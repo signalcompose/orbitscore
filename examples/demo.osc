@@ -1,0 +1,22 @@
+# グローバル設定
+key C
+tempo 120
+meter 4/4 shared
+randseed 42
+
+# シーケンス（ピアノ）
+sequence piano {
+  bus "IAC Driver Bus 1"
+  channel 1
+  meter 5/4 independent
+  tempo 132
+  octave 4.0
+  octmul 1.0
+  bendRange 2
+
+  # イベント（例）
+  # () は和音。同時発音し、グループ音価は内部の最大に合わせる。
+  # 1..12=半音度数(1=C# if key=C)、0=休符。
+  # U は「拍子の分母=1」の単位（4/4なら U1=四分）。
+  (1@U0.5, 5@U1, 8@U0.25)  0@U0.5  3@2s  12@25%2bars
+}

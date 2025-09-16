@@ -1,0 +1,23 @@
+{
+  "name": "orbitscore",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm -w @orbitscore/engine run build && npm -w @orbitscore/vscode-extension run build",
+    "dev:engine": "npm -w @orbitscore/engine run dev",
+    "test": "npm -w @orbitscore/engine test"
+  },
+  "version": "1.0.0",
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/node": "^24.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}
