@@ -1,9 +1,8 @@
-# OrbitScore - 休符を度数0とする革新的音楽言語
+# OrbitScore
 
-**Music DSL where silence is degree 0** - 無音に音楽的価値を与える革新的アプローチ
+**Chromatic degree-based music DSL with shared/independent meter systems for polyrhythmic composition**
 
-休符を音階の一部（度数0）として扱い、音と同等の価値を持つ要素として作曲できる新しい音楽DSL。
-従来の音楽理論では分離されていた「音」と「無音」を統一的に扱える画期的なシステムです。
+半音階度数システム（0=休符, 1-12=半音階）を基盤とし、shared/independentメーターによるポリリズム作曲を可能にする音楽DSL。
 
 ## 核心的特徴
 
