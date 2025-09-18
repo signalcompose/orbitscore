@@ -13,6 +13,8 @@ export class Scheduler {
   private tickTimer: NodeJS.Timeout | null = null;
   private wallStartMs: number | null = null;
   private scheduledUntilMs = 0; // 0-based timeline
+  private mutedSequences = new Set<string>();
+  private soloSequences = new Set<string>();
 
   constructor(private out: MidiOut, private ir: IR) {}
   start() {
@@ -33,6 +35,13 @@ export class Scheduler {
   getCurrentTimeSec(): number { return this.currentSec; }
   setLoop(window: LoopWindow | null) { this.loop = window; }
   requestJump(targetBar: number) { this.pendingJumpBar = Math.max(0, Math.floor(targetBar)); }
+  setMute(sequenceName: string, muted: boolean) {
+    if (muted) this.mutedSequences.add(sequenceName); else this.mutedSequences.delete(sequenceName);
+  }
+  setSolo(sequenceNames: string[] | null) {
+    this.soloSequences.clear();
+    if (sequenceNames && sequenceNames.length) sequenceNames.forEach(n => this.soloSequences.add(n));
+  }
 
   /**
    * シンプルなトランスポート前進（実時間適用の最小モデル）。
@@ -163,7 +172,28 @@ export class Scheduler {
     const all = this.renderOffline();
     const start = Math.max(0, Math.floor(windowStartMs));
     const end = Math.max(start, Math.floor(windowEndMs));
-    return all.filter(m => m.timeMs >= start && m.timeMs < end);
+    // Solo/Mute チャンネルフィルタ
+    let allowedChannels: Set<number> | null = null;
+    if (this.soloSequences.size > 0) {
+      allowedChannels = new Set<number>();
+      for (const seq of this.ir.sequences) {
+        if (this.soloSequences.has(seq.config.name)) allowedChannels.add(seq.config.channel);
+      }
+    } else if (this.mutedSequences.size > 0) {
+      allowedChannels = new Set<number>();
+      for (const seq of this.ir.sequences) {
+        if (!this.mutedSequences.has(seq.config.name)) allowedChannels.add(seq.config.channel);
+      }
+    }
+
+    return all.filter(m => {
+      if (m.timeMs < start || m.timeMs >= end) return false;
+      if (allowedChannels) {
+        const ch = (m.status & 0x0f) + 1; // 1-16
+        return allowedChannels.has(ch);
+      }
+      return true;
+    });
   }
 
   /**
