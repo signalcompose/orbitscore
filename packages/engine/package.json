@@ -6,8 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "ts-node src/index.ts",
-    "test": "vitest run",
-    "notify:test": "node -r ts-node/register src/notify_test.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@julusian/midi": "^3.0.0",
