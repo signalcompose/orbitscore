@@ -1,212 +1,212 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from 'vitest'
 
-import { PitchConverter } from "../../packages/engine/src/pitch";
-import type { SequenceConfig } from "../../packages/engine/src/ir";
+import { PitchConverter } from '../../packages/engine/src/pitch'
+import type { SequenceConfig } from '../../packages/engine/src/ir'
 
-describe("PitchConverter", () => {
+describe('PitchConverter', () => {
   const createConfig = (overrides: Partial<SequenceConfig> = {}): Required<SequenceConfig> => ({
-    name: "test",
-    bus: "test-bus",
+    name: 'test',
+    bus: 'test-bus',
     channel: 1,
-    key: "C",
+    key: 'C',
     tempo: 120,
-    meter: { n: 4, d: 4, align: "shared" },
+    meter: { n: 4, d: 4, align: 'shared' },
     octave: 0.0, // C4を基準とするため0に設定
     octmul: 1.0,
     bendRange: 2,
     mpe: false,
-    defaultDur: { kind: "unit", value: 1 },
+    defaultDur: { kind: 'unit', value: 1 },
     randseed: 0,
     ...overrides,
-  });
+  })
 
-  describe("degreeToSemitone conversion", () => {
-    it("should convert degree 1 (C#) to +1 semitone", () => {
-      const converter = new PitchConverter(createConfig({ key: "C" }));
-      const result = converter.convertPitch({ degree: 1 });
-      expect(result.note).toBe(61); // C#4 = MIDI note 61
-      expect(result.pitchBend).toBe(0);
-    });
+  describe('degreeToSemitone conversion', () => {
+    it('should convert degree 1 (C#) to +1 semitone', () => {
+      const converter = new PitchConverter(createConfig({ key: 'C' }))
+      const result = converter.convertPitch({ degree: 1 })
+      expect(result.note).toBe(61) // C#4 = MIDI note 61
+      expect(result.pitchBend).toBe(0)
+    })
 
-    it("should convert degree 2 (D) to semitone 2", () => {
-      const converter = new PitchConverter(createConfig({ key: "C" }));
-      const result = converter.convertPitch({ degree: 2 });
-      expect(result.note).toBe(62); // D4 = MIDI note 62
-      expect(result.pitchBend).toBe(0);
-    });
+    it('should convert degree 2 (D) to semitone 2', () => {
+      const converter = new PitchConverter(createConfig({ key: 'C' }))
+      const result = converter.convertPitch({ degree: 2 })
+      expect(result.note).toBe(62) // D4 = MIDI note 62
+      expect(result.pitchBend).toBe(0)
+    })
 
-    it("should convert degree 8 (G#) to semitone 8", () => {
-      const converter = new PitchConverter(createConfig({ key: "C" }));
-      const result = converter.convertPitch({ degree: 8 });
-      expect(result.note).toBe(68); // G#4 = MIDI note 68
-      expect(result.pitchBend).toBe(0);
-    });
-  });
+    it('should convert degree 8 (G#) to semitone 8', () => {
+      const converter = new PitchConverter(createConfig({ key: 'C' }))
+      const result = converter.convertPitch({ degree: 8 })
+      expect(result.note).toBe(68) // G#4 = MIDI note 68
+      expect(result.pitchBend).toBe(0)
+    })
+  })
 
-  describe("key transposition", () => {
-    it("should transpose correctly for different keys", () => {
-      const converterC = new PitchConverter(createConfig({ key: "C" }));
-      const converterG = new PitchConverter(createConfig({ key: "G" }));
+  describe('key transposition', () => {
+    it('should transpose correctly for different keys', () => {
+      const converterC = new PitchConverter(createConfig({ key: 'C' }))
+      const converterG = new PitchConverter(createConfig({ key: 'G' }))
 
-      const resultC = converterC.convertPitch({ degree: 1 });
-      const resultG = converterG.convertPitch({ degree: 1 });
+      const resultC = converterC.convertPitch({ degree: 1 })
+      const resultG = converterG.convertPitch({ degree: 1 })
 
-      expect(resultC.note).toBe(61); // C#4 (degree=1)
-      expect(resultG.note).toBe(68); // G#4 (key=G, degree=1)
-    });
+      expect(resultC.note).toBe(61) // C#4 (degree=1)
+      expect(resultG.note).toBe(68) // G#4 (key=G, degree=1)
+    })
 
-    it("should handle flat keys correctly", () => {
-      const converter = new PitchConverter(createConfig({ key: "Db" }));
-      const result = converter.convertPitch({ degree: 1 });
-      expect(result.note).toBe(62); // Db(key)+degree1 => 62
-    });
-  });
+    it('should handle flat keys correctly', () => {
+      const converter = new PitchConverter(createConfig({ key: 'Db' }))
+      const result = converter.convertPitch({ degree: 1 })
+      expect(result.note).toBe(62) // Db(key)+degree1 => 62
+    })
+  })
 
-  describe("octave shift", () => {
-    it("should apply octave shift correctly", () => {
-      const converter = new PitchConverter(createConfig());
-      const result = converter.convertPitch({ degree: 1, octaveShift: 1 });
-      expect(result.note).toBe(73); // C#5 = MIDI note 73
-    });
+  describe('octave shift', () => {
+    it('should apply octave shift correctly', () => {
+      const converter = new PitchConverter(createConfig())
+      const result = converter.convertPitch({ degree: 1, octaveShift: 1 })
+      expect(result.note).toBe(73) // C#5 = MIDI note 73
+    })
 
-    it("should apply negative octave shift correctly", () => {
-      const converter = new PitchConverter(createConfig());
-      const result = converter.convertPitch({ degree: 1, octaveShift: -1 });
-      expect(result.note).toBe(49); // C#3 = MIDI note 49
-    });
-  });
+    it('should apply negative octave shift correctly', () => {
+      const converter = new PitchConverter(createConfig())
+      const result = converter.convertPitch({ degree: 1, octaveShift: -1 })
+      expect(result.note).toBe(49) // C#3 = MIDI note 49
+    })
+  })
 
-  describe("detune", () => {
-    it("should apply detune correctly", () => {
-      const converter = new PitchConverter(createConfig());
-      const result = converter.convertPitch({ degree: 1, detune: 0.5 });
-      expect(result.note).toBe(61); // C#4 base note
-      expect(result.pitchBend).toBe(2048); // 0.5 / bendRange(2) * 8192
-    });
+  describe('detune', () => {
+    it('should apply detune correctly', () => {
+      const converter = new PitchConverter(createConfig())
+      const result = converter.convertPitch({ degree: 1, detune: 0.5 })
+      expect(result.note).toBe(61) // C#4 base note
+      expect(result.pitchBend).toBe(2048) // 0.5 / bendRange(2) * 8192
+    })
 
-    it("should apply negative detune correctly", () => {
-      const converter = new PitchConverter(createConfig());
-      const result = converter.convertPitch({ degree: 1, detune: -0.3 });
-      expect(result.note).toBe(61); // C#4 base note
-      expect(result.pitchBend).toBe(-1229); // -0.3 semitones * 4096
-    });
-  });
+    it('should apply negative detune correctly', () => {
+      const converter = new PitchConverter(createConfig())
+      const result = converter.convertPitch({ degree: 1, detune: -0.3 })
+      expect(result.note).toBe(61) // C#4 base note
+      expect(result.pitchBend).toBe(-1229) // -0.3 semitones * 4096
+    })
+  })
 
-  describe("octave and octmul", () => {
-    it("should apply octave correctly", () => {
-      const converter = new PitchConverter(createConfig({ octave: 1.0 }));
-      const result = converter.convertPitch({ degree: 1 });
-      expect(result.note).toBe(73); // C#5 = MIDI note 73
-    });
+  describe('octave and octmul', () => {
+    it('should apply octave correctly', () => {
+      const converter = new PitchConverter(createConfig({ octave: 1.0 }))
+      const result = converter.convertPitch({ degree: 1 })
+      expect(result.note).toBe(73) // C#5 = MIDI note 73
+    })
 
-    it("should apply octmul correctly (applies to octave term only)", () => {
-      const converter = new PitchConverter(createConfig({ octave: 1.0, octmul: 2.0 }));
-      const result = converter.convertPitch({ degree: 1 });
-      expect(result.note).toBe(85); // 60 + 1 + (1*2*12) = 85
-    });
-  });
+    it('should apply octmul correctly (applies to octave term only)', () => {
+      const converter = new PitchConverter(createConfig({ octave: 1.0, octmul: 2.0 }))
+      const result = converter.convertPitch({ degree: 1 })
+      expect(result.note).toBe(85) // 60 + 1 + (1*2*12) = 85
+    })
+  })
 
-  describe("bendRange", () => {
-    it("should respect bendRange setting", () => {
-      const converter = new PitchConverter(createConfig({ bendRange: 4 }));
-      const result = converter.convertPitch({ degree: 1, detune: 1.0 });
-      expect(result.note).toBe(61); // C#4 base note
-      expect(result.pitchBend).toBe(2048); // 1.0 / 4 * 8192
-    });
-  });
+  describe('bendRange', () => {
+    it('should respect bendRange setting', () => {
+      const converter = new PitchConverter(createConfig({ bendRange: 4 }))
+      const result = converter.convertPitch({ degree: 1, detune: 1.0 })
+      expect(result.note).toBe(61) // C#4 base note
+      expect(result.pitchBend).toBe(2048) // 1.0 / 4 * 8192
+    })
+  })
 
-  describe("MPE channel assignment", () => {
-    it("should assign channels sequentially in MPE mode", () => {
-      const converter = new PitchConverter(createConfig({ mpe: true }));
+  describe('MPE channel assignment', () => {
+    it('should assign channels sequentially in MPE mode', () => {
+      const converter = new PitchConverter(createConfig({ mpe: true }))
 
-      const result1 = converter.convertPitch({ degree: 1 });
-      const result2 = converter.convertPitch({ degree: 2 });
-      const result3 = converter.convertPitch({ degree: 3 });
+      const result1 = converter.convertPitch({ degree: 1 })
+      const result2 = converter.convertPitch({ degree: 2 })
+      const result3 = converter.convertPitch({ degree: 3 })
 
-      expect(result1.channel).toBe(1);
-      expect(result2.channel).toBe(2);
-      expect(result3.channel).toBe(3);
-    });
+      expect(result1.channel).toBe(1)
+      expect(result2.channel).toBe(2)
+      expect(result3.channel).toBe(3)
+    })
 
-    it("should wrap around after channel 15 in MPE mode", () => {
-      const converter = new PitchConverter(createConfig({ mpe: true }));
+    it('should wrap around after channel 15 in MPE mode', () => {
+      const converter = new PitchConverter(createConfig({ mpe: true }))
 
       // Generate 16 notes to test wrap-around
-      const results = [];
+      const results = []
       for (let i = 0; i < 16; i++) {
-        results.push(converter.convertPitch({ degree: 1 }));
+        results.push(converter.convertPitch({ degree: 1 }))
       }
 
-      expect(results[14].channel).toBe(15);
-      expect(results[15].channel).toBe(1); // Wraps back to 1
-    });
+      expect(results[14].channel).toBe(15)
+      expect(results[15].channel).toBe(1) // Wraps back to 1
+    })
 
-    it("should use same channel in non-MPE mode", () => {
-      const converter = new PitchConverter(createConfig({ mpe: false, channel: 5 }));
+    it('should use same channel in non-MPE mode', () => {
+      const converter = new PitchConverter(createConfig({ mpe: false, channel: 5 }))
 
-      const result1 = converter.convertPitch({ degree: 1 });
-      const result2 = converter.convertPitch({ degree: 2 });
+      const result1 = converter.convertPitch({ degree: 1 })
+      const result2 = converter.convertPitch({ degree: 2 })
 
-      expect(result1.channel).toBe(5);
-      expect(result2.channel).toBe(5);
-    });
-  });
+      expect(result1.channel).toBe(5)
+      expect(result2.channel).toBe(5)
+    })
+  })
 
-  describe("random suffix", () => {
-    it("should apply random value for r suffix", () => {
-      const converter = new PitchConverter(createConfig({ randseed: 12345 }));
+  describe('random suffix', () => {
+    it('should apply random value for r suffix', () => {
+      const converter = new PitchConverter(createConfig({ randseed: 12345 }))
 
       // Test with original value containing 'r'
-      const result1 = converter.convertPitch({ degree: 1.0 }, "1.0r");
-      const result2 = converter.convertPitch({ degree: 1.0 }, "1.0r");
+      const result1 = converter.convertPitch({ degree: 1.0 }, '1.0r')
+      const result2 = converter.convertPitch({ degree: 1.0 }, '1.0r')
 
       // Should be deterministic with same seed
-      expect(result1.note).toBe(result2.note);
-      expect(result1.pitchBend).toBe(result2.pitchBend);
-    });
+      expect(result1.note).toBe(result2.note)
+      expect(result1.pitchBend).toBe(result2.pitchBend)
+    })
 
-    it("should not apply random value without r suffix", () => {
-      const converter = new PitchConverter(createConfig());
+    it('should not apply random value without r suffix', () => {
+      const converter = new PitchConverter(createConfig())
 
-      const result1 = converter.convertPitch({ degree: 1.0 }, "1.0");
-      const result2 = converter.convertPitch({ degree: 1.0 }, "1.0");
+      const result1 = converter.convertPitch({ degree: 1.0 }, '1.0')
+      const result2 = converter.convertPitch({ degree: 1.0 }, '1.0')
 
       // Should be identical
-      expect(result1.note).toBe(result2.note);
-      expect(result1.pitchBend).toBe(result2.pitchBend);
-    });
-  });
+      expect(result1.note).toBe(result2.note)
+      expect(result1.pitchBend).toBe(result2.pitchBend)
+    })
+  })
 
-  describe("edge cases", () => {
-    it("should clamp MIDI note to valid range", () => {
-      const converter = new PitchConverter(createConfig({ octave: 6.0 }));
-      const result = converter.convertPitch({ degree: 1 });
-      expect(result.note).toBe(127); // Clamped to max MIDI note
-    });
+  describe('edge cases', () => {
+    it('should clamp MIDI note to valid range', () => {
+      const converter = new PitchConverter(createConfig({ octave: 6.0 }))
+      const result = converter.convertPitch({ degree: 1 })
+      expect(result.note).toBe(127) // Clamped to max MIDI note
+    })
 
-    it("should clamp MIDI note to minimum range", () => {
-      const converter = new PitchConverter(createConfig({ octave: -6.0 }));
-      const result = converter.convertPitch({ degree: 1 });
-      expect(result.note).toBe(0); // Clamped to min MIDI note
-    });
+    it('should clamp MIDI note to minimum range', () => {
+      const converter = new PitchConverter(createConfig({ octave: -6.0 }))
+      const result = converter.convertPitch({ degree: 1 })
+      expect(result.note).toBe(0) // Clamped to min MIDI note
+    })
 
-    it("should throw error for rest (degree 0)", () => {
-      const converter = new PitchConverter(createConfig());
-      expect(() => converter.convertPitch({ degree: 0 })).toThrow();
-    });
-  });
+    it('should throw error for rest (degree 0)', () => {
+      const converter = new PitchConverter(createConfig())
+      expect(() => converter.convertPitch({ degree: 0 })).toThrow()
+    })
+  })
 
-  describe("channel reset", () => {
-    it("should reset channel assignment", () => {
-      const converter = new PitchConverter(createConfig({ mpe: true }));
+  describe('channel reset', () => {
+    it('should reset channel assignment', () => {
+      const converter = new PitchConverter(createConfig({ mpe: true }))
 
-      converter.convertPitch({ degree: 1 });
-      converter.convertPitch({ degree: 2 });
+      converter.convertPitch({ degree: 1 })
+      converter.convertPitch({ degree: 2 })
 
-      converter.resetChannelAssignment();
+      converter.resetChannelAssignment()
 
-      const result = converter.convertPitch({ degree: 3 });
-      expect(result.channel).toBe(1);
-    });
-  });
-});
+      const result = converter.convertPitch({ degree: 3 })
+      expect(result.channel).toBe(1)
+    })
+  })
+})
