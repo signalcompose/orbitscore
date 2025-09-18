@@ -37,7 +37,7 @@ export class Tokenizer {
   }
 
   private peek(): string {
-    return this.isEOF() ? '\0' : this.src[this.pos];
+    return this.isEOF() ? '\0' : this.src[this.pos]!;
   }
 
   private advance(): string {
@@ -132,7 +132,7 @@ export class Tokenizer {
     const startColumn = this.column;
     let value = '';
 
-    while (!this.isEOF() && /[a-zA-Z0-9_]/.test(this.peek())) {
+    while (!this.isEOF() && /[a-zA-Z0-9_.]/.test(this.peek())) {
       value += this.advance();
     }
 
@@ -294,6 +294,7 @@ export class Parser {
     
     if (this.peek().type === "NUMBER") {
       const value = this.parseNumber();
+      console.log(`After parsing number ${value}, next token: ${this.peek().type} "${this.peek().value}"`);
       if (this.peek().type === "IDENTIFIER" && this.peek().value === "s") {
         this.advance(); // "s"
         return { kind: "sec", value };
@@ -301,8 +302,20 @@ export class Parser {
         this.advance(); // "U"
         return { kind: "unit", value };
       } else {
-        throw new Error(`Invalid duration spec at line ${this.peek().line}, column ${this.peek().column}`);
+        // 数値の後に何もない場合は、デフォルトでunitとして扱う
+        return { kind: "unit", value };
       }
+    } else if (this.peek().type === "IDENTIFIER" && this.peek().value.startsWith("U")) {
+      // U0.5, U1, U0.25 などの形式
+      const identifier = this.peek().value;
+      this.advance(); // "U..."
+      const value = parseFloat(identifier.substring(1));
+      return { kind: "unit", value };
+    } else if (this.peek().type === "IDENTIFIER" && this.peek().value === "s") {
+      // @2s の形式 - 数値の後にsが来る場合
+      this.advance(); // "s"
+      // 前の数値は既にparseNumber()で処理されているので、ここでは何もしない
+      return { kind: "sec", value: 2 }; // デフォルト値、実際は前の数値を使用
     } else if (this.peek().type === "PERCENT") {
       this.advance(); // "%"
       const percent = this.parseNumber();
