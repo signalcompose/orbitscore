@@ -35,7 +35,17 @@ orbitscore/
 ✅ **Phase 1 完了** - パーサ実装
 ✅ **Phase 2 完了** - Pitch/Bend変換（度数→MIDIノート+PitchBend、octave/octmul/detune/MPE）
 
-DSLのパーサが完全に実装され、demo.oscの解析に成功しました。詳細な実装計画は `IMPLEMENTATION_PLAN.md` をご覧ください。
+DSLのパーサが完全に実装され、demo.oscの解析に成功しました。
+
+## 📚 Documentation
+
+プロジェクトのドキュメントは [`docs/`](docs/) フォルダに整理されています：
+
+- 📏 [PROJECT_RULES.md](docs/PROJECT_RULES.md) - プロジェクトルール（必読）
+- 📝 [WORK_LOG.md](docs/WORK_LOG.md) - 開発履歴
+- 🎵 [INSTRUCTIONS_NEW_DSL.md](docs/INSTRUCTIONS_NEW_DSL.md) - 言語仕様
+- 🗺️ [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) - 実装計画
+- 📚 [INDEX.md](docs/INDEX.md) - ドキュメント索引
 
 ### 実装済み機能
 
