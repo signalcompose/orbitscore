@@ -301,6 +301,40 @@ export function quantizeToNextBar(currentSec: number, seq: SequenceIR, ir?: IR):
   return bars * barSec
 }
 
+/**
+ * 現在時刻に対して、全シーケンスの「次の小節頭」のうち最小値を返す。
+ * shared/independent を各シーケンスの設定に従って評価する。
+ */
+export function nextBoundaryAcrossSequences(currentSec: number, ir: IR): number {
+  let min = Infinity
+  for (const seq of ir.sequences) {
+    const b = quantizeToNextBar(currentSec, seq, ir)
+    if (b < min) min = b
+  }
+  // 全くシーケンスがない場合はグローバルに従う
+  if (!isFinite(min)) {
+    const dummy: SequenceIR = {
+      config: {
+        name: '__dummy__',
+        bus: '',
+        channel: 1,
+        key: ir.global.key,
+        tempo: ir.global.tempo,
+        meter: { n: ir.global.meter.n, d: ir.global.meter.d, align: 'shared' },
+        octave: 0,
+        octmul: 1,
+        bendRange: 2,
+        mpe: false,
+        defaultDur: { kind: 'unit', value: 1 },
+        randseed: 0,
+      },
+      events: [],
+    } as any
+    return quantizeToNextBar(currentSec, dummy, ir)
+  }
+  return min
+}
+
 /** n小節目の先頭の秒位置（0始まり想定: barIndex=0 -> 0sec） */
 export function barIndexToSeconds(barIndex: number, seq: SequenceIR, ir?: IR): number {
   const barSec = barDurationSeconds(seq, ir)
