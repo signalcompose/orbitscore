@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { parseSourceToIR } from '../../packages/engine/src/parser/parser';
-import { Scheduler } from '../../packages/engine/src/scheduler';
-import { TestMidiSink } from '../../packages/engine/src/midi';
+import { describe, it, expect } from "vitest";
+
+import { parseSourceToIR } from "../../packages/engine/src/parser/parser";
+import { Scheduler } from "../../packages/engine/src/scheduler";
+import { TestMidiSink } from "../../packages/engine/src/midi";
 
 const src = `
 key C
@@ -15,8 +16,8 @@ sequence s {
 }
 `;
 
-describe('Scheduler transport minimal state', () => {
-  it('applies jump at next bar and loops at endBar', () => {
+describe("Scheduler transport minimal state", () => {
+  it("applies jump at next bar and loops at endBar", () => {
     const ir = parseSourceToIR(src);
     const sched = new Scheduler(new TestMidiSink() as any, ir);
 

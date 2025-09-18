@@ -1,6 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { parseSourceToIR } from '../../packages/engine/src/parser/parser';
-import { barIndexToSeconds, computeLoopApplyTime, planJump } from '../../packages/engine/src/scheduler';
+import { describe, it, expect } from "vitest";
+
+import { parseSourceToIR } from "../../packages/engine/src/parser/parser";
+import {
+  barIndexToSeconds,
+  computeLoopApplyTime,
+  planJump,
+} from "../../packages/engine/src/scheduler";
 
 const src = `
 key C
@@ -14,8 +19,8 @@ sequence s {
 }
 `;
 
-describe('Loop/Jump planning', () => {
-  it('computes apply time at next bar and jump targets', () => {
+describe("Loop/Jump planning", () => {
+  it("computes apply time at next bar and jump targets", () => {
     const ir = parseSourceToIR(src);
     const seq = ir.sequences[0]!;
 

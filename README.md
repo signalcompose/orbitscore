@@ -38,6 +38,7 @@ orbitscore/
 DSLのパーサが完全に実装され、demo.oscの解析に成功しました。詳細な実装計画は `IMPLEMENTATION_PLAN.md` をご覧ください。
 
 ### 実装済み機能
+
 - ✅ グローバル設定パース（key, tempo, meter, randseed）
 - ✅ シーケンス設定パース（bus, channel, meter, tempo, octave, etc.）
 - ✅ イベントパース（和音、単音、休符、各種音価）
@@ -45,6 +46,7 @@ DSLのパーサが完全に実装され、demo.oscの解析に成功しました
 - ✅ vitestテストフレームワーク
 
 ### 次のフェーズ
+
 🔄 **Phase 3** - スケジューラ + Transport（LookAhead=50ms/ Tick=5ms、shared/independent、Loop/Jump）
 
 ### テストの実行

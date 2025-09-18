@@ -4,17 +4,27 @@ import type { PitchSpec, SequenceConfig } from "./ir";
  * MIDIノート番号とPitchBend値のペア
  */
 export type MidiNote = {
-  note: number;        // MIDIノート番号 (0-127)
-  pitchBend: number;   // PitchBend値 (-8192 〜 +8191)
-  channel: number;      // MIDIチャンネル (1-16)
+  note: number; // MIDIノート番号 (0-127)
+  pitchBend: number; // PitchBend値 (-8192 〜 +8191)
+  channel: number; // MIDIチャンネル (1-16)
 };
 
 /**
  * キーから半音オフセットへのマッピング
  */
 const KEY_TO_SEMITONE: Record<string, number> = {
-  "C": 0, "Db": 1, "D": 2, "Eb": 3, "E": 4, "F": 5,
-  "Gb": 6, "G": 7, "Ab": 8, "A": 9, "Bb": 10, "B": 11
+  C: 0,
+  Db: 1,
+  D: 2,
+  Eb: 3,
+  E: 4,
+  F: 5,
+  Gb: 6,
+  G: 7,
+  Ab: 8,
+  A: 9,
+  Bb: 10,
+  B: 11,
 };
 
 /**
@@ -24,7 +34,7 @@ function degreeToSemitone(degree: number, key: string): number {
   if (degree === 0) {
     throw new Error("Rest (degree 0) cannot be converted to semitone");
   }
-  
+
   const keyOffset = KEY_TO_SEMITONE[key] || 0;
   // 1..12 はキー基準の半音度数（1→+1半音, 12→+12半音）
   return keyOffset + degree;
@@ -45,7 +55,7 @@ function generateRandom(seed: number): number {
  * 数値に乱数サフィックス 'r' が含まれているかチェック
  */
 function hasRandomSuffix(value: string): boolean {
-  return value.endsWith('r');
+  return value.endsWith("r");
 }
 
 /**
@@ -53,7 +63,7 @@ function hasRandomSuffix(value: string): boolean {
  */
 function applyRandom(value: number, randseed: number): number {
   const random = generateRandom(randseed);
-  return value + (random * 0.999);
+  return value + random * 0.999;
 }
 
 /**
@@ -87,7 +97,7 @@ export class PitchConverter {
     }
 
     let degree = pitch.degree;
-    
+
     // 乱数サフィックスの処理
     if (originalValue && hasRandomSuffix(originalValue)) {
       const numericValue = parseFloat(originalValue.slice(0, -1));
@@ -98,8 +108,8 @@ export class PitchConverter {
     const baseSemitones =
       60 +
       degreeToSemitone(degree, this.key) +
-      ((this.octave * this.octmul) * 12) +
-      ((pitch.octaveShift ?? 0) * 12);
+      this.octave * this.octmul * 12 +
+      (pitch.octaveShift ?? 0) * 12;
 
     // detune を加味した最終半音値
     const finalSemitones = baseSemitones + (pitch.detune ?? 0);
@@ -114,7 +124,7 @@ export class PitchConverter {
     return {
       note: Math.max(0, Math.min(127, midiNote)),
       pitchBend: pitchBendValue,
-      channel
+      channel,
     };
   }
 
