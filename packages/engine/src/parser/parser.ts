@@ -300,6 +300,11 @@ export class Parser {
       } else if (this.peek().type === "IDENTIFIER" && this.peek().value === "U") {
         this.advance(); // "U"
         return { kind: "unit", value };
+      } else if (this.peek().type === "PERCENT") {
+        this.advance(); // "%"
+        const percent = this.parseNumber();
+        this.expect("IDENTIFIER"); // "bars"
+        return { kind: "percent", percent, bars: percent };
       } else {
         // 数値の後に何もない場合は、デフォルトでunitとして扱う
         return { kind: "unit", value };
@@ -315,12 +320,6 @@ export class Parser {
       this.advance(); // "s"
       // 前の数値は既にparseNumber()で処理されているので、ここでは何もしない
       return { kind: "sec", value: 2 }; // デフォルト値、実際は前の数値を使用
-    } else if (this.peek().type === "PERCENT") {
-      this.advance(); // "%"
-      const percent = this.parseNumber();
-      this.expect("KEYWORD"); // "bars"
-      const bars = this.parseNumber();
-      return { kind: "percent", percent, bars };
     } else if (this.peek().type === "LBRACKET") {
       this.advance(); // "["
       const a = this.parseNumber();
