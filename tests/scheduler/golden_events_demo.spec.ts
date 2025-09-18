@@ -38,24 +38,30 @@ describe('demo.osc golden events validation (±5ms precision)', () => {
 
     const expectedEvents = [
       // Chord at t=0 - NoteOn events
-      { timeMs: 0, status: 0x90, data1: 109, data2: 100 }, // NoteOn: degree=1 -> A4
-      { timeMs: 0, status: 0x90, data1: 113, data2: 100 }, // NoteOn: degree=5 -> F5
-      { timeMs: 0, status: 0x90, data1: 116, data2: 100 }, // NoteOn: degree=8 -> G#5
+      // With octave=4.0: base MIDI = 60 + degree_semitones + 4*12 = 60 + degree_semitones + 48
+      // degree=1 (C) -> 60+0+48 = 108
+      // degree=5 (E) -> 60+4+48 = 112  
+      // degree=8 (G) -> 60+7+48 = 115
+      { timeMs: 0, status: 0x90, data1: 108, data2: 100 }, // NoteOn: degree=1 -> C8
+      { timeMs: 0, status: 0x90, data1: 112, data2: 100 }, // NoteOn: degree=5 -> E8
+      { timeMs: 0, status: 0x90, data1: 115, data2: 100 }, // NoteOn: degree=8 -> G8
       
       // Chord NoteOff events (sorted by duration: 0.25, 0.5, 1.0 units)
-      { timeMs: 114, status: 0x80, data1: 116, data2: 0 }, // NoteOff: degree=8 (0.25 units)
-      { timeMs: 227, status: 0x80, data1: 109, data2: 0 }, // NoteOff: degree=1 (0.5 units)
-      { timeMs: 455, status: 0x80, data1: 113, data2: 0 }, // NoteOff: degree=5 (1.0 units)
+      { timeMs: 114, status: 0x80, data1: 115, data2: 0 }, // NoteOff: degree=8 (0.25 units)
+      { timeMs: 227, status: 0x80, data1: 108, data2: 0 }, // NoteOff: degree=1 (0.5 units)
+      { timeMs: 455, status: 0x80, data1: 112, data2: 0 }, // NoteOff: degree=5 (1.0 units)
       
       // Rest: 0@U0.5 (no MIDI events)
       
       // Note: 3@2s at t=0.4545+0.227=0.6815
-      { timeMs: 682, status: 0x90, data1: 111, data2: 100 }, // NoteOn: degree=3 -> D#5
-      { timeMs: 2682, status: 0x80, data1: 111, data2: 0 }, // NoteOff: degree=3 (2s later)
+      // degree=3 (D) -> 60+2+48 = 110
+      { timeMs: 682, status: 0x90, data1: 110, data2: 100 }, // NoteOn: degree=3 -> D8
+      { timeMs: 2682, status: 0x80, data1: 110, data2: 0 }, // NoteOff: degree=3 (2s later)
       
       // Note: 12@25%2bars at t=0.6815+2000=2681.5
-      { timeMs: 2682, status: 0x90, data1: 120, data2: 100 }, // NoteOn: degree=12 -> C6
-      { timeMs: 3818, status: 0x80, data1: 120, data2: 0 }, // NoteOff: degree=12 (25% of 2 bars later)
+      // degree=12 (B) -> 60+11+48 = 119
+      { timeMs: 2682, status: 0x90, data1: 119, data2: 100 }, // NoteOn: degree=12 -> B8
+      { timeMs: 3818, status: 0x80, data1: 119, data2: 0 }, // NoteOff: degree=12 (25% of 2 bars later)
     ]
 
     // Validate message count
