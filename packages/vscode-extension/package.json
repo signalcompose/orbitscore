@@ -35,9 +35,16 @@
     "languages": [
       {
         "id": "orbitscore",
-        "extensions": [
-          ".osc"
-        ]
+        "aliases": ["OrbitScore", "orbitscore"],
+        "extensions": [".osc"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "orbitscore",
+        "scopeName": "source.orbitscore",
+        "path": "./syntaxes/orbitscore.tmLanguage.json"
       }
     ],
     "keybindings": [

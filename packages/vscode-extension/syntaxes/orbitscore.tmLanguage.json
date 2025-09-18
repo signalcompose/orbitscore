@@ -1,0 +1,105 @@
+{
+  "name": "OrbitScore",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#durations"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.orbitscore",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.orbitscore",
+          "match": "\\b(sequence|key|tempo|meter|bus|channel|octave|octmul|bendRange|mpe|defaultDur|randseed|shared|independent|true|false)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.orbitscore",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.orbitscore",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.degree.orbitscore",
+          "match": "\\b(0|[1-9]|1[0-2])\\b(?!@)"
+        },
+        {
+          "name": "constant.numeric.float.orbitscore",
+          "match": "\\b\\d+\\.\\d+r?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.orbitscore",
+          "match": "\\b\\d+r?\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.orbitscore",
+          "match": "[(){}\\[\\],]"
+        },
+        {
+          "name": "keyword.operator.octave.orbitscore",
+          "match": "\\^[+-]?\\d+"
+        },
+        {
+          "name": "keyword.operator.detune.orbitscore",
+          "match": "~[+-]?\\d+(\\.\\d+)?"
+        }
+      ]
+    },
+    "durations": {
+      "patterns": [
+        {
+          "name": "constant.other.duration.seconds.orbitscore",
+          "match": "@\\d+(\\.\\d+)?s"
+        },
+        {
+          "name": "constant.other.duration.unit.orbitscore",
+          "match": "@U\\d+(\\.\\d+)?"
+        },
+        {
+          "name": "constant.other.duration.percent.orbitscore",
+          "match": "@\\d+%\\d+bars"
+        },
+        {
+          "name": "constant.other.duration.tuplet.orbitscore",
+          "match": "@\\[\\d+:\\d+\\]\\*U\\d+(\\.\\d+)?"
+        }
+      ]
+    }
+  },
+  "scopeName": "source.orbitscore"
+}

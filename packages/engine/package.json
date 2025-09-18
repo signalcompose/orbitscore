@@ -3,10 +3,14 @@
   "version": "0.0.1",
   "type": "commonjs",
   "main": "dist/index.js",
+  "bin": {
+    "orbitscore": "./dist/cli.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "ts-node src/index.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "cli": "node dist/cli.js"
   },
   "dependencies": {
     "@julusian/midi": "^3.0.0",
