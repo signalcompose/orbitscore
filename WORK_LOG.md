@@ -59,27 +59,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ```typescript
 export type TokenType =
-  | "KEYWORD"
-  | "IDENTIFIER"
-  | "NUMBER"
-  | "STRING"
-  | "BOOLEAN"
-  | "LPAREN"
-  | "RPAREN"
-  | "LBRACE"
-  | "RBRACE"
-  | "LBRACKET"
-  | "RBRACKET"
-  | "COMMA"
-  | "AT"
-  | "PERCENT"
-  | "COLON"
-  | "ASTERISK"
-  | "CARET"
-  | "TILDE"
-  | "SLASH"
-  | "NEWLINE"
-  | "EOF";
+  | 'KEYWORD'
+  | 'IDENTIFIER'
+  | 'NUMBER'
+  | 'STRING'
+  | 'BOOLEAN'
+  | 'LPAREN'
+  | 'RPAREN'
+  | 'LBRACE'
+  | 'RBRACE'
+  | 'LBRACKET'
+  | 'RBRACKET'
+  | 'COMMA'
+  | 'AT'
+  | 'PERCENT'
+  | 'COLON'
+  | 'ASTERISK'
+  | 'CARET'
+  | 'TILDE'
+  | 'SLASH'
+  | 'NEWLINE'
+  | 'EOF'
 ```
 
 **Technical Challenges and Solutions**:
@@ -101,14 +101,14 @@ export type TokenType =
 
 ```typescript
 export class Parser {
-  private tokens: Token[];
-  private pos: number = 0;
+  private tokens: Token[]
+  private pos: number = 0
 
-  private parseGlobalConfig(): GlobalConfig;
-  private parseSequenceConfig(): SequenceConfig;
-  private parseSequenceEvent(): SequenceEvent;
-  private parseDurationSpec(): DurationSpec;
-  private parsePitchSpec(): PitchSpec;
+  private parseGlobalConfig(): GlobalConfig
+  private parseSequenceConfig(): SequenceConfig
+  private parseSequenceEvent(): SequenceEvent
+  private parseDurationSpec(): DurationSpec
+  private parsePitchSpec(): PitchSpec
 }
 ```
 
@@ -141,9 +141,9 @@ export class Parser {
 
 ```typescript
 export type SequenceEvent =
-  | { kind: "note"; pitches: PitchSpec[]; dur: DurationSpec }
-  | { kind: "chord"; notes: { pitch: PitchSpec; dur: DurationSpec }[] }
-  | { kind: "rest"; dur: DurationSpec };
+  | { kind: 'note'; pitches: PitchSpec[]; dur: DurationSpec }
+  | { kind: 'chord'; notes: { pitch: PitchSpec; dur: DurationSpec }[] }
+  | { kind: 'rest'; dur: DurationSpec }
 ```
 
 ### 1.7 Testing and Golden IR Creation

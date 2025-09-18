@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect } from 'vitest'
 
-import { parseSourceToIR } from "../../packages/engine/src/parser/parser";
-import { Scheduler } from "../../packages/engine/src/scheduler";
-import { TestMidiSink } from "../../packages/engine/src/midi";
+import { parseSourceToIR } from '../../packages/engine/src/parser/parser'
+import { Scheduler } from '../../packages/engine/src/scheduler'
+import { TestMidiSink } from '../../packages/engine/src/midi'
 
 const src = `
 key C
@@ -16,22 +16,22 @@ sequence s {
   octave 0.0
   1@U1 1@U1 1@U1 1@U1
 }
-`;
+`
 
-describe("reschedule without duplicates", () => {
-  it("avoids duplicates after resetSchedule and re-schedule", () => {
-    const ir = parseSourceToIR(src);
-    const sink = new TestMidiSink();
-    const sched = new Scheduler(sink as any, ir);
+describe('reschedule without duplicates', () => {
+  it('avoids duplicates after resetSchedule and re-schedule', () => {
+    const ir = parseSourceToIR(src)
+    const sink = new TestMidiSink()
+    const sched = new Scheduler(sink as any, ir)
 
-    sched.scheduleThrough(600);
-    const firstCount = sink.sent.length;
+    sched.scheduleThrough(600)
+    const firstCount = sink.sent.length
 
     // simulate jump: reset and re-schedule overlapping window (keep sent cache)
-    sched.resetSchedule(0);
-    sched.scheduleThrough(600);
+    sched.resetSchedule(0)
+    sched.scheduleThrough(600)
 
     // count should not double
-    expect(sink.sent.length).toBe(firstCount);
-  });
-});
+    expect(sink.sent.length).toBe(firstCount)
+  })
+})
