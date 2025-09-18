@@ -5,9 +5,7 @@ async function main() {
   loadProjectEnv();
   const notifier = createNotifierFromEnv();
   if (!notifier) {
-    console.error(
-      "Notifier not configured. Set ORBITSCORE_MCP_BASE_URL in .env",
-    );
+    console.error("Notifier not configured. Set ORBITSCORE_MCP_BASE_URL in .env");
     process.exit(1);
   }
   const text = process.argv.slice(2).join(" ") || "Hello";

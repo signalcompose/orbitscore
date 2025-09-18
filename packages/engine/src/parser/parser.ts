@@ -244,9 +244,7 @@ export class Tokenizer {
     const startLine = this.line;
     const startColumn = this.column;
     const value = this.advance();
-    throw new Error(
-      `Unknown character '${value}' at line ${startLine}, column ${startColumn}`,
-    );
+    throw new Error(`Unknown character '${value}' at line ${startLine}, column ${startColumn}`);
   }
 
   tokenize(): Token[] {
@@ -276,9 +274,7 @@ export class Parser {
   }
 
   private peek(): Token {
-    return this.isEOF()
-      ? this.tokens[this.tokens.length - 1]
-      : this.tokens[this.pos];
+    return this.isEOF() ? this.tokens[this.tokens.length - 1] : this.tokens[this.pos];
   }
 
   private advance(): Token {
@@ -331,24 +327,9 @@ export class Parser {
 
   private parseKey(): string {
     const token = this.expect("KEYWORD");
-    const validKeys = [
-      "C",
-      "Db",
-      "D",
-      "Eb",
-      "E",
-      "F",
-      "Gb",
-      "G",
-      "Ab",
-      "A",
-      "Bb",
-      "B",
-    ];
+    const validKeys = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
     if (!validKeys.includes(token.value)) {
-      throw new Error(
-        `Invalid key '${token.value}' at line ${token.line}, column ${token.column}`,
-      );
+      throw new Error(`Invalid key '${token.value}' at line ${token.line}, column ${token.column}`);
     }
     return token.value;
   }
@@ -371,10 +352,7 @@ export class Parser {
       if (this.peek().type === "IDENTIFIER" && this.peek().value === "s") {
         this.advance(); // "s"
         return { kind: "sec", value: firstNumber };
-      } else if (
-        this.peek().type === "IDENTIFIER" &&
-        this.peek().value === "U"
-      ) {
+      } else if (this.peek().type === "IDENTIFIER" && this.peek().value === "U") {
         this.advance(); // "U"
         return { kind: "unit", value: firstNumber };
       } else if (this.peek().type === "PERCENT") {
@@ -386,10 +364,7 @@ export class Parser {
         // 数値の後に何もない場合は、デフォルトでunitとして扱う
         return { kind: "unit", value: firstNumber };
       }
-    } else if (
-      this.peek().type === "IDENTIFIER" &&
-      this.peek().value.startsWith("U")
-    ) {
+    } else if (this.peek().type === "IDENTIFIER" && this.peek().value.startsWith("U")) {
       // U0.5, U1, U0.25 などの形式
       const identifier = this.peek().value;
       this.advance(); // "U..."
@@ -579,10 +554,7 @@ export class Parser {
             // イベントの開始 - 設定の解析を終了
             return config as SequenceConfig;
         }
-      } else if (
-        this.peek().type === "NUMBER" ||
-        this.peek().type === "LPAREN"
-      ) {
+      } else if (this.peek().type === "NUMBER" || this.peek().type === "LPAREN") {
         // イベントの開始 - 設定の解析を終了
         return config as SequenceConfig;
       } else {

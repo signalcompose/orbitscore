@@ -16,16 +16,7 @@ module.exports = {
     "eslint-config-prettier",
     "plugin:prettier/recommended",
   ],
-  settings: {
-    "import/resolver": {
-      typescript: {
-        project: [
-          "packages/engine/tsconfig.json",
-          "packages/vscode-extension/tsconfig.json",
-        ],
-      },
-    },
-  },
+  settings: {},
   rules: {
     "import/order": ["warn", { "newlines-between": "always" }],
     "no-console": "off",
@@ -38,9 +29,9 @@ module.exports = {
       {
         trailingComma: "all",
         tabWidth: 2,
-        semi: false,
-        singleQuote: true,
-        jsxSingleQuote: true,
+        semi: true,
+        singleQuote: false,
+        jsxSingleQuote: false,
         printWidth: 100,
       },
     ],
