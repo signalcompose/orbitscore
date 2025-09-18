@@ -133,6 +133,39 @@ export class Scheduler {
   }
 
   /**
+   * 全シーケンスの最小境界でQuantized適用する前進（shared/independent混在対応）。
+   */
+  simulateTransportAdvanceAcrossSequences(durationSec: number) {
+    const endTarget = this.currentSec + Math.max(0, durationSec)
+    while (true) {
+      const nextBoundary = nextBoundaryAcrossSequences(this.currentSec + 1e-9, this.ir)
+      if (nextBoundary > endTarget) {
+        this.currentSec = endTarget
+        break
+      }
+      this.currentSec = nextBoundary
+      if (this.pendingJumpBar !== null) {
+        const baseSeq = globalBaseSeq(this.ir)
+        const targetSec = barIndexToSeconds(this.pendingJumpBar, baseSeq, this.ir)
+        this.currentSec = targetSec
+        this.pendingJumpBar = null
+        return
+      }
+      if (this.loop && this.loop.enabled) {
+        const baseSeq = globalBaseSeq(this.ir)
+        const startSec = barIndexToSeconds(this.loop.startBar, baseSeq, this.ir)
+        const endSec = barIndexToSeconds(this.loop.endBar, baseSeq, this.ir)
+        if (this.currentSec >= endSec) {
+          this.currentSec = startSec
+          return
+        }
+      }
+      // 境界に到達したので今回の前進はここで終了
+      return
+    }
+  }
+
+  /**
    * オフラインで全イベントをスケジュールし、timeMs付きのMIDIメッセージ列を返す
    * - ループやトランスポートは未対応（Phase3-min）
    */
@@ -362,6 +395,26 @@ export function planJump(
 
 function thisTempoFallback(): number {
   return 120
+}
+
+function globalBaseSeq(ir: IR): SequenceIR {
+  return {
+    config: {
+      name: '__global__',
+      bus: '',
+      channel: 1,
+      key: ir.global.key,
+      tempo: ir.global.tempo,
+      meter: { n: ir.global.meter.n, d: ir.global.meter.d, align: 'shared' },
+      octave: 0,
+      octmul: 1,
+      bendRange: 2,
+      mpe: false,
+      defaultDur: { kind: 'unit', value: 1 },
+      randseed: 0,
+    },
+    events: [],
+  } as any
 }
 
 function makeNoteOn(tSec: number, ch: number, note: number, vel: number): MidiMessage {

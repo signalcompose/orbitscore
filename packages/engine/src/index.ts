@@ -3,9 +3,7 @@ import * as fs from 'node:fs'
 import { parseSourceToIR } from './parser/parser'
 import { TestMidiSink } from './midi'
 import { Scheduler } from './scheduler'
-import { loadProjectEnv } from './env'
 
-loadProjectEnv()
 const file = process.argv[2] ?? 'examples/demo.osc'
 const src = fs.readFileSync(file, 'utf8')
 const ir = parseSourceToIR(src)

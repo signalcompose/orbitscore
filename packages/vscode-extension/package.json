@@ -52,9 +52,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -w"
   },
-  "dependencies": {
-    "dotenv": "^16.4.5"
-  },
+  "dependencies": {},
   "devDependencies": {
     "typescript": "^5.4.0",
     "@types/vscode": "^1.90.0"
