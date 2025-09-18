@@ -1,10 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import { parseSourceToIR } from "../../packages/engine/src/parser/parser";
-import {
-  barDurationSeconds,
-  quantizeToNextBar,
-} from "../../packages/engine/src/scheduler";
+import { barDurationSeconds, quantizeToNextBar } from "../../packages/engine/src/scheduler";
 
 const src = `
 key C

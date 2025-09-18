@@ -4,9 +4,7 @@ import { PitchConverter } from "../../packages/engine/src/pitch";
 import type { SequenceConfig } from "../../packages/engine/src/ir";
 
 describe("PitchConverter", () => {
-  const createConfig = (
-    overrides: Partial<SequenceConfig> = {},
-  ): Required<SequenceConfig> => ({
+  const createConfig = (overrides: Partial<SequenceConfig> = {}): Required<SequenceConfig> => ({
     name: "test",
     bus: "test-bus",
     channel: 1,
@@ -102,9 +100,7 @@ describe("PitchConverter", () => {
     });
 
     it("should apply octmul correctly (applies to octave term only)", () => {
-      const converter = new PitchConverter(
-        createConfig({ octave: 1.0, octmul: 2.0 }),
-      );
+      const converter = new PitchConverter(createConfig({ octave: 1.0, octmul: 2.0 }));
       const result = converter.convertPitch({ degree: 1 });
       expect(result.note).toBe(85); // 60 + 1 + (1*2*12) = 85
     });
@@ -146,9 +142,7 @@ describe("PitchConverter", () => {
     });
 
     it("should use same channel in non-MPE mode", () => {
-      const converter = new PitchConverter(
-        createConfig({ mpe: false, channel: 5 }),
-      );
+      const converter = new PitchConverter(createConfig({ mpe: false, channel: 5 }));
 
       const result1 = converter.convertPitch({ degree: 1 });
       const result2 = converter.convertPitch({ degree: 2 });

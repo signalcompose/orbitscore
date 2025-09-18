@@ -30,9 +30,7 @@ describe("cross-window NoteOff scheduling", () => {
 
     // window 500-1000ms should contain NoteOff at 1000ms for U2 (1s)
     const w2 = sched.collectWindow(500, 1001);
-    const hasOff1s = w2.some(
-      (m) => (m.status & 0xf0) === 0x80 && m.timeMs === 1000,
-    );
+    const hasOff1s = w2.some((m) => (m.status & 0xf0) === 0x80 && m.timeMs === 1000);
     expect(hasOff1s).toBe(true);
   });
 });

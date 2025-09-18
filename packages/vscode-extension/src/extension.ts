@@ -58,10 +58,7 @@ async function pollSlackMentions(context: vscode.ExtensionContext) {
   cp.execFile(nodeBin, [script], { cwd: folder }, (err, stdout, stderr) => {
     if (err) {
       console.error("slack:mentions error", err, stderr);
-      vscode.window.setStatusBarMessage(
-        "Slack polling error. See console.",
-        5000,
-      );
+      vscode.window.setStatusBarMessage("Slack polling error. See console.", 5000);
       return;
     }
     try {
