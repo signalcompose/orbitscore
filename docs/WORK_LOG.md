@@ -505,6 +505,8 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 - `374db22` - docs: Add English instruction verification rule to PROJECT_RULES.md
 - `f0b7754` - docs: Update WORK_LOG.md with latest commit
 - `9bf6e18` - refactor: Organize documentation in docs folder
+- `c7bc785` - docs: Update WORK_LOG.md with documentation reorganization
+- `fcbe265` - chore: Setup ESLint and Prettier pre-commit hooks
 
 ### 4.10 Next Steps
 
