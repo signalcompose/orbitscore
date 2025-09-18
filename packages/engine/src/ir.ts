@@ -14,6 +14,7 @@ export type PitchSpec = {
 
 export type SequenceEvent =
   | { kind: "note"; pitches: PitchSpec[]; dur: DurationSpec }
+  | { kind: "chord"; notes: { pitch: PitchSpec; dur: DurationSpec }[] }
   | { kind: "rest"; dur: DurationSpec };
 
 export type MeterAlign = "shared" | "independent"; // 小節線共有 or 回り込み

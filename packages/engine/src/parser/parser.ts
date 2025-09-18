@@ -294,7 +294,6 @@ export class Parser {
     
     if (this.peek().type === "NUMBER") {
       const value = this.parseNumber();
-      console.log(`After parsing number ${value}, next token: ${this.peek().type} "${this.peek().value}"`);
       if (this.peek().type === "IDENTIFIER" && this.peek().value === "s") {
         this.advance(); // "s"
         return { kind: "sec", value };
@@ -365,18 +364,19 @@ export class Parser {
     if (this.peek().type === "LPAREN") {
       // 和音
       this.advance(); // "("
-      const pitches: PitchSpec[] = [];
+      const notes: { pitch: PitchSpec; dur: DurationSpec }[] = [];
       
       do {
-        pitches.push(this.parsePitchSpec());
+        const pitch = this.parsePitchSpec();
+        const dur = this.parseDurationSpec();
+        notes.push({ pitch, dur });
         if (this.peek().type === "COMMA") {
           this.advance(); // ","
         }
       } while (this.peek().type !== "RPAREN");
 
       this.expect("RPAREN");
-      const dur = this.parseDurationSpec();
-      return { kind: "note", pitches, dur };
+      return { kind: "chord", notes };
     } else {
       // 単音または休符
       const degree = this.parseNumber();
@@ -439,10 +439,11 @@ export class Parser {
 
     const config: Partial<SequenceConfig> = { name };
 
-    while (this.peek().type === "KEYWORD") {
-      const keyword = this.peek().value;
-      
-      switch (keyword) {
+    while (this.peek().type !== "RBRACE" && this.peek().type !== "EOF") {
+      if (this.peek().type === "KEYWORD") {
+        const keyword = this.peek().value;
+        
+        switch (keyword) {
         case "bus":
           this.advance(); // "bus"
           config.bus = this.parseString();
@@ -492,8 +493,15 @@ export class Parser {
           config.randseed = this.parseNumber();
           break;
         default:
-          // イベントの開始
-          break;
+          // イベントの開始 - 設定の解析を終了
+          return config as SequenceConfig;
+        }
+      } else if (this.peek().type === "NUMBER" || this.peek().type === "LPAREN") {
+        // イベントの開始 - 設定の解析を終了
+        return config as SequenceConfig;
+      } else {
+        // キーワード以外のトークン（コメント、改行など）をスキップ
+        this.advance();
       }
     }
 
