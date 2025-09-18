@@ -250,7 +250,7 @@ export type SequenceEvent =
 - Octave, coefficient, detune synthesis
 - MPE/channel assignment
 
-## Phase 3: Scheduler + Transport (In Progress)
+## Phase 3: Scheduler + Transport (Completed)
 
 ### 3.1 Overview
 
@@ -381,10 +381,131 @@ export class Scheduler {
 - Phase 4: VS Code Extension implementation
 - Phase 5: MIDI Output via CoreMIDI
 
-### Phase 4: VS Code Extension
+## Phase 4: VS Code Extension (Completed)
 
-- Selective execution functionality
-- Transport UI
+### 4.1 Overview
+
+**Date**: December 19, 2024
+**Work Content**:
+
+- Minimal VS Code extension implementation
+- Language support for .osc files with syntax highlighting
+- Command implementation (start/runSelection/stop/transport)
+- Transport UI with webview panel
+- Status bar integration
+- Real-time diagnostics
+
+### 4.2 Language Support Implementation
+
+**Date**: December 19, 2024
+**Work Content**:
+
+- Created TextMate grammar for syntax highlighting
+- Implemented language configuration (brackets, comments, folding)
+- File association for .osc extension
+- Auto-closing pairs and surrounding pairs
+
+**Files Created**:
+- `packages/vscode-extension/syntaxes/orbitscore.tmLanguage.json`
+- `packages/vscode-extension/language-configuration.json`
+
+### 4.3 Command Implementation
+
+**Date**: December 19, 2024
+**Work Content**:
+
+Implemented four main commands:
+
+1. **Start Engine**: Launches OrbitScore engine daemon
+2. **Run Selection**: Executes selected text or entire document (Cmd+Enter)
+3. **Stop Engine**: Terminates engine process
+4. **Transport Panel**: Opens interactive transport control webview
+
+**Key Features**:
+- Cmd+Enter keybinding for quick execution
+- Temporary file creation for selection execution
+- Process management for engine lifecycle
+- Output channel for engine logs
+
+### 4.4 Transport UI Development
+
+**Date**: December 19, 2024
+**Work Content**:
+
+- Webview-based transport panel with Play/Pause/Stop controls
+- Jump to bar functionality
+- Loop configuration with start/end bars
+- Real-time status bar updates
+- Bidirectional communication between extension and engine
+
+**Transport State Management**:
+```typescript
+interface TransportState {
+  playing: boolean
+  bar: number
+  beat: number
+  bpm: number
+  loopEnabled: boolean
+  loopStart?: number
+  loopEnd?: number
+}
+```
+
+### 4.5 Engine CLI Interface
+
+**Date**: December 19, 2024
+**Work Content**:
+
+Created CLI interface (`packages/engine/src/cli.ts`) with:
+- Engine daemon mode for VS Code integration
+- File execution support
+- Transport command handling via stdin
+- Status reporting via stdout
+
+**Commands Supported**:
+- `orbitscore start` - Start engine daemon
+- `orbitscore run <file>` - Execute .osc file
+- Transport: play, pause, stop, jump, loop
+
+### 4.6 Diagnostics Integration
+
+**Date**: December 19, 2024
+**Work Content**:
+
+- Real-time syntax error checking
+- Parser integration for validation
+- Error location extraction (line, column)
+- Visual indicators in editor
+
+### 4.7 Technical Achievements
+
+1. **Full IDE Experience**: Syntax highlighting, diagnostics, and execution
+2. **Interactive Transport**: Real-time playback control
+3. **Seamless Integration**: Cmd+Enter workflow like TidalCycles
+4. **Process Management**: Robust engine lifecycle handling
+5. **Error Feedback**: Immediate syntax validation
+
+### 4.8 Implementation Status
+
+- ✅ Language support (syntax, configuration)
+- ✅ Command palette integration
+- ✅ Keybinding (Cmd+Enter)
+- ✅ Transport UI (webview panel)
+- ✅ Status bar integration
+- ✅ Diagnostics
+- ✅ Engine CLI interface
+- ⚠️ CoreMidiSink (stub only, to be implemented in Phase 5)
+
+### 4.9 Commit History
+
+- `2c470c9` - fix: Correct degree to note mapping system
+- `d7a3669` - feat: Implement VS Code extension (Phase 4)
+
+### 4.10 Next Steps
+
+- Phase 5: MIDI Output implementation with @julusian/midi
+- IAC Bus connection
+- MIDI message routing
 - Engine integration
 
 ### Phase 5: MIDI Output Implementation
@@ -424,4 +545,4 @@ export class Scheduler {
 **Created**: December 19, 2024
 **Author**: AI Assistant
 **Project**: OrbitScore
-**Phase**: Phase 3 In Progress
+**Phase**: Phase 4 Completed
