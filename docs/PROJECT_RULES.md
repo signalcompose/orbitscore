@@ -8,6 +8,7 @@
 - Document what was changed, why, and the commit hash
 - Keep chronological order
 - Include technical decisions and challenges
+- **MUST update README.md when WORK_LOG.md is updated** to keep project status current
 
 ### 2. English Instruction Verification (英文チェック)
 **When the user provides instructions in English:**
@@ -36,9 +37,10 @@
 3. Implement features
 4. Write/update tests
 5. **Update WORK_LOG.md**
-6. Update other documentation
-7. Commit with descriptive message
-8. **Add commit hash to WORK_LOG.md**
+6. **Update README.md** (sync with WORK_LOG.md status)
+7. Update other documentation
+8. Commit with descriptive message
+9. **Add commit hash to WORK_LOG.md**
 
 ### Commit Message Format:
 ```
@@ -97,6 +99,7 @@ Types: feat, fix, docs, test, refactor, chore
 
 - [ ] Tests pass (`npm test`)
 - [ ] WORK_LOG.md updated
+- [ ] README.md updated (MUST reflect current status from WORK_LOG.md)
 - [ ] Documentation updated if needed
 - [ ] Commit message is descriptive
 - [ ] No console.log left in production code
@@ -109,8 +112,9 @@ Types: feat, fix, docs, test, refactor, chore
 3. **Documentation Sync**: Keep docs in sync with code
 4. **Code Review**: Review your own code before committing
 
-## 📝 WORK_LOG.md Structure
+## 📝 Documentation Sync Rules
 
+### WORK_LOG.md Structure
 Each phase section should include:
 - Overview with date
 - Work content details  
@@ -120,6 +124,13 @@ Each phase section should include:
 - Test results
 - Commit history with hashes
 - Next steps
+
+### README.md Must Always Include:
+- Current development status (sync with WORK_LOG.md phases)
+- Completed features list
+- Test count and status
+- Installation/usage instructions
+- **MUST be updated whenever WORK_LOG.md changes**
 
 ## 🎵 Domain-Specific Rules
 
