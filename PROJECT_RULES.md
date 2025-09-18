@@ -9,12 +9,21 @@
 - Keep chronological order
 - Include technical decisions and challenges
 
-### 2. Documentation First
+### 2. English Instruction Verification (英文チェック)
+**When the user provides instructions in English:**
+- Check if the English is grammatically correct
+- If incorrect, provide the corrected version
+- Suggest rephrasing for clarity
+- Example response: "I believe you meant: '[corrected sentence]'. Would you like me to proceed with this understanding?"
+- Help the user improve their English communication skills
+- Always be respectful and supportive when making corrections
+
+### 3. Documentation First
 - Update relevant docs (README, IMPLEMENTATION_PLAN, etc.) with each change
 - Documentation is as important as code
 - Keep specifications in sync with implementation
 
-### 3. Test-Driven Development
+### 4. Test-Driven Development
 - Write tests for new features
 - Ensure all tests pass before committing
 - Golden files for regression testing
