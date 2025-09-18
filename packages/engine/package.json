@@ -1,15 +1,17 @@
 {
   "name": "@orbitscore/engine",
   "version": "0.0.1",
-  "type": "module",
+  "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "ts-node src/index.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "notify:test": "node -r ts-node/register src/notify_test.ts"
   },
   "dependencies": {
-    "@julusian/midi": "^3.0.0" 
+    "@julusian/midi": "^3.0.0",
+    "dotenv": "^16.4.5"
   },
   "devDependencies": {
     "typescript": "^5.4.0",

@@ -1,51 +1,51 @@
-# OrbitScore 開発作業ログ
+# OrbitScore Development Work Log
 
-## プロジェクト概要
-LilyPond に依存しない新しい音楽DSL（Domain Specific Language）の設計・実装プロジェクト。TidalCycles風の選択範囲実行とポリリズム/ポリメーターをサポートする。
+## Project Overview
+A design and implementation project for a new music DSL (Domain Specific Language) independent of LilyPond. Supports TidalCycles-style selective execution and polyrhythm/polymeter expression.
 
-## 開発環境
+## Development Environment
 - **OS**: macOS (darwin 24.6.0)
-- **言語**: TypeScript
-- **テストフレームワーク**: vitest
-- **プロジェクト構造**: monorepo (packages/engine, packages/vscode-extension)
-- **バージョン管理**: Git
+- **Language**: TypeScript
+- **Testing Framework**: vitest
+- **Project Structure**: monorepo (packages/engine, packages/vscode-extension)
+- **Version Control**: Git
 
-## Phase 1: パーサ実装 (完了)
+## Phase 1: Parser Implementation (Completed)
 
-### 1.1 プロジェクト初期化
-**日時**: 2024年12月19日
-**作業内容**:
-- monorepo構造の確認
-- 既存ファイルの調査（ir.ts, parser.ts, scheduler.ts, midi.ts）
-- demo.oscファイルの内容確認
-- 実装計画書（IMPLEMENTATION_PLAN.md）の作成
+### 1.1 Project Initialization
+**Date**: December 19, 2024
+**Work Content**:
+- Monorepo structure verification
+- Investigation of existing files (ir.ts, parser.ts, scheduler.ts, midi.ts)
+- demo.osc file content analysis
+- Implementation plan document (IMPLEMENTATION_PLAN.md) creation
 
-**技術的決定**:
-- IR型定義を契約として凍結
-- 段階的実装アプローチの採用
-- テスト駆動開発の採用
+**Technical Decisions**:
+- IR type definitions frozen as contracts
+- Adoption of incremental implementation approach
+- Adoption of test-driven development
 
-### 1.2 テストフレームワーク導入
-**日時**: 2024年12月19日
-**作業内容**:
-- Node.js標準テストからvitestへの移行
-- vitest設定ファイル（vitest.config.ts）の作成
-- テストスクリプトの更新
+### 1.2 Testing Framework Introduction
+**Date**: December 19, 2024
+**Work Content**:
+- Migration from Node.js standard testing to vitest
+- vitest configuration file (vitest.config.ts) creation
+- Test script updates
 
-**技術的決定**:
-- vitestの採用理由: TypeScriptサポート、高速実行、モダンなAPI
-- テストファイルの配置: `tests/parser/parser.spec.ts`
+**Technical Decisions**:
+- vitest adoption rationale: TypeScript support, fast execution, modern API
+- Test file placement: `tests/parser/parser.spec.ts`
 
-### 1.3 トークナイザー実装
-**日時**: 2024年12月19日
-**作業内容**:
-- Tokenizerクラスの実装
-- トークン型定義（TokenType, Token）
-- キーワード、数値、文字列、記号の解析
-- コメント処理（# 構文）
-- 小数点と乱数サフィックス（r）の処理
+### 1.3 Tokenizer Implementation
+**Date**: December 19, 2024
+**Work Content**:
+- Tokenizer class implementation
+- Token type definitions (TokenType, Token)
+- Parsing of keywords, numbers, strings, symbols
+- Comment processing (# syntax)
+- Decimal point and random suffix (r) processing
 
-**実装詳細**:
+**Implementation Details**:
 ```typescript
 export type TokenType = 
   | "KEYWORD" | "IDENTIFIER" | "NUMBER" | "STRING" | "BOOLEAN"
@@ -54,19 +54,19 @@ export type TokenType =
   | "SLASH" | "NEWLINE" | "EOF";
 ```
 
-**技術的課題と解決**:
-- 課題: `U0.5` 構文の解析（識別子に小数点を含む）
-- 解決: `readIdentifier()` メソッドで `/[a-zA-Z0-9_.]/` パターンを使用
+**Technical Challenges and Solutions**:
+- Challenge: `U0.5` syntax parsing (identifiers containing decimal points)
+- Solution: Using `/[a-zA-Z0-9_.]/` pattern in `readIdentifier()` method
 
-### 1.4 パーサー実装
-**日時**: 2024年12月19日
-**作業内容**:
-- Parserクラスの実装
-- グローバル設定パース（key, tempo, meter, randseed）
-- シーケンス設定パース（bus, channel, meter, tempo, octave, etc.）
-- イベントパース（度数、音価、和音、オクターブシフト、detune、ランダム）
+### 1.4 Parser Implementation
+**Date**: December 19, 2024
+**Work Content**:
+- Parser class implementation
+- Global configuration parsing (key, tempo, meter, randseed)
+- Sequence configuration parsing (bus, channel, meter, tempo, octave, etc.)
+- Event parsing (degrees, durations, chords, octave shifts, detune, random)
 
-**実装詳細**:
+**Implementation Details**:
 ```typescript
 export class Parser {
   private tokens: Token[];
@@ -80,27 +80,27 @@ export class Parser {
 }
 ```
 
-### 1.5 音価構文の実装
-**日時**: 2024年12月19日
-**作業内容**:
-- 秒単位: `@2s`
-- 単位: `@U1.5`, `@U0.5`
-- パーセント: `@25%2bars`
-- 連符: `@[3:2]*U1`（未実装）
+### 1.5 Duration Syntax Implementation
+**Date**: December 19, 2024
+**Work Content**:
+- Seconds: `@2s`
+- Units: `@U1.5`, `@U0.5`
+- Percentage: `@25%2bars`
+- Tuplets: `@[3:2]*U1` (not implemented)
 
-**技術的課題と解決**:
-- 課題: `@25%2bars` 構文の解析
-- 問題: `this.expect("KEYWORD")` で `bars` を期待していたが、`bars` は `IDENTIFIER` タイプ
-- 解決: `this.expect("IDENTIFIER")` に修正
+**Technical Challenges and Solutions**:
+- Challenge: `@25%2bars` syntax parsing
+- Problem: Expected `bars` with `this.expect("KEYWORD")` but `bars` is `IDENTIFIER` type
+- Solution: Modified to `this.expect("IDENTIFIER")`
 
-### 1.6 和音構文の実装
-**日時**: 2024年12月19日
-**作業内容**:
-- IR型定義の拡張: `chord` 型の追加
-- 和音構文: `(1@U0.5, 5@U1, 8@U0.25)` の解析
-- 各音高に個別の音価を付与する設計
+### 1.6 Chord Syntax Implementation
+**Date**: December 19, 2024
+**Work Content**:
+- IR type definition extension: addition of `chord` type
+- Chord syntax parsing: `(1@U0.5, 5@U1, 8@U0.25)`
+- Design for individual durations per pitch
 
-**実装詳細**:
+**Implementation Details**:
 ```typescript
 export type SequenceEvent =
   | { kind: "note"; pitches: PitchSpec[]; dur: DurationSpec }
@@ -108,90 +108,127 @@ export type SequenceEvent =
   | { kind: "rest"; dur: DurationSpec };
 ```
 
-### 1.7 テストとGolden IR作成
-**日時**: 2024年12月19日
-**作業内容**:
-- demo.oscの完全解析テストの実装
-- Golden IR JSONファイルの作成
-- テストの成功確認
+### 1.7 Testing and Golden IR Creation
+**Date**: December 19, 2024
+**Work Content**:
+- Complete parsing test implementation for demo.osc
+- Golden IR JSON file creation
+- Test success verification
 
-**テスト結果**:
-- ✅ グローバル設定: key=C, tempo=120, meter=4/4 shared
-- ✅ シーケンス設定: piano, IAC Driver Bus 1, channel 1, tempo 132, meter 5/4 independent
-- ✅ 和音: `(1@U0.5, 5@U1, 8@U0.25)` → chord型
-- ✅ 休符: `0@U0.5` → rest型
-- ✅ 単音: `3@2s` → note型（秒単位）
-- ✅ 複雑な音価: `12@25%2bars` → note型（パーセント単位）
+**Test Results**:
+- ✅ Global config: key=C, tempo=120, meter=4/4 shared
+- ✅ Sequence config: piano, IAC Driver Bus 1, channel 1, tempo 132, meter 5/4 independent
+- ✅ Chord: `(1@U0.5, 5@U1, 8@U0.25)` → chord type
+- ✅ Rest: `0@U0.5` → rest type
+- ✅ Single note: `3@2s` → note type (seconds)
+- ✅ Complex duration: `12@25%2bars` → note type (percentage)
 
-## 技術的成果
+## Technical Achievements
 
-### 1. DSL設計の特徴
-- **構文の一貫性**: すべての音価が `@` プレフィックスを使用
-- **型安全性**: TypeScriptによる厳密な型定義
-- **拡張性**: IR型定義による契約ベースの設計
+### 1. DSL Design Features
+- **Syntax Consistency**: All durations use `@` prefix
+- **Type Safety**: Strict type definitions with TypeScript
+- **Extensibility**: Contract-based design with IR type definitions
 
-### 2. パーサ設計の特徴
-- **レキサー・パーサ分離**: TokenizerとParserの明確な分離
-- **エラーハンドリング**: 詳細なエラーメッセージ（行・列番号付き）
-- **再帰下降パーサ**: 各構文要素に対応するメソッド
+### 2. Parser Design Features
+- **Lexer-Parser Separation**: Clear separation between Tokenizer and Parser
+- **Error Handling**: Detailed error messages with line and column numbers
+- **Recursive Descent Parser**: Methods corresponding to each syntax element
 
-### 3. テスト設計の特徴
-- **Golden IR**: demo.oscの期待されるIR出力をJSONファイルとして保存
-- **回帰テスト**: パーサの変更による既存機能の破綻を検出
-- **vitest**: モダンなテストフレームワークによる高速実行
+### 3. Testing Design Features
+- **Golden IR**: Expected IR output for demo.osc saved as JSON file
+- **Regression Testing**: Detection of existing functionality breaks due to parser changes
+- **vitest**: Fast execution with modern testing framework
 
-## コミット履歴
+## Commit History
 
-### 主要コミット
+### Major Commits
 1. `c880244` - feat: implement basic parser structure with tokenizer and parser classes
 2. `d068930` - feat: add vitest testing framework and improve parser
 3. `c481545` - feat: fix parser sequence config parsing and add chord support
 4. `3a49dd5` - feat: complete Phase 1 parser implementation
 
-### コミット戦略
-- **小さな単位でのコミット**: 各機能を段階的にコミット
-- **意味のあるコミットメッセージ**: 変更内容を明確に記述
-- **テスト付きコミット**: 各機能にテストを追加
+### Commit Strategy
+- **Small Unit Commits**: Incremental commits for each feature
+- **Meaningful Commit Messages**: Clear description of changes
+- **Test-Included Commits**: Tests added for each feature
 
-## 次のフェーズ
+## Next Phases
 
-### Phase 2: Pitch/Bend変換
-- 度数→MIDIノート+PitchBend変換の実装
-- オクターブ・係数・detune合成
-- MPE/チャンネル割り当て
+## Phase 2: Pitch/Bend Conversion (Completed)
 
-### Phase 3: スケジューラ + Transport
-- LookAhead=50ms, Tick=5msでのスケジューリング
-- shared/independentメーター対応
-- Transport機能（Loop/Jump/Mute/Solo）
+### 2.1 概要
+**Date**: December 19, 2024
+**Work Content**:
+- 度数(1..12)→キー基準の半音度数へ変換（1→+1半音, …, 12→+12半音）
+- octave, octmul, octaveShift の合成（octmul はオクターブ項にのみ適用）
+- detune（半音単位の実数）を最終半音値に加算し、最寄りMIDIノートとの差をPitchBend化
+- bendRange に基づくPitchBend正規化と [-8192, +8191] へのクリップ
+- MPEチャンネル割当（通常モードは固定Ch、MPEはローテーション）
+- 単体テスト `tests/pitch/pitch.spec.ts` の追加と全面整合
 
-### Phase 4: VS Code拡張
-- 選択範囲実行機能
+### 2.2 技術的決定
+- 度数は「半音度数」として解釈（INSTRUCTIONS_NEW_DSL.mdに準拠）
+- MIDI基準は C4=60。半音値は `60 + keyOffset + degree + (octave * octmul * 12) + (octaveShift * 12)`
+- detune はノート丸め後にPitchBendへ反映（ベースノートの安定性を優先）
+- bendRange の換算は `bend = (semitoneDelta / bendRange) * 8192` を四捨五入しレンジ内にクリップ
+- MPEは安全なCh分散（実装はローテーション方式）
+
+### 2.3 テスト結果
+- vitest: 22テスト/22パス（parser 1, pitch 21）
+- 主な検証項目:
+  - キー変換（C, G, Db）
+  - octave / octmul / octaveShift の合成
+  - detune と bendRange の相互作用
+  - 最小/最大ノートのクランプ
+  - MPE/非MPEのチャンネル割当
+
+### 2.4 変更ファイル
+- `packages/engine/src/pitch.ts`（新規）: 変換ロジック実装
+- `tests/pitch/pitch.spec.ts`: テスト追加/整合
+- `INSTRUCTIONS_NEW_DSL.md` / `IMPLEMENTATION_PLAN.md`: フェーズ完了時に `WORK_LOG.md` へ記録するルールを追記
+
+### 2.5 備考
+- 数値末尾 `r` の乱数は再現性確保（randseed）し、degree での利用をサポート
+- IR契約（`ir.ts`）は変更なし
+
+### Phase 2: Pitch/Bend Conversion
+- Implementation of degree → MIDI note + PitchBend conversion
+- Octave, coefficient, detune synthesis
+- MPE/channel assignment
+
+### Phase 3: Scheduler + Transport
+- Scheduling with LookAhead=50ms, Tick=5ms
+- shared/independent meter support
+- Transport functionality (Loop/Jump/Mute/Solo)
+
+### Phase 4: VS Code Extension
+- Selective execution functionality
 - Transport UI
-- エンジン連携
+- Engine integration
 
-### Phase 5: MIDI出力実装
-- CoreMIDI経由でのIAC Bus出力
-- @julusian/midiを使用した実装
+### Phase 5: MIDI Output Implementation
+- IAC Bus output via CoreMIDI
+- Implementation using @julusian/midi
 
-## 論文執筆用メモ
+## Research Notes for Paper Writing
 
-### 研究の意義
-1. **音楽DSLの新たなアプローチ**: LilyPondに依存しない独立したDSL
-2. **ポリリズム/ポリメーターの表現**: shared/independentメーターの実装
-3. **実用的な音楽制作環境**: VS Code統合による開発体験
+### Research Significance
+1. **Novel Approach to Music DSL**: Independent DSL without LilyPond dependency
+2. **Polyrhythm/Polymeter Expression**: Implementation of shared/independent meters
+3. **Practical Music Production Environment**: Development experience through VS Code integration
 
-### 技術的貢献
-1. **型安全な音楽DSL**: TypeScriptによる厳密な型定義
-2. **契約ベースの設計**: IR型定義による安定したAPI
-3. **テスト駆動開発**: Golden IRによる回帰テスト
+### Technical Contributions
+1. **Type-Safe Music DSL**: Strict type definitions with TypeScript
+2. **Contract-Based Design**: Stable API through IR type definitions
+3. **Test-Driven Development**: Regression testing with Golden IR
 
-### 今後の研究課題
-1. **パフォーマンス最適化**: 大規模楽譜の解析性能
-2. **ユーザビリティ**: エラーメッセージの改善
-3. **拡張性**: 新しい構文要素の追加
+### Future Research Challenges
+1. **Performance Optimization**: Parsing performance for large scores
+2. **Usability**: Improvement of error messages
+3. **Extensibility**: Addition of new syntax elements
 
-## 参考文献・関連研究
+## References and Related Work
 - TidalCycles: Live coding music with Haskell
 - LilyPond: Music notation software
 - Domain Specific Languages: Design and Implementation
@@ -199,7 +236,7 @@ export type SequenceEvent =
 
 ---
 
-**作成日**: 2024年12月19日
-**作成者**: AI Assistant
-**プロジェクト**: OrbitScore
-**フェーズ**: Phase 1 完了
+**Created**: December 19, 2024
+**Author**: AI Assistant
+**Project**: OrbitScore
+**Phase**: Phase 1 Completed

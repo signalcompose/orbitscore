@@ -33,6 +33,7 @@ orbitscore/
 ## 開発状況
 
 ✅ **Phase 1 完了** - パーサ実装
+✅ **Phase 2 完了** - Pitch/Bend変換（度数→MIDIノート+PitchBend、octave/octmul/detune/MPE）
 
 DSLのパーサが完全に実装され、demo.oscの解析に成功しました。詳細な実装計画は `IMPLEMENTATION_PLAN.md` をご覧ください。
 
@@ -44,7 +45,15 @@ DSLのパーサが完全に実装され、demo.oscの解析に成功しました
 - ✅ vitestテストフレームワーク
 
 ### 次のフェーズ
-🔄 **Phase 2** - Pitch/Bend変換（度数→MIDIノート+PitchBend変換）
+🔄 **Phase 3** - スケジューラ + Transport（LookAhead=50ms/ Tick=5ms、shared/independent、Loop/Jump）
+
+### テストの実行
+
+```bash
+npm test
+```
+
+すべてのテスト（parser / pitch / scheduler）が実行されます。
 
 ## 使い方
 
