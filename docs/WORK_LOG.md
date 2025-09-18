@@ -503,6 +503,8 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 - `332ebc3` - docs: Add PROJECT_RULES.md and update WORK_LOG.md for Phase 4
 - `ce08b16` - docs: Update WORK_LOG.md with documentation commit hash
 - `374db22` - docs: Add English instruction verification rule to PROJECT_RULES.md
+- `f0b7754` - docs: Update WORK_LOG.md with latest commit
+- `9bf6e18` - refactor: Organize documentation in docs folder
 
 ### 4.10 Next Steps
 
