@@ -1,0 +1,97 @@
+{
+  "global": {
+    "key": "C",
+    "tempo": 120,
+    "meter": {
+      "n": 4,
+      "d": 4,
+      "align": "shared"
+    },
+    "randseed": 0
+  },
+  "sequences": [
+    {
+      "config": {
+        "name": "piano",
+        "bus": "IAC Driver Bus 1",
+        "channel": 1,
+        "tempo": 132,
+        "meter": {
+          "n": 5,
+          "d": 4,
+          "align": "independent"
+        },
+        "octave": 4,
+        "octmul": 1,
+        "bendRange": 2,
+        "mpe": false
+      },
+      "events": [
+        {
+          "kind": "chord",
+          "notes": [
+            {
+              "pitch": {
+                "degree": 1
+              },
+              "dur": {
+                "kind": "unit",
+                "value": 0.5
+              }
+            },
+            {
+              "pitch": {
+                "degree": 5
+              },
+              "dur": {
+                "kind": "unit",
+                "value": 1
+              }
+            },
+            {
+              "pitch": {
+                "degree": 8
+              },
+              "dur": {
+                "kind": "unit",
+                "value": 0.25
+              }
+            }
+          ]
+        },
+        {
+          "kind": "rest",
+          "dur": {
+            "kind": "unit",
+            "value": 0.5
+          }
+        },
+        {
+          "kind": "note",
+          "pitches": [
+            {
+              "degree": 3
+            }
+          ],
+          "dur": {
+            "kind": "sec",
+            "value": 2
+          }
+        },
+        {
+          "kind": "note",
+          "pitches": [
+            {
+              "degree": 12
+            }
+          ],
+          "dur": {
+            "kind": "percent",
+            "percent": 2,
+            "bars": 2
+          }
+        }
+      ]
+    }
+  ]
+}
