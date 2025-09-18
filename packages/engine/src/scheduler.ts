@@ -15,6 +15,7 @@ export class Scheduler {
   private scheduledUntilMs = 0; // 0-based timeline
   private mutedSequences = new Set<string>();
   private soloSequences = new Set<string>();
+  private sentSet = new Set<string>();
 
   constructor(private out: MidiOut, private ir: IR) {}
   start() {
@@ -41,6 +42,15 @@ export class Scheduler {
   setSolo(sequenceNames: string[] | null) {
     this.soloSequences.clear();
     if (sequenceNames && sequenceNames.length) sequenceNames.forEach(n => this.soloSequences.add(n));
+  }
+
+  /**
+   * 再スケジュール開始位置を変更（ジャンプ等の後始末）
+   * clearSent=true にすると重複防止セットもリセット
+   */
+  resetSchedule(fromMs = 0, clearSent = false) {
+    this.scheduledUntilMs = Math.max(0, fromMs);
+    if (clearSent) this.sentSet.clear();
   }
 
   /**
@@ -204,7 +214,10 @@ export class Scheduler {
     const end = Math.max(endMs, start);
     const windowMsgs = this.collectWindow(start, end);
     for (const m of windowMsgs) {
+      const key = `${m.timeMs}-${m.status}-${m.data1}-${m.data2}`;
+      if (this.sentSet.has(key)) continue;
       this.out.send(m);
+      this.sentSet.add(key);
     }
     this.scheduledUntilMs = end;
   }
