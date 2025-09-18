@@ -21,3 +21,22 @@ export class TestMidiSink implements MidiOut {
 }
 
 // TODO: CoreMIDI 実装（@julusian/midi で IAC を開く）
+export class CoreMidiSink implements MidiOut {
+  private sent: MidiMessage[] = []
+  
+  async open(portName: string = 'IAC Driver Bus 1'): Promise<void> {
+    console.log(`Opening MIDI port: ${portName}`)
+    // TODO: Implement with @julusian/midi
+  }
+  
+  send(msg: MidiMessage): void {
+    // For now, just log
+    console.log(`MIDI: [${msg.timeMs}ms] ${msg.status.toString(16)} ${msg.data1} ${msg.data2}`)
+    this.sent.push(msg)
+  }
+  
+  async close(): Promise<void> {
+    console.log('Closing MIDI port')
+    // TODO: Implement with @julusian/midi
+  }
+}

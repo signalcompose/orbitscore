@@ -40,6 +40,10 @@ export class Scheduler {
     if (this.tickTimer) clearInterval(this.tickTimer)
     this.tickTimer = null
   }
+  
+  isPlaying(): boolean {
+    return this.tickTimer !== null
+  }
 
   // ----- Transport state helpers (for tests/phase3 minimal) -----
   setCurrentTimeSec(sec: number) {
