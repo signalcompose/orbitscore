@@ -10,16 +10,23 @@ export class Scheduler {
   private currentSec = 0;
   private loop: LoopWindow | null = null;
   private pendingJumpBar: number | null = null;
+  private tickTimer: NodeJS.Timeout | null = null;
+  private wallStartMs: number | null = null;
+  private scheduledUntilMs = 0; // 0-based timeline
 
   constructor(private out: MidiOut, private ir: IR) {}
   start() {
-    // TODO:
-    // - グローバル Playhead（Bar:Beat）を進める
-    // - Loop 窓 (startBar,endBar,enabled) と Jump/Scene/Mute/Solo を小節頭で反映
-    // - shared: 全シーケンスが同じ小節線を共有
-    // - independent: 各シーケンスが自分の小節線で回り込み
+    // 実時間窓出しの最小実装（テストでは直接 scheduleThrough を呼ぶ）
+    this.wallStartMs = Date.now();
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    this.tickTimer = setInterval(() => {
+      const nowMs = Date.now();
+      const elapsedMs = this.wallStartMs ? nowMs - this.wallStartMs : 0;
+      const targetMs = elapsedMs + LOOK_AHEAD_MS;
+      this.scheduleThrough(targetMs);
+    }, TICK_MS);
   }
-  stop() {}
+  stop() { if (this.tickTimer) clearInterval(this.tickTimer); this.tickTimer = null; }
 
   // ----- Transport state helpers (for tests/phase3 minimal) -----
   setCurrentTimeSec(sec: number) { this.currentSec = Math.max(0, sec); }
@@ -157,6 +164,19 @@ export class Scheduler {
     const start = Math.max(0, Math.floor(windowStartMs));
     const end = Math.max(start, Math.floor(windowEndMs));
     return all.filter(m => m.timeMs >= start && m.timeMs < end);
+  }
+
+  /**
+   * 内部の scheduledUntilMs から endMs までのイベントを送り出す（即時送信）
+   */
+  scheduleThrough(endMs: number) {
+    const start = this.scheduledUntilMs;
+    const end = Math.max(endMs, start);
+    const windowMsgs = this.collectWindow(start, end);
+    for (const m of windowMsgs) {
+      this.out.send(m);
+    }
+    this.scheduledUntilMs = end;
   }
 }
 
