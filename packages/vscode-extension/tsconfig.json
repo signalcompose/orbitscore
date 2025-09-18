@@ -1,5 +1,13 @@
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": { "outDir": "dist", "rootDir": "src", "module": "commonjs", "target": "ES2022" },
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "module": "commonjs",
+    "target": "ES2022",
+    "moduleResolution": "node",
+    "types": ["node", "vscode"],
+    "verbatimModuleSyntax": false
+  },
   "include": ["src"]
 }

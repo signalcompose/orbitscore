@@ -1,154 +1,153 @@
 import type { PitchSpec, SequenceConfig } from "./ir";
 
-// MIDIノートとPitchBendの結果
+/**
+ * MIDIノート番号とPitchBend値のペア
+ */
 export type MidiNote = {
   note: number;        // MIDIノート番号 (0-127)
-  pitchBend: number;   // PitchBend値 (-8192 to 8191)
-  channel: number;     // MIDIチャンネル (1-16)
+  pitchBend: number;   // PitchBend値 (-8192 〜 +8191)
+  channel: number;      // MIDIチャンネル (1-16)
 };
 
-// キーから半音オフセットへの変換
+/**
+ * キーから半音オフセットへのマッピング
+ */
 const KEY_TO_SEMITONE: Record<string, number> = {
   "C": 0, "Db": 1, "D": 2, "Eb": 3, "E": 4, "F": 5,
   "Gb": 6, "G": 7, "Ab": 8, "A": 9, "Bb": 10, "B": 11
 };
 
 /**
- * 度数をMIDIノート+PitchBendに変換
- * @param pitchSpec 音高仕様
- * @param config シーケンス設定
- * @param channel MIDIチャンネル（MPE使用時は自動割り当て）
- * @returns MIDIノート情報
+ * 度数から半音への変換（キー基準）
  */
-export function convertDegreeToMidi(
-  pitchSpec: PitchSpec,
-  config: Required<SequenceConfig>,
-  channel: number = 1
-): MidiNote {
-  // 1. 度数→半音変換
-  const semitones = convertDegreeToSemitones(pitchSpec.degree, config.key || "C");
-  
-  // 2. オクターブ・係数・detune合成
-  const finalSemitones = applyOctaveAndDetune(
-    semitones,
-    pitchSpec,
-    config.octave || 4.0,
-    config.octmul || 1.0
-  );
-  
-  // 3. MIDIノート+PitchBend変換
-  return convertSemitonesToMidi(finalSemitones, config.bendRange || 2, channel);
-}
-
-/**
- * 度数を半音に変換
- * @param degree 度数 (0=休符, 1-12=キー基準半音度数)
- * @param key キー (C, Db, D, ...)
- * @returns 半音数
- */
-function convertDegreeToSemitones(degree: number, key: string): number {
+function degreeToSemitone(degree: number, key: string): number {
   if (degree === 0) {
-    return 0; // 休符
+    throw new Error("Rest (degree 0) cannot be converted to semitone");
   }
   
   const keyOffset = KEY_TO_SEMITONE[key] || 0;
-  // 度数1 = キーのルート音
-  // 度数2 = キーのルート音 + 1半音
-  // 度数3 = キーのルート音 + 2半音
-  return keyOffset + (degree - 1);
+  // 1..12 はキー基準の半音度数（1→+1半音, 12→+12半音）
+  return keyOffset + degree;
 }
 
 /**
- * オクターブ・係数・detuneを適用
- * @param semitones 基本半音数
- * @param pitchSpec 音高仕様
- * @param octave 基本オクターブ
- * @param octmul オクターブ係数
- * @returns 最終半音数
+ * 乱数値を生成（randseedで再現性を保つ）
  */
-function applyOctaveAndDetune(
-  semitones: number,
-  pitchSpec: PitchSpec,
-  octave: number,
-  octmul: number
-): number {
-  let finalSemitones = semitones;
-  
-  // オクターブ係数適用（最初に適用）
-  finalSemitones *= octmul;
-  
-  // オクターブシフト適用
-  if (pitchSpec.octaveShift !== undefined) {
-    finalSemitones += pitchSpec.octaveShift * 12;
-  }
-  
-  // 基本オクターブ適用
-  const octaveOffset = (octave + 1) * 12;
-  finalSemitones += octaveOffset;
-  
-  // detune適用
-  if (pitchSpec.detune !== undefined) {
-    finalSemitones += pitchSpec.detune;
-  }
-  
-  return finalSemitones;
+function generateRandom(seed: number): number {
+  // 簡易的な線形合同法
+  const a = 1664525;
+  const c = 1013904223;
+  const m = Math.pow(2, 32);
+  return ((a * seed + c) % m) / m;
 }
 
 /**
- * 半音数をMIDIノート+PitchBendに変換
- * @param semitones 半音数
- * @param bendRange PitchBend範囲（半音）
- * @param channel MIDIチャンネル
- * @returns MIDIノート情報
+ * 数値に乱数サフィックス 'r' が含まれているかチェック
  */
-function convertSemitonesToMidi(
-  semitones: number,
-  bendRange: number,
-  channel: number
-): MidiNote {
-  // MIDIノート範囲にクランプ
-  const clampedSemitones = Math.max(0, Math.min(127, semitones));
-  
-  // 近傍MIDIノート計算
-  const midiNote = Math.round(clampedSemitones);
-  
-  // PitchBend値計算
-  const pitchBendSemitones = semitones - midiNote;
-  const pitchBendRange = bendRange * 2; // ±bendRange
-  const pitchBendValue = Math.round((pitchBendSemitones / pitchBendRange) * 8191);
-  
-  // PitchBend値を範囲内にクランプ
-  const clampedPitchBend = Math.max(-8192, Math.min(8191, pitchBendValue));
-  
-  return {
-    note: midiNote,
-    pitchBend: clampedPitchBend,
-    channel
-  };
+function hasRandomSuffix(value: string): boolean {
+  return value.endsWith('r');
 }
 
 /**
- * MPE対応のチャンネル割り当て
- * @param pitchSpecs 音高仕様配列
- * @param config シーケンス設定
- * @param baseChannel ベースチャンネル
- * @returns MIDIノート情報配列
+ * 乱数値を適用（0〜0.999の範囲）
  */
-export function convertChordToMidi(
-  pitchSpecs: PitchSpec[],
-  config: Required<SequenceConfig>,
-  baseChannel: number = 1
-): MidiNote[] {
-  if (!config.mpe) {
-    // MPE無効: 全音を同じチャンネルで送信
-    return pitchSpecs.map(pitchSpec => 
-      convertDegreeToMidi(pitchSpec, config, baseChannel)
-    );
+function applyRandom(value: number, randseed: number): number {
+  const random = generateRandom(randseed);
+  return value + (random * 0.999);
+}
+
+/**
+ * PitchConverter: 度数→MIDIノート+PitchBend変換
+ */
+export class PitchConverter {
+  private key: string;
+  private octave: number;
+  private octmul: number;
+  private bendRange: number;
+  private mpe: boolean;
+  private randseed: number;
+  private nextChannel: number;
+
+  constructor(config: Required<SequenceConfig>) {
+    this.key = config.key;
+    this.octave = config.octave;
+    this.octmul = config.octmul;
+    this.bendRange = config.bendRange;
+    this.mpe = config.mpe;
+    this.randseed = config.randseed;
+    this.nextChannel = config.channel;
   }
-  
-  // MPE有効: 各音を異なるチャンネルで送信
-  return pitchSpecs.map((pitchSpec, index) => {
-    const channel = baseChannel + (index % 15); // チャンネル1-15を使用
-    return convertDegreeToMidi(pitchSpec, config, channel);
-  });
+
+  /**
+   * PitchSpecをMIDIノートに変換
+   */
+  convertPitch(pitch: PitchSpec, originalValue?: string): MidiNote {
+    if (pitch.degree === 0) {
+      throw new Error("Cannot convert rest (degree 0) to MIDI note");
+    }
+
+    let degree = pitch.degree;
+    
+    // 乱数サフィックスの処理
+    if (originalValue && hasRandomSuffix(originalValue)) {
+      const numericValue = parseFloat(originalValue.slice(0, -1));
+      degree = applyRandom(numericValue, this.randseed);
+    }
+
+    // detune を除いた基準半音値（MIDIノート丸めの基準）
+    const baseSemitones =
+      60 +
+      degreeToSemitone(degree, this.key) +
+      ((this.octave * this.octmul) * 12) +
+      ((pitch.octaveShift ?? 0) * 12);
+
+    // detune を加味した最終半音値
+    const finalSemitones = baseSemitones + (pitch.detune ?? 0);
+
+    // MIDIノート番号とPitchBend値に変換
+    const midiNote = Math.round(baseSemitones);
+    const pitchBendValue = this.semitonesToPitchBend(finalSemitones - midiNote);
+
+    // チャンネル割り当て
+    const channel = this.assignChannel();
+
+    return {
+      note: Math.max(0, Math.min(127, midiNote)),
+      pitchBend: pitchBendValue,
+      channel
+    };
+  }
+
+  /**
+   * 半音差をPitchBend値に変換
+   */
+  private semitonesToPitchBend(semitones: number): number {
+    // PitchBend値の範囲: -8192 〜 +8191 にクリップ
+    const pitchBendRange = 8192;
+    const normalized = semitones / this.bendRange;
+    const value = Math.round(normalized * pitchBendRange);
+    return Math.max(-8192, Math.min(8191, value));
+  }
+
+  /**
+   * チャンネル割り当て（MPE対応）
+   */
+  private assignChannel(): number {
+    if (this.mpe) {
+      // MPEモード: チャンネル1-15を使用（16は予約）
+      const channel = ((this.nextChannel - 1) % 15) + 1;
+      this.nextChannel = channel + 1;
+      return channel;
+    } else {
+      // 通常モード: 設定されたチャンネルを使用
+      return this.nextChannel;
+    }
+  }
+
+  /**
+   * チャンネル割り当てをリセット
+   */
+  resetChannelAssignment(): void {
+    this.nextChannel = 1;
+  }
 }

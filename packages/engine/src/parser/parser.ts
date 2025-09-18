@@ -293,21 +293,21 @@ export class Parser {
     this.expect("AT");
     
     if (this.peek().type === "NUMBER") {
-      const value = this.parseNumber();
+      const firstNumber = this.parseNumber();
       if (this.peek().type === "IDENTIFIER" && this.peek().value === "s") {
         this.advance(); // "s"
-        return { kind: "sec", value };
+        return { kind: "sec", value: firstNumber };
       } else if (this.peek().type === "IDENTIFIER" && this.peek().value === "U") {
         this.advance(); // "U"
-        return { kind: "unit", value };
+        return { kind: "unit", value: firstNumber };
       } else if (this.peek().type === "PERCENT") {
         this.advance(); // "%"
-        const percent = this.parseNumber();
+        const bars = this.parseNumber();
         this.expect("IDENTIFIER"); // "bars"
-        return { kind: "percent", percent, bars: percent };
+        return { kind: "percent", percent: firstNumber, bars };
       } else {
         // 数値の後に何もない場合は、デフォルトでunitとして扱う
-        return { kind: "unit", value };
+        return { kind: "unit", value: firstNumber };
       }
     } else if (this.peek().type === "IDENTIFIER" && this.peek().value.startsWith("U")) {
       // U0.5, U1, U0.25 などの形式
