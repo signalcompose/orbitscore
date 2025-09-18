@@ -13,3 +13,4 @@ sched.start()
 console.log('OrbitScore Engine started (test sink). Ctrl+C to stop.')
 
 // Slack通知は一時停止
+// Test comment
