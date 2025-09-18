@@ -22,13 +22,17 @@ export class Scheduler {
     private ir: IR,
   ) {}
   start() {
-    // 実時間窓出しの最小実装（テストでは直接 scheduleThrough を呼ぶ）
+    // 実時間窓出しとトランスポート統合
     this.wallStartMs = Date.now()
     if (this.tickTimer) clearInterval(this.tickTimer)
     this.tickTimer = setInterval(() => {
       const nowMs = Date.now()
       const elapsedMs = this.wallStartMs ? nowMs - this.wallStartMs : 0
       const targetMs = elapsedMs + LOOK_AHEAD_MS
+      
+      // トランスポート前進（小節頭でjump/loop適用）
+      this.simulateTransportAdvanceAcrossSequences((targetMs - this.currentSec * 1000) / 1000)
+      
       this.scheduleThrough(targetMs)
     }, TICK_MS)
   }
@@ -152,32 +156,43 @@ export class Scheduler {
    */
   simulateTransportAdvanceAcrossSequences(durationSec: number) {
     const endTarget = this.currentSec + Math.max(0, durationSec)
-    while (true) {
-      const nextBoundary = nextBoundaryAcrossSequences(this.currentSec + 1e-9, this.ir)
-      if (nextBoundary > endTarget) {
-        this.currentSec = endTarget
-        break
-      }
-      this.currentSec = nextBoundary
-      if (this.pendingJumpBar !== null) {
-        const baseSeq = globalBaseSeq(this.ir)
-        const targetSec = barIndexToSeconds(this.pendingJumpBar, baseSeq, this.ir)
-        this.currentSec = targetSec
-        this.pendingJumpBar = null
-        return
-      }
-      if (this.loop && this.loop.enabled) {
-        const baseSeq = globalBaseSeq(this.ir)
-        const startSec = barIndexToSeconds(this.loop.startBar, baseSeq, this.ir)
-        const endSec = barIndexToSeconds(this.loop.endBar, baseSeq, this.ir)
-        if (this.currentSec >= endSec) {
-          this.currentSec = startSec
-          return
-        }
-      }
-      // 境界に到達したので今回の前進はここで終了
+    
+    // Find the next boundary
+    const nextBoundary = nextBoundaryAcrossSequences(this.currentSec + 1e-9, this.ir)
+    
+    // If next boundary is beyond our target, just advance to target
+    if (nextBoundary > endTarget) {
+      this.currentSec = endTarget
       return
     }
+    
+    // Advance to the next boundary
+    this.currentSec = nextBoundary
+    
+    // Check for pending jump at this boundary
+    if (this.pendingJumpBar !== null) {
+      const baseSeq = globalBaseSeq(this.ir)
+      const targetSec = barIndexToSeconds(this.pendingJumpBar, baseSeq, this.ir)
+      this.currentSec = targetSec
+      this.pendingJumpBar = null
+      return // Jump applied, stop here
+    }
+    
+    // Check for loop at this boundary
+    if (this.loop && this.loop.enabled) {
+      const baseSeq = globalBaseSeq(this.ir)
+      const startSec = barIndexToSeconds(this.loop.startBar, baseSeq, this.ir)
+      const endSec = barIndexToSeconds(this.loop.endBar, baseSeq, this.ir)
+      if (this.currentSec >= endSec) {
+        // Loop back to start
+        this.currentSec = startSec
+        // For loop, we just jump back to start, no overflow
+        return
+      }
+    }
+    
+    // Boundary reached, stop here (no transport actions triggered)
+    return
   }
 
   /**
@@ -422,7 +437,7 @@ function thisTempoFallback(): number {
   return 120
 }
 
-function globalBaseSeq(ir: IR): SequenceIR {
+export function globalBaseSeq(ir: IR): SequenceIR {
   return {
     config: {
       name: '__global__',
