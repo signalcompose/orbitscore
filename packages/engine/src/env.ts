@@ -1,6 +1,7 @@
-import * as path from 'node:path';
-import * as fs from 'node:fs';
-import dotenv from 'dotenv';
+import * as path from "node:path";
+import * as fs from "node:fs";
+
+import * as dotenv from "dotenv";
 
 /**
  * プロジェクトの .env を読み込む（ルート or パッケージ配下）
@@ -8,9 +9,9 @@ import dotenv from 'dotenv';
  */
 export function loadProjectEnv(): string | undefined {
   const candidates = [
-    path.resolve(process.cwd(), '.env'),
-    path.resolve(__dirname, '../../../.env'), // repo root when running from dist
-    path.resolve(__dirname, '../../.env'),    // engine package root
+    path.resolve(process.cwd(), ".env"),
+    path.resolve(__dirname, "../../../.env"), // repo root when running from dist
+    path.resolve(__dirname, "../../.env"), // engine package root
   ];
 
   for (const p of candidates) {

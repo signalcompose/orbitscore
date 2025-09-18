@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { parseSourceToIR } from '../../packages/engine/src/parser/parser';
-import { Scheduler } from '../../packages/engine/src/scheduler';
-import { TestMidiSink } from '../../packages/engine/src/midi';
+import { describe, it, expect } from "vitest";
+
+import { parseSourceToIR } from "../../packages/engine/src/parser/parser";
+import { Scheduler } from "../../packages/engine/src/scheduler";
+import { TestMidiSink } from "../../packages/engine/src/midi";
 
 const src = `
 key C
@@ -17,8 +18,8 @@ sequence s {
 }
 `;
 
-describe('reschedule without duplicates', () => {
-  it('avoids duplicates after resetSchedule and re-schedule', () => {
+describe("reschedule without duplicates", () => {
+  it("avoids duplicates after resetSchedule and re-schedule", () => {
     const ir = parseSourceToIR(src);
     const sink = new TestMidiSink();
     const sched = new Scheduler(sink as any, ir);

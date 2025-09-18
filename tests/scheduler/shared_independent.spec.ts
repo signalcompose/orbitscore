@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { parseSourceToIR } from '../../packages/engine/src/parser/parser';
-import { Scheduler } from '../../packages/engine/src/scheduler';
-import { TestMidiSink } from '../../packages/engine/src/midi';
+import { describe, it, expect } from "vitest";
+
+import { parseSourceToIR } from "../../packages/engine/src/parser/parser";
+import { Scheduler } from "../../packages/engine/src/scheduler";
+import { TestMidiSink } from "../../packages/engine/src/midi";
 
 const src = `
 key C
@@ -25,8 +26,8 @@ sequence sharedSeq {
 }
 `;
 
-describe('Scheduler: shared vs independent percent duration', () => {
-  it('uses sequence meter for independent and global meter for shared', () => {
+describe("Scheduler: shared vs independent percent duration", () => {
+  it("uses sequence meter for independent and global meter for shared", () => {
     const ir = parseSourceToIR(src);
     const sink = new TestMidiSink();
     const sched = new Scheduler(sink as any, ir);
@@ -34,8 +35,12 @@ describe('Scheduler: shared vs independent percent duration', () => {
 
     // helper to get duration of first note for a channel
     function durationMsForChannel(ch: number): number {
-      const noteOns = msgs.filter(m => (m.status & 0xf0) === 0x90 && ((m.status & 0x0f) + 1) === ch);
-      const noteOffs = msgs.filter(m => (m.status & 0xf0) === 0x80 && ((m.status & 0x0f) + 1) === ch);
+      const noteOns = msgs.filter(
+        (m) => (m.status & 0xf0) === 0x90 && (m.status & 0x0f) + 1 === ch,
+      );
+      const noteOffs = msgs.filter(
+        (m) => (m.status & 0xf0) === 0x80 && (m.status & 0x0f) + 1 === ch,
+      );
       expect(noteOns.length).toBeGreaterThan(0);
       expect(noteOffs.length).toBeGreaterThan(0);
       return noteOffs[0]!.timeMs - noteOns[0]!.timeMs;

@@ -1,8 +1,9 @@
+import * as fs from "node:fs";
+
 import { parseSourceToIR } from "./parser/parser";
 import { TestMidiSink } from "./midi";
 import { Scheduler } from "./scheduler";
 import { loadProjectEnv } from "./env";
-import * as fs from "node:fs";
 
 loadProjectEnv();
 const file = process.argv[2] ?? "examples/demo.osc";

@@ -1,4 +1,4 @@
-import type { IR, DurationSpec, SequenceEvent, SequenceIR } from "./ir";
+import type { IR, DurationSpec, SequenceIR } from "./ir";
 import type { MidiOut, MidiMessage } from "./midi";
 import { PitchConverter } from "./pitch";
 
@@ -17,7 +17,10 @@ export class Scheduler {
   private soloSequences = new Set<string>();
   private sentSet = new Set<string>();
 
-  constructor(private out: MidiOut, private ir: IR) {}
+  constructor(
+    private out: MidiOut,
+    private ir: IR,
+  ) {}
   start() {
     // 実時間窓出しの最小実装（テストでは直接 scheduleThrough を呼ぶ）
     this.wallStartMs = Date.now();
@@ -29,19 +32,32 @@ export class Scheduler {
       this.scheduleThrough(targetMs);
     }, TICK_MS);
   }
-  stop() { if (this.tickTimer) clearInterval(this.tickTimer); this.tickTimer = null; }
+  stop() {
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    this.tickTimer = null;
+  }
 
   // ----- Transport state helpers (for tests/phase3 minimal) -----
-  setCurrentTimeSec(sec: number) { this.currentSec = Math.max(0, sec); }
-  getCurrentTimeSec(): number { return this.currentSec; }
-  setLoop(window: LoopWindow | null) { this.loop = window; }
-  requestJump(targetBar: number) { this.pendingJumpBar = Math.max(0, Math.floor(targetBar)); }
+  setCurrentTimeSec(sec: number) {
+    this.currentSec = Math.max(0, sec);
+  }
+  getCurrentTimeSec(): number {
+    return this.currentSec;
+  }
+  setLoop(window: LoopWindow | null) {
+    this.loop = window;
+  }
+  requestJump(targetBar: number) {
+    this.pendingJumpBar = Math.max(0, Math.floor(targetBar));
+  }
   setMute(sequenceName: string, muted: boolean) {
-    if (muted) this.mutedSequences.add(sequenceName); else this.mutedSequences.delete(sequenceName);
+    if (muted) this.mutedSequences.add(sequenceName);
+    else this.mutedSequences.delete(sequenceName);
   }
   setSolo(sequenceNames: string[] | null) {
     this.soloSequences.clear();
-    if (sequenceNames && sequenceNames.length) sequenceNames.forEach(n => this.soloSequences.add(n));
+    if (sequenceNames && sequenceNames.length)
+      sequenceNames.forEach((n) => this.soloSequences.add(n));
   }
 
   /**
@@ -69,15 +85,28 @@ export class Scheduler {
         channel: 1,
         key: this.ir.global.key,
         tempo: this.ir.global.tempo,
-        meter: { n: this.ir.global.meter.n, d: this.ir.global.meter.d, align: 'shared' },
-        octave: 0, octmul: 1, bendRange: 2, mpe: false,
-        defaultDur: { kind: 'unit', value: 1 }, randseed: 0
+        meter: {
+          n: this.ir.global.meter.n,
+          d: this.ir.global.meter.d,
+          align: "shared",
+        },
+        octave: 0,
+        octmul: 1,
+        bendRange: 2,
+        mpe: false,
+        defaultDur: { kind: "unit", value: 1 },
+        randseed: 0,
       },
-      events: []
+      events: [],
     } as any;
 
+    // eslint-disable-next-line no-constant-condition
     while (true) {
-      const nextBoundary = quantizeToNextBar(this.currentSec + 1e-9, baseSeq, this.ir);
+      const nextBoundary = quantizeToNextBar(
+        this.currentSec + 1e-9,
+        baseSeq,
+        this.ir,
+      );
       if (nextBoundary > endTarget) {
         this.currentSec = endTarget;
         break;
@@ -88,7 +117,11 @@ export class Scheduler {
 
       // Jump優先（適用したら今回の進行は終了）
       if (this.pendingJumpBar !== null) {
-        const targetSec = barIndexToSeconds(this.pendingJumpBar, baseSeq, this.ir);
+        const targetSec = barIndexToSeconds(
+          this.pendingJumpBar,
+          baseSeq,
+          this.ir,
+        );
         this.currentSec = targetSec;
         this.pendingJumpBar = null;
         return;
@@ -96,7 +129,11 @@ export class Scheduler {
 
       // Loop
       if (this.loop && this.loop.enabled) {
-        const startSec = barIndexToSeconds(this.loop.startBar, baseSeq, this.ir);
+        const startSec = barIndexToSeconds(
+          this.loop.startBar,
+          baseSeq,
+          this.ir,
+        );
         const endSec = barIndexToSeconds(this.loop.endBar, baseSeq, this.ir);
         if (this.currentSec >= endSec) {
           this.currentSec = startSec;
@@ -150,7 +187,10 @@ export class Scheduler {
           // グループ音価は内部最大
           let groupDurSec = 0;
           for (const n of ev.notes) {
-            groupDurSec = Math.max(groupDurSec, durationToSeconds(n.dur, seq, this.ir));
+            groupDurSec = Math.max(
+              groupDurSec,
+              durationToSeconds(n.dur, seq, this.ir),
+            );
           }
           for (const n of ev.notes) {
             const durSec = durationToSeconds(n.dur, seq, this.ir);
@@ -172,7 +212,7 @@ export class Scheduler {
       }
     }
 
-    return msgs.map(m => ({ ...m, timeMs: Math.round(m.timeMs) }));
+    return msgs.map((m) => ({ ...m, timeMs: Math.round(m.timeMs) }));
   }
 
   /**
@@ -187,16 +227,18 @@ export class Scheduler {
     if (this.soloSequences.size > 0) {
       allowedChannels = new Set<number>();
       for (const seq of this.ir.sequences) {
-        if (this.soloSequences.has(seq.config.name)) allowedChannels.add(seq.config.channel);
+        if (this.soloSequences.has(seq.config.name))
+          allowedChannels.add(seq.config.channel);
       }
     } else if (this.mutedSequences.size > 0) {
       allowedChannels = new Set<number>();
       for (const seq of this.ir.sequences) {
-        if (!this.mutedSequences.has(seq.config.name)) allowedChannels.add(seq.config.channel);
+        if (!this.mutedSequences.has(seq.config.name))
+          allowedChannels.add(seq.config.channel);
       }
     }
 
-    return all.filter(m => {
+    return all.filter((m) => {
       if (m.timeMs < start || m.timeMs >= end) return false;
       if (allowedChannels) {
         const ch = (m.status & 0x0f) + 1; // 1-16
@@ -225,8 +267,12 @@ export class Scheduler {
 
 // ---------- utils ----------
 
-export function durationToSeconds(d: DurationSpec, seq: SequenceIR, ir?: IR): number {
-  const tempo = seq.config.tempo ??  thisTempoFallback(seq);
+export function durationToSeconds(
+  d: DurationSpec,
+  seq: SequenceIR,
+  ir?: IR,
+): number {
+  const tempo = seq.config.tempo ?? thisTempoFallback();
   const n = seq.config.meter?.n ?? 4;
   const dDen = seq.config.meter?.d ?? 4;
   const secPerQuarter = 60 / tempo; // BPMは四分音符を基準
@@ -242,7 +288,7 @@ export function durationToSeconds(d: DurationSpec, seq: SequenceIR, ir?: IR): nu
       // independent: シーケンス自身のメーターでバー長を計算
       let barSeconds = n * secPerDenNote;
       const align = seq.config.meter?.align ?? ir?.global.meter.align;
-      if (align === 'shared' && ir) {
+      if (align === "shared" && ir) {
         const gn = ir.global.meter.n;
         const gd = ir.global.meter.d;
         const secPerGlobalDen = (4 / gd) * secPerQuarter;
@@ -259,17 +305,23 @@ export function durationToSeconds(d: DurationSpec, seq: SequenceIR, ir?: IR): nu
 
 /** シーケンス1小節の秒数（sharedならグローバルメーター） */
 export function barDurationSeconds(seq: SequenceIR, ir?: IR): number {
-  const tempo = seq.config.tempo ?? thisTempoFallback(seq);
+  const tempo = seq.config.tempo ?? thisTempoFallback();
   const secPerQuarter = 60 / tempo;
-  const align = seq.config.meter?.align ?? ir?.global.meter.align ?? 'shared';
-  const n = align === 'shared' && ir ? ir.global.meter.n : (seq.config.meter?.n ?? 4);
-  const d = align === 'shared' && ir ? ir.global.meter.d : (seq.config.meter?.d ?? 4);
+  const align = seq.config.meter?.align ?? ir?.global.meter.align ?? "shared";
+  const n =
+    align === "shared" && ir ? ir.global.meter.n : (seq.config.meter?.n ?? 4);
+  const d =
+    align === "shared" && ir ? ir.global.meter.d : (seq.config.meter?.d ?? 4);
   const secPerDenNote = (4 / d) * secPerQuarter;
   return n * secPerDenNote;
 }
 
 /** 現在秒から、次の小節頭までを返す（Quantized Apply用） */
-export function quantizeToNextBar(currentSec: number, seq: SequenceIR, ir?: IR): number {
+export function quantizeToNextBar(
+  currentSec: number,
+  seq: SequenceIR,
+  ir?: IR,
+): number {
   const barSec = barDurationSeconds(seq, ir);
   if (barSec <= 0) return currentSec;
   const bars = Math.ceil(currentSec / barSec);
@@ -277,7 +329,11 @@ export function quantizeToNextBar(currentSec: number, seq: SequenceIR, ir?: IR):
 }
 
 /** n小節目の先頭の秒位置（0始まり想定: barIndex=0 -> 0sec） */
-export function barIndexToSeconds(barIndex: number, seq: SequenceIR, ir?: IR): number {
+export function barIndexToSeconds(
+  barIndex: number,
+  seq: SequenceIR,
+  ir?: IR,
+): number {
   const barSec = barDurationSeconds(seq, ir);
   return Math.max(0, barIndex) * barSec;
 }
@@ -285,7 +341,11 @@ export function barIndexToSeconds(barIndex: number, seq: SequenceIR, ir?: IR): n
 export type LoopWindow = { enabled: boolean; startBar: number; endBar: number };
 
 /** 次の小節頭でLoopを適用する際の適用時刻（秒）を返す */
-export function computeLoopApplyTime(currentSec: number, seq: SequenceIR, ir?: IR): number {
+export function computeLoopApplyTime(
+  currentSec: number,
+  seq: SequenceIR,
+  ir?: IR,
+): number {
   return quantizeToNextBar(currentSec, seq, ir);
 }
 
@@ -294,23 +354,45 @@ export function planJump(
   currentSec: number,
   targetBar: number,
   seq: SequenceIR,
-  ir?: IR
+  ir?: IR,
 ): { applyAtSec: number; jumpToSec: number } {
   const applyAtSec = quantizeToNextBar(currentSec, seq, ir);
   const jumpToSec = barIndexToSeconds(targetBar, seq, ir);
   return { applyAtSec, jumpToSec };
 }
 
-function thisTempoFallback(_seq: SequenceIR): number { return 120; }
-
-function makeNoteOn(tSec: number, ch: number, note: number, vel: number): MidiMessage {
-  const status = 0x90 | ((ch - 1) & 0x0f);
-  return { timeMs: Math.round(tSec * 1000), status, data1: note & 0x7f, data2: vel & 0x7f };
+function thisTempoFallback(): number {
+  return 120;
 }
 
-function makeNoteOff(tSec: number, ch: number, note: number, vel: number): MidiMessage {
+function makeNoteOn(
+  tSec: number,
+  ch: number,
+  note: number,
+  vel: number,
+): MidiMessage {
+  const status = 0x90 | ((ch - 1) & 0x0f);
+  return {
+    timeMs: Math.round(tSec * 1000),
+    status,
+    data1: note & 0x7f,
+    data2: vel & 0x7f,
+  };
+}
+
+function makeNoteOff(
+  tSec: number,
+  ch: number,
+  note: number,
+  vel: number,
+): MidiMessage {
   const status = 0x80 | ((ch - 1) & 0x0f);
-  return { timeMs: Math.round(tSec * 1000), status, data1: note & 0x7f, data2: vel & 0x7f };
+  return {
+    timeMs: Math.round(tSec * 1000),
+    status,
+    data1: note & 0x7f,
+    data2: vel & 0x7f,
+  };
 }
 
 function makePitchBend(tSec: number, ch: number, bend: number): MidiMessage {
@@ -318,6 +400,6 @@ function makePitchBend(tSec: number, ch: number, bend: number): MidiMessage {
   const value14 = Math.max(0, Math.min(16383, bend + 8192));
   const lsb = value14 & 0x7f;
   const msb = (value14 >> 7) & 0x7f;
-  const status = 0xE0 | ((ch - 1) & 0x0f);
+  const status = 0xe0 | ((ch - 1) & 0x0f);
   return { timeMs: Math.round(tSec * 1000), status, data1: lsb, data2: msb };
 }

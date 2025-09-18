@@ -3,7 +3,9 @@
   "displayName": "OrbitScore",
   "publisher": "local",
   "version": "0.0.1",
-  "engines": { "vscode": "^1.90.0" },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
   "activationEvents": [
     "onStartupFinished",
     "onCommand:orbitscore.start",
@@ -13,14 +15,37 @@
   ],
   "contributes": {
     "commands": [
-      { "command": "orbitscore.start", "title": "OrbitScore: Start Engine" },
-      { "command": "orbitscore.runSelection", "title": "OrbitScore: Run Selection" },
-      { "command": "orbitscore.stop", "title": "OrbitScore: Stop Engine" },
-      { "command": "orbitscore.transport", "title": "OrbitScore: Transport Panel" }
+      {
+        "command": "orbitscore.start",
+        "title": "OrbitScore: Start Engine"
+      },
+      {
+        "command": "orbitscore.runSelection",
+        "title": "OrbitScore: Run Selection"
+      },
+      {
+        "command": "orbitscore.stop",
+        "title": "OrbitScore: Stop Engine"
+      },
+      {
+        "command": "orbitscore.transport",
+        "title": "OrbitScore: Transport Panel"
+      }
     ],
-    "languages": [{ "id": "orbitscore", "extensions": [".osc"] }],
+    "languages": [
+      {
+        "id": "orbitscore",
+        "extensions": [
+          ".osc"
+        ]
+      }
+    ],
     "keybindings": [
-      { "command": "orbitscore.runSelection", "key": "cmd+enter", "when": "editorTextFocus && editorLangId == orbitscore" }
+      {
+        "command": "orbitscore.runSelection",
+        "key": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == orbitscore"
+      }
     ]
   },
   "scripts": {

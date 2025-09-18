@@ -10,7 +10,11 @@
     "test": "npm -w @orbitscore/engine test",
     "slack:notify": "node ./scripts/slack_notify.js",
     "slack:latest": "node ./scripts/slack_fetch_latest.js",
-    "slack:mentions": "node ./scripts/slack_fetch_mentions.js"
+    "slack:mentions": "node ./scripts/slack_fetch_mentions.js",
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "format": "prettier . --write",
+    "prepare": "husky install"
   },
   "version": "1.0.0",
   "main": "index.js",
@@ -20,8 +24,23 @@
   "description": "",
   "devDependencies": {
     "@types/node": "^24.5.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-prettier": "^5.5.4",
+    "husky": "^9.1.6",
+    "lint-staged": "^15.2.9",
+    "prettier": "^3.6.2",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2",
     "vitest": "^3.2.4"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ]
   }
 }

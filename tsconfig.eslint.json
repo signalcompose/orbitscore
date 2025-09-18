@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolveJsonModule": true
+  },
+  "include": [
+    "packages/engine/src/**/*.ts",
+    "packages/vscode-extension/src/**/*.ts",
+    "tests/**/*.ts"
+  ]
+}

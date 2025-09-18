@@ -1,11 +1,37 @@
-import type { IR, GlobalConfig, SequenceIR, SequenceConfig, SequenceEvent, PitchSpec, DurationSpec, MeterAlign } from "../ir";
+import type {
+  IR,
+  GlobalConfig,
+  SequenceIR,
+  SequenceConfig,
+  SequenceEvent,
+  PitchSpec,
+  DurationSpec,
+  MeterAlign,
+} from "../ir";
 
 // トークン型定義
-export type TokenType = 
-  | "KEYWORD" | "IDENTIFIER" | "NUMBER" | "STRING" | "BOOLEAN"
-  | "LPAREN" | "RPAREN" | "LBRACE" | "RBRACE" | "LBRACKET" | "RBRACKET"
-  | "COMMA" | "AT" | "PERCENT" | "COLON" | "ASTERISK" | "CARET" | "TILDE"
-  | "SLASH" | "NEWLINE" | "EOF";
+export type TokenType =
+  | "KEYWORD"
+  | "IDENTIFIER"
+  | "NUMBER"
+  | "STRING"
+  | "BOOLEAN"
+  | "LPAREN"
+  | "RPAREN"
+  | "LBRACE"
+  | "RBRACE"
+  | "LBRACKET"
+  | "RBRACKET"
+  | "COMMA"
+  | "AT"
+  | "PERCENT"
+  | "COLON"
+  | "ASTERISK"
+  | "CARET"
+  | "TILDE"
+  | "SLASH"
+  | "NEWLINE"
+  | "EOF";
 
 export type Token = {
   type: TokenType;
@@ -16,9 +42,22 @@ export type Token = {
 
 // キーワード定義
 const KEYWORDS = new Set([
-  "key", "tempo", "meter", "randseed", "sequence", "bus", "channel",
-  "octave", "octmul", "bendRange", "mpe", "defaultDur", "shared", "independent",
-  "true", "false"
+  "key",
+  "tempo",
+  "meter",
+  "randseed",
+  "sequence",
+  "bus",
+  "channel",
+  "octave",
+  "octmul",
+  "bendRange",
+  "mpe",
+  "defaultDur",
+  "shared",
+  "independent",
+  "true",
+  "false",
 ]);
 
 // トークナイザー
@@ -37,13 +76,13 @@ export class Tokenizer {
   }
 
   private peek(): string {
-    return this.isEOF() ? '\0' : this.src[this.pos]!;
+    return this.isEOF() ? "\0" : this.src[this.pos]!;
   }
 
   private advance(): string {
-    if (this.isEOF()) return '\0';
+    if (this.isEOF()) return "\0";
     const char = this.src[this.pos++];
-    if (char === '\n') {
+    if (char === "\n") {
       this.line++;
       this.column = 1;
     } else {
@@ -53,24 +92,23 @@ export class Tokenizer {
   }
 
   private skipWhitespace(): void {
-    while (!this.isEOF() && /\s/.test(this.peek()) && this.peek() !== '\n') {
+    while (!this.isEOF() && /\s/.test(this.peek()) && this.peek() !== "\n") {
       this.advance();
     }
   }
 
   private skipComment(): void {
-    if (this.peek() === '#') {
-      while (!this.isEOF() && this.peek() !== '\n') {
+    if (this.peek() === "#") {
+      while (!this.isEOF() && this.peek() !== "\n") {
         this.advance();
       }
     }
   }
 
   private readNumber(): Token {
-    const startPos = this.pos;
     const startLine = this.line;
     const startColumn = this.column;
-    let value = '';
+    let value = "";
 
     // 整数部分
     while (!this.isEOF() && /\d/.test(this.peek())) {
@@ -78,7 +116,7 @@ export class Tokenizer {
     }
 
     // 小数部分
-    if (this.peek() === '.') {
+    if (this.peek() === ".") {
       value += this.advance();
       while (!this.isEOF() && /\d/.test(this.peek())) {
         value += this.advance();
@@ -86,7 +124,7 @@ export class Tokenizer {
     }
 
     // 乱数サフィックス
-    if (this.peek() === 'r') {
+    if (this.peek() === "r") {
       value += this.advance();
     }
 
@@ -94,7 +132,7 @@ export class Tokenizer {
       type: "NUMBER",
       value,
       line: startLine,
-      column: startColumn
+      column: startColumn,
     };
   }
 
@@ -102,10 +140,10 @@ export class Tokenizer {
     const startLine = this.line;
     const startColumn = this.column;
     this.advance(); // 開始の "
-    let value = '';
+    let value = "";
 
     while (!this.isEOF() && this.peek() !== '"') {
-      if (this.peek() === '\\') {
+      if (this.peek() === "\\") {
         this.advance();
         if (!this.isEOF()) {
           value += this.advance();
@@ -123,14 +161,14 @@ export class Tokenizer {
       type: "STRING",
       value,
       line: startLine,
-      column: startColumn
+      column: startColumn,
     };
   }
 
   private readIdentifier(): Token {
     const startLine = this.line;
     const startColumn = this.column;
-    let value = '';
+    let value = "";
 
     while (!this.isEOF() && /[a-zA-Z0-9_.]/.test(this.peek())) {
       value += this.advance();
@@ -141,7 +179,7 @@ export class Tokenizer {
       type,
       value,
       line: startLine,
-      column: startColumn
+      column: startColumn,
     };
   }
 
@@ -173,12 +211,21 @@ export class Tokenizer {
 
     // 記号
     const symbolMap: Record<string, TokenType> = {
-      '(': "LPAREN", ')': "RPAREN",
-      '{': "LBRACE", '}': "RBRACE",
-      '[': "LBRACKET", ']': "RBRACKET",
-      ',': "COMMA", '@': "AT", '%': "PERCENT",
-      ':': "COLON", '*': "ASTERISK", '^': "CARET",
-      '~': "TILDE", '/': "SLASH", '\n': "NEWLINE"
+      "(": "LPAREN",
+      ")": "RPAREN",
+      "{": "LBRACE",
+      "}": "RBRACE",
+      "[": "LBRACKET",
+      "]": "RBRACKET",
+      ",": "COMMA",
+      "@": "AT",
+      "%": "PERCENT",
+      ":": "COLON",
+      "*": "ASTERISK",
+      "^": "CARET",
+      "~": "TILDE",
+      "/": "SLASH",
+      "\n": "NEWLINE",
     };
 
     if (char in symbolMap) {
@@ -189,7 +236,7 @@ export class Tokenizer {
         type: symbolMap[char],
         value,
         line: startLine,
-        column: startColumn
+        column: startColumn,
       };
     }
 
@@ -197,7 +244,9 @@ export class Tokenizer {
     const startLine = this.line;
     const startColumn = this.column;
     const value = this.advance();
-    throw new Error(`Unknown character '${value}' at line ${startLine}, column ${startColumn}`);
+    throw new Error(
+      `Unknown character '${value}' at line ${startLine}, column ${startColumn}`,
+    );
   }
 
   tokenize(): Token[] {
@@ -227,7 +276,9 @@ export class Parser {
   }
 
   private peek(): Token {
-    return this.isEOF() ? this.tokens[this.tokens.length - 1] : this.tokens[this.pos];
+    return this.isEOF()
+      ? this.tokens[this.tokens.length - 1]
+      : this.tokens[this.pos];
   }
 
   private advance(): Token {
@@ -246,7 +297,9 @@ export class Parser {
   private expect(type: TokenType): Token {
     const token = this.peek();
     if (token.type !== type) {
-      throw new Error(`Expected ${type}, got ${token.type} at line ${token.line}, column ${token.column}`);
+      throw new Error(
+        `Expected ${type}, got ${token.type} at line ${token.line}, column ${token.column}`,
+      );
     }
     return this.advance();
   }
@@ -255,7 +308,9 @@ export class Parser {
     const token = this.expect("NUMBER");
     const value = parseFloat(token.value);
     if (isNaN(value)) {
-      throw new Error(`Invalid number '${token.value}' at line ${token.line}, column ${token.column}`);
+      throw new Error(
+        `Invalid number '${token.value}' at line ${token.line}, column ${token.column}`,
+      );
     }
     return value;
   }
@@ -269,14 +324,31 @@ export class Parser {
     const token = this.expect("KEYWORD");
     if (token.value === "true") return true;
     if (token.value === "false") return false;
-    throw new Error(`Expected boolean, got '${token.value}' at line ${token.line}, column ${token.column}`);
+    throw new Error(
+      `Expected boolean, got '${token.value}' at line ${token.line}, column ${token.column}`,
+    );
   }
 
   private parseKey(): string {
     const token = this.expect("KEYWORD");
-    const validKeys = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+    const validKeys = [
+      "C",
+      "Db",
+      "D",
+      "Eb",
+      "E",
+      "F",
+      "Gb",
+      "G",
+      "Ab",
+      "A",
+      "Bb",
+      "B",
+    ];
     if (!validKeys.includes(token.value)) {
-      throw new Error(`Invalid key '${token.value}' at line ${token.line}, column ${token.column}`);
+      throw new Error(
+        `Invalid key '${token.value}' at line ${token.line}, column ${token.column}`,
+      );
     }
     return token.value;
   }
@@ -286,18 +358,23 @@ export class Parser {
     if (token.value === "shared" || token.value === "independent") {
       return token.value;
     }
-    throw new Error(`Invalid meter alignment '${token.value}' at line ${token.line}, column ${token.column}`);
+    throw new Error(
+      `Invalid meter alignment '${token.value}' at line ${token.line}, column ${token.column}`,
+    );
   }
 
   private parseDurationSpec(): DurationSpec {
     this.expect("AT");
-    
+
     if (this.peek().type === "NUMBER") {
       const firstNumber = this.parseNumber();
       if (this.peek().type === "IDENTIFIER" && this.peek().value === "s") {
         this.advance(); // "s"
         return { kind: "sec", value: firstNumber };
-      } else if (this.peek().type === "IDENTIFIER" && this.peek().value === "U") {
+      } else if (
+        this.peek().type === "IDENTIFIER" &&
+        this.peek().value === "U"
+      ) {
         this.advance(); // "U"
         return { kind: "unit", value: firstNumber };
       } else if (this.peek().type === "PERCENT") {
@@ -309,7 +386,10 @@ export class Parser {
         // 数値の後に何もない場合は、デフォルトでunitとして扱う
         return { kind: "unit", value: firstNumber };
       }
-    } else if (this.peek().type === "IDENTIFIER" && this.peek().value.startsWith("U")) {
+    } else if (
+      this.peek().type === "IDENTIFIER" &&
+      this.peek().value.startsWith("U")
+    ) {
       // U0.5, U1, U0.25 などの形式
       const identifier = this.peek().value;
       this.advance(); // "U..."
@@ -331,7 +411,9 @@ export class Parser {
       const base = this.parseNumber();
       return { kind: "tuplet", a, b, base: { kind: "unit", value: base } };
     } else {
-      throw new Error(`Invalid duration spec at line ${this.peek().line}, column ${this.peek().column}`);
+      throw new Error(
+        `Invalid duration spec at line ${this.peek().line}, column ${this.peek().column}`,
+      );
     }
   }
 
@@ -364,7 +446,7 @@ export class Parser {
       // 和音
       this.advance(); // "("
       const notes: { pitch: PitchSpec; dur: DurationSpec }[] = [];
-      
+
       do {
         const pitch = this.parsePitchSpec();
         const dur = this.parseDurationSpec();
@@ -380,7 +462,7 @@ export class Parser {
       // 単音または休符
       const degree = this.parseNumber();
       const dur = this.parseDurationSpec();
-      
+
       if (degree === 0) {
         return { kind: "rest", dur };
       } else {
@@ -395,7 +477,7 @@ export class Parser {
 
     while (!this.isEOF() && this.peek().type === "KEYWORD") {
       const keyword = this.peek().value;
-      
+
       switch (keyword) {
         case "key":
           this.advance(); // "key"
@@ -405,7 +487,7 @@ export class Parser {
           this.advance(); // "tempo"
           config.tempo = this.parseNumber();
           break;
-        case "meter":
+        case "meter": {
           this.advance(); // "meter"
           const n = this.parseNumber();
           this.expect("SLASH");
@@ -413,6 +495,7 @@ export class Parser {
           const align = this.parseMeterAlign();
           config.meter = { n, d, align };
           break;
+        }
         case "randseed":
           this.advance(); // "randseed"
           config.randseed = this.parseNumber();
@@ -427,7 +510,7 @@ export class Parser {
       key: config.key || "C",
       tempo: config.tempo || 120,
       meter: config.meter || { n: 4, d: 4, align: "shared" },
-      randseed: config.randseed || 0
+      randseed: config.randseed || 0,
     };
   }
 
@@ -441,61 +524,65 @@ export class Parser {
     while (this.peek().type !== "RBRACE" && this.peek().type !== "EOF") {
       if (this.peek().type === "KEYWORD") {
         const keyword = this.peek().value;
-        
+
         switch (keyword) {
-        case "bus":
-          this.advance(); // "bus"
-          config.bus = this.parseString();
-          break;
-        case "channel":
-          this.advance(); // "channel"
-          config.channel = this.parseNumber();
-          break;
-        case "key":
-          this.advance(); // "key"
-          config.key = this.parseKey();
-          break;
-        case "tempo":
-          this.advance(); // "tempo"
-          config.tempo = this.parseNumber();
-          break;
-        case "meter":
-          this.advance(); // "meter"
-          const n = this.parseNumber();
-          this.expect("SLASH");
-          const d = this.parseNumber();
-          const align = this.parseMeterAlign();
-          config.meter = { n, d, align };
-          break;
-        case "octave":
-          this.advance(); // "octave"
-          config.octave = this.parseNumber();
-          break;
-        case "octmul":
-          this.advance(); // "octmul"
-          config.octmul = this.parseNumber();
-          break;
-        case "bendRange":
-          this.advance(); // "bendRange"
-          config.bendRange = this.parseNumber();
-          break;
-        case "mpe":
-          this.advance(); // "mpe"
-          config.mpe = this.parseBoolean();
-          break;
-        case "defaultDur":
-          this.advance(); // "defaultDur"
-          config.defaultDur = this.parseDurationSpec();
-          break;
-        case "randseed":
-          this.advance(); // "randseed"
-          config.randseed = this.parseNumber();
-          break;
-        default:
-          // イベントの開始 - 設定の解析を終了
-          return config as SequenceConfig;
+          case "bus":
+            this.advance(); // "bus"
+            config.bus = this.parseString();
+            break;
+          case "channel":
+            this.advance(); // "channel"
+            config.channel = this.parseNumber();
+            break;
+          case "key":
+            this.advance(); // "key"
+            config.key = this.parseKey();
+            break;
+          case "tempo":
+            this.advance(); // "tempo"
+            config.tempo = this.parseNumber();
+            break;
+          case "meter": {
+            this.advance(); // "meter"
+            const n = this.parseNumber();
+            this.expect("SLASH");
+            const d = this.parseNumber();
+            const align = this.parseMeterAlign();
+            config.meter = { n, d, align };
+            break;
+          }
+          case "octave":
+            this.advance(); // "octave"
+            config.octave = this.parseNumber();
+            break;
+          case "octmul":
+            this.advance(); // "octmul"
+            config.octmul = this.parseNumber();
+            break;
+          case "bendRange":
+            this.advance(); // "bendRange"
+            config.bendRange = this.parseNumber();
+            break;
+          case "mpe":
+            this.advance(); // "mpe"
+            config.mpe = this.parseBoolean();
+            break;
+          case "defaultDur":
+            this.advance(); // "defaultDur"
+            config.defaultDur = this.parseDurationSpec();
+            break;
+          case "randseed":
+            this.advance(); // "randseed"
+            config.randseed = this.parseNumber();
+            break;
+          default:
+            // イベントの開始 - 設定の解析を終了
+            return config as SequenceConfig;
         }
-      } else if (this.peek().type === "NUMBER" || this.peek().type === "LPAREN") {
+      } else if (
+        this.peek().type === "NUMBER" ||
+        this.peek().type === "LPAREN"
+      ) {
         // イベントの開始 - 設定の解析を終了
         return config as SequenceConfig;
       } else {
@@ -539,9 +626,9 @@ export class Parser {
         bendRange: config.bendRange || 2,
         mpe: config.mpe || false,
         defaultDur: config.defaultDur,
-        randseed: config.randseed
+        randseed: config.randseed,
       },
-      events
+      events,
     };
   }
 
