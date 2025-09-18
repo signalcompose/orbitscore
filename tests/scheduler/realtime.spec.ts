@@ -35,4 +35,22 @@ describe('Scheduler realtime windowing (minimal)', () => {
     sched.scheduleThrough(1100)
     expect(sink.sent.some((m) => m.timeMs === 1000)).toBe(true)
   })
+
+  it('reports global playhead as bar:beat at 120bpm 4/4', () => {
+    const ir = parseSourceToIR(src)
+    const sched = new Scheduler(new TestMidiSink() as any, ir)
+    // 120bpm, 4/4 → 1小節=2秒, 1拍=0.5秒
+    sched.setCurrentTimeSec(0)
+    expect(sched.getGlobalPlayheadBarBeat()).toEqual({ bar: 0, beat: 1 })
+    sched.setCurrentTimeSec(0.5)
+    expect(sched.getGlobalPlayheadBarBeat().beat).toBeCloseTo(2, 5)
+    sched.setCurrentTimeSec(1.0)
+    expect(sched.getGlobalPlayheadBarBeat().beat).toBeCloseTo(3, 5)
+    sched.setCurrentTimeSec(1.5)
+    expect(sched.getGlobalPlayheadBarBeat().beat).toBeCloseTo(4, 5)
+    sched.setCurrentTimeSec(2.0)
+    const p = sched.getGlobalPlayheadBarBeat()
+    expect(p.bar).toBe(1)
+    expect(p.beat).toBeCloseTo(1, 5)
+  })
 })

@@ -44,6 +44,21 @@ export class Scheduler {
   getCurrentTimeSec(): number {
     return this.currentSec
   }
+  /** 現在のグローバル再生位置を Bar:Beat で返す（Beat=1始まり、4/4なら1小節=4拍） */
+  getGlobalPlayheadBarBeat(): { bar: number; beat: number } {
+    const baseSeq = globalBaseSeq(this.ir)
+    const barSec = barDurationSeconds(baseSeq, this.ir)
+    if (barSec <= 0) return { bar: 0, beat: 1 }
+    const barFloat = this.currentSec / barSec
+    const barIndex = Math.floor(barFloat)
+    const beatCount = this.ir.global.meter.n
+    const withinBarSec = this.currentSec - barIndex * barSec
+    const secPerBeat = barSec / beatCount
+    const beatFloat = withinBarSec / secPerBeat
+    // 1始まり表示: 1..N の範囲に丸め（小数は切り上げず、そのまま+1）
+    const beat = 1 + beatFloat
+    return { bar: barIndex, beat }
+  }
   setLoop(window: LoopWindow | null) {
     this.loop = window
   }
