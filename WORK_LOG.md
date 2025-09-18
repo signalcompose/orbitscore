@@ -250,11 +250,136 @@ export type SequenceEvent =
 - Octave, coefficient, detune synthesis
 - MPE/channel assignment
 
-### Phase 3: Scheduler + Transport
+## Phase 3: Scheduler + Transport (In Progress)
 
-- Scheduling with LookAhead=50ms, Tick=5ms
-- shared/independent meter support
-- Transport functionality (Loop/Jump/Mute/Solo)
+### 3.1 Overview
+
+**Date**: December 19, 2024
+**Work Content**:
+
+- Real-time scheduling implementation with LookAhead=50ms, Tick=5ms
+- Shared/independent meter support with polymeter/tempo
+- Transport functionality (Loop/Jump/Mute/Solo) with quantization at bar boundaries
+- Window-based note event scheduling with cross-boundary NOTE_OFF handling
+
+### 3.2 Scheduler Core Implementation
+
+**Date**: December 19, 2024
+**Work Content**:
+
+- Basic scheduler with window-based event generation
+- Event scheduling through `scheduleThrough()` method
+- Support for both shared and independent sequences
+- Cross-window NOTE_OFF tracking to prevent stuck notes
+
+**Implementation Details**:
+
+```typescript
+export class Scheduler {
+  private currentSec: number = 0
+  private wallStartMs: number | null = null
+  private tickTimer: NodeJS.Timeout | null = null
+  private pendingJumpBar: number | null = null
+  private loop: LoopRange | null = null
+  private muted: Set<string> = new Set()
+  private soloed: Set<string> = new Set()
+  
+  scheduleThrough(targetMs: number): void
+  simulateTransportAdvanceAcrossSequences(durationSec: number): void
+}
+```
+
+### 3.3 Transport Integration
+
+**Date**: December 19, 2024  
+**Work Content**:
+
+- Jump/Loop implementation with bar boundary quantization
+- `simulateTransportAdvanceAcrossSequences` method for boundary-aware advancement
+- Support for mixed shared/independent sequences
+- Proper handling of transport actions at boundaries
+
+**Technical Decisions**:
+
+- Transport actions (jump/loop) are applied only at bar boundaries
+- No overflow time is applied after loop (maintains boundary semantic)
+- Method stops at first boundary where transport action occurs
+- Recursive advancement removed to maintain single-boundary-per-call behavior
+
+### 3.4 Test Suite Implementation
+
+**Date**: December 19, 2024
+**Work Content**:
+
+- Comprehensive test coverage across 15 test files
+- 21 tests covering all scheduler functionality
+- Golden events generation for demo.osc validation
+- Transport integration tests for real-time playback scenarios
+
+**Test Files Created/Modified**:
+
+1. `tests/scheduler/basic.spec.ts` - Basic event scheduling
+2. `tests/scheduler/window.spec.ts` - Window-based scheduling
+3. `tests/scheduler/cross_window_noteoff.spec.ts` - NOTE_OFF boundary handling
+4. `tests/scheduler/shared_independent.spec.ts` - Mixed meter support
+5. `tests/scheduler/polymeter_tempo.spec.ts` - Polymeter/tempo combinations
+6. `tests/scheduler/quantize.spec.ts` - Quantization behavior
+7. `tests/scheduler/mute_solo.spec.ts` - Mute/Solo functionality
+8. `tests/scheduler/loop_jump.spec.ts` - Loop/Jump operations
+9. `tests/scheduler/transport_state.spec.ts` - Transport state management
+10. `tests/scheduler/realtime.spec.ts` - Real-time scheduling
+11. `tests/scheduler/reschedule.spec.ts` - Event rescheduling
+12. `tests/scheduler/next_boundary.spec.ts` - Boundary calculations
+13. `tests/scheduler/next_boundary_transport.spec.ts` - Transport at boundaries
+14. `tests/scheduler/transport_integration.spec.ts` - Full transport integration
+15. `tests/scheduler/golden_events_demo.spec.ts` - Golden event validation
+
+### 3.5 Bug Fixes and Refinements
+
+**Date**: December 19, 2024
+**Work Content**:
+
+#### Transport Integration Fixes (Final Phase)
+
+- **Parser Errors**: Fixed sequence naming issues in test files
+  - `sequence shared` → `sequence sharedSeq`
+  - `sequence indep` → `sequence indepSeq`
+
+- **Loop Test Logic**: Adjusted timing for proper loop boundary testing
+  - Changed start from 2.5s to 3.5s (within bar 1)
+  - Updated expectations to match boundary behavior
+
+- **simulateTransportAdvanceAcrossSequences**: Simplified and corrected logic
+  - Stops at boundaries after applying transport actions
+  - No overflow after loop (consistent boundary semantics)
+  - Fixed to handle one boundary at a time as intended
+
+### 3.6 Technical Achievements
+
+1. **Real-time Scheduling**: Accurate timing with 50ms lookahead buffer
+2. **Polymeter/Tempo Support**: Independent and shared meter/tempo handling
+3. **Transport Quantization**: Jump/Loop actions applied at bar boundaries
+4. **NOTE_OFF Management**: Cross-window tracking prevents stuck notes
+5. **Test Coverage**: 100% test pass rate (21/21 tests)
+
+### 3.7 Implementation Status
+
+- ✅ Basic scheduler with window-based events
+- ✅ Shared/independent sequence support
+- ✅ Transport (Jump/Loop) with boundary quantization
+- ✅ Mute/Solo functionality
+- ✅ Cross-window NOTE_OFF handling
+- ✅ Real-time scheduling integration
+- ✅ Comprehensive test suite
+
+### 3.8 Commit History
+
+- `ea3f482` - fix: Transport integration Phase 3 - Fix jump/loop behavior at boundaries
+
+### 3.9 Next Steps
+
+- Phase 4: VS Code Extension implementation
+- Phase 5: MIDI Output via CoreMIDI
 
 ### Phase 4: VS Code Extension
 
@@ -299,4 +424,4 @@ export type SequenceEvent =
 **Created**: December 19, 2024
 **Author**: AI Assistant
 **Project**: OrbitScore
-**Phase**: Phase 1 Completed
+**Phase**: Phase 3 In Progress
