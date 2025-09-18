@@ -299,10 +299,12 @@ export class Scheduler {
 // ---------- utils ----------
 
 export function durationToSeconds(d: DurationSpec, seq: SequenceIR, ir?: IR): number {
-  const tempo = seq.config.tempo ?? thisTempoFallback()
+  // テンポは align により参照元を切替（shared はグローバル、independent はシーケンス）
+  const align = seq.config.meter?.align ?? ir?.global.meter.align
+  const effectiveTempo = align === 'shared' && ir ? ir.global.tempo : (seq.config.tempo ?? thisTempoFallback())
   const n = seq.config.meter?.n ?? 4
   const dDen = seq.config.meter?.d ?? 4
-  const secPerQuarter = 60 / tempo // BPMは四分音符を基準
+  const secPerQuarter = 60 / effectiveTempo // BPMは四分音符を基準
   const secPerDenNote = (4 / dDen) * secPerQuarter // 拍子分母=1 の基準
 
   switch (d.kind) {
@@ -311,16 +313,17 @@ export function durationToSeconds(d: DurationSpec, seq: SequenceIR, ir?: IR): nu
     case 'unit':
       return d.value * secPerDenNote
     case 'percent': {
-      // shared: グローバルメーターのバー長を使用
-      // independent: シーケンス自身のメーターでバー長を計算
-      let barSeconds = n * secPerDenNote
-      const align = seq.config.meter?.align ?? ir?.global.meter.align
+      // shared: グローバルのメーターとテンポでバー長を計算
+      // independent: シーケンス自身のメーターとテンポでバー長を計算
       if (align === 'shared' && ir) {
         const gn = ir.global.meter.n
         const gd = ir.global.meter.d
-        const secPerGlobalDen = (4 / gd) * secPerQuarter
-        barSeconds = gn * secPerGlobalDen
+        const secPerGlobalQuarter = 60 / ir.global.tempo
+        const secPerGlobalDen = (4 / gd) * secPerGlobalQuarter
+        const barSeconds = gn * secPerGlobalDen
+        return (d.percent / 100) * (d.bars * barSeconds)
       }
+      const barSeconds = n * secPerDenNote
       return (d.percent / 100) * (d.bars * barSeconds)
     }
     case 'tuplet': {
@@ -330,13 +333,20 @@ export function durationToSeconds(d: DurationSpec, seq: SequenceIR, ir?: IR): nu
   }
 }
 
-/** シーケンス1小節の秒数（sharedならグローバルメーター） */
+/** シーケンス1小節の秒数（sharedならグローバルのメーター/テンポに従う） */
 export function barDurationSeconds(seq: SequenceIR, ir?: IR): number {
-  const tempo = seq.config.tempo ?? thisTempoFallback()
-  const secPerQuarter = 60 / tempo
   const align = seq.config.meter?.align ?? ir?.global.meter.align ?? 'shared'
-  const n = align === 'shared' && ir ? ir.global.meter.n : (seq.config.meter?.n ?? 4)
-  const d = align === 'shared' && ir ? ir.global.meter.d : (seq.config.meter?.d ?? 4)
+  if (align === 'shared' && ir) {
+    const n = ir.global.meter.n
+    const d = ir.global.meter.d
+    const secPerQuarter = 60 / ir.global.tempo
+    const secPerDenNote = (4 / d) * secPerQuarter
+    return n * secPerDenNote
+  }
+  const tempo = seq.config.tempo ?? thisTempoFallback()
+  const n = seq.config.meter?.n ?? 4
+  const d = seq.config.meter?.d ?? 4
+  const secPerQuarter = 60 / tempo
   const secPerDenNote = (4 / d) * secPerQuarter
   return n * secPerDenNote
 }
