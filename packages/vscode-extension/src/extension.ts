@@ -230,6 +230,12 @@ function showTransportPanel() {
       case 'loop':
         sendTransportCommand(`loop:${message.enabled}:${message.start}:${message.end}`)
         break
+      case 'mute':
+        sendTransportCommand(`mute:${message.seq}:${message.on}`)
+        break
+      case 'solo':
+        sendTransportCommand(`solo:${message.list}`)
+        break
     }
   })
 }
@@ -385,6 +391,22 @@ function getTransportHTML(): string {
         <button id="setLoopBtn">Set Loop</button>
     </div>
 
+    <div class="section">
+        <h3>Mute</h3>
+        <label>Sequence: <input type="text" id="muteSeq" placeholder="piano"></label>
+        <label>
+            <input type="checkbox" id="muteOn"> Muted
+        </label>
+        <button id="applyMuteBtn">Apply</button>
+    </div>
+
+    <div class="section">
+        <h3>Solo</h3>
+        <label>Sequences (comma-separated): <input type="text" id="soloList" placeholder="drums,bass"></label>
+        <button id="applySoloBtn">Apply Solo</button>
+        <button id="clearSoloBtn">Clear Solo</button>
+    </div>
+
     <script>
         const vscode = acquireVsCodeApi();
 
@@ -415,6 +437,25 @@ function getTransportHTML(): string {
                 start: parseInt(start),
                 end: parseInt(end)
             });
+        });
+
+        document.getElementById('applyMuteBtn').addEventListener('click', () => {
+            const seq = document.getElementById('muteSeq').value?.trim();
+            const on = document.getElementById('muteOn').checked;
+            if (seq) {
+                vscode.postMessage({ command: 'mute', seq, on });
+            }
+        });
+
+        document.getElementById('applySoloBtn').addEventListener('click', () => {
+            const list = document.getElementById('soloList').value?.trim();
+            if (list) {
+                vscode.postMessage({ command: 'solo', list });
+            }
+        });
+
+        document.getElementById('clearSoloBtn').addEventListener('click', () => {
+            vscode.postMessage({ command: 'solo', list: 'none' });
         });
     </script>
 </body>
