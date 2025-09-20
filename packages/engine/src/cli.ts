@@ -55,13 +55,28 @@ function registerSignalHandlers() {
 
 registerSignalHandlers()
 
+function listPorts(): string[] {
+  try {
+    const out = new MidiOutput()
+    const n = out.getPortCount()
+    const names: string[] = []
+    for (let i = 0; i < n; i++) names.push(out.getPortName(i))
+    try {
+      out.closePort()
+      // eslint-disable-next-line no-empty
+    } catch {}
+    if (typeof (out as any).destroy === 'function') (out as any).destroy()
+    return names
+  } catch (e) {
+    console.error(`Failed to enumerate ports: ${e instanceof Error ? e.message : e}`)
+    return []
+  }
+}
+
 function startEngine() {
   console.log('Starting OrbitScore engine...')
 
   midiSink = midiSink ?? new CoreMidiSink()
-  midiSink.open().catch((error) => {
-    console.error(`Failed to open MIDI port: ${error instanceof Error ? error.message : error}`)
-  })
 
   // Create readline interface for transport commands
   const rl = readline.createInterface({
@@ -148,24 +163,6 @@ function handleTransportCommand(command: string) {
 
   const parts = command.split(':')
   const cmd = parts[0]
-
-  function listPorts(): string[] {
-    try {
-      const out = new MidiOutput()
-      const n = out.getPortCount()
-      const names: string[] = []
-      for (let i = 0; i < n; i++) names.push(out.getPortName(i))
-      try {
-        out.closePort()
-        // eslint-disable-next-line no-empty
-      } catch {}
-      if (typeof (out as any).destroy === 'function') (out as any).destroy()
-      return names
-    } catch (e) {
-      console.error(`Failed to enumerate ports: ${e instanceof Error ? e.message : e}`)
-      return []
-    }
-  }
 
   switch (cmd) {
     case 'play':
@@ -356,6 +353,30 @@ switch (command) {
     break
   }
 
+  case 'ports': {
+    const names = listPorts()
+    console.log(`PORTS:${JSON.stringify(names)}`)
+    console.log(
+      names.length
+        ? names.map((n: string, i: number) => `${i}: ${n}`).join('\n')
+        : 'No ports (is IAC Driver enabled?)',
+    )
+    break
+  }
+
+  case 'eval': {
+    const filePath = process.argv[3]
+    if (!filePath) {
+      console.error('Usage: orbitscore eval <file.osc>')
+      process.exit(1)
+    }
+    runFile(filePath).catch((error) => {
+      console.error(`Failed to eval file: ${error instanceof Error ? error.message : error}`)
+      process.exit(1)
+    })
+    break
+  }
+
   case 'help':
   default:
     console.log(`
@@ -364,6 +385,8 @@ OrbitScore Engine CLI
 Usage:
   orbitscore start           Start the engine daemon
   orbitscore run <file>      Run an .osc file
+  orbitscore eval <file>     Evaluate an .osc file
+  orbitscore ports          List available MIDI ports
   orbitscore help           Show this help
 
 Transport commands (when engine is running):
