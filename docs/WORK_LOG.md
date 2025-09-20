@@ -661,7 +661,11 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 
 **Impact**:
 
-- DSL `tuplet` duration and single-note microtonal/octave modifiers work as specified in `INSTRUCTIONS_NEW_DSL.md`.
+- DSL `tuplet` durationとsingle-note microtonal/octave modifiersが `INSTRUCTIONS_NEW_DSL.md` の仕様通りに動作。
+
+**Commit History**:
+
+- `dea355e` - feat(parser): improve duration diagnostics
 
 ### 5.10 Parser/IR wiring for random suffix `r` and key token acceptance
 
@@ -691,5 +695,4 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 
 **Commit History**:
 
-- `7bef26d` - feat(parser): accept key as IDENTIFIER; carry degreeRaw on PitchSpec
-- `b7472e2` - feat(engine): wire r-suffix end-to-end; add E2E tests; docs
+- `42dc84a` - feat(engine): add CLI port management
