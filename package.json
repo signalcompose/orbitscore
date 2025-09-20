@@ -11,6 +11,7 @@
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier . --write",
+    "telemetry:max": "node tools/max-telemetry-server.js",
     "prepare": "husky"
   },
   "version": "1.0.0",

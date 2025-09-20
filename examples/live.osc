@@ -1,0 +1,12 @@
+key C
+tempo 120
+meter 4/4 shared
+
+# 最小テスト用シーケンス（IACに直送）
+sequence lead {
+  bus "IACドライバ バス1"  # 環境のポート名に合わせて必要なら変更
+  channel 1
+  octave 4.0
+  1@U1  5@U1  8@U1  12@U1
+}
+
