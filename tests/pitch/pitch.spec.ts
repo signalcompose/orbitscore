@@ -44,23 +44,23 @@ describe('PitchConverter', () => {
 
     it('should map all 12 degrees correctly in key C', () => {
       const converter = new PitchConverter(createConfig({ key: 'C' }))
-      
+
       // Complete degree to MIDI note mapping in key C
       const expectedMapping = [
-        { degree: 1, note: 60 },  // C
-        { degree: 2, note: 61 },  // C#
-        { degree: 3, note: 62 },  // D
-        { degree: 4, note: 63 },  // D#
-        { degree: 5, note: 64 },  // E
-        { degree: 6, note: 65 },  // F
-        { degree: 7, note: 66 },  // F#
-        { degree: 8, note: 67 },  // G
-        { degree: 9, note: 68 },  // G#
+        { degree: 1, note: 60 }, // C
+        { degree: 2, note: 61 }, // C#
+        { degree: 3, note: 62 }, // D
+        { degree: 4, note: 63 }, // D#
+        { degree: 5, note: 64 }, // E
+        { degree: 6, note: 65 }, // F
+        { degree: 7, note: 66 }, // F#
+        { degree: 8, note: 67 }, // G
+        { degree: 9, note: 68 }, // G#
         { degree: 10, note: 69 }, // A
         { degree: 11, note: 70 }, // A#
         { degree: 12, note: 71 }, // B
       ]
-      
+
       expectedMapping.forEach(({ degree, note }) => {
         const result = converter.convertPitch({ degree })
         expect(result.note).toBe(note)
