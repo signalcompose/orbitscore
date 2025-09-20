@@ -53,9 +53,12 @@ export class CoreMidiSink implements MidiOut {
   }
 
   async open(portName?: string): Promise<void> {
-    const target = (portName ?? this.defaultPort).trim()
-    if (!target) {
+    if (!portName) {
       throw new Error('CoreMidiSink requires a MIDI port name to open')
+    }
+    const target = portName.trim()
+    if (!target) {
+      throw new Error('CoreMidiSink requires a non-empty MIDI port name to open')
     }
 
     if (this.output && this.output.isPortOpen() && this.currentPort === target) {

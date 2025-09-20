@@ -6,7 +6,7 @@ randseed 42
 
 # シーケンス（ピアノ）
 sequence piano {
-  bus "IAC Driver Bus 1"
+  bus "to Max 1"
   channel 1
   meter 5/4 independent
   tempo 132
