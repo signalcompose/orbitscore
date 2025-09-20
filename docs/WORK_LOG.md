@@ -696,7 +696,7 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 
 **Commit History**:
 
-- _TBD_ - feat(engine): add CLI port management
+- `b3a1963` - feat(engine): add CLI port management
 
 ### 5.11 VS Code Transport Panel Enhancements
 
@@ -727,10 +727,7 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 
 **Commit History**:
 
-- _TBD_ - feat(vscode): enhance transport panel with live status
-- **Commit History**:
-
-- _TBD_
+- `3432427` - feat(vscode): enhance transport panel with live status
 
 ### 5.12 Telemetry pipeline for Max integration
 
@@ -762,4 +759,4 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 
 **Commit History**:
 
-- _TBD_ - feat(telemetry): add Max patches, logging tools, and analyzer tests
+- `727cf55` - feat(telemetry): add Max patches, logging tools, and analyzer tests
