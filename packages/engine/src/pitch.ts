@@ -159,10 +159,11 @@ export class PitchConverter {
 
     // detune を除いた基準半音値（MIDIノート丸めの基準）
     // MIDIのフルレンジ（0-127）をカバーするため、オクターブ0から開始
+    // octmul: オクターブの定義を変更する係数（1.0=12半音, 0.5=6半音, 2.0=24半音）
     const baseSemitones =
       degreeToSemitone(degree, this.key) +
-      this.octave * this.octmul * 12 +
-      (pitch.octaveShift ?? 0) * 12
+      this.octave * (this.octmul * 12) +
+      (pitch.octaveShift ?? 0) * (this.octmul * 12)
 
     // detune を加味した最終半音値
     const finalSemitones = baseSemitones + (pitch.detune ?? 0)
