@@ -159,7 +159,6 @@ function handleTransportCommand(command: string) {
         out.closePort()
         // eslint-disable-next-line no-empty
       } catch {}
-      // @ts-expect-error destroy may not exist in types
       if (typeof (out as any).destroy === 'function') (out as any).destroy()
       return names
     } catch (e) {
