@@ -86,6 +86,7 @@ function startEngine() {
   })
 
   rl.on('line', (line) => {
+    console.log(`Received command: ${line.trim()}`)
     handleTransportCommand(line.trim())
   })
 
@@ -197,6 +198,64 @@ async function liveEvaluate(code: string) {
 }
 
 function handleTransportCommand(command: string) {
+  // Handle eval command even without scheduler
+  if (command.startsWith('eval:')) {
+    console.log(`Processing eval command: ${command}`)
+    const parts = command.split(':')
+    const file = (parts[1] || '').trim()
+    if (!file) {
+      console.error('Usage: eval:<file.osc>')
+      return
+    }
+    console.log(`Reading file: ${file}`)
+    console.log(`File exists: ${fs.existsSync(file)}`)
+    ;(async () => {
+      try {
+        const source = fs.readFileSync(file, 'utf8')
+        console.log(`File content length: ${source.length}`)
+        console.log(`Parsing source...`)
+        console.log(`Source content: ${source.substring(0, 200)}...`)
+        let ir
+        try {
+          ir = parseSourceToIR(source)
+          console.log(`Parsing successful, creating scheduler...`)
+          console.log(`IR sequences count: ${ir.sequences.length}`)
+        } catch (parseError) {
+          console.error(`Parse error: ${parseError}`)
+          console.error(
+            `Parse error stack: ${parseError instanceof Error ? parseError.stack : 'No stack'}`,
+          )
+          return
+        }
+        if (scheduler) {
+          scheduler.stop()
+          scheduler = null
+        }
+        midiSink = midiSink ?? new CoreMidiSink()
+        const busNames = Array.from(
+          new Set(
+            ir.sequences
+              .map((seq) => seq.config.bus)
+              .filter((name) => typeof name === 'string' && name.trim().length > 0),
+          ),
+        )
+        const primaryBus = busNames[0]
+        if (busNames.length > 1 && primaryBus) {
+          console.warn(
+            `Multiple MIDI buses detected (${busNames.join(', ')}). Using "${primaryBus}" for evaluation.`,
+          )
+        }
+        await midiSink.open(primaryBus)
+        scheduler = new Scheduler(midiSink, ir)
+        scheduler.start()
+        console.log(`Evaluation completed with bus: ${primaryBus || 'default'}`)
+      } catch (error) {
+        console.error(`Evaluation failed: ${error instanceof Error ? error.message : error}`)
+      }
+    })()
+    return
+  }
+
   if (!scheduler) {
     console.error('No scheduler active')
     return

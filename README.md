@@ -21,6 +21,24 @@
 - **macOS対応**: IAC Bus経由でのMIDI出力（CoreMIDI / @julusian/midi）
 - **VS Code拡張**: 統合開発環境での作曲
 
+## 現在の実装状況
+
+### ✅ 完了済みフェーズ
+
+- **Phase 1**: Parser Implementation (100%)
+- **Phase 2**: Pitch/Bend Conversion (100%)  
+- **Phase 3**: Scheduler + Transport (100%)
+- **Phase 4**: VS Code Extension (100%)
+- **Phase 5**: MIDI Output Implementation (100%)
+- **Phase 6**: Max/MSP Integration (100%)
+- **Phase 7**: Live Coding Implementation (100%)
+- **Phase 8**: VS Code Extension Live Coding Fixes (100%)
+
+### 🚧 次の実装予定
+
+- **Phase 9**: Global configuration and selective sequence playback
+- **Phase 10**: Performance optimization and advanced features
+
 ## 技術スタック
 
 - TypeScript
