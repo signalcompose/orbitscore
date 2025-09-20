@@ -16,12 +16,15 @@
 
 **When the user provides instructions in English:**
 
+- **Respond in Japanese using UTF-8 encoding**
+- Provide "Suggested English" to improve the user's English writing skills
 - Check if the English is grammatically correct
 - If incorrect, provide the corrected version
 - Suggest rephrasing for clarity
 - Example response: "I believe you meant: '[corrected sentence]'. Would you like me to proceed with this understanding?"
 - Help the user improve their English communication skills
 - Always be respectful and supportive when making corrections
+- **Purpose: To enhance the user's English writing ability through continuous feedback**
 
 ### 3. Documentation First
 
