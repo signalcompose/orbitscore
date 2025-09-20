@@ -36,8 +36,17 @@
 
 ### 🚧 次の実装予定
 
-- **Phase 9**: Global configuration and selective sequence playback
-- **Phase 10**: Performance optimization and advanced features
+- **Phase 11**: Sequence Loop Playback and DJ-like Controls
+  - シーケンスのループ再生機能
+  - `.stop`, `.mute`, `.unmute` コマンド
+  - グローバル設定とシーケンス設定の分離実行
+- **Phase 12**: Parameter Debugging and Implementation
+  - key, tempo, meter, bendRange, defaultDur パラメータの実装
+  - パラメータのデバッグ機能
+- **Phase 13**: VS Code Extension Enhancements
+  - 構文チェック機能の実装
+  - DSL明示的セクション化
+- **Phase 14**: Performance optimization and advanced features
 
 ## 技術スタック
 
