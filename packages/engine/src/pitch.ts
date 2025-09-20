@@ -29,7 +29,7 @@ const KEY_TO_SEMITONE: Record<string, number> = {
 
 /**
  * 度数から半音への変換（キー基準）
- * 
+ *
  * 重要: 音階に0の概念を導入することが本ソフトウェアの特徴
  * - 0 = 休符/無音（rest/silence） ※この関数には入らない
  *   - 音が出ない音価を指定することで休符を表現
@@ -53,42 +53,42 @@ function degreeToSemitone(degree: number, key: string): number {
   }
 
   const keyOffset = KEY_TO_SEMITONE[key] || 0
-  
+
   // 度数から半音へのマッピング
-  // 1=C(0), 2=C#(1), 3=D(2), 4=D#(3), 5=E(4), 6=F(5), 
+  // 1=C(0), 2=C#(1), 3=D(2), 4=D#(3), 5=E(4), 6=F(5),
   // 7=F#(6), 8=G(7), 9=G#(8), 10=A(9), 11=A#(10), 12=B(11)
   const degreeToSemitoneMap: Record<number, number> = {
-    1: 0,   // C
-    2: 1,   // C#
-    3: 2,   // D
-    4: 3,   // D#
-    5: 4,   // E
-    6: 5,   // F
-    7: 6,   // F#
-    8: 7,   // G
-    9: 8,   // G#
-    10: 9,  // A
+    1: 0, // C
+    2: 1, // C#
+    3: 2, // D
+    4: 3, // D#
+    5: 4, // E
+    6: 5, // F
+    7: 6, // F#
+    8: 7, // G
+    9: 8, // G#
+    10: 9, // A
     11: 10, // A#
     12: 11, // B
   }
-  
+
   // 整数部分と小数部分を分離
   const intDegree = Math.floor(degree)
   const fractionalPart = degree - intDegree
-  
+
   // マッピングから半音数を取得（1-12の範囲外の場合はオクターブ調整）
   let baseSemitone = 0
   let octaveAdjust = 0
-  
+
   if (intDegree >= 1 && intDegree <= 12) {
     baseSemitone = degreeToSemitoneMap[intDegree]!
   } else if (intDegree > 12) {
     // 13以上はオクターブ上
     octaveAdjust = Math.floor((intDegree - 1) / 12)
     const normalizedDegree = ((intDegree - 1) % 12) + 1
-    baseSemitone = degreeToSemitoneMap[normalizedDegree]! + (octaveAdjust * 12)
+    baseSemitone = degreeToSemitoneMap[normalizedDegree]! + octaveAdjust * 12
   }
-  
+
   // キーオフセットと小数部分を加算
   return keyOffset + baseSemitone + fractionalPart
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+
 import { parseSourceToIR } from '../../packages/engine/src/parser/parser'
 import { nextBoundaryAcrossSequences } from '../../packages/engine/src/scheduler'
 

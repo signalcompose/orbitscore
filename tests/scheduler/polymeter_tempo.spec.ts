@@ -36,7 +36,7 @@ describe('polymeter with different tempos (independent vs shared)', () => {
     const barB = barDurationSeconds(seqB, ir) // shared uses global tempo (120bpm) and meter (4/4)
 
     // 90bpm: sec/quarter = 60/90 = 0.666..., 5/4 bar = 5 * 0.666... = 3.333...
-    expect(barA).toBeCloseTo(60 / 90 * 5, 5)
+    expect(barA).toBeCloseTo((60 / 90) * 5, 5)
     // 120bpm: sec/quarter = 0.5, 4/4 bar = 4 * 0.5 = 2.0
     expect(barB).toBeCloseTo(2.0, 5)
   })
@@ -65,13 +65,15 @@ describe('polymeter with different tempos (independent vs shared)', () => {
     expect(durationToSeconds({ kind: 'unit', value: 1 }, seqB, ir)).toBeCloseTo(0.5, 5)
 
     // percent: independent uses seq meter/tempo (90bpm, 5/4) => 50% of 2 bars = 3.333...
-    expect(
-      durationToSeconds({ kind: 'percent', percent: 50, bars: 2 }, seqA, ir),
-    ).toBeCloseTo((60 / 90) * 5 * 1, 5)
+    expect(durationToSeconds({ kind: 'percent', percent: 50, bars: 2 }, seqA, ir)).toBeCloseTo(
+      (60 / 90) * 5 * 1,
+      5,
+    )
 
     // percent: shared uses global meter/tempo => 25% of 1 bar = 0.5
-    expect(
-      durationToSeconds({ kind: 'percent', percent: 25, bars: 1 }, seqB, ir),
-    ).toBeCloseTo(0.5, 5)
+    expect(durationToSeconds({ kind: 'percent', percent: 25, bars: 1 }, seqB, ir)).toBeCloseTo(
+      0.5,
+      5,
+    )
   })
 })

@@ -760,3 +760,29 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 **Commit History**:
 
 - `727cf55` - feat(telemetry): add Max patches, logging tools, and analyzer tests
+
+### 5.13 Formatting sync after test run
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- `packages/engine/src/pitch.ts` と関連テストのコメント/空行をPrettier整形してコードスタイルに揃えた。
+- `npm test` 実行時に生成される `tests/scheduler/golden_events_demo.json` の `generated` タイムスタンプを最新化。
+- `tools/telemetry-inspect.js` の返却オブジェクトを多行表記へ整形し、読みやすさを改善。
+
+**Rationale**:
+
+- コミット前にフォーマットずれを解消して差分ノイズを抑え、以降のレビュー負荷を下げるため。
+- ゴールデンファイルの生成タイムスタンプを現状に合わせ、再テストのトレーサビリティを保つため。
+
+**Validation**:
+
+- `npm test`
+
+**Impact**:
+
+- テストスイートの出力とコードスタイルが最新化され、後続作業時に余計な差分が発生しにくくなる。
+
+**Commit History**:
+
+- (this commit) chore: sync formatting after test run

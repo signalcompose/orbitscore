@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+
 import { parseSourceToIR } from '../../packages/engine/src/parser/parser'
 import { Scheduler } from '../../packages/engine/src/scheduler'
 import { TestMidiSink } from '../../packages/engine/src/midi'

@@ -31,7 +31,15 @@ function metrics(events) {
   const span = ts.length ? Math.max(...ts) - Math.min(...ts) : 0
   const nps = span > 0 ? (notes.length * 1000) / span : 0
   const channels = [...new Set(events.map((e) => e.ch || 1))]
-  return { count: events.length, notes: notes.length, ccs: ccs.length, pbs: pbs.length, timeSpanMs: span, notesPerSec: Number(nps.toFixed(2)), channels }
+  return {
+    count: events.length,
+    notes: notes.length,
+    ccs: ccs.length,
+    pbs: pbs.length,
+    timeSpanMs: span,
+    notesPerSec: Number(nps.toFixed(2)),
+    channels,
+  }
 }
 
 function findLatestLog(dir = path.join(process.cwd(), 'logs')) {
@@ -57,4 +65,3 @@ console.log(`[inspect] File: ${p}`)
 console.log(`[inspect] Metrics:`, m)
 console.log(`[inspect] Sample (last 5):`)
 evs.slice(-5).forEach((e) => console.log(e))
-
