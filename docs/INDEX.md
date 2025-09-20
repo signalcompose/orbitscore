@@ -35,25 +35,28 @@
 
 ## 📋 Development Phases
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| 1 | ✅ Complete | Parser Implementation |
-| 2 | ✅ Complete | Pitch/Bend Conversion |
-| 3 | ✅ Complete | Scheduler + Transport |
-| 4 | ✅ Complete | VS Code Extension |
-| 5 | ⏳ Pending | MIDI Output (CoreMIDI) |
+| Phase | Status      | Description            |
+| ----- | ----------- | ---------------------- |
+| 1     | ✅ Complete | Parser Implementation  |
+| 2     | ✅ Complete | Pitch/Bend Conversion  |
+| 3     | ✅ Complete | Scheduler + Transport  |
+| 4     | ✅ Complete | VS Code Extension      |
+| 5     | ⏳ Pending  | MIDI Output (CoreMIDI) |
 
 ## 🎯 Key Concepts
 
 ### Degree System
+
 - **0 = Rest/Silence** (革新的特徴)
 - **1-12 = Chromatic Scale** (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
 
 ### Precision
+
 - 小数第3位まで (3 decimal places)
 - Deterministic randomness with seed
 
 ### Meter Types
+
 - **Shared**: Global bar lines
 - **Independent**: Per-sequence bar lines
 
@@ -74,4 +77,4 @@
 
 ---
 
-*Last Updated: December 19, 2024*
+_Last Updated: December 19, 2024_
