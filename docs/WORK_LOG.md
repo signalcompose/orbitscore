@@ -727,3 +727,38 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 **Commit History**:
 
 - _TBD_ - feat(vscode): enhance transport panel with live status
+- **Commit History**:
+
+- _TBD_
+
+### 5.12 Telemetry pipeline for Max integration
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- Maxパッチ `iac_receiver.maxpat` と `iac_receiver_telemetry.maxpat` を整備し、IAC経由で即出音+JSON送出を実現。
+- `npm run telemetry:max` でOSC(JSON)を受信し `logs/max-telemetry-YYYYMMDD.jsonl` に保存するUDPサーバを追加。
+- `tools/telemetry-inspect.js` により最新ログを解析しメトリクスを表示。
+- `tests/telemetry/analyzer.ts` と `tests/telemetry/telemetry_basic.spec.ts` でログの自動検証を追加。
+- `.gitignore` に `logs/` を追加し、実演ログをリポジトリ外に維持。
+- サンプルスコア `examples/live.osc` を追加（IAC直送テスト用）。
+
+**Rationale**:
+
+- ライブ前リハで得た演奏ログを自動チェックし、スタックノートやCC異常を早期検知するため。
+- CLI/Max/Cursorエージェント間で共通のフィードバック回路（PDCA→テスト）を構築するため。
+
+**Validation**:
+
+- `npm run telemetry:max` ＋ Max → `logs/` にJSONL生成。
+- `TELEMETRY_LOG=... npm test` で解析テストが動作。
+- `npm run lint`, `npm test`。
+
+**Impact**:
+
+- 演奏ログを簡単に採取・検証でき、次の改善サイクルへ組み込み可能。
+- テストスイートに実演ログを組み込めるため、再現性の高い品質管理が実現。
+
+**Commit History**:
+
+- _TBD_ - feat(telemetry): add Max patches, logging tools, and analyzer tests
