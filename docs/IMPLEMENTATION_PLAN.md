@@ -311,17 +311,117 @@
 - [x] 共有/独立メーター混在シーケンスでの動作テスト
 - [x] リアルタイム再生でのトランスポート統合テスト
 
-### Phase 11: Performance Optimization and Advanced Features
+### Phase 11: Sequence Loop Playback and DJ-like Controls
+
+**目標**: シーケンスのループ再生とDJライクな制御機能
+
+#### 11.1 Sequence Loop Playback
+
+- [ ] **シーケンスのループ再生機能**
+  - [ ] 各シーケンスの独立したループ再生
+  - [ ] シーケンス終了時の自動ループ
+  - [ ] ループ回数の制御
+  - [ ] テスト: ループ再生の動作確認
+
+#### 11.2 DJ-like Sequence Controls
+
+- [ ] **`.stop` コマンドの実装**
+  - [ ] `sequence piano {...}.stop` でシーケンスの周回単位で再生終了
+  - [ ] パーサーでの`.stop`構文解析
+  - [ ] スケジューラーでの停止処理
+  - [ ] テスト: `.stop`コマンドの動作確認
+
+- [ ] **`.mute` コマンドの実装**
+  - [ ] `sequence piano {...}.mute` で即時ミュート
+  - [ ] パーサーでの`.mute`構文解析
+  - [ ] スケジューラーでのミュート処理
+  - [ ] テスト: `.mute`コマンドの動作確認
+
+- [ ] **`.unmute` コマンドの実装**
+  - [ ] `sequence piano {...}.unmute` でミュート解除
+  - [ ] パーサーでの`.unmute`構文解析
+  - [ ] スケジューラーでのミュート解除処理
+  - [ ] テスト: `.unmute`コマンドの動作確認
+
+#### 11.3 Global and Sequence Separation
+
+- [ ] **グローバル設定とシーケンス設定の分離実行**
+  - [ ] グローバル設定のみの実行
+  - [ ] 選択シーケンス + グローバル設定の実行
+  - [ ] VS Code拡張での選択処理
+  - [ ] テスト: 分離実行の動作確認
+
+### Phase 12: Parameter Debugging and Implementation
+
+**目標**: 各種パラメータのデバッグと実装
+
+#### 12.1 Parameter Implementation (Priority 1)
+
+- [ ] **key パラメータの実装**
+  - [ ] パーサーでのキー設定の解析
+  - [ ] PitchConverterでのキーオフセット適用
+  - [ ] テスト: 異なるキーでの音程確認
+
+- [ ] **tempo パラメータの実装**
+  - [ ] グローバルテンポの適用
+  - [ ] シーケンス固有テンポの適用
+  - [ ] スケジューラーでのテンポ変更
+  - [ ] テスト: テンポ変更での再生速度確認
+
+- [ ] **meter パラメータの実装**
+  - [ ] shared/independentメーターの適用
+  - [ ] 小節線の計算
+  - [ ] テスト: 異なるメーターでの小節線確認
+
+- [ ] **bendRange パラメータの実装**
+  - [ ] PitchConverterでのベンドレンジ適用
+  - [ ] PitchBend値の計算
+  - [ ] テスト: 異なるベンドレンジでの音程確認
+
+- [ ] **defaultDur パラメータの実装**
+  - [ ] デフォルト音価の適用
+  - [ ] パーサーでの音価補完
+  - [ ] テスト: デフォルト音価での音長確認
+
+#### 12.2 Parameter Debugging
+
+- [ ] **パラメータのデバッグ機能**
+  - [ ] 各パラメータの現在値表示
+  - [ ] パラメータ変更のログ出力
+  - [ ] パラメータ適用の検証
+  - [ ] テスト: パラメータデバッグの動作確認
+
+### Phase 13: VS Code Extension Enhancements
+
+**目標**: VS Code拡張の機能強化
+
+#### 13.1 Diagnostics Implementation
+
+- [ ] **構文チェック機能の実装**
+  - [ ] リアルタイム診断
+  - [ ] エラー表示機能
+  - [ ] 警告表示機能
+  - [ ] テスト: 診断機能の動作確認
+
+#### 13.2 DSL Refactoring
+
+- [ ] **明示的セクション化**
+  - [ ] `global` セクションの実装
+  - [ ] `sequence` セクションの分離
+  - [ ] パーサーの更新
+  - [ ] IR型の更新
+
+### Phase 14: Performance Optimization and Advanced Features
 
 **目標**: パフォーマンス最適化と高度な機能
 
-#### 11.1 Performance Optimization
+#### 14.1 Performance Optimization
 
 - [ ] パーサーの最適化
 - [ ] スケジューラーの最適化
 - [ ] メモリ使用量の最適化
 
-#### 11.2 Advanced Features
+#### 14.2 Advanced Features
 
 - [ ] 高度なトランスポート機能
 - [ ] エフェクト処理
