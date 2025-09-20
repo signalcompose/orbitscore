@@ -1,8 +1,9 @@
-import * as vscode from 'vscode'
 import * as child_process from 'child_process'
-import * as path from 'path'
 import * as fs from 'fs'
 import * as os from 'os'
+import * as path from 'path'
+
+import * as vscode from 'vscode'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -20,12 +21,12 @@ interface TransportState {
   loopEnd?: number
 }
 
-let transportState: TransportState = {
+const transportState: TransportState = {
   playing: false,
   bar: 0,
   beat: 0,
   bpm: 120,
-  loopEnabled: false
+  loopEnabled: false,
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -45,7 +46,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
     vscode.commands.registerCommand('orbitscore.stop', stopEngine),
     vscode.commands.registerCommand('orbitscore.transport', showTransportPanel),
-    statusBarItem
+    statusBarItem,
   )
 
   // Register diagnostics
@@ -58,11 +59,11 @@ export function activate(context: vscode.ExtensionContext) {
       if (event.document.languageId === 'orbitscore') {
         updateDiagnostics(event.document, diagnosticCollection)
       }
-    })
+    }),
   )
 
   // Initial diagnostics for open documents
-  vscode.workspace.textDocuments.forEach(doc => {
+  vscode.workspace.textDocuments.forEach((doc) => {
     if (doc.languageId === 'orbitscore') {
       updateDiagnostics(doc, diagnosticCollection)
     }
@@ -86,14 +87,14 @@ function startEngine() {
   }
 
   const enginePath = path.join(__dirname, '../../engine/dist/cli.js')
-  
+
   if (!fs.existsSync(enginePath)) {
     vscode.window.showErrorMessage('Engine not found. Please build the engine first.')
     return
   }
 
   engineProcess = child_process.spawn('node', [enginePath, 'start'], {
-    cwd: path.dirname(enginePath)
+    cwd: path.dirname(enginePath),
   })
 
   engineProcess.stdout?.on('data', (data) => {
@@ -145,7 +146,7 @@ async function runSelection() {
   // Get selected text or entire document
   const selection = editor.selection
   let text: string
-  
+
   if (selection.isEmpty) {
     text = editor.document.getText()
   } else {
@@ -155,36 +156,36 @@ async function runSelection() {
   // Create temporary file
   const tmpDir = os.tmpdir()
   const tmpFile = path.join(tmpDir, `orbitscore_${Date.now()}.osc`)
-  
+
   try {
     fs.writeFileSync(tmpFile, text)
-    
+
     // If engine is not running, start it
     if (!engineProcess) {
       startEngine()
       // Wait a bit for engine to start
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await new Promise((resolve) => setTimeout(resolve, 500))
     }
 
     // Send the file to the engine
     const enginePath = path.join(__dirname, '../../engine/dist/cli.js')
     const runProcess = child_process.spawn('node', [enginePath, 'run', tmpFile])
-    
+
     runProcess.stdout?.on('data', (data) => {
       outputChannel?.append(data.toString())
     })
-    
+
     runProcess.stderr?.on('data', (data) => {
       outputChannel?.append(`[ERROR] ${data.toString()}`)
     })
-    
+
     runProcess.on('close', (code) => {
       if (code === 0) {
         vscode.window.showInformationMessage('OrbitScore: Selection executed')
       } else {
         vscode.window.showErrorMessage(`OrbitScore: Execution failed with code ${code}`)
       }
-      
+
       // Clean up temp file
       try {
         fs.unlinkSync(tmpFile)
@@ -205,34 +206,32 @@ function showTransportPanel() {
     'OrbitScore Transport',
     vscode.ViewColumn.Two,
     {
-      enableScripts: true
-    }
+      enableScripts: true,
+    },
   )
 
   panel.webview.html = getTransportHTML()
 
   // Handle messages from the webview
-  panel.webview.onDidReceiveMessage(
-    message => {
-      switch (message.command) {
-        case 'play':
-          sendTransportCommand('play')
-          break
-        case 'pause':
-          sendTransportCommand('pause')
-          break
-        case 'stop':
-          sendTransportCommand('stop')
-          break
-        case 'jump':
-          sendTransportCommand(`jump:${message.bar}`)
-          break
-        case 'loop':
-          sendTransportCommand(`loop:${message.enabled}:${message.start}:${message.end}`)
-          break
-      }
+  panel.webview.onDidReceiveMessage((message) => {
+    switch (message.command) {
+      case 'play':
+        sendTransportCommand('play')
+        break
+      case 'pause':
+        sendTransportCommand('pause')
+        break
+      case 'stop':
+        sendTransportCommand('stop')
+        break
+      case 'jump':
+        sendTransportCommand(`jump:${message.bar}`)
+        break
+      case 'loop':
+        sendTransportCommand(`loop:${message.enabled}:${message.start}:${message.end}`)
+        break
     }
-  )
+  })
 }
 
 function sendTransportCommand(command: string) {
@@ -252,7 +251,7 @@ function updateStatusBar() {
   const bar = transportState.bar.toString().padStart(3, '0')
   const beat = transportState.beat.toString().padStart(2, '0')
   const loop = transportState.loopEnabled ? '🔁' : ''
-  
+
   statusBarItem.text = `${status} ${bar}:${beat} | ${transportState.bpm} BPM ${loop}`
   statusBarItem.tooltip = 'Click to open transport panel'
   statusBarItem.command = 'orbitscore.transport'
@@ -272,12 +271,15 @@ function tryParseTransportUpdate(data: string) {
   }
 }
 
-async function updateDiagnostics(document: vscode.TextDocument, collection: vscode.DiagnosticCollection) {
+async function updateDiagnostics(
+  document: vscode.TextDocument,
+  collection: vscode.DiagnosticCollection,
+) {
   const diagnostics: vscode.Diagnostic[] = []
-  
+
   // Simple validation - we'll run the parser and catch errors
   const text = document.getText()
-  
+
   try {
     // Import parser dynamically
     const { parseSourceToIR } = await import('../../engine/dist/parser/parser')
@@ -288,12 +290,12 @@ async function updateDiagnostics(document: vscode.TextDocument, collection: vsco
     // Parse error message for line/column info
     const errorStr = error.toString()
     const match = errorStr.match(/line (\d+), column (\d+): (.+)/)
-    
+
     if (match) {
       const line = parseInt(match[1]) - 1
       const column = parseInt(match[2]) - 1
       const message = match[3]
-      
+
       const range = new vscode.Range(line, column, line, column + 1)
       const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error)
       diagnostics.push(diagnostic)
@@ -303,7 +305,7 @@ async function updateDiagnostics(document: vscode.TextDocument, collection: vsco
       const diagnostic = new vscode.Diagnostic(range, errorStr, vscode.DiagnosticSeverity.Error)
       diagnostics.push(diagnostic)
     }
-    
+
     collection.set(document.uri, diagnostics)
   }
 }
