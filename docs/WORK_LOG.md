@@ -283,7 +283,7 @@ export class Scheduler {
   private loop: LoopRange | null = null
   private muted: Set<string> = new Set()
   private soloed: Set<string> = new Set()
-  
+
   scheduleThrough(targetMs: number): void
   simulateTransportAdvanceAcrossSequences(durationSec: number): void
 }
@@ -406,6 +406,7 @@ export class Scheduler {
 - Auto-closing pairs and surrounding pairs
 
 **Files Created**:
+
 - `packages/vscode-extension/syntaxes/orbitscore.tmLanguage.json`
 - `packages/vscode-extension/language-configuration.json`
 
@@ -422,6 +423,7 @@ Implemented four main commands:
 4. **Transport Panel**: Opens interactive transport control webview
 
 **Key Features**:
+
 - Cmd+Enter keybinding for quick execution
 - Temporary file creation for selection execution
 - Process management for engine lifecycle
@@ -439,6 +441,7 @@ Implemented four main commands:
 - Bidirectional communication between extension and engine
 
 **Transport State Management**:
+
 ```typescript
 interface TransportState {
   playing: boolean
@@ -457,12 +460,14 @@ interface TransportState {
 **Work Content**:
 
 Created CLI interface (`packages/engine/src/cli.ts`) with:
+
 - Engine daemon mode for VS Code integration
 - File execution support
 - Transport command handling via stdin
 - Status reporting via stdout
 
 **Commands Supported**:
+
 - `orbitscore start` - Start engine daemon
 - `orbitscore run <file>` - Execute .osc file
 - Transport: play, pause, stop, jump, loop
@@ -494,7 +499,7 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 - ✅ Status bar integration
 - ✅ Diagnostics
 - ✅ Engine CLI interface
-- ⚠️ CoreMidiSink (stub only, to be implemented in Phase 5)
+- ✅ CoreMidiSink (IAC Bus連携完了)
 
 ### 4.9 Commit History
 
@@ -521,10 +526,81 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 - MIDI message routing
 - Engine integration
 
-### Phase 5: MIDI Output Implementation
+## Phase 5: MIDI Output Implementation (Completed)
 
-- IAC Bus output via CoreMIDI
-- Implementation using @julusian/midi
+### 5.1 Overview
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- `CoreMidiSink` を @julusian/midi で実装し、IAC Bus を自動接続
+- `.env` の `ORBITSCORE_MIDI_PORT` を読み込み、CLI から接続先を制御
+- CLI の `run` コマンドを非同期化し、バス選択とグレースフルシャットダウンを追加
+- MIDIユニットテストを新設し、送信フォーマットとポート接続の振る舞いを検証
+
+**Technical Decisions**:
+
+- デフォルトポートは `IAC Driver Bus 1`、環境変数とシーケンスの `bus` 定義で上書き
+- `openPortByName` 失敗時はポート一覧を列挙し、名前を正規化して再試行
+- `Scheduler` 利用時に多重ポートを避けるため、CLIで単一シンクを共有し起動時に明示的に `open`
+- Graceful shutdown ハンドラを追加し、SIGINT/SIGTERM/uncaughtException で確実に `close`
+
+### 5.2 CoreMidiSink Implementation
+
+- MIDIメッセージの data バイトは 7bit にクランプ、status は 0xFF マスクで安全化
+- 送信前にポートオープン済みか検証し、未接続時は例外で通知
+- テスト容易性のため `@julusian/midi` モジュールをモック注入できるようコンストラクタを設計
+
+### 5.3 CLI Integration
+
+- `dotenv` をロードして `.env` を自動反映
+- `.osc` のシーケンスからユニークな `bus` 名を抽出し、複数検出時は警告ログを出力
+- `run` コマンド実行時に既存スケジューラを停止・再生成し、最新IRで再生
+- シグナルハンドラで `Scheduler` と `CoreMidiSink` を破棄し、プロセス終了時のMIDIポートリークを防止
+
+### 5.4 Testing
+
+- 新しい `tests/midi/core_sink.spec.ts` で 5 ケースを追加（ポート解決・クランプ・例外・クローズ）
+- 既存の Vitest スイートと併せて `npm test` で 49 テスト全通過を確認
+
+### 5.5 Implementation Status
+
+- ✅ IAC Bus output via CoreMIDI
+- ✅ Implementation using @julusian/midi
+- ✅ CLI 経由の環境変数・バス選択サポート
+- ✅ MIDI 向けユニットテストと自動化
+
+### 5.6 Commit History
+
+- (to be recorded after commit)
+
+### 5.7 CLI Transport Reporting Improvement
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- `Scheduler` に `getLoopState()` と `getDisplayBpm()` を追加
+- `packages/engine/src/cli.ts` の TRANSPORT 出力で BPM/Loop を実値に更新
+- 既存テスト 49/49 パスを再確認（機能追加による破壊なし）
+
+**Notes**:
+
+- 現状の表示BPMは `IR.global.tempo` に準拠（将来的にシーケンス別表示やUI拡張を検討）
+
+### 5.8 Repo Docs Update
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- `AGENTS.md` に言語/エンコーディング方針を追記：「あなたの返答はUTF-8の日本語で返す。」
+- 追加更新: 英語での指示時は正しい英文で返答し、英作文力向上を支援し、意図確認を行う方針を追記
+  - 上記方針は `AGENTS.md` の Language & Encoding 節にも反映済み
+- `agent.md` は方針重複のため削除し、AGENTS.md に集約
+ - `PROJECT_RULES.md` の要点（WORK_LOG/README厳格運用、コミット体裁テンプレ、Pre-commitチェック、MIDI/DSLの厳守事項）を `AGENTS.md` に反映
+
+**Rationale**:
+
+- リポジトリ内エージェントの応答言語を統一し、ユーザー期待に整合させるため
 
 ## Research Notes for Paper Writing
 
@@ -558,4 +634,4 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 **Created**: December 19, 2024
 **Author**: AI Assistant
 **Project**: OrbitScore
-**Phase**: Phase 4 Completed
+**Phase**: Phase 5 Completed
