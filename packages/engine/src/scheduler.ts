@@ -7,6 +7,24 @@ const TICK_MS = 5
 
 /** 共有/独立メーターに対応する再生位置とループを管理し、NoteOn/Off を窓出し */
 export class Scheduler {
+  liveUpdate(newIR: IR): void {
+    // Store current loop state
+    const currentLoop = this.loop
+
+    // Update the IR with new sequences
+    this.ir = newIR
+
+    // Clear any pending events and reset scheduling
+    this.sentSet.clear()
+    this.scheduledUntilMs = 0
+
+    // Restore loop state
+    this.loop = currentLoop
+
+    // Keep current playback position and loop state
+    // Music continues seamlessly with new sequences
+    console.log('Live update: sequences replaced, playback continues')
+  }
   private currentSec = 0
   private loop: LoopWindow | null = null
   private pendingJumpBar: number | null = null

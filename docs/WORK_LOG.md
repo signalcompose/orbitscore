@@ -786,3 +786,272 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 **Commit History**:
 
 - (this commit) chore: sync formatting after test run
+
+## Phase 6: Max/MSP Integration (Completed)
+
+### 6.1 Overview
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- Max/MSPパッチのADSR実装を修正し、音声出力を実現
+- CLIに`ports`と`eval`コマンドを追加
+- デフォルトMIDIポートの概念を削除（ファイル指定のみ）
+- 包括的なMax/MSP統合テストを追加
+- UDPテレメトリーの動作確認
+
+**Technical Decisions**:
+
+- Max/MSPパッチの`adsr~`オブジェクトは数値（0/1）でトリガー
+- `t b b`オブジェクトは不要（bangではなく数値が必要）
+- `vel_gate > 0.`を直接`adsr~`に接続
+- MIDIポートは`.osc`ファイル内で指定（デフォルトなし）
+
+### 6.2 Max/MSP Patch Fixes
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- `iac_receiver_telemetry_fixed.maxpat`を作成
+- ADSRの正しい実装：`vel_gate > 0.` → `adsr~`直接接続
+- 元の壊れたパッチファイルを削除
+- 音声出力の動作確認完了
+
+**Implementation Details**:
+
+```max
+# 正しい接続
+notein(velocity) → / 127. → > 0. → adsr~ → env_gain → gain~ → ezdac~
+```
+
+### 6.3 CLI Enhancements
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- `orbitscore ports`コマンドでMIDIポート一覧表示
+- `orbitscore eval <file>`コマンドで直接ファイル実行
+- `listPorts()`関数をグローバルスコープに移動
+- デフォルトMIDIポートの自動オープンを削除
+
+**Commands Added**:
+
+- `orbitscore ports` - List available MIDI ports
+- `orbitscore eval <file>` - Evaluate .osc file directly
+
+### 6.4 Integration Testing
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- `tests/max/udp_telemetry.spec.ts` - UDPテレメトリー受信テスト
+- `tests/max/max_patch_simulator.spec.ts` - Max/MSPパッチシミュレーション
+- `tests/max/midi_port_detection.spec.ts` - MIDIポート検出テスト
+- 9つのテストが全て通過
+
+**Test Coverage**:
+
+- UDPプロトコルの動作確認
+- MIDIイベント（note, CC, pitch bend）の送受信
+- Max/MSPのMIDIポート検出
+
+### 6.5 Technical Achievements
+
+1. **Audio Output**: Max/MSPパッチで音声出力が正常動作
+2. **MIDI Integration**: OrbitScoreエンジンからMax/MSPへのMIDI送信
+3. **Telemetry Pipeline**: UDP経由でのJSONテレメトリー送信
+4. **Test Automation**: 統合テストの自動化
+
+### 6.6 Implementation Status
+
+- ✅ Max/MSPパッチで音声出力
+- ✅ ADSRエンベロープの正しい実装
+- ✅ MIDIテレメトリーのUDP送信
+- ✅ CLIコマンドの拡張
+- ✅ 統合テストの実装
+
+### 6.7 Commit History
+
+- `b26464a` - feat: Complete Max/MSP integration with working audio output
+
+### 6.8 Next Steps
+
+- Phase 7: Performance optimization and advanced features
+- Phase 8: Documentation and user guide
+- Phase 9: Community features and extensions
+
+## Phase 7: Live Coding Implementation (Completed)
+
+### 7.1 Overview
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- TidalCycles/Scratchスタイルのライブコーディングを実装
+- エンジンに`live:`コマンドを追加
+- スケジューラに`liveUpdate`メソッドを実装
+- VS Code拡張の`runSelection`をライブ評価に変更
+- Cmd+Enterでの即座実行機能
+
+**Technical Decisions**:
+
+- 既存スケジューラを停止せずに新しいコードを評価
+- ループ状態と再生位置を維持しながらシーケンスを更新
+- 一時ファイルではなくstdinで直接コードを送信
+- 音楽が継続的に流れながら新しいパターンに切り替わる
+
+### 7.2 Engine Live Evaluation
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- CLIに`live:`コマンドを追加
+- `liveEvaluate()`関数を実装
+- 既存スケジューラがある場合は`liveUpdate()`を呼び出し
+- スケジューラがない場合は新規作成
+
+**Implementation Details**:
+
+```typescript
+// packages/engine/src/cli.ts
+case 'live': {
+  const code = process.argv[3]
+  liveEvaluate(code).catch((error) => {
+    console.error(`Failed to live evaluate: ${error}`)
+    process.exit(1)
+  })
+  break
+}
+```
+
+### 7.3 Scheduler Live Update
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- `Scheduler`クラスに`liveUpdate()`メソッドを追加
+- ループ状態と再生位置を維持
+- 新しいIRでシーケンスを更新
+- 音楽が継続的に流れる
+
+**Implementation Details**:
+
+```typescript
+// packages/engine/src/scheduler.ts
+liveUpdate(newIR: IR): void {
+  // Store current loop state
+  const currentLoop = this.loop
+  
+  // Update the IR with new sequences
+  this.ir = newIR
+  
+  // Clear any pending events and reset scheduling
+  this.sentSet.clear()
+  this.scheduledUntilMs = 0
+  
+  // Restore loop state
+  this.loop = currentLoop
+  
+  console.log('Live update: sequences replaced, playback continues')
+}
+```
+
+### 7.4 VS Code Extension Live Coding
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- `runSelection()`をライブ評価に変更
+- 一時ファイルではなくstdinで直接コードを送信
+- Cmd+Enterで即座に実行
+- 音楽が継続的に流れながら新しいパターンに切り替わる
+
+**Implementation Details**:
+
+```typescript
+// packages/vscode-extension/src/extension.ts
+async function runSelection() {
+  // Get selected text or entire document
+  const text = editor.document.getText(selection)
+  
+  // Send the code directly to the running engine via stdin
+  const escapedCode = text.replace(/"/g, '\\"')
+  engineProcess.stdin?.write(`live:${escapedCode}\n`)
+  
+  vscode.window.showInformationMessage('🎵 OrbitScore: Live coding! Music continues...')
+}
+```
+
+### 7.5 Testing
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- `tests/live_coding/live_coding.spec.ts`を作成
+- 4つのテストケースを実装
+- ライブ更新中の再生継続をテスト
+- ループ状態の維持をテスト
+- 複数回のライブ更新をテスト
+
+**Test Results**:
+
+- ✅ 初期コードでの再生開始
+- ✅ ライブ更新中の再生継続
+- ✅ 複数回のライブ更新
+- ✅ ループ状態の維持
+
+### 7.6 Technical Achievements
+
+1. **True Live Coding**: TidalCycles/Scratchスタイルの体験
+2. **Seamless Updates**: 音楽が継続的に流れながら新しいパターンに切り替わる
+3. **State Preservation**: ループ状態と再生位置を維持
+4. **Real-time Evaluation**: Cmd+Enterで即座に実行
+
+### 7.7 Implementation Status
+
+- ✅ エンジンにライブ評価機能
+- ✅ スケジューラにライブ更新機能
+- ✅ VS Code拡張のライブコーディング
+- ✅ Cmd+Enterでの即座実行
+- ✅ ライブコーディングのテスト
+- ✅ 実際の音声出力確認
+
+### 7.8 Commit History
+
+- `b26464a` - feat: Complete Max/MSP integration with working audio output
+- (to be committed) - feat: Implement live coding functionality
+
+### 7.9 Usage Instructions
+
+**TidalCycles/Scratchスタイルのライブコーディング：**
+
+1. VS Codeで.oscファイルを開く
+2. Cmd+Enterでコードを実行
+3. 音楽が流れ始める
+4. コードを変更してCmd+Enter
+5. 音楽が継続的に流れながら新しいパターンに切り替わる
+6. 手動で停止するまで音楽が流れ続ける
+
+**例：**
+```osc
+key C
+tempo 120
+meter 4/4 shared
+
+sequence piano {
+  bus "to Max 1"
+  channel 1
+  meter 4/4 shared
+  tempo 120
+  octave 4
+  defaultDur @U1
+  
+  1@U1 3@U1 5@U1 8@U1
+}
+```
+
+### 7.10 Next Steps
+
+- Phase 8: Performance optimization and advanced features
+- Phase 9: Documentation and user guide
+- Phase 10: Community features and extensions
