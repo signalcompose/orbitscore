@@ -202,6 +202,23 @@ function handleTransportCommand(command: string) {
       break
     }
 
+    case 'port': {
+      const name = (parts[1] || '').trim()
+      if (!midiSink) {
+        console.error('No MIDI sink available')
+        break
+      }
+      if (!name) {
+        console.error('Usage: port:<MIDI Port Name>')
+        break
+      }
+      midiSink
+        .open(name)
+        .then(() => console.log(`MIDI port switched to "${name}"`))
+        .catch((e) => console.error(`Failed to switch port: ${e instanceof Error ? e.message : e}`))
+      break
+    }
+
     default:
       console.error(`Unknown command: ${command}`)
   }
@@ -245,6 +262,7 @@ Transport commands (when engine is running):
   mute:<seq>:<true|false>   Mute/unmute a sequence by name
   solo:<a,b>|none           Solo sequence list or clear with "none"
   status                    Print one-shot transport line
+  port:<name>               Switch MIDI port
 `)
     break
 }
