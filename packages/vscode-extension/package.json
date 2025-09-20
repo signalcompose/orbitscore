@@ -35,8 +35,13 @@
     "languages": [
       {
         "id": "orbitscore",
-        "aliases": ["OrbitScore", "orbitscore"],
-        "extensions": [".osc"],
+        "aliases": [
+          "OrbitScore",
+          "orbitscore"
+        ],
+        "extensions": [
+          ".osc"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],

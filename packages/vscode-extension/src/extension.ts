@@ -9,6 +9,28 @@ import * as vscode from 'vscode'
 let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
+let transportPanel: vscode.WebviewPanel | null = null
+let lastBroadcast: {
+  playing: boolean
+  bar: number
+  beat: number
+  bpm: number
+  loopEnabled: boolean
+} | null = null
+type LoopInfo = { enabled: boolean; startBar: number; endBar: number }
+let engineStatus: {
+  mute: string[]
+  solo: string[] | null
+  port: string | null
+  loop: LoopInfo | null
+  bpm?: number
+  beatsPerBar?: number
+} = {
+  mute: [],
+  solo: null,
+  port: null,
+  loop: null,
+}
 
 // Transport state
 interface TransportState {
@@ -98,9 +120,11 @@ function startEngine() {
   })
 
   engineProcess.stdout?.on('data', (data) => {
-    outputChannel?.append(data.toString())
-    // Parse transport state if available
-    tryParseTransportUpdate(data.toString())
+    const str = data.toString()
+    outputChannel?.append(str)
+    // Parse transport/state lines
+    tryParseTransportUpdate(str)
+    tryParseStatusUpdate(str)
   })
 
   engineProcess.stderr?.on('data', (data) => {
@@ -167,32 +191,20 @@ async function runSelection() {
       await new Promise((resolve) => setTimeout(resolve, 500))
     }
 
-    // Send the file to the engine
-    const enginePath = path.join(__dirname, '../../engine/dist/cli.js')
-    const runProcess = child_process.spawn('node', [enginePath, 'run', tmpFile])
-
-    runProcess.stdout?.on('data', (data) => {
-      outputChannel?.append(data.toString())
-    })
-
-    runProcess.stderr?.on('data', (data) => {
-      outputChannel?.append(`[ERROR] ${data.toString()}`)
-    })
-
-    runProcess.on('close', (code) => {
-      if (code === 0) {
-        vscode.window.showInformationMessage('OrbitScore: Selection executed')
-      } else {
-        vscode.window.showErrorMessage(`OrbitScore: Execution failed with code ${code}`)
-      }
-
-      // Clean up temp file
+    // Send the file to the running engine via stdin (live eval)
+    if (!engineProcess) {
+      vscode.window.showErrorMessage('Engine is not running')
+      return
+    }
+    engineProcess.stdin?.write(`eval:${tmpFile}\n`)
+    // Clean up temp file slightly later to ensure engine has read it
+    setTimeout(() => {
       try {
         fs.unlinkSync(tmpFile)
-      } catch (e) {
-        // Ignore cleanup errors
-      }
-    })
+      } catch (_) {}
+    }, 1500)
+
+    vscode.window.showInformationMessage('OrbitScore: Selection sent for evaluation')
   } catch (error) {
     vscode.window.showErrorMessage(`OrbitScore: ${error}`)
     outputChannel?.appendLine(`Error: ${error}`)
@@ -209,6 +221,10 @@ function showTransportPanel() {
       enableScripts: true,
     },
   )
+  transportPanel = panel
+  panel.onDidDispose(() => {
+    if (transportPanel === panel) transportPanel = null
+  })
 
   panel.webview.html = getTransportHTML()
 
@@ -244,6 +260,9 @@ function showTransportPanel() {
         break
     }
   })
+
+  // Push current status immediately
+  broadcastTransportState()
 }
 
 function sendTransportCommand(command: string) {
@@ -280,7 +299,76 @@ function tryParseTransportUpdate(data: string) {
     transportState.bpm = parseInt(match[4] || '120')
     transportState.loopEnabled = match[5] === 'true'
     updateStatusBar()
+    // スロットリング: 拍が変わった/再生状態が変わった/テンポやループ状態が変わった場合のみ送信
+    const current = {
+      playing: transportState.playing,
+      bar: transportState.bar,
+      beat: transportState.beat,
+      bpm: transportState.bpm,
+      loopEnabled: transportState.loopEnabled,
+    }
+    const shouldSend =
+      !lastBroadcast ||
+      lastBroadcast.playing !== current.playing ||
+      lastBroadcast.bar !== current.bar ||
+      lastBroadcast.beat !== current.beat ||
+      lastBroadcast.bpm !== current.bpm ||
+      lastBroadcast.loopEnabled !== current.loopEnabled
+    if (shouldSend) {
+      broadcastTransportState(current)
+      lastBroadcast = current
+    }
   }
+}
+
+function tryParseStatusUpdate(data: string) {
+  const idx = data.indexOf('STATUS:')
+  if (idx < 0) return
+  const jsonPart = data.slice(idx + 'STATUS:'.length).trim()
+  try {
+    const obj = JSON.parse(jsonPart)
+    engineStatus = {
+      mute: Array.isArray(obj.mute) ? obj.mute : [],
+      solo: Array.isArray(obj.solo) ? obj.solo : null,
+      port: typeof obj.port === 'string' ? obj.port : null,
+      loop:
+        obj.loop && typeof obj.loop === 'object'
+          ? {
+              enabled: !!obj.loop.enabled,
+              startBar: Number.isFinite(obj.loop.startBar) ? obj.loop.startBar : 0,
+              endBar: Number.isFinite(obj.loop.endBar) ? obj.loop.endBar : 0,
+            }
+          : null,
+      bpm: Number.isFinite(obj.bpm) ? obj.bpm : undefined,
+      beatsPerBar: Number.isFinite(obj.beatsPerBar) ? obj.beatsPerBar : undefined,
+    }
+    broadcastEngineStatus()
+  } catch {
+    // ignore
+  }
+}
+
+function broadcastTransportState(stateOverride?: {
+  playing: boolean
+  bar: number
+  beat: number
+  bpm: number
+  loopEnabled: boolean
+}) {
+  if (!transportPanel) return
+  const state = stateOverride ?? {
+    playing: transportState.playing,
+    bar: transportState.bar,
+    beat: transportState.beat,
+    bpm: transportState.bpm,
+    loopEnabled: transportState.loopEnabled,
+  }
+  transportPanel.webview.postMessage({ type: 'transport', state })
+}
+
+function broadcastEngineStatus() {
+  if (!transportPanel) return
+  transportPanel.webview.postMessage({ type: 'engineStatus', status: engineStatus })
 }
 
 async function updateDiagnostics(
@@ -301,14 +389,16 @@ async function updateDiagnostics(
   } catch (error: any) {
     // Parse error message for line/column info
     const errorStr = error.toString()
-    const match = errorStr.match(/line (\d+), column (\d+): (.+)/)
+    // Support optional "length N" segment in error message
+    const match = errorStr.match(/line (\d+), column (\d+)(?:, length (\d+))?: (.+)/)
 
     if (match) {
       const line = parseInt(match[1]) - 1
       const column = parseInt(match[2]) - 1
-      const message = match[3]
+      const length = match[3] ? parseInt(match[3]) : 1
+      const message = match[4] ?? errorStr
 
-      const range = new vscode.Range(line, column, line, column + 1)
+      const range = new vscode.Range(line, column, line, column + Math.max(1, length))
       const diagnostic = new vscode.Diagnostic(range, message, vscode.DiagnosticSeverity.Error)
       diagnostics.push(diagnostic)
     } else {
@@ -373,6 +463,29 @@ function getTransportHTML(): string {
 </head>
 <body>
     <h2>🎵 OrbitScore Transport</h2>
+    <div id="status" style="margin: 8px 0; opacity: 0.9;">
+      <strong>Status:</strong>
+      <span id="statusPlaying">⏸</span>
+      <span id="statusBarBeat">000:00</span>
+      <span id="statusBpm">120 BPM</span>
+      <span id="statusLoop"></span>
+    </div>
+
+    <div class="section">
+      <h3>Progress</h3>
+      <label>Beats per bar: <input type="number" id="beatsPerBar" min="1" value="4" /></label>
+      <div id="progressOuter" style="height:8px;background:var(--vscode-editorIndentGuide-background);width:100%;margin-top:6px;position:relative;">
+        <div id="progressInner" style="height:100%;width:0%;background:var(--vscode-editorInfo-foreground);"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>Current</h3>
+      <div>Port: <span id="curPort">(unknown)</span></div>
+      <div>Mute: <span id="curMute">—</span></div>
+      <div>Solo: <span id="curSolo">—</span></div>
+      <div>Loop: <span id="curLoop">—</span></div>
+    </div>
     
     <div class="transport-controls">
         <button id="playBtn">▶️ Play</button>
@@ -423,6 +536,92 @@ function getTransportHTML(): string {
     <script>
         const vscode = acquireVsCodeApi();
 
+        let lastBeat = 0;
+        let lastBeatTs = 0;
+        let lastBpm = 120;
+        let rafId = 0;
+
+        function updateStatusView(state) {
+            const playing = state.playing ? '▶️' : '⏸';
+            const barStr = String(state.bar ?? 0).padStart(3, '0');
+            const beatStr = String(Math.floor(state.beat ?? 0)).padStart(2, '0');
+            document.getElementById('statusPlaying').textContent = playing;
+            document.getElementById('statusBarBeat').textContent = barStr + ':' + beatStr;
+            document.getElementById('statusBpm').textContent = (state.bpm ?? 120) + ' BPM';
+            document.getElementById('statusLoop').textContent = state.loopEnabled ? '🔁' : '';
+            const loopChk = document.getElementById('loopEnabled');
+            if (loopChk) loopChk.checked = !!state.loopEnabled;
+
+            const beatsPerBar = parseInt(document.getElementById('beatsPerBar').value || '4');
+            const currentBeat = Math.max(1, Math.floor(state.beat ?? 1));
+            // 拍が変わったら基準を更新
+            if (currentBeat !== lastBeat || state.bpm !== lastBpm) {
+              lastBeat = currentBeat;
+              lastBeatTs = Date.now();
+              lastBpm = state.bpm ?? 120;
+            }
+            // アニメーション更新
+            if (rafId) cancelAnimationFrame(rafId);
+            const animate = () => {
+              const msPerBeat = 60000 / Math.max(1, lastBpm);
+              const elapsed = Date.now() - lastBeatTs;
+              const phase = Math.max(0, Math.min(1, elapsed / msPerBeat));
+              const beatIndexWithinBar = ((currentBeat - 1) % beatsPerBar) + phase;
+              const progress = Math.max(0, Math.min(1, beatIndexWithinBar / beatsPerBar));
+              const inner = document.getElementById('progressInner');
+              if (inner) inner.style.width = (progress * 100).toFixed(1) + '%';
+              if (document.getElementById('statusPlaying').textContent === '▶️') {
+                rafId = requestAnimationFrame(animate);
+              }
+            };
+            animate();
+        }
+
+        function updateEngineStatusView(st) {
+            document.getElementById('curPort').textContent = st.port || '(none)';
+            const mute = Array.isArray(st.mute) && st.mute.length ? st.mute.join(', ') : '—';
+            const solo = Array.isArray(st.solo) && st.solo.length ? st.solo.join(', ') : '—';
+            document.getElementById('curMute').textContent = mute;
+            document.getElementById('curSolo').textContent = solo;
+            const loopEl = document.getElementById('curLoop');
+            if (st.loop && st.loop.enabled) {
+              loopEl.textContent = '' + st.loop.startBar + ' - ' + st.loop.endBar;
+              // reflect into Loop form and persist
+              const chk = document.getElementById('loopEnabled');
+              const s = document.getElementById('loopStart');
+              const e = document.getElementById('loopEnd');
+              if (chk) chk.checked = true;
+              if (s) s.value = String(st.loop.startBar);
+              if (e) e.value = String(st.loop.endBar);
+              const saved = vscode.getState() || {};
+              vscode.setState({ ...(saved||{}), loopEnabled: true, loopStart: st.loop.startBar, loopEnd: st.loop.endBar });
+            } else {
+              loopEl.textContent = '—';
+              const chk = document.getElementById('loopEnabled');
+              if (chk) chk.checked = false;
+              const saved = vscode.getState() || {};
+              vscode.setState({ ...(saved||{}), loopEnabled: false });
+            }
+            // beatsPerBar from engine
+            if (Number.isFinite(st.beatsPerBar)) {
+              const input = document.getElementById('beatsPerBar');
+              if (input) input.value = String(st.beatsPerBar);
+              const saved = vscode.getState() || {};
+              vscode.setState({ ...(saved||{}), beatsPerBar: st.beatsPerBar });
+            }
+            // bpm could be shown next to status (already displayed via transport state)
+        }
+
+        window.addEventListener('message', (event) => {
+            const msg = event.data;
+            if (msg?.type === 'transport' && msg.state) {
+                updateStatusView(msg.state);
+            }
+            if (msg?.type === 'engineStatus' && msg.status) {
+                updateEngineStatusView(msg.status);
+            }
+        });
+
         document.getElementById('playBtn').addEventListener('click', () => {
             vscode.postMessage({ command: 'play' });
         });
@@ -450,6 +649,9 @@ function getTransportHTML(): string {
                 start: parseInt(start),
                 end: parseInt(end)
             });
+            // persist
+            const st = vscode.getState() || {};
+            vscode.setState({ ...(st||{}), loopEnabled: !!enabled, loopStart: parseInt(start), loopEnd: parseInt(end) });
         });
 
         document.getElementById('applyMuteBtn').addEventListener('click', () => {
@@ -481,7 +683,38 @@ function getTransportHTML(): string {
         document.getElementById('statusBtn').addEventListener('click', () => {
             vscode.postMessage({ command: 'status' });
         });
+
+        // Request an initial status when loaded
+        vscode.postMessage({ command: 'status' });
+
+        // Persist beatsPerBar via VS Code state
+        (function persistBeatsPerBar() {
+            const state = vscode.getState() || {};
+            const input = document.getElementById('beatsPerBar');
+            if (state.beatsPerBar) input.value = String(state.beatsPerBar);
+            input.addEventListener('change', () => {
+                const v = Math.max(1, parseInt(input.value || '4'));
+                vscode.setState({ ...(state||{}), beatsPerBar: v });
+            });
+        })();
+
+        // Restore loop settings from state
+        (function restoreLoopFromState() {
+            const st = vscode.getState() || {};
+            if (typeof st.loopEnabled === 'boolean') {
+                const chk = document.getElementById('loopEnabled');
+                if (chk) chk.checked = !!st.loopEnabled;
+            }
+            if (Number.isFinite(st.loopStart)) {
+                const inp = document.getElementById('loopStart');
+                if (inp) inp.value = String(st.loopStart);
+            }
+            if (Number.isFinite(st.loopEnd)) {
+                const inp = document.getElementById('loopEnd');
+                if (inp) inp.value = String(st.loopEnd);
+            }
+        })();
     </script>
-</body>
+  </body>
 </html>`
 }
