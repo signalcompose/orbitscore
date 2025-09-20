@@ -236,6 +236,12 @@ function showTransportPanel() {
       case 'solo':
         sendTransportCommand(`solo:${message.list}`)
         break
+      case 'status':
+        sendTransportCommand('status')
+        break
+      case 'port':
+        sendTransportCommand(`port:${message.name}`)
+        break
     }
   })
 }
@@ -407,6 +413,13 @@ function getTransportHTML(): string {
         <button id="clearSoloBtn">Clear Solo</button>
     </div>
 
+    <div class="section">
+        <h3>MIDI Port</h3>
+        <label>Port Name: <input type="text" id="midiPort" placeholder="IAC Driver Bus 1"></label>
+        <button id="applyPortBtn">Switch Port</button>
+        <button id="statusBtn">Status</button>
+    </div>
+
     <script>
         const vscode = acquireVsCodeApi();
 
@@ -456,6 +469,17 @@ function getTransportHTML(): string {
 
         document.getElementById('clearSoloBtn').addEventListener('click', () => {
             vscode.postMessage({ command: 'solo', list: 'none' });
+        });
+
+        document.getElementById('applyPortBtn').addEventListener('click', () => {
+            const name = document.getElementById('midiPort').value?.trim();
+            if (name) {
+                vscode.postMessage({ command: 'port', name });
+            }
+        });
+
+        document.getElementById('statusBtn').addEventListener('click', () => {
+            vscode.postMessage({ command: 'status' });
         });
     </script>
 </body>
