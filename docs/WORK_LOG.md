@@ -677,6 +677,7 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 - Parser: `parsePitchSpec()` が最初の `NUMBER` トークン文字列を保持して `degreeRaw` へ格納。
 - Scheduler→PitchConverter: `convertPitch(pitch, pitch.degreeRaw)` を配線し、`r` サフィックスをE2E適用。
 - Tests: `tests/scheduler/random_suffix.spec.ts` を追加（randseedに基づく決定的挙動を確認）。
+- Tests: `tests/midi/core_sink.spec.ts` を追加（CoreMidiSink のポート切替/送信ガードを検証）。
 - 既存テスト更新: `tests/parser/duration_and_pitch.spec.ts` に `degreeRaw` 追加に伴う期待値の更新。
 
 **Rationale**:
