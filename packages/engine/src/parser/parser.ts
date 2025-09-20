@@ -81,7 +81,7 @@ export class Tokenizer {
 
   private advance(): string {
     if (this.isEOF()) return '\0'
-    const char = this.src[this.pos++]
+    const char = this.src[this.pos++]!
     if (char === '\n') {
       this.line++
       this.column = 1
@@ -228,12 +228,13 @@ export class Tokenizer {
       '\n': 'NEWLINE',
     }
 
-    if (char in symbolMap) {
+    if (Object.prototype.hasOwnProperty.call(symbolMap, char)) {
       const startLine = this.line
       const startColumn = this.column
       const value = this.advance()
+      const t = symbolMap[char as keyof typeof symbolMap]!
       return {
-        type: symbolMap[char],
+        type: t,
         value,
         line: startLine,
         column: startColumn,
@@ -274,12 +275,12 @@ export class Parser {
   }
 
   private peek(): Token {
-    return this.isEOF() ? this.tokens[this.tokens.length - 1] : this.tokens[this.pos]
+    return this.isEOF() ? this.tokens[this.tokens.length - 1]! : this.tokens[this.pos]!
   }
 
   private advance(): Token {
-    if (this.isEOF()) return this.tokens[this.tokens.length - 1]
-    return this.tokens[this.pos++]
+    if (this.isEOF()) return this.tokens[this.tokens.length - 1]!
+    return this.tokens[this.pos++]!
   }
 
   private match(type: TokenType): boolean {
@@ -413,7 +414,10 @@ export class Parser {
       octaveShift = sign * this.parseNumber()
     }
 
-    return { degree, detune, octaveShift }
+    const pitch: PitchSpec = { degree }
+    if (detune !== undefined) (pitch as any).detune = detune
+    if (octaveShift !== undefined) (pitch as any).octaveShift = octaveShift
+    return pitch
   }
 
   private parseSequenceEvent(): SequenceEvent {
@@ -447,7 +451,7 @@ export class Parser {
     }
   }
 
-  private parseGlobalConfig(): GlobalConfig {
+  private parseGlobalConfig(): Required<GlobalConfig> {
     const config: Partial<GlobalConfig> = {}
 
     while (!this.isEOF() && this.peek().type === 'KEYWORD') {
@@ -587,18 +591,18 @@ export class Parser {
 
     return {
       config: {
-        name: config.name,
+        name: config.name!,
         bus: config.bus || '',
-        channel: config.channel || 1,
-        key: config.key,
-        tempo: config.tempo,
-        meter: config.meter,
-        octave: config.octave || 4.0,
-        octmul: config.octmul || 1.0,
-        bendRange: config.bendRange || 2,
-        mpe: config.mpe || false,
-        defaultDur: config.defaultDur,
-        randseed: config.randseed,
+        channel: config.channel ?? 1,
+        key: config.key ?? 'C',
+        tempo: config.tempo ?? 120,
+        meter: config.meter ?? { n: 4, d: 4, align: 'shared' },
+        octave: config.octave ?? 4.0,
+        octmul: config.octmul ?? 1.0,
+        bendRange: config.bendRange ?? 2,
+        mpe: config.mpe ?? false,
+        defaultDur: config.defaultDur ?? { kind: 'unit', value: 1 },
+        randseed: config.randseed ?? 0,
       },
       events,
     }
