@@ -8,6 +8,10 @@ export type DurationSpec =
 
 export type PitchSpec = {
   degree: number // 0..12 (0 は休符), 1..12 はキーから音高に
+  /**
+   * 元の度数文字列表現（例: "1.0r"）。ランダムサフィックス 'r' のE2E適用に使用。
+   */
+  degreeRaw?: string
   detune?: number // セント/半音単位の浮動 (半音=1)
   octaveShift?: number // +1,-1 など
 }
