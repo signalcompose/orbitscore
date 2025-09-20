@@ -155,6 +155,47 @@ async function runFile(filePath: string) {
   }
 }
 
+async function liveEvaluate(code: string) {
+  try {
+    const ir = parseSourceToIR(code)
+    console.log('Code parsed successfully')
+
+    // Extract unique bus names from sequences
+    const busNames = Array.from(
+      new Set(
+        ir.sequences
+          .map((seq) => seq.config.bus)
+          .filter((name) => typeof name === 'string' && name.trim().length > 0),
+      ),
+    )
+    const primaryBus = busNames[0]
+    if (busNames.length > 1 && primaryBus) {
+      console.warn(
+        `Multiple MIDI buses detected (${busNames.join(', ')}). Using "${primaryBus}" for live evaluation.`,
+      )
+    }
+
+    // If no scheduler exists, create one
+    if (!scheduler) {
+      midiSink = midiSink ?? new CoreMidiSink()
+      await midiSink.open(primaryBus)
+
+      scheduler = new Scheduler(midiSink, ir)
+      scheduler.start()
+      console.log(`Live coding started with bus: ${primaryBus || 'default'}`)
+    } else {
+      // Live update: replace sequences without stopping playback
+      scheduler.liveUpdate(ir)
+      console.log('Sequences updated live - music continues!')
+    }
+
+    console.log('Live evaluation completed')
+  } catch (error) {
+    console.error(`Live evaluation failed: ${error}`)
+    throw error
+  }
+}
+
 function handleTransportCommand(command: string) {
   if (!scheduler) {
     console.error('No scheduler active')
@@ -377,6 +418,19 @@ switch (command) {
     break
   }
 
+  case 'live': {
+    const code = process.argv[3]
+    if (!code) {
+      console.error('Usage: orbitscore live <code>')
+      process.exit(1)
+    }
+    liveEvaluate(code).catch((error) => {
+      console.error(`Failed to live evaluate: ${error instanceof Error ? error.message : error}`)
+      process.exit(1)
+    })
+    break
+  }
+
   case 'help':
   default:
     console.log(`
@@ -386,6 +440,7 @@ Usage:
   orbitscore start           Start the engine daemon
   orbitscore run <file>      Run an .osc file
   orbitscore eval <file>     Evaluate an .osc file
+  orbitscore live <code>     Live evaluate code (for live coding)
   orbitscore ports          List available MIDI ports
   orbitscore help           Show this help
 

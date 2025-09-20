@@ -1,6 +1,5 @@
 import * as child_process from 'child_process'
 import * as fs from 'fs'
-import * as os from 'os'
 import * as path from 'path'
 
 import * as vscode from 'vscode'
@@ -177,13 +176,7 @@ async function runSelection() {
     text = editor.document.getText(selection)
   }
 
-  // Create temporary file
-  const tmpDir = os.tmpdir()
-  const tmpFile = path.join(tmpDir, `orbitscore_${Date.now()}.osc`)
-
   try {
-    fs.writeFileSync(tmpFile, text)
-
     // If engine is not running, start it
     if (!engineProcess) {
       startEngine()
@@ -191,20 +184,17 @@ async function runSelection() {
       await new Promise((resolve) => setTimeout(resolve, 500))
     }
 
-    // Send the file to the running engine via stdin (live eval)
+    // Send the code directly to the running engine via stdin (live eval)
     if (!engineProcess) {
       vscode.window.showErrorMessage('Engine is not running')
       return
     }
-    engineProcess.stdin?.write(`eval:${tmpFile}\n`)
-    // Clean up temp file slightly later to ensure engine has read it
-    setTimeout(() => {
-      try {
-        fs.unlinkSync(tmpFile)
-      } catch (_) {}
-    }, 1500)
 
-    vscode.window.showInformationMessage('OrbitScore: Selection sent for evaluation')
+    // Escape the code for command line
+    const escapedCode = text.replace(/"/g, '\\"')
+    engineProcess.stdin?.write(`live:${escapedCode}\n`)
+
+    vscode.window.showInformationMessage('🎵 OrbitScore: Live coding! Music continues...')
   } catch (error) {
     vscode.window.showErrorMessage(`OrbitScore: ${error}`)
     outputChannel?.appendLine(`Error: ${error}`)
