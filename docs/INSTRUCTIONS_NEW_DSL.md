@@ -31,8 +31,8 @@ sequence <name> {
   key <ROOT>
   tempo <BPM>
   meter <N>/<D> <align>
-  octave <FLOAT>
-  octmul <FLOAT>
+  octave <FLOAT>        # 基本オクターブ（例: 4.0）
+  octmul <FLOAT>        # オクターブ定義係数（1.0=12半音, 0.5=6半音, 2.0=24半音）
   bendRange <SEMITONES>
   mpe <true|false>
   defaultDur <DUR>

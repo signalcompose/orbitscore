@@ -121,13 +121,25 @@ describe('PitchConverter', () => {
     it('should apply octave correctly', () => {
       const converter = new PitchConverter(createConfig({ octave: 1.0 }))
       const result = converter.convertPitch({ degree: 1 })
-      expect(result.note).toBe(12) // C1 = MIDI note 12 (0 + 12)
+      expect(result.note).toBe(12) // C1 = MIDI note 12 (0 + 1*1*12)
     })
 
-    it('should apply octmul correctly (applies to octave term only)', () => {
+    it('should apply octmul correctly (changes octave definition)', () => {
       const converter = new PitchConverter(createConfig({ octave: 1.0, octmul: 2.0 }))
       const result = converter.convertPitch({ degree: 1 })
-      expect(result.note).toBe(24) // 0 + 0 + (1*2*12) = 24
+      expect(result.note).toBe(24) // C1 with 2x octave = 0 + 1*(2*12) = 24
+    })
+
+    it('should apply octmul for microtonal scales (0.5 = 6 semitones)', () => {
+      const converter = new PitchConverter(createConfig({ octave: 1.0, octmul: 0.5 }))
+      const result = converter.convertPitch({ degree: 1 })
+      expect(result.note).toBe(6) // C1 with 0.5x octave = 0 + 1*(0.5*12) = 6
+    })
+
+    it('should apply octmul to octaveShift as well', () => {
+      const converter = new PitchConverter(createConfig({ octave: 0.0, octmul: 0.5 }))
+      const result = converter.convertPitch({ degree: 1, octaveShift: 1 })
+      expect(result.note).toBe(6) // C0 + 1 octave shift with 0.5x octave = 0 + 1*(0.5*12) = 6
     })
   })
 
