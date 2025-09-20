@@ -31,6 +31,8 @@ export type TokenType =
   | 'TILDE'
   | 'SLASH'
   | 'NEWLINE'
+  | 'PLUS'
+  | 'MINUS'
   | 'EOF'
 
 export type Token = {
@@ -225,6 +227,8 @@ export class Tokenizer {
       '^': 'CARET',
       '~': 'TILDE',
       '/': 'SLASH',
+      '+': 'PLUS',
+      '-': 'MINUS',
       '\n': 'NEWLINE',
     }
 
@@ -327,7 +331,14 @@ export class Parser {
   }
 
   private parseKey(): string {
-    const token = this.expect('KEYWORD')
+    // KEYWORD/IDENTIFIER のどちらでも受理（C/Db などは識別子として来る可能性がある）
+    const tok = this.peek()
+    if (tok.type !== 'KEYWORD' && tok.type !== 'IDENTIFIER') {
+      throw new Error(
+        `Expected KEYWORD or IDENTIFIER for key, got ${tok.type} at line ${tok.line}, column ${tok.column}`,
+      )
+    }
+    const token = this.advance()
     const validKeys = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
     if (!validKeys.includes(token.value)) {
       throw new Error(`Invalid key '${token.value}' at line ${token.line}, column ${token.column}`)
@@ -348,73 +359,92 @@ export class Parser {
   private parseDurationSpec(): DurationSpec {
     this.expect('AT')
 
-    if (this.peek().type === 'NUMBER') {
-      const firstNumber = this.parseNumber()
-      if (this.peek().type === 'IDENTIFIER' && this.peek().value === 's') {
-        this.advance() // "s"
-        return { kind: 'sec', value: firstNumber }
-      } else if (this.peek().type === 'IDENTIFIER' && this.peek().value === 'U') {
-        this.advance() // "U"
-        return { kind: 'unit', value: firstNumber }
-      } else if (this.peek().type === 'PERCENT') {
-        this.advance() // "%"
-        const bars = this.parseNumber()
-        this.expect('IDENTIFIER') // "bars"
-        return { kind: 'percent', percent: firstNumber, bars }
-      } else {
-        // 数値の後に何もない場合は、デフォルトでunitとして扱う
-        return { kind: 'unit', value: firstNumber }
-      }
-    } else if (this.peek().type === 'IDENTIFIER' && this.peek().value.startsWith('U')) {
-      // U0.5, U1, U0.25 などの形式
-      const identifier = this.peek().value
-      this.advance() // "U..."
-      const value = parseFloat(identifier.substring(1))
-      return { kind: 'unit', value }
-    } else if (this.peek().type === 'IDENTIFIER' && this.peek().value === 's') {
-      // @2s の形式 - 数値の後にsが来る場合
-      this.advance() // "s"
-      // 前の数値は既にparseNumber()で処理されているので、ここでは何もしない
-      return { kind: 'sec', value: 2 } // デフォルト値、実際は前の数値を使用
-    } else if (this.peek().type === 'LBRACKET') {
+    // 1) @[a:b]*U1 / U0.5 など（連符）
+    if (this.peek().type === 'LBRACKET') {
       this.advance() // "["
       const a = this.parseNumber()
       this.expect('COLON')
       const b = this.parseNumber()
       this.expect('RBRACKET')
       this.expect('ASTERISK')
-      this.expect('IDENTIFIER') // "U"
-      const base = this.parseNumber()
+      // 次は "U1" や "U0.5" のような IDENTIFIER を想定
+      const id = this.expect('IDENTIFIER').value
+      if (!id.startsWith('U')) {
+        throw new Error(`Expected U<value> after tuplet, got '${id}'`)
+      }
+      const base = parseFloat(id.substring(1))
+      if (!isFinite(base)) {
+        throw new Error(`Invalid unit base '${id}' after tuplet`)
+      }
       return { kind: 'tuplet', a, b, base: { kind: 'unit', value: base } }
-    } else {
-      throw new Error(
-        `Invalid duration spec at line ${this.peek().line}, column ${this.peek().column}`,
-      )
     }
+
+    // 2) 数値から始まる形式: @2s / @1.5U / @25%2bars / @1.0（unit既定）
+    if (this.peek().type === 'NUMBER') {
+      const firstNumber = this.parseNumber()
+      if (this.peek().type === 'IDENTIFIER') {
+        const ident = this.peek().value
+        if (ident === 's') {
+          this.advance()
+          return { kind: 'sec', value: firstNumber }
+        }
+        if (ident === 'U') {
+          this.advance()
+          return { kind: 'unit', value: firstNumber }
+        }
+      }
+      if (this.peek().type === 'PERCENT') {
+        this.advance() // "%"
+        const bars = this.parseNumber()
+        this.expect('IDENTIFIER') // "bars"
+        return { kind: 'percent', percent: firstNumber, bars }
+      }
+      // サフィックス無しは unit として扱う
+      return { kind: 'unit', value: firstNumber }
+    }
+
+    // 3) 識別子から始まる形式: @U0.5 / @U1
+    if (this.peek().type === 'IDENTIFIER' && this.peek().value.startsWith('U')) {
+      const identifier = this.advance().value // 例: "U0.5"
+      const value = parseFloat(identifier.substring(1))
+      if (!isFinite(value)) {
+        throw new Error(`Invalid unit value '${identifier}'`)
+      }
+      return { kind: 'unit', value }
+    }
+
+    throw new Error(
+      `Invalid duration spec at line ${this.peek().line}, column ${this.peek().column}`,
+    )
   }
 
   private parsePitchSpec(): PitchSpec {
-    const degree = this.parseNumber()
+    // 最初の数値トークンを保持して degreeRaw へ格納（rサフィックス用）
+    const numTok = this.expect('NUMBER')
+    const degreeRaw = numTok.value
+    const degree = parseFloat(degreeRaw.endsWith('r') ? degreeRaw.slice(0, -1) : degreeRaw)
     let detune: number | undefined
     let octaveShift: number | undefined
 
     // detune
     if (this.peek().type === 'TILDE') {
       this.advance() // "~"
-      const sign = this.peek().value === '+' ? 1 : -1
-      this.advance() // "+" or "-"
+      const signTok = this.peek().type
+      const sign = signTok === 'MINUS' ? -1 : 1
+      if (signTok === 'PLUS' || signTok === 'MINUS') this.advance()
       detune = sign * this.parseNumber()
     }
 
     // octave shift
     if (this.peek().type === 'CARET') {
       this.advance() // "^"
-      const sign = this.peek().value === '+' ? 1 : -1
-      this.advance() // "+" or "-"
+      const signTok = this.peek().type
+      const sign = signTok === 'MINUS' ? -1 : 1
+      if (signTok === 'PLUS' || signTok === 'MINUS') this.advance()
       octaveShift = sign * this.parseNumber()
     }
 
-    const pitch: PitchSpec = { degree }
+    const pitch: PitchSpec = { degree, degreeRaw }
     if (detune !== undefined) (pitch as any).detune = detune
     if (octaveShift !== undefined) (pitch as any).octaveShift = octaveShift
     return pitch
@@ -438,16 +468,14 @@ export class Parser {
       this.expect('RPAREN')
       return { kind: 'chord', notes }
     } else {
-      // 単音または休符
-      const degree = this.parseNumber()
+      // 単音または休符（detune/~ と octave shift/^ に対応）
+      const pitch = this.parsePitchSpec()
       const dur = this.parseDurationSpec()
 
-      if (degree === 0) {
+      if (pitch.degree === 0) {
         return { kind: 'rest', dur }
-      } else {
-        const pitch: PitchSpec = { degree }
-        return { kind: 'note', pitches: [pitch], dur }
       }
+      return { kind: 'note', pitches: [pitch], dur }
     }
   }
 
