@@ -596,7 +596,8 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 - 追加更新: 英語での指示時は正しい英文で返答し、英作文力向上を支援し、意図確認を行う方針を追記
   - 上記方針は `AGENTS.md` の Language & Encoding 節にも反映済み
 - `agent.md` は方針重複のため削除し、AGENTS.md に集約
- - `PROJECT_RULES.md` の要点（WORK_LOG/README厳格運用、コミット体裁テンプレ、Pre-commitチェック、MIDI/DSLの厳守事項）を `AGENTS.md` に反映
+- `PROJECT_RULES.md` の要点（WORK_LOG/README厳格運用、コミット体裁テンプレ、Pre-commitチェック、MIDI/DSLの厳守事項）を `AGENTS.md` に反映
+- 言語方針を更新：「英語での指示時も回答は日本語。併せて Suggested English を提示して英作文チェックを実施」
 
 **Rationale**:
 
@@ -635,3 +636,55 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 **Author**: AI Assistant
 **Project**: OrbitScore
 **Phase**: Phase 5 Completed
+
+### 5.9 Parser Fixes: Tuplet + Pitch Suffix (Detune/Octave) for Single Notes
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- Fix `parseDurationSpec()` to correctly parse tuplets: `@[a:b]*U<value>` now accepts `IDENTIFIER` tokens like `U1`, `U0.5` (tokenizer groups `U` and digits).
+- Remove incorrect fallback branch that returned `@2s` with a hardcoded value; `@<number>s` now uses the parsed number consistently.
+- Support single-note pitch suffix parsing by using `parsePitchSpec()` for non-chord events:
+  - Detune: `~+0.5`
+  - Octave shift: `^+1`
+- Add tests: `tests/parser/duration_and_pitch.spec.ts`
+
+**Rationale**:
+
+- Tokenizer treats `U1.5` as a single `IDENTIFIER` → parser needed to parse numeric part after `U` instead of expecting separate `NUMBER` token.
+- Single-note events previously ignored `~` and `^` suffixes because they parsed raw degree only.
+
+**Validation**:
+
+- `npm test` passes (existing suites + new parser tests for tuplet and pitch suffix).
+- Verified no regression in scheduler/pitch/midi tests.
+
+**Impact**:
+
+- DSL `tuplet` duration and single-note microtonal/octave modifiers work as specified in `INSTRUCTIONS_NEW_DSL.md`.
+
+### 5.10 Parser/IR wiring for random suffix `r` and key token acceptance
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- Parser: `key` 値で `KEYWORD` だけでなく `IDENTIFIER` も受理（`C`, `Db`, ...）。
+- IR: `PitchSpec` に `degreeRaw?: string` を追加（例: `"1.0r"`）。
+- Parser: `parsePitchSpec()` が最初の `NUMBER` トークン文字列を保持して `degreeRaw` へ格納。
+- Scheduler→PitchConverter: `convertPitch(pitch, pitch.degreeRaw)` を配線し、`r` サフィックスをE2E適用。
+- Tests: `tests/scheduler/random_suffix.spec.ts` を追加（randseedに基づく決定的挙動を確認）。
+- 既存テスト更新: `tests/parser/duration_and_pitch.spec.ts` に `degreeRaw` 追加に伴う期待値の更新。
+
+**Rationale**:
+
+- 仕様「任意の数値末尾 'r' は [0,0.999] を加算」を度数に対して実運用できるよう、原文数値をIRに保持してPitchConverterへ伝搬する必要があったため。
+- 一部のテーマ/配色環境で `C` などが `IDENTIFIER` としてトークナイズされるケースにも堅牢にするため。
+
+**Validation**:
+
+- `npm test` 53/53 パス（新規2件含む）。
+
+**Impact**:
+
+- `1.0r` などの表記が、シーケンスの `randseed` に基づき決定的にピッチへ反映されるようになった。
+- 将来的に detune/octave/duration への `r` 拡張も同様のパターンで配線可能。

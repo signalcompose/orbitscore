@@ -29,10 +29,10 @@ export class Scheduler {
       const nowMs = Date.now()
       const elapsedMs = this.wallStartMs ? nowMs - this.wallStartMs : 0
       const targetMs = elapsedMs + LOOK_AHEAD_MS
-      
+
       // トランスポート前進（小節頭でjump/loop適用）
       this.simulateTransportAdvanceAcrossSequences((targetMs - this.currentSec * 1000) / 1000)
-      
+
       this.scheduleThrough(targetMs)
     }, TICK_MS)
   }
@@ -40,9 +40,26 @@ export class Scheduler {
     if (this.tickTimer) clearInterval(this.tickTimer)
     this.tickTimer = null
   }
-  
+
   isPlaying(): boolean {
     return this.tickTimer !== null
+  }
+
+  /** 現在のループ状態を返す */
+  getLoopState(): { enabled: boolean; startBar: number; endBar: number } {
+    if (this.loop) {
+      return {
+        enabled: !!this.loop.enabled,
+        startBar: this.loop.startBar,
+        endBar: this.loop.endBar,
+      }
+    }
+    return { enabled: false, startBar: 0, endBar: 0 }
+  }
+
+  /** 表示用のグローバルBPMを返す（現状はIRのglobal.tempo） */
+  getDisplayBpm(): number {
+    return this.ir.global.tempo
   }
 
   // ----- Transport state helpers (for tests/phase3 minimal) -----
@@ -160,19 +177,19 @@ export class Scheduler {
    */
   simulateTransportAdvanceAcrossSequences(durationSec: number) {
     const endTarget = this.currentSec + Math.max(0, durationSec)
-    
+
     // Find the next boundary
     const nextBoundary = nextBoundaryAcrossSequences(this.currentSec + 1e-9, this.ir)
-    
+
     // If next boundary is beyond our target, just advance to target
     if (nextBoundary > endTarget) {
       this.currentSec = endTarget
       return
     }
-    
+
     // Advance to the next boundary
     this.currentSec = nextBoundary
-    
+
     // Check for pending jump at this boundary
     if (this.pendingJumpBar !== null) {
       const baseSeq = globalBaseSeq(this.ir)
@@ -181,7 +198,7 @@ export class Scheduler {
       this.pendingJumpBar = null
       return // Jump applied, stop here
     }
-    
+
     // Check for loop at this boundary
     if (this.loop && this.loop.enabled) {
       const baseSeq = globalBaseSeq(this.ir)
@@ -194,7 +211,7 @@ export class Scheduler {
         return
       }
     }
-    
+
     // Boundary reached, stop here (no transport actions triggered)
     return
   }
@@ -226,7 +243,7 @@ export class Scheduler {
         case 'note': {
           const durSec = durationToSeconds(ev.dur, seq, this.ir)
           for (const pitch of ev.pitches) {
-            const midi = converter.convertPitch(pitch)
+            const midi = converter.convertPitch(pitch, (pitch as any).degreeRaw)
             // PitchBend（必要なら）
             if (midi.pitchBend !== 0) {
               msgs.push(makePitchBend(tSec, midi.channel, midi.pitchBend))
@@ -246,7 +263,7 @@ export class Scheduler {
           }
           for (const n of ev.notes) {
             const durSec = durationToSeconds(n.dur, seq, this.ir)
-            const midi = converter.convertPitch(n.pitch)
+            const midi = converter.convertPitch(n.pitch, (n.pitch as any).degreeRaw)
             if (midi.pitchBend !== 0) {
               msgs.push(makePitchBend(tSec, midi.channel, midi.pitchBend))
             }
@@ -320,7 +337,8 @@ export class Scheduler {
 export function durationToSeconds(d: DurationSpec, seq: SequenceIR, ir?: IR): number {
   // テンポは align により参照元を切替（shared はグローバル、independent はシーケンス）
   const align = seq.config.meter?.align ?? ir?.global.meter.align
-  const effectiveTempo = align === 'shared' && ir ? ir.global.tempo : (seq.config.tempo ?? thisTempoFallback())
+  const effectiveTempo =
+    align === 'shared' && ir ? ir.global.tempo : (seq.config.tempo ?? thisTempoFallback())
   const n = seq.config.meter?.n ?? 4
   const dDen = seq.config.meter?.d ?? 4
   const secPerQuarter = 60 / effectiveTempo // BPMは四分音符を基準
