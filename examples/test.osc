@@ -1,0 +1,14 @@
+key C
+tempo 120
+meter 4/4 shared
+
+sequence piano {
+  bus "to Max 1"
+  channel 1
+  meter 4/4 shared
+  tempo 120
+  octave 4
+  defaultDur @U1
+  
+  1@U1 3@U1 5@U1 8@U1
+}
