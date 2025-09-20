@@ -28,6 +28,20 @@ sequence s { channel 1 bus "IAC"
     })
   })
 
+  it('accepts singular "bar" in percent duration', () => {
+    const src = `
+key C
+tempo 120
+meter 4/4 shared
+sequence s { channel 1 bus "IAC"
+  5@25%1bar
+}
+`
+    const ir = parseSourceToIR(src)
+    const evs = ir.sequences[0]!.events
+    expect((evs[0] as any).dur).toEqual({ kind: 'percent', percent: 25, bars: 1 })
+  })
+
   it('parses single-note detune (~) and octave shift (^) suffixes', () => {
     const src = `
 key C

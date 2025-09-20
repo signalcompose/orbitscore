@@ -298,8 +298,9 @@ export class Parser {
   private expect(type: TokenType): Token {
     const token = this.peek()
     if (token.type !== type) {
+      const len = token.value?.length ?? 1
       throw new Error(
-        `Expected ${type}, got ${token.type} at line ${token.line}, column ${token.column}`,
+        `Expected ${type}, got ${token.type} ('${token.value}') at line ${token.line}, column ${token.column}, length ${len}: unexpected token`,
       )
     }
     return this.advance()
@@ -309,8 +310,9 @@ export class Parser {
     const token = this.expect('NUMBER')
     const value = parseFloat(token.value)
     if (isNaN(value)) {
+      const len = token.value?.length ?? 1
       throw new Error(
-        `Invalid number '${token.value}' at line ${token.line}, column ${token.column}`,
+        `Invalid number '${token.value}' at line ${token.line}, column ${token.column}, length ${len}: cannot parse`,
       )
     }
     return value
@@ -334,14 +336,18 @@ export class Parser {
     // KEYWORD/IDENTIFIER のどちらでも受理（C/Db などは識別子として来る可能性がある）
     const tok = this.peek()
     if (tok.type !== 'KEYWORD' && tok.type !== 'IDENTIFIER') {
+      const len = tok.value?.length ?? 1
       throw new Error(
-        `Expected KEYWORD or IDENTIFIER for key, got ${tok.type} at line ${tok.line}, column ${tok.column}`,
+        `Expected KEYWORD or IDENTIFIER for key, got ${tok.type} ('${tok.value}') at line ${tok.line}, column ${tok.column}, length ${len}: invalid key token`,
       )
     }
     const token = this.advance()
     const validKeys = ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B']
     if (!validKeys.includes(token.value)) {
-      throw new Error(`Invalid key '${token.value}' at line ${token.line}, column ${token.column}`)
+      const len = token.value?.length ?? 1
+      throw new Error(
+        `Invalid key '${token.value}' at line ${token.line}, column ${token.column}, length ${len}`,
+      )
     }
     return token.value
   }
@@ -351,8 +357,9 @@ export class Parser {
     if (token.value === 'shared' || token.value === 'independent') {
       return token.value
     }
+    const len = token.value?.length ?? 1
     throw new Error(
-      `Invalid meter alignment '${token.value}' at line ${token.line}, column ${token.column}`,
+      `Invalid meter alignment '${token.value}' at line ${token.line}, column ${token.column}, length ${len}`,
     )
   }
 
@@ -368,13 +375,20 @@ export class Parser {
       this.expect('RBRACKET')
       this.expect('ASTERISK')
       // 次は "U1" や "U0.5" のような IDENTIFIER を想定
-      const id = this.expect('IDENTIFIER').value
+      const idTok = this.expect('IDENTIFIER')
+      const id = idTok.value
       if (!id.startsWith('U')) {
-        throw new Error(`Expected U<value> after tuplet, got '${id}'`)
+        const len = idTok.value?.length ?? 1
+        throw new Error(
+          `Expected U<value> after tuplet, got '${id}' at line ${idTok.line}, column ${idTok.column}, length ${len}`,
+        )
       }
       const base = parseFloat(id.substring(1))
       if (!isFinite(base)) {
-        throw new Error(`Invalid unit base '${id}' after tuplet`)
+        const len = idTok.value?.length ?? 1
+        throw new Error(
+          `Invalid unit base '${id}' after tuplet at line ${idTok.line}, column ${idTok.column}, length ${len}`,
+        )
       }
       return { kind: 'tuplet', a, b, base: { kind: 'unit', value: base } }
     }
@@ -396,7 +410,13 @@ export class Parser {
       if (this.peek().type === 'PERCENT') {
         this.advance() // "%"
         const bars = this.parseNumber()
-        this.expect('IDENTIFIER') // "bars"
+        const barTok = this.expect('IDENTIFIER') // "bar" or "bars"
+        if (!(barTok.value === 'bars' || barTok.value === 'bar')) {
+          const len = barTok.value?.length ?? 1
+          throw new Error(
+            `Expected 'bar' or 'bars', got '${barTok.value}' at line ${barTok.line}, column ${barTok.column}, length ${len}`,
+          )
+        }
         return { kind: 'percent', percent: firstNumber, bars }
       }
       // サフィックス無しは unit として扱う
@@ -408,14 +428,18 @@ export class Parser {
       const identifier = this.advance().value // 例: "U0.5"
       const value = parseFloat(identifier.substring(1))
       if (!isFinite(value)) {
-        throw new Error(`Invalid unit value '${identifier}'`)
+        const t = this.peek()
+        const len = identifier?.length ?? 1
+        throw new Error(
+          `Invalid unit value '${identifier}' at line ${t.line}, column ${t.column}, length ${len}`,
+        )
       }
       return { kind: 'unit', value }
     }
 
-    throw new Error(
-      `Invalid duration spec at line ${this.peek().line}, column ${this.peek().column}`,
-    )
+    const t = this.peek()
+    const len = t.value?.length ?? 1
+    throw new Error(`Invalid duration spec at line ${t.line}, column ${t.column}, length ${len}`)
   }
 
   private parsePitchSpec(): PitchSpec {
