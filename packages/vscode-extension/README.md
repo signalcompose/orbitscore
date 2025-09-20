@@ -20,6 +20,7 @@ VS Code extension for the OrbitScore music DSL.
 ## Installation
 
 1. Build the engine first:
+
 ```bash
 cd packages/engine
 npm install
@@ -27,6 +28,7 @@ npm run build
 ```
 
 2. Build the extension:
+
 ```bash
 cd packages/vscode-extension
 npm install
@@ -34,6 +36,7 @@ npm run build
 ```
 
 3. Install in VS Code:
+
 - Open VS Code
 - Press `Cmd+Shift+P`
 - Run "Developer: Install Extension from Location..."

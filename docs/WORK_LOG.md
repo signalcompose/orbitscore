@@ -695,4 +695,35 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 
 **Commit History**:
 
-- `42dc84a` - feat(engine): add CLI port management
+- _TBD_ - feat(engine): add CLI port management
+
+### 5.11 VS Code Transport Panel Enhancements
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- Transport Webview を常時保持し、拡張から状態(push)を通知。
+- 再生/停止/ループ情報を即時反映するステータスバーの拡張。
+- Webview に進行バー（Beats per bar 入力 + rAFアニメーション）を追加。
+- MIDIポート/ミュート/ソロ/ループ範囲を Webview 上に表示。
+- Beats per bar / Loop設定を `vscode.setState()` で保持。
+- STATUSの length 付きエラー文字列を診断で解釈できるよう正規表現を更新。
+
+**Rationale**:
+
+- ライブ中にVS Codeから離れずトランスポートを監視・制御するため。
+- 状態pushにより、スコア編集→eval時のラグやWebview未同期を解消。
+
+**Validation**:
+
+- `npm run lint`
+- `npm test`
+
+**Impact**:
+
+- Transport UI で再生状況・ループ範囲・ポートが即時可視化され、Beats per bar の進行を視覚的に追える。
+- ユーザー設定（Beats per bar / Loop）がパネル再表示後も維持される。
+
+**Commit History**:
+
+- _TBD_ - feat(vscode): enhance transport panel with live status
