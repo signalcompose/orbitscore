@@ -688,3 +688,8 @@ Created CLI interface (`packages/engine/src/cli.ts`) with:
 
 - `1.0r` などの表記が、シーケンスの `randseed` に基づき決定的にピッチへ反映されるようになった。
 - 将来的に detune/octave/duration への `r` 拡張も同様のパターンで配線可能。
+
+**Commit History**:
+
+- `7bef26d` - feat(parser): accept key as IDENTIFIER; carry degreeRaw on PitchSpec
+- `b7472e2` - feat(engine): wire r-suffix end-to-end; add E2E tests; docs
