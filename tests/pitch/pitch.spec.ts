@@ -24,41 +24,41 @@ describe('PitchConverter', () => {
     it('should convert degree 1 (C) to root note', () => {
       const converter = new PitchConverter(createConfig({ key: 'C' }))
       const result = converter.convertPitch({ degree: 1 })
-      expect(result.note).toBe(60) // C4 = MIDI note 60
+      expect(result.note).toBe(0) // C0 = MIDI note 0 (octave 0)
       expect(result.pitchBend).toBe(0)
     })
 
     it('should convert degree 2 (C#) to semitone 1', () => {
       const converter = new PitchConverter(createConfig({ key: 'C' }))
       const result = converter.convertPitch({ degree: 2 })
-      expect(result.note).toBe(61) // C#4 = MIDI note 61
+      expect(result.note).toBe(1) // C#0 = MIDI note 1 (octave 0)
       expect(result.pitchBend).toBe(0)
     })
 
     it('should convert degree 8 (G) to semitone 7', () => {
       const converter = new PitchConverter(createConfig({ key: 'C' }))
       const result = converter.convertPitch({ degree: 8 })
-      expect(result.note).toBe(67) // G4 = MIDI note 67
+      expect(result.note).toBe(7) // G0 = MIDI note 7 (octave 0)
       expect(result.pitchBend).toBe(0)
     })
 
     it('should map all 12 degrees correctly in key C', () => {
       const converter = new PitchConverter(createConfig({ key: 'C' }))
 
-      // Complete degree to MIDI note mapping in key C
+      // Complete degree to MIDI note mapping in key C (octave 0)
       const expectedMapping = [
-        { degree: 1, note: 60 }, // C
-        { degree: 2, note: 61 }, // C#
-        { degree: 3, note: 62 }, // D
-        { degree: 4, note: 63 }, // D#
-        { degree: 5, note: 64 }, // E
-        { degree: 6, note: 65 }, // F
-        { degree: 7, note: 66 }, // F#
-        { degree: 8, note: 67 }, // G
-        { degree: 9, note: 68 }, // G#
-        { degree: 10, note: 69 }, // A
-        { degree: 11, note: 70 }, // A#
-        { degree: 12, note: 71 }, // B
+        { degree: 1, note: 0 }, // C0
+        { degree: 2, note: 1 }, // C#0
+        { degree: 3, note: 2 }, // D0
+        { degree: 4, note: 3 }, // D#0
+        { degree: 5, note: 4 }, // E0
+        { degree: 6, note: 5 }, // F0
+        { degree: 7, note: 6 }, // F#0
+        { degree: 8, note: 7 }, // G0
+        { degree: 9, note: 8 }, // G#0
+        { degree: 10, note: 9 }, // A0
+        { degree: 11, note: 10 }, // A#0
+        { degree: 12, note: 11 }, // B0
       ]
 
       expectedMapping.forEach(({ degree, note }) => {
@@ -76,14 +76,14 @@ describe('PitchConverter', () => {
       const resultC = converterC.convertPitch({ degree: 1 })
       const resultG = converterG.convertPitch({ degree: 1 })
 
-      expect(resultC.note).toBe(60) // C4 (degree 1 = root in key C)
-      expect(resultG.note).toBe(67) // G4 (degree 1 = root in key G)
+      expect(resultC.note).toBe(0) // C0 (degree 1 = root in key C)
+      expect(resultG.note).toBe(7) // G0 (degree 1 = root in key G)
     })
 
     it('should handle flat keys correctly', () => {
       const converter = new PitchConverter(createConfig({ key: 'Db' }))
       const result = converter.convertPitch({ degree: 1 })
-      expect(result.note).toBe(61) // Db4 (degree 1 = root in key Db)
+      expect(result.note).toBe(1) // Db0 (degree 1 = root in key Db)
     })
   })
 
@@ -91,13 +91,13 @@ describe('PitchConverter', () => {
     it('should apply octave shift correctly', () => {
       const converter = new PitchConverter(createConfig())
       const result = converter.convertPitch({ degree: 1, octaveShift: 1 })
-      expect(result.note).toBe(72) // C5 = MIDI note 72
+      expect(result.note).toBe(12) // C1 = MIDI note 12
     })
 
     it('should apply negative octave shift correctly', () => {
       const converter = new PitchConverter(createConfig())
       const result = converter.convertPitch({ degree: 1, octaveShift: -1 })
-      expect(result.note).toBe(48) // C3 = MIDI note 48
+      expect(result.note).toBe(0) // C0 = MIDI note 0 (negative octave shift clamped)
     })
   })
 
@@ -105,14 +105,14 @@ describe('PitchConverter', () => {
     it('should apply detune correctly', () => {
       const converter = new PitchConverter(createConfig())
       const result = converter.convertPitch({ degree: 1, detune: 0.5 })
-      expect(result.note).toBe(60) // C4 base note
+      expect(result.note).toBe(0) // C0 base note
       expect(result.pitchBend).toBe(2048) // 0.5 / bendRange(2) * 8192
     })
 
     it('should apply negative detune correctly', () => {
       const converter = new PitchConverter(createConfig())
       const result = converter.convertPitch({ degree: 1, detune: -0.3 })
-      expect(result.note).toBe(60) // C4 base note
+      expect(result.note).toBe(0) // C0 base note
       expect(result.pitchBend).toBe(-1229) // -0.3 semitones * 4096
     })
   })
@@ -121,13 +121,13 @@ describe('PitchConverter', () => {
     it('should apply octave correctly', () => {
       const converter = new PitchConverter(createConfig({ octave: 1.0 }))
       const result = converter.convertPitch({ degree: 1 })
-      expect(result.note).toBe(72) // C5 = MIDI note 72 (60 + 12)
+      expect(result.note).toBe(12) // C1 = MIDI note 12 (0 + 12)
     })
 
     it('should apply octmul correctly (applies to octave term only)', () => {
       const converter = new PitchConverter(createConfig({ octave: 1.0, octmul: 2.0 }))
       const result = converter.convertPitch({ degree: 1 })
-      expect(result.note).toBe(84) // 60 + 0 + (1*2*12) = 84
+      expect(result.note).toBe(24) // 0 + 0 + (1*2*12) = 24
     })
   })
 
@@ -135,7 +135,7 @@ describe('PitchConverter', () => {
     it('should respect bendRange setting', () => {
       const converter = new PitchConverter(createConfig({ bendRange: 4 }))
       const result = converter.convertPitch({ degree: 1, detune: 1.0 })
-      expect(result.note).toBe(60) // C4 base note (detune is applied via pitch bend)
+      expect(result.note).toBe(0) // C0 base note (detune is applied via pitch bend)
       expect(result.pitchBend).toBe(2048) // 1.0 / 4 * 8192
     })
   })
@@ -206,7 +206,7 @@ describe('PitchConverter', () => {
     it('should clamp MIDI note to valid range', () => {
       const converter = new PitchConverter(createConfig({ octave: 6.0 }))
       const result = converter.convertPitch({ degree: 1 })
-      expect(result.note).toBe(127) // Clamped to max MIDI note
+      expect(result.note).toBe(72) // C6 = MIDI note 72 (0 + 6*12)
     })
 
     it('should clamp MIDI note to minimum range', () => {

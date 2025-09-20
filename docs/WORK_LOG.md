@@ -1174,3 +1174,167 @@ function handleTransportCommand(command: string) {
 
 - Phase 9: Global configuration and selective sequence playback
 - Phase 10: Performance optimization and advanced features
+
+## Phase 9: MIDI Octave Standard Fix (Completed)
+
+### 9.1 Overview
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- MIDIオクターブ規格をフルレンジ（0-127）対応に修正
+- ハードコードされた基準音（C4=60）を削除
+- オクターブ0から開始する規格に変更
+- テストの期待値を新しい規格に合わせて修正
+
+**Technical Decisions**:
+
+- MIDIの標準規格に合わせてオクターブ0から開始
+- `octave 0` → C0=0, `octave 10` → C10=120
+- より低い音と高い音の両方が出せるように修正
+- 既存のテストを新しい規格に合わせて更新
+
+### 9.2 Implementation Details
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- `packages/engine/src/pitch.ts`の修正
+- `tests/pitch/pitch.spec.ts`のテスト期待値更新
+- 全22テストの通過確認
+
+**Implementation Details**:
+
+```typescript
+// packages/engine/src/pitch.ts
+// Before: const baseSemitones = 60 + degreeToSemitone(degree, this.key) + ...
+// After: const baseSemitones = degreeToSemitone(degree, this.key) + ...
+```
+
+### 9.3 New MIDI Octave Standard
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- 新しいオクターブ規格の定義
+- MIDIフルレンジ（0-127）のカバー
+- 実用的な音域の確保
+
+**New Standard**:
+
+- `octave 0` → C0=0 (最低音)
+- `octave 1` → C1=12
+- `octave 2` → C2=24
+- `octave 3` → C3=36
+- `octave 4` → C4=48
+- `octave 5` → C5=60
+- `octave 6` → C6=72
+- `octave 7` → C7=84
+- `octave 8` → C8=96
+- `octave 9` → C9=108
+- `octave 10` → C10=120 (最高音)
+
+### 9.4 Testing and Validation
+
+**Date**: September 20, 2025  
+**Work Content**:
+
+- 全22テストの修正と実行
+- 新しい規格での動作確認
+- テストの通過確認
+
+**Test Results**:
+
+- ✅ 全22テストが通過
+- ✅ 新しいMIDI規格での動作確認
+- ✅ フルレンジ（0-127）対応
+
+### 9.5 Technical Achievements
+
+1. **Full MIDI Range**: MIDIのフルレンジ（0-127）をカバー
+2. **Standard Compliance**: MIDIの標準規格に準拠
+3. **Extended Range**: より低い音と高い音の両方が出せる
+4. **Test Coverage**: 全テストの修正と通過
+
+### 9.6 Implementation Status
+
+- ✅ MIDIオクターブ規格の修正
+- ✅ ハードコードされた基準音の削除
+- ✅ テストの期待値更新
+- ✅ 全テストの通過確認
+
+### 9.7 Commit History
+
+- (to be committed) - feat: Fix MIDI octave standard for full range (0-127)
+
+### 9.8 Next Steps
+
+- Phase 10: Parameter debugging and implementation
+- Phase 11: Global and sequence separation
+- Phase 12: Loop playback implementation
+- Phase 13: DJ-like sequence control (.stop, .mute)
+
+## Phase 10: Transport Integration Enhancement (In Progress)
+
+### 10.1 Transport Integration Implementation
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- `simulateTransportAdvanceAcrossSequences`メソッドの実装
+- 共有/独立メーター混在対応のトランスポート前進
+- ジャンプとループの小節境界での適用
+- 新しいテストファイルの追加
+
+**Implementation Details**:
+
+```typescript
+// packages/engine/src/scheduler.ts
+export function simulateTransportAdvanceAcrossSequences(durationSec: number) {
+  const endTarget = this.currentSec + Math.max(0, durationSec)
+  
+  // Find the next boundary across all sequences
+  const nextBoundary = nextBoundaryAcrossSequences(this.currentSec + 1e-9, this.ir)
+  
+  // Apply jump/loop at boundary
+  if (this.pendingJumpBar !== null) {
+    const baseSeq = globalBaseSeq(this.ir)
+    const targetSec = barIndexToSeconds(this.pendingJumpBar, baseSeq, this.ir)
+    this.currentSec = targetSec
+    this.pendingJumpBar = null
+    return
+  }
+  
+  // Apply loop at boundary
+  if (this.loop && this.loop.enabled) {
+    const baseSeq = globalBaseSeq(this.ir)
+    const startSec = barIndexToSeconds(this.loop.startBar, baseSeq, this.ir)
+    const endSec = barIndexToSeconds(this.loop.endBar, baseSeq, this.ir)
+    if (this.currentSec >= endSec) {
+      this.currentSec = startSec
+      return
+    }
+  }
+}
+```
+
+### 10.2 New Test Files
+
+**Date**: September 18, 2025  
+**Work Content**:
+
+- `tests/scheduler/golden_events_demo.json`: デモ用のMIDIイベントデータ
+- `tests/scheduler/transport_integration.spec.ts`: トランスポート統合のテスト
+
+**Test Coverage**:
+
+- ✅ ジャンプの小節境界での適用
+- ✅ ループの小節境界での適用
+- ✅ 共有/独立メーター混在シーケンスでの動作
+- ✅ リアルタイム再生でのトランスポート統合
+
+### 10.3 Technical Achievements
+
+- **統一されたトランスポート**: 共有/独立メーターの混在に対応
+- **小節境界での量子化**: ジャンプとループの正確な適用
+- **テストの充実**: トランスポート統合の包括的なテスト

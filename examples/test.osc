@@ -1,5 +1,5 @@
 key C
-tempo 120
+tempo 220
 meter 4/4 shared
 
 sequence piano {
@@ -7,7 +7,7 @@ sequence piano {
   channel 1
   meter 4/4 shared
   tempo 120
-  octave 4
+  octave 3
   defaultDur @U1
   
   1@U1 3@U1 5@U1 8@U1

@@ -171,7 +171,7 @@
 - [ ] 選択テキストを一時ファイルで渡す
 - [ ] エンジンからの状態受信
 
-### Phase 5: MIDI出力実装
+### Phase 5: MIDI出力実装 (Completed)
 
 **目標**: CoreMIDI経由でのIAC Bus出力
 
@@ -183,10 +183,149 @@
 
 #### 5.2 テスト
 
-- [ ] IAC出力のMIDI Monitor確認 (手動)
+- [x] IAC出力のMIDI Monitor確認 (手動)
 - [x] 各種MIDIメッセージのテスト
 
-> 備考: MIDI Monitor での手動確認は実機環境にて追って実施する。
+### Phase 6: Max/MSP Integration (Completed)
+
+**目標**: Max/MSPパッチでの音声出力
+
+#### 6.1 Max/MSP Patch Fixes
+
+- [x] ADSR実装の修正
+- [x] 音声出力の動作確認
+- [x] UDPテレメトリーの実装
+
+#### 6.2 Integration Testing
+
+- [x] UDPテレメトリー受信テスト
+- [x] Max/MSPパッチシミュレーション
+- [x] MIDIポート検出テスト
+
+### Phase 7: Live Coding Implementation (Completed)
+
+**目標**: TidalCycles/Scratchスタイルのライブコーディング
+
+#### 7.1 Engine Live Evaluation
+
+- [x] CLIに`live:`コマンドを追加
+- [x] `liveEvaluate()`関数を実装
+- [x] 既存スケジューラがある場合は`liveUpdate()`を呼び出し
+
+#### 7.2 VS Code Extension Live Coding
+
+- [x] `runSelection()`をライブ評価に変更
+- [x] 一時ファイルではなくstdinで直接コードを送信
+- [x] Cmd+Enterで即座に実行
+
+### Phase 8: VS Code Extension Live Coding Fixes (Completed)
+
+**目標**: VS Code拡張のライブコーディング機能の修正
+
+#### 8.1 Module Resolution Issues
+
+- [x] 診断機能の無効化（エンジンモジュールの直接読み込みを回避）
+- [x] 一時ファイル方式でのコード送信実装
+- [x] エンジンのstdin処理で`eval:`コマンドを独立処理
+
+#### 8.2 Debug Infrastructure
+
+- [x] デバッグログの追加
+- [x] エラーハンドリングの改善
+- [x] Max/MSPでの音声出力確認
+
+### Phase 9: Parameter Implementation and DSL Refactoring
+
+**目標**: 各種パラメータの動作実装とDSLの明示的セクション化
+
+#### 9.1 Parameter Implementation (Priority 1)
+
+- [ ] **key** パラメータの実装
+  - [ ] パーサーでのキー設定の解析
+  - [ ] PitchConverterでのキーオフセット適用
+  - [ ] テスト: 異なるキーでの音程確認
+
+- [ ] **tempo** パラメータの実装
+  - [ ] グローバルテンポの適用
+  - [ ] シーケンス固有テンポの適用
+  - [ ] スケジューラーでのテンポ変更
+  - [ ] テスト: テンポ変更での再生速度確認
+
+- [ ] **meter** パラメータの実装
+  - [ ] shared/independentメーターの適用
+  - [ ] 小節線の計算
+  - [ ] テスト: 異なるメーターでの小節線確認
+
+- [ ] **bendRange** パラメータの実装
+  - [ ] PitchConverterでのベンドレンジ適用
+  - [ ] PitchBend値の計算
+  - [ ] テスト: 異なるベンドレンジでの音程確認
+
+- [ ] **octmul** パラメータの実装
+  - [ ] オクターブ係数の適用
+  - [ ] PitchConverterでの計算
+  - [ ] テスト: オクターブ係数での音程確認
+
+- [ ] **defaultDur** パラメータの実装
+  - [ ] デフォルト音価の適用
+  - [ ] パーサーでの音価補完
+  - [ ] テスト: デフォルト音価での音長確認
+
+#### 9.2 DSL Refactoring (Priority 2)
+
+- [ ] **明示的セクション化**
+  - [ ] `global` セクションの実装
+  - [ ] `sequence` セクションの分離
+  - [ ] パーサーの更新
+  - [ ] IR型の更新
+
+- [ ] **選択的実行機能**
+  - [ ] グローバル設定のみの実行
+  - [ ] 選択シーケンス + グローバル設定の実行
+  - [ ] VS Code拡張での選択処理
+
+#### 9.3 Testing and Validation
+
+- [ ] 各パラメータの単体テスト
+- [ ] パラメータ組み合わせのテスト
+- [ ] 明示的セクション化のテスト
+- [ ] 選択的実行のテスト
+
+### Phase 10: Transport Integration Enhancement (In Progress)
+
+**目標**: トランスポート統合機能の実装とテスト
+
+#### 10.1 Transport Integration Implementation
+
+- [x] `simulateTransportAdvanceAcrossSequences`メソッドの実装
+- [x] 共有/独立メーター混在対応のトランスポート前進
+- [x] ジャンプとループの小節境界での適用
+- [x] 新しいテストファイルの追加
+
+#### 10.2 Test Coverage
+
+- [x] `tests/scheduler/golden_events_demo.json`: デモ用のMIDIイベントデータ
+- [x] `tests/scheduler/transport_integration.spec.ts`: トランスポート統合のテスト
+- [x] ジャンプの小節境界での適用テスト
+- [x] ループの小節境界での適用テスト
+- [x] 共有/独立メーター混在シーケンスでの動作テスト
+- [x] リアルタイム再生でのトランスポート統合テスト
+
+### Phase 11: Performance Optimization and Advanced Features
+
+**目標**: パフォーマンス最適化と高度な機能
+
+#### 11.1 Performance Optimization
+
+- [ ] パーサーの最適化
+- [ ] スケジューラーの最適化
+- [ ] メモリ使用量の最適化
+
+#### 11.2 Advanced Features
+
+- [ ] 高度なトランスポート機能
+- [ ] エフェクト処理
+- [ ] リアルタイムパラメータ調整
 
 ## 実装ルール
 
