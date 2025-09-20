@@ -62,6 +62,11 @@ export class Scheduler {
     return this.ir.global.tempo
   }
 
+  /** 表示用の小節内拍数（グローバルの meter.n を返す） */
+  getDisplayBeatsPerBar(): number {
+    return this.ir.global.meter.n
+  }
+
   // ----- Transport state helpers (for tests/phase3 minimal) -----
   setCurrentTimeSec(sec: number) {
     this.currentSec = Math.max(0, sec)
@@ -98,6 +103,16 @@ export class Scheduler {
     this.soloSequences.clear()
     if (sequenceNames && sequenceNames.length)
       sequenceNames.forEach((n) => this.soloSequences.add(n))
+  }
+
+  /** 現在のミュート一覧（シーケンス名の配列） */
+  getMuteList(): string[] {
+    return Array.from(this.mutedSequences)
+  }
+
+  /** 現在のソロ一覧（null は無効） */
+  getSoloList(): string[] | null {
+    return this.soloSequences.size ? Array.from(this.soloSequences) : null
   }
 
   /**

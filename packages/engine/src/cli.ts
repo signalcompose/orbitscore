@@ -4,10 +4,11 @@ import * as fs from 'fs'
 import * as readline from 'readline'
 
 import * as dotenv from 'dotenv'
+import { Output as MidiOutput } from '@julusian/midi'
 
+import { CoreMidiSink } from './midi'
 import { parseSourceToIR } from './parser/parser'
 import { Scheduler } from './scheduler'
-import { CoreMidiSink } from './midi'
 
 dotenv.config()
 
@@ -16,6 +17,8 @@ const command = process.argv[2]
 
 let scheduler: Scheduler | null = null
 let midiSink: CoreMidiSink | null = null
+let lastEmit: { playing: boolean; bar: number; beat: number; bpm: number; loop: boolean } | null =
+  null
 
 async function shutdown() {
   if (scheduler) {
@@ -71,7 +74,7 @@ function startEngine() {
     handleTransportCommand(line.trim())
   })
 
-  // Start transport state reporting
+  // Start transport state reporting (throttled to meaningful changes)
   setInterval(() => {
     if (scheduler) {
       const state = scheduler.getGlobalPlayheadBarBeat()
@@ -79,7 +82,21 @@ function startEngine() {
       const bpm = scheduler.getDisplayBpm()
       const loopEnabled = scheduler.getLoopState().enabled
 
-      console.log(`TRANSPORT:${playing}:${state.bar}:${state.beat}:${bpm}:${loopEnabled}`)
+      // beatは整数へ丸め（拡張の正規表現互換のため）
+      const beatInt = Math.floor(state.beat)
+      const current = { playing, bar: state.bar, beat: beatInt, bpm, loop: loopEnabled }
+      const changed =
+        !lastEmit ||
+        lastEmit.playing !== current.playing ||
+        lastEmit.bar !== current.bar ||
+        lastEmit.beat !== current.beat ||
+        lastEmit.bpm !== current.bpm ||
+        lastEmit.loop !== current.loop
+
+      if (changed) {
+        console.log(`TRANSPORT:${playing}:${state.bar}:${beatInt}:${bpm}:${loopEnabled}`)
+        lastEmit = current
+      }
     }
   }, 100)
 
@@ -131,6 +148,25 @@ function handleTransportCommand(command: string) {
 
   const parts = command.split(':')
   const cmd = parts[0]
+
+  function listPorts(): string[] {
+    try {
+      const out = new MidiOutput()
+      const n = out.getPortCount()
+      const names: string[] = []
+      for (let i = 0; i < n; i++) names.push(out.getPortName(i))
+      try {
+        out.closePort()
+        // eslint-disable-next-line no-empty
+      } catch {}
+      // @ts-expect-error destroy may not exist in types
+      if (typeof (out as any).destroy === 'function') (out as any).destroy()
+      return names
+    } catch (e) {
+      console.error(`Failed to enumerate ports: ${e instanceof Error ? e.message : e}`)
+      return []
+    }
+  }
 
   switch (cmd) {
     case 'play':
@@ -197,25 +233,103 @@ function handleTransportCommand(command: string) {
       const state = scheduler.getGlobalPlayheadBarBeat()
       const playing = scheduler.isPlaying()
       const bpm = scheduler.getDisplayBpm()
-      const loopEnabled = scheduler.getLoopState().enabled
-      console.log(`TRANSPORT:${playing}:${state.bar}:${state.beat}:${bpm}:${loopEnabled}`)
+      const loopState = scheduler.getLoopState()
+      const beatsPerBar = scheduler.getDisplayBeatsPerBar()
+      const beatInt = Math.floor(state.beat)
+      console.log(`TRANSPORT:${playing}:${state.bar}:${beatInt}:${bpm}:${loopState.enabled}`)
+      // 追加ステータス（JSONで出力）
+      const extra = {
+        mute: scheduler.getMuteList(),
+        solo: scheduler.getSoloList(),
+        port: midiSink?.getCurrentPortName() ?? null,
+        loop: loopState,
+        bpm,
+        beatsPerBar,
+      }
+      console.log(`STATUS:${JSON.stringify(extra)}`)
       break
     }
 
     case 'port': {
-      const name = (parts[1] || '').trim()
+      const arg = (parts[1] || '').trim()
       if (!midiSink) {
         console.error('No MIDI sink available')
         break
       }
-      if (!name) {
-        console.error('Usage: port:<MIDI Port Name>')
+      if (!arg) {
+        console.error('Usage: port:<MIDI Port Name | index>  (use "ports" to list)')
         break
       }
-      midiSink
-        .open(name)
-        .then(() => console.log(`MIDI port switched to "${name}"`))
-        .catch((e) => console.error(`Failed to switch port: ${e instanceof Error ? e.message : e}`))
+      // Accept numeric index or name
+      const maybeIndex = Number.isFinite(Number(arg)) ? Number(arg) : NaN
+      if (!Number.isNaN(maybeIndex)) {
+        const names = listPorts()
+        const target = names[maybeIndex]
+        if (!target) {
+          console.error(`Invalid port index ${maybeIndex}. Use "ports" to list.`)
+          break
+        }
+        midiSink
+          .open(target)
+          .then(() => console.log(`MIDI port switched to "${target}"`))
+          .catch((e) =>
+            console.error(`Failed to switch port: ${e instanceof Error ? e.message : e}`),
+          )
+      } else {
+        midiSink
+          .open(arg)
+          .then(() => console.log(`MIDI port switched to "${arg}"`))
+          .catch((e) =>
+            console.error(`Failed to switch port: ${e instanceof Error ? e.message : e}`),
+          )
+      }
+      break
+    }
+
+    case 'ports': {
+      const names = listPorts()
+      console.log(`PORTS:${JSON.stringify(names)}`)
+      console.log(
+        names.length
+          ? names.map((n, i) => `${i}: ${n}`).join('\n')
+          : 'No ports (is IAC Driver enabled?)',
+      )
+      break
+    }
+
+    case 'eval': {
+      const file = (parts[1] || '').trim()
+      if (!file) {
+        console.error('Usage: eval:<file.osc>')
+        break
+      }
+      ;(async () => {
+        try {
+          const source = fs.readFileSync(file, 'utf8')
+          const ir = parseSourceToIR(source)
+          if (scheduler) {
+            scheduler.stop()
+            scheduler = null
+          }
+          midiSink = midiSink ?? new CoreMidiSink()
+          const busNames = Array.from(
+            new Set(
+              ir.sequences
+                .map((seq) => seq.config.bus)
+                .filter((name) => typeof name === 'string' && name.trim().length > 0),
+            ),
+          )
+          const primaryBus = busNames[0]
+          if (primaryBus) {
+            await midiSink.open(primaryBus)
+          }
+          scheduler = new Scheduler(midiSink, ir)
+          scheduler.start()
+          console.log(`Reloaded: ${file}${primaryBus ? ` → ${primaryBus}` : ''}`)
+        } catch (error) {
+          console.error(`Eval failed: ${error}`)
+        }
+      })()
       break
     }
 
