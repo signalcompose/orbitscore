@@ -32,7 +32,7 @@ sequence <name> {
   tempo <BPM>
   meter <N>/<D> <align>
   octave <FLOAT>        # 基本オクターブ（例: 4.0）
-  octmul <FLOAT>        # オクターブ定義係数（1.0=12半音, 0.5=6半音, 2.0=24半音）
+  octmul <FLOAT>        # 度数間音程係数（1.0=12半音, 0.5=6半音, 2.0=24半音）
   bendRange <SEMITONES>
   mpe <true|false>
   defaultDur <DUR>
@@ -86,6 +86,15 @@ sequence <name> {
 
 - 小数第3位まで
 - r は [0, 0.999]
+
+### 7) octmul による音程調整
+
+- `octmul` は度数間の音程を変更する係数
+- `octmul: 1.0` = 標準の12半音オクターブ（度数1→C, 度数2→C#）
+- `octmul: 0.5` = 6半音オクターブ（度数1→C, 度数2→C+0.5半音）
+- `octmul: 2.0` = 24半音オクターブ（度数1→C, 度数2→C+2半音）
+- 微分音はMIDIノート番号 + PitchBendで表現
+- 和声は通常のMIDIでは鳴らすことができない（微分音のため）
 
 ---
 

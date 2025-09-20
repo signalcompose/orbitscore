@@ -28,7 +28,7 @@ const KEY_TO_SEMITONE: Record<string, number> = {
 }
 
 /**
- * 度数から半音への変換（キー基準）
+ * 度数から半音への変換（キー基準、octmul対応）
  *
  * 重要: 音階に0の概念を導入することが本ソフトウェアの特徴
  * - 0 = 休符/無音（rest/silence） ※この関数には入らない
@@ -46,51 +46,37 @@ const KEY_TO_SEMITONE: Record<string, number> = {
  * - 10 = A（ラ）
  * - 11 = A#（ラ#）
  * - 12 = B（シ）
+ *
+ * octmul: 度数間の音程を変更（1.0=12半音, 0.5=6半音, 2.0=24半音）
  */
-function degreeToSemitone(degree: number, key: string): number {
+function degreeToSemitone(degree: number, key: string, octmul: number = 1.0): number {
   if (degree === 0) {
     throw new Error('Rest (degree 0) cannot be converted to semitone - degree 0 is silence/rest')
   }
 
   const keyOffset = KEY_TO_SEMITONE[key] || 0
 
-  // 度数から半音へのマッピング
-  // 1=C(0), 2=C#(1), 3=D(2), 4=D#(3), 5=E(4), 6=F(5),
-  // 7=F#(6), 8=G(7), 9=G#(8), 10=A(9), 11=A#(10), 12=B(11)
-  const degreeToSemitoneMap: Record<number, number> = {
-    1: 0, // C
-    2: 1, // C#
-    3: 2, // D
-    4: 3, // D#
-    5: 4, // E
-    6: 5, // F
-    7: 6, // F#
-    8: 7, // G
-    9: 8, // G#
-    10: 9, // A
-    11: 10, // A#
-    12: 11, // B
-  }
-
   // 整数部分と小数部分を分離
   const intDegree = Math.floor(degree)
   const fractionalPart = degree - intDegree
 
-  // マッピングから半音数を取得（1-12の範囲外の場合はオクターブ調整）
+  // octmulを考慮した度数間の音程計算
+  // 度数1-12の相対的な音程関係をoctmulで変更
   let baseSemitone = 0
   let octaveAdjust = 0
 
   if (intDegree >= 1 && intDegree <= 12) {
-    baseSemitone = degreeToSemitoneMap[intDegree]!
+    // 度数1-12の範囲内：octmulを適用
+    baseSemitone = (intDegree - 1) * octmul
   } else if (intDegree > 12) {
-    // 13以上はオクターブ上
+    // 13以上はオクターブ上：octmulを適用したオクターブ調整
     octaveAdjust = Math.floor((intDegree - 1) / 12)
     const normalizedDegree = ((intDegree - 1) % 12) + 1
-    baseSemitone = degreeToSemitoneMap[normalizedDegree]! + octaveAdjust * 12
+    baseSemitone = (normalizedDegree - 1) * octmul + octaveAdjust * (12 * octmul)
   }
 
-  // キーオフセットと小数部分を加算
-  return keyOffset + baseSemitone + fractionalPart
+  // キーオフセットと小数部分を加算（小数部分にもoctmulを適用）
+  return keyOffset + baseSemitone + fractionalPart * octmul
 }
 
 /**
@@ -159,9 +145,9 @@ export class PitchConverter {
 
     // detune を除いた基準半音値（MIDIノート丸めの基準）
     // MIDIのフルレンジ（0-127）をカバーするため、オクターブ0から開始
-    // octmul: オクターブの定義を変更する係数（1.0=12半音, 0.5=6半音, 2.0=24半音）
+    // octmul: 度数間の音程を変更する係数（1.0=12半音, 0.5=6半音, 2.0=24半音）
     const baseSemitones =
-      degreeToSemitone(degree, this.key) +
+      degreeToSemitone(degree, this.key, this.octmul) +
       this.octave * (this.octmul * 12) +
       (pitch.octaveShift ?? 0) * (this.octmul * 12)
 
@@ -169,7 +155,7 @@ export class PitchConverter {
     const finalSemitones = baseSemitones + (pitch.detune ?? 0)
 
     // MIDIノート番号とPitchBend値に変換
-    const midiNote = Math.round(baseSemitones)
+    const midiNote = Math.round(finalSemitones)
     const pitchBendValue = this.semitonesToPitchBend(finalSemitones - midiNote)
 
     // チャンネル割り当て

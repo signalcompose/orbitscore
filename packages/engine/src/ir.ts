@@ -31,7 +31,7 @@ export type SequenceConfig = {
   tempo?: number // BPM（優先）
   meter?: { n: number; d: number; align?: MeterAlign }
   octave?: number // 基本オクターブ（例: 4.0）
-  octmul?: number // オクターブ定義係数（1.0=12半音, 0.5=6半音, 2.0=24半音）
+  octmul?: number // 度数間音程係数（1.0=12半音, 0.5=6半音, 2.0=24半音）
   bendRange?: number // ピッチベンド半音幅（デフォ 2）
   mpe?: boolean // MPE 使用（同時音の微分を安全に）
   defaultDur?: DurationSpec
