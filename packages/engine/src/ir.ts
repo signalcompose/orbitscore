@@ -1,3 +1,11 @@
+/**
+ * @deprecated These IR types are for the old MIDI-based DSL.
+ * New IR types for the audio-based DSL should be defined separately.
+ * See docs/INSTRUCTION_ORBITSCORE_DSL.md for the new DSL structure.
+ *
+ * This file is preserved for historical reference.
+ */
+
 export type Fraction = { num: number; den: number } // 分母は 2/3/5 素因数に限定
 export type TimeUnit = 'sec' | 'unit' | 'percent' | 'tuplet'
 export type DurationSpec =

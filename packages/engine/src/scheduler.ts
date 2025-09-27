@@ -1,3 +1,11 @@
+/**
+ * @deprecated This scheduler is designed for the old MIDI-based DSL.
+ * The new audio-based DSL requires a different scheduling approach.
+ * See docs/INSTRUCTION_ORBITSCORE_DSL.md for the new architecture.
+ *
+ * This file is preserved for historical reference.
+ */
+
 import type { IR, DurationSpec, SequenceIR } from './ir'
 import type { MidiOut, MidiMessage } from './midi'
 import { PitchConverter } from './pitch'

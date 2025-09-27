@@ -1,3 +1,12 @@
+/**
+ * @deprecated This MIDI output module is part of the old DSL implementation.
+ * The new audio-based DSL does not primarily use MIDI output.
+ * See docs/INSTRUCTION_ORBITSCORE_DSL.md for the new approach.
+ *
+ * This file is preserved for historical reference and potential future
+ * MIDI integration as a secondary feature.
+ */
+
 import type { Output as MidiOutputInstance } from '@julusian/midi'
 import { Output as MidiOutputClass } from '@julusian/midi'
 
