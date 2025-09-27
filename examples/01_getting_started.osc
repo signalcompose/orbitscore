@@ -10,14 +10,14 @@ global.tick(4)
 
 // === Section 2: Your First Sequence ===
 var drum = init global.seq
-drum.config(meter: 4/4, length: 1)
+drum.beat(4 by 4).length(1)
 drum.audio("../test-assets/audio/kick.wav").chop(4)
 drum.play(1, 0, 1, 0)  // Simple kick pattern
 drum.run()
 
 // === Section 3: Add More Layers ===
 var snare = init global.seq
-snare.config(meter: 4/4, length: 1)
+snare.beat(4 by 4).length(1)
 snare.audio("../test-assets/audio/snare.wav").chop(4)
 snare.play(0, 0, 1, 0)  // Snare on beat 3
 snare.run()

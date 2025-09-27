@@ -14,8 +14,8 @@ var bass = init global.seq
 var drums = init global.seq
 
 // Configure sequences
-bass.config(meter: 4/4, length: 2)  // 2 bar loop
-drums.config(meter: 4/4, length: 1) // 1 bar loop
+bass.beat(4 by 4).length(2)  // 2 bar loop
+drums.beat(4 by 4).length(1) // 1 bar loop
 
 // Load bass samples and create pattern
 bass.audio("../audio/bass_c1.wav").chop(8)
@@ -24,7 +24,7 @@ bass.play(1, 0, 0, 1, 0, 0, 1, 0,  // Bar 1: C - - C - - C -
 
 // Add another bass layer with different notes
 var bass2 = init global.seq
-bass2.config(meter: 4/4, length: 2)
+bass2.beat(4 by 4).length(2)
 bass2.audio("../audio/bass_g1.wav").chop(8)
 bass2.play(0, 0, 0, 0, 1, 0, 0, 1,  // Bar 1: - - - - G - - G
            1, 0, 0, 0, 1, 1, 0, 0)   // Bar 2: G - - - G G - -

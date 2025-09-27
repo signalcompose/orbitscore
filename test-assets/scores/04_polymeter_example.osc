@@ -15,17 +15,17 @@ var seq4 = init global.seq  // 4/4 pattern
 var seq5 = init global.seq  // 5/4 pattern
 
 // 3/4 pattern - repeats every 3 beats
-seq3.config(meter: 3/4, length: 1)
+seq3.beat(3 by 4).length(1)
 seq3.audio("../audio/hihat_closed.wav").chop(3)
 seq3.play(1, 0, 1)  // X - X pattern
 
 // 4/4 pattern - standard
-seq4.config(meter: 4/4, length: 1)
+seq4.beat(4 by 4).length(1)
 seq4.audio("../audio/kick.wav").chop(4)
 seq4.play(1, 0, 0, 1)  // X - - X pattern
 
 // 5/4 pattern - odd meter
-seq5.config(meter: 5/4, length: 1)
+seq5.beat(5 by 4).length(1)
 seq5.audio("../audio/snare.wav").chop(5)
 seq5.play(0, 0, 1, 0, 1)  // - - X - X pattern
 

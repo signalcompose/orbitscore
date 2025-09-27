@@ -12,7 +12,7 @@ global.tick(4)
 // === Technique 1: Nested Play Structures ===
 // Create complex rhythmic patterns with nested elements
 var complex_rhythm = init global.seq
-complex_rhythm.config(meter: 4/4, length: 2)
+complex_rhythm.beat(4 by 4).length(2)
 complex_rhythm.audio("../audio/snare.wav").chop(32)
 
 // Nested groups create flams and rolls
@@ -30,7 +30,7 @@ complex_rhythm.play(
 // === Technique 2: Modified Play Structures ===
 // Apply effects to specific slices
 var modified_bass = init global.seq
-modified_bass.config(meter: 4/4, length: 2)
+modified_bass.beat(4 by 4).length(2)
 modified_bass.audio("../audio/bass_c1.wav").chop(16)
 
 // Use .fixpitch() and .time() modifiers on specific notes
@@ -48,14 +48,14 @@ modified_bass.play(
 // === Technique 3: Multiple Audio Sources ===
 // Chain different samples in one sequence
 var multi_sample = init global.seq
-multi_sample.config(meter: 4/4, length: 1)
+multi_sample.beat(4 by 4).length(1)
 
 // First half uses kick, second half uses snare
 multi_sample.audio("../audio/kick.wav").chop(2)
 multi_sample.play(1, 0)
 
 var multi_sample2 = init global.seq
-multi_sample2.config(meter: 4/4, length: 1, offset: 0.5)
+multi_sample2.beat(4 by 4).length(1)  // TODO: offset for phase shifting
 multi_sample2.audio("../audio/snare.wav").chop(2)
 multi_sample2.play(0, 1)
 
@@ -64,11 +64,11 @@ multi_sample2.play(0, 1)
 var poly3 = init global.seq
 var poly4 = init global.seq
 
-poly3.config(meter: 3/4, length: 1)
+poly3.beat(3 by 4).length(1)
 poly3.audio("../audio/hihat_closed.wav").chop(3)
 poly3.play(1, 0, 1)
 
-poly4.config(meter: 4/4, length: 1)
+poly4.beat(4 by 4).length(1)
 poly4.audio("../audio/hihat_open.wav").chop(4)
 poly4.play(1, 0, 0, 1)
 
@@ -79,7 +79,7 @@ var pattern_b = (0, 1, 0, 1)
 var pattern_c = (1, 1, 0, 0)
 
 var dynamic_seq = init global.seq
-dynamic_seq.config(meter: 4/4, length: 4)
+dynamic_seq.beat(4 by 4).length(4)
 dynamic_seq.audio("../audio/sine_440.wav").chop(16)
 dynamic_seq.play(
   pattern_a, pattern_b, pattern_c, pattern_a,  // Bar 1
@@ -90,13 +90,13 @@ dynamic_seq.play(
 
 // === Technique 6: Chord Progressions with Samples ===
 var chord_prog = init global.seq
-chord_prog.config(meter: 4/4, length: 8)
+chord_prog.beat(4 by 4).length(8)
 
 // Load multiple chord samples and play progression
 var chord_seq1 = init global.seq
 var chord_seq2 = init global.seq
 
-chord_seq1.config(meter: 4/4, length: 8)
+chord_seq1.beat(4 by 4).length(8)
 chord_seq1.audio("../audio/chord_c_major.wav").chop(8)
 chord_seq1.play(1, 0, 0, 0, 0, 0, 0, 0,  // C major - Bar 1
                 0, 0, 0, 0, 1, 0, 0, 0,  // C major - Bar 5
@@ -107,7 +107,7 @@ chord_seq1.play(1, 0, 0, 0, 0, 0, 0, 0,  // C major - Bar 1
                 0, 0, 0, 0, 0, 0, 0, 0,
                 0, 0, 0, 0, 0, 0, 0, 0)
 
-chord_seq2.config(meter: 4/4, length: 8)
+chord_seq2.beat(4 by 4).length(8)
 chord_seq2.audio("../audio/chord_a_minor.wav").chop(8)
 chord_seq2.play(0, 0, 0, 0, 0, 0, 0, 0,
                 1, 0, 0, 0, 0, 0, 0, 0,  // A minor - Bar 2

@@ -9,7 +9,7 @@ global.tick(4)
 
 // === Example 1: Audio Chopping ===
 var chop_demo = init global.seq
-chop_demo.config(meter: 4/4, length: 2)
+chop_demo.beat(4 by 4).length(2)
 
 // Chop audio into 16 slices over 2 bars
 chop_demo.audio("../test-assets/audio/arpeggio_c.wav").chop(16)
@@ -20,7 +20,7 @@ chop_demo.play(
 
 // === Example 2: Time Stretching ===
 var stretch = init global.seq
-stretch.config(meter: 4/4, length: 1)
+stretch.beat(4 by 4).length(1)
 stretch.audio("../test-assets/audio/bass_c1.wav").chop(4)
 
 // Play at different speeds
@@ -33,7 +33,7 @@ stretch.play(
 
 // === Example 3: Pitch Shifting ===
 var pitch = init global.seq
-pitch.config(meter: 4/4, length: 2)
+pitch.beat(4 by 4).length(2)
 pitch.audio("../test-assets/audio/sine_440.wav").chop(8)
 
 // Play at different pitches

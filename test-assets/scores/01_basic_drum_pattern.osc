@@ -15,9 +15,9 @@ var snare = init global.seq
 var hihat = init global.seq
 
 // Configure drum sequences
-kick.config(meter: 4/4, length: 1)
-snare.config(meter: 4/4, length: 1)
-hihat.config(meter: 4/4, length: 1)
+kick.beat(4 by 4).length(1)
+snare.beat(4 by 4).length(1)
+hihat.beat(4 by 4).length(1)
 
 // Load and chop audio samples
 kick.audio("../audio/kick.wav").chop(4)
