@@ -1,15 +1,18 @@
 // Polymeter Example - OrbitScore Audio DSL
 // Demonstrates different meters playing simultaneously
 
+// Initialize global context first
+var global = init GLOBAL
+
+// Configure global parameters
 global.tempo(140)
 global.beat(4)
 global.tick(4)
 
-// Initialize
-var global = init GLOBAL
-var seq3 = init GLOBAL.seq  // 3/4 pattern
-var seq4 = init GLOBAL.seq  // 4/4 pattern
-var seq5 = init GLOBAL.seq  // 5/4 pattern
+// Initialize sequences from global
+var seq3 = init global.seq  // 3/4 pattern
+var seq4 = init global.seq  // 4/4 pattern
+var seq5 = init global.seq  // 5/4 pattern
 
 // 3/4 pattern - repeats every 3 beats
 seq3.config(meter: 3/4, length: 1)

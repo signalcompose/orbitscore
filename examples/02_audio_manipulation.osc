@@ -1,0 +1,53 @@
+// Audio Manipulation Examples
+// Demonstrates chop, time, and fixpitch features
+
+// Initialize
+var global = init GLOBAL
+global.tempo(110)
+global.beat(4)
+global.tick(4)
+
+// === Example 1: Audio Chopping ===
+var chop_demo = init global.seq
+chop_demo.config(meter: 4/4, length: 2)
+
+// Chop audio into 16 slices over 2 bars
+chop_demo.audio("../test-assets/audio/arpeggio_c.wav").chop(16)
+chop_demo.play(
+  1, 0, 0, 1, 0, 0, 1, 0,  // Rhythmic pattern
+  0, 1, 0, 1, 0, 0, 0, 0
+)
+
+// === Example 2: Time Stretching ===
+var stretch = init global.seq
+stretch.config(meter: 4/4, length: 1)
+stretch.audio("../test-assets/audio/bass_c1.wav").chop(4)
+
+// Play at different speeds
+stretch.play(
+  1.time(2.0),    // Double speed
+  1.time(0.5),    // Half speed  
+  1.time(1.5),    // 1.5x speed
+  1              // Normal speed
+)
+
+// === Example 3: Pitch Shifting ===
+var pitch = init global.seq
+pitch.config(meter: 4/4, length: 2)
+pitch.audio("../test-assets/audio/sine_440.wav").chop(8)
+
+// Play at different pitches
+pitch.play(
+  1.fixpitch(0),   // Original pitch
+  1.fixpitch(7),   // Up a fifth
+  1.fixpitch(12),  // Up an octave
+  1.fixpitch(-5),  // Down a fourth
+  1.fixpitch(3),   // Up a minor third
+  1.fixpitch(-12), // Down an octave
+  0, 0
+)
+
+// Start playback
+chop_demo.run()
+stretch.run()
+pitch.run()

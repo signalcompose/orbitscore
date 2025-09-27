@@ -1,16 +1,18 @@
 // Basic Drum Pattern - OrbitScore Audio DSL
 // This demonstrates a simple 4/4 drum pattern using chopped samples
 
-// Global configuration
+// Initialize global context first
+var global = init GLOBAL
+
+// Configure global parameters
 global.tempo(120)
 global.beat(4)
 global.tick(4)
 
-// Initialize sequences
-var global = init GLOBAL
-var kick = init GLOBAL.seq
-var snare = init GLOBAL.seq
-var hihat = init GLOBAL.seq
+// Initialize sequences from global
+var kick = init global.seq
+var snare = init global.seq
+var hihat = init global.seq
 
 // Configure drum sequences
 kick.config(meter: 4/4, length: 1)

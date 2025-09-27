@@ -1,15 +1,17 @@
 // Advanced Techniques - OrbitScore Audio DSL
 // Demonstrates nested structures, modifiers, and complex patterns
 
+// Initialize global context first
+var global = init GLOBAL
+
+// Configure global parameters
 global.tempo(110)
 global.beat(4)
 global.tick(4)
 
-var global = init GLOBAL
-
 // === Technique 1: Nested Play Structures ===
 // Create complex rhythmic patterns with nested elements
-var complex_rhythm = init GLOBAL.seq
+var complex_rhythm = init global.seq
 complex_rhythm.config(meter: 4/4, length: 2)
 complex_rhythm.audio("../audio/snare.wav").chop(32)
 
@@ -27,7 +29,7 @@ complex_rhythm.play(
 
 // === Technique 2: Modified Play Structures ===
 // Apply effects to specific slices
-var modified_bass = init GLOBAL.seq
+var modified_bass = init global.seq
 modified_bass.config(meter: 4/4, length: 2)
 modified_bass.audio("../audio/bass_c1.wav").chop(16)
 
@@ -45,22 +47,22 @@ modified_bass.play(
 
 // === Technique 3: Multiple Audio Sources ===
 // Chain different samples in one sequence
-var multi_sample = init GLOBAL.seq
+var multi_sample = init global.seq
 multi_sample.config(meter: 4/4, length: 1)
 
 // First half uses kick, second half uses snare
 multi_sample.audio("../audio/kick.wav").chop(2)
 multi_sample.play(1, 0)
 
-var multi_sample2 = init GLOBAL.seq
+var multi_sample2 = init global.seq
 multi_sample2.config(meter: 4/4, length: 1, offset: 0.5)
 multi_sample2.audio("../audio/snare.wav").chop(2)
 multi_sample2.play(0, 1)
 
 // === Technique 4: Polyrhythmic Layers ===
 // Create a 3-against-4 pattern
-var poly3 = init GLOBAL.seq
-var poly4 = init GLOBAL.seq
+var poly3 = init global.seq
+var poly4 = init global.seq
 
 poly3.config(meter: 3/4, length: 1)
 poly3.audio("../audio/hihat_closed.wav").chop(3)
@@ -76,7 +78,7 @@ var pattern_a = (1, 0, 1, 0)
 var pattern_b = (0, 1, 0, 1)
 var pattern_c = (1, 1, 0, 0)
 
-var dynamic_seq = init GLOBAL.seq
+var dynamic_seq = init global.seq
 dynamic_seq.config(meter: 4/4, length: 4)
 dynamic_seq.audio("../audio/sine_440.wav").chop(16)
 dynamic_seq.play(
@@ -87,12 +89,12 @@ dynamic_seq.play(
 )
 
 // === Technique 6: Chord Progressions with Samples ===
-var chord_prog = init GLOBAL.seq
+var chord_prog = init global.seq
 chord_prog.config(meter: 4/4, length: 8)
 
 // Load multiple chord samples and play progression
-var chord_seq1 = init GLOBAL.seq
-var chord_seq2 = init GLOBAL.seq
+var chord_seq1 = init global.seq
+var chord_seq2 = init global.seq
 
 chord_seq1.config(meter: 4/4, length: 8)
 chord_seq1.audio("../audio/chord_c_major.wav").chop(8)

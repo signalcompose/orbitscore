@@ -8,7 +8,29 @@ All implementation, testing, and planning must strictly follow this specificatio
 
 ---
 
-## 1. Global Parameters
+## 1. Initialization
+
+### Global Context
+```js
+// REQUIRED: First, initialize the global context
+var global = init GLOBAL
+// This creates the global transport and audio engine
+```
+
+### Sequence Initialization  
+```js
+// After global initialization, create sequences
+var seq1 = init global.seq
+var seq2 = init global.seq
+```
+- Sequences inherit global parameters by default
+- Each sequence is linked to the global transport
+
+---
+
+## 2. Global Parameters
+
+After initialization, configure the global context:
 
 ### Tempo
 ```js
@@ -44,28 +66,14 @@ global.key(C)
 
 ---
 
-## 2. Initialization
-
-```js
-var global = init GLOBAL
-// Starts the global transport and prepares to receive live coding input
-```
-
----
-
 ## 3. Sequences
 
-### Initialization
+### Configuration
+After initialization, sequences can be configured:
 ```js
-var seq1 = init GLOBAL.seq
-```
-- Inherits all global parameters by default
-- Can override tempo, meter, and other properties
-
-### Overrides
-```js
-seq1.tempo(120)       // independent tempo (polymeter support)
-seq1.beat(17 by 8)    // independent meter
+seq1.tempo(120)       // independent tempo (polytempo support)
+seq1.beat(17 by 8)    // independent meter (polymeter support)
+seq1.config(meter: 4/4, length: 2)  // configure meter and loop length
 ```
 
 ---
@@ -195,7 +203,54 @@ This approach ensures code remains self-documenting while maintaining fast input
 
 ---
 
-## 11. Versioning
+## 11. Complete Usage Example
+
+```js
+// STEP 1: Initialize global context first
+var global = init GLOBAL
+
+// STEP 2: Configure global parameters
+global.tempo(120)
+global.beat(4 by 4)
+global.tick(480)
+global.key(C)
+
+// STEP 3: Initialize sequences from global
+var kick = init global.seq
+var bass = init global.seq
+var lead = init global.seq
+
+// STEP 4: Configure sequences
+kick.config(meter: 4/4, length: 1)
+bass.config(meter: 4/4, length: 2)
+lead.config(meter: 4/4, length: 4)
+
+// STEP 5: Load audio and create patterns
+kick.audio("kick.wav").chop(4)
+kick.play(1, 0, 0, 1)
+
+bass.audio("bass.wav").chop(8)
+bass.play(1, 0, 0, 1, 0, 0, 1, 0,
+          0, 1, 0, 1, 0, 0, 0, 0)
+
+lead.audio("synth.wav").chop(16)
+lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 
+          0, 0, 0, 0, 0, 0, 0, 0,
+          1, 1, 1, 0)
+
+// STEP 6: Start playback
+global.run()
+
+// STEP 7: Live manipulation
+kick.mute()
+bass.fixpitch(5)
+lead.time(0.5)
+global.tempo(130)
+```
+
+---
+
+## 12. Versioning
 
 This is version **v0.1 Initial Draft**.  
 Future changes must update this document first before implementation.
