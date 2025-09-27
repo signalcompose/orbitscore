@@ -101,12 +101,21 @@ seq1.play(8,7,6,5, 4,3,2,1)     // Reverse order
 
 ## 4. Playback and Structure
 
-### Play
+### Play - Rhythmic Division with Nesting
+The `play()` method divides time hierarchically using nested structures:
+
 ```js
-seq1.play(0)                     // play whole bar
-seq1.play((0)(0))                // divide bar into 2
-seq1.play((0)((0)(0)))           // divide into 1 + 2
+seq1.play(1)                     // play slice 1 for whole bar
+seq1.play(1, 2)                  // divide bar into 2: each gets 1/2
+seq1.play(1, (2, 3))              // 1 gets 1/2, then 2&3 each get 1/4 (splitting the second 1/2)
+seq1.play((1, 2), (3, 4, 5))     // first half: 1&2 (each 1/4), second half: 3,4,5 (each 1/6)
+seq1.play(1, (0, 1, 2, 3, 4))    // 1 gets 1/2 (2 beats), then 5-tuplet in remaining 1/2
 ```
+
+**Nesting Rule**: Each level of parentheses divides its parent's time duration:
+- Top level divides the bar
+- Nested elements divide their parent's time slot equally
+- 0 = silence, 1-n = slice number from `chop(n)`
 
 ### Alternative Functional Form
 ```js

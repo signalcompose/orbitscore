@@ -1828,3 +1828,40 @@ export type AudioTokenType =
 - All extension features integrated
 - Fixed TypeScript errors in `updateDiagnostics` function
 - Ready for VS Code packaging and distribution
+
+---
+
+## Critical Implementation Gap: Nested Play Timing
+
+### Issue Discovered
+**Date**: 2024-09-28
+**Status**: 🔴 Not Implemented
+
+**Problem**:
+The current interpreter implementation does NOT handle hierarchical time division in nested `play()` structures.
+
+**Current Behavior (INCORRECT)**:
+- `play(1, (2, 3, 4))` is flattened to `[1, 2, 3, 4]` - plays all at equal intervals
+
+**Expected Behavior (PER SPECIFICATION)**:
+- `play(1, (2, 3, 4))` should:
+  - Divide bar into 2 parts
+  - Play slice 1 for first 1/2 (e.g., 2 beats in 4/4)
+  - Divide second 1/2 into 3 parts for slices 2, 3, 4 (triplet in 2 beats)
+
+**Implementation Required**:
+- Parser: ✅ Already parses nested structures correctly
+- Interpreter: ❌ Must implement hierarchical time calculation
+- Transport: ❌ Must handle complex timing schedules
+
+**Example of Required Timing Calculation**:
+```
+play(1, (0, 1, 2, 3, 4)) in 4/4 at 120 BPM:
+- Bar duration: 2000ms
+- Slice 1: 0-1000ms (first half)
+- Silence (0): 1000-1200ms (1/5 of second half)
+- Slice 1: 1200-1400ms
+- Slice 2: 1400-1600ms
+- Slice 3: 1600-1800ms
+- Slice 4: 1800-2000ms
+```
