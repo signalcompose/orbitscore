@@ -1,0 +1,193 @@
+{
+  "name": "OrbitScore Audio DSL",
+  "scopeName": "source.orbitscore",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#variables"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#methods"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#play-structures"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.orbitscore",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.line.number-sign.orbitscore",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "variables": {
+      "patterns": [
+        {
+          "name": "variable.other.orbitscore",
+          "match": "\\b(global|seq\\d*|drums|bass|piano)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.orbitscore",
+          "match": "\\b(var|init|by|force)\\b"
+        },
+        {
+          "name": "keyword.other.constant.orbitscore",
+          "match": "\\b(GLOBAL)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.key.orbitscore",
+          "match": "\\b(C|Db|D|Eb|E|F|Gb|G|Ab|A|Bb|B)\\b"
+        }
+      ]
+    },
+    "methods": {
+      "patterns": [
+        {
+          "name": "support.function.global.orbitscore",
+          "match": "\\b(tempo|tick|beat|key|run|loop|stop|mute|unmute)(?=\\()"
+        },
+        {
+          "name": "support.function.sequence.orbitscore",
+          "match": "\\b(audio|chop|play|fixpitch|time|reverse)(?=\\()"
+        },
+        {
+          "name": "support.function.transport.orbitscore",
+          "match": "\\.(run|loop|stop|mute|unmute|force)\\b"
+        },
+        {
+          "name": "entity.name.function.orbitscore",
+          "match": "\\.(tempo|tick|beat|key|audio|chop|play|fixpitch|time)(?=\\()"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.orbitscore",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.orbitscore",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.orbitscore",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.orbitscore",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.float.orbitscore",
+          "match": "\\b\\d+\\.\\d+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.orbitscore",
+          "match": "\\b\\d+\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.orbitscore",
+          "match": "="
+        },
+        {
+          "name": "keyword.operator.accessor.orbitscore",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.separator.comma.orbitscore",
+          "match": ","
+        },
+        {
+          "name": "punctuation.definition.parameters.begin.orbitscore",
+          "match": "\\("
+        },
+        {
+          "name": "punctuation.definition.parameters.end.orbitscore",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.definition.block.begin.orbitscore",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.definition.block.end.orbitscore",
+          "match": "\\}"
+        }
+      ]
+    },
+    "play-structures": {
+      "patterns": [
+        {
+          "name": "meta.play.nested.orbitscore",
+          "match": "\\((\\d+)\\)",
+          "captures": {
+            "1": {
+              "name": "constant.numeric.slice.orbitscore"
+            }
+          }
+        },
+        {
+          "name": "meta.play.modifier.orbitscore",
+          "match": "(\\d+)\\.(chop|time|fixpitch)\\((\\d+(?:\\.\\d+)?)\\)",
+          "captures": {
+            "1": {
+              "name": "constant.numeric.slice.orbitscore"
+            },
+            "2": {
+              "name": "support.function.modifier.orbitscore"
+            },
+            "3": {
+              "name": "constant.numeric.parameter.orbitscore"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

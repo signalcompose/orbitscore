@@ -1771,3 +1771,60 @@ export type AudioTokenType =
 1. **パフォーマンス最適化**
 2. **高度な機能**
 3. **DSL明示的セクション化**
+
+---
+
+## Phase A4: VS Code Extension Update
+
+### A4.1 Syntax Highlighting
+**Date**: 2024-09-28
+**Status**: ✅ Completed
+
+**Work Content**:
+- Created new `orbitscore-audio.tmLanguage.json` for audio-based DSL
+- Updated patterns for new keywords (`init`, `GLOBAL`, transport commands)
+- Added method chaining support (`.audio()`, `.chop()`, `.time()`, `.fixpitch()`)
+- Preserved old syntax file for reference
+
+### A4.2 Command Execution
+**Date**: 2024-09-28  
+**Status**: ✅ Completed
+
+**Implementation**:
+- Execute selection with `Cmd+Enter`
+- Execute file with `Shift+Cmd+Enter`
+- Stop engine with `Cmd+.`
+- Commands executed via `node cli.js eval <tmpFile>`
+- Process management for clean shutdown
+
+### A4.3 IntelliSense
+**Date**: 2024-09-28
+**Status**: ✅ Completed
+
+**Features**:
+- Autocomplete for global methods (`tempo()`, `tick()`, `beat()`, `key()`)
+- Autocomplete for sequence methods (`audio()`, `play()`, `mute()`, etc.)
+- Method chaining support (`.chop()`, `.time()`, `.fixpitch()`)
+- NO abbreviations - full descriptive names only
+- Parameter hints with types
+- Hover documentation for all methods
+
+### A4.4 Diagnostics
+**Date**: 2024-09-28
+**Status**: ✅ Completed
+
+**Checks**:
+- Missing parentheses detection
+- Tempo range validation (40-300 BPM)
+- Deprecated keyword warnings (`sequence` → `seq`)
+- Real-time error highlighting
+
+### A4.5 Build and Testing
+**Date**: 2024-09-28
+**Status**: ✅ Completed
+
+**Results**:
+- TypeScript compilation successful
+- All extension features integrated
+- Fixed TypeScript errors in `updateDiagnostics` function
+- Ready for VS Code packaging and distribution
