@@ -1,0 +1,63 @@
+// Melodic Patterns - OrbitScore Audio DSL
+// Demonstrates melodic sequencing with chords and arpeggios
+
+// Set a slower tempo for melodic content
+global.tempo(100)
+global.beat(4)
+global.tick(4)
+
+// Initialize
+var global = init GLOBAL
+var melody = init GLOBAL.seq
+var chords = init GLOBAL.seq
+var arp = init GLOBAL.seq
+
+// Melody sequence - using sine wave
+melody.config(meter: 4/4, length: 4)
+melody.audio("../audio/sine_440.wav").chop(16)
+melody.play(
+  1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0,  // Bar 1-2: Melodic pattern
+  0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 1, 1,  // Bar 3-4: Variation
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // Bars 5-8: Rest
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+)
+
+// Chord progression
+chords.config(meter: 4/4, length: 4)
+chords.audio("../audio/chord_c_major.wav").chop(4)
+chords.play(
+  1, 0, 0, 0,  // Bar 1: C major
+  0, 0, 0, 0,  // Bar 2: Rest
+  0, 0, 0, 0,  // Bar 3: Rest
+  0, 0, 0, 0   // Bar 4: Rest
+)
+
+// Add minor chord
+var chords2 = init GLOBAL.seq
+chords2.config(meter: 4/4, length: 4)
+chords2.audio("../audio/chord_a_minor.wav").chop(4)
+chords2.play(
+  0, 0, 0, 0,  // Bar 1: Rest
+  0, 0, 0, 0,  // Bar 2: Rest
+  1, 0, 0, 0,  // Bar 3: A minor
+  0, 0, 0, 0   // Bar 4: Rest
+)
+
+// Arpeggio pattern
+arp.config(meter: 4/4, length: 2)
+arp.audio("../audio/arpeggio_c.wav").chop(8)
+arp.play(1, 0, 1, 0, 1, 0, 1, 0,  // Up pattern
+         0, 1, 0, 1, 0, 1, 0, 1)   // Down pattern
+
+// Start sequences
+melody.run()
+chords.run()
+chords2.run()
+arp.run()
+
+// Live performance commands
+// melody.fixpitch(7)   // Transpose up a fifth
+// arp.time(2.0)        // Double speed arpeggio
+// chords.mute()        // Mute chords
+// global.tempo(80)     // Slow down
+// melody.loop()        // Loop melody only

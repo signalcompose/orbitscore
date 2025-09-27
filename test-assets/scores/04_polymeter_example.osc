@@ -1,0 +1,39 @@
+// Polymeter Example - OrbitScore Audio DSL
+// Demonstrates different meters playing simultaneously
+
+global.tempo(140)
+global.beat(4)
+global.tick(4)
+
+// Initialize
+var global = init GLOBAL
+var seq3 = init GLOBAL.seq  // 3/4 pattern
+var seq4 = init GLOBAL.seq  // 4/4 pattern
+var seq5 = init GLOBAL.seq  // 5/4 pattern
+
+// 3/4 pattern - repeats every 3 beats
+seq3.config(meter: 3/4, length: 1)
+seq3.audio("../audio/hihat_closed.wav").chop(3)
+seq3.play(1, 0, 1)  // X - X pattern
+
+// 4/4 pattern - standard
+seq4.config(meter: 4/4, length: 1)
+seq4.audio("../audio/kick.wav").chop(4)
+seq4.play(1, 0, 0, 1)  // X - - X pattern
+
+// 5/4 pattern - odd meter
+seq5.config(meter: 5/4, length: 1)
+seq5.audio("../audio/snare.wav").chop(5)
+seq5.play(0, 0, 1, 0, 1)  // - - X - X pattern
+
+// Start all - they will cycle at different rates
+global.run()
+
+// The patterns will align every 60 beats (LCM of 3, 4, 5)
+// Creating evolving polyrhythmic textures
+
+// Live controls
+// seq3.mute()      // Remove 3/4 layer
+// seq5.time(0.5)   // Half-time the 5/4
+// seq4.loop()      // Loop only the 4/4
+// global.tempo(160) // Speed everything up

@@ -1,0 +1,39 @@
+// Basic Drum Pattern - OrbitScore Audio DSL
+// This demonstrates a simple 4/4 drum pattern using chopped samples
+
+// Global configuration
+global.tempo(120)
+global.beat(4)
+global.tick(4)
+
+// Initialize sequences
+var global = init GLOBAL
+var kick = init GLOBAL.seq
+var snare = init GLOBAL.seq
+var hihat = init GLOBAL.seq
+
+// Configure drum sequences
+kick.config(meter: 4/4, length: 1)
+snare.config(meter: 4/4, length: 1)
+hihat.config(meter: 4/4, length: 1)
+
+// Load and chop audio samples
+kick.audio("../audio/kick.wav").chop(4)
+snare.audio("../audio/snare.wav").chop(4)
+hihat.audio("../audio/hihat_closed.wav").chop(16)
+
+// Create patterns
+kick.play(1, 0, 0, 0)  // Kick on beat 1
+snare.play(0, 0, 1, 0) // Snare on beat 3
+hihat.play(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1) // 16th note hi-hats
+
+// Start playback
+global.run()
+
+// Individual sequence controls (for live coding)
+// kick.run()
+// snare.run()
+// hihat.run()
+// kick.mute()
+// snare.loop()
+// global.stop()
