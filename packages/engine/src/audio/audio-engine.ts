@@ -300,6 +300,13 @@ export class AudioEngine {
   }
 
   /**
+   * Get the audio context
+   */
+  getAudioContext(): AudioContext {
+    return this.audioContext
+  }
+
+  /**
    * Cleanup resources
    */
   async dispose(): Promise<void> {

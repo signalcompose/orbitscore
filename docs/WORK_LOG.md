@@ -1865,3 +1865,54 @@ play(1, (0, 1, 2, 3, 4)) in 4/4 at 120 BPM:
 - Slice 3: 1600-1800ms
 - Slice 4: 1800-2000ms
 ```
+
+---
+
+## Hierarchical Play Timing Implementation
+
+### Implementation Completed
+**Date**: 2024-09-28
+**Status**: ✅ Partially Implemented
+
+**What Was Implemented**:
+
+1. **TimingCalculator Class** (`packages/engine/src/timing/timing-calculator.ts`)
+   - Calculates exact timing for nested play structures
+   - Recursively processes nested elements
+   - Returns `TimedEvent` objects with startTime, duration, and depth
+   - Includes debug formatting for readable output
+
+2. **Interpreter Updates**
+   - Stores play patterns in sequence state
+   - Calculates hierarchical timing using TimingCalculator
+   - Schedules audio playback with correct timing
+   - Debug output shows calculated beat positions
+
+3. **Test Suite**
+   - Comprehensive tests for timing calculation
+   - Tests for flat, nested, and deeply nested structures
+   - Tests for tuplets and complex rhythmic patterns
+   - All tests passing ✅
+
+4. **Example File**
+   - Created `examples/04_nested_rhythms.osc`
+   - Demonstrates various nested patterns
+   - Includes triplets, quintuplets, syncopation, and flams
+
+**Current Limitations**:
+- Transport system integration incomplete (using direct audio scheduling)
+- No visual feedback of timing structure
+- Loop handling for complex patterns needs work
+
+**Test Results**:
+```
+✓ timing-calculator.spec.ts (8 tests) 
+  - Simple flat timing
+  - Silence handling
+  - Nested timing
+  - Complex nested timing  
+  - 5-tuplet pattern
+  - Deeply nested structures
+  - Timing formatting
+  - Silence formatting
+```
