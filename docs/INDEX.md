@@ -15,13 +15,18 @@
    - Chronological progress tracking
    - All commits documented
 
-3. **[INSTRUCTIONS_NEW_DSL.md](./INSTRUCTIONS_NEW_DSL.md)** 🎵
-   - DSL language specification
-   - Syntax and semantics
-   - Key concepts (degree 0 = rest)
-   - Implementation requirements
+3. **[INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md)** 🎵
+   - **Single source of truth** for OrbitScore DSL
+   - Audio-based DSL specification (v0.1)
+   - Global parameters and sequences
+   - Transport commands and DAW integration
+   
+4. **[INSTRUCTIONS_NEW_DSL.md](./INSTRUCTIONS_NEW_DSL.md)** ⚠️ **DEPRECATED**
+   - Old MIDI-based DSL specification
+   - Superseded by INSTRUCTION_ORBITSCORE_DSL.md
+   - Kept for historical reference only
 
-4. **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** 🗺️
+5. **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** 🗺️
    - Technical roadmap
    - Phase-by-phase implementation
    - Testing requirements
@@ -35,36 +40,47 @@
 
 ## 📋 Development Phases
 
+### Previous MIDI-Based Implementation (Deprecated)
 | Phase | Status      | Description            |
 | ----- | ----------- | ---------------------- |
-| 1     | ✅ Complete | Parser Implementation  |
-| 2     | ✅ Complete | Pitch/Bend Conversion  |
-| 3     | ✅ Complete | Scheduler + Transport  |
-| 4     | ✅ Complete | VS Code Extension      |
-| 5     | ⏳ Pending  | MIDI Output (CoreMIDI) |
+| 1-10  | ⚠️ Deprecated | Old MIDI-based system  |
+
+### New Audio-Based Implementation
+| Phase | Status      | Description                  |
+| ----- | ----------- | ---------------------------- |
+| A1    | 🔄 Planning | New Parser (Audio DSL)       |
+| A2    | 📝 Planned  | Audio Engine Integration     |
+| A3    | 📝 Planned  | Transport System             |
+| A4    | 📝 Planned  | VS Code Extension Update     |
+| A5    | 📝 Planned  | DAW Plugin Development       |
 
 ## 🎯 Key Concepts
 
-### Degree System
+### New Audio-Based DSL
 
-- **0 = Rest/Silence** (革新的特徴)
-- **1-12 = Chromatic Scale** (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
+- **Audio File Playback**: Load and slice audio files (.wav, .aiff, .mp3, .mp4)
+- **Time-Stretching**: Automatic tempo matching with pitch preservation
+- **Transport Commands**: `global.run()`, `global.loop()`, `seq.mute()`, etc.
+- **Editor Integration**: Execute commands with Cmd+Enter
 
-### Precision
+### Core Features
 
-- 小数第3位まで (3 decimal places)
-- Deterministic randomness with seed
+- **Tempo**: Global and per-sequence tempo control
+- **Meter**: Support for composite meters like `(4 by 4)(5 by 4)`
+- **Chop**: Divide audio files into equal slices
+- **Fixpitch**: Decouple playback speed from pitch
 
-### Meter Types
+### DAW Integration
 
-- **Shared**: Global bar lines
-- **Independent**: Per-sequence bar lines
+- **Audio Output**: Internal audio engine at 48kHz/24bit
+- **Plugin Bridge**: VST/AU plugin for DAW routing
+- **MIDI**: IAC Bus support (future)
 
 ## 🔍 Finding Information
 
+- **DSL Specification**: Check [INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md) ⭐
 - **How something works**: Check [WORK_LOG.md](./WORK_LOG.md)
 - **What to implement**: Check [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)
-- **Language details**: Check [INSTRUCTIONS_NEW_DSL.md](./INSTRUCTIONS_NEW_DSL.md)
 - **Project practices**: Check [PROJECT_RULES.md](./PROJECT_RULES.md)
 
 ## 📝 Documentation Guidelines
@@ -77,4 +93,4 @@
 
 ---
 
-_Last Updated: December 19, 2024_
+_Last Updated: December 25, 2024 - Migrated to Audio-Based DSL_
