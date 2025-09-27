@@ -1,16 +1,18 @@
 // Melodic Patterns - OrbitScore Audio DSL
 // Demonstrates melodic sequencing with chords and arpeggios
 
+// Initialize global context first
+var global = init GLOBAL
+
 // Set a slower tempo for melodic content
 global.tempo(100)
 global.beat(4)
 global.tick(4)
 
-// Initialize
-var global = init GLOBAL
-var melody = init GLOBAL.seq
-var chords = init GLOBAL.seq
-var arp = init GLOBAL.seq
+// Initialize sequences from global
+var melody = init global.seq
+var chords = init global.seq
+var arp = init global.seq
 
 // Melody sequence - using sine wave
 melody.config(meter: 4/4, length: 4)
@@ -33,7 +35,7 @@ chords.play(
 )
 
 // Add minor chord
-var chords2 = init GLOBAL.seq
+var chords2 = init global.seq
 chords2.config(meter: 4/4, length: 4)
 chords2.audio("../audio/chord_a_minor.wav").chop(4)
 chords2.play(

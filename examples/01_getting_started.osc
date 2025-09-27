@@ -1,0 +1,29 @@
+// OrbitScore Getting Started
+// Execute sections with Cmd+Enter
+
+// === Section 1: Basic Setup ===
+// Initialize and configure global transport
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4)
+global.tick(4)
+
+// === Section 2: Your First Sequence ===
+var drum = init global.seq
+drum.config(meter: 4/4, length: 1)
+drum.audio("../test-assets/audio/kick.wav").chop(4)
+drum.play(1, 0, 1, 0)  // Simple kick pattern
+drum.run()
+
+// === Section 3: Add More Layers ===
+var snare = init global.seq
+snare.config(meter: 4/4, length: 1)
+snare.audio("../test-assets/audio/snare.wav").chop(4)
+snare.play(0, 0, 1, 0)  // Snare on beat 3
+snare.run()
+
+// === Section 4: Control Playback ===
+global.tempo(130)  // Speed up
+drum.mute()        // Mute drums
+snare.loop()       // Loop snare
+global.stop()      // Stop everything
