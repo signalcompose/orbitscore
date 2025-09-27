@@ -1,52 +1,51 @@
 # OrbitScore
 
-**Chromatic degree-based music DSL with shared/independent meter systems for polyrhythmic composition**
+**Audio-based live coding DSL for modern music production**
 
-半音階度数システム（0=休符, 1-12=半音階）を基盤とし、shared/independentメーターによるポリリズム作曲を可能にする音楽DSL。
+オーディオファイルの操作を中心とした新しい音楽制作用DSL。タイムストレッチ、ピッチシフト、リアルタイムトランスポート制御を統合。
 
-## 核心的特徴
+> ⚠️ **Migration Notice**: The project is migrating from MIDI-based to audio-based DSL. See [INSTRUCTION_ORBITSCORE_DSL.md](docs/INSTRUCTION_ORBITSCORE_DSL.md) for the new specification.
 
-### 🎵 度数システムの革新
+## 核心的特徴 (New Audio-Based DSL)
 
-- **度数0 = 休符** - 無音を音階の一部として定義
-- **度数1-12 = 半音階** - C, C#, D, D#, E, F, F#, G, G#, A, A#, B
-- 音と無音を同じ体系で扱える統一的アプローチ
+### 🎵 Audio Processing
 
-### ⚡ その他の特徴
+- **Audio File Support**: WAV, AIFF, MP3, MP4 playback
+- **Time-Stretching**: Tempo adjustment with pitch preservation
+- **Audio Slicing**: `.chop(n)` to divide files into equal parts
+- **Pitch Shifting**: `.fixpitch(n)` for independent pitch control
 
-- **選択範囲実行**: VS Codeエディタで選択した範囲を即座に実行（Cmd+Enter）
-- **ポリリズム/ポリメーター**: shared（小節線共有）とindependent（独立）の両方をサポート
-- **高精度**: 小数第3位までの精度と乱数シードによる再現性
-- **リアルタイムトランスポート**: 小節頭でのループ/ジャンプ with 量子化
-- **macOS対応**: IAC Bus経由でのMIDI出力（CoreMIDI / @julusian/midi）
-- **VS Code拡張**: 統合開発環境での作曲
+### ⚡ Live Coding Features
+
+- **Editor Integration**: Execute commands with Cmd+Enter
+- **Transport Commands**: `global.run()`, `loop()`, `mute()`, etc.
+- **Real-time Control**: Bar-quantized transport with look-ahead
+- **Polymeter Support**: Independent sequence timing
+
+### 🔧 Technical Features
+
+- **48kHz/24bit Audio**: Professional audio quality
+- **DAW Integration**: VST/AU plugin for routing (planned)
+- **VS Code Extension**: Syntax highlighting and live execution
+- **macOS Optimized**: CoreAudio integration
 
 ## 現在の実装状況
 
-### ✅ 完了済みフェーズ
+### 📦 Legacy MIDI-Based Implementation (Deprecated)
 
-- **Phase 1**: Parser Implementation (100%)
-- **Phase 2**: Pitch/Bend Conversion (100%)  
-- **Phase 3**: Scheduler + Transport (100%)
-- **Phase 4**: VS Code Extension (100%)
-- **Phase 5**: MIDI Output Implementation (100%)
-- **Phase 6**: Max/MSP Integration (100%)
-- **Phase 7**: Live Coding Implementation (100%)
-- **Phase 8**: VS Code Extension Live Coding Fixes (100%)
+The previous MIDI-based implementation (Phases 1-10) is now deprecated but preserved for research purposes.
 
-### 🚧 次の実装予定
+### 🚧 New Audio-Based Implementation
 
-- **Phase 11**: Sequence Loop Playback and DJ-like Controls
-  - シーケンスのループ再生機能
-  - `.stop`, `.mute`, `.unmute` コマンド
-  - グローバル設定とシーケンス設定の分離実行
-- **Phase 12**: Parameter Debugging and Implementation
-  - key, tempo, meter, bendRange, defaultDur パラメータの実装
-  - パラメータのデバッグ機能
-- **Phase 13**: VS Code Extension Enhancements
-  - 構文チェック機能の実装
-  - DSL明示的セクション化
-- **Phase 14**: Performance optimization and advanced features
+| Phase | Status | Description |
+|-------|--------|-------------|
+| **A1** | 🔄 Planning | New Parser for Audio DSL |
+| **A2** | 📝 Planned | Audio Engine Integration |
+| **A3** | 📝 Planned | Transport System |
+| **A4** | 📝 Planned | VS Code Extension Update |
+| **A5** | 📝 Planned | DAW Plugin Development |
+
+See [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for detailed roadmap.
 
 ## 技術スタック
 
