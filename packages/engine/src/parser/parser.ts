@@ -1,3 +1,11 @@
+/**
+ * @deprecated This parser is for the old MIDI-based DSL.
+ * The new audio-based DSL parser should be implemented according to
+ * docs/INSTRUCTION_ORBITSCORE_DSL.md
+ *
+ * This file is preserved for historical reference and research purposes.
+ */
+
 import type {
   IR,
   GlobalConfig,

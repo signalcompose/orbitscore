@@ -1,3 +1,11 @@
+/**
+ * @deprecated This pitch conversion module is part of the old MIDI-based DSL.
+ * The new audio-based DSL handles pitch differently through audio processing.
+ * See docs/INSTRUCTION_ORBITSCORE_DSL.md for the new approach.
+ *
+ * This file is preserved for historical reference.
+ */
+
 import type { PitchSpec, SequenceConfig } from './ir'
 
 /**
