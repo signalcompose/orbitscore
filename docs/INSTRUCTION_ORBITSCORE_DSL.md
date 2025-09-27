@@ -82,11 +82,19 @@ The `length` parameter defines how many bars the sequence loops over:
 - `length(2)` with `.chop(8)` = 4 slices per bar × 2 bars = 8 elements in `play()`
 - `length(4)` with `.chop(16)` = 4 slices per bar × 4 bars = 16 elements in `play()`
 
+### Slice Indexing in play()
+When using `chop(n)`, the audio is divided into n slices numbered 1 through n:
+- **0** = silence (no playback)
+- **1 to n** = play slice number (1-indexed)
+- Numbers can be reused and reordered freely
+
 Example:
 ```js
 seq1.beat(4 by 4).length(2)     // 2-bar loop in 4/4
-seq1.audio("file.wav").chop(8)  // 8 slices total (4 per bar)
-seq1.play(1,0,0,1, 0,0,1,0)     // 8 elements for 2 bars
+seq1.audio("file.wav").chop(8)  // Creates slices 1-8
+seq1.play(1,3,2,1, 5,7,0,4)     // Play: slice1, slice3, slice2, slice1, slice5, slice7, silence, slice4
+seq1.play(1,1,1,1, 2,2,2,2)     // Repeat slices
+seq1.play(8,7,6,5, 4,3,2,1)     // Reverse order
 ```
 
 ---
