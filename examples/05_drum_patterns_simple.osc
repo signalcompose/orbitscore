@@ -1,0 +1,85 @@
+// Simple Drum Patterns - OrbitScore Audio DSL
+// Demonstrates using chop(1) or no chop for drum samples
+
+// Initialize
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4)
+global.tick(4)
+
+// === Pattern 1: Basic 4/4 Beat ===
+// Using chop(1) explicitly - entire sample as slice 1
+var kick = init global.seq
+kick.length(1)
+kick.audio("../test-assets/audio/kick.wav").chop(1)  // Entire file is slice 1
+kick.play(1, 0, 0, 0)  // Kick on beat 1
+
+var snare = init global.seq
+snare.length(1)
+snare.audio("../test-assets/audio/snare.wav").chop(1)
+snare.play(0, 0, 1, 0)  // Snare on beat 3
+
+// === Pattern 2: Using Default (no chop) ===
+// Omitting .chop() defaults to .chop(1)
+var hihat = init global.seq
+hihat.length(1)
+hihat.audio("../test-assets/audio/hihat_closed.wav")  // No .chop() = chop(1)
+hihat.play(1, 1, 1, 1)  // Four-on-the-floor hi-hats
+
+// === Pattern 3: More Complex Pattern ===
+// Still using whole samples, but with nested timing
+var kick2 = init global.seq
+kick2.length(2)  // 2 bar pattern
+kick2.audio("../test-assets/audio/kick.wav")  // Defaults to chop(1)
+kick2.play(
+  1, 0, (1, 0), 0,  // Bar 1: Kick, rest, double kick, rest
+  1, 0, 0, (1, 1),  // Bar 2: Kick, rest, rest, double kick
+)
+
+var snare2 = init global.seq
+snare2.length(2)
+snare2.audio("../test-assets/audio/snare.wav")  // Defaults to chop(1)
+snare2.play(
+  0, 0, 1, 0,       // Bar 1: Standard backbeat
+  0, 0, 1, (1, 1),  // Bar 2: Snare with fill
+)
+
+// === Pattern 4: Ghost Notes and Dynamics ===
+// Using the same sample (slice 1) multiple times
+// In a real implementation, velocity/volume could vary
+var ghost = init global.seq
+ghost.length(1)
+ghost.audio("../test-assets/audio/snare.wav")
+ghost.play(
+  0, (0, 1), 1, (1, 0, 1)  // Ghost notes between main hits
+)
+
+// === Pattern 5: Open/Closed Hi-Hat Pattern ===
+var closed_hat = init global.seq
+closed_hat.length(1)
+closed_hat.audio("../test-assets/audio/hihat_closed.wav")
+closed_hat.play(1, 1, 1, 0)  // Closed on 1, 2, 3
+
+var open_hat = init global.seq
+open_hat.length(1)
+open_hat.audio("../test-assets/audio/hihat_open.wav")
+open_hat.play(0, 0, 0, 1)  // Open on 4
+
+// === Start Playback ===
+kick.run()
+snare.run()
+hihat.run()
+
+// Uncomment to try variations:
+// kick2.run()
+// snare2.run()
+// ghost.run()
+// closed_hat.run()
+// open_hat.run()
+
+// === Key Points ===
+// - chop(1) or no chop: entire file is slice 1
+// - play(1) triggers the whole sample
+// - play(0) is silence
+// - Perfect for one-shot drum samples
+// - Nested patterns still work with timing division

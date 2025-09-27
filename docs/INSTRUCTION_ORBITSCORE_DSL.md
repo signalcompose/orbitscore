@@ -76,6 +76,26 @@ seq1.beat(17 by 8)    // independent meter (polymeter support)
 seq1.length(2)        // loop length in bars (default: 1)
 ```
 
+### Method Chaining
+All sequence methods return the sequence object, allowing fluent chaining:
+```js
+// Multi-line (traditional)
+var snare = init global.seq
+snare.beat(4 by 4)
+snare.length(1)
+snare.audio("snare.wav")
+snare.chop(4)
+snare.play(0, 0, 1, 0)
+snare.run()
+
+// Single-line (method chaining)
+var snare = init global.seq
+snare.beat(4 by 4).length(1).audio("snare.wav").chop(4).play(0, 0, 1, 0).run()
+
+// Or even more concise (if parser supports)
+init global.seq.beat(4 by 4).length(1).audio("snare.wav").play(0, 0, 1, 0).run()
+```
+
 ### Loop Length and Pattern Relationship
 The `length` parameter defines how many bars the sequence loops over:
 - `length(1)` with `.chop(4)` = 4 slices per bar × 1 bar = 4 elements in `play()`
@@ -87,6 +107,17 @@ When using `chop(n)`, the audio is divided into n slices numbered 1 through n:
 - **0** = silence (no playback)
 - **1 to n** = play slice number (1-indexed)
 - Numbers can be reused and reordered freely
+
+**Special case**: `chop(1)` means no division - the entire audio file is slice 1:
+```js
+// For drum hits - play the whole sample
+kick.audio("kick.wav").chop(1)  // or just kick.audio("kick.wav")
+kick.play(1, 0, 1, 0)           // Kick, silence, kick, silence
+
+// For sliced loops
+break.audio("break.wav").chop(8)  // Divide into 8 slices
+break.play(1,3,2,1, 5,7,0,4)      // Rearrange slices
+```
 
 Example:
 ```js
@@ -158,11 +189,18 @@ global.loop(seq1)        // loop only seq1
 
 ### File Loading
 ```js
-seq1.audio("../audio/piano1.wav").chop(6)
+seq1.audio("../audio/piano1.wav").chop(6)  // Divide into 6 slices
+seq1.audio("../audio/kick.wav").chop(1)     // No division (whole file)
+seq1.audio("../audio/kick.wav")             // Default: chop(1)
 ```
-- Splits file into equal slices (1..6)
+- `.chop(n)` divides file into n equal slices (numbered 1 to n)
+- `.chop(1)` or omitting `.chop()` = no division (entire file is slice 1)
 - Supported formats: wav, aiff, mp3, mp4
 - Output defaults to 48kHz / 24bit (unless global override)
+
+**Common patterns**:
+- Drum hits: Use `.chop(1)` or omit - triggers entire sample
+- Loops/Breaks: Use `.chop(8)`, `.chop(16)` etc. for slicing and rearrangement
 
 ### Play with Audio
 ```js
@@ -230,6 +268,34 @@ Instead of creating abbreviated forms that reduce readability (e.g., `gl.tem()`)
 3. **Code readability** for collaboration and maintenance
 
 This approach ensures code remains self-documenting while maintaining fast input speed.
+
+### Context-Aware Autocomplete
+
+The extension provides intelligent suggestions based on method chain context:
+
+```js
+// After 'var seq = init global.seq'
+seq.┃  // Suggests: audio(), beat(), length(), tempo()
+
+// After 'seq.audio("file.wav")'
+seq.audio("file.wav").┃  // Suggests: chop(), play(), run()
+
+// After 'seq.audio("file.wav").chop(8)'
+seq.audio("file.wav").chop(8).┃  // Suggests: play(), run()
+
+// After 'seq.play(1, 2, 3)'
+seq.play(1, 2, 3).┃  // Suggests: run(), loop(), mute(), fixpitch(), time()
+
+// After 'global.'
+global.┃  // Suggests: tempo(), beat(), tick(), key(), run(), loop(), stop()
+```
+
+**Method Order Rules**:
+- `audio()` must come before `chop()` and `play()`
+- `beat()`, `length()`, `tempo()` can be called anytime after init
+- `play()` typically comes after `audio()` (with or without `chop()`)
+- `run()`, `loop()`, `mute()` are usually final in the chain
+- Modifiers like `fixpitch()`, `time()` can appear after `play()`
 
 ---
 

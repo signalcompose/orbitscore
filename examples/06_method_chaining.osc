@@ -1,0 +1,80 @@
+// Method Chaining Examples - OrbitScore Audio DSL
+// Demonstrates fluent API with method chaining
+
+// Initialize global
+var global = init GLOBAL
+global.tempo(120).beat(4).tick(4)  // Chain global methods too!
+
+// === Example 1: Traditional Multi-line ===
+var kick_traditional = init global.seq
+kick_traditional.beat(4 by 4)
+kick_traditional.length(1)
+kick_traditional.audio("../test-assets/audio/kick.wav")
+kick_traditional.chop(1)
+kick_traditional.play(1, 0, 1, 0)
+kick_traditional.run()
+
+// === Example 2: Method Chaining (One-liner) ===
+var kick_chained = init global.seq
+kick_chained.beat(4 by 4).length(1).audio("../test-assets/audio/kick.wav").play(1, 0, 1, 0).run()
+
+// === Example 3: Complex Pattern with Chaining ===
+var snare = init global.seq
+snare.beat(4 by 4).length(2).audio("../test-assets/audio/snare.wav").play(
+  0, 0, 1, 0,           // Bar 1: backbeat
+  0, 0, 1, (1, 1, 1, 1) // Bar 2: snare with roll
+).run()
+
+// === Example 4: Multiple Sequences in Compact Form ===
+// Create a full drum kit in just a few lines
+var drums_kick = init global.seq
+var drums_snare = init global.seq  
+var drums_hihat = init global.seq
+
+drums_kick.audio("../test-assets/audio/kick.wav").play(1, 0, 0, 0).run()
+drums_snare.audio("../test-assets/audio/snare.wav").play(0, 0, 1, 0).run()
+drums_hihat.audio("../test-assets/audio/hihat_closed.wav").play(1, 1, 1, 1).run()
+
+// === Example 5: Chained with Audio Processing ===
+var bass = init global.seq
+bass.beat(4 by 4).length(2).audio("../test-assets/audio/bass_c1.wav").chop(8).play(
+  1, 0, 0, 1, 0, 0, 1, 0,
+  0, 1, 0, 1, 0, 0, 0, 0
+).fixpitch(7).run()  // Transpose up a fifth
+
+// === Example 6: Chained with Different Meters ===
+var poly3 = init global.seq
+poly3.beat(3 by 4).audio("../test-assets/audio/sine_440.wav").play(1, 1, 1).run()
+
+var poly5 = init global.seq
+poly5.beat(5 by 4).audio("../test-assets/audio/sine_880.wav").play(1, 0, 1, 0, 1).run()
+
+// === Example 7: Live Coding Style ===
+// Quick one-liners for experimentation
+
+// Instant kick pattern
+init global.seq.audio("../test-assets/audio/kick.wav").play(1, (1, 0), 1, 0).run()
+
+// Quick hi-hat with variations
+init global.seq.audio("../test-assets/audio/hihat_closed.wav").play(
+  (1, 1), 1, (1, 1, 1), 1
+).run()
+
+// Bass line with pitch variation
+init global.seq.audio("../test-assets/audio/bass_c1.wav").chop(4).play(
+  1.fixpitch(0), 2.fixpitch(7), 3.fixpitch(5), 4.fixpitch(3)
+).run()
+
+// === Benefits of Method Chaining ===
+// - Concise and readable
+// - Less variable pollution
+// - Natural flow from left to right
+// - Perfect for live coding
+// - Easy to modify on the fly
+
+// === Transport Control ===
+// These can also be chained
+global.tempo(130).run()  // Speed up and start
+
+// Stop everything
+// global.stop()

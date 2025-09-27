@@ -213,12 +213,14 @@ export class Interpreter {
         console.log(`Loaded audio for ${target}: ${audioPath}`)
 
         // Process chain (e.g., .chop())
+        let chopApplied = false
         if (chain) {
           for (const chainMethod of chain) {
             if (chainMethod.method === 'chop') {
               const numSlices = chainMethod.args[0]
               sequence.slices = audioFile.chop(numSlices)
               console.log(`Chopped ${target} audio into ${numSlices} slices`)
+              chopApplied = true
 
               // Update transport sequence
               const transportSeq: TransportSequence = {
@@ -233,6 +235,24 @@ export class Interpreter {
               this.transport.addSequence(transportSeq)
             }
           }
+        }
+
+        // Default behavior: if no .chop(), treat as .chop(1)
+        if (!chopApplied) {
+          sequence.slices = audioFile.chop(1)
+          console.log(`${target} audio: no chop specified, using entire file as slice 1`)
+
+          // Update transport sequence
+          const transportSeq: TransportSequence = {
+            id: target,
+            slices: sequence.slices,
+            tempo: sequence.tempo,
+            meter: sequence.beat,
+            loop: false,
+            muted: sequence.isMuted,
+            state: sequence.isPlaying ? 'playing' : 'stopped',
+          }
+          this.transport.addSequence(transportSeq)
         }
         break
       }
