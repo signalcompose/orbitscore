@@ -4,6 +4,8 @@ import * as fs from 'fs'
 import * as os from 'os'
 
 import * as vscode from 'vscode'
+// Context-aware completion will be integrated in next iteration
+// import { analyzeMethodChain, getContextualCompletions } from './completion-context'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
