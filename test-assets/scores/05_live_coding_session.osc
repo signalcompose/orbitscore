@@ -1,0 +1,130 @@
+// Live Coding Session - OrbitScore Audio DSL
+// A complete example for live performance
+// Execute sections with Cmd+Enter for real-time music creation
+
+// === SECTION 1: Setup ===
+global.tempo(125)
+global.beat(4)
+global.tick(4)
+
+var global = init GLOBAL
+
+// === SECTION 2: Initialize Drum Kit ===
+var kick = init GLOBAL.seq
+var snare = init GLOBAL.seq
+var hihat = init GLOBAL.seq
+var open_hat = init GLOBAL.seq
+
+kick.config(meter: 4/4, length: 1)
+snare.config(meter: 4/4, length: 1)
+hihat.config(meter: 4/4, length: 1)
+open_hat.config(meter: 4/4, length: 2)
+
+// === SECTION 3: Load Samples ===
+kick.audio("../audio/kick.wav").chop(8)
+snare.audio("../audio/snare.wav").chop(8)
+hihat.audio("../audio/hihat_closed.wav").chop(16)
+open_hat.audio("../audio/hihat_open.wav").chop(8)
+
+// === SECTION 4: Basic Beat ===
+// Start with kick
+kick.play(1, 0, 0, 0, 1, 0, 0, 0)
+kick.run()
+
+// === SECTION 5: Add Snare ===
+snare.play(0, 0, 0, 0, 1, 0, 0, 0)
+snare.run()
+
+// === SECTION 6: Hi-Hat Pattern ===
+hihat.play(1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1)
+hihat.run()
+
+// === SECTION 7: Bass Line ===
+var bass = init GLOBAL.seq
+bass.config(meter: 4/4, length: 2)
+bass.audio("../audio/bass_c1.wav").chop(16)
+bass.play(
+  1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0,  // Bar 1
+  0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0   // Bar 2
+)
+bass.run()
+
+// === SECTION 8: Melodic Element ===
+var lead = init GLOBAL.seq
+lead.config(meter: 4/4, length: 4)
+lead.audio("../audio/sine_440.wav").chop(32)
+lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 0,
+          0, 0, 0, 0, (1, 1, 1, 0), 0, 0, 0, 0, 0, 0, 0, 0,
+          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+          (1, 1, 1, 1), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+lead.run()
+
+// === SECTION 9: Effects & Modulation ===
+bass.fixpitch(-2)  // Pitch down
+lead.time(0.5)     // Half-time the lead
+
+// === SECTION 10: Build Up ===
+open_hat.play(0, 0, 0, 0, 0, 0, 0, 1,
+              0, 0, 0, 1, 0, 0, 1, 1)
+open_hat.run()
+
+global.tempo(130)  // Speed up slightly
+
+// === SECTION 11: Drop ===
+hihat.mute()       // Remove hi-hats for space
+snare.mute()       // Remove snare
+lead.mute()        // Drop the lead
+
+// Let the kick and bass groove
+
+// === SECTION 12: Bring Back Elements ===
+snare.unmute()
+hihat.unmute()
+lead.unmute()
+lead.fixpitch(7)  // Transpose lead up
+
+// === SECTION 13: Breakdown ===
+kick.mute()
+bass.mute()
+// Just percussion and lead
+
+// === SECTION 14: Final Build ===
+kick.unmute()
+bass.unmute()
+global.tempo(135)
+
+// === SECTION 15: End ===
+global.stop()
+
+// === LIVE CODING COMMANDS ===
+// Use these for improvisation:
+
+// Mute/Unmute tracks
+// kick.mute()
+// snare.mute()
+// hihat.mute()
+// bass.mute()
+// lead.mute()
+
+// Pitch adjustments
+// bass.fixpitch(5)
+// lead.fixpitch(-7)
+
+// Time stretching
+// bass.time(2.0)
+// lead.time(0.5)
+
+// Tempo changes
+// global.tempo(120)
+// global.tempo(140)
+
+// Loop controls
+// bass.loop()
+// global.loop()
+
+// Stop individual sequences
+// kick.stop()
+// snare.stop()
+
+// Restart
+// global.run()

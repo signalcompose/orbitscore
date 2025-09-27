@@ -1,0 +1,43 @@
+// Bass Sequence - OrbitScore Audio DSL
+// Demonstrates bass line sequencing with time stretching
+
+// Global tempo and meter
+global.tempo(130)
+global.beat(4)
+global.tick(4)
+
+// Initialize
+var global = init GLOBAL
+var bass = init GLOBAL.seq
+var drums = init GLOBAL.seq
+
+// Configure sequences
+bass.config(meter: 4/4, length: 2)  // 2 bar loop
+drums.config(meter: 4/4, length: 1) // 1 bar loop
+
+// Load bass samples and create pattern
+bass.audio("../audio/bass_c1.wav").chop(8)
+bass.play(1, 0, 0, 1, 0, 0, 1, 0,  // Bar 1: C - - C - - C -
+          0, 1, 0, 1, 0, 0, 0, 0)   // Bar 2: - E - E - - - -
+
+// Add another bass layer with different notes
+var bass2 = init GLOBAL.seq
+bass2.config(meter: 4/4, length: 2)
+bass2.audio("../audio/bass_g1.wav").chop(8)
+bass2.play(0, 0, 0, 0, 1, 0, 0, 1,  // Bar 1: - - - - G - - G
+           1, 0, 0, 0, 1, 1, 0, 0)   // Bar 2: G - - - G G - -
+
+// Simple drum pattern
+drums.audio("../audio/kick.wav").chop(4)
+drums.play(1, 0, 1, 0)
+
+// Start all sequences
+global.run()
+
+// Live coding commands
+// bass.mute()
+// bass2.run()
+// bass.fixpitch(2)  // Pitch up 2 semitones
+// bass.time(0.5)    // Half speed
+// global.tempo(140) // Speed up
+// global.loop()     // Loop global

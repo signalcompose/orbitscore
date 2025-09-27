@@ -1,0 +1,137 @@
+// Advanced Techniques - OrbitScore Audio DSL
+// Demonstrates nested structures, modifiers, and complex patterns
+
+global.tempo(110)
+global.beat(4)
+global.tick(4)
+
+var global = init GLOBAL
+
+// === Technique 1: Nested Play Structures ===
+// Create complex rhythmic patterns with nested elements
+var complex_rhythm = init GLOBAL.seq
+complex_rhythm.config(meter: 4/4, length: 2)
+complex_rhythm.audio("../audio/snare.wav").chop(32)
+
+// Nested groups create flams and rolls
+complex_rhythm.play(
+  1, 0, (1, 1), 0,           // Beat 1: single, Beat 3: flam
+  0, 0, 1, 0,                 // Beat 2 rest, Beat 4 single
+  (1, 1, 1, 1), 0, 0, 0,     // Beat 1: roll
+  0, 0, (1, 1), 0,            // Beat 3: flam
+  0, 0, 0, 0,                 // Rest
+  1, (1, 1, 1), 0, 0,        // Complex pattern
+  0, 0, 0, 0,                 // Rest
+  (1, 0, 1, 0), 0, 1, 0      // Alternating pattern
+)
+
+// === Technique 2: Modified Play Structures ===
+// Apply effects to specific slices
+var modified_bass = init GLOBAL.seq
+modified_bass.config(meter: 4/4, length: 2)
+modified_bass.audio("../audio/bass_c1.wav").chop(16)
+
+// Use .fixpitch() and .time() modifiers on specific notes
+modified_bass.play(
+  1.fixpitch(0), 0, 0, 1.fixpitch(5),    // Root and fifth
+  0, 0, 1.fixpitch(7), 0,                 // Octave
+  1.time(2.0), 0, 0, 0,                   // Stretched note
+  0, 0, 1.time(0.5), 0,                   // Quick note
+  1.fixpitch(-12), 0, 0, 1.fixpitch(-5),  // Low octave
+  0, 0, 1.fixpitch(3), 0,                 // Minor third
+  1.time(0.25), 1.time(0.25), 1.time(0.25), 1.time(0.25), // Rapid fire
+  0, 0, 0, 0                               // Rest
+)
+
+// === Technique 3: Multiple Audio Sources ===
+// Chain different samples in one sequence
+var multi_sample = init GLOBAL.seq
+multi_sample.config(meter: 4/4, length: 1)
+
+// First half uses kick, second half uses snare
+multi_sample.audio("../audio/kick.wav").chop(2)
+multi_sample.play(1, 0)
+
+var multi_sample2 = init GLOBAL.seq
+multi_sample2.config(meter: 4/4, length: 1, offset: 0.5)
+multi_sample2.audio("../audio/snare.wav").chop(2)
+multi_sample2.play(0, 1)
+
+// === Technique 4: Polyrhythmic Layers ===
+// Create a 3-against-4 pattern
+var poly3 = init GLOBAL.seq
+var poly4 = init GLOBAL.seq
+
+poly3.config(meter: 3/4, length: 1)
+poly3.audio("../audio/hihat_closed.wav").chop(3)
+poly3.play(1, 0, 1)
+
+poly4.config(meter: 4/4, length: 1)
+poly4.audio("../audio/hihat_open.wav").chop(4)
+poly4.play(1, 0, 0, 1)
+
+// === Technique 5: Dynamic Pattern Generation ===
+// Use variables for pattern reuse
+var pattern_a = (1, 0, 1, 0)
+var pattern_b = (0, 1, 0, 1)
+var pattern_c = (1, 1, 0, 0)
+
+var dynamic_seq = init GLOBAL.seq
+dynamic_seq.config(meter: 4/4, length: 4)
+dynamic_seq.audio("../audio/sine_440.wav").chop(16)
+dynamic_seq.play(
+  pattern_a, pattern_b, pattern_c, pattern_a,  // Bar 1
+  pattern_b, pattern_c, pattern_a, pattern_b,  // Bar 2
+  pattern_c, pattern_a, pattern_b, pattern_c,  // Bar 3
+  pattern_a, pattern_a, pattern_b, pattern_b   // Bar 4
+)
+
+// === Technique 6: Chord Progressions with Samples ===
+var chord_prog = init GLOBAL.seq
+chord_prog.config(meter: 4/4, length: 8)
+
+// Load multiple chord samples and play progression
+var chord_seq1 = init GLOBAL.seq
+var chord_seq2 = init GLOBAL.seq
+
+chord_seq1.config(meter: 4/4, length: 8)
+chord_seq1.audio("../audio/chord_c_major.wav").chop(8)
+chord_seq1.play(1, 0, 0, 0, 0, 0, 0, 0,  // C major - Bar 1
+                0, 0, 0, 0, 1, 0, 0, 0,  // C major - Bar 5
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0)
+
+chord_seq2.config(meter: 4/4, length: 8)
+chord_seq2.audio("../audio/chord_a_minor.wav").chop(8)
+chord_seq2.play(0, 0, 0, 0, 0, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0, 0,  // A minor - Bar 2
+                0, 0, 0, 0, 0, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0, 0,  // A minor - Bar 4
+                0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 1, 0, 0, 0,  // A minor - Bar 6
+                0, 0, 0, 0, 0, 0, 0, 0,
+                1, 0, 0, 0, 0, 0, 0, 0)  // A minor - Bar 8
+
+// === Start Everything ===
+// Comment/uncomment to control layers
+complex_rhythm.run()
+modified_bass.run()
+multi_sample.run()
+multi_sample2.run()
+poly3.run()
+poly4.run()
+dynamic_seq.run()
+chord_seq1.run()
+chord_seq2.run()
+
+// === Performance Controls ===
+// global.tempo(120)
+// complex_rhythm.mute()
+// modified_bass.fixpitch(12)
+// poly3.time(2.0)
+// dynamic_seq.loop()
+// global.stop()
