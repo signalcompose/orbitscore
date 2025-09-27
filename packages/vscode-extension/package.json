@@ -54,7 +54,7 @@
       {
         "language": "orbitscore",
         "scopeName": "source.orbitscore",
-        "path": "./syntaxes/orbitscore.tmLanguage.json"
+        "path": "./syntaxes/orbitscore-audio.tmLanguage.json"
       }
     ],
     "keybindings": [
