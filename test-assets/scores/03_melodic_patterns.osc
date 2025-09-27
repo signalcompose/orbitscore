@@ -15,7 +15,7 @@ var chords = init global.seq
 var arp = init global.seq
 
 // Melody sequence - using sine wave
-melody.config(meter: 4/4, length: 4)
+melody.beat(4 by 4).length(4)
 melody.audio("../audio/sine_440.wav").chop(16)
 melody.play(
   1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 1, 0,  // Bar 1-2: Melodic pattern
@@ -25,7 +25,7 @@ melody.play(
 )
 
 // Chord progression
-chords.config(meter: 4/4, length: 4)
+chords.beat(4 by 4).length(4)
 chords.audio("../audio/chord_c_major.wav").chop(4)
 chords.play(
   1, 0, 0, 0,  // Bar 1: C major
@@ -36,7 +36,7 @@ chords.play(
 
 // Add minor chord
 var chords2 = init global.seq
-chords2.config(meter: 4/4, length: 4)
+chords2.beat(4 by 4).length(4)
 chords2.audio("../audio/chord_a_minor.wav").chop(4)
 chords2.play(
   0, 0, 0, 0,  // Bar 1: Rest
@@ -46,7 +46,7 @@ chords2.play(
 )
 
 // Arpeggio pattern
-arp.config(meter: 4/4, length: 2)
+arp.beat(4 by 4).length(2)
 arp.audio("../audio/arpeggio_c.wav").chop(8)
 arp.play(1, 0, 1, 0, 1, 0, 1, 0,  // Up pattern
          0, 1, 0, 1, 0, 1, 0, 1)   // Down pattern

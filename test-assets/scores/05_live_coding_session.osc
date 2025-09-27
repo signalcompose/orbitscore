@@ -16,10 +16,10 @@ var snare = init global.seq
 var hihat = init global.seq
 var open_hat = init global.seq
 
-kick.config(meter: 4/4, length: 1)
-snare.config(meter: 4/4, length: 1)
-hihat.config(meter: 4/4, length: 1)
-open_hat.config(meter: 4/4, length: 2)
+kick.beat(4 by 4).length(1)
+snare.beat(4 by 4).length(1)
+hihat.beat(4 by 4).length(1)
+open_hat.beat(4 by 4).length(2)
 
 // === SECTION 4: Load Samples ===
 kick.audio("../audio/kick.wav").chop(8)
@@ -42,7 +42,7 @@ hihat.run()
 
 // === SECTION 8: Bass Line ===
 var bass = init global.seq
-bass.config(meter: 4/4, length: 2)
+bass.beat(4 by 4).length(2)
 bass.audio("../audio/bass_c1.wav").chop(16)
 bass.play(
   1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0,  // Bar 1
@@ -52,7 +52,7 @@ bass.run()
 
 // === SECTION 9: Melodic Element ===
 var lead = init global.seq
-lead.config(meter: 4/4, length: 4)
+lead.beat(4 by 4).length(4)
 lead.audio("../audio/sine_440.wav").chop(32)
 lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 0,
           0, 0, 0, 0, (1, 1, 1, 0), 0, 0, 0, 0, 0, 0, 0, 0,

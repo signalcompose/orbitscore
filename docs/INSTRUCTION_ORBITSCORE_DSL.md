@@ -73,7 +73,20 @@ After initialization, sequences can be configured:
 ```js
 seq1.tempo(120)       // independent tempo (polytempo support)
 seq1.beat(17 by 8)    // independent meter (polymeter support)
-seq1.config(meter: 4/4, length: 2)  // configure meter and loop length
+seq1.length(2)        // loop length in bars (default: 1)
+```
+
+### Loop Length and Pattern Relationship
+The `length` parameter defines how many bars the sequence loops over:
+- `length(1)` with `.chop(4)` = 4 slices per bar × 1 bar = 4 elements in `play()`
+- `length(2)` with `.chop(8)` = 4 slices per bar × 2 bars = 8 elements in `play()`
+- `length(4)` with `.chop(16)` = 4 slices per bar × 4 bars = 16 elements in `play()`
+
+Example:
+```js
+seq1.beat(4 by 4).length(2)     // 2-bar loop in 4/4
+seq1.audio("file.wav").chop(8)  // 8 slices total (4 per bar)
+seq1.play(1,0,0,1, 0,0,1,0)     // 8 elements for 2 bars
 ```
 
 ---
@@ -221,9 +234,9 @@ var bass = init global.seq
 var lead = init global.seq
 
 // STEP 4: Configure sequences
-kick.config(meter: 4/4, length: 1)
-bass.config(meter: 4/4, length: 2)
-lead.config(meter: 4/4, length: 4)
+kick.beat(4 by 4).length(1)
+bass.beat(4 by 4).length(2)
+lead.beat(4 by 4).length(4)
 
 // STEP 5: Load audio and create patterns
 kick.audio("kick.wav").chop(4)

@@ -11,19 +11,19 @@ global.tick(4)
 
 // 3/4 pattern
 var three_four = init global.seq
-three_four.config(meter: 3/4, length: 1)
+three_four.beat(3 by 4).length(1)
 three_four.audio("../test-assets/audio/hihat_closed.wav").chop(3)
 three_four.play(1, 0, 1)  // Accent pattern
 
 // 4/4 pattern
 var four_four = init global.seq
-four_four.config(meter: 4/4, length: 1)
+four_four.beat(4 by 4).length(1)
 four_four.audio("../test-assets/audio/kick.wav").chop(4)
 four_four.play(1, 0, 0, 1)  // Standard kick
 
 // 5/4 pattern
 var five_four = init global.seq
-five_four.config(meter: 5/4, length: 1)
+five_four.beat(5 by 4).length(1)
 five_four.audio("../test-assets/audio/snare.wav").chop(5)
 five_four.play(0, 0, 1, 0, 1)  // Syncopated snare
 
@@ -32,7 +32,7 @@ five_four.play(0, 0, 1, 0, 1)  // Syncopated snare
 // Slow bass at 60 BPM (half speed)
 var slow_bass = init global.seq
 slow_bass.tempo(60)  // Independent tempo
-slow_bass.config(meter: 4/4, length: 2)
+slow_bass.beat(4 by 4).length(2)
 slow_bass.audio("../test-assets/audio/bass_c1.wav").chop(8)
 slow_bass.play(1, 0, 0, 0, 0, 0, 1, 0,
                0, 0, 0, 0, 1, 0, 0, 0)
@@ -40,7 +40,7 @@ slow_bass.play(1, 0, 0, 0, 0, 0, 1, 0,
 // Fast hi-hats at 240 BPM (double speed)
 var fast_hats = init global.seq
 fast_hats.tempo(240)  // Independent tempo
-fast_hats.config(meter: 4/4, length: 1)
+fast_hats.beat(4 by 4).length(1)
 fast_hats.audio("../test-assets/audio/hihat_open.wav").chop(8)
 fast_hats.play(1, 0, 1, 0, 1, 0, 1, 0)
 
