@@ -1,0 +1,102 @@
+// Nested Rhythmic Patterns - OrbitScore Audio DSL
+// Demonstrates hierarchical time division with nested play() structures
+
+// Initialize
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4)  // 4/4 time
+global.tick(4)
+
+// === Example 1: Simple Nesting ===
+// play(1, (2, 3)) - first half plays slice 1, second half divided for 2 and 3
+var simple = init global.seq
+simple.length(1)
+simple.audio("../test-assets/audio/hihat_closed.wav").chop(4)
+simple.play(1, (2, 3))  // X - - (X X) pattern
+
+// === Example 2: Triplet Feel ===
+// play((1, 2, 3), (4, 5, 6)) - two triplets
+var triplets = init global.seq
+triplets.length(1)
+triplets.audio("../test-assets/audio/snare.wav").chop(8)
+triplets.play((1, 2, 3), (4, 5, 6))  // Two groups of triplets
+
+// === Example 3: 5-Tuplet Pattern ===
+// play(1, (0, 1, 2, 3, 4)) - half note followed by 5-tuplet
+var tuplet = init global.seq
+tuplet.length(1)
+tuplet.audio("../test-assets/audio/kick.wav").chop(5)
+tuplet.play(1, (0, 1, 2, 3, 4))  // Kick, then silence + 4 rapid kicks
+
+// === Example 4: Complex Nested Rhythm ===
+// Mixing different subdivisions
+var complex = init global.seq
+complex.length(2)  // 2 bars
+complex.audio("../test-assets/audio/arpeggio_c.wav").chop(16)
+complex.play(
+  // Bar 1: increasingly complex subdivisions
+  1,                    // Quarter note
+  (2, 3),              // Two eighths
+  (4, 5, 6),           // Triplet
+  ((7, 8), (9, 10)),   // Four sixteenths
+  
+  // Bar 2: polyrhythmic feel
+  (1, 2, 3, 4, 5),     // Quintuplet
+  (6, 7),              // Two in the space of 5
+  8,                    // Quarter
+  (0, 0, 0)            // Three silences (rest)
+)
+
+// === Example 5: Deep Nesting ===
+// play(1, (2, (3, (4, 5))))
+var deep = init global.seq
+deep.length(1)
+deep.audio("../test-assets/audio/sine_440.wav").chop(8)
+deep.play(
+  1,                    // First half
+  (2,                   // Third quarter split:
+    (3,                 // Last eighth split:
+      (4, 5)            // Two thirty-seconds
+    )
+  )
+)
+
+// === Example 6: Rhythmic Displacement ===
+// Using silence (0) for syncopation
+var syncopated = init global.seq
+syncopated.length(1)
+syncopated.audio("../test-assets/audio/bass_c1.wav").chop(8)
+syncopated.play(
+  (1, 0),              // On-beat, rest
+  (0, 2),              // Rest, off-beat
+  (3, 0, 4),           // Triplet with rest in middle
+  5                     // Final beat
+)
+
+// === Example 7: Flam and Roll Effects ===
+// Very fast subdivisions create flam/roll effects
+var flam = init global.seq
+flam.length(1)
+flam.audio("../test-assets/audio/snare.wav").chop(8)
+flam.play(
+  1,                    // Single hit
+  ((2, 3)),            // Flam (very close together)
+  (4, (5, 6, 7, 8)),   // Single then roll
+  0                     // Rest
+)
+
+// Start sequences
+simple.run()
+// triplets.run()
+// tuplet.run()
+// complex.run()
+// deep.run()
+// syncopated.run()
+// flam.run()
+
+// === Live Performance Tips ===
+// - Comment/uncomment .run() calls to layer patterns
+// - Modify nesting on the fly for variations
+// - Use 0 (silence) to create space and syncopation
+// - Deep nesting creates accelerando/ritardando effects
+// - Mix different subdivision levels for polyrhythmic textures

@@ -6,6 +6,7 @@
 import { AudioIR, GlobalInit, SequenceInit, Statement, PlayElement } from '../parser/audio-parser'
 import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
 import { Transport, TransportSequence } from '../transport/transport'
+import { TimingCalculator, TimedEvent } from '../timing/timing-calculator'
 
 /**
  * Global transport state
@@ -26,8 +27,11 @@ interface SequenceState {
   name: string
   tempo?: number
   beat?: { numerator: number; denominator: number }
+  length?: number // Loop length in bars
   audioFile?: AudioFile
   slices: AudioSlice[]
+  playPattern?: PlayElement[] // Store the play pattern
+  timedEvents?: TimedEvent[] // Calculated timing
   isMuted: boolean
   isPlaying: boolean
 }
@@ -301,49 +305,76 @@ export class Interpreter {
       return
     }
 
-    // Parse play arguments to get slice numbers
-    const sliceNumbers = this.parsePlayArguments(args)
+    // Store the play pattern for later use
+    sequence.playPattern = args
 
-    // Get the slices to play
-    const slicesToPlay: AudioSlice[] = []
-    for (const num of sliceNumbers) {
-      const slice = sequence.slices.find((s) => s.sliceNumber === num)
-      if (slice) {
-        slicesToPlay.push(slice)
-      }
-    }
-
-    if (slicesToPlay.length === 0) {
-      console.warn(`No valid slices to play for sequence: ${sequence.name}`)
-      return
-    }
-
-    // Determine tempo
+    // Calculate bar duration
     const tempo = sequence.tempo || this.globalState.tempo
-    const playbackRate = tempo / 120 // Normalize to 120 BPM base
+    const meter = sequence.beat || this.globalState.beat
+    const beatsPerBar = meter.numerator
+    const beatDuration = 60000 / tempo // ms per beat
+    const barDuration = beatDuration * beatsPerBar
 
-    // Check for fixpitch in chain
+    // Calculate hierarchical timing
+    const timedEvents = TimingCalculator.calculateTiming(args, barDuration)
+    sequence.timedEvents = timedEvents
+
+    // Debug output
+    console.log(`Playing ${sequence.name} with hierarchical timing:`)
+    console.log(TimingCalculator.formatTiming(timedEvents, tempo))
+
+    // Check for modifiers in chain
     let fixpitch: number | undefined
+    let timeStretch: number = 1.0
     if (chain) {
       for (const chainMethod of chain) {
         if (chainMethod.method === 'fixpitch') {
           fixpitch = chainMethod.args[0]
+        } else if (chainMethod.method === 'time') {
+          timeStretch = chainMethod.args[0]
         }
       }
     }
 
-    // Play the sequence
-    console.log(`Playing ${sequence.name}: slices [${sliceNumbers.join(', ')}] at tempo ${tempo}`)
+    // Schedule events with the transport system
+    if (this.transport) {
+      // Create events for transport scheduling
+      for (const event of timedEvents) {
+        if (event.sliceNumber > 0 && event.sliceNumber <= sequence.slices.length) {
+          const slice = sequence.slices[event.sliceNumber - 1] // slices are 0-indexed
 
-    if (fixpitch !== undefined) {
-      // With pitch preservation (not yet fully implemented)
-      console.log(`With pitch fixed at: ${fixpitch} semitones`)
+          // Register the timed playback with transport
+          // This will be handled by the transport system's scheduling
+          // Note: Transport.scheduleEvent doesn't exist yet, need to implement
+          // For now, we'll use the audio engine directly with startTime
+          const audioContextTime = this.audioEngine.getAudioContext().currentTime
+          const startTime = audioContextTime + event.startTime / 1000 // Convert ms to seconds
+
+          this.audioEngine.playSlice(slice, {
+            tempo: (tempo / 120) * timeStretch,
+            pitch: fixpitch,
+            startTime: startTime,
+          })
+        }
+        // If sliceNumber is 0, it's silence - no playback needed
+      }
+    } else {
+      // Fallback: immediate playback without timing (for testing)
+      console.warn('No transport system - playing immediately without timing')
+      const slicesToPlay: AudioSlice[] = []
+      for (const event of timedEvents) {
+        if (event.sliceNumber > 0 && event.sliceNumber <= sequence.slices.length) {
+          slicesToPlay.push(sequence.slices[event.sliceNumber - 1])
+        }
+      }
+
+      if (slicesToPlay.length > 0) {
+        this.audioEngine.playSequence(slicesToPlay, {
+          tempo: tempo / 120,
+          loop: false,
+        })
+      }
     }
-
-    this.audioEngine.playSequence(slicesToPlay, {
-      tempo: playbackRate,
-      loop: false,
-    })
 
     sequence.isPlaying = true
   }
