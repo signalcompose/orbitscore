@@ -1477,6 +1477,273 @@ export function simulateTransportAdvanceAcrossSequences(durationSec: number) {
 - [ ] パーサーの更新
 - [ ] IR型の更新
 
+---
+
+## DSL Migration: MIDI to Audio-Based (December 25, 2024)
+
+### Migration Overview
+
+**Date**: December 25, 2024
+**Work Content**:
+- Complete deprecation of MIDI-based DSL (INSTRUCTIONS_NEW_DSL.md)
+- Adoption of new audio-based DSL (INSTRUCTION_ORBITSCORE_DSL.md)
+- Documentation update to establish single source of truth
+
+**Technical Decisions**:
+- Audio-based approach prioritized over MIDI for modern music production
+- Focus on time-stretching and pitch-shifting capabilities
+- Transport commands integrated directly into editor workflow
+
+### Documentation Changes
+
+**Updated Files**:
+1. `docs/INDEX.md`:
+   - Marked old DSL as deprecated
+   - Added reference to new INSTRUCTION_ORBITSCORE_DSL.md as canonical source
+   - Updated development phases to show new audio-based implementation plan
+   - Revised key concepts to focus on audio features
+
+**Migration Strategy**:
+- All existing MIDI-based code marked as deprecated but preserved for reference
+- New implementation will follow test-driven development
+- Parser → IR → Scheduler → Audio Engine pipeline
+
+### New DSL Features
+
+**Core Capabilities**:
+- Audio file loading and slicing (`.chop()`)
+- Time-stretching with pitch preservation (`.fixpitch()`)
+- Global and sequence-level transport commands
+- Editor integration with Cmd+Enter execution
+- Composite meters and polymeter support
+
+**Implementation Phases**:
+- A1: New Parser for Audio DSL
+- A2: Audio Engine Integration
+- A3: Transport System
+- A4: VS Code Extension Update
+- A5: DAW Plugin Development
+
+### Design Decision: Autocomplete over Abbreviations
+
+**Decision**: DSLに短縮形（`gl.tem()`など）を作らず、VS Code拡張の補完機能で対応
+**Rationale**:
+- コードの可読性を最優先
+- 入力速度は補完機能で確保
+- 自己文書化されたコードの維持
+- コラボレーションとメンテナンスの容易さ
+
+これにより、`global.tempo(140)`のような完全な記述を維持しながら、効率的な入力を実現。
+
+---
+
+## Phase A1: New Audio-Based Parser Implementation (December 25, 2024)
+
+### A1.1 Tokenizer Implementation
+
+**Date**: December 25, 2024
+**Work Content**:
+- Created new audio-based parser (`packages/engine/src/parser/audio-parser.ts`)
+- Implemented tokenizer for new DSL syntax
+- Added support for new keywords: `var`, `init`, `by`, `GLOBAL`
+- Added dot operator for method calls
+
+**Technical Details**:
+```typescript
+export type AudioTokenType =
+  | 'VAR'          // var keyword
+  | 'INIT'         // init keyword
+  | 'BY'           // by keyword (for meter)
+  | 'GLOBAL'       // GLOBAL constant
+  | 'IDENTIFIER'   // variable names, method names
+  | 'NUMBER'       // numeric values
+  | 'STRING'       // string literals
+  | 'DOT'          // . (method call)
+  // ... other tokens
+```
+
+### A1.2 Basic Parser Structure
+
+**Work Content**:
+- Implemented AudioParser class with basic parsing methods
+- Added support for variable declarations (`var global = init GLOBAL`)
+- Added method call parsing (`global.tempo(140)`)
+- Implemented meter syntax parsing (`4 by 4`)
+
+**Test Results**:
+- ✅ 21 tests passing
+- ✅ Tokenizer correctly identifies all token types
+- ✅ Parser handles global parameters (tempo, tick, beat, key)
+- ✅ Parser handles transport commands (run, loop, mute)
+- ✅ Parser handles sequence configuration
+
+**Challenges and Solutions**:
+- Challenge: Parsing "n by m" meter syntax within method arguments
+- Solution: Modified parseArgument() to check for BY token after numbers
+
+### A1.3 Sample File Creation
+
+**Work Content**:
+- Created `examples/audio-demo.osc` demonstrating new DSL syntax
+- Shows initialization, configuration, play patterns, and transport commands
+
+### A1.4 Complete Parser Implementation
+
+**Date**: December 25, 2024
+**Work Content**:
+- ✅ Initialization parsing (var global = init GLOBAL, var seq = init GLOBAL.seq)
+- ✅ Method chaining support (.audio().chop())
+- ✅ Transport commands with force modifier (.run.force())
+- ✅ Complex play structures with nesting and modifiers
+- ✅ Comprehensive test suite (30 tests passing)
+
+**Play Structure Features**:
+- Simple arguments: `seq1.play(1, 2, 3, 4)`
+- Nested structures: `seq1.play((1)(2)(3))`
+- Modifiers: `seq1.play(1.chop(4), 3.time(2))`
+- Method chains: `seq1.play(5).fixpitch(0)`
+
+**Technical Achievements**:
+- Clean separation between tokenizer and parser
+- Support for all DSL syntax from INSTRUCTION_ORBITSCORE_DSL.md
+- Robust error handling with line/column information
+- Flexible argument parsing for various contexts
+
+**Test Coverage**:
+- 30 tests covering all major features
+- Tokenizer tests for all token types
+- Parser tests for all statement types
+- Integration tests for complete examples
+
+---
+
+## Phase A2: Audio Engine Implementation (December 25, 2024)
+
+### A2.1 Audio Engine Core
+
+**Date**: December 25, 2024
+**Work Content**:
+- Created `packages/engine/src/audio/audio-engine.ts`
+- Implemented AudioEngine class with Web Audio API
+- Added AudioFile class for file loading and slicing
+- WAV file support with 48kHz/24bit conversion
+
+**Technical Stack**:
+- `node-web-audio-api` for audio context
+- `wavefile` for WAV file parsing
+- Native Node.js fs for file I/O
+
+### A2.2 Audio Features
+
+**Implemented**:
+- ✅ WAV file loading and parsing
+- ✅ Audio slicing (chop functionality)
+- ✅ Basic tempo control via playback rate
+- ✅ Slice playback with timing control
+- ✅ Sequence playback with looping option
+- ✅ Master volume control
+
+**Placeholders for future**:
+- Time-stretching without pitch change (requires granular synthesis)
+- Pitch shifting with formant preservation (requires phase vocoder)
+- MP3/MP4/AIFF format support
+
+### A2.3 Interpreter Implementation
+
+**Work Content**:
+- Created `packages/engine/src/interpreter/interpreter.ts`
+- Connects parser IR to audio engine
+- Manages global and sequence states
+- Executes DSL commands
+
+**Features**:
+- Global state management (tempo, beat, key)
+- Sequence state management (audio files, slices, mute state)
+- Play command execution with slice selection
+- Transport control (run, loop, stop, mute/unmute)
+- Nested play structure parsing
+
+### A2.4 Test Results
+
+**Audio Engine Tests**: 15 tests passing
+- Audio file loading
+- Slice generation and retrieval
+- Playback with tempo adjustment
+- Transport controls
+
+**Interpreter Tests**: 14 tests passing
+- Initialization processing
+- Global parameter setting
+- Sequence configuration
+- Play functionality (simple, nested, modified)
+- Transport controls
+- Complete program execution
+
+**Total Phase A2 Tests**: 29 tests passing
+
+---
+
+## Phase A3: Transport System Implementation (December 25, 2024)
+
+### A3.1 Transport Core
+
+**Date**: December 25, 2024
+**Work Content**:
+- Created `packages/engine/src/transport/transport.ts`
+- Implemented real-time scheduling system
+- Bar boundary quantization
+- Look-ahead scheduling (100ms look-ahead, 25ms interval)
+
+**Features Implemented**:
+- ✅ Global transport controls (start, stop, loop)
+- ✅ Per-sequence controls (start, stop, mute/unmute)
+- ✅ Bar boundary quantization for scheduled events
+- ✅ Position tracking (bar, beat, tick)
+- ✅ Polymeter support (independent meters per sequence)
+- ✅ Polytempo support (independent tempos per sequence)
+- ✅ Event queue system for scheduled actions
+
+### A3.2 Transport Architecture
+
+**Scheduling System**:
+```typescript
+- Look-ahead time: 100ms
+- Schedule interval: 25ms
+- Tick resolution: 480 ticks per quarter note
+- Position tracking: bar/beat/tick + absolute ticks
+```
+
+**Event Types**:
+- start: Begin playback (immediate or at next bar)
+- stop: Stop playback (immediate or at next bar)
+- loop: Enable looping (immediate or at next bar)
+- jump: Jump to specific bar
+
+### A3.3 Integration with Interpreter
+
+**Work Content**:
+- Updated interpreter to use transport system
+- Connected sequence initialization to transport
+- Synchronized global parameters (tempo, meter)
+- Integrated transport commands with DSL execution
+
+### A3.4 Test Results
+
+**Transport Tests**: 24 tests passing
+- Basic functionality (tempo, meter, position)
+- Sequence management
+- Transport controls
+- Looping behavior
+- Position tracking
+- Polymeter/polytempo support
+
+**Integration Tests**: 14 tests passing (maintained)
+- All interpreter tests continue to work with transport
+
+**Total Phase A3 Tests**: 38 tests passing
+
+---
+
 ## 重要な未実装項目の要約
 
 ### 🔴 **Priority 1 (最重要)**
