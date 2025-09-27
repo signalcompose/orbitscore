@@ -26,13 +26,27 @@
 - Always be respectful and supportive when making corrections
 - **Purpose: To enhance the user's English writing ability through continuous feedback**
 
-### 3. Documentation First
+### 3. Specification Adherence (仕様遵守)
+
+**MUST verify with specification before implementation:**
+
+- **Primary specification**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`
+- **Required verification for undefined items**:
+  - Default values for parameters
+  - Error handling methods
+  - Value ranges and constraints
+  - Method chaining possibilities
+- **PROHIBITED**: Adding features not in specification without confirmation
+  - Example violations: `config()` method, `offset()` method
+- **When specification is unclear**: MUST ask user for clarification
+
+### 4. Documentation First
 
 - Update relevant docs (README, IMPLEMENTATION_PLAN, etc.) with each change
 - Documentation is as important as code
 - Keep specifications in sync with implementation
 
-### 4. Test-Driven Development
+### 5. Test-Driven Development
 
 - Write tests for new features
 - Ensure all tests pass before committing
