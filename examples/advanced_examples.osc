@@ -1,0 +1,340 @@
+# OrbitScore 上級サンプル集
+# ポリメーター、微分音、ランダム、連符などの高度な機能
+
+# ====================
+# 例1: ポリメーター（5対3対4）
+# ====================
+key A
+tempo 120
+meter 4/4 shared
+
+sequence five_four {
+  bus "IAC Driver Bus 1"
+  channel 1
+  meter 5/4 independent  # 5/4拍子で独立
+  octave 4
+  
+  # 5拍のパターン
+  1@U1  3@U1  5@U1  8@U1  10@U1
+}
+
+sequence three_four {
+  bus "IAC Driver Bus 1"
+  channel 2
+  meter 3/4 independent  # 3/4拍子で独立
+  octave 3
+  
+  # 3拍のパターン
+  1@U1  5@U1  8@U1
+}
+
+sequence four_four {
+  bus "IAC Driver Bus 1"
+  channel 3
+  meter 4/4 shared  # 標準4/4
+  octave 2
+  
+  # 4拍のパターン
+  1@U1  0@U1  5@U1  0@U1
+}
+
+# ====================
+# 例2: 微分音と東洋音階
+# ====================
+key C
+tempo 60
+meter 4/4 shared
+
+sequence microtonal_scale {
+  bus "IAC Driver Bus 1"
+  channel 1
+  octave 4
+  bendRange 4  # ±4半音のベンド範囲
+  
+  # 中東風の音階（クォータートーン含む）
+  1@U1        # C
+  2.5@U1      # D♭ + 1/4音
+  4.5@U1      # E♭ + 1/4音
+  6@U1        # F
+  8@U1        # G
+  9.5@U1      # A♭ + 1/4音
+  11.5@U1     # B♭ + 1/4音
+  1^+1@U2     # C（オクターブ上）
+}
+
+# ====================
+# 例3: デチューンによるコーラス効果
+# ====================
+key D
+tempo 90
+meter 4/4 shared
+
+sequence voice1 {
+  bus "IAC Driver Bus 1"
+  channel 1
+  octave 4
+  
+  # 基準音
+  1@U2  5@U2  8@U2  12@U2
+}
+
+sequence voice2 {
+  bus "IAC Driver Bus 1"
+  channel 2
+  octave 4
+  
+  # わずかに高く（+5セント）
+  1~+0.05@U2  5~+0.05@U2  8~+0.05@U2  12~+0.05@U2
+}
+
+sequence voice3 {
+  bus "IAC Driver Bus 1"
+  channel 3
+  octave 4
+  
+  # わずかに低く（-5セント）
+  1~-0.05@U2  5~-0.05@U2  8~-0.05@U2  12~-0.05@U2
+}
+
+# ====================
+# 例4: ランダムメロディー生成
+# ====================
+key E
+tempo 150
+meter 4/4 shared
+randseed 42  # 再現可能なランダム
+
+sequence random_melody {
+  bus "IAC Driver Bus 1"
+  channel 1
+  octave 4
+  
+  # ランダム要素を含むフレーズ（毎回同じ結果）
+  1@U1
+  3.0r@U1     # 3 + [0, 0.999]
+  5@U1
+  7.0r@U1     # 7 + [0, 0.999]
+  8@U1
+  10.0r@U1    # 10 + [0, 0.999]
+  12@U1
+  1^+1@U1
+}
+
+sequence random_rhythm {
+  bus "IAC Driver Bus 1"
+  channel 2
+  octave 3
+  randseed 123
+  
+  # ランダムなリズムパターン
+  1@U0.5r  0@U0.5  5@U0.5r  0@U0.5
+  8@U1r    0@U0.5r  3@U0.5
+}
+
+# ====================
+# 例5: 連符の世界
+# ====================
+key Bb
+tempo 100
+meter 4/4 shared
+
+sequence tuplet_study {
+  bus "IAC Driver Bus 1"
+  channel 1
+  octave 4
+  
+  # 通常のリズム
+  1@U1  3@U1  5@U1  8@U1
+  
+  # 3連符（2拍に3音）
+  1@[3:2]*U1  3@[3:2]*U1  5@[3:2]*U1
+  0@U1  # 休符
+  
+  # 5連符（1拍に5音）
+  1@[5:4]*U1  2@[5:4]*U1  3@[5:4]*U1  4@[5:4]*U1  5@[5:4]*U1
+  0@U3  # 休符
+  
+  # 7連符（2拍に7音）
+  8@[7:8]*U1  7@[7:8]*U1  6@[7:8]*U1  5@[7:8]*U1  
+  4@[7:8]*U1  3@[7:8]*U1  2@[7:8]*U1
+  
+  # 終止
+  1@U4
+}
+
+# ====================
+# 例6: octmulによる音程システム実験
+# ====================
+key C
+tempo 120
+meter 4/4 shared
+
+# 通常の12音平均律
+sequence equal_temperament {
+  bus "IAC Driver Bus 1"
+  channel 1
+  octave 4
+  octmul 1.0  # 標準
+  
+  1@U0.5  2@U0.5  3@U0.5  4@U0.5  5@U0.5  6@U0.5
+}
+
+# 6音音階（全音音階風）
+sequence whole_tone {
+  bus "IAC Driver Bus 1"
+  channel 2
+  octave 4
+  octmul 2.0  # 度数1つで全音
+  
+  1@U0.5  2@U0.5  3@U0.5  4@U0.5  5@U0.5  6@U0.5
+}
+
+# 24音音階（クォータートーン）
+sequence quarter_tone {
+  bus "IAC Driver Bus 1"
+  channel 3
+  octave 4
+  octmul 0.5  # 度数1つで1/4音
+  
+  1@U0.25  2@U0.25  3@U0.25  4@U0.25  
+  5@U0.25  6@U0.25  7@U0.25  8@U0.25
+}
+
+# ====================
+# 例7: 複雑な和音進行
+# ====================
+key Db
+tempo 72
+meter 4/4 shared
+
+sequence jazz_chords {
+  bus "IAC Driver Bus 1"
+  channel 1
+  octave 4
+  
+  # DbM7(9) - 拡張和音
+  (1, 5, 8, 12, 3^+1)@U2
+  
+  # Gb13 - テンション
+  (6, 10, 1^+1, 5^+1, 3^+1)@U2
+  
+  # Fm7(b5) - ハーフディミニッシュ
+  (5, 8, 11, 3^+1)@U2
+  
+  # Bb7(alt) - オルタード
+  (10, 2^+1, 6^+1, 8^+1)@U2
+  
+  # DbM7 - 解決
+  (1, 5, 8, 12)@U4
+}
+
+# ====================
+# 例8: ミニマル・ミュージック
+# ====================
+key C
+tempo 144
+meter 4/4 shared
+
+sequence pattern_a {
+  bus "IAC Driver Bus 1"
+  channel 1
+  meter 7/8 independent  # 7/8拍子
+  octave 5
+  
+  # 7拍のパターン
+  1@U0.5  3@U0.5  5@U0.5  8@U0.5  
+  5@U0.5  3@U0.5  1@U0.5
+}
+
+sequence pattern_b {
+  bus "IAC Driver Bus 1"
+  channel 2
+  meter 5/8 independent  # 5/8拍子
+  octave 4
+  
+  # 5拍のパターン
+  8@U0.5  10@U0.5  12@U0.5  10@U0.5  8@U0.5
+}
+
+sequence pattern_c {
+  bus "IAC Driver Bus 1"
+  channel 3
+  meter 3/8 independent  # 3/8拍子
+  octave 3
+  
+  # 3拍のパターン
+  1@U0.5  5@U0.5  1@U0.5
+}
+
+# ====================
+# 例9: グリッサンド効果
+# ====================
+key G
+tempo 80
+meter 4/4 shared
+
+sequence glissando {
+  bus "IAC Driver Bus 1"
+  channel 1
+  octave 4
+  bendRange 12  # ±1オクターブのベンド
+  
+  # 滑らかな音程変化をシミュレート
+  1@U0.1
+  1.2@U0.1  1.4@U0.1  1.6@U0.1  1.8@U0.1
+  2@U0.1    2.2@U0.1  2.4@U0.1  2.6@U0.1  2.8@U0.1
+  3@U0.1    3.3@U0.1  3.6@U0.1  3.9@U0.1
+  4.2@U0.1  4.5@U0.1  4.8@U0.1
+  5@U2  # 到達音
+}
+
+# ====================
+# 例10: フーガ風対位法
+# ====================
+key F
+tempo 92
+meter 4/4 shared
+
+# 主題
+sequence subject {
+  bus "IAC Driver Bus 1"
+  channel 1
+  octave 4
+  
+  6@U1  8@U0.5  10@U0.5  
+  11@U1  10@U0.5  8@U0.5
+  6@U2  0@U2
+}
+
+# 応答（5度上）
+sequence answer {
+  bus "IAC Driver Bus 1"
+  channel 2
+  octave 4
+  
+  0@U4  # 4拍待つ
+  1^+1@U1  3^+1@U0.5  5^+1@U0.5
+  6^+1@U1  5^+1@U0.5  3^+1@U0.5
+  1^+1@U2
+}
+
+# 対旋律
+sequence counter {
+  bus "IAC Driver Bus 1"
+  channel 3
+  octave 3
+  
+  0@U8  # 8拍待つ
+  6@U2  3@U1  1@U1
+  6@U0.5  8@U0.5  10@U0.5  11@U0.5
+  1^+1@U2
+}
+
+# ペダル音
+sequence pedal {
+  bus "IAC Driver Bus 1"
+  channel 4
+  octave 2
+  
+  6@U16  # F音を保持
+}
