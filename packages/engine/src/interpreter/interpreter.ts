@@ -328,6 +328,10 @@ export class Interpreter {
     // Store the play pattern for later use
     sequence.playPattern = args
 
+    // Parse arguments to get slice numbers for logging
+    const sliceNumbers = this.parsePlayArguments(args)
+    console.log(`Playing ${sequence.name}: slices [${sliceNumbers.join(', ')}]`)
+
     // Calculate bar duration
     const tempo = sequence.tempo || this.globalState.tempo
     const meter = sequence.beat || this.globalState.beat
