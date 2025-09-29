@@ -561,8 +561,12 @@ export class AudioParser {
         if (lookahead2.type === 'BY') {
           // This is a meter like (3 by 4)
           return this.parseCompositeMeter()
-        } else if (lookahead2.type === 'RPAREN' || lookahead2.type === 'DOT') {
-          // This is a play structure like (1) or (1).chop(2)
+        } else if (
+          lookahead2.type === 'RPAREN' ||
+          lookahead2.type === 'DOT' ||
+          lookahead2.type === 'COMMA'
+        ) {
+          // This is a play structure like (1), (1).chop(2), or (1, 2)
           return this.parseNestedPlay()
         }
       } else if (lookahead.type === 'LPAREN') {
@@ -570,8 +574,8 @@ export class AudioParser {
         return this.parseNestedPlay()
       }
 
-      // Default to composite meter
-      return this.parseCompositeMeter()
+      // Default to nested play (not composite meter)
+      return this.parseNestedPlay()
     }
 
     throw new Error(`Unexpected token in argument: ${token.type}`)
