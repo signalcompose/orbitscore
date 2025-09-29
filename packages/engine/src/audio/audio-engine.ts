@@ -92,7 +92,12 @@ export class AudioFile {
     // De-interleave and copy samples to buffer
     if (numberOfChannels === 1) {
       // Mono: direct copy
-      this.buffer.copyToChannel(samples as any, 0)
+      // Ensure samples is a proper Float32Array
+      const channelData = new Float32Array(samples.length)
+      for (let i = 0; i < samples.length; i++) {
+        channelData[i] = samples[i] || 0
+      }
+      this.buffer.copyToChannel(channelData, 0)
     } else {
       // Stereo or multi-channel: de-interleave
       for (let channel = 0; channel < numberOfChannels; channel++) {
@@ -100,7 +105,7 @@ export class AudioFile {
         for (let i = 0; i < samplesPerChannel; i++) {
           channelData[i] = samples[i * numberOfChannels + channel] || 0
         }
-        this.buffer.copyToChannel(channelData as any, channel)
+        this.buffer.copyToChannel(channelData, channel)
       }
     }
   }
