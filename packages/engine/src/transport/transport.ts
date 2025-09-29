@@ -98,6 +98,10 @@ export class Transport {
     this.globalTempo = Math.max(20, Math.min(999, bpm))
   }
 
+  setGlobalTempo(bpm: number): void {
+    this.setTempo(bpm)
+  }
+
   /**
    * Set global meter
    */
@@ -105,11 +109,38 @@ export class Transport {
     this.globalMeter = meter
   }
 
+  setGlobalMeter(meter: Meter): void {
+    this.setMeter(meter)
+  }
+
+  /**
+   * Set tick resolution
+   */
+  setTickResolution(ticks: number): void {
+    this.ticksPerQuarter = ticks
+  }
+
   /**
    * Add a sequence to the transport
    */
   addSequence(sequence: TransportSequence): void {
     this.sequences.set(sequence.id, sequence)
+  }
+
+  /**
+   * Update a sequence in the transport
+   */
+  updateSequence(sequence: TransportSequence): void {
+    const existing = this.sequences.get(sequence.id)
+    if (existing) {
+      // Merge with existing state
+      this.sequences.set(sequence.id, {
+        ...existing,
+        ...sequence,
+      })
+    } else {
+      this.addSequence(sequence)
+    }
   }
 
   /**
