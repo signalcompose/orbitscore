@@ -379,9 +379,10 @@ export class AudioParser {
     this.expect('EQUALS')
     this.expect('INIT')
 
+    // Check for GLOBAL (global initialization)
     if (this.current().type === 'GLOBAL' || this.current().value === 'GLOBAL') {
       this.advance()
-      // Check if it's GLOBAL.seq
+      // Check if it's GLOBAL.seq (old syntax, still support for backward compatibility)
       if (this.current().type === 'DOT') {
         this.advance()
         if (this.current().value === 'seq') {
@@ -392,7 +393,21 @@ export class AudioParser {
       return { type: 'global_init', variableName: varName }
     }
 
-    throw new Error('Expected GLOBAL after init')
+    // Check for variable.seq (new syntax: init global.seq)
+    if (this.current().type === 'IDENTIFIER') {
+      const globalVar = this.advance().value
+      if (this.current().type === 'DOT') {
+        this.advance()
+        if (this.current().value === 'seq') {
+          this.advance()
+          return { type: 'seq_init', variableName: varName, globalVariable: globalVar }
+        }
+      }
+      // If not .seq, it might be another type of initialization
+      throw new Error(`Unexpected initialization: init ${globalVar}`)
+    }
+
+    throw new Error('Expected GLOBAL or variable name after init')
   }
 
   private parseMethodCall(): any {

@@ -70,19 +70,20 @@ export class AudioFile {
   private async loadWav(fileBuffer: Buffer): Promise<void> {
     const wav = new WaveFile(fileBuffer)
 
-    // Get format info before conversion
-    const originalChannels = wav.fmt.numChannels
+    // Get format info before conversion (cast to any for now, wavefile typings are incomplete)
+    const fmt = wav.fmt as any
+    const originalChannels = fmt.numChannels
 
     // Convert to standard format if needed
     wav.toBitDepth('32f') // Convert to 32-bit float
     wav.toSampleRate(48000) // Convert to 48kHz
 
     // Get audio data - returns interleaved samples for multi-channel
-    const samples = wav.getSamples(false, Float32Array) as Float32Array
+    const samples = wav.getSamples(false) as unknown as Float32Array
 
     // Get updated format info after conversion
-    const sampleRate = wav.fmt.sampleRate || 48000
-    const numberOfChannels = wav.fmt.numChannels || originalChannels || 1
+    const sampleRate = (fmt.sampleRate || 48000) as number
+    const numberOfChannels = (fmt.numChannels || originalChannels || 1) as number
     const samplesPerChannel = Math.floor(samples.length / numberOfChannels)
 
     // Create AudioBuffer
@@ -91,15 +92,15 @@ export class AudioFile {
     // De-interleave and copy samples to buffer
     if (numberOfChannels === 1) {
       // Mono: direct copy
-      this.buffer.copyToChannel(samples, 0)
+      this.buffer.copyToChannel(samples as any, 0)
     } else {
       // Stereo or multi-channel: de-interleave
       for (let channel = 0; channel < numberOfChannels; channel++) {
         const channelData = new Float32Array(samplesPerChannel)
         for (let i = 0; i < samplesPerChannel; i++) {
-          channelData[i] = samples[i * numberOfChannels + channel]
+          channelData[i] = samples[i * numberOfChannels + channel] || 0
         }
-        this.buffer.copyToChannel(channelData, channel)
+        this.buffer.copyToChannel(channelData as any, channel)
       }
     }
   }

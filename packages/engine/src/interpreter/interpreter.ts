@@ -226,8 +226,8 @@ export class Interpreter {
               const transportSeq: TransportSequence = {
                 id: target,
                 slices: sequence.slices,
-                tempo: sequence.tempo,
-                meter: sequence.beat,
+                tempo: sequence.tempo || this.globalState.tempo || 120,
+                meter: sequence.beat || this.globalState.beat || { numerator: 4, denominator: 4 },
                 loop: false,
                 muted: sequence.isMuted,
                 state: sequence.isPlaying ? 'playing' : 'stopped',
@@ -246,8 +246,8 @@ export class Interpreter {
           const transportSeq: TransportSequence = {
             id: target,
             slices: sequence.slices,
-            tempo: sequence.tempo,
-            meter: sequence.beat,
+            tempo: sequence.tempo || this.globalState.tempo || 120,
+            meter: sequence.beat || this.globalState.beat || { numerator: 4, denominator: 4 },
             loop: false,
             muted: sequence.isMuted,
             state: sequence.isPlaying ? 'playing' : 'stopped',
@@ -362,19 +362,23 @@ export class Interpreter {
       for (const event of timedEvents) {
         if (event.sliceNumber > 0 && event.sliceNumber <= sequence.slices.length) {
           const slice = sequence.slices[event.sliceNumber - 1] // slices are 0-indexed
+          if (slice) {
+            // Register the timed playback with transport
+            // This will be handled by the transport system's scheduling
+            // Note: Transport.scheduleEvent doesn't exist yet, need to implement
+            // For now, we'll use the audio engine directly with startTime
+            const audioContextTime = this.audioEngine.getAudioContext().currentTime
+            const startTime = audioContextTime + event.startTime / 1000 // Convert ms to seconds
 
-          // Register the timed playback with transport
-          // This will be handled by the transport system's scheduling
-          // Note: Transport.scheduleEvent doesn't exist yet, need to implement
-          // For now, we'll use the audio engine directly with startTime
-          const audioContextTime = this.audioEngine.getAudioContext().currentTime
-          const startTime = audioContextTime + event.startTime / 1000 // Convert ms to seconds
-
-          this.audioEngine.playSlice(slice, {
-            tempo: (tempo / 120) * timeStretch,
-            pitch: fixpitch,
-            startTime: startTime,
-          })
+            const playOptions: { tempo?: number; pitch?: number; startTime?: number } = {
+              tempo: (tempo / 120) * timeStretch,
+              startTime: startTime,
+            }
+            if (fixpitch !== undefined) {
+              playOptions.pitch = fixpitch
+            }
+            this.audioEngine.playSlice(slice, playOptions)
+          }
         }
         // If sliceNumber is 0, it's silence - no playback needed
       }
@@ -384,7 +388,10 @@ export class Interpreter {
       const slicesToPlay: AudioSlice[] = []
       for (const event of timedEvents) {
         if (event.sliceNumber > 0 && event.sliceNumber <= sequence.slices.length) {
-          slicesToPlay.push(sequence.slices[event.sliceNumber - 1])
+          const slice = sequence.slices[event.sliceNumber - 1]
+          if (slice) {
+            slicesToPlay.push(slice)
+          }
         }
       }
 
