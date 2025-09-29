@@ -54,23 +54,35 @@ export class Sequence {
   }
 
   audio(filepath: string): this {
-    // Store the filepath and load it lazily or use a promise internally
-    this.loadAudio(filepath)
+    // Store the filepath for loading
+    this._audioFilePath = filepath
+    // Note: Actual loading will happen when needed or through explicit load call
+    console.log(`${this._name}: audio file set to ${filepath}`)
     return this
   }
 
-  private async loadAudio(filepath: string): Promise<void> {
+  private _audioFilePath?: string
+
+  async loadAudio(): Promise<void> {
+    if (!this._audioFilePath) return
+
     try {
-      this._audioFile = await this.audioEngine.loadAudioFile(filepath)
+      this._audioFile = await this.audioEngine.loadAudioFile(this._audioFilePath)
       // Default to chop(1) if not specified
       this._slices = this._audioFile.chop(1)
-      console.log(`${this._name}: loaded audio ${filepath}`)
+      console.log(`${this._name}: loaded audio ${this._audioFilePath}`)
     } catch (error) {
-      console.error(`Failed to load audio ${filepath}:`, error)
+      console.error(`Failed to load audio ${this._audioFilePath}:`, error)
     }
   }
 
   chop(divisions: number): this {
+    if (!this._audioFile && this._audioFilePath) {
+      // If audio file is set but not loaded, just store the chop value
+      this._chopDivisions = divisions
+      console.log(`${this._name}: will chop into ${divisions} slices when loaded`)
+      return this
+    }
     if (!this._audioFile) {
       console.error(`${this._name}: no audio file loaded`)
       return this
@@ -79,6 +91,8 @@ export class Sequence {
     console.log(`${this._name}: chopped into ${divisions} slices`)
     return this
   }
+
+  private _chopDivisions?: number
 
   play(...elements: PlayElement[]): this {
     this._playPattern = elements
