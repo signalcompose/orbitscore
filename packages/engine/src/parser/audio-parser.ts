@@ -217,6 +217,7 @@ export type GlobalInit = {
 export type SequenceInit = {
   type: 'seq_init'
   variableName: string
+  globalVariable?: string // For new syntax: init global.seq
 }
 
 export type Statement = GlobalStatement | SequenceStatement | TransportStatement
