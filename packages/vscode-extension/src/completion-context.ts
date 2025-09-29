@@ -68,7 +68,7 @@ export function analyzeMethodChain(lineText: string, position: number): MethodCh
 
   // Find the last method before the cursor
   const methodMatch = chainText.match(/\.(\w+)\([^)]*\)(?!.*\.\w+\([^)]*\))/)
-  if (methodMatch) {
+  if (methodMatch && methodMatch[1]) {
     context.lastMethod = methodMatch[1]
   }
 

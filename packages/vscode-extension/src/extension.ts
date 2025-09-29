@@ -4,8 +4,8 @@ import * as fs from 'fs'
 import * as os from 'os'
 
 import * as vscode from 'vscode'
-// Context-aware completion will be integrated in next iteration
-// import { analyzeMethodChain, getContextualCompletions } from './completion-context'
+
+import { analyzeMethodChain, getContextualCompletions } from './completion-context'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -203,97 +203,33 @@ function isTransportCommand(text: string): boolean {
 }
 
 function registerCompletionProviders(context: vscode.ExtensionContext) {
-  // Global methods
-  const globalProvider = vscode.languages.registerCompletionItemProvider(
+  // Context-aware completion provider
+  const completionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     {
       provideCompletionItems(document, position) {
-        const linePrefix = document.lineAt(position).text.substr(0, position.character)
-        if (!linePrefix.endsWith('global.')) {
+        const lineText = document.lineAt(position).text
+        const linePrefix = lineText.substr(0, position.character)
+
+        // Check if we're typing after a dot
+        if (!linePrefix.endsWith('.')) {
           return undefined
         }
 
-        const completions = [
-          createCompletion('tempo', 'Set global tempo', 'tempo(${1:140})'),
-          createCompletion('tick', 'Set tick resolution', 'tick(${1:480})'),
-          createCompletion('beat', 'Set time signature', 'beat(${1:4} by ${2:4})'),
-          createCompletion('key', 'Set global key', 'key(${1:C})'),
-          createCompletion('run', 'Start transport', 'run()'),
-          createCompletion('loop', 'Loop transport', 'loop()'),
-          createCompletion('stop', 'Stop transport', 'stop()'),
-        ]
+        // Analyze the method chain context
+        const chainContext = analyzeMethodChain(lineText, position.character)
 
-        return completions
+        // Determine if this is a global or sequence context
+        const isGlobal = linePrefix.includes('global.')
+
+        // Get contextual completions
+        return getContextualCompletions(chainContext, isGlobal)
       },
     },
-    '.',
+    '.', // Trigger on dot
   )
 
-  // Sequence methods
-  const seqProvider = vscode.languages.registerCompletionItemProvider(
-    'orbitscore',
-    {
-      provideCompletionItems(document, position) {
-        const linePrefix = document.lineAt(position).text.substr(0, position.character)
-        if (!linePrefix.match(/seq\w*\./)) {
-          return undefined
-        }
-
-        const completions = [
-          createCompletion('tempo', 'Set sequence tempo', 'tempo(${1:120})'),
-          createCompletion('beat', 'Set sequence meter', 'beat(${1:4} by ${2:4})'),
-          createCompletion('audio', 'Load audio file', 'audio("${1:../audio/file.wav}")'),
-          createCompletion('play', 'Play slices', 'play(${1:1, 2, 3, 4})'),
-          createCompletion('mute', 'Mute sequence', 'mute()'),
-          createCompletion('unmute', 'Unmute sequence', 'unmute()'),
-        ]
-
-        return completions
-      },
-    },
-    '.',
-  )
-
-  // Chained methods
-  const chainProvider = vscode.languages.registerCompletionItemProvider(
-    'orbitscore',
-    {
-      provideCompletionItems(document, position) {
-        const linePrefix = document.lineAt(position).text.substr(0, position.character)
-
-        // Check if we're after audio()
-        if (linePrefix.match(/\.audio\([^)]+\)\./)) {
-          return [createCompletion('chop', 'Slice audio into parts', 'chop(${1:16})')]
-        }
-
-        // Check if we're after a number in play()
-        if (linePrefix.match(/\d+\./)) {
-          return [
-            createCompletion('chop', 'Subdivide slice', 'chop(${1:4})'),
-            createCompletion('time', 'Stretch time', 'time(${1:2})'),
-            createCompletion('fixpitch', 'Fix pitch', 'fixpitch(${1:0})'),
-          ]
-        }
-
-        return undefined
-      },
-    },
-    '.',
-  )
-
-  context.subscriptions.push(globalProvider, seqProvider, chainProvider)
-}
-
-function createCompletion(
-  label: string,
-  detail: string,
-  insertText: string,
-): vscode.CompletionItem {
-  const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Method)
-  item.detail = detail
-  item.insertText = new vscode.SnippetString(insertText)
-  item.documentation = new vscode.MarkdownString(`**${label}**\n\n${detail}`)
-  return item
+  context.subscriptions.push(completionProvider)
 }
 
 function registerHoverProvider(context: vscode.ExtensionContext) {

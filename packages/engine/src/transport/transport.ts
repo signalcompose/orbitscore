@@ -421,7 +421,7 @@ export class Transport {
       const slice = seq.slices[sliceIndex]
 
       // Only play at the start of the slice's time window
-      if (this.shouldPlaySlice(seq, sliceIndex)) {
+      if (slice && this.shouldPlaySlice(seq, sliceIndex)) {
         this.audioEngine.playSlice(slice, {
           tempo: seqTempo / this.globalTempo,
           startTime: when,
