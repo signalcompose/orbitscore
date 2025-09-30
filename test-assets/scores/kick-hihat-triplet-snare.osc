@@ -1,0 +1,26 @@
+// Kick, Hi-hat and Triplet Snare pattern
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// Kick: 4/4 basic pattern
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("../../test-assets/audio/kick.wav")
+kick.play(1, 0, 1, 0)  // Kick on 1 and 3
+
+// Hi-hat: 8th notes
+var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio("../../test-assets/audio/hihat_closed.wav")
+hihat.play(1, 1, 1, 1, 1, 1, 1, 1)  // 8 beats
+
+// Snare: Triplets (3 notes per bar)
+var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio("../../test-assets/audio/snare.wav")
+snare.play(1, 1, 1)  // 三連符: 1小節を3分割
+
+// Start
+global.run()

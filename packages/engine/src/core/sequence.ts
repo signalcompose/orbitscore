@@ -6,6 +6,7 @@
 import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
 import { PlayElement } from '../parser/audio-parser'
 import { TimingCalculator, TimedEvent } from '../timing/timing-calculator'
+import { PrecisionScheduler } from '../audio/precision-scheduler'
 
 import { Global, Meter } from './global'
 
@@ -24,6 +25,9 @@ export class Sequence {
   private _timedEvents?: TimedEvent[]
   private _isMuted: boolean = false
   private _isPlaying: boolean = false
+  private _audioFilePath?: string
+  private _chopDivisions?: number
+  private playbackInterval: NodeJS.Timeout | undefined
 
   constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
@@ -61,8 +65,6 @@ export class Sequence {
     return this
   }
 
-  private _audioFilePath?: string
-
   async loadAudio(): Promise<void> {
     if (!this._audioFilePath) return
 
@@ -91,8 +93,6 @@ export class Sequence {
     console.log(`${this._name}: chopped into ${divisions} slices`)
     return this
   }
-
-  private _chopDivisions?: number
 
   play(...elements: PlayElement[]): this {
     this._playPattern = elements
@@ -123,28 +123,53 @@ export class Sequence {
     return this
   }
 
+  // Schedule events to a global scheduler
+  scheduleEvents(scheduler: PrecisionScheduler): void {
+    if (!this._audioFilePath || !this._timedEvents || this._timedEvents.length === 0) {
+      return
+    }
+
+    const globalState = this.global.getState()
+    const tempo = this._tempo || globalState.tempo || 120
+    const beatDuration = 60000 / tempo // ms per beat
+    const barDuration = beatDuration * 4 // assuming 4/4 time
+    const loopCount = this._length || 1 // Use length as loop count
+
+    console.log(`${this._name}: scheduling ${this._timedEvents.length} events x ${loopCount} loops`)
+
+    // Schedule events for each loop
+    for (let loop = 0; loop < loopCount; loop++) {
+      const loopOffset = loop * barDuration
+
+      for (const event of this._timedEvents) {
+        if (event.sliceNumber > 0) {
+          // 0 is silence
+          const startTimeMs = event.startTime + loopOffset
+
+          // Schedule the audio file to play at the correct time
+          scheduler.scheduleEvent(
+            this._audioFilePath,
+            startTimeMs,
+            this._isMuted ? 0 : 80,
+            this._name,
+          )
+
+          if (loop === 0) {
+            console.log(`  - event at ${event.startTime}ms: slice ${event.sliceNumber}`)
+          }
+        }
+      }
+    }
+
+    this._isPlaying = true
+    console.log(`${this._name}: scheduled for playback (${loopCount} loops)`)
+  }
+
   // Transport control
   run(): this {
     // Mark as playing even if audio isn't loaded yet (for testing)
     if (!this._isPlaying) {
       this._isPlaying = true
-
-      // Schedule audio playback if we have timed events and slices
-      if (this._timedEvents && this._slices.length > 0) {
-        const audioContext = this.audioEngine.getAudioContext()
-        const currentTime = audioContext.currentTime
-
-        for (const event of this._timedEvents) {
-          if (event.sliceNumber > 0 && event.sliceNumber <= this._slices.length) {
-            const slice = this._slices[event.sliceNumber - 1]
-            if (slice) {
-              const startTime = currentTime + event.startTime / 1000
-              this.audioEngine.playSlice(slice, { startTime })
-            }
-          }
-        }
-      }
-
       console.log(`${this._name}: started playback`)
     }
     return this

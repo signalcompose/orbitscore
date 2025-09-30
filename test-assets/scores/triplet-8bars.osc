@@ -1,0 +1,26 @@
+// 8-bar loop with triplet snare
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// Kick: 8 bars
+var kick = init global.seq
+kick.beat(4 by 4).length(8)  // 8小節ループ
+kick.audio("../../test-assets/audio/kick.wav")
+kick.play(1, 0, 1, 0)
+
+// Hi-hat: 8 bars
+var hihat = init global.seq
+hihat.beat(4 by 4).length(8)  // 8小節ループ
+hihat.audio("../../test-assets/audio/hihat_closed.wav")
+hihat.play(1, 1, 1, 1, 1, 1, 1, 1)
+
+// Snare: Triplets for 8 bars
+var snare = init global.seq
+snare.beat(4 by 4).length(8)  // 8小節ループ
+snare.audio("../../test-assets/audio/snare.wav")
+snare.play(1, 1, 1)  // 三連符
+
+// Start
+global.run()

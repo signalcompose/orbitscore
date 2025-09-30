@@ -1,0 +1,35 @@
+// Complex rhythm pattern demonstrating OrbitScore's flexibility
+
+// Initialize global transport
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// Kick: Basic 4-on-the-floor
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("../../test-assets/audio/kick.wav")
+kick.play(1, 0, 1, 0)
+
+// Snare: Syncopated pattern with nested timing
+var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio("../../test-assets/audio/snare.wav")
+// Using nested structures for complex rhythms
+// (0, 1) means: first half silent, second half has a hit
+// Results in syncopated snare pattern
+snare.play(0, (0, 1), 0, 1)
+
+// Hi-hat: Mixed 8th and 16th notes using nested play
+var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio("../../test-assets/audio/hihat_closed.wav")
+// Complex pattern: 1, (1,1), 1, (1,1,1,1)
+// Beat 1: single 8th note
+// Beat 2: two 16th notes
+// Beat 3: single 8th note  
+// Beat 4: four 32nd notes
+hihat.play(1, (1, 1), 1, (1, 1, 1, 1))
+
+// Start all sequences
+global.run()
