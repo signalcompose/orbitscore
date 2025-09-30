@@ -1,0 +1,14 @@
+// Nested chop pattern - slower tempo
+
+var global = init GLOBAL
+global.tempo(80)  // 120 → 80 BPMに変更（より遅く）
+global.beat(4 by 4)
+
+var arp = init global.seq
+arp.beat(4 by 4).length(1)
+arp.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+// Nested pattern: 1, (1,4,3), 3, (4,1,2,4,3), 2, (3,1)
+arp.play(1, (1, 4, 3), 3, (4, 1, 2, 4, 3), 2, (3, 1))
+
+// Start
+global.run()

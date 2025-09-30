@@ -1,0 +1,18 @@
+// Simple nested pattern for debugging
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(4)  // 4回ループ
+test.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+// Simple nested: 1, (2, 3), 4
+// Should be: 
+// - 1 takes 1/3 of 2000ms = 667ms
+// - (2,3) takes 1/3 of 2000ms = 667ms, split into 2 parts (333ms each)
+// - 4 takes 1/3 of 2000ms = 667ms
+test.play(1, (2, 3), 4)
+
+// Start
+global.run()

@@ -5,7 +5,7 @@
 
 import { Transport } from '../transport/transport'
 import { AudioEngine } from '../audio/audio-engine'
-import { PrecisionScheduler } from '../audio/precision-scheduler'
+import { AdvancedAudioPlayer } from '../audio/advanced-player'
 
 import { Sequence } from './sequence'
 
@@ -25,12 +25,12 @@ export class Global {
   private sequences: Map<string, Sequence> = new Map()
   private transport: Transport
   private audioEngine: AudioEngine
-  private globalScheduler: PrecisionScheduler
+  private globalScheduler: AdvancedAudioPlayer
 
   constructor(audioEngine: AudioEngine) {
     this.audioEngine = audioEngine
     this.transport = new Transport(audioEngine)
-    this.globalScheduler = new PrecisionScheduler()
+    this.globalScheduler = new AdvancedAudioPlayer()
   }
 
   // Property accessors with method chaining
@@ -73,15 +73,21 @@ export class Global {
       this.transport.start()
 
       // Start all registered sequences (they will add events to the global scheduler)
-      for (const [name, sequence] of this.sequences) {
-        sequence.scheduleEvents(this.globalScheduler)
-        console.log(`Started sequence: ${name}`)
-      }
-
-      // Start the global scheduler for synchronized playback
-      this.globalScheduler.start()
-
-      console.log('Global transport started')
+      // Use Promise.all to wait for all sequences to prepare their slices
+      Promise.all(
+        Array.from(this.sequences.entries()).map(async ([name, sequence]) => {
+          await sequence.scheduleEvents(this.globalScheduler)
+          console.log(`Started sequence: ${name}`)
+        }),
+      )
+        .then(() => {
+          // Start the global scheduler for synchronized playback
+          this.globalScheduler.start()
+          console.log('Global transport started')
+        })
+        .catch((err) => {
+          console.error('Failed to start sequences:', err)
+        })
     }
     return this
   }

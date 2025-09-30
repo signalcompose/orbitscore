@@ -7,7 +7,7 @@
 
 import * as fs from 'fs'
 
-import { AudioTokenizer, AudioParser } from './parser/audio-parser'
+import { parseAudioDSL } from './parser/audio-parser'
 import { InterpreterV2 } from './interpreter/interpreter-v2'
 
 // Command line interface for the OrbitScore audio engine
@@ -45,10 +45,7 @@ async function playFile(filepath: string) {
 
     // Parse the DSL
     console.log('=== Parsing DSL ===')
-    const tokenizer = new AudioTokenizer(source)
-    const tokens = tokenizer.tokenize()
-    const parser = new AudioParser(tokens)
-    const ir = parser.parse()
+    const ir = parseAudioDSL(source)
     console.log(`Parsed ${ir.statements.length} statements`)
     console.log()
 
@@ -118,10 +115,7 @@ hihat.run()
 `
 
   // Parse and execute
-  const tokenizer = new AudioTokenizer(testDSL)
-  const tokens = tokenizer.tokenize()
-  const parser = new AudioParser(tokens)
-  const ir = parser.parse()
+  const ir = parseAudioDSL(testDSL)
 
   const interpreter = new InterpreterV2()
   await interpreter.execute(ir)
@@ -150,6 +144,24 @@ async function main() {
     case 'play':
       if (!file) {
         console.error('Please specify a file to play')
+        printUsage()
+        process.exit(1)
+      }
+      await playFile(file)
+      break
+
+    case 'run':
+      if (!file) {
+        console.error('Please specify a file to run')
+        printUsage()
+        process.exit(1)
+      }
+      await playFile(file)
+      break
+
+    case 'eval':
+      if (!file) {
+        console.error('Please specify a file to evaluate')
         printUsage()
         process.exit(1)
       }

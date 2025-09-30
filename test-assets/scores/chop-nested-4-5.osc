@@ -1,0 +1,18 @@
+// Nested 4 and 5 subdivisions pattern
+
+var global = init GLOBAL
+global.tempo(60)  // 60BPM（1小節=4秒）
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(4)  // 4回ループ
+test.audio("../../test-assets/audio/arpeggio_c.wav").chop(5)
+// Pattern: 1, (2, 3, 4), 5
+// 5分割なので各スライスは200ms
+// - 0ms: slice 1
+// - 1000-3000ms: (2,3,4) 3連符
+// - 3000ms: slice 5
+test.play(1, (2, 3, 4), 5)
+
+// Start
+global.run()
