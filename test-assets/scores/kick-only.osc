@@ -1,0 +1,14 @@
+// Kick only pattern
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// Kick: 3/4 pattern for polyrhythm feel
+var kick = init global.seq
+kick.beat(3 by 4).length(1)
+kick.audio("../../test-assets/audio/kick.wav")
+kick.play(1, 1, 1)
+
+// Start
+global.run()

@@ -1,0 +1,29 @@
+// Kick, Hi-hat and Triplet Snare pattern - Extended pattern
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// Kick: 4/4 pattern repeated 10 times (40 beats)
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("../../test-assets/audio/kick.wav")
+// 10小節分 = 40拍
+kick.play(1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0, 1,0,1,0)
+
+// Hi-hat: 8th notes repeated 10 times (80 beats)
+var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio("../../test-assets/audio/hihat_closed.wav")
+// 10小節分 = 80個の8分音符
+hihat.play(1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1, 1,1,1,1,1,1,1,1)
+
+// Snare: Triplets repeated 10 times (30 beats)
+var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio("../../test-assets/audio/snare.wav")
+// 10小節分 = 30個の三連符
+snare.play(1,1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1, 1,1,1)
+
+// Start
+global.run()

@@ -5,6 +5,7 @@
 
 import { Transport } from '../transport/transport'
 import { AudioEngine } from '../audio/audio-engine'
+import { PrecisionScheduler } from '../audio/precision-scheduler'
 
 import { Sequence } from './sequence'
 
@@ -24,10 +25,12 @@ export class Global {
   private sequences: Map<string, Sequence> = new Map()
   private transport: Transport
   private audioEngine: AudioEngine
+  private globalScheduler: PrecisionScheduler
 
   constructor(audioEngine: AudioEngine) {
     this.audioEngine = audioEngine
     this.transport = new Transport(audioEngine)
+    this.globalScheduler = new PrecisionScheduler()
   }
 
   // Property accessors with method chaining
@@ -68,6 +71,16 @@ export class Global {
     if (!this._isRunning) {
       this._isRunning = true
       this.transport.start()
+
+      // Start all registered sequences (they will add events to the global scheduler)
+      for (const [name, sequence] of this.sequences) {
+        sequence.scheduleEvents(this.globalScheduler)
+        console.log(`Started sequence: ${name}`)
+      }
+
+      // Start the global scheduler for synchronized playback
+      this.globalScheduler.start()
+
       console.log('Global transport started')
     }
     return this

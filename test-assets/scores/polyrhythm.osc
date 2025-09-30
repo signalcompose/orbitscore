@@ -1,0 +1,26 @@
+// Polyrhythm example: 3 against 4
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// Kick: Every 3 beats (creates 3/4 feel)
+var kick = init global.seq
+kick.beat(3 by 4).length(1)
+kick.audio("../../test-assets/audio/kick.wav")
+kick.play(1, 1, 1)
+
+// Snare: Every 4 beats (standard 4/4)
+var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio("../../test-assets/audio/snare.wav")
+snare.play(1, 0, 1, 0)
+
+// Hi-hat: Constant 8th notes to keep time
+var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio("../../test-assets/audio/hihat_closed.wav")
+hihat.play(1, 1, 1, 1, 1, 1, 1, 1)
+
+// Start polyrhythm
+global.run()
