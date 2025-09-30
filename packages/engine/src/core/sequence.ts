@@ -6,7 +6,8 @@
 import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
 import { PlayElement } from '../parser/audio-parser'
 import { TimingCalculator, TimedEvent } from '../timing/timing-calculator'
-import { PrecisionScheduler } from '../audio/precision-scheduler'
+import { AdvancedAudioPlayer } from '../audio/advanced-player'
+import { audioSlicer } from '../audio/audio-slicer'
 
 import { Global, Meter } from './global'
 
@@ -60,6 +61,7 @@ export class Sequence {
   audio(filepath: string): this {
     // Store the filepath for loading
     this._audioFilePath = filepath
+    this._chopDivisions = 1 // Default to no chopping
     // Note: Actual loading will happen when needed or through explicit load call
     console.log(`${this._name}: audio file set to ${filepath}`)
     return this
@@ -79,19 +81,28 @@ export class Sequence {
   }
 
   chop(divisions: number): this {
-    if (!this._audioFile && this._audioFilePath) {
-      // If audio file is set but not loaded, just store the chop value
-      this._chopDivisions = divisions
-      console.log(`${this._name}: will chop into ${divisions} slices when loaded`)
+    this._chopDivisions = divisions
+
+    if (!this._audioFilePath) {
+      console.error(`${this._name}: no audio file set`)
       return this
     }
-    if (!this._audioFile) {
-      console.error(`${this._name}: no audio file loaded`)
-      return this
-    }
-    this._slices = this._audioFile.chop(divisions)
-    console.log(`${this._name}: chopped into ${divisions} slices`)
+
+    console.log(`${this._name}: chopping into ${divisions} slices`)
     return this
+  }
+
+  private async prepareSlices(): Promise<void> {
+    if (!this._audioFilePath || !this._chopDivisions || this._chopDivisions <= 1) {
+      return
+    }
+
+    try {
+      await audioSlicer.sliceAudioFile(this._audioFilePath, this._chopDivisions)
+      console.log(`${this._name}: slices ready`)
+    } catch (err: any) {
+      console.error(`${this._name}: failed to prepare slices - ${err.message}`)
+    }
   }
 
   play(...elements: PlayElement[]): this {
@@ -124,16 +135,19 @@ export class Sequence {
   }
 
   // Schedule events to a global scheduler
-  scheduleEvents(scheduler: PrecisionScheduler): void {
+  async scheduleEvents(scheduler: AdvancedAudioPlayer): Promise<void> {
     if (!this._audioFilePath || !this._timedEvents || this._timedEvents.length === 0) {
       return
     }
+
+    // No need to prepare slices - sox will handle partial playback
 
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo || 120
     const beatDuration = 60000 / tempo // ms per beat
     const barDuration = beatDuration * 4 // assuming 4/4 time
     const loopCount = this._length || 1 // Use length as loop count
+    const chopDivisions = this._chopDivisions || 1
 
     console.log(`${this._name}: scheduling ${this._timedEvents.length} events x ${loopCount} loops`)
 
@@ -146,13 +160,24 @@ export class Sequence {
           // 0 is silence
           const startTimeMs = event.startTime + loopOffset
 
-          // Schedule the audio file to play at the correct time
-          scheduler.scheduleEvent(
-            this._audioFilePath,
-            startTimeMs,
-            this._isMuted ? 0 : 80,
-            this._name,
-          )
+          // Use sox slice playback instead of file slicing
+          if (chopDivisions > 1) {
+            scheduler.scheduleSliceEvent(
+              this._audioFilePath,
+              startTimeMs,
+              event.sliceNumber,
+              chopDivisions,
+              { volume: this._isMuted ? 0 : 50 },
+              this._name,
+            )
+          } else {
+            scheduler.scheduleEvent(
+              this._audioFilePath,
+              startTimeMs,
+              this._isMuted ? 0 : 50, // 音量を50%に下げる
+              this._name,
+            )
+          }
 
           if (loop === 0) {
             console.log(`  - event at ${event.startTime}ms: slice ${event.sliceNumber}`)

@@ -1,0 +1,16 @@
+// Nested 4 and 5 subdivisions - slower tempo
+
+var global = init GLOBAL
+global.tempo(40)  // 40BPM（1小節=6秒）でさらに遅く
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(4)  // 4小節ループ
+test.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+// Pattern: 1, (2, 3, 4, 1), 2, (1, 2, 3, 4, 1)
+// 40BPMなら各スロット1500ms
+// 5連符は300ms間隔になり、250msのスライスが重ならない
+test.play(1, (2, 3, 4, 1), 2, (1, 2, 3, 4, 2))
+
+// Start
+global.run()

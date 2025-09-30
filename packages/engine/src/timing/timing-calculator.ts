@@ -56,6 +56,15 @@ export class TimingCalculator {
           duration: elementDuration,
           depth,
         })
+      } else if (Array.isArray(element)) {
+        // Array of elements (nested structure)
+        const nestedEvents = this.calculateTiming(
+          element,
+          elementDuration, // Nested elements split their parent's duration
+          elementStartTime, // Start at parent's position
+          depth + 1,
+        )
+        events.push(...nestedEvents)
       } else if (element && typeof element === 'object') {
         if (element.type === 'nested') {
           // Recursively calculate timing for nested elements

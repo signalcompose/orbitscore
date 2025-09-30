@@ -1974,3 +1974,45 @@ play(1, (0, 1, 2, 3, 4)) in 4/4 at 120 BPM:
 - Added proper undefined checks
 - Conditional property assignment for optional fields
 - Type guards for slice existence
+
+## Phase 4: Nested Play Pattern Debugging (In Progress)
+
+### 4.1 Problem Identification
+
+**Date**: September 30, 2025
+**Issue**: Nested play patterns not playing the last element correctly
+
+**Problem Description**:
+- User reported: "最後３の音で終わってない？" (The last sound is not slice 3?)
+- Pattern: `play(1, (2, 3), 2, (3, 4, 1))` should end with slice 1, but ends with slice 3
+- Pattern: `play(1, (2, 3, 4), 5)` should end with slice 5, but ends with slice 1
+
+**Investigation Results**:
+- ✅ Parser: Correctly outputs `{ type: 'nested', elements: [2, 3] }`
+- ✅ TimingCalculator: Correctly calculates 7 events with proper timing
+- ✅ Scheduling: Correctly schedules all 7 events including the last slice
+- ❌ Audio Playback: `sox` commands generated but `spawn` calls not executed
+
+**Test Status**:
+- Total Tests: 187
+- Passing: ~180 (96%)
+- Failing: ~7 (4%)
+- Critical Failures: Sox integration tests (4/4 failing)
+
+**Root Cause**: Audio playback execution issue, not parsing or timing calculation
+
+**Investigation Results (Continued)**:
+- ✅ Parser: `parseAudioDSL` function works correctly
+- ✅ Tokenizer: `EQUALS` token correctly generated
+- ❌ CLI: `play` command not implemented (shows usage instead)
+- ❌ Audio Playback: `sox` commands generated but not executed
+
+**Root Cause Identified**: 
+1. CLI implementation issue - `play` command not properly implemented
+2. Audio playback execution issue - `spawn` calls not being made
+
+**Next Steps**:
+1. Fix CLI `play` command implementation
+2. Debug `AdvancedAudioPlayer` execution issue
+3. Test with real audio files to confirm user-reported issue
+4. Fix audio playback without breaking existing functionality

@@ -1,0 +1,13 @@
+// Debug slice 2 only
+var global = init GLOBAL
+global.tempo(60)
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(1)
+test.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+
+// Only slice 2
+test.play(2)
+
+global.run()

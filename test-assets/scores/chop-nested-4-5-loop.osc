@@ -1,0 +1,19 @@
+// Nested 4 and 5 subdivisions - 8 bar loop
+
+var global = init GLOBAL
+global.tempo(60)  // 60BPM（1小節=4秒）
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(8)  // 8小節ループ
+test.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+// Pattern: 1, (2, 3, 4, 1), 2, (1, 2, 3, 4, 1)
+// 4分割なので各スロットは1000ms
+// - スロット1: スライス1（単独）
+// - スロット2: (2,3,4,1) 4連符
+// - スロット3: スライス2（単独）
+// - スロット4: (1,2,3,4,1) 5連符
+test.play(1, (2, 3, 4, 1), 2, (1, 2, 3, 4, 1))
+
+// Start
+global.run()

@@ -1,0 +1,13 @@
+// Reverse arpeggio - play slices 4, 3, 2, 1
+var global = init GLOBAL
+global.tempo(60)  // Slow tempo for clear distinction
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(4)  // 4回ループ
+test.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+
+// Reverse pattern: 4, 3, 2, 1
+test.play(4, 3, 2, 1)
+
+global.run()

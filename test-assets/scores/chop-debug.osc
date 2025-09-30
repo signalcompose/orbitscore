@@ -1,0 +1,15 @@
+// Debug timing calculation
+
+var global = init GLOBAL
+global.tempo(60)  // 60BPMでさらに遅く（1小節=4秒）
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(1)
+test.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+// Very simple: 1, 2, 3, 4
+// Should be evenly spaced at 0ms, 1000ms, 2000ms, 3000ms
+test.play(1, 2, 3, 4)
+
+// Start
+global.run()

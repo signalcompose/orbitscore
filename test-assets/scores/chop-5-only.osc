@@ -1,0 +1,15 @@
+// Test 5-subdivision only
+
+var global = init GLOBAL
+global.tempo(60)  // 60BPM（1小節=4秒）
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(4)  // 4小節ループ
+test.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+// Pattern: just the 5-subdivision
+// Each bar: (1, 2, 3, 4, 1) repeated
+test.play((1, 2, 3, 4, 1))
+
+// Start
+global.run()
