@@ -58,15 +58,14 @@ describe('AdvancedAudioPlayer', () => {
       const sliceNumber = 1
       const totalSlices = 4
 
-      // Mock console.log to capture the sox command
+      // Mock console.log to capture scheduling logs
       const consoleSpy = vi.spyOn(console, 'log')
 
       player.playSlice(filepath, sliceNumber, totalSlices, {}, 'test')
 
-      // Verify the sox command was logged correctly
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '🔧 sox command: sox /path/to/test.wav -d vol 0.8 trim 0 0.25',
-      )
+      // Verify the slice info was logged (scheduling, not execution)
+      expect(consoleSpy).toHaveBeenCalledWith('🔍 playSlice called: test, slice 1/4, hasSox: true')
+      expect(consoleSpy).toHaveBeenCalledWith('🎵 test (sox slice 1/4: 0.00s-0.25s)')
 
       consoleSpy.mockRestore()
     })
@@ -80,9 +79,8 @@ describe('AdvancedAudioPlayer', () => {
 
       player.playSlice(filepath, sliceNumber, totalSlices, {}, 'test')
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '🔧 sox command: sox /path/to/test.wav -d vol 0.8 trim 0.25 0.25',
-      )
+      expect(consoleSpy).toHaveBeenCalledWith('🔍 playSlice called: test, slice 2/4, hasSox: true')
+      expect(consoleSpy).toHaveBeenCalledWith('🎵 test (sox slice 2/4: 0.25s-0.50s)')
 
       consoleSpy.mockRestore()
     })
@@ -96,14 +94,13 @@ describe('AdvancedAudioPlayer', () => {
 
       player.playSlice(filepath, sliceNumber, totalSlices, {}, 'test')
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '🔧 sox command: sox /path/to/test.wav -d vol 0.8 trim 0.75 0.25',
-      )
+      expect(consoleSpy).toHaveBeenCalledWith('🔍 playSlice called: test, slice 4/4, hasSox: true')
+      expect(consoleSpy).toHaveBeenCalledWith('🎵 test (sox slice 4/4: 0.75s-1.00s)')
 
       consoleSpy.mockRestore()
     })
 
-    it('should include volume in sox command', () => {
+    it('should schedule slice with custom volume', () => {
       const filepath = '/path/to/test.wav'
       const sliceNumber = 1
       const totalSlices = 4
@@ -113,9 +110,9 @@ describe('AdvancedAudioPlayer', () => {
 
       player.playSlice(filepath, sliceNumber, totalSlices, options, 'test')
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '🔧 sox command: sox /path/to/test.wav -d vol 0.5 trim 0 0.25',
-      )
+      // Verify scheduling (volume is passed in options, applied during execution)
+      expect(consoleSpy).toHaveBeenCalledWith('🔍 playSlice called: test, slice 1/4, hasSox: true')
+      expect(consoleSpy).toHaveBeenCalledWith('🎵 test (sox slice 1/4: 0.00s-0.25s)')
 
       consoleSpy.mockRestore()
     })

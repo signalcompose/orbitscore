@@ -1,0 +1,16 @@
+// Test chop() with nested play pattern
+// play(1, (2, 3, 4)) means:
+// - 1 gets first half (2 beats)
+// - (2, 3, 4) split the second half equally (each gets 2/3 beat)
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+var arp = init global.seq
+arp.beat(4 by 4).length(4)
+arp.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+arp.play(1, (2, 3, 4))
+
+// Start
+global.run()

@@ -90,8 +90,28 @@ export class AdvancedAudioPlayer {
    * Play audio with sox or fallback to afplay
    */
   playAudio(filepath: string, options: PlayOptions = {}, sequenceName: string = '') {
+    const { startTime = 0 } = options
+
+    // Always schedule through the scheduler for consistent timing
+    // This ensures all events use the same time base
+    this.scheduledPlays.push({
+      time: startTime,
+      filepath,
+      options: { ...options, startTime: 0 },
+      sequenceName,
+    })
+  }
+
+  /**
+   * Execute playback immediately (called by scheduler)
+   */
+  private executePlayback(
+    filepath: string,
+    options: PlayOptions,
+    sequenceName: string,
+    scheduledTime: number,
+  ) {
     const {
-      startTime = 0,
       volume = 80,
       trimStart,
       trimEnd,
@@ -101,23 +121,18 @@ export class AdvancedAudioPlayer {
       speed = 1.0,
     } = options
 
-    if (startTime > 0) {
-      // Schedule for later
-      this.scheduledPlays.push({
-        time: startTime,
-        filepath,
-        options: { ...options, startTime: 0 },
-        sequenceName,
-      })
-      return
-    }
+    const now = Date.now() - this.startTime
+    const jitter = now - scheduledTime
+    console.log(
+      `🕒 executePlayback ${sequenceName} | scheduled=${scheduledTime.toFixed(2)}ms actual=${now.toFixed(2)}ms jitter=${jitter.toFixed(2)}ms`,
+    )
 
-    // Play immediately
     if (this.hasSox) {
       this.playWithSox(
         filepath,
         { volume, trimStart, trimEnd, trimStartSeconds, trimEndSeconds, pitch, speed },
         sequenceName,
+        scheduledTime,
       )
     } else {
       this.playWithAfplay(filepath, volume, sequenceName)
@@ -179,7 +194,12 @@ export class AdvancedAudioPlayer {
   /**
    * Play with sox for advanced features
    */
-  private playWithSox(filepath: string, options: any, sequenceName: string) {
+  private playWithSox(
+    filepath: string,
+    options: any,
+    sequenceName: string,
+    scheduledTime?: number,
+  ) {
     const args: string[] = [filepath]
 
     // Output device
@@ -215,13 +235,31 @@ export class AdvancedAudioPlayer {
     // Debug: log the sox command
     console.log(`🔧 sox command: sox ${args.join(' ')}`)
 
+    const launchTime = Date.now()
     const proc = spawn('sox', args, {
       stdio: 'ignore',
       detached: false,
     })
 
+    console.log(
+      `🚀 sox spawn ${sequenceName} | scheduled=${
+        scheduledTime !== undefined ? scheduledTime.toFixed(2) : 'n/a'
+      }ms launchDelta=${this.isRunning ? (launchTime - this.startTime).toFixed(2) : 'n/a'}ms`,
+    )
+
     proc.on('error', (err) => {
       console.error(`sox error for ${sequenceName}:`, err.message)
+    })
+
+    proc.on('close', (code) => {
+      const closeTime = Date.now()
+      console.log(
+        `✅ sox close ${sequenceName} | exit=${code} elapsed=${
+          scheduledTime !== undefined && this.isRunning
+            ? (closeTime - (this.startTime + scheduledTime)).toFixed(2)
+            : 'n/a'
+        }ms`,
+      )
     })
 
     this.processes.push(proc)
@@ -266,8 +304,15 @@ export class AdvancedAudioPlayer {
     console.log(`🎬 Starting advanced scheduler with ${this.scheduledPlays.length} events`)
 
     // High-precision scheduling loop
+    let lastTick = process.hrtime.bigint()
     this.intervalId = setInterval(() => {
+      const tickStart = process.hrtime.bigint()
       const now = Date.now() - this.startTime
+      const intervalNs = Number(tickStart - lastTick) / 1_000_000
+      lastTick = tickStart
+      console.log(
+        `🌀 scheduler tick | now=${now.toFixed(2)}ms interval=${intervalNs.toFixed(2)}ms queue=${this.scheduledPlays.length}`,
+      )
 
       while (
         this.scheduledPlays.length > 0 &&
@@ -275,11 +320,15 @@ export class AdvancedAudioPlayer {
         this.scheduledPlays[0].time <= now
       ) {
         const play = this.scheduledPlays.shift()!
-        this.playAudio(play.filepath, play.options, play.sequenceName)
+        console.log(
+          `⏰ Playing at ${now}ms (scheduled: ${play.time}ms, remaining: ${this.scheduledPlays.length})`,
+        )
+        this.executePlayback(play.filepath, play.options, play.sequenceName, play.time)
       }
 
       // Stop if no more events
       if (this.scheduledPlays.length === 0 && this.intervalId !== undefined) {
+        console.log(`🛑 No more events, stopping in 1s`)
         setTimeout(() => this.stop(), 1000) // Wait 1s then stop
       }
     }, 1) // 1ms precision

@@ -1,0 +1,14 @@
+// Test chop() with reverse order
+// Divide arpeggio into 4 slices and play in reverse
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+var arp = init global.seq
+arp.beat(4 by 4).length(1)
+arp.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
+arp.play(4, 3, 2, 1)
+
+// Start
+global.run()

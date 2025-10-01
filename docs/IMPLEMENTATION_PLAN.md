@@ -18,17 +18,20 @@ Implementation plan for the new audio-based OrbitScore DSL as defined in `INSTRU
 ### ✅ Completed (100% tested)
 - **Parser**: Full DSL syntax support with 31 tests
 - **Object-Oriented Architecture**: Global and Sequence classes
-- **Audio Engine**: WAV loading, slicing, basic playback
+- **Audio Engine**: WAV loading, slicing, sox-based playback
 - **Transport System**: Scheduling, polymeter, mute/unmute
 - **VS Code Extension**: Syntax highlighting, autocomplete, execution
 - **Timing Calculation**: Hierarchical play patterns
 - **Method Chaining**: Fluent API across all components
+- **Audio Slicing (chop)**: sox trim-based partial playback (no temp files)
+- **CLI with Timeout**: Auto-stop feature for testing
+- **Real Audio Playback**: Verified with kick, arpeggio, and complex nested patterns
 
 ### ⚠️ Partially Implemented
 - **Audio Formats**: Only WAV fully supported (AIFF/MP3/MP4 placeholders)
 - **Time Stretching**: Basic tempo adjustment (needs quality algorithm)
 - **Pitch Shifting**: Placeholder only (needs DSP implementation)
-- **Transport Integration**: Direct scheduling (needs full integration)
+- **Infinite Loop**: length(n) provides finite loops (needs loop() method)
 
 ### 📋 Not Yet Implemented
 - **Force Modifier**: `.force` for immediate transport
@@ -37,10 +40,11 @@ Implementation plan for the new audio-based OrbitScore DSL as defined in `INSTRU
 - **DAW Plugin**: VST/AU development (Phase A5)
 
 ### 📊 Testing Coverage
-- **Total Tests**: 187 (100% passing)
-- **Unit Tests**: 180
+- **Total Tests**: 216 passed, 1 skipped (99.5%)
+- **Unit Tests**: 209
 - **E2E Tests**: 7
 - **Code Coverage**: Core features fully tested
+- **Real Audio Tests**: Verified with actual playback (kick, arpeggio, nested patterns)
 
 ## Implementation Phases
 
