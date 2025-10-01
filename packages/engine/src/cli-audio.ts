@@ -13,23 +13,25 @@ import { InterpreterV2 } from './interpreter/interpreter-v2'
 // Command line interface for the OrbitScore audio engine
 const command = process.argv[2]
 const file = process.argv[3]
+const durationArg = process.argv[4] // Optional duration in seconds
 
 function printUsage() {
   console.log(`
 OrbitScore Audio Engine CLI
 
 Usage:
-  orbitscore-audio play <file.osc>  - Play an OrbitScore file
-  orbitscore-audio test              - Run test sound
-  orbitscore-audio help              - Show this help
+  orbitscore-audio play <file.osc> [duration]  - Play an OrbitScore file (optional duration in seconds)
+  orbitscore-audio test                         - Run test sound
+  orbitscore-audio help                         - Show this help
 
 Examples:
-  orbitscore-audio play examples/01_getting_started.osc
+  orbitscore-audio play examples/01_getting_started.osc     - Play until completion
+  orbitscore-audio play examples/01_getting_started.osc 5   - Play for 5 seconds then stop
   orbitscore-audio test
 `)
 }
 
-async function playFile(filepath: string) {
+async function playFile(filepath: string, durationSeconds?: number) {
   try {
     // Check if file exists
     if (!fs.existsSync(filepath)) {
@@ -41,6 +43,9 @@ async function playFile(filepath: string) {
     const source = fs.readFileSync(filepath, 'utf8')
     console.log('=== Loading OrbitScore file ===')
     console.log(`File: ${filepath}`)
+    if (durationSeconds) {
+      console.log(`Duration: ${durationSeconds} seconds`)
+    }
     console.log()
 
     // Parse the DSL
@@ -72,10 +77,21 @@ async function playFile(filepath: string) {
       Object.values(state.globals).some((g: any) => g.isRunning)
     ) {
       console.log()
-      console.log('🎵 Audio is playing. Press Ctrl+C to stop.')
+      if (durationSeconds) {
+        console.log(`🎵 Playing for ${durationSeconds} seconds...`)
 
-      // Keep process alive
-      setInterval(() => {}, 1000)
+        // Auto-stop after specified duration
+        setTimeout(() => {
+          console.log()
+          console.log('⏹ Auto-stopping after timeout')
+          process.exit(0)
+        }, durationSeconds * 1000)
+      } else {
+        console.log('🎵 Audio is playing. Press Ctrl+C to stop.')
+
+        // Keep process alive
+        setInterval(() => {}, 1000)
+      }
     }
   } catch (error) {
     console.error('Error:', error)
@@ -141,32 +157,38 @@ process.on('SIGINT', () => {
 // Main
 async function main() {
   switch (command) {
-    case 'play':
+    case 'play': {
       if (!file) {
         console.error('Please specify a file to play')
         printUsage()
         process.exit(1)
       }
-      await playFile(file)
+      const playDuration = durationArg ? parseFloat(durationArg) : undefined
+      await playFile(file, playDuration)
       break
+    }
 
-    case 'run':
+    case 'run': {
       if (!file) {
         console.error('Please specify a file to run')
         printUsage()
         process.exit(1)
       }
-      await playFile(file)
+      const runDuration = durationArg ? parseFloat(durationArg) : undefined
+      await playFile(file, runDuration)
       break
+    }
 
-    case 'eval':
+    case 'eval': {
       if (!file) {
         console.error('Please specify a file to evaluate')
         printUsage()
         process.exit(1)
       }
-      await playFile(file)
+      const evalDuration = durationArg ? parseFloat(durationArg) : undefined
+      await playFile(file, evalDuration)
       break
+    }
 
     case 'test':
       await playTestSound()
