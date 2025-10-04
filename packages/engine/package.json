@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "ts-node src/index.ts",
-    "test": "vitest run",
+    "test": "npx vitest run --dir ../../tests --globals",
     "cli": "node dist/cli.js"
   },
   "dependencies": {
