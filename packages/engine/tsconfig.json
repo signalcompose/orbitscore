@@ -1,15 +1,15 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
     "module": "commonjs",
-    "target": "es2022",
-    "moduleResolution": "node",
-    "strict": true,
-    "skipLibCheck": true,
+    "target": "ES2020",
     "types": ["node"],
-    "verbatimModuleSyntax": false
+    "typeRoots": [
+      "../../node_modules/@types"
+    ],
+    "composite": true
   },
   "include": ["src"]
 }

@@ -2287,3 +2287,390 @@ kick.play(1, 1, 1)
 
 **Commit History**:
 - (to be committed) - feat: verify audio playback and add CLI timeout feature
+
+---
+
+## Phase 6: Live Coding Workflow Implementation (In Progress)
+
+### 6.1 Overview
+
+**Date**: January 13, 2025
+**Status**: 🚧 In Progress (Critical Issues Remaining)
+
+**Goal**: Implement persistent REPL-based live coding workflow in VS Code extension
+
+**Key Features Implemented**:
+1. Persistent engine process with REPL mode
+2. Automatic file evaluation on save/open
+3. Separate workflows for definitions vs. execution
+4. Status bar visual feedback
+5. Individual track control (`.run()`, `.loop()`, `.stop()`)
+
+### 6.2 Architecture Changes
+
+#### 6.2.1 Persistent Engine Process
+
+**Previous Behavior**:
+- Each `Cmd+Enter` spawned new `node cli-audio.js` process
+- No state preservation between executions
+- Variables defined in one execution were lost
+
+**New Behavior**:
+- Single persistent `node cli-audio.js` process
+- REPL mode activated by `global.run()` detection
+- State (variables, sequences) maintained across commands
+- Communication via `stdin.write()` from extension
+
+**Implementation**:
+- `packages/engine/src/cli-audio.ts`:
+  - Added `readline` interface for interactive input
+  - `globalInterpreter` persists across REPL commands
+  - `startREPL()` function keeps process alive
+  - Process prints "🎹 Live coding mode. Enter commands:" when ready
+
+#### 6.2.2 Two-Phase Workflow
+
+**Phase 1: Definitions (File Save / File Open)**
+- Triggered: `onDidSaveTextDocument`, `onDidChangeActiveTextEditor`, extension activation
+- Behavior: 
+  - Entire file content is filtered through `filterDefinitionsOnly()`
+  - Sends only variable declarations and settings (no `.loop()`, `.run()`, `.stop()`)
+  - Initializes engine if `global.run()` is present
+  - Updates interpreter state without playing audio
+
+**Phase 2: Execution (Cmd+Enter)**
+- Triggered: User selects code and presses `Cmd+Enter`
+- Behavior:
+  - If engine not initialized, automatically calls Phase 1 first
+  - Sends only selected text to `engineProcess.stdin`
+  - Executes transport commands (`.loop()`, `.run()`, `.stop()`)
+
+**Implementation**:
+- `packages/vscode-extension/src/extension.ts`:
+  - `evaluateFileInBackground()`: Handles Phase 1
+  - `runSelection()`: Handles Phase 2
+  - `filterDefinitionsOnly()`: Filters out transport commands
+
+#### 6.2.3 Code Filtering Logic
+
+**Purpose**: Prevent audio playback during definition phase
+
+**Filtered Commands** (removed during file evaluation):
+- `.loop()`
+- `.stop()`
+- `.mute()`
+- `.unmute()`
+- `global.run()` (only during re-evaluation, kept during initialization)
+
+**Kept Commands**:
+- Variable declarations (`var kick = init global.seq`)
+- Configuration methods (`.tempo()`, `.beat()`, `.audio()`, `.chop()`, `.play()`)
+- `global.run()` during first initialization
+
+### 6.3 Sequence Control Implementation
+
+#### 6.3.1 New Methods
+
+**`sequence.run()` - One-shot Playback**:
+```typescript
+run(): Sequence {
+  this._isPlaying = true;
+  this._isLooping = false;
+  this.scheduleEvents(0, this.globalContext.transport.getCurrentTime());
+  return this;
+}
+```
+
+**`sequence.loop()` - Continuous Looping**:
+```typescript
+loop(): Sequence {
+  this.stop(); // Clear any existing loop
+  this._isLooping = true;
+  this._isPlaying = true;
+  
+  const patternDuration = this.getPatternDuration();
+  const currentTime = this.getScheduler().getCurrentTime();
+  
+  // Schedule first iteration
+  this.scheduleEvents(0, currentTime);
+  
+  // Schedule subsequent iterations
+  this.loopTimer = setInterval(() => {
+    const nextStartTime = this.getScheduler().getCurrentTime();
+    this.scheduleEvents(this.loopIteration, nextStartTime);
+    this.loopIteration++;
+  }, patternDuration);
+  
+  return this;
+}
+```
+
+**`sequence.stop()` - Stop Individual Sequence**:
+```typescript
+stop(): Sequence {
+  this._isPlaying = false;
+  this._isLooping = false;
+  
+  if (this.loopTimer) {
+    clearInterval(this.loopTimer);
+    this.loopTimer = undefined;
+  }
+  
+  this.loopIteration = 0;
+  return this;
+}
+```
+
+#### 6.3.2 Global Transport Updates
+
+**`global.run()` - Start Scheduler Only**:
+```typescript
+run(): Global {
+  this.globalScheduler.stopAll(); // Clean state
+  this.transport.start();
+  this.globalScheduler.start();
+  console.log("▶ Global scheduler started");
+  return this;
+}
+```
+
+**`global.stop()` - Stop Everything**:
+```typescript
+stop(): Global {
+  // Stop all registered sequences
+  this.sequences.forEach(seq => seq.stop());
+  
+  // Kill all audio processes
+  this.globalScheduler.stopAll();
+  
+  // Stop transport
+  this.transport.stop();
+  console.log("⏹ Global stopped");
+  return this;
+}
+```
+
+### 6.4 VS Code Extension Enhancements
+
+#### 6.4.1 Status Bar Integration
+
+**Visual Feedback**:
+- `⏸️ Ready` - Engine initialized, waiting for commands
+- `▶️ Playing` - At least one sequence is playing
+- Updates based on stdout from engine process
+
+**Implementation**:
+```typescript
+statusBarItem.text = line.includes("Live coding mode") 
+  ? "⏸️ Ready"
+  : line.includes("▶ Global")
+  ? "▶️ Playing"
+  : line.includes("⏹ Global")
+  ? "⏸️ Ready"
+  : statusBarItem.text;
+```
+
+#### 6.4.2 Command Palette Simplification
+
+**Removed Commands** (transport handled via DSL):
+- "Start OrbitScore Engine"
+- "Stop OrbitScore Engine" (temporarily re-added for debugging)
+
+**Kept Commands**:
+- "Run Selection" (`Cmd+Enter`)
+- "Reload Window"
+- "Stop Engine" (for debugging current issues)
+
+#### 6.4.3 Automatic Initialization
+
+**On Extension Activation**:
+1. Check if active document is `.osc` file
+2. Evaluate file in background
+3. Initialize engine if `global.run()` present
+
+**On File Open** (`onDidChangeActiveTextEditor`):
+1. Detect `.osc` file
+2. Evaluate file in background
+3. Update interpreter state
+
+**On File Save** (`onDidSaveTextDocument`):
+1. Detect `.osc` file
+2. Re-evaluate file in background
+3. Update interpreter state without restarting engine
+
+### 6.5 Test Files Created
+
+**Example Files** (in `examples/`):
+- `live-demo.osc` - Main live coding demonstration
+- `test-live-coding.osc` - Initial test file
+- `test-live-coding-clean.osc` - Cleaned version
+- `live-commands.txt` - Command reference
+
+**Test Workflow**:
+1. Open `live-demo.osc` → Engine auto-initializes
+2. Save file (Cmd+S) → Definitions updated
+3. Select `kick.loop()` + Cmd+Enter → Kick starts looping
+4. Select `snare.loop()` + Cmd+Enter → Snare added
+5. Select `kick.stop()` + Cmd+Enter → Kick stops (BROKEN)
+6. Select `global.stop()` + Cmd+Enter → All stop (BROKEN)
+
+### 6.6 Critical Issues Discovered
+
+#### 🔴 Issue 1: `global.stop()` Not Fully Stopping Audio
+
+**Status**: CRITICAL - Blocking live coding workflow
+
+**Symptom**:
+- After `global.stop()`, status bar shows "⏸️ Ready"
+- But `kick.loop()` still plays audio
+- Pattern is distorted: plays as `(1,0,1,0,0,0,0,0)` instead of `(1,0,1,0)`
+
+**Root Cause (Suspected)**:
+- Events accumulating in scheduler
+- `AdvancedAudioPlayer.stopAll()` not clearing all events
+- Loop timers not properly cleared
+
+#### 🔴 Issue 2: `kick.stop()` Not Functioning
+
+**Status**: CRITICAL
+
+**Symptom**: Individual sequence `.stop()` has no effect
+
+**Root Cause (Suspected)**:
+- Loop timer not being cleared
+- Event queue not being flushed for specific sequences
+
+#### 🔴 Issue 3: Inaccurate Rhythm / Extended Patterns
+
+**Status**: CRITICAL - Makes live performance impossible
+
+**Symptom**:
+- Patterns play with incorrect timing ("間伸びしてる")
+- Pattern extends with zeros: `(1,0,1,0) → (1,0,1,0,0,0,0,0)`
+
+**Root Cause (Suspected)**:
+- Event timing calculation in `scheduleEvents()` incorrect
+- `baseTime` calculation in `loop()` accumulates errors
+- Events from previous loops not being cleared
+
+### 6.7 Attempted Fixes (Not Yet Resolved)
+
+1. ✅ Modified `sequence.loop()` to call `stop()` first
+2. ✅ Modified `global.stop()` to call `globalScheduler.stopAll()`
+3. ✅ Modified `global.run()` to call `stopAll()` before starting
+4. ✅ Added scheduler restart logic in `scheduleEvent()`
+5. ❌ **STILL NOT WORKING** - Core issue remains
+
+### 6.8 Files Modified
+
+**Core Engine**:
+- `packages/engine/src/cli-audio.ts` - REPL mode, persistent interpreter
+- `packages/engine/src/core/sequence.ts` - `.run()`, `.loop()`, `.stop()` methods
+- `packages/engine/src/core/global.ts` - Updated `.run()` and `.stop()`
+- `packages/engine/src/audio/advanced-player.ts` - Scheduler lifecycle fixes (attempted)
+- `packages/engine/src/interpreter/interpreter-v2.ts` - Log reduction
+
+**VS Code Extension**:
+- `packages/vscode-extension/src/extension.ts` - Complete live coding workflow
+- `packages/vscode-extension/package.json` - Command palette updates
+
+**Documentation**:
+- `docs/PROJECT_RULES.md` - Added Serena memory management section
+- `.serena/memories/current_issues.md` - Created with critical issues
+
+**Configuration**:
+- `package.json` (root) - Updated dependencies
+- `package-lock.json` - Dependency updates
+- `packages/engine/package.json` - Updated dependencies
+- `tsconfig.json`, `tsconfig.base.json` - TypeScript configuration updates
+- `packages/engine/tsconfig.json` - Build configuration
+- `packages/vscode-extension/tsconfig.json` - Extension build configuration
+
+**Build Artifacts**:
+- `packages/vscode-extension/orbitscore-0.0.1.vsix` - Updated extension package
+- `packages/vscode-extension/orbitscore-0.0.2.vsix` - New version
+- `packages/vscode-extension/orbitscore-0.0.3.vsix` - Latest version
+
+**Deleted Files**:
+- `.channels_cache.json` - Temporary cache file
+- `.env` - Environment variables file
+
+### 6.9 Test Results
+
+**Manual Testing**:
+- ✅ Persistent engine process working
+- ✅ File evaluation on save/open working
+- ✅ Code filtering working (no audio on save)
+- ✅ Status bar updates working
+- ✅ `kick.loop()` plays audio
+- ✅ Multiple sequences can be started
+- ❌ `kick.stop()` not working
+- ❌ `global.stop()` not fully stopping audio
+- ❌ Rhythm timing inaccurate
+
+**Unit Tests**:
+- Total: 217 tests
+- Passing: 216 (99.5%)
+- Skipped: 1
+- Failing: 0
+
+**Note**: Unit tests don't cover scheduler lifecycle issues
+
+### 6.10 Implementation Status
+
+**Completed** ✅:
+- Persistent engine process with REPL
+- Two-phase workflow (definitions vs. execution)
+- Code filtering (`filterDefinitionsOnly`)
+- Status bar visual feedback
+- Automatic file evaluation
+- Individual track control methods (`.run()`, `.loop()`, `.stop()`)
+- Command palette simplification
+- Example files and documentation
+
+**In Progress** 🚧:
+- Scheduler event management (CRITICAL BUGS)
+- Accurate timing for loops
+- Reliable `.stop()` functionality
+
+**Blocked** 🔴:
+- Live performance testing (depends on bug fixes)
+- Phase 6 completion (depends on bug fixes)
+
+### 6.11 Next Steps
+
+**Immediate Priority**:
+1. Fix scheduler event management
+2. Ensure `.stop()` methods work reliably
+3. Fix rhythm accuracy for live performance
+4. Update Serena memory with resolution status
+
+**After Bug Fixes**:
+1. Complete Phase 6 features
+2. Performance testing with complex patterns
+3. Multi-track live coding demonstration
+4. Video documentation of workflow
+
+**Future Enhancements**:
+- Visual feedback for active sequences
+- Undo/redo for live coding actions
+- Recording/playback of live coding sessions
+
+### 6.12 Development Notes
+
+**User Feedback**:
+- "音も出たしね" - Audio playback confirmed working
+- Persistent issues with stop functionality
+- Pattern distortion is critical blocker
+
+**Technical Debt**:
+- Scheduler needs fundamental review
+- Event queue management needs audit
+- Timing calculation needs verification
+
+**Documentation Updates Needed**:
+- README.md - Current status and known issues
+- Serena memory - Resolution when bugs fixed
+
+**Commit History**:
+- (to be committed) - feat: implement live coding workflow with persistent REPL

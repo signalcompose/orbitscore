@@ -37,15 +37,23 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 
 ### 🚧 New Audio-Based Implementation
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| **A1** | 🔄 Planning | New Parser for Audio DSL |
-| **A2** | 📝 Planned | Audio Engine Integration |
-| **A3** | 📝 Planned | Transport System |
-| **A4** | 📝 Planned | VS Code Extension Update |
-| **A5** | 📝 Planned | DAW Plugin Development |
+| Phase | Status | Progress | Description |
+|-------|--------|----------|-------------|
+| **Phase 1-3** | ✅ Complete | 100% | Parser, Interpreter, Transport System |
+| **Phase 4** | ✅ Complete | 100% | VS Code Extension (Syntax, Commands, IntelliSense) |
+| **Phase 5** | ✅ Complete | 100% | Audio Playback Verification (Sox Integration) |
+| **Phase 6** | 🚧 In Progress | 70% | Live Coding Workflow (⚠️ Critical Issues) |
+| **Phase 7** | 📝 Planned | 0% | Advanced Audio Features (Time-stretch, Pitch-shift) |
+| **Phase 8** | 📝 Planned | 0% | DAW Plugin Development |
 
-See [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for detailed roadmap.
+**Current Status**: Phase 6 - Live coding workflow implemented but with critical scheduler issues
+
+**Known Issues** 🔴:
+- `global.stop()` not fully stopping audio
+- `kick.stop()` not functioning
+- Rhythm timing inaccurate (pattern distortion)
+
+See [WORK_LOG.md](docs/WORK_LOG.md#phase-6-live-coding-workflow-implementation-in-progress) for detailed status and [current_issues](docs/WORK_LOG.md#66-critical-issues-discovered) for bug reports.
 
 ## 技術スタック
 
@@ -142,12 +150,16 @@ orbitscore/
 npm test
 ```
 
-**53個のテスト**が全てパスしています：
+**216/217 tests passing (99.5%)**:
 
-- Parser: 3 tests
-- Pitch: 22 tests
-- Scheduler: 22 tests
-- MIDI: 5 tests
+- Parser: ✅ Complete
+- Audio Engine: ✅ Complete  
+- Timing Calculator: ✅ Complete
+- Transport System: ✅ Complete
+- VS Code Extension: ✅ Complete
+- Integration Tests: 1 skipped
+
+**Note**: Unit tests don't cover the scheduler lifecycle issues discovered in manual testing.
 
 ## 使い方
 

@@ -63,8 +63,9 @@
 5. **Update WORK_LOG.md**
 6. **Update README.md** (sync with WORK_LOG.md status)
 7. Update other documentation
-8. Commit with descriptive message
-9. **Add commit hash to WORK_LOG.md**
+8. **Update Serena memory** (important changes, issues, decisions)
+9. Commit with descriptive message
+10. **Add commit hash to WORK_LOG.md**
 
 ### Commit Message Format:
 
@@ -137,6 +138,7 @@ Types: feat, fix, docs, test, refactor, chore
 - [ ] WORK_LOG.md updated
 - [ ] README.md updated (MUST reflect current status from WORK_LOG.md)
 - [ ] Documentation updated if needed
+- [ ] **Serena memory updated** (current issues, architectural changes, important decisions)
 - [ ] Commit message is descriptive
 - [ ] No console.log left in production code
 - [ ] Types are properly defined
@@ -147,6 +149,54 @@ Types: feat, fix, docs, test, refactor, chore
 2. **Incremental Commits**: Small, focused commits
 3. **Documentation Sync**: Keep docs in sync with code
 4. **Code Review**: Review your own code before committing
+
+## 🧠 Serena Memory Management
+
+### When to Update Serena Memory (コミット時):
+
+**MUST update before committing when there are:**
+
+1. **Critical Issues** (現在の重大な問題)
+   - Bugs that affect core functionality
+   - Performance issues
+   - Broken features that need fixing
+   - Example: "`global.stop()` not working properly"
+
+2. **Architectural Changes** (アーキテクチャ変更)
+   - Major refactoring
+   - New design patterns introduced
+   - Module structure changes
+   - Breaking changes to internal APIs
+
+3. **Important Decisions** (重要な決定事項)
+   - Technical approach changes
+   - Library/tool choices
+   - Implementation strategy shifts
+   - Performance optimization strategies
+
+4. **Current Development Status** (開発ステータス)
+   - Phase completion status
+   - Feature implementation progress
+   - Known limitations
+   - Next steps/priorities
+
+### Serena Memory Categories:
+
+- **`project_overview`**: High-level project description, tech stack, current status
+- **`current_issues`**: Active bugs and problems that need attention
+- **`development_guidelines`**: Implementation patterns, best practices
+- **`code_style_conventions`**: TypeScript/coding standards
+- **`task_completion_checklist`**: Standard procedures for completion
+- **`suggested_commands`**: Commonly used commands and workflows
+
+### Update Command:
+
+```typescript
+serena-write_memory({
+  memory_name: "current_issues",
+  content: "Updated markdown content..."
+})
+```
 
 ## 📝 Documentation Sync Rules
 

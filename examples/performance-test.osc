@@ -1,0 +1,228 @@
+// OrbitScore VS Code Live Coding Performance Test
+// Use Cmd+Enter to execute each section step by step
+// This file tests real-time live coding capabilities
+
+// STEP 1: Global Initialization and Basic Setup
+// Select this section and press Cmd+Enter
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.tick(480)
+
+//
+// STEP 2: Kick Drum Pattern (4-on-the-floor)
+//
+// Select this section and press Cmd+Enter
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("../test-assets/audio/kick.wav").chop(1)
+kick.play(1, 0, 1, 0)
+
+// Start the kick
+kick.run()
+
+//
+// STEP 3: Add Hi-Hat Pattern (16th notes)
+//
+// Select this section and press Cmd+Enter
+var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio("../test-assets/audio/hihat.wav").chop(1)
+hihat.play(1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0)
+
+hihat.run()
+
+//
+// STEP 4: Add Snare (2 and 4)
+//
+// Select this section and press Cmd+Enter
+var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio("../test-assets/audio/snare.wav").chop(1)
+snare.play(0, 0, 1, 0)
+
+snare.run()
+
+//
+// STEP 5: Add Bassline (using chop for variation)
+//
+// Select this section and press Cmd+Enter
+var bass = init global.seq
+bass.beat(4 by 4).length(2)
+bass.audio("../test-assets/audio/bass.wav").chop(8)
+bass.play(1, 0, 0, 1, 0, 0, 1, 0,
+          0, 1, 0, 1, 0, 0, 0, 0)
+
+bass.run()
+
+//
+// STEP 6: Add Arpeggio (complex nested pattern)
+//
+// Select this section and press Cmd+Enter
+var arp = init global.seq
+arp.beat(4 by 4).length(4)
+arp.audio("../test-assets/audio/arpeggio.wav").chop(16)
+arp.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 
+         0, 0, 0, 0, 0, 0, 0, 0,
+         1, 1, 1, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0)
+
+arp.run()
+
+//
+// STEP 7: Change Tempo (Real-time Test)
+//
+// Select this section and press Cmd+Enter
+global.tempo(140)
+
+//
+// STEP 8: Modify Kick Pattern (Breakbeat Style)
+//
+// Select this section and press Cmd+Enter
+kick.play(1, 0, 0, 1, 0, 1, 0, 0)
+
+//
+// STEP 9: Change Bassline Slice Order
+//
+// Select this section and press Cmd+Enter
+bass.play(8, 7, 6, 5, 4, 3, 2, 1,
+          1, 2, 3, 4, 5, 6, 7, 8)
+
+//
+// STEP 10: Mute Individual Elements
+//
+// Select this section and press Cmd+Enter
+hihat.mute()
+snare.mute()
+
+//
+// STEP 11: Unmute and Change Hi-Hat Pattern
+//
+// Select this section and press Cmd+Enter
+hihat.unmute()
+hihat.play(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+//
+// STEP 12: Add Complex Nested Pattern
+//
+// Select this section and press Cmd+Enter
+var complex = init global.seq
+complex.beat(4 by 4).length(1)
+complex.audio("../test-assets/audio/arpeggio.wav").chop(8)
+complex.play((1, 2), (3, 4, 5), (6, 7), (8, 1))
+
+complex.run()
+
+//
+// STEP 13: Test Different Meter (5/4)
+//
+// Select this section and press Cmd+Enter
+var quintuple = init global.seq
+quintuple.beat(5 by 4).length(1)
+quintuple.audio("../test-assets/audio/kick.wav").chop(1)
+quintuple.play(1, 0, 1, 0, 1)
+
+quintuple.run()
+
+//
+// STEP 14: Test Polymeter (Different sequences with different meters)
+//
+// Select this section and press Cmd+Enter
+var polymeter = init global.seq
+polymeter.beat(7 by 8).length(1)
+polymeter.audio("../test-assets/audio/hihat.wav").chop(1)
+polymeter.play(1, 0, 1, 0, 1, 0, 1)
+
+polymeter.run()
+
+//
+// STEP 15: Test Method Chaining
+//
+// Select this section and press Cmd+Enter
+var chained = init global.seq
+chained.beat(4 by 4).length(2).audio("../test-assets/audio/bass.wav").chop(4).play(1, 2, 3, 4, 4, 3, 2, 1).run()
+
+//
+// STEP 16: Test Error Handling (Intentional Error)
+//
+// Select this section and press Cmd+Enter
+// This should show an error but not crash the system
+var errorTest = init global.seq
+errorTest.audio("nonexistent.wav").chop(4)
+errorTest.play(1, 2, 3, 4)
+
+//
+// STEP 17: Test Fixpitch (if implemented)
+//
+// Select this section and press Cmd+Enter
+// Note: This may not work yet as fixpitch is placeholder
+var pitchTest = init global.seq
+pitchTest.beat(4 by 4).length(1)
+pitchTest.audio("../test-assets/audio/arpeggio.wav").chop(1)
+pitchTest.play(1).fixpitch(5)
+
+pitchTest.run()
+
+//
+// STEP 18: Performance Test - Multiple Complex Sequences
+//
+// Select this section and press Cmd+Enter
+// This tests CPU performance with many simultaneous sequences
+var perf1 = init global.seq
+var perf2 = init global.seq
+var perf3 = init global.seq
+var perf4 = init global.seq
+
+perf1.beat(4 by 4).length(1).audio("../test-assets/audio/kick.wav").chop(1).play(1, 0, 1, 0).run()
+perf2.beat(4 by 4).length(1).audio("../test-assets/audio/hihat.wav").chop(1).play(1, 0, 1, 0).run()
+perf3.beat(4 by 4).length(1).audio("../test-assets/audio/snare.wav").chop(1).play(0, 0, 1, 0).run()
+perf4.beat(4 by 4).length(1).audio("../test-assets/audio/bass.wav").chop(4).play(1, 2, 3, 4).run()
+
+//
+// STEP 19: Stop All Sequences
+//
+// Select this section and press Cmd+Enter
+global.stop()
+
+//
+// STEP 20: Restart with Different Tempo
+//
+// Select this section and press Cmd+Enter
+global.tempo(100)
+global.run()
+
+//
+// STEP 21: Test Loop Mode
+//
+// Select this section and press Cmd+Enter
+global.loop()
+
+//
+// STEP 22: Final Performance Test - Full Band
+//
+// Select this section and press Cmd+Enter
+// Create a full band arrangement
+var drums = init global.seq
+var bassline = init global.seq
+var melody = init global.seq
+var harmony = init global.seq
+
+drums.beat(4 by 4).length(4).audio("../test-assets/audio/kick.wav").chop(1).play(1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0).run()
+bassline.beat(4 by 4).length(2).audio("../test-assets/audio/bass.wav").chop(8).play(1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1).run()
+melody.beat(4 by 4).length(4).audio("../test-assets/audio/arpeggio.wav").chop(16).play((1, 2, 3, 4), 0, 0, 0, (5, 6, 7, 8), 0, 0, 0, (1, 2, 3, 4), 0, 0, 0, (5, 6, 7, 8)).run()
+harmony.beat(4 by 4).length(1).audio("../test-assets/audio/arpeggio.wav").chop(8).play(1, 0, 1, 0, 1, 0, 1, 0).run()
+
+//
+// STEP 23: Live Manipulation Test
+//
+// Select this section and press Cmd+Enter
+// Test real-time parameter changes
+drums.mute()
+bassline.tempo(80)
+melody.play(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
+
+//
+// STEP 24: Final Stop
+//
+// Select this section and press Cmd+Enter
+global.stop()

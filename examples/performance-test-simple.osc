@@ -1,0 +1,55 @@
+// OrbitScore VS Code Live Coding Performance Test - Simple Version
+// Use Cmd+Enter to execute each section step by step
+
+// STEP 1: Global Initialization
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// STEP 2: Kick Drum Pattern
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("../test-assets/audio/kick.wav").chop(1)
+kick.play(1, 0, 1, 0)
+kick.run()
+
+// STEP 3: Add Hi-Hat Pattern
+var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio("../test-assets/audio/hihat.wav").chop(1)
+hihat.play(1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0)
+hihat.run()
+
+// STEP 4: Add Snare
+var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio("../test-assets/audio/snare.wav").chop(1)
+snare.play(0, 0, 1, 0)
+snare.run()
+
+// STEP 5: Add Bassline
+var bass = init global.seq
+bass.beat(4 by 4).length(2)
+bass.audio("../test-assets/audio/bass.wav").chop(8)
+bass.play(1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0)
+bass.run()
+
+// STEP 6: Start Global Transport
+global.run()
+
+// STEP 7: Test Tempo Change
+global.tempo(140)
+
+// STEP 8: Test Pattern Change
+kick.play(1, 0, 0, 1, 0, 1, 0, 0)
+
+// STEP 9: Test Muting
+hihat.mute()
+snare.mute()
+
+// STEP 10: Test Unmuting
+hihat.unmute()
+hihat.play(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+// STEP 11: Test Stop
+global.stop()

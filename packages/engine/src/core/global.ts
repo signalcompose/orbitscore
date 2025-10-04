@@ -19,6 +19,7 @@ export class Global {
   private _tick: number = 480
   private _beat: Meter = { numerator: 4, denominator: 4 }
   private _key: string = 'C'
+  private _audioPath: string = '' // Base path for audio files
   private _isRunning: boolean = false
   private _isLooping: boolean = false
 
@@ -66,29 +67,27 @@ export class Global {
     return this
   }
 
+  audioPath(value?: string): string | this {
+    if (value === undefined) {
+      return this._audioPath
+    }
+    this._audioPath = value
+    // audioPath: ${value}
+    return this
+  }
+
   // Transport control methods
   run(): this {
-    if (!this._isRunning) {
-      this._isRunning = true
-      this.transport.start()
+    // Always restart scheduler even if already running
+    // This ensures clean state after stop()
+    this._isRunning = true
+    this.transport.start()
 
-      // Start all registered sequences (they will add events to the global scheduler)
-      // Use Promise.all to wait for all sequences to prepare their slices
-      Promise.all(
-        Array.from(this.sequences.entries()).map(async ([name, sequence]) => {
-          await sequence.scheduleEvents(this.globalScheduler)
-          console.log(`Started sequence: ${name}`)
-        }),
-      )
-        .then(() => {
-          // Start the global scheduler for synchronized playback
-          this.globalScheduler.start()
-          console.log('Global transport started')
-        })
-        .catch((err) => {
-          console.error('Failed to start sequences:', err)
-        })
-    }
+    // Stop and restart the global scheduler for clean state
+    this.globalScheduler.stopAll()
+    this.globalScheduler.start()
+    console.log('▶ Global')
+    
     return this
   }
 
@@ -97,17 +96,26 @@ export class Global {
       this._isLooping = true
       this._isRunning = true
       this.transport.start()
-      console.log('Global transport looping')
+      // Global: loop
     }
     return this
   }
 
   stop(): this {
+    // Stop all sequences first
+    for (const [name, sequence] of this.sequences.entries()) {
+      sequence.stop()
+    }
+    
+    // Stop the scheduler
+    this.globalScheduler.stopAll()
+    
+    // Stop transport
     if (this._isRunning) {
       this._isRunning = false
       this._isLooping = false
       this.transport.stop()
-      console.log('Global transport stopped')
+      console.log('⏹ Global (all sequences stopped)')
     }
     return this
   }
@@ -116,6 +124,11 @@ export class Global {
   get seq(): Sequence {
     const sequence = new Sequence(this, this.audioEngine)
     return sequence
+  }
+  
+  // Get the global scheduler (used by sequences for scheduling)
+  getScheduler(): AdvancedAudioPlayer {
+    return this.globalScheduler
   }
 
   // Register a sequence (called by Sequence constructor)
@@ -143,6 +156,7 @@ export class Global {
       tick: this._tick,
       beat: this._beat,
       key: this._key,
+      audioPath: this._audioPath,
       isRunning: this._isRunning,
       isLooping: this._isLooping,
     }

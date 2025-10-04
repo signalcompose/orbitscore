@@ -5,7 +5,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm -w @orbitscore/engine run build && npm -w @orbitscore/vscode-extension run build",
+    "build": "tsc -b",
     "dev:engine": "npm -w @orbitscore/engine run dev",
     "test": "npm -w @orbitscore/engine test",
     "lint": "eslint . --ext .ts,.tsx",
@@ -24,6 +24,8 @@
     "@types/node": "^24.5.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
+    "@vscode/vsce": "^2.22.0",
+    "@types/vscode": "^1.90.0",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
@@ -40,8 +42,5 @@
       "prettier --write"
     ]
   },
-  "dependencies": {
-    "node-web-audio-api": "^1.0.4",
-    "wavefile": "^11.0.0"
-  }
+  "dependencies": {}
 }
