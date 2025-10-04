@@ -7,5 +7,6 @@
 - `docs/IMPLEMENTATION_PLAN.md` — 実装計画と進捗管理
 - `docs/INSTRUCTIONS_NEW_DSL.md` — DSL仕様
 - `docs/WORK_LOG.md` — 開発ログ（各コミットで更新必須）
+- `docs/SERENA.md` - Serenaの運用ルール
 
 Codex CLI / Cursor CLI など別エージェントで作業を引き継ぐ際も、これらドキュメントを共通の参照源としてください。
