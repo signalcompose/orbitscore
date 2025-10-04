@@ -64,8 +64,9 @@
 6. **Update README.md** (sync with WORK_LOG.md status)
 7. Update other documentation
 8. **Update Serena memory** (important changes, issues, decisions)
-9. Commit with descriptive message
+9. **Commit all changes including Serena memory files** (`.serena/memories/*.md`)
 10. **Add commit hash to WORK_LOG.md**
+11. **Commit the commit hash update**
 
 ### Commit Message Format:
 
@@ -139,6 +140,7 @@ Types: feat, fix, docs, test, refactor, chore
 - [ ] README.md updated (MUST reflect current status from WORK_LOG.md)
 - [ ] Documentation updated if needed
 - [ ] **Serena memory updated** (current issues, architectural changes, important decisions)
+- [ ] **Serena memory files staged** (`.serena/memories/*.md` included in commit)
 - [ ] Commit message is descriptive
 - [ ] No console.log left in production code
 - [ ] Types are properly defined
@@ -197,6 +199,21 @@ serena-write_memory({
   content: "Updated markdown content..."
 })
 ```
+
+### After Updating Memory:
+
+**MUST commit the updated memory files:**
+
+```bash
+git add .serena/memories/*.md
+git commit -m "docs: update Serena memory with [description]"
+```
+
+**Why**: Serena memory files (`.serena/memories/*.md`) are stored in the repository and should be version controlled. This ensures:
+- Memory persists across sessions
+- Other agents (Codex CLI, future sessions) can access the information
+- Changes are tracked in git history
+- Team members can see project status and issues
 
 ## 📝 Documentation Sync Rules
 
