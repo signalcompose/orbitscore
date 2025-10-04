@@ -1,0 +1,22 @@
+// Test chop() functionality with different slices
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// Use a longer audio file and chop it into 4 parts
+var arp = init global.seq
+arp.beat(4 by 4).length(1)
+arp.audio("test-assets/audio/arpeggio_c.wav").chop(4)
+// Play different slices: 1, 2, 3, 4
+arp.play(1, 2, 3, 4)
+
+// Another sequence using same file but different slices
+var arp2 = init global.seq
+arp2.beat(4 by 4).length(1)
+arp2.audio("test-assets/audio/arpeggio_c.wav").chop(4)
+// Play slices in reverse: 4, 3, 2, 1
+arp2.play(4, 3, 2, 1)
+
+// Start
+global.run()

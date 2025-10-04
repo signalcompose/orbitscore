@@ -11,6 +11,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **Testing Framework**: vitest
 - **Project Structure**: monorepo (packages/engine, packages/vscode-extension)
 - **Version Control**: Git
+- **Code Quality**: ESLint + Prettier with pre-commit hooks
+
+## Phase 6: Development Environment Improvements (Completed)
+
+### 6.1 Replacement of Git Hook Manager
+
+**Date**: October 4, 2025
+**Work Content**:
+
+- Removed Husky due to npm workspaces circular dependency issues
+- Implemented manual Git pre-commit hook with `lint-staged`
+- Created `npm run hooks:install` script for easy setup
+- Verified pre-commit linting and formatting
+
+**Technical Decisions**:
+
+- **Husky Issues**: 
+  - `npm install` failed with `sh: husky: command not found` due to `prepare` script running before Husky installation
+  - npm workspaces hoisting behavior caused additional complexity
+- **Solution**: Manual Git hook installation
+  - Created `.git/hooks/pre-commit` script that runs `npx lint-staged`
+  - Added `hooks:install` script to regenerate hook after clone/checkout
+  - Removed `simple-git-hooks` dependency (wasn't installing correctly in monorepo)
+- **Pre-commit Behavior**:
+  - Runs ESLint with `--fix` on staged `.ts` and `.tsx` files
+  - Runs Prettier with `--write` on staged files
+  - Commits are blocked if linting fails
+  - Auto-formatted files are staged automatically
+
+**Results**:
+
+- ✅ Pre-commit hooks working correctly
+- ✅ Code quality enforcement automated
+- ✅ No circular dependency issues
+- ✅ Clean `npm install` process
+
+**Testing**:
+
+- Verified with test file containing formatting issues
+- Confirmed ESLint errors block commits
+- Confirmed valid code is formatted and committed successfully
 
 ## Phase 1: Parser Implementation (Completed)
 

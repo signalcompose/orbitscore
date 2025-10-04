@@ -1,0 +1,13 @@
+// Timing test - very simple, one sound at a time
+
+var global = init GLOBAL
+global.tempo(60)  // 60 BPM = 1秒に1拍
+global.beat(4 by 4)
+
+var test = init global.seq
+test.beat(4 by 4).length(1)
+test.audio("test-assets/audio/kick.wav")
+// 1拍ごとにkick - 明確に区別できるはず
+test.play(1, 0, 0, 0)
+
+global.run()
