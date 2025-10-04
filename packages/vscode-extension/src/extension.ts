@@ -11,8 +11,9 @@ import { analyzeMethodChain, getContextualCompletions } from './completion-conte
 let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
+let isLiveCodingMode: boolean = false
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
   // Create output channel
@@ -29,10 +30,39 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.showCommands', showCommands),
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
-    vscode.commands.registerCommand('orbitscore.runFile', runFile),
-    vscode.commands.registerCommand('orbitscore.stop', stopEngine),
+    vscode.commands.registerCommand('orbitscore.stopEngine', stopEngine),
     statusBarItem,
   )
+
+  // Track last evaluated file to avoid duplicates
+  let lastEvaluatedFile: string | undefined
+
+  // Auto-evaluate file on editor change and save
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(async (editor) => {
+      if (editor && editor.document.languageId === 'orbitscore') {
+        const filePath = editor.document.uri.fsPath
+        if (filePath !== lastEvaluatedFile) {
+          outputChannel?.appendLine('📂 Switched to OrbitScore file')
+          lastEvaluatedFile = filePath
+          await evaluateFileInBackground(editor.document)
+        }
+      }
+    }),
+    vscode.workspace.onDidSaveTextDocument(async (document) => {
+      if (document.languageId === 'orbitscore') {
+        await evaluateFileInBackground(document)
+      }
+    }),
+  )
+
+  // Evaluate currently active document if it's an OrbitScore file
+  const activeEditor = vscode.window.activeTextEditor
+  if (activeEditor && activeEditor.document.languageId === 'orbitscore') {
+    outputChannel?.appendLine('📂 Extension activated with OrbitScore file open')
+    lastEvaluatedFile = activeEditor.document.uri.fsPath
+    await evaluateFileInBackground(activeEditor.document)
+  }
 
   // Register IntelliSense providers
   registerCompletionProviders(context)
@@ -53,7 +83,9 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
-  stopEngine()
+  if (engineProcess && !engineProcess.killed) {
+    engineProcess.kill()
+  }
   outputChannel?.dispose()
   statusBarItem?.dispose()
 }
@@ -66,11 +98,15 @@ function showCommands() {
       detail: 'Execute selected code or current line',
     },
     {
-      label: '📄 Run File',
-      description: 'Run entire file',
-      detail: 'Execute the current .osc file',
+      label: '🛑 Stop Engine',
+      description: 'Kill engine process',
+      detail: 'Force stop the audio engine',
     },
-    { label: '⏹ Stop', description: 'Stop engine', detail: 'Stop all playback' },
+    {
+      label: '🔄 Reload',
+      description: 'Reload window',
+      detail: 'Restart extension and re-evaluate file',
+    },
   ]
 
   vscode.window.showQuickPick(items).then((selection) => {
@@ -80,14 +116,68 @@ function showCommands() {
       case '▶️ Run Selection':
         vscode.commands.executeCommand('orbitscore.runSelection')
         break
-      case '📄 Run File':
-        vscode.commands.executeCommand('orbitscore.runFile')
+      case '🛑 Stop Engine':
+        vscode.commands.executeCommand('orbitscore.stopEngine')
         break
-      case '⏹ Stop':
-        vscode.commands.executeCommand('orbitscore.stop')
+      case '🔄 Reload':
+        vscode.commands.executeCommand('workbench.action.reloadWindow')
         break
     }
   })
+}
+
+function stopEngine() {
+  if (engineProcess && !engineProcess.killed) {
+    engineProcess.kill()
+    engineProcess = null
+    isLiveCodingMode = false
+    statusBarItem!.text = '🎵 OrbitScore'
+    vscode.window.showInformationMessage('🛑 Engine stopped')
+  }
+}
+
+
+function filterDefinitionsOnly(code: string, isInitializing: boolean = false): string {
+  // Filter out transport commands (.loop(), .run(), .stop(), etc.)
+  // Keep only variable declarations and property settings
+  const lines = code.split('\n')
+  const filtered = lines.filter(line => {
+    const trimmed = line.trim()
+    // Skip comments and empty lines
+    if (!trimmed || trimmed.startsWith('//')) return true
+    // Skip all transport commands
+    if (trimmed.match(/\.(loop|run|stop|mute|unmute)\s*\(\s*\)/)) {
+      // Only keep global.run() during initialization
+      if (isInitializing && trimmed.includes('global.run()')) return true
+      return false
+    }
+    // Keep everything else (var declarations, property settings)
+    return true
+  })
+  return filtered.join('\n')
+}
+
+async function evaluateFileInBackground(document: vscode.TextDocument) {
+  const code = document.getText()
+  
+  outputChannel?.appendLine(`📝 File evaluation`)
+  outputChannel?.appendLine(`   Live coding mode: ${isLiveCodingMode}`)
+  
+  // If not in live coding mode, check if file contains global.run()
+  if (!isLiveCodingMode && code.includes('global.run()')) {
+    // Initialize: keep global.run(), filter other transport commands
+    const definitionsOnly = filterDefinitionsOnly(code, true)
+    outputChannel?.appendLine('   → Initializing...')
+    await executeCode(definitionsOnly)
+    outputChannel?.appendLine('✅ Initialized')
+  } else if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
+    // Re-evaluate: filter ALL transport commands including global.run()
+    const definitionsOnly = filterDefinitionsOnly(code, false)
+    outputChannel?.appendLine('   → Re-evaluating definitions...')
+    engineProcess.stdin?.write(definitionsOnly + '\n')
+  } else {
+    outputChannel?.appendLine('   → No action taken')
+  }
 }
 
 async function runSelection() {
@@ -107,72 +197,96 @@ async function runSelection() {
     // Get the current line
     const line = editor.document.lineAt(selection.active.line)
     text = line.text
-
-    // If line is a transport command, execute it
-    if (isTransportCommand(text)) {
-      await executeCode(text)
-      return
-    }
-
-    // Otherwise, run the whole file
-    text = editor.document.getText()
   }
 
-  await executeCode(text)
-}
-
-async function runFile() {
-  const editor = vscode.window.activeTextEditor
-  if (!editor || editor.document.languageId !== 'orbitscore') {
-    vscode.window.showErrorMessage('Please open an OrbitScore file')
-    return
+  const trimmedText = text.trim()
+  
+  // If not in live coding mode yet, initialize first (but don't execute the command yet)
+  if (!isLiveCodingMode) {
+    outputChannel?.appendLine('⚠️ Not in live coding mode, initializing...')
+    // Only evaluate the file, don't send the command
+    await evaluateFileInBackground(editor.document)
+    // Wait for initialization
+    await new Promise(resolve => setTimeout(resolve, 1000))
   }
 
-  const text = editor.document.getText()
-  await executeCode(text)
+  // Now execute just the selected command (not the whole file)
+  if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
+    outputChannel?.appendLine(`> ${trimmedText}`)
+    engineProcess.stdin?.write(trimmedText + '\n')
+  } else {
+    vscode.window.showWarningMessage('Live coding mode not active')
+  }
 }
+
 
 async function executeCode(code: string) {
   try {
-    // Create temporary file
-    const tmpDir = os.tmpdir()
-    const tmpFile = path.join(tmpDir, `orbitscore_${Date.now()}.osc`)
-    fs.writeFileSync(tmpFile, code)
-
-    // Find the engine executable
     const projectRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
     if (!projectRoot) {
       vscode.window.showErrorMessage('Please open a workspace folder')
       return
     }
 
-    const enginePath = path.join(projectRoot, 'packages/engine/dist/cli.js')
+    const enginePath = path.join(projectRoot, 'packages/engine/dist/cli-audio.js')
     if (!fs.existsSync(enginePath)) {
-      vscode.window.showErrorMessage('Engine not found. Please build the project first.')
+      vscode.window.showErrorMessage('Audio engine not found. Please build the project first.')
       return
     }
 
-    // Execute the code
+    // Check if we're in live coding mode (persistent process)
+    if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
+      // Send command to existing process via stdin
+      outputChannel?.appendLine(`> ${code.substring(0, 100)}${code.length > 100 ? '...' : ''}`)
+      engineProcess.stdin?.write(code + '\n')
+      return
+    }
+
+    // Start new process
+    const tmpDir = os.tmpdir()
+    const tmpFile = path.join(tmpDir, `orbitscore_${Date.now()}.osc`)
+    fs.writeFileSync(tmpFile, code)
+
     outputChannel?.show()
-    outputChannel?.appendLine(`Executing: ${code.substring(0, 100)}...`)
+    outputChannel?.appendLine(`🎵 OrbitScore Audio Engine`)
 
     const proc = child_process.spawn('node', [enginePath, 'eval', tmpFile], {
       cwd: projectRoot,
     })
 
     proc.stdout?.on('data', (data) => {
-      outputChannel?.append(data.toString())
+      const output = data.toString()
+      outputChannel?.append(output)
+      
+      // Check if we entered live coding mode
+      if (output.includes('Live coding mode')) {
+        isLiveCodingMode = true
+        statusBarItem!.text = '⏸️ Ready'
+        vscode.window.showInformationMessage('🎵 Live coding mode activated')
+      }
+      
+      // Check for global.run()
+      if (output.includes('▶ Global')) {
+        statusBarItem!.text = '▶️ Playing'
+      }
+      
+      // Check for global.stop()
+      if (output.includes('⏹ Global')) {
+        statusBarItem!.text = '⏸️ Ready'
+      }
     })
 
     proc.stderr?.on('data', (data) => {
-      outputChannel?.append(`[ERROR] ${data.toString()}`)
+      outputChannel?.append(data.toString())
     })
 
     proc.on('close', (code) => {
-      if (code === 0) {
-        vscode.window.showInformationMessage('🎵 Code executed successfully')
-      } else {
-        vscode.window.showErrorMessage('Execution failed. Check output for details.')
+      isLiveCodingMode = false
+      statusBarItem!.text = '🎵 OrbitScore'
+      engineProcess = null
+      
+      if (code !== 0) {
+        vscode.window.showErrorMessage('Engine stopped')
       }
 
       // Clean up temp file
@@ -181,7 +295,7 @@ async function executeCode(code: string) {
       } catch {}
     })
 
-    // Store for later stopping if needed
+    // Store for later use
     engineProcess = proc
   } catch (error: any) {
     vscode.window.showErrorMessage(`Error: ${error.message}`)
@@ -189,13 +303,6 @@ async function executeCode(code: string) {
   }
 }
 
-function stopEngine() {
-  if (engineProcess) {
-    engineProcess.kill()
-    engineProcess = null
-    vscode.window.showInformationMessage('🛑 Stopped')
-  }
-}
 
 function isTransportCommand(text: string): boolean {
   const trimmed = text.trim()

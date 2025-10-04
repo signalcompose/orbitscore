@@ -1,0 +1,8 @@
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+play kick at 1
+play kick at 2
+play kick at 3
+play kick at 4

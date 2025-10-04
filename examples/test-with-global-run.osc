@@ -1,0 +1,11 @@
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("../test-assets/audio/kick.wav").chop(1)
+kick.play(1, 0, 1, 0)
+kick.run()
+
+global.run()

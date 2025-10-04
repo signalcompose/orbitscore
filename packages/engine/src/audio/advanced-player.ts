@@ -26,6 +26,7 @@ interface ScheduledPlay {
 export class AdvancedAudioPlayer {
   private processes: ChildProcess[] = []
   private scheduledPlays: ScheduledPlay[] = []
+  private sequenceEvents: Map<string, ScheduledPlay[]> = new Map() // Track events per sequence
   private startTime: number = 0
   private intervalId: NodeJS.Timeout | undefined
   private isRunning: boolean = false
@@ -40,10 +41,9 @@ export class AdvancedAudioPlayer {
     try {
       execSync('which sox', { stdio: 'pipe' })
       this.hasSox = true
-      console.log('✅ sox found - advanced audio features enabled')
     } catch {
       this.hasSox = false
-      console.warn('⚠️  sox not found. Install with: brew install sox')
+      console.warn('⚠️ sox not found')
     }
   }
 
@@ -56,19 +56,7 @@ export class AdvancedAudioPlayer {
           this.hasSox = code === 0
 
           if (!this.hasSox) {
-            console.warn('')
-            console.warn('⚠️  ADVANCED AUDIO FEATURES UNAVAILABLE')
-            console.warn('   sox not found. Install with: brew install sox')
-            console.warn('   Falling back to afplay (limited features)')
-            console.warn('   - No partial playback support')
-            console.warn('   - No audio format conversion')
-            console.warn('   - No real-time effects')
-            console.warn('')
-          } else {
-            console.log('✅ sox found - advanced audio features enabled')
-            console.log('   - Partial playback support')
-            console.log('   - Multiple audio formats (WAV, MP3, FLAC, OGG)')
-            console.log('   - Real-time effects (pitch, speed, filters)')
+            console.warn('⚠️ sox not found - limited features')
           }
 
           resolve()
@@ -121,11 +109,7 @@ export class AdvancedAudioPlayer {
       speed = 1.0,
     } = options
 
-    const now = Date.now() - this.startTime
-    const jitter = now - scheduledTime
-    console.log(
-      `🕒 executePlayback ${sequenceName} | scheduled=${scheduledTime.toFixed(2)}ms actual=${now.toFixed(2)}ms jitter=${jitter.toFixed(2)}ms`,
-    )
+    // executePlayback
 
     if (this.hasSox) {
       this.playWithSox(
@@ -149,9 +133,7 @@ export class AdvancedAudioPlayer {
     options: PlayOptions = {},
     sequenceName: string = '',
   ) {
-    console.log(
-      `🔍 playSlice called: ${sequenceName}, slice ${sliceNumber}/${totalSlices}, hasSox: ${this.hasSox}`,
-    )
+    // playSlice
 
     if (this.hasSox && totalSlices > 1) {
       // Use sox trim for partial playback - no file slicing needed!
@@ -173,7 +155,6 @@ export class AdvancedAudioPlayer {
       this.playAudio(filepath, sliceOptions, sequenceName)
     } else {
       // Fallback to full file playback
-      console.log(`🎵 ${sequenceName} (afplay - slice ${sliceNumber}/${totalSlices})`)
       this.playAudio(filepath, options, sequenceName)
     }
   }
@@ -232,38 +213,34 @@ export class AdvancedAudioPlayer {
       args.push('speed', options.speed.toString())
     }
 
-    // Debug: log the sox command
-    console.log(`🔧 sox command: sox ${args.join(' ')}`)
-
     const launchTime = Date.now()
     const proc = spawn('sox', args, {
-      stdio: 'ignore',
+      stdio: ['ignore', 'ignore', 'pipe'], // Ignore stdout, capture stderr only for real errors
       detached: false,
     })
 
-    console.log(
-      `🚀 sox spawn ${sequenceName} | scheduled=${
-        scheduledTime !== undefined ? scheduledTime.toFixed(2) : 'n/a'
-      }ms launchDelta=${this.isRunning ? (launchTime - this.startTime).toFixed(2) : 'n/a'}ms`,
-    )
+    // Capture stderr for real errors only
+    if (proc.stderr) {
+      proc.stderr.on('data', (data) => {
+        const errorMsg = data.toString().trim()
+        // Only show actual errors (FAIL, ERROR), ignore info/warnings
+        if (errorMsg && (errorMsg.includes('FAIL') || errorMsg.includes('ERROR'))) {
+          console.error(`sox error: ${errorMsg}`)
+        }
+      })
+    }
 
     proc.on('error', (err) => {
       console.error(`sox error for ${sequenceName}:`, err.message)
     })
 
     proc.on('close', (code) => {
-      const closeTime = Date.now()
-      console.log(
-        `✅ sox close ${sequenceName} | exit=${code} elapsed=${
-          scheduledTime !== undefined && this.isRunning
-            ? (closeTime - (this.startTime + scheduledTime)).toFixed(2)
-            : 'n/a'
-        }ms`,
-      )
+      if (code !== 0) {
+        console.error(`sox ${sequenceName}: exit=${code}`)
+      }
     })
 
     this.processes.push(proc)
-    console.log(`🎵 ${sequenceName} (sox)`)
   }
 
   /**
@@ -286,7 +263,6 @@ export class AdvancedAudioPlayer {
     })
 
     this.processes.push(proc)
-    console.log(`🎵 ${sequenceName} (afplay)`)
   }
 
   /**
@@ -301,8 +277,6 @@ export class AdvancedAudioPlayer {
     // Sort scheduled plays by time
     this.scheduledPlays.sort((a, b) => a.time - b.time)
 
-    console.log(`🎬 Starting advanced scheduler with ${this.scheduledPlays.length} events`)
-
     // High-precision scheduling loop
     let lastTick = process.hrtime.bigint()
     this.intervalId = setInterval(() => {
@@ -310,9 +284,6 @@ export class AdvancedAudioPlayer {
       const now = Date.now() - this.startTime
       const intervalNs = Number(tickStart - lastTick) / 1_000_000
       lastTick = tickStart
-      console.log(
-        `🌀 scheduler tick | now=${now.toFixed(2)}ms interval=${intervalNs.toFixed(2)}ms queue=${this.scheduledPlays.length}`,
-      )
 
       while (
         this.scheduledPlays.length > 0 &&
@@ -320,15 +291,11 @@ export class AdvancedAudioPlayer {
         this.scheduledPlays[0].time <= now
       ) {
         const play = this.scheduledPlays.shift()!
-        console.log(
-          `⏰ Playing at ${now}ms (scheduled: ${play.time}ms, remaining: ${this.scheduledPlays.length})`,
-        )
         this.executePlayback(play.filepath, play.options, play.sequenceName, play.time)
       }
 
       // Stop if no more events
       if (this.scheduledPlays.length === 0 && this.intervalId !== undefined) {
-        console.log(`🛑 No more events, stopping in 1s`)
         setTimeout(() => this.stop(), 1000) // Wait 1s then stop
       }
     }, 1) // 1ms precision
@@ -346,8 +313,6 @@ export class AdvancedAudioPlayer {
       clearInterval(this.intervalId)
       this.intervalId = undefined
     }
-
-    console.log('🛑 Advanced scheduler stopped')
   }
 
   /**
@@ -367,6 +332,16 @@ export class AdvancedAudioPlayer {
   }
 
   /**
+   * Clear all events for a specific sequence
+   */
+  clearSequenceEvents(sequenceName: string) {
+    // Remove from main queue
+    this.scheduledPlays = this.scheduledPlays.filter(play => play.sequenceName !== sequenceName)
+    // Clear from sequence tracking
+    this.sequenceEvents.delete(sequenceName)
+  }
+
+  /**
    * Schedule an event (compatibility with PrecisionScheduler)
    */
   scheduleEvent(
@@ -376,6 +351,10 @@ export class AdvancedAudioPlayer {
     sequenceName: string = '',
   ) {
     this.playAudio(filepath, { startTime: startTimeMs, volume }, sequenceName)
+    // Ensure scheduler is running when events are added
+    if (!this.isRunning) {
+      this.startScheduler()
+    }
   }
 
   /**
@@ -389,6 +368,10 @@ export class AdvancedAudioPlayer {
     options: PlayOptions = {},
     sequenceName: string = '',
   ) {
+    // Ensure scheduler is running when events are added
+    if (!this.isRunning) {
+      this.startScheduler()
+    }
     if (this.hasSox && totalSlices > 1) {
       // Use sox trim for partial playback - no file slicing needed!
       const duration = this.getAudioDuration(filepath)

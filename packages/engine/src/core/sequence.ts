@@ -3,6 +3,8 @@
  * Represents an individual musical sequence with its own properties
  */
 
+import * as path from 'path'
+
 import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
 import { PlayElement } from '../parser/audio-parser'
 import { TimingCalculator, TimedEvent } from '../timing/timing-calculator'
@@ -26,9 +28,11 @@ export class Sequence {
   private _timedEvents?: TimedEvent[]
   private _isMuted: boolean = false
   private _isPlaying: boolean = false
+  private _isLooping: boolean = false
   private _audioFilePath?: string
   private _chopDivisions?: number
   private playbackInterval: NodeJS.Timeout | undefined
+  private loopTimer: NodeJS.Timeout | undefined
 
   constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
@@ -59,11 +63,18 @@ export class Sequence {
   }
 
   audio(filepath: string): this {
-    // Store the filepath for loading
-    this._audioFilePath = filepath
+    // If global audio path is set and filepath is relative, combine them
+    const globalState = this.global.getState()
+    if (globalState.audioPath && !path.isAbsolute(filepath)) {
+      this._audioFilePath = path.join(globalState.audioPath, filepath)
+      // ${this._name}: audio=${filepath}
+    } else {
+      this._audioFilePath = filepath
+      // ${this._name}: audio=${filepath}
+    }
+    
     this._chopDivisions = 1 // Default to no chopping
     // Note: Actual loading will happen when needed or through explicit load call
-    console.log(`${this._name}: audio file set to ${filepath}`)
     return this
   }
 
@@ -74,7 +85,7 @@ export class Sequence {
       this._audioFile = await this.audioEngine.loadAudioFile(this._audioFilePath)
       // Default to chop(1) if not specified
       this._slices = this._audioFile.chop(1)
-      console.log(`${this._name}: loaded audio ${this._audioFilePath}`)
+      // ${this._name}: loaded
     } catch (error) {
       console.error(`Failed to load audio ${this._audioFilePath}:`, error)
     }
@@ -88,7 +99,7 @@ export class Sequence {
       return this
     }
 
-    console.log(`${this._name}: chopping into ${divisions} slices`)
+    // ${this._name}: chop(${divisions})
     return this
   }
 
@@ -99,7 +110,7 @@ export class Sequence {
 
     try {
       await audioSlicer.sliceAudioFile(this._audioFilePath, this._chopDivisions)
-      console.log(`${this._name}: slices ready`)
+      // ${this._name}: slices ready
     } catch (err: any) {
       console.error(`${this._name}: failed to prepare slices - ${err.message}`)
     }
@@ -116,7 +127,7 @@ export class Sequence {
 
     this._timedEvents = TimingCalculator.calculateTiming(elements, barDuration)
 
-    console.log(`${this._name}: play pattern set with ${this._timedEvents.length} events`)
+    // ${this._name}: ${this._timedEvents.length} events
 
     // Update transport with the sequence data
     const transport = this.global.getTransport()
@@ -134,97 +145,146 @@ export class Sequence {
     return this
   }
 
-  // Schedule events to a global scheduler
-  async scheduleEvents(scheduler: AdvancedAudioPlayer): Promise<void> {
+  // Schedule events to a global scheduler (one-shot or one iteration)
+  async scheduleEvents(scheduler: AdvancedAudioPlayer, loopIteration: number = 0, baseTime: number = 0): Promise<void> {
     if (!this._audioFilePath || !this._timedEvents || this._timedEvents.length === 0) {
       return
     }
 
-    // No need to prepare slices - sox will handle partial playback
+    // Resolve the audio file path to an absolute path
+    const resolvedFilePath = path.resolve(this._audioFilePath)
 
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo || 120
     const beatDuration = 60000 / tempo // ms per beat
     const barDuration = beatDuration * 4 // assuming 4/4 time
-    const loopCount = this._length || 1 // Use length as loop count
     const chopDivisions = this._chopDivisions || 1
 
-    console.log(`${this._name}: scheduling ${this._timedEvents.length} events x ${loopCount} loops`)
+    // Schedule events for current iteration
+    const loopOffset = loopIteration * barDuration * (this._length || 1)
 
-    // Schedule events for each loop
-    for (let loop = 0; loop < loopCount; loop++) {
-      const loopOffset = loop * barDuration
+    for (const event of this._timedEvents) {
+      if (event.sliceNumber > 0) {
+        // 0 is silence
+        const startTimeMs = baseTime + event.startTime + loopOffset
 
-      for (const event of this._timedEvents) {
-        if (event.sliceNumber > 0) {
-          // 0 is silence
-          const startTimeMs = event.startTime + loopOffset
-
-          // Use sox slice playback instead of file slicing
-          if (chopDivisions > 1) {
-            scheduler.scheduleSliceEvent(
-              this._audioFilePath,
-              startTimeMs,
-              event.sliceNumber,
-              chopDivisions,
-              { volume: this._isMuted ? 0 : 50 },
-              this._name,
-            )
-          } else {
-            scheduler.scheduleEvent(
-              this._audioFilePath,
-              startTimeMs,
-              this._isMuted ? 0 : 50, // 音量を50%に下げる
-              this._name,
-            )
-          }
-
-          if (loop === 0) {
-            console.log(`  - event at ${event.startTime}ms: slice ${event.sliceNumber}`)
-          }
+        // Use sox slice playback instead of file slicing
+        if (chopDivisions > 1) {
+          scheduler.scheduleSliceEvent(
+            resolvedFilePath,
+            startTimeMs,
+            event.sliceNumber,
+            chopDivisions,
+            { volume: this._isMuted ? 0 : 50 },
+            this._name,
+          )
+        } else {
+          scheduler.scheduleEvent(
+            resolvedFilePath,
+            startTimeMs,
+            this._isMuted ? 0 : 50,
+            this._name,
+          )
         }
       }
     }
 
     this._isPlaying = true
-    console.log(`${this._name}: scheduled for playback (${loopCount} loops)`)
+  }
+  
+  // Calculate pattern duration
+  private getPatternDuration(): number {
+    const globalState = this.global.getState()
+    const tempo = this._tempo || globalState.tempo || 120
+    const beatDuration = 60000 / tempo // ms per beat
+    const barDuration = beatDuration * 4 // assuming 4/4 time
+    return barDuration * (this._length || 1)
   }
 
   // Transport control
   run(): this {
-    // Mark as playing even if audio isn't loaded yet (for testing)
+    // One-shot playback
     if (!this._isPlaying) {
       this._isPlaying = true
-      console.log(`${this._name}: started playback`)
+      this._isLooping = false
+      console.log(`▶ ${this._name} (one-shot)`)
+      
+      // Schedule immediately
+      const scheduler = this.global.getScheduler()
+      this.scheduleEvents(scheduler, 0)
     }
     return this
   }
 
   loop(): this {
-    // TODO: Implement looping with transport system
+    // Clear old loop timer if exists
+    if (this.loopTimer) {
+      clearInterval(this.loopTimer)
+      this.loopTimer = undefined
+    }
+    
+    const scheduler = this.global.getScheduler()
+    
+    // Clear old events for this sequence first
+    ;(scheduler as any).clearSequenceEvents(this._name)
+    
+    this._isLooping = true
     this._isPlaying = true
-    console.log(`${this._name}: looping`)
+    console.log(`🔁 ${this._name} (loop)`)
+    
+    // Get current time relative to scheduler start (rounded to next beat)
+    const currentTime = (scheduler as any).isRunning 
+      ? Date.now() - (scheduler as any).startTime 
+      : 0
+    
+    let iteration = 0
+    
+    // Schedule first iteration from current time
+    this.scheduleEvents(scheduler, iteration, currentTime)
+    
+    // Set up loop timer
+    const patternDuration = this.getPatternDuration()
+    this.loopTimer = setInterval(() => {
+      if (this._isLooping && !this._isMuted) {
+        iteration++
+        const baseTime = (scheduler as any).isRunning 
+          ? Date.now() - (scheduler as any).startTime 
+          : 0
+        this.scheduleEvents(scheduler, iteration, baseTime)
+      }
+    }, patternDuration)
+    
     return this
   }
 
   stop(): this {
-    if (this._isPlaying) {
-      this._isPlaying = false
-      // TODO: Stop scheduled audio
-      console.log(`${this._name}: stopped`)
+    // Clear scheduled events from scheduler
+    const scheduler = this.global.getScheduler()
+    ;(scheduler as any).clearSequenceEvents(this._name)
+    
+    // Clear loop timer
+    if (this.loopTimer) {
+      clearInterval(this.loopTimer)
+      this.loopTimer = undefined
     }
+    
+    // Clear state
+    this._isPlaying = false
+    this._isLooping = false
+    
+    console.log(`⏹ ${this._name}`)
     return this
   }
 
   mute(): this {
     this._isMuted = true
-    console.log(`${this._name}: muted`)
+    // ${this._name}: mute
     return this
   }
 
   unmute(): this {
     this._isMuted = false
-    console.log(`${this._name}: unmuted`)
+    // ${this._name}: unmute
     return this
   }
 
@@ -240,6 +300,7 @@ export class Sequence {
       timedEvents: this._timedEvents,
       isMuted: this._isMuted,
       isPlaying: this._isPlaying,
+      isLooping: this._isLooping,
     }
   }
 }

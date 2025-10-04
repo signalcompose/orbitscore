@@ -6,6 +6,7 @@
  */
 
 import * as fs from 'fs'
+import * as readline from 'readline'
 
 import { parseAudioDSL } from './parser/audio-parser'
 import { InterpreterV2 } from './interpreter/interpreter-v2'
@@ -31,6 +32,9 @@ Examples:
 `)
 }
 
+// Shared interpreter instance for REPL mode
+let globalInterpreter: InterpreterV2 | null = null
+
 async function playFile(filepath: string, durationSeconds?: number) {
   try {
     // Check if file exists
@@ -41,55 +45,31 @@ async function playFile(filepath: string, durationSeconds?: number) {
 
     // Read the DSL file
     const source = fs.readFileSync(filepath, 'utf8')
-    console.log('=== Loading OrbitScore file ===')
-    console.log(`File: ${filepath}`)
-    if (durationSeconds) {
-      console.log(`Duration: ${durationSeconds} seconds`)
-    }
-    console.log()
 
     // Parse the DSL
-    console.log('=== Parsing DSL ===')
     const ir = parseAudioDSL(source)
-    console.log(`Parsed ${ir.statements.length} statements`)
-    console.log()
 
-    // Execute with interpreter
-    console.log('=== Executing ===')
-    const interpreter = new InterpreterV2()
-    await interpreter.execute(ir)
+    // ALWAYS create new interpreter and enter REPL mode for live coding
+    globalInterpreter = new InterpreterV2()
+    await globalInterpreter.execute(ir)
 
     // Get final state
-    const state = interpreter.getState()
-    console.log()
-    console.log('=== Execution Complete ===')
-    console.log(`Globals created: ${Object.keys(state.globals).length}`)
-    console.log(`Sequences created: ${Object.keys(state.sequences).length}`)
+    const state = globalInterpreter.getState()
 
-    // List sequences and their states
-    for (const [name, seq] of Object.entries(state.sequences)) {
-      console.log(`  - ${name}: ${(seq as any).isPlaying ? '▶️ playing' : '⏸ stopped'}`)
-    }
-
-    // Keep the process alive if audio is playing
-    if (
-      Object.values(state.sequences).some((s: any) => s.isPlaying) ||
-      Object.values(state.globals).some((g: any) => g.isRunning)
-    ) {
-      console.log()
-      if (durationSeconds) {
-        console.log(`🎵 Playing for ${durationSeconds} seconds...`)
-
-        // Auto-stop after specified duration
-        setTimeout(() => {
-          console.log()
-          console.log('⏹ Auto-stopping after timeout')
-          process.exit(0)
-        }, durationSeconds * 1000)
-      } else {
-        console.log('🎵 Audio is playing. Press Ctrl+C to stop.')
-
-        // Keep process alive
+    // Check if global.run() was called
+    const hasRunningGlobal = Object.values(state.globals).some((g: any) => g.isRunning)
+    
+    if (hasRunningGlobal) {
+      // Enter interactive REPL mode
+      console.log('🎵 Live coding mode')
+      await startREPL(globalInterpreter)
+    } else if (durationSeconds) {
+      // Timed execution mode
+      setTimeout(() => process.exit(0), durationSeconds * 1000)
+    } else {
+      // One-shot mode
+      const isPlaying = Object.values(state.sequences).some((s: any) => s.isPlaying)
+      if (isPlaying) {
         setInterval(() => {}, 1000)
       }
     }
@@ -99,9 +79,33 @@ async function playFile(filepath: string, durationSeconds?: number) {
   }
 }
 
+async function startREPL(interpreter: InterpreterV2) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: false,
+  })
+
+  rl.on('line', async (line) => {
+    const code = line.trim()
+    if (!code) return
+
+    try {
+      // Parse and execute the single line command
+      const ir = parseAudioDSL(code)
+      await interpreter.execute(ir)
+      console.log('✓') // Success indicator
+    } catch (error: any) {
+      console.error(`[ERROR] ${error.message}`)
+    }
+  })
+
+  // Keep process alive
+  await new Promise(() => {}) // Never resolves
+}
+
 async function playTestSound() {
-  console.log('=== Test Sound ===')
-  console.log('Playing a simple drum pattern...')
+  console.log('Test sound...')
 
   const testDSL = `
 // Test sound - simple drum pattern
@@ -136,21 +140,11 @@ hihat.run()
   const interpreter = new InterpreterV2()
   await interpreter.execute(ir)
 
-  console.log()
-  console.log('Test pattern loaded:')
-  console.log('  - Kick:  [1, 0, 1, 0]')
-  console.log('  - Snare: [0, 1, 0, 1]')
-  console.log('  - HiHat: [1, 1, 1, 1]')
-  console.log()
-  console.log('🎵 Playing test pattern. Press Ctrl+C to stop.')
-
-  // Keep process alive
   setInterval(() => {}, 1000)
 }
 
 // Handle Ctrl+C gracefully
 process.on('SIGINT', () => {
-  console.log('\n👋 Stopping audio...')
   process.exit(0)
 })
 

@@ -48,7 +48,7 @@ export class InterpreterV2 {
     const globalInstance = new Global(this.audioEngine)
     this.globals.set(init.variableName, globalInstance)
     this.currentGlobal = globalInstance
-    console.log(`Created Global instance: ${init.variableName}`)
+    // Global: ${init.variableName}
   }
 
   /**
@@ -77,7 +77,7 @@ export class InterpreterV2 {
     const sequence = global.seq
     sequence.setName(init.variableName)
     this.sequences.set(init.variableName, sequence)
-    console.log(`Created Sequence instance: ${init.variableName}`)
+    // Sequence: ${init.variableName}
   }
 
   /**
