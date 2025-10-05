@@ -1,0 +1,138 @@
+// 07. Audio Control - Volume and Stereo Positioning
+// Learn how to control volume (gain) and stereo position (pan) in real-time
+
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+// ==================================================
+// PART 1: Volume Control with gain()
+// ==================================================
+
+// Volume range: 0-100 (default: 80)
+var soft = init global.seq
+soft.audio("kick.wav")
+soft.gain(30)              // Quiet (30%)
+soft.play(1, 0, 0, 0)
+
+var normal = init global.seq
+normal.audio("snare.wav")
+normal.gain(80)            // Normal (80%, default)
+normal.play(0, 1, 0, 0)
+
+var loud = init global.seq
+loud.audio("hihat.wav")
+loud.gain(100)             // Loud (100%)
+loud.play(0, 0, 1, 0)
+
+// Method chaining is also supported
+var chained = init global.seq
+chained.gain(60).audio("kick.wav").play(0, 0, 0, 1)
+
+// ==================================================
+// PART 2: Stereo Positioning with pan()
+// ==================================================
+
+// Pan range: -100 (full left) to 100 (full right)
+// Default: 0 (center)
+
+var left = init global.seq
+left.audio("kick.wav")
+left.pan(-100)             // Full left
+left.play(1, 0, 0, 0)
+
+var center = init global.seq
+center.audio("snare.wav")
+center.pan(0)              // Center (default)
+center.play(0, 1, 0, 0)
+
+var right = init global.seq
+right.audio("hihat.wav")
+right.pan(100)             // Full right
+right.play(0, 0, 1, 0)
+
+var midLeft = init global.seq
+midLeft.audio("kick.wav")
+midLeft.pan(-50)           // Mid-left
+midLeft.play(0, 0, 0, 1)
+
+// ==================================================
+// PART 3: Combining gain() and pan()
+// ==================================================
+
+var combined = init global.seq
+combined.audio("kick.wav")
+combined.gain(70).pan(-50)  // 70% volume, mid-left
+combined.play(1, 0, 1, 0)
+
+// Method chaining (all in one line)
+var oneLinr = init global.seq
+oneLinr.gain(80).pan(50).audio("snare.wav").play(0, 1, 0, 1)
+
+// ==================================================
+// PART 4: Real-Time Control (Live Coding)
+// ==================================================
+
+// Start playback
+// global.run()
+// left.loop()
+// center.loop()
+// right.loop()
+
+// Try these commands while playing:
+
+// Change volume in real-time
+// left.gain(100)          // Increase to 100%
+// left.gain(50)           // Decrease to 50%
+// left.gain(0)            // Mute
+
+// Change stereo position in real-time
+// left.pan(-100)          // Move to full left
+// left.pan(0)             // Move to center
+// left.pan(100)           // Move to full right
+// left.pan(-50)           // Move to mid-left
+
+// Combine changes
+// left.gain(80).pan(-100) // 80% volume, full left
+
+// Stop playback
+// global.stop()
+
+// ==================================================
+// PART 5: Practical Example - Stereo Drum Mix
+// ==================================================
+
+var kick = init global.seq
+kick.gain(90).pan(0).audio("kick.wav")
+kick.play(1, 0, 1, 0)
+
+var snare = init global.seq
+snare.gain(80).pan(-20).audio("snare.wav")
+snare.play(0, 1, 0, 1)
+
+var hihatClosed = init global.seq
+hihatClosed.gain(60).pan(50).audio("hihat.wav")
+hihatClosed.play(1, 1, 1, 1)
+
+// Commands to try:
+// global.run()
+// kick.loop()
+// snare.loop()
+// hihatClosed.loop()
+
+// Live mixing:
+// kick.gain(100)              // Boost kick
+// snare.pan(-50)              // Move snare left
+// hihatClosed.gain(40).pan(70) // Quieter, more right
+
+// global.stop()
+
+// ==================================================
+// 💡 Tips:
+// ==================================================
+// 1. gain() accepts 0-100 (default: 80)
+// 2. pan() accepts -100 to 100 (default: 0)
+// 3. Both methods support real-time changes
+// 4. Changes take effect within 1-2ms
+// 5. Use method chaining for cleaner code
+// 6. Negative numbers work: pan(-100), pan(-50)
