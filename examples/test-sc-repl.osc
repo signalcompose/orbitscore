@@ -4,19 +4,23 @@ global.tempo(120).beat(4 by 4)
 global.audioPath("test-assets/audio")
 
 var kick = init global.seq
-kick.beat(4 by 4).length(1)
-kick.audio("kick.wav").chop(1)
+kick.audio("kick.wav")
 kick.play(1, 0, 1, 0)
 
 var snare = init global.seq
-snare.beat(4 by 4).length(1)
-snare.audio("snare.wav").chop(1)
+snare.audio("snare.wav")
 snare.play(0, 1, 0, 1)
 
+var hihat = init global.seq
+hihat.audio("hihat.wav").chop(2)
+hihat.play(1, 2, 1, 2, 1, 2, 1, 2)
+
+// Commands for live coding (use Cmd+Enter):
 global.run()
 kick.loop()
 snare.loop()
-
+hihat.loop()
 kick.stop()
 snare.stop()
+hihat.stop()
 global.stop()

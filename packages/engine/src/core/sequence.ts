@@ -241,7 +241,7 @@ export class Sequence {
     return this
   }
 
-  loop(): this {
+  async loop(): Promise<this> {
     const scheduler = this.global.getScheduler()
     const isRunning = (scheduler as any).isRunning
     
@@ -249,6 +249,14 @@ export class Sequence {
     if (!isRunning) {
       console.log(`⚠️ ${this._name}.loop() - scheduler not running. Use global.run() first.`)
       return this
+    }
+    
+    // Preload buffer to get correct duration
+    if (this._audioFilePath && scheduler.loadBuffer) {
+      const resolvedPath = path.isAbsolute(this._audioFilePath)
+        ? this._audioFilePath
+        : path.resolve(this._audioFilePath)
+      await scheduler.loadBuffer(resolvedPath)
     }
     
     // Clear old loop timer if exists

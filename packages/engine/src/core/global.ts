@@ -23,6 +23,7 @@ export interface Scheduler {
   scheduleEvent(filepath: string, time: number, volume: number, sequenceName: string): void
   scheduleSliceEvent(filepath: string, time: number, sliceIndex: number, totalSlices: number, volume: number, sequenceName: string): void
   getAudioDuration(filepath: string): number
+  loadBuffer?(filepath: string): Promise<any>
 }
 
 export class Global {
