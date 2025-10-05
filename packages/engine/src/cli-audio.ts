@@ -22,12 +22,15 @@ OrbitScore Audio Engine CLI
 
 Usage:
   orbitscore-audio play <file.osc> [duration]  - Play an OrbitScore file (optional duration in seconds)
+  orbitscore-audio repl                         - Start REPL mode for live coding
+  orbitscore-audio eval <file.osc>              - Evaluate a file in persistent mode
   orbitscore-audio test                         - Run test sound
   orbitscore-audio help                         - Show this help
 
 Examples:
   orbitscore-audio play examples/01_getting_started.osc     - Play until completion
   orbitscore-audio play examples/01_getting_started.osc 5   - Play for 5 seconds then stop
+  orbitscore-audio repl                                      - Start live coding REPL
   orbitscore-audio test
 `)
 }
@@ -49,8 +52,14 @@ async function playFile(filepath: string, durationSeconds?: number) {
     // Parse the DSL
     const ir = parseAudioDSL(source)
 
-    // ALWAYS create new interpreter and enter REPL mode for live coding
-    globalInterpreter = new InterpreterV2()
+    // Create interpreter only if not already exists (for REPL persistence)
+    if (!globalInterpreter) {
+      console.log('🆕 Creating new interpreter')
+      globalInterpreter = new InterpreterV2()
+    } else {
+      console.log('♻️ Reusing existing interpreter')
+    }
+    
     await globalInterpreter.execute(ir)
 
     // Get final state
@@ -170,6 +179,20 @@ async function main() {
       }
       const runDuration = durationArg ? parseFloat(durationArg) : undefined
       await playFile(file, runDuration)
+      break
+    }
+
+    case 'repl': {
+      // Start REPL mode without requiring a file
+      console.log('🎵 OrbitScore Audio Engine')
+      console.log('✅ Initialized')
+      
+      // Create a global interpreter
+      const { InterpreterV2 } = await import('./interpreter/interpreter-v2')
+      globalInterpreter = new InterpreterV2()
+      
+      console.log('🎵 Live coding mode')
+      await startREPL(globalInterpreter)
       break
     }
 

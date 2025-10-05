@@ -1,83 +1,91 @@
-# Current Critical Issues
+# Current Issues
 
-## 🔴 Critical: Scheduler Lifecycle & Event Management Issues
+## ✅ RESOLVED: Phase 6 Live Coding Workflow Issues
 
-### Issue 1: `global.stop()` Not Fully Stopping Audio
-**Status**: CRITICAL - Live coding workflow broken  
-**Reported**: Multiple times by user  
-**Symptom**: 
-- After `global.stop()`, status bar shows "⏸️ Ready"
-- But `kick.loop()` still plays audio
-- Pattern is distorted: plays as `(1,0,1,0,0,0,0,0)` instead of `(1,0,1,0)`
+### All Critical Issues Fixed (January 13, 2025)
 
-**Root Cause (Suspected)**:
-- Events are accumulating in the scheduler
-- `AdvancedAudioPlayer.stopAll()` may not be clearing all scheduled events
-- Loop timers (`setInterval`) may not be properly cleared in `Sequence.stop()`
+All three critical scheduler issues have been successfully resolved:
 
-**Files Involved**:
-- `packages/engine/src/audio/advanced-player.ts` - Scheduler and event management
-- `packages/engine/src/core/sequence.ts` - Loop management
-- `packages/engine/src/core/global.ts` - Global stop implementation
+#### Issue 1: Scheduler Auto-Stop (RESOLVED ✅)
+**Root Cause**: `AdvancedAudioPlayer.startScheduler()` had an auto-stop mechanism that stopped the scheduler 1 second after the event queue became empty. This was incompatible with live coding where new events are continuously added.
 
-### Issue 2: `kick.stop()` Not Functioning
-**Status**: CRITICAL  
-**Symptom**: Individual sequence `.stop()` method has no effect
+**Fix**: Removed auto-stop logic (lines 302-305 in `advanced-player.ts`). Scheduler now runs continuously from `global.run()` until `global.stop()` is explicitly called.
 
-**Root Cause (Suspected)**:
-- Loop timer not being cleared properly
-- Event queue not being flushed for specific sequences
+**Files Modified**: `packages/engine/src/audio/advanced-player.ts`
 
-### Issue 3: Inaccurate Rhythm / Extended Patterns
-**Status**: CRITICAL - Makes live performance impossible  
-**Symptom**: 
-- Patterns play with incorrect timing ("間伸びしてる" - stretched out)
-- Pattern appears to extend with zeros: `(1,0,1,0) → (1,0,1,0,0,0,0,0)`
+#### Issue 2: Double Offset in Loop Scheduling (RESOLVED ✅)
+**Root Cause**: `Sequence.loop()` was passing `loopIteration` to `scheduleEvents()`, which then calculated `loopOffset = loopIteration * patternDuration`. This caused events to be scheduled at double the intended time (e.g., iteration 1 scheduled at 4000ms instead of 2000ms).
 
-**Root Cause (Suspected)**:
-- Event timing calculation in `Sequence.scheduleEvents()` may be incorrect
-- `baseTime` calculation in `loop()` may accumulate errors
-- Events from previous loops not being cleared before scheduling new ones
+**Fix**: Changed `scheduleEvents()` calls in `loop()` to always use `loopIteration=0`, since `baseTime` (from `nextScheduleTime`) already contains the correct absolute time.
 
-## 🔧 Attempted Fixes (Not Yet Resolved)
+**Files Modified**: `packages/engine/src/core/sequence.ts`
 
-### Previous Fix Attempts:
-1. ✅ Modified `sequence.loop()` to call `stop()` first to clear old events
-2. ✅ Modified `global.stop()` to call `globalScheduler.stopAll()` and stop all sequences
-3. ✅ Modified `global.run()` to call `stopAll()` before starting
-4. ✅ Added scheduler restart logic in `scheduleEvent()` if stopped
-5. ❌ **STILL NOT WORKING** - Core issue remains unresolved
+#### Issue 3: Instance Recreation on File Save (RESOLVED ✅)
+**Root Cause**: 
+1. `var` declarations were being re-evaluated on file save, creating new `Global` and `Sequence` instances
+2. Old instances' loop timers remained active, causing sound to play from "ghost" instances
+3. `InterpreterV2` was creating new instances instead of reusing existing ones
 
-### Root Problem:
-The scheduler's event management and lifecycle needs fundamental review:
-- How events are queued
-- How they are cleared
-- How loop timers interact with the scheduler
-- How `stop()` propagates through the system
+**Fixes**:
+1. Modified `extension.ts` to filter out `var` declarations on re-evaluation (`first: false`)
+2. Modified `interpreter-v2.ts` to reuse existing `Global` and `Sequence` instances
+3. Modified `cli-audio.ts` to reuse `globalInterpreter` instance in REPL mode
 
-## 📋 Debug Strategy Needed
+**Files Modified**: 
+- `packages/vscode-extension/src/extension.ts`
+- `packages/engine/src/interpreter/interpreter-v2.ts`
+- `packages/engine/src/cli-audio.ts`
 
-1. Add comprehensive logging to track:
-   - Event queue state before/after operations
-   - Loop timer lifecycle
-   - Scheduler state transitions
+### Additional Improvements
 
-2. Verify event clearing logic:
-   - Are all events properly removed on `stop()`?
-   - Are loop timers (`setInterval`) properly cleared?
+#### UI/UX Enhancements
+- ✅ Status bar renamed: `Engine: X` → `OrbitScore: X` for clarity
+- ✅ Comment syntax fixed: `#` → `//` for TypeScript compatibility
+- ✅ Version info displayed on activation (build time, path)
+- ✅ Debug logging added to scheduler lifecycle
 
-3. Test timing calculation:
-   - Is `baseTime` calculated correctly in loops?
-   - Are events scheduled at correct absolute times?
+#### Engine Improvements
+- ✅ Added `repl` command to `cli-audio.js`
+- ✅ Fixed `global.run()` idempotency (prevents double-start)
+- ✅ Removed unnecessary `stopAll()` call in `global.run()`
 
-## 🎯 Priority Actions
+## 🟢 Current Status: All Systems Operational
 
-1. **IMMEDIATE**: Fix scheduler event management
-2. **HIGH**: Ensure `stop()` methods work reliably
-3. **HIGH**: Fix rhythm accuracy for live performance
+### Verified Working ✅
+1. **Engine Management**
+   - ✅ Manual start/stop via status bar
+   - ✅ Status indicators: Stopped / Ready / Playing
 
-## 📝 Notes
+2. **File Evaluation**
+   - ✅ Definitions evaluated on save
+   - ✅ Execution commands filtered out
+   - ✅ Instance reuse on re-evaluation
 
-- User explicitly requested to keep command palette engine start/stop for debugging due to these issues
-- Live coding workflow depends on reliable start/stop functionality
-- This is blocking Phase 4 completion and live performance testing
+3. **Live Coding Workflow**
+   - ✅ `global.run()` - starts scheduler
+   - ✅ `kick.loop()` - accurate timing, continuous loop
+   - ✅ `kick.stop()` - stops individual sequence
+   - ✅ `global.stop()` - stops all sequences and scheduler
+
+4. **Timing Accuracy**
+   - ✅ No drift in loop iterations
+   - ✅ Events scheduled at correct absolute times
+   - ✅ All loop iterations play reliably
+
+## 📝 Next Steps
+
+### Phase 6 Completion
+- [ ] Remove debug logging (clean up production code)
+- [ ] Test multiple simultaneous sequences (kick + snare + hihat)
+- [ ] Performance testing with complex patterns
+- [ ] Update documentation
+
+### Phase 7: Advanced Features (Next)
+- [ ] Time-stretching with sox
+- [ ] Pitch-shifting
+- [ ] Real-time effects
+- [ ] Pattern transformations
+
+## 🎯 No Active Issues
+
+All critical bugs have been resolved. System is ready for live performance testing and Phase 6 completion.

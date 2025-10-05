@@ -45,10 +45,18 @@ export class InterpreterV2 {
    * Process global initialization: var global = init GLOBAL
    */
   private async processGlobalInit(init: GlobalInit): Promise<void> {
-    const globalInstance = new Global(this.audioEngine)
-    this.globals.set(init.variableName, globalInstance)
+    // Reuse existing global if it exists (for REPL persistence)
+    let globalInstance = this.globals.get(init.variableName)
+    
+    if (globalInstance) {
+      console.log(`♻️ Reusing existing global: ${init.variableName}`)
+    } else {
+      console.log(`🆕 Creating new global: ${init.variableName}`)
+      globalInstance = new Global(this.audioEngine)
+      this.globals.set(init.variableName, globalInstance)
+    }
+    
     this.currentGlobal = globalInstance
-    // Global: ${init.variableName}
   }
 
   /**
@@ -73,11 +81,18 @@ export class InterpreterV2 {
       }
     }
 
-    // Create sequence through the Global's factory method
-    const sequence = global.seq
-    sequence.setName(init.variableName)
-    this.sequences.set(init.variableName, sequence)
-    // Sequence: ${init.variableName}
+    // Reuse existing sequence if it exists (for REPL persistence)
+    let sequence = this.sequences.get(init.variableName)
+    
+    if (sequence) {
+      console.log(`♻️ Reusing existing sequence: ${init.variableName}`)
+    } else {
+      console.log(`🆕 Creating new sequence: ${init.variableName}`)
+      // Create sequence through the Global's factory method
+      sequence = global.seq
+      sequence.setName(init.variableName)
+      this.sequences.set(init.variableName, sequence)
+    }
   }
 
   /**

@@ -161,12 +161,15 @@ export class Sequence {
     const chopDivisions = this._chopDivisions || 1
 
     // Schedule events for current iteration
+    // When called from loop(), baseTime already includes the correct time
+    // loopIteration should be 0 for loop() calls
     const loopOffset = loopIteration * barDuration * (this._length || 1)
 
     for (const event of this._timedEvents) {
       if (event.sliceNumber > 0) {
         // 0 is silence
         const startTimeMs = baseTime + event.startTime + loopOffset
+        console.log(`    🎵 Scheduling ${this._name} event at ${startTimeMs}ms (base=${baseTime}, event=${event.startTime}, offset=${loopOffset})`)
 
         // Use sox slice playback instead of file slicing
         if (chopDivisions > 1) {
@@ -217,8 +220,11 @@ export class Sequence {
   }
 
   loop(): this {
+    console.log(`🔁 ${this._name}.loop() called - isLooping=${this._isLooping}, loopTimer=${this.loopTimer ? 'EXISTS' : 'null'}`)
+    
     // Clear old loop timer if exists
     if (this.loopTimer) {
+      console.log(`  🧹 Clearing old loop timer`)
       clearInterval(this.loopTimer)
       this.loopTimer = undefined
     }
@@ -226,31 +232,42 @@ export class Sequence {
     const scheduler = this.global.getScheduler()
     
     // Clear old events for this sequence first
+    console.log(`  🗑️ Clearing old events for ${this._name}`)
     ;(scheduler as any).clearSequenceEvents(this._name)
     
     this._isLooping = true
     this._isPlaying = true
-    console.log(`🔁 ${this._name} (loop)`)
     
-    // Get current time relative to scheduler start (rounded to next beat)
-    const currentTime = (scheduler as any).isRunning 
-      ? Date.now() - (scheduler as any).startTime 
+    // Get current scheduler time
+    const isRunning = (scheduler as any).isRunning
+    const schedulerStartTime = (scheduler as any).startTime
+    const now = Date.now()
+    const currentTime = isRunning 
+      ? now - schedulerStartTime 
       : 0
     
+    console.log(`  ⏰ Scheduler state: isRunning=${isRunning}, startTime=${schedulerStartTime}, now=${now}`)
+    console.log(`  ⏰ Starting at: ${currentTime}ms`)
+    
+    // Calculate pattern duration
+    const patternDuration = this.getPatternDuration()
+    console.log(`  ⏱️ Pattern duration: ${patternDuration}ms`)
+    
+    // Track next scheduled time (cumulative, to avoid drift)
+    let nextScheduleTime = currentTime
     let iteration = 0
     
-    // Schedule first iteration from current time
-    this.scheduleEvents(scheduler, iteration, currentTime)
+    // Schedule first iteration
+    console.log(`  📅 Scheduling iteration ${iteration} at ${nextScheduleTime}ms`)
+    this.scheduleEvents(scheduler, 0, nextScheduleTime) // Always use 0, baseTime contains the correct time
     
     // Set up loop timer
-    const patternDuration = this.getPatternDuration()
     this.loopTimer = setInterval(() => {
       if (this._isLooping && !this._isMuted) {
         iteration++
-        const baseTime = (scheduler as any).isRunning 
-          ? Date.now() - (scheduler as any).startTime 
-          : 0
-        this.scheduleEvents(scheduler, iteration, baseTime)
+        nextScheduleTime += patternDuration // Cumulative time, no drift
+        console.log(`  🔄 Loop iteration ${iteration} at ${nextScheduleTime}ms`)
+        this.scheduleEvents(scheduler, 0, nextScheduleTime) // Always use 0, baseTime contains the correct time
       }
     }, patternDuration)
     
@@ -258,21 +275,27 @@ export class Sequence {
   }
 
   stop(): this {
+    console.log(`⏹ ${this._name}.stop() called - isPlaying=${this._isPlaying}, isLooping=${this._isLooping}, loopTimer=${this.loopTimer ? 'EXISTS' : 'null'}`)
+    
     // Clear scheduled events from scheduler
     const scheduler = this.global.getScheduler()
+    console.log(`  🗑️ Clearing scheduled events`)
     ;(scheduler as any).clearSequenceEvents(this._name)
     
     // Clear loop timer
     if (this.loopTimer) {
+      console.log(`  🧹 Clearing loop timer`)
       clearInterval(this.loopTimer)
       this.loopTimer = undefined
+    } else {
+      console.log(`  ⚠️ No loop timer to clear`)
     }
     
     // Clear state
     this._isPlaying = false
     this._isLooping = false
     
-    console.log(`⏹ ${this._name}`)
+    console.log(`✅ ${this._name} stopped`)
     return this
   }
 
