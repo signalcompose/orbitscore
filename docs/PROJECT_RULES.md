@@ -83,6 +83,26 @@
 
 ### Git Branch and PR Workflow:
 
+**CRITICAL: Always create a feature branch before starting work**
+
+**Creating a new feature branch:**
+```bash
+# Create and switch to new feature branch
+git checkout -b feature/descriptive-name
+
+# Example branch names:
+# - feature/vst-plugin-support
+# - fix/audio-timing-issue
+# - refactor/parser-cleanup
+```
+
+**Branch naming convention:**
+- `feature/` - new features
+- `fix/` - bug fixes
+- `refactor/` - code refactoring
+- `docs/` - documentation only changes
+- `test/` - test additions/fixes
+
 **Creating PRs:**
 ```bash
 # Push branch to GitHub
@@ -102,6 +122,7 @@ gh pr merge <number> --squash
 ```
 
 **Important:**
+- **ALWAYS create a branch before starting work** - never commit directly to main
 - **Branches are kept for history** - do not delete after merge
 - User typically handles merging, but agent may assist with complex implementations
 - Always use `--squash` for clean commit history on main branch
