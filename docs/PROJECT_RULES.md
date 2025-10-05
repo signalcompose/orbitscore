@@ -39,6 +39,11 @@
 - **PROHIBITED**: Adding features not in specification without confirmation
   - Example violations: `config()` method, `offset()` method
 - **When specification is unclear**: MUST ask user for clarification
+- **When implementation is blocked or encountering errors**: MUST check official documentation first
+  - Check library/framework documentation (e.g., SuperCollider docs, supercolliderjs docs)
+  - Search for similar issues or examples
+  - Verify API usage and parameter formats
+  - Only ask user after exhausting documentation resources
 
 ### 4. Documentation First
 
