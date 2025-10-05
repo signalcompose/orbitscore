@@ -23,13 +23,20 @@ export class InterpreterV2 {
   }
 
   /**
-   * Boot SuperCollider server
+   * Boot SuperCollider server (public method for explicit boot)
    */
-  private async ensureBooted(): Promise<void> {
+  async boot(): Promise<void> {
     if (!this.isBooted) {
       await this.audioEngine.boot()
       this.isBooted = true
     }
+  }
+
+  /**
+   * Boot SuperCollider server (ensure it's booted)
+   */
+  private async ensureBooted(): Promise<void> {
+    await this.boot()
   }
 
   /**

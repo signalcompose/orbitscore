@@ -191,6 +191,9 @@ async function main() {
       const { InterpreterV2 } = await import('./interpreter/interpreter-v2')
       globalInterpreter = new InterpreterV2()
       
+      // Boot SuperCollider once at startup
+      await globalInterpreter.boot()
+      
       console.log('🎵 Live coding mode')
       await startREPL(globalInterpreter)
       break
