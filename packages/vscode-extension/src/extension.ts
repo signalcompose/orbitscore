@@ -50,6 +50,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
     vscode.commands.registerCommand('orbitscore.stopEngine', stopEngine),
     vscode.commands.registerCommand('orbitscore.killSuperCollider', killSuperCollider),
+    vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     statusBarItem,
   )
 
@@ -106,6 +107,11 @@ function showCommands() {
       detail: 'Force stop the audio engine',
     },
     {
+      label: '🔊 Select Audio Device',
+      description: 'Choose output device',
+      detail: 'Select audio output device for SuperCollider',
+    },
+    {
       label: '🔪 Kill SuperCollider',
       description: 'killall scsynth',
       detail: 'Force kill all SuperCollider server processes',
@@ -129,6 +135,9 @@ function showCommands() {
         break
       case '🛑 Stop Engine':
         vscode.commands.executeCommand('orbitscore.stopEngine')
+        break
+      case '🔊 Select Audio Device':
+        vscode.commands.executeCommand('orbitscore.selectAudioDevice')
         break
       case '🔪 Kill SuperCollider':
         vscode.commands.executeCommand('orbitscore.killSuperCollider')
@@ -167,7 +176,28 @@ function startEngine() {
   // Get workspace root for proper relative path resolution
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
   
-  engineProcess = child_process.spawn('node', [enginePath, 'repl'], {
+  // Load .orbitscore.json config if it exists
+  const configPath = path.join(workspaceRoot, '.orbitscore.json')
+  let audioDevice: string | undefined
+  
+  if (fs.existsSync(configPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+      audioDevice = config.audioDevice
+      if (audioDevice) {
+        outputChannel?.appendLine(`🔊 Using audio device from config: ${audioDevice}`)
+      }
+    } catch (error) {
+      outputChannel?.appendLine(`⚠️ Failed to read .orbitscore.json: ${error}`)
+    }
+  }
+  
+  const args = ['repl']
+  if (audioDevice) {
+    args.push('--audio-device', audioDevice)
+  }
+  
+  engineProcess = child_process.spawn('node', [enginePath, ...args], {
     cwd: workspaceRoot,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
@@ -249,6 +279,73 @@ function killSuperCollider() {
       outputChannel?.appendLine('✅ SuperCollider processes killed')
       vscode.window.showInformationMessage('✅ SuperCollider killed')
     }
+  })
+}
+
+async function selectAudioDevice() {
+  outputChannel?.appendLine('🔊 Detecting audio devices...')
+  
+  // Get workspace root
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]
+  if (!workspaceFolder) {
+    vscode.window.showErrorMessage('⚠️ No workspace folder open')
+    return
+  }
+  
+  const configPath = path.join(workspaceFolder.uri.fsPath, '.orbitscore.json')
+  
+  vscode.window.showInformationMessage('🔊 Detecting audio devices... (this may take a few seconds)')
+  
+  // Temporarily boot SuperCollider to get device list from its output
+  const scPath = '/Applications/SuperCollider.app/Contents/Resources/scsynth'
+  
+  // Use scsynth directly with -u 0 to get device list without actually starting
+  child_process.exec(`${scPath} -u 57199`, { timeout: 3000 }, async (error, stdout, stderr) => {
+    // Parse device list from SuperCollider's boot log
+    const deviceRegex = /(\d+)\s*:\s*"([^"]+)"/g
+    const devices: Array<{label: string, id: number, description: string}> = []
+    let match
+    
+    while ((match = deviceRegex.exec(stdout)) !== null) {
+      const deviceId = parseInt(match[1])
+      const deviceName = match[2]
+      devices.push({
+        label: deviceName,
+        id: deviceId,
+        description: `Device ID: ${deviceId}`
+      })
+    }
+    
+    if (devices.length === 0) {
+      vscode.window.showErrorMessage('⚠️ No audio devices detected')
+      outputChannel?.appendLine('⚠️ Failed to parse device list from SuperCollider')
+      outputChannel?.appendLine(`Regex matches: ${devices.length}`)
+      return
+    }
+    
+    // Show quick pick
+    const selected = await vscode.window.showQuickPick(devices, {
+      placeHolder: 'Select audio output device',
+      title: '🔊 Audio Device Selection'
+    })
+    
+    if (!selected) return
+    
+    // Save device name (as SuperCollider recognizes it) to .orbitscore.json
+    let config: any = {}
+    if (fs.existsSync(configPath)) {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    }
+    
+    config.audioDevice = selected.label
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+    
+    outputChannel?.appendLine(`✅ Audio device set to: ${selected.label} (ID: ${selected.id})`)
+    outputChannel?.appendLine(`✅ Config saved to: ${configPath}`)
+    vscode.window.showInformationMessage(`✅ Audio device set to: ${selected.label}. Restart engine to apply.`)
+    
+    // Kill the temporary SuperCollider instance
+    child_process.exec('killall scsynth sclang 2>/dev/null')
   })
 }
 

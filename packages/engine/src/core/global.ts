@@ -101,6 +101,29 @@ export class Global {
     return this
   }
 
+  /**
+   * Set audio output device
+   * @param deviceName - Name of the output device to use
+   */
+  audioDevice(deviceName: string): this {
+    // Check if audioEngine has device selection support (SuperColliderPlayer)
+    if (typeof (this.audioEngine as any).getCurrentOutputDevice === 'function') {
+      const currentDevice = (this.audioEngine as any).getCurrentOutputDevice()
+      if (currentDevice === deviceName) {
+        console.log(`🔊 Already using device: ${deviceName}`)
+        return this
+      }
+      
+      console.warn(`⚠️  Audio device can only be set before engine starts`)
+      console.warn(`⚠️  Current device: ${currentDevice || 'default'}`)
+      console.warn(`⚠️  Requested device: ${deviceName}`)
+      console.warn(`⚠️  Restart the engine to change audio device`)
+    } else {
+      console.warn('⚠️  Audio device selection not available')
+    }
+    return this
+  }
+
   gain(valueDb?: number): number | this {
     if (valueDb === undefined) {
       return this._masterGainDb
