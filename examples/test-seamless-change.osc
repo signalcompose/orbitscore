@@ -1,0 +1,29 @@
+// Test seamless parameter changes (no restart from beginning)
+// Phase 10: Live Parameter Control
+
+var global = init GLOBAL
+global.audioPath("test-assets/audio")
+global.tempo(120)
+
+// Setup a simple 4-beat kick pattern
+var kick = init global.seq
+kick.audio("kick.wav").play(1,0,1,0).gain(0)  // 0 dB
+
+// Start playback
+global.run()
+kick.loop()
+
+// Wait a moment, then change gain while playing
+// The sequence should NOT restart from beginning!
+// It should continue from current position with new gain
+
+// Try these commands while it's playing:
+// kick.gain(-6)     // Should change smoothly, no restart
+// kick.gain(-12)    // Should change smoothly, no restart
+// kick.pan(-100)    // Should change smoothly, no restart
+// kick.pan(100)     // Should change smoothly, no restart
+
+// You should see "(seamless)" in the console log
+// And the kick should continue from where it was, not restart
+
+// global.stop()

@@ -510,3 +510,94 @@ describe('Integration tests', () => {
     // More specific assertions can be added as implementation progresses
   })
 })
+
+describe('Random value syntax', () => {
+  it('should parse gain(r) - full random', () => {
+    const ir = parseAudioDSL('seq1.gain(r)')
+    expect(ir.statements).toHaveLength(1)
+    expect(ir.statements[0]).toMatchObject({
+      type: 'sequence',
+      target: 'seq1',
+      method: 'gain',
+      args: [{ type: 'full-random' }],
+    })
+  })
+
+  it('should parse pan(r) - full random', () => {
+    const ir = parseAudioDSL('seq1.pan(r)')
+    expect(ir.statements).toHaveLength(1)
+    expect(ir.statements[0]).toMatchObject({
+      type: 'sequence',
+      target: 'seq1',
+      method: 'pan',
+      args: [{ type: 'full-random' }],
+    })
+  })
+
+  it('should parse gain(r0%4) - random walk around 0dB ±4dB', () => {
+    const ir = parseAudioDSL('seq1.gain(r0%4)')
+    expect(ir.statements).toHaveLength(1)
+    expect(ir.statements[0]).toMatchObject({
+      type: 'sequence',
+      target: 'seq1',
+      method: 'gain',
+      args: [{ type: 'random-walk', center: 0, range: 4 }],
+    })
+  })
+
+  it('should parse gain(r-6%3) - random walk around -6dB ±3dB', () => {
+    const ir = parseAudioDSL('seq1.gain(r-6%3)')
+    expect(ir.statements).toHaveLength(1)
+    expect(ir.statements[0]).toMatchObject({
+      type: 'sequence',
+      target: 'seq1',
+      method: 'gain',
+      args: [{ type: 'random-walk', center: -6, range: 3 }],
+    })
+  })
+
+  it('should parse pan(r50%30) - random walk around 50 ±30', () => {
+    const ir = parseAudioDSL('seq1.pan(r50%30)')
+    expect(ir.statements).toHaveLength(1)
+    expect(ir.statements[0]).toMatchObject({
+      type: 'sequence',
+      target: 'seq1',
+      method: 'pan',
+      args: [{ type: 'random-walk', center: 50, range: 30 }],
+    })
+  })
+
+  it('should parse pan(r-50%20) - random walk around -50 ±20', () => {
+    const ir = parseAudioDSL('seq1.pan(r-50%20)')
+    expect(ir.statements).toHaveLength(1)
+    expect(ir.statements[0]).toMatchObject({
+      type: 'sequence',
+      target: 'seq1',
+      method: 'pan',
+      args: [{ type: 'random-walk', center: -50, range: 20 }],
+    })
+  })
+
+  it('should parse chained random gain and pan', () => {
+    const ir = parseAudioDSL('seq1.gain(r-3%2).pan(r)')
+    expect(ir.statements).toHaveLength(1)
+    expect(ir.statements[0]).toMatchObject({
+      type: 'sequence',
+      target: 'seq1',
+      method: 'gain',
+      args: [{ type: 'random-walk', center: -3, range: 2 }],
+      chain: [{ method: 'pan', args: [{ type: 'full-random' }] }],
+    })
+  })
+
+  it('should parse gain with decimal center and range', () => {
+    const ir = parseAudioDSL('seq1.gain(r-3.5%1.5)')
+    expect(ir.statements).toHaveLength(1)
+    expect(ir.statements[0]).toMatchObject({
+      type: 'sequence',
+      target: 'seq1',
+      method: 'gain',
+      args: [{ type: 'random-walk', center: -3.5, range: 1.5 }],
+    })
+  })
+})
