@@ -11,10 +11,10 @@ interface ScheduledPlay {
   time: number;
   filepath: string;
   options: {
-    volume?: number;
-    pan?: number; // -100 (left) to 100 (right)
-    startPos?: number;
-    duration?: number;
+    gainDb?: number; // Gain in dB (-60 to +12, default 0)
+    pan?: number; // Pan position (-100 to +100, default 0)
+    startPos?: number; // Start position in seconds
+    duration?: number; // Duration in seconds
   };
   sequenceName: string;
 }
@@ -115,11 +115,11 @@ export class SuperColliderPlayer {
   /**
    * Schedule a play event
    */
-  scheduleEvent(filepath: string, startTimeMs: number, volume = 80, pan = 0, sequenceName = ''): void {
+  scheduleEvent(filepath: string, startTimeMs: number, gainDb = 0, pan = 0, sequenceName = ''): void {
     const play: ScheduledPlay = {
       time: startTimeMs,
       filepath,
-      options: { volume, pan },
+      options: { gainDb, pan },
       sequenceName,
     };
 
@@ -143,7 +143,7 @@ export class SuperColliderPlayer {
     startTimeMs: number,
     sliceIndex: number,
     totalSlices: number,
-    volume = 80,
+    gainDb = 0,
     pan = 0,
     sequenceName = ''
   ): void {
@@ -156,7 +156,7 @@ export class SuperColliderPlayer {
       time: startTimeMs,
       filepath,
       options: {
-        volume,
+        gainDb,
         pan,
         startPos,
         duration: sliceDuration,
@@ -181,7 +181,7 @@ export class SuperColliderPlayer {
    */
   private async executePlayback(
     filepath: string,
-    options: { volume?: number; pan?: number; startPos?: number; duration?: number },
+    options: { gainDb?: number; pan?: number; startPos?: number; duration?: number },
     sequenceName: string,
     scheduledTime: number
   ): Promise<void> {
@@ -194,7 +194,18 @@ export class SuperColliderPlayer {
     );
 
     const { bufnum } = await this.loadBuffer(filepath);
-    const volume = options.volume !== undefined ? options.volume / 100 : 0.8; // Default: 80%
+    
+    // Convert dB to amplitude: amplitude = 10^(dB/20)
+    // Default: 0 dB = 1.0 (100%)
+    let amplitude: number;
+    if (options.gainDb === undefined) {
+      amplitude = 1.0; // 0 dB default
+    } else if (options.gainDb === -Infinity) {
+      amplitude = 0.0; // Complete silence
+    } else {
+      amplitude = Math.pow(10, options.gainDb / 20);
+    }
+    
     const pan = options.pan !== undefined ? options.pan / 100 : 0.0; // -100..100 -> -1.0..1.0
     const startPos = options.startPos ?? 0;
     const duration = options.duration ?? 0;
@@ -208,7 +219,7 @@ export class SuperColliderPlayer {
       'bufnum',
       bufnum,
       'amp',
-      volume,
+      amplitude,
       'pan',
       pan,
       'rate',

@@ -15,39 +15,70 @@ describe('Sequence - gain() and pan()', () => {
       getCurrentTime: vi.fn().mockReturnValue(0),
       scheduleEvent: vi.fn(),
       scheduleSliceEvent: vi.fn(),
+      getMasterGainDb: vi.fn().mockReturnValue(0),
     } as any
 
     global = new Global(mockPlayer)
     seq = new Sequence(global, mockPlayer)
   })
 
-  describe('gain() method', () => {
-    it('should set volume to 80', () => {
-      seq.gain(80)
+  describe('gain() method (dB unit)', () => {
+    it('should set gain to 0 dB (default, 100%)', () => {
+      seq.gain(0)
       const state = seq.getState()
-      expect(state.volume).toBe(80)
+      expect(state.gainDb).toBe(0)
     })
 
-    it('should clamp volume to 0 minimum', () => {
-      seq.gain(-50)
+    it('should set gain to -6 dB (~50%)', () => {
+      seq.gain(-6)
       const state = seq.getState()
-      expect(state.volume).toBe(0)
+      expect(state.gainDb).toBe(-6)
     })
 
-    it('should clamp volume to 100 maximum', () => {
-      seq.gain(150)
+    it('should set gain to -12 dB (~25%)', () => {
+      seq.gain(-12)
       const state = seq.getState()
-      expect(state.volume).toBe(100)
+      expect(state.gainDb).toBe(-12)
+    })
+
+    it('should accept decimal dB values like -3.5', () => {
+      seq.gain(-3.5)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-3.5)
+    })
+
+    it('should clamp gain to -60 dB minimum', () => {
+      seq.gain(-100)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-60)
+    })
+
+    it('should clamp gain to +12 dB maximum', () => {
+      seq.gain(20)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(12)
+    })
+
+    it('should accept -Infinity for complete silence', () => {
+      seq.gain(-Infinity)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-Infinity)
+    })
+
+    it('should allow positive gain (boost)', () => {
+      seq.gain(6)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(6)
     })
 
     it('should allow chaining', () => {
-      const result = seq.gain(80)
+      const result = seq.gain(-6)
       expect(result).toBe(seq)
     })
 
-    it('should have default volume of 80', () => {
+    it('should have default gain of 0 dB', () => {
       const state = seq.getState()
-      expect(state.volume).toBe(80)
+      expect(state.gainDb).toBe(0)
     })
   })
 
@@ -95,27 +126,27 @@ describe('Sequence - gain() and pan()', () => {
 
   describe('Chaining gain() and pan()', () => {
     it('should allow gain().pan() chaining', () => {
-      seq.gain(80).pan(-50)
+      seq.gain(-6).pan(-50)
       const state = seq.getState()
-      expect(state.volume).toBe(80)
+      expect(state.gainDb).toBe(-6)
       expect(state.pan).toBe(-50)
     })
 
     it('should allow pan().gain() chaining', () => {
-      seq.pan(100).gain(60)
+      seq.pan(100).gain(-12)
       const state = seq.getState()
-      expect(state.volume).toBe(60)
+      expect(state.gainDb).toBe(-12)
       expect(state.pan).toBe(100)
     })
 
     it('should allow multiple updates', () => {
-      seq.gain(80)
+      seq.gain(-3)
       seq.pan(-100)
-      seq.gain(40)
+      seq.gain(-9)
       seq.pan(50)
 
       const state = seq.getState()
-      expect(state.volume).toBe(40)
+      expect(state.gainDb).toBe(-9)
       expect(state.pan).toBe(50)
     })
   })

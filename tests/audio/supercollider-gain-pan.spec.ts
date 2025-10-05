@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
 
-describe('SuperColliderPlayer - Volume and Pan Conversion', () => {
+describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
   let player: SuperColliderPlayer
   let mockOscClient: any
 
@@ -25,162 +25,213 @@ describe('SuperColliderPlayer - Volume and Pan Conversion', () => {
     // No need to shutdown in tests
   })
 
-  describe('Volume conversion (0-100 to 0.0-1.0)', () => {
-    it('should convert volume 0 to amp 0.0', async () => {
+  describe('dB to amplitude conversion', () => {
+    it('should convert 0 dB to amp 1.0 (100%)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
 
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
       await (player as any).executePlayback('/path/to/sample.wav', {
-        volume: 0,
-      })
+        gainDb: 0,
+      }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(
-        expect.arrayContaining(['amp', 0])
+        expect.arrayContaining(['amp', 1.0])
       )
     })
 
-    it('should convert volume 50 to amp 0.5', async () => {
+    it('should convert -6 dB to amp ~0.501 (~50%)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
 
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
       await (player as any).executePlayback('/path/to/sample.wav', {
-        volume: 50,
-      })
+        gainDb: -6,
+      }, '', 0)
 
-      expect(sendMsg).toHaveBeenCalledWith(
-        expect.arrayContaining(['amp', 0.5])
-      )
+      const calls = sendMsg.mock.calls
+      const ampIndex = calls[0][0].indexOf('amp')
+      const ampValue = calls[0][0][ampIndex + 1]
+      
+      // -6 dB = 10^(-6/20) = 0.5011872336272722
+      expect(ampValue).toBeCloseTo(0.501, 2)
     })
 
-    it('should convert volume 80 to amp 0.8', async () => {
+    it('should convert -12 dB to amp ~0.251 (~25%)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { volume: 80 })
+      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: -12 }, '', 0)
 
-      expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 0.8]))
+      const calls = sendMsg.mock.calls
+      const ampIndex = calls[0][0].indexOf('amp')
+      const ampValue = calls[0][0][ampIndex + 1]
+      
+      // -12 dB = 10^(-12/20) = 0.25118864315095796
+      expect(ampValue).toBeCloseTo(0.251, 2)
     })
 
-    it('should convert volume 100 to amp 1.0', async () => {
+    it('should convert +6 dB to amp ~2.0 (200%)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { volume: 100 })
+      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: 6 }, '', 0)
+
+      const calls = sendMsg.mock.calls
+      const ampIndex = calls[0][0].indexOf('amp')
+      const ampValue = calls[0][0][ampIndex + 1]
+      
+      // +6 dB = 10^(6/20) = 1.9952623149688797
+      expect(ampValue).toBeCloseTo(1.995, 2)
+    })
+
+    it('should convert -Infinity dB to amp 0.0 (silence)', async () => {
+      const mockBufferCache = new Map()
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
+      ;(player as any).bufferCache = mockBufferCache
+      const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+
+      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: -Infinity }, '', 0)
+
+      expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 0.0]))
+    })
+
+    it('should use default 0 dB (amp 1.0) when not specified', async () => {
+      const mockBufferCache = new Map()
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
+      ;(player as any).bufferCache = mockBufferCache
+      const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+
+      await (player as any).executePlayback('/path/to/sample.wav', {}, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 1.0]))
     })
 
-    it('should use default volume 80 (amp 0.8) when not specified', async () => {
+    it('should handle decimal dB values like -3.5', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', {})
+      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: -3.5 }, '', 0)
 
-      expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 0.8]))
+      const calls = sendMsg.mock.calls
+      const ampIndex = calls[0][0].indexOf('amp')
+      const ampValue = calls[0][0][ampIndex + 1]
+      
+      // -3.5 dB = 10^(-3.5/20) = 0.6683439176841525
+      expect(ampValue).toBeCloseTo(0.668, 2)
     })
   })
 
   describe('Pan conversion (-100..100 to -1.0..1.0)', () => {
     it('should convert pan -100 to -1.0 (full left)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: -100 })
+      await (player as any).executePlayback('/path/to/sample.wav', { pan: -100 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', -1.0]))
     })
 
     it('should convert pan 0 to 0.0 (center)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: 0 })
+      await (player as any).executePlayback('/path/to/sample.wav', { pan: 0 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', 0.0]))
     })
 
     it('should convert pan 100 to 1.0 (full right)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: 100 })
+      await (player as any).executePlayback('/path/to/sample.wav', { pan: 100 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', 1.0]))
     })
 
     it('should convert pan -50 to -0.5 (mid-left)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: -50 })
+      await (player as any).executePlayback('/path/to/sample.wav', { pan: -50 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', -0.5]))
     })
 
     it('should convert pan 50 to 0.5 (mid-right)', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: 50 })
+      await (player as any).executePlayback('/path/to/sample.wav', { pan: 50 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', 0.5]))
     })
 
     it('should use default pan 0 (center) when not specified', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', {})
+      await (player as any).executePlayback('/path/to/sample.wav', {}, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', 0.0]))
     })
   })
 
-  describe('Combined volume and pan', () => {
-    it('should correctly convert both volume and pan', async () => {
+  describe('Combined gainDb and pan', () => {
+    it('should correctly convert both gainDb and pan', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { volume: 60, pan: -75 })
+      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: -6, pan: -75 }, '', 0)
 
-      expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 0.6, 'pan', -0.75]))
+      const calls = sendMsg.mock.calls
+      const ampIndex = calls[0][0].indexOf('amp')
+      const ampValue = calls[0][0][ampIndex + 1]
+      
+      expect(ampValue).toBeCloseTo(0.501, 2)
+      expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', -0.75]))
     })
 
     it('should handle extreme values', async () => {
       const mockBufferCache = new Map()
-      mockBufferCache.set('/path/to/sample.wav', 0)
+      mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { volume: 100, pan: -100 })
+      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: 12, pan: -100 }, '', 0)
 
-      expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 1.0, 'pan', -1.0]))
+      const calls = sendMsg.mock.calls
+      const ampIndex = calls[0][0].indexOf('amp')
+      const ampValue = calls[0][0][ampIndex + 1]
+      
+      // +12 dB = 10^(12/20) = 3.981071705534969
+      expect(ampValue).toBeCloseTo(3.981, 2)
+      expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', -1.0]))
     })
   })
 })

@@ -1,0 +1,22 @@
+// Simple dB gain test
+// Listen to different volume levels in dB
+
+var global = init GLOBAL
+global.audioPath("test-assets/audio")
+global.tempo(120)
+
+// Setup kick sequence (don't start yet)
+var kick = init global.seq
+kick.audio("kick.wav").play(1,0,0,0).gain(0)  // 0 dB = 100% (default)
+
+// Start scheduler and playback
+global.run()
+kick.loop()
+
+// Uncomment ONE of these to test different levels:
+// kick.gain(-3)    // -3 dB ≈ 71%
+// kick.gain(-6)    // -6 dB ≈ 50%
+// kick.gain(-12)   // -12 dB ≈ 25%
+// kick.gain(-24)   // -24 dB ≈ 6%
+// kick.gain(6)     // +6 dB ≈ 200% (careful!)
+// kick.gain(-inf)  // Silent

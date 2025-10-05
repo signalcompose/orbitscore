@@ -52,6 +52,19 @@
 - Ensure all tests pass before committing
 - Golden files for regression testing
 
+### 6. Tutorial and Example File Management
+
+**チュートリアルファイルの参照を必須とする:**
+
+- **新しい`.osc`テストファイルを作成する前に、必ず既存のチュートリアルファイル（`examples/01_*.osc` - `examples/08_*.osc`）を確認すること**
+- チュートリアルファイルに正しい構文例が記載されているため、それを参考にすること
+- 特に以下を確認：
+  - `var global = init GLOBAL` の初期化（`global`ではなく`GLOBAL`）
+  - `.audio()` メソッド（`sample()`ではない）
+  - `global.run()` の呼び出しタイミング
+  - メソッドチェーンの正しい使い方
+- **目的**: 構文エラーや混乱を防ぎ、お互いの時間を節約する
+
 ## 📋 Development Workflow
 
 ### For Each Phase:

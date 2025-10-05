@@ -7,60 +7,85 @@ OrbitScore is a live coding environment for audio performance, featuring a custo
 - **Language**: TypeScript
 - **Audio Engine**: SuperCollider (scsynth + supercolliderjs)
 - **VS Code Extension**: Cursor/VS Code extension for live coding
-- **Parser**: Custom DSL parser for audio patterns
+- **Parser**: Custom DSL parser for audio patterns with negative number support
 - **Scheduler**: Precision 1ms interval scheduler
 - **Build**: npm workspaces (monorepo)
 
 ## Architecture
 - `packages/engine`: Core audio engine with SuperCollider integration
 - `packages/vscode-extension`: Cursor/VS Code extension for live coding
-- `examples/`: Demo files and test cases
+- `examples/`: Tutorial files (01-08) and reference tests
 - `test-assets/audio/`: Sample audio files (kick, snare, hihat)
+- `tests/`: Comprehensive test suite (67 tests total)
 
-## Current Status (Phase 7: SuperCollider Integration - 100% Complete)
+## Current Status (Phase 8: Audio Control & Timing Verification - 100% Complete)
 
-### Recent Achievements (January 5, 2025)
-- ✅ **SuperCollider Integration Complete**
-  - Ultra-low latency: 0-2ms (vs 140-150ms with sox)
-  - Professional audio quality via scsynth
-  - Stable buffer management and OSC communication
-  
-- ✅ **Chop Functionality Complete**
-  - 1-based to 0-based slice index conversion
-  - Buffer preloading for correct duration
-  - Perfect 8-beat hihat (closed/open alternation)
-  
-- ✅ **Live Coding Workflow**
-  - Single SuperCollider boot per session
-  - File save → definitions load
-  - Cmd+Enter → command execution
-  - Graceful shutdown (SIGTERM → server.quit())
-  
-- ✅ **3-Track Synchronization**
-  - Kick, Snare, Hihat playing simultaneously
-  - 0-2ms drift across all tracks
-  - Perfect polymeter support ready
+### Phase 8 Achievements (January 5, 2025)
 
-### TypeScript Build
-- All build errors resolved
-- @types/node successfully installed
-- skipLibCheck enabled for supercolliderjs
+#### 1. Volume Control (gain)
+- ✅ `gain()` method implementation
+  - Range: 0-100 (default: 80)
+  - Maps to SuperCollider amp: 0.0-1.0
+  - Real-time updates with 1-2ms latency
+  - Method chaining support
+  - 15 unit tests passing
 
-### Next Steps
-- [ ] Test polymeter functionality with SuperCollider
-- [ ] Optimize buffer duration query (implement /b_query properly)
-- [ ] Add more audio synthesis capabilities
-- [ ] Performance testing with complex patterns
+#### 2. Stereo Positioning (pan)
+- ✅ `pan()` method implementation
+  - Range: -100 (left) to 100 (right), default: 0 (center)
+  - Maps to SuperCollider pan: -1.0 to 1.0
+  - Real-time updates with 1-2ms latency
+  - Method chaining support
+  - 28 unit tests passing
 
-## Latest Commits
+#### 3. Parser Enhancement
+- ✅ Negative number support
+  - Added MINUS token type
+  - Correctly parses pan(-100), pan(-50), etc.
+  - 6 new parser tests
+
+#### 4. Timing Verification
+- ✅ Polymeter: Different time signatures (4/4, 5/4, 7/4)
+- ✅ Polytempo: Different tempos (80-160 BPM)
+- ✅ Nested rhythms: Up to 11 levels (2048th notes, 0.98ms intervals)
+- ✅ Multi-track: 5 simultaneous tracks with complex patterns
+- ✅ Timing drift: 0-2ms consistently
+
+### Test Coverage
+- **Total**: 67 tests (66 passing, 1 skipped)
+  - Parser: 39 tests
+  - Sequence: 15 tests
+  - SuperCollider: 13 tests
+
+### Documentation & Examples
+- ✅ Comprehensive Phase 8 work log
+- ✅ New tutorials:
+  - `07_audio_control.osc` - Volume and stereo positioning
+  - `08_timing_verification.osc` - Timing tests and performance metrics
+- ✅ Cleaned up examples directory (17 files organized)
+- ✅ Updated README with new tutorials
+
+### Performance Metrics (Verified)
+- **Latency**: 0-2ms (70x better than sox)
+- **Timing drift**: 0-2ms across all tracks
+- **Precision**: Sub-millisecond (0.98ms intervals working)
+- **Stability**: 100% (no crashes, no leaks)
+
+### Latest Commits
+- `c9025c5` - docs: Add Phase 8 documentation and reorganize examples
+- `2ed153a` - feat: Add gain() and pan() methods for audio control
+- `11f5d4e` - docs: Update documentation for Phase 7 SuperCollider integration
 - `06cd4dd` - feat: Complete chop functionality with buffer preloading
 - `aa8fd2c` - feat: Complete SuperCollider live coding integration in Cursor
-- `4f071b8` - fix: Fix SuperCollider multiple boot issue in REPL mode
-- `6f831d8` - feat: Integrate SuperCollider for ultra-low latency audio playback
 
-## Test Results
-- ✅ 3-track simultaneous playback (kick, snare, hihat)
-- ✅ 0-2ms drift maintained consistently
-- ✅ Chop working perfectly (8-beat hihat)
-- ✅ Clean engine start/stop cycle
-- ✅ No SuperCollider process leaks
+## Next Phase (Phase 9: Advanced Audio Effects)
+
+### Planned Features
+1. **Pitch Control** - `pitch()` method using SuperCollider's rate parameter
+2. **Filters** - `lpf()` and `hpf()` methods (low-pass/high-pass)
+3. **Reverb** - `reverb()` method
+4. **Compression** - `compress()` method
+
+### Current Focus
+- Ready to implement compression/effects
+- All timing and control features verified and stable
