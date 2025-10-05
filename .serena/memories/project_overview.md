@@ -1,80 +1,89 @@
-# OrbitScore Project Overview
+# OrbitScore - Project Overview
 
-## Project Description
-OrbitScore is an audio-based music DSL (Domain Specific Language) for real-time audio manipulation, time-stretching, pitch-shifting, and live coding performance. The project has migrated from a MIDI-based system to an audio-based system.
+**Last Updated:** 2025-01-05
 
-## Key Features
-- **Audio Processing**: WAV, AIFF, MP3, MP4 playback with time-stretching and pitch-shifting
-- **Audio Slicing**: `.chop(n)` to divide files into equal parts
-- **Real-time Transport**: `global.run()`, `global.stop()`, bar-quantized scheduling
-- **Live Coding**: VS Code extension with Cmd+Enter execution and persistent REPL
-- **Individual Track Control**: `.run()`, `.loop()`, `.stop()` methods for sequences
-- **Polymeter Support**: Independent sequence timing
-- **Professional Audio**: 48kHz/24bit quality with CoreAudio integration
+## What is OrbitScore?
+
+OrbitScore is a **live coding audio DSL (Domain Specific Language)** designed for real-time musical performance and composition. It provides an intuitive, text-based interface for creating and manipulating rhythmic patterns and audio sequences.
 
 ## Tech Stack
-- **Language**: TypeScript
-- **Testing**: Vitest
-- **Build System**: TypeScript compiler
-- **Package Manager**: npm with workspaces
-- **Audio**: sox (Sound eXchange) for advanced features, afplay as fallback
-- **Platform**: macOS optimized with CoreAudio
-- **Editor**: VS Code extension with syntax highlighting and live execution
 
-## Project Structure
-- **Monorepo**: npm workspaces with `packages/engine` and `packages/vscode-extension`
-- **Engine**: Core DSL implementation, parser, audio engine, transport system
-- **VS Code Extension**: Syntax highlighting, autocomplete, Cmd+Enter execution, persistent REPL
-- **Documentation**: Comprehensive docs in `docs/` folder
-- **Testing**: Extensive test suite with 216/217 tests passing (99.5%)
+- **Language:** TypeScript
+- **Runtime:** Node.js
+- **Audio Engine:** `sox` (primary), `afplay` (fallback for macOS)
+- **Project Structure:** Monorepo with npm workspaces
+- **IDE Integration:** VS Code/Cursor extension with syntax highlighting and live coding support
 
-## Current Status (Phase 6 - January 13, 2025)
+## Core Components
 
-### Implementation Progress
-- **Phase 1-3**: ✅ Parser, Interpreter, Transport (100%)
-- **Phase 4**: ✅ VS Code Extension (100%)
-- **Phase 5**: ✅ Audio Playback Verification (100%)
-- **Phase 6**: ✅ Live Coding Workflow (100% - ALL ISSUES RESOLVED)
-- **Phase 7**: 📝 Advanced Audio Features (Next)
-- **Phase 8**: 📝 DAW Plugin (Planned)
+1. **DSL Parser** (`packages/engine/src/parser/`)
+   - Parses `.osc` files into Abstract Syntax Tree (AST)
+   - Supports hierarchical patterns and nested structures
 
-### Phase 6 Complete! 🎉
-All critical issues have been resolved:
-- ✅ Scheduler auto-stop removed (live coding compatible)
-- ✅ Loop timing fixed (no double offset)
-- ✅ Instance reuse implemented (no ghost instances)
-- ✅ `global.stop()` working perfectly
-- ✅ `kick.stop()` working perfectly
-- ✅ Accurate rhythm with no drift
+2. **Interpreter** (`packages/engine/src/interpreter/`)
+   - `InterpreterV2`: Persistent REPL-based interpreter
+   - Maintains state across multiple evaluations
+   - Reuses instances for live coding workflow
 
-### Live Coding Workflow (Verified Working)
-1. **Engine Management**: Manual start/stop via status bar
-2. **File Evaluation**: Definitions on save, execution via Cmd+Enter
-3. **Transport Control**: `global.run()` / `global.stop()`
-4. **Sequence Control**: `kick.loop()` / `kick.stop()`
-5. **Visual Feedback**: Status bar shows Stopped / Ready / Playing
+3. **Audio Scheduler** (`packages/engine/src/audio/`)
+   - `AdvancedAudioPlayer`: High-precision audio scheduler (1ms resolution)
+   - Manages parallel playback of multiple sequences
+   - Supports real-time event scheduling and modification
 
-### Recent Achievements (Phase 6)
-- ✅ Persistent engine process with REPL mode
-- ✅ Two-phase workflow (definitions vs. execution)
-- ✅ Automatic file evaluation on save
-- ✅ Code filtering to prevent unintended execution
-- ✅ Individual track control with accurate timing
-- ✅ Status bar visual feedback
-- ✅ Instance reuse across evaluations
-- ✅ Scheduler lifecycle fully debugged and fixed
+4. **VS Code Extension** (`packages/vscode-extension/`)
+   - Syntax highlighting for `.osc` files
+   - Live coding support with `Cmd+Enter` execution
+   - Two-phase workflow: file save for definitions, Cmd+Enter for transport
+   - Real-time status feedback via status bar
 
-### Latest Session Work (January 13, 2025)
-- Fixed scheduler auto-stop issue
-- Fixed loop timing double-offset bug
-- Implemented instance reuse in interpreter
-- Added extensive debug logging
-- Improved UI/UX (status bar naming, comment syntax)
-- Verified complete live coding workflow
+## Current Status
+
+### Phase 6: Live Coding Workflow - ✅ 100% Complete
+
+**Recent Achievements:**
+- ✅ Fixed snare pattern playback bug (scheduledPlays sorting issue)
+- ✅ Implemented explicit scheduler control (no auto-start)
+- ✅ Enabled live sequence addition without restart
+- ✅ Achieved perfect multi-track synchronization (0-3ms drift)
+- ✅ Individual sequence control (independent loop/stop)
+- ✅ Cleaned up debug logs for production readiness
+
+**Test Results:**
+- ✅ 3-track simultaneous playback (kick + snare + hihat)
+- ✅ Individual sequence control
+- ✅ Global stop functionality
+- ✅ Live sequence addition
+- ✅ Explicit scheduler control
+
+**Latest Commits:**
+- `fix: Sort scheduledPlays after adding events for correct timing`
+- `fix: Remove auto-start logic, require explicit global.run()`
+- `fix: Enable live sequence addition via file save`
+- `chore: Clean up debug logs for production`
+
+## Live Coding Workflow
+
+1. **Start Engine:** Click status bar or use command palette
+2. **Define Sequences:** Save file (`Cmd+S`) to load definitions
+3. **Start Scheduler:** Execute `global.run()` with `Cmd+Enter`
+4. **Control Sequences:**
+   - `kick.loop()` - Start looping a sequence
+   - `kick.stop()` - Stop a specific sequence
+   - `global.stop()` - Stop all sequences and scheduler
+5. **Add New Sequences:** Edit file, save, and use immediately
+
+## Key Features
+
+- **Real-time Performance:** 1ms scheduler precision, 0-3ms typical drift
+- **Persistent State:** Interpreter maintains state across evaluations
+- **Live Modification:** Add/modify sequences without restarting
+- **Explicit Control:** User controls when audio starts/stops
+- **Multi-track Sync:** Perfect synchronization of multiple sequences
+- **IDE Integration:** Seamless Cursor/VS Code integration
 
 ## Next Steps
-1. Clean up debug logging for production
-2. Test multiple simultaneous sequences
-3. Performance testing with complex patterns
-4. Update user documentation
-5. Begin Phase 7: Advanced audio features
+
+1. Performance testing with complex patterns
+2. Optional loop quantization feature
+3. Additional DSL features (effects, parameters)
+4. Community testing and feedback

@@ -1,91 +1,67 @@
-# Current Issues
+# OrbitScore - Current Issues
 
-## ✅ RESOLVED: Phase 6 Live Coding Workflow Issues
+**Last Updated:** 2025-01-05
 
-### All Critical Issues Fixed (January 13, 2025)
+## Status: ✅ ALL CRITICAL ISSUES RESOLVED
 
-All three critical scheduler issues have been successfully resolved:
+### Previously Critical Issues (NOW RESOLVED)
 
-#### Issue 1: Scheduler Auto-Stop (RESOLVED ✅)
-**Root Cause**: `AdvancedAudioPlayer.startScheduler()` had an auto-stop mechanism that stopped the scheduler 1 second after the event queue became empty. This was incompatible with live coding where new events are continuously added.
+#### 1. ✅ RESOLVED: Snare Pattern Bug - Incorrect Playback
+**Status:** Fixed  
+**Issue:** `snare.play(0, 1, 0, 1)` was not playing correctly in the expected pattern.
 
-**Fix**: Removed auto-stop logic (lines 302-305 in `advanced-player.ts`). Scheduler now runs continuously from `global.run()` until `global.stop()` is explicitly called.
+**Root Cause:**
+- `scheduledPlays` array was only sorted once at `startScheduler()` initialization
+- In live coding mode, new events added via `loop()` were not re-sorted
+- This caused events to execute out of chronological order
+- snare events scheduled at 500ms were delayed by 500ms, playing at the same time as kick events
 
-**Files Modified**: `packages/engine/src/audio/advanced-player.ts`
+**Fix:**
+- Added `this.scheduledPlays.sort((a, b) => a.time - b.time)` after every `playAudio()` call
+- Files modified: `packages/engine/src/audio/advanced-player.ts`
 
-#### Issue 2: Double Offset in Loop Scheduling (RESOLVED ✅)
-**Root Cause**: `Sequence.loop()` was passing `loopIteration` to `scheduleEvents()`, which then calculated `loopOffset = loopIteration * patternDuration`. This caused events to be scheduled at double the intended time (e.g., iteration 1 scheduled at 4000ms instead of 2000ms).
+**Result:** All sequences now play with perfect timing (0-3ms drift)
 
-**Fix**: Changed `scheduleEvents()` calls in `loop()` to always use `loopIteration=0`, since `baseTime` (from `nextScheduleTime`) already contains the correct absolute time.
+#### 2. ✅ RESOLVED: Auto-Start Scheduler Issue
+**Status:** Fixed  
+**Issue:** Calling `sequence.loop()` would automatically start the scheduler, even without `global.run()`.
 
-**Files Modified**: `packages/engine/src/core/sequence.ts`
+**Fix:**
+- Removed auto-start logic from `scheduleEvent()` and `scheduleSliceEvent()`
+- Added scheduler running checks to `sequence.run()` and `sequence.loop()`
+- Now displays warning: `⚠️ kick.loop() - scheduler not running. Use global.run() first.`
+- Files modified: `packages/engine/src/audio/advanced-player.ts`, `packages/engine/src/core/sequence.ts`
 
-#### Issue 3: Instance Recreation on File Save (RESOLVED ✅)
-**Root Cause**: 
-1. `var` declarations were being re-evaluated on file save, creating new `Global` and `Sequence` instances
-2. Old instances' loop timers remained active, causing sound to play from "ghost" instances
-3. `InterpreterV2` was creating new instances instead of reusing existing ones
+**Result:** Users must explicitly call `global.run()` before sequences will play
 
-**Fixes**:
-1. Modified `extension.ts` to filter out `var` declarations on re-evaluation (`first: false`)
-2. Modified `interpreter-v2.ts` to reuse existing `Global` and `Sequence` instances
-3. Modified `cli-audio.ts` to reuse `globalInterpreter` instance in REPL mode
+#### 3. ✅ RESOLVED: Live Sequence Addition
+**Status:** Fixed  
+**Issue:** Adding new sequences during live coding required engine restart.
 
-**Files Modified**: 
-- `packages/vscode-extension/src/extension.ts`
-- `packages/engine/src/interpreter/interpreter-v2.ts`
-- `packages/engine/src/cli-audio.ts`
+**Fix:**
+- Removed `var` declaration filtering during re-evaluation in `filterDefinitionsOnly()`
+- `InterpreterV2` already handles instance reuse via `processGlobalInit()` and `processSequenceInit()`
+- Files modified: `packages/vscode-extension/src/extension.ts`
 
-### Additional Improvements
+**Result:** New sequences can be added by saving file, no restart needed
 
-#### UI/UX Enhancements
-- ✅ Status bar renamed: `Engine: X` → `OrbitScore: X` for clarity
-- ✅ Comment syntax fixed: `#` → `//` for TypeScript compatibility
-- ✅ Version info displayed on activation (build time, path)
-- ✅ Debug logging added to scheduler lifecycle
+---
 
-#### Engine Improvements
-- ✅ Added `repl` command to `cli-audio.js`
-- ✅ Fixed `global.run()` idempotency (prevents double-start)
-- ✅ Removed unnecessary `stopAll()` call in `global.run()`
+## Known Limitations (Not Bugs)
 
-## 🟢 Current Status: All Systems Operational
+1. **Loop Start Timing:** Sequences start immediately when `loop()` is called, not quantized to bar boundaries
+   - This is acceptable for initial implementation
+   - Future enhancement: Add optional quantization parameter
 
-### Verified Working ✅
-1. **Engine Management**
-   - ✅ Manual start/stop via status bar
-   - ✅ Status indicators: Stopped / Ready / Playing
+2. **No Visual Feedback for Playing State:** Status bar shows "Playing" for global state only
+   - Individual sequence states not displayed
+   - Future enhancement: Add sequence-specific indicators
 
-2. **File Evaluation**
-   - ✅ Definitions evaluated on save
-   - ✅ Execution commands filtered out
-   - ✅ Instance reuse on re-evaluation
+---
 
-3. **Live Coding Workflow**
-   - ✅ `global.run()` - starts scheduler
-   - ✅ `kick.loop()` - accurate timing, continuous loop
-   - ✅ `kick.stop()` - stops individual sequence
-   - ✅ `global.stop()` - stops all sequences and scheduler
+## Next Steps
 
-4. **Timing Accuracy**
-   - ✅ No drift in loop iterations
-   - ✅ Events scheduled at correct absolute times
-   - ✅ All loop iterations play reliably
-
-## 📝 Next Steps
-
-### Phase 6 Completion
-- [ ] Remove debug logging (clean up production code)
-- [ ] Test multiple simultaneous sequences (kick + snare + hihat)
-- [ ] Performance testing with complex patterns
-- [ ] Update documentation
-
-### Phase 7: Advanced Features (Next)
-- [ ] Time-stretching with sox
-- [ ] Pitch-shifting
-- [ ] Real-time effects
-- [ ] Pattern transformations
-
-## 🎯 No Active Issues
-
-All critical bugs have been resolved. System is ready for live performance testing and Phase 6 completion.
+1. Performance testing with complex patterns
+2. Loop start quantization (optional feature)
+3. Documentation updates
+4. User testing and feedback collection

@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.vsix
+*.tsbuildinfo
+.vscode/
+vscode-extension

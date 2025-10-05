@@ -152,6 +152,7 @@ function startEngine() {
   })
 
   isLiveCodingMode = true
+  hasEvaluatedFile = false  // Reset on engine start
   statusBarItem!.text = '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
   vscode.window.showInformationMessage('✅ Engine started')
@@ -180,6 +181,7 @@ function startEngine() {
     outputChannel?.appendLine(`\n🛑 Engine process exited with code ${code}`)
     engineProcess = null
     isLiveCodingMode = false
+    hasEvaluatedFile = false  // Reset on engine exit
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
   })
@@ -190,6 +192,7 @@ function stopEngine() {
     engineProcess.kill()
     engineProcess = null
     isLiveCodingMode = false
+    hasEvaluatedFile = false  // Reset on engine stop
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
     vscode.window.showInformationMessage('🛑 Engine stopped')
@@ -200,7 +203,8 @@ function stopEngine() {
 
 function filterDefinitionsOnly(code: string, isInitializing: boolean = false): string {
   // Filter out transport commands (.loop(), .run(), .stop(), etc.)
-  // Keep only variable declarations and property settings
+  // Keep variable declarations and property settings
+  // Note: var declarations are always kept because InterpreterV2 reuses existing instances
   const lines = code.split('\n')
   const filtered = lines.filter(line => {
     const trimmed = line.trim()
@@ -212,13 +216,8 @@ function filterDefinitionsOnly(code: string, isInitializing: boolean = false): s
       return false
     }
     
-    // During re-evaluation (NOT initialization), skip var declarations
-    // This prevents creating new sequence instances
-    if (!isInitializing && trimmed.match(/^var\s+\w+\s*=/)) {
-      return false
-    }
-    
-    // Keep everything else (property settings during re-evaluation)
+    // Keep everything else including var declarations
+    // InterpreterV2 will reuse existing instances if they exist
     return true
   })
   return filtered.join('\n')

@@ -169,7 +169,7 @@ export class Sequence {
       if (event.sliceNumber > 0) {
         // 0 is silence
         const startTimeMs = baseTime + event.startTime + loopOffset
-
+        
         // Use sox slice playback instead of file slicing
         if (chopDivisions > 1) {
           scheduler.scheduleSliceEvent(
@@ -205,6 +205,15 @@ export class Sequence {
 
   // Transport control
   run(): this {
+    const scheduler = this.global.getScheduler()
+    const isRunning = (scheduler as any).isRunning
+    
+    // Check if scheduler is running
+    if (!isRunning) {
+      console.log(`⚠️ ${this._name}.run() - scheduler not running. Use global.run() first.`)
+      return this
+    }
+    
     // One-shot playback
     if (!this._isPlaying) {
       this._isPlaying = true
@@ -212,20 +221,26 @@ export class Sequence {
       console.log(`▶ ${this._name} (one-shot)`)
       
       // Schedule immediately
-      const scheduler = this.global.getScheduler()
       this.scheduleEvents(scheduler, 0)
     }
     return this
   }
 
   loop(): this {
+    const scheduler = this.global.getScheduler()
+    const isRunning = (scheduler as any).isRunning
+    
+    // Check if scheduler is running
+    if (!isRunning) {
+      console.log(`⚠️ ${this._name}.loop() - scheduler not running. Use global.run() first.`)
+      return this
+    }
+    
     // Clear old loop timer if exists
     if (this.loopTimer) {
       clearInterval(this.loopTimer)
       this.loopTimer = undefined
     }
-    
-    const scheduler = this.global.getScheduler()
     
     // Clear old events for this sequence first
     ;(scheduler as any).clearSequenceEvents(this._name)
@@ -234,12 +249,9 @@ export class Sequence {
     this._isPlaying = true
     
     // Get current scheduler time
-    const isRunning = (scheduler as any).isRunning
     const schedulerStartTime = (scheduler as any).startTime
     const now = Date.now()
-    const currentTime = isRunning 
-      ? now - schedulerStartTime 
-      : 0
+    const currentTime = now - schedulerStartTime
     
     // Calculate pattern duration
     const patternDuration = this.getPatternDuration()
