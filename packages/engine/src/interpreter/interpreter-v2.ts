@@ -48,10 +48,7 @@ export class InterpreterV2 {
     // Reuse existing global if it exists (for REPL persistence)
     let globalInstance = this.globals.get(init.variableName)
     
-    if (globalInstance) {
-      console.log(`♻️ Reusing existing global: ${init.variableName}`)
-    } else {
-      console.log(`🆕 Creating new global: ${init.variableName}`)
+    if (!globalInstance) {
       globalInstance = new Global(this.audioEngine)
       this.globals.set(init.variableName, globalInstance)
     }
@@ -84,10 +81,7 @@ export class InterpreterV2 {
     // Reuse existing sequence if it exists (for REPL persistence)
     let sequence = this.sequences.get(init.variableName)
     
-    if (sequence) {
-      console.log(`♻️ Reusing existing sequence: ${init.variableName}`)
-    } else {
-      console.log(`🆕 Creating new sequence: ${init.variableName}`)
+    if (!sequence) {
       // Create sequence through the Global's factory method
       sequence = global.seq
       sequence.setName(init.variableName)

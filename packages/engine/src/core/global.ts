@@ -78,11 +78,8 @@ export class Global {
 
   // Transport control methods
   run(): this {
-    console.log(`▶ Global.run() called - _isRunning=${this._isRunning}`)
-    
     // If already running, do nothing (idempotent)
     if (this._isRunning) {
-      console.log('⚠️ Global is already running')
       return this
     }
     
@@ -107,16 +104,12 @@ export class Global {
   }
 
   stop(): this {
-    console.log(`⏹ Global.stop() called - ${this.sequences.size} sequences registered`)
-    
     // Stop all sequences first
     for (const [name, sequence] of this.sequences.entries()) {
-      console.log(`  ⏹ Stopping sequence: ${name}`)
       sequence.stop()
     }
     
     // Stop the scheduler
-    console.log(`  🛑 Calling globalScheduler.stopAll()`)
     this.globalScheduler.stopAll()
     
     // Stop transport
@@ -124,9 +117,7 @@ export class Global {
       this._isRunning = false
       this._isLooping = false
       this.transport.stop()
-      console.log('✅ Global stopped (all sequences stopped)')
-    } else {
-      console.log('⚠️ Global was not running')
+      console.log('✅ Global stopped')
     }
     return this
   }

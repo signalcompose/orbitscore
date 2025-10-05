@@ -209,14 +209,12 @@ function filterDefinitionsOnly(code: string, isInitializing: boolean = false): s
     
     // Skip all transport commands (always, even during initialization)
     if (trimmed.match(/\.(loop|run|stop|mute|unmute)\s*\(\s*\)/)) {
-      outputChannel?.appendLine(`   🚫 Filtered out: ${trimmed}`)
       return false
     }
     
     // During re-evaluation (NOT initialization), skip var declarations
     // This prevents creating new sequence instances
     if (!isInitializing && trimmed.match(/^var\s+\w+\s*=/)) {
-      outputChannel?.appendLine(`   🚫 Filtered out: ${trimmed}`)
       return false
     }
     
@@ -229,26 +227,22 @@ function filterDefinitionsOnly(code: string, isInitializing: boolean = false): s
 async function evaluateFileInBackground(document: vscode.TextDocument) {
   // Only evaluate if engine is running
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
-    outputChannel?.appendLine('⚠️ Cannot evaluate: Engine is not running')
     return
   }
 
   const code = document.getText()
   
   const isFirstEvaluation = !hasEvaluatedFile
-  outputChannel?.appendLine(`📝 Evaluating file... (first: ${isFirstEvaluation})`)
   
   // Filter out all transport commands (always)
   // isInitializing = true for first evaluation (include var declarations)
   const definitionsOnly = filterDefinitionsOnly(code, isFirstEvaluation)
   
   // Send definitions to engine
-  outputChannel?.appendLine('   → Loading definitions...')
   engineProcess.stdin?.write(definitionsOnly + '\n')
   
   // Mark as evaluated
   hasEvaluatedFile = true
-  outputChannel?.appendLine('✅ File evaluated')
 }
 
 async function runSelection() {
@@ -280,14 +274,12 @@ async function runSelection() {
   
   // If file hasn't been evaluated yet, evaluate it first
   if (!hasEvaluatedFile) {
-    outputChannel?.appendLine('📝 Auto-evaluating file before first command...')
     await evaluateFileInBackground(editor.document)
     // Wait for evaluation to complete
     await new Promise(resolve => setTimeout(resolve, 500))
   }
 
   // Execute the selected command
-  outputChannel?.appendLine(`> ${trimmedText}`)
   engineProcess.stdin?.write(trimmedText + '\n')
 }
 

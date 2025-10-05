@@ -1,0 +1,49 @@
+// Multi-Track Live Coding Test
+// Test multiple sequences running simultaneously
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
+
+// Kick - 4/4 pattern
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("kick.wav").chop(1)
+kick.play(1, 0, 1, 0)
+
+// Snare - On beats 2 and 4
+var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio("snare.wav").chop(1)
+snare.play(0, 1, 0, 1)
+
+// Hi-hat - 16th notes
+var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio("hihat.wav").chop(1)
+hihat.play(1, 1, 1, 1)
+
+// Test Commands (Execute with Cmd+Enter):
+// 
+// 1. Start scheduler:
+// global.run()
+//
+// 2. Start individual tracks:
+// kick.loop()
+// snare.loop()
+// hihat.loop()
+//
+// 3. Stop individual tracks:
+// kick.stop()
+// snare.stop()
+// hihat.stop()
+//
+// 4. Stop all:
+// global.stop()
+//
+// Expected behavior:
+// - Each sequence plays independently
+// - Timing is accurate and synchronized
+// - Individual stop/start works without affecting other tracks
+// - Global stop stops everything

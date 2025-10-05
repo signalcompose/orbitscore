@@ -269,15 +269,12 @@ export class AdvancedAudioPlayer {
    * Start the scheduler
    */
   startScheduler() {
-    console.log(`🚀 startScheduler() called - isRunning=${this.isRunning}`)
     if (this.isRunning) {
-      console.log(`⚠️ Already running, skipping`)
       return
     }
 
     this.isRunning = true
     this.startTime = Date.now()
-    console.log(`✅ Scheduler started - startTime=${this.startTime}, isRunning=${this.isRunning}`)
 
     // Sort scheduled plays by time
     this.scheduledPlays.sort((a, b) => a.time - b.time)
@@ -323,38 +320,28 @@ export class AdvancedAudioPlayer {
    * Kill all playing processes
    */
   stopAll() {
-    console.log(`🛑 stopAll() called - killing ${this.processes.length} processes, clearing ${this.scheduledPlays.length} scheduled plays`)
-    
     this.stop()
 
     for (const proc of this.processes) {
       if (proc && !proc.killed) {
         proc.kill()
-        console.log(`  ☠️ Killed process PID ${proc.pid}`)
       }
     }
 
     this.processes = []
     this.scheduledPlays = []
     this.sequenceEvents.clear() // Clear all sequence events
-    
-    console.log(`✅ stopAll() complete - all cleared`)
   }
 
   /**
    * Clear all events for a specific sequence
    */
   clearSequenceEvents(sequenceName: string) {
-    const beforeCount = this.scheduledPlays.length
     // Remove from main queue
     this.scheduledPlays = this.scheduledPlays.filter(play => play.sequenceName !== sequenceName)
-    const afterCount = this.scheduledPlays.length
-    const removed = beforeCount - afterCount
     
     // Clear from sequence tracking
     this.sequenceEvents.delete(sequenceName)
-    
-    console.log(`🗑️ clearSequenceEvents("${sequenceName}") - removed ${removed} scheduled events`)
   }
 
   /**
@@ -418,10 +405,8 @@ export class AdvancedAudioPlayer {
    * Start playback (compatibility)
    */
   start() {
-    console.log(`▶️ start() called - isRunning=${this.isRunning}`)
     // Force restart to ensure clean startTime
     if (this.isRunning) {
-      console.log(`  🔄 Stopping existing scheduler`)
       this.stop()
     }
     this.startScheduler()
