@@ -81,6 +81,31 @@
 10. **Add commit hash to WORK_LOG.md**
 11. **Commit the commit hash update**
 
+### Git Branch and PR Workflow:
+
+**Creating PRs:**
+```bash
+# Push branch to GitHub
+git push -u origin feature/branch-name
+
+# Create PR with gh command
+gh pr create --title "feat: description" --body "detailed description"
+```
+
+**Merging PRs:**
+```bash
+# Merge with squash (DO NOT delete branch)
+gh pr merge <number> --squash
+
+# ❌ NEVER use --delete-branch flag
+# ✅ Keep branches for historical reference
+```
+
+**Important:**
+- **Branches are kept for history** - do not delete after merge
+- User typically handles merging, but agent may assist with complex implementations
+- Always use `--squash` for clean commit history on main branch
+
 ### Commit Message Format:
 
 ```
