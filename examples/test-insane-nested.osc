@@ -1,0 +1,91 @@
+// INSANE Nested Subdivision Test - SuperCollider
+// Pushing the limits of hierarchical time division!
+
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+// === EXTREME (4 levels) - BASELINE ===
+// play(1, (2, (3, (4, 5))))
+// 1000ms → 500ms → 250ms → 125ms × 2
+var extreme = init global.seq
+extreme.audio("kick.wav")
+extreme.play(1, (2, (3, (4, 5))))
+
+// === SUPER EXTREME (5 levels) - 32nd notes! ===
+// play(1, (2, (3, (4, (5, 6)))))
+// 1000ms → 500ms → 250ms → 125ms → 62.5ms × 2
+// 62.5ms = 32分音符！BPM 960相当！
+var superExtreme = init global.seq
+superExtreme.audio("snare.wav")
+superExtreme.play(1, (2, (3, (4, (5, 6)))))
+
+// === ULTRA SUPER EXTREME (6 levels) - 64th notes! ===
+// play(1, (2, (3, (4, (5, (6, 7))))))
+// 1000ms → 500ms → 250ms → 125ms → 62.5ms → 31.25ms × 2
+// 31.25ms = 64分音符！BPM 1920相当！
+var ultraSuperExtreme = init global.seq
+ultraSuperExtreme.audio("hihat.wav")
+ultraSuperExtreme.play(1, (2, (3, (4, (5, (6, 7))))))
+
+// === MEGA DEATH EXTREME (7 levels) - 128th notes! ===
+// play(1, (2, (3, (4, (5, (6, (7, 8)))))))
+// 1000ms → 500ms → 250ms → 125ms → 62.5ms → 31.25ms → 15.625ms × 2
+// 15.625ms = 128分音符！BPM 3840相当！
+// これはもはや音のFlam/Rollに近い！
+var megaDeathExtreme = init global.seq
+megaDeathExtreme.audio("kick.wav")
+megaDeathExtreme.play(1, (2, (3, (4, (5, (6, (7, 8)))))))
+
+// === HYPER COSMIC EXTREME (8 levels) - 256th notes! ===
+// play(1, (2, (3, (4, (5, (6, (7, (8, 9))))))))
+// 1000ms → 500ms → 250ms → 125ms → 62.5ms → 31.25ms → 15.625ms → 7.8125ms × 2
+// 7.8125ms = 256分音符！BPM 7680相当！
+// 人間の耳では個別の音として認識できない可能性！
+var hyperCosmicExtreme = init global.seq
+hyperCosmicExtreme.audio("hihat.wav")
+hyperCosmicExtreme.play(1, (2, (3, (4, (5, (6, (7, (8, 9))))))))
+
+// === ABSOLUTE MADNESS (9 levels) - 512th notes! ===
+// play(1, (2, (3, (4, (5, (6, (7, (8, (9, 10)))))))))
+// Final subdivision: 3.90625ms × 2
+// 3.9ms = 512分音符！BPM 15360相当！
+// これは理論上の限界に挑戦！
+var absoluteMadness = init global.seq
+absoluteMadness.audio("snare.wav")
+absoluteMadness.play(1, (2, (3, (4, (5, (6, (7, (8, (9, 10)))))))))
+
+// === QUANTUM REALM (10 levels) - 1024th notes! ===
+// play(1, (2, (3, (4, (5, (6, (7, (8, (9, (10, 11))))))))))
+// Final subdivision: 1.953125ms × 2
+// 1.95ms = 1024分音符！BPM 30720相当！
+// SuperColliderのスケジューリング精度の限界に挑む！
+var quantumRealm = init global.seq
+quantumRealm.audio("kick.wav")
+quantumRealm.play(1, (2, (3, (4, (5, (6, (7, (8, (9, (10, 11))))))))))
+
+// === PLANCK TIME ZONE (11 levels) - THE ABSOLUTE LIMIT ===
+// play(1, (2, (3, (4, (5, (6, (7, (8, (9, (10, (11, 12)))))))))))
+// Final subdivision: 0.9765625ms × 2
+// 0.98ms = 2048分音符！BPM 61440相当！
+// これは音楽というより物理実験！
+var planckTimeZone = init global.seq
+planckTimeZone.audio("hihat.wav")
+planckTimeZone.play(1, (2, (3, (4, (5, (6, (7, (8, (9, (10, (11, 12)))))))))))
+
+// Commands for live coding:
+global.run()
+
+// Start with safer tests
+extreme.loop()           // 125ms (safe)
+superExtreme.loop()      // 62.5ms (should work)
+ultraSuperExtreme.loop() // 31.25ms (challenging!)
+
+// Danger zone - may cause audio artifacts!
+megaDeathExtreme.loop()     // 15.6ms (extreme!)
+hyperCosmicExtreme.loop()   // 7.8ms (insane!)
+absoluteMadness.loop()      // 3.9ms (madness!)
+quantumRealm.loop()         // 1.95ms (quantum!)
+planckTimeZone.loop()       // 0.98ms (god mode!)
+
+global.stop()

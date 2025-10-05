@@ -1,0 +1,24 @@
+// Polytempo test - SuperCollider
+// Global: 120 BPM (4/4)
+// Kick: 120 BPM (1 beat per 0.5s)
+// Snare: 90 BPM (1 beat per 0.667s)
+// Phase alignment every 2s (LCM of 0.5s and 0.667s)
+
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+var kick = init global.seq
+kick.audio("kick.wav")
+kick.play(1, 0, 1, 0)  // 2 beats per bar at 120 BPM = 1s per loop
+
+var snare = init global.seq
+snare.tempo(90)  // Different tempo!
+snare.audio("snare.wav")
+snare.play(1, 0, 1, 0)  // 2 beats per bar at 90 BPM = 1.333s per loop
+
+// Commands for live coding:
+// global.run()
+// kick.loop()
+// snare.loop()
+// global.stop()

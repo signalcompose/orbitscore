@@ -19,6 +19,7 @@ export type AudioTokenType =
   | 'RPAREN' // )
   | 'COMMA' // ,
   | 'EQUALS' // =
+  | 'MINUS' // - (for negative numbers)
   | 'NEWLINE' // line break
   | 'EOF' // end of file
 
@@ -187,6 +188,10 @@ export class AudioTokenizer {
           break
         case '=':
           tokens.push({ type: 'EQUALS', value: '=', line, column })
+          this.advance()
+          break
+        case '-':
+          tokens.push({ type: 'MINUS', value: '-', line, column })
           this.advance()
           break
         default:
@@ -513,6 +518,14 @@ export class AudioParser {
 
   private parseArgument(): any {
     const token = this.current()
+
+    // Handle negative numbers (MINUS followed by NUMBER)
+    if (token.type === 'MINUS') {
+      this.advance() // consume MINUS
+      const numToken = this.expect('NUMBER')
+      const value = -parseFloat(numToken.value)
+      return value
+    }
 
     // Numbers
     if (token.type === 'NUMBER') {

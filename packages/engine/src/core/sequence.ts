@@ -22,6 +22,8 @@ export class Sequence {
   private _tempo?: number
   private _beat?: Meter
   private _length?: number // Loop length in bars
+  private _volume: number = 80 // 0-100, default 80
+  private _pan: number = 0 // -100 (left) to 100 (right), default 0 (center)
   private _audioFile?: AudioFile
   private _slices: AudioSlice[] = []
   private _playPattern?: PlayElement[]
@@ -59,6 +61,60 @@ export class Sequence {
 
   length(bars: number): this {
     this._length = bars
+    return this
+  }
+
+  gain(value: number): this {
+    this._volume = Math.max(0, Math.min(100, value))
+    
+    // If already playing, reschedule with new gain
+    if (this._isLooping || this._isPlaying) {
+      const scheduler = this.global.getScheduler()
+      const isRunning = (scheduler as any).isRunning
+      
+      if (isRunning) {
+        // Clear old events and reschedule with new gain
+        ;(scheduler as any).clearSequenceEvents(this._name)
+        
+        // Get current scheduler time
+        const schedulerStartTime = (scheduler as any).startTime
+        const now = Date.now()
+        const currentTime = now - schedulerStartTime
+        
+        // Reschedule immediately with new gain
+        this.scheduleEvents(scheduler, 0, currentTime)
+        
+        console.log(`🎚️ ${this._name}: gain=${value}`)
+      }
+    }
+    
+    return this
+  }
+
+  pan(value: number): this {
+    this._pan = Math.max(-100, Math.min(100, value))
+    
+    // If already playing, reschedule with new pan
+    if (this._isLooping || this._isPlaying) {
+      const scheduler = this.global.getScheduler()
+      const isRunning = (scheduler as any).isRunning
+      
+      if (isRunning) {
+        // Clear old events and reschedule with new pan
+        ;(scheduler as any).clearSequenceEvents(this._name)
+        
+        // Get current scheduler time
+        const schedulerStartTime = (scheduler as any).startTime
+        const now = Date.now()
+        const currentTime = now - schedulerStartTime
+        
+        // Reschedule immediately with new pan
+        this.scheduleEvents(scheduler, 0, currentTime)
+        
+        console.log(`🎛️ ${this._name}: pan=${value}`)
+      }
+    }
+    
     return this
   }
 
@@ -188,14 +244,16 @@ export class Sequence {
             startTimeMs,
             event.sliceNumber,
             chopDivisions,
-            this._isMuted ? 0 : 50,
+            this._isMuted ? 0 : this._volume,
+            this._pan,
             this._name,
           )
         } else {
           scheduler.scheduleEvent(
             resolvedFilePath,
             startTimeMs,
-            this._isMuted ? 0 : 50,
+            this._isMuted ? 0 : this._volume,
+            this._pan,
             this._name,
           )
         }
@@ -336,6 +394,8 @@ export class Sequence {
       tempo: this._tempo,
       beat: this._beat,
       length: this._length,
+      volume: this._volume,
+      pan: this._pan,
       slices: this._slices,
       playPattern: this._playPattern,
       timedEvents: this._timedEvents,

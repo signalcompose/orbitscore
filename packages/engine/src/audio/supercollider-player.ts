@@ -12,6 +12,7 @@ interface ScheduledPlay {
   filepath: string;
   options: {
     volume?: number;
+    pan?: number; // -100 (left) to 100 (right)
     startPos?: number;
     duration?: number;
   };
@@ -114,11 +115,11 @@ export class SuperColliderPlayer {
   /**
    * Schedule a play event
    */
-  scheduleEvent(filepath: string, startTimeMs: number, volume = 80, sequenceName = ''): void {
+  scheduleEvent(filepath: string, startTimeMs: number, volume = 80, pan = 0, sequenceName = ''): void {
     const play: ScheduledPlay = {
       time: startTimeMs,
       filepath,
-      options: { volume },
+      options: { volume, pan },
       sequenceName,
     };
 
@@ -143,6 +144,7 @@ export class SuperColliderPlayer {
     sliceIndex: number,
     totalSlices: number,
     volume = 80,
+    pan = 0,
     sequenceName = ''
   ): void {
     const duration = this.getAudioDuration(filepath);
@@ -155,6 +157,7 @@ export class SuperColliderPlayer {
       filepath,
       options: {
         volume,
+        pan,
         startPos,
         duration: sliceDuration,
       },
@@ -178,7 +181,7 @@ export class SuperColliderPlayer {
    */
   private async executePlayback(
     filepath: string,
-    options: { volume?: number; startPos?: number; duration?: number },
+    options: { volume?: number; pan?: number; startPos?: number; duration?: number },
     sequenceName: string,
     scheduledTime: number
   ): Promise<void> {
@@ -191,7 +194,8 @@ export class SuperColliderPlayer {
     );
 
     const { bufnum } = await this.loadBuffer(filepath);
-    const volume = options.volume !== undefined ? options.volume / 100 : 0.5;
+    const volume = options.volume !== undefined ? options.volume / 100 : 0.8; // Default: 80%
+    const pan = options.pan !== undefined ? options.pan / 100 : 0.0; // -100..100 -> -1.0..1.0
     const startPos = options.startPos ?? 0;
     const duration = options.duration ?? 0;
 
@@ -205,6 +209,8 @@ export class SuperColliderPlayer {
       bufnum,
       'amp',
       volume,
+      'pan',
+      pan,
       'rate',
       1.0,
       'startPos',

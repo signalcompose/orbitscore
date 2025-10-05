@@ -20,8 +20,8 @@ export interface Scheduler {
   stop(): void
   stopAll(): void
   clearSequenceEvents(name: string): void
-  scheduleEvent(filepath: string, time: number, volume: number, sequenceName: string): void
-  scheduleSliceEvent(filepath: string, time: number, sliceIndex: number, totalSlices: number, volume: number, sequenceName: string): void
+  scheduleEvent(filepath: string, time: number, volume: number, pan: number, sequenceName: string): void
+  scheduleSliceEvent(filepath: string, time: number, sliceIndex: number, totalSlices: number, volume: number, pan: number, sequenceName: string): void
   getAudioDuration(filepath: string): number
   loadBuffer?(filepath: string): Promise<any>
 }

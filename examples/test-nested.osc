@@ -1,0 +1,75 @@
+// Nested Subdivision Test - SuperCollider
+// Tests hierarchical time division with precise timing
+
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+// === Test 1: Simple Binary Subdivision ===
+// play(1, (2, 3)) - first half plays slice 1, second half splits for 2 and 3
+// Expected timing (1 bar = 2000ms):
+// - Slice 1: 0ms, duration 1000ms
+// - Slice 2: 1000ms, duration 500ms
+// - Slice 3: 1500ms, duration 500ms
+var binary = init global.seq
+binary.audio("kick.wav")
+binary.play(1, (2, 3))
+
+// === Test 2: Triplet Feel ===
+// play(1, (2, 3, 4)) - quarter note + triplet
+// Expected timing (1 bar = 2000ms):
+// - Slice 1: 0ms, duration 1000ms
+// - Slice 2: 1000ms, duration 333ms
+// - Slice 3: 1333ms, duration 333ms
+// - Slice 4: 1666ms, duration 334ms
+var triplet = init global.seq
+triplet.audio("snare.wav")
+triplet.play(1, (2, 3, 4))
+
+// === Test 3: Deep Nesting ===
+// play(1, (2, (3, 4)))
+// Expected timing (1 bar = 2000ms):
+// - Slice 1: 0ms, duration 1000ms
+// - Slice 2: 1000ms, duration 500ms
+// - Slice 3: 1500ms, duration 250ms
+// - Slice 4: 1750ms, duration 250ms
+var deep = init global.seq
+deep.audio("hihat.wav")
+deep.play(1, (2, (3, 4)))
+
+// === Test 4: Complex Pattern ===
+// play((1, 2), (3, (4, 5, 6)))
+// First half: binary split (1, 2)
+// Second half: 3 followed by triplet (4, 5, 6)
+// Expected timing (1 bar = 2000ms):
+// - Slice 1: 0ms, duration 500ms
+// - Slice 2: 500ms, duration 500ms
+// - Slice 3: 1000ms, duration 500ms
+// - Slice 4: 1500ms, duration 167ms
+// - Slice 5: 1667ms, duration 167ms
+// - Slice 6: 1834ms, duration 166ms
+var complex = init global.seq
+complex.audio("hihat.wav")
+complex.play((1, 2), (3, (4, 5, 6)))
+
+// === Test 5: Extreme Nesting ===
+// play(1, (2, (3, (4, 5))))
+// Progressive subdivision: 1/2 → 1/4 → 1/8 → 1/16
+// Expected timing (1 bar = 2000ms):
+// - Slice 1: 0ms, duration 1000ms
+// - Slice 2: 1000ms, duration 500ms
+// - Slice 3: 1500ms, duration 250ms
+// - Slice 4: 1750ms, duration 125ms
+// - Slice 5: 1875ms, duration 125ms
+var extreme = init global.seq
+extreme.audio("kick.wav")
+extreme.play(1, (2, (3, (4, 5))))
+
+// Commands for live coding:
+// global.run()
+// binary.loop()
+// triplet.loop()
+// deep.loop()
+// complex.loop()
+// extreme.loop()
+// global.stop()
