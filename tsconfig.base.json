@@ -8,6 +8,8 @@
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
-    "verbatimModuleSyntax": false
+    "verbatimModuleSyntax": false,
+    "esModuleInterop": true,
+    "types": ["node"]
   }
 }
