@@ -159,7 +159,11 @@ export class Sequence {
     }
 
     // Resolve the audio file path to an absolute path
-    const resolvedFilePath = path.resolve(this._audioFilePath)
+    // Note: audio() method already combines globalState.audioPath with filepath
+    // So we only need to resolve relative paths from current working directory
+    const resolvedFilePath = path.isAbsolute(this._audioFilePath)
+      ? this._audioFilePath
+      : path.resolve(this._audioFilePath)
 
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo || 120

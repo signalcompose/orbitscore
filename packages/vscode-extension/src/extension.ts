@@ -147,8 +147,11 @@ function startEngine() {
     return
   }
 
+  // Get workspace root for proper relative path resolution
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+  
   engineProcess = child_process.spawn('node', [enginePath, 'repl'], {
-    cwd: path.dirname(enginePath),
+    cwd: workspaceRoot,
     stdio: ['pipe', 'pipe', 'pipe'],
   })
 
@@ -190,7 +193,17 @@ function startEngine() {
 
 function stopEngine() {
   if (engineProcess && !engineProcess.killed) {
-    engineProcess.kill()
+    // Send graceful shutdown signal (SIGTERM)
+    // This allows the engine to clean up SuperCollider properly
+    engineProcess.kill('SIGTERM')
+    
+    // Force kill after 2 seconds if still running
+    setTimeout(() => {
+      if (engineProcess && !engineProcess.killed) {
+        engineProcess.kill('SIGKILL')
+      }
+    }, 2000)
+    
     engineProcess = null
     isLiveCodingMode = false
     hasEvaluatedFile = false  // Reset on engine stop
