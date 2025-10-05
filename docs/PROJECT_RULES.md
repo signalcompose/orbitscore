@@ -65,6 +65,23 @@
   - メソッドチェーンの正しい使い方
 - **目的**: 構文エラーや混乱を防ぎ、お互いの時間を節約する
 
+### 7. User Confirmation Required (ユーザー確認必須)
+
+**CRITICAL: NEVER proceed with actions without explicit user confirmation**
+
+- **When asking "〜しますか？" (Shall I do X?), ALWAYS wait for user's response**
+- **NEVER execute the action immediately after asking**
+- Examples of actions requiring confirmation:
+  - Creating a PR
+  - Merging a PR
+  - Deleting branches
+  - Pushing to remote
+  - Making significant changes
+  - Running destructive operations
+- **Only proceed after receiving explicit "yes", "go ahead", "お願いします" or similar confirmation**
+- If no response, ask again or wait
+- **Purpose**: Respect user's decision-making and avoid unwanted actions
+
 ## 📋 Development Workflow
 
 ### For Each Phase:
