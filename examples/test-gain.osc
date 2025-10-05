@@ -1,0 +1,58 @@
+// Gain (Volume) Test - SuperCollider
+// Tests different volume levels across sequences
+
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+// === Test 1: Maximum Volume (100) ===
+var loud = init global.seq
+loud.gain(100)
+loud.audio("kick.wav")
+loud.play(1, 0, 0, 0)
+
+// === Test 2: Normal Volume (80 - default) ===
+var normal = init global.seq
+normal.gain(80)
+normal.audio("snare.wav")
+normal.play(0, 1, 0, 0)
+
+// === Test 3: Medium Volume (50) ===
+var medium = init global.seq
+medium.gain(50)
+medium.audio("hihat.wav")
+medium.play(0, 0, 1, 0)
+
+// === Test 4: Quiet Volume (25) ===
+var quiet = init global.seq
+quiet.gain(25)
+quiet.audio("kick.wav")
+quiet.play(0, 0, 0, 1)
+
+// === Test 5: Very Quiet (10) ===
+var whisper = init global.seq
+whisper.gain(10)
+whisper.audio("snare.wav")
+whisper.play(1, 1, 1, 1)
+
+// === Test 6: No gain() - should use default (80) ===
+var defaultGain = init global.seq
+defaultGain.audio("hihat.wav")
+defaultGain.play(1, 0, 1, 0)
+
+// Commands for live coding:
+global.run()
+loud.loop()      // Should be loudest
+normal.loop()    // Standard volume
+medium.loop()    // Half volume
+quiet.loop()     // Quarter volume
+whisper.loop()   // Almost silent
+defaultGain.loop() // Should match normal
+global.stop()
+
+// Test together:
+global.run()
+loud.loop()
+medium.loop()
+whisper.loop()
+// Listen for volume differences!

@@ -1,0 +1,17 @@
+// Simple Pan Test
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+var kick = init global.seq
+kick.audio("kick.wav")
+kick.play(1, 0, 1, 0)
+
+// Commands:
+// global.run()
+// kick.pan(-100).loop()  // 完全左
+// kick.pan(0)            // センター
+// kick.pan(100)          // 完全右
+// kick.pan(-50)          // 左寄り
+// kick.pan(50)           // 右寄り
+// global.stop()

@@ -1,0 +1,35 @@
+// Pan Test - Stereo positioning
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+var left = init global.seq
+left.pan(-100).gain(80).audio("kick.wav")
+left.play(1, 0, 0, 0)
+
+var center = init global.seq
+center.pan(0).gain(80).audio("snare.wav")
+center.play(0, 1, 0, 0)
+
+var right = init global.seq
+right.pan(100).gain(80).audio("hihat.wav")
+right.play(0, 0, 1, 0)
+
+var moveLeft = init global.seq
+moveLeft.pan(-50).gain(80).audio("kick.wav")
+moveLeft.play(0, 0, 0, 1)
+
+// Commands:
+global.run()
+left.loop()      // 完全左
+center.loop()    // センター
+right.loop()     // 完全右
+moveLeft.loop()  // 左寄り
+
+// Live pan changes:
+left.pan(-100)   // 完全左
+left.pan(0)      // センターに移動
+left.pan(100)    // 完全右に移動
+left.pan(-50)    // 左寄りに戻す
+
+global.stop()

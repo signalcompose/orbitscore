@@ -230,6 +230,95 @@ describe('AudioParser', () => {
       })
     })
 
+    it('should parse seq.gain() with positive value', () => {
+      const ir = parseAudioDSL('seq1.gain(80)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'gain',
+        args: [80],
+      })
+    })
+
+    it('should parse seq.gain() with zero', () => {
+      const ir = parseAudioDSL('seq1.gain(0)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'gain',
+        args: [0],
+      })
+    })
+
+    it('should parse seq.gain() with max value', () => {
+      const ir = parseAudioDSL('seq1.gain(100)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'gain',
+        args: [100],
+      })
+    })
+
+    it('should parse chained gain and pan', () => {
+      const ir = parseAudioDSL('seq1.gain(80).pan(-50)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'gain',
+        args: [80],
+        chain: [{ method: 'pan', args: [-50] }],
+      })
+    })
+
+    it('should parse seq.pan() with negative value', () => {
+      const ir = parseAudioDSL('seq1.pan(-100)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'pan',
+        args: [-100],
+      })
+    })
+
+    it('should parse seq.pan() with zero', () => {
+      const ir = parseAudioDSL('seq1.pan(0)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'pan',
+        args: [0],
+      })
+    })
+
+    it('should parse seq.pan() with positive value', () => {
+      const ir = parseAudioDSL('seq1.pan(100)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'pan',
+        args: [100],
+      })
+    })
+
+    it('should parse seq.pan() with negative decimal', () => {
+      const ir = parseAudioDSL('seq1.pan(-50)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'pan',
+        args: [-50],
+      })
+    })
+
     it('should parse seq.audio()', () => {
       const ir = parseAudioDSL('seq1.audio("../audio/piano.wav")')
       expect(ir.statements).toHaveLength(1)

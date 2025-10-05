@@ -1,0 +1,19 @@
+// Polymeter test - SuperCollider
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+var kick = init global.seq
+kick.audio("kick.wav")
+kick.play(1, 0, 1, 0)
+
+var snare = init global.seq
+snare.beat(5 by 4)
+snare.audio("snare.wav")
+snare.play(1, 0, 1, 0)
+
+// Commands for live coding:
+global.run()
+kick.loop()
+snare.loop()
+global.stop()

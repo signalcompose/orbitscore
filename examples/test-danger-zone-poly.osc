@@ -1,0 +1,71 @@
+// Danger Zone × Polymeter × Polytempo × Length Test
+// Ultimate rhythmic complexity test!
+
+var global = init GLOBAL
+global.tempo(120).beat(4 by 4)
+global.audioPath("test-assets/audio")
+
+// === Pattern 1: megaDeathExtreme with 5/4 meter ===
+// 15.625ms × 2 (最後の2音) in 5/4 time
+// Bar duration: 2500ms (5/4 at 120 BPM)
+var mega5 = init global.seq
+mega5.beat(5 by 4)
+mega5.audio("kick.wav")
+mega5.play(1, (2, (3, (4, (5, (6, (7, 8)))))))
+
+// === Pattern 2: hyperCosmicExtreme with 7/8 meter + slower tempo ===
+// 7.8125ms × 2 (最後の2音) in 7/8 time at 90 BPM
+// Bar duration: 2333ms (7/8 at 90 BPM)
+var hyper7 = init global.seq
+hyper7.tempo(90).beat(7 by 8)
+hyper7.audio("snare.wav")
+hyper7.play(1, (2, (3, (4, (5, (6, (7, (8, 9))))))))
+
+// === Pattern 3: absoluteMadness with 3/4 meter + faster tempo + 2 bars ===
+// 3.90625ms × 2 (最後の2音) in 3/4 time at 150 BPM, 2 bars
+// Bar duration: 1200ms (3/4 at 150 BPM)
+var mad3 = init global.seq
+mad3.tempo(150).beat(3 by 4).length(2)
+mad3.audio("hihat.wav")
+mad3.play(1, (2, (3, (4, (5, (6, (7, (8, (9, 10)))))))))
+
+// === Pattern 4: quantumRealm with 6/8 meter ===
+// 1.953125ms × 2 (最後の2音) in 6/8 time
+// Bar duration: 2000ms (6/8 at 120 BPM = 3/4 equivalent)
+var quantum6 = init global.seq
+quantum6.beat(6 by 8)
+quantum6.audio("kick.wav")
+quantum6.play(1, (2, (3, (4, (5, (6, (7, (8, (9, (10, 11))))))))))
+
+// === Pattern 5: planckTimeZone with 11/8 meter + 105 BPM ===
+// 0.9765625ms × 2 (最後の2音) in 11/8 time at 105 BPM
+// Bar duration: 2514ms (11/8 at 105 BPM)
+var planck11 = init global.seq
+planck11.tempo(105).beat(11 by 8)
+planck11.audio("snare.wav")
+planck11.play(1, (2, (3, (4, (5, (6, (7, (8, (9, (10, (11, 12)))))))))))
+
+// === Expected Bar Durations ===
+// mega5:    2500ms (5/4 @ 120 BPM)
+// hyper7:   2333ms (7/8 @ 90 BPM)
+// mad3:     1200ms (3/4 @ 150 BPM) × 2 bars = 2400ms per loop
+// quantum6: 2000ms (6/8 @ 120 BPM)
+// planck11: 2514ms (11/8 @ 105 BPM)
+
+// Phase alignment: LCM of all bar durations
+// This will create an incredibly complex polyrhythmic texture!
+
+// Commands for live coding:
+global.run()
+mega5.loop()
+hyper7.loop()
+mad3.loop()
+quantum6.loop()
+planck11.loop()
+global.stop()
+
+// Expected phenomena:
+// - Each pattern has different bar length
+// - Phase relationships constantly shift
+// - Extreme subdivisions (0.98ms - 15.6ms) in different meters
+// - Complex groove that never exactly repeats (until LCM)
