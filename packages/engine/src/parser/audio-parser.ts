@@ -20,6 +20,7 @@ export type AudioTokenType =
   | 'COMMA' // ,
   | 'EQUALS' // =
   | 'MINUS' // - (for negative numbers)
+  | 'PERCENT' // % (for random range)
   | 'NEWLINE' // line break
   | 'EOF' // end of file
 
@@ -194,6 +195,10 @@ export class AudioTokenizer {
           tokens.push({ type: 'MINUS', value: '-', line, column })
           this.advance()
           break
+        case '%':
+          tokens.push({ type: 'PERCENT', value: '%', line, column })
+          this.advance()
+          break
         default:
           // Skip unknown characters
           this.advance()
@@ -245,6 +250,11 @@ export type MethodChain = {
   method: string
   args: any[]
 }
+
+// Random value types
+export type RandomValue = 
+  | { type: 'full-random' }  // r
+  | { type: 'random-walk', center: number, range: number }  // r0%20, r-6%4
 
 // Play structure types
 export type PlayElement =
@@ -560,9 +570,51 @@ export class AudioParser {
       return this.advance().value
     }
 
-    // Identifiers (for key names like C, D, etc.)
+    // Identifiers (for key names like C, D, etc., or random syntax 'r')
     if (token.type === 'IDENTIFIER') {
       const value = this.advance().value
+
+      // Check for random syntax: 'r', 'r0%20', 'r-6%3', etc.
+      if (value === 'r') {
+        // Check if followed by MINUS (for negative center like r-6%3)
+        if (this.current().type === 'MINUS') {
+          this.advance() // consume MINUS
+          const numToken = this.expect('NUMBER')
+          const center = -parseFloat(numToken.value)
+          
+          // Expect PERCENT
+          this.expect('PERCENT')
+          const rangeToken = this.expect('NUMBER')
+          const range = parseFloat(rangeToken.value)
+          
+          return { type: 'random-walk', center, range } as RandomValue
+        } else {
+          // Just 'r' - full random
+          return { type: 'full-random' } as RandomValue
+        }
+      } else if (value.startsWith('r') && value.length > 1) {
+        // Parse 'r0', 'r50', etc. followed by '%<range>'
+        // Extract center value from identifier (e.g., 'r0' -> 0, 'r50' -> 50)
+        const centerStr = value.substring(1) // Remove 'r' prefix
+        const center = parseFloat(centerStr)
+        
+        if (isNaN(center)) {
+          // Not a random syntax, treat as regular identifier
+          return value
+        }
+        
+        // Check if followed by PERCENT
+        if (this.current().type === 'PERCENT') {
+          this.advance() // consume PERCENT
+          const rangeToken = this.expect('NUMBER')
+          const range = parseFloat(rangeToken.value)
+          
+          return { type: 'random-walk', center, range } as RandomValue
+        } else {
+          // r<num> without %, treat as regular identifier (invalid syntax)
+          throw new Error(`Invalid random syntax: expected '%' after '${value}'`)
+        }
+      }
 
       // Check for "n by m" meter syntax (shouldn't happen with identifiers, but keep for safety)
       if (this.current().type === 'BY') {
