@@ -1,0 +1,24 @@
+// Audio Device Selection Test
+// Tests audio output device switching functionality
+
+// Note: Before running this file:
+// 1. Select audio device: Cmd+Shift+P → "OrbitScore: Select Audio Device"
+// 2. Choose your desired output device
+// 3. Restart engine
+// 4. Run this file to verify audio comes from the selected device
+
+var global = init GLOBAL
+global.tempo(120)
+
+var kick = init global.seq
+kick.audio("test-assets/audio/kick.wav").play(1, 0, 1, 0)
+
+// Start playback
+global.run()
+kick.loop()
+
+// You should hear the kick from your selected audio device
+// Try switching devices and restarting to verify it works
+
+// Stop
+// global.stop()

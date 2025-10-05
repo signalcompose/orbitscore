@@ -12,9 +12,24 @@ import { parseAudioDSL } from './parser/audio-parser'
 import { InterpreterV2 } from './interpreter/interpreter-v2'
 
 // Command line interface for the OrbitScore audio engine
-const command = process.argv[2]
-const file = process.argv[3]
-const durationArg = process.argv[4] // Optional duration in seconds
+const args = process.argv.slice(2)
+const command = args[0]
+
+// Parse command line options
+let audioDevice: string | undefined
+let file: string | undefined
+let durationArg: string | undefined
+
+for (let i = 1; i < args.length; i++) {
+  if (args[i] === '--audio-device' && args[i + 1]) {
+    audioDevice = args[i + 1]
+    i++ // Skip next arg
+  } else if (!file) {
+    file = args[i]
+  } else if (!durationArg) {
+    durationArg = args[i]
+  }
+}
 
 function printUsage() {
   console.log(`
@@ -205,8 +220,8 @@ async function main() {
       const { InterpreterV2 } = await import('./interpreter/interpreter-v2')
       globalInterpreter = new InterpreterV2()
       
-      // Boot SuperCollider once at startup
-      await globalInterpreter.boot()
+      // Boot SuperCollider once at startup with optional audio device
+      await globalInterpreter.boot(audioDevice)
       
       console.log('🎵 Live coding mode')
       await startREPL(globalInterpreter)

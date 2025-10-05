@@ -25,9 +25,9 @@ export class InterpreterV2 {
   /**
    * Boot SuperCollider server (public method for explicit boot)
    */
-  async boot(): Promise<void> {
+  async boot(audioDevice?: string): Promise<void> {
     if (!this.isBooted) {
-      await this.audioEngine.boot()
+      await this.audioEngine.boot(audioDevice)
       this.isBooted = true
     }
   }
