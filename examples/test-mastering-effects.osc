@@ -1,0 +1,67 @@
+// Mastering Effects Test
+// Tests global compressor, limiter, and normalizer for louder output
+
+var global = init GLOBAL
+global.audioPath("test-assets/audio")
+
+// Create kick and hat sequences
+var kick = init global.seq
+kick.audio("kick.wav").play(1, 0, 1, 0)
+
+var hat = init global.seq
+hat.audio("hihat.wav").chop(2).play(1, 2, 1, 2)
+
+// Start playback
+global.run()
+kick.loop()
+hat.loop()
+
+// ========================================
+// Test 1: HEAVY compression for maximum loudness
+// ========================================
+
+// Ultra-aggressive compressor settings
+// - Very low threshold (0.2) = compress almost everything
+// - High ratio (0.9) = near-infinite compression
+// - Fast attack (0.001s) = catch transients immediately
+// - Short release (0.03s) = pump effect
+// - High makeup gain (2.0) = maximum boost
+// global.compressor(0.2, 0.9, 0.001, 0.03, 2.0, true)
+
+// ========================================
+// Test 2: Brick wall limiter
+// ========================================
+
+// Aggressive limiter to prevent clipping
+// - Lower ceiling (0.95) = more limiting
+// global.limiter(0.95, 0.01, true)
+
+// ========================================
+// Test 3: Maximize with normalizer
+// ========================================
+
+// Push to maximum loudness
+// global.normalizer(1.0, 0.01, true)
+
+// ========================================
+// Test 4: Even MORE aggressive (if needed)
+// ========================================
+
+// Nuclear option: extreme compression
+// global.compressor(0.15, 0.95, 0.0005, 0.02, 2.0, true)
+
+// ========================================
+// Test 5: Turn off effects one by one
+// ========================================
+
+// Turn off compressor
+// global.compressor(0, 0, 0, 0, 0, false)
+
+// Turn off limiter
+// global.limiter(0, 0, false)
+
+// Turn off normalizer
+// global.normalizer(0, 0, false)
+
+// Stop playback
+global.stop()
