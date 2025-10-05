@@ -6,8 +6,8 @@
     "module": "commonjs",
     "target": "ES2020",
     "composite": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "esModuleInterop": true
   },
   "include": ["src"]
 }

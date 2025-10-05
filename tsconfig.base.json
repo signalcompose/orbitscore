@@ -9,7 +9,6 @@
     "declaration": true,
     "declarationMap": true,
     "verbatimModuleSyntax": false,
-    "esModuleInterop": true,
-    "types": ["node"]
+    "esModuleInterop": true
   }
 }

@@ -5,13 +5,24 @@
 
 import { Transport } from '../transport/transport'
 import { AudioEngine } from '../audio/audio-engine'
-import { AdvancedAudioPlayer } from '../audio/advanced-player'
 
 import { Sequence } from './sequence'
 
 export interface Meter {
   numerator: number
   denominator: number
+}
+
+// Common scheduler interface
+export interface Scheduler {
+  isRunning: boolean
+  start(): void
+  stop(): void
+  stopAll(): void
+  clearSequenceEvents(name: string): void
+  scheduleEvent(filepath: string, time: number, volume: number, sequenceName: string): void
+  scheduleSliceEvent(filepath: string, time: number, sliceIndex: number, totalSlices: number, volume: number, sequenceName: string): void
+  getAudioDuration(filepath: string): number
 }
 
 export class Global {
@@ -25,13 +36,19 @@ export class Global {
 
   private sequences: Map<string, Sequence> = new Map()
   private transport: Transport
-  private audioEngine: AudioEngine
-  private globalScheduler: AdvancedAudioPlayer
+  private audioEngine: any // Can be AudioEngine or SuperColliderPlayer
+  private globalScheduler: Scheduler
 
-  constructor(audioEngine: AudioEngine) {
+  constructor(audioEngine: any) {
     this.audioEngine = audioEngine
-    this.transport = new Transport(audioEngine)
-    this.globalScheduler = new AdvancedAudioPlayer()
+    // Transport only works with AudioEngine, skip for SuperColliderPlayer
+    if (audioEngine.getCurrentTime) {
+      this.transport = new Transport(audioEngine as AudioEngine)
+    } else {
+      // SuperColliderPlayer doesn't need Transport
+      this.transport = null as any
+    }
+    this.globalScheduler = audioEngine as Scheduler
   }
 
   // Property accessors with method chaining
@@ -40,7 +57,9 @@ export class Global {
       return this._tempo
     }
     this._tempo = value
-    this.transport.setGlobalTempo(value)
+    if (this.transport) {
+      this.transport.setGlobalTempo(value)
+    }
     return this
   }
 
@@ -49,13 +68,17 @@ export class Global {
       return this._tick
     }
     this._tick = value
-    this.transport.setTickResolution(value)
+    if (this.transport) {
+      this.transport.setTickResolution(value)
+    }
     return this
   }
 
   beat(numerator: number, denominator: number): this {
     this._beat = { numerator, denominator }
-    this.transport.setGlobalMeter(this._beat)
+    if (this.transport) {
+      this.transport.setGlobalMeter(this._beat)
+    }
     return this
   }
 
@@ -84,7 +107,9 @@ export class Global {
     }
     
     this._isRunning = true
-    this.transport.start()
+    if (this.transport) {
+      this.transport.start()
+    }
 
     // Start the global scheduler (will restart if needed)
     this.globalScheduler.start()
@@ -97,7 +122,9 @@ export class Global {
     if (!this._isLooping) {
       this._isLooping = true
       this._isRunning = true
-      this.transport.start()
+      if (this.transport) {
+        this.transport.start()
+      }
       // Global: loop
     }
     return this
@@ -116,7 +143,9 @@ export class Global {
     if (this._isRunning) {
       this._isRunning = false
       this._isLooping = false
-      this.transport.stop()
+      if (this.transport) {
+        this.transport.stop()
+      }
       console.log('✅ Global stopped')
     }
     return this
@@ -129,21 +158,28 @@ export class Global {
   }
   
   // Get the global scheduler (used by sequences for scheduling)
-  getScheduler(): AdvancedAudioPlayer {
+  getScheduler(): Scheduler {
     return this.globalScheduler
+  }
+
+  // Get the transport (may be null for SuperColliderPlayer)
+  getTransport(): Transport | null {
+    return this.transport
   }
 
   // Register a sequence (called by Sequence constructor)
   registerSequence(name: string, sequence: Sequence): void {
     this.sequences.set(name, sequence)
-    // Also register with transport
-    this.transport.addSequence({
-      id: name,
-      slices: [],
-      loop: false,
-      muted: false,
-      state: 'stopped',
-    })
+    // Also register with transport (if available)
+    if (this.transport) {
+      this.transport.addSequence({
+        id: name,
+        slices: [],
+        loop: false,
+        muted: false,
+        state: 'stopped',
+      })
+    }
   }
 
   // Get sequence by name
@@ -164,10 +200,6 @@ export class Global {
     }
   }
 
-  // Get transport for internal use
-  getTransport(): Transport {
-    return this.transport
-  }
 }
 
 // Export a singleton factory

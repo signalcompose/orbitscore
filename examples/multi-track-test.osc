@@ -6,19 +6,19 @@ global.tempo(120)
 global.beat(4 by 4)
 global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
 
-// Kick - 4/4 pattern (inherits global.beat = 4/4 = 2000ms)
+// Kick - 4/4 pattern (1拍目と3拍目)
 var kick = init global.seq
 kick.length(1)
 kick.audio("kick.wav").chop(1)
 kick.play(1, 0, 1, 0)
 
-// Snare - 5/4 pattern (5ループと4ループで回り込む = 20拍で同期)
+// Snare - 4/4 pattern (2拍目と4拍目)
 var snare = init global.seq
-snare.beat(5 by 4).length(1)
+snare.length(1)
 snare.audio("snare.wav").chop(1)
-snare.play(1, 0, 1, 0)
+snare.play(0, 1, 0, 1)
 
-// Hi-hat - 8th notes (closed on beat, open on offbeat, inherits global.beat)
+// Hi-hat - 8分音符 (表拍=closed, 裏拍=open)
 var hihat = init global.seq
 hihat.length(1)
 hihat.audio("hihat.wav").chop(2)
