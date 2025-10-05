@@ -365,10 +365,10 @@ function filterDefinitionsOnly(code: string, isInitializing: boolean = false): s
       return false
     }
     
-    // Skip standalone gain/pan/delay/compressor/limiter/normalizer commands (live parameter changes)
+    // Skip standalone gain/pan/compressor/limiter/normalizer commands (live parameter changes)
     // Pattern: sequenceName.gain(...) or global.compressor(...) with nothing before
     // But keep chained ones like: kick.audio(...).play(...).gain(...)
-    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(gain|pan|delay|compressor|limiter|normalizer)\s*\(/)) {
+    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(gain|pan|compressor|limiter|normalizer)\s*\(/)) {
       // Check if this is standalone (no var declaration, no other methods before)
       // If line starts with identifier.method, it's standalone
       if (!trimmed.startsWith('var ') && !trimmed.includes('.audio(') && !trimmed.includes('.play(')) {

@@ -322,63 +322,6 @@ export class Global {
     return this
   }
 
-  /**
-   * Add delay effect to master output
-   * @param time - Delay time in seconds (default: 0.5)
-   * @param feedback - Feedback amount 0-1 (default: 0.3)
-   * @param mix - Dry/wet mix 0-1 (default: 0.5)
-   * @param enabled - Enable/disable effect (default: true)
-   */
-  delay(time = 0.5, feedback = 0.3, mix = 0.5, enabled = true): this {
-    // If disabled, remove effect
-    if (!enabled) {
-      const existingDelayIndex = this._masterEffects.findIndex(e => e.type === 'delay')
-      if (existingDelayIndex >= 0) {
-        this._masterEffects.splice(existingDelayIndex, 1)
-      }
-      
-      // Remove effect synth from SuperCollider
-      if ((this.globalScheduler as any).removeEffect) {
-        (this.globalScheduler as any).removeEffect('master', 'delay')
-      }
-      
-      const seamless = this._isRunning ? ' (seamless)' : ''
-      console.log(`🎛️ Global: delay off${seamless}`)
-      return this
-    }
-    
-    // Validate parameters
-    const delayTime = Math.max(0.01, Math.min(2.0, time))
-    const delayFeedback = Math.max(0, Math.min(1.0, feedback))
-    const delayMix = Math.max(0, Math.min(1.0, mix))
-    
-    // Update or add to master effect chain
-    const existingDelayIndex = this._masterEffects.findIndex(e => e.type === 'delay')
-    if (existingDelayIndex >= 0) {
-      // Update existing delay
-      this._masterEffects[existingDelayIndex] = {
-        type: 'delay',
-        params: { time: delayTime, feedback: delayFeedback, mix: delayMix }
-      }
-    } else {
-      // Add new delay
-      this._masterEffects.push({
-        type: 'delay',
-        params: { time: delayTime, feedback: delayFeedback, mix: delayMix }
-      })
-    }
-    
-    // Send OSC message to SuperCollider (always sends, for seamless update)
-    if ((this.globalScheduler as any).addEffect) {
-      (this.globalScheduler as any).addEffect('master', 'delay', { time: delayTime, feedback: delayFeedback, mix: delayMix })
-    }
-    
-    // Log with seamless indicator if running
-    const seamless = this._isRunning ? ' (seamless)' : ''
-    console.log(`🎛️ Global: delay(time=${delayTime}s, feedback=${delayFeedback}, mix=${delayMix})${seamless}`)
-    return this
-  }
-
   // Transport control methods
   run(): this {
     // If already running, do nothing (idempotent)
