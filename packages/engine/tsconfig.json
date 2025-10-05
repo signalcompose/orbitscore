@@ -5,11 +5,9 @@
     "rootDir": "src",
     "module": "commonjs",
     "target": "ES2020",
-    "types": ["node"],
-    "typeRoots": [
-      "../../node_modules/@types"
-    ],
-    "composite": true
+    "composite": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
   },
   "include": ["src"]
 }
