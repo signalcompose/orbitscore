@@ -37,7 +37,7 @@ export class SuperColliderPlayer {
   private synthDefPath: string;
   private availableDevices: AudioDevice[] = [];
   private currentOutputDevice: string | null = null;
-  private effectSynths: Map<string, number[]> = new Map(); // Track mastering effect synths
+  private effectSynths: Map<string, Map<string, number>> = new Map(); // Track mastering effect synths by target and type
 
   // Scheduler
   public isRunning = false;
@@ -387,15 +387,13 @@ export class SuperColliderPlayer {
     }
 
     // Check if effect already exists
-    const effectKey = `${target}_${effectType}`;
-    let existingSynthId: number | undefined;
-    
-    // Find existing synth for this effect type
-    const masterSynths = this.effectSynths.get(target);
-    if (masterSynths) {
-      // For now, assume one synth per effect type
-      existingSynthId = masterSynths[0];
+    let targetEffects = this.effectSynths.get(target);
+    if (!targetEffects) {
+      targetEffects = new Map();
+      this.effectSynths.set(target, targetEffects);
     }
+    
+    const existingSynthId = targetEffects.get(effectType);
 
     try {
       if (existingSynthId !== undefined) {
@@ -425,10 +423,8 @@ export class SuperColliderPlayer {
         
         await this.server.send.msg(createParams);
         
-        if (!this.effectSynths.has(target)) {
-          this.effectSynths.set(target, []);
-        }
-        this.effectSynths.get(target)!.push(synthId);
+        // Store synth ID by effect type
+        targetEffects.set(effectType, synthId);
         
         console.log(`✅ ${effectType} created (ID: ${synthId})`);
       }
@@ -445,17 +441,18 @@ export class SuperColliderPlayer {
       return;
     }
 
-    const synths = this.effectSynths.get(target);
-    if (synths && synths.length > 0) {
-      for (const synthId of synths) {
+    const targetEffects = this.effectSynths.get(target);
+    if (targetEffects) {
+      const synthId = targetEffects.get(effectType);
+      if (synthId !== undefined) {
         try {
           await this.server.send.msg(['/n_free', synthId]);
+          targetEffects.delete(effectType);
           console.log(`✅ ${effectType} removed (ID: ${synthId})`);
         } catch (error) {
           console.error(`⚠️  Failed to free synth:`, error);
         }
       }
-      this.effectSynths.delete(target);
     }
   }
 
