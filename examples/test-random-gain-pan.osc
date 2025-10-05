@@ -1,0 +1,37 @@
+// Test random gain and pan features
+// Demonstrates full random (r) and random walk (r<center>%<range>) syntax
+
+// Initialize
+var global = init GLOBAL
+var kick = init global.seq
+
+// Set audio and basic pattern
+kick.audio("test-assets/audio/kick.wav").play(1,0,0,0)
+
+// Start playback - these commands need explicit execution
+global.run()
+kick.loop()
+
+// ===== Test Cases (uncomment and execute with Cmd+Enter) =====
+
+// 1. Full random gain (-60dB to +12dB)
+// kick.gain(r)
+
+// 2. Random walk gain around -6dB ±3dB (range: -9dB to -3dB)
+// kick.gain(r-6%3)
+
+// 3. Random walk gain around 0dB ±4dB (range: -4dB to +4dB)
+// kick.gain(r0%4)
+
+// 4. Full random pan (-100 to +100)
+// kick.pan(r)
+
+// 5. Random walk pan around 50 ±30 (range: 20 to 80, right-biased)
+// kick.pan(r50%30)
+
+// 6. Random walk pan around -50 ±20 (range: -70 to -30, left-biased)
+// kick.pan(r-50%20)
+
+// 7. Reset to fixed values
+// kick.gain(0)
+// kick.pan(0)

@@ -30,6 +30,10 @@
         "title": "OrbitScore: Stop Engine"
       },
       {
+        "command": "orbitscore.killSuperCollider",
+        "title": "OrbitScore: Kill SuperCollider"
+      },
+      {
         "command": "orbitscore.transport",
         "title": "OrbitScore: Transport Panel"
       }

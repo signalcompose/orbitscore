@@ -107,6 +107,11 @@ export class InterpreterV2 {
       sequence = global.seq
       sequence.setName(init.variableName)
       this.sequences.set(init.variableName, sequence)
+    } else {
+      // Reset parameters to defaults when re-initializing
+      // This prevents previous live changes (gain/pan) from persisting
+      ;(sequence as any)._gainDb = 0  // Reset to 0 dB
+      ;(sequence as any)._pan = 0      // Reset to center
     }
   }
 

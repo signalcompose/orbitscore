@@ -39,8 +39,8 @@ export async function activate(context: vscode.ExtensionContext) {
   // Create status bar item
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
   statusBarItem.text = '🎵 OrbitScore: Stopped'
-  statusBarItem.tooltip = 'Click to start engine'
-  statusBarItem.command = 'orbitscore.toggleEngine'
+  statusBarItem.tooltip = 'Click to show commands'
+  statusBarItem.command = 'orbitscore.showCommands'
   statusBarItem.show()
 
   // Register commands
@@ -49,6 +49,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.showCommands', showCommands),
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
     vscode.commands.registerCommand('orbitscore.stopEngine', stopEngine),
+    vscode.commands.registerCommand('orbitscore.killSuperCollider', killSuperCollider),
     statusBarItem,
   )
 
@@ -90,6 +91,11 @@ export function deactivate() {
 function showCommands() {
   const items: vscode.QuickPickItem[] = [
     {
+      label: '🚀 Start Engine',
+      description: 'Boot audio engine',
+      detail: 'Start OrbitScore audio engine with SuperCollider',
+    },
+    {
       label: '▶️ Run Selection',
       description: 'Cmd+Enter',
       detail: 'Execute selected code or current line',
@@ -98,6 +104,11 @@ function showCommands() {
       label: '🛑 Stop Engine',
       description: 'Kill engine process',
       detail: 'Force stop the audio engine',
+    },
+    {
+      label: '🔪 Kill SuperCollider',
+      description: 'killall scsynth',
+      detail: 'Force kill all SuperCollider server processes',
     },
     {
       label: '🔄 Reload',
@@ -110,11 +121,17 @@ function showCommands() {
     if (!selection) return
 
     switch (selection.label) {
+      case '🚀 Start Engine':
+        vscode.commands.executeCommand('orbitscore.toggleEngine')
+        break
       case '▶️ Run Selection':
         vscode.commands.executeCommand('orbitscore.runSelection')
         break
       case '🛑 Stop Engine':
         vscode.commands.executeCommand('orbitscore.stopEngine')
+        break
+      case '🔪 Kill SuperCollider':
+        vscode.commands.executeCommand('orbitscore.killSuperCollider')
         break
       case '🔄 Reload':
         vscode.commands.executeCommand('workbench.action.reloadWindow')
@@ -214,9 +231,30 @@ function stopEngine() {
   }
 }
 
+function killSuperCollider() {
+  outputChannel?.appendLine('🔪 Killing SuperCollider processes...')
+  
+  // Execute killall scsynth, suppress errors if no process found
+  child_process.exec('killall scsynth 2>/dev/null', (error, stdout, stderr) => {
+    if (error) {
+      // Exit code 1 means no process found, which is ok
+      if (error.code === 1) {
+        outputChannel?.appendLine('✅ No SuperCollider processes found')
+        vscode.window.showInformationMessage('✅ No SuperCollider processes running')
+      } else {
+        outputChannel?.appendLine(`⚠️ Error: ${error.message}`)
+        vscode.window.showWarningMessage(`⚠️ Failed to kill SuperCollider: ${error.message}`)
+      }
+    } else {
+      outputChannel?.appendLine('✅ SuperCollider processes killed')
+      vscode.window.showInformationMessage('✅ SuperCollider killed')
+    }
+  })
+}
 
 function filterDefinitionsOnly(code: string, isInitializing: boolean = false): string {
   // Filter out transport commands (.loop(), .run(), .stop(), etc.)
+  // Filter out standalone gain/pan (live changes, not default settings)
   // Keep variable declarations and property settings
   // Note: var declarations are always kept because InterpreterV2 reuses existing instances
   const lines = code.split('\n')
@@ -230,7 +268,18 @@ function filterDefinitionsOnly(code: string, isInitializing: boolean = false): s
       return false
     }
     
-    // Keep everything else including var declarations
+    // Skip standalone gain/pan commands (live parameter changes)
+    // Pattern: sequenceName.gain(...) or sequenceName.pan(...) with nothing before
+    // But keep chained ones like: kick.audio(...).play(...).gain(...)
+    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(gain|pan)\s*\(/)) {
+      // Check if this is standalone (no var declaration, no other methods before)
+      // If line starts with identifier.gain or identifier.pan, it's standalone
+      if (!trimmed.startsWith('var ') && !trimmed.includes('.audio(') && !trimmed.includes('.play(')) {
+        return false
+      }
+    }
+    
+    // Keep everything else including var declarations and chained methods
     // InterpreterV2 will reuse existing instances if they exist
     return true
   })
