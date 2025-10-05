@@ -665,3 +665,90 @@ left.pan(100)   // Move to full right
 
 ---
 
+### 8.7 Global Mastering Effects Implementation (January 6, 2025)
+
+**Date**: January 6, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `feature/supercollider-effects` → merged to `main`
+**PR**: #4
+
+**Work Content**: Implemented global mastering effects to increase loudness and prevent clipping
+
+#### Implemented Effects
+
+**1. Compressor (Compander)**
+- Parameters: `threshold` (0-1), `ratio` (0-1), `attack` (s), `release` (s), `makeupGain` (0-2)
+- Purpose: Increase perceived loudness by compressing dynamic range
+- SynthDef: `fxCompressor` using `Compander.ar()`
+
+**2. Limiter**
+- Parameters: `level` (0-1), `duration` (lookahead time)
+- Purpose: Prevent clipping by limiting peaks
+- SynthDef: `fxLimiter` using `Limiter.ar()`
+
+**3. Normalizer**
+- Parameters: `level` (0-1), `duration` (lookahead time)
+- Purpose: Maximize output level
+- SynthDef: `fxNormalizer` using `Normalizer.ar()`
+
+#### Technical Implementation
+
+**SuperCollider Architecture**:
+- All effects process bus 0 (master output) directly
+- Use `In.ar(0, 2)` to read stereo input
+- Use `ReplaceOut.ar(0, ...)` to write back to bus 0
+- Effects are chained: orbitPlayBuf → Compressor → Limiter → Normalizer → Output
+
+**TypeScript Implementation**:
+- `Global.compressor()`, `limiter()`, `normalizer()` methods
+- Effect synth management: `Map<string, Map<string, number>>` (target → effectType → synthID)
+- Individual effect control: each effect can be added/removed independently
+- Seamless updates: existing synths updated via `/n_set`, new synths created via `/s_new`
+- Proper cleanup: `/n_free` removes specific effect without affecting others
+
+**Parser Enhancement**:
+- Added boolean literal support: `true` and `false` are now recognized as boolean values
+- Enables `enabled` parameter: `global.compressor(..., false)` to turn off
+
+**Auto-Evaluation Filter**:
+- Added `compressor`, `limiter`, `normalizer` to standalone command filter
+- Prevents auto-evaluation on file open/save (Cmd+Enter required)
+
+#### Testing Results
+
+**Test File**: `examples/test-mastering-effects.osc`
+
+**Aggressive Settings** (verified working):
+```osc
+global.compressor(0.15, 0.95, 0.001, 0.02, 2.0, true)  // Ultra-heavy compression
+global.limiter(0.95, 0.01, true)                       // Brick wall limiting
+global.normalizer(1.0, 0.01, true)                     // Maximum loudness
+```
+
+**Results**:
+- ✅ Significant loudness increase (user confirmed: "ガッチリ上がって良いね")
+- ✅ Individual on/off control working correctly
+- ✅ Seamless parameter updates during playback
+- ✅ No audio dropout when effects are removed
+- ✅ Dry signal returns when all effects are off
+
+#### Bug Fixes
+
+**Issue 1**: Effect synth management
+- **Problem**: All effect synths stored in single array, removing one effect removed all
+- **Fix**: Changed to nested Map structure for individual effect type management
+
+**Issue 2**: Boolean parsing
+- **Problem**: `false` parameter not recognized, treated as identifier
+- **Fix**: Added boolean literal parsing in `parseArgument()`
+
+**Issue 3**: Auto-evaluation
+- **Problem**: Effect methods auto-evaluated on file open, causing duplicate synths
+- **Fix**: Added effect methods to auto-evaluation filter
+
+**Commits**:
+- `260eead` - feat: implement global mastering effects (compressor, limiter, normalizer)
+- `1a2795e` - fix: mastering effects - individual on/off control and boolean parsing
+
+---
+

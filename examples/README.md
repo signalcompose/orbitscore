@@ -48,9 +48,10 @@
 ### 7. `07_audio_control.osc` 🆕
 - **目的**: 音量とステレオ位置の制御
 - **内容**:
-  - `gain()` メソッド（0-100、デフォルト80）
+  - `gain()` メソッド（dB単位: -60 to +12 dB、デフォルト 0 dB）
   - `pan()` メソッド（-100=左, 0=中央, 100=右）
-  - リアルタイムパラメータ変更
+  - リアルタイムパラメータ変更（シームレス）
+  - ランダム機能（`r`, `r0%10`）
   - ステレオミキシングの実例
 
 ### 8. `08_timing_verification.osc` 🆕
@@ -61,6 +62,15 @@
   - ネストされたリズム（最大11レベル）
   - マルチトラックストレステスト
   - パフォーマンスメトリクス
+
+### 9. `test-mastering-effects.osc` 🆕
+- **目的**: グローバルマスタリングエフェクト
+- **内容**:
+  - `global.compressor()` - 音圧を上げる
+  - `global.limiter()` - クリッピング防止
+  - `global.normalizer()` - 最大音量化
+  - シームレスなon/off制御
+  - 超アグレッシブな設定例
 
 ## 🎵 ライブコーディング用
 
@@ -108,8 +118,10 @@ global.stop()
 
 高度な使用例やストレステストのための参考ファイル：
 
-- `test-gain.osc` - 音量制御の詳細テスト
+- `test-gain.osc` - 音量制御の詳細テスト（dB単位）
 - `test-pan.osc` - ステレオ位置の詳細テスト
+- `test-random-gain-pan.osc` - ランダム機能のテスト
+- `test-mastering-effects.osc` - マスタリングエフェクトのテスト
 - `test-polymeter.osc` - ポリメーターの基本テスト
 - `test-polytempo.osc` - ポリテンポの基本テスト
 - `test-nested.osc` - ネストリズムの各種パターン
