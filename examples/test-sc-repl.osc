@@ -1,7 +1,7 @@
 // SuperCollider REPL test
 var global = init GLOBAL
 global.tempo(120).beat(4 by 4)
-global.audioPath("test-assets/audio")
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
 
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
@@ -16,3 +16,7 @@ snare.play(0, 1, 0, 1)
 global.run()
 kick.loop()
 snare.loop()
+
+kick.stop()
+snare.stop()
+global.stop()

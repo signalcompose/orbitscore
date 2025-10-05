@@ -13,6 +13,7 @@ let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let isLiveCodingMode: boolean = false
 let hasEvaluatedFile: boolean = false
+let evaluationTimeout: NodeJS.Timeout | null = null
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
@@ -229,19 +230,28 @@ async function evaluateFileInBackground(document: vscode.TextDocument) {
     return
   }
 
-  const code = document.getText()
-  
-  const isFirstEvaluation = !hasEvaluatedFile
-  
-  // Filter out all transport commands (always)
-  // isInitializing = true for first evaluation (include var declarations)
-  const definitionsOnly = filterDefinitionsOnly(code, isFirstEvaluation)
-  
-  // Send definitions to engine
-  engineProcess.stdin?.write(definitionsOnly + '\n')
-  
-  // Mark as evaluated
-  hasEvaluatedFile = true
+  // Debounce: cancel previous evaluation
+  if (evaluationTimeout) {
+    clearTimeout(evaluationTimeout)
+  }
+
+  // Schedule evaluation after 100ms of no activity
+  evaluationTimeout = setTimeout(() => {
+    const code = document.getText()
+    
+    const isFirstEvaluation = !hasEvaluatedFile
+    
+    // Filter out all transport commands (always)
+    // isInitializing = true for first evaluation (include var declarations)
+    const definitionsOnly = filterDefinitionsOnly(code, isFirstEvaluation)
+    
+    // Send definitions to engine
+    engineProcess?.stdin?.write(definitionsOnly + '\n')
+    
+    // Mark as evaluated
+    hasEvaluatedFile = true
+    evaluationTimeout = null
+  }, 100)
 }
 
 async function runSelection() {
