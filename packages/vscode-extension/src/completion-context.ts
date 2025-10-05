@@ -94,6 +94,9 @@ export function getContextualCompletions(
     }
     completions.push(createCompletion('tick', 'Set tick resolution', 'tick(${1:4})'))
     completions.push(createCompletion('key', 'Set global key', 'key(${1:C})'))
+    completions.push(createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'))
+    completions.push(createCompletion('gain', 'Set master volume in dB', 'gain(${1:0})'))
+    completions.push(createCompletion('delay', 'Add master delay effect', 'delay(${1:0.5}, ${2:0.3}, ${3:0.5})'))
 
     // Transport commands always available
     completions.push(createCompletion('run', 'Start all sequences', 'run()'))
@@ -136,6 +139,9 @@ export function getContextualCompletions(
     if (context.hasPlay) {
       completions.push(createCompletion('fixpitch', 'Pitch shift in semitones', 'fixpitch(${1:0})'))
       completions.push(createCompletion('time', 'Time stretch factor', 'time(${1:1.0})'))
+      completions.push(createCompletion('gain', 'Set volume in dB', 'gain(${1:0})'))
+      completions.push(createCompletion('pan', 'Set pan position (-100 to 100)', 'pan(${1:0})'))
+      completions.push(createCompletion('delay', 'Add delay effect', 'delay(${1:0.5}, ${2:0.3}, ${3:0.5})'))
     }
 
     // Transport commands (usually at the end)

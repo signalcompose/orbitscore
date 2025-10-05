@@ -37,6 +37,7 @@ export class SuperColliderPlayer {
   private synthDefPath: string;
   private availableDevices: AudioDevice[] = [];
   private currentOutputDevice: string | null = null;
+  private effectSynths: Map<string, number[]> = new Map(); // Track mastering effect synths
 
   // Scheduler
   public isRunning = false;
@@ -87,6 +88,32 @@ export class SuperColliderPlayer {
     await new Promise(resolve => setTimeout(resolve, 200));
 
     console.log('✅ SynthDef loaded');
+
+    // Load mastering effect SynthDefs
+    await this.loadMasteringEffectSynthDefs();
+  }
+
+  /**
+   * Load mastering effect SynthDefs
+   */
+  private async loadMasteringEffectSynthDefs(): Promise<void> {
+    if (!this.server) {
+      return;
+    }
+
+    const synthDefDir = path.join(__dirname, '../../supercollider/synthdefs');
+    const effectSynthDefs = ['fxCompressor', 'fxLimiter', 'fxNormalizer'];
+    
+    for (const synthDefName of effectSynthDefs) {
+      const synthDefPath = path.join(synthDefDir, `${synthDefName}.scsyndef`);
+      if (fs.existsSync(synthDefPath)) {
+        const synthDefData = fs.readFileSync(synthDefPath);
+        await this.server.send.msg(['/d_recv', synthDefData]);
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+    }
+    
+    console.log('✅ Mastering effect SynthDefs loaded');
   }
 
   /**
@@ -329,6 +356,107 @@ export class SuperColliderPlayer {
   clearSequenceEvents(sequenceName: string): void {
     this.scheduledPlays = this.scheduledPlays.filter(play => play.sequenceName !== sequenceName);
     this.sequenceEvents.delete(sequenceName);
+  }
+
+  /**
+   * Add mastering effect to master output
+   */
+  async addEffect(target: string, effectType: string, params: any): Promise<void> {
+    if (!this.server) {
+      console.error('⚠️  SuperCollider server not running');
+      return;
+    }
+
+    // Only support master effects
+    if (target !== 'master') {
+      console.error('⚠️  Only master effects are supported');
+      return;
+    }
+
+    // Map effect type to SynthDef name
+    const synthDefMap: { [key: string]: string } = {
+      'compressor': 'fxCompressor',
+      'limiter': 'fxLimiter',
+      'normalizer': 'fxNormalizer'
+    };
+
+    const synthDefName = synthDefMap[effectType];
+    if (!synthDefName) {
+      console.error(`⚠️  Effect type ${effectType} not supported`);
+      return;
+    }
+
+    // Check if effect already exists
+    const effectKey = `${target}_${effectType}`;
+    let existingSynthId: number | undefined;
+    
+    // Find existing synth for this effect type
+    const masterSynths = this.effectSynths.get(target);
+    if (masterSynths) {
+      // For now, assume one synth per effect type
+      existingSynthId = masterSynths[0];
+    }
+
+    try {
+      if (existingSynthId !== undefined) {
+        // Update existing effect parameters
+        const setParams: any[] = ['/n_set', existingSynthId];
+        
+        Object.entries(params).forEach(([key, value]) => {
+          setParams.push(key, value);
+        });
+        
+        await this.server.send.msg(setParams);
+        console.log(`✅ ${effectType} updated`);
+      } else {
+        // Create new effect synth
+        const synthId = Math.floor(Math.random() * 1000000) + 1000;
+        const createParams: any[] = [
+          '/s_new',
+          synthDefName,
+          synthId,
+          1, // addToTail
+          0  // target
+        ];
+        
+        Object.entries(params).forEach(([key, value]) => {
+          createParams.push(key, value);
+        });
+        
+        await this.server.send.msg(createParams);
+        
+        if (!this.effectSynths.has(target)) {
+          this.effectSynths.set(target, []);
+        }
+        this.effectSynths.get(target)!.push(synthId);
+        
+        console.log(`✅ ${effectType} created (ID: ${synthId})`);
+      }
+    } catch (error) {
+      console.error(`⚠️  Failed to add ${effectType}:`, error);
+    }
+  }
+
+  /**
+   * Remove effect from master output
+   */
+  async removeEffect(target: string, effectType: string): Promise<void> {
+    if (!this.server) {
+      return;
+    }
+
+    const synths = this.effectSynths.get(target);
+    if (synths && synths.length > 0) {
+      for (const synthId of synths) {
+        try {
+          await this.server.send.msg(['/n_free', synthId]);
+          console.log(`✅ ${effectType} removed (ID: ${synthId})`);
+        } catch (error) {
+          console.error(`⚠️  Failed to free synth:`, error);
+        }
+      }
+      this.effectSynths.delete(target);
+    }
   }
 
   /**
