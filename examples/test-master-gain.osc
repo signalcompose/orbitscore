@@ -1,0 +1,27 @@
+// Master gain test
+// Test global.gain() affecting all sequences
+
+var global = init GLOBAL
+global.audioPath("test-assets/audio")
+global.tempo(120)
+
+// Setup three sequences with different gains
+var kick = init global.seq
+kick.audio("kick.wav").play(1,0,0,0).gain(0)  // 0 dB
+
+var snare = init global.seq
+snare.audio("snare.wav").play(0,1,0,0).gain(-3)  // -3 dB
+
+var hihat = init global.seq
+hihat.audio("hihat.wav").play(1,1,1,1).gain(-6)  // -6 dB
+
+// Start scheduler and playback
+global.run()
+kick.loop()
+snare.loop()
+hihat.loop()
+
+// Try changing master gain while playing:
+// global.gain(-6)   // All become 6dB quieter
+// global.gain(-12)  // All become 12dB quieter
+// global.gain(3)    // All become 3dB louder

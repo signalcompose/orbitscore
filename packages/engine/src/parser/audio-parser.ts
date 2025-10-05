@@ -519,9 +519,18 @@ export class AudioParser {
   private parseArgument(): any {
     const token = this.current()
 
-    // Handle negative numbers (MINUS followed by NUMBER)
+    // Handle negative numbers, -Infinity, and -inf
     if (token.type === 'MINUS') {
       this.advance() // consume MINUS
+      const nextToken = this.current()
+      
+      // Check for -Infinity or -inf
+      if (nextToken.type === 'IDENTIFIER' && (nextToken.value === 'Infinity' || nextToken.value === 'inf')) {
+        this.advance() // consume Infinity or inf
+        return -Infinity
+      }
+      
+      // Regular negative number
       const numToken = this.expect('NUMBER')
       const value = -parseFloat(numToken.value)
       return value

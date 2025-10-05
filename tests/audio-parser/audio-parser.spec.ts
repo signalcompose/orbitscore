@@ -230,18 +230,7 @@ describe('AudioParser', () => {
       })
     })
 
-    it('should parse seq.gain() with positive value', () => {
-      const ir = parseAudioDSL('seq1.gain(80)')
-      expect(ir.statements).toHaveLength(1)
-      expect(ir.statements[0]).toMatchObject({
-        type: 'sequence',
-        target: 'seq1',
-        method: 'gain',
-        args: [80],
-      })
-    })
-
-    it('should parse seq.gain() with zero', () => {
+    it('should parse seq.gain() with 0 dB (default)', () => {
       const ir = parseAudioDSL('seq1.gain(0)')
       expect(ir.statements).toHaveLength(1)
       expect(ir.statements[0]).toMatchObject({
@@ -252,25 +241,69 @@ describe('AudioParser', () => {
       })
     })
 
-    it('should parse seq.gain() with max value', () => {
-      const ir = parseAudioDSL('seq1.gain(100)')
+    it('should parse seq.gain() with negative dB', () => {
+      const ir = parseAudioDSL('seq1.gain(-6)')
       expect(ir.statements).toHaveLength(1)
       expect(ir.statements[0]).toMatchObject({
         type: 'sequence',
         target: 'seq1',
         method: 'gain',
-        args: [100],
+        args: [-6],
       })
     })
 
-    it('should parse chained gain and pan', () => {
-      const ir = parseAudioDSL('seq1.gain(80).pan(-50)')
+    it('should parse seq.gain() with positive dB (boost)', () => {
+      const ir = parseAudioDSL('seq1.gain(6)')
       expect(ir.statements).toHaveLength(1)
       expect(ir.statements[0]).toMatchObject({
         type: 'sequence',
         target: 'seq1',
         method: 'gain',
-        args: [80],
+        args: [6],
+      })
+    })
+
+    it('should parse seq.gain() with decimal dB value', () => {
+      const ir = parseAudioDSL('seq1.gain(-3.5)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'gain',
+        args: [-3.5],
+      })
+    })
+
+    it('should parse seq.gain() with -Infinity', () => {
+      const ir = parseAudioDSL('seq1.gain(-Infinity)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'gain',
+        args: [-Infinity],
+      })
+    })
+
+    it('should parse seq.gain() with -inf (short form)', () => {
+      const ir = parseAudioDSL('seq1.gain(-inf)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'gain',
+        args: [-Infinity],
+      })
+    })
+
+    it('should parse chained gain and pan with dB', () => {
+      const ir = parseAudioDSL('seq1.gain(-6).pan(-50)')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'sequence',
+        target: 'seq1',
+        method: 'gain',
+        args: [-6],
         chain: [{ method: 'pan', args: [-50] }],
       })
     })

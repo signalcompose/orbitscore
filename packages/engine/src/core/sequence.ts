@@ -22,7 +22,7 @@ export class Sequence {
   private _tempo?: number
   private _beat?: Meter
   private _length?: number // Loop length in bars
-  private _volume: number = 80 // 0-100, default 80
+  private _gainDb: number = 0 // Gain in dB, default 0 dB (100%)
   private _pan: number = 0 // -100 (left) to 100 (right), default 0 (center)
   private _audioFile?: AudioFile
   private _slices: AudioSlice[] = []
@@ -64,8 +64,14 @@ export class Sequence {
     return this
   }
 
-  gain(value: number): this {
-    this._volume = Math.max(0, Math.min(100, value))
+  gain(valueDb: number): this {
+    // Clamp to -60 dB (effectively silent) to +12 dB (prevent clipping)
+    // -Infinity is allowed for complete silence
+    if (valueDb === -Infinity) {
+      this._gainDb = -Infinity
+    } else {
+      this._gainDb = Math.max(-60, Math.min(12, valueDb))
+    }
     
     // If already playing, reschedule with new gain
     if (this._isLooping || this._isPlaying) {
@@ -84,7 +90,7 @@ export class Sequence {
         // Reschedule immediately with new gain
         this.scheduleEvents(scheduler, 0, currentTime)
         
-        console.log(`🎚️ ${this._name}: gain=${value}`)
+        console.log(`🎚️ ${this._name}: gain=${valueDb} dB`)
       }
     }
     
@@ -237,6 +243,17 @@ export class Sequence {
         // 0 is silence
         const startTimeMs = baseTime + event.startTime + loopOffset
         
+        // Calculate final gain: sequence gain + master gain (in dB, so we add them)
+        const masterGainDb = this.global.getMasterGainDb()
+        let finalGainDb: number
+        if (this._isMuted) {
+          finalGainDb = -Infinity
+        } else if (this._gainDb === -Infinity || masterGainDb === -Infinity) {
+          finalGainDb = -Infinity
+        } else {
+          finalGainDb = this._gainDb + masterGainDb
+        }
+        
         // Use sox slice playback instead of file slicing
         if (chopDivisions > 1) {
           scheduler.scheduleSliceEvent(
@@ -244,7 +261,7 @@ export class Sequence {
             startTimeMs,
             event.sliceNumber,
             chopDivisions,
-            this._isMuted ? 0 : this._volume,
+            finalGainDb,
             this._pan,
             this._name,
           )
@@ -252,7 +269,7 @@ export class Sequence {
           scheduler.scheduleEvent(
             resolvedFilePath,
             startTimeMs,
-            this._isMuted ? 0 : this._volume,
+            finalGainDb,
             this._pan,
             this._name,
           )
@@ -394,7 +411,7 @@ export class Sequence {
       tempo: this._tempo,
       beat: this._beat,
       length: this._length,
-      volume: this._volume,
+      gainDb: this._gainDb,
       pan: this._pan,
       slices: this._slices,
       playPattern: this._playPattern,

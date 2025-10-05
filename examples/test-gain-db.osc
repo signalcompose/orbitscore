@@ -1,0 +1,37 @@
+// Test dB-based gain control
+// Phase 9: Master Volume & dB Unit
+
+var global = init GLOBAL
+global.audioPath("test-assets/audio")
+global.tempo(120)
+global.run()
+
+// Test 1: Sequence gain in dB
+var kick = init global.seq
+kick.audio("kick.wav").play(1,0,0,0).gain(0).loop()  // 0 dB (100%, default)
+
+var snare = init global.seq
+snare.audio("snare.wav").play(0,1,0,0).gain(-6).loop()  // -6 dB (≈50%)
+
+var hihat = init global.seq
+hihat.audio("hihat.wav").play(1,1,1,1).gain(-12).loop()  // -12 dB (≈25%)
+
+// Test 2: Master volume control
+// After 4 bars, reduce master volume
+// global.gain(-6)  // All sequences will be 6 dB quieter
+
+// Test 3: Very quiet
+var quiet = init global.seq
+quiet.audio("kick.wav").play(1,0,0,0).gain(-60).loop()  // -60 dB (very quiet)
+
+// Test 4: Boost (careful!)
+var loud = init global.seq
+loud.audio("snare.wav").play(0,0,1,0).gain(6).loop()  // +6 dB (≈200%, might clip)
+
+// Test 5: Silence
+var silent = init global.seq
+silent.audio("hihat.wav").play(0,0,0,1).gain(-inf).loop()  // -∞ dB (complete silence, short form)
+
+// Test 6: Decimal values
+var precise = init global.seq
+precise.audio("kick.wav").play(0,1,0,0).gain(-3.5).loop()  // -3.5 dB (≈67%)

@@ -20,8 +20,8 @@ export interface Scheduler {
   stop(): void
   stopAll(): void
   clearSequenceEvents(name: string): void
-  scheduleEvent(filepath: string, time: number, volume: number, pan: number, sequenceName: string): void
-  scheduleSliceEvent(filepath: string, time: number, sliceIndex: number, totalSlices: number, volume: number, pan: number, sequenceName: string): void
+  scheduleEvent(filepath: string, time: number, gainDb: number, pan: number, sequenceName: string): void
+  scheduleSliceEvent(filepath: string, time: number, sliceIndex: number, totalSlices: number, gainDb: number, pan: number, sequenceName: string): void
   getAudioDuration(filepath: string): number
   loadBuffer?(filepath: string): Promise<any>
 }
@@ -32,6 +32,7 @@ export class Global {
   private _beat: Meter = { numerator: 4, denominator: 4 }
   private _key: string = 'C'
   private _audioPath: string = '' // Base path for audio files
+  private _masterGainDb: number = 0 // Master volume in dB, default 0 dB (100%)
   private _isRunning: boolean = false
   private _isLooping: boolean = false
 
@@ -98,6 +99,41 @@ export class Global {
     this._audioPath = value
     // audioPath: ${value}
     return this
+  }
+
+  gain(valueDb?: number): number | this {
+    if (valueDb === undefined) {
+      return this._masterGainDb
+    }
+    
+    // Clamp to -60 dB to +12 dB
+    // -Infinity is allowed for complete silence
+    if (valueDb === -Infinity) {
+      this._masterGainDb = -Infinity
+    } else {
+      this._masterGainDb = Math.max(-60, Math.min(12, valueDb))
+    }
+    
+    // If global is running, reschedule all playing sequences with new master gain
+    if (this._isRunning) {
+      for (const [name, sequence] of this.sequences.entries()) {
+        const state = sequence.getState() as any
+        if (state.isPlaying || state.isLooping) {
+          // Trigger reschedule by calling the sequence's gain with its current value
+          // This will cause the sequence to recalculate with the new master gain
+          const currentGainDb = state.gainDb ?? 0
+          ;(sequence as any).gain(currentGainDb)
+        }
+      }
+      console.log(`🎚️ Global: master gain=${valueDb} dB`)
+    }
+    
+    return this
+  }
+
+  // Get master gain in dB (used by sequences to calculate final gain)
+  getMasterGainDb(): number {
+    return this._masterGainDb
   }
 
   // Transport control methods
@@ -196,6 +232,7 @@ export class Global {
       beat: this._beat,
       key: this._key,
       audioPath: this._audioPath,
+      masterGainDb: this._masterGainDb,
       isRunning: this._isRunning,
       isLooping: this._isLooping,
     }
