@@ -570,9 +570,17 @@ export class AudioParser {
       return this.advance().value
     }
 
-    // Identifiers (for key names like C, D, etc., or random syntax 'r')
+    // Identifiers (for key names like C, D, etc., or random syntax 'r', or boolean literals)
     if (token.type === 'IDENTIFIER') {
       const value = this.advance().value
+
+      // Check for boolean literals
+      if (value === 'true') {
+        return true
+      }
+      if (value === 'false') {
+        return false
+      }
 
       // Check for random syntax: 'r', 'r0%20', 'r-6%3', etc.
       if (value === 'r') {
