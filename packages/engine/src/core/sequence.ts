@@ -8,7 +8,6 @@ import * as path from 'path'
 import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { TimingCalculator, TimedEvent } from '../timing/timing-calculator'
-import { AdvancedAudioPlayer } from '../audio/advanced-player'
 import { audioSlicer } from '../audio/audio-slicer'
 
 import { Global, Meter, Scheduler } from './global'
@@ -246,21 +245,6 @@ export class Sequence {
     this._timedEvents = TimingCalculator.calculateTiming(elements, barDuration)
 
     // ${this._name}: ${this._timedEvents.length} events
-
-    // Update transport with the sequence data (if available)
-    const transport = this.global.getTransport()
-    if (transport) {
-      transport.updateSequence({
-        id: this._name,
-        slices: this._slices,
-        tempo: tempo, // Already calculated above
-        meter: meter, // Already calculated above
-        length: this._length || 1, // Default to 1 bar if not specified
-        loop: false,
-        muted: this._isMuted,
-        state: this._isPlaying ? 'playing' : 'stopped',
-      })
-    }
 
     return this
   }
