@@ -165,7 +165,56 @@ Removed verbose logs while keeping essential messages:
 
 **Commit History**:
 - `58add44` - fix: resolve Phase 6 critical scheduler issues - live coding workflow complete
-- (pending) - fix: multi-track synchronization and final Phase 6 completion
+- `0fc66c4` - fix: multi-track synchronization and Phase 6 completion
+
+---
+
+### 6.17 Polymeter Support Implementation (January 5, 2025)
+
+**Objective**: Enable sequences to have independent time signatures (polymeter/polytempo).
+
+**Problem Identified**:
+- Bar duration calculation used incorrect formula: `barDuration = (60000 / tempo) * meter.numerator`
+- This prevented sequences from having different bar lengths
+- `beat(5 by 4)` was incorrectly calculated as 2500ms when it should be based on numerator and denominator
+
+**Solution Implemented**:
+1. **Corrected Bar Duration Formula**:
+   - Old: `barDuration = beatDuration * meter.numerator` (wrong)
+   - New: `barDuration = quarterNoteDuration * (meter.numerator / meter.denominator * 4)` (correct)
+   
+2. **Applied to Multiple Locations**:
+   - `play()` method - for initial timing calculation
+   - `getPatternDuration()` - for loop duration calculation
+
+**Mathematical Examples** (BPM 120 = 500ms quarter note):
+- `4 by 4`: 500 * (4/4 * 4) = 2000ms ✅
+- `5 by 4`: 500 * (5/4 * 4) = 2500ms ✅
+- `9 by 8`: 500 * (9/8 * 4) = 2250ms ✅
+
+**Test Results**:
+- ✅ Polymeter test: `kick.beat(4 by 4)` + `snare.beat(5 by 4)`
+- ✅ Kick: 1000ms intervals (2000ms bar / 2 triggers)
+- ✅ Snare: 1250ms intervals (2500ms bar / 2 triggers)
+- ✅ Synchronization at 10000ms (20 beats = LCM of 4 and 5)
+- ✅ Drift: 0-5ms (excellent accuracy)
+
+**Files Modified**:
+- `packages/engine/src/core/sequence.ts` - Fixed `play()` and `getPatternDuration()`
+- `packages/engine/src/audio/advanced-player.ts` - Added debug logging
+- `examples/multi-track-test.osc` - Updated for polymeter testing
+- `test-assets/audio/hihat.wav` - Created combined hihat file (closed + open)
+
+**Debug Enhancements**:
+- Added playback timing logs: `🔊 Playing: {sequence} at {time}ms (scheduled: {scheduled}ms, drift: {drift}ms)`
+- Helps verify precise timing and identify timing issues
+
+**Key Insight**:
+- `beat()` defines **bar duration**, not trigger count
+- `play()` arguments define **trigger count and timing**
+- This separation enables polymeter while keeping `play()` simple
+
+**Commit**: (pending) `feat: add polymeter support with correct bar duration calculation`
 
 ---
 

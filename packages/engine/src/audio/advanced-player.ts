@@ -102,6 +102,13 @@ export class AdvancedAudioPlayer {
     sequenceName: string,
     scheduledTime: number,
   ) {
+    const launchTime = Date.now()
+    const actualStartTime = launchTime - this.startTime
+    const drift = actualStartTime - scheduledTime
+
+    // Log actual playback timing
+    console.log(`🔊 Playing: ${sequenceName} at ${actualStartTime}ms (scheduled: ${scheduledTime}ms, drift: ${drift}ms)`)
+
     const {
       volume = 80,
       trimStart,
