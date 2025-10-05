@@ -45,6 +45,23 @@
   - 階層的な時間分割
   - 複雑なパターン生成
 
+### 7. `07_audio_control.osc` 🆕
+- **目的**: 音量とステレオ位置の制御
+- **内容**:
+  - `gain()` メソッド（0-100、デフォルト80）
+  - `pan()` メソッド（-100=左, 0=中央, 100=右）
+  - リアルタイムパラメータ変更
+  - ステレオミキシングの実例
+
+### 8. `08_timing_verification.osc` 🆕
+- **目的**: タイミング精度の検証
+- **内容**:
+  - ポリメーター（異なる拍子）
+  - ポリテンポ（異なるBPM）
+  - ネストされたリズム（最大11レベル）
+  - マルチトラックストレステスト
+  - パフォーマンスメトリクス
+
 ## 🎵 ライブコーディング用
 
 ### `live-demo.osc`
@@ -86,6 +103,20 @@ kick.stop()
 global.stop()
 ```
 
+## 🧪 参考テストファイル
+
+高度な使用例やストレステストのための参考ファイル：
+
+- `test-gain.osc` - 音量制御の詳細テスト
+- `test-pan.osc` - ステレオ位置の詳細テスト
+- `test-polymeter.osc` - ポリメーターの基本テスト
+- `test-polytempo.osc` - ポリテンポの基本テスト
+- `test-nested.osc` - ネストリズムの各種パターン
+- `test-insane-nested.osc` - 極限ネスト（11レベル）
+- `test-danger-zone-poly.osc` - マルチトラックストレステスト
+
+これらのファイルは開発・デバッグ用ですが、参考になる場合があります。
+
 ## 📁 ディレクトリ構造
 
 ```
@@ -97,8 +128,11 @@ examples/
 ├── 04_nested_rhythms.osc           # ネストリズム
 ├── 05_drum_patterns_simple.osc     # ドラムパターン
 ├── 06_method_chaining.osc          # メソッドチェーン
+├── 07_audio_control.osc            # 🆕 音量・パン制御
+├── 08_timing_verification.osc      # 🆕 タイミング検証
 ├── live-demo.osc                   # ライブデモ
 ├── multi-track-test.osc            # マルチトラックテスト
+├── test-*.osc                      # 参考テストファイル
 └── max/                            # Max/MSP パッチ（MIDI用、非推奨）
 ```
 
