@@ -123,7 +123,12 @@ export class Sequence {
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo
     const meter = this._beat || globalState.beat
-    const barDuration = (60000 / tempo) * meter.numerator // Duration of one bar in ms
+    
+    // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
+    // これにより、シーケンスごとに異なる拍子で1小節の長さを変えられる（ポリメーター）
+    // 例: global.beat(4 by 4) = 2000ms, seq.beat(5 by 4) = 2500ms, seq.beat(9 by 8) = 2250ms
+    const quarterNoteDuration = 60000 / tempo  // 4分音符の長さ（BPMの基準）
+    const barDuration = quarterNoteDuration * (meter.numerator / meter.denominator * 4)
 
     this._timedEvents = TimingCalculator.calculateTiming(elements, barDuration)
 
@@ -198,8 +203,12 @@ export class Sequence {
   private getPatternDuration(): number {
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo || 120
-    const beatDuration = 60000 / tempo // ms per beat
-    const barDuration = beatDuration * 4 // assuming 4/4 time
+    const meter = this._beat || globalState.beat
+    
+    // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
+    const quarterNoteDuration = 60000 / tempo
+    const barDuration = quarterNoteDuration * (meter.numerator / meter.denominator * 4)
+    
     return barDuration * (this._length || 1)
   }
 
@@ -268,6 +277,8 @@ export class Sequence {
       if (this._isLooping && !this._isMuted) {
         iteration++
         nextScheduleTime += patternDuration // Cumulative time, no drift
+        // Clear old scheduled events for this sequence before scheduling new ones
+        ;(scheduler as any).clearSequenceEvents(this._name)
         this.scheduleEvents(scheduler, 0, nextScheduleTime) // Always use 0, baseTime contains the correct time
       }
     }, patternDuration)
