@@ -186,11 +186,13 @@ Types: feat, fix, docs, test, refactor, chore
 
 ## 🚫 Things to Avoid
 
-1. **NEVER** commit without updating WORK_LOG.md
-2. **NEVER** change IR types without version consideration
-3. **NEVER** skip tests for new features
-4. **NEVER** use magic numbers - use constants
-5. **NEVER** leave TODO comments without tracking
+1. **NEVER** commit directly to main branch - always create a feature branch first
+2. **NEVER** commit without updating WORK_LOG.md
+3. **NEVER** change IR types without version consideration
+4. **NEVER** skip tests for new features
+5. **NEVER** use magic numbers - use constants
+6. **NEVER** leave TODO comments without tracking
+7. **NEVER** delete branches after merging (use `--squash` without `--delete-branch`)
 
 ## ✅ Checklist Before Committing
 
