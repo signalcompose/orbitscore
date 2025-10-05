@@ -1,0 +1,61 @@
+// Mastering Effects Test
+// Tests global compressor, limiter, and normalizer for louder output
+
+var global = init GLOBAL
+global.audioPath("test-assets/audio")
+
+// Create kick and hat sequences
+var kick = init global.seq
+kick.audio("kick.wav").play(1, 0, 1, 0)
+
+var hat = init global.seq
+hat.audio("hihat.wav").chop(2).play(1, 2, 1, 2)
+
+// Start playback
+global.run()
+kick.loop()
+hat.loop()
+
+// ========================================
+// Test 1: Add compressor for punch
+// ========================================
+
+// Add compressor (moderate settings)
+// global.compressor(0.6, 0.6, 0.01, 0.1, 1.2, true)
+
+// ========================================
+// Test 2: Add limiter to prevent clipping
+// ========================================
+
+// Add limiter (prevent peaks above 0.99)
+// global.limiter(0.99, 0.01, true)
+
+// ========================================
+// Test 3: Add normalizer for maximum loudness
+// ========================================
+
+// Add normalizer (maximize output)
+// global.normalizer(0.95, 0.01, true)
+
+// ========================================
+// Test 4: Adjust compressor for more punch
+// ========================================
+
+// Increase compression ratio and makeup gain
+// global.compressor(0.5, 0.7, 0.005, 0.05, 1.5, true)
+
+// ========================================
+// Test 5: Turn off effects one by one
+// ========================================
+
+// Turn off compressor
+// global.compressor(0, 0, 0, 0, 0, false)
+
+// Turn off limiter
+// global.limiter(0, 0, false)
+
+// Turn off normalizer
+// global.normalizer(0, 0, false)
+
+// Stop playback
+// global.stop()
