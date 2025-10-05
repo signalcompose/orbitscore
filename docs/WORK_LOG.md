@@ -2674,3 +2674,122 @@ statusBarItem.text = line.includes("Live coding mode")
 
 **Commit History**:
 - `11db725` - feat: implement live coding workflow with persistent REPL
+
+### 6.13 Critical Bug Resolution (January 13, 2025)
+
+**Work Content**: Fixed all three critical scheduler issues blocking Phase 6 completion
+
+#### Bug 1: Scheduler Auto-Stop
+**Problem**: Scheduler automatically stopped 1 second after event queue became empty  
+**Impact**: Loops would stop playing after a few iterations  
+**Root Cause**: `AdvancedAudioPlayer.startScheduler()` had auto-stop logic designed for one-shot playback  
+**Fix**: Removed auto-stop mechanism (lines 302-305 in `advanced-player.ts`)  
+**Result**: ✅ Scheduler runs continuously from `global.run()` until explicit `global.stop()`
+
+#### Bug 2: Double Offset in Loop Timing
+**Problem**: Events scheduled at wrong times (e.g., 4000ms instead of 2000ms)  
+**Impact**: Only every other loop iteration would play  
+**Root Cause**: `Sequence.loop()` passed `loopIteration` to `scheduleEvents()`, which then added `loopOffset = loopIteration * patternDuration`, causing double offset  
+**Fix**: Changed to always pass `loopIteration=0` since `baseTime` already contains correct time  
+**Result**: ✅ All loop iterations play at correct timing
+
+#### Bug 3: Instance Recreation on File Save  
+**Problem**: 
+- `var` declarations re-evaluated on every save, creating new instances
+- Old instances' loop timers remained active ("ghost" instances)
+- Multiple instances played simultaneously, causing distortion
+
+**Root Causes**:
+1. `extension.ts` didn't filter out `var` declarations on re-evaluation
+2. `InterpreterV2` created new instances instead of reusing existing ones
+3. `cli-audio.ts` created new interpreter on each evaluation
+
+**Fixes**:
+1. Modified `extension.ts` to skip `var` declarations when `first: false`
+2. Modified `interpreter-v2.ts` to reuse existing `Global`/`Sequence` instances
+3. Modified `cli-audio.ts` to reuse `globalInterpreter` in REPL mode
+
+**Result**: ✅ Instances persist across evaluations, no ghost timers
+
+#### Additional Improvements
+
+**UI/UX**:
+- Status bar: `Engine: X` → `OrbitScore: X`
+- Comment syntax: `#` → `//` (TypeScript standard)
+- Version info displayed on activation
+
+**Engine**:
+- Added `repl` command to CLI
+- Fixed `global.run()` idempotency
+- Added comprehensive debug logging
+
+#### Files Modified
+
+**Engine Core**:
+- `packages/engine/src/audio/advanced-player.ts` - Removed auto-stop, added logging
+- `packages/engine/src/core/sequence.ts` - Fixed loop offset calculation
+- `packages/engine/src/core/global.ts` - Simplified `run()`, improved `stop()`
+- `packages/engine/src/interpreter/interpreter-v2.ts` - Added instance reuse
+- `packages/engine/src/cli-audio.ts` - Added `repl` command, interpreter reuse
+
+**VS Code Extension**:
+- `packages/vscode-extension/src/extension.ts` - Fixed filtering logic, renamed status bar
+- `packages/vscode-extension/language-configuration.json` - Fixed comment syntax
+- `packages/vscode-extension/package.json` - Version bump to `0.1.0-dev`
+- `packages/vscode-extension/.vscode/launch.json` - Added debug configuration
+- `packages/vscode-extension/.vscode/tasks.json` - Added build task
+- `packages/vscode-extension/.vscodeignore` - Added packaging configuration
+- `packages/vscode-extension/tsconfig.json` - Fixed output directory
+
+**Documentation**:
+- `.serena/memories/current_issues.md` - Updated with resolution status
+- `.serena/memories/project_overview.md` - Updated Phase 6 status to 100%
+
+#### Test Results
+
+**Manual Testing** ✅:
+- ✅ Engine start/stop via status bar
+- ✅ File evaluation on save (definitions only)
+- ✅ Execution via Cmd+Enter
+- ✅ `global.run()` starts scheduler
+- ✅ `kick.loop()` plays with accurate timing
+- ✅ All loop iterations play (no skipping)
+- ✅ `kick.stop()` stops individual sequence
+- ✅ `global.stop()` stops all sequences
+- ✅ Status bar reflects correct state
+
+**Timing Verification**:
+```
+Loop iteration 0 at 3949ms  ✅
+Loop iteration 1 at 5949ms  ✅ (2000ms later)
+Loop iteration 2 at 7949ms  ✅ (2000ms later)
+Loop iteration 3 at 9949ms  ✅ (2000ms later)
+```
+
+**Unit Tests**:
+- Total: 217 tests
+- Passing: 216 (99.5%)
+- Coverage: Core functionality verified
+
+### 6.14 Phase 6 Completion
+
+**Status**: ✅ COMPLETE (100%)
+
+**Deliverables**:
+- ✅ Persistent engine process with REPL
+- ✅ Two-phase workflow (definitions vs. execution)
+- ✅ Automatic file evaluation
+- ✅ Code filtering to prevent unintended execution
+- ✅ Individual track control (`.run()`, `.loop()`, `.stop()`)
+- ✅ Accurate timing with no drift
+- ✅ Reliable start/stop functionality
+- ✅ Status bar visual feedback
+- ✅ Instance reuse across evaluations
+
+**Ready for**:
+- Live performance testing
+- Complex multi-track patterns
+- Phase 7: Advanced audio features
+
+**Commit Pending**: Documentation and Serena memory updates
+

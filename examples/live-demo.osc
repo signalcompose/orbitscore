@@ -2,7 +2,7 @@ var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
 global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
-global.stop()
+global.run()
 
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
@@ -19,4 +19,9 @@ hihat.beat(4 by 4).length(1)
 hihat.audio("hihat_closed.wav").chop(1)
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 
-kick.stop()
+// 以下をCmd+Enterで実行:
+// kick.loop()
+// snare.loop()
+// hihat.loop()
+// kick.stop()
+// global.stop()

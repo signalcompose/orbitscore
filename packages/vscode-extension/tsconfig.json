@@ -1,15 +1,15 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist",
-    "rootDir": "src",
+    "outDir": "./dist",
+    "rootDir": "./src",
     "module": "commonjs",
     "target": "ES2020",
     "types": ["vscode", "node"],
     "typeRoots": [
       "../../node_modules/@types"
-    ],
-    "composite": true
+    ]
   },
-  "include": ["src"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
 }
