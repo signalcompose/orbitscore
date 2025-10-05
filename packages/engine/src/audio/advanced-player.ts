@@ -88,6 +88,9 @@ export class AdvancedAudioPlayer {
       options: { ...options, startTime: 0 },
       sequenceName,
     })
+    
+    // Re-sort after adding new event to maintain time order
+    this.scheduledPlays.sort((a, b) => a.time - b.time)
   }
 
   /**
@@ -354,10 +357,8 @@ export class AdvancedAudioPlayer {
     sequenceName: string = '',
   ) {
     this.playAudio(filepath, { startTime: startTimeMs, volume }, sequenceName)
-    // Ensure scheduler is running when events are added
-    if (!this.isRunning) {
-      this.startScheduler()
-    }
+    // Note: Scheduler must be started explicitly with global.run()
+    // This ensures explicit control over when audio playback begins
   }
 
   /**
@@ -371,10 +372,8 @@ export class AdvancedAudioPlayer {
     options: PlayOptions = {},
     sequenceName: string = '',
   ) {
-    // Ensure scheduler is running when events are added
-    if (!this.isRunning) {
-      this.startScheduler()
-    }
+    // Note: Scheduler must be started explicitly with global.run()
+    // This ensures explicit control over when audio playback begins
     if (this.hasSox && totalSlices > 1) {
       // Use sox trim for partial playback - no file slicing needed!
       const duration = this.getAudioDuration(filepath)

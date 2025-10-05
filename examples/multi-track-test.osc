@@ -18,29 +18,29 @@ snare.beat(4 by 4).length(1)
 snare.audio("snare.wav").chop(1)
 snare.play(0, 1, 0, 1)
 
-// Hi-hat - 16th notes
+// Hi-hat - 4th notes
 var hihat = init global.seq
 hihat.beat(4 by 4).length(1)
-hihat.audio("hihat.wav").chop(1)
+hihat.audio("hihat_closed.wav").chop(1)
 hihat.play(1, 1, 1, 1)
 
 // Test Commands (Execute with Cmd+Enter):
 // 
 // 1. Start scheduler:
-// global.run()
+global.run()
 //
 // 2. Start individual tracks:
-// kick.loop()
-// snare.loop()
-// hihat.loop()
+kick.loop()
+snare.loop()
+hihat.loop()
 //
 // 3. Stop individual tracks:
-// kick.stop()
-// snare.stop()
-// hihat.stop()
+kick.stop()
+snare.stop()
+hihat.stop()
 //
 // 4. Stop all:
-// global.stop()
+global.stop()
 //
 // Expected behavior:
 // - Each sequence plays independently
