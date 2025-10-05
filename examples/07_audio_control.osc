@@ -1,33 +1,44 @@
-// 07. Audio Control - Volume and Stereo Positioning
-// Learn how to control volume (gain) and stereo position (pan) in real-time
+// 07. Audio Control - Volume (dB) and Stereo Positioning
+// Learn how to control volume with professional dB units and stereo positioning
 
 var global = init GLOBAL
 global.tempo(120).beat(4 by 4)
 global.audioPath("test-assets/audio")
 
 // ==================================================
-// PART 1: Volume Control with gain()
+// PART 1: Volume Control with gain() - dB Unit
 // ==================================================
 
-// Volume range: 0-100 (default: 80)
+// Volume in dB: -60 dB (very quiet) to +12 dB (boost)
+// Default: 0 dB (100%, unity gain)
+// Common values:
+//   0 dB = 100% (default)
+//  -6 dB ≈ 50%
+// -12 dB ≈ 25%
+//  +6 dB ≈ 200% (careful with clipping!)
+
 var soft = init global.seq
 soft.audio("kick.wav")
-soft.gain(30)              // Quiet (30%)
+soft.gain(-12)             // -12 dB ≈ 25%
 soft.play(1, 0, 0, 0)
 
 var normal = init global.seq
 normal.audio("snare.wav")
-normal.gain(80)            // Normal (80%, default)
+normal.gain(0)             // 0 dB = 100% (default)
 normal.play(0, 1, 0, 0)
 
 var loud = init global.seq
 loud.audio("hihat.wav")
-loud.gain(100)             // Loud (100%)
+loud.gain(6)               // +6 dB ≈ 200% (boost)
 loud.play(0, 0, 1, 0)
 
-// Method chaining is also supported
-var chained = init global.seq
-chained.gain(60).audio("kick.wav").play(0, 0, 0, 1)
+// Decimal values supported for fine control
+var precise = init global.seq
+precise.gain(-3.5).audio("kick.wav").play(0, 0, 0, 1)  // -3.5 dB ≈ 67%
+
+// Complete silence with -inf
+var silent = init global.seq
+silent.gain(-inf).audio("snare.wav").play(0, 0, 0, 1)  // -∞ dB = silent
 
 // ==================================================
 // PART 2: Stereo Positioning with pan()
@@ -62,77 +73,108 @@ midLeft.play(0, 0, 0, 1)
 
 var combined = init global.seq
 combined.audio("kick.wav")
-combined.gain(70).pan(-50)  // 70% volume, mid-left
+combined.gain(-6).pan(-50)  // -6 dB (≈50%), mid-left
 combined.play(1, 0, 1, 0)
 
 // Method chaining (all in one line)
-var oneLinr = init global.seq
-oneLinr.gain(80).pan(50).audio("snare.wav").play(0, 1, 0, 1)
+var oneLiner = init global.seq
+oneLiner.gain(-3).pan(50).audio("snare.wav").play(0, 1, 0, 1)
 
 // ==================================================
-// PART 4: Real-Time Control (Live Coding)
+// PART 4: Master Volume Control
+// ==================================================
+
+// global.gain() affects ALL sequences
+// Final dB = sequence dB + master dB
+
+var kick = init global.seq
+kick.gain(0).audio("kick.wav").play(1, 0, 0, 0)  // 0 dB
+
+var snare = init global.seq
+snare.gain(-3).audio("snare.wav").play(0, 1, 0, 0)  // -3 dB
+
+var hihat = init global.seq
+hihat.gain(-6).audio("hihat.wav").play(0, 0, 1, 0)  // -6 dB
+
+// Try these:
+// global.gain(-6)    // All sequences become 6 dB quieter
+// global.gain(-12)   // All sequences become 12 dB quieter
+// global.gain(3)     // All sequences become 3 dB louder
+
+// ==================================================
+// PART 5: Real-Time Control (Live Coding)
 // ==================================================
 
 // Start playback
 // global.run()
-// left.loop()
-// center.loop()
-// right.loop()
+// kick.loop()
+// snare.loop()
+// hihat.loop()
 
 // Try these commands while playing:
 
 // Change volume in real-time
-// left.gain(100)          // Increase to 100%
-// left.gain(50)           // Decrease to 50%
-// left.gain(0)            // Mute
+// kick.gain(6)           // Boost to +6 dB
+// kick.gain(-6)          // Reduce to -6 dB
+// kick.gain(-12)         // Reduce to -12 dB
+// kick.gain(-inf)        // Silence
 
 // Change stereo position in real-time
-// left.pan(-100)          // Move to full left
-// left.pan(0)             // Move to center
-// left.pan(100)           // Move to full right
-// left.pan(-50)           // Move to mid-left
+// kick.pan(-100)         // Move to full left
+// kick.pan(0)            // Move to center
+// kick.pan(100)          // Move to full right
+// kick.pan(-50)          // Move to mid-left
 
 // Combine changes
-// left.gain(80).pan(-100) // 80% volume, full left
+// kick.gain(-3).pan(-100)  // -3 dB, full left
+
+// Master volume changes
+// global.gain(-6)        // Reduce all by 6 dB
+// global.gain(0)         // Reset to 0 dB
 
 // Stop playback
 // global.stop()
 
 // ==================================================
-// PART 5: Practical Example - Stereo Drum Mix
+// PART 6: Practical Example - Stereo Drum Mix
 // ==================================================
 
-var kick = init global.seq
-kick.gain(90).pan(0).audio("kick.wav")
-kick.play(1, 0, 1, 0)
+var drumKick = init global.seq
+drumKick.gain(0).pan(0).audio("kick.wav")      // 0 dB, center
+drumKick.play(1, 0, 1, 0)
 
-var snare = init global.seq
-snare.gain(80).pan(-20).audio("snare.wav")
-snare.play(0, 1, 0, 1)
+var drumSnare = init global.seq
+drumSnare.gain(-3).pan(-20).audio("snare.wav") // -3 dB, slight left
+drumSnare.play(0, 1, 0, 1)
 
-var hihatClosed = init global.seq
-hihatClosed.gain(60).pan(50).audio("hihat.wav")
-hihatClosed.play(1, 1, 1, 1)
+var drumHihat = init global.seq
+drumHihat.gain(-6).pan(50).audio("hihat.wav")  // -6 dB, right
+drumHihat.play(1, 1, 1, 1)
 
 // Commands to try:
 // global.run()
-// kick.loop()
-// snare.loop()
-// hihatClosed.loop()
+// drumKick.loop()
+// drumSnare.loop()
+// drumHihat.loop()
 
 // Live mixing:
-// kick.gain(100)              // Boost kick
-// snare.pan(-50)              // Move snare left
-// hihatClosed.gain(40).pan(70) // Quieter, more right
+// drumKick.gain(3)              // Boost kick by 3 dB
+// drumSnare.pan(-50)            // Move snare more left
+// drumHihat.gain(-12).pan(70)   // Quieter hihat, more right
+// global.gain(-6)               // Reduce overall mix by 6 dB
 
 // global.stop()
 
 // ==================================================
 // 💡 Tips:
 // ==================================================
-// 1. gain() accepts 0-100 (default: 80)
-// 2. pan() accepts -100 to 100 (default: 0)
-// 3. Both methods support real-time changes
-// 4. Changes take effect within 1-2ms
-// 5. Use method chaining for cleaner code
-// 6. Negative numbers work: pan(-100), pan(-50)
+// 1. gain() uses dB units: -60 to +12 dB (default: 0 dB)
+// 2. 0 dB = unity gain (100%), -6 dB ≈ 50%, +6 dB ≈ 200%
+// 3. Use -inf for complete silence
+// 4. Decimal values supported: gain(-3.5)
+// 5. global.gain() affects all sequences (master volume)
+// 6. Final dB = sequence dB + master dB
+// 7. pan() accepts -100 to 100 (default: 0)
+// 8. Both methods support real-time changes (1-2ms latency)
+// 9. dB is logarithmic (matches human hearing)
+// 10. Use method chaining for cleaner code
