@@ -17,32 +17,38 @@ kick.loop()
 hat.loop()
 
 // ========================================
-// Test 1: Add compressor for punch
+// Test 1: HEAVY compression for maximum loudness
 // ========================================
 
-// Add compressor (moderate settings)
-// global.compressor(0.6, 0.6, 0.01, 0.1, 1.2, true)
+// Ultra-aggressive compressor settings
+// - Very low threshold (0.2) = compress almost everything
+// - High ratio (0.9) = near-infinite compression
+// - Fast attack (0.001s) = catch transients immediately
+// - Short release (0.03s) = pump effect
+// - High makeup gain (2.0) = maximum boost
+// global.compressor(0.2, 0.9, 0.001, 0.03, 2.0, true)
 
 // ========================================
-// Test 2: Add limiter to prevent clipping
+// Test 2: Brick wall limiter
 // ========================================
 
-// Add limiter (prevent peaks above 0.99)
-// global.limiter(0.99, 0.01, true)
+// Aggressive limiter to prevent clipping
+// - Lower ceiling (0.95) = more limiting
+// global.limiter(0.95, 0.01, true)
 
 // ========================================
-// Test 3: Add normalizer for maximum loudness
+// Test 3: Maximize with normalizer
 // ========================================
 
-// Add normalizer (maximize output)
-// global.normalizer(0.95, 0.01, true)
+// Push to maximum loudness
+// global.normalizer(1.0, 0.01, true)
 
 // ========================================
-// Test 4: Adjust compressor for more punch
+// Test 4: Even MORE aggressive (if needed)
 // ========================================
 
-// Increase compression ratio and makeup gain
-// global.compressor(0.5, 0.7, 0.005, 0.05, 1.5, true)
+// Nuclear option: extreme compression
+// global.compressor(0.15, 0.95, 0.0005, 0.02, 2.0, true)
 
 // ========================================
 // Test 5: Turn off effects one by one
@@ -58,4 +64,4 @@ hat.loop()
 // global.normalizer(0, 0, false)
 
 // Stop playback
-// global.stop()
+global.stop()
