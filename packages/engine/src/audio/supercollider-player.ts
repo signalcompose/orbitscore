@@ -87,11 +87,16 @@ export class SuperColliderPlayer {
   }
 
   /**
-   * Query buffer duration (simplified)
+   * Query buffer duration (wait for buffer to load)
    */
   private async queryBufferDuration(bufnum: number): Promise<number> {
-    // TODO: Implement proper /b_query response handling
-    return 0.5; // Assume 0.5 second for drum samples
+    // Wait for buffer to load (SuperCollider sends /done after /b_allocRead)
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // TODO: Implement proper /b_query response handling with supercolliderjs API
+    // For now, use default duration based on typical drum samples
+    // hihat.wav is 0.3s (150ms * 2 slices)
+    return 0.3;
   }
 
   /**
@@ -99,7 +104,11 @@ export class SuperColliderPlayer {
    */
   getAudioDuration(filepath: string): number {
     const bufferInfo = this.bufferCache.get(filepath);
-    return bufferInfo?.duration ?? 1.0;
+    if (!bufferInfo) {
+      console.warn(`⚠️  No buffer cached for ${filepath}, using default 0.3s`);
+      return 0.3; // Default for drum samples
+    }
+    return bufferInfo.duration;
   }
 
   /**
@@ -138,7 +147,8 @@ export class SuperColliderPlayer {
   ): void {
     const duration = this.getAudioDuration(filepath);
     const sliceDuration = duration / totalSlices;
-    const startPos = sliceIndex * sliceDuration;
+    // sliceIndex is 1-based from DSL, convert to 0-based
+    const startPos = (sliceIndex - 1) * sliceDuration;
 
     const play: ScheduledPlay = {
       time: startTimeMs,
