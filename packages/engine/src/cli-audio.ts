@@ -152,10 +152,24 @@ hihat.run()
   setInterval(() => {}, 1000)
 }
 
-// Handle Ctrl+C gracefully
-process.on('SIGINT', () => {
+// Handle Ctrl+C and SIGTERM gracefully
+async function shutdown() {
+  if (globalInterpreter) {
+    try {
+      // Quit SuperCollider server
+      const audioEngine = (globalInterpreter as any).audioEngine
+      if (audioEngine && typeof audioEngine.quit === 'function') {
+        await audioEngine.quit()
+      }
+    } catch (e) {
+      // Ignore errors during shutdown
+    }
+  }
   process.exit(0)
-})
+}
+
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)
 
 // Main
 async function main() {
