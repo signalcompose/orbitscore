@@ -19,6 +19,13 @@ interface ScheduledPlay {
   sequenceName: string;
 }
 
+export interface AudioDevice {
+  id: number;
+  name: string;
+  type: 'input' | 'output';
+  channels: number;
+}
+
 /**
  * SuperCollider audio player with low-latency scheduling
  */
@@ -28,6 +35,8 @@ export class SuperColliderPlayer {
   private bufferDurations: Map<number, number> = new Map();
   private nextBufnum = 0;
   private synthDefPath: string;
+  private availableDevices: AudioDevice[] = [];
+  private currentOutputDevice: string | null = null;
 
   // Scheduler
   public isRunning = false;
@@ -44,17 +53,32 @@ export class SuperColliderPlayer {
   /**
    * Boot SuperCollider server and load SynthDef
    */
-  async boot(): Promise<void> {
+  async boot(outputDevice?: string): Promise<void> {
     console.log('🎵 Booting SuperCollider server...');
 
-    // @ts-ignore - supercolliderjs types are incomplete
-    this.server = await sc.server.boot({
+    const bootOptions: any = {
       scsynth: '/Applications/SuperCollider.app/Contents/Resources/scsynth',
       debug: false,
-    });
+    };
+
+    // Set output device if specified (by name)
+    // SuperCollider device option can be a string or [inputDevice, outputDevice] array
+    if (outputDevice) {
+      // Use array format: [inputDevice, outputDevice]
+      // Use default input device (MacBook Airの) and specified output
+      bootOptions.device = ["MacBook Airの", outputDevice];
+      this.currentOutputDevice = outputDevice;
+      console.log(`🔊 Using output device: ${outputDevice}`);
+    }
+
+    // @ts-ignore - supercolliderjs types are incomplete
+    this.server = await sc.server.boot(bootOptions);
 
     console.log('✅ SuperCollider server ready');
 
+    // Parse available devices from server boot log
+    // Note: Device list is printed during boot, we'll capture it from stdout
+    
     // Load SynthDef
     const synthDefData = fs.readFileSync(this.synthDefPath);
     await this.server.send.msg(['/d_recv', synthDefData]);
@@ -63,6 +87,28 @@ export class SuperColliderPlayer {
     await new Promise(resolve => setTimeout(resolve, 200));
 
     console.log('✅ SynthDef loaded');
+  }
+
+  /**
+   * Get list of available audio devices
+   * Note: This information is captured during server boot
+   */
+  getAvailableDevices(): AudioDevice[] {
+    return this.availableDevices;
+  }
+
+  /**
+   * Get current output device name
+   */
+  getCurrentOutputDevice(): string | null {
+    return this.currentOutputDevice;
+  }
+
+  /**
+   * Set available devices (called during boot process)
+   */
+  setAvailableDevices(devices: AudioDevice[]): void {
+    this.availableDevices = devices;
   }
 
   /**
