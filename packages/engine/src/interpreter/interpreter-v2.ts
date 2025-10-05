@@ -4,7 +4,7 @@
  */
 
 import { AudioIR, GlobalInit, SequenceInit, Statement } from '../parser/audio-parser'
-import { AudioEngine } from '../audio/audio-engine'
+import { SuperColliderPlayer } from '../audio/supercollider-player'
 import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
 
@@ -12,19 +12,33 @@ import { Sequence } from '../core/sequence'
  * Interpreter V2 - Object-oriented approach
  */
 export class InterpreterV2 {
-  private audioEngine: AudioEngine
+  private audioEngine: SuperColliderPlayer
   private globals: Map<string, Global> = new Map()
   private sequences: Map<string, Sequence> = new Map()
   private currentGlobal?: Global
+  private isBooted = false
 
   constructor() {
-    this.audioEngine = new AudioEngine()
+    this.audioEngine = new SuperColliderPlayer()
+  }
+
+  /**
+   * Boot SuperCollider server
+   */
+  private async ensureBooted(): Promise<void> {
+    if (!this.isBooted) {
+      await this.audioEngine.boot()
+      this.isBooted = true
+    }
   }
 
   /**
    * Execute parsed IR
    */
   async execute(ir: AudioIR): Promise<void> {
+    // Ensure SuperCollider is booted
+    await this.ensureBooted()
+
     // Process global initialization
     if (ir.globalInit) {
       await this.processGlobalInit(ir.globalInit)

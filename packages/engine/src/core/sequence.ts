@@ -11,7 +11,7 @@ import { TimingCalculator, TimedEvent } from '../timing/timing-calculator'
 import { AdvancedAudioPlayer } from '../audio/advanced-player'
 import { audioSlicer } from '../audio/audio-slicer'
 
-import { Global, Meter } from './global'
+import { Global, Meter, Scheduler } from './global'
 
 export class Sequence {
   private global: Global
@@ -134,24 +134,26 @@ export class Sequence {
 
     // ${this._name}: ${this._timedEvents.length} events
 
-    // Update transport with the sequence data
+    // Update transport with the sequence data (if available)
     const transport = this.global.getTransport()
-    transport.updateSequence({
-      id: this._name,
-      slices: this._slices,
-      tempo: tempo, // Already calculated above
-      meter: meter, // Already calculated above
-      length: this._length || 1, // Default to 1 bar if not specified
-      loop: false,
-      muted: this._isMuted,
-      state: this._isPlaying ? 'playing' : 'stopped',
-    })
+    if (transport) {
+      transport.updateSequence({
+        id: this._name,
+        slices: this._slices,
+        tempo: tempo, // Already calculated above
+        meter: meter, // Already calculated above
+        length: this._length || 1, // Default to 1 bar if not specified
+        loop: false,
+        muted: this._isMuted,
+        state: this._isPlaying ? 'playing' : 'stopped',
+      })
+    }
 
     return this
   }
 
   // Schedule events to a global scheduler (one-shot or one iteration)
-  async scheduleEvents(scheduler: AdvancedAudioPlayer, loopIteration: number = 0, baseTime: number = 0): Promise<void> {
+  async scheduleEvents(scheduler: Scheduler, loopIteration: number = 0, baseTime: number = 0): Promise<void> {
     if (!this._audioFilePath || !this._timedEvents || this._timedEvents.length === 0) {
       return
     }
@@ -182,7 +184,7 @@ export class Sequence {
             startTimeMs,
             event.sliceNumber,
             chopDivisions,
-            { volume: this._isMuted ? 0 : 50 },
+            this._isMuted ? 0 : 50,
             this._name,
           )
         } else {
