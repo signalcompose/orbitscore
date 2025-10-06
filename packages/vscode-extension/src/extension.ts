@@ -14,6 +14,7 @@ let statusBarItem: vscode.StatusBarItem | null = null
 let isLiveCodingMode: boolean = false
 let hasEvaluatedFile: boolean = false
 let evaluationTimeout: NodeJS.Timeout | null = null
+let isDebugMode: boolean = false // Debug mode flag
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
@@ -49,6 +50,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.showCommands', showCommands),
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
     vscode.commands.registerCommand('orbitscore.stopEngine', stopEngine),
+    vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
     vscode.commands.registerCommand('orbitscore.killSuperCollider', killSuperCollider),
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     statusBarItem,
@@ -97,6 +99,11 @@ function showCommands() {
       detail: 'Start OrbitScore audio engine with SuperCollider',
     },
     {
+      label: '🐛 Start Engine (Debug)',
+      description: 'Boot with full logging',
+      detail: 'Start engine with verbose debug output',
+    },
+    {
       label: '▶️ Run Selection',
       description: 'Cmd+Enter',
       detail: 'Execute selected code or current line',
@@ -130,6 +137,9 @@ function showCommands() {
       case '🚀 Start Engine':
         vscode.commands.executeCommand('orbitscore.toggleEngine')
         break
+      case '🐛 Start Engine (Debug)':
+        vscode.commands.executeCommand('orbitscore.startEngineDebug')
+        break
       case '▶️ Run Selection':
         vscode.commands.executeCommand('orbitscore.runSelection')
         break
@@ -159,13 +169,15 @@ function toggleEngine() {
   }
 }
 
-function startEngine() {
+function startEngine(debugMode: boolean = false) {
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return
   }
 
-  outputChannel?.appendLine('🚀 Starting engine...')
+  isDebugMode = debugMode
+  const modeLabel = debugMode ? '(Debug Mode)' : ''
+  outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
   
   const enginePath = path.join(__dirname, '../../engine/dist/cli-audio.js')
   if (!fs.existsSync(enginePath)) {
@@ -196,6 +208,9 @@ function startEngine() {
   if (audioDevice) {
     args.push('--audio-device', audioDevice)
   }
+  if (debugMode) {
+    args.push('--debug')
+  }
   
   engineProcess = child_process.spawn('node', [enginePath, ...args], {
     cwd: workspaceRoot,
@@ -204,21 +219,107 @@ function startEngine() {
 
   isLiveCodingMode = true
   hasEvaluatedFile = false  // Reset on engine start
-  statusBarItem!.text = '🎵 OrbitScore: Ready'
+  statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
-  vscode.window.showInformationMessage('✅ Engine started')
+  vscode.window.showInformationMessage(debugMode ? '✅ Engine started (Debug)' : '✅ Engine started')
   outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
 
   // Handle stdout
   engineProcess.stdout?.on('data', (data) => {
     const output = data.toString()
-    outputChannel?.append(output)
+    
+    // In non-debug mode, filter out verbose logs
+    if (!debugMode) {
+      const lines = output.split('\n')
+      const filtered = lines.filter((line: string) => {
+        const trimmed = line.trim()
+        
+        // Keep important messages only
+        if (line.includes('ERROR') || 
+            line.includes('⚠️') || 
+            line.includes('🎛️')) {
+          return true
+        }
+        
+        // Keep initialization messages
+        if (line.includes('🎵 OrbitScore') ||
+            line.includes('✅ Initialized') ||
+            line.includes('✅ SuperCollider server ready') ||
+            line.includes('✅ SynthDef loaded') ||
+            line.includes('✅ Mastering effect') ||
+            line.includes('🎵 Live coding mode')) {
+          return true
+        }
+        
+        // Keep transport state changes
+        if (line.includes('✅ Global running') ||
+            line.includes('✅ Global stopped')) {
+          return true
+        }
+        
+        // Filter out ALL verbose logs
+        if (line.includes('🔊 Playing:') ||
+            line.includes('sendosc:') ||
+            line.includes('rcvosc :') ||
+            line.includes('stdout :') ||
+            line.includes('"oscType"') ||
+            line.includes('"address"') ||
+            line.includes('"args"') ||
+            line.includes('"type"') ||
+            line.includes('"data"') ||
+            line.includes('"bufnum"') ||
+            line.includes('"amp"') ||
+            line.includes('"pan"') ||
+            line.includes('"rate"') ||
+            line.includes('"startPos"') ||
+            line.includes('"duration"') ||
+            line.includes('"threshold"') ||
+            line.includes('"ratio"') ||
+            line.includes('"attack"') ||
+            line.includes('"release"') ||
+            line.includes('"makeupGain"') ||
+            line.includes('"level"') ||
+            line.includes('"/') ||  // OSC addresses like "/done", "/n_go"
+            line.includes('orbitPlayBuf') ||
+            line.includes('fxCompressor') ||
+            line.includes('fxLimiter') ||
+            line.includes('fxNormalizer') ||
+            line.includes('Number of Devices:') ||
+            line.includes('Input Device') ||
+            line.includes('Output Device') ||
+            line.includes('Streams:') ||
+            line.includes('channels') ||
+            line.includes('SC_AudioDriver:') ||
+            line.includes('PublishPortToRendezvous') ||
+            trimmed === '✓' ||
+            trimmed === '}' ||
+            trimmed === ']' ||
+            trimmed === '{' ||
+            trimmed === '[' ||
+            trimmed.startsWith('}') ||
+            trimmed.startsWith(']') ||
+            trimmed.match(/^\d+\s*:/) ||  // Device numbers
+            trimmed.match(/^-?\d+(\.\d+)?,?$/) ||  // Numbers only
+            trimmed === '') {
+          return false
+        }
+        
+        return true
+      })
+      const filteredOutput = filtered.join('\n')
+      if (filteredOutput.trim()) {
+        outputChannel?.append(filteredOutput + '\n')
+      }
+    } else {
+      // Debug mode: show everything
+      outputChannel?.append(output)
+    }
 
     // Update status based on scheduler state
     if (output.includes('✅ Global running') || output.includes('▶ Global')) {
-      statusBarItem!.text = '🎵 OrbitScore: ▶️ Playing'
+      statusBarItem!.text = debugMode ? '🎵 OrbitScore: ▶️ Playing 🐛' : '🎵 OrbitScore: ▶️ Playing'
     } else if (output.includes('✅ Global stopped') || output.includes('⏹ Global')) {
-      statusBarItem!.text = '🎵 OrbitScore: Ready'
+      statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
     }
   })
 
@@ -233,9 +334,14 @@ function startEngine() {
     engineProcess = null
     isLiveCodingMode = false
     hasEvaluatedFile = false  // Reset on engine exit
+    isDebugMode = false  // Reset debug mode
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
   })
+}
+
+function startEngineDebug() {
+  startEngine(true)
 }
 
 function stopEngine() {
@@ -365,10 +471,10 @@ function filterDefinitionsOnly(code: string, isInitializing: boolean = false): s
       return false
     }
     
-    // Skip standalone gain/pan/delay/compressor/limiter/normalizer commands (live parameter changes)
+    // Skip standalone parameter change commands (live parameter changes)
     // Pattern: sequenceName.gain(...) or global.compressor(...) with nothing before
     // But keep chained ones like: kick.audio(...).play(...).gain(...)
-    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(gain|pan|delay|compressor|limiter|normalizer)\s*\(/)) {
+    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(gain|pan|length|tempo|beat|compressor|limiter|normalizer)\s*\(/)) {
       // Check if this is standalone (no var declaration, no other methods before)
       // If line starts with identifier.method, it's standalone
       if (!trimmed.startsWith('var ') && !trimmed.includes('.audio(') && !trimmed.includes('.play(')) {
