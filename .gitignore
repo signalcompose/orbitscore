@@ -6,3 +6,22 @@ dist/
 logs/
 *.tsbuildinfo
 .orbitscore.json
+
+# Ignore custom audio files (keep only tutorial samples)
+test-assets/audio/*.wav
+!test-assets/audio/arpeggio_c.wav
+!test-assets/audio/bass_c1.wav
+!test-assets/audio/bass_e1.wav
+!test-assets/audio/bass_g1.wav
+!test-assets/audio/chord_a_minor.wav
+!test-assets/audio/chord_c_major.wav
+!test-assets/audio/hihat_closed.wav
+!test-assets/audio/hihat_open.wav
+!test-assets/audio/hihat.wav
+!test-assets/audio/kick.wav
+!test-assets/audio/sine_440.wav
+!test-assets/audio/sine_880.wav
+!test-assets/audio/snare.wav
+
+# Ignore temporary extension build files
+packages/vscode-extension/engine/
