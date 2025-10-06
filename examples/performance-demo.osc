@@ -1,0 +1,140 @@
+// ========================================
+// OrbitScore Performance Demo
+// All test-assets samples showcase
+// ========================================
+
+// --- Global Initialization ---
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4)
+global.tick(4)
+
+// --- Sequence Initialization ---
+var kick = init global.seq
+var snare = init global.seq
+var hatc = init global.seq
+var hato = init global.seq
+var hat = init global.seq
+var bassc = init global.seq
+var basse = init global.seq
+var bassg = init global.seq
+var arp = init global.seq
+var chordc = init global.seq
+var chorda = init global.seq
+var sine1 = init global.seq
+var sine2 = init global.seq
+
+// --- Global Mastering Effects (uncomment to use) ---
+// global.compressor(0.5, 1.0, 10, 100, true)
+// global.limiter(0.9, 0.01, true)
+// global.normalizer(0.95, 0.01, true)
+
+// --- Drum Section ---
+
+// Kick - Foundation
+kick.audio("kick.wav").chop(1).play(0, 0, 0, 0)
+
+// Snare - Backbeat
+snare.audio("snare.wav").chop(1).play(0, 0, 0, 0)
+
+// Hi-hat Closed - 16th notes
+hatc.audio("hihat_closed.wav").chop(1).play(0, 0, 0, 0)
+
+// Hi-hat Open - Accents
+hato.audio("hihat_open.wav").chop(1).play(0, 0, 0, 0)
+
+// Generic Hi-hat - Variations
+hat.audio("hihat.wav").chop(1).play(0, 0, 0, 0)
+
+// --- Bass Section ---
+
+// Bass C1 - Root note
+bassc.audio("bass_c1.wav").chop(1).play(0, 0, 0, 0)
+
+// Bass E1 - Third
+basse.audio("bass_e1.wav").chop(1).play(0, 0, 0, 0)
+
+// Bass G1 - Fifth
+bassg.audio("bass_g1.wav").chop(1).play(0, 0, 0, 0)
+
+// --- Melodic Section ---
+
+// Arpeggio
+arp.audio("arpeggio_c.wav").chop(1).play(0, 0, 0, 0)
+
+// Chord C Major - Pads
+chordc.audio("chord_c_major.wav").chop(1).play(0, 0, 0, 0).length(4)
+
+// Chord A Minor - Pads
+chorda.audio("chord_a_minor.wav").chop(1).play(0, 0, 0, 0).length(4)
+
+// --- Sine Wave Section (for testing/effects) ---
+
+// Sine 440Hz
+sine1.audio("sine_440.wav").chop(1).play(0, 0, 0, 0)
+
+// Sine 880Hz
+sine2.audio("sine_880.wav").chop(1).play(0, 0, 0, 0)
+
+// ========================================
+// Live Coding Commands (use Cmd+Enter)
+// ========================================
+
+// --- Start/Stop All ---
+global.run()
+global.stop()
+
+// --- Individual Sequence Control ---
+// kick.loop()
+// kick.stop()
+
+// --- Drum Variations ---
+// kick.play(1, 0, 1, 0,  1, 0, 1, 0,  1, 0, 1, 0,  1, 0, 1, 0)
+// snare.play(0, 0, 1, 0,  0, 0, 1, 0,  0, 0, 1, 0,  0, 0, 1, 0)
+// hatc.play(1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1,  1, 1, 1, 1)
+
+// --- Polymeter Examples ---
+// kick.play(1, 0, 0,  1, 0, 0,  1, 0, 0)  // 3/4 polymeter
+// snare.play(0, 0, 0, 0,  1, 0, 0, 0)     // 4/4 normal
+
+// --- Polytempo Examples ---
+// arp.tempo(256).play(1, 0, 0, 0)  // Double speed
+// chordc.tempo(64).play(1, 0, 0, 0).length(8)  // Half speed, longer
+
+// --- Gain/Pan Control (seamless changes) ---
+// kick.gain(-6)
+// kick.gain(0)
+// snare.pan(-50)  // Left
+// hato.pan(50)    // Right
+
+// --- Random Values ---
+// hatc.gain(r-12%6)  // Random walk around -12dB, ±6dB range
+// hat.pan(r)         // Full random pan
+
+// --- Nested Rhythms ---
+// kick.play(1, [1, 0, 1], 0, 0)
+// snare.play([1, 0, 0], 0, [1, 1], 0)
+
+// --- Chop (slice playback) ---
+// arp.chop(4).play(0, 1, 2, 3)
+// chordc.chop(8).play(0, 2, 4, 6, 1, 3, 5, 7)
+
+// --- Length Control ---
+// chordc.length(2)  // Stretch to 2 bars
+// chordc.length(1)  // Back to 1 bar
+
+// --- Tempo/Beat Changes ---
+// global.tempo(140)
+// global.tempo(100)
+// global.beat(3)  // 3/4 time
+// global.beat(4)  // Back to 4/4
+
+// ========================================
+// Performance Tips
+// ========================================
+// 1. Start with drums: kick.loop(), snare.loop(), hatc.loop()
+// 2. Add bass: bassc.loop(), basse.loop(), bassg.loop()
+// 3. Layer melodies: arp.loop(), chordc.loop()
+// 4. Use gain() and pan() for live mixing
+// 5. Experiment with polymeter and nested rhythms
+// 6. Apply global mastering effects for final polish

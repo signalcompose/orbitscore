@@ -179,7 +179,11 @@ function startEngine(debugMode: boolean = false) {
   const modeLabel = debugMode ? '(Debug Mode)' : ''
   outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
   
-  const enginePath = path.join(__dirname, '../../engine/dist/cli-audio.js')
+  // Try extension-local engine first, then workspace engine
+  let enginePath = path.join(__dirname, '../engine/dist/cli-audio.js')
+  if (!fs.existsSync(enginePath)) {
+    enginePath = path.join(__dirname, '../../engine/dist/cli-audio.js')
+  }
   if (!fs.existsSync(enginePath)) {
     vscode.window.showErrorMessage(`Engine not found: ${enginePath}`)
     return
