@@ -9,33 +9,29 @@
    - MUST read before contributing
    - Includes WORK_LOG update requirements
 
-2. **[SERENA_GUIDE.md](./SERENA_GUIDE.md)** 🤖
-   - Serena MCP usage guidelines
-   - Code analysis and long-term memory management
-   - MUST read at session start
-
-3. **[CONTEXT7_GUIDE.md](./CONTEXT7_GUIDE.md)** 📚
+2. **[CONTEXT7_GUIDE.md](./CONTEXT7_GUIDE.md)** 📚
    - Context7 usage guidelines
    - External library documentation reference
    - MUST read at session start
 
-4. **[TOOL_SELECTION_GUIDE.md](./TOOL_SELECTION_GUIDE.md)** 🛠️
-   - Tool selection criteria
-   - Decision flowchart for choosing appropriate tools
+3. **Serena Memory** 🤖
+   - Serena MCP manages long-term memory automatically
+   - Use `serena-list_memories` to see available memories
+   - Key memories: `project_overview`, `current_issues`, `serena_usage_guidelines`
 
-5. **[WORK_LOG.md](./WORK_LOG.md)** 📝
+4. **[WORK_LOG.md](./WORK_LOG.md)** 📝
    - Complete development history
    - Technical decisions and rationale
    - Chronological progress tracking
    - All commits documented
 
-6. **[INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md)** 🎵
+5. **[INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md)** 🎵
    - **Single source of truth** for OrbitScore DSL
    - Audio-based DSL specification (v2.0)
    - Global parameters and sequences
    - Transport commands and DAW integration
 
-7. **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** 🗺️
+6. **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** 🗺️
    - Technical roadmap
    - Phase-by-phase implementation
    - Testing requirements

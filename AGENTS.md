@@ -6,25 +6,30 @@
 
 **新しいセッション開始時、ユーザーからの最初の質問に答える前に、以下を必ず実行すること：**
 
-1. `docs/PROJECT_RULES.md` を読み込む（運用ルール・コミット方針）
-2. `docs/SERENA_GUIDE.md` を読み込む（Serena MCP使用ガイドライン）
-3. `docs/CONTEXT7_GUIDE.md` を読み込む（Context7使用ガイドライン）
-4. `docs/TOOL_SELECTION_GUIDE.md` を読み込む（ツール選択の判断基準）
+1. **Serenaプロジェクトをアクティベート**
+   - `serena-activate_project("orbitscore")`
+
+2. **必須ドキュメントを読み込む**
+   - `docs/PROJECT_RULES.md` - プロジェクトの必須ルール・コミット方針
+   - `docs/CONTEXT7_GUIDE.md` - 外部ライブラリ参照ガイド
+
+3. **Serenaメモリを確認**
+   - `serena-list_memories` - 利用可能なメモリを確認
+   - 関連するメモリがあれば読み込む（特に`project_overview`、`current_issues`を推奨）
 
 **プロジェクトの現状把握が必要な場合は、Serenaを使用して以下を確認：**
-- **直近の開発状況** → Serenaのメモリまたは`docs/WORK_LOG.md`を検索
+- **直近の開発状況** → Serenaで`docs/WORK_LOG.md`を検索
 - **現在の実装フェーズ** → Serenaで`docs/IMPLEMENTATION_PLAN.md`を検索
 - **DSL仕様の詳細** → Serenaで`docs/INSTRUCTION_ORBITSCORE_DSL.md`を検索
 
-これにより、トークン効率を保ちながら必要な情報だけを取得し、Serenaの長期記憶機能を活用します。
+これにより、トークン効率を保ちながら必要な情報だけを取得し、Serenaの長期記憶機能を最大限に活用します。
 
 ## 主要ドキュメント
 
 ### 必須ガイド（セッション開始時に読み込む）
 - `docs/PROJECT_RULES.md` — プロジェクト運用ルール / コミット方針
-- `docs/SERENA_GUIDE.md` — Serena MCP使用ガイドライン
-- `docs/CONTEXT7_GUIDE.md` — Context7使用ガイドライン
-- `docs/TOOL_SELECTION_GUIDE.md` — ツール選択の判断基準
+- `docs/CONTEXT7_GUIDE.md` — 外部ライブラリ参照ガイド
+- **Serenaメモリ** — Serenaが管理する長期記憶（`serena-list_memories`で確認）
 
 ### アクティブなドキュメント
 - `docs/INDEX.md` — ドキュメントの総合ナビゲーション
@@ -40,7 +45,10 @@ Codex CLI / Cursor CLI など別エージェントで作業を引き継ぐ際も
 
 ## ツール使用ガイド
 
-上記の必須ガイドで、適切なツールの選択方法と使用方法を理解できます。
+Serenaメモリに詳細なガイドラインがあります。特に以下を参照：
+- `serena_usage_guidelines` - Serenaの使い方
+- `development_guidelines` - 開発ガイドライン
+- `code_style_conventions` - コーディング規約
 
 ### クイックリファレンス
 
