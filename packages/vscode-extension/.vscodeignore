@@ -6,10 +6,15 @@ src/**
 .yarnrc
 vsc-extension-quickstart.md
 **/tsconfig.json
+**/tsconfig.tsbuildinfo
 **/.eslintrc.json
+**/.eslintrc.cjs
+**/.gitignore
 **/*.map
 **/*.ts
+**/*.d.ts
+**/*.d.ts.map
 *.vsix
-node_modules/**
+*.tgz
 ../../**
-!../../packages/engine/dist/**
+../engine/**
