@@ -7,135 +7,151 @@ OrbitScore is a live coding environment for audio performance, featuring a custo
 - **Language**: TypeScript
 - **Audio Engine**: SuperCollider (scsynth + supercolliderjs)
 - **VS Code Extension**: Cursor/VS Code extension for live coding
-- **Parser**: Custom DSL parser with dB unit, negative number, and boolean literal support
+- **Parser**: Custom DSL parser (audio-parser.ts) with dB unit, negative number, boolean literal support
 - **Scheduler**: Precision 1ms interval scheduler
 - **Build**: npm workspaces (monorepo)
 
 ## Architecture
 - `packages/engine`: Core audio engine with SuperCollider integration
 - `packages/vscode-extension`: Cursor/VS Code extension for live coding
-- `examples/`: Tutorial files (01-09) and reference tests
-- `test-assets/audio/`: Sample audio files (kick, snare, hihat)
-- `tests/`: Comprehensive test suite (77 tests total)
+- `examples/`: Tutorial files and comprehensive tests
+- `test-assets/audio/`: Sample audio files
+- `tests/`: Core test suite (128 tests passing)
 
-## Current Status (Phase 9: Global Mastering Effects - 100% Complete)
+## Current Status (Phase 10: Codebase Cleanup - 100% Complete)
 
-### Phase 9 Achievements (January 6, 2025)
+### Phase 10 Achievements (January 6, 2025)
 
-#### 1. Global Mastering Effects
-- ✅ **Compressor (Compander)** - Increase perceived loudness
-  - Parameters: `threshold` (0-1), `ratio` (0-1), `attack` (s), `release` (s), `makeupGain` (0-2)
-  - Ultra-aggressive preset: `global.compressor(0.15, 0.95, 0.001, 0.02, 2.0, true)`
-- ✅ **Limiter** - Prevent clipping
-  - Parameters: `level` (0-1), `duration` (lookahead time)
-  - Brick wall preset: `global.limiter(0.95, 0.01, true)`
-- ✅ **Normalizer** - Maximize output level
-  - Parameters: `level` (0-1), `duration` (lookahead time)
-  - Maximum preset: `global.normalizer(1.0, 0.01, true)`
+#### 1. Major Codebase Cleanup (5896 lines deleted)
+- ✅ **MIDI System Removed**: Complete removal of deprecated MIDI-based architecture
+  - Deleted: midi.ts, scheduler.ts, old parser, transport, IR, pitch conversion
+  - Deleted: 25 MIDI-related test files
+  - Result: Clean, maintainable codebase focused on SuperCollider
+- ✅ **Unimplemented Features Cleaned**: Removed placeholder completions (delay, fixpitch, time)
+- ✅ **Transport System Removed**: Old Transport class replaced with direct SuperCollider scheduling
 
-#### 2. Technical Architecture
-**SuperCollider**:
-- All effects process bus 0 (master output) directly
-- Use `In.ar(0, 2)` → `ReplaceOut.ar(0, ...)` for in-place processing
-- Effect chain: orbitPlayBuf → Compressor → Limiter → Normalizer → Output
-- SynthDefs: `fxCompressor`, `fxLimiter`, `fxNormalizer`
+#### 2. Debug Mode Implementation
+- ✅ **Dual Mode Operation**:
+  - 🚀 Normal Mode: Clean output (only important messages)
+  - 🐛 Debug Mode: Full verbose logging (SuperCollider communication)
+- ✅ **Smart Filtering**: Removes sendosc/rcvosc, JSON, OSC messages, device info
+- ✅ **Status Bar Integration**: Shows 🐛 icon in debug mode
+- ✅ **CLI Support**: `--debug` flag for verbose output
 
-**TypeScript**:
-- Effect synth management: `Map<string, Map<string, number>>` (target → effectType → synthID)
-- Individual effect control: add/remove/update independently
-- Seamless updates: `/n_set` for existing synths, `/s_new` for new
-- Proper cleanup: `/n_free` removes specific effect only
+#### 3. length() Fix
+- ✅ **Correct Behavior**: `length(n)` now multiplies event duration by n
+- ✅ **Auto-Recalculation**: Timing recalculated when length changes
+- ✅ **Seamless Updates**: Auto-restart loop when length changes during playback
+- ✅ **Example**: `length(2)` doubles beat duration (1 bar pattern over 2 bars)
 
-#### 3. Parser & Extension Enhancements
-- ✅ Boolean literal support: `true`/`false` recognized as boolean values
-- ✅ Auto-evaluation filter: `compressor`, `limiter`, `normalizer` require Cmd+Enter
-- ✅ Completion providers for all mastering effects
+#### 4. Execution Method Filters
+- ✅ **Added to filter**: `length`, `tempo`, `beat` (Cmd+Enter required when standalone)
+- ✅ **Preserved**: Method chaining auto-evaluation
+- ✅ **Example**: `kick.length(2)` requires Cmd+Enter, but `kick.tempo(140).audio(...).play(...)` auto-evaluates
 
-#### 4. Testing & Verification
-- ✅ Significant loudness increase confirmed
-- ✅ Individual on/off control working
-- ✅ Seamless parameter updates during playback
-- ✅ No audio dropout when effects removed
-- ✅ Dry signal returns when all effects off
+#### 5. Comprehensive Testing
+- ✅ **test-all-features.osc**: All implemented features in one file
+- ✅ **Test Coverage**: 128/143 tests passing (core functionality 100%)
+- ✅ **Verified Features**: Init, config, audio, chop, gain, pan, random, polymeter, polytempo, nested, length, mastering effects, transport
 
-### Previous Achievements (Phases 1-8)
+### Previous Achievements (Phases 1-9)
+
+#### Phase 9: Global Mastering Effects
+- ✅ Compressor, Limiter, Normalizer
+- ✅ Individual on/off control
+- ✅ Seamless parameter updates
+- ✅ Significant loudness increase
 
 #### Phase 8: dB-Based Gain Control
-- ✅ Professional dB unit (-60 to +12 dB, default 0 dB)
+- ✅ Professional dB unit (-60 to +12 dB)
 - ✅ Master volume: `global.gain()`
-- ✅ Silence: `-inf` or `-Infinity`
-- ✅ Random values: `r` (full random), `r0%10` (random walk)
-- ✅ Seamless parameter changes (no restart)
+- ✅ Random values: `r`, `r0%10`
+- ✅ Seamless parameter changes
 
 #### Phase 7: SuperCollider Integration
-- ✅ 0-2ms latency (70x better than sox)
-- ✅ Buffer preloading with automatic caching
-- ✅ Chop functionality with slice indexing
-- ✅ Audio device selection via command palette
+- ✅ 0-2ms latency
+- ✅ Buffer caching
+- ✅ Chop functionality
+- ✅ Audio device selection
 
 #### Phase 6: Audio DSL
-- ✅ Pan control (-100 to 100, stereo positioning)
-- ✅ Timing verification: 0-2ms drift at all scales
-- ✅ Polymeter, polytempo, nested rhythms (11 levels)
+- ✅ Pan control (-100 to 100)
+- ✅ Timing verification (0-2ms drift)
+- ✅ Polymeter, polytempo
+- ✅ Nested rhythms (11 levels)
 
-### Performance Metrics (Verified)
+### Performance Metrics
 - **Latency**: 0-2ms (exceptional)
-- **Timing drift**: 0-2ms (even at 0.98ms intervals)
-- **Gain precision**: Full floating-point dB (unlimited resolution)
-- **Stability**: 100% (no crashes, no leaks)
-- **Test coverage**: 77 tests (100% pass rate)
+- **Timing drift**: 0-2ms (sub-millisecond precision)
+- **Test coverage**: 128 tests passing
+- **Codebase**: ~6000 lines cleaner
 
 ### Key Features Summary
 
 **Audio Control**:
-- `sequence.gain(dB)` - Volume in dB (-60 to +12, default 0)
-- `sequence.pan(position)` - Stereo position (-100 to 100)
+- `sequence.gain(dB)` - Volume in dB
+- `sequence.pan(position)` - Stereo position
+- `sequence.length(bars)` - Loop length multiplier
+- `sequence.tempo(bpm)` - Independent tempo
+- `sequence.beat(n by d)` - Independent meter
 - `global.gain(dB)` - Master volume
-- Random values: `gain(r)`, `gain(r-6%3)`, `pan(r50%30)`
+- Random values: `r`, `r-6%3`, `pan(r50%30)`
 
-**Mastering Effects** (Global only):
+**Mastering Effects** (Global):
 - `global.compressor(threshold, ratio, attack, release, makeupGain, enabled)`
 - `global.limiter(level, duration, enabled)`
 - `global.normalizer(level, duration, enabled)`
 
 **Timing Features**:
-- Polymeter: Different time signatures per sequence
-- Polytempo: Different BPM per sequence
-- Nested rhythms: Up to 11 levels tested (0.98ms precision)
+- Polymeter: Different time signatures
+- Polytempo: Different BPM
+- Nested rhythms: Up to 11 levels
+- Length control: Stretch pattern duration
 
 **Audio Manipulation**:
 - `chop(n)` - Split audio into n slices
-- `play(pattern)` - Complex nested rhythm patterns
-- `audio(file)` - Load audio files with caching
+- `play(pattern)` - Nested rhythm patterns
+- `audio(file)` - Load with caching
 
 **Live Coding**:
-- Seamless parameter changes (no restart)
-- Auto-evaluation on save (settings only)
-- Cmd+Enter for execution commands
+- Seamless parameter changes
+- Auto-evaluation (settings)
+- Cmd+Enter (execution/changes)
+- Debug mode for troubleshooting
+
+**VS Code Integration**:
 - Status bar with command palette
+- Debug/Normal mode toggle
+- Audio device selection
+- Kill SuperCollider command
+- Smart auto-completion
+
+### Deprecated/Removed
+
+**MIDI System** (Completely Removed):
+- Old MIDI-based DSL syntax
+- MIDI output functionality
+- All related tests and implementations
+- 5896 lines of legacy code
 
 ### Latest Commits
-- `5fd235a` - feat: Global mastering effects (compressor, limiter, normalizer)
-- `53b178b` - feat: Add audio device selection via command palette
-- `f0ffbbb` - docs: Add user confirmation requirement to project rules
+- `6171c8d` - docs: Update documentation for codebase cleanup and debug mode
+- `542e901` - feat: Add debug mode and fix length() implementation
+- `0f5fb7f` - refactor: Remove deprecated MIDI system and old implementations
 
 ## Next Phase Options
 
-### Option 1: Effect Presets System (User Requested)
-- TypeScript-style import/export for effect presets
+### Option 1: Effect Presets System
+- TypeScript-style import/export
 - Named preset definitions
 - Reusable mastering chains
 
 ### Option 2: Additional Effects
 - Reverb (FreeVerb)
-- Delay (CombL)
+- Delay (CombL) - for global only
 - Filters (RLPF, RHPF)
 
-### Option 3: Per-Sequence Effects
-- Revisit dynamic bus allocation
-- Independent effect processing per sequence
-
 ### Current Focus
-- Preparing to implement effect presets system
-- All mastering effects verified and stable
-- Ready for next feature discussion
+- Ready for preset system implementation
+- All core features stable and tested
+- Clean codebase ready for new features
