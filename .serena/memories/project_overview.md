@@ -1,141 +1,126 @@
 # OrbitScore Project Overview
 
-## Project Description
-OrbitScore is a live coding environment for audio performance, featuring a custom DSL for intuitive musical pattern creation with ultra-low latency playback.
+## Project Summary
+OrbitScore is a live-coding audio engine with SuperCollider integration, designed for real-time performance. It features a custom DSL for pattern-based audio sequencing with support for polymeter, polytempo, and nested rhythms.
 
-## Tech Stack
-- **Language**: TypeScript
-- **Audio Engine**: SuperCollider (scsynth + supercolliderjs)
-- **VS Code Extension**: Cursor/VS Code extension for live coding
-- **Parser**: Custom DSL parser with dB unit, negative number, and boolean literal support
-- **Scheduler**: Precision 1ms interval scheduler
-- **Build**: npm workspaces (monorepo)
+## Recent Development (January 6, 2025)
 
-## Architecture
-- `packages/engine`: Core audio engine with SuperCollider integration
-- `packages/vscode-extension`: Cursor/VS Code extension for live coding
-- `examples/`: Tutorial files (01-09) and reference tests
-- `test-assets/audio/`: Sample audio files (kick, snare, hihat)
-- `tests/`: Comprehensive test suite (77 tests total)
+### Phase 11: Performance Demo and Extension Packaging
+**Status**: ✅ COMPLETE
 
-## Current Status (Phase 9: Global Mastering Effects - 100% Complete)
+**Key Achievements**:
+1. **VS Code Extension Packaging Fixed**
+   - Resolved engine path resolution issues
+   - Added fallback logic for bundled vs workspace engine
+   - Successfully packaged with dependencies (35 files, 57.5 KB)
+   - Tested in live performance - working perfectly
 
-### Phase 9 Achievements (January 6, 2025)
+2. **Performance Demo File Created**
+   - `examples/performance-demo.osc` with all 13 test samples
+   - Organized by category: drums, bass, melody, test
+   - Initial silent patterns for live coding
+   - Comprehensive command examples
 
-#### 1. Global Mastering Effects
-- ✅ **Compressor (Compander)** - Increase perceived loudness
-  - Parameters: `threshold` (0-1), `ratio` (0-1), `attack` (s), `release` (s), `makeupGain` (0-2)
-  - Ultra-aggressive preset: `global.compressor(0.15, 0.95, 0.001, 0.02, 2.0, true)`
-- ✅ **Limiter** - Prevent clipping
-  - Parameters: `level` (0-1), `duration` (lookahead time)
-  - Brick wall preset: `global.limiter(0.95, 0.01, true)`
-- ✅ **Normalizer** - Maximize output level
-  - Parameters: `level` (0-1), `duration` (lookahead time)
-  - Maximum preset: `global.normalizer(1.0, 0.01, true)`
+3. **Serena Usage Guidelines Integration**
+   - Moved from `docs/SERENA.md` to `AGENTS.md`
+   - Now auto-loaded by all agents
+   - Clear guidelines for when to use Serena vs normal tools
 
-#### 2. Technical Architecture
-**SuperCollider**:
-- All effects process bus 0 (master output) directly
-- Use `In.ar(0, 2)` → `ReplaceOut.ar(0, ...)` for in-place processing
-- Effect chain: orbitPlayBuf → Compressor → Limiter → Normalizer → Output
-- SynthDefs: `fxCompressor`, `fxLimiter`, `fxNormalizer`
+**Live Performance Result**: ✅ Successfully used in real performance
 
-**TypeScript**:
-- Effect synth management: `Map<string, Map<string, number>>` (target → effectType → synthID)
-- Individual effect control: add/remove/update independently
-- Seamless updates: `/n_set` for existing synths, `/s_new` for new
-- Proper cleanup: `/n_free` removes specific effect only
+## Current Architecture
 
-#### 3. Parser & Extension Enhancements
-- ✅ Boolean literal support: `true`/`false` recognized as boolean values
-- ✅ Auto-evaluation filter: `compressor`, `limiter`, `normalizer` require Cmd+Enter
-- ✅ Completion providers for all mastering effects
+### Core Components
+1. **Engine** (`packages/engine/`)
+   - SuperCollider integration via supercolliderjs
+   - Real-time audio scheduling with microsecond precision
+   - Global mastering effects (compressor, limiter, normalizer)
+   - Audio path: `test-assets/audio/` (13 samples available)
 
-#### 4. Testing & Verification
-- ✅ Significant loudness increase confirmed
-- ✅ Individual on/off control working
-- ✅ Seamless parameter updates during playback
-- ✅ No audio dropout when effects removed
-- ✅ Dry signal returns when all effects off
+2. **VS Code Extension** (`packages/vscode-extension/`)
+   - Live coding interface with Cmd+Enter execution
+   - Status bar controls (Start/Stop/Debug/Kill/Reload)
+   - Auto-evaluation for settings, manual for execution
+   - Debug mode for verbose logging
+   - **Packaging**: Bundles engine with dependencies
 
-### Previous Achievements (Phases 1-8)
+3. **DSL** (Domain Specific Language)
+   - Syntax: `var global = init GLOBAL`, `var seq = init global.seq`
+   - Pattern notation: comma-separated (e.g., `1, 0, 1, 0`)
+   - Nested rhythms: `[1, 0, 1]` within patterns
+   - Real-time parameter changes: `gain()`, `pan()`, `tempo()`, `length()`
 
-#### Phase 8: dB-Based Gain Control
-- ✅ Professional dB unit (-60 to +12 dB, default 0 dB)
-- ✅ Master volume: `global.gain()`
-- ✅ Silence: `-inf` or `-Infinity`
-- ✅ Random values: `r` (full random), `r0%10` (random walk)
-- ✅ Seamless parameter changes (no restart)
+### Key Features
+- **Polymeter/Polytempo**: Independent tempo and meter per sequence
+- **Chop**: Audio slicing with `chop(n)` and slice playback
+- **Global Mastering**: Compressor, limiter, normalizer on master bus
+- **Random Values**: `r` (full random), `rX%Y` (random walk)
+- **Audio Device Selection**: Via `.orbitscore.json` config
+- **Debug Mode**: Toggle verbose logging
 
-#### Phase 7: SuperCollider Integration
-- ✅ 0-2ms latency (70x better than sox)
-- ✅ Buffer preloading with automatic caching
-- ✅ Chop functionality with slice indexing
-- ✅ Audio device selection via command palette
+## Technical Details
 
-#### Phase 6: Audio DSL
-- ✅ Pan control (-100 to 100, stereo positioning)
-- ✅ Timing verification: 0-2ms drift at all scales
-- ✅ Polymeter, polytempo, nested rhythms (11 levels)
+### Audio Engine
+- **SuperCollider**: scsynth for audio synthesis
+- **SynthDefs**: orbitPlayBuf, fxCompressor, fxLimiter, fxNormalizer
+- **Timing**: Microsecond-precision scheduling
+- **Gain**: dB units (-60 to +12 dB, -inf for silence)
+- **Pan**: -100 (left) to +100 (right)
 
-### Performance Metrics (Verified)
-- **Latency**: 0-2ms (exceptional)
-- **Timing drift**: 0-2ms (even at 0.98ms intervals)
-- **Gain precision**: Full floating-point dB (unlimited resolution)
-- **Stability**: 100% (no crashes, no leaks)
-- **Test coverage**: 77 tests (100% pass rate)
+### Extension Packaging
+- **Engine Path Resolution**:
+  1. Check `../engine/dist/cli-audio.js` (bundled)
+  2. Fallback to `../../engine/dist/cli-audio.js` (workspace)
+- **Dependencies**: Includes `node_modules/` with supercolliderjs
+- **Size**: 57.5 KB with all dependencies
 
-### Key Features Summary
+### Test Assets
+13 audio samples in `test-assets/audio/`:
+- Drums: kick, snare, hihat_closed, hihat_open, hihat
+- Bass: bass_c1, bass_e1, bass_g1
+- Melody: arpeggio_c, chord_c_major, chord_a_minor
+- Test: sine_440, sine_880
 
-**Audio Control**:
-- `sequence.gain(dB)` - Volume in dB (-60 to +12, default 0)
-- `sequence.pan(position)` - Stereo position (-100 to 100)
-- `global.gain(dB)` - Master volume
-- Random values: `gain(r)`, `gain(r-6%3)`, `pan(r50%30)`
+## Development Workflow
 
-**Mastering Effects** (Global only):
-- `global.compressor(threshold, ratio, attack, release, makeupGain, enabled)`
-- `global.limiter(level, duration, enabled)`
-- `global.normalizer(level, duration, enabled)`
+### Agent Guidelines (AGENTS.md)
+**Use Serena for**:
+- Complex code analysis and architecture understanding
+- Symbol reference tracking
+- Large-scale refactoring impact analysis
+- Bug investigation across multiple files
 
-**Timing Features**:
-- Polymeter: Different time signatures per sequence
-- Polytempo: Different BPM per sequence
-- Nested rhythms: Up to 11 levels tested (0.98ms precision)
+**Use Normal Tools for**:
+- Simple file edits
+- Known file/function changes
+- String search/replace
 
-**Audio Manipulation**:
-- `chop(n)` - Split audio into n slices
-- `play(pattern)` - Complex nested rhythm patterns
-- `audio(file)` - Load audio files with caching
+### Commit Workflow
+1. Make changes
+2. Update `docs/WORK_LOG.md`
+3. Update Serena memory
+4. Commit with descriptive message
+5. Create PR (if on feature branch)
+6. Merge to main (squash merge, keep branch)
 
-**Live Coding**:
-- Seamless parameter changes (no restart)
-- Auto-evaluation on save (settings only)
-- Cmd+Enter for execution commands
-- Status bar with command palette
+### Rules
+- **No direct commits to main** (use feature branches)
+- **Always update WORK_LOG** with each commit
+- **Test before committing**
+- **Check official docs** when blocked
 
-### Latest Commits
-- `5fd235a` - feat: Global mastering effects (compressor, limiter, normalizer)
-- `53b178b` - feat: Add audio device selection via command palette
-- `f0ffbbb` - docs: Add user confirmation requirement to project rules
+## Future Improvements
+1. **Error Messages**: Add line numbers to parser/interpreter errors
+2. **Extension Packaging**: Automate with webpack/esbuild
+3. **Bundle Size**: Reduce by bundling dependencies
+4. **Per-Sequence Effects**: Delayed (complex bus architecture)
+5. **VST Plugin Support**: Abandoned (installation complexity)
 
-## Next Phase Options
+## Current Status
+- ✅ Core engine: Stable and production-ready
+- ✅ VS Code extension: Working with proper packaging
+- ✅ Live performance: Successfully tested
+- ✅ Documentation: Up to date
+- ✅ Test coverage: Core functionality 100% passing
 
-### Option 1: Effect Presets System (User Requested)
-- TypeScript-style import/export for effect presets
-- Named preset definitions
-- Reusable mastering chains
-
-### Option 2: Additional Effects
-- Reverb (FreeVerb)
-- Delay (CombL)
-- Filters (RLPF, RHPF)
-
-### Option 3: Per-Sequence Effects
-- Revisit dynamic bus allocation
-- Independent effect processing per sequence
-
-### Current Focus
-- Preparing to implement effect presets system
-- All mastering effects verified and stable
-- Ready for next feature discussion
+**Next Steps**: Error message improvements, packaging automation
