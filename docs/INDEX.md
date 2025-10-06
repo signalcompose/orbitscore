@@ -9,24 +9,33 @@
    - MUST read before contributing
    - Includes WORK_LOG update requirements
 
-2. **[WORK_LOG.md](./WORK_LOG.md)** 📝
+2. **[SERENA_GUIDE.md](./SERENA_GUIDE.md)** 🤖
+   - Serena MCP usage guidelines
+   - Code analysis and long-term memory management
+   - MUST read at session start
+
+3. **[CONTEXT7_GUIDE.md](./CONTEXT7_GUIDE.md)** 📚
+   - Context7 usage guidelines
+   - External library documentation reference
+   - MUST read at session start
+
+4. **[TOOL_SELECTION_GUIDE.md](./TOOL_SELECTION_GUIDE.md)** 🛠️
+   - Tool selection criteria
+   - Decision flowchart for choosing appropriate tools
+
+5. **[WORK_LOG.md](./WORK_LOG.md)** 📝
    - Complete development history
    - Technical decisions and rationale
    - Chronological progress tracking
    - All commits documented
 
-3. **[INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md)** 🎵
+6. **[INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md)** 🎵
    - **Single source of truth** for OrbitScore DSL
-   - Audio-based DSL specification (v0.1)
+   - Audio-based DSL specification (v2.0)
    - Global parameters and sequences
    - Transport commands and DAW integration
-   
-4. **[INSTRUCTIONS_NEW_DSL.md](./INSTRUCTIONS_NEW_DSL.md)** ⚠️ **DEPRECATED**
-   - Old MIDI-based DSL specification
-   - Superseded by INSTRUCTION_ORBITSCORE_DSL.md
-   - Kept for historical reference only
 
-5. **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** 🗺️
+7. **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** 🗺️
    - Technical roadmap
    - Phase-by-phase implementation
    - Testing requirements
@@ -91,6 +100,23 @@
 4. Include examples where helpful
 5. Document decisions and rationale
 
+## 📦 Archive
+
+### DSL仕様の変遷（論文執筆・研究用）
+
+OrbitScoreのDSL設計は、開発過程で大きく進化しました：
+
+| Version | Document | Status | Description |
+|---------|----------|--------|-------------|
+| **v2.0** | [INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md) | ✅ **現行** | SuperCollider Audio Engine統合 |
+| **v1.0** | [archive/DSL_SPECIFICATION_v1.0_MIDI.md](./archive/DSL_SPECIFICATION_v1.0_MIDI.md) | 📚 アーカイブ | MIDIベース度数システム |
+
+**設計思想の進化**:
+- **v1.0**: MIDIベースの度数システム（0=休符、1-12=半音階）
+- **v2.0**: オーディオベースの直接再生システム（`audio()`, `chop()`, `play()`）
+
+詳細な技術的変遷と意思決定の経緯は[WORK_LOG.md](./WORK_LOG.md)を参照してください。
+
 ---
 
-_Last Updated: December 25, 2024 - Migrated to Audio-Based DSL_
+_Last Updated: October 6, 2025 - Added archive section for research documentation_
