@@ -87,6 +87,30 @@
 - If no response, ask again or wait
 - **Purpose**: Respect user's decision-making and avoid unwanted actions
 
+### 8. Tool Confirmation Policy (ツール確認ポリシー)
+
+**読み取り専用ツール（確認不要 - Read-only tools, no confirmation needed）:**
+
+- **Serena系すべて** - `find_symbol`, `find_referencing_symbols`, `search_for_pattern`, `get_symbols_overview`, `list_dir`, `find_file`, `read_memory`, `list_memories`
+- **ファイル読み取り** - `Read`, `Grep`, `Glob`, `LS`, `SemanticSearch`
+- **外部ドキュメント** - `Context7` (resolve-library-id, get-library-docs)
+- **Git情報取得** - `git status`, `git log`, `git diff` (読み取り専用)
+
+**書き込み・実行系ツール（確認必要 - Write/Execute tools, confirmation required）:**
+
+- **コード編集** - `StrReplace`, `MultiStrReplace`, `Write`, `Delete`
+- **Serena編集** - `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol`, `write_memory`, `delete_memory`
+- **Shell実行** - 特に破壊的操作 (rm, git push, npm publish など)
+- **Git操作** - `git commit`, `git push`, `gh pr create`, `gh pr merge`
+
+**理由:**
+
+- 読み取り専用ツールはプロジェクトに変更を加えないため、確認なしで実行しても安全
+- 書き込み・実行系ツールは意図しない変更を防ぐため、確認が必要
+- 作業効率と安全性のバランスを取る
+
+**注意:** MCPツールの確認設定はCursor/エディタ側で管理されるため、このポリシーはAIエージェントとユーザー間の共通理解として機能する
+
 ## 📋 Development Workflow
 
 ### For Each Phase:
