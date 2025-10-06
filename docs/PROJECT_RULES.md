@@ -298,6 +298,66 @@ git commit -m "docs: update Serena memory with [description]"
 - Changes are tracked in git history
 - Team members can see project status and issues
 
+## 🔄 Session Continuity and Information Handoff
+
+### 基本方針
+Resume機能に依存せず、Serenaメモリとドキュメントで情報を引き継ぐ。
+
+### 作業中の情報保存（AIエージェントの責務）
+
+以下のタイミングで重要な情報をSerenaメモリに保存する：
+
+1. **複雑なアーキテクチャを理解した時**
+   - `serena-write_memory`で要約を保存
+   - 例：パーサーの設計、オーディオエンジンの仕組み
+
+2. **重要な設計決定をした時**
+   - 理由と経緯を記録
+   - 例：ライブラリ選定、実装アプローチの変更
+
+3. **大きなタスクが完了した時**
+   - 実装の詳細と注意点を保存
+   - 例：新機能の実装完了、リファクタリング完了
+
+4. **コミット時（必須）**
+   - WORK_LOGに詳細を記録
+   - 上記の「Serena Memory Management」セクション参照
+
+### セッション開始時（AIエージェントの責務）
+
+1. **既存メモリの確認**
+   - `serena-list_memories`で保存されている知識を確認
+   - 関連するメモリがあれば`serena-read_memory`で読み込む
+
+2. **最新状況の把握**
+   - WORK_LOGの最新エントリを確認（必要に応じて）
+   - 現在の実装フェーズを把握
+
+3. **前回の作業内容の理解**
+   - Serenaメモリから前回の知見を取得
+   - 継続作業の場合は文脈を復元
+
+### Resume機能の使用判断（ユーザー判断）
+
+**基本方針：新規セッションを推奨**
+
+- 独立したタスク → 新規セッション
+- 時間が経過 → 新規セッション
+- 異なるトピック → 新規セッション
+
+**Resumeを使うべき例外的ケース：**
+
+- 複雑な議論・設計決定の途中
+- 大規模リファクタリングの段階的実施中
+- デバッグの試行錯誤を継続する必要がある時
+
+**理由：**
+
+- Serenaメモリで構造化された知識として蓄積
+- 新鮮な視点で問題を見られる
+- トークン効率が良い
+- 会話履歴の管理が不要
+
 ## 📝 Documentation Sync Rules
 
 ### WORK_LOG.md Structure
