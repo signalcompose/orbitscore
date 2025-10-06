@@ -77,7 +77,23 @@ export class Sequence {
   }
 
   length(bars: number): this {
+    const wasLooping = this._isLooping
     this._length = bars
+    
+    // Recalculate timing if play pattern exists
+    if (this._playPattern && this._playPattern.length > 0) {
+      this.play(...this._playPattern)
+    }
+    
+    // If currently looping, restart the loop with new length
+    if (wasLooping) {
+      // Don't await, just trigger async restart
+      this.stop()
+      setTimeout(() => {
+        this.loop()
+      }, 10)
+    }
+    
     return this
   }
 
@@ -242,7 +258,10 @@ export class Sequence {
     const quarterNoteDuration = 60000 / tempo  // 4分音符の長さ（BPMの基準）
     const barDuration = quarterNoteDuration * (meter.numerator / meter.denominator * 4)
 
-    this._timedEvents = TimingCalculator.calculateTiming(elements, barDuration)
+    // Apply length multiplier to bar duration (stretches each event)
+    const effectiveBarDuration = barDuration * (this._length || 1)
+
+    this._timedEvents = TimingCalculator.calculateTiming(elements, effectiveBarDuration)
 
     // ${this._name}: ${this._timedEvents.length} events
 
@@ -420,6 +439,8 @@ export class Sequence {
     const quarterNoteDuration = 60000 / tempo
     const barDuration = quarterNoteDuration * (meter.numerator / meter.denominator * 4)
     
+    // length() multiplies the duration of each event, not the number of bars
+    // So the pattern duration is: 1 bar × length multiplier
     return barDuration * (this._length || 1)
   }
 

@@ -19,17 +19,23 @@ const command = args[0]
 let audioDevice: string | undefined
 let file: string | undefined
 let durationArg: string | undefined
+let debugMode: boolean = false
 
 for (let i = 1; i < args.length; i++) {
   if (args[i] === '--audio-device' && args[i + 1]) {
     audioDevice = args[i + 1]
     i++ // Skip next arg
+  } else if (args[i] === '--debug') {
+    debugMode = true
   } else if (!file) {
     file = args[i]
   } else if (!durationArg) {
     durationArg = args[i]
   }
 }
+
+// Set global debug flag
+;(globalThis as any).ORBITSCORE_DEBUG = debugMode
 
 function printUsage() {
   console.log(`

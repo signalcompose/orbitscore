@@ -262,9 +262,11 @@ export class SuperColliderPlayer {
     const actualStartTime = launchTime - this.startTime;
     const drift = actualStartTime - scheduledTime;
 
-    console.log(
-      `🔊 Playing: ${sequenceName} at ${actualStartTime}ms (scheduled: ${scheduledTime}ms, drift: ${drift}ms)`
-    );
+    if ((globalThis as any).ORBITSCORE_DEBUG) {
+      console.log(
+        `🔊 Playing: ${sequenceName} at ${actualStartTime}ms (scheduled: ${scheduledTime}ms, drift: ${drift}ms)`
+      )
+    }
 
     const { bufnum } = await this.loadBuffer(filepath);
     
