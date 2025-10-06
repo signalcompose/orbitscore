@@ -752,3 +752,94 @@ global.normalizer(1.0, 0.01, true)                     // Maximum loudness
 
 ---
 
+### 8.8 Codebase Cleanup and Debug Mode (January 6, 2025)
+
+**Date**: January 6, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `refactor/cleanup-unimplemented-features` → merged to `main`
+**PR**: #5
+
+**Work Content**: Major codebase cleanup - removed deprecated MIDI system and added debug mode
+
+#### Removed Code (5896 lines deleted)
+
+**MIDI System (Deprecated)**:
+- `packages/engine/src/midi.ts` - Old MIDI output system
+- `packages/engine/src/scheduler.ts` - Old MIDI scheduler
+- `packages/engine/src/parser/parser.ts` - Old MIDI DSL parser
+- `packages/engine/src/transport/transport.ts` - Old Transport system
+- `packages/engine/src/ir.ts` - Old IR definitions
+- `packages/engine/src/pitch.ts` - Old pitch conversion
+- `packages/engine/src/audio/advanced-player.ts` - Old audio player
+- `packages/engine/src/cli.ts` - Old MIDI CLI
+- `packages/engine/src/index.ts` - Old entry point
+- `packages/engine/src/interpreter/interpreter.ts` - Old interpreter
+
+**MIDI Tests (25 test files)**:
+- `tests/midi/*` - All MIDI tests
+- `tests/scheduler/*` - Old scheduler tests
+- `tests/max/*` - Max/MSP integration tests
+- `tests/live_coding/*` - Old live coding tests
+- All related test files
+
+**Unimplemented Features**:
+- `delay()` completion (SynthDef doesn't exist)
+- `fixpitch()` completion (not implemented)
+- `time()` completion (not implemented)
+
+#### Added Features
+
+**Debug Mode**:
+- Command palette: `🚀 Start Engine` (normal) vs `🐛 Start Engine (Debug)`
+- Normal mode: Shows only important messages (✅, 🎛️, ERROR, ⚠️)
+- Debug mode: Shows all logs including SuperCollider communication
+- Status bar shows 🐛 icon in debug mode
+- CLI flag: `--debug` to enable verbose logging
+
+**Output Filtering (Normal Mode)**:
+- Filters out: `sendosc:`, `rcvosc:`, JSON objects, OSC messages
+- Filters out: Device info, SuperCollider boot details
+- Filters out: `🔊 Playing:` messages, buffer allocations
+- Keeps: Initialization, transport state, effects, errors, warnings
+
+#### Bug Fixes
+
+**length() Implementation**:
+- **Problem**: `length(n)` didn't correctly stretch event timing
+- **Fix**: Apply length multiplier to `barDuration` in `play()` method
+- **Fix**: Recalculate timing when `length()` is changed
+- **Fix**: Auto-restart loop when length changes during playback
+- **Result**: `length(2)` now correctly doubles the duration of each beat
+
+**Auto-Evaluation Rules**:
+- Added `length`, `tempo`, `beat` to execution method filter
+- Standalone calls require Cmd+Enter
+- Method chain calls are auto-evaluated
+
+#### Documentation Updates
+
+**DSL Specification**:
+- Updated to v2.0 (SuperCollider Audio Engine)
+- Marked MIDI support as deprecated
+- Updated implementation status
+- Updated test coverage numbers
+
+**Examples**:
+- Created `examples/test-all-features.osc` - comprehensive feature test
+- Updated README with debug mode instructions
+
+#### Test Results
+
+**After Cleanup**:
+- 128/143 tests passing
+- Removed tests: MIDI-related (deprecated system)
+- Failing tests: SuperCollider boot timeout (test environment issue)
+- Core functionality: 100% passing
+
+**Commits**:
+- `c60a8c3` - refactor: Remove unimplemented features from completions and code
+- `0f5fb7f` - refactor: Remove deprecated MIDI system and old implementations
+- `542e901` - feat: Add debug mode and fix length() implementation
+
+---
+

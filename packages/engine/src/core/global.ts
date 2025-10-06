@@ -3,7 +3,6 @@
  * Represents the global transport and configuration
  */
 
-import { Transport } from '../transport/transport'
 import { AudioEngine } from '../audio/audio-engine'
 
 import { Sequence } from './sequence'
@@ -38,19 +37,11 @@ export class Global {
   private _isLooping: boolean = false
 
   private sequences: Map<string, Sequence> = new Map()
-  private transport: Transport
   private audioEngine: any // Can be AudioEngine or SuperColliderPlayer
   private globalScheduler: Scheduler
 
   constructor(audioEngine: any) {
     this.audioEngine = audioEngine
-    // Transport only works with AudioEngine, skip for SuperColliderPlayer
-    if (audioEngine.getCurrentTime) {
-      this.transport = new Transport(audioEngine as AudioEngine)
-    } else {
-      // SuperColliderPlayer doesn't need Transport
-      this.transport = null as any
-    }
     this.globalScheduler = audioEngine as Scheduler
   }
 
@@ -60,9 +51,6 @@ export class Global {
       return this._tempo
     }
     this._tempo = value
-    if (this.transport) {
-      this.transport.setGlobalTempo(value)
-    }
     return this
   }
 
@@ -71,17 +59,11 @@ export class Global {
       return this._tick
     }
     this._tick = value
-    if (this.transport) {
-      this.transport.setTickResolution(value)
-    }
     return this
   }
 
   beat(numerator: number, denominator: number): this {
     this._beat = { numerator, denominator }
-    if (this.transport) {
-      this.transport.setGlobalMeter(this._beat)
-    }
     return this
   }
 
@@ -322,63 +304,6 @@ export class Global {
     return this
   }
 
-  /**
-   * Add delay effect to master output
-   * @param time - Delay time in seconds (default: 0.5)
-   * @param feedback - Feedback amount 0-1 (default: 0.3)
-   * @param mix - Dry/wet mix 0-1 (default: 0.5)
-   * @param enabled - Enable/disable effect (default: true)
-   */
-  delay(time = 0.5, feedback = 0.3, mix = 0.5, enabled = true): this {
-    // If disabled, remove effect
-    if (!enabled) {
-      const existingDelayIndex = this._masterEffects.findIndex(e => e.type === 'delay')
-      if (existingDelayIndex >= 0) {
-        this._masterEffects.splice(existingDelayIndex, 1)
-      }
-      
-      // Remove effect synth from SuperCollider
-      if ((this.globalScheduler as any).removeEffect) {
-        (this.globalScheduler as any).removeEffect('master', 'delay')
-      }
-      
-      const seamless = this._isRunning ? ' (seamless)' : ''
-      console.log(`🎛️ Global: delay off${seamless}`)
-      return this
-    }
-    
-    // Validate parameters
-    const delayTime = Math.max(0.01, Math.min(2.0, time))
-    const delayFeedback = Math.max(0, Math.min(1.0, feedback))
-    const delayMix = Math.max(0, Math.min(1.0, mix))
-    
-    // Update or add to master effect chain
-    const existingDelayIndex = this._masterEffects.findIndex(e => e.type === 'delay')
-    if (existingDelayIndex >= 0) {
-      // Update existing delay
-      this._masterEffects[existingDelayIndex] = {
-        type: 'delay',
-        params: { time: delayTime, feedback: delayFeedback, mix: delayMix }
-      }
-    } else {
-      // Add new delay
-      this._masterEffects.push({
-        type: 'delay',
-        params: { time: delayTime, feedback: delayFeedback, mix: delayMix }
-      })
-    }
-    
-    // Send OSC message to SuperCollider (always sends, for seamless update)
-    if ((this.globalScheduler as any).addEffect) {
-      (this.globalScheduler as any).addEffect('master', 'delay', { time: delayTime, feedback: delayFeedback, mix: delayMix })
-    }
-    
-    // Log with seamless indicator if running
-    const seamless = this._isRunning ? ' (seamless)' : ''
-    console.log(`🎛️ Global: delay(time=${delayTime}s, feedback=${delayFeedback}, mix=${delayMix})${seamless}`)
-    return this
-  }
-
   // Transport control methods
   run(): this {
     // If already running, do nothing (idempotent)
@@ -387,9 +312,6 @@ export class Global {
     }
     
     this._isRunning = true
-    if (this.transport) {
-      this.transport.start()
-    }
 
     // Start the global scheduler (will restart if needed)
     this.globalScheduler.start()
@@ -402,9 +324,6 @@ export class Global {
     if (!this._isLooping) {
       this._isLooping = true
       this._isRunning = true
-      if (this.transport) {
-        this.transport.start()
-      }
       // Global: loop
     }
     return this
@@ -423,9 +342,6 @@ export class Global {
     if (this._isRunning) {
       this._isRunning = false
       this._isLooping = false
-      if (this.transport) {
-        this.transport.stop()
-      }
       console.log('✅ Global stopped')
     }
     return this
@@ -442,24 +358,9 @@ export class Global {
     return this.globalScheduler
   }
 
-  // Get the transport (may be null for SuperColliderPlayer)
-  getTransport(): Transport | null {
-    return this.transport
-  }
-
   // Register a sequence (called by Sequence constructor)
   registerSequence(name: string, sequence: Sequence): void {
     this.sequences.set(name, sequence)
-    // Also register with transport (if available)
-    if (this.transport) {
-      this.transport.addSequence({
-        id: name,
-        slices: [],
-        loop: false,
-        muted: false,
-        state: 'stopped',
-      })
-    }
   }
 
   // Get sequence by name

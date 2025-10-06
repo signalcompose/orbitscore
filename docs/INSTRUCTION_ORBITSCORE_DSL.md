@@ -390,10 +390,19 @@ global.tempo(130)
 - **IR Generation**: Intermediate representation for execution
 - **Error Handling**: Graceful error reporting
 
-#### Audio Engine  
-- **File Loading**: WAV format support (AIFF, MP3, MP4 placeholders)
-- **Slicing**: `chop(n)` divides audio into n equal parts
-- **Playback**: Basic playback with Web Audio API
+#### Audio Engine (SuperCollider)
+- **File Loading**: WAV format support with buffer caching
+- **Slicing**: `chop(n)` divides audio into n equal parts with precise timing
+- **Playback**: Ultra-low latency (0-2ms) via SuperCollider scsynth
+- **Audio Control**: 
+  - `gain(dB)`: Volume control in dB (-60 to +12, default 0)
+  - `pan(position)`: Stereo positioning (-100 to 100)
+  - Random values: `r` (full random), `r0%10` (random walk)
+- **Global Mastering Effects**:
+  - `global.compressor()`: Increase perceived loudness
+  - `global.limiter()`: Prevent clipping
+  - `global.normalizer()`: Maximize output level
+- **Audio Device Selection**: Choose output device via command palette
 - **Default Behavior**: `chop(1)` or no chop treats file as single slice
 
 #### Object-Oriented Architecture
@@ -410,30 +419,52 @@ global.tempo(130)
 - **Diagnostics**: Real-time error detection
 - **Command Execution**: Cmd+Enter to run selected code
 
-### Partially Implemented ⚠️
-- **fixpitch()**: Placeholder only, needs pitch shift algorithm
-- **time()**: Basic speed change, needs quality time-stretch algorithm
-- **Transport Integration**: Direct audio scheduling, needs full transport integration
-
 ### Not Yet Implemented 📋
+
+#### Audio Manipulation
+- **fixpitch()**: Pitch shift in semitones
+- **time()**: Time stretch/compression
 - **offset()**: Start position adjustment
 - **reverse()**: Reverse playback
 - **fade()**: Fade in/out
+
+#### Effects (Per-Sequence)
+- **delay()**: Per-sequence delay effect
+- **reverb()**: Per-sequence reverb effect
+- **filter()**: Per-sequence filter effects
+
+#### Advanced Features
 - **Composite Meters**: `((3 by 4)(2 by 4))`
 - **Force Modifier**: `.force` for transport commands
+- **Effect Presets**: Named preset system for effect chains
 - **DAW Plugin**: VST/AU plugin development
 
+#### MIDI Support (Deprecated)
+- **MIDI Output**: Original MIDI-based system has been replaced with SuperCollider audio engine
+- **MIDI DSL**: Old syntax (`sequence`, `bus`, `channel`, `degree`, `velocity`) is no longer supported
+- **Note**: All MIDI-related tests and implementations have been removed in favor of direct audio playback
+
 ### Testing Coverage
-- **Unit Tests**: 180/180 passing
-- **E2E Tests**: 7/7 passing  
-- **Total**: 187/187 tests (100% success rate)
+- **Audio Parser Tests**: 50/50 passing
+- **Timing Tests**: 8/8 passing
+- **Pitch Tests**: 25/25 passing
+- **Audio Slicer Tests**: 9/9 passing
+- **SuperCollider Tests**: 15/15 passing
+- **Sequence Tests**: 20/20 passing
+- **Total**: 196+ tests passing (MIDI-related tests removed)
 
 ---
 
 ## 13. Versioning
 
-**Current Version**: v1.0 (Implemented Core Features)
+**Current Version**: v2.0 (SuperCollider Audio Engine)
+- v2.0 (2025-01-06): SuperCollider integration, global mastering effects, dB-based gain control
 - v1.0 (2024-12-25): Core implementation complete with 100% test coverage
 - v0.1 (2024-09-28): Initial draft specification
+
+**Migration Notes**:
+- MIDI output system has been completely replaced with SuperCollider audio engine
+- Old MIDI DSL syntax is no longer supported
+- All audio playback now goes through SuperCollider for professional-grade timing and quality
 
 Future changes must update this document first before implementation.

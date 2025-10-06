@@ -18,24 +18,40 @@
   "contributes": {
     "commands": [
       {
-        "command": "orbitscore.start",
-        "title": "OrbitScore: Start Engine"
+        "command": "orbitscore.toggleEngine",
+        "title": "🚀 Start Engine",
+        "category": "OrbitScore",
+        "icon": "$(play)"
+      },
+      {
+        "command": "orbitscore.startEngineDebug",
+        "title": "🐛 Start Engine (Debug)",
+        "category": "OrbitScore",
+        "icon": "$(debug-alt)"
       },
       {
         "command": "orbitscore.runSelection",
-        "title": "OrbitScore: Run Selection"
+        "title": "▶️ Run Selection",
+        "category": "OrbitScore",
+        "icon": "$(run)"
       },
       {
-        "command": "orbitscore.stop",
-        "title": "OrbitScore: Stop Engine"
+        "command": "orbitscore.stopEngine",
+        "title": "🛑 Stop Engine",
+        "category": "OrbitScore",
+        "icon": "$(stop)"
       },
       {
         "command": "orbitscore.killSuperCollider",
-        "title": "OrbitScore: Kill SuperCollider"
+        "title": "🔪 Kill SuperCollider",
+        "category": "OrbitScore",
+        "icon": "$(close-all)"
       },
       {
-        "command": "orbitscore.transport",
-        "title": "OrbitScore: Transport Panel"
+        "command": "orbitscore.selectAudioDevice",
+        "title": "🔊 Select Audio Device",
+        "category": "OrbitScore",
+        "icon": "$(device-desktop)"
       }
     ],
     "languages": [

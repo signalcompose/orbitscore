@@ -96,7 +96,9 @@ export function getContextualCompletions(
     completions.push(createCompletion('key', 'Set global key', 'key(${1:C})'))
     completions.push(createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'))
     completions.push(createCompletion('gain', 'Set master volume in dB', 'gain(${1:0})'))
-    completions.push(createCompletion('delay', 'Add master delay effect', 'delay(${1:0.5}, ${2:0.3}, ${3:0.5})'))
+    completions.push(createCompletion('compressor', 'Add compressor effect', 'compressor(${1:0.5}, ${2:0.5}, ${3:0.01}, ${4:0.1}, ${5:1.0}, ${6:true})'))
+    completions.push(createCompletion('limiter', 'Add limiter effect', 'limiter(${1:0.99}, ${2:0.01}, ${3:true})'))
+    completions.push(createCompletion('normalizer', 'Add normalizer effect', 'normalizer(${1:1.0}, ${2:0.01}, ${3:true})'))
 
     // Transport commands always available
     completions.push(createCompletion('run', 'Start all sequences', 'run()'))
@@ -137,11 +139,8 @@ export function getContextualCompletions(
 
     // After play is defined
     if (context.hasPlay) {
-      completions.push(createCompletion('fixpitch', 'Pitch shift in semitones', 'fixpitch(${1:0})'))
-      completions.push(createCompletion('time', 'Time stretch factor', 'time(${1:1.0})'))
       completions.push(createCompletion('gain', 'Set volume in dB', 'gain(${1:0})'))
       completions.push(createCompletion('pan', 'Set pan position (-100 to 100)', 'pan(${1:0})'))
-      completions.push(createCompletion('delay', 'Add delay effect', 'delay(${1:0.5}, ${2:0.3}, ${3:0.5})'))
     }
 
     // Transport commands (usually at the end)
