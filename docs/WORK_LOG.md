@@ -843,3 +843,69 @@ global.normalizer(1.0, 0.01, true)                     // Maximum loudness
 
 ---
 
+### 8.9 Performance Demo and Extension Packaging (January 6, 2025)
+
+**Date**: January 6, 2025  
+**Status**: ✅ COMPLETE
+
+**Work Content**: VS Code extension packaging improvements and performance demo file creation
+
+#### 1. Extension Packaging Issues and Resolution
+**Problem**: Extension couldn't find engine after packaging
+- `engine/dist/cli-audio.js` not found in installed extension
+- `node_modules` (supercolliderjs) missing from package
+- Relative path validation errors from vsce
+
+**Root Causes**:
+1. `.vscodeignore` incorrectly excluded engine files
+2. Engine path resolution only checked workspace location
+3. Dependencies not included in package
+
+**Solutions**:
+1. **Engine Path Resolution** (`extension.ts`):
+   - Added fallback logic: check `../engine/dist/cli-audio.js` first (bundled)
+   - Then check `../../engine/dist/cli-audio.js` (workspace)
+   - Provides clear error message if neither found
+
+2. **Packaging Process**:
+   - Copy engine files directly into extension directory
+   - Include: `dist/`, `supercollider/`, `package.json`, `node_modules/`
+   - Update `.vscodeignore` to exclude parent directories but include engine
+
+3. **Final Package**:
+   - 35 files, 57.5 KB (with dependencies)
+   - Successfully tested in live performance
+
+#### 2. Performance Demo File
+**Created**: `examples/performance-demo.osc`
+- All 13 test-assets samples configured
+- Drums: kick, snare, hatc, hato, hat
+- Bass: bassc, basse, bassg
+- Melody: arp, chordc, chorda
+- Test: sine1, sine2
+- Initial patterns: `0, 0, 0, 0` (silent, ready for live coding)
+- Comprehensive command examples for live performance
+
+#### 3. Serena Usage Guidelines Integration
+**Moved**: `docs/SERENA.md` → `AGENTS.md`
+- Consolidated into main agent rules file
+- Auto-loaded by all agents (Cursor, Codex CLI, etc.)
+- Guidelines:
+  - Use Serena for: complex code analysis, architecture understanding, symbol references
+  - Use normal tools for: simple file edits, known file changes, string search/replace
+
+**Performance Result**: ✅ Successfully used in live performance, all features working
+
+**Files Modified**:
+- `packages/vscode-extension/src/extension.ts`
+- `packages/vscode-extension/.vscodeignore`
+- `examples/performance-demo.osc` (new)
+- `AGENTS.md`
+
+**Future Improvements**:
+- Add line numbers to error messages
+- Automate extension packaging process
+- Bundle extension with webpack/esbuild for smaller size
+
+---
+
