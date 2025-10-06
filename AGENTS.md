@@ -9,6 +9,7 @@
 1. `docs/PROJECT_RULES.md` を読み込む（運用ルール・コミット方針）
 2. `docs/SERENA_GUIDE.md` を読み込む（Serena MCP使用ガイドライン）
 3. `docs/CONTEXT7_GUIDE.md` を読み込む（Context7使用ガイドライン）
+4. `docs/TOOL_SELECTION_GUIDE.md` を読み込む（ツール選択の判断基準）
 
 **プロジェクトの現状把握が必要な場合は、Serenaを使用して以下を確認：**
 - **直近の開発状況** → Serenaのメモリまたは`docs/WORK_LOG.md`を検索
@@ -23,10 +24,10 @@
 - `docs/PROJECT_RULES.md` — プロジェクト運用ルール / コミット方針
 - `docs/SERENA_GUIDE.md` — Serena MCP使用ガイドライン
 - `docs/CONTEXT7_GUIDE.md` — Context7使用ガイドライン
+- `docs/TOOL_SELECTION_GUIDE.md` — ツール選択の判断基準
 
 ### アクティブなドキュメント
 - `docs/INDEX.md` — ドキュメントの総合ナビゲーション
-- `docs/TOOL_SELECTION_GUIDE.md` — ツール選択の判断基準
 - `docs/IMPLEMENTATION_PLAN.md` — 実装計画と進捗管理
 - `docs/INSTRUCTION_ORBITSCORE_DSL.md` — DSL仕様（v2.0・現行版）
 - `docs/WORK_LOG.md` — 開発ログ（各コミットで更新必須）
@@ -39,11 +40,7 @@ Codex CLI / Cursor CLI など別エージェントで作業を引き継ぐ際も
 
 ## ツール使用ガイド
 
-詳細なガイドラインは各専用ドキュメントを参照してください：
-
-- **Serena MCP**: [docs/SERENA_GUIDE.md](docs/SERENA_GUIDE.md) - コードベース理解と長期記憶管理
-- **Context7**: [docs/CONTEXT7_GUIDE.md](docs/CONTEXT7_GUIDE.md) - 外部ライブラリのドキュメント参照
-- **ツール選択**: [docs/TOOL_SELECTION_GUIDE.md](docs/TOOL_SELECTION_GUIDE.md) - 適切なツールの選び方
+上記の必須ガイドで、適切なツールの選択方法と使用方法を理解できます。
 
 ### クイックリファレンス
 
