@@ -22,14 +22,14 @@ export interface PreparePlaybackOptions {
 
 /**
  * Prepare common setup for both run() and loop() playback
- * 
+ *
  * This function handles:
  * - Scheduler validation
  * - Slice preparation (if chop() was called)
  * - Audio buffer preloading
  * - Clearing existing loop timers
  * - Getting current scheduler time
- * 
+ *
  * @param options - Preparation options
  * @returns Prepared scheduler and current time, or null if scheduler not running
  */
