@@ -101,13 +101,21 @@
 - **コード編集** - `StrReplace`, `MultiStrReplace`, `Write`, `Delete`
 - **Serena編集** - `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol`, `write_memory`, `delete_memory`
 - **Shell実行** - 特に破壊的操作 (rm, git push, npm publish など)
-- **Git操作** - `git commit`, `git push`, `gh pr create`, `gh pr merge`
+- **Git操作** - `git commit`, `git push`, `gh pr create`
+
+**⚠️ 禁止事項（AIエージェントは実行してはいけない）:**
+
+- **PRのマージ** - `gh pr merge` は**絶対に実行しない**
+  - ユーザーが「all check passed」を確認してからマージします
+  - AIエージェントはマージの準備（PR作成、レビュー対応）までを行い、マージ実行はユーザーに委ねます
+  - 理由: テスト結果、ビルド結果、BugBotのコメントなど、最終的な品質確認はユーザーが行うべき
 
 **理由:**
 
 - 読み取り専用ツールはプロジェクトに変更を加えないため、確認なしで実行しても安全
 - 書き込み・実行系ツールは意図しない変更を防ぐため、確認が必要
 - 作業効率と安全性のバランスを取る
+- **品質保証**: マージは最終的な品質確認を経てから実行されるべき
 
 **注意:** MCPツールの確認設定はCursor/エディタ側で管理されるため、このポリシーはAIエージェントとユーザー間の共通理解として機能する
 
