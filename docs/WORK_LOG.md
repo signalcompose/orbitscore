@@ -15,6 +15,84 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.20 Fix InterpreterV2.getState() - Phase 3-2 (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+**Branch**: 18-refactor-interpreter-v2ts-phase-3-2
+**Issue**: #18
+
+**Work Content**: `InterpreterV2.getState()`メソッドが`Global`と`Sequence`インスタンスの専用`getState()`メソッドを使用するように修正
+
+#### 問題点
+
+**プライベートプロパティへの直接アクセス**
+- `InterpreterV2.getState()`が`Global`と`Sequence`インスタンスのプライベートプロパティに直接アクセス
+- `(global as any)._isRunning`、`(sequence as any)._isPlaying`などの型キャストを使用
+- 専用の`getState()`メソッドをバイパス
+- デバッグ・テスト時に不完全または不整合な状態を返す可能性
+
+#### 修正内容
+
+**専用getState()メソッドの使用**
+- `Global.getState()`を使用してグローバル状態を取得
+- `Sequence.getState()`を使用してシーケンス状態を取得
+- プライベートプロパティへの直接アクセスを削除
+
+**修正前**:
+```typescript
+for (const [name, global] of this.state.globals.entries()) {
+  state.globals[name] = {
+    isRunning: (global as any)._isRunning,
+    tempo: (global as any)._tempo,
+    beat: (global as any)._beat,
+  }
+}
+```
+
+**修正後**:
+```typescript
+for (const [name, global] of this.state.globals.entries()) {
+  state.globals[name] = global.getState()
+}
+```
+
+#### 改善点
+
+**1. 完全な状態取得**
+- `Global.getState()`は9つのプロパティを返す（tempo, tick, beat, key, audioPath, masterGainDb, masterEffects, isRunning, isLooping）
+- 以前は3つのプロパティのみ（isRunning, tempo, beat）
+- `Sequence.getState()`は13つのプロパティを返す（name, tempo, beat, length, gainDb, gainRandom, pan, panRandom, slices, playPattern, timedEvents, isMuted, isPlaying, isLooping）
+- 以前は5つのプロパティのみ（isPlaying, isLooping, isMuted, audioFile, timedEvents）
+
+**2. 一貫性の向上**
+- パブリックAPIを使用
+- クラスの内部実装変更に影響されない
+- カプセル化の原則に従う
+
+**3. 保守性の向上**
+- 型キャスト不要
+- プライベートプロパティ名の変更に影響されない
+- テスト・デバッグが確実
+
+#### テスト結果
+```bash
+npm test
+```
+- ✅ 115 tests passed
+- ⏭️ 15 tests skipped
+- ✅ ビルド成功
+- ✅ lint成功
+
+#### ファイル変更
+- **変更**:
+  - `packages/engine/src/interpreter/interpreter-v2.ts` (getState()メソッドの修正)
+
+#### コミット
+- `8ba3f99`: fix: InterpreterV2.getState()で専用メソッドを使用
+
+---
+
 ### 6.19 Refactor Timing Calculator - Phase 2-2 (January 7, 2025)
 
 **Date**: January 7, 2025
