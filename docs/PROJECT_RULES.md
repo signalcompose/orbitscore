@@ -212,12 +212,24 @@ git checkout -b feature/descriptive-name
 # Push branch to GitHub
 git push -u origin feature/branch-name
 
-# Create PR to develop
-gh pr create --base develop --title "feat: description" --body "detailed description"
+# Create PR to develop (with automatic Issue closing)
+gh pr create --base develop --title "feat: description" --body "Closes #<issue-number>
+
+detailed description"
 
 # Create PR to main (for releases)
 gh pr create --base main --title "release: version X.Y.Z" --body "release notes"
 ```
+
+**Automatic Issue Closing:**
+- **ALWAYS include `Closes #<issue-number>` in PR body** to automatically close the related Issue when PR is merged
+- Keywords that work: `Closes`, `Fixes`, `Resolves` (case-insensitive)
+- Example: `Closes #14` will automatically close Issue #14 when PR is merged
+- **Benefits**:
+  - ✅ Never forget to close Issues
+  - ✅ Clear connection between PR and Issue
+  - ✅ Automatic workflow (GitHub handles it)
+- **Workflow**: Issue → Branch → PR (with `Closes #N`) → Merge → Issue auto-closes
 
 **Merging PRs:**
 ```bash
