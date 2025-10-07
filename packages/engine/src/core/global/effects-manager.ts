@@ -107,15 +107,6 @@ export class EffectsManager {
    * @param makeupGain - Makeup gain 0-2 (default: 1.0)
    * @param enabled - Enable/disable effect (default: true)
    */
-  /**
-   * Add compressor effect to master output (mastering)
-   * @param threshold - Compression threshold 0-1 (default: 0.5)
-   * @param ratio - Compression ratio 0-1 (default: 0.5, 0=1:1, 1=inf:1)
-   * @param attack - Attack time in seconds (default: 0.01)
-   * @param release - Release time in seconds (default: 0.1)
-   * @param makeupGain - Makeup gain 0-2 (default: 1.0)
-   * @param enabled - Enable/disable effect (default: true)
-   */
   compressor(
     threshold = 0.5,
     ratio = 0.5,
@@ -149,12 +140,6 @@ export class EffectsManager {
    * @param duration - Lookahead time in seconds (default: 0.01)
    * @param enabled - Enable/disable effect (default: true)
    */
-  /**
-   * Add limiter effect to master output (mastering)
-   * @param level - Limiter level 0-1 (default: 0.99)
-   * @param duration - Lookahead time in seconds (default: 0.01)
-   * @param enabled - Enable/disable effect (default: true)
-   */
   limiter(level = 0.99, duration = 0.01, enabled = true): this {
     if (!enabled) {
       this.removeEffect('limiter')
@@ -172,12 +157,6 @@ export class EffectsManager {
     return this
   }
 
-  /**
-   * Add normalizer effect to master output (mastering)
-   * @param level - Normalization level 0-1 (default: 1.0)
-   * @param duration - Lookahead time in seconds (default: 0.01)
-   * @param enabled - Enable/disable effect (default: true)
-   */
   /**
    * Add normalizer effect to master output (mastering)
    * @param level - Normalization level 0-1 (default: 1.0)
