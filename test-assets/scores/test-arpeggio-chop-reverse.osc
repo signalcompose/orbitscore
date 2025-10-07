@@ -1,0 +1,27 @@
+// Test chop() with arpeggio file in reverse order
+// Should hear 4 distinct notes in reverse
+
+// Initialize global context
+var global = init GLOBAL
+
+// Configure global parameters
+global.audioPath("test-assets/audio")
+global.tempo(120)
+global.beat(4)
+global.tick(4)
+
+// Initialize sequence
+var arp = init global.seq
+
+// Configure sequence
+arp.beat(4 by 4).length(1)
+
+// Load and chop arpeggio (1.0s / 4 = 0.25s per slice)
+arp.audio("arpeggio_c.wav").chop(4)
+
+// Play all 4 slices in REVERSE sequence
+arp.play(4, 3, 2, 1)
+
+// Start playback
+global.run()
+arp.run()

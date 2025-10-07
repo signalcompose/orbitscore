@@ -1183,6 +1183,68 @@ global.normalizer(1.0, 0.01, true)                     // Maximum loudness
 
 ---
 
+## 2025-01-07: Chop Slice Playback Rate and Envelope Improvements
+
+### 問題
+1. **スライスの再生速度が不適切**: `chop()`で分割されたスライスが、イベントの時間枠に合わせて再生速度を調整していなかった
+2. **クリックノイズ**: スライスの開始・終了時に急激な音量変化によるクリックノイズが発生
+3. **アタック感の喪失**: フェードインが長すぎてアタック感が失われる
+
+### 解決
+1. **再生速度の自動調整**:
+   - `SuperColliderPlayer.scheduleSliceEvent()`に`eventDurationMs`パラメータを追加
+   - `rate = sliceDuration / eventDurationSec`で再生速度を計算
+   - スライスが時間枠より短い場合は減速、長い場合は加速
+
+2. **エンベロープの可変フェード時間**:
+   - `orbitPlayBuf` SynthDefのエンベロープを再生時間に応じて調整
+   - フェードイン: 0ms（アタック感を保持）
+   - フェードアウト: 再生時間の4%（最大8ms）でクリックノイズを防止
+
+### 実装詳細
+
+#### TypeScript側の変更
+- `packages/engine/src/audio/supercollider-player.ts`:
+  - `scheduleSliceEvent()`に`eventDurationMs`パラメータを追加
+  - `rate = sliceDuration / eventDurationSec`で再生速度を計算
+  - `options.rate`をSuperColliderに送信
+
+- `packages/engine/src/core/global.ts`:
+  - `Scheduler`インターフェースの`scheduleSliceEvent()`シグネチャを更新
+
+- `packages/engine/src/core/sequence.ts`:
+  - `scheduleEvents()`と`scheduleEventsFromTime()`で`event.duration`を`scheduleSliceEvent()`に渡す
+
+#### SuperCollider側の変更
+- `packages/engine/supercollider/setup.scd`:
+  - `orbitPlayBuf` SynthDefに可変エンベロープを実装
+  - `fadeIn = 0`（アタック感を保持）
+  - `fadeOut = min(0.008, actualDuration * 0.04)`（クリックノイズ防止）
+  - `sustain = max(0, actualDuration - fadeOut)`
+
+### SynthDefビルド方法のドキュメント化
+- `packages/engine/supercollider/README.md`を新規作成
+- ビルド手順、トラブルシューティング、編集方法を詳細に記載
+- 頻繁に発生する問題（sclangが終了しない、構文エラー、ファイルが更新されない）の解決策を記載
+
+### 動作確認
+- ✅ `play(1,2,3,4)`: 各スライスが均等に再生される
+- ✅ `play(4,3,2,1)`: 逆順再生が正しく動作
+- ✅ `play(4,0,3,0,2,0,1,0)`: 休符を含むパターンが正しく動作
+- ✅ `play(1,1,2,2,3,3,4,4)`: 同じスライスの繰り返しが正しく動作
+- ✅ `play((1,0),2,(3,3,3),4)`: ネストしたパターンで3連符が正しく再生される（rate=1.5）
+- ✅ クリックノイズが大幅に軽減
+- ✅ アタック感が保持される
+
+### ファイル変更
+- `packages/engine/src/audio/supercollider-player.ts`: 再生速度計算とrate送信
+- `packages/engine/src/core/global.ts`: Schedulerインターフェース更新
+- `packages/engine/src/core/sequence.ts`: eventDuration渡し
+- `packages/engine/supercollider/setup.scd`: 可変エンベロープ実装
+- `packages/engine/supercollider/README.md`: SynthDefビルド方法のドキュメント（新規作成）
+
+---
+
 ## 2025-01-07: CLI Timed Execution Bug Fix
 
 ### 問題

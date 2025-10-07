@@ -31,6 +31,7 @@ export interface Scheduler {
     time: number,
     sliceIndex: number,
     totalSlices: number,
+    eventDurationMs: number | undefined,
     gainDb: number,
     pan: number,
     sequenceName: string,

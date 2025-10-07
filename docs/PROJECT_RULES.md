@@ -265,18 +265,101 @@ Types: feat, fix, docs, test, refactor, chore
 
 ## 🎯 Core Principles
 
-### 1. Degree System Philosophy
+### 1. Code Organization and Architecture
+
+#### Single Responsibility Principle (SRP)
+- **One Function, One Purpose**: Each function should do exactly one thing
+- **Small Functions**: Aim for functions under 50 lines
+- **Clear Names**: Function names should clearly describe their single purpose
+- **Example**: `preparePlayback()` only prepares, `runSequence()` only executes
+
+#### DRY (Don't Repeat Yourself)
+- **Extract Common Logic**: If code appears in 2+ places, extract it to a shared function
+- **Shared Utilities**: Create utility modules for reusable logic
+- **Refactoring Trigger**: Duplicate code is a signal to refactor immediately
+
+#### Module Organization
+- **Group by Feature**: Organize related functions in feature directories
+- **Clear Directory Structure**: Use descriptive directory names
+  ```
+  feature/
+  ├── operation-a.ts
+  ├── operation-b.ts
+  └── shared-utility.ts
+  ```
+- **Example**:
+  ```
+  sequence/
+  ├── playback/
+  │   ├── prepare-playback.ts
+  │   ├── run-sequence.ts
+  │   └── loop-sequence.ts
+  └── audio/
+      └── prepare-slices.ts
+  ```
+
+#### Function Design
+- **Pure Functions**: Prefer pure functions without side effects when possible
+- **Explicit Dependencies**: Pass dependencies as parameters, not globals
+- **Return Values**: Return results rather than mutating state when possible
+- **Type Safety**: Use TypeScript interfaces for function options
+  ```typescript
+  export interface PreparePlaybackOptions {
+    sequenceName: string
+    audioFilePath?: string
+    // ...
+  }
+  
+  export async function preparePlayback(
+    options: PreparePlaybackOptions
+  ): Promise<PlaybackPreparation | null>
+  ```
+
+#### Reusability Guidelines
+- **Descriptive Names**: Use names that describe what the function does, not where it's used
+  - ✅ Good: `preparePlayback()`, `scheduleEvents()`
+  - ❌ Bad: `helper1()`, `doStuff()`
+- **Generic Parameters**: Use options objects for flexibility
+- **Documentation**: Add JSDoc comments explaining purpose and usage
+- **Export Public APIs**: Export functions that might be useful elsewhere
+
+#### Class Design
+- **Thin Controllers**: Keep class methods thin (under 30 lines), delegate to utility functions
+- **Composition over Inheritance**: Prefer composing functionality from modules
+- **Example**:
+  ```typescript
+  class Sequence {
+    async run(): Promise<this> {
+      const prepared = await preparePlayback({ /* options */ })
+      if (!prepared) return this
+      
+      const result = runSequence({ /* options */ })
+      this._isPlaying = result.isPlaying
+      return this
+    }
+  }
+  ```
+
+#### Refactoring Triggers
+When you see these patterns, **refactor immediately**:
+1. **Duplicate Code**: Same logic in 2+ places → Extract to shared function
+2. **Long Methods**: Methods over 50 lines → Break into smaller functions
+3. **Multiple Responsibilities**: Function does many things → Split by responsibility
+4. **Hard to Test**: Complex logic in class → Extract to pure function
+5. **Hard to Reuse**: Logic tied to specific context → Generalize with parameters
+
+### 2. Degree System Philosophy
 
 - **0 = rest/silence** - Musical value, not just "no sound"
 - 1-12 = chromatic scale (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
 - This is a defining feature of OrbitScore
 
-### 2. Precision
+### 3. Precision
 
 - 小数第3位まで (3 decimal places)
 - Random with seed for reproducibility
 
-### 3. Contract-Based Design
+### 4. Contract-Based Design
 
 - IR types are frozen contracts
 - Breaking changes require new versions

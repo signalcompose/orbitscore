@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { execFileSync } from 'child_process'
 
 import * as sc from 'supercolliderjs'
 
@@ -16,6 +17,7 @@ interface ScheduledPlay {
     pan?: number // Pan position (-100 to +100, default 0)
     startPos?: number // Start position in seconds
     duration?: number // Duration in seconds
+    rate?: number // Playback rate (1.0 = normal, 2.0 = double speed, 0.5 = half speed)
   }
   sequenceName: string
 }
@@ -149,29 +151,42 @@ export class SuperColliderPlayer {
 
     const bufnum = this.nextBufnum++
 
-    await this.server.send.msg(['/b_allocRead', bufnum, filepath, 0, -1])
+    // Get duration from audio file using sox before loading into SuperCollider
+    const duration = this.getAudioFileDuration(filepath)
 
-    // Query duration
-    const duration = await this.queryBufferDuration()
+    await this.server.send.msg(['/b_allocRead', bufnum, filepath, 0, -1])
 
     const bufferInfo: BufferInfo = { bufnum, duration }
     this.bufferCache.set(filepath, bufferInfo)
     this.bufferDurations.set(bufnum, duration)
 
+    console.log(`📦 Loaded buffer ${bufnum} (${path.basename(filepath)}): ${duration.toFixed(3)}s`)
+
     return bufferInfo
   }
 
   /**
-   * Query buffer duration (wait for buffer to load)
+   * Get audio file duration using sox
+   * Uses execFileSync to prevent command injection vulnerabilities
    */
-  private async queryBufferDuration(): Promise<number> {
-    // Wait for buffer to load (SuperCollider sends /done after /b_allocRead)
-    await new Promise((resolve) => setTimeout(resolve, 100))
+  private getAudioFileDuration(filepath: string): number {
+    try {
+      // Use execFileSync with separate arguments to prevent command injection
+      const output = execFileSync('soxi', ['-D', filepath], { encoding: 'utf8' })
+      const duration = parseFloat(output.trim())
 
-    // TODO: Implement proper /b_query response handling with supercolliderjs API
-    // For now, use default duration based on typical drum samples
-    // hihat.wav is 0.3s (150ms * 2 slices)
-    return 0.3
+      if (isNaN(duration) || duration <= 0) {
+        console.warn(`⚠️  Invalid duration from sox for ${filepath}, using default 0.3s`)
+        return 0.3
+      }
+
+      return duration
+    } catch (error: any) {
+      console.warn(
+        `⚠️  Failed to get duration for ${filepath}: ${error.message}, using default 0.3s`,
+      )
+      return 0.3
+    }
   }
 
   /**
@@ -223,6 +238,7 @@ export class SuperColliderPlayer {
     startTimeMs: number,
     sliceIndex: number,
     totalSlices: number,
+    eventDurationMs: number | undefined,
     gainDb = 0,
     pan = 0,
     sequenceName = '',
@@ -232,6 +248,16 @@ export class SuperColliderPlayer {
     // sliceIndex is 1-based from DSL, convert to 0-based
     const startPos = (sliceIndex - 1) * sliceDuration
 
+    // Calculate playback rate to fit slice into event duration
+    // rate = actual slice duration / desired event duration
+    // If eventDurationMs is undefined or 0, use natural rate (1.0)
+    // If slice is shorter than event, we need to slow down (rate < 1.0) to stretch it
+    // If slice is longer than event, we need to speed up (rate > 1.0) to compress it
+    let rate = 1.0
+    if (eventDurationMs && eventDurationMs > 0) {
+      rate = (sliceDuration * 1000) / eventDurationMs
+    }
+
     const play: ScheduledPlay = {
       time: startTimeMs,
       filepath,
@@ -240,6 +266,7 @@ export class SuperColliderPlayer {
         pan,
         startPos,
         duration: sliceDuration,
+        rate,
       },
       sequenceName,
     }
@@ -261,7 +288,7 @@ export class SuperColliderPlayer {
    */
   private async executePlayback(
     filepath: string,
-    options: { gainDb?: number; pan?: number; startPos?: number; duration?: number },
+    options: { gainDb?: number; pan?: number; startPos?: number; duration?: number; rate?: number },
     sequenceName: string,
     scheduledTime: number,
   ): Promise<void> {
@@ -291,6 +318,7 @@ export class SuperColliderPlayer {
     const pan = options.pan !== undefined ? options.pan / 100 : 0.0 // -100..100 -> -1.0..1.0
     const startPos = options.startPos ?? 0
     const duration = options.duration ?? 0
+    const rate = options.rate ?? 1.0
 
     await this.server.send.msg([
       '/s_new',
@@ -305,7 +333,7 @@ export class SuperColliderPlayer {
       'pan',
       pan,
       'rate',
-      1.0,
+      rate,
       'startPos',
       startPos,
       'duration',
