@@ -58,15 +58,22 @@ export class TempoManager {
   }
 
   /**
+   * Calculate bar duration in milliseconds
+   * @private
+   */
+  private calculateBarDuration(tempo: number, meter: Meter): number {
+    // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
+    const quarterNoteDuration = 60000 / tempo
+    return quarterNoteDuration * ((meter.numerator / meter.denominator) * 4)
+  }
+
+  /**
    * Calculate pattern duration
    */
   calculatePatternDuration(globalTempo: number, globalBeat: Meter): number {
     const tempo = this._tempo || globalTempo
     const meter = this._beat || globalBeat
-
-    // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
-    const quarterNoteDuration = 60000 / tempo
-    const barDuration = quarterNoteDuration * ((meter.numerator / meter.denominator) * 4)
+    const barDuration = this.calculateBarDuration(tempo, meter)
 
     // length() multiplies the duration of each event, not the number of bars
     // So the pattern duration is: 1 bar × length multiplier
@@ -84,11 +91,9 @@ export class TempoManager {
     const tempo = this._tempo || globalTempo
     const meter = this._beat || globalBeat
 
-    // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
     // これにより、シーケンスごとに異なる拍子で1小節の長さを変えられる（ポリメーター）
     // 例: global.beat(4 by 4) = 2000ms, seq.beat(5 by 4) = 2500ms, seq.beat(9 by 8) = 2250ms
-    const quarterNoteDuration = 60000 / tempo // 4分音符の長さ（BPMの基準）
-    const barDuration = quarterNoteDuration * ((meter.numerator / meter.denominator) * 4)
+    const barDuration = this.calculateBarDuration(tempo, meter)
 
     // Apply length multiplier to bar duration (stretches each event)
     const effectiveBarDuration = barDuration * (this._length || 1)

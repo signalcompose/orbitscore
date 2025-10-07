@@ -69,21 +69,6 @@ export class GainManager {
   }
 
   /**
-   * Calculate final gain including master gain and mute state
-   */
-  calculateFinalGain(masterGainDb: number, isMuted: boolean): number {
-    const sequenceGainDb = this.generateEventGain()
-
-    if (isMuted) {
-      return -Infinity
-    } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
-      return -Infinity
-    } else {
-      return sequenceGainDb + masterGainDb
-    }
-  }
-
-  /**
    * Get gain description for logging
    */
   getGainDescription(): string {

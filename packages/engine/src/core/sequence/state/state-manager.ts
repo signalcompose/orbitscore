@@ -6,7 +6,7 @@
 import { AudioSlice } from '../../../audio/audio-engine'
 import { PlayElement } from '../../../parser/audio-parser'
 import { TimedEvent } from '../../../timing/calculation'
-import { SequenceState, SequenceScheduling } from '../types'
+import { StateManagerState } from '../types'
 
 /**
  * State manager for Sequence
@@ -170,18 +170,7 @@ export class StateManager {
   /**
    * Get complete sequence state
    */
-  getState(): Omit<
-    SequenceState,
-    | 'gainDb'
-    | 'gainRandom'
-    | 'pan'
-    | 'panRandom'
-    | 'tempo'
-    | 'beat'
-    | 'length'
-    | 'audioFilePath'
-    | 'chopDivisions'
-  > {
+  getState(): StateManagerState {
     return {
       name: this._name,
       slices: this._slices,
@@ -190,19 +179,6 @@ export class StateManager {
       isMuted: this._isMuted,
       isPlaying: this._isPlaying,
       isLooping: this._isLooping,
-    }
-  }
-
-  /**
-   * Get scheduling state
-   */
-  getSchedulingState(): SequenceScheduling {
-    return {
-      isPlaying: this._isPlaying,
-      isLooping: this._isLooping,
-      loopStartTime: this._loopStartTime,
-      playbackInterval: this.playbackInterval,
-      loopTimer: this.loopTimer,
     }
   }
 
@@ -218,15 +194,5 @@ export class StateManager {
       clearInterval(this.loopTimer)
       this.loopTimer = undefined
     }
-  }
-
-  /**
-   * Reset all state
-   */
-  reset(): void {
-    this.clearTimers()
-    this._isPlaying = false
-    this._isLooping = false
-    this._loopStartTime = undefined
   }
 }

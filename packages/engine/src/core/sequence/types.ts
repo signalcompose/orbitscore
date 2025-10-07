@@ -46,14 +46,16 @@ export interface SequenceParameters {
 }
 
 /**
- * Sequence scheduling interface
+ * State manager state (subset of SequenceState)
  */
-export interface SequenceScheduling {
+export interface StateManagerState {
+  name: string
+  slices: AudioSlice[]
+  playPattern?: PlayElement[]
+  timedEvents?: TimedEvent[]
+  isMuted: boolean
   isPlaying: boolean
   isLooping: boolean
-  loopStartTime?: number
-  playbackInterval?: NodeJS.Timeout
-  loopTimer?: NodeJS.Timeout
 }
 
 /**

@@ -5,8 +5,42 @@
 
 import * as path from 'path'
 
+import { RandomValue } from '../../../parser/audio-parser'
 import { ScheduleEventsOptions, ScheduleEventsFromTimeOptions } from '../types'
 import { generateRandomValue } from '../parameters/random-utils'
+
+/**
+ * Resolve audio file path to absolute path
+ */
+function resolveAudioFilePath(audioFilePath: string): string {
+  return path.isAbsolute(audioFilePath) ? audioFilePath : path.resolve(process.cwd(), audioFilePath)
+}
+
+/**
+ * Calculate final gain for event
+ * Handles random gain generation, mute state, and master gain
+ */
+function calculateEventGain(
+  gainDb: number,
+  gainRandom: RandomValue | undefined,
+  masterGainDb: number,
+  isMuted: boolean,
+): number {
+  // Generate random gain if specified
+  let sequenceGainDb = gainDb
+  if (gainRandom) {
+    sequenceGainDb = generateRandomValue(gainRandom, -60, 12)
+  }
+
+  // Apply mute and master gain
+  if (isMuted) {
+    return -Infinity
+  } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
+    return -Infinity
+  } else {
+    return sequenceGainDb + masterGainDb
+  }
+}
 
 /**
  * Schedule events for sequence
@@ -34,9 +68,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
   }
 
   // Resolve the audio file path to an absolute path
-  const resolvedFilePath = path.isAbsolute(audioFilePath)
-    ? audioFilePath
-    : path.resolve(process.cwd(), audioFilePath)
+  const resolvedFilePath = resolveAudioFilePath(audioFilePath)
 
   // Schedule events for current iteration
   const loopOffset = loopIteration * patternDuration
@@ -46,22 +78,8 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
       // 0 is silence
       const startTimeMs = baseTime + event.startTime + loopOffset
 
-      // Calculate final gain
-      let sequenceGainDb = gainDb
-
-      // Generate random gain if specified
-      if (gainRandom) {
-        sequenceGainDb = generateRandomValue(gainRandom, -60, 12)
-      }
-
-      let finalGainDb: number
-      if (isMuted) {
-        finalGainDb = -Infinity
-      } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
-        finalGainDb = -Infinity
-      } else {
-        finalGainDb = sequenceGainDb + masterGainDb
-      }
+      // Calculate final gain using helper function
+      const finalGainDb = calculateEventGain(gainDb, gainRandom, masterGainDb, isMuted)
 
       // Generate random pan if specified
       const eventPan = panRandom ? generateRandomValue(panRandom, -100, 100) : pan
@@ -111,9 +129,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
     return
   }
 
-  const resolvedFilePath = path.isAbsolute(audioFilePath)
-    ? audioFilePath
-    : path.resolve(audioFilePath)
+  const resolvedFilePath = resolveAudioFilePath(audioFilePath)
 
   // Calculate which loop iteration we're in
   const elapsedTime = fromTime - (loopStartTime || 0)
@@ -133,22 +149,8 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
           continue
         }
 
-        // Calculate final gain
-        let sequenceGainDb = gainDb
-
-        // Generate random gain if specified
-        if (gainRandom) {
-          sequenceGainDb = generateRandomValue(gainRandom, -60, 12)
-        }
-
-        let finalGainDb: number
-        if (isMuted) {
-          finalGainDb = -Infinity
-        } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
-          finalGainDb = -Infinity
-        } else {
-          finalGainDb = sequenceGainDb + masterGainDb
-        }
+        // Calculate final gain using helper function
+        const finalGainDb = calculateEventGain(gainDb, gainRandom, masterGainDb, isMuted)
 
         // Generate random pan if specified
         const eventPan = panRandom ? generateRandomValue(panRandom, -100, 100) : pan
