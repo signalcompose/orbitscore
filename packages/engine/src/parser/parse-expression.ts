@@ -182,9 +182,10 @@ export class ExpressionParser {
       const center = parseFloat(centerStr)
 
       if (isNaN(center)) {
-        // Not a valid random syntax (e.g., 'rabc')
+        // This should not happen if isRandomSyntax() check is correct
+        // 'rabc' etc. should be treated as regular identifiers
         throw new Error(
-          `Invalid random syntax: '${value}' - expected 'r' followed by a number (e.g., 'r0%20', 'r-6%3')`,
+          `Internal error: Invalid random syntax '${value}' passed to parseRandomValue`,
         )
       }
 
@@ -204,7 +205,7 @@ export class ExpressionParser {
     }
 
     // Should not reach here if isRandomSyntax check was done properly
-    throw new Error(`Invalid random syntax: '${value}'`)
+    throw new Error(`Internal error: Unexpected random syntax format '${value}'`)
   }
 
   /**
