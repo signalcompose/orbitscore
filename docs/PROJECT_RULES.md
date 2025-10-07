@@ -140,6 +140,31 @@
 - `docs/*` - Documentation only changes
 - `test/*` - Test additions/fixes
 
+**Git Worktree Setup:**
+
+This project uses Git Worktree to maintain separate working directories for `main` and `develop` branches:
+
+```bash
+# Directory structure
+/Users/yamato/Src/proj_livecoding/
+├── orbitscore/          # develop branch (main working directory)
+└── orbitscore-main/     # main branch (production environment)
+
+# View worktrees
+git worktree list
+
+# Switch between environments
+cd /Users/yamato/Src/proj_livecoding/orbitscore       # develop
+cd /Users/yamato/Src/proj_livecoding/orbitscore-main  # main
+```
+
+**Benefits:**
+- Complete separation between develop and main environments
+- No need to switch branches (no file changes)
+- Can test both environments simultaneously
+- Prevents accidental commits to main branch
+- Stable production environment always available
+
 **Branch Protection Rules (main & develop):**
 - ✅ Pull Request required before merging
 - ✅ At least 1 approval required
