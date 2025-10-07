@@ -10,6 +10,7 @@ export interface Meter {
 // Common scheduler interface
 export interface Scheduler {
   isRunning: boolean
+  startTime: number // Timestamp when scheduler started
   start(): void
   stop(): void
   stopAll(): void

@@ -87,61 +87,39 @@ export class Sequence {
     return this
   }
 
-  gain(valueDb: number | RandomValue): this {
-    // Use gain manager to set gain
-    this.gainManager.setGain({ valueDb })
-
-    // If already playing, reschedule future events only (seamless change)
+  /**
+   * Seamlessly update parameter during playback
+   * Reschedules future events with new parameter value
+   */
+  private seamlessParameterUpdate(parameterName: string, description: string): void {
     if (this.stateManager.isLooping() || this.stateManager.isPlaying()) {
       const scheduler = this.global.getScheduler()
-      const isRunning = (scheduler as any).isRunning
 
-      if (isRunning && this.stateManager.getLoopStartTime() !== undefined) {
+      if (scheduler.isRunning && this.stateManager.getLoopStartTime() !== undefined) {
         // Get current scheduler time
-        const schedulerStartTime = (scheduler as any).startTime
         const now = Date.now()
-        const currentTime = now - schedulerStartTime
+        const currentTime = now - scheduler.startTime
 
         // Clear ALL old events first
-        ;(scheduler as any).clearSequenceEvents(this.stateManager.getName())
+        scheduler.clearSequenceEvents(this.stateManager.getName())
 
         // Reschedule events, but only future ones
         this.scheduleEventsFromTime(scheduler, currentTime)
 
-        const gainDesc = this.gainManager.getGainDescription()
-        console.log(`🎚️ ${this.stateManager.getName()}: gain=${gainDesc} (seamless)`)
+        console.log(`🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`)
       }
     }
+  }
 
+  gain(valueDb: number | RandomValue): this {
+    this.gainManager.setGain({ valueDb })
+    this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
     return this
   }
 
   pan(value: number | RandomValue): this {
-    // Use pan manager to set pan
     this.panManager.setPan({ value })
-
-    // If already playing, reschedule with new pan
-    if (this.stateManager.isLooping() || this.stateManager.isPlaying()) {
-      const scheduler = this.global.getScheduler()
-      const isRunning = (scheduler as any).isRunning
-
-      if (isRunning && this.stateManager.getLoopStartTime() !== undefined) {
-        // Clear ALL old events first
-        ;(scheduler as any).clearSequenceEvents(this.stateManager.getName())
-
-        // Get current scheduler time
-        const schedulerStartTime = (scheduler as any).startTime
-        const now = Date.now()
-        const currentTime = now - schedulerStartTime
-
-        // Reschedule events, but only future ones
-        this.scheduleEventsFromTime(scheduler, currentTime)
-
-        const panDesc = this.panManager.getPanDescription()
-        console.log(`🎚️ ${this.stateManager.getName()}: pan=${panDesc} (seamless)`)
-      }
-    }
-
+    this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
     return this
   }
 
