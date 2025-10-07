@@ -13,6 +13,7 @@ export class TempFileManager {
   private tempDir: string
   private instanceDir: string
   private createdFiles: Set<string> = new Set()
+  private exitHandlerRegistered: boolean = false
 
   constructor() {
     // Create instance-specific subdirectory to isolate files from other processes
@@ -31,7 +32,7 @@ export class TempFileManager {
     // Clean up old orphaned directories on startup (older than 1 hour)
     this.cleanupOldDirectories()
 
-    // Register cleanup on process exit
+    // Register cleanup on process exit (only once)
     this.registerExitHandler()
   }
 
@@ -111,16 +112,42 @@ export class TempFileManager {
 
   /**
    * Register cleanup handler on process exit
+   * Uses both 'beforeExit' and 'exit' for more reliable cleanup
    */
   private registerExitHandler(): void {
-    process.on('exit', () => {
+    // Prevent multiple registrations
+    if (this.exitHandlerRegistered) {
+      return
+    }
+    this.exitHandlerRegistered = true
+
+    // Cleanup function that removes files and directory
+    const cleanup = () => {
       try {
+        // First, try to remove individual files
+        for (const filepath of this.createdFiles) {
+          try {
+            if (fs.existsSync(filepath)) {
+              fs.unlinkSync(filepath)
+            }
+          } catch (error) {
+            // Continue with other files if one fails
+          }
+        }
+
+        // Then try to remove the instance directory
         if (fs.existsSync(this.instanceDir)) {
           fs.rmSync(this.instanceDir, { recursive: true, force: true })
         }
       } catch (error) {
         // Ignore errors during exit cleanup
       }
-    })
+    }
+
+    // Register on 'beforeExit' for async cleanup opportunity
+    process.on('beforeExit', cleanup)
+
+    // Also register on 'exit' as a fallback
+    process.on('exit', cleanup)
   }
 }
