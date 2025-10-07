@@ -119,13 +119,22 @@
 2. Create todo list
 3. Implement features
 4. Write/update tests
-5. **Update WORK_LOG.md**
+5. **Update WORK_LOG.md** (before committing, use `[PENDING]` for commit hash)
 6. **Update README.md** (sync with WORK_LOG.md status)
 7. Update other documentation
 8. **Update Serena memory** (important changes, issues, decisions)
-9. **Commit all changes including Serena memory files** (`.serena/memories/*.md`)
-10. **Add commit hash to WORK_LOG.md**
-11. **Commit the commit hash update**
+9. **Commit all changes including docs and Serena memory files** (`.serena/memories/*.md`)
+10. **Get the commit hash** (`git rev-parse --short HEAD`) - this is the "実コミット"
+11. **Update WORK_LOG.md with the first commit hash** (replace `[PENDING]` with the hash from step 10)
+12. **Amend the commit** (`git add docs/WORK_LOG.md && git commit --amend --no-edit`)
+
+**Important**: 
+- Record the **first commit hash** (from step 10) in WORK_LOG.md, not the final amended hash
+- This hash represents the "actual commit" with all changes
+- The amend only adds the commit hash reference to WORK_LOG.md
+- This avoids infinite loop of updating hashes
+
+**Note**: With Git Workflow (feature branches + PRs), we commit everything together before pushing, then create PR for review.
 
 ### Git Workflow and Branch Protection:
 
@@ -230,17 +239,24 @@ gh pr merge <number> --squash
 
 ### Commit Message Format:
 
+**Language: Japanese (日本語)**
+
 ```
-<type>: <description>
+<type>: <日本語での説明>
 
-<detailed explanation>
+<詳細な説明>
 
-<what changed>
-<why it changed>
-<impact>
+<何が変わったか>
+<なぜ変わったか>
+<影響>
 ```
 
 Types: feat, fix, docs, test, refactor, chore
+
+**Important**: 
+- Commit messages MUST be written in Japanese
+- Only the type prefix (feat, fix, etc.) remains in English
+- This applies to both commit titles and detailed descriptions
 
 ### Progress Reporting
 
