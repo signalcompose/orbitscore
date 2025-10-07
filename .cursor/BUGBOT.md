@@ -22,9 +22,10 @@ OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング�
 ## アーキテクチャパターン
 
 ### DSL設計
-- **度数0は休符**: 音楽的な沈黙を表す重要な概念
-- **度数1-12**: 半音階（C, C#, D, D#, E, F, F#, G, G#, A, A#, B）
-- **小数第3位まで**: 精度の維持（3 decimal places）
+- **仕様書準拠**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`（v2.0）に厳密に従う
+- **メソッドチェーン**: 仕様書で定義されたメソッドのみ使用
+- **`play()`メソッドのネスト**: 括弧を使った構造の正しい実装
+- **精度**: 小数第3位まで（3 decimal places）
 
 ### コード構造
 - **モノレポ構成**: `packages/`配下にengine, parser, vscode-extensionを配置
@@ -33,6 +34,10 @@ OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング�
 
 ### SuperCollider統合
 - **SynthDef管理**: `packages/engine/supercollider/synthdefs/`に配置
+- **setup.scdファイル**: SynthDef生成スクリプトの変更時は注意深くレビュー
+  - パラメータの型と範囲の確認
+  - エンベロープの適切な設定（doneAction: 2など）
+  - バス番号の正しい使用（In.ar/Out.ar/ReplaceOut.ar）
 - **オーディオデバイス**: 入力/出力/duplexの明確な分類
 - **エラーハンドリング**: SuperColliderサーバーの起動失敗、SynthDef読み込みエラーの適切な処理
 
@@ -52,14 +57,14 @@ OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング�
 ### ドキュメント
 - **仕様書**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`が最新のDSL仕様（v2.0）
 - **実装計画**: `docs/IMPLEMENTATION_PLAN.md`でフェーズ管理
-- **作業ログ**: `docs/WORK_LOG.md`は全コミットで更新必須
 
 ## よくある問題
 
 ### DSL関連
-- **度数0の扱い**: 休符として正しく処理されているか確認
 - **未定義メソッド**: 仕様書にないメソッドの追加（例: `config()`, `offset()`）
 - **メソッドチェーン**: 仕様書で定義されたメソッドのみ使用
+- **`play()`メソッドのネスト**: 括弧を使った構造の正しい実装
+- **仕様書との整合性**: 最新のDSL仕様（v2.0）に厳密に従う
 
 ### SuperCollider関連
 - **SynthDef未定義**: 使用前にSynthDefが読み込まれているか確認
@@ -74,10 +79,10 @@ OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング�
 ## レビュー時の注意点
 
 ### 必須確認事項
-1. **仕様書との整合性**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`に準拠しているか
+1. **仕様書との整合性**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`（v2.0）に厳密に準拠しているか
 2. **テストの追加**: 新機能に対応するテストが追加されているか
-3. **ドキュメント更新**: README.md、WORK_LOG.mdが更新されているか
-4. **型安全性**: TypeScriptの型定義が適切か
+3. **型安全性**: TypeScriptの型定義が適切か
+4. **ライブパフォーマンスの安定性**: 本番環境での動作に影響する変更がないか
 
 ### パフォーマンス
 - **オーディオバッファ**: 適切なバッファサイズとレイテンシ
