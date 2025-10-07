@@ -1,6 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 
 import * as sc from 'supercolliderjs'
 
@@ -167,11 +167,12 @@ export class SuperColliderPlayer {
 
   /**
    * Get audio file duration using sox
+   * Uses execFileSync to prevent command injection vulnerabilities
    */
   private getAudioFileDuration(filepath: string): number {
     try {
-      // Use sox to get audio file duration
-      const output = execSync(`soxi -D "${filepath}"`, { encoding: 'utf8' })
+      // Use execFileSync with separate arguments to prevent command injection
+      const output = execFileSync('soxi', ['-D', filepath], { encoding: 'utf8' })
       const duration = parseFloat(output.trim())
 
       if (isNaN(duration) || duration <= 0) {
@@ -237,7 +238,7 @@ export class SuperColliderPlayer {
     startTimeMs: number,
     sliceIndex: number,
     totalSlices: number,
-    eventDurationMs: number,
+    eventDurationMs: number | undefined,
     gainDb = 0,
     pan = 0,
     sequenceName = '',
@@ -249,10 +250,13 @@ export class SuperColliderPlayer {
 
     // Calculate playback rate to fit slice into event duration
     // rate = actual slice duration / desired event duration
+    // If eventDurationMs is undefined or 0, use natural rate (1.0)
     // If slice is shorter than event, we need to slow down (rate < 1.0) to stretch it
     // If slice is longer than event, we need to speed up (rate > 1.0) to compress it
-    // Use milliseconds to maintain precision, then convert
-    const rate = (sliceDuration * 1000) / eventDurationMs
+    let rate = 1.0
+    if (eventDurationMs && eventDurationMs > 0) {
+      rate = (sliceDuration * 1000) / eventDurationMs
+    }
 
     const play: ScheduledPlay = {
       time: startTimeMs,

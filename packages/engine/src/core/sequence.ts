@@ -327,8 +327,9 @@ export class Sequence {
 
           // Schedule event
           if (chopDivisions > 1) {
-            // Ensure duration is defined (should always be set by TimingCalculator)
-            const eventDuration = event.duration ?? 0
+            // Ensure duration is defined and non-zero to prevent Infinity rate calculation
+            // If duration is 0 or undefined, use slice's natural duration (rate = 1.0)
+            const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
             scheduler.scheduleSliceEvent(
               resolvedFilePath,
               startTimeMs,
@@ -409,8 +410,9 @@ export class Sequence {
 
         // Use sox slice playback instead of file slicing
         if (this._chopDivisions && this._chopDivisions > 1) {
-          // Ensure duration is defined (should always be set by TimingCalculator)
-          const eventDuration = event.duration ?? 0
+          // Ensure duration is defined and non-zero to prevent Infinity rate calculation
+          // If duration is 0 or undefined, use slice's natural duration (rate = 1.0)
+          const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
           scheduler.scheduleSliceEvent(
             resolvedFilePath,
             startTimeMs,
@@ -493,6 +495,11 @@ export class Sequence {
 
     const { scheduler, currentTime } = prepared
 
+    // Set loop state BEFORE calling loopSequence to avoid race condition
+    // The setInterval callback will check this state via getIsLoopingFn()
+    this._isLooping = true
+    this._isPlaying = true
+
     const result = loopSequence({
       sequenceName: this._name,
       scheduler,
@@ -504,8 +511,7 @@ export class Sequence {
       getIsMutedFn: () => this._isMuted,
     })
 
-    this._isPlaying = result.isPlaying
-    this._isLooping = result.isLooping
+    // Update remaining state from result
     this._loopStartTime = result.loopStartTime
     this.loopTimer = result.loopTimer
 
