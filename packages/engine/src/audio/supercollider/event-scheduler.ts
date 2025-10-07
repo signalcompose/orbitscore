@@ -120,7 +120,12 @@ export class EventScheduler {
 
       while (this.scheduledPlays.length > 0 && this.scheduledPlays[0].time <= now) {
         const play = this.scheduledPlays.shift()!
-        this.executePlayback(play.filepath, play.options, play.sequenceName, play.time)
+        // Execute playback asynchronously but handle errors
+        this.executePlayback(play.filepath, play.options, play.sequenceName, play.time).catch(
+          (error) => {
+            console.error(`❌ Playback error for ${play.sequenceName}:`, error)
+          },
+        )
       }
     }, 1)
   }
