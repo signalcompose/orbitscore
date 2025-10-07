@@ -372,7 +372,6 @@ export class Sequence {
     const tempo = this._tempo || globalState.tempo || 120
     const beatDuration = 60000 / tempo // ms per beat
     const barDuration = beatDuration * 4 // assuming 4/4 time
-    const chopDivisions = this._chopDivisions || 1
 
     // Schedule events for current iteration
     // When called from loop(), baseTime already includes the correct time

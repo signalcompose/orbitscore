@@ -48,7 +48,7 @@ export class SuperColliderPlayer {
   private intervalId: NodeJS.Timeout | null = null
 
   constructor() {
-    // @ts-ignore - __dirname is available in CommonJS
+    // __dirname is available in CommonJS context
     this.synthDefPath = path.join(__dirname, '../../supercollider/synthdefs/orbitPlayBuf.scsyndef')
   }
 
@@ -333,7 +333,6 @@ export class SuperColliderPlayer {
 
       while (this.scheduledPlays.length > 0 && this.scheduledPlays[0].time <= now) {
         const play = this.scheduledPlays.shift()!
-        console.log(`⏰ Executing playback at ${now}ms (scheduled: ${play.time}ms)`)
         this.executePlayback(play.filepath, play.options, play.sequenceName, play.time)
       }
     }, 1)
