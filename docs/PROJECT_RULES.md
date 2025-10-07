@@ -145,6 +145,10 @@ gh pr merge <number> --squash
 
 **Important:**
 - **ALWAYS create a branch before starting work** - never commit directly to main
+- **Branch names MUST be in English only** - no Japanese characters (日本語禁止)
+  - ✅ Good: `11-refactor-audio-slicer-phase-2-1`
+  - ❌ Bad: `11-refactor-audio-slicertsをモジュール分割phase-2-1`
+  - Reason: Japanese characters in branch names can cause issues with some tools and environments
 - **Branches are kept for history** - do not delete after merge
 - User typically handles merging, but agent may assist with complex implementations
 - Always use `--squash` for clean commit history on main branch
