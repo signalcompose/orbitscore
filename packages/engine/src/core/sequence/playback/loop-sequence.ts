@@ -8,7 +8,8 @@ export interface LoopSequenceOptions {
   scheduleEventsFn: (scheduler: any, offset: number, baseTime: number) => void
   getPatternDurationFn: () => number
   clearSequenceEventsFn: (sequenceName: string) => void
-  isMuted: boolean
+  getIsLoopingFn: () => boolean
+  getIsMutedFn: () => boolean
 }
 
 /**
@@ -41,7 +42,8 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
     scheduleEventsFn,
     getPatternDurationFn,
     clearSequenceEventsFn,
-    isMuted,
+    getIsLoopingFn,
+    getIsMutedFn,
   } = options
 
   // Clear old events for this sequence first
@@ -52,14 +54,14 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
 
   // Track next scheduled time (cumulative, to avoid drift)
   let nextScheduleTime = currentTime
-  let isLooping = true
 
   // Schedule first iteration
   scheduleEventsFn(scheduler, 0, nextScheduleTime)
 
   // Set up loop timer
+  // Note: isLooping and isMuted are checked via getter functions to reflect current state
   const loopTimer = setInterval(() => {
-    if (isLooping && !isMuted) {
+    if (getIsLoopingFn() && !getIsMutedFn()) {
       nextScheduleTime += patternDuration // Cumulative time, no drift
       // Clear old scheduled events for this sequence before scheduling new ones
       clearSequenceEventsFn(sequenceName)
