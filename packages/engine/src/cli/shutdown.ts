@@ -48,6 +48,6 @@ export async function shutdown(interpreter: InterpreterV2 | null): Promise<void>
  * ```
  */
 export function registerShutdownHandlers(getInterpreter: () => InterpreterV2 | null): void {
-  process.on('SIGINT', () => shutdown(getInterpreter()))
-  process.on('SIGTERM', () => shutdown(getInterpreter()))
+  process.on('SIGINT', async () => await shutdown(getInterpreter()))
+  process.on('SIGTERM', async () => await shutdown(getInterpreter()))
 }

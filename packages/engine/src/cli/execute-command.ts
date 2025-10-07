@@ -92,8 +92,9 @@ export async function executeCommand(
 
     case 'repl': {
       // Start REPL mode without requiring a file
+      // Note: startREPLMode() returns Promise<never>, so this never returns
       await startREPLMode({ audioDevice })
-      return null // Never reached
+      break
     }
 
     case 'eval': {
@@ -116,7 +117,8 @@ export async function executeCommand(
 
     case 'test':
       await playTestSound()
-      return null // Never reached
+      // Never reached - playTestSound() returns Promise<never>
+      break
 
     case 'help':
     case undefined:
@@ -128,4 +130,7 @@ export async function executeCommand(
       printUsage()
       process.exit(1)
   }
+
+  // This line is technically unreachable but satisfies TypeScript's type checker
+  return null
 }
