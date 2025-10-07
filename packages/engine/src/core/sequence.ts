@@ -7,7 +7,8 @@ import * as path from 'path'
 
 import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
-import { TimingCalculator, TimedEvent } from '../timing/timing-calculator'
+import { TimedEvent } from '../timing/timing-calculator'
+import { calculateEventTiming } from '../timing/calculation'
 
 import { Global, Meter, Scheduler } from './global'
 import { preparePlayback } from './sequence/playback/prepare-playback'
@@ -263,7 +264,7 @@ export class Sequence {
     // Apply length multiplier to bar duration (stretches each event)
     const effectiveBarDuration = barDuration * (this._length || 1)
 
-    this._timedEvents = TimingCalculator.calculateTiming(elements, effectiveBarDuration)
+    this._timedEvents = calculateEventTiming(elements, effectiveBarDuration)
 
     // ${this._name}: ${this._timedEvents.length} events
 
