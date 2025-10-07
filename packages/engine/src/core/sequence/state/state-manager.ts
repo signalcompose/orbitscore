@@ -3,7 +3,7 @@
  * Handles sequence state management and inspection
  */
 
-import { AudioSlice } from '../../../audio/audio-engine'
+import { AudioSlice } from '../../../audio/types'
 import { PlayElement } from '../../../parser/audio-parser'
 import { TimedEvent } from '../../../timing/calculation'
 import { StateManagerState } from '../types'

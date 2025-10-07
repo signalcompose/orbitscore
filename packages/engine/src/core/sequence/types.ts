@@ -2,7 +2,7 @@
  * Type definitions for Sequence module
  */
 
-import { AudioSlice } from '../../audio/audio-engine'
+import { AudioSlice } from '../../audio/types'
 import { PlayElement, RandomValue } from '../../parser/audio-parser'
 import { TimedEvent } from '../../timing/calculation'
 import { Meter, Scheduler } from '../global/types'
