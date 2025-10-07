@@ -11,6 +11,7 @@ import { EffectParams } from './types'
 export class SynthDefLoader {
   private synthDefPath: string
   private effectSynths: Map<string, Map<string, number>> = new Map() // Track mastering effect synths by target and type
+  private nextSynthId = 2000 // Start from 2000 to avoid conflicts with other synths
 
   constructor(private oscClient: OSCClient) {
     // __dirname is available in CommonJS context
@@ -109,8 +110,8 @@ export class SynthDefLoader {
         await this.oscClient.sendMessage(setParams)
         console.log(`✅ ${effectType} updated`)
       } else {
-        // Create new effect synth
-        const synthId = Math.floor(Math.random() * 1000000) + 1000
+        // Create new effect synth with monotonically increasing ID
+        const synthId = this.nextSynthId++
         const createParams: any[] = [
           '/s_new',
           synthDefName,
