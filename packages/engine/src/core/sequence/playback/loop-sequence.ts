@@ -24,13 +24,13 @@ export interface LoopSequenceResult {
 
 /**
  * Execute loop playback of a sequence
- * 
+ *
  * This function:
  * - Schedules first iteration immediately
  * - Sets up interval timer for subsequent iterations
  * - Tracks cumulative time to avoid drift
  * - Respects mute state
- * 
+ *
  * @param options - Loop sequence options
  * @returns Updated playback state and loop timer
  */

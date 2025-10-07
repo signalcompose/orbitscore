@@ -21,12 +21,12 @@ export interface RunSequenceResult {
 
 /**
  * Execute one-shot playback of a sequence
- * 
+ *
  * This function:
  * - Schedules events once from current time
  * - Auto-stops after pattern duration
  * - Clears scheduled events on completion
- * 
+ *
  * @param options - Run sequence options
  * @returns Updated playback state
  */

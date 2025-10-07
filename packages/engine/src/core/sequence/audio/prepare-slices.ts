@@ -11,12 +11,12 @@ export interface PrepareSlicesOptions {
 
 /**
  * Prepare audio slices for chop() functionality
- * 
+ *
  * This function:
  * - Checks if slicing is needed (chopDivisions > 1)
  * - Uses audioSlicer to create slice files
  * - Handles errors gracefully
- * 
+ *
  * @param options - Slice preparation options
  */
 export async function prepareSlices(options: PrepareSlicesOptions): Promise<void> {

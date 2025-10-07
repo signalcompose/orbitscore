@@ -181,7 +181,9 @@ export class SuperColliderPlayer {
 
       return duration
     } catch (error: any) {
-      console.warn(`⚠️  Failed to get duration for ${filepath}: ${error.message}, using default 0.3s`)
+      console.warn(
+        `⚠️  Failed to get duration for ${filepath}: ${error.message}, using default 0.3s`,
+      )
       return 0.3
     }
   }
