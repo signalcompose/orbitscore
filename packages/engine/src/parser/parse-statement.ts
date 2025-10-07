@@ -110,7 +110,7 @@ export class StatementParser {
   /**
    * Parse method call
    */
-  private parseMethodCall(): { statement: Statement; newPos: number } {
+  private parseMethodCall(): { statement: Statement | null; newPos: number } {
     const targetResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = targetResult.newPos
     const target = targetResult.token.value
@@ -207,7 +207,8 @@ export class StatementParser {
       }
     }
 
-    return { statement: null as any, newPos: this.pos }
+    // Identifier without method call (invalid syntax, skip it)
+    return { statement: null, newPos: this.pos }
   }
 
   /**
