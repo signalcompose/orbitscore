@@ -55,6 +55,10 @@ hihat.run()
   const interpreter = new InterpreterV2()
   await interpreter.execute(ir)
 
-  // Keep process alive - never resolves
+  // Keep process alive indefinitely to continue audio playback
+  // This is intentional: the test command is designed to play sound continuously
+  // until the user manually terminates with Ctrl+C (SIGINT).
+  // The shutdown handlers in shutdown.ts will gracefully stop SuperCollider.
+  // Note: This promise never resolves, which is the expected behavior.
   await new Promise(() => {})
 }

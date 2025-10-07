@@ -104,9 +104,12 @@ export async function executeCommand(
 
     case 'repl':
       // Start REPL mode without requiring a file
+      // This is intentional: REPL is an interactive mode that runs indefinitely
+      // until the user terminates with Ctrl+C. The startREPLMode() function
+      // creates a readline interface and waits for user input continuously.
       // Note: startREPLMode() never resolves, so this never returns
       await startREPLMode({ audioDevice })
-      // Never reached
+      // Never reached (but required for ESLint no-fallthrough rule)
       break
 
     case 'eval': {
@@ -134,9 +137,12 @@ export async function executeCommand(
     }
 
     case 'test':
-      // playTestSound() never resolves, so this never returns
+      // Play test sound continuously until user terminates
+      // This is intentional: the test command plays a drum pattern indefinitely
+      // to verify audio engine functionality. The user must manually stop with Ctrl+C.
+      // Note: playTestSound() never resolves, so this never returns
       await playTestSound()
-      // Never reached
+      // Never reached (but required for ESLint no-fallthrough rule)
       break
 
     case 'help':

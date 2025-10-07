@@ -68,6 +68,12 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
     }
   })
 
-  // Keep process alive - never resolves
+  // Keep process alive indefinitely for interactive REPL
+  // This is intentional: REPL mode is designed to run continuously,
+  // listening for user input on stdin until the user terminates with Ctrl+C.
+  // The readline interface will continue to emit 'line' events as long as
+  // the process is alive. The shutdown handlers in shutdown.ts will handle
+  // graceful termination of SuperCollider when the user exits.
+  // Note: This promise never resolves, which is the expected behavior.
   await new Promise(() => {})
 }
