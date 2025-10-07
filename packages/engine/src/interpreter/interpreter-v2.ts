@@ -62,10 +62,8 @@ export class InterpreterV2 {
     }
 
     // Process sequence initializations
-    if (ir.sequenceInits) {
-      for (const seqInit of ir.sequenceInits) {
-        await processSequenceInit(seqInit, this.state)
-      }
+    for (const seqInit of ir.sequenceInits) {
+      await processSequenceInit(seqInit, this.state)
     }
 
     // Process statements
@@ -85,21 +83,11 @@ export class InterpreterV2 {
 
     // Convert Map to plain object for easier inspection
     for (const [name, global] of this.state.globals.entries()) {
-      state.globals[name] = {
-        isRunning: (global as any)._isRunning,
-        tempo: (global as any)._tempo,
-        beat: (global as any)._beat,
-      }
+      state.globals[name] = global.getState()
     }
 
     for (const [name, sequence] of this.state.sequences.entries()) {
-      state.sequences[name] = {
-        isPlaying: (sequence as any)._isPlaying,
-        isLooping: (sequence as any)._isLooping,
-        isMuted: (sequence as any)._isMuted,
-        audioFile: (sequence as any)._audioFile,
-        timedEvents: (sequence as any).timedEvents,
-      }
+      state.sequences[name] = sequence.getState()
     }
 
     return state
