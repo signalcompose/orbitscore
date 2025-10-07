@@ -21,14 +21,14 @@
 
 ### 🟡 中優先度（200-500行）
 5. **audio-engine.ts** (363行) - オーディオエンジン
-6. **cli-audio.ts** (282行) - CLI処理
+6. ~~**cli-audio.ts** (282行)~~ ✅ **完了** (PR #16)
 7. **interpreter-v2.ts** (275行) - インタープリター
 
 ### 🟢 低優先度（200行未満）
 8. **simple-player.ts** (196行)
 9. **precision-scheduler.ts** (173行)
-10. **timing-calculator.ts** (151行)
-11. ~~**audio-slicer.ts** (139行)~~ ✅ **完了**
+10. ~~**timing-calculator.ts** (151行)~~ ✅ **完了** (PR #15)
+11. ~~**audio-slicer.ts** (139行)~~ ✅ **完了** (PR #12)
 
 ## 実施順序
 
@@ -61,33 +61,44 @@
 - **テスト**: ✅ 115 tests passed
 - **コミット**: `393308d`, `74537f2`
 
-#### 2-2: timing-calculator.ts (151行) 🔜 **次のステップ**
+#### 2-2: timing-calculator.ts (151行) ✅ **完了** (PR #15)
 - **現状**: タイミング計算ロジック
 - **課題**:
   - 複数の計算ロジックが1ファイルに集約
   - テストが困難な部分がある
-- **リファクタリング方針**:
-  - `timing/` ディレクトリ内で分割
-  - `calculate-event-timing.ts` - イベントタイミング計算
-  - `calculate-pattern-duration.ts` - パターン期間計算
-  - `flatten-play-pattern.ts` - パターン展開
-- **テスト**: 各関数に対する単体テストを追加
+- **リファクタリング結果**:
+  - `timing/calculation/` ディレクトリを作成
+  - `types.ts` - TimedEvent型定義
+  - `calculate-event-timing.ts` - イベントタイミング計算（再帰処理）
+  - `convert-to-absolute-timing.ts` - 絶対タイミング変換
+  - `format-timing.ts` - デバッグ用フォーマット
+  - `timing-calculator.ts` - 後方互換性のためのラッパークラス（@deprecated）
+- **バグ修正**:
+  - calculateEventTimingの再帰呼び出しを修正
+  - TimedEvent型のインポート元を統一
+- **テスト**: ✅ 115 tests passed
+- **コミット**: `1092e7f`, `e88677a`, `de64dbc`
 
 ### Phase 3: 中規模ファイル
 
-#### 3-1: cli-audio.ts (282行)
+#### 3-1: cli-audio.ts (282行) ✅ **完了** (PR #16)
 - **現状**: CLI処理、引数パース、実行モード管理
 - **課題**:
   - コマンド処理、引数パース、実行ロジックが混在
-- **リファクタリング方針**:
+- **リファクタリング結果**:
   - `cli/` ディレクトリを作成
-  - `parse-arguments.ts` - 引数パース
-  - `execute-command.ts` - コマンド実行
-  - `repl-mode.ts` - REPLモード
-  - `play-mode.ts` - 再生モード
-- **テスト**: コマンドラインインターフェースのE2Eテスト
+  - `types.ts` - CLI型定義（ParsedArguments, PlayOptions, REPLOptions, PlayResult）
+  - `parse-arguments.ts` - 引数パース、グローバルデバッグフラグ設定
+  - `play-mode.ts` - ファイル再生処理、timed execution制御
+  - `repl-mode.ts` - REPLモード起動、SuperColliderブート、インタラクティブ入力処理
+  - `test-sound.ts` - テスト音（ドラムパターン）再生
+  - `shutdown.ts` - SuperColliderサーバーのグレースフルシャットダウン、シグナルハンドラー登録
+  - `execute-command.ts` - コマンドルーティング、ヘルプ表示、エラーハンドリング
+  - `cli-audio.ts` - 薄いラッパー（後方互換性のため）
+- **テスト**: ✅ 115 tests passed
+- **コミット**: `[次のコミット]`
 
-#### 3-2: interpreter-v2.ts (275行)
+#### 3-2: interpreter-v2.ts (275行) 🔜 **次のステップ**
 - **現状**: DSLインタープリター
 - **課題**:
   - 評価ロジックが複雑
@@ -191,7 +202,8 @@
 ## 現在の状態
 
 - **Phase 1**: ✅ 完了（PR #10マージ済み）
-- **Phase 2-1**: ✅ 完了（audio-slicer.ts、PR #12）
-- **Phase 2-2**: 🔜 次のステップ（timing-calculator.ts）
-- **Phase 3**: ⏳ 未着手
+- **Phase 2-1**: ✅ 完了（`audio-slicer.ts`のモジュール分割、バグ修正、テスト修正、pre-commit強化、PR #12）
+- **Phase 2-2**: ✅ 完了（`timing-calculator.ts`のモジュール分割、バグ修正、テスト修正、PR #15）
+- **Phase 3-1**: ✅ 完了（`cli-audio.ts`のモジュール分割、PR #16）
+- **Phase 3-2**: 🔜 次のステップ（`interpreter-v2.ts`）
 - **Phase 4**: ⏳ 未着手
