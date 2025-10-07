@@ -25,13 +25,12 @@ describe.skipIf(process.env.CI === 'true')(
       // }
 
       player = new SuperColliderPlayer()
-      ;(player as any).server = {
+      ;(player as any).oscClient.server = {
         send: {
           msg: vi.fn().mockResolvedValue(undefined),
         },
       }
-      ;(player as any).isBooted = true
-      ;(player as any).bufferCache = new Map()
+      ;(player as any).bufferManager.bufferCache = new Map()
     })
 
     afterEach(() => {
@@ -42,9 +41,9 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert 0 dB to amp 1.0 (100%)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
 
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback(
           '/path/to/sample.wav',
@@ -61,9 +60,9 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert -6 dB to amp ~0.501 (~50%)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
 
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback(
           '/path/to/sample.wav',
@@ -85,8 +84,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert -12 dB to amp ~0.251 (~25%)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', { gainDb: -12 }, '', 0)
 
@@ -101,8 +100,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert +6 dB to amp ~2.0 (200%)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', { gainDb: 6 }, '', 0)
 
@@ -117,8 +116,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert -Infinity dB to amp 0.0 (silence)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback(
           '/path/to/sample.wav',
@@ -133,8 +132,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should use default 0 dB (amp 1.0) when not specified', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', {}, '', 0)
 
@@ -144,8 +143,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should handle decimal dB values like -3.5', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', { gainDb: -3.5 }, '', 0)
 
@@ -162,8 +161,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert pan -100 to -1.0 (full left)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: -100 }, '', 0)
 
@@ -173,8 +172,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert pan 0 to 0.0 (center)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: 0 }, '', 0)
 
@@ -184,8 +183,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert pan 100 to 1.0 (full right)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: 100 }, '', 0)
 
@@ -195,8 +194,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert pan -50 to -0.5 (mid-left)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: -50 }, '', 0)
 
@@ -206,8 +205,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should convert pan 50 to 0.5 (mid-right)', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: 50 }, '', 0)
 
@@ -217,8 +216,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should use default pan 0 (center) when not specified', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback('/path/to/sample.wav', {}, '', 0)
 
@@ -230,8 +229,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should correctly convert both gainDb and pan', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback(
           '/path/to/sample.wav',
@@ -251,8 +250,8 @@ describe.skipIf(process.env.CI === 'true')(
       it('should handle extreme values', async () => {
         const mockBufferCache = new Map()
         mockBufferCache.set('/path/to/sample.wav', { bufnum: 0, duration: 1.0 })
-        ;(player as any).bufferCache = mockBufferCache
-        const sendMsg = vi.spyOn((player as any).server.send, 'msg')
+        ;(player as any).bufferManager.bufferCache = mockBufferCache
+        const sendMsg = vi.spyOn((player as any).oscClient.server.send, 'msg')
 
         await (player as any).testExecutePlayback(
           '/path/to/sample.wav',
