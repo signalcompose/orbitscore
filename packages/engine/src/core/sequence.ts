@@ -460,7 +460,9 @@ export class Sequence {
     if (!prepared) return this
 
     const { scheduler, currentTime } = prepared
-    this.loopTimer = undefined // Clear loop timer reference
+    // Note: preparePlayback() has already cleared any existing loop timer
+    // run() is one-shot playback, so we ensure loopTimer remains undefined
+    this.loopTimer = undefined
 
     const result = runSequence({
       sequenceName: this._name,
@@ -516,7 +518,8 @@ export class Sequence {
     const scheduler = this.global.getScheduler()
     ;(scheduler as any).clearSequenceEvents(this._name)
 
-    // Clear loop timer
+    // Clear loop timer (only exists if loop() was called, not run())
+    // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
     if (this.loopTimer) {
       clearInterval(this.loopTimer)
       this.loopTimer = undefined
