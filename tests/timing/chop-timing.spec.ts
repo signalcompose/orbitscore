@@ -28,7 +28,7 @@ describe('Chop Timing', () => {
       // Setup
       global.tempo(30).beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -53,7 +53,7 @@ describe('Chop Timing', () => {
       // Setup
       global.tempo(120).beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -78,7 +78,7 @@ describe('Chop Timing', () => {
       // Setup
       global.tempo(60).beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 0, 3, 0) // Only 1st and 3rd slices
 
@@ -139,7 +139,7 @@ describe('Chop Timing', () => {
       await global.run()
 
       sequence.beat(4, 4).length(1)
-      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -193,7 +193,7 @@ describe('Chop Timing', () => {
       await global.run()
 
       sequence.beat(4, 4).length(1)
-      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(8) // 8 slices
       sequence.play(2, 4, 6, 8) // Even slices only
 
