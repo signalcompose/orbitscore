@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from 'vitest'
 
-import { TimingCalculator } from '../../packages/engine/src/timing/timing-calculator'
+import { calculateEventTiming } from '../../packages/engine/src/timing/calculation'
 
 describe('Nested Play Timing Calculation', () => {
   describe('play(1, (2, 3), 2, (3, 4, 1))', () => {
@@ -17,7 +17,7 @@ describe('Nested Play Timing Calculation', () => {
       ]
 
       const barDuration = 4000 // 4 seconds
-      const events = TimingCalculator.calculateTiming(elements, barDuration)
+      const events = calculateEventTiming(elements, barDuration)
 
       console.log(
         'Events:',
@@ -47,7 +47,7 @@ describe('Nested Play Timing Calculation', () => {
       const elements = [1, { type: 'nested', elements: [2, 3, 4] }, 5]
 
       const barDuration = 3000 // 3 seconds
-      const events = TimingCalculator.calculateTiming(elements, barDuration)
+      const events = calculateEventTiming(elements, barDuration)
 
       console.log(
         'Events:',

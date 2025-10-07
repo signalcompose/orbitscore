@@ -20,8 +20,8 @@ vi.mock('os', () => ({
   tmpdir: vi.fn(() => '/tmp'),
 }))
 
-import * as fs from 'fs'
 import * as os from 'os'
+import * as fs from 'fs'
 
 import { AudioSlicer } from '../../packages/engine/src/audio/audio-slicer'
 
@@ -209,19 +209,24 @@ describe('AudioSlicer', () => {
   })
 
   describe('cleanup', () => {
-    it('should clean up temporary files', async () => {
+    it('should clean up temporary files and clear cache', async () => {
       const filepath = '/path/to/test.wav'
       const divisions = 4
 
       // Slice the file
       await slicer.sliceAudioFile(filepath, divisions)
 
-      // Cleanup
+      // Verify that slices are accessible before cleanup
+      const slicePathBefore = slicer.getSliceFilepath(filepath, divisions, 1)
+      expect(slicePathBefore).not.toBeNull()
+      expect(slicePathBefore).toContain('test_slice1_of_4.wav')
+
+      // Clean up temporary files and clear cache
       slicer.cleanup()
 
-      // Should clear cache
-      const slicePath = slicer.getSliceFilepath(filepath, divisions, 1)
-      expect(slicePath).toBeNull()
+      // After cleanup, cache should be cleared
+      const slicePathAfter = slicer.getSliceFilepath(filepath, divisions, 1)
+      expect(slicePathAfter).toBeNull()
     })
   })
 })

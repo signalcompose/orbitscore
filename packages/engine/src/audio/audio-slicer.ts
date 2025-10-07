@@ -1,8 +1,6 @@
 /**
  * Audio file slicer for chop() functionality
- * Wrapper class for backward compatibility
- *
- * @deprecated Use slicing module directly for new code
+ * Simple wrapper around slicing module for easier usage
  */
 
 import {
@@ -13,10 +11,8 @@ import {
   sliceAudioFile,
 } from './slicing'
 
-export { AudioSliceInfo }
-
 /**
- * Audio slicer class (backward compatibility wrapper)
+ * Audio slicer class with singleton pattern
  */
 export class AudioSlicer {
   private cache: SliceCache
@@ -30,27 +26,34 @@ export class AudioSlicer {
   }
 
   /**
-   * Slice an audio file into n equal parts
+   * Slice audio file into equal parts
    */
   sliceAudioFile(filepath: string, divisions: number): AudioSliceInfo[] {
     return sliceAudioFile(filepath, divisions, this.cache, this.fileManager, this.wavProcessor)
   }
 
   /**
-   * Get a specific slice filepath
+   * Get slice filepath (for backward compatibility)
    */
-  getSliceFilepath(originalPath: string, divisions: number, sliceNumber: number): string | null {
-    return this.cache.getSliceFilepath(originalPath, divisions, sliceNumber)
+  getSliceFilepath(filepath: string, divisions: number, sliceNumber: number): string | null {
+    const slices = this.cache.get(filepath, divisions)
+    if (!slices) return null
+
+    const slice = slices.find((s) => s.sliceNumber === sliceNumber)
+    return slice?.filepath || null
   }
 
   /**
-   * Clean up temporary files
+   * Clean up temporary files (for testing)
    */
   cleanup(): void {
-    this.fileManager.cleanup()
+    // Clear the cache to remove references to temporary files
     this.cache.clear()
+
+    // Clean up temporary files created by this instance
+    this.fileManager.cleanup()
   }
 }
 
-// Global instance for backward compatibility
+// Global instance for convenience
 export const audioSlicer = new AudioSlicer()

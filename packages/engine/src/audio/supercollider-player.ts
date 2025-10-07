@@ -42,10 +42,17 @@ export class SuperColliderPlayer {
   }
 
   /**
-   * Get current output device name
+   * Get current output device
    */
-  getCurrentOutputDevice(): string | null {
-    return this.oscClient.getCurrentOutputDevice()
+  getCurrentOutputDevice(): AudioDevice | undefined {
+    const deviceName = this.oscClient.getCurrentOutputDevice()
+    if (!deviceName) {
+      return undefined
+    }
+
+    // Find the device in available devices
+    const devices = this.getAvailableDevices()
+    return devices.find((device) => device.name === deviceName)
   }
 
   /**
@@ -157,7 +164,7 @@ export class SuperColliderPlayer {
     await this.oscClient.quit()
   }
 
-  // デバッグ用のプロパティアクセス（後方互換性）
+  // AudioEngine interface implementation
   get isRunning(): boolean {
     return this.eventScheduler.isRunning
   }
@@ -167,7 +174,8 @@ export class SuperColliderPlayer {
   }
 
   /**
-   * テスト用: 再生を実行（内部メソッドを公開）
+   * Test helper: Execute playback (exposes internal method for testing)
+   * @deprecated Only for testing purposes
    */
   async testExecutePlayback(
     filepath: string,

@@ -1,12 +1,14 @@
+import type { Scheduler } from '../../global/types'
+
 /**
  * Options for one-shot sequence playback
  */
 export interface RunSequenceOptions {
   sequenceName: string
-  scheduler: any
+  scheduler: Scheduler
   currentTime: number
   isPlaying: boolean
-  scheduleEventsFn: (scheduler: any, offset: number, baseTime: number) => void
+  scheduleEventsFn: (scheduler: Scheduler, offset: number, baseTime: number) => void
   getPatternDurationFn: () => number
   clearSequenceEventsFn: (sequenceName: string) => void
 }
