@@ -26,7 +26,8 @@ describe('Chop Timing', () => {
   describe('Timing Calculation', () => {
     it('should schedule 4 slices at correct intervals (30 BPM)', async () => {
       // Setup
-      global.tempo(30).beat(4, 4)
+      global.tempo(30)
+      global.beat(4, 4)
       sequence.beat(4, 4).length(1)
       sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
@@ -51,7 +52,8 @@ describe('Chop Timing', () => {
 
     it('should schedule 4 slices at correct intervals (120 BPM)', async () => {
       // Setup
-      global.tempo(120).beat(4, 4)
+      global.tempo(120)
+      global.beat(4, 4)
       sequence.beat(4, 4).length(1)
       sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
@@ -76,7 +78,8 @@ describe('Chop Timing', () => {
 
     it('should schedule only specified slices', async () => {
       // Setup
-      global.tempo(60).beat(4, 4)
+      global.tempo(60)
+      global.beat(4, 4)
       sequence.beat(4, 4).length(1)
       sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
@@ -135,7 +138,8 @@ describe('Chop Timing', () => {
       player.loadBuffer = async () => ({ bufnum: 0, duration: 1.0 })
 
       // Setup
-      global.tempo(60).beat(4, 4)
+      global.tempo(60)
+      global.beat(4, 4)
       await global.run()
 
       sequence.beat(4, 4).length(1)
@@ -189,7 +193,8 @@ describe('Chop Timing', () => {
       player.loadBuffer = async () => ({ bufnum: 0, duration: 1.0 })
 
       // Setup
-      global.tempo(60).beat(4, 4)
+      global.tempo(60)
+      global.beat(4, 4)
       await global.run()
 
       sequence.beat(4, 4).length(1)
@@ -218,7 +223,8 @@ describe('Chop Timing', () => {
       player.getAudioDuration = () => 1.0 // 1 second audio file
 
       // Setup
-      global.tempo(60).beat(4, 4)
+      global.tempo(60)
+      global.beat(4, 4)
       sequence.beat(4, 4).length(1)
       sequence.audio('test-assets/audio/test.wav')
       sequence.chop(4)
