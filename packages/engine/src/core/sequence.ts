@@ -334,6 +334,7 @@ export class Sequence {
               startTimeMs,
               event.sliceNumber,
               chopDivisions,
+              event.duration, // Event duration in ms (time slot for this event)
               finalGainDb,
               eventPan,
               this._name,
@@ -413,6 +414,7 @@ export class Sequence {
             startTimeMs,
             event.sliceNumber,
             this._chopDivisions,
+            event.duration, // Event duration in ms (time slot for this event)
             finalGainDb,
             eventPan,
             this._name,
