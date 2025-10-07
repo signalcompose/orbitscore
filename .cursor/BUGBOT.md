@@ -1,13 +1,16 @@
 # OrbitScore プロジェクトレビューガイドライン
 
-## 🌐 言語設定
+## 🌐 言語設定 - CRITICAL REQUIREMENT
 
-**レビューコメントは必ず日本語で記述してください。**
+**⚠️ MANDATORY: ALL review comments MUST be written in JAPANESE (日本語) ⚠️**
 
-- すべてのコメント、説明、提案は日本語で行う
-- 技術用語は英語のまま使用可（例: SuperCollider, SynthDef, TypeScript）
-- コード例は英語のまま
-- 理由: このプロジェクトの開発者は日本語話者であり、日本語でのコミュニケーションが最も効率的
+**This is a CRITICAL requirement for this project. Failure to follow this will result in ineffective communication.**
+
+- **ALL comments, explanations, and suggestions MUST be in Japanese**
+- Technical terms can remain in English (例: SuperCollider, SynthDef, TypeScript)
+- Code examples remain in English
+- **Reason**: This project's developers are Japanese speakers, and Japanese communication is most efficient
+- **IMPORTANT**: If you write in English, the review will be ignored and ineffective
 
 ## プロジェクト概要
 
@@ -107,3 +110,11 @@ OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング�
 - [DSL仕様書](../docs/INSTRUCTION_ORBITSCORE_DSL.md)
 - [実装計画](../docs/IMPLEMENTATION_PLAN.md)
 - [プロジェクトルール](../docs/PROJECT_RULES.md)
+
+---
+
+## 🚨 FINAL REMINDER
+
+**ALL REVIEW COMMENTS MUST BE IN JAPANESE (日本語) - NO EXCEPTIONS**
+
+This is the most important rule for effective communication in this project.
