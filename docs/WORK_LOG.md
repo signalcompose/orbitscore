@@ -15,6 +15,101 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.18 Refactor Audio Slicer - Phase 2-1 (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+**Branch**: 11-refactor-audio-slicer-phase-2-1
+**Issue**: #11
+
+**Work Content**: `audio-slicer.ts`（151行）を5つのモジュールに分割し、コーディング規約に準拠
+
+#### リファクタリング内容
+
+**1. モジュール分割**
+新しいディレクトリ構造：
+```
+packages/engine/src/audio/slicing/
+├── index.ts                 # モジュールエクスポート
+├── types.ts                 # 型定義
+├── slice-cache.ts           # キャッシュ管理
+├── temp-file-manager.ts     # 一時ファイル管理
+├── wav-processor.ts         # WAV処理
+└── slice-audio-file.ts      # メインロジック
+```
+
+**2. 各モジュールの責務**
+- `types.ts`: `AudioSliceInfo`, `AudioProperties`の型定義
+- `slice-cache.ts`: スライスキャッシュの管理（has, get, set, clear, getSliceFilepath）
+- `temp-file-manager.ts`: 一時ファイルの生成・書き込み・クリーンアップ
+  - インスタンス固有のサブディレクトリを使用
+  - プロセス終了時の自動クリーンアップ
+  - 1時間以上古い孤立ディレクトリのクリーンアップ
+- `wav-processor.ts`: WAVファイルの読み込み・サンプル抽出・バッファ作成
+- `slice-audio-file.ts`: オーディオスライシングのメインロジック
+
+**3. 後方互換性**
+- `audio-slicer.ts`を後方互換性のためのラッパークラスとして保持
+- 既存のコードは変更不要
+
+#### バグ修正
+
+**1. レースコンディションの修正**
+- **問題**: `cache.has()`と`cache.get()!`の2回呼び出しで、間にキャッシュエントリが削除される可能性
+- **修正**: `cache.get()`1回の呼び出しに統合し、`undefined`チェックで安全に処理
+
+**2. 不要なasyncの削除**
+- **問題**: `sliceAudioFile()`が非同期処理を行わないのに`async`マーク
+- **修正**: `async`を削除し、呼び出し側の`await`も削除
+- **影響範囲**: `audio-slicer.ts`, `prepare-slices.ts`, `prepare-playback.ts`
+
+**3. Buffer型エラーの修正**
+- **問題**: `sliceWav.toBuffer()`が`Uint8Array`を返すが、戻り値の型は`Buffer`
+- **修正**: `Buffer.from(sliceWav.toBuffer())`で明示的に変換
+
+**4. インスタンスディレクトリの使用**
+- **問題**: `getSliceFilepath()`が`this.tempDir`を使用し、プロセスクラッシュ時にファイルが残る
+- **修正**: `this.instanceDir`を使用してインスタンス固有のディレクトリに配置
+- **効果**: プロセス終了時の自動クリーンアップが機能
+
+**5. テストのモック順序修正**
+- **問題**: `audio-slicer.spec.ts`でグローバルインスタンス作成時にモックが適用されていない
+- **修正**: `vi.mock()`をインポート前に配置し、モック実装を詳細化
+
+#### pre-commitフックの強化
+- `npm test`と`npm run build`を追加
+- コミット前に必ずテストとビルドが通ることを保証
+
+#### テスト結果
+```bash
+npm test
+```
+- ✅ 115 tests passed
+- ⏭️ 15 tests skipped
+- ✅ ビルド成功
+- ✅ lint成功
+
+#### ファイル変更
+- **新規作成**:
+  - `packages/engine/src/audio/slicing/index.ts`
+  - `packages/engine/src/audio/slicing/types.ts`
+  - `packages/engine/src/audio/slicing/slice-cache.ts`
+  - `packages/engine/src/audio/slicing/temp-file-manager.ts`
+  - `packages/engine/src/audio/slicing/wav-processor.ts`
+  - `packages/engine/src/audio/slicing/slice-audio-file.ts`
+- **変更**:
+  - `packages/engine/src/audio/audio-slicer.ts` (ラッパークラスに変更)
+  - `packages/engine/src/core/sequence/audio/prepare-slices.ts` (async削除)
+  - `packages/engine/src/core/sequence/playback/prepare-playback.ts` (await削除)
+  - `tests/audio/audio-slicer.spec.ts` (モック修正)
+  - `.husky/pre-commit` (test/build追加)
+
+#### コミット
+- `393308d`: fix: レースコンディションと不要なasyncを修正
+- `74537f2`: fix: Buffer型エラーとインスタンスディレクトリの使用を修正
+
+---
+
 ### 6.17 Fix Async/Await in Sequence Methods (January 7, 2025)
 
 **Date**: January 7, 2025
