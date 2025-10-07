@@ -3,7 +3,7 @@
  * Represents the global transport and configuration
  */
 
-import { AudioEngine } from '../audio/audio-engine'
+import { SuperColliderPlayer } from '../audio/supercollider-player'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -22,14 +22,14 @@ export class Global {
   private sequenceRegistry: SequenceRegistry
 
   // Core dependencies
-  private audioEngine: any // Can be AudioEngine or SuperColliderPlayer
+  private audioEngine: SuperColliderPlayer
   private globalScheduler: Scheduler
 
   /**
    * Creates a new Global instance with all manager components
-   * @param audioEngine - The audio engine instance (AudioEngine or SuperColliderPlayer)
+   * @param audioEngine - The SuperCollider audio engine instance
    */
-  constructor(audioEngine: any) {
+  constructor(audioEngine: SuperColliderPlayer) {
     this.audioEngine = audioEngine
     this.globalScheduler = audioEngine as Scheduler
 
@@ -175,6 +175,6 @@ export class Global {
 }
 
 // Export a singleton factory
-export function createGlobal(audioEngine: AudioEngine): Global {
+export function createGlobal(audioEngine: SuperColliderPlayer): Global {
   return new Global(audioEngine)
 }

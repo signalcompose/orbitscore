@@ -83,15 +83,6 @@ Example OrbitScore files demonstrating various DSL features:
 3. Press `Cmd+Enter` to execute selected code
 4. Use `Cmd+.` to stop playback
 
-### Testing the Audio Engine
-
-```javascript
-// From the project root
-const { AudioEngine } = require('./packages/engine/dist/audio/audio-engine');
-const engine = new AudioEngine();
-await engine.loadFile('test-assets/audio/kick.wav');
-```
-
 ### Regenerating Audio Files
 
 If you need to regenerate the test audio files:

@@ -6,7 +6,7 @@
 
 import * as path from 'path'
 
-import { AudioEngine, AudioFile } from '../audio/audio-engine'
+import { SuperColliderPlayer } from '../audio/supercollider-player'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 
 import { Global } from './global'
@@ -23,7 +23,7 @@ import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/ev
 
 export class Sequence {
   private global: Global
-  private audioEngine: AudioEngine
+  private audioEngine: SuperColliderPlayer
 
   // Managers
   private gainManager: GainManager
@@ -32,11 +32,10 @@ export class Sequence {
   private stateManager: StateManager
 
   // Audio properties
-  private _audioFile?: AudioFile
   private _audioFilePath?: string
   private _chopDivisions?: number
 
-  constructor(global: Global, audioEngine: AudioEngine) {
+  constructor(global: Global, audioEngine: SuperColliderPlayer) {
     this.global = global
     this.audioEngine = audioEngine
 
@@ -137,17 +136,11 @@ export class Sequence {
     return this
   }
 
+  // Note: Audio loading is now handled by SuperCollider's buffer manager
+  // This method is kept for backward compatibility but does nothing
   async loadAudio(): Promise<void> {
-    if (!this._audioFilePath) return
-
-    try {
-      this._audioFile = await this.audioEngine.loadAudioFile(this._audioFilePath)
-      // Default to chop(1) if not specified
-      const slices = this._audioFile.chop(1)
-      this.stateManager.setSlices(slices)
-    } catch (error) {
-      console.error(`Failed to load audio ${this._audioFilePath}:`, error)
-    }
+    // SuperCollider handles audio loading internally via loadBuffer()
+    // No action needed here
   }
 
   chop(divisions: number): this {
