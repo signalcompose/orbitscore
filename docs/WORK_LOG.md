@@ -15,6 +15,65 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.16 Git Workflow and Development Environment Setup (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+
+**Work Content**: Implemented comprehensive Git Workflow with branch protection, worktree setup, and Cursor BugBot rules to ensure stable development and production environments
+
+#### Problem: Production-Breaking Changes Before Live Performances
+**Issue**: Accidental direct commits to main branch before live performances could break the production environment
+**Impact**: Risk of software failure during live coding performances
+**Root Cause**: No branch protection rules, direct commits to main branch possible
+
+#### Solution: Comprehensive Git Workflow Implementation
+**1. Branch Protection Rules**
+- **main branch**: PR required, 1 approval required, dismiss stale reviews, enforce admins
+- **develop branch**: PR required, 1 approval required, dismiss stale reviews, enforce admins
+- **Result**: ✅ No direct commits possible to protected branches
+
+**2. Git Worktree Setup**
+- **orbitscore/**: develop + feature branches (main working directory)
+- **orbitscore-main/**: main branch (production environment)
+- **Benefits**: Complete separation, no branch switching needed, stable production environment
+
+**3. Cursor BugBot Rules**
+- **Language**: Japanese review comments mandatory
+- **Focus**: DSL specification (v2.0) compliance, live performance stability
+- **Special checks**: setup.scd file changes require careful review
+- **Guidelines**: `.cursor/BUGBOT.md` with project-specific review criteria
+
+**4. Documentation Updates**
+- **PROJECT_RULES.md**: Added comprehensive Git Workflow section
+- **Worktree usage**: Documented directory structure and switching commands
+- **Development workflow**: Clear PR process from feature → develop → main
+
+#### Technical Decisions
+**Branch Structure**: main (production) ← develop (integration) ← feature/* (development)
+**Protection Level**: All branches require PR and approval, admins cannot bypass
+**Review Process**: Cursor BugBot provides change summaries, human review for code quality
+**Environment Separation**: Worktree ensures stable main environment always available
+
+#### Files Modified
+- `docs/PROJECT_RULES.md`: Added Git Workflow and branch protection documentation
+- `.cursor/BUGBOT.md`: Created comprehensive review guidelines
+- `packages/engine/supercollider/setup.scd`: Documented in review guidelines
+
+#### Test Results
+- ✅ Branch protection rules active and enforced
+- ✅ Worktree setup functional (orbitscore-main/ created)
+- ✅ Cursor BugBot rules configured for Japanese reviews
+- ✅ PR workflow tested (PR #7 created)
+
+#### Next Steps
+- Merge PR #7 to develop branch
+- Create develop → main PR for production deployment
+- Resume normal feature development with protected workflow
+
+**Commit**: f315c36, 15dd441 (feature/git-workflow-setup branch)
+**PR**: #7 - Git Workflowとブランチ保護、Worktree、Cursor BugBotルールの実装
+
 ### 6.15 Multi-Track Synchronization and Final Fixes (January 5, 2025)
 
 **Date**: January 5, 2025
