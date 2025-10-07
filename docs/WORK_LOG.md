@@ -15,6 +15,84 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.20 Fix InterpreterV2.getState() - Phase 3-2 (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+**Branch**: 18-refactor-interpreter-v2ts-phase-3-2
+**Issue**: #18
+
+**Work Content**: `InterpreterV2.getState()`メソッドが`Global`と`Sequence`インスタンスの専用`getState()`メソッドを使用するように修正
+
+#### 問題点
+
+**プライベートプロパティへの直接アクセス**
+- `InterpreterV2.getState()`が`Global`と`Sequence`インスタンスのプライベートプロパティに直接アクセス
+- `(global as any)._isRunning`、`(sequence as any)._isPlaying`などの型キャストを使用
+- 専用の`getState()`メソッドをバイパス
+- デバッグ・テスト時に不完全または不整合な状態を返す可能性
+
+#### 修正内容
+
+**専用getState()メソッドの使用**
+- `Global.getState()`を使用してグローバル状態を取得
+- `Sequence.getState()`を使用してシーケンス状態を取得
+- プライベートプロパティへの直接アクセスを削除
+
+**修正前**:
+```typescript
+for (const [name, global] of this.state.globals.entries()) {
+  state.globals[name] = {
+    isRunning: (global as any)._isRunning,
+    tempo: (global as any)._tempo,
+    beat: (global as any)._beat,
+  }
+}
+```
+
+**修正後**:
+```typescript
+for (const [name, global] of this.state.globals.entries()) {
+  state.globals[name] = global.getState()
+}
+```
+
+#### 改善点
+
+**1. 完全な状態取得**
+- `Global.getState()`は9つのプロパティを返す（tempo, tick, beat, key, audioPath, masterGainDb, masterEffects, isRunning, isLooping）
+- 以前は3つのプロパティのみ（isRunning, tempo, beat）
+- `Sequence.getState()`は13つのプロパティを返す（name, tempo, beat, length, gainDb, gainRandom, pan, panRandom, slices, playPattern, timedEvents, isMuted, isPlaying, isLooping）
+- 以前は5つのプロパティのみ（isPlaying, isLooping, isMuted, audioFile, timedEvents）
+
+**2. 一貫性の向上**
+- パブリックAPIを使用
+- クラスの内部実装変更に影響されない
+- カプセル化の原則に従う
+
+**3. 保守性の向上**
+- 型キャスト不要
+- プライベートプロパティ名の変更に影響されない
+- テスト・デバッグが確実
+
+#### テスト結果
+```bash
+npm test
+```
+- ✅ 115 tests passed
+- ⏭️ 15 tests skipped
+- ✅ ビルド成功
+- ✅ lint成功
+
+#### ファイル変更
+- **変更**:
+  - `packages/engine/src/interpreter/interpreter-v2.ts` (getState()メソッドの修正)
+
+#### コミット
+- `8ba3f99`: fix: InterpreterV2.getState()で専用メソッドを使用
+
+---
+
 ### 6.19 Refactor Timing Calculator - Phase 2-2 (January 7, 2025)
 
 **Date**: January 7, 2025
@@ -1529,6 +1607,84 @@ npm test
 
 #### コミット
 - `[次のコミット]`: refactor: cli-audio.tsをモジュール分割（Phase 3-1）
+
+---
+
+### 6.21 Refactor Interpreter V2 - Phase 3-2 (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+**Branch**: 18-refactor-interpreter-v2ts-phase-3-2
+**Issue**: #18
+
+**Work Content**: `interpreter-v2.ts`（275行）を5つのモジュールに分割し、コーディング規約に準拠
+
+#### リファクタリング内容
+
+**1. モジュール分割**
+新しいディレクトリ構造：
+```
+packages/engine/src/interpreter/
+├── index.ts                      # モジュールエクスポート
+├── types.ts                      # 型定義
+├── process-initialization.ts     # 初期化処理
+├── process-statement.ts          # ステートメント処理
+├── evaluate-method.ts            # メソッド評価
+└── interpreter-v2.ts             # 薄いラッパー（後方互換性）
+```
+
+**2. 各モジュールの責務**
+- `types.ts`: `InterpreterState`, `InterpreterOptions`の型定義
+- `process-initialization.ts`: `processGlobalInit`, `processSequenceInit`（グローバルとシーケンスの初期化）
+- `process-statement.ts`: `processStatement`, `processGlobalStatement`, `processSequenceStatement`, `processTransportStatement`（ステートメント処理）
+- `evaluate-method.ts`: `callMethod`, `processArguments`（メソッド呼び出しと引数処理）
+- `interpreter-v2.ts`: 後方互換性のための薄いラッパークラス（`@deprecated`タグ付き）
+
+**3. 後方互換性**
+- `InterpreterV2`クラスを薄いラッパーとして保持
+- 既存のコードは変更不要
+- `@deprecated`タグで新しいモジュールの使用を推奨
+
+#### コーディング規約の適用
+
+**1. SRP（単一責任の原則）**
+- 初期化処理、ステートメント処理、メソッド評価を分離
+- 各関数が1つの明確な責務を持つ
+
+**2. DRY（重複排除）**
+- 共通の状態管理を`InterpreterState`型で統一
+- メソッド呼び出しロジックを`callMethod`関数に集約
+
+**3. 再利用性**
+- 各関数は独立して使用可能
+- 明確な関数名（`processGlobalInit`, `processStatement`, `callMethod`など）
+
+**4. ドキュメント**
+- 各関数にJSDocコメント
+- パラメータと戻り値の説明
+- 使用例を含む詳細な説明
+
+#### テスト結果
+```bash
+npm test
+```
+- ✅ 115 tests passed
+- ⏭️ 15 tests skipped
+- ✅ ビルド成功
+- ✅ lint成功（1つの既存の警告のみ）
+
+#### ファイル変更
+- **新規作成**:
+  - `packages/engine/src/interpreter/index.ts`
+  - `packages/engine/src/interpreter/types.ts`
+  - `packages/engine/src/interpreter/process-initialization.ts`
+  - `packages/engine/src/interpreter/process-statement.ts`
+  - `packages/engine/src/interpreter/evaluate-method.ts`
+- **変更**:
+  - `packages/engine/src/interpreter/interpreter-v2.ts` (薄いラッパーに変更)
+
+#### コミット
+- `[PENDING]`: refactor: interpreter-v2.tsをモジュール分割（Phase 3-2）
 
 ---
 
