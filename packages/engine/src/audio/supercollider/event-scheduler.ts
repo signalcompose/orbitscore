@@ -174,29 +174,49 @@ export class EventScheduler {
     sequenceName: string,
     scheduledTime: number,
   ): Promise<void> {
-    const launchTime = Date.now()
-    const actualStartTime = launchTime - this.startTime
-    const drift = actualStartTime - scheduledTime
+    this.logPlaybackDebugInfo(sequenceName, scheduledTime)
+    const { bufnum } = await this.bufferManager.loadBuffer(filepath)
+    const amplitude = this.convertGainToAmplitude(options.gainDb)
+    await this.sendPlaybackMessage(bufnum, amplitude, options)
+  }
 
+  /**
+   * Log playback debug information
+   */
+  private logPlaybackDebugInfo(sequenceName: string, scheduledTime: number): void {
     if ((globalThis as any).ORBITSCORE_DEBUG) {
+      const launchTime = Date.now()
+      const actualStartTime = launchTime - this.startTime
+      const drift = actualStartTime - scheduledTime
       console.log(
         `🔊 Playing: ${sequenceName} at ${actualStartTime}ms (scheduled: ${scheduledTime}ms, drift: ${drift}ms)`,
       )
     }
+  }
 
-    const { bufnum } = await this.bufferManager.loadBuffer(filepath)
-
-    // Convert dB to amplitude: amplitude = 10^(dB/20)
-    // Default: 0 dB = 1.0 (100%)
-    let amplitude: number
-    if (options.gainDb === undefined) {
-      amplitude = 1.0 // 0 dB default
-    } else if (options.gainDb === -Infinity) {
-      amplitude = 0.0 // Complete silence
-    } else {
-      amplitude = Math.pow(10, options.gainDb / 20)
+  /**
+   * Convert dB gain to amplitude
+   * amplitude = 10^(dB/20)
+   * Default: 0 dB = 1.0 (100%)
+   */
+  private convertGainToAmplitude(gainDb: number | undefined): number {
+    if (gainDb === undefined) {
+      return 1.0 // 0 dB default
     }
+    if (gainDb === -Infinity) {
+      return 0.0 // Complete silence
+    }
+    return Math.pow(10, gainDb / 20)
+  }
 
+  /**
+   * Send OSC playback message to SuperCollider
+   */
+  private async sendPlaybackMessage(
+    bufnum: number,
+    amplitude: number,
+    options: PlaybackOptions,
+  ): Promise<void> {
     const pan = options.pan !== undefined ? options.pan / 100 : 0.0 // -100..100 -> -1.0..1.0
     const startPos = options.startPos ?? 0
     const duration = options.duration ?? 0
