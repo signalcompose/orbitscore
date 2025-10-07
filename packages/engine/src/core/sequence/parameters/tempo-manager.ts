@@ -95,11 +95,4 @@ export class TempoManager {
 
     return calculateEventTiming(elements, effectiveBarDuration)
   }
-
-  /**
-   * Check if length change requires loop restart
-   */
-  shouldRestartLoopOnLengthChange(): boolean {
-    return this._length !== undefined
-  }
 }
