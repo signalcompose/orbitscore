@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
 
-import { TimingCalculator } from '../../packages/engine/src/timing/timing-calculator'
+import { calculateEventTiming, formatTiming } from '../../packages/engine/src/timing/calculation'
 
 describe('TimingCalculator', () => {
   describe('calculateTiming', () => {
     it('should calculate simple flat timing', () => {
       // play(1, 2, 3, 4) in a 1000ms bar
       const elements = [1, 2, 3, 4]
-      const events = TimingCalculator.calculateTiming(elements, 1000)
+      const events = calculateEventTiming(elements, 1000)
 
       expect(events).toHaveLength(4)
       expect(events[0]).toEqual({
@@ -39,7 +39,7 @@ describe('TimingCalculator', () => {
     it('should handle silence (0)', () => {
       // play(1, 0, 2) - middle element is silence
       const elements = [1, 0, 2]
-      const events = TimingCalculator.calculateTiming(elements, 900)
+      const events = calculateEventTiming(elements, 900)
 
       expect(events).toHaveLength(3)
       expect(events[1]).toEqual({
@@ -59,7 +59,7 @@ describe('TimingCalculator', () => {
           elements: [2, 3],
         },
       ]
-      const events = TimingCalculator.calculateTiming(elements, 1000)
+      const events = calculateEventTiming(elements, 1000)
 
       expect(events).toHaveLength(3)
 
@@ -102,7 +102,7 @@ describe('TimingCalculator', () => {
           elements: [3, 4, 5],
         },
       ]
-      const events = TimingCalculator.calculateTiming(elements, 1000)
+      const events = calculateEventTiming(elements, 1000)
 
       expect(events).toHaveLength(5)
 
@@ -143,7 +143,7 @@ describe('TimingCalculator', () => {
           elements: [0, 1, 2, 3, 4],
         },
       ]
-      const events = TimingCalculator.calculateTiming(elements, 2000) // 4/4 at 120 BPM
+      const events = calculateEventTiming(elements, 2000) // 4/4 at 120 BPM
 
       expect(events).toHaveLength(6)
 
@@ -182,7 +182,7 @@ describe('TimingCalculator', () => {
           ],
         },
       ]
-      const events = TimingCalculator.calculateTiming(elements, 1000)
+      const events = calculateEventTiming(elements, 1000)
 
       expect(events).toHaveLength(4)
 
@@ -228,7 +228,7 @@ describe('TimingCalculator', () => {
         { sliceNumber: 3, startTime: 750, duration: 250, depth: 1 },
       ]
 
-      const formatted = TimingCalculator.formatTiming(events, 120)
+      const formatted = formatTiming(events, 120)
 
       expect(formatted).toContain('Slice 1 @ beat 0.00 for 1.00 beats')
       expect(formatted).toContain('  Slice 2 @ beat 1.00 for 0.50 beats')
@@ -238,7 +238,7 @@ describe('TimingCalculator', () => {
     it('should format silence', () => {
       const events = [{ sliceNumber: 0, startTime: 0, duration: 500, depth: 0 }]
 
-      const formatted = TimingCalculator.formatTiming(events, 120)
+      const formatted = formatTiming(events, 120)
 
       expect(formatted).toContain('[silence] @ beat 0.00 for 1.00 beats')
     })
