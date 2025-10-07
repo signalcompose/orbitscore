@@ -81,8 +81,8 @@ export async function processSequenceInit(
   if (!sequence) {
     // Create sequence through the Global's factory method
     sequence = global.seq
-    sequence.setName(init.variableName)
-    state.sequences.set(init.variableName, sequence)
+    sequence!.setName(init.variableName)
+    state.sequences.set(init.variableName, sequence!)
   } else {
     // Reset parameters to defaults when re-initializing
     // This prevents previous live changes (gain/pan) from persisting
