@@ -209,19 +209,24 @@ describe('AudioSlicer', () => {
   })
 
   describe('cleanup', () => {
-    it('should manage temporary files automatically', async () => {
+    it('should clean up temporary files and clear cache', async () => {
       const filepath = '/path/to/test.wav'
       const divisions = 4
 
       // Slice the file
       await slicer.sliceAudioFile(filepath, divisions)
 
-      // Temporary files are managed automatically by TempFileManager
-      // No explicit cleanup() method needed
-      // Verify that slices are still accessible
-      const slicePath = slicer.getSliceFilepath(filepath, divisions, 1)
-      expect(slicePath).not.toBeNull()
-      expect(slicePath).toContain('test_slice1_of_4.wav')
+      // Verify that slices are accessible before cleanup
+      const slicePathBefore = slicer.getSliceFilepath(filepath, divisions, 1)
+      expect(slicePathBefore).not.toBeNull()
+      expect(slicePathBefore).toContain('test_slice1_of_4.wav')
+
+      // Clean up temporary files and clear cache
+      slicer.cleanup()
+
+      // After cleanup, cache should be cleared
+      const slicePathAfter = slicer.getSliceFilepath(filepath, divisions, 1)
+      expect(slicePathAfter).toBeNull()
     })
   })
 })

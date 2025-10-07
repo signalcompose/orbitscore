@@ -47,8 +47,11 @@ export class AudioSlicer {
    * Clean up temporary files (for testing)
    */
   cleanup(): void {
-    // Cleanup method removed from TempFileManager
-    // Temporary files are managed automatically
+    // Clear the cache to remove references to temporary files
+    this.cache.clear()
+
+    // Clean up temporary files created by this instance
+    this.fileManager.cleanup()
   }
 }
 
