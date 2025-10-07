@@ -60,16 +60,22 @@ export async function executeCommand(
         printUsage()
         process.exit(1)
       }
-      const playDuration = durationArg ? parseFloat(durationArg) : undefined
-      const result = await playFile({
-        filepath: file,
-        durationSeconds: playDuration,
-        globalInterpreter,
-      })
-      if (result.shouldStartREPL) {
-        await startREPL(result.interpreter)
+      try {
+        const playDuration = durationArg ? parseFloat(durationArg) : undefined
+        const result = await playFile({
+          filepath: file,
+          durationSeconds: playDuration,
+          globalInterpreter,
+        })
+        if (result.shouldStartREPL) {
+          await startREPL(result.interpreter)
+        }
+        return result.interpreter
+      } catch (error: any) {
+        console.error(`Error: ${error.message}`)
+        process.exit(1)
       }
-      return result.interpreter
+      break
     }
 
     case 'run': {
@@ -78,16 +84,22 @@ export async function executeCommand(
         printUsage()
         process.exit(1)
       }
-      const runDuration = durationArg ? parseFloat(durationArg) : undefined
-      const result = await playFile({
-        filepath: file,
-        durationSeconds: runDuration,
-        globalInterpreter,
-      })
-      if (result.shouldStartREPL) {
-        await startREPL(result.interpreter)
+      try {
+        const runDuration = durationArg ? parseFloat(durationArg) : undefined
+        const result = await playFile({
+          filepath: file,
+          durationSeconds: runDuration,
+          globalInterpreter,
+        })
+        if (result.shouldStartREPL) {
+          await startREPL(result.interpreter)
+        }
+        return result.interpreter
+      } catch (error: any) {
+        console.error(`Error: ${error.message}`)
+        process.exit(1)
       }
-      return result.interpreter
+      break
     }
 
     case 'repl': {
@@ -103,16 +115,22 @@ export async function executeCommand(
         printUsage()
         process.exit(1)
       }
-      const evalDuration = durationArg ? parseFloat(durationArg) : undefined
-      const result = await playFile({
-        filepath: file,
-        durationSeconds: evalDuration,
-        globalInterpreter,
-      })
-      if (result.shouldStartREPL) {
-        await startREPL(result.interpreter)
+      try {
+        const evalDuration = durationArg ? parseFloat(durationArg) : undefined
+        const result = await playFile({
+          filepath: file,
+          durationSeconds: evalDuration,
+          globalInterpreter,
+        })
+        if (result.shouldStartREPL) {
+          await startREPL(result.interpreter)
+        }
+        return result.interpreter
+      } catch (error: any) {
+        console.error(`Error: ${error.message}`)
+        process.exit(1)
       }
-      return result.interpreter
+      break
     }
 
     case 'test':
