@@ -127,13 +127,56 @@
 10. **Add commit hash to WORK_LOG.md**
 11. **Commit the commit hash update**
 
-### Git Branch and PR Workflow:
+### Git Workflow and Branch Protection:
 
 **CRITICAL: Always create a feature branch before starting work**
 
+**Branch Structure:**
+- `main` - Production-ready code (protected)
+- `develop` - Integration branch (protected)
+- `feature/*` - Feature development branches
+- `fix/*` - Bug fix branches
+- `refactor/*` - Refactoring branches
+- `docs/*` - Documentation only changes
+- `test/*` - Test additions/fixes
+
+**Git Worktree Setup:**
+
+This project uses Git Worktree to maintain separate working directories for `main` and `develop` branches:
+
+```bash
+# Directory structure
+/Users/yamato/Src/proj_livecoding/
+├── orbitscore/          # develop branch (main working directory)
+└── orbitscore-main/     # main branch (production environment)
+
+# View worktrees
+git worktree list
+
+# Switch between environments
+cd /Users/yamato/Src/proj_livecoding/orbitscore       # develop
+cd /Users/yamato/Src/proj_livecoding/orbitscore-main  # main
+```
+
+**Benefits:**
+- Complete separation between develop and main environments
+- No need to switch branches (no file changes)
+- Can test both environments simultaneously
+- Prevents accidental commits to main branch
+- Stable production environment always available
+
+**Branch Protection Rules (main & develop):**
+- ✅ Pull Request required before merging
+- ✅ At least 1 approval required
+- ✅ Dismiss stale pull request approvals when new commits are pushed
+- ✅ Administrators cannot bypass these settings
+- ✅ Status checks must pass before merging (if configured)
+
 **Creating a new feature branch:**
 ```bash
-# Create and switch to new feature branch
+# Create and switch to new feature branch from develop
+git checkout develop
+git pull origin develop
 git checkout -b feature/descriptive-name
 
 # Example branch names:
@@ -142,20 +185,29 @@ git checkout -b feature/descriptive-name
 # - refactor/parser-cleanup
 ```
 
-**Branch naming convention:**
-- `feature/` - new features
-- `fix/` - bug fixes
-- `refactor/` - code refactoring
-- `docs/` - documentation only changes
-- `test/` - test additions/fixes
+**Development Workflow:**
+```
+1. Create feature branch from develop
+2. Implement changes
+3. Commit and push to origin
+4. Create PR to develop
+5. Request review (Cursor BugBot provides change summary)
+6. Address review comments
+7. Merge to develop after approval
+8. (Release) Create PR from develop to main
+9. Merge to main after approval
+```
 
 **Creating PRs:**
 ```bash
 # Push branch to GitHub
 git push -u origin feature/branch-name
 
-# Create PR with gh command
-gh pr create --title "feat: description" --body "detailed description"
+# Create PR to develop
+gh pr create --base develop --title "feat: description" --body "detailed description"
+
+# Create PR to main (for releases)
+gh pr create --base main --title "release: version X.Y.Z" --body "release notes"
 ```
 
 **Merging PRs:**
@@ -168,10 +220,13 @@ gh pr merge <number> --squash
 ```
 
 **Important:**
-- **ALWAYS create a branch before starting work** - never commit directly to main
+- **ALWAYS create a branch before starting work** - never commit directly to main or develop
+- **ALWAYS create PR to develop first** - main is only for releases
 - **Branches are kept for history** - do not delete after merge
+- **Cursor BugBot** automatically provides change summaries on PRs (not actual code reviews)
 - User typically handles merging, but agent may assist with complex implementations
-- Always use `--squash` for clean commit history on main branch
+- Always use `--squash` for clean commit history on main/develop branches
+- **Branch protection prevents accidental direct pushes** to main and develop
 
 ### Commit Message Format:
 

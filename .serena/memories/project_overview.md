@@ -1,126 +1,58 @@
-# OrbitScore Project Overview
+# OrbitScore プロジェクト概要
 
-## Project Summary
-OrbitScore is a live-coding audio engine with SuperCollider integration, designed for real-time performance. It features a custom DSL for pattern-based audio sequencing with support for polymeter, polytempo, and nested rhythms.
+## プロジェクト説明
 
-## Recent Development (January 6, 2025)
+OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング用オーディオエンジンです。SuperColliderとの統合、カスタムDSL、VS Code拡張機能を含む包括的な音楽制作環境を提供します。
 
-### Phase 11: Performance Demo and Extension Packaging
-**Status**: ✅ COMPLETE
+## 技術スタック
 
-**Key Achievements**:
-1. **VS Code Extension Packaging Fixed**
-   - Resolved engine path resolution issues
-   - Added fallback logic for bundled vs workspace engine
-   - Successfully packaged with dependencies (35 files, 57.5 KB)
-   - Tested in live performance - working perfectly
+- **言語**: TypeScript
+- **オーディオエンジン**: SuperCollider
+- **アーキテクチャ**: モノレポ構成
+- **パッケージ**: engine, parser, vscode-extension
+- **テスト**: Jest（187/187テスト通過）
 
-2. **Performance Demo File Created**
-   - `examples/performance-demo.osc` with all 13 test samples
-   - Organized by category: drums, bass, melody, test
-   - Initial silent patterns for live coding
-   - Comprehensive command examples
+## 現在の状況（2025-01-07更新）
 
-3. **Serena Usage Guidelines Integration**
-   - Moved from `docs/SERENA.md` to `AGENTS.md`
-   - Now auto-loaded by all agents
-   - Clear guidelines for when to use Serena vs normal tools
+### ✅ 完了したフェーズ
+- **Phase 11**: VS Code拡張機能のパッケージ化修正完了
+- **Git Workflow**: 包括的な開発ワークフロー実装完了
+- **ブランチ保護**: main/developブランチの完全保護設定完了
+- **Worktree**: 本番環境分離（orbitscore-main/）設定完了
+- **Cursor BugBot**: 日本語レビュー、プロジェクト固有ガイドライン設定完了
 
-**Live Performance Result**: ✅ Successfully used in real performance
+### 🎯 現在のフェーズ
+- **開発環境**: 安定したGit Workflowで通常の機能開発準備完了
+- **本番環境**: 保護されたmainブランチで常に安定状態を維持
 
-## Current Architecture
+### 📋 次の優先事項
+- 通常の機能開発に戻る
+- ライブパフォーマンスでの安定性を維持しながら新機能開発
 
-### Core Components
-1. **Engine** (`packages/engine/`)
-   - SuperCollider integration via supercolliderjs
-   - Real-time audio scheduling with microsecond precision
-   - Global mastering effects (compressor, limiter, normalizer)
-   - Audio path: `test-assets/audio/` (13 samples available)
+## アーキテクチャ
 
-2. **VS Code Extension** (`packages/vscode-extension/`)
-   - Live coding interface with Cmd+Enter execution
-   - Status bar controls (Start/Stop/Debug/Kill/Reload)
-   - Auto-evaluation for settings, manual for execution
-   - Debug mode for verbose logging
-   - **Packaging**: Bundles engine with dependencies
+### DSL設計
+- **仕様書**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`（v2.0）が最新
+- **特徴**: 度数ベース、メソッドチェーン、`play()`メソッドのネスト構造
+- **精度**: 小数第3位まで
 
-3. **DSL** (Domain Specific Language)
-   - Syntax: `var global = init GLOBAL`, `var seq = init global.seq`
-   - Pattern notation: comma-separated (e.g., `1, 0, 1, 0`)
-   - Nested rhythms: `[1, 0, 1]` within patterns
-   - Real-time parameter changes: `gain()`, `pan()`, `tempo()`, `length()`
+### SuperCollider統合
+- **SynthDef**: `packages/engine/supercollider/synthdefs/`に配置
+- **setup.scd**: SynthDef生成スクリプト
+- **オーディオデバイス**: 入力/出力/duplexの明確な分類
 
-### Key Features
-- **Polymeter/Polytempo**: Independent tempo and meter per sequence
-- **Chop**: Audio slicing with `chop(n)` and slice playback
-- **Global Mastering**: Compressor, limiter, normalizer on master bus
-- **Random Values**: `r` (full random), `rX%Y` (random walk)
-- **Audio Device Selection**: Via `.orbitscore.json` config
-- **Debug Mode**: Toggle verbose logging
+## 開発ワークフロー
 
-## Technical Details
+### ブランチ構造
+- **main**: 本番環境（完全保護）
+- **develop**: 統合ブランチ（完全保護）
+- **feature/**: 機能開発ブランチ
 
-### Audio Engine
-- **SuperCollider**: scsynth for audio synthesis
-- **SynthDefs**: orbitPlayBuf, fxCompressor, fxLimiter, fxNormalizer
-- **Timing**: Microsecond-precision scheduling
-- **Gain**: dB units (-60 to +12 dB, -inf for silence)
-- **Pan**: -100 (left) to +100 (right)
+### 保護ルール
+- PR必須、承認必須、管理者強制適用
+- Cursor BugBotによる日本語レビュー
+- ライブパフォーマンスの安定性を最優先
 
-### Extension Packaging
-- **Engine Path Resolution**:
-  1. Check `../engine/dist/cli-audio.js` (bundled)
-  2. Fallback to `../../engine/dist/cli-audio.js` (workspace)
-- **Dependencies**: Includes `node_modules/` with supercolliderjs
-- **Size**: 57.5 KB with all dependencies
-
-### Test Assets
-13 audio samples in `test-assets/audio/`:
-- Drums: kick, snare, hihat_closed, hihat_open, hihat
-- Bass: bass_c1, bass_e1, bass_g1
-- Melody: arpeggio_c, chord_c_major, chord_a_minor
-- Test: sine_440, sine_880
-
-## Development Workflow
-
-### Agent Guidelines (AGENTS.md)
-**Use Serena for**:
-- Complex code analysis and architecture understanding
-- Symbol reference tracking
-- Large-scale refactoring impact analysis
-- Bug investigation across multiple files
-
-**Use Normal Tools for**:
-- Simple file edits
-- Known file/function changes
-- String search/replace
-
-### Commit Workflow
-1. Make changes
-2. Update `docs/WORK_LOG.md`
-3. Update Serena memory
-4. Commit with descriptive message
-5. Create PR (if on feature branch)
-6. Merge to main (squash merge, keep branch)
-
-### Rules
-- **No direct commits to main** (use feature branches)
-- **Always update WORK_LOG** with each commit
-- **Test before committing**
-- **Check official docs** when blocked
-
-## Future Improvements
-1. **Error Messages**: Add line numbers to parser/interpreter errors
-2. **Extension Packaging**: Automate with webpack/esbuild
-3. **Bundle Size**: Reduce by bundling dependencies
-4. **Per-Sequence Effects**: Delayed (complex bus architecture)
-5. **VST Plugin Support**: Abandoned (installation complexity)
-
-## Current Status
-- ✅ Core engine: Stable and production-ready
-- ✅ VS Code extension: Working with proper packaging
-- ✅ Live performance: Successfully tested
-- ✅ Documentation: Up to date
-- ✅ Test coverage: Core functionality 100% passing
-
-**Next Steps**: Error message improvements, packaging automation
+### Worktree
+- **orbitscore/**: develop + feature branches（開発作業）
+- **orbitscore-main/**: main branch（本番確認用）

@@ -1,72 +1,35 @@
-# Current Issues
+# 現在の課題・問題
 
-## Status: NO CRITICAL ISSUES ✅
+## 解決済み（2025-01-07）
 
-All previous critical issues have been resolved. Phase 9 (dB-based gain) completed successfully.
+### ✅ Git Workflow実装完了
+- **問題**: 本番前に機能追加してmainブランチが壊れる問題
+- **解決**: 包括的なGit Workflowとブランチ保護ルールを実装
+- **内容**:
+  - main/developブランチの完全保護（PR必須、承認必須、管理者強制適用）
+  - Git Worktree設定（orbitscore-main/で本番環境分離）
+  - Cursor BugBotルール（日本語レビュー、プロジェクト固有ガイドライン）
+  - PROJECT_RULES.mdに詳細なワークフローを文書化
 
-## Minor TODOs (Non-blocking)
+### ✅ 開発環境の安定化
+- **問題**: ライブパフォーマンス前の不安定な開発環境
+- **解決**: 保護されたブランチとworktreeによる環境分離
+- **効果**: 本番環境が常に安定した状態を維持
 
-### 1. Buffer Duration Query
-**Priority**: Low  
-**Status**: Working with workaround  
-**Description**: Currently using fixed 0.3s duration for all drum samples. Should implement proper `/b_query` response handling with supercolliderjs API.  
-**Workaround**: Preload buffers and wait 100ms for load completion. Works perfectly for current use cases.  
-**Impact**: None - current implementation works well for all test cases.
+## 現在の状況
 
-### 2. Audio Path Documentation
-**Priority**: Low  
-**Status**: Working correctly  
-**Description**: Document best practices for `global.audioPath()` usage (relative vs absolute paths).  
-**Current Behavior**: 
-- Relative paths resolved from workspace root
-- Absolute paths used as-is
-- Both work correctly
+- **重大な問題**: なし
+- **開発フェーズ**: Git Workflow実装完了、次の機能開発準備中
+- **次回優先事項**: 通常の機能開発に戻る
 
-## Resolved Issues ✅
+## 技術的決定事項
 
-### dB-Based Gain Control (Phase 9 - RESOLVED)
-- **Implemented**: Professional dB unit for volume control (-60 to +12 dB)
-- **Result**: Infinite precision, industry standard, matches human hearing
-- **Tests**: 77 tests passing (Sequence: 20, SuperCollider: 15, Parser: 42)
-- **Features**: Master volume, real-time control, -inf support
+### Git Workflow
+- **ブランチ構造**: main（本番）← develop（統合）← feature/*（開発）
+- **保護ルール**: 全ブランチでPR必須、承認必須、管理者強制適用
+- **Worktree**: orbitscore/（develop）、orbitscore-main/（main）で環境分離
 
-### Volume and Pan Control (Phase 8 - RESOLVED)
-- **Fixed**: Added `gain()` and `pan()` methods with real-time updates
-- **Result**: Perfect stereo mixing and volume control
-- **Tests**: 77 new tests, all passing
-
-### Negative Number Parsing (Phase 8 - RESOLVED)
-- **Fixed**: Added MINUS token support in parser
-- **Result**: `pan(-100)` and `gain(-6)` correctly parsed
-- **Enhancement**: Added `-inf` as alias for `-Infinity`
-- **Tests**: Parser tests for negative and decimal values passing
-
-### Timing Verification (Phase 8 - VERIFIED)
-- **Tested**: Polymeter, polytempo, nested rhythms (11 levels)
-- **Result**: 0-2ms drift at all timing scales
-- **Tests**: Comprehensive timing examples created
-
-## Known Limitations
-- SuperCollider server path is hardcoded (macOS specific)
-- Limited to mono audio samples currently
-- No built-in effects/filters yet (planned for next phase)
-- No VST plugin support yet (user requested feature)
-
-## Performance Metrics (Phase 9 Verified)
-- **Latency**: 0-2ms (exceptional)
-- **Timing drift**: 0-2ms (even at 0.98ms intervals)
-- **Gain precision**: Full floating-point (dB unit)
-- **Stability**: 100% (no crashes in extensive testing)
-- **Synchronization**: Perfect across 5+ simultaneous tracks
-- **Memory**: No leaks detected
-- **Test coverage**: 77 tests (100% pass rate)
-
-## Next Phase Options
-1. **VST Plugin Support**: Load VST/VST3 plugins, GUI control
-2. **Built-in Effects**: pitch(), lpf(), hpf(), reverb(), compress()
-
-## Documentation & Best Practices
-- ✅ Tutorial File Management rule added to PROJECT_RULES.md
-- ✅ Mandates checking existing tutorials before creating test files
-- ✅ Prevents common syntax errors (GLOBAL, .audio(), global.run())
-- ✅ Tutorial 07 updated with correct dB syntax
+### Cursor BugBot
+- **言語**: 日本語でのレビューコメント必須
+- **重点**: DSL仕様（v2.0）への厳密な準拠、ライブパフォーマンスの安定性
+- **特別チェック**: setup.scdファイルの変更時は注意深いレビュー
