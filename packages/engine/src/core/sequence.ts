@@ -328,12 +328,14 @@ export class Sequence {
 
           // Schedule event
           if (chopDivisions > 1) {
+            // Ensure duration is defined (should always be set by TimingCalculator)
+            const eventDuration = event.duration ?? 0
             scheduler.scheduleSliceEvent(
               resolvedFilePath,
               startTimeMs,
               event.sliceNumber,
               chopDivisions,
-              event.duration, // Event duration in ms (time slot for this event)
+              eventDuration, // Event duration in ms (time slot for this event)
               finalGainDb,
               eventPan,
               this._name,
@@ -408,12 +410,14 @@ export class Sequence {
 
         // Use sox slice playback instead of file slicing
         if (this._chopDivisions && this._chopDivisions > 1) {
+          // Ensure duration is defined (should always be set by TimingCalculator)
+          const eventDuration = event.duration ?? 0
           scheduler.scheduleSliceEvent(
             resolvedFilePath,
             startTimeMs,
             event.sliceNumber,
             this._chopDivisions,
-            event.duration, // Event duration in ms (time slot for this event)
+            eventDuration, // Event duration in ms (time slot for this event)
             finalGainDb,
             eventPan,
             this._name,
