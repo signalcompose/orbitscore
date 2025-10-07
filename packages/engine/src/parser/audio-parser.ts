@@ -252,9 +252,9 @@ export type MethodChain = {
 }
 
 // Random value types
-export type RandomValue = 
-  | { type: 'full-random' }  // r
-  | { type: 'random-walk', center: number, range: number }  // r0%20, r-6%4
+export type RandomValue =
+  | { type: 'full-random' } // r
+  | { type: 'random-walk'; center: number; range: number } // r0%20, r-6%4
 
 // Play structure types
 export type PlayElement =
@@ -533,13 +533,16 @@ export class AudioParser {
     if (token.type === 'MINUS') {
       this.advance() // consume MINUS
       const nextToken = this.current()
-      
+
       // Check for -Infinity or -inf
-      if (nextToken.type === 'IDENTIFIER' && (nextToken.value === 'Infinity' || nextToken.value === 'inf')) {
+      if (
+        nextToken.type === 'IDENTIFIER' &&
+        (nextToken.value === 'Infinity' || nextToken.value === 'inf')
+      ) {
         this.advance() // consume Infinity or inf
         return -Infinity
       }
-      
+
       // Regular negative number
       const numToken = this.expect('NUMBER')
       const value = -parseFloat(numToken.value)
@@ -589,12 +592,12 @@ export class AudioParser {
           this.advance() // consume MINUS
           const numToken = this.expect('NUMBER')
           const center = -parseFloat(numToken.value)
-          
+
           // Expect PERCENT
           this.expect('PERCENT')
           const rangeToken = this.expect('NUMBER')
           const range = parseFloat(rangeToken.value)
-          
+
           return { type: 'random-walk', center, range } as RandomValue
         } else {
           // Just 'r' - full random
@@ -605,18 +608,18 @@ export class AudioParser {
         // Extract center value from identifier (e.g., 'r0' -> 0, 'r50' -> 50)
         const centerStr = value.substring(1) // Remove 'r' prefix
         const center = parseFloat(centerStr)
-        
+
         if (isNaN(center)) {
           // Not a random syntax, treat as regular identifier
           return value
         }
-        
+
         // Check if followed by PERCENT
         if (this.current().type === 'PERCENT') {
           this.advance() // consume PERCENT
           const rangeToken = this.expect('NUMBER')
           const range = parseFloat(rangeToken.value)
-          
+
           return { type: 'random-walk', center, range } as RandomValue
         } else {
           // r<num> without %, treat as regular identifier (invalid syntax)

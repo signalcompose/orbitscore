@@ -8,9 +8,12 @@ import * as path from 'path'
 import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { TimingCalculator, TimedEvent } from '../timing/timing-calculator'
-import { audioSlicer } from '../audio/audio-slicer'
 
 import { Global, Meter, Scheduler } from './global'
+import { preparePlayback } from './sequence/playback/prepare-playback'
+import { runSequence } from './sequence/playback/run-sequence'
+import { loopSequence } from './sequence/playback/loop-sequence'
+import { prepareSlices as prepareSlicesUtil } from './sequence/audio/prepare-slices'
 
 /**
  * Generate a random value based on the random spec
@@ -79,21 +82,21 @@ export class Sequence {
   length(bars: number): this {
     const wasLooping = this._isLooping
     this._length = bars
-    
+
     // Recalculate timing if play pattern exists
     if (this._playPattern && this._playPattern.length > 0) {
       this.play(...this._playPattern)
     }
-    
+
     // If currently looping, restart the loop with new length
     if (wasLooping) {
-      // Don't await, just trigger async restart
+      // Trigger async restart (no await needed as this is a sync method)
       this.stop()
-      setTimeout(() => {
-        this.loop()
+      setTimeout(async () => {
+        await this.loop()
       }, 10)
     }
-    
+
     return this
   }
 
@@ -118,32 +121,34 @@ export class Sequence {
         this._gainDb = Math.max(-60, Math.min(12, valueDb))
       }
     }
-    
+
     // If already playing, reschedule future events only (seamless change)
     if (this._isLooping || this._isPlaying) {
       const scheduler = this.global.getScheduler()
       const isRunning = (scheduler as any).isRunning
-      
+
       if (isRunning && this._loopStartTime !== undefined) {
         // Get current scheduler time
         const schedulerStartTime = (scheduler as any).startTime
         const now = Date.now()
         const currentTime = now - schedulerStartTime
-        
+
         // Clear ALL old events first
         ;(scheduler as any).clearSequenceEvents(this._name)
-        
+
         // Reschedule events, but only future ones
         // scheduleEvents will now skip events that are already in the past
         this.scheduleEventsFromTime(scheduler, currentTime)
-        
-        const gainDesc = this._gainRandom 
-          ? (this._gainRandom.type === 'full-random' ? 'random' : `random(${this._gainRandom.center}±${this._gainRandom.range})`)
+
+        const gainDesc = this._gainRandom
+          ? this._gainRandom.type === 'full-random'
+            ? 'random'
+            : `random(${this._gainRandom.center}±${this._gainRandom.range})`
           : `${typeof valueDb === 'number' ? valueDb : this._gainDb} dB`
         console.log(`🎚️ ${this._name}: gain=${gainDesc} (seamless)`)
       }
     }
-    
+
     return this
   }
 
@@ -162,31 +167,33 @@ export class Sequence {
       this._panRandom = undefined
       this._pan = Math.max(-100, Math.min(100, value))
     }
-    
+
     // If already playing, reschedule with new pan
     if (this._isLooping || this._isPlaying) {
       const scheduler = this.global.getScheduler()
       const isRunning = (scheduler as any).isRunning
-      
+
       if (isRunning && this._loopStartTime !== undefined) {
         // Clear ALL old events first
         ;(scheduler as any).clearSequenceEvents(this._name)
-        
+
         // Get current scheduler time
         const schedulerStartTime = (scheduler as any).startTime
         const now = Date.now()
         const currentTime = now - schedulerStartTime
-        
+
         // Reschedule events, but only future ones
         this.scheduleEventsFromTime(scheduler, currentTime)
-        
-        const panDesc = this._panRandom 
-          ? (this._panRandom.type === 'full-random' ? 'random' : `random(${this._panRandom.center}±${this._panRandom.range})`)
+
+        const panDesc = this._panRandom
+          ? this._panRandom.type === 'full-random'
+            ? 'random'
+            : `random(${this._panRandom.center}±${this._panRandom.range})`
           : value
         console.log(`🎚️ ${this._name}: pan=${panDesc} (seamless)`)
       }
     }
-    
+
     return this
   }
 
@@ -200,7 +207,7 @@ export class Sequence {
       this._audioFilePath = filepath
       // ${this._name}: audio=${filepath}
     }
-    
+
     this._chopDivisions = 1 // Default to no chopping
     // Note: Actual loading will happen when needed or through explicit load call
     return this
@@ -232,16 +239,11 @@ export class Sequence {
   }
 
   private async prepareSlices(): Promise<void> {
-    if (!this._audioFilePath || !this._chopDivisions || this._chopDivisions <= 1) {
-      return
-    }
-
-    try {
-      await audioSlicer.sliceAudioFile(this._audioFilePath, this._chopDivisions)
-      // ${this._name}: slices ready
-    } catch (err: any) {
-      console.error(`${this._name}: failed to prepare slices - ${err.message}`)
-    }
+    await prepareSlicesUtil({
+      sequenceName: this._name,
+      audioFilePath: this._audioFilePath,
+      chopDivisions: this._chopDivisions,
+    })
   }
 
   play(...elements: PlayElement[]): this {
@@ -251,12 +253,12 @@ export class Sequence {
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo
     const meter = this._beat || globalState.beat
-    
+
     // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
     // これにより、シーケンスごとに異なる拍子で1小節の長さを変えられる（ポリメーター）
     // 例: global.beat(4 by 4) = 2000ms, seq.beat(5 by 4) = 2500ms, seq.beat(9 by 8) = 2250ms
-    const quarterNoteDuration = 60000 / tempo  // 4分音符の長さ（BPMの基準）
-    const barDuration = quarterNoteDuration * (meter.numerator / meter.denominator * 4)
+    const quarterNoteDuration = 60000 / tempo // 4分音符の長さ（BPMの基準）
+    const barDuration = quarterNoteDuration * ((meter.numerator / meter.denominator) * 4)
 
     // Apply length multiplier to bar duration (stretches each event)
     const effectiveBarDuration = barDuration * (this._length || 1)
@@ -279,10 +281,6 @@ export class Sequence {
       ? this._audioFilePath
       : path.resolve(this._audioFilePath)
 
-    const globalState = this.global.getState()
-    const tempo = this._tempo || globalState.tempo || 120
-    const beatDuration = 60000 / tempo // ms per beat
-    const barDuration = beatDuration * 4 // assuming 4/4 time
     const chopDivisions = this._chopDivisions || 1
     const patternDuration = this.getPatternDuration()
 
@@ -307,12 +305,12 @@ export class Sequence {
           // Calculate final gain
           const masterGainDb = this.global.getMasterGainDb()
           let sequenceGainDb = this._gainDb
-          
+
           // Generate random gain if specified
           if (this._gainRandom) {
             sequenceGainDb = generateRandomValue(this._gainRandom, -60, 12)
           }
-          
+
           let finalGainDb: number
           if (this._isMuted) {
             finalGainDb = -Infinity
@@ -321,19 +319,23 @@ export class Sequence {
           } else {
             finalGainDb = sequenceGainDb + masterGainDb
           }
-          
+
           // Generate random pan if specified
-          const eventPan = this._panRandom 
+          const eventPan = this._panRandom
             ? generateRandomValue(this._panRandom, -100, 100)
             : this._pan
 
           // Schedule event
           if (chopDivisions > 1) {
+            // Ensure duration is defined and non-zero to prevent Infinity rate calculation
+            // If duration is 0 or undefined, use slice's natural duration (rate = 1.0)
+            const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
             scheduler.scheduleSliceEvent(
               resolvedFilePath,
               startTimeMs,
               event.sliceNumber,
               chopDivisions,
+              eventDuration, // Event duration in ms (time slot for this event)
               finalGainDb,
               eventPan,
               this._name,
@@ -352,23 +354,26 @@ export class Sequence {
     }
   }
 
-  async scheduleEvents(scheduler: Scheduler, loopIteration: number = 0, baseTime: number = 0): Promise<void> {
+  async scheduleEvents(
+    scheduler: Scheduler,
+    loopIteration: number = 0,
+    baseTime: number = 0,
+  ): Promise<void> {
     if (!this._audioFilePath || !this._timedEvents || this._timedEvents.length === 0) {
       return
     }
 
     // Resolve the audio file path to an absolute path
     // Note: audio() method already combines globalState.audioPath with filepath
-    // So we only need to resolve relative paths from current working directory
+    // If the path is relative, resolve it from the workspace root (process.cwd())
     const resolvedFilePath = path.isAbsolute(this._audioFilePath)
       ? this._audioFilePath
-      : path.resolve(this._audioFilePath)
+      : path.resolve(process.cwd(), this._audioFilePath)
 
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo || 120
     const beatDuration = 60000 / tempo // ms per beat
     const barDuration = beatDuration * 4 // assuming 4/4 time
-    const chopDivisions = this._chopDivisions || 1
 
     // Schedule events for current iteration
     // When called from loop(), baseTime already includes the correct time
@@ -379,16 +384,16 @@ export class Sequence {
       if (event.sliceNumber > 0) {
         // 0 is silence
         const startTimeMs = baseTime + event.startTime + loopOffset
-        
+
         // Calculate final gain: sequence gain + master gain (in dB, so we add them)
         const masterGainDb = this.global.getMasterGainDb()
         let sequenceGainDb = this._gainDb
-        
+
         // Generate random gain if specified
         if (this._gainRandom) {
           sequenceGainDb = generateRandomValue(this._gainRandom, -60, 12)
         }
-        
+
         let finalGainDb: number
         if (this._isMuted) {
           finalGainDb = -Infinity
@@ -397,135 +402,119 @@ export class Sequence {
         } else {
           finalGainDb = sequenceGainDb + masterGainDb
         }
-        
+
         // Generate random pan if specified
-        const eventPan = this._panRandom 
+        const eventPan = this._panRandom
           ? generateRandomValue(this._panRandom, -100, 100)
           : this._pan
-        
+
         // Use sox slice playback instead of file slicing
-        if (chopDivisions > 1) {
+        if (this._chopDivisions && this._chopDivisions > 1) {
+          // Ensure duration is defined and non-zero to prevent Infinity rate calculation
+          // If duration is 0 or undefined, use slice's natural duration (rate = 1.0)
+          const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
           scheduler.scheduleSliceEvent(
             resolvedFilePath,
             startTimeMs,
             event.sliceNumber,
-            chopDivisions,
+            this._chopDivisions,
+            eventDuration, // Event duration in ms (time slot for this event)
             finalGainDb,
             eventPan,
             this._name,
           )
         } else {
-          scheduler.scheduleEvent(
-            resolvedFilePath,
-            startTimeMs,
-            finalGainDb,
-            eventPan,
-            this._name,
-          )
+          scheduler.scheduleEvent(resolvedFilePath, startTimeMs, finalGainDb, eventPan, this._name)
         }
       }
     }
 
     this._isPlaying = true
   }
-  
+
   // Calculate pattern duration
   private getPatternDuration(): number {
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo || 120
     const meter = this._beat || globalState.beat
-    
+
     // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
     const quarterNoteDuration = 60000 / tempo
-    const barDuration = quarterNoteDuration * (meter.numerator / meter.denominator * 4)
-    
+    const barDuration = quarterNoteDuration * ((meter.numerator / meter.denominator) * 4)
+
     // length() multiplies the duration of each event, not the number of bars
     // So the pattern duration is: 1 bar × length multiplier
     return barDuration * (this._length || 1)
   }
 
   // Transport control
-  run(): this {
-    const scheduler = this.global.getScheduler()
-    const isRunning = (scheduler as any).isRunning
-    
-    // Check if scheduler is running
-    if (!isRunning) {
-      console.log(`⚠️ ${this._name}.run() - scheduler not running. Use global.run() first.`)
-      return this
-    }
-    
-    // One-shot playback
-    if (!this._isPlaying) {
-      this._isPlaying = true
-      this._isLooping = false
-      console.log(`▶ ${this._name} (one-shot)`)
-      
-      // Schedule immediately
-      this.scheduleEvents(scheduler, 0)
-    }
+  async run(): Promise<this> {
+    const prepared = await preparePlayback({
+      sequenceName: this._name,
+      audioFilePath: this._audioFilePath,
+      chopDivisions: this._chopDivisions,
+      loopTimer: this.loopTimer,
+      prepareSlicesFn: () => this.prepareSlices(),
+      getScheduler: () => this.global.getScheduler(),
+    })
+
+    if (!prepared) return this
+
+    const { scheduler, currentTime } = prepared
+    // Note: preparePlayback() has already cleared any existing loop timer
+    // run() is one-shot playback, so we ensure loopTimer remains undefined
+    this.loopTimer = undefined
+
+    const result = runSequence({
+      sequenceName: this._name,
+      scheduler,
+      currentTime,
+      isPlaying: this._isPlaying,
+      scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
+      getPatternDurationFn: () => this.getPatternDuration(),
+      clearSequenceEventsFn: (name) => (scheduler as any).clearSequenceEvents(name),
+    })
+
+    this._isPlaying = result.isPlaying
+    this._isLooping = result.isLooping
+
     return this
   }
 
   async loop(): Promise<this> {
-    const scheduler = this.global.getScheduler()
-    const isRunning = (scheduler as any).isRunning
-    
-    // Check if scheduler is running
-    if (!isRunning) {
-      console.log(`⚠️ ${this._name}.loop() - scheduler not running. Use global.run() first.`)
-      return this
-    }
-    
-    // Preload buffer to get correct duration
-    if (this._audioFilePath && scheduler.loadBuffer) {
-      const resolvedPath = path.isAbsolute(this._audioFilePath)
-        ? this._audioFilePath
-        : path.resolve(this._audioFilePath)
-      await scheduler.loadBuffer(resolvedPath)
-    }
-    
-    // Clear old loop timer if exists
-    if (this.loopTimer) {
-      clearInterval(this.loopTimer)
-      this.loopTimer = undefined
-    }
-    
-    // Clear old events for this sequence first
-    ;(scheduler as any).clearSequenceEvents(this._name)
-    
+    const prepared = await preparePlayback({
+      sequenceName: this._name,
+      audioFilePath: this._audioFilePath,
+      chopDivisions: this._chopDivisions,
+      loopTimer: this.loopTimer,
+      prepareSlicesFn: () => this.prepareSlices(),
+      getScheduler: () => this.global.getScheduler(),
+    })
+
+    if (!prepared) return this
+
+    const { scheduler, currentTime } = prepared
+
+    // Set loop state BEFORE calling loopSequence to avoid race condition
+    // The setInterval callback will check this state via getIsLoopingFn()
     this._isLooping = true
     this._isPlaying = true
-    
-    // Get current scheduler time
-    const schedulerStartTime = (scheduler as any).startTime
-    const now = Date.now()
-    const currentTime = now - schedulerStartTime
-    
-    // Record loop start time for seamless parameter changes
-    this._loopStartTime = currentTime
-    
-    // Calculate pattern duration
-    const patternDuration = this.getPatternDuration()
-    
-    // Track next scheduled time (cumulative, to avoid drift)
-    let nextScheduleTime = currentTime
-    let iteration = 0
-    
-    // Schedule first iteration
-    this.scheduleEvents(scheduler, 0, nextScheduleTime) // Always use 0, baseTime contains the correct time
-    
-    // Set up loop timer
-    this.loopTimer = setInterval(() => {
-      if (this._isLooping && !this._isMuted) {
-        iteration++
-        nextScheduleTime += patternDuration // Cumulative time, no drift
-        // Clear old scheduled events for this sequence before scheduling new ones
-        ;(scheduler as any).clearSequenceEvents(this._name)
-        this.scheduleEvents(scheduler, 0, nextScheduleTime) // Always use 0, baseTime contains the correct time
-      }
-    }, patternDuration)
-    
+
+    const result = loopSequence({
+      sequenceName: this._name,
+      scheduler,
+      currentTime,
+      scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
+      getPatternDurationFn: () => this.getPatternDuration(),
+      clearSequenceEventsFn: (name) => (scheduler as any).clearSequenceEvents(name),
+      getIsLoopingFn: () => this._isLooping,
+      getIsMutedFn: () => this._isMuted,
+    })
+
+    // Update remaining state from result
+    this._loopStartTime = result.loopStartTime
+    this.loopTimer = result.loopTimer
+
     return this
   }
 
@@ -533,13 +522,14 @@ export class Sequence {
     // Clear scheduled events from scheduler
     const scheduler = this.global.getScheduler()
     ;(scheduler as any).clearSequenceEvents(this._name)
-    
-    // Clear loop timer
+
+    // Clear loop timer (only exists if loop() was called, not run())
+    // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
     if (this.loopTimer) {
       clearInterval(this.loopTimer)
       this.loopTimer = undefined
     }
-    
+
     // Clear state
     this._isPlaying = false
     this._isLooping = false

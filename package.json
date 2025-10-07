@@ -12,16 +12,19 @@
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier . --write",
     "telemetry:max": "node tools/max-telemetry-server.js",
-    "hooks:install": "echo '#!/bin/sh\n\n# OrbitScore pre-commit hook\n# Runs lint-staged on staged files\n\nnpx lint-staged' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
+    "prepare": "husky"
   },
   "version": "1.0.0",
   "main": "index.js",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "devDependencies": {
-    "@types/node": "^20.19.19",
+    "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
@@ -30,6 +33,7 @@
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
     "eslint-plugin-prettier": "^5.5.4",
+    "husky": "^9.1.7",
     "lint-staged": "^15.2.9",
     "prettier": "^3.6.2",
     "ts-node": "^10.9.2",

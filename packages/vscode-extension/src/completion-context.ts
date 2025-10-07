@@ -94,11 +94,27 @@ export function getContextualCompletions(
     }
     completions.push(createCompletion('tick', 'Set tick resolution', 'tick(${1:4})'))
     completions.push(createCompletion('key', 'Set global key', 'key(${1:C})'))
-    completions.push(createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'))
+    completions.push(
+      createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'),
+    )
     completions.push(createCompletion('gain', 'Set master volume in dB', 'gain(${1:0})'))
-    completions.push(createCompletion('compressor', 'Add compressor effect', 'compressor(${1:0.5}, ${2:0.5}, ${3:0.01}, ${4:0.1}, ${5:1.0}, ${6:true})'))
-    completions.push(createCompletion('limiter', 'Add limiter effect', 'limiter(${1:0.99}, ${2:0.01}, ${3:true})'))
-    completions.push(createCompletion('normalizer', 'Add normalizer effect', 'normalizer(${1:1.0}, ${2:0.01}, ${3:true})'))
+    completions.push(
+      createCompletion(
+        'compressor',
+        'Add compressor effect',
+        'compressor(${1:0.5}, ${2:0.5}, ${3:0.01}, ${4:0.1}, ${5:1.0}, ${6:true})',
+      ),
+    )
+    completions.push(
+      createCompletion('limiter', 'Add limiter effect', 'limiter(${1:0.99}, ${2:0.01}, ${3:true})'),
+    )
+    completions.push(
+      createCompletion(
+        'normalizer',
+        'Add normalizer effect',
+        'normalizer(${1:1.0}, ${2:0.01}, ${3:true})',
+      ),
+    )
 
     // Transport commands always available
     completions.push(createCompletion('run', 'Start all sequences', 'run()'))

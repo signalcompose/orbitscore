@@ -1,4 +1,14 @@
-# OrbitScore DSL 仕様書 v1.0
+# OrbitScore DSL 仕様書 v1.0 (ARCHIVED)
+
+> ⚠️ **この文書はアーカイブされています**
+> 
+> - **現行仕様**: [../INSTRUCTION_ORBITSCORE_DSL.md](../INSTRUCTION_ORBITSCORE_DSL.md)
+> - **アーカイブ日**: 2025-10-06
+> - **理由**: v2.0でSuperCollider Audio Engineに移行（MIDIベースからオーディオベースへ）
+> - **用途**: 開発過程の記録・論文執筆の参考資料
+> 
+> この文書は、OrbitScoreの初期設計思想であるMIDIベースの度数システムを記録しています。
+> 実装の変遷については[../WORK_LOG.md](../WORK_LOG.md)を参照してください。
 
 ## 概要
 
