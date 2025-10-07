@@ -15,6 +15,89 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.19 Refactor Timing Calculator - Phase 2-2 (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+**Branch**: 14-refactor-timing-calculator-phase-2-2
+**Issue**: #14
+
+**Work Content**: `timing-calculator.ts`（151行）を5つのモジュールに分割し、コーディング規約に準拠
+
+#### リファクタリング内容
+
+**1. モジュール分割**
+新しいディレクトリ構造：
+```
+packages/engine/src/timing/calculation/
+├── index.ts                          # モジュールエクスポート
+├── types.ts                          # 型定義
+├── calculate-event-timing.ts         # イベントタイミング計算
+├── convert-to-absolute-timing.ts     # 絶対タイミング変換
+└── format-timing.ts                  # デバッグ用フォーマット
+```
+
+**2. 各モジュールの責務**
+- `types.ts`: `TimedEvent`インターフェースの型定義
+- `calculate-event-timing.ts`: 階層的なplay()構造のタイミング計算（再帰処理）
+- `convert-to-absolute-timing.ts`: バー相対タイミングを絶対タイミングに変換
+- `format-timing.ts`: デバッグ用の人間が読める形式へのフォーマット
+
+**3. 後方互換性**
+- `timing-calculator.ts`を後方互換性のためのラッパークラスとして保持
+- 既存のコードは変更不要
+- `@deprecated`タグで新しいモジュールの使用を推奨
+
+#### コーディング規約の適用
+
+**1. SRP（単一責任の原則）**
+- 各関数が1つの明確な責務を持つ
+- タイミング計算、変換、フォーマットを分離
+
+**2. DRY（重複排除）**
+- `TimingCalculator`クラスは新しいモジュールに委譲
+- ロジックの重複を完全に排除
+
+**3. 再利用性**
+- 各関数は独立して使用可能
+- 明確な関数名（`calculateEventTiming`, `convertToAbsoluteTiming`, `formatTiming`）
+
+**4. ドキュメント**
+- 各関数にJSDocコメント
+- パラメータと戻り値の説明
+- 使用例を含む詳細な説明
+
+#### テスト結果
+```bash
+npm test
+```
+- ✅ 115 tests passed
+- ⏭️ 15 tests skipped
+- ✅ ビルド成功
+- ✅ lint成功
+
+#### ファイル変更
+- **新規作成**:
+  - `packages/engine/src/timing/calculation/index.ts`
+  - `packages/engine/src/timing/calculation/types.ts`
+  - `packages/engine/src/timing/calculation/calculate-event-timing.ts`
+  - `packages/engine/src/timing/calculation/convert-to-absolute-timing.ts`
+  - `packages/engine/src/timing/calculation/format-timing.ts`
+- **変更**:
+  - `packages/engine/src/timing/timing-calculator.ts` (ラッパークラスに変更)
+  - `docs/PROJECT_RULES.md` (自動Issueクローズのワークフロー追加)
+  - `.serena/memories/development_guidelines.md` (自動Issueクローズのガイドライン追加)
+
+#### ワークフロー改善
+- **自動Issueクローズ**: PR本文に`Closes #<issue-number>`を含めることで、PRマージ時にIssueが自動クローズされる仕組みを導入
+- `docs/PROJECT_RULES.md`に詳細なガイドラインを追加
+- Serenaメモリに開発ガイドラインとして記録
+
+#### コミット
+- `1092e7f`: refactor: timing-calculator.tsをモジュール分割（Phase 2-2）
+
+---
+
 ### 6.18 Refactor Audio Slicer - Phase 2-1 (January 7, 2025)
 
 **Date**: January 7, 2025
