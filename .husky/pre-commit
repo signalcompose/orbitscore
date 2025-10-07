@@ -1,1 +1,21 @@
+#!/usr/bin/env sh
+# Pre-commit hook for OrbitScore
+#
+# IMPORTANT: This hook runs tests and build before commit.
+# This is intentional to catch errors early, even though it makes commits slower.
+# 
+# Rationale:
+# - Prevents pushing broken code that will fail in CI/CD
+# - Saves time by catching issues locally instead of waiting for CI/CD feedback
+# - Ensures code quality before it reaches the remote repository
+#
+# If you need to skip this hook temporarily (NOT RECOMMENDED):
+# git commit --no-verify
+
 npx lint-staged
+
+# Run tests
+npm test || exit 1
+
+# Run build
+npm run build || exit 1
