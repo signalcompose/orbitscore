@@ -48,7 +48,7 @@ export async function preparePlayback(
   }
 
   // Prepare slices if chop() was called
-  await prepareSlicesFn()
+  prepareSlicesFn()
 
   // Preload buffer to get correct duration
   if (audioFilePath && scheduler.loadBuffer) {
