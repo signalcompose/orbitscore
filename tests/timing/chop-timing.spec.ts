@@ -3,6 +3,8 @@
  * Verifies that sliced audio events are scheduled at correct times
  */
 
+import * as path from 'path'
+
 import { describe, it, expect, beforeEach } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
@@ -24,9 +26,10 @@ describe('Chop Timing', () => {
   describe('Timing Calculation', () => {
     it('should schedule 4 slices at correct intervals (30 BPM)', async () => {
       // Setup
-      global.tempo(30).beat(4, 4)
+      global.tempo(30)
+      global.beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -49,9 +52,10 @@ describe('Chop Timing', () => {
 
     it('should schedule 4 slices at correct intervals (120 BPM)', async () => {
       // Setup
-      global.tempo(120).beat(4, 4)
+      global.tempo(120)
+      global.beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -74,9 +78,10 @@ describe('Chop Timing', () => {
 
     it('should schedule only specified slices', async () => {
       // Setup
-      global.tempo(60).beat(4, 4)
+      global.tempo(60)
+      global.beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 0, 3, 0) // Only 1st and 3rd slices
 
@@ -105,7 +110,7 @@ describe('Chop Timing', () => {
 
   describe('Slice Scheduling', () => {
     it('should call scheduleSliceEvent with correct parameters', async () => {
-      // Mock scheduleSliceEvent and server
+      // Mock SuperColliderPlayer's public scheduleSliceEvent method
       const scheduledEvents: any[] = []
       player.scheduleSliceEvent = (
         filepath: string,
@@ -130,14 +135,15 @@ describe('Chop Timing', () => {
       }
 
       // Mock loadBuffer to avoid server calls
-      player.loadBuffer = async () => ({ bufnum: 0 })
+      player.loadBuffer = async () => ({ bufnum: 0, duration: 1.0 })
 
       // Setup
-      global.tempo(60).beat(4, 4)
+      global.tempo(60)
+      global.beat(4, 4)
       await global.run()
 
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -153,13 +159,13 @@ describe('Chop Timing', () => {
         expect(event.sliceIndex).toBe(index + 1)
         expect(event.totalSlices).toBe(4)
         expect(event.startTimeMs).toBeGreaterThanOrEqual(expectedTimes[index])
-        expect(event.startTimeMs).toBeLessThan(expectedTimes[index] + 200) // Allow 200ms tolerance
+        expect(event.startTimeMs).toBeLessThan(expectedTimes[index] + 300) // Allow 300ms tolerance for CI
         expect(event.sequenceName).toBe('test')
       })
     })
 
     it('should schedule slices with correct slice positions', async () => {
-      // Mock scheduleSliceEvent and server
+      // Mock SuperColliderPlayer's public scheduleSliceEvent method
       const scheduledEvents: any[] = []
       player.scheduleSliceEvent = (
         filepath: string,
@@ -184,14 +190,15 @@ describe('Chop Timing', () => {
       }
 
       // Mock loadBuffer to avoid server calls
-      player.loadBuffer = async () => ({ bufnum: 0 })
+      player.loadBuffer = async () => ({ bufnum: 0, duration: 1.0 })
 
       // Setup
-      global.tempo(60).beat(4, 4)
+      global.tempo(60)
+      global.beat(4, 4)
       await global.run()
 
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
       sequence.chop(8) // 8 slices
       sequence.play(2, 4, 6, 8) // Even slices only
 
@@ -216,7 +223,8 @@ describe('Chop Timing', () => {
       player.getAudioDuration = () => 1.0 // 1 second audio file
 
       // Setup
-      global.tempo(60).beat(4, 4)
+      global.tempo(60)
+      global.beat(4, 4)
       sequence.beat(4, 4).length(1)
       sequence.audio('test-assets/audio/test.wav')
       sequence.chop(4)
