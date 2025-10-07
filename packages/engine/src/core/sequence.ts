@@ -408,12 +408,12 @@ export class Sequence {
           : this._pan
 
         // Use sox slice playback instead of file slicing
-        if (chopDivisions > 1) {
+        if (this._chopDivisions && this._chopDivisions > 1) {
           scheduler.scheduleSliceEvent(
             resolvedFilePath,
             startTimeMs,
             event.sliceNumber,
-            chopDivisions,
+            this._chopDivisions,
             finalGainDb,
             eventPan,
             this._name,
@@ -452,6 +452,9 @@ export class Sequence {
       console.log(`⚠️ ${this._name}.run() - scheduler not running. Use global.run() first.`)
       return this
     }
+
+    // Prepare slices if chop() was called
+    await this.prepareSlices()
 
     // Preload buffer to get correct duration (for one-shot playback)
     if (this._audioFilePath && scheduler.loadBuffer) {

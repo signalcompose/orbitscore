@@ -48,7 +48,7 @@ export class SuperColliderPlayer {
   private intervalId: NodeJS.Timeout | null = null
 
   constructor() {
-    // @ts-expect-error - __dirname is available in CommonJS
+    // @ts-ignore - __dirname is available in CommonJS
     this.synthDefPath = path.join(__dirname, '../../supercollider/synthdefs/orbitPlayBuf.scsyndef')
   }
 
@@ -152,7 +152,7 @@ export class SuperColliderPlayer {
     await this.server.send.msg(['/b_allocRead', bufnum, filepath, 0, -1])
 
     // Query duration
-    const duration = await this.queryBufferDuration(bufnum)
+    const duration = await this.queryBufferDuration()
 
     const bufferInfo: BufferInfo = { bufnum, duration }
     this.bufferCache.set(filepath, bufferInfo)

@@ -175,7 +175,7 @@ function startEngine(debugMode: boolean = false) {
     return
   }
 
-  isDebugMode = debugMode
+  // isDebugMode = debugMode
   const modeLabel = debugMode ? '(Debug Mode)' : ''
   outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
 
@@ -341,7 +341,7 @@ function startEngine(debugMode: boolean = false) {
     engineProcess = null
     isLiveCodingMode = false
     hasEvaluatedFile = false // Reset on engine exit
-    isDebugMode = false // Reset debug mode
+    // isDebugMode = false // Reset debug mode
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
   })
