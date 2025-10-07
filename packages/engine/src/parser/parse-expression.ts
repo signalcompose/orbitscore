@@ -182,8 +182,10 @@ export class ExpressionParser {
       const center = parseFloat(centerStr)
 
       if (isNaN(center)) {
-        // Not a random syntax, treat as regular identifier
-        return { value: value as any, newPos: this.pos }
+        // Not a valid random syntax (e.g., 'rabc')
+        throw new Error(
+          `Invalid random syntax: '${value}' - expected 'r' followed by a number (e.g., 'r0%20', 'r-6%3')`,
+        )
       }
 
       // Check if followed by PERCENT
@@ -201,7 +203,8 @@ export class ExpressionParser {
       }
     }
 
-    return { value: value as any, newPos: this.pos }
+    // Should not reach here if isRandomSyntax check was done properly
+    throw new Error(`Invalid random syntax: '${value}'`)
   }
 
   /**
