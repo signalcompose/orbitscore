@@ -2,7 +2,17 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
 
-describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
+/**
+ * SuperCollider連携テスト
+ * 
+ * CI環境ではスキップされます。理由：
+ * - SuperColliderサーバーの起動が必要
+ * - 実際の音出しテストは手動確認が必要
+ * - 数値計算のロジックは他のテストでカバー
+ * 
+ * ローカル環境でSuperColliderを起動して実行可能です。
+ */
+describe.skipIf(process.env.CI === 'true')('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
   let player: SuperColliderPlayer
   // let mockOscClient: any
 
