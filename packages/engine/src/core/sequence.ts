@@ -7,8 +7,7 @@ import * as path from 'path'
 
 import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
-import { TimedEvent } from '../timing/timing-calculator'
-import { calculateEventTiming } from '../timing/calculation'
+import { TimedEvent, calculateEventTiming } from '../timing/calculation'
 
 import { Global, Meter, Scheduler } from './global'
 import { preparePlayback } from './sequence/playback/prepare-playback'
