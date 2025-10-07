@@ -230,6 +230,8 @@ export class Sequence {
       isMuted: this.stateManager.isMuted(),
       sequenceName: this.stateManager.getName(),
       loopStartTime: this.stateManager.getLoopStartTime(),
+      masterGainDb: this.global.getMasterGainDb(),
+      patternDuration: this.getPatternDuration(),
     })
   }
 
@@ -259,6 +261,8 @@ export class Sequence {
       panRandom: panState.panRandom,
       isMuted: this.stateManager.isMuted(),
       sequenceName: this.stateManager.getName(),
+      masterGainDb: this.global.getMasterGainDb(),
+      patternDuration: this.getPatternDuration(),
     })
 
     this.stateManager.setPlaying(true)

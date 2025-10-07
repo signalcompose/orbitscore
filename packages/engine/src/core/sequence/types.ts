@@ -106,6 +106,8 @@ export interface ScheduleEventsOptions {
   panRandom?: RandomValue
   isMuted: boolean
   sequenceName: string
+  masterGainDb: number
+  patternDuration: number
 }
 
 /**
@@ -124,4 +126,6 @@ export interface ScheduleEventsFromTimeOptions {
   isMuted: boolean
   sequenceName: string
   loopStartTime?: number
+  masterGainDb: number
+  patternDuration: number
 }
