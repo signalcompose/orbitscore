@@ -31,22 +31,3 @@ jobs:
 
     - name: Lint code
       run: npm run lint
-
-    - name: Run Cursor BugBot
-      if: ${{ secrets.CURSOR_BOT_API_KEY != '' }}
-      uses: cursor-ai/bugbot-action@v1
-      with:
-        api-key: ${{ secrets.CURSOR_BOT_API_KEY }}
-        review-type: 'comprehensive'
-        fail-on-issues: false
-    
-    - name: Cursor BugBot API Key Missing
-      if: ${{ secrets.CURSOR_BOT_API_KEY == '' }}
-      run: |
-        echo "⚠️ CURSOR_BOT_API_KEY secret is not set. Please configure it in GitHub repository settings."
-        echo "To get your API key:"
-        echo "1. Open Cursor settings"
-        echo "2. Go to Account > API Keys"
-        echo "3. Create a new API key for BugBot"
-        echo "4. Add it as CURSOR_BOT_API_KEY secret in GitHub repository settings"
-
