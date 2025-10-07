@@ -3,6 +3,8 @@
  * Verifies that sliced audio events are scheduled at correct times
  */
 
+import * as path from 'path'
+
 import { describe, it, expect, beforeEach } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
@@ -26,7 +28,7 @@ describe('Chop Timing', () => {
       // Setup
       global.tempo(30).beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -51,7 +53,7 @@ describe('Chop Timing', () => {
       // Setup
       global.tempo(120).beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -76,7 +78,7 @@ describe('Chop Timing', () => {
       // Setup
       global.tempo(60).beat(4, 4)
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 0, 3, 0) // Only 1st and 3rd slices
 
@@ -105,9 +107,9 @@ describe('Chop Timing', () => {
 
   describe('Slice Scheduling', () => {
     it('should call scheduleSliceEvent with correct parameters', async () => {
-      // Mock scheduleSliceEvent and server
+      // Mock EventScheduler's scheduleSliceEvent method
       const scheduledEvents: any[] = []
-      player.scheduleSliceEvent = (
+      ;(player as any).eventScheduler.scheduleSliceEvent = (
         filepath: string,
         startTimeMs: number,
         sliceIndex: number,
@@ -137,7 +139,7 @@ describe('Chop Timing', () => {
       await global.run()
 
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
       sequence.chop(4)
       sequence.play(1, 2, 3, 4)
 
@@ -159,9 +161,9 @@ describe('Chop Timing', () => {
     })
 
     it('should schedule slices with correct slice positions', async () => {
-      // Mock scheduleSliceEvent and server
+      // Mock EventScheduler's scheduleSliceEvent method
       const scheduledEvents: any[] = []
-      player.scheduleSliceEvent = (
+      ;(player as any).eventScheduler.scheduleSliceEvent = (
         filepath: string,
         startTimeMs: number,
         sliceIndex: number,
@@ -191,7 +193,7 @@ describe('Chop Timing', () => {
       await global.run()
 
       sequence.beat(4, 4).length(1)
-      sequence.audio('test-assets/audio/arpeggio_c.wav')
+      sequence.audio(path.join(process.cwd(), '../../test-assets/audio/arpeggio_c.wav'))
       sequence.chop(8) // 8 slices
       sequence.play(2, 4, 6, 8) // Even slices only
 
