@@ -333,6 +333,7 @@ export class SuperColliderPlayer {
 
       while (this.scheduledPlays.length > 0 && this.scheduledPlays[0].time <= now) {
         const play = this.scheduledPlays.shift()!
+        console.log(`⏰ Executing playback at ${now}ms (scheduled: ${play.time}ms)`)
         this.executePlayback(play.filepath, play.options, play.sequenceName, play.time)
       }
     }, 1)

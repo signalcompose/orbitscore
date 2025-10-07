@@ -481,7 +481,7 @@ export class Sequence {
       const now = Date.now()
       const currentTime = now - schedulerStartTime
 
-      // Schedule immediately
+      // Schedule from current time (events will be scheduled relative to now)
       this.scheduleEvents(scheduler, 0, currentTime)
 
       // Auto-stop after pattern duration
