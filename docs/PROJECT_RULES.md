@@ -57,6 +57,27 @@
 - Ensure all tests pass before committing
 - Golden files for regression testing
 
+**Testing Strategy:**
+
+1. **Automated Unit Tests** (CI環境で実行)
+   - パーサー、タイミング計算、オーディオスライサー等
+   - 高速実行、自動化可能
+   - リグレッション検出に有効
+
+2. **SuperCollider Integration Tests** (ローカル環境のみ)
+   - SuperColliderサーバー起動が必要
+   - CI環境ではスキップ (`describe.skipIf(process.env.CI === 'true')`)
+   - 数値計算ロジックは他のテストでカバー
+   - 例: `tests/audio/supercollider-gain-pan.spec.ts`
+
+3. **Audio Playback Tests** (将来実装予定)
+   - リファクタリング完了後に実装
+   - 実際に音を鳴らして期待通りの音が出ているか確認
+   - 音色、タイミング精度、エフェクト効果等をテスト
+   - 人間の耳による確認が必要
+
+**Note**: SuperCollider関連テストはCI環境で複雑なセットアップが必要（Xvfb、ダミーオーディオドライバ等）のため、ローカル環境での手動確認を推奨。
+
 ### 6. Tutorial and Example File Management
 
 **チュートリアルファイルの参照を必須とする:**
