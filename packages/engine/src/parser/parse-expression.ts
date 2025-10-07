@@ -247,7 +247,7 @@ export class ExpressionParser {
   /**
    * Parse nested play structure
    */
-  private parseNestedPlay(): { value: PlayNested; newPos: number } {
+  private parseNestedPlay(): { value: PlayNested | PlayWithModifier; newPos: number } {
     const elements: PlayElement[] = []
 
     // Parse nested structure like ((1)(2)) or (1, 2, 3)
@@ -300,7 +300,7 @@ export class ExpressionParser {
     // Check for modifiers on the nested structure itself
     if (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
       const modifierResult = this.parsePlayWithModifier({ type: 'nested', elements })
-      return { value: modifierResult.value as any, newPos: modifierResult.newPos }
+      return { value: modifierResult.value, newPos: modifierResult.newPos }
     }
 
     return { value: { type: 'nested', elements }, newPos: this.pos }
