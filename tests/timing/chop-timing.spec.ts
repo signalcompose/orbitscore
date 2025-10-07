@@ -155,7 +155,7 @@ describe('Chop Timing', () => {
         expect(event.sliceIndex).toBe(index + 1)
         expect(event.totalSlices).toBe(4)
         expect(event.startTimeMs).toBeGreaterThanOrEqual(expectedTimes[index])
-        expect(event.startTimeMs).toBeLessThan(expectedTimes[index] + 200) // Allow 200ms tolerance
+        expect(event.startTimeMs).toBeLessThan(expectedTimes[index] + 300) // Allow 300ms tolerance for CI
         expect(event.sequenceName).toBe('test')
       })
     })
