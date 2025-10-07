@@ -14,15 +14,21 @@ import { TransportControl } from './global/transport-control'
 import { SequenceRegistry } from './global/sequence-registry'
 
 export class Global {
+  // Manager instances for different responsibilities
   private tempoManager: TempoManager
   private audioManager: AudioManager
   private effectsManager: EffectsManager
   private transportControl: TransportControl
   private sequenceRegistry: SequenceRegistry
 
+  // Core dependencies
   private audioEngine: any // Can be AudioEngine or SuperColliderPlayer
   private globalScheduler: Scheduler
 
+  /**
+   * Creates a new Global instance with all manager components
+   * @param audioEngine - The audio engine instance (AudioEngine or SuperColliderPlayer)
+   */
   constructor(audioEngine: any) {
     this.audioEngine = audioEngine
     this.globalScheduler = audioEngine as Scheduler

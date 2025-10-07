@@ -56,6 +56,58 @@ export class EffectsManager {
   }
 
   /**
+   * Helper method to remove an effect from the master effect chain
+   * @param effectType - Type of effect to remove
+   * @private
+   */
+  private removeEffect(effectType: string): void {
+    const existingIndex = this._masterEffects.findIndex((e) => e.type === effectType)
+    if (existingIndex >= 0) {
+      this._masterEffects.splice(existingIndex, 1)
+    }
+
+    if ((this.globalScheduler as any).removeEffect) {
+      ;(this.globalScheduler as any).removeEffect('master', effectType)
+    }
+
+    const seamless = this._isRunning ? ' (seamless)' : ''
+    console.log(`🎛️ Global: ${effectType} off${seamless}`)
+  }
+
+  /**
+   * Helper method to add or update an effect in the master effect chain
+   * @param effectType - Type of effect to add/update
+   * @param params - Effect parameters
+   * @param logMessage - Message to log
+   * @private
+   */
+  private addOrUpdateEffect(effectType: string, params: any, logMessage: string): void {
+    const existingIndex = this._masterEffects.findIndex((e) => e.type === effectType)
+    if (existingIndex >= 0) {
+      this._masterEffects[existingIndex] = { type: effectType, params }
+    } else {
+      this._masterEffects.push({ type: effectType, params })
+    }
+
+    // Send OSC message to SuperCollider
+    if ((this.globalScheduler as any).addEffect) {
+      ;(this.globalScheduler as any).addEffect('master', effectType, params)
+    }
+
+    const seamless = this._isRunning ? ' (seamless)' : ''
+    console.log(`🎛️ Global: ${logMessage}${seamless}`)
+  }
+
+  /**
+   * Add compressor effect to master output (mastering)
+   * @param threshold - Compression threshold 0-1 (default: 0.5)
+   * @param ratio - Compression ratio 0-1 (default: 0.5, 0=1:1, 1=inf:1)
+   * @param attack - Attack time in seconds (default: 0.01)
+   * @param release - Release time in seconds (default: 0.1)
+   * @param makeupGain - Makeup gain 0-2 (default: 1.0)
+   * @param enabled - Enable/disable effect (default: true)
+   */
+  /**
    * Add compressor effect to master output (mastering)
    * @param threshold - Compression threshold 0-1 (default: 0.5)
    * @param ratio - Compression ratio 0-1 (default: 0.5, 0=1:1, 1=inf:1)
@@ -73,68 +125,21 @@ export class EffectsManager {
     enabled = true,
   ): this {
     if (!enabled) {
-      const existingIndex = this._masterEffects.findIndex((e) => e.type === 'compressor')
-      if (existingIndex >= 0) {
-        this._masterEffects.splice(existingIndex, 1)
-      }
-
-      if ((this.globalScheduler as any).removeEffect) {
-        ;(this.globalScheduler as any).removeEffect('master', 'compressor')
-      }
-
-      const seamless = this._isRunning ? ' (seamless)' : ''
-      console.log(`🎛️ Global: compressor off${seamless}`)
+      this.removeEffect('compressor')
       return this
     }
 
     // Validate parameters
-    const validThreshold = Math.max(0, Math.min(1.0, threshold))
-    const validRatio = Math.max(0, Math.min(1.0, ratio))
-    const validAttack = Math.max(0.001, Math.min(1.0, attack))
-    const validRelease = Math.max(0.01, Math.min(5.0, release))
-    const validMakeupGain = Math.max(0, Math.min(2.0, makeupGain))
-
-    // Update or add to master effect chain
-    const existingIndex = this._masterEffects.findIndex((e) => e.type === 'compressor')
-    if (existingIndex >= 0) {
-      this._masterEffects[existingIndex] = {
-        type: 'compressor',
-        params: {
-          threshold: validThreshold,
-          ratio: validRatio,
-          attack: validAttack,
-          release: validRelease,
-          makeupGain: validMakeupGain,
-        },
-      }
-    } else {
-      this._masterEffects.push({
-        type: 'compressor',
-        params: {
-          threshold: validThreshold,
-          ratio: validRatio,
-          attack: validAttack,
-          release: validRelease,
-          makeupGain: validMakeupGain,
-        },
-      })
+    const params = {
+      threshold: Math.max(0, Math.min(1.0, threshold)),
+      ratio: Math.max(0, Math.min(1.0, ratio)),
+      attack: Math.max(0.001, Math.min(1.0, attack)),
+      release: Math.max(0.01, Math.min(5.0, release)),
+      makeupGain: Math.max(0, Math.min(2.0, makeupGain)),
     }
 
-    // Send OSC message to SuperCollider
-    if ((this.globalScheduler as any).addEffect) {
-      ;(this.globalScheduler as any).addEffect('master', 'compressor', {
-        threshold: validThreshold,
-        ratio: validRatio,
-        attack: validAttack,
-        release: validRelease,
-        makeupGain: validMakeupGain,
-      })
-    }
-
-    const seamless = this._isRunning ? ' (seamless)' : ''
-    console.log(
-      `🎛️ Global: compressor(threshold=${validThreshold}, ratio=${validRatio}, attack=${validAttack}s, release=${validRelease}s, gain=${validMakeupGain})${seamless}`,
-    )
+    const logMessage = `compressor(threshold=${params.threshold}, ratio=${params.ratio}, attack=${params.attack}s, release=${params.release}s, gain=${params.makeupGain})`
+    this.addOrUpdateEffect('compressor', params, logMessage)
     return this
   }
 
@@ -144,50 +149,26 @@ export class EffectsManager {
    * @param duration - Lookahead time in seconds (default: 0.01)
    * @param enabled - Enable/disable effect (default: true)
    */
+  /**
+   * Add limiter effect to master output (mastering)
+   * @param level - Limiter level 0-1 (default: 0.99)
+   * @param duration - Lookahead time in seconds (default: 0.01)
+   * @param enabled - Enable/disable effect (default: true)
+   */
   limiter(level = 0.99, duration = 0.01, enabled = true): this {
     if (!enabled) {
-      const existingIndex = this._masterEffects.findIndex((e) => e.type === 'limiter')
-      if (existingIndex >= 0) {
-        this._masterEffects.splice(existingIndex, 1)
-      }
-
-      if ((this.globalScheduler as any).removeEffect) {
-        ;(this.globalScheduler as any).removeEffect('master', 'limiter')
-      }
-
-      const seamless = this._isRunning ? ' (seamless)' : ''
-      console.log(`🎛️ Global: limiter off${seamless}`)
+      this.removeEffect('limiter')
       return this
     }
 
     // Validate parameters
-    const validLevel = Math.max(0.1, Math.min(1.0, level))
-    const validDuration = Math.max(0.001, Math.min(0.1, duration))
-
-    // Update or add to master effect chain
-    const existingIndex = this._masterEffects.findIndex((e) => e.type === 'limiter')
-    if (existingIndex >= 0) {
-      this._masterEffects[existingIndex] = {
-        type: 'limiter',
-        params: { level: validLevel, duration: validDuration },
-      }
-    } else {
-      this._masterEffects.push({
-        type: 'limiter',
-        params: { level: validLevel, duration: validDuration },
-      })
+    const params = {
+      level: Math.max(0.1, Math.min(1.0, level)),
+      duration: Math.max(0.001, Math.min(0.1, duration)),
     }
 
-    // Send OSC message to SuperCollider
-    if ((this.globalScheduler as any).addEffect) {
-      ;(this.globalScheduler as any).addEffect('master', 'limiter', {
-        level: validLevel,
-        duration: validDuration,
-      })
-    }
-
-    const seamless = this._isRunning ? ' (seamless)' : ''
-    console.log(`🎛️ Global: limiter(level=${validLevel}, duration=${validDuration}s)${seamless}`)
+    const logMessage = `limiter(level=${params.level}, duration=${params.duration}s)`
+    this.addOrUpdateEffect('limiter', params, logMessage)
     return this
   }
 
@@ -197,50 +178,26 @@ export class EffectsManager {
    * @param duration - Lookahead time in seconds (default: 0.01)
    * @param enabled - Enable/disable effect (default: true)
    */
+  /**
+   * Add normalizer effect to master output (mastering)
+   * @param level - Normalization level 0-1 (default: 1.0)
+   * @param duration - Lookahead time in seconds (default: 0.01)
+   * @param enabled - Enable/disable effect (default: true)
+   */
   normalizer(level = 1.0, duration = 0.01, enabled = true): this {
     if (!enabled) {
-      const existingIndex = this._masterEffects.findIndex((e) => e.type === 'normalizer')
-      if (existingIndex >= 0) {
-        this._masterEffects.splice(existingIndex, 1)
-      }
-
-      if ((this.globalScheduler as any).removeEffect) {
-        ;(this.globalScheduler as any).removeEffect('master', 'normalizer')
-      }
-
-      const seamless = this._isRunning ? ' (seamless)' : ''
-      console.log(`🎛️ Global: normalizer off${seamless}`)
+      this.removeEffect('normalizer')
       return this
     }
 
     // Validate parameters
-    const validLevel = Math.max(0.1, Math.min(1.0, level))
-    const validDuration = Math.max(0.001, Math.min(0.1, duration))
-
-    // Update or add to master effect chain
-    const existingIndex = this._masterEffects.findIndex((e) => e.type === 'normalizer')
-    if (existingIndex >= 0) {
-      this._masterEffects[existingIndex] = {
-        type: 'normalizer',
-        params: { level: validLevel, duration: validDuration },
-      }
-    } else {
-      this._masterEffects.push({
-        type: 'normalizer',
-        params: { level: validLevel, duration: validDuration },
-      })
+    const params = {
+      level: Math.max(0.1, Math.min(1.0, level)),
+      duration: Math.max(0.001, Math.min(0.1, duration)),
     }
 
-    // Send OSC message to SuperCollider
-    if ((this.globalScheduler as any).addEffect) {
-      ;(this.globalScheduler as any).addEffect('master', 'normalizer', {
-        level: validLevel,
-        duration: validDuration,
-      })
-    }
-
-    const seamless = this._isRunning ? ' (seamless)' : ''
-    console.log(`🎛️ Global: normalizer(level=${validLevel}, duration=${validDuration}s)${seamless}`)
+    const logMessage = `normalizer(level=${params.level}, duration=${params.duration}s)`
+    this.addOrUpdateEffect('normalizer', params, logMessage)
     return this
   }
 
