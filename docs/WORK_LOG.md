@@ -15,6 +15,70 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.17 Fix Async/Await in Sequence Methods (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+**Branch**: feature/git-workflow-setup
+
+**Work Content**: Fixed missing `await` for async `loop()` method call in `length()` method and removed unused variables
+
+#### Problem: Missing Await for Async Methods
+**Issue**: `Sequence.run()` and `Sequence.loop()` were changed to `async` returning `Promise<this>`, but internal callers weren't awaiting them
+**Impact**: Asynchronous tasks like buffer preloading or event scheduling might not complete before subsequent operations
+**Root Cause**: `length()` method called `this.loop()` without `await` in a setTimeout callback
+
+#### Solution: Add Await and Clean Up Code
+**1. Fixed `length()` Method**
+- Changed setTimeout callback to `async` function
+- Added `await` when calling `this.loop()`
+- **Location**: `packages/engine/src/core/sequence.ts:92-93`
+
+**2. Removed Unused Variables**
+- Removed unused `tempo` variable in `scheduleEventsFromTime()` method
+- Removed unused `iteration` variable in `loop()` method
+- Removed unused `barDuration` variable in `scheduleEventsFromTime()` method
+
+#### Testing Results
+```bash
+npm test -- --testPathPattern="sequence|interpreter" --maxWorkers=1
+```
+- ✅ 109 tests passed
+- ⏭️ 15 tests skipped (e2e/interpreter-v2, pending implementation updates)
+- ✅ No linter errors
+
+#### Files Changed
+- `packages/engine/src/core/sequence.ts`
+  - Fixed async/await in `length()` method
+  - Removed unused variables in `scheduleEventsFromTime()` and `loop()` methods
+
+#### Technical Details
+**Before**:
+```typescript
+setTimeout(() => {
+  this.loop()
+}, 10)
+```
+
+**After**:
+```typescript
+setTimeout(async () => {
+  await this.loop()
+}, 10)
+```
+
+**Why This Matters**:
+- Ensures buffer preloading completes before playback starts
+- Guarantees event scheduling finishes before next operation
+- Prevents race conditions in live coding scenarios
+
+#### Next Steps
+- Continue with regular feature development
+- All async methods now properly awaited
+- No breaking changes for user-facing DSL code
+
+**Commit**: 95ca2f3
+
 ### 6.16 Git Workflow and Development Environment Setup (January 7, 2025)
 
 **Date**: January 7, 2025
