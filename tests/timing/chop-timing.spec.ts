@@ -107,9 +107,9 @@ describe('Chop Timing', () => {
 
   describe('Slice Scheduling', () => {
     it('should call scheduleSliceEvent with correct parameters', async () => {
-      // Mock EventScheduler's scheduleSliceEvent method
+      // Mock SuperColliderPlayer's public scheduleSliceEvent method
       const scheduledEvents: any[] = []
-      ;(player as any).eventScheduler.scheduleSliceEvent = (
+      player.scheduleSliceEvent = (
         filepath: string,
         startTimeMs: number,
         sliceIndex: number,
@@ -161,9 +161,9 @@ describe('Chop Timing', () => {
     })
 
     it('should schedule slices with correct slice positions', async () => {
-      // Mock EventScheduler's scheduleSliceEvent method
+      // Mock SuperColliderPlayer's public scheduleSliceEvent method
       const scheduledEvents: any[] = []
-      ;(player as any).eventScheduler.scheduleSliceEvent = (
+      player.scheduleSliceEvent = (
         filepath: string,
         startTimeMs: number,
         sliceIndex: number,
