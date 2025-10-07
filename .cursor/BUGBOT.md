@@ -4,13 +4,13 @@
 
 **⚠️ MANDATORY: ALL review comments MUST be written in JAPANESE (日本語) ⚠️**
 
-**This is a CRITICAL requirement for this project. Failure to follow this will result in ineffective communication.**
+**This is a CRITICAL requirement for this project. Failure to follow this will result in less effective communication with Japanese-speaking developers.**
 
 - **ALL comments, explanations, and suggestions MUST be in Japanese**
 - Technical terms can remain in English (例: SuperCollider, SynthDef, TypeScript)
 - Code examples remain in English
 - **Reason**: This project's developers are Japanese speakers, and Japanese communication is most efficient
-- **IMPORTANT**: If you write in English, the review will be ignored and ineffective
+- **IMPORTANT**: If you write in English, the review will be less effective for Japanese-speaking developers
 
 ## プロジェクト概要
 
