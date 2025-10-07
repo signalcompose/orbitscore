@@ -100,9 +100,18 @@ export class ParserUtils {
 
   /**
    * Check if identifier is a random syntax
+   * Valid random syntax: 'r', 'r0', 'r50', 'r123', etc.
+   * Invalid: 'rabc', 'rtest', etc. (these are treated as regular identifiers)
    */
   static isRandomSyntax(value: string): boolean {
-    return value === 'r' || (value.startsWith('r') && value.length > 1)
+    if (value === 'r') return true
+    if (value.startsWith('r') && value.length > 1) {
+      const rest = value.substring(1)
+      // Check if the rest is a valid number
+      const num = parseFloat(rest)
+      return !isNaN(num) && isFinite(num)
+    }
+    return false
   }
 
   /**
