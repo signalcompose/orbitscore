@@ -1183,3 +1183,27 @@ global.normalizer(1.0, 0.01, true)                     // Maximum loudness
 
 ---
 
+## 2025-01-07: CLI Timed Execution Bug Fix
+
+### 問題
+`packages/engine/src/cli-audio.ts` の92行目で、timed execution条件 `durationSeconds && globalInterpreter` が不適切だった：
+
+1. **REPLモードの不適切な防止**: `globalInterpreter` は常に truthy のため、`durationSeconds` が指定されると常に timed execution モードになる
+2. **0秒実行の失敗**: `durationSeconds` が `0` の場合、falsy として扱われて 0秒実行が開始されない
+
+### 解決
+条件を `durationSeconds !== undefined && globalInterpreter` に変更：
+
+- `durationSeconds` が明示的に指定された場合（`0` を含む）のみ timed execution モード
+- `durationSeconds` が `undefined` の場合は REPL モードまたは one-shot モード
+
+### 動作確認
+- ✅ 0秒実行: 適切に timed execution モードになり、即座に終了
+- ✅ REPLモード: `durationSeconds` 未指定時に正しく REPL モードに入る
+- ✅ 通常実行: 指定秒数の timed execution が正常動作
+
+### ファイル変更
+- `packages/engine/src/cli-audio.ts`: 92行目の条件修正
+
+---
+

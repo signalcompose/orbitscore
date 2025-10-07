@@ -32,7 +32,7 @@ describe.skip('End-to-End Tests with Real Audio', () => {
         }
       }
       // Wait for cleanup
-      await new Promise(resolve => setTimeout(resolve, 100))
+      await new Promise((resolve) => setTimeout(resolve, 100))
     }
     consoleSpy.mockRestore()
     consoleWarnSpy.mockRestore()

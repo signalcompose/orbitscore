@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
 import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
 
 describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
@@ -10,7 +11,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
     mockOscClient = {
       send: vi.fn().mockResolvedValue(undefined),
     }
-    
+
     player = new SuperColliderPlayer()
     ;(player as any).server = {
       send: {
@@ -33,13 +34,16 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
 
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', {
-        gainDb: 0,
-      }, '', 0)
-
-      expect(sendMsg).toHaveBeenCalledWith(
-        expect.arrayContaining(['amp', 1.0])
+      await (player as any).executePlayback(
+        '/path/to/sample.wav',
+        {
+          gainDb: 0,
+        },
+        '',
+        0,
       )
+
+      expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 1.0]))
     })
 
     it('should convert -6 dB to amp ~0.501 (~50%)', async () => {
@@ -49,14 +53,19 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
 
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', {
-        gainDb: -6,
-      }, '', 0)
+      await (player as any).executePlayback(
+        '/path/to/sample.wav',
+        {
+          gainDb: -6,
+        },
+        '',
+        0,
+      )
 
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
       const ampValue = calls[0][0][ampIndex + 1]
-      
+
       // -6 dB = 10^(-6/20) = 0.5011872336272722
       expect(ampValue).toBeCloseTo(0.501, 2)
     })
@@ -72,7 +81,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
       const ampValue = calls[0][0][ampIndex + 1]
-      
+
       // -12 dB = 10^(-12/20) = 0.25118864315095796
       expect(ampValue).toBeCloseTo(0.251, 2)
     })
@@ -88,7 +97,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
       const ampValue = calls[0][0][ampIndex + 1]
-      
+
       // +6 dB = 10^(6/20) = 1.9952623149688797
       expect(ampValue).toBeCloseTo(1.995, 2)
     })
@@ -126,7 +135,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
       const ampValue = calls[0][0][ampIndex + 1]
-      
+
       // -3.5 dB = 10^(-3.5/20) = 0.6683439176841525
       expect(ampValue).toBeCloseTo(0.668, 2)
     })
@@ -212,7 +221,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
       const ampValue = calls[0][0][ampIndex + 1]
-      
+
       expect(ampValue).toBeCloseTo(0.501, 2)
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', -0.75]))
     })
@@ -228,7 +237,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
       const ampValue = calls[0][0][ampIndex + 1]
-      
+
       // +12 dB = 10^(12/20) = 3.981071705534969
       expect(ampValue).toBeCloseTo(3.981, 2)
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', -1.0]))

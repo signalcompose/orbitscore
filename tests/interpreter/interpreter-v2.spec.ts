@@ -25,7 +25,7 @@ describe.skip('Interpreter V2 - Object-Oriented Implementation', () => {
         }
       }
       // Wait for cleanup
-      await new Promise(resolve => setTimeout(resolve, 100))
+      await new Promise((resolve) => setTimeout(resolve, 100))
     }
   })
 

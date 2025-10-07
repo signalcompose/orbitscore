@@ -68,12 +68,12 @@ export class InterpreterV2 {
   private async processGlobalInit(init: GlobalInit): Promise<void> {
     // Reuse existing global if it exists (for REPL persistence)
     let globalInstance = this.globals.get(init.variableName)
-    
+
     if (!globalInstance) {
       globalInstance = new Global(this.audioEngine)
       this.globals.set(init.variableName, globalInstance)
     }
-    
+
     this.currentGlobal = globalInstance
   }
 
@@ -101,7 +101,7 @@ export class InterpreterV2 {
 
     // Reuse existing sequence if it exists (for REPL persistence)
     let sequence = this.sequences.get(init.variableName)
-    
+
     if (!sequence) {
       // Create sequence through the Global's factory method
       sequence = global.seq
@@ -110,8 +110,8 @@ export class InterpreterV2 {
     } else {
       // Reset parameters to defaults when re-initializing
       // This prevents previous live changes (gain/pan) from persisting
-      ;(sequence as any)._gainDb = 0  // Reset to 0 dB
-      ;(sequence as any)._pan = 0      // Reset to center
+      ;(sequence as any)._gainDb = 0 // Reset to 0 dB
+      ;(sequence as any)._pan = 0 // Reset to center
     }
   }
 

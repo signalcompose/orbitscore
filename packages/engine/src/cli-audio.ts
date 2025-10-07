@@ -80,7 +80,7 @@ async function playFile(filepath: string, durationSeconds?: number) {
     } else {
       console.log('♻️ Reusing existing interpreter')
     }
-    
+
     await globalInterpreter.execute(ir)
 
     // Get final state
@@ -88,18 +88,18 @@ async function playFile(filepath: string, durationSeconds?: number) {
 
     // Check if global.run() was called
     const hasRunningGlobal = Object.values(state.globals).some((g: any) => g.isRunning)
-    
-    if (durationSeconds && globalInterpreter) {
+
+    if (durationSeconds !== undefined && globalInterpreter) {
       // Timed execution mode with auto-exit when all sequences finish
       const maxWaitTime = durationSeconds * 1000
       const startTime = Date.now()
       const interpreter = globalInterpreter // Capture for closure
-      
+
       const checkInterval = setInterval(() => {
         const currentState = interpreter.getState()
         const isAnyPlaying = Object.values(currentState.sequences).some((s: any) => s.isPlaying)
         const elapsed = Date.now() - startTime
-        
+
         if (!isAnyPlaying || elapsed >= maxWaitTime) {
           clearInterval(checkInterval)
           console.log('✅ Playback finished')
@@ -235,14 +235,14 @@ async function main() {
       // Start REPL mode without requiring a file
       console.log('🎵 OrbitScore Audio Engine')
       console.log('✅ Initialized')
-      
+
       // Create a global interpreter
       const { InterpreterV2 } = await import('./interpreter/interpreter-v2')
       globalInterpreter = new InterpreterV2()
-      
+
       // Boot SuperCollider once at startup with optional audio device
       await globalInterpreter.boot(audioDevice)
-      
+
       console.log('🎵 Live coding mode')
       await startREPL(globalInterpreter)
       break
