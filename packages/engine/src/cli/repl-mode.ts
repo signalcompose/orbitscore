@@ -24,7 +24,7 @@ import { REPLOptions } from './types'
  * await startREPLMode({ audioDevice: 'Built-in Output' })
  * ```
  */
-export async function startREPLMode(options: REPLOptions = {}): Promise<never> {
+export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   console.log('🎵 OrbitScore Audio Engine')
   console.log('✅ Initialized')
 
@@ -36,9 +36,6 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<never> {
 
   console.log('🎵 Live coding mode')
   await startREPL(globalInterpreter)
-
-  // Never resolves
-  return new Promise(() => {}) as Promise<never>
 }
 
 /**
@@ -50,7 +47,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<never> {
  * @param interpreter - Existing interpreter instance
  * @returns Never resolves (keeps process alive)
  */
-export async function startREPL(interpreter: InterpreterV2): Promise<never> {
+export async function startREPL(interpreter: InterpreterV2): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -71,6 +68,6 @@ export async function startREPL(interpreter: InterpreterV2): Promise<never> {
     }
   })
 
-  // Keep process alive
-  return new Promise(() => {}) as Promise<never>
+  // Keep process alive - never resolves
+  await new Promise(() => {})
 }

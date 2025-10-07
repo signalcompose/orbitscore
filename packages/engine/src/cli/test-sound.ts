@@ -19,7 +19,7 @@ import { parseAudioDSL } from '../parser/audio-parser'
  * await playTestSound()
  * ```
  */
-export async function playTestSound(): Promise<never> {
+export async function playTestSound(): Promise<void> {
   console.log('Test sound...')
 
   const testDSL = `
@@ -55,9 +55,6 @@ hihat.run()
   const interpreter = new InterpreterV2()
   await interpreter.execute(ir)
 
-  // Keep process alive
-  setInterval(() => {}, 1000)
-
-  // Never resolves
-  return new Promise(() => {}) as Promise<never>
+  // Keep process alive - never resolves
+  await new Promise(() => {})
 }

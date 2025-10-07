@@ -102,12 +102,12 @@ export async function executeCommand(
       break
     }
 
-    case 'repl': {
+    case 'repl':
       // Start REPL mode without requiring a file
-      // Note: startREPLMode() returns Promise<never>, so this never returns
+      // Note: startREPLMode() never resolves, so this never returns
       await startREPLMode({ audioDevice })
+      // Never reached
       break
-    }
 
     case 'eval': {
       if (!file) {
@@ -134,8 +134,9 @@ export async function executeCommand(
     }
 
     case 'test':
+      // playTestSound() never resolves, so this never returns
       await playTestSound()
-      // Never reached - playTestSound() returns Promise<never>
+      // Never reached
       break
 
     case 'help':
@@ -149,6 +150,6 @@ export async function executeCommand(
       process.exit(1)
   }
 
-  // This line is technically unreachable but satisfies TypeScript's type checker
+  // Unreachable, but satisfies TypeScript
   return null
 }
