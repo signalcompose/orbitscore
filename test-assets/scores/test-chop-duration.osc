@@ -1,0 +1,16 @@
+// Test chop() duration fix
+// Should hear 4 distinct slices of arpeggio
+
+var global = init GLOBAL
+global.audioPath("test-assets/audio")
+global.tempo(120)
+global.beat(4)
+global.tick(4)
+
+var arp = init global.seq
+arp.beat(4 by 4).length(1)
+arp.audio("arpeggio_c.wav").chop(4)
+arp.play(1, 2, 3, 4)
+
+global.run()
+arp.run()

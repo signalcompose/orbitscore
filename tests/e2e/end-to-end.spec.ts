@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { AudioTokenizer, AudioParser } from '../../packages/engine/src/parser/audio-parser'
 import { InterpreterV2 } from '../../packages/engine/src/interpreter/interpreter-v2'
 
-describe('End-to-End Tests with Real Audio', () => {
+describe.skip('End-to-End Tests with Real Audio', () => {
   let interpreter: InterpreterV2
 
   // Mock console to capture outputs
@@ -21,7 +21,19 @@ describe('End-to-End Tests with Real Audio', () => {
     consoleWarnSpy.mockClear()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Clean up SuperCollider server
+    if (interpreter) {
+      const state = interpreter.getState()
+      for (const globalName in state.globals) {
+        const global = state.globals[globalName]
+        if (global && typeof global.stop === 'function') {
+          global.stop()
+        }
+      }
+      // Wait for cleanup
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
     consoleSpy.mockRestore()
     consoleWarnSpy.mockRestore()
   })

@@ -18,7 +18,7 @@ SynthDef(\orbitPlayBuf, {
         startPos = 0,      // 開始位置（秒）
         duration = 0;      // 再生時間（秒、0 = 全体）
     
-    var sig, env, actualDuration;
+    var sig, env, actualDuration, fadeIn, fadeOut, sustain;
     
     // 実際の再生時間を計算（0なら全体、それ以外なら指定された時間）
     actualDuration = Select.kr(duration > 0, [
@@ -36,9 +36,15 @@ SynthDef(\orbitPlayBuf, {
         loop: 0
     );
     
-    // エンベロープで再生時間を制御（短いフェードイン/アウト）
+    // エンベロープで再生時間を制御（クリック音防止のためフェードアウト）
+    // フェード時間を再生時間に応じて調整（短い音ほど短いフェード）
+    // アタック感を保つためフェードインなし、フェードアウトのみ
+    fadeIn = 0;  // フェードインなし
+    fadeOut = min(0.008, actualDuration * 0.04);  // 再生時間の4%、最大8ms
+    sustain = max(0, actualDuration - fadeOut);
+    
     env = EnvGen.kr(
-        Env.linen(0.001, actualDuration - 0.002, 0.001),
+        Env.linen(fadeIn, sustain, fadeOut),
         doneAction: 2  // 再生終了後にシンセを自動削除
     );
     

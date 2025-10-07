@@ -4,27 +4,20 @@
   "type": "commonjs",
   "main": "dist/index.js",
   "bin": {
-    "orbitscore": "./dist/cli.js"
+    "orbitscore": "./dist/cli-audio.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "ts-node src/index.ts",
-    "test": "npx vitest run --dir ../../tests --globals",
-    "cli": "node dist/cli.js"
+    "test": "npx vitest run --dir ../../tests --globals --pool=forks --poolOptions.forks.singleFork=true",
+    "cli": "cd ../.. && node packages/engine/dist/cli-audio.js"
   },
   "dependencies": {
-    "@julusian/midi": "^3.0.0",
-    "dotenv": "^16.4.5",
-    "node-web-audio-api": "^1.0.4",
-    "osc": "^2.4.5",
-    "speaker": "^0.5.5",
     "supercolliderjs": "^1.0.1",
-    "tslib": "^2.8.1",
-    "wav": "^1.0.2",
     "wavefile": "^11.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
+    "@types/node": "^22.0.0",
     "ts-node": "^10.9.2",
     "vitest": "^2.1.9"
   }
