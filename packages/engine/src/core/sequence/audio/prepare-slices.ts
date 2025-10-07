@@ -19,7 +19,7 @@ export interface PrepareSlicesOptions {
  *
  * @param options - Slice preparation options
  */
-export async function prepareSlices(options: PrepareSlicesOptions): Promise<void> {
+export function prepareSlices(options: PrepareSlicesOptions): void {
   const { sequenceName, audioFilePath, chopDivisions } = options
 
   // Skip if no audio file or no chopping needed
@@ -28,7 +28,7 @@ export async function prepareSlices(options: PrepareSlicesOptions): Promise<void
   }
 
   try {
-    await audioSlicer.sliceAudioFile(audioFilePath, chopDivisions)
+    audioSlicer.sliceAudioFile(audioFilePath, chopDivisions)
     // Successfully prepared slices
   } catch (err: any) {
     console.error(`${sequenceName}: failed to prepare slices - ${err.message}`)

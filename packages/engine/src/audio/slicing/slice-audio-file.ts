@@ -18,16 +18,17 @@ import { WavProcessor } from './wav-processor'
  * @param wavProcessor - WAV processor instance
  * @returns Array of slice information
  */
-export async function sliceAudioFile(
+export function sliceAudioFile(
   filepath: string,
   divisions: number,
   cache: SliceCache,
   fileManager: TempFileManager,
   wavProcessor: WavProcessor,
-): Promise<AudioSliceInfo[]> {
-  // Check cache first
-  if (cache.has(filepath, divisions)) {
-    return cache.get(filepath, divisions)!
+): AudioSliceInfo[] {
+  // Check cache first - use single get() call to avoid race condition
+  const cached = cache.get(filepath, divisions)
+  if (cached) {
+    return cached
   }
 
   // Read and parse WAV file

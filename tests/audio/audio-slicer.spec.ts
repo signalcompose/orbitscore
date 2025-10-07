@@ -2,16 +2,27 @@
  * Tests for AudioSlicer - file slicing functionality
  */
 
-import * as fs from 'fs'
-import * as os from 'os'
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-import { AudioSlicer } from '../../packages/engine/src/audio/audio-slicer'
+// Mock fs and os BEFORE importing AudioSlicer
+vi.mock('fs', () => ({
+  readFileSync: vi.fn(),
+  writeFileSync: vi.fn(),
+  existsSync: vi.fn(),
+  mkdirSync: vi.fn(),
+  readdirSync: vi.fn(),
+  unlinkSync: vi.fn(),
+  statSync: vi.fn(),
+  rmSync: vi.fn(),
+}))
 
-// Mock fs and os
-vi.mock('fs')
-vi.mock('os')
+vi.mock('os', () => ({
+  tmpdir: vi.fn(() => '/tmp'),
+}))
+
+import * as fs from 'fs'
+import * as os from 'os'
+import { AudioSlicer } from '../../packages/engine/src/audio/audio-slicer'
 
 // Mock wavefile with inline class definition to avoid hoisting issues
 vi.mock('wavefile', () => ({
@@ -69,9 +80,12 @@ describe('AudioSlicer', () => {
     // Mock file operations
     mockFs.readFileSync.mockReturnValue(Buffer.from('mock-wav-data'))
     mockFs.writeFileSync.mockImplementation(() => {})
-    mockFs.existsSync.mockReturnValue(true)
-    mockFs.readdirSync.mockReturnValue(['slice1.wav', 'slice2.wav'] as any)
+    mockFs.existsSync.mockReturnValue(false) // Instance directory doesn't exist yet
+    mockFs.mkdirSync = vi.fn() // Mock directory creation
+    mockFs.readdirSync.mockReturnValue([])
     mockFs.unlinkSync.mockImplementation(() => {})
+    mockFs.statSync = vi.fn().mockReturnValue({ isDirectory: () => true, mtimeMs: Date.now() })
+    mockFs.rmSync = vi.fn() // Mock directory removal
 
     slicer = new AudioSlicer()
   })
