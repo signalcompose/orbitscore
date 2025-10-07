@@ -34,7 +34,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
 
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback(
+      await (player as any).testExecutePlayback(
         '/path/to/sample.wav',
         {
           gainDb: 0,
@@ -53,7 +53,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
 
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback(
+      await (player as any).testExecutePlayback(
         '/path/to/sample.wav',
         {
           gainDb: -6,
@@ -76,7 +76,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: -12 }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { gainDb: -12 }, '', 0)
 
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
@@ -92,7 +92,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: 6 }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { gainDb: 6 }, '', 0)
 
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
@@ -108,7 +108,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: -Infinity }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { gainDb: -Infinity }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 0.0]))
     })
@@ -119,7 +119,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', {}, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', {}, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['amp', 1.0]))
     })
@@ -130,7 +130,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: -3.5 }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { gainDb: -3.5 }, '', 0)
 
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
@@ -148,7 +148,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: -100 }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: -100 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', -1.0]))
     })
@@ -159,7 +159,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: 0 }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: 0 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', 0.0]))
     })
@@ -170,7 +170,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: 100 }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: 100 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', 1.0]))
     })
@@ -181,7 +181,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: -50 }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: -50 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', -0.5]))
     })
@@ -192,7 +192,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { pan: 50 }, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', { pan: 50 }, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', 0.5]))
     })
@@ -203,7 +203,7 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', {}, '', 0)
+      await (player as any).testExecutePlayback('/path/to/sample.wav', {}, '', 0)
 
       expect(sendMsg).toHaveBeenCalledWith(expect.arrayContaining(['pan', 0.0]))
     })
@@ -216,7 +216,12 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: -6, pan: -75 }, '', 0)
+      await (player as any).testExecutePlayback(
+        '/path/to/sample.wav',
+        { gainDb: -6, pan: -75 },
+        '',
+        0,
+      )
 
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
@@ -232,7 +237,12 @@ describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
       ;(player as any).bufferCache = mockBufferCache
       const sendMsg = vi.spyOn((player as any).server.send, 'msg')
 
-      await (player as any).executePlayback('/path/to/sample.wav', { gainDb: 12, pan: -100 }, '', 0)
+      await (player as any).testExecutePlayback(
+        '/path/to/sample.wav',
+        { gainDb: 12, pan: -100 },
+        '',
+        0,
+      )
 
       const calls = sendMsg.mock.calls
       const ampIndex = calls[0][0].indexOf('amp')
