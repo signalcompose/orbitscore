@@ -73,7 +73,7 @@ export class WavProcessor {
     try {
       const sliceWav = new WaveFile()
       sliceWav.fromScratch(numChannels, sampleRate, bitDepth, samples)
-      return Buffer.from(sliceWav.toBuffer()) as Buffer
+      return Buffer.from(sliceWav.toBuffer())
     } catch (error) {
       throw new Error(`Failed to create WAV buffer: ${error}`)
     }

@@ -22,6 +22,7 @@ vi.mock('os', () => ({
 
 import * as fs from 'fs'
 import * as os from 'os'
+
 import { AudioSlicer } from '../../packages/engine/src/audio/audio-slicer'
 
 // Mock wavefile with inline class definition to avoid hoisting issues

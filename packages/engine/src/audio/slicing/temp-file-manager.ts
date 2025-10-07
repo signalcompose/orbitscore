@@ -52,7 +52,7 @@ export class TempFileManager {
    */
   getSliceFilepath(originalFilepath: string, sliceNumber: number, totalSlices: number): string {
     const filename = this.generateSliceFilename(originalFilepath, sliceNumber, totalSlices)
-    return path.join(this.tempDir, filename)
+    return path.join(this.instanceDir, filename)
   }
 
   /**
