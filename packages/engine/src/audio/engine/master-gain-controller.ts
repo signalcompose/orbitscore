@@ -24,12 +24,3 @@ export function setMasterVolume(gainNode: GainNode, volume: number): void {
   const clampedVolume = Math.max(0, Math.min(1, volume))
   gainNode.gain.value = clampedVolume
 }
-
-/**
- * Get the current master volume level
- * @param gainNode Master GainNode
- * @returns Current volume level (0.0 to 1.0)
- */
-export function getMasterVolume(gainNode: GainNode): number {
-  return gainNode.gain.value
-}
