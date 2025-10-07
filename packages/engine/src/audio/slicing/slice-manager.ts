@@ -40,12 +40,3 @@ export function createSlices(buffer: AudioBuffer, numSlices: number): AudioSlice
 export function getSlice(slices: AudioSlice[], sliceNumber: number): AudioSlice | undefined {
   return slices.find((s) => s.sliceNumber === sliceNumber)
 }
-
-/**
- * Get all slices
- * @param slices Array of audio slices
- * @returns All slices
- */
-export function getAllSlices(slices: AudioSlice[]): AudioSlice[] {
-  return slices
-}

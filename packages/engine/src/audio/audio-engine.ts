@@ -9,6 +9,9 @@
 // Type exports
 export type { AudioSlice, PlaySliceOptions, PlaySequenceOptions } from './types'
 
+// Type imports for internal use
+import type { AudioSlice, PlaySliceOptions, PlaySequenceOptions } from './types'
+
 // Engine module imports
 import {
   createAudioContext,
@@ -19,12 +22,10 @@ import {
   closeContext,
 } from './engine/audio-context-manager'
 import { createMasterGain, setMasterVolume as setVolume } from './engine/master-gain-controller'
-import { createAudioFileCache, setCached, type CachedAudioFile } from './engine/audio-file-cache'
 import { loadAudioFile as loadFile } from './loading/audio-file-loader'
-import { createSlices, getSlice as findSlice, getAllSlices } from './slicing/slice-manager'
+import { createSlices, getSlice as findSlice } from './slicing/slice-manager'
 import { playSlice as playAudioSlice } from './playback/slice-player'
 import { playSequence as playAudioSequence } from './playback/sequence-player'
-import type { AudioSlice, PlaySliceOptions, PlaySequenceOptions } from './types'
 
 /**
  * Audio file with slicing capability
@@ -71,7 +72,7 @@ export class AudioFile {
    * Get all slices
    */
   getSlices(): AudioSlice[] {
-    return getAllSlices(this.slices)
+    return this.slices
   }
 
   /**
@@ -89,7 +90,7 @@ export class AudioFile {
 export class AudioEngine {
   private audioContext: AudioContext
   private masterGain: GainNode
-  private audioFiles: Map<string, CachedAudioFile>
+  private audioFiles: Map<string, AudioFile>
   private isPlaying: boolean = false
 
   constructor() {
@@ -102,22 +103,27 @@ export class AudioEngine {
     // Create master gain node
     this.masterGain = createMasterGain(this.audioContext)
 
-    // Create audio file cache
-    this.audioFiles = createAudioFileCache()
+    // Create audio file cache (stores AudioFile instances)
+    this.audioFiles = new Map<string, AudioFile>()
   }
 
   /**
    * Load an audio file
+   * Uses cache to avoid reloading the same file
    */
   async loadAudioFile(filePath: string): Promise<AudioFile> {
+    // Check cache first
+    const cached = this.audioFiles.get(filePath)
+    if (cached) {
+      return cached
+    }
+
+    // Load and cache if not found
     const audioFile = new AudioFile(this.audioContext, filePath)
     await audioFile.load()
 
     // Store in cache
-    const buffer = audioFile.getBuffer()
-    if (buffer) {
-      setCached(this.audioFiles, filePath, buffer, audioFile.getSlices())
-    }
+    this.audioFiles.set(filePath, audioFile)
 
     return audioFile
   }

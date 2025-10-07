@@ -17,34 +17,6 @@ const SUPPORTED_EXTENSIONS = {
 } as const
 
 /**
- * Check if a file exists at the given path
- * @param filePath Path to the file
- * @returns True if the file exists
- */
-export function fileExists(filePath: string): boolean {
-  const fullPath = path.resolve(filePath)
-  return fs.existsSync(fullPath)
-}
-
-/**
- * Get the file extension from a path
- * @param filePath Path to the file
- * @returns Lowercase file extension (e.g., '.wav')
- */
-export function getFileExtension(filePath: string): string {
-  return path.extname(filePath).toLowerCase()
-}
-
-/**
- * Check if the file format is supported
- * @param extension File extension
- * @returns True if the format is supported for decoding
- */
-export function isSupportedFormat(extension: string): boolean {
-  return SUPPORTED_EXTENSIONS.wav.includes(extension as '.wav')
-}
-
-/**
  * Load an audio file from disk and decode it
  * @param context AudioContext for decoding
  * @param filePath Path to the audio file
@@ -55,17 +27,21 @@ export async function loadAudioFile(context: AudioContext, filePath: string): Pr
   const fullPath = path.resolve(filePath)
 
   // Check if file exists
-  if (!fileExists(filePath)) {
+  if (!fs.existsSync(fullPath)) {
     throw new Error(`Audio file not found: ${fullPath}`)
   }
 
   // Check file format
-  const ext = getFileExtension(fullPath)
+  const ext = path.extname(fullPath).toLowerCase()
 
-  if (!isSupportedFormat(ext)) {
-    if (
-      SUPPORTED_EXTENSIONS.unsupported.includes(ext as '.mp3' | '.mp4' | '.m4a' | '.aiff' | '.aif')
-    ) {
+  // Check if format is supported
+  const isWav = SUPPORTED_EXTENSIONS.wav.includes(ext as '.wav')
+  const isUnsupported = SUPPORTED_EXTENSIONS.unsupported.includes(
+    ext as '.mp3' | '.mp4' | '.m4a' | '.aiff' | '.aif',
+  )
+
+  if (!isWav) {
+    if (isUnsupported) {
       throw new Error(`Format ${ext} not yet implemented. Please use WAV files.`)
     }
     throw new Error(`Unsupported audio format: ${ext}`)
@@ -74,11 +50,6 @@ export async function loadAudioFile(context: AudioContext, filePath: string): Pr
   // Read file into buffer
   const fileBuffer = fs.readFileSync(fullPath)
 
-  // Decode based on format
-  if (ext === '.wav') {
-    return decodeWav(context, fileBuffer)
-  }
-
-  // This should never be reached due to format checks above
-  throw new Error(`Unsupported audio format: ${ext}`)
+  // Decode WAV file
+  return decodeWav(context, fileBuffer)
 }
