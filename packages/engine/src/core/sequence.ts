@@ -359,10 +359,10 @@ export class Sequence {
 
     // Resolve the audio file path to an absolute path
     // Note: audio() method already combines globalState.audioPath with filepath
-    // So we only need to resolve relative paths from current working directory
+    // If the path is relative, resolve it from the workspace root (process.cwd())
     const resolvedFilePath = path.isAbsolute(this._audioFilePath)
       ? this._audioFilePath
-      : path.resolve(this._audioFilePath)
+      : path.resolve(process.cwd(), this._audioFilePath)
 
     const globalState = this.global.getState()
     const tempo = this._tempo || globalState.tempo || 120
@@ -445,7 +445,7 @@ export class Sequence {
   }
 
   // Transport control
-  run(): this {
+  async run(): Promise<this> {
     const scheduler = this.global.getScheduler()
     const isRunning = (scheduler as any).isRunning
     
@@ -455,14 +455,42 @@ export class Sequence {
       return this
     }
     
+    // Preload buffer to get correct duration (for one-shot playback)
+    if (this._audioFilePath && scheduler.loadBuffer) {
+      const resolvedPath = path.isAbsolute(this._audioFilePath)
+        ? this._audioFilePath
+        : path.resolve(process.cwd(), this._audioFilePath)
+      await scheduler.loadBuffer(resolvedPath)
+    }
+    
+    // Clear any existing loop timer
+    if (this.loopTimer) {
+      clearInterval(this.loopTimer)
+      this.loopTimer = undefined
+    }
+    
     // One-shot playback
     if (!this._isPlaying) {
       this._isPlaying = true
       this._isLooping = false
       console.log(`▶ ${this._name} (one-shot)`)
       
+      // Get current scheduler time
+      const schedulerStartTime = (scheduler as any).startTime
+      const now = Date.now()
+      const currentTime = now - schedulerStartTime
+      
       // Schedule immediately
-      this.scheduleEvents(scheduler, 0)
+      this.scheduleEvents(scheduler, 0, currentTime)
+      
+      // Auto-stop after pattern duration
+      const patternDuration = this.getPatternDuration()
+      setTimeout(() => {
+        this._isPlaying = false
+        // Clear scheduled events from scheduler
+        ;(scheduler as any).clearSequenceEvents(this._name)
+        console.log(`⏹ ${this._name} (finished)`)
+      }, patternDuration)
     }
     return this
   }

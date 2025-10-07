@@ -4,13 +4,13 @@
   "type": "commonjs",
   "main": "dist/index.js",
   "bin": {
-    "orbitscore": "./dist/cli.js"
+    "orbitscore": "./dist/cli-audio.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "ts-node src/index.ts",
-    "test": "npx vitest run --dir ../../tests --globals",
-    "cli": "node dist/cli.js"
+    "test": "npx vitest run --dir ../../tests --globals --pool=forks --poolOptions.forks.singleFork=true",
+    "cli": "cd ../.. && node packages/engine/dist/cli-audio.js"
   },
   "dependencies": {
     "supercolliderjs": "^1.0.1",

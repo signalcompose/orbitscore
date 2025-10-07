@@ -356,7 +356,13 @@ export class SuperColliderPlayer {
    * Clear events for a specific sequence
    */
   clearSequenceEvents(sequenceName: string): void {
+    const beforeCount = this.scheduledPlays.length;
     this.scheduledPlays = this.scheduledPlays.filter(play => play.sequenceName !== sequenceName);
+    const afterCount = this.scheduledPlays.length;
+    const cleared = beforeCount - afterCount;
+    if (cleared > 0) {
+      console.log(`🗑️  Cleared ${cleared} events for ${sequenceName} (${afterCount} remaining)`);
+    }
     this.sequenceEvents.delete(sequenceName);
   }
 

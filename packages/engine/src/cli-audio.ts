@@ -89,13 +89,27 @@ async function playFile(filepath: string, durationSeconds?: number) {
     // Check if global.run() was called
     const hasRunningGlobal = Object.values(state.globals).some((g: any) => g.isRunning)
     
-    if (hasRunningGlobal) {
-      // Enter interactive REPL mode
+    if (durationSeconds && globalInterpreter) {
+      // Timed execution mode with auto-exit when all sequences finish
+      const maxWaitTime = durationSeconds * 1000
+      const startTime = Date.now()
+      const interpreter = globalInterpreter // Capture for closure
+      
+      const checkInterval = setInterval(() => {
+        const currentState = interpreter.getState()
+        const isAnyPlaying = Object.values(currentState.sequences).some((s: any) => s.isPlaying)
+        const elapsed = Date.now() - startTime
+        
+        if (!isAnyPlaying || elapsed >= maxWaitTime) {
+          clearInterval(checkInterval)
+          console.log('✅ Playback finished')
+          process.exit(0)
+        }
+      }, 100) // Check every 100ms
+    } else if (hasRunningGlobal) {
+      // Interactive REPL mode (only if no duration specified)
       console.log('🎵 Live coding mode')
       await startREPL(globalInterpreter)
-    } else if (durationSeconds) {
-      // Timed execution mode
-      setTimeout(() => process.exit(0), durationSeconds * 1000)
     } else {
       // One-shot mode
       const isPlaying = Object.values(state.sequences).some((s: any) => s.isPlaying)

@@ -5,6 +5,7 @@
 
 // --- Global Initialization ---
 var global = init GLOBAL
+global.audioPath("test-assets/audio")
 global.tempo(120)
 global.beat(4)
 global.tick(4)
