@@ -2,11 +2,13 @@
  * Audio path and device management for Global class
  */
 
+import type { AudioEngine } from '../../audio/types'
+
 export class AudioManager {
   private _audioPath: string = '' // Base path for audio files
-  private audioEngine: any // Can be AudioEngine or SuperColliderPlayer
+  private audioEngine: AudioEngine
 
-  constructor(audioEngine: any) {
+  constructor(audioEngine: AudioEngine) {
     this.audioEngine = audioEngine
   }
 
@@ -24,15 +26,15 @@ export class AudioManager {
    */
   audioDevice(deviceName: string): this {
     // Check if audioEngine has device selection support (SuperColliderPlayer)
-    if (typeof (this.audioEngine as any).getCurrentOutputDevice === 'function') {
-      const currentDevice = (this.audioEngine as any).getCurrentOutputDevice()
-      if (currentDevice === deviceName) {
+    if (this.audioEngine.getCurrentOutputDevice) {
+      const currentDevice = this.audioEngine.getCurrentOutputDevice()
+      if (currentDevice && currentDevice.name === deviceName) {
         console.log(`🔊 Already using device: ${deviceName}`)
         return this
       }
 
       console.warn(`⚠️  Audio device can only be set before engine starts`)
-      console.warn(`⚠️  Current device: ${currentDevice || 'default'}`)
+      console.warn(`⚠️  Current device: ${currentDevice?.name || 'default'}`)
       console.warn(`⚠️  Requested device: ${deviceName}`)
       console.warn(`⚠️  Restart the engine to change audio device`)
     } else {

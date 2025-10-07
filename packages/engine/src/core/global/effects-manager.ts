@@ -41,7 +41,7 @@ export class EffectsManager {
           // Trigger reschedule by calling the sequence's gain with its current value
           // This will cause the sequence to recalculate with the new master gain
           const currentGainDb = state.gainDb ?? 0
-          ;(sequence as any).gain(currentGainDb)
+          sequence.gain(currentGainDb)
         }
       }
       console.log(`🎚️ Global: master gain=${valueDb} dB`)
@@ -66,8 +66,8 @@ export class EffectsManager {
       this._masterEffects.splice(existingIndex, 1)
     }
 
-    if ((this.globalScheduler as any).removeEffect) {
-      ;(this.globalScheduler as any).removeEffect('master', effectType)
+    if (this.globalScheduler.removeEffect) {
+      this.globalScheduler.removeEffect('master', effectType)
     }
 
     const seamless = this._isRunning ? ' (seamless)' : ''
@@ -90,8 +90,8 @@ export class EffectsManager {
     }
 
     // Send OSC message to SuperCollider
-    if ((this.globalScheduler as any).addEffect) {
-      ;(this.globalScheduler as any).addEffect('master', effectType, params)
+    if (this.globalScheduler.addEffect) {
+      this.globalScheduler.addEffect('master', effectType, params)
     }
 
     const seamless = this._isRunning ? ' (seamless)' : ''

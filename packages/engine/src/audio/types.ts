@@ -3,6 +3,44 @@
  * Maintained for backward compatibility
  */
 
+import type { AudioDevice } from './supercollider/types'
+
+/**
+ * Audio engine interface
+ * Defines the common interface for audio engines (currently SuperCollider)
+ */
+export interface AudioEngine {
+  /**
+   * Boot the audio engine
+   */
+  boot(): Promise<void>
+
+  /**
+   * Quit the audio engine
+   */
+  quit(): Promise<void>
+
+  /**
+   * Check if the engine is running
+   */
+  readonly isRunning: boolean
+
+  /**
+   * Get the current output audio device (optional)
+   */
+  getCurrentOutputDevice?(): AudioDevice | undefined
+
+  /**
+   * Get available audio devices (optional)
+   */
+  getAvailableDevices?(): AudioDevice[]
+
+  /**
+   * Set available audio devices (optional)
+   */
+  setAvailableDevices?(devices: AudioDevice[]): void
+}
+
 /**
  * Audio slice interface
  * Note: SuperCollider uses file paths and slice numbers directly,

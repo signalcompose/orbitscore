@@ -1,10 +1,12 @@
 import path from 'path'
 
+import type { Scheduler } from '../../global/types'
+
 /**
  * Result of playback preparation
  */
 export interface PlaybackPreparation {
-  scheduler: any
+  scheduler: Scheduler
   currentTime: number
 }
 
@@ -17,7 +19,7 @@ export interface PreparePlaybackOptions {
   chopDivisions?: number
   loopTimer?: NodeJS.Timeout
   prepareSlicesFn: () => Promise<void>
-  getScheduler: () => any
+  getScheduler: () => Scheduler
 }
 
 /**
@@ -40,7 +42,7 @@ export async function preparePlayback(
 
   // Get and validate scheduler
   const scheduler = getScheduler()
-  const isRunning = (scheduler as any).isRunning
+  const isRunning = scheduler.isRunning
 
   if (!isRunning) {
     console.log(`⚠️ ${sequenceName} - scheduler not running. Use global.run() first.`)
@@ -64,7 +66,7 @@ export async function preparePlayback(
   }
 
   // Get current scheduler time
-  const schedulerStartTime = (scheduler as any).startTime
+  const schedulerStartTime = scheduler.startTime
   const now = Date.now()
   const currentTime = now - schedulerStartTime
 
