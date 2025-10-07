@@ -59,7 +59,7 @@ export async function playFile(options: PlayOptions): Promise<PlayResult> {
   // Check if global.run() was called
   const hasRunningGlobal = Object.values(state.globals).some((g: any) => g.isRunning)
 
-  if (durationSeconds !== undefined && interpreter) {
+  if (durationSeconds !== undefined) {
     // Timed execution mode with auto-exit when all sequences finish
     startTimedExecution(interpreter, durationSeconds)
     return { interpreter, shouldStartREPL: false }
