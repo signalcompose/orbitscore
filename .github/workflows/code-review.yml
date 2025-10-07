@@ -1,4 +1,4 @@
-name: Code Review
+name: CI/CD - Test, Build, and Lint
 
 on:
   pull_request:
