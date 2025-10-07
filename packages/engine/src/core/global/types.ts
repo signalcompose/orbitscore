@@ -11,6 +11,7 @@ export interface Meter {
 export interface Scheduler {
   isRunning: boolean
   startTime: number // Timestamp when scheduler started
+  sequenceTimeouts?: Record<string, NodeJS.Timeout> // For tracking sequence timeouts
   start(): void
   stop(): void
   stopAll(): void
@@ -34,6 +35,9 @@ export interface Scheduler {
   ): void
   getAudioDuration(filepath: string): number
   loadBuffer?(filepath: string): Promise<any>
+  // Master effects (optional, for SuperCollider)
+  addEffect?(target: string, effectType: string, params: any): void
+  removeEffect?(target: string, effectType: string): void
 }
 
 export interface MasterEffect {

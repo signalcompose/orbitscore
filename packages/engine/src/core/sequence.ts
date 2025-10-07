@@ -6,7 +6,7 @@
 
 import * as path from 'path'
 
-import { SuperColliderPlayer } from '../audio/supercollider-player'
+import { AudioEngine } from '../audio/types'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 
 import { Global } from './global'
@@ -23,7 +23,7 @@ import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/ev
 
 export class Sequence {
   private global: Global
-  private audioEngine: SuperColliderPlayer
+  private audioEngine: AudioEngine
 
   // Managers
   private gainManager: GainManager
@@ -35,7 +35,7 @@ export class Sequence {
   private _audioFilePath?: string
   private _chopDivisions?: number
 
-  constructor(global: Global, audioEngine: SuperColliderPlayer) {
+  constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
     this.audioEngine = audioEngine
 
@@ -270,7 +270,7 @@ export class Sequence {
       isPlaying: this.stateManager.isPlaying(),
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
-      clearSequenceEventsFn: (name) => (scheduler as any).clearSequenceEvents(name),
+      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
     })
 
     this.stateManager.setPlaying(result.isPlaying)
@@ -304,7 +304,7 @@ export class Sequence {
       currentTime,
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
-      clearSequenceEventsFn: (name) => (scheduler as any).clearSequenceEvents(name),
+      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
     })
@@ -319,7 +319,7 @@ export class Sequence {
   stop(): this {
     // Clear scheduled events from scheduler
     const scheduler = this.global.getScheduler()
-    ;(scheduler as any).clearSequenceEvents(this.stateManager.getName())
+    scheduler.clearSequenceEvents(this.stateManager.getName())
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
