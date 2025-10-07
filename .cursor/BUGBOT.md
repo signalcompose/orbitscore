@@ -1,125 +1,126 @@
-# OrbitScore プロジェクトレビューガイドライン
+# OrbitScore Project Review Guidelines
 
-## 🌐 言語設定 - CRITICAL REQUIREMENT
+## 🌐 Language Policy
 
-**⚠️ MANDATORY: ALL review comments MUST be written in JAPANESE (日本語) ⚠️**
+**IMPORTANT: All review comments should be written in JAPANESE (日本語)**
 
-**This is a CRITICAL requirement for this project. Failure to follow this will result in less effective communication with Japanese-speaking developers.**
-
-- **ALL comments, explanations, and suggestions MUST be in Japanese**
-- Technical terms can remain in English (例: SuperCollider, SynthDef, TypeScript)
+- This project's developers are Japanese speakers
+- Japanese communication is most efficient for this team
+- Technical terms can remain in English (e.g., SuperCollider, SynthDef, TypeScript)
 - Code examples remain in English
-- **Reason**: This project's developers are Japanese speakers, and Japanese communication is most efficient
-- **IMPORTANT**: If you write in English, the review will be less effective for Japanese-speaking developers
 
-## プロジェクト概要
+## Project Overview
 
-OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング用オーディオエンジンです。SuperColliderとの統合、カスタムDSL、VS Code拡張機能を含みます。
+OrbitScore is a live coding audio engine with a degree-based music DSL. It includes SuperCollider integration, custom DSL, and VS Code extension.
 
-## セキュリティの重点領域
+**Key Technologies:**
+- TypeScript
+- SuperCollider (audio synthesis backend)
+- Node.js
+- VS Code Extension API
 
-- **SuperColliderサーバーとの通信**: OSCメッセージの検証とエラーハンドリング
-- **ファイル操作**: オーディオファイルパスの検証とサニタイゼーション
-- **プロセス管理**: SuperColliderプロセスの適切な起動・終了処理
+## Security Focus Areas
 
-## アーキテクチャパターン
+- **SuperCollider Server Communication**: OSC message validation and error handling
+- **File Operations**: Audio file path validation and sanitization
+- **Process Management**: Proper SuperCollider process startup/shutdown handling
 
-### DSL設計
-- **仕様書準拠**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`（v2.0）に厳密に従う
-- **メソッドチェーン**: 仕様書で定義されたメソッドのみ使用
-- **`play()`メソッドのネスト**: 括弧を使った構造の正しい実装
-- **精度**: 小数第3位まで（3 decimal places）
+## Architecture Patterns
 
-### コード構造
-- **モノレポ構成**: `packages/`配下にengine, parser, vscode-extensionを配置
-- **TypeScript**: 厳格な型定義、デフォルトエクスポート禁止
-- **テスト**: `tests/<module>/<feature>.spec.ts`の命名規則
+### DSL Design
+- **Specification Compliance**: Strictly follow `docs/INSTRUCTION_ORBITSCORE_DSL.md` (v2.0)
+- **Method Chaining**: Only use methods defined in the specification
+- **`play()` Method Nesting**: Proper implementation of parenthesis-based structure
+- **Precision**: Up to 3 decimal places
 
-### SuperCollider統合
-- **SynthDef管理**: `packages/engine/supercollider/synthdefs/`に配置
-- **setup.scdファイル**: SynthDef生成スクリプトの変更時は注意深くレビュー
-  - パラメータの型と範囲の確認
-  - エンベロープの適切な設定（doneAction: 2など）
-  - バス番号の正しい使用（In.ar/Out.ar/ReplaceOut.ar）
-- **オーディオデバイス**: 入力/出力/duplexの明確な分類
-- **エラーハンドリング**: SuperColliderサーバーの起動失敗、SynthDef読み込みエラーの適切な処理
+### Code Structure
+- **Monorepo**: `packages/` contains engine, parser, vscode-extension
+- **TypeScript**: Strict type definitions, no default exports
+- **Tests**: Naming convention `tests/<module>/<feature>.spec.ts`
 
-## コーディング規約
+### SuperCollider Integration
+- **SynthDef Management**: Located in `packages/engine/supercollider/synthdefs/`
+- **setup.scd File**: Carefully review SynthDef generation script changes
+  - Verify parameter types and ranges
+  - Proper envelope settings (e.g., doneAction: 2)
+  - Correct bus number usage (In.ar/Out.ar/ReplaceOut.ar)
+- **Audio Devices**: Clear classification of input/output/duplex
+- **Error Handling**: Proper handling of SuperCollider server startup failures and SynthDef loading errors
+
+## Coding Conventions
 
 ### TypeScript
-- **明示的なエクスポート**: デフォルトエクスポート禁止
-- **型定義**: すべての関数に戻り値の型を明記
-- **定数使用**: マジックナンバー禁止、定数を使用
+- **Explicit Exports**: No default exports
+- **Type Definitions**: All functions must have explicit return types
+- **Constants**: No magic numbers, use constants
 
-### 命名規則
-- **関数**: camelCase
-- **クラス**: PascalCase
-- **定数**: UPPER_SNAKE_CASE
-- **ファイル**: kebab-case
+### Naming Conventions
+- **Functions**: camelCase
+- **Classes**: PascalCase
+- **Constants**: UPPER_SNAKE_CASE
+- **Files**: kebab-case
 
-### ドキュメント
-- **仕様書**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`が最新のDSL仕様（v2.0）
-- **実装計画**: `docs/IMPLEMENTATION_PLAN.md`でフェーズ管理
+### Documentation
+- **Specification**: `docs/INSTRUCTION_ORBITSCORE_DSL.md` is the latest DSL spec (v2.0)
+- **Implementation Plan**: Phase management in `docs/IMPLEMENTATION_PLAN.md`
 
-## よくある問題
+## Common Issues
 
-### DSL関連
-- **未定義メソッド**: 仕様書にないメソッドの追加（例: `config()`, `offset()`）
-- **メソッドチェーン**: 仕様書で定義されたメソッドのみ使用
-- **`play()`メソッドのネスト**: 括弧を使った構造の正しい実装
-- **仕様書との整合性**: 最新のDSL仕様（v2.0）に厳密に従う
+### DSL-Related
+- **Undefined Methods**: Adding methods not in the specification (e.g., `config()`, `offset()`)
+- **Method Chaining**: Only use methods defined in the specification
+- **`play()` Method Nesting**: Proper implementation of parenthesis-based structure
+- **Specification Consistency**: Strictly follow the latest DSL spec (v2.0)
 
-### SuperCollider関連
-- **SynthDef未定義**: 使用前にSynthDefが読み込まれているか確認
-- **オーディオデバイス**: デバイスIDの検証とエラーハンドリング
-- **メモリリーク**: SuperColliderプロセスの適切なクリーンアップ
-- **意図的な無限待機**: REPL/testモードなど、対話型モードでの`await new Promise(() => {})`は意図的な設計
+### SuperCollider-Related
+- **Undefined SynthDef**: Verify SynthDef is loaded before use
+- **Audio Devices**: Device ID validation and error handling
+- **Memory Leaks**: Proper SuperCollider process cleanup
+- **Intentional Infinite Wait**: `await new Promise(() => {})` in REPL/test modes is intentional design
 
-### テスト関連
-- **ゴールデンファイル**: 回帰テスト用のゴールデンファイルの更新忘れ
-- **非同期処理**: SuperColliderとの通信における適切なawait/Promise処理
-- **テストの独立性**: 各テストが独立して実行可能か確認
+### Test-Related
+- **Golden Files**: Don't forget to update golden files for regression tests
+- **Async Processing**: Proper await/Promise handling in SuperCollider communication
+- **Test Independence**: Verify each test can run independently
 
-## レビュー時の注意点
+## Review Checklist
 
-### 必須確認事項
-1. **仕様書との整合性**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`（v2.0）に厳密に準拠しているか
-2. **テストの追加**: 新機能に対応するテストが追加されているか
-3. **型安全性**: TypeScriptの型定義が適切か
-4. **ライブパフォーマンスの安定性**: 本番環境での動作に影響する変更がないか
-5. **コメントの理解**: コードだけでなくコメントも読んで設計意図を理解すること
-   - 特に`Promise<void>`が決して解決しない場合など、意図的な設計パターンに注意
-   - コメントに「intentional（意図的）」「never resolves（決して解決しない）」などの記載がある場合は、その設計意図を尊重すること
-   - バグと判断する前に、コメントで説明されている設計意図を確認すること
+### Required Checks
+1. **Specification Compliance**: Strictly adheres to `docs/INSTRUCTION_ORBITSCORE_DSL.md` (v2.0)
+2. **Test Coverage**: Tests are added for new features
+3. **Type Safety**: TypeScript type definitions are appropriate
+4. **Live Performance Stability**: No changes that affect production environment
+5. **Comment Understanding**: Read both code AND comments to understand design intent
+   - Pay attention to intentional design patterns like `Promise<void>` that never resolves
+   - When comments mention "intentional" or "never resolves", respect that design intent
+   - Before flagging as a bug, verify the design intent explained in comments
 
-### パフォーマンス
-- **オーディオバッファ**: 適切なバッファサイズとレイテンシ
-- **メモリ使用**: 長時間実行時のメモリリーク
-- **SuperCollider負荷**: 過度なOSCメッセージ送信の回避
+### Performance
+- **Audio Buffers**: Appropriate buffer size and latency
+- **Memory Usage**: Memory leaks during long-running sessions
+- **SuperCollider Load**: Avoid excessive OSC message sending
 
-### ライブコーディング特有の考慮事項
-- **実行時エラー**: ライブパフォーマンス中のエラーハンドリング
-- **状態管理**: グローバル状態の適切な管理
-- **リアルタイム性**: オーディオ再生のタイミング精度
+### Live Coding Specific Considerations
+- **Runtime Errors**: Error handling during live performance
+- **State Management**: Proper global state management
+- **Real-time**: Audio playback timing accuracy
 
-## 除外項目
+## Exclusions
 
-以下は自動レビューの対象外としてください：
-- **アーカイブファイル**: `docs/archive/`配下のファイル
-- **生成ファイル**: `dist/`, `build/`, `*.scsyndef`
-- **テストアセット**: `test-assets/`配下のオーディオファイル
-- **一時ファイル**: `tmp/`配下のファイル
+The following should be excluded from automated review:
+- **Archive Files**: Files under `docs/archive/`
+- **Generated Files**: `dist/`, `build/`, `*.scsyndef`
+- **Test Assets**: Audio files under `test-assets/`
+- **Temporary Files**: Files under `tmp/`
 
-## 参考リンク
+## Reference Links
 
-- [DSL仕様書](../docs/INSTRUCTION_ORBITSCORE_DSL.md)
-- [実装計画](../docs/IMPLEMENTATION_PLAN.md)
-- [プロジェクトルール](../docs/PROJECT_RULES.md)
+- [DSL Specification](../docs/INSTRUCTION_ORBITSCORE_DSL.md)
+- [Implementation Plan](../docs/IMPLEMENTATION_PLAN.md)
+- [Project Rules](../docs/PROJECT_RULES.md)
 
 ---
 
-## 🚨 FINAL REMINDER
+## 🚨 IMPORTANT REMINDER
 
-**ALL REVIEW COMMENTS MUST BE IN JAPANESE (日本語) - NO EXCEPTIONS**
-
-This is the most important rule for effective communication in this project.
+**Please write all review comments in JAPANESE (日本語) for effective communication with this project's developers.**
