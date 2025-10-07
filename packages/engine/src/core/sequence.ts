@@ -1,92 +1,78 @@
 /**
  * Sequence class for OrbitScore
  * Represents an individual musical sequence with its own properties
+ * Refactored to use modular architecture with parameter, scheduling, and state managers
  */
 
 import * as path from 'path'
 
-import { AudioEngine, AudioFile, AudioSlice } from '../audio/audio-engine'
+import { AudioEngine, AudioFile } from '../audio/audio-engine'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
-import { TimedEvent, calculateEventTiming } from '../timing/calculation'
 
 import { Global } from './global'
-import { Meter, Scheduler } from './global/types'
+import { Scheduler } from './global/types'
 import { preparePlayback } from './sequence/playback/prepare-playback'
 import { runSequence } from './sequence/playback/run-sequence'
 import { loopSequence } from './sequence/playback/loop-sequence'
 import { prepareSlices as prepareSlicesUtil } from './sequence/audio/prepare-slices'
-
-/**
- * Generate a random value based on the random spec
- */
-function generateRandomValue(spec: RandomValue, min: number, max: number): number {
-  if (spec.type === 'full-random') {
-    // Full random within min-max range
-    return Math.random() * (max - min) + min
-  } else {
-    // Random walk: center ± range
-    const value = spec.center + (Math.random() * 2 - 1) * spec.range
-    // Clamp to valid range
-    return Math.max(min, Math.min(max, value))
-  }
-}
+import { GainManager } from './sequence/parameters/gain-manager'
+import { PanManager } from './sequence/parameters/pan-manager'
+import { TempoManager } from './sequence/parameters/tempo-manager'
+import { StateManager } from './sequence/state/state-manager'
+import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
 
 export class Sequence {
   private global: Global
   private audioEngine: AudioEngine
 
-  // Sequence properties
-  private _name: string = ''
-  private _tempo?: number
-  private _beat?: Meter
-  private _length?: number // Loop length in bars
-  private _gainDb: number = 0 // Gain in dB, default 0 dB (100%)
-  private _gainRandom?: RandomValue // Random spec for gain
-  private _pan: number = 0 // -100 (left) to 100 (right), default 0 (center)
-  private _panRandom?: RandomValue // Random spec for pan
+  // Managers
+  private gainManager: GainManager
+  private panManager: PanManager
+  private tempoManager: TempoManager
+  private stateManager: StateManager
+
+  // Audio properties
   private _audioFile?: AudioFile
-  private _slices: AudioSlice[] = []
-  private _playPattern?: PlayElement[]
-  private _timedEvents?: TimedEvent[]
-  private _isMuted: boolean = false
-  private _isPlaying: boolean = false
-  private _isLooping: boolean = false
   private _audioFilePath?: string
   private _chopDivisions?: number
-  private playbackInterval: NodeJS.Timeout | undefined
-  private loopTimer: NodeJS.Timeout | undefined
-  private _loopStartTime?: number // Time when loop() was called (in scheduler time)
 
   constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
     this.audioEngine = audioEngine
+
+    // Initialize managers
+    this.gainManager = new GainManager()
+    this.panManager = new PanManager()
+    this.tempoManager = new TempoManager()
+    this.stateManager = new StateManager()
   }
 
   // Set the name (called when assigned to a variable)
   setName(name: string): this {
-    this._name = name
+    this.stateManager.setName(name)
     this.global.registerSequence(name, this)
     return this
   }
 
   // Method chaining setters
   tempo(value: number): this {
-    this._tempo = value
+    this.tempoManager.setTempo(value)
     return this
   }
 
   beat(numerator: number, denominator: number): this {
-    this._beat = { numerator, denominator }
+    this.tempoManager.setBeat(numerator, denominator)
     return this
   }
 
   length(bars: number): this {
-    const wasLooping = this._isLooping
-    this._length = bars
+    const wasLooping = this.stateManager.isLooping()
+    this.tempoManager.setLength(bars)
 
     // Recalculate timing if play pattern exists
-    if (this._playPattern && this._playPattern.length > 0) {
-      this.play(...this._playPattern)
+    const playPattern = this.stateManager.getPlayPattern()
+    if (playPattern && playPattern.length > 0) {
+      this.play(...playPattern)
     }
 
     // If currently looping, restart the loop with new length
@@ -102,51 +88,28 @@ export class Sequence {
   }
 
   gain(valueDb: number | RandomValue): this {
-    // Check if it's a random value spec
-    if (typeof valueDb === 'object' && 'type' in valueDb) {
-      this._gainRandom = valueDb
-      // Set a default value for display (center if random-walk, 0 if full-random)
-      if (valueDb.type === 'random-walk') {
-        this._gainDb = Math.max(-60, Math.min(12, valueDb.center))
-      } else {
-        this._gainDb = 0 // Default to 0 dB for full-random
-      }
-    } else {
-      // Fixed value
-      this._gainRandom = undefined
-      // Clamp to -60 dB (effectively silent) to +12 dB (prevent clipping)
-      // -Infinity is allowed for complete silence
-      if (valueDb === -Infinity) {
-        this._gainDb = -Infinity
-      } else {
-        this._gainDb = Math.max(-60, Math.min(12, valueDb))
-      }
-    }
+    // Use gain manager to set gain
+    this.gainManager.setGain({ valueDb })
 
     // If already playing, reschedule future events only (seamless change)
-    if (this._isLooping || this._isPlaying) {
+    if (this.stateManager.isLooping() || this.stateManager.isPlaying()) {
       const scheduler = this.global.getScheduler()
       const isRunning = (scheduler as any).isRunning
 
-      if (isRunning && this._loopStartTime !== undefined) {
+      if (isRunning && this.stateManager.getLoopStartTime() !== undefined) {
         // Get current scheduler time
         const schedulerStartTime = (scheduler as any).startTime
         const now = Date.now()
         const currentTime = now - schedulerStartTime
 
         // Clear ALL old events first
-        ;(scheduler as any).clearSequenceEvents(this._name)
+        ;(scheduler as any).clearSequenceEvents(this.stateManager.getName())
 
         // Reschedule events, but only future ones
-        // scheduleEvents will now skip events that are already in the past
         this.scheduleEventsFromTime(scheduler, currentTime)
 
-        const gainDesc = this._gainRandom
-          ? this._gainRandom.type === 'full-random'
-            ? 'random'
-            : `random(${this._gainRandom.center}±${this._gainRandom.range})`
-          : `${typeof valueDb === 'number' ? valueDb : this._gainDb} dB`
-        console.log(`🎚️ ${this._name}: gain=${gainDesc} (seamless)`)
+        const gainDesc = this.gainManager.getGainDescription()
+        console.log(`🎚️ ${this.stateManager.getName()}: gain=${gainDesc} (seamless)`)
       }
     }
 
@@ -154,29 +117,17 @@ export class Sequence {
   }
 
   pan(value: number | RandomValue): this {
-    // Check if it's a random value spec
-    if (typeof value === 'object' && 'type' in value) {
-      this._panRandom = value
-      // Set a default value for display (center if random-walk, 0 if full-random)
-      if (value.type === 'random-walk') {
-        this._pan = Math.max(-100, Math.min(100, value.center))
-      } else {
-        this._pan = 0 // Default to center for full-random
-      }
-    } else {
-      // Fixed value
-      this._panRandom = undefined
-      this._pan = Math.max(-100, Math.min(100, value))
-    }
+    // Use pan manager to set pan
+    this.panManager.setPan({ value })
 
     // If already playing, reschedule with new pan
-    if (this._isLooping || this._isPlaying) {
+    if (this.stateManager.isLooping() || this.stateManager.isPlaying()) {
       const scheduler = this.global.getScheduler()
       const isRunning = (scheduler as any).isRunning
 
-      if (isRunning && this._loopStartTime !== undefined) {
+      if (isRunning && this.stateManager.getLoopStartTime() !== undefined) {
         // Clear ALL old events first
-        ;(scheduler as any).clearSequenceEvents(this._name)
+        ;(scheduler as any).clearSequenceEvents(this.stateManager.getName())
 
         // Get current scheduler time
         const schedulerStartTime = (scheduler as any).startTime
@@ -186,12 +137,8 @@ export class Sequence {
         // Reschedule events, but only future ones
         this.scheduleEventsFromTime(scheduler, currentTime)
 
-        const panDesc = this._panRandom
-          ? this._panRandom.type === 'full-random'
-            ? 'random'
-            : `random(${this._panRandom.center}±${this._panRandom.range})`
-          : value
-        console.log(`🎚️ ${this._name}: pan=${panDesc} (seamless)`)
+        const panDesc = this.panManager.getPanDescription()
+        console.log(`🎚️ ${this.stateManager.getName()}: pan=${panDesc} (seamless)`)
       }
     }
 
@@ -203,10 +150,8 @@ export class Sequence {
     const globalState = this.global.getState()
     if (globalState.audioPath && !path.isAbsolute(filepath)) {
       this._audioFilePath = path.join(globalState.audioPath, filepath)
-      // ${this._name}: audio=${filepath}
     } else {
       this._audioFilePath = filepath
-      // ${this._name}: audio=${filepath}
     }
 
     this._chopDivisions = 1 // Default to no chopping
@@ -220,8 +165,8 @@ export class Sequence {
     try {
       this._audioFile = await this.audioEngine.loadAudioFile(this._audioFilePath)
       // Default to chop(1) if not specified
-      this._slices = this._audioFile.chop(1)
-      // ${this._name}: loaded
+      const slices = this._audioFile.chop(1)
+      this.stateManager.setSlices(slices)
     } catch (error) {
       console.error(`Failed to load audio ${this._audioFilePath}:`, error)
     }
@@ -231,128 +176,61 @@ export class Sequence {
     this._chopDivisions = divisions
 
     if (!this._audioFilePath) {
-      console.error(`${this._name}: no audio file set`)
+      console.error(`${this.stateManager.getName()}: no audio file set`)
       return this
     }
 
-    // ${this._name}: chop(${divisions})
     return this
   }
 
   private async prepareSlices(): Promise<void> {
     await prepareSlicesUtil({
-      sequenceName: this._name,
+      sequenceName: this.stateManager.getName(),
       audioFilePath: this._audioFilePath,
       chopDivisions: this._chopDivisions,
     })
   }
 
   play(...elements: PlayElement[]): this {
-    this._playPattern = elements
+    this.stateManager.setPlayPattern(elements)
 
     // Calculate timing for the play pattern
     const globalState = this.global.getState()
-    const tempo = this._tempo || globalState.tempo
-    const meter = this._beat || globalState.beat
+    const timedEvents = this.tempoManager.calculateEventTiming(
+      elements,
+      globalState.tempo || 120,
+      globalState.beat,
+    )
 
-    // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
-    // これにより、シーケンスごとに異なる拍子で1小節の長さを変えられる（ポリメーター）
-    // 例: global.beat(4 by 4) = 2000ms, seq.beat(5 by 4) = 2500ms, seq.beat(9 by 8) = 2250ms
-    const quarterNoteDuration = 60000 / tempo // 4分音符の長さ（BPMの基準）
-    const barDuration = quarterNoteDuration * ((meter.numerator / meter.denominator) * 4)
-
-    // Apply length multiplier to bar duration (stretches each event)
-    const effectiveBarDuration = barDuration * (this._length || 1)
-
-    this._timedEvents = calculateEventTiming(elements, effectiveBarDuration)
-
-    // ${this._name}: ${this._timedEvents.length} events
+    this.stateManager.setTimedEvents(timedEvents)
 
     return this
   }
 
-  // Schedule events to a global scheduler (one-shot or one iteration)
   // Schedule events from a specific time onwards (for seamless parameter changes)
   private scheduleEventsFromTime(scheduler: Scheduler, fromTime: number): void {
-    if (!this._timedEvents || !this._audioFilePath) {
+    const timedEvents = this.stateManager.getTimedEvents()
+    if (!timedEvents || !this._audioFilePath) {
       return
     }
 
-    const resolvedFilePath = path.isAbsolute(this._audioFilePath)
-      ? this._audioFilePath
-      : path.resolve(this._audioFilePath)
+    const gainState = this.gainManager.getGain()
+    const panState = this.panManager.getPan()
 
-    const chopDivisions = this._chopDivisions || 1
-    const patternDuration = this.getPatternDuration()
-
-    // Calculate which loop iteration we're in
-    const elapsedTime = fromTime - (this._loopStartTime || 0)
-    const currentIteration = Math.floor(elapsedTime / patternDuration)
-
-    // Schedule remaining events in current iteration + next iteration
-    for (let iter = currentIteration; iter < currentIteration + 2; iter++) {
-      const loopOffset = iter * patternDuration
-      const baseTime = (this._loopStartTime || 0) + loopOffset
-
-      for (const event of this._timedEvents) {
-        if (event.sliceNumber > 0) {
-          const startTimeMs = baseTime + event.startTime
-
-          // Skip events that are in the past
-          if (startTimeMs <= fromTime) {
-            continue
-          }
-
-          // Calculate final gain
-          const masterGainDb = this.global.getMasterGainDb()
-          let sequenceGainDb = this._gainDb
-
-          // Generate random gain if specified
-          if (this._gainRandom) {
-            sequenceGainDb = generateRandomValue(this._gainRandom, -60, 12)
-          }
-
-          let finalGainDb: number
-          if (this._isMuted) {
-            finalGainDb = -Infinity
-          } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
-            finalGainDb = -Infinity
-          } else {
-            finalGainDb = sequenceGainDb + masterGainDb
-          }
-
-          // Generate random pan if specified
-          const eventPan = this._panRandom
-            ? generateRandomValue(this._panRandom, -100, 100)
-            : this._pan
-
-          // Schedule event
-          if (chopDivisions > 1) {
-            // Ensure duration is defined and non-zero to prevent Infinity rate calculation
-            // If duration is 0 or undefined, use slice's natural duration (rate = 1.0)
-            const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
-            scheduler.scheduleSliceEvent(
-              resolvedFilePath,
-              startTimeMs,
-              event.sliceNumber,
-              chopDivisions,
-              eventDuration, // Event duration in ms (time slot for this event)
-              finalGainDb,
-              eventPan,
-              this._name,
-            )
-          } else {
-            scheduler.scheduleEvent(
-              resolvedFilePath,
-              startTimeMs,
-              finalGainDb,
-              eventPan,
-              this._name,
-            )
-          }
-        }
-      }
-    }
+    scheduleEventsFromTime({
+      scheduler,
+      fromTime,
+      audioFilePath: this._audioFilePath,
+      timedEvents,
+      chopDivisions: this._chopDivisions,
+      gainDb: gainState.gainDb,
+      gainRandom: gainState.gainRandom,
+      pan: panState.pan,
+      panRandom: panState.panRandom,
+      isMuted: this.stateManager.isMuted(),
+      sequenceName: this.stateManager.getName(),
+      loopStartTime: this.stateManager.getLoopStartTime(),
+    })
   }
 
   async scheduleEvents(
@@ -360,101 +238,45 @@ export class Sequence {
     loopIteration: number = 0,
     baseTime: number = 0,
   ): Promise<void> {
-    if (!this._audioFilePath || !this._timedEvents || this._timedEvents.length === 0) {
+    const timedEvents = this.stateManager.getTimedEvents()
+    if (!this._audioFilePath || !timedEvents || timedEvents.length === 0) {
       return
     }
 
-    // Resolve the audio file path to an absolute path
-    // Note: audio() method already combines globalState.audioPath with filepath
-    // If the path is relative, resolve it from the workspace root (process.cwd())
-    const resolvedFilePath = path.isAbsolute(this._audioFilePath)
-      ? this._audioFilePath
-      : path.resolve(process.cwd(), this._audioFilePath)
+    const gainState = this.gainManager.getGain()
+    const panState = this.panManager.getPan()
 
-    const globalState = this.global.getState()
-    const tempo = this._tempo || globalState.tempo || 120
-    const beatDuration = 60000 / tempo // ms per beat
-    const barDuration = beatDuration * 4 // assuming 4/4 time
+    await scheduleEvents({
+      scheduler,
+      loopIteration,
+      baseTime,
+      audioFilePath: this._audioFilePath,
+      timedEvents,
+      chopDivisions: this._chopDivisions,
+      gainDb: gainState.gainDb,
+      gainRandom: gainState.gainRandom,
+      pan: panState.pan,
+      panRandom: panState.panRandom,
+      isMuted: this.stateManager.isMuted(),
+      sequenceName: this.stateManager.getName(),
+    })
 
-    // Schedule events for current iteration
-    // When called from loop(), baseTime already includes the correct time
-    // loopIteration should be 0 for loop() calls
-    const loopOffset = loopIteration * barDuration * (this._length || 1)
-
-    for (const event of this._timedEvents) {
-      if (event.sliceNumber > 0) {
-        // 0 is silence
-        const startTimeMs = baseTime + event.startTime + loopOffset
-
-        // Calculate final gain: sequence gain + master gain (in dB, so we add them)
-        const masterGainDb = this.global.getMasterGainDb()
-        let sequenceGainDb = this._gainDb
-
-        // Generate random gain if specified
-        if (this._gainRandom) {
-          sequenceGainDb = generateRandomValue(this._gainRandom, -60, 12)
-        }
-
-        let finalGainDb: number
-        if (this._isMuted) {
-          finalGainDb = -Infinity
-        } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
-          finalGainDb = -Infinity
-        } else {
-          finalGainDb = sequenceGainDb + masterGainDb
-        }
-
-        // Generate random pan if specified
-        const eventPan = this._panRandom
-          ? generateRandomValue(this._panRandom, -100, 100)
-          : this._pan
-
-        // Use sox slice playback instead of file slicing
-        if (this._chopDivisions && this._chopDivisions > 1) {
-          // Ensure duration is defined and non-zero to prevent Infinity rate calculation
-          // If duration is 0 or undefined, use slice's natural duration (rate = 1.0)
-          const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
-          scheduler.scheduleSliceEvent(
-            resolvedFilePath,
-            startTimeMs,
-            event.sliceNumber,
-            this._chopDivisions,
-            eventDuration, // Event duration in ms (time slot for this event)
-            finalGainDb,
-            eventPan,
-            this._name,
-          )
-        } else {
-          scheduler.scheduleEvent(resolvedFilePath, startTimeMs, finalGainDb, eventPan, this._name)
-        }
-      }
-    }
-
-    this._isPlaying = true
+    this.stateManager.setPlaying(true)
   }
 
   // Calculate pattern duration
   private getPatternDuration(): number {
     const globalState = this.global.getState()
-    const tempo = this._tempo || globalState.tempo || 120
-    const meter = this._beat || globalState.beat
-
-    // 1小節の長さ = 4分音符の長さ × (分子 / 分母 × 4)
-    const quarterNoteDuration = 60000 / tempo
-    const barDuration = quarterNoteDuration * ((meter.numerator / meter.denominator) * 4)
-
-    // length() multiplies the duration of each event, not the number of bars
-    // So the pattern duration is: 1 bar × length multiplier
-    return barDuration * (this._length || 1)
+    return this.tempoManager.calculatePatternDuration(globalState.tempo || 120, globalState.beat)
   }
 
   // Transport control
   async run(): Promise<this> {
     const prepared = await preparePlayback({
-      sequenceName: this._name,
+      sequenceName: this.stateManager.getName(),
       audioFilePath: this._audioFilePath,
       chopDivisions: this._chopDivisions,
-      loopTimer: this.loopTimer,
+      loopTimer: this.stateManager.getLoopTimer(),
       prepareSlicesFn: () => this.prepareSlices(),
       getScheduler: () => this.global.getScheduler(),
     })
@@ -464,30 +286,30 @@ export class Sequence {
     const { scheduler, currentTime } = prepared
     // Note: preparePlayback() has already cleared any existing loop timer
     // run() is one-shot playback, so we ensure loopTimer remains undefined
-    this.loopTimer = undefined
+    this.stateManager.setLoopTimer(undefined)
 
-    const result = runSequence({
-      sequenceName: this._name,
+    const result = await runSequence({
+      sequenceName: this.stateManager.getName(),
       scheduler,
       currentTime,
-      isPlaying: this._isPlaying,
+      isPlaying: this.stateManager.isPlaying(),
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
       clearSequenceEventsFn: (name) => (scheduler as any).clearSequenceEvents(name),
     })
 
-    this._isPlaying = result.isPlaying
-    this._isLooping = result.isLooping
+    this.stateManager.setPlaying(result.isPlaying)
+    this.stateManager.setLooping(result.isLooping)
 
     return this
   }
 
   async loop(): Promise<this> {
     const prepared = await preparePlayback({
-      sequenceName: this._name,
+      sequenceName: this.stateManager.getName(),
       audioFilePath: this._audioFilePath,
       chopDivisions: this._chopDivisions,
-      loopTimer: this.loopTimer,
+      loopTimer: this.stateManager.getLoopTimer(),
       prepareSlicesFn: () => this.prepareSlices(),
       getScheduler: () => this.global.getScheduler(),
     })
@@ -498,23 +320,23 @@ export class Sequence {
 
     // Set loop state BEFORE calling loopSequence to avoid race condition
     // The setInterval callback will check this state via getIsLoopingFn()
-    this._isLooping = true
-    this._isPlaying = true
+    this.stateManager.setLooping(true)
+    this.stateManager.setPlaying(true)
 
     const result = loopSequence({
-      sequenceName: this._name,
+      sequenceName: this.stateManager.getName(),
       scheduler,
       currentTime,
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
       clearSequenceEventsFn: (name) => (scheduler as any).clearSequenceEvents(name),
-      getIsLoopingFn: () => this._isLooping,
-      getIsMutedFn: () => this._isMuted,
+      getIsLoopingFn: () => this.stateManager.isLooping(),
+      getIsMutedFn: () => this.stateManager.isMuted(),
     })
 
     // Update remaining state from result
-    this._loopStartTime = result.loopStartTime
-    this.loopTimer = result.loopTimer
+    this.stateManager.setLoopStartTime(result.loopStartTime)
+    this.stateManager.setLoopTimer(result.loopTimer)
 
     return this
   }
@@ -522,50 +344,47 @@ export class Sequence {
   stop(): this {
     // Clear scheduled events from scheduler
     const scheduler = this.global.getScheduler()
-    ;(scheduler as any).clearSequenceEvents(this._name)
+    ;(scheduler as any).clearSequenceEvents(this.stateManager.getName())
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
-    if (this.loopTimer) {
-      clearInterval(this.loopTimer)
-      this.loopTimer = undefined
+    const loopTimer = this.stateManager.getLoopTimer()
+    if (loopTimer) {
+      clearInterval(loopTimer)
+      this.stateManager.setLoopTimer(undefined)
     }
 
     // Clear state
-    this._isPlaying = false
-    this._isLooping = false
+    this.stateManager.setPlaying(false)
+    this.stateManager.setLooping(false)
     return this
   }
 
   mute(): this {
-    this._isMuted = true
-    // ${this._name}: mute
+    this.stateManager.setMuted(true)
     return this
   }
 
   unmute(): this {
-    this._isMuted = false
-    // ${this._name}: unmute
+    this.stateManager.setMuted(false)
     return this
   }
 
   // Get state for debugging/inspection
   getState() {
+    const state = this.stateManager.getState()
+    const gainState = this.gainManager.getGain()
+    const panState = this.panManager.getPan()
+
     return {
-      name: this._name,
-      tempo: this._tempo,
-      beat: this._beat,
-      length: this._length,
-      gainDb: this._gainDb,
-      gainRandom: this._gainRandom,
-      pan: this._pan,
-      panRandom: this._panRandom,
-      slices: this._slices,
-      playPattern: this._playPattern,
-      timedEvents: this._timedEvents,
-      isMuted: this._isMuted,
-      isPlaying: this._isPlaying,
-      isLooping: this._isLooping,
+      ...state,
+      tempo: this.tempoManager.getTempo(),
+      beat: this.tempoManager.getBeat(),
+      length: this.tempoManager.getLength(),
+      gainDb: gainState.gainDb,
+      gainRandom: gainState.gainRandom,
+      pan: panState.pan,
+      panRandom: panState.panRandom,
     }
   }
 }
