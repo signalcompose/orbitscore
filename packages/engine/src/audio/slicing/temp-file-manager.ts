@@ -11,6 +11,7 @@ import * as os from 'os'
  */
 export class TempFileManager {
   private tempDir: string
+  private createdFiles: Set<string> = new Set()
 
   constructor() {
     // Use system temp directory
@@ -43,29 +44,28 @@ export class TempFileManager {
   writeSliceFile(filepath: string, buffer: Buffer): void {
     try {
       fs.writeFileSync(filepath, buffer)
+      // Track this file for cleanup
+      this.createdFiles.add(filepath)
     } catch (error) {
       throw new Error(`Failed to write slice file ${filepath}: ${error}`)
     }
   }
 
   /**
-   * Clean up all temporary slice files
+   * Clean up only the temporary files created by this instance
+   * This prevents accidentally deleting files from other processes
    */
   cleanup(): void {
-    if (!fs.existsSync(this.tempDir)) {
-      return
-    }
-
-    const files = fs.readdirSync(this.tempDir)
-    for (const file of files) {
-      // Only delete files that match our slice pattern
-      if (file.includes('_slice') && file.endsWith('.wav')) {
-        try {
-          fs.unlinkSync(path.join(this.tempDir, file))
-        } catch (error) {
-          console.warn(`Failed to delete temp file ${file}: ${error}`)
+    for (const filepath of this.createdFiles) {
+      try {
+        if (fs.existsSync(filepath)) {
+          fs.unlinkSync(filepath)
         }
+      } catch (error) {
+        console.warn(`Failed to delete temp file ${filepath}: ${error}`)
       }
     }
+    // Clear the tracking set after cleanup
+    this.createdFiles.clear()
   }
 }
