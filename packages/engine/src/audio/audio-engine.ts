@@ -2,28 +2,33 @@
  * Audio Engine for OrbitScore
  * Based on specification: docs/INSTRUCTION_ORBITSCORE_DSL.md
  *
- * This engine handles audio file loading, slicing, time-stretching,
- * pitch-shifting, and playback.
+ * This is a thin wrapper that maintains backward compatibility while
+ * delegating to modular implementations.
  */
 
-import * as fs from 'fs'
-import * as path from 'path'
+// Type exports
+export type { AudioSlice, PlaySliceOptions, PlaySequenceOptions } from './types'
 
-// import { AudioContext, AudioBuffer, AudioBufferSourceNode, GainNode } from 'node-web-audio-api'
-import { WaveFile } from 'wavefile'
-
-/**
- * Represents a slice of an audio file
- */
-export interface AudioSlice {
-  buffer: AudioBuffer
-  startTime: number // in seconds
-  duration: number // in seconds
-  sliceNumber: number
-}
+// Engine module imports
+import {
+  createAudioContext,
+  getCurrentTime as getTime,
+  getSampleRate as getRate,
+  suspendContext,
+  resumeContext,
+  closeContext,
+} from './engine/audio-context-manager'
+import { createMasterGain, setMasterVolume as setVolume } from './engine/master-gain-controller'
+import { createAudioFileCache, setCached, type CachedAudioFile } from './engine/audio-file-cache'
+import { loadAudioFile as loadFile } from './loading/audio-file-loader'
+import { createSlices, getSlice as findSlice, getAllSlices } from './slicing/slice-manager'
+import { playSlice as playAudioSlice } from './playback/slice-player'
+import { playSequence as playAudioSequence } from './playback/sequence-player'
+import type { AudioSlice, PlaySliceOptions, PlaySequenceOptions } from './types'
 
 /**
  * Audio file with slicing capability
+ * Maintains backward compatibility with the original AudioFile class
  */
 export class AudioFile {
   private audioContext: AudioContext
@@ -40,74 +45,7 @@ export class AudioFile {
    * Load audio file into memory
    */
   async load(): Promise<void> {
-    const fullPath = path.resolve(this.filePath)
-
-    if (!fs.existsSync(fullPath)) {
-      throw new Error(`Audio file not found: ${fullPath}`)
-    }
-
-    const fileBuffer = fs.readFileSync(fullPath)
-
-    // Determine file format and decode
-    const ext = path.extname(fullPath).toLowerCase()
-
-    if (ext === '.wav') {
-      await this.loadWav(fileBuffer)
-    } else if (ext === '.mp3' || ext === '.mp4' || ext === '.m4a') {
-      // For MP3/MP4, we need additional decoding
-      // For now, we'll throw an error - can be implemented later
-      throw new Error(`Format ${ext} not yet implemented. Please use WAV files.`)
-    } else if (ext === '.aiff' || ext === '.aif') {
-      throw new Error(`Format ${ext} not yet implemented. Please use WAV files.`)
-    } else {
-      throw new Error(`Unsupported audio format: ${ext}`)
-    }
-  }
-
-  /**
-   * Load WAV file
-   */
-  private async loadWav(fileBuffer: Buffer): Promise<void> {
-    const wav = new WaveFile(fileBuffer)
-
-    // Get format info before conversion (cast to any for now, wavefile typings are incomplete)
-    const fmt = wav.fmt as any
-    const originalChannels = fmt.numChannels
-
-    // Convert to standard format if needed
-    wav.toBitDepth('32f') // Convert to 32-bit float
-    wav.toSampleRate(48000) // Convert to 48kHz
-
-    // Get audio data - returns interleaved samples for multi-channel
-    const samples = wav.getSamples(false) as unknown as Float32Array
-
-    // Get updated format info after conversion
-    const sampleRate = (fmt.sampleRate || 48000) as number
-    const numberOfChannels = (fmt.numChannels || originalChannels || 1) as number
-    const samplesPerChannel = Math.floor(samples.length / numberOfChannels)
-
-    // Create AudioBuffer
-    this.buffer = this.audioContext.createBuffer(numberOfChannels, samplesPerChannel, sampleRate)
-
-    // De-interleave and copy samples to buffer
-    if (numberOfChannels === 1) {
-      // Mono: direct copy
-      // Ensure samples is a proper Float32Array
-      const channelData = new Float32Array(samples.length)
-      for (let i = 0; i < samples.length; i++) {
-        channelData[i] = samples[i] || 0
-      }
-      this.buffer.copyToChannel(channelData, 0)
-    } else {
-      // Stereo or multi-channel: de-interleave
-      for (let channel = 0; channel < numberOfChannels; channel++) {
-        const channelData = new Float32Array(samplesPerChannel)
-        for (let i = 0; i < samplesPerChannel; i++) {
-          channelData[i] = samples[i * numberOfChannels + channel] || 0
-        }
-        this.buffer.copyToChannel(channelData, channel)
-      }
-    }
+    this.buffer = await loadFile(this.audioContext, this.filePath)
   }
 
   /**
@@ -118,22 +56,7 @@ export class AudioFile {
       throw new Error('Audio file not loaded')
     }
 
-    const totalDuration = this.buffer.duration
-    const sliceDuration = totalDuration / numSlices
-
-    this.slices = []
-
-    for (let i = 0; i < numSlices; i++) {
-      const startTime = i * sliceDuration
-
-      this.slices.push({
-        buffer: this.buffer,
-        startTime,
-        duration: sliceDuration,
-        sliceNumber: i + 1, // 1-indexed
-      })
-    }
-
+    this.slices = createSlices(this.buffer, numSlices)
     return this.slices
   }
 
@@ -141,14 +64,14 @@ export class AudioFile {
    * Get a specific slice
    */
   getSlice(sliceNumber: number): AudioSlice | undefined {
-    return this.slices.find((s) => s.sliceNumber === sliceNumber)
+    return findSlice(this.slices, sliceNumber)
   }
 
   /**
    * Get all slices
    */
   getSlices(): AudioSlice[] {
-    return this.slices
+    return getAllSlices(this.slices)
   }
 
   /**
@@ -161,23 +84,26 @@ export class AudioFile {
 
 /**
  * Main Audio Engine
+ * Maintains backward compatibility with the original AudioEngine class
  */
 export class AudioEngine {
   private audioContext: AudioContext
   private masterGain: GainNode
-  private audioFiles: Map<string, AudioFile> = new Map()
+  private audioFiles: Map<string, CachedAudioFile>
   private isPlaying: boolean = false
 
   constructor() {
-    // Initialize audio context with 48kHz sample rate
-    this.audioContext = new AudioContext({
+    // Initialize audio context
+    this.audioContext = createAudioContext({
       sampleRate: 48000,
       latencyHint: 'interactive',
     })
 
     // Create master gain node
-    this.masterGain = this.audioContext.createGain()
-    this.masterGain.connect(this.audioContext.destination)
+    this.masterGain = createMasterGain(this.audioContext)
+
+    // Create audio file cache
+    this.audioFiles = createAudioFileCache()
   }
 
   /**
@@ -188,7 +114,10 @@ export class AudioEngine {
     await audioFile.load()
 
     // Store in cache
-    this.audioFiles.set(filePath, audioFile)
+    const buffer = audioFile.getBuffer()
+    if (buffer) {
+      setCached(this.audioFiles, filePath, buffer, audioFile.getSlices())
+    }
 
     return audioFile
   }
@@ -196,72 +125,15 @@ export class AudioEngine {
   /**
    * Play an audio slice
    */
-  playSlice(
-    slice: AudioSlice,
-    options: {
-      tempo?: number // Tempo adjustment (1.0 = normal)
-      pitch?: number // Pitch shift in semitones
-      startTime?: number // When to start playing (audio context time)
-    } = {},
-  ): AudioBufferSourceNode {
-    const source = this.audioContext.createBufferSource()
-    source.buffer = slice.buffer
-
-    // Apply tempo adjustment (affects playback rate)
-    if (options.tempo) {
-      source.playbackRate.value = options.tempo
-    }
-
-    // Note: Pitch shifting without affecting tempo requires more complex processing
-    // For now, playbackRate affects both tempo and pitch
-    // True pitch shifting would require a pitch shift node or granular synthesis
-
-    // Connect to master gain
-    source.connect(this.masterGain)
-
-    // Start playback
-    const when = options.startTime || this.audioContext.currentTime
-    source.start(when, slice.startTime, slice.duration)
-
-    return source
+  playSlice(slice: AudioSlice, options: PlaySliceOptions = {}): AudioBufferSourceNode {
+    return playAudioSlice(this.audioContext, this.masterGain, slice, options)
   }
 
   /**
    * Play a sequence of slices
    */
-  playSequence(
-    slices: AudioSlice[],
-    options: {
-      tempo?: number
-      pitch?: number
-      loop?: boolean
-    } = {},
-  ): void {
-    let currentTime = this.audioContext.currentTime
-
-    for (const slice of slices) {
-      this.playSlice(slice, {
-        ...options,
-        startTime: currentTime,
-      })
-
-      // Calculate next start time based on slice duration and tempo
-      const adjustedDuration = slice.duration / (options.tempo || 1.0)
-      currentTime += adjustedDuration
-    }
-
-    // Handle looping if requested
-    if (options.loop) {
-      const totalDuration = slices.reduce(
-        (sum, slice) => sum + slice.duration / (options.tempo || 1.0),
-        0,
-      )
-
-      // Schedule next iteration
-      setTimeout(() => {
-        this.playSequence(slices, options)
-      }, totalDuration * 1000)
-    }
+  playSequence(slices: AudioSlice[], options: PlaySequenceOptions = {}): void {
+    playAudioSequence(this.audioContext, this.masterGain, slices, options)
   }
 
   /**
@@ -273,14 +145,14 @@ export class AudioEngine {
     this.isPlaying = false
 
     // Suspend audio context to stop all playback
-    this.audioContext.suspend()
+    suspendContext(this.audioContext)
   }
 
   /**
    * Resume playback
    */
   resume(): void {
-    this.audioContext.resume()
+    resumeContext(this.audioContext)
     this.isPlaying = true
   }
 
@@ -288,21 +160,21 @@ export class AudioEngine {
    * Set master volume
    */
   setMasterVolume(volume: number): void {
-    this.masterGain.gain.value = Math.max(0, Math.min(1, volume))
+    setVolume(this.masterGain, volume)
   }
 
   /**
    * Get current time
    */
   getCurrentTime(): number {
-    return this.audioContext.currentTime
+    return getTime(this.audioContext)
   }
 
   /**
    * Get sample rate
    */
   getSampleRate(): number {
-    return this.audioContext.sampleRate
+    return getRate(this.audioContext)
   }
 
   /**
@@ -316,7 +188,7 @@ export class AudioEngine {
    * Cleanup resources
    */
   async dispose(): Promise<void> {
-    await this.audioContext.close()
+    await closeContext(this.audioContext)
   }
 }
 
