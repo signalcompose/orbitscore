@@ -25,6 +25,8 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
     panRandom,
     isMuted,
     sequenceName,
+    masterGainDb,
+    patternDuration,
   } = options
 
   if (!audioFilePath || !timedEvents || timedEvents.length === 0) {
@@ -37,7 +39,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
     : path.resolve(process.cwd(), audioFilePath)
 
   // Schedule events for current iteration
-  const loopOffset = loopIteration * 4000 * (1 || 1) // Simplified for now
+  const loopOffset = loopIteration * patternDuration
 
   for (const event of timedEvents) {
     if (event.sliceNumber > 0) {
@@ -55,10 +57,10 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
       let finalGainDb: number
       if (isMuted) {
         finalGainDb = -Infinity
-      } else if (sequenceGainDb === -Infinity) {
+      } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
         finalGainDb = -Infinity
       } else {
-        finalGainDb = sequenceGainDb // Simplified for now
+        finalGainDb = sequenceGainDb + masterGainDb
       }
 
       // Generate random pan if specified
@@ -101,6 +103,8 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
     isMuted,
     sequenceName,
     loopStartTime,
+    masterGainDb,
+    patternDuration,
   } = options
 
   if (!timedEvents || !audioFilePath) {
@@ -110,8 +114,6 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
   const resolvedFilePath = path.isAbsolute(audioFilePath)
     ? audioFilePath
     : path.resolve(audioFilePath)
-
-  const patternDuration = 4000 // Simplified for now
 
   // Calculate which loop iteration we're in
   const elapsedTime = fromTime - (loopStartTime || 0)
@@ -142,10 +144,10 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
         let finalGainDb: number
         if (isMuted) {
           finalGainDb = -Infinity
-        } else if (sequenceGainDb === -Infinity) {
+        } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
           finalGainDb = -Infinity
         } else {
-          finalGainDb = sequenceGainDb // Simplified for now
+          finalGainDb = sequenceGainDb + masterGainDb
         }
 
         // Generate random pan if specified
