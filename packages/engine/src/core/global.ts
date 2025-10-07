@@ -136,7 +136,7 @@ export class Global {
 
     // If global is running, reschedule all playing sequences with new master gain
     if (this._isRunning) {
-      for (const [name, sequence] of this.sequences.entries()) {
+      for (const [, sequence] of this.sequences.entries()) {
         const state = sequence.getState() as any
         if (state.isPlaying || state.isLooping) {
           // Trigger reschedule by calling the sequence's gain with its current value
@@ -372,7 +372,7 @@ export class Global {
 
   stop(): this {
     // Stop all sequences first
-    for (const [name, sequence] of this.sequences.entries()) {
+    for (const [, sequence] of this.sequences.entries()) {
       sequence.stop()
     }
 

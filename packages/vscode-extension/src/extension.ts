@@ -1,7 +1,7 @@
 import * as child_process from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
-import * as os from 'os'
+// import * as os from 'os'
 
 import * as vscode from 'vscode'
 
@@ -14,7 +14,7 @@ let statusBarItem: vscode.StatusBarItem | null = null
 let isLiveCodingMode: boolean = false
 let hasEvaluatedFile: boolean = false
 let evaluationTimeout: NodeJS.Timeout | null = null
-let isDebugMode: boolean = false // Debug mode flag
+// let isDebugMode: boolean = false // Debug mode flag
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
@@ -28,7 +28,7 @@ export async function activate(context: vscode.ExtensionContext) {
   outputChannel = vscode.window.createOutputChannel('OrbitScore')
 
   // Show version info
-  const packageJson = require(path.join(__dirname, '../package.json'))
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'))
   const buildTime = fs.statSync(__filename).mtime.toISOString()
   outputChannel.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
   outputChannel.appendLine(`🎵 OrbitScore Extension v${packageJson.version}`)
@@ -378,7 +378,7 @@ function killSuperCollider() {
   outputChannel?.appendLine('🔪 Killing SuperCollider processes...')
 
   // Execute killall scsynth, suppress errors if no process found
-  child_process.exec('killall scsynth 2>/dev/null', (error, stdout, stderr) => {
+  child_process.exec('killall scsynth 2>/dev/null', (error) => {
     if (error) {
       // Exit code 1 means no process found, which is ok
       if (error.code === 1) {
@@ -415,7 +415,7 @@ async function selectAudioDevice() {
   const scPath = '/Applications/SuperCollider.app/Contents/Resources/scsynth'
 
   // Use scsynth directly with -u 0 to get device list without actually starting
-  child_process.exec(`${scPath} -u 57199`, { timeout: 3000 }, async (error, stdout, stderr) => {
+  child_process.exec(`${scPath} -u 57199`, { timeout: 3000 }, async (error, stdout) => {
     // Parse device list from SuperCollider's boot log
     const deviceRegex = /(\d+)\s*:\s*"([^"]+)"/g
     const devices: Array<{ label: string; id: number; description: string }> = []
@@ -466,7 +466,7 @@ async function selectAudioDevice() {
   })
 }
 
-function filterDefinitionsOnly(code: string, isInitializing: boolean = false): string {
+function filterDefinitionsOnly(code: string): string {
   // Filter out transport commands (.loop(), .run(), .stop(), etc.)
   // Filter out standalone gain/pan (live changes, not default settings)
   // Keep variable declarations and property settings
@@ -523,11 +523,11 @@ async function evaluateFileInBackground(document: vscode.TextDocument) {
   evaluationTimeout = setTimeout(() => {
     const code = document.getText()
 
-    const isFirstEvaluation = !hasEvaluatedFile
+    // const isFirstEvaluation = !hasEvaluatedFile
 
     // Filter out all transport commands (always)
     // isInitializing = true for first evaluation (include var declarations)
-    const definitionsOnly = filterDefinitionsOnly(code, isFirstEvaluation)
+    const definitionsOnly = filterDefinitionsOnly(code)
 
     // Send definitions to engine
     engineProcess?.stdin?.write(definitionsOnly + '\n')
@@ -576,93 +576,14 @@ async function runSelection() {
   engineProcess.stdin?.write(trimmedText + '\n')
 }
 
-async function executeCode(code: string) {
-  try {
-    const projectRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (!projectRoot) {
-      vscode.window.showErrorMessage('Please open a workspace folder')
-      return
-    }
+// Removed unused executeCode function
 
-    const enginePath = path.join(projectRoot, 'packages/engine/dist/cli-audio.js')
-    if (!fs.existsSync(enginePath)) {
-      vscode.window.showErrorMessage('Audio engine not found. Please build the project first.')
-      return
-    }
-
-    // Check if we're in live coding mode (persistent process)
-    if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
-      // Send command to existing process via stdin
-      outputChannel?.appendLine(`> ${code.substring(0, 100)}${code.length > 100 ? '...' : ''}`)
-      engineProcess.stdin?.write(code + '\n')
-      return
-    }
-
-    // Start new process
-    const tmpDir = os.tmpdir()
-    const tmpFile = path.join(tmpDir, `orbitscore_${Date.now()}.osc`)
-    fs.writeFileSync(tmpFile, code)
-
-    outputChannel?.show()
-    outputChannel?.appendLine(`🎵 OrbitScore Audio Engine`)
-
-    const proc = child_process.spawn('node', [enginePath, 'eval', tmpFile], {
-      cwd: projectRoot,
-    })
-
-    proc.stdout?.on('data', (data) => {
-      const output = data.toString()
-      outputChannel?.append(output)
-
-      // Check if we entered live coding mode
-      if (output.includes('Live coding mode')) {
-        isLiveCodingMode = true
-        statusBarItem!.text = '⏸️ Ready'
-        vscode.window.showInformationMessage('🎵 Live coding mode activated')
-      }
-
-      // Check for global.run()
-      if (output.includes('▶ Global') || output.includes('✅ Global running')) {
-        statusBarItem!.text = '▶️ Playing'
-      }
-
-      // Check for global.stop()
-      if (output.includes('⏹ Global') || output.includes('✅ Global stopped')) {
-        statusBarItem!.text = '⏸️ Ready'
-      }
-    })
-
-    proc.stderr?.on('data', (data) => {
-      outputChannel?.append(data.toString())
-    })
-
-    proc.on('close', (code) => {
-      isLiveCodingMode = false
-      statusBarItem!.text = '🎵 OrbitScore'
-      engineProcess = null
-
-      if (code !== 0) {
-        vscode.window.showErrorMessage('Engine stopped')
-      }
-
-      // Clean up temp file
-      try {
-        fs.unlinkSync(tmpFile)
-      } catch {}
-    })
-
-    // Store for later use
-    engineProcess = proc
-  } catch (error: any) {
-    vscode.window.showErrorMessage(`Error: ${error.message}`)
-    outputChannel?.appendLine(`Error: ${error}`)
-  }
-}
-
+/*
 function isTransportCommand(text: string): boolean {
   const trimmed = text.trim()
   return /^(global|seq\w*)\.(run|loop|stop|mute|unmute)/.test(trimmed)
 }
+*/
 
 function registerCompletionProviders(context: vscode.ExtensionContext) {
   // Context-aware completion provider

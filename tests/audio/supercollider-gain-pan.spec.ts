@@ -4,13 +4,13 @@ import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollid
 
 describe('SuperColliderPlayer - dB to Amplitude and Pan Conversion', () => {
   let player: SuperColliderPlayer
-  let mockOscClient: any
+  // let mockOscClient: any
 
   beforeEach(() => {
     // Mock OSC client to avoid actual network calls
-    mockOscClient = {
-      send: vi.fn().mockResolvedValue(undefined),
-    }
+    // mockOscClient = {
+    //   send: vi.fn().mockResolvedValue(undefined),
+    // }
 
     player = new SuperColliderPlayer()
     ;(player as any).server = {

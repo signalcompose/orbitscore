@@ -48,7 +48,7 @@ export class SuperColliderPlayer {
   private intervalId: NodeJS.Timeout | null = null
 
   constructor() {
-    // @ts-ignore - __dirname is available in CommonJS
+    // @ts-expect-error - __dirname is available in CommonJS
     this.synthDefPath = path.join(__dirname, '../../supercollider/synthdefs/orbitPlayBuf.scsyndef')
   }
 
@@ -73,7 +73,7 @@ export class SuperColliderPlayer {
       console.log(`🔊 Using output device: ${outputDevice}`)
     }
 
-    // @ts-ignore - supercolliderjs types are incomplete
+    // @ts-expect-error - supercolliderjs types are incomplete
     this.server = await sc.server.boot(bootOptions)
 
     console.log('✅ SuperCollider server ready')
@@ -164,7 +164,7 @@ export class SuperColliderPlayer {
   /**
    * Query buffer duration (wait for buffer to load)
    */
-  private async queryBufferDuration(bufnum: number): Promise<number> {
+  private async queryBufferDuration(): Promise<number> {
     // Wait for buffer to load (SuperCollider sends /done after /b_allocRead)
     await new Promise((resolve) => setTimeout(resolve, 100))
 
