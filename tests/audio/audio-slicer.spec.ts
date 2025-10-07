@@ -118,20 +118,18 @@ describe('AudioSlicer', () => {
       // Should create 4 slice files
       expect(mockFs.writeFileSync).toHaveBeenCalledTimes(4)
 
-      // Check file paths
-      const expectedPaths = [
-        '/tmp/test_slice1_of_4.wav',
-        '/tmp/test_slice2_of_4.wav',
-        '/tmp/test_slice3_of_4.wav',
-        '/tmp/test_slice4_of_4.wav',
+      // Check file paths - should be in instance directory
+      const expectedFilenames = [
+        'test_slice1_of_4.wav',
+        'test_slice2_of_4.wav',
+        'test_slice3_of_4.wav',
+        'test_slice4_of_4.wav',
       ]
 
-      expectedPaths.forEach((expectedPath, index) => {
-        expect(mockFs.writeFileSync).toHaveBeenNthCalledWith(
-          index + 1,
-          expectedPath,
-          Buffer.from('mock-wav-data'),
-        )
+      expectedFilenames.forEach((filename, index) => {
+        const call = mockFs.writeFileSync.mock.calls[index]
+        expect(call[0]).toMatch(new RegExp(`orbitscore_.*/${filename}$`))
+        expect(call[1]).toEqual(Buffer.from('mock-wav-data'))
       })
     })
 
@@ -184,7 +182,8 @@ describe('AudioSlicer', () => {
       // Then get slice filepath
       const slicePath = slicer.getSliceFilepath(filepath, divisions, 2)
 
-      expect(slicePath).toBe('/tmp/test_slice2_of_4.wav')
+      // Should be in instance directory
+      expect(slicePath).toMatch(/orbitscore_.*\/test_slice2_of_4\.wav$/)
     })
 
     it('should return null for non-existent slice', () => {
