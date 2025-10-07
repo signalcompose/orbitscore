@@ -15,6 +15,101 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.22 Phase 7: Final Cleanup - Remove Unused Code and Improve Type Safety (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+**Branch**: 34-phase-7-final-cleanup-remove-unused-code-and-improve-type-safety
+**Issue**: #34
+
+**Work Content**: Phase 1-6のリファクタリング完了後、コードベース全体を詳細にチェックし、未使用コードの削除と型安全性の向上を実施
+
+#### 実施内容
+
+**Phase 7-1: 未使用コード削除**
+- **削除したファイル**:
+  - `packages/engine/src/core/sequence/scheduling/loop-scheduler.ts` (重複)
+  - `packages/engine/src/core/sequence/scheduling/run-scheduler.ts` (重複)
+  - `packages/engine/src/timing/timing-calculator.ts` (非推奨ラッパー)
+- **テスト更新**: 直接 `calculation/` モジュールを使用するように変更
+
+**Phase 7-2: 非推奨ファイル削除**
+- **`audio-slicer.ts`の扱い**:
+  - 依存関係管理のためシンプルなラッパーとして保持
+  - `cleanup()` メソッドを削除（自動管理に移行）
+  - テストを更新して新しい動作を反映
+
+**Phase 7-3: 型安全性向上**
+- **新規インターフェース**:
+  - `AudioEngine` インターフェースを追加（オーディオエンジンの抽象化）
+- **`Scheduler` インターフェース拡張**:
+  - `addEffect?` と `removeEffect?` をオプションメソッドとして追加
+  - `sequenceTimeouts?` を追加
+- **型の改善**:
+  - `Global` と `Sequence` を `SuperColliderPlayer` の代わりに `AudioEngine` を受け取るように変更
+  - `prepare-playback.ts` で `Scheduler` 型を使用
+
+**Phase 7-4: 型キャスト削減**
+- **削除した型キャスト**:
+  - `sequence.ts`: `clearSequenceEvents` の `as any` キャストを削除
+  - `effects-manager.ts`: `removeEffect`, `addEffect`, `gain` の `as any` キャストを削除
+  - `prepare-playback.ts`: `isRunning`, `startTime` の `as any` キャストを削除
+  - `audio-manager.ts`: `getCurrentOutputDevice` の `as any` キャストを削除
+  - `sequence-registry.ts`: `Sequence` コンストラクタの `as any` キャストを削除
+- **型定義の更新**:
+  - `SuperColliderPlayer.getCurrentOutputDevice()`: `AudioDevice | undefined` を返すように変更
+  - `AudioEngine.getAvailableDevices()`: `AudioDevice[]` を返すように変更（`Promise` ではない）
+
+#### バグ修正
+- **`AudioSlicer.cleanup()`メソッドの実装**:
+  - 空になっていた`cleanup()`メソッドを実装
+  - `SliceCache.clear()`と`TempFileManager.cleanup()`を呼び出し
+  - テスト環境での一時ファイル蓄積問題を解決
+
+#### テスト結果
+```bash
+npm test
+```
+- ✅ 115 tests passed
+- ⏭️ 15 tests skipped
+- ✅ ビルド成功
+- ✅ lint成功
+
+#### ファイル変更
+- **削除**:
+  - `packages/engine/src/core/sequence/scheduling/loop-scheduler.ts`
+  - `packages/engine/src/core/sequence/scheduling/run-scheduler.ts`
+  - `packages/engine/src/timing/timing-calculator.ts`
+- **変更**:
+  - `packages/engine/src/audio/audio-slicer.ts` (cleanup()メソッド実装)
+  - `packages/engine/src/audio/supercollider-player.ts` (getCurrentOutputDevice()型変更)
+  - `packages/engine/src/audio/types.ts` (AudioEngineインターフェース追加)
+  - `packages/engine/src/core/global.ts` (AudioEngine型使用)
+  - `packages/engine/src/core/global/audio-manager.ts` (型キャスト削除)
+  - `packages/engine/src/core/global/effects-manager.ts` (型キャスト削除)
+  - `packages/engine/src/core/global/sequence-registry.ts` (型キャスト削除)
+  - `packages/engine/src/core/global/types.ts` (Schedulerインターフェース拡張)
+  - `packages/engine/src/core/sequence.ts` (AudioEngine型使用)
+  - `packages/engine/src/core/sequence/playback/loop-sequence.ts` (Scheduler型使用)
+  - `packages/engine/src/core/sequence/playback/prepare-playback.ts` (Scheduler型使用)
+  - `packages/engine/src/core/sequence/playback/run-sequence.ts` (Scheduler型使用)
+  - `packages/engine/src/core/sequence/scheduling/index.ts` (event-schedulerのみエクスポート)
+  - `tests/audio/audio-slicer.spec.ts` (cleanup()テスト更新)
+  - `tests/timing/nested-play-timing.spec.ts` (calculation/モジュール直接使用)
+  - `tests/timing/timing-calculator.spec.ts` (calculation/モジュール直接使用)
+
+#### コミット
+- `c9eb7a0`: refactor: Phase 7 final cleanup - remove unused code and improve type safety
+- `5456707`: fix: implement AudioSlicer.cleanup() method to prevent temporary file accumulation
+
+#### 成果
+- **コードベースの大幅な改善**: 未使用コードの削除、型安全性の向上
+- **保守性の向上**: モジュール化、依存関係の明確化
+- **バグの修正**: 一時ファイル管理の問題解決
+- **開発効率の向上**: より安全で予測可能なコードベース
+
+---
+
 ### 6.20 Fix InterpreterV2.getState() - Phase 3-2 (January 7, 2025)
 
 **Date**: January 7, 2025
