@@ -495,7 +495,8 @@ export class Sequence {
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
       clearSequenceEventsFn: (name) => (scheduler as any).clearSequenceEvents(name),
-      isMuted: this._isMuted,
+      getIsLoopingFn: () => this._isLooping,
+      getIsMutedFn: () => this._isMuted,
     })
 
     this._isPlaying = result.isPlaying

@@ -32,14 +32,38 @@
   - Cursor BugBotルール（日本語レビュー、プロジェクト固有ガイドライン）
   - PROJECT_RULES.mdに詳細なワークフローを文書化
 
+### ✅ Chop Slice Playback Rate and Envelope (2025-01-07)
+- **問題**: スライスの再生速度が時間枠に合わず、クリックノイズが発生
+- **解決**: 
+  - 再生速度の自動調整（`rate = sliceDuration / eventDurationSec`）
+  - 可変エンベロープ（fadeIn=0ms、fadeOut=4%）
+  - `run()`と`loop()`のリファクタリング（DRY、SRP）
+- **効果**: スライスが正しいタイミングで再生され、クリックノイズが軽減、アタック感が保持される
+- **PR**: #10
+
 ## 現在の状況
 
 - **重大な問題**: なし
-- **開発フェーズ**: CI/CD修正完了、テストスイート整理完了
+- **開発フェーズ**: Chop機能の改善完了、コード組織化の原則を確立
 - **次回優先事項**: 
-  - feature/git-workflow-setup ブランチをdevelopにマージ
-  - e2e/interpreter-v2テストの更新（オプション）
+  - PR #10のマージ
   - 通常の機能開発に戻る
+
+## 未実装機能（今後の実装予定）
+
+### グラニュラーシンセシス対応
+- **目的**: 音のピッチを保ったまま長さだけを変える再生モード
+- **現状**: 現在は「テープレコーダー」方式（速度変更でピッチも変わる）のみ
+- **実装方針**:
+  - DSL仕様から検討が必要
+  - SuperColliderのグラニュラーシンセシス機能を活用
+  - 新しいメソッドまたはオプションパラメータで切り替え可能に
+  - 例: `sequence.timeStretch("granular")` または `sequence.play(...).mode("granular")`
+- **技術的検討事項**:
+  - SuperColliderの`Warp1` UGenまたは`GrainBuf` UGenの使用
+  - グレインサイズ、オーバーラップ、ウィンドウ関数の設定
+  - リアルタイム性能への影響
+  - DSL構文の設計（シンプルさと柔軟性のバランス）
 
 ## 技術的決定事項
 
@@ -55,6 +79,14 @@
 ### Audio Playback
 - **Path Resolution**: `process.cwd()`を使用してワークスペース相対パスをサポート
 - **Auto-Stop**: `sequence.run()`に実装して異なる実行コンテキストで再利用可能に
+- **Playback Rate**: スライスの長さをイベントの時間枠に合わせて自動調整（tape-style pitch shift）
+
+### Code Organization (2025-01-07)
+- **Single Responsibility Principle**: 1つの関数は1つの責務のみ（50行以下推奨）
+- **DRY**: 2箇所以上に同じコードがあれば即座に抽出
+- **Module Organization**: 機能ごとにディレクトリを分割（例: `sequence/playback/`, `sequence/audio/`）
+- **Thin Controllers**: クラスメソッドは薄く（30行以下）、ユーティリティ関数に委譲
+- **Refactoring Triggers**: 重複コード、長いメソッド、複数の責務、テストが困難、再利用が困難
 
 ### Git Workflow
 - **ブランチ構造**: main（本番）← develop（統合）← feature/*（開発）
