@@ -32,7 +32,7 @@ export class AudioSlicer {
   /**
    * Slice an audio file into n equal parts
    */
-  async sliceAudioFile(filepath: string, divisions: number): Promise<AudioSliceInfo[]> {
+  sliceAudioFile(filepath: string, divisions: number): AudioSliceInfo[] {
     return sliceAudioFile(filepath, divisions, this.cache, this.fileManager, this.wavProcessor)
   }
 
