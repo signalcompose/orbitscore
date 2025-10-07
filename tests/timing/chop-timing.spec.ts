@@ -132,7 +132,7 @@ describe('Chop Timing', () => {
       }
 
       // Mock loadBuffer to avoid server calls
-      player.loadBuffer = async () => ({ bufnum: 0 })
+      player.loadBuffer = async () => ({ bufnum: 0, duration: 1.0 })
 
       // Setup
       global.tempo(60).beat(4, 4)
@@ -186,7 +186,7 @@ describe('Chop Timing', () => {
       }
 
       // Mock loadBuffer to avoid server calls
-      player.loadBuffer = async () => ({ bufnum: 0 })
+      player.loadBuffer = async () => ({ bufnum: 0, duration: 1.0 })
 
       // Setup
       global.tempo(60).beat(4, 4)
