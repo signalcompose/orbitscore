@@ -1,34 +1,44 @@
 /**
  * Interpreter V2 for OrbitScore Audio DSL
  * Object-oriented implementation with proper class instantiation
+ *
+ * @deprecated This class is now a thin wrapper around the interpreter modules.
+ * For new code, consider using the modules directly from './interpreter/'.
  */
 
-import { AudioIR, GlobalInit, SequenceInit, Statement } from '../parser/audio-parser'
+import { AudioIR } from '../parser/audio-parser'
 import { SuperColliderPlayer } from '../audio/supercollider-player'
-import { Global } from '../core/global'
-import { Sequence } from '../core/sequence'
+
+import { InterpreterState } from './types'
+import { processGlobalInit, processSequenceInit } from './process-initialization'
+import { processStatement } from './process-statement'
 
 /**
  * Interpreter V2 - Object-oriented approach
+ *
+ * This class serves as a backward compatibility wrapper around the new
+ * interpreter modules. For new code, consider using the modules directly.
  */
 export class InterpreterV2 {
-  private audioEngine: SuperColliderPlayer
-  private globals: Map<string, Global> = new Map()
-  private sequences: Map<string, Sequence> = new Map()
-  private currentGlobal?: Global
-  private isBooted = false
+  private state: InterpreterState
 
   constructor() {
-    this.audioEngine = new SuperColliderPlayer()
+    this.state = {
+      audioEngine: new SuperColliderPlayer(),
+      globals: new Map(),
+      sequences: new Map(),
+      currentGlobal: undefined,
+      isBooted: false,
+    }
   }
 
   /**
    * Boot SuperCollider server (public method for explicit boot)
    */
   async boot(audioDevice?: string): Promise<void> {
-    if (!this.isBooted) {
-      await this.audioEngine.boot(audioDevice)
-      this.isBooted = true
+    if (!this.state.isBooted) {
+      await this.state.audioEngine.boot(audioDevice)
+      this.state.isBooted = true
     }
   }
 
@@ -48,204 +58,20 @@ export class InterpreterV2 {
 
     // Process global initialization
     if (ir.globalInit) {
-      await this.processGlobalInit(ir.globalInit)
+      await processGlobalInit(ir.globalInit, this.state)
     }
 
     // Process sequence initializations
-    for (const seqInit of ir.sequenceInits) {
-      await this.processSequenceInit(seqInit)
+    if (ir.sequenceInits) {
+      for (const seqInit of ir.sequenceInits) {
+        await processSequenceInit(seqInit, this.state)
+      }
     }
 
     // Process statements
     for (const statement of ir.statements) {
-      await this.processStatement(statement)
+      await processStatement(statement, this.state)
     }
-  }
-
-  /**
-   * Process global initialization: var global = init GLOBAL
-   */
-  private async processGlobalInit(init: GlobalInit): Promise<void> {
-    // Reuse existing global if it exists (for REPL persistence)
-    let globalInstance = this.globals.get(init.variableName)
-
-    if (!globalInstance) {
-      globalInstance = new Global(this.audioEngine)
-      this.globals.set(init.variableName, globalInstance)
-    }
-
-    this.currentGlobal = globalInstance
-  }
-
-  /**
-   * Process sequence initialization: var seq = init global.seq
-   */
-  private async processSequenceInit(init: SequenceInit): Promise<void> {
-    let global: Global | undefined
-
-    // If globalVariable is specified (new syntax: init global.seq)
-    if (init.globalVariable) {
-      global = this.globals.get(init.globalVariable)
-      if (!global) {
-        console.error(`Global instance not found: ${init.globalVariable}`)
-        return
-      }
-    } else {
-      // Legacy syntax: init GLOBAL.seq
-      global = this.currentGlobal
-      if (!global) {
-        console.error('No global instance available for sequence initialization')
-        return
-      }
-    }
-
-    // Reuse existing sequence if it exists (for REPL persistence)
-    let sequence = this.sequences.get(init.variableName)
-
-    if (!sequence) {
-      // Create sequence through the Global's factory method
-      sequence = global.seq
-      sequence.setName(init.variableName)
-      this.sequences.set(init.variableName, sequence)
-    } else {
-      // Reset parameters to defaults when re-initializing
-      // This prevents previous live changes (gain/pan) from persisting
-      ;(sequence as any)._gainDb = 0 // Reset to 0 dB
-      ;(sequence as any)._pan = 0 // Reset to center
-    }
-  }
-
-  /**
-   * Process a statement
-   */
-  private async processStatement(statement: Statement): Promise<void> {
-    switch (statement.type) {
-      case 'global':
-        await this.processGlobalStatement(statement as any)
-        break
-      case 'sequence':
-        await this.processSequenceStatement(statement as any)
-        break
-      case 'transport':
-        await this.processTransportStatement(statement as any)
-        break
-      default:
-        console.warn(`Unknown statement type: ${(statement as any).type}`)
-    }
-  }
-
-  /**
-   * Process global method calls
-   */
-  private async processGlobalStatement(statement: any): Promise<void> {
-    const global = this.globals.get(statement.target)
-    if (!global) {
-      console.error(`Global instance not found: ${statement.target}`)
-      return
-    }
-
-    // Start with the global object
-    let result: any = global
-
-    // Process the main method
-    result = await this.callMethod(result, statement.method, statement.args)
-
-    // Process any chained methods
-    if (statement.chain) {
-      for (const chainedCall of statement.chain) {
-        result = await this.callMethod(result, chainedCall.method, chainedCall.args)
-      }
-    }
-  }
-
-  /**
-   * Process sequence method calls
-   */
-  private async processSequenceStatement(statement: any): Promise<void> {
-    const sequence = this.sequences.get(statement.target)
-    if (!sequence) {
-      console.error(`Sequence instance not found: ${statement.target}`)
-      return
-    }
-
-    // Start with the sequence object
-    let result: any = sequence
-
-    // Process the main method
-    result = await this.callMethod(result, statement.method, statement.args)
-
-    // Process any chained methods
-    if (statement.chain) {
-      for (const chainedCall of statement.chain) {
-        result = await this.callMethod(result, chainedCall.method, chainedCall.args)
-      }
-    }
-  }
-
-  /**
-   * Process transport commands
-   */
-  private async processTransportStatement(statement: any): Promise<void> {
-    // Transport commands can be on global or sequence
-    const target = statement.target
-
-    // Check if it's a global
-    const global = this.globals.get(target)
-    if (global) {
-      await this.callMethod(global, statement.command, [])
-      return
-    }
-
-    // Check if it's a sequence
-    const sequence = this.sequences.get(target)
-    if (sequence) {
-      await this.callMethod(sequence, statement.command, [])
-      return
-    }
-
-    console.error(`Transport target not found: ${target}`)
-  }
-
-  /**
-   * Call a method on an object with proper argument processing
-   */
-  private async callMethod(obj: any, methodName: string, args: any[]): Promise<any> {
-    const method = obj[methodName]
-    if (!method || typeof method !== 'function') {
-      console.error(`Method not found: ${methodName} on ${obj.constructor.name}`)
-      return obj
-    }
-
-    // Process arguments
-    const processedArgs = await this.processArguments(methodName, args)
-
-    // Call the method
-    const result = await method.apply(obj, processedArgs)
-
-    // Return the result (usually 'this' for chaining)
-    return result || obj
-  }
-
-  /**
-   * Process method arguments
-   */
-  private async processArguments(methodName: string, args: any[]): Promise<any[]> {
-    const processed: any[] = []
-
-    for (const arg of args) {
-      if (methodName === 'beat' && arg.numerator !== undefined) {
-        // Handle meter: beat(4 by 4) -> beat(4, 4)
-        processed.push(arg.numerator, arg.denominator)
-      } else if (methodName === 'play') {
-        // Play arguments are passed as-is (already PlayElement[])
-        processed.push(arg)
-      } else {
-        // Most arguments are passed through
-        processed.push(arg)
-      }
-    }
-
-    return processed
   }
 
   /**
@@ -257,19 +83,49 @@ export class InterpreterV2 {
       sequences: {},
     }
 
-    for (const [name, global] of this.globals) {
-      state.globals[name] = global.getState()
+    // Convert Map to plain object for easier inspection
+    for (const [name, global] of this.state.globals.entries()) {
+      state.globals[name] = {
+        isRunning: (global as any)._isRunning,
+        tempo: (global as any)._tempo,
+        beat: (global as any)._beat,
+      }
     }
 
-    for (const [name, sequence] of this.sequences) {
-      state.sequences[name] = sequence.getState()
+    for (const [name, sequence] of this.state.sequences.entries()) {
+      state.sequences[name] = {
+        isPlaying: (sequence as any)._isPlaying,
+        isLooping: (sequence as any)._isLooping,
+        isMuted: (sequence as any)._isMuted,
+        audioFile: (sequence as any)._audioFile,
+        timedEvents: (sequence as any).timedEvents,
+      }
     }
 
     return state
   }
+
+  /**
+   * Get audio engine for testing/debugging
+   * @deprecated Direct access to audioEngine. Use getState() instead.
+   */
+  get audioEngine(): SuperColliderPlayer {
+    return this.state.audioEngine
+  }
 }
 
-// Export factory function
+/**
+ * Factory function to create a new interpreter instance
+ *
+ * @returns New InterpreterV2 instance
+ *
+ * @example
+ * ```typescript
+ * const interpreter = createInterpreter()
+ * await interpreter.boot()
+ * await interpreter.execute(ir)
+ * ```
+ */
 export function createInterpreter(): InterpreterV2 {
   return new InterpreterV2()
 }
