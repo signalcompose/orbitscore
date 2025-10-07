@@ -148,10 +148,12 @@ export class AudioEngine {
   async stop(): Promise<void> {
     // In a real implementation, we would track all active sources
     // and stop them individually
-    this.isPlaying = false
 
     // Suspend audio context to stop all playback
     await suspendContext(this.audioContext)
+
+    // Update state after successful suspension
+    this.isPlaying = false
   }
 
   /**
