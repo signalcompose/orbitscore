@@ -1447,3 +1447,88 @@ global.normalizer(1.0, 0.01, true)                     // Maximum loudness
 
 ---
 
+### 6.20 Refactor CLI Audio - Phase 3-1 (January 7, 2025)
+
+**Date**: January 7, 2025
+**Status**: ✅ COMPLETE
+**Branch**: 16-refactor-cli-audio-phase-3-1
+**Issue**: #16
+
+**Work Content**: `cli-audio.ts`（282行）を7つのモジュールに分割し、コーディング規約に準拠
+
+#### リファクタリング内容
+
+**1. モジュール分割**
+新しいディレクトリ構造：
+```
+packages/engine/src/cli/
+├── index.ts                  # モジュールエクスポート
+├── types.ts                  # CLI型定義
+├── parse-arguments.ts        # 引数パース処理
+├── play-mode.ts              # ファイル再生処理
+├── repl-mode.ts              # REPLモード処理
+├── test-sound.ts             # テスト音再生処理
+├── shutdown.ts               # シャットダウン処理
+└── execute-command.ts        # コマンド実行ロジック
+```
+
+**2. 各モジュールの責務**
+- `types.ts`: CLI関連の型定義（`ParsedArguments`, `PlayOptions`, `REPLOptions`, `PlayResult`）
+- `parse-arguments.ts`: コマンドライン引数のパース、グローバルデバッグフラグの設定
+- `play-mode.ts`: `.osc`ファイルの読み込み・パース・実行、timed execution制御
+- `repl-mode.ts`: REPLモードの起動、SuperColliderのブート、インタラクティブな入力処理
+- `test-sound.ts`: テスト音（ドラムパターン）の再生
+- `shutdown.ts`: SuperColliderサーバーのグレースフルシャットダウン、シグナルハンドラー登録
+- `execute-command.ts`: コマンドルーティング、ヘルプ表示、エラーハンドリング
+
+**3. 後方互換性**
+- `cli-audio.ts`を薄いラッパーとして保持
+- 既存のエントリーポイント（`#!/usr/bin/env node`）を維持
+- 既存のコマンドラインインターフェースは変更なし
+
+#### コーディング規約の適用
+
+**1. SRP（単一責任の原則）**
+- 各関数が1つの明確な責務を持つ
+- 引数パース、コマンド実行、REPL、再生、シャットダウンを分離
+
+**2. DRY（重複排除）**
+- `play`, `run`, `eval`コマンドの共通処理を`playFile()`関数に集約
+- `cli-audio.ts`は新しいモジュールに委譲
+
+**3. 再利用性**
+- 各関数は独立して使用可能
+- 明確な関数名（`parseArguments`, `playFile`, `startREPL`, `playTestSound`, `shutdown`, `executeCommand`）
+
+**4. ドキュメント**
+- 各関数にJSDocコメント
+- パラメータと戻り値の説明
+- 使用例を含む詳細な説明
+
+#### テスト結果
+```bash
+npm test
+```
+- ✅ 115 tests passed
+- ⏭️ 15 tests skipped
+- ✅ ビルド成功
+- ✅ lint成功
+
+#### ファイル変更
+- **新規作成**:
+  - `packages/engine/src/cli/index.ts`
+  - `packages/engine/src/cli/types.ts`
+  - `packages/engine/src/cli/parse-arguments.ts`
+  - `packages/engine/src/cli/play-mode.ts`
+  - `packages/engine/src/cli/repl-mode.ts`
+  - `packages/engine/src/cli/test-sound.ts`
+  - `packages/engine/src/cli/shutdown.ts`
+  - `packages/engine/src/cli/execute-command.ts`
+- **変更**:
+  - `packages/engine/src/cli-audio.ts` (薄いラッパーに変更)
+
+#### コミット
+- `[次のコミット]`: refactor: cli-audio.tsをモジュール分割（Phase 3-1）
+
+---
+
