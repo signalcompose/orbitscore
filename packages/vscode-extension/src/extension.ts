@@ -487,7 +487,11 @@ function startEngine(debugMode: boolean = false) {
         }
 
         // Keep transport state changes
-        if (line.includes('✅ Global running') || line.includes('✅ Global stopped')) {
+        if (
+          line.includes('✅ Global running') ||
+          line.includes('✅ Global stopped') ||
+          line.includes('✅ Global starting')
+        ) {
           return true
         }
 
@@ -702,44 +706,69 @@ async function selectAudioDevice() {
 
 function filterDefinitionsOnly(code: string): string {
   // Filter out transport commands (.loop(), .run(), .stop(), etc.)
-  // Filter out standalone gain/pan (live changes, not default settings)
-  // Keep variable declarations and property settings
-  // Note: var declarations are always kept because InterpreterV2 reuses existing instances
-  const lines = code.split('\n')
-  const filtered = lines.filter((line) => {
-    const trimmed = line.trim()
-    // Skip comments and empty lines
-    if (!trimmed || trimmed.startsWith('//')) return true
+  // But preserve multiline statements by removing complete statements, not individual lines
 
-    // Skip all transport commands (always, even during initialization)
-    if (trimmed.match(/\.(loop|run|stop|mute|unmute)\s*\(\s*\)/)) {
-      return false
+  // Split into lines but preserve line breaks for reconstruction
+  const lines = code.split('\n')
+  const result: string[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+    const trimmed = line.trim()
+
+    // Keep comments and empty lines
+    if (!trimmed || trimmed.startsWith('//')) {
+      result.push(line)
+      i++
+      continue
     }
 
-    // Skip standalone parameter change commands (live parameter changes)
-    // Pattern: sequenceName.gain(...) or global.compressor(...) with nothing before
-    // But keep chained ones like: kick.audio(...).play(...).gain(...)
+    // Check if this is a transport command (complete statement on one line)
+    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|run|start|stop|mute|unmute)\s*\(\s*\)$/)) {
+      // Skip this line (it's a transport command)
+      i++
+      continue
+    }
+
+    // Check if this is a standalone parameter change command (not chained)
+    // But keep global settings like global.tempo(), global.beat()
+    const isGlobalSetting = trimmed.startsWith('global.')
     if (
+      !isGlobalSetting &&
       trimmed.match(
         /^[a-zA-Z_][a-zA-Z0-9_]*\.(gain|pan|length|tempo|beat|compressor|limiter|normalizer)\s*\(/,
-      )
+      ) &&
+      !trimmed.startsWith('var ') &&
+      !trimmed.includes('.audio(') &&
+      !trimmed.includes('.play(')
     ) {
-      // Check if this is standalone (no var declaration, no other methods before)
-      // If line starts with identifier.method, it's standalone
-      if (
-        !trimmed.startsWith('var ') &&
-        !trimmed.includes('.audio(') &&
-        !trimmed.includes('.play(')
-      ) {
-        return false
+      // For standalone parameter changes, we need to check if it spans multiple lines
+      let parenDepth = 0
+      let lineEnd = i
+
+      // Count opening and closing parens to find the end of the statement
+      for (let j = i; j < lines.length; j++) {
+        const currentLine = lines[j]
+        for (const char of currentLine) {
+          if (char === '(') parenDepth++
+          if (char === ')') parenDepth--
+        }
+        lineEnd = j
+        if (parenDepth === 0) break
       }
+
+      // Skip all lines of this standalone parameter change
+      i = lineEnd + 1
+      continue
     }
 
-    // Keep everything else including var declarations and chained methods
-    // InterpreterV2 will reuse existing instances if they exist
-    return true
-  })
-  return filtered.join('\n')
+    // Keep everything else (variable declarations, chained methods, multiline statements)
+    result.push(line)
+    i++
+  }
+
+  return result.join('\n')
 }
 
 async function evaluateFileInBackground(document: vscode.TextDocument) {
@@ -762,6 +791,19 @@ async function evaluateFileInBackground(document: vscode.TextDocument) {
     // Filter out all transport commands (always)
     // isInitializing = true for first evaluation (include var declarations)
     const definitionsOnly = filterDefinitionsOnly(code)
+
+    // Debug: log what we're sending in debug mode
+    if (statusBarItem?.text.includes('🐛')) {
+      outputChannel?.appendLine('📤 File evaluation:')
+      outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      outputChannel?.appendLine(definitionsOnly)
+      outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      outputChannel?.appendLine(`📏 Length: ${definitionsOnly.length} chars`)
+      outputChannel?.appendLine(`📊 Lines: ${definitionsOnly.split('\n').length}`)
+      // Show what will actually be sent (with newline added)
+      outputChannel?.appendLine('📮 Sending to engine (with final newline):')
+      outputChannel?.appendLine(JSON.stringify(definitionsOnly + '\n'))
+    }
 
     // Send definitions to engine
     engineProcess?.stdin?.write(definitionsOnly + '\n')
@@ -798,16 +840,6 @@ async function runSelection() {
   }
 
   const trimmedText = text.trim()
-
-  // If file hasn't been evaluated yet, evaluate it first
-  if (!hasEvaluatedFile) {
-    await evaluateFileInBackground(editor.document)
-    // Wait for evaluation to complete
-    await new Promise((resolve) => setTimeout(resolve, 500))
-  }
-
-  // Execute the selected command
-  engineProcess.stdin?.write(trimmedText + '\n')
 
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
@@ -866,6 +898,19 @@ async function runSelection() {
     createFlash(0)
   }
 
+  // If file hasn't been evaluated yet, evaluate it first
+  if (!hasEvaluatedFile) {
+    await evaluateFileInBackground(editor.document)
+    // Wait for evaluation to complete
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+
+  // Execute the selected command (both single line and multiline)
+  // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
+  if (statusBarItem?.text.includes('🐛')) {
+    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(trimmedText)}`)
+  }
+  engineProcess.stdin?.write(trimmedText + '\n')
   flashLines()
 }
 
