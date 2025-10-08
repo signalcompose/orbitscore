@@ -391,7 +391,17 @@ function startEngine(debugMode: boolean = false) {
   outputChannel?.appendLine(`📍 Path: ${enginePath}`)
 
   if (!fs.existsSync(enginePath)) {
-    vscode.window.showErrorMessage(`Engine not found: ${enginePath}`)
+    if (debugMode) {
+      vscode.window.showErrorMessage(`Debug engine not found: ${enginePath}`)
+    } else {
+      vscode.window.showErrorMessage(
+        `Extension engine not found: ${enginePath}\n\n` +
+          `This indicates a build issue. Please rebuild the extension:\n` +
+          `1. Run "npm run build" in the vscode-extension directory\n` +
+          `2. Ensure the engine is properly built and copied\n` +
+          `3. Check that packages/engine/dist/cli-audio.js exists`,
+      )
+    }
     return
   }
 
