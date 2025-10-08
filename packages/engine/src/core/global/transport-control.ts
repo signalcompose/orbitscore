@@ -26,7 +26,7 @@ export class TransportControl {
 
     // Start the global scheduler (will restart if needed)
     this.globalScheduler.start()
-    console.log('✅ Global running')
+    console.log('✅ Global starting')
 
     return this
   }

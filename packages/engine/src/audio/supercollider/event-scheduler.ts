@@ -118,7 +118,7 @@ export class EventScheduler {
     this.isRunning = true
     this.startTime = Date.now()
 
-    console.log('✅ Global running')
+    console.log('✅ Global starting')
 
     this.scheduledPlays.sort((a, b) => a.time - b.time)
 
