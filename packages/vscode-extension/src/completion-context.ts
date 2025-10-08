@@ -92,7 +92,7 @@ export function getContextualCompletions(
     if (!context.hasBeat) {
       completions.push(createCompletion('beat', 'Set time signature', 'beat(${1:4} by ${2:4})'))
     }
-    completions.push(createCompletion('tick', 'Set tick resolution', 'tick(${1:4})'))
+    completions.push(createCompletion('tick', 'Set tick resolution', 'tick(${1:480})'))
     completions.push(createCompletion('key', 'Set global key', 'key(${1:C})'))
     completions.push(
       createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'),
@@ -157,6 +157,9 @@ export function getContextualCompletions(
     if (context.hasPlay) {
       completions.push(createCompletion('gain', 'Set volume in dB', 'gain(${1:0})'))
       completions.push(createCompletion('pan', 'Set pan position (-100 to 100)', 'pan(${1:0})'))
+      // Note: fixpitch() and time() are parsed but not yet implemented in the engine
+      // completions.push(createCompletion('fixpitch', 'Set pitch offset in semitones', 'fixpitch(${1:0})'))
+      // completions.push(createCompletion('time', 'Set time stretch factor', 'time(${1:1.0})'))
     }
 
     // Transport commands (usually at the end)
@@ -212,10 +215,11 @@ function sortCompletionsByRelevance(
   } else if (context.hasPlay && !context.hasRun) {
     // After play, suggest transport or modifiers
     order['run'] = 1
-    order['fixpitch'] = 2
-    order['time'] = 3
-    order['loop'] = 4
-    order['mute'] = 5
+    order['loop'] = 2
+    order['mute'] = 3
+    // Note: fixpitch and time are not yet implemented
+    // order['fixpitch'] = 2
+    // order['time'] = 3
   }
 
   return completions.sort((a, b) => {
