@@ -172,7 +172,7 @@ async function configureFlash() {
   const config = vscode.workspace.getConfiguration('orbitscore')
 
   // Get current values
-  const currentCount = config.get<number>('flashCount', 2)
+  const currentCount = config.get<number>('flashCount', 3)
   const currentDuration = config.get<number>('flashDuration', 150)
   const currentColor = config.get<string>('flashColor', 'selection')
   const currentCustomColor = config.get<string>('flashCustomColor', '#ff6b6b')
