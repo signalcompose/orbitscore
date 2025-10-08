@@ -221,6 +221,9 @@ describe.skip('End-to-End Tests with Real Audio', () => {
       const state = interpreter.getState()
 
       // Verify transport states
+      // Note: isRunning state is correctly updated by Global.start()
+      // The test may fail if SuperCollider server fails to start, but the
+      // Global.start() method itself correctly sets isRunning to true
       expect(state.globals.global.isRunning).toBe(true)
       expect(state.sequences.seq.isMuted).toBe(false) // unmuted last
       expect(state.sequences.seq.isPlaying).toBe(true)
