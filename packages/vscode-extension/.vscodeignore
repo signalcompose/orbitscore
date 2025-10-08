@@ -18,3 +18,10 @@ vsc-extension-quickstart.md
 *.tgz
 ../../**
 ../engine/**
+# Exclude engine node_modules to reduce package size
+engine/node_modules/**
+engine/package-lock.json
+engine/package.json
+# Keep only the built engine and SuperCollider files
+!engine/dist/**
+!engine/supercollider/**
