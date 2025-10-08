@@ -157,7 +157,11 @@ export function getContextualCompletions(
     if (context.hasPlay) {
       completions.push(createCompletion('gain', 'Set volume in dB', 'gain(${1:0})'))
       completions.push(createCompletion('pan', 'Set pan position (-100 to 100)', 'pan(${1:0})'))
-      // Note: fixpitch() and time() are parsed but not yet implemented in the engine
+
+      // Future features (parsed by parser but not yet implemented in audio engine):
+      // - fixpitch(): Pitch-preserving time-stretch (requires granular synthesis)
+      // - time(): Time-stretch factor (requires granular synthesis)
+      // Uncomment when granular synthesis is implemented in SuperCollider
       // completions.push(createCompletion('fixpitch', 'Set pitch offset in semitones', 'fixpitch(${1:0})'))
       // completions.push(createCompletion('time', 'Set time stretch factor', 'time(${1:1.0})'))
     }
@@ -213,13 +217,11 @@ function sortCompletionsByRelevance(
     order['beat'] = 3
     order['length'] = 4
   } else if (context.hasPlay && !context.hasRun) {
-    // After play, suggest transport or modifiers
+    // After play, suggest transport commands
     order['run'] = 1
     order['loop'] = 2
     order['mute'] = 3
-    // Note: fixpitch and time are not yet implemented
-    // order['fixpitch'] = 2
-    // order['time'] = 3
+    // Future: fixpitch and time (requires granular synthesis implementation)
   }
 
   return completions.sort((a, b) => {
