@@ -391,6 +391,7 @@ export class ExpressionParser {
 
     if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
       // Another nested element, continue the loop
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       return true
     }
 
