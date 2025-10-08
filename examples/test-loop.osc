@@ -1,0 +1,16 @@
+// ループテスト - 5秒間キックドラムがループします
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4)
+global.tick(4)
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
+
+var kick = init global.seq
+kick.length(1)
+kick.audio("kick.wav").chop(1)
+kick.play(1, 0, 0, 0)
+
+// ループ実行
+global.run()
+kick.loop()

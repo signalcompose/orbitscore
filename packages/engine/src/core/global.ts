@@ -66,7 +66,7 @@ export class Global {
     return this
   }
 
-  beat(numerator: number, denominator: number): this {
+  beat(numerator: number, denominator: number = 4): this {
     this.tempoManager.beat(numerator, denominator)
     return this
   }

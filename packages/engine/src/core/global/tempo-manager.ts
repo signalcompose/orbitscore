@@ -27,7 +27,7 @@ export class TempoManager {
     return this
   }
 
-  beat(numerator: number, denominator: number): this {
+  beat(numerator: number, denominator: number = 4): this {
     this._beat = { numerator, denominator }
     return this
   }

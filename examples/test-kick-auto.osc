@@ -1,0 +1,19 @@
+// 自動実行キックドラムテスト（CLI用）
+// 期待される動作：120 BPMで4拍子のキックドラムが1拍目だけに鳴る
+
+// グローバル設定
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4)
+global.tick(4)
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
+
+// キックドラムシーケンス
+var kick = init global.seq
+kick.length(1)
+kick.audio("kick.wav").chop(1)  // audioPathを使用して相対パス
+kick.play(1, 0, 0, 0)
+
+// 自動実行（スケジューラー起動が必要）
+global.run()
+kick.loop()  // ループ実行

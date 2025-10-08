@@ -1,0 +1,21 @@
+// シンプルなキックドラムテスト
+// 期待される動作：120 BPMで4拍子のキックドラムが1拍目だけに鳴る
+
+// グローバル設定
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4)        // 4/4拍子
+global.tick(4)
+
+// キックドラムシーケンス
+var kick = init global.seq
+kick.length(1)        // 1小節ループ
+kick.audio("../test-assets/audio/kick.wav").chop(1)  // 音声ファイル全体を使用
+kick.play(1, 0, 0, 0) // 1拍目だけキック、残りは休符
+
+// 実行コマンド（以下を選択してCmd+Enterで実行）
+// kick.run()
+
+// 停止コマンド
+// kick.stop()
+// global.stop()

@@ -91,12 +91,18 @@ export class TempoManager {
     const tempo = this._tempo || globalTempo
     const meter = this._beat || globalBeat
 
+    console.log(
+      `⏱️  Timing calc: tempo=${tempo}, meter=${meter.numerator}/${meter.denominator}, length=${this._length}`,
+    )
+
     // これにより、シーケンスごとに異なる拍子で1小節の長さを変えられる（ポリメーター）
     // 例: global.beat(4 by 4) = 2000ms, seq.beat(5 by 4) = 2500ms, seq.beat(9 by 8) = 2250ms
     const barDuration = this.calculateBarDuration(tempo, meter)
+    console.log(`⏱️  barDuration=${barDuration}`)
 
     // Apply length multiplier to bar duration (stretches each event)
     const effectiveBarDuration = barDuration * (this._length || 1)
+    console.log(`⏱️  effectiveBarDuration=${effectiveBarDuration}`)
 
     return calculateEventTiming(elements, effectiveBarDuration)
   }
