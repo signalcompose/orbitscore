@@ -50,8 +50,9 @@ export function runSequence(options: RunSequenceOptions): RunSequenceResult {
 
   console.log(`▶ ${sequenceName} (one-shot)`)
 
-  // Schedule events from current time
-  scheduleEventsFn(scheduler, 0, currentTime)
+  // Schedule events from current time with a small buffer (100ms) to ensure they're in the future
+  const scheduleTime = currentTime + 100
+  scheduleEventsFn(scheduler, 0, scheduleTime)
 
   // Auto-stop after pattern duration
   const patternDuration = getPatternDurationFn()

@@ -37,6 +37,12 @@
    - Testing requirements
    - Completion criteria
 
+7. **[BEAT_METER_SPECIFICATION.md](./BEAT_METER_SPECIFICATION.md)** 🎼
+   - Beat/Meter specification and future plans
+   - Polymeter feature details
+   - Tempo/BPM terminology
+   - Phase 2 validation plans
+
 ### Quick Links
 
 - **User Guide**: [../README.md](../README.md) - Start here for usage
@@ -65,7 +71,7 @@
 
 - **Audio File Playback**: Load and slice audio files (.wav, .aiff, .mp3, .mp4)
 - **Time-Stretching**: Automatic tempo matching with pitch preservation
-- **Transport Commands**: `global.run()`, `global.loop()`, `seq.mute()`, etc.
+- **Transport Commands**: `global.start()`, `global.loop()`, `seq.mute()`, etc.
 - **Editor Integration**: Execute commands with Cmd+Enter
 
 ### Core Features

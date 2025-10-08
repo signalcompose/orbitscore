@@ -52,6 +52,12 @@
         "title": "🔊 Select Audio Device",
         "category": "OrbitScore",
         "icon": "$(device-desktop)"
+      },
+      {
+        "command": "orbitscore.configureFlash",
+        "title": "⚡ Configure Flash Settings",
+        "category": "OrbitScore",
+        "icon": "$(settings-gear)"
       }
     ],
     "languages": [
@@ -80,10 +86,57 @@
         "key": "cmd+enter",
         "when": "editorTextFocus && editorLangId == orbitscore"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "OrbitScore",
+      "properties": {
+        "orbitscore.flashCount": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Number of times to flash executed lines",
+          "format": "integer"
+        },
+        "orbitscore.flashDuration": {
+          "type": "number",
+          "default": 150,
+          "minimum": 50,
+          "maximum": 500,
+          "description": "Duration of each flash in milliseconds",
+          "format": "integer"
+        },
+        "orbitscore.flashColor": {
+          "type": "string",
+          "enum": [
+            "selection",
+            "error",
+            "warning",
+            "info",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "Use editor selection color",
+            "Use error color (red)",
+            "Use warning color (yellow)",
+            "Use info color (blue)",
+            "Use custom color"
+          ],
+          "default": "selection",
+          "description": "Color theme for line flash"
+        },
+        "orbitscore.flashCustomColor": {
+          "type": "string",
+          "default": "#ff6b6b",
+          "description": "Custom flash color (hex format, e.g., #ff6b6b)",
+          "format": "color-hex"
+        }
+      }
+    }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:engine && tsc -p tsconfig.json",
+    "build:engine": "cd ../engine && npm run build && cp -r dist ../vscode-extension/engine/",
     "dev": "tsc -w"
   },
   "devDependencies": {

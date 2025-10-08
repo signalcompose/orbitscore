@@ -1,0 +1,28 @@
+// 改行+ネストパターンテスト
+// 期待される動作：
+// arpが ((1,0), 2, (3,2,3), 4) というネストパターンで再生される
+// - 最初の1拍でスライス1と0（無音）が2分割で再生
+// - 2拍目でスライス2が再生
+// - 3拍目でスライス3,2,3が3分割で再生
+// - 4拍目でスライス4が再生
+// 音の流れ：C → D → E-D-E → F（速度が変化しながら）
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.tick(4)
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
+
+var arp = init global.seq
+arp.length(1)
+arp.audio("arpeggio_c.wav").chop(4)
+arp.play(
+  (1, 0),
+  2,
+  (3, 2, 3),
+  4
+)
+
+global.start()
+arp.run()
+

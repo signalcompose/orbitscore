@@ -1,4 +1,4 @@
-import path from 'path'
+import * as path from 'path'
 
 import type { Scheduler } from '../../global/types'
 
@@ -45,7 +45,7 @@ export async function preparePlayback(
   const isRunning = scheduler.isRunning
 
   if (!isRunning) {
-    console.log(`⚠️ ${sequenceName} - scheduler not running. Use global.run() first.`)
+    console.log(`⚠️ ${sequenceName} - scheduler not running. Use global.start() first.`)
     return null
   }
 

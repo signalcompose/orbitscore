@@ -33,7 +33,8 @@ SynthDef(\orbitPlayBuf, {
         rate: rate * BufRateScale.kr(bufnum),
         trigger: 1,
         startPos: startPos * BufSampleRate.kr(bufnum),
-        loop: 0
+        loop: 0,
+        doneAction: 0  // duration制御はエンベロープで行う
     );
     
     // エンベロープで再生時間を制御（クリック音防止のためフェードアウト）

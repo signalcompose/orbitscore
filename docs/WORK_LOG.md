@@ -15,6 +15,138 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.24 Beat/Meter Specification Documentation (January 8, 2025)
+
+**Date**: January 8, 2025
+**Status**: ✅ COMPLETE
+**Branch**: feature/audio-test-setup
+**Commits**: 
+- (pending): docs: add beat/meter specification and future validation plans
+
+**Work Content**: 拍子記号の仕様を明文化し、将来的な改善計画をドキュメント化
+
+#### 背景
+`beat(n1 by n2)`構文の分母（n2）に関する仕様が曖昧だった。音楽理論上の標準的な拍子記号に準拠するため、将来的な制約を明確化する必要があった。
+
+#### 実施内容
+
+**1. 新規ドキュメント作成**
+- **`docs/BEAT_METER_SPECIFICATION.md`**を作成
+  - 現在の実装（Phase 1）: 分母に制限なし
+  - 将来の改善計画（Phase 2）: 2のべき乗（1, 2, 4, 8, 16, 32, 64, 128）に制限
+  - 小節長の計算式と具体例
+  - ポリメーター機能の詳細説明
+  - `tempo()` → `bpm()`への用語改善案
+
+**2. 音楽理論的背景**
+- **標準的な拍子記号**: 4/4, 3/4, 6/8, 7/8, 9/8, 5/4など（分母は2のべき乗）
+- **非標準的な拍子**: 8/9, 5/7, 4/3など（音楽理論上解釈が困難）
+- **理由**: 分母は拍の基準単位を示し、通常は2のべき乗（全音符を基準とした分割）
+
+**3. 小節長の計算例**
+```
+tempo(60) beat(4 by 4) → 1小節 = 4000ms（1拍=1秒）
+tempo(60) beat(7 by 8) → 1小節 = 3500ms（8分音符=500ms）
+tempo(120) beat(5 by 4) → 1小節 = 2500ms
+```
+
+**4. ポリメーター機能**
+- グローバルとシーケンスで異なる拍子を設定可能
+- 例: グローバル4/4（4秒）、シーケンス5/4（5秒）→ 位相がずれる
+- 20秒後に再び同期（最小公倍数）
+
+**5. 関連ドキュメント更新**
+- `docs/IMPROVEMENT_RECOMMENDATIONS.md`: Phase 2の改善項目として追加
+- `docs/INDEX.md`: 新規ドキュメントへのリンク追加
+- **Serenaメモリ**: `beat_meter_specification`メモリを作成
+
+#### 将来の実装計画（Phase 2）
+1. パーサーで分母を検証（2のべき乗のみ許可）
+2. 分母が不正な場合のエラーメッセージ
+3. テストケース追加（正常系・異常系）
+4. `bpm()`メソッドの追加（`tempo()`のエイリアス）
+
+#### 現時点の方針
+- **Phase 1**: 厳密な制約を課さず、柔軟性を優先
+- **理由**: ポリメーター機能の動作を優先、実験的な使用を妨げない
+- **Phase 2以降**: 段階的に厳密化を進める
+
+#### 成果
+- ✅ 拍子記号の仕様を明文化
+- ✅ 音楽理論的背景を整理
+- ✅ 将来的な改善計画を明確化
+- ✅ ポリメーター機能の数学的説明を詳細化
+- ✅ `tempo` vs `bpm`の用語改善案を提示
+
+---
+
+### 6.23 Multiline Syntax Support and VSCode Extension Improvements (January 8, 2025)
+
+**Date**: January 8, 2025
+**Status**: ✅ COMPLETE
+**Branch**: feature/audio-test-setup
+**Commits**: 
+- `19aadf0`: fix: Improve REPL buffering to support multiline statements
+
+**Work Content**: DSL構文の改善（改行サポート）とVSCode拡張機能のREPLモード改善
+
+#### 実施内容
+
+**1. REPLモードのバッファリング改善**
+- **問題**: VSCode拡張から複数行のコード（改行を含む`play()`等）を送信すると、REPLモードが各行を個別に処理してパーサーエラーが発生
+- **解決策**:
+  - `repl-mode.ts`にバッファリングロジックを実装
+  - 不完全な入力（EOF、Expected RPAREN、Expected comma or closing parenthesis）を検出して継続バッファリング
+  - 完全な文が揃ったら実行
+  - 連続2行の空行でバッファを強制実行（フォールバック）
+- **修正ファイル**: `packages/engine/src/cli/repl-mode.ts`
+
+**2. VSCode拡張のフィルタリング改善**
+- **問題**: `global.start()`がトランスポートコマンドとして認識されず送信される
+- **解決策**: 
+  - `filterDefinitionsOnly()`で`start`をトランスポートコマンドリストに追加
+  - `global.*`設定メソッド（`tempo`, `beat`, `tick`, `audioPath`）は保持
+- **修正ファイル**: `packages/vscode-extension/src/extension.ts`
+
+**3. デバッグログの強化**
+- REPLモードに詳細なデバッグログを追加
+  - 各行の受信内容
+  - バッファの状態
+  - パースエラーの詳細
+  - バッファリング継続/実行の判断
+- `ORBITSCORE_DEBUG`環境変数で制御
+
+**4. テスト用サンプルファイル作成**
+- `examples/test-multiline-syntax.osc`: 基本的な改行テスト
+- `examples/test-multiline-nested.osc`: ネストパターンの改行テスト
+- `examples/test-vscode-multiline.osc`: VSCode拡張機能テスト用
+- `examples/debug-parser.osc`: パーサーデバッグ用
+
+#### テスト結果
+
+**音声出力テスト**: ✅ PASS
+- CLI実行: ✅ 正常動作
+- VSCode拡張（Debug Mode）: ✅ 正常動作
+- 改行を含む`play()`パターン: ✅ 正常パース・実行
+- `global.start()`リネーム: ✅ 正常動作
+- C-D-E-Fアルペジオ: ✅ 正しい音程で再生
+
+**Vitestテスト**: ✅ 132 passed | 15 skipped (147)
+
+#### 学んだ教訓
+
+1. **REPLモードの制限**: `readline`の`line`イベントは各行を個別に処理するため、複数行の文には明示的なバッファリングが必要
+2. **パーサーエラーメッセージの活用**: エラーメッセージ（EOF、Expected RPAREN等）を利用して、入力が不完全かどうかを判断できる
+3. **フィルタリングの粒度**: トランスポートコマンドと設定メソッドを区別する必要がある
+
+#### 次のステップ
+
+- 予約キーワード（`RUN`, `LOOP`, `STOP`, `MUTE`）の実装（保留中）
+- ドキュメント・Serenaメモリの最終更新
+- PR作成
+
+---
+
 ### 6.22 Phase 7: Final Cleanup - Remove Unused Code and Improve Type Safety (January 7, 2025)
 
 **Date**: January 7, 2025
@@ -668,9 +800,9 @@ Actually played: snare at 47841ms (drift: 500ms) ← Wrong!
 **Fix**: 
 1. Removed auto-start from `scheduleEvent()` and `scheduleSliceEvent()`
 2. Added scheduler running checks to `sequence.run()` and `sequence.loop()`
-3. Display warning: `⚠️ kick.loop() - scheduler not running. Use global.run() first.`
+3. Display warning: `⚠️ kick.loop() - scheduler not running. Use global.start() first.`
 
-**Result**: ✅ Users must explicitly call `global.run()` before sequences will play  
+**Result**: ✅ Users must explicitly call `global.start()` before sequences will play  
 **Files**: `packages/engine/src/audio/advanced-player.ts`, `packages/engine/src/core/sequence.ts`
 
 #### Issue 3: Live Sequence Addition Required Restart
@@ -709,9 +841,9 @@ Actually played: snare at 47841ms (drift: 500ms) ← Wrong!
 - Parallel playback: Perfect synchronization
 
 **Workflow Verification**:
-- ✅ Engine start without `global.run()` → no audio
-- ✅ `kick.loop()` without `global.run()` → warning displayed
-- ✅ `global.run()` → scheduler starts
+- ✅ Engine start without `global.start()` → no audio
+- ✅ `kick.loop()` without `global.start()` → warning displayed
+- ✅ `global.start()` → scheduler starts
 - ✅ `kick.loop()` → kick plays
 - ✅ `snare.loop()` → snare added, synced with kick
 - ✅ Add hihat to file and save → hihat available immediately
@@ -1782,4 +1914,90 @@ npm test
 - `[PENDING]`: refactor: interpreter-v2.tsをモジュール分割（Phase 3-2）
 
 ---
+
+
+
+---
+
+### 2025-01-08: Audio Output Testing & Bug Fixes
+
+**Date**: January 8, 2025  
+**Branch**: `feature/audio-test-setup`  
+**Status**: ✅ Testing Complete
+
+#### Goal
+音声出力機能のテストとVSCode拡張機能のライブコーディングテスト準備
+
+#### Critical Bug Fixes
+
+1. **`beat()` denominator default value** (🔴 Critical)
+   - **Problem**: `global.beat(4)` → `denominator` が `undefined` → タイミング計算が `NaN`
+   - **Root Cause**: `beat(numerator, denominator)` に第2引数のデフォルト値がなかった
+   - **Solution**: `beat(numerator: number, denominator: number = 4)` にデフォルト値追加
+   - **Impact**: これがないと音が一切鳴らない（全てのタイミング計算が破綻）
+   - **Files**: `packages/engine/src/core/global.ts`, `packages/engine/src/core/global/tempo-manager.ts`
+
+2. **`run()` sequence scheduling timing**
+   - **Problem**: イベントが過去の時間にスケジュールされ、即座にクリアされる
+   - **Solution**: `run-sequence.ts` で 100ms バッファを追加
+   - **Files**: `packages/engine/src/core/sequence/playback/run-sequence.ts`
+
+#### Audio Output Tests
+
+✅ **All tests passed:**
+- Simple playback: `play(1, 0, 0, 0)` with `run()` 
+- Loop test: `play(1, 0, 0, 0)` with `loop()`
+- Chop test: `play(1, 2, 3, 4)` with `chop(4)`
+- Silence test: `play(1, 0, 2, 0, 3, 0, 4, 0)`
+- Nested pattern: `play((1, 0), 2, (3, 2, 3), 4)`
+- Length test: `length(2)` - rate調整が正しく動作
+
+#### Test Coverage
+
+**Created**: `tests/audio/rate-calculation.spec.ts`
+- 15 tests covering rate calculation
+- Tempo variations (120, 140, 90 BPM)
+- Different chop divisions (2, 4, 8)
+- Length variations (1, 2, 4 bars)
+- Nested patterns and edge cases
+- **Result**: All 15 tests passing ✅
+
+#### Key Findings
+
+**Rate Calculation Formula:**
+```
+rate = (sliceDuration * 1000) / eventDurationMs
+```
+
+At 120 BPM, 4/4, `length(1)`:
+- 1 bar = 2000ms, 4 events = 500ms each
+- For 1s audio with `chop(4)`: sliceDuration = 250ms
+- rate = 250 / 500 = 0.5
+
+With `length(2)`:
+- 2 bars = 4000ms, 4 events = 1000ms each  
+- rate = 250 / 1000 = 0.25 (1 octave lower)
+
+#### Example Files Created
+
+- `examples/test-simple-run.osc` - Simple kick drum
+- `examples/test-loop.osc` - Looping kick
+- `examples/test-chop.osc` - Arpeggio chop
+- `examples/test-chop-sparse.osc` - With silences
+- `examples/test-chop-nested.osc` - Nested patterns
+- `examples/test-length.osc` - Length(2) test
+
+#### Documentation Updates
+
+- Updated `docs/USER_MANUAL.md`:
+  - Added `length()` and pitch relationship
+  - Detailed nested pattern explanation
+  - Improved `beat()` usage examples
+- Updated `docs/WORK_LOG.md`: This entry
+
+#### Next Steps
+
+- [ ] VSCode extension live coding test
+- [ ] Additional feature tests (gain, pan, multiple sequences)
+- [ ] Commit changes
 

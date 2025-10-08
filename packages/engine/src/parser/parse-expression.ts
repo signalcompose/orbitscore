@@ -317,12 +317,18 @@ export class ExpressionParser {
       ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
       !ParserUtils.isEOF(this.tokens, this.pos)
     ) {
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'RPAREN') {
+        break
+      }
       this.parseNestedPlayElement(elements)
 
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       // Handle comma or continue
       if (!this.handleNestedPlaySeparator()) {
         break
       }
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     }
 
     const rparenResult = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
@@ -341,6 +347,8 @@ export class ExpressionParser {
    * Parse a single element within a nested play structure
    */
   private parseNestedPlayElement(elements: PlayElement[]): void {
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+
     if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
       // Nested element
       const nestedResult = this.parseNestedPlay()
@@ -367,9 +375,12 @@ export class ExpressionParser {
    * @returns true if should continue parsing, false if should stop
    */
   private handleNestedPlaySeparator(): boolean {
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+
     if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
       const commaResult = ParserUtils.advance(this.tokens, this.pos)
       this.pos = commaResult.newPos
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       return true
     }
 
@@ -380,6 +391,7 @@ export class ExpressionParser {
 
     if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
       // Another nested element, continue the loop
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       return true
     }
 

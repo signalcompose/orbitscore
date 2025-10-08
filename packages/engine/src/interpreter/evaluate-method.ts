@@ -65,6 +65,12 @@ export async function processArguments(methodName: string, args: any[]): Promise
     if (methodName === 'beat' && arg.numerator !== undefined) {
       // Handle meter: beat(4 by 4) -> beat(4, 4)
       processed.push(arg.numerator, arg.denominator)
+    } else if (methodName === 'beat' && typeof arg === 'number') {
+      // ERROR: beat() must use "n by m" syntax, not single number
+      throw new Error(
+        `beat() requires meter notation: beat(${arg} by 4) instead of beat(${arg})\n` +
+          `This is essential for polymeter support where different time signatures create independent bar lengths.`,
+      )
     } else if (methodName === 'play') {
       // Play arguments are passed as-is (already PlayElement[])
       processed.push(arg)

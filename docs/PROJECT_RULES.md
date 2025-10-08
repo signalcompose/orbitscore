@@ -45,6 +45,23 @@
   - Verify API usage and parameter formats
   - Only ask user after exhausting documentation resources
 
+**DSL Code Writing (DSLコード記述時の必須ルール):**
+
+- **BEFORE writing any `.osc` file or DSL code**: MUST read the relevant section in `docs/INSTRUCTION_ORBITSCORE_DSL.md`
+- **NEVER guess DSL syntax**: Always verify with specification first
+- **When creating examples or patterns**:
+  1. Check `examples/` directory for similar patterns
+  2. Read DSL specification for the methods you intend to use
+  3. Verify parameter order, types, and expected values
+  4. Understand what each method does (e.g., `beat()` sets time signature, NOT rhythm pattern)
+- **Common mistakes to avoid**:
+  - `beat()` is for time signature and **MUST use "n by m" notation** (e.g., `beat(4 by 4)` = 4/4)
+  - **NEVER use single argument** like `beat(4)` - this will cause an error
+  - This notation is essential for polymeter support where different time signatures create independent bar lengths
+  - Rhythm patterns are defined in `play()` (e.g., `play(1, 0, 0, 0)`)
+  - Don't invent new syntax or methods without checking specification
+- **Purpose**: Prevent syntax errors, save time, and maintain consistency with specification
+
 ### 4. Documentation First
 
 - Update relevant docs (README, IMPLEMENTATION_PLAN, etc.) with each change
@@ -87,7 +104,7 @@
 - 特に以下を確認：
   - `var global = init GLOBAL` の初期化（`global`ではなく`GLOBAL`）
   - `.audio()` メソッド（`sample()`ではない）
-  - `global.run()` の呼び出しタイミング
+- `global.start()` の呼び出しタイミング
   - メソッドチェーンの正しい使い方
 - **目的**: 構文エラーや混乱を防ぎ、お互いの時間を節約する
 
@@ -323,13 +340,14 @@ alias review-get='gh pr view --comments | grep -A 100 "bugbot"'
 6. **Update README.md** (sync with WORK_LOG.md status)
 7. Update other documentation
 8. **Update Serena memory** (important changes, issues, decisions)
-9. **Commit all changes including docs and Serena memory files** (`.serena/memories/*.md`)
-10. **Get the commit hash** (`git rev-parse --short HEAD`) - this is the "実コミット"
-11. **Update WORK_LOG.md with the first commit hash** (replace `[PENDING]` with the hash from step 10)
-12. **Amend the commit** (`git add docs/WORK_LOG.md && git commit --amend --no-edit`)
+9. **Update USER_MANUAL.md** (if user-facing changes)
+10. **Commit all changes including docs and Serena memory files** (`.serena/memories/*.md`)
+11. **Get the commit hash** (`git rev-parse --short HEAD`) - this is the "実コミット"
+12. **Update WORK_LOG.md with the first commit hash** (replace `[PENDING]` with the hash from step 11)
+13. **Amend the commit** (`git add docs/WORK_LOG.md && git commit --amend --no-edit`)
 
 **Important**: 
-- Record the **first commit hash** (from step 10) in WORK_LOG.md, not the final amended hash
+- Record the **first commit hash** (from step 11) in WORK_LOG.md, not the final amended hash
 - This hash represents the "actual commit" with all changes
 - The amend only adds the commit hash reference to WORK_LOG.md
 - This avoids infinite loop of updating hashes

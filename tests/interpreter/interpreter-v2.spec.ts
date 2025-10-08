@@ -144,7 +144,7 @@ seq.play(1, 0, 1, 0)
   it('should handle transport commands', async () => {
     const code = `
 var global = init GLOBAL
-global.run()
+global.start()
 var seq = init global.seq
 seq.mute()
 `

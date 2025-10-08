@@ -4,7 +4,7 @@
 // Initialize
 var global = init GLOBAL
 global.tempo(120)
-global.beat(4)
+global.beat(4 by 4)
 global.tick(4)
 
 // === Pattern 1: Basic 4/4 Beat ===

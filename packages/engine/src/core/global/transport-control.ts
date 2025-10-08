@@ -16,7 +16,7 @@ export class TransportControl {
   }
 
   // Transport control methods
-  run(): this {
+  start(): this {
     // If already running, do nothing (idempotent)
     if (this._isRunning) {
       return this
@@ -26,7 +26,7 @@ export class TransportControl {
 
     // Start the global scheduler (will restart if needed)
     this.globalScheduler.start()
-    console.log('✅ Global running')
+    console.log('✅ Global starting')
 
     return this
   }

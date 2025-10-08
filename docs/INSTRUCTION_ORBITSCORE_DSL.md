@@ -114,6 +114,30 @@ snare.beat(4 by 4).length(1).audio("snare.wav").chop(4).play(0, 0, 1, 0).run()
 init global.seq.beat(4 by 4).length(1).audio("snare.wav").play(0, 0, 1, 0).run()
 ```
 
+### Multiline Parentheses & Chaining
+- 括弧で囲まれた引数リストやネスト構造は、**どのメソッド/関数でも改行を挟んで記述可能**です。
+- `global.beat()` や `seq.play()`、今後導入予定の `RUN()` など、DSL全体で同じ書き方ができます。
+- カンマ区切りを守れば閉じ括弧の位置・インデントも自由に整形できます。
+
+```js
+global.beat(
+  5 by 4,
+)
+
+seq.audio(
+  "../audio/snare.wav",
+).play(
+  (1, 0),
+  2,
+  (
+    3,
+    (4, 5),
+  ),
+)
+```
+
+> 注: `(1)(2)` のようなタプルネスト記法も改行混在で利用できます。閉じ括弧は任意の行に置いて構いません。
+
 ### Loop Length and Pattern Relationship
 The `length` parameter defines how many bars the sequence loops over:
 - `length(1)` with `.chop(4)` = 4 slices per bar × 1 bar = 4 elements in `play()`
@@ -189,8 +213,8 @@ seq1.play((0).chop(5).time(5), (0).chop(4).time(4))
 Available on both `global` and sequences (`seqN`).
 
 ```js
-global.run()              // run from next bar
-global.run.force()        // run immediately
+global.start()            // start scheduler from next bar
+global.start.force()      // start immediately
 global.loop()             // loop from next bar
 global.loop.force()       // loop immediately
 global.mute()
@@ -200,7 +224,7 @@ global.stop()
 
 ### Targeted Transport
 ```js
-global.run(seq1, seq2)   // run only selected sequences
+global.start(seq1, seq2) // (warning) start ignores sequence arguments
 global.loop(seq1)        // loop only seq1
 ```
 
@@ -361,7 +385,7 @@ lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0),
           1, 1, 1, 0)
 
 // STEP 6: Start playback
-global.run()
+global.start()
 
 // STEP 7: Live manipulation
 kick.mute()
