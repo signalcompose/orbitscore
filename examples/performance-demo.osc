@@ -82,7 +82,7 @@ sine2.audio("sine_880.wav").chop(1).play(0, 0, 0, 0)
 // ========================================
 
 // --- Start/Stop All ---
-global.run()
+global.start()
 global.stop()
 
 // --- Individual Sequence Control ---

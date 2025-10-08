@@ -12,5 +12,5 @@ kick.audio("kick.wav").chop(1)
 kick.play(1, 0, 0, 0)
 
 // ループ実行
-global.run()
+global.start()
 kick.loop()

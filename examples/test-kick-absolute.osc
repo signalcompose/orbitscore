@@ -14,5 +14,5 @@ kick.audio("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio/kick.
 kick.play(1, 0, 0, 0)
 
 // 自動実行
-global.run()
+global.start()
 kick.run()

@@ -13,5 +13,5 @@ arp.audio("arpeggio_c.wav").chop(4)
 arp.play(1, 0, 2, 0, 3, 0, 4, 0)
 
 // ループ実行
-global.run()
+global.start()
 arp.loop()

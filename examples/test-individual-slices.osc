@@ -31,7 +31,7 @@ slice4.audio("arpeggio_c.wav").chop(4)
 slice4.play(0, 0, 0, 4)
 
 // テスト用コマンド（以下を選択してCmd+Enterで実行）
-global.run()
+global.start()
 slice1.run()  // スライス1のみ
 slice2.run()  // スライス2のみ
 slice3.run()  // スライス3のみ
