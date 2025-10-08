@@ -1,0 +1,32 @@
+// VSCode拡張機能テスト用ファイル
+// このファイルでCmd+Enterによるライブコーディングをテストします
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.tick(4)
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
+
+// キックドラムシーケンス
+var kick = init global.seq
+kick.length(1)
+kick.audio("kick.wav").chop(1)
+kick.play(1, 0, 0, 0)
+
+// アルペジオシーケンス
+var arp = init global.seq
+arp.length(1)
+arp.audio("arpeggio_c.wav").chop(4)
+arp.play(1, 2, (3,3), 4)
+
+// テスト用コマンド（以下を選択してCmd+Enterで実行）
+global.start()
+kick.run()
+kick.loop()
+arp.run()
+arp.loop()
+
+// 停止コマンド
+kick.stop()
+arp.stop()
+global.stop()

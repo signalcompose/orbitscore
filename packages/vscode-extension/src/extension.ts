@@ -53,6 +53,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
     vscode.commands.registerCommand('orbitscore.killSuperCollider', killSuperCollider),
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
+    vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     statusBarItem,
   )
 
@@ -124,6 +125,11 @@ function showCommands() {
       detail: 'Force kill all SuperCollider server processes',
     },
     {
+      label: '⚡ Configure Flash',
+      description: 'Customize flash settings',
+      detail: 'Configure flash count, duration, color, and opacity',
+    },
+    {
       label: '🔄 Reload',
       description: 'Reload window',
       detail: 'Restart extension and re-evaluate file',
@@ -152,11 +158,200 @@ function showCommands() {
       case '🔪 Kill SuperCollider':
         vscode.commands.executeCommand('orbitscore.killSuperCollider')
         break
+      case '⚡ Configure Flash':
+        vscode.commands.executeCommand('orbitscore.configureFlash')
+        break
       case '🔄 Reload':
         vscode.commands.executeCommand('workbench.action.reloadWindow')
         break
     }
   })
+}
+
+async function configureFlash() {
+  const config = vscode.workspace.getConfiguration('orbitscore')
+
+  // Get current values
+  const currentCount = config.get<number>('flashCount', 3)
+  const currentDuration = config.get<number>('flashDuration', 150)
+  const currentColor = config.get<string>('flashColor', 'selection')
+  const currentCustomColor = config.get<string>('flashCustomColor', '#ff6b6b')
+
+  // Show configuration options
+  const options = [
+    {
+      label: `🔢 Flash Count: ${currentCount}`,
+      description: 'Number of flashes (1-5)',
+      detail: 'Current: ' + currentCount,
+      action: 'count',
+    },
+    {
+      label: `⏱️ Flash Duration: ${currentDuration}ms`,
+      description: 'Duration of each flash (50-500ms)',
+      detail: 'Current: ' + currentDuration + 'ms',
+      action: 'duration',
+    },
+    {
+      label: `🎨 Flash Color: ${currentColor}`,
+      description: 'Color theme for flash',
+      detail: 'Current: ' + currentColor,
+      action: 'color',
+    },
+    {
+      label: `🎯 Custom Color: ${currentCustomColor}`,
+      description: 'Custom color (hex format)',
+      detail: 'Current: ' + currentCustomColor,
+      action: 'customColor',
+    },
+    {
+      label: '🧪 Test Flash',
+      description: 'Test current flash settings',
+      detail: 'Preview the flash effect',
+      action: 'test',
+    },
+  ]
+
+  const selected = await vscode.window.showQuickPick(options, {
+    placeHolder: 'Configure flash settings',
+    title: '⚡ Flash Configuration',
+  })
+
+  if (!selected) return
+
+  switch (selected.action) {
+    case 'count': {
+      const newCount = await vscode.window.showInputBox({
+        prompt: 'Enter flash count (1-5)',
+        value: currentCount.toString(),
+        validateInput: (value) => {
+          const num = parseInt(value)
+          if (isNaN(num) || num < 1 || num > 5) {
+            return 'Please enter a number between 1 and 5'
+          }
+          return null
+        },
+      })
+      if (newCount) {
+        await config.update('flashCount', parseInt(newCount), vscode.ConfigurationTarget.Global)
+        vscode.window.showInformationMessage(`✅ Flash count set to ${newCount}`)
+      }
+      break
+    }
+
+    case 'duration': {
+      const newDuration = await vscode.window.showInputBox({
+        prompt: 'Enter flash duration in milliseconds (50-500)',
+        value: currentDuration.toString(),
+        validateInput: (value) => {
+          const num = parseInt(value)
+          if (isNaN(num) || num < 50 || num > 500) {
+            return 'Please enter a number between 50 and 500'
+          }
+          return null
+        },
+      })
+      if (newDuration) {
+        await config.update(
+          'flashDuration',
+          parseInt(newDuration),
+          vscode.ConfigurationTarget.Global,
+        )
+        vscode.window.showInformationMessage(`✅ Flash duration set to ${newDuration}ms`)
+      }
+      break
+    }
+
+    case 'color': {
+      const colorOptions = [
+        { label: 'selection', description: 'Editor selection color' },
+        { label: 'error', description: 'Error color (red)' },
+        { label: 'warning', description: 'Warning color (yellow)' },
+        { label: 'info', description: 'Info color (blue)' },
+        { label: 'custom', description: 'Custom color' },
+      ]
+      const selectedColor = await vscode.window.showQuickPick(colorOptions, {
+        placeHolder: 'Select flash color theme',
+      })
+      if (selectedColor) {
+        await config.update('flashColor', selectedColor.label, vscode.ConfigurationTarget.Global)
+        vscode.window.showInformationMessage(`✅ Flash color set to ${selectedColor.label}`)
+      }
+      break
+    }
+
+    case 'customColor': {
+      const newCustomColor = await vscode.window.showInputBox({
+        prompt: 'Enter custom color (hex format, e.g., #ff6b6b)',
+        value: currentCustomColor,
+        validateInput: (value) => {
+          if (!/^#[0-9A-Fa-f]{6}$/.test(value)) {
+            return 'Please enter a valid hex color (e.g., #ff6b6b)'
+          }
+          return null
+        },
+      })
+      if (newCustomColor) {
+        await config.update('flashCustomColor', newCustomColor, vscode.ConfigurationTarget.Global)
+        vscode.window.showInformationMessage(`✅ Custom color set to ${newCustomColor}`)
+      }
+      break
+    }
+
+    case 'test': {
+      // Test flash by simulating a runSelection call
+      const editor = vscode.window.activeTextEditor
+      if (editor) {
+        const line = editor.document.lineAt(editor.selection.active.line)
+        const range = new vscode.Range(line.range.start, line.range.end)
+
+        // Use the same flash logic as runSelection
+        const flashCount = config.get<number>('flashCount', 3)
+        const flashDuration = config.get<number>('flashDuration', 150)
+        const flashColor = config.get<string>('flashColor', 'selection')
+        const flashCustomColor = config.get<string>('flashCustomColor', '#ff6b6b')
+
+        let backgroundColor: string | vscode.ThemeColor
+        switch (flashColor) {
+          case 'error':
+            backgroundColor = new vscode.ThemeColor('editorError.foreground')
+            break
+          case 'warning':
+            backgroundColor = new vscode.ThemeColor('editorWarning.foreground')
+            break
+          case 'info':
+            backgroundColor = new vscode.ThemeColor('editorInfo.foreground')
+            break
+          case 'custom':
+            backgroundColor = flashCustomColor
+            break
+          default:
+            backgroundColor = new vscode.ThemeColor('editor.selectionBackground')
+            break
+        }
+
+        const createFlash = (flashIndex: number) => {
+          const decoration = vscode.window.createTextEditorDecorationType({
+            backgroundColor: backgroundColor,
+            isWholeLine: true,
+          })
+          editor.setDecorations(decoration, [range])
+
+          setTimeout(() => {
+            decoration.dispose()
+            if (flashIndex < flashCount - 1) {
+              setTimeout(() => createFlash(flashIndex + 1), 100)
+            }
+          }, flashDuration)
+        }
+
+        createFlash(0)
+        vscode.window.showInformationMessage('🧪 Flash test completed!')
+      } else {
+        vscode.window.showWarningMessage('⚠️ Please open a file to test flash')
+      }
+      break
+    }
+  }
 }
 
 function toggleEngine() {
@@ -176,17 +371,54 @@ function startEngine(debugMode: boolean = false) {
   }
 
   // isDebugMode = debugMode
-  const modeLabel = debugMode ? '(Debug Mode)' : ''
+  const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
   outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
 
-  // Try extension-local engine first, then workspace engine
-  let enginePath = path.join(__dirname, '../engine/dist/cli-audio.js')
-  if (!fs.existsSync(enginePath)) {
+  // Choose engine based on mode
+  let enginePath: string
+  let engineSource: string
+  if (debugMode) {
+    // Debug mode: use workspace engine (development)
     enginePath = path.join(__dirname, '../../engine/dist/cli-audio.js')
+    engineSource = 'workspace engine (development)'
+  } else {
+    // Normal mode: use extension-local engine (stable)
+    enginePath = path.join(__dirname, '../engine/dist/cli-audio.js')
+    engineSource = 'extension engine (stable)'
   }
+
+  outputChannel?.appendLine(`📦 Using: ${engineSource}`)
+  outputChannel?.appendLine(`📍 Path: ${enginePath}`)
+
   if (!fs.existsSync(enginePath)) {
-    vscode.window.showErrorMessage(`Engine not found: ${enginePath}`)
+    if (debugMode) {
+      vscode.window.showErrorMessage(`Debug engine not found: ${enginePath}`)
+    } else {
+      vscode.window.showErrorMessage(
+        `Extension engine not found: ${enginePath}\n\n` +
+          `This indicates a build issue. Please rebuild the extension:\n` +
+          `1. Run "npm run build" in the vscode-extension directory\n` +
+          `2. Ensure the engine is properly built and copied\n` +
+          `3. Check that packages/engine/dist/cli-audio.js exists`,
+      )
+    }
     return
+  }
+
+  // Show engine build time
+  try {
+    const stats = fs.statSync(enginePath)
+    const buildTime = stats.mtime.toLocaleString('ja-JP', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+    outputChannel?.appendLine(`⏰ Built: ${buildTime}`)
+  } catch (error) {
+    outputChannel?.appendLine(`⚠️ Could not get build time: ${error}`)
   }
 
   // Get workspace root for proper relative path resolution
@@ -216,9 +448,16 @@ function startEngine(debugMode: boolean = false) {
     args.push('--debug')
   }
 
+  // Set debug environment variable for debug mode
+  const env = { ...process.env }
+  if (debugMode) {
+    env.ORBITSCORE_DEBUG = '1'
+  }
+
   engineProcess = child_process.spawn('node', [enginePath, ...args], {
     cwd: workspaceRoot,
     stdio: ['pipe', 'pipe', 'pipe'],
+    env,
   })
 
   isLiveCodingMode = true
@@ -258,7 +497,16 @@ function startEngine(debugMode: boolean = false) {
         }
 
         // Keep transport state changes
-        if (line.includes('✅ Global running') || line.includes('✅ Global stopped')) {
+        if (
+          line.includes('✅ Global running') ||
+          line.includes('✅ Global stopped') ||
+          line.includes('✅ Global starting')
+        ) {
+          return true
+        }
+
+        // Keep user execution feedback (run/loop commands)
+        if (line.includes('▶ ') || line.includes('⏹ ') || line.includes('🔄 ')) {
           return true
         }
 
@@ -468,44 +716,70 @@ async function selectAudioDevice() {
 
 function filterDefinitionsOnly(code: string): string {
   // Filter out transport commands (.loop(), .run(), .stop(), etc.)
-  // Filter out standalone gain/pan (live changes, not default settings)
-  // Keep variable declarations and property settings
-  // Note: var declarations are always kept because InterpreterV2 reuses existing instances
-  const lines = code.split('\n')
-  const filtered = lines.filter((line) => {
-    const trimmed = line.trim()
-    // Skip comments and empty lines
-    if (!trimmed || trimmed.startsWith('//')) return true
+  // But preserve multiline statements by removing complete statements, not individual lines
 
-    // Skip all transport commands (always, even during initialization)
-    if (trimmed.match(/\.(loop|run|stop|mute|unmute)\s*\(\s*\)/)) {
-      return false
+  // Split into lines but preserve line breaks for reconstruction
+  const lines = code.split('\n')
+  const result: string[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+    const trimmed = line.trim()
+
+    // Keep comments and empty lines
+    if (!trimmed || trimmed.startsWith('//')) {
+      result.push(line)
+      i++
+      continue
     }
 
-    // Skip standalone parameter change commands (live parameter changes)
-    // Pattern: sequenceName.gain(...) or global.compressor(...) with nothing before
-    // But keep chained ones like: kick.audio(...).play(...).gain(...)
+    // Check if this is a transport command (complete statement on one line)
+    // Match both with and without arguments: seq.start(), seq.start(args), global.start(), etc.
+    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|start|stop|mute|unmute)\s*\(/)) {
+      // Skip this line (it's a transport command)
+      i++
+      continue
+    }
+
+    // Check if this is a standalone parameter change command (not chained)
+    // But keep global settings like global.tempo(), global.beat()
+    const isGlobalSetting = trimmed.startsWith('global.')
     if (
+      !isGlobalSetting &&
       trimmed.match(
         /^[a-zA-Z_][a-zA-Z0-9_]*\.(gain|pan|length|tempo|beat|compressor|limiter|normalizer)\s*\(/,
-      )
+      ) &&
+      !trimmed.startsWith('var ') &&
+      !trimmed.includes('.audio(') &&
+      !trimmed.includes('.play(')
     ) {
-      // Check if this is standalone (no var declaration, no other methods before)
-      // If line starts with identifier.method, it's standalone
-      if (
-        !trimmed.startsWith('var ') &&
-        !trimmed.includes('.audio(') &&
-        !trimmed.includes('.play(')
-      ) {
-        return false
+      // For standalone parameter changes, we need to check if it spans multiple lines
+      let parenDepth = 0
+      let lineEnd = i
+
+      // Count opening and closing parens to find the end of the statement
+      for (let j = i; j < lines.length; j++) {
+        const currentLine = lines[j]
+        for (const char of currentLine) {
+          if (char === '(') parenDepth++
+          if (char === ')') parenDepth--
+        }
+        lineEnd = j
+        if (parenDepth === 0) break
       }
+
+      // Skip all lines of this standalone parameter change
+      i = lineEnd + 1
+      continue
     }
 
-    // Keep everything else including var declarations and chained methods
-    // InterpreterV2 will reuse existing instances if they exist
-    return true
-  })
-  return filtered.join('\n')
+    // Keep everything else (variable declarations, chained methods, multiline statements)
+    result.push(line)
+    i++
+  }
+
+  return result.join('\n')
 }
 
 async function evaluateFileInBackground(document: vscode.TextDocument) {
@@ -528,6 +802,19 @@ async function evaluateFileInBackground(document: vscode.TextDocument) {
     // Filter out all transport commands (always)
     // isInitializing = true for first evaluation (include var declarations)
     const definitionsOnly = filterDefinitionsOnly(code)
+
+    // Debug: log what we're sending in debug mode
+    if (statusBarItem?.text.includes('🐛')) {
+      outputChannel?.appendLine('📤 File evaluation:')
+      outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      outputChannel?.appendLine(definitionsOnly)
+      outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+      outputChannel?.appendLine(`📏 Length: ${definitionsOnly.length} chars`)
+      outputChannel?.appendLine(`📊 Lines: ${definitionsOnly.split('\n').length}`)
+      // Show what will actually be sent (with newline added)
+      outputChannel?.appendLine('📮 Sending to engine (with final newline):')
+      outputChannel?.appendLine(JSON.stringify(definitionsOnly + '\n'))
+    }
 
     // Send definitions to engine
     engineProcess?.stdin?.write(definitionsOnly + '\n')
@@ -565,6 +852,63 @@ async function runSelection() {
 
   const trimmedText = text.trim()
 
+  // Visual feedback: flash the executed lines (configurable)
+  const flashLines = () => {
+    const config = vscode.workspace.getConfiguration('orbitscore')
+    const flashCount = config.get<number>('flashCount', 3)
+    const flashDuration = config.get<number>('flashDuration', 150)
+    const flashColor = config.get<string>('flashColor', 'selection')
+    const flashCustomColor = config.get<string>('flashCustomColor', '#ff6b6b')
+
+    // Determine background color
+    let backgroundColor: string | vscode.ThemeColor
+    switch (flashColor) {
+      case 'error':
+        backgroundColor = new vscode.ThemeColor('editorError.foreground')
+        break
+      case 'warning':
+        backgroundColor = new vscode.ThemeColor('editorWarning.foreground')
+        break
+      case 'info':
+        backgroundColor = new vscode.ThemeColor('editorInfo.foreground')
+        break
+      case 'custom':
+        backgroundColor = flashCustomColor
+        break
+      default: // 'selection'
+        backgroundColor = new vscode.ThemeColor('editor.selectionBackground')
+        break
+    }
+
+    const isWholeLine = selection.isEmpty
+    const range = !selection.isEmpty
+      ? new vscode.Range(selection.start, selection.end)
+      : new vscode.Range(
+          editor.document.lineAt(selection.active.line).range.start,
+          editor.document.lineAt(selection.active.line).range.end,
+        )
+
+    // Create flash function
+    const createFlash = (flashIndex: number) => {
+      const decoration = vscode.window.createTextEditorDecorationType({
+        backgroundColor: backgroundColor,
+        isWholeLine: isWholeLine,
+      })
+      editor.setDecorations(decoration, [range])
+
+      setTimeout(() => {
+        decoration.dispose()
+        // Schedule next flash if not the last one
+        if (flashIndex < flashCount - 1) {
+          setTimeout(() => createFlash(flashIndex + 1), 100)
+        }
+      }, flashDuration)
+    }
+
+    // Start flashing
+    createFlash(0)
+  }
+
   // If file hasn't been evaluated yet, evaluate it first
   if (!hasEvaluatedFile) {
     await evaluateFileInBackground(editor.document)
@@ -572,8 +916,13 @@ async function runSelection() {
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
 
-  // Execute the selected command
+  // Execute the selected command (both single line and multiline)
+  // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
+  if (statusBarItem?.text.includes('🐛')) {
+    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(trimmedText)}`)
+  }
   engineProcess.stdin?.write(trimmedText + '\n')
+  flashLines()
 }
 
 // Removed unused executeCode function

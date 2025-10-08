@@ -1,0 +1,28 @@
+## 変更内容
+
+### DSL構文改善
+- **括弧内改行サポート**: play() 引数、メソッドチェーン、ネスト構造で改行を許可
+- **可読性向上**: 複数バーのパターンやメソッドチェーンを見やすく記述可能
+
+### global.run() → global.start() リネーム
+- 将来の予約語 RUN との名前衝突を回避
+- immediate execution (即時実行) と configuration (設定) を明確に分離
+
+### VSCode拡張機能の改善
+- **フラッシュ機能**: 実行行を視覚的にフラッシュ表示（回数・持続時間・色をカスタマイズ可能）
+- **ログ最適化**: 通常モードでは必要最小限のログのみ表示、デバッグモードで詳細ログ表示
+
+## テスト結果
+- ✅ 132 tests passed, 15 skipped
+- ✅ 音声出力テスト完了（run/loop/chop/nested/length）
+- ✅ VSCode拡張機能テスト完了（ライブコーディング機能正常動作）
+
+## ドキュメント更新
+- docs/INSTRUCTION_ORBITSCORE_DSL.md: 改行サポートとglobal.start()を追記
+- docs/USER_MANUAL.md: 新構文例を追加
+- docs/AUDIO_TEST_SETUP.md: テスト環境セットアップガイド作成
+- Serenaメモリ: DSL記述ルール、VSCode設定ガイド更新
+
+## 次のステップ
+- 予約語 RUN, LOOP, STOP, MUTE の実装（別PR）
+

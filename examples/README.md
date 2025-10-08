@@ -111,7 +111,7 @@
 
 ```orbitscore
 // スケジューラー起動
-global.run()
+global.start()
 
 // シーケンス開始
 kick.loop()

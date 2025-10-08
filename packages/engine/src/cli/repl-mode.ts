@@ -54,19 +54,97 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
     terminal: false,
   })
 
+  let buffer = ''
+  let emptyLineCount = 0
+
   rl.on('line', async (line) => {
-    const code = line.trim()
-    if (!code) return
+    if (process.env.ORBITSCORE_DEBUG) {
+      console.log(`[DEBUG] Received line (length=${line.length}): ${JSON.stringify(line)}`)
+      console.log(`[DEBUG] Buffer length before: ${buffer.length}`)
+    }
+
+    // If we receive an empty line, increment counter
+    if (line.trim() === '') {
+      emptyLineCount++
+      buffer += '\n'
+
+      if (process.env.ORBITSCORE_DEBUG) {
+        console.log(`[DEBUG] Empty line detected, count=${emptyLineCount}`)
+      }
+
+      // If we get 2+ consecutive empty lines, treat buffer as complete and execute
+      if (emptyLineCount >= 2 && buffer.trim()) {
+        if (process.env.ORBITSCORE_DEBUG) {
+          console.log(`[DEBUG] Forcing execution due to 2+ empty lines`)
+        }
+        await executeBuffer()
+      }
+      return
+    }
+
+    // Reset empty line counter and add line to buffer
+    emptyLineCount = 0
+    buffer += line + '\n'
+
+    if (process.env.ORBITSCORE_DEBUG) {
+      console.log(`[DEBUG] Buffer length after: ${buffer.length}`)
+      console.log(`[DEBUG] Attempting to parse buffer...`)
+    }
+
+    // Try to parse and execute the buffer
+    // If parsing fails due to incomplete input, keep buffering
+    try {
+      const ir = parseAudioDSL(buffer.trim())
+      await interpreter.execute(ir)
+      console.log('✓') // Success indicator
+      buffer = '' // Reset buffer on success
+      if (process.env.ORBITSCORE_DEBUG) {
+        console.log(`[DEBUG] Parse success, buffer cleared`)
+      }
+    } catch (error: any) {
+      if (process.env.ORBITSCORE_DEBUG) {
+        console.log(`[DEBUG] Parse error: ${error.message}`)
+      }
+      // If error is about EOF or incomplete input, keep buffering
+      if (
+        error.message.includes('EOF') ||
+        error.message.includes('Expected RPAREN') ||
+        error.message.includes('Expected comma or closing parenthesis')
+      ) {
+        if (process.env.ORBITSCORE_DEBUG) {
+          console.log(`[DEBUG] Incomplete input, continuing to buffer`)
+        }
+        // Continue buffering
+        return
+      }
+      // For other errors, report and reset buffer
+      console.error(`[ERROR] ${error.message}`)
+      buffer = ''
+      if (process.env.ORBITSCORE_DEBUG) {
+        console.log(`[DEBUG] Fatal parse error, buffer cleared`)
+      }
+    }
+  })
+
+  async function executeBuffer() {
+    const code = buffer.trim()
+    if (!code) {
+      buffer = ''
+      emptyLineCount = 0
+      return
+    }
 
     try {
-      // Parse and execute the single line command
       const ir = parseAudioDSL(code)
       await interpreter.execute(ir)
       console.log('✓') // Success indicator
     } catch (error: any) {
       console.error(`[ERROR] ${error.message}`)
     }
-  })
+
+    buffer = ''
+    emptyLineCount = 0
+  }
 
   // Keep process alive indefinitely for interactive REPL
   // This is intentional: REPL mode is designed to run continuously,

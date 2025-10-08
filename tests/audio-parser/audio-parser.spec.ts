@@ -184,24 +184,24 @@ describe('AudioParser', () => {
   })
 
   describe('Transport commands', () => {
-    it('should parse global.run()', () => {
-      const ir = parseAudioDSL('global.run()')
-      expect(ir.statements).toHaveLength(1)
-      expect(ir.statements[0]).toMatchObject({
-        type: 'global',
-        target: 'global',
-        method: 'run',
-        args: [],
-      })
-    })
-
-    it('should parse global.run.force()', () => {
-      const ir = parseAudioDSL('global.run.force()')
+    it('should parse global.start()', () => {
+      const ir = parseAudioDSL('global.start()')
       expect(ir.statements).toHaveLength(1)
       expect(ir.statements[0]).toMatchObject({
         type: 'transport',
         target: 'global',
-        command: 'run',
+        command: 'start',
+        sequences: [],
+      })
+    })
+
+    it('should parse global.start.force()', () => {
+      const ir = parseAudioDSL('global.start.force()')
+      expect(ir.statements).toHaveLength(1)
+      expect(ir.statements[0]).toMatchObject({
+        type: 'transport',
+        target: 'global',
+        command: 'start',
         force: true,
       })
     })
@@ -210,10 +210,10 @@ describe('AudioParser', () => {
       const ir = parseAudioDSL('seq1.mute()')
       expect(ir.statements).toHaveLength(1)
       expect(ir.statements[0]).toMatchObject({
-        type: 'sequence',
+        type: 'transport',
         target: 'seq1',
-        method: 'mute',
-        args: [],
+        command: 'mute',
+        sequences: [],
       })
     })
   })
@@ -502,7 +502,7 @@ describe('Integration tests', () => {
       seq1.audio("../audio/piano.wav")
       
       // Start playback
-      global.run()
+      global.start()
     `
 
     const ir = parseAudioDSL(source)

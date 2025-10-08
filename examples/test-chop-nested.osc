@@ -1,0 +1,18 @@
+// Chopテスト - ネストパターン
+// 期待される動作：(スライス1→休符)→スライス2→(スライス3→スライス2→スライス3)→スライス4
+// 1番目と3番目の位置で細分化される、3番目の中でスライス2が挟まれる
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.tick(4)
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
+
+var arp = init global.seq
+arp.length(1)
+arp.audio("arpeggio_c.wav").chop(4)
+arp.play((1, 0), 2, (3, 2, 3), 4)
+
+// ループ実行
+global.start()
+arp.loop()
