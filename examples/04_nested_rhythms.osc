@@ -4,7 +4,7 @@
 // Initialize
 var global = init GLOBAL
 global.tempo(120)
-global.beat(4)  // 4/4 time
+global.beat(4 by 4)  // 4/4 time
 global.tick(4)
 
 // === Example 1: Simple Nesting ===

@@ -55,7 +55,9 @@
   3. Verify parameter order, types, and expected values
   4. Understand what each method does (e.g., `beat()` sets time signature, NOT rhythm pattern)
 - **Common mistakes to avoid**:
-  - `beat()` is for time signature (e.g., `beat(4)` = 4/4), NOT for rhythm patterns
+  - `beat()` is for time signature and **MUST use "n by m" notation** (e.g., `beat(4 by 4)` = 4/4)
+  - **NEVER use single argument** like `beat(4)` - this will cause an error
+  - This notation is essential for polymeter support where different time signatures create independent bar lengths
   - Rhythm patterns are defined in `play()` (e.g., `play(1, 0, 0, 0)`)
   - Don't invent new syntax or methods without checking specification
 - **Purpose**: Prevent syntax errors, save time, and maintain consistency with specification
