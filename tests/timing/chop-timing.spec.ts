@@ -140,7 +140,7 @@ describe('Chop Timing', () => {
       // Setup
       global.tempo(60)
       global.beat(4, 4)
-      await global.run()
+      await global.start()
 
       sequence.beat(4, 4).length(1)
       sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))
@@ -195,7 +195,7 @@ describe('Chop Timing', () => {
       // Setup
       global.tempo(60)
       global.beat(4, 4)
-      await global.run()
+      await global.start()
 
       sequence.beat(4, 4).length(1)
       sequence.audio(path.join(process.cwd(), 'test-assets/audio/arpeggio_c.wav'))

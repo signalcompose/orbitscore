@@ -65,7 +65,7 @@
 
 - **Audio File Playback**: Load and slice audio files (.wav, .aiff, .mp3, .mp4)
 - **Time-Stretching**: Automatic tempo matching with pitch preservation
-- **Transport Commands**: `global.run()`, `global.loop()`, `seq.mute()`, etc.
+- **Transport Commands**: `global.start()`, `global.loop()`, `seq.mute()`, etc.
 - **Editor Integration**: Execute commands with Cmd+Enter
 
 ### Core Features

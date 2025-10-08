@@ -136,6 +136,8 @@ export class StatementParser {
     this.pos = targetResult.newPos
     const target = targetResult.token.value
 
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+
     if (ParserUtils.current(this.tokens, this.pos).type !== 'DOT') {
       // Identifier without method call (invalid syntax, skip it)
       return { statement: null, newPos: this.pos }
@@ -143,6 +145,7 @@ export class StatementParser {
 
     const dotResult = ParserUtils.advance(this.tokens, this.pos)
     this.pos = dotResult.newPos
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     const methodResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = methodResult.newPos
     const method = methodResult.token.value
@@ -175,6 +178,8 @@ export class StatementParser {
     this.pos = forceDotResult.newPos
     const forceResult = ParserUtils.advance(this.tokens, this.pos)
     this.pos = forceResult.newPos
+
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
 
     // This is a transport command with force
     if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
@@ -215,6 +220,7 @@ export class StatementParser {
     this.pos = argsResult.newPos
 
     // Check for method chaining (e.g., .audio(...).chop(...))
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     const chain = this.parseMethodChain()
 
     const result: any = {
@@ -237,14 +243,21 @@ export class StatementParser {
   private parseMethodChain(): MethodChain[] {
     const chain: MethodChain[] = []
 
-    while (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
+    // Allow newlines between chained methods
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+    let current = ParserUtils.current(this.tokens, this.pos)
+
+    while (current.type === 'DOT') {
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       const chainDotResult = ParserUtils.advance(this.tokens, this.pos)
       this.pos = chainDotResult.newPos
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       const chainMethodResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
       this.pos = chainMethodResult.newPos
       const chainMethod = chainMethodResult.token.value
 
       // Check if chained method has arguments
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
         const chainArgsResult = this.parseArguments()
         this.pos = chainArgsResult.newPos
@@ -252,6 +265,10 @@ export class StatementParser {
       } else {
         chain.push({ method: chainMethod, args: [] })
       }
+
+      // Update current for next iteration
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      current = ParserUtils.current(this.tokens, this.pos)
     }
 
     return chain
@@ -286,14 +303,20 @@ export class StatementParser {
       ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
       !ParserUtils.isEOF(this.tokens, this.pos)
     ) {
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'RPAREN') {
+        break
+      }
       const expressionParser = new ExpressionParser(this.tokens, this.pos)
       const argResult = expressionParser.parseArgument()
       this.pos = argResult.newPos
       args.push(argResult.value)
 
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
         const commaResult = ParserUtils.advance(this.tokens, this.pos)
         this.pos = commaResult.newPos
+        this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       } else if (ParserUtils.current(this.tokens, this.pos).type === 'RPAREN') {
         // End of arguments
         break
@@ -306,6 +329,7 @@ export class StatementParser {
       }
     }
 
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     const rparenResult = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
     this.pos = rparenResult.newPos
     return { args, newPos: this.pos }

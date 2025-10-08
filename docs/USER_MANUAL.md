@@ -107,7 +107,7 @@ kick.audio("kick.wav").chop(1)
 kick.play(1, 0, 0, 0)
 
 // 実行
-global.run()
+global.start()
 kick.run()
 ```
 
@@ -316,7 +316,7 @@ arp.play(1, 0, 2, 0, 3, 0, 4, 0)
 arp.play((1, 0), 2, (3, 2, 3), 4)
 // → 聞こえる順: 1(速い)→2→3(速い)→2(速い)→3(速い)→4
 
-global.run()
+global.start()
 arp.loop()
 ```
 
@@ -330,10 +330,10 @@ arp.loop()
 #### スケジューラーの起動
 
 ```orbitscore
-global.run()   // スケジューラーを起動（必須）
+global.start()   // スケジューラーを起動（必須）
 ```
 
-**重要**: シーケンスを実行する前に、必ず`global.run()`でスケジューラーを起動する必要があります。
+**重要**: シーケンスを実行する前に、必ず`global.start()`でスケジューラーを起動する必要があります。
 
 #### シーケンスの実行
 
@@ -413,13 +413,13 @@ seq.play(1, 0, 0, 0)   // リズムパターン
 
 ❌ **間違い:**
 ```orbitscore
-kick.run()   // global.run()を呼んでいない
+kick.run()   // global.start()を呼んでいない
 ```
 
 ✅ **正しい:**
 ```orbitscore
-global.run()   // スケジューラー起動（必須）
-kick.run()     // シーケンス実行
+global.start()   // スケジューラー起動（必須）
+kick.run()       // シーケンス実行
 ```
 
 ### 3. 音声ファイルパスの問題
@@ -464,7 +464,7 @@ seq.play(1, 0, 0, 0)  // 数値で指定
 
 1. **スケジューラーが起動していない**
    ```orbitscore
-   global.run()  // これを追加
+   global.start()  // これを追加
    kick.run()
    ```
 

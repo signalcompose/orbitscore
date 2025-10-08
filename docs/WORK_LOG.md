@@ -668,9 +668,9 @@ Actually played: snare at 47841ms (drift: 500ms) ← Wrong!
 **Fix**: 
 1. Removed auto-start from `scheduleEvent()` and `scheduleSliceEvent()`
 2. Added scheduler running checks to `sequence.run()` and `sequence.loop()`
-3. Display warning: `⚠️ kick.loop() - scheduler not running. Use global.run() first.`
+3. Display warning: `⚠️ kick.loop() - scheduler not running. Use global.start() first.`
 
-**Result**: ✅ Users must explicitly call `global.run()` before sequences will play  
+**Result**: ✅ Users must explicitly call `global.start()` before sequences will play  
 **Files**: `packages/engine/src/audio/advanced-player.ts`, `packages/engine/src/core/sequence.ts`
 
 #### Issue 3: Live Sequence Addition Required Restart
@@ -709,9 +709,9 @@ Actually played: snare at 47841ms (drift: 500ms) ← Wrong!
 - Parallel playback: Perfect synchronization
 
 **Workflow Verification**:
-- ✅ Engine start without `global.run()` → no audio
-- ✅ `kick.loop()` without `global.run()` → warning displayed
-- ✅ `global.run()` → scheduler starts
+- ✅ Engine start without `global.start()` → no audio
+- ✅ `kick.loop()` without `global.start()` → warning displayed
+- ✅ `global.start()` → scheduler starts
 - ✅ `kick.loop()` → kick plays
 - ✅ `snare.loop()` → snare added, synced with kick
 - ✅ Add hihat to file and save → hihat available immediately

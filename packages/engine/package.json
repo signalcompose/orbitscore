@@ -7,7 +7,7 @@
     "orbitscore": "./dist/cli-audio.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/sync-dist.js",
     "dev": "ts-node src/index.ts",
     "test": "npx vitest run --dir ../../tests --globals --pool=forks --poolOptions.forks.singleFork=true",
     "cli": "cd ../.. && node packages/engine/dist/cli-audio.js"

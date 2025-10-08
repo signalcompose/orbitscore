@@ -34,7 +34,12 @@ export class BufferManager {
     this.bufferCache.set(filepath, bufferInfo)
     this.bufferDurations.set(bufnum, duration)
 
-    console.log(`📦 Loaded buffer ${bufnum} (${path.basename(filepath)}): ${duration.toFixed(3)}s`)
+    // Only log in debug mode
+    if (process.env.ORBITSCORE_DEBUG) {
+      console.log(
+        `📦 Loaded buffer ${bufnum} (${path.basename(filepath)}): ${duration.toFixed(3)}s`,
+      )
+    }
 
     return bufferInfo
   }
@@ -46,7 +51,11 @@ export class BufferManager {
   private getAudioFileDuration(filepath: string): number {
     try {
       // Use execFileSync with separate arguments to prevent command injection
-      const output = execFileSync('soxi', ['-D', filepath], { encoding: 'utf8' })
+      // Suppress soxi warnings by redirecting stderr to /dev/null
+      const output = execFileSync('soxi', ['-D', filepath], {
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'ignore'], // Ignore stderr to suppress warnings
+      })
       const duration = parseFloat(output.trim())
 
       if (isNaN(duration) || duration <= 0) {

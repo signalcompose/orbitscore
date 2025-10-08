@@ -149,7 +149,11 @@ export async function processTransportStatement(
   // Check if it's a global
   const global = state.globals.get(target)
   if (global) {
-    await callMethod(global, statement.command, [])
+    const args = statement.sequences ?? []
+    if (statement.command === 'start' && args.length > 0) {
+      console.warn('global.start() ignores sequence arguments; starting global transport only')
+    }
+    await callMethod(global, statement.command, statement.command === 'start' ? [] : args)
     return
   }
 

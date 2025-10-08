@@ -137,4 +137,88 @@ seq.run()
     expect(result[2].chain).toHaveLength(1)
     expect(result[2].chain[0].method).toBe('length')
   })
+
+  it('should allow multiline arguments inside parentheses', () => {
+    const code = `
+seq.play(
+  1,
+  (2, 3),
+  4,
+)
+`
+
+    const tokenizer = new AudioTokenizer(code)
+    const tokens = tokenizer.tokenize()
+    const parser = new AudioParser(tokens)
+    const result = parser.parse().statements
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual({
+      type: 'sequence',
+      target: 'seq',
+      method: 'play',
+      args: [
+        1,
+        {
+          type: 'nested',
+          elements: [2, 3],
+        },
+        4,
+      ],
+    })
+  })
+
+  it('should allow multiline method chains with nested play', () => {
+    const code = `
+seq.audio("test.wav")
+  .chop(4)
+  .play(
+    (1, 0),
+    2,
+    (
+      3,
+      (4, 5),
+    ),
+  )
+`
+
+    const tokenizer = new AudioTokenizer(code)
+    const tokens = tokenizer.tokenize()
+    const parser = new AudioParser(tokens)
+    const result = parser.parse().statements
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual({
+      type: 'sequence',
+      target: 'seq',
+      method: 'audio',
+      args: ['test.wav'],
+      chain: [
+        {
+          method: 'chop',
+          args: [4],
+        },
+        {
+          method: 'play',
+          args: [
+            {
+              type: 'nested',
+              elements: [1, 0],
+            },
+            2,
+            {
+              type: 'nested',
+              elements: [
+                3,
+                {
+                  type: 'nested',
+                  elements: [4, 5],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+  })
 })

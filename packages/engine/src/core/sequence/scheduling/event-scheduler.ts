@@ -63,14 +63,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
     patternDuration,
   } = options
 
-  console.log(
-    `🎬 scheduleEvents called for ${sequenceName}: audioFile=${!!audioFilePath}, events=${timedEvents?.length || 0}, baseTime=${baseTime}`,
-  )
-
   if (!audioFilePath || !timedEvents || timedEvents.length === 0) {
-    console.log(
-      `⚠️  Early return: audioFilePath=${!!audioFilePath}, timedEvents=${!!timedEvents}, length=${timedEvents?.length}`,
-    )
     return
   }
 
@@ -80,15 +73,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
   // Schedule events for current iteration
   const loopOffset = loopIteration * patternDuration
 
-  console.log(
-    `📋 Processing ${timedEvents.length} events:`,
-    timedEvents.map((e) => `slice=${e.sliceNumber} time=${e.startTime}`).join(', '),
-  )
-
   for (const event of timedEvents) {
-    console.log(
-      `🎯 Event: slice=${event.sliceNumber}, startTime=${event.startTime}, baseTime=${baseTime}`,
-    )
     if (event.sliceNumber > 0) {
       // 0 is silence
       const startTimeMs = baseTime + event.startTime + loopOffset

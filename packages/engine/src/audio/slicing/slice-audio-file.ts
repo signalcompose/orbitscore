@@ -63,7 +63,9 @@ export function sliceAudioFile(
 
     try {
       fileManager.writeSliceFile(sliceFilepath, buffer)
-      console.log(`✅ Successfully created slice ${sliceNumber}/${divisions}: ${sliceFilepath}`)
+      if (process.env.ORBITSCORE_DEBUG) {
+        console.log(`✅ Successfully created slice ${sliceNumber}/${divisions}: ${sliceFilepath}`)
+      }
     } catch (error) {
       console.error(`❌ Failed to create slice ${sliceNumber}/${divisions}: ${error}`)
       continue
@@ -80,9 +82,11 @@ export function sliceAudioFile(
       duration,
     })
 
-    console.log(
-      `Created slice ${sliceNumber}/${divisions}: ${fileManager.generateSliceFilename(filepath, sliceNumber, divisions)} (${Math.round(duration)}ms)`,
-    )
+    if (process.env.ORBITSCORE_DEBUG) {
+      console.log(
+        `Created slice ${sliceNumber}/${divisions}: ${fileManager.generateSliceFilename(filepath, sliceNumber, divisions)} (${Math.round(duration)}ms)`,
+      )
+    }
   }
 
   // Cache the result

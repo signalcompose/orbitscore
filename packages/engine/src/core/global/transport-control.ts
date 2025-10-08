@@ -16,7 +16,7 @@ export class TransportControl {
   }
 
   // Transport control methods
-  run(): this {
+  start(): this {
     // If already running, do nothing (idempotent)
     if (this._isRunning) {
       return this

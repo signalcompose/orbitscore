@@ -317,9 +317,12 @@ export class Sequence {
   }
 
   stop(): this {
+    const sequenceName = this.stateManager.getName()
+    const wasLooping = this.stateManager.isLooping()
+
     // Clear scheduled events from scheduler
     const scheduler = this.global.getScheduler()
-    scheduler.clearSequenceEvents(this.stateManager.getName())
+    scheduler.clearSequenceEvents(sequenceName)
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
@@ -332,6 +335,12 @@ export class Sequence {
     // Clear state
     this.stateManager.setPlaying(false)
     this.stateManager.setLooping(false)
+
+    // Log stop message for loop sequences
+    if (wasLooping) {
+      console.log(`⏹ ${sequenceName} (loop stopped)`)
+    }
+
     return this
   }
 
