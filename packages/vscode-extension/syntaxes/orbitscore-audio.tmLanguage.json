@@ -79,7 +79,7 @@
         },
         {
           "name": "support.function.sequence.orbitscore",
-          "match": "\\b(audio|chop|play|fixpitch|time|reverse)(?=\\()"
+          "match": "\\b(audio|chop|play)(?=\\()"
         },
         {
           "name": "support.function.transport.orbitscore",
@@ -87,7 +87,7 @@
         },
         {
           "name": "entity.name.function.orbitscore",
-          "match": "\\.(tempo|tick|beat|key|audio|chop|play|fixpitch|time)(?=\\()"
+          "match": "\\.(tempo|tick|beat|key|audio|chop|play)(?=\\()"
         }
       ]
     },
@@ -174,7 +174,7 @@
         },
         {
           "name": "meta.play.modifier.orbitscore",
-          "match": "(\\d+)\\.(chop|time|fixpitch)\\((\\d+(?:\\.\\d+)?)\\)",
+          "match": "(\\d+)\\.(chop)\\((\\d+(?:\\.\\d+)?)\\)",
           "captures": {
             "1": {
               "name": "constant.numeric.slice.orbitscore"
