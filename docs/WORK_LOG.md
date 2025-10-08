@@ -15,6 +15,73 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.23 Multiline Syntax Support and VSCode Extension Improvements (January 8, 2025)
+
+**Date**: January 8, 2025
+**Status**: ✅ COMPLETE
+**Branch**: feature/audio-test-setup
+**Commits**: 
+- `19aadf0`: fix: Improve REPL buffering to support multiline statements
+
+**Work Content**: DSL構文の改善（改行サポート）とVSCode拡張機能のREPLモード改善
+
+#### 実施内容
+
+**1. REPLモードのバッファリング改善**
+- **問題**: VSCode拡張から複数行のコード（改行を含む`play()`等）を送信すると、REPLモードが各行を個別に処理してパーサーエラーが発生
+- **解決策**:
+  - `repl-mode.ts`にバッファリングロジックを実装
+  - 不完全な入力（EOF、Expected RPAREN、Expected comma or closing parenthesis）を検出して継続バッファリング
+  - 完全な文が揃ったら実行
+  - 連続2行の空行でバッファを強制実行（フォールバック）
+- **修正ファイル**: `packages/engine/src/cli/repl-mode.ts`
+
+**2. VSCode拡張のフィルタリング改善**
+- **問題**: `global.start()`がトランスポートコマンドとして認識されず送信される
+- **解決策**: 
+  - `filterDefinitionsOnly()`で`start`をトランスポートコマンドリストに追加
+  - `global.*`設定メソッド（`tempo`, `beat`, `tick`, `audioPath`）は保持
+- **修正ファイル**: `packages/vscode-extension/src/extension.ts`
+
+**3. デバッグログの強化**
+- REPLモードに詳細なデバッグログを追加
+  - 各行の受信内容
+  - バッファの状態
+  - パースエラーの詳細
+  - バッファリング継続/実行の判断
+- `ORBITSCORE_DEBUG`環境変数で制御
+
+**4. テスト用サンプルファイル作成**
+- `examples/test-multiline-syntax.osc`: 基本的な改行テスト
+- `examples/test-multiline-nested.osc`: ネストパターンの改行テスト
+- `examples/test-vscode-multiline.osc`: VSCode拡張機能テスト用
+- `examples/debug-parser.osc`: パーサーデバッグ用
+
+#### テスト結果
+
+**音声出力テスト**: ✅ PASS
+- CLI実行: ✅ 正常動作
+- VSCode拡張（Debug Mode）: ✅ 正常動作
+- 改行を含む`play()`パターン: ✅ 正常パース・実行
+- `global.start()`リネーム: ✅ 正常動作
+- C-D-E-Fアルペジオ: ✅ 正しい音程で再生
+
+**Vitestテスト**: ✅ 132 passed | 15 skipped (147)
+
+#### 学んだ教訓
+
+1. **REPLモードの制限**: `readline`の`line`イベントは各行を個別に処理するため、複数行の文には明示的なバッファリングが必要
+2. **パーサーエラーメッセージの活用**: エラーメッセージ（EOF、Expected RPAREN等）を利用して、入力が不完全かどうかを判断できる
+3. **フィルタリングの粒度**: トランスポートコマンドと設定メソッドを区別する必要がある
+
+#### 次のステップ
+
+- 予約キーワード（`RUN`, `LOOP`, `STOP`, `MUTE`）の実装（保留中）
+- ドキュメント・Serenaメモリの最終更新
+- PR作成
+
+---
+
 ### 6.22 Phase 7: Final Cleanup - Remove Unused Code and Improve Type Safety (January 7, 2025)
 
 **Date**: January 7, 2025
