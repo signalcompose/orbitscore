@@ -4,7 +4,7 @@
 // グローバル設定
 var global = init GLOBAL
 global.tempo(120)
-global.beat(4)        // 4/4拍子
+global.beat(4 by 4)        // 4/4拍子
 global.tick(4)
 
 // キックドラムシーケンス

@@ -735,7 +735,8 @@ function filterDefinitionsOnly(code: string): string {
     }
 
     // Check if this is a transport command (complete statement on one line)
-    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|run|start|stop|mute|unmute)\s*\(\s*\)$/)) {
+    // Match both with and without arguments: seq.start(), seq.start(args), global.start(), etc.
+    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|start|stop|mute|unmute)\s*\(/)) {
       // Skip this line (it's a transport command)
       i++
       continue

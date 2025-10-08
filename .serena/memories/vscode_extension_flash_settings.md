@@ -14,7 +14,7 @@ OrbitScore VSCode拡張機能に、コード実行時の視覚的フィードバ
   "properties": {
     "orbitscore.flashCount": {
       "type": "number",
-      "default": 2,
+      "default": 3,
       "minimum": 1,
       "maximum": 5,
       "description": "Number of times to flash executed lines",
@@ -71,7 +71,7 @@ OrbitScore VSCode拡張機能に、コード実行時の視覚的フィードバ
 // Visual feedback: flash the executed lines (configurable)
 const flashLines = () => {
   const config = vscode.workspace.getConfiguration('orbitscore')
-  const flashCount = config.get<number>('flashCount', 2)
+  const flashCount = config.get<number>('flashCount', 3)
   const flashDuration = config.get<number>('flashDuration', 150)
   const flashColor = config.get<string>('flashColor', 'selection')
   const flashCustomColor = config.get<string>('flashCustomColor', '#ff6b6b')

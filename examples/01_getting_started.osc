@@ -5,7 +5,7 @@
 // Initialize and configure global transport
 var global = init GLOBAL
 global.tempo(120)
-global.beat(4)
+global.beat(4 by 4)
 global.tick(4)
 
 // === Section 2: Your First Sequence ===
