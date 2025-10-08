@@ -12,5 +12,5 @@ kick.audio("kick.wav").chop(1)
 kick.play(1, 0, 0, 0)
 
 // 1回だけ実行（ループしない）
-global.run()
+global.start()
 kick.run()

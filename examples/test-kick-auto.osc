@@ -15,5 +15,5 @@ kick.audio("kick.wav").chop(1)  // audioPathを使用して相対パス
 kick.play(1, 0, 0, 0)
 
 // 自動実行（スケジューラー起動が必要）
-global.run()
+global.start()
 kick.loop()  // ループ実行
