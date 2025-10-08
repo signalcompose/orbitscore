@@ -188,10 +188,10 @@ describe('AudioParser', () => {
       const ir = parseAudioDSL('global.start()')
       expect(ir.statements).toHaveLength(1)
       expect(ir.statements[0]).toMatchObject({
-        type: 'global',
+        type: 'transport',
         target: 'global',
-        method: 'start',
-        args: [],
+        command: 'start',
+        sequences: [],
       })
     })
 
@@ -210,10 +210,10 @@ describe('AudioParser', () => {
       const ir = parseAudioDSL('seq1.mute()')
       expect(ir.statements).toHaveLength(1)
       expect(ir.statements[0]).toMatchObject({
-        type: 'sequence',
+        type: 'transport',
         target: 'seq1',
-        method: 'mute',
-        args: [],
+        command: 'mute',
+        sequences: [],
       })
     })
   })

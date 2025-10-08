@@ -219,6 +219,20 @@ export class StatementParser {
     const argsResult = this.parseArguments()
     this.pos = argsResult.newPos
 
+    // Check if this is a transport command
+    const transportCommands = ['start', 'stop', 'loop', 'mute', 'unmute']
+    if (transportCommands.includes(method)) {
+      return {
+        statement: {
+          type: 'transport',
+          target,
+          command: method,
+          sequences: argsResult.args,
+        },
+        newPos: this.pos,
+      }
+    }
+
     // Check for method chaining (e.g., .audio(...).chop(...))
     this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     const chain = this.parseMethodChain()
