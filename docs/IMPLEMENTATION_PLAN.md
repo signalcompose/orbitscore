@@ -109,8 +109,8 @@ seq1.play(1).fixpitch(0)
 
 #### A1.6 Transport Command Parsing
 ```js
-global.run()
-global.run.force()
+global.start()
+global.start.force()
 global.loop(seq1, seq2)
 seq1.mute()
 ```
@@ -162,7 +162,7 @@ seq1.mute()
 
 #### A3.1 Global Transport
 - [x] run() - start transport
-- [ ] run.force() - immediate start (not implemented)
+- [ ] start.force() - immediate start (not implemented)
 - [x] loop() - loop mode
 - [ ] loop.force() - immediate loop (not implemented)
 - [x] stop() - stop transport

@@ -210,7 +210,7 @@ describe.skip('End-to-End Tests with Real Audio', () => {
         seq.audio("test-assets/audio/chord_c_major.wav").chop(8)
         seq.play(1, 2, 3, 4, 5, 6, 7, 8)
         
-        global.run()
+        global.start()
         seq.mute()
         seq.unmute()
         seq.run()

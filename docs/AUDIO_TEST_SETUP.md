@@ -206,7 +206,7 @@ let kick = new Sequence("kick")
 // 2. 保存（Cmd+S）- 定義が評価される
 
 // 3. 実行コマンドを選択して実行（Cmd+Enter）
-global.run()
+global.start()
 kick.loop()
 
 // 4. パラメータを変更して再度Cmd+Enter
@@ -296,7 +296,7 @@ let kick = new Sequence("kick")
   .chop(1)
   .play("1")
 
-global.run()
+global.start()
 kick.loop()
 ```
 
@@ -318,7 +318,7 @@ let arp = new Sequence("arp")
   .chop(4)
   .play("1 2 3 4")
 
-global.run()
+global.start()
 arp.loop()
 ```
 
@@ -341,7 +341,7 @@ let kick = new Sequence("kick")
   .gain(-6)   // -6 dB（少し小さく）
   .pan(-50)   // 左寄り
 
-global.run()
+global.start()
 kick.loop()
 
 // リアルタイムで変更

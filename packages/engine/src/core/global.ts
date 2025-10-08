@@ -129,8 +129,8 @@ export class Global {
   }
 
   // Transport control
-  run(): this {
-    this.transportControl.run()
+  start(): this {
+    this.transportControl.start()
     this.effectsManager.setRunningState(true)
     return this
   }

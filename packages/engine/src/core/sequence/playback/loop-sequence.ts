@@ -51,6 +51,8 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // Clear old events for this sequence first
   clearSequenceEventsFn(sequenceName)
 
+  console.log(`🔄 ${sequenceName} (loop started)`)
+
   // Calculate pattern duration
   const patternDuration = getPatternDurationFn()
 

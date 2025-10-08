@@ -65,6 +65,13 @@ export class EventScheduler {
     // sliceIndex is 1-based from DSL, convert to 0-based
     const startPos = (sliceIndex - 1) * sliceDuration
 
+    // Debug log for slice positioning (only in debug mode)
+    if (process.env.ORBITSCORE_DEBUG) {
+      console.log(
+        `🔍 Slice debug: filepath=${filepath}, duration=${duration}, sliceIndex=${sliceIndex}, totalSlices=${totalSlices}, sliceDuration=${sliceDuration}, startPos=${startPos}`,
+      )
+    }
+
     // Calculate playback rate to fit slice into event duration
     // rate = actual slice duration / desired event duration
     // If eventDurationMs is undefined or 0, use natural rate (1.0)
@@ -160,7 +167,7 @@ export class EventScheduler {
     const afterCount = this.scheduledPlays.length
     const cleared = beforeCount - afterCount
     if (cleared > 0) {
-      console.log(`🗑️  Cleared ${cleared} events for ${sequenceName} (${afterCount} remaining)`)
+      console.log(`⏹ ${sequenceName} (stopped)`)
     }
     this.sequenceEvents.delete(sequenceName)
   }
