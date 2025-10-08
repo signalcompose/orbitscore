@@ -1783,3 +1783,89 @@ npm test
 
 ---
 
+
+
+---
+
+### 2025-01-08: Audio Output Testing & Bug Fixes
+
+**Date**: January 8, 2025  
+**Branch**: `feature/audio-test-setup`  
+**Status**: ✅ Testing Complete
+
+#### Goal
+音声出力機能のテストとVSCode拡張機能のライブコーディングテスト準備
+
+#### Critical Bug Fixes
+
+1. **`beat()` denominator default value** (🔴 Critical)
+   - **Problem**: `global.beat(4)` → `denominator` が `undefined` → タイミング計算が `NaN`
+   - **Root Cause**: `beat(numerator, denominator)` に第2引数のデフォルト値がなかった
+   - **Solution**: `beat(numerator: number, denominator: number = 4)` にデフォルト値追加
+   - **Impact**: これがないと音が一切鳴らない（全てのタイミング計算が破綻）
+   - **Files**: `packages/engine/src/core/global.ts`, `packages/engine/src/core/global/tempo-manager.ts`
+
+2. **`run()` sequence scheduling timing**
+   - **Problem**: イベントが過去の時間にスケジュールされ、即座にクリアされる
+   - **Solution**: `run-sequence.ts` で 100ms バッファを追加
+   - **Files**: `packages/engine/src/core/sequence/playback/run-sequence.ts`
+
+#### Audio Output Tests
+
+✅ **All tests passed:**
+- Simple playback: `play(1, 0, 0, 0)` with `run()` 
+- Loop test: `play(1, 0, 0, 0)` with `loop()`
+- Chop test: `play(1, 2, 3, 4)` with `chop(4)`
+- Silence test: `play(1, 0, 2, 0, 3, 0, 4, 0)`
+- Nested pattern: `play((1, 0), 2, (3, 2, 3), 4)`
+- Length test: `length(2)` - rate調整が正しく動作
+
+#### Test Coverage
+
+**Created**: `tests/audio/rate-calculation.spec.ts`
+- 15 tests covering rate calculation
+- Tempo variations (120, 140, 90 BPM)
+- Different chop divisions (2, 4, 8)
+- Length variations (1, 2, 4 bars)
+- Nested patterns and edge cases
+- **Result**: All 15 tests passing ✅
+
+#### Key Findings
+
+**Rate Calculation Formula:**
+```
+rate = (sliceDuration * 1000) / eventDurationMs
+```
+
+At 120 BPM, 4/4, `length(1)`:
+- 1 bar = 2000ms, 4 events = 500ms each
+- For 1s audio with `chop(4)`: sliceDuration = 250ms
+- rate = 250 / 500 = 0.5
+
+With `length(2)`:
+- 2 bars = 4000ms, 4 events = 1000ms each  
+- rate = 250 / 1000 = 0.25 (1 octave lower)
+
+#### Example Files Created
+
+- `examples/test-simple-run.osc` - Simple kick drum
+- `examples/test-loop.osc` - Looping kick
+- `examples/test-chop.osc` - Arpeggio chop
+- `examples/test-chop-sparse.osc` - With silences
+- `examples/test-chop-nested.osc` - Nested patterns
+- `examples/test-length.osc` - Length(2) test
+
+#### Documentation Updates
+
+- Updated `docs/USER_MANUAL.md`:
+  - Added `length()` and pitch relationship
+  - Detailed nested pattern explanation
+  - Improved `beat()` usage examples
+- Updated `docs/WORK_LOG.md`: This entry
+
+#### Next Steps
+
+- [ ] VSCode extension live coding test
+- [ ] Additional feature tests (gain, pan, multiple sequences)
+- [ ] Commit changes
+
