@@ -150,16 +150,65 @@ export async function processTransportStatement(
   const global = state.globals.get(target)
   if (global) {
     const args = statement.sequences ?? []
-    if (statement.command === 'start' && args.length > 0) {
-      console.warn('global.start() ignores sequence arguments; starting global transport only')
+
+    // Define expected arguments for each transport command
+    let processedArgs: any[] = []
+
+    switch (statement.command) {
+      case 'start':
+        // start() takes no arguments
+        if (args.length > 0) {
+          console.warn('global.start() ignores sequence arguments; starting global transport only')
+        }
+        processedArgs = []
+        break
+
+      case 'loop':
+        // loop() takes no arguments
+        if (args.length > 0) {
+          console.warn('global.loop() ignores sequence arguments; looping global transport only')
+        }
+        processedArgs = []
+        break
+
+      case 'stop':
+        // stop() takes no arguments
+        if (args.length > 0) {
+          console.warn('global.stop() ignores sequence arguments; stopping global transport only')
+        }
+        processedArgs = []
+        break
+
+      case 'mute':
+      case 'unmute':
+        // mute/unmute() methods don't exist on Global
+        console.warn(
+          `global.${statement.command}() is not supported; use sequence.${statement.command}() instead`,
+        )
+        return
+
+      default:
+        // For unknown commands, warn and don't call
+        console.warn(`Unknown transport command: ${statement.command}`)
+        return
     }
-    await callMethod(global, statement.command, statement.command === 'start' ? [] : args)
+
+    await callMethod(global, statement.command, processedArgs)
     return
   }
 
   // Check if it's a sequence
   const sequence = state.sequences.get(target)
   if (sequence) {
+    const args = statement.sequences ?? []
+
+    // All sequence transport commands take no arguments
+    if (args.length > 0) {
+      console.warn(
+        `${target}.${statement.command}() ignores arguments; ${statement.command} affects only this sequence`,
+      )
+    }
+
     await callMethod(sequence, statement.command, [])
     return
   }
