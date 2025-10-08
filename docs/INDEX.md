@@ -37,6 +37,12 @@
    - Testing requirements
    - Completion criteria
 
+7. **[BEAT_METER_SPECIFICATION.md](./BEAT_METER_SPECIFICATION.md)** 🎼
+   - Beat/Meter specification and future plans
+   - Polymeter feature details
+   - Tempo/BPM terminology
+   - Phase 2 validation plans
+
 ### Quick Links
 
 - **User Guide**: [../README.md](../README.md) - Start here for usage

@@ -15,6 +15,71 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.24 Beat/Meter Specification Documentation (January 8, 2025)
+
+**Date**: January 8, 2025
+**Status**: ✅ COMPLETE
+**Branch**: feature/audio-test-setup
+**Commits**: 
+- (pending): docs: add beat/meter specification and future validation plans
+
+**Work Content**: 拍子記号の仕様を明文化し、将来的な改善計画をドキュメント化
+
+#### 背景
+`beat(n1 by n2)`構文の分母（n2）に関する仕様が曖昧だった。音楽理論上の標準的な拍子記号に準拠するため、将来的な制約を明確化する必要があった。
+
+#### 実施内容
+
+**1. 新規ドキュメント作成**
+- **`docs/BEAT_METER_SPECIFICATION.md`**を作成
+  - 現在の実装（Phase 1）: 分母に制限なし
+  - 将来の改善計画（Phase 2）: 2のべき乗（1, 2, 4, 8, 16, 32, 64, 128）に制限
+  - 小節長の計算式と具体例
+  - ポリメーター機能の詳細説明
+  - `tempo()` → `bpm()`への用語改善案
+
+**2. 音楽理論的背景**
+- **標準的な拍子記号**: 4/4, 3/4, 6/8, 7/8, 9/8, 5/4など（分母は2のべき乗）
+- **非標準的な拍子**: 8/9, 5/7, 4/3など（音楽理論上解釈が困難）
+- **理由**: 分母は拍の基準単位を示し、通常は2のべき乗（全音符を基準とした分割）
+
+**3. 小節長の計算例**
+```
+tempo(60) beat(4 by 4) → 1小節 = 4000ms（1拍=1秒）
+tempo(60) beat(7 by 8) → 1小節 = 3500ms（8分音符=500ms）
+tempo(120) beat(5 by 4) → 1小節 = 2500ms
+```
+
+**4. ポリメーター機能**
+- グローバルとシーケンスで異なる拍子を設定可能
+- 例: グローバル4/4（4秒）、シーケンス5/4（5秒）→ 位相がずれる
+- 20秒後に再び同期（最小公倍数）
+
+**5. 関連ドキュメント更新**
+- `docs/IMPROVEMENT_RECOMMENDATIONS.md`: Phase 2の改善項目として追加
+- `docs/INDEX.md`: 新規ドキュメントへのリンク追加
+- **Serenaメモリ**: `beat_meter_specification`メモリを作成
+
+#### 将来の実装計画（Phase 2）
+1. パーサーで分母を検証（2のべき乗のみ許可）
+2. 分母が不正な場合のエラーメッセージ
+3. テストケース追加（正常系・異常系）
+4. `bpm()`メソッドの追加（`tempo()`のエイリアス）
+
+#### 現時点の方針
+- **Phase 1**: 厳密な制約を課さず、柔軟性を優先
+- **理由**: ポリメーター機能の動作を優先、実験的な使用を妨げない
+- **Phase 2以降**: 段階的に厳密化を進める
+
+#### 成果
+- ✅ 拍子記号の仕様を明文化
+- ✅ 音楽理論的背景を整理
+- ✅ 将来的な改善計画を明確化
+- ✅ ポリメーター機能の数学的説明を詳細化
+- ✅ `tempo` vs `bpm`の用語改善案を提示
+
+---
+
 ### 6.23 Multiline Syntax Support and VSCode Extension Improvements (January 8, 2025)
 
 **Date**: January 8, 2025
