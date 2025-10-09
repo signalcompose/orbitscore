@@ -54,8 +54,10 @@ export type Statement = GlobalStatement | SequenceStatement | TransportStatement
 
 export type GlobalStatement = {
   type: 'global'
+  target: string
   method: string
   args: any[]
+  chain?: MethodChain[]
 }
 
 export type SequenceStatement = {
