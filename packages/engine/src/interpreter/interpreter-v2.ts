@@ -29,6 +29,10 @@ export class InterpreterV2 {
       sequences: new Map(),
       currentGlobal: undefined,
       isBooted: false,
+      // Initialize unidirectional toggle groups
+      runGroup: new Set(),
+      loopGroup: new Set(),
+      muteGroup: new Set(),
     }
   }
 
