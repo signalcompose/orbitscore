@@ -179,37 +179,37 @@ export class Sequence {
 
   gain(valueDb: number | RandomValue): this {
     this.gainManager.setGain({ valueDb })
-    this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
+    // Setting only - no immediate application
     return this
   }
 
   /**
-   * Set default gain (initial fader position) without immediate playback.
-   * This sets the gain value but does not trigger seamless parameter update.
-   * Use this to configure initial gain before starting playback.
+   * Set gain with immediate application (real-time change during playback).
+   * Use underscore prefix for instant reflection.
    * @param valueDb - Gain in decibels (-60 to +12 dB)
    * @returns this for method chaining
    */
-  defaultGain(valueDb: number | RandomValue): this {
+  _gain(valueDb: number | RandomValue): this {
     this.gainManager.setGain({ valueDb })
+    this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
     return this
   }
 
   pan(value: number | RandomValue): this {
     this.panManager.setPan({ value })
-    this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
+    // Setting only - no immediate application
     return this
   }
 
   /**
-   * Set default pan (initial pan position) without immediate playback.
-   * This sets the pan value but does not trigger seamless parameter update.
-   * Use this to configure initial pan before starting playback.
+   * Set pan with immediate application (real-time change during playback).
+   * Use underscore prefix for instant reflection.
    * @param value - Pan value (-100 to +100, where 0 is center, -100 is left, +100 is right)
    * @returns this for method chaining
    */
-  defaultPan(value: number | RandomValue): this {
+  _pan(value: number | RandomValue): this {
     this.panManager.setPan({ value })
+    this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
     return this
   }
 
