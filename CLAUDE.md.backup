@@ -1,0 +1,370 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+---
+
+## Project Overview
+
+**OrbitScore** is an audio-based live coding DSL for modern music production. It features:
+
+- **Audio File Playback**: WAV, AIFF, MP3, MP4 with time-stretching and pitch-shifting
+- **Live Coding Integration**: Real-time execution via VS Code extension
+- **SuperCollider Backend**: Ultra-low latency (0-2ms) audio engine
+- **Polymeter Support**: Independent time signatures and tempo per sequence
+
+**Technology Stack**: TypeScript, SuperCollider (scsynth), supercolliderjs, VS Code Extension API, Vitest
+
+---
+
+## Common Development Commands
+
+### Building and Testing
+
+```bash
+# Build all packages
+npm run build
+
+# Run all tests (225 tests, 23 skipped)
+npm test
+
+# Run engine in development mode
+npm run dev:engine
+
+# Linting and formatting
+npm run lint
+npm run lint:fix
+npm run format
+```
+
+### Package-Specific Commands
+
+```bash
+# Engine package
+cd packages/engine
+npm test                    # Run engine tests
+npm run build               # Build engine
+npm run dev                 # Development mode with watch
+
+# VS Code extension
+cd packages/vscode-extension
+npm install
+npm run build
+# Install: Cmd+Shift+P → "Developer: Install Extension from Location..."
+```
+
+### Running Individual Tests
+
+```bash
+# Run specific test file
+npx vitest run tests/parser/syntax-updates.spec.ts
+
+# Run tests matching pattern
+npx vitest run -t "Audio Control"
+
+# Watch mode for development
+npx vitest watch tests/core/
+```
+
+---
+
+## Architecture Overview
+
+### Monorepo Structure
+
+```
+orbitscore/
+├── packages/
+│   ├── engine/              # Core DSL engine
+│   │   ├── src/
+│   │   │   ├── parser/      # DSL syntax parser
+│   │   │   ├── interpreter/ # Execute parsed code
+│   │   │   ├── core/        # Sequence, Global, Transport
+│   │   │   ├── audio/       # SuperCollider integration
+│   │   │   ├── timing/      # Event scheduling logic
+│   │   │   └── cli-audio.ts # REPL interface
+│   │   └── supercollider/   # SuperCollider boot config
+│   └── vscode-extension/    # VS Code integration
+│       ├── src/             # Extension logic
+│       └── syntaxes/        # .osc syntax highlighting
+├── tests/                   # All test files
+│   ├── parser/             # Parser tests
+│   ├── interpreter/        # Interpreter tests
+│   ├── core/               # Sequence/Global tests
+│   ├── audio/              # Audio engine tests
+│   └── timing/             # Timing calculation tests
+├── docs/                    # Documentation
+│   ├── INSTRUCTION_ORBITSCORE_DSL.md  # DSL specification (SOURCE OF TRUTH)
+│   ├── PROJECT_RULES.md     # Development rules
+│   ├── WORK_LOG.md          # Development history
+│   └── IMPLEMENTATION_PLAN.md
+└── examples/                # Tutorial .osc files
+```
+
+### Key Architectural Concepts
+
+#### 1. Two-Phase Execution Model
+
+OrbitScore uses a persistent engine process with two execution phases:
+
+1. **Definition Phase** (on file save):
+   - Parse `.osc` file
+   - Create/update sequence definitions
+   - No audio playback occurs
+
+2. **Execution Phase** (Cmd+Enter):
+   - Execute selected lines via REPL
+   - Trigger `.run()`, `.loop()`, `global.start()` commands
+   - Audio playback begins
+
+**Key Classes**:
+- `Global`: Manages transport, scheduler, and audio engine
+- `Sequence`: Individual track with audio, timing, and playback state
+- `Transport`: Handles bar-quantized playback control
+- `AudioEngine`: SuperCollider interface (buffer loading, event scheduling)
+
+#### 2. DSL Syntax Fundamentals
+
+**CRITICAL**: Before writing any `.osc` code, read `docs/INSTRUCTION_ORBITSCORE_DSL.md`.
+
+**Core Syntax**:
+```js
+// Initialize global context
+var global = init GLOBAL
+
+// Create sequence
+var kick = init global.seq
+
+// Configure sequence
+kick.audio("kick.wav")      // Load audio file
+kick.beat(4 by 4)           // Time signature (4/4)
+kick.tempo(140)             // BPM (overrides global)
+kick.chop(8)                // Divide audio into 8 slices
+kick.play(1, 0, 0, 0)       // Play pattern (slice indices)
+kick.length(2)              // Loop length in bars
+
+// Transport control
+global.start()              // Start scheduler
+kick.run()                  // Play once
+kick.loop()                 // Loop continuously
+RUN(kick, snare)            // Run multiple sequences
+LOOP(hat)                   // Loop one, stop others
+MUTE(kick)                  // Mute (LOOP only)
+global.stop()               // Stop all
+```
+
+**Common Mistake**: `beat()` uses **"n by m" notation** for time signatures:
+- ✅ Correct: `beat(4 by 4)` or `beat(5, 4)`
+- ❌ Wrong: `beat(4)` (will cause error)
+
+#### 3. Setting Synchronization System
+
+**Method Variants**:
+- `method()`: Set value, no immediate effect (buffered for next cycle)
+- `_method()`: Set value + trigger immediate re-scheduling
+
+**Examples**:
+```js
+kick.tempo(140)       // Buffer tempo change
+kick._tempo(140)      // Apply tempo change immediately and re-trigger
+
+kick.gain(0.8)        // Real-time parameter (always immediate)
+kick.defaultGain(0.8) // Set initial gain before playback
+```
+
+**Real-time Parameters** (always immediate):
+- `gain()`, `pan()`
+
+**Buffered Parameters** (applied on next cycle):
+- `tempo()`, `beat()`, `play()`, `chop()`, `audio()`, `length()`
+
+#### 4. Polymeter and Polytempo
+
+Each sequence can have independent time signature and tempo:
+
+```js
+var kick = init global.seq
+kick.beat(4 by 4).tempo(120)  // 4/4 at 120 BPM
+
+var snare = init global.seq
+snare.beat(5 by 4).tempo(132) // 5/4 at 132 BPM
+```
+
+Bar lengths are calculated independently, allowing complex polyrhythmic patterns.
+
+---
+
+## Critical Development Rules
+
+### 1. DSL Specification is Law
+
+**`docs/INSTRUCTION_ORBITSCORE_DSL.md` is the single source of truth.**
+
+Before implementing any feature:
+1. Verify it exists in the specification
+2. Check parameter order, types, and behavior
+3. If unclear, ask the user for clarification
+
+**Prohibited**: Adding features not in specification without user confirmation.
+
+### 2. WORK_LOG.md is Mandatory
+
+**Every commit MUST be documented in WORK_LOG.md.**
+
+Update `docs/WORK_LOG.md` **before** committing:
+- What changed
+- Why it changed
+- Technical decisions
+- Commit hash (use `[PENDING]` initially, then update with actual hash)
+
+Also update `README.md` when project status changes.
+
+### 3. Git Workflow
+
+**ALWAYS create a feature branch before starting work.**
+
+```bash
+# Create branch from develop
+git checkout develop
+git pull origin develop
+git checkout -b <issue-number>-descriptive-name
+
+# Example: 61-audio-playback-testing
+```
+
+**Branch Naming**:
+- Format: `<issue-number>-descriptive-name`
+- English only (no Japanese characters)
+- Protected branches: `main`, `develop` (cannot push directly)
+
+**PR Workflow**:
+```bash
+# Push branch
+git push -u origin <branch-name>
+
+# Create PR to develop (include "Closes #N")
+gh pr create --base develop --title "feat: description" --body "Closes #<issue-number>
+
+detailed description"
+
+# After approval, merge with squash (DO NOT delete branch)
+gh pr merge <number> --squash
+```
+
+### 4. Test-Driven Development
+
+- Write tests for all new features
+- All tests must pass before committing
+- CI environment: 225 tests pass, 23 skipped (SuperCollider integration tests)
+
+**Testing Strategy**:
+- **Unit tests**: Parser, timing, audio slicer (automated, CI-compatible)
+- **Integration tests**: SuperCollider tests (local only, skipped in CI)
+- **Manual tests**: Audio playback verification (requires human listening)
+
+### 5. Serena Memory Management
+
+**Memory Commit Workflow**:
+- ✅ Edit/save memory on `develop` branch
+- ❌ DO NOT commit memory on `develop` branch
+- ✅ Changes carry over to feature branch (unstaged)
+- ✅ Commit memory together with feature implementation
+
+**Update Memory When**:
+- Critical bugs discovered
+- Architectural changes made
+- Important technical decisions
+- Phase completion status changes
+
+### 6. Code Organization Principles
+
+**Single Responsibility Principle**:
+- One function, one purpose
+- Functions under 50 lines
+- Extract duplicate code immediately (DRY)
+
+**Module Organization**:
+```typescript
+// Group by feature
+sequence/
+├── playback/
+│   ├── prepare-playback.ts
+│   ├── run-sequence.ts
+│   └── loop-sequence.ts
+└── audio/
+    └── prepare-slices.ts
+```
+
+**Type Safety**:
+```typescript
+export interface PreparePlaybackOptions {
+  sequenceName: string
+  audioFilePath?: string
+}
+
+export async function preparePlayback(
+  options: PreparePlaybackOptions
+): Promise<PlaybackPreparation | null>
+```
+
+---
+
+## Important Notes
+
+### SuperCollider Integration
+
+- **Audio Engine**: scsynth (SuperCollider synthesis server)
+- **Node Interface**: supercolliderjs
+- **Latency**: 0-2ms (measured, production-ready)
+- **Boot Config**: `packages/engine/supercollider/boot.js`
+
+**Key Operations**:
+- Buffer loading: `s.buffer.read(path)`
+- Event scheduling: `s.bundle.add(time, ["/s.new", synthDef, ...])`
+- Graceful shutdown: `s.quit()`
+
+### VS Code Extension
+
+- **File Extension**: `.osc`
+- **Syntax Highlighting**: `packages/vscode-extension/syntaxes/orbitscore.tmLanguage.json`
+- **Execution**: Cmd+Enter sends selected lines to engine REPL
+- **REPL**: Persistent process (`packages/engine/dist/cli-audio.js`)
+
+### Tutorial Files
+
+Before writing test `.osc` files, check existing tutorials:
+- `examples/01_*.osc` through `examples/08_*.osc`
+- Correct initialization patterns
+- Proper method usage
+- Common patterns
+
+---
+
+## Troubleshooting
+
+### Tests Fail with "no audio file set"
+Ensure sequence has `.audio("file.wav")` before calling chop/play methods.
+
+### SuperCollider Server Won't Start
+- Check if scsynth is installed: `which scsynth`
+- macOS: Install SuperCollider.app
+- Port conflict: Check if 57110 is available
+
+### REPL Not Responding
+- Restart engine: `npm run dev:engine`
+- Check process: `ps aux | grep cli-audio`
+
+### Git Hook Blocks Commit
+Pre-commit hook prevents:
+- Direct commits to `main`/`develop`
+- Committing `.serena/memories/` on protected branches
+
+---
+
+## Additional Resources
+
+- **DSL Specification**: `docs/INSTRUCTION_ORBITSCORE_DSL.md` (MUST READ before DSL work)
+- **Project Rules**: `docs/PROJECT_RULES.md` (comprehensive development guidelines)
+- **Work Log**: `docs/WORK_LOG.md` (development history and decisions)
+- **Implementation Plan**: `docs/IMPLEMENTATION_PLAN.md` (roadmap and phases)
+- **User Manual**: `docs/USER_MANUAL.md` (end-user documentation)
