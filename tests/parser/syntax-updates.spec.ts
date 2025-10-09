@@ -56,8 +56,9 @@ seq.beat(3 by 4)
     const result = parser.parse().statements
 
     expect(result).toHaveLength(2)
+    // Note: Parser returns 'sequence' type, interpreter determines if it's global
     expect(result[0]).toEqual({
-      type: 'global',
+      type: 'sequence',
       target: 'global',
       method: 'beat',
       args: [{ numerator: 4, denominator: 4 }],
@@ -128,9 +129,10 @@ seq.run()
 
     // Check statements
     expect(result).toHaveLength(6)
-    expect(result[0].type).toBe('global')
+    // Note: Parser returns 'sequence' type, interpreter determines if it's global
+    expect(result[0].type).toBe('sequence')
     expect(result[0].method).toBe('tempo')
-    expect(result[1].type).toBe('global')
+    expect(result[1].type).toBe('sequence')
     expect(result[1].method).toBe('beat')
     expect(result[2].type).toBe('sequence')
     expect(result[2].method).toBe('beat')
@@ -233,7 +235,7 @@ seq.audio("test.wav")
       expect(result).toHaveLength(1)
       expect(result[0]).toEqual({
         type: 'transport',
-        target: 'global',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords
         command: 'run',
         sequences: ['kick'],
       })
@@ -249,7 +251,7 @@ seq.audio("test.wav")
       expect(result).toHaveLength(1)
       expect(result[0]).toEqual({
         type: 'transport',
-        target: 'global',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords
         command: 'loop',
         sequences: ['kick', 'snare', 'hihat'],
       })
@@ -265,7 +267,7 @@ seq.audio("test.wav")
       expect(result).toHaveLength(1)
       expect(result[0]).toEqual({
         type: 'transport',
-        target: 'global',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords
         command: 'mute',
         sequences: ['bass'],
       })
@@ -287,7 +289,7 @@ RUN(
       expect(result).toHaveLength(1)
       expect(result[0]).toEqual({
         type: 'transport',
-        target: 'global',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords
         command: 'run',
         sequences: ['kick', 'snare', 'hihat'],
       })

@@ -58,11 +58,20 @@ export class Global {
     return this
   }
 
-  tick(value?: number): number | this {
-    const result = this.tempoManager.tick(value)
-    if (typeof result === 'number') {
-      return result
+  /**
+   * Set tempo with immediate application to all sequences that inherit it
+   * @param value - Tempo in BPM
+   * @returns this for method chaining
+   */
+  _tempo(value: number): this {
+    this.tempoManager.tempo(value)
+
+    // Notify all sequences that haven't overridden tempo
+    const sequences = this.sequenceRegistry.getAllSequences()
+    for (const [, seq] of sequences) {
+      seq.notifyGlobalTempoChange()
     }
+
     return this
   }
 
@@ -71,13 +80,28 @@ export class Global {
     return this
   }
 
-  key(value?: string): string | this {
-    const result = this.tempoManager.key(value)
-    if (typeof result === 'string') {
-      return result
+  /**
+   * Set beat with immediate application to all sequences that inherit it
+   * @param numerator - Beat numerator
+   * @param denominator - Beat denominator
+   * @returns this for method chaining
+   */
+  _beat(numerator: number, denominator: number): this {
+    this.tempoManager.beat(numerator, denominator)
+
+    // Notify all sequences that haven't overridden beat
+    const sequences = this.sequenceRegistry.getAllSequences()
+    for (const [, seq] of sequences) {
+      seq.notifyGlobalBeatChange()
     }
+
     return this
   }
+
+  // Note: tick() and key() have been removed
+  // - tick(): MIDI resolution, not needed for audio-only implementation
+  // - key(): Will be added when MIDI support is implemented
+  //   For audio, key detection feature needs to be implemented first
 
   // Audio path and device management
   audioPath(value?: string): string | this {

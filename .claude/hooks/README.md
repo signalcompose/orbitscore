@@ -25,19 +25,31 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 
 **重要**: このフックにより、ワークフロー違反（Issue・ブランチ作成前の実装開始）を**システムとして防止**
 
-### 2. SessionStart Hook (`session-start.sh`)
+### 2. SessionStart Hook (`session-start.sh`) ⚠️ CRITICAL
 
-**実行タイミング**: Claude Codeセッション開始時
+**実行タイミング**: Claude Codeセッション開始時（startup, resume, **compact**）
 
-**目的**: セッション開始時の必須アクションをリマインド
+**目的**: **Compacting conversation後の文脈回復**（最重要）
 
-**チェック内容**:
-- Serenaプロジェクトのアクティベート確認
-- 必須ドキュメント（PROJECT_RULES.md, CONTEXT7_GUIDE.md）の読み込み確認
-- Serenaメモリの確認
-- Git Workflowのリマインダー
+**重要性**: Compacting conversation後は、重要な約束事（プロジェクトルール、現在のIssue状況、Git状態など）が失われます。このフックは、それらを自動的に復元するために必須です。
 
-**動作**: 警告のみ（ブロックなし）
+**実行内容**:
+```bash
+1. mcp__serena__check_onboarding_performed - Onboarding状態確認
+2. mcp__serena__read_memory("current_issues") - 現在のIssue状況読み込み
+3. mcp__serena__read_memory("project_overview") - プロジェクト全体像読み込み
+4. git branch --show-current && git log -1 --oneline - Git状態確認
+5. ブランチ名からIssue番号を確認（例: 57-dsl-clarification → Issue #57）
+```
+
+**動作**: additionalContextとしてリマインダーを出力（Claude側で自動認識）
+
+**トリガー**:
+- `compact`: Compacting conversation後（最重要）
+- `resume`: セッション再開時（`--resume`, `/resume`）
+- `startup`も可能だが、現在はcompactとresumeのみ設定
+
+**詳細**: CLAUDE.mdの「⚠️ COMPACTING CONVERSATION後の必須手順」を参照
 
 ### 2. PreCompact Hook (`pre-compact.sh`)
 
@@ -101,16 +113,24 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 
 ## 設定ファイル
 
-`.claude/config.json`にHooksの設定が記載されています：
+`.claude/settings.json`にHooksの設定が記載されています：
 
 ```json
 {
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "compact",
         "hooks": [{
           "type": "command",
-          "command": ".claude/hooks/session-start.sh"
+          "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+        }]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [{
+          "type": "command",
+          "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
         }]
       }
     ],

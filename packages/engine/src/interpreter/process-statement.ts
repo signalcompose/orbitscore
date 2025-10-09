@@ -38,7 +38,17 @@ export async function processStatement(
       await processGlobalStatement(statement, state)
       break
     case 'sequence':
-      await processSequenceStatement(statement, state)
+      // Parser cannot distinguish between global and sequence at parse time
+      // Determine the actual type here by checking state
+      if (state.globals.has(statement.target)) {
+        // It's actually a global statement
+        await processGlobalStatement(statement as any, state)
+      } else if (state.sequences.has(statement.target)) {
+        // It's a sequence statement
+        await processSequenceStatement(statement, state)
+      } else {
+        console.error(`Variable not found: ${statement.target}`)
+      }
       break
     case 'transport':
       await processTransportStatement(statement, state)
@@ -150,7 +160,10 @@ export async function processTransportStatement(
 
   // Handle reserved keywords (RUN, LOOP, MUTE) with unidirectional toggle
   // Empty arguments are allowed (e.g., RUN() clears the RUN group)
-  if (target === 'global' && (command === 'run' || command === 'loop' || command === 'mute')) {
+  if (
+    target === '__RESERVED_KEYWORD__' &&
+    (command === 'run' || command === 'loop' || command === 'mute')
+  ) {
     switch (command) {
       case 'run':
         await handleRunCommand(sequenceNames, state)
@@ -167,7 +180,7 @@ export async function processTransportStatement(
     return
   }
 
-  // Handle global commands (e.g., global.start())
+  // Handle global commands (e.g., g.start() where g is a global variable)
   const global = state.globals.get(target)
   if (global) {
     switch (command) {

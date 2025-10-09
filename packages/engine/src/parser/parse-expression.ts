@@ -11,7 +11,6 @@ import {
   PlayWithModifier,
   PlayModifier,
   Meter,
-  CompositeMeter,
 } from './types'
 import { ParserUtils } from './parser-utils'
 
@@ -167,7 +166,7 @@ export class ExpressionParser {
   }
 
   /**
-   * Parse parenthesized expressions (nested play or composite meters)
+   * Parse parenthesized expressions (nested play or single meters)
    */
   private parseParenthesizedExpression(): { value: any; newPos: number } {
     // Look ahead to determine if this is a play structure or meter
@@ -176,7 +175,7 @@ export class ExpressionParser {
       const lookahead2 = ParserUtils.peek(this.tokens, this.pos, 2)
       if (lookahead2.type === 'BY') {
         // This is a meter like (3 by 4)
-        return this.parseCompositeMeter()
+        return this.parseSingleMeter()
       } else if (
         lookahead2.type === 'RPAREN' ||
         lookahead2.type === 'DOT' ||
@@ -279,7 +278,7 @@ export class ExpressionParser {
       this.pos = methodResult.newPos
       const method = methodResult.token.value
 
-      if (method === 'chop' || method === 'time' || method === 'fixpitch') {
+      if (method === 'chop') {
         const lparenResult = ParserUtils.expect(this.tokens, this.pos, 'LPAREN')
         this.pos = lparenResult.newPos
         const argResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
@@ -287,9 +286,15 @@ export class ExpressionParser {
         const rparenResult = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
         this.pos = rparenResult.newPos
         modifiers.push({
-          method: method as 'chop' | 'time' | 'fixpitch',
+          method: method as 'chop',
           value: ParserUtils.parseNumber(argResult.token),
         })
+      } else if (method === 'time' || method === 'fixpitch') {
+        throw new Error(
+          `${method}() is not yet implemented. ` +
+            `This feature is planned for future release. ` +
+            `See GitHub issue tracker for updates.`,
+        )
       }
     }
 
@@ -400,29 +405,39 @@ export class ExpressionParser {
   }
 
   /**
-   * Parse composite meter
+   * Parse single meter in parentheses: (3 by 4)
+   * Note: Composite meters like (3 by 4)(5 by 4) are not supported
    */
-  private parseCompositeMeter(): { value: CompositeMeter; newPos: number } {
-    const meters: Meter[] = []
+  private parseSingleMeter(): { value: Meter; newPos: number } {
+    const lparenResult = ParserUtils.expect(this.tokens, this.pos, 'LPAREN')
+    this.pos = lparenResult.newPos
+    const numResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+    this.pos = numResult.newPos
+    const byResult = ParserUtils.expect(this.tokens, this.pos, 'BY')
+    this.pos = byResult.newPos
+    const denResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+    this.pos = denResult.newPos
+    const rparenResult = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
+    this.pos = rparenResult.newPos
 
-    while (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
-      const lparenResult = ParserUtils.advance(this.tokens, this.pos)
-      this.pos = lparenResult.newPos
-      const numResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
-      this.pos = numResult.newPos
-      const byResult = ParserUtils.expect(this.tokens, this.pos, 'BY')
-      this.pos = byResult.newPos
-      const denResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
-      this.pos = denResult.newPos
-      const rparenResult = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
-      this.pos = rparenResult.newPos
-
-      meters.push({
-        numerator: parseInt(numResult.token.value),
-        denominator: parseInt(denResult.token.value),
-      })
+    const meter: Meter = {
+      numerator: parseInt(numResult.token.value),
+      denominator: parseInt(denResult.token.value),
     }
 
-    return { value: { meters }, newPos: this.pos }
+    // Check if there's another meter following (composite meter syntax)
+    // This is not supported, so throw an error
+    if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
+      const nextToken = ParserUtils.peek(this.tokens, this.pos)
+      const nextNextToken = ParserUtils.peek(this.tokens, this.pos, 2)
+      if (nextToken.type === 'NUMBER' && nextNextToken.type === 'BY') {
+        throw new Error(
+          'Composite meters like (3 by 4)(5 by 4) are not supported. ' +
+            'Use a single meter notation like (3 by 4) or 3 by 4.',
+        )
+      }
+    }
+
+    return { value: meter, newPos: this.pos }
   }
 }
