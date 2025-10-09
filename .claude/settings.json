@@ -1,11 +1,52 @@
 {
   "hooks": {
-    "sessionStart": [
+    "SessionStart": [
       {
-        "matcher": {
-          "trigger": ["startup", "resume", "compact"]
-        },
-        "prompt": "セッション開始時の重要情報確認プロセスを実行してください：\n\n1. mcp__serena__check_onboarding_performedを実行してonboarding状態を確認\n2. mcp__serena__read_memoryで以下のメモリを読み込み：\n   - current_issues（現在のIssue状況）\n   - project_overview（プロジェクト全体像）\n3. git branch --show-current && git log -1 --onelineで現在のブランチと最新コミットを確認\n4. ブランチ名からIssue番号を抽出（例：57-dsl-clarification-parser-consistency → Issue #57）\n\nこれらの情報を確認してから、ユーザーに簡潔な状況報告を行い、次のタスクを確認してください。\n\n**重要**: Compacting conversationやセッション開始後は必ずこのプロセスを実行してください。文脈の回復に必須です。"
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-edit-check.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash:git commit.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-commit-check.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash:git checkout -b.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre-branch-check.sh"
+          }
+        ]
       }
     ]
   }
