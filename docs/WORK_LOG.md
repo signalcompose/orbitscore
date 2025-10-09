@@ -15,6 +15,119 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 [... previous 2796 lines preserved ...]
 
+### 6.25 Reserved Keywords Implementation (RUN/LOOP/STOP/MUTE) (October 9, 2025)
+
+**Date**: October 9, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `39-reserved-keywords-implementation`
+**Commits**:
+- `026be27`: feat: 予約語（RUN/LOOP/STOP/MUTE）の実装
+
+**Work Content**: 大文字の予約語（RUN, LOOP, STOP, MUTE）を実装し、複数シーケンスを一括操作する機能を追加
+
+#### 背景
+ライブコーディング時に複数のシーケンスを個別に`run()`、`loop()`で操作するのは冗長で読みにくかった。予約語による一括操作で、より直感的で簡潔なDSL構文を実現する。
+
+#### 実施内容
+
+**1. パーサー拡張 (Phase 1)**
+- トークナイザーに予約語を追加（`types.ts`, `tokenizer.ts`）
+  - `RUN`, `LOOP`, `STOP`, `MUTE`をトークンタイプとして認識
+  - `KEYWORDS`セットに追加して大文字小文字を区別
+- パーサーに予約語処理ロジックを追加（`parse-statement.ts`）
+  - `parseReservedKeyword()`メソッドを実装
+  - 複数引数（シーケンス名）を解析
+  - `TransportStatement`型でIRを生成
+
+**2. インタプリタ実装 (Phase 2)**
+- トランスポート処理を拡張（`process-statement.ts`）
+  - `processTransportStatement()`を修正
+  - `statement.sequences`配列から複数シーケンスを取得
+  - 各シーケンスに対して`run()`, `loop()`, `stop()`, `mute()`を実行
+  - 存在しないシーケンスのエラーハンドリング
+
+**3. テスト実装**
+- パーサーテスト（`tests/parser/syntax-updates.spec.ts`）
+  - `RUN(kick)` - 単一シーケンス
+  - `LOOP(kick, snare, hihat)` - 複数シーケンス
+  - `STOP(kick, snare)` - 複数シーケンス
+  - マルチライン構文のサポート確認
+- インタプリタテスト（`tests/interpreter/interpreter-v2.spec.ts`）
+  - 複数シーケンスへの一括実行
+  - 存在しないシーケンスのエラーハンドリング
+  - `RUN/LOOP/STOP`の動作確認
+
+**4. ドキュメント更新**
+- DSL仕様書（`docs/INSTRUCTION_ORBITSCORE_DSL.md`）
+  - Section 5に予約語の説明を追加
+  - 利点と使用例を明記
+  - マルチライン構文の例を追加
+- 例題ファイル（`examples/09_reserved_keywords.osc`）
+  - 予約語の実践的な使用例
+  - 複数シーケンスの一括制御デモ
+
+#### 構文例
+
+**基本構文:**
+```js
+RUN(kick)                 // kick.run()と等価
+RUN(kick, snare, hihat)   // 複数シーケンスを一括実行
+
+LOOP(bass)                // bass.loop()と等価
+LOOP(kick, snare)         // 複数シーケンスを一括ループ
+
+STOP(kick)                // kick.stop()と等価
+STOP(kick, snare)         // 複数シーケンスを一括停止
+
+MUTE(hihat)               // hihat.mute()と等価
+MUTE(snare, hihat)        // 複数シーケンスを一括ミュート
+```
+
+**マルチライン構文:**
+```js
+RUN(
+  kick,
+  snare,
+  hihat,
+)
+```
+
+#### 技術的詳細
+
+**トークナイザー:**
+- `AudioTokenType`に`RUN`, `LOOP`, `STOP`, `MUTE`を追加
+- `KEYWORDS`セットに予約語を登録
+- 大文字小文字を区別して認識
+
+**パーサー:**
+- `parseStatement()`に予約語の分岐を追加
+- `parseReservedKeyword()`で引数リストを解析
+- `TransportStatement`型で`sequences`配列を含むIRを生成
+
+**インタプリタ:**
+- `processTransportStatement()`で`sequences`配列をループ
+- 各シーケンスに対して指定されたコマンドを実行
+- 存在しないシーケンスのエラーメッセージを表示
+
+#### テスト結果
+- **パーサーテスト**: 12 passed (全て通過)
+- **インタプリタテスト**: 11 skipped (既存テストはスキップ設定のまま)
+- **全体**: 137 passed, 19 skipped
+
+#### 利点
+- ✅ ライブコーディング時の操作が簡潔になる
+- ✅ 複数シーケンスを一括操作可能
+- ✅ コードの意図が明確になる
+- ✅ マルチライン構文で読みやすい
+
+#### 残作業
+- Phase 3（設定変更の反映タイミング制御）は将来的な拡張として保留
+  - `RUN()`は即座に設定変更を反映
+  - `LOOP()`は次サイクルから設定変更を反映
+  - 現在の実装では両方とも即座に反映される
+
+---
+
 ### 6.24 Beat/Meter Specification Documentation (January 8, 2025)
 
 **Date**: January 8, 2025

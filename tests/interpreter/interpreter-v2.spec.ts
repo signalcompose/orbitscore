@@ -194,4 +194,83 @@ drum.play(1, 0, 0, 1)
     expect(state.sequences.drum.playPattern).toEqual([1, 0, 0, 1])
     expect(state.sequences.drum.timedEvents).toHaveLength(4)
   })
+
+  describe('Reserved Keywords (RUN/LOOP/STOP/MUTE)', () => {
+    it('should execute RUN on multiple sequences', async () => {
+      const code = `
+var global = init GLOBAL
+var kick = init global.seq
+var snare = init global.seq
+
+RUN(kick, snare)
+`
+      const tokenizer = new AudioTokenizer(code)
+      const tokens = tokenizer.tokenize()
+      const parser = new AudioParser(tokens)
+      const ir = parser.parse()
+
+      await interpreter.execute(ir)
+      const state = interpreter.getState()
+
+      // Both sequences should be running
+      expect(state.sequences.kick.isPlaying).toBe(true)
+      expect(state.sequences.snare.isPlaying).toBe(true)
+    })
+
+    it('should execute LOOP on single sequence', async () => {
+      const code = `
+var global = init GLOBAL
+var bass = init global.seq
+
+LOOP(bass)
+`
+      const tokenizer = new AudioTokenizer(code)
+      const tokens = tokenizer.tokenize()
+      const parser = new AudioParser(tokens)
+      const ir = parser.parse()
+
+      await interpreter.execute(ir)
+      const state = interpreter.getState()
+
+      expect(state.sequences.bass.isLooping).toBe(true)
+    })
+
+    it('should execute STOP on sequences', async () => {
+      const code = `
+var global = init GLOBAL
+var kick = init global.seq
+var snare = init global.seq
+
+RUN(kick, snare)
+STOP(kick)
+`
+      const tokenizer = new AudioTokenizer(code)
+      const tokens = tokenizer.tokenize()
+      const parser = new AudioParser(tokens)
+      const ir = parser.parse()
+
+      await interpreter.execute(ir)
+      const state = interpreter.getState()
+
+      // kick should be stopped, snare should still be running
+      expect(state.sequences.kick.isPlaying).toBe(false)
+      expect(state.sequences.snare.isPlaying).toBe(true)
+    })
+
+    it('should handle non-existent sequence gracefully', async () => {
+      const code = `
+var global = init GLOBAL
+var kick = init global.seq
+
+RUN(kick, nonexistent)
+`
+      const tokenizer = new AudioTokenizer(code)
+      const tokens = tokenizer.tokenize()
+      const parser = new AudioParser(tokens)
+      const ir = parser.parse()
+
+      // Should not throw
+      await expect(interpreter.execute(ir)).resolves.not.toThrow()
+    })
+  })
 })

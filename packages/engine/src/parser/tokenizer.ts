@@ -15,7 +15,17 @@ export class AudioTokenizer {
   private column: number = 1
 
   // Keywords that should be recognized
-  private static readonly KEYWORDS = new Set(['var', 'init', 'by', 'GLOBAL', 'force'])
+  private static readonly KEYWORDS = new Set([
+    'var',
+    'init',
+    'by',
+    'GLOBAL',
+    'force',
+    'RUN',
+    'LOOP',
+    'STOP',
+    'MUTE',
+  ])
 
   constructor(src: string) {
     this.src = src

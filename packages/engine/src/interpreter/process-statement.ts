@@ -149,51 +149,42 @@ export async function processTransportStatement(
   // Check if it's a global
   const global = state.globals.get(target)
   if (global) {
-    const args = statement.sequences ?? []
+    const sequenceNames = statement.sequences ?? []
 
-    // Define expected arguments for each transport command
-    let processedArgs: any[] = []
+    // For reserved keywords (RUN, LOOP, STOP, MUTE), apply command to sequences
+    if (sequenceNames.length > 0) {
+      for (const seqName of sequenceNames) {
+        const sequence = state.sequences.get(seqName)
+        if (sequence) {
+          await callMethod(sequence, statement.command, [])
+        } else {
+          console.error(`Sequence not found: ${seqName}`)
+        }
+      }
+      return
+    }
 
+    // For global commands without sequences (e.g., global.start())
     switch (statement.command) {
       case 'start':
-        // start() takes no arguments
-        if (args.length > 0) {
-          console.warn('global.start() ignores sequence arguments; starting global transport only')
-        }
-        processedArgs = []
-        break
-
       case 'loop':
-        // loop() takes no arguments
-        if (args.length > 0) {
-          console.warn('global.loop() ignores sequence arguments; looping global transport only')
-        }
-        processedArgs = []
-        break
-
       case 'stop':
-        // stop() takes no arguments
-        if (args.length > 0) {
-          console.warn('global.stop() ignores sequence arguments; stopping global transport only')
-        }
-        processedArgs = []
+        await callMethod(global, statement.command, [])
         break
 
       case 'mute':
       case 'unmute':
         // mute/unmute() methods don't exist on Global
         console.warn(
-          `global.${statement.command}() is not supported; use sequence.${statement.command}() instead`,
+          `global.${statement.command}() is not supported; use sequence.${statement.command}() or RUN/LOOP/STOP/MUTE with sequence names instead`,
         )
-        return
+        break
 
       default:
         // For unknown commands, warn and don't call
         console.warn(`Unknown transport command: ${statement.command}`)
-        return
     }
 
-    await callMethod(global, statement.command, processedArgs)
     return
   }
 
