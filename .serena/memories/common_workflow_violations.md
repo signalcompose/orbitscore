@@ -23,11 +23,11 @@ git checkout -b 39-add-new-feature
 
 **なぜこれが起きるか:**
 - 「実装の準備」を依頼されると、Issueを飛ばしてブランチを作ってしまう
-- `AGENTS.md`や`PROJECT_RULES.md`を読まずに作業を開始する
+- `CLAUDE.md`や`PROJECT_RULES.md`を読まずに作業を開始する
 
 **対策:**
-- `AGENTS.md`の先頭に「CRITICAL RULES」セクションを追加（完了）
-- セッション開始時に必ず`AGENTS.md`を読むよう強調
+- `CLAUDE.md`の先頭に「CRITICAL RULES」セクションを追加（完了）
+- セッション開始時に必ず`CLAUDE.md`を読むよう強調
 
 ### 2. ブランチ名にIssue番号を含めない
 **違反例:**
@@ -47,7 +47,7 @@ git checkout -b 42-fix-audio-bug  # ✅
 - Issue番号の重要性を理解していない
 
 **対策:**
-- ブランチ命名規則を`AGENTS.md`に明記（完了）
+- ブランチ命名規則を`CLAUDE.md`に明記（完了）
 - 具体例を複数提示
 
 ### 3. PR本文に`Closes #N`を含めない
@@ -90,13 +90,13 @@ seq.beat(4 by 4)  // ✅ "n by m" 形式が必須
 - `PROJECT_RULES.md`のDSL記述ルールを強調（既存）
 - コード作成前に必ず仕様書を読むよう指示
 
-### 5. セッション開始時にAGENTS.mdを読まない
+### 5. セッション開始時にCLAUDE.mdを読まない
 **違反例:**
 - いきなり実装を開始
 - 準備アクション（Serena activate、ドキュメント確認）をスキップ
 
 **正しい手順:**
-1. `AGENTS.md`を読む
+1. `CLAUDE.md`を読む
 2. Serenaプロジェクトをアクティベート
 3. `PROJECT_RULES.md`を読む
 4. Serenaメモリを確認
@@ -107,7 +107,7 @@ seq.beat(4 by 4)  // ✅ "n by m" 形式が必須
 - 「準備して」という指示を「すぐ実装開始」と解釈
 
 **対策:**
-- `AGENTS.md`の先頭に「このファイルを必ず最初に読むこと」を明記（完了）
+- `CLAUDE.md`の先頭に「このファイルを必ず最初に読むこと」を明記（完了）
 - repo_specific_ruleでも同様に強調
 
 ## 根本原因
@@ -124,5 +124,6 @@ seq.beat(4 by 4)  // ✅ "n by m" 形式が必須
 4. **チェックリスト**: 作業開始前の確認項目を列挙
 
 ## 改善履歴
-- 2025-01-08: `AGENTS.md`にCRITICAL RULESセクションを追加
+- 2025-01-08: `CLAUDE.md`にCRITICAL RULESセクションを追加
 - 2025-01-08: このメモリを作成してよくある違反を文書化
+- 2025-01-09: `AGENTS.md`を廃止し、`CLAUDE.md`に統合。Claude Code Hooks実装に伴う一元化
