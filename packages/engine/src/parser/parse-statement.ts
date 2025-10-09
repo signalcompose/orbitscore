@@ -30,13 +30,8 @@ export class StatementParser {
       return this.parseVarDeclaration()
     }
 
-    // Reserved keywords: RUN(), LOOP(), STOP(), MUTE()
-    if (
-      token.type === 'RUN' ||
-      token.type === 'LOOP' ||
-      token.type === 'STOP' ||
-      token.type === 'MUTE'
-    ) {
+    // Reserved keywords: RUN(), LOOP(), MUTE()
+    if (token.type === 'RUN' || token.type === 'LOOP' || token.type === 'MUTE') {
       return this.parseReservedKeyword()
     }
 
@@ -230,7 +225,7 @@ export class StatementParser {
     this.pos = argsResult.newPos
 
     // Check if this is a transport command
-    const transportCommands = ['start', 'stop', 'loop', 'mute', 'unmute']
+    const transportCommands = ['start', 'loop', 'run', 'mute']
     if (transportCommands.includes(method)) {
       return {
         statement: {
@@ -316,7 +311,7 @@ export class StatementParser {
   }
 
   /**
-   * Parse reserved keyword (RUN, LOOP, STOP, MUTE)
+   * Parse reserved keyword (RUN, LOOP, MUTE)
    */
   private parseReservedKeyword(): { statement: Statement; newPos: number } {
     const keywordToken = ParserUtils.current(this.tokens, this.pos)

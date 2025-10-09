@@ -11,7 +11,6 @@ export type AudioTokenType =
   | 'GLOBAL' // GLOBAL constant
   | 'RUN' // RUN reserved keyword
   | 'LOOP' // LOOP reserved keyword
-  | 'STOP' // STOP reserved keyword
   | 'MUTE' // MUTE reserved keyword
   | 'IDENTIFIER' // variable names, method names
   | 'NUMBER' // numeric values

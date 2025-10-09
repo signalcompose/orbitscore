@@ -1,116 +1,66 @@
-# 現在の課題・問題
+# Current Issues and Status
 
-## 解決済み（2025-01-07）
+**Last Updated**: 2025-10-09
 
-### ✅ CI/CD Build Failures
-- **問題**: GitHub Actions CI failing due to `speaker` package build errors and Node.js version mismatch
-- **解決**: 未使用依存関係を削除、Node.jsバージョンを統一（v22）
-- **効果**: CI builds successfully, clean dependency tree
+## Active Work
 
-### ✅ Audio Playback Issues
-- **問題**: Audio files not found, looping playback not stopping, CLI not exiting
-- **解決**: 
-  - `global.audioPath()` support for relative path resolution
-  - `sequence.run()` auto-stop mechanism
-  - CLI auto-exit after playback completion
-- **効果**: Audio plays correctly, stops automatically, CLI exits cleanly
+### Phase 3: 設定同期システムの実装 ✅
+- **Status**: 実装完了
+- **Description**: RUN/LOOPの設定反映タイミング制御
+- **Completed**: 2025-10-09
+- **Details**:
+  - **RUN()**: 即座に設定変更を反映して実行
+  - **LOOP()**: 次サイクルから設定変更を反映
+  - 設定変更（`tempo()`, `beat()`, `play()`, `chop()`, `audio()`, `length()`）は実行中にバッファリングされる
+  - リアルタイムパラメータ（`gain()`, `pan()`）は即座に反映
+  - **Test Results**: 150 passed, 19 skipped（新規テスト13個追加）
 
-### ✅ Test Suite Issues
-- **問題**: 13 tests failing due to obsolete test files and SuperCollider port conflicts
-- **解決**: 
-  - Removed 7 obsolete test files referencing deleted modules
-  - Sequential test execution to avoid port conflicts
-  - Skipped e2e/interpreter-v2 tests pending implementation updates
-- **効果**: 109 tests passing, 15 tests skipped, 0 failures
+## Recently Completed
 
-### ✅ Git Workflow実装完了
-- **問題**: 本番前に機能追加してmainブランチが壊れる問題
-- **解決**: 包括的なGit Workflowとブランチ保護ルールを実装
-- **内容**:
-  - main/developブランチの完全保護（PR必須、承認必須、管理者強制適用）
-  - Git Worktree設定（orbitscore-main/で本番環境分離）
-  - Cursor BugBotルール（日本語レビュー、プロジェクト固有ガイドライン）
-  - PROJECT_RULES.mdに詳細なワークフローを文書化
+### Issue #42: Phase 3 - Setting Synchronization System ✅
+- **Status**: 実装完了、PR作成待ち
+- **Branch**: `42-setting-synchronization-system`
+- **Description**: 設定バッファリングシステムの実装
+- **Completed Phases**:
+  - Phase 3-1: 設計確認 ✅
+  - Phase 3-2: バッファフィールド追加 ✅
+  - Phase 3-3: RUN()即座反映 ✅
+  - Phase 3-4: LOOP()次サイクル反映 ✅
+  - Phase 3-5: 設定メソッド修正 ✅
+  - Phase 3-6: テスト実装 ✅
+  - Phase 3-8: 全テスト実行 ✅
 
-### ✅ Chop Slice Playback Rate and Envelope (2025-01-07)
-- **問題**: スライスの再生速度が時間枠に合わず、クリックノイズが発生
-- **解決**: 
-  - 再生速度の自動調整（`rate = sliceDuration / eventDurationSec`）
-  - 可変エンベロープ（fadeIn=0ms、fadeOut=4%）
-  - `run()`と`loop()`のリファクタリング（DRY、SRP）
-- **効果**: スライスが正しいタイミングで再生され、クリックノイズが軽減、アタック感が保持される
-- **PR**: #10
+### Issue #39: Reserved Keywords Implementation ✅
+- **Status**: Merged to develop (PR #41)
+- **Branch**: `39-reserved-keywords-implementation`
+- **Description**: Implemented RUN/LOOP/STOP/MUTE reserved keywords for controlling multiple sequences
+- **Completed Phases**:
+  - Phase 1: パーサー拡張 ✅
+  - Phase 2: インタプリタ実装 ✅
+  - Phase 3: 設定同期システム ✅（Issue #42で実装）
+  - Phase 4: テスト実装 ✅
+  - Phase 5: ドキュメント更新 ✅
+- **Test Results**: 150 passed, 19 skipped
 
-### ✅ Phase 7: Final Cleanup (2025-01-07)
-- **問題**: 未使用コード、型安全性の問題、一時ファイル蓄積
-- **解決**: 
-  - 未使用ファイルの削除（重複スケジューラー、非推奨ラッパー）
-  - 型安全性の向上（`AudioEngine`インターフェース、`Scheduler`拡張）
-  - 型キャストの削減（`as any`の使用を最小化）
-  - `AudioSlicer.cleanup()`メソッドの実装
-- **効果**: コードベースの大幅な改善、保守性の向上、バグの修正
-- **PR**: #35
+### Issue #40: Claude Code Review Japanese Localization ✅
+- **Status**: Merged to develop
+- **Description**: Updated GitHub Actions workflow to request Japanese code reviews
 
-## 現在の状況
+### Issue #28: Phase 5-1 - audio-engine.ts Refactoring ✅
+- **Status**: CLOSED（不要となった）
+- **Reason**: SuperCollider一本化（PR #31）により、audio-engine.tsは削除された
 
-- **重大な問題**: なし
-- **開発フェーズ**: 全リファクタリング完了、コードベース完全にクリーンアップ
-- **次回優先事項**: 
-  - 通常の機能開発に戻る
-  - グラニュラーシンセシス対応の検討
+## Active Branch
+- **Current**: `42-setting-synchronization-system`
+- **Status**: 実装完了、コミット・PR作成待ち
 
-## 未実装機能（今後の実装予定）
+## Next Steps
+1. **Phase 3-10**: コミット・PR作成
+   - コミットハッシュ取得
+   - WORK_LOG更新
+   - PR作成: `Closes #42`を含める
+2. マージ後、次の機能実装へ
 
-### グラニュラーシンセシス対応
-- **目的**: 音のピッチを保ったまま長さだけを変える再生モード
-- **現状**: 現在は「テープレコーダー」方式（速度変更でピッチも変わる）のみ
-- **実装方針**:
-  - DSL仕様から検討が必要
-  - SuperColliderのグラニュラーシンセシス機能を活用
-  - 新しいメソッドまたはオプションパラメータで切り替え可能に
-  - 例: `sequence.timeStretch("granular")` または `sequence.play(...).mode("granular")`
-- **技術的検討事項**:
-  - SuperColliderの`Warp1` UGenまたは`GrainBuf` UGenの使用
-  - グレインサイズ、オーバーラップ、ウィンドウ関数の設定
-  - リアルタイム性能への影響
-  - DSL構文の設計（シンプルさと柔軟性のバランス）
+## Open Issues
 
-## 技術的決定事項
-
-### Dependency Management
-- **方針**: 未使用パッケージは積極的に削除してメンテナンス負担を軽減
-- **Node.js**: v22.0.0以上を要求（`engines`フィールドで明示）
-- **削除したパッケージ**: speaker, node-web-audio-api, wav, @julusian/midi, dotenv, osc
-
-### Test Strategy
-- **方針**: 実装更新が必要なテストは古い期待値を維持するのではなくスキップ
-- **SuperCollider**: 順次実行でポート競合を回避（`--pool=forks --poolOptions.forks.singleFork=true`）
-
-### Audio Playback
-- **Path Resolution**: `process.cwd()`を使用してワークスペース相対パスをサポート
-- **Auto-Stop**: `sequence.run()`に実装して異なる実行コンテキストで再利用可能に
-- **Playback Rate**: スライスの長さをイベントの時間枠に合わせて自動調整（tape-style pitch shift）
-
-### Code Organization (2025-01-07)
-- **Single Responsibility Principle**: 1つの関数は1つの責務のみ（50行以下推奨）
-- **DRY**: 2箇所以上に同じコードがあれば即座に抽出
-- **Module Organization**: 機能ごとにディレクトリを分割（例: `sequence/playback/`, `sequence/audio/`）
-- **Thin Controllers**: クラスメソッドは薄く（30行以下）、ユーティリティ関数に委譲
-- **Refactoring Triggers**: 重複コード、長いメソッド、複数の責務、テストが困難、再利用が困難
-
-### Type Safety (2025-01-07)
-- **AudioEngine Interface**: オーディオエンジンの抽象化
-- **Scheduler Interface**: スケジューラーの型定義拡張
-- **Type Cast Reduction**: `as any`の使用を最小化
-- **Interface Design**: 適切なインターフェース設計で保守性向上
-
-### Git Workflow
-- **ブランチ構造**: main（本番）← develop（統合）← feature/*（開発）
-- **保護ルール**: 全ブランチでPR必須、承認必須、管理者強制適用
-- **Worktree**: orbitscore/（develop）、orbitscore-main/（main）で環境分離
-- **コミットメッセージ**: 日本語必須（typeプレフィックスのみ英語）
-
-### Cursor BugBot
-- **言語**: 日本語でのレビューコメント必須
-- **重点**: DSL仕様（v2.0）への厳密な準拠、ライブパフォーマンスの安定性
-- **特別チェック**: setup.scdファイルの変更時は注意深いレビュー
+なし（全てクローズまたは完了）
