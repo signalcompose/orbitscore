@@ -199,16 +199,33 @@ export async function processTransportStatement(
  * Handle RUN() command - unidirectional toggle
  */
 async function handleRunCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
-  // Update RUN group
-  state.runGroup = new Set(sequenceNames)
+  // Validate all sequences exist before updating state
+  const notFound: string[] = []
+  const validSequences: string[] = []
+
+  for (const seqName of sequenceNames) {
+    if (state.sequences.has(seqName)) {
+      validSequences.push(seqName)
+    } else {
+      notFound.push(seqName)
+    }
+  }
+
+  // Warn about missing sequences
+  if (notFound.length > 0) {
+    console.warn(
+      `⚠️ RUN(): The following sequences do not exist and will be ignored: ${notFound.join(', ')}`,
+    )
+  }
+
+  // Update RUN group with only valid sequences
+  state.runGroup = new Set(validSequences)
 
   // Execute run() on included sequences
-  for (const seqName of sequenceNames) {
+  for (const seqName of validSequences) {
     const sequence = state.sequences.get(seqName)
     if (sequence) {
       await sequence.run()
-    } else {
-      console.error(`Sequence not found: ${seqName}`)
     }
   }
 }
@@ -217,7 +234,26 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
  * Handle LOOP() command - unidirectional toggle
  */
 async function handleLoopCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
-  const newLoopGroup = new Set(sequenceNames)
+  // Validate all sequences exist before updating state
+  const notFound: string[] = []
+  const validSequences: string[] = []
+
+  for (const seqName of sequenceNames) {
+    if (state.sequences.has(seqName)) {
+      validSequences.push(seqName)
+    } else {
+      notFound.push(seqName)
+    }
+  }
+
+  // Warn about missing sequences
+  if (notFound.length > 0) {
+    console.warn(
+      `⚠️ LOOP(): The following sequences do not exist and will be ignored: ${notFound.join(', ')}`,
+    )
+  }
+
+  const newLoopGroup = new Set(validSequences)
   const oldLoopGroup = state.loopGroup
 
   // Stop sequences that are no longer in LOOP group
@@ -230,23 +266,22 @@ async function handleLoopCommand(sequenceNames: string[], state: InterpreterStat
     }
   }
 
-  // Update LOOP group
+  // Update LOOP group with only valid sequences
   state.loopGroup = newLoopGroup
 
   // Execute loop() on included sequences
-  for (const seqName of sequenceNames) {
+  for (const seqName of validSequences) {
     const sequence = state.sequences.get(seqName)
     if (sequence) {
       await sequence.loop()
 
       // Apply MUTE state (MUTE only affects LOOP)
+      // Default is unmuted unless sequence is in muteGroup
       if (state.muteGroup.has(seqName)) {
         sequence.mute()
       } else {
         sequence.unmute()
       }
-    } else {
-      console.error(`Sequence not found: ${seqName}`)
     }
   }
 }
@@ -256,7 +291,26 @@ async function handleLoopCommand(sequenceNames: string[], state: InterpreterStat
  * MUTE is a persistent flag that only affects LOOP playback
  */
 async function handleMuteCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
-  const newMuteGroup = new Set(sequenceNames)
+  // Validate all sequences exist before updating state
+  const notFound: string[] = []
+  const validSequences: string[] = []
+
+  for (const seqName of sequenceNames) {
+    if (state.sequences.has(seqName)) {
+      validSequences.push(seqName)
+    } else {
+      notFound.push(seqName)
+    }
+  }
+
+  // Warn about missing sequences
+  if (notFound.length > 0) {
+    console.warn(
+      `⚠️ MUTE(): The following sequences do not exist and will be ignored: ${notFound.join(', ')}`,
+    )
+  }
+
+  const newMuteGroup = new Set(validSequences)
   const oldMuteGroup = state.muteGroup
 
   // Unmute sequences that are no longer in MUTE group (only if they're in LOOP)
@@ -269,11 +323,11 @@ async function handleMuteCommand(sequenceNames: string[], state: InterpreterStat
     }
   }
 
-  // Update MUTE group (persistent flag)
+  // Update MUTE group (persistent flag) with only valid sequences
   state.muteGroup = newMuteGroup
 
   // Mute sequences in MUTE group (only if they're in LOOP)
-  for (const seqName of sequenceNames) {
+  for (const seqName of validSequences) {
     if (state.loopGroup.has(seqName)) {
       const sequence = state.sequences.get(seqName)
       if (sequence) {
