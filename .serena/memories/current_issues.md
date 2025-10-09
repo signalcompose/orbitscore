@@ -2,65 +2,81 @@
 
 **Last Updated**: 2025-10-09
 
-## Active Work
-
-### Phase 3: 設定同期システムの実装 ✅
-- **Status**: 実装完了
-- **Description**: RUN/LOOPの設定反映タイミング制御
-- **Completed**: 2025-10-09
-- **Details**:
-  - **RUN()**: 即座に設定変更を反映して実行
-  - **LOOP()**: 次サイクルから設定変更を反映
-  - 設定変更（`tempo()`, `beat()`, `play()`, `chop()`, `audio()`, `length()`）は実行中にバッファリングされる
-  - リアルタイムパラメータ（`gain()`, `pan()`）は即座に反映
-  - **Test Results**: 150 passed, 19 skipped（新規テスト13個追加）
-
 ## Recently Completed
 
+### Issue #46: DSL v3.0 Edge Case Tests ✅
+- **Status**: Merged to develop (PR #47)
+- **Branch**: `46-dsl-v3-edge-case-tests`
+- **Description**: RUN/LOOP/MUTEコマンドのエッジケーステスト追加
+- **Completed**: 2025-10-09
+- **Details**:
+  - 12個のエッジケーステスト追加
+  - 空のコマンド、重複シーケンス、存在しないシーケンスなど
+  - process-statement.ts: 空の引数対応、停止処理改善
+  - **Test Results**: 219 passed, 19 skipped（新規12個追加）
+- **Review**: Claude review approved with minor suggestions (recorded in `pr47_review_suggestions`)
+
+### Issue #44: DSL v3.0 Implementation ✅
+- **Status**: Merged to develop (PR #45)
+- **Description**: アンダースコアプレフィックスパターン + 片記号方式の実装
+
 ### Issue #42: Phase 3 - Setting Synchronization System ✅
-- **Status**: 実装完了、PR作成待ち
-- **Branch**: `42-setting-synchronization-system`
-- **Description**: 設定バッファリングシステムの実装
-- **Completed Phases**:
-  - Phase 3-1: 設計確認 ✅
-  - Phase 3-2: バッファフィールド追加 ✅
-  - Phase 3-3: RUN()即座反映 ✅
-  - Phase 3-4: LOOP()次サイクル反映 ✅
-  - Phase 3-5: 設定メソッド修正 ✅
-  - Phase 3-6: テスト実装 ✅
-  - Phase 3-8: 全テスト実行 ✅
+- **Status**: Merged to develop (PR #43)
+- **Description**: 設定同期システムの実装
 
-### Issue #39: Reserved Keywords Implementation ✅
-- **Status**: Merged to develop (PR #41)
-- **Branch**: `39-reserved-keywords-implementation`
-- **Description**: Implemented RUN/LOOP/STOP/MUTE reserved keywords for controlling multiple sequences
-- **Completed Phases**:
-  - Phase 1: パーサー拡張 ✅
-  - Phase 2: インタプリタ実装 ✅
-  - Phase 3: 設定同期システム ✅（Issue #42で実装）
-  - Phase 4: テスト実装 ✅
-  - Phase 5: ドキュメント更新 ✅
-- **Test Results**: 150 passed, 19 skipped
+## Next Steps (Priority Order)
 
-### Issue #40: Claude Code Review Japanese Localization ✅
-- **Status**: Merged to develop
-- **Description**: Updated GitHub Actions workflow to request Japanese code reviews
+### 優先度：中
 
-### Issue #28: Phase 5-1 - audio-engine.ts Refactoring ✅
-- **Status**: CLOSED（不要となった）
-- **Reason**: SuperCollider一本化（PR #31）により、audio-engine.tsは削除された
+**Option 1: パフォーマンス最適化**
+- `handleLoopCommand`の二重ループを単一ループに統合
+- 推定工数: 0.5日
+- 関連メモリ: `dsl_v3_future_improvements` (Issue 4)、`pr47_review_suggestions` (提案1)
 
-## Active Branch
-- **Current**: `42-setting-synchronization-system`
-- **Status**: 実装完了、コミット・PR作成待ち
+**Option 2: `_method()`の即時適用の実装検証**
+- `seamlessParameterUpdate()`が実際に機能しているか確認
+- ループ中に`_tempo()`を呼んだ時、即座にテンポが変わるか検証
+- 推定工数: 2-3日
+- 関連メモリ: `dsl_v3_future_improvements` (Issue 1)
 
-## Next Steps
-1. **Phase 3-10**: コミット・PR作成
-   - コミットハッシュ取得
-   - WORK_LOG更新
-   - PR作成: `Closes #42`を含める
-2. マージ後、次の機能実装へ
+**Option 3: 型安全性の向上**
+- `processTransportStatement`のany型を適切な型に変更
+- TransportStatementインターフェースを定義
+- 推定工数: 0.5-1日
+- 関連メモリ: `pr47_review_suggestions` (提案2)
+
+### 優先度：低
+
+**Option 4: ドキュメント充実**
+- ライブコーディングパターン集
+- v2.0→v3.0移行ガイド
+- 推定工数: 1-2日
+- 関連メモリ: `dsl_v3_future_improvements` (Issue 5)
+
+**Option 5: MUTE仕様の妥当性確認**
+- RUNでもミュートできるべきか、ユーザーフィードバック収集
+- 推定工数: フィードバック待ち
+- 関連メモリ: `dsl_v3_future_improvements` (Issue 2)
+
+## Current Branch
+- **Current**: `develop`
+- **Status**: 最新（PR #47マージ済み）
 
 ## Open Issues
 
 なし（全てクローズまたは完了）
+
+## Recommendations
+
+次の実装タスクとして、以下を推奨：
+
+1. **パフォーマンス最適化**（Option 1）
+   - 小規模な変更で効果が期待できる
+   - PR #47のレビューでも指摘されている
+   - 短時間で完了可能
+
+2. **`_method()`の即時適用検証**（Option 2）
+   - より重要な機能検証
+   - 時間はかかるが、DSL v3.0の完成度を高める
+
+どちらを優先するかは、ユーザーの判断による。
