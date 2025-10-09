@@ -30,6 +30,16 @@ export class StatementParser {
       return this.parseVarDeclaration()
     }
 
+    // Reserved keywords: RUN(), LOOP(), STOP(), MUTE()
+    if (
+      token.type === 'RUN' ||
+      token.type === 'LOOP' ||
+      token.type === 'STOP' ||
+      token.type === 'MUTE'
+    ) {
+      return this.parseReservedKeyword()
+    }
+
     // Method calls: global.tempo(140) or seq1.play(0)
     if (token.type === 'IDENTIFIER') {
       return this.parseMethodCall()
@@ -300,6 +310,46 @@ export class StatementParser {
         type: 'transport',
         target,
         command,
+      },
+      newPos: this.pos,
+    }
+  }
+
+  /**
+   * Parse reserved keyword (RUN, LOOP, STOP, MUTE)
+   */
+  private parseReservedKeyword(): { statement: Statement; newPos: number } {
+    const keywordToken = ParserUtils.current(this.tokens, this.pos)
+    const command = keywordToken.value.toLowerCase()
+    this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+
+    // Expect opening parenthesis
+    if (ParserUtils.current(this.tokens, this.pos).type !== 'LPAREN') {
+      throw new Error(`Expected opening parenthesis after ${keywordToken.value}`)
+    }
+
+    // Parse sequence names
+    const argsResult = this.parseArguments()
+    this.pos = argsResult.newPos
+
+    // Convert arguments to sequence names (expect identifiers)
+    const sequences: string[] = []
+    for (const arg of argsResult.args) {
+      if (typeof arg === 'string') {
+        sequences.push(arg)
+      } else {
+        throw new Error(`Expected sequence name, got ${JSON.stringify(arg)}`)
+      }
+    }
+
+    return {
+      statement: {
+        type: 'transport',
+        target: 'global',
+        command,
+        sequences,
       },
       newPos: this.pos,
     }
