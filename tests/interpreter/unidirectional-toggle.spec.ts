@@ -267,4 +267,227 @@ describe('DSL v3.0: Unidirectional Toggle (片記号方式)', () => {
       expect(state.sequences.kick.isLooping).toBe(true)
     })
   })
+
+  describe('Edge Cases', () => {
+    it('should handle empty RUN()', async () => {
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+        var snare = init global.seq
+
+        global.start()
+        RUN(kick, snare)
+        RUN()
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // RUN() with no arguments should clear the RUN group
+      expect(state.sequences.kick.isPlaying).toBe(false)
+      expect(state.sequences.snare.isPlaying).toBe(false)
+    })
+
+    it('should handle empty LOOP()', async () => {
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+        var snare = init global.seq
+
+        global.start()
+        LOOP(kick, snare)
+        LOOP()
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // LOOP() with no arguments should clear the LOOP group
+      expect(state.sequences.kick.isLooping).toBe(false)
+      expect(state.sequences.snare.isLooping).toBe(false)
+    })
+
+    it('should handle empty MUTE()', async () => {
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+        var snare = init global.seq
+
+        global.start()
+        LOOP(kick, snare)
+        MUTE(kick, snare)
+        MUTE()
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // MUTE() with no arguments should clear the MUTE group
+      expect(state.sequences.kick.isMuted).toBe(false)
+      expect(state.sequences.snare.isMuted).toBe(false)
+    })
+
+    it('should handle duplicate sequences in RUN()', async () => {
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+
+        global.start()
+        RUN(kick, kick, kick)
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // Duplicate sequences should be deduplicated
+      expect(state.sequences.kick.isPlaying).toBe(true)
+    })
+
+    it('should handle duplicate sequences in LOOP()', async () => {
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+
+        global.start()
+        LOOP(kick, kick, kick)
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // Duplicate sequences should be deduplicated
+      expect(state.sequences.kick.isLooping).toBe(true)
+    })
+
+    it('should handle duplicate sequences in MUTE()', async () => {
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+
+        global.start()
+        LOOP(kick)
+        MUTE(kick, kick, kick)
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // Duplicate sequences should be deduplicated
+      expect(state.sequences.kick.isMuted).toBe(true)
+    })
+
+    it('should warn about non-existent sequences in RUN()', async () => {
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+
+        global.start()
+        RUN(kick, nonexistent)
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // Valid sequences should still run
+      expect(state.sequences.kick.isPlaying).toBe(true)
+      // Warning should be logged for non-existent sequence
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('nonexistent'))
+
+      consoleSpy.mockRestore()
+    })
+
+    it('should warn about non-existent sequences in LOOP()', async () => {
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+
+        global.start()
+        LOOP(kick, nonexistent)
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // Valid sequences should still loop
+      expect(state.sequences.kick.isLooping).toBe(true)
+      // Warning should be logged for non-existent sequence
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('nonexistent'))
+
+      consoleSpy.mockRestore()
+    })
+
+    it('should warn about non-existent sequences in MUTE()', async () => {
+      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+
+        global.start()
+        LOOP(kick)
+        MUTE(kick, nonexistent)
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // Valid sequences should still be muted
+      expect(state.sequences.kick.isMuted).toBe(true)
+      // Warning should be logged for non-existent sequence
+      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('nonexistent'))
+
+      consoleSpy.mockRestore()
+    })
+
+    it('should handle RUN to LOOP transition', async () => {
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+
+        global.start()
+        RUN(kick)
+        LOOP(kick)
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // Sequence should be both running and looping
+      expect(state.sequences.kick.isPlaying).toBe(true)
+      expect(state.sequences.kick.isLooping).toBe(true)
+    })
+
+    it('should handle MUTE with RUN (should have no effect)', async () => {
+      const code = `
+        var global = init GLOBAL
+        var kick = init global.seq
+
+        global.start()
+        RUN(kick)
+        MUTE(kick)
+      `
+
+      const ir = parseCode(code)
+      await interpreter.execute(ir)
+
+      const state = interpreter.getState()
+      // MUTE only affects LOOP, so RUN playback should be unaffected
+      expect(state.sequences.kick.isPlaying).toBe(true)
+      expect(state.sequences.kick.isMuted).toBe(false)
+    })
+  })
 })
