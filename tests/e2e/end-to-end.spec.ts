@@ -1,6 +1,12 @@
 /**
  * End-to-End test with real audio files
  * Tests the complete flow from DSL parsing to audio playback
+ *
+ * NOTE: These tests are skipped by default because they require SuperCollider server to be running.
+ * To run these tests:
+ * 1. Start SuperCollider server manually
+ * 2. Remove .skip from describe.skip()
+ * 3. Run: npm test -- tests/e2e/end-to-end.spec.ts
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
