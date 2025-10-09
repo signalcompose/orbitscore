@@ -17,6 +17,102 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.29 Performance: handleLoopCommand Optimization (January 9, 2025)
+
+**Date**: January 9, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `48-performance-loop-optimization`
+**Issue**: #48
+**Commits**: `5470808`
+
+**Work Content**: `handleLoopCommand`関数の二重ループを差分計算方式に統合し、パフォーマンスを最適化
+
+#### 背景
+
+PR #47のレビューで指摘された改善項目として、`handleLoopCommand`の二重ループ構造を最適化することが推奨された。現在の実装では、`state.sequences.get()`が冗長に呼び出され、すでにlooping中のシーケンスに対しても`loop()`が再度呼ばれていた。
+
+#### 実装の変更
+
+**最適化前の構造:**
+
+```typescript
+// ループ1: 停止処理
+for (const seqName of oldLoopGroup) {
+  if (!newLoopGroup.has(seqName)) {
+    const sequence = state.sequences.get(seqName)  // Get呼び出し #1
+    if (sequence) sequence.stop()
+  }
+}
+
+// ループ2: ループ開始＋MUTE適用
+for (const seqName of validSequences) {
+  const sequence = state.sequences.get(seqName)  // Get呼び出し #2
+  if (sequence) {
+    await sequence.loop()  // 全シーケンスに対してloop()を呼ぶ
+    // MUTE適用
+  }
+}
+```
+
+**最適化後の構造:**
+
+```typescript
+// 差分セットを事前計算
+const toStop = [...oldLoopGroup].filter(name => !newLoopGroup.has(name))
+const toStart = validSequences.filter(name => !oldLoopGroup.has(name))
+const toContinue = validSequences.filter(name => oldLoopGroup.has(name))
+
+// 停止処理（削除されたシーケンスのみ）
+for (const seqName of toStop) {
+  const sequence = state.sequences.get(seqName)
+  if (sequence) sequence.stop()
+}
+
+// 新規開始（新しく追加されたシーケンスのみloop()呼び出し）
+for (const seqName of toStart) {
+  const sequence = state.sequences.get(seqName)
+  if (sequence) {
+    await sequence.loop()
+    // MUTE適用
+  }
+}
+
+// 継続中（すでにlooping中、MUTEステートのみ更新）
+for (const seqName of toContinue) {
+  const sequence = state.sequences.get(seqName)
+  if (sequence) {
+    // loop()は呼ばない（不要な再開を防ぐ）
+    // MUTEステートのみ更新
+  }
+}
+```
+
+#### 最適化の効果
+
+1. **Map lookup削減**: 冗長な`state.sequences.get()`呼び出しを削減
+2. **不要なloop()呼び出し削減**: すでにlooping中のシーケンスに対して`loop()`を再度呼ばない
+3. **コードの可読性向上**: 差分セット（`toStop`, `toStart`, `toContinue`）により、何が起こるかが明示的
+4. **パフォーマンス改善**: 大量のシーケンスを扱う場合のスケーラビリティ向上
+
+#### テスト結果
+
+- **全体**: 219 passed, 19 skipped
+- **リグレッション**: なし
+- **Edge Casesテスト**: すべてパス（空のLOOP()、重複シーケンス、存在しないシーケンス等）
+
+#### 技術的な学び
+
+1. **差分計算の重要性**: SetのfilterとArray.prototype.filter()を組み合わせて効率的に差分を計算
+2. **冪等性の考慮**: `loop()`は冪等ではない（再度呼ぶとループが再開される）ため、継続中のシーケンスには呼ばない
+3. **MUTEステートの独立性**: MUTEステートはloop()とは独立して更新可能
+
+#### 次のステップ
+
+- `_method()`の即時適用の実装検証（DSL v3.0の完成度向上）
+- 型安全性の向上（`processTransportStatement`のany型を適切な型に変更）
+
+---
+
 ### 6.28 DSL v3.0: Edge Case Tests (January 9, 2025)
 
 **Date**: January 9, 2025
