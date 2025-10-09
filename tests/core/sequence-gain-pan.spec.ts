@@ -151,4 +151,47 @@ describe('Sequence - gain() and pan()', () => {
       expect(state.pan).toBe(50)
     })
   })
+
+  describe('DSL v3.0: Setting vs Immediate Application', () => {
+    it('gain() should set value without immediate application', () => {
+      seq.gain(-6)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-6)
+    })
+
+    it('pan() should set value without immediate application', () => {
+      seq.pan(-50)
+      const state = seq.getState()
+      expect(state.pan).toBe(-50)
+    })
+
+    it('_gain() should set value with immediate application', () => {
+      seq._gain(-12)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-12)
+    })
+
+    it('_pan() should set value with immediate application', () => {
+      seq._pan(30)
+      const state = seq.getState()
+      expect(state.pan).toBe(30)
+    })
+
+    it('should allow mixing setting and immediate methods', () => {
+      seq.gain(-6).pan(-50)._gain(-12)._pan(30)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-12)
+      expect(state.pan).toBe(30)
+    })
+
+    it('_gain() should allow chaining', () => {
+      const result = seq._gain(-6)
+      expect(result).toBe(seq)
+    })
+
+    it('_pan() should allow chaining', () => {
+      const result = seq._pan(-50)
+      expect(result).toBe(seq)
+    })
+  })
 })

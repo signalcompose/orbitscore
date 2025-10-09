@@ -1,5 +1,11 @@
 /**
  * Tests for the object-oriented Interpreter V2
+ *
+ * NOTE: These tests are skipped by default because they require SuperCollider server to be running.
+ * To run these tests:
+ * 1. Start SuperCollider server manually
+ * 2. Remove .skip from describe.skip()
+ * 3. Run: npm test -- tests/interpreter/interpreter-v2.spec.ts
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'

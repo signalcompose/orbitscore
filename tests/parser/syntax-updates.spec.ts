@@ -222,7 +222,7 @@ seq.audio("test.wav")
     })
   })
 
-  describe('Reserved Keywords (RUN/LOOP/STOP/MUTE)', () => {
+  describe('Reserved Keywords (RUN/LOOP/MUTE) - DSL v3.0', () => {
     it('should parse RUN with single sequence', () => {
       const code = `RUN(kick)`
       const tokenizer = new AudioTokenizer(code)
@@ -252,22 +252,6 @@ seq.audio("test.wav")
         target: 'global',
         command: 'loop',
         sequences: ['kick', 'snare', 'hihat'],
-      })
-    })
-
-    it('should parse STOP with sequences', () => {
-      const code = `STOP(kick, snare)`
-      const tokenizer = new AudioTokenizer(code)
-      const tokens = tokenizer.tokenize()
-      const parser = new AudioParser(tokens)
-      const result = parser.parse().statements
-
-      expect(result).toHaveLength(1)
-      expect(result[0]).toEqual({
-        type: 'transport',
-        target: 'global',
-        command: 'stop',
-        sequences: ['kick', 'snare'],
       })
     })
 
