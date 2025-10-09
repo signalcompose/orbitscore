@@ -242,7 +242,7 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
 }
 
 /**
- * Handle LOOP() command - unidirectional toggle
+ * Handle LOOP() command - unidirectional toggle (optimized with differential calculation)
  */
 async function handleLoopCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
   // Validate all sequences exist before updating state
@@ -267,27 +267,42 @@ async function handleLoopCommand(sequenceNames: string[], state: InterpreterStat
   const newLoopGroup = new Set(validSequences)
   const oldLoopGroup = state.loopGroup
 
-  // Stop sequences that are no longer in LOOP group
-  for (const seqName of oldLoopGroup) {
-    if (!newLoopGroup.has(seqName)) {
-      const sequence = state.sequences.get(seqName)
-      if (sequence) {
-        sequence.stop()
-      }
+  // Calculate differential sets for efficient processing
+  const toStop = [...oldLoopGroup].filter((name) => !newLoopGroup.has(name))
+  const toStart = validSequences.filter((name) => !oldLoopGroup.has(name))
+  const toContinue = validSequences.filter((name) => oldLoopGroup.has(name))
+
+  // Stop sequences removed from LOOP group
+  for (const seqName of toStop) {
+    const sequence = state.sequences.get(seqName)
+    if (sequence) {
+      sequence.stop()
     }
   }
 
   // Update LOOP group with only valid sequences
   state.loopGroup = newLoopGroup
 
-  // Execute loop() on included sequences
-  for (const seqName of validSequences) {
+  // Start new sequences
+  for (const seqName of toStart) {
     const sequence = state.sequences.get(seqName)
     if (sequence) {
       await sequence.loop()
 
       // Apply MUTE state (MUTE only affects LOOP)
-      // Default is unmuted unless sequence is in muteGroup
+      if (state.muteGroup.has(seqName)) {
+        sequence.mute()
+      } else {
+        sequence.unmute()
+      }
+    }
+  }
+
+  // Update MUTE state for continuing sequences (no need to call loop() again)
+  for (const seqName of toContinue) {
+    const sequence = state.sequences.get(seqName)
+    if (sequence) {
+      // Only update MUTE state, don't restart loop
       if (state.muteGroup.has(seqName)) {
         sequence.mute()
       } else {
