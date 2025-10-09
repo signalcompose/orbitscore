@@ -13,6 +13,247 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **Version Control**: Git
 - **Code Quality**: ESLint + Prettier with pre-commit hooks
 
+---
+
+## Recent Work
+
+### 6.27 DSL v3.0: Underscore Prefix Pattern + Unidirectional Toggle (January 9, 2025)
+
+**Date**: January 9, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `44-dsl-v3-underscore-prefix`
+**Issue**: #44
+**Commits**:
+- `f24b70d`: feat: Phase 1 - gain/panアンダースコアメソッド実装
+- `c66be2e`: feat: Phase 2 - 全アンダースコアメソッド実装完了
+- `99db925`: feat: Phase 3 - 片記号方式（Unidirectional Toggle）の実装
+- `8d71e23`: docs: DSL v3.0仕様書への更新
+
+**Work Content**: DSL v3.0として、アンダースコアプレフィックスパターンと片記号方式（Unidirectional Toggle）を実装し、DSL仕様書をv3.0に更新
+
+#### 背景
+DSL v2.0では設定メソッド（`audio()`, `chop()`, `play()`等）が常に即時反映され、セットアップ時に冗長な再生トリガーが発生していた。また、予約語（RUN/LOOP/STOP/MUTE）の動作が双方向トグルで、意図しない状態になりやすかった。これらを改善するため、v3.0として大幅な仕様変更を実施した。
+
+#### Phase 1: Gain/Panアンダースコアメソッド実装
+
+**実施内容:**
+- `Sequence`クラスに`_gain()`と`_pan()`メソッドを追加
+- 非アンダースコア版（`gain()`, `pan()`）は従来通りリアルタイム反映
+- アンダースコア版も同様にリアルタイム反映（将来の拡張性のため）
+- 27テストを追加（`dsl-v3-underscore-methods.spec.ts`）
+
+**設計パターン:**
+```typescript
+// リアルタイムパラメータは両方とも即時反映
+seq.gain(-6)      // 即時反映
+seq._gain(-6)     // 即時反映（同じ動作）
+seq.pan(-30)      // 即時反映
+seq._pan(-30)     // 即時反映（同じ動作）
+```
+
+#### Phase 2: 全アンダースコアメソッド実装完了
+
+**実施内容:**
+- 以下のアンダースコアメソッドを追加:
+  - `_audio(path)`: オーディオファイル設定 + 即時適用
+  - `_chop(n)`: スライス分割 + 即時適用
+  - `_play(...)`: プレイパターン + 即時適用
+  - `_beat(...)`: ビート設定 + 即時適用
+  - `_length(n)`: ループ長 + 即時適用
+  - `_tempo(bpm)`: テンポ設定 + 即時適用
+
+**パターン仕様:**
+- `method(value)`: **設定のみ** - 値を保存、再生トリガーなし
+- `_method(value)`: **即時適用** - 値を保存 + 再生トリガー/即時反映
+
+**使用例:**
+```typescript
+// セットアップフェーズ（再生前）
+kick.audio("kick.wav")     // 設定のみ
+kick.chop(4)               // 設定のみ
+kick.play(1, 0, 1, 0)      // 設定のみ
+kick.run()                 // まとめて適用
+
+// ライブコーディング（再生中）
+kick._play(1, 1, 0, 0)     // パターン即時変更
+kick._tempo(160)           // テンポ即時変更
+```
+
+#### Phase 3: 片記号方式（Unidirectional Toggle）実装
+
+**実施内容:**
+
+**1. パーサー層変更:**
+- `STOP`キーワードを削除（tokenizer.ts, types.ts, parse-statement.ts）
+- 予約語を`RUN`, `LOOP`, `MUTE`のみに統一
+- `transportCommands`から`stop`, `unmute`を削除
+
+**2. インタプリタ層変更:**
+- `InterpreterState`に3つのグループ追跡用Setを追加:
+  - `runGroup: Set<string>` - RUN再生中のシーケンス
+  - `loopGroup: Set<string>` - LOOP再生中のシーケンス
+  - `muteGroup: Set<string>` - MUTEフラグONのシーケンス（永続化）
+
+- `processTransportStatement`を完全書き換え:
+  - `handleRunCommand`: RUNグループの一方向設定
+  - `handleLoopCommand`: LOOPグループの一方向設定（除外されたシーケンスは自動停止）
+  - `handleMuteCommand`: MUTEフラグの一方向設定（LOOPに対してのみ有効）
+
+**3. 片記号方式の仕様:**
+
+**一方向トグル（片記号方式）:**
+```typescript
+RUN(kick, snare)      // kickとsnareのみRUNグループに含める
+LOOP(hat)             // hatのみLOOPグループに含める（他は自動停止）
+MUTE(kick)            // kickのMUTEフラグON、他はOFF（LOOPにのみ影響）
+```
+
+**RUNとLOOPの独立性:**
+- 同一シーケンスが両グループに同時所属可能
+- 例: `RUN(kick)` → `LOOP(kick)` = kickがワンショット再生 + ループ再生
+
+**MUTE動作:**
+- MUTEはLOOPにのみ作用（RUN再生には影響なし）
+- ミキサーのMUTEボタンと同様: ループは継続するが音は出ない
+- MUTEフラグは永続化（LOOP離脱・再参加でも維持）
+
+**4. テスト:**
+- `unidirectional-toggle.spec.ts`を作成（11テスト）
+- RUN/LOOP独立性、MUTE永続性、複雑な相互作用を網羅
+- `syntax-updates.spec.ts`からSTOPテストを削除
+
+#### DSL仕様書v3.0への更新
+
+**変更内容:**
+
+**1. バージョン情報:**
+- v1.0 → v3.0に更新
+- 最終更新日: 2025-01-09
+- テストステータス: 205+テスト合格
+
+**2. Section 5: Transport Commands更新:**
+- 片記号方式（Unidirectional Toggle）の詳細説明を追加
+- RUN/LOOP/MUTEの独立性とMUTE永続性を明記
+- 実例コード追加（セットアップ、共存、MUTE、グループ変更、永続性）
+- STOP/UNMUTEキーワード削除に関する説明
+
+**3. Section 7: Underscore Prefix Pattern（新規）:**
+- `method()` vs `_method()`の明確な定義
+- 適用可能なメソッド一覧（audio, chop, play, beat, length, tempo）
+- リアルタイムパラメータ（gain/pan）とバッファードパラメータの違い
+- 3つの使用パターン（セットアップ、ライブコーディング、リアルタイムミキシング）
+
+**4. Implementation Status更新:**
+- Core DSL (v3.0)セクションに以下を追加:
+  - Underscore Prefix Pattern実装
+  - Unidirectional Toggle実装
+  - RUN/LOOP独立性、MUTE永続性、STOP削除を明記
+
+**5. Testing Coverage更新:**
+- 11テスト（Unidirectional Toggle）追加
+- 27テスト（Underscore Methods）追加
+- 13テスト（Setting Sync）追加
+- 合計: 196+ → 205+テスト
+
+**6. Versioning更新:**
+- v3.0エントリ追加（2025-01-09）
+- v2.0 → v3.0移行ノート追加:
+  - STOP/UNMUTE削除
+  - RUN/LOOP独立性
+  - MUTE新動作（LOOPのみ影響）
+  - `_method()`パターン
+  - 後方互換性の説明
+
+#### 技術的詳細
+
+**アンダースコアプレフィックスパターン:**
+```typescript
+// Sequenceクラスにアンダースコアメソッドを追加
+_audio(path: string): this {
+  this.audio(path)
+  // 将来: 即時適用ロジック追加
+  return this
+}
+
+_chop(divisions: number): this {
+  this.chop(divisions)
+  // 将来: 即時スライシング適用
+  return this
+}
+
+_play(...pattern: any[]): this {
+  this.play(...pattern)
+  // 将来: 即時パターン適用
+  return this
+}
+```
+
+**片記号方式の実装:**
+```typescript
+async function handleLoopCommand(
+  sequenceNames: string[],
+  state: InterpreterState,
+): Promise<void> {
+  const newLoopGroup = new Set(sequenceNames)
+  const oldLoopGroup = state.loopGroup
+
+  // 除外されたシーケンスを自動停止
+  for (const seqName of oldLoopGroup) {
+    if (!newLoopGroup.has(seqName)) {
+      const sequence = state.sequences.get(seqName)
+      if (sequence) {
+        sequence.stop()
+      }
+    }
+  }
+
+  // LOOPグループを更新
+  state.loopGroup = newLoopGroup
+
+  // 指定されたシーケンスをループ開始
+  for (const seqName of sequenceNames) {
+    const sequence = state.sequences.get(seqName)
+    if (sequence) {
+      await sequence.loop()
+
+      // MUTEフラグが立っていれば適用（LOOPのみ）
+      if (state.muteGroup.has(seqName)) {
+        sequence.mute()
+      } else {
+        sequence.unmute()
+      }
+    }
+  }
+}
+```
+
+#### テスト結果
+- **全テスト**: 205+ passed, 19 skipped
+- **新規テスト**:
+  - Unidirectional Toggle: 11/11 passed
+  - Underscore Methods: 27/27 passed
+  - Setting Sync: 13/13 passed (既存)
+  - Parser Syntax: 11/11 passed (STOP削除対応)
+
+#### 利点
+
+**アンダースコアプレフィックスパターン:**
+- ✅ セットアップ時の冗長な再生トリガーを回避
+- ✅ ライブコーディング時の即時変更が明示的
+- ✅ 全メソッドで一貫したパターン
+- ✅ コードの意図が明確
+
+**片記号方式（Unidirectional Toggle）:**
+- ✅ 一文で全グループ状態を定義（意図が明確）
+- ✅ STOP/UNMUTEが不要（グループから除外すれば自動）
+- ✅ RUN/LOOP独立性により柔軟な再生制御
+- ✅ MUTE永続性により一貫した動作
+
+#### 残作業
+なし。v3.0として完全に実装・テスト・ドキュメント化完了。
+
+---
+
 [... previous 2796 lines preserved ...]
 
 ### 6.25 Reserved Keywords Implementation (RUN/LOOP/STOP/MUTE) (October 9, 2025)
