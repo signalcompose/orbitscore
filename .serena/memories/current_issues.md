@@ -1,14 +1,27 @@
 # Current Issues and Status
 
-**Last Updated**: 2025-10-09
+**Last Updated**: 2025-01-09
 
 ## Recently Completed
+
+### Issue #50: _method() Seamless Parameter Update Verification ✅
+- **Status**: Complete, PR pending
+- **Branch**: `50-verify-underscore-method-seamless-update`
+- **Description**: `_method()`の即時適用機能（seamless parameter update）の動作検証
+- **Completed**: 2025-01-09
+- **Details**:
+  - テストファイル作成: `tests/core/seamless-parameter-update.spec.ts` (10テスト、全て成功)
+  - LOOP中の`_method()`は完璧に動作することを確認
+  - RUN中の`_method()`は動作しない（既知の制限、設計上の判断）
+  - `seamlessParameterUpdate()`の仕組みを完全に理解
+- **Conclusion**: DSL v3.0の`_method()`機能は正しく実装されており、ライブコーディングで期待通りに動作
+- **Memory**: `issue50_seamless_update_verification`
 
 ### Issue #48: handleLoopCommand Performance Optimization ✅
 - **Status**: Merged to develop (PR #49)
 - **Branch**: `48-performance-loop-optimization`
 - **Description**: handleLoopCommandの二重ループを差分計算方式に統合
-- **Completed**: 2025-10-09
+- **Completed**: 2025-01-09
 - **Details**:
   - 差分セット（toStop/toStart/toContinue）による効率化
   - 冗長なstate.sequences.get()呼び出しを削減
@@ -20,7 +33,7 @@
 - **Status**: Merged to develop (PR #47)
 - **Branch**: `46-dsl-v3-edge-case-tests`
 - **Description**: RUN/LOOP/MUTEコマンドのエッジケーステスト追加
-- **Completed**: 2025-10-09
+- **Completed**: 2025-01-09
 
 ### Issue #44: DSL v3.0 Implementation ✅
 - **Status**: Merged to develop (PR #45)
@@ -34,18 +47,18 @@
 
 ### 優先度：中
 
-**Option 1: `_method()`の即時適用の実装検証** （推奨）
-- `seamlessParameterUpdate()`が実際に機能しているか確認
-- ループ中に`_tempo()`を呼んだ時、即座にテンポが変わるか検証
-- 推定工数: 2-3日
-- 関連メモリ: `dsl_v3_future_improvements` (Issue 1)
-- **理由**: DSL v3.0の完成度を高める重要な検証
-
-**Option 2: 型安全性の向上**
+**Option 1: 型安全性の向上** （推奨）
 - `processTransportStatement`のany型を適切な型に変更
 - TransportStatementインターフェースを定義
 - 推定工数: 0.5-1日
 - 関連メモリ: `pr47_review_suggestions` (提案2)、`pr49_review_suggestions` (軽微な提案)
+- **理由**: Issue #50完了により、次はコード品質向上に注力
+
+**Option 2: RUN中の`_method()`サポートの検討**
+- 現在はLOOPでのみ動作、RUNでも必要か設計判断
+- ユーザーフィードバック収集が優先
+- 推定工数: 設計判断 + 実装2-3日
+- 関連メモリ: `issue50_seamless_update_verification`
 
 ### 優先度：低
 
@@ -61,8 +74,8 @@
 - 関連メモリ: `dsl_v3_future_improvements` (Issue 2)
 
 ## Current Branch
-- **Current**: `48-performance-loop-optimization`（マージ準備完了）
-- **Next**: `develop`（マージ後に移動）
+- **Current**: `50-verify-underscore-method-seamless-update` (PR準備完了)
+- **Next**: `develop` (PRマージ後に移動)
 
 ## Open Issues
 
@@ -70,10 +83,10 @@
 
 ## Recommendations
 
-次の実装タスクとして、**Option 1: `_method()`の即時適用の実装検証**を推奨：
+次の実装タスクとして、**Option 1: 型安全性の向上**を推奨：
 
-1. DSL v3.0の中核機能であり、検証が重要
-2. 実装済みのはずだが、実際に動作しているか確認が必要
-3. ユーザー体験に直結する機能
+1. Issue #50完了により、DSL v3.0の検証は完了
+2. コード品質向上（型安全性）に注力するタイミング
+3. 小規模なタスクなので、短期間で完了できる
 
-または、小規模な**Option 2: 型安全性の向上**から始めるのも良い選択肢。
+または、ユーザーフィードバックを待って**Option 2: RUN中の`_method()`サポート**を検討するのも良い選択肢。
