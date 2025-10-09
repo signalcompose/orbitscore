@@ -3,7 +3,12 @@
  * Handles global, sequence, and transport statements
  */
 
-import { Statement } from '../parser/audio-parser'
+import {
+  Statement,
+  GlobalStatement,
+  SequenceStatement,
+  TransportStatement,
+} from '../parser/audio-parser'
 
 import { InterpreterState } from './types'
 import { callMethod } from './evaluate-method'
@@ -30,15 +35,16 @@ export async function processStatement(
 ): Promise<void> {
   switch (statement.type) {
     case 'global':
-      await processGlobalStatement(statement as any, state)
+      await processGlobalStatement(statement, state)
       break
     case 'sequence':
-      await processSequenceStatement(statement as any, state)
+      await processSequenceStatement(statement, state)
       break
     case 'transport':
-      await processTransportStatement(statement as any, state)
+      await processTransportStatement(statement, state)
       break
     default:
+      // TypeScript should prevent this, but handle gracefully at runtime
       console.warn(`Unknown statement type: ${(statement as any).type}`)
   }
 }
@@ -60,7 +66,7 @@ export async function processStatement(
  * ```
  */
 export async function processGlobalStatement(
-  statement: any,
+  statement: GlobalStatement,
   state: InterpreterState,
 ): Promise<void> {
   const global = state.globals.get(statement.target)
@@ -100,7 +106,7 @@ export async function processGlobalStatement(
  * ```
  */
 export async function processSequenceStatement(
-  statement: any,
+  statement: SequenceStatement,
   state: InterpreterState,
 ): Promise<void> {
   const sequence = state.sequences.get(statement.target)
@@ -135,7 +141,7 @@ export async function processSequenceStatement(
  * @param state - Interpreter state
  */
 export async function processTransportStatement(
-  statement: any,
+  statement: TransportStatement,
   state: InterpreterState,
 ): Promise<void> {
   const target = statement.target

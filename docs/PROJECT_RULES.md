@@ -649,6 +649,37 @@ When you see these patterns, **refactor immediately**:
 
 ## 🧠 Serena Memory Management
 
+### 🔴 CRITICAL: Serena Memory Commit Workflow
+
+**developブランチではSerenaメモリをコミットしない:**
+
+- ✅ **developでメモリ変更はOK**: 編集・保存は自由に行える
+- ❌ **developでメモリコミットはNG**: コミット・pushはしない
+- ✅ **変更は次のブランチに持ち越す**: unstagedのまま機能ブランチに移行
+- ✅ **機能ブランチで一緒にコミット**: 機能実装と一緒にメモリをコミット
+
+**理由**: メモリ更新だけのPRを防ぎ、機能実装と関連情報を一緒に管理
+
+**Hook保護**: `pre-commit-check.sh`がdevelop/mainでの`.serena/memories/`コミットをブロック
+
+**ワークフロー例**:
+```bash
+# developブランチでメモリ更新（コミットしない）
+(develop) $ serena-write_memory(...)  # OK: 編集・保存
+(develop) $ git status                # .serena/memories/ が unstaged
+
+# 機能ブランチ作成（変更が持ち越される）
+(develop) $ git checkout -b 52-new-feature
+(52-new-feature) $ git status         # .serena/memories/ がまだ unstaged
+
+# 機能実装
+(52-new-feature) $ [実装...]
+
+# 機能とメモリを一緒にコミット
+(52-new-feature) $ git add .
+(52-new-feature) $ git commit -m "feat: 新機能実装とメモリ更新"  # OK!
+```
+
 ### When to Update Serena Memory (コミット時):
 
 **MUST update before committing when there are:**

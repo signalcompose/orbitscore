@@ -167,14 +167,17 @@ orbitscore/
 npm test
 ```
 
-**216/217 tests passing (99.5%)**:
+**229/248 tests passing (92.3%)**:
 
-- Parser: ✅ Complete
-- Audio Engine: ✅ Complete  
-- Timing Calculator: ✅ Complete
+- Parser: ✅ Complete (50 tests)
+- Audio Engine: ✅ Complete (9 tests)
+- Timing Calculator: ✅ Complete (10 tests)
+- Interpreter: ✅ Complete (83 tests)
+- DSL v3.0: ✅ Complete (56 tests)
+- Setting Sync: ✅ Complete (19 tests)
 - Live Coding Workflow: ✅ Verified (manual testing)
 
-**Note**: Scheduler lifecycle issues have been resolved. All live coding features working correctly.
+**Note**: 19 tests skipped (SuperCollider integration tests require local environment).
 
 ## 使い方
 

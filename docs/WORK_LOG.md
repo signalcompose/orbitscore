@@ -17,6 +17,98 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.30 Refactor: Type Safety Improvement + Serena Memory Workflow (January 9, 2025)
+
+**Date**: January 9, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `55-improve-type-safety-process-statement`
+**Issue**: #55
+**Commits**: `8d98a8f`
+
+**Work Content**: `processStatement`関数群のany型を適切な型に変更して型安全性を向上。併せて、Serenaメモリのコミットワークフローを改善し、developブランチでのメモリコミットをブロックするHookを追加。
+
+#### 背景
+
+PR #47, #49のレビューで型安全性の向上が推奨された。`processGlobalStatement`, `processSequenceStatement`, `processTransportStatement`の各関数でany型が使用されており、TypeScriptの型チェックが効いていなかった。
+
+また、Serenaメモリ更新だけのPRが発生する問題があり、ワークフローの改善が必要だった。
+
+#### 実装の変更
+
+**1. 型定義の修正**
+
+`packages/engine/src/parser/types.ts`の`GlobalStatement`に`target`と`chain`フィールドを追加：
+
+```typescript
+export type GlobalStatement = {
+  type: 'global'
+  target: string      // 追加
+  method: string
+  args: any[]
+  chain?: MethodChain[]  // 追加
+}
+```
+
+**2. any型の削除**
+
+`packages/engine/src/interpreter/process-statement.ts`で全てのany型を削除：
+
+```typescript
+// Before
+export async function processGlobalStatement(
+  statement: any,  // ❌
+  state: InterpreterState,
+): Promise<void>
+
+// After
+export async function processGlobalStatement(
+  statement: GlobalStatement,  // ✅
+  state: InterpreterState,
+): Promise<void>
+```
+
+同様に`processSequenceStatement`, `processTransportStatement`も修正。
+
+**3. Serenaメモリワークフローの改善**
+
+developブランチでのメモリコミットをブロックする仕組みを追加：
+
+- `.claude/hooks/pre-commit-check.sh`: develop/mainで`.serena/memories/`のコミットをブロック（exit 2）
+- `.claude/hooks/session-start.sh`: developブランチ時にメモリ更新ルールをリマインド
+- `docs/PROJECT_RULES.md`: メモリコミットワークフローを明記
+
+**ワークフロー:**
+- ✅ developでメモリ変更（編集・保存）はOK
+- ❌ developでメモリコミットはNG
+- ✅ 変更はunstagedのまま機能ブランチに持ち越す
+- ✅ 機能ブランチで機能と一緒にコミット
+
+#### テスト結果
+
+```
+Test Files  14 passed | 2 skipped (16)
+     Tests  229 passed | 19 skipped (248)
+  Duration  443ms
+```
+
+✅ 型エラーなし、リグレッションなし
+
+#### 変更ファイル
+
+- `packages/engine/src/parser/types.ts` - GlobalStatement型定義に`target`, `chain`追加
+- `packages/engine/src/interpreter/process-statement.ts` - any型を適切な型に変更
+- `.claude/hooks/pre-commit-check.sh` - Serenaメモリコミットブロック機能追加
+- `.claude/hooks/session-start.sh` - developブランチ時の警告追加
+- `docs/PROJECT_RULES.md` - Serenaメモリワークフロー明記
+- `.serena/memories/common_workflow_violations.md` - 実装前チェックリスト追加
+
+#### 次のステップ
+
+- Phase 8: 音声出力の動作確認
+- ユーザーマニュアル作成
+
+---
+
 ### 6.29 Performance: handleLoopCommand Optimization (January 9, 2025)
 
 **Date**: January 9, 2025
