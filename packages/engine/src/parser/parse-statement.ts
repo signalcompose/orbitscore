@@ -242,8 +242,11 @@ export class StatementParser {
     this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     const chain = this.parseMethodChain()
 
+    // Note: We cannot determine if target is global or sequence at parse time
+    // since variable names are arbitrary. Use 'sequence' type and let the interpreter
+    // determine the actual type by checking state.globals and state.sequences.
     const result: any = {
-      type: target === 'global' ? 'global' : 'sequence',
+      type: 'sequence',
       target,
       method,
       args: argsResult.args,
@@ -342,7 +345,7 @@ export class StatementParser {
     return {
       statement: {
         type: 'transport',
-        target: 'global',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords (RUN/LOOP/MUTE)
         command,
         sequences,
       },

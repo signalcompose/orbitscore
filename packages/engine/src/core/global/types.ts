@@ -47,9 +47,7 @@ export interface MasterEffect {
 
 export interface GlobalState {
   tempo: number
-  tick: number
   beat: Meter
-  key: string
   audioPath: string
   masterGainDb: number
   masterEffects: MasterEffect[]

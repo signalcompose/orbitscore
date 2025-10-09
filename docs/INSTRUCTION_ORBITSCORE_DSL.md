@@ -22,22 +22,28 @@ var global = init GLOBAL
 
 **Implementation Details**:
 - Creates an instance of the `Global` class
-- Initializes `AudioEngine` with Web Audio API
+- Initializes `AudioEngine` with SuperCollider
 - Sets up `Transport` system for scheduling
-- Default values: tempo=120, tick=480, beat=4/4, key='C'
+- Default values: tempo=120, beat=4/4
+- **Variable naming**: The variable name "global" is conventional but not required - you can use any valid identifier (e.g., `var g = init GLOBAL`, `var master = init GLOBAL`)
+- **Singleton behavior**: Multiple `init GLOBAL` statements return the same Global instance
 
-### Sequence Initialization  
+### Sequence Initialization
 ```js
 // After global initialization, create sequences
 var seq1 = init global.seq
 var seq2 = init global.seq
+// Or with any global variable name:
+var kick = init g.seq
+var snare = init master.seq
 ```
 
 **Implementation Details**:
 - Creates instances of the `Sequence` class through Global's factory method
 - Each sequence maintains its own state (tempo, beat, length, audio, play pattern)
-- Sequences inherit global parameters by default but can override them
+- Sequences inherit global parameters (tempo, beat) by default but can override them
 - Each sequence is automatically registered with the global transport
+- **Variable naming**: Sequence variable names are arbitrary and user-defined (common names: kick, snare, hat, bass, lead, etc.)
 
 **Legacy Syntax Support** (for backward compatibility):
 ```js
@@ -55,32 +61,19 @@ After initialization, configure the global context:
 global.tempo(140)   // set global tempo to 140 BPM
 ```
 
-### Tick Resolution
-```js
-global.tick(480)    // default resolution is 480 ticks per quarter note
-// Allowed values: 480, 960, 1920
-```
-
 ### Meter (Time Signature)
 ```js
 global.beat(4 by 4)   // equivalent to 4/4
 global.beat(5 by 4)   // 5/4
 global.beat(9 by 8)   // 9/8
-```
-- One bar = `n * (tick * (4/N))`
-  - Example: `5 by 4` → 5 × (480 × 4/4) = 2400 ticks  
-  - Example: `11 by 8` → 11 × (480 × 4/8) = 2640 ticks  
-
-### Composite Meters
-```js
-global.beat((4 by 4)(5 by 4))  
-global.beat((3 by 4)(2 by 4)).time(2)
+global.beat(3, 4)     // alternative syntax: 3/4
 ```
 
-### Key
-```js
-global.key(C)
-```
+**Note**:
+- tick() and key() have been removed from the current audio-based implementation
+- tick(): MIDI resolution concept, not needed for audio-only playback
+- key(): Will be added when MIDI support is implemented. For audio files, requires audio key detection feature.
+- Composite meters like (4 by 4)(5 by 4) are not currently supported
 
 ---
 
@@ -196,15 +189,7 @@ seq1.play(1, (0, 1, 2, 3, 4))    // 1 gets 1/2 (2 beats), then 5-tuplet in remai
 - Nested elements divide their parent's time slot equally
 - 0 = silence, 1-n = slice number from `chop(n)`
 
-### Alternative Functional Form
-```js
-seq1.play(0.chop(5), 0.chop(4))  // equivalent to nested form
-```
-
-### Time Modifiers
-```js
-seq1.play((0).chop(5).time(5), (0).chop(4).time(4))
-```
+**Note**: Play modifiers like .chop(), .time(), and .fixpitch() are planned for future release but not yet implemented.
 
 ---
 
@@ -348,16 +333,10 @@ seq1.audio("../audio/kick.wav")             // Default: chop(1)
 ### Play with Audio
 ```js
 seq1.play(1)           // play slice 1
-seq1.play(1).fixpitch(0)  // play at original pitch
+seq1.play(1, 2, 3, 4)  // play slices in sequence
 ```
 
-### Fixpitch
-```js
-fixpitch(0)   // original pitch
-fixpitch(1)   // +1 semitone
-fixpitch(-1)  // -1 semitone
-```
-- Decouples playback speed from pitch (granular or PSOLA-based time-stretching).
+**Note**: Audio manipulation features like fixpitch() and time() are planned for future release but not yet implemented.
 
 ---
 
@@ -373,6 +352,8 @@ fixpitch(-1)  // -1 semitone
 This pattern applies to ALL configuration methods that can affect running sequences.
 
 ### Applicable Methods
+
+#### Sequence Configuration Methods
 
 All sequence configuration methods follow this pattern:
 
@@ -393,6 +374,26 @@ seq._beat(4 by 4)         // Set meter AND apply timing change immediately
 seq._length(2)            // Set loop length AND apply immediately
 seq._tempo(140)           // Set tempo AND apply immediately
 ```
+
+#### Global Configuration Methods
+
+Global also supports underscore methods for parameters that affect all sequences:
+
+```js
+// Setting-only methods (no underscore)
+global.tempo(140)         // Set global tempo (no immediate effect on sequences)
+global.beat(4 by 4)       // Set global beat (no immediate effect on sequences)
+
+// Immediate application methods (with underscore)
+global._tempo(140)        // Set global tempo AND update all sequences that inherit it
+global._beat(4 by 4)      // Set global beat AND update all sequences that inherit it
+```
+
+**Inheritance behavior**:
+- When a sequence hasn't overridden tempo/beat, it inherits from global
+- `global._tempo()` triggers seamless parameter updates for all inheriting sequences
+- `global._beat()` triggers seamless parameter updates for all inheriting sequences
+- If a sequence has overridden a parameter (e.g., `seq.tempo(160)`), it ignores global changes
 
 ### Real-Time vs. Buffered Parameters
 
@@ -475,19 +476,27 @@ For backward compatibility and ease of use:
 
 ## 8. Implementation Notes
 
-- Parser must support both nested `play` and functional `.chop/.time` syntax.  
-- IR must normalize both syntaxes into the same structure.  
-- Scheduler must handle composite meters and independent seq tempos.  
-- Audio engine must implement time-stretch (default) and pitch-shift when `fixpitch` is specified.  
+- Parser must support nested `play` structures for hierarchical timing
+- IR must represent play structures as tree-like data for timing calculation
+- Scheduler must handle independent sequence tempos (polytempo) and meters (polymeter)
+- Audio engine uses SuperCollider for ultra-low latency playback (0-2ms)
+- Global underscore methods (_tempo, _beat) must trigger seamless parameter updates for inheriting sequences
+
+**Future Additions**:
+- Audio manipulation features (fixpitch, time) will require time-stretch and pitch-shift implementation
+- Composite meters may require complex timing calculation algorithms
+- tick/key will be added when MIDI support is implemented
 
 ---
 
 ## 9. Testing Guidelines
 
-- **Parser**: verify meters, composite beats, both play syntaxes, fixpitch parsing.  
-- **Mapping**: ensure ticks match expected values for given meters and chops.  
-- **Audio**: confirm playback speed matches tempo; fixpitch keeps pitch constant.  
-- **Transport**: global and targeted transport commands function as specified.
+- **Parser**: Verify meter parsing, nested play structures, variable initialization
+- **Timing**: Ensure timing calculations are correct for nested play structures and different meters
+- **Audio**: Confirm playback speed matches tempo and sequences synchronize correctly
+- **Transport**: Global and sequence transport commands function as specified
+- **Underscore Methods**: Verify immediate application behavior for all _method() calls
+- **Inheritance**: Test that sequences inherit global parameters correctly and seamless updates work
 
 ---
 
@@ -497,8 +506,8 @@ For backward compatibility and ease of use:
 
 - **No abbreviations/shortcuts in DSL**: Maintain full readability with descriptive names
 - **Smart autocomplete**: VS Code extension provides intelligent suggestions
-  - `global.` → suggests `tempo()`, `tick()`, `beat()`, `key()`, `run()`, `loop()`, etc.
-  - `seq1.` → suggests `play()`, `audio()`, `tempo()`, `beat()`, `mute()`, etc.
+  - `global.` → suggests `tempo()`, `_tempo()`, `beat()`, `_beat()`, `start()`, `stop()`, `gain()`, etc.
+  - `seq1.` → suggests `audio()`, `chop()`, `play()`, `tempo()`, `beat()`, `length()`, `run()`, `loop()`, `mute()`, etc.
   - Method signatures with parameter hints
 - **Snippet expansion**: Type-ahead for common patterns
   - `init` → expands to `var seq = init GLOBAL.seq`
@@ -532,10 +541,10 @@ seq.audio("file.wav").┃  // Suggests: chop(), play(), run()
 seq.audio("file.wav").chop(8).┃  // Suggests: play(), run()
 
 // After 'seq.play(1, 2, 3)'
-seq.play(1, 2, 3).┃  // Suggests: run(), loop(), mute(), fixpitch(), time()
+seq.play(1, 2, 3).┃  // Suggests: run(), loop(), mute()
 
 // After 'global.'
-global.┃  // Suggests: tempo(), beat(), tick(), key(), run(), loop(), stop()
+global.┃  // Suggests: tempo(), _tempo(), beat(), _beat(), start(), stop(), loop(), gain()
 ```
 
 **Method Order Rules**:
@@ -543,7 +552,7 @@ global.┃  // Suggests: tempo(), beat(), tick(), key(), run(), loop(), stop()
 - `beat()`, `length()`, `tempo()` can be called anytime after init
 - `play()` typically comes after `audio()` (with or without `chop()`)
 - `run()`, `loop()`, `mute()` are usually final in the chain
-- Modifiers like `fixpitch()`, `time()` can appear after `play()`
+- Underscore methods (_audio, _chop, _play, _tempo, _beat, _length) can be used during live coding for immediate updates
 
 ---
 
@@ -556,8 +565,6 @@ var global = init GLOBAL
 // STEP 2: Configure global parameters
 global.tempo(120)
 global.beat(4 by 4)
-global.tick(480)
-global.key(C)
 
 // STEP 3: Initialize sequences from global
 var kick = init global.seq
@@ -594,9 +601,7 @@ global.start()
 kick.mute()
 bass.gain(-12)      // Real-time gain change
 lead.pan(0)         // Real-time pan change
-bass.fixpitch(5)
-lead.time(0.5)
-global.tempo(130)
+global._tempo(130)  // Change global tempo for all inheriting sequences
 ```
 
 ---
@@ -606,17 +611,23 @@ global.tempo(130)
 ### Completed Features ✅
 
 #### Core DSL (v3.0)
-- **Initialization**: `init GLOBAL`, `init global.seq`
-- **Global Parameters**: tempo, tick, beat, key
+- **Initialization**: `init GLOBAL`, `init global.seq` (variable names are arbitrary, not hardcoded)
+- **Global Parameters**: tempo, beat
 - **Sequence Configuration**: tempo, beat, length, audio, chop
 - **Play Patterns**: Flat and nested structures with hierarchical timing
 - **Method Chaining**: All methods return `this` for fluent API
 - **Transport Commands**: run, stop, loop, mute, unmute
-- **Underscore Prefix Pattern (v3.0)**: `_audio()`, `_chop()`, `_play()`, `_beat()`, `_length()`, `_tempo()` for immediate application
+- **Underscore Prefix Pattern (v3.0)**:
+  - Sequence: `_audio()`, `_chop()`, `_play()`, `_beat()`, `_length()`, `_tempo()` for immediate application
+  - Global: `_tempo()`, `_beat()` for immediate application with seamless parameter updates
+- **Parameter Inheritance**: Sequences inherit tempo/beat from Global unless overridden
 - **Unidirectional Toggle (v3.0)**: `RUN()`, `LOOP()`, `MUTE()` reserved keywords with片記号方式 semantics
   - RUN and LOOP are independent groups
   - MUTE is persistent flag, only affects LOOP playback
   - STOP keyword removed (use LOOP with different list)
+
+**Removed (not yet implemented for audio-based DSL)**:
+- tick() and key() - MIDI-only concepts, will be added when MIDI support is implemented
 
 #### Parser
 - **Tokenizer**: Complete lexical analysis
