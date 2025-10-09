@@ -2,6 +2,57 @@
 
 このリポジトリのルール・計画・仕様はすべて `docs/` 以下に集約しています。
 
+## 🔴 CRITICAL RULES - 絶対に守るべきルール
+
+**これらのルールは例外なく適用されます。違反は重大な問題を引き起こします。**
+
+### 1. Git Workflow - Issue → Branch → PR の順序を必ず守る
+
+**正しい順序（MUST FOLLOW）:**
+```
+Issue作成（番号取得）→ ブランチ作成（Issue番号含む）→ 実装 → PR作成 → Merge
+```
+
+**具体例:**
+1. `gh issue create --title "[Feature] Add new feature"` → Issue #39作成
+2. `git checkout -b 39-add-new-feature` → ブランチ名にIssue番号を含める
+3. 実装・コミット
+4. `gh pr create --body "Closes #39"` → PRにIssue番号を含める
+5. マージ時にIssueが自動クローズ
+
+**❌ 絶対にやってはいけないこと:**
+- Issueを作成する前にブランチを作成する
+- ブランチ名にIssue番号を含めない
+- PR本文に`Closes #N`を含めない
+
+**理由:** Issue-Branch-PRの紐付けにより、変更の追跡が可能になり、自動クローズにより作業漏れを防ぐ
+
+### 2. ブランチ命名規則
+
+**形式:** `<issue-number>-<descriptive-name>`
+
+**例:**
+- ✅ Good: `39-reserved-keywords-implementation`
+- ✅ Good: `42-fix-audio-timing-bug`
+- ❌ Bad: `feature/reserved-keywords-implementation` (Issue番号なし)
+- ❌ Bad: `reserved-keywords` (Issue番号なし)
+- ❌ Bad: `39-予約語実装` (日本語使用)
+
+**重要:** ブランチ名は必ず英語のみ。日本語を使用すると一部のツールで問題が発生します。
+
+### 3. セッション開始時の必須ドキュメント確認
+
+**AIエージェントは必ずこのファイル（AGENTS.md）を最初に読むこと。**
+
+その後、以下のドキュメントを確認：
+1. `docs/PROJECT_RULES.md` - Git Workflow、コミットルール、テスト方針
+2. `docs/CONTEXT7_GUIDE.md` - 外部ライブラリ参照ガイド
+3. Serenaメモリ（`project_overview`, `current_issues`等）
+
+**理由:** これらのドキュメントを読まずに作業を開始すると、ルール違反や不適切な実装が発生します。
+
+---
+
 ## セッション開始時の必須アクション
 
 **AIエージェントは、ユーザーからの最初のメッセージを受け取ったら、タスクに取り掛かる前に必ず以下を実行すること：**

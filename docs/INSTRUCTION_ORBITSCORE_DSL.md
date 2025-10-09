@@ -222,7 +222,39 @@ global.unmute()
 global.stop()
 ```
 
-### Targeted Transport
+### Reserved Keywords (Recommended)
+
+Use uppercase reserved keywords to control multiple sequences:
+
+```js
+RUN(kick)                 // run kick sequence (equivalent to kick.run())
+RUN(kick, snare, hihat)   // run multiple sequences
+
+LOOP(bass)                // loop bass sequence
+LOOP(kick, snare)         // loop multiple sequences
+
+STOP(kick)                // stop kick sequence
+STOP(kick, snare)         // stop multiple sequences
+
+MUTE(hihat)               // mute hihat sequence
+MUTE(snare, hihat)        // mute multiple sequences
+```
+
+**Benefits of Reserved Keywords:**
+- **Clearer intent**: `RUN(kick, snare)` is more readable than `kick.run()` followed by `snare.run()`
+- **Bulk operations**: Control multiple sequences in a single statement
+- **Live coding friendly**: Quick execution with multiline support
+
+**Multiline support:**
+```js
+RUN(
+  kick,
+  snare,
+  hihat,
+)
+```
+
+### Targeted Transport (Legacy)
 ```js
 global.start(seq1, seq2) // (warning) start ignores sequence arguments
 global.loop(seq1)        // loop only seq1
@@ -230,6 +262,7 @@ global.loop(seq1)        // loop only seq1
 
 ### Editor Execution
 - Any `global` or `seq` transport command can be executed by selecting it in the editor and pressing **Command + Enter**.
+- Reserved keywords (`RUN`, `LOOP`, `STOP`, `MUTE`) can also be executed this way.
 
 ---
 
