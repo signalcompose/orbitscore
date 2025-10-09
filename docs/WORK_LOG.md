@@ -229,6 +229,92 @@ mockPlayer = {
 
 ---
 
+### 6.31 Infrastructure: PreCompact/PostCompact Hooks and AGENTS.md→CLAUDE.md Migration (January 9, 2025)
+
+**Date**: January 9, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `52-compact-hooks-agents-migration`
+**Issue**: #52
+**Commits**: `[PENDING]`
+
+**Work Content**: Claude Code Hooksの拡張（PreCompact/PostCompact追加）とドキュメント統合（AGENTS.md→CLAUDE.md）
+
+#### 背景
+
+コンテキスト圧縮（compaction）前後の作業継続性を確保するため、PreCompact/PostCompactフックの実装が必要だった。また、Claude Code Hooksの実装に伴い、AGENTS.mdとCLAUDE.mdの役割が重複してきたため、Claude固有の機能であるHooksの説明をCLAUDE.mdに一元化することが提案された。
+
+#### 実装内容
+
+**1. PreCompact Hook (`pre-compact.sh`)**
+- **実行タイミング**: コンテキスト圧縮の**直前**（コンテキストがまだ残っている状態）
+- **目的**: 重要な情報を保存してコンテキスト喪失に備える
+- **リマインド内容**:
+  - Serenaメモリへの作業状況保存（設計決定、実装中の課題、次のステップ）
+  - `.claude/next-session-prompt.md`への引き継ぎメモ作成
+  - 未コミット変更の確認
+  - 重要な決定事項の記録（アーキテクチャ変更、ライブラリ選定理由等）
+
+**2. PostCompact Hook (`post-compact.sh`)**
+- **実行タイミング**: コンテキスト圧縮の**直後**（同じセッション継続、コンテキストは失われた状態）
+- **目的**: 圧縮後のセッション継続のための復元アクション
+- **復元内容**:
+  - CLAUDE.mdの明示的な読み込み
+  - Serenaプロジェクトの再アクティベート
+  - 必須ドキュメントの読み込み（PROJECT_RULES.md, CONTEXT7_GUIDE.md）
+  - Serenaメモリの確認
+  - 作業文脈の復元（`git branch`, `git status`, `git log -1`）
+- **重要な洞察**: PostCompactはSessionStartとほぼ同じ復元アクションを実行する必要がある。これは、コンテキスト圧縮により会話履歴が要約され、詳細な文脈が失われているため。
+
+**3. AGENTS.md → CLAUDE.md統合**
+- **CLAUDE.md更新**:
+  - 自己参照を修正（「このファイル（AGENTS.md）」→「このファイル（CLAUDE.md）」）
+  - PostCompact Hookの説明を更新
+  - PreCompact/PostCompact Hooksの説明を追加
+- **AGENTS.md変更**:
+  - リダイレクトファイルに変更
+  - 「このファイルは廃止されました。CLAUDE.mdを参照してください」と明記
+  - 後方互換性のために残す
+- **Hooksスクリプトの参照修正**:
+  - `session-start.sh`: （すでにCLAUDE.mdへの参照なし）
+  - `post-compact.sh`: 「AGENTS.md」→「CLAUDE.md」
+  - `pre-compact.sh`: 「AGENTS.md」→「CLAUDE.md」
+  - `pre-branch-check.sh`: 「AGENTS.md」→「CLAUDE.md」
+- **その他のドキュメント**:
+  - `.claude/hooks/README.md`: すべてのAGENTS.md参照をCLAUDE.mdに変更
+  - `.serena/memories/common_workflow_violations.md`: すべての参照を更新
+
+**4. .claude/config.json更新**
+- PreCompactとPostCompactのフック設定を追加
+- 全5種類のHooksを管理：SessionStart, PreCompact, PostCompact, PreToolUse（commit, branch）
+
+#### 技術的な洞察
+
+**PreCompact vs PostCompact の役割分担:**
+- **PreCompact**: 情報を「保存」する（コンテキストがまだ残っている）
+- **PostCompact**: 情報を「復元」する（コンテキストが失われている）
+- **SessionStart**: 新規セッションの初期化（コンテキストが存在しない）
+
+**PostCompact ≒ SessionStart の理由:**
+コンテキスト圧縮により、会話履歴が失われるため、PostCompactでは新しいセッションと同様の復元アクションが必要。ただし、同じセッションが継続しているため、リマインダーのトーンが若干異なる。
+
+#### ドキュメント更新
+
+1. `.claude/hooks/README.md`: PreCompact/PostCompactの詳細説明を追加
+2. `CLAUDE.md`: Hooksセクションに PreCompact/PostCompact を追加
+3. `AGENTS.md`: リダイレクトファイルに変更
+4. `.serena/memories/common_workflow_violations.md`: AGENTS.md→CLAUDE.mdへの参照を更新、改善履歴に統合の記録を追加
+
+#### Git Workflow
+
+このブランチは`50-verify-underscore-method-seamless-update`から派生し、50ブランチに向けてPRを作成。50ブランチはすべての変更を統合した後、developにマージされる。
+
+#### 次のステップ
+
+- PR #51（50→develop）のレビュー・マージ
+- Claude Code Hooksの Phase 2 実装検討（PR作成時のチェック等）
+
+---
+
 ### 6.28 DSL v3.0: Edge Case Tests (January 9, 2025)
 
 **Date**: January 9, 2025
