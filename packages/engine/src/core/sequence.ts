@@ -35,6 +35,14 @@ export class Sequence {
   private _audioFilePath?: string
   private _chopDivisions?: number
 
+  // Pending settings buffers (applied on next RUN/LOOP)
+  private _pendingTempo?: number
+  private _pendingBeat?: [number, number]
+  private _pendingLength?: number
+  private _pendingPlayPattern?: PlayElement[]
+  private _pendingAudioFilePath?: string
+  private _pendingChopDivisions?: number
+
   constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
     this.audioEngine = audioEngine
@@ -53,34 +61,93 @@ export class Sequence {
     return this
   }
 
+  /**
+   * Apply pending settings from buffer to actual settings
+   * Called by RUN() immediately, and by LOOP() at next cycle
+   */
+  private applyPendingSettings(): void {
+    if (this._pendingTempo !== undefined) {
+      this.tempoManager.setTempo(this._pendingTempo)
+      this._pendingTempo = undefined
+    }
+
+    if (this._pendingBeat !== undefined) {
+      this.tempoManager.setBeat(this._pendingBeat[0], this._pendingBeat[1])
+      this._pendingBeat = undefined
+    }
+
+    if (this._pendingLength !== undefined) {
+      this.tempoManager.setLength(this._pendingLength)
+      this._pendingLength = undefined
+    }
+
+    if (this._pendingPlayPattern !== undefined) {
+      // Recalculate timing with new play pattern
+      const globalState = this.global.getState()
+      this.stateManager.setPlayPattern(this._pendingPlayPattern)
+      const timedEvents = this.tempoManager.calculateEventTiming(
+        this._pendingPlayPattern,
+        globalState.tempo || 120,
+        globalState.beat,
+      )
+      this.stateManager.setTimedEvents(timedEvents)
+      this._pendingPlayPattern = undefined
+    }
+
+    if (this._pendingAudioFilePath !== undefined) {
+      this._audioFilePath = this._pendingAudioFilePath
+      this._pendingAudioFilePath = undefined
+    }
+
+    if (this._pendingChopDivisions !== undefined) {
+      this._chopDivisions = this._pendingChopDivisions
+      this._pendingChopDivisions = undefined
+    }
+  }
+
   // Method chaining setters
   tempo(value: number): this {
-    this.tempoManager.setTempo(value)
+    // Buffer if playing/looping, otherwise apply immediately
+    if (this.stateManager.isPlaying() || this.stateManager.isLooping()) {
+      this._pendingTempo = value
+    } else {
+      this.tempoManager.setTempo(value)
+    }
     return this
   }
 
   beat(numerator: number, denominator: number): this {
-    this.tempoManager.setBeat(numerator, denominator)
+    // Buffer if playing/looping, otherwise apply immediately
+    if (this.stateManager.isPlaying() || this.stateManager.isLooping()) {
+      this._pendingBeat = [numerator, denominator]
+    } else {
+      this.tempoManager.setBeat(numerator, denominator)
+    }
     return this
   }
 
   length(bars: number): this {
-    const wasLooping = this.stateManager.isLooping()
-    this.tempoManager.setLength(bars)
+    // Buffer if playing/looping, otherwise apply immediately
+    if (this.stateManager.isPlaying() || this.stateManager.isLooping()) {
+      this._pendingLength = bars
+    } else {
+      const wasLooping = this.stateManager.isLooping()
+      this.tempoManager.setLength(bars)
 
-    // Recalculate timing if play pattern exists
-    const playPattern = this.stateManager.getPlayPattern()
-    if (playPattern && playPattern.length > 0) {
-      this.play(...playPattern)
-    }
+      // Recalculate timing if play pattern exists
+      const playPattern = this.stateManager.getPlayPattern()
+      if (playPattern && playPattern.length > 0) {
+        this.play(...playPattern)
+      }
 
-    // If currently looping, restart the loop with new length
-    if (wasLooping) {
-      // Trigger async restart (no await needed as this is a sync method)
-      this.stop()
-      setTimeout(async () => {
-        await this.loop()
-      }, 10)
+      // If currently looping, restart the loop with new length
+      if (wasLooping) {
+        // Trigger async restart (no await needed as this is a sync method)
+        this.stop()
+        setTimeout(async () => {
+          await this.loop()
+        }, 10)
+      }
     }
 
     return this
@@ -123,15 +190,22 @@ export class Sequence {
   }
 
   audio(filepath: string): this {
-    // If global audio path is set and filepath is relative, combine them
+    // Calculate full path
     const globalState = this.global.getState()
-    if (globalState.audioPath && !path.isAbsolute(filepath)) {
-      this._audioFilePath = path.join(globalState.audioPath, filepath)
+    const fullPath =
+      globalState.audioPath && !path.isAbsolute(filepath)
+        ? path.join(globalState.audioPath, filepath)
+        : filepath
+
+    // Buffer if playing/looping, otherwise apply immediately
+    if (this.stateManager.isPlaying() || this.stateManager.isLooping()) {
+      this._pendingAudioFilePath = fullPath
+      this._pendingChopDivisions = 1 // Reset chop when audio changes
     } else {
-      this._audioFilePath = filepath
+      this._audioFilePath = fullPath
+      this._chopDivisions = 1 // Default to no chopping
     }
 
-    this._chopDivisions = 1 // Default to no chopping
     // Note: Actual loading will happen when needed or through explicit load call
     return this
   }
@@ -144,11 +218,16 @@ export class Sequence {
   }
 
   chop(divisions: number): this {
-    this._chopDivisions = divisions
+    // Buffer if playing/looping, otherwise apply immediately
+    if (this.stateManager.isPlaying() || this.stateManager.isLooping()) {
+      this._pendingChopDivisions = divisions
+    } else {
+      this._chopDivisions = divisions
 
-    if (!this._audioFilePath) {
-      console.error(`${this.stateManager.getName()}: no audio file set`)
-      return this
+      if (!this._audioFilePath) {
+        console.error(`${this.stateManager.getName()}: no audio file set`)
+        return this
+      }
     }
 
     return this
@@ -163,17 +242,22 @@ export class Sequence {
   }
 
   play(...elements: PlayElement[]): this {
-    this.stateManager.setPlayPattern(elements)
+    // Buffer if playing/looping, otherwise apply immediately
+    if (this.stateManager.isPlaying() || this.stateManager.isLooping()) {
+      this._pendingPlayPattern = elements
+    } else {
+      this.stateManager.setPlayPattern(elements)
 
-    // Calculate timing for the play pattern
-    const globalState = this.global.getState()
-    const timedEvents = this.tempoManager.calculateEventTiming(
-      elements,
-      globalState.tempo || 120,
-      globalState.beat,
-    )
+      // Calculate timing for the play pattern
+      const globalState = this.global.getState()
+      const timedEvents = this.tempoManager.calculateEventTiming(
+        elements,
+        globalState.tempo || 120,
+        globalState.beat,
+      )
 
-    this.stateManager.setTimedEvents(timedEvents)
+      this.stateManager.setTimedEvents(timedEvents)
+    }
 
     return this
   }
@@ -247,6 +331,9 @@ export class Sequence {
 
   // Transport control
   async run(): Promise<this> {
+    // Apply pending settings immediately (RUN behavior)
+    this.applyPendingSettings()
+
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
       audioFilePath: this._audioFilePath,
@@ -307,6 +394,7 @@ export class Sequence {
       clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
+      applyPendingSettingsFn: () => this.applyPendingSettings(),
     })
 
     // Update remaining state from result

@@ -12,6 +12,7 @@ export interface LoopSequenceOptions {
   clearSequenceEventsFn: (sequenceName: string) => void
   getIsLoopingFn: () => boolean
   getIsMutedFn: () => boolean
+  applyPendingSettingsFn: () => void
 }
 
 /**
@@ -46,6 +47,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
     clearSequenceEventsFn,
     getIsLoopingFn,
     getIsMutedFn,
+    applyPendingSettingsFn,
   } = options
 
   // Clear old events for this sequence first
@@ -59,13 +61,16 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // Track next scheduled time (cumulative, to avoid drift)
   let nextScheduleTime = currentTime
 
-  // Schedule first iteration
+  // Schedule first iteration (no settings applied yet - using current settings)
   scheduleEventsFn(scheduler, 0, nextScheduleTime)
 
   // Set up loop timer
   // Note: isLooping and isMuted are checked via getter functions to reflect current state
   const loopTimer = setInterval(() => {
     if (getIsLoopingFn() && !getIsMutedFn()) {
+      // Apply pending settings at the beginning of next cycle (LOOP behavior)
+      applyPendingSettingsFn()
+
       nextScheduleTime += patternDuration // Cumulative time, no drift
       // Clear old scheduled events for this sequence before scheduling new ones
       clearSequenceEventsFn(sequenceName)

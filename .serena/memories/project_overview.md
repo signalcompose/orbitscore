@@ -1,89 +1,90 @@
-# OrbitScore プロジェクト概要
+# OrbitScore Project Overview
 
-## プロジェクト説明
+**Last Updated**: 2025-10-09
 
-OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング用オーディオエンジンです。SuperColliderとの統合、カスタムDSL、VS Code拡張機能を含む包括的な音楽制作環境を提供します。
+## Project Description
+OrbitScore is a live coding environment for audio synthesis using a custom DSL. The system parses DSL code and controls SuperCollider for real-time audio generation.
 
-## 技術スタック
+## Current Architecture
 
-- **言語**: TypeScript
-- **オーディオエンジン**: SuperCollider
-- **アーキテクチャ**: モノレポ構成
-- **パッケージ**: engine, parser, vscode-extension
-- **テスト**: vitest（115/130テスト通過）
+### Core Components
+1. **Parser** (`packages/engine/src/parser/`)
+   - Tokenizer: Lexical analysis
+   - Parser: Syntax analysis and IR generation
+   - Latest: Reserved keywords (RUN/LOOP/STOP/MUTE) support
 
-## 現在の状況（2025-01-07更新）
+2. **Interpreter** (`packages/engine/src/interpreter/`)
+   - Statement processing
+   - SuperCollider OSC communication
+   - Latest: Multiple sequence control via reserved keywords
 
-### ✅ 完了したフェーズ
-- **Phase 1-7**: 全リファクタリング完了（約2,000行のコードベース改善）
-- **SuperCollider一本化**: Web Audio APIからSuperColliderへの完全移行
-- **型安全性向上**: `any`型の使用を最小限に削減
-- **未使用コード削除**: 重複ファイル、非推奨コードの完全削除
-- **VS Code拡張機能**: パッケージ化修正完了
-- **Git Workflow**: 包括的な開発ワークフロー実装完了
-- **ブランチ保護**: main/developブランチの完全保護設定完了
-- **Worktree**: 本番環境分離（orbitscore-main/）設定完了
-- **Cursor BugBot**: 日本語レビュー、プロジェクト固有ガイドライン設定完了
+3. **CLI** (`packages/cli/`)
+   - File watching and execution
+   - REPL interface
 
-### 🎯 現在のフェーズ
-- **開発環境**: 安定したGit Workflowで通常の機能開発準備完了
-- **本番環境**: 保護されたmainブランチで常に安定状態を維持
-- **コードベース**: 完全にリファクタリング済み、型安全、保守性向上
+4. **VSCode Extension** (`packages/vscode-orbitscore/`)
+   - Syntax highlighting
+   - Code execution integration
 
-### 📋 次の優先事項
-- 通常の機能開発に戻る
-- ライブパフォーマンスでの安定性を維持しながら新機能開発
-- グラニュラーシンセシス対応の検討
+## Latest Features (as of PR #41)
 
-## アーキテクチャ
+### Reserved Keywords for Multiple Sequence Control
+```javascript
+RUN(kick, snare, hihat)   // Start multiple sequences
+LOOP(bass)                // Loop sequence
+STOP(kick, snare)         // Stop multiple sequences
+MUTE(hihat)               // Mute sequence
+```
 
-### DSL設計
-- **仕様書**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`（v2.0）が最新
-- **特徴**: 度数ベース、メソッドチェーン、`play()`メソッドのネスト構造
-- **精度**: 小数第3位まで
+**Benefits**:
+- Clearer intent in live coding
+- Bulk operations on multiple sequences
+- More readable than chained method calls
 
-### SuperCollider統合
-- **SynthDef**: `packages/engine/supercollider/synthdefs/`に配置
-- **setup.scd**: SynthDef生成スクリプト
-- **オーディオデバイス**: 入力/出力/duplexの明確な分類
+## Test Status
+- **Total Tests**: 137 passed, 19 skipped
+- **Coverage**: Parser, Interpreter, CLI
+- **Framework**: Vitest
 
-### リファクタリング成果
-- **モジュール化**: 全ファイルが50行以下の関数で構成
-- **型安全性**: `AudioEngine`インターフェース、`Scheduler`インターフェース拡張
-- **保守性**: 未使用コード削除、重複排除、明確なディレクトリ構造
-- **テスト**: 115 tests passed, 15 skipped
+## Documentation Structure
+- `docs/INSTRUCTION_ORBITSCORE_DSL.md` - DSL specification (v2.0)
+- `docs/IMPLEMENTATION_PLAN.md` - Implementation roadmap
+- `docs/PROJECT_RULES.md` - Git workflow and coding standards
+- `docs/WORK_LOG.md` - Development history
+- `CLAUDE.md` - AI agent instructions (CRITICAL RULES)
 
-## 開発ワークフロー
+## Git Workflow (CRITICAL)
+**MUST FOLLOW**: Issue → Branch → PR → Merge
 
-### ブランチ構造
-- **main**: 本番環境（完全保護）
-- **develop**: 統合ブランチ（完全保護）
-- **feature/**: 機能開発ブランチ
+1. Create Issue (get number)
+2. Create branch: `<issue-number>-<descriptive-name>`
+3. Implement and commit
+4. Create PR with `Closes #<issue-number>`
+5. Merge (auto-closes issue)
 
-### 保護ルール
-- PR必須、承認必須、管理者強制適用
-- Cursor BugBotによる日本語レビュー
-- ライブパフォーマンスの安定性を最優先
+## Branch Policy
+- **Protected**: `main`, `develop` (require PR)
+- **Remote**: Keep for historical reference
+- **Local**: Can delete after merge
 
-### Worktree
-- **orbitscore/**: develop + feature branches（開発作業）
-- **orbitscore-main/**: main branch（本番確認用）
+## Session Handoff Notes
 
-## 完了したリファクタリング
+### Stashed Changes
+- Branch deletion rule clarification (stash@{0})
+- To be included in next documentation PR
 
-### 主要な改善
-- **コードベース削減**: 約2,000行の削減
-- **型安全性**: `any`型使用を最小限に削減
-- **保守性**: モジュール化、依存関係の明確化
-- **テスト**: 全テストが通過、型安全な実装
+### Untracked Files
+- `CLAUDE.md` - Project instructions for AI agents
+- `tmp/github-issue-body.md` - Temporary file
 
-### 削除されたファイル
-- 未使用のスケジューラーファイル（重複）
-- 非推奨のラッパークラス
-- Web Audio API関連コード（SuperCollider一本化）
+### Next Session Checklist
+1. Read CLAUDE.md (CRITICAL RULES section)
+2. Read PROJECT_RULES.md
+3. Check Serena memories
+4. Follow Issue → Branch → PR workflow
+5. Never commit directly to develop/main
 
-### 追加された機能
-- `AudioEngine`インターフェース
-- 拡張された`Scheduler`インターフェース
-- 型安全な実装
-- 自動一時ファイル管理
+## Known Future Enhancements
+- Granular synthesis support
+- Additional DSL syntax improvements
+- Performance optimizations
