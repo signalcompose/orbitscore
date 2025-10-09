@@ -151,4 +151,118 @@ describe('Sequence - gain() and pan()', () => {
       expect(state.pan).toBe(50)
     })
   })
+
+  describe('defaultGain() method (initial fader position)', () => {
+    it('should set default gain without triggering seamless update', () => {
+      seq.defaultGain(-6)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-6)
+    })
+
+    it('should set default gain to 0 dB', () => {
+      seq.defaultGain(0)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(0)
+    })
+
+    it('should clamp default gain to -60 dB minimum', () => {
+      seq.defaultGain(-100)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-60)
+    })
+
+    it('should clamp default gain to +12 dB maximum', () => {
+      seq.defaultGain(20)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(12)
+    })
+
+    it('should accept -Infinity for complete silence', () => {
+      seq.defaultGain(-Infinity)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-Infinity)
+    })
+
+    it('should allow chaining', () => {
+      const result = seq.defaultGain(-6)
+      expect(result).toBe(seq)
+    })
+
+    it('should work before playback starts', () => {
+      seq.defaultGain(-12).defaultPan(-50)
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-12)
+      expect(state.pan).toBe(-50)
+    })
+  })
+
+  describe('defaultPan() method (initial pan position)', () => {
+    it('should set default pan without triggering seamless update', () => {
+      seq.defaultPan(-50)
+      const state = seq.getState()
+      expect(state.pan).toBe(-50)
+    })
+
+    it('should set default pan to center (0)', () => {
+      seq.defaultPan(0)
+      const state = seq.getState()
+      expect(state.pan).toBe(0)
+    })
+
+    it('should clamp default pan to -100 minimum', () => {
+      seq.defaultPan(-200)
+      const state = seq.getState()
+      expect(state.pan).toBe(-100)
+    })
+
+    it('should clamp default pan to 100 maximum', () => {
+      seq.defaultPan(200)
+      const state = seq.getState()
+      expect(state.pan).toBe(100)
+    })
+
+    it('should allow chaining', () => {
+      const result = seq.defaultPan(-50)
+      expect(result).toBe(seq)
+    })
+
+    it('should work before playback starts', () => {
+      seq.defaultPan(100).defaultGain(-3)
+      const state = seq.getState()
+      expect(state.pan).toBe(100)
+      expect(state.gainDb).toBe(-3)
+    })
+  })
+
+  describe('defaultGain() vs gain() behavior', () => {
+    it('should allow setting default values before playback', () => {
+      // Set initial values with default methods
+      seq.defaultGain(-6).defaultPan(-50)
+
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-6)
+      expect(state.pan).toBe(-50)
+    })
+
+    it('should allow overriding defaults with real-time methods', () => {
+      // Set defaults first
+      seq.defaultGain(-12).defaultPan(100)
+
+      // Override with real-time methods
+      seq.gain(-3).pan(0)
+
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-3)
+      expect(state.pan).toBe(0)
+    })
+
+    it('should work in any order', () => {
+      // Mix default and real-time methods
+      seq.defaultGain(-6).pan(50).defaultPan(-100).gain(-9)
+
+      const state = seq.getState()
+      expect(state.gainDb).toBe(-9)
+      expect(state.pan).toBe(-100)
+    })
+  })
 })

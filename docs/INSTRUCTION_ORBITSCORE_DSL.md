@@ -413,15 +413,22 @@ bass.play(1, 0, 0, 1, 0, 0, 1, 0,
           0, 1, 0, 1, 0, 0, 0, 0)
 
 lead.audio("synth.wav").chop(16)
-lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 
+lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0),
           0, 0, 0, 0, 0, 0, 0, 0,
           1, 1, 1, 0)
+
+// STEP 5b: Set initial gain/pan (before playback)
+kick.defaultGain(-3).defaultPan(0)
+bass.defaultGain(-6).defaultPan(-30)
+lead.defaultGain(-9).defaultPan(30)
 
 // STEP 6: Start playback
 global.start()
 
-// STEP 7: Live manipulation
+// STEP 7: Live manipulation (real-time changes during playback)
 kick.mute()
+bass.gain(-12)      // Real-time gain change
+lead.pan(0)         // Real-time pan change
 bass.fixpitch(5)
 lead.time(0.5)
 global.tempo(130)
@@ -451,9 +458,11 @@ global.tempo(130)
 - **File Loading**: WAV format support with buffer caching
 - **Slicing**: `chop(n)` divides audio into n equal parts with precise timing
 - **Playback**: Ultra-low latency (0-2ms) via SuperCollider scsynth
-- **Audio Control**: 
-  - `gain(dB)`: Volume control in dB (-60 to +12, default 0)
-  - `pan(position)`: Stereo positioning (-100 to 100)
+- **Audio Control**:
+  - `gain(dB)`: Real-time volume control in dB (-60 to +12, default 0) - applies immediately even during playback
+  - `pan(position)`: Real-time stereo positioning (-100 to 100) - applies immediately even during playback
+  - `defaultGain(dB)`: Set initial gain without triggering playback - use before `run()` or `loop()`
+  - `defaultPan(position)`: Set initial pan without triggering playback - use before `run()` or `loop()`
   - Random values: `r` (full random), `r0%10` (random walk)
 - **Global Mastering Effects**:
   - `global.compressor()`: Increase perceived loudness
