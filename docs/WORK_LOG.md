@@ -83,6 +83,20 @@ developブランチでのメモリコミットをブロックする仕組みを�
 - ✅ 変更はunstagedのまま機能ブランチに持ち越す
 - ✅ 機能ブランチで機能と一緒にコミット
 
+**4. ワークフロー強制の仕組み追加**
+
+システムレベルでワークフロー違反を防止：
+
+- `CLAUDE.md`: 実装前の必須ワークフローを明記、実装前チェックリスト追加
+- `.claude/hooks/pre-edit-check.sh`: Edit/Write使用前にブランチチェック、develop/mainでの実装をブロック（exit 2）
+- `.claude/config.json`: Edit/WriteツールのPreToolUseマッチャーを追加
+- `.claude/hooks/README.md`: 新しいフックの説明を追加
+
+**効果:**
+- developブランチでEdit/Writeツールを使おうとするとシステムが自動ブロック
+- Issue作成 → ブランチ作成 → 実装の手順を確実に守れる
+- 口約束ではなく、システムが強制
+
 #### テスト結果
 
 ```
@@ -95,12 +109,21 @@ Test Files  14 passed | 2 skipped (16)
 
 #### 変更ファイル
 
+**型安全性:**
 - `packages/engine/src/parser/types.ts` - GlobalStatement型定義に`target`, `chain`追加
 - `packages/engine/src/interpreter/process-statement.ts` - any型を適切な型に変更
+
+**メモリワークフロー:**
 - `.claude/hooks/pre-commit-check.sh` - Serenaメモリコミットブロック機能追加
 - `.claude/hooks/session-start.sh` - developブランチ時の警告追加
 - `docs/PROJECT_RULES.md` - Serenaメモリワークフロー明記
 - `.serena/memories/common_workflow_violations.md` - 実装前チェックリスト追加
+
+**ワークフロー強制:**
+- `CLAUDE.md` - 実装前の必須ワークフロー、チェックリスト明記
+- `.claude/hooks/pre-edit-check.sh` - Edit/Write前のブランチチェック（新規）
+- `.claude/config.json` - Edit/WriteツールのPreToolUseマッチャー追加
+- `.claude/hooks/README.md` - 新しいフックの説明追加
 
 #### 次のステップ
 

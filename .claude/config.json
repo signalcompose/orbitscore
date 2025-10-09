@@ -32,6 +32,24 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Edit:.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/pre-edit-check.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write:.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/pre-edit-check.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Bash:git commit.*",
         "hooks": [
           {

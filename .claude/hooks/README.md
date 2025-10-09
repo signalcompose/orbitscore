@@ -8,7 +8,24 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 
 ## 実装されているHooks
 
-### 1. SessionStart Hook (`session-start.sh`)
+### 1. PreEdit/PreWrite Hook (`pre-edit-check.sh`) 🔴 NEW
+
+**実行タイミング**: Edit/Writeツール使用前
+
+**目的**: develop/mainブランチでの直接実装を防止
+
+**チェック内容**:
+- 現在のブランチがdevelop/mainでないか確認
+- develop/mainの場合は**実装をブロック**（exit 2）
+- ブランチ名にIssue番号が含まれているか確認（警告のみ）
+
+**動作**:
+- develop/mainでEdit/Writeを使おうとすると**ブロック**
+- Issue番号のないブランチ名の場合は警告のみ
+
+**重要**: このフックにより、ワークフロー違反（Issue・ブランチ作成前の実装開始）を**システムとして防止**
+
+### 2. SessionStart Hook (`session-start.sh`)
 
 **実行タイミング**: Claude Codeセッション開始時
 
