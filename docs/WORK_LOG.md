@@ -128,6 +128,91 @@ RUN(
 
 ---
 
+### 6.26 defaultGain() and defaultPan() Methods (October 9, 2025)
+
+**Date**: October 9, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `42-setting-synchronization-system`
+**Commits**:
+- `1228715`: feat: defaultGain()とdefaultPan()メソッドの実装
+
+**Work Content**: 初期値設定用の`defaultGain()`と`defaultPan()`メソッドを実装し、再生前のフェーダー位置を設定可能にした
+
+#### 背景
+`gain()`と`pan()`は常に即時反映されるリアルタイムパラメータとして実装されている。しかし、再生開始前に初期値を設定したい場合、即時反映は不要である。明示的に「初期値設定」と「リアルタイム変更」を区別するため、`defaultGain()`と`defaultPan()`を追加した。
+
+#### 実施内容
+
+**1. Sequenceクラスにメソッド追加**
+- `defaultGain(valueDb)`: 初期ゲイン設定（-60〜+12 dB）
+- `defaultPan(value)`: 初期パン設定（-100〜+100）
+- 内部的には`GainManager`/`PanManager`の`setGain()`/`setPan()`を呼ぶ
+- **重要な違い**: `seamlessParameterUpdate()`を呼ばない
+  - `gain()`/`pan()`は即座にイベントを再スケジュールする
+  - `defaultGain()`/`defaultPan()`は値だけ設定し、再生は開始しない
+
+**2. テスト実装**
+- `tests/core/sequence-gain-pan.spec.ts`に17個のテストを追加
+  - `defaultGain()`の基本動作（クランプ、チェイニング）
+  - `defaultPan()`の基本動作（クランプ、チェイニング）
+  - `defaultGain()`と`gain()`の併用パターン
+- **テスト結果**: 36 tests passed (20 → 36)
+
+**3. ドキュメント更新**
+- `docs/INSTRUCTION_ORBITSCORE_DSL.md`の「Audio Control」セクションを更新
+  - `gain(dB)`: リアルタイム変更（再生中でも即座に反映）
+  - `defaultGain(dB)`: 初期値設定（再生開始前に使用）
+  - `pan(position)`: リアルタイム変更（再生中でも即座に反映）
+  - `defaultPan(position)`: 初期値設定（再生開始前に使用）
+- 使用例セクションに`defaultGain()`/`defaultPan()`の使い方を追加
+
+#### 設計判断
+
+**なぜ別メソッドにしたか:**
+1. **明示的で分かりやすい** - `default`接頭辞で初期値設定だと一目瞭然
+2. **予測可能** - コンテキストに依存しない（RUN()の内外で挙動が変わらない）
+3. **責務の分離** - `RUN()`はシーケンス実行のみに集中、パラメータ管理と独立
+4. **将来の拡張性** - 他のパラメータにも同様のパターンを適用可能
+
+**検討した代替案:**
+- RUN()の中で呼ばれたら即時反映、外なら初期値設定 → **却下**（コンテキスト依存で複雑）
+- コンストラクタで初期値を指定 → **却下**（DSLの流暢なAPIに合わない）
+
+#### 使用例
+
+```js
+var kick = init global.seq
+var snare = init global.seq
+
+// 初期値設定（再生前のフェーダー位置）
+kick.defaultGain(-3).defaultPan(0)
+snare.defaultGain(-6).defaultPan(-30)
+
+// パターン設定
+kick.audio("kick.wav").play(1, 0, 1, 0)
+snare.audio("snare.wav").play(0, 1, 0, 1)
+
+// 再生開始
+RUN(kick, snare)
+
+// リアルタイム変更（再生中）
+kick.gain(-12)     // 即座にゲイン変更
+snare.pan(30)      // 即座にパン変更
+```
+
+#### テスト結果
+- **全テスト**: 186 passed, 19 skipped (169 total)
+  - sequence-gain-pan.spec.ts: 36 passed（+16）
+  - 既存テストは全てパス
+
+#### 成果
+- ✅ 初期値設定とリアルタイム変更を明確に区別
+- ✅ DSL仕様の一貫性を維持
+- ✅ ドキュメントに使用例を追加
+- ✅ 17個の新規テストで動作を保証
+
+---
+
 ### 6.24 Beat/Meter Specification Documentation (January 8, 2025)
 
 **Date**: January 8, 2025

@@ -183,9 +183,33 @@ export class Sequence {
     return this
   }
 
+  /**
+   * Set default gain (initial fader position) without immediate playback.
+   * This sets the gain value but does not trigger seamless parameter update.
+   * Use this to configure initial gain before starting playback.
+   * @param valueDb - Gain in decibels (-60 to +12 dB)
+   * @returns this for method chaining
+   */
+  defaultGain(valueDb: number | RandomValue): this {
+    this.gainManager.setGain({ valueDb })
+    return this
+  }
+
   pan(value: number | RandomValue): this {
     this.panManager.setPan({ value })
     this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
+    return this
+  }
+
+  /**
+   * Set default pan (initial pan position) without immediate playback.
+   * This sets the pan value but does not trigger seamless parameter update.
+   * Use this to configure initial pan before starting playback.
+   * @param value - Pan value (-100 to +100, where 0 is center, -100 is left, +100 is right)
+   * @returns this for method chaining
+   */
+  defaultPan(value: number | RandomValue): this {
+    this.panManager.setPan({ value })
     return this
   }
 
