@@ -32,7 +32,6 @@ export type {
   PlayWithModifier,
   PlayModifier,
   Meter,
-  CompositeMeter,
 } from './types'
 
 /**

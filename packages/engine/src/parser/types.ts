@@ -91,7 +91,7 @@ export type PlayWithModifier = {
 }
 
 export type PlayModifier = {
-  method: 'chop' | 'time' | 'fixpitch'
+  method: 'chop' // Note: 'time' and 'fixpitch' removed - not yet implemented
   value: number
 }
 
@@ -100,10 +100,8 @@ export type Meter = {
   denominator: number
 }
 
-export type CompositeMeter = {
-  meters: Meter[]
-  repeat?: number
-}
+// Note: CompositeMeter has been removed - not yet implemented
+// Future: may add support for composite meters like 4/4+3/8
 
 export type TransportStatement = {
   type: 'transport'

@@ -107,7 +107,6 @@ killall sclang 2>/dev/null
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4)
-global.tick(4)
 global.audioPath("/path/to/your/audio/files")
 
 // キックドラムシーケンス
@@ -151,6 +150,8 @@ var global = init GLOBAL
 
 すべてのOrbitScoreプログラムは、グローバルコンテキストの初期化から始まります。これにより、トランスポートとオーディオエンジンが作成されます。
 
+**注意**: `global`という変数名は慣例ですが、任意の名前を使用できます（例: `var g = init GLOBAL`）。
+
 #### シーケンス作成
 
 ```orbitscore
@@ -178,13 +179,6 @@ global.beat(7 by 8)   // 7/8拍子
 ```
 
 **重要**: `beat()`は拍子（タイムシグネチャ）を設定するメソッドです。リズムパターンを定義するものではありません。
-
-#### Tick Resolution
-
-```orbitscore
-global.tick(480)   // 1/4音符あたり480 tick（デフォルト）
-global.tick(960)   // より高精度
-```
 
 #### オーディオファイルのベースパス
 
@@ -459,6 +453,8 @@ seq.pan(50)     // やや右
 - **`_method(value)`**: **即時適用** - 値を保存し、かつ即座に再生トリガー/反映を行う
 
 **対象メソッド:**
+
+**Sequenceメソッド:**
 - `audio()` / `_audio()` - オーディオファイル設定
 - `chop()` / `_chop()` - スライス分割
 - `play()` / `_play()` - プレイパターン
@@ -467,6 +463,10 @@ seq.pan(50)     // やや右
 - `tempo()` / `_tempo()` - テンポ設定
 - `gain()` / `_gain()` - 音量（リアルタイムパラメータ - 両方とも即時反映）
 - `pan()` / `_pan()` - パン（リアルタイムパラメータ - 両方とも即時反映）
+
+**Globalメソッド:**
+- `tempo()` / `_tempo()` - グローバルテンポ設定（アンダースコアあり版は全シーケンスに即時反映）
+- `beat()` / `_beat()` - グローバル拍子設定（アンダースコアあり版は全シーケンスに即時反映）
 
 #### 使い分け
 
@@ -506,7 +506,42 @@ kick._play(1, 1, 0, 0)     // パターンが即座に変更され、再生開�
 kick._tempo(160)           // テンポが即座に変更
 ```
 
-**3. リアルタイムミキシング**
+**3. グローバルパラメータの即時反映（再生中）**
+
+Globalのアンダースコアメソッドは、そのパラメータを継承している全シーケンスに即座に反映されます：
+
+```orbitscore
+var g = init GLOBAL
+g.tempo(120)
+
+var kick = init g.seq
+kick.play(1, 0, 1, 0)
+// kickはグローバルのテンポ(120)を継承
+
+var bass = init g.seq
+bass.tempo(90)  // bassは独自のテンポを設定（グローバルを上書き）
+bass.play(1, 0, 0, 0)
+
+g.start()
+kick.loop()
+bass.loop()
+
+// グローバルテンポを即座に変更（継承しているkickのみ影響）
+g._tempo(140)
+// → kickは140 BPMで再生（即座に反映）
+// → bassは90 BPM（変更なし、独自テンポを使用中）
+
+// グローバル拍子を即座に変更
+g._beat(3, 4)
+// → 継承している全シーケンスが3/4拍子に変更
+```
+
+**継承とオーバーライドのルール:**
+- シーケンスは初期状態でGlobalのtempo/beatを継承
+- `sequence.tempo()`や`sequence.beat()`を呼ぶと、その時点で継承を解除し独自値を使用
+- `global._tempo()`や`global._beat()`は、**継承しているシーケンスのみ**に即座に反映
+
+**4. リアルタイムミキシング**
 
 `gain()`と`pan()`は**リアルタイムパラメータ**なので、アンダースコアの有無に関わらず常に即時反映されます：
 
@@ -705,9 +740,10 @@ killall sclang
 
 ---
 
-**Version**: 3.0
-**Last Updated**: 2025-01-09
+**Version**: 3.1
+**Last Updated**: 2025-10-09
 
 **変更履歴:**
+- **v3.1 (2025-10-09)**: Issue #57対応 - tick/key削除、Global._tempo()/_beat()追加、継承システム説明追加
 - **v3.0 (2025-01-09)**: アンダースコアプレフィックスパターン + 片記号方式（Unidirectional Toggle）追加
 - **v1.0 (2024-10-08)**: 初版公開

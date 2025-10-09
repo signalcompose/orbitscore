@@ -67,9 +67,9 @@ export function calculateEventTiming(
         )
         events.push(...nestedEvents)
       } else if (element.type === 'modified') {
-        // Modified element (e.g., with .time(), .fixpitch())
+        // Modified element (e.g., with .chop())
         // For now, treat the value as a simple number
-        // TODO: Apply time modifications
+        // TODO: Apply chop modifications
         if (typeof element.value === 'number') {
           events.push({
             sliceNumber: element.value,

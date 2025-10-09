@@ -499,6 +499,28 @@ export class Sequence {
     return this
   }
 
+  /**
+   * Notify that global tempo has changed
+   * Only triggers seamless update if this sequence hasn't overridden tempo
+   */
+  notifyGlobalTempoChange(): void {
+    if (this.tempoManager.getTempo() === undefined) {
+      // Not overridden - apply global tempo change seamlessly
+      this.seamlessParameterUpdate('tempo', 'global tempo changed')
+    }
+  }
+
+  /**
+   * Notify that global beat has changed
+   * Only triggers seamless update if this sequence hasn't overridden beat
+   */
+  notifyGlobalBeatChange(): void {
+    if (this.tempoManager.getBeat() === undefined) {
+      // Not overridden - apply global beat change seamlessly
+      this.seamlessParameterUpdate('beat', 'global beat changed')
+    }
+  }
+
   // Get state for debugging/inspection
   getState() {
     const state = this.stateManager.getState()
