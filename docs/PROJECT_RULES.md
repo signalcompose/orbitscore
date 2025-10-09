@@ -12,6 +12,35 @@
 - Include technical decisions and challenges
 - **MUST update README.md when WORK_LOG.md is updated** to keep project status current
 
+### 1a. WORK_LOG.md Archiving (アーカイブ管理)
+
+**When WORK_LOG.md exceeds ~2,000 lines or ~100KB, archive older sections:**
+
+- **Keep recent work** (latest 15-20 sections) in main `docs/WORK_LOG.md`
+- **Archive older sections** to `docs/archive/WORK_LOG_YYYY-MM.md` by month
+  - Example: `docs/archive/WORK_LOG_2025-09.md` for September 2025 work
+- **Add reference link** at the end of main WORK_LOG.md pointing to archived files
+- **Add header to archived file** with:
+  - Archive period (start date - end date)
+  - Link back to main WORK_LOG.md
+  - Clear indication this is an archived version
+
+**Purpose:**
+- Maintain readability of main WORK_LOG.md
+- Preserve complete development history for academic papers
+- Keep technical information accessible but organized
+- Reduce file size for better editor performance
+
+**Archive File Header Format:**
+```markdown
+# OrbitScore Development Work Log - [Month] [Year] Archive
+
+**Archive Period**: [Start Date] - [End Date]
+**Note**: This is an archived version of the work log. For recent work, see [../WORK_LOG.md](../WORK_LOG.md)
+
+---
+```
+
 ### 2. English Instruction Verification (英文チェック)
 
 **When the user provides instructions in English:**
