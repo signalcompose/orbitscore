@@ -1,13 +1,13 @@
 # INSTRUCTION_ORBITSCORE_DSL.md
 
-## OrbitScore DSL Specification (v1.0 – Implemented)
+## OrbitScore DSL Specification (v3.0 – Implemented)
 
-This document defines the **OrbitScore DSL**.  
-It is the **single source of truth** for the project.  
+This document defines the **OrbitScore DSL**.
+It is the **single source of truth** for the project.
 All implementation, testing, and planning must strictly follow this specification.
 
-**Last Updated**: 2024-12-25  
-**Implementation Status**: ✅ Core features implemented and tested (187/187 tests passing)
+**Last Updated**: 2025-01-09
+**Implementation Status**: ✅ Core features implemented and tested (205/205 tests passing)
 
 ---
 
@@ -210,40 +210,99 @@ seq1.play((0).chop(5).time(5), (0).chop(4).time(4))
 
 ## 5. Transport Commands
 
-Available on both `global` and sequences (`seqN`).
+### Global Transport
+Available on `global`:
 
 ```js
 global.start()            // start scheduler from next bar
-global.start.force()      // start immediately
-global.loop()             // loop from next bar
-global.loop.force()       // loop immediately
-global.mute()
-global.unmute()
-global.stop()
+global.stop()             // stop scheduler
 ```
 
-### Reserved Keywords (Recommended)
-
-Use uppercase reserved keywords to control multiple sequences:
+### Sequence Transport (Method-based)
+Available on individual sequences:
 
 ```js
-RUN(kick)                 // run kick sequence (equivalent to kick.run())
-RUN(kick, snare, hihat)   // run multiple sequences
+kick.run()                // play sequence once (one-shot)
+kick.loop()               // play sequence in loop
+kick.stop()               // stop sequence
+kick.mute()               // mute sequence (only affects LOOP playback)
+kick.unmute()             // unmute sequence
+```
 
-LOOP(bass)                // loop bass sequence
-LOOP(kick, snare)         // loop multiple sequences
+### Reserved Keywords (Unidirectional Toggle) - v3.0
 
-STOP(kick)                // stop kick sequence
-STOP(kick, snare)         // stop multiple sequences
+**DSL v3.0 introduces片記号方式 (unidirectional toggle)**:
 
-MUTE(hihat)               // mute hihat sequence
-MUTE(snare, hihat)        // mute multiple sequences
+Use uppercase reserved keywords to control multiple sequences with **unidirectional toggle** semantics:
+
+```js
+RUN(kick)                 // Include ONLY kick in RUN group (one-shot playback)
+RUN(kick, snare, hihat)   // Include ONLY kick, snare, hihat in RUN group
+
+LOOP(bass)                // Include ONLY bass in LOOP group (others auto-stop)
+LOOP(kick, snare)         // Include ONLY kick, snare in LOOP group (hat stops if it was looping)
+
+MUTE(hihat)               // Set ONLY hihat's MUTE flag ON (others OFF, applies only to LOOP)
+MUTE(snare, hihat)        // Set ONLY snare and hihat's MUTE flags ON (others OFF)
+```
+
+**Unidirectional Toggle Behavior (片記号方式)**:
+- **RUN group**: Lists sequences for one-shot playback. Only listed sequences are included.
+- **LOOP group**: Lists sequences for loop playback. **Sequences not listed are automatically stopped.**
+- **MUTE group**: Sets MUTE flag ON for listed sequences, OFF for others. **MUTE only affects LOOP playback**, not RUN.
+- Each command **replaces** the entire group with the new list (unidirectional - inclusion only)
+
+**RUN and LOOP Independence**:
+- RUN and LOOP are **independent groups** - the same sequence can be in both simultaneously
+- When a sequence is in both RUN and LOOP, it plays both one-shot AND loops
+- Example: `RUN(kick)` then `LOOP(kick)` → kick plays one-shot AND loops
+
+**MUTE Behavior**:
+- MUTE is a **persistent flag** that only affects LOOP playback
+- Like a mixer mute button: LOOP continues but produces no sound
+- **MUTE does NOT affect RUN playback** - RUN sequences always play with sound
+- MUTE flag persists even when sequence leaves/rejoins LOOP group
+
+**Examples:**
+```js
+// Setup
+var kick = init global.seq
+var snare = init global.seq
+var hat = init global.seq
+
+global.start()
+
+// Include kick and snare in RUN group
+RUN(kick, snare)              // kick and snare play one-shot
+
+// Replace LOOP group with only hat
+LOOP(hat)                     // Only hat loops (kick/snare NOT looping)
+
+// Both RUN and LOOP
+RUN(kick)                     // kick plays one-shot
+LOOP(kick)                    // kick ALSO loops (independent)
+
+// MUTE only affects LOOP
+LOOP(kick, snare, hat)        // All three loop
+MUTE(hat)                     // hat loops but muted (kick/snare unmuted)
+RUN(hat)                      // hat plays one-shot WITH sound (MUTE doesn't affect RUN)
+
+// Changing groups
+LOOP(kick, snare, hat)        // All three loop
+LOOP(kick)                    // Only kick loops (snare and hat auto-stop)
+
+// MUTE persistence
+MUTE(kick)                    // kick's MUTE flag ON
+LOOP(kick, snare)             // kick loops (muted), snare loops (unmuted)
+LOOP(snare)                   // kick stops, but MUTE flag persists
+LOOP(kick)                    // kick loops again, still muted (flag persisted)
+MUTE(snare)                   // kick's MUTE flag OFF, snare's MUTE flag ON
 ```
 
 **Benefits of Reserved Keywords:**
 - **Clearer intent**: `RUN(kick, snare)` is more readable than `kick.run()` followed by `snare.run()`
-- **Bulk operations**: Control multiple sequences in a single statement
-- **Live coding friendly**: Quick execution with multiline support
+- **Unidirectional control**: One statement defines the entire group state
+- **Live coding friendly**: Quick bulk updates with multiline support
 
 **Multiline support:**
 ```js
@@ -252,17 +311,20 @@ RUN(
   snare,
   hihat,
 )
-```
 
-### Targeted Transport (Legacy)
-```js
-global.start(seq1, seq2) // (warning) start ignores sequence arguments
-global.loop(seq1)        // loop only seq1
+LOOP(
+  bass,
+  lead,
+)
+
+MUTE(
+  hihat,
+)
 ```
 
 ### Editor Execution
 - Any `global` or `seq` transport command can be executed by selecting it in the editor and pressing **Command + Enter**.
-- Reserved keywords (`RUN`, `LOOP`, `STOP`, `MUTE`) can also be executed this way.
+- Reserved keywords (`RUN`, `LOOP`, `MUTE`) can also be executed this way.
 
 ---
 
@@ -299,7 +361,110 @@ fixpitch(-1)  // -1 semitone
 
 ---
 
-## 7. DAW Integration
+## 7. Underscore Prefix Pattern (Setting vs. Application) - v3.0
+
+**DSL v3.0 introduces a consistent pattern for all configuration methods:**
+
+### The Pattern: `method()` vs. `_method()`
+
+- **`method(value)`**: **Setting only** - stores the value but does NOT trigger playback or apply immediately
+- **`_method(value)`**: **Immediate application** - sets the value AND triggers playback/applies immediately
+
+This pattern applies to ALL configuration methods that can affect running sequences.
+
+### Applicable Methods
+
+All sequence configuration methods follow this pattern:
+
+```js
+// Setting-only methods (no underscore)
+seq.audio("file.wav")     // Set audio file (no playback)
+seq.chop(8)               // Set chop divisions (no slicing applied yet)
+seq.play(1, 2, 3, 4)      // Set play pattern (no playback)
+seq.beat(4 by 4)          // Set meter (no timing change yet)
+seq.length(2)             // Set loop length (no change yet)
+seq.tempo(140)            // Set tempo (no tempo change yet)
+
+// Immediate application methods (with underscore)
+seq._audio("file.wav")    // Set audio file AND apply immediately (triggers playback if running)
+seq._chop(8)              // Set chop divisions AND re-slice immediately
+seq._play(1, 2, 3, 4)     // Set play pattern AND start playback immediately
+seq._beat(4 by 4)         // Set meter AND apply timing change immediately
+seq._length(2)            // Set loop length AND apply immediately
+seq._tempo(140)           // Set tempo AND apply immediately
+```
+
+### Real-Time vs. Buffered Parameters
+
+**Real-time parameters** (apply immediately regardless of playback state):
+- `gain(dB)` and `_gain(dB)` - both apply immediately
+- `pan(position)` and `_pan(position)` - both apply immediately
+- These are mixer-style controls that should respond instantly
+
+**Buffered parameters** (timing-dependent):
+- Non-underscore: Buffered until next `run()` or `loop()` call
+- Underscore: Applied immediately even during playback
+
+### Usage Patterns
+
+**Pattern 1: Setup phase (before playback)**
+```js
+// During setup, use non-underscore methods (cleaner, no redundant playback triggers)
+var kick = init global.seq
+kick.audio("kick.wav")
+kick.chop(4)
+kick.play(1, 0, 1, 0)
+kick.beat(4 by 4)
+kick.length(1)
+
+// Start playback
+global.start()
+kick.run()                // Now all settings are applied
+```
+
+**Pattern 2: Live coding (during playback)**
+```js
+// Sequence is already running
+kick.run()
+
+// Non-underscore: Changes are buffered, applied at next run()/loop()
+kick.play(1, 1, 0, 0)     // Pattern buffered, not applied yet
+kick.run()                // NOW the new pattern is applied
+
+// Underscore: Changes apply immediately
+kick._play(1, 1, 0, 0)    // Pattern applied immediately, playback restarts
+```
+
+**Pattern 3: Real-time mixing**
+```js
+// These always apply immediately (mixer-style controls)
+kick.gain(-6)             // Immediate
+kick._gain(-6)            // Immediate (same effect)
+kick.pan(-50)             // Immediate
+kick._pan(-50)            // Immediate (same effect)
+
+// But other parameters are buffered without underscore
+kick.tempo(160)           // Buffered
+kick._tempo(160)          // Applied immediately
+```
+
+### Benefits
+
+1. **Clear Intent**: Underscore makes it explicit when you want immediate effect
+2. **Performance**: Avoid redundant operations during setup phase
+3. **Live Coding**: Quick updates with `_method()` during performance
+4. **Consistency**: Same pattern across all configuration methods
+
+### Default Behavior
+
+For backward compatibility and ease of use:
+- `defaultGain(dB)` - sets initial gain without triggering playback (use before `run()`)
+- `defaultPan(position)` - sets initial pan without triggering playback (use before `run()`)
+- `gain(dB)` / `pan(position)` - apply immediately during playback (real-time controls)
+
+---
+
+## 8. DAW Integration
 
 - **MIDI**: use macOS **IAC Bus** for routing when MIDI features are enabled later.  
 - **Audio**: OrbitScore outputs audio internally.  
@@ -440,13 +605,18 @@ global.tempo(130)
 
 ### Completed Features ✅
 
-#### Core DSL
+#### Core DSL (v3.0)
 - **Initialization**: `init GLOBAL`, `init global.seq`
 - **Global Parameters**: tempo, tick, beat, key
 - **Sequence Configuration**: tempo, beat, length, audio, chop
 - **Play Patterns**: Flat and nested structures with hierarchical timing
 - **Method Chaining**: All methods return `this` for fluent API
 - **Transport Commands**: run, stop, loop, mute, unmute
+- **Underscore Prefix Pattern (v3.0)**: `_audio()`, `_chop()`, `_play()`, `_beat()`, `_length()`, `_tempo()` for immediate application
+- **Unidirectional Toggle (v3.0)**: `RUN()`, `LOOP()`, `MUTE()` reserved keywords with片記号方式 semantics
+  - RUN and LOOP are independent groups
+  - MUTE is persistent flag, only affects LOOP playback
+  - STOP keyword removed (use LOOP with different list)
 
 #### Parser
 - **Tokenizer**: Complete lexical analysis
@@ -510,25 +680,54 @@ global.tempo(130)
 - **MIDI DSL**: Old syntax (`sequence`, `bus`, `channel`, `degree`, `velocity`) is no longer supported
 - **Note**: All MIDI-related tests and implementations have been removed in favor of direct audio playback
 
-### Testing Coverage
+### Testing Coverage (v3.0)
 - **Audio Parser Tests**: 50/50 passing
+- **Parser Syntax Tests**: 11/11 passing (v3.0: STOP removed)
+- **Unidirectional Toggle Tests**: 11/11 passing (v3.0: RUN/LOOP/MUTE semantics)
+- **Underscore Methods Tests**: 27/27 passing (v3.0: _audio, _chop, _play, etc.)
 - **Timing Tests**: 8/8 passing
 - **Pitch Tests**: 25/25 passing
 - **Audio Slicer Tests**: 9/9 passing
 - **SuperCollider Tests**: 15/15 passing
 - **Sequence Tests**: 20/20 passing
-- **Total**: 196+ tests passing (MIDI-related tests removed)
+- **Setting Sync Tests**: 13/13 passing (v3.0: RUN/LOOP buffering)
+- **Total**: 205+ tests passing
 
 ---
 
 ## 13. Versioning
 
-**Current Version**: v2.0 (SuperCollider Audio Engine)
+**Current Version**: v3.0 (Underscore Prefix + Unidirectional Toggle)
+
+- v3.0 (2025-01-09): **Underscore Prefix Pattern** + **Unidirectional Toggle (片記号方式)**
+  - **Underscore Prefix**: `method()` = setting only, `_method()` = immediate application
+  - **Unidirectional Toggle**: `RUN()`, `LOOP()`, `MUTE()` with inclusion-only semantics
+  - RUN and LOOP are independent groups (same sequence can be in both)
+  - MUTE is persistent flag, only affects LOOP playback
+  - Removed `STOP` keyword (use `LOOP()` with empty/different list instead)
+  - 205+ tests passing including 11 new unidirectional toggle tests
+
 - v2.0 (2025-01-06): SuperCollider integration, global mastering effects, dB-based gain control
+  - SuperCollider audio engine for professional-grade timing
+  - Global mastering: compressor, limiter, normalizer
+  - dB-based gain control (-60 to +12 dB)
+
 - v1.0 (2024-12-25): Core implementation complete with 100% test coverage
+  - Parser, interpreter, timing calculator
+  - Nested play structures
+  - Method chaining
+
 - v0.1 (2024-09-28): Initial draft specification
 
-**Migration Notes**:
+**Migration Notes from v2.0 to v3.0**:
+- **STOP keyword removed**: Use `LOOP(seq1)` then `LOOP(seq2)` to switch - seq1 auto-stops
+- **UNMUTE keyword removed**: Use `MUTE(seq2)` - seq1 auto-unmutes (unidirectional toggle)
+- **New behavior**: `RUN()` and `LOOP()` are independent - sequence can be in both simultaneously
+- **MUTE semantics changed**: MUTE only affects LOOP, not RUN playback
+- **New pattern**: Use `_method()` for immediate application during live coding
+- All existing v2.0 code continues to work (backward compatible for non-keyword features)
+
+**Migration Notes from v1.0 to v2.0**:
 - MIDI output system has been completely replaced with SuperCollider audio engine
 - Old MIDI DSL syntax is no longer supported
 - All audio playback now goes through SuperCollider for professional-grade timing and quality
