@@ -2,7 +2,6 @@ name: CI/CD - Test, Build, and Lint
 
 on:
   pull_request:
-    branches: [ main, develop ]
     types: [opened, synchronize, reopened]
 
 jobs:
