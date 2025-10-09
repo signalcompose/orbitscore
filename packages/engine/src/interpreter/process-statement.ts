@@ -124,85 +124,161 @@ export async function processSequenceStatement(
 }
 
 /**
- * Process transport commands
+ * Process transport commands with unidirectional toggle (DSL v3.0)
  *
- * Executes transport commands (run, stop, loop, etc.) on Global or Sequence instances.
+ * Implements片記号方式 (unidirectional toggle):
+ * - RUN(kick, snare): Include only kick and snare in RUN group
+ * - LOOP(hat): Include only hat in LOOP group, stop others
+ * - MUTE(kick): Set kick's MUTE flag ON, others OFF (applies only to LOOP)
  *
  * @param statement - Transport statement IR
  * @param state - Interpreter state
- *
- * @example
- * ```typescript
- * await processTransportStatement(
- *   { type: 'transport', target: 'global', command: 'run' },
- *   state
- * )
- * ```
  */
 export async function processTransportStatement(
   statement: any,
   state: InterpreterState,
 ): Promise<void> {
-  // Transport commands can be on global or sequence
   const target = statement.target
+  const command = statement.command
+  const sequenceNames = statement.sequences ?? []
 
-  // Check if it's a global
-  const global = state.globals.get(target)
-  if (global) {
-    const sequenceNames = statement.sequences ?? []
+  // Handle reserved keywords (RUN, LOOP, MUTE) with unidirectional toggle
+  if (target === 'global' && sequenceNames.length > 0) {
+    switch (command) {
+      case 'run':
+        await handleRunCommand(sequenceNames, state)
+        break
 
-    // For reserved keywords (RUN, LOOP, STOP, MUTE), apply command to sequences
-    if (sequenceNames.length > 0) {
-      for (const seqName of sequenceNames) {
-        const sequence = state.sequences.get(seqName)
-        if (sequence) {
-          await callMethod(sequence, statement.command, [])
-        } else {
-          console.error(`Sequence not found: ${seqName}`)
-        }
-      }
-      return
-    }
-
-    // For global commands without sequences (e.g., global.start())
-    switch (statement.command) {
-      case 'start':
       case 'loop':
-      case 'stop':
-        await callMethod(global, statement.command, [])
+        await handleLoopCommand(sequenceNames, state)
         break
 
       case 'mute':
-      case 'unmute':
-        // mute/unmute() methods don't exist on Global
-        console.warn(
-          `global.${statement.command}() is not supported; use sequence.${statement.command}() or RUN/LOOP/STOP/MUTE with sequence names instead`,
-        )
+        await handleMuteCommand(sequenceNames, state)
         break
 
       default:
-        // For unknown commands, warn and don't call
-        console.warn(`Unknown transport command: ${statement.command}`)
+        console.warn(`Unknown reserved keyword: ${command}`)
     }
-
     return
   }
 
-  // Check if it's a sequence
+  // Handle global commands (e.g., global.start())
+  const global = state.globals.get(target)
+  if (global) {
+    switch (command) {
+      case 'start':
+        await callMethod(global, 'start', [])
+        break
+
+      case 'stop':
+        await callMethod(global, 'stop', [])
+        break
+
+      case 'loop':
+        await callMethod(global, 'loop', [])
+        break
+
+      default:
+        console.warn(`Unknown global transport command: ${command}`)
+    }
+    return
+  }
+
+  // Handle sequence commands (e.g., kick.run())
   const sequence = state.sequences.get(target)
   if (sequence) {
-    const args = statement.sequences ?? []
-
-    // All sequence transport commands take no arguments
-    if (args.length > 0) {
-      console.warn(
-        `${target}.${statement.command}() ignores arguments; ${statement.command} affects only this sequence`,
-      )
-    }
-
-    await callMethod(sequence, statement.command, [])
+    await callMethod(sequence, command, [])
     return
   }
 
   console.error(`Transport target not found: ${target}`)
+}
+
+/**
+ * Handle RUN() command - unidirectional toggle
+ */
+async function handleRunCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
+  // Update RUN group
+  state.runGroup = new Set(sequenceNames)
+
+  // Execute run() on included sequences
+  for (const seqName of sequenceNames) {
+    const sequence = state.sequences.get(seqName)
+    if (sequence) {
+      await sequence.run()
+    } else {
+      console.error(`Sequence not found: ${seqName}`)
+    }
+  }
+}
+
+/**
+ * Handle LOOP() command - unidirectional toggle
+ */
+async function handleLoopCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
+  const newLoopGroup = new Set(sequenceNames)
+  const oldLoopGroup = state.loopGroup
+
+  // Stop sequences that are no longer in LOOP group
+  for (const seqName of oldLoopGroup) {
+    if (!newLoopGroup.has(seqName)) {
+      const sequence = state.sequences.get(seqName)
+      if (sequence) {
+        sequence.stop()
+      }
+    }
+  }
+
+  // Update LOOP group
+  state.loopGroup = newLoopGroup
+
+  // Execute loop() on included sequences
+  for (const seqName of sequenceNames) {
+    const sequence = state.sequences.get(seqName)
+    if (sequence) {
+      await sequence.loop()
+
+      // Apply MUTE state (MUTE only affects LOOP)
+      if (state.muteGroup.has(seqName)) {
+        sequence.mute()
+      } else {
+        sequence.unmute()
+      }
+    } else {
+      console.error(`Sequence not found: ${seqName}`)
+    }
+  }
+}
+
+/**
+ * Handle MUTE() command - unidirectional toggle
+ * MUTE is a persistent flag that only affects LOOP playback
+ */
+async function handleMuteCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
+  const newMuteGroup = new Set(sequenceNames)
+  const oldMuteGroup = state.muteGroup
+
+  // Unmute sequences that are no longer in MUTE group (only if they're in LOOP)
+  for (const seqName of oldMuteGroup) {
+    if (!newMuteGroup.has(seqName) && state.loopGroup.has(seqName)) {
+      const sequence = state.sequences.get(seqName)
+      if (sequence) {
+        sequence.unmute()
+      }
+    }
+  }
+
+  // Update MUTE group (persistent flag)
+  state.muteGroup = newMuteGroup
+
+  // Mute sequences in MUTE group (only if they're in LOOP)
+  for (const seqName of sequenceNames) {
+    if (state.loopGroup.has(seqName)) {
+      const sequence = state.sequences.get(seqName)
+      if (sequence) {
+        sequence.mute()
+      }
+    }
+  }
 }

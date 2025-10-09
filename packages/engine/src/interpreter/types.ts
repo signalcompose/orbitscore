@@ -15,6 +15,11 @@ export interface InterpreterState {
   currentGlobal?: Global
   audioEngine: SuperColliderPlayer
   isBooted: boolean
+
+  // Unidirectional toggle groups (DSL v3.0)
+  runGroup: Set<string> // Sequences in RUN playback
+  loopGroup: Set<string> // Sequences in LOOP playback
+  muteGroup: Set<string> // Sequences with MUTE flag ON (persistent)
 }
 
 /**

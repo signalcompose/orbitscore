@@ -23,7 +23,6 @@ export class AudioTokenizer {
     'force',
     'RUN',
     'LOOP',
-    'STOP',
     'MUTE',
   ])
 
