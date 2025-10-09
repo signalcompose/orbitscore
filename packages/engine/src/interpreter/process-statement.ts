@@ -143,7 +143,8 @@ export async function processTransportStatement(
   const sequenceNames = statement.sequences ?? []
 
   // Handle reserved keywords (RUN, LOOP, MUTE) with unidirectional toggle
-  if (target === 'global' && sequenceNames.length > 0) {
+  // Empty arguments are allowed (e.g., RUN() clears the RUN group)
+  if (target === 'global' && (command === 'run' || command === 'loop' || command === 'mute')) {
     switch (command) {
       case 'run':
         await handleRunCommand(sequenceNames, state)
@@ -156,9 +157,6 @@ export async function processTransportStatement(
       case 'mute':
         await handleMuteCommand(sequenceNames, state)
         break
-
-      default:
-        console.warn(`Unknown reserved keyword: ${command}`)
     }
     return
   }
@@ -218,8 +216,21 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
     )
   }
 
+  const newRunGroup = new Set(validSequences)
+  const oldRunGroup = state.runGroup
+
+  // Stop sequences that are no longer in RUN group (and not in LOOP group)
+  for (const seqName of oldRunGroup) {
+    if (!newRunGroup.has(seqName) && !state.loopGroup.has(seqName)) {
+      const sequence = state.sequences.get(seqName)
+      if (sequence) {
+        sequence.stop()
+      }
+    }
+  }
+
   // Update RUN group with only valid sequences
-  state.runGroup = new Set(validSequences)
+  state.runGroup = newRunGroup
 
   // Execute run() on included sequences
   for (const seqName of validSequences) {
