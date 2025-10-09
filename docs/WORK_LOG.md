@@ -17,6 +17,92 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.28 DSL v3.0: Edge Case Tests (January 9, 2025)
+
+**Date**: January 9, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `46-dsl-v3-edge-case-tests`
+**Issue**: #46
+**Commits**: `7b00153`
+
+**Work Content**: RUN/LOOP/MUTEコマンドの堅牢性を向上させるため、エッジケースのテストカバレッジを追加
+
+#### 背景
+DSL v3.0の実装完了後、より堅牢なシステムにするため、予約語コマンド（RUN/LOOP/MUTE）のエッジケースをカバーするテストが必要と判断。特に空の引数、重複シーケンス、存在しないシーケンスなどの境界条件を検証。
+
+#### 追加したテストシナリオ
+
+1. **空のコマンド**
+   - `RUN()`: RUNグループをクリア（LOOPグループのシーケンスは影響を受けない）
+   - `LOOP()`: LOOPグループをクリア（すべてのループを停止）
+   - `MUTE()`: MUTEグループをクリア（すべてアンミュート）
+
+2. **重複シーケンス**
+   - `RUN(kick, kick, kick)`: 重複を自動的に排除
+   - `LOOP(kick, kick)`: 重複を自動的に排除
+   - `MUTE(kick, kick)`: 重複を自動的に排除
+
+3. **存在しないシーケンス**
+   - `RUN(kick, nonexistent)`: 警告を出力し、有効なシーケンスのみ実行
+   - `LOOP(kick, nonexistent)`: 警告を出力し、有効なシーケンスのみループ
+   - `MUTE(kick, nonexistent)`: 警告を出力し、有効なシーケンスのみミュート
+
+4. **RUN→LOOP遷移**
+   - `RUN(kick)`後に`LOOP(kick)`: 両方のグループに同時所属可能
+
+5. **MUTEとRUNの相互作用**
+   - `RUN(kick)`後に`MUTE(kick)`: MUTEはLOOPのみに影響（RUNには影響なし）
+
+#### 実装の修正
+
+**process-statement.tsの条件修正:**
+
+空の引数を受け付けるように、条件式を変更：
+
+```typescript
+// 修正前
+if (target === 'global' && sequenceNames.length > 0) {
+  // handle commands
+}
+
+// 修正後
+if (target === 'global' && (command === 'run' || command === 'loop' || command === 'mute')) {
+  // handle commands (empty arguments allowed)
+}
+```
+
+**handleRunCommand の停止処理改善:**
+
+LOOPグループとの独立性を考慮した停止処理：
+
+```typescript
+// RUNグループから削除されたシーケンスで、LOOPグループに属していないものを停止
+for (const seqName of oldRunGroup) {
+  if (!newRunGroup.has(seqName) && !state.loopGroup.has(seqName)) {
+    sequence.stop()
+  }
+}
+```
+
+#### テスト結果
+
+- **新規テスト**: 12個追加（Edge Casesセクション）
+- **全体**: 22 passed（既存10 + 新規12）
+- **リグレッション**: なし
+
+#### 技術的な学び
+
+1. **Setの重複排除**: JavaScriptのSetは自動的に重複を排除するため、明示的な処理は不要
+2. **RUN/LOOPの独立性**: 同一シーケンスが両グループに同時所属可能
+3. **エラーハンドリング**: 存在しないシーケンスは警告を出力し、有効なシーケンスのみで処理継続
+
+#### 次のステップ
+
+- パフォーマンス最適化（`handleLoopCommand`の二重ループ統合）
+- `_method()`の即時適用の実装検証
+
+---
+
 ### 6.27 DSL v3.0: Underscore Prefix Pattern + Unidirectional Toggle (January 9, 2025)
 
 **Date**: January 9, 2025
