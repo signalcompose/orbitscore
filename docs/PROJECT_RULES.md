@@ -368,9 +368,9 @@ alias review-get='gh pr view --comments | grep -A 100 "bugbot"'
 5. **Update WORK_LOG.md** (before committing, use `[PENDING]` for commit hash)
 6. **Update README.md** (sync with WORK_LOG.md status)
 7. Update other documentation
-8. **Update Serena memory** (important changes, issues, decisions)
+8. **Serenaを使って重要な変更を保存** (必要に応じて)
 9. **Update USER_MANUAL.md** (if user-facing changes)
-10. **Commit all changes including docs and Serena memory files** (`.serena/memories/*.md`)
+10. **Commit all changes including docs**
 11. **Get the commit hash** (`git rev-parse --short HEAD`) - this is the "実コミット"
 12. **Update WORK_LOG.md with the first commit hash** (replace `[PENDING]` with the hash from step 11)
 13. **Amend the commit** (`git add docs/WORK_LOG.md && git commit --amend --no-edit`)
@@ -663,8 +663,7 @@ When you see these patterns, **refactor immediately**:
 - [ ] WORK_LOG.md updated
 - [ ] README.md updated (MUST reflect current status from WORK_LOG.md)
 - [ ] Documentation updated if needed
-- [ ] **Serena memory updated** (current issues, architectural changes, important decisions)
-- [ ] **Serena memory files staged** (`.serena/memories/*.md` included in commit)
+- [ ] **Serenaを使って重要な変更を保存** (必要に応じて)
 - [ ] Commit message is descriptive
 - [ ] No console.log left in production code
 - [ ] Types are properly defined
@@ -675,100 +674,6 @@ When you see these patterns, **refactor immediately**:
 2. **Incremental Commits**: Small, focused commits
 3. **Documentation Sync**: Keep docs in sync with code
 4. **Code Review**: Review your own code before committing
-
-## 🧠 Serena Memory Management
-
-### 🔴 CRITICAL: Serena Memory Commit Workflow
-
-**developブランチではSerenaメモリをコミットしない:**
-
-- ✅ **developでメモリ変更はOK**: 編集・保存は自由に行える
-- ❌ **developでメモリコミットはNG**: コミット・pushはしない
-- ✅ **変更は次のブランチに持ち越す**: unstagedのまま機能ブランチに移行
-- ✅ **機能ブランチで一緒にコミット**: 機能実装と一緒にメモリをコミット
-
-**理由**: メモリ更新だけのPRを防ぎ、機能実装と関連情報を一緒に管理
-
-**Hook保護**: `pre-commit-check.sh`がdevelop/mainでの`.serena/memories/`コミットをブロック
-
-**ワークフロー例**:
-```bash
-# developブランチでメモリ更新（コミットしない）
-(develop) $ serena-write_memory(...)  # OK: 編集・保存
-(develop) $ git status                # .serena/memories/ が unstaged
-
-# 機能ブランチ作成（変更が持ち越される）
-(develop) $ git checkout -b 52-new-feature
-(52-new-feature) $ git status         # .serena/memories/ がまだ unstaged
-
-# 機能実装
-(52-new-feature) $ [実装...]
-
-# 機能とメモリを一緒にコミット
-(52-new-feature) $ git add .
-(52-new-feature) $ git commit -m "feat: 新機能実装とメモリ更新"  # OK!
-```
-
-### When to Update Serena Memory (コミット時):
-
-**MUST update before committing when there are:**
-
-1. **Critical Issues** (現在の重大な問題)
-   - Bugs that affect core functionality
-   - Performance issues
-   - Broken features that need fixing
-   - Example: "`global.stop()` not working properly"
-
-2. **Architectural Changes** (アーキテクチャ変更)
-   - Major refactoring
-   - New design patterns introduced
-   - Module structure changes
-   - Breaking changes to internal APIs
-
-3. **Important Decisions** (重要な決定事項)
-   - Technical approach changes
-   - Library/tool choices
-   - Implementation strategy shifts
-   - Performance optimization strategies
-
-4. **Current Development Status** (開発ステータス)
-   - Phase completion status
-   - Feature implementation progress
-   - Known limitations
-   - Next steps/priorities
-
-### Serena Memory Categories:
-
-- **`project_overview`**: High-level project description, tech stack, current status
-- **`current_issues`**: Active bugs and problems that need attention
-- **`development_guidelines`**: Implementation patterns, best practices
-- **`code_style_conventions`**: TypeScript/coding standards
-- **`task_completion_checklist`**: Standard procedures for completion
-- **`suggested_commands`**: Commonly used commands and workflows
-
-### Update Command:
-
-```typescript
-serena-write_memory({
-  memory_name: "current_issues",
-  content: "Updated markdown content..."
-})
-```
-
-### After Updating Memory:
-
-**MUST commit the updated memory files:**
-
-```bash
-git add .serena/memories/*.md
-git commit -m "docs: update Serena memory with [description]"
-```
-
-**Why**: Serena memory files (`.serena/memories/*.md`) are stored in the repository and should be version controlled. This ensures:
-- Memory persists across sessions
-- Other agents (Codex CLI, future sessions) can access the information
-- Changes are tracked in git history
-- Team members can see project status and issues
 
 ## 🔄 Session Continuity and Information Handoff
 
@@ -793,7 +698,7 @@ Resume機能に依存せず、Serenaメモリとドキュメントで情報を�
 
 4. **コミット時（必須）**
    - WORK_LOGに詳細を記録
-   - 上記の「Serena Memory Management」セクション参照
+   - Serenaを使って重要な決定事項や変更を保存
 
 ### セッション開始時（AIエージェントの責務）
 
