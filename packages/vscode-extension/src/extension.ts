@@ -364,19 +364,13 @@ function toggleEngine() {
   }
 }
 
-function startEngine(debugMode: boolean = false) {
-  if (engineProcess && !engineProcess.killed) {
-    vscode.window.showWarningMessage('⚠️ Engine is already running')
-    return
-  }
-
-  // isDebugMode = debugMode
-  const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
-  outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
-
-  // Choose engine based on mode
+/**
+ * Determine engine path based on debug mode.
+ */
+function getEnginePath(debugMode: boolean): { enginePath: string; engineSource: string } | null {
   let enginePath: string
   let engineSource: string
+
   if (debugMode) {
     // Debug mode: use workspace engine (development)
     enginePath = path.join(__dirname, '../../engine/dist/cli-audio.js')
@@ -402,10 +396,16 @@ function startEngine(debugMode: boolean = false) {
           `3. Check that packages/engine/dist/cli-audio.js exists`,
       )
     }
-    return
+    return null
   }
 
-  // Show engine build time
+  return { enginePath, engineSource }
+}
+
+/**
+ * Show engine build time.
+ */
+function showEngineBuildTime(enginePath: string): void {
   try {
     const stats = fs.statSync(enginePath)
     const buildTime = stats.mtime.toLocaleString('ja-JP', {
@@ -420,148 +420,139 @@ function startEngine(debugMode: boolean = false) {
   } catch (error) {
     outputChannel?.appendLine(`⚠️ Could not get build time: ${error}`)
   }
+}
 
-  // Get workspace root for proper relative path resolution
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-
-  // Load .orbitscore.json config if it exists
+/**
+ * Load audio device from .orbitscore.json config.
+ */
+function loadAudioDeviceConfig(workspaceRoot: string): string | undefined {
   const configPath = path.join(workspaceRoot, '.orbitscore.json')
-  let audioDevice: string | undefined
 
-  if (fs.existsSync(configPath)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-      audioDevice = config.audioDevice
-      if (audioDevice) {
-        outputChannel?.appendLine(`🔊 Using audio device from config: ${audioDevice}`)
-      }
-    } catch (error) {
-      outputChannel?.appendLine(`⚠️ Failed to read .orbitscore.json: ${error}`)
+  if (!fs.existsSync(configPath)) {
+    return undefined
+  }
+
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    const audioDevice = config.audioDevice
+    if (audioDevice) {
+      outputChannel?.appendLine(`🔊 Using audio device from config: ${audioDevice}`)
     }
+    return audioDevice
+  } catch (error) {
+    outputChannel?.appendLine(`⚠️ Failed to read .orbitscore.json: ${error}`)
+    return undefined
+  }
+}
+
+/**
+ * Filter stdout output in non-debug mode.
+ */
+function shouldFilterLine(line: string): boolean {
+  const trimmed = line.trim()
+
+  // Keep important messages
+  if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️')) {
+    return false
   }
 
-  const args = ['repl']
-  if (audioDevice) {
-    args.push('--audio-device', audioDevice)
-  }
-  if (debugMode) {
-    args.push('--debug')
-  }
-
-  // Set debug environment variable for debug mode
-  const env = { ...process.env }
-  if (debugMode) {
-    env.ORBITSCORE_DEBUG = '1'
+  // Keep initialization messages
+  if (
+    line.includes('🎵 OrbitScore') ||
+    line.includes('✅ Initialized') ||
+    line.includes('✅ SuperCollider server ready') ||
+    line.includes('✅ SynthDef loaded') ||
+    line.includes('✅ Mastering effect') ||
+    line.includes('🎵 Live coding mode')
+  ) {
+    return false
   }
 
-  engineProcess = child_process.spawn('node', [enginePath, ...args], {
-    cwd: workspaceRoot,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env,
-  })
+  // Keep transport state changes
+  if (
+    line.includes('✅ Global running') ||
+    line.includes('✅ Global stopped') ||
+    line.includes('✅ Global starting')
+  ) {
+    return false
+  }
 
-  isLiveCodingMode = true
-  hasEvaluatedFile = false // Reset on engine start
-  statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
-  statusBarItem!.tooltip = 'Click to stop engine'
-  vscode.window.showInformationMessage(
-    debugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
-  )
-  outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
+  // Keep user execution feedback
+  if (line.includes('▶ ') || line.includes('⏹ ') || line.includes('🔄 ')) {
+    return false
+  }
 
-  // Handle stdout
-  engineProcess.stdout?.on('data', (data) => {
+  // Filter out verbose logs
+  if (
+    line.includes('🔊 Playing:') ||
+    line.includes('sendosc:') ||
+    line.includes('rcvosc :') ||
+    line.includes('stdout :') ||
+    line.includes('"oscType"') ||
+    line.includes('"address"') ||
+    line.includes('"args"') ||
+    line.includes('"type"') ||
+    line.includes('"data"') ||
+    line.includes('"bufnum"') ||
+    line.includes('"amp"') ||
+    line.includes('"pan"') ||
+    line.includes('"rate"') ||
+    line.includes('"startPos"') ||
+    line.includes('"duration"') ||
+    line.includes('"threshold"') ||
+    line.includes('"ratio"') ||
+    line.includes('"attack"') ||
+    line.includes('"release"') ||
+    line.includes('"makeupGain"') ||
+    line.includes('"level"') ||
+    line.includes('"/') ||
+    line.includes('orbitPlayBuf') ||
+    line.includes('fxCompressor') ||
+    line.includes('fxLimiter') ||
+    line.includes('fxNormalizer') ||
+    line.includes('Number of Devices:') ||
+    line.includes('Input Device') ||
+    line.includes('Output Device') ||
+    line.includes('Streams:') ||
+    line.includes('channels') ||
+    line.includes('SC_AudioDriver:') ||
+    line.includes('PublishPortToRendezvous') ||
+    trimmed === '✓' ||
+    trimmed === '}' ||
+    trimmed === ']' ||
+    trimmed === '{' ||
+    trimmed === '[' ||
+    trimmed.startsWith('}') ||
+    trimmed.startsWith(']') ||
+    trimmed.match(/^\d+\s*:/) ||
+    trimmed.match(/^-?\d+(\.\d+)?,?$/) ||
+    trimmed === ''
+  ) {
+    return true
+  }
+
+  return false
+}
+
+/**
+ * Filter stdout output for non-debug mode.
+ */
+function filterStdout(output: string): string {
+  const lines = output.split('\n')
+  const filtered = lines.filter((line: string) => !shouldFilterLine(line))
+  return filtered.join('\n')
+}
+
+/**
+ * Setup stdout handler for engine process.
+ */
+function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+  process.stdout?.on('data', (data) => {
     const output = data.toString()
 
-    // In non-debug mode, filter out verbose logs
+    // Filter output in non-debug mode
     if (!debugMode) {
-      const lines = output.split('\n')
-      const filtered = lines.filter((line: string) => {
-        const trimmed = line.trim()
-
-        // Keep important messages only
-        if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️')) {
-          return true
-        }
-
-        // Keep initialization messages
-        if (
-          line.includes('🎵 OrbitScore') ||
-          line.includes('✅ Initialized') ||
-          line.includes('✅ SuperCollider server ready') ||
-          line.includes('✅ SynthDef loaded') ||
-          line.includes('✅ Mastering effect') ||
-          line.includes('🎵 Live coding mode')
-        ) {
-          return true
-        }
-
-        // Keep transport state changes
-        if (
-          line.includes('✅ Global running') ||
-          line.includes('✅ Global stopped') ||
-          line.includes('✅ Global starting')
-        ) {
-          return true
-        }
-
-        // Keep user execution feedback (run/loop commands)
-        if (line.includes('▶ ') || line.includes('⏹ ') || line.includes('🔄 ')) {
-          return true
-        }
-
-        // Filter out ALL verbose logs
-        if (
-          line.includes('🔊 Playing:') ||
-          line.includes('sendosc:') ||
-          line.includes('rcvosc :') ||
-          line.includes('stdout :') ||
-          line.includes('"oscType"') ||
-          line.includes('"address"') ||
-          line.includes('"args"') ||
-          line.includes('"type"') ||
-          line.includes('"data"') ||
-          line.includes('"bufnum"') ||
-          line.includes('"amp"') ||
-          line.includes('"pan"') ||
-          line.includes('"rate"') ||
-          line.includes('"startPos"') ||
-          line.includes('"duration"') ||
-          line.includes('"threshold"') ||
-          line.includes('"ratio"') ||
-          line.includes('"attack"') ||
-          line.includes('"release"') ||
-          line.includes('"makeupGain"') ||
-          line.includes('"level"') ||
-          line.includes('"/') || // OSC addresses like "/done", "/n_go"
-          line.includes('orbitPlayBuf') ||
-          line.includes('fxCompressor') ||
-          line.includes('fxLimiter') ||
-          line.includes('fxNormalizer') ||
-          line.includes('Number of Devices:') ||
-          line.includes('Input Device') ||
-          line.includes('Output Device') ||
-          line.includes('Streams:') ||
-          line.includes('channels') ||
-          line.includes('SC_AudioDriver:') ||
-          line.includes('PublishPortToRendezvous') ||
-          trimmed === '✓' ||
-          trimmed === '}' ||
-          trimmed === ']' ||
-          trimmed === '{' ||
-          trimmed === '[' ||
-          trimmed.startsWith('}') ||
-          trimmed.startsWith(']') ||
-          trimmed.match(/^\d+\s*:/) || // Device numbers
-          trimmed.match(/^-?\d+(\.\d+)?,?$/) || // Numbers only
-          trimmed === ''
-        ) {
-          return false
-        }
-
-        return true
-      })
-      const filteredOutput = filtered.join('\n')
+      const filteredOutput = filterStdout(output)
       if (filteredOutput.trim()) {
         outputChannel?.append(filteredOutput + '\n')
       }
@@ -577,22 +568,92 @@ function startEngine(debugMode: boolean = false) {
       statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
     }
   })
+}
 
-  // Handle stderr
-  engineProcess.stderr?.on('data', (data) => {
+/**
+ * Setup stderr handler for engine process.
+ */
+function setupStderrHandler(process: child_process.ChildProcess): void {
+  process.stderr?.on('data', (data) => {
     outputChannel?.append(`ERROR: ${data.toString()}`)
   })
+}
 
-  // Handle process exit
-  engineProcess.on('exit', (code) => {
+/**
+ * Setup exit handler for engine process.
+ */
+function setupExitHandler(process: child_process.ChildProcess): void {
+  process.on('exit', (code) => {
     outputChannel?.appendLine(`\n🛑 Engine process exited with code ${code}`)
     engineProcess = null
     isLiveCodingMode = false
-    hasEvaluatedFile = false // Reset on engine exit
-    // isDebugMode = false // Reset debug mode
+    hasEvaluatedFile = false
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
   })
+}
+
+function startEngine(debugMode: boolean = false) {
+  if (engineProcess && !engineProcess.killed) {
+    vscode.window.showWarningMessage('⚠️ Engine is already running')
+    return
+  }
+
+  const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
+  outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
+
+  // Get engine path
+  const engineInfo = getEnginePath(debugMode)
+  if (!engineInfo) {
+    return
+  }
+  const { enginePath } = engineInfo
+
+  // Show build time
+  showEngineBuildTime(enginePath)
+
+  // Get workspace root
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+
+  // Load audio device config
+  const audioDevice = loadAudioDeviceConfig(workspaceRoot)
+
+  // Build args
+  const args = ['repl']
+  if (audioDevice) {
+    args.push('--audio-device', audioDevice)
+  }
+  if (debugMode) {
+    args.push('--debug')
+  }
+
+  // Set environment
+  const env = { ...process.env }
+  if (debugMode) {
+    env.ORBITSCORE_DEBUG = '1'
+  }
+
+  // Spawn engine process
+  engineProcess = child_process.spawn('node', [enginePath, ...args], {
+    cwd: workspaceRoot,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env,
+  })
+
+  // Update state
+  isLiveCodingMode = true
+  hasEvaluatedFile = false
+  statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
+  statusBarItem!.tooltip = 'Click to stop engine'
+  vscode.window.showInformationMessage(
+    debugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
+  )
+  outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
+
+  // Setup handlers
+  setupStdoutHandler(engineProcess, debugMode)
+  setupStderrHandler(engineProcess)
+  setupExitHandler(engineProcess)
 }
 
 function startEngineDebug() {

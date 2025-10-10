@@ -1,0 +1,49 @@
+// OrbitScore Audio Test 05: Transport Commands (DSL v3.0)
+// Tests: RUN, LOOP, MUTE commands
+
+var global = init GLOBAL
+var kick = init global.seq
+var snare = init global.seq
+var hihat = init global.seq
+
+kick.audio("kick.wav").play(1, 0, 0, 0)
+snare.audio("snare.wav").play(0, 1, 0, 1)
+hihat.audio("hihat.wav").play(1, 1, 1, 1)
+
+global.tempo(120)
+global.start()
+
+// 5-2-1: RUN single sequence
+RUN(kick)
+
+// 5-2-2: RUN multiple sequences
+// RUN(kick, snare, hihat)
+
+// 5-2-3: LOOP single sequence
+// LOOP(kick)
+
+// 5-2-4: LOOP multiple, others auto-stop
+// LOOP(kick, snare)
+
+// 5-2-5: MUTE flag
+// MUTE(hihat)
+
+// 5-2-6: MUTE only affects LOOP, not RUN
+// RUN(kick)  // Should play even if MUTED
+// LOOP(kick) // Should be silent if MUTED
+
+// 5-2-7: RUN and LOOP independence
+// RUN(kick)
+// LOOP(kick)  // Same sequence can run AND loop
+
+// 5-2-8: MUTE persistence
+// MUTE(snare)
+// LOOP(kick, snare)  // snare is muted
+// LOOP(kick)         // snare removed from LOOP but still muted
+// LOOP(kick, snare)  // snare still muted (persistence)
+
+// Expected:
+// - RUN plays sequences once
+// - LOOP continuously loops
+// - MUTE only affects LOOP
+// - State persists correctly
