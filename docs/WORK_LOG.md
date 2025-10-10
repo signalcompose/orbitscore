@@ -17,6 +17,60 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.36 Configuration: hooks shellスクリプト内のSerenaメモリ参照を抽象化 (October 11, 2025)
+
+**Date**: October 11, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: N/A（軽微な修正）
+**Commits**: `[PENDING]`
+
+**Work Content**: Issue #63の抜け漏れ修正。`.claude/hooks/`配下のshellスクリプト内に残っていた具体的なSerenaメモリ参照を抽象化。
+
+#### 背景
+
+Issue #63でドキュメント内の具体的なSerenaメモリ参照を抽象化したが、`.claude/hooks/`配下のshellスクリプト内に具体的なメモリ名（`project_overview`, `current_issues`）が残っていることが判明。
+
+#### 実施した変更
+
+**1. session-start.sh修正 ✅**
+
+変更前：
+```
+- 特に `project_overview`, `current_issues` を確認
+```
+
+変更後：
+```
+- 必要に応じてread_memoryで読み込む
+```
+
+**2. post-compact.sh修正 ✅**
+
+変更前：
+```
+- 特に `project_overview`, `current_issues` を確認
+```
+
+変更後：
+```
+- 必要に応じてread_memoryで読み込む
+```
+
+#### 理由
+
+- Issue #63で確立したドキュメント記述ポリシーに準拠
+- shellスクリプトとドキュメントの一貫性を保証
+- 各開発者が独自のメモリ構成を持つ環境に対応
+
+#### 影響範囲
+
+**変更ファイル:**
+- `.claude/hooks/session-start.sh`
+- `.claude/hooks/post-compact.sh`
+
+---
+
 ### 6.35 Configuration: Serenaメモリを個人環境に移行 (October 11, 2025)
 
 **Date**: October 11, 2025
