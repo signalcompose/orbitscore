@@ -4,6 +4,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
+## 🗣️ コミュニケーションルール
+
+### 言語ポリシー
+
+**ユーザーとAIのコミュニケーション:**
+- ✅ ユーザーは**英語でも日本語でも**指示を出せる
+- ✅ AIは**常に日本語で**返答する（UTF-8エンコーディング）
+- ✅ ユーザーの英語が長文の場合、文法チェックと改善例を提供する
+
+**Issue/Commit/PR:**
+- ✅ **Issue**: タイトル・本文ともに**日本語**で記述
+- ✅ **Commit**: タイトル・本文ともに**日本語**で記述（type prefixのみ英語）
+  - 例: `feat: オーディオ録音機能を追加`
+  - 例: `refactor: コード品質向上とテストファイル追加`
+- ✅ **PR**: タイトル・本文ともに**日本語**で記述
+  - 例: `feat: オーディオ録音機能を追加`
+  - 本文に必ず `Closes #<issue-number>` を含める
+- ❌ **ブランチ名のみ英語**（ツール互換性のため）
+  - 例: `61-audio-playback-testing`
+
+**理由:**
+- プロジェクトは日本語話者向け
+- コミット履歴・Issue履歴を日本語で統一
+- 論文・ドキュメントでの引用が容易
+
+**詳細:** `docs/PROJECT_RULES.md` Section 2, Commit Message Format
+
+---
+
 ## 📚 Documentation Reference
 
 **プロジェクトの詳細情報はすべて `./docs/` 配下にあります。**
@@ -239,11 +268,18 @@ git checkout -b 61-audio-playback-testing
 
 - **必ず`Closes #<issue-number>`を含める**
 - **`develop`ブランチ向けに作成**
+- **タイトル・本文は日本語で記述**
 - **例**:
   ```bash
-  gh pr create --base develop --title "feat: description" --body "Closes #61
+  gh pr create --base develop --title "feat: オーディオ録音機能を追加" --body "Closes #61
 
-  detailed description"
+  ## 概要
+  ライブパフォーマンスでの録音忘れ防止のため、自動録音機能を実装。
+
+  ## 変更内容
+  - global.start()で録音開始
+  - global.stop()で録音停止・ファイル保存
+  "
   ```
 
 ### マージポリシー

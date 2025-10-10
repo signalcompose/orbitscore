@@ -17,13 +17,67 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.34 Documentation: CLAUDE.mdにコミュニケーションルール追加 (October 10, 2025)
+
+**Date**: October 10, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: #61
+**Commits**: `512105d`
+
+**Work Content**: CLAUDE.mdにプロジェクトのコミュニケーションルール（言語ポリシー）を明記。
+
+#### 背景
+
+プロジェクトには「ユーザーは英語でも日本語でも指示可能、AIは日本語で返答、Issue/Commit/PRは日本語で記述」というルールが存在していたが、CLAUDE.mdに明記されていなかった。そのため、直近のコミットメッセージが英語で記述されるという問題が発生。
+
+#### 実施した変更
+
+**CLAUDE.md更新 ✅**
+
+新規セクション「🗣️ コミュニケーションルール」を追加：
+
+1. **言語ポリシー**:
+   - ユーザーは英語でも日本語でも指示可能
+   - AIは常に日本語で返答（UTF-8エンコーディング）
+   - ユーザーの英語が長文の場合、文法チェックと改善例を提供
+
+2. **Issue/Commit/PR**:
+   - Issue: タイトル・本文ともに日本語
+   - Commit: タイトル・本文ともに日本語（type prefixのみ英語）
+     - 例: `feat: オーディオ録音機能を追加`
+   - PR: タイトル・本文ともに日本語
+   - ブランチ名のみ英語（ツール互換性のため）
+
+3. **PR作成例を更新**:
+   - 日本語での記述例を追加
+   - `Closes #<issue-number>` を含める例を明示
+
+#### 理由
+
+- プロジェクトは日本語話者向け
+- コミット履歴・Issue履歴を日本語で統一
+- 論文・ドキュメントでの引用が容易
+- ルールの明文化により、今後の一貫性を保証
+
+#### 既存コミットの扱い
+
+直近の英語コミット（`e54615a`, `937d428`）はそのまま保持し、今後のコミットから日本語で記述する方針。
+
+#### 技術的決定事項
+
+- ルールは `docs/PROJECT_RULES.md` に既存だったが、CLAUDE.mdにも明記することで可視性向上
+- ブランチ名は英語のまま（Git/GitHub toolsの互換性のため）
+
+---
+
 ### 6.33 Refactoring: Code Quality Improvement + Test File Creation (October 10, 2025)
 
 **Date**: October 10, 2025
 **Status**: ✅ COMPLETE
 **Branch**: `61-audio-playback-testing`
 **Issue**: #61
-**Commits**: [PENDING]
+**Commits**: `e54615a`
 
 **Work Content**: 50行超の長い関数をリファクタリングし、AUDIO_TEST_CHECKLIST.mdに基づいた実音出しテスト用.oscファイルを作成。
 
