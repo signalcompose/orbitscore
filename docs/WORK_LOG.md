@@ -17,13 +17,88 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.37 Documentation: CLAUDE.md簡潔化とプロジェクト計画ドキュメント追加 (October 11, 2025)
+
+**Date**: October 11, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: N/A（ドキュメント整理）
+**Commits**: `c06b41d`
+
+**Work Content**: CLAUDE.mdの大幅な簡潔化を実施し、詳細は`/docs`配下を参照する構造に変更。また、P2P協調機能とElectronアプリの計画ドキュメントを追加。
+
+#### 背景
+
+CLAUDE.mdが冗長化し、重要な情報が埋もれる状態になっていた。プロジェクトルールの詳細は既に`docs/PROJECT_RULES.md`に記載されているため、CLAUDE.mdは「クイックリファレンス」と「必須手順」のみに絞り、詳細はdocsへ誘導する構造が適切。
+
+また、将来的な機能開発（P2P協調機能、Electronアプリ）の計画が議論されたため、これらをドキュメント化してプロジェクトの方向性を明確化する必要があった。
+
+#### 実施した変更
+
+**1. CLAUDE.md簡潔化 ✅**
+
+主な変更：
+- **冗長な説明を削除**: コミュニケーションルール、詳細なGitワークフローなどを削除
+- **docsへの参照を強化**: 詳細は`docs/PROJECT_RULES.md`等を参照するよう誘導
+- **構造を整理**:
+  - セッション開始時の必須アクション（ステップ1-4）
+  - Quick Reference（プロジェクト概要、開発コマンド、技術スタック）
+  - Implementation Workflow（ワークフロー、チェックリスト）
+  - Git Workflow Summary
+  - Documentation Reference Priority
+  - Additional Resources（docsへのリンク集）
+
+削除した主なセクション：
+- 🗣️ コミュニケーションルール（PROJECT_RULES.mdに記載済み）
+- 詳細なGitワークフロー説明（PROJECT_RULES.mdに記載済み）
+- 開発コマンドの詳細（README.mdやPROJECT_RULES.mdに記載済み）
+- テスト戦略の詳細（PROJECT_RULES.mdに記載済み）
+
+**2. プロジェクト計画ドキュメント追加 ✅**
+
+新規追加したドキュメント：
+- `docs/COLLABORATION_FEATURE_PLAN.md` - P2P協調ライブコーディング機能の詳細計画
+  - WebRTC P2P接続、CRDT同期、ホストマイグレーション、音声制御など
+  - 推定工数: 6-7週間（7フェーズ）
+- `docs/ELECTRON_APP_PLAN.md` - Electronアプリ版OrbitScoreの計画（未作成の場合）
+
+**3. .gitignore修正 ✅**
+
+`.claude/settings.local.json`の除外ルールを削除（不要なエントリ）。
+
+**4. tmpファイル更新 ✅**
+
+`tmp/github-issue-body.md`に空行を追加（末尾の整形）。
+
+#### 理由
+
+- **可読性向上**: CLAUDE.mdが簡潔になり、重要な情報（セッション開始手順、ワークフロー）が見つけやすくなる
+- **保守性向上**: 詳細情報は適切なドキュメントに集約され、重複を削減
+- **プロジェクト方向性の明確化**: 将来的な機能開発の計画を文書化し、優先順位付けを支援
+
+#### 影響範囲
+
+**変更ファイル:**
+- `CLAUDE.md` - 大幅な簡潔化（約370行 → 約260行）
+- `.gitignore` - 不要なエントリ削除
+- `tmp/github-issue-body.md` - 整形
+- `docs/COLLABORATION_FEATURE_PLAN.md` - 新規追加
+- `docs/ELECTRON_APP_PLAN.md` - 新規追加
+
+**影響:**
+- AIエージェントのセッション開始がより明確になる
+- ドキュメントの階層構造が整理される
+- 将来の機能開発の方向性が明確になる
+
+---
+
 ### 6.36 Configuration: hooks shellスクリプト内のSerenaメモリ参照を抽象化 (October 11, 2025)
 
 **Date**: October 11, 2025
 **Status**: ✅ COMPLETE
 **Branch**: `61-audio-playback-testing`
 **Issue**: N/A（軽微な修正）
-**Commits**: `[PENDING]`
+**Commits**: `de726bc`
 
 **Work Content**: Issue #63の抜け漏れ修正。`.claude/hooks/`配下のshellスクリプト内に残っていた具体的なSerenaメモリ参照を抽象化。
 

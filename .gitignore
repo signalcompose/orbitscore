@@ -28,6 +28,3 @@ packages/vscode-extension/engine/
 
 # Serena - 各開発者が個別にオンボーディング
 .serena/
-
-# Claude Code local settings
-.claude/settings.local.json
