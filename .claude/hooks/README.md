@@ -36,10 +36,11 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 **実行内容**:
 ```bash
 1. mcp__serena__check_onboarding_performed - Onboarding状態確認
-2. mcp__serena__read_memory("current_issues") - 現在のIssue状況読み込み
-3. mcp__serena__read_memory("project_overview") - プロジェクト全体像読み込み
-4. git branch --show-current && git log -1 --oneline - Git状態確認
-5. ブランチ名からIssue番号を確認（例: 57-dsl-clarification → Issue #57）
+2. Serenaを使って現在の状況を確認
+   - list_memoriesで利用可能なメモリを確認
+   - 必要に応じてread_memoryで読み込む
+3. git branch --show-current && git log -1 --oneline - Git状態確認
+4. ブランチ名からIssue番号を確認（例: 57-dsl-clarification → Issue #57）
 ```
 
 **動作**: additionalContextとしてリマインダーを出力（Claude側で自動認識）

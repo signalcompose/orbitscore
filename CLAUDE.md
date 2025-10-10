@@ -56,9 +56,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 1. Onboarding確認
 mcp__serena__check_onboarding_performed
 
-# 2. 重要メモリ読み込み
-mcp__serena__read_memory("current_issues")
-mcp__serena__read_memory("project_overview")
+# 2. Serenaメモリを使って現在の状況を確認
+#    list_memoriesで利用可能なメモリを確認し、
+#    必要に応じてread_memoryで読み込む
 
 # 3. Git状態確認
 git branch --show-current
@@ -122,11 +122,11 @@ git log -1 --oneline
    - `docs/PROJECT_RULES.md`
    - `docs/INDEX.md`（ドキュメント構造の理解）
 
-3. **Serenaメモリを確認**
+3. **Serenaを使ってプロジェクト知識を確認**
    ```
    mcp__serena__list_memories
    ```
-   - 特に `project_overview`, `current_issues` を確認
+   - 必要な知識を`read_memory`で読み込む
 
 4. **現在のブランチを確認**
    ```bash
@@ -292,15 +292,6 @@ git checkout -b 61-audio-playback-testing
   # ブランチは削除しない
   ```
 
-### Serenaメモリのコミットルール
-
-- ✅ `develop`でメモリ変更（編集・保存）はOK
-- ❌ `develop`でメモリコミットはNG
-- ✅ 変更はunstagedのまま機能ブランチに持ち越す
-- ✅ 機能ブランチで機能と一緒にコミット
-
-**理由**: メモリ更新だけのPRを防ぐため
-
 ---
 
 ## WORK_LOG.md更新ルール
@@ -379,5 +370,4 @@ git checkout -b 61-audio-playback-testing
 - **📝 `docs/WORK_LOG.md`** - 開発履歴（技術的決定事項）
 - **🗺️ `docs/IMPLEMENTATION_PLAN.md`** - ロードマップとフェーズ
 - **📖 `docs/USER_MANUAL.md`** - ユーザー向けドキュメント
-- **🤖 `.serena/memories/`** - Serenaメモリ
 - **🪝 `.claude/hooks/README.md`** - Hooksの説明
