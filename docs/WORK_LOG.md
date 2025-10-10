@@ -17,6 +17,106 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.33 Refactoring: Code Quality Improvement + Test File Creation (October 10, 2025)
+
+**Date**: October 10, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: #61
+**Commits**: [PENDING]
+
+**Work Content**: 50行超の長い関数をリファクタリングし、AUDIO_TEST_CHECKLIST.mdに基づいた実音出しテスト用.oscファイルを作成。
+
+#### 背景
+
+Issue #61（実音出しテスト準備）の一環として、コードベースの品質向上とテスト環境整備を実施。PROJECT_RULES.mdに従い、50行を超える関数を複数のヘルパー関数に分割し、可読性・保守性を向上させた。
+
+#### リファクタリング実施内容
+
+**1. Engine Package (`packages/engine/src/`)**
+
+- **`interpreter/process-statement.ts`**: ✅
+  - `handleLoopCommand` (67行): 5つのヘルパー関数に分割
+    - `validateSequences()`: シーケンス検証
+    - `calculateLoopDiff()`: 差分計算
+    - `stopSequences()`: 停止処理
+    - `startSequencesWithMute()`: ミュート適用付き開始
+    - `updateMuteState()`: ミュート状態更新
+  - `processTransportStatement` (61行): 2つのヘルパー関数に分割
+    - `handleReservedKeywordCommand()`: 予約語コマンド処理
+    - `handleGlobalTransportCommand()`: グローバルコマンド処理
+
+- **`audio/supercollider/event-scheduler.ts`**: ✅
+  - `EventScheduler.scheduleSliceEvent` (56行): 3つのヘルパーメソッドに分割
+    - `calculateSlicePosition()`: スライス位置計算
+    - `calculatePlaybackRate()`: 再生速度計算
+    - `addToScheduledPlays()`: イベント追加処理
+
+**2. VSCode Extension Package (`packages/vscode-extension/src/`)**
+
+- **`extension.ts`**: ✅
+  - `startEngine` (230行 → 60行): 7つのヘルパー関数に分割
+    - `getEnginePath()`: エンジンパス決定
+    - `showEngineBuildTime()`: ビルド時刻表示
+    - `loadAudioDeviceConfig()`: オーディオデバイス設定読み込み
+    - `shouldFilterLine()`: ログフィルタ判定
+    - `filterStdout()`: 標準出力フィルタ
+    - `setupStdoutHandler()`: 標準出力ハンドラ設定
+    - `setupStderrHandler()`: 標準エラーハンドラ設定
+    - `setupExitHandler()`: 終了ハンドラ設定
+
+**リファクタリング結果**:
+- 4つの長い関数を合計17個のヘルパー関数/メソッドに分割
+- 可読性向上、単一責任原則（SRP）の徹底
+- テストカバレッジ向上の基盤確立
+
+#### テスト実行結果
+
+```bash
+npm test
+```
+
+**結果**: ✅ 全テストパス
+- Test Files: 14 passed | 2 skipped (16)
+- Tests: **225 passed** | 23 skipped (248 total) = **90.7%**
+- リファクタリング後も全機能が正常動作
+
+#### テストファイル作成
+
+`test-audio/` ディレクトリに実音出しテスト用.oscファイルを作成：
+
+1. **`01_initialization.osc`**: 初期化テスト
+   - グローバルコンテキスト、シーケンス作成
+2. **`02_global_params.osc`**: グローバルパラメータテスト
+   - テンポ、拍子設定
+3. **`05_transport_commands.osc`**: トランスポートコマンドテスト (DSL v3.0)
+   - RUN(), LOOP(), MUTE() 予約語テスト
+4. **`07_underscore_prefix.osc`**: アンダースコアプレフィックステスト (DSL v3.0)
+   - バッファ vs 即時適用の動作確認
+5. **`09_integration.osc`**: 統合テスト
+   - マルチトラック同期、ライブコーディングシミュレーション
+
+**目的**: ユーザーによる実音出しテスト環境の整備
+
+#### 技術的決定事項
+
+1. **リファクタリング基準**: 50行を超える関数は分割対象
+2. **ヘルパー関数命名**: 動詞で開始、明確な責務を反映
+3. **テストファイル構成**: AUDIO_TEST_CHECKLIST.mdの構造に準拠
+4. **コメント**: 各テストファイルに期待される動作を明記
+
+#### 今後の作業
+
+- [ ] ユーザーによる実音出しテスト実行
+- [ ] 音質・タイミング確認（0-3ms以内）
+- [ ] 発見した問題のIssue化
+- [ ] 残りの長い関数のリファクタリング（必要に応じて）
+  - `getContextualCompletions` (101行) - 優先度: 低
+  - `runSelection` (99行) - 優先度: 低
+  - `activate` (67行) - 優先度: 低
+
+---
+
 ### 6.32 Documentation: WORK_LOG日付修正とSerenaメモリ整理 (October 10, 2025)
 
 **Date**: October 10, 2025

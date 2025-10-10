@@ -9,8 +9,28 @@ OrbitScore is an audio-based live coding DSL for modern music production. It pro
 - **Project Start**: 2025-09-16
 - **DSL Version**: v3.0 (完全実装済み)
 - **Test Status**: 225 passed, 23 skipped (248 total) = 90.7%
-- **Current Branch**: develop
-- **Latest PR**: #58 (Merged 2025-10-10) - DSL仕様明確化 + Claude Code Hooks削除
+- **Current Branch**: `61-audio-playback-testing` (実音出しテスト中)
+- **Latest PR**: #60 (Merged 2025-10-10) - WORK_LOG日付修正とアーカイブ化
+- **Current Issue**: #61 (実音出しテスト - SuperCollider統合の動作確認)
+
+## Recent Major Updates (2025-10-10)
+
+### 1. WORK_LOGアーカイブ化 (Issue #59, PR #60)
+- WORK_LOG.mdを3,105行から1,882行に削減（約40%削減）
+- `docs/archive/WORK_LOG_2025-09.md`作成（1,236行、2025-09-16〜2025-10-04）
+- PROJECT_RULES.mdにアーカイブルール追加（Section 1a）
+- 目的: 可読性向上、エディタパフォーマンス改善、論文用履歴保存
+
+### 2. DSL仕様明確化とClaude Code整理 (Issue #58, PR #58)
+- DSL仕様を`docs/INSTRUCTION_ORBITSCORE_DSL.md`に統合
+- Claude Code Hooks完全削除（SessionStart/SessionEnd）
+- CLAUDE.md簡素化（強制実行 → 推奨事項ベース）
+- ユーザーマニュアル更新
+
+### 3. Serenaメモリ整理
+- 完了済みメモリ削除: `dsl_v3_implementation_progress`, `issue50_seamless_update_verification`, `phase3_setting_sync_plan`
+- 最新情報に更新: `project_overview`, `current_issues`
+- 新規メモリ作成: `future_improvements`（BugBotレビュー提案を記録）
 
 ## Core Architecture
 
@@ -80,13 +100,21 @@ OrbitScore is an audio-based live coding DSL for modern music production. It pro
 - ❌ Commit on develop: NG
 - ✅ Commit on feature branch: OK (with feature changes)
 
+**WORK_LOG Archiving Policy** (New: 2025-10-10):
+- Archive when WORK_LOG.md exceeds ~2,000 lines or ~100KB
+- Keep recent work (latest 15-20 sections) in main file
+- Move older sections to `docs/archive/WORK_LOG_YYYY-MM.md` by month
+- Purpose: Readability, editor performance, complete history preservation
+
 ## Documentation Structure
 - `CLAUDE.md` - Claude Code guidelines (session start actions, quick reference)
 - `docs/INDEX.md` - Documentation entry point
 - `docs/PROJECT_RULES.md` - Development workflow and coding standards
+  - **Section 1a**: WORK_LOG.md Archiving rules (added 2025-10-10)
 - `docs/INSTRUCTION_ORBITSCORE_DSL.md` - DSL specification v3.0 (single source of truth)
 - `docs/IMPLEMENTATION_PLAN.md` - Technical roadmap and phase tracking
-- `docs/WORK_LOG.md` - Complete development history (for academic paper)
+- `docs/WORK_LOG.md` - Recent development history (Section 6.15+)
+- `docs/archive/WORK_LOG_2025-09.md` - Archive (Section 6.1-6.14, 2025-09-16〜2025-10-04)
 - `docs/USER_MANUAL.md` - User-facing features and usage
 
 ## Essential Commands
@@ -94,7 +122,7 @@ OrbitScore is an audio-based live coding DSL for modern music production. It pro
 ```bash
 # Build & Test
 npm run build                    # Build entire project
-npm test                         # Run all tests (229 passed, 19 skipped)
+npm test                         # Run all tests (225 passed, 23 skipped)
 npm run lint                     # Check code style
 npm run lint:fix                 # Auto-fix linting issues
 
@@ -123,19 +151,22 @@ gh pr create --base develop --title "..." --body "Closes #<issue-number>"
 
 ## Next Steps (Priority Order)
 
-### High Priority
-1. **Audio Recording Feature** - User request for live performance archiving
-2. **Edge Case Tests** - RUN/LOOP/MUTE robustness improvements
+### 🔴 最優先
+1. **実音出しテスト完了** (Issue #61) - SuperCollider統合の実環境動作確認
 
-### Medium Priority
-3. **Documentation** - Live coding patterns, migration guide, troubleshooting
+### 🔴 高優先度
+2. **Audio Recording Feature** - User request for live performance archiving
 
-### Low Priority (Future)
-4. **Audio Key Detection** - Polymodal feature prerequisite
-5. **MIDI Support** - External instrument control
-6. **DAW Plugin** - VST/AU wrapper for DAW integration
+### 🟡 中優先度
+3. **Edge Case Tests** - RUN/LOOP/MUTE robustness improvements
+4. **Documentation** - Live coding patterns, migration guide, troubleshooting
+
+### 🟢 低優先度（将来機能）
+5. **Audio Key Detection** - Polymodal feature prerequisite
+6. **MIDI Support** - External instrument control
+7. **DAW Plugin** - VST/AU wrapper for DAW integration
 
 ## Reference
 - **Canonical DSL Spec**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`
-- **Serena Memories**: 28 memories available for project-specific knowledge
+- **Serena Memories**: 29 memories available for project-specific knowledge
 - **GitHub Issues**: Use for all new features and bug fixes

@@ -48,6 +48,60 @@ export class EventScheduler {
   }
 
   /**
+   * Calculate slice position and duration.
+   */
+  private calculateSlicePosition(
+    filepath: string,
+    sliceIndex: number,
+    totalSlices: number,
+  ): { sliceDuration: number; startPos: number; totalDuration: number } {
+    const totalDuration = this.bufferManager.getAudioDuration(filepath)
+    const sliceDuration = totalDuration / totalSlices
+    // sliceIndex is 1-based from DSL, convert to 0-based
+    const startPos = (sliceIndex - 1) * sliceDuration
+
+    // Debug log for slice positioning (only in debug mode)
+    if (process.env.ORBITSCORE_DEBUG) {
+      console.log(
+        `🔍 Slice debug: filepath=${filepath}, duration=${totalDuration}, sliceIndex=${sliceIndex}, totalSlices=${totalSlices}, sliceDuration=${sliceDuration}, startPos=${startPos}`,
+      )
+    }
+
+    return { sliceDuration, startPos, totalDuration }
+  }
+
+  /**
+   * Calculate playback rate to fit slice into event duration.
+   * rate = actual slice duration / desired event duration
+   * If eventDurationMs is undefined or 0, use natural rate (1.0)
+   */
+  private calculatePlaybackRate(
+    sliceDurationSec: number,
+    eventDurationMs: number | undefined,
+  ): number {
+    if (!eventDurationMs || eventDurationMs <= 0) {
+      return 1.0
+    }
+    return (sliceDurationSec * 1000) / eventDurationMs
+  }
+
+  /**
+   * Add scheduled play to the queue and track sequence events.
+   */
+  private addToScheduledPlays(play: ScheduledPlay): void {
+    this.scheduledPlays.push(play)
+    this.scheduledPlays.sort((a, b) => a.time - b.time)
+
+    // Track sequence events
+    if (play.sequenceName) {
+      if (!this.sequenceEvents.has(play.sequenceName)) {
+        this.sequenceEvents.set(play.sequenceName, [])
+      }
+      this.sequenceEvents.get(play.sequenceName)!.push(play)
+    }
+  }
+
+  /**
    * スライスイベントをスケジュール（chop用）
    */
   scheduleSliceEvent(
@@ -60,27 +114,12 @@ export class EventScheduler {
     pan = 0,
     sequenceName = '',
   ): void {
-    const duration = this.bufferManager.getAudioDuration(filepath)
-    const sliceDuration = duration / totalSlices
-    // sliceIndex is 1-based from DSL, convert to 0-based
-    const startPos = (sliceIndex - 1) * sliceDuration
-
-    // Debug log for slice positioning (only in debug mode)
-    if (process.env.ORBITSCORE_DEBUG) {
-      console.log(
-        `🔍 Slice debug: filepath=${filepath}, duration=${duration}, sliceIndex=${sliceIndex}, totalSlices=${totalSlices}, sliceDuration=${sliceDuration}, startPos=${startPos}`,
-      )
-    }
-
-    // Calculate playback rate to fit slice into event duration
-    // rate = actual slice duration / desired event duration
-    // If eventDurationMs is undefined or 0, use natural rate (1.0)
-    // If slice is shorter than event, we need to slow down (rate < 1.0) to stretch it
-    // If slice is longer than event, we need to speed up (rate > 1.0) to compress it
-    let rate = 1.0
-    if (eventDurationMs && eventDurationMs > 0) {
-      rate = (sliceDuration * 1000) / eventDurationMs
-    }
+    const { sliceDuration, startPos } = this.calculateSlicePosition(
+      filepath,
+      sliceIndex,
+      totalSlices,
+    )
+    const rate = this.calculatePlaybackRate(sliceDuration, eventDurationMs)
 
     const play: ScheduledPlay = {
       time: startTimeMs,
@@ -95,16 +134,7 @@ export class EventScheduler {
       sequenceName,
     }
 
-    this.scheduledPlays.push(play)
-    this.scheduledPlays.sort((a, b) => a.time - b.time)
-
-    // Track sequence events
-    if (sequenceName) {
-      if (!this.sequenceEvents.has(sequenceName)) {
-        this.sequenceEvents.set(sequenceName, [])
-      }
-      this.sequenceEvents.get(sequenceName)!.push(play)
-    }
+    this.addToScheduledPlays(play)
   }
 
   /**

@@ -150,6 +150,54 @@ export async function processSequenceStatement(
  * @param statement - Transport statement IR
  * @param state - Interpreter state
  */
+/**
+ * Handles reserved keyword transport commands (RUN, LOOP, MUTE).
+ */
+async function handleReservedKeywordCommand(
+  command: string,
+  sequenceNames: string[],
+  state: InterpreterState,
+): Promise<boolean> {
+  switch (command) {
+    case 'run':
+      await handleRunCommand(sequenceNames, state)
+      return true
+
+    case 'loop':
+      await handleLoopCommand(sequenceNames, state)
+      return true
+
+    case 'mute':
+      await handleMuteCommand(sequenceNames, state)
+      return true
+
+    default:
+      return false
+  }
+}
+
+/**
+ * Handles global transport commands (start, stop, loop).
+ */
+async function handleGlobalTransportCommand(global: any, command: string): Promise<void> {
+  switch (command) {
+    case 'start':
+      await callMethod(global, 'start', [])
+      break
+
+    case 'stop':
+      await callMethod(global, 'stop', [])
+      break
+
+    case 'loop':
+      await callMethod(global, 'loop', [])
+      break
+
+    default:
+      console.warn(`Unknown global transport command: ${command}`)
+  }
+}
+
 export async function processTransportStatement(
   statement: TransportStatement,
   state: InterpreterState,
@@ -164,41 +212,14 @@ export async function processTransportStatement(
     target === '__RESERVED_KEYWORD__' &&
     (command === 'run' || command === 'loop' || command === 'mute')
   ) {
-    switch (command) {
-      case 'run':
-        await handleRunCommand(sequenceNames, state)
-        break
-
-      case 'loop':
-        await handleLoopCommand(sequenceNames, state)
-        break
-
-      case 'mute':
-        await handleMuteCommand(sequenceNames, state)
-        break
-    }
+    await handleReservedKeywordCommand(command, sequenceNames, state)
     return
   }
 
   // Handle global commands (e.g., g.start() where g is a global variable)
   const global = state.globals.get(target)
   if (global) {
-    switch (command) {
-      case 'start':
-        await callMethod(global, 'start', [])
-        break
-
-      case 'stop':
-        await callMethod(global, 'stop', [])
-        break
-
-      case 'loop':
-        await callMethod(global, 'loop', [])
-        break
-
-      default:
-        console.warn(`Unknown global transport command: ${command}`)
-    }
+    await handleGlobalTransportCommand(global, command)
     return
   }
 
@@ -263,8 +284,13 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
 /**
  * Handle LOOP() command - unidirectional toggle (optimized with differential calculation)
  */
-async function handleLoopCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
-  // Validate all sequences exist before updating state
+/**
+ * Validates sequence names and returns valid and not found sequences.
+ */
+function validateSequences(
+  sequenceNames: string[],
+  state: InterpreterState,
+): { validSequences: string[]; notFound: string[] } {
   const notFound: string[] = []
   const validSequences: string[] = []
 
@@ -276,34 +302,44 @@ async function handleLoopCommand(sequenceNames: string[], state: InterpreterStat
     }
   }
 
-  // Warn about missing sequences
-  if (notFound.length > 0) {
-    console.warn(
-      `⚠️ LOOP(): The following sequences do not exist and will be ignored: ${notFound.join(', ')}`,
-    )
-  }
+  return { validSequences, notFound }
+}
 
-  const newLoopGroup = new Set(validSequences)
-  const oldLoopGroup = state.loopGroup
-
-  // Calculate differential sets for efficient processing
+/**
+ * Calculates differential sets for efficient LOOP command processing.
+ */
+function calculateLoopDiff(
+  newSequences: string[],
+  oldLoopGroup: Set<string>,
+): { toStop: string[]; toStart: string[]; toContinue: string[] } {
+  const newLoopGroup = new Set(newSequences)
   const toStop = [...oldLoopGroup].filter((name) => !newLoopGroup.has(name))
-  const toStart = validSequences.filter((name) => !oldLoopGroup.has(name))
-  const toContinue = validSequences.filter((name) => oldLoopGroup.has(name))
+  const toStart = newSequences.filter((name) => !oldLoopGroup.has(name))
+  const toContinue = newSequences.filter((name) => oldLoopGroup.has(name))
 
-  // Stop sequences removed from LOOP group
-  for (const seqName of toStop) {
+  return { toStop, toStart, toContinue }
+}
+
+/**
+ * Stops sequences that are removed from LOOP group.
+ */
+function stopSequences(sequenceNames: string[], state: InterpreterState): void {
+  for (const seqName of sequenceNames) {
     const sequence = state.sequences.get(seqName)
     if (sequence) {
       sequence.stop()
     }
   }
+}
 
-  // Update LOOP group with only valid sequences
-  state.loopGroup = newLoopGroup
-
-  // Start new sequences
-  for (const seqName of toStart) {
+/**
+ * Starts sequences and applies MUTE state.
+ */
+async function startSequencesWithMute(
+  sequenceNames: string[],
+  state: InterpreterState,
+): Promise<void> {
+  for (const seqName of sequenceNames) {
     const sequence = state.sequences.get(seqName)
     if (sequence) {
       await sequence.loop()
@@ -316,9 +352,13 @@ async function handleLoopCommand(sequenceNames: string[], state: InterpreterStat
       }
     }
   }
+}
 
-  // Update MUTE state for continuing sequences (no need to call loop() again)
-  for (const seqName of toContinue) {
+/**
+ * Updates MUTE state for continuing sequences.
+ */
+function updateMuteState(sequenceNames: string[], state: InterpreterState): void {
+  for (const seqName of sequenceNames) {
     const sequence = state.sequences.get(seqName)
     if (sequence) {
       // Only update MUTE state, don't restart loop
@@ -329,6 +369,33 @@ async function handleLoopCommand(sequenceNames: string[], state: InterpreterStat
       }
     }
   }
+}
+
+async function handleLoopCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
+  // Validate all sequences exist before updating state
+  const { validSequences, notFound } = validateSequences(sequenceNames, state)
+
+  // Warn about missing sequences
+  if (notFound.length > 0) {
+    console.warn(
+      `⚠️ LOOP(): The following sequences do not exist and will be ignored: ${notFound.join(', ')}`,
+    )
+  }
+
+  // Calculate differential sets for efficient processing
+  const { toStop, toStart, toContinue } = calculateLoopDiff(validSequences, state.loopGroup)
+
+  // Stop sequences removed from LOOP group
+  stopSequences(toStop, state)
+
+  // Update LOOP group with only valid sequences
+  state.loopGroup = new Set(validSequences)
+
+  // Start new sequences
+  await startSequencesWithMute(toStart, state)
+
+  // Update MUTE state for continuing sequences (no need to call loop() again)
+  updateMuteState(toContinue, state)
 }
 
 /**
