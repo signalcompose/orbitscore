@@ -17,6 +17,127 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.35 Configuration: Serenaメモリを個人環境に移行 (October 11, 2025)
+
+**Date**: October 11, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `63-serena-memory-migration`
+**Issue**: #63
+**Commits**: `[PENDING]`
+
+**Work Content**: チーム開発でのマージコンフリクトを防ぐため、Serenaメモリを個人環境に移行し、ドキュメント内の具体的なメモリ参照を抽象化。
+
+#### 背景
+
+チーム開発を想定した場合、`.serena/memories/`配下の29個のメモリファイルがGit管理されていると、各開発者のコンテキスト（作業中のIssue、実装状況、技術的決定事項など）が異なるため、激しいマージコンフリクトが発生する懸念があった。
+
+また、ドキュメント内で具体的なメモリファイル名（例: `current_issues.md`, `project_overview.md`）を参照していたが、これは各開発者が独自にSerenaオンボーディングを実行した場合、メモリの構成や命名が異なる可能性があり、ドキュメントの汎用性を損なう問題があった。
+
+#### 実施した変更
+
+**1. Git管理からSerenaメモリを除外 ✅**
+
+`.gitignore`に以下を追加：
+```gitignore
+# Serena - 各開発者が個別にオンボーディング
+.serena/
+
+# Claude Code local settings
+.claude/settings.local.json
+```
+
+`git rm --cached -r .serena/`を実行し、29ファイルをGit追跡から除外。ローカルファイルは保持。
+
+**2. ドキュメントの抽象化 ✅**
+
+具体的なメモリファイル名への参照を削除し、Serenaツールの使い方のみを記述するよう変更：
+
+**CLAUDE.md**:
+- 「⚠️ COMPACTING CONVERSATION後の必須手順」セクション:
+  - `mcp__serena__read_memory("current_issues")` → 削除
+  - `mcp__serena__read_memory("project_overview")` → 削除
+  - 抽象的な指示に変更: "Serenaを使って現在の状況を確認 (list_memories → read_memory)"
+- 「Serenaメモリのコミットルール」セクション: 完全削除（メモリはGit管理外のため不要）
+- Additional Resources: `.serena/memories/`への言及を削除
+
+**docs/PROJECT_RULES.md**:
+- 「🧠 Serena Memory Management」セクション（679-772行）: 完全削除
+- "Session Continuity"セクション: 具体的なメモリ名を削除し、抽象的な指示に変更
+- "Checklist Before Committing": `[ ] Serenaを使って重要な変更を保存 (必要に応じて)` に簡素化
+- Traditional Workflowの各ステップ: `.serena/memories/*.md`への参照を削除
+
+**docs/INDEX.md**:
+- "Serena Memory"セクションを"Serenaツール"に変更
+- 具体的なメモリファイル名を削除し、`list_memories`と`read_memory`の使い方のみ記述
+
+**.claude/hooks/session-start.md**:
+- 実行手順から具体的なメモリ名を削除
+- "Serenaを使って現在の状況を確認 (list_memories → read_memory)" に変更
+
+**.claude/hooks/README.md**:
+- SessionStart Hook実行内容を抽象化
+- 具体的なメモリ名を削除
+
+#### ドキュメント記述ポリシー
+
+今後、Serenaに関するドキュメント記述は以下のポリシーに従う：
+
+**✅ 記述してよいもの:**
+1. Serena自体を使うという宣言
+2. Serenaがアクティブになった時に使えるコマンド（`list_memories`, `read_memory`, `write_memory`など）
+
+**❌ 記述してはいけないもの:**
+- 具体的なメモリファイル名（`current_issues.md`, `project_overview.md`など）
+- メモリの具体的な内容や構造
+
+**理由:**
+- `.serena/`ファイルは各開発者のClaude+Serenaが生成するため、内容が開発者ごとに異なる
+- ドキュメントは「使い方」を示すべきで、「具体的な実装」に依存すべきでない
+- コマンドは共通のため、指定可能
+
+#### 理由
+
+**チーム開発での利点:**
+- メモリファイルのマージコンフリクトを完全に回避
+- 各開発者が独自のコンテキストを維持可能
+- `.claude/settings.local.json`も除外し、個人設定の分離を実現
+
+**ドキュメントの汎用性向上:**
+- メモリ構成が異なる環境でも適用可能
+- 新規開発者がオンボーディング時に混乱しない
+- ツールの使い方に焦点を当てることで、より教育的
+
+#### 技術的決定事項
+
+- `.serena/`全体を`.gitignore`（`memories/`だけでなく`cache/`や`project.yml`も含む）
+- 各開発者は初回セットアップ時に`claude mcp add serena ...`とSerenaオンボーディングを実行
+- ドキュメントはツールの「使い方」を示し、具体的な「実装」には言及しない方針
+- `.claude/settings.local.json`もGit管理外とし、個人設定を分離
+
+#### ワークフロー変更
+
+従来: プロジェクトに`.serena/memories/`がコミットされており、新規開発者はそれを継承
+
+新規: 各開発者が独自にSerenaオンボーディングを実行し、独自のメモリを構築
+
+#### 影響範囲
+
+**変更ファイル:**
+- `.gitignore` (2行追加)
+- `CLAUDE.md` (3箇所の抽象化、1セクション削除)
+- `docs/PROJECT_RULES.md` (1セクション完全削除、3箇所の簡素化)
+- `docs/INDEX.md` (1セクションの抽象化)
+- `.claude/hooks/session-start.md` (1箇所の抽象化)
+- `.claude/hooks/README.md` (1箇所の抽象化)
+
+**Git管理から除外:**
+- `.serena/` (29ファイル)
+
+**既存の`.serena/`ファイル:**
+- ローカルには保持（各開発者は自分のメモリを引き続き使用可能）
+
+---
+
 ### 6.34 Documentation: CLAUDE.mdにコミュニケーションルール追加 (October 10, 2025)
 
 **Date**: October 10, 2025
