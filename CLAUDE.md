@@ -4,370 +4,257 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
-## 🗣️ コミュニケーションルール
+## 📚 Documentation Structure
 
-### 言語ポリシー
+**IMPORTANT**: Detailed design and specification documentation is maintained in Japanese in the `/docs` directory. Always refer to `/docs` for:
 
-**ユーザーとAIのコミュニケーション:**
-- ✅ ユーザーは**英語でも日本語でも**指示を出せる
-- ✅ AIは**常に日本語で**返答する（UTF-8エンコーディング）
-- ✅ ユーザーの英語が長文の場合、文法チェックと改善例を提供する
+- **Documentation Index**: [`docs/INDEX.md`](docs/INDEX.md) - すべてのドキュメントの目次（必読）
+- **DSL Specification**: [`docs/INSTRUCTION_ORBITSCORE_DSL.md`](docs/INSTRUCTION_ORBITSCORE_DSL.md) - 単一信頼情報源（Single Source of Truth）
+- **Project Rules**: [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) - 開発ワークフロー、Git規則、コミット規約
+- **Work Log**: [`docs/WORK_LOG.md`](docs/WORK_LOG.md) - 完全な開発履歴と技術的決定事項
+- **Implementation Plan**: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) - 技術ロードマップとフェーズ
+- **User Manual**: [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) - ユーザー向け機能説明
+- **Context7 Guide**: [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md) - 外部ライブラリドキュメント参照ガイド
 
-**Issue/Commit/PR:**
-- ✅ **Issue**: タイトル・本文ともに**日本語**で記述
-- ✅ **Commit**: タイトル・本文ともに**日本語**で記述（type prefixのみ英語）
-  - 例: `feat: オーディオ録音機能を追加`
-  - 例: `refactor: コード品質向上とテストファイル追加`
-- ✅ **PR**: タイトル・本文ともに**日本語**で記述
-  - 例: `feat: オーディオ録音機能を追加`
-  - 本文に必ず `Closes #<issue-number>` を含める
-- ❌ **ブランチ名のみ英語**（ツール互換性のため）
-  - 例: `61-audio-playback-testing`
-
-**理由:**
-- プロジェクトは日本語話者向け
-- コミット履歴・Issue履歴を日本語で統一
-- 論文・ドキュメントでの引用が容易
-
-**詳細:** `docs/PROJECT_RULES.md` Section 2, Commit Message Format
+**Documentation Rules**:
+1. All documentation in `/docs` must be written in Japanese
+2. When updating project design or specifications, update `/docs` files accordingly
+3. CLAUDE.md should remain concise and reference `/docs` for details
 
 ---
 
-## 📚 Documentation Reference
+## 🚀 セッション開始時の必須アクション
 
-**プロジェクトの詳細情報はすべて `./docs/` 配下にあります。**
+**CRITICAL: これらのステップを必ず実行すること。プロジェクトの仕様とルールを把握せずに作業を開始してはいけない。**
 
-- **ドキュメントインデックス**: `docs/INDEX.md` - すべてのドキュメントの目次
-- **DSL仕様（重要）**: `docs/INSTRUCTION_ORBITSCORE_DSL.md` - 単一信頼情報源
-- **プロジェクトルール**: `docs/PROJECT_RULES.md` - 開発ルールと規約
-- **開発履歴**: `docs/WORK_LOG.md` - 完全な開発履歴
-- **実装計画**: `docs/IMPLEMENTATION_PLAN.md` - 技術ロードマップ
-- **ユーザーマニュアル**: `docs/USER_MANUAL.md` - ユーザー向け機能説明
+### ステップ1: Serena オンボーディング確認
 
-**アーキテクチャ、DSL構文、トラブルシューティングなどの詳細は `docs/INDEX.md` を参照してください。**
-
----
-
-## ⚠️ COMPACTING CONVERSATION後の必須手順
-
-> **Compacting conversation直後は、以下を必ず実行してください**
-
-```bash
-# 1. Onboarding確認
+```
 mcp__serena__check_onboarding_performed
-
-# 2. Serenaメモリを使って現在の状況を確認
-#    list_memoriesで利用可能なメモリを確認し、
-#    必要に応じてread_memoryで読み込む
-
-# 3. Git状態確認
-git branch --show-current
-git log -1 --oneline
-
-# 4. Issue番号確認
-# ブランチ名からIssue番号を抽出（例: 61-audio-playback-testing → Issue #61）
 ```
 
-**この手順をスキップすると、重要な約束事を忘れたまま実装を進めてしまいます。**
+Serena のオンボーディング状態を確認し、利用可能なメモリリストを取得する。
 
----
+### ステップ2: 必須ドキュメントを並行読み込み
 
-## 🔴 CRITICAL: 実装前の必須ワークフロー
+**以下のドキュメントとメモリを並行して読み込むこと（1回のメッセージで複数のRead/read_memoryツールを実行）:**
 
-> **一行でもコードを書く前に、以下の手順を完了すること**
+#### 必須ドキュメント（Readツール）
+1. [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) - 開発ワークフロー、Git規則、重要ルール
+2. [`docs/INDEX.md`](docs/INDEX.md) - ドキュメント構造の全体像とその下のファイルによる仕様や設計の確認
 
-### 正しい手順（絶対に守る）
+#### Serenaメモリの読み込み
+1. `check_onboarding_performed` で取得したメモリリストを確認
+2. プロジェクト概要、開発ガイドライン、重要パターンなど、タスクに関連するメモリを `mcp__serena__read_memory` で読み込む
 
+**並行実行の例:**
 ```
-1. Issue作成（gh issue create）
-2. ブランチ作成（git checkout -b <issue-number>-description）
-3. 実装開始（Edit/Writeツール使用OK）
-4. テスト実行
-5. WORK_LOG.md更新
-6. コミット
-7. PR作成（Closes #N）
+並行で以下を実行:
+- mcp__serena__check_onboarding_performed (オンボーディング確認とメモリリスト取得)
+- Read("docs/PROJECT_RULES.md")
+- Read("docs/INDEX.md")
+その後、必要なメモリを並行で読み込む
 ```
 
-### ❌ 絶対にやってはいけないこと
+#### タスク依存の追加ドキュメント
+必要に応じて以下のドキュメントを読み込む（作業内容に応じて判断）:
+- [`docs/INSTRUCTION_ORBITSCORE_DSL.md`](docs/INSTRUCTION_ORBITSCORE_DSL.md) - DSL仕様が必要な場合
+- [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) - 実装計画の確認が必要な場合
+- [`docs/WORK_LOG.md`](docs/WORK_LOG.md) - 過去の実装経緯を確認する場合
+- [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md) - 外部ライブラリドキュメントが必要な場合
 
-- `main`ブランチで実装を開始する
-- `develop`ブランチで実装を開始する
-- Issueを作成せずに実装を開始する
-- ブランチを作成せずに実装を開始する
-- Issue番号のないブランチ名を使用する
-- **WORK_LOG.mdを更新せずにコミットする**
-
-## 実装開始前の必須チェック
-
-**Edit/Writeツールを使う前に必ず確認:**
-
-1. ✅ Issue作成済み？
-2. ✅ ブランチ作成済み？
-3. ✅ 現在のブランチは`main`/`develop`ではない？
-4. ✅ ブランチ名にIssue番号が含まれている？
-
-**一つでもNoがあれば、実装を開始してはいけない。**
-
----
-
-## セッション開始時の必須アクション
-
-1. **Serenaプロジェクトをアクティベート**
-   ```
-   mcp__serena__check_onboarding_performed
-   ```
-
-2. **必須ドキュメントを読み込む**
-   - `CLAUDE.md`（このファイル）
-   - `docs/PROJECT_RULES.md`
-   - `docs/INDEX.md`（ドキュメント構造の理解）
-
-3. **Serenaを使ってプロジェクト知識を確認**
-   ```
-   mcp__serena__list_memories
-   ```
-   - 必要な知識を`read_memory`で読み込む
-
-4. **現在のブランチを確認**
-   ```bash
-   git branch --show-current
-   ```
-   - `main`/`develop`にいる場合は、作業開始前に機能ブランチを作成
-
----
-
-## Project Overview
-
-**OrbitScore** is an audio-based live coding DSL for modern music production.
-
-**Key Features**:
-- Audio File Playback (WAV, AIFF, MP3, MP4) with time-stretching and pitch-shifting
-- Live Coding Integration via VS Code extension
-- SuperCollider Backend (0-2ms ultra-low latency)
-- Polymeter Support (independent time signatures per sequence)
-
-**Technology Stack**: TypeScript, SuperCollider (scsynth), supercolliderjs, VS Code Extension API, Vitest
-
-**Current Status**:
-- DSL Version: v3.0 (完全実装済み)
-- Test Status: 225 passed, 23 skipped (248 total) = 90.7%
-- Main Branch: `main`
-- Development Branch: `develop`
-
-**詳細なアーキテクチャ、DSL構文、実装計画は `docs/INDEX.md` を参照してください。**
-
----
-
-## Common Development Commands
-
-### Building and Testing
+### ステップ3: 現在のブランチを確認
 
 ```bash
-# Build all packages
-npm run build
+git branch --show-current
+```
 
-# Run all tests (225 tests, 23 skipped)
+**ブランチ確認後のアクション:**
+- ✅ 機能ブランチ（`<issue-number>-*`形式）: そのまま作業可能
+- ⚠️ `develop`ブランチ: 作業開始前に機能ブランチを作成すること
+- 🔴 `main`ブランチ: 絶対に作業しない。`develop`に移動してから機能ブランチを作成
+
+### ステップ4: 作業準備完了の確認
+
+以下を確認してからユーザーに報告:
+- [ ] Serena オンボーディング確認完了
+- [ ] 必須ドキュメント読み込み完了
+- [ ] Serenaメモリリスト確認完了
+- [ ] 関連するメモリ読み込み完了
+- [ ] 現在のブランチを確認
+- [ ] 作業可能な状態であることを確認
+
+**ユーザーへの報告例:**
+```
+準備完了しました！
+
+✅ Serena: オンボーディング確認済み
+✅ 必須ドキュメント: PROJECT_RULES.md 読み込み完了
+✅ Serenaメモリ: X件のメモリを確認、関連メモリ読み込み完了
+✅ 現在のブランチ: <branch-name>（機能ブランチ）
+
+何かお手伝いできることがあればお申し付けください。
+```
+
+### 📋 なぜこれが重要か
+
+1. **仕様遵守**: プロジェクトの仕様とルールを理解せずに実装すると、仕様違反のコードを書いてしまう
+2. **ワークフロー違反防止**: Git規則を理解せずに作業すると、protected branchへの直接コミット等の問題が発生
+3. **一貫性の維持**: 命名規則やパターンを把握してから実装することで、コードベース全体の一貫性を保つ
+4. **効率的な作業**: 必要なドキュメントを事前に把握することで、後から探す時間を削減
+
+### 🚫 やってはいけないこと
+
+- ❌ ドキュメント読み込みをスキップして実装を開始
+- ❌ ユーザーが「準備して」と言った時に、ドキュメントを読まずに「準備完了」と返答
+- ❌ PROJECT_RULES.mdを読まずにコード変更を開始
+- ❌ ブランチ確認をせずに実装を開始
+
+---
+
+## Quick Reference
+
+### Project Overview
+**OrbitScore** - Audio-based live coding DSL for modern music production
+- DSL Version: v3.0 (SuperCollider Audio Engine)
+- Test Status: 225 passed, 23 skipped (248 total) = 90.7%
+- Main Branch: `main`, Development Branch: `develop`
+
+### Development Commands
+```bash
+npm run build            # Build all packages
+npm test                 # Run all tests (225 tests, 23 skipped)
+npm run dev:engine       # Run engine in development mode
+npm run lint             # ESLint + Prettier
+```
+
+### Technology Stack Summary
+- **Frontend/DSL**: TypeScript, VS Code Extension API
+- **Audio Backend**: SuperCollider (scsynth), supercolliderjs
+- **Testing**: Vitest (Unit + Integration tests)
+- **Key Features**: Audio File Playback (WAV/AIFF/MP3/MP4), Time-stretching, Polymeter
+
+**Details**: See [`docs/INDEX.md`](docs/INDEX.md)
+
+### Key Conventions
+- **DSL Specification**: [`docs/INSTRUCTION_ORBITSCORE_DSL.md`](docs/INSTRUCTION_ORBITSCORE_DSL.md) - Single Source of Truth
+- **Work Log**: Every commit MUST be documented in [`docs/WORK_LOG.md`](docs/WORK_LOG.md)
+- **Branch Names**: `<issue-number>-description` (English only, e.g., `61-audio-playback-testing`)
+- **Commits/PRs**: Japanese (e.g., `feat: オーディオ録音機能を追加`)
+
+**Details**: See [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md)
+
+---
+
+## 🔴 CRITICAL: Implementation Workflow
+
+**NEVER start coding without following these steps:**
+
+### Correct Workflow (MUST FOLLOW)
+
+```
+1. Create Issue: gh issue create --title "..."
+2. Create Branch: git checkout -b <issue-number>-description
+3. Start Implementation (Edit/Write tools OK)
+4. Run Tests: npm test
+5. Update WORK_LOG.md
+6. Commit
+7. Create PR: gh pr create --base develop --body "Closes #N"
+```
+
+### ❌ NEVER DO THESE
+
+- Start implementation on `main` branch
+- Start implementation on `develop` branch
+- Start without creating an Issue
+- Start without creating a branch
+- Use branch names without Issue number
+- **Commit without updating WORK_LOG.md**
+
+### Pre-Implementation Checklist
+
+**Before using Edit/Write tools, confirm:**
+
+1. ✅ Issue created?
+2. ✅ Branch created?
+3. ✅ Current branch is NOT `main`/`develop`?
+4. ✅ Branch name includes Issue number?
+
+**If any answer is No, DO NOT start implementation.**
+
+### Hook Protection
+
+**Automated Guards:**
+- `pre-edit-check.sh` blocks Edit/Write on develop/main branches
+- `pre-commit-check.sh` blocks Serena memory commits on develop/main
+- `session-start.sh` shows reminders at session start
+
+See `.claude/settings.json` for Hook configuration.
+
+**Details**: See [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md), [`.claude/hooks/README.md`](.claude/hooks/README.md)
+
+---
+
+## Git Workflow Summary
+
+### Branch Structure
+- `main` - Production (protected)
+- `develop` - Integration (protected, base for PRs)
+- `<issue-number>-description` - Feature branches (English only)
+
+### Quick Workflow
+```bash
+# 1. Create Issue
+gh issue create --title "..."
+
+# 2. Create Branch
+git checkout -b <issue-number>-description
+
+# 3. Implement & Test
 npm test
 
-# Run engine in development mode
-npm run dev:engine
+# 4. Update WORK_LOG.md
+# Edit docs/WORK_LOG.md
 
-# Linting and formatting
-npm run lint
-npm run lint:fix
-npm run format
+# 5. Create PR
+gh pr create --base develop --body "Closes #N"
 ```
 
-### Package-Specific Commands
-
-```bash
-# Engine package
-cd packages/engine
-npm test                    # Run engine tests
-npm run build               # Build engine
-npm run dev                 # Development mode with watch
-
-# VS Code extension
-cd packages/vscode-extension
-npm install
-npm run build
-# Install: Cmd+Shift+P → "Developer: Install Extension from Location..."
-```
-
-### Running Individual Tests
-
-```bash
-# Run specific test file
-npx vitest run tests/parser/syntax-updates.spec.ts
-
-# Run tests matching pattern
-npx vitest run -t "Audio Control"
-
-# Watch mode for development
-npx vitest watch tests/core/
-```
+**Details**: See [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) Section 2
 
 ---
 
-## ドキュメント参照の優先順位
+## 📚 Documentation Reference Priority
 
-**ライブラリ・技術情報が必要な場合、必ず以下の順序で調査する：**
+**When you need library/technology information, follow this order:**
 
-1. ✅ **Context7を最初に試す**
+1. ✅ **Context7 first**
    ```
    mcp__context7__resolve-library-id("library-name")
    mcp__context7__get-library-docs("/org/project", topic="...")
    ```
-   - コード例が豊富
-   - 信頼性の高いスニペット
-   - オフライン参照可能
 
-2. ✅ **Context7で不足している場合のみWebFetch**
+2. ✅ **WebFetch only if Context7 is insufficient**
    ```
    WebFetch(url="...", prompt="...")
    ```
-   - 最新の仕様情報
-   - 詳細な設定ドキュメント
-   - Context7にない情報
 
-**理由**：
-- Context7はコード例とベストプラクティスが充実
-- オフラインでも利用可能
-- WebFetchは最新情報が必要な場合の補完手段
+**Reason**: Context7 has rich code examples and best practices, available offline. WebFetch is supplementary for latest information.
 
-**例外**：
-- プロジェクト固有のドキュメント（このプロジェクトのdocs/）はReadツールで直接参照
+**Exception**: Project-specific docs (`/docs`) use Read tool directly.
 
----
-
-## Git Workflow
-
-### ブランチ命名規則
-
-- **形式**: `<issue-number>-<descriptive-name>`
-- **英語のみ**（日本語禁止）
-- **例**:
-  - ✅ `61-audio-playback-testing`
-  - ✅ `55-improve-type-safety-process-statement`
-  - ❌ `feature/type-safety`（Issue番号なし）
-  - ❌ `55-型安全性向上`（日本語使用）
-
-### ブランチ作成
-
-```bash
-# Create branch from develop
-git checkout develop
-git pull origin develop
-git checkout -b <issue-number>-descriptive-name
-
-# Example
-git checkout -b 61-audio-playback-testing
-```
-
-### PR作成
-
-- **必ず`Closes #<issue-number>`を含める**
-- **`develop`ブランチ向けに作成**
-- **タイトル・本文は日本語で記述**
-- **例**:
-  ```bash
-  gh pr create --base develop --title "feat: オーディオ録音機能を追加" --body "Closes #61
-
-  ## 概要
-  ライブパフォーマンスでの録音忘れ防止のため、自動録音機能を実装。
-
-  ## 変更内容
-  - global.start()で録音開始
-  - global.stop()で録音停止・ファイル保存
-  "
-  ```
-
-### マージポリシー
-
-- **マージ方法**: Squash merge
-- **ブランチ削除**: マージ後も削除しない（履歴保持のため）
-- **例**:
-  ```bash
-  gh pr merge <number> --squash
-  # ブランチは削除しない
-  ```
-
----
-
-## WORK_LOG.md更新ルール
-
-**Every commit MUST be documented in WORK_LOG.md.**
-
-コミット前に `docs/WORK_LOG.md` を更新：
-- 何が変わったか
-- なぜ変わったか
-- 技術的な決定事項
-- コミットハッシュ（最初は `[PENDING]`、後で実際のハッシュに更新）
-
-プロジェクトの状態が変わった場合は `README.md` も更新。
-
-**詳細は `docs/PROJECT_RULES.md` Section 1を参照。**
-
----
-
-## DSL仕様ルール
-
-**`docs/INSTRUCTION_ORBITSCORE_DSL.md` is the single source of truth.**
-
-機能実装前に：
-1. 仕様書に存在することを確認
-2. パラメータの順序、型、動作を確認
-3. 不明な場合はユーザーに確認
-
-**禁止事項**: ユーザー確認なしに仕様にない機能を追加すること
-
----
-
-## Hooks
-
-### PreToolUse Hooks
-
-- `Edit|Write` → `main`/`develop`ブランチでの編集をブロック
-- `Bash:git commit.*` → Serenaメモリの単独コミットをブロック
-- `Bash:git checkout -b.*` → ブランチ命名規則をリマインド
-
-### SessionStart Hook
-
-- セッション開始時に必須アクションをリマインド
-- Compacting conversation後の文脈回復を自動化
-
-**詳細**: `.claude/hooks/README.md`
-
----
-
-## Test-Driven Development
-
-- 新機能には必ずテストを書く
-- コミット前にすべてのテストがパスすること
-- CI環境: 225 tests pass, 23 skipped (SuperCollider integration tests)
-
-**テスト戦略**:
-- **Unit tests**: Parser, timing, audio slicer (自動化、CI互換)
-- **Integration tests**: SuperCollider tests (ローカルのみ、CIではスキップ)
-- **Manual tests**: Audio playback verification (人間によるリスニングが必要)
-
----
-
-## 重要なリマインダー
-
-**実装を開始する前に、必ずこのファイルの「実装開始前の必須チェック」を確認してください。**
-
-ワークフロー違反は、ブランチ管理の崩壊、Issue追跡の喪失、PRとIssueの紐付け失敗につながります。
+**Details**: See [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md)
 
 ---
 
 ## Additional Resources
 
 すべての詳細ルールとドキュメントは以下を参照：
-- **📚 `docs/INDEX.md`** - ドキュメント目次（必読）
-- **🎵 `docs/INSTRUCTION_ORBITSCORE_DSL.md`** - DSL仕様（単一信頼情報源）
-- **📏 `docs/PROJECT_RULES.md`** - 開発ルール（包括的ガイドライン）
-- **📝 `docs/WORK_LOG.md`** - 開発履歴（技術的決定事項）
-- **🗺️ `docs/IMPLEMENTATION_PLAN.md`** - ロードマップとフェーズ
-- **📖 `docs/USER_MANUAL.md`** - ユーザー向けドキュメント
-- **🪝 `.claude/hooks/README.md`** - Hooksの説明
+- **📚 [`docs/INDEX.md`](docs/INDEX.md)** - ドキュメント目次（必読）
+- **🎵 [`docs/INSTRUCTION_ORBITSCORE_DSL.md`](docs/INSTRUCTION_ORBITSCORE_DSL.md)** - DSL仕様（単一信頼情報源）
+- **📏 [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md)** - 開発ルール（包括的ガイドライン）
+- **📝 [`docs/WORK_LOG.md`](docs/WORK_LOG.md)** - 開発履歴（技術的決定事項）
+- **🗺️ [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)** - ロードマップとフェーズ
+- **📖 [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md)** - ユーザー向けドキュメント
+- **📚 [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md)** - 外部ライブラリドキュメント参照ガイド
+- **🪝 [`.claude/hooks/README.md`](.claude/hooks/README.md)** - Hooksの説明
