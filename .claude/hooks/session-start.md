@@ -18,9 +18,9 @@ Compacting conversation後や新しいセッション開始時に、プロジェ
 ## 実行内容
 
 1. **Onboarding確認**: `mcp__serena__check_onboarding_performed`
-2. **重要なメモリ読み込み**:
-   - `current_issues`: 現在のIssue状況と次のタスク
-   - `project_overview`: プロジェクト全体像とアーキテクチャ
+2. **Serenaメモリを使って現在の状況を確認**:
+   - `list_memories`で利用可能なメモリを確認
+   - 必要に応じて`read_memory`で読み込む
 3. **Git状態確認**:
    - `git branch --show-current`: 現在のブランチ
    - `git log -1 --oneline`: 最新コミット
@@ -32,10 +32,11 @@ Compacting conversation後や新しいセッション開始時に、プロジェ
 
 ```
 1. mcp__serena__check_onboarding_performed を実行
-2. mcp__serena__read_memory で current_issues を読み込み
-3. mcp__serena__read_memory で project_overview を読み込み
-4. git branch --show-current && git log -1 --oneline を実行
-5. 現在のブランチ名からIssue番号を抽出（例: 57-dsl-clarification-parser-consistency → Issue #57）
+2. Serenaを使って現在の状況を確認
+   - list_memoriesで利用可能なメモリを確認
+   - 必要に応じてread_memoryで読み込む
+3. git branch --show-current && git log -1 --oneline を実行
+4. 現在のブランチ名からIssue番号を抽出（例: 57-dsl-clarification-parser-consistency → Issue #57）
 ```
 
 この情報を元に、セッションで何をすべきかを理解してから作業を開始してください。
