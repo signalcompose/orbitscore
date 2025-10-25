@@ -354,7 +354,9 @@ npm run build
 
 ## License
 
-ISC
+MIT License - see [LICENSE](LICENSE) file for details
+
+Copyright (c) 2025 Hiroshi Yamato / dropcontrol
 
 ## Contributing
 
