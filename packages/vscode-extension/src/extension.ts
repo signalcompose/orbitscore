@@ -783,10 +783,43 @@ function filterDefinitionsOnly(code: string): string {
       continue
     }
 
-    // Check if this is a transport command (complete statement on one line)
-    // Match both with and without arguments: seq.start(), seq.start(args), global.start(), etc.
-    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|start|stop|mute|unmute)\s*\(/)) {
-      // Skip this line (it's a transport command)
+    // Check if this is a reserved keyword transport command: RUN(), LOOP(), MUTE(), STOP()
+    // These can span multiple lines, so we need to count parentheses
+    if (trimmed.match(/^(RUN|LOOP|MUTE|STOP)\s*\(/)) {
+      let parenDepth = 0
+      let lineEnd = i
+
+      // Count opening and closing parens to find the end of the statement
+      for (let j = i; j < lines.length; j++) {
+        const currentLine = lines[j]
+        for (const char of currentLine) {
+          if (char === '(') parenDepth++
+          if (char === ')') parenDepth--
+        }
+        lineEnd = j
+        if (parenDepth === 0) break
+      }
+
+      // Skip all lines of this reserved keyword command
+      i = lineEnd + 1
+      continue
+    }
+
+    // Check if this is a method-chained transport command (complete statement on one line)
+    // Match both with and without arguments: seq.start(), seq.start(args), etc.
+    // BUT preserve global.start() and global.stop() (scheduler control)
+    const isGlobalTransport = trimmed.startsWith('global.')
+    if (
+      !isGlobalTransport &&
+      trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|run|stop|mute|unmute)\s*\(/)
+    ) {
+      // Skip this line (it's a sequence transport command)
+      i++
+      continue
+    }
+
+    // Filter out global.loop() specifically (deprecated)
+    if (trimmed.match(/^global\.loop\s*\(/)) {
       i++
       continue
     }

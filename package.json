@@ -5,8 +5,9 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc --build",
-    "build:clean": "tsc --build --clean && tsc --build",
+    "build": "tsc --build && npm run build:copy-engine",
+    "build:clean": "tsc --build --clean && tsc --build && npm run build:copy-engine",
+    "build:copy-engine": "cp -r packages/engine/dist packages/vscode-extension/engine/ && cp -r packages/engine/supercollider packages/vscode-extension/engine/",
     "dev:engine": "npm -w @orbitscore/engine run dev",
     "test": "npm -w @orbitscore/engine test",
     "lint": "eslint . --ext .ts,.tsx",

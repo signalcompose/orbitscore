@@ -50,6 +50,20 @@ export class OSCClient {
   }
 
   /**
+   * バッファロードコマンドを送信し、/doneメッセージを待つ
+   */
+  async sendBufferLoad(bufnum: number, filepath: string): Promise<void> {
+    if (!this.server) {
+      throw new Error('SuperCollider server not running')
+    }
+    // Use callAndResponse to wait for /done message
+    await this.server.callAndResponse({
+      call: ['/b_allocRead', bufnum, filepath, 0, -1],
+      response: ['/done', '/b_allocRead', bufnum],
+    })
+  }
+
+  /**
    * サーバーが起動しているかチェック
    */
   isRunning(): boolean {

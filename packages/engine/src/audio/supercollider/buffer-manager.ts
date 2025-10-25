@@ -28,7 +28,8 @@ export class BufferManager {
     // Get duration from audio file using sox before loading into SuperCollider
     const duration = this.getAudioFileDuration(filepath)
 
-    await this.oscClient.sendMessage(['/b_allocRead', bufnum, filepath, 0, -1])
+    // Wait for SuperCollider to complete buffer loading (/done message)
+    await this.oscClient.sendBufferLoad(bufnum, filepath)
 
     const bufferInfo: BufferInfo = { bufnum, duration }
     this.bufferCache.set(filepath, bufferInfo)

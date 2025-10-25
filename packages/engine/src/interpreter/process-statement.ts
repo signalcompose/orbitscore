@@ -282,14 +282,41 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
   // Update RUN group state
   state.runGroup = newRunGroup
 
-  // Execute run() on all specified sequences immediately
-  // This happens EVERY time RUN() is called, regardless of previous state
-  for (const seqName of validSequences) {
-    const sequence = state.sequences.get(seqName)
-    if (sequence) {
-      await sequence.run()
-    }
+  // Preload all audio buffers in parallel (to avoid sequential loading delays)
+  const scheduler = state.audioEngine as any
+  if (scheduler.loadBuffer) {
+    const path = await import('path')
+    console.log(`🔧 [RUN] Preloading ${validSequences.length} buffers in parallel...`)
+    await Promise.all(
+      validSequences.map(async (seqName) => {
+        const sequence = state.sequences.get(seqName)
+        if (sequence) {
+          const audioPath = (sequence as any)._audioFilePath
+          if (audioPath) {
+            // Use same path resolution as preparePlayback()
+            const resolvedPath = path.isAbsolute(audioPath)
+              ? audioPath
+              : path.resolve(process.cwd(), audioPath)
+            console.log(`🔧 [RUN] Preloading ${seqName}: ${resolvedPath}`)
+            await scheduler.loadBuffer(resolvedPath)
+          }
+        }
+      }),
+    )
+    console.log(`🔧 [RUN] Preload complete`)
   }
+
+  // Execute run() on all specified sequences immediately (in parallel)
+  // This happens EVERY time RUN() is called, regardless of previous state
+  // Since buffers are preloaded, run() will be truly parallel
+  await Promise.all(
+    validSequences.map(async (seqName) => {
+      const sequence = state.sequences.get(seqName)
+      if (sequence) {
+        await sequence.run()
+      }
+    }),
+  )
 }
 
 /**
@@ -350,19 +377,43 @@ async function startSequencesWithMute(
   sequenceNames: string[],
   state: InterpreterState,
 ): Promise<void> {
-  for (const seqName of sequenceNames) {
-    const sequence = state.sequences.get(seqName)
-    if (sequence) {
-      await sequence.loop()
-
-      // Apply MUTE state (MUTE only affects LOOP)
-      if (state.muteGroup.has(seqName)) {
-        sequence.mute()
-      } else {
-        sequence.unmute()
-      }
-    }
+  // Preload all audio buffers in parallel (to avoid sequential loading delays)
+  const scheduler = state.audioEngine as any
+  if (scheduler.loadBuffer) {
+    const path = await import('path')
+    await Promise.all(
+      sequenceNames.map(async (seqName) => {
+        const sequence = state.sequences.get(seqName)
+        if (sequence) {
+          const audioPath = (sequence as any)._audioFilePath
+          if (audioPath) {
+            // Use same path resolution as preparePlayback()
+            const resolvedPath = path.isAbsolute(audioPath)
+              ? audioPath
+              : path.resolve(process.cwd(), audioPath)
+            await scheduler.loadBuffer(resolvedPath)
+          }
+        }
+      }),
+    )
   }
+
+  // Start all sequences in parallel
+  // Since buffers are preloaded, loop() will be truly parallel
+  await Promise.all(
+    sequenceNames.map(async (seqName) => {
+      const sequence = state.sequences.get(seqName)
+      if (sequence) {
+        await sequence.loop()
+
+        // Apply MUTE state only if sequence is in MUTE group
+        // (loop() already starts in unmuted state, no need to call unmute())
+        if (state.muteGroup.has(seqName)) {
+          sequence.mute()
+        }
+      }
+    }),
+  )
 }
 
 /**

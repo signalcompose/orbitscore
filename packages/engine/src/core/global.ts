@@ -168,6 +168,9 @@ export class Global {
     return this
   }
 
+  /**
+   * @deprecated Not needed. Use LOOP(seq) for sequences instead.
+   */
   loop(): this {
     this.transportControl.loop()
     this.effectsManager.setRunningState(true)
