@@ -4,7 +4,7 @@
 
 Implementation plan for the new audio-based OrbitScore DSL as defined in `INSTRUCTION_ORBITSCORE_DSL.md`.
 
-**Single Source of Truth**: `docs/INSTRUCTION_ORBITSCORE_DSL.md`
+**Single Source of Truth**: [`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md)
 
 ## Migration Status
 
@@ -17,17 +17,17 @@ Implementation plan for the new audio-based OrbitScore DSL as defined in `INSTRU
 
 ## Current Implementation Summary
 
-### ✅ Completed (100% tested)
-- **Parser**: Full DSL syntax support with 31 tests
+### ✅ Completed (tested)
+- **Parser**: Full DSL syntax support with 50 tests
 - **Object-Oriented Architecture**: Global and Sequence classes
-- **Audio Engine**: WAV loading, slicing, sox-based playback
+- **Audio Engine**: WAV loading, slicing, SuperCollider-based playback
 - **Transport System**: Scheduling, polymeter, mute/unmute
 - **VS Code Extension**: Syntax highlighting, autocomplete, execution
 - **Timing Calculation**: Hierarchical play patterns
 - **Method Chaining**: Fluent API across all components
-- **Audio Slicing (chop)**: sox trim-based partial playback (no temp files)
+- **Audio Slicing (chop)**: SuperCollider buffer-based partial playback
 - **CLI with Timeout**: Auto-stop feature for testing
-- **Real Audio Playback**: Verified with kick, arpeggio, and complex nested patterns
+- **Real Audio Playback**: Verified with kick, snare, hihat, bass, arpeggio
 
 ### ⚠️ Partially Implemented
 - **Audio Formats**: Only WAV fully supported (AIFF/MP3/MP4 placeholders)
@@ -42,12 +42,12 @@ Implementation plan for the new audio-based OrbitScore DSL as defined in `INSTRU
 - **DAW Plugin**: VST/AU development (Phase A5)
 
 ### 📊 Testing Coverage
-- **Total Tests**: 115 passed, 15 skipped (88.5%)
-- **Unit Tests**: 100
-- **Integration Tests**: 15
-- **Code Coverage**: Core features fully tested
-- **Real Audio Tests**: Verified with actual playback (kick, arpeggio, nested patterns)
-- **Refactoring Impact**: Tests updated to reflect modular architecture
+- **Total Tests**: 225 passed, 23 skipped (248 total) = 90.7%
+- **Parser Tests**: 50/50
+- **Interpreter Tests**: 83/83
+- **DSL v3.0 Tests**: 56/56 (Unidirectional Toggle, Underscore Prefix, Gain/Pan)
+- **Audio Engine Tests**: 15/15 (SuperCollider integration)
+- **Real Audio Tests**: Verified with actual playback (kick, snare, hihat, bass, arpeggio)
 
 ## Implementation Phases
 
@@ -263,7 +263,7 @@ seq1.mute()
 
 ## Success Criteria
 
-1. **Parser**: Successfully parse all DSL syntax from INSTRUCTION_ORBITSCORE_DSL.md
+1. **Parser**: Successfully parse all DSL syntax from [`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md)
 2. **Audio**: Play sliced audio with tempo adjustment and optional pitch preservation
 3. **Transport**: Execute all transport commands with proper timing
 4. **Editor**: Cmd+Enter execution works for all commands
@@ -362,5 +362,5 @@ seq1.mute()
 
 ---
 
-*Last Updated: 2025-01-09*
-*Canonical Reference: `docs/INSTRUCTION_ORBITSCORE_DSL.md`*
+*Last Updated: 2025-10-26*
+*Canonical Reference: [`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md)*

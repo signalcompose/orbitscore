@@ -8,13 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **IMPORTANT**: Detailed design and specification documentation is maintained in Japanese in the `/docs` directory. Always refer to `/docs` for:
 
-- **Documentation Index**: [`docs/INDEX.md`](docs/INDEX.md) - すべてのドキュメントの目次（必読）
-- **DSL Specification**: [`docs/INSTRUCTION_ORBITSCORE_DSL.md`](docs/INSTRUCTION_ORBITSCORE_DSL.md) - 単一信頼情報源（Single Source of Truth）
-- **Project Rules**: [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) - 開発ワークフロー、Git規則、コミット規約
-- **Work Log**: [`docs/WORK_LOG.md`](docs/WORK_LOG.md) - 完全な開発履歴と技術的決定事項
-- **Implementation Plan**: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) - 技術ロードマップとフェーズ
-- **User Manual**: [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md) - ユーザー向け機能説明
-- **Context7 Guide**: [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md) - 外部ライブラリドキュメント参照ガイド
+- **Documentation Index**: [`docs/core/INDEX.md`](docs/core/INDEX.md) - すべてのドキュメントの目次（必読）
+- **DSL Specification**: [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) - 単一信頼情報源（Single Source of Truth）
+- **Project Rules**: [`docs/core/PROJECT_RULES.md`](docs/core/PROJECT_RULES.md) - 開発ワークフロー、Git規則、コミット規約
+- **Work Log**: [`docs/development/WORK_LOG.md`](docs/development/WORK_LOG.md) - 完全な開発履歴と技術的決定事項
+- **Implementation Plan**: [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_PLAN.md) - 技術ロードマップとフェーズ
+- **User Manual**: [`docs/core/USER_MANUAL.md`](docs/core/USER_MANUAL.md) - ユーザー向け機能説明
+- **Context7 Guide**: [`docs/core/CONTEXT7_GUIDE.md`](docs/core/CONTEXT7_GUIDE.md) - 外部ライブラリドキュメント参照ガイド
+- **Testing Guide**: [`docs/testing/TESTING_GUIDE.md`](docs/testing/TESTING_GUIDE.md) - テスト手順とガイド
 
 **Documentation Rules**:
 1. All documentation in `/docs` must be written in Japanese
@@ -40,8 +41,8 @@ Serena のオンボーディング状態を確認し、利用可能なメモリ�
 **以下のドキュメントとメモリを並行して読み込むこと（1回のメッセージで複数のRead/read_memoryツールを実行）:**
 
 #### 必須ドキュメント（Readツール）
-1. [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) - 開発ワークフロー、Git規則、重要ルール
-2. [`docs/INDEX.md`](docs/INDEX.md) - ドキュメント構造の全体像とその下のファイルによる仕様や設計の確認
+1. [`docs/core/PROJECT_RULES.md`](docs/core/PROJECT_RULES.md) - 開発ワークフロー、Git規則、重要ルール
+2. [`docs/core/INDEX.md`](docs/core/INDEX.md) - ドキュメント構造の全体像とその下のファイルによる仕様や設計の確認
 
 #### Serenaメモリの読み込み
 1. `check_onboarding_performed` で取得したメモリリストを確認
@@ -51,17 +52,18 @@ Serena のオンボーディング状態を確認し、利用可能なメモリ�
 ```
 並行で以下を実行:
 - mcp__serena__check_onboarding_performed (オンボーディング確認とメモリリスト取得)
-- Read("docs/PROJECT_RULES.md")
-- Read("docs/INDEX.md")
+- Read("docs/core/PROJECT_RULES.md")
+- Read("docs/core/INDEX.md")
 その後、必要なメモリを並行で読み込む
 ```
 
 #### タスク依存の追加ドキュメント
 必要に応じて以下のドキュメントを読み込む（作業内容に応じて判断）:
-- [`docs/INSTRUCTION_ORBITSCORE_DSL.md`](docs/INSTRUCTION_ORBITSCORE_DSL.md) - DSL仕様が必要な場合
-- [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) - 実装計画の確認が必要な場合
-- [`docs/WORK_LOG.md`](docs/WORK_LOG.md) - 過去の実装経緯を確認する場合
-- [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md) - 外部ライブラリドキュメントが必要な場合
+- [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) - DSL仕様が必要な場合
+- [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_PLAN.md) - 実装計画の確認が必要な場合
+- [`docs/development/WORK_LOG.md`](docs/development/WORK_LOG.md) - 過去の実装経緯を確認する場合
+- [`docs/core/CONTEXT7_GUIDE.md`](docs/core/CONTEXT7_GUIDE.md) - 外部ライブラリドキュメントが必要な場合
+- [`docs/testing/TESTING_GUIDE.md`](docs/testing/TESTING_GUIDE.md) - テスト手順が必要な場合
 
 ### ステップ3: 現在のブランチを確認
 

@@ -228,18 +228,7 @@ global.start()            // start scheduler from next bar
 global.stop()             // stop scheduler
 ```
 
-### Sequence Transport (Method-based)
-Available on individual sequences:
-
-```js
-kick.run()                // play sequence once (one-shot)
-kick.loop()               // play sequence in loop
-kick.stop()               // stop sequence
-kick.mute()               // mute sequence (only affects LOOP playback)
-kick.unmute()             // unmute sequence
-```
-
-### Reserved Keywords (Unidirectional Toggle) - v3.0
+### Sequence Transport - Reserved Keywords (Unidirectional Toggle)
 
 **DSL v3.0 introduces片記号方式 (unidirectional toggle)**:
 
@@ -261,6 +250,11 @@ MUTE(snare, hihat)        // Set ONLY snare and hihat's MUTE flags ON (others OF
 - **LOOP group**: Lists sequences for loop playback. **Sequences not listed are automatically stopped.**
 - **MUTE group**: Sets MUTE flag ON for listed sequences, OFF for others. **MUTE only affects LOOP playback**, not RUN.
 - Each command **replaces** the entire group with the new list (unidirectional - inclusion only)
+
+**Why no STOP or UNMUTE keywords?**
+- **STOP is unnecessary**: Use `LOOP(other_sequences)` to stop unwanted sequences automatically
+- **UNMUTE is unnecessary**: Use `MUTE(other_sequences)` to unmute by exclusion
+- This design simplifies the DSL and makes the state explicit and predictable
 
 **RUN and LOOP Independence**:
 - RUN and LOOP are **independent groups** - the same sequence can be in both simultaneously
@@ -349,7 +343,7 @@ seq1.audio("../audio/kick.wav")             // Default: chop(1)
 - `.chop(n)` divides file into n equal slices (numbered 1 to n)
 - `.chop(1)` or omitting `.chop()` = no division (entire file is slice 1)
 - Supported formats: wav, aiff, mp3, mp4
-- Output defaults to 48kHz / 24bit (unless global override)
+- Audio output: 48kHz / 24bit
 
 **Common patterns**:
 - Drum hits: Use `.chop(1)` or omit - triggers entire sample
@@ -504,7 +498,7 @@ For backward compatibility and ease of use:
 - Parser must support nested `play` structures for hierarchical timing
 - IR must represent play structures as tree-like data for timing calculation
 - Scheduler must handle independent sequence tempos (polytempo) and meters (polymeter)
-- Audio engine uses SuperCollider for ultra-low latency playback (0-2ms)
+- Audio engine uses SuperCollider with 0-2ms latency
 - Global underscore methods (_tempo, _beat) must trigger seamless parameter updates for inheriting sequences
 
 **Future Additions**:
@@ -622,8 +616,12 @@ lead.defaultGain(-9).defaultPan(30)
 // STEP 6: Start playback
 global.start()
 
-// STEP 7: Live manipulation (real-time changes during playback)
-kick.mute()
+// STEP 7: Use reserved keywords for transport control
+RUN(kick, bass, lead)
+LOOP(kick, bass)
+MUTE(kick)          // Mute kick in LOOP (RUN still plays with sound)
+
+// STEP 8: Live manipulation (real-time changes during playback)
 bass.gain(-12)      // Real-time gain change
 lead.pan(0)         // Real-time pan change
 global._tempo(130)  // Change global tempo for all inheriting sequences
@@ -663,7 +661,7 @@ global._tempo(130)  // Change global tempo for all inheriting sequences
 #### Audio Engine (SuperCollider)
 - **File Loading**: WAV format support with buffer caching
 - **Slicing**: `chop(n)` divides audio into n equal parts with precise timing
-- **Playback**: Ultra-low latency (0-2ms) via SuperCollider scsynth
+- **Playback**: 0-2ms latency via SuperCollider scsynth
 - **Audio Control**:
   - `gain(dB)`: Real-time volume control in dB (-60 to +12, default 0) - applies immediately even during playback
   - `pan(position)`: Real-time stereo positioning (-100 to 100) - applies immediately even during playback
