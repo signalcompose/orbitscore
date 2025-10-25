@@ -391,6 +391,9 @@ export class Sequence {
   }
 
   // Transport control
+  /**
+   * @internal - Reserved keywords use only. Use RUN(seq) instead.
+   */
   async run(): Promise<this> {
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -424,6 +427,9 @@ export class Sequence {
     return this
   }
 
+  /**
+   * @internal - Reserved keywords use only. Use LOOP(seq) instead.
+   */
   async loop(): Promise<this> {
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -461,6 +467,9 @@ export class Sequence {
     return this
   }
 
+  /**
+   * @internal - Reserved keywords use only. Use LOOP() or RUN() to exclude sequence.
+   */
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
@@ -489,13 +498,37 @@ export class Sequence {
     return this
   }
 
+  /**
+   * @internal - Reserved keywords use only. Use MUTE(seq) instead.
+   */
   mute(): this {
     this.stateManager.setMuted(true)
     return this
   }
 
+  /**
+   * @internal - Reserved keywords use only. Use MUTE() to exclude sequence.
+   */
   unmute(): this {
+    const wasLooping = this.stateManager.isLooping()
+    const sequenceName = this.stateManager.getName()
     this.stateManager.setMuted(false)
+
+    // If this sequence is currently looping, clear old events and reschedule from current time
+    // This prevents accumulated events from playing when unmuting
+    if (wasLooping) {
+      const scheduler = this.global.getScheduler()
+      const currentTime = Date.now() - scheduler.startTime
+
+      console.log(`🔓 ${sequenceName}: unmuting and rescheduling from ${currentTime}ms`)
+
+      // Clear old scheduled events
+      scheduler.clearSequenceEvents(sequenceName)
+
+      // Reschedule from current time (seamless resume)
+      this.scheduleEventsFromTime(scheduler, currentTime)
+    }
+
     return this
   }
 
