@@ -157,6 +157,16 @@ export class EventScheduler {
 
       while (this.scheduledPlays.length > 0 && this.scheduledPlays[0].time <= now) {
         const play = this.scheduledPlays.shift()!
+
+        // Skip if this sequence's events have been cleared
+        // (sequenceEvents.has() returns false if clearSequenceEvents() was called)
+        if (play.sequenceName && !this.sequenceEvents.has(play.sequenceName)) {
+          console.log(
+            `🔧 [skip cleared] ${play.sequenceName}: skipping event at ${play.time}ms (cleared)`,
+          )
+          continue
+        }
+
         // Execute playback asynchronously but handle errors
         this.executePlayback(play.filepath, play.options, play.sequenceName, play.time).catch(
           (error) => {
@@ -193,13 +203,35 @@ export class EventScheduler {
    */
   clearSequenceEvents(sequenceName: string): void {
     const beforeCount = this.scheduledPlays.length
+
+    // Log events that will be cleared
+    const eventsToRemove = this.scheduledPlays.filter((play) => play.sequenceName === sequenceName)
+    if (eventsToRemove.length > 0) {
+      console.log(
+        `🔧 [clearEvents] ${sequenceName}: removing events at times: ${eventsToRemove.map((e) => e.time).join(', ')}ms`,
+      )
+    }
+
     this.scheduledPlays = this.scheduledPlays.filter((play) => play.sequenceName !== sequenceName)
     const afterCount = this.scheduledPlays.length
     const cleared = beforeCount - afterCount
+    console.log(
+      `🔧 [clearEvents] ${sequenceName}: cleared ${cleared} events (${beforeCount} → ${afterCount})`,
+    )
     if (cleared > 0) {
       console.log(`⏹ ${sequenceName} (stopped)`)
     }
+    // Delete from Map so that any events still in scheduledPlays will be skipped
     this.sequenceEvents.delete(sequenceName)
+  }
+
+  /**
+   * シーケンスのイベントトラッキングを再初期化
+   * unmute()後に新しいイベントをスケジュールする前に呼び出す
+   */
+  reinitializeSequenceTracking(sequenceName: string): void {
+    this.sequenceEvents.set(sequenceName, [])
+    console.log(`🔧 [reinit] ${sequenceName}: tracking reinitialized`)
   }
 
   /**
@@ -211,6 +243,29 @@ export class EventScheduler {
     sequenceName: string,
     scheduledTime: number,
   ): Promise<void> {
+    // Only perform checks if sequenceName is provided (non-empty)
+    if (sequenceName) {
+      const now = Date.now() - this.startTime
+      const drift = now - scheduledTime
+
+      // Double-check: Skip if sequence was cleared while waiting in async queue
+      if (!this.sequenceEvents.has(sequenceName)) {
+        console.log(
+          `🔧 [skip in exec] ${sequenceName}: skipping event at ${scheduledTime}ms (cleared during async wait)`,
+        )
+        return
+      }
+
+      // Skip events with excessive drift (> 1000ms)
+      // These are likely old events that should have been cleared
+      if (drift > 1000) {
+        console.log(
+          `🔧 [skip drift] ${sequenceName}: skipping event at ${scheduledTime}ms (drift: ${drift}ms > 1000ms)`,
+        )
+        return
+      }
+    }
+
     this.logPlaybackDebugInfo(sequenceName, scheduledTime)
     const { bufnum } = await this.bufferManager.loadBuffer(filepath)
     const amplitude = this.convertGainToAmplitude(options.gainDb)
