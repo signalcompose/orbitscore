@@ -454,6 +454,7 @@ export class Sequence {
       scheduler,
       currentTime,
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
+      scheduleEventsFromTimeFn: (sched, fromTime) => this.scheduleEventsFromTime(sched, fromTime),
       getPatternDurationFn: () => this.getPatternDuration(),
       clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
@@ -502,7 +503,14 @@ export class Sequence {
    * @internal - Reserved keywords use only. Use MUTE(seq) instead.
    */
   mute(): this {
+    const sequenceName = this.stateManager.getName()
     this.stateManager.setMuted(true)
+
+    // Clear any scheduled events when muting
+    // This prevents accumulated events from playing when unmuting
+    const scheduler = this.global.getScheduler()
+    scheduler.clearSequenceEvents(sequenceName)
+
     return this
   }
 
@@ -522,8 +530,11 @@ export class Sequence {
 
       console.log(`🔓 ${sequenceName}: unmuting and rescheduling from ${currentTime}ms`)
 
-      // Clear old scheduled events
+      // Clear old scheduled events (removes from scheduledPlays and sequenceEvents Map)
       scheduler.clearSequenceEvents(sequenceName)
+
+      // Reinitialize tracking so new events won't be skipped
+      scheduler.reinitializeSequenceTracking(sequenceName)
 
       // Reschedule from current time (seamless resume)
       this.scheduleEventsFromTime(scheduler, currentTime)
