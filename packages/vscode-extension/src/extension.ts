@@ -364,48 +364,36 @@ function toggleEngine() {
   }
 }
 
-function startEngine(debugMode: boolean = false) {
-  if (engineProcess && !engineProcess.killed) {
-    vscode.window.showWarningMessage('⚠️ Engine is already running')
-    return
-  }
-
-  // isDebugMode = debugMode
-  const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
-  outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
-
-  // Choose engine based on mode
-  let enginePath: string
-  let engineSource: string
-  if (debugMode) {
-    // Debug mode: use workspace engine (development)
-    enginePath = path.join(__dirname, '../../engine/dist/cli-audio.js')
-    engineSource = 'workspace engine (development)'
-  } else {
-    // Normal mode: use extension-local engine (stable)
-    enginePath = path.join(__dirname, '../engine/dist/cli-audio.js')
-    engineSource = 'extension engine (stable)'
-  }
+/**
+ * Determine engine path based on debug mode.
+ */
+function getEnginePath(debugMode: boolean): { enginePath: string; engineSource: string } | null {
+  // Always use extension-local engine (both debug and normal mode)
+  // This ensures we test the same engine that will be distributed
+  const enginePath = path.join(__dirname, '../engine/dist/cli-audio.js')
+  const engineSource = debugMode ? 'extension engine (debug)' : 'extension engine (stable)'
 
   outputChannel?.appendLine(`📦 Using: ${engineSource}`)
   outputChannel?.appendLine(`📍 Path: ${enginePath}`)
 
   if (!fs.existsSync(enginePath)) {
-    if (debugMode) {
-      vscode.window.showErrorMessage(`Debug engine not found: ${enginePath}`)
-    } else {
-      vscode.window.showErrorMessage(
-        `Extension engine not found: ${enginePath}\n\n` +
-          `This indicates a build issue. Please rebuild the extension:\n` +
-          `1. Run "npm run build" in the vscode-extension directory\n` +
-          `2. Ensure the engine is properly built and copied\n` +
-          `3. Check that packages/engine/dist/cli-audio.js exists`,
-      )
-    }
-    return
+    vscode.window.showErrorMessage(
+      `Extension engine not found: ${enginePath}\n\n` +
+        `This indicates a build issue. Please rebuild the extension:\n` +
+        `1. Run "npm run build" in the vscode-extension directory\n` +
+        `2. Ensure the engine is properly built and copied\n` +
+        `3. Check that packages/engine/dist/cli-audio.js exists`,
+    )
+    return null
   }
 
-  // Show engine build time
+  return { enginePath, engineSource }
+}
+
+/**
+ * Show engine build time.
+ */
+function showEngineBuildTime(enginePath: string): void {
   try {
     const stats = fs.statSync(enginePath)
     const buildTime = stats.mtime.toLocaleString('ja-JP', {
@@ -420,148 +408,139 @@ function startEngine(debugMode: boolean = false) {
   } catch (error) {
     outputChannel?.appendLine(`⚠️ Could not get build time: ${error}`)
   }
+}
 
-  // Get workspace root for proper relative path resolution
-  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
-
-  // Load .orbitscore.json config if it exists
+/**
+ * Load audio device from .orbitscore.json config.
+ */
+function loadAudioDeviceConfig(workspaceRoot: string): string | undefined {
   const configPath = path.join(workspaceRoot, '.orbitscore.json')
-  let audioDevice: string | undefined
 
-  if (fs.existsSync(configPath)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-      audioDevice = config.audioDevice
-      if (audioDevice) {
-        outputChannel?.appendLine(`🔊 Using audio device from config: ${audioDevice}`)
-      }
-    } catch (error) {
-      outputChannel?.appendLine(`⚠️ Failed to read .orbitscore.json: ${error}`)
+  if (!fs.existsSync(configPath)) {
+    return undefined
+  }
+
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+    const audioDevice = config.audioDevice
+    if (audioDevice) {
+      outputChannel?.appendLine(`🔊 Using audio device from config: ${audioDevice}`)
     }
+    return audioDevice
+  } catch (error) {
+    outputChannel?.appendLine(`⚠️ Failed to read .orbitscore.json: ${error}`)
+    return undefined
+  }
+}
+
+/**
+ * Filter stdout output in non-debug mode.
+ */
+function shouldFilterLine(line: string): boolean {
+  const trimmed = line.trim()
+
+  // Keep important messages
+  if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️')) {
+    return false
   }
 
-  const args = ['repl']
-  if (audioDevice) {
-    args.push('--audio-device', audioDevice)
-  }
-  if (debugMode) {
-    args.push('--debug')
-  }
-
-  // Set debug environment variable for debug mode
-  const env = { ...process.env }
-  if (debugMode) {
-    env.ORBITSCORE_DEBUG = '1'
+  // Keep initialization messages
+  if (
+    line.includes('🎵 OrbitScore') ||
+    line.includes('✅ Initialized') ||
+    line.includes('✅ SuperCollider server ready') ||
+    line.includes('✅ SynthDef loaded') ||
+    line.includes('✅ Mastering effect') ||
+    line.includes('🎵 Live coding mode')
+  ) {
+    return false
   }
 
-  engineProcess = child_process.spawn('node', [enginePath, ...args], {
-    cwd: workspaceRoot,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env,
-  })
+  // Keep transport state changes
+  if (
+    line.includes('✅ Global running') ||
+    line.includes('✅ Global stopped') ||
+    line.includes('✅ Global starting')
+  ) {
+    return false
+  }
 
-  isLiveCodingMode = true
-  hasEvaluatedFile = false // Reset on engine start
-  statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
-  statusBarItem!.tooltip = 'Click to stop engine'
-  vscode.window.showInformationMessage(
-    debugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
-  )
-  outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
+  // Keep user execution feedback
+  if (line.includes('▶ ') || line.includes('⏹ ') || line.includes('🔄 ')) {
+    return false
+  }
 
-  // Handle stdout
-  engineProcess.stdout?.on('data', (data) => {
+  // Filter out verbose logs
+  if (
+    line.includes('🔊 Playing:') ||
+    line.includes('sendosc:') ||
+    line.includes('rcvosc :') ||
+    line.includes('stdout :') ||
+    line.includes('"oscType"') ||
+    line.includes('"address"') ||
+    line.includes('"args"') ||
+    line.includes('"type"') ||
+    line.includes('"data"') ||
+    line.includes('"bufnum"') ||
+    line.includes('"amp"') ||
+    line.includes('"pan"') ||
+    line.includes('"rate"') ||
+    line.includes('"startPos"') ||
+    line.includes('"duration"') ||
+    line.includes('"threshold"') ||
+    line.includes('"ratio"') ||
+    line.includes('"attack"') ||
+    line.includes('"release"') ||
+    line.includes('"makeupGain"') ||
+    line.includes('"level"') ||
+    line.includes('"/') ||
+    line.includes('orbitPlayBuf') ||
+    line.includes('fxCompressor') ||
+    line.includes('fxLimiter') ||
+    line.includes('fxNormalizer') ||
+    line.includes('Number of Devices:') ||
+    line.includes('Input Device') ||
+    line.includes('Output Device') ||
+    line.includes('Streams:') ||
+    line.includes('channels') ||
+    line.includes('SC_AudioDriver:') ||
+    line.includes('PublishPortToRendezvous') ||
+    trimmed === '✓' ||
+    trimmed === '}' ||
+    trimmed === ']' ||
+    trimmed === '{' ||
+    trimmed === '[' ||
+    trimmed.startsWith('}') ||
+    trimmed.startsWith(']') ||
+    trimmed.match(/^\d+\s*:/) ||
+    trimmed.match(/^-?\d+(\.\d+)?,?$/) ||
+    trimmed === ''
+  ) {
+    return true
+  }
+
+  return false
+}
+
+/**
+ * Filter stdout output for non-debug mode.
+ */
+function filterStdout(output: string): string {
+  const lines = output.split('\n')
+  const filtered = lines.filter((line: string) => !shouldFilterLine(line))
+  return filtered.join('\n')
+}
+
+/**
+ * Setup stdout handler for engine process.
+ */
+function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+  process.stdout?.on('data', (data) => {
     const output = data.toString()
 
-    // In non-debug mode, filter out verbose logs
+    // Filter output in non-debug mode
     if (!debugMode) {
-      const lines = output.split('\n')
-      const filtered = lines.filter((line: string) => {
-        const trimmed = line.trim()
-
-        // Keep important messages only
-        if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️')) {
-          return true
-        }
-
-        // Keep initialization messages
-        if (
-          line.includes('🎵 OrbitScore') ||
-          line.includes('✅ Initialized') ||
-          line.includes('✅ SuperCollider server ready') ||
-          line.includes('✅ SynthDef loaded') ||
-          line.includes('✅ Mastering effect') ||
-          line.includes('🎵 Live coding mode')
-        ) {
-          return true
-        }
-
-        // Keep transport state changes
-        if (
-          line.includes('✅ Global running') ||
-          line.includes('✅ Global stopped') ||
-          line.includes('✅ Global starting')
-        ) {
-          return true
-        }
-
-        // Keep user execution feedback (run/loop commands)
-        if (line.includes('▶ ') || line.includes('⏹ ') || line.includes('🔄 ')) {
-          return true
-        }
-
-        // Filter out ALL verbose logs
-        if (
-          line.includes('🔊 Playing:') ||
-          line.includes('sendosc:') ||
-          line.includes('rcvosc :') ||
-          line.includes('stdout :') ||
-          line.includes('"oscType"') ||
-          line.includes('"address"') ||
-          line.includes('"args"') ||
-          line.includes('"type"') ||
-          line.includes('"data"') ||
-          line.includes('"bufnum"') ||
-          line.includes('"amp"') ||
-          line.includes('"pan"') ||
-          line.includes('"rate"') ||
-          line.includes('"startPos"') ||
-          line.includes('"duration"') ||
-          line.includes('"threshold"') ||
-          line.includes('"ratio"') ||
-          line.includes('"attack"') ||
-          line.includes('"release"') ||
-          line.includes('"makeupGain"') ||
-          line.includes('"level"') ||
-          line.includes('"/') || // OSC addresses like "/done", "/n_go"
-          line.includes('orbitPlayBuf') ||
-          line.includes('fxCompressor') ||
-          line.includes('fxLimiter') ||
-          line.includes('fxNormalizer') ||
-          line.includes('Number of Devices:') ||
-          line.includes('Input Device') ||
-          line.includes('Output Device') ||
-          line.includes('Streams:') ||
-          line.includes('channels') ||
-          line.includes('SC_AudioDriver:') ||
-          line.includes('PublishPortToRendezvous') ||
-          trimmed === '✓' ||
-          trimmed === '}' ||
-          trimmed === ']' ||
-          trimmed === '{' ||
-          trimmed === '[' ||
-          trimmed.startsWith('}') ||
-          trimmed.startsWith(']') ||
-          trimmed.match(/^\d+\s*:/) || // Device numbers
-          trimmed.match(/^-?\d+(\.\d+)?,?$/) || // Numbers only
-          trimmed === ''
-        ) {
-          return false
-        }
-
-        return true
-      })
-      const filteredOutput = filtered.join('\n')
+      const filteredOutput = filterStdout(output)
       if (filteredOutput.trim()) {
         outputChannel?.append(filteredOutput + '\n')
       }
@@ -577,22 +556,92 @@ function startEngine(debugMode: boolean = false) {
       statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
     }
   })
+}
 
-  // Handle stderr
-  engineProcess.stderr?.on('data', (data) => {
+/**
+ * Setup stderr handler for engine process.
+ */
+function setupStderrHandler(process: child_process.ChildProcess): void {
+  process.stderr?.on('data', (data) => {
     outputChannel?.append(`ERROR: ${data.toString()}`)
   })
+}
 
-  // Handle process exit
-  engineProcess.on('exit', (code) => {
+/**
+ * Setup exit handler for engine process.
+ */
+function setupExitHandler(process: child_process.ChildProcess): void {
+  process.on('exit', (code) => {
     outputChannel?.appendLine(`\n🛑 Engine process exited with code ${code}`)
     engineProcess = null
     isLiveCodingMode = false
-    hasEvaluatedFile = false // Reset on engine exit
-    // isDebugMode = false // Reset debug mode
+    hasEvaluatedFile = false
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
   })
+}
+
+function startEngine(debugMode: boolean = false) {
+  if (engineProcess && !engineProcess.killed) {
+    vscode.window.showWarningMessage('⚠️ Engine is already running')
+    return
+  }
+
+  const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
+  outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
+
+  // Get engine path
+  const engineInfo = getEnginePath(debugMode)
+  if (!engineInfo) {
+    return
+  }
+  const { enginePath } = engineInfo
+
+  // Show build time
+  showEngineBuildTime(enginePath)
+
+  // Get workspace root
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+
+  // Load audio device config
+  const audioDevice = loadAudioDeviceConfig(workspaceRoot)
+
+  // Build args
+  const args = ['repl']
+  if (audioDevice) {
+    args.push('--audio-device', audioDevice)
+  }
+  if (debugMode) {
+    args.push('--debug')
+  }
+
+  // Set environment
+  const env = { ...process.env }
+  if (debugMode) {
+    env.ORBITSCORE_DEBUG = '1'
+  }
+
+  // Spawn engine process
+  engineProcess = child_process.spawn('node', [enginePath, ...args], {
+    cwd: workspaceRoot,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env,
+  })
+
+  // Update state
+  isLiveCodingMode = true
+  hasEvaluatedFile = false
+  statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
+  statusBarItem!.tooltip = 'Click to stop engine'
+  vscode.window.showInformationMessage(
+    debugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
+  )
+  outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
+
+  // Setup handlers
+  setupStdoutHandler(engineProcess, debugMode)
+  setupStderrHandler(engineProcess)
+  setupExitHandler(engineProcess)
 }
 
 function startEngineDebug() {
@@ -734,10 +783,43 @@ function filterDefinitionsOnly(code: string): string {
       continue
     }
 
-    // Check if this is a transport command (complete statement on one line)
-    // Match both with and without arguments: seq.start(), seq.start(args), global.start(), etc.
-    if (trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|start|stop|mute|unmute)\s*\(/)) {
-      // Skip this line (it's a transport command)
+    // Check if this is a reserved keyword transport command: RUN(), LOOP(), MUTE(), STOP()
+    // These can span multiple lines, so we need to count parentheses
+    if (trimmed.match(/^(RUN|LOOP|MUTE|STOP)\s*\(/)) {
+      let parenDepth = 0
+      let lineEnd = i
+
+      // Count opening and closing parens to find the end of the statement
+      for (let j = i; j < lines.length; j++) {
+        const currentLine = lines[j]
+        for (const char of currentLine) {
+          if (char === '(') parenDepth++
+          if (char === ')') parenDepth--
+        }
+        lineEnd = j
+        if (parenDepth === 0) break
+      }
+
+      // Skip all lines of this reserved keyword command
+      i = lineEnd + 1
+      continue
+    }
+
+    // Check if this is a method-chained transport command (complete statement on one line)
+    // Match both with and without arguments: seq.start(), seq.start(args), etc.
+    // BUT preserve global.start() and global.stop() (scheduler control)
+    const isGlobalTransport = trimmed.startsWith('global.')
+    if (
+      !isGlobalTransport &&
+      trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|run|stop|mute|unmute)\s*\(/)
+    ) {
+      // Skip this line (it's a sequence transport command)
+      i++
+      continue
+    }
+
+    // Filter out global.loop() specifically (deprecated)
+    if (trimmed.match(/^global\.loop\s*\(/)) {
       i++
       continue
     }
@@ -801,11 +883,27 @@ async function evaluateFileInBackground(document: vscode.TextDocument) {
 
     // Filter out all transport commands (always)
     // isInitializing = true for first evaluation (include var declarations)
-    const definitionsOnly = filterDefinitionsOnly(code)
+    let definitionsOnly = filterDefinitionsOnly(code)
+
+    // Inject setDocumentDirectory() call after global variable initialization
+    const documentDir = path.dirname(document.uri.fsPath)
+    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+
+    // Find where 'var global = init GLOBAL' appears and inject after it
+    const globalInitMatch = definitionsOnly.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*\n)/)
+    if (globalInitMatch) {
+      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+      definitionsOnly =
+        definitionsOnly.slice(0, insertPos) +
+        setDirCommand +
+        '\n' +
+        definitionsOnly.slice(insertPos)
+    }
 
     // Debug: log what we're sending in debug mode
     if (statusBarItem?.text.includes('🐛')) {
       outputChannel?.appendLine('📤 File evaluation:')
+      outputChannel?.appendLine(`📂 Document directory: ${documentDir}`)
       outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
       outputChannel?.appendLine(definitionsOnly)
       outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
@@ -838,16 +936,107 @@ async function runSelection() {
     return
   }
 
-  // Get selected text or current line
+  // Get selected text or current line (with multiline detection)
   let text: string
+  let executionRange: vscode.Range
   const selection = editor.selection
 
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
+    executionRange = new vscode.Range(selection.start, selection.end)
   } else {
     // Get the current line
-    const line = editor.document.lineAt(selection.active.line)
-    text = line.text
+    const currentLine = selection.active.line
+    let startLine = currentLine
+    let endLine = currentLine
+
+    // Check if we're on a function call - if so, execute the entire call (including multiline)
+    // This allows cursor to be on any line of a multiline function call
+
+    const currentLineText = editor.document.lineAt(currentLine).text
+
+    // Check if current line contains a function call pattern
+    // Patterns: identifier(...), identifier.method(...), METHOD(...)
+    const hasFunctionCall = /[\w.]+\s*\(/.test(currentLineText)
+
+    if (hasFunctionCall) {
+      // Count parentheses balance on current line
+      const openParens = (currentLineText.match(/\(/g) || []).length
+      const closeParens = (currentLineText.match(/\)/g) || []).length
+      const currentBalance = openParens - closeParens
+
+      // If balanced, it's a single-line call - execute just this line
+      if (currentBalance === 0) {
+        // Single line function call - use current line
+        startLine = currentLine
+        endLine = currentLine
+      } else {
+        // Multiline function call - find the complete range
+
+        // Search backward to find the function call start (line with opening paren)
+        let balance = 0
+        for (let i = currentLine; i >= 0; i--) {
+          const lineText = editor.document.lineAt(i).text
+          const open = (lineText.match(/\(/g) || []).length
+          const close = (lineText.match(/\)/g) || []).length
+
+          // Add to balance as we go backwards
+          balance += close - open
+
+          // When balance becomes negative, we've found the start line
+          if (balance < 0) {
+            startLine = i
+            break
+          }
+
+          // Stop if we hit an empty line before finding the start
+          if (i < currentLine && lineText.trim() === '') {
+            startLine = currentLine
+            break
+          }
+        }
+
+        // Search forward from start to find the closing paren
+        balance = 0
+        for (let i = startLine; i < editor.document.lineCount; i++) {
+          const lineText = editor.document.lineAt(i).text
+          const open = (lineText.match(/\(/g) || []).length
+          const close = (lineText.match(/\)/g) || []).length
+
+          balance += open - close
+
+          // When balance reaches 0, we've found the complete call
+          if (balance === 0) {
+            endLine = i
+            break
+          }
+
+          // Stop if we hit an empty line
+          if (i > startLine && lineText.trim() === '') {
+            endLine = i - 1
+            break
+          }
+        }
+      }
+    } else {
+      // Not a function call - just execute current line
+      startLine = currentLine
+      endLine = currentLine
+    }
+
+    // If we detected a multiline statement, use the full range
+    if (startLine < endLine) {
+      executionRange = new vscode.Range(
+        editor.document.lineAt(startLine).range.start,
+        editor.document.lineAt(endLine).range.end,
+      )
+      text = editor.document.getText(executionRange)
+    } else {
+      // Single line execution
+      const line = editor.document.lineAt(currentLine)
+      text = line.text
+      executionRange = line.range
+    }
   }
 
   const trimmedText = text.trim()
@@ -881,12 +1070,7 @@ async function runSelection() {
     }
 
     const isWholeLine = selection.isEmpty
-    const range = !selection.isEmpty
-      ? new vscode.Range(selection.start, selection.end)
-      : new vscode.Range(
-          editor.document.lineAt(selection.active.line).range.start,
-          editor.document.lineAt(selection.active.line).range.end,
-        )
+    const range = executionRange
 
     // Create flash function
     const createFlash = (flashIndex: number) => {
@@ -1002,13 +1186,36 @@ async function updateDiagnostics(
   const text = document.getText()
   const lines = text.split('\n')
 
+  // Track multiline statements (lines ending with open parenthesis and comma)
+  let inMultilineStatement = false
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (!line) continue
 
+    // Detect multiline statement start: ends with '(' or ','
+    const trimmedLine = line.trim()
+    if (trimmedLine.endsWith('(') || trimmedLine.endsWith(',')) {
+      if (!inMultilineStatement) {
+        inMultilineStatement = true
+      }
+      continue // Skip parenthesis check for multiline statements
+    }
+
+    // Detect multiline statement end: line with closing parenthesis
+    if (inMultilineStatement && trimmedLine.endsWith(')')) {
+      inMultilineStatement = false
+      continue // Skip parenthesis check for closing line
+    }
+
+    // Skip parenthesis check if we're inside a multiline statement
+    if (inMultilineStatement) {
+      continue
+    }
+
     // Check for common syntax errors
 
-    // Missing closing parenthesis
+    // Missing closing parenthesis (only for single-line statements)
     const openParens = (line.match(/\(/g) || []).length
     const closeParens = (line.match(/\)/g) || []).length
     if (openParens > closeParens) {

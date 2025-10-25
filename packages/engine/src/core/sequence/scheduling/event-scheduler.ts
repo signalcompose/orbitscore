@@ -135,6 +135,11 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
   const elapsedTime = fromTime - (loopStartTime || 0)
   const currentIteration = Math.floor(elapsedTime / patternDuration)
 
+  // Debug logging to understand scheduling behavior
+  console.log(
+    `🔧 [scheduleFromTime] ${sequenceName}: fromTime=${fromTime}ms, loopStartTime=${loopStartTime}ms, elapsed=${elapsedTime}ms, iteration=${currentIteration}, patternDur=${patternDuration}ms`,
+  )
+
   // Schedule remaining events in current iteration + next iteration
   for (let iter = currentIteration; iter < currentIteration + 2; iter++) {
     const loopOffset = iter * patternDuration
@@ -146,8 +151,15 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
 
         // Skip events that are in the past
         if (startTimeMs <= fromTime) {
+          console.log(
+            `🔧 [scheduleFromTime] ${sequenceName}: SKIP past event at ${startTimeMs}ms (fromTime=${fromTime}ms)`,
+          )
           continue
         }
+
+        console.log(
+          `🔧 [scheduleFromTime] ${sequenceName}: SCHEDULE event at ${startTimeMs}ms (fromTime=${fromTime}ms)`,
+        )
 
         // Calculate final gain using helper function
         const finalGainDb = calculateEventGain(gainDb, gainRandom, masterGainDb, isMuted)

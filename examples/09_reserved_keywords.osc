@@ -6,26 +6,27 @@
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
+global.audioPath("../test-assets/audio")
 
 // Create sequences
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
-kick.audio("../test-assets/audio/kick.wav")
+kick.audio("kick.wav")
 kick.play(1, 0, 1, 0)
 
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
-snare.audio("../test-assets/audio/snare.wav")
+snare.audio("snare.wav")
 snare.play(0, 1, 0, 1)
 
 var hihat = init global.seq
 hihat.beat(4 by 4).length(1)
-hihat.audio("../test-assets/audio/hihat.wav")
+hihat.audio("hihat.wav")
 hihat.play(1, 1, 1, 1)
 
 var bass = init global.seq
 bass.beat(4 by 4).length(2)
-bass.audio("../test-assets/audio/bass.wav").chop(8)
+bass.audio("bass.wav").chop(8)
 bass.play(1, 0, 3, 0, 1, 0, 5, 0)
 
 // Start the global transport
@@ -41,15 +42,15 @@ RUN(bass)
 STOP(hihat)
 
 // Loop kick and snare
+LOOP(kick, snare, hihat)
 LOOP(kick, snare)
-
+LOOP()
 // Mute snare temporarily
 MUTE(snare)
-
+MUTE()
 // Multiline syntax (useful for live coding)
 RUN(
   kick,
   snare,
   hihat,
-  bass,
 )

@@ -48,6 +48,60 @@ export class EventScheduler {
   }
 
   /**
+   * Calculate slice position and duration.
+   */
+  private calculateSlicePosition(
+    filepath: string,
+    sliceIndex: number,
+    totalSlices: number,
+  ): { sliceDuration: number; startPos: number; totalDuration: number } {
+    const totalDuration = this.bufferManager.getAudioDuration(filepath)
+    const sliceDuration = totalDuration / totalSlices
+    // sliceIndex is 1-based from DSL, convert to 0-based
+    const startPos = (sliceIndex - 1) * sliceDuration
+
+    // Debug log for slice positioning (only in debug mode)
+    if (process.env.ORBITSCORE_DEBUG) {
+      console.log(
+        `🔍 Slice debug: filepath=${filepath}, duration=${totalDuration}, sliceIndex=${sliceIndex}, totalSlices=${totalSlices}, sliceDuration=${sliceDuration}, startPos=${startPos}`,
+      )
+    }
+
+    return { sliceDuration, startPos, totalDuration }
+  }
+
+  /**
+   * Calculate playback rate to fit slice into event duration.
+   * rate = actual slice duration / desired event duration
+   * If eventDurationMs is undefined or 0, use natural rate (1.0)
+   */
+  private calculatePlaybackRate(
+    sliceDurationSec: number,
+    eventDurationMs: number | undefined,
+  ): number {
+    if (!eventDurationMs || eventDurationMs <= 0) {
+      return 1.0
+    }
+    return (sliceDurationSec * 1000) / eventDurationMs
+  }
+
+  /**
+   * Add scheduled play to the queue and track sequence events.
+   */
+  private addToScheduledPlays(play: ScheduledPlay): void {
+    this.scheduledPlays.push(play)
+    this.scheduledPlays.sort((a, b) => a.time - b.time)
+
+    // Track sequence events
+    if (play.sequenceName) {
+      if (!this.sequenceEvents.has(play.sequenceName)) {
+        this.sequenceEvents.set(play.sequenceName, [])
+      }
+      this.sequenceEvents.get(play.sequenceName)!.push(play)
+    }
+  }
+
+  /**
    * スライスイベントをスケジュール（chop用）
    */
   scheduleSliceEvent(
@@ -60,27 +114,12 @@ export class EventScheduler {
     pan = 0,
     sequenceName = '',
   ): void {
-    const duration = this.bufferManager.getAudioDuration(filepath)
-    const sliceDuration = duration / totalSlices
-    // sliceIndex is 1-based from DSL, convert to 0-based
-    const startPos = (sliceIndex - 1) * sliceDuration
-
-    // Debug log for slice positioning (only in debug mode)
-    if (process.env.ORBITSCORE_DEBUG) {
-      console.log(
-        `🔍 Slice debug: filepath=${filepath}, duration=${duration}, sliceIndex=${sliceIndex}, totalSlices=${totalSlices}, sliceDuration=${sliceDuration}, startPos=${startPos}`,
-      )
-    }
-
-    // Calculate playback rate to fit slice into event duration
-    // rate = actual slice duration / desired event duration
-    // If eventDurationMs is undefined or 0, use natural rate (1.0)
-    // If slice is shorter than event, we need to slow down (rate < 1.0) to stretch it
-    // If slice is longer than event, we need to speed up (rate > 1.0) to compress it
-    let rate = 1.0
-    if (eventDurationMs && eventDurationMs > 0) {
-      rate = (sliceDuration * 1000) / eventDurationMs
-    }
+    const { sliceDuration, startPos } = this.calculateSlicePosition(
+      filepath,
+      sliceIndex,
+      totalSlices,
+    )
+    const rate = this.calculatePlaybackRate(sliceDuration, eventDurationMs)
 
     const play: ScheduledPlay = {
       time: startTimeMs,
@@ -95,16 +134,7 @@ export class EventScheduler {
       sequenceName,
     }
 
-    this.scheduledPlays.push(play)
-    this.scheduledPlays.sort((a, b) => a.time - b.time)
-
-    // Track sequence events
-    if (sequenceName) {
-      if (!this.sequenceEvents.has(sequenceName)) {
-        this.sequenceEvents.set(sequenceName, [])
-      }
-      this.sequenceEvents.get(sequenceName)!.push(play)
-    }
+    this.addToScheduledPlays(play)
   }
 
   /**
@@ -127,6 +157,16 @@ export class EventScheduler {
 
       while (this.scheduledPlays.length > 0 && this.scheduledPlays[0].time <= now) {
         const play = this.scheduledPlays.shift()!
+
+        // Skip if this sequence's events have been cleared
+        // (sequenceEvents.has() returns false if clearSequenceEvents() was called)
+        if (play.sequenceName && !this.sequenceEvents.has(play.sequenceName)) {
+          console.log(
+            `🔧 [skip cleared] ${play.sequenceName}: skipping event at ${play.time}ms (cleared)`,
+          )
+          continue
+        }
+
         // Execute playback asynchronously but handle errors
         this.executePlayback(play.filepath, play.options, play.sequenceName, play.time).catch(
           (error) => {
@@ -163,13 +203,35 @@ export class EventScheduler {
    */
   clearSequenceEvents(sequenceName: string): void {
     const beforeCount = this.scheduledPlays.length
+
+    // Log events that will be cleared
+    const eventsToRemove = this.scheduledPlays.filter((play) => play.sequenceName === sequenceName)
+    if (eventsToRemove.length > 0) {
+      console.log(
+        `🔧 [clearEvents] ${sequenceName}: removing events at times: ${eventsToRemove.map((e) => e.time).join(', ')}ms`,
+      )
+    }
+
     this.scheduledPlays = this.scheduledPlays.filter((play) => play.sequenceName !== sequenceName)
     const afterCount = this.scheduledPlays.length
     const cleared = beforeCount - afterCount
+    console.log(
+      `🔧 [clearEvents] ${sequenceName}: cleared ${cleared} events (${beforeCount} → ${afterCount})`,
+    )
     if (cleared > 0) {
       console.log(`⏹ ${sequenceName} (stopped)`)
     }
+    // Delete from Map so that any events still in scheduledPlays will be skipped
     this.sequenceEvents.delete(sequenceName)
+  }
+
+  /**
+   * シーケンスのイベントトラッキングを再初期化
+   * unmute()後に新しいイベントをスケジュールする前に呼び出す
+   */
+  reinitializeSequenceTracking(sequenceName: string): void {
+    this.sequenceEvents.set(sequenceName, [])
+    console.log(`🔧 [reinit] ${sequenceName}: tracking reinitialized`)
   }
 
   /**
@@ -181,6 +243,29 @@ export class EventScheduler {
     sequenceName: string,
     scheduledTime: number,
   ): Promise<void> {
+    // Only perform checks if sequenceName is provided (non-empty)
+    if (sequenceName) {
+      const now = Date.now() - this.startTime
+      const drift = now - scheduledTime
+
+      // Double-check: Skip if sequence was cleared while waiting in async queue
+      if (!this.sequenceEvents.has(sequenceName)) {
+        console.log(
+          `🔧 [skip in exec] ${sequenceName}: skipping event at ${scheduledTime}ms (cleared during async wait)`,
+        )
+        return
+      }
+
+      // Skip events with excessive drift (> 1000ms)
+      // These are likely old events that should have been cleared
+      if (drift > 1000) {
+        console.log(
+          `🔧 [skip drift] ${sequenceName}: skipping event at ${scheduledTime}ms (drift: ${drift}ms > 1000ms)`,
+        )
+        return
+      }
+    }
+
     this.logPlaybackDebugInfo(sequenceName, scheduledTime)
     const { bufnum } = await this.bufferManager.loadBuffer(filepath)
     const amplitude = this.convertGainToAmplitude(options.gainDb)

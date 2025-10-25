@@ -1,0 +1,61 @@
+// OrbitScore Audio Test 09: Integration Test
+// Tests: Multi-track synchronization, tempo changes, live coding simulation
+
+var global = init GLOBAL
+
+// Create drum kit
+var kick = init global.seq
+var snare = init global.seq
+var hihat = init global.seq
+var clap = init global.seq
+
+// Load audio
+kick.audio("kick.wav")
+snare.audio("snare.wav")
+hihat.audio("hihat.wav")
+clap.audio("clap.wav")
+
+// Set patterns
+kick.play(1, 0, 0, 0)
+snare.play(0, 1, 0, 1)
+hihat.play(1, 1, 1, 1)
+clap.play(0, 0, 1, 0)
+
+// Set gains for balance
+kick.gain(0)
+snare.gain(-3)
+hihat.gain(-6)
+clap.gain(-3)
+
+// Pan for stereo field
+kick.pan(0)
+snare.pan(-30)
+hihat.pan(30)
+clap.pan(0)
+
+// Start at 100 BPM
+global.tempo(100)
+global.start()
+
+// 9-1: Multi-track sync test
+LOOP(kick, snare, hihat)
+
+// 9-2: Tempo change during playback
+// global._tempo(140)
+
+// 9-3: RUN/LOOP/MUTE complex interaction
+// RUN(clap)
+// MUTE(hihat)
+// LOOP(kick, snare, hihat, clap)
+
+// 9-4: Live coding simulation - pattern changes
+// hihat._play(1, 0, 1, 0, 1, 0, 1, 0)
+// kick._play(1, 0, 1, 0)
+// snare._play(0, 0, 1, 0)
+
+// Expected:
+// - All tracks perfectly synchronized
+// - Tempo change affects all tracks simultaneously
+// - MUTE/UNMUTE works without glitches
+// - Pattern changes are seamless (no audio dropouts)
+// - Stereo field is balanced and clear

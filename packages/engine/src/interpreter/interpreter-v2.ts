@@ -55,8 +55,13 @@ export class InterpreterV2 {
 
   /**
    * Execute parsed IR
+   * @param ir - Parsed intermediate representation
+   * @param options - Execution options
+   * @param options.skipTransportCommands - If true, skip RUN/LOOP/MUTE commands (used on file save)
    */
-  async execute(ir: AudioIR): Promise<void> {
+  async execute(ir: AudioIR, options?: { skipTransportCommands?: boolean }): Promise<void> {
+    const skipTransport = options?.skipTransportCommands ?? false
+
     // Ensure SuperCollider is booted
     await this.ensureBooted()
 
@@ -72,6 +77,10 @@ export class InterpreterV2 {
 
     // Process statements
     for (const statement of ir.statements) {
+      // Skip transport commands if requested (e.g., on file save)
+      if (skipTransport && statement.type === 'transport') {
+        continue
+      }
       await processStatement(statement, this.state)
     }
   }

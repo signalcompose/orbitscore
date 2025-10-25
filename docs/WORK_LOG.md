@@ -17,6 +17,410 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.37 Documentation: CLAUDE.md簡潔化とプロジェクト計画ドキュメント追加 (October 11, 2025)
+
+**Date**: October 11, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: N/A（ドキュメント整理）
+**Commits**: `c06b41d`
+
+**Work Content**: CLAUDE.mdの大幅な簡潔化を実施し、詳細は`/docs`配下を参照する構造に変更。また、P2P協調機能とElectronアプリの計画ドキュメントを追加。
+
+#### 背景
+
+CLAUDE.mdが冗長化し、重要な情報が埋もれる状態になっていた。プロジェクトルールの詳細は既に`docs/PROJECT_RULES.md`に記載されているため、CLAUDE.mdは「クイックリファレンス」と「必須手順」のみに絞り、詳細はdocsへ誘導する構造が適切。
+
+また、将来的な機能開発（P2P協調機能、Electronアプリ）の計画が議論されたため、これらをドキュメント化してプロジェクトの方向性を明確化する必要があった。
+
+#### 実施した変更
+
+**1. CLAUDE.md簡潔化 ✅**
+
+主な変更：
+- **冗長な説明を削除**: コミュニケーションルール、詳細なGitワークフローなどを削除
+- **docsへの参照を強化**: 詳細は`docs/PROJECT_RULES.md`等を参照するよう誘導
+- **構造を整理**:
+  - セッション開始時の必須アクション（ステップ1-4）
+  - Quick Reference（プロジェクト概要、開発コマンド、技術スタック）
+  - Implementation Workflow（ワークフロー、チェックリスト）
+  - Git Workflow Summary
+  - Documentation Reference Priority
+  - Additional Resources（docsへのリンク集）
+
+削除した主なセクション：
+- 🗣️ コミュニケーションルール（PROJECT_RULES.mdに記載済み）
+- 詳細なGitワークフロー説明（PROJECT_RULES.mdに記載済み）
+- 開発コマンドの詳細（README.mdやPROJECT_RULES.mdに記載済み）
+- テスト戦略の詳細（PROJECT_RULES.mdに記載済み）
+
+**2. プロジェクト計画ドキュメント追加 ✅**
+
+新規追加したドキュメント：
+- `docs/COLLABORATION_FEATURE_PLAN.md` - P2P協調ライブコーディング機能の詳細計画
+  - WebRTC P2P接続、CRDT同期、ホストマイグレーション、音声制御など
+  - 推定工数: 6-7週間（7フェーズ）
+- `docs/ELECTRON_APP_PLAN.md` - Electronアプリ版OrbitScoreの計画（未作成の場合）
+
+**3. .gitignore修正 ✅**
+
+`.claude/settings.local.json`の除外ルールを削除（不要なエントリ）。
+
+**4. tmpファイル更新 ✅**
+
+`tmp/github-issue-body.md`に空行を追加（末尾の整形）。
+
+#### 理由
+
+- **可読性向上**: CLAUDE.mdが簡潔になり、重要な情報（セッション開始手順、ワークフロー）が見つけやすくなる
+- **保守性向上**: 詳細情報は適切なドキュメントに集約され、重複を削減
+- **プロジェクト方向性の明確化**: 将来的な機能開発の計画を文書化し、優先順位付けを支援
+
+#### 影響範囲
+
+**変更ファイル:**
+- `CLAUDE.md` - 大幅な簡潔化（約370行 → 約260行）
+- `.gitignore` - 不要なエントリ削除
+- `tmp/github-issue-body.md` - 整形
+- `docs/COLLABORATION_FEATURE_PLAN.md` - 新規追加
+- `docs/ELECTRON_APP_PLAN.md` - 新規追加
+
+**影響:**
+- AIエージェントのセッション開始がより明確になる
+- ドキュメントの階層構造が整理される
+- 将来の機能開発の方向性が明確になる
+
+---
+
+### 6.36 Configuration: hooks shellスクリプト内のSerenaメモリ参照を抽象化 (October 11, 2025)
+
+**Date**: October 11, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: N/A（軽微な修正）
+**Commits**: `de726bc`
+
+**Work Content**: Issue #63の抜け漏れ修正。`.claude/hooks/`配下のshellスクリプト内に残っていた具体的なSerenaメモリ参照を抽象化。
+
+#### 背景
+
+Issue #63でドキュメント内の具体的なSerenaメモリ参照を抽象化したが、`.claude/hooks/`配下のshellスクリプト内に具体的なメモリ名（`project_overview`, `current_issues`）が残っていることが判明。
+
+#### 実施した変更
+
+**1. session-start.sh修正 ✅**
+
+変更前：
+```
+- 特に `project_overview`, `current_issues` を確認
+```
+
+変更後：
+```
+- 必要に応じてread_memoryで読み込む
+```
+
+**2. post-compact.sh修正 ✅**
+
+変更前：
+```
+- 特に `project_overview`, `current_issues` を確認
+```
+
+変更後：
+```
+- 必要に応じてread_memoryで読み込む
+```
+
+#### 理由
+
+- Issue #63で確立したドキュメント記述ポリシーに準拠
+- shellスクリプトとドキュメントの一貫性を保証
+- 各開発者が独自のメモリ構成を持つ環境に対応
+
+#### 影響範囲
+
+**変更ファイル:**
+- `.claude/hooks/session-start.sh`
+- `.claude/hooks/post-compact.sh`
+
+---
+
+### 6.35 Configuration: Serenaメモリを個人環境に移行 (October 11, 2025)
+
+**Date**: October 11, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `63-serena-memory-migration`
+**Issue**: #63
+**Commits**: `[PENDING]`
+
+**Work Content**: チーム開発でのマージコンフリクトを防ぐため、Serenaメモリを個人環境に移行し、ドキュメント内の具体的なメモリ参照を抽象化。
+
+#### 背景
+
+チーム開発を想定した場合、`.serena/memories/`配下の29個のメモリファイルがGit管理されていると、各開発者のコンテキスト（作業中のIssue、実装状況、技術的決定事項など）が異なるため、激しいマージコンフリクトが発生する懸念があった。
+
+また、ドキュメント内で具体的なメモリファイル名（例: `current_issues.md`, `project_overview.md`）を参照していたが、これは各開発者が独自にSerenaオンボーディングを実行した場合、メモリの構成や命名が異なる可能性があり、ドキュメントの汎用性を損なう問題があった。
+
+#### 実施した変更
+
+**1. Git管理からSerenaメモリを除外 ✅**
+
+`.gitignore`に以下を追加：
+```gitignore
+# Serena - 各開発者が個別にオンボーディング
+.serena/
+
+# Claude Code local settings
+.claude/settings.local.json
+```
+
+`git rm --cached -r .serena/`を実行し、29ファイルをGit追跡から除外。ローカルファイルは保持。
+
+**2. ドキュメントの抽象化 ✅**
+
+具体的なメモリファイル名への参照を削除し、Serenaツールの使い方のみを記述するよう変更：
+
+**CLAUDE.md**:
+- 「⚠️ COMPACTING CONVERSATION後の必須手順」セクション:
+  - `mcp__serena__read_memory("current_issues")` → 削除
+  - `mcp__serena__read_memory("project_overview")` → 削除
+  - 抽象的な指示に変更: "Serenaを使って現在の状況を確認 (list_memories → read_memory)"
+- 「Serenaメモリのコミットルール」セクション: 完全削除（メモリはGit管理外のため不要）
+- Additional Resources: `.serena/memories/`への言及を削除
+
+**docs/PROJECT_RULES.md**:
+- 「🧠 Serena Memory Management」セクション（679-772行）: 完全削除
+- "Session Continuity"セクション: 具体的なメモリ名を削除し、抽象的な指示に変更
+- "Checklist Before Committing": `[ ] Serenaを使って重要な変更を保存 (必要に応じて)` に簡素化
+- Traditional Workflowの各ステップ: `.serena/memories/*.md`への参照を削除
+
+**docs/INDEX.md**:
+- "Serena Memory"セクションを"Serenaツール"に変更
+- 具体的なメモリファイル名を削除し、`list_memories`と`read_memory`の使い方のみ記述
+
+**.claude/hooks/session-start.md**:
+- 実行手順から具体的なメモリ名を削除
+- "Serenaを使って現在の状況を確認 (list_memories → read_memory)" に変更
+
+**.claude/hooks/README.md**:
+- SessionStart Hook実行内容を抽象化
+- 具体的なメモリ名を削除
+
+#### ドキュメント記述ポリシー
+
+今後、Serenaに関するドキュメント記述は以下のポリシーに従う：
+
+**✅ 記述してよいもの:**
+1. Serena自体を使うという宣言
+2. Serenaがアクティブになった時に使えるコマンド（`list_memories`, `read_memory`, `write_memory`など）
+
+**❌ 記述してはいけないもの:**
+- 具体的なメモリファイル名（`current_issues.md`, `project_overview.md`など）
+- メモリの具体的な内容や構造
+
+**理由:**
+- `.serena/`ファイルは各開発者のClaude+Serenaが生成するため、内容が開発者ごとに異なる
+- ドキュメントは「使い方」を示すべきで、「具体的な実装」に依存すべきでない
+- コマンドは共通のため、指定可能
+
+#### 理由
+
+**チーム開発での利点:**
+- メモリファイルのマージコンフリクトを完全に回避
+- 各開発者が独自のコンテキストを維持可能
+- `.claude/settings.local.json`も除外し、個人設定の分離を実現
+
+**ドキュメントの汎用性向上:**
+- メモリ構成が異なる環境でも適用可能
+- 新規開発者がオンボーディング時に混乱しない
+- ツールの使い方に焦点を当てることで、より教育的
+
+#### 技術的決定事項
+
+- `.serena/`全体を`.gitignore`（`memories/`だけでなく`cache/`や`project.yml`も含む）
+- 各開発者は初回セットアップ時に`claude mcp add serena ...`とSerenaオンボーディングを実行
+- ドキュメントはツールの「使い方」を示し、具体的な「実装」には言及しない方針
+- `.claude/settings.local.json`もGit管理外とし、個人設定を分離
+
+#### ワークフロー変更
+
+従来: プロジェクトに`.serena/memories/`がコミットされており、新規開発者はそれを継承
+
+新規: 各開発者が独自にSerenaオンボーディングを実行し、独自のメモリを構築
+
+#### 影響範囲
+
+**変更ファイル:**
+- `.gitignore` (2行追加)
+- `CLAUDE.md` (3箇所の抽象化、1セクション削除)
+- `docs/PROJECT_RULES.md` (1セクション完全削除、3箇所の簡素化)
+- `docs/INDEX.md` (1セクションの抽象化)
+- `.claude/hooks/session-start.md` (1箇所の抽象化)
+- `.claude/hooks/README.md` (1箇所の抽象化)
+
+**Git管理から除外:**
+- `.serena/` (29ファイル)
+
+**既存の`.serena/`ファイル:**
+- ローカルには保持（各開発者は自分のメモリを引き続き使用可能）
+
+---
+
+### 6.34 Documentation: CLAUDE.mdにコミュニケーションルール追加 (October 10, 2025)
+
+**Date**: October 10, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: #61
+**Commits**: `512105d`
+
+**Work Content**: CLAUDE.mdにプロジェクトのコミュニケーションルール（言語ポリシー）を明記。
+
+#### 背景
+
+プロジェクトには「ユーザーは英語でも日本語でも指示可能、AIは日本語で返答、Issue/Commit/PRは日本語で記述」というルールが存在していたが、CLAUDE.mdに明記されていなかった。そのため、直近のコミットメッセージが英語で記述されるという問題が発生。
+
+#### 実施した変更
+
+**CLAUDE.md更新 ✅**
+
+新規セクション「🗣️ コミュニケーションルール」を追加：
+
+1. **言語ポリシー**:
+   - ユーザーは英語でも日本語でも指示可能
+   - AIは常に日本語で返答（UTF-8エンコーディング）
+   - ユーザーの英語が長文の場合、文法チェックと改善例を提供
+
+2. **Issue/Commit/PR**:
+   - Issue: タイトル・本文ともに日本語
+   - Commit: タイトル・本文ともに日本語（type prefixのみ英語）
+     - 例: `feat: オーディオ録音機能を追加`
+   - PR: タイトル・本文ともに日本語
+   - ブランチ名のみ英語（ツール互換性のため）
+
+3. **PR作成例を更新**:
+   - 日本語での記述例を追加
+   - `Closes #<issue-number>` を含める例を明示
+
+#### 理由
+
+- プロジェクトは日本語話者向け
+- コミット履歴・Issue履歴を日本語で統一
+- 論文・ドキュメントでの引用が容易
+- ルールの明文化により、今後の一貫性を保証
+
+#### 既存コミットの扱い
+
+直近の英語コミット（`e54615a`, `937d428`）はそのまま保持し、今後のコミットから日本語で記述する方針。
+
+#### 技術的決定事項
+
+- ルールは `docs/PROJECT_RULES.md` に既存だったが、CLAUDE.mdにも明記することで可視性向上
+- ブランチ名は英語のまま（Git/GitHub toolsの互換性のため）
+
+---
+
+### 6.33 Refactoring: Code Quality Improvement + Test File Creation (October 10, 2025)
+
+**Date**: October 10, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: #61
+**Commits**: `e54615a`
+
+**Work Content**: 50行超の長い関数をリファクタリングし、AUDIO_TEST_CHECKLIST.mdに基づいた実音出しテスト用.oscファイルを作成。
+
+#### 背景
+
+Issue #61（実音出しテスト準備）の一環として、コードベースの品質向上とテスト環境整備を実施。PROJECT_RULES.mdに従い、50行を超える関数を複数のヘルパー関数に分割し、可読性・保守性を向上させた。
+
+#### リファクタリング実施内容
+
+**1. Engine Package (`packages/engine/src/`)**
+
+- **`interpreter/process-statement.ts`**: ✅
+  - `handleLoopCommand` (67行): 5つのヘルパー関数に分割
+    - `validateSequences()`: シーケンス検証
+    - `calculateLoopDiff()`: 差分計算
+    - `stopSequences()`: 停止処理
+    - `startSequencesWithMute()`: ミュート適用付き開始
+    - `updateMuteState()`: ミュート状態更新
+  - `processTransportStatement` (61行): 2つのヘルパー関数に分割
+    - `handleReservedKeywordCommand()`: 予約語コマンド処理
+    - `handleGlobalTransportCommand()`: グローバルコマンド処理
+
+- **`audio/supercollider/event-scheduler.ts`**: ✅
+  - `EventScheduler.scheduleSliceEvent` (56行): 3つのヘルパーメソッドに分割
+    - `calculateSlicePosition()`: スライス位置計算
+    - `calculatePlaybackRate()`: 再生速度計算
+    - `addToScheduledPlays()`: イベント追加処理
+
+**2. VSCode Extension Package (`packages/vscode-extension/src/`)**
+
+- **`extension.ts`**: ✅
+  - `startEngine` (230行 → 60行): 7つのヘルパー関数に分割
+    - `getEnginePath()`: エンジンパス決定
+    - `showEngineBuildTime()`: ビルド時刻表示
+    - `loadAudioDeviceConfig()`: オーディオデバイス設定読み込み
+    - `shouldFilterLine()`: ログフィルタ判定
+    - `filterStdout()`: 標準出力フィルタ
+    - `setupStdoutHandler()`: 標準出力ハンドラ設定
+    - `setupStderrHandler()`: 標準エラーハンドラ設定
+    - `setupExitHandler()`: 終了ハンドラ設定
+
+**リファクタリング結果**:
+- 4つの長い関数を合計17個のヘルパー関数/メソッドに分割
+- 可読性向上、単一責任原則（SRP）の徹底
+- テストカバレッジ向上の基盤確立
+
+#### テスト実行結果
+
+```bash
+npm test
+```
+
+**結果**: ✅ 全テストパス
+- Test Files: 14 passed | 2 skipped (16)
+- Tests: **225 passed** | 23 skipped (248 total) = **90.7%**
+- リファクタリング後も全機能が正常動作
+
+#### テストファイル作成
+
+`test-audio/` ディレクトリに実音出しテスト用.oscファイルを作成：
+
+1. **`01_initialization.osc`**: 初期化テスト
+   - グローバルコンテキスト、シーケンス作成
+2. **`02_global_params.osc`**: グローバルパラメータテスト
+   - テンポ、拍子設定
+3. **`05_transport_commands.osc`**: トランスポートコマンドテスト (DSL v3.0)
+   - RUN(), LOOP(), MUTE() 予約語テスト
+4. **`07_underscore_prefix.osc`**: アンダースコアプレフィックステスト (DSL v3.0)
+   - バッファ vs 即時適用の動作確認
+5. **`09_integration.osc`**: 統合テスト
+   - マルチトラック同期、ライブコーディングシミュレーション
+
+**目的**: ユーザーによる実音出しテスト環境の整備
+
+#### 技術的決定事項
+
+1. **リファクタリング基準**: 50行を超える関数は分割対象
+2. **ヘルパー関数命名**: 動詞で開始、明確な責務を反映
+3. **テストファイル構成**: AUDIO_TEST_CHECKLIST.mdの構造に準拠
+4. **コメント**: 各テストファイルに期待される動作を明記
+
+#### 今後の作業
+
+- [ ] ユーザーによる実音出しテスト実行
+- [ ] 音質・タイミング確認（0-3ms以内）
+- [ ] 発見した問題のIssue化
+- [ ] 残りの長い関数のリファクタリング（必要に応じて）
+  - `getContextualCompletions` (101行) - 優先度: 低
+  - `runSelection` (99行) - 優先度: 低
+  - `activate` (67行) - 優先度: 低
+
+---
+
 ### 6.32 Documentation: WORK_LOG日付修正とSerenaメモリ整理 (October 10, 2025)
 
 **Date**: October 10, 2025
