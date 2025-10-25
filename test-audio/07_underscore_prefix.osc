@@ -1,0 +1,35 @@
+// OrbitScore Audio Test 07: Underscore Prefix Pattern (DSL v3.0)
+// Tests: Buffered vs immediate application
+
+var global = init GLOBAL
+var seq = init global.seq
+
+seq.audio("kick.wav")
+seq.chop(4)
+seq.play(1, 2, 3, 4)
+
+global.tempo(120)
+global.start()
+
+// 7-1-1: audio() vs _audio() - Buffered vs immediate
+seq.audio("snare.wav")  // Buffered - no playback triggered
+// seq._audio("snare.wav") // Immediate - triggers playback if already looping
+
+// 7-1-2: chop() vs _chop() - Buffered vs immediate
+seq.chop(8)  // Buffered - takes effect on next RUN/LOOP
+// seq._chop(8) // Immediate - re-triggers playback with new slicing
+
+// 7-1-3: play() vs _play() - Buffered vs immediate
+seq.play(4, 3, 2, 1)  // Buffered
+// seq._play(4, 3, 2, 1) // Immediate - seamless pattern update during LOOP
+
+// Start looping
+LOOP(seq)
+
+// Now try immediate updates while looping
+// seq._play(1, 0, 2, 0, 3, 0, 4, 0)
+
+// Expected:
+// - Methods without _ buffer changes
+// - Methods with _ apply immediately and retrigger/update
+// - No glitches during seamless updates

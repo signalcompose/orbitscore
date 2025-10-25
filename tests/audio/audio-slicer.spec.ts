@@ -2,16 +2,28 @@
  * Tests for AudioSlicer - file slicing functionality
  */
 
-import * as fs from 'fs'
-import * as os from 'os'
-
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-import { AudioSlicer } from '../../packages/engine/src/audio/audio-slicer'
+// Mock fs and os BEFORE importing AudioSlicer
+vi.mock('fs', () => ({
+  readFileSync: vi.fn(),
+  writeFileSync: vi.fn(),
+  existsSync: vi.fn(),
+  mkdirSync: vi.fn(),
+  readdirSync: vi.fn(),
+  unlinkSync: vi.fn(),
+  statSync: vi.fn(),
+  rmSync: vi.fn(),
+}))
 
-// Mock fs and os
-vi.mock('fs')
-vi.mock('os')
+vi.mock('os', () => ({
+  tmpdir: vi.fn(() => '/tmp'),
+}))
+
+import * as os from 'os'
+import * as fs from 'fs'
+
+import { AudioSlicer } from '../../packages/engine/src/audio/audio-slicer'
 
 // Mock wavefile with inline class definition to avoid hoisting issues
 vi.mock('wavefile', () => ({
@@ -69,9 +81,12 @@ describe('AudioSlicer', () => {
     // Mock file operations
     mockFs.readFileSync.mockReturnValue(Buffer.from('mock-wav-data'))
     mockFs.writeFileSync.mockImplementation(() => {})
-    mockFs.existsSync.mockReturnValue(true)
-    mockFs.readdirSync.mockReturnValue(['slice1.wav', 'slice2.wav'] as any)
+    mockFs.existsSync.mockReturnValue(false) // Instance directory doesn't exist yet
+    mockFs.mkdirSync = vi.fn() // Mock directory creation
+    mockFs.readdirSync.mockReturnValue([])
     mockFs.unlinkSync.mockImplementation(() => {})
+    mockFs.statSync = vi.fn().mockReturnValue({ isDirectory: () => true, mtimeMs: Date.now() })
+    mockFs.rmSync = vi.fn() // Mock directory removal
 
     slicer = new AudioSlicer()
   })
@@ -103,20 +118,18 @@ describe('AudioSlicer', () => {
       // Should create 4 slice files
       expect(mockFs.writeFileSync).toHaveBeenCalledTimes(4)
 
-      // Check file paths
-      const expectedPaths = [
-        '/tmp/test_slice1_of_4.wav',
-        '/tmp/test_slice2_of_4.wav',
-        '/tmp/test_slice3_of_4.wav',
-        '/tmp/test_slice4_of_4.wav',
+      // Check file paths - should be in instance directory
+      const expectedFilenames = [
+        'test_slice1_of_4.wav',
+        'test_slice2_of_4.wav',
+        'test_slice3_of_4.wav',
+        'test_slice4_of_4.wav',
       ]
 
-      expectedPaths.forEach((expectedPath, index) => {
-        expect(mockFs.writeFileSync).toHaveBeenNthCalledWith(
-          index + 1,
-          expectedPath,
-          Buffer.from('mock-wav-data'),
-        )
+      expectedFilenames.forEach((filename, index) => {
+        const call = mockFs.writeFileSync.mock.calls[index]
+        expect(call[0]).toMatch(new RegExp(`orbitscore_.*/${filename}$`))
+        expect(call[1]).toEqual(Buffer.from('mock-wav-data'))
       })
     })
 
@@ -169,7 +182,8 @@ describe('AudioSlicer', () => {
       // Then get slice filepath
       const slicePath = slicer.getSliceFilepath(filepath, divisions, 2)
 
-      expect(slicePath).toBe('/tmp/test_slice2_of_4.wav')
+      // Should be in instance directory
+      expect(slicePath).toMatch(/orbitscore_.*\/test_slice2_of_4\.wav$/)
     })
 
     it('should return null for non-existent slice', () => {
@@ -195,19 +209,24 @@ describe('AudioSlicer', () => {
   })
 
   describe('cleanup', () => {
-    it('should clean up temporary files', async () => {
+    it('should clean up temporary files and clear cache', async () => {
       const filepath = '/path/to/test.wav'
       const divisions = 4
 
       // Slice the file
       await slicer.sliceAudioFile(filepath, divisions)
 
-      // Cleanup
+      // Verify that slices are accessible before cleanup
+      const slicePathBefore = slicer.getSliceFilepath(filepath, divisions, 1)
+      expect(slicePathBefore).not.toBeNull()
+      expect(slicePathBefore).toContain('test_slice1_of_4.wav')
+
+      // Clean up temporary files and clear cache
       slicer.cleanup()
 
-      // Should clear cache
-      const slicePath = slicer.getSliceFilepath(filepath, divisions, 1)
-      expect(slicePath).toBeNull()
+      // After cleanup, cache should be cleared
+      const slicePathAfter = slicer.getSliceFilepath(filepath, divisions, 1)
+      expect(slicePathAfter).toBeNull()
     })
   })
 })

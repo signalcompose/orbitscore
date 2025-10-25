@@ -12,6 +12,35 @@
 - Include technical decisions and challenges
 - **MUST update README.md when WORK_LOG.md is updated** to keep project status current
 
+### 1a. WORK_LOG.md Archiving (アーカイブ管理)
+
+**When WORK_LOG.md exceeds ~2,000 lines or ~100KB, archive older sections:**
+
+- **Keep recent work** (latest 15-20 sections) in main `docs/WORK_LOG.md`
+- **Archive older sections** to `docs/archive/WORK_LOG_YYYY-MM.md` by month
+  - Example: `docs/archive/WORK_LOG_2025-09.md` for September 2025 work
+- **Add reference link** at the end of main WORK_LOG.md pointing to archived files
+- **Add header to archived file** with:
+  - Archive period (start date - end date)
+  - Link back to main WORK_LOG.md
+  - Clear indication this is an archived version
+
+**Purpose:**
+- Maintain readability of main WORK_LOG.md
+- Preserve complete development history for academic papers
+- Keep technical information accessible but organized
+- Reduce file size for better editor performance
+
+**Archive File Header Format:**
+```markdown
+# OrbitScore Development Work Log - [Month] [Year] Archive
+
+**Archive Period**: [Start Date] - [End Date]
+**Note**: This is an archived version of the work log. For recent work, see [../WORK_LOG.md](../WORK_LOG.md)
+
+---
+```
+
 ### 2. English Instruction Verification (英文チェック)
 
 **When the user provides instructions in English:**
@@ -45,6 +74,23 @@
   - Verify API usage and parameter formats
   - Only ask user after exhausting documentation resources
 
+**DSL Code Writing (DSLコード記述時の必須ルール):**
+
+- **BEFORE writing any `.osc` file or DSL code**: MUST read the relevant section in `docs/INSTRUCTION_ORBITSCORE_DSL.md`
+- **NEVER guess DSL syntax**: Always verify with specification first
+- **When creating examples or patterns**:
+  1. Check `examples/` directory for similar patterns
+  2. Read DSL specification for the methods you intend to use
+  3. Verify parameter order, types, and expected values
+  4. Understand what each method does (e.g., `beat()` sets time signature, NOT rhythm pattern)
+- **Common mistakes to avoid**:
+  - `beat()` is for time signature and **MUST use "n by m" notation** (e.g., `beat(4 by 4)` = 4/4)
+  - **NEVER use single argument** like `beat(4)` - this will cause an error
+  - This notation is essential for polymeter support where different time signatures create independent bar lengths
+  - Rhythm patterns are defined in `play()` (e.g., `play(1, 0, 0, 0)`)
+  - Don't invent new syntax or methods without checking specification
+- **Purpose**: Prevent syntax errors, save time, and maintain consistency with specification
+
 ### 4. Documentation First
 
 - Update relevant docs (README, IMPLEMENTATION_PLAN, etc.) with each change
@@ -57,6 +103,27 @@
 - Ensure all tests pass before committing
 - Golden files for regression testing
 
+**Testing Strategy:**
+
+1. **Automated Unit Tests** (CI環境で実行)
+   - パーサー、タイミング計算、オーディオスライサー等
+   - 高速実行、自動化可能
+   - リグレッション検出に有効
+
+2. **SuperCollider Integration Tests** (ローカル環境のみ)
+   - SuperColliderサーバー起動が必要
+   - CI環境ではスキップ (`describe.skipIf(process.env.CI === 'true')`)
+   - 数値計算ロジックは他のテストでカバー
+   - 例: `tests/audio/supercollider-gain-pan.spec.ts`
+
+3. **Audio Playback Tests** (将来実装予定)
+   - リファクタリング完了後に実装
+   - 実際に音を鳴らして期待通りの音が出ているか確認
+   - 音色、タイミング精度、エフェクト効果等をテスト
+   - 人間の耳による確認が必要
+
+**Note**: SuperCollider関連テストはCI環境で複雑なセットアップが必要（Xvfb、ダミーオーディオドライバ等）のため、ローカル環境での手動確認を推奨。
+
 ### 6. Tutorial and Example File Management
 
 **チュートリアルファイルの参照を必須とする:**
@@ -66,7 +133,7 @@
 - 特に以下を確認：
   - `var global = init GLOBAL` の初期化（`global`ではなく`GLOBAL`）
   - `.audio()` メソッド（`sample()`ではない）
-  - `global.run()` の呼び出しタイミング
+- `global.start()` の呼び出しタイミング
   - メソッドチェーンの正しい使い方
 - **目的**: 構文エラーや混乱を防ぎ、お互いの時間を節約する
 
@@ -87,29 +154,285 @@
 - If no response, ask again or wait
 - **Purpose**: Respect user's decision-making and avoid unwanted actions
 
+### 8. Tool Confirmation Policy (ツール確認ポリシー)
+
+**読み取り専用ツール（確認不要 - Read-only tools, no confirmation needed）:**
+
+- **Serena系すべて** - `find_symbol`, `find_referencing_symbols`, `search_for_pattern`, `get_symbols_overview`, `list_dir`, `find_file`, `read_memory`, `list_memories`
+- **ファイル読み取り** - `Read`, `Grep`, `Glob`, `LS`, `SemanticSearch`
+- **外部ドキュメント** - `Context7` (resolve-library-id, get-library-docs)
+- **Git情報取得** - `git status`, `git log`, `git diff` (読み取り専用)
+
+**書き込み・実行系ツール（確認必要 - Write/Execute tools, confirmation required）:**
+
+- **コード編集** - `StrReplace`, `MultiStrReplace`, `Write`, `Delete`
+- **Serena編集** - `replace_symbol_body`, `insert_after_symbol`, `insert_before_symbol`, `write_memory`, `delete_memory`
+- **Shell実行** - 特に破壊的操作 (rm, git push, npm publish など)
+- **Git操作** - `git commit`, `git push`, `gh pr create`
+
+**⚠️ 禁止事項（AIエージェントは実行してはいけない）:**
+
+- **PRのマージ** - `gh pr merge` は原則として実行しない
+  - ユーザーが「all check passed」を確認してからマージします
+  - AIエージェントはマージの準備（PR作成、レビュー対応）までを行い、マージ実行はユーザーに委ねます
+  - 理由: テスト結果、ビルド結果、BugBotのコメントなど、最終的な品質確認はユーザーが行うべき
+  - **例外**: ユーザーが明示的に「マージしてください」「マージをお願いします」と依頼した場合は実行可能
+- **ブランチの削除** - `git branch -d` や `gh pr merge --delete-branch` は原則として実行しない
+  - ブランチは履歴追跡のため保持します
+  - **例外**: ユーザーが明示的に「ブランチを削除してください」と依頼した場合は実行可能
+
+**理由:**
+
+- 読み取り専用ツールはプロジェクトに変更を加えないため、確認なしで実行しても安全
+- 書き込み・実行系ツールは意図しない変更を防ぐため、確認が必要
+- 作業効率と安全性のバランスを取る
+- **品質保証**: マージは最終的な品質確認を経てから実行されるべき
+
+**注意:** MCPツールの確認設定はCursor/エディタ側で管理されるため、このポリシーはAIエージェントとユーザー間の共通理解として機能する
+
 ## 📋 Development Workflow
 
-### For Each Phase:
+### Multi-Model Development Workflow (推奨)
+
+**役割分担による効率的な開発サイクル:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│ Phase X-Y リファクタリング/実装サイクル                      │
+└─────────────────────────────────────────────────────────┘
+
+1. 【実装担当: Auto (Sonnet 3.5)】
+   - Issue/ブランチ作成
+   - Serenaメモリ更新（進行中ステータス）
+   - コード実装
+   - テスト実行
+   - コミット
+   - PR作成（`Closes #<issue-number>`）
+   
+   ⚠️ 問題発生時（ループ/ハルシネーション/行き詰まり）
+   ↓ エスカレーション（ユーザー判断）
+   
+   【問題解決: Claude 4.5 Sonnet】
+   - 問題の分析と診断
+   - 解決策の提案と実装
+   - Autoに戻すための明確な指示を残す
+   - Serenaメモリに解決策を記録
+   
+   ↓ 解決後、Autoに戻る（ユーザー判断）
+   
+   【実装再開: Auto (Sonnet 3.5)】
+   - 4.5の指示とSerenaメモリを参照
+   - 実装を継続
+   ↓
+
+🔄 **【モデル切り替え依頼: Auto (Sonnet 3.5)】**
+   - 実装完了後、ユーザーに以下を依頼:
+     "実装が完了しました。評価・修正のためにClaude 4.5 Sonnetに切り替えてください。"
+   - ユーザーがCursorでモデルを4.5 Sonnetに切り替え
+   ↓
+
+2. 【評価・修正: Claude 4.5 Sonnet】
+   - コーディング規約チェック
+   - 設計パターン検証
+   - テスト結果確認
+   - リンターエラー修正
+   - 必要に応じて追加修正
+   - コミット（修正があった場合）
+   ↓
+
+3. 【レビュー: BugBot（自動）】
+   - PR上で自動レビュー実行
+   ↓
+
+4. 【レビュー受け渡し: ユーザー】
+   - BugBotのコメントを確認
+   - 必要に応じて以下のコマンドで取得:
+     gh pr view <PR番号> --comments
+   - レビュー内容を4.5 Sonnetに伝える
+   ↓
+
+5. 【レビュー対応: Claude 4.5 Sonnet】
+   - BugBotの指摘に対応
+   - 修正実装
+   - テスト実行
+   - コミット
+   ↓
+
+6. 【マージ: ユーザー】
+   - "all check passed"を確認
+   - マージ実行（squash）
+   ↓
+
+7. 【次フェーズ準備: Claude 4.5 Sonnet】
+   - Serenaメモリ更新（完了ステータス）
+   - 次のPhaseの準備
+   - セッション終了報告
+```
+
+**利点:**
+- ✅ **コスト効率**: 実装はSonnet 3.5、評価・レビュー対応はSonnet 4.5で最適化
+- ✅ **品質保証**: 複数段階のチェック（評価 → BugBot → レビュー対応）
+- ✅ **明確な役割分担**: 各ステップで責任が明確
+- ✅ **自動化**: BugBotが自動レビュー、Issueも自動クローズ
+- ✅ **エスカレーション**: 問題発生時に4.5 Sonnetが介入して解決
+
+**🔄 正常完了時のモデル切り替え依頼（Auto → 4.5 Sonnet）:**
+
+**Autoが実装を完了した場合、必ずユーザーに以下を依頼:**
+
+```
+✅ 実装が完了しました。
+
+次のステップ: 評価・修正のためにClaude 4.5 Sonnetに切り替えてください。
+
+【完了した作業】
+- Issue作成・ブランチ作成
+- コード実装
+- テスト実行（115 passed, 15 skipped）
+- コミット・PR作成
+
+【4.5 Sonnetで実行する作業】
+- コーディング規約チェック
+- 設計パターン検証
+- リンターエラー修正
+- 必要に応じて追加修正
+
+Cursorでモデルを4.5 Sonnetに切り替えてから、評価・修正を開始してください。
+```
+
+**🚨 エスカレーション判断基準（Auto → 4.5 Sonnet）:**
+
+**Autoが以下の状況を検出した場合、ユーザーに報告すべき:**
+
+1. **ループ検出**
+   - 同じエラーが3回以上繰り返される
+   - 同じ修正を何度も試している
+   - 進捗がないまま10回以上のツール呼び出し
+
+2. **ハルシネーション**
+   - 存在しないAPI/メソッドを使おうとする
+   - ドキュメントにない機能を実装しようとする
+   - Context7やSerenaで確認できない情報を使用
+
+3. **行き詰まり**
+   - テストが通らず原因が特定できない
+   - 複雑な設計判断が必要
+   - 複数の解決策があり選択が困難
+
+4. **仕様不明確**
+   - DSL仕様（`INSTRUCTION_ORBITSCORE_DSL.md`）に記載がない
+   - 設計パターンの選択が必要
+   - アーキテクチャレベルの判断が必要
+
+**エスカレーション時のAuto報告フォーマット:**
+```
+⚠️ エスカレーション推奨
+
+【問題】: [問題の簡潔な説明]
+【試行回数】: X回
+【試したこと】:
+- 試行1: [内容] → [結果]
+- 試行2: [内容] → [結果]
+【現在の状態】: [コードの状態、エラー内容]
+【判断が必要な点】: [何を決める必要があるか]
+
+4.5 Sonnetへのエスカレーションを推奨します。
+```
+
+**4.5 Sonnet解決後のハンドオフ:**
+
+**評価・修正完了後:**
+- Serenaメモリに評価結果を記録（`refactoring_plan`を更新）
+- 修正内容をコミット（修正があった場合）
+- ユーザーに「評価・修正完了」を報告
+- 次のPhaseの準備またはPRマージの準備
+
+**エスカレーション解決後:**
+- Serenaメモリに解決策を記録（`current_issues`または新規メモリ）
+- 明確な次のステップを文書化
+- Autoが参照できる形で指示を残す
+- ユーザーに「Auto (Sonnet 3.5)に戻してください」を依頼
+
+**補助ツール（オプション）:**
+```bash
+# BugBotレビュー取得を簡単にするエイリアス
+alias review-get='gh pr view --comments | grep -A 100 "bugbot"'
+```
+
+### Traditional Workflow (For Each Phase):
 
 1. Review IMPLEMENTATION_PLAN.md
 2. Create todo list
 3. Implement features
 4. Write/update tests
-5. **Update WORK_LOG.md**
+5. **Update WORK_LOG.md** (before committing, use `[PENDING]` for commit hash)
 6. **Update README.md** (sync with WORK_LOG.md status)
 7. Update other documentation
-8. **Update Serena memory** (important changes, issues, decisions)
-9. **Commit all changes including Serena memory files** (`.serena/memories/*.md`)
-10. **Add commit hash to WORK_LOG.md**
-11. **Commit the commit hash update**
+8. **Serenaを使って重要な変更を保存** (必要に応じて)
+9. **Update USER_MANUAL.md** (if user-facing changes)
+10. **Commit all changes including docs**
+11. **Get the commit hash** (`git rev-parse --short HEAD`) - this is the "実コミット"
+12. **Update WORK_LOG.md with the first commit hash** (replace `[PENDING]` with the hash from step 11)
+13. **Amend the commit** (`git add docs/WORK_LOG.md && git commit --amend --no-edit`)
 
-### Git Branch and PR Workflow:
+**Important**: 
+- Record the **first commit hash** (from step 11) in WORK_LOG.md, not the final amended hash
+- This hash represents the "actual commit" with all changes
+- The amend only adds the commit hash reference to WORK_LOG.md
+- This avoids infinite loop of updating hashes
+
+**Note**: With Git Workflow (feature branches + PRs), we commit everything together before pushing, then create PR for review.
+
+### Git Workflow and Branch Protection:
 
 **CRITICAL: Always create a feature branch before starting work**
 
+**Branch Structure:**
+- `main` - Production-ready code (protected)
+- `develop` - Integration branch (protected)
+- `feature/*` - Feature development branches
+- `fix/*` - Bug fix branches
+- `refactor/*` - Refactoring branches
+- `docs/*` - Documentation only changes
+- `test/*` - Test additions/fixes
+
+**Git Worktree Setup:**
+
+This project uses Git Worktree to maintain separate working directories for `main` and `develop` branches:
+
+```bash
+# Directory structure
+/Users/yamato/Src/proj_livecoding/
+├── orbitscore/          # develop branch (main working directory)
+└── orbitscore-main/     # main branch (production environment)
+
+# View worktrees
+git worktree list
+
+# Switch between environments
+cd /Users/yamato/Src/proj_livecoding/orbitscore       # develop
+cd /Users/yamato/Src/proj_livecoding/orbitscore-main  # main
+```
+
+**Benefits:**
+- Complete separation between develop and main environments
+- No need to switch branches (no file changes)
+- Can test both environments simultaneously
+- Prevents accidental commits to main branch
+- Stable production environment always available
+
+**Branch Protection Rules (main & develop):**
+- ✅ Pull Request required before merging
+- ✅ At least 1 approval required
+- ✅ Dismiss stale pull request approvals when new commits are pushed
+- ✅ Administrators cannot bypass these settings
+- ✅ Status checks must pass before merging (if configured)
+
 **Creating a new feature branch:**
 ```bash
-# Create and switch to new feature branch
+# Create and switch to new feature branch from develop
+git checkout develop
+git pull origin develop
 git checkout -b feature/descriptive-name
 
 # Example branch names:
@@ -118,21 +441,42 @@ git checkout -b feature/descriptive-name
 # - refactor/parser-cleanup
 ```
 
-**Branch naming convention:**
-- `feature/` - new features
-- `fix/` - bug fixes
-- `refactor/` - code refactoring
-- `docs/` - documentation only changes
-- `test/` - test additions/fixes
+**Development Workflow:**
+```
+1. Create feature branch from develop
+2. Implement changes
+3. Commit and push to origin
+4. Create PR to develop
+5. Request review (Cursor BugBot provides change summary)
+6. Address review comments
+7. Merge to develop after approval
+8. (Release) Create PR from develop to main
+9. Merge to main after approval
+```
 
 **Creating PRs:**
 ```bash
 # Push branch to GitHub
 git push -u origin feature/branch-name
 
-# Create PR with gh command
-gh pr create --title "feat: description" --body "detailed description"
+# Create PR to develop (with automatic Issue closing)
+gh pr create --base develop --title "feat: description" --body "Closes #<issue-number>
+
+detailed description"
+
+# Create PR to main (for releases)
+gh pr create --base main --title "release: version X.Y.Z" --body "release notes"
 ```
+
+**Automatic Issue Closing:**
+- **ALWAYS include `Closes #<issue-number>` in PR body** to automatically close the related Issue when PR is merged
+- Keywords that work: `Closes`, `Fixes`, `Resolves` (case-insensitive)
+- Example: `Closes #14` will automatically close Issue #14 when PR is merged
+- **Benefits**:
+  - ✅ Never forget to close Issues
+  - ✅ Clear connection between PR and Issue
+  - ✅ Automatic workflow (GitHub handles it)
+- **Workflow**: Issue → Branch → PR (with `Closes #N`) → Merge → Issue auto-closes
 
 **Merging PRs:**
 ```bash
@@ -144,24 +488,38 @@ gh pr merge <number> --squash
 ```
 
 **Important:**
-- **ALWAYS create a branch before starting work** - never commit directly to main
+- **ALWAYS create a branch before starting work** - never commit directly to main or develop
+- **ALWAYS create PR to develop first** - main is only for releases
+- **Branch names MUST be in English only** - no Japanese characters (日本語禁止)
+  - ✅ Good: `11-refactor-audio-slicer-phase-2-1`
+  - ❌ Bad: `11-refactor-audio-slicertsをモジュール分割phase-2-1`
+  - Reason: Japanese characters in branch names can cause issues with some tools and environments
 - **Branches are kept for history** - do not delete after merge
+- **Cursor BugBot** automatically provides change summaries on PRs (not actual code reviews)
 - User typically handles merging, but agent may assist with complex implementations
-- Always use `--squash` for clean commit history on main branch
+- Always use `--squash` for clean commit history on main/develop branches
+- **Branch protection prevents accidental direct pushes** to main and develop
 
 ### Commit Message Format:
 
+**Language: Japanese (日本語)**
+
 ```
-<type>: <description>
+<type>: <日本語での説明>
 
-<detailed explanation>
+<詳細な説明>
 
-<what changed>
-<why it changed>
-<impact>
+<何が変わったか>
+<なぜ変わったか>
+<影響>
 ```
 
 Types: feat, fix, docs, test, refactor, chore
+
+**Important**: 
+- Commit messages MUST be written in Japanese
+- Only the type prefix (feat, fix, etc.) remains in English
+- This applies to both commit titles and detailed descriptions
 
 ### Progress Reporting
 
@@ -170,18 +528,101 @@ Types: feat, fix, docs, test, refactor, chore
 
 ## 🎯 Core Principles
 
-### 1. Degree System Philosophy
+### 1. Code Organization and Architecture
+
+#### Single Responsibility Principle (SRP)
+- **One Function, One Purpose**: Each function should do exactly one thing
+- **Small Functions**: Aim for functions under 50 lines
+- **Clear Names**: Function names should clearly describe their single purpose
+- **Example**: `preparePlayback()` only prepares, `runSequence()` only executes
+
+#### DRY (Don't Repeat Yourself)
+- **Extract Common Logic**: If code appears in 2+ places, extract it to a shared function
+- **Shared Utilities**: Create utility modules for reusable logic
+- **Refactoring Trigger**: Duplicate code is a signal to refactor immediately
+
+#### Module Organization
+- **Group by Feature**: Organize related functions in feature directories
+- **Clear Directory Structure**: Use descriptive directory names
+  ```
+  feature/
+  ├── operation-a.ts
+  ├── operation-b.ts
+  └── shared-utility.ts
+  ```
+- **Example**:
+  ```
+  sequence/
+  ├── playback/
+  │   ├── prepare-playback.ts
+  │   ├── run-sequence.ts
+  │   └── loop-sequence.ts
+  └── audio/
+      └── prepare-slices.ts
+  ```
+
+#### Function Design
+- **Pure Functions**: Prefer pure functions without side effects when possible
+- **Explicit Dependencies**: Pass dependencies as parameters, not globals
+- **Return Values**: Return results rather than mutating state when possible
+- **Type Safety**: Use TypeScript interfaces for function options
+  ```typescript
+  export interface PreparePlaybackOptions {
+    sequenceName: string
+    audioFilePath?: string
+    // ...
+  }
+  
+  export async function preparePlayback(
+    options: PreparePlaybackOptions
+  ): Promise<PlaybackPreparation | null>
+  ```
+
+#### Reusability Guidelines
+- **Descriptive Names**: Use names that describe what the function does, not where it's used
+  - ✅ Good: `preparePlayback()`, `scheduleEvents()`
+  - ❌ Bad: `helper1()`, `doStuff()`
+- **Generic Parameters**: Use options objects for flexibility
+- **Documentation**: Add JSDoc comments explaining purpose and usage
+- **Export Public APIs**: Export functions that might be useful elsewhere
+
+#### Class Design
+- **Thin Controllers**: Keep class methods thin (under 30 lines), delegate to utility functions
+- **Composition over Inheritance**: Prefer composing functionality from modules
+- **Example**:
+  ```typescript
+  class Sequence {
+    async run(): Promise<this> {
+      const prepared = await preparePlayback({ /* options */ })
+      if (!prepared) return this
+      
+      const result = runSequence({ /* options */ })
+      this._isPlaying = result.isPlaying
+      return this
+    }
+  }
+  ```
+
+#### Refactoring Triggers
+When you see these patterns, **refactor immediately**:
+1. **Duplicate Code**: Same logic in 2+ places → Extract to shared function
+2. **Long Methods**: Methods over 50 lines → Break into smaller functions
+3. **Multiple Responsibilities**: Function does many things → Split by responsibility
+4. **Hard to Test**: Complex logic in class → Extract to pure function
+5. **Hard to Reuse**: Logic tied to specific context → Generalize with parameters
+
+### 2. Degree System Philosophy
 
 - **0 = rest/silence** - Musical value, not just "no sound"
 - 1-12 = chromatic scale (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
 - This is a defining feature of OrbitScore
 
-### 2. Precision
+### 3. Precision
 
 - 小数第3位まで (3 decimal places)
 - Random with seed for reproducibility
 
-### 3. Contract-Based Design
+### 4. Contract-Based Design
 
 - IR types are frozen contracts
 - Breaking changes require new versions
@@ -222,8 +663,7 @@ Types: feat, fix, docs, test, refactor, chore
 - [ ] WORK_LOG.md updated
 - [ ] README.md updated (MUST reflect current status from WORK_LOG.md)
 - [ ] Documentation updated if needed
-- [ ] **Serena memory updated** (current issues, architectural changes, important decisions)
-- [ ] **Serena memory files staged** (`.serena/memories/*.md` included in commit)
+- [ ] **Serenaを使って重要な変更を保存** (必要に応じて)
 - [ ] Commit message is descriptive
 - [ ] No console.log left in production code
 - [ ] Types are properly defined
@@ -235,68 +675,65 @@ Types: feat, fix, docs, test, refactor, chore
 3. **Documentation Sync**: Keep docs in sync with code
 4. **Code Review**: Review your own code before committing
 
-## 🧠 Serena Memory Management
+## 🔄 Session Continuity and Information Handoff
 
-### When to Update Serena Memory (コミット時):
+### 基本方針
+Resume機能に依存せず、Serenaメモリとドキュメントで情報を引き継ぐ。
 
-**MUST update before committing when there are:**
+### 作業中の情報保存（AIエージェントの責務）
 
-1. **Critical Issues** (現在の重大な問題)
-   - Bugs that affect core functionality
-   - Performance issues
-   - Broken features that need fixing
-   - Example: "`global.stop()` not working properly"
+以下のタイミングで重要な情報をSerenaメモリに保存する：
 
-2. **Architectural Changes** (アーキテクチャ変更)
-   - Major refactoring
-   - New design patterns introduced
-   - Module structure changes
-   - Breaking changes to internal APIs
+1. **複雑なアーキテクチャを理解した時**
+   - `serena-write_memory`で要約を保存
+   - 例：パーサーの設計、オーディオエンジンの仕組み
 
-3. **Important Decisions** (重要な決定事項)
-   - Technical approach changes
-   - Library/tool choices
-   - Implementation strategy shifts
-   - Performance optimization strategies
+2. **重要な設計決定をした時**
+   - 理由と経緯を記録
+   - 例：ライブラリ選定、実装アプローチの変更
 
-4. **Current Development Status** (開発ステータス)
-   - Phase completion status
-   - Feature implementation progress
-   - Known limitations
-   - Next steps/priorities
+3. **大きなタスクが完了した時**
+   - 実装の詳細と注意点を保存
+   - 例：新機能の実装完了、リファクタリング完了
 
-### Serena Memory Categories:
+4. **コミット時（必須）**
+   - WORK_LOGに詳細を記録
+   - Serenaを使って重要な決定事項や変更を保存
 
-- **`project_overview`**: High-level project description, tech stack, current status
-- **`current_issues`**: Active bugs and problems that need attention
-- **`development_guidelines`**: Implementation patterns, best practices
-- **`code_style_conventions`**: TypeScript/coding standards
-- **`task_completion_checklist`**: Standard procedures for completion
-- **`suggested_commands`**: Commonly used commands and workflows
+### セッション開始時（AIエージェントの責務）
 
-### Update Command:
+1. **既存メモリの確認**
+   - `serena-list_memories`で保存されている知識を確認
+   - 関連するメモリがあれば`serena-read_memory`で読み込む
 
-```typescript
-serena-write_memory({
-  memory_name: "current_issues",
-  content: "Updated markdown content..."
-})
-```
+2. **最新状況の把握**
+   - WORK_LOGの最新エントリを確認（必要に応じて）
+   - 現在の実装フェーズを把握
 
-### After Updating Memory:
+3. **前回の作業内容の理解**
+   - Serenaメモリから前回の知見を取得
+   - 継続作業の場合は文脈を復元
 
-**MUST commit the updated memory files:**
+### Resume機能の使用判断（ユーザー判断）
 
-```bash
-git add .serena/memories/*.md
-git commit -m "docs: update Serena memory with [description]"
-```
+**基本方針：新規セッションを推奨**
 
-**Why**: Serena memory files (`.serena/memories/*.md`) are stored in the repository and should be version controlled. This ensures:
-- Memory persists across sessions
-- Other agents (Codex CLI, future sessions) can access the information
-- Changes are tracked in git history
-- Team members can see project status and issues
+- 独立したタスク → 新規セッション
+- 時間が経過 → 新規セッション
+- 異なるトピック → 新規セッション
+
+**Resumeを使うべき例外的ケース：**
+
+- 複雑な議論・設計決定の途中
+- 大規模リファクタリングの段階的実施中
+- デバッグの試行錯誤を継続する必要がある時
+
+**理由：**
+
+- Serenaメモリで構造化された知識として蓄積
+- 新鮮な視点で問題を見られる
+- トークン効率が良い
+- 会話履歴の管理が不要
 
 ## 📝 Documentation Sync Rules
 

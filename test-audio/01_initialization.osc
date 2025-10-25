@@ -1,0 +1,30 @@
+// OrbitScore Audio Test 01: Initialization
+// Tests: Global context and sequence creation
+
+// 1-1: Initialize global context
+var global = init GLOBAL
+
+// 1-2: Create sequences
+var kick = init global.seq
+var snare = init global.seq
+var hihat = init global.seq
+
+// Set audio files
+kick.audio("kick.wav")
+snare.audio("snare.wav")
+hihat.audio("hihat.wav")
+
+// Set basic patterns
+kick.play(1, 0, 0, 0)
+snare.play(0, 1, 0, 1)
+hihat.play(1, 1, 1, 1)
+
+// Test execution
+global.tempo(120)
+global.beat(4)
+global.start()
+
+// Expected:
+// - No errors during initialization
+// - All sequences created successfully
+// - Audio files loaded without errors

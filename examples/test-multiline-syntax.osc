@@ -1,0 +1,38 @@
+// 改行サポートテスト
+// 期待される動作：
+// 1. global.start()でスケジューラーが起動
+// 2. kickが4拍パターン（1拍目のみ）で1回再生
+// 3. arpが4スライス（C-D-E-F）を順番に再生
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.tick(4)
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
+
+// 改行を使ったメソッドチェーン
+var kick = init global.seq
+kick
+  .length(1)
+  .audio("kick.wav")
+  .chop(1)
+  .play(1, 0, 0, 0)
+
+// 改行を使ったplay()引数
+var arp = init global.seq
+arp.length(1)
+arp.audio("arpeggio_c.wav").chop(4)
+arp.play(
+  1,
+  2,
+  3,
+  4
+)
+
+// global.start()でスケジューラー起動（global.run()から変更）
+global.start()
+
+// テスト実行
+kick.run()
+arp.run()
+

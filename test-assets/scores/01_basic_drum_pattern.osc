@@ -5,6 +5,7 @@
 var global = init GLOBAL
 
 // Configure global parameters
+global.audioPath("test-assets/audio")
 global.tempo(120)
 global.beat(4)
 global.tick(4)
@@ -20,22 +21,27 @@ snare.beat(4 by 4).length(1)
 hihat.beat(4 by 4).length(1)
 
 // Load and chop audio samples
-kick.audio("../audio/kick.wav").chop(4)
-snare.audio("../audio/snare.wav").chop(4)
-hihat.audio("../audio/hihat_closed.wav").chop(16)
+kick.audio("kick.wav").chop(4)
+snare.audio("snare.wav").chop(4)
+hihat.audio("hihat_closed.wav").chop(16)
 
 // Create patterns
 kick.play(1, 0, 0, 0)  // Kick on beat 1
 snare.play(0, 0, 1, 0) // Snare on beat 3
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1) // 16th note hi-hats
 
-// Start playback
+// Start playback (run = play once, loop = play continuously)
 global.run()
+kick.run()
+snare.run()
+hihat.run()
 
 // Individual sequence controls (for live coding)
-// kick.run()
-// snare.run()
-// hihat.run()
-// kick.mute()
+// kick.loop()  // For continuous playback
 // snare.loop()
+// hihat.loop()
+// kick.stop()
+// snare.stop()
+// hihat.stop()
+// kick.mute()
 // global.stop()

@@ -1,13 +1,13 @@
 # INSTRUCTION_ORBITSCORE_DSL.md
 
-## OrbitScore DSL Specification (v1.0 – Implemented)
+## OrbitScore DSL Specification (v3.0 – Implemented)
 
-This document defines the **OrbitScore DSL**.  
-It is the **single source of truth** for the project.  
+This document defines the **OrbitScore DSL**.
+It is the **single source of truth** for the project.
 All implementation, testing, and planning must strictly follow this specification.
 
-**Last Updated**: 2024-12-25  
-**Implementation Status**: ✅ Core features implemented and tested (187/187 tests passing)
+**Last Updated**: 2025-01-09
+**Implementation Status**: ✅ Core features implemented and tested (205/205 tests passing)
 
 ---
 
@@ -22,22 +22,28 @@ var global = init GLOBAL
 
 **Implementation Details**:
 - Creates an instance of the `Global` class
-- Initializes `AudioEngine` with Web Audio API
+- Initializes `AudioEngine` with SuperCollider
 - Sets up `Transport` system for scheduling
-- Default values: tempo=120, tick=480, beat=4/4, key='C'
+- Default values: tempo=120, beat=4/4
+- **Variable naming**: The variable name "global" is conventional but not required - you can use any valid identifier (e.g., `var g = init GLOBAL`, `var master = init GLOBAL`)
+- **Singleton behavior**: Multiple `init GLOBAL` statements return the same Global instance
 
-### Sequence Initialization  
+### Sequence Initialization
 ```js
 // After global initialization, create sequences
 var seq1 = init global.seq
 var seq2 = init global.seq
+// Or with any global variable name:
+var kick = init g.seq
+var snare = init master.seq
 ```
 
 **Implementation Details**:
 - Creates instances of the `Sequence` class through Global's factory method
 - Each sequence maintains its own state (tempo, beat, length, audio, play pattern)
-- Sequences inherit global parameters by default but can override them
+- Sequences inherit global parameters (tempo, beat) by default but can override them
 - Each sequence is automatically registered with the global transport
+- **Variable naming**: Sequence variable names are arbitrary and user-defined (common names: kick, snare, hat, bass, lead, etc.)
 
 **Legacy Syntax Support** (for backward compatibility):
 ```js
@@ -55,32 +61,44 @@ After initialization, configure the global context:
 global.tempo(140)   // set global tempo to 140 BPM
 ```
 
-### Tick Resolution
-```js
-global.tick(480)    // default resolution is 480 ticks per quarter note
-// Allowed values: 480, 960, 1920
-```
-
 ### Meter (Time Signature)
 ```js
 global.beat(4 by 4)   // equivalent to 4/4
 global.beat(5 by 4)   // 5/4
 global.beat(9 by 8)   // 9/8
-```
-- One bar = `n * (tick * (4/N))`
-  - Example: `5 by 4` → 5 × (480 × 4/4) = 2400 ticks  
-  - Example: `11 by 8` → 11 × (480 × 4/8) = 2640 ticks  
-
-### Composite Meters
-```js
-global.beat((4 by 4)(5 by 4))  
-global.beat((3 by 4)(2 by 4)).time(2)
+global.beat(3, 4)     // alternative syntax: 3/4
 ```
 
-### Key
+### Audio Path (Base Directory)
 ```js
-global.key(C)
+global.audioPath("../test-assets/audio")   // set base directory for audio files
 ```
+
+**Implementation Details**:
+- Sets the base directory for resolving relative audio file paths
+- When using `.audio("kick.wav")`, the path is resolved relative to:
+  1. **Document directory** (if set by VS Code extension - automatic)
+  2. **audioPath directory** (if set via `global.audioPath()`)
+  3. **Current working directory** (fallback)
+- **Automatic document directory**: VS Code extension automatically sets the document directory based on the `.osc` file location
+- **Singleton behavior**: Setting the same path multiple times is a no-op (skipped)
+- Path resolution priority: Absolute path > Document directory > audioPath > CWD
+
+**Example**:
+```js
+// In /Users/yamato/projects/myproject/songs/track01.osc
+var global = init GLOBAL
+global.audioPath("../audio")  // resolves to /Users/yamato/projects/myproject/audio
+
+var kick = init global.seq
+kick.audio("kick.wav")  // resolves to /Users/yamato/projects/myproject/audio/kick.wav
+```
+
+**Note**:
+- tick() and key() have been removed from the current audio-based implementation
+- tick(): MIDI resolution concept, not needed for audio-only playback
+- key(): Will be added when MIDI support is implemented. For audio files, requires audio key detection feature.
+- Composite meters like (4 by 4)(5 by 4) are not currently supported
 
 ---
 
@@ -113,6 +131,30 @@ snare.beat(4 by 4).length(1).audio("snare.wav").chop(4).play(0, 0, 1, 0).run()
 // Or even more concise (if parser supports)
 init global.seq.beat(4 by 4).length(1).audio("snare.wav").play(0, 0, 1, 0).run()
 ```
+
+### Multiline Parentheses & Chaining
+- 括弧で囲まれた引数リストやネスト構造は、**どのメソッド/関数でも改行を挟んで記述可能**です。
+- `global.beat()` や `seq.play()`、今後導入予定の `RUN()` など、DSL全体で同じ書き方ができます。
+- カンマ区切りを守れば閉じ括弧の位置・インデントも自由に整形できます。
+
+```js
+global.beat(
+  5 by 4,
+)
+
+seq.audio(
+  "../audio/snare.wav",
+).play(
+  (1, 0),
+  2,
+  (
+    3,
+    (4, 5),
+  ),
+)
+```
+
+> 注: `(1)(2)` のようなタプルネスト記法も改行混在で利用できます。閉じ括弧は任意の行に置いて構いません。
 
 ### Loop Length and Pattern Relationship
 The `length` parameter defines how many bars the sequence loops over:
@@ -172,40 +214,127 @@ seq1.play(1, (0, 1, 2, 3, 4))    // 1 gets 1/2 (2 beats), then 5-tuplet in remai
 - Nested elements divide their parent's time slot equally
 - 0 = silence, 1-n = slice number from `chop(n)`
 
-### Alternative Functional Form
-```js
-seq1.play(0.chop(5), 0.chop(4))  // equivalent to nested form
-```
-
-### Time Modifiers
-```js
-seq1.play((0).chop(5).time(5), (0).chop(4).time(4))
-```
+**Note**: Play modifiers like .chop(), .time(), and .fixpitch() are planned for future release but not yet implemented.
 
 ---
 
 ## 5. Transport Commands
 
-Available on both `global` and sequences (`seqN`).
+### Global Transport
+Available on `global`:
 
 ```js
-global.run()              // run from next bar
-global.run.force()        // run immediately
-global.loop()             // loop from next bar
-global.loop.force()       // loop immediately
-global.mute()
-global.unmute()
-global.stop()
+global.start()            // start scheduler from next bar
+global.stop()             // stop scheduler
 ```
 
-### Targeted Transport
+### Sequence Transport (Method-based)
+Available on individual sequences:
+
 ```js
-global.run(seq1, seq2)   // run only selected sequences
-global.loop(seq1)        // loop only seq1
+kick.run()                // play sequence once (one-shot)
+kick.loop()               // play sequence in loop
+kick.stop()               // stop sequence
+kick.mute()               // mute sequence (only affects LOOP playback)
+kick.unmute()             // unmute sequence
+```
+
+### Reserved Keywords (Unidirectional Toggle) - v3.0
+
+**DSL v3.0 introduces片記号方式 (unidirectional toggle)**:
+
+Use uppercase reserved keywords to control multiple sequences with **unidirectional toggle** semantics:
+
+```js
+RUN(kick)                 // Include ONLY kick in RUN group (one-shot playback)
+RUN(kick, snare, hihat)   // Include ONLY kick, snare, hihat in RUN group
+
+LOOP(bass)                // Include ONLY bass in LOOP group (others auto-stop)
+LOOP(kick, snare)         // Include ONLY kick, snare in LOOP group (hat stops if it was looping)
+
+MUTE(hihat)               // Set ONLY hihat's MUTE flag ON (others OFF, applies only to LOOP)
+MUTE(snare, hihat)        // Set ONLY snare and hihat's MUTE flags ON (others OFF)
+```
+
+**Unidirectional Toggle Behavior (片記号方式)**:
+- **RUN group**: Lists sequences for one-shot playback. Only listed sequences are included.
+- **LOOP group**: Lists sequences for loop playback. **Sequences not listed are automatically stopped.**
+- **MUTE group**: Sets MUTE flag ON for listed sequences, OFF for others. **MUTE only affects LOOP playback**, not RUN.
+- Each command **replaces** the entire group with the new list (unidirectional - inclusion only)
+
+**RUN and LOOP Independence**:
+- RUN and LOOP are **independent groups** - the same sequence can be in both simultaneously
+- When a sequence is in both RUN and LOOP, it plays both one-shot AND loops
+- Example: `RUN(kick)` then `LOOP(kick)` → kick plays one-shot AND loops
+
+**MUTE Behavior**:
+- MUTE is a **persistent flag** that only affects LOOP playback
+- Like a mixer mute button: LOOP continues but produces no sound
+- **MUTE does NOT affect RUN playback** - RUN sequences always play with sound
+- MUTE flag persists even when sequence leaves/rejoins LOOP group
+
+**Examples:**
+```js
+// Setup
+var kick = init global.seq
+var snare = init global.seq
+var hat = init global.seq
+
+global.start()
+
+// Include kick and snare in RUN group
+RUN(kick, snare)              // kick and snare play one-shot
+
+// Replace LOOP group with only hat
+LOOP(hat)                     // Only hat loops (kick/snare NOT looping)
+
+// Both RUN and LOOP
+RUN(kick)                     // kick plays one-shot
+LOOP(kick)                    // kick ALSO loops (independent)
+
+// MUTE only affects LOOP
+LOOP(kick, snare, hat)        // All three loop
+MUTE(hat)                     // hat loops but muted (kick/snare unmuted)
+RUN(hat)                      // hat plays one-shot WITH sound (MUTE doesn't affect RUN)
+
+// Changing groups
+LOOP(kick, snare, hat)        // All three loop
+LOOP(kick)                    // Only kick loops (snare and hat auto-stop)
+
+// MUTE persistence
+MUTE(kick)                    // kick's MUTE flag ON
+LOOP(kick, snare)             // kick loops (muted), snare loops (unmuted)
+LOOP(snare)                   // kick stops, but MUTE flag persists
+LOOP(kick)                    // kick loops again, still muted (flag persisted)
+MUTE(snare)                   // kick's MUTE flag OFF, snare's MUTE flag ON
+```
+
+**Benefits of Reserved Keywords:**
+- **Clearer intent**: `RUN(kick, snare)` is more readable than `kick.run()` followed by `snare.run()`
+- **Unidirectional control**: One statement defines the entire group state
+- **Live coding friendly**: Quick bulk updates with multiline support
+
+**Multiline support:**
+```js
+RUN(
+  kick,
+  snare,
+  hihat,
+)
+
+LOOP(
+  bass,
+  lead,
+)
+
+MUTE(
+  hihat,
+)
 ```
 
 ### Editor Execution
 - Any `global` or `seq` transport command can be executed by selecting it in the editor and pressing **Command + Enter**.
+- Reserved keywords (`RUN`, `LOOP`, `MUTE`) can also be executed this way.
 
 ---
 
@@ -229,20 +358,139 @@ seq1.audio("../audio/kick.wav")             // Default: chop(1)
 ### Play with Audio
 ```js
 seq1.play(1)           // play slice 1
-seq1.play(1).fixpitch(0)  // play at original pitch
+seq1.play(1, 2, 3, 4)  // play slices in sequence
 ```
 
-### Fixpitch
-```js
-fixpitch(0)   // original pitch
-fixpitch(1)   // +1 semitone
-fixpitch(-1)  // -1 semitone
-```
-- Decouples playback speed from pitch (granular or PSOLA-based time-stretching).
+**Note**: Audio manipulation features like fixpitch() and time() are planned for future release but not yet implemented.
 
 ---
 
-## 7. DAW Integration
+## 7. Underscore Prefix Pattern (Setting vs. Application) - v3.0
+
+**DSL v3.0 introduces a consistent pattern for all configuration methods:**
+
+### The Pattern: `method()` vs. `_method()`
+
+- **`method(value)`**: **Setting only** - stores the value but does NOT trigger playback or apply immediately
+- **`_method(value)`**: **Immediate application** - sets the value AND triggers playback/applies immediately
+
+This pattern applies to ALL configuration methods that can affect running sequences.
+
+### Applicable Methods
+
+#### Sequence Configuration Methods
+
+All sequence configuration methods follow this pattern:
+
+```js
+// Setting-only methods (no underscore)
+seq.audio("file.wav")     // Set audio file (no playback)
+seq.chop(8)               // Set chop divisions (no slicing applied yet)
+seq.play(1, 2, 3, 4)      // Set play pattern (no playback)
+seq.beat(4 by 4)          // Set meter (no timing change yet)
+seq.length(2)             // Set loop length (no change yet)
+seq.tempo(140)            // Set tempo (no tempo change yet)
+
+// Immediate application methods (with underscore)
+seq._audio("file.wav")    // Set audio file AND apply immediately (triggers playback if running)
+seq._chop(8)              // Set chop divisions AND re-slice immediately
+seq._play(1, 2, 3, 4)     // Set play pattern AND start playback immediately
+seq._beat(4 by 4)         // Set meter AND apply timing change immediately
+seq._length(2)            // Set loop length AND apply immediately
+seq._tempo(140)           // Set tempo AND apply immediately
+```
+
+#### Global Configuration Methods
+
+Global also supports underscore methods for parameters that affect all sequences:
+
+```js
+// Setting-only methods (no underscore)
+global.tempo(140)         // Set global tempo (no immediate effect on sequences)
+global.beat(4 by 4)       // Set global beat (no immediate effect on sequences)
+
+// Immediate application methods (with underscore)
+global._tempo(140)        // Set global tempo AND update all sequences that inherit it
+global._beat(4 by 4)      // Set global beat AND update all sequences that inherit it
+```
+
+**Inheritance behavior**:
+- When a sequence hasn't overridden tempo/beat, it inherits from global
+- `global._tempo()` triggers seamless parameter updates for all inheriting sequences
+- `global._beat()` triggers seamless parameter updates for all inheriting sequences
+- If a sequence has overridden a parameter (e.g., `seq.tempo(160)`), it ignores global changes
+
+### Real-Time vs. Buffered Parameters
+
+**Real-time parameters** (apply immediately regardless of playback state):
+- `gain(dB)` and `_gain(dB)` - both apply immediately
+- `pan(position)` and `_pan(position)` - both apply immediately
+- These are mixer-style controls that should respond instantly
+
+**Buffered parameters** (timing-dependent):
+- Non-underscore: Buffered until next `run()` or `loop()` call
+- Underscore: Applied immediately even during playback
+
+### Usage Patterns
+
+**Pattern 1: Setup phase (before playback)**
+```js
+// During setup, use non-underscore methods (cleaner, no redundant playback triggers)
+var kick = init global.seq
+kick.audio("kick.wav")
+kick.chop(4)
+kick.play(1, 0, 1, 0)
+kick.beat(4 by 4)
+kick.length(1)
+
+// Start playback
+global.start()
+kick.run()                // Now all settings are applied
+```
+
+**Pattern 2: Live coding (during playback)**
+```js
+// Sequence is already running
+kick.run()
+
+// Non-underscore: Changes are buffered, applied at next run()/loop()
+kick.play(1, 1, 0, 0)     // Pattern buffered, not applied yet
+kick.run()                // NOW the new pattern is applied
+
+// Underscore: Changes apply immediately
+kick._play(1, 1, 0, 0)    // Pattern applied immediately, playback restarts
+```
+
+**Pattern 3: Real-time mixing**
+```js
+// These always apply immediately (mixer-style controls)
+kick.gain(-6)             // Immediate
+kick._gain(-6)            // Immediate (same effect)
+kick.pan(-50)             // Immediate
+kick._pan(-50)            // Immediate (same effect)
+
+// But other parameters are buffered without underscore
+kick.tempo(160)           // Buffered
+kick._tempo(160)          // Applied immediately
+```
+
+### Benefits
+
+1. **Clear Intent**: Underscore makes it explicit when you want immediate effect
+2. **Performance**: Avoid redundant operations during setup phase
+3. **Live Coding**: Quick updates with `_method()` during performance
+4. **Consistency**: Same pattern across all configuration methods
+
+### Default Behavior
+
+For backward compatibility and ease of use:
+- `defaultGain(dB)` - sets initial gain without triggering playback (use before `run()`)
+- `defaultPan(position)` - sets initial pan without triggering playback (use before `run()`)
+- `gain(dB)` / `pan(position)` - apply immediately during playback (real-time controls)
+
+---
+
+## 8. DAW Integration
 
 - **MIDI**: use macOS **IAC Bus** for routing when MIDI features are enabled later.  
 - **Audio**: OrbitScore outputs audio internally.  
@@ -253,19 +501,27 @@ fixpitch(-1)  // -1 semitone
 
 ## 8. Implementation Notes
 
-- Parser must support both nested `play` and functional `.chop/.time` syntax.  
-- IR must normalize both syntaxes into the same structure.  
-- Scheduler must handle composite meters and independent seq tempos.  
-- Audio engine must implement time-stretch (default) and pitch-shift when `fixpitch` is specified.  
+- Parser must support nested `play` structures for hierarchical timing
+- IR must represent play structures as tree-like data for timing calculation
+- Scheduler must handle independent sequence tempos (polytempo) and meters (polymeter)
+- Audio engine uses SuperCollider for ultra-low latency playback (0-2ms)
+- Global underscore methods (_tempo, _beat) must trigger seamless parameter updates for inheriting sequences
+
+**Future Additions**:
+- Audio manipulation features (fixpitch, time) will require time-stretch and pitch-shift implementation
+- Composite meters may require complex timing calculation algorithms
+- tick/key will be added when MIDI support is implemented
 
 ---
 
 ## 9. Testing Guidelines
 
-- **Parser**: verify meters, composite beats, both play syntaxes, fixpitch parsing.  
-- **Mapping**: ensure ticks match expected values for given meters and chops.  
-- **Audio**: confirm playback speed matches tempo; fixpitch keeps pitch constant.  
-- **Transport**: global and targeted transport commands function as specified.
+- **Parser**: Verify meter parsing, nested play structures, variable initialization
+- **Timing**: Ensure timing calculations are correct for nested play structures and different meters
+- **Audio**: Confirm playback speed matches tempo and sequences synchronize correctly
+- **Transport**: Global and sequence transport commands function as specified
+- **Underscore Methods**: Verify immediate application behavior for all _method() calls
+- **Inheritance**: Test that sequences inherit global parameters correctly and seamless updates work
 
 ---
 
@@ -275,8 +531,8 @@ fixpitch(-1)  // -1 semitone
 
 - **No abbreviations/shortcuts in DSL**: Maintain full readability with descriptive names
 - **Smart autocomplete**: VS Code extension provides intelligent suggestions
-  - `global.` → suggests `tempo()`, `tick()`, `beat()`, `key()`, `run()`, `loop()`, etc.
-  - `seq1.` → suggests `play()`, `audio()`, `tempo()`, `beat()`, `mute()`, etc.
+  - `global.` → suggests `tempo()`, `_tempo()`, `beat()`, `_beat()`, `start()`, `stop()`, `gain()`, etc.
+  - `seq1.` → suggests `audio()`, `chop()`, `play()`, `tempo()`, `beat()`, `length()`, `run()`, `loop()`, `mute()`, etc.
   - Method signatures with parameter hints
 - **Snippet expansion**: Type-ahead for common patterns
   - `init` → expands to `var seq = init GLOBAL.seq`
@@ -310,10 +566,10 @@ seq.audio("file.wav").┃  // Suggests: chop(), play(), run()
 seq.audio("file.wav").chop(8).┃  // Suggests: play(), run()
 
 // After 'seq.play(1, 2, 3)'
-seq.play(1, 2, 3).┃  // Suggests: run(), loop(), mute(), fixpitch(), time()
+seq.play(1, 2, 3).┃  // Suggests: run(), loop(), mute()
 
 // After 'global.'
-global.┃  // Suggests: tempo(), beat(), tick(), key(), run(), loop(), stop()
+global.┃  // Suggests: tempo(), _tempo(), beat(), _beat(), start(), stop(), loop(), gain()
 ```
 
 **Method Order Rules**:
@@ -321,7 +577,7 @@ global.┃  // Suggests: tempo(), beat(), tick(), key(), run(), loop(), stop()
 - `beat()`, `length()`, `tempo()` can be called anytime after init
 - `play()` typically comes after `audio()` (with or without `chop()`)
 - `run()`, `loop()`, `mute()` are usually final in the chain
-- Modifiers like `fixpitch()`, `time()` can appear after `play()`
+- Underscore methods (_audio, _chop, _play, _tempo, _beat, _length) can be used during live coding for immediate updates
 
 ---
 
@@ -334,8 +590,6 @@ var global = init GLOBAL
 // STEP 2: Configure global parameters
 global.tempo(120)
 global.beat(4 by 4)
-global.tick(480)
-global.key(C)
 
 // STEP 3: Initialize sequences from global
 var kick = init global.seq
@@ -356,18 +610,23 @@ bass.play(1, 0, 0, 1, 0, 0, 1, 0,
           0, 1, 0, 1, 0, 0, 0, 0)
 
 lead.audio("synth.wav").chop(16)
-lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 
+lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0),
           0, 0, 0, 0, 0, 0, 0, 0,
           1, 1, 1, 0)
 
-// STEP 6: Start playback
-global.run()
+// STEP 5b: Set initial gain/pan (before playback)
+kick.defaultGain(-3).defaultPan(0)
+bass.defaultGain(-6).defaultPan(-30)
+lead.defaultGain(-9).defaultPan(30)
 
-// STEP 7: Live manipulation
+// STEP 6: Start playback
+global.start()
+
+// STEP 7: Live manipulation (real-time changes during playback)
 kick.mute()
-bass.fixpitch(5)
-lead.time(0.5)
-global.tempo(130)
+bass.gain(-12)      // Real-time gain change
+lead.pan(0)         // Real-time pan change
+global._tempo(130)  // Change global tempo for all inheriting sequences
 ```
 
 ---
@@ -376,13 +635,24 @@ global.tempo(130)
 
 ### Completed Features ✅
 
-#### Core DSL
-- **Initialization**: `init GLOBAL`, `init global.seq`
-- **Global Parameters**: tempo, tick, beat, key
+#### Core DSL (v3.0)
+- **Initialization**: `init GLOBAL`, `init global.seq` (variable names are arbitrary, not hardcoded)
+- **Global Parameters**: tempo, beat
 - **Sequence Configuration**: tempo, beat, length, audio, chop
 - **Play Patterns**: Flat and nested structures with hierarchical timing
 - **Method Chaining**: All methods return `this` for fluent API
 - **Transport Commands**: run, stop, loop, mute, unmute
+- **Underscore Prefix Pattern (v3.0)**:
+  - Sequence: `_audio()`, `_chop()`, `_play()`, `_beat()`, `_length()`, `_tempo()` for immediate application
+  - Global: `_tempo()`, `_beat()` for immediate application with seamless parameter updates
+- **Parameter Inheritance**: Sequences inherit tempo/beat from Global unless overridden
+- **Unidirectional Toggle (v3.0)**: `RUN()`, `LOOP()`, `MUTE()` reserved keywords with片記号方式 semantics
+  - RUN and LOOP are independent groups
+  - MUTE is persistent flag, only affects LOOP playback
+  - STOP keyword removed (use LOOP with different list)
+
+**Removed (not yet implemented for audio-based DSL)**:
+- tick() and key() - MIDI-only concepts, will be added when MIDI support is implemented
 
 #### Parser
 - **Tokenizer**: Complete lexical analysis
@@ -394,9 +664,11 @@ global.tempo(130)
 - **File Loading**: WAV format support with buffer caching
 - **Slicing**: `chop(n)` divides audio into n equal parts with precise timing
 - **Playback**: Ultra-low latency (0-2ms) via SuperCollider scsynth
-- **Audio Control**: 
-  - `gain(dB)`: Volume control in dB (-60 to +12, default 0)
-  - `pan(position)`: Stereo positioning (-100 to 100)
+- **Audio Control**:
+  - `gain(dB)`: Real-time volume control in dB (-60 to +12, default 0) - applies immediately even during playback
+  - `pan(position)`: Real-time stereo positioning (-100 to 100) - applies immediately even during playback
+  - `defaultGain(dB)`: Set initial gain without triggering playback - use before `run()` or `loop()`
+  - `defaultPan(position)`: Set initial pan without triggering playback - use before `run()` or `loop()`
   - Random values: `r` (full random), `r0%10` (random walk)
 - **Global Mastering Effects**:
   - `global.compressor()`: Increase perceived loudness
@@ -444,25 +716,54 @@ global.tempo(130)
 - **MIDI DSL**: Old syntax (`sequence`, `bus`, `channel`, `degree`, `velocity`) is no longer supported
 - **Note**: All MIDI-related tests and implementations have been removed in favor of direct audio playback
 
-### Testing Coverage
+### Testing Coverage (v3.0)
 - **Audio Parser Tests**: 50/50 passing
+- **Parser Syntax Tests**: 11/11 passing (v3.0: STOP removed)
+- **Unidirectional Toggle Tests**: 11/11 passing (v3.0: RUN/LOOP/MUTE semantics)
+- **Underscore Methods Tests**: 27/27 passing (v3.0: _audio, _chop, _play, etc.)
 - **Timing Tests**: 8/8 passing
 - **Pitch Tests**: 25/25 passing
 - **Audio Slicer Tests**: 9/9 passing
 - **SuperCollider Tests**: 15/15 passing
 - **Sequence Tests**: 20/20 passing
-- **Total**: 196+ tests passing (MIDI-related tests removed)
+- **Setting Sync Tests**: 13/13 passing (v3.0: RUN/LOOP buffering)
+- **Total**: 205+ tests passing
 
 ---
 
 ## 13. Versioning
 
-**Current Version**: v2.0 (SuperCollider Audio Engine)
+**Current Version**: v3.0 (Underscore Prefix + Unidirectional Toggle)
+
+- v3.0 (2025-01-09): **Underscore Prefix Pattern** + **Unidirectional Toggle (片記号方式)**
+  - **Underscore Prefix**: `method()` = setting only, `_method()` = immediate application
+  - **Unidirectional Toggle**: `RUN()`, `LOOP()`, `MUTE()` with inclusion-only semantics
+  - RUN and LOOP are independent groups (same sequence can be in both)
+  - MUTE is persistent flag, only affects LOOP playback
+  - Removed `STOP` keyword (use `LOOP()` with empty/different list instead)
+  - 205+ tests passing including 11 new unidirectional toggle tests
+
 - v2.0 (2025-01-06): SuperCollider integration, global mastering effects, dB-based gain control
+  - SuperCollider audio engine for professional-grade timing
+  - Global mastering: compressor, limiter, normalizer
+  - dB-based gain control (-60 to +12 dB)
+
 - v1.0 (2024-12-25): Core implementation complete with 100% test coverage
+  - Parser, interpreter, timing calculator
+  - Nested play structures
+  - Method chaining
+
 - v0.1 (2024-09-28): Initial draft specification
 
-**Migration Notes**:
+**Migration Notes from v2.0 to v3.0**:
+- **STOP keyword removed**: Use `LOOP(seq1)` then `LOOP(seq2)` to switch - seq1 auto-stops
+- **UNMUTE keyword removed**: Use `MUTE(seq2)` - seq1 auto-unmutes (unidirectional toggle)
+- **New behavior**: `RUN()` and `LOOP()` are independent - sequence can be in both simultaneously
+- **MUTE semantics changed**: MUTE only affects LOOP, not RUN playback
+- **New pattern**: Use `_method()` for immediate application during live coding
+- All existing v2.0 code continues to work (backward compatible for non-keyword features)
+
+**Migration Notes from v1.0 to v2.0**:
 - MIDI output system has been completely replaced with SuperCollider audio engine
 - Old MIDI DSL syntax is no longer supported
 - All audio playback now goes through SuperCollider for professional-grade timing and quality

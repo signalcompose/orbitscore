@@ -1,0 +1,16 @@
+// 最もシンプルなテスト - run()で1回だけ実行
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.tick(4)
+global.audioPath("/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio")
+
+var kick = init global.seq
+kick.length(1)
+kick.audio("kick.wav").chop(1)
+kick.play(1, 0, 0, 0)
+
+// 1回だけ実行（ループしない）
+global.start()
+kick.run()

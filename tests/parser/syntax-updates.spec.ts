@@ -56,8 +56,9 @@ seq.beat(3 by 4)
     const result = parser.parse().statements
 
     expect(result).toHaveLength(2)
+    // Note: Parser returns 'sequence' type, interpreter determines if it's global
     expect(result[0]).toEqual({
-      type: 'global',
+      type: 'sequence',
       target: 'global',
       method: 'beat',
       args: [{ numerator: 4, denominator: 4 }],
@@ -128,13 +129,170 @@ seq.run()
 
     // Check statements
     expect(result).toHaveLength(6)
-    expect(result[0].type).toBe('global')
+    // Note: Parser returns 'sequence' type, interpreter determines if it's global
+    expect(result[0].type).toBe('sequence')
     expect(result[0].method).toBe('tempo')
-    expect(result[1].type).toBe('global')
+    expect(result[1].type).toBe('sequence')
     expect(result[1].method).toBe('beat')
     expect(result[2].type).toBe('sequence')
     expect(result[2].method).toBe('beat')
     expect(result[2].chain).toHaveLength(1)
     expect(result[2].chain[0].method).toBe('length')
+  })
+
+  it('should allow multiline arguments inside parentheses', () => {
+    const code = `
+seq.play(
+  1,
+  (2, 3),
+  4,
+)
+`
+
+    const tokenizer = new AudioTokenizer(code)
+    const tokens = tokenizer.tokenize()
+    const parser = new AudioParser(tokens)
+    const result = parser.parse().statements
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual({
+      type: 'sequence',
+      target: 'seq',
+      method: 'play',
+      args: [
+        1,
+        {
+          type: 'nested',
+          elements: [2, 3],
+        },
+        4,
+      ],
+    })
+  })
+
+  it('should allow multiline method chains with nested play', () => {
+    const code = `
+seq.audio("test.wav")
+  .chop(4)
+  .play(
+    (1, 0),
+    2,
+    (
+      3,
+      (4, 5),
+    ),
+  )
+`
+
+    const tokenizer = new AudioTokenizer(code)
+    const tokens = tokenizer.tokenize()
+    const parser = new AudioParser(tokens)
+    const result = parser.parse().statements
+
+    expect(result).toHaveLength(1)
+    expect(result[0]).toEqual({
+      type: 'sequence',
+      target: 'seq',
+      method: 'audio',
+      args: ['test.wav'],
+      chain: [
+        {
+          method: 'chop',
+          args: [4],
+        },
+        {
+          method: 'play',
+          args: [
+            {
+              type: 'nested',
+              elements: [1, 0],
+            },
+            2,
+            {
+              type: 'nested',
+              elements: [
+                3,
+                {
+                  type: 'nested',
+                  elements: [4, 5],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    })
+  })
+
+  describe('Reserved Keywords (RUN/LOOP/MUTE) - DSL v3.0', () => {
+    it('should parse RUN with single sequence', () => {
+      const code = `RUN(kick)`
+      const tokenizer = new AudioTokenizer(code)
+      const tokens = tokenizer.tokenize()
+      const parser = new AudioParser(tokens)
+      const result = parser.parse().statements
+
+      expect(result).toHaveLength(1)
+      expect(result[0]).toEqual({
+        type: 'transport',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords
+        command: 'run',
+        sequences: ['kick'],
+      })
+    })
+
+    it('should parse LOOP with multiple sequences', () => {
+      const code = `LOOP(kick, snare, hihat)`
+      const tokenizer = new AudioTokenizer(code)
+      const tokens = tokenizer.tokenize()
+      const parser = new AudioParser(tokens)
+      const result = parser.parse().statements
+
+      expect(result).toHaveLength(1)
+      expect(result[0]).toEqual({
+        type: 'transport',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords
+        command: 'loop',
+        sequences: ['kick', 'snare', 'hihat'],
+      })
+    })
+
+    it('should parse MUTE with sequences', () => {
+      const code = `MUTE(bass)`
+      const tokenizer = new AudioTokenizer(code)
+      const tokens = tokenizer.tokenize()
+      const parser = new AudioParser(tokens)
+      const result = parser.parse().statements
+
+      expect(result).toHaveLength(1)
+      expect(result[0]).toEqual({
+        type: 'transport',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords
+        command: 'mute',
+        sequences: ['bass'],
+      })
+    })
+
+    it('should parse multiline reserved keyword calls', () => {
+      const code = `
+RUN(
+  kick,
+  snare,
+  hihat,
+)
+`
+      const tokenizer = new AudioTokenizer(code)
+      const tokens = tokenizer.tokenize()
+      const parser = new AudioParser(tokens)
+      const result = parser.parse().statements
+
+      expect(result).toHaveLength(1)
+      expect(result[0]).toEqual({
+        type: 'transport',
+        target: '__RESERVED_KEYWORD__', // Special marker for reserved keywords
+        command: 'run',
+        sequences: ['kick', 'snare', 'hihat'],
+      })
+    })
   })
 })

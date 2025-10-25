@@ -5,23 +5,30 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc --build && npm run build:copy-engine",
+    "build:clean": "tsc --build --clean && tsc --build && npm run build:copy-engine",
+    "build:copy-engine": "cp -r packages/engine/dist packages/vscode-extension/engine/ && cp -r packages/engine/supercollider packages/vscode-extension/engine/",
     "dev:engine": "npm -w @orbitscore/engine run dev",
     "test": "npm -w @orbitscore/engine test",
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier . --write",
     "telemetry:max": "node tools/max-telemetry-server.js",
-    "hooks:install": "echo '#!/bin/sh\n\n# OrbitScore pre-commit hook\n# Runs lint-staged on staged files\n\nnpx lint-staged' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit"
+    "prepare": "husky"
   },
   "version": "1.0.0",
   "main": "index.js",
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
+  "packageManager": "npm@10.9.0",
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "devDependencies": {
-    "@types/node": "^20.19.19",
+    "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
@@ -30,6 +37,7 @@
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
     "eslint-plugin-prettier": "^5.5.4",
+    "husky": "^9.1.7",
     "lint-staged": "^15.2.9",
     "prettier": "^3.6.2",
     "ts-node": "^10.9.2",

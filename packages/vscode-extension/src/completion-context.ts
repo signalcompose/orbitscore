@@ -92,13 +92,29 @@ export function getContextualCompletions(
     if (!context.hasBeat) {
       completions.push(createCompletion('beat', 'Set time signature', 'beat(${1:4} by ${2:4})'))
     }
-    completions.push(createCompletion('tick', 'Set tick resolution', 'tick(${1:4})'))
+    completions.push(createCompletion('tick', 'Set tick resolution', 'tick(${1:480})'))
     completions.push(createCompletion('key', 'Set global key', 'key(${1:C})'))
-    completions.push(createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'))
+    completions.push(
+      createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'),
+    )
     completions.push(createCompletion('gain', 'Set master volume in dB', 'gain(${1:0})'))
-    completions.push(createCompletion('compressor', 'Add compressor effect', 'compressor(${1:0.5}, ${2:0.5}, ${3:0.01}, ${4:0.1}, ${5:1.0}, ${6:true})'))
-    completions.push(createCompletion('limiter', 'Add limiter effect', 'limiter(${1:0.99}, ${2:0.01}, ${3:true})'))
-    completions.push(createCompletion('normalizer', 'Add normalizer effect', 'normalizer(${1:1.0}, ${2:0.01}, ${3:true})'))
+    completions.push(
+      createCompletion(
+        'compressor',
+        'Add compressor effect',
+        'compressor(${1:0.5}, ${2:0.5}, ${3:0.01}, ${4:0.1}, ${5:1.0}, ${6:true})',
+      ),
+    )
+    completions.push(
+      createCompletion('limiter', 'Add limiter effect', 'limiter(${1:0.99}, ${2:0.01}, ${3:true})'),
+    )
+    completions.push(
+      createCompletion(
+        'normalizer',
+        'Add normalizer effect',
+        'normalizer(${1:1.0}, ${2:0.01}, ${3:true})',
+      ),
+    )
 
     // Transport commands always available
     completions.push(createCompletion('run', 'Start all sequences', 'run()'))
@@ -141,6 +157,13 @@ export function getContextualCompletions(
     if (context.hasPlay) {
       completions.push(createCompletion('gain', 'Set volume in dB', 'gain(${1:0})'))
       completions.push(createCompletion('pan', 'Set pan position (-100 to 100)', 'pan(${1:0})'))
+
+      // Future features (parsed by parser but not yet implemented in audio engine):
+      // - fixpitch(): Pitch-preserving time-stretch (requires granular synthesis)
+      // - time(): Time-stretch factor (requires granular synthesis)
+      // Uncomment when granular synthesis is implemented in SuperCollider
+      // completions.push(createCompletion('fixpitch', 'Set pitch offset in semitones', 'fixpitch(${1:0})'))
+      // completions.push(createCompletion('time', 'Set time stretch factor', 'time(${1:1.0})'))
     }
 
     // Transport commands (usually at the end)
@@ -194,12 +217,11 @@ function sortCompletionsByRelevance(
     order['beat'] = 3
     order['length'] = 4
   } else if (context.hasPlay && !context.hasRun) {
-    // After play, suggest transport or modifiers
+    // After play, suggest transport commands
     order['run'] = 1
-    order['fixpitch'] = 2
-    order['time'] = 3
-    order['loop'] = 4
-    order['mute'] = 5
+    order['loop'] = 2
+    order['mute'] = 3
+    // Future: fixpitch and time (requires granular synthesis implementation)
   }
 
   return completions.sort((a, b) => {

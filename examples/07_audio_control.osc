@@ -106,7 +106,7 @@ hihat.gain(-6).audio("hihat.wav").play(0, 0, 1, 0)  // -6 dB
 // ==================================================
 
 // Start playback
-// global.run()
+// global.start()
 // kick.loop()
 // snare.loop()
 // hihat.loop()
@@ -152,7 +152,7 @@ drumHihat.gain(-6).pan(50).audio("hihat.wav")  // -6 dB, right
 drumHihat.play(1, 1, 1, 1)
 
 // Commands to try:
-// global.run()
+// global.start()
 // drumKick.loop()
 // drumSnare.loop()
 // drumHihat.loop()

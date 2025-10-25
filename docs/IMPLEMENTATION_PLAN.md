@@ -11,7 +11,9 @@ Implementation plan for the new audio-based OrbitScore DSL as defined in `INSTRU
 - **Old System**: MIDI-based DSL (deprecated)
 - **New System**: Audio-based DSL (✅ Core implementation complete)
 - **Migration Date**: December 25, 2024
-- **Completion Status**: ~85% (Core features complete, advanced features pending)
+- **Completion Status**: ~90% (Core features complete, advanced features pending)
+- **Refactoring Status**: ✅ Phase 1-7 Complete (All major refactoring completed)
+- **DSL Version**: v3.0 (Underscore prefix + Unidirectional toggle)
 
 ## Current Implementation Summary
 
@@ -40,11 +42,12 @@ Implementation plan for the new audio-based OrbitScore DSL as defined in `INSTRU
 - **DAW Plugin**: VST/AU development (Phase A5)
 
 ### 📊 Testing Coverage
-- **Total Tests**: 216 passed, 1 skipped (99.5%)
-- **Unit Tests**: 209
-- **E2E Tests**: 7
+- **Total Tests**: 115 passed, 15 skipped (88.5%)
+- **Unit Tests**: 100
+- **Integration Tests**: 15
 - **Code Coverage**: Core features fully tested
 - **Real Audio Tests**: Verified with actual playback (kick, arpeggio, nested patterns)
+- **Refactoring Impact**: Tests updated to reflect modular architecture
 
 ## Implementation Phases
 
@@ -107,8 +110,8 @@ seq1.play(1).fixpitch(0)
 
 #### A1.6 Transport Command Parsing
 ```js
-global.run()
-global.run.force()
+global.start()
+global.start.force()
 global.loop(seq1, seq2)
 seq1.mute()
 ```
@@ -160,7 +163,7 @@ seq1.mute()
 
 #### A3.1 Global Transport
 - [x] run() - start transport
-- [ ] run.force() - immediate start (not implemented)
+- [ ] start.force() - immediate start (not implemented)
 - [x] loop() - loop mode
 - [ ] loop.force() - immediate loop (not implemented)
 - [x] stop() - stop transport
@@ -296,7 +299,68 @@ seq1.mute()
 
 **Total**: 7-10 weeks for full implementation
 
+## Future Improvements (Post DSL v3.0)
+
+### 中優先度（次のPRで対処可能）
+
+#### ⚠️ エッジケーステストの追加
+**関連Issue**: Claude Review #45 項目5
+**目的**: RUN/LOOP/MUTEコマンドの堅牢性向上
+**内容**:
+- 空のコマンド: `RUN()`, `LOOP()`, `MUTE()`
+- 重複シーケンス: `RUN(kick, kick, kick)`
+- 存在しないシーケンス: `RUN(nonexistent)`（現在は警告のみ）
+- RUN→LOOP遷移時の挙動確認
+- 同一シーケンスの複数グループ所属
+
+**実装場所**: `tests/interpreter/unidirectional-toggle.spec.ts`
+
+#### ⚠️ パフォーマンス最適化
+**関連Issue**: Claude Review #45 項目4
+**目的**: handleLoopCommandの処理効率向上
+**内容**:
+- 現在の二重ループを単一ループに統合
+- oldLoopGroupとnewLoopGroupの差分処理を最適化
+- メモリアロケーション削減
+
+**実装場所**: `packages/engine/src/interpreter/process-statement.ts`
+**推定工数**: 0.5日
+
+### 低優先度（将来的な改善）
+
+#### 📚 ドキュメント充実
+**関連Issue**: Claude Review #45 項目6
+**目的**: 実践的なユースケースの提供
+**内容**:
+- より多くの実用例（ライブコーディングパターン）
+- DSL v2.0からv3.0への移行ガイド
+- RUN/LOOP/MUTEの組み合わせパターン集
+- トラブルシューティングガイド
+
+**実装場所**:
+- `docs/USER_MANUAL.md`
+- `docs/MIGRATION_GUIDE_v3.md`（新規作成）
+- `examples/live-coding-patterns/`（新規ディレクトリ）
+
+**推定工数**: 1-2日
+
+#### 📚 シームレス更新ロジックの統一・コメント追加
+**関連Issue**: Claude Review #45 項目1
+**目的**: 全_method()実装の一貫性確保
+**内容**:
+- 現在の_method()実装レビュー
+- "Future: immediate application logic"コメントの具体化
+- 統一的なシームレス更新パターンの設計
+- 実装ガイドライン文書化
+
+**実装場所**:
+- `packages/engine/src/core/sequence.ts`
+- `packages/engine/src/core/global.ts`
+- `docs/DEVELOPER_GUIDE.md`（新規セクション）
+
+**推定工数**: 2-3日（設計含む）
+
 ---
 
-*Last Updated: December 25, 2024*
+*Last Updated: 2025-01-09*
 *Canonical Reference: `docs/INSTRUCTION_ORBITSCORE_DSL.md`*

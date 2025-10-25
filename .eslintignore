@@ -1,0 +1,16 @@
+# Node modules
+node_modules/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Copied engine files in vscode-extension
+packages/vscode-extension/engine/
+
+# Test coverage
+coverage/
+
+# Generated files
+*.d.ts.map

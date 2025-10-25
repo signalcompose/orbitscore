@@ -4,7 +4,7 @@
 // Initialize
 var global = init GLOBAL
 global.tempo(110)
-global.beat(4)
+global.beat(4 by 4)
 global.tick(4)
 
 // === Example 1: Audio Chopping ===

@@ -5,8 +5,9 @@
 
 // --- Global Initialization ---
 var global = init GLOBAL
+global.audioPath("test-assets/audio")
 global.tempo(120)
-global.beat(4)
+global.beat(4 by 4)
 global.tick(4)
 
 // --- Sequence Initialization ---
@@ -81,7 +82,7 @@ sine2.audio("sine_880.wav").chop(1).play(0, 0, 0, 0)
 // ========================================
 
 // --- Start/Stop All ---
-global.run()
+global.start()
 global.stop()
 
 // --- Individual Sequence Control ---
@@ -126,8 +127,8 @@ global.stop()
 // --- Tempo/Beat Changes ---
 // global.tempo(140)
 // global.tempo(100)
-// global.beat(3)  // 3/4 time
-// global.beat(4)  // Back to 4/4
+// global.beat(3 by 4)  // 3/4 time
+// global.beat(4 by 4)  // Back to 4/4
 
 // ========================================
 // Performance Tips
