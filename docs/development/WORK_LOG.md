@@ -2610,6 +2610,63 @@ git mv docs/IMPROVEMENT_RECOMMENDATIONS.md docs/planning/
 - Phase 2コミット作成
 - PR作成（Phase 1+2統合）
 
+**Commit**: f9fe1e9
+**Branch**: `67-clarify-transport-docs`
+
+---
+
+### 6.45 User Documentation Internationalization - English/Japanese bilingual support (October 26, 2025)
+
+**Branch**: `67-clarify-transport-docs` (継続)
+
+#### Objective
+エンドユーザー向けドキュメントの多言語化（英語・日本語）を実施。publicリリースに向けて英語圏ユーザーへの対応を強化。
+
+#### Changes
+
+**Phase 3: User Documentation Internationalization**
+
+1. **ディレクトリ構造**:
+   - `docs/user/en/` - 英語版ユーザードキュメント
+   - `docs/user/ja/` - 日本語版ユーザードキュメント
+
+2. **README.md英語化**:
+   - プロジェクト概要を完全英語化
+   - 技術スタック、実装状況、DSL構文例を英語で記載
+   - ユーザードキュメントへのリンク追加（"Coming soon"表記→実際のリンクに更新）
+
+3. **USER_MANUAL.md多言語化**:
+   - `docs/user/ja/USER_MANUAL.md`: 既存の日本語版をコピー（740行）
+   - `docs/user/en/USER_MANUAL.md`: 英語版を新規作成
+     - Installation guide
+     - Basic usage
+     - DSL syntax guide
+     - Transport control (Unidirectional Toggle explanation)
+     - Advanced features (Polymeter, Audio slicing)
+     - Troubleshooting
+
+4. **GETTING_STARTED.md作成**:
+   - `docs/user/en/GETTING_STARTED.md`: 英語版クイックスタート
+   - `docs/user/ja/GETTING_STARTED.md`: 日本語版クイックスタート
+   - Prerequisites, Installation steps, Verification, Examples
+
+#### Files Modified/Created
+- `README.md` (英語化、ユーザードキュメントリンク更新)
+- `docs/user/en/USER_MANUAL.md` (新規作成、英語版)
+- `docs/user/en/GETTING_STARTED.md` (新規作成、英語版)
+- `docs/user/ja/USER_MANUAL.md` (既存からコピー、日本語版)
+- `docs/user/ja/GETTING_STARTED.md` (新規作成、日本語版)
+
+#### Technical Decisions
+- **README.md**: 完全英語化（プロジェクトの国際化を明確に）
+- **User Documentation**: 英語・日本語の両方を提供（public release準備）
+- **Developer Documentation**: 日本語のまま維持（開発チームの効率性）
+- **Documentation Structure**: 用途別に明確に分離（core/development/testing/planning/user）
+
+#### Next Steps
+- コミット作成
+- PR作成（Phase 1+2+3統合）
+
 **Commit**: (pending)
 **Branch**: `67-clarify-transport-docs`
 
