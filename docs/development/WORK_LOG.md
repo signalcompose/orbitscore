@@ -17,6 +17,72 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.43 Issue #67: Documentation clarification - Transport control and exaggerated expressions (October 26, 2025)
+
+**Date**: October 26, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `67-clarify-transport-docs`
+**Issue**: #67
+**PR**: TBD
+
+**Work Content**: ドキュメント内の設定メソッドと実行関数の混同を修正し、誇張表現を事実ベースの記述に変更。
+
+#### 主な変更内容
+
+**1. Transport制御方法の明確化**
+
+- **問題**: `.run()`, `.loop()` などのメソッド呼び出しがユーザーAPIとして記述されていた
+- **実態**: `filterDefinitionsOnly`によりファイル保存時に自動除外される
+- **修正**:
+  - INSTRUCTION_ORBITSCORE_DSL.md: "Sequence Transport (Method-based)"セクションを削除
+  - 予約キーワード（`RUN()`, `LOOP()`, `MUTE()`）を主要なTransport制御方法として位置づけ
+  - USER_MANUAL.md: "シーケンスの実行（個別）"セクションを削除
+  - README.md: Transport制御の説明を明確に分離
+
+**2. 片記号方式（Unidirectional Toggle）の説明強化**
+
+- STOP/UNMUTEキーワードが不要な理由を明記:
+  - **STOP不要**: `LOOP(other_sequences)`で自動停止
+  - **UNMUTE不要**: `MUTE(other_sequences)`で除外により自動アンミュート
+- 片記号方式のメリットを説明: シンプルさ、状態の明確さ
+
+**3. 誇張表現の削除**
+
+以下の誇張表現を事実ベースの記述に変更:
+- "Ultra-low latency" → "0-2ms latency"
+- "Professional audio quality" → "48kHz/24bit audio output" / "High-quality audio output"
+- "Perfect 3-track synchronization" → "3-track synchronization"
+- "Production-ready" → "Live coding ready"
+
+#### 修正されたファイル
+
+- `docs/INSTRUCTION_ORBITSCORE_DSL.md`:
+  - セクション5.2削除（Sequence Transport Method-based）
+  - セクション5.3を5.2に昇格（Reserved Keywords）
+  - 片記号方式の説明強化
+  - セクション11のコード例修正（`kick.mute()` → `MUTE(kick)`）
+  - 誇張表現の削除
+
+- `docs/USER_MANUAL.md`:
+  - セクション4.5.2削除（シーケンスの実行（個別））
+  - セクション4.5.3を4.5.2に昇格（トランスポート制御）
+  - 片記号方式の説明補強
+  - 誇張表現の削除（"高品質なオーディオエンジン" → "0-2msレイテンシのオーディオエンジン"）
+
+- `README.md`:
+  - Transport制御の説明を分離（Global transport / Sequence control）
+  - 基本構文例の修正（`.loop()` → `LOOP()`, `.run()` → `RUN()`）
+  - Phase 7 Achievementsの誇張表現削除
+
+#### 技術的決定事項
+
+- **ドキュメント作成ルール**: 誇張表現・大袈裟な表現を使用しない
+  - 禁止: "プロフェッショナルな", "完璧な", "最高の", "究極の"
+  - 推奨: 事実ベース、具体的数値、状態明示
+- **WORK_LOG.mdの扱い**: 過去の記録は改竄しない（歴史的記録として保持）
+
+---
+
 ### 6.42 PR #65: Audio playback testing and multiline function execution (October 25, 2025)
 
 **Date**: October 25, 2025
@@ -2445,6 +2511,164 @@ Duration    ~300ms
 
 **Commit**: 1c045f9
 **Branch**: feature/git-workflow-setup
+
+---
+
+### 6.44 Documentation Reorganization - Directory structure and test document consolidation (October 26, 2025)
+
+**Branch**: `67-clarify-transport-docs` (継続)
+
+#### Objective
+ドキュメント構造の再編成とテスト関連ドキュメントの統合を実施。実装との整合性確認と誇張表現の削除を徹底。
+
+#### Changes
+
+**Phase 2: Documentation Reorganization**
+
+1. **ディレクトリ構造の作成**:
+   - `docs/core/` - コアドキュメント（PROJECT_RULES, INSTRUCTION_ORBITSCORE_DSL, USER_MANUAL, CONTEXT7_GUIDE, INDEX）
+   - `docs/development/` - 開発ドキュメント（WORK_LOG, IMPLEMENTATION_PLAN, BEAT_METER_SPECIFICATION）
+   - `docs/testing/` - テストドキュメント（TESTING_GUIDE, PERFORMANCE_TEST）
+   - `docs/planning/` - 企画ドキュメント（COLLABORATION_FEATURE_PLAN, ELECTRON_APP_PLAN, IMPROVEMENT_RECOMMENDATIONS）
+
+2. **ファイル移動**（git mv使用）:
+   - コアドキュメント5ファイル → `docs/core/`
+   - 開発ドキュメント3ファイル → `docs/development/`
+   - 企画ドキュメント3ファイル → `docs/planning/`
+
+3. **テストドキュメント統合**:
+   - `docs/testing/TESTING_GUIDE.md` 作成（統合版）
+     - AUDIO_TEST_CHECKLIST.md
+     - AUDIO_TEST_SETUP.md
+     - CURSOR_TEST_INSTRUCTIONS.md → IDE_TEST_INSTRUCTIONS（VS Code/Cursor/Claude Code対応）
+   - `docs/testing/PERFORMANCE_TEST.md` 作成（統合版）
+     - PERFORMANCE_TEST_GUIDE.md
+     - PERFORMANCE_TEST_REPORT.md
+
+4. **実装検証と修正**:
+   - テスト結果: 225 passed / 23 skipped (248 total) = 90.7%
+   - SuperCollider統合: 0-2ms latency (確認済み)
+   - Reserved keywords: `RUN()`, `LOOP()`, `MUTE()` (実装確認)
+   - Underscore prefix pattern: `_audio()`, `_chop()`, `_play()` (実装確認)
+   - filterDefinitionsOnly: `.run()`, `.loop()`, `.mute()` は定義時にフィルター（確認済み）
+
+5. **誇張表現の削除**:
+   - "完璧", "プロフェッショナルレベル", "究極の", "音楽制作の新しいパラダイム" 等を削除
+   - 事実ベースの表現に統一: "0-2ms latency", "48kHz/24bit audio output"
+   - IMPLEMENTATION_PLAN.md: "Ultra-low latency" → "0-2ms latency"
+   - IMPROVEMENT_RECOMMENDATIONS.md: 誇張的結論を簡潔な事実に修正
+
+6. **ドキュメントリンク更新**:
+   - `docs/core/INDEX.md`: 新しいディレクトリ構造に対応、DSL v3.0に更新
+   - `README.md`: Documentation セクションのパス更新
+   - `CLAUDE.md`: セッション開始時の必須ドキュメントパス更新
+   - `docs/development/IMPLEMENTATION_PLAN.md`: 相対パス修正、テスト数更新、last updated更新
+   - `docs/planning/IMPROVEMENT_RECOMMENDATIONS.md`: パス修正、誇張表現削除
+
+#### Files Modified
+- `docs/core/INDEX.md` (ディレクトリ構造更新、DSL v3.0反映)
+- `docs/testing/TESTING_GUIDE.md` (新規作成、統合版)
+- `docs/testing/PERFORMANCE_TEST.md` (新規作成、統合版)
+- `docs/development/IMPLEMENTATION_PLAN.md` (パス修正、テスト数更新、SuperCollider記載、誇張表現削除)
+- `docs/planning/IMPROVEMENT_RECOMMENDATIONS.md` (パス修正、誇張表現削除)
+- `README.md` (ドキュメントリンク更新)
+- `CLAUDE.md` (セッション開始時パス更新)
+
+#### Git Operations
+```bash
+# ディレクトリ作成
+mkdir -p docs/{core,development,testing,planning}
+
+# ファイル移動（git mv使用）
+git mv docs/PROJECT_RULES.md docs/core/
+git mv docs/INSTRUCTION_ORBITSCORE_DSL.md docs/core/
+git mv docs/USER_MANUAL.md docs/core/
+git mv docs/CONTEXT7_GUIDE.md docs/core/
+git mv docs/INDEX.md docs/core/
+git mv docs/WORK_LOG.md docs/development/
+git mv docs/IMPLEMENTATION_PLAN.md docs/development/
+git mv docs/BEAT_METER_SPECIFICATION.md docs/development/
+git mv docs/COLLABORATION_FEATURE_PLAN.md docs/planning/
+git mv docs/ELECTRON_APP_PLAN.md docs/planning/
+git mv docs/IMPROVEMENT_RECOMMENDATIONS.md docs/planning/
+```
+
+#### Implementation Verification
+- **Parser Tests**: 50/50 passed
+- **Interpreter Tests**: 83/83 passed
+- **DSL v3.0 Tests**: 56/56 passed (Unidirectional Toggle, Underscore Prefix, Gain/Pan)
+- **Audio Engine**: 15/15 passed (SuperCollider integration)
+- **Total**: 225 passed / 23 skipped (248 total) = 90.7%
+
+#### Technical Decisions
+- **Directory Structure**: ドキュメントを機能別に整理し、見つけやすさと保守性を向上
+- **Test Document Consolidation**: 散在していたテストドキュメントを統合し、IDE支援（VS Code/Cursor/Claude Code）を明記
+- **Exaggerated Expression Removal**: 事実ベースの記述に統一し、ドキュメントの信頼性を向上
+- **Implementation Verification**: 全ドキュメントを実装に照らし合わせて検証、不正確な記述を修正
+
+#### Next Steps
+- Phase 2コミット作成
+- PR作成（Phase 1+2統合）
+
+**Commit**: f9fe1e9
+**Branch**: `67-clarify-transport-docs`
+
+---
+
+### 6.45 User Documentation Internationalization - English/Japanese bilingual support (October 26, 2025)
+
+**Branch**: `67-clarify-transport-docs` (継続)
+
+#### Objective
+エンドユーザー向けドキュメントの多言語化（英語・日本語）を実施。publicリリースに向けて英語圏ユーザーへの対応を強化。
+
+#### Changes
+
+**Phase 3: User Documentation Internationalization**
+
+1. **ディレクトリ構造**:
+   - `docs/user/en/` - 英語版ユーザードキュメント
+   - `docs/user/ja/` - 日本語版ユーザードキュメント
+
+2. **README.md英語化**:
+   - プロジェクト概要を完全英語化
+   - 技術スタック、実装状況、DSL構文例を英語で記載
+   - ユーザードキュメントへのリンク追加（"Coming soon"表記→実際のリンクに更新）
+
+3. **USER_MANUAL.md多言語化**:
+   - `docs/user/ja/USER_MANUAL.md`: 既存の日本語版をコピー（740行）
+   - `docs/user/en/USER_MANUAL.md`: 英語版を新規作成
+     - Installation guide
+     - Basic usage
+     - DSL syntax guide
+     - Transport control (Unidirectional Toggle explanation)
+     - Advanced features (Polymeter, Audio slicing)
+     - Troubleshooting
+
+4. **GETTING_STARTED.md作成**:
+   - `docs/user/en/GETTING_STARTED.md`: 英語版クイックスタート
+   - `docs/user/ja/GETTING_STARTED.md`: 日本語版クイックスタート
+   - Prerequisites, Installation steps, Verification, Examples
+
+#### Files Modified/Created
+- `README.md` (英語化、ユーザードキュメントリンク更新)
+- `docs/user/en/USER_MANUAL.md` (新規作成、英語版)
+- `docs/user/en/GETTING_STARTED.md` (新規作成、英語版)
+- `docs/user/ja/USER_MANUAL.md` (既存からコピー、日本語版)
+- `docs/user/ja/GETTING_STARTED.md` (新規作成、日本語版)
+
+#### Technical Decisions
+- **README.md**: 完全英語化（プロジェクトの国際化を明確に）
+- **User Documentation**: 英語・日本語の両方を提供（public release準備）
+- **Developer Documentation**: 日本語のまま維持（開発チームの効率性）
+- **Documentation Structure**: 用途別に明確に分離（core/development/testing/planning/user）
+
+#### Next Steps
+- コミット作成
+- PR作成（Phase 1+2+3統合）
+
+**Commit**: (pending)
+**Branch**: `67-clarify-transport-docs`
 
 ---
 

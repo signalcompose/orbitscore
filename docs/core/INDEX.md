@@ -19,29 +19,65 @@
    - `list_memories`で利用可能なメモリを確認
    - 必要に応じて`read_memory`で読み込む
 
-4. **[WORK_LOG.md](./WORK_LOG.md)** 📝
+4. **[INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md)** 🎵
+   - **Single source of truth** for OrbitScore DSL
+   - Audio-based DSL specification (v3.0)
+   - Global parameters and sequences
+   - Transport commands (RUN/LOOP/MUTE)
+
+5. **[USER_MANUAL.md](./USER_MANUAL.md)** 📖
+   - User-facing documentation
+   - Feature explanations and examples
+   - Live coding workflow guide
+
+### Development Documents
+
+1. **[WORK_LOG.md](../development/WORK_LOG.md)** 📝
    - Complete development history
    - Technical decisions and rationale
    - Chronological progress tracking
    - All commits documented
 
-5. **[INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md)** 🎵
-   - **Single source of truth** for OrbitScore DSL
-   - Audio-based DSL specification (v2.0)
-   - Global parameters and sequences
-   - Transport commands and DAW integration
-
-6. **[IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)** 🗺️
+2. **[IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md)** 🗺️
    - Technical roadmap
    - Phase-by-phase implementation
    - Testing requirements
    - Completion criteria
 
-7. **[BEAT_METER_SPECIFICATION.md](./BEAT_METER_SPECIFICATION.md)** 🎼
+3. **[BEAT_METER_SPECIFICATION.md](../development/BEAT_METER_SPECIFICATION.md)** 🎼
    - Beat/Meter specification and future plans
    - Polymeter feature details
    - Tempo/BPM terminology
    - Phase 2 validation plans
+
+### Testing Documents
+
+1. **[TESTING_GUIDE.md](../testing/TESTING_GUIDE.md)** 🧪
+   - Unit & Integration test procedures
+   - IDE integration testing (VS Code/Cursor/Claude Code)
+   - Feature verification checklist
+   - Troubleshooting guide
+
+2. **[PERFORMANCE_TEST.md](../testing/PERFORMANCE_TEST.md)** ⚡
+   - Live coding performance testing
+   - Benchmarks and metrics
+   - Stress test procedures
+   - Performance optimization guide
+
+### Planning Documents
+
+1. **[COLLABORATION_FEATURE_PLAN.md](../planning/COLLABORATION_FEATURE_PLAN.md)** 👥
+   - Collaboration feature planning
+   - Multi-user scenarios
+
+2. **[ELECTRON_APP_PLAN.md](../planning/ELECTRON_APP_PLAN.md)** 💻
+   - Standalone Electron app planning
+   - Desktop application architecture
+
+3. **[IMPROVEMENT_RECOMMENDATIONS.md](../planning/IMPROVEMENT_RECOMMENDATIONS.md)** 💡
+   - Future improvement proposals
+   - Priority-based roadmap
+   - Technical enhancements
 
 ### Quick Links
 
@@ -90,9 +126,10 @@
 ## 🔍 Finding Information
 
 - **DSL Specification**: Check [INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md) ⭐
-- **How something works**: Check [WORK_LOG.md](./WORK_LOG.md)
-- **What to implement**: Check [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)
+- **How something works**: Check [WORK_LOG.md](../development/WORK_LOG.md)
+- **What to implement**: Check [IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md)
 - **Project practices**: Check [PROJECT_RULES.md](./PROJECT_RULES.md)
+- **Testing procedures**: Check [TESTING_GUIDE.md](../testing/TESTING_GUIDE.md)
 
 ## 📝 Documentation Guidelines
 
@@ -110,15 +147,15 @@ OrbitScoreのDSL設計は、開発過程で大きく進化しました：
 
 | Version | Document | Status | Description |
 |---------|----------|--------|-------------|
-| **v2.0** | [INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md) | ✅ **現行** | SuperCollider Audio Engine統合 |
+| **v3.0** | [INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md) | ✅ **現行** | SuperCollider Audio Engine + Unidirectional Toggle |
 | **v1.0** | [archive/DSL_SPECIFICATION_v1.0_MIDI.md](./archive/DSL_SPECIFICATION_v1.0_MIDI.md) | 📚 アーカイブ | MIDIベース度数システム |
 
 **設計思想の進化**:
 - **v1.0**: MIDIベースの度数システム（0=休符、1-12=半音階）
-- **v2.0**: オーディオベースの直接再生システム（`audio()`, `chop()`, `play()`）
+- **v3.0**: オーディオベース + SuperCollider (`audio()`, `chop()`, `RUN()`, `LOOP()`, `MUTE()`)
 
-詳細な技術的変遷と意思決定の経緯は[WORK_LOG.md](./WORK_LOG.md)を参照してください。
+詳細な技術的変遷と意思決定の経緯は[WORK_LOG.md](../development/WORK_LOG.md)を参照してください。
 
 ---
 
-_Last Updated: October 6, 2025 - Added archive section for research documentation_
+_Last Updated: 2025-10-26 - Reorganized directory structure for documentation_
