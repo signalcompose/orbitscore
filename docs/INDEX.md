@@ -14,10 +14,10 @@
    - External library documentation reference
    - MUST read at session start
 
-3. **Serena Memory** 🤖
-   - Serena MCP manages long-term memory automatically
-   - Use `serena-list_memories` to see available memories
-   - Key memories: `project_overview`, `current_issues`, `serena_usage_guidelines`
+3. **Serenaツール** 🤖
+   - Serenaを使ってプロジェクト知識を管理
+   - `list_memories`で利用可能なメモリを確認
+   - 必要に応じて`read_memory`で読み込む
 
 4. **[WORK_LOG.md](./WORK_LOG.md)** 📝
    - Complete development history

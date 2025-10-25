@@ -1,0 +1,26 @@
+// OrbitScore Audio Test 02: Global Parameters
+// Tests: Tempo, beat, and audio path settings
+
+var global = init GLOBAL
+var seq = init global.seq
+
+seq.audio("kick.wav").play(1, 0, 1, 0)
+
+// 2-1: Tempo setting
+global.tempo(120)
+
+// 2-2: Beat setting - 4/4 time
+global.beat(4)
+
+// Start playback
+global.start()
+LOOP(seq)
+
+// Wait for user to hear 4/4 pattern
+// Then change to 5/4
+// global._beat(5 by 4)
+
+// Expected:
+// - Playback starts at 120 BPM in 4/4 time
+// - Pattern should be steady and on-tempo
+// - Changing to 5/4 should alter the rhythm feel

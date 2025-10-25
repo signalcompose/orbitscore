@@ -143,6 +143,13 @@ export class SuperColliderPlayer {
   }
 
   /**
+   * Reinitialize sequence tracking (for unmute)
+   */
+  reinitializeSequenceTracking(sequenceName: string): void {
+    this.eventScheduler.reinitializeSequenceTracking(sequenceName)
+  }
+
+  /**
    * Add mastering effect to master output
    */
   async addEffect(target: string, effectType: string, params: EffectParams): Promise<void> {

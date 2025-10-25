@@ -16,6 +16,7 @@ export interface Scheduler {
   stop(): void
   stopAll(): void
   clearSequenceEvents(name: string): void
+  reinitializeSequenceTracking(name: string): void
   scheduleEvent(
     filepath: string,
     time: number,

@@ -48,7 +48,7 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 | **Phase 8** | 📝 Next | 0% | Polymeter Testing & Advanced Features |
 | **Phase 9** | 📝 Planned | 0% | DAW Plugin Development |
 
-**Current Status**: Git Workflow Complete! Stable development environment established 🛡️
+**Current Status**: Audio Playback Testing in progress (Issue #61) 🎧
 
 **Phase 7 Achievements**:
 - ✅ **SuperCollider audio engine** (replaced sox)
@@ -72,52 +72,75 @@ See [WORK_LOG.md](docs/WORK_LOG.md#615-phase-6-completion-january-5-2025) for de
 
 ## 技術スタック
 
+### 現行（Audio-Based）
 - TypeScript
 - VS Code Extension API
 - **SuperCollider** (scsynth + supercolliderjs)
 - OSC (Open Sound Control)
-- CoreMIDI (@julusian/midi) - Legacy
-- macOS IAC Bus - Legacy
+
+### 旧実装（Deprecated / 未実装）
+- ~~CoreMIDI (@julusian/midi)~~ - Legacy, 未実装
+- ~~macOS IAC Bus~~ - Legacy, 未実装
 
 ## プロジェクト構造
 
 ```
 orbitscore/
 ├── packages/
-│   ├── engine/          # DSLエンジン
+│   ├── engine/          # DSLエンジン（Audio-Based）
 │   │   ├── src/
-│   │   │   ├── parser/  # パーサ実装
-│   │   │   ├── pitch.ts # Pitch/Bend変換
-│   │   │   ├── scheduler.ts # スケジューラ
-│   │   │   ├── midi.ts  # MIDI出力
-│   │   │   └── cli.ts   # CLIインターフェース
-│   │   └── dist/        # ビルド出力
-│   └── vscode-extension/ # VS Code拡張
-│       ├── src/         # 拡張機能ソース
-│       └── syntaxes/    # シンタックス定義
-├── docs/                # ドキュメント
-│   ├── WORK_LOG.md     # 開発履歴
-│   ├── PROJECT_RULES.md # プロジェクトルール
+│   │   │   ├── parser/       # パーサ実装
+│   │   │   ├── interpreter/  # インタープリタ（v2）
+│   │   │   ├── core/         # Global & Sequence
+│   │   │   ├── audio/        # SuperCollider統合
+│   │   │   ├── timing/       # タイミング計算
+│   │   │   └── cli/          # CLIインターフェース
+│   │   ├── dist/             # ビルド出力
+│   │   └── supercollider/    # SynthDef定義
+│   └── vscode-extension/     # VS Code拡張
+│       ├── src/              # 拡張機能ソース
+│       ├── syntaxes/         # シンタックス定義
+│       └── engine/           # バンドルされたエンジン
+├── docs/                     # ドキュメント
+│   ├── WORK_LOG.md          # 開発履歴
+│   ├── PROJECT_RULES.md     # プロジェクトルール
+│   ├── INSTRUCTION_ORBITSCORE_DSL.md  # DSL仕様
 │   └── ...
-├── tests/               # テストスイート
-│   ├── parser/         # パーサテスト
-│   ├── pitch/          # Pitch変換テスト
-│   ├── midi/           # CoreMIDIシンクのユニットテスト
-│   └── scheduler/      # スケジューラテスト
+├── tests/                    # テストスイート
+│   ├── parser/              # パーサテスト
+│   ├── interpreter/         # インタープリタテスト
+│   ├── audio/               # オーディオ処理テスト
+│   ├── core/                # Global & Sequenceテスト
+│   └── timing/              # タイミング計算テスト
 ├── examples/
-│   └── demo.osc        # デモファイル
-└── README.md           # このファイル
+│   └── *.osc                # サンプルファイル
+└── README.md                # このファイル
 ```
 
 ## 開発状況
 
-### 完了フェーズ
+### 完了フェーズ（Audio-Based実装）
+
+詳細は [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) を参照
+
+- ✅ **Phase 1-3** - Parser, Interpreter, Transport System
+- ✅ **Phase 4** - VS Code Extension (Syntax, Commands, IntelliSense)
+- ✅ **Phase 5** - Audio Playback Verification
+- ✅ **Phase 6** - Live Coding Workflow
+- ✅ **Phase 7** - SuperCollider Integration (0-2ms Latency)
+
+### 旧完了フェーズ（MIDI-Based / Deprecated）
+
+<details>
+<summary>旧フェーズ（参考用）</summary>
 
 - ✅ **Phase 1** - パーサ実装
 - ✅ **Phase 2** - Pitch/Bend変換（度数→MIDIノート+PitchBend、octave/octmul/detune/MPE）
 - ✅ **Phase 3** - スケジューラ + Transport（リアルタイム再生、Loop/Jump、Mute/Solo）
 - ✅ **Phase 4** - VS Code拡張（シンタックスハイライト、Cmd+Enter実行、Transport UI）
 - ✅ **Phase 5** - MIDI出力実装（CoreMIDI / IAC Bus）
+
+</details>
 
 ## 📚 Documentation
 
@@ -129,7 +152,40 @@ orbitscore/
 - 🗺️ [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) - 実装計画
 - 📚 [INDEX.md](docs/INDEX.md) - ドキュメント索引
 
-## 実装済み機能
+## 実装済み機能（Audio-Based v3.0）
+
+### Parser & Interpreter
+
+- ✅ グローバル設定（`GLOBAL`, `tempo()`, `beat()`, `audioPath()`）
+- ✅ シーケンス設定（`global.seq`, `beat()`, `length()`, `audio()`）
+- ✅ パターン定義（`play()`, `chop()`）
+- ✅ メソッドチェーン構文
+
+### Audio Engine (SuperCollider)
+
+- ✅ オーディオファイル再生（WAV, AIFF, MP3, MP4）
+- ✅ Ultra-low latency（0-2ms）
+- ✅ Time-stretching（テンポ調整）
+- ✅ Chop機能（オーディオスライシング）
+- ✅ Buffer管理とプリロード
+
+### Transport & Timing
+
+- ✅ リアルタイムスケジューリング
+- ✅ Polymeter対応（シーケンス毎に独立した拍子）
+- ✅ Transport制御（`start()`, `loop()`, `stop()`）
+- ✅ Reserved keywords（`RUN()`, `LOOP()`, `MUTE()`）
+- ✅ Bar-quantized execution
+
+### VS Code Extension
+
+- ✅ シンタックスハイライト（Audio DSL v3.0）
+- ✅ Cmd+Enter実行
+- ✅ エンジン制御コマンド
+- ✅ リアルタイムフィードバック
+
+<details>
+<summary>旧実装済み機能（MIDI-Based / Deprecated）</summary>
 
 ### パーサ (Phase 1)
 
@@ -153,13 +209,7 @@ orbitscore/
 - ✅ Mute/Solo機能
 - ✅ 窓ベースNoteOff管理
 
-### VS Code拡張 (Phase 4)
-
-- ✅ シンタックスハイライト
-- ✅ Cmd+Enter選択実行
-- ✅ Transport UIパネル
-- ✅ リアルタイム診断
-- ✅ ステータスバー表示
+</details>
 
 ## テスト
 
@@ -194,13 +244,67 @@ npm install
 npm run build
 ```
 
-### MIDIポート設定
+### ビルドコマンド
+
+```bash
+# 通常ビルド（増分ビルド）
+npm run build
+
+# クリーンビルド（全ファイルを再コンパイル）
+npm run build:clean
+```
+
+**注意**: 初回ビルド時や、TypeScriptの増分ビルドで問題が発生した場合は `npm run build:clean` を実行してください。
+
+**VSCode Extension専用ビルド**:
+```bash
+cd packages/vscode-extension
+npm run build          # 増分ビルド
+npm run build:clean    # クリーンビルド
+```
+
+### ~~MIDIポート設定~~ (未実装)
+
+> ⚠️ **Note**: MIDI機能は現在未実装です。本プロジェクトはオーディオベースのDSLに移行しました。以下の説明は旧仕様（Deprecated）です。
+
+<details>
+<summary>旧MIDI仕様（参考用）</summary>
 
 - デフォルトで `IAC Driver Bus 1` に接続しますが、`.env` に `ORBITSCORE_MIDI_PORT="Your IAC Bus"` を指定すると上書きできます。
 - 各シーケンスの `bus "..."` 設定を解析し、最初に検出したIAC Bus名を優先してオープンします。
 - 複数バスを定義する場合は、実行時に警告が表示されます（現状は最初のバスを利用）。
 
-### DSLの基本構文
+</details>
+
+### DSLの基本構文（Audio-Based v3.0）
+
+```osc
+// グローバル設定
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("./audio")  // オーディオファイルのベースパス
+
+// グローバル起動
+global.start()
+
+// キックシーケンス
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("kick.wav")
+kick.play(1, 0, 1, 0)
+kick.loop()
+
+// スネアシーケンス
+var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio("snare.wav")
+snare.play(0, 1, 0, 1)
+snare.run()
+```
+
+<details>
+<summary>旧MIDI構文（参考用 / Deprecated）</summary>
 
 ```osc
 # グローバル設定
@@ -223,6 +327,8 @@ sequence piano {
   (1@U0.5, 5@U1, 8@U0.25)  0@U0.5  3@2s  12@25%2bars
 }
 ```
+
+</details>
 
 ### VS Code拡張
 
