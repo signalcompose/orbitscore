@@ -122,11 +122,14 @@ git branch --show-current
 
 ### Development Commands
 ```bash
-npm run build            # Build all packages
+npm run build            # Build all packages (incremental)
+npm run build:clean      # Clean build (rebuild all files)
 npm test                 # Run all tests (225 tests, 23 skipped)
 npm run dev:engine       # Run engine in development mode
 npm run lint             # ESLint + Prettier
 ```
+
+**Note**: Use `npm run build:clean` if you encounter TypeScript incremental build issues (e.g., `cli-audio.js` not generated).
 
 ### Technology Stack Summary
 - **Frontend/DSL**: TypeScript, VS Code Extension API
@@ -244,6 +247,93 @@ gh pr create --base develop --body "Closes #N"
 **Exception**: Project-specific docs (`/docs`) use Read tool directly.
 
 **Details**: See [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md)
+
+---
+
+## 🚨 Git Workflow 絶対禁止事項
+
+- ❌ **main → develop への逆流**（これが最も重要）
+- ❌ **main・developブランチへの直接コミット**
+- ❌ Squashマージ（Git Flow履歴が破壊される）
+- ❌ ISSUE番号のないブランチ名
+
+**重要**: developからmainへの直接PRは**リリース時のみ許可**。
+逆方向（main → develop）は**絶対禁止**。
+
+---
+
+## Commit・PR・ISSUE言語ルール
+
+### 🚨 絶対に守るべき言語ルール
+
+#### コミットメッセージ
+
+- ✅ **タイトル（1行目）**: 必ず英語 (Conventional Commits)
+- ✅ **本文（2行目以降）**: 必ず日本語
+
+#### PR（Pull Request）
+
+- ✅ **タイトル**: 英語
+- ✅ **本文**: 日本語
+
+#### ISSUE
+
+- ✅ **タイトル**: 英語
+- ✅ **本文**: 日本語
+
+### Conventional Commits形式
+
+**フォーマット**:
+```
+<type>(<scope>): <subject>  ← 英語
+
+<body>  ← 日本語
+
+<footer>
+```
+
+**タイプ**:
+- `feat`: 新機能
+- `fix`: バグ修正
+- `docs`: ドキュメントのみの変更
+- `refactor`: リファクタリング
+- `test`: テスト追加・修正
+- `chore`: ビルドプロセスやツールの変更
+
+### 正しい例
+
+```bash
+git commit -m "$(cat <<'EOF'
+feat(dsl): add polymeter support
+
+ポリメーター機能を実装
+
+## 変更内容
+- 異なる拍子のパターンを同時再生
+- テンポ独立制御
+- SuperColliderとの統合
+
+Closes #123
+EOF
+)"
+```
+
+### 間違った例（絶対にやってはいけない）
+
+```bash
+# ❌ NG: 本文が英語
+feat(dsl): add polymeter support
+
+- Add polymeter pattern support  ← 英語はダメ！
+- Support different time signatures  ← 英語はダメ！
+```
+
+```bash
+# ❌ NG: タイトルが日本語
+ポリメーター機能の実装  ← タイトルは英語で！
+
+異なる拍子のパターンを同時再生できるようにしました。
+```
 
 ---
 

@@ -234,10 +234,19 @@ export async function processTransportStatement(
 }
 
 /**
- * Handle RUN() command - unidirectional toggle
+ * Handle RUN() command - always execute immediately
+ * RUN() is an imperative command that runs sequences at the moment it's called
+ *
+ * Key behaviors:
+ * - RUN(kick, snare): Execute kick and snare immediately (EVERY time called)
+ * - RUN(): Clear the RUN group (no execution)
+ *
+ * Unlike the old unidirectional toggle, RUN() ALWAYS executes when called with arguments,
+ * regardless of previous RUN() calls. This supports live coding where Cmd+Enter should
+ * trigger immediate execution.
  */
 async function handleRunCommand(sequenceNames: string[], state: InterpreterState): Promise<void> {
-  // Validate all sequences exist before updating state
+  // Validate all sequences exist
   const notFound: string[] = []
   const validSequences: string[] = []
 
@@ -256,10 +265,11 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
     )
   }
 
+  // Update RUN group (for state tracking, though RUN is imperative)
   const newRunGroup = new Set(validSequences)
   const oldRunGroup = state.runGroup
 
-  // Stop sequences that are no longer in RUN group (and not in LOOP group)
+  // Stop sequences that are removed from RUN group (only if not in LOOP group)
   for (const seqName of oldRunGroup) {
     if (!newRunGroup.has(seqName) && !state.loopGroup.has(seqName)) {
       const sequence = state.sequences.get(seqName)
@@ -269,10 +279,11 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
     }
   }
 
-  // Update RUN group with only valid sequences
+  // Update RUN group state
   state.runGroup = newRunGroup
 
-  // Execute run() on included sequences
+  // Execute run() on all specified sequences immediately
+  // This happens EVERY time RUN() is called, regardless of previous state
   for (const seqName of validSequences) {
     const sequence = state.sequences.get(seqName)
     if (sequence) {
