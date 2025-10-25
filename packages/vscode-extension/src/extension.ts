@@ -936,16 +936,107 @@ async function runSelection() {
     return
   }
 
-  // Get selected text or current line
+  // Get selected text or current line (with multiline detection)
   let text: string
+  let executionRange: vscode.Range
   const selection = editor.selection
 
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
+    executionRange = new vscode.Range(selection.start, selection.end)
   } else {
     // Get the current line
-    const line = editor.document.lineAt(selection.active.line)
-    text = line.text
+    const currentLine = selection.active.line
+    let startLine = currentLine
+    let endLine = currentLine
+
+    // Check if we're on a function call - if so, execute the entire call (including multiline)
+    // This allows cursor to be on any line of a multiline function call
+
+    const currentLineText = editor.document.lineAt(currentLine).text
+
+    // Check if current line contains a function call pattern
+    // Patterns: identifier(...), identifier.method(...), METHOD(...)
+    const hasFunctionCall = /[\w.]+\s*\(/.test(currentLineText)
+
+    if (hasFunctionCall) {
+      // Count parentheses balance on current line
+      const openParens = (currentLineText.match(/\(/g) || []).length
+      const closeParens = (currentLineText.match(/\)/g) || []).length
+      const currentBalance = openParens - closeParens
+
+      // If balanced, it's a single-line call - execute just this line
+      if (currentBalance === 0) {
+        // Single line function call - use current line
+        startLine = currentLine
+        endLine = currentLine
+      } else {
+        // Multiline function call - find the complete range
+
+        // Search backward to find the function call start (line with opening paren)
+        let balance = 0
+        for (let i = currentLine; i >= 0; i--) {
+          const lineText = editor.document.lineAt(i).text
+          const open = (lineText.match(/\(/g) || []).length
+          const close = (lineText.match(/\)/g) || []).length
+
+          // Add to balance as we go backwards
+          balance += close - open
+
+          // When balance becomes negative, we've found the start line
+          if (balance < 0) {
+            startLine = i
+            break
+          }
+
+          // Stop if we hit an empty line before finding the start
+          if (i < currentLine && lineText.trim() === '') {
+            startLine = currentLine
+            break
+          }
+        }
+
+        // Search forward from start to find the closing paren
+        balance = 0
+        for (let i = startLine; i < editor.document.lineCount; i++) {
+          const lineText = editor.document.lineAt(i).text
+          const open = (lineText.match(/\(/g) || []).length
+          const close = (lineText.match(/\)/g) || []).length
+
+          balance += open - close
+
+          // When balance reaches 0, we've found the complete call
+          if (balance === 0) {
+            endLine = i
+            break
+          }
+
+          // Stop if we hit an empty line
+          if (i > startLine && lineText.trim() === '') {
+            endLine = i - 1
+            break
+          }
+        }
+      }
+    } else {
+      // Not a function call - just execute current line
+      startLine = currentLine
+      endLine = currentLine
+    }
+
+    // If we detected a multiline statement, use the full range
+    if (startLine < endLine) {
+      executionRange = new vscode.Range(
+        editor.document.lineAt(startLine).range.start,
+        editor.document.lineAt(endLine).range.end,
+      )
+      text = editor.document.getText(executionRange)
+    } else {
+      // Single line execution
+      const line = editor.document.lineAt(currentLine)
+      text = line.text
+      executionRange = line.range
+    }
   }
 
   const trimmedText = text.trim()
@@ -979,12 +1070,7 @@ async function runSelection() {
     }
 
     const isWholeLine = selection.isEmpty
-    const range = !selection.isEmpty
-      ? new vscode.Range(selection.start, selection.end)
-      : new vscode.Range(
-          editor.document.lineAt(selection.active.line).range.start,
-          editor.document.lineAt(selection.active.line).range.end,
-        )
+    const range = executionRange
 
     // Create flash function
     const createFlash = (flashIndex: number) => {
@@ -1100,13 +1186,36 @@ async function updateDiagnostics(
   const text = document.getText()
   const lines = text.split('\n')
 
+  // Track multiline statements (lines ending with open parenthesis and comma)
+  let inMultilineStatement = false
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     if (!line) continue
 
+    // Detect multiline statement start: ends with '(' or ','
+    const trimmedLine = line.trim()
+    if (trimmedLine.endsWith('(') || trimmedLine.endsWith(',')) {
+      if (!inMultilineStatement) {
+        inMultilineStatement = true
+      }
+      continue // Skip parenthesis check for multiline statements
+    }
+
+    // Detect multiline statement end: line with closing parenthesis
+    if (inMultilineStatement && trimmedLine.endsWith(')')) {
+      inMultilineStatement = false
+      continue // Skip parenthesis check for closing line
+    }
+
+    // Skip parenthesis check if we're inside a multiline statement
+    if (inMultilineStatement) {
+      continue
+    }
+
     // Check for common syntax errors
 
-    // Missing closing parenthesis
+    // Missing closing parenthesis (only for single-line statements)
     const openParens = (line.match(/\(/g) || []).length
     const closeParens = (line.match(/\)/g) || []).length
     if (openParens > closeParens) {

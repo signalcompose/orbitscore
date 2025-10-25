@@ -42,15 +42,15 @@ RUN(bass)
 STOP(hihat)
 
 // Loop kick and snare
+LOOP(kick, snare, hihat)
 LOOP(kick, snare)
-
+LOOP()
 // Mute snare temporarily
 MUTE(snare)
-
+MUTE()
 // Multiline syntax (useful for live coding)
 RUN(
   kick,
   snare,
   hihat,
-  bass,
 )
