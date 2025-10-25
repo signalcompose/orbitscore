@@ -5,7 +5,8 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc --build",
+    "build:clean": "tsc --build --clean && tsc --build",
     "dev:engine": "npm -w @orbitscore/engine run dev",
     "test": "npm -w @orbitscore/engine test",
     "lint": "eslint . --ext .ts,.tsx",

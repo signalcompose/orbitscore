@@ -136,7 +136,9 @@
   },
   "scripts": {
     "build": "npm run build:engine && tsc -p tsconfig.json",
+    "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json",
     "build:engine": "cd ../engine && npm run build && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/",
+    "build:engine:clean": "cd ../engine && npm run build:clean && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/",
     "dev": "tsc -w"
   },
   "devDependencies": {

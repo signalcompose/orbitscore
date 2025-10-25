@@ -43,9 +43,10 @@ export function runSequence(options: RunSequenceOptions): RunSequenceResult {
     clearSequenceEventsFn,
   } = options
 
-  // Skip if already playing
+  // RUN() is imperative: always execute immediately, even if already playing
+  // Clear existing events first to prevent overlap
   if (isPlaying) {
-    return { isPlaying: true, isLooping: false }
+    clearSequenceEventsFn(sequenceName)
   }
 
   console.log(`▶ ${sequenceName} (one-shot)`)
