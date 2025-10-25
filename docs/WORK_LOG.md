@@ -17,6 +17,141 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.42 PR #65: Audio playback testing and multiline function execution (October 25, 2025)
+
+**Date**: October 25, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `61-audio-playback-testing`
+**Issue**: #61
+**PR**: #65
+**Commits**: `891a6fd`, `937d428`, `e54615a`, `e8042bc`, `e3f45c5`, `de726bc`, `9ec92ba`, `e3f37b3`, `2fcf0cf`, `83f3e95`, `21db2c8`, `7365557`, `9183cfc`, `1cec208`
+
+**Work Content**: Issue #61のAudio playback testing関連の包括的な機能改善とバグ修正。Phase 6実装、RUN()即時実行修正、MUTE/UNMUTE機能改善、Multiline関数呼び出し実行機能、audioPath相対パス解決、CI/CD改善を含む大規模PR。
+
+#### 主な変更内容
+
+**1. Phase 6: ファイル保存フィルタリングとバッファロード修正 ✅**
+
+- `shouldFilterLine()`による不要なログ出力の除外
+- `filterDefinitionsOnly()`を拡張し、以下をフィルタ:
+  - 予約キーワード (RUN/LOOP/MUTE/STOP) - 複数行対応
+  - シーケンス実行メソッド (seq.run/loop/stop/mute/unmute)
+  - `global.loop()` (deprecated)
+  - `global.start()`と`global.stop()`は保持（スケジューラ制御）
+- バッファプリロードの並列化（`Promise.all()`）
+- `OSCClient.sendBufferLoad()`追加: `callAndResponse`でSuperColliderの`/done`メッセージを待機
+- LOOP開始時の"Buffer UGen: no buffer data"エラーを解消
+
+**2. RUN() 即時実行修正 ✅**
+
+- `runSequence()`の`isPlaying`チェックを削除
+- 既存イベントをクリアしてから新規スケジュール
+- ライブコーディングで期待通りの動作（毎回即時実行）
+- `tsc --build`への変更で増分ビルドの問題（cli-audio.js未生成）を解決
+
+**3. MUTE/UNMUTE 機能修正 ✅**
+
+- **drift-based filtering**: `executePlayback()`でdrift > 1000msのイベントをスキップ
+- **LOOP タイマーのmute遷移検出**: `loop-sequence.ts`に`wasMuted`状態を追加
+- **`reinitializeSequenceTracking()`メソッド追加**: イベントトラッキングを再初期化
+- **`mute()`メソッド改善**: mute時に`scheduledEvents`をクリア
+- **`unmute()`メソッド強化**: `clearSequenceEvents()` → `reinitializeSequenceTracking()` → `scheduleEventsFromTime()`
+- MUTE中のイベント蓄積問題を完全に解消
+- UNMUTEでのシームレスな再開を実現
+
+**4. Multiline 関数呼び出し実行機能 ✅**
+
+- VS Code拡張機能: `runSelection()`に関数呼び出し検出ロジックを追加
+- 括弧バランスベースのmultiline範囲検出を実装
+- 関数呼び出しパターン検出: `identifier(...)`, `object.method(...)`, `FUNCTION(...)`
+- 動作:
+  - 関数呼び出しの行にカーソル → multiline全体を自動検出して実行
+  - 1行で完結する関数 → 1行のみ実行
+- `updateDiagnostics()`の未使用変数を削除（ESLint対応）
+
+**5. audioPath 相対パス解決とnpm設定の改善 ✅**
+
+- `AudioManager.setDocumentDirectory()`メソッドを追加
+- `audioPath()`でドキュメントディレクトリ基準の相対パス解決
+- パス解決の優先順位: 絶対パス > ドキュメント基準 > process.cwd()基準
+- VS Code Extension: ファイル評価時に`setDocumentDirectory()`を自動挿入
+- シングルトン動作で重複呼び出しを防止
+- `.npmrc`追加: yarn不使用を明確化、`engine-strict=true`でバージョンチェック有効化
+- `package.json`に`packageManager`フィールド追加
+
+**6. エンジンパスの統一 ✅**
+
+- デバッグモードと本番モードの両方でExtension内のエンジンを使用
+- 開発用エンジン（`packages/engine/dist`）を削除し、配布用エンジンに統一
+- `getEnginePath()`を修正: `workspace engine (development)`への分岐を削除
+- 本番環境と同じ条件でテスト可能に
+
+**7. CI/CD改善 ✅**
+
+- `.eslintignore`追加: `packages/vscode-extension/engine/`（コピーファイル）を除外
+- Claude Code Review workflow修正:
+  - `pull_request`トリガーから`workflow_run`トリガーに変更
+  - CI/CD成功後のみレビューを実行
+  - `github-script`でPR番号を動的取得
+
+**8. ドキュメント整備 ✅**
+
+- CLAUDE.md簡潔化（約370行 → 約260行）
+- WORK_LOG.md更新: 詳細な開発履歴を記録
+- P2P協調機能計画（`docs/COLLABORATION_FEATURE_PLAN.md`）
+- Electronアプリ計画（`docs/ELECTRON_APP_PLAN.md`）
+- README.md更新: 現在のステータス、MIDI機能を未実装として明記
+- AUDIO_TEST_CHECKLIST.md追加: 50+の手動テスト項目
+
+#### テスト結果
+
+- ✅ 全テスト合格: **225 passed | 23 skipped** (248 total) = **90.7%**
+- ✅ ファイル保存時に実行関数が実行されない
+- ✅ Cmd+Enterで実行関数が正常動作
+- ✅ RUN/LOOPのバッファプリロードが並列動作
+- ✅ 複数シーケンスが同一タイミングで再生開始
+- ✅ LOOP開始時の最初の音が正常に再生
+- ✅ MUTE/UNMUTEでイベント蓄積が発生しない
+- ✅ Multiline関数呼び出しが正常動作
+
+#### Claude Code Review評価
+
+**総合評価**: ✅ **マージ推奨 (Approve)**
+
+**優れている点**:
+- Phase 6実装の完成度
+- MUTE/UNMUTE機能の堅牢性（drift filtering、LOOP遷移検出、イベント再初期化）
+- Multiline実行の実装品質（括弧バランス分析）
+- テストカバレッジ維持（90.7%）
+- 型安全性、エラーハンドリング、ドキュメント
+
+**軽微な懸念点（マージ後対応可）**:
+- Serenaメモリの重要情報を`docs/`に移行推奨
+- Multiline検出のエッジケーステスト追加推奨
+- エンジンビルドプロセスをREADME.mdに明記推奨
+
+#### 影響範囲
+
+**変更ファイル（主要）**:
+- `packages/engine/src/audio/supercollider/event-scheduler.ts` - drift filtering、reinitialize tracking
+- `packages/engine/src/core/sequence.ts` - mute/unmute改善
+- `packages/engine/src/core/sequence/playback/loop-sequence.ts` - mute遷移検知
+- `packages/engine/src/core/sequence/playback/run-sequence.ts` - isPlayingチェック削除
+- `packages/engine/src/core/global/audio-manager.ts` - audioPath相対パス解決
+- `packages/vscode-extension/src/extension.ts` - multiline実行、診断機能、エンジンパス統一
+- `packages/engine/src/interpreter/process-statement.ts` - ファイル保存フィルタリング
+- `.eslintignore` - 新規追加
+- `.github/workflows/claude-code-review.yml` - workflow_run trigger
+- `docs/INSTRUCTION_ORBITSCORE_DSL.md` - audioPath仕様追加
+
+**影響**:
+- ライブコーディング体験の大幅な向上
+- MUTE/UNMUTE機能の信頼性向上
+- オーディオファイルパス管理の簡素化
+- CI/CDの効率化
+
+---
+
 ### 6.37 Documentation: CLAUDE.md簡潔化とプロジェクト計画ドキュメント追加 (October 11, 2025)
 
 **Date**: October 11, 2025

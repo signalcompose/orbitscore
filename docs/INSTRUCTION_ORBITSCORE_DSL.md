@@ -69,6 +69,31 @@ global.beat(9 by 8)   // 9/8
 global.beat(3, 4)     // alternative syntax: 3/4
 ```
 
+### Audio Path (Base Directory)
+```js
+global.audioPath("../test-assets/audio")   // set base directory for audio files
+```
+
+**Implementation Details**:
+- Sets the base directory for resolving relative audio file paths
+- When using `.audio("kick.wav")`, the path is resolved relative to:
+  1. **Document directory** (if set by VS Code extension - automatic)
+  2. **audioPath directory** (if set via `global.audioPath()`)
+  3. **Current working directory** (fallback)
+- **Automatic document directory**: VS Code extension automatically sets the document directory based on the `.osc` file location
+- **Singleton behavior**: Setting the same path multiple times is a no-op (skipped)
+- Path resolution priority: Absolute path > Document directory > audioPath > CWD
+
+**Example**:
+```js
+// In /Users/yamato/projects/myproject/songs/track01.osc
+var global = init GLOBAL
+global.audioPath("../audio")  // resolves to /Users/yamato/projects/myproject/audio
+
+var kick = init global.seq
+kick.audio("kick.wav")  // resolves to /Users/yamato/projects/myproject/audio/kick.wav
+```
+
 **Note**:
 - tick() and key() have been removed from the current audio-based implementation
 - tick(): MIDI resolution concept, not needed for audio-only playback
