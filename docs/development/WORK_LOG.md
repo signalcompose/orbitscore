@@ -2514,6 +2514,107 @@ Duration    ~300ms
 
 ---
 
+### 6.44 Documentation Reorganization - Directory structure and test document consolidation (October 26, 2025)
+
+**Branch**: `67-clarify-transport-docs` (継続)
+
+#### Objective
+ドキュメント構造の再編成とテスト関連ドキュメントの統合を実施。実装との整合性確認と誇張表現の削除を徹底。
+
+#### Changes
+
+**Phase 2: Documentation Reorganization**
+
+1. **ディレクトリ構造の作成**:
+   - `docs/core/` - コアドキュメント（PROJECT_RULES, INSTRUCTION_ORBITSCORE_DSL, USER_MANUAL, CONTEXT7_GUIDE, INDEX）
+   - `docs/development/` - 開発ドキュメント（WORK_LOG, IMPLEMENTATION_PLAN, BEAT_METER_SPECIFICATION）
+   - `docs/testing/` - テストドキュメント（TESTING_GUIDE, PERFORMANCE_TEST）
+   - `docs/planning/` - 企画ドキュメント（COLLABORATION_FEATURE_PLAN, ELECTRON_APP_PLAN, IMPROVEMENT_RECOMMENDATIONS）
+
+2. **ファイル移動**（git mv使用）:
+   - コアドキュメント5ファイル → `docs/core/`
+   - 開発ドキュメント3ファイル → `docs/development/`
+   - 企画ドキュメント3ファイル → `docs/planning/`
+
+3. **テストドキュメント統合**:
+   - `docs/testing/TESTING_GUIDE.md` 作成（統合版）
+     - AUDIO_TEST_CHECKLIST.md
+     - AUDIO_TEST_SETUP.md
+     - CURSOR_TEST_INSTRUCTIONS.md → IDE_TEST_INSTRUCTIONS（VS Code/Cursor/Claude Code対応）
+   - `docs/testing/PERFORMANCE_TEST.md` 作成（統合版）
+     - PERFORMANCE_TEST_GUIDE.md
+     - PERFORMANCE_TEST_REPORT.md
+
+4. **実装検証と修正**:
+   - テスト結果: 225 passed / 23 skipped (248 total) = 90.7%
+   - SuperCollider統合: 0-2ms latency (確認済み)
+   - Reserved keywords: `RUN()`, `LOOP()`, `MUTE()` (実装確認)
+   - Underscore prefix pattern: `_audio()`, `_chop()`, `_play()` (実装確認)
+   - filterDefinitionsOnly: `.run()`, `.loop()`, `.mute()` は定義時にフィルター（確認済み）
+
+5. **誇張表現の削除**:
+   - "完璧", "プロフェッショナルレベル", "究極の", "音楽制作の新しいパラダイム" 等を削除
+   - 事実ベースの表現に統一: "0-2ms latency", "48kHz/24bit audio output"
+   - IMPLEMENTATION_PLAN.md: "Ultra-low latency" → "0-2ms latency"
+   - IMPROVEMENT_RECOMMENDATIONS.md: 誇張的結論を簡潔な事実に修正
+
+6. **ドキュメントリンク更新**:
+   - `docs/core/INDEX.md`: 新しいディレクトリ構造に対応、DSL v3.0に更新
+   - `README.md`: Documentation セクションのパス更新
+   - `CLAUDE.md`: セッション開始時の必須ドキュメントパス更新
+   - `docs/development/IMPLEMENTATION_PLAN.md`: 相対パス修正、テスト数更新、last updated更新
+   - `docs/planning/IMPROVEMENT_RECOMMENDATIONS.md`: パス修正、誇張表現削除
+
+#### Files Modified
+- `docs/core/INDEX.md` (ディレクトリ構造更新、DSL v3.0反映)
+- `docs/testing/TESTING_GUIDE.md` (新規作成、統合版)
+- `docs/testing/PERFORMANCE_TEST.md` (新規作成、統合版)
+- `docs/development/IMPLEMENTATION_PLAN.md` (パス修正、テスト数更新、SuperCollider記載、誇張表現削除)
+- `docs/planning/IMPROVEMENT_RECOMMENDATIONS.md` (パス修正、誇張表現削除)
+- `README.md` (ドキュメントリンク更新)
+- `CLAUDE.md` (セッション開始時パス更新)
+
+#### Git Operations
+```bash
+# ディレクトリ作成
+mkdir -p docs/{core,development,testing,planning}
+
+# ファイル移動（git mv使用）
+git mv docs/PROJECT_RULES.md docs/core/
+git mv docs/INSTRUCTION_ORBITSCORE_DSL.md docs/core/
+git mv docs/USER_MANUAL.md docs/core/
+git mv docs/CONTEXT7_GUIDE.md docs/core/
+git mv docs/INDEX.md docs/core/
+git mv docs/WORK_LOG.md docs/development/
+git mv docs/IMPLEMENTATION_PLAN.md docs/development/
+git mv docs/BEAT_METER_SPECIFICATION.md docs/development/
+git mv docs/COLLABORATION_FEATURE_PLAN.md docs/planning/
+git mv docs/ELECTRON_APP_PLAN.md docs/planning/
+git mv docs/IMPROVEMENT_RECOMMENDATIONS.md docs/planning/
+```
+
+#### Implementation Verification
+- **Parser Tests**: 50/50 passed
+- **Interpreter Tests**: 83/83 passed
+- **DSL v3.0 Tests**: 56/56 passed (Unidirectional Toggle, Underscore Prefix, Gain/Pan)
+- **Audio Engine**: 15/15 passed (SuperCollider integration)
+- **Total**: 225 passed / 23 skipped (248 total) = 90.7%
+
+#### Technical Decisions
+- **Directory Structure**: ドキュメントを機能別に整理し、見つけやすさと保守性を向上
+- **Test Document Consolidation**: 散在していたテストドキュメントを統合し、IDE支援（VS Code/Cursor/Claude Code）を明記
+- **Exaggerated Expression Removal**: 事実ベースの記述に統一し、ドキュメントの信頼性を向上
+- **Implementation Verification**: 全ドキュメントを実装に照らし合わせて検証、不正確な記述を修正
+
+#### Next Steps
+- Phase 2コミット作成
+- PR作成（Phase 1+2統合）
+
+**Commit**: (pending)
+**Branch**: `67-clarify-transport-docs`
+
+---
+
 ## Archived Work
 
 Older work logs have been moved to the archive:

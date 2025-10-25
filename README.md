@@ -146,11 +146,13 @@ orbitscore/
 
 プロジェクトのドキュメントは [`docs/`](docs/) フォルダに整理されています：
 
-- 📏 [PROJECT_RULES.md](docs/PROJECT_RULES.md) - プロジェクトルール（必読）
-- 📝 [WORK_LOG.md](docs/WORK_LOG.md) - 開発履歴
-- 🎵 [INSTRUCTIONS_NEW_DSL.md](docs/INSTRUCTIONS_NEW_DSL.md) - 言語仕様
-- 🗺️ [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) - 実装計画
-- 📚 [INDEX.md](docs/INDEX.md) - ドキュメント索引
+- 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.md) - プロジェクトルール（必読）
+- 📝 [WORK_LOG.md](docs/development/WORK_LOG.md) - 開発履歴
+- 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) - 言語仕様（単一信頼情報源）
+- 📖 [USER_MANUAL.md](docs/core/USER_MANUAL.md) - ユーザーマニュアル
+- 🗺️ [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.md) - 実装計画
+- 🧪 [TESTING_GUIDE.md](docs/testing/TESTING_GUIDE.md) - テストガイド
+- 📚 [INDEX.md](docs/core/INDEX.md) - ドキュメント索引（全体構造）
 
 ## 実装済み機能（Audio-Based v3.0）
 
