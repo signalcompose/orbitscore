@@ -862,11 +862,27 @@ async function evaluateFileInBackground(document: vscode.TextDocument) {
 
     // Filter out all transport commands (always)
     // isInitializing = true for first evaluation (include var declarations)
-    const definitionsOnly = filterDefinitionsOnly(code)
+    let definitionsOnly = filterDefinitionsOnly(code)
+
+    // Inject setDocumentDirectory() call after global variable initialization
+    const documentDir = path.dirname(document.uri.fsPath)
+    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+
+    // Find where 'var global = init GLOBAL' appears and inject after it
+    const globalInitMatch = definitionsOnly.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*\n)/)
+    if (globalInitMatch) {
+      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+      definitionsOnly =
+        definitionsOnly.slice(0, insertPos) +
+        setDirCommand +
+        '\n' +
+        definitionsOnly.slice(insertPos)
+    }
 
     // Debug: log what we're sending in debug mode
     if (statusBarItem?.text.includes('🐛')) {
       outputChannel?.appendLine('📤 File evaluation:')
+      outputChannel?.appendLine(`📂 Document directory: ${documentDir}`)
       outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
       outputChannel?.appendLine(definitionsOnly)
       outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')

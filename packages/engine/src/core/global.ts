@@ -117,6 +117,15 @@ export class Global {
     return this
   }
 
+  /**
+   * Set the directory of the currently evaluated .osc file
+   * Used for relative path resolution in audioPath()
+   * @internal - Called by the engine when evaluating a document
+   */
+  setDocumentDirectory(dirPath: string): void {
+    this.audioManager.setDocumentDirectory(dirPath)
+  }
+
   // Master effects management
   gain(valueDb?: number): number | this {
     const result = this.effectsManager.gain(valueDb)
