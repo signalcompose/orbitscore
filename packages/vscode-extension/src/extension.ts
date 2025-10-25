@@ -368,34 +368,22 @@ function toggleEngine() {
  * Determine engine path based on debug mode.
  */
 function getEnginePath(debugMode: boolean): { enginePath: string; engineSource: string } | null {
-  let enginePath: string
-  let engineSource: string
-
-  if (debugMode) {
-    // Debug mode: use workspace engine (development)
-    enginePath = path.join(__dirname, '../../engine/dist/cli-audio.js')
-    engineSource = 'workspace engine (development)'
-  } else {
-    // Normal mode: use extension-local engine (stable)
-    enginePath = path.join(__dirname, '../engine/dist/cli-audio.js')
-    engineSource = 'extension engine (stable)'
-  }
+  // Always use extension-local engine (both debug and normal mode)
+  // This ensures we test the same engine that will be distributed
+  const enginePath = path.join(__dirname, '../engine/dist/cli-audio.js')
+  const engineSource = debugMode ? 'extension engine (debug)' : 'extension engine (stable)'
 
   outputChannel?.appendLine(`📦 Using: ${engineSource}`)
   outputChannel?.appendLine(`📍 Path: ${enginePath}`)
 
   if (!fs.existsSync(enginePath)) {
-    if (debugMode) {
-      vscode.window.showErrorMessage(`Debug engine not found: ${enginePath}`)
-    } else {
-      vscode.window.showErrorMessage(
-        `Extension engine not found: ${enginePath}\n\n` +
-          `This indicates a build issue. Please rebuild the extension:\n` +
-          `1. Run "npm run build" in the vscode-extension directory\n` +
-          `2. Ensure the engine is properly built and copied\n` +
-          `3. Check that packages/engine/dist/cli-audio.js exists`,
-      )
-    }
+    vscode.window.showErrorMessage(
+      `Extension engine not found: ${enginePath}\n\n` +
+        `This indicates a build issue. Please rebuild the extension:\n` +
+        `1. Run "npm run build" in the vscode-extension directory\n` +
+        `2. Ensure the engine is properly built and copied\n` +
+        `3. Check that packages/engine/dist/cli-audio.js exists`,
+    )
     return null
   }
 
