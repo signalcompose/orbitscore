@@ -24,7 +24,7 @@
 
 ### 🔧 Technical Features
 
-- **48kHz/24bit Audio**: Professional audio quality
+- **48kHz/24bit Audio**: High-quality audio output
 - **DAW Integration**: VST/AU plugin for routing (planned)
 - **VS Code Extension**: Syntax highlighting and live execution
 - **macOS Optimized**: CoreAudio integration
@@ -52,13 +52,13 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 
 **Phase 7 Achievements**:
 - ✅ **SuperCollider audio engine** (replaced sox)
-- ✅ **Ultra-low latency: 0-2ms** (was 140-150ms)
-- ✅ Professional audio quality via scsynth
-- ✅ Perfect 3-track synchronization
+- ✅ **0-2ms latency** (was 140-150ms)
+- ✅ 48kHz/24bit audio output via scsynth
+- ✅ 3-track synchronization
 - ✅ **Chop functionality** (8-beat hihat with closed/open)
 - ✅ Buffer preloading and management
 - ✅ Graceful lifecycle (SIGTERM → server.quit())
-- ✅ Production-ready live coding in Cursor
+- ✅ Live coding ready in Cursor
 
 **Phase 6 Achievements** (Foundation):
 - ✅ Persistent engine process with REPL
@@ -173,8 +173,8 @@ orbitscore/
 
 - ✅ リアルタイムスケジューリング
 - ✅ Polymeter対応（シーケンス毎に独立した拍子）
-- ✅ Transport制御（`start()`, `loop()`, `stop()`）
-- ✅ Reserved keywords（`RUN()`, `LOOP()`, `MUTE()`）
+- ✅ Global transport: `global.start()`, `global.stop()`
+- ✅ Sequence control: `RUN()`, `LOOP()`, `MUTE()` (Unidirectional Toggle)
 - ✅ Bar-quantized execution
 
 ### VS Code Extension
@@ -293,14 +293,16 @@ var kick = init global.seq
 kick.beat(4 by 4).length(1)
 kick.audio("kick.wav")
 kick.play(1, 0, 1, 0)
-kick.loop()
 
 // スネアシーケンス
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
 snare.audio("snare.wav")
 snare.play(0, 1, 0, 1)
-snare.run()
+
+// Transport control
+LOOP(kick)
+RUN(snare)
 ```
 
 <details>

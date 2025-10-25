@@ -17,6 +17,72 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.43 Issue #67: Documentation clarification - Transport control and exaggerated expressions (October 26, 2025)
+
+**Date**: October 26, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `67-clarify-transport-docs`
+**Issue**: #67
+**PR**: TBD
+
+**Work Content**: ドキュメント内の設定メソッドと実行関数の混同を修正し、誇張表現を事実ベースの記述に変更。
+
+#### 主な変更内容
+
+**1. Transport制御方法の明確化**
+
+- **問題**: `.run()`, `.loop()` などのメソッド呼び出しがユーザーAPIとして記述されていた
+- **実態**: `filterDefinitionsOnly`によりファイル保存時に自動除外される
+- **修正**:
+  - INSTRUCTION_ORBITSCORE_DSL.md: "Sequence Transport (Method-based)"セクションを削除
+  - 予約キーワード（`RUN()`, `LOOP()`, `MUTE()`）を主要なTransport制御方法として位置づけ
+  - USER_MANUAL.md: "シーケンスの実行（個別）"セクションを削除
+  - README.md: Transport制御の説明を明確に分離
+
+**2. 片記号方式（Unidirectional Toggle）の説明強化**
+
+- STOP/UNMUTEキーワードが不要な理由を明記:
+  - **STOP不要**: `LOOP(other_sequences)`で自動停止
+  - **UNMUTE不要**: `MUTE(other_sequences)`で除外により自動アンミュート
+- 片記号方式のメリットを説明: シンプルさ、状態の明確さ
+
+**3. 誇張表現の削除**
+
+以下の誇張表現を事実ベースの記述に変更:
+- "Ultra-low latency" → "0-2ms latency"
+- "Professional audio quality" → "48kHz/24bit audio output" / "High-quality audio output"
+- "Perfect 3-track synchronization" → "3-track synchronization"
+- "Production-ready" → "Live coding ready"
+
+#### 修正されたファイル
+
+- `docs/INSTRUCTION_ORBITSCORE_DSL.md`:
+  - セクション5.2削除（Sequence Transport Method-based）
+  - セクション5.3を5.2に昇格（Reserved Keywords）
+  - 片記号方式の説明強化
+  - セクション11のコード例修正（`kick.mute()` → `MUTE(kick)`）
+  - 誇張表現の削除
+
+- `docs/USER_MANUAL.md`:
+  - セクション4.5.2削除（シーケンスの実行（個別））
+  - セクション4.5.3を4.5.2に昇格（トランスポート制御）
+  - 片記号方式の説明補強
+  - 誇張表現の削除（"高品質なオーディオエンジン" → "0-2msレイテンシのオーディオエンジン"）
+
+- `README.md`:
+  - Transport制御の説明を分離（Global transport / Sequence control）
+  - 基本構文例の修正（`.loop()` → `LOOP()`, `.run()` → `RUN()`）
+  - Phase 7 Achievementsの誇張表現削除
+
+#### 技術的決定事項
+
+- **ドキュメント作成ルール**: 誇張表現・大袈裟な表現を使用しない
+  - 禁止: "プロフェッショナルな", "完璧な", "最高の", "究極の"
+  - 推奨: 事実ベース、具体的数値、状態明示
+- **WORK_LOG.mdの扱い**: 過去の記録は改竄しない（歴史的記録として保持）
+
+---
+
 ### 6.42 PR #65: Audio playback testing and multiline function execution (October 25, 2025)
 
 **Date**: October 25, 2025
