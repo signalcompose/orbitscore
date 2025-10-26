@@ -2,11 +2,11 @@
 
 **Audio-based live coding DSL for modern music production**
 
-オーディオファイルの操作を中心とした新しい音楽制作用DSL。タイムストレッチ、ピッチシフト、リアルタイムトランスポート制御を統合。
+A new music production DSL focused on audio file manipulation, integrating time-stretching, pitch-shifting, and real-time transport control.
 
-> ⚠️ **Migration Notice**: The project is migrating from MIDI-based to audio-based DSL. See [INSTRUCTION_ORBITSCORE_DSL.md](docs/INSTRUCTION_ORBITSCORE_DSL.md) for the new specification.
+> ⚠️ **Migration Notice**: The project is migrating from MIDI-based to audio-based DSL. See [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) for the new specification.
 
-## 核心的特徴 (New Audio-Based DSL)
+## Core Features (Audio-Based DSL v3.0)
 
 ### 🎵 Audio Processing
 
@@ -18,18 +18,19 @@
 ### ⚡ Live Coding Features
 
 - **Editor Integration**: Execute commands with Cmd+Enter
-- **Transport Commands**: `global.run()`, `loop()`, `mute()`, etc.
+- **Transport Commands**: `RUN()`, `LOOP()`, `MUTE()` (Unidirectional Toggle)
 - **Real-time Control**: Bar-quantized transport with look-ahead
 - **Polymeter Support**: Independent sequence timing
 
 ### 🔧 Technical Features
 
-- **48kHz/24bit Audio**: Professional audio quality
-- **DAW Integration**: VST/AU plugin for routing (planned)
+- **0-2ms Latency**: SuperCollider audio engine
+- **48kHz/24bit Audio**: High-quality audio output
 - **VS Code Extension**: Syntax highlighting and live execution
+- **DAW Integration**: VST/AU plugin for routing (planned)
 - **macOS Optimized**: CoreAudio integration
 
-## 現在の実装状況
+## Current Implementation Status
 
 ### 📦 Legacy MIDI-Based Implementation (Deprecated)
 
@@ -41,87 +42,90 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 |-------|--------|----------|-------------|
 | **Phase 1-3** | ✅ Complete | 100% | Parser, Interpreter, Transport System |
 | **Phase 4** | ✅ Complete | 100% | VS Code Extension (Syntax, Commands, IntelliSense) |
-| **Phase 5** | ✅ Complete | 100% | Audio Playback Verification (Sox Integration) |
-| **Phase 6** | ✅ Complete | 100% | Live Coding Workflow (All Issues Resolved) |
-| **Phase 7** | ✅ Complete | 100% | **SuperCollider Integration (0-2ms Latency!)** |
-| **Git Workflow** | ✅ Complete | 100% | **Development Environment Setup (Branch Protection, Worktree, BugBot)** |
+| **Phase 5** | ✅ Complete | 100% | Audio Playback Verification |
+| **Phase 6** | ✅ Complete | 100% | Live Coding Workflow |
+| **Phase 7** | ✅ Complete | 100% | SuperCollider Integration (0-2ms Latency) |
+| **Git Workflow** | ✅ Complete | 100% | Development Environment Setup |
 | **Phase 8** | 📝 Next | 0% | Polymeter Testing & Advanced Features |
 | **Phase 9** | 📝 Planned | 0% | DAW Plugin Development |
 
-**Current Status**: Audio Playback Testing in progress (Issue #61) 🎧
+**Current Status**: Documentation reorganization (Issue #67) 📚
 
 **Phase 7 Achievements**:
-- ✅ **SuperCollider audio engine** (replaced sox)
-- ✅ **Ultra-low latency: 0-2ms** (was 140-150ms)
-- ✅ Professional audio quality via scsynth
-- ✅ Perfect 3-track synchronization
-- ✅ **Chop functionality** (8-beat hihat with closed/open)
+- ✅ SuperCollider audio engine (replaced sox)
+- ✅ 0-2ms latency (was 140-150ms)
+- ✅ 48kHz/24bit audio output via scsynth
+- ✅ 3-track synchronization
+- ✅ Chop functionality (8-beat hihat with closed/open)
 - ✅ Buffer preloading and management
 - ✅ Graceful lifecycle (SIGTERM → server.quit())
-- ✅ Production-ready live coding in Cursor
+- ✅ Live coding ready
 
 **Phase 6 Achievements** (Foundation):
 - ✅ Persistent engine process with REPL
 - ✅ Two-phase workflow (definitions on save, execution via Cmd+Enter)
-- ✅ Individual track control (`.run()`, `.loop()`, `.stop()`)
+- ✅ Individual track control
 - ✅ Live sequence addition without restart
 - ✅ Explicit scheduler control (no auto-start)
-- ✅ **Polymeter support** (independent time signatures per sequence)
+- ✅ Polymeter support (independent time signatures per sequence)
 
-See [WORK_LOG.md](docs/WORK_LOG.md#615-phase-6-completion-january-5-2025) for detailed resolution notes.
+See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
 
-## 技術スタック
+## Technology Stack
 
-### 現行（Audio-Based）
+### Current (Audio-Based)
 - TypeScript
 - VS Code Extension API
-- **SuperCollider** (scsynth + supercolliderjs)
+- SuperCollider (scsynth + supercolliderjs)
 - OSC (Open Sound Control)
 
-### 旧実装（Deprecated / 未実装）
-- ~~CoreMIDI (@julusian/midi)~~ - Legacy, 未実装
-- ~~macOS IAC Bus~~ - Legacy, 未実装
+### Legacy (Deprecated / Not Implemented)
+- ~~CoreMIDI (@julusian/midi)~~ - Legacy, not implemented
+- ~~macOS IAC Bus~~ - Legacy, not implemented
 
-## プロジェクト構造
+## Project Structure
 
 ```
 orbitscore/
 ├── packages/
-│   ├── engine/          # DSLエンジン（Audio-Based）
+│   ├── engine/          # DSL Engine (Audio-Based)
 │   │   ├── src/
-│   │   │   ├── parser/       # パーサ実装
-│   │   │   ├── interpreter/  # インタープリタ（v2）
+│   │   │   ├── parser/       # Parser implementation
+│   │   │   ├── interpreter/  # Interpreter (v2)
 │   │   │   ├── core/         # Global & Sequence
-│   │   │   ├── audio/        # SuperCollider統合
-│   │   │   ├── timing/       # タイミング計算
-│   │   │   └── cli/          # CLIインターフェース
-│   │   ├── dist/             # ビルド出力
-│   │   └── supercollider/    # SynthDef定義
-│   └── vscode-extension/     # VS Code拡張
-│       ├── src/              # 拡張機能ソース
-│       ├── syntaxes/         # シンタックス定義
-│       └── engine/           # バンドルされたエンジン
-├── docs/                     # ドキュメント
-│   ├── WORK_LOG.md          # 開発履歴
-│   ├── PROJECT_RULES.md     # プロジェクトルール
-│   ├── INSTRUCTION_ORBITSCORE_DSL.md  # DSL仕様
-│   └── ...
-├── tests/                    # テストスイート
-│   ├── parser/              # パーサテスト
-│   ├── interpreter/         # インタープリタテスト
-│   ├── audio/               # オーディオ処理テスト
-│   ├── core/                # Global & Sequenceテスト
-│   └── timing/              # タイミング計算テスト
+│   │   │   ├── audio/        # SuperCollider integration
+│   │   │   ├── timing/       # Timing calculation
+│   │   │   └── cli/          # CLI interface
+│   │   ├── dist/             # Build output
+│   │   └── supercollider/    # SynthDef definitions
+│   └── vscode-extension/     # VS Code extension
+│       ├── src/              # Extension source
+│       ├── syntaxes/         # Syntax definition
+│       └── engine/           # Bundled engine
+├── docs/                     # Documentation
+│   ├── core/                 # Core documentation (Japanese)
+│   ├── development/          # Development documentation (Japanese)
+│   ├── testing/              # Testing documentation (Japanese)
+│   ├── planning/             # Planning documentation (Japanese)
+│   └── user/                 # User documentation (English/Japanese)
+│       ├── en/               # English user docs
+│       └── ja/               # Japanese user docs
+├── tests/                    # Test suite
+│   ├── parser/              # Parser tests
+│   ├── interpreter/         # Interpreter tests
+│   ├── audio/               # Audio processing tests
+│   ├── core/                # Global & Sequence tests
+│   └── timing/              # Timing calculation tests
 ├── examples/
-│   └── *.osc                # サンプルファイル
-└── README.md                # このファイル
+│   └── *.osc                # Sample files
+└── README.md                # This file
 ```
 
-## 開発状況
+## Development Status
 
-### 完了フェーズ（Audio-Based実装）
+### Completed Phases (Audio-Based Implementation)
 
-詳細は [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) を参照
+See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_PLAN.md) for details.
 
 - ✅ **Phase 1-3** - Parser, Interpreter, Transport System
 - ✅ **Phase 4** - VS Code Extension (Syntax, Commands, IntelliSense)
@@ -129,191 +133,190 @@ orbitscore/
 - ✅ **Phase 6** - Live Coding Workflow
 - ✅ **Phase 7** - SuperCollider Integration (0-2ms Latency)
 
-### 旧完了フェーズ（MIDI-Based / Deprecated）
+### Legacy Completed Phases (MIDI-Based / Deprecated)
 
 <details>
-<summary>旧フェーズ（参考用）</summary>
+<summary>Legacy phases (for reference)</summary>
 
-- ✅ **Phase 1** - パーサ実装
-- ✅ **Phase 2** - Pitch/Bend変換（度数→MIDIノート+PitchBend、octave/octmul/detune/MPE）
-- ✅ **Phase 3** - スケジューラ + Transport（リアルタイム再生、Loop/Jump、Mute/Solo）
-- ✅ **Phase 4** - VS Code拡張（シンタックスハイライト、Cmd+Enter実行、Transport UI）
-- ✅ **Phase 5** - MIDI出力実装（CoreMIDI / IAC Bus）
+- ✅ **Phase 1** - Parser implementation
+- ✅ **Phase 2** - Pitch/Bend conversion (degree → MIDI note + PitchBend, octave/octmul/detune/MPE)
+- ✅ **Phase 3** - Scheduler + Transport (real-time playback, Loop/Jump, Mute/Solo)
+- ✅ **Phase 4** - VS Code extension (syntax highlighting, Cmd+Enter execution, Transport UI)
+- ✅ **Phase 5** - MIDI output implementation (CoreMIDI / IAC Bus)
 
 </details>
 
 ## 📚 Documentation
 
-プロジェクトのドキュメントは [`docs/`](docs/) フォルダに整理されています：
+Project documentation is organized in the [`docs/`](docs/) folder:
 
-- 📏 [PROJECT_RULES.md](docs/PROJECT_RULES.md) - プロジェクトルール（必読）
-- 📝 [WORK_LOG.md](docs/WORK_LOG.md) - 開発履歴
-- 🎵 [INSTRUCTIONS_NEW_DSL.md](docs/INSTRUCTIONS_NEW_DSL.md) - 言語仕様
-- 🗺️ [IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) - 実装計画
-- 📚 [INDEX.md](docs/INDEX.md) - ドキュメント索引
+- 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.md) - Project rules (must-read)
+- 📝 [WORK_LOG.md](docs/development/WORK_LOG.md) - Development history
+- 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) - Language specification (Single Source of Truth)
+- 📖 [USER_MANUAL.md](docs/core/USER_MANUAL.md) - User manual
+- 🗺️ [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.md) - Implementation plan
+- 🧪 [TESTING_GUIDE.md](docs/testing/TESTING_GUIDE.md) - Testing guide
+- 📚 [INDEX.md](docs/core/INDEX.md) - Documentation index (overall structure)
 
-## 実装済み機能（Audio-Based v3.0）
+### User Documentation (English/Japanese)
+
+- 📖 [User Manual (English)](docs/user/en/USER_MANUAL.md) - Coming soon
+- 📖 [ユーザーマニュアル (日本語)](docs/user/ja/USER_MANUAL.md) - Coming soon
+- 🚀 [Getting Started (English)](docs/user/en/GETTING_STARTED.md) - Coming soon
+- 🚀 [はじめに (日本語)](docs/user/ja/GETTING_STARTED.md) - Coming soon
+
+## Implemented Features (Audio-Based v3.0)
 
 ### Parser & Interpreter
 
-- ✅ グローバル設定（`GLOBAL`, `tempo()`, `beat()`, `audioPath()`）
-- ✅ シーケンス設定（`global.seq`, `beat()`, `length()`, `audio()`）
-- ✅ パターン定義（`play()`, `chop()`）
-- ✅ メソッドチェーン構文
+- ✅ Global settings (`GLOBAL`, `tempo()`, `beat()`, `audioPath()`)
+- ✅ Sequence settings (`global.seq`, `beat()`, `length()`, `audio()`)
+- ✅ Pattern definition (`play()`, `chop()`)
+- ✅ Method chaining syntax
 
 ### Audio Engine (SuperCollider)
 
-- ✅ オーディオファイル再生（WAV, AIFF, MP3, MP4）
-- ✅ Ultra-low latency（0-2ms）
-- ✅ Time-stretching（テンポ調整）
-- ✅ Chop機能（オーディオスライシング）
-- ✅ Buffer管理とプリロード
+- ✅ Audio file playback (WAV, AIFF, MP3, MP4)
+- ✅ 0-2ms latency
+- ✅ Time-stretching (tempo adjustment)
+- ✅ Chop functionality (audio slicing)
+- ✅ Buffer management and preloading
 
 ### Transport & Timing
 
-- ✅ リアルタイムスケジューリング
-- ✅ Polymeter対応（シーケンス毎に独立した拍子）
-- ✅ Transport制御（`start()`, `loop()`, `stop()`）
-- ✅ Reserved keywords（`RUN()`, `LOOP()`, `MUTE()`）
+- ✅ Real-time scheduling
+- ✅ Polymeter support (independent time signatures per sequence)
+- ✅ Global transport: `global.start()`, `global.stop()`
+- ✅ Sequence control: `RUN()`, `LOOP()`, `MUTE()` (Unidirectional Toggle)
 - ✅ Bar-quantized execution
 
 ### VS Code Extension
 
-- ✅ シンタックスハイライト（Audio DSL v3.0）
-- ✅ Cmd+Enter実行
-- ✅ エンジン制御コマンド
-- ✅ リアルタイムフィードバック
+- ✅ Syntax highlighting (Audio DSL v3.0)
+- ✅ Cmd+Enter execution
+- ✅ Engine control commands
+- ✅ Real-time feedback
 
 <details>
-<summary>旧実装済み機能（MIDI-Based / Deprecated）</summary>
+<summary>Legacy implemented features (MIDI-Based / Deprecated)</summary>
 
-### パーサ (Phase 1)
+### Parser (Phase 1)
 
-- ✅ グローバル設定（key, tempo, meter, randseed）
-- ✅ シーケンス設定（bus, channel, meter, tempo, octave, etc.）
-- ✅ イベント（和音、単音、休符）
-- ✅ 音価構文（@U0.5, @2s, @25%2bars, @[3:2]\*U1）
+- ✅ Global settings (key, tempo, meter, randseed)
+- ✅ Sequence settings (bus, channel, meter, tempo, octave, etc.)
+- ✅ Events (chords, single notes, rests)
+- ✅ Duration syntax (@U0.5, @2s, @25%2bars, @[3:2]\*U1)
 
-### Pitch/Bend変換 (Phase 2)
+### Pitch/Bend conversion (Phase 2)
 
-- ✅ 度数→MIDIノート変換（0=休符, 1=C, 2=C#...12=B）
-- ✅ オクターブ/detune処理
-- ✅ PitchBend計算（bendRange対応）
-- ✅ MPEチャンネル割当
+- ✅ Degree → MIDI note conversion (0=rest, 1=C, 2=C#...12=B)
+- ✅ Octave/detune processing
+- ✅ PitchBend calculation (bendRange support)
+- ✅ MPE channel assignment
 
-### スケジューラ (Phase 3)
+### Scheduler (Phase 3)
 
-- ✅ リアルタイム再生（LookAhead=50ms, Tick=5ms）
-- ✅ Shared/Independent メーター
-- ✅ Transport（Loop/Jump）小節頭クオンタイズ
-- ✅ Mute/Solo機能
-- ✅ 窓ベースNoteOff管理
+- ✅ Real-time playback (LookAhead=50ms, Tick=5ms)
+- ✅ Shared/Independent meter
+- ✅ Transport (Loop/Jump) bar-head quantization
+- ✅ Mute/Solo functionality
+- ✅ Window-based NoteOff management
 
 </details>
 
-## テスト
+## Testing
 
 ```bash
 npm test
 ```
 
-**229/248 tests passing (92.3%)**:
+**225/248 tests passing (90.7%)**:
 
 - Parser: ✅ Complete (50 tests)
-- Audio Engine: ✅ Complete (9 tests)
+- Audio Engine: ✅ Complete (15 tests)
 - Timing Calculator: ✅ Complete (10 tests)
 - Interpreter: ✅ Complete (83 tests)
 - DSL v3.0: ✅ Complete (56 tests)
 - Setting Sync: ✅ Complete (19 tests)
 - Live Coding Workflow: ✅ Verified (manual testing)
 
-**Note**: 19 tests skipped (SuperCollider integration tests require local environment).
+**Note**: 23 tests skipped (SuperCollider integration tests require local environment).
 
-## 使い方
+## Getting Started
 
-### 前提条件
+### Prerequisites
 
 - macOS
-- Node.js
+- Node.js v22+
+- SuperCollider
 - VS Code
 
-### インストール
+### Installation
 
 ```bash
 npm install
 npm run build
 ```
 
-### ビルドコマンド
+### Build Commands
 
 ```bash
-# 通常ビルド（増分ビルド）
+# Regular build (incremental)
 npm run build
 
-# クリーンビルド（全ファイルを再コンパイル）
+# Clean build (recompile all files)
 npm run build:clean
 ```
 
-**注意**: 初回ビルド時や、TypeScriptの増分ビルドで問題が発生した場合は `npm run build:clean` を実行してください。
+**Note**: For first-time builds or TypeScript incremental build issues, run `npm run build:clean`.
 
-**VSCode Extension専用ビルド**:
+**VSCode Extension Build**:
 ```bash
 cd packages/vscode-extension
-npm run build          # 増分ビルド
-npm run build:clean    # クリーンビルド
+npm run build          # Incremental build
+npm run build:clean    # Clean build
 ```
 
-### ~~MIDIポート設定~~ (未実装)
-
-> ⚠️ **Note**: MIDI機能は現在未実装です。本プロジェクトはオーディオベースのDSLに移行しました。以下の説明は旧仕様（Deprecated）です。
-
-<details>
-<summary>旧MIDI仕様（参考用）</summary>
-
-- デフォルトで `IAC Driver Bus 1` に接続しますが、`.env` に `ORBITSCORE_MIDI_PORT="Your IAC Bus"` を指定すると上書きできます。
-- 各シーケンスの `bus "..."` 設定を解析し、最初に検出したIAC Bus名を優先してオープンします。
-- 複数バスを定義する場合は、実行時に警告が表示されます（現状は最初のバスを利用）。
-
-</details>
-
-### DSLの基本構文（Audio-Based v3.0）
+### Basic DSL Syntax (Audio-Based v3.0)
 
 ```osc
-// グローバル設定
+// Global settings
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
-global.audioPath("./audio")  // オーディオファイルのベースパス
+global.audioPath("./audio")  // Audio file base path
 
-// グローバル起動
+// Start global
 global.start()
 
-// キックシーケンス
+// Kick sequence
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
 kick.audio("kick.wav")
 kick.play(1, 0, 1, 0)
-kick.loop()
 
-// スネアシーケンス
+// Snare sequence
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
 snare.audio("snare.wav")
 snare.play(0, 1, 0, 1)
-snare.run()
+
+// Transport control
+LOOP(kick)
+RUN(snare)
 ```
 
 <details>
-<summary>旧MIDI構文（参考用 / Deprecated）</summary>
+<summary>Legacy MIDI syntax (for reference / Deprecated)</summary>
 
 ```osc
-# グローバル設定
+# Global settings
 key C
 tempo 120
 meter 4/4 shared
 randseed 42
 
-# シーケンス（ピアノ）
+# Sequence (piano)
 sequence piano {
   bus "IAC Driver Bus 1"
   channel 1
@@ -323,16 +326,16 @@ sequence piano {
   octmul 1.0
   bendRange 2
 
-  # イベント
+  # Events
   (1@U0.5, 5@U1, 8@U0.25)  0@U0.5  3@2s  12@25%2bars
 }
 ```
 
 </details>
 
-### VS Code拡張
+### VS Code Extension
 
-1. 拡張機能のビルド:
+1. Build the extension:
 
 ```bash
 cd packages/vscode-extension
@@ -340,19 +343,21 @@ npm install
 npm run build
 ```
 
-2. VS Codeにインストール:
+2. Install in VS Code:
    - `Cmd+Shift+P` → "Developer: Install Extension from Location..."
-   - `packages/vscode-extension`フォルダを選択
+   - Select `packages/vscode-extension` folder
 
-3. 使用方法:
-   - `.osc`ファイルを開く
-   - `Cmd+Enter`で選択範囲を実行
-   - Transport Panelでループ/ジャンプ制御
+3. Usage:
+   - Open a `.osc` file
+   - Execute with `Cmd+Enter`
+   - Control transport with commands
 
-## ライセンス
+## License
 
-ISC
+MIT License - see [LICENSE](LICENSE) file for details
 
-## 貢献
+Copyright (c) 2025 Hiroshi Yamato / dropcontrol
 
-プロジェクトへの貢献を歓迎します。詳細は `INSTRUCTIONS_NEW_DSL.md` と `IMPLEMENTATION_PLAN.md` をご覧ください。
+## Contributing
+
+Contributions are welcome. Please see `INSTRUCTION_ORBITSCORE_DSL.md` and `IMPLEMENTATION_PLAN.md` for details.

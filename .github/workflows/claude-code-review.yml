@@ -1,60 +1,87 @@
 name: Claude Code Review
 
 on:
-  workflow_run:
-    workflows: ["CI/CD - Test, Build, and Lint"]
-    types:
-      - completed
-    # Only run on pull requests
-    branches-ignore:
-      - main
-      - develop
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
+  # Wait for CI/CD to complete
+  wait-for-ci:
+    runs-on: ubuntu-latest
+    outputs:
+      ci-success: ${{ steps.check-ci.outputs.success }}
+    steps:
+      - name: Wait for CI/CD checks
+        id: check-ci
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const maxAttempts = 60; // 10 minutes max (10 seconds * 60)
+            const delay = 10000; // 10 seconds
+
+            for (let attempt = 0; attempt < maxAttempts; attempt++) {
+              const { data: checkRuns } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+              });
+
+              const ciCheck = checkRuns.check_runs.find(run =>
+                run.name === 'code-review' &&
+                run.app.slug === 'github-actions'
+              );
+
+              if (ciCheck) {
+                if (ciCheck.status === 'completed') {
+                  if (ciCheck.conclusion === 'success') {
+                    core.setOutput('success', 'true');
+                    return;
+                  } else {
+                    core.setOutput('success', 'false');
+                    core.info(`CI/CD check failed with conclusion: ${ciCheck.conclusion}`);
+                    return;
+                  }
+                }
+                core.info(`CI/CD check status: ${ciCheck.status}, waiting...`);
+              } else {
+                core.info('CI/CD check not found yet, waiting...');
+              }
+
+              await new Promise(resolve => setTimeout(resolve, delay));
+            }
+
+            core.setFailed('Timeout waiting for CI/CD check');
+            core.setOutput('success', 'false');
+
   claude-review:
-    # Only run if CI/CD workflow succeeded
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    needs: wait-for-ci
+    # Only run if CI/CD succeeded and not a release PR (develop -> main)
+    if: |
+      needs.wait-for-ci.outputs.ci-success == 'true' &&
+      github.event.pull_request.base.ref != 'main'
 
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: read
+      checks: write
       id-token: write
 
     steps:
-      - name: Get PR number
-        id: pr
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data: pullRequests } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              head: `${context.repo.owner}:${context.payload.workflow_run.head_branch}`,
-            });
-            if (pullRequests.length > 0) {
-              return pullRequests[0].number;
-            }
-            return null;
-          result-encoding: string
-
       - name: Checkout repository
-        if: steps.pr.outputs.result != 'null'
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Run Claude Code Review
-        if: steps.pr.outputs.result != 'null'
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
             REPO: ${{ github.repository }}
-            PR NUMBER: ${{ steps.pr.outputs.result }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
 
             **重要: レビューは必ず日本語で記述してください。**
 

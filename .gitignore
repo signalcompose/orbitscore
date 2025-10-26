@@ -28,3 +28,12 @@ packages/vscode-extension/engine/
 
 # Serena - 各開発者が個別にオンボーディング
 .serena/
+
+# Environment variables (sensitive information)
+.env
+.env.local
+.env.*.local
+
+# Slack MCP cache files (not used in OrbitScore)
+.channels_cache.json
+.users_cache.json
