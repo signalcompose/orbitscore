@@ -66,16 +66,12 @@ open_hat.audio("../test-assets/audio/hihat_open.wav")
 open_hat.play(0, 0, 0, 1)  // Open on 4
 
 // === Start Playback ===
-kick.run()
-snare.run()
-hihat.run()
+RUN(kick, snare, hihat)
 
 // Uncomment to try variations:
-// kick2.run()
-// snare2.run()
-// ghost.run()
-// closed_hat.run()
-// open_hat.run()
+// RUN(kick2, snare2)
+// RUN(ghost)
+// RUN(closed_hat, open_hat)
 
 // === Key Points ===
 // - chop(1) or no chop: entire file is slice 1

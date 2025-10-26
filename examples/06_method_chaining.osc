@@ -12,18 +12,20 @@ kick_traditional.length(1)
 kick_traditional.audio("../test-assets/audio/kick.wav")
 kick_traditional.chop(1)
 kick_traditional.play(1, 0, 1, 0)
-kick_traditional.run()
+// RUN(kick_traditional)  // Use reserved keyword to start
 
 // === Example 2: Method Chaining (One-liner) ===
 var kick_chained = init global.seq
-kick_chained.beat(4 by 4).length(1).audio("../test-assets/audio/kick.wav").play(1, 0, 1, 0).run()
+kick_chained.beat(4 by 4).length(1).audio("../test-assets/audio/kick.wav").play(1, 0, 1, 0)
+// RUN(kick_chained)  // Use reserved keyword to start
 
 // === Example 3: Complex Pattern with Chaining ===
 var snare = init global.seq
 snare.beat(4 by 4).length(2).audio("../test-assets/audio/snare.wav").play(
   0, 0, 1, 0,           // Bar 1: backbeat
   0, 0, 1, (1, 1, 1, 1) // Bar 2: snare with roll
-).run()
+)
+// RUN(snare)  // Use reserved keyword to start
 
 // === Example 4: Multiple Sequences in Compact Form ===
 // Create a full drum kit in just a few lines
@@ -31,39 +33,52 @@ var drums_kick = init global.seq
 var drums_snare = init global.seq  
 var drums_hihat = init global.seq
 
-drums_kick.audio("../test-assets/audio/kick.wav").play(1, 0, 0, 0).run()
-drums_snare.audio("../test-assets/audio/snare.wav").play(0, 0, 1, 0).run()
-drums_hihat.audio("../test-assets/audio/hihat_closed.wav").play(1, 1, 1, 1).run()
+drums_kick.audio("../test-assets/audio/kick.wav").play(1, 0, 0, 0)
+drums_snare.audio("../test-assets/audio/snare.wav").play(0, 0, 1, 0)
+drums_hihat.audio("../test-assets/audio/hihat_closed.wav").play(1, 1, 1, 1)
+
+// Start all drum sequences together
+RUN(drums_kick, drums_snare, drums_hihat)
 
 // === Example 5: Chained with Audio Processing ===
 var bass = init global.seq
 bass.beat(4 by 4).length(2).audio("../test-assets/audio/bass_c1.wav").chop(8).play(
   1, 0, 0, 1, 0, 0, 1, 0,
   0, 1, 0, 1, 0, 0, 0, 0
-).fixpitch(7).run()  // Transpose up a fifth
+).fixpitch(7)  // Transpose up a fifth
+// RUN(bass)  // Use reserved keyword to start
 
 // === Example 6: Chained with Different Meters ===
 var poly3 = init global.seq
-poly3.beat(3 by 4).audio("../test-assets/audio/sine_440.wav").play(1, 1, 1).run()
+poly3.beat(3 by 4).audio("../test-assets/audio/sine_440.wav").play(1, 1, 1)
 
 var poly5 = init global.seq
-poly5.beat(5 by 4).audio("../test-assets/audio/sine_880.wav").play(1, 0, 1, 0, 1).run()
+poly5.beat(5 by 4).audio("../test-assets/audio/sine_880.wav").play(1, 0, 1, 0, 1)
+
+// Start polymeter patterns
+RUN(poly3, poly5)
 
 // === Example 7: Live Coding Style ===
-// Quick one-liners for experimentation
+// Quick definitions for experimentation
 
 // Instant kick pattern
-init global.seq.audio("../test-assets/audio/kick.wav").play(1, (1, 0), 1, 0).run()
+var quick_kick = init global.seq
+quick_kick.audio("../test-assets/audio/kick.wav").play(1, (1, 0), 1, 0)
 
 // Quick hi-hat with variations
-init global.seq.audio("../test-assets/audio/hihat_closed.wav").play(
+var quick_hat = init global.seq
+quick_hat.audio("../test-assets/audio/hihat_closed.wav").play(
   (1, 1), 1, (1, 1, 1), 1
-).run()
+)
 
 // Bass line with pitch variation
-init global.seq.audio("../test-assets/audio/bass_c1.wav").chop(4).play(
+var quick_bass = init global.seq
+quick_bass.audio("../test-assets/audio/bass_c1.wav").chop(4).play(
   1.fixpitch(0), 2.fixpitch(7), 3.fixpitch(5), 4.fixpitch(3)
-).run()
+)
+
+// Start patterns with reserved keywords
+// RUN(quick_kick, quick_hat, quick_bass)
 
 // === Benefits of Method Chaining ===
 // - Concise and readable
@@ -73,8 +88,8 @@ init global.seq.audio("../test-assets/audio/bass_c1.wav").chop(4).play(
 // - Easy to modify on the fly
 
 // === Transport Control ===
-// These can also be chained
-global.tempo(130).run()  // Speed up and start
+// Change tempo
+global.tempo(130)
 
-// Stop everything
-// global.stop()
+// Stop everything with reserved keyword
+// LOOP()  // Stops all sequences

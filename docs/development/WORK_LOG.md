@@ -17,6 +17,79 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.44 Issue #72: Update examples to use DSL v3 reserved keywords (October 27, 2025)
+
+**Date**: October 27, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `72-examples-cleanup`
+**Issue**: #72
+**PR**: TBD
+
+**Work Content**: Examples ディレクトリ内の古い DSL v2 メソッドベース構文を DSL v3 Reserved Keywords に更新。
+
+#### 主な変更内容
+
+**更新したファイル（8ファイル）**:
+
+1. **`examples/01_getting_started.osc`**
+   - `drum.loop()` → `LOOP(drum)`
+   - `snare.run()` → `RUN(snare)`
+   - `drum.unmute()` → `MUTE()` (unmute all)
+   - `global.stop()` → `LOOP()` (stop all)
+
+2. **`examples/02_audio_manipulation.osc`**
+   - 3つの `.run()` 呼び出し → `RUN(chop_demo, stretch, pitch)`
+
+3. **`examples/03_polymeter_polytempo.osc`**
+   - 5つの `.run()` 呼び出し → `RUN(three_four, four_four, five_four, slow_bass, fast_hats)`
+
+4. **`examples/04_nested_rhythms.osc`**
+   - コメントアウトされた `.run()` を `RUN()` 形式に統一
+
+5. **`examples/05_drum_patterns_simple.osc`**
+   - 複数の `.run()` → `RUN(kick, snare, hihat)`
+
+6. **`examples/06_method_chaining.osc`**
+   - メソッドチェーンから `.run()` を削除
+   - Reserved Keywords で実行する形式に変更
+   - コメントで実行方法を説明
+
+7. **`examples/09_reserved_keywords.osc`**
+   - タイトルから `STOP` を削除（存在しないキーワード）
+   - `STOP(hihat)` を削除
+   - Unidirectional Toggle design の説明を追加
+
+8. **`examples/README.md`**
+   - 実行コマンド例を Reserved Keywords 形式に更新
+   - `kick.loop()` → `LOOP(kick)`
+   - `global.stop()` → `LOOP()` (stops all)
+
+#### DSL v3 Reserved Keywords
+
+- **`RUN(seq1, seq2, ...)`**: 指定したシーケンスを1回実行
+- **`LOOP(seq1, seq2, ...)`**: 指定したシーケンスをループ、それ以外を停止
+- **`LOOP()`**: すべてのシーケンスを停止
+- **`MUTE(seq1, seq2, ...)`**: 指定したシーケンスをミュート
+- **`MUTE()`**: すべてのシーケンスをアンミュート
+
+#### Unidirectional Toggle Design（片記号方式）
+
+- `STOP()`, `UNMUTE()` キーワードは存在しない
+- `LOOP()` で停止、`MUTE()` でアンミュート
+- 排他的な操作により、反対の操作が不要
+
+#### 技術的詳細
+
+- メソッド呼び出し（`.run()`, `.loop()` など）は `filterDefinitionsOnly` により保存時に自動除外される
+- Reserved Keywords のみがユーザー向けAPIとして機能
+- すべてのサンプルコードが DSL v3 仕様に準拠
+
+#### テスト
+
+- 構文チェック: すべてのファイルが正しいフォーマットで更新されていることを確認
+
+---
+
 ### 6.43 Issue #67: Documentation clarification - Transport control and exaggerated expressions (October 26, 2025)
 
 **Date**: October 26, 2025

@@ -48,6 +48,4 @@ pitch.play(
 )
 
 // Start playback
-chop_demo.run()
-stretch.run()
-pitch.run()
+RUN(chop_demo, stretch, pitch)

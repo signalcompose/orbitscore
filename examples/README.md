@@ -113,14 +113,18 @@
 // スケジューラー起動
 global.start()
 
-// シーケンス開始
-kick.loop()
+// シーケンス開始（Reserved Keywords使用）
+LOOP(kick)         // kickをループ
+
+// 複数シーケンス同時開始
+RUN(kick, snare, hihat)
 
 // シーケンス停止
-kick.stop()
+LOOP()             // すべてのシーケンスを停止
 
-// 全停止
-global.stop()
+// ミュート制御
+MUTE(snare)        // snareのみミュート
+MUTE()             // すべてアンミュート
 ```
 
 ## 🧪 参考テストファイル
