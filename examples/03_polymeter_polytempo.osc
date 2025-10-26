@@ -46,11 +46,7 @@ fast_hats.play(1, 0, 1, 0, 1, 0, 1, 0)
 
 // Start all patterns
 // They will cycle at different rates creating evolving textures
-three_four.run()
-four_four.run()
-five_four.run()
-slow_bass.run()
-fast_hats.run()
+RUN(three_four, four_four, five_four, slow_bass, fast_hats)
 
 // The polymeters will align every 60 beats (LCM of 3, 4, 5)
 // The polytempos create complex rhythmic relationships

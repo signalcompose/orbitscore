@@ -1,7 +1,14 @@
-// Example: Reserved Keywords (RUN/LOOP/STOP/MUTE)
+// Example: Reserved Keywords (RUN/LOOP/MUTE)
 //
 // This example demonstrates the use of reserved keywords to control
 // multiple sequences simultaneously.
+//
+// DSL v3 uses Unidirectional Toggle design:
+// - RUN(a, b) - Run sequences a and b once
+// - LOOP(a, b) - Loop sequences a and b, stop all others
+// - LOOP() - Stop all sequences
+// - MUTE(a) - Mute sequence a only
+// - MUTE() - Unmute all sequences
 
 var global = init GLOBAL
 global.tempo(120)
@@ -38,12 +45,10 @@ RUN(kick, snare, hihat)
 // Run bass separately
 RUN(bass)
 
-// Stop hihat
-STOP(hihat)
-
-// Loop kick and snare
-LOOP(kick, snare, hihat)
+// Loop kick and snare only (stops hihat and bass)
 LOOP(kick, snare)
+
+// Stop all sequences
 LOOP()
 // Mute snare temporarily
 MUTE(snare)

@@ -14,17 +14,17 @@ var drum = init global.seq
 drum.beat(4 by 4).length(1)
 drum.audio("kick.wav").chop(4)  // audioPath already set
 drum.play(1, 0, 1, 0)  // Simple kick pattern
-drum.loop ()
+LOOP(drum)
 
 // === Section 3: Add More Layers ===
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
 snare.audio("snare.wav").chop(4)  // audioPath already set
 snare.play(0, 0, 1, 0)  // Snare on beat 3
-snare.run()
+RUN(snare)
 
 // === Section 4: Control Playback ===
 global.tempo(130)  // Speed up
-drum.unmute()        // Mute drums
-snare.loop()       // Loop snare
-global.stop()      // Stop everything
+MUTE()             // Unmute all (if previously muted)
+LOOP(snare)        // Loop snare only, stop drum
+LOOP()             // Stop everything

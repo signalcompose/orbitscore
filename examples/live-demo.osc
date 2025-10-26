@@ -19,9 +19,11 @@ hihat.beat(4 by 4).length(1)
 hihat.audio("hihat_closed.wav").chop(1)
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1)
 
-// 以下をCmd+Enterで実行:
-// kick.loop()
-// snare.loop()
-// hihat.loop()
-// kick.stop()
-// global.stop()
+// 以下をCmd+Enterで実行（DSL v3 Reserved Keywords）:
+// LOOP(kick)           // kickをループ
+// LOOP(kick, snare)    // kick, snareをループ（他は停止）
+// RUN(hihat)           // hihatを1回実行
+// LOOP(kick, snare, hihat)  // 全てをループ
+// LOOP()               // 全て停止
+// MUTE(snare)          // snareのみミュート
+// MUTE()               // 全てアンミュート

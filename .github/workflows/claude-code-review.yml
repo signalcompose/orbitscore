@@ -5,13 +5,20 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  # Wait for CI/CD to complete
-  wait-for-ci:
+  claude-review:
+    # Only run if not a release PR (develop -> main)
+    if: github.event.pull_request.base.ref != 'main'
+
     runs-on: ubuntu-latest
-    outputs:
-      ci-success: ${{ steps.check-ci.outputs.success }}
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      checks: write
+      id-token: write
+
     steps:
-      - name: Wait for CI/CD checks
+      - name: Wait for CI/CD to complete
         id: check-ci
         uses: actions/github-script@v7
         with:
@@ -34,41 +41,23 @@ jobs:
               if (ciCheck) {
                 if (ciCheck.status === 'completed') {
                   if (ciCheck.conclusion === 'success') {
-                    core.setOutput('success', 'true');
+                    core.info('✅ CI/CD check passed');
                     return;
                   } else {
-                    core.setOutput('success', 'false');
-                    core.info(`CI/CD check failed with conclusion: ${ciCheck.conclusion}`);
+                    core.setFailed(`CI/CD check failed with conclusion: ${ciCheck.conclusion}`);
                     return;
                   }
                 }
-                core.info(`CI/CD check status: ${ciCheck.status}, waiting...`);
+                core.info(`⏳ CI/CD check status: ${ciCheck.status}, waiting...`);
               } else {
-                core.info('CI/CD check not found yet, waiting...');
+                core.info('⏳ CI/CD check not found yet, waiting...');
               }
 
               await new Promise(resolve => setTimeout(resolve, delay));
             }
 
-            core.setFailed('Timeout waiting for CI/CD check');
-            core.setOutput('success', 'false');
+            core.setFailed('Timeout waiting for CI/CD check (10 minutes)');
 
-  claude-review:
-    needs: wait-for-ci
-    # Only run if CI/CD succeeded and not a release PR (develop -> main)
-    if: |
-      needs.wait-for-ci.outputs.ci-success == 'true' &&
-      github.event.pull_request.base.ref != 'main'
-
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: read
-      checks: write
-      id-token: write
-
-    steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
