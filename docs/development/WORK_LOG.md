@@ -17,6 +17,99 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.45 Issue #75: Clean up examples directory (October 27, 2025)
+
+**Date**: October 27, 2025
+**Status**: ✅ COMPLETE
+**Branch**: `75-examples-cleanup`
+**Issue**: #75
+**PR**: TBD
+**Commit**: [PENDING]
+
+**Work Content**: Examples ディレクトリのクリーンアップ。不要なテストファイルを削除し、残りのファイルをDSL v3に更新。
+
+#### 削除したファイル（17ファイル）
+
+**テストファイル（15ファイル）**:
+- `test-chop-arpeggio.osc`
+- `test-chop-nested.osc`
+- `test-chop-sparse.osc`
+- `test-chop.osc`
+- `test-individual-slices.osc`
+- `test-kick-absolute.osc`
+- `test-kick-auto.osc`
+- `test-length.osc`
+- `test-loop.osc`
+- `test-multiline-nested.osc`
+- `test-multiline-syntax.osc`
+- `test-simple-kick.osc`
+- `test-simple-run.osc`
+- `test-vscode-multiline.osc`
+- `vscode-test.osc`
+
+**デバッグファイル（1ファイル）**:
+- `debug-parser.osc`
+
+**削除の理由**:
+- 開発初期の実験的なテストファイル
+- E2Eテストとしての価値が低い
+- チュートリアルファイル（01-09）で十分カバー
+- ユーザーにとって混乱の元
+
+#### 更新したファイル（2ファイル）
+
+1. **`examples/live-demo.osc`**
+   - 古いメソッドベース構文を削除
+   - DSL v3 Reserved Keywords に更新
+   - コメントでライブコーディングの例を追加
+
+2. **`examples/performance-demo.osc`**
+   - Live Coding Commandsセクションを Reserved Keywords に更新
+   - Performance Tips を Reserved Keywords 形式に更新
+   - `MUTE()` の使用例を追加
+
+#### 更新したドキュメント（1ファイル）
+
+**`examples/README.md`**:
+- 削除されたtest-*ファイルの記載を削除
+- ファイル一覧を整理（11ファイルに絞り込み）
+- 推奨学習順序を追加
+- ライブパフォーマンス用セクションを更新
+- performance-demo.osc の詳細を追加
+
+#### 最終的なファイル構成（11ファイル）
+
+**チュートリアル（9ファイル）**:
+1. `01_getting_started.osc` - 入門
+2. `02_audio_manipulation.osc` - 音声操作
+3. `03_polymeter_polytempo.osc` - ポリメーター・ポリテンポ
+4. `04_nested_rhythms.osc` - ネストリズム
+5. `05_drum_patterns_simple.osc` - ドラムパターン
+6. `06_method_chaining.osc` - メソッドチェーン
+7. `07_audio_control.osc` - 音量・パン制御
+8. `08_timing_verification.osc` - タイミング精度検証
+9. `09_reserved_keywords.osc` - Reserved Keywords
+
+**ライブパフォーマンス用（2ファイル）**:
+10. `live-demo.osc` - ライブコーディングテンプレート
+11. `performance-demo.osc` - 総合パフォーマンスデモ
+
+#### 期待される効果
+
+- ✅ ユーザーが学習すべきファイルが明確化
+- ✅ 段階的な学習パスが整備
+- ✅ ライブパフォーマンス用ファイルが使いやすく
+- ✅ E2Eテストとしても活用可能（将来実装予定）
+- ✅ ディレクトリ構造がシンプルに
+
+#### 技術的詳細
+
+- すべてのファイルがDSL v3 Reserved Keywords に準拠
+- 削除されたtest-*ファイルの機能は、チュートリアルファイル（01-09）でカバー
+- ライブパフォーマンス用ファイルは、実際のライブコーディングシーンで使用可能
+
+---
+
 ### 6.44 Issue #72: Update examples to use DSL v3 reserved keywords (October 27, 2025)
 
 **Date**: October 27, 2025
