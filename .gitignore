@@ -33,3 +33,7 @@ packages/vscode-extension/engine/
 .env
 .env.local
 .env.*.local
+
+# Slack MCP cache files (not used in OrbitScore)
+.channels_cache.json
+.users_cache.json
