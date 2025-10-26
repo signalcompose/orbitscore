@@ -86,13 +86,14 @@ flam.play(
 )
 
 // Start sequences
-simple.run()
-// triplets.run()
-// tuplet.run()
-// complex.run()
-// deep.run()
-// syncopated.run()
-// flam.run()
+RUN(simple)
+// Uncomment to try other patterns:
+// RUN(triplets)
+// RUN(tuplet)
+// RUN(complex)
+// RUN(deep)
+// RUN(syncopated)
+// RUN(flam)
 
 // === Live Performance Tips ===
 // - Comment/uncomment .run() calls to layer patterns
