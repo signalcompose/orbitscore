@@ -63,37 +63,29 @@
   - マルチトラックストレステスト
   - パフォーマンスメトリクス
 
-### 9. `test-mastering-effects.osc` 🆕
-- **目的**: グローバルマスタリングエフェクト
+### 9. `09_reserved_keywords.osc` 🆕
+- **目的**: Reserved Keywords（RUN/LOOP/MUTE）の使い方
 - **内容**:
-  - `global.compressor()` - 音圧を上げる
-  - `global.limiter()` - クリッピング防止
-  - `global.normalizer()` - 最大音量化
-  - シームレスなon/off制御
-  - 超アグレッシブな設定例
+  - Unidirectional Toggle design
+  - 複数シーケンスの同時制御
+  - ミュート機能
 
-### 10. `test-all-features.osc` 🆕
-- **目的**: 全機能の網羅的テスト
-- **内容**:
-  - 実装済み全機能のデモ
-  - 基本的な使い方の参考例
-  - コメントアウトされたテストケース
-
-## 🎵 ライブコーディング用
+## 🎵 ライブパフォーマンス用
 
 ### `live-demo.osc`
 - **目的**: ライブコーディングのデモ・テンプレート
 - **内容**:
   - 基本的な3トラック（kick, snare, hihat）
-  - コメントアウトされた実行コマンド
+  - Reserved Keywords使用例
   - ライブパフォーマンス用のシンプルな構成
 
-### `multi-track-test.osc`
-- **目的**: 複数トラックの同時制御テスト
+### `performance-demo.osc`
+- **目的**: 全サンプルファイルを使った総合デモ
 - **内容**:
-  - 3つの独立したシーケンス
-  - 個別のループ制御
-  - グローバル停止のテスト
+  - ドラム、ベース、メロディの全セクション
+  - Reserved Keywords使用例
+  - ライブミキシングのヒント
+  - マスタリングエフェクト設定例
 
 ## 🚀 使い方
 
@@ -127,39 +119,35 @@ MUTE(snare)        // snareのみミュート
 MUTE()             // すべてアンミュート
 ```
 
-## 🧪 参考テストファイル
+## 📋 推奨学習順序
 
-高度な使用例やストレステストのための参考ファイル：
+1. `01_getting_started.osc` - 基本操作
+2. `05_drum_patterns_simple.osc` - ドラムパターン
+3. `06_method_chaining.osc` - メソッドチェーン
+4. `09_reserved_keywords.osc` - Reserved Keywords
+5. `02_audio_manipulation.osc` - 音声操作
+6. `07_audio_control.osc` - 音量・パン制御
+7. `03_polymeter_polytempo.osc` - ポリメーター
+8. `04_nested_rhythms.osc` - ネストリズム
+9. `08_timing_verification.osc` - タイミング検証
+10. `live-demo.osc` / `performance-demo.osc` - ライブパフォーマンス
 
-- `test-gain.osc` - 音量制御の詳細テスト（dB単位）
-- `test-pan.osc` - ステレオ位置の詳細テスト
-- `test-random-gain-pan.osc` - ランダム機能のテスト
-- `test-mastering-effects.osc` - マスタリングエフェクトのテスト
-- `test-polymeter.osc` - ポリメーターの基本テスト
-- `test-polytempo.osc` - ポリテンポの基本テスト
-- `test-nested.osc` - ネストリズムの各種パターン
-- `test-insane-nested.osc` - 極限ネスト（11レベル）
-- `test-danger-zone-poly.osc` - マルチトラックストレステスト
-
-これらのファイルは開発・デバッグ用ですが、参考になる場合があります。
-
-## 📁 ディレクトリ構造
+## 📁 ファイル一覧
 
 ```
 examples/
 ├── README.md                       # このファイル
 ├── 01_getting_started.osc          # 入門
 ├── 02_audio_manipulation.osc       # 音声操作
-├── 03_polymeter_polytempo.osc      # ポリメーター
+├── 03_polymeter_polytempo.osc      # ポリメーター・ポリテンポ
 ├── 04_nested_rhythms.osc           # ネストリズム
 ├── 05_drum_patterns_simple.osc     # ドラムパターン
 ├── 06_method_chaining.osc          # メソッドチェーン
-├── 07_audio_control.osc            # 🆕 音量・パン制御
-├── 08_timing_verification.osc      # 🆕 タイミング検証
-├── live-demo.osc                   # ライブデモ
-├── multi-track-test.osc            # マルチトラックテスト
-├── test-*.osc                      # 参考テストファイル
-└── max/                            # Max/MSP パッチ（MIDI用、非推奨）
+├── 07_audio_control.osc            # 音量・パン制御
+├── 08_timing_verification.osc      # タイミング精度検証
+├── 09_reserved_keywords.osc        # Reserved Keywords
+├── live-demo.osc                   # ライブコーディングテンプレート
+└── performance-demo.osc            # 総合パフォーマンスデモ
 ```
 
 ## ⚠️ 注意事項

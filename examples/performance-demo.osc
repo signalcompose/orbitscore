@@ -80,14 +80,16 @@ sine2.audio("sine_880.wav").chop(1).play(0, 0, 0, 0)
 // ========================================
 // Live Coding Commands (use Cmd+Enter)
 // ========================================
+// DSL v3 uses Reserved Keywords: RUN(), LOOP(), MUTE()
 
 // --- Start/Stop All ---
 global.start()
-global.stop()
+// LOOP()  // Stop all sequences
 
-// --- Individual Sequence Control ---
-// kick.loop()
-// kick.stop()
+// --- Individual Sequence Control (Reserved Keywords) ---
+// LOOP(kick)           // Loop kick only
+// RUN(kick)            // Run kick once
+// LOOP(kick, snare)    // Loop kick and snare, stop others
 
 // --- Drum Variations ---
 // kick.play(1, 0, 1, 0,  1, 0, 1, 0,  1, 0, 1, 0,  1, 0, 1, 0)
@@ -133,9 +135,10 @@ global.stop()
 // ========================================
 // Performance Tips
 // ========================================
-// 1. Start with drums: kick.loop(), snare.loop(), hatc.loop()
-// 2. Add bass: bassc.loop(), basse.loop(), bassg.loop()
-// 3. Layer melodies: arp.loop(), chordc.loop()
+// 1. Start with drums: LOOP(kick, snare, hatc)
+// 2. Add bass: LOOP(kick, snare, hatc, bassc, basse, bassg)
+// 3. Layer melodies: LOOP(kick, snare, hatc, bassc, arp, chordc)
 // 4. Use gain() and pan() for live mixing
 // 5. Experiment with polymeter and nested rhythms
 // 6. Apply global mastering effects for final polish
+// 7. Use MUTE(snare) to temporarily mute, MUTE() to unmute all
