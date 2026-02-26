@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.46 Issue #78: Migrate from Git Flow to GitHub Flow (February 27, 2026)
+
+**Date**: February 27, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `78-migrate-github-flow`
+**Issue**: #78
+**PR**: TBD
+**Commit**: 1325935
+
+**Work Content**: Git Flow（main + develop + feature branches）から GitHub Flow（main + feature branches）への移行。
+
+#### 背景
+- develop と main の内容が実質同一で、develop ブランチが形骸化していた
+- ワークフローを簡素化し、GitHub Flow に一本化
+
+#### 作業内容
+1. **リモートブランチ削除**: マージ済み8本 + 未マージ31本 + develop = 40本
+2. **develop ブランチ保護ルール削除**: GitHub API経由で保護ルールを解除後、ブランチ削除
+3. **ドキュメント更新**:
+   - `CLAUDE.md`: develop参照をすべて削除、GitHub Flowに書き換え
+   - `docs/core/PROJECT_RULES.md`: ブランチ構造、ワークフロー、PR作成手順を更新
+   - `CONTRIBUTING.md`: Git Flow → GitHub Flow に変更
+4. **Hook スクリプト更新**:
+   - `pre-edit-check.sh`: develop チェック削除（mainのみ保護）
+   - `pre-commit-check.sh`: develop チェック削除
+   - `session-start.sh`: develop 警告 → main 警告に変更
+   - `hooks/README.md`: 説明を更新
+5. **CI/CD更新**:
+   - `claude-code-review.yml`: main PR除外条件を削除（全PRでレビュー実行）
+6. **コミット戦略ルール追加**:
+   - Conventional Commits 形式の採用を明記
+   - 小さいコミットを積み重ねるルールを追加
+
+#### 技術的決定
+- squash merge の禁止ルールは維持（コミット履歴の保全のため）
+- main ブランチの保護ルールはそのまま維持
+
+---
+
 ### 6.45 Issue #75: Clean up examples directory (October 27, 2025)
 
 **Date**: October 27, 2025
