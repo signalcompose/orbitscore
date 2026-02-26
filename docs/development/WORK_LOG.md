@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.47 Issue #80: Fix hardcoded input device in scsynth boot (February 27, 2026)
+
+**Date**: February 27, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `80-fix-hardcoded-input-device`
+**Issue**: #80
+
+**Work Content**: `osc-client.ts` の `boot()` で入力デバイス `'MacBook Airの'` がハードコードされており、外付けオーディオインターフェースが使用できない問題を修正。
+
+**Changes**:
+- `bootOptions.device = ['MacBook Airの', outputDevice]` → `bootOptions.device = outputDevice` に変更
+- OrbitScoreは出力のみ使用するため、入力デバイス指定を削除
+- scynthのデフォルト入力デバイスに委任
+
+---
+
 ### 6.46 Issue #78: Migrate from Git Flow to GitHub Flow (February 27, 2026)
 
 **Date**: February 27, 2026

@@ -24,11 +24,8 @@ export class OSCClient {
     }
 
     // Set output device if specified (by name)
-    // SuperCollider device option can be a string or [inputDevice, outputDevice] array
     if (outputDevice) {
-      // Use array format: [inputDevice, outputDevice]
-      // Use default input device (MacBook Airの) and specified output
-      bootOptions.device = ['MacBook Airの', outputDevice]
+      bootOptions.device = outputDevice
       this.currentOutputDevice = outputDevice
       console.log(`🔊 Using output device: ${outputDevice}`)
     }
