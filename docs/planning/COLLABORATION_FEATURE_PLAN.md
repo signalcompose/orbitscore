@@ -2677,8 +2677,8 @@ gh issue create \
 
 ### 2. ブランチ作成
 ```bash
-git checkout develop
-git pull origin develop
+git checkout main
+git pull origin main
 git checkout -b <issue-number>-p2p-collaboration
 ```
 

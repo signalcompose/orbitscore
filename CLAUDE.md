@@ -73,8 +73,7 @@ git branch --show-current
 
 **ブランチ確認後のアクション:**
 - ✅ 機能ブランチ（`<issue-number>-*`形式）: そのまま作業可能
-- ⚠️ `develop`ブランチ: 作業開始前に機能ブランチを作成すること
-- 🔴 `main`ブランチ: 絶対に作業しない。`develop`に移動してから機能ブランチを作成
+- 🔴 `main`ブランチ: 絶対に作業しない。機能ブランチを作成すること
 
 ### ステップ4: 作業準備完了の確認
 
@@ -120,7 +119,7 @@ git branch --show-current
 **OrbitScore** - Audio-based live coding DSL for modern music production
 - DSL Version: v3.0 (SuperCollider Audio Engine)
 - Test Status: 225 passed, 23 skipped (248 total) = 90.7%
-- Main Branch: `main`, Development Branch: `develop`
+- Branch Strategy: GitHub Flow (`main` + feature branches)
 
 ### Development Commands
 ```bash
@@ -164,13 +163,12 @@ npm run lint             # ESLint + Prettier
 4. Run Tests: npm test
 5. Update WORK_LOG.md
 6. Commit
-7. Create PR: gh pr create --base develop --body "Closes #N"
+7. Create PR: gh pr create --base main --body "Closes #N"
 ```
 
 ### ❌ NEVER DO THESE
 
 - Start implementation on `main` branch
-- Start implementation on `develop` branch
 - Start without creating an Issue
 - Start without creating a branch
 - Use branch names without Issue number
@@ -182,7 +180,7 @@ npm run lint             # ESLint + Prettier
 
 1. ✅ Issue created?
 2. ✅ Branch created?
-3. ✅ Current branch is NOT `main`/`develop`?
+3. ✅ Current branch is NOT `main`?
 4. ✅ Branch name includes Issue number?
 
 **If any answer is No, DO NOT start implementation.**
@@ -190,8 +188,8 @@ npm run lint             # ESLint + Prettier
 ### Hook Protection
 
 **Automated Guards:**
-- `pre-edit-check.sh` blocks Edit/Write on develop/main branches
-- `pre-commit-check.sh` blocks Serena memory commits on develop/main
+- `pre-edit-check.sh` blocks Edit/Write on main branch
+- `pre-commit-check.sh` blocks Serena memory commits on main
 - `session-start.sh` shows reminders at session start
 
 See `.claude/settings.json` for Hook configuration.
@@ -203,8 +201,7 @@ See `.claude/settings.json` for Hook configuration.
 ## Git Workflow Summary
 
 ### Branch Structure
-- `main` - Production (protected)
-- `develop` - Integration (protected, base for PRs)
+- `main` - Production (protected, base for PRs)
 - `<issue-number>-description` - Feature branches (English only)
 
 ### Quick Workflow
@@ -222,7 +219,7 @@ npm test
 # Edit docs/WORK_LOG.md
 
 # 5. Create PR
-gh pr create --base develop --body "Closes #N"
+gh pr create --base main --body "Closes #N"
 ```
 
 **Details**: See [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) Section 2
@@ -254,13 +251,18 @@ gh pr create --base develop --body "Closes #N"
 
 ## 🚨 Git Workflow 絶対禁止事項
 
-- ❌ **main → develop への逆流**（これが最も重要）
-- ❌ **main・developブランチへの直接コミット**
-- ❌ Squashマージ（Git Flow履歴が破壊される）
+- ❌ **mainブランチへの直接コミット**
 - ❌ ISSUE番号のないブランチ名
 
-**重要**: developからmainへの直接PRは**リリース時のみ許可**。
-逆方向（main → develop）は**絶対禁止**。
+**ワークフロー**: GitHub Flow（main + feature branches）を採用。
+feature ブランチから main への PR でマージする。
+
+### コミット戦略
+
+- **Conventional Commits** 形式を採用（`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`）
+- **小さいコミットを積み重ねる**: 1つの論理的変更ごとに1コミット
+- 大きな変更は複数の小さなコミットに分割する
+- 各コミットは単独でビルド・テストが通る状態を維持する
 
 ---
 

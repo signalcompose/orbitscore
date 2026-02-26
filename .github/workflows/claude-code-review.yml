@@ -6,8 +6,6 @@ on:
 
 jobs:
   claude-review:
-    # Only run if not a release PR (develop -> main)
-    if: github.event.pull_request.base.ref != 'main'
 
     runs-on: ubuntu-latest
     permissions:

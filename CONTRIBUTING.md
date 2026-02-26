@@ -8,14 +8,11 @@ By participating in this project, you agree to maintain a respectful and collabo
 
 ## Development Workflow
 
-OrbitScore uses a **Git Flow** branching strategy with `develop` as the integration branch and `main` as the stable release branch.
+OrbitScore uses a **GitHub Flow** branching strategy with `main` as the single long-lived branch.
 
 ### Branch Structure
 
-- **`main`**: Production-ready, stable releases only
-- **`develop`**: Integration branch for development (default for PRs)
-- **`feature/*`**: New features and enhancements
-- **`fix/*`**: Bug fixes
+- **`main`**: Production-ready code (protected, base for PRs)
 - **`<issue-number>-<description>`**: Feature branches linked to issues
 
 ### Getting Started
@@ -32,10 +29,10 @@ OrbitScore uses a **Git Flow** branching strategy with `develop` as the integrat
    git remote add upstream https://github.com/signalcompose/orbitscore.git
    ```
 
-4. **Create a feature branch from `develop`**:
+4. **Create a feature branch from `main`**:
    ```bash
-   git checkout develop
-   git pull upstream develop
+   git checkout main
+   git pull upstream main
    git checkout -b <issue-number>-feature-name
    ```
 
@@ -105,7 +102,7 @@ Closes #123"
    ```
 
 2. **Create a Pull Request**:
-   - Base branch: `develop`
+   - Base branch: `main`
    - Title: English (e.g., "feat: add audio slicing feature")
    - Description: Japanese is acceptable for internal development
 
@@ -126,7 +123,7 @@ Closes #123"
 - **Write clear descriptions**: Explain what and why
 - **Update documentation**: If your change affects user-facing features
 - **Add tests**: Ensure new code is tested
-- **Rebase if needed**: Keep your branch up to date with `develop`
+- **Rebase if needed**: Keep your branch up to date with `main`
 
 ## Documentation
 

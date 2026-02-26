@@ -12,15 +12,15 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 
 **実行タイミング**: Edit/Writeツール使用前
 
-**目的**: develop/mainブランチでの直接実装を防止
+**目的**: mainブランチでの直接実装を防止
 
 **チェック内容**:
-- 現在のブランチがdevelop/mainでないか確認
-- develop/mainの場合は**実装をブロック**（exit 2）
+- 現在のブランチがmainでないか確認
+- mainの場合は**実装をブロック**（exit 2）
 - ブランチ名にIssue番号が含まれているか確認（警告のみ）
 
 **動作**:
-- develop/mainでEdit/Writeを使おうとすると**ブロック**
+- mainでEdit/Writeを使おうとすると**ブロック**
 - Issue番号のないブランチ名の場合は警告のみ
 
 **重要**: このフックにより、ワークフロー違反（Issue・ブランチ作成前の実装開始）を**システムとして防止**
@@ -200,7 +200,7 @@ fi
 
 1. `.claude/hooks/`に新しいスクリプトを作成
 2. 実行権限を付与：`chmod +x .claude/hooks/new-hook.sh`
-3. `.claude/config.json`に設定を追加
+3. `.claude/settings.json`に設定を追加
 4. テスト実行：`./.claude/hooks/new-hook.sh`
 
 ## デバッグ
@@ -241,7 +241,7 @@ claude --debug
 ### Hookが実行されない
 
 1. スクリプトに実行権限があるか確認：`ls -la .claude/hooks/`
-2. `.claude/config.json`の設定を確認
+2. `.claude/settings.json`の設定を確認
 3. `claude --debug`でデバッグモードで実行
 
 ### エラーメッセージが表示されない

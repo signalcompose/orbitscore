@@ -387,41 +387,11 @@ alias review-get='gh pr view --comments | grep -A 100 "bugbot"'
 
 **CRITICAL: Always create a feature branch before starting work**
 
-**Branch Structure:**
-- `main` - Production-ready code (protected)
-- `develop` - Integration branch (protected)
-- `feature/*` - Feature development branches
-- `fix/*` - Bug fix branches
-- `refactor/*` - Refactoring branches
-- `docs/*` - Documentation only changes
-- `test/*` - Test additions/fixes
+**Branch Structure (GitHub Flow):**
+- `main` - Production-ready code (protected, base for PRs)
+- `<issue-number>-description` - Feature/fix/refactor branches
 
-**Git Worktree Setup:**
-
-This project uses Git Worktree to maintain separate working directories for `main` and `develop` branches:
-
-```bash
-# Directory structure
-/Users/yamato/Src/proj_livecoding/
-├── orbitscore/          # develop branch (main working directory)
-└── orbitscore-main/     # main branch (production environment)
-
-# View worktrees
-git worktree list
-
-# Switch between environments
-cd /Users/yamato/Src/proj_livecoding/orbitscore       # develop
-cd /Users/yamato/Src/proj_livecoding/orbitscore-main  # main
-```
-
-**Benefits:**
-- Complete separation between develop and main environments
-- No need to switch branches (no file changes)
-- Can test both environments simultaneously
-- Prevents accidental commits to main branch
-- Stable production environment always available
-
-**Branch Protection Rules (main & develop):**
+**Branch Protection Rules (main):**
 - ✅ Pull Request required before merging
 - ✅ At least 1 approval required
 - ✅ Dismiss stale pull request approvals when new commits are pushed
@@ -430,28 +400,26 @@ cd /Users/yamato/Src/proj_livecoding/orbitscore-main  # main
 
 **Creating a new feature branch:**
 ```bash
-# Create and switch to new feature branch from develop
-git checkout develop
-git pull origin develop
-git checkout -b feature/descriptive-name
+# Create and switch to new feature branch from main
+git checkout main
+git pull origin main
+git checkout -b <issue-number>-descriptive-name
 
 # Example branch names:
-# - feature/vst-plugin-support
-# - fix/audio-timing-issue
-# - refactor/parser-cleanup
+# - 78-migrate-github-flow
+# - 55-improve-type-safety
+# - 61-audio-playback-testing
 ```
 
-**Development Workflow:**
+**Development Workflow (GitHub Flow):**
 ```
-1. Create feature branch from develop
+1. Create feature branch from main
 2. Implement changes
 3. Commit and push to origin
-4. Create PR to develop
-5. Request review (Cursor BugBot provides change summary)
+4. Create PR to main
+5. Request review (Claude Code Review provides feedback)
 6. Address review comments
-7. Merge to develop after approval
-8. (Release) Create PR from develop to main
-9. Merge to main after approval
+7. Merge to main after approval
 ```
 
 **Creating PRs:**
@@ -459,13 +427,10 @@ git checkout -b feature/descriptive-name
 # Push branch to GitHub
 git push -u origin feature/branch-name
 
-# Create PR to develop (with automatic Issue closing)
-gh pr create --base develop --title "feat: description" --body "Closes #<issue-number>
+# Create PR to main (with automatic Issue closing)
+gh pr create --base main --title "feat: description" --body "Closes #<issue-number>
 
 detailed description"
-
-# Create PR to main (for releases)
-gh pr create --base main --title "release: version X.Y.Z" --body "release notes"
 ```
 
 **Automatic Issue Closing:**
@@ -488,8 +453,8 @@ gh pr merge <number> --squash
 ```
 
 **Important:**
-- **ALWAYS create a branch before starting work** - never commit directly to main or develop
-- **ALWAYS create PR to develop first** - main is only for releases
+- **ALWAYS create a branch before starting work** - never commit directly to main
+- **ALWAYS create PR to main** - GitHub Flow workflow
 - **Branch names MUST be in English only** - no Japanese characters (日本語禁止)
   - ✅ Good: `11-refactor-audio-slicer-phase-2-1`
   - ❌ Bad: `11-refactor-audio-slicertsをモジュール分割phase-2-1`
@@ -497,8 +462,8 @@ gh pr merge <number> --squash
 - **Branches are kept for history** - do not delete after merge
 - **Cursor BugBot** automatically provides change summaries on PRs (not actual code reviews)
 - User typically handles merging, but agent may assist with complex implementations
-- Always use `--squash` for clean commit history on main/develop branches
-- **Branch protection prevents accidental direct pushes** to main and develop
+- Always use `--squash` for clean commit history on main branch
+- **Branch protection prevents accidental direct pushes** to main
 
 ### Commit Message Format:
 

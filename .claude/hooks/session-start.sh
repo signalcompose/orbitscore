@@ -13,9 +13,9 @@ fi
 # Base notification
 NOTIFICATION="📋 **セッション開始時の必須アクション**\n\n1. **Serenaプロジェクトをアクティベート**\n   - serena-activate_project(\"orbitscore\")\n\n2. **必須ドキュメントを読み込む**\n   - docs/PROJECT_RULES.md\n   - docs/CONTEXT7_GUIDE.md\n\n3. **Serenaメモリを確認**\n   - serena-list_memories\n   - 必要に応じてread_memoryで読み込む\n\n4. **Git Workflow reminder**\n   - Issue作成 → ブランチ作成（Issue番号含む） → 実装 → PR作成（Closes #N）\n   - ブランチ名: \`<issue-number>-<descriptive-name>\` （英語のみ）"
 
-# Add develop branch reminder if on develop
-if [[ "$CURRENT_BRANCH" == "develop" ]]; then
-  NOTIFICATION="$NOTIFICATION\n\n⚠️ **現在 \`develop\` ブランチにいます**\n\n**Serenaメモリ更新のルール:**\n- ✅ メモリ変更（編集・保存）はOK\n- ❌ メモリのコミットはNG\n- 変更はunstagedのまま機能ブランチに持ち越す\n- 機能ブランチで機能と一緒にコミット\n\n作業を始める前に機能ブランチを作成してください。"
+# Add main branch reminder if on main
+if [[ "$CURRENT_BRANCH" == "main" ]]; then
+  NOTIFICATION="$NOTIFICATION\n\n🔴 **現在 \`main\` ブランチにいます**\n\nmainブランチでは直接作業できません。\n作業を始める前に機能ブランチを作成してください。\n\n例: \`git checkout -b <issue-number>-description\`"
 fi
 
 NOTIFICATION="$NOTIFICATION\n\nこれらを確認してから作業を開始してください。"

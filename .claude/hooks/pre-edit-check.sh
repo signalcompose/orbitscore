@@ -10,11 +10,11 @@ else
   CURRENT_BRANCH=""
 fi
 
-# Check if on develop/main branch
-if [[ "$CURRENT_BRANCH" == "develop" ]] || [[ "$CURRENT_BRANCH" == "main" ]]; then
+# Check if on main branch
+if [[ "$CURRENT_BRANCH" == "main" ]]; then
   cat << 'EOF'
 {
-  "error": "🚫 **実装ブロック: develop/mainブランチでの編集禁止**\n\n現在のブランチ: `${CURRENT_BRANCH}`\n\n**ワークフロー違反**: develop/mainブランチで直接実装を開始しようとしています。\n\n**正しい手順**:\n1. Issue作成: `gh issue create --title \"...\"`\n2. ブランチ作成: `git checkout -b <issue-number>-description`\n3. 実装開始\n\n**理由**:\n- ブランチ管理の崩壊を防ぐ\n- Issue追跡を確実にする\n- PRとIssueの紐付けを保証する\n\n詳細: CLAUDE.md「実装前の必須ワークフロー」"
+  "error": "🚫 **実装ブロック: mainブランチでの編集禁止**\n\n現在のブランチ: `main`\n\n**ワークフロー違反**: mainブランチで直接実装を開始しようとしています。\n\n**正しい手順**:\n1. Issue作成: `gh issue create --title \"...\"`\n2. ブランチ作成: `git checkout -b <issue-number>-description`\n3. 実装開始\n\n**理由**:\n- ブランチ管理の崩壊を防ぐ\n- Issue追跡を確実にする\n- PRとIssueの紐付けを保証する\n\n詳細: CLAUDE.md「実装前の必須ワークフロー」"
 }
 EOF
   exit 2  # Block edit
