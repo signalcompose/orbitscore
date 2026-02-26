@@ -3,7 +3,8 @@
 
 // Initialize global
 var global = init GLOBAL
-global.tempo(120).beat(4 by 4).tick(4)  // Chain global methods too!
+global.tempo(120).beat(4 by 4)  // Chain global methods too!
+global.start()
 
 // === Example 1: Traditional Multi-line ===
 var kick_traditional = init global.seq

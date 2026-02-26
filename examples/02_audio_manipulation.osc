@@ -5,7 +5,6 @@
 var global = init GLOBAL
 global.tempo(110)
 global.beat(4 by 4)
-global.tick(4)
 
 // === Example 1: Audio Chopping ===
 var chop_demo = init global.seq
@@ -48,4 +47,5 @@ pitch.play(
 )
 
 // Start playback
+global.start()
 RUN(chop_demo, stretch, pitch)

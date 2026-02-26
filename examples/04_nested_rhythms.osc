@@ -5,7 +5,6 @@
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)  // 4/4 time
-global.tick(4)
 
 // === Example 1: Simple Nesting ===
 // play(1, (2, 3)) - first half plays slice 1, second half divided for 2 and 3
@@ -86,6 +85,7 @@ flam.play(
 )
 
 // Start sequences
+global.start()
 RUN(simple)
 // Uncomment to try other patterns:
 // RUN(triplets)
