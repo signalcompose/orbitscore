@@ -200,7 +200,7 @@ fi
 
 1. `.claude/hooks/`に新しいスクリプトを作成
 2. 実行権限を付与：`chmod +x .claude/hooks/new-hook.sh`
-3. `.claude/config.json`に設定を追加
+3. `.claude/settings.json`に設定を追加
 4. テスト実行：`./.claude/hooks/new-hook.sh`
 
 ## デバッグ
@@ -241,7 +241,7 @@ claude --debug
 ### Hookが実行されない
 
 1. スクリプトに実行権限があるか確認：`ls -la .claude/hooks/`
-2. `.claude/config.json`の設定を確認
+2. `.claude/settings.json`の設定を確認
 3. `claude --debug`でデバッグモードで実行
 
 ### エラーメッセージが表示されない
