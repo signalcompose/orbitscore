@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.48 Issue #82: Fix scsynth boot timeout (February 27, 2026)
+
+**Date**: February 27, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `82-fix-scsynth-boot-timeout`
+**Issue**: #82
+
+**Work Content**: supercolliderjs の `Server.boot()` に3秒のハードコードタイムアウトがあり、scynthのデバイス初期化に3秒以上かかるとエンジンがクラッシュする問題を修正。
+
+**Changes**:
+- `scripts/patch-supercolliderjs.sh` を作成（タイムアウト 3s → 30s にパッチ）
+- `package.json` に `postinstall` スクリプトを追加（`npm install` 時に自動パッチ）
+
+---
+
 ### 6.47 Issue #80: Fix hardcoded input device in scsynth boot (February 27, 2026)
 
 **Date**: February 27, 2026
