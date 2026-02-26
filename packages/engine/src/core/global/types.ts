@@ -50,6 +50,7 @@ export interface GlobalState {
   tempo: number
   beat: Meter
   audioPath: string
+  documentDirectory: string
   masterGainDb: number
   masterEffects: MasterEffect[]
   isRunning: boolean

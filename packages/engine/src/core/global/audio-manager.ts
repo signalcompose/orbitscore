@@ -86,6 +86,7 @@ export class AudioManager {
   getState() {
     return {
       audioPath: this._audioPath,
+      documentDirectory: this._documentDirectory,
     }
   }
 }

@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.49 Issue #85: Fix audio relative path resolution (February 27, 2026)
+
+**Date**: February 27, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `85-fix-audio-relative-path-resolution`
+**Issue**: #85
+
+**Work Content**: Normal Mode でオーディオファイルの相対パスが `.osc` ファイルの場所ではなく `process.cwd()` を基準に解決されるバグを修正。`sequence.audio()` でパスを設定する時点で絶対パスに解決するようにした。
+
+**Root Cause**: `sequence.audio()` が `globalState.audioPath` 未設定時に相対パスをそのまま保存し、`process-statement.ts` の RUN/LOOP が `process.cwd()` を基準に解決していた。Extension が注入する `setDocumentDirectory()` の `_documentDirectory` が使われていなかった。
+
+**Changes**:
+- `packages/engine/src/core/global/types.ts` — `GlobalState` 型に `documentDirectory` フィールドを追加
+- `packages/engine/src/core/global/audio-manager.ts` — `getState()` で `documentDirectory` を返すように変更
+- `packages/engine/src/core/sequence.ts` — `audio()` / `_audio()` で相対パスを `documentDirectory` を基準に絶対パスへ解決
+- `packages/engine/src/interpreter/process-statement.ts` — RUN/LOOP のバッファプリロードで `documentDirectory` を使うフォールバックを追加
+
+**Tests**: 225 passed, 23 skipped (all passing)
+
 ### 6.48 Issue #82: Fix scsynth boot timeout (February 27, 2026)
 
 **Date**: February 27, 2026

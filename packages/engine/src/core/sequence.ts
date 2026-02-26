@@ -208,12 +208,22 @@ export class Sequence {
   }
 
   audio(filepath: string): this {
-    // Calculate full path
+    // Calculate full path - resolve to absolute at set time
     const globalState = this.global.getState()
-    const fullPath =
-      globalState.audioPath && !path.isAbsolute(filepath)
-        ? path.join(globalState.audioPath, filepath)
-        : filepath
+    let fullPath: string
+
+    if (path.isAbsolute(filepath)) {
+      fullPath = filepath
+    } else if (globalState.audioPath) {
+      // Join with global audioPath (already absolute)
+      fullPath = path.join(globalState.audioPath, filepath)
+    } else if (globalState.documentDirectory) {
+      // Resolve relative to the .osc file's directory
+      fullPath = path.resolve(globalState.documentDirectory, filepath)
+    } else {
+      // Fallback to process.cwd()
+      fullPath = path.resolve(process.cwd(), filepath)
+    }
 
     this._audioFilePath = fullPath
     this._chopDivisions = 1 // Reset chop when audio changes
@@ -228,12 +238,19 @@ export class Sequence {
    * @returns this for method chaining
    */
   _audio(filepath: string): this {
-    // Calculate full path
+    // Calculate full path - resolve to absolute at set time
     const globalState = this.global.getState()
-    const fullPath =
-      globalState.audioPath && !path.isAbsolute(filepath)
-        ? path.join(globalState.audioPath, filepath)
-        : filepath
+    let fullPath: string
+
+    if (path.isAbsolute(filepath)) {
+      fullPath = filepath
+    } else if (globalState.audioPath) {
+      fullPath = path.join(globalState.audioPath, filepath)
+    } else if (globalState.documentDirectory) {
+      fullPath = path.resolve(globalState.documentDirectory, filepath)
+    } else {
+      fullPath = path.resolve(process.cwd(), filepath)
+    }
 
     this._audioFilePath = fullPath
     this._chopDivisions = 1 // Reset chop when audio changes
