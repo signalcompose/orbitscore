@@ -639,19 +639,22 @@ function startEngineDebug() {
 
 function stopEngine() {
   if (engineProcess && !engineProcess.killed) {
+    // Capture process reference before nulling module-level variable
+    // (the SIGKILL timeout needs this reference after engineProcess is set to null)
+    const proc = engineProcess
+    engineProcess = null
+    isLiveCodingMode = false
+
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
-    engineProcess.kill('SIGTERM')
+    proc.kill('SIGTERM')
 
     // Force kill after 2 seconds if still running
     setTimeout(() => {
-      if (engineProcess && !engineProcess.killed) {
-        engineProcess.kill('SIGKILL')
+      if (!proc.killed) {
+        proc.kill('SIGKILL')
       }
     }, 2000)
-
-    engineProcess = null
-    isLiveCodingMode = false
 
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'

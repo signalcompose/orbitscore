@@ -148,9 +148,9 @@ export class Sequence {
       clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
+      setLoopTimerFn: (timer) => this.stateManager.setLoopTimer(timer),
     })
 
-    this.stateManager.setLoopTimer(result.loopTimer)
     this.stateManager.setLoopStartTime(result.loopStartTime)
   }
 
@@ -397,11 +397,11 @@ export class Sequence {
       clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
+      setLoopTimerFn: (timer) => this.stateManager.setLoopTimer(timer),
     })
 
     // Update remaining state from result
     this.stateManager.setLoopStartTime(result.loopStartTime)
-    this.stateManager.setLoopTimer(result.loopTimer)
 
     return this
   }

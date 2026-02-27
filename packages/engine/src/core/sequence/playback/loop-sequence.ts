@@ -13,6 +13,7 @@ export interface LoopSequenceOptions {
   clearSequenceEventsFn: (sequenceName: string) => void
   getIsLoopingFn: () => boolean
   getIsMutedFn: () => boolean
+  setLoopTimerFn?: (timer: NodeJS.Timeout) => void
 }
 
 /**
@@ -48,6 +49,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
     clearSequenceEventsFn,
     getIsLoopingFn,
     getIsMutedFn,
+    setLoopTimerFn,
   } = options
 
   // Clear old events for this sequence first
@@ -122,6 +124,8 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
       // Schedule next iteration with current pattern duration
       scheduleNextIteration()
     }, patternDuration)
+    // Update stateManager with current timer ID so stop() can cancel it
+    setLoopTimerFn?.(loopTimer)
   }
 
   scheduleNextIteration()
