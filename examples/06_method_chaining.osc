@@ -3,7 +3,8 @@
 
 // Initialize global
 var global = init GLOBAL
-global.tempo(120).beat(4 by 4).tick(4)  // Chain global methods too!
+global.tempo(120).beat(4 by 4)  // Chain global methods too!
+global.start()
 
 // === Example 1: Traditional Multi-line ===
 var kick_traditional = init global.seq
@@ -45,7 +46,7 @@ var bass = init global.seq
 bass.beat(4 by 4).length(2).audio("../test-assets/audio/bass_c1.wav").chop(8).play(
   1, 0, 0, 1, 0, 0, 1, 0,
   0, 1, 0, 1, 0, 0, 0, 0
-).fixpitch(7)  // Transpose up a fifth
+)
 // RUN(bass)  // Use reserved keyword to start
 
 // === Example 6: Chained with Different Meters ===
@@ -89,7 +90,7 @@ quick_bass.audio("../test-assets/audio/bass_c1.wav").chop(4).play(
 
 // === Transport Control ===
 // Change tempo
-global.tempo(130)
+// global.tempo(130)
 
-// Stop everything with reserved keyword
-// LOOP()  // Stops all sequences
+// Stop everything
+// global.stop()

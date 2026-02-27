@@ -23,4 +23,4 @@ snare.audio("../../test-assets/audio/snare.wav")
 snare.play(1, 1, 1)  // 三連符
 
 // Start
-global.run()
+global.start()

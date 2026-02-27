@@ -4,27 +4,25 @@
 // === Section 1: Basic Setup ===
 // Initialize and configure global transport
 var global = init GLOBAL
-global.tempo(120)
+global.tempo(200)
 global.beat(4 by 4)
 global.audioPath("../test-assets/audio")  // Set base path for audio files (relative to .osc file)
 global.start()  // Start the scheduler
 
 // === Section 2: Your First Sequence ===
 var drum = init global.seq
-drum.beat(4 by 4).length(1)
+drum.beat(5 by 4).length(1)
 drum.audio("kick.wav").chop(4)  // audioPath already set
-drum.play(1, 0, 1, 0)  // Simple kick pattern
-LOOP(drum)
+drum.play(1, 1, 1, 1)  // Simple kick pattern
 
 // === Section 3: Add More Layers ===
 var snare = init global.seq
 snare.beat(4 by 4).length(1)
 snare.audio("snare.wav").chop(4)  // audioPath already set
-snare.play(0, 0, 1, 0)  // Snare on beat 3
-RUN(snare)
+snare.play(1, 1, 1, 1)  // Snare on beat 3
 
 // === Section 4: Control Playback ===
-global.tempo(130)  // Speed up
+// global.tempo(200)  // Speed up
 MUTE()             // Unmute all (if previously muted)
-LOOP(snare)        // Loop snare only, stop drum
+LOOP(drum, snare)  // Loop snare only, stop drum
 LOOP()             // Stop everything

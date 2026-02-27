@@ -12,8 +12,7 @@ let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let isLiveCodingMode: boolean = false
-let hasEvaluatedFile: boolean = false
-let evaluationTimeout: NodeJS.Timeout | null = null
+
 // let isDebugMode: boolean = false // Debug mode flag
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -22,7 +21,6 @@ export async function activate(context: vscode.ExtensionContext) {
   // Reset state on activation (important for reload)
   engineProcess = null
   isLiveCodingMode = false
-  hasEvaluatedFile = false
 
   // Create output channel
   outputChannel = vscode.window.createOutputChannel('OrbitScore')
@@ -55,15 +53,6 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     statusBarItem,
-  )
-
-  // Auto-evaluate file only on save (not on open)
-  context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument(async (document) => {
-      if (document.languageId === 'orbitscore') {
-        await evaluateFileInBackground(document)
-      }
-    }),
   )
 
   // Register IntelliSense providers
@@ -575,7 +564,7 @@ function setupExitHandler(process: child_process.ChildProcess): void {
     outputChannel?.appendLine(`\n🛑 Engine process exited with code ${code}`)
     engineProcess = null
     isLiveCodingMode = false
-    hasEvaluatedFile = false
+
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
   })
@@ -630,7 +619,7 @@ function startEngine(debugMode: boolean = false) {
 
   // Update state
   isLiveCodingMode = true
-  hasEvaluatedFile = false
+
   statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
   vscode.window.showInformationMessage(
@@ -650,20 +639,23 @@ function startEngineDebug() {
 
 function stopEngine() {
   if (engineProcess && !engineProcess.killed) {
+    // Capture process reference before nulling module-level variable
+    // (the SIGKILL timeout needs this reference after engineProcess is set to null)
+    const proc = engineProcess
+    engineProcess = null
+    isLiveCodingMode = false
+
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
-    engineProcess.kill('SIGTERM')
+    proc.kill('SIGTERM')
 
     // Force kill after 2 seconds if still running
     setTimeout(() => {
-      if (engineProcess && !engineProcess.killed) {
-        engineProcess.kill('SIGKILL')
+      if (!proc.killed) {
+        proc.kill('SIGKILL')
       }
     }, 2000)
 
-    engineProcess = null
-    isLiveCodingMode = false
-    hasEvaluatedFile = false // Reset on engine stop
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
     vscode.window.showInformationMessage('🛑 Engine stopped')
@@ -763,164 +755,30 @@ async function selectAudioDevice() {
   })
 }
 
-function filterDefinitionsOnly(code: string): string {
-  // Filter out transport commands (.loop(), .run(), .stop(), etc.)
-  // But preserve multiline statements by removing complete statements, not individual lines
+/**
+ * Extract the subject identifier from a line of OrbitScore code.
+ * Returns the variable name that the line operates on, or null for standalone commands.
+ *
+ * Examples:
+ *   "var drum = init global.seq" → "drum"
+ *   "drum.audio('kick.wav')"     → "drum"
+ *   "global.tempo(120)"          → "global"
+ *   "LOOP(drum, snare)"          → null (standalone)
+ *   "// comment"                 → null
+ */
+function getLineSubject(lineText: string): string | null {
+  const trimmed = lineText.trim()
+  if (!trimmed || trimmed.startsWith('//')) return null
 
-  // Split into lines but preserve line breaks for reconstruction
-  const lines = code.split('\n')
-  const result: string[] = []
-  let i = 0
+  // var <name> = init ...
+  const varMatch = trimmed.match(/^var\s+(\w+)\s*=/)
+  if (varMatch) return varMatch[1]
 
-  while (i < lines.length) {
-    const line = lines[i]
-    const trimmed = line.trim()
+  // <name>.method(...)
+  const dotMatch = trimmed.match(/^(\w+)\./)
+  if (dotMatch) return dotMatch[1]
 
-    // Keep comments and empty lines
-    if (!trimmed || trimmed.startsWith('//')) {
-      result.push(line)
-      i++
-      continue
-    }
-
-    // Check if this is a reserved keyword transport command: RUN(), LOOP(), MUTE(), STOP()
-    // These can span multiple lines, so we need to count parentheses
-    if (trimmed.match(/^(RUN|LOOP|MUTE|STOP)\s*\(/)) {
-      let parenDepth = 0
-      let lineEnd = i
-
-      // Count opening and closing parens to find the end of the statement
-      for (let j = i; j < lines.length; j++) {
-        const currentLine = lines[j]
-        for (const char of currentLine) {
-          if (char === '(') parenDepth++
-          if (char === ')') parenDepth--
-        }
-        lineEnd = j
-        if (parenDepth === 0) break
-      }
-
-      // Skip all lines of this reserved keyword command
-      i = lineEnd + 1
-      continue
-    }
-
-    // Check if this is a method-chained transport command (complete statement on one line)
-    // Match both with and without arguments: seq.start(), seq.start(args), etc.
-    // BUT preserve global.start() and global.stop() (scheduler control)
-    const isGlobalTransport = trimmed.startsWith('global.')
-    if (
-      !isGlobalTransport &&
-      trimmed.match(/^[a-zA-Z_][a-zA-Z0-9_]*\.(loop|run|stop|mute|unmute)\s*\(/)
-    ) {
-      // Skip this line (it's a sequence transport command)
-      i++
-      continue
-    }
-
-    // Filter out global.loop() specifically (deprecated)
-    if (trimmed.match(/^global\.loop\s*\(/)) {
-      i++
-      continue
-    }
-
-    // Check if this is a standalone parameter change command (not chained)
-    // But keep global settings like global.tempo(), global.beat()
-    const isGlobalSetting = trimmed.startsWith('global.')
-    if (
-      !isGlobalSetting &&
-      trimmed.match(
-        /^[a-zA-Z_][a-zA-Z0-9_]*\.(gain|pan|length|tempo|beat|compressor|limiter|normalizer)\s*\(/,
-      ) &&
-      !trimmed.startsWith('var ') &&
-      !trimmed.includes('.audio(') &&
-      !trimmed.includes('.play(')
-    ) {
-      // For standalone parameter changes, we need to check if it spans multiple lines
-      let parenDepth = 0
-      let lineEnd = i
-
-      // Count opening and closing parens to find the end of the statement
-      for (let j = i; j < lines.length; j++) {
-        const currentLine = lines[j]
-        for (const char of currentLine) {
-          if (char === '(') parenDepth++
-          if (char === ')') parenDepth--
-        }
-        lineEnd = j
-        if (parenDepth === 0) break
-      }
-
-      // Skip all lines of this standalone parameter change
-      i = lineEnd + 1
-      continue
-    }
-
-    // Keep everything else (variable declarations, chained methods, multiline statements)
-    result.push(line)
-    i++
-  }
-
-  return result.join('\n')
-}
-
-async function evaluateFileInBackground(document: vscode.TextDocument) {
-  // Only evaluate if engine is running
-  if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
-    return
-  }
-
-  // Debounce: cancel previous evaluation
-  if (evaluationTimeout) {
-    clearTimeout(evaluationTimeout)
-  }
-
-  // Schedule evaluation after 100ms of no activity
-  evaluationTimeout = setTimeout(() => {
-    const code = document.getText()
-
-    // const isFirstEvaluation = !hasEvaluatedFile
-
-    // Filter out all transport commands (always)
-    // isInitializing = true for first evaluation (include var declarations)
-    let definitionsOnly = filterDefinitionsOnly(code)
-
-    // Inject setDocumentDirectory() call after global variable initialization
-    const documentDir = path.dirname(document.uri.fsPath)
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-
-    // Find where 'var global = init GLOBAL' appears and inject after it
-    const globalInitMatch = definitionsOnly.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*\n)/)
-    if (globalInitMatch) {
-      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-      definitionsOnly =
-        definitionsOnly.slice(0, insertPos) +
-        setDirCommand +
-        '\n' +
-        definitionsOnly.slice(insertPos)
-    }
-
-    // Debug: log what we're sending in debug mode
-    if (statusBarItem?.text.includes('🐛')) {
-      outputChannel?.appendLine('📤 File evaluation:')
-      outputChannel?.appendLine(`📂 Document directory: ${documentDir}`)
-      outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-      outputChannel?.appendLine(definitionsOnly)
-      outputChannel?.appendLine('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-      outputChannel?.appendLine(`📏 Length: ${definitionsOnly.length} chars`)
-      outputChannel?.appendLine(`📊 Lines: ${definitionsOnly.split('\n').length}`)
-      // Show what will actually be sent (with newline added)
-      outputChannel?.appendLine('📮 Sending to engine (with final newline):')
-      outputChannel?.appendLine(JSON.stringify(definitionsOnly + '\n'))
-    }
-
-    // Send definitions to engine
-    engineProcess?.stdin?.write(definitionsOnly + '\n')
-
-    // Mark as evaluated
-    hasEvaluatedFile = true
-    evaluationTimeout = null
-  }, 100)
+  return null
 }
 
 async function runSelection() {
@@ -945,97 +803,77 @@ async function runSelection() {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
   } else {
-    // Get the current line
+    // No selection: subject-based block evaluation
+    // Detect which variable/object the current line belongs to, then collect all related lines
     const currentLine = selection.active.line
-    let startLine = currentLine
-    let endLine = currentLine
-
-    // Check if we're on a function call - if so, execute the entire call (including multiline)
-    // This allows cursor to be on any line of a multiline function call
-
     const currentLineText = editor.document.lineAt(currentLine).text
+    const subject = getLineSubject(currentLineText)
 
-    // Check if current line contains a function call pattern
-    // Patterns: identifier(...), identifier.method(...), METHOD(...)
-    const hasFunctionCall = /[\w.]+\s*\(/.test(currentLineText)
+    if (subject) {
+      // Collect all lines belonging to this subject (var decl + method calls)
+      const collectedLines: { lineNum: number; text: string }[] = []
 
-    if (hasFunctionCall) {
-      // Count parentheses balance on current line
-      const openParens = (currentLineText.match(/\(/g) || []).length
-      const closeParens = (currentLineText.match(/\)/g) || []).length
-      const currentBalance = openParens - closeParens
+      for (let i = 0; i < editor.document.lineCount; i++) {
+        const lineText = editor.document.lineAt(i).text
+        const lineSubject = getLineSubject(lineText)
 
-      // If balanced, it's a single-line call - execute just this line
-      if (currentBalance === 0) {
-        // Single line function call - use current line
-        startLine = currentLine
-        endLine = currentLine
-      } else {
-        // Multiline function call - find the complete range
+        if (lineSubject === subject) {
+          collectedLines.push({ lineNum: i, text: lineText })
 
-        // Search backward to find the function call start (line with opening paren)
-        let balance = 0
-        for (let i = currentLine; i >= 0; i--) {
-          const lineText = editor.document.lineAt(i).text
-          const open = (lineText.match(/\(/g) || []).length
-          const close = (lineText.match(/\)/g) || []).length
-
-          // Add to balance as we go backwards
-          balance += close - open
-
-          // When balance becomes negative, we've found the start line
-          if (balance < 0) {
-            startLine = i
-            break
+          // Handle multiline statements (unbalanced parentheses)
+          let parenBalance = 0
+          for (const char of lineText) {
+            if (char === '(') parenBalance++
+            if (char === ')') parenBalance--
           }
-
-          // Stop if we hit an empty line before finding the start
-          if (i < currentLine && lineText.trim() === '') {
-            startLine = currentLine
-            break
-          }
-        }
-
-        // Search forward from start to find the closing paren
-        balance = 0
-        for (let i = startLine; i < editor.document.lineCount; i++) {
-          const lineText = editor.document.lineAt(i).text
-          const open = (lineText.match(/\(/g) || []).length
-          const close = (lineText.match(/\)/g) || []).length
-
-          balance += open - close
-
-          // When balance reaches 0, we've found the complete call
-          if (balance === 0) {
-            endLine = i
-            break
-          }
-
-          // Stop if we hit an empty line
-          if (i > startLine && lineText.trim() === '') {
-            endLine = i - 1
-            break
+          while (parenBalance > 0 && i + 1 < editor.document.lineCount) {
+            i++
+            const contLine = editor.document.lineAt(i).text
+            collectedLines.push({ lineNum: i, text: contLine })
+            for (const char of contLine) {
+              if (char === '(') parenBalance++
+              if (char === ')') parenBalance--
+            }
           }
         }
       }
-    } else {
-      // Not a function call - just execute current line
-      startLine = currentLine
-      endLine = currentLine
-    }
 
-    // If we detected a multiline statement, use the full range
-    if (startLine < endLine) {
+      if (collectedLines.length > 0) {
+        text = collectedLines.map((l) => l.text).join('\n')
+        const firstLine = collectedLines[0].lineNum
+        const lastLine = collectedLines[collectedLines.length - 1].lineNum
+        executionRange = new vscode.Range(
+          editor.document.lineAt(firstLine).range.start,
+          editor.document.lineAt(lastLine).range.end,
+        )
+      } else {
+        const line = editor.document.lineAt(currentLine)
+        text = line.text
+        executionRange = line.range
+      }
+    } else {
+      // Standalone command (LOOP, RUN, MUTE, etc.) - evaluate current statement only
+      let endLine = currentLine
+      const lineText = editor.document.lineAt(currentLine).text
+      let parenBalance = 0
+      for (const char of lineText) {
+        if (char === '(') parenBalance++
+        if (char === ')') parenBalance--
+      }
+      while (parenBalance > 0 && endLine + 1 < editor.document.lineCount) {
+        endLine++
+        const contLine = editor.document.lineAt(endLine).text
+        for (const char of contLine) {
+          if (char === '(') parenBalance++
+          if (char === ')') parenBalance--
+        }
+      }
+
       executionRange = new vscode.Range(
-        editor.document.lineAt(startLine).range.start,
+        editor.document.lineAt(currentLine).range.start,
         editor.document.lineAt(endLine).range.end,
       )
       text = editor.document.getText(executionRange)
-    } else {
-      // Single line execution
-      const line = editor.document.lineAt(currentLine)
-      text = line.text
-      executionRange = line.range
     }
   }
 
@@ -1093,19 +931,29 @@ async function runSelection() {
     createFlash(0)
   }
 
-  // If file hasn't been evaluated yet, evaluate it first
-  if (!hasEvaluatedFile) {
-    await evaluateFileInBackground(editor.document)
-    // Wait for evaluation to complete
-    await new Promise((resolve) => setTimeout(resolve, 500))
+  // Inject setDocumentDirectory when evaluating global block
+  let codeToSend = trimmedText
+  if (
+    !selection.isEmpty ||
+    getLineSubject(editor.document.lineAt(selection.active.line).text) === 'global'
+  ) {
+    // Check if the code contains global init — inject setDocumentDirectory after it
+    const documentDir = path.dirname(editor.document.uri.fsPath)
+    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
+    if (globalInitMatch) {
+      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+      codeToSend =
+        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
+    }
   }
 
   // Execute the selected command (both single line and multiline)
   // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
   if (statusBarItem?.text.includes('🐛')) {
-    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(trimmedText)}`)
+    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
   }
-  engineProcess.stdin?.write(trimmedText + '\n')
+  engineProcess.stdin?.write(codeToSend + '\n')
   flashLines()
 }
 

@@ -11,4 +11,4 @@ snare.audio("../../test-assets/audio/snare.wav")
 snare.play(1, 1, 1)  // 三連符: 1小節を3分割
 
 // Start
-global.run()
+global.start()

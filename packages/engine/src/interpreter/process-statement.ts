@@ -220,6 +220,13 @@ export async function processTransportStatement(
   const global = state.globals.get(target)
   if (global) {
     await handleGlobalTransportCommand(global, command)
+    // Clear transport groups when global.stop() is called
+    // This ensures LOOP/RUN differential calculations work correctly after restart
+    if (command === 'stop') {
+      state.runGroup = new Set()
+      state.loopGroup = new Set()
+      state.muteGroup = new Set()
+    }
     return
   }
 
@@ -286,6 +293,7 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
   const scheduler = state.audioEngine as any
   if (scheduler.loadBuffer) {
     const path = await import('path')
+    const documentDir = state.currentGlobal?.getState().documentDirectory || ''
     console.log(`🔧 [RUN] Preloading ${validSequences.length} buffers in parallel...`)
     await Promise.all(
       validSequences.map(async (seqName) => {
@@ -293,10 +301,15 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
         if (sequence) {
           const audioPath = (sequence as any)._audioFilePath
           if (audioPath) {
-            // Use same path resolution as preparePlayback()
-            const resolvedPath = path.isAbsolute(audioPath)
-              ? audioPath
-              : path.resolve(process.cwd(), audioPath)
+            // Resolve relative paths: prefer documentDirectory, fallback to process.cwd()
+            let resolvedPath: string
+            if (path.isAbsolute(audioPath)) {
+              resolvedPath = audioPath
+            } else if (documentDir) {
+              resolvedPath = path.resolve(documentDir, audioPath)
+            } else {
+              resolvedPath = path.resolve(process.cwd(), audioPath)
+            }
             console.log(`🔧 [RUN] Preloading ${seqName}: ${resolvedPath}`)
             await scheduler.loadBuffer(resolvedPath)
           }
@@ -381,16 +394,22 @@ async function startSequencesWithMute(
   const scheduler = state.audioEngine as any
   if (scheduler.loadBuffer) {
     const path = await import('path')
+    const documentDir = state.currentGlobal?.getState().documentDirectory || ''
     await Promise.all(
       sequenceNames.map(async (seqName) => {
         const sequence = state.sequences.get(seqName)
         if (sequence) {
           const audioPath = (sequence as any)._audioFilePath
           if (audioPath) {
-            // Use same path resolution as preparePlayback()
-            const resolvedPath = path.isAbsolute(audioPath)
-              ? audioPath
-              : path.resolve(process.cwd(), audioPath)
+            // Resolve relative paths: prefer documentDirectory, fallback to process.cwd()
+            let resolvedPath: string
+            if (path.isAbsolute(audioPath)) {
+              resolvedPath = audioPath
+            } else if (documentDir) {
+              resolvedPath = path.resolve(documentDir, audioPath)
+            } else {
+              resolvedPath = path.resolve(process.cwd(), audioPath)
+            }
             await scheduler.loadBuffer(resolvedPath)
           }
         }

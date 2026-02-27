@@ -53,61 +53,8 @@ export class Sequence {
     return this
   }
 
-  // Method chaining setters
-  tempo(value: number): this {
-    this.tempoManager.setTempo(value)
-    // Setting only - no immediate application
-    return this
-  }
-
-  /**
-   * Set tempo with immediate application (real-time change during playback).
-   * Use underscore prefix for instant reflection.
-   * @param value - Tempo in BPM
-   * @returns this for method chaining
-   */
-  _tempo(value: number): this {
-    this.tempoManager.setTempo(value)
-    this.seamlessParameterUpdate('tempo', `${value} BPM`)
-    return this
-  }
-
-  beat(numerator: number, denominator: number): this {
-    this.tempoManager.setBeat(numerator, denominator)
-    // Setting only - no immediate application
-    return this
-  }
-
-  /**
-   * Set beat with immediate application (real-time change during playback).
-   * Use underscore prefix for instant reflection.
-   * @param numerator - Beat numerator
-   * @param denominator - Beat denominator
-   * @returns this for method chaining
-   */
-  _beat(numerator: number, denominator: number): this {
-    this.tempoManager.setBeat(numerator, denominator)
-    this.seamlessParameterUpdate('beat', `${numerator}/${denominator}`)
-    return this
-  }
-
-  length(bars: number): this {
-    this.tempoManager.setLength(bars)
-    // Setting only - no immediate application
-    // Note: Recalculation of timing happens when play() is called
-    return this
-  }
-
-  /**
-   * Set length with immediate application (real-time change during playback).
-   * Use underscore prefix for instant reflection.
-   * @param bars - Sequence length in bars
-   * @returns this for method chaining
-   */
-  _length(bars: number): this {
-    this.tempoManager.setLength(bars)
-
-    // Recalculate timing if play pattern exists
+  // Recalculate timed events from current tempo/beat/length settings
+  private recalculateTiming(): void {
     const playPattern = this.stateManager.getPlayPattern()
     if (playPattern && playPattern.length > 0) {
       const globalState = this.global.getState()
@@ -118,7 +65,26 @@ export class Sequence {
       )
       this.stateManager.setTimedEvents(timedEvents)
     }
+  }
 
+  // Method chaining setters
+  tempo(value: number): this {
+    this.tempoManager.setTempo(value)
+    this.recalculateTiming()
+    this.seamlessParameterUpdate('tempo', `${value} BPM`)
+    return this
+  }
+
+  beat(numerator: number, denominator: number): this {
+    this.tempoManager.setBeat(numerator, denominator)
+    this.recalculateTiming()
+    this.seamlessParameterUpdate('beat', `${numerator}/${denominator}`)
+    return this
+  }
+
+  length(bars: number): this {
+    this.tempoManager.setLength(bars)
+    this.recalculateTiming()
     this.seamlessParameterUpdate('length', `${bars} bars`)
     return this
   }
@@ -132,34 +98,63 @@ export class Sequence {
       const scheduler = this.global.getScheduler()
 
       if (scheduler.isRunning && this.stateManager.getLoopStartTime() !== undefined) {
-        // Get current scheduler time
+        const isTimingChange = ['tempo', 'beat', 'length'].includes(parameterName)
+
+        if (isTimingChange && this.stateManager.isLooping()) {
+          // For timing changes during loop: defer to next bar boundary.
+          // recalculateTiming() already updated timedEvents.
+          // The loop timer's getPatternDurationFn() will return the new duration.
+          // The next cycle will automatically use new timing and events.
+          // This avoids rhythm discontinuity from restarting mid-beat.
+          console.log(
+            `🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (next cycle)`,
+          )
+          return
+        }
+
+        // Non-timing changes (gain, pan, play, audio, chop):
+        // Reschedule immediately for seamless update
         const now = Date.now()
         const currentTime = now - scheduler.startTime
-
-        // Clear ALL old events first
         scheduler.clearSequenceEvents(this.stateManager.getName())
-
-        // Reschedule events, but only future ones
         this.scheduleEventsFromTime(scheduler, currentTime)
-
         console.log(`🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`)
       }
     }
   }
 
-  gain(valueDb: number | RandomValue): this {
-    this.gainManager.setGain({ valueDb })
-    // Setting only - no immediate application
-    return this
+  /**
+   * Restart the loop from the current time with updated timing parameters.
+   * Cancels the old loop timer and starts a fresh loop cycle.
+   */
+  private restartLoopFromCurrentTime(scheduler: Scheduler, currentTime: number): void {
+    // Cancel old loop timer
+    const oldTimer = this.stateManager.getLoopTimer()
+    if (oldTimer) {
+      clearTimeout(oldTimer)
+    }
+
+    // Reset loop start time to now (fresh loop cycle boundary)
+    this.stateManager.setLoopStartTime(currentTime)
+
+    // Start new loop from current time
+    const result = loopSequence({
+      sequenceName: this.stateManager.getName(),
+      scheduler,
+      currentTime,
+      scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
+      scheduleEventsFromTimeFn: (sched, fromTime) => this.scheduleEventsFromTime(sched, fromTime),
+      getPatternDurationFn: () => this.getPatternDuration(),
+      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
+      getIsLoopingFn: () => this.stateManager.isLooping(),
+      getIsMutedFn: () => this.stateManager.isMuted(),
+      setLoopTimerFn: (timer) => this.stateManager.setLoopTimer(timer),
+    })
+
+    this.stateManager.setLoopStartTime(result.loopStartTime)
   }
 
-  /**
-   * Set gain with immediate application (real-time change during playback).
-   * Use underscore prefix for instant reflection.
-   * @param valueDb - Gain in decibels (-60 to +12 dB)
-   * @returns this for method chaining
-   */
-  _gain(valueDb: number | RandomValue): this {
+  gain(valueDb: number | RandomValue): this {
     this.gainManager.setGain({ valueDb })
     this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
     return this
@@ -179,18 +174,6 @@ export class Sequence {
 
   pan(value: number | RandomValue): this {
     this.panManager.setPan({ value })
-    // Setting only - no immediate application
-    return this
-  }
-
-  /**
-   * Set pan with immediate application (real-time change during playback).
-   * Use underscore prefix for instant reflection.
-   * @param value - Pan value (-100 to +100, where 0 is center, -100 is left, +100 is right)
-   * @returns this for method chaining
-   */
-  _pan(value: number | RandomValue): this {
-    this.panManager.setPan({ value })
     this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
     return this
   }
@@ -208,36 +191,25 @@ export class Sequence {
   }
 
   audio(filepath: string): this {
-    // Calculate full path
+    // Calculate full path - resolve to absolute at set time
     const globalState = this.global.getState()
-    const fullPath =
-      globalState.audioPath && !path.isAbsolute(filepath)
-        ? path.join(globalState.audioPath, filepath)
-        : filepath
+    let fullPath: string
+
+    if (path.isAbsolute(filepath)) {
+      fullPath = filepath
+    } else if (globalState.audioPath) {
+      // Join with global audioPath (already absolute)
+      fullPath = path.join(globalState.audioPath, filepath)
+    } else if (globalState.documentDirectory) {
+      // Resolve relative to the .osc file's directory
+      fullPath = path.resolve(globalState.documentDirectory, filepath)
+    } else {
+      // Fallback to process.cwd()
+      fullPath = path.resolve(process.cwd(), filepath)
+    }
 
     this._audioFilePath = fullPath
     this._chopDivisions = 1 // Reset chop when audio changes
-    // Setting only - no immediate application
-    return this
-  }
-
-  /**
-   * Set audio with immediate application (real-time change during playback).
-   * Use underscore prefix for instant reflection.
-   * @param filepath - Audio file path
-   * @returns this for method chaining
-   */
-  _audio(filepath: string): this {
-    // Calculate full path
-    const globalState = this.global.getState()
-    const fullPath =
-      globalState.audioPath && !path.isAbsolute(filepath)
-        ? path.join(globalState.audioPath, filepath)
-        : filepath
-
-    this._audioFilePath = fullPath
-    this._chopDivisions = 1 // Reset chop when audio changes
-
     this.seamlessParameterUpdate('audio', path.basename(fullPath))
     return this
   }
@@ -250,18 +222,6 @@ export class Sequence {
   }
 
   chop(divisions: number): this {
-    this._chopDivisions = divisions
-    // Setting only - no immediate application
-    return this
-  }
-
-  /**
-   * Set chop with immediate application (real-time change during playback).
-   * Use underscore prefix for instant reflection.
-   * @param divisions - Number of divisions to chop the audio into
-   * @returns this for method chaining
-   */
-  _chop(divisions: number): this {
     this._chopDivisions = divisions
 
     if (!this._audioFilePath) {
@@ -282,28 +242,6 @@ export class Sequence {
   }
 
   play(...elements: PlayElement[]): this {
-    this.stateManager.setPlayPattern(elements)
-
-    // Calculate timing for the play pattern
-    const globalState = this.global.getState()
-    const timedEvents = this.tempoManager.calculateEventTiming(
-      elements,
-      globalState.tempo || 120,
-      globalState.beat,
-    )
-
-    this.stateManager.setTimedEvents(timedEvents)
-    // Setting only - no immediate application
-    return this
-  }
-
-  /**
-   * Set play pattern with immediate application (real-time change during playback).
-   * Use underscore prefix for instant reflection.
-   * @param elements - Play pattern elements
-   * @returns this for method chaining
-   */
-  _play(...elements: PlayElement[]): this {
     this.stateManager.setPlayPattern(elements)
 
     // Calculate timing for the play pattern
@@ -459,11 +397,11 @@ export class Sequence {
       clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
+      setLoopTimerFn: (timer) => this.stateManager.setLoopTimer(timer),
     })
 
     // Update remaining state from result
     this.stateManager.setLoopStartTime(result.loopStartTime)
-    this.stateManager.setLoopTimer(result.loopTimer)
 
     return this
   }
@@ -483,7 +421,7 @@ export class Sequence {
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
     const loopTimer = this.stateManager.getLoopTimer()
     if (loopTimer) {
-      clearInterval(loopTimer)
+      clearTimeout(loopTimer)
       this.stateManager.setLoopTimer(undefined)
     }
 
@@ -549,7 +487,8 @@ export class Sequence {
    */
   notifyGlobalTempoChange(): void {
     if (this.tempoManager.getTempo() === undefined) {
-      // Not overridden - apply global tempo change seamlessly
+      // Not overridden - recalculate timing with new global tempo and reschedule
+      this.recalculateTiming()
       this.seamlessParameterUpdate('tempo', 'global tempo changed')
     }
   }
@@ -560,7 +499,8 @@ export class Sequence {
    */
   notifyGlobalBeatChange(): void {
     if (this.tempoManager.getBeat() === undefined) {
-      // Not overridden - apply global beat change seamlessly
+      // Not overridden - recalculate timing with new global beat and reschedule
+      this.recalculateTiming()
       this.seamlessParameterUpdate('beat', 'global beat changed')
     }
   }

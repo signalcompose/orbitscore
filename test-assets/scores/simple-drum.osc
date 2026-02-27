@@ -22,4 +22,4 @@ hihat.audio("../../test-assets/audio/hihat_closed.wav")
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1)  // Hi-hat 8th notes
 
 // Start all sequences
-global.run()
+global.start()

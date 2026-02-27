@@ -6,8 +6,7 @@ var global = init GLOBAL
 
 // Configure global parameters
 global.tempo(110)
-global.beat(4)
-global.tick(4)
+global.beat(4 by 4)
 
 // === Technique 1: Nested Play Structures ===
 // Create complex rhythmic patterns with nested elements
@@ -119,21 +118,11 @@ chord_seq2.play(0, 0, 0, 0, 0, 0, 0, 0,
                 1, 0, 0, 0, 0, 0, 0, 0)  // A minor - Bar 8
 
 // === Start Everything ===
-// Comment/uncomment to control layers
-complex_rhythm.run()
-modified_bass.run()
-multi_sample.run()
-multi_sample2.run()
-poly3.run()
-poly4.run()
-dynamic_seq.run()
-chord_seq1.run()
-chord_seq2.run()
+global.start()
+RUN(complex_rhythm, modified_bass, multi_sample, multi_sample2, poly3, poly4, dynamic_seq, chord_seq1, chord_seq2)
 
 // === Performance Controls ===
-// global.tempo(120)
-// complex_rhythm.mute()
-// modified_bass.fixpitch(12)
-// poly3.time(2.0)
-// dynamic_seq.loop()
+global.tempo(100)
+// MUTE(complex_rhythm)
+LOOP(dynamic_seq)
 // global.stop()

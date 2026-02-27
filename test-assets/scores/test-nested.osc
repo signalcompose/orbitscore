@@ -66,10 +66,6 @@ extreme.audio("kick.wav")
 extreme.play(1, (2, (3, (4, 5))))
 
 // Commands for live coding:
-// global.run()
-// binary.loop()
-// triplet.loop()
-// deep.loop()
-// complex.loop()
-// extreme.loop()
+// global.start()
+// LOOP(binary, triplet, deep, complex, extreme)
 // global.stop()

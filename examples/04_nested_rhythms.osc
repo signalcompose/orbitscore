@@ -5,7 +5,6 @@
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)  // 4/4 time
-global.tick(4)
 
 // === Example 1: Simple Nesting ===
 // play(1, (2, 3)) - first half plays slice 1, second half divided for 2 and 3
@@ -86,6 +85,7 @@ flam.play(
 )
 
 // Start sequences
+global.start()
 RUN(simple)
 // Uncomment to try other patterns:
 // RUN(triplets)
@@ -96,7 +96,7 @@ RUN(simple)
 // RUN(flam)
 
 // === Live Performance Tips ===
-// - Comment/uncomment .run() calls to layer patterns
+// - Comment/uncomment RUN() calls to layer patterns
 // - Modify nesting on the fly for variations
 // - Use 0 (silence) to create space and syncopation
 // - Deep nesting creates accelerando/ritardando effects

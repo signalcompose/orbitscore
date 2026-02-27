@@ -6,8 +6,7 @@ var global = init GLOBAL
 
 // Set a slower tempo for melodic content
 global.tempo(100)
-global.beat(4)
-global.tick(4)
+global.beat(4 by 4)
 
 // Initialize sequences from global
 var melody = init global.seq
@@ -52,14 +51,12 @@ arp.play(1, 0, 1, 0, 1, 0, 1, 0,  // Up pattern
          0, 1, 0, 1, 0, 1, 0, 1)   // Down pattern
 
 // Start sequences
-melody.run()
-chords.run()
-chords2.run()
-arp.run()
+global.start()
+RUN(melody, chords, chords2, arp)
 
 // Live performance commands
 // melody.fixpitch(7)   // Transpose up a fifth
 // arp.time(2.0)        // Double speed arpeggio
-// chords.mute()        // Mute chords
+// MUTE(chords)         // Mute chords
 // global.tempo(80)     // Slow down
-// melody.loop()        // Loop melody only
+// LOOP(melody)         // Loop melody only

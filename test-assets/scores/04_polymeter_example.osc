@@ -6,8 +6,7 @@ var global = init GLOBAL
 
 // Configure global parameters
 global.tempo(140)
-global.beat(4)
-global.tick(4)
+global.beat(4 by 4)
 
 // Initialize sequences from global
 var seq3 = init global.seq  // 3/4 pattern
@@ -30,13 +29,13 @@ seq5.audio("../audio/snare.wav").chop(5)
 seq5.play(0, 0, 1, 0, 1)  // - - X - X pattern
 
 // Start all - they will cycle at different rates
-global.run()
+global.start()
 
 // The patterns will align every 60 beats (LCM of 3, 4, 5)
 // Creating evolving polyrhythmic textures
 
 // Live controls
-// seq3.mute()      // Remove 3/4 layer
+// MUTE(seq3)       // Remove 3/4 layer
 // seq5.time(0.5)   // Half-time the 5/4
-// seq4.loop()      // Loop only the 4/4
+// LOOP(seq4)       // Loop only the 4/4
 // global.tempo(160) // Speed everything up

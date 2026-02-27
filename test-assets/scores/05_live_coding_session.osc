@@ -7,8 +7,7 @@ var global = init GLOBAL
 
 // === SECTION 2: Setup ===
 global.tempo(125)
-global.beat(4)
-global.tick(4)
+global.beat(4 by 4)
 
 // === SECTION 3: Initialize Drum Kit ===
 var kick = init global.seq
@@ -30,15 +29,15 @@ open_hat.audio("../audio/hihat_open.wav").chop(8)
 // === SECTION 5: Basic Beat ===
 // Start with kick
 kick.play(1, 0, 0, 0, 1, 0, 0, 0)
-kick.run()
+RUN(kick)
 
 // === SECTION 6: Add Snare ===
 snare.play(0, 0, 0, 0, 1, 0, 0, 0)
-snare.run()
+RUN(snare)
 
 // === SECTION 7: Hi-Hat Pattern ===
 hihat.play(1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1)
-hihat.run()
+RUN(hihat)
 
 // === SECTION 8: Bass Line ===
 var bass = init global.seq
@@ -48,7 +47,7 @@ bass.play(
   1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0,  // Bar 1
   0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1, 0, 0   // Bar 2
 )
-bass.run()
+RUN(bass)
 
 // === SECTION 9: Melodic Element ===
 var lead = init global.seq
@@ -58,7 +57,7 @@ lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 0, 0, (1, 0, 0, 0), 0,
           0, 0, 0, 0, (1, 1, 1, 0), 0, 0, 0, 0, 0, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
           (1, 1, 1, 1), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-lead.run()
+RUN(lead)
 
 // === SECTION 10: Effects & Modulation ===
 bass.fixpitch(-2)  // Pitch down
@@ -67,45 +66,40 @@ lead.time(0.5)     // Half-time the lead
 // === SECTION 11: Build Up ===
 open_hat.play(0, 0, 0, 0, 0, 0, 0, 1,
               0, 0, 0, 1, 0, 0, 1, 1)
-open_hat.run()
+RUN(open_hat)
 
 global.tempo(130)  // Speed up slightly
 
 // === SECTION 12: Drop ===
-hihat.mute()       // Remove hi-hats for space
-snare.mute()       // Remove snare
-lead.mute()        // Drop the lead
+MUTE(hihat, snare, lead)  // Remove hi-hats, snare, and lead
 
 // Let the kick and bass groove
 
 // === SECTION 13: Bring Back Elements ===
-snare.unmute()
-hihat.unmute()
-lead.unmute()
+MUTE()  // Unmute all
 lead.fixpitch(7)  // Transpose lead up
 
 // === SECTION 14: Breakdown ===
-kick.mute()
-bass.mute()
+MUTE(kick, bass)
 // Just percussion and lead
 
 // === SECTION 15: Final Build ===
-kick.unmute()
-bass.unmute()
+MUTE()  // Unmute all
 global.tempo(135)
 
 // === SECTION 16: End ===
-global.stop()
+// global.stop()
 
 // === LIVE CODING COMMANDS ===
 // Use these for improvisation:
 
 // Mute/Unmute tracks
-// kick.mute()
-// snare.mute()
-// hihat.mute()
-// bass.mute()
-// lead.mute()
+// MUTE(kick)
+// MUTE(snare)
+// MUTE(hihat)
+// MUTE(bass)
+// MUTE(lead)
+// MUTE()  // Unmute all
 
 // Pitch adjustments
 // bass.fixpitch(5)
@@ -120,12 +114,11 @@ global.stop()
 // global.tempo(140)
 
 // Loop controls
-// bass.loop()
-// global.loop()
+// LOOP(bass)
 
 // Stop individual sequences
 // kick.stop()
 // snare.stop()
 
 // Restart
-// global.run()
+// global.start()

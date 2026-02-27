@@ -23,4 +23,4 @@ hihat.audio("../../test-assets/audio/hihat_closed.wav")
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1)
 
 // Start polyrhythm
-global.run()
+global.start()

@@ -6,8 +6,7 @@ var global = init GLOBAL
 
 // Configure global parameters
 global.tempo(130)
-global.beat(4)
-global.tick(4)
+global.beat(4 by 4)
 
 // Initialize sequences from global
 var bass = init global.seq
@@ -34,12 +33,11 @@ drums.audio("../audio/kick.wav").chop(4)
 drums.play(1, 0, 1, 0)
 
 // Start all sequences
-global.run()
+global.start()
 
 // Live coding commands
-// bass.mute()
-// bass2.run()
+// MUTE(bass)
+// RUN(bass2)
 // bass.fixpitch(2)  // Pitch up 2 semitones
 // bass.time(0.5)    // Half speed
 // global.tempo(140) // Speed up
-// global.loop()     // Loop global

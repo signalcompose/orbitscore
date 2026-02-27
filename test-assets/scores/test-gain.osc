@@ -41,18 +41,11 @@ defaultGain.audio("hihat.wav")
 defaultGain.play(1, 0, 1, 0)
 
 // Commands for live coding:
-global.run()
-loud.loop()      // Should be loudest
-normal.loop()    // Standard volume
-medium.loop()    // Half volume
-quiet.loop()     // Quarter volume
-whisper.loop()   // Almost silent
-defaultGain.loop() // Should match normal
-global.stop()
+global.start()
+LOOP(loud, normal, medium, quiet, whisper, defaultGain)
+// global.stop()
 
 // Test together:
-global.run()
-loud.loop()
-medium.loop()
-whisper.loop()
+// global.start()
+// LOOP(loud, medium, whisper)
 // Listen for volume differences!

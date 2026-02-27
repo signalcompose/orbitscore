@@ -16,10 +16,8 @@ var hihat = init global.seq
 hihat.audio("hihat.wav").play(1,1,1,1).gain(-6)  // -6 dB
 
 // Start scheduler and playback
-global.run()
-kick.loop()
-snare.loop()
-hihat.loop()
+global.start()
+LOOP(kick, snare, hihat)
 
 // Try changing master gain while playing:
 // global.gain(-6)   // All become 6dB quieter

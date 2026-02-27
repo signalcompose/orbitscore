@@ -74,18 +74,12 @@ planckTimeZone.audio("hihat.wav")
 planckTimeZone.play(1, (2, (3, (4, (5, (6, (7, (8, (9, (10, (11, 12)))))))))))
 
 // Commands for live coding:
-global.run()
+global.start()
 
 // Start with safer tests
-extreme.loop()           // 125ms (safe)
-superExtreme.loop()      // 62.5ms (should work)
-ultraSuperExtreme.loop() // 31.25ms (challenging!)
+LOOP(extreme, superExtreme, ultraSuperExtreme)
 
 // Danger zone - may cause audio artifacts!
-megaDeathExtreme.loop()     // 15.6ms (extreme!)
-hyperCosmicExtreme.loop()   // 7.8ms (insane!)
-absoluteMadness.loop()      // 3.9ms (madness!)
-quantumRealm.loop()         // 1.95ms (quantum!)
-planckTimeZone.loop()       // 0.98ms (god mode!)
+// LOOP(megaDeathExtreme, hyperCosmicExtreme, absoluteMadness, quantumRealm, planckTimeZone)
 
-global.stop()
+// global.stop()

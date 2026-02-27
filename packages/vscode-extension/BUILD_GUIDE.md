@@ -51,21 +51,28 @@ npx vsce package
 - TypeScriptソースファイル（`**/*.ts`）
 - 型定義ファイル（`**/*.d.ts`）
 - ソースマップ（`**/*.map`）
-- Engineのnode_modules（`engine/node_modules/**`）
-- Engineのpackage.json/package-lock.json
+- Engineのpackage.json/package-lock.json（ビルド時の一時ファイル）
 
 ### 含まれるファイル
 
 - ビルド済みJavaScriptファイル（`dist/`）
 - Engineのビルド済みファイル（`engine/dist/`）
+- Engineのランタイム依存（`engine/node_modules/` - supercolliderjs, wavefile）
 - SuperColliderファイル（`engine/supercollider/`）
 - 構文ハイライトファイル（`syntaxes/`）
 - 言語設定ファイル（`language-configuration.json`）
 
 ### パッケージサイズ
 
-- **最適化前**: 24.49 MB（2685ファイル）
-- **最適化後**: 93.18 KB（67ファイル）
+- 約 3.3 MB（2458ファイル）
+- `engine/node_modules` を含む（supercolliderjs + wavefile のランタイム依存）
+
+### Engineランタイム依存の管理
+
+`build:engine` スクリプト実行時に `scripts/install-engine-deps.sh` が自動的に：
+
+1. `engine/` ディレクトリにランタイム依存（supercolliderjs, wavefile）をインストール
+2. supercolliderjs のブートタイムアウトパッチを適用（3s → 30s）
 
 ## 開発時のビルド
 
@@ -93,9 +100,9 @@ npm run build
    ```
    - 解決策: `packages/engine`で`npm run build`を実行
 
-2. **パッケージサイズが大きい**
-   - `.vscodeignore`の設定を確認
-   - `engine/node_modules`が除外されているか確認
+2. **`Cannot find module 'supercolliderjs'`**
+   - `npm run build:engine` を再実行して `engine/node_modules` にランタイム依存をインストール
+   - `npx vsce package` で再パッケージ → `code --install-extension *.vsix --force` で再インストール
 
 3. **TypeScriptエラー**
    - `tsconfig.json`の設定を確認
@@ -136,8 +143,9 @@ packages/vscode-extension/
 │   └── completion-context.ts # コード補完
 ├── dist/                  # ビルド済みJavaScript
 ├── syntaxes/              # 構文ハイライト
-├── engine/                # Engineパッケージ（必要な部分のみ）
+├── engine/                # Engineパッケージ
 │   ├── dist/             # ビルド済みEngine
+│   ├── node_modules/     # ランタイム依存（supercolliderjs, wavefile）
 │   └── supercollider/    # SuperColliderファイル
 ├── package.json          # 拡張機能設定
 ├── tsconfig.json         # TypeScript設定

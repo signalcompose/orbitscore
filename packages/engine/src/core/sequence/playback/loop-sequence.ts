@@ -13,6 +13,7 @@ export interface LoopSequenceOptions {
   clearSequenceEventsFn: (sequenceName: string) => void
   getIsLoopingFn: () => boolean
   getIsMutedFn: () => boolean
+  setLoopTimerFn?: (timer: NodeJS.Timeout) => void
 }
 
 /**
@@ -48,6 +49,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
     clearSequenceEventsFn,
     getIsLoopingFn,
     getIsMutedFn,
+    setLoopTimerFn,
   } = options
 
   // Clear old events for this sequence first
@@ -55,8 +57,8 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
 
   console.log(`🔄 ${sequenceName} (loop started)`)
 
-  // Calculate pattern duration
-  const patternDuration = getPatternDurationFn()
+  // Calculate initial pattern duration
+  let patternDuration = getPatternDurationFn()
 
   // Track next scheduled time (cumulative, to avoid drift)
   let nextScheduleTime = currentTime
@@ -67,42 +69,66 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // Track previous mute state for transition detection
   let wasMuted = getIsMutedFn()
 
-  // Set up loop timer
-  // Note: isLooping and isMuted are checked via getter functions to reflect current state
-  const loopTimer = setInterval(() => {
-    const isMuted = getIsMutedFn()
-    const isLooping = getIsLoopingFn()
+  // Use setTimeout-based loop to allow dynamic pattern duration
+  // (setInterval can't change its interval after creation)
+  let loopTimer: NodeJS.Timeout = undefined as unknown as NodeJS.Timeout
 
-    // Detect mute -> unmute transition
-    if (wasMuted && !isMuted && isLooping) {
-      // Just unmuted! Reschedule events from current time
-      const currentTime = Date.now() - scheduler.startTime
-      console.log(
-        `🔓 ${sequenceName}: detected unmute in LOOP timer, rescheduling from ${currentTime}ms`,
-      )
+  const scheduleNextIteration = () => {
+    loopTimer = setTimeout(() => {
+      const isMuted = getIsMutedFn()
+      const isLooping = getIsLoopingFn()
 
-      // Clear old events (if any)
-      clearSequenceEventsFn(sequenceName)
+      if (!isLooping) {
+        return // Stop the loop
+      }
 
-      // Reinitialize tracking so new events won't be skipped
-      scheduler.reinitializeSequenceTracking(sequenceName)
+      // Save the duration that this setTimeout was based on
+      // (the setTimeout interval matched this value)
+      const previousDuration = patternDuration
 
-      // Schedule events from current time (seamless resume)
-      scheduleEventsFromTimeFn(scheduler, currentTime)
+      // Recalculate pattern duration for the NEXT cycle
+      // (may have changed due to tempo/beat/length changes)
+      patternDuration = getPatternDurationFn()
 
-      // Update nextScheduleTime to align with current time
-      nextScheduleTime = currentTime
-    } else if (isLooping && !isMuted) {
-      // Normal loop: not muted, continue scheduling
-      nextScheduleTime += patternDuration // Cumulative time, no drift
-      // Clear old scheduled events for this sequence before scheduling new ones
-      clearSequenceEventsFn(sequenceName)
-      scheduleEventsFn(scheduler, 0, nextScheduleTime)
-    }
+      // Detect mute -> unmute transition
+      if (wasMuted && !isMuted) {
+        // Just unmuted! Reschedule events from current time
+        const currentTime = Date.now() - scheduler.startTime
+        console.log(
+          `🔓 ${sequenceName}: detected unmute in LOOP timer, rescheduling from ${currentTime}ms`,
+        )
 
-    // Update previous mute state for next iteration
-    wasMuted = isMuted
-  }, patternDuration)
+        // Clear old events (if any)
+        clearSequenceEventsFn(sequenceName)
+
+        // Reinitialize tracking so new events won't be skipped
+        scheduler.reinitializeSequenceTracking(sequenceName)
+
+        // Schedule events from current time (seamless resume)
+        scheduleEventsFromTimeFn(scheduler, currentTime)
+
+        // Update nextScheduleTime to align with current time
+        nextScheduleTime = currentTime
+      } else if (!isMuted) {
+        // Advance by the PREVIOUS duration (matches the setTimeout interval)
+        // This keeps the bar boundary aligned with when the callback actually fired
+        nextScheduleTime += previousDuration
+        // Clear old scheduled events for this sequence before scheduling new ones
+        clearSequenceEventsFn(sequenceName)
+        scheduleEventsFn(scheduler, 0, nextScheduleTime)
+      }
+
+      // Update previous mute state for next iteration
+      wasMuted = isMuted
+
+      // Schedule next iteration with current pattern duration
+      scheduleNextIteration()
+    }, patternDuration)
+    // Update stateManager with current timer ID so stop() can cancel it
+    setLoopTimerFn?.(loopTimer)
+  }
+
+  scheduleNextIteration()
 
   return {
     isPlaying: true,

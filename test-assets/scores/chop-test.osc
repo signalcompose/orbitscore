@@ -19,4 +19,4 @@ arp2.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
 arp2.play(4, 3, 2, 1)
 
 // Start
-global.run()
+global.start()

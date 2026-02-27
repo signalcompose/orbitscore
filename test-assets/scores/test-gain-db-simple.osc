@@ -10,8 +10,8 @@ var kick = init global.seq
 kick.audio("kick.wav").play(1,0,0,0).gain(0)  // 0 dB = 100% (default)
 
 // Start scheduler and playback
-global.run()
-kick.loop()
+global.start()
+LOOP(kick)
 
 // Uncomment ONE of these to test different levels:
 // kick.gain(-3)    // -3 dB ≈ 71%
