@@ -21,7 +21,7 @@ hihat.play(1, 1, 1, 1)
 
 // Test execution
 global.tempo(120)
-global.beat(4)
+global.beat(4 by 4)
 global.start()
 
 // Expected:

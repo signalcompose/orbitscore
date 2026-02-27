@@ -56,13 +56,9 @@ planck11.play(1, (2, (3, (4, (5, (6, (7, (8, (9, (10, (11, 12)))))))))))
 // This will create an incredibly complex polyrhythmic texture!
 
 // Commands for live coding:
-global.run()
-mega5.loop()
-hyper7.loop()
-mad3.loop()
-quantum6.loop()
-planck11.loop()
-global.stop()
+global.start()
+LOOP(mega5, hyper7, mad3, quantum6, planck11)
+// global.stop()
 
 // Expected phenomena:
 // - Each pattern has different bar length

@@ -14,8 +14,8 @@ var kick = init global.seq
 kick.audio("test-assets/audio/kick.wav").play(1, 0, 1, 0)
 
 // Start playback
-global.run()
-kick.loop()
+global.start()
+LOOP(kick)
 
 // You should hear the kick from your selected audio device
 // Try switching devices and restarting to verify it works

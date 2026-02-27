@@ -25,8 +25,7 @@ snare5by4.play(1, 0, 1, 0, 1)
 // Result: Kick and snare gradually shift relative to each other
 // Commands:
 // global.start()
-// kick4by4.loop()
-// snare5by4.loop()
+// LOOP(kick4by4, snare5by4)
 // global.stop()
 
 // ==================================================
@@ -54,9 +53,7 @@ slow.play(1, 0, 0, 0)
 // Result: Three independent tempos running simultaneously
 // Commands:
 // global.start()
-// fast.loop()
-// medium.loop()
-// slow.loop()
+// LOOP(fast, medium, slow)
 // global.stop()
 
 // ==================================================
@@ -93,11 +90,7 @@ extreme.play(1, (2, (3, (4, 4))))  // 4 levels deep
 
 // Commands:
 // global.start()
-// binary.loop()
-// triplet.loop()
-// deep.loop()
-// complex.loop()
-// extreme.loop()
+// LOOP(binary, triplet, deep, complex, extreme)
 // global.stop()
 
 // ==================================================
@@ -116,7 +109,7 @@ insane.play(1, (2, (2, (2, (2, (2, (2, (2, (2, (2, (2, 2)))))))))))
 
 // Commands:
 // global.start()
-// insane.loop()
+// LOOP(insane)
 // global.stop()
 
 // ==================================================
@@ -159,11 +152,7 @@ track5.play(1, (2, (3, (4, 4))))
 
 // Commands:
 // global.start()
-// track1.loop()
-// track2.loop()
-// track3.loop()
-// track4.loop()
-// track5.loop()
+// LOOP(track1, track2, track3, track4, track5)
 // global.stop()
 
 // ==================================================

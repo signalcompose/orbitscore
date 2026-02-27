@@ -25,22 +25,19 @@ hihat.audio("hihat.wav").chop(2)
 hihat.play(1, 2, 1, 2, 1, 2, 1, 2)
 
 // Test Commands (Execute with Cmd+Enter):
-// 
+//
 // 1. Start scheduler:
-global.run()
+global.start()
 //
-// 2. Start individual tracks:
-kick.loop()
-snare.loop()
-hihat.loop()
+// 2. Start all tracks:
+LOOP(kick, snare, hihat)
 //
-// 3. Stop individual tracks:
-kick.stop()
-snare.stop()
-hihat.stop()
+// 3. Mute individual tracks:
+// MUTE(kick)
+// MUTE(snare)
 //
 // 4. Stop all:
-global.stop()
+// global.stop()
 //
 // Expected behavior:
 // - Each sequence plays independently

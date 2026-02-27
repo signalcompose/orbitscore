@@ -96,7 +96,7 @@ RUN(simple)
 // RUN(flam)
 
 // === Live Performance Tips ===
-// - Comment/uncomment .run() calls to layer patterns
+// - Comment/uncomment RUN() calls to layer patterns
 // - Modify nesting on the fly for variations
 // - Use 0 (silence) to create space and syncopation
 // - Deep nesting creates accelerando/ritardando effects

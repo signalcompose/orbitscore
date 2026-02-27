@@ -17,4 +17,4 @@ hihat.audio("../../test-assets/audio/hihat_closed.wav")
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1)  // 8 beats
 
 // Start
-global.run()
+global.start()

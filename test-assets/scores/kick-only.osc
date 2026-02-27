@@ -11,4 +11,4 @@ kick.audio("../../test-assets/audio/kick.wav")
 kick.play(1, 1, 1)
 
 // Start
-global.run()
+global.start()

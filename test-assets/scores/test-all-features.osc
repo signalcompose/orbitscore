@@ -10,7 +10,6 @@
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
-global.tick(4)
 global.key(C)
 global.audioPath("test-assets/audio")
 
@@ -128,26 +127,17 @@ global.normalizer(0, 0, false)
 // ============================================
 
 // Start the global scheduler
-global.run()
+global.start()
 
-// Start individual sequences
-kick.loop()
-snare.loop()
-hat.loop()
-poly1.loop()
-poly2.loop()
-nested.loop()
-
-// Stop individual sequences
-kick.stop()
-snare.stop()
+// Start sequences
+LOOP(kick, snare, hat, poly1, poly2, nested)
 
 // Mute/Unmute
-hat.mute()
-hat.unmute()
+MUTE(hat)
+MUTE()
 
 // Stop all
-global.stop()
+// global.stop()
 
 // ============================================
 // 13. Method Chaining (All in one line)
@@ -155,7 +145,8 @@ global.stop()
 
 // Uncomment to test full method chaining
 // var chain = init global.seq
-// chain.tempo(140).beat(5 by 4).length(2).audio("kick.wav").chop(4).play(1, 2, 0, 3).gain(-3).pan(-20).loop()
+// chain.tempo(140).beat(5 by 4).length(2).audio("kick.wav").chop(4).play(1, 2, 0, 3).gain(-3).pan(-20)
+// LOOP(chain)
 
 // ============================================
 // Test Summary

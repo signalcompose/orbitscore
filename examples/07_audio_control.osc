@@ -107,9 +107,7 @@ hihat.gain(-6).audio("hihat.wav").play(0, 0, 1, 0)  // -6 dB
 
 // Start playback
 // global.start()
-// kick.loop()
-// snare.loop()
-// hihat.loop()
+// LOOP(kick, snare, hihat)
 
 // Try these commands while playing:
 
@@ -153,9 +151,7 @@ drumHihat.play(1, 1, 1, 1)
 
 // Commands to try:
 // global.start()
-// drumKick.loop()
-// drumSnare.loop()
-// drumHihat.loop()
+// LOOP(drumKick, drumSnare, drumHihat)
 
 // Live mixing:
 // drumKick.gain(3)              // Boost kick by 3 dB

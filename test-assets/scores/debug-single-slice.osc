@@ -10,4 +10,4 @@ test.audio("../../test-assets/audio/arpeggio_c.wav").chop(4)
 // Only slice 1
 test.play(1)
 
-global.run()
+global.start()

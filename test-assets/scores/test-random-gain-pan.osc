@@ -9,8 +9,8 @@ var kick = init global.seq
 kick.audio("test-assets/audio/kick.wav").play(1,0,0,0)
 
 // Start playback - these commands need explicit execution
-global.run()
-kick.loop()
+global.start()
+LOOP(kick)
 
 // ===== Test Cases (uncomment and execute with Cmd+Enter) =====
 

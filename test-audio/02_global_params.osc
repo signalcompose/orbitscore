@@ -10,7 +10,7 @@ seq.audio("kick.wav").play(1, 0, 1, 0)
 global.tempo(120)
 
 // 2-2: Beat setting - 4/4 time
-global.beat(4)
+global.beat(4 by 4)
 
 // Start playback
 global.start()

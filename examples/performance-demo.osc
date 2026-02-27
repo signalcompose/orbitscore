@@ -8,7 +8,6 @@ var global = init GLOBAL
 global.audioPath("test-assets/audio")
 global.tempo(120)
 global.beat(4 by 4)
-global.tick(4)
 
 // --- Sequence Initialization ---
 var kick = init global.seq
@@ -87,7 +86,7 @@ global.start()
 // LOOP()  // Stop all sequences
 
 // --- Individual Sequence Control (Reserved Keywords) ---
-// LOOP(kick)           // Loop kick only
+LOOP(kick)           // Loop kick only
 // RUN(kick)            // Run kick once
 // LOOP(kick, snare)    // Loop kick and snare, stop others
 

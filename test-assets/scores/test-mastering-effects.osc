@@ -12,9 +12,8 @@ var hat = init global.seq
 hat.audio("hihat.wav").chop(2).play(1, 2, 1, 2)
 
 // Start playback
-global.run()
-kick.loop()
-hat.loop()
+global.start()
+LOOP(kick, hat)
 
 // ========================================
 // Test 1: HEAVY compression for maximum loudness
@@ -64,4 +63,4 @@ hat.loop()
 // global.normalizer(0, 0, false)
 
 // Stop playback
-global.stop()
+// global.stop()

@@ -5,7 +5,6 @@
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
-global.tick(4)
 
 // === Pattern 1: Basic 4/4 Beat ===
 // Using chop(1) explicitly - entire sample as slice 1
@@ -66,6 +65,7 @@ open_hat.audio("../test-assets/audio/hihat_open.wav")
 open_hat.play(0, 0, 0, 1)  // Open on 4
 
 // === Start Playback ===
+global.start()
 RUN(kick, snare, hihat)
 
 // Uncomment to try variations:

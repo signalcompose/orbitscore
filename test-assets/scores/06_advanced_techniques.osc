@@ -122,7 +122,7 @@ global.start()
 RUN(complex_rhythm, modified_bass, multi_sample, multi_sample2, poly3, poly4, dynamic_seq, chord_seq1, chord_seq2)
 
 // === Performance Controls ===
-// global.tempo(120)
+global.tempo(100)
 // MUTE(complex_rhythm)
-// LOOP(dynamic_seq)
+LOOP(dynamic_seq)
 // global.stop()

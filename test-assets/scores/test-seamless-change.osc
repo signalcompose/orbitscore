@@ -10,8 +10,8 @@ var kick = init global.seq
 kick.audio("kick.wav").play(1,0,1,0).gain(0)  // 0 dB
 
 // Start playback
-global.run()
-kick.loop()
+global.start()
+LOOP(kick)
 
 // Wait a moment, then change gain while playing
 // The sequence should NOT restart from beginning!

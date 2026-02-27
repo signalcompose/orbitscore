@@ -20,16 +20,13 @@ moveLeft.pan(-50).gain(80).audio("kick.wav")
 moveLeft.play(0, 0, 0, 1)
 
 // Commands:
-global.run()
-left.loop()      // 完全左
-center.loop()    // センター
-right.loop()     // 完全右
-moveLeft.loop()  // 左寄り
+global.start()
+LOOP(left, center, right, moveLeft)
 
 // Live pan changes:
-left.pan(-100)   // 完全左
-left.pan(0)      // センターに移動
-left.pan(100)    // 完全右に移動
-left.pan(-50)    // 左寄りに戻す
+// left.pan(-100)   // 完全左
+// left.pan(0)      // センターに移動
+// left.pan(100)    // 完全右に移動
+// left.pan(-50)    // 左寄りに戻す
 
-global.stop()
+// global.stop()
