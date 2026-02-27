@@ -220,6 +220,13 @@ export async function processTransportStatement(
   const global = state.globals.get(target)
   if (global) {
     await handleGlobalTransportCommand(global, command)
+    // Clear transport groups when global.stop() is called
+    // This ensures LOOP/RUN differential calculations work correctly after restart
+    if (command === 'stop') {
+      state.runGroup = new Set()
+      state.loopGroup = new Set()
+      state.muteGroup = new Set()
+    }
     return
   }
 

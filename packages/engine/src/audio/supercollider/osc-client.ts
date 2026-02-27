@@ -24,8 +24,12 @@ export class OSCClient {
     }
 
     // Set output device if specified (by name)
+    // device maps to scsynth -H flag, numInputBusChannels maps to -i flag
+    // Output-only devices (e.g. "外部") need -i 0 to disable input channels
+    // Note: supercolliderjs args() only accepts string values (_.isString check)
     if (outputDevice) {
       bootOptions.device = outputDevice
+      bootOptions.numInputBusChannels = '0'
       this.currentOutputDevice = outputDevice
       console.log(`🔊 Using output device: ${outputDevice}`)
     }
