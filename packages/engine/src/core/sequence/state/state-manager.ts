@@ -191,7 +191,7 @@ export class StateManager {
       this.playbackInterval = undefined
     }
     if (this.loopTimer) {
-      clearInterval(this.loopTimer)
+      clearTimeout(this.loopTimer)
       this.loopTimer = undefined
     }
   }

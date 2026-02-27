@@ -62,7 +62,7 @@ export async function preparePlayback(
 
   // Clear existing loop timer if any
   if (loopTimer) {
-    clearInterval(loopTimer)
+    clearTimeout(loopTimer)
   }
 
   // Get current scheduler time

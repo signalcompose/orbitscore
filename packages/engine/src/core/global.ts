@@ -55,18 +55,8 @@ export class Global {
     if (typeof result === 'number') {
       return result
     }
-    return this
-  }
 
-  /**
-   * Set tempo with immediate application to all sequences that inherit it
-   * @param value - Tempo in BPM
-   * @returns this for method chaining
-   */
-  _tempo(value: number): this {
-    this.tempoManager.tempo(value)
-
-    // Notify all sequences that haven't overridden tempo
+    // Notify all sequences that inherit global tempo
     const sequences = this.sequenceRegistry.getAllSequences()
     for (const [, seq] of sequences) {
       seq.notifyGlobalTempoChange()
@@ -77,19 +67,8 @@ export class Global {
 
   beat(numerator: number, denominator: number): this {
     this.tempoManager.beat(numerator, denominator)
-    return this
-  }
 
-  /**
-   * Set beat with immediate application to all sequences that inherit it
-   * @param numerator - Beat numerator
-   * @param denominator - Beat denominator
-   * @returns this for method chaining
-   */
-  _beat(numerator: number, denominator: number): this {
-    this.tempoManager.beat(numerator, denominator)
-
-    // Notify all sequences that haven't overridden beat
+    // Notify all sequences that inherit global beat
     const sequences = this.sequenceRegistry.getAllSequences()
     for (const [, seq] of sequences) {
       seq.notifyGlobalBeatChange()

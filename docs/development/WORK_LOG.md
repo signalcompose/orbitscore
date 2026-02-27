@@ -17,7 +17,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.49 Issue #85: Fix audio relative path resolution (February 27, 2026)
+### 6.50 Issue #85: Fix audio relative path resolution (February 27, 2026)
 
 **Date**: February 27, 2026
 **Status**: ✅ COMPLETE
@@ -35,6 +35,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - `packages/engine/src/interpreter/process-statement.ts` — RUN/LOOP のバッファプリロードで `documentDirectory` を使うフォールバックを追加
 
 **Tests**: 225 passed, 23 skipped (all passing)
+
+---
+
+### 6.49 Issue #84: Include engine runtime deps in extension package (February 27, 2026)
+
+**Date**: February 27, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `84-fix-extension-engine-deps`
+**Issue**: #84
+
+**Work Content**: VS Code拡張パッケージにエンジンのランタイム依存関係（supercolliderjs, wavefile）が含まれていなかった問題を修正。
+
+**Changes**:
+- `scripts/install-engine-deps.sh` を新規作成（エンジン依存関係のインストール + パッチ適用）
+- `packages/vscode-extension/package.json` の `build:engine` スクリプトに依存関係インストールステップを追加
+- `.vscodeignore` から `engine/node_modules/**` の除外を解除
+- `BUILD_GUIDE.md` を更新
+
+**パッケージサイズ**: 93 KB → 3.3 MB（ランタイム依存を含む）
 
 ### 6.48 Issue #82: Fix scsynth boot timeout (February 27, 2026)
 
