@@ -58,8 +58,9 @@ pub async fn run(
             Message::Text(t) => t,
             Message::Close(_) => break,
             Message::Ping(_) => {
-                // tungstenite が自動で Pong を返すが、handshake 後はアプリ層 Ping
-                // (method="Ping") を使うことを想定しているため無視。
+                // split 後は read/write が分離しており auto-Pong は走らない。
+                // プロトコル上は application 層 method="Ping" を keepalive に使う想定で、
+                // ws-layer Ping は現状未サポート (Phase 1c で write 経由の Pong 対応検討)。
                 continue;
             }
             _ => continue,
@@ -87,7 +88,9 @@ pub async fn run(
 
     // drop で channel を閉じると writer は rx.recv() の None で exit する
     drop(tx);
-    let _ = writer_task.await;
+    if let Err(e) = writer_task.await {
+        warn!("writer task terminated abnormally: {e}");
+    }
     Ok(())
 }
 
@@ -208,7 +211,12 @@ async fn handle_command(
                                 "time_sec": handle.start_sec,
                             }),
                         );
-                        let _ = tx.send(to_json_or_fallback(&started_evt)).await;
+                        if tx.send(to_json_or_fallback(&started_evt)).await.is_err() {
+                            warn!(
+                                "PlayStarted event drop: writer gone (play_id={})",
+                                handle.play_id
+                            );
+                        }
 
                         ok(&id, json!({"play_id": handle.play_id}))
                     }
@@ -255,8 +263,9 @@ fn schedule_play_ended(
     duration_sec: f64,
 ) {
     tokio::spawn(async move {
-        // 現在時刻 (daemon 起動からの経過秒) を求めて、終了予定までの実時間を計算
-        let now = engine.uptime_sec();
+        // transport 時刻 (audio callback 駆動) を優先し、未起動時のみ wall-clock にフォールバック。
+        // これにより start_sec が transport 基準で指定された場合も正しく待機できる。
+        let now = engine.now_sec().unwrap_or_else(|| engine.uptime_sec());
         let delay = (start_sec + duration_sec - now).max(0.0);
         if delay > 0.0 {
             tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
@@ -274,11 +283,14 @@ fn schedule_play_ended(
 }
 
 fn ok(id: &str, result: Value) -> Value {
+    // OkResponse は String/Value のみ含む固定スキーマ。
+    // シリアライズ失敗はプログラマエラー (新フィールドの Serialize 実装不備) として
+    // expect で早期失敗させ、"null" をクライアントに silent 送信する事態を避ける。
     serde_json::to_value(OkResponse {
         id: id.to_string(),
         result,
     })
-    .unwrap_or(serde_json::Value::Null)
+    .expect("OkResponse must be serializable")
 }
 
 fn err(id: &str, error: ProtocolError) -> Value {
@@ -286,7 +298,7 @@ fn err(id: &str, error: ProtocolError) -> Value {
         id: id.to_string(),
         error,
     })
-    .unwrap_or(serde_json::Value::Null)
+    .expect("ErrorResponse must be serializable")
 }
 
 fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
