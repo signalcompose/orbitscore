@@ -18,8 +18,9 @@ pub async fn run(
     let (mut write, mut read) = ws.split();
 
     // 最初の handshake フレーム送信
-    let handshake_json = serde_json::to_string(&Handshake::current()).unwrap();
-    write.send(Message::Text(handshake_json)).await?;
+    write
+        .send(Message::Text(to_json_or_fallback(&Handshake::current())))
+        .await?;
 
     while let Some(msg) = read.next().await {
         let msg = match msg {
@@ -47,18 +48,37 @@ pub async fn run(
                     id: String::new(),
                     error: ProtocolError::new("MALFORMED_REQUEST", e.to_string()),
                 };
-                let s = serde_json::to_string(&err).unwrap();
-                write.send(Message::Text(s)).await?;
+                write.send(Message::Text(to_json_or_fallback(&err))).await?;
                 continue;
             }
         };
 
         let reply = handle_command(cmd, &engine).await;
-        let s = serde_json::to_string(&reply).unwrap();
-        write.send(Message::Text(s)).await?;
+        write
+            .send(Message::Text(to_json_or_fallback(&reply)))
+            .await?;
     }
 
     Ok(())
+}
+
+/// 固定スキーマの型をシリアライズするヘルパー。
+///
+/// 我々が扱う型（Handshake / OkResponse / ErrorResponse / Value）では
+/// シリアライズ失敗は理論上起こり得ないが、将来の型追加で予期せぬ
+/// Serialize 実装が混ざっても tokio task が silent panic しないよう
+/// 明示的な fallback エラー JSON を返す。
+fn to_json_or_fallback<T: serde::Serialize>(v: &T) -> String {
+    match serde_json::to_string(v) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("failed to serialize response: {e}");
+            format!(
+                r#"{{"id":"","error":{{"code":"INTERNAL_ERROR","message":"response serialization failed: {}"}}}}"#,
+                e.to_string().replace('"', "\\\"")
+            )
+        }
+    }
 }
 
 /// Command を dispatch し、Response JSON を組み立てる。
@@ -172,7 +192,7 @@ fn ok(id: &str, result: Value) -> Value {
         id: id.to_string(),
         result,
     })
-    .unwrap()
+    .unwrap_or(serde_json::Value::Null)
 }
 
 fn err(id: &str, error: ProtocolError) -> Value {
@@ -180,7 +200,7 @@ fn err(id: &str, error: ProtocolError) -> Value {
         id: id.to_string(),
         error,
     })
-    .unwrap()
+    .unwrap_or(serde_json::Value::Null)
 }
 
 fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {

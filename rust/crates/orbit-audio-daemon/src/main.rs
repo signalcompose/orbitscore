@@ -56,7 +56,9 @@ async fn run() -> Result<(), i32> {
         port,
         protocol_version: PROTOCOL_VERSION,
     };
-    let line = serde_json::to_string(&ready).unwrap();
+    let line = serde_json::to_string(&ready).unwrap_or_else(|_| {
+        format!(r#"{{"ready":true,"port":{port},"protocol_version":"{PROTOCOL_VERSION}"}}"#)
+    });
     println!("{line}");
     use std::io::Write;
     let _ = std::io::stdout().flush();
@@ -73,7 +75,9 @@ fn report_startup_failure(error: ProtocolError) {
         ready: false,
         error,
     };
-    let line = serde_json::to_string(&payload).unwrap();
+    let line = serde_json::to_string(&payload).unwrap_or_else(|_| {
+        r#"{"ready":false,"error":{"code":"INTERNAL_ERROR","message":"startup error serialization failed"}}"#.to_string()
+    });
     eprintln!("{line}");
     use std::io::Write;
     let _ = std::io::stderr().flush();
