@@ -17,6 +17,50 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.54 Issue #91: Rust audio engine proof of concept (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE（PoC スコープ）
+**Branch**: `91-rust-engine-poc`
+**Issue**: #91
+
+**Work Content**: `rust/` 配下に単一 crate `orbitscore-engine` を新設し、`cpal` + `symphonia` による最小の「WAV ロード → 時間軸スケジュール → デスクトップ再生」PoC を実装。WASM 対応（将来の "OrbitScore Lite" ウェブ版）を Cargo features で day 1 から意識。
+
+**ディレクトリ構成**:
+```
+rust/
+├── Cargo.toml              # features: default=native, wasm は予約
+├── rust-toolchain.toml     # stable + rustfmt + clippy
+├── .gitignore              # target/
+├── README.md
+├── src/
+│   ├── lib.rs
+│   ├── core/               # Engine / Sample / Scheduler（プラットフォーム非依存）
+│   ├── native/             # cpal + symphonia（feature = "native"）
+│   └── wasm/               # wasm-bindgen スタブ（feature = "wasm"、予約）
+└── examples/
+    └── poc_play.rs         # cargo run --example poc_play -- <wav>...
+```
+
+**検証結果**:
+- kick.wav / snare.wav を 500ms 間隔でラウンドロビン再生（6 秒間）
+- `cargo check --all-targets` / `cargo clippy -- -D warnings` / `cargo fmt --check` すべて clean
+- 初回フルビルド 約17秒、インクリメンタル 0.3 秒
+- 実機の 36ch オーディオインターフェース環境でも動作（デバイス config に合わせて Engine を自動構築する API 設計）
+
+**重要な設計判断**:
+- **後から分離可能な構造**: `rust/` ディレクトリを独立 Cargo workspace としてまとめ、将来 `signalcompose/orbitscore-engine` として分離できる。ただしスピード優先で当面は monorepo。
+- **WASM 対応予約**: `feature = "wasm"` を Cargo で定義し、`src/wasm/` をスタブで用意。`cpal` / `symphonia` は `dep:` プレフィックスで optional 化。
+- **デバイス config 追従**: `start_default_output() -> (Engine, OutputStream)` が cpal のデバイス config に合わせて Engine を構築する。呼び出し側は config ミスマッチを意識しない。
+
+**成果物**:
+- `rust/` crate 一式
+- `docs/research/RUST_POC_FINDINGS.md` — 所感レポート
+
+**結論**: Rust 化は技術的に十分現実的。Phase 2（本実装）に進める地固めが完了。
+
+---
+
 ### 6.53 Issue #97: Align test count references and link Rust migration research issues (April 17, 2026)
 
 **Date**: April 17, 2026
