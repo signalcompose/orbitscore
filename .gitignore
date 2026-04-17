@@ -7,6 +7,9 @@ logs/
 *.tsbuildinfo
 .orbitscore.json
 
+# Rust build artifacts (Cargo)
+rust/target/
+
 # Ignore custom audio files (keep only tutorial samples)
 test-assets/audio/*.wav
 !test-assets/audio/arpeggio_c.wav
