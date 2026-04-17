@@ -7,6 +7,9 @@ logs/
 *.tsbuildinfo
 .orbitscore.json
 
+# Claude Code local settings (per-developer overrides)
+.claude/settings.local.json
+
 # Rust build artifacts (Cargo)
 rust/target/
 
