@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use orbit_audio_core::{Engine, Sample};
 use orbit_audio_native::{
     load_sample_resampled, start_default_output, LoaderError, OutputError, OutputStream,
-    ResampleError,
+    ResampleError, StreamStats, StreamStatsSnapshot,
 };
 use uuid::Uuid;
 
@@ -38,6 +38,7 @@ pub struct EngineWrap {
     samples: Mutex<HashMap<String, Sample>>,
     started_at: std::time::Instant,
     active_play_count: std::sync::atomic::AtomicUsize,
+    stream_stats: Arc<StreamStats>,
 }
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
@@ -47,7 +48,7 @@ impl EngineWrap {
     /// Engine とストリーム guard を起動する。
     /// guard は caller（通常は main）が drop されるまで保持すること。
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
-        let (engine, stream) = start_default_output()?;
+        let (engine, stream, stream_stats) = start_default_output()?;
         let sample_rate = stream.sample_rate;
         let channels = stream.channels;
         let wrap = Arc::new(Self {
@@ -57,6 +58,7 @@ impl EngineWrap {
             samples: Mutex::new(HashMap::new()),
             started_at: std::time::Instant::now(),
             active_play_count: std::sync::atomic::AtomicUsize::new(0),
+            stream_stats,
         });
         Ok((wrap, StreamGuard(stream)))
     }
@@ -141,9 +143,14 @@ impl EngineWrap {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn now_sec(&self) -> Option<f64> {
-        self.engine.now_sec()
+    /// transport 時刻（audio callback 駆動）を優先し、未起動時のみ wall-clock にフォールバック。
+    pub fn transport_or_uptime_sec(&self) -> f64 {
+        self.engine.now_sec().unwrap_or_else(|| self.uptime_sec())
+    }
+
+    /// audio stream の稼働統計スナップショット（StreamStats event 用）。
+    pub fn stream_stats_snapshot(&self) -> StreamStatsSnapshot {
+        self.stream_stats.snapshot()
     }
 
     /// `samples` Mutex を poisoned-safe に取得する。

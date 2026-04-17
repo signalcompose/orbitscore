@@ -24,6 +24,14 @@ const EVENT_CHANNEL_CAPACITY: usize = 128;
 
 const EVENT_PLAY_STARTED: &str = "PlayStarted";
 const EVENT_PLAY_ENDED: &str = "PlayEnded";
+const EVENT_STREAM_STATS: &str = "StreamStats";
+const EVENT_DAEMON_ERROR: &str = "DaemonError";
+
+const ERROR_SEVERITY_WARNING: &str = "warning";
+const ERROR_CODE_STREAM_XRUN: &str = "STREAM_XRUN";
+
+/// StreamStats の送出間隔。protocol 仕様で 1 Hz 固定。
+const STREAM_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
@@ -44,6 +52,59 @@ pub async fn run(
             }
         }
     });
+
+    // StreamStats 1 Hz ticker。mpsc の送信が失敗（= writer/reader 終了）した
+    // 時点で自然に exit する。reader 側が閉じる tx の clone を持つため、
+    // session が終わると tx が全て drop され、この task も最後は送信失敗で抜ける。
+    let stats_task = {
+        let tx = tx.clone();
+        let engine = engine.clone();
+        tokio::spawn(async move {
+            // 1 Hz 固定仕様に合わせ、最初の tick も INTERVAL 後に揃える
+            // （tokio::time::interval のデフォルトは即時発火）。
+            let start = tokio::time::Instant::now() + STREAM_STATS_INTERVAL;
+            let mut ticker = tokio::time::interval_at(start, STREAM_STATS_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut last_xruns: u64 = 0;
+            loop {
+                ticker.tick().await;
+                let snapshot = engine.stream_stats_snapshot();
+                let now_sec = engine.transport_or_uptime_sec();
+
+                if snapshot.xruns > last_xruns {
+                    let warn_evt = Event::new(
+                        EVENT_DAEMON_ERROR,
+                        json!({
+                            "severity": ERROR_SEVERITY_WARNING,
+                            "code": ERROR_CODE_STREAM_XRUN,
+                            "message": format!(
+                                "buffer underrun or stream error occurred ({} total)",
+                                snapshot.xruns
+                            ),
+                        }),
+                    );
+                    if tx.send(to_json_or_fallback(&warn_evt)).await.is_err() {
+                        break;
+                    }
+                    last_xruns = snapshot.xruns;
+                }
+
+                let stats_evt = Event::new(
+                    EVENT_STREAM_STATS,
+                    json!({
+                        // cpu_load: audio callback の計測基盤が未整備のため 0.0 固定。
+                        "cpu_load": 0.0,
+                        "xruns": snapshot.xruns,
+                        "buffer_underruns": snapshot.buffer_underruns,
+                        "now_sec": now_sec,
+                    }),
+                );
+                if tx.send(to_json_or_fallback(&stats_evt)).await.is_err() {
+                    break;
+                }
+            }
+        })
+    };
 
     while let Some(msg) = read.next().await {
         let msg = match msg {
@@ -89,7 +150,14 @@ pub async fn run(
         }
     }
 
-    // drop で channel を閉じると writer は rx.recv() の None で exit する
+    // stats_task は自身の tx clone を保持するため、drop(tx) では exit しない。
+    // abort してから join を待ち、cancelled 以外の終了（panic 等）があれば warn する。
+    stats_task.abort();
+    match stats_task.await {
+        Ok(()) => {}
+        Err(e) if e.is_cancelled() => {}
+        Err(e) => warn!("stats task terminated abnormally: {e}"),
+    }
     drop(tx);
     if let Err(e) = writer_task.await {
         warn!("writer task terminated abnormally: {e}");
@@ -266,9 +334,7 @@ fn schedule_play_ended(
     duration_sec: f64,
 ) {
     tokio::spawn(async move {
-        // transport 時刻 (audio callback 駆動) を優先し、未起動時のみ wall-clock にフォールバック。
-        // これにより start_sec が transport 基準で指定された場合も正しく待機できる。
-        let now = engine.now_sec().unwrap_or_else(|| engine.uptime_sec());
+        let now = engine.transport_or_uptime_sec();
         let delay = (start_sec + duration_sec - now).max(0.0);
         if delay > 0.0 {
             tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;

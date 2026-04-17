@@ -1,10 +1,43 @@
 //! cpal を使った既定出力デバイスへのストリーム設定。
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use thiserror::Error;
 
 use orbit_audio_core::Engine;
+
+/// cpal ストリームから得られる稼働統計。
+///
+/// err_fn は audio スレッドから呼ばれるため atomic で更新する。
+/// `buffer_underruns` は cpal の `StreamError` が underrun を個別に示さないため
+/// 常に 0。将来 backend-specific な判別ができるようになれば増分経路を追加する。
+#[derive(Debug, Default)]
+pub struct StreamStats {
+    xruns: AtomicU64,
+    buffer_underruns: AtomicU64,
+}
+
+impl StreamStats {
+    pub fn snapshot(&self) -> StreamStatsSnapshot {
+        StreamStatsSnapshot {
+            xruns: self.xruns.load(Ordering::Relaxed),
+            buffer_underruns: self.buffer_underruns.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record_xrun(&self) {
+        self.xruns.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StreamStatsSnapshot {
+    pub xruns: u64,
+    pub buffer_underruns: u64,
+}
 
 #[derive(Error, Debug)]
 pub enum OutputError {
@@ -27,7 +60,7 @@ pub struct OutputStream {
 
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
 /// 同時に初期化する。呼び出し側は config ミスマッチを意識しなくてよい。
-pub fn start_default_output() -> Result<(Engine, OutputStream), OutputError> {
+pub fn start_default_output() -> Result<(Engine, OutputStream, Arc<StreamStats>), OutputError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
     let supported = device
@@ -39,8 +72,9 @@ pub fn start_default_output() -> Result<(Engine, OutputStream), OutputError> {
     let sample_rate = config.sample_rate.0;
     let channels = config.channels;
 
+    let stats = Arc::new(StreamStats::default());
     let engine = Engine::new(sample_rate, channels);
-    let stream = build_stream(&device, &config, sample_format, engine.clone())?;
+    let stream = build_stream(&device, &config, sample_format, engine.clone(), stats.clone())?;
     stream
         .play()
         .map_err(|e| OutputError::PlayStream(e.to_string()))?;
@@ -52,6 +86,7 @@ pub fn start_default_output() -> Result<(Engine, OutputStream), OutputError> {
             sample_rate,
             channels,
         },
+        stats,
     ))
 }
 
@@ -60,8 +95,16 @@ fn build_stream(
     config: &StreamConfig,
     sample_format: SampleFormat,
     engine: Engine,
+    stats: Arc<StreamStats>,
 ) -> Result<Stream, OutputError> {
-    let err_fn = |err| eprintln!("stream error: {err}");
+    let make_err_fn = || {
+        // audio thread から呼ばれるため blocking I/O を避け、atomic increment のみ行う。
+        // 上位 (daemon session) が StreamStats / DaemonError 経由で可視化する責務を持つ。
+        let stats = stats.clone();
+        move |_err| {
+            stats.record_xrun();
+        }
+    };
 
     /// scratch バッファを事前に 1 秒分確保してクロージャにムーブするヘルパー。
     /// cpal のコールバック buffer_size は通常数百フレームなので十分余裕がある。
@@ -75,7 +118,7 @@ fn build_stream(
             .build_output_stream(
                 config,
                 move |data: &mut [f32], _| engine.render(data),
-                err_fn,
+                make_err_fn(),
                 None,
             )
             .map_err(|e| OutputError::BuildStream(e.to_string()))?,
@@ -95,7 +138,7 @@ fn build_stream(
                             data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
                     },
-                    err_fn,
+                    make_err_fn(),
                     None,
                 )
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?
@@ -116,7 +159,7 @@ fn build_stream(
                             data[i] = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
                         }
                     },
-                    err_fn,
+                    make_err_fn(),
                     None,
                 )
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?
@@ -137,7 +180,7 @@ fn build_stream(
                             data[i] = v as u16;
                         }
                     },
-                    err_fn,
+                    make_err_fn(),
                     None,
                 )
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?
@@ -149,4 +192,37 @@ fn build_stream(
         }
     };
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_stats_starts_at_zero() {
+        let stats = StreamStats::default();
+        let snap = stats.snapshot();
+        assert_eq!(snap.xruns, 0);
+        assert_eq!(snap.buffer_underruns, 0);
+    }
+
+    #[test]
+    fn record_xrun_increments_only_xruns() {
+        let stats = StreamStats::default();
+        stats.record_xrun();
+        stats.record_xrun();
+        stats.record_xrun();
+        let snap = stats.snapshot();
+        assert_eq!(snap.xruns, 3);
+        assert_eq!(snap.buffer_underruns, 0);
+    }
+
+    #[test]
+    fn snapshot_is_monotonic() {
+        let stats = StreamStats::default();
+        let s1 = stats.snapshot();
+        stats.record_xrun();
+        let s2 = stats.snapshot();
+        assert!(s2.xruns > s1.xruns);
+    }
 }

@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.60 Issue #107: orbit-audio-daemon Phase 1b-3 StreamStats / DaemonError (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE (Phase 1b-3: StreamStats 1 Hz + DaemonError warning path)
+**Branch**: `107-daemon-stream-events`
+**Issue**: #107（Phase 1b-3 の一部）
+
+**Work Content**: orbit-audio-daemon に StreamStats イベントの 1 Hz 周期送信と、cpal `err_fn` からの xrun 検知を経由する DaemonError (severity=warning, code=STREAM_XRUN) 通知を実装。Phase 1b-2 で導入した mpsc writer task 経路を再利用し、接続ごとに ticker task を起動する。
+
+**実装**:
+- `orbit-audio-native/src/output.rs` に `StreamStats { xruns, buffer_underruns }` atomic counter を追加、`start_default_output` の戻り値を `(Engine, OutputStream, Arc<StreamStats>)` に拡張
+- `err_fn` を factory 化し xrun 発生時に atomic increment
+- `engine_wrap.rs` に `stream_stats_snapshot()` を追加
+- `session.rs` に 1 Hz ticker task を追加。前回値と比較して xrun 増分があれば DaemonError warning を先に送出、続けて StreamStats を送出
+- session 終了時に `stats_task.abort()` で cleanup
+
+**スコープ外（次フェーズ）**:
+- `cpu_load` 実測（現状は 0.0 stub、コールバック timing 計測基盤が未整備）
+- `buffer_underruns` の個別集計（cpal `StreamError` が underrun を区別しないため 0 stub）
+- DaemonError severity=fatal（DEVICE_LOST / FATAL_PANIC） — panic hook と cpal device lost 検出が必要
+
+**検証**:
+- `cargo build --workspace` clean
+- `cargo test -p orbit-audio-daemon` 1 pass（smoke test）
+- 既存 PlayStarted/PlayEnded 経路への影響なし
+
+---
+
 ### 6.59 Issue #107: orbit-audio-daemon Phase 1b-2 events (April 17, 2026)
 
 **Date**: April 17, 2026
