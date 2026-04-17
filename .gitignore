@@ -52,3 +52,4 @@ credentials*
 # Slack MCP cache files (not used in OrbitScore)
 .channels_cache.json
 .users_cache.json
+.claude/scheduled_tasks.lock

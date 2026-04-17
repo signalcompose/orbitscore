@@ -106,6 +106,8 @@ impl EngineWrap {
     /// sample を現在時刻 + offset でスケジュール。
     ///
     /// `time_sec` は daemon 起動からの経過秒（Engine transport 基準）。
+    /// 戻り値にサンプル再生時間を含めるので、呼び出し側は PlayEnded を
+    /// 遅延送信するためのタイマーを組める。
     pub fn play_at(
         &self,
         sample_id: &str,
@@ -117,6 +119,7 @@ impl EngineWrap {
             .get(sample_id)
             .cloned()
             .ok_or_else(|| WrapError::SampleNotFound(sample_id.to_string()))?;
+        let duration_sec = sample.duration_secs();
         self.engine
             .schedule_with_gain(time_sec, gain, sample)
             .map_err(|e| WrapError::Scheduler(e.to_string()))?;
@@ -124,6 +127,9 @@ impl EngineWrap {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(PlayHandle {
             play_id: format!("p-{}", short_uuid()),
+            sample_id: sample_id.to_string(),
+            start_sec: time_sec,
+            duration_sec,
         })
     }
 
@@ -161,6 +167,9 @@ pub struct LoadedSample {
 
 pub struct PlayHandle {
     pub play_id: String,
+    pub sample_id: String,
+    pub start_sec: f64,
+    pub duration_sec: f64,
 }
 
 fn short_uuid() -> String {

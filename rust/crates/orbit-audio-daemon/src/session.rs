@@ -1,27 +1,50 @@
 //! 1 WebSocket 接続あたりのメッセージループ。
+//!
+//! writer task と reader task を分離した構造:
+//! - reader: WebSocket 受信 → Command dispatch → Response を mpsc へ送る
+//! - writer: mpsc から受信 → WebSocket へ書き込む
+//! - 遅延イベント (PlayEnded 等) も mpsc で writer に合流する
+//!
+//! これにより、handle_command の非同期待ち中にもイベントを送れる。
 
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
+use tokio::sync::mpsc;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 use tracing::warn;
 
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError};
 
+/// writer task のキュー容量。過大に積まれると back pressure をかける。
+const EVENT_CHANNEL_CAPACITY: usize = 128;
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
 ) -> Result<(), tokio_tungstenite::tungstenite::Error> {
     let (mut write, mut read) = ws.split();
+    let (tx, mut rx) = mpsc::channel::<String>(EVENT_CHANNEL_CAPACITY);
 
-    // 最初の handshake フレーム送信
+    // 最初の handshake フレーム
     write
         .send(Message::Text(to_json_or_fallback(&Handshake::current())))
         .await?;
 
+    // writer task: mpsc から受けた message を書き出す
+    let writer_task = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if write.send(Message::Text(msg)).await.is_err() {
+                break;
+            }
+        }
+        // remaining drain (close handshake 等) は tungstenite 側で行われる
+    });
+
+    // reader task: WebSocket 受信 → command → tx へ送る
     while let Some(msg) = read.next().await {
         let msg = match msg {
             Ok(m) => m,
@@ -34,8 +57,9 @@ pub async fn run(
         let text = match msg {
             Message::Text(t) => t,
             Message::Close(_) => break,
-            Message::Ping(p) => {
-                write.send(Message::Pong(p)).await?;
+            Message::Ping(_) => {
+                // tungstenite が自動で Pong を返すが、handshake 後はアプリ層 Ping
+                // (method="Ping") を使うことを想定しているため無視。
                 continue;
             }
             _ => continue,
@@ -48,17 +72,22 @@ pub async fn run(
                     id: String::new(),
                     error: ProtocolError::new("MALFORMED_REQUEST", e.to_string()),
                 };
-                write.send(Message::Text(to_json_or_fallback(&err))).await?;
+                if tx.send(to_json_or_fallback(&err)).await.is_err() {
+                    break;
+                }
                 continue;
             }
         };
 
-        let reply = handle_command(cmd, &engine).await;
-        write
-            .send(Message::Text(to_json_or_fallback(&reply)))
-            .await?;
+        let reply = handle_command(cmd, &engine, &tx).await;
+        if tx.send(to_json_or_fallback(&reply)).await.is_err() {
+            break;
+        }
     }
 
+    // tx を drop して writer が exit
+    drop(tx);
+    let _ = writer_task.await;
     Ok(())
 }
 
@@ -82,7 +111,13 @@ fn to_json_or_fallback<T: serde::Serialize>(v: &T) -> String {
 }
 
 /// Command を dispatch し、Response JSON を組み立てる。
-async fn handle_command(cmd: Command, engine: &Arc<EngineWrap>) -> Value {
+///
+/// `tx` は event 送信用チャンネル（PlayEnded 等の遅延通知に使う）。
+async fn handle_command(
+    cmd: Command,
+    engine: &Arc<EngineWrap>,
+    tx: &mpsc::Sender<String>,
+) -> Value {
     let Command { id, method, params } = cmd;
     match method.as_str() {
         "Ping" => ok(&id, Value::String("pong".to_string())),
@@ -155,7 +190,29 @@ async fn handle_command(cmd: Command, engine: &Arc<EngineWrap>) -> Value {
             }
             match params.get("sample_id").and_then(|v| v.as_str()) {
                 Some(sid) => match engine.play_at(sid, time_sec, gain) {
-                    Ok(handle) => ok(&id, json!({"play_id": handle.play_id})),
+                    Ok(handle) => {
+                        // PlayStarted event を即時送信
+                        let started_evt = Event::new(
+                            "PlayStarted",
+                            json!({
+                                "play_id": handle.play_id,
+                                "sample_id": handle.sample_id,
+                                "time_sec": handle.start_sec,
+                            }),
+                        );
+                        let _ = tx.send(to_json_or_fallback(&started_evt)).await;
+
+                        // PlayEnded event をサンプル長 + 起動時刻からの経過で遅延送信
+                        schedule_play_ended(
+                            tx.clone(),
+                            engine.clone(),
+                            handle.play_id.clone(),
+                            handle.start_sec,
+                            handle.duration_sec,
+                        );
+
+                        ok(&id, json!({"play_id": handle.play_id}))
+                    }
                     Err(e) => err(&id, wrap_err_to_protocol(&e)),
                 },
                 None => err(
@@ -185,6 +242,36 @@ async fn handle_command(cmd: Command, engine: &Arc<EngineWrap>) -> Value {
             ProtocolError::new("MALFORMED_REQUEST", format!("unknown method: {other}")),
         ),
     }
+}
+
+/// PlayEnded event を遅延発行するタスクを spawn する。
+///
+/// 現在の transport 時刻を基準に `start_sec + duration_sec` まで待機し、
+/// mpsc 経由で writer task に送る。コネクションが閉じていたら silently drop。
+fn schedule_play_ended(
+    tx: mpsc::Sender<String>,
+    engine: Arc<EngineWrap>,
+    play_id: String,
+    start_sec: f64,
+    duration_sec: f64,
+) {
+    tokio::spawn(async move {
+        // 現在時刻 (daemon 起動からの経過秒) を求めて、終了予定までの実時間を計算
+        let now = engine.uptime_sec();
+        let delay = (start_sec + duration_sec - now).max(0.0);
+        if delay > 0.0 {
+            tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
+        }
+        let ended_at_sec = start_sec + duration_sec;
+        let evt = Event::new(
+            "PlayEnded",
+            json!({
+                "play_id": play_id,
+                "ended_at_sec": ended_at_sec,
+            }),
+        );
+        let _ = tx.send(to_json_or_fallback(&evt)).await;
+    });
 }
 
 fn ok(id: &str, result: Value) -> Value {
@@ -222,18 +309,4 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::Output(o) => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
         WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
     }
-}
-
-/// Stream stats 通知（Phase 1b-2 で定期送信を実装、現状はヘルパのみ提供）。
-#[allow(dead_code)]
-pub fn make_stream_stats_event(now_sec: f64) -> Event {
-    Event::new(
-        "StreamStats",
-        json!({
-            "cpu_load": 0.0,
-            "xruns": 0,
-            "buffer_underruns": 0,
-            "now_sec": now_sec,
-        }),
-    )
 }

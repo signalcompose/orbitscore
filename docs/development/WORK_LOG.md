@@ -17,6 +17,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.59 Issue #107: orbit-audio-daemon Phase 1b-2 events (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE (Phase 1b-2 小スコープ: PlayStarted / PlayEnded events)
+**Branch**: `107-daemon-events`
+**Issue**: #107（Phase 1b-2 の一部）
+
+**Work Content**: orbit-audio-daemon に Phase 1 event 発行を追加。`PlayStarted` を PlayAt 応答直後に送り、`PlayEnded` を `start_sec + duration_sec` で遅延送信する。writer task 分離構造 (mpsc) で、今後の StreamStats / DaemonError も同一経路で発行可能になった。
+
+**設計変更**:
+- session.rs を reader / writer 2 task 構造にリファクタ (`tokio::sync::mpsc` で合流)
+- PlayHandle に `sample_id` / `start_sec` / `duration_sec` を追加
+- `schedule_play_ended` ヘルパで遅延送信タスクを spawn
+- back pressure 用 channel capacity = 128
+
+**Changes**:
+- `rust/crates/orbit-audio-daemon/src/session.rs` を mpsc ベースに書き換え
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs` PlayHandle 拡張
+
+**検証**:
+- cargo check / clippy / fmt / test clean、18 tests pass 継続
+- WebSocket 往復は smoke test と手動検証
+
+**非対応（将来）**:
+- StreamStats 1 Hz: 同じ mpsc 経路で追加可能、Phase 1b-3 で実装
+- DaemonError 経路: cpal err_fn からの通知経路が必要
+- 個別 Stop / SetGlobalGain の実動作: Engine API 追加が必要
+- lock-free ringbuf 化
+
+---
+
 ### 6.58 Issue #107: orbit-audio-daemon Phase 1b-1 (April 17, 2026)
 
 **Date**: April 17, 2026
