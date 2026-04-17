@@ -35,3 +35,23 @@ impl Sample {
         self.frames() as f64 / self.sample_rate as f64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stereo_frames_and_duration() {
+        let s = Sample::new(vec![0.0; 96_000], 48_000, 2);
+        assert_eq!(s.frames(), 48_000);
+        assert!((s.duration_secs() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mono_duration_differs_from_stereo_for_same_buffer() {
+        let mono = Sample::new(vec![0.0; 48_000], 48_000, 1);
+        let stereo = Sample::new(vec![0.0; 48_000], 48_000, 2);
+        assert_eq!(mono.duration_secs(), 1.0);
+        assert_eq!(stereo.duration_secs(), 0.5);
+    }
+}

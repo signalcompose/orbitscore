@@ -16,6 +16,8 @@ pub enum EngineError {
     Decode(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("scheduler mutex poisoned (a previous thread panicked while holding the lock)")]
+    Poisoned,
 }
 
 /// 共有可能なエンジンハンドル。
@@ -34,18 +36,25 @@ impl Engine {
         }
     }
 
-    /// サンプルをスケジュールする。
-    pub fn schedule(&self, start_sec: f64, sample: Sample) {
-        if let Ok(mut s) = self.inner.lock() {
-            s.schedule(ScheduledSample::new(start_sec, sample));
-        }
+    /// サンプルをスケジュールする。制御スレッドから呼ぶ想定。
+    /// スケジューラの Mutex が poisoned 状態の場合はエラーを返し、呼び出し側に
+    /// 障害を伝える（サイレントに無視しない）。
+    pub fn schedule(&self, start_sec: f64, sample: Sample) -> Result<(), EngineError> {
+        let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
+        s.schedule(ScheduledSample::new(start_sec, sample));
+        Ok(())
     }
 
     /// 指定ゲインでサンプルをスケジュールする。
-    pub fn schedule_with_gain(&self, start_sec: f64, gain: f32, sample: Sample) {
-        if let Ok(mut s) = self.inner.lock() {
-            s.schedule(ScheduledSample::new(start_sec, sample).with_gain(gain));
-        }
+    pub fn schedule_with_gain(
+        &self,
+        start_sec: f64,
+        gain: f32,
+        sample: Sample,
+    ) -> Result<(), EngineError> {
+        let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
+        s.schedule(ScheduledSample::new(start_sec, sample).with_gain(gain));
+        Ok(())
     }
 
     /// オーディオコールバックから呼び出される。`out` は interleaved f32。
@@ -64,8 +73,32 @@ impl Engine {
         }
     }
 
-    /// 現在の出力ストリーム時刻（秒）
-    pub fn now_sec(&self) -> f64 {
-        self.inner.try_lock().map(|s| s.now_sec()).unwrap_or(0.0)
+    /// 現在の出力ストリーム時刻（秒）を返す。
+    /// ロック取得に失敗した場合は `None` を返し、呼び出し側がストリーム開始直後の
+    /// `Some(0.0)` と区別できるようにする。
+    pub fn now_sec(&self) -> Option<f64> {
+        self.inner.try_lock().ok().map(|s| s.now_sec())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schedule_then_render_writes_nonzero() {
+        let engine = Engine::new(48_000, 2);
+        let sample = Sample::new(vec![0.5f32; 200], 48_000, 2);
+        engine.schedule(0.0, sample).expect("schedule");
+
+        let mut buf = vec![0.0f32; 400];
+        engine.render(&mut buf);
+        assert!(buf.iter().any(|&x| x != 0.0));
+    }
+
+    #[test]
+    fn now_sec_returns_some_zero_at_start() {
+        let engine = Engine::new(48_000, 2);
+        assert_eq!(engine.now_sec(), Some(0.0));
     }
 }

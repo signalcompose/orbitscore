@@ -92,6 +92,11 @@ impl Scheduler {
             }
 
             let src_channels = active.sample.channels as usize;
+            if src_channels == 0 {
+                // 0ch の不正なサンプルはスキップ（`src_channels - 1` のアンダーフロー回避）
+                active.read_pos = active.sample.frames();
+                continue;
+            }
             let total_src_frames = active.sample.frames();
             if active.read_pos >= total_src_frames {
                 continue; // 再生済み
@@ -130,5 +135,73 @@ impl Scheduler {
     /// 現在の出力ストリーム時刻（秒）
     pub fn now_sec(&self) -> f64 {
         self.cursor_frames as f64 / self.output_sample_rate as f64
+    }
+
+    /// テスト用: 保持しているイベント数
+    #[cfg(test)]
+    pub(crate) fn events_len(&self) -> usize {
+        self.events.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_sample_stereo(frames: usize) -> Sample {
+        Sample::new(vec![0.1f32; frames * 2], 48_000, 2)
+    }
+
+    #[test]
+    fn unplayed_event_is_retained_across_render() {
+        // 1 秒後に再生するサンプルをスケジュールし、2ms だけ render
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(ScheduledSample::new(1.0, mk_sample_stereo(4_800)));
+
+        let mut buf = vec![0.0f32; 200]; // 100 frames
+        s.render(&mut buf);
+
+        // まだ開始時刻に到達していないので保持されているはず（retain 回帰テスト）
+        assert_eq!(s.events_len(), 1);
+    }
+
+    #[test]
+    fn played_event_is_dropped() {
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100)));
+
+        // サンプル全体を十分に超える長さを render
+        let mut buf = vec![0.0f32; 1000];
+        s.render(&mut buf);
+
+        assert_eq!(s.events_len(), 0);
+    }
+
+    #[test]
+    fn zero_channel_sample_is_skipped_without_panic() {
+        let mut s = Scheduler::new(48_000, 2);
+        // 不正な 0ch サンプル（src_channels - 1 アンダーフロー回避の確認）
+        s.schedule(ScheduledSample::new(
+            0.0,
+            Sample::new(vec![0.0; 10], 48_000, 0),
+        ));
+
+        let mut buf = vec![0.0f32; 200];
+        s.render(&mut buf); // panic せず完了すること
+                            // 次回 render でイベントが掃除される
+        s.render(&mut buf);
+        assert_eq!(s.events_len(), 0);
+    }
+
+    #[test]
+    fn render_mixes_scheduled_audio_into_output() {
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100)));
+
+        let mut buf = vec![0.0f32; 200];
+        s.render(&mut buf);
+
+        // 先頭から非ゼロの音が書き込まれているはず
+        assert!(buf.iter().any(|&x| x != 0.0));
     }
 }

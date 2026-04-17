@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     for i in 0..10 {
         let sample = samples[i % samples.len()].clone();
         let when = 0.2 + (i as f64) * 0.5;
-        engine.schedule(when, sample);
+        engine.schedule(when, sample)?;
     }
 
     // 6 秒再生してから終了

@@ -45,6 +45,9 @@ cargo build --no-default-features --features wasm --target wasm32-unknown-unknow
   対応 Issue: [#100](https://github.com/signalcompose/orbitscore/issues/100)
 - **タイムストレッチなし** — Phase 2 で `rubato` or SoundTouch 等を検討
   (Issue [#92](https://github.com/signalcompose/orbitscore/issues/92))
+- **モノラル → マルチチャンネル展開は最終チャンネル複製のみ** — モノラル素材を
+  ステレオや多 ch 出力に流す際、`ch.min(src_channels - 1)` で最後のチャンネルを
+  繰り返すシンプルな方式を採っている。pan law や空間音響の考慮は Phase 2 以降
 - **`Mutex` ベースの同期** — PoC の簡略化。本実装ではロックフリー化を検討
 - **WASM 未検証** — feature flag とスタブのみ。実機 wasm ビルドは未実施
 

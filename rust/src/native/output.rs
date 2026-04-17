@@ -10,8 +10,8 @@ use crate::core::Engine;
 pub enum OutputError {
     #[error("no default output device found")]
     NoDevice,
-    #[error("no supported output config")]
-    NoConfig,
+    #[error("no supported output config: {0}")]
+    NoConfig(String),
     #[error("cpal build stream error: {0}")]
     BuildStream(String),
     #[error("cpal play stream error: {0}")]
@@ -32,7 +32,7 @@ pub fn start_default_output() -> Result<(Engine, OutputStream), OutputError> {
     let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
     let supported = device
         .default_output_config()
-        .map_err(|_| OutputError::NoConfig)?;
+        .map_err(|e| OutputError::NoConfig(e.to_string()))?;
 
     let sample_format = supported.sample_format();
     let config: StreamConfig = supported.config();
@@ -62,6 +62,10 @@ fn build_stream(
     engine: Engine,
 ) -> Result<Stream, OutputError> {
     let err_fn = |err| eprintln!("stream error: {err}");
+    // scratch バッファを事前に 1 秒分確保。
+    // cpal の callback buffer_size は通常数百フレームなので十分余裕がある。
+    // これによりリアルタイムコールバック初回でのヒープ確保を回避する。
+    let scratch_cap = (config.sample_rate.0 as usize) * (config.channels as usize);
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
@@ -72,10 +76,10 @@ fn build_stream(
             )
             .map_err(|e| OutputError::BuildStream(e.to_string()))?,
         SampleFormat::I16 => {
-            // scratch はクロージャキャプチャ側で保持し、コールバック内で
-            // resize のみ行う。これにより realtime スレッドでのヒープ確保を避ける。
+            // scratch はクロージャキャプチャ側で保持し、事前に 1 秒分確保する。
+            // コールバック内は resize のみで realloc が発生しない想定。
             // バッファのゼロクリアは engine.render() 内の Scheduler::render で行うため省略。
-            let mut scratch: Vec<f32> = Vec::new();
+            let mut scratch: Vec<f32> = vec![0.0; scratch_cap];
             device
                 .build_output_stream(
                     config,
@@ -95,7 +99,7 @@ fn build_stream(
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?
         }
         SampleFormat::U16 => {
-            let mut scratch: Vec<f32> = Vec::new();
+            let mut scratch: Vec<f32> = vec![0.0; scratch_cap];
             device
                 .build_output_stream(
                     config,
@@ -115,7 +119,11 @@ fn build_stream(
                 )
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?
         }
-        _ => return Err(OutputError::NoConfig),
+        other => {
+            return Err(OutputError::NoConfig(format!(
+                "unsupported sample format: {other:?}"
+            )))
+        }
     };
     Ok(stream)
 }
