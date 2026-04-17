@@ -299,11 +299,17 @@ async fn handle_command(
                 ),
             }
         }
-        "Stop" => {
-            // 現状 Engine は個別 play 停止 API を持たないため常に not_found を返す (Phase 1b-2 で実装)。
-            let pid = params.get("play_id").and_then(|v| v.as_str()).unwrap_or("");
-            ok(&id, json!({"play_id": pid, "status": "not_found"}))
-        }
+        "Stop" => match params.get("play_id").and_then(|v| v.as_str()) {
+            Some(pid) => match engine.stop(pid) {
+                Ok(true) => ok(&id, json!({"play_id": pid, "status": "stopped"})),
+                Ok(false) => ok(&id, json!({"play_id": pid, "status": "not_found"})),
+                Err(e) => err(&id, wrap_err_to_protocol(&e)),
+            },
+            None => err(
+                &id,
+                ProtocolError::new("MALFORMED_REQUEST", "missing 'play_id' param"),
+            ),
+        },
         "SetGlobalGain" => {
             let value = params.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);
             let ramp_sec = params

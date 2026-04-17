@@ -122,16 +122,24 @@ impl EngineWrap {
             .cloned()
             .ok_or_else(|| WrapError::SampleNotFound(sample_id.to_string()))?;
         let duration_sec = sample.duration_secs();
+        let play_id = format!("p-{}", short_uuid());
         self.engine
-            .schedule_with_gain(time_sec, gain, sample)
+            .schedule_with_play_id(time_sec, gain, play_id.clone(), sample)
             .map_err(|e| WrapError::Scheduler(e.to_string()))?;
         self.active_play_count
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(PlayHandle {
-            play_id: format!("p-{}", short_uuid()),
+            play_id,
             start_sec: time_sec,
             duration_sec,
         })
+    }
+
+    /// `play_id` に一致するアクティブ再生を停止する。true = 停止、false = 見つからず。
+    pub fn stop(&self, play_id: &str) -> Result<bool, WrapError> {
+        self.engine
+            .stop(play_id)
+            .map_err(|e| WrapError::Scheduler(e.to_string()))
     }
 
     /// 読み取り専用カウンタ。Phase 1b-2 で Stop 実装後に poisoned 検出もしたいため

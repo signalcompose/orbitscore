@@ -11,6 +11,8 @@ pub struct ScheduledSample {
     pub gain: f32,
     /// サンプル本体
     pub sample: Sample,
+    /// Stop 命令での個別停止用識別子。`None` なら停止不可（fire-and-forget）。
+    pub play_id: Option<String>,
 }
 
 impl ScheduledSample {
@@ -19,11 +21,17 @@ impl ScheduledSample {
             start_sec,
             gain: 1.0,
             sample,
+            play_id: None,
         }
     }
 
     pub fn with_gain(mut self, gain: f32) -> Self {
         self.gain = gain;
+        self
+    }
+
+    pub fn with_play_id(mut self, play_id: String) -> Self {
+        self.play_id = Some(play_id);
         self
     }
 }
@@ -59,6 +67,8 @@ struct ActiveSample {
     sample: Sample,
     /// このサンプル内で次に読むフレーム位置
     read_pos: usize,
+    /// 個別停止用識別子
+    play_id: Option<String>,
 }
 
 impl Scheduler {
@@ -104,7 +114,16 @@ impl Scheduler {
             gain: event.gain,
             sample: event.sample,
             read_pos: 0,
+            play_id: event.play_id,
         });
+    }
+
+    /// `play_id` に一致するアクティブ再生を削除する。true = 削除した, false = 見つからず。
+    pub fn stop(&mut self, play_id: &str) -> bool {
+        let before = self.events.len();
+        self.events
+            .retain(|a| a.play_id.as_deref() != Some(play_id));
+        self.events.len() < before
     }
 
     /// 出力バッファにアクティブなサンプル群を加算する。
@@ -311,6 +330,33 @@ mod tests {
         s.render(&mut buf);
         // 50 frames 経過後の global_gain は 0.5 付近
         assert!((s.global_gain() - 0.5).abs() < 0.02, "{}", s.global_gain());
+    }
+
+    #[test]
+    fn stop_removes_matching_play_id() {
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(1.0, mk_sample_stereo(100))
+                .with_play_id("p-a".to_string()),
+        );
+        s.schedule(
+            ScheduledSample::new(2.0, mk_sample_stereo(100))
+                .with_play_id("p-b".to_string()),
+        );
+        assert_eq!(s.events_len(), 2);
+        assert!(s.stop("p-a"));
+        assert_eq!(s.events_len(), 1);
+        assert!(!s.stop("p-a"));
+        assert!(s.stop("p-b"));
+        assert_eq!(s.events_len(), 0);
+    }
+
+    #[test]
+    fn stop_ignores_unknown_id() {
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100)));
+        assert!(!s.stop("does-not-exist"));
+        assert_eq!(s.events_len(), 1);
     }
 
     #[test]

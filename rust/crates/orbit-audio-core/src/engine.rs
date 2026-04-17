@@ -57,6 +57,29 @@ impl Engine {
         Ok(())
     }
 
+    /// `play_id` 付きでスケジュールする。後で `stop` で個別停止できる。
+    pub fn schedule_with_play_id(
+        &self,
+        start_sec: f64,
+        gain: f32,
+        play_id: String,
+        sample: Sample,
+    ) -> Result<(), EngineError> {
+        let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
+        s.schedule(
+            ScheduledSample::new(start_sec, sample)
+                .with_gain(gain)
+                .with_play_id(play_id),
+        );
+        Ok(())
+    }
+
+    /// `play_id` に一致するアクティブ再生を停止する。true = 停止成功, false = 見つからず。
+    pub fn stop(&self, play_id: &str) -> Result<bool, EngineError> {
+        let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
+        Ok(s.stop(play_id))
+    }
+
     /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時、正なら線形ランプ。
     ///
     /// 正の `ramp_sec` がサブフレーム相当（例: 1/sample_rate 未満）でも、
