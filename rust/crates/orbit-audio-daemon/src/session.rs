@@ -30,7 +30,7 @@ const EVENT_DAEMON_ERROR: &str = "DaemonError";
 const ERROR_SEVERITY_WARNING: &str = "warning";
 const ERROR_CODE_STREAM_XRUN: &str = "STREAM_XRUN";
 
-/// StreamStats の送出間隔。プロトコル仕様 v0.1 で 1 Hz 固定。
+/// StreamStats の送出間隔。protocol 仕様で 1 Hz 固定。
 const STREAM_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 pub async fn run(
@@ -60,8 +60,8 @@ pub async fn run(
         let tx = tx.clone();
         let engine = engine.clone();
         tokio::spawn(async move {
-            // interval_at で最初の tick も 1 s 後に揃える。プロトコル仕様 (1 Hz 固定) に
-            // 則り、接続直後の即時イベントは送出しない。
+            // 1 Hz 固定仕様に合わせ、最初の tick も INTERVAL 後に揃える
+            // （tokio::time::interval のデフォルトは即時発火）。
             let start = tokio::time::Instant::now() + STREAM_STATS_INTERVAL;
             let mut ticker = tokio::time::interval_at(start, STREAM_STATS_INTERVAL);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -150,9 +150,14 @@ pub async fn run(
         }
     }
 
-    // drop で channel を閉じると writer は rx.recv() の None で exit する。
-    // stats_task は tx clone を保持しているため、ここで先に中止する。
+    // stats_task は自身の tx clone を保持するため、drop(tx) では exit しない。
+    // abort してから join を待ち、cancelled 以外の終了（panic 等）があれば warn する。
     stats_task.abort();
+    match stats_task.await {
+        Ok(()) => {}
+        Err(e) if e.is_cancelled() => {}
+        Err(e) => warn!("stats task terminated abnormally: {e}"),
+    }
     drop(tx);
     if let Err(e) = writer_task.await {
         warn!("writer task terminated abnormally: {e}");

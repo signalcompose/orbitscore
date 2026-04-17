@@ -98,10 +98,11 @@ fn build_stream(
     stats: Arc<StreamStats>,
 ) -> Result<Stream, OutputError> {
     let make_err_fn = || {
+        // audio thread から呼ばれるため blocking I/O を避け、atomic increment のみ行う。
+        // 上位 (daemon session) が StreamStats / DaemonError 経由で可視化する責務を持つ。
         let stats = stats.clone();
-        move |err| {
+        move |_err| {
             stats.record_xrun();
-            eprintln!("stream error: {err}");
         }
     };
 
@@ -191,4 +192,37 @@ fn build_stream(
         }
     };
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stream_stats_starts_at_zero() {
+        let stats = StreamStats::default();
+        let snap = stats.snapshot();
+        assert_eq!(snap.xruns, 0);
+        assert_eq!(snap.buffer_underruns, 0);
+    }
+
+    #[test]
+    fn record_xrun_increments_only_xruns() {
+        let stats = StreamStats::default();
+        stats.record_xrun();
+        stats.record_xrun();
+        stats.record_xrun();
+        let snap = stats.snapshot();
+        assert_eq!(snap.xruns, 3);
+        assert_eq!(snap.buffer_underruns, 0);
+    }
+
+    #[test]
+    fn snapshot_is_monotonic() {
+        let stats = StreamStats::default();
+        let s1 = stats.snapshot();
+        stats.record_xrun();
+        let s2 = stats.snapshot();
+        assert!(s2.xruns > s1.xruns);
+    }
 }
