@@ -236,5 +236,6 @@ pub trait MidiSink: Node {
 
 - [docs/planning/RUST_ENGINE_MIGRATION_PLAN.md](./RUST_ENGINE_MIGRATION_PLAN.md) - 全体ロードマップ
 - [docs/research/RUST_POC_FINDINGS.md](../research/RUST_POC_FINDINGS.md) - PoC 所感
+- [docs/research/ENGINE_DAEMON_PROTOCOL.md](../research/ENGINE_DAEMON_PROTOCOL.md) - IPC プロトコル仕様 (v0.1 draft)
 - [Epic #105](https://github.com/signalcompose/orbitscore/issues/105)
 - Node trait の設計参考: JUCE AudioProcessor, Web Audio API AudioNode

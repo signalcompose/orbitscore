@@ -89,6 +89,11 @@
    - DSL → MIDI 変換戦略、responsibilities 境界
    - Cargo workspace 構造、Plugin Host MIDI 契約
 
+6. **[ENGINE_DAEMON_PROTOCOL.md](../research/ENGINE_DAEMON_PROTOCOL.md)** 📡
+   - TS ↔ Rust daemon の IPC プロトコル仕様 (v0.1 draft)
+   - WebSocket + JSON-RPC 風 Command/Response/Event
+   - Phase 1 commands + Phase 2 予約 (MIDI Event 型)
+
 ### Quick Links
 
 - **User Guide**: [../README.md](../README.md) - Start here for usage

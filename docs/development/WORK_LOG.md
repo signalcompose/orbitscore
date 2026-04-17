@@ -17,6 +17,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.57 Issue #93: Engine Daemon IPC Protocol Design (Phase 1b 設計) (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `93-engine-daemon-ipc-protocol`
+**Issue**: #93（Epic #105 の Phase 1b 設計）
+
+**Work Content**: TypeScript 側 app layer と Rust 側 audio daemon を繋ぐ IPC プロトコル（v0.1 draft）を設計。`docs/research/ENGINE_DAEMON_PROTOCOL.md` として文書化。後続の #107 (daemon 実装) / #108 (TS client) の契約となる。
+
+**設計の骨子**:
+- トランスポート: WebSocket over localhost（`127.0.0.1` bind、認証なし）
+- エンコーディング: UTF-8 JSON（バイナリフレーム不使用）
+- メッセージ型: Command / Response / Event の 3 トリプル
+- Phase 1 必須 commands: LoadSample / UnloadSample / PlayAt / Stop / SetGlobalGain / GetStatus / Ping
+- Phase 1 events: PlayStarted / PlayEnded / StreamStats / DaemonError
+- Phase 2 予約: Plugin / MIDI Event 型（定義のみ、実装は後続 Issue）
+- MCP との関係性を整理（将来のブリッジ方針を明記）
+
+**Changes**:
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` 新規作成（12 セクション）
+- `docs/core/INDEX.md` に新規ドキュメントへのリンク追加
+
+**非変更**:
+- 実装コード一切なし（100% 設計文書）
+- DSL / interpreter / musical timing 不変
+
+**次のステップ**:
+- Issue #107（orbit-audio-daemon binary 実装、本 protocol を実装）
+- Issue #108（TS rust-engine client、本 protocol のクライアント）
+
+---
+
 ### 6.56 Issue #106: Rust Cargo workspace split (Phase 1a) (April 17, 2026)
 
 **Date**: April 17, 2026
