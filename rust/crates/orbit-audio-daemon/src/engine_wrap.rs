@@ -1,0 +1,136 @@
+//! Engine + ロード済みサンプル / 再生管理の wrapper。
+//!
+//! PoC 簡略化のため `Arc<Mutex>` ベース。lock-free 化は Phase 1b-2 以降で検討。
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+use orbit_audio_core::{Engine, Sample};
+use orbit_audio_native::{
+    load_sample_resampled, start_default_output, LoaderError, OutputError, OutputStream,
+    ResampleError,
+};
+use uuid::Uuid;
+
+#[derive(Debug, thiserror::Error)]
+pub enum WrapError {
+    #[error("audio output init failed: {0}")]
+    Output(#[from] OutputError),
+    #[error("loader error: {0}")]
+    Loader(#[from] LoaderError),
+    #[error("resample error: {0}")]
+    Resample(#[from] ResampleError),
+    #[error("sample not found: {0}")]
+    SampleNotFound(String),
+}
+
+/// 共有可能なエンジン wrapper。
+///
+/// `cpal::Stream` は `!Send` のため、ここには持ち込まない。
+/// [`start`] が返す [`StreamGuard`] を main 側で alive に保つ責務。
+pub struct EngineWrap {
+    engine: Engine,
+    sample_rate: u32,
+    channels: u16,
+    samples: Mutex<HashMap<String, Sample>>,
+}
+
+/// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
+pub struct StreamGuard(#[allow(dead_code)] pub(crate) OutputStream);
+
+impl EngineWrap {
+    /// Engine とストリーム guard を起動する。
+    /// guard は caller（通常は main）が drop されるまで保持すること。
+    pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        let (engine, stream) = start_default_output()?;
+        let sample_rate = stream.sample_rate;
+        let channels = stream.channels;
+        let wrap = Arc::new(Self {
+            engine,
+            sample_rate,
+            channels,
+            samples: Mutex::new(HashMap::new()),
+        });
+        Ok((wrap, StreamGuard(stream)))
+    }
+
+    pub fn output_sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn output_channels(&self) -> u16 {
+        self.channels
+    }
+
+    /// ファイルをロードし sample_id を返す。
+    pub fn load_sample(&self, path: PathBuf) -> Result<LoadedSample, WrapError> {
+        let sample = load_sample_resampled(&path, self.sample_rate)?;
+        let id = format!("s-{}", short_uuid());
+        let info = LoadedSample {
+            sample_id: id.clone(),
+            frames: sample.frames(),
+            channels: sample.channels,
+            sample_rate: sample.sample_rate,
+        };
+        self.samples.lock().unwrap().insert(id, sample);
+        Ok(info)
+    }
+
+    pub fn unload_sample(&self, sample_id: &str) -> Result<(), WrapError> {
+        if self.samples.lock().unwrap().remove(sample_id).is_some() {
+            Ok(())
+        } else {
+            Err(WrapError::SampleNotFound(sample_id.to_string()))
+        }
+    }
+
+    /// sample を現在時刻 + offset でスケジュール。
+    ///
+    /// `time_sec` は daemon 起動からの経過秒（Engine transport 基準）。
+    pub fn play_at(
+        &self,
+        sample_id: &str,
+        time_sec: f64,
+        gain: f32,
+    ) -> Result<PlayHandle, WrapError> {
+        let sample = self
+            .samples
+            .lock()
+            .unwrap()
+            .get(sample_id)
+            .cloned()
+            .ok_or_else(|| WrapError::SampleNotFound(sample_id.to_string()))?;
+        self.engine
+            .schedule_with_gain(time_sec, gain, sample)
+            .map_err(|_| {
+                WrapError::Loader(LoaderError::Decode("scheduler poisoned".to_string()))
+            })?;
+        Ok(PlayHandle {
+            play_id: format!("p-{}", short_uuid()),
+        })
+    }
+
+    pub fn loaded_sample_count(&self) -> usize {
+        self.samples.lock().unwrap().len()
+    }
+
+    pub fn now_sec(&self) -> Option<f64> {
+        self.engine.now_sec()
+    }
+}
+
+pub struct LoadedSample {
+    pub sample_id: String,
+    pub frames: usize,
+    pub channels: u16,
+    pub sample_rate: u32,
+}
+
+pub struct PlayHandle {
+    pub play_id: String,
+}
+
+fn short_uuid() -> String {
+    Uuid::new_v4().simple().to_string()[..8].to_string()
+}

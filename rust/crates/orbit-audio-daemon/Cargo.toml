@@ -1,0 +1,25 @@
+[package]
+name = "orbit-audio-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Signal compose audio engine daemon exposing WebSocket IPC (protocol v0.1)"
+
+[[bin]]
+name = "orbit-audio-daemon"
+path = "src/main.rs"
+
+[dependencies]
+orbit-audio-core = { path = "../orbit-audio-core" }
+orbit-audio-native = { path = "../orbit-audio-native" }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

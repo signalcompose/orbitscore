@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.58 Issue #107: orbit-audio-daemon Phase 1b-1 (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE (Phase 1b-1 スコープ)
+**Branch**: `107-orbit-audio-daemon`
+**Issue**: #107（Epic #105 の Phase 1b-1）
+
+**Work Content**: IPC protocol v0.1 を実装する WebSocket daemon バイナリ `orbit-audio-daemon` を新設。Phase 1b-1 の範囲で Core commands を実装し、起動シーケンス（stdout ready line + stderr 失敗通知 + handshake frame）を protocol 仕様通りに整備。
+
+**実装 commands**:
+- `Ping` / `GetStatus`
+- `LoadSample` / `UnloadSample` / `PlayAt` / `Stop` / `SetGlobalGain`
+
+**Stack**:
+- `tokio` 1.x multi-thread runtime
+- `tokio-tungstenite` 0.24 WebSocket server
+- `serde` / `serde_json` でメッセージ型
+- `uuid` で sample_id / play_id 生成
+- `tracing` で構造化ログ (stderr に出力)
+
+**設計メモ**:
+- `cpal::Stream` は `!Send` のため、`EngineWrap` からは分離し `StreamGuard` として main 側で alive に保持
+- 1 接続 = 1 tokio task。Engine は `Arc<Mutex>` 共有
+- 起動失敗時は stderr に 1 行 JSON + 非ゼロ exit で通知
+
+**Changes**:
+- `rust/crates/orbit-audio-daemon/` 新規 crate（bin target）
+  - `src/main.rs`: tokio runtime + startup sequence
+  - `src/server.rs`: accept loop
+  - `src/session.rs`: 1 接続のメッセージディスパッチ
+  - `src/engine_wrap.rs`: Engine + sample 管理 (Mutex-based)
+  - `src/protocol.rs`: Command/Response/Event/Error 型
+  - `tests/smoke.rs`: daemon 起動と ready line 出力の smoke test
+- `rust/Cargo.toml`: workspace members に追加、tokio/serde/uuid/tracing を `[workspace.dependencies]` に集約
+- `rust/README.md`: crate 一覧と Quick start に daemon を追加
+
+**検証**:
+- `cargo check --workspace --all-targets` clean
+- `cargo clippy --workspace --all-targets -- -D warnings` clean
+- `cargo fmt --all --check` clean
+- `cargo test --workspace`: 18 passed (core 8 + native 9 + daemon smoke 1)
+
+**非対応**（Phase 1b-2 以降）:
+- Events (PlayStarted / PlayEnded / StreamStats / DaemonError) 発行
+- 個別 play の Stop 実装（現状は常に `not_found` 返却）
+- SetGlobalGain の実動作（accepted を返すが no-op）
+- lock-free ringbuf 化
+
+---
+
 ### 6.57 Issue #93: Engine Daemon IPC Protocol Design (Phase 1b 設計) (April 17, 2026)
 
 **Date**: April 17, 2026
