@@ -145,6 +145,57 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn empty_sample_does_not_panic() {
+        // フレーム数 0 の有効なサンプルが panic せず扱えること
+        let s = Sample::new(vec![], 44_100, 2);
+        let r = resample_to(s, 48_000).unwrap();
+        assert_eq!(r.sample_rate, 48_000);
+        assert_eq!(r.channels, 2);
+        // 出力はせいぜいリサンプラの delay 分（または 0）
+        assert!(
+            r.frames() < 2048,
+            "unexpected non-trivial frames: {}",
+            r.frames()
+        );
+    }
+
+    #[test]
+    fn mono_upsample_8000_to_48000_preserves_duration() {
+        // 1:6 という極端な比率で mono source を upsample
+        let in_frames = 8_000;
+        let data = vec![0.5f32; in_frames];
+        let s = Sample::new(data, 8_000, 1);
+        let r = resample_to(s, 48_000).unwrap();
+
+        assert_eq!(r.sample_rate, 48_000);
+        assert_eq!(r.channels, 1);
+        assert!((r.duration_secs() - 1.0).abs() < 0.01);
+        let diff = (r.frames() as i64 - 48_000).abs();
+        assert!(diff < 200, "frames {} far from 48000", r.frames());
+    }
+
+    #[test]
+    fn short_sample_smaller_than_chunk_frames() {
+        // CHUNK_FRAMES (1024) より短いサンプルが panic / 切り捨てなく扱えること
+        let in_frames = 100;
+        let data = vec![0.2f32; in_frames * 2];
+        let s = Sample::new(data, 44_100, 2);
+        let r = resample_to(s, 48_000).unwrap();
+
+        assert_eq!(r.sample_rate, 48_000);
+        assert_eq!(r.channels, 2);
+        // 期待フレーム数: 100 * 48000 / 44100 ≈ 109
+        let expected = (in_frames as f64 * 48_000.0 / 44_100.0) as i64;
+        let diff = (r.frames() as i64 - expected).abs();
+        assert!(
+            diff < 20,
+            "short sample frames {} far from {}",
+            r.frames(),
+            expected
+        );
+    }
+
     /// サイン波で信号品質を検証する。DC だけのテストでは
     /// FFT 処理が壊れていても通ってしまうため、周波数成分を持つ信号で
     /// RMS が概ね保たれることを確認する。

@@ -32,7 +32,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   - `ResampleError` (Init / Process / ZeroChannels)
 
 **API 追加**:
-- `rust/src/native/loader.rs`: `load_sample_at(path, target_sr)` を公開
+- `rust/src/native/loader.rs`: `load_sample_resampled(path, target_sr)` を公開
   - ソース SR と target_sr が一致する場合はコピーせずそのまま返す
   - 異なる場合のみ resampler を呼ぶ
 
@@ -47,7 +47,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - zero_channel_sample_returns_error — 不正入力の早期エラー
 
 **example 更新**:
-- `poc_play.rs` が `load_sample_at(path, stream.sample_rate)` を使用
+- `poc_play.rs` が `load_sample_resampled(path, stream.sample_rate)` を使用
 - 異なる SR の WAV を渡しても正しいピッチ・テンポで再生できる
 
 **ドキュメント**:
