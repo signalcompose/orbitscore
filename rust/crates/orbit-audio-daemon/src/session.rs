@@ -60,9 +60,11 @@ pub async fn run(
         let tx = tx.clone();
         let engine = engine.clone();
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(STREAM_STATS_INTERVAL);
+            // interval_at で最初の tick も 1 s 後に揃える。プロトコル仕様 (1 Hz 固定) に
+            // 則り、接続直後の即時イベントは送出しない。
+            let start = tokio::time::Instant::now() + STREAM_STATS_INTERVAL;
+            let mut ticker = tokio::time::interval_at(start, STREAM_STATS_INTERVAL);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            // 最初の tick は即時発火し、接続直後の baseline として送出する。
             let mut last_xruns: u64 = 0;
             loop {
                 ticker.tick().await;
