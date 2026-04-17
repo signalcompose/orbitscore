@@ -74,14 +74,17 @@ pub async fn run(
                     error: ProtocolError::new("MALFORMED_REQUEST", e.to_string()),
                 };
                 if tx.send(to_json_or_fallback(&err)).await.is_err() {
+                    warn!("MALFORMED_REQUEST reply send failed; closing session");
                     break;
                 }
                 continue;
             }
         };
 
+        let method = cmd.method.clone();
         let reply = handle_command(cmd, &engine, &tx).await;
         if tx.send(to_json_or_fallback(&reply)).await.is_err() {
+            warn!("reply send failed for method={method}; closing session");
             break;
         }
     }
