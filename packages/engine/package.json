@@ -2,6 +2,8 @@
   "name": "@orbitscore/engine",
   "version": "0.0.1",
   "type": "commonjs",
+  "author": "Signal compose Inc.",
+  "license": "SEE LICENSE IN ../../LICENSE",
   "main": "dist/index.js",
   "bin": {
     "orbitscore": "./dist/cli-audio.js"

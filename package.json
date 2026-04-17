@@ -32,8 +32,8 @@
     "supercollider",
     "performance"
   ],
-  "author": "Hiroshi Yamato / dropcontrol",
-  "license": "MIT",
+  "author": "Signal compose Inc.",
+  "license": "SEE LICENSE IN LICENSE",
   "description": "Audio-based live coding DSL for modern music production",
   "devDependencies": {
     "@types/node": "^22.0.0",

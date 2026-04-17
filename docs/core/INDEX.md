@@ -79,6 +79,11 @@
    - Priority-based roadmap
    - Technical enhancements
 
+4. **[RUST_ENGINE_MIGRATION_PLAN.md](../planning/RUST_ENGINE_MIGRATION_PLAN.md)** 🦀
+   - Rust サウンドエンジン移行計画
+   - Engine-as-a-Service アーキテクチャ
+   - VST3/CLAP プラグインホスティング、商用展開戦略
+
 ### Quick Links
 
 - **User Guide**: [../README.md](../README.md) - Start here for usage

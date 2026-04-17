@@ -354,9 +354,19 @@ npm run build
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file for details
+Signal compose Source-Available License v1.0 — see [LICENSE](LICENSE) for details.
 
-Copyright (c) 2025 Hiroshi Yamato / dropcontrol
+Summary:
+- **Base**: Apache License 2.0
+- **Commons Clause**: Reselling the Software as a competing product is not permitted.
+- **Fair Revenue Clause**: Organizations with annual revenue exceeding $250,000 USD require a commercial license when using the source code commercially.
+- **Academic Exception**: Students, faculty, and staff of accredited academic institutions may use the Software at no cost.
+
+Packaged binary products (Steam, App Store, Gumroad, etc.) are distributed under separate end-user license terms accompanying each product.
+
+Commercial licensing inquiries: license@signalcompose.com
+
+Copyright (c) 2026 Signal compose Inc.
 
 ## Contributing
 
