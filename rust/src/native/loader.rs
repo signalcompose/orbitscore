@@ -26,13 +26,10 @@ pub enum LoaderError {
     Resample(#[from] super::resampler::ResampleError),
 }
 
-/// 音声ファイルをロードして `target_sr` に合わせてリサンプリングする。
+/// 音声ファイルをロードし、`target_sr`（プロジェクト SR）へ自動で揃える。
 ///
 /// Pro Tools / Logic Pro 方式に倣い、再生時ではなくロード時に一度だけ
 /// 変換することで、再生時のリアルタイム処理を 1:1 マッピングに保つ。
-///
-/// SR が一致する場合は `resample_to` がコピーせずそのまま返すため、ここでは
-/// 追加のガードは置かない。
 pub fn load_sample_resampled(
     path: impl AsRef<Path>,
     target_sr: u32,

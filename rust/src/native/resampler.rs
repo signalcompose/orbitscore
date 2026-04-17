@@ -21,9 +21,11 @@ pub enum ResampleError {
     ZeroChannels,
 }
 
-/// チャンクサイズ (frames). オフライン処理なのでそこそこ大きめで可。
-/// rubato は内部でこのサイズ単位で FFT 処理する。
+/// FFT 処理のチャンクサイズ (frames)。
+/// rubato のドキュメントで音声用途の典型値として推奨されている 1024 サンプルを採用。
+/// 2 の冪であることが FFT 効率の前提。
 const CHUNK_FRAMES: usize = 1024;
+
 /// 遅延と品質のトレードオフ。2 は rubato のドキュメント推奨値。
 const SUB_CHUNKS: usize = 2;
 
