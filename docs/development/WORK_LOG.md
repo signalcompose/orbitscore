@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.52 Issue #89: Fix Dependabot vulnerabilities, excluding supercolliderjs-related (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `89-fix-dependabot-safe-vulns`
+**Issue**: #89
+
+**Work Content**: `npm audit fix`（非 `--force`）で安全に解消できる脆弱性を修正。SuperCollider 関連（`@supercollider/*`, `supercolliderjs` 配下の `js-yaml` 等）は将来的に Rust エンジンへ置換予定のため、意図的にスキップ。
+
+**結果**:
+- 修正前: 22 脆弱性（1 low, 11 moderate, 10 high）
+- 修正後: 10 脆弱性（すべて moderate）
+  - `js-yaml`（SC 経由、Rust 移行で解決予定）
+  - `esbuild`（vitest 経由、dev 依存のみ）
+- **High 深刻度 10 件すべて解消**
+- Low / 一部 Moderate も解消（brace-expansion, flatted, immutable, jws, lodash, minimatch, picomatch, qs, rollup, underscore, undici, yaml 等）
+
+**Changes**:
+- `package-lock.json` のみ更新（346 insertions, 295 deletions）
+- `package.json` は変更なし（宣言依存の breaking change は発生せず）
+
+**Tests**: 220 passed | 23 skipped（main 側と同数、リグレッションなし）
+
+**補足観察**:
+- 既存ドキュメント（CLAUDE.md, README.md, TESTING_GUIDE.md, IMPLEMENTATION_PLAN.md 等）の「225 passed」記述は現状と一致していない（実測値は 220 passed）。別 Issue で統一検討。
+
+---
+
 ### 6.51 Issue #87: Adopt Signal compose Fair Trade License (April 17, 2026)
 
 **Date**: April 17, 2026
