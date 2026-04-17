@@ -34,6 +34,12 @@ impl Sample {
     pub fn duration_secs(&self) -> f64 {
         self.frames() as f64 / self.sample_rate as f64
     }
+
+    /// インターリーブ PCM バッファへの読み取り専用スライス。
+    /// 外部で内部表現（`Arc<Vec<f32>>`）に依存せずデータを参照するためのアクセサ。
+    pub fn as_slice(&self) -> &[f32] {
+        &self.data
+    }
 }
 
 #[cfg(test)]

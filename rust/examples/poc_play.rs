@@ -11,7 +11,7 @@ use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
-use orbitscore_engine::native::{load_sample_from_file, start_default_output};
+use orbitscore_engine::native::{load_sample_resampled, start_default_output};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let paths: Vec<String> = env::args().skip(1).collect();
@@ -20,11 +20,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
 
+    // デバイス config に一致する Engine を自動構築
+    let (engine, stream) = start_default_output()?;
+    println!(
+        "output stream: sr={}, ch={}",
+        stream.sample_rate, stream.channels
+    );
+
+    // Project SR = 出力デバイスの SR。ソースが異なる場合は rubato でリサンプル。
     let samples = paths
         .iter()
         .map(|p| {
             println!("loading {p}");
-            load_sample_from_file(p)
+            load_sample_resampled(p, stream.sample_rate)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -37,13 +45,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             s.duration_secs()
         );
     }
-
-    // デバイス config に一致する Engine を自動構築
-    let (engine, stream) = start_default_output()?;
-    println!(
-        "output stream: sr={}, ch={}",
-        stream.sample_rate, stream.channels
-    );
 
     // 500ms 間隔で 10 回スケジュール（ラウンドロビン）
     for i in 0..10 {
