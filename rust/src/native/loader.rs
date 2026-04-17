@@ -86,13 +86,13 @@ pub fn load_sample_from_file(path: impl AsRef<Path>) -> Result<Sample, LoaderErr
             .decode(&packet)
             .map_err(|e| LoaderError::Decode(e.to_string()))?;
 
-        append_interleaved(&mut samples, decoded);
+        append_interleaved(&mut samples, decoded)?;
     }
 
     Ok(Sample::new(samples, sample_rate, channels))
 }
 
-fn append_interleaved(out: &mut Vec<f32>, buffer: AudioBufferRef) {
+fn append_interleaved(out: &mut Vec<f32>, buffer: AudioBufferRef) -> Result<(), LoaderError> {
     match buffer {
         AudioBufferRef::F32(buf) => {
             let frames = buf.frames();
@@ -103,12 +103,33 @@ fn append_interleaved(out: &mut Vec<f32>, buffer: AudioBufferRef) {
                 }
             }
         }
+        AudioBufferRef::F64(buf) => {
+            let frames = buf.frames();
+            let channels = buf.spec().channels.count();
+            for f in 0..frames {
+                for c in 0..channels {
+                    out.push(buf.chan(c)[f] as f32);
+                }
+            }
+        }
         AudioBufferRef::S16(buf) => {
             let frames = buf.frames();
             let channels = buf.spec().channels.count();
             for f in 0..frames {
                 for c in 0..channels {
                     out.push(buf.chan(c)[f] as f32 / i16::MAX as f32);
+                }
+            }
+        }
+        AudioBufferRef::S24(buf) => {
+            let frames = buf.frames();
+            let channels = buf.spec().channels.count();
+            // symphonia の i24 は 24bit 符号付整数を i32 にラップしている。
+            // 24bit のフルスケールは 2^23 - 1。
+            const S24_MAX: f32 = 8_388_607.0;
+            for f in 0..frames {
+                for c in 0..channels {
+                    out.push(buf.chan(c)[f].inner() as f32 / S24_MAX);
                 }
             }
         }
@@ -131,8 +152,24 @@ fn append_interleaved(out: &mut Vec<f32>, buffer: AudioBufferRef) {
                 }
             }
         }
-        _ => {
-            // 他のフォーマットは必要になったら追加する
+        AudioBufferRef::U16(buf) => {
+            let frames = buf.frames();
+            let channels = buf.spec().channels.count();
+            for f in 0..frames {
+                for c in 0..channels {
+                    let s = buf.chan(c)[f];
+                    out.push((s as f32 - 32768.0) / 32768.0);
+                }
+            }
+        }
+        other => {
+            // U24 / S8 / U32 など、未対応のサンプル型に出会った場合は黙って
+            // 捨てずに明示的にエラーにする（サイレントドロップはデバッグ困難なため）
+            return Err(LoaderError::Decode(format!(
+                "unsupported sample format: {:?}",
+                std::mem::discriminant(&other)
+            )));
         }
     }
+    Ok(())
 }

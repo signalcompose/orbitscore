@@ -71,35 +71,55 @@ fn build_stream(
                 None,
             )
             .map_err(|e| OutputError::BuildStream(e.to_string()))?,
-        SampleFormat::I16 => device
-            .build_output_stream(
-                config,
-                move |data: &mut [i16], _| {
-                    let mut buf = vec![0.0f32; data.len()];
-                    engine.render(&mut buf);
-                    for (i, s) in buf.iter().enumerate() {
-                        data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-                    }
-                },
-                err_fn,
-                None,
-            )
-            .map_err(|e| OutputError::BuildStream(e.to_string()))?,
-        SampleFormat::U16 => device
-            .build_output_stream(
-                config,
-                move |data: &mut [u16], _| {
-                    let mut buf = vec![0.0f32; data.len()];
-                    engine.render(&mut buf);
-                    for (i, s) in buf.iter().enumerate() {
-                        let v = (s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32;
-                        data[i] = v as u16;
-                    }
-                },
-                err_fn,
-                None,
-            )
-            .map_err(|e| OutputError::BuildStream(e.to_string()))?,
+        SampleFormat::I16 => {
+            // scratch はクロージャキャプチャ側で保持し、コールバック内で
+            // resize のみ行う。これにより realtime スレッドでのヒープ確保を避ける。
+            let mut scratch: Vec<f32> = Vec::new();
+            device
+                .build_output_stream(
+                    config,
+                    move |data: &mut [i16], _| {
+                        if scratch.len() < data.len() {
+                            scratch.resize(data.len(), 0.0);
+                        }
+                        let buf = &mut scratch[..data.len()];
+                        for x in buf.iter_mut() {
+                            *x = 0.0;
+                        }
+                        engine.render(buf);
+                        for (i, s) in buf.iter().enumerate() {
+                            data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| OutputError::BuildStream(e.to_string()))?
+        }
+        SampleFormat::U16 => {
+            let mut scratch: Vec<f32> = Vec::new();
+            device
+                .build_output_stream(
+                    config,
+                    move |data: &mut [u16], _| {
+                        if scratch.len() < data.len() {
+                            scratch.resize(data.len(), 0.0);
+                        }
+                        let buf = &mut scratch[..data.len()];
+                        for x in buf.iter_mut() {
+                            *x = 0.0;
+                        }
+                        engine.render(buf);
+                        for (i, s) in buf.iter().enumerate() {
+                            let v = (s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32;
+                            data[i] = v as u16;
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| OutputError::BuildStream(e.to_string()))?
+        }
         _ => return Err(OutputError::NoConfig),
     };
     Ok(stream)
