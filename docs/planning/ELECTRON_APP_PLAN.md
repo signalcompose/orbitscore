@@ -976,7 +976,7 @@ class StatusBar {
 ```yaml
 appId: com.orbitscore.app
 productName: OrbitScore
-copyright: Copyright © 2025
+copyright: Copyright © 2026 Signal compose Inc.
 
 directories:
   output: release
