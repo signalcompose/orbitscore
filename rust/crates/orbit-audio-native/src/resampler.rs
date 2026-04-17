@@ -7,7 +7,7 @@ use audioadapter_buffers::direct::InterleavedSlice;
 use rubato::{Fft, FixedSync, Resampler};
 use thiserror::Error;
 
-use crate::core::Sample;
+use orbit_audio_core::Sample;
 
 #[derive(Error, Debug)]
 pub enum ResampleError {

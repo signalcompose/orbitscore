@@ -1,0 +1,14 @@
+[package]
+name = "orbit-audio-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Signal compose の汎用 audio engine core (platform-agnostic)"
+
+[lib]
+name = "orbit_audio_core"
+
+[dependencies]
+thiserror = { workspace = true }

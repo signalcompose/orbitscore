@@ -1,49 +1,32 @@
-[package]
-name = "orbitscore-engine"
+[workspace]
+resolver = "2"
+members = [
+  "crates/orbit-audio-core",
+  "crates/orbit-audio-native",
+  "crates/orbit-audio-wasm",
+]
+
+[workspace.package]
 version = "0.0.1"
 edition = "2021"
 license = "LicenseRef-Signal-compose-FairTrade-1.0"
-description = "Rust implementation of the OrbitScore audio engine (PoC)"
 repository = "https://github.com/signalcompose/orbitscore"
 authors = ["Signal compose Inc."]
 
-[lib]
-name = "orbitscore_engine"
-path = "src/lib.rs"
-
-[features]
-default = ["native"]
-native = [
-  "dep:cpal",
-  "dep:symphonia",
-  "dep:rubato",
-  "dep:audioadapter-buffers",
-]
-wasm = ["dep:wasm-bindgen", "dep:web-sys", "dep:console_error_panic_hook"]
-
-[dependencies]
+[workspace.dependencies]
 thiserror = "2.0"
-
-cpal = { version = "0.15", optional = true }
-symphonia = { version = "0.5", features = ["wav", "mp3", "aac", "isomp4"], optional = true }
-rubato = { version = "2", optional = true }
-audioadapter-buffers = { version = "3", optional = true }
-
-wasm-bindgen = { version = "0.2", optional = true }
-web-sys = { version = "0.3", optional = true, features = [
+cpal = "0.15"
+symphonia = { version = "0.5", features = ["wav", "mp3", "aac", "isomp4"] }
+rubato = "2"
+audioadapter-buffers = "3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
   "AudioContext",
   "AudioWorklet",
   "AudioWorkletNode",
   "AudioWorkletProcessor",
 ] }
-console_error_panic_hook = { version = "0.1", optional = true }
-
-[dev-dependencies]
-hound = "3.5"
-
-[[example]]
-name = "poc_play"
-required-features = ["native"]
+console_error_panic_hook = "0.1"
 
 [profile.release]
 opt-level = 3

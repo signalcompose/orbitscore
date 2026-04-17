@@ -331,12 +331,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 
 [[package]]
-name = "hound"
-version = "3.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62adaabb884c94955b19907d60019f4e145d091c75345379e70d1ee696f7854f"
-
-[[package]]
 name = "indexmap"
 version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -599,16 +593,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "orbitscore-engine"
+name = "orbit-audio-core"
+version = "0.0.1"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "orbit-audio-native"
 version = "0.0.1"
 dependencies = [
  "audioadapter-buffers",
- "console_error_panic_hook",
  "cpal",
- "hound",
+ "orbit-audio-core",
  "rubato",
  "symphonia",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "orbit-audio-wasm"
+version = "0.0.1"
+dependencies = [
+ "console_error_panic_hook",
+ "orbit-audio-core",
  "wasm-bindgen",
  "web-sys",
 ]

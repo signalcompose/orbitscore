@@ -4,7 +4,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use thiserror::Error;
 
-use crate::core::Engine;
+use orbit_audio_core::Engine;
 
 #[derive(Error, Debug)]
 pub enum OutputError {
