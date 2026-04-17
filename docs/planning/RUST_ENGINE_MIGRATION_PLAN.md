@@ -272,19 +272,29 @@ Signal compose Source-Available License により:
 - ✅ Dependabot 警告の安全な修正（Phase 0）— PR #90 (2026-04-17)
 - ✅ Research Issue 群の作成（下記）
 - ✅ ライセンス切り替え（MIT → Signal compose Source-Available License v1.0）— PR #88
+- ✅ Rust audio engine PoC — PR #99 (Issue #91)
+- ✅ Sample rate conversion on load via rubato — PR #103 (Issue #100)
+- ✅ 3-layer architecture 方針確定 — [docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md](./AUDIO_ENGINE_CORE_ARCHITECTURE.md) (Epic #105)
 
 ### 進行中 / 次に取り組む
 
 - [ ] Issue #73: リリース自動化（エンドユーザー向け `.vsix` ワークフロー）
 
-### Research / Design Issues（Phase 1）
+### Research / Design Issues（Phase 1 以降）
 
-- [ ] Issue #91: [spike: Rust audio engine proof of concept](https://github.com/signalcompose/orbitscore/issues/91)
-- [ ] Issue #92: [research: time-stretch DSP library selection for Rust engine](https://github.com/signalcompose/orbitscore/issues/92)
-- [ ] Issue #93: [design: engine daemon IPC protocol (WebSocket + JSON-RPC)](https://github.com/signalcompose/orbitscore/issues/93)
-- [ ] Issue #94: [design: Tauri standalone application architecture](https://github.com/signalcompose/orbitscore/issues/94)
-- [ ] Issue #95: [research: VST3 and CLAP plugin hosting in Rust](https://github.com/signalcompose/orbitscore/issues/95)
-- [ ] Issue #96: [design: LLM agent integration architecture](https://github.com/signalcompose/orbitscore/issues/96)
+- [x] Issue #91: Rust audio engine proof of concept (PR #99 merged)
+- [ ] Issue #92: [research: time-stretch DSP library selection for Rust engine](https://github.com/signalcompose/orbitscore/issues/92) — Phase 2
+- [ ] Issue #93: [design: engine daemon IPC protocol (WebSocket + JSON-RPC)](https://github.com/signalcompose/orbitscore/issues/93) — Phase 1b
+- [ ] Issue #94: [design: Tauri standalone application architecture](https://github.com/signalcompose/orbitscore/issues/94) — Phase 3
+- [ ] Issue #95: [research: VST3 and CLAP plugin hosting in Rust](https://github.com/signalcompose/orbitscore/issues/95) — Phase 2
+- [ ] Issue #96: [design: LLM agent integration architecture](https://github.com/signalcompose/orbitscore/issues/96) — Phase 3
+
+### Phase 1a / 1b 実装 Issues（新規追加）
+
+- [ ] Issue [#105 (Epic)](https://github.com/signalcompose/orbitscore/issues/105) Audio Engine Core 3-layer architecture migration
+- [ ] Issue [#106](https://github.com/signalcompose/orbitscore/issues/106) feat(rust): Cargo workspace split for core/native/wasm separation — Phase 1a
+- [ ] Issue [#107](https://github.com/signalcompose/orbitscore/issues/107) feat(rust): orbit-audio-daemon binary with WebSocket IPC server — Phase 1b
+- [ ] Issue [#108](https://github.com/signalcompose/orbitscore/issues/108) feat(ts): rust-engine client replacing SuperCollider OSC path — Phase 1b
 
 ### 組織タスク
 

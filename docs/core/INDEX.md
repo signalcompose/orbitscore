@@ -84,6 +84,11 @@
    - Engine-as-a-Service アーキテクチャ
    - VST3/CLAP プラグインホスティング、商用展開戦略
 
+5. **[AUDIO_ENGINE_CORE_ARCHITECTURE.md](../planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md)** 🎚️
+   - 3 層分離アーキテクチャ（Core / Plugins / App）
+   - DSL → MIDI 変換戦略、responsibilities 境界
+   - Cargo workspace 構造、Plugin Host MIDI 契約
+
 ### Quick Links
 
 - **User Guide**: [../README.md](../README.md) - Start here for usage
