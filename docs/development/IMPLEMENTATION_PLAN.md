@@ -42,7 +42,7 @@ Implementation plan for the new audio-based OrbitScore DSL as defined in `INSTRU
 - **DAW Plugin**: VST/AU development (Phase A5)
 
 ### 📊 Testing Coverage
-- **Total Tests**: 225 passed, 23 skipped (248 total) = 90.7%
+- **Total Tests**: 220 passed, 23 skipped (243 total) = 90.5%
 - **Parser Tests**: 50/50
 - **Interpreter Tests**: 83/83
 - **DSL v3.0 Tests**: 56/56 (Unidirectional Toggle, Underscore Prefix, Gain/Pan)

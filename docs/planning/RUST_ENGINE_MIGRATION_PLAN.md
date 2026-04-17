@@ -56,7 +56,7 @@
 ```
 ・Rust エンジン本実装（デーモン構造）
 ・VS Code 拡張を「エンジンクライアント」として書き換え
-・既存テストスイート（225 tests）の移植
+・既存テストスイート（220 tests）の移植
 ・機能パリティ達成
   └─ WAV/AIFF/MP3/MP4 デコード (symphonia)
   └─ タイムストレッチ (SoundTouch 等)
@@ -265,18 +265,32 @@ Signal compose Source-Available License により:
 
 ---
 
-## 7. 次のアクション（即座）
+## 7. 次のアクション
 
-```
-□ Issue #73 (リリース自動化) 完遂
-□ Dependabot 警告の安全な修正（Phase 0）
-□ 本ドキュメントを基にした Research Issue 群の作成
-  - Issue: Rust engine PoC
-  - Issue: Tauri standalone design
-  - Issue: Plugin hosting architecture
-  - Issue: LLM agent integration
-□ チーム合意形成（Signal compose ミーティングで議論）
-```
+### 完了済み
+
+- ✅ Dependabot 警告の安全な修正（Phase 0）— PR #90 (2026-04-17)
+- ✅ Research Issue 群の作成（下記）
+- ✅ ライセンス切り替え（MIT → Signal compose Source-Available License v1.0）— PR #88
+
+### 進行中 / 次に取り組む
+
+- [ ] Issue #73: リリース自動化（エンドユーザー向け `.vsix` ワークフロー）
+
+### Research / Design Issues（Phase 1）
+
+- [ ] Issue #91: [spike: Rust audio engine proof of concept](https://github.com/signalcompose/orbitscore/issues/91)
+- [ ] Issue #92: [research: time-stretch DSP library selection for Rust engine](https://github.com/signalcompose/orbitscore/issues/92)
+- [ ] Issue #93: [design: engine daemon IPC protocol (WebSocket + JSON-RPC)](https://github.com/signalcompose/orbitscore/issues/93)
+- [ ] Issue #94: [design: Tauri standalone application architecture](https://github.com/signalcompose/orbitscore/issues/94)
+- [ ] Issue #95: [research: VST3 and CLAP plugin hosting in Rust](https://github.com/signalcompose/orbitscore/issues/95)
+- [ ] Issue #96: [design: LLM agent integration architecture](https://github.com/signalcompose/orbitscore/issues/96)
+
+### 組織タスク
+
+- [ ] チーム合意形成（Signal compose ミーティングで議論）
+- [ ] Rust + リアルタイム DSP 経験者の確保（採用 / 外部委託 / 自学）
+- [ ] `license@signalcompose.com` メールアドレスのセットアップ（Google Workspace エイリアス等）
 
 ---
 
