@@ -59,15 +59,51 @@ scheduler の `render` で、出力チャンネル数が入力（モノラル）
 
 WASM ビルドでは `cpal`, `symphonia` が不要。`dep:` プレフィックスで optional にすることで、`wasm` フィーチャだけ有効な時はこれらを引き込まないことを確認。実際の WASM ビルドは別 Issue（Phase 3）で検証。
 
+## Known Limitations（PoC スコープ外）
+
+### サンプリング周波数変換（SRC）未対応
+
+現状の scheduler はソース WAV と出力デバイスの SR が一致するときのみ正しく再生できる。異なる場合はピッチとテンポがずれる。
+
+| 条件 | 挙動 |
+|---|---|
+| 48kHz source + 48kHz output | ✅ 正しい（PoC が動いた条件） |
+| 44.1kHz source + 48kHz output | ❌ 約 8.8% 早く再生（半音弱ピッチアップ） |
+| 96kHz source + 48kHz output | ❌ 倍速再生（1 オクターブアップ） |
+
+対応 Issue: [#100 sample rate conversion on sample load](https://github.com/signalcompose/orbitscore/issues/100)
+
+### 業界 DAW の SRC ハンドリング（調査結果）
+
+| DAW | タイミング | 備考 |
+|---|---|---|
+| Pro Tools | **オフライン（インポート時）** | 最高品質、"conversion quality" オプション |
+| Logic Pro | オフライン（設定による） | インポート時変換 |
+| Ableton Live | リアルタイム再生時 | **SoX Resampler library** を採用 |
+| Reaper | リアルタイム再生時 | 異なる SR の混在に柔軟 |
+| Bitwig Studio | リアルタイム再生時 | - |
+
+業界共通の**ベストプラクティス**は「プロジェクト SR を固定し、素材は事前変換」。
+
+### OrbitScore の選択: Pro Tools / Logic Pro 方式
+
+ライブコーディング用途では:
+- サンプルは事前ロード（ストリーミングではない）
+- 低レイテンシ最重要
+- 繰り返し再生
+
+→ **ロード時に `rubato` (MIT) で Project SR に変換**するのが、品質・レイテンシ・実装容易性のバランスが最良。
+
 ## 次の検討事項
 
 本 PoC のスコープ外、次に詰めるべき論点:
 
-1. **タイムストレッチ DSP**（Issue #92）— SoundTouch vs Rubato vs 独自実装
-2. **ポリリズム / ポリメーター表現**（scheduler の時間軸抽象化）
-3. **DSL パーサの統合**（現行 TS エンジンの `interpreter` 部分を Rust に移植する経路）
-4. **リアルタイム性**（現在は `Mutex` で単純同期、ロックフリー化を検討）
-5. **IPC プロトコル**（Issue #93）— Node 側フロントエンドとの通信設計
+1. **サンプリング周波数変換**（Issue #100）— `rubato` によるロード時 SRC
+2. **タイムストレッチ DSP**（Issue #92）— SoundTouch vs Rubato vs 独自実装
+3. **ポリリズム / ポリメーター表現**（scheduler の時間軸抽象化）
+4. **DSL パーサの統合**（現行 TS エンジンの `interpreter` 部分を Rust に移植する経路）
+5. **リアルタイム性**（現在は `Mutex` で単純同期、ロックフリー化を検討）
+6. **IPC プロトコル**（Issue #93）— Node 側フロントエンドとの通信設計
 
 ## 結論
 

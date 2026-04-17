@@ -38,6 +38,16 @@ cargo run --example poc_play
 cargo build --no-default-features --features wasm --target wasm32-unknown-unknown
 ```
 
+## Known Limitations (PoC)
+
+- **サンプリング周波数変換 (SRC) なし** — ソース WAV と出力デバイスの SR が
+  一致するときのみ正しく再生される。異なる場合はピッチ・テンポがずれる。
+  対応 Issue: [#100](https://github.com/signalcompose/orbitscore/issues/100)
+- **タイムストレッチなし** — Phase 2 で `rubato` or SoundTouch 等を検討
+  (Issue [#92](https://github.com/signalcompose/orbitscore/issues/92))
+- **`Mutex` ベースの同期** — PoC の簡略化。本実装ではロックフリー化を検討
+- **WASM 未検証** — feature flag とスタブのみ。実機 wasm ビルドは未実施
+
 ## Design principles
 
 - **Platform-agnostic core**: `core` モジュールは `std` に留め、`cpal` 等を直接使わない
