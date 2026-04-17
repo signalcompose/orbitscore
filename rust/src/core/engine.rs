@@ -49,18 +49,23 @@ impl Engine {
     }
 
     /// オーディオコールバックから呼び出される。`out` は interleaved f32。
+    ///
+    /// リアルタイムスレッドで呼ばれるため `try_lock` を用い、ロック競合時は
+    /// 無音（silent drop）を返してコールバックを即時完了させる。将来的には
+    /// lock-free ringbuffer に置き換える余地あり（Phase 2）。
     pub fn render(&self, out: &mut [f32]) {
-        if let Ok(mut s) = self.inner.lock() {
-            s.render(out);
-        } else {
-            for x in out.iter_mut() {
-                *x = 0.0;
+        match self.inner.try_lock() {
+            Ok(mut s) => s.render(out),
+            Err(_) => {
+                for x in out.iter_mut() {
+                    *x = 0.0;
+                }
             }
         }
     }
 
     /// 現在の出力ストリーム時刻（秒）
     pub fn now_sec(&self) -> f64 {
-        self.inner.lock().map(|s| s.now_sec()).unwrap_or(0.0)
+        self.inner.try_lock().map(|s| s.now_sec()).unwrap_or(0.0)
     }
 }

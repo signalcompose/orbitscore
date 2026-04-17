@@ -74,6 +74,7 @@ fn build_stream(
         SampleFormat::I16 => {
             // scratch はクロージャキャプチャ側で保持し、コールバック内で
             // resize のみ行う。これにより realtime スレッドでのヒープ確保を避ける。
+            // バッファのゼロクリアは engine.render() 内の Scheduler::render で行うため省略。
             let mut scratch: Vec<f32> = Vec::new();
             device
                 .build_output_stream(
@@ -83,9 +84,6 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        for x in buf.iter_mut() {
-                            *x = 0.0;
-                        }
                         engine.render(buf);
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
@@ -106,9 +104,6 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        for x in buf.iter_mut() {
-                            *x = 0.0;
-                        }
                         engine.render(buf);
                         for (i, s) in buf.iter().enumerate() {
                             let v = (s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32;

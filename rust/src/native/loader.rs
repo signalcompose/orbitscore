@@ -63,11 +63,17 @@ pub fn load_sample_from_file(path: impl AsRef<Path>) -> Result<Sample, LoaderErr
         .ok_or(LoaderError::Unsupported)?
         .count() as u16;
 
+    let capacity = track
+        .codec_params
+        .n_frames
+        .map(|f| f as usize * channels as usize)
+        .unwrap_or(0);
+
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
         .map_err(|e| LoaderError::Decode(e.to_string()))?;
 
-    let mut samples: Vec<f32> = Vec::new();
+    let mut samples: Vec<f32> = Vec::with_capacity(capacity);
 
     loop {
         let packet = match format.next_packet() {
@@ -92,79 +98,40 @@ pub fn load_sample_from_file(path: impl AsRef<Path>) -> Result<Sample, LoaderErr
     Ok(Sample::new(samples, sample_rate, channels))
 }
 
+/// 各 `AudioBuffer<T>` のフレームループ本体を展開するマクロ。
+/// 変換式 `$conv` が `T -> f32` の意味を持ち、それ以外はすべて共通。
+macro_rules! push_frames {
+    ($out:expr, $buf:expr, $conv:expr) => {{
+        let frames = $buf.frames();
+        let channels = $buf.spec().channels.count();
+        for f in 0..frames {
+            for c in 0..channels {
+                $out.push($conv($buf.chan(c)[f]));
+            }
+        }
+    }};
+}
+
 fn append_interleaved(out: &mut Vec<f32>, buffer: AudioBufferRef) -> Result<(), LoaderError> {
+    // 24-bit 符号付整数のフルスケール (2^23 - 1)
+    const S24_MAX: f32 = 8_388_607.0;
+
     match buffer {
-        AudioBufferRef::F32(buf) => {
-            let frames = buf.frames();
-            let channels = buf.spec().channels.count();
-            for f in 0..frames {
-                for c in 0..channels {
-                    out.push(buf.chan(c)[f]);
-                }
-            }
-        }
-        AudioBufferRef::F64(buf) => {
-            let frames = buf.frames();
-            let channels = buf.spec().channels.count();
-            for f in 0..frames {
-                for c in 0..channels {
-                    out.push(buf.chan(c)[f] as f32);
-                }
-            }
-        }
-        AudioBufferRef::S16(buf) => {
-            let frames = buf.frames();
-            let channels = buf.spec().channels.count();
-            for f in 0..frames {
-                for c in 0..channels {
-                    out.push(buf.chan(c)[f] as f32 / i16::MAX as f32);
-                }
-            }
-        }
+        AudioBufferRef::F32(buf) => push_frames!(out, buf, |s: f32| s),
+        AudioBufferRef::F64(buf) => push_frames!(out, buf, |s: f64| s as f32),
+        AudioBufferRef::S16(buf) => push_frames!(out, buf, |s: i16| s as f32 / i16::MAX as f32),
         AudioBufferRef::S24(buf) => {
-            let frames = buf.frames();
-            let channels = buf.spec().channels.count();
-            // symphonia の i24 は 24bit 符号付整数を i32 にラップしている。
-            // 24bit のフルスケールは 2^23 - 1。
-            const S24_MAX: f32 = 8_388_607.0;
-            for f in 0..frames {
-                for c in 0..channels {
-                    out.push(buf.chan(c)[f].inner() as f32 / S24_MAX);
-                }
-            }
+            push_frames!(out, buf, |s: symphonia::core::sample::i24| {
+                s.inner() as f32 / S24_MAX
+            })
         }
-        AudioBufferRef::S32(buf) => {
-            let frames = buf.frames();
-            let channels = buf.spec().channels.count();
-            for f in 0..frames {
-                for c in 0..channels {
-                    out.push(buf.chan(c)[f] as f32 / i32::MAX as f32);
-                }
-            }
-        }
-        AudioBufferRef::U8(buf) => {
-            let frames = buf.frames();
-            let channels = buf.spec().channels.count();
-            for f in 0..frames {
-                for c in 0..channels {
-                    let s = buf.chan(c)[f];
-                    out.push((s as f32 - 128.0) / 128.0);
-                }
-            }
-        }
+        AudioBufferRef::S32(buf) => push_frames!(out, buf, |s: i32| s as f32 / i32::MAX as f32),
+        AudioBufferRef::U8(buf) => push_frames!(out, buf, |s: u8| (s as f32 - 128.0) / 128.0),
         AudioBufferRef::U16(buf) => {
-            let frames = buf.frames();
-            let channels = buf.spec().channels.count();
-            for f in 0..frames {
-                for c in 0..channels {
-                    let s = buf.chan(c)[f];
-                    out.push((s as f32 - 32768.0) / 32768.0);
-                }
-            }
+            push_frames!(out, buf, |s: u16| (s as f32 - 32768.0) / 32768.0)
         }
         other => {
-            // U24 / S8 / U32 など、未対応のサンプル型に出会った場合は黙って
-            // 捨てずに明示的にエラーにする（サイレントドロップはデバッグ困難なため）
+            // U24 / S8 / U32 など、未対応のサンプル型は黙って捨てずに明示エラー。
             return Err(LoaderError::Decode(format!(
                 "unsupported sample format: {:?}",
                 std::mem::discriminant(&other)

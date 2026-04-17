@@ -33,8 +33,8 @@ impl ScheduledSample {
 /// オーディオコールバック内で使うことを想定し、allocation 無しで
 /// フレーム単位のサンプルを取り出せるよう設計している。
 pub struct Scheduler {
-    pub output_sample_rate: u32,
-    pub output_channels: u16,
+    pub(crate) output_sample_rate: u32,
+    pub(crate) output_channels: u16,
     events: Vec<ActiveSample>,
     /// 出力ストリーム上の現在位置（サンプルフレーム単位）
     cursor_frames: u64,
@@ -122,9 +122,9 @@ impl Scheduler {
         }
 
         self.cursor_frames += frames_to_render as u64;
-        // 再生完了したものをドロップ
-        self.events
-            .retain(|a| a.read_pos < a.sample.frames() || a.start_frame > self.cursor_frames);
+        // 再生完了したもの（= すべてのフレームを読み終えたもの）をドロップ。
+        // まだ開始時刻に到達していないイベントは read_pos == 0 のため自然に保持される。
+        self.events.retain(|a| a.read_pos < a.sample.frames());
     }
 
     /// 現在の出力ストリーム時刻（秒）
