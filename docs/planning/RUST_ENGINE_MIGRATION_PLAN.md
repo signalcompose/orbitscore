@@ -171,7 +171,7 @@ OrbitScore が SC に依存している機能は**限定的**:
 
 | 用途 | Rust crate | 備考 |
 |---|---|---|
-| VST3 ホスト | `vst3-sys`, `vst3-host` | VST3 SDK バインディング |
+| VST3 ホスト | `vst3-sys`, `nih-plug` | `vst3-sys`: 低レベルバインディング、`nih-plug`: 高レベルホスト/プラグインフレームワーク |
 | CLAP ホスト | `clack-host` | CLAP は Rust 親和性が高い |
 | LV2 ホスト | `lv2-host` (Linux 中心) | Linux ユーザー向け |
 | オーディオ I/O | `cpal` | クロスプラットフォーム |
