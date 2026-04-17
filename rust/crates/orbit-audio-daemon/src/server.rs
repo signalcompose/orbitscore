@@ -22,12 +22,40 @@ pub async fn bind_localhost() -> std::io::Result<BoundServer> {
 }
 
 /// accept loop。各接続ごとに新タスクを spawn し、[`session::run`] で処理する。
+///
+/// accept エラーはすべて永続化し得るため、短い backoff を挟んで tight spin を防ぐ。
 pub async fn serve(listener: TcpListener, engine: Arc<EngineWrap>) {
+    use std::io::ErrorKind;
+    use tokio::time::{sleep, Duration};
+
+    let mut consecutive_errors: u32 = 0;
     loop {
         let (stream, peer) = match listener.accept().await {
-            Ok(s) => s,
+            Ok(s) => {
+                consecutive_errors = 0;
+                s
+            }
             Err(e) => {
-                warn!("accept error: {e}");
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                match e.kind() {
+                    // リソース枯渇系: 長めに待って諦め条件も設定
+                    ErrorKind::OutOfMemory => {
+                        tracing::error!("accept fatal (out of memory): {e}, exiting");
+                        return;
+                    }
+                    _ => {
+                        warn!("accept error: {e} (consecutive={consecutive_errors})");
+                    }
+                }
+                if consecutive_errors >= 20 {
+                    tracing::error!(
+                        "accept error persists for {} attempts, exiting",
+                        consecutive_errors
+                    );
+                    return;
+                }
+                // Tight spin 防止: 100ms backoff
+                sleep(Duration::from_millis(100)).await;
                 continue;
             }
         };

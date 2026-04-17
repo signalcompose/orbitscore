@@ -65,6 +65,9 @@ impl EngineWrap {
         self.started_at.elapsed().as_secs_f64()
     }
 
+    /// 現在は daemon 起動からの累積 `PlayAt` 回数を返す。
+    /// Phase 1b-1 時点では Stop / 再生完了イベントが未実装のため、
+    /// 減算は行わず単調増加する（Phase 1b-2 で実時間の active 数に移行予定）。
     pub fn active_play_count(&self) -> usize {
         self.active_play_count
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -88,12 +91,12 @@ impl EngineWrap {
             channels: sample.channels,
             sample_rate: sample.sample_rate,
         };
-        self.samples.lock().unwrap().insert(id, sample);
+        self.lock_samples()?.insert(id, sample);
         Ok(info)
     }
 
     pub fn unload_sample(&self, sample_id: &str) -> Result<(), WrapError> {
-        if self.samples.lock().unwrap().remove(sample_id).is_some() {
+        if self.lock_samples()?.remove(sample_id).is_some() {
             Ok(())
         } else {
             Err(WrapError::SampleNotFound(sample_id.to_string()))
@@ -110,9 +113,7 @@ impl EngineWrap {
         gain: f32,
     ) -> Result<PlayHandle, WrapError> {
         let sample = self
-            .samples
-            .lock()
-            .unwrap()
+            .lock_samples()?
             .get(sample_id)
             .cloned()
             .ok_or_else(|| WrapError::SampleNotFound(sample_id.to_string()))?;
@@ -126,13 +127,28 @@ impl EngineWrap {
         })
     }
 
+    /// 読み取り専用カウンタ。Phase 1b-2 で Stop 実装後に poisoned 検出もしたいため
+    /// 現状は Result ではなく fallback（poisoned 時は 0 を返す）で返却する。
     pub fn loaded_sample_count(&self) -> usize {
-        self.samples.lock().unwrap().len()
+        match self.samples.lock() {
+            Ok(guard) => guard.len(),
+            Err(_) => 0,
+        }
     }
 
     #[allow(dead_code)]
     pub fn now_sec(&self) -> Option<f64> {
         self.engine.now_sec()
+    }
+
+    /// `samples` Mutex を poisoned-safe に取得する。
+    /// poisoned 時は `WrapError::Scheduler` に変換して呼び出し側に明示的に通知する。
+    fn lock_samples(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, HashMap<String, Sample>>, WrapError> {
+        self.samples
+            .lock()
+            .map_err(|_| WrapError::Scheduler("samples mutex poisoned".to_string()))
     }
 }
 
