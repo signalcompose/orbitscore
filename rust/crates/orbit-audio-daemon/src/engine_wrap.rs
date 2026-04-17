@@ -127,7 +127,6 @@ impl EngineWrap {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(PlayHandle {
             play_id: format!("p-{}", short_uuid()),
-            sample_id: sample_id.to_string(),
             start_sec: time_sec,
             duration_sec,
         })
@@ -167,7 +166,6 @@ pub struct LoadedSample {
 
 pub struct PlayHandle {
     pub play_id: String,
-    pub sample_id: String,
     pub start_sec: f64,
     pub duration_sec: f64,
 }

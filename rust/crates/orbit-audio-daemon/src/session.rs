@@ -22,6 +22,9 @@ use crate::protocol::{Command, ErrorResponse, Event, Handshake, OkResponse, Prot
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
 const EVENT_CHANNEL_CAPACITY: usize = 128;
 
+const EVENT_PLAY_STARTED: &str = "PlayStarted";
+const EVENT_PLAY_ENDED: &str = "PlayEnded";
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -34,17 +37,14 @@ pub async fn run(
         .send(Message::Text(to_json_or_fallback(&Handshake::current())))
         .await?;
 
-    // writer task: mpsc から受けた message を書き出す
     let writer_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if write.send(Message::Text(msg)).await.is_err() {
                 break;
             }
         }
-        // remaining drain (close handshake 等) は tungstenite 側で行われる
     });
 
-    // reader task: WebSocket 受信 → command → tx へ送る
     while let Some(msg) = read.next().await {
         let msg = match msg {
             Ok(m) => m,
@@ -85,7 +85,7 @@ pub async fn run(
         }
     }
 
-    // tx を drop して writer が exit
+    // drop で channel を閉じると writer は rx.recv() の None で exit する
     drop(tx);
     let _ = writer_task.await;
     Ok(())
@@ -191,18 +191,7 @@ async fn handle_command(
             match params.get("sample_id").and_then(|v| v.as_str()) {
                 Some(sid) => match engine.play_at(sid, time_sec, gain) {
                     Ok(handle) => {
-                        // PlayStarted event を即時送信
-                        let started_evt = Event::new(
-                            "PlayStarted",
-                            json!({
-                                "play_id": handle.play_id,
-                                "sample_id": handle.sample_id,
-                                "time_sec": handle.start_sec,
-                            }),
-                        );
-                        let _ = tx.send(to_json_or_fallback(&started_evt)).await;
-
-                        // PlayEnded event をサンプル長 + 起動時刻からの経過で遅延送信
+                        // 遅延タスクを先に spawn して await コストを避ける
                         schedule_play_ended(
                             tx.clone(),
                             engine.clone(),
@@ -210,6 +199,16 @@ async fn handle_command(
                             handle.start_sec,
                             handle.duration_sec,
                         );
+
+                        let started_evt = Event::new(
+                            EVENT_PLAY_STARTED,
+                            json!({
+                                "play_id": handle.play_id,
+                                "sample_id": sid,
+                                "time_sec": handle.start_sec,
+                            }),
+                        );
+                        let _ = tx.send(to_json_or_fallback(&started_evt)).await;
 
                         ok(&id, json!({"play_id": handle.play_id}))
                     }
@@ -264,7 +263,7 @@ fn schedule_play_ended(
         }
         let ended_at_sec = start_sec + duration_sec;
         let evt = Event::new(
-            "PlayEnded",
+            EVENT_PLAY_ENDED,
             json!({
                 "play_id": play_id,
                 "ended_at_sec": ended_at_sec,
