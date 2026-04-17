@@ -1,21 +1,94 @@
-MIT License
+Signal compose Source-Available License v1.0
 
-Copyright (c) 2025 Hiroshi Yamato / dropcontrol
+Copyright (c) 2026 Signal compose Inc.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+================================================================================
+WHY THIS LICENSE
+================================================================================
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This license exists to:
+- Enable free use for individuals, startups, and small businesses
+- Ensure sustainable development through fair contributions from successful companies
+- Protect the software from being resold as a competing product
+- Support education by providing free access for students and academic institutions
+
+We want to support developers, not restrict them.
+
+================================================================================
+BASE LICENSE
+================================================================================
+
+This software is licensed under the Apache License, Version 2.0 (the "Base
+License"), with the additional conditions below.
+
+You may obtain a copy of the Apache License at:
+https://www.apache.org/licenses/LICENSE-2.0
+
+All rights granted under the Apache License 2.0 (use, copy, modify, distribute)
+remain in effect, subject to the following additional conditions.
+
+================================================================================
+COMMONS CLAUSE (v1.0)
+================================================================================
+
+The grant of rights under this License does not include the right to Sell the
+Software.
+
+"Sell" means providing the Software to third parties for a fee or other
+consideration, where the value derives entirely or substantially from the
+Software's functionality. This includes hosting or consulting services whose
+primary value is the Software itself.
+
+Internal use within your organization is always permitted.
+
+================================================================================
+FAIR REVENUE CLAUSE
+================================================================================
+
+Organizations (individuals, teams, or companies) with annual revenue exceeding
+$250,000 USD are required to obtain a commercial license when they:
+
+- Use the source code to build or operate a product or service, or
+- Distribute derivative works based on this source code, or
+- Otherwise exercise the rights granted by this license in a commercial context.
+
+This is not about restricting use—it's about ensuring that successful
+organizations contribute fairly to the ongoing development of this software.
+
+Grace period: 90 days from exceeding the threshold.
+Contact: license@signalcompose.com
+
+Commercial license options:
+- Perpetual buyout: Contact for pricing (one-time purchase for the current
+  major version; major version upgrades may require a separate upgrade fee).
+
+Note on packaged software:
+This license applies to the SOURCE CODE of this project. Packaged, compiled,
+or distributed binary products (such as those sold on Steam, the App Store,
+Gumroad, or similar storefronts) are distributed under separate end-user
+license terms accompanying each product. Purchasing a packaged product does
+not grant you any rights to the source code beyond those granted by this
+license.
+
+================================================================================
+ACADEMIC EXCEPTION
+================================================================================
+
+Students, faculty, and staff of accredited academic institutions may use this
+Software at no cost, regardless of the annual revenue threshold described in
+the Fair Revenue Clause.
+
+This exception applies to personal projects, coursework, and academic
+research, and is intended to foster learning and academic collaboration.
+Commercial products developed from such use fall under the standard terms of
+this license.
+
+================================================================================
+DISCLAIMER
+================================================================================
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+IMPLIED. See the Apache License 2.0 for the full disclaimer and limitation of
+liability terms.
+
+================================================================================

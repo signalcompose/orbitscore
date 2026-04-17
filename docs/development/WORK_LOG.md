@@ -17,6 +17,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.51 Issue #87: Adopt Signal compose Fair Trade License (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `87-adopt-fair-trade-license`
+**Issue**: #87
+
+**Work Content**: ソースコードのライセンスを MIT から Signal compose Source-Available License v1.0 へ切り替え。将来の商用展開（Steam / App Store 販売）戦略に合わせた Fair Trade 型ライセンスを採用。
+
+**採用条項**:
+- Apache License 2.0 をベースに
+- Commons Clause（他者による再販制限）
+- Fair Revenue Clause（年商 $250K 超は要商用ライセンス、買い切りモデル、料金は問い合わせベース）
+- Academic Exception（学生・教職員は常に無償）
+
+**Changes**:
+- `LICENSE` を MIT から Signal compose Source-Available License v1.0 へ書き換え
+- `package.json` の `license` を `"SEE LICENSE IN LICENSE"` に更新、`author` を `Signal compose Inc.` に変更
+- `README.md` のライセンスセクションを新規ライセンスに合わせて更新（条項サマリー、連絡先、パッケージ製品との区別を明記）
+- `.claude/license.local.md` に連絡先メール（license@signalcompose.com）を保存
+- `docs/planning/RUST_ENGINE_MIGRATION_PLAN.md` を新規作成（Rust サウンドエンジン移行計画と戦略ロードマップ）
+- `docs/core/INDEX.md` に新規プラン文書へのリンクを追加
+
+**重要な区別**:
+- ソースコード: Signal compose Source-Available License v1.0
+- 完成ソフトウェア（Steam / App Store / Gumroad 販売）: 別途 EULA で配布
+
+**連絡先**: license@signalcompose.com（メールアドレスのセットアップは別途対応予定）
+
+---
+
 ### 6.50 Issue #85: Fix audio relative path resolution (February 27, 2026)
 
 **Date**: February 27, 2026
