@@ -148,6 +148,13 @@ impl EngineWrap {
         self.engine.now_sec().unwrap_or_else(|| self.uptime_sec())
     }
 
+    /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時。
+    pub fn set_global_gain(&self, value: f32, ramp_sec: f64) -> Result<(), WrapError> {
+        self.engine
+            .set_global_gain(value, ramp_sec)
+            .map_err(|e| WrapError::Scheduler(e.to_string()))
+    }
+
     /// audio stream の稼働統計スナップショット（StreamStats event 用）。
     pub fn stream_stats_snapshot(&self) -> StreamStatsSnapshot {
         self.stream_stats.snapshot()

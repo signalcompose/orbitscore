@@ -305,15 +305,27 @@ async fn handle_command(
             ok(&id, json!({"play_id": pid, "status": "not_found"}))
         }
         "SetGlobalGain" => {
-            // 現状 Engine は global gain を持たないため、受理するが no-op (Phase 1b-2 で実装)。
             let value = params.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            let ramp_sec = params
+                .get("ramp_sec")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
             if value < 0.0 {
                 return err(
                     &id,
                     ProtocolError::new("PARAM_OUT_OF_RANGE", "value must be >= 0"),
                 );
             }
-            ok(&id, json!({"status": "accepted"}))
+            if ramp_sec < 0.0 {
+                return err(
+                    &id,
+                    ProtocolError::new("PARAM_OUT_OF_RANGE", "ramp_sec must be >= 0"),
+                );
+            }
+            match engine.set_global_gain(value as f32, ramp_sec) {
+                Ok(()) => ok(&id, json!({"status": "accepted"})),
+                Err(e) => err(&id, wrap_err_to_protocol(&e)),
+            }
         }
         other => err(
             &id,

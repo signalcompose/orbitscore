@@ -57,6 +57,22 @@ impl Engine {
         Ok(())
     }
 
+    /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時、正なら線形ランプ。
+    ///
+    /// 正の `ramp_sec` がサブフレーム相当（例: 1/sample_rate 未満）でも、
+    /// 呼び出し側の「ランプ要求」意図を尊重して最小 1 フレームのランプとして扱う。
+    /// これにより、意図せず即時切替にフォールバックして pop ノイズが乗ることを防ぐ。
+    pub fn set_global_gain(&self, value: f32, ramp_sec: f64) -> Result<(), EngineError> {
+        let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
+        let ramp_frames = if ramp_sec > 0.0 {
+            ((ramp_sec * s.output_sample_rate() as f64).round() as u64).max(1)
+        } else {
+            0
+        };
+        s.set_global_gain(value, ramp_frames);
+        Ok(())
+    }
+
     /// オーディオコールバックから呼び出される。`out` は interleaved f32。
     ///
     /// リアルタイムスレッドで呼ばれるため `try_lock` を用い、ロック競合時は
