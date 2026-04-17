@@ -62,10 +62,14 @@ fn build_stream(
     engine: Engine,
 ) -> Result<Stream, OutputError> {
     let err_fn = |err| eprintln!("stream error: {err}");
-    // scratch バッファを事前に 1 秒分確保。
-    // cpal の callback buffer_size は通常数百フレームなので十分余裕がある。
-    // これによりリアルタイムコールバック初回でのヒープ確保を回避する。
-    let scratch_cap = (config.sample_rate.0 as usize) * (config.channels as usize);
+
+    /// scratch バッファを事前に 1 秒分確保してクロージャにムーブするヘルパー。
+    /// cpal のコールバック buffer_size は通常数百フレームなので十分余裕がある。
+    /// リアルタイムコールバック初回でのヒープ確保を回避する。
+    fn scratch_with_capacity(config: &StreamConfig) -> Vec<f32> {
+        vec![0.0; (config.sample_rate.0 as usize) * (config.channels as usize)]
+    }
+
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
@@ -76,10 +80,8 @@ fn build_stream(
             )
             .map_err(|e| OutputError::BuildStream(e.to_string()))?,
         SampleFormat::I16 => {
-            // scratch はクロージャキャプチャ側で保持し、事前に 1 秒分確保する。
-            // コールバック内は resize のみで realloc が発生しない想定。
             // バッファのゼロクリアは engine.render() 内の Scheduler::render で行うため省略。
-            let mut scratch: Vec<f32> = vec![0.0; scratch_cap];
+            let mut scratch = scratch_with_capacity(config);
             device
                 .build_output_stream(
                     config,
@@ -98,8 +100,29 @@ fn build_stream(
                 )
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?
         }
+        SampleFormat::I32 => {
+            // 一部の Linux (ALSA) 環境で出力デフォルトになるため対応。
+            let mut scratch = scratch_with_capacity(config);
+            device
+                .build_output_stream(
+                    config,
+                    move |data: &mut [i32], _| {
+                        if scratch.len() < data.len() {
+                            scratch.resize(data.len(), 0.0);
+                        }
+                        let buf = &mut scratch[..data.len()];
+                        engine.render(buf);
+                        for (i, s) in buf.iter().enumerate() {
+                            data[i] = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
+                        }
+                    },
+                    err_fn,
+                    None,
+                )
+                .map_err(|e| OutputError::BuildStream(e.to_string()))?
+        }
         SampleFormat::U16 => {
-            let mut scratch: Vec<f32> = vec![0.0; scratch_cap];
+            let mut scratch = scratch_with_capacity(config);
             device
                 .build_output_stream(
                     config,

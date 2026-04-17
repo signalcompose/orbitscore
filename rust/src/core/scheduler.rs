@@ -33,11 +33,13 @@ impl ScheduledSample {
 /// オーディオコールバック内で使うことを想定し、allocation 無しで
 /// フレーム単位のサンプルを取り出せるよう設計している。
 pub struct Scheduler {
-    pub(crate) output_sample_rate: u32,
-    pub(crate) output_channels: u16,
+    output_sample_rate: u32,
+    output_channels: u16,
     events: Vec<ActiveSample>,
     /// 出力ストリーム上の現在位置（サンプルフレーム単位）
     cursor_frames: u64,
+    // TODO (Phase 2): events を start_frame で BinaryHeap にして、
+    // render ごとの線形スキャンを削減する
 }
 
 struct ActiveSample {

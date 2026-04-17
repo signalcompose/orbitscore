@@ -66,7 +66,7 @@ pub fn load_sample_from_file(path: impl AsRef<Path>) -> Result<Sample, LoaderErr
     let capacity = track
         .codec_params
         .n_frames
-        .map(|f| f as usize * channels as usize)
+        .map(|f| (f as usize).saturating_mul(channels as usize))
         .unwrap_or(0);
 
     let mut decoder = symphonia::default::get_codecs()
