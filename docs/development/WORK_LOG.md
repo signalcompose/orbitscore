@@ -17,6 +17,50 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.55 Issue #100: Sample rate conversion on load via rubato (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `100-sample-rate-conversion`
+**Issue**: #100
+
+**Work Content**: PoC #91 で明示された既知の制限「サンプリング周波数変換 (SRC) なし」を解消。rubato 2.0 を使って**ロード時**に Project SR へ一度だけ変換する方式（Pro Tools / Logic Pro 方式）を採用。再生時（リアルタイム）は従来通り 1:1 マッピングで低レイテンシを維持。
+
+**追加モジュール**:
+- `rust/src/native/resampler.rs` (新規)
+  - `resample_to(sample, target_sr)` — rubato の FftFixedSync::Both で高品質変換
+  - `ResampleError` (Init / Process / ZeroChannels)
+
+**API 追加**:
+- `rust/src/native/loader.rs`: `load_sample_at(path, target_sr)` を公開
+  - ソース SR と target_sr が一致する場合はコピーせずそのまま返す
+  - 異なる場合のみ resampler を呼ぶ
+
+**依存追加**:
+- `rubato = "2"` (optional, native feature)
+- `audioadapter-buffers = "3"` (optional, native feature)
+
+**テスト追加** (4 件、合計 12 tests):
+- same_sample_rate_passes_through — パススルーの確認
+- upsample_44100_to_48000_preserves_duration — 持続時間 ±5ms
+- downsample_96000_to_48000_halves_frames — フレーム数半減
+- zero_channel_sample_returns_error — 不正入力の早期エラー
+
+**example 更新**:
+- `poc_play.rs` が `load_sample_at(path, stream.sample_rate)` を使用
+- 異なる SR の WAV を渡しても正しいピッチ・テンポで再生できる
+
+**ドキュメント**:
+- `rust/README.md` Known Limitations から SRC 項目を削除
+- WORK_LOG に本エントリ追加
+
+**検証**:
+- cargo check / clippy -D warnings / fmt --check すべて clean
+- cargo test --lib: 12 passed, 0 failed
+- PoC (examples/poc_play) 動作確認 OK
+
+---
+
 ### 6.54 Issue #91: Rust audio engine proof of concept (April 17, 2026)
 
 **Date**: April 17, 2026

@@ -13,7 +13,12 @@ path = "src/lib.rs"
 
 [features]
 default = ["native"]
-native = ["dep:cpal", "dep:symphonia"]
+native = [
+  "dep:cpal",
+  "dep:symphonia",
+  "dep:rubato",
+  "dep:audioadapter-buffers",
+]
 wasm = ["dep:wasm-bindgen", "dep:web-sys", "dep:console_error_panic_hook"]
 
 [dependencies]
@@ -21,6 +26,8 @@ thiserror = "2.0"
 
 cpal = { version = "0.15", optional = true }
 symphonia = { version = "0.5", features = ["wav", "mp3", "aac", "isomp4"], optional = true }
+rubato = { version = "2", optional = true }
+audioadapter-buffers = { version = "3", optional = true }
 
 wasm-bindgen = { version = "0.2", optional = true }
 web-sys = { version = "0.3", optional = true, features = [

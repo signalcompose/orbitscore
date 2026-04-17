@@ -5,6 +5,8 @@
 
 mod loader;
 mod output;
+mod resampler;
 
-pub use loader::{load_sample_from_file, LoaderError};
+pub use loader::{load_sample_at, load_sample_from_file, LoaderError};
 pub use output::{start_default_output, OutputError, OutputStream};
+pub use resampler::{resample_to, ResampleError};

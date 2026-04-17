@@ -22,6 +22,22 @@ pub enum LoaderError {
     Decode(String),
     #[error("unsupported format")]
     Unsupported,
+    #[error("resample error: {0}")]
+    Resample(#[from] super::resampler::ResampleError),
+}
+
+/// 音声ファイルをロードして `target_sr` に合わせてリサンプリングする。
+///
+/// Pro Tools / Logic Pro 方式に倣い、再生時ではなくロード時に一度だけ
+/// 変換することで、再生時のリアルタイム処理を 1:1 マッピングに保つ。
+///
+/// ソースの SR と target が一致する場合はコピーせずそのまま返す。
+pub fn load_sample_at(path: impl AsRef<Path>, target_sr: u32) -> Result<Sample, LoaderError> {
+    let raw = load_sample_from_file(path)?;
+    if raw.sample_rate == target_sr {
+        return Ok(raw);
+    }
+    Ok(super::resampler::resample_to(raw, target_sr)?)
 }
 
 /// 音声ファイルを読み込み、出力サンプルレートに関係なく元のサンプルをそのまま返す。
