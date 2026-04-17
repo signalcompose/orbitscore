@@ -17,7 +17,9 @@ rust/
     ├── orbit-audio-core/       # platform-agnostic DSP / scheduler
     ├── orbit-audio-native/     # cpal + symphonia + rubato (desktop)
     │   └── examples/poc_play.rs
-    └── orbit-audio-wasm/       # wasm-bindgen + AudioWorklet (スタブ)
+    ├── orbit-audio-wasm/       # wasm-bindgen + AudioWorklet (スタブ)
+    └── orbit-audio-daemon/     # binary: WebSocket IPC server (protocol v0.1)
+        └── tests/smoke.rs      # startup smoke test
 ```
 
 ### Crate 責務
@@ -27,6 +29,7 @@ rust/
 | `orbit-audio-core` | 秒ベースの `Engine` / `Scheduler` / `Sample`。OS / ファイル I/O 非依存 |
 | `orbit-audio-native` | `cpal` 経由の出力、`symphonia` デコーダ、`rubato` による SRC |
 | `orbit-audio-wasm` | 将来 (Phase 3) の AudioWorklet バインディング用スタブ |
+| `orbit-audio-daemon` | WebSocket IPC server。TS client と接続して Phase 1 commands を実行 |
 
 `orbit-audio-core` はプラットフォーム非依存で、他のバックエンドから共通利用できる。
 
@@ -45,6 +48,9 @@ cargo run --example poc_play -- ../test-assets/audio/kick.wav ../test-assets/aud
 
 # WASM スタブビルド
 cargo build -p orbit-audio-wasm --target wasm32-unknown-unknown
+
+# Daemon 起動（Phase 1b-1 時点では Ping / LoadSample / PlayAt / Stop / GetStatus / SetGlobalGain 実装済み）
+cargo run --bin orbit-audio-daemon
 ```
 
 ## Known Limitations (Phase 1)

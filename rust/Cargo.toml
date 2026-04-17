@@ -4,6 +4,7 @@ members = [
   "crates/orbit-audio-core",
   "crates/orbit-audio-native",
   "crates/orbit-audio-wasm",
+  "crates/orbit-audio-daemon",
 ]
 
 [workspace.package]
@@ -27,6 +28,15 @@ web-sys = { version = "0.3", features = [
   "AudioWorkletProcessor",
 ] }
 console_error_panic_hook = "0.1"
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "time"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = 3
