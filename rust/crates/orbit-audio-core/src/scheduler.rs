@@ -38,6 +38,12 @@ pub struct Scheduler {
     events: Vec<ActiveSample>,
     /// 出力ストリーム上の現在位置（サンプルフレーム単位）
     cursor_frames: u64,
+    /// 現在のマスターゲイン（線形、フレーム単位でランプ更新）
+    global_gain: f32,
+    /// ランプ終了時点の目標ゲイン
+    target_gain: f32,
+    /// 残りランプフレーム数。0 でランプ終了し global_gain = target_gain。
+    ramp_frames_remaining: u64,
     // TODO (Phase 2): events を start_frame で BinaryHeap にして、
     // render ごとの線形スキャンを削減する
 }
@@ -60,7 +66,29 @@ impl Scheduler {
             output_channels,
             events: Vec::new(),
             cursor_frames: 0,
+            global_gain: 1.0,
+            target_gain: 1.0,
+            ramp_frames_remaining: 0,
         }
+    }
+
+    /// マスターゲインを設定する。`ramp_frames == 0` なら即時、それ以外は線形ランプで
+    /// `value` に到達する。負の値は 0.0 にクランプする。
+    pub fn set_global_gain(&mut self, value: f32, ramp_frames: u64) {
+        let value = value.max(0.0);
+        if ramp_frames == 0 {
+            self.global_gain = value;
+            self.target_gain = value;
+            self.ramp_frames_remaining = 0;
+        } else {
+            self.target_gain = value;
+            self.ramp_frames_remaining = ramp_frames;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn global_gain(&self) -> f32 {
+        self.global_gain
     }
 
     /// サンプルを予約する。時刻は秒。
@@ -128,6 +156,25 @@ impl Scheduler {
             active.read_pos += frames_to_copy;
         }
 
+        // 混合後の出力バッファにフレーム単位のマスターゲインを適用する。
+        // ランプ中はフレームごとに線形補間で global_gain を更新する。
+        // 単調パスで追加 allocation なし。
+        for frame in 0..frames_to_render {
+            if self.ramp_frames_remaining > 0 {
+                let step =
+                    (self.target_gain - self.global_gain) / self.ramp_frames_remaining as f32;
+                self.global_gain += step;
+                self.ramp_frames_remaining -= 1;
+                if self.ramp_frames_remaining == 0 {
+                    self.global_gain = self.target_gain;
+                }
+            }
+            let base = frame * output_channels;
+            for ch in 0..output_channels {
+                out[base + ch] *= self.global_gain;
+            }
+        }
+
         self.cursor_frames += frames_to_render as u64;
         // 再生完了したもの（= すべてのフレームを読み終えたもの）をドロップ。
         // まだ開始時刻に到達していないイベントは read_pos == 0 のため自然に保持される。
@@ -137,6 +184,10 @@ impl Scheduler {
     /// 現在の出力ストリーム時刻（秒）
     pub fn now_sec(&self) -> f64 {
         self.cursor_frames as f64 / self.output_sample_rate as f64
+    }
+
+    pub fn output_sample_rate(&self) -> u32 {
+        self.output_sample_rate
     }
 
     /// テスト用: 保持しているイベント数
@@ -205,5 +256,45 @@ mod tests {
 
         // 先頭から非ゼロの音が書き込まれているはず
         assert!(buf.iter().any(|&x| x != 0.0));
+    }
+
+    #[test]
+    fn set_global_gain_immediate_scales_output() {
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100)));
+        s.set_global_gain(0.5, 0);
+
+        let mut buf = vec![0.0f32; 200];
+        s.render(&mut buf);
+
+        // 元々 0.1 のサンプルが 0.5x でスケール → ~0.05。ランプ無しなので一定。
+        let peak = buf.iter().cloned().fold(0.0f32, f32::max);
+        assert!((peak - 0.05).abs() < 1e-5, "peak={peak}");
+    }
+
+    #[test]
+    fn set_global_gain_ramps_linearly_to_target() {
+        let mut s = Scheduler::new(48_000, 2);
+        // 直流 1.0 のモノラルサンプルを想定して 1ch 出力にすると計算が容易。
+        // ここでは 2ch stereo で mk_sample_stereo(.1) を流し、ランプ後の最後の
+        // フレームが target_gain (0.0) で減衰していることだけ検証する。
+        s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100)));
+        s.set_global_gain(0.0, 100); // 100 フレームで 1.0 → 0.0 へランプ
+
+        let mut buf = vec![0.0f32; 200]; // 100 frames
+        s.render(&mut buf);
+
+        // 最終フレームはランプ完了し target_gain = 0.0 になっているはず
+        let last_l = buf[198];
+        let last_r = buf[199];
+        assert!(last_l.abs() < 1e-6 && last_r.abs() < 1e-6);
+        assert_eq!(s.global_gain(), 0.0);
+    }
+
+    #[test]
+    fn set_global_gain_clamps_negative_to_zero() {
+        let mut s = Scheduler::new(48_000, 2);
+        s.set_global_gain(-0.5, 0);
+        assert_eq!(s.global_gain(), 0.0);
     }
 }

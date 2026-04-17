@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.61 Issue #107: orbit-audio-daemon SetGlobalGain 実装 (April 18, 2026)
+
+**Date**: April 18, 2026
+**Status**: ✅ COMPLETE (Phase 1b-4: SetGlobalGain with ramp)
+**Branch**: `107-global-gain`
+**Issue**: #107
+
+**Work Content**: これまで `accepted` を返すだけの no-op だった `SetGlobalGain` コマンドを実装。`Scheduler` に master gain + 線形ランプ機能を追加し、Engine / EngineWrap / session.rs を経由して protocol v0.1 仕様を満たすようにした。
+
+**実装**:
+- `orbit-audio-core::Scheduler` に `global_gain` / `target_gain` / `ramp_frames_remaining` を追加、`set_global_gain(value, ramp_frames)` を公開
+- `render` 末尾で混合済み出力にマスターゲインを後適用（per-frame 線形ランプ、allocation 無し）
+- `Engine::set_global_gain(value, ramp_sec)` で秒 → frames 変換を担当
+- `EngineWrap::set_global_gain` 経由で daemon session がそのまま呼べる
+- `SetGlobalGain` handler を実装に置き換え、`ramp_sec` バリデーション（負値エラー）を追加
+
+**テスト**:
+- scheduler: 即時セット / 線形ランプ後に target 到達 / 負値クランプ — 3 件追加
+- 既存 12 native tests / 11 core tests 全て pass
+- clippy clean
+
+**非対応（次フェーズ）**:
+- 個別 Stop 実装（Scheduler に play_id 追跡が必要）
+- DaemonError severity=fatal（panic hook / device lost 検出）
+
+---
+
 ### 6.60 Issue #107: orbit-audio-daemon Phase 1b-3 StreamStats / DaemonError (April 17, 2026)
 
 **Date**: April 17, 2026
