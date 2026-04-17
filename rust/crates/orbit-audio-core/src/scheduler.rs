@@ -214,6 +214,11 @@ impl Scheduler {
         self.output_sample_rate
     }
 
+    /// スケジュール中のイベント数（完了前の play_at + まだ開始時刻に到達していないもの）。
+    pub fn active_count(&self) -> usize {
+        self.events.len()
+    }
+
     /// テスト用: 保持しているイベント数
     #[cfg(test)]
     pub(crate) fn events_len(&self) -> usize {

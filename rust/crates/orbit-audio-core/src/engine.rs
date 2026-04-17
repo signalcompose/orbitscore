@@ -80,6 +80,12 @@ impl Engine {
         Ok(s.stop(play_id))
     }
 
+    /// スケジュール中のイベント数（実時間で active な再生数）。
+    /// ロック競合時は `None` を返す。
+    pub fn active_count(&self) -> Option<usize> {
+        self.inner.try_lock().ok().map(|s| s.active_count())
+    }
+
     /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時、正なら線形ランプ。
     ///
     /// 正の `ramp_sec` がサブフレーム相当（例: 1/sample_rate 未満）でも、

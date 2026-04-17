@@ -37,7 +37,6 @@ pub struct EngineWrap {
     channels: u16,
     samples: Mutex<HashMap<String, Sample>>,
     started_at: std::time::Instant,
-    active_play_count: std::sync::atomic::AtomicUsize,
     stream_stats: Arc<StreamStats>,
 }
 
@@ -57,7 +56,6 @@ impl EngineWrap {
             channels,
             samples: Mutex::new(HashMap::new()),
             started_at: std::time::Instant::now(),
-            active_play_count: std::sync::atomic::AtomicUsize::new(0),
             stream_stats,
         });
         Ok((wrap, StreamGuard(stream)))
@@ -67,12 +65,10 @@ impl EngineWrap {
         self.started_at.elapsed().as_secs_f64()
     }
 
-    /// 現在は daemon 起動からの累積 `PlayAt` 回数を返す。
-    /// Phase 1b-1 時点では Stop / 再生完了イベントが未実装のため、
-    /// 減算は行わず単調増加する（Phase 1b-2 で実時間の active 数に移行予定）。
+    /// 現在スケジュール中の（まだ完了していない）再生イベント数。
+    /// audio callback がロックを握っている瞬間は取得できないので、その場合は 0 を返す。
     pub fn active_play_count(&self) -> usize {
-        self.active_play_count
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.engine.active_count().unwrap_or(0)
     }
 
     pub fn output_sample_rate(&self) -> u32 {
@@ -126,8 +122,6 @@ impl EngineWrap {
         self.engine
             .schedule_with_play_id(time_sec, gain, play_id.clone(), sample)
             .map_err(|e| WrapError::Scheduler(e.to_string()))?;
-        self.active_play_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(PlayHandle {
             play_id,
             start_sec: time_sec,
