@@ -11,10 +11,12 @@ use crate::core::Sample;
 
 #[derive(Error, Debug)]
 pub enum ResampleError {
-    #[error("resampler init error: {0}")]
-    Init(String),
+    #[error("resampler construct error: {0}")]
+    Construct(#[from] rubato::ResamplerConstructionError),
     #[error("resampler process error: {0}")]
-    Process(String),
+    Process(#[from] rubato::ResampleError),
+    #[error("buffer setup error: {0}")]
+    Buffer(String),
     #[error("zero-channel sample cannot be resampled")]
     ZeroChannels,
 }
@@ -27,13 +29,14 @@ const SUB_CHUNKS: usize = 2;
 
 /// `sample` を `target_sr` へリサンプリングする。
 ///
-/// source と target の SR が同じ場合はコピー無しでそのまま返す。
+/// - source と target の SR が同じ場合はコピー無しでそのまま返す
+/// - ゼロチャンネルの不正サンプルは SR 比較より先にエラー
 pub fn resample_to(sample: Sample, target_sr: u32) -> Result<Sample, ResampleError> {
-    if sample.sample_rate == target_sr {
-        return Ok(sample);
-    }
     if sample.channels == 0 {
         return Err(ResampleError::ZeroChannels);
+    }
+    if sample.sample_rate == target_sr {
+        return Ok(sample);
     }
 
     let channels = sample.channels as usize;
@@ -47,23 +50,23 @@ pub fn resample_to(sample: Sample, target_sr: u32) -> Result<Sample, ResampleErr
         SUB_CHUNKS,
         channels,
         FixedSync::Both,
-    )
-    .map_err(|e| ResampleError::Init(e.to_string()))?;
+    )?;
 
     let out_len = resampler.process_all_needed_output_len(in_frames);
     let mut out_data = vec![0.0f32; out_len * channels];
 
-    let input = InterleavedSlice::new(&sample.data[..], channels, in_frames)
-        .map_err(|e| ResampleError::Init(e.to_string()))?;
+    let input = InterleavedSlice::new(sample.as_slice(), channels, in_frames)
+        .map_err(|e| ResampleError::Buffer(e.to_string()))?;
     let mut output = InterleavedSlice::new_mut(&mut out_data, channels, out_len)
-        .map_err(|e| ResampleError::Init(e.to_string()))?;
+        .map_err(|e| ResampleError::Buffer(e.to_string()))?;
 
-    let (_nbr_in, nbr_out) = resampler
-        .process_all_into_buffer(&input, &mut output, in_frames, None)
-        .map_err(|e| ResampleError::Process(e.to_string()))?;
+    let (_, nbr_out) = resampler.process_all_into_buffer(&input, &mut output, in_frames, None)?;
 
-    // 実際に書き込まれた frames 分だけに切り詰める
+    // 実際に書き込まれた frames 分だけに切り詰め、余剰キャパシティも解放。
+    // このあと `Sample::new` で `Arc<Vec<f32>>` に包まれると shrink できなくなるため、
+    // 共有前のここが唯一の縮小機会。
     out_data.truncate(nbr_out * channels);
+    out_data.shrink_to_fit();
 
     Ok(Sample::new(out_data, target_sr, sample.channels))
 }
@@ -92,7 +95,6 @@ mod tests {
         assert_eq!(r.channels, 2);
         // 持続時間が ±5ms 以内で保たれること
         assert!((r.duration_secs() - 1.0).abs() < 0.005);
-        // 期待フレーム数付近（48000 ±小誤差）
         let expected = 48_000;
         let diff = (r.frames() as i64 - expected as i64).abs();
         assert!(
@@ -129,5 +131,48 @@ mod tests {
             resample_to(s, 44_100),
             Err(ResampleError::ZeroChannels)
         ));
+    }
+
+    #[test]
+    fn zero_channel_sample_with_same_sr_also_returns_error() {
+        // channels チェックが SR 比較より先に動くことを確認
+        let s = Sample::new(vec![], 48_000, 0);
+        assert!(matches!(
+            resample_to(s, 48_000),
+            Err(ResampleError::ZeroChannels)
+        ));
+    }
+
+    /// サイン波で信号品質を検証する。DC だけのテストでは
+    /// FFT 処理が壊れていても通ってしまうため、周波数成分を持つ信号で
+    /// RMS が概ね保たれることを確認する。
+    #[test]
+    fn sine_wave_rms_is_preserved_through_resampling() {
+        use std::f32::consts::TAU;
+
+        let sr_in: u32 = 44_100;
+        let sr_out: u32 = 48_000;
+        let freq: f32 = 1_000.0;
+        let channels: u16 = 2;
+        let in_frames = sr_in as usize;
+
+        let data: Vec<f32> = (0..in_frames * channels as usize)
+            .map(|i| {
+                let frame = i / channels as usize;
+                (TAU * freq * frame as f32 / sr_in as f32).sin() * 0.5
+            })
+            .collect();
+
+        let rms_in: f32 = (data.iter().map(|x| x * x).sum::<f32>() / data.len() as f32).sqrt();
+
+        let s = Sample::new(data, sr_in, channels);
+        let r = resample_to(s, sr_out).unwrap();
+
+        let rms_out: f32 = (r.data.iter().map(|x| x * x).sum::<f32>() / r.data.len() as f32).sqrt();
+        let db_diff = 20.0 * (rms_out / rms_in).log10();
+        assert!(
+            db_diff.abs() < 0.5,
+            "RMS diff {db_diff:.3} dB outside ±0.5 dB (in={rms_in:.4}, out={rms_out:.4})"
+        );
     }
 }

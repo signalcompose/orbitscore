@@ -11,7 +11,7 @@ use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
-use orbitscore_engine::native::{load_sample_at, start_default_output};
+use orbitscore_engine::native::{load_sample_resampled, start_default_output};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let paths: Vec<String> = env::args().skip(1).collect();
@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .iter()
         .map(|p| {
             println!("loading {p}");
-            load_sample_at(p, stream.sample_rate)
+            load_sample_resampled(p, stream.sample_rate)
         })
         .collect::<Result<Vec<_>, _>>()?;
 

@@ -31,12 +31,13 @@ pub enum LoaderError {
 /// Pro Tools / Logic Pro 方式に倣い、再生時ではなくロード時に一度だけ
 /// 変換することで、再生時のリアルタイム処理を 1:1 マッピングに保つ。
 ///
-/// ソースの SR と target が一致する場合はコピーせずそのまま返す。
-pub fn load_sample_at(path: impl AsRef<Path>, target_sr: u32) -> Result<Sample, LoaderError> {
+/// SR が一致する場合は `resample_to` がコピーせずそのまま返すため、ここでは
+/// 追加のガードは置かない。
+pub fn load_sample_resampled(
+    path: impl AsRef<Path>,
+    target_sr: u32,
+) -> Result<Sample, LoaderError> {
     let raw = load_sample_from_file(path)?;
-    if raw.sample_rate == target_sr {
-        return Ok(raw);
-    }
     Ok(super::resampler::resample_to(raw, target_sr)?)
 }
 
