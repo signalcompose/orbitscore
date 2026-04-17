@@ -44,6 +44,8 @@ pub struct Scheduler {
     target_gain: f32,
     /// 残りランプフレーム数。0 でランプ終了し global_gain = target_gain。
     ramp_frames_remaining: u64,
+    /// ランプ中の定数ステップ（set_global_gain で計算）。線形ランプを保証する。
+    ramp_step: f32,
     // TODO (Phase 2): events を start_frame で BinaryHeap にして、
     // render ごとの線形スキャンを削減する
 }
@@ -69,20 +71,23 @@ impl Scheduler {
             global_gain: 1.0,
             target_gain: 1.0,
             ramp_frames_remaining: 0,
+            ramp_step: 0.0,
         }
     }
 
-    /// マスターゲインを設定する。`ramp_frames == 0` なら即時、それ以外は線形ランプで
-    /// `value` に到達する。負の値は 0.0 にクランプする。
+    /// マスターゲインを設定する。`ramp_frames == 0` なら即時、それ以外は定数ステップで
+    /// 線形に `value` へ到達する。負の値は 0.0 にクランプする。
     pub fn set_global_gain(&mut self, value: f32, ramp_frames: u64) {
         let value = value.max(0.0);
         if ramp_frames == 0 {
             self.global_gain = value;
             self.target_gain = value;
             self.ramp_frames_remaining = 0;
+            self.ramp_step = 0.0;
         } else {
             self.target_gain = value;
             self.ramp_frames_remaining = ramp_frames;
+            self.ramp_step = (value - self.global_gain) / ramp_frames as f32;
         }
     }
 
@@ -161,12 +166,12 @@ impl Scheduler {
         // 単調パスで追加 allocation なし。
         for frame in 0..frames_to_render {
             if self.ramp_frames_remaining > 0 {
-                let step =
-                    (self.target_gain - self.global_gain) / self.ramp_frames_remaining as f32;
-                self.global_gain += step;
+                self.global_gain += self.ramp_step;
                 self.ramp_frames_remaining -= 1;
                 if self.ramp_frames_remaining == 0 {
+                    // 浮動小数点誤差対策でターゲットにスナップ
                     self.global_gain = self.target_gain;
+                    self.ramp_step = 0.0;
                 }
             }
             let base = frame * output_channels;
@@ -289,6 +294,23 @@ mod tests {
         let last_r = buf[199];
         assert!(last_l.abs() < 1e-6 && last_r.abs() < 1e-6);
         assert_eq!(s.global_gain(), 0.0);
+    }
+
+    #[test]
+    fn set_global_gain_ramp_is_linear_at_midpoint() {
+        // ランプ 100 フレームで 1.0 → 0.0 の場合、50 フレーム目の直後のゲインは
+        // 約 0.5 であること（線形ランプの検証）。後半 50 フレームで 0 に達する。
+        let mut s = Scheduler::new(48_000, 2);
+        // 定数 0.5 の mono→stereo サンプル 200 フレーム
+        let sample = Sample::new(vec![0.5f32; 200 * 2], 48_000, 2);
+        s.schedule(ScheduledSample::new(0.0, sample));
+        s.set_global_gain(0.0, 100);
+
+        // 最初の 50 フレームを render
+        let mut buf = vec![0.0f32; 100]; // 50 frames
+        s.render(&mut buf);
+        // 50 frames 経過後の global_gain は 0.5 付近
+        assert!((s.global_gain() - 0.5).abs() < 0.02, "{}", s.global_gain());
     }
 
     #[test]
