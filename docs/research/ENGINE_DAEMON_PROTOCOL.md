@@ -203,7 +203,7 @@ JSON-RPC 2.0 の影響を受けた独自形式:
 }
 ```
 
-- `time_sec`: 出力ストリームの時刻（daemon 起動からの経過秒 または transport 基準時刻）
+- `time_sec`: daemon 内部 transport の基準時刻（起動時に 0.0 からスタート、`ResetTransport` で reset 可能 / Phase 2 で検討）。詳細はセクション 11 の Open Questions 参照
 - `gain`: 0.0〜1.0+（線形）
 - `pan`: -1.0 (L) 〜 1.0 (R)、省略時は 0.0
 
