@@ -17,6 +17,3 @@ cpal = { workspace = true }
 symphonia = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }
-
-[dev-dependencies]
-hound = { workspace = true }

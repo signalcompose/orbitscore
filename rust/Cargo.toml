@@ -27,7 +27,6 @@ web-sys = { version = "0.3", features = [
   "AudioWorkletProcessor",
 ] }
 console_error_panic_hook = "0.1"
-hound = "3.5"
 
 [profile.release]
 opt-level = 3
