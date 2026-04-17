@@ -17,7 +17,9 @@ if grep -q "30000ms" "$SERVER_JS"; then
 fi
 
 # Patch timeout: 3000ms -> 30000ms
-if sed -i '' 's/Server failed to start in 3000ms/Server failed to start in 30000ms/; s/}, 3000);/}, 30000);/' "$SERVER_JS"; then
+# `sed -i.bak` is portable across BSD sed (macOS) and GNU sed (Linux).
+if sed -i.bak 's/Server failed to start in 3000ms/Server failed to start in 30000ms/; s/}, 3000);/}, 30000);/' "$SERVER_JS"; then
+  rm -f "$SERVER_JS.bak"
   echo "✅ supercolliderjs patched: boot timeout 3s -> 30s"
 else
   echo "⚠️  Failed to patch supercolliderjs"
