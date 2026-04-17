@@ -1,0 +1,18 @@
+[package]
+name = "orbit-audio-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "WASM / AudioWorklet backend for Signal compose audio engine (stub)"
+
+[lib]
+name = "orbit_audio_wasm"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+orbit-audio-core = { path = "../orbit-audio-core" }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true }
+console_error_panic_hook = { workspace = true }

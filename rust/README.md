@@ -1,59 +1,65 @@
-# orbitscore-engine (Rust)
+# orbit-audio (Rust workspace)
 
-Rust 実装の OrbitScore オーディオエンジン。
+Signal compose の汎用 Rust audio engine ワークスペース。OrbitScore のサウンドエンジン
+として利用するほか、将来的には他の音声プロダクト / OSS 公開の基盤となる。
 
 ## Status
 
-**Phase 1 / PoC** — Issue #91 に紐づく技術検証。API・構造は未確定。
+**Phase 1a 完了** — Cargo workspace 分離済み。Phase 1b（IPC daemon）は Issue [#107](https://github.com/signalcompose/orbitscore/issues/107) で進行予定。
 
 ## Layout
 
 ```
 rust/
-├── Cargo.toml
-├── src/
-│   ├── lib.rs         # モジュールルート
-│   ├── core/          # プラットフォーム非依存の DSP / スケジューラ
-│   ├── native/        # cpal 経由のネイティブ音声 I/O (feature = "native")
-│   └── wasm/          # wasm-bindgen + AudioWorklet グルー (feature = "wasm")
-└── examples/
-    └── poc_play.rs    # WAV ロード + スケジュール再生の最小サンプル
+├── Cargo.toml                  # workspace root
+├── rust-toolchain.toml         # stable + rustfmt + clippy
+└── crates/
+    ├── orbit-audio-core/       # platform-agnostic DSP / scheduler
+    ├── orbit-audio-native/     # cpal + symphonia + rubato (desktop)
+    │   └── examples/poc_play.rs
+    └── orbit-audio-wasm/       # wasm-bindgen + AudioWorklet (スタブ)
 ```
 
-### Feature flags
+### Crate 責務
 
-| feature | 依存 | 用途 |
-|---|---|---|
-| `native` (default) | `cpal`, `symphonia` | デスクトップ音声出力 |
-| `wasm` | `wasm-bindgen`, `web-sys` | ブラウザ向け AudioWorklet（予約） |
+| Crate | 役割 |
+|---|---|
+| `orbit-audio-core` | 秒ベースの `Engine` / `Scheduler` / `Sample`。OS / ファイル I/O 非依存 |
+| `orbit-audio-native` | `cpal` 経由の出力、`symphonia` デコーダ、`rubato` による SRC |
+| `orbit-audio-wasm` | 将来 (Phase 3) の AudioWorklet バインディング用スタブ |
+
+`orbit-audio-core` はプラットフォーム非依存で、他のバックエンドから共通利用できる。
 
 ## Quick start
 
 ```bash
-# デスクトップ PoC
 cd rust
-cargo run --example poc_play
 
-# WASM 向けビルド（今はスタブのみ）
-cargo build --no-default-features --features wasm --target wasm32-unknown-unknown
+# 全クレートのチェック / テスト
+cargo check --workspace --all-targets
+cargo test --workspace --lib
+cargo clippy --workspace --all-targets -- -D warnings
+
+# デスクトップ PoC 再生
+cargo run --example poc_play -- ../test-assets/audio/kick.wav ../test-assets/audio/snare.wav
+
+# WASM スタブビルド
+cargo build -p orbit-audio-wasm --target wasm32-unknown-unknown
 ```
 
-## Known Limitations (PoC)
+## Known Limitations (Phase 1)
 
-- **タイムストレッチなし** — Phase 2 で `rubato` or SoundTouch 等を検討
-  (Issue [#92](https://github.com/signalcompose/orbitscore/issues/92))
-- **モノラル → マルチチャンネル展開は最終チャンネル複製のみ** — モノラル素材を
-  ステレオや多 ch 出力に流す際、`ch.min(src_channels - 1)` で最後のチャンネルを
-  繰り返すシンプルな方式を採っている。pan law や空間音響の考慮は Phase 2 以降
-- **`Mutex` ベースの同期** — PoC の簡略化。本実装ではロックフリー化を検討
-- **WASM 未検証** — feature flag とスタブのみ。実機 wasm ビルドは未実施
+- **タイムストレッチなし** — Phase 2 で検討（Issue [#92](https://github.com/signalcompose/orbitscore/issues/92)）
+- **モノラル → マルチチャンネル展開は最終チャンネル複製のみ** — pan law や空間音響は Phase 2 以降
+- **`Mutex` ベースの同期** — 本実装でロックフリー化を検討
+- **WASM 未検証** — スタブのみ。実機 wasm ビルドは Phase 3
 
 ## Design principles
 
-- **Platform-agnostic core**: `core` モジュールは `std` に留め、`cpal` 等を直接使わない
-- **Thin adapters**: `native` / `wasm` は core を呼ぶ薄いアダプタに留める
+- **Core は platform / DSL / musical time を知らない**（秒ベース命令のみ）
+- **Plugin host は generic MIDI Event を受ける**（DSL 不知）
 - **Realtime-safe**: オーディオコールバック内で allocation / lock を避ける
-- **Separable**: 将来 `signalcompose/orbitscore-engine` として独立リポジトリ化する可能性を踏まえ、外部依存を最小化
+- **公開可能な境界**: `orbit-audio-core` は将来 crates.io 公開候補
 
 ## License
 
@@ -61,7 +67,6 @@ Signal compose Source-Available License v1.0 — ルートの [LICENSE](../LICEN
 
 ## Related docs
 
+- [docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md](../docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md) — 3 層分離アーキテクチャ方針
 - [docs/planning/RUST_ENGINE_MIGRATION_PLAN.md](../docs/planning/RUST_ENGINE_MIGRATION_PLAN.md) — 全体ロードマップ
-- Issue #91: spike: Rust audio engine proof of concept
-- Issue #92: research: time-stretch DSP library selection
-- Issue #93: design: engine daemon IPC protocol
+- [docs/research/RUST_POC_FINDINGS.md](../docs/research/RUST_POC_FINDINGS.md) — PoC 所感

@@ -17,6 +17,51 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.56 Issue #106: Rust Cargo workspace split (Phase 1a) (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `106-rust-workspace-split`
+**Issue**: #106（Epic #105 の Phase 1a）
+
+**Work Content**: 単一 crate `orbitscore-engine` を Cargo workspace に再構成。`orbit-audio-core` を platform-agnostic な独立 crate として切り出し、将来の plugin 分離や他プロダクト転用の土台を作る。
+
+**構成**:
+```
+rust/
+├── Cargo.toml (workspace root)
+└── crates/
+    ├── orbit-audio-core/       (prev src/core)
+    ├── orbit-audio-native/     (prev src/native + examples)
+    └── orbit-audio-wasm/       (prev src/wasm、スタブ)
+```
+
+**Changes**:
+- ワークスペース化: 旧 `rust/Cargo.toml` を `[workspace]` root に、各 crate 配下に独立した `Cargo.toml`
+- モジュール再配置: `src/core/` → `crates/orbit-audio-core/src/`、他も同様
+- 例の移設: `examples/poc_play.rs` → `crates/orbit-audio-native/examples/`
+- use 文更新: `crate::core::...` → `orbit_audio_core::...`
+- 旧 feature flag（native / wasm / 相互排他の compile_error）は crate 分割により不要となり削除
+- `rust/Cargo.lock` は再生成
+
+**検証**:
+- `cargo check --workspace --all-targets` clean
+- `cargo clippy --workspace --all-targets -- -D warnings` clean
+- `cargo test --workspace --lib`: 17 passed (core 8 + native 9)
+- `cargo build --release` 成功
+- `cargo run --example poc_play` で実機再生 OK
+
+**非変更**:
+- DSL / interpreter / musical timing（TypeScript 側）は一切触らず
+- Rust コードのロジックは変更なし（機械的リファクタのみ）
+
+**次のステップ**:
+- Issue #93（IPC プロトコル設計）
+- Issue #107（orbit-audio-daemon バイナリ）
+- Issue #108（TS rust-engine client）
+
+---
+
 ### 6.55 Issue #100: Sample rate conversion on load via rubato (April 17, 2026)
 
 **Date**: April 17, 2026

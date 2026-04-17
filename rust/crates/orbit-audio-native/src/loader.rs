@@ -12,7 +12,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use thiserror::Error;
 
-use crate::core::Sample;
+use orbit_audio_core::Sample;
 
 #[derive(Error, Debug)]
 pub enum LoaderError {

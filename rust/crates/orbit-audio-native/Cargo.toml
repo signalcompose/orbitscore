@@ -1,0 +1,22 @@
+[package]
+name = "orbit-audio-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Native (desktop) audio backend for Signal compose audio engine (cpal + symphonia + rubato)"
+
+[lib]
+name = "orbit_audio_native"
+
+[dependencies]
+orbit-audio-core = { path = "../orbit-audio-core" }
+thiserror = { workspace = true }
+cpal = { workspace = true }
+symphonia = { workspace = true }
+rubato = { workspace = true }
+audioadapter-buffers = { workspace = true }
+
+[dev-dependencies]
+hound = { workspace = true }

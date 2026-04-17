@@ -11,7 +11,7 @@ use std::error::Error;
 use std::thread;
 use std::time::Duration;
 
-use orbitscore_engine::native::{load_sample_resampled, start_default_output};
+use orbit_audio_native::{load_sample_resampled, start_default_output};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let paths: Vec<String> = env::args().skip(1).collect();
