@@ -17,6 +17,40 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.53 Issue #97: Align test count references and link Rust migration research issues (April 17, 2026)
+
+**Date**: April 17, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `97-update-test-count-docs`
+**Issue**: #97
+
+**Work Content**: 複数ドキュメントで古い「225 passed」と記載されていたが、実測値は **220 passed, 23 skipped, 243 total = 90.5%**。現状に合わせて修正。併せて Rust 移行計画に Research Issue 群（#91-#96）へのリンクを追加。
+
+**テスト数更新**:
+- `CLAUDE.md` L121, L128
+- `README.md` L233
+- `docs/testing/TESTING_GUIDE.md` L4 (+ Last Updated を 2026-04-17 に), L71
+- `docs/development/IMPLEMENTATION_PLAN.md` L45
+- `docs/planning/RUST_ENGINE_MIGRATION_PLAN.md` L59
+
+**Rust 移行計画の進捗反映**:
+- `docs/planning/RUST_ENGINE_MIGRATION_PLAN.md` §7「次のアクション」を更新
+  - 完了項目（PR #88 ライセンス、PR #90 Dependabot）にチェック
+  - Research Issue #91-#96 へのリンクを追加
+  - 組織タスク（Rust 経験者確保、メールセットアップ）を追記
+
+**新規作成 Research Issues**:
+- #91: spike: Rust audio engine proof of concept
+- #92: research: time-stretch DSP library selection for Rust engine
+- #93: design: engine daemon IPC protocol
+- #94: design: Tauri standalone application architecture
+- #95: research: VST3 and CLAP plugin hosting in Rust
+- #96: design: LLM agent integration architecture
+
+**Tests**: 220 passed, 23 skipped（変更なし、docs のみ更新）
+
+---
+
 ### 6.52 Issue #89: Fix Dependabot vulnerabilities, excluding supercolliderjs-related (April 17, 2026)
 
 **Date**: April 17, 2026

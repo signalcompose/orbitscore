@@ -1,7 +1,7 @@
 # OrbitScore Testing Guide
 
-**Last Updated**: 2025-10-26
-**Test Status**: 225 passed | 23 skipped (248 total) = 90.7%
+**Last Updated**: 2026-04-17
+**Test Status**: 220 passed | 23 skipped (243 total) = 90.5%
 
 ## 📚 Overview
 
@@ -68,7 +68,7 @@ npm test -- unidirectional-toggle
 
 ### Current Test Coverage
 
-**Total**: 225 passed | 23 skipped (248 total) = 90.7%
+**Total**: 220 passed | 23 skipped (243 total) = 90.5%
 
 **Test Suites**:
 - ✅ Audio Parser: 50/50
