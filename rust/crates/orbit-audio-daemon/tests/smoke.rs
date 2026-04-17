@@ -5,7 +5,6 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 
 #[test]
 fn daemon_prints_ready_line_on_stdout() {
@@ -28,25 +27,20 @@ fn daemon_prints_ready_line_on_stdout() {
     let stderr = child.stderr.take().expect("stderr");
     let mut reader = BufReader::new(stdout);
 
-    // 10 秒以内に ready line が来ること（protocol 仕様準拠）
-    let start = Instant::now();
+    // 実装では一度 read_line を呼べば block して line か EOF まで返ってくるため、
+    // ループではなく単発の read でよい。タイムアウトは OS の read timeout に依存しない
+    // ようにするため別スレッドで kill するアプローチは本 PoC では省略。
     let mut line = String::new();
-    let read_result = loop {
-        if start.elapsed() > Duration::from_secs(10) {
-            break Err(());
+    let read_result = match reader.read_line(&mut line) {
+        Ok(0) => {
+            // EOF → 起動失敗。stderr を吸い上げて表示し skip 扱い
+            let err = std::io::read_to_string(stderr).unwrap_or_default();
+            eprintln!("skipping: daemon exited before ready: {err}");
+            let _ = child.kill();
+            return;
         }
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => {
-                // EOF → 起動失敗。stderr を吸い上げて表示
-                let err = std::io::read_to_string(stderr).unwrap_or_default();
-                eprintln!("skipping: daemon exited before ready: {err}");
-                let _ = child.kill();
-                return;
-            }
-            Ok(_) => break Ok(()),
-            Err(_) => break Err(()),
-        }
+        Ok(_) => Ok(()),
+        Err(_) => Err(()),
     };
 
     let _ = child.kill();

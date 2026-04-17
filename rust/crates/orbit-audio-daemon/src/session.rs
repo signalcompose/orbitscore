@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError};
@@ -31,7 +31,7 @@ pub async fn run(
         };
 
         let text = match msg {
-            Message::Text(t) => t.to_string(),
+            Message::Text(t) => t,
             Message::Close(_) => break,
             Message::Ping(p) => {
                 write.send(Message::Pong(p)).await?;
@@ -53,7 +53,7 @@ pub async fn run(
             }
         };
 
-        let reply = handle_command(&cmd, &engine);
+        let reply = handle_command(cmd, &engine).await;
         let s = serde_json::to_string(&reply).unwrap();
         write.send(Message::Text(s)).await?;
     }
@@ -62,9 +62,10 @@ pub async fn run(
 }
 
 /// Command を dispatch し、Response JSON を組み立てる。
-fn handle_command(cmd: &Command, engine: &Arc<EngineWrap>) -> Value {
-    match cmd.method.as_str() {
-        "Ping" => ok(&cmd.id, Value::String("pong".to_string())),
+async fn handle_command(cmd: Command, engine: &Arc<EngineWrap>) -> Value {
+    let Command { id, method, params } = cmd;
+    match method.as_str() {
+        "Ping" => ok(&id, Value::String("pong".to_string())),
         "GetStatus" => {
             let status = json!({
                 "daemon_version": env!("CARGO_PKG_VERSION"),
@@ -72,95 +73,95 @@ fn handle_command(cmd: &Command, engine: &Arc<EngineWrap>) -> Value {
                 "output_sample_rate": engine.output_sample_rate(),
                 "output_channels": engine.output_channels(),
                 "loaded_samples": engine.loaded_sample_count(),
-                "now_sec": engine.now_sec().unwrap_or(0.0),
+                "active_plays": engine.active_play_count(),
+                "uptime_sec": engine.uptime_sec(),
             });
-            ok(&cmd.id, status)
+            ok(&id, status)
         }
-        "LoadSample" => match cmd.params.get("path").and_then(|p| p.as_str()) {
-            Some(path_str) => match engine.load_sample(path_str.into()) {
-                Ok(info) => ok(
-                    &cmd.id,
-                    json!({
-                        "sample_id": info.sample_id,
-                        "frames": info.frames,
-                        "channels": info.channels,
-                        "sample_rate": info.sample_rate,
-                    }),
-                ),
-                Err(e) => err(&cmd.id, wrap_err_to_protocol(&e)),
-            },
+        "LoadSample" => match params.get("path").and_then(|p| p.as_str()) {
+            Some(path_str) => {
+                // ファイル I/O + symphonia decode + rubato SRC は CPU/IO ブロッキング。
+                // tokio ワーカーを塞がないよう spawn_blocking で隔離する。
+                let engine = engine.clone();
+                let path = std::path::PathBuf::from(path_str);
+                let loaded = tokio::task::spawn_blocking(move || engine.load_sample(path)).await;
+                match loaded {
+                    Ok(Ok(info)) => ok(
+                        &id,
+                        json!({
+                            "sample_id": info.sample_id,
+                            "frames": info.frames,
+                            "channels": info.channels,
+                            "sample_rate": info.sample_rate,
+                        }),
+                    ),
+                    Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
+                    Err(join_err) => err(
+                        &id,
+                        ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                    ),
+                }
+            }
             None => err(
-                &cmd.id,
+                &id,
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
             ),
         },
-        "UnloadSample" => match cmd.params.get("sample_id").and_then(|p| p.as_str()) {
+        "UnloadSample" => match params.get("sample_id").and_then(|p| p.as_str()) {
             Some(sid) => match engine.unload_sample(sid) {
-                Ok(()) => ok(&cmd.id, json!({"status": "unloaded"})),
-                Err(e) => err(&cmd.id, wrap_err_to_protocol(&e)),
+                Ok(()) => ok(&id, json!({"status": "unloaded"})),
+                Err(e) => err(&id, wrap_err_to_protocol(&e)),
             },
             None => err(
-                &cmd.id,
+                &id,
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'sample_id' param"),
             ),
         },
         "PlayAt" => {
-            let time_sec = cmd
-                .params
+            let time_sec = params
                 .get("time_sec")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0);
-            let gain = cmd
-                .params
+            let gain = params
                 .get("gain")
                 .and_then(|v| v.as_f64())
                 .map(|x| x as f32)
                 .unwrap_or(1.0);
             if gain < 0.0 {
                 return err(
-                    &cmd.id,
+                    &id,
                     ProtocolError::new("PARAM_OUT_OF_RANGE", "gain must be >= 0"),
                 );
             }
-            match cmd.params.get("sample_id").and_then(|v| v.as_str()) {
+            match params.get("sample_id").and_then(|v| v.as_str()) {
                 Some(sid) => match engine.play_at(sid, time_sec, gain) {
-                    Ok(handle) => ok(&cmd.id, json!({"play_id": handle.play_id})),
-                    Err(e) => err(&cmd.id, wrap_err_to_protocol(&e)),
+                    Ok(handle) => ok(&id, json!({"play_id": handle.play_id})),
+                    Err(e) => err(&id, wrap_err_to_protocol(&e)),
                 },
                 None => err(
-                    &cmd.id,
+                    &id,
                     ProtocolError::new("MALFORMED_REQUEST", "missing 'sample_id' param"),
                 ),
             }
         }
         "Stop" => {
-            // 現状の Engine は個別 play 停止 API を持たないため、常に idempotent success を返す。
-            // Phase 1b-2 で Engine 側に Stop API を追加予定。
-            let pid = cmd
-                .params
-                .get("play_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            ok(&cmd.id, json!({"play_id": pid, "status": "not_found"}))
+            // 現状 Engine は個別 play 停止 API を持たないため常に not_found を返す (Phase 1b-2 で実装)。
+            let pid = params.get("play_id").and_then(|v| v.as_str()).unwrap_or("");
+            ok(&id, json!({"play_id": pid, "status": "not_found"}))
         }
         "SetGlobalGain" => {
-            // 現状の Engine は global gain を持たないため、受理するが no-op。
-            // Phase 1b-2 で実装予定。
-            let value = cmd
-                .params
-                .get("value")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(1.0);
+            // 現状 Engine は global gain を持たないため、受理するが no-op (Phase 1b-2 で実装)。
+            let value = params.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);
             if value < 0.0 {
                 return err(
-                    &cmd.id,
+                    &id,
                     ProtocolError::new("PARAM_OUT_OF_RANGE", "value must be >= 0"),
                 );
             }
-            ok(&cmd.id, json!({"status": "accepted"}))
+            ok(&id, json!({"status": "accepted"}))
         }
         other => err(
-            &cmd.id,
+            &id,
             ProtocolError::new("MALFORMED_REQUEST", format!("unknown method: {other}")),
         ),
     }
@@ -199,6 +200,7 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::Loader(L::Resample(r)) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
         WrapError::Resample(r) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
         WrapError::Output(o) => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
+        WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
     }
 }
 
@@ -214,13 +216,4 @@ pub fn make_stream_stats_event(now_sec: f64) -> Event {
             "now_sec": now_sec,
         }),
     )
-}
-
-#[allow(dead_code)]
-pub fn _assert_not_dead<T>(_: T) {}
-
-// sanity: info! を使うのでリンカが warning を出さないよう ref
-#[allow(dead_code)]
-fn _use_info() {
-    info!("touch");
 }

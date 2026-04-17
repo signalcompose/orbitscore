@@ -23,6 +23,8 @@ pub enum WrapError {
     Resample(#[from] ResampleError),
     #[error("sample not found: {0}")]
     SampleNotFound(String),
+    #[error("scheduler error: {0}")]
+    Scheduler(String),
 }
 
 /// 共有可能なエンジン wrapper。
@@ -34,6 +36,8 @@ pub struct EngineWrap {
     sample_rate: u32,
     channels: u16,
     samples: Mutex<HashMap<String, Sample>>,
+    started_at: std::time::Instant,
+    active_play_count: std::sync::atomic::AtomicUsize,
 }
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
@@ -51,8 +55,19 @@ impl EngineWrap {
             sample_rate,
             channels,
             samples: Mutex::new(HashMap::new()),
+            started_at: std::time::Instant::now(),
+            active_play_count: std::sync::atomic::AtomicUsize::new(0),
         });
         Ok((wrap, StreamGuard(stream)))
+    }
+
+    pub fn uptime_sec(&self) -> f64 {
+        self.started_at.elapsed().as_secs_f64()
+    }
+
+    pub fn active_play_count(&self) -> usize {
+        self.active_play_count
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn output_sample_rate(&self) -> u32 {
@@ -103,9 +118,9 @@ impl EngineWrap {
             .ok_or_else(|| WrapError::SampleNotFound(sample_id.to_string()))?;
         self.engine
             .schedule_with_gain(time_sec, gain, sample)
-            .map_err(|_| {
-                WrapError::Loader(LoaderError::Decode("scheduler poisoned".to_string()))
-            })?;
+            .map_err(|e| WrapError::Scheduler(e.to_string()))?;
+        self.active_play_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(PlayHandle {
             play_id: format!("p-{}", short_uuid()),
         })
@@ -115,6 +130,7 @@ impl EngineWrap {
         self.samples.lock().unwrap().len()
     }
 
+    #[allow(dead_code)]
     pub fn now_sec(&self) -> Option<f64> {
         self.engine.now_sec()
     }
