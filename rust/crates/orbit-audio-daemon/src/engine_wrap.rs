@@ -3,7 +3,7 @@
 //! `Arc<Mutex>` ベースで制御スレッドと audio callback を共有する。
 //! audio callback 側は `try_lock` で競合時に無音 fallback する前提（lock-free 化は別 Issue）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -39,6 +39,9 @@ pub struct EngineWrap {
     samples: Mutex<HashMap<String, Sample>>,
     started_at: std::time::Instant,
     stream_stats: Arc<StreamStats>,
+    /// Stop 経由で停止済みの play_id。PlayEnded 遅延タスクが自然発火を抑制するために参照する。
+    /// PlayEnded 発火時に take（remove）されるため、通常ケースでは事後掃除不要。
+    stopped_play_ids: Mutex<HashSet<String>>,
 }
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
@@ -58,6 +61,7 @@ impl EngineWrap {
             samples: Mutex::new(HashMap::new()),
             started_at: std::time::Instant::now(),
             stream_stats,
+            stopped_play_ids: Mutex::new(HashSet::new()),
         });
         Ok((wrap, StreamGuard(stream)))
     }
@@ -131,10 +135,31 @@ impl EngineWrap {
     }
 
     /// `play_id` に一致するアクティブ再生を停止する。true = 停止、false = 見つからず。
+    ///
+    /// 停止成功時は `stopped_play_ids` にも記録し、PlayEnded 遅延タスクに
+    /// 自然発火を抑制させる（take_play_ended_suppressed で消費される）。
     pub fn stop(&self, play_id: &str) -> Result<bool, WrapError> {
-        self.engine
+        let stopped = self
+            .engine
             .stop(play_id)
-            .map_err(|e| WrapError::Scheduler(e.to_string()))
+            .map_err(|e| WrapError::Scheduler(e.to_string()))?;
+        if stopped {
+            self.stopped_play_ids
+                .lock()
+                .map_err(|_| WrapError::Scheduler("stopped_play_ids mutex poisoned".to_string()))?
+                .insert(play_id.to_string());
+        }
+        Ok(stopped)
+    }
+
+    /// PlayEnded 送信直前に呼ぶ。Stop によって停止された `play_id` なら true を返し、
+    /// 該当エントリを remove する。呼び出し側は true なら PlayEnded の送出をスキップする。
+    pub fn take_play_ended_suppressed(&self, play_id: &str) -> bool {
+        match self.stopped_play_ids.lock() {
+            Ok(mut s) => s.remove(play_id),
+            // poisoned は非致命的エラー扱い: 抑制されていない前提で PlayEnded を送出する
+            Err(_) => false,
+        }
     }
 
     /// 読み取り専用カウンタ。poisoned 時は fallback として 0 を返す。

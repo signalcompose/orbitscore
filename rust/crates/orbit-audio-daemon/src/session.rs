@@ -357,6 +357,11 @@ fn schedule_play_ended(
         if delay > 0.0 {
             tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
         }
+        // Stop 命令で停止された play_id なら PlayEnded を送出しない。
+        // Stop 応答 + PlayEnded の二重通知を避け、protocol の意味論を保つ。
+        if engine.take_play_ended_suppressed(&play_id) {
+            return;
+        }
         let ended_at_sec = start_sec + duration_sec;
         let evt = Event::new(
             EVENT_PLAY_ENDED,
