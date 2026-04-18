@@ -214,16 +214,11 @@ impl Scheduler {
         self.output_sample_rate
     }
 
-    /// スケジュール中のイベント数（完了前の play_at + まだ開始時刻に到達していないもの）。
+    /// 現在保持中のイベント数（開始時刻待機中 + 再生中の両方を含む、完了済は除く）。
     pub fn active_count(&self) -> usize {
         self.events.len()
     }
 
-    /// テスト用: 保持しているイベント数
-    #[cfg(test)]
-    pub(crate) fn events_len(&self) -> usize {
-        self.events.len()
-    }
 }
 
 #[cfg(test)]
@@ -244,7 +239,7 @@ mod tests {
         s.render(&mut buf);
 
         // まだ開始時刻に到達していないので保持されているはず（retain 回帰テスト）
-        assert_eq!(s.events_len(), 1);
+        assert_eq!(s.active_count(), 1);
     }
 
     #[test]
@@ -256,7 +251,7 @@ mod tests {
         let mut buf = vec![0.0f32; 1000];
         s.render(&mut buf);
 
-        assert_eq!(s.events_len(), 0);
+        assert_eq!(s.active_count(), 0);
     }
 
     #[test]
@@ -272,7 +267,7 @@ mod tests {
         s.render(&mut buf); // panic せず完了すること
                             // 次回 render でイベントが掃除される
         s.render(&mut buf);
-        assert_eq!(s.events_len(), 0);
+        assert_eq!(s.active_count(), 0);
     }
 
     #[test]
@@ -348,12 +343,12 @@ mod tests {
             ScheduledSample::new(2.0, mk_sample_stereo(100))
                 .with_play_id("p-b".to_string()),
         );
-        assert_eq!(s.events_len(), 2);
+        assert_eq!(s.active_count(), 2);
         assert!(s.stop("p-a"));
-        assert_eq!(s.events_len(), 1);
+        assert_eq!(s.active_count(), 1);
         assert!(!s.stop("p-a"));
         assert!(s.stop("p-b"));
-        assert_eq!(s.events_len(), 0);
+        assert_eq!(s.active_count(), 0);
     }
 
     #[test]
@@ -361,7 +356,7 @@ mod tests {
         let mut s = Scheduler::new(48_000, 2);
         s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100)));
         assert!(!s.stop("does-not-exist"));
-        assert_eq!(s.events_len(), 1);
+        assert_eq!(s.active_count(), 1);
     }
 
     #[test]

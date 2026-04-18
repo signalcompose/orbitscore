@@ -1,6 +1,7 @@
 //! Engine + ロード済みサンプル / 再生管理の wrapper。
 //!
-//! PoC 簡略化のため `Arc<Mutex>` ベース。lock-free 化は Phase 1b-2 以降で検討。
+//! `Arc<Mutex>` ベースで制御スレッドと audio callback を共有する。
+//! audio callback 側は `try_lock` で競合時に無音 fallback する前提（lock-free 化は別 Issue）。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -136,8 +137,7 @@ impl EngineWrap {
             .map_err(|e| WrapError::Scheduler(e.to_string()))
     }
 
-    /// 読み取り専用カウンタ。Phase 1b-2 で Stop 実装後に poisoned 検出もしたいため
-    /// 現状は Result ではなく fallback（poisoned 時は 0 を返す）で返却する。
+    /// 読み取り専用カウンタ。poisoned 時は fallback として 0 を返す。
     pub fn loaded_sample_count(&self) -> usize {
         match self.samples.lock() {
             Ok(guard) => guard.len(),

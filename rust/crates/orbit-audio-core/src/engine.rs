@@ -45,18 +45,6 @@ impl Engine {
         Ok(())
     }
 
-    /// 指定ゲインでサンプルをスケジュールする。
-    pub fn schedule_with_gain(
-        &self,
-        start_sec: f64,
-        gain: f32,
-        sample: Sample,
-    ) -> Result<(), EngineError> {
-        let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
-        s.schedule(ScheduledSample::new(start_sec, sample).with_gain(gain));
-        Ok(())
-    }
-
     /// `play_id` 付きでスケジュールする。後で `stop` で個別停止できる。
     pub fn schedule_with_play_id(
         &self,
