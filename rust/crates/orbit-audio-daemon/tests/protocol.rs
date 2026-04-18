@@ -88,7 +88,7 @@ async fn play_at_then_play_started_and_play_ended() {
     assert!(saw_ended, "PlayEnded event missing");
 }
 
-/// PR #116 fix 回帰テスト: Stop された play_id では PlayEnded が発火しない。
+/// Stop された play_id では PlayEnded が発火しないことを確認する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn stop_suppresses_play_ended() {
     let daemon = TestDaemon::start().await;
@@ -140,10 +140,7 @@ async fn stop_suppresses_play_ended() {
             Err(_) => break,
         }
     }
-    assert!(
-        !saw_ended,
-        "PlayEnded should be suppressed after Stop (PR #116 regression)"
-    );
+    assert!(!saw_ended, "PlayEnded should be suppressed after Stop");
 }
 
 /// Stop の play_id パラメータ欠落時は MALFORMED_REQUEST。

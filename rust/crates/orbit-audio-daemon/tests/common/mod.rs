@@ -111,18 +111,22 @@ pub async fn recv_reply_for_id(ws: &mut WsClient, id: &str) -> Value {
 ///
 /// PlayStarted が reply より先に来るケース（`PlayAt` の実装順序）で、
 /// event を discard せず保持したいテスト向け。
+///
+/// `StreamStats` は 1 Hz ticker が連続で積むことがあるため、scan budget の
+/// 圧迫を避けて `events` には含めない（純 StreamStats を検証するテストは
+/// `recv_reply_for_id` を使わず直接 `next_json` でドレインする）。
 pub async fn recv_reply_with_events(ws: &mut WsClient, id: &str) -> (Value, Vec<Value>) {
     let mut events = Vec::new();
-    for _ in 0..16 {
+    for _ in 0..64 {
         let msg = next_json(ws).await;
         if msg["id"] == id {
             return (msg, events);
         }
-        if msg["type"] == "event" {
+        if msg["type"] == "event" && msg["event"] != "StreamStats" {
             events.push(msg);
         }
     }
-    panic!("did not receive reply for id={id} within 16 messages");
+    panic!("did not receive reply for id={id} within 64 messages");
 }
 
 /// Command を JSON 文字列で送る。

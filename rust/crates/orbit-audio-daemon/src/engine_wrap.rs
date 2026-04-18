@@ -53,14 +53,40 @@ impl EngineWrap {
     /// Engine とストリーム guard を起動する（本番用、cpal 既定出力）。
     /// guard は caller（通常は main）が drop されるまで保持すること。
     ///
-    /// 内部的には [`Self::start_with`] に [`CpalBackend`] を渡しているのと
-    /// 等価だが、戻り値の guard 型を歴史的な `StreamGuard` (!Send) に保つため
-    /// 別パスで書いている。test からは [`Self::start_with`] を使う。
+    /// 本番経路は `cpal::Stream` が `!Send` のため [`Self::start_with`] の
+    /// `Box<dyn Any + Send>` guard 型に詰められない。そのため本番は専用パス。
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats) = orbit_audio_native::start_default_output()?;
-        let sample_rate = stream.sample_rate;
-        let channels = stream.channels;
-        let wrap = Arc::new(Self {
+        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        Ok((wrap, StreamGuard(stream)))
+    }
+
+    /// [`AudioBackend`] 経由で起動する（integration test 用）。
+    ///
+    /// guard は `Box<dyn Any + Send>` の不透明ハンドル。scope 終了まで
+    /// drop せずに保持する必要がある。
+    pub fn start_with<B: AudioBackend>(
+        backend: B,
+    ) -> Result<(Arc<Self>, Box<dyn std::any::Any + Send>), WrapError> {
+        let started = backend.start()?;
+        let wrap = Self::build(
+            started.engine,
+            started.sample_rate,
+            started.channels,
+            started.stats,
+        );
+        Ok((wrap, started.guard))
+    }
+
+    /// `start` / `start_with` 共通の Arc<Self> 構築部。新しいフィールドが
+    /// 追加された際、両経路で初期化漏れが起きないよう一箇所に集約する。
+    fn build(
+        engine: Engine,
+        sample_rate: u32,
+        channels: u16,
+        stream_stats: Arc<StreamStats>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
             engine,
             sample_rate,
             channels,
@@ -68,30 +94,7 @@ impl EngineWrap {
             started_at: std::time::Instant::now(),
             stream_stats,
             stopped_play_ids: Mutex::new(HashSet::new()),
-        });
-        Ok((wrap, StreamGuard(stream)))
-    }
-
-    /// 任意の [`AudioBackend`] で起動する。integration test は
-    /// [`crate::backend::StubBackend`] を渡して audio device を使わずに
-    /// `EngineWrap` を構築する。
-    ///
-    /// guard は `Box<dyn Any + Send>` の不透明ハンドル。scope 終了まで
-    /// drop せずに保持する必要がある（cpal::Stream の alive 条件）。
-    pub fn start_with<B: AudioBackend>(
-        backend: B,
-    ) -> Result<(Arc<Self>, Box<dyn std::any::Any + Send>), WrapError> {
-        let started = backend.start()?;
-        let wrap = Arc::new(Self {
-            engine: started.engine,
-            sample_rate: started.sample_rate,
-            channels: started.channels,
-            samples: Mutex::new(HashMap::new()),
-            started_at: std::time::Instant::now(),
-            stream_stats: started.stats,
-            stopped_play_ids: Mutex::new(HashSet::new()),
-        });
-        Ok((wrap, started.guard))
+        })
     }
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から
