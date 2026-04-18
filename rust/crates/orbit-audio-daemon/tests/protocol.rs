@@ -62,8 +62,6 @@ async fn play_at_then_play_started_and_play_ended() {
     )
     .await;
     let (_play_resp, early_events) = recv_reply_with_events(&mut ws, "cmd-play").await;
-    // PlayStarted は PlayAt 実装上 reply より先に writer mpsc に乗るため
-    // early_events に含まれる可能性がある。
     let mut saw_started = early_events.iter().any(|e| e["event"] == "PlayStarted");
 
     // sample duration を advance。kick.wav は 1 秒未満。
@@ -214,8 +212,8 @@ async fn stream_stats_ticks_at_1hz() {
     let mut ws = daemon.connect().await;
     let _hs = TestDaemon::recv_handshake(&mut ws).await;
 
-    // ticker は接続直後の INTERVAL 経過後に初回発火。2 tick を安定して観測するため
-    // 5 秒分 advance する。各 advance 後に yield_now を複数回挟んで ticker task を駆動する。
+    // ticker は接続直後の INTERVAL 経過後に初回発火。最大 8 秒分 1 秒刻みで
+    // advance し、2 tick 観測できた時点で break する（早期終了前提）。
     let mut stats_count = 0;
     for _ in 0..8 {
         advance_and_yield(Duration::from_secs(1)).await;
@@ -300,4 +298,69 @@ async fn daemon_error_fatal_on_device_lost() {
         }
     }
     assert!(saw_fatal, "DEVICE_LOST fatal event not received");
+}
+
+/// UnloadSample は happy path でサンプルを解放でき、二重 unload はエラー。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn unload_sample_happy_then_unknown() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let wav_path = format!("{manifest_dir}/../../../test-assets/audio/kick.wav");
+    send_cmd(&mut ws, "l", "LoadSample", json!({ "path": wav_path })).await;
+    let load_resp = recv_reply_for_id(&mut ws, "l").await;
+    let sid = load_resp["result"]["sample_id"].as_str().unwrap().to_string();
+
+    send_cmd(&mut ws, "u1", "UnloadSample", json!({ "sample_id": sid })).await;
+    let resp1 = recv_reply_for_id(&mut ws, "u1").await;
+    assert!(resp1["result"].is_object(), "first unload should succeed: {resp1}");
+
+    // 既に解放済みの sample_id を再度 unload するとエラー応答になる。
+    send_cmd(&mut ws, "u2", "UnloadSample", json!({ "sample_id": sid })).await;
+    let resp2 = recv_reply_for_id(&mut ws, "u2").await;
+    assert!(
+        resp2["error"].is_object(),
+        "second unload should fail: {resp2}"
+    );
+}
+
+/// PlayAt に未ロードの sample_id を渡すとエラー応答を返す。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn play_at_unknown_sample_id_errors() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    send_cmd(
+        &mut ws,
+        "p",
+        "PlayAt",
+        json!({ "sample_id": "s-ghost", "time_sec": 0.0, "gain": 1.0 }),
+    )
+    .await;
+    let resp = recv_reply_for_id(&mut ws, "p").await;
+    assert!(
+        resp["error"].is_object(),
+        "unknown sample_id should yield error: {resp}"
+    );
+}
+
+/// SetGlobalGain は負の `ramp_sec` を拒否する。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn set_global_gain_rejects_negative_ramp() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    send_cmd(
+        &mut ws,
+        "g",
+        "SetGlobalGain",
+        json!({ "value": 1.0, "ramp_sec": -0.1 }),
+    )
+    .await;
+    let resp = recv_reply_for_id(&mut ws, "g").await;
+    assert_eq!(resp["error"]["code"], "PARAM_OUT_OF_RANGE");
 }
