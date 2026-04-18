@@ -3396,6 +3396,24 @@ git mv docs/IMPROVEMENT_RECOMMENDATIONS.md docs/planning/
 
 ---
 
+### 6.46 Fix pre-edit-check.sh hook protocol violation (April 18, 2026)
+
+#### 背景
+`.claude/hooks/pre-edit-check.sh` の main ブランチ block 時に Claude Code が "No stderr output" エラーを表示し、親切なブロック理由が user に到達していなかった (Issue #119)。
+
+#### 原因
+1. Shell スタイル block (`exit 2`) なのに理由を stdout に `{"error":"..."}` 独自 schema で出していた。exit 2 は stderr を期待するため stdout は捨てられ、Claude Code から見ると「exit 2 で block、stderr 空」状態だった
+2. notification 分岐で `<<'EOF'` (quoted heredoc) を使っていたため `${CURRENT_BRANCH}` が展開されずリテラル文字列のまま埋め込まれていた
+
+#### 修正
+- main block は Claude Code 公式 JSON schema (`hookSpecificOutput.permissionDecision=deny` + `permissionDecisionReason`) + `exit 0` に変更。jq (fallback: python3) で JSON escape
+- notification heredoc は `<<EOF` に変更して変数展開を有効化
+- 3 シナリオ (main / 非 issue ブランチ / issue ブランチ) で動作検証済み
+
+**Branch**: `119-fix-pre-edit-check-hook-protocol`
+
+---
+
 ## Archived Work
 
 Older work logs have been moved to the archive:
