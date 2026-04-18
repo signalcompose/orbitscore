@@ -9,10 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use orbit_audio_core::{Engine, Sample};
 use orbit_audio_native::{
-    load_sample_resampled, start_default_output, LoaderError, OutputError, OutputStream,
-    ResampleError, StreamStats, StreamStatsSnapshot,
+    load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
+    StreamStatsSnapshot,
 };
 use uuid::Uuid;
+
+use crate::backend::AudioBackend;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WrapError {
@@ -48,10 +50,14 @@ pub struct EngineWrap {
 pub struct StreamGuard(#[allow(dead_code)] pub(crate) OutputStream);
 
 impl EngineWrap {
-    /// Engine とストリーム guard を起動する。
+    /// Engine とストリーム guard を起動する（本番用、cpal 既定出力）。
     /// guard は caller（通常は main）が drop されるまで保持すること。
+    ///
+    /// 内部的には [`Self::start_with`] に [`CpalBackend`] を渡しているのと
+    /// 等価だが、戻り値の guard 型を歴史的な `StreamGuard` (!Send) に保つため
+    /// 別パスで書いている。test からは [`Self::start_with`] を使う。
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
-        let (engine, stream, stream_stats) = start_default_output()?;
+        let (engine, stream, stream_stats) = orbit_audio_native::start_default_output()?;
         let sample_rate = stream.sample_rate;
         let channels = stream.channels;
         let wrap = Arc::new(Self {
@@ -64,6 +70,35 @@ impl EngineWrap {
             stopped_play_ids: Mutex::new(HashSet::new()),
         });
         Ok((wrap, StreamGuard(stream)))
+    }
+
+    /// 任意の [`AudioBackend`] で起動する。integration test は
+    /// [`crate::backend::StubBackend`] を渡して audio device を使わずに
+    /// `EngineWrap` を構築する。
+    ///
+    /// guard は `Box<dyn Any + Send>` の不透明ハンドル。scope 終了まで
+    /// drop せずに保持する必要がある（cpal::Stream の alive 条件）。
+    pub fn start_with<B: AudioBackend>(
+        backend: B,
+    ) -> Result<(Arc<Self>, Box<dyn std::any::Any + Send>), WrapError> {
+        let started = backend.start()?;
+        let wrap = Arc::new(Self {
+            engine: started.engine,
+            sample_rate: started.sample_rate,
+            channels: started.channels,
+            samples: Mutex::new(HashMap::new()),
+            started_at: std::time::Instant::now(),
+            stream_stats: started.stats,
+            stopped_play_ids: Mutex::new(HashSet::new()),
+        });
+        Ok((wrap, started.guard))
+    }
+
+    /// test harness 用: `StreamStats` への参照を取得し、外部から
+    /// xrun / device_lost を駆動できるようにする。
+    #[doc(hidden)]
+    pub fn stream_stats_arc(&self) -> Arc<StreamStats> {
+        self.stream_stats.clone()
     }
 
     pub fn uptime_sec(&self) -> f64 {

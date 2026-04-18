@@ -8,16 +8,12 @@
 //!
 //! 起動失敗時は stderr に 1 行 JSON を出して非ゼロ exit code で終了する。
 
-mod engine_wrap;
-mod protocol;
-mod server;
-mod session;
-
-use engine_wrap::EngineWrap;
-use protocol::{
+use orbit_audio_daemon::engine_wrap::EngineWrap;
+use orbit_audio_daemon::protocol::{
     Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC,
     ERROR_SEVERITY_FATAL, EVENT_DAEMON_ERROR, PROTOCOL_VERSION,
 };
+use orbit_audio_daemon::server;
 use serde_json::json;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
