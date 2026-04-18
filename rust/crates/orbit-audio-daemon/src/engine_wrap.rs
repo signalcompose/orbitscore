@@ -1,8 +1,9 @@
 //! Engine + ロード済みサンプル / 再生管理の wrapper。
 //!
-//! PoC 簡略化のため `Arc<Mutex>` ベース。lock-free 化は Phase 1b-2 以降で検討。
+//! `Arc<Mutex>` ベースで制御スレッドと audio callback を共有する。
+//! audio callback 側は `try_lock` で競合時に無音 fallback する前提（lock-free 化は別 Issue）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -37,8 +38,10 @@ pub struct EngineWrap {
     channels: u16,
     samples: Mutex<HashMap<String, Sample>>,
     started_at: std::time::Instant,
-    active_play_count: std::sync::atomic::AtomicUsize,
     stream_stats: Arc<StreamStats>,
+    /// Stop 経由で停止済みの play_id。PlayEnded 遅延タスクが自然発火を抑制するために参照する。
+    /// PlayEnded 発火時に take（remove）されるため、通常ケースでは事後掃除不要。
+    stopped_play_ids: Mutex<HashSet<String>>,
 }
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
@@ -57,8 +60,8 @@ impl EngineWrap {
             channels,
             samples: Mutex::new(HashMap::new()),
             started_at: std::time::Instant::now(),
-            active_play_count: std::sync::atomic::AtomicUsize::new(0),
             stream_stats,
+            stopped_play_ids: Mutex::new(HashSet::new()),
         });
         Ok((wrap, StreamGuard(stream)))
     }
@@ -67,12 +70,10 @@ impl EngineWrap {
         self.started_at.elapsed().as_secs_f64()
     }
 
-    /// 現在は daemon 起動からの累積 `PlayAt` 回数を返す。
-    /// Phase 1b-1 時点では Stop / 再生完了イベントが未実装のため、
-    /// 減算は行わず単調増加する（Phase 1b-2 で実時間の active 数に移行予定）。
+    /// 現在スケジュール中の（まだ完了していない）再生イベント数。
+    /// audio callback がロックを握っている瞬間は取得できないので、その場合は 0 を返す。
     pub fn active_play_count(&self) -> usize {
-        self.active_play_count
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.engine.active_count().unwrap_or(0)
     }
 
     pub fn output_sample_rate(&self) -> u32 {
@@ -122,20 +123,46 @@ impl EngineWrap {
             .cloned()
             .ok_or_else(|| WrapError::SampleNotFound(sample_id.to_string()))?;
         let duration_sec = sample.duration_secs();
+        let play_id = format!("p-{}", short_uuid());
         self.engine
-            .schedule_with_gain(time_sec, gain, sample)
+            .schedule_with_play_id(time_sec, gain, play_id.clone(), sample)
             .map_err(|e| WrapError::Scheduler(e.to_string()))?;
-        self.active_play_count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(PlayHandle {
-            play_id: format!("p-{}", short_uuid()),
+            play_id,
             start_sec: time_sec,
             duration_sec,
         })
     }
 
-    /// 読み取り専用カウンタ。Phase 1b-2 で Stop 実装後に poisoned 検出もしたいため
-    /// 現状は Result ではなく fallback（poisoned 時は 0 を返す）で返却する。
+    /// `play_id` に一致するアクティブ再生を停止する。true = 停止、false = 見つからず。
+    ///
+    /// 停止成功時は `stopped_play_ids` にも記録し、PlayEnded 遅延タスクに
+    /// 自然発火を抑制させる（take_play_ended_suppressed で消費される）。
+    pub fn stop(&self, play_id: &str) -> Result<bool, WrapError> {
+        let stopped = self
+            .engine
+            .stop(play_id)
+            .map_err(|e| WrapError::Scheduler(e.to_string()))?;
+        if stopped {
+            self.stopped_play_ids
+                .lock()
+                .map_err(|_| WrapError::Scheduler("stopped_play_ids mutex poisoned".to_string()))?
+                .insert(play_id.to_string());
+        }
+        Ok(stopped)
+    }
+
+    /// PlayEnded 送信直前に呼ぶ。Stop によって停止された `play_id` なら true を返し、
+    /// 該当エントリを remove する。呼び出し側は true なら PlayEnded の送出をスキップする。
+    pub fn take_play_ended_suppressed(&self, play_id: &str) -> bool {
+        match self.stopped_play_ids.lock() {
+            Ok(mut s) => s.remove(play_id),
+            // poisoned は非致命的エラー扱い: 抑制されていない前提で PlayEnded を送出する
+            Err(_) => false,
+        }
+    }
+
+    /// 読み取り専用カウンタ。poisoned 時は fallback として 0 を返す。
     pub fn loaded_sample_count(&self) -> usize {
         match self.samples.lock() {
             Ok(guard) => guard.len(),

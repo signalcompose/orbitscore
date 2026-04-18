@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.62 Issue #107: orbit-audio-daemon Stop 個別停止実装 (April 18, 2026)
+
+**Date**: April 18, 2026
+**Status**: ✅ COMPLETE (Phase 1b-5: per-play Stop)
+**Branch**: `107-daemon-stop`
+**Issue**: #107
+
+**Work Content**: これまで常に `not_found` を返す no-op だった `Stop` コマンドを実装。`Scheduler::stop(play_id)` で events から対象を削除、`Engine` / `EngineWrap` 経由で daemon session が呼び出す。protocol v0.1 の `stopped` / `not_found` 返却を満たす。
+
+**実装**:
+- `ScheduledSample` / `ActiveSample` に `play_id: Option<String>` を追加
+- `Scheduler::stop(&str) -> bool` で events retain 経由の削除
+- `Engine::schedule_with_play_id` / `Engine::stop` を公開
+- `EngineWrap::play_at` は生成した `play_id` を `schedule_with_play_id` 経由で渡す
+- `EngineWrap::stop(play_id) -> Result<bool, _>` を追加
+- `Stop` handler を実装に置き換え、`play_id` 欠落を `MALFORMED_REQUEST` で返却
+
+**テスト**:
+- scheduler: 一致 id で削除 / 未知 id で no-op — 2 件追加
+- 既存 12 native / 14 core / 1 daemon smoke 全 pass
+- clippy clean
+
+**スコープ外**:
+- `already_stopped` 状態の区別（履歴追跡が必要、現状は `not_found` にまとめる）
+- DaemonError severity=fatal (panic hook / device lost)
+
+---
+
 ### 6.61 Issue #107: orbit-audio-daemon SetGlobalGain 実装 (April 18, 2026)
 
 **Date**: April 18, 2026
