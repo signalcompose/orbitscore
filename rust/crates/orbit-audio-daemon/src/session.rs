@@ -17,18 +17,14 @@ use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 use tracing::warn;
 
 use crate::engine_wrap::{EngineWrap, WrapError};
-use crate::protocol::{Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError};
+use crate::protocol::{
+    Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError, ERROR_CODE_DEVICE_LOST,
+    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
+    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
+};
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
 const EVENT_CHANNEL_CAPACITY: usize = 128;
-
-const EVENT_PLAY_STARTED: &str = "PlayStarted";
-const EVENT_PLAY_ENDED: &str = "PlayEnded";
-const EVENT_STREAM_STATS: &str = "StreamStats";
-const EVENT_DAEMON_ERROR: &str = "DaemonError";
-
-const ERROR_SEVERITY_WARNING: &str = "warning";
-const ERROR_CODE_STREAM_XRUN: &str = "STREAM_XRUN";
 
 /// StreamStats の送出間隔。protocol 仕様で 1 Hz 固定。
 const STREAM_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -66,10 +62,27 @@ pub async fn run(
             let mut ticker = tokio::time::interval_at(start, STREAM_STATS_INTERVAL);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_xruns: u64 = 0;
+            let mut device_lost_reported = false;
             loop {
                 ticker.tick().await;
                 let snapshot = engine.stream_stats_snapshot();
                 let now_sec = engine.transport_or_uptime_sec();
+
+                // fatal を warning より先に送り、client が最終イベントとして確実に観測できる順序にする。
+                if snapshot.device_lost && !device_lost_reported {
+                    let fatal_evt = Event::new(
+                        EVENT_DAEMON_ERROR,
+                        json!({
+                            "severity": ERROR_SEVERITY_FATAL,
+                            "code": ERROR_CODE_DEVICE_LOST,
+                            "message": "audio device disappeared",
+                        }),
+                    );
+                    if tx.send(to_json_or_fallback(&fatal_evt)).await.is_err() {
+                        break;
+                    }
+                    device_lost_reported = true;
+                }
 
                 if snapshot.xruns > last_xruns {
                     let warn_evt = Event::new(

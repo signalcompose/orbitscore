@@ -70,6 +70,20 @@ impl ProtocolError {
     }
 }
 
+// Event / error code constants. Shared across session and panic-hook paths so the
+// wire schema is produced from a single source.
+pub const EVENT_DAEMON_ERROR: &str = "DaemonError";
+pub const EVENT_STREAM_STATS: &str = "StreamStats";
+pub const EVENT_PLAY_STARTED: &str = "PlayStarted";
+pub const EVENT_PLAY_ENDED: &str = "PlayEnded";
+
+pub const ERROR_SEVERITY_WARNING: &str = "warning";
+pub const ERROR_SEVERITY_FATAL: &str = "fatal";
+
+pub const ERROR_CODE_STREAM_XRUN: &str = "STREAM_XRUN";
+pub const ERROR_CODE_DEVICE_LOST: &str = "DEVICE_LOST";
+pub const ERROR_CODE_FATAL_PANIC: &str = "FATAL_PANIC";
+
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]
 pub struct Event {
