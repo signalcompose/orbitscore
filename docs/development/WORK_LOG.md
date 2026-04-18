@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.63 Issue #107: orbit-audio-daemon fatal DaemonError (April 18, 2026)
+
+**Date**: April 18, 2026
+**Status**: ✅ COMPLETE (Phase 1b-6: fatal DaemonError — DEVICE_LOST / FATAL_PANIC)
+**Branch**: `107-daemon-fatal-errors`
+**Issue**: #107
+
+**Work Content**: Phase 1b の最終 scope として protocol v0.1 の `DaemonError severity=fatal` 2 経路を実装し、daemon 側の Phase 1b 完了。
+
+**実装**:
+- `StreamStats` に `device_lost: AtomicBool` を追加、`record_device_lost()` / snapshot 拡張
+- `make_err_fn` の closure で `cpal::StreamError` を variant で振り分け: `DeviceNotAvailable` → `record_device_lost`、`BackendSpecific` → `record_xrun`
+- `session.rs` stats_task 1 Hz ticker に device_lost 検知ブロックを xrun より前に挿入、1 回だけ fatal DaemonError (`DEVICE_LOST`) 発火
+- `main.rs` に `install_fatal_panic_hook()`: panic 時に DaemonError wire format を stderr に 1 行出力し `process::exit(1)` で確実終了。`StartupError { ready: false }` は pre-ready 失敗専用なので意図的に使わない
+- unit test 4 件追加（device_lost atomic 2件 + err_fn variant dispatch 2件）
+- 既存 test（stream_stats_starts_at_zero / record_xrun_increments_only_xruns）を device_lost フィールド込みに更新
+
+**設計上の既知トレードオフ** (プランで合意、scope 外):
+- 複数 client 同時接続時は各 session が独立に DEVICE_LOST を発火する（broadcast registry は将来拡張）
+- audio thread での DeviceNotAvailable から tokio 側 1 Hz tick 観測まで最大 1 秒の検知遅延（fatal としては許容）
+
+**検証**:
+- cargo build / clippy --workspace --all-targets -D warnings clean
+- cargo test --workspace: core 14 / native 16 / daemon 1 smoke = 31 pass
+- FATAL_PANIC は panic hook が process-global のため unit test では単離困難。Issue #117（統合テスト基盤）で対応
+
+---
+
 ### 6.62 Issue #107: orbit-audio-daemon Stop 個別停止実装 (April 18, 2026)
 
 **Date**: April 18, 2026

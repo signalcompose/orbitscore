@@ -14,7 +14,11 @@ mod server;
 mod session;
 
 use engine_wrap::EngineWrap;
-use protocol::{ProtocolError, StartupError, StartupReady, PROTOCOL_VERSION};
+use protocol::{
+    Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC,
+    ERROR_SEVERITY_FATAL, EVENT_DAEMON_ERROR, PROTOCOL_VERSION,
+};
+use serde_json::json;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
@@ -25,9 +29,38 @@ async fn main() {
         )
         .init();
 
+    install_fatal_panic_hook();
+
     if let Err(code) = run().await {
         std::process::exit(code);
     }
+}
+
+/// panic 時に DaemonError event の wire format を stderr に出力し、
+/// `process::exit(1)` で daemon を確実に終了させる。
+///
+/// WebSocket と stderr で同じ schema を使うため、client は transport
+/// を問わず同じ parser で fatal を扱える。`StartupError { ready: false }`
+/// は pre-ready 失敗専用なので意図的に使わない。
+fn install_fatal_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("{info}");
+        let evt = Event::new(
+            EVENT_DAEMON_ERROR,
+            json!({
+                "severity": ERROR_SEVERITY_FATAL,
+                "code": ERROR_CODE_FATAL_PANIC,
+                "message": msg,
+            }),
+        );
+        match serde_json::to_string(&evt) {
+            Ok(line) => eprintln!("{line}"),
+            Err(e) => eprintln!(
+                r#"{{"type":"event","event":"{EVENT_DAEMON_ERROR}","data":{{"severity":"{ERROR_SEVERITY_FATAL}","code":"{ERROR_CODE_FATAL_PANIC}","message":"panic hook serialize failed: {e}"}}}}"#
+            ),
+        }
+        std::process::exit(1);
+    }));
 }
 
 async fn run() -> Result<(), i32> {

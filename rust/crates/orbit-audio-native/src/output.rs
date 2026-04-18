@@ -1,6 +1,6 @@
 //! cpal を使った既定出力デバイスへのストリーム設定。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -14,10 +14,16 @@ use orbit_audio_core::Engine;
 /// err_fn は audio スレッドから呼ばれるため atomic で更新する。
 /// `buffer_underruns` は cpal の `StreamError` が underrun を個別に示さないため
 /// 常に 0。将来 backend-specific な判別ができるようになれば増分経路を追加する。
+///
+/// `device_lost` は `cpal::StreamError::DeviceNotAvailable` を受け取った際に
+/// true にセットされ、上位 (daemon session) が 1 Hz ticker で polling して
+/// fatal DaemonError イベントを発火するためのフラグ。一度 true になったら
+/// 現 stream は回復不能なので、set 後の再初期化は scope 外。
 #[derive(Debug, Default)]
 pub struct StreamStats {
     xruns: AtomicU64,
     buffer_underruns: AtomicU64,
+    device_lost: AtomicBool,
 }
 
 impl StreamStats {
@@ -25,11 +31,27 @@ impl StreamStats {
         StreamStatsSnapshot {
             xruns: self.xruns.load(Ordering::Relaxed),
             buffer_underruns: self.buffer_underruns.load(Ordering::Relaxed),
+            device_lost: self.device_lost.load(Ordering::Relaxed),
         }
     }
 
     fn record_xrun(&self) {
         self.xruns.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_device_lost(&self) {
+        self.device_lost.store(true, Ordering::Relaxed);
+    }
+
+    /// cpal::StreamError を variant で振り分けて atomic を更新する。
+    /// audio thread から呼ばれるので blocking I/O を避け atomic 操作のみ。
+    /// make_err_fn と test helper の両方がこれを参照するため、
+    /// dispatch ロジックの drift 防止に single-source として機能する。
+    fn record_error(&self, err: &cpal::StreamError) {
+        match err {
+            cpal::StreamError::DeviceNotAvailable => self.record_device_lost(),
+            cpal::StreamError::BackendSpecific { .. } => self.record_xrun(),
+        }
     }
 }
 
@@ -37,6 +59,7 @@ impl StreamStats {
 pub struct StreamStatsSnapshot {
     pub xruns: u64,
     pub buffer_underruns: u64,
+    pub device_lost: bool,
 }
 
 #[derive(Error, Debug)]
@@ -98,12 +121,9 @@ fn build_stream(
     stats: Arc<StreamStats>,
 ) -> Result<Stream, OutputError> {
     let make_err_fn = || {
-        // audio thread から呼ばれるため blocking I/O を避け、atomic increment のみ行う。
         // 上位 (daemon session) が StreamStats / DaemonError 経由で可視化する責務を持つ。
         let stats = stats.clone();
-        move |_err| {
-            stats.record_xrun();
-        }
+        move |err: cpal::StreamError| stats.record_error(&err)
     };
 
     /// scratch バッファを事前に 1 秒分確保してクロージャにムーブするヘルパー。
@@ -197,6 +217,7 @@ fn build_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cpal::BackendSpecificError;
 
     #[test]
     fn stream_stats_starts_at_zero() {
@@ -204,6 +225,7 @@ mod tests {
         let snap = stats.snapshot();
         assert_eq!(snap.xruns, 0);
         assert_eq!(snap.buffer_underruns, 0);
+        assert!(!snap.device_lost);
     }
 
     #[test]
@@ -215,6 +237,7 @@ mod tests {
         let snap = stats.snapshot();
         assert_eq!(snap.xruns, 3);
         assert_eq!(snap.buffer_underruns, 0);
+        assert!(!snap.device_lost);
     }
 
     #[test]
@@ -224,5 +247,49 @@ mod tests {
         stats.record_xrun();
         let s2 = stats.snapshot();
         assert!(s2.xruns > s1.xruns);
+    }
+
+    #[test]
+    fn record_device_lost_sets_flag() {
+        let stats = StreamStats::default();
+        assert!(!stats.snapshot().device_lost);
+        stats.record_device_lost();
+        assert!(stats.snapshot().device_lost);
+    }
+
+    #[test]
+    fn device_lost_and_xrun_are_independent() {
+        let stats = StreamStats::default();
+        stats.record_xrun();
+        let after_xrun = stats.snapshot();
+        assert_eq!(after_xrun.xruns, 1);
+        assert!(!after_xrun.device_lost);
+
+        stats.record_device_lost();
+        let after_lost = stats.snapshot();
+        assert_eq!(after_lost.xruns, 1, "record_device_lost must not touch xruns");
+        assert!(after_lost.device_lost);
+    }
+
+    #[test]
+    fn record_error_dispatches_device_not_available_as_device_lost() {
+        let stats = StreamStats::default();
+        stats.record_error(&cpal::StreamError::DeviceNotAvailable);
+        let snap = stats.snapshot();
+        assert!(snap.device_lost);
+        assert_eq!(snap.xruns, 0);
+    }
+
+    #[test]
+    fn record_error_dispatches_backend_specific_as_xrun() {
+        let stats = StreamStats::default();
+        stats.record_error(&cpal::StreamError::BackendSpecific {
+            err: BackendSpecificError {
+                description: "transient underrun".to_string(),
+            },
+        });
+        let snap = stats.snapshot();
+        assert_eq!(snap.xruns, 1);
+        assert!(!snap.device_lost);
     }
 }
