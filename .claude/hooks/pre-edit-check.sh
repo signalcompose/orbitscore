@@ -45,12 +45,15 @@ fi
 
 # Warn (don't block) when branch name lacks an issue number prefix
 if [[ "$CURRENT_BRANCH" != "" ]] && ! [[ "$CURRENT_BRANCH" =~ ^[0-9]+-.*$ ]]; then
-  # 非 quoted heredoc で ${CURRENT_BRANCH} を展開する
-  cat <<EOF
-{
-  "notification": "⚠️ ブランチ命名規則の警告\n\n現在のブランチ: \`${CURRENT_BRANCH}\`\n\nブランチ名にIssue番号が含まれていません。\n\n推奨形式: <issue-number>-<descriptive-name>\n例: 55-improve-type-safety-process-statement\n\n作業を続ける前に、正しいブランチ名で作り直すことを推奨します。"
-}
-EOF
+  # ブランチ名に " や \ 等が含まれた場合でも malformed JSON を出さないよう
+  # deny 分岐と同じ escape パスを通す
+  MSG=$(printf '⚠️ ブランチ命名規則の警告\n\n現在のブランチ: `%s`\n\nブランチ名にIssue番号が含まれていません。\n\n推奨形式: <issue-number>-<descriptive-name>\n例: 55-improve-type-safety-process-statement\n\n作業を続ける前に、正しいブランチ名で作り直すことを推奨します。' "$CURRENT_BRANCH")
+  if command -v jq >/dev/null 2>&1; then
+    MSG_JSON=$(printf '%s' "$MSG" | jq -Rs .)
+  else
+    MSG_JSON=$(printf '%s' "$MSG" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
+  fi
+  printf '{"notification":%s}\n' "$MSG_JSON"
   exit 0
 fi
 
