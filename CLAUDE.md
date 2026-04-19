@@ -198,7 +198,31 @@ See `.claude/settings.json` for Hook configuration.
 
 ---
 
-## Git Workflow Summary
+## 🔴 /code:autopilot Pipeline 実行ルール
+
+`/code:autopilot` pipeline を走らせるとき、**各 phase の専用 skill を必ず Skill tool 経由で invoke する**こと。Agent tool で review を代替したり、`autopilot-state.sh advance` を連打して phase を飛ばしてはならない。
+
+### 必須: 各 phase → 対応 skill
+
+| phase | 必ず呼ぶ skill |
+|---|---|
+| sprint | `code:sprint-impl` |
+| audit | `code:audit-compliance` |
+| simplify | `simplify` (3 agents 並列: code-reuse / code-quality / efficiency が必須) |
+| ship | `code:shipping-pr` (`--skip-review` 指定) |
+| post-pr-review | `code:pr-review-team` |
+| retrospective | `code:retrospective` |
+
+### 禁止事項
+
+- ❌ `simplify` を `pr-review-toolkit:code-reviewer` agent 1 件で代用する
+- ❌ `code:audit-compliance` / `code:retrospective` を inline text 処理で済ませる
+- ❌ `autopilot-state.sh advance` を連続実行して複数 phase を一気にジャンプさせる
+- ❌ Security checklist を stop hook の催促を待って読む（PR 作成直後 / review 完了時点で自発的に読む）
+
+### 理由
+
+各 skill には固有の `verify-workflow.sh` hook が付随しており、iteration 収束の計測・security checklist 参照・phase 完了条件のチェックを行う。skill を bypass すると hook が発火せず、品質ゲートが形骸化する。過去に PR #121 と #124 (Issue #108 Phase 1) で同じ bypass を 2 度繰り返した。
 
 ### Branch Structure
 - `main` - Production (protected, base for PRs)

@@ -16,6 +16,7 @@ export {
 export { PROTOCOL_VERSION, isEventFrame, isHandshakeFrame, isResponseFrame } from './protocol-types'
 export type {
   CommandFrame,
+  CommandMethod,
   EventFrame,
   HandshakeFrame,
   ResponseFrame,

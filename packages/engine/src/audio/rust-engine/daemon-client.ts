@@ -29,6 +29,7 @@ import {
 } from './errors'
 import {
   CommandFrame,
+  CommandMethod,
   isEventFrame,
   isHandshakeFrame,
   isResponseFrame,
@@ -180,7 +181,7 @@ export class DaemonClient extends EventEmitter {
   // --- internals ---
 
   private async request(
-    method: string,
+    method: CommandMethod,
     params: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -257,7 +258,15 @@ export class DaemonClient extends EventEmitter {
     this.child = child
 
     const stderrChunks: string[] = []
-    child.stderr?.on('data', (chunk) => stderrChunks.push(chunk.toString()))
+    // startup 診断用の stderr 収集。ready-line が settle したら detach して
+    // daemon の長期稼働中に stderr を無限に蓄積しないようにする。
+    const onStderrData = (chunk: Buffer): void => {
+      stderrChunks.push(chunk.toString())
+    }
+    child.stderr?.on('data', onStderrData)
+    const detachStderr = (): void => {
+      child.stderr?.off('data', onStderrData)
+    }
 
     const reader = createInterface({ input: child.stdout! })
     const port = await new Promise<number>((resolve, reject) => {
@@ -270,6 +279,7 @@ export class DaemonClient extends EventEmitter {
         settled = true
         clearTimeout(to)
         reader.close()
+        detachStderr()
         fn()
       }
       const to = setTimeout(() => {
@@ -372,9 +382,12 @@ export class DaemonClient extends EventEmitter {
     // (ws が message を emit するのは open 後なので競合はないが、
     // handshake frame が open 直後に届くケースに備えて
     // 最初のメッセージで handshakeResolver を呼ぶ二段構え。)
-    ws.on('message', (data) => this.handleFrame(data.toString()))
+    const onMessage = (data: WebSocket.RawData) => this.handleFrame(data.toString())
+    ws.on('message', onMessage)
     ws.on('close', () => {
       this.running = false
+      // close 後に listener を放置すると ws オブジェクトの GC が阻害されるので明示 detach。
+      ws.off('message', onMessage)
       // handshake 途中で close した場合、handshakePromise が永続 hang するのを防ぐ。
       if (this.handshakeResolver) {
         this.handshakeResolver(new Error('websocket closed during handshake'))

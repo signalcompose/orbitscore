@@ -59,12 +59,14 @@ export class MockDaemonServer {
         this.received.push(parsed)
         const handler = handlers[parsed.method as keyof MockDaemonHandlers]
         if (!handler) {
+          // mock 固有の error code。本物 daemon の MALFORMED_REQUEST とは意味が違い、
+          // 「テストがハンドラを登録し忘れた」ことを示す。
           socket.send(
             JSON.stringify({
               id: parsed.id,
               error: {
-                code: 'MALFORMED_REQUEST',
-                message: `mock: unknown method ${parsed.method}`,
+                code: 'UNKNOWN_METHOD',
+                message: `mock: no handler registered for method ${parsed.method}`,
               },
             }),
           )
