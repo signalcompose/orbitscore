@@ -198,16 +198,32 @@ impl EngineWrap {
     pub fn take_play_ended_suppressed(&self, play_id: &str) -> bool {
         match self.stopped_play_ids.lock() {
             Ok(mut s) => s.remove(play_id),
-            // poisoned は非致命的エラー扱い: 抑制されていない前提で PlayEnded を送出する
-            Err(_) => false,
+            // poisoned は非致命的エラー扱い: 抑制されていない前提で PlayEnded を送出する。
+            // poison 状態は通常発生せず、発生した場合は Stop 後に PlayEnded が漏れるため
+            // post-mortem の根拠として warn! を残す。
+            Err(_) => {
+                tracing::warn!(
+                    play_id = %play_id,
+                    "stopped_play_ids mutex poisoned; PlayEnded suppression disabled for this id"
+                );
+                false
+            }
         }
     }
 
     /// 読み取り専用カウンタ。poisoned 時は fallback として 0 を返す。
+    ///
+    /// poison 時は GetStatus などで「サンプル未ロード」に見える根因を示すため
+    /// warn! を残す。
     pub fn loaded_sample_count(&self) -> usize {
         match self.samples.lock() {
             Ok(guard) => guard.len(),
-            Err(_) => 0,
+            Err(_) => {
+                tracing::warn!(
+                    "samples mutex poisoned; loaded_sample_count returning 0 (GetStatus will misreport)"
+                );
+                0
+            }
         }
     }
 
