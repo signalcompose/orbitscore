@@ -1,0 +1,72 @@
+/**
+ * Protocol v0.1 type definitions mirroring `rust/crates/orbit-audio-daemon/src/protocol.rs`.
+ *
+ * Single source of truth: `docs/research/ENGINE_DAEMON_PROTOCOL.md`.
+ * 型のドリフト検出はレビューで担保する（機械的同期は今は行わない）。
+ */
+
+export const PROTOCOL_VERSION = '0.1' as const
+
+export interface HandshakeFrame {
+  type: 'handshake'
+  protocol_version: string
+  daemon_version: string
+  capabilities: string[]
+}
+
+export interface CommandFrame {
+  id: string
+  method: string
+  params: Record<string, unknown>
+}
+
+export interface OkResponse {
+  id: string
+  result: Record<string, unknown>
+}
+
+export interface ErrorResponse {
+  id: string
+  error: {
+    code: string
+    message: string
+    details?: unknown
+  }
+}
+
+export type ResponseFrame = OkResponse | ErrorResponse
+
+export interface EventFrame {
+  type: 'event'
+  event: 'PlayStarted' | 'PlayEnded' | 'StreamStats' | 'DaemonError'
+  data: Record<string, unknown>
+}
+
+/** startup 成功時に stdout に 1 行出る JSON。 */
+export interface StartupReadyLine {
+  ready: true
+  port: number
+  protocol_version: string
+}
+
+/** startup 失敗時に stderr に 1 行出る JSON。 */
+export interface StartupErrorLine {
+  ready: false
+  error: {
+    code: string
+    message: string
+    details?: unknown
+  }
+}
+
+export function isResponseFrame(v: unknown): v is ResponseFrame {
+  return typeof v === 'object' && v !== null && 'id' in v
+}
+
+export function isEventFrame(v: unknown): v is EventFrame {
+  return typeof v === 'object' && v !== null && (v as { type?: unknown }).type === 'event'
+}
+
+export function isHandshakeFrame(v: unknown): v is HandshakeFrame {
+  return typeof v === 'object' && v !== null && (v as { type?: unknown }).type === 'handshake'
+}

@@ -3468,6 +3468,38 @@ PR #121 の pr-review-team (silent-failure-hunter) で指摘された `EngineWra
 
 ---
 
+### 6.49 Rust engine client — Phase 1 scaffold (April 19, 2026)
+
+#### 背景
+Issue #108 (TS 側 audio engine の SuperCollider → Rust daemon 置換) の Phase 1。完了条件 7 項目を 1 PR でやると巨大化するので、最小動作 (DaemonClient + feature flag 土台 + 単体テスト) に絞る。
+
+#### 設計
+- `packages/engine/src/audio/rust-engine/` 新設 (Phase 2 で adapter を入れる土台)
+- `DaemonClient` class: `child_process.spawn` + `ws` + handshake + request/response 多重化 + event stream
+- daemon バイナリ解決: `options.daemonPath` → `ORBIT_AUDIO_DAEMON_PATH` → `rust/target/{release,debug}/orbit-audio-daemon`
+- protocol v0.1 type 定義 (`protocol-types.ts`) を Rust `protocol.rs` の mirror として置く
+- handshake 検出は `connectWebSocket` より前に resolver を配置する二段構えで open→message の race を回避
+
+#### テスト
+- `tests/audio/rust-engine/mock-daemon-server.ts`: `ws.WebSocketServer` で handshake + hardcoded method handlers
+- `daemon-client.spec.ts` 8 ケース: handshake / LoadSample / PlayAt / Stop / SetGlobalGain / error response / event emit / quit
+- 実 daemon spawn は CI audio device 不在のため integration test (別 PR) に回す
+
+#### 非目標 (Phase 2+)
+- `AudioEngine + Scheduler` を満たす `RustEngineAdapter` 実装
+- `interpreter-v2.ts:27` の `new SuperColliderPlayer()` hardcode 解消
+- `ORBITSCORE_ENGINE=rust` を default にする切替
+- BufferManager / EventScheduler の bufnum → sample_id refactor
+
+#### 検証
+- `npm test`: 228 passed / 23 skipped (従来 220 + 新規 8 = 228、回帰なし)
+- `npm run lint`: auto-fix 後 warning 1 のみ（既存、本 PR 外）
+- `npm run build`: TS build + dist copy 成功
+
+**Branch**: `108-ts-rust-engine-client-phase1`
+
+---
+
 ## Archived Work
 
 Older work logs have been moved to the archive:
