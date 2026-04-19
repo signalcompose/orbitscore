@@ -150,8 +150,11 @@ export class DaemonClient extends EventEmitter {
     this.running = false
     try {
       this.ws?.close()
-    } catch {
-      /* swallow */
+    } catch (e) {
+      // ws.close() は原則 throw しないが、ws ライブラリ内部の assertion 等で
+      // 例外が出ても quit は継続する。完全に silent にすると cleanup 失敗が
+      // 隠れるため 'ws-close-error' event に通知する。
+      this.emit('ws-close-error', e)
     }
     this.ws = null
     if (this.child && !this.child.killed) {
@@ -365,6 +368,12 @@ export class DaemonClient extends EventEmitter {
     ws.on('message', (data) => this.handleFrame(data.toString()))
     ws.on('close', () => {
       this.running = false
+      // handshake 途中で close した場合、handshakePromise が永続 hang するのを防ぐ。
+      if (this.handshakeResolver) {
+        this.handshakeResolver(new Error('websocket closed during handshake'))
+      }
+      // 閉じた socket への参照を残さない (stale reference 回避)。
+      if (this.ws === ws) this.ws = null
       for (const [, pend] of this.pending) {
         pend.reject(new Error('websocket closed'))
       }
