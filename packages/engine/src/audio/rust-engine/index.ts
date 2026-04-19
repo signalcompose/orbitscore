@@ -7,7 +7,12 @@
 
 export { DaemonClient } from './daemon-client'
 export type { DaemonClientOptions } from './daemon-client'
-export { DaemonNotFoundError, DaemonProtocolError, DaemonStartupError } from './errors'
+export {
+  DaemonNotFoundError,
+  DaemonProtocolError,
+  DaemonQuitError,
+  DaemonStartupError,
+} from './errors'
 export { PROTOCOL_VERSION, isEventFrame, isHandshakeFrame, isResponseFrame } from './protocol-types'
 export type {
   CommandFrame,

@@ -21,7 +21,12 @@ import * as path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import WebSocket from 'ws'
 
-import { DaemonNotFoundError, DaemonProtocolError, DaemonStartupError } from './errors'
+import {
+  DaemonNotFoundError,
+  DaemonProtocolError,
+  DaemonQuitError,
+  DaemonStartupError,
+} from './errors'
 import {
   CommandFrame,
   isEventFrame,
@@ -61,6 +66,8 @@ export class DaemonClient extends EventEmitter {
   private ws: WebSocket | null = null
   private readonly pending = new Map<string, PendingRequest>()
   private running = false
+  /** 並列 start() を直列化し、daemon を二重に spawn しないためのシングルフライト。 */
+  private startPromise: Promise<void> | null = null
 
   isRunning(): boolean {
     return this.running
@@ -68,7 +75,14 @@ export class DaemonClient extends EventEmitter {
 
   async start(options: DaemonClientOptions = {}): Promise<void> {
     if (this.running) return
+    if (this.startPromise) return this.startPromise
+    this.startPromise = this.doStart(options).finally(() => {
+      this.startPromise = null
+    })
+    return this.startPromise
+  }
 
+  private async doStart(options: DaemonClientOptions): Promise<void> {
     const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
     const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
     const handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS
@@ -155,7 +169,7 @@ export class DaemonClient extends EventEmitter {
     }
     this.child = null
     for (const [, pend] of this.pending) {
-      pend.reject(new Error('daemon client quit'))
+      pend.reject(new DaemonQuitError())
     }
     this.pending.clear()
   }
@@ -244,61 +258,74 @@ export class DaemonClient extends EventEmitter {
 
     const reader = createInterface({ input: child.stdout! })
     const port = await new Promise<number>((resolve, reject) => {
-      const to = setTimeout(() => {
+      // ready-line 受信 / timeout / exit のいずれか最初に発火した結果だけを
+      // 採用する。settled flag で二重解決を防ぐ (startup crash で line と exit
+      // が両方届くケースに備える)。
+      let settled = false
+      const finish = (fn: () => void) => {
+        if (settled) return
+        settled = true
+        clearTimeout(to)
         reader.close()
-        reject(
-          new DaemonStartupError(
-            `daemon ready line timeout after ${timeoutMs}ms`,
-            stderrChunks.join(''),
-            child.exitCode,
+        fn()
+      }
+      const to = setTimeout(() => {
+        finish(() =>
+          reject(
+            new DaemonStartupError(
+              `daemon ready line timeout after ${timeoutMs}ms`,
+              stderrChunks.join(''),
+              child.exitCode,
+            ),
           ),
         )
       }, timeoutMs)
 
       reader.once('line', (line) => {
-        clearTimeout(to)
-        reader.close()
-        try {
-          const parsed = JSON.parse(line) as StartupReadyLine | StartupErrorLine
-          if (!parsed.ready) {
+        finish(() => {
+          try {
+            const parsed = JSON.parse(line) as StartupReadyLine | StartupErrorLine
+            if (!parsed.ready) {
+              reject(
+                new DaemonStartupError(
+                  `daemon startup error: ${parsed.error.code}: ${parsed.error.message}`,
+                  stderrChunks.join(''),
+                  null,
+                ),
+              )
+              return
+            }
+            if (parsed.protocol_version !== PROTOCOL_VERSION) {
+              reject(
+                new DaemonStartupError(
+                  `protocol version mismatch: expected ${PROTOCOL_VERSION}, got ${parsed.protocol_version}`,
+                  stderrChunks.join(''),
+                  null,
+                ),
+              )
+              return
+            }
+            resolve(parsed.port)
+          } catch {
             reject(
               new DaemonStartupError(
-                `daemon startup error: ${parsed.error.code}: ${parsed.error.message}`,
+                `failed to parse daemon ready line: ${line}`,
                 stderrChunks.join(''),
                 null,
               ),
             )
-            return
           }
-          if (parsed.protocol_version !== PROTOCOL_VERSION) {
-            reject(
-              new DaemonStartupError(
-                `protocol version mismatch: expected ${PROTOCOL_VERSION}, got ${parsed.protocol_version}`,
-                stderrChunks.join(''),
-                null,
-              ),
-            )
-            return
-          }
-          resolve(parsed.port)
-        } catch (e) {
-          reject(
-            new DaemonStartupError(
-              `failed to parse daemon ready line: ${line}`,
-              stderrChunks.join(''),
-              null,
-            ),
-          )
-        }
+        })
       })
 
       child.once('exit', (code) => {
-        clearTimeout(to)
-        reject(
-          new DaemonStartupError(
-            `daemon exited before ready (code=${code})`,
-            stderrChunks.join(''),
-            code,
+        finish(() =>
+          reject(
+            new DaemonStartupError(
+              `daemon exited before ready (code=${code})`,
+              stderrChunks.join(''),
+              code,
+            ),
           ),
         )
       })

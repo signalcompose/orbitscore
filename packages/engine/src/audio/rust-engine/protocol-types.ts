@@ -60,7 +60,12 @@ export interface StartupErrorLine {
 }
 
 export function isResponseFrame(v: unknown): v is ResponseFrame {
-  return typeof v === 'object' && v !== null && 'id' in v
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  // `type` 付きフレーム (handshake / event) は除外する。将来 `id` を持つ
+  // typed フレームが追加されても誤 routing しないよう、discriminant の
+  // 不在を積極的に確認する。
+  return 'id' in o && !('type' in o)
 }
 
 export function isEventFrame(v: unknown): v is EventFrame {

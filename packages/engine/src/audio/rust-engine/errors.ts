@@ -23,6 +23,13 @@ export class DaemonStartupError extends Error {
   }
 }
 
+export class DaemonQuitError extends Error {
+  constructor(message = 'daemon client quit') {
+    super(message)
+    this.name = 'DaemonQuitError'
+  }
+}
+
 export class DaemonProtocolError extends Error {
   readonly code: string
   readonly details?: unknown
