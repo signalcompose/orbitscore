@@ -230,7 +230,7 @@ Project documentation is organized in the [`docs/`](docs/) folder:
 npm test
 ```
 
-**220/243 tests passing (90.5%)**:
+**230/253 tests passing (90.9%)**:
 
 - Parser: ✅ Complete (50 tests)
 - Audio Engine: ✅ Complete (15 tests)

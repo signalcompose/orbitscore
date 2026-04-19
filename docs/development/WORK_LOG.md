@@ -3498,6 +3498,24 @@ Issue #108 (TS 側 audio engine の SuperCollider → Rust daemon 置換) の Ph
 
 **Branch**: `108-ts-rust-engine-client-phase1`
 
+#### Retrospective (April 19, 2026)
+
+**Auditor (5 principles)**:
+- DDD / TDD / DRY / ISSUE: PASS
+- PROCESS: PARTIAL → README.md / CLAUDE.md の test count 表記を 220 → 230 に更新して解消
+
+**Researcher (Phase 2 に向けた学び)**:
+- DaemonClient を AudioEngine/Scheduler と疎結合に保ったことで mock test が容易になった。Phase 2 は adapter 層で bind する
+- handshake race 回避のために `handshakeResolver` を `connectWebSocket` より先に配置する pattern は、EventEmitter 属 listener の pre-placement 原則として再利用可能
+- mock-daemon-server.ts は protocol 進化に追従させ続ける必要がある。`PROTOCOL_VERSION` による misalignment 検出が保険になる
+- `ws.off('message', handler)` + `this.ws = null` の listener cleanup pattern は Phase 2 の長期稼働 scheduler 統合時にも適用する
+- `startPromise` single-flight は `quit()` にも同等の検討が必要（並列 quit 対策）
+
+**simplify phase で修正した 3 件 (commit 510d1a6)**:
+- `request()` を stringly-typed string から `CommandMethod` union 型に絞り compile 時型安全を強化
+- `mock-daemon-server.ts` の未登録 method error code を `MALFORMED_REQUEST` → `UNKNOWN_METHOD` に変更
+- ws/stderr listener の close 時 detach で GC 阻害回避
+
 ---
 
 ## Archived Work
