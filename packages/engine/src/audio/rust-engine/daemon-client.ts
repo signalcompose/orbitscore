@@ -284,40 +284,47 @@ export class DaemonClient extends EventEmitter {
         )
       }, timeoutMs)
 
-      reader.once('line', (line) => {
+      // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
+      // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
+      // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
+      // 行が出るまで読み続ける防御的実装にする。
+      const skippedLines: string[] = []
+      reader.on('line', (line) => {
+        if (settled) return
+        let parsed: StartupReadyLine | StartupErrorLine
+        try {
+          parsed = JSON.parse(line) as StartupReadyLine | StartupErrorLine
+        } catch {
+          // JSON として読めない行は log とみなしてスキップし次の行を待つ。
+          skippedLines.push(line)
+          return
+        }
         finish(() => {
-          try {
-            const parsed = JSON.parse(line) as StartupReadyLine | StartupErrorLine
-            if (!parsed.ready) {
-              reject(
-                new DaemonStartupError(
-                  `daemon startup error: ${parsed.error.code}: ${parsed.error.message}`,
-                  stderrChunks.join(''),
-                  null,
-                ),
-              )
-              return
-            }
-            if (parsed.protocol_version !== PROTOCOL_VERSION) {
-              reject(
-                new DaemonStartupError(
-                  `protocol version mismatch: expected ${PROTOCOL_VERSION}, got ${parsed.protocol_version}`,
-                  stderrChunks.join(''),
-                  null,
-                ),
-              )
-              return
-            }
-            resolve(parsed.port)
-          } catch {
+          if (!parsed.ready) {
             reject(
               new DaemonStartupError(
-                `failed to parse daemon ready line: ${line}`,
+                `daemon startup error: ${parsed.error.code}: ${parsed.error.message}`,
                 stderrChunks.join(''),
                 null,
               ),
             )
+            return
           }
+          if (parsed.protocol_version !== PROTOCOL_VERSION) {
+            reject(
+              new DaemonStartupError(
+                `protocol version mismatch: expected ${PROTOCOL_VERSION}, got ${parsed.protocol_version}`,
+                stderrChunks.join(''),
+                null,
+              ),
+            )
+            return
+          }
+          if (skippedLines.length > 0) {
+            // 予期せぬ stdout 出力は event で通知して debug に残す。
+            this.emit('unexpected-stdout', skippedLines)
+          }
+          resolve(parsed.port)
         })
       })
 
