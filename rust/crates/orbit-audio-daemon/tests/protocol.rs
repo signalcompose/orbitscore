@@ -122,11 +122,14 @@ async fn stop_suppresses_play_ended() {
         "Stop should succeed: {stop_resp}"
     );
 
-    // 残メッセージを消化しつつ、PlayEnded が来ないことを確認
-    advance_and_yield(Duration::from_secs(2)).await;
+    // sample duration を確実に超える時間（kick.wav は 1 秒未満なので 5 秒）まで
+    // 虚時間を進める。これにより自然発火の PlayEnded 遅延 task は確定的に
+    // 完了し、抑制ロジックが効いていれば PlayEnded event は writer mpsc に
+    // 流れない。
+    advance_and_yield(Duration::from_secs(5)).await;
 
     let mut saw_ended = false;
-    for _ in 0..10 {
+    for _ in 0..20 {
         let res = tokio::time::timeout(Duration::from_millis(100), next_json(&mut ws)).await;
         match res {
             Ok(msg) => {

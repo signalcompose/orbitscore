@@ -99,6 +99,9 @@ impl EngineWrap {
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から
     /// xrun / device_lost を駆動できるようにする。
+    ///
+    /// 外部 crate (`tests/`) から呼ぶ必要があるため `pub` だが、
+    /// `#[doc(hidden)]` で rustdoc からは不可視にし公開 API としては扱わない。
     #[doc(hidden)]
     pub fn stream_stats_arc(&self) -> Arc<StreamStats> {
         self.stream_stats.clone()

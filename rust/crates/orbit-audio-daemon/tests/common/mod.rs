@@ -75,6 +75,11 @@ impl Drop for TestDaemon {
     fn drop(&mut self) {
         // accept loop は listener が drop されるまで止まらないので
         // spawn した task を abort して runtime を cleanly 終了させる。
+        //
+        // `server::serve` 内で per-connection に `tokio::spawn` された session
+        // task は個別 abort しない。各テストは `flavor = "current_thread"` で
+        // 専用 runtime を持ち、関数終了時に runtime ごと drop されるため、
+        // 残存 session task もそのタイミングで回収される。
         self.serve_handle.abort();
     }
 }
@@ -147,6 +152,11 @@ pub async fn send_cmd(ws: &mut WsClient, id: &str, method: &str, params: Value) 
 /// PlayEnded 遅延 task が必ずしも実行されない。各 advance の前後で
 /// 複数回 `yield_now().await` を呼ぶことで、協調スケジューリング上
 /// それらの task に順番を回す。
+///
+/// なお `tokio::time::pause` 状態では「全 task が park すると次の pending
+/// timer まで自動で時計が進む」仕様 (docs.rs/tokio/latest/tokio/time/fn.pause)。
+/// そのため `tokio::time::timeout(50ms, ...)` を含む drain loop は単一 poll
+/// 化せず、auto-advance により実時間を待たずに timeout として成立する。
 pub async fn advance_and_yield(duration: std::time::Duration) {
     for _ in 0..10 {
         tokio::task::yield_now().await;
