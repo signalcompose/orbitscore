@@ -35,11 +35,23 @@ impl StreamStats {
         }
     }
 
-    fn record_xrun(&self) {
+    /// xrun カウンタを 1 増やす。
+    ///
+    /// 通常は [`StreamStats::record_error`] 経由で自動的に呼ばれる。
+    /// `#[doc(hidden)] pub` は integration test から xrun 発生を再現する
+    /// ために半公開にしている（docs には露出しない）。
+    #[doc(hidden)]
+    pub fn record_xrun(&self) {
         self.xruns.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn record_device_lost(&self) {
+    /// device_lost フラグを立てる。
+    ///
+    /// 通常は [`StreamStats::record_error`] 経由で自動的に呼ばれる。
+    /// `#[doc(hidden)] pub` は integration test から device_lost 発生を
+    /// 再現するために半公開にしている（docs には露出しない）。
+    #[doc(hidden)]
+    pub fn record_device_lost(&self) {
         self.device_lost.store(true, Ordering::Relaxed);
     }
 

@@ -9,10 +9,12 @@ use std::sync::{Arc, Mutex};
 
 use orbit_audio_core::{Engine, Sample};
 use orbit_audio_native::{
-    load_sample_resampled, start_default_output, LoaderError, OutputError, OutputStream,
-    ResampleError, StreamStats, StreamStatsSnapshot,
+    load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
+    StreamStatsSnapshot,
 };
 use uuid::Uuid;
+
+use crate::backend::AudioBackend;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WrapError {
@@ -48,13 +50,43 @@ pub struct EngineWrap {
 pub struct StreamGuard(#[allow(dead_code)] pub(crate) OutputStream);
 
 impl EngineWrap {
-    /// Engine とストリーム guard を起動する。
+    /// Engine とストリーム guard を起動する（本番用、cpal 既定出力）。
     /// guard は caller（通常は main）が drop されるまで保持すること。
+    ///
+    /// 本番経路は `cpal::Stream` が `!Send` のため [`Self::start_with`] の
+    /// `Box<dyn Any + Send>` guard 型に詰められない。そのため本番は専用パス。
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
-        let (engine, stream, stream_stats) = start_default_output()?;
-        let sample_rate = stream.sample_rate;
-        let channels = stream.channels;
-        let wrap = Arc::new(Self {
+        let (engine, stream, stream_stats) = orbit_audio_native::start_default_output()?;
+        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        Ok((wrap, StreamGuard(stream)))
+    }
+
+    /// [`AudioBackend`] 経由で起動する（integration test 用）。
+    ///
+    /// guard は `Box<dyn Any + Send>` の不透明ハンドル。scope 終了まで
+    /// drop せずに保持する必要がある。
+    pub fn start_with<B: AudioBackend>(
+        backend: B,
+    ) -> Result<(Arc<Self>, Box<dyn std::any::Any + Send>), WrapError> {
+        let started = backend.start()?;
+        let wrap = Self::build(
+            started.engine,
+            started.sample_rate,
+            started.channels,
+            started.stats,
+        );
+        Ok((wrap, started.guard))
+    }
+
+    /// `start` / `start_with` 共通の Arc<Self> 構築部。新しいフィールドが
+    /// 追加された際、両経路で初期化漏れが起きないよう一箇所に集約する。
+    fn build(
+        engine: Engine,
+        sample_rate: u32,
+        channels: u16,
+        stream_stats: Arc<StreamStats>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
             engine,
             sample_rate,
             channels,
@@ -62,8 +94,17 @@ impl EngineWrap {
             started_at: std::time::Instant::now(),
             stream_stats,
             stopped_play_ids: Mutex::new(HashSet::new()),
-        });
-        Ok((wrap, StreamGuard(stream)))
+        })
+    }
+
+    /// test harness 用: `StreamStats` への参照を取得し、外部から
+    /// xrun / device_lost を駆動できるようにする。
+    ///
+    /// 外部 crate (`tests/`) から呼ぶ必要があるため `pub` だが、
+    /// `#[doc(hidden)]` で rustdoc からは不可視にし公開 API としては扱わない。
+    #[doc(hidden)]
+    pub fn stream_stats_arc(&self) -> Arc<StreamStats> {
+        self.stream_stats.clone()
     }
 
     pub fn uptime_sec(&self) -> f64 {

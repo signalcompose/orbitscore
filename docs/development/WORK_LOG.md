@@ -3414,6 +3414,43 @@ git mv docs/IMPROVEMENT_RECOMMENDATIONS.md docs/planning/
 
 ---
 
+### 6.47 Daemon integration test infrastructure (April 19, 2026)
+
+#### 背景
+Phase 1b (#107) で daemon 側 protocol 実装は完了したが、protocol 経路は cpal の実 audio device に依存していたため、CI 上で end-to-end テストが行えず、PR #113-118 で追加した挙動の回帰を手動検証に頼っていた (Issue #117)。
+
+#### 設計
+- **`AudioBackend` trait** を `orbit-audio-daemon/src/backend.rs` に新設
+  - `CpalBackend` (本番): `start_default_output()` を薄くラップ
+  - `StubBackend` (テスト): Engine のみ構築、audio callback 無し、stats は default
+- **binary → lib + bin 分離**: `src/lib.rs` でモジュールを公開し integration test から参照可能に
+- **`EngineWrap::start_with<B: AudioBackend>`** 追加。本番の `start()` は backwards-compat のため `StreamGuard` 版を据置
+- **`StreamStats::record_xrun` / `record_device_lost` を `#[doc(hidden)] pub` に昇格**: rustdoc には露出させず integration test から xrun / device_lost を直接駆動できるように
+- **TCP loopback + TestDaemon harness**: `Drop` で `serve_handle.abort()` し runtime 終了ハングを防ぐ
+
+#### テストケース (tests/protocol.rs, 10 件)
+1. handshake_frame_is_sent
+2. play_at_then_play_started_and_play_ended (kick.wav 利用)
+3. stop_suppresses_play_ended (PR #116 回帰)
+4. stop_without_play_id_returns_malformed_request
+5. stop_unknown_id_returns_not_found
+6. set_global_gain_accepts
+7. set_global_gain_rejects_negative
+8. stream_stats_ticks_at_1hz
+9. daemon_error_warning_on_xrun
+10. daemon_error_fatal_on_device_lost
+
+虚時間 (`tokio::test(start_paused = true)` + `tokio::time::advance`) で 1 Hz ticker / PlayEnded 遅延を進める。`advance_and_yield` ヘルパーで複数回 `yield_now().await` を挟み spawn task を駆動する。PlayStarted が reply より先に mpsc に乗る仕様に対応するため `recv_reply_with_events` ヘルパーで event を保持しつつ reply を待つ。
+
+#### 検証
+- `cargo test --workspace`: 全テスト green（protocol test 10/10 含む）
+- `cargo clippy --workspace --all-targets -- -D warnings`: warning ゼロ
+- Flakiness チェック: 5 回連続 pass
+
+**Branch**: `117-daemon-integration-tests`
+
+---
+
 ## Archived Work
 
 Older work logs have been moved to the archive:
