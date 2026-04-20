@@ -60,6 +60,7 @@ export interface DaemonClientOptions {
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const DEFAULT_CONNECT_TIMEOUT_MS = 3_000
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000
+const DEFAULT_KILL_TIMEOUT_MS = 500
 
 interface PendingRequest {
   resolve: (value: Record<string, unknown>) => void
@@ -131,31 +132,41 @@ export class DaemonClient extends EventEmitter {
     if (this.ws) {
       try {
         this.ws.close()
-      } catch {
-        // close で throw しても startup エラーを優先したいので握り潰す。
+      } catch (e) {
+        // startup エラーを優先しつつ、cleanup 失敗が silent にならないよう通知。
+        this.emit('ws-close-error', e)
       }
       this.ws = null
     }
-    if (this.child && !this.child.killed) {
-      const child = this.child
-      child.kill('SIGTERM')
-      await new Promise<void>((resolve) => {
-        const to = setTimeout(() => {
-          child.kill('SIGKILL')
-          resolve()
-        }, 500)
-        child.once('exit', () => {
-          clearTimeout(to)
-          resolve()
-        })
-      })
+    if (this.child) {
+      await this.killChildGracefully(this.child)
+      this.child = null
     }
-    this.child = null
-    // pending は spawn/handshake 段階では存在しないが念のため reject しておく。
     for (const [, pend] of this.pending) {
       pend.reject(new Error('daemon startup failed'))
     }
     this.pending.clear()
+  }
+
+  /**
+   * child に SIGTERM を送り、DEFAULT_KILL_TIMEOUT_MS 以内に exit しなければ
+   * SIGKILL にエスカレーションする。exit listener は必ず detach する。
+   */
+  private async killChildGracefully(child: ChildProcess): Promise<void> {
+    if (child.killed) return
+    child.kill('SIGTERM')
+    await new Promise<void>((resolve) => {
+      const onExit = (): void => {
+        clearTimeout(to)
+        resolve()
+      }
+      const to = setTimeout(() => {
+        child.off('exit', onExit)
+        child.kill('SIGKILL')
+        resolve()
+      }, DEFAULT_KILL_TIMEOUT_MS)
+      child.once('exit', onExit)
+    })
   }
 
   async loadSample(
@@ -204,20 +215,10 @@ export class DaemonClient extends EventEmitter {
       this.emit('ws-close-error', e)
     }
     this.ws = null
-    if (this.child && !this.child.killed) {
-      this.child.kill('SIGTERM')
-      await new Promise<void>((resolve) => {
-        const to = setTimeout(() => {
-          this.child?.kill('SIGKILL')
-          resolve()
-        }, 500)
-        this.child?.once('exit', () => {
-          clearTimeout(to)
-          resolve()
-        })
-      })
+    if (this.child) {
+      await this.killChildGracefully(this.child)
+      this.child = null
     }
-    this.child = null
     for (const [, pend] of this.pending) {
       pend.reject(new DaemonQuitError())
     }
