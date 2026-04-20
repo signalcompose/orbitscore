@@ -133,17 +133,13 @@ describe('DaemonClient with mock server', () => {
     expect(client.isRunning()).toBe(false)
   })
 
-  it('handshake フレームの protocol_version 不一致は reject する', async () => {
-    // skipHandshake=true で mock を立ち上げ、手動で不一致 version を送る。
+  it('handshake フレームが届かないと handshakeTimeout で reject する', async () => {
+    // skipHandshake=true の mock に接続すると handshake frame が来ないので
+    // handshakeTimeoutMs 経過後に reject されるはず。protocol_version 不一致時も
+    // 同じ timeout 経路に落ちるため、version mismatch の具体検証は別 Issue で
+    // mock server を拡張して扱う。
     const url = await server.start({}, true)
-    const ws = new (await import('ws')).WebSocket(url)
-    // mock server の WebSocketServer に接続された socket を捕捉して version 不一致
-    // handshake を送るのは面倒なので、代わりに server.broadcastEvent を利用した
-    // simplified shape のテストにする: handshake を装ったフレームを broadcast する。
-    // ここでは「mock が handshake を一切送らない」= handshake timeout が発火する
-    // 挙動を検証する（protocol_version 誤り時も timeout / reject する経路に落ちる）。
     const p = client.start({ wsUrlOverride: url, handshakeTimeoutMs: 200 })
     await expect(p).rejects.toThrow(/handshake timeout/)
-    ws.close()
   })
 })
