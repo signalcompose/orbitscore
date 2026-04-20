@@ -3516,6 +3516,33 @@ Issue #108 (TS 側 audio engine の SuperCollider → Rust daemon 置換) の Ph
 - `mock-daemon-server.ts` の未登録 method error code を `MALFORMED_REQUEST` → `UNKNOWN_METHOD` に変更
 - ws/stderr listener の close 時 detach で GC 阻害回避
 
+### April 20, 2026 — PR #124 追加 review 対応
+
+#### 背景
+PR #124 (Rust daemon client Phase 1) の claude-review で指摘された追加事項への対応。
+CI (prettier) が fail していたのも同時に修正。
+
+#### 変更内容
+- `protocol-types.ts`: `CommandMethod` union を複数行フォーマットに修正 (prettier CI fail 解消)
+- `protocol-types.ts`: `StartupErrorLine` の JSDoc を stderr → stdout に訂正 (実装整合)
+- `mock-daemon-server.ts`: `protocol_version` を `'0.1'` リテラルから `PROTOCOL_VERSION` import に変更し、drift 検出を可能に
+- `daemon-client.ts`: `doStart` を try/catch で包み、`cleanupAfterStartFailure` で `this.child` / `this.ws` / `handshakeResolver` / `pending` を確実に回収するよう修正 (複数 reviewer Critical 一致項目)
+- `errors.ts`: `DaemonConnectionError` を追加。ws close 系の generic Error 2 箇所を置換
+- `daemon-client.ts`: `wsUrlOverride` option に `@internal` JSDoc を付与し production 誤用を防止
+- `index.ts`: `DaemonConnectionError` を public export
+
+#### 検証
+- `npm test`: 230 passed / 23 skipped (回帰なし)
+- `npm run lint`: error 0 (既存 warning 1 のみ)
+
+#### 残項目 (別 Issue に分離)
+- setTimeout(r, 20) の flaky risk → deterministic な waitFor 化
+- request() timeout (daemon ハング時の client 永久 pending)
+- ws.close() 完了待機 (Phase 2 adapter 実装時)
+- getStatus() テスト未カバー
+
+**Branch**: `108-ts-rust-engine-client-phase1`
+
 ---
 
 ## Archived Work
