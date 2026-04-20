@@ -10,6 +10,9 @@ logs/
 # Claude Code local settings (per-developer overrides)
 .claude/settings.local.json
 
+# Claude Code implementation plans (autopilot 用の一時ドキュメント)
+.claude/plans/
+
 # Rust build artifacts (Cargo)
 rust/target/
 

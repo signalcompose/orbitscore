@@ -3468,6 +3468,83 @@ PR #121 の pr-review-team (silent-failure-hunter) で指摘された `EngineWra
 
 ---
 
+### 6.49 Rust engine client — Phase 1 scaffold (April 19, 2026)
+
+#### 背景
+Issue #108 (TS 側 audio engine の SuperCollider → Rust daemon 置換) の Phase 1。完了条件 7 項目を 1 PR でやると巨大化するので、最小動作 (DaemonClient + feature flag 土台 + 単体テスト) に絞る。
+
+#### 設計
+- `packages/engine/src/audio/rust-engine/` 新設 (Phase 2 で adapter を入れる土台)
+- `DaemonClient` class: `child_process.spawn` + `ws` + handshake + request/response 多重化 + event stream
+- daemon バイナリ解決: `options.daemonPath` → `ORBIT_AUDIO_DAEMON_PATH` → `rust/target/{release,debug}/orbit-audio-daemon`
+- protocol v0.1 type 定義 (`protocol-types.ts`) を Rust `protocol.rs` の mirror として置く
+- handshake 検出は `connectWebSocket` より前に resolver を配置する二段構えで open→message の race を回避
+
+#### テスト
+- `tests/audio/rust-engine/mock-daemon-server.ts`: `ws.WebSocketServer` で handshake + hardcoded method handlers
+- `daemon-client.spec.ts` 8 ケース: handshake / LoadSample / PlayAt / Stop / SetGlobalGain / error response / event emit / quit
+- 実 daemon spawn は CI audio device 不在のため integration test (別 PR) に回す
+
+#### 非目標 (Phase 2+)
+- `AudioEngine + Scheduler` を満たす `RustEngineAdapter` 実装
+- `interpreter-v2.ts:27` の `new SuperColliderPlayer()` hardcode 解消
+- `ORBITSCORE_ENGINE=rust` を default にする切替
+- BufferManager / EventScheduler の bufnum → sample_id refactor
+
+#### 検証
+- `npm test`: 228 passed / 23 skipped (従来 220 + 新規 8 = 228、回帰なし)
+- `npm run lint`: auto-fix 後 warning 1 のみ（既存、本 PR 外）
+- `npm run build`: TS build + dist copy 成功
+
+**Branch**: `108-ts-rust-engine-client-phase1`
+
+#### Retrospective (April 19, 2026)
+
+**Auditor (5 principles)**:
+- DDD / TDD / DRY / ISSUE: PASS
+- PROCESS: PARTIAL → README.md / CLAUDE.md の test count 表記を 220 → 230 に更新して解消
+
+**Researcher (Phase 2 に向けた学び)**:
+- DaemonClient を AudioEngine/Scheduler と疎結合に保ったことで mock test が容易になった。Phase 2 は adapter 層で bind する
+- handshake race 回避のために `handshakeResolver` を `connectWebSocket` より先に配置する pattern は、EventEmitter 属 listener の pre-placement 原則として再利用可能
+- mock-daemon-server.ts は protocol 進化に追従させ続ける必要がある。`PROTOCOL_VERSION` による misalignment 検出が保険になる
+- `ws.off('message', handler)` + `this.ws = null` の listener cleanup pattern は Phase 2 の長期稼働 scheduler 統合時にも適用する
+- `startPromise` single-flight は `quit()` にも同等の検討が必要（並列 quit 対策）
+
+**simplify phase で修正した 3 件 (commit 510d1a6)**:
+- `request()` を stringly-typed string から `CommandMethod` union 型に絞り compile 時型安全を強化
+- `mock-daemon-server.ts` の未登録 method error code を `MALFORMED_REQUEST` → `UNKNOWN_METHOD` に変更
+- ws/stderr listener の close 時 detach で GC 阻害回避
+
+### April 20, 2026 — PR #124 追加 review 対応
+
+#### 背景
+PR #124 (Rust daemon client Phase 1) の claude-review で指摘された追加事項への対応。
+CI (prettier) が fail していたのも同時に修正。
+
+#### 変更内容
+- `protocol-types.ts`: `CommandMethod` union を複数行フォーマットに修正 (prettier CI fail 解消)
+- `protocol-types.ts`: `StartupErrorLine` の JSDoc を stderr → stdout に訂正 (実装整合)
+- `mock-daemon-server.ts`: `protocol_version` を `'0.1'` リテラルから `PROTOCOL_VERSION` import に変更し、drift 検出を可能に
+- `daemon-client.ts`: `doStart` を try/catch で包み、`cleanupAfterStartFailure` で `this.child` / `this.ws` / `handshakeResolver` / `pending` を確実に回収するよう修正 (複数 reviewer Critical 一致項目)
+- `errors.ts`: `DaemonConnectionError` を追加。ws close 系の generic Error 2 箇所を置換
+- `daemon-client.ts`: `wsUrlOverride` option に `@internal` JSDoc を付与し production 誤用を防止
+- `index.ts`: `DaemonConnectionError` を public export
+
+#### 検証
+- `npm test`: 230 passed / 23 skipped (回帰なし)
+- `npm run lint`: error 0 (既存 warning 1 のみ)
+
+#### 残項目 (別 Issue に分離)
+- setTimeout(r, 20) の flaky risk → deterministic な waitFor 化
+- request() timeout (daemon ハング時の client 永久 pending)
+- ws.close() 完了待機 (Phase 2 adapter 実装時)
+- getStatus() テスト未カバー
+
+**Branch**: `108-ts-rust-engine-client-phase1`
+
+---
+
 ## Archived Work
 
 Older work logs have been moved to the archive:
