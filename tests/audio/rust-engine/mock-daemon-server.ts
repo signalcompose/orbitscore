@@ -9,6 +9,8 @@ import { AddressInfo } from 'net'
 
 import { WebSocket, WebSocketServer } from 'ws'
 
+import { PROTOCOL_VERSION } from '../../../packages/engine/src/audio/rust-engine/protocol-types'
+
 type CommandRecord = {
   id: string
   method: string
@@ -42,7 +44,7 @@ export class MockDaemonServer {
         socket.send(
           JSON.stringify({
             type: 'handshake',
-            protocol_version: '0.1',
+            protocol_version: PROTOCOL_VERSION,
             daemon_version: 'mock-0.0.0',
             capabilities: ['playback'],
           }),
