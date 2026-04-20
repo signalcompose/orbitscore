@@ -15,7 +15,14 @@ export interface HandshakeFrame {
 }
 
 /** Protocol v0.1 で daemon が受け付ける method 名。 */
-export type CommandMethod = 'LoadSample' | 'UnloadSample' | 'PlayAt' | 'Stop' | 'SetGlobalGain' | 'GetStatus' | 'Ping'
+export type CommandMethod =
+  | 'LoadSample'
+  | 'UnloadSample'
+  | 'PlayAt'
+  | 'Stop'
+  | 'SetGlobalGain'
+  | 'GetStatus'
+  | 'Ping'
 
 export interface CommandFrame {
   id: string
