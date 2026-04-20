@@ -8,7 +8,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
-import { DaemonProtocolError } from '../../../packages/engine/src/audio/rust-engine/errors'
+import {
+  DaemonConnectionError,
+  DaemonProtocolError,
+} from '../../../packages/engine/src/audio/rust-engine/errors'
 
 import { MockDaemonServer } from './mock-daemon-server'
 
@@ -129,7 +132,7 @@ describe('DaemonClient with mock server', () => {
     // open 後すぐに server を止めて close を飛ばす
     await new Promise((r) => setTimeout(r, 20))
     await server.stop()
-    await expect(startPromise).rejects.toThrow()
+    await expect(startPromise).rejects.toBeInstanceOf(DaemonConnectionError)
     expect(client.isRunning()).toBe(false)
   })
 
@@ -140,6 +143,6 @@ describe('DaemonClient with mock server', () => {
     // mock server を拡張して扱う。
     const url = await server.start({}, true)
     const p = client.start({ wsUrlOverride: url, handshakeTimeoutMs: 200 })
-    await expect(p).rejects.toThrow(/handshake timeout/)
+    await expect(p).rejects.toBeInstanceOf(DaemonConnectionError)
   })
 })

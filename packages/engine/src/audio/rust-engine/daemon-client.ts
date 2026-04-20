@@ -107,7 +107,7 @@ export class DaemonClient extends EventEmitter {
       const handshakePromise = new Promise<void>((resolve, reject) => {
         const to = setTimeout(() => {
           this.handshakeResolver = null
-          reject(new Error(`handshake timeout after ${handshakeTimeoutMs}ms`))
+          reject(new DaemonConnectionError(`handshake timeout after ${handshakeTimeoutMs}ms`))
         }, handshakeTimeoutMs)
         this.handshakeResolver = (err) => {
           clearTimeout(to)
@@ -121,7 +121,12 @@ export class DaemonClient extends EventEmitter {
       await handshakePromise
       this.running = true
     } catch (err) {
-      await this.cleanupAfterStartFailure()
+      // cleanup 自体が throw しても original startup error を優先するため握り潰す。
+      try {
+        await this.cleanupAfterStartFailure()
+      } catch (cleanupErr) {
+        console.warn('DaemonClient cleanup after startup failure failed:', cleanupErr)
+      }
       throw err
     }
   }
@@ -133,8 +138,8 @@ export class DaemonClient extends EventEmitter {
       try {
         this.ws.close()
       } catch (e) {
-        // startup エラーを優先しつつ、cleanup 失敗が silent にならないよう通知。
-        this.emit('ws-close-error', e)
+        // startup phase では listener 未登録の可能性が高いので console に出す。
+        console.warn('DaemonClient ws.close() threw during startup cleanup:', e)
       }
       this.ws = null
     }
@@ -162,7 +167,15 @@ export class DaemonClient extends EventEmitter {
       }
       const to = setTimeout(() => {
         child.off('exit', onExit)
-        child.kill('SIGKILL')
+        try {
+          child.kill('SIGKILL')
+        } catch (e) {
+          // kill 自体が throw (process table 未解放等) したら診断を残す。
+          console.warn('DaemonClient SIGKILL failed:', e)
+        }
+        console.warn(
+          `DaemonClient child did not exit within ${DEFAULT_KILL_TIMEOUT_MS}ms of SIGTERM; escalated to SIGKILL`,
+        )
         resolve()
       }, DEFAULT_KILL_TIMEOUT_MS)
       child.once('exit', onExit)
