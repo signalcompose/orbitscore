@@ -88,28 +88,69 @@ export class DaemonClient extends EventEmitter {
     const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
     const handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS
 
-    const wsUrl =
-      options.wsUrlOverride ?? (await this.spawnDaemon(options.daemonPath, startupTimeoutMs))
+    // spawn/connect/handshake のいずれかが throw した場合、this.child / this.ws が
+    // dangling になるのを防ぐため try/catch で包み、失敗時は明示的に cleanup する。
+    // quit() は this.running===false なら no-op なので手動回収が必要。
+    try {
+      const wsUrl =
+        options.wsUrlOverride ?? (await this.spawnDaemon(options.daemonPath, startupTimeoutMs))
 
-    // handshake の検出ハンドラを connectWebSocket より先に用意。
-    // open 後すぐ message が届くケースでも handshakeResolver が
-    // セット済みの状態で handleFrame を通るようにする。
-    const handshakePromise = new Promise<void>((resolve, reject) => {
-      const to = setTimeout(() => {
-        this.handshakeResolver = null
-        reject(new Error(`handshake timeout after ${handshakeTimeoutMs}ms`))
-      }, handshakeTimeoutMs)
-      this.handshakeResolver = (err) => {
-        clearTimeout(to)
-        this.handshakeResolver = null
-        if (err) reject(err)
-        else resolve()
+      // handshake の検出ハンドラを connectWebSocket より先に用意。
+      // open 後すぐ message が届くケースでも handshakeResolver が
+      // セット済みの状態で handleFrame を通るようにする。
+      const handshakePromise = new Promise<void>((resolve, reject) => {
+        const to = setTimeout(() => {
+          this.handshakeResolver = null
+          reject(new Error(`handshake timeout after ${handshakeTimeoutMs}ms`))
+        }, handshakeTimeoutMs)
+        this.handshakeResolver = (err) => {
+          clearTimeout(to)
+          this.handshakeResolver = null
+          if (err) reject(err)
+          else resolve()
+        }
+      })
+
+      await this.connectWebSocket(wsUrl, connectTimeoutMs)
+      await handshakePromise
+      this.running = true
+    } catch (err) {
+      await this.cleanupAfterStartFailure()
+      throw err
+    }
+  }
+
+  /** doStart の中断時に this.child / this.ws を確実に回収する。 */
+  private async cleanupAfterStartFailure(): Promise<void> {
+    this.handshakeResolver = null
+    if (this.ws) {
+      try {
+        this.ws.close()
+      } catch {
+        // close で throw しても startup エラーを優先したいので握り潰す。
       }
-    })
-
-    await this.connectWebSocket(wsUrl, connectTimeoutMs)
-    await handshakePromise
-    this.running = true
+      this.ws = null
+    }
+    if (this.child && !this.child.killed) {
+      const child = this.child
+      child.kill('SIGTERM')
+      await new Promise<void>((resolve) => {
+        const to = setTimeout(() => {
+          child.kill('SIGKILL')
+          resolve()
+        }, 500)
+        child.once('exit', () => {
+          clearTimeout(to)
+          resolve()
+        })
+      })
+    }
+    this.child = null
+    // pending は spawn/handshake 段階では存在しないが念のため reject しておく。
+    for (const [, pend] of this.pending) {
+      pend.reject(new Error('daemon startup failed'))
+    }
+    this.pending.clear()
   }
 
   async loadSample(
