@@ -30,6 +30,14 @@ export class DaemonQuitError extends Error {
   }
 }
 
+/** WebSocket connection が予期せず close した場合に投げる。 */
+export class DaemonConnectionError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DaemonConnectionError'
+  }
+}
+
 export class DaemonProtocolError extends Error {
   readonly code: string
   readonly details?: unknown

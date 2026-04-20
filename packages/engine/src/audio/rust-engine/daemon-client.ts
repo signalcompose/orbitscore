@@ -22,6 +22,7 @@ import { v4 as uuidv4 } from 'uuid'
 import WebSocket from 'ws'
 
 import {
+  DaemonConnectionError,
   DaemonNotFoundError,
   DaemonProtocolError,
   DaemonQuitError,
@@ -48,7 +49,11 @@ export interface DaemonClientOptions {
   connectTimeoutMs?: number
   /** handshake フレーム受信 timeout。 */
   handshakeTimeoutMs?: number
-  /** テスト用: spawn を skip して既存 ws URL に接続する抜け道。 */
+  /**
+   * テスト用: spawn を skip して既存 ws URL に接続する抜け道。
+   * production code からは使用しない。
+   * @internal
+   */
   wsUrlOverride?: string
 }
 
@@ -431,12 +436,12 @@ export class DaemonClient extends EventEmitter {
       ws.off('message', onMessage)
       // handshake 途中で close した場合、handshakePromise が永続 hang するのを防ぐ。
       if (this.handshakeResolver) {
-        this.handshakeResolver(new Error('websocket closed during handshake'))
+        this.handshakeResolver(new DaemonConnectionError('websocket closed during handshake'))
       }
       // 閉じた socket への参照を残さない (stale reference 回避)。
       if (this.ws === ws) this.ws = null
       for (const [, pend] of this.pending) {
-        pend.reject(new Error('websocket closed'))
+        pend.reject(new DaemonConnectionError('websocket closed'))
       }
       this.pending.clear()
     })

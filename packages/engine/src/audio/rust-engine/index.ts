@@ -8,6 +8,7 @@
 export { DaemonClient } from './daemon-client'
 export type { DaemonClientOptions } from './daemon-client'
 export {
+  DaemonConnectionError,
   DaemonNotFoundError,
   DaemonProtocolError,
   DaemonQuitError,
