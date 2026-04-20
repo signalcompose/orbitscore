@@ -59,7 +59,7 @@ export interface StartupReadyLine {
   protocol_version: string
 }
 
-/** startup 失敗時に stderr に 1 行出る JSON。 */
+/** startup 失敗時に stdout の ready-line 位置に出力される JSON (失敗時は ready:false)。 */
 export interface StartupErrorLine {
   ready: false
   error: {
