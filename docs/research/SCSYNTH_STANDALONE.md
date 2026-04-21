@@ -88,6 +88,8 @@ cp /Applications/SuperCollider.app/Contents/Frameworks/libfftw3f.dylib /tmp/scsy
 
 ディレクトリ構造を `Contents/Resources/` + `Contents/Frameworks/` の形で保つ必要がある (scsynth の `@loader_path/../Frameworks/libsndfile.dylib` 参照に対応)。
 
+**注意**: `/Applications/SuperCollider.app` は Homebrew cask デフォルトのインストール先。user が手動 install した場合や地域設定によって `/Applications/SuperCollider/SuperCollider.app` 等の差異がありうる。bundle 生成スクリプト (#136) では SC.app の discovery logic を実装すること (Spotlight 検索 / `brew --prefix supercollider` / 複数 path 候補の fallback)。
+
 ### 2. 起動
 
 ```bash
@@ -113,7 +115,7 @@ PublishPortToRendezvous 0 57202
 
 ### 4. OSC 通信テスト結果
 
-カスタム Node.js test (dgram UDP で OSC 直接エンコード) で以下を確認:
+カスタム Node.js test (dgram UDP で OSC 直接エンコード) で以下を確認。OSC 各メッセージの詳細仕様は [`ENGINE_DAEMON_PROTOCOL.md`](./ENGINE_DAEMON_PROTOCOL.md) を参照:
 
 | 操作 | 期待 | 実測 |
 |---|---|---|
@@ -152,6 +154,8 @@ bundle 後はこれを拡張 install path からの相対に差し替える。`s
 - IPC は OSC (現状通り) → aggregation
 
 → Sonic Pi 先例と同等の配置。GPL-3.0 準拠。
+
+**LICENSE / NOTICE 実装**: OrbitScore 本体は root `LICENSE` (Signal compose Fair Trade License)。scsynth bundle 側には別途 `LICENSE.GPL-3.0` と corresponding source URL を記載した NOTICE を配置する。詳細実装は Issue #139。
 
 ---
 
