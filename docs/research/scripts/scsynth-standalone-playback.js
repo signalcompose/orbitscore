@@ -56,7 +56,7 @@ function enc(addr, types, args) {
 }
 function decodeAddr(buf) {
   let end = 0
-  while (buf[end] !== 0) end++
+  while (end < buf.length && buf[end] !== 0) end++
   return buf.slice(0, end).toString()
 }
 
@@ -73,10 +73,19 @@ const DEF_PATH =
 
 const sock = dgram.createSocket('udp4')
 const events = []
+let bufferDone = false
 sock.on('message', (m) => {
-  const addr = decodeAddr(m)
-  events.push(addr)
-  console.log('[recv]', addr)
+  try {
+    const addr = decodeAddr(m)
+    events.push(addr)
+    console.log('[recv]', addr)
+    // /b_allocRead 完了を個別に検知して下流の /s_new と race しないようにする
+    if (addr === '/done' && events.filter((e) => e === '/done').length >= 2) {
+      bufferDone = true
+    }
+  } catch (e) {
+    console.error('[error] malformed OSC frame:', e.message)
+  }
 })
 
 function send(buf) {
@@ -96,7 +105,17 @@ async function main() {
 
   // /b_allocRead bufnum path startFrame numFrames(0=all)
   await send(enc('/b_allocRead', 'isii', [0, WAV_PATH, 0, 0]))
-  await wait(400)
+  // wait for /done (buffer load 完了) を polling。race 回避のため
+  // /s_new を送る前に buffer が確実に読み込まれたことを保証する。
+  const bufferDeadline = Date.now() + 3000
+  while (!bufferDone && Date.now() < bufferDeadline) {
+    await wait(50)
+  }
+  if (!bufferDone) {
+    console.error('[error] /b_allocRead /done timeout')
+    sock.close()
+    process.exit(1)
+  }
 
   // /s_new synthdef nodeId addAction target ...args
   await send(

@@ -64,10 +64,14 @@ const socket = dgram.createSocket('udp4')
 const flags = { statusReply: false, defLoaded: false }
 
 socket.on('message', (msg) => {
-  const addr = decodeAddress(msg)
-  console.log('[recv]', addr)
-  if (addr === '/status.reply') flags.statusReply = true
-  if (addr === '/done') flags.defLoaded = true
+  try {
+    const addr = decodeAddress(msg)
+    console.log('[recv]', addr)
+    if (addr === '/status.reply') flags.statusReply = true
+    if (addr === '/done') flags.defLoaded = true
+  } catch (e) {
+    console.error('[error] malformed OSC frame:', e.message)
+  }
 })
 
 function send(buf) {
