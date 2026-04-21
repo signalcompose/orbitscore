@@ -124,7 +124,9 @@ PublishPortToRendezvous 0 57202
 | `/b_allocRead` (kick.wav) | `/done ,sii` 受信 | ✅ |
 | `/s_new orbitPlayBuf` | `/n_go` + `/n_end` 受信 | ✅ |
 
-Test script: `/tmp/scsynth-test/test-playback.js` (本リポジトリ外)。
+Test scripts (reproduction 用に本リポジトリに同梱):
+- [`docs/research/scripts/scsynth-standalone-boot.js`](./scripts/scsynth-standalone-boot.js) — boot / /status / /d_recv 検証
+- [`docs/research/scripts/scsynth-standalone-playback.js`](./scripts/scsynth-standalone-playback.js) — /b_allocRead + /s_new + /n_go/n_end フル再生検証
 
 ---
 
