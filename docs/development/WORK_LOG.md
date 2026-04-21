@@ -3543,6 +3543,52 @@ CI (prettier) が fail していたのも同時に修正。
 
 **Branch**: `108-ts-rust-engine-client-phase1`
 
+### April 21, 2026 — Issue #133 scsynth standalone 検証 (Epic #131 Phase 1)
+
+#### 背景
+Epic #131 (v1.0 ICMC Ready) Phase 1 の前提調査。SC.app を別 install せず
+scsynth バイナリ単体を `.vsix` に同梱する戦略 (Sonic Pi パターン) の実現性を
+primary-source で確認するタスク。
+
+#### 変更内容
+- `docs/research/SCSYNTH_STANDALONE.md` 新規作成 (170 行、日本語)
+  - scsynth 3.14.1 (Homebrew cask) を `/tmp` に抽出して OSC 通信・SynthDef load・
+    WAV 再生まで動作確認した結果を記録
+  - 最小 bundle 構成: scsynth 1.5 MB + non-supernova plugins 5.1 MB +
+    libsndfile.dylib 4.9 MB + libfftw3f.dylib 1.6 MB = ~13 MB
+  - 必須起動フラグ: `-u <port> -i 0` (input disable で sample rate mismatch crash 回避)
+  - GPL-3.0 aggregation 観点の合規性 (Sonic Pi 先例) を明文化
+  - Fallback 策と実装時の注意点を整理
+- `docs/research/scripts/scsynth-standalone-boot.js` 追加 (reproduction 用)
+- `docs/research/scripts/scsynth-standalone-playback.js` 追加 (同)
+
+#### 検証
+- scsynth standalone 起動 / OSC `/status` reply / `/d_recv` SynthDef load /
+  `/b_allocRead` WAV load / `/s_new` synth 起動 + `/n_end` 自動終了まで PASS
+- 3 回の iteration で silent-failure-hunter 指摘を解消:
+  - decodeAddr bounds check, socket handler try/catch,
+  - `/d_recv` vs `/b_allocRead` の `/done` 判定を明示 flag 化
+- 5 commit (b379bd5 → 847db3e) で docs + scripts + robust 化を反復
+
+#### 後続
+- #134: minimum plugin set 決定 (全量同梱 vs non-supernova 限定)
+- #135: codesign / notarize pipeline 設計
+- #136: `packages/vscode-extension` への bundle 配置と path resolution 切替
+- #139: LICENSE.GPL-3.0 と NOTICE 配置
+
+#### Retrospective (April 21, 2026)
+
+**Auditor (5 principles)**:
+- DDD / TDD / DRY / ISSUE: PASS
+- PROCESS: 本エントリ追加により PASS
+
+**Researcher 推奨**:
+- CLAUDE.md Quick Reference に scsynth 操作フラグ (`-i 0`) / 非致命 boot
+  warning を追記する (後続 issue で検討)
+- #136 実装時は scripts/\*.js を CI 検証ゲートとして活用
+
+**Branch**: `133-scsynth-standalone-verify`
+
 ---
 
 ## Archived Work
