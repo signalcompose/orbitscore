@@ -3589,6 +3589,65 @@ primary-source で確認するタスク。
 
 **Branch**: `133-scsynth-standalone-verify`
 
+### April 23, 2026 — Issue #134 + #135 scsynth bundle research (Epic #131 Phase 1)
+
+#### 背景
+Epic #131 (v1.0 ICMC Ready) Phase 1 の前提調査 2 件を 1 PR で完了。
+- #134: `.vsix` に同梱する scsynth plugin / dylib の最適セット決定
+- #135: 同梱 scsynth binary の codesign / notarize pipeline 設計
+
+下流 #136 (bundle 実装)、#137 (CI publish)、#138 (cold-install smoke test)、
+#139 (LICENSE/NOTICE) の意思決定資料として整備。
+
+#### 変更内容
+- `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` 新規作成 (~310 行、日本語)
+  - non-supernova plugin 26 ファイル全同梱 (5.1 MB) + libsndfile.dylib (4.9 MB) +
+    scsynth 本体 (1.5 MB) = bundle 合計 **~11.5 MB** に確定
+  - libfftw3f.dylib は全 26 plugin で未使用 (otool 実測) → 同梱対象から除外
+  - 抽出 script (Homebrew cask default / SC.app fallback、fail-fast 検証付き)
+  - Cold-install verification checklist (11 項目) + 失敗時診断フロー + timeout 目安
+  - SC version update policy (Major/Minor で re-extract、Patch 据え置き)
+- `docs/research/CODESIGN_PIPELINE.md` 新規作成 (~350 行、日本語)
+  - SC 3.14.1 scsynth の `codesign -dv` 実測結果を引用 (team HE5VJFE9E4 署名済)
+  - **決定: 再署名 / 再 notarize 不要** — SC 公式 signature を流用
+  - `spctl --type exec` rejected は policy mismatch、実運用の Gatekeeper 判定は
+    VS Code 親プロセス経由 spawn で問題なし (#138 で実測予定)
+  - GitHub Actions workflow 骨子 (macos-14、VSCE_PAT のみ必須、Apple secret 不要)
+  - CI assertion 成功基準テーブル (#138 向け)
+  - Fallback plan (SC 側 signature 失効時の自前署名手順)
+
+#### 重要な発見
+- **Apple Developer ID 取得不要**: SC 公式が既に Apple Dev ID 署名 + hardened
+  runtime + notarize 済、全 binary (scsynth / libsndfile / plugin .scx) が
+  team HE5VJFE9E4 で統一
+- **bundle サイズ 11.5 MB**: 当初想定 (~30 MB) より 3 倍コンパクト
+- **libfftw3f 不要**: FFT_UGens は Accelerate.framework 経由
+
+#### 検証
+- scsynth / libsndfile / plugin の codesign -dv で signature 全実測
+- 26 non-supernova plugin の libfftw3f 依存を otool で全検証
+- `spctl --assess` / `xcrun stapler validate` で Gatekeeper / notarize 挙動確認
+- 3 回の iteration で pipeline-review findings を解消:
+  - /simplify (3 agents) で cross-ref / fallback trim / Last-verified header
+  - /code:pr-review-team iter 1: extraction fail-fast / post-package verify /
+    Gatekeeper context / cold-install checklist / CI assertion criteria
+  - /code:pr-review-team iter 2: timeout budgets + 診断フロー追加
+  - iter 3: c=i=0 収束達成
+
+#### Retrospective (April 23, 2026)
+
+**Auditor (5 principles)**:
+- DDD / TDD / ISSUE: PASS
+- DRY: PARTIAL → 本 WORK_LOG entry で整合 + MANIFEST↔CODESIGN cross-ref 対称化は後続 PR で
+- PROCESS: 本 entry 追加により PASS
+
+**Researcher 推奨 (次スプリント)**:
+- #136 (extract script) が critical path、2-3h 見込で優先着手
+- #140 (VitePress scaffold) を並行開始 (docs 10+ ファイルの navigation 整備)
+- #137 (CI workflow) を #136 実装と並行で draft (`act` でローカル検証可)
+
+**Branch**: `134-135-scsynth-bundle-research`
+
 ---
 
 ## Archived Work
