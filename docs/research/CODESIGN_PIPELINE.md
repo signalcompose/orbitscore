@@ -107,7 +107,18 @@ $ spctl --assess --type install /Applications/SuperCollider.app
 
 ### これは問題か?
 
-**No**。rejected 理由は "code is valid but does not seem to be an app"、つまり **code signature 自体は valid** で、`spctl --type exec/install` policy が "app bundle expected" を強制しているだけ。
+**Gatekeeper の実起動判定には影響しない**。rejected 理由は "code is valid but does not seem to be an app"、つまり **code signature 自体は valid** で、`spctl --type exec/install` policy が "app bundle expected" を強制しているだけ。
+
+**実運用 (VS Code 拡張から scsynth を child process として spawn) では**:
+- 親 VS Code は Microsoft 署名済の signed app
+- child binary の code signature を macOS が online で検証 (quarantine xattr 付きなら)
+- spctl policy mismatch の警告は発生しない (Launch Services は別経路で判定)
+
+**ただし以下のケースは要注意** (#138 smoke test で実測必須):
+- user が `scsynth` を Finder から直接 double-click → spctl policy mismatch で拒否の可能性
+- user の VS Code が未署名 nightly / portable build → 親の信頼が継承されない
+- offline 環境で quarantine 付きファイル起動 → notarize online check 失敗
+
 
 実際の Gatekeeper 挙動は Launch Services が管理しており、以下で決まる:
 1. 実行ファイルが **signed** であること → ✅
@@ -211,7 +222,7 @@ jobs:
         run: brew install --cask supercollider
       - name: Extract scsynth bundle
         run: bash scripts/extract-scsynth-bundle.sh   # #136 で実装
-      - name: Verify bundle signatures
+      - name: Verify pre-package signatures
         run: |
           codesign --verify --verbose packages/vscode-extension/engine/scsynth/Contents/Resources/scsynth
           codesign --verify --verbose packages/vscode-extension/engine/scsynth/Contents/Frameworks/libsndfile.dylib
@@ -219,15 +230,31 @@ jobs:
         run: npm install && npm run build
       - name: Package .vsix
         run: npx vsce package
-      - name: Verify .vsix signature preserved
+      - name: Verify post-package signatures preserved (MANDATORY gate)
         run: |
           unzip -o packages/vscode-extension/*.vsix -d /tmp/vsix-check
           codesign --verify --verbose /tmp/vsix-check/extension/engine/scsynth/Contents/Resources/scsynth
+          codesign --verify --verbose /tmp/vsix-check/extension/engine/scsynth/Contents/Frameworks/libsndfile.dylib
+          # 万一 Mach-O LC_CODE_SIGNATURE が vsce packaging で壊れたら publish 中止
       - name: Publish to Marketplace
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: npx vsce publish
 ```
+
+### CI assertion 成功基準 (#138 で厳密化)
+
+各検証ステップが真となる場合のみ次工程に進むこと:
+
+| Step | 成功条件 |
+|---|---|
+| `codesign --verify --verbose <binary>` | exit code 0 AND stderr に `valid on disk` AND `satisfies its Designated Requirement` を含む |
+| `codesign -dv <binary>` | stdout に `TeamIdentifier=HE5VJFE9E4` を含む |
+| `file <binary>` | stdout に `Mach-O universal binary` を含む (arm64 + x86_64) |
+| `scsynth -u <port> -i 0` 起動 | stdout/stderr に `SuperCollider 3 server ready.` を含み、exit しない (signal KILL で止めるまで) |
+| OSC `/status` round-trip | UDP に `/status.reply` frame が戻る |
+
+これらを満たさない場合は CI fail、publish しない。
 
 ### Required secrets
 

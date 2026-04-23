@@ -180,13 +180,23 @@ packages/vscode-extension/engine/scsynth/
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 1. SC install (未導入なら)
-if ! [ -d /Applications/SuperCollider.app ]; then
-  brew install --cask supercollider
-fi
-
 SC_ROOT="/Applications/SuperCollider.app/Contents"
 DEST="packages/vscode-extension/engine/scsynth/Contents"
+
+# 1. SC install 確認 (fail-fast; 未導入なら Homebrew で install 試行)
+if ! [ -d /Applications/SuperCollider.app ]; then
+  echo "SuperCollider.app not found. Attempting Homebrew install..." >&2
+  brew install --cask supercollider
+fi
+if ! [ -f "$SC_ROOT/Resources/scsynth" ]; then
+  echo "ERROR: scsynth binary not found at expected path" >&2
+  echo "  Expected: $SC_ROOT/Resources/scsynth" >&2
+  exit 1
+fi
+if ! [ -f "$SC_ROOT/Frameworks/libsndfile.dylib" ]; then
+  echo "ERROR: libsndfile.dylib not found" >&2
+  exit 1
+fi
 
 # 2. ディレクトリ作成
 mkdir -p "$DEST/Resources/plugins" "$DEST/Frameworks"
@@ -195,12 +205,19 @@ mkdir -p "$DEST/Resources/plugins" "$DEST/Frameworks"
 cp "$SC_ROOT/Resources/scsynth" "$DEST/Resources/scsynth"
 
 # 4. plugins (non-supernova のみ)
+plugin_count=0
 for f in "$SC_ROOT/Resources/plugins/"*.scx; do
   basename=$(basename "$f")
   if [[ "$basename" != *_supernova.scx ]]; then
     cp "$f" "$DEST/Resources/plugins/$basename"
+    plugin_count=$((plugin_count + 1))
   fi
 done
+if [ "$plugin_count" -ne 26 ]; then
+  echo "ERROR: expected 26 non-supernova plugins, got $plugin_count" >&2
+  echo "  SC version may have added/removed plugins; update manifest doc." >&2
+  exit 1
+fi
 
 # 5. dylib (libsndfile のみ)
 cp "$SC_ROOT/Frameworks/libsndfile.dylib" "$DEST/Frameworks/libsndfile.dylib"
@@ -210,10 +227,18 @@ echo "Bundle size:"
 du -sh "$DEST"
 
 echo "Architecture check (should show universal):"
-file "$DEST/Resources/scsynth"
+file "$DEST/Resources/scsynth" | grep -E "universal|arm64.*x86_64" || {
+  echo "ERROR: scsynth is not universal binary" >&2
+  exit 1
+}
 
-echo "Signature check (should be SC official):"
-codesign -dv "$DEST/Resources/scsynth" 2>&1 | grep -E "Identifier|TeamIdentifier"
+echo "Signature check (should be SC official, team HE5VJFE9E4):"
+codesign --verify --verbose "$DEST/Resources/scsynth" 2>&1 | tail -3
+codesign -dv "$DEST/Resources/scsynth" 2>&1 | grep TeamIdentifier | grep -q HE5VJFE9E4 || {
+  echo "ERROR: scsynth signature TeamIdentifier is not HE5VJFE9E4" >&2
+  exit 1
+}
+echo "OK: bundle prepared at $DEST"
 ```
 
 ### Fallback: SC.app discovery
@@ -244,6 +269,24 @@ SC_APP=$(
 SC 公式 release notes と `codesign -dv` Timestamp を定期 watch (~ quarterly)。
 
 ---
+
+## Cold-install verification checklist (#138 向け)
+
+`.vsix` install 後の新規 Mac で以下を満たすこと:
+
+- [ ] `scsynth` バイナリが `Contents/Resources/scsynth` に存在
+- [ ] `plugins/` 配下に **26 ファイル** (non-supernova のみ) 存在、supernova variant は含まない
+- [ ] `libsndfile.dylib` が `Contents/Frameworks/` に存在
+- [ ] `scsynth` が実行権限付き (`-rwxr-xr-x` 等)
+- [ ] `file` 出力が universal binary (arm64 + x86_64)
+- [ ] `codesign --verify --verbose` が exit 0 で "valid on disk" + "satisfies its Designated Requirement" を stdout に含む
+- [ ] `codesign -dv` の TeamIdentifier が `HE5VJFE9E4`
+- [ ] scsynth が standalone 起動 (`-u <port> -i 0`) 成功、`SuperCollider 3 server ready.` ログ出力
+- [ ] OSC `/status` で `/status.reply` 受信
+- [ ] `orbitPlayBuf.scsyndef` の `/d_recv` で `/done` 受信
+- [ ] WAV `/b_allocRead` + `/s_new` で `/n_go` + `/n_end` 受信
+
+検証 script (再利用可): [`docs/research/scripts/verify-bundle.sh`](./scripts/verify-bundle.sh) として #136 実装時に整備。
 
 ## #136 実装時の注意点
 
