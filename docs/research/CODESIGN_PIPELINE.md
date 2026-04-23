@@ -1,10 +1,12 @@
 # Codesign / Notarize Pipeline
 
 **日付**: 2026-04-23
+**Last verified**: 2026-04-23 (SC 3.14.1、macOS Sonoma / Sequoia 時代)
 **対象 Issue**: #135
 **関連 Epic**: #131 (v1.0 ICMC Ready Phase 1)
 **前提**: [SCSYNTH_BUNDLE_MANIFEST.md](./SCSYNTH_BUNDLE_MANIFEST.md) で bundle 構成確定
 **SC バージョン**: SuperCollider 3.14.1 (Homebrew cask、universal binary)
+**再検証トリガー**: SC 版上げ、Apple notarize policy 変更、macOS Major 版上げ
 
 ---
 
@@ -154,19 +156,13 @@ scsynth does not have a ticket stapled to it.
 
 ### vsce packaging の仕組み
 
-`vsce package` は `.vsix` を生成するが、これは **zip archive** (OPC format)。
+`vsce package` が生成する `.vsix` は **zip archive** (OPC format)。
 
-重要: zip は **Mach-O binary の内部 (LC_CODE_SIGNATURE load command)** を保持する。Code signature は binary body に埋め込まれているため、zip compress/decompress で失われない。
+重要: zip は **Mach-O binary 内部の LC_CODE_SIGNATURE load command を保持する**。Code signature は binary body に埋め込まれているため zip compress/decompress で失われない。xattr (`com.apple.cs.*` 等) は喪失する可能性があるが、Gatekeeper は LC_CODE_SIGNATURE を読むので無関係。
 
-**失われる可能性があるもの** (extended attributes):
-- `com.apple.cs.code-signature` 等の xattr
-- HFS+ finder flags
+実行権限 (mode 0755 等) は vsce 内部の `yazl` で保持される (要 #138 実機検証)。
 
-しかし Apple の Gatekeeper は binary 内部の LC_CODE_SIGNATURE を読むため、xattr 喪失は問題なし。
-
-### 実行権限
-
-scsynth は executable。zip は Unix permission (mode 0755 等) を原則保持するが、一部の zip 実装では欠落。vsce 内部の実装 (`yazl` npm package 使用) は permission を保持することを公式 docs で確認済 (要検証: #138 cold-install smoke test)。
+bundle ディレクトリ構造の詳細は [SCSYNTH_BUNDLE_MANIFEST.md § Bundle 最終 manifest](./SCSYNTH_BUNDLE_MANIFEST.md) を参照。
 
 ### 検証コマンド (publish 前 smoke test)
 
@@ -247,57 +243,18 @@ jobs:
 
 ## Fallback plan (将来 SC 側 signature が使えなくなった場合)
 
-SC project が署名なしリリースを出す / CDN が停止して notarize verification 失敗する等のリスク。その場合は Signal compose Inc. の Developer ID で再署名する路線に切替。
+発動条件: SC project が署名なしリリースを出す、または Apple の notarize server で verification が失敗する。
 
-### 再署名コマンド (参考)
-
-```bash
-# scsynth binary (hardened runtime + timestamp)
-codesign --force \
-  --sign "Developer ID Application: Signal compose Inc. (XXXXXXXXXX)" \
-  --options runtime \
-  --timestamp \
-  --entitlements scripts/scsynth.entitlements \
-  packages/vscode-extension/engine/scsynth/Contents/Resources/scsynth
-
-# dylib / plugin も同様に
-find packages/vscode-extension/engine/scsynth -name "*.dylib" -o -name "*.scx" |
-  xargs -I{} codesign --force --sign "..." --options runtime --timestamp {}
-
-# Notarize submission
-xcrun notarytool submit packages/vscode-extension/orbitscore-X.Y.Z.vsix \
-  --apple-id "$APPLE_ID" \
-  --password "$APPLE_ID_PASSWORD" \
-  --team-id "$APPLE_TEAM_ID" \
-  --wait
-```
-
-### Entitlements (scsynth 用)
-
-OSC 通信のため network 権限、audio I/O 権限が必要:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-  <key>com.apple.security.network.server</key>
-  <true/>
-  <key>com.apple.security.network.client</key>
-  <true/>
-  <key>com.apple.security.device.audio-input</key>
-  <true/>
-</dict>
-</plist>
-```
-
-現時点では適用しない (SC 公式署名を使うため)。
-
-### Apple Developer ID 取得 (fallback 発動時のみ)
-
+切替手順 (概略):
 1. Apple Developer Program ($99/年、Signal compose Inc. 法人名義) 加入
-2. Xcode or developer.apple.com で Developer ID Application 証明書生成
-3. App-specific password 発行 (Apple ID 設定画面)
-4. GitHub secrets に登録
+2. Developer ID Application 証明書生成
+3. `codesign --force --sign "Developer ID Application: Signal compose Inc." --options runtime --timestamp --entitlements scsynth.entitlements` で scsynth + dylib + plugins を再署名
+4. `xcrun notarytool submit <vsix> --wait` で notarize 申請
+5. GitHub secrets (`APPLE_DEVELOPER_ID_CERT`, `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`) を追加
+
+Entitlements 例 (OSC / audio 用): `com.apple.security.network.server`, `network.client`, `device.audio-input` を `true` に設定。詳細は Apple 公式 Entitlements 仕様を参照。
+
+現時点では発動不要 (SC 公式署名を流用)。
 
 ---
 

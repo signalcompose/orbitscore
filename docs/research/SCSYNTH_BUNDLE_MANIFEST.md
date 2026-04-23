@@ -1,10 +1,12 @@
 # scsynth Bundle Manifest
 
 **日付**: 2026-04-23
+**Last verified**: 2026-04-23 (SC 3.14.1)
 **対象 Issue**: #134
 **関連 Epic**: #131 (v1.0 ICMC Ready Phase 1)
 **前提**: [SCSYNTH_STANDALONE.md](./SCSYNTH_STANDALONE.md) で SC.app 外 standalone 起動検証済
 **SC バージョン**: SuperCollider 3.14.1 (Homebrew cask、universal binary)
+**再検証トリガー**: SC の Major/Minor bump 時 (section "Update policy" 参照)
 
 ---
 
