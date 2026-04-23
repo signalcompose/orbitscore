@@ -288,6 +288,20 @@ SC 公式 release notes と `codesign -dv` Timestamp を定期 watch (~ quarterl
 
 検証 script (再利用可): [`docs/research/scripts/verify-bundle.sh`](./scripts/verify-bundle.sh) として #136 実装時に整備。
 
+### 失敗時の診断フロー
+
+| 失敗箇所 | 典型原因 | 対応 |
+|---|---|---|
+| 項目 1-4 (ファイル配置) | 抽出 script の path 決定不良 / SC.app location 差異 | extract script 再実行、path 候補 fallback を追加 |
+| 項目 5-7 (codesign / TeamIdentifier) | vsce packaging で LC_CODE_SIGNATURE 破損 / xattr 不正 stripping | 元 SC.app からの再抽出、vsce version 確認 |
+| 項目 8 (scsynth 起動失敗) | ポート衝突 (default 57110)、権限不足、Gatekeeper 拒否 | `lsof -i :57110` で占有確認 → 別ポートで再試行、`xattr -l` で quarantine 確認 |
+| 項目 9-11 (OSC round-trip 失敗) | scsynth が boot 途中で crash / ファイアウォール | scsynth stderr をキャプチャ、boot 完了を 10 秒 timeout で待機、失敗したら `scsynth -v` で verbose log 取得 |
+
+タイムアウト目安 (#138 CI 向け):
+- scsynth boot: **10 秒** (`SuperCollider 3 server ready.` 表示まで)
+- OSC `/status` round-trip: **2 秒**
+- `/d_recv` + `/b_allocRead` + `/s_new` → `/n_end`: **5 秒**
+
 ## #136 実装時の注意点
 
 1. **ディレクトリ構造保持**: `Contents/Resources/` + `Contents/Frameworks/` を崩すと scsynth の `@loader_path/../Frameworks/libsndfile.dylib` が解決失敗
