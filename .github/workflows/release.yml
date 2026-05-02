@@ -1,21 +1,34 @@
 name: Release
 
-# Tag push triggers a full release pipeline:
-#   - v1.2.3        → stable: GitHub Release + Marketplace + Open VSX
-#   - v1.2.3-rc1    → prerelease: GitHub Release only (no Marketplace push)
-#   - v1.2.3-beta.1 → prerelease (matches *-rc* / *-beta* / *-alpha*)
+# Triggers:
+#   - tag push v*  → full pipeline (build + bundle + verify + GitHub Release + Marketplace + Open VSX)
+#   - pull_request → smoke pipeline (build + bundle + verify only — publish steps are gated to tag pushes)
+#
+# Tag → release-type mapping (strict SemVer-only stable):
+#   - v1.2.3        → stable   : GitHub Release + Marketplace + Open VSX
+#   - v1.2.3-rc1    → prerelease: GitHub Release only
+#   - v1.2.3-foo    → prerelease (anything that is not bare X.Y.Z is treated as prerelease;
+#                                 prevents test/smoke tags like v0.0.0-test1 from publishing)
 #
 # Required GitHub secrets (set via gh secret set <name> --repo signalcompose/orbitscore):
 #   - VSCE_PAT  : VS Code Marketplace publisher token (Azure DevOps)
 #   - OVSX_PAT  : Open VSX namespace token (Eclipse Foundation account)
-# Apple Developer ID secrets are NOT required — the bundled scsynth retains
-# the SuperCollider project's existing notarized signature (see
-# docs/research/CODESIGN_PIPELINE.md).
+# The publish steps abort with an error if these are unset, so a stable tag push on a repo
+# without secrets fails loud rather than silently skipping.
+# Apple Developer ID secrets are NOT required — the bundled scsynth retains the SuperCollider
+# project's existing notarized signature (see docs/research/CODESIGN_PIPELINE.md).
 
 on:
   push:
     tags:
       - 'v*'
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'packages/vscode-extension/**'
+      - 'packages/engine/**'
+      - 'scripts/extract-scsynth-bundle.sh'
+      - 'scripts/verify-bundle.sh'
 
 permissions:
   contents: write # required for gh release create
@@ -41,6 +54,7 @@ jobs:
           cache: 'npm' # node_modules cache keyed on package-lock.json (~55s saved on warm runs)
 
       - name: Install SuperCollider (source for scsynth bundle)
+        timeout-minutes: 10 # surface brew hangs early instead of consuming the job-level 30min timeout
         run: brew install --cask supercollider
 
       - name: Install npm dependencies
@@ -64,29 +78,50 @@ jobs:
 
       - name: Verify .vsix preserves bundle signatures (post-package gate)
         run: |
+          set -euo pipefail # fail fast on any error in this multi-line script
           VSIX_CHECK=$(mktemp -d)
-          unzip -o packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix -d "$VSIX_CHECK"
+          # Resolve the exact .vsix path; fail loudly if the glob produced 0 or >1 hits
+          # (multiple hits would indicate a stale build artifact polluting the verify).
+          mapfile -t VSIX_FILES < <(ls packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix 2>/dev/null || true)
+          if [ "${#VSIX_FILES[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly 1 .vsix for target $VSIX_TARGET, got ${#VSIX_FILES[@]}: ${VSIX_FILES[*]}" >&2
+            exit 1
+          fi
+          unzip -o "${VSIX_FILES[0]}" -d "$VSIX_CHECK"
           bash scripts/verify-bundle.sh "$VSIX_CHECK/extension/engine/scsynth"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # Steps below this point only run for tag pushes (not pull_request).
+      # PR runs end after post-package gate, providing a smoke test of the
+      # entire build/bundle pipeline without publishing anything.
+      # ─────────────────────────────────────────────────────────────────────
 
       - name: Determine release type from tag
         id: release_type
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          if [[ "$TAG" =~ -(rc|alpha|beta)([0-9.]*)?$ ]]; then
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "Detected prerelease tag: $TAG"
-          else
+          # Stable iff tag is bare SemVer (vX.Y.Z). Anything else (rc/alpha/beta/test/foo)
+          # is treated as prerelease — prevents accidental Marketplace publish from
+          # smoke-test tags like v0.0.0-test1.
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
             echo "Detected stable release tag: $TAG"
+          else
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Detected prerelease tag: $TAG"
           fi
 
       - name: Create GitHub Release with .vsix asset
+        id: gh_release
+        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           IS_PRERELEASE: ${{ steps.release_type.outputs.is_prerelease }}
         run: |
+          set -euo pipefail
           PRERELEASE_FLAG=""
           if [ "$IS_PRERELEASE" = "true" ]; then
             PRERELEASE_FLAG="--prerelease"
@@ -97,30 +132,62 @@ jobs:
             packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix
 
       - name: Publish to VS Code Marketplace (stable only)
-        if: steps.release_type.outputs.is_prerelease == 'false'
+        id: vsce_publish
+        if: startsWith(github.ref, 'refs/tags/v') && steps.release_type.outputs.is_prerelease == 'false'
         working-directory: packages/vscode-extension
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx vsce publish --target "$VSIX_TARGET" --packagePath orbitscore-"$VSIX_TARGET"-*.vsix
+        run: |
+          set -euo pipefail
+          # Fail loud rather than letting vsce attempt auth with empty token
+          # (which produces a confusing error vs an actionable "secret missing" message).
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "::error::VSCE_PAT secret is not set. Register it via 'gh secret set VSCE_PAT --repo signalcompose/orbitscore' before tagging stable releases." >&2
+            exit 1
+          fi
+          npx vsce publish --target "$VSIX_TARGET" --packagePath orbitscore-"$VSIX_TARGET"-*.vsix
 
       - name: Publish to Open VSX (stable only)
-        if: steps.release_type.outputs.is_prerelease == 'false'
+        id: ovsx_publish
+        if: startsWith(github.ref, 'refs/tags/v') && steps.release_type.outputs.is_prerelease == 'false'
         working-directory: packages/vscode-extension
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: npx ovsx publish orbitscore-"$VSIX_TARGET"-*.vsix -p "$OVSX_PAT"
+        run: |
+          set -euo pipefail
+          if [ -z "${OVSX_PAT:-}" ]; then
+            echo "::error::OVSX_PAT secret is not set. Register it via 'gh secret set OVSX_PAT --repo signalcompose/orbitscore' before tagging stable releases." >&2
+            exit 1
+          fi
+          npx ovsx publish orbitscore-"$VSIX_TARGET"-*.vsix -p "$OVSX_PAT"
 
       - name: Summary
+        # always() so the summary still emits if a publish step failed,
+        # but per-step outcome lookups give an accurate picture instead of unconditional success claims.
+        if: always() && startsWith(github.ref, 'refs/tags/v')
         env:
           TAG: ${{ github.ref_name }}
           IS_PRERELEASE: ${{ steps.release_type.outputs.is_prerelease }}
+          GH_RELEASE_OUTCOME: ${{ steps.gh_release.outcome }}
+          VSCE_OUTCOME: ${{ steps.vsce_publish.outcome }}
+          OVSX_OUTCOME: ${{ steps.ovsx_publish.outcome }}
         run: |
-          echo "## Release $TAG" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          if [ "$IS_PRERELEASE" = "true" ]; then
-            echo "🧪 **Prerelease** — GitHub Release only, Marketplace/Open VSX skipped" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "🚀 **Stable release** — published to GitHub Release, VS Code Marketplace, and Open VSX" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          echo "- vsix: $(ls packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- target: $VSIX_TARGET" >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          {
+            echo "## Release $TAG"
+            echo ""
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              echo "🧪 **Prerelease** — GitHub Release only, Marketplace/Open VSX skipped"
+            else
+              echo "🚀 **Stable release** target — per-channel results below"
+            fi
+            echo ""
+            echo "| Channel | Outcome |"
+            echo "|---|---|"
+            echo "| GitHub Release | ${GH_RELEASE_OUTCOME:-skipped} |"
+            echo "| VS Code Marketplace | ${VSCE_OUTCOME:-skipped} |"
+            echo "| Open VSX | ${OVSX_OUTCOME:-skipped} |"
+            echo ""
+            echo "- target: \`$VSIX_TARGET\`"
+            echo "- vsix: \`$(ls packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix)\`"
+          } >> "$GITHUB_STEP_SUMMARY"

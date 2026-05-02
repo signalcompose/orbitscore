@@ -31,10 +31,10 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - pipeline:
   1. checkout + setup-node
   2. `brew install --cask supercollider` (bundle source)
-  3. `npm install` + `npm run build` (engine + extension)
+  3. `npm ci` + `npm run build` (engine + extension)
   4. `npm run build:bundle` (scsynth 抽出)
-  5. `npm run verify:bundle` (pre-package gate、11 checks)
-  6. `npx vsce package --target darwin-arm64 --no-yarn`
+  5. `npm run verify:bundle` (pre-package integrity gate)
+  6. `npx vsce package --target $VSIX_TARGET --no-yarn` (currently `darwin-arm64`、env var で集約)
   7. `.vsix` 解凍 → verify-bundle.sh で **post-package signature 維持**確認
   8. tag suffix で release type 判定 (regex: `-(rc|alpha|beta)([0-9.]*)?$`)
   9. `gh release create` (prerelease/stable + `--generate-notes` で auto changelog)
