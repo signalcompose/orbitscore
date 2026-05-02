@@ -17,6 +17,93 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.65 Issue #136: scsynth bundle integration in vscode-extension (May 02, 2026)
+
+**Date**: May 02, 2026
+**Status**: ✅ COMPLETE (PR pending review)
+**Branch**: `136-bundle-scsynth-vscode-extension`
+**Issue**: #136 (Epic #131 Phase 1 — ICMC v1.0)
+
+**Work Content**: ICMC 2026 リリースの最大インストール障壁 (SC.app の手動 install 強要) を解消するため、scsynth + 26 plugins + libsndfile.dylib (~11.5MB) を `.vsix` に同梱、path resolver を extension/engine 共通化、bundle 不在時の first-run UX を実装。旧 #146 の (1)(2) (bundle 検出 + Notification) を統合 (CodeX レビュー承認、#146 close 済)。
+
+**Version**: 1.0.1 → **1.1.0** (Phase 13 で minor bump、scsynth bundle 同梱は major feature)
+
+**実装** (18 commits、各単独で `npm test` 通過):
+
+| # | Commit | 内容 |
+|---|--------|------|
+| 1 | `63e298b` | feat(audio): add scsynth path resolver with multi-source fallback |
+| 2 | `24a2e5c` | refactor(audio): wire SuperColliderPlayer through scsynth resolver |
+| 3 | `a4bad3b` | feat(vscode-extension): add orbitscore.scsynthPath setting and pass to engine |
+| 4 | `7880462` | refactor(vscode-extension): unify selectAudioDevice through scsynth resolver |
+| 5 | `9663a83` | feat(vscode-extension): add bundle status bar and first-run notification |
+| 6 | `aca6450` | feat(build): add scsynth bundle extract/verify scripts and legal placeholders |
+| 7 | `e25894d` | docs(worklog,readme): record scsynth bundle integration |
+| 8 | `1569110` | refactor(audio): drop SC.app/spotlight fallback from scsynth resolver |
+| 9 | `08c2855` | refactor(vscode-extension): align UX with strict bundle requirement |
+| 10 | `5f93169` | docs(worklog,readme,build-guide): document strict resolver and dev workaround |
+| 11 | `98277db` | docs(platform): scope v1.0 to macOS Apple Silicon only |
+| 12 | `bb94fe6` | fix(review): address claude-review feedback (libsndfile LGPL, JSDoc, DRY, dead code) |
+| 13 | `58d9825` | docs(extension-readme): restructure for marketplace + bump version to 1.1.0 |
+| 14 | `df3e8f7` | refactor(vscode-extension): rename killSuperCollider command to forceKillScsynth |
+| 15 | `fbd033a` | fix(vscode-extension): exec→execFile in selectAudioDevice + status bar settings target |
+| 16 | `e82e0ef` | fix(vscode-extension): skip engine spawn when scsynth unresolvable (avoid double error notice) |
+| 17 | `2f8f4d8` | refactor(vscode-extension): reuse pre-check resolution + execFile for all killall (review minors) |
+| 18 | this | docs(legal): embed GPL-3.0 verbatim + NOTICE aggregation clause (closes #139) |
+
+**新規ファイル**:
+- `packages/engine/src/audio/supercollider/scsynth-resolver.ts` (resolver 本体、strict mode)
+- `tests/audio/scsynth-resolver.spec.ts` (10 unit tests、CI 実行可)
+- `scripts/extract-scsynth-bundle.sh` (SC.app 自動 discovery + 26 plugin filter + 検証)
+- `scripts/verify-bundle.sh` (`.vsix` 解凍後の signature/permission 確認)
+- `packages/vscode-extension/legal/scsynth-LICENSE.GPL-3.0` (#139 placeholder)
+- `packages/vscode-extension/legal/scsynth-NOTICE` (GPL-3.0 §6 corresponding source URL 明記)
+
+**Path resolver 仕様** (engine 側に唯一存在、extension は `require` で再利用):
+1. `opts.explicit` (caller 明示)
+2. `process.env.ORBIT_SCSYNTH_PATH` (extension が settings から渡す)
+3. Bundle (`<engine root>/scsynth/Contents/Resources/scsynth`)
+
+**Strict mode の理由** (本 PR レビュー過程で確定): 当初は SC.app fallback と Spotlight も持っていたが、ICMC リリース目標 (「SC が無くても動く」) に対して fallback はテストの意味を曖昧にすると判断。bundle 抽出失敗を SC.app が肩代わりして production の不具合を隠蔽するリスクを排除するため、Phase 8 で fallback を削除。bundle が無ければ即 `ScsynthNotFoundError` で fail loud。各候補で `fs.statSync` + 実行権限ビット (`mode & 0o111`) を検査。`daemon-client.ts:417-433` の `resolveDaemonBinary()` パターン流用。
+
+**Dev workflow への影響**:
+- engine 単独 CLI (`npm run dev:engine`) で SC.app に依存していた dev は `ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` を env で渡す
+- vscode-extension 経由 (通常 user) は build pipeline で bundle 同梱、何もしなくて OK
+
+**First-run UX** (CodeX 指摘「status bar degraded」反映 + Phase 9 で strict mode 整合):
+- StatusBar item (priority 99) で source 別に icon: `bundle` (✅) / `env`/`explicit` (⚙️ custom) / 解決失敗 (❌ error 背景)
+- `startEngine()` 実行時に解決失敗 → 毎回 `showErrorMessage` (Open Settings / View Logs)
+- 当初設計の "Don't Show Again" dismiss 機構は廃止 (silent fallback がない以上、Notice を黙らせる選択肢自体が不適切)
+
+**リリース戦略** (本 PR レビュー過程で確定):
+- ICMC v1.0 初回は **GitHub Release に `.vsix` を添付**して配布、ユーザは ダウンロード + ダブルクリック (or `code --install-extension`) で install
+- Marketplace 自動 publish (#137) は ICMC ブロッカーから降格可能 (別 issue で再整理)
+
+**動作環境** (v1.0): **macOS (Apple Silicon)** のみ。bundle scsynth は universal binary だが、Intel Mac は未テスト。Windows / Linux は scsynth bundle に対応 binary が同梱されないため非対応 (cross-platform は将来 issue で扱う)。Marketplace publish 時は `vsce package --target darwin-arm64` で OS gate を明示する想定。
+
+**実機検証 (SC 3.14.1 環境)**:
+- `npm run build:bundle` → 11MB bundle 生成、26 plugins、universal arm64+x86_64
+- `npm run verify:bundle` → 11/11 checks pass (signature valid、TeamIdentifier=HE5VJFE9E4)
+- engine test 240 pass / 23 skipped (resolver 10 新規 + 既存 230 維持、Phase 8 で sc-app/spotlight test 1 件削減)
+- TypeScript build clean、ESLint clean
+
+**スコープ外** (本 PR で実装しない):
+- #137 Marketplace 自動 publish workflow (リリース戦略変更で ICMC ブロッカーから降格、別 issue で再整理予定)
+- #138 cold-install acceptance test (実機 SC-less Mac で別途検証)
+- #151 OrbitScore: Check Audio Setup (post-icmc)
+- #152 OrbitScore: Open Examples (post-icmc)
+- #156 環境変数名統一 (post-icmc、Phase 15 review feedback)
+
+**スコープに吸収** (本 PR で完了):
+- #139 LICENSE/NOTICE 文言洗練 → Phase 18 で GPL-3.0 verbatim 同梱 + NOTICE に separate works (OSC IPC) aggregation 明記 + libsndfile LGPL-2.1 区別 (Phase 12)。本 PR マージで #139 close。
+
+**後続**:
+- 本 PR マージ → #138 で SC-less Mac の cold-install 検証
+- #138 通過 → 手動 GitHub Release で `.vsix` 配布開始
+- ICMC 2026 リリース ready
+
+---
+
 ### 6.64 Issue #153: pre-edit-check.sh allow plan-mode plan files (May 02, 2026)
 
 **Date**: May 02, 2026

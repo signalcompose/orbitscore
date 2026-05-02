@@ -1,14 +1,33 @@
 {
   "name": "orbitscore",
   "displayName": "OrbitScore",
+  "description": "Live coding music DSL with bundled SuperCollider audio engine. macOS (Apple Silicon) only.",
   "publisher": "local",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "author": "Signal compose Inc.",
   "license": "SEE LICENSE IN ../../LICENSE",
   "repository": {
     "type": "git",
     "url": "https://github.com/signalcompose/orbitscore"
   },
+  "bugs": {
+    "url": "https://github.com/signalcompose/orbitscore/issues"
+  },
+  "homepage": "https://github.com/signalcompose/orbitscore#readme",
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "live-coding",
+    "music",
+    "dsl",
+    "supercollider",
+    "scsynth",
+    "audio",
+    "polymeter",
+    "orbitscore"
+  ],
   "engines": {
     "vscode": "^1.99.0"
   },
@@ -44,8 +63,8 @@
         "icon": "$(stop)"
       },
       {
-        "command": "orbitscore.killSuperCollider",
-        "title": "🔪 Kill SuperCollider",
+        "command": "orbitscore.forceKillScsynth",
+        "title": "🔪 Force Kill scsynth",
         "category": "OrbitScore",
         "icon": "$(close-all)"
       },
@@ -132,6 +151,12 @@
           "default": "#ff6b6b",
           "description": "Custom flash color (hex format, e.g., #ff6b6b)",
           "format": "color-hex"
+        },
+        "orbitscore.scsynthPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override path to the scsynth binary. Leave empty to use the bundled scsynth (recommended). Advanced users can point this at a custom SuperCollider install.",
+          "scope": "machine-overridable"
         }
       }
     }
@@ -141,6 +166,8 @@
     "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json",
     "build:engine": "cd ../engine && npm run build && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh",
     "build:engine:clean": "cd ../engine && npm run build:clean && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh",
+    "build:bundle": "bash ../../scripts/extract-scsynth-bundle.sh",
+    "verify:bundle": "bash ../../scripts/verify-bundle.sh",
     "dev": "tsc -w"
   },
   "devDependencies": {

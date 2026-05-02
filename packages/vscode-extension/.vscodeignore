@@ -24,3 +24,7 @@ engine/package.json
 !engine/dist/**
 !engine/supercollider/**
 !engine/node_modules/**
+# Keep bundled scsynth (binary + plugins + libsndfile + LICENSE/NOTICE)
+!engine/scsynth/**
+# Keep legal templates (used by extract-scsynth-bundle.sh)
+!legal/**

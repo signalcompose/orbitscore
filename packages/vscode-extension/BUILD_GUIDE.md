@@ -36,11 +36,72 @@ cd packages/vscode-extension
 npm run build
 ```
 
-### 4. パッケージ化
+### 4. scsynth bundle の抽出 (リリース時のみ)
+
+`.vsix` 配布版には scsynth バイナリ + plugins + libsndfile.dylib (~11.5 MB)
+を同梱します。
+
+**Strict mode (Issue #136)**: resolver は SC.app / Spotlight への暗黙
+fallback を持ちません。bundle が無ければ `ScsynthNotFoundError` で fail loud
+します。これは "SC が無い環境で `.vsix` install するだけで動く" を保証する
+ための意図的な設計です (silent fallback があると bundle 抽出失敗を SC.app
+が肩代わりして production の不具合を隠蔽するリスクがあるため)。
+
+**Dev workflow への影響**:
+- vscode-extension 経由 (通常 user): bundle 同梱で何もしなくて OK
+- engine 単独 CLI で SC.app に依存している dev:
+  ```bash
+  ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth \
+    npm run dev:engine
+  ```
+  または `build:bundle` で bundle を抽出してから実行
 
 ```bash
+# SC.app から抽出 (default: SC.app 不在時 fail-fast)
+cd packages/vscode-extension
+npm run build:bundle
+
+# dev で SC.app が無い場合は warning + skip
+bash ../../scripts/extract-scsynth-bundle.sh --allow-skip
+
+# 抽出後の検証 (構造、universal binary、codesign、plugin count 等)
+npm run verify:bundle
+```
+
+抽出される構造:
+```
+packages/vscode-extension/engine/scsynth/
+├── Contents/
+│   ├── Resources/
+│   │   ├── scsynth                (1.5 MB, universal arm64+x86_64)
+│   │   └── plugins/               (26 .scx ファイル、5.1 MB)
+│   └── Frameworks/
+│       └── libsndfile.dylib       (4.9 MB)
+├── LICENSE.GPL-3.0                (legal/scsynth-LICENSE.GPL-3.0 から copy)
+└── NOTICE                          (legal/scsynth-NOTICE から copy)
+```
+
+詳細: [`docs/research/SCSYNTH_BUNDLE_MANIFEST.md`](../../docs/research/SCSYNTH_BUNDLE_MANIFEST.md)
+
+### 5. パッケージ化
+
+```bash
+# build → bundle 抽出 → vsce package の順で実行
+npm run build
+npm run build:bundle
+
+# Marketplace publish 用 (将来): platform target を Apple Silicon に絞る
+npx vsce package --target darwin-arm64
+
+# GitHub Release 用 (現状): platform target なしの universal vsix
+# (vsix metadata 上は platform agnostic だが、bundle scsynth が macOS Mach-O のみ)
 npx vsce package
 ```
+
+**Platform target の意図**: bundle scsynth + libsndfile.dylib は macOS のみ。
+将来 Marketplace に公開する際は \`--target darwin-arm64\` で Apple Silicon 用と
+明示することで Windows / Linux ユーザーには見えなくなる。Intel Mac は universal
+binary 上は動く可能性があるが未テスト。
 
 ## パッケージサイズの最適化
 
@@ -64,8 +125,18 @@ npx vsce package
 
 ### パッケージサイズ
 
-- 約 3.3 MB（2458ファイル）
+- engine のみ: 約 3.3 MB（2458ファイル）
+- scsynth bundle 同梱版: 約 14.8 MB (上記 + scsynth/plugins/libsndfile)
 - `engine/node_modules` を含む（supercolliderjs + wavefile のランタイム依存）
+
+### scsynth bundle ディレクトリの取り扱い
+
+`packages/vscode-extension/engine/` は root `.gitignore:36` で無視されており、
+bundle (`engine/scsynth/`) も git 管理外です。CI / release pipeline で
+`build:bundle` を実行して都度生成します。
+
+LICENSE.GPL-3.0 と NOTICE のテンプレートは git 管理 (`packages/vscode-extension/legal/`)
+で、`extract-scsynth-bundle.sh` が bundle dir に copy します。
 
 ### Engineランタイム依存の管理
 

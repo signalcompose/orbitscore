@@ -11,6 +11,7 @@ import { analyzeMethodChain, getContextualCompletions } from './completion-conte
 let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
+let bundleStatusItem: vscode.StatusBarItem | null = null
 let isLiveCodingMode: boolean = false
 
 // let isDebugMode: boolean = false // Debug mode flag
@@ -42,6 +43,27 @@ export async function activate(context: vscode.ExtensionContext) {
   statusBarItem.command = 'orbitscore.showCommands'
   statusBarItem.show()
 
+  // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)
+  bundleStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
+  // Click → orbitscore.scsynthPath に絞った設定画面に直接遷移
+  // (tooltip 案内と一致、maybeShowBundleNotice の "Open Settings" ボタンとも統一)
+  bundleStatusItem.command = {
+    command: 'workbench.action.openSettings',
+    title: 'Open scsynth settings',
+    arguments: ['orbitscore.scsynthPath'],
+  }
+  updateBundleStatus()
+  bundleStatusItem.show()
+
+  // Re-evaluate bundle status when user changes the override setting
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('orbitscore.scsynthPath')) {
+        updateBundleStatus()
+      }
+    }),
+  )
+
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -49,10 +71,11 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
     vscode.commands.registerCommand('orbitscore.stopEngine', stopEngine),
     vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
-    vscode.commands.registerCommand('orbitscore.killSuperCollider', killSuperCollider),
+    vscode.commands.registerCommand('orbitscore.forceKillScsynth', forceKillScsynth),
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     statusBarItem,
+    bundleStatusItem,
   )
 
   // Register IntelliSense providers
@@ -79,6 +102,91 @@ export function deactivate() {
   }
   outputChannel?.dispose()
   statusBarItem?.dispose()
+  bundleStatusItem?.dispose()
+}
+
+/**
+ * Resolve scsynth via shared resolver (engine の compiled JS を runtime require).
+ * Returns null on failure. 失敗時は outputChannel に reason を log するため
+ * View Logs から原因を追える (engine/dist/ 不在 vs. bundle 不在 vs. その他)。
+ */
+function resolveScsynthForUI(): { path: string; source: string } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const resolverModule = require('../engine/dist/audio/supercollider/scsynth-resolver') as {
+      resolveScsynthPath: (opts?: { explicit?: string }) => { path: string; source: string }
+    }
+    const userOverride = vscode.workspace
+      .getConfiguration('orbitscore')
+      .get<string>('scsynthPath', '')
+      .trim()
+    return resolverModule.resolveScsynthPath(userOverride ? { explicit: userOverride } : undefined)
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`❌ scsynth resolver failed: ${reason}`)
+    return null
+  }
+}
+
+/**
+ * Refresh the bundle status bar item to reflect the current resolution.
+ *
+ * Strict mode (Issue #136): resolver は SC.app / Spotlight 暗黙 fallback を
+ * 持たないため、source は \`bundle\` / \`env\` / \`explicit\` のいずれか。
+ * 解決失敗時は error 状態を強調表示する。
+ */
+function updateBundleStatus(): void {
+  if (!bundleStatusItem) return
+  const resolution = resolveScsynthForUI()
+  if (!resolution) {
+    bundleStatusItem.text = '$(error) scsynth: not found'
+    bundleStatusItem.tooltip =
+      'Bundled scsynth not found. Reinstall the extension or set orbitscore.scsynthPath to a system scsynth.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
+    return
+  }
+  bundleStatusItem.backgroundColor = undefined
+  switch (resolution.source) {
+    case 'bundle':
+      bundleStatusItem.text = '$(check) scsynth (bundled)'
+      bundleStatusItem.tooltip = `Using bundled scsynth\n${resolution.path}`
+      break
+    case 'env':
+    case 'explicit':
+      bundleStatusItem.text = '$(gear) scsynth (custom)'
+      bundleStatusItem.tooltip = `Using user-overridden scsynth\n${resolution.path}`
+      break
+    default:
+      bundleStatusItem.text = '$(question) scsynth: unknown source'
+      bundleStatusItem.tooltip = resolution.path
+  }
+}
+
+/**
+ * Show error notification when scsynth resolution fails.
+ *
+ * Strict mode (Issue #136): bundle / env / explicit が解決できれば silent。
+ * いずれも見つからない場合は毎回エラー表示 (修復必須)。
+ * \`globalState\` の dismiss 機構は持たない (silent fallback がないため
+ * 「無視して動かす」選択肢自体がない)。
+ */
+async function maybeShowBundleNotice(): Promise<void> {
+  if (!outputChannel) return
+  const resolution = resolveScsynthForUI()
+  if (resolution) {
+    // bundle / env / explicit いずれも resolved → 通知不要
+    return
+  }
+  const choice = await vscode.window.showErrorMessage(
+    '⚠️ scsynth not found. OrbitScore requires the bundled scsynth to start. Reinstall the extension or set orbitscore.scsynthPath to a system scsynth.',
+    'Open Settings',
+    'View Logs',
+  )
+  if (choice === 'Open Settings') {
+    vscode.commands.executeCommand('workbench.action.openSettings', 'orbitscore.scsynthPath')
+  } else if (choice === 'View Logs') {
+    outputChannel.show()
+  }
 }
 
 function showCommands() {
@@ -109,9 +217,9 @@ function showCommands() {
       detail: 'Select audio output device for SuperCollider',
     },
     {
-      label: '🔪 Kill SuperCollider',
+      label: '🔪 Force Kill scsynth',
       description: 'killall scsynth',
-      detail: 'Force kill all SuperCollider server processes',
+      detail: 'Escape hatch — force-kill any orphan scsynth processes',
     },
     {
       label: '⚡ Configure Flash',
@@ -144,8 +252,8 @@ function showCommands() {
       case '🔊 Select Audio Device':
         vscode.commands.executeCommand('orbitscore.selectAudioDevice')
         break
-      case '🔪 Kill SuperCollider':
-        vscode.commands.executeCommand('orbitscore.killSuperCollider')
+      case '🔪 Force Kill scsynth':
+        vscode.commands.executeCommand('orbitscore.forceKillScsynth')
         break
       case '⚡ Configure Flash':
         vscode.commands.executeCommand('orbitscore.configureFlash')
@@ -576,6 +684,17 @@ function startEngine(debugMode: boolean = false) {
     return
   }
 
+  // Pre-check: scsynth が解決できない場合は engine spawn を行わず、エラー
+  // Notification のみ表示する。spawn してから boot 失敗するとユーザーに
+  // 二重通知 (resolver エラー + engine 終了ログ) が出てしまうのを防ぐ
+  // (claude-review on PR #155 の Significant 指摘 #2)。
+  // 解決できた場合はその path を engine spawn に再利用 (Minor #1: 二重 fs.statSync 回避)。
+  const scResolution = resolveScsynthForUI()
+  if (!scResolution) {
+    void maybeShowBundleNotice()
+    return
+  }
+
   const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
   outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
 
@@ -609,6 +728,12 @@ function startEngine(debugMode: boolean = false) {
   if (debugMode) {
     env.ORBITSCORE_DEBUG = '1'
   }
+
+  // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
+  // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
+  // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。
+  env.ORBIT_SCSYNTH_PATH = scResolution.path
+  outputChannel?.appendLine(`🔧 scsynth (${scResolution.source}): ${scResolution.path}`)
 
   // Spawn engine process
   engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -663,23 +788,33 @@ function stopEngine() {
   }
 }
 
-function killSuperCollider() {
-  outputChannel?.appendLine('🔪 Killing SuperCollider processes...')
+/**
+ * Force-kill any stray scsynth processes (escape hatch for zombie cleanup).
+ *
+ * Normal stop is handled via \`stopEngine\` (graceful SIGTERM through the engine
+ * process). This command is for cases where the engine process itself was
+ * SIGKILL'd / force-quit and left an orphan scsynth, or for clearing leftover
+ * processes from external manual boots during development.
+ */
+function forceKillScsynth() {
+  outputChannel?.appendLine('🔪 Force-killing scsynth processes...')
 
-  // Execute killall scsynth, suppress errors if no process found
-  child_process.exec('killall scsynth 2>/dev/null', (error) => {
+  // killall covers both bundled and system scsynth (intentional — escape hatch
+  // should clean up everything). Exit code 1 = "no process found" (not an error).
+  // execFile (not exec) for consistency with selectAudioDevice (no shell, even
+  // though args are hardcoded here so no injection risk).
+  child_process.execFile('killall', ['scsynth'], (error) => {
     if (error) {
-      // Exit code 1 means no process found, which is ok
       if (error.code === 1) {
-        outputChannel?.appendLine('✅ No SuperCollider processes found')
-        vscode.window.showInformationMessage('✅ No SuperCollider processes running')
+        outputChannel?.appendLine('✅ No scsynth processes found')
+        vscode.window.showInformationMessage('✅ No scsynth processes running')
       } else {
         outputChannel?.appendLine(`⚠️ Error: ${error.message}`)
-        vscode.window.showWarningMessage(`⚠️ Failed to kill SuperCollider: ${error.message}`)
+        vscode.window.showWarningMessage(`⚠️ Failed to kill scsynth: ${error.message}`)
       }
     } else {
-      outputChannel?.appendLine('✅ SuperCollider processes killed')
-      vscode.window.showInformationMessage('✅ SuperCollider killed')
+      outputChannel?.appendLine('✅ scsynth processes killed')
+      vscode.window.showInformationMessage('✅ scsynth killed')
     }
   })
 }
@@ -700,11 +835,23 @@ async function selectAudioDevice() {
     '🔊 Detecting audio devices... (this may take a few seconds)',
   )
 
-  // Temporarily boot SuperCollider to get device list from its output
-  const scPath = '/Applications/SuperCollider.app/Contents/Resources/scsynth'
+  // Resolve scsynth path via shared resolver (strict mode: bundle / env / explicit のみ)。
+  // status bar / startEngine と同じ resolveScsynthForUI() を再利用。
+  const resolution = resolveScsynthForUI()
+  if (!resolution) {
+    vscode.window.showErrorMessage(
+      "⚠️ scsynth not found. Reinstall the extension to restore the bundle, or set 'orbitscore.scsynthPath' to a system scsynth.",
+    )
+    return
+  }
+  const scPath = resolution.path
+  outputChannel?.appendLine(`🔧 Using scsynth (${resolution.source}): ${scPath}`)
 
-  // Use scsynth directly with -u 0 to get device list without actually starting
-  child_process.exec(`${scPath} -u 57199`, { timeout: 3000 }, async (error, stdout) => {
+  // Use scsynth directly with -u 57199 to get device list without actually starting.
+  // execFile (not exec) は scPath をシェル展開せずに直接実行するため、
+  // ユーザー設定値 (orbitscore.scsynthPath) に \`;\` 等が混入しても command injection
+  // にならない (claude-review #155 の必須対応、CWE-78 緩和)。
+  child_process.execFile(scPath, ['-u', '57199'], { timeout: 3000 }, async (error, stdout) => {
     // Parse device list from SuperCollider's boot log
     const deviceRegex = /(\d+)\s*:\s*"([^"]+)"/g
     const devices: Array<{ label: string; id: number; description: string }> = []
@@ -751,7 +898,11 @@ async function selectAudioDevice() {
     )
 
     // Kill the temporary SuperCollider instance
-    child_process.exec('killall scsynth sclang 2>/dev/null')
+    // Cleanup temp scsynth (and sclang if any from system SC). execFile for
+    // shell-free invocation; we ignore the result (best-effort cleanup).
+    child_process.execFile('killall', ['scsynth', 'sclang'], () => {
+      /* best-effort, ignore error */
+    })
   })
 }
 
