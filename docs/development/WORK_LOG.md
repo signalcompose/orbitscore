@@ -36,7 +36,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   5. `npm run verify:bundle` (pre-package integrity gate)
   6. `npx vsce package --target $VSIX_TARGET --no-yarn` (currently `darwin-arm64`、env var で集約)
   7. `.vsix` 解凍 → verify-bundle.sh で **post-package signature 維持**確認
-  8. tag suffix で release type 判定 (regex: `-(rc|alpha|beta)([0-9.]*)?$`)
+  8. tag で release type 判定 (stable iff `^v[0-9]+\.[0-9]+\.[0-9]+$`、それ以外は test/smoke tag も含めすべて prerelease 扱い)
   9. `gh release create` (prerelease/stable + `--generate-notes` で auto changelog)
   10. stable のみ `vsce publish` + `ovsx publish`
   11. GitHub Actions job summary に release 情報

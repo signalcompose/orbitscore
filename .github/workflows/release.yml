@@ -50,7 +50,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22' # match root package.json engines (>=22.0.0); bumped from 20 in iter3 fix
           cache: 'npm' # node_modules cache keyed on package-lock.json (~55s saved on warm runs)
 
       - name: Install SuperCollider (source for scsynth bundle)
@@ -82,9 +82,13 @@ jobs:
           VSIX_CHECK=$(mktemp -d)
           # Resolve the exact .vsix path; fail loudly if the glob produced 0 or >1 hits
           # (multiple hits would indicate a stale build artifact polluting the verify).
-          mapfile -t VSIX_FILES < <(ls packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix 2>/dev/null || true)
+          # NOTE: avoid bash 4+ `mapfile` — macos-14 ships system bash 3.2 (Apple/GPLv3 reasons).
+          # Use globbing into a positional array instead (bash 3.2-safe).
+          shopt -s nullglob
+          VSIX_FILES=(packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix)
+          shopt -u nullglob
           if [ "${#VSIX_FILES[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly 1 .vsix for target $VSIX_TARGET, got ${#VSIX_FILES[@]}: ${VSIX_FILES[*]}" >&2
+            echo "::error::Expected exactly 1 .vsix for target $VSIX_TARGET, got ${#VSIX_FILES[@]}: ${VSIX_FILES[*]:-<none>}" >&2
             exit 1
           fi
           unzip -o "${VSIX_FILES[0]}" -d "$VSIX_CHECK"
@@ -173,14 +177,25 @@ jobs:
           OVSX_OUTCOME: ${{ steps.ovsx_publish.outcome }}
         run: |
           set -euo pipefail
+          # Guard against empty IS_PRERELEASE (e.g. release_type step skipped/failed)
+          # — explicit warning over silent misclassification as stable.
+          if [ -z "${IS_PRERELEASE:-}" ]; then
+            echo "::warning::IS_PRERELEASE unset in Summary; release_type step may have been skipped or failed"
+            PRERELEASE_LABEL="❓ **Unknown release type**"
+          elif [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_LABEL="🧪 **Prerelease** — GitHub Release only, Marketplace/Open VSX skipped"
+          else
+            PRERELEASE_LABEL="🚀 **Stable release** target — per-channel results below"
+          fi
+          # Resolve vsix path safely (mirror post-package gate's nullglob pattern, bash 3.2-safe)
+          shopt -s nullglob
+          VSIX_FILES=(packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix)
+          shopt -u nullglob
+          VSIX_DISPLAY="${VSIX_FILES[0]:-<not found>}"
           {
             echo "## Release $TAG"
             echo ""
-            if [ "$IS_PRERELEASE" = "true" ]; then
-              echo "🧪 **Prerelease** — GitHub Release only, Marketplace/Open VSX skipped"
-            else
-              echo "🚀 **Stable release** target — per-channel results below"
-            fi
+            echo "$PRERELEASE_LABEL"
             echo ""
             echo "| Channel | Outcome |"
             echo "|---|---|"
@@ -189,5 +204,5 @@ jobs:
             echo "| Open VSX | ${OVSX_OUTCOME:-skipped} |"
             echo ""
             echo "- target: \`$VSIX_TARGET\`"
-            echo "- vsix: \`$(ls packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix)\`"
+            echo "- vsix: \`$VSIX_DISPLAY\`"
           } >> "$GITHUB_STEP_SUMMARY"
