@@ -28,7 +28,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Version**: 1.0.1 → **1.1.0** (Phase 13 で minor bump、scsynth bundle 同梱は major feature)
 
-**実装** (13 commits、各単独で `npm test` 通過):
+**実装** (15 commits、各単独で `npm test` 通過):
 
 | # | Commit | 内容 |
 |---|--------|------|
@@ -44,7 +44,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 | 10 | `5f93169` | docs(worklog,readme,build-guide): document strict resolver and dev workaround |
 | 11 | `98277db` | docs(platform): scope v1.0 to macOS Apple Silicon only |
 | 12 | `bb94fe6` | fix(review): address claude-review feedback (libsndfile LGPL, JSDoc, DRY, dead code) |
-| 13 | this | docs(extension-readme): restructure for marketplace + bump version to 1.1.0 |
+| 13 | `58d9825` | docs(extension-readme): restructure for marketplace + bump version to 1.1.0 |
+| 14 | `df3e8f7` | refactor(vscode-extension): rename killSuperCollider command to forceKillScsynth |
+| 15 | this | fix(vscode-extension): exec→execFile in selectAudioDevice + status bar settings target |
 
 **新規ファイル**:
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts` (resolver 本体、strict mode)

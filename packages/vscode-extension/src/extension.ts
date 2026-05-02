@@ -45,7 +45,13 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)
   bundleStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
-  bundleStatusItem.command = 'workbench.action.openSettings'
+  // Click → orbitscore.scsynthPath に絞った設定画面に直接遷移
+  // (tooltip 案内と一致、maybeShowBundleNotice の "Open Settings" ボタンとも統一)
+  bundleStatusItem.command = {
+    command: 'workbench.action.openSettings',
+    title: 'Open scsynth settings',
+    arguments: ['orbitscore.scsynthPath'],
+  }
   updateBundleStatus()
   bundleStatusItem.show()
 
@@ -838,8 +844,11 @@ async function selectAudioDevice() {
   const scPath = resolution.path
   outputChannel?.appendLine(`🔧 Using scsynth (${resolution.source}): ${scPath}`)
 
-  // Use scsynth directly with -u 0 to get device list without actually starting
-  child_process.exec(`${scPath} -u 57199`, { timeout: 3000 }, async (error, stdout) => {
+  // Use scsynth directly with -u 57199 to get device list without actually starting.
+  // execFile (not exec) は scPath をシェル展開せずに直接実行するため、
+  // ユーザー設定値 (orbitscore.scsynthPath) に \`;\` 等が混入しても command injection
+  // にならない (claude-review #155 の必須対応、CWE-78 緩和)。
+  child_process.execFile(scPath, ['-u', '57199'], { timeout: 3000 }, async (error, stdout) => {
     // Parse device list from SuperCollider's boot log
     const deviceRegex = /(\d+)\s*:\s*"([^"]+)"/g
     const devices: Array<{ label: string; id: number; description: string }> = []
