@@ -301,5 +301,5 @@ ls -la test-assets/audio/*.wav
 ## 🔗 Related Documentation
 
 - **DSL Specification**: [`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md)
-- **User Manual**: [`../core/USER_MANUAL.md`](../core/USER_MANUAL.md)
+- **User Manual**: [`../user/ja/USER_MANUAL.md`](../user/ja/USER_MANUAL.md)
 - **Implementation Plan**: [`../development/IMPLEMENTATION_PLAN.md`](../development/IMPLEMENTATION_PLAN.md)

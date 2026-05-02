@@ -20,8 +20,8 @@
 
 作業前に必ず目を通す:
 
-- [docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md](../planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md) — 全体設計方針と責務分離原則
-- [docs/planning/RUST_ENGINE_MIGRATION_PLAN.md](../planning/RUST_ENGINE_MIGRATION_PLAN.md) — 段階的ロードマップ
+- [docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md](../planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md) — 全体設計方針と責務分離原則
+- [docs/planning/RUST_ENGINE_MIGRATION_PLAN.md](../planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.md) — 段階的ロードマップ
 - `rust/` の現状コード（17 tests + PoC example が動く状態）
 
 ---
@@ -108,8 +108,8 @@
   - 主要コマンド（`cargo test --workspace` 等）
   - 既存の Known Limitations は維持
 - [ ] `docs/development/WORK_LOG.md` に 6.56 エントリ追加（作業内容）
-- [ ] `docs/planning/RUST_ENGINE_MIGRATION_PLAN.md` Phase 1 section の進捗更新（Phase 1a 完了にチェック）
-- [ ] `docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md` の「Cargo workspace 構造」セクションを実装実態に合わせて調整
+- [ ] `docs/planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.md` Phase 1 section の進捗更新（Phase 1a 完了にチェック）
+- [ ] `docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md` の「Cargo workspace 構造」セクションを実装実態に合わせて調整
 - [ ] `CLAUDE.md` の Development Commands 欄に `cargo` 系コマンド（workspace）を追加（任意、対象的なら）
 
 **DSL 仕様については本プランでは言及しない**。実装を唯一の真実とする方針。
@@ -159,5 +159,5 @@
 
 - [Epic #105](https://github.com/signalcompose/orbitscore/issues/105)
 - [Issue #106](https://github.com/signalcompose/orbitscore/issues/106) ← 本プランが対応する Issue
-- [docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md](../planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md)
+- [docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md](../planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md)
 - [Cargo workspace 公式ドキュメント](https://doc.rust-lang.org/cargo/reference/workspaces.html)
