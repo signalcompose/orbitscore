@@ -20,6 +20,11 @@ on:
 permissions:
   contents: write # required for gh release create
 
+env:
+  # vsce package / publish target. macOS Apple Silicon only for v1.x
+  # (see docs/development/WORK_LOG.md "動作環境" in section 6.65).
+  VSIX_TARGET: darwin-arm64
+
 jobs:
   release:
     name: Build, package and publish
@@ -33,12 +38,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm' # node_modules cache keyed on package-lock.json (~55s saved on warm runs)
 
       - name: Install SuperCollider (source for scsynth bundle)
         run: brew install --cask supercollider
 
       - name: Install npm dependencies
-        run: npm install
+        run: npm ci # CI-mode install: lockfile validated, faster than npm install
 
       - name: Build engine + extension TypeScript
         working-directory: packages/vscode-extension
@@ -52,15 +58,15 @@ jobs:
         working-directory: packages/vscode-extension
         run: npm run verify:bundle
 
-      - name: Package .vsix (Apple Silicon target)
+      - name: Package .vsix
         working-directory: packages/vscode-extension
-        run: npx vsce package --target darwin-arm64 --no-yarn
+        run: npx vsce package --target "$VSIX_TARGET" --no-yarn
 
       - name: Verify .vsix preserves bundle signatures (post-package gate)
         run: |
-          mkdir -p /tmp/vsix-check
-          unzip -o packages/vscode-extension/orbitscore-darwin-arm64-*.vsix -d /tmp/vsix-check
-          bash scripts/verify-bundle.sh /tmp/vsix-check/extension/engine/scsynth
+          VSIX_CHECK=$(mktemp -d)
+          unzip -o packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix -d "$VSIX_CHECK"
+          bash scripts/verify-bundle.sh "$VSIX_CHECK/extension/engine/scsynth"
 
       - name: Determine release type from tag
         id: release_type
@@ -88,21 +94,21 @@ jobs:
           gh release create "$TAG" \
             $PRERELEASE_FLAG \
             --generate-notes \
-            packages/vscode-extension/orbitscore-darwin-arm64-*.vsix
+            packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix
 
       - name: Publish to VS Code Marketplace (stable only)
         if: steps.release_type.outputs.is_prerelease == 'false'
         working-directory: packages/vscode-extension
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: npx vsce publish --target darwin-arm64 --packagePath orbitscore-darwin-arm64-*.vsix
+        run: npx vsce publish --target "$VSIX_TARGET" --packagePath orbitscore-"$VSIX_TARGET"-*.vsix
 
       - name: Publish to Open VSX (stable only)
         if: steps.release_type.outputs.is_prerelease == 'false'
         working-directory: packages/vscode-extension
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: npx ovsx publish orbitscore-darwin-arm64-*.vsix -p "$OVSX_PAT"
+        run: npx ovsx publish orbitscore-"$VSIX_TARGET"-*.vsix -p "$OVSX_PAT"
 
       - name: Summary
         env:
@@ -116,5 +122,5 @@ jobs:
           else
             echo "🚀 **Stable release** — published to GitHub Release, VS Code Marketplace, and Open VSX" >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "- vsix: $(ls packages/vscode-extension/orbitscore-darwin-arm64-*.vsix)" >> "$GITHUB_STEP_SUMMARY"
-          echo "- target: darwin-arm64" >> "$GITHUB_STEP_SUMMARY"
+          echo "- vsix: $(ls packages/vscode-extension/orbitscore-"$VSIX_TARGET"-*.vsix)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- target: $VSIX_TARGET" >> "$GITHUB_STEP_SUMMARY"
