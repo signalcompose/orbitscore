@@ -175,9 +175,9 @@ describe('resolveScsynthPath', () => {
     expect(() => resolveScsynthPath({ explicit: '/dir/scsynth' })).toThrow(ScsynthNotFoundError)
   })
 
-  it('does not invoke spawnSync (no Spotlight fallback in strict mode)', () => {
-    // child_process は import されていないので呼ばれることがない
-    // この test の意図は「fallback が削除されたことを意図的に確認」
+  it('never references SuperCollider.app in any code path (no SC.app/Spotlight fallback)', () => {
+    // strict mode の核心: searched に SuperCollider.app の path が一切現れない
+    // (SC.app fallback も Spotlight 探索もゼロ)。bundle 候補のみ試される。
     mockedStatSync.mockImplementation(() => notFoundStat())
 
     let caught: ScsynthNotFoundError | null = null
@@ -188,10 +188,7 @@ describe('resolveScsynthPath', () => {
     }
 
     expect(caught).toBeInstanceOf(ScsynthNotFoundError)
-    // searched に SuperCollider.app の path が出てこない (Spotlight 探索ゼロ)
-    const hasSpotlightPath = caught?.searched.some(
-      (p) => p.includes('SuperCollider.app') && !p.startsWith('/Applications/'),
-    )
-    expect(hasSpotlightPath).toBe(false)
+    // SuperCollider.app を含む path がいかなる形でも出てこない
+    expect(caught?.searched.some((p) => p.includes('SuperCollider.app'))).toBe(false)
   })
 })

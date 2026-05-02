@@ -12,7 +12,6 @@ let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let bundleStatusItem: vscode.StatusBarItem | null = null
-let extensionContext: vscode.ExtensionContext | null = null
 let isLiveCodingMode: boolean = false
 
 // let isDebugMode: boolean = false // Debug mode flag
@@ -49,9 +48,6 @@ export async function activate(context: vscode.ExtensionContext) {
   bundleStatusItem.command = 'workbench.action.openSettings'
   updateBundleStatus()
   bundleStatusItem.show()
-
-  // Save context for first-run notification
-  extensionContext = context
 
   // Re-evaluate bundle status when user changes the override setting
   context.subscriptions.push(
@@ -105,7 +101,8 @@ export function deactivate() {
 
 /**
  * Resolve scsynth via shared resolver (engine の compiled JS を runtime require).
- * Returns null on failure (e.g. resolver throws ScsynthNotFoundError).
+ * Returns null on failure. 失敗時は outputChannel に reason を log するため
+ * View Logs から原因を追える (engine/dist/ 不在 vs. bundle 不在 vs. その他)。
  */
 function resolveScsynthForUI(): { path: string; source: string } | null {
   try {
@@ -118,7 +115,9 @@ function resolveScsynthForUI(): { path: string; source: string } | null {
       .get<string>('scsynthPath', '')
       .trim()
     return resolverModule.resolveScsynthPath(userOverride ? { explicit: userOverride } : undefined)
-  } catch {
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`❌ scsynth resolver failed: ${reason}`)
     return null
   }
 }
@@ -166,7 +165,7 @@ function updateBundleStatus(): void {
  * 「無視して動かす」選択肢自体がない)。
  */
 async function maybeShowBundleNotice(): Promise<void> {
-  if (!extensionContext || !outputChannel) return
+  if (!outputChannel) return
   const resolution = resolveScsynthForUI()
   if (resolution) {
     // bundle / env / explicit いずれも resolved → 通知不要
@@ -679,8 +678,9 @@ function startEngine(debugMode: boolean = false) {
     return
   }
 
-  // Fire-and-forget: bundle 不在や SC.app fallback の場合に初回限定 Warning。
-  // engine 起動と UI 通知を並行させ、UI thread をブロックしない。
+  // Fire-and-forget: scsynth が解決できない場合に毎回エラー Notification を表示
+  // (strict mode のため silent fallback はない)。engine 起動と UI 通知を並行させ、
+  // UI thread をブロックしない。
   void maybeShowBundleNotice()
 
   const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
@@ -818,31 +818,17 @@ async function selectAudioDevice() {
     '🔊 Detecting audio devices... (this may take a few seconds)',
   )
 
-  // Resolve scsynth path via shared resolver (bundle / env / SC.app / spotlight).
-  // 同じ resolver を engine 側 spawn と共有することで path 解決の drift を防ぐ。
-  let scPath: string
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const resolverModule = require('../engine/dist/audio/supercollider/scsynth-resolver') as {
-      resolveScsynthPath: (opts?: { explicit?: string }) => { path: string; source: string }
-    }
-    const userOverride = vscode.workspace
-      .getConfiguration('orbitscore')
-      .get<string>('scsynthPath', '')
-      .trim()
-    const resolution = resolverModule.resolveScsynthPath(
-      userOverride ? { explicit: userOverride } : undefined,
-    )
-    scPath = resolution.path
-    outputChannel?.appendLine(`🔧 Using scsynth (${resolution.source}): ${scPath}`)
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+  // Resolve scsynth path via shared resolver (strict mode: bundle / env / explicit のみ)。
+  // status bar / startEngine と同じ resolveScsynthForUI() を再利用。
+  const resolution = resolveScsynthForUI()
+  if (!resolution) {
     vscode.window.showErrorMessage(
-      `⚠️ scsynth not found. Reinstall the extension to restore the bundle, or set 'orbitscore.scsynthPath' to a system scsynth. (${msg})`,
+      "⚠️ scsynth not found. Reinstall the extension to restore the bundle, or set 'orbitscore.scsynthPath' to a system scsynth.",
     )
-    outputChannel?.appendLine(`❌ scsynth resolve failed: ${msg}`)
     return
   }
+  const scPath = resolution.path
+  outputChannel?.appendLine(`🔧 Using scsynth (${resolution.source}): ${scPath}`)
 
   // Use scsynth directly with -u 0 to get device list without actually starting
   child_process.exec(`${scPath} -u 57199`, { timeout: 3000 }, async (error, stdout) => {

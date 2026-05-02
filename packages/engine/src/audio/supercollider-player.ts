@@ -30,7 +30,10 @@ export class SuperColliderPlayer {
    * Boot SuperCollider server and load SynthDef.
    *
    * `BootOptions.scsynth` 未指定時は `resolveScsynthPath()` で
-   * explicit / env / bundle / SC.app / Spotlight の順に解決する。
+   * explicit / env / bundle の順に解決する (strict mode、Issue #136)。
+   * SC.app / Spotlight への暗黙 fallback は持たない — bundle が無ければ
+   * `ScsynthNotFoundError` で fail loud。dev 環境で SC.app を使う場合は
+   * `ORBIT_SCSYNTH_PATH` env を経由すること。
    */
   async boot(outputDevice?: string, options?: BootOptions): Promise<void> {
     const mergedOptions: BootOptions = { ...options }
