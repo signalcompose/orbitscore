@@ -1,176 +1,134 @@
 # OrbitScore Documentation Index
 
-## 📚 Documentation Structure
+OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider audio engine.
 
-### Core Documents
-
-1. **[PROJECT_RULES.md](./PROJECT_RULES.md)** 📏
-   - Critical project rules and practices
-   - MUST read before contributing
-   - Includes WORK_LOG update requirements
-
-2. **[CONTEXT7_GUIDE.md](./CONTEXT7_GUIDE.md)** 📚
-   - Context7 usage guidelines
-   - External library documentation reference
-   - MUST read at session start
-
-3. **Serenaツール** 🤖
-   - Serenaを使ってプロジェクト知識を管理
-   - `list_memories`で利用可能なメモリを確認
-   - 必要に応じて`read_memory`で読み込む
-
-4. **[INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md)** 🎵
-   - **Single source of truth** for OrbitScore DSL
-   - Audio-based DSL specification (v3.0)
-   - Global parameters and sequences
-   - Transport commands (RUN/LOOP/MUTE)
-
-5. **[USER_MANUAL.md](./USER_MANUAL.md)** 📖
-   - User-facing documentation
-   - Feature explanations and examples
-   - Live coding workflow guide
-
-### Development Documents
-
-1. **[WORK_LOG.md](../development/WORK_LOG.md)** 📝
-   - Complete development history
-   - Technical decisions and rationale
-   - Chronological progress tracking
-   - All commits documented
-
-2. **[IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md)** 🗺️
-   - Technical roadmap
-   - Phase-by-phase implementation
-   - Testing requirements
-   - Completion criteria
-
-3. **[BEAT_METER_SPECIFICATION.md](../development/BEAT_METER_SPECIFICATION.md)** 🎼
-   - Beat/Meter specification and future plans
-   - Polymeter feature details
-   - Tempo/BPM terminology
-   - Phase 2 validation plans
-
-### Testing Documents
-
-1. **[TESTING_GUIDE.md](../testing/TESTING_GUIDE.md)** 🧪
-   - Unit & Integration test procedures
-   - IDE integration testing (VS Code/Cursor/Claude Code)
-   - Feature verification checklist
-   - Troubleshooting guide
-
-2. **[PERFORMANCE_TEST.md](../testing/PERFORMANCE_TEST.md)** ⚡
-   - Live coding performance testing
-   - Benchmarks and metrics
-   - Stress test procedures
-   - Performance optimization guide
-
-### Planning Documents
-
-1. **[COLLABORATION_FEATURE_PLAN.md](../planning/COLLABORATION_FEATURE_PLAN.md)** 👥
-   - Collaboration feature planning
-   - Multi-user scenarios
-
-2. **[ELECTRON_APP_PLAN.md](../planning/ELECTRON_APP_PLAN.md)** 💻
-   - Standalone Electron app planning
-   - Desktop application architecture
-
-3. **[IMPROVEMENT_RECOMMENDATIONS.md](../planning/IMPROVEMENT_RECOMMENDATIONS.md)** 💡
-   - Future improvement proposals
-   - Priority-based roadmap
-   - Technical enhancements
-
-4. **[RUST_ENGINE_MIGRATION_PLAN.md](../planning/RUST_ENGINE_MIGRATION_PLAN.md)** 🦀
-   - Rust サウンドエンジン移行計画
-   - Engine-as-a-Service アーキテクチャ
-   - VST3/CLAP プラグインホスティング、商用展開戦略
-
-5. **[AUDIO_ENGINE_CORE_ARCHITECTURE.md](../planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md)** 🎚️
-   - 3 層分離アーキテクチャ（Core / Plugins / App）
-   - DSL → MIDI 変換戦略、responsibilities 境界
-   - Cargo workspace 構造、Plugin Host MIDI 契約
-
-6. **[ENGINE_DAEMON_PROTOCOL.md](../research/ENGINE_DAEMON_PROTOCOL.md)** 📡
-   - TS ↔ Rust daemon の IPC プロトコル仕様 (v0.1 draft)
-   - WebSocket + JSON-RPC 風 Command/Response/Event
-   - Phase 1 commands + Phase 2 予約 (MIDI Event 型)
-
-### Quick Links
-
-- **User Guide**: [../README.md](../README.md) - Start here for usage
-- **VS Code Extension**: [../packages/vscode-extension/README.md](../packages/vscode-extension/README.md)
-- **Examples**: [../examples/](../examples/) - Sample .osc files
-
-## 📋 Development Phases
-
-### Previous MIDI-Based Implementation (Deprecated)
-| Phase | Status      | Description            |
-| ----- | ----------- | ---------------------- |
-| 1-10  | ⚠️ Deprecated | Old MIDI-based system  |
-
-### New Audio-Based Implementation
-| Phase | Status      | Description                  |
-| ----- | ----------- | ---------------------------- |
-| A1    | 🔄 Planning | New Parser (Audio DSL)       |
-| A2    | 📝 Planned  | Audio Engine Integration     |
-| A3    | 📝 Planned  | Transport System             |
-| A4    | 📝 Planned  | VS Code Extension Update     |
-| A5    | 📝 Planned  | DAW Plugin Development       |
-
-## 🎯 Key Concepts
-
-### New Audio-Based DSL
-
-- **Audio File Playback**: Load and slice audio files (.wav, .aiff, .mp3, .mp4)
-- **Time-Stretching**: Automatic tempo matching with pitch preservation
-- **Transport Commands**: `global.start()`, `global.loop()`, `seq.mute()`, etc.
-- **Editor Integration**: Execute commands with Cmd+Enter
-
-### Core Features
-
-- **Tempo**: Global and per-sequence tempo control
-- **Meter**: Support for composite meters like `(4 by 4)(5 by 4)`
-- **Chop**: Divide audio files into equal slices
-- **Fixpitch**: Decouple playback speed from pitch
-
-### DAW Integration
-
-- **Audio Output**: Internal audio engine at 48kHz/24bit
-- **Plugin Bridge**: VST/AU plugin for DAW routing
-- **MIDI**: IAC Bus support (future)
-
-## 🔍 Finding Information
-
-- **DSL Specification**: Check [INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md) ⭐
-- **How something works**: Check [WORK_LOG.md](../development/WORK_LOG.md)
-- **What to implement**: Check [IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md)
-- **Project practices**: Check [PROJECT_RULES.md](./PROJECT_RULES.md)
-- **Testing procedures**: Check [TESTING_GUIDE.md](../testing/TESTING_GUIDE.md)
-
-## 📝 Documentation Guidelines
-
-1. **Always update WORK_LOG.md** with every commit
-2. Keep documentation in sync with code
-3. Use clear, descriptive headings
-4. Include examples where helpful
-5. Document decisions and rationale
-
-## 📦 Archive
-
-### DSL仕様の変遷（論文執筆・研究用）
-
-OrbitScoreのDSL設計は、開発過程で大きく進化しました：
-
-| Version | Document | Status | Description |
-|---------|----------|--------|-------------|
-| **v3.0** | [INSTRUCTION_ORBITSCORE_DSL.md](./INSTRUCTION_ORBITSCORE_DSL.md) | ✅ **現行** | SuperCollider Audio Engine + Unidirectional Toggle |
-| **v1.0** | [archive/DSL_SPECIFICATION_v1.0_MIDI.md](./archive/DSL_SPECIFICATION_v1.0_MIDI.md) | 📚 アーカイブ | MIDIベース度数システム |
-
-**設計思想の進化**:
-- **v1.0**: MIDIベースの度数システム（0=休符、1-12=半音階）
-- **v3.0**: オーディオベース + SuperCollider (`audio()`, `chop()`, `RUN()`, `LOOP()`, `MUTE()`)
-
-詳細な技術的変遷と意思決定の経緯は[WORK_LOG.md](../development/WORK_LOG.md)を参照してください。
+**Current release**: v1.1.0 (ICMC 2026 ready) — bundled scsynth, strict path resolver, automated release workflow.
+**Supported platforms**: macOS (Apple Silicon, arm64) only. Intel macOS is untested. Windows / Linux is not supported in v1.x.
 
 ---
 
-_Last Updated: 2025-10-26 - Reorganized directory structure for documentation_
+## 📚 Top-level entry points
+
+- 🏠 [README.md](../../README.md) — Project overview, install pointer, status table
+- 🛠️ [CLAUDE.md](../../CLAUDE.md) — Claude Code session start guide
+- 📖 [USER_MANUAL.md (日本語)](../user/ja/USER_MANUAL.md) — User manual (canonical, Japanese)
+- 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](INSTRUCTION_ORBITSCORE_DSL.md) — DSL specification (single source of truth, v3.0)
+
+---
+
+## 🧭 Core (`docs/core/`)
+
+| File | Purpose |
+|---|---|
+| [INDEX.md](INDEX.md) | This file — top-level navigation |
+| [PROJECT_RULES.md](PROJECT_RULES.md) | Critical project rules — must-read before contributing |
+| [INSTRUCTION_ORBITSCORE_DSL.md](INSTRUCTION_ORBITSCORE_DSL.md) | DSL v3.0 specification — single source of truth |
+| [CONTEXT7_GUIDE.md](CONTEXT7_GUIDE.md) | Context7 (external library docs) usage |
+
+---
+
+## 🚧 Development (`docs/development/`)
+
+| File | Purpose |
+|---|---|
+| [WORK_LOG.md](../development/WORK_LOG.md) | Recent development log (May 2026 onward; older entries archived by month) |
+| [IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md) | Phase-by-phase technical roadmap |
+| [BEAT_METER_SPECIFICATION.md](../development/BEAT_METER_SPECIFICATION.md) | Beat / meter / polymeter specification |
+
+### Archived WORK_LOG (`docs/archive/`)
+
+| Period | Archive |
+|---|---|
+| 2025-09 | [WORK_LOG_2025-09.md](../archive/WORK_LOG_2025-09.md) |
+| 2025-10 | [WORK_LOG_2025-10.md](../archive/WORK_LOG_2025-10.md) |
+| 2026-02 | [WORK_LOG_2026-02.md](../archive/WORK_LOG_2026-02.md) |
+| 2026-04 | [WORK_LOG_2026-04.md](../archive/WORK_LOG_2026-04.md) |
+
+---
+
+## 🧪 Testing (`docs/testing/`)
+
+| File | Purpose |
+|---|---|
+| [TESTING_GUIDE.md](../testing/TESTING_GUIDE.md) | Unit / integration test procedures |
+| [PERFORMANCE_TEST.md](../testing/PERFORMANCE_TEST.md) | Live coding performance benchmarks |
+
+---
+
+## 🔬 Research (`docs/research/`)
+
+ICMC v1.x の bundle / signing / standalone 検証 (PR #155 で結論を実装に反映済):
+
+| File | Status | Description |
+|---|---|---|
+| [SCSYNTH_BUNDLE_MANIFEST.md](../research/SCSYNTH_BUNDLE_MANIFEST.md) | ✅ Implemented (#136) | scsynth bundle 構造、26 plugin 同梱 |
+| [SCSYNTH_STANDALONE.md](../research/SCSYNTH_STANDALONE.md) | ✅ Implemented (#133) | scsynth standalone 起動検証 |
+| [CODESIGN_PIPELINE.md](../research/CODESIGN_PIPELINE.md) | ✅ Implemented (#135) | macOS signing / notarize 戦略 (Apple Dev ID 不要) |
+| [ENGINE_DAEMON_PROTOCOL.md](../research/ENGINE_DAEMON_PROTOCOL.md) | 📝 Draft | Rust daemon IPC v0.1 (post-ICMC) |
+| [RUST_POC_FINDINGS.md](../research/RUST_POC_FINDINGS.md) | 📝 PoC | Rust audio engine 検証 (post-ICMC) |
+
+---
+
+## 🗺️ Planning (`docs/planning/`)
+
+### Current (active for v1.x)
+
+| File | Purpose |
+|---|---|
+| [ROADMAP_2026.md](../planning/ROADMAP_2026.md) | 2026 ロードマップ (ICMC Hamburg 2026-05-10 〜 16 を含む) |
+| [IMPROVEMENT_RECOMMENDATIONS.md](../planning/IMPROVEMENT_RECOMMENDATIONS.md) | 優先度付き改善提案 |
+
+### Post-ICMC (deferred until after ICMC 2026)
+
+`docs/planning/post-icmc/`:
+
+| File | Purpose |
+|---|---|
+| [COLLABORATION_FEATURE_PLAN.md](../planning/post-icmc/COLLABORATION_FEATURE_PLAN.md) | マルチユーザー協調機能設計 |
+| [ELECTRON_APP_PLAN.md](../planning/post-icmc/ELECTRON_APP_PLAN.md) | スタンドアロン Electron アプリ計画 |
+| [RUST_ENGINE_MIGRATION_PLAN.md](../planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.md) | Rust audio engine 移行ロードマップ |
+| [AUDIO_ENGINE_CORE_ARCHITECTURE.md](../planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md) | 3 層分離アーキテクチャ (Core / Plugins / App) |
+
+### Short-term implementation plans (`docs/plans/`)
+
+| File | Purpose |
+|---|---|
+| [orbit-audio-daemon-phase-1b-1.md](../plans/orbit-audio-daemon-phase-1b-1.md) | Rust daemon Phase 1b 実装計画 |
+| [rust-audio-workspace-split.md](../plans/rust-audio-workspace-split.md) | Rust Cargo workspace 構造計画 |
+
+---
+
+## 👥 User documentation (`docs/user/`)
+
+| File | Purpose |
+|---|---|
+| [user/ja/USER_MANUAL.md](../user/ja/USER_MANUAL.md) | 日本語版ユーザーマニュアル (canonical) |
+| [user/ja/GETTING_STARTED.md](../user/ja/GETTING_STARTED.md) | 日本語版スタートガイド |
+| [user/en/USER_MANUAL.md](../user/en/USER_MANUAL.md) | English user manual (bundle 反映 TODO) |
+| [user/en/GETTING_STARTED.md](../user/en/GETTING_STARTED.md) | English getting started |
+
+---
+
+## 📦 Archived specifications (`docs/archive/`)
+
+DSL 仕様の変遷 (論文執筆・研究用):
+
+| Version | Document | Status |
+|---|---|---|
+| v3.0 (current) | [INSTRUCTION_ORBITSCORE_DSL.md](INSTRUCTION_ORBITSCORE_DSL.md) | ✅ Active |
+| v1.0 (deprecated) | [archive/DSL_SPECIFICATION_v1.0_MIDI.md](../archive/DSL_SPECIFICATION_v1.0_MIDI.md) | 📚 Archived |
+
+---
+
+## 🔗 Quick links
+
+- **Install / use**: [USER_MANUAL.md](../user/ja/USER_MANUAL.md)
+- **DSL syntax**: [INSTRUCTION_ORBITSCORE_DSL.md](INSTRUCTION_ORBITSCORE_DSL.md)
+- **Project rules**: [PROJECT_RULES.md](PROJECT_RULES.md)
+- **Recent dev log**: [WORK_LOG.md](../development/WORK_LOG.md)
+- **GitHub Releases (`.vsix` download)**: [github.com/signalcompose/orbitscore/releases](https://github.com/signalcompose/orbitscore/releases)
+- **Issue tracker**: [github.com/signalcompose/orbitscore/issues](https://github.com/signalcompose/orbitscore/issues)
+
+---
+
+_Last updated: 2026-05-02 (post-ICMC docs refactor, #158)_
