@@ -12,15 +12,24 @@ export class OSCClient {
   private currentOutputDevice: string | null = null
 
   /**
-   * SuperColliderサーバーを起動
+   * SuperColliderサーバーを起動。
+   *
+   * `BootOptions.scsynth` は caller (`SuperColliderPlayer.boot()` 等) で
+   * `resolveScsynthPath()` を通して必ず埋めること。本メソッドは hardcode を持たず、
+   * 未指定時は明示エラーを投げる。
    */
   async boot(outputDevice?: string, options?: BootOptions): Promise<void> {
     console.log('🎵 Booting SuperCollider server...')
 
     const bootOptions: any = {
-      scsynth: '/Applications/SuperCollider.app/Contents/Resources/scsynth',
       debug: false,
       ...options,
+    }
+
+    if (!bootOptions.scsynth) {
+      throw new Error(
+        'OSCClient.boot: BootOptions.scsynth is required. Caller must resolve scsynth path (see scsynth-resolver.ts).',
+      )
     }
 
     // Set output device if specified (by name)

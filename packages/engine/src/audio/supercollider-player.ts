@@ -8,6 +8,7 @@ import { OSCClient } from './supercollider/osc-client'
 import { BufferManager } from './supercollider/buffer-manager'
 import { EventScheduler } from './supercollider/event-scheduler'
 import { SynthDefLoader } from './supercollider/synthdef-loader'
+import { resolveScsynthPath } from './supercollider/scsynth-resolver'
 
 /**
  * SuperCollider audio player with low-latency scheduling
@@ -26,10 +27,21 @@ export class SuperColliderPlayer {
   }
 
   /**
-   * Boot SuperCollider server and load SynthDef
+   * Boot SuperCollider server and load SynthDef.
+   *
+   * `BootOptions.scsynth` 未指定時は `resolveScsynthPath()` で
+   * explicit / env / bundle / SC.app / Spotlight の順に解決する。
    */
   async boot(outputDevice?: string, options?: BootOptions): Promise<void> {
-    await this.oscClient.boot(outputDevice, options)
+    const mergedOptions: BootOptions = { ...options }
+    if (!mergedOptions.scsynth) {
+      const resolution = resolveScsynthPath()
+      mergedOptions.scsynth = resolution.path
+      if (process.env.ORBITSCORE_DEBUG) {
+        console.log(`🔍 scsynth resolved via ${resolution.source}: ${resolution.path}`)
+      }
+    }
+    await this.oscClient.boot(outputDevice, mergedOptions)
     await this.synthDefLoader.loadMainSynthDef()
     await this.synthDefLoader.loadMasteringEffectSynthDefs()
   }
