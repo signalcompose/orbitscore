@@ -688,7 +688,9 @@ function startEngine(debugMode: boolean = false) {
   // Notification のみ表示する。spawn してから boot 失敗するとユーザーに
   // 二重通知 (resolver エラー + engine 終了ログ) が出てしまうのを防ぐ
   // (claude-review on PR #155 の Significant 指摘 #2)。
-  if (!resolveScsynthForUI()) {
+  // 解決できた場合はその path を engine spawn に再利用 (Minor #1: 二重 fs.statSync 回避)。
+  const scResolution = resolveScsynthForUI()
+  if (!scResolution) {
     void maybeShowBundleNotice()
     return
   }
@@ -727,17 +729,11 @@ function startEngine(debugMode: boolean = false) {
     env.ORBITSCORE_DEBUG = '1'
   }
 
-  // Pass scsynth path override to engine via env (resolver consumes ORBIT_SCSYNTH_PATH).
-  // Empty / whitespace-only setting → resolver が bundle 候補を試す
-  // (strict mode、SC.app 暗黙 fallback なし、bundle 不在は ScsynthNotFoundError で fail loud)。
-  const scsynthOverride = vscode.workspace
-    .getConfiguration('orbitscore')
-    .get<string>('scsynthPath', '')
-    .trim()
-  if (scsynthOverride) {
-    env.ORBIT_SCSYNTH_PATH = scsynthOverride
-    outputChannel?.appendLine(`🔧 scsynth override: ${scsynthOverride}`)
-  }
+  // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
+  // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
+  // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。
+  env.ORBIT_SCSYNTH_PATH = scResolution.path
+  outputChannel?.appendLine(`🔧 scsynth (${scResolution.source}): ${scResolution.path}`)
 
   // Spawn engine process
   engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -805,7 +801,9 @@ function forceKillScsynth() {
 
   // killall covers both bundled and system scsynth (intentional — escape hatch
   // should clean up everything). Exit code 1 = "no process found" (not an error).
-  child_process.exec('killall scsynth 2>/dev/null', (error) => {
+  // execFile (not exec) for consistency with selectAudioDevice (no shell, even
+  // though args are hardcoded here so no injection risk).
+  child_process.execFile('killall', ['scsynth'], (error) => {
     if (error) {
       if (error.code === 1) {
         outputChannel?.appendLine('✅ No scsynth processes found')
@@ -900,7 +898,11 @@ async function selectAudioDevice() {
     )
 
     // Kill the temporary SuperCollider instance
-    child_process.exec('killall scsynth sclang 2>/dev/null')
+    // Cleanup temp scsynth (and sclang if any from system SC). execFile for
+    // shell-free invocation; we ignore the result (best-effort cleanup).
+    child_process.execFile('killall', ['scsynth', 'sclang'], () => {
+      /* best-effort, ignore error */
+    })
   })
 }
 
