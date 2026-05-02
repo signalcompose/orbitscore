@@ -1,0 +1,120 @@
+name: Release
+
+# Tag push triggers a full release pipeline:
+#   - v1.2.3        → stable: GitHub Release + Marketplace + Open VSX
+#   - v1.2.3-rc1    → prerelease: GitHub Release only (no Marketplace push)
+#   - v1.2.3-beta.1 → prerelease (matches *-rc* / *-beta* / *-alpha*)
+#
+# Required GitHub secrets (set via gh secret set <name> --repo signalcompose/orbitscore):
+#   - VSCE_PAT  : VS Code Marketplace publisher token (Azure DevOps)
+#   - OVSX_PAT  : Open VSX namespace token (Eclipse Foundation account)
+# Apple Developer ID secrets are NOT required — the bundled scsynth retains
+# the SuperCollider project's existing notarized signature (see
+# docs/research/CODESIGN_PIPELINE.md).
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # required for gh release create
+
+jobs:
+  release:
+    name: Build, package and publish
+    runs-on: macos-14 # Apple Silicon runner — bundled scsynth is universal but built/verified on arm64
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install SuperCollider (source for scsynth bundle)
+        run: brew install --cask supercollider
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Build engine + extension TypeScript
+        working-directory: packages/vscode-extension
+        run: npm run build
+
+      - name: Extract scsynth bundle (~11.5 MB)
+        working-directory: packages/vscode-extension
+        run: npm run build:bundle
+
+      - name: Verify bundle integrity (pre-package gate)
+        working-directory: packages/vscode-extension
+        run: npm run verify:bundle
+
+      - name: Package .vsix (Apple Silicon target)
+        working-directory: packages/vscode-extension
+        run: npx vsce package --target darwin-arm64 --no-yarn
+
+      - name: Verify .vsix preserves bundle signatures (post-package gate)
+        run: |
+          mkdir -p /tmp/vsix-check
+          unzip -o packages/vscode-extension/orbitscore-darwin-arm64-*.vsix -d /tmp/vsix-check
+          bash scripts/verify-bundle.sh /tmp/vsix-check/extension/engine/scsynth
+
+      - name: Determine release type from tag
+        id: release_type
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" =~ -(rc|alpha|beta)([0-9.]*)?$ ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "Detected prerelease tag: $TAG"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "Detected stable release tag: $TAG"
+          fi
+
+      - name: Create GitHub Release with .vsix asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ steps.release_type.outputs.is_prerelease }}
+        run: |
+          PRERELEASE_FLAG=""
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          gh release create "$TAG" \
+            $PRERELEASE_FLAG \
+            --generate-notes \
+            packages/vscode-extension/orbitscore-darwin-arm64-*.vsix
+
+      - name: Publish to VS Code Marketplace (stable only)
+        if: steps.release_type.outputs.is_prerelease == 'false'
+        working-directory: packages/vscode-extension
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --target darwin-arm64 --packagePath orbitscore-darwin-arm64-*.vsix
+
+      - name: Publish to Open VSX (stable only)
+        if: steps.release_type.outputs.is_prerelease == 'false'
+        working-directory: packages/vscode-extension
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish orbitscore-darwin-arm64-*.vsix -p "$OVSX_PAT"
+
+      - name: Summary
+        env:
+          TAG: ${{ github.ref_name }}
+          IS_PRERELEASE: ${{ steps.release_type.outputs.is_prerelease }}
+        run: |
+          echo "## Release $TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            echo "🧪 **Prerelease** — GitHub Release only, Marketplace/Open VSX skipped" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "🚀 **Stable release** — published to GitHub Release, VS Code Marketplace, and Open VSX" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "- vsix: $(ls packages/vscode-extension/orbitscore-darwin-arm64-*.vsix)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- target: darwin-arm64" >> "$GITHUB_STEP_SUMMARY"

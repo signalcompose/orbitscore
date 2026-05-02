@@ -17,6 +17,49 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.66 Issue #137: Marketplace + Open VSX automated publish workflow (May 02, 2026)
+
+**Date**: May 02, 2026
+**Status**: ✅ COMPLETE (workflow file 完成、secrets 登録は user 作業)
+**Branch**: `137-marketplace-publish-workflow`
+**Issue**: #137 (Epic #131 Phase 1 — ICMC v1.0)
+
+**Work Content**: PR #155 (Issue #136 scsynth bundle) マージ完了後の release 自動化。tag push (`v*`) trigger で GitHub Release / VS Code Marketplace / Open VSX に自動 publish する workflow を追加。`-rc` / `-alpha` / `-beta` suffix の prerelease tag は GitHub Release のみ自動化、Marketplace と Open VSX は stable tag のみ。
+
+**実装**:
+- `.github/workflows/release.yml` 新規作成 (macos-14 runner)
+- pipeline:
+  1. checkout + setup-node
+  2. `brew install --cask supercollider` (bundle source)
+  3. `npm install` + `npm run build` (engine + extension)
+  4. `npm run build:bundle` (scsynth 抽出)
+  5. `npm run verify:bundle` (pre-package gate、11 checks)
+  6. `npx vsce package --target darwin-arm64 --no-yarn`
+  7. `.vsix` 解凍 → verify-bundle.sh で **post-package signature 維持**確認
+  8. tag suffix で release type 判定 (regex: `-(rc|alpha|beta)([0-9.]*)?$`)
+  9. `gh release create` (prerelease/stable + `--generate-notes` で auto changelog)
+  10. stable のみ `vsce publish` + `ovsx publish`
+  11. GitHub Actions job summary に release 情報
+
+**Security 対策**: `${{ github.ref_name }}` を直接 `run:` で展開せず `env:` 経由で shell 変数として参照 (workflow injection 緩和、参照: github.blog/security/vulnerability-research/)。
+
+**必要 secrets** (user 作業):
+- `VSCE_PAT`: VS Code Marketplace publisher token (Azure DevOps PAT)
+- `OVSX_PAT`: Open VSX namespace token (Eclipse Foundation アカウント)
+- **Apple Developer ID 不要** — SC project の既存 notarized signature を流用 (`docs/research/CODESIGN_PIPELINE.md` で確定)
+
+**動作シナリオ**:
+- `git tag v1.1.0 && git push origin v1.1.0` → 全 channel publish
+- `git tag v1.1.0-rc4 && git push origin v1.1.0-rc4` → GitHub Release prerelease のみ
+- 既存の手動 prerelease (rc1-rc3) も同パイプラインで再現可能
+
+**後続**:
+- user による secrets 登録 (`gh secret set VSCE_PAT --repo signalcompose/orbitscore` 等)
+- 初回 publisher 取得 (Signal compose、Marketplace + Open VSX)
+- 動作確認: 試験 tag (`v0.0.0-test1` 等) で workflow が走るか smoke
+
+---
+
 ### 6.65 Issue #136: scsynth bundle integration in vscode-extension (May 02, 2026)
 
 **Date**: May 02, 2026
