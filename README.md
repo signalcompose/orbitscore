@@ -164,7 +164,7 @@ Project documentation is organized in the [`docs/`](docs/) folder:
 - 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.md) - Project rules (must-read)
 - 📝 [WORK_LOG.md](docs/development/WORK_LOG.md) - Development history
 - 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) - Language specification (Single Source of Truth)
-- 📖 [USER_MANUAL.md](docs/core/USER_MANUAL.md) - User manual
+- 📖 [USER_MANUAL.md (日本語)](docs/user/ja/USER_MANUAL.md) - User manual (canonical, Japanese)
 - 🗺️ [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.md) - Implementation plan
 - 🧪 [TESTING_GUIDE.md](docs/testing/TESTING_GUIDE.md) - Testing guide
 - 📚 [INDEX.md](docs/core/INDEX.md) - Documentation index (overall structure)
