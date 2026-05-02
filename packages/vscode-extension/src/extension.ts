@@ -123,14 +123,20 @@ function resolveScsynthForUI(): { path: string; source: string } | null {
   }
 }
 
-/** Refresh the bundle status bar item to reflect the current resolution. */
+/**
+ * Refresh the bundle status bar item to reflect the current resolution.
+ *
+ * Strict mode (Issue #136): resolver は SC.app / Spotlight 暗黙 fallback を
+ * 持たないため、source は \`bundle\` / \`env\` / \`explicit\` のいずれか。
+ * 解決失敗時は error 状態を強調表示する。
+ */
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   const resolution = resolveScsynthForUI()
   if (!resolution) {
     bundleStatusItem.text = '$(error) scsynth: not found'
     bundleStatusItem.tooltip =
-      'No scsynth binary found. Reinstall the extension or set orbitscore.scsynthPath.'
+      'Bundled scsynth not found. Reinstall the extension or set orbitscore.scsynthPath to a system scsynth.'
     bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
     return
   }
@@ -145,16 +151,6 @@ function updateBundleStatus(): void {
       bundleStatusItem.text = '$(gear) scsynth (custom)'
       bundleStatusItem.tooltip = `Using user-overridden scsynth\n${resolution.path}`
       break
-    case 'sc-app':
-      bundleStatusItem.text = '$(folder) scsynth (SC.app)'
-      bundleStatusItem.tooltip = `Using system SuperCollider.app (bundle missing)\n${resolution.path}`
-      bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground')
-      break
-    case 'spotlight':
-      bundleStatusItem.text = '$(search) scsynth (found)'
-      bundleStatusItem.tooltip = `Using SuperCollider found via Spotlight\n${resolution.path}`
-      bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground')
-      break
     default:
       bundleStatusItem.text = '$(question) scsynth: unknown source'
       bundleStatusItem.tooltip = resolution.path
@@ -162,56 +158,29 @@ function updateBundleStatus(): void {
 }
 
 /**
- * Show first-run / fallback warning when scsynth is missing or running off SC.app.
- * - Bundle / env / explicit → silent (normal operation)
- * - sc-app / spotlight → 1 回だけ Warning (Don't Show Again は globalState に記録)
- * - resolution failed → エラー Notification (毎回出す、修復必須のため)
+ * Show error notification when scsynth resolution fails.
+ *
+ * Strict mode (Issue #136): bundle / env / explicit が解決できれば silent。
+ * いずれも見つからない場合は毎回エラー表示 (修復必須)。
+ * \`globalState\` の dismiss 機構は持たない (silent fallback がないため
+ * 「無視して動かす」選択肢自体がない)。
  */
 async function maybeShowBundleNotice(): Promise<void> {
   if (!extensionContext || !outputChannel) return
   const resolution = resolveScsynthForUI()
-  if (!resolution) {
-    const choice = await vscode.window.showErrorMessage(
-      '⚠️ scsynth not found. OrbitScore cannot start the audio engine.',
-      'Open Settings',
-      'View Logs',
-    )
-    if (choice === 'Open Settings') {
-      vscode.commands.executeCommand('workbench.action.openSettings', 'orbitscore.scsynthPath')
-    } else if (choice === 'View Logs') {
-      outputChannel.show()
-    }
+  if (resolution) {
+    // bundle / env / explicit いずれも resolved → 通知不要
     return
   }
-  if (
-    resolution.source === 'bundle' ||
-    resolution.source === 'env' ||
-    resolution.source === 'explicit'
-  ) {
-    return
-  }
-  // sc-app / spotlight 経由 → 初回限定 Warning (version 単位で dismiss を記録)
-  const packageJsonPath = path.join(__dirname, '../package.json')
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
-  const dismissedVersion = extensionContext.globalState.get<string>(
-    'orbitscore.bundleNotice.dismissedVersion',
-  )
-  if (dismissedVersion === packageJson.version) {
-    return
-  }
-  const fallbackName = resolution.source === 'sc-app' ? 'SuperCollider.app' : 'system SuperCollider'
-  const choice = await vscode.window.showWarningMessage(
-    `⚠️ Bundled scsynth not found. Falling back to ${fallbackName}. Reinstall the extension to restore the bundle.`,
+  const choice = await vscode.window.showErrorMessage(
+    '⚠️ scsynth not found. OrbitScore requires the bundled scsynth to start. Reinstall the extension or set orbitscore.scsynthPath to a system scsynth.',
     'Open Settings',
-    "Don't Show Again",
+    'View Logs',
   )
   if (choice === 'Open Settings') {
     vscode.commands.executeCommand('workbench.action.openSettings', 'orbitscore.scsynthPath')
-  } else if (choice === "Don't Show Again") {
-    await extensionContext.globalState.update(
-      'orbitscore.bundleNotice.dismissedVersion',
-      packageJson.version,
-    )
+  } else if (choice === 'View Logs') {
+    outputChannel.show()
   }
 }
 
@@ -869,7 +838,7 @@ async function selectAudioDevice() {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     vscode.window.showErrorMessage(
-      `⚠️ scsynth not found. Install SuperCollider or set 'orbitscore.scsynthPath'. (${msg})`,
+      `⚠️ scsynth not found. Reinstall the extension to restore the bundle, or set 'orbitscore.scsynthPath' to a system scsynth. (${msg})`,
     )
     outputChannel?.appendLine(`❌ scsynth resolve failed: ${msg}`)
     return
