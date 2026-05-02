@@ -183,6 +183,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 Older entries have been archived by month for readability:
 
+- [2025-09](../archive/WORK_LOG_2025-09.md)
 - [2025-10](../archive/WORK_LOG_2025-10.md)
 - [2026-02](../archive/WORK_LOG_2026-02.md)
 - [2026-04](../archive/WORK_LOG_2026-04.md)
