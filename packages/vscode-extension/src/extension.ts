@@ -711,8 +711,31 @@ async function selectAudioDevice() {
     '🔊 Detecting audio devices... (this may take a few seconds)',
   )
 
-  // Temporarily boot SuperCollider to get device list from its output
-  const scPath = '/Applications/SuperCollider.app/Contents/Resources/scsynth'
+  // Resolve scsynth path via shared resolver (bundle / env / SC.app / spotlight).
+  // 同じ resolver を engine 側 spawn と共有することで path 解決の drift を防ぐ。
+  let scPath: string
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const resolverModule = require('../engine/dist/audio/supercollider/scsynth-resolver') as {
+      resolveScsynthPath: (opts?: { explicit?: string }) => { path: string; source: string }
+    }
+    const userOverride = vscode.workspace
+      .getConfiguration('orbitscore')
+      .get<string>('scsynthPath', '')
+      .trim()
+    const resolution = resolverModule.resolveScsynthPath(
+      userOverride ? { explicit: userOverride } : undefined,
+    )
+    scPath = resolution.path
+    outputChannel?.appendLine(`🔧 Using scsynth (${resolution.source}): ${scPath}`)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    vscode.window.showErrorMessage(
+      `⚠️ scsynth not found. Install SuperCollider or set 'orbitscore.scsynthPath'. (${msg})`,
+    )
+    outputChannel?.appendLine(`❌ scsynth resolve failed: ${msg}`)
+    return
+  }
 
   // Use scsynth directly with -u 0 to get device list without actually starting
   child_process.exec(`${scPath} -u 57199`, { timeout: 3000 }, async (error, stdout) => {
