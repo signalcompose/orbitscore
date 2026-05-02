@@ -684,10 +684,14 @@ function startEngine(debugMode: boolean = false) {
     return
   }
 
-  // Fire-and-forget: scsynth が解決できない場合に毎回エラー Notification を表示
-  // (strict mode のため silent fallback はない)。engine 起動と UI 通知を並行させ、
-  // UI thread をブロックしない。
-  void maybeShowBundleNotice()
+  // Pre-check: scsynth が解決できない場合は engine spawn を行わず、エラー
+  // Notification のみ表示する。spawn してから boot 失敗するとユーザーに
+  // 二重通知 (resolver エラー + engine 終了ログ) が出てしまうのを防ぐ
+  // (claude-review on PR #155 の Significant 指摘 #2)。
+  if (!resolveScsynthForUI()) {
+    void maybeShowBundleNotice()
+    return
+  }
 
   const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
   outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
@@ -724,7 +728,8 @@ function startEngine(debugMode: boolean = false) {
   }
 
   // Pass scsynth path override to engine via env (resolver consumes ORBIT_SCSYNTH_PATH).
-  // Empty / whitespace-only setting → fall through to bundle / SC.app fallback in resolver.
+  // Empty / whitespace-only setting → resolver が bundle 候補を試す
+  // (strict mode、SC.app 暗黙 fallback なし、bundle 不在は ScsynthNotFoundError で fail loud)。
   const scsynthOverride = vscode.workspace
     .getConfiguration('orbitscore')
     .get<string>('scsynthPath', '')
