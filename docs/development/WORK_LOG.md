@@ -26,7 +26,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Work Content**: ICMC 2026 リリースの最大インストール障壁 (SC.app の手動 install 強要) を解消するため、scsynth + 26 plugins + libsndfile.dylib (~11.5MB) を `.vsix` に同梱、path resolver を extension/engine 共通化、bundle 不在時の first-run UX を実装。旧 #146 の (1)(2) (bundle 検出 + Notification) を統合 (CodeX レビュー承認、#146 close 済)。
 
-**実装** (10 commits、各単独で `npm test` 通過):
+**Version**: 1.0.1 → **1.1.0** (Phase 13 で minor bump、scsynth bundle 同梱は major feature)
+
+**実装** (13 commits、各単独で `npm test` 通過):
 
 | # | Commit | 内容 |
 |---|--------|------|
@@ -39,7 +41,10 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 | 7 | `e25894d` | docs(worklog,readme): record scsynth bundle integration |
 | 8 | `1569110` | refactor(audio): drop SC.app/spotlight fallback from scsynth resolver |
 | 9 | `08c2855` | refactor(vscode-extension): align UX with strict bundle requirement |
-| 10 | this | docs(worklog,readme,build-guide): document strict resolver and dev workaround |
+| 10 | `5f93169` | docs(worklog,readme,build-guide): document strict resolver and dev workaround |
+| 11 | `98277db` | docs(platform): scope v1.0 to macOS Apple Silicon only |
+| 12 | `bb94fe6` | fix(review): address claude-review feedback (libsndfile LGPL, JSDoc, DRY, dead code) |
+| 13 | this | docs(extension-readme): restructure for marketplace + bump version to 1.1.0 |
 
 **新規ファイル**:
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts` (resolver 本体、strict mode)
