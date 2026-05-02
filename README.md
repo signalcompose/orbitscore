@@ -49,7 +49,16 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 | **Phase 8** | 📝 Next | 0% | Polymeter Testing & Advanced Features |
 | **Phase 9** | 📝 Planned | 0% | DAW Plugin Development |
 
-**Current Status**: Documentation reorganization (Issue #67) 📚
+**Current Status**: ICMC v1.0 Phase 1 — scsynth bundle integration (Issue #136, PR pending) 🎁
+
+**ICMC v1.0 Phase 1 (Epic #131)** — `.vsix` install だけで音が鳴る状態を実現:
+
+| Issue | Status | Description |
+|-------|--------|-------------|
+| #136 | ✅ Implementation complete | scsynth + 26 plugins + libsndfile bundle (~11.5MB), path resolver unification, first-run UX |
+| #139 | 🚧 Placeholder bundled in #136 | LICENSE/NOTICE 文言洗練・SC source URL 確定 |
+| #138 | 📝 Pending | Cold-install acceptance test (SC-less macOS) |
+| #137 | 📝 Pending | Marketplace 自動 publish workflow |
 
 **Phase 7 Achievements**:
 - ✅ SuperCollider audio engine (replaced sox)
