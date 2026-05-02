@@ -132,6 +132,12 @@
           "default": "#ff6b6b",
           "description": "Custom flash color (hex format, e.g., #ff6b6b)",
           "format": "color-hex"
+        },
+        "orbitscore.scsynthPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override path to the scsynth binary. Leave empty to use the bundled scsynth (recommended). Advanced users can point this at a custom SuperCollider install.",
+          "scope": "machine-overridable"
         }
       }
     }

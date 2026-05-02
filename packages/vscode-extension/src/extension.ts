@@ -610,6 +610,17 @@ function startEngine(debugMode: boolean = false) {
     env.ORBITSCORE_DEBUG = '1'
   }
 
+  // Pass scsynth path override to engine via env (resolver consumes ORBIT_SCSYNTH_PATH).
+  // Empty / whitespace-only setting → fall through to bundle / SC.app fallback in resolver.
+  const scsynthOverride = vscode.workspace
+    .getConfiguration('orbitscore')
+    .get<string>('scsynthPath', '')
+    .trim()
+  if (scsynthOverride) {
+    env.ORBIT_SCSYNTH_PATH = scsynthOverride
+    outputChannel?.appendLine(`🔧 scsynth override: ${scsynthOverride}`)
+  }
+
   // Spawn engine process
   engineProcess = child_process.spawn('node', [enginePath, ...args], {
     cwd: workspaceRoot,
