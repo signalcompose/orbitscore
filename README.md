@@ -49,18 +49,19 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 | **Phase 8** | 📝 Next | 0% | Polymeter Testing & Advanced Features |
 | **Phase 9** | 📝 Planned | 0% | DAW Plugin Development |
 
-**Current Status**: ICMC v1.0 Phase 1 — scsynth bundle integration (Issue #136, PR pending) 🎁
+**Current Status**: ICMC v1.1.0 release-ready 🚀 (bundle + release pipeline merged, awaiting publisher account setup + cold-install verification)
 
-**Supported Platforms (v1.0)**: macOS (Apple Silicon) only. Bundled `scsynth` ships only macOS Mach-O binaries; Windows / Linux are out of scope for the initial ICMC release.
+**Supported platforms**: macOS Apple Silicon (arm64) only. Intel x86_64 untested. Windows / Linux not supported in v1.x. (Bundled `scsynth` ships only macOS Mach-O binaries; cross-platform is a post-ICMC effort.)
 
-**ICMC v1.0 Phase 1 (Epic #131)** — `.vsix` install だけで音が鳴る状態を実現:
+**ICMC v1.1.0 (Epic #131 Phase 1)** — `.vsix` install だけで音が鳴る + tag push で全 channel に自動 publish:
 
 | Issue | Status | Description |
 |-------|--------|-------------|
-| #136 | ✅ Implementation complete | scsynth + 26 plugins + libsndfile bundle (~11.5MB), path resolver unification, first-run UX |
-| #139 | 🚧 Placeholder bundled in #136 | LICENSE/NOTICE 文言洗練・SC source URL 確定 |
-| #138 | 📝 Pending | Cold-install acceptance test (SC-less macOS) |
-| #137 | 📝 Pending | Marketplace 自動 publish workflow |
+| #136 | ✅ Merged ([PR #155](https://github.com/signalcompose/orbitscore/pull/155)) | scsynth + 26 plugins + libsndfile bundle (~11.5MB), strict path resolver, first-run UX |
+| #137 | ✅ Merged ([PR #157](https://github.com/signalcompose/orbitscore/pull/157)) | GitHub Actions release workflow (Marketplace + Open VSX + GitHub Release) |
+| #139 | ✅ Closed (吸収 in #155) | LICENSE.GPL-3.0 verbatim + NOTICE aggregation clause |
+| #146 | ✅ Closed (吸収 in #155) | First-run check / status bar / settings override |
+| #138 | ⏳ Pending | Cold-install acceptance test on SC-less macOS (manual verification) |
 
 **Phase 7 Achievements**:
 - ✅ SuperCollider audio engine (replaced sox)
