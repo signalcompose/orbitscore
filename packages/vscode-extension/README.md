@@ -2,6 +2,18 @@
 
 VS Code extension for the OrbitScore music DSL.
 
+## Supported Platforms
+
+**macOS (Apple Silicon)** only as of v1.0.
+
+| OS / Arch | Status | Notes |
+|---|---|---|
+| macOS Apple Silicon (arm64) | ✅ Supported | Tested target. Bundled scsynth runs natively. |
+| macOS Intel (x86_64) | ⚠️ Untested | The bundled scsynth is a universal binary so it may work, but not actively verified. |
+| Windows / Linux | ❌ Not supported | scsynth bundle ships only macOS binaries (`.dylib`, Mach-O). |
+
+Windows / Linux support is tracked separately as a future cross-platform effort.
+
 ## Features
 
 - **Syntax Highlighting**: Full syntax highlighting for `.osc` files
@@ -17,7 +29,17 @@ VS Code extension for the OrbitScore music DSL.
 - `OrbitScore: Stop Engine` - Stop the engine
 - `OrbitScore: Transport Panel` - Open transport control panel
 
-## Installation
+## Installation (Users)
+
+Download the latest `orbitscore-*.vsix` from the [GitHub Releases](https://github.com/signalcompose/orbitscore/releases) page and either:
+
+- Double-click the `.vsix` file (opens VS Code's install dialog), or
+- In VS Code, run `Extensions: Install from VSIX...` and pick the file, or
+- From the command line: `code --install-extension orbitscore-*.vsix`
+
+**SuperCollider does not need to be installed separately** — the bundled `scsynth` (~11.5 MB) is shipped inside the `.vsix`.
+
+## Installation (From Source — Developers)
 
 1. Build the engine first:
 
@@ -35,7 +57,13 @@ npm install
 npm run build
 ```
 
-3. Install in VS Code:
+3. Optional: bundle scsynth (release builds only — requires `SuperCollider.app` installed on the dev machine):
+
+```bash
+npm run build:bundle
+```
+
+4. Install in VS Code:
 
 - Open VS Code
 - Press `Cmd+Shift+P`

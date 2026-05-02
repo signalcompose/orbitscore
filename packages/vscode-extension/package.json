@@ -1,6 +1,7 @@
 {
   "name": "orbitscore",
   "displayName": "OrbitScore",
+  "description": "Live coding music DSL with bundled SuperCollider audio engine. macOS (Apple Silicon) only.",
   "publisher": "local",
   "version": "1.0.1",
   "author": "Signal compose Inc.",
@@ -9,6 +10,10 @@
     "type": "git",
     "url": "https://github.com/signalcompose/orbitscore"
   },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
   "engines": {
     "vscode": "^1.99.0"
   },

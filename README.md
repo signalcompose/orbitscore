@@ -51,6 +51,8 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 
 **Current Status**: ICMC v1.0 Phase 1 — scsynth bundle integration (Issue #136, PR pending) 🎁
 
+**Supported Platforms (v1.0)**: macOS (Apple Silicon) only. Bundled `scsynth` ships only macOS Mach-O binaries; Windows / Linux are out of scope for the initial ICMC release.
+
 **ICMC v1.0 Phase 1 (Epic #131)** — `.vsix` install だけで音が鳴る状態を実現:
 
 | Issue | Status | Description |

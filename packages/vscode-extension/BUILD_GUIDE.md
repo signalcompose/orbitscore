@@ -89,8 +89,19 @@ packages/vscode-extension/engine/scsynth/
 # build → bundle 抽出 → vsce package の順で実行
 npm run build
 npm run build:bundle
+
+# Marketplace publish 用 (将来): platform target を Apple Silicon に絞る
+npx vsce package --target darwin-arm64
+
+# GitHub Release 用 (現状): platform target なしの universal vsix
+# (vsix metadata 上は platform agnostic だが、bundle scsynth が macOS Mach-O のみ)
 npx vsce package
 ```
+
+**Platform target の意図**: bundle scsynth + libsndfile.dylib は macOS のみ。
+将来 Marketplace に公開する際は \`--target darwin-arm64\` で Apple Silicon 用と
+明示することで Windows / Linux ユーザーには見えなくなる。Intel Mac は universal
+binary 上は動く可能性があるが未テスト。
 
 ## パッケージサイズの最適化
 

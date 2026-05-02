@@ -69,6 +69,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - ICMC v1.0 初回は **GitHub Release に `.vsix` を添付**して配布、ユーザは ダウンロード + ダブルクリック (or `code --install-extension`) で install
 - Marketplace 自動 publish (#137) は ICMC ブロッカーから降格可能 (別 issue で再整理)
 
+**動作環境** (v1.0): **macOS (Apple Silicon)** のみ。bundle scsynth は universal binary だが、Intel Mac は未テスト。Windows / Linux は scsynth bundle に対応 binary が同梱されないため非対応 (cross-platform は将来 issue で扱う)。Marketplace publish 時は `vsce package --target darwin-arm64` で OS gate を明示する想定。
+
 **実機検証 (SC 3.14.1 環境)**:
 - `npm run build:bundle` → 11MB bundle 生成、26 plugins、universal arm64+x86_64
 - `npm run verify:bundle` → 11/11 checks pass (signature valid、TeamIdentifier=HE5VJFE9E4)
