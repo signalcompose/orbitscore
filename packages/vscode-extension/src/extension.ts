@@ -11,6 +11,8 @@ import { analyzeMethodChain, getContextualCompletions } from './completion-conte
 let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
+let bundleStatusItem: vscode.StatusBarItem | null = null
+let extensionContext: vscode.ExtensionContext | null = null
 let isLiveCodingMode: boolean = false
 
 // let isDebugMode: boolean = false // Debug mode flag
@@ -42,6 +44,24 @@ export async function activate(context: vscode.ExtensionContext) {
   statusBarItem.command = 'orbitscore.showCommands'
   statusBarItem.show()
 
+  // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)
+  bundleStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
+  bundleStatusItem.command = 'workbench.action.openSettings'
+  updateBundleStatus()
+  bundleStatusItem.show()
+
+  // Save context for first-run notification
+  extensionContext = context
+
+  // Re-evaluate bundle status when user changes the override setting
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('orbitscore.scsynthPath')) {
+        updateBundleStatus()
+      }
+    }),
+  )
+
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -53,6 +73,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     statusBarItem,
+    bundleStatusItem,
   )
 
   // Register IntelliSense providers
@@ -79,6 +100,119 @@ export function deactivate() {
   }
   outputChannel?.dispose()
   statusBarItem?.dispose()
+  bundleStatusItem?.dispose()
+}
+
+/**
+ * Resolve scsynth via shared resolver (engine の compiled JS を runtime require).
+ * Returns null on failure (e.g. resolver throws ScsynthNotFoundError).
+ */
+function resolveScsynthForUI(): { path: string; source: string } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const resolverModule = require('../engine/dist/audio/supercollider/scsynth-resolver') as {
+      resolveScsynthPath: (opts?: { explicit?: string }) => { path: string; source: string }
+    }
+    const userOverride = vscode.workspace
+      .getConfiguration('orbitscore')
+      .get<string>('scsynthPath', '')
+      .trim()
+    return resolverModule.resolveScsynthPath(userOverride ? { explicit: userOverride } : undefined)
+  } catch {
+    return null
+  }
+}
+
+/** Refresh the bundle status bar item to reflect the current resolution. */
+function updateBundleStatus(): void {
+  if (!bundleStatusItem) return
+  const resolution = resolveScsynthForUI()
+  if (!resolution) {
+    bundleStatusItem.text = '$(error) scsynth: not found'
+    bundleStatusItem.tooltip =
+      'No scsynth binary found. Reinstall the extension or set orbitscore.scsynthPath.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
+    return
+  }
+  bundleStatusItem.backgroundColor = undefined
+  switch (resolution.source) {
+    case 'bundle':
+      bundleStatusItem.text = '$(check) scsynth (bundled)'
+      bundleStatusItem.tooltip = `Using bundled scsynth\n${resolution.path}`
+      break
+    case 'env':
+    case 'explicit':
+      bundleStatusItem.text = '$(gear) scsynth (custom)'
+      bundleStatusItem.tooltip = `Using user-overridden scsynth\n${resolution.path}`
+      break
+    case 'sc-app':
+      bundleStatusItem.text = '$(folder) scsynth (SC.app)'
+      bundleStatusItem.tooltip = `Using system SuperCollider.app (bundle missing)\n${resolution.path}`
+      bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground')
+      break
+    case 'spotlight':
+      bundleStatusItem.text = '$(search) scsynth (found)'
+      bundleStatusItem.tooltip = `Using SuperCollider found via Spotlight\n${resolution.path}`
+      bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground')
+      break
+    default:
+      bundleStatusItem.text = '$(question) scsynth: unknown source'
+      bundleStatusItem.tooltip = resolution.path
+  }
+}
+
+/**
+ * Show first-run / fallback warning when scsynth is missing or running off SC.app.
+ * - Bundle / env / explicit → silent (normal operation)
+ * - sc-app / spotlight → 1 回だけ Warning (Don't Show Again は globalState に記録)
+ * - resolution failed → エラー Notification (毎回出す、修復必須のため)
+ */
+async function maybeShowBundleNotice(): Promise<void> {
+  if (!extensionContext || !outputChannel) return
+  const resolution = resolveScsynthForUI()
+  if (!resolution) {
+    const choice = await vscode.window.showErrorMessage(
+      '⚠️ scsynth not found. OrbitScore cannot start the audio engine.',
+      'Open Settings',
+      'View Logs',
+    )
+    if (choice === 'Open Settings') {
+      vscode.commands.executeCommand('workbench.action.openSettings', 'orbitscore.scsynthPath')
+    } else if (choice === 'View Logs') {
+      outputChannel.show()
+    }
+    return
+  }
+  if (
+    resolution.source === 'bundle' ||
+    resolution.source === 'env' ||
+    resolution.source === 'explicit'
+  ) {
+    return
+  }
+  // sc-app / spotlight 経由 → 初回限定 Warning (version 単位で dismiss を記録)
+  const packageJsonPath = path.join(__dirname, '../package.json')
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+  const dismissedVersion = extensionContext.globalState.get<string>(
+    'orbitscore.bundleNotice.dismissedVersion',
+  )
+  if (dismissedVersion === packageJson.version) {
+    return
+  }
+  const fallbackName = resolution.source === 'sc-app' ? 'SuperCollider.app' : 'system SuperCollider'
+  const choice = await vscode.window.showWarningMessage(
+    `⚠️ Bundled scsynth not found. Falling back to ${fallbackName}. Reinstall the extension to restore the bundle.`,
+    'Open Settings',
+    "Don't Show Again",
+  )
+  if (choice === 'Open Settings') {
+    vscode.commands.executeCommand('workbench.action.openSettings', 'orbitscore.scsynthPath')
+  } else if (choice === "Don't Show Again") {
+    await extensionContext.globalState.update(
+      'orbitscore.bundleNotice.dismissedVersion',
+      packageJson.version,
+    )
+  }
 }
 
 function showCommands() {
@@ -575,6 +709,10 @@ function startEngine(debugMode: boolean = false) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return
   }
+
+  // Fire-and-forget: bundle 不在や SC.app fallback の場合に初回限定 Warning。
+  // engine 起動と UI 通知を並行させ、UI thread をブロックしない。
+  void maybeShowBundleNotice()
 
   const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
   outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
