@@ -17,6 +17,26 @@ else
   CURRENT_BRANCH=""
 fi
 
+# Read tool_input.file_path from stdin (Claude Code PreToolUse hook protocol).
+# Plan-mode の plan file (.claude/plans/) は Phase 4 で書込必須なので protected branch でも許可。
+TARGET_FILE=""
+if ! [ -t 0 ]; then
+  INPUT_JSON=$(cat 2>/dev/null || true)
+  if [ -n "$INPUT_JSON" ]; then
+    if command -v jq >/dev/null 2>&1; then
+      TARGET_FILE=$(printf '%s' "$INPUT_JSON" | jq -r '.tool_input.file_path // ""' 2>/dev/null || true)
+    elif command -v python3 >/dev/null 2>&1; then
+      TARGET_FILE=$(printf '%s' "$INPUT_JSON" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("tool_input",{}).get("file_path",""))' 2>/dev/null || true)
+    fi
+  fi
+fi
+
+case "$TARGET_FILE" in
+  */.claude/plans/*)
+    exit 0
+    ;;
+esac
+
 # Block edits on main branch (JSON-style deny so the reason reaches the user)
 if [[ "$CURRENT_BRANCH" == "main" ]]; then
   REASON=$(cat <<'MSG'

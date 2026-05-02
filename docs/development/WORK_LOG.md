@@ -17,6 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.64 Issue #153: pre-edit-check.sh allow plan-mode plan files (May 02, 2026)
+
+**Date**: May 02, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `153-hook-allow-plans-dir`
+**Issue**: #153
+
+**Work Content**: Claude Code plan mode の plan file (`.claude/plans/<name>.md`) 書込が main ブランチで `pre-edit-check.sh` にブロックされ workflow が完結しない問題を解決。Issue #136 (scsynth bundle) の plan 作成中に発見した hook 改善作業。
+
+**実装**:
+- `.claude/hooks/pre-edit-check.sh` 修正
+  - stdin から `tool_input.file_path` を読み取る処理を追加 (jq 優先、python3 fallback)
+  - `case` 判定で `*/.claude/plans/*` パスは早期 `exit 0` で通過
+- 既存の main 編集 deny ロジックと branch 命名警告は無改修
+
+**検証**:
+- Sanity test 7 ケースすべて pass
+  - feature branch + 通常 file → exit 0 (既存通り)
+  - feature branch + plan file → exit 0 (新挙動、early allow)
+  - 空 stdin / malformed JSON / `tool_input.file_path` 欠落 → exit 0 (graceful)
+  - simulated main + plan file → exit 0 (新挙動、early allow)
+  - simulated main + 通常 file → deny JSON 出力 + exit 0 (既存通り)
+
+**後続**:
+- 本 fix で plan mode workflow が main ブランチでも完結可能に
+- 将来 `claude-tools` リポジトリに汎用 branch-protection plugin を作る際の参考実装
+
+---
+
 ### 6.63 Issue #107: orbit-audio-daemon fatal DaemonError (April 18, 2026)
 
 **Date**: April 18, 2026
