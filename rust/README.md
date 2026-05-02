@@ -73,6 +73,6 @@ Signal compose Source-Available License v1.0 — ルートの [LICENSE](../LICEN
 
 ## Related docs
 
-- [docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md](../docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md) — 3 層分離アーキテクチャ方針
-- [docs/planning/RUST_ENGINE_MIGRATION_PLAN.md](../docs/planning/RUST_ENGINE_MIGRATION_PLAN.md) — 全体ロードマップ
+- [docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md](../docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md) — 3 層分離アーキテクチャ方針
+- [docs/planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.md](../docs/planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.md) — 全体ロードマップ
 - [docs/research/RUST_POC_FINDINGS.md](../docs/research/RUST_POC_FINDINGS.md) — PoC 所感

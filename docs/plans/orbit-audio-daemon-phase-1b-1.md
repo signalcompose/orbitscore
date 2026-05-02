@@ -17,7 +17,7 @@
 ## 2. 参照
 
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — 実装契約（必読）
-- `docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md` — 責務境界
+- `docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md` — 責務境界
 - `rust/crates/orbit-audio-native/` — 既存の音声 I/O 層（再利用）
 
 ---
@@ -138,7 +138,7 @@ impl From<LoaderError> for ProtocolError {
 
 - [ ] `rust/README.md` の crate 一覧に `orbit-audio-daemon` を追加
 - [ ] `docs/development/WORK_LOG.md` に 6.58 エントリを追加
-- [ ] `docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md` Cargo workspace 節を実態に合わせて更新
+- [ ] `docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md` Cargo workspace 節を実態に合わせて更新
 
 **DSL 仕様への言及はしない**（実装を真実とする方針）。
 
