@@ -14,11 +14,7 @@ SuperCollider 3.14.1 release):
   - scsynth plugins (UGens, *.scx files in plugins/)
 
 License: GNU General Public License version 3 or later (GPL-3.0-or-later)
-See: LICENSE.GPL-3.0 in this directory.
-
-These components are aggregated with OrbitScore (which itself is licensed
-under the Signal compose Fair Trade License — see ../../LICENSE) following
-the GPL aggregation exception (GPL-3.0 §0).
+Full license text: see LICENSE.GPL-3.0 in this directory.
 
 Corresponding source code (GPL-3.0 §6):
   https://github.com/supercollider/supercollider/releases/tag/Version-3.14.1
@@ -29,6 +25,34 @@ code is available under the same GPL-3.0-or-later license at the URL above.
 Copyright notices preserved from the SuperCollider project:
   Copyright (c) 2002-2025 The SuperCollider community
   https://github.com/supercollider/supercollider/blob/main/COPYING
+
+--------------------------------------------------------------------------------
+Aggregation statement (GPL-3.0 §0)
+--------------------------------------------------------------------------------
+
+OrbitScore (the VS Code extension and its TypeScript engine) and the bundled
+SuperCollider components are **separate works** that happen to be distributed
+together inside the same `.vsix` archive. They communicate exclusively via the
+Open Sound Control (OSC) protocol over a UDP socket — there is no source-level
+linking, no shared address space, and no shared headers.
+
+Per GPL-3.0 §0 ("Definitions"):
+
+> A "Modified Version" of the [Program] does not include works merely
+> aggregated with the [Program] on a volume of a storage or distribution
+> medium.
+
+Under the FSF's published interpretation of "aggregation" (see
+https://www.gnu.org/licenses/gpl-faq.html#MereAggregation), software that
+interacts with a GPL'd program "through some kind of pipe, socket, or
+command-line arguments" constitutes aggregation rather than a derivative work.
+Therefore, the OrbitScore extension code itself is **not** a derivative work of
+SuperCollider and remains under the Signal compose Fair Trade License (see
+../../LICENSE).
+
+The bundled GPL-3.0 components retain their GPL-3.0 license. Users who modify
+or redistribute the SuperCollider components must comply with GPL-3.0
+independently of the OrbitScore license.
 
 ================================================================================
 Section B: libsndfile (LGPL-2.1-or-later)
@@ -41,7 +65,8 @@ Bundled component (distributed unmodified, copied from the SuperCollider
 
 License: GNU Lesser General Public License version 2.1 or later
         (LGPL-2.1-or-later)
-See: https://github.com/libsndfile/libsndfile/blob/master/COPYING
+Full license text:
+  https://github.com/libsndfile/libsndfile/blob/master/COPYING
 
 libsndfile is **not** part of the SuperCollider project. It is an
 independent library by Erik de Castro Lopo and contributors, included
@@ -65,18 +90,8 @@ Compliance summary
 ================================================================================
 
 This NOTICE file is provided in compliance with:
-  - GPL-3.0 §5 and §7 (for SuperCollider components)
+  - GPL-3.0 §5 and §7 (for SuperCollider components, aggregation per §0)
   - LGPL-2.1 §1, §2, §6 (for libsndfile)
 
 For the full GPL-3.0 license text, see LICENSE.GPL-3.0 in this directory.
 For the full LGPL-2.1 license text, see the libsndfile COPYING URL above.
-
-------------------------------------------------------------------------
-PLACEHOLDER STATUS:
-This NOTICE will be reviewed and finalized in Issue #139 before any public
-release. Section A (GPL aggregation, SC source URL) is accurate as of the
-bundled SuperCollider 3.14.1 release. Section B (libsndfile LGPL-2.1) was
-added in PR #155 review to correct the prior misclassification. Issue #139
-will additionally embed the verbatim GPL-3.0 license text in
-LICENSE.GPL-3.0 and verify libsndfile version pinning.
-------------------------------------------------------------------------

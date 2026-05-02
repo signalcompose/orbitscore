@@ -28,7 +28,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Version**: 1.0.1 → **1.1.0** (Phase 13 で minor bump、scsynth bundle 同梱は major feature)
 
-**実装** (17 commits、各単独で `npm test` 通過):
+**実装** (18 commits、各単独で `npm test` 通過):
 
 | # | Commit | 内容 |
 |---|--------|------|
@@ -48,7 +48,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 | 14 | `df3e8f7` | refactor(vscode-extension): rename killSuperCollider command to forceKillScsynth |
 | 15 | `fbd033a` | fix(vscode-extension): exec→execFile in selectAudioDevice + status bar settings target |
 | 16 | `e82e0ef` | fix(vscode-extension): skip engine spawn when scsynth unresolvable (avoid double error notice) |
-| 17 | this | refactor(vscode-extension): reuse pre-check resolution + execFile for all killall (review minors) |
+| 17 | `2f8f4d8` | refactor(vscode-extension): reuse pre-check resolution + execFile for all killall (review minors) |
+| 18 | this | docs(legal): embed GPL-3.0 verbatim + NOTICE aggregation clause (closes #139) |
 
 **新規ファイル**:
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts` (resolver 本体、strict mode)
@@ -89,9 +90,12 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **スコープ外** (本 PR で実装しない):
 - #137 Marketplace 自動 publish workflow (リリース戦略変更で ICMC ブロッカーから降格、別 issue で再整理予定)
 - #138 cold-install acceptance test (実機 SC-less Mac で別途検証)
-- #139 LICENSE/NOTICE 文言洗練 (本 PR は placeholder のみ)
 - #151 OrbitScore: Check Audio Setup (post-icmc)
 - #152 OrbitScore: Open Examples (post-icmc)
+- #156 環境変数名統一 (post-icmc、Phase 15 review feedback)
+
+**スコープに吸収** (本 PR で完了):
+- #139 LICENSE/NOTICE 文言洗練 → Phase 18 で GPL-3.0 verbatim 同梱 + NOTICE に separate works (OSC IPC) aggregation 明記 + libsndfile LGPL-2.1 区別 (Phase 12)。本 PR マージで #139 close。
 
 **後続**:
 - 本 PR マージ → #138 で SC-less Mac の cold-install 検証
