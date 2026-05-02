@@ -147,6 +147,8 @@
     "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json",
     "build:engine": "cd ../engine && npm run build && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh",
     "build:engine:clean": "cd ../engine && npm run build:clean && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh",
+    "build:bundle": "bash ../../scripts/extract-scsynth-bundle.sh",
+    "verify:bundle": "bash ../../scripts/verify-bundle.sh",
     "dev": "tsc -w"
   },
   "devDependencies": {

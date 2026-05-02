@@ -36,9 +36,45 @@ cd packages/vscode-extension
 npm run build
 ```
 
-### 4. パッケージ化
+### 4. scsynth bundle の抽出 (リリース時のみ)
+
+`.vsix` 配布版には scsynth バイナリ + plugins + libsndfile.dylib (~11.5 MB)
+を同梱します。開発時は SC.app があれば不要 (resolver が SC.app fallback)
+ですが、Marketplace publish や cold-install テストでは必須です。
 
 ```bash
+# SC.app から抽出 (default: SC.app 不在時 fail-fast)
+cd packages/vscode-extension
+npm run build:bundle
+
+# dev で SC.app が無い場合は warning + skip
+bash ../../scripts/extract-scsynth-bundle.sh --allow-skip
+
+# 抽出後の検証 (構造、universal binary、codesign、plugin count 等)
+npm run verify:bundle
+```
+
+抽出される構造:
+```
+packages/vscode-extension/engine/scsynth/
+├── Contents/
+│   ├── Resources/
+│   │   ├── scsynth                (1.5 MB, universal arm64+x86_64)
+│   │   └── plugins/               (26 .scx ファイル、5.1 MB)
+│   └── Frameworks/
+│       └── libsndfile.dylib       (4.9 MB)
+├── LICENSE.GPL-3.0                (legal/scsynth-LICENSE.GPL-3.0 から copy)
+└── NOTICE                          (legal/scsynth-NOTICE から copy)
+```
+
+詳細: [`docs/research/SCSYNTH_BUNDLE_MANIFEST.md`](../../docs/research/SCSYNTH_BUNDLE_MANIFEST.md)
+
+### 5. パッケージ化
+
+```bash
+# build → bundle 抽出 → vsce package の順で実行
+npm run build
+npm run build:bundle
 npx vsce package
 ```
 
@@ -64,8 +100,18 @@ npx vsce package
 
 ### パッケージサイズ
 
-- 約 3.3 MB（2458ファイル）
+- engine のみ: 約 3.3 MB（2458ファイル）
+- scsynth bundle 同梱版: 約 14.8 MB (上記 + scsynth/plugins/libsndfile)
 - `engine/node_modules` を含む（supercolliderjs + wavefile のランタイム依存）
+
+### scsynth bundle ディレクトリの取り扱い
+
+`packages/vscode-extension/engine/` は root `.gitignore:36` で無視されており、
+bundle (`engine/scsynth/`) も git 管理外です。CI / release pipeline で
+`build:bundle` を実行して都度生成します。
+
+LICENSE.GPL-3.0 と NOTICE のテンプレートは git 管理 (`packages/vscode-extension/legal/`)
+で、`extract-scsynth-bundle.sh` が bundle dir に copy します。
 
 ### Engineランタイム依存の管理
 

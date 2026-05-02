@@ -1,0 +1,38 @@
+OrbitScore VS Code Extension — Bundled scsynth Notice
+
+This extension bundles the following components from the SuperCollider
+project (https://supercollider.github.io/), distributed under the
+GNU General Public License version 3 or later (GPL-3.0-or-later):
+
+  - scsynth (audio server binary)
+  - scsynth plugins (UGens, *.scx files in plugins/)
+  - libsndfile.dylib (audio file I/O library)
+
+These components are distributed unmodified, as extracted from the
+official SuperCollider 3.14.1 release. They are aggregated with
+OrbitScore (which itself is licensed under the Signal compose Fair
+Trade License — see ../../LICENSE) following the GPL aggregation
+exception (GPL-3.0 §0).
+
+------------------------------------------------------------------------
+Corresponding source code (GPL-3.0 §6):
+  https://github.com/supercollider/supercollider/releases/tag/Version-3.14.1
+
+The bundled binaries were built from the above tagged release. The
+source code is available under the same GPL-3.0-or-later license at the
+URL above.
+------------------------------------------------------------------------
+
+Copyright notices preserved from the SuperCollider project:
+  Copyright (c) 2002-2025 The SuperCollider community
+  https://github.com/supercollider/supercollider/blob/main/COPYING
+
+This NOTICE file is provided in compliance with GPL-3.0 §5 and §7.
+For the full license text, see LICENSE.GPL-3.0 in this directory.
+
+------------------------------------------------------------------------
+PLACEHOLDER STATUS:
+This NOTICE will be reviewed and finalized in Issue #139 before any
+public release. The corresponding source URL and copyright statements
+above are accurate as of the bundled SuperCollider 3.14.1 release.
+------------------------------------------------------------------------

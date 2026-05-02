@@ -1,0 +1,19 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+------------------------------------------------------------------------
+NOTE: This is a placeholder pointing to the GNU GPL v3.0 text. The full
+text is published at https://www.gnu.org/licenses/gpl-3.0.txt and is
+incorporated by reference. SuperCollider scsynth and its plugins are
+licensed under GPL-3.0-or-later. See NOTICE for the corresponding source
+URL and aggregation disclosure (Issue #139 will replace this with the
+full verbatim license text before public release).
+------------------------------------------------------------------------
+
+The complete license text MUST be embedded verbatim before any public
+distribution (e.g. VS Code Marketplace publish). This placeholder is
+sufficient for development builds and internal review only.
