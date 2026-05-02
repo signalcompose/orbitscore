@@ -39,8 +39,22 @@ npm run build
 ### 4. scsynth bundle の抽出 (リリース時のみ)
 
 `.vsix` 配布版には scsynth バイナリ + plugins + libsndfile.dylib (~11.5 MB)
-を同梱します。開発時は SC.app があれば不要 (resolver が SC.app fallback)
-ですが、Marketplace publish や cold-install テストでは必須です。
+を同梱します。
+
+**Strict mode (Issue #136)**: resolver は SC.app / Spotlight への暗黙
+fallback を持ちません。bundle が無ければ `ScsynthNotFoundError` で fail loud
+します。これは "SC が無い環境で `.vsix` install するだけで動く" を保証する
+ための意図的な設計です (silent fallback があると bundle 抽出失敗を SC.app
+が肩代わりして production の不具合を隠蔽するリスクがあるため)。
+
+**Dev workflow への影響**:
+- vscode-extension 経由 (通常 user): bundle 同梱で何もしなくて OK
+- engine 単独 CLI で SC.app に依存している dev:
+  ```bash
+  ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth \
+    npm run dev:engine
+  ```
+  または `build:bundle` で bundle を抽出してから実行
 
 ```bash
 # SC.app から抽出 (default: SC.app 不在時 fail-fast)
