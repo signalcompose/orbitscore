@@ -1,22 +1,25 @@
 /**
  * scsynth binary path resolver.
  *
- * 優先順位:
+ * 優先順位 (strict mode — Issue #136 の "SC 不要で動く" を保証するため
+ * SC.app / Spotlight への暗黙 fallback は意図的に持たない):
  *   1. explicit (caller 明示)
  *   2. env (ORBIT_SCSYNTH_PATH)
  *   3. bundle (extension 同梱、`<engine root>/scsynth/Contents/Resources/scsynth`)
- *   4. SC.app fallback (`/Applications/SuperCollider.app/Contents/Resources/scsynth`)
- *   5. Spotlight (`mdfind` で SuperCollider.app を検索)
+ *
+ * 全 miss 時は `ScsynthNotFoundError` を投げ、bundle が無い状況を「サイレントに
+ * SC.app で誤魔化す」のではなく明示的に検知できるようにする。dev 環境で
+ * SC.app を使いたい場合は `ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/...`
+ * を env で渡すこと。
  *
  * パターンは `packages/engine/src/audio/rust-engine/daemon-client.ts` の
- * `resolveDaemonBinary()` を流用。各候補は `fs.existsSync` + 実行権限を検査。
+ * `resolveDaemonBinary()` を流用。各候補は `fs.statSync` + 実行権限を検査。
  */
 
-import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 
-export type ScsynthSource = 'explicit' | 'env' | 'bundle' | 'sc-app' | 'spotlight'
+export type ScsynthSource = 'explicit' | 'env' | 'bundle'
 
 export interface ScsynthResolution {
   path: string
@@ -33,15 +36,14 @@ export class ScsynthNotFoundError extends Error {
 
   constructor(searched: string[]) {
     super(
-      `scsynth binary not found. Searched paths:\n${searched.map((p) => '  - ' + p).join('\n')}`,
+      `scsynth binary not found. Searched paths:\n${searched.map((p) => '  - ' + p).join('\n')}\n\n` +
+        `For development without a bundled scsynth, set ORBIT_SCSYNTH_PATH to a system scsynth (e.g. /Applications/SuperCollider.app/Contents/Resources/scsynth).`,
     )
     this.name = 'ScsynthNotFoundError'
     this.searched = searched
   }
 }
 
-const SC_APP_DEFAULT_PATH = '/Applications/SuperCollider.app/Contents/Resources/scsynth'
-const SPOTLIGHT_TIMEOUT_MS = 500
 const ENV_VAR = 'ORBIT_SCSYNTH_PATH'
 
 /**
@@ -50,7 +52,7 @@ const ENV_VAR = 'ORBIT_SCSYNTH_PATH'
  * - vscode-extension 同梱: `packages/vscode-extension/engine/dist/audio/supercollider/scsynth-resolver.js`
  *   から見ると `engine/scsynth/...` は `../../../scsynth/...`
  * - engine package 単独: `packages/engine/dist/audio/supercollider/scsynth-resolver.js`
- *   から見ると bundle は存在しない (常に miss → 次候補へ)
+ *   から見ると bundle は存在しない (常に miss → エラー、dev は env 経由で解決)
  */
 function bundleCandidatePath(): string {
   return path.resolve(__dirname, '../../../scsynth/Contents/Resources/scsynth')
@@ -63,24 +65,6 @@ function isExecutableFile(p: string): boolean {
     return (stat.mode & 0o111) !== 0
   } catch {
     return false
-  }
-}
-
-function findViaSpotlight(): string | null {
-  try {
-    const result = spawnSync('mdfind', ['-name', 'SuperCollider.app'], {
-      timeout: SPOTLIGHT_TIMEOUT_MS,
-      encoding: 'utf8',
-    })
-    if (result.status !== 0 || !result.stdout) return null
-    const firstHit = result.stdout
-      .split('\n')
-      .map((s) => s.trim())
-      .find((s) => s.length > 0)
-    if (!firstHit) return null
-    return path.join(firstHit, 'Contents/Resources/scsynth')
-  } catch {
-    return null
   }
 }
 
@@ -108,8 +92,6 @@ export function resolveScsynthPath(opts: ResolveOptions = {}): ScsynthResolution
     tryCandidate(opts.explicit, 'explicit') ??
     tryCandidate(process.env[ENV_VAR], 'env') ??
     tryCandidate(bundleCandidatePath(), 'bundle') ??
-    tryCandidate(SC_APP_DEFAULT_PATH, 'sc-app') ??
-    tryCandidate(findViaSpotlight(), 'spotlight') ??
     (() => {
       throw new ScsynthNotFoundError(searched)
     })()

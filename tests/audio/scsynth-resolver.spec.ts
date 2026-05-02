@@ -1,14 +1,15 @@
 /**
  * scsynth-resolver tests.
  *
- * `fs` と `child_process` を mock して、resolution 優先順位
- * (explicit / env / bundle / sc-app / spotlight) と全 miss 時の
- * `ScsynthNotFoundError` を検証する。
+ * `fs` を mock して、resolution 優先順位 (explicit / env / bundle) と
+ * 全 miss 時の `ScsynthNotFoundError` を検証する。
+ *
+ * Strict mode (Issue #136): SC.app / Spotlight への暗黙 fallback は持たないため、
+ * bundle が無ければ explicit / env で明示する以外に解決手段はない。
  *
  * SC.app の有無に依存しないため CI でも実行可能。
  */
 
-import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -19,12 +20,8 @@ import {
 } from '../../packages/engine/src/audio/supercollider/scsynth-resolver'
 
 vi.mock('fs')
-vi.mock('child_process')
 
 const mockedStatSync = vi.mocked(fs.statSync)
-const mockedSpawnSync = vi.mocked(spawnSync)
-
-const SC_APP_PATH = '/Applications/SuperCollider.app/Contents/Resources/scsynth'
 
 /** isFile=true + execute bit を持つ stat を返す */
 function execFileStat(): fs.Stats {
@@ -34,7 +31,7 @@ function execFileStat(): fs.Stats {
   } as unknown as fs.Stats
 }
 
-/** existsSync ではなく statSync を使うので ENOENT を投げる stat を返す */
+/** ENOENT を投げる stat を返す */
 function notFoundStat(): never {
   const err = new Error('ENOENT') as NodeJS.ErrnoException
   err.code = 'ENOENT'
@@ -104,49 +101,8 @@ describe('resolveScsynthPath', () => {
     expect(result.path).toMatch(/\/scsynth\/Contents\/Resources\/scsynth$/)
   })
 
-  it('returns SC.app fallback when bundle missing', () => {
-    mockedStatSync.mockImplementation((p) => {
-      if (p === SC_APP_PATH) return execFileStat()
-      return notFoundStat()
-    })
-
-    const result = resolveScsynthPath()
-
-    expect(result.source).toBe('sc-app')
-    expect(result.path).toBe(SC_APP_PATH)
-  })
-
-  it('returns spotlight result as last resort', () => {
-    const SPOT_PATH = '/Volumes/External/SuperCollider.app/Contents/Resources/scsynth'
-    mockedStatSync.mockImplementation((p) => {
-      if (p === SPOT_PATH) return execFileStat()
-      return notFoundStat()
-    })
-    mockedSpawnSync.mockReturnValue({
-      status: 0,
-      stdout: '/Volumes/External/SuperCollider.app\n',
-      stderr: '',
-      pid: 0,
-      output: [],
-      signal: null,
-    } as any)
-
-    const result = resolveScsynthPath()
-
-    expect(result.source).toBe('spotlight')
-    expect(result.path).toBe(SPOT_PATH)
-  })
-
-  it('throws ScsynthNotFoundError with searched paths when all candidates miss', () => {
+  it('throws ScsynthNotFoundError when bundle is missing and no explicit/env given (strict mode)', () => {
     mockedStatSync.mockImplementation(() => notFoundStat())
-    mockedSpawnSync.mockReturnValue({
-      status: 1,
-      stdout: '',
-      stderr: '',
-      pid: 0,
-      output: [],
-      signal: null,
-    } as any)
 
     let caught: ScsynthNotFoundError | null = null
     try {
@@ -156,8 +112,43 @@ describe('resolveScsynthPath', () => {
     }
 
     expect(caught).toBeInstanceOf(ScsynthNotFoundError)
-    expect(caught?.searched.length).toBeGreaterThanOrEqual(2)
-    expect(caught?.searched).toContain(SC_APP_PATH)
+    // bundle 候補のみ searched に入る (explicit/env なしのため)
+    expect(caught?.searched.length).toBe(1)
+    expect(caught?.searched[0]).toMatch(/\/scsynth\/Contents\/Resources\/scsynth$/)
+    // SC.app への暗黙 fallback がないことを確認
+    expect(caught?.searched).not.toContain(
+      '/Applications/SuperCollider.app/Contents/Resources/scsynth',
+    )
+  })
+
+  it('throws ScsynthNotFoundError with all attempted paths when explicit + env + bundle all miss', () => {
+    process.env.ORBIT_SCSYNTH_PATH = '/env/missing'
+    mockedStatSync.mockImplementation(() => notFoundStat())
+
+    let caught: ScsynthNotFoundError | null = null
+    try {
+      resolveScsynthPath({ explicit: '/explicit/missing' })
+    } catch (e) {
+      caught = e as ScsynthNotFoundError
+    }
+
+    expect(caught).toBeInstanceOf(ScsynthNotFoundError)
+    expect(caught?.searched).toContain('/explicit/missing')
+    expect(caught?.searched).toContain('/env/missing')
+    expect(caught?.searched.length).toBe(3) // explicit + env + bundle
+  })
+
+  it('error message guides developers to set ORBIT_SCSYNTH_PATH', () => {
+    mockedStatSync.mockImplementation(() => notFoundStat())
+
+    let caught: ScsynthNotFoundError | null = null
+    try {
+      resolveScsynthPath()
+    } catch (e) {
+      caught = e as ScsynthNotFoundError
+    }
+
+    expect(caught?.message).toContain('ORBIT_SCSYNTH_PATH')
   })
 
   it('treats existing-but-not-executable file as miss', () => {
@@ -165,14 +156,12 @@ describe('resolveScsynthPath', () => {
       if (p === '/explicit/scsynth') {
         return { isFile: () => true, mode: 0o644 } as unknown as fs.Stats
       }
-      if (p === SC_APP_PATH) return execFileStat()
       return notFoundStat()
     })
 
-    const result = resolveScsynthPath({ explicit: '/explicit/scsynth' })
-
-    expect(result.source).toBe('sc-app')
-    expect(result.searched).toContain('/explicit/scsynth')
+    expect(() => resolveScsynthPath({ explicit: '/explicit/scsynth' })).toThrow(
+      ScsynthNotFoundError,
+    )
   })
 
   it('treats directory as miss (not a regular file)', () => {
@@ -180,35 +169,29 @@ describe('resolveScsynthPath', () => {
       if (p === '/dir/scsynth') {
         return { isFile: () => false, mode: 0o755 } as unknown as fs.Stats
       }
-      if (p === SC_APP_PATH) return execFileStat()
       return notFoundStat()
     })
 
-    const result = resolveScsynthPath({ explicit: '/dir/scsynth' })
-
-    expect(result.source).toBe('sc-app')
+    expect(() => resolveScsynthPath({ explicit: '/dir/scsynth' })).toThrow(ScsynthNotFoundError)
   })
 
-  it('handles spotlight failure gracefully (non-zero exit)', () => {
+  it('does not invoke spawnSync (no Spotlight fallback in strict mode)', () => {
+    // child_process は import されていないので呼ばれることがない
+    // この test の意図は「fallback が削除されたことを意図的に確認」
     mockedStatSync.mockImplementation(() => notFoundStat())
-    mockedSpawnSync.mockReturnValue({
-      status: 1,
-      stdout: '',
-      stderr: 'mdfind: error',
-      pid: 0,
-      output: [],
-      signal: null,
-    } as any)
 
-    expect(() => resolveScsynthPath()).toThrow(ScsynthNotFoundError)
-  })
+    let caught: ScsynthNotFoundError | null = null
+    try {
+      resolveScsynthPath()
+    } catch (e) {
+      caught = e as ScsynthNotFoundError
+    }
 
-  it('handles spotlight throwing (e.g. mdfind not found)', () => {
-    mockedStatSync.mockImplementation(() => notFoundStat())
-    mockedSpawnSync.mockImplementation(() => {
-      throw new Error('ENOENT')
-    })
-
-    expect(() => resolveScsynthPath()).toThrow(ScsynthNotFoundError)
+    expect(caught).toBeInstanceOf(ScsynthNotFoundError)
+    // searched に SuperCollider.app の path が出てこない (Spotlight 探索ゼロ)
+    const hasSpotlightPath = caught?.searched.some(
+      (p) => p.includes('SuperCollider.app') && !p.startsWith('/Applications/'),
+    )
+    expect(hasSpotlightPath).toBe(false)
   })
 })
