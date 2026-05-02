@@ -63,8 +63,8 @@
         "icon": "$(stop)"
       },
       {
-        "command": "orbitscore.killSuperCollider",
-        "title": "🔪 Kill SuperCollider",
+        "command": "orbitscore.forceKillScsynth",
+        "title": "🔪 Force Kill scsynth",
         "category": "OrbitScore",
         "icon": "$(close-all)"
       },

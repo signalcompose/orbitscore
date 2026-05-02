@@ -65,7 +65,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
     vscode.commands.registerCommand('orbitscore.stopEngine', stopEngine),
     vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
-    vscode.commands.registerCommand('orbitscore.killSuperCollider', killSuperCollider),
+    vscode.commands.registerCommand('orbitscore.forceKillScsynth', forceKillScsynth),
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     statusBarItem,
@@ -211,9 +211,9 @@ function showCommands() {
       detail: 'Select audio output device for SuperCollider',
     },
     {
-      label: '🔪 Kill SuperCollider',
+      label: '🔪 Force Kill scsynth',
       description: 'killall scsynth',
-      detail: 'Force kill all SuperCollider server processes',
+      detail: 'Escape hatch — force-kill any orphan scsynth processes',
     },
     {
       label: '⚡ Configure Flash',
@@ -246,8 +246,8 @@ function showCommands() {
       case '🔊 Select Audio Device':
         vscode.commands.executeCommand('orbitscore.selectAudioDevice')
         break
-      case '🔪 Kill SuperCollider':
-        vscode.commands.executeCommand('orbitscore.killSuperCollider')
+      case '🔪 Force Kill scsynth':
+        vscode.commands.executeCommand('orbitscore.forceKillScsynth')
         break
       case '⚡ Configure Flash':
         vscode.commands.executeCommand('orbitscore.configureFlash')
@@ -781,23 +781,31 @@ function stopEngine() {
   }
 }
 
-function killSuperCollider() {
-  outputChannel?.appendLine('🔪 Killing SuperCollider processes...')
+/**
+ * Force-kill any stray scsynth processes (escape hatch for zombie cleanup).
+ *
+ * Normal stop is handled via \`stopEngine\` (graceful SIGTERM through the engine
+ * process). This command is for cases where the engine process itself was
+ * SIGKILL'd / force-quit and left an orphan scsynth, or for clearing leftover
+ * processes from external manual boots during development.
+ */
+function forceKillScsynth() {
+  outputChannel?.appendLine('🔪 Force-killing scsynth processes...')
 
-  // Execute killall scsynth, suppress errors if no process found
+  // killall covers both bundled and system scsynth (intentional — escape hatch
+  // should clean up everything). Exit code 1 = "no process found" (not an error).
   child_process.exec('killall scsynth 2>/dev/null', (error) => {
     if (error) {
-      // Exit code 1 means no process found, which is ok
       if (error.code === 1) {
-        outputChannel?.appendLine('✅ No SuperCollider processes found')
-        vscode.window.showInformationMessage('✅ No SuperCollider processes running')
+        outputChannel?.appendLine('✅ No scsynth processes found')
+        vscode.window.showInformationMessage('✅ No scsynth processes running')
       } else {
         outputChannel?.appendLine(`⚠️ Error: ${error.message}`)
-        vscode.window.showWarningMessage(`⚠️ Failed to kill SuperCollider: ${error.message}`)
+        vscode.window.showWarningMessage(`⚠️ Failed to kill scsynth: ${error.message}`)
       }
     } else {
-      outputChannel?.appendLine('✅ SuperCollider processes killed')
-      vscode.window.showInformationMessage('✅ SuperCollider killed')
+      outputChannel?.appendLine('✅ scsynth processes killed')
+      vscode.window.showInformationMessage('✅ scsynth killed')
     }
   })
 }

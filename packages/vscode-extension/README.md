@@ -54,7 +54,7 @@ LOOP(kick)
 | `OrbitScore: Stop Engine` | Stop the engine |
 | `OrbitScore: Start Engine (Debug)` | Boot with verbose logging |
 | `OrbitScore: Select Audio Device` | Pick an output device interactively |
-| `OrbitScore: Kill SuperCollider` | Force-kill any stray `scsynth` processes |
+| `OrbitScore: Force Kill scsynth` | Escape hatch — force-kill any orphan `scsynth` processes |
 | `OrbitScore: Configure Flash` | Customize line-flash visual feedback |
 
 ## Settings
