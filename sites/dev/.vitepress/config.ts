@@ -14,13 +14,17 @@ export default withMermaid(
 
     srcExclude: ['STYLE_GUIDE.md', '**/.audit/**', '**/AUDIT_REPORT*.md'],
 
+    // KaTeX CSS は public/katex/ に同梱して local link で読み込む。
+    // CDN 依存 (cdn.jsdelivr.net) を排除し、飛行機内やオフライン環境
+    // でも数式が崩れず表示できるようにする。
+    // 同梱バージョンは package.json の `katex` deps と整合させる
+    // (現在 0.16.21、 更新時は public/katex/ も同期する)。
     head: [
       [
         'link',
         {
           rel: 'stylesheet',
-          href: 'https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css',
-          crossorigin: 'anonymous',
+          href: '/katex/katex.min.css',
         },
       ],
     ],
