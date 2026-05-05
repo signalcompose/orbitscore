@@ -132,8 +132,28 @@ status: draft | reviewed | stable  # 編集状態
 skill default は URL/file path レベル。OrbitScore では:
 
 - ファイル参照は **`<file>:<start>-<end>` の line range 付き** で記述
-- 引用は逐語、再構成不可
 - 外部仕様 (SC OSC protocol 等) は URL + 章/節指定
+
+### 本文中コードブロック (引用) の規律
+
+**code が SoT** の前提を崩さないため、章本文の TypeScript snippet は以下を必須:
+
+- **文字単位 verbatim**: `// <file>:<start>-<end>` 行コメント付きのコードブロックは、actual code と文字単位で一致 (空白・改行・インデント・comment を黙って reformat しない)
+- **省略は `// ...` で明示**: 一部行を削る場合、削除位置に `// ...` を必ず置く。 黙って削除は禁止
+- **末尾 `// ...` は actual code がさらに続く時のみ**: range の最終行で snippet が終わる場合は `// ...` を置かない (誤読防止)
+- **些細な要素も verbatim**: `console.log` / inline comment / error handler 等を「ノイズだから」 と削らない。それも SoT の一部
+- **範囲精度**: range の `<start>-<end>` と actual code の対応が off-by-one なら違反
+
+詳細は [`sites/dev/STYLE_GUIDE.md`](../../sites/dev/STYLE_GUIDE.md) §5-bis 参照。
+
+### Phase B 以降の writing agent dispatch 時の必須事項
+
+`.claude/skills/vitepress-learning-site/references/writing-agent-template.md` の prompt skeleton に加え、**OrbitScore 用の追加規律として以下を必ず明記**:
+
+1. STYLE_GUIDE §5-bis の verbatim 規律を遵守 (上記参照)
+2. 本文中 code snippet の `<file>:<start>-<end>` range は **書く前にその行範囲を Read で確認**、書いた後に **再度突き合わせて diff が無いか self-check**
+3. 省略を入れる場合 `// ...` を必ず明示、 silent omission 禁止
+4. 末尾 `// ...` は range の最終行で snippet が終わる場合は禁止
 
 例:
 

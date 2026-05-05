@@ -17,6 +17,59 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.68 Issue #162: Scaffold dev learning site + spike chapter 0-2 (May 05, 2026)
+
+**Date**: May 05, 2026
+**Status**: ✅ COMPLETE (Phase A 完走、Phase B は別 issue)
+**Branch**: `162-scaffold-dev-learning-site`
+**Issue**: #162
+
+**Work Content**: dev 学習サイトの **Phase A**: VitePress scaffold + spike 章 (0-2 アーキテクチャ全景) を 1 PR で end-to-end。前 PR #161 で skill 導入と project brief は済、本 PR はその次段。
+
+**目的**: skill loop (Phase 4 scaffold → Phase 5 writing → Phase 6 build → Phase 7 verify → Phase 8 advisor audit) が機能するかを 1 章で validate し、Phase B の bulk parallel writing に進む前提条件を確立する。
+
+**新規 / 更新ファイル**:
+- 新規: `sites/dev/` (VitePress project root、`type: module`)
+  - `package.json` (`@orbitscore/dev-site`、deps: vitepress, vitepress-plugin-mermaid, mermaid, @vscode/markdown-it-katex, katex)
+  - `.vitepress/config.ts` (Mermaid + KaTeX 設定、cleanUrls、srcExclude STYLE_GUIDE)
+  - `.vitepress/sidebar.ts` (16 章の TOC export)
+  - `.vitepress/theme/index.ts` (default theme re-export、Vue component の global 登録は意図的に避けた)
+  - `index.md` (landing、 個人学習ノート disclaimer + status table)
+  - `STYLE_GUIDE.md` (frontmatter 規約、`## Sources` 規約、`## 次の深掘り候補` 必須、shallow first pass 制約 400-800 行目安、tone)
+  - `orientation/architecture-overview.md` (spike 章、status `draft`、書き手 = sub-agent / advisor audit 通過)
+  - 残り 15 章 stub (frontmatter `status: stub` + 1 行説明、Phase B で本文)
+- 更新: root `package.json` (workspaces に `sites/*` 追加)
+- 更新: `.gitignore` (`sites/*/.vitepress/cache/`, `sites/*/.vitepress/dist/`)
+- 更新: `docs/core/INDEX.md` (新 section: dev 学習サイト)
+
+**spike 章執筆プロセス**:
+1. **Phase 5 (writing)**: general-purpose sub-agent (model: sonnet) を 1 つ dispatch、`packages/engine/src/` 全体構造 + `vscode-extension/src/extension.ts` + `audio/supercollider/scsynth-resolver.ts` 等を primary source として読ませて書かせた
+2. **Phase 6 (build)**: 初回 build で 3 dead link 検出 (sub-agent が stub の path を guess していた)、normalize fix
+3. **Phase 8 (audit)**: advisor で audit。 1 件 Critical (「Electron renderer」 → 正確には 「Extension Host (Node.js、Renderer から fork)」) + 2 件 Minor (UDP/TCP 不一致、heartbeat → /status query) を flag、すべて修正
+
+**学んだこと (Phase B 設計への反映)**:
+- sub-agent の cross-link は **必ず stub の path を読み込ませる** prompt にする (推測しがち)
+- advisor audit が conceptual error (process model 誤認) を catch できることが実証された (cross-LLM-family audit に格上げしなくても spike 段階では十分)
+- shallow first pass の 1 章は 318 行で overview として機能する。Phase B の他章も同 scale を狙う
+
+**完了条件**:
+- [x] `sites/dev/` で VitePress build pass (dead link 0)
+- [x] 0-2 章が `status: draft` で完成 (advisor audit critical / minor すべて適用済)
+- [x] 残り 15 章が `status: stub` で存在
+- [x] STYLE_GUIDE.md 完成
+- [x] WORK_LOG / INDEX 更新
+
+**未完了 (yamato 作業)**:
+- 0-2 章を読み、code に戻って Sources の line range / code snippet 逐語性を verify
+- mental model が更新できたら別 commit で `status: reviewed` に格上げ
+
+**Out of Scope (別 issue)**:
+- Phase B: 残り 15 章の bulk writing (Part 別 sub-agent 並列 dispatch)
+- Phase C: cross-chapter polish + Glossary 統一 + 深掘り backlog 整理
+- Phase D: GitHub Pages deploy (post-ICMC)
+
+---
+
 ### 6.67 Issue #160: Install vitepress-learning-site skill (May 05, 2026)
 
 **Date**: May 05, 2026
