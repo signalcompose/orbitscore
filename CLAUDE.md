@@ -281,11 +281,8 @@ gh pr create --base main --body "Closes #N"
 
 ### 起動前の必須読み込み
 
-`/vitepress-learning-site` または当該 skill を invoke する作業に入る前に、必ず:
-
-```
-Read("docs/development/DEV_LEARNING_SITE.md")
-```
+`/vitepress-learning-site` または当該 skill を invoke する作業に入る前に、
+必ず [`docs/development/DEV_LEARNING_SITE.md`](docs/development/DEV_LEARNING_SITE.md) を読み込むこと。
 
 このファイルには以下が含まれる:
 - skill の Phase 1 (interview) で grilling される項目の **事前回答** (audience=self, language=ja, primary source=own codebase 等)
