@@ -2,7 +2,7 @@
 title: "I-3. selective execution"
 chapter-id: "I-3"
 verified-against: 0a4b598
-verified-at: 2026-05-05
+verified-at: "2026-05-05"
 status: draft
 ---
 

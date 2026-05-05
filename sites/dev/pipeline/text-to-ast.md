@@ -2,7 +2,7 @@
 title: "I-1. テキスト → AST"
 chapter-id: "I-1"
 verified-against: 0a4b598
-verified-at: 2026-05-05
+verified-at: "2026-05-05"
 status: draft
 ---
 

@@ -2,7 +2,7 @@
 title: "I-2. AST 評価モデル"
 chapter-id: "I-2"
 verified-against: 0a4b598
-verified-at: 2026-05-05
+verified-at: "2026-05-05"
 status: draft
 ---
 
