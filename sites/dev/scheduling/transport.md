@@ -223,7 +223,7 @@ engine の REPL は受け取ったテキストを `parseAudioDSL()` → `interpr
 「再生位置」は OrbitScore では **スケジューラーの起動時刻 (`startTime`)** として保持されています。
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:143-149
+// packages/engine/src/audio/supercollider/event-scheduler.ts:143-149 (start() の前半。setInterval ループ部分は event-queue.md で扱う)
   start(): void {
     if (this.isRunning) {
       return
@@ -231,7 +231,7 @@ engine の REPL は受け取ったテキストを `parseAudioDSL()` → `interpr
 
     this.isRunning = true
     this.startTime = Date.now()
-  }
+    // ...
 ```
 
 すべての `ScheduledPlay.time` はこの `startTime` を基準とした **相対時刻 (ms)** です。ポーリングループも `now = Date.now() - this.startTime` で相対時刻に変換して比較します。
