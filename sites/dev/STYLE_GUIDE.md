@@ -91,12 +91,101 @@ stub の段階では `verified-against` `verified-at` は省略可、`status: st
 ## 5. `## Sources` の最低要件
 
 - ファイル参照は `<file-path>:<start>-<end>` の line range 付き
-- 引用は逐語、再構成不可
 - 外部仕様 (SuperCollider OSC protocol 等) は URL + 章/節指定
 - 例:
   - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:76-99` — `resolveScsynthPath()` の優先順位ロジック
   - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — strict mode 採用の経緯
   - [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) §Synth Commands — `/s_new`、`/n_set`
+
+## 5-bis. 本文中のコードブロック (引用) の規律
+
+本サイトは **コード = SoT** という前提で書かれています。本文中のコードブロックが
+SoT との対応を破ると、サイト全体の信頼性が失われます。以下を **必須**:
+
+### 引用は文字単位で逐語 (verbatim)
+
+`// <file>:<start>-<end>` のような行コメントを付けたコードブロックは、**指定 range
+の actual code と文字単位で一致** すること。空白・改行・インデント・コメントを
+書き手の都合で reformat してはいけない。
+
+OK の例 (verbatim):
+```typescript
+// repl-mode.ts:27-38
+export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
+  console.log('🎵 OrbitScore Audio Engine')
+  console.log('✅ Initialized')
+
+  // Create a global interpreter
+  const globalInterpreter = new InterpreterV2()
+  // ...
+}
+```
+
+NG の例 (無印省略):
+```typescript
+// repl-mode.ts:27-38
+export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
+  const globalInterpreter = new InterpreterV2()  // console.log 等を黙って削除
+  await startREPL(globalInterpreter)
+}
+```
+
+### 省略する場合は `// ...` を必ず置く
+
+長い snippet で読み手の負担を下げたい場合、**省略は許容される**。ただし以下の
+規則に従うこと:
+
+1. **省略箇所には `// ...` を必ず置く** (黙って行を消さない)
+2. **省略後の行コメントには対応する実 line range を付ける** (例:
+   `// repl-mode.ts:27-38 (console.log と "Process arguments" コメント等を省略)`)
+3. **末尾の `// ...` は actual code がさらに続く時のみ使う**。range の最終行が
+   そこなら `// ...` を置かない (誤読を招く)
+
+OK の例 (省略を明示):
+```typescript
+// event-scheduler.ts:155-177 (skip-cleared 分岐と error handler 詳細を省略)
+this.intervalId = setInterval(() => {
+  const now = Date.now() - this.startTime
+
+  while (this.scheduledPlays.length > 0 && this.scheduledPlays[0].time <= now) {
+    const play = this.scheduledPlays.shift()!
+    // ...
+    this.executePlayback(play.filepath, play.options, play.sequenceName, play.time)
+    // ...
+  }
+}, 1)
+```
+
+NG の例 (誤った末尾 `// ...`):
+```typescript
+// event-scheduler.ts:317-335
+await this.oscClient.sendMessage([
+  '/s_new',
+  // ...
+  'duration',
+  duration,
+  // ...   ← 実際は actual code 末尾。さらに引数があるかのように読める。NG
+])
+```
+
+### 行 comment / console.log 等の「些細に見える要素」も省略しない
+
+引用元の `console.log` や inline comment は、**書き手にとっては些細でも、
+学習者にとってはコンテキストの一部**。reformat や silent omission をすると
+SoT が壊れる。verbatim を貫くか、省略するなら `// ...` で明示する。
+
+### 範囲指定の精度
+
+`// <file>:<start>-<end>` の range は **content と一致させる**。range が
+27-38 なら、コードブロックの先頭が 27 行目、末尾が 38 行目に対応すること。
+off-by-one は NG。
+
+### writing agent への送信 prompt にこの規律を必ず含める
+
+Phase B 以降の bulk parallel writing で sub-agent を dispatch する時、prompt
+の "Fact-first discipline" セクションに本 §5-bis の内容 (verbatim、省略表記、
+末尾 `// ...` の禁則、些細要素も削らない) を **必ず明記** する。同じ事故を
+全章で再発させないため。
 
 ## 6. `## 次の深掘り候補` の意義
 
