@@ -327,6 +327,15 @@ flowchart TB
 
 > NOTE: unverified — `setInterval(1)` の実際の発火間隔 (Node.js の libuv タイマー精度) と、実際の OSC 送信タイミングの drift 測定値は code から確認できていない。architecture-overview.md の「次の深掘り候補」に記載がある通り、精度の実測は別途確認が必要。
 
+## 関連用語
+
+- [scsynth](/glossary#scsynth) — SuperCollider のオーディオサーバーバイナリ。OSC 経由でイベントを受け取る最終送信先
+- [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — engine と scsynth の通信プロトコル。`executePlayback()` がメッセージを送信する
+- [orbitPlayBuf](/glossary#orbitplaybuf) — OrbitScore 専用 SynthDef の名前。OSC メッセージで指定するバッファ再生 Synth
+- [SynthDef (SC)](/glossary#synthdef-sc) — SuperCollider の音声処理定義。`orbitPlayBuf` はその一例
+- [Buffer (SC)](/glossary#buffer-sc) — scsynth に読み込んだオーディオデータ領域。`bufnumLeft`/`bufnumRight` としてイベントに格納される
+- [chop](/glossary#chop) — オーディオファイルを等分割するメソッド。`scheduleSliceEvent()` がスライス位置を計算する基礎
+
 ## 次の深掘り候補
 
 - `setInterval(1)` の実際の発火間隔 (libuv タイマーの最小分解能は OS 依存で 4〜15ms 程度)

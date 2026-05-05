@@ -326,6 +326,23 @@ sequenceDiagram
 | `/s_new` から scsynth が音を出すまでの SC サーバーコマンド体系 | [III-1. SuperCollider との通信](/audio/supercollider) |
 | extension の activation、IntelliSense、flash ビジュアルフィードバック | [IV-1. VS Code 拡張アーキテクチャ](/editor/vscode-architecture) |
 
+## 関連用語
+
+本章で扱う用語は [Glossary](/glossary) を参照。主要な用語:
+
+- [scsynth](/glossary#scsynth) — SuperCollider のオーディオサーバーバイナリ
+- [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — engine と scsynth の通信プロトコル
+- [SynthDef (SC)](/glossary#synthdef-sc) — orbitPlayBuf など音声処理定義
+- [Extension Host](/glossary#extension-host) — VS Code 拡張が動く Node.js プロセス
+- [orbitPlayBuf](/glossary#orbitplaybuf) — OrbitScore 専用 SynthDef の名前
+- [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — SC.app fallback を持たない fail-loud 設計
+- [StatusBarItem](/glossary#statusbaritem) — engine 状態・scsynth 解決状態を表示するステータスバー
+
+## 関連 ADR
+
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — なぜ scsynth を audio バックエンドに選んだか
+- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — strict mode の意思決定と bundle 構成
+
 ## 次の深掘り候補
 
 ここから先、もう一段深く読みたい話題は次のとおりです。それぞれ独立した issue として起票して別章で扱う想定です。

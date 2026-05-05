@@ -345,6 +345,13 @@ sequenceDiagram
   end
 ```
 
+## 関連用語
+
+- [subject ベースブロック評価](/glossary#subject-ベースブロック評価) — カーソル行の subject を起点としてブロックを収集する選択実行戦略
+- [setDocumentDirectory](/glossary#setdocumentdirectory) — 実行前に作業ディレクトリをドキュメントのパスに合わせる注入処理
+- [DSL](/glossary#dsl) — OrbitScore が定義するドメイン固有言語。REPL に送信されて評価される
+- [flashLines()](/glossary#flashlines) — 実行ブロックを一時的にハイライトする VS Code 拡張の視覚フィードバック関数
+
 ## 次の深掘り候補
 
 - `getLineSubject()` が null を返すケースの網羅 — コメント、空行、マルチワード行の扱い

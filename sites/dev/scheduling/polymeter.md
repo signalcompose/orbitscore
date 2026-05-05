@@ -251,6 +251,12 @@ flowchart LR
 
 「各シーケンスが独自の barDuration を計算し、その長さの setTimeout でループを回す」というシンプルな設計が、polymeter という音楽的に豊かな挙動を生み出しています。LCM による再同期は意図して実装されたものではなく、独立したタイマーが生み出す創発的な性質です。
 
+## 関連用語
+
+- [DSL](/glossary#dsl) — OrbitScore が定義するドメイン固有言語。`beat(n by m)` 構文でシーケンスごとの拍子を指定する
+- [chop](/glossary#chop) — オーディオファイルを等分割するメソッド。chop 数が barDuration の分割単位となる
+- [play パターン](/glossary#play-パターン) — サンプルのトリガー列。polymeter では各シーケンスが独立した長さのパターンを持つ
+
 ## 次の深掘り候補
 
 - `setInterval` ではなく `setTimeout` の自己再帰チェーンを使う理由 (ループ途中での `patternDuration` 変更への対応)

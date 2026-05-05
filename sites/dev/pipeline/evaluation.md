@@ -407,6 +407,21 @@ flowchart LR
 
 変数名 (文字列) をキーとした `Map` がバインディングの実体で、スコープや closure のような複雑な仕組みは持ちません。再評価のたびに `Map` の同じエントリを更新するだけで REPL の状態が保たれます。
 
+## 関連用語
+
+- [DSL](/glossary#dsl) — OrbitScore が定義するドメイン固有言語。インタープリターが AST を評価する言語
+- [init](/glossary#init) — `init global` / `init sequenceName` 構文。インタープリターが `processGlobalInit()` / `processSequenceInit()` で処理する
+- [global](/glossary#global) — グローバルスコープ識別子。`state.globals` Map のキーとして使われる
+- [RUN](/glossary#run) — `:run` コマンド。`processStatement()` が `handleRunCommand()` にディスパッチするトランスポート操作
+- [LOOP](/glossary#loop) — `:loop` コマンド。ループ差分計算 (`calculateLoopDiff`) を伴うトランスポート操作
+- [MUTE / UNMUTE](/glossary#mute--unmute) — `:mute` / `:unmute` コマンド。`Sequence` のフラグ管理を伴う
+- [片記号方式](/glossary#片記号方式) — `:command` のコロンプレフィックスによるトランスポートコマンド記法
+- [アンダースコアプレフィックスパターン](/glossary#アンダースコアプレフィックスパターン) — `_sequenceName` でシーケンスを無効化する v3.0 記法。`processSequenceInit()` が識別する
+
+## 関連 ADR
+
+- [ADR-002 DSL v3 Pivot](/decisions/adr-002-dsl-v3-pivot) — v3.0 で導入された構文変更 (アンダースコアプレフィックス、片記号方式) の意思決定
+
 ## 次の深掘り候補
 
 - `Global` クラスの内部構造 — `TempoManager`, `AudioManager`, `EffectsManager` の委譲パターン

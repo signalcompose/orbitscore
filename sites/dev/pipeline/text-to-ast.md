@@ -289,6 +289,19 @@ classDiagram
 
 この中間表現が次章のインタープリターに渡されます。
 
+## 関連用語
+
+- [DSL](/glossary#dsl) — OrbitScore が定義するドメイン固有言語。本章のパーサーがテキストを解析する対象
+- [Single Source of Truth (SoT)](/glossary#single-source-of-truth-sot) — DSL 仕様ドキュメント (`INSTRUCTION_ORBITSCORE_DSL.md`) がコードより優先される原則
+- [init](/glossary#init) — `init global` / `init sequenceName` 構文。変数宣言を表す DSL キーワード
+- [global](/glossary#global) — グローバルスコープを表す識別子。パーサーはこれを区別しないが AST に記録する
+- [アンダースコアプレフィックスパターン](/glossary#アンダースコアプレフィックスパターン) — v3.0 で導入されたトグル記法 (`_sequenceName`)。トークナイザーが識別する
+- [sequence 旧キーワード](/glossary#sequence-旧キーワード) — v1.0 で使われた `sequence` 宣言キーワード。現在は `init` に統一
+
+## 関連 ADR
+
+- [ADR-002 DSL v3 Pivot](/decisions/adr-002-dsl-v3-pivot) — v1.0/v2.0 から v3.0 への構文変更の意思決定。`sequence` → `init` 移行の背景
+
 ## 次の深掘り候補
 
 - `AudioTokenizer` が内部で使う正規表現の詳細 (tokenize ループ全体を表形式でまとめる)

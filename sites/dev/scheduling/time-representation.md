@@ -248,6 +248,12 @@ flowchart TB
 
 変換の核心は `calculateBarDuration()` の 2 行の計算式です。この式を理解すれば、次章で扱う polymeter がなぜ自然に実現できるのか、という問いにも答えられます。
 
+## 関連用語
+
+- [DSL](/glossary#dsl) — OrbitScore が定義するドメイン固有言語。`tempo()` / `beat()` 構文が本章の時間表現の起点
+- [chop](/glossary#chop) — オーディオファイルを等分割するメソッド。`TimedEvent` の `duration` フィールドと直結する
+- [play パターン](/glossary#play-パターン) — サンプルのトリガー列。スケジューラーが ms に変換して並べる対象
+
 ## 次の深掘り候補
 
 - `formatTiming()` の逆変換 (ms → 拍数) が浮動小数点誤差をどう扱っているか (`.toFixed(2)` の影響)
