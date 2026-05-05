@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Project Rules**: [`docs/core/PROJECT_RULES.md`](docs/core/PROJECT_RULES.md) - 開発ワークフロー、Git規則、コミット規約
 - **Work Log**: [`docs/development/WORK_LOG.md`](docs/development/WORK_LOG.md) - 完全な開発履歴と技術的決定事項
 - **Implementation Plan**: [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_PLAN.md) - 技術ロードマップとフェーズ
+- **Dev Learning Site Brief**: [`docs/development/DEV_LEARNING_SITE.md`](docs/development/DEV_LEARNING_SITE.md) - dev 学習サイト project brief + skill 運用 overrides
 - **User Manual**: [`docs/user/ja/USER_MANUAL.md`](docs/user/ja/USER_MANUAL.md) - ユーザー向け機能説明 (日本語版)
 - **Context7 Guide**: [`docs/core/CONTEXT7_GUIDE.md`](docs/core/CONTEXT7_GUIDE.md) - 外部ライブラリドキュメント参照ガイド
 - **Testing Guide**: [`docs/testing/TESTING_GUIDE.md`](docs/testing/TESTING_GUIDE.md) - テスト手順とガイド
@@ -270,6 +271,36 @@ gh pr create --base main --body "Closes #N"
 **Exception**: Project-specific docs (`/docs`) use Read tool directly.
 
 **Details**: See [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md)
+
+---
+
+## 🎓 Skill: vitepress-learning-site の運用
+
+`.claude/skills/vitepress-learning-site/` は [yuichkun/.claude](https://github.com/yuichkun/.claude/tree/main/skills/vitepress-learning-site) 由来の skill (作者承諾済、verbatim install)。
+**OrbitScore 用の事前確定事項と運用 overrides** は [`docs/development/DEV_LEARNING_SITE.md`](docs/development/DEV_LEARNING_SITE.md) に集約する。
+
+### 起動前の必須読み込み
+
+`/vitepress-learning-site` または当該 skill を invoke する作業に入る前に、
+必ず [`docs/development/DEV_LEARNING_SITE.md`](docs/development/DEV_LEARNING_SITE.md) を読み込むこと。
+
+このファイルには以下が含まれる:
+- skill の Phase 1 (interview) で grilling される項目の **事前回答** (audience=self, language=ja, primary source=own codebase 等)
+- skill default からの **OrbitScore 固有 override** (cross-LLM-family audit を advisor で代替、site location を `sites/dev/` に固定 等)
+- dev 学習サイトの **project brief** (なぜ作るか、章構成、SoT 階層の取り扱い)
+
+### skill 起動時の挙動
+
+skill の Phase 1 interview は `DEV_LEARNING_SITE.md` の決定で skip。
+未決の項目があれば対話で確認、決定後は `DEV_LEARNING_SITE.md` に追記して永続化する。
+
+### skill 本体の編集方針
+
+`.claude/skills/vitepress-learning-site/` 配下のファイル (yuichkun 由来) は
+**OrbitScore 文脈の都合で編集して構わない** (作者承諾済)。
+編集が発生したら以下を更新:
+- WORK_LOG.md に変更内容と理由
+- 当該ファイルの change 注釈 (差分 origin が分かる程度)
 
 ---
 
