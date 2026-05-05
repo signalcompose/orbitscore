@@ -20,10 +20,11 @@ status: draft
 
 ```mermaid
 graph TD
-  subgraph "VS Code (Electron プロセス)"
+  subgraph "VS Code (Extension Host プロセス、Node.js)"
     EXT["vscode-extension\n(packages/vscode-extension)"]
     EDITOR["エディタ / UI"]
     STATUSBAR["ステータスバー\nbundleStatusItem / statusBarItem"]
+    RESOLVER["scsynth-resolver\n(engine 由来の compiled JS を require、\nExtension Host 内で実行)"]
   end
 
   subgraph "engine プロセス (Node.js child_process)"
@@ -44,9 +45,11 @@ graph TD
   AUDIO -->|"OSC over UDP\n(/s_new, /b_allocRead ...)"| SCSYNTH
   SCSYNTH -->|"audio out"| DAC["スピーカー"]
 
-  EXT -->|"require('../engine/dist/...')\n(scsynth-resolver.ts)"| AUDIO
-  EXT -.->|"ORBIT_SCSYNTH_PATH (env)"| CLI
+  EXT -->|"resolveScsynthForUI() を呼ぶ"| RESOLVER
+  EXT -.->|"ORBIT_SCSYNTH_PATH (env で解決済 path を渡す)"| CLI
 ```
+
+> **図の読み方**: `RESOLVER` は engine の compiled JS だが、 require する側 (Extension Host プロセス) で実行されるため Extension Host subgraph 内に置いている。engine プロセスとは独立して動く点が重要。engine プロセスへの「侵入」 ではなく、engine の build artifact (compiled JS) を読み込む code-level の依存。
 
 ### 各層の責務
 
@@ -329,8 +332,7 @@ sequenceDiagram
 
 - **scsynth バンドル戦略**: なぜ SC.app fallback を持たないのか。strict mode の判断経緯 (Issue #136) を当時の議論ごと辿る
 - **supercolliderjs の内部**: `sc.server.boot()` がどう scsynth を spawn しているのか。supercolliderjs のソース追跡
-- **engine ↔ extension 間の型境界**: `resolveScsynthForUI()` が engine の compiled JS を `require()` する構造。build artifact 依存をどう管理しているか
-- **architecture diagram の境界表現**: 本章の `EXT → AUDIO` 矢印は extension が engine compiled JS を `require()` する境界を示すが、`AUDIO` が engine subgraph 内に置かれているため「extension が engine プロセス内に踏み込む」 と読める可能性がある。実際には extension の Extension Host プロセス内で `require()` が解決される (engine プロセス起動とは独立)。この境界の精度を上げた図表現は別章で扱う
+- **engine ↔ extension 間の型境界**: `resolveScsynthForUI()` が engine の compiled JS を `require()` する構造。build artifact 依存をどう管理しているか、type 境界 (engine 側 export と extension 側 import) はどう揃えているか
 - **setInterval(1ms) の精度**: Node.js の `setInterval` は 1ms を保証しません。実際の drift 特性と timing 精度への影響
 - **OSC メッセージのバッファリング**: `sendMessage` は毎回 UDP を送出しているのか、それとも `supercolliderjs` 内部でバッファリングしているのか
 - **SynthDef `orbitPlayBuf` の実体**: engine から `/s_new` で呼ばれている SynthDef の定義はどこにあって、scsynth にどうロードされているのか

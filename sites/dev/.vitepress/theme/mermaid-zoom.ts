@@ -52,7 +52,17 @@ function openZoomOverlay(wrapper: HTMLElement) {
   }
 
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') close()
+    if (e.key === 'Escape') {
+      close()
+      return
+    }
+    // Tab focus trap: closeBtn が overlay 内で唯一の focusable 要素なので、
+    // Tab / Shift+Tab を抑止して常にそこへ留める。SVG 内に tabindex を持つ
+    // 要素を追加した場合は cycle 処理に拡張すること。
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      closeBtn.focus()
+    }
   }
 
   overlay.addEventListener('click', (e) => {
