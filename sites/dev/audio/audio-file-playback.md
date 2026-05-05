@@ -341,6 +341,21 @@ sequenceDiagram
   SC-->>SC: PlayBuf.ar (startPos, rate, duration 制御)
 ```
 
+## 関連用語
+
+- [Buffer (SC)](/glossary#buffer-sc) — `BufferManager` が管理する scsynth 上のオーディオメモリ領域。`bufnum` で識別
+- [orbitPlayBuf](/glossary#orbitplaybuf) — バッファを再生する専用 SynthDef。`startPos` / `duration` / `rate` / `pan` / `amp` を引数に取る
+- [chop](/glossary#chop) — DSL の `seq.chop(N)` メソッド。本章で説明するスライス分割機能
+- [play パターン](/glossary#play-パターン) — `seq.play(1, 0, 1, 0)` で指定するスライスインデックスのシーケンス
+- [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — `/b_allocRead` と `/s_new` を scsynth に送る通信プロトコル
+- [scsynth](/glossary#scsynth) — バッファを保持してオーディオを出力するサーバーバイナリ
+- [UGen (Unit Generator)](/glossary#ugen-unit-generator) — `orbitPlayBuf` 内の `PlayBuf` / `BufRateScale` / `EnvGen` / `Pan2` 等の処理単位
+
+## 関連 ADR
+
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — Buffer + SynthDef + `/s_new` による再生アーキテクチャの採用経緯
+- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — `libsndfile.dylib` を bundle に含める判断 (フォーマット対応の根拠)
+
 ## 次の深掘り候補
 
 - **フォーマット対応の確認**: 同梱 `libsndfile.dylib` の version と実際にデコードできるフォーマット (特に MP3/MP4) の確認

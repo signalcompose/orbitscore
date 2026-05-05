@@ -349,6 +349,21 @@ async sendBufferLoad(bufnum: number, filepath: string): Promise<void> {
 
 この callAndResponse パターンが重要なのは、**バッファロードが完了する前に `/s_new` を送ると scsynth 側でバッファが見つからず無音になる** からです。`BufferManager.loadBuffer()` で `await this.oscClient.sendBufferLoad(...)` としていることで、ロード完了を保証してから再生に進みます。
 
+## 関連用語
+
+- [scsynth](/glossary#scsynth) — 本章の主役。OrbitScore が `child_process.spawn` で起動するオーディオサーバーバイナリ
+- [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — engine と scsynth の通信プロトコル。`/d_recv` / `/s_new` / `/n_set` / `/n_free` / `/b_allocRead` がすべて OSC
+- [SynthDef (SC)](/glossary#synthdef-sc) — `/d_recv` でロードする音声処理定義。`orbitPlayBuf` / `fxCompressor` / `fxLimiter` / `fxNormalizer` の 4 つ
+- [orbitPlayBuf](/glossary#orbitplaybuf) — OrbitScore 専用 SynthDef。`/s_new` でインスタンス化して再生する
+- [UGen (Unit Generator)](/glossary#ugen-unit-generator) — SynthDef を構成する基本処理単位。`PlayBuf` / `Pan2` / `EnvGen` 等
+- [Buffer (SC)](/glossary#buffer-sc) — `/b_allocRead` でロードされる scsynth 上のオーディオメモリ領域
+- [bundle (scsynth source)](/glossary#bundle-scsynth-source) — `.vsix` に同梱された scsynth バイナリ。`bundleCandidatePath()` が参照
+
+## 関連 ADR
+
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — なぜ scsynth を採用したか (sox 140-150ms → 0-8ms 達成) の意思決定
+- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — `.vsix` への同梱と SC.app fallback 削除の経緯
+
 ## 次の深掘り候補
 
 - **supercolliderjs の内部**: `sc.server.boot()` はどう scsynth を spawn し、`/status` 確認をしているのか。supercolliderjs のソースを追跡する

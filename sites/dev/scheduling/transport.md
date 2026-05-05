@@ -306,6 +306,23 @@ flowchart TB
 
 OrbitScore の transport は「DSL テキストを stdin に送り込む」という単純な入力モデルの上に、interpreter が状態を蓄積し、scheduler が時刻を管理するという構造で動いています。selective execution は「止めずに更新する」パラダイムであり、状態の引き継ぎは interpreter の `Map` に保持されたオブジェクトが生き続けることで実現しています。
 
+## 関連用語
+
+- [global](/glossary#global) — `global.start()` / `global.stop()` のレシーバ。TransportControl を保持するシングルトン
+- [RUN](/glossary#run) — 片記号方式のトランスポートコマンド。`processTransportStatement()` が `handleRunCommand()` にディスパッチ
+- [LOOP](/glossary#loop) — 片記号方式のループコマンド。差分計算 (`calculateLoopDiff`) でシーケンスの起動・停止を制御
+- [MUTE / UNMUTE](/glossary#mute--unmute) — 片記号方式のミュートコマンド。`muteGroup` Set で管理
+- [片記号方式](/glossary#片記号方式) — `RUN()` / `LOOP()` / `MUTE()` が「現在のグループを完全置換」するセマンティクス
+- [init](/glossary#init) — `var seq = init global.seq` で InterpreterV2 に Sequence を登録する構文
+- [scsynth](/glossary#scsynth) — EventScheduler が OSC 経由で `/s_new` を送る先のオーディオサーバー
+- [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — extension → engine → scsynth の通信に使われるプロトコル
+- [subject-based block evaluation](/glossary#subject-based-block-evaluation) — selective execution が利用する、カーソル行の subject に基づくブロック収集方式
+
+## 関連 ADR
+
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — EventScheduler が scsynth に接続する設計判断の背景
+- [ADR-002 DSL v3 Pivot](/decisions/adr-002-dsl-v3-pivot) — `RUN()` / `LOOP()` / `MUTE()` 片記号方式を導入した DSL v3.0 の経緯
+
 ## 次の深掘り候補
 
 - `skipTransportCommands` が実際にどのイベントから呼ばれているかの extension.ts 追跡

@@ -406,6 +406,10 @@ async function updateDiagnostics(
 
 単一行のみが対象です。複数行ステートメント (行末が `(` または `,` で終わる行) は `inMultilineStatement` フラグで検出してスキップします。単一行で `(` > `)` なら `DiagnosticSeverity.Error` を出します。
 
+::: tip 設計上の制限 (バグではない)
+複数行ステートメント全体での括弧対応は意図的にチェックしていません。タイピング中の中間状態 (例: `_kick.play(` を打った直後) で false positive を出さないための trade-off です。実用上は `Cmd+Enter` 実行時に engine 側のパーサが構文エラーを返すので、二重防御の一段目として「単一行で明らかに閉じ忘れている」ケースのみ早期警告する設計です。複数行対応の改善案は「次の深掘り候補」を参照してください。
+:::
+
 ### 2. tempo 範囲チェック (Warning)
 
 `.tempo(N)` の N が 20 未満または 999 超なら `DiagnosticSeverity.Warning`。正規表現 `/\.tempo\((\d+)\)/` でキャプチャし、範囲外の数値の桁のみをハイライトします (`start` / `start + tempoMatch[1].length`)。
@@ -459,6 +463,21 @@ flowchart TD
 ```
 
 ---
+
+## 関連用語
+
+- [subject-based block evaluation](/glossary#subject-based-block-evaluation) — `runSelection()` パス 2 の動作モード。カーソル行の subject を元にファイル全体から関連行を収集
+- [flashLines()](/glossary#flashlines) — 実行した行範囲をエディタ上で点滅させる視覚フィードバック関数
+- [DiagnosticCollection](/glossary#diagnosticcollection) — `updateDiagnostics()` が書き込む診断コレクション。タイピングごとに更新
+- [DiagnosticTag.Deprecated](/glossary#diagnostictagdeprecated) — `sequence ` キーワード検出時に付加するタグ。取り消し線スタイルで表示
+- [Extension Host](/glossary#extension-host) — `runSelection()` と `flashLines()` が動くプロセス。engine への stdin 送信もここで行う
+- [setDocumentDirectory](/glossary#setdocumentdirectory) — global ブロック評価時に自動注入される相対パス解決コマンド
+- [language ID (orbitscore)](/glossary#language-id-orbitscore) — `runSelection()` が最初に確認するガード条件。`.osc` ファイル以外では実行しない
+- [DSL (Domain-Specific Language)](/glossary#dsl) — engine の stdin に送られるテキスト。`codeToSend + '\n'` の形式
+
+## 関連 ADR
+
+- [ADR-002 DSL v3 Pivot](/decisions/adr-002-dsl-v3-pivot) — `sequence ` キーワードが deprecated として検出される背景 (v1.0 MIDI DSL の残滓)
 
 ## 次の深掘り候補
 

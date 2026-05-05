@@ -234,6 +234,23 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 
 ---
 
+## 関連用語
+
+- [DSL (Domain-Specific Language)](/glossary#dsl) — 本 ADR の主題。v1.0 MIDI DSL から v3.0 Audio DSL への進化
+- [アンダースコアプレフィックスパターン](/glossary#アンダースコアプレフィックスパターン) — v3.0 で導入した `method()` vs `_method()` の区別
+- [片記号方式](/glossary#片記号方式) — v3.0 の `RUN()` / `LOOP()` / `MUTE()` セマンティクス
+- [RUN](/glossary#run) — v3.0 で導入した片記号方式の 1 回再生コマンド
+- [LOOP](/glossary#loop) — v3.0 で導入した片記号方式のループコマンド
+- [MUTE / UNMUTE](/glossary#mute--unmute) — v3.0 で `UNMUTE` キーワードを廃止し片記号方式に統一
+- [sequence (旧キーワード)](/glossary#sequence-旧キーワード) — v1.0 の `sequence name { }` 構文。v2.0 で廃止。`DiagnosticTag.Deprecated` で警告表示
+- [init](/glossary#init) — v2.0 で `sequence` キーワードを置き換えた `var seq = init global.seq` 構文
+- [ICMC (International Computer Music Conference)](/glossary#icmc-international-computer-music-conference) — DSL 設計変更と密接に関わる発表目標
+
+## 関連 ADR
+
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — v1.0 → v2.0 pivot (MIDI → Audio) を支えたオーディオエンジン採用の意思決定
+- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — v2.0 以降の Audio DSL を動かす scsynth の配布戦略
+
 ## 次の深掘り候補
 
 - v2.0 pivot の意思決定記録の発掘 — PR やコミット本文に詳細な議論が残っていないか確認

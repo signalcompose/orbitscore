@@ -273,6 +273,22 @@ commit `1569110` の "Dev workflow への影響" セクション:
 
 ---
 
+## 関連用語
+
+- [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — 本 ADR の核心。SC.app への暗黙 fallback を持たない fail-loud 設計
+- [bundle (scsynth source)](/glossary#bundle-scsynth-source) — `.vsix` に同梱された scsynth バイナリ。resolver の第 3 優先候補
+- [explicit (scsynth source)](/glossary#explicit-scsynth-source) — resolver の最優先。`orbitscore.scsynthPath` 設定値
+- [env (scsynth source)](/glossary#env-scsynth-source) — `ORBIT_SCSYNTH_PATH` 環境変数。dev 環境で SC.app を指定する方法
+- [ScsynthNotFoundError](/glossary#scsynthnotfounderror) — 3 候補すべて miss 時に throw されるエラークラス
+- [ScsynthResolution](/glossary#scsynthresolution) — `resolveScsynthPath()` の返り値型
+- [scsynth](/glossary#scsynth) — bundle の主役。universal binary (arm64 + x86_64)
+- [StatusBarItem](/glossary#statusbaritem) — `bundleStatusItem` が bundle 解決状態を表示するための VS Code API
+
+## 関連 ADR
+
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — scsynth を採用した理由。本 ADR の bundle 戦略はこの選択の帰結
+- [ADR-002 DSL v3 Pivot](/decisions/adr-002-dsl-v3-pivot) — scsynth に依存する Audio DSL が確定した意思決定
+
 ## 次の深掘り候補
 
 - `build:bundle` スクリプトの実装 — scsynth を SC.app から抽出・配置する処理の詳細

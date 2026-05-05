@@ -435,6 +435,23 @@ flowchart TD
 
 ---
 
+## 関連用語
+
+- [activate() / deactivate()](/glossary#activate--deactivate) — VS Code 拡張のライフサイクル関数。本章で詳説する `activate()` がすべての登録を行う
+- [activationEvents](/glossary#activationevents) — `"onStartupFinished"` と `"onLanguage:orbitscore"` の 2 種類で常時起動を実現
+- [Extension Host](/glossary#extension-host) — 拡張コードが動く Node.js プロセス。engine プロセスの親プロセス
+- [StatusBarItem](/glossary#statusbaritem) — `statusBarItem` (priority 100) と `bundleStatusItem` (priority 99) の 2 本を管理
+- [language ID (orbitscore)](/glossary#language-id-orbitscore) — `.osc` ファイルに割り当てた言語 ID。IntelliSense・診断・キーバインドがすべてこの ID でフィルタリング
+- [DiagnosticCollection](/glossary#diagnosticcollection) — `updateDiagnostics()` が書き込む診断コレクション。タイピングのたびに更新
+- [scsynth](/glossary#scsynth) — `resolveScsynthForUI()` が起動前に解決するオーディオサーバーバイナリ
+- [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — scsynth が見つからなければ spawn 自体をキャンセルする fail-loud 設計
+- [MethodChainContext](/glossary#methodchaincontext) — IntelliSense が文脈に応じた補完候補を出すためのメソッドチェーン状態表現
+
+## 関連 ADR
+
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — engine が scsynth を必要とする背景
+- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — `resolveScsynthForUI()` の優先順位と fail-loud 設計の意思決定
+
 ## 次の深掘り候補
 
 - `registerCompletionProviders` と `registerHoverProvider` の実装詳細 (`extension.ts` の別セクション)

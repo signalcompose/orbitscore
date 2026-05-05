@@ -88,6 +88,16 @@ status: stub | draft | reviewed | stable
 
 stub の段階では `verified-against` `verified-at` は省略可、`status: stub` のみ必須。
 
+#### `verified-against` の更新ポリシー
+
+`verified-against` は「この章を書いた時点で参照したコードの commit」を示すスナップショットです。コードが進化すると当然乖離していきます。更新タイミングは以下を原則とします:
+
+- **章本文を実質的に書き直したとき**: 必ず最新 commit (短縮 sha) に更新する
+- **小規模 cross-link / 体裁修正のみ**: 更新しない (本文内容と code の対応関係に変更がないため)
+- **`status` を `reviewed` / `stable` に昇格させるとき**: その時点で最新 commit に再検証して更新する
+
+つまり「`verified-against` が古い = 章が古い」とは限らず、**「本文と code が乖離していないかを確認した最後の時点」** という意味になります。読者が章を読むときに「このスナップショットからどれだけコードが動いたか」を `git log <sha>..HEAD -- <相当 path>` で追えるのが目的です。
+
 ## 5. `## Sources` の最低要件
 
 - ファイル参照は `<file-path>:<start>-<end>` の line range 付き

@@ -225,6 +225,22 @@ flowchart TD
 
 extension は起動時と設定変更時に `updateBundleStatus()` を呼び、resolver の結果をステータスバーに表示します。source が `'bundle'`, `'env'`, `'explicit'` のいずれかが表示され、未解決なら `$(error) scsynth: not found` と強調表示されます。SC.app fallback がないため、「一見動いているように見えて実はおかしい」という状態が発生しにくい設計です。
 
+## 関連用語
+
+- [scsynth](/glossary#scsynth) — 本章が扱うバイナリ本体。universal binary (arm64 + x86_64) として bundle に同梱
+- [bundle (scsynth source)](/glossary#bundle-scsynth-source) — `ScsynthSource` の 3 番目の候補。`bundleCandidatePath()` が `__dirname` 相対で解決
+- [explicit (scsynth source)](/glossary#explicit-scsynth-source) — resolver の最優先候補。`orbitscore.scsynthPath` 設定値
+- [env (scsynth source)](/glossary#env-scsynth-source) — `ORBIT_SCSYNTH_PATH` 環境変数。開発時に SC.app を指定する用途
+- [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — SC.app への暗黙 fallback を持たない fail-loud 設計
+- [ScsynthNotFoundError](/glossary#scsynthnotfounderror) — 3 候補すべて miss 時に throw されるエラー。`searched` フィールドで探索済みパスを報告
+- [ScsynthResolution](/glossary#scsynthresolution) — `resolveScsynthPath()` の返り値型。`path` / `source` / `searched` の 3 フィールド
+- [StatusBarItem](/glossary#statusbaritem) — bundle 解決状態を表示する VS Code API。`bundleStatusItem` (priority 99) に解決結果を表示
+
+## 関連 ADR
+
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — scsynth を採用した理由と SuperCollider 依存の背景
+- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — 本章の内容を意思決定の視点から詳説する ADR
+
 ## 次の深掘り候補
 
 - **bundle 抽出スクリプト (`extract-scsynth-bundle.sh`) の詳細**: SC.app からどう scsynth / plugins / libsndfile を抽出しているか。universal binary の確認手順
