@@ -17,6 +17,7 @@ function openZoomOverlay(wrapper: HTMLElement) {
   const overlay = document.createElement('div')
   overlay.className = ZOOM_OVERLAY_CLASS
   overlay.setAttribute('role', 'dialog')
+  overlay.setAttribute('aria-modal', 'true')
   overlay.setAttribute('aria-label', 'Enlarged diagram')
 
   const inner = document.createElement('div')
@@ -39,9 +40,15 @@ function openZoomOverlay(wrapper: HTMLElement) {
   overlay.appendChild(inner)
   overlay.appendChild(closeBtn)
 
+  // 開く前のフォーカス位置を覚えておき、閉じた後に復元する (a11y)
+  const previousActive = document.activeElement as HTMLElement | null
+
   const close = () => {
     overlay.remove()
     document.removeEventListener('keydown', onKey)
+    if (previousActive && typeof previousActive.focus === 'function') {
+      previousActive.focus()
+    }
   }
 
   const onKey = (e: KeyboardEvent) => {
@@ -60,6 +67,9 @@ function openZoomOverlay(wrapper: HTMLElement) {
 
   document.addEventListener('keydown', onKey)
   document.body.appendChild(overlay)
+
+  // 開いた直後に close ボタンへ初期フォーカス (スクリーンリーダー用、ESC 等の操作起点)
+  closeBtn.focus()
 }
 
 function enhanceWrapper(wrapper: HTMLElement) {

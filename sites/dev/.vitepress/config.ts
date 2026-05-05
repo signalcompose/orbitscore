@@ -42,7 +42,7 @@ export default withMermaid(
         },
       ],
       sidebar,
-      outline: { level: [2, 3], label: 'On this page' },
+      outline: { level: [2, 3], label: 'このページの目次' },
       search: { provider: 'local' },
       lastUpdatedText: '最終更新',
       docFooter: {
