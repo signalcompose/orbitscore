@@ -17,6 +17,52 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.67 Issue #160: Install vitepress-learning-site skill (May 05, 2026)
+
+**Date**: May 05, 2026
+**Status**: ✅ COMPLETE (infra のみ、scaffold は別 PR)
+**Branch**: `160-install-vitepress-learning-skill`
+**Issue**: #160
+
+**Work Content**: dev 学習サイト構築 (post-ICMC) の前段として [yuichkun/.claude](https://github.com/yuichkun/.claude/tree/main/skills/vitepress-learning-site) の `vitepress-learning-site` skill を `.claude/skills/` 配下に install。作者承諾済、verbatim copy (上流 commit `66e544d`)。本 PR は infra のみ、サイト本体の scaffold は別 issue で対応予定。
+
+**動機**: LLM 駆動開発で生じる「実装レイヤーの理解の構造的欠落」 (仕様考案 → LLM 実装 → 動作確認、という cycle で実装中に知識が獲得されない問題) を補う仕組み。dev 学習サイトを開発サイクルに組み込むことで、code から explanation を生成 → audit → 著者が読んで編集する loop を回す。
+
+**install 構成** (12 ファイル、verbatim):
+- `.claude/skills/vitepress-learning-site/SKILL.md`
+- `.claude/skills/vitepress-learning-site/references/*.md` (8 ファイル)
+- `.claude/skills/vitepress-learning-site/assets/*` (3 ファイル)
+
+**設計上の決定 (advisor 経由で確定)**:
+- `.claude/skills-config/` のような新規 convention を **発明しない** (Claude Code 公式 schema との衝突リスク、discovery が指示ベース、community precedent ゼロ、bus factor 悪化の懸念)
+- 代わりに **既存 pattern (project CLAUDE.md → docs/development/ への参照)** を使う
+- skill overrides + project brief は [`docs/development/DEV_LEARNING_SITE.md`](DEV_LEARNING_SITE.md) に集約
+- CLAUDE.md に `## 🎓 Skill: vitepress-learning-site の運用` section を追加し、skill 起動前に DEV_LEARNING_SITE.md を必ず読む指示を明記
+
+**新規 / 更新ファイル**:
+- 新規: `.claude/skills/vitepress-learning-site/` 配下 12 ファイル
+- 新規: `docs/development/DEV_LEARNING_SITE.md` (project brief + skill Phase 1-8 overrides)
+- 更新: `CLAUDE.md` (skill 運用 section 追加、Documentation Structure list に DEV_LEARNING_SITE エントリ追加)
+- 更新: `docs/core/INDEX.md` (Development table に DEV_LEARNING_SITE エントリ追加)
+- 更新: 本ファイル (エントリ追加)
+
+**Skill overrides の主要決定** (詳細は DEV_LEARNING_SITE.md):
+- audience = self (yamato 自身、実装学習)
+- language = 日本語 only (start)、en は post-ICMC で検討
+- primary source = own codebase
+- site location = `sites/dev/`、章構造は code tree mirror
+- external audit = advisor (会話 context) で代替、Codex/Gemini は precondition でない
+- 各章 frontmatter に `verified-against: <commit-sha>` 必須 (doc rot を解消ではなく document する artifact framing)
+- deploy = post-ICMC で GitHub Pages、initial は local-only
+
+**Out of Scope (別 issue / 別 PR で対応)**:
+- dev 学習サイト本体の scaffold (`sites/dev/` の VitePress 設定、章ファイル骨格)
+- routine 設計 (PR merge 時の章更新 trigger 等、post-ICMC)
+- ICMC 用 minimum user site
+- 既存 docs/ から dev/user 両サイトへの段階的移行
+
+---
+
 ### 6.66 Issue #137: Marketplace + Open VSX automated publish workflow (May 02, 2026)
 
 **Date**: May 02, 2026

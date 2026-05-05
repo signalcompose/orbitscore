@@ -34,6 +34,7 @@ OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider a
 | [WORK_LOG.md](../development/WORK_LOG.md) | Recent development log (May 2026 onward; older entries archived by month) |
 | [IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md) | Phase-by-phase technical roadmap |
 | [BEAT_METER_SPECIFICATION.md](../development/BEAT_METER_SPECIFICATION.md) | Beat / meter / polymeter specification |
+| [DEV_LEARNING_SITE.md](../development/DEV_LEARNING_SITE.md) | dev 学習サイト project brief + `vitepress-learning-site` skill 運用 overrides |
 
 ### Archived WORK_LOG (`docs/archive/`)
 
