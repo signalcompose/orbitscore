@@ -1,5 +1,9 @@
 # SoT 整合性検証レポート (2026-05-06)
 
+> **ステータス**: ✅ 検出された違反 (Critical 1, Major 3 のうち 3 件) はすべて commit `2251e78` で修正済み。
+> Major 4 (`execution-feedback.md` の `extension.ts:1102-1108`) は再検証の結果 audit 側の誤検出と判明、修正不要。
+> 本ファイルは検証履歴として保存。**未対応の違反はもはや存在しません**。
+
 ## 検証範囲
 
 - 16 章 (orientation×1, pipeline×3, scheduling×4, audio×3, editor×2, decisions×3, glossary×1)
