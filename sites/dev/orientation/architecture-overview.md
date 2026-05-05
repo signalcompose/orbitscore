@@ -10,11 +10,13 @@ status: draft
 
 # 0-2. アーキテクチャ全景
 
-`.osc` ファイルに `seq.play(1, 2, 3)` と書いて `Cmd+Enter` を押す。数秒後に音が出る。その間に何が起きているか — それが本章の問いだ。
+`.osc` ファイルに `seq.play(1, 2, 3)` と書いて `Cmd+Enter` を押すと、数秒後に音が出ます。その間に何が起きているのでしょう。それが本章の問いです。
 
-答えは 3 つのプロセスにまたがる。**VS Code extension** (UI 層)、**engine** (Node.js DSL ランタイム)、**scsynth** (SuperCollider オーディオサーバー) だ。それぞれが独立したプロセスとして動き、明確な境界で責務を分担している。
+答えはひとつのプロセスの中ではなく、**3 つのプロセスにまたがって** います。**VS Code extension** (UI 層)、**engine** (Node.js DSL ランタイム)、**scsynth** (SuperCollider オーディオサーバー) の 3 つです。それぞれが独立したプロセスとして動き、明確な境界で責務を分担しています。
 
 ## 3 層の全体像
+
+まず、全体像から見ていきましょう。次の図は 3 つのプロセスとその間の通信方法を示したものです。
 
 ```mermaid
 graph TD
@@ -48,23 +50,29 @@ graph TD
 
 ### 各層の責務
 
+3 つの層がそれぞれ何を担当しているかを表にまとめます。
+
 | 層 | プロセス | 言語 | 責務 |
 |---|---|---|---|
-| **VS Code extension** | Extension Host (Node.js、Renderer から fork) | TypeScript | ユーザー入力受付、engine spawn/kill、scsynth パス解決、ステータス表示 |
-| **engine** | Node.js | TypeScript | DSL パース、AST 解釈、イベントスケジュール、OSC メッセージ生成 |
+| **VS Code extension** | Extension Host (Node.js、Renderer から fork) | TypeScript | ユーザー入力の受付、engine の spawn / kill、scsynth パスの解決、ステータス表示 |
+| **engine** | Node.js | TypeScript | DSL のパース、AST の解釈、イベントのスケジュール、OSC メッセージの生成 |
 | **scsynth** | C++ ネイティブ | C++ | DSP 処理、バッファ読み込み、実際の音声出力 |
+
+責務がきれいに分かれているのが分かります。**入力** は extension が受け、**意味** は engine が解釈し、**音** は scsynth が作る、という分業です。
 
 ## 各層の詳細
 
+ここからは 1 層ずつ、もう少し近づいて見ていきましょう。
+
 ### VS Code extension 層
 
-`packages/vscode-extension/src/extension.ts` が activation のエントリポイントだ。`activate()` で行うことは大きく 3 つ:
+`packages/vscode-extension/src/extension.ts` が activation のエントリポイントです。`activate()` 関数が VS Code から呼ばれたとき、大きく次の 3 つのことをやっています。
 
-1. **ステータスバー登録**: `statusBarItem` (エンジン状態) と `bundleStatusItem` (scsynth 解決状態) を作り、常時表示する
-2. **コマンド登録**: `orbitscore.toggleEngine`、`orbitscore.runSelection`、`orbitscore.stopEngine` 等
-3. **言語機能**: CompletionProvider と HoverProvider を `orbitscore` 言語 ID に束縛
+1. **ステータスバーの登録**: `statusBarItem` (engine の状態) と `bundleStatusItem` (scsynth 解決状態) という 2 本のアイコンを用意し、常に表示する
+2. **コマンドの登録**: `orbitscore.toggleEngine`、`orbitscore.runSelection`、`orbitscore.stopEngine` といったコマンドを VS Code に教える
+3. **言語機能の登録**: CompletionProvider と HoverProvider を `orbitscore` 言語 ID に束縛する (補完とホバーが効くようになります)
 
-engine の起動は `startEngine()` 関数が担う。重要な点は、engine を spawn する前に必ず scsynth パスの解決を先行させることだ:
+engine の起動は `startEngine()` 関数が担います。ここで気をつけたいのは、**engine を spawn する前に必ず scsynth パスの解決を先行させる** という点です。
 
 ```typescript
 // extension.ts:692-696
@@ -75,9 +83,9 @@ if (!scResolution) {
 }
 ```
 
-解決に失敗した場合は engine を spawn しない。engine 起動後に boot 失敗する場合と比べ、エラー通知が 1 回で済む。
+scsynth が見つからないなら、そもそも engine を起動しません。理由はシンプルで、engine 起動後に boot 失敗するよりも、起動前に止めたほうがエラー通知が 1 回で済むからです。
 
-engine プロセス本体は `child_process.spawn` で Node.js を起動する:
+engine プロセス本体は `child_process.spawn` で Node.js を起動します。
 
 ```typescript
 // extension.ts:739-743
@@ -88,18 +96,18 @@ engineProcess = child_process.spawn('node', [enginePath, ...args], {
 })
 ```
 
-`stdio: ['pipe', 'pipe', 'pipe']` の意味: stdin / stdout / stderr がすべてパイプになっている。DSL テキストは **stdin に書き込む** ことで engine に渡る。
+`stdio: ['pipe', 'pipe', 'pipe']` は何かと言うと、stdin / stdout / stderr の 3 本がすべてパイプとして親プロセス (extension) から触れる、という意味です。これによって DSL テキストを **stdin に書き込む** ことで engine に渡せます。
 
 ```typescript
 // extension.ts:1107
 engineProcess.stdin?.write(codeToSend + '\n')
 ```
 
-これが「`Cmd+Enter` を押すと音が出る」フローの最初の一歩だ。
+これが「`Cmd+Enter` を押すと音が出る」フローの最初の一歩、つまり **DSL テキストを engine に届ける** という最初の動作になります。
 
 ### engine 層
 
-engine のエントリポイントは `packages/engine/src/cli-audio.ts`。`repl` コマンドで起動すると `startREPLMode()` が呼ばれる:
+engine のエントリポイントは `packages/engine/src/cli-audio.ts` です。`repl` というコマンドで起動すると `startREPLMode()` が呼ばれ、interpreter を作って boot するという 3 ステップが走ります。
 
 ```typescript
 // cli/repl-mode.ts:27-38
@@ -110,14 +118,14 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
 }
 ```
 
-`boot()` の中では `SuperColliderPlayer.boot()` が呼ばれ、scsynth プロセスが起動する (詳細は後述)。
+`boot()` の中では `SuperColliderPlayer.boot()` が呼ばれて、scsynth プロセスが起動します (この詳細は次の audio 層のところで見ます)。
 
-REPL ループは readline で stdin を監視し、受信した行を DSL テキストとして解釈する。実際の処理は 2 段階:
+REPL ループは readline で stdin を監視していて、受信した行を DSL テキストとして解釈します。実際の処理は 2 段階です。
 
-1. **parse**: `parseAudioDSL(text)` → `AudioIR` (AST 相当の中間表現)
-2. **execute**: `interpreter.execute(ir)` → メソッド呼び出し → スケジュール登録
+1. **parse**: `parseAudioDSL(text)` がテキストを `AudioIR` (AST 相当の中間表現) に変換する
+2. **execute**: `interpreter.execute(ir)` が IR を辿って必要なメソッドを呼び出す
 
-`AudioIR` の型は `packages/engine/src/parser/types.ts` に定義されており、3 つのフィールドを持つ:
+`AudioIR` の型は `packages/engine/src/parser/types.ts` で定義されていて、3 つのフィールドを持ちます。
 
 ```typescript
 // parser/types.ts:36-40
@@ -128,7 +136,7 @@ export type AudioIR = {
 }
 ```
 
-`statements` 配列の各要素は `GlobalStatement`、`SequenceStatement`、`TransportStatement` のいずれかだ。`processStatement()` がこれをルーティングし、対象オブジェクト (Global / Sequence) の対応するメソッドを `callMethod()` 経由で呼び出す。
+`statements` 配列の各要素は `GlobalStatement`、`SequenceStatement`、`TransportStatement` のいずれかです。`processStatement()` がこれを type に応じて振り分け、対象オブジェクト (Global / Sequence) の対応するメソッドを `callMethod()` 経由で呼び出します。
 
 ```typescript
 // interpreter/evaluate-method.ts:23-38
@@ -141,21 +149,21 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 }
 ```
 
-`play()` メソッドが呼ばれると、最終的に `EventScheduler.scheduleEvent()` が実行され、再生イベントがタイムスタンプ付きでキューに積まれる。
+たとえば `seq.play()` が呼ばれると、最終的に `EventScheduler.scheduleEvent()` が実行され、再生イベントがタイムスタンプ付きで内部キューに積まれます。
 
 ### audio / scsynth 層
 
-`SuperColliderPlayer` は engine 内部における audio 層の境界面だ。内部は 4 つのクラスに分割されている:
+`SuperColliderPlayer` は engine の中における audio 層の境界面です。中身は 4 つのクラスに分かれていて、それぞれ違う仕事をしています。
 
 ```
 SuperColliderPlayer
-├── OSCClient       ← supercolliderjs 経由で scsynth と通信
-├── BufferManager   ← 音声ファイルのバッファ管理 (bufnum ↔ filepath)
-├── EventScheduler  ← タイムライン管理 + OSC 送信タイミング制御
-└── SynthDefLoader  ← SynthDef の読み込み (orbitPlayBuf 等)
+├── OSCClient       ← supercolliderjs 経由で scsynth と通信する
+├── BufferManager   ← 音声ファイルのバッファ管理 (bufnum ↔ filepath の対応)
+├── EventScheduler  ← タイムライン管理と OSC 送信タイミング制御
+└── SynthDefLoader  ← SynthDef (orbitPlayBuf 等) の読み込み
 ```
 
-scsynth との通信は **OSC (Open Sound Control) over UDP** だ。具体的なメッセージは `EventScheduler.sendPlaybackMessage()` が送出する:
+scsynth との通信は **OSC (Open Sound Control) over UDP** で行います。具体的なメッセージは `EventScheduler.sendPlaybackMessage()` が送出します。
 
 ```typescript
 // audio/supercollider/event-scheduler.ts:317-335
@@ -175,9 +183,9 @@ await this.oscClient.sendMessage([
 ])
 ```
 
-`/s_new` は SuperCollider Server Command Reference に定義された標準 OSC コマンドで、SynthDef `orbitPlayBuf` のインスタンスを生成して即時再生する。
+`/s_new` は SuperCollider Server Command Reference に定義された標準 OSC コマンドで、SynthDef `orbitPlayBuf` のインスタンスを生成して即時再生します。
 
-`EventScheduler.start()` はタイマー (setInterval 1ms) を起動し、経過時間とイベントキューを突き合わせて再生タイミングを制御する:
+`EventScheduler.start()` は 1ms 周期のタイマー (setInterval) を起動して、経過時間とイベントキューを突き合わせて再生タイミングをコントロールします。
 
 ```typescript
 // audio/supercollider/event-scheduler.ts:155-177
@@ -192,7 +200,7 @@ this.intervalId = setInterval(() => {
 
 ## scsynth は別プロセス
 
-実装上で特に気になるのは、**scsynth は extension に bundle 同梱されている** という事実だ。
+実装を読んでいて面白いのは、**scsynth が extension に bundle 同梱されている** という事実です。
 
 ```
 packages/vscode-extension/
@@ -202,7 +210,7 @@ packages/vscode-extension/
         └── Contents/Resources/scsynth
 ```
 
-`scsynth-resolver.ts` はこのバンドルパスを最後の候補として試みる (strict mode):
+`scsynth-resolver.ts` はこのバンドルパスを最後の候補として試みます。ここでの設計が strict mode と呼ばれるものです。
 
 ```typescript
 // audio/supercollider/scsynth-resolver.ts:91-98
@@ -214,9 +222,9 @@ return (
 )
 ```
 
-優先順位は `explicit > env (ORBIT_SCSYNTH_PATH) > bundle`。SC.app や Spotlight への暗黙 fallback は意図的に持たない (Issue #136、PR #155 で確定した strict mode の方針)。
+優先順位は `explicit > env (ORBIT_SCSYNTH_PATH) > bundle` です。ここで意図的なのは、**SC.app や Spotlight への暗黙 fallback を持たない** という点です (Issue #136、PR #155 で確定した方針)。SC.app fallback があると bundle 抽出失敗を SC.app が肩代わりしてしまい、production の不具合を隠蔽するリスクがあるためです。
 
-`OSCClient.boot()` が `supercolliderjs` ライブラリ経由で scsynth を起動すると、scsynth は **engine から見ると child process** として動く。ただし通信は stdin/stdout ではなく OSC over UDP だ (scsynth は default で UDP listener、TCP は `-t <port>` 起動オプション指定時のみ)。
+`OSCClient.boot()` が `supercolliderjs` ライブラリ経由で scsynth を起動すると、scsynth は **engine から見ると child process** として動きます。ただし通信は stdin/stdout ではなく OSC over UDP です (scsynth は default で UDP listener、TCP は `-t <port>` 起動オプション指定時のみ)。
 
 ```typescript
 // audio/supercollider/osc-client.ts:46-48
@@ -224,11 +232,11 @@ return (
 this.server = await sc.server.boot(bootOptions)
 ```
 
-`supercolliderjs` が scsynth のライフサイクル管理 (spawn / kill / `/status` 経由の alive 判定) を担い、engine はその上で OSC メッセージを送受信する。
+`supercolliderjs` が scsynth のライフサイクル管理 (spawn / kill / `/status` 経由の alive 判定) を担い、engine はその上で OSC メッセージを送受信する、という形です。
 
 ## 「play() → 音」の data flow
 
-以上を踏まえ、`seq.play(1, 2, 3)` を `Cmd+Enter` で評価した場合の全体 flow を sequence diagram で示す。
+ここまでの話を踏まえて、`seq.play(1, 2, 3)` を `Cmd+Enter` で評価したときの全体 flow を sequence diagram で見てみましょう。
 
 ```mermaid
 sequenceDiagram
@@ -259,16 +267,16 @@ sequenceDiagram
   SC-->>User: audio out (スピーカー)
 ```
 
-注目したいのは 2 点:
+この図で注目したいのは 2 点です。
 
-1. **extension は DSL を解釈しない**: テキストをそのまま stdin に流す。解釈は engine が担う
-2. **engine は音を鳴らさない**: OSC メッセージを生成するだけ。音声 DSP は scsynth が担う
+1. **extension は DSL を解釈しません**: テキストをそのまま stdin に流すだけで、解釈は engine が担います
+2. **engine は音を鳴らしません**: OSC メッセージを生成するだけで、音声 DSP は scsynth が担います
 
-この責務分離があるため、将来 engine を差し替えても scsynth 側は変わらず、scsynth を別バイナリに差し替えても engine 側の parser / interpreter は変わらない。
+この責務分離があるおかげで、将来 engine を差し替えても scsynth 側は変わらず、scsynth を別バイナリに差し替えても engine 側の parser / interpreter は変わらない、という構造的な強さが生まれています。
 
 ## 後続章へのナビゲーション
 
-本章は「全体像を把握する」ための浅い first pass だ。各層の詳細は対応する章で扱う。
+本章は「全体像を把握する」ための浅い first pass でした。各層の詳細はこれから対応する章で扱っていきます。
 
 | 関心領域 | 参照先 |
 |---|---|
@@ -279,12 +287,14 @@ sequenceDiagram
 
 ## 次の深掘り候補
 
-- **scsynth バンドル戦略**: なぜ SC.app fallback を持たないか。strict mode の判断経緯 (Issue #136) の詳細読解
-- **supercolliderjs の内部**: `sc.server.boot()` が内部でどう scsynth を spawn しているか。supercolliderjs のソース追跡
-- **engine ↔ extension 間の型境界**: `resolveScsynthForUI()` が engine の compiled JS を `require()` する構造。build artifact 依存の管理方針
-- **setInterval(1ms) の精度**: Node.js の `setInterval` は 1ms を保証しない。実際の drift 特性と timing 精度の影響
-- **OSC メッセージのバッファリング**: `sendMessage` は毎回 UDP を送出するか。`supercolliderjs` の内部バッファリング戦略
-- **SynthDef `orbitPlayBuf` の実体**: engine 側から `/s_new` で呼ばれる SynthDef の定義はどこにあり、scsynth にどうロードされるか
+ここから先、もう一段深く読みたい話題は次のとおりです。それぞれ独立した issue として起票して別章で扱う想定です。
+
+- **scsynth バンドル戦略**: なぜ SC.app fallback を持たないのか。strict mode の判断経緯 (Issue #136) を当時の議論ごと辿る
+- **supercolliderjs の内部**: `sc.server.boot()` がどう scsynth を spawn しているのか。supercolliderjs のソース追跡
+- **engine ↔ extension 間の型境界**: `resolveScsynthForUI()` が engine の compiled JS を `require()` する構造。build artifact 依存をどう管理しているか
+- **setInterval(1ms) の精度**: Node.js の `setInterval` は 1ms を保証しません。実際の drift 特性と timing 精度への影響
+- **OSC メッセージのバッファリング**: `sendMessage` は毎回 UDP を送出しているのか、それとも `supercolliderjs` 内部でバッファリングしているのか
+- **SynthDef `orbitPlayBuf` の実体**: engine から `/s_new` で呼ばれている SynthDef の定義はどこにあって、scsynth にどうロードされているのか
 
 ## Sources
 

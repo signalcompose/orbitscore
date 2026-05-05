@@ -1,0 +1,118 @@
+/* Mermaid 図の表示幅を column 幅まで拡張する。
+ * vitepress-plugin-mermaid のデフォルトは SVG が content size に縮むため、
+ * 複雑な図 (subgraph 多数 / sequence diagram) が小さく描画されて読めない。
+ *
+ * useMaxWidth: true (mermaid デフォルト) と組み合わせて、CSS 側でも
+ * width: 100% を強制する。横長の図はスクロールではなく拡大表示。
+ */
+.mermaid-wrapper {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin: 1.5em 0;
+  overflow-x: auto;
+}
+
+.mermaid-wrapper svg {
+  width: 100% !important;
+  height: auto !important;
+  max-width: 100% !important;
+  min-width: 700px;
+  font-size: 14px !important;
+}
+
+/* sequenceDiagram のラベル文字を読みやすく */
+.mermaid-wrapper svg .messageText,
+.mermaid-wrapper svg .labelText,
+.mermaid-wrapper svg .nodeLabel,
+.mermaid-wrapper svg .actor text {
+  font-size: 14px !important;
+}
+
+/* dark theme でラベルが見づらくならないよう色は CSS 変数経由 */
+.mermaid-wrapper svg text {
+  fill: var(--vp-c-text-1);
+}
+
+/* Mermaid 図クリック拡大表示 (theme/mermaid-zoom.ts と連動)
+ *
+ * column 幅で読みづらい複雑な図のために、クリックで fullscreen overlay を開く。
+ * 複雑になるほど詳細を確認したくなる、というケースに対応。
+ */
+
+.mermaid-zoomable {
+  cursor: zoom-in;
+  transition: outline-color 0.15s ease;
+  outline: 2px solid transparent;
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.mermaid-zoomable:hover {
+  outline-color: var(--vp-c-brand-1);
+}
+
+.mermaid-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.92);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  padding: 2rem;
+  animation: mermaid-zoom-fade-in 0.15s ease;
+}
+
+@keyframes mermaid-zoom-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.mermaid-zoom-inner {
+  width: 100%;
+  height: 100%;
+  max-width: 95vw;
+  max-height: 90vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+
+.mermaid-zoom-inner svg {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  font-size: 18px !important;
+}
+
+.mermaid-zoom-inner svg text,
+.mermaid-zoom-inner svg .messageText,
+.mermaid-zoom-inner svg .labelText,
+.mermaid-zoom-inner svg .nodeLabel,
+.mermaid-zoom-inner svg .actor text {
+  font-size: 18px !important;
+  fill: var(--vp-c-text-1);
+}
+
+.mermaid-zoom-close {
+  position: absolute;
+  top: 1rem;
+  right: 1.25rem;
+  background: transparent;
+  border: 0;
+  color: white;
+  font-size: 2.5rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem 0.75rem;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+
+.mermaid-zoom-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
