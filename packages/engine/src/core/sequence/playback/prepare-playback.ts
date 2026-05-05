@@ -53,11 +53,15 @@ export async function preparePlayback(
   prepareSlicesFn()
 
   // Preload buffer to get correct duration
+  // audioFilePath is always absolute (sequence.audio() resolves at set time)
   if (audioFilePath && scheduler.loadBuffer) {
-    const resolvedPath = path.isAbsolute(audioFilePath)
-      ? audioFilePath
-      : path.resolve(process.cwd(), audioFilePath)
-    await scheduler.loadBuffer(resolvedPath)
+    if (!path.isAbsolute(audioFilePath)) {
+      throw new Error(
+        `Audio file path is not absolute: "${audioFilePath}". ` +
+          `This is an internal error — sequence.audio() should have absolutized the path.`,
+      )
+    }
+    await scheduler.loadBuffer(audioFilePath)
   }
 
   // Clear existing loop timer if any

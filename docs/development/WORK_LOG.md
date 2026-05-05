@@ -17,6 +17,50 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.69 Issue #168: Eliminate environment-dependent audio file path resolution (May 06, 2026)
+
+**Date**: May 06, 2026
+**Status**: ✅ COMPLETE
+**Branch**: `168-audio-path-environment-independence`
+**Issue**: #168
+
+**動機**: `audioPath()` および `audio()` のパス解決に `process.cwd()` フォールバックが残っており、開発環境依存（VS Code workspace の有無、エンジン spawn 時の cwd 等）でサイレントに誤解決される懸念があった。デモ時に「音が鳴らない」事故になりうる。
+
+**設計方針**:
+- パスは 2 種類のみを許容: 絶対パス、または `.osc` ファイルからの相対パス
+- `process.cwd()` フォールバックを完全排除 → 明示エラー
+- `documentDirectory` を常に保証する仕組みを engine / VS Code 拡張 / CLI 各層に整備
+
+**変更内容**:
+
+Engine:
+- `packages/engine/src/core/global/audio-manager.ts`: 相対パス + documentDirectory 未設定の場合に明示エラー
+- `packages/engine/src/core/sequence.ts`: `audio()` で同様のエラー化
+- `packages/engine/src/interpreter/process-statement.ts`: 冗長な防御的解決を削除（`_audioFilePath` は常に絶対パス前提に簡素化）
+- `packages/engine/src/core/sequence/scheduling/event-scheduler.ts`: `process.cwd()` フォールバックを assertion に変更
+- `packages/engine/src/core/sequence/playback/prepare-playback.ts`: 同上
+- `packages/engine/src/interpreter/interpreter-v2.ts`: `execute()` に `documentDirectory` オプションを追加し、global 初期化後に自動セット
+- `packages/engine/src/cli/play-mode.ts`: `.osc` ファイルパスから documentDirectory を自動導出して execute に渡す
+
+VS Code 拡張:
+- `packages/vscode-extension/src/extension.ts`: `setDocumentDirectory` の自動注入を「global ブロック評価時のみ」から拡張。`globalInitialized` フラグでセッション状態を追跡し、init 後の任意の評価でもコード先頭に prepend するように変更（`.osc` ファイル切り替えにも追従）
+
+テスト:
+- `tests/core/audio-path-resolution.spec.ts` 新規追加（7 テスト）: 絶対パス受理、documentDirectory 経由解決、未設定エラー、各ケースを網羅
+- `tests/core/dsl-v3-underscore-methods.spec.ts`: setUp で `setDocumentDirectory('/tmp/test')` を追加
+- `tests/timing/chop-timing.spec.ts`: 同上
+
+ドキュメント:
+- `sites/dev/glossary.md`: `setDocumentDirectory` エントリを新仕様に更新（注入タイミング 2 種、CLI 自動導出、フォールバック非存在を明記）
+- `sites/dev/pipeline/selective-execution.md`: 注入ロジック節を書き換え
+- `sites/dev/editor/execution-feedback.md`: 同上
+
+**テスト結果**: 247 passed / 23 skipped / 270 total
+
+**破壊的変更**: 暗黙の `cwd` 依存で動いていたコードはエラーになる。ICMC 前のため外部影響は限定的と判断。
+
+---
+
 ### 6.68 Issue #162: Scaffold dev learning site + spike chapter 0-2 (May 05, 2026)
 
 **Date**: May 05, 2026

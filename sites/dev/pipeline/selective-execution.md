@@ -128,29 +128,35 @@ subject が `null` の場合 — つまり `RUN(kick, snare)` のようなスタ
 
 ### setDocumentDirectory の注入
 
-送るコードが確定したあと、もう 1 つ処理があります。グローバルブロックを評価するとき、ドキュメントのディレクトリパスを自動注入します。
+送るコードが確定したあと、ドキュメントのディレクトリパスを自動注入します。`audioPath()` および `audio()` の相対パス解決に使われます。
 
 ```typescript
-// extension.ts:1085-1100
-  // Inject setDocumentDirectory when evaluating global block
-  let codeToSend = trimmedText
-  if (
-    !selection.isEmpty ||
-    getLineSubject(editor.document.lineAt(selection.active.line).text) === 'global'
-  ) {
-    // Check if the code contains global init — inject setDocumentDirectory after it
-    const documentDir = path.dirname(editor.document.uri.fsPath)
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-    if (globalInitMatch) {
-      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-      codeToSend =
-        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-    }
-  }
+// extension.ts (実装は条件を簡略化して抜粋)
+let codeToSend = trimmedText
+const documentDir = path.dirname(editor.document.uri.fsPath)
+const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
+if (globalInitMatch) {
+  // global を初期化するブロック評価: init の直後に挿入
+  const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+  codeToSend =
+    codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
+  globalInitialized = true
+} else if (globalInitialized) {
+  // 既に global が存在するセッション: コード先頭に prepend
+  codeToSend = setDirCommand + '\n' + codeToSend
+}
 ```
 
-`var global = init GLOBAL` という行が見つかったら、その直後に `global.setDocumentDirectory("...")` を挿入します。DSL で相対パスのオーディオファイルを指定した場合に、エンジン側が正しいベースディレクトリを知るための仕掛けです。
+注入条件:
+
+1. `var global = init GLOBAL` を含む評価 → init の直後に挿入し、`globalInitialized` フラグを立てる
+2. 上記後の任意の評価 → コード先頭に prepend (`.osc` ファイル切り替えにも追従)
+3. `globalInitialized` が `false` の状態で `init` 行を含まない評価 → 注入しない (`global` 未定義のためエラー回避)
+
+`globalInitialized` フラグは engine プロセスのライフサイクルにバインドされ、起動・再起動・activate のタイミングでリセットされます。
+
+`process.cwd()` へのフォールバックは engine 側に存在しません (Issue #168)。documentDirectory が未設定で相対パスが指定された場合は明示エラーになります。
 
 ### stdin への書き込み
 

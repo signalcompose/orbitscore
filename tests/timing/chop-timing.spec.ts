@@ -19,6 +19,8 @@ describe('Chop Timing', () => {
   beforeEach(() => {
     player = new SuperColliderPlayer()
     global = new Global(player)
+    // Set documentDirectory so relative audio paths resolve in tests
+    global.setDocumentDirectory('/tmp/test')
     sequence = new Sequence(global, player as any)
     sequence.setName('test')
   })

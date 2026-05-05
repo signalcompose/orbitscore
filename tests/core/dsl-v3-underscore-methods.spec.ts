@@ -20,6 +20,8 @@ describe('DSL v3.0: Methods with Seamless Parameter Update', () => {
     } as any
 
     global = new Global(mockPlayer)
+    // Set documentDirectory so relative audio paths resolve in tests
+    global.setDocumentDirectory('/tmp/test')
     seq = new Sequence(global, mockPlayer)
     seq.setName('test')
   })

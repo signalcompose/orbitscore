@@ -59,7 +59,10 @@ export class InterpreterV2 {
    * @param options - Execution options
    * @param options.skipTransportCommands - If true, skip RUN/LOOP/MUTE commands (used on file save)
    */
-  async execute(ir: AudioIR, options?: { skipTransportCommands?: boolean }): Promise<void> {
+  async execute(
+    ir: AudioIR,
+    options?: { skipTransportCommands?: boolean; documentDirectory?: string },
+  ): Promise<void> {
     const skipTransport = options?.skipTransportCommands ?? false
 
     // Ensure SuperCollider is booted
@@ -68,6 +71,11 @@ export class InterpreterV2 {
     // Process global initialization
     if (ir.globalInit) {
       await processGlobalInit(ir.globalInit, this.state)
+    }
+
+    // Set documentDirectory on global so audioPath() / audio() can resolve relative paths
+    if (options?.documentDirectory && this.state.currentGlobal) {
+      this.state.currentGlobal.setDocumentDirectory(options.documentDirectory)
     }
 
     // Process sequence initializations

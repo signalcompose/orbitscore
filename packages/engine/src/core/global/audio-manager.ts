@@ -32,28 +32,23 @@ export class AudioManager {
     // Resolve to absolute path
     let resolved: string
     if (path.isAbsolute(value)) {
-      // Already absolute
       resolved = value
     } else if (this._documentDirectory) {
-      // Relative to the .osc file's directory
       resolved = path.resolve(this._documentDirectory, value)
     } else {
-      // Fallback to process.cwd() if no document context
-      resolved = path.resolve(process.cwd(), value)
+      throw new Error(
+        `Cannot resolve relative audioPath("${value}"): no document context. ` +
+          `Save the .osc file first, or use an absolute path.`,
+      )
     }
 
     // Singleton behavior: only set if different from current value
     if (this._audioPath === resolved) {
-      // Already set to this value, skip
       return this
     }
 
     console.log(`📂 audioPath: ${value} → ${resolved}`)
-    if (this._documentDirectory) {
-      console.log(`📂 base: ${this._documentDirectory} (.osc file directory)`)
-    } else {
-      console.log(`📂 base: ${process.cwd()} (process.cwd)`)
-    }
+    console.log(`📂 base: ${this._documentDirectory} (.osc file directory)`)
 
     this._audioPath = resolved
     return this

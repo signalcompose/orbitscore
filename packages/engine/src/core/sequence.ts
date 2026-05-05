@@ -204,8 +204,10 @@ export class Sequence {
       // Resolve relative to the .osc file's directory
       fullPath = path.resolve(globalState.documentDirectory, filepath)
     } else {
-      // Fallback to process.cwd()
-      fullPath = path.resolve(process.cwd(), filepath)
+      throw new Error(
+        `Cannot resolve relative audio("${filepath}"): no audioPath() or document context. ` +
+          `Set audioPath() first, save the .osc file, or use an absolute path.`,
+      )
     }
 
     this._audioFilePath = fullPath
