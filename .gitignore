@@ -7,6 +7,10 @@ logs/
 *.tsbuildinfo
 .orbitscore.json
 
+# VitePress (sites/*)
+sites/*/.vitepress/cache/
+sites/*/.vitepress/dist/
+
 # Claude Code local settings (per-developer overrides)
 .claude/settings.local.json
 

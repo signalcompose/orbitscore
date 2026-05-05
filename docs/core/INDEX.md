@@ -36,6 +36,16 @@ OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider a
 | [BEAT_METER_SPECIFICATION.md](../development/BEAT_METER_SPECIFICATION.md) | Beat / meter / polymeter specification |
 | [DEV_LEARNING_SITE.md](../development/DEV_LEARNING_SITE.md) | dev 学習サイト project brief + `vitepress-learning-site` skill 運用 overrides |
 
+### Dev Learning Site (`sites/dev/`)
+
+dev 学習サイト本体 (VitePress、ローカル参照は `npm run docs:dev`、deploy は post-ICMC で別 issue):
+
+| Location | Purpose |
+|---|---|
+| [`sites/dev/`](../../sites/dev/) | dev 学習サイト VitePress プロジェクト、yamato 個人学習ノート |
+| [`sites/dev/STYLE_GUIDE.md`](../../sites/dev/STYLE_GUIDE.md) | 章執筆規約 (frontmatter / Sources / 次の深掘り候補 / shallow first pass) |
+| [`sites/dev/orientation/architecture-overview.md`](../../sites/dev/orientation/architecture-overview.md) | spike 章 (0-2 アーキテクチャ全景)、status: draft |
+
 ### Archived WORK_LOG (`docs/archive/`)
 
 | Period | Archive |
