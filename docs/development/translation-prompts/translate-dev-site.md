@@ -1,17 +1,12 @@
-# Translation Prompt: Dev Site (ja → en)
+# Translation Task: Dev Site (ja → en)
 
-このプロンプトは Claude Desktop / Claude on the Web に **そのまま貼り付けて** 使う想定です。
+You are translating the OrbitScore developer learning site (implementation reading notes) from Japanese to English.
 
-将来の routine 化を見据えて self-contained に書かれています。
+This file IS the instruction. Read all of it, then execute the workflow.
 
 User サイトとは異なり **verbatim 規律** が CRITICAL なので、code block / line range / KaTeX / Sources の取り扱いに特に注意してください。
 
 ---
-
-## プロンプト本文 (ここから↓を copy)
-
-```
-You are translating the OrbitScore developer learning site (implementation reading notes) from Japanese to English.
 
 ## Repository
 
@@ -21,40 +16,24 @@ You have GitHub access. Clone the repo, work on a new branch, and open a single 
 
 ## Required Reading (read these first, in order)
 
-1. `sites/dev/.translation-glossary.md` — terminology pairs, tone rules, **CRITICAL §4 verbatim discipline**
-2. `sites/dev/STYLE_GUIDE.md` — writing rules including §5-bis verbatim citation rules
-3. `sites/dev/en/orientation/architecture-overview.md` — translated chapter (use as reference for tone/style/verbatim discipline)
+1. `docs/development/TRANSLATION_STATUS.md` — single source of truth for which chapters need translation
+2. `sites/dev/.translation-glossary.md` — terminology pairs, tone rules, **CRITICAL §4 verbatim discipline**
+3. `sites/dev/STYLE_GUIDE.md` — writing rules including §5-bis verbatim citation rules
 4. `docs/development/TRANSLATION_WORKFLOW.md` — high-level workflow doc
 5. `docs/development/DEV_LEARNING_SITE.md` — project brief explaining the site's purpose and SoT relationship
+6. Any chapter under `sites/dev/en/` whose Status is `done` — use as reference for tone/style/verbatim handling. At minimum read `sites/dev/en/orientation/architecture-overview.md` (the original spike chapter).
 
-## Chapters to Translate (18 total)
+## Determining Scope (do NOT hardcode)
 
-For each chapter, translate the Japanese source and overwrite the English stub at the same relative path under `sites/dev/en/`:
+Read `docs/development/TRANSLATION_STATUS.md` and find every row in the **`sites/dev/` (19 章)** section whose `Status` column is `pending` OR `outdated`. Those are your translation targets.
 
-| # | Source (ja) | Target (en, overwrite) | Title |
-|---|---|---|---|
-| - | `sites/dev/index.md` | `sites/dev/en/index.md` | OrbitScore Dev (landing) |
-| 0-1 | `sites/dev/orientation/what-is-orbitscore.md` | `sites/dev/en/orientation/what-is-orbitscore.md` | What is OrbitScore |
-| I-1 | `sites/dev/pipeline/text-to-ast.md` | `sites/dev/en/pipeline/text-to-ast.md` | Text to AST |
-| I-2 | `sites/dev/pipeline/evaluation.md` | `sites/dev/en/pipeline/evaluation.md` | AST Evaluation Model |
-| I-3 | `sites/dev/pipeline/selective-execution.md` | `sites/dev/en/pipeline/selective-execution.md` | Selective Execution |
-| II-1 | `sites/dev/scheduling/time-representation.md` | `sites/dev/en/scheduling/time-representation.md` | Time Representation |
-| II-2 | `sites/dev/scheduling/polymeter.md` | `sites/dev/en/scheduling/polymeter.md` | Polymeter / Polyrhythm |
-| II-3 | `sites/dev/scheduling/event-queue.md` | `sites/dev/en/scheduling/event-queue.md` | Event Queue and Look-Ahead |
-| II-4 | `sites/dev/scheduling/transport.md` | `sites/dev/en/scheduling/transport.md` | Transport |
-| III-1 | `sites/dev/audio/supercollider.md` | `sites/dev/en/audio/supercollider.md` | Communication with SuperCollider |
-| III-2 | `sites/dev/audio/audio-file-playback.md` | `sites/dev/en/audio/audio-file-playback.md` | Audio File Playback |
-| III-3 | `sites/dev/audio/scsynth-bundle.md` | `sites/dev/en/audio/scsynth-bundle.md` | scsynth Bundle and Path Resolution |
-| IV-1 | `sites/dev/editor/vscode-architecture.md` | `sites/dev/en/editor/vscode-architecture.md` | VS Code Extension Architecture |
-| IV-2 | `sites/dev/editor/execution-feedback.md` | `sites/dev/en/editor/execution-feedback.md` | Inline Execution and Feedback |
-| ADR | `sites/dev/decisions/adr-001-supercollider.md` | `sites/dev/en/decisions/adr-001-supercollider.md` | ADR-001 Choosing SC-based Implementation |
-| ADR | `sites/dev/decisions/adr-002-dsl-v3-pivot.md` | `sites/dev/en/decisions/adr-002-dsl-v3-pivot.md` | ADR-002 DSL v1 to v3 Pivot |
-| ADR | `sites/dev/decisions/adr-003-scsynth-bundle.md` | `sites/dev/en/decisions/adr-003-scsynth-bundle.md` | ADR-003 scsynth Bundle Strict Mode |
-| - | `sites/dev/glossary.md` | `sites/dev/en/glossary.md` | Glossary |
+For each target:
+- Source (ja): `sites/dev/<path>` (the path in the table)
+- Target (en, overwrite stub): `sites/dev/en/<path>`
 
-The stub files currently contain only a "Translation in progress" warning. Overwrite them entirely with full translations.
+If `Status` is `done`, skip that chapter (do NOT modify it).
 
-Chapter `orientation/architecture-overview.md` is ALREADY translated as a spike example — use it as your tone/style/verbatim reference, do NOT modify it.
+The number of chapters per run varies by current status. Treat all targets uniformly. Single PR contains all chapters translated in this run.
 
 ## CRITICAL: Verbatim Rules
 
@@ -135,53 +114,48 @@ Keep relative paths the same in both ja and en (both versions live at the same d
 
 - ja: `[アーキテクチャ全景](/orientation/architecture-overview)` → en: `[Architecture Overview](/en/orientation/architecture-overview)`
 
-NOTE: Absolute paths to dev site internal pages need `/en/` prefix in the en version. Use the spike `architecture-overview.md` as reference for how it handles these.
+NOTE: Absolute paths to dev site internal pages need `/en/` prefix in the en version. Use any `done` chapter (e.g., `architecture-overview.md`) as reference for how it handles these.
 
 For relative paths like `./other.md` or `../section/other.md`, keep them as-is.
 
 ## Glossary terminology
 
-Follow `sites/dev/.translation-glossary.md` §1 strictly. Key examples:
-
-- 実装レイヤー → implementation layer
-- 単一信頼情報源 / SoT → Single Source of Truth (SoT)
-- 構文木 / AST → AST (abstract syntax tree)
-- スケジューラ → scheduler
-- 注入 → injection / inject
-- 解決 → resolve / resolution
-- 同梱 → bundled
-- 拡張機能 → extension
-- 拡張機能ホスト → Extension Host (preserve VS Code official capitalization)
-
-If a term is not in the glossary, infer from context and note it in the PR description.
+Follow `sites/dev/.translation-glossary.md` §1 strictly. If a term is not in the glossary, infer from context and note it in the PR description.
 
 ## Workflow
 
-1. Create a branch: `en-translation-dev-site`
-2. Translate all 18 chapters by overwriting the stub files at `sites/dev/en/<path>.md`
-3. Run locally to verify:
+1. Determine scope from `TRANSLATION_STATUS.md` (rows with `pending` or `outdated` for `sites/dev/`).
+2. Create a branch named `en-translation-dev-site-<YYYY-MM-DD>` (today's date) to allow concurrent runs.
+3. Translate every target chapter by overwriting the stub at `sites/dev/en/<path>`.
+4. Run locally to verify:
    ```bash
    npm install
    npm run -w @orbitscore/dev-site docs:build
    ```
    Build must pass with no dead links and no KaTeX rendering errors.
-4. Update `docs/development/TRANSLATION_STATUS.md`:
-   - For each of the 18 dev chapters in the table, change `Status` from `pending` to `done`
+5. Update `docs/development/TRANSLATION_STATUS.md`:
+   - For each translated chapter, change `Status` to `done`
    - Set `Last translated against (ja commit)` to the current `main` HEAD commit hash
-   - Update the `残り: 18 章` summary line (`残り: 0 章` if all done)
-5. Commit with title: `docs(en): translate dev site chapters (18)`
-6. Open a PR against `main` with title: `Translate dev site to English (18 chapters)`
+   - Recompute the `残り: N 章` summary line at the bottom of the dev section
+   - Recompute the global summary at the bottom of the file
+6. Commit with title: `docs(en): translate dev site chapters (N)` where N is the count
+7. Open a PR against `main` with title: `Translate dev site to English (N chapters)`
 
 ## PR Description Template
 
 ```
 ## Summary
 
-18 章の英訳を完了。spike 章 (architecture-overview.md) と同じトーン・glossary・verbatim 規律に従って翻訳。
+N 章の英訳を完了。Status=done の既存章と同じトーン・glossary・verbatim 規律に従って翻訳。
 
-## Translated chapters
+## Translated chapters (this run)
 
-(List each chapter as a checkbox, ticking those done)
+(List each chapter you translated as a bullet. Format: `- <path> (<English title>)`)
+
+## Status changes
+
+- pending → done: <count>
+- outdated → done: <count>
 
 ## Verbatim discipline self-check
 
@@ -193,7 +167,7 @@ If a term is not in the glossary, infer from context and note it in the PR descr
 
 ## Source ja commit
 
-Translated against `main` at <commit-sha-here>.
+Translated against `main` at <commit-sha>.
 
 ## Verification
 
@@ -213,7 +187,8 @@ Translated against `main` at <commit-sha-here>.
 
 ## Verification Checklist (before opening PR)
 
-- [ ] All 18 stub files overwritten with full translations
+- [ ] All target stub files (per current `TRANSLATION_STATUS.md`) overwritten with full translations
+- [ ] No `done` chapters were modified
 - [ ] `docs:build` passes with no dead links
 - [ ] KaTeX math expressions render correctly
 - [ ] Code blocks: byte-identical content, range comments preserved, omission markers preserved
@@ -222,23 +197,14 @@ Translated against `main` at <commit-sha-here>.
 - [ ] Mermaid: graph syntax preserved, only ja node labels translated
 - [ ] Cross-chapter links: absolute paths use `/en/` prefix, relative paths unchanged
 - [ ] Glossary §1 terminology applied consistently
-- [ ] `TRANSLATION_STATUS.md` updated
+- [ ] `TRANSLATION_STATUS.md` updated for every translated chapter
+- [ ] Summary counts recomputed
 
 ## Notes
 
-- This is a single-PR-for-all-chapters approach (not one PR per chapter), per project preference.
-- The dev site is a "personal learning notes" reference, so the en version should also feel like reading detailed implementation notes, not marketing/tutorial copy.
-- The verbatim discipline is non-negotiable: the SoT is the code, and citations must remain trustworthy.
-```
-
----
-
-## Routine 化への展望
-
-User サイトと同様、CronCreate routine で自動化想定:
-
-1. ja の章が更新された commit を検出
-2. `TRANSLATION_STATUS.md` の該当章を `done` → `outdated` に変更
-3. このプロンプトを on-the-web に投げて再翻訳 PR 作成
-
-特に dev サイトは verbatim 規律のため、ja 側の code block range が変わったときは en 側も同じ commit ベースで再翻訳が必要。
+- The number of chapters per run varies. Do not assume any specific count.
+- New ja chapters added since the last run will appear as `pending` rows automatically; pick them up.
+- This is a single-PR-for-all-pending approach.
+- The dev site is "personal learning notes" reference, so en should also feel like detailed implementation notes, not marketing copy.
+- The verbatim discipline is non-negotiable: SoT is the code, citations must remain trustworthy.
+- If you encounter a term not in the glossary, suggest a glossary update in the PR description (do not modify the glossary file in this PR — that is a separate concern).
