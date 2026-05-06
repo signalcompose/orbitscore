@@ -22,6 +22,8 @@ npm run docs:preview  # http://localhost:4173 で配信
 npm run docs:dev      # http://localhost:5173 (HMR 付き)
 ```
 
+> **Note**: `base: '/orbitscore/'` を設定しているため、 ローカル dev サーバは `http://localhost:5173/orbitscore/` で起動します (ブラウザで自動 redirect されない場合は手動アクセス)。
+
 ## ディレクトリ構成
 
 - `index.md` — 章 1 「OrbitScore とは」 (landing 兼ねる)
