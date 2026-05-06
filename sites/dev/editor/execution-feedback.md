@@ -185,31 +185,36 @@ _kick.play(
 
 ## `setDocumentDirectory` の自動注入
 
-収集したテキストを engine に送る直前、**global ブロックの評価時に限り** `setDocumentDirectory` コマンドを自動で挿入します:
+収集したテキストを engine に送る直前、`setDocumentDirectory` コマンドを自動で挿入します。`audioPath()` および `audio()` の相対パス解決を `.osc` ファイルのディレクトリ基準で行うための仕掛けです。
 
 ```typescript
-// extension.ts:1085-1100
-  // Inject setDocumentDirectory when evaluating global block
-  let codeToSend = trimmedText
-  if (
-    !selection.isEmpty ||
-    getLineSubject(editor.document.lineAt(selection.active.line).text) === 'global'
-  ) {
-    // Check if the code contains global init — inject setDocumentDirectory after it
-    const documentDir = path.dirname(editor.document.uri.fsPath)
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-    if (globalInitMatch) {
-      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-      codeToSend =
-        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-    }
-  }
+// extension.ts (Issue #168 で挙動を変更)
+let codeToSend = trimmedText
+const documentDir = path.dirname(editor.document.uri.fsPath)
+const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
+if (globalInitMatch) {
+  // global を初期化する評価: init の直後に挿入
+  const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+  codeToSend =
+    codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
+  globalInitialized = true
+} else if (globalInitialized) {
+  // 既に global が存在するセッション: コード先頭に prepend
+  codeToSend = setDirCommand + '\n' + codeToSend
+}
 ```
 
-`var global = init GLOBAL ...` にマッチしたら、その行の直後に `global.setDocumentDirectory("...")` を差し込みます。`documentDir` は現在のファイルのディレクトリです。これにより、`audioPath("relative/path")` のような相対パスが正しく解決されます。
+注入は以下の 2 段階で行われます:
+
+1. **global 初期化ブロックの評価時**: `var global = init GLOBAL` の直後に挿入し、`globalInitialized` フラグを立てる
+2. **その後の任意の評価**: コード先頭に prepend する。これにより、ユーザーが別の `.osc` ファイルに切り替えて部分評価しても、現在のファイルのディレクトリが反映される
+
+`globalInitialized` フラグは engine プロセスのライフサイクル（起動・停止・拡張機能の activate）にバインドされ、リセットされます。
 
 Windows のパス区切り文字 (`\`) を `\\` にエスケープする処理も含まれています (`replace(/\\/g, '\\\\')`).
+
+engine 側に `process.cwd()` へのフォールバックは存在しません (Issue #168)。documentDirectory が未設定の状態で相対パスが指定された場合は明示エラーになります。
 
 ---
 

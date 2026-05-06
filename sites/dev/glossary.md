@@ -62,7 +62,14 @@ DSL v1.0 (MIDI フェーズ) のキーワード。`sequence name { ... }` とい
 
 ### setDocumentDirectory
 
-`global.setDocumentDirectory("path/to/dir")` — `.osc` ファイルのディレクトリを engine に伝えます。`audioPath()` での相対パス解決に使われます。VS Code 拡張の `runSelection()` が `global` ブロック評価時に自動注入します。
+`global.setDocumentDirectory("path/to/dir")` — `.osc` ファイルのディレクトリを engine に伝えます。`audioPath()` および `audio()` で相対パスを解決する際の基準として使われます。VS Code 拡張の `runSelection()` が以下のタイミングで自動注入します:
+
+- `var global = init GLOBAL` を含むブロック評価時 (init の直後に挿入)
+- 上記 init 後の任意の評価 (コード先頭に prepend、`.osc` ファイル切り替えにも追従)
+
+CLI (`playFile`) では `.osc` ファイルパスから自動導出されます。
+
+`process.cwd()` へのフォールバックは存在しません。documentDirectory が未設定で、かつ相対パスが指定された場合は明示エラーになります（絶対パスは常に許容）。
 
 ### SoT (Single Source of Truth)
 

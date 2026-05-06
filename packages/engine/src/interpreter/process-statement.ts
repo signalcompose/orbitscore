@@ -292,8 +292,6 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
   // Preload all audio buffers in parallel (to avoid sequential loading delays)
   const scheduler = state.audioEngine as any
   if (scheduler.loadBuffer) {
-    const path = await import('path')
-    const documentDir = state.currentGlobal?.getState().documentDirectory || ''
     console.log(`🔧 [RUN] Preloading ${validSequences.length} buffers in parallel...`)
     await Promise.all(
       validSequences.map(async (seqName) => {
@@ -301,17 +299,9 @@ async function handleRunCommand(sequenceNames: string[], state: InterpreterState
         if (sequence) {
           const audioPath = (sequence as any)._audioFilePath
           if (audioPath) {
-            // Resolve relative paths: prefer documentDirectory, fallback to process.cwd()
-            let resolvedPath: string
-            if (path.isAbsolute(audioPath)) {
-              resolvedPath = audioPath
-            } else if (documentDir) {
-              resolvedPath = path.resolve(documentDir, audioPath)
-            } else {
-              resolvedPath = path.resolve(process.cwd(), audioPath)
-            }
-            console.log(`🔧 [RUN] Preloading ${seqName}: ${resolvedPath}`)
-            await scheduler.loadBuffer(resolvedPath)
+            // _audioFilePath is always absolute (sequence.audio() resolves at set time)
+            console.log(`🔧 [RUN] Preloading ${seqName}: ${audioPath}`)
+            await scheduler.loadBuffer(audioPath)
           }
         }
       }),
@@ -393,24 +383,14 @@ async function startSequencesWithMute(
   // Preload all audio buffers in parallel (to avoid sequential loading delays)
   const scheduler = state.audioEngine as any
   if (scheduler.loadBuffer) {
-    const path = await import('path')
-    const documentDir = state.currentGlobal?.getState().documentDirectory || ''
     await Promise.all(
       sequenceNames.map(async (seqName) => {
         const sequence = state.sequences.get(seqName)
         if (sequence) {
           const audioPath = (sequence as any)._audioFilePath
           if (audioPath) {
-            // Resolve relative paths: prefer documentDirectory, fallback to process.cwd()
-            let resolvedPath: string
-            if (path.isAbsolute(audioPath)) {
-              resolvedPath = audioPath
-            } else if (documentDir) {
-              resolvedPath = path.resolve(documentDir, audioPath)
-            } else {
-              resolvedPath = path.resolve(process.cwd(), audioPath)
-            }
-            await scheduler.loadBuffer(resolvedPath)
+            // _audioFilePath is always absolute (sequence.audio() resolves at set time)
+            await scheduler.loadBuffer(audioPath)
           }
         }
       }),

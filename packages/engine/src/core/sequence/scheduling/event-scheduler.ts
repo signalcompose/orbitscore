@@ -10,10 +10,17 @@ import { ScheduleEventsOptions, ScheduleEventsFromTimeOptions } from '../types'
 import { generateRandomValue } from '../parameters/random-utils'
 
 /**
- * Resolve audio file path to absolute path
+ * Assert that audio file path is absolute.
+ * audioFilePath should always be absolute since sequence.audio() resolves at set time.
  */
 function resolveAudioFilePath(audioFilePath: string): string {
-  return path.isAbsolute(audioFilePath) ? audioFilePath : path.resolve(process.cwd(), audioFilePath)
+  if (!path.isAbsolute(audioFilePath)) {
+    throw new Error(
+      `Audio file path is not absolute: "${audioFilePath}". ` +
+        `This is an internal error — sequence.audio() should have absolutized the path.`,
+    )
+  }
+  return audioFilePath
 }
 
 /**

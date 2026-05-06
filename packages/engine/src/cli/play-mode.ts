@@ -3,6 +3,7 @@
  */
 
 import * as fs from 'fs'
+import * as path from 'path'
 
 import { InterpreterV2 } from '../interpreter/interpreter-v2'
 import { parseAudioDSL } from '../parser/audio-parser'
@@ -42,6 +43,9 @@ export async function playFile(options: PlayOptions): Promise<PlayResult> {
   // Parse the DSL
   const ir = parseAudioDSL(source)
 
+  // Derive documentDirectory from the .osc file location for relative path resolution
+  const documentDirectory = path.dirname(path.resolve(filepath))
+
   // Create interpreter only if not already exists (for REPL persistence)
   let interpreter = globalInterpreter
   if (!interpreter) {
@@ -51,7 +55,7 @@ export async function playFile(options: PlayOptions): Promise<PlayResult> {
     console.log('♻️ Reusing existing interpreter')
   }
 
-  await interpreter.execute(ir)
+  await interpreter.execute(ir, { documentDirectory })
 
   // Get final state
   const state = interpreter.getState()

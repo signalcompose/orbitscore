@@ -13,6 +13,9 @@ let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let bundleStatusItem: vscode.StatusBarItem | null = null
 let isLiveCodingMode: boolean = false
+// Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
+// Used to decide if `global.setDocumentDirectory(...)` can be prepended safely.
+let globalInitialized: boolean = false
 
 // let isDebugMode: boolean = false // Debug mode flag
 
@@ -22,6 +25,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Reset state on activation (important for reload)
   engineProcess = null
   isLiveCodingMode = false
+  globalInitialized = false
 
   // Create output channel
   outputChannel = vscode.window.createOutputChannel('OrbitScore')
@@ -672,6 +676,7 @@ function setupExitHandler(process: child_process.ChildProcess): void {
     outputChannel?.appendLine(`\n🛑 Engine process exited with code ${code}`)
     engineProcess = null
     isLiveCodingMode = false
+    globalInitialized = false
 
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
@@ -744,6 +749,7 @@ function startEngine(debugMode: boolean = false) {
 
   // Update state
   isLiveCodingMode = true
+  globalInitialized = false
 
   statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
@@ -769,6 +775,7 @@ function stopEngine() {
     const proc = engineProcess
     engineProcess = null
     isLiveCodingMode = false
+    globalInitialized = false
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -1082,21 +1089,27 @@ async function runSelection() {
     createFlash(0)
   }
 
-  // Inject setDocumentDirectory when evaluating global block
+  // Inject setDocumentDirectory so audioPath() / audio() resolve relative paths
+  // against the .osc file's directory, not the engine process's cwd.
+  //
+  // Strategy:
+  // - If this eval contains `var global = init GLOBAL`, insert setDocumentDirectory
+  //   right after it (and remember that global is now initialized).
+  // - Otherwise, if global has already been initialized in this engine session,
+  //   prepend setDocumentDirectory before the user code (refreshes the directory
+  //   in case the user switched .osc files).
+  // - If global has not yet been initialized, do not inject (would fail with
+  //   "global is not defined").
   let codeToSend = trimmedText
-  if (
-    !selection.isEmpty ||
-    getLineSubject(editor.document.lineAt(selection.active.line).text) === 'global'
-  ) {
-    // Check if the code contains global init — inject setDocumentDirectory after it
-    const documentDir = path.dirname(editor.document.uri.fsPath)
-    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-    if (globalInitMatch) {
-      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-      codeToSend =
-        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-    }
+  const documentDir = path.dirname(editor.document.uri.fsPath)
+  const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+  const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
+  if (globalInitMatch) {
+    const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+    codeToSend = codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
+    globalInitialized = true
+  } else if (globalInitialized) {
+    codeToSend = setDirCommand + '\n' + codeToSend
   }
 
   // Execute the selected command (both single line and multiline)
