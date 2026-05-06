@@ -6,6 +6,7 @@ import * as fs from 'fs'
 import * as vscode from 'vscode'
 
 import { analyzeMethodChain, getContextualCompletions } from './completion-context'
+import { analyzeAudioPathOrdering, analyzeGlobalOncePerFile } from './diagnostics-analysis'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -1266,87 +1267,26 @@ async function updateDiagnostics(
     }
   }
 
-  // === Analysis: global state-setter once-per-file ===
-  // global.<method>() のうち state-setting 系は live coding の正攻法
-  // 「行を書き換えて再評価」を促すため、ファイル中で 1 回のみとする。
-  // 例外: init global.seq (sequence 宣言)、LOOP/RUN/MUTE (transport コマンド)。
-  const GLOBAL_ONCE_METHODS = new Set([
-    'tempo',
-    'beat',
-    'audioPath',
-    'start',
-    'stop',
-    'gain',
-    'key',
-    'normalizer',
-    'limiter',
-    'compressor',
-  ])
-
-  type CallLocation = { line: number; col: number; len: number }
-  const globalCallsByMethod = new Map<string, CallLocation[]>()
-  const globalCallPattern = /\bglobal\s*\.\s*(\w+)\s*\(/g
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (!line || line.trim().startsWith('//')) continue
-    for (const m of line.matchAll(globalCallPattern)) {
-      const method = m[1]
-      if (!GLOBAL_ONCE_METHODS.has(method)) continue
-      const list = globalCallsByMethod.get(method) ?? []
-      list.push({ line: i, col: m.index ?? 0, len: m[0].length })
-      globalCallsByMethod.set(method, list)
-    }
-  }
-
-  for (const [method, calls] of globalCallsByMethod) {
-    if (calls.length <= 1) continue
-    for (let k = 1; k < calls.length; k++) {
-      const c = calls[k]
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(c.line, c.col, c.line, c.col + c.len),
-        `Duplicate global.${method}(). Live coding pattern: edit the existing line instead of adding a new one.`,
+  // === Cross-line analyses (pure functions, unit-testable) ===
+  // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
+  // VS Code Diagnostic オブジェクトに変換するだけにする。
+  for (const issue of analyzeGlobalOncePerFile(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
         vscode.DiagnosticSeverity.Warning,
-      )
-      diagnostics.push(diagnostic)
-    }
+      ),
+    )
   }
-
-  // === Analysis: audioPath ordering ===
-  // global.audioPath() が seq.audio("<相対パス>") より前にあることを要求する。
-  // 絶対パスの場合は audioPath 不要のためスキップ。
-  const audioPathCalls = globalCallsByMethod.get('audioPath') ?? []
-  const firstAudioPathLine = audioPathCalls.length > 0 ? audioPathCalls[0].line : -1
-
-  const audioCallPattern = /\.audio\s*\(\s*["']([^"']+)["']\s*\)/g
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (!line || line.trim().startsWith('//')) continue
-    // Skip lines that are themselves global.audioPath() declarations
-    if (/\bglobal\s*\.\s*audioPath\s*\(/.test(line)) continue
-    for (const m of line.matchAll(audioCallPattern)) {
-      const arg = m[1]
-      const isAbsolute =
-        arg.startsWith('/') ||
-        arg.startsWith('~/') ||
-        arg.startsWith('~\\') ||
-        /^[A-Za-z]:[\\/]/.test(arg)
-      if (isAbsolute) continue
-      const isBeforeOrMissing = firstAudioPathLine === -1 || i < firstAudioPathLine
-      if (!isBeforeOrMissing) continue
-      const message =
-        firstAudioPathLine === -1
-          ? 'Relative audio path requires global.audioPath() to be set first (no audioPath found in file).'
-          : `Relative audio path used before global.audioPath() (declared at line ${firstAudioPathLine + 1}). Move audioPath() above this audio() call.`
-      const startCol = m.index ?? 0
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(i, startCol, i, startCol + m[0].length),
-        message,
+  for (const issue of analyzeAudioPathOrdering(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
         vscode.DiagnosticSeverity.Warning,
-      )
-      diagnostics.push(diagnostic)
-    }
+      ),
+    )
   }
 
   collection.set(document.uri, diagnostics)
