@@ -1,15 +1,10 @@
-# Translation Prompt: User Site (ja → en)
+# Translation Task: User Site (ja → en)
 
-このプロンプトは Claude Desktop / Claude on the Web に **そのまま貼り付けて** 使う想定です。
+You are translating the OrbitScore user-facing learning site from Japanese to English.
 
-将来の routine 化を見据えて self-contained に書かれています。
+This file IS the instruction. Read all of it, then execute the workflow.
 
 ---
-
-## プロンプト本文 (ここから↓を copy)
-
-```
-You are translating the OrbitScore user-facing learning site from Japanese to English.
 
 ## Repository
 
@@ -19,30 +14,23 @@ You have GitHub access. Clone the repo, work on a new branch, and open a single 
 
 ## Required Reading (read these first, in order)
 
-1. `sites/user/.translation-glossary.md` — terminology pairs, tone rules, do-not-translate list
-2. `sites/user/STYLE_GUIDE.md` — writing rules (tone, structure, link conventions)
-3. `sites/user/en/index.md` — translated landing page (use as reference for tone/style)
-4. `sites/user/en/getting-started/first-sound.md` — translated chapter 3 (use as reference for tone/style)
-5. `docs/development/TRANSLATION_WORKFLOW.md` — high-level workflow doc
+1. `docs/development/TRANSLATION_STATUS.md` — single source of truth for which chapters need translation
+2. `sites/user/.translation-glossary.md` — terminology pairs, tone rules, do-not-translate list
+3. `sites/user/STYLE_GUIDE.md` — writing rules (tone, structure, link conventions)
+4. `docs/development/TRANSLATION_WORKFLOW.md` — high-level workflow doc
+5. Any chapter under `sites/user/en/` whose Status is `done` — use as reference for tone/style. At minimum read `sites/user/en/index.md` and `sites/user/en/getting-started/first-sound.md` (the original spike chapters).
 
-## Chapters to Translate (8 total)
+## Determining Scope (do NOT hardcode)
 
-For each chapter, translate the Japanese source and overwrite the English stub at the same relative path under `sites/user/en/`:
+Read `docs/development/TRANSLATION_STATUS.md` and find every row in the **`sites/user/` (10 章)** section whose `Status` column is `pending` OR `outdated`. Those are your translation targets.
 
-| # | Source (ja) | Target (en, overwrite) | Title |
-|---|---|---|---|
-| 2 | `sites/user/getting-started/installation.md` | `sites/user/en/getting-started/installation.md` | Installation |
-| 4 | `sites/user/basics/patterns.md` | `sites/user/en/basics/patterns.md` | Building Patterns |
-| 5 | `sites/user/basics/multiple-sequences.md` | `sites/user/en/basics/multiple-sequences.md` | Multiple Sequences |
-| 6 | `sites/user/basics/polyrhythm.md` | `sites/user/en/basics/polyrhythm.md` | Polymeter and Polyrhythm |
-| 7 | `sites/user/basics/audio-manipulation.md` | `sites/user/en/basics/audio-manipulation.md` | Audio Manipulation |
-| 8 | `sites/user/basics/live-coding.md` | `sites/user/en/basics/live-coding.md` | Live Coding |
-| 9 | `sites/user/reference/methods.md` | `sites/user/en/reference/methods.md` | Reference |
-| 10 | `sites/user/troubleshooting.md` | `sites/user/en/troubleshooting.md` | Troubleshooting |
+For each target:
+- Source (ja): `sites/user/<path>` (the path in the table)
+- Target (en, overwrite stub): `sites/user/en/<path>`
 
-The stub files currently contain only a "Translation in progress" warning. Overwrite them entirely with full translations.
+If `Status` is `done`, skip that chapter (do NOT modify it).
 
-Chapters 1 and 3 (`index.md` and `getting-started/first-sound.md`) are ALREADY translated as spike examples — use them as your tone/style reference, do NOT modify them.
+The number of chapters per run varies by current status (e.g., 8 in initial bulk, 1 after a single ja update, etc.). Treat all targets uniformly. Single PR contains all chapters translated in this run.
 
 ## Critical Rules
 
@@ -74,7 +62,7 @@ Polite, friendly, kind — but **NOT condescending or childish**.
 | "Watch out!" | "Please note that..." |
 | Excessive `🎉🚀✨` emojis | Use UI/code emojis (`🎵`, `✅`) only when they are in the source as UI quotations |
 
-Use polite English equivalent of the ja ですます tone. Read the spike chapters (`en/index.md`, `en/getting-started/first-sound.md`) and match their register.
+Use polite English equivalent of the ja ですます tone. Match the register of any chapter under `sites/user/en/` whose Status is `done`.
 
 ### Cross-chapter links
 
@@ -85,68 +73,53 @@ Keep relative paths. Both ja and en versions live at the same depth so paths tra
 
 ### Glossary terminology
 
-Follow `sites/user/.translation-glossary.md` §1 strictly. Examples:
-
-- ライブコーディング → live coding
-- シーケンス → sequence
-- パターン → pattern
-- ポリメーター → polymeter
-- ポリリズム → polyrhythm
-- 拍子 → time signature
-- 拍 → beat
-- 拡張機能 → extension
-- 同梱 → bundled
-- バスドラム / キック → kick (not "kick drum")
-
-If a term is not in the glossary, infer from context and note it in the PR description.
+Follow `sites/user/.translation-glossary.md` §1 strictly. If a term is not in the glossary, infer from context and note it in the PR description.
 
 ## Workflow
 
-1. Create a branch: `en-translation-user-site`
-2. Translate all 8 chapters by overwriting the stub files at `sites/user/en/<path>.md`
-3. Run locally to verify:
+1. Determine scope from `TRANSLATION_STATUS.md` (rows with `pending` or `outdated` for `sites/user/`).
+2. Create a branch named `en-translation-user-site-<YYYY-MM-DD>` (today's date) to allow concurrent runs.
+3. Translate every target chapter by overwriting the stub at `sites/user/en/<path>`.
+4. Run locally to verify:
    ```bash
    npm install
    npm run -w @orbitscore/user-site docs:build
    ```
    Build must pass with no dead links.
-4. Update `docs/development/TRANSLATION_STATUS.md`:
-   - For each of the 8 user chapters in the table, change `Status` from `pending` to `done`
-   - Set `Last translated against (ja commit)` to the current `main` HEAD commit hash
-   - Update the `残り: 8 章` summary line to reflect the new count (`残り: 0 章` if all done)
-5. Commit with title: `docs(en): translate user site chapters (8)`
-6. Open a PR against `main` with title: `Translate user site to English (8 chapters)`
+5. Update `docs/development/TRANSLATION_STATUS.md`:
+   - For each translated chapter, change `Status` to `done`
+   - Set `Last translated against (ja commit)` to the current `main` HEAD commit hash (the one your translation is based on)
+   - Recompute the `残り: N 章` summary line at the bottom of the user section
+   - Recompute the global summary at the bottom of the file
+6. Commit with title: `docs(en): translate user site chapters (N)` where N is the count
+7. Open a PR against `main` with title: `Translate user site to English (N chapters)`
 
 ## PR Description Template
 
 ```
 ## Summary
 
-8 章の英訳を完了。spike 章 (index.md, first-sound.md) と同じトーン・glossary に従って翻訳。
+N 章の英訳を完了。Status=done の既存章と同じトーン・glossary に従って翻訳。
 
-## Translated chapters
+## Translated chapters (this run)
 
-- [ ] getting-started/installation.md (Installation)
-- [ ] basics/patterns.md (Building Patterns)
-- [ ] basics/multiple-sequences.md (Multiple Sequences)
-- [ ] basics/polyrhythm.md (Polymeter and Polyrhythm)
-- [ ] basics/audio-manipulation.md (Audio Manipulation)
-- [ ] basics/live-coding.md (Live Coding)
-- [ ] reference/methods.md (Reference)
-- [ ] troubleshooting.md (Troubleshooting)
+(List each chapter you translated as a bullet. Format: `- <path> (<English title>)`)
 
-(Replace [ ] with [x] for completed chapters)
+## Status changes
+
+- pending → done: <count>
+- outdated → done: <count>
 
 ## Source ja commit
 
-Translated against `main` at <commit-sha-here>.
+Translated against `main` at <commit-sha>.
 
 ## Verification
 
 - [ ] `npm run -w @orbitscore/user-site docs:build` passes locally
 - [ ] No dead links
 - [ ] Glossary §1 terms used consistently
-- [ ] Tone matches spike chapters (no condescending/childish phrasing)
+- [ ] Tone matches existing `done` chapters
 
 ## Glossary terms not found in glossary
 
@@ -155,29 +128,21 @@ Translated against `main` at <commit-sha-here>.
 
 ## Verification Checklist (before opening PR)
 
-- [ ] All 8 stub files overwritten with full translations
+- [ ] All target stub files (per current `TRANSLATION_STATUS.md`) overwritten with full translations
+- [ ] No `done` chapters were modified
 - [ ] `docs:build` passes with no dead links
-- [ ] Frontmatter `title` and `description` translated for all 8 files
-- [ ] Cross-chapter links use relative paths (`./other.md`, `../section/other.md`)
+- [ ] Frontmatter `title` and `description` translated
+- [ ] Cross-chapter links use relative paths
 - [ ] Code blocks unchanged (DSL, file paths, method names preserved)
 - [ ] Glossary §1 terminology applied consistently
 - [ ] No "Let's...", "You did it!", or other condescending phrasing
-- [ ] `TRANSLATION_STATUS.md` updated with `done` and commit hash
+- [ ] `TRANSLATION_STATUS.md` updated for every translated chapter
+- [ ] Summary counts (`残り: N 章` and global summary) recomputed
 
 ## Notes
 
-- This is a single-PR-for-all-chapters approach (not one PR per chapter), per project preference.
-- The output should read like a polite English tutorial written for absolute beginners — clear, kind, and respectful, but not childish.
-- If you encounter a term that should be added to the glossary, mention it in the PR description so the glossary can be updated separately.
-```
-
----
-
-## Routine 化への展望
-
-このプロンプトは将来 CronCreate routine で自動化する想定:
-
-1. ja の章が更新された commit を検出
-2. `TRANSLATION_STATUS.md` の該当章を `done` → `outdated` に変更
-3. このプロンプトを on-the-web に投げて再翻訳 PR を作成
-4. PR review → merge
+- The number of chapters per run varies. Do not assume any specific count.
+- This is a single-PR-for-all-pending approach. If `outdated` and `pending` are mixed, include both.
+- New ja chapters added since the last run will appear as `pending` rows automatically; pick them up.
+- The output should read like a polite English tutorial written for absolute beginners — clear, kind, respectful, but not childish.
+- If you encounter a term not in the glossary, suggest a glossary update in the PR description (do not modify the glossary file in this PR — that is a separate concern).
