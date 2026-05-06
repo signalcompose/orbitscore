@@ -1,64 +1,37 @@
 # OrbitScore User Learning Site
 
-OrbitScore のユーザー向け学習サイト。VitePress で構築。
+OrbitScore のユーザー向け学習サイト (初心者向け 10 章のチュートリアル)。
+詳細は [`docs/development/USER_LEARNING_SITE.md`](../../docs/development/USER_LEARNING_SITE.md) 参照。
 
-## ローカル起動
+## ローカルで閲覧する
+
+`sites/user/` ディレクトリで実行:
+
+### オフライン用 (飛行機・移動中)
 
 ```bash
-npm install
-npm run -w sites/user docs:dev
+npm run docs:build    # 一度ビルド
+npm run docs:preview  # http://localhost:4173 で配信
 ```
 
-ブラウザで `http://localhost:5173/` （またはターミナルに表示される URL）を開きます。
+ビルドさえ済んでいれば実行中ネットワークは不要。`dist/` を別の場所にコピーして任意の方法で閲覧することもできます。
 
-## 静的サイト build
-
-```bash
-npm run -w sites/user docs:build
-```
-
-成果物は `sites/user/.vitepress/dist/` に出力されます。
-
-## オフライン閲覧
-
-build した `dist/` を別のディレクトリにコピーすれば、ネット接続なしで閲覧できます（飛行機内などで）:
+### 編集しながら確認
 
 ```bash
-npm run -w sites/user docs:build
-cp -r sites/user/.vitepress/dist ~/orbitscore-user-docs
-# あとは ~/orbitscore-user-docs を任意の方法で閲覧
-```
-
-VitePress の `docs:preview` を使う場合:
-
-```bash
-npm run -w sites/user docs:preview
+npm run docs:dev      # http://localhost:5173 (HMR 付き)
 ```
 
 ## ディレクトリ構成
 
-```
-sites/user/
-├── package.json
-├── .vitepress/
-│   ├── config.ts          # サイト全体の設定
-│   ├── sidebar.ts         # サイドバー構成
-│   └── theme/
-├── index.md               # 章 1（landing 兼ねる）
-├── STYLE_GUIDE.md         # 執筆規律（srcExclude 対象）
-├── README.md              # 本ファイル（srcExclude 対象）
-├── getting-started/       # 章 2-3
-├── basics/                # 章 4-8
-├── reference/             # 章 9
-└── troubleshooting.md     # 章 10
-```
-
-## 関連ドキュメント
-
-- [USER_LEARNING_SITE.md](../../docs/development/USER_LEARNING_SITE.md) — プロジェクトブリーフ
-- [STYLE_GUIDE.md](./STYLE_GUIDE.md) — 執筆規律
-- [USER_MANUAL.md](../../docs/user/ja/USER_MANUAL.md) — primary source（仕様書）
+- `index.md` — 章 1 「OrbitScore とは」 (landing 兼ねる)
+- `getting-started/` — 章 2-3 (インストール、はじめての音)
+- `basics/` — 章 4-8 (パターン、複数シーケンス、ポリリズム、オーディオ操作、ライブコーディング)
+- `reference/` — 章 9 (メソッド早見表)
+- `troubleshooting.md` — 章 10
+- `STYLE_GUIDE.md` — 執筆規約 (ですます調、子供扱いしない、コードのみ)
+- `.vitepress/` — VitePress 設定 (config, sidebar, theme)
 
 ## 公開について
 
-現時点ではローカル閲覧のみ。Web 公開（GitHub Pages 等）はコンテンツ完成後に別 issue で判断します。
+現時点ではローカル閲覧のみ。Web 公開 (GitHub Pages 等) はコンテンツ完成後に別 issue で判断します。
