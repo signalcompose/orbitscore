@@ -321,27 +321,27 @@ This chapter was a shallow first pass to establish the big picture. The details 
 
 | Area of interest | Reference |
 |---|---|
-| How DSL text is converted into a token sequence and an AST is constructed | [I-1. From Text to AST](/pipeline/text-to-ast) |
-| How `seq.play()` calculates timing and enqueues events | [II-3. Event Queue and Look-Ahead](/scheduling/event-queue) |
-| The SuperCollider server command system from `/s_new` to audio output | [III-1. Communication with SuperCollider](/audio/supercollider) |
-| Extension activation, IntelliSense, and flash visual feedback | [IV-1. VS Code Extension Architecture](/editor/vscode-architecture) |
+| How DSL text is converted into a token sequence and an AST is constructed | [I-1. From Text to AST](/en/pipeline/text-to-ast) |
+| How `seq.play()` calculates timing and enqueues events | [II-3. Event Queue and Look-Ahead](/en/scheduling/event-queue) |
+| The SuperCollider server command system from `/s_new` to audio output | [III-1. Communication with SuperCollider](/en/audio/supercollider) |
+| Extension activation, IntelliSense, and flash visual feedback | [IV-1. VS Code Extension Architecture](/en/editor/vscode-architecture) |
 
 ## Related Terms
 
-Terms covered in this chapter are available in the [Glossary](/glossary). Key terms:
+Terms covered in this chapter are available in the [Glossary](/en/glossary). Key terms:
 
-- [scsynth](/glossary#scsynth) — SuperCollider's audio server binary
-- [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — communication protocol between engine and scsynth
-- [SynthDef (SC)](/glossary#synthdef-sc) — audio processing definitions such as orbitPlayBuf
-- [Extension Host](/glossary#extension-host) — the Node.js process in which VS Code extensions run
-- [orbitPlayBuf](/glossary#orbitplaybuf) — the name of OrbitScore's dedicated SynthDef
-- [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — fail-loud design with no SC.app fallback
-- [StatusBarItem](/glossary#statusbaritem) — status bar items displaying engine state and scsynth resolution state
+- [scsynth](/en/glossary#scsynth) — SuperCollider's audio server binary
+- [OSC (Open Sound Control)](/en/glossary#osc-open-sound-control) — communication protocol between engine and scsynth
+- [SynthDef (SC)](/en/glossary#synthdef-sc) — audio processing definitions such as orbitPlayBuf
+- [Extension Host](/en/glossary#extension-host) — the Node.js process in which VS Code extensions run
+- [orbitPlayBuf](/en/glossary#orbitplaybuf) — the name of OrbitScore's dedicated SynthDef
+- [strict mode (scsynth resolver)](/en/glossary#strict-mode-scsynth-resolver) — fail-loud design with no SC.app fallback
+- [StatusBarItem](/en/glossary#statusbaritem) — status bar items displaying engine state and scsynth resolution state
 
 ## Related ADRs
 
-- [ADR-001 Choosing SuperCollider as the Implementation Base](/decisions/adr-001-supercollider) — why scsynth was chosen as the audio backend
-- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — the decision-making process and bundle configuration for strict mode
+- [ADR-001 Choosing SuperCollider as the Implementation Base](/en/decisions/adr-001-supercollider) — why scsynth was chosen as the audio backend
+- [ADR-003 scsynth bundle strict mode](/en/decisions/adr-003-scsynth-bundle) — the decision-making process and bundle configuration for strict mode
 
 ## Next Exploration Candidates
 
