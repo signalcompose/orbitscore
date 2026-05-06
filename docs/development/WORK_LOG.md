@@ -17,6 +17,59 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.74 Deploy user + dev learning sites to GitHub Pages (May 06, 2026)
+
+**Date**: May 06, 2026
+**Status**: ⏳ IN PROGRESS (PR pending)
+**Branch**: `claude/review-issues-gyJUJ`
+**関連 Issue**: #183 (deploy user site), #165 (deploy dev site), #181 (translation sync gap), #166 Epic (dev learning site)
+
+**動機**: ICMC 2026 Hamburg (5/10-16) の発表に向けて、user / dev 両学習サイトの公開導線を確立する。Twitter / QR / 論文から飛んできた閲覧者が Web 上で内容を読める状態にする。 user は内容完成・dev は「個人学習ノート」 として未完を含むまま公開する方針。
+
+**設計方針**:
+- 同一 repo・GitHub Actions deploy・subpath split:
+  - user → `https://signalcompose.github.io/orbitscore/`
+  - dev → `https://signalcompose.github.io/orbitscore/dev/`
+- カスタムドメイン (post-ICMC) は CNAME + `base` 切替で対応可
+- dev サイトは未完 (#166 stub 章、#181 ja code comment 残存) を含むまま公開:
+  - landing の disclaimer (「個人学習ノート」「code が SoT」) で読者期待値を制御
+  - `.translation-glossary.md` で「code 内 ja コメントは byte-identical (英訳しない)」 を明文化
+  - `what-is-orbitscore.md` stub には Glossary / ADR-002 への pointer を追加 (迷子防止)
+
+**変更内容**:
+
+Workflow:
+- `.github/workflows/deploy-sites.yml` 新規 — `main` の `sites/**` 変更で trigger、 user / dev を 1 artifact に集約 → Pages deploy
+
+VitePress config:
+- `sites/user/.vitepress/config.ts` — `base: '/orbitscore/'` 追加
+- `sites/dev/.vitepress/config.ts` — `base: '/orbitscore/dev/'` 追加、 KaTeX CSS link を base 込みに更新
+
+Translation glossary (#181 sync gap 対応):
+- `sites/dev/.translation-glossary.md` §2 を改訂:
+  - 「code 内 ja コメントは byte-identical (英訳しない)」 を明文化、citation 整合を最優先する根拠を記載
+  - 「commit message 引用は ja のまま (verbatim quote)」 を追加
+
+Stub 暫定対応 (#166 Epic 残作業):
+- `sites/dev/orientation/what-is-orbitscore.md` (ja/en) — stub のまま、Glossary と ADR-002 への pointer を追加、「暫定的な要点」 を 3 行で書き起こし、Epic #166 で yamato 直筆予定を明記
+
+README:
+- `README.md` (root) — Learning Sites (web) セクション追加、 4 link
+- `sites/user/README.md` — 「公開について」 → 「公開 URL」 に置換、 deploy workflow 説明
+- `sites/dev/README.md` — 「公開 URL」 セクション追加、 個人学習ノートとして未完を含むことを明記
+
+**ビルド確認**:
+- `npm run docs:build -w @orbitscore/user-site` ✅ 成功 (18.57s)
+- `npm run docs:build -w @orbitscore/dev-site` ✅ 成功 (23.92s)
+- 生成 HTML の asset href が `/orbitscore/` および `/orbitscore/dev/` で正しく prefix 化されることを確認
+- workflow の combine step (user dist → root + dev dist → /dev/) を local 模擬実行、両 index.html 生成確認
+
+**残タスク (post-deploy)**:
+- Repo Settings → Pages → Source = "GitHub Actions" を web UI で有効化 (yamato 操作)
+- カスタムドメイン取得 + CNAME 設定 + `base` 切替 (post-ICMC、別 PR)
+- #181 残作業: 8 ファイルの ja code comment は glossary 改訂で「byte-identical 規律」 として正規化 (修正不要)
+- #166 Epic: `what-is-orbitscore.md` の本文完成 (post-ICMC、 yamato 直筆)
+
 ### 6.73 Translation prep: i18n setup, glossaries, spike translations (May 06, 2026)
 
 **Date**: May 06, 2026

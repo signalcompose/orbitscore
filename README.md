@@ -160,6 +160,15 @@ See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_
 
 ## 📚 Documentation
 
+### Learning Sites (web)
+
+- 🎓 [User Learning Site (ja)](https://signalcompose.github.io/orbitscore/) — beginner-friendly tutorial
+- 🎓 [User Learning Site (en)](https://signalcompose.github.io/orbitscore/en/)
+- 🛠️ [Dev Learning Site (ja)](https://signalcompose.github.io/orbitscore/dev/) — implementation reading notes (personal)
+- 🛠️ [Dev Learning Site (en)](https://signalcompose.github.io/orbitscore/dev/en/)
+
+### Project documentation (in-repo)
+
 Project documentation is organized in the [`docs/`](docs/) folder:
 
 - 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.md) - Project rules (must-read)

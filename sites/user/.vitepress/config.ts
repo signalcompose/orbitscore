@@ -8,6 +8,8 @@ export default withMermaid(
     description: 'OrbitScore ユーザー向け学習サイト — ライブコーディングで音楽を作るための入門',
     lang: 'ja-JP',
 
+    base: '/orbitscore/',
+
     lastUpdated: true,
     cleanUrls: true,
 
