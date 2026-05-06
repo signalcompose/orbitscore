@@ -17,6 +17,50 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.73 Translation prep: i18n setup, glossaries, spike translations (May 06, 2026)
+
+**Date**: May 06, 2026
+**Status**: ⏳ IN PROGRESS（マージ前 review 待ち）
+**Branch**: `prep-translation-i18n-setup`
+
+**動機**: dev / user 両学習サイトの日英翻訳を効率化するための事前準備。bulk 翻訳は Claude on the Web / CronCreate routine に委ねる前提で、品質と整合性を保証するインフラを Claude Code 側で確立する。
+
+**設計方針**:
+- VitePress 標準の i18n 機能を使用（locales: ja root + en）
+- 用語ペア・トーン・do-not-translate を `.translation-glossary.md` に明示
+- spike 章を Claude Code で完訳して on-the-web の reference template とする
+- 章単位 issue で並列翻訳できる workflow
+
+**変更内容**:
+
+`sites/user/`:
+- `.translation-glossary.md` 新規（用語ペア、ですます調 → polite English の翻訳例、章タイトル英訳一覧）
+- `.vitepress/config.ts` を `locales: { root, en }` 構造に書き換え
+- `.vitepress/sidebar.ts` を `sidebarJa` / `sidebarEn` に分離
+- `en/` 配下に全 10 章 stub を作成（warning ボックス表示）
+- `en/index.md` (章 1) を完訳（spike）
+- `en/getting-started/first-sound.md` (章 3) を完訳（spike）
+
+`sites/dev/`:
+- `.translation-glossary.md` 新規（user とは別のトーン規律と verbatim 規律を含む、CRITICAL §4）
+- `.vitepress/config.ts` を i18n 対応化、README.md を srcExclude に追加
+- `.vitepress/sidebar.ts` を `sidebarJa` / `sidebarEn` に分離
+- `en/` 配下に全 19 章 stub を作成
+- `en/orientation/architecture-overview.md` (spike 章) を sub-agent dispatch で完訳
+
+`docs/development/`:
+- `TRANSLATION_WORKFLOW.md` 新規（翻訳 workflow、章単位 issue テンプレ、ローカル実行例）
+- `TRANSLATION_STATUS.md` 新規（29 章の進捗 tracker、status 定義、ja 更新時の手順）
+
+**ビルド確認**: 両サイト build クリーン通過。`/en/` 配下の各 stub と spike 章が表示でき、navbar 右上に言語スイッチャーが自動生成されることを確認。
+
+**残タスク（別 issue で扱う）**:
+- bulk 翻訳: user 残り 8 章 + dev 残り 18 章（章単位 issue で Claude on the Web に dispatch）
+- ja 元更新時の en 自動 outdated 検出（CronCreate routine 化）
+- Web デプロイ（GitHub Pages 等）
+
+---
+
 ### 6.72 Issue #174: Build user-facing learning site (sites/user/) (May 06, 2026)
 
 **Date**: May 06, 2026

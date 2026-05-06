@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 import markdownItKatex from '@vscode/markdown-it-katex'
-import { sidebar } from './sidebar'
+import { sidebarJa, sidebarEn } from './sidebar'
 
 export default withMermaid(
   defineConfig({
@@ -12,13 +12,18 @@ export default withMermaid(
     lastUpdated: true,
     cleanUrls: true,
 
-    srcExclude: ['STYLE_GUIDE.md', '**/.audit/**', '**/AUDIT_REPORT*.md'],
+    srcExclude: [
+      'STYLE_GUIDE.md',
+      'README.md',
+      '.translation-glossary.md',
+      'en/STYLE_GUIDE.md',
+      '**/.audit/**',
+      '**/AUDIT_REPORT*.md',
+    ],
 
     // KaTeX CSS は public/katex/ に同梱して local link で読み込む。
     // CDN 依存 (cdn.jsdelivr.net) を排除し、飛行機内やオフライン環境
     // でも数式が崩れず表示できるようにする。
-    // 同梱バージョンは package.json の `katex` deps と整合させる
-    // (現在 0.16.21、 更新時は public/katex/ も同期する)。
     head: [
       [
         'link',
@@ -36,23 +41,58 @@ export default withMermaid(
       },
     },
 
-    themeConfig: {
-      nav: [
-        { text: 'Home', link: '/' },
-        { text: 'Glossary', link: '/glossary' },
-        {
-          text: 'Repo',
-          link: 'https://github.com/signalcompose/orbitscore',
+    locales: {
+      root: {
+        label: '日本語',
+        lang: 'ja-JP',
+        title: 'OrbitScore Dev',
+        description: 'OrbitScore 実装解説・学習サイト (個人学習ノート)',
+        themeConfig: {
+          nav: [
+            { text: 'Home', link: '/' },
+            { text: 'Glossary', link: '/glossary' },
+            {
+              text: 'Repo',
+              link: 'https://github.com/signalcompose/orbitscore',
+            },
+          ],
+          sidebar: sidebarJa,
+          outline: { level: [2, 3], label: 'このページの目次' },
+          lastUpdatedText: '最終更新',
+          docFooter: {
+            prev: '前のページ',
+            next: '次のページ',
+          },
         },
-      ],
-      sidebar,
-      outline: { level: [2, 3], label: 'このページの目次' },
-      search: { provider: 'local' },
-      lastUpdatedText: '最終更新',
-      docFooter: {
-        prev: '前のページ',
-        next: '次のページ',
       },
+      en: {
+        label: 'English',
+        lang: 'en-US',
+        link: '/en/',
+        title: 'OrbitScore Dev',
+        description: 'OrbitScore implementation notes (personal learning notes)',
+        themeConfig: {
+          nav: [
+            { text: 'Home', link: '/en/' },
+            { text: 'Glossary', link: '/en/glossary' },
+            {
+              text: 'Repo',
+              link: 'https://github.com/signalcompose/orbitscore',
+            },
+          ],
+          sidebar: sidebarEn,
+          outline: { level: [2, 3], label: 'On this page' },
+          lastUpdatedText: 'Last updated',
+          docFooter: {
+            prev: 'Previous',
+            next: 'Next',
+          },
+        },
+      },
+    },
+
+    themeConfig: {
+      search: { provider: 'local' },
     },
 
     mermaid: {

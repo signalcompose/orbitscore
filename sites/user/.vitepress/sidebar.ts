@@ -1,6 +1,6 @@
 import type { DefaultTheme } from 'vitepress'
 
-export const sidebar: DefaultTheme.SidebarItem[] = [
+export const sidebarJa: DefaultTheme.SidebarItem[] = [
   {
     text: 'はじめに',
     collapsed: false,
@@ -34,3 +34,41 @@ export const sidebar: DefaultTheme.SidebarItem[] = [
     ],
   },
 ]
+
+export const sidebarEn: DefaultTheme.SidebarItem[] = [
+  {
+    text: 'Introduction',
+    collapsed: false,
+    items: [{ text: '1. What is OrbitScore', link: '/en/' }],
+  },
+  {
+    text: 'Getting Started',
+    collapsed: false,
+    items: [
+      { text: '2. Installation', link: '/en/getting-started/installation' },
+      { text: '3. Your First Sound', link: '/en/getting-started/first-sound' },
+    ],
+  },
+  {
+    text: 'Basics',
+    collapsed: false,
+    items: [
+      { text: '4. Building Patterns', link: '/en/basics/patterns' },
+      { text: '5. Multiple Sequences', link: '/en/basics/multiple-sequences' },
+      { text: '6. Polymeter & Polyrhythm', link: '/en/basics/polyrhythm' },
+      { text: '7. Audio Manipulation', link: '/en/basics/audio-manipulation' },
+      { text: '8. Live Coding', link: '/en/basics/live-coding' },
+    ],
+  },
+  {
+    text: 'Help',
+    collapsed: false,
+    items: [
+      { text: '9. Reference', link: '/en/reference/methods' },
+      { text: '10. Troubleshooting', link: '/en/troubleshooting' },
+    ],
+  },
+]
+
+// 後方互換のため既存 import 名 (sidebar) も維持
+export const sidebar = sidebarJa
