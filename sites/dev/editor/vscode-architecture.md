@@ -251,7 +251,7 @@ interface MethodChainContext {
 
 `analyzeMethodChain(lineText, position)` は、カーソル位置までのテキストを走査して、メソッドチェーンのどの段階にいるかを判定します。`getContextualCompletions(context, isGlobal)` はその結果を受けて、文脈に適した補完候補を並べ直して返します。例えば `.audio()` がまだない段階では `audio` が補完の先頭に来て、`.play()` 済みなら `run`, `loop` が先頭に来ます。
 
-診断 (`updateDiagnostics`) はドキュメント変更イベント (`onDidChangeTextDocument`) で駆動します。`languageId === 'orbitscore'` の文書だけが対象です。
+診断 (`updateDiagnostics`) はドキュメント変更イベント (`onDidChangeTextDocument`) で駆動します。`languageId === 'orbitscore'` の文書だけが対象です。チェック内容は 5 種類: 括弧の対応 (Error)、tempo 範囲 (Warning)、deprecated キーワード (Warning)、`global` state-setter の once-per-file (Warning)、`audioPath` ordering (Warning)。詳細は [II-2](/editor/execution-feedback#リアルタイム診断-updatediagnostics) を参照してください。
 
 ---
 

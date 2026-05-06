@@ -6,6 +6,7 @@ import * as fs from 'fs'
 import * as vscode from 'vscode'
 
 import { analyzeMethodChain, getContextualCompletions } from './completion-context'
+import { analyzeAudioPathOrdering, analyzeGlobalOncePerFile } from './diagnostics-analysis'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -1264,6 +1265,28 @@ async function updateDiagnostics(
       diagnostic.tags = [vscode.DiagnosticTag.Deprecated]
       diagnostics.push(diagnostic)
     }
+  }
+
+  // === Cross-line analyses (pure functions, unit-testable) ===
+  // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
+  // VS Code Diagnostic オブジェクトに変換するだけにする。
+  for (const issue of analyzeGlobalOncePerFile(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Warning,
+      ),
+    )
+  }
+  for (const issue of analyzeAudioPathOrdering(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Warning,
+      ),
+    )
   }
 
   collection.set(document.uri, diagnostics)

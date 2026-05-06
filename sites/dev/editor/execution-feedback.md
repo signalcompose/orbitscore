@@ -405,7 +405,7 @@ async function updateDiagnostics(
 }
 ```
 
-診断のチェック内容は 3 種類です:
+診断のチェック内容は 5 種類です:
 
 ### 1. 括弧の対応チェック (Error)
 
@@ -424,6 +424,31 @@ async function updateDiagnostics(
 `sequence ` という文字列を含む行 (コメントアウトを除く) は旧 MIDI DSL の構文です。`DiagnosticTag.Deprecated` を付けることで、VS Code が取り消し線スタイルで表示します。
 
 ちなみに `sequence ` の検出が「旧 MIDI DSL の名残」である背景は [ADR-002](/decisions/adr-002-dsl-v3-pivot) で扱います。
+
+### 4. global state-setter once-per-file (Warning)
+
+`global` の state-setting メソッド (tempo / beat / audioPath / start / stop / gain / key / normalizer / limiter / compressor) はファイル中で 1 回のみ書くべき、というルールに違反した場合に `DiagnosticSeverity.Warning` を出します。
+
+ドキュメント全行を再ループして `\bglobal\s*\.\s*(\w+)\s*\(/g` で呼び出しを抽出し、対象メソッドごとの出現位置を Map に集計、2 回目以降の出現に Diagnostic を付けます。
+
+対象外:
+- `init global.seq` (sequence 宣言、複数必要)
+- `LOOP`, `RUN`, `MUTE` (uppercase 標準形のトランスポートコマンド、評価ごとに発火する用途)
+- `seq.<method>` (per-sequence メソッドは制限なし)
+
+設計意図: live coding の正攻法は「行を書き換えて再評価」。重複行は意図しない誤動作 (どの値が効いているか不明) の温床になるため、編集スタイルの自然な誘導として warning を出します。
+
+### 5. audioPath ordering (Warning)
+
+`global.audioPath()` は最初の `\.audio("<相対パス>")` より先に書かなければならない、というルールです。順序が逆だと audio() 呼び出し時点で audioPath が空のため、絶対化のタイミングがズレます。
+
+最初の `global.audioPath(` の出現行番号を取得し、各 `\.audio("...")` 呼び出しについて引数を判定:
+- 絶対パス (`/`, `~/`, `C:\` 等) → スキップ
+- 相対パス、かつ audioPath より前に出現または audioPath 不在 → Warning
+
+メッセージは「audioPath 不在」と「順序逆」で分岐します。後者の場合は audioPath が宣言されている行番号も提示します。
+
+ちなみにこのルールが導入された経緯は [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) で扱った「パス解決の環境非依存化」と関連します。runtime エラーになる前に editor 上で予防する UX 改善です。
 
 ---
 
