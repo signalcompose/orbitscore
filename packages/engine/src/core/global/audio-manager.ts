@@ -9,14 +9,14 @@ import type { AudioEngine } from '../../audio/types'
 export class AudioManager {
   private _audioPath: string = '' // Base path for audio files
   private audioEngine: AudioEngine
-  private _documentDirectory: string = '' // Directory of the currently evaluated .osc file
+  private _documentDirectory: string = '' // Directory of the currently evaluated .orbs file
 
   constructor(audioEngine: AudioEngine) {
     this.audioEngine = audioEngine
   }
 
   /**
-   * Set the directory of the currently evaluated .osc file
+   * Set the directory of the currently evaluated .orbs file
    * This is used as the base for relative path resolution in audioPath()
    * @internal - Called by the engine when evaluating a document
    */
@@ -38,7 +38,7 @@ export class AudioManager {
     } else {
       throw new Error(
         `Cannot resolve relative audioPath("${value}"): no document context. ` +
-          `Save the .osc file first, or use an absolute path.`,
+          `Save the .orbs file first, or use an absolute path.`,
       )
     }
 
@@ -48,7 +48,7 @@ export class AudioManager {
     }
 
     console.log(`📂 audioPath: ${value} → ${resolved}`)
-    console.log(`📂 base: ${this._documentDirectory} (.osc file directory)`)
+    console.log(`📂 base: ${this._documentDirectory} (.orbs file directory)`)
 
     this._audioPath = resolved
     return this

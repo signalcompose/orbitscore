@@ -6,7 +6,7 @@
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
-global.audioPath("../test-assets/audio")  // Set base path for audio files (relative to .osc file)
+global.audioPath("../test-assets/audio")  // Set base path for audio files (relative to .orbs file)
 global.start()  // Start the scheduler
 
 // === Section 2: Your First Sequence ===

@@ -54,7 +54,7 @@ PR #99 / #103 で Rust audio engine の PoC を構築した結果、全機能が
 
 - DSL の構文 / 意味論
 - Musical time (BPM / 拍子 / ポリリズム)
-- ファイル形式（`.osc` 等）
+- ファイル形式（`.orbs` 等）
 - ネットワーク / IPC（デーモン化の詳細）
 - UI / エディタ
 

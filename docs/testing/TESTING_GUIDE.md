@@ -101,7 +101,7 @@ Same installation process as VS Code.
 
 #### Test 1: Syntax Highlighting
 
-1. Open `examples/09_reserved_keywords.osc`
+1. Open `examples/09_reserved_keywords.orbs`
 2. **Verify**:
    - Keywords (`var`, `init`, `GLOBAL`, `RUN`, `LOOP`, `MUTE`) are highlighted
    - Method names (`tempo`, `beat`, `play`, `audio`) are highlighted
@@ -266,7 +266,7 @@ ls -la test-assets/audio/*.wav
 ### Issue: Cmd+Enter Does Nothing
 
 **Check**:
-1. File has `.osc` extension
+1. File has `.orbs` extension
 2. Extension is activated (restart IDE)
 3. Keybinding is registered
 

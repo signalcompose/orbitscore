@@ -185,7 +185,7 @@ _kick.play(
 
 ## `setDocumentDirectory` の自動注入
 
-収集したテキストを engine に送る直前、`setDocumentDirectory` コマンドを自動で挿入します。`audioPath()` および `audio()` の相対パス解決を `.osc` ファイルのディレクトリ基準で行うための仕掛けです。
+収集したテキストを engine に送る直前、`setDocumentDirectory` コマンドを自動で挿入します。`audioPath()` および `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けです。
 
 ```typescript
 // extension.ts (Issue #168 で挙動を変更)
@@ -208,7 +208,7 @@ if (globalInitMatch) {
 注入は以下の 2 段階で行われます:
 
 1. **global 初期化ブロックの評価時**: `var global = init GLOBAL` の直後に挿入し、`globalInitialized` フラグを立てる
-2. **その後の任意の評価**: コード先頭に prepend する。これにより、ユーザーが別の `.osc` ファイルに切り替えて部分評価しても、現在のファイルのディレクトリが反映される
+2. **その後の任意の評価**: コード先頭に prepend する。これにより、ユーザーが別の `.orbs` ファイルに切り替えて部分評価しても、現在のファイルのディレクトリが反映される
 
 `globalInitialized` フラグは engine プロセスのライフサイクル（起動・停止・拡張機能の activate）にバインドされ、リセットされます。
 
@@ -477,7 +477,7 @@ flowchart TD
 - [DiagnosticTag.Deprecated](/glossary#diagnostictagdeprecated) — `sequence ` キーワード検出時に付加するタグ。取り消し線スタイルで表示
 - [Extension Host](/glossary#extension-host) — `runSelection()` と `flashLines()` が動くプロセス。engine への stdin 送信もここで行う
 - [setDocumentDirectory](/glossary#setdocumentdirectory) — global ブロック評価時に自動注入される相対パス解決コマンド
-- [language ID (orbitscore)](/glossary#language-id-orbitscore) — `runSelection()` が最初に確認するガード条件。`.osc` ファイル以外では実行しない
+- [language ID (orbitscore)](/glossary#language-id-orbitscore) — `runSelection()` が最初に確認するガード条件。`.orbs` ファイル以外では実行しない
 - [DSL (Domain-Specific Language)](/glossary#dsl) — engine の stdin に送られるテキスト。`codeToSend + '\n'` の形式
 
 ## 関連 ADR

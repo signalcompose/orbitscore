@@ -11,12 +11,12 @@
 
 Cursorで以下のファイルを開いてください：
 ```
-examples/performance-test-simple.osc
+examples/performance-test-simple.orbs
 ```
 
 ### Step 2: 構文ハイライトの確認
 
-- ファイルが`.osc`拡張子で認識されているか確認
+- ファイルが`.orbs`拡張子で認識されているか確認
 - キーワード（`var`, `init`, `GLOBAL`）が色付けされているか確認
 - メソッド名（`tempo`, `beat`, `play`）が色付けされているか確認
 
@@ -121,7 +121,7 @@ global.stop()
 ### 問題: Cmd+Enterを押しても何も起こらない
 
 **確認項目**:
-1. ファイルが`.osc`拡張子で保存されているか
+1. ファイルが`.orbs`拡張子で保存されているか
 2. 拡張が有効化されているか（Cursor再起動）
 3. キーバインドが正しく設定されているか
 

@@ -97,7 +97,7 @@ export class Global {
   }
 
   /**
-   * Set the directory of the currently evaluated .osc file
+   * Set the directory of the currently evaluated .orbs file
    * Used for relative path resolution in audioPath()
    * @internal - Called by the engine when evaluating a document
    */

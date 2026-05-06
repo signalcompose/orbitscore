@@ -151,7 +151,7 @@ if (globalInitMatch) {
 注入条件:
 
 1. `var global = init GLOBAL` を含む評価 → init の直後に挿入し、`globalInitialized` フラグを立てる
-2. 上記後の任意の評価 → コード先頭に prepend (`.osc` ファイル切り替えにも追従)
+2. 上記後の任意の評価 → コード先頭に prepend (`.orbs` ファイル切り替えにも追従)
 3. `globalInitialized` が `false` の状態で `init` 行を含まない評価 → 注入しない (`global` 未定義のためエラー回避)
 
 `globalInitialized` フラグは engine プロセスのライフサイクルにバインドされ、起動・再起動・activate のタイミングでリセットされます。

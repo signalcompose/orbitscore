@@ -125,7 +125,7 @@ kick.run()
 #### VS Code / Cursor での実行
 
 1. **エンジン起動**: ステータスバーをクリック → "🚀 Start Engine"
-2. **ファイルを開く**: `.osc` ファイルを開く
+2. **ファイルを開く**: `.orbs` ファイルを開く
 3. **保存**: `Cmd+S` で定義を評価
 4. **実行**: コマンドを選択して `Cmd+Enter`
 
@@ -133,7 +133,7 @@ kick.run()
 
 ```bash
 cd packages/engine
-node dist/cli-audio.js play your-file.osc 10  # 10秒間再生
+node dist/cli-audio.js play your-file.orbs 10  # 10秒間再生
 ```
 
 ---

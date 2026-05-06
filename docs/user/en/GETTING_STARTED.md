@@ -72,7 +72,7 @@ code --install-extension orbitscore-0.0.1.vsix
 
 ## Step 5: Verify Installation
 
-Create a test file `test.osc`:
+Create a test file `test.orbs`:
 
 ```osc
 var global = init GLOBAL
@@ -92,12 +92,12 @@ LOOP(kick)
 
 ```bash
 cd packages/engine
-npm run cli -- /path/to/test.osc
+npm run cli -- /path/to/test.orbs
 ```
 
 ### Run in VS Code
 
-1. Open `test.osc` in VS Code
+1. Open `test.orbs` in VS Code
 2. Select all lines
 3. Press **Cmd+Enter** (Mac) or **Ctrl+Enter** (Linux/Windows)
 4. You should hear a kick drum playing
@@ -108,13 +108,13 @@ Explore example files in the `examples/` directory:
 
 ```bash
 cd examples
-ls *.osc
+ls *.orbs
 ```
 
 Recommended examples:
-- `01_hello_world.osc` - Basic usage
-- `09_reserved_keywords.osc` - Transport control
-- `performance-demo.osc` - Advanced features
+- `01_hello_world.orbs` - Basic usage
+- `09_reserved_keywords.orbs` - Transport control
+- `performance-demo.orbs` - Advanced features
 
 ## Next Steps
 
@@ -134,7 +134,7 @@ Recommended examples:
 ### Issue: Cmd+Enter not working
 
 **Solution**:
-1. Verify file has `.osc` extension
+1. Verify file has `.orbs` extension
 2. Restart VS Code
 3. Use Command Palette: "OrbitScore: Run Selection"
 

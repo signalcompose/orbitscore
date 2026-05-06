@@ -17,15 +17,15 @@ export function printUsage(): void {
 OrbitScore Audio Engine CLI
 
 Usage:
-  orbitscore-audio play <file.osc> [duration]  - Play an OrbitScore file (optional duration in seconds)
+  orbitscore-audio play <file.orbs> [duration]  - Play an OrbitScore file (optional duration in seconds)
   orbitscore-audio repl                         - Start REPL mode for live coding
-  orbitscore-audio eval <file.osc>              - Evaluate a file in persistent mode
+  orbitscore-audio eval <file.orbs>              - Evaluate a file in persistent mode
   orbitscore-audio test                         - Run test sound
   orbitscore-audio help                         - Show this help
 
 Examples:
-  orbitscore-audio play examples/01_getting_started.osc     - Play until completion
-  orbitscore-audio play examples/01_getting_started.osc 5   - Play for 5 seconds then stop
+  orbitscore-audio play examples/01_getting_started.orbs     - Play until completion
+  orbitscore-audio play examples/01_getting_started.orbs 5   - Play for 5 seconds then stop
   orbitscore-audio repl                                      - Start live coding REPL
   orbitscore-audio test
 `)

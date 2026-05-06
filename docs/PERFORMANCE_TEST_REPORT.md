@@ -5,7 +5,7 @@
 **テスト日時**: 2024年12月25日  
 **テスト環境**: macOS 24.6.0, Node.js, VS Code  
 **テスト対象**: OrbitScore VS Code拡張機能 + オーディオエンジン  
-**テストファイル**: `examples/performance-test-simple.osc`
+**テストファイル**: `examples/performance-test-simple.orbs`
 
 ## テスト結果サマリー
 
@@ -88,11 +88,11 @@ bass.play(1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0)
 
 **発見された問題**:
 - 複雑なコメント形式（`// =====`）でパーサーエラー
-- 元の`performance-test.osc`ファイルが解析できない
+- 元の`performance-test.orbs`ファイルが解析できない
 
 **解決策**:
 - シンプルなコメント形式に変更
-- `performance-test-simple.osc`で正常動作を確認
+- `performance-test-simple.orbs`で正常動作を確認
 
 ## パフォーマンスメトリクス
 
@@ -172,7 +172,7 @@ bass.play(1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0)
 
 2. **パーサーの修正**
    - 複雑なコメント形式のサポート追加
-   - 元の`performance-test.osc`ファイルの修正
+   - 元の`performance-test.orbs`ファイルの修正
 
 3. **詳細パフォーマンステスト**
    - 長時間実行テスト（10分以上）

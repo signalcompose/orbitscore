@@ -129,7 +129,7 @@ orbitscore/
 │   ├── core/                # Global & Sequence tests
 │   └── timing/              # Timing calculation tests
 ├── examples/
-│   └── *.osc                # Sample files
+│   └── *.orbs                # Sample files
 └── README.md                # This file
 ```
 
@@ -360,7 +360,7 @@ npm run build
    - Select `packages/vscode-extension` folder
 
 3. Usage:
-   - Open a `.osc` file
+   - Open a `.orbs` file
    - Execute with `Cmd+Enter`
    - Control transport with commands
 

@@ -2,7 +2,7 @@
 
 Live coding music DSL for VS Code with a bundled SuperCollider audio engine.
 
-Write `.osc` patches and run them line by line with `Cmd+Enter`. No separate SuperCollider install required.
+Write `.orbs` patches and run them line by line with `Cmd+Enter`. No separate SuperCollider install required.
 
 ## Supported Platforms
 
@@ -18,7 +18,7 @@ Cross-platform support is tracked as a future effort.
 
 ## Quick Start
 
-1. Open or create a `.osc` file (a starter template is in [examples/](https://github.com/signalcompose/orbitscore/tree/main/examples))
+1. Open or create a `.orbs` file (a starter template is in [examples/](https://github.com/signalcompose/orbitscore/tree/main/examples))
 2. Run **OrbitScore: Start Engine** (status bar shows `OrbitScore: Ready`)
 3. Select code (or place the cursor on a line) and press `Cmd+Enter`
 
@@ -38,7 +38,7 @@ LOOP(kick)
 
 ## Features
 
-- Syntax highlighting for `.osc` files
+- Syntax highlighting for `.orbs` files
 - Run selection with `Cmd+Enter` (single line or multi-line block)
 - IntelliSense / hover for DSL keywords
 - Real-time syntax diagnostics

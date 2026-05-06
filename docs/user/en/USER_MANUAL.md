@@ -85,7 +85,7 @@ cd packages/engine/supercollider
 
 ### Your First Program
 
-Create a file `hello.osc`:
+Create a file `hello.orbs`:
 
 ```osc
 // Initialize global context
@@ -116,7 +116,7 @@ LOOP(kick)
 
 ```bash
 cd packages/engine
-npm run cli -- path/to/your/file.osc
+npm run cli -- path/to/your/file.orbs
 ```
 
 ## DSL Syntax Guide
@@ -385,7 +385,7 @@ global.start()
 ### Cmd+Enter Not Working
 
 **Check**:
-1. File has `.osc` extension
+1. File has `.orbs` extension
 2. VS Code extension is installed
 3. Extension is activated
 

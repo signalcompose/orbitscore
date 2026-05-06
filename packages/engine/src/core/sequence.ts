@@ -201,12 +201,12 @@ export class Sequence {
       // Join with global audioPath (already absolute)
       fullPath = path.join(globalState.audioPath, filepath)
     } else if (globalState.documentDirectory) {
-      // Resolve relative to the .osc file's directory
+      // Resolve relative to the .orbs file's directory
       fullPath = path.resolve(globalState.documentDirectory, filepath)
     } else {
       throw new Error(
         `Cannot resolve relative audio("${filepath}"): no audioPath() or document context. ` +
-          `Set audioPath() first, save the .osc file, or use an absolute path.`,
+          `Set audioPath() first, save the .orbs file, or use an absolute path.`,
       )
     }
 
