@@ -17,6 +17,48 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.75 Release v1.2.0 — first git-tagged release (May 06, 2026)
+
+**Date**: May 06, 2026
+**Status**: ✅ COMPLETED
+**Branch**: `claude/prepare-orbitscore-release-0Q6uK`
+**Tag**: `v1.2.0` (初の正式 git tag)
+
+**動機**: ICMC 2026 Hamburg (5/10-16) 発表前に、 これまで package.json 内のみで管理されていたバージョンを git tag として固定し、 `release.yml` workflow による Marketplace / Open VSX / GitHub Release の自動配信パイプラインを起動する。 1.1.0 ICMC release-ready 状態以降に積み上がった機能・破壊的変更・ドキュメント整備を 1.2.0 として正式リリースする。
+
+**バージョン選択の根拠**:
+- semver 上は `.osc` → `.orbs` 拡張子変更が breaking でありメジャー (2.0.0) 候補
+- ただし対象ユーザーが内部利用に限定されている現状に鑑み、 利用者影響範囲を考慮して minor (1.2.0) 扱いとする
+- CHANGELOG の Changed セクション冒頭で破壊的変更を明示し、 利用者へのリネーム手順を案内
+
+**変更内容**:
+
+- `CHANGELOG.md` 新規作成 (Keep a Changelog 準拠、 1.2.0 が初エントリ)
+- `package.json` (root) `1.1.2` → `1.2.0`
+- `packages/vscode-extension/package.json` `1.1.2` → `1.2.0`
+- `package-lock.json` workspace ルートと vscode-extension entry を 1.2.0 に同期
+
+**含まれる主な変更 (1.1.0 ICMC release-ready 以降)**:
+- 拡張子 `.osc` → `.orbs` (af9b887) ※ 利用者リネーム必要
+- 診断機能: global once-per-file / audioPath ordering (0666633, 2c3d793)
+- ユーザー向け学習サイト 8 章 (65a11b8)
+- 開発者向け学習サイト 16 章 (671481f)
+- i18n: dev 18 章 / user 8 章の英訳 (136c4b6, d4e1850)
+- GitHub Pages deploy workflow (36dae32)
+- 環境非依存 audio path 解決 fix (f972ddc)
+
+**自動化フロー**:
+1. tag `v1.2.0` を push
+2. `.github/workflows/release.yml` が trigger:
+   - macOS arm64 で extension をビルド
+   - scsynth bundle 抽出 + 整合性検証
+   - `.vsix` package 化
+   - `gh release create --generate-notes` で GitHub Release 作成 + .vsix を asset 添付
+   - VS Code Marketplace + Open VSX に publish (stable tag のみ)
+3. CHANGELOG.md は repo 内 canonical 詳細記録、 GitHub Release notes は workflow による auto-generated 形式
+
+---
+
 ### 6.74 Deploy user + dev learning sites to GitHub Pages (May 06, 2026)
 
 **Date**: May 06, 2026
