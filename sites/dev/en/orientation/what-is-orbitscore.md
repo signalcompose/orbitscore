@@ -1,10 +1,13 @@
 ---
-title: What is OrbitScore
-description: stub (translation pending)
+title: "0-1. What is OrbitScore"
+chapter-id: "0-1"
+status: stub
 ---
 
-# What is OrbitScore
+> **Note**: This page is a stub. The body is planned for Phase B (with a draft proposal to be written by yamato as the DSL designer).
 
-::: warning Translation in progress
-This page is awaiting translation. Please refer to the Japanese version for now.
-:::
+The DSL design philosophy of OrbitScore, its relationship to the paper, and why it was created (motivation and problem statement).
+
+## Next Exploration Candidates
+
+(Undecided at the scaffold stage)
