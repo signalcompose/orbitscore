@@ -30,34 +30,34 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 
 | # | パス | Status | Last translated against (ja commit) | PR |
 |---|---|---|---|---|
-| - | `index.md` | pending | - | - |
-| 0-1 | `orientation/what-is-orbitscore.md` | pending | - | - |
+| - | `index.md` | done | 8ba937f | - |
+| 0-1 | `orientation/what-is-orbitscore.md` | done | 8ba937f | - |
 | 0-2 | `orientation/architecture-overview.md` | done (spike) | (本 PR) | - |
-| I-1 | `pipeline/text-to-ast.md` | pending | - | - |
-| I-2 | `pipeline/evaluation.md` | pending | - | - |
-| I-3 | `pipeline/selective-execution.md` | pending | - | - |
-| II-1 | `scheduling/time-representation.md` | pending | - | - |
-| II-2 | `scheduling/polymeter.md` | pending | - | - |
-| II-3 | `scheduling/event-queue.md` | pending | - | - |
-| II-4 | `scheduling/transport.md` | pending | - | - |
-| III-1 | `audio/supercollider.md` | pending | - | - |
-| III-2 | `audio/audio-file-playback.md` | pending | - | - |
-| III-3 | `audio/scsynth-bundle.md` | pending | - | - |
-| IV-1 | `editor/vscode-architecture.md` | pending | - | - |
-| IV-2 | `editor/execution-feedback.md` | pending | - | - |
-| ADR | `decisions/adr-001-supercollider.md` | pending | - | - |
-| ADR | `decisions/adr-002-dsl-v3-pivot.md` | pending | - | - |
-| ADR | `decisions/adr-003-scsynth-bundle.md` | pending | - | - |
-| - | `glossary.md` | pending | - | - |
+| I-1 | `pipeline/text-to-ast.md` | done | 8ba937f | - |
+| I-2 | `pipeline/evaluation.md` | done | 8ba937f | - |
+| I-3 | `pipeline/selective-execution.md` | done | 8ba937f | - |
+| II-1 | `scheduling/time-representation.md` | done | 8ba937f | - |
+| II-2 | `scheduling/polymeter.md` | done | 8ba937f | - |
+| II-3 | `scheduling/event-queue.md` | done | 8ba937f | - |
+| II-4 | `scheduling/transport.md` | done | 8ba937f | - |
+| III-1 | `audio/supercollider.md` | done | 8ba937f | - |
+| III-2 | `audio/audio-file-playback.md` | done | 8ba937f | - |
+| III-3 | `audio/scsynth-bundle.md` | done | 8ba937f | - |
+| IV-1 | `editor/vscode-architecture.md` | done | 8ba937f | - |
+| IV-2 | `editor/execution-feedback.md` | done | 8ba937f | - |
+| ADR | `decisions/adr-001-supercollider.md` | done | 8ba937f | - |
+| ADR | `decisions/adr-002-dsl-v3-pivot.md` | done | 8ba937f | - |
+| ADR | `decisions/adr-003-scsynth-bundle.md` | done | 8ba937f | - |
+| - | `glossary.md` | done | 8ba937f | - |
 
-**残り**: 18 章
+**残り**: 0 章
 
 ---
 
 ## 全体進捗
 
-- **完了**: 11 章 (user 10 + dev 1 spike)
-- **未着手**: 18 章
+- **完了**: 29 章 (user 10 + dev 19)
+- **未着手**: 0 章
 - **総章数**: 29 章
 
 ---
