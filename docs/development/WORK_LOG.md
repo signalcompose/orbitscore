@@ -17,6 +17,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.71 Issue #171: Diagnostics for global once-per-file & audioPath ordering (May 06, 2026)
+
+**Date**: May 06, 2026
+**Status**: ⏳ IN PROGRESS（マージ前動作確認待ち）
+**Branch**: `171-global-once-per-file-diagnostics`
+**Issue**: #171
+**Version**: 1.1.1 → **1.1.2**
+
+**動機**:
+- パス解決の runtime エラーは Output Channel にしか出ず、入力時点で気づきにくい（デモ中だと致命的）
+- DSL の意図: `global` の state-setting メソッドは単一情報源、live coding の正攻法は「行を書き換えて再評価」
+- `global.audioPath()` は `seq.audio()` より前にないと、絶対化のタイミングがズレる
+
+**設計方針**: VS Code 拡張の静的 diagnostic として実装（parser レベルでは syntax error にできない、構文上は valid）。Engine/parser 一切無変更、テストも無変更。
+
+**変更内容**:
+
+`packages/vscode-extension/src/extension.ts`:
+- 既存の `updateDiagnostics()` 関数末尾に 2 つの解析パスを追加
+- Analysis 1: `global.<method>()` の重複検出（state-setting 10 メソッド対象）
+  - 対象: tempo, beat, audioPath, start, stop, gain, key, normalizer, limiter, compressor
+  - 対象外: `init global.seq`, LOOP/RUN/MUTE
+  - 2 回目以降の出現に Warning severity の Diagnostic
+- Analysis 2: audioPath ordering 検出
+  - 最初の `global.audioPath(` 出現位置を取得
+  - 各 `\.audio("...")` 呼び出しについて、相対パスかつ audioPath より前に出現または audioPath 不在 → Warning
+  - 絶対パス（`/`, `~/`, `C:\`）はスキップ
+
+`package.json` (root) / `packages/vscode-extension/package.json`: 1.1.1 → 1.1.2
+
+`sites/dev/editor/execution-feedback.md`: 「診断のチェック内容は 3 種類」を 5 種類に拡張、新節 4・5 を追加
+
+**テスト結果**: 247 passed / 23 skipped / 270 total（engine 無変更のため）
+
+**マージ前動作確認**:
+- once-per-file: tempo 重複に warning、init global.seq / LOOP は warning なし
+- ordering: audio() が audioPath() より前で warning、絶対パスはスキップ
+- 既存ファイル: `05_live_coding_session.orbs` で tempo 2-3 回目に warning（想定通り）
+
+---
+
 ### 6.70 Issue #170: Rename file extension from .osc to .orbs (May 06, 2026)
 
 **Date**: May 06, 2026
