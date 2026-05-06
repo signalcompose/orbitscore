@@ -15,7 +15,7 @@ OrbitScore VS Code Live Coding Performance Testの結果に基づき、ライブ
 ```bash
 # VS Codeで拡張をインストールしてテスト
 code --install-extension packages/vscode-extension/orbitscore-0.0.1.vsix
-# examples/performance-test-simple.oscを開いてCmd+Enterをテスト
+# examples/performance-test-simple.orbsを開いてCmd+Enterをテスト
 ```
 
 #### 2. パーサーのコメント処理改善

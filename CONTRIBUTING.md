@@ -158,7 +158,7 @@ orbitscore/
 │   ├── testing/         # Testing documentation
 │   └── user/            # User documentation (en/ja)
 ├── tests/               # Test suite
-└── examples/            # Example .osc files
+└── examples/            # Example .orbs files
 ```
 
 ## Questions?

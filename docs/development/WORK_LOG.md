@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.70 Issue #170: Rename file extension from .osc to .orbs (May 06, 2026)
+
+**Date**: May 06, 2026
+**Status**: ⏳ IN PROGRESS（マージ前動作確認待ち）
+**Branch**: `170-rename-extension-to-orbs`
+**Issue**: #170
+**Version**: 1.1.0 → **1.1.1**
+
+**動機**:
+- OSC (Open Sound Control) との混同回避（ICMC コミュニティで衝突）
+- 論文では拡張子に言及がないため、ICMC 前のいまが切り替えタイミングとして最適
+- `.orbs` は orbit との語感連続性、ブランド整合、衝突小
+
+**設計方針**: 後方互換なし（ICMC 前で外部影響限定的、清潔なコードベース優先）
+
+**変更内容**:
+
+ファイルリネーム (82 ファイル、`.osc` → `.orbs`):
+- `examples/` (11 ファイル)
+- `test-assets/scores/` (66 ファイル)
+- `test-audio/` (5 ファイル)
+
+VS Code 拡張:
+- `packages/vscode-extension/package.json`: 言語登録の extensions を `.osc` → `.orbs` に変更、version 1.1.0 → 1.1.1
+
+ソースコード（コメント、JSDoc 例、エラーメッセージ）:
+- `packages/engine/src/cli-audio.ts`, `cli/execute-command.ts`, `cli/parse-arguments.ts`, `cli/play-mode.ts`
+- `packages/engine/src/core/global.ts`, `core/global/audio-manager.ts`, `core/sequence.ts`
+- `packages/vscode-extension/src/extension.ts`
+- すべてコメント・docstring・エラーメッセージ内の `.osc` 文字列のみ。プログラム的な拡張子チェック（`.endsWith('.osc')` 等）は元から存在せず
+
+ドキュメント:
+- `sites/dev/` 6 ファイル更新
+- `docs/` (active) 約 15 ファイル更新（archive は意図的に温存）
+- `README.md`, `CONTRIBUTING.md`, `examples/README.md`, `test-assets/README.md`, `packages/vscode-extension/README.md`
+
+バージョンバンプ:
+- root `package.json`: 1.0.1 → 1.1.1
+- `packages/vscode-extension/package.json`: 1.1.0 → 1.1.1
+
+**RC 番号を版番に含めない理由**: VS Code Extension パネルが `1.1.0-rc3` の suffix を表示しないため、複数 .vsix を区別できない。patch を毎回上げる方式に切り替え。
+
+**未更新（意図的）**:
+- `docs/archive/WORK_LOG_*.md`: 過去の作業記録、当時の事実として保存
+- `CLAUDE.md.backup`: 古い snapshot、編集対象外
+
+**テスト結果**: 247 passed / 23 skipped / 270 total
+
+**.vsix**: `packages/vscode-extension/orbitscore-1.1.1.vsix` (7.18 MB, 2510 files)
+
+**マージ前動作確認**:
+- [ ] `.orbs` ファイル開いて syntax highlight が効く
+- [ ] `.orbs` ファイルで `Cmd+Enter` (runSelection) 動作
+- [ ] `.orbs` ファイル開くと syntax highlight が効かない（プレーンテキスト扱い）
+- [ ] CLI `orbitscore-audio play examples/01_getting_started.orbs` 動作
+
+---
+
 ### 6.69 Issue #168: Eliminate environment-dependent audio file path resolution (May 06, 2026)
 
 **Date**: May 06, 2026
@@ -27,7 +85,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **動機**: `audioPath()` および `audio()` のパス解決に `process.cwd()` フォールバックが残っており、開発環境依存（VS Code workspace の有無、エンジン spawn 時の cwd 等）でサイレントに誤解決される懸念があった。デモ時に「音が鳴らない」事故になりうる。
 
 **設計方針**:
-- パスは 2 種類のみを許容: 絶対パス、または `.osc` ファイルからの相対パス
+- パスは 2 種類のみを許容: 絶対パス、または `.orbs` ファイルからの相対パス
 - `process.cwd()` フォールバックを完全排除 → 明示エラー
 - `documentDirectory` を常に保証する仕組みを engine / VS Code 拡張 / CLI 各層に整備
 
@@ -40,10 +98,10 @@ Engine:
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts`: `process.cwd()` フォールバックを assertion に変更
 - `packages/engine/src/core/sequence/playback/prepare-playback.ts`: 同上
 - `packages/engine/src/interpreter/interpreter-v2.ts`: `execute()` に `documentDirectory` オプションを追加し、global 初期化後に自動セット
-- `packages/engine/src/cli/play-mode.ts`: `.osc` ファイルパスから documentDirectory を自動導出して execute に渡す
+- `packages/engine/src/cli/play-mode.ts`: `.orbs` ファイルパスから documentDirectory を自動導出して execute に渡す
 
 VS Code 拡張:
-- `packages/vscode-extension/src/extension.ts`: `setDocumentDirectory` の自動注入を「global ブロック評価時のみ」から拡張。`globalInitialized` フラグでセッション状態を追跡し、init 後の任意の評価でもコード先頭に prepend するように変更（`.osc` ファイル切り替えにも追従）
+- `packages/vscode-extension/src/extension.ts`: `setDocumentDirectory` の自動注入を「global ブロック評価時のみ」から拡張。`globalInitialized` フラグでセッション状態を追跡し、init 後の任意の評価でもコード先頭に prepend するように変更（`.orbs` ファイル切り替えにも追従）
 
 テスト:
 - `tests/core/audio-path-resolution.spec.ts` 新規追加（7 テスト）: 絶対パス受理、documentDirectory 経由解決、未設定エラー、各ケースを網羅

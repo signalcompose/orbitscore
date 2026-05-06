@@ -2,7 +2,7 @@
 
 ## Overview
 
-This guide provides step-by-step instructions for testing OrbitScore's VS Code extension live coding capabilities using the `examples/performance-test.osc` file.
+This guide provides step-by-step instructions for testing OrbitScore's VS Code extension live coding capabilities using the `examples/performance-test.orbs` file.
 
 ## Prerequisites
 
@@ -13,8 +13,8 @@ This guide provides step-by-step instructions for testing OrbitScore's VS Code e
 ## Test Setup
 
 ### 1. Open the Performance Test File
-- Open `examples/performance-test.osc` in VS Code
-- Ensure the file is recognized as OrbitScore language (`.osc` extension)
+- Open `examples/performance-test.orbs` in VS Code
+- Ensure the file is recognized as OrbitScore language (`.orbs` extension)
 
 ### 2. Verify Extension Functionality
 - Check that syntax highlighting is working
@@ -215,7 +215,7 @@ Verify these files exist:
 #### Cmd+Enter Not Working
 - Verify extension is installed and active
 - Check keybinding is registered
-- Ensure file has `.osc` extension
+- Ensure file has `.orbs` extension
 - Check VS Code language mode
 
 #### Performance Issues

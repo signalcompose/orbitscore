@@ -17,7 +17,7 @@ import { ParsedArguments } from './types'
  * ```typescript
  * const args = parseArguments(process.argv.slice(2))
  * console.log(args.command) // 'play'
- * console.log(args.file) // 'examples/01_getting_started.osc'
+ * console.log(args.file) // 'examples/01_getting_started.orbs'
  * console.log(args.durationArg) // '5'
  * ```
  */

@@ -76,7 +76,7 @@
 
 **DSL Code Writing (DSLコード記述時の必須ルール):**
 
-- **BEFORE writing any `.osc` file or DSL code**: MUST read the relevant section in `docs/INSTRUCTION_ORBITSCORE_DSL.md`
+- **BEFORE writing any `.orbs` file or DSL code**: MUST read the relevant section in `docs/INSTRUCTION_ORBITSCORE_DSL.md`
 - **NEVER guess DSL syntax**: Always verify with specification first
 - **When creating examples or patterns**:
   1. Check `examples/` directory for similar patterns
@@ -128,7 +128,7 @@
 
 **チュートリアルファイルの参照を必須とする:**
 
-- **新しい`.osc`テストファイルを作成する前に、必ず既存のチュートリアルファイル（`examples/01_*.osc` - `examples/08_*.osc`）を確認すること**
+- **新しい`.orbs`テストファイルを作成する前に、必ず既存のチュートリアルファイル（`examples/01_*.orbs` - `examples/08_*.orbs`）を確認すること**
 - チュートリアルファイルに正しい構文例が記載されているため、それを参考にすること
 - 特に以下を確認：
   - `var global = init GLOBAL` の初期化（`global`ではなく`GLOBAL`）

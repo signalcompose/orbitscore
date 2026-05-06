@@ -1090,14 +1090,14 @@ async function runSelection() {
   }
 
   // Inject setDocumentDirectory so audioPath() / audio() resolve relative paths
-  // against the .osc file's directory, not the engine process's cwd.
+  // against the .orbs file's directory, not the engine process's cwd.
   //
   // Strategy:
   // - If this eval contains `var global = init GLOBAL`, insert setDocumentDirectory
   //   right after it (and remember that global is now initialized).
   // - Otherwise, if global has already been initialized in this engine session,
   //   prepend setDocumentDirectory before the user code (refreshes the directory
-  //   in case the user switched .osc files).
+  //   in case the user switched .orbs files).
   // - If global has not yet been initialized, do not inject (would fail with
   //   "global is not defined").
   let codeToSend = trimmedText

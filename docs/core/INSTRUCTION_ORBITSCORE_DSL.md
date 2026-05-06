@@ -80,13 +80,13 @@ global.audioPath("../test-assets/audio")   // set base directory for audio files
   1. **Document directory** (if set by VS Code extension - automatic)
   2. **audioPath directory** (if set via `global.audioPath()`)
   3. **Current working directory** (fallback)
-- **Automatic document directory**: VS Code extension automatically sets the document directory based on the `.osc` file location
+- **Automatic document directory**: VS Code extension automatically sets the document directory based on the `.orbs` file location
 - **Singleton behavior**: Setting the same path multiple times is a no-op (skipped)
 - Path resolution priority: Absolute path > Document directory > audioPath > CWD
 
 **Example**:
 ```js
-// In /Users/yamato/projects/myproject/songs/track01.osc
+// In /Users/yamato/projects/myproject/songs/track01.orbs
 var global = init GLOBAL
 global.audioPath("../audio")  // resolves to /Users/yamato/projects/myproject/audio
 

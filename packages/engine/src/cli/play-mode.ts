@@ -13,7 +13,7 @@ import { PlayOptions, PlayResult } from './types'
 /**
  * Play an OrbitScore file
  *
- * This function reads a .osc file, parses it, and executes it using
+ * This function reads a .orbs file, parses it, and executes it using
  * the interpreter. It supports both one-shot playback and timed execution
  * with auto-exit.
  *
@@ -23,10 +23,10 @@ import { PlayOptions, PlayResult } from './types'
  * @example
  * ```typescript
  * // One-shot playback
- * const result = await playFile({ filepath: 'examples/01_getting_started.osc' })
+ * const result = await playFile({ filepath: 'examples/01_getting_started.orbs' })
  *
  * // Timed execution (5 seconds)
- * await playFile({ filepath: 'examples/01_getting_started.osc', durationSeconds: 5 })
+ * await playFile({ filepath: 'examples/01_getting_started.orbs', durationSeconds: 5 })
  * ```
  */
 export async function playFile(options: PlayOptions): Promise<PlayResult> {
@@ -43,7 +43,7 @@ export async function playFile(options: PlayOptions): Promise<PlayResult> {
   // Parse the DSL
   const ir = parseAudioDSL(source)
 
-  // Derive documentDirectory from the .osc file location for relative path resolution
+  // Derive documentDirectory from the .orbs file location for relative path resolution
   const documentDirectory = path.dirname(path.resolve(filepath))
 
   // Create interpreter only if not already exists (for REPL persistence)

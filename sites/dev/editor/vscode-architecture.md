@@ -50,7 +50,7 @@ VS Code Renderer (UI)
 OrbitScore が使っているのは 2 種類です:
 
 - `"onStartupFinished"`: VS Code 起動が完了した時点で無条件に起動
-- `"onLanguage:orbitscore"`: `.osc` ファイル (language ID: `orbitscore`) を開いた瞬間に起動
+- `"onLanguage:orbitscore"`: `.orbs` ファイル (language ID: `orbitscore`) を開いた瞬間に起動
 
 `onStartupFinished` があるため、OrbitScore ファイルを開いていなくても拡張は常時ロードされます。Status bar インジケータが常に表示されているのはこのためです。
 
@@ -227,7 +227,7 @@ function updateBundleStatus(): void {
 }
 ```
 
-`when` 条件で `editorLangId == orbitscore` が指定されているため、`.osc` ファイルにフォーカスがある時のみ有効です。
+`when` 条件で `editorLangId == orbitscore` が指定されているため、`.orbs` ファイルにフォーカスがある時のみ有効です。
 
 ---
 
@@ -441,7 +441,7 @@ flowchart TD
 - [activationEvents](/glossary#activationevents) — `"onStartupFinished"` と `"onLanguage:orbitscore"` の 2 種類で常時起動を実現
 - [Extension Host](/glossary#extension-host) — 拡張コードが動く Node.js プロセス。engine プロセスの親プロセス
 - [StatusBarItem](/glossary#statusbaritem) — `statusBarItem` (priority 100) と `bundleStatusItem` (priority 99) の 2 本を管理
-- [language ID (orbitscore)](/glossary#language-id-orbitscore) — `.osc` ファイルに割り当てた言語 ID。IntelliSense・診断・キーバインドがすべてこの ID でフィルタリング
+- [language ID (orbitscore)](/glossary#language-id-orbitscore) — `.orbs` ファイルに割り当てた言語 ID。IntelliSense・診断・キーバインドがすべてこの ID でフィルタリング
 - [DiagnosticCollection](/glossary#diagnosticcollection) — `updateDiagnostics()` が書き込む診断コレクション。タイピングのたびに更新
 - [scsynth](/glossary#scsynth) — `resolveScsynthForUI()` が起動前に解決するオーディオサーバーバイナリ
 - [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — scsynth が見つからなければ spawn 自体をキャンセルする fail-loud 設計

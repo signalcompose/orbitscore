@@ -122,14 +122,14 @@ npx vsce package
 テストファイルは`examples/`ディレクトリに用意されています：
 
 ```bash
-ls examples/*.osc
+ls examples/*.orbs
 ```
 
 主なテストファイル：
-- `01_getting_started.osc` - 基本動作確認
-- `05_drum_patterns_simple.osc` - ドラムパターン
-- `07_audio_control.osc` - 音量・パン制御
-- `08_timing_verification.osc` - タイミング精度検証
+- `01_getting_started.orbs` - 基本動作確認
+- `05_drum_patterns_simple.orbs` - ドラムパターン
+- `07_audio_control.orbs` - 音量・パン制御
+- `08_timing_verification.orbs` - タイミング精度検証
 
 ## エージェント実行テスト（Type 1）
 
@@ -158,15 +158,15 @@ AIエージェントが以下の手順でテストを実行します：
 cd packages/engine
 
 # 基本的な実行
-node dist/cli-audio.js ../../examples/01_getting_started.osc
+node dist/cli-audio.js ../../examples/01_getting_started.orbs
 
 # デバッグモード（詳細ログ）
-DEBUG=orbitscore:* node dist/cli-audio.js ../../examples/01_getting_started.osc
+DEBUG=orbitscore:* node dist/cli-audio.js ../../examples/01_getting_started.orbs
 ```
 
 ### VSCode拡張機能での実行例
 
-1. `.osc`ファイルを開く
+1. `.orbs`ファイルを開く
 2. ステータスバーをクリック → "🚀 Start Engine"
 3. ファイル全体を選択して`Cmd+Enter`で実行
 
@@ -179,7 +179,7 @@ DEBUG=orbitscore:* node dist/cli-audio.js ../../examples/01_getting_started.osc
 ### Step 1: エンジン起動
 
 1. VS CodeでOrbitScoreプロジェクトを開く
-2. `.osc`ファイルを開く（例：`examples/live-demo.osc`）
+2. `.orbs`ファイルを開く（例：`examples/live-demo.orbs`）
 3. ステータスバーをクリック
    - **通常モード**: 🚀 Start Engine
    - **デバッグモード**: 🐛 Start Engine (Debug)

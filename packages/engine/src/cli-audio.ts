@@ -2,7 +2,7 @@
 
 /**
  * Audio-based CLI for OrbitScore
- * Executes .osc files and plays audio
+ * Executes .orbs files and plays audio
  *
  * This is a thin wrapper around the CLI modules in ./cli/
  * For backward compatibility, this file is kept as the main entry point.

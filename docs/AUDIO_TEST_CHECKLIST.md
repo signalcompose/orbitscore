@@ -21,7 +21,7 @@
 - [ ] **1-1**: グローバルコンテキスト初期化 (`var global = init GLOBAL`)
 - [ ] **1-2**: シーケンス作成 (`var seq = init global.seq`)
 
-**テストファイル**: `test-audio/01_initialization.osc`
+**テストファイル**: `test-audio/01_initialization.orbs`
 
 ---
 
@@ -32,7 +32,7 @@
 - [ ] **2-3**: 拍子設定 - 5/4拍子 (`global.beat(5 by 4)`)
 - [ ] **2-4**: オーディオパス設定 (`global.audioPath()`)
 
-**テストファイル**: `test-audio/02_global_params.osc`
+**テストファイル**: `test-audio/02_global_params.orbs`
 
 ---
 
@@ -43,7 +43,7 @@
 - [ ] **3-3**: 音声ファイル読み込み - 絶対パス (`seq.audio("/path/to/kick.wav")`)
 - [ ] **3-4**: Chop（音声分割） (`seq.chop(1)`, `seq.chop(4)`, `seq.chop(8)`)
 
-**テストファイル**: `test-audio/03_sequence_params.osc`
+**テストファイル**: `test-audio/03_sequence_params.orbs`
 
 ---
 
@@ -56,7 +56,7 @@
 - [ ] **4-5**: ネストplay() - 3分割 (`play(1, 2, (3, 2, 3), 4)`)
 - [ ] **4-6**: 休符を挟む (`play(1, 0, 2, 0, 3, 0, 4, 0)`)
 
-**テストファイル**: `test-audio/04_play_patterns.osc`
+**テストファイル**: `test-audio/04_play_patterns.orbs`
 
 ---
 
@@ -71,7 +71,7 @@
 - [ ] **5-1-5**: ミュート/アンミュート (`seq.mute()`, `seq.unmute()`)
 - [ ] **5-1-6**: 全体停止 (`global.stop()`)
 
-**テストファイル**: `test-audio/05_transport_basic.osc`
+**テストファイル**: `test-audio/05_transport_basic.orbs`
 
 #### 5-2. 予約語による一括制御（DSL v3.0）
 
@@ -84,7 +84,7 @@
 - [ ] **5-2-7**: RUNとLOOPの独立性（同じシーケンスが両方で動作）
 - [ ] **5-2-8**: MUTEフラグの永続性（LOOP離脱後も維持）
 
-**テストファイル**: `test-audio/05_transport_commands.osc`
+**テストファイル**: `test-audio/05_transport_commands.orbs`
 
 ---
 
@@ -99,7 +99,7 @@
 - [ ] **6-7**: リアルタイム音量変更（LOOP中）
 - [ ] **6-8**: リアルタイムパン変更（LOOP中）
 
-**テストファイル**: `test-audio/06_gain_pan.osc`
+**テストファイル**: `test-audio/06_gain_pan.orbs`
 
 ---
 
@@ -113,7 +113,7 @@
 - [ ] **7-1-4**: `tempo()` vs `_tempo()` - 設定のみ vs 即時適用
 - [ ] **7-1-5**: `length()` vs `_length()` - 設定のみ vs 即時適用
 
-**テストファイル**: `test-audio/07_underscore_prefix.osc`
+**テストファイル**: `test-audio/07_underscore_prefix.orbs`
 
 #### 7-2. グローバルパラメータの即時反映
 
@@ -121,14 +121,14 @@
 - [ ] **7-2-2**: `global._beat()` - 継承しているシーケンスに即時反映
 - [ ] **7-2-3**: 独自テンポ設定済みシーケンスは影響を受けない
 
-**テストファイル**: `test-audio/07_global_underscore.osc`
+**テストファイル**: `test-audio/07_global_underscore.orbs`
 
 #### 7-3. 初期値設定メソッド
 
 - [ ] **7-3-1**: `defaultGain()` - 初期音量設定（再生トリガーなし）
 - [ ] **7-3-2**: `defaultPan()` - 初期パン設定（再生トリガーなし）
 
-**テストファイル**: `test-audio/07_default_values.osc`
+**テストファイル**: `test-audio/07_default_values.orbs`
 
 ---
 
@@ -137,7 +137,7 @@
 - [ ] **8-1**: メソッドチェーンでシーケンス設定
 - [ ] **8-2**: チェーンの可読性確認（複数行記法）
 
-**テストファイル**: `test-audio/08_method_chaining.osc`
+**テストファイル**: `test-audio/08_method_chaining.orbs`
 
 ---
 
@@ -148,7 +148,7 @@
 - [ ] **9-3**: RUN/LOOP/MUTE複合動作
 - [ ] **9-4**: ライブコーディングシミュレーション（パターン変更）
 
-**テストファイル**: `test-audio/09_integration.osc`
+**テストファイル**: `test-audio/09_integration.orbs`
 
 ---
 
@@ -163,12 +163,12 @@
 
 2. CLIテスト実行
    ```bash
-   node packages/engine/dist/cli-audio.js run test-audio/01_initialization.osc
+   node packages/engine/dist/cli-audio.js run test-audio/01_initialization.orbs
    ```
 
 ### 手動テスト（ユーザー実行）
 
-各`.osc`ファイルをVSCode Extensionで実行し、以下を確認：
+各`.orbs`ファイルをVSCode Extensionで実行し、以下を確認：
 
 1. **タイミング精度**: 0-3ms以内の誤差
 2. **音質**: クリアで歪みがない

@@ -39,7 +39,7 @@ ls -la test-assets/audio/
 ## 🧪 Performance Test Procedures
 
 ### Test File
-Open `examples/performance-test.osc` in your IDE (VS Code/Cursor/Claude Code)
+Open `examples/performance-test.orbs` in your IDE (VS Code/Cursor/Claude Code)
 
 ### Phase 1: Basic Functionality
 
@@ -332,7 +332,7 @@ global.start()
 
 ### Cmd+Enter Not Working
 **Check**:
-1. File has `.osc` extension
+1. File has `.orbs` extension
 2. Extension is activated
 3. Keybinding is registered
 

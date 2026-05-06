@@ -72,7 +72,7 @@ code --install-extension orbitscore-0.0.1.vsix
 
 ## ステップ5: インストールの確認
 
-テストファイル `test.osc` を作成：
+テストファイル `test.orbs` を作成：
 
 ```osc
 var global = init GLOBAL
@@ -92,12 +92,12 @@ LOOP(kick)
 
 ```bash
 cd packages/engine
-npm run cli -- /path/to/test.osc
+npm run cli -- /path/to/test.orbs
 ```
 
 ### VS Codeで実行
 
-1. VS Codeで `test.osc` を開く
+1. VS Codeで `test.orbs` を開く
 2. すべての行を選択
 3. **Cmd+Enter**（Mac）または **Ctrl+Enter**（Linux/Windows）を押す
 4. キックドラムが再生されます
@@ -108,13 +108,13 @@ npm run cli -- /path/to/test.osc
 
 ```bash
 cd examples
-ls *.osc
+ls *.orbs
 ```
 
 推奨サンプル：
-- `01_hello_world.osc` - 基本的な使い方
-- `09_reserved_keywords.osc` - トランスポート制御
-- `performance-demo.osc` - 高度な機能
+- `01_hello_world.orbs` - 基本的な使い方
+- `09_reserved_keywords.orbs` - トランスポート制御
+- `performance-demo.orbs` - 高度な機能
 
 ## 次のステップ
 
@@ -134,7 +134,7 @@ ls *.osc
 ### 問題: Cmd+Enterが動作しない
 
 **解決方法**:
-1. ファイルに `.osc` 拡張子があるか確認
+1. ファイルに `.orbs` 拡張子があるか確認
 2. VS Codeを再起動
 3. コマンドパレットを使用: "OrbitScore: Run Selection"
 

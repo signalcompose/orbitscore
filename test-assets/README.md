@@ -7,7 +7,7 @@ This directory contains test audio files and score examples for OrbitScore devel
 ```
 test-assets/
 ├── audio/              # Test WAV files
-├── scores/             # Example .osc files
+├── scores/             # Example .orbs files
 ├── generate-test-audio.js  # Audio generation script
 └── README.md          # This file
 ```
@@ -38,33 +38,33 @@ All audio files are in WAV format (48kHz, 32-bit float, mono):
 
 Example OrbitScore files demonstrating various DSL features:
 
-### 1. `01_basic_drum_pattern.osc`
+### 1. `01_basic_drum_pattern.orbs`
 - **Purpose**: Simple 4/4 drum pattern
 - **Features**: Basic sequencing, audio loading, chopping
 - **Sequences**: Kick, snare, hi-hat patterns
 
-### 2. `02_bass_sequence.osc`
+### 2. `02_bass_sequence.orbs`
 - **Purpose**: Bass line with layered patterns
 - **Features**: Multi-bar loops, time stretching, pitch shifting
 - **Sequences**: Two bass layers, simple drums
 
-### 3. `03_melodic_patterns.osc`
+### 3. `03_melodic_patterns.orbs`
 - **Purpose**: Melodic content with chords
 - **Features**: Long sequences, chord progressions, arpeggios
 - **Sequences**: Melody, chords, arpeggiated patterns
 
-### 4. `04_polymeter_example.osc`
+### 4. `04_polymeter_example.orbs`
 - **Purpose**: Polyrhythmic patterns
 - **Features**: Different meters (3/4, 4/4, 5/4) playing simultaneously
 - **Sequences**: Three different metric patterns creating evolving rhythms
 
-### 5. `05_live_coding_session.osc`
+### 5. `05_live_coding_session.orbs`
 - **Purpose**: Complete live coding example
 - **Features**: Section-by-section execution, real-time manipulation
 - **Sequences**: Full drum kit, bass, lead, with performance commands
 - **Usage**: Execute sections with Cmd+Enter in VS Code
 
-### 6. `06_advanced_techniques.osc`
+### 6. `06_advanced_techniques.orbs`
 - **Purpose**: Advanced DSL features
 - **Features**: 
   - Nested play structures (flams, rolls)
@@ -78,7 +78,7 @@ Example OrbitScore files demonstrating various DSL features:
 
 ### In VS Code with OrbitScore Extension
 
-1. Open any `.osc` file from the `scores/` directory
+1. Open any `.orbs` file from the `scores/` directory
 2. Select code sections or entire file
 3. Press `Cmd+Enter` to execute selected code
 4. Use `Cmd+.` to stop playback

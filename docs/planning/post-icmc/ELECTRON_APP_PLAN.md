@@ -798,7 +798,7 @@ function addToRecentFiles(filePath: string): void {
 document.addEventListener('drop', async (e) => {
   e.preventDefault();
   const file = e.dataTransfer?.files[0];
-  if (file && file.name.endsWith('.osc')) {
+  if (file && file.name.endsWith('.orbs')) {
     const content = await file.text();
     editor.setValue(content);
   }
@@ -1707,7 +1707,7 @@ const myPlugin: OrbitScorePlugin = {
 
 **実装例**:
 ```javascript
-// ~/.orbitscore/scripts/my-custom-functions.osc
+// ~/.orbitscore/scripts/my-custom-functions.orbs
 // ユーザー定義関数（DSL拡張）
 function myPattern(seq, n) {
   seq.play(
