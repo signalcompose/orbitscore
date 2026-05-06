@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.72 Issue #174: Build user-facing learning site (sites/user/) (May 06, 2026)
+
+**Date**: May 06, 2026
+**Status**: ⏳ IN PROGRESS（マージ前 review 待ち）
+**Branch**: `174-user-learning-site`
+**Issue**: #174
+
+**動機**: ICMC で論文に興味を持った人や VS Code 拡張をインストールしたユーザーが、OrbitScore で実際に音を出してライブコーディングを始められるようにする「優しく丁寧な」初心者向け学習サイトを構築。dev サイト (`sites/dev/`) と並行して、UX 寄りの learning resource を整備する。
+
+**設計方針**:
+- 場所: `sites/user/`（VitePress、`@orbitscore/user-site` workspace）
+- 言語: 日本語のみ（英語版は別 issue で on-the-web / CronCreate routine で後追い）
+- 想定読者: 完全初心者、小学校高学年〜中学生レベルでも理解可能、子供扱いせず
+- トーン: ですます調、friendly、kind、親切丁寧
+- 表現: コードのみ（動画・GIF・スクリーンショットなし、必要なら Mermaid のみ）
+- SoT 関係: `docs/user/ja/USER_MANUAL.md` を primary source として再構成（dev サイトとは異なり code 直接引用ではない）
+
+**章構成（10 章）**:
+1. OrbitScore とは（landing 兼ねる）
+2. インストール
+3. はじめての音
+4. パターンを作る
+5. 複数のシーケンス
+6. ポリメーター・ポリリズム
+7. オーディオ操作
+8. ライブコーディング
+9. リファレンス（チートシート）
+10. トラブルシューティング
+
+**変更内容**:
+
+- `docs/development/USER_LEARNING_SITE.md` 新規作成（DEV_LEARNING_SITE.md 形式準拠の project brief）
+- `sites/user/` VitePress project 一式を新規作成（package.json、.vitepress/config.ts + sidebar.ts + theme/、STYLE_GUIDE.md、README.md）
+- 全 10 章を執筆（sub-agent 並列 dispatch、Group A/B/C で 9 章、spike 章 first-sound.md は手書き）
+- `docs/core/INDEX.md` に user 学習サイトの section を追加
+
+**執筆 workflow**:
+- spike 章: 章 3 first-sound.md を手書きでトーン基準を確立
+- bulk: sub-agent を 3 並列で dispatch（Group A: 章 2, 10 / Group B: 章 4, 5, 6 / Group C: 章 7, 8, 9）
+- self-check: ですます調違反、子供扱いトーン、過剰絵文字を grep で検出 → 違反なし
+
+**ビルド確認**: `npm run -w sites/user docs:build` クリーン通過、dead link なし、syntax warning なし。
+
+**別 issue で扱う**:
+- 英語版翻訳（dev サイトの英語化と同時に）
+- Web デプロイ（GitHub Pages or Vercel）
+- マーケットプレイス公開後の install ページ更新
+
+---
+
 ### 6.71 Issue #171: Diagnostics for global once-per-file & audioPath ordering (May 06, 2026)
 
 **Date**: May 06, 2026
