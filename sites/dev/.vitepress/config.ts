@@ -3,11 +3,15 @@ import { withMermaid } from 'vitepress-plugin-mermaid'
 import markdownItKatex from '@vscode/markdown-it-katex'
 import { sidebarJa, sidebarEn } from './sidebar'
 
+const SITE_BASE = '/orbitscore/dev/'
+
 export default withMermaid(
   defineConfig({
     title: 'OrbitScore Dev',
     description: 'OrbitScore 実装解説・学習サイト (個人学習ノート)',
     lang: 'ja-JP',
+
+    base: SITE_BASE,
 
     lastUpdated: true,
     cleanUrls: true,
@@ -29,7 +33,7 @@ export default withMermaid(
         'link',
         {
           rel: 'stylesheet',
-          href: '/katex/katex.min.css',
+          href: `${SITE_BASE}katex/katex.min.css`,
         },
       ],
     ],

@@ -1,0 +1,89 @@
+name: Deploy learning sites
+
+# OrbitScore の 2 つの VitePress 学習サイト (user / dev) を GitHub Pages に
+# 同時 deploy する。1 repo 1 GitHub Pages 制約のため、subpath で分割:
+#   user → https://signalcompose.github.io/orbitscore/
+#   dev  → https://signalcompose.github.io/orbitscore/dev/
+#
+# 各サイトの VitePress config の `base` がこの subpath と一致している必要がある。
+# (sites/user/.vitepress/config.ts: base = '/orbitscore/'
+#  sites/dev/.vitepress/config.ts:  base = '/orbitscore/dev/')
+#
+# Repo Settings → Pages → Source = "GitHub Actions" を事前に有効化すること。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sites/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy-sites.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Pages deploy は環境単位で逐次化。並走 run は新しい方が勝つ
+# (cancel-in-progress=false で deploy 中は既存 run を待つ)。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build user + dev sites
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build user site
+        run: npm run docs:build -w @orbitscore/user-site
+
+      - name: Build dev site
+        run: npm run docs:build -w @orbitscore/dev-site
+
+      - name: Combine sites into single artifact
+        run: |
+          set -euo pipefail
+          OUT=dist-pages
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+          # user site → root (served at /orbitscore/)
+          cp -R sites/user/.vitepress/dist/. "$OUT"/
+          # dev site → /dev/ subdir (served at /orbitscore/dev/)
+          mkdir -p "$OUT/dev"
+          cp -R sites/dev/.vitepress/dist/. "$OUT/dev"/
+          # sanity check: confirm both index.html exist
+          test -f "$OUT/index.html"     || { echo "::error::user index.html missing" >&2; exit 1; }
+          test -f "$OUT/dev/index.html" || { echo "::error::dev index.html missing" >&2; exit 1; }
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-pages
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
