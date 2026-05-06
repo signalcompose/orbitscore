@@ -1,0 +1,17 @@
+{
+  "name": "@orbitscore/user-site",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "OrbitScore user-facing learning site (beginner-friendly tutorial)",
+  "scripts": {
+    "docs:dev": "vitepress dev .",
+    "docs:build": "vitepress build .",
+    "docs:preview": "vitepress preview ."
+  },
+  "devDependencies": {
+    "mermaid": "^11.4.1",
+    "vitepress": "^1.5.0",
+    "vitepress-plugin-mermaid": "^2.0.17"
+  }
+}

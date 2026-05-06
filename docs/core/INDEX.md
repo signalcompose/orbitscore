@@ -35,16 +35,27 @@ OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider a
 | [IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md) | Phase-by-phase technical roadmap |
 | [BEAT_METER_SPECIFICATION.md](../development/BEAT_METER_SPECIFICATION.md) | Beat / meter / polymeter specification |
 | [DEV_LEARNING_SITE.md](../development/DEV_LEARNING_SITE.md) | dev 学習サイト project brief + `vitepress-learning-site` skill 運用 overrides |
+| [USER_LEARNING_SITE.md](../development/USER_LEARNING_SITE.md) | user 学習サイト project brief + 執筆規律 overrides |
 
 ### Dev Learning Site (`sites/dev/`)
 
-dev 学習サイト本体 (VitePress、ローカル参照は `npm run docs:dev`、deploy は post-ICMC で別 issue):
+dev 学習サイト本体 (VitePress、ローカル参照は `npm run -w sites/dev docs:dev`、deploy は post-ICMC で別 issue):
 
 | Location | Purpose |
 |---|---|
 | [`sites/dev/`](../../sites/dev/) | dev 学習サイト VitePress プロジェクト、yamato 個人学習ノート |
 | [`sites/dev/STYLE_GUIDE.md`](../../sites/dev/STYLE_GUIDE.md) | 章執筆規約 (frontmatter / Sources / 次の深掘り候補 / shallow first pass) |
 | [`sites/dev/orientation/architecture-overview.md`](../../sites/dev/orientation/architecture-overview.md) | spike 章 (0-2 アーキテクチャ全景)、status: draft |
+
+### User Learning Site (`sites/user/`)
+
+user 向け学習サイト本体 (VitePress、ローカル参照は `npm run -w sites/user docs:dev`、deploy はコンテンツ完了後に別 issue):
+
+| Location | Purpose |
+|---|---|
+| [`sites/user/`](../../sites/user/) | user 学習サイト VitePress プロジェクト、初心者向け 10 章 |
+| [`sites/user/STYLE_GUIDE.md`](../../sites/user/STYLE_GUIDE.md) | 章執筆規約 (ですます調、子供扱いしない、コードのみ) |
+| [`sites/user/index.md`](../../sites/user/index.md) | 章 1 「OrbitScore とは」 (landing 兼ねる) |
 
 ### Archived WORK_LOG (`docs/archive/`)
 
