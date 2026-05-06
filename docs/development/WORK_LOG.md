@@ -17,28 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.75 Release v1.2.0 — first git-tagged release (May 06, 2026)
+### 6.75 Release v1.1.0 stable — promote RC sequence to stable (May 06, 2026)
 
 **Date**: May 06, 2026
-**Status**: ✅ COMPLETED
+**Status**: ⏳ READY (tag push 待ち、 proxy 制約により利用者側で push 必要)
 **Branch**: `claude/prepare-orbitscore-release-0Q6uK`
-**Tag**: `v1.2.0` (初の正式 git tag)
+**Tag**: `v1.1.0` (v1.1.0-rc1/rc2/rc3 を経た初の stable 化)
 
-**動機**: ICMC 2026 Hamburg (5/10-16) 発表前に、 これまで package.json 内のみで管理されていたバージョンを git tag として固定し、 `release.yml` workflow による Marketplace / Open VSX / GitHub Release の自動配信パイプラインを起動する。 1.1.0 ICMC release-ready 状態以降に積み上がった機能・破壊的変更・ドキュメント整備を 1.2.0 として正式リリースする。
+**動機**: ICMC 2026 Hamburg (5/10-16) 発表前に、 既に rc1/rc2/rc3 を切り終えた v1.1.0 を stable として正式タグ付けし、 `release.yml` workflow による Marketplace / Open VSX / GitHub Release の自動配信パイプラインを起動する。 RC 連番をきちんと stable で締めくくることで `v1.0.1 → v1.1.0-rc{1,2,3} → v1.1.0 stable` の canonical な lineage を残す。
 
 **バージョン選択の根拠**:
-- semver 上は `.osc` → `.orbs` 拡張子変更が breaking でありメジャー (2.0.0) 候補
-- ただし対象ユーザーが内部利用に限定されている現状に鑑み、 利用者影響範囲を考慮して minor (1.2.0) 扱いとする
-- CHANGELOG の Changed セクション冒頭で破壊的変更を明示し、 利用者へのリネーム手順を案内
+- 当初 v1.2.0 案で実装着手したが、 過去タグ (v1.0.1, v1.1.0-rc{1,2,3}) を `git fetch --tags` で確認した結果、 v1.1.0 RC が 3 本も切られているのに stable promote が未実施という宙吊り状態が判明
+- post-rc3 の変更 (.orbs rename / 学習サイト / diagnostics) は「v1.1.0 の最終スコープに取り込まれた追加分」 として位置づけ可能、 別 minor を切る積極的理由なし
+- README / WORK_LOG にも「ICMC v1.1.0 release-ready」 という記述があり、 そもそも 1.1.0 が出すべきバージョンだった
+- semver 上 `.osc` → `.orbs` は breaking だが、 利用者影響範囲を考慮して minor (1.1.0) 扱い、 CHANGELOG Changed 冒頭で明示
+
+**Proxy 制約 (重要)**:
+- Claude session の git proxy は `refs/tags/*` への push を 403 で全面ブロック
+- annotated/lightweight 問わず、 また tag 名のパターンに依らず拒否される
+- これは tag push が release.yml workflow を起動して Marketplace publish まで自動実行する高権限操作だからで、 安全装置として人間の手動 push を強制する設計
+- 結果、 commit + branch push までは Claude が完了、 最後の `git push origin v1.1.0` のみ利用者側で実行が必要
 
 **変更内容**:
 
-- `CHANGELOG.md` 新規作成 (Keep a Changelog 準拠、 1.2.0 が初エントリ)
-- `package.json` (root) `1.1.2` → `1.2.0`
-- `packages/vscode-extension/package.json` `1.1.2` → `1.2.0`
-- `package-lock.json` workspace ルートと vscode-extension entry を 1.2.0 に同期
+- `CHANGELOG.md` 新規作成 (Keep a Changelog 準拠、 1.1.0 が初エントリ)
+- `package.json` (root) `1.1.2` → `1.1.0` (※ 後方への version down は package.json 上の数値のみ、 git tag は新規)
+- `packages/vscode-extension/package.json` `1.1.2` → `1.1.0`
+- `package-lock.json` workspace ルートと vscode-extension entry を 1.1.0 に同期
 
-**含まれる主な変更 (1.1.0 ICMC release-ready 以降)**:
+**含まれる主な変更 (v1.1.0-rc3 以降)**:
 - 拡張子 `.osc` → `.orbs` (af9b887) ※ 利用者リネーム必要
 - 診断機能: global once-per-file / audioPath ordering (0666633, 2c3d793)
 - ユーザー向け学習サイト 8 章 (65a11b8)
@@ -48,7 +55,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - 環境非依存 audio path 解決 fix (f972ddc)
 
 **自動化フロー**:
-1. tag `v1.2.0` を push
+1. tag `v1.1.0` を push (利用者側で実行)
 2. `.github/workflows/release.yml` が trigger:
    - macOS arm64 で extension をビルド
    - scsynth bundle 抽出 + 整合性検証
