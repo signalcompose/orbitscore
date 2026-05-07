@@ -1,13 +1,24 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
 ## [1.1.0] - 2026-05-06
 
-ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 を経て、 学習サイト群の公開、 .orbs 拡張子への切替、診断機能の追加を最終スコープに取り込んで stable 化。
+ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 を経て、 学習サイト群の公開、 .orbs 拡張子への切替、 診断機能の追加を最終スコープに取り込んで stable 化。
 
-### Changed
+> **Note**: `package.json` 上のバージョンは v1.1.0-rc 系列の retarget 整理に伴い `1.1.2` から `1.1.0` に戻している。 これは git tag (`v1.1.0`) を canonical な version reference として扱う運用のため、 npm registry 等の外部利用には影響しない。 詳細は [`docs/development/WORK_LOG.md`](docs/development/WORK_LOG.md) 6.75 を参照。
 
-- **拡張子変更**: ファイル拡張子を `.osc` から `.orbs` に変更 ([`af9b887`](https://github.com/signalcompose/orbitscore/commit/af9b887))
-  - VS Code 言語登録、 syntax 定義、 サンプルファイルすべて更新
-  - 既存 `.osc` ファイルは利用者側でリネームが必要
-- 診断ロジックを純粋関数に分離してテスト容易性を向上 ([`2c3d793`](https://github.com/signalcompose/orbitscore/commit/2c3d793))
+### Breaking Changes
+
+- **ファイル拡張子変更**: `.osc` → `.orbs` ([`af9b887`](https://github.com/signalcompose/orbitscore/commit/af9b887))
+  - 既存 `.osc` ファイルを使用しているユーザーは手動でリネームが必要
+  - VS Code 言語登録、 syntax 定義、 サンプルファイルすべて更新済
+  - semver 上は major bump (2.0.0) に該当するが、 RC 連番との連続性と利用者影響範囲を考慮して minor (1.1.0) として release
 
 ### Added
 
@@ -21,6 +32,10 @@ ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 
   - dev → `https://signalcompose.github.io/orbitscore/dev/`
 - KaTeX CSS / フォントを vendor 化してオフラインでも数式が読める状態に ([`6591391`](https://github.com/signalcompose/orbitscore/commit/6591391))
 
+### Changed
+
+- 診断ロジックを純粋関数に分離してテスト容易性を向上 ([`2c3d793`](https://github.com/signalcompose/orbitscore/commit/2c3d793))
+
 ### Fixed
 
 - 環境依存の audio file path 解決を排除し、 異なる作業ディレクトリでも同じ挙動になるよう修正 ([`f972ddc`](https://github.com/signalcompose/orbitscore/commit/f972ddc))
@@ -32,4 +47,5 @@ ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 
 - ローカル / オフライン閲覧手順を README に追記
 - README に学習サイト (web) セクションを追加
 
+[Unreleased]: https://github.com/signalcompose/orbitscore/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/signalcompose/orbitscore/releases/tag/v1.1.0
