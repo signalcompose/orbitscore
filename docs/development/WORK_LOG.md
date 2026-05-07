@@ -17,6 +17,58 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.80 Issue #194 / Epic #187: SC plugin skeleton (Step 2.1) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
+**Branch**: `194-link-audio-plugin-skeleton` (main から派生、 PR #191 とは独立)
+**Issue**: #194 (Step 2.1) / Epic: #187
+
+**動機**: Epic #187 の Step 2.1。 `OrbitLinkAudio.scx` plugin の置き場 (`packages/sc-link-audio/`) を skeleton として整備し、 後続 Step 2.2 (UGen 実装) / Step 4 (build pipeline 統合) が着手できる足場を作る。 本 sub-step は **ファイル配置とディレクトリ構造の確定が目的** で、 実コンパイルは scope 外。
+
+**設計方針** (Epic #187 §0 を継承):
+- macOS arm64 only (v1.x release target、 Linux/Windows は scope 外)
+- LinkAudio API は alpha → wrapper 1 ファイル (`link_audio_facade.hpp`) に集約
+- GPL-2.0-or-later の独立 artifact、 OrbitScore 本体 (`LicenseRef-Signal-compose-FairTrade-1.0`) と mere aggregation
+- submodule (SC SDK + Ableton/link) の物理追加は Step 2.2 で実施 (本 sub-step は placeholder のみ)
+
+**変更内容** (1 commit):
+
+新規ファイル群:
+- `packages/sc-link-audio/README.md` — 目的、 ディレクトリ構造、 ライセンス、 ビルド前提、 関連 Issue/PR、 ステータス表
+- `packages/sc-link-audio/CMakeLists.txt` — C++17、 SC_PATH / LINK_AUDIO_PATH を configure-time 変数で受ける、 macOS arm64 強制、 OrbitLinkAudio.scx を `add_library(... MODULE)` で出力。 Step 2.1 では configure までを wire (実コンパイルは Step 2.2 の submodule 追加後)
+- `packages/sc-link-audio/.gitignore` — build/ 成果物 + submodule clone を ignore
+- `packages/sc-link-audio/external_libraries/.gitkeep` — submodule mount point の placeholder + コメントで Step 2.2 の手順を明記
+- `packages/sc-link-audio/src/link_audio_facade.hpp` — alpha API 変更を吸収する 1 ファイル wrapper の枠組み (型 alias + Step 2.2 で埋める関数シグネチャ コメント)
+- `packages/sc-link-audio/src/channel_registry.hpp` / `channel_registry.cpp` — TS 側 `LinkAudioChannelRegistry` (Step 3.2) と対になる server 側 lookup の宣言 + stub 実装 (lazy-create + sum-by-name 用)
+- `packages/sc-link-audio/src/orbit_link_audio_out.cpp` — `OrbitLinkAudioOut` UGen の skeleton (Ctor/Dtor/next が no-op、 Step 2.2 で実装)
+
+設計上の注意:
+- 全 C++ ソースに `#ifdef ORBIT_SC_PLUGIN_BUILD` を巻いて、 SC SDK が無い環境でも編集 / lint が破綻しない
+- `#include "link_audio_facade.hpp"` は ORBIT_SC_PLUGIN_BUILD 未定義時に stub forward declaration を提供 (linter 対応)
+- workspace package.json は触らない (C++ プロジェクトのため、 npm workspaces とは無関係)
+
+**検証**:
+- `npm test` で 266 件 pass / 23 件 skip (本 branch は main 起点のため、 PR #191 の +48 件は載っていない、 これは想定通り)
+- regression なし、 TS toolchain への影響ゼロ
+- husky pre-commit hook で commit が pass
+
+**残作業 (別 sub-issue)**:
+- Step 2.2: `OrbitLinkAudioOut` UGen 単一 channel commit 実装、 git submodule add (SC SDK + Ableton/link)
+- Step 2.3: channelId → sink lookup の動的 add/remove
+- Step 2.4: 同名 sum 動作の検収 (2 sequence で同一 channel に出して加算合成確認)
+- Step 2.5: tempo / phase / transport sync (LinkAudio 内蔵 Link 経由)
+- Step 4: ブート pipeline での plugin available 検出 + flip、 `.vsix` bundle 統合
+
+**stacked PR の状態**:
+- PR #189 (Step 1 research) → main 待ち
+- PR #191 (Step 3.1 + 3.2 + 3.3 + 3.5 consolidated) → main 待ち、 Step 2 plugin 不在時の hardware fallback で機能完備
+- PR #194 (Step 2.1 skeleton、 本 sub-step) → main 起点で独立、 PR #191 の merge 順序とは無関係
+
+**次の Step**: 着陸後 PR review + tag push を待機。 飛行機内で進められる範囲はここまで (Step 2.2 以降は SC SDK + Ableton/link の git clone が必要、 着陸環境で着手)。
+
+---
+
 ### 6.74 Deploy user + dev learning sites to GitHub Pages (May 06, 2026)
 
 **Date**: May 06, 2026
