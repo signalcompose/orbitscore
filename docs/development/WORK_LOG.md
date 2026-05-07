@@ -41,26 +41,36 @@ API surface (`LinkAudio.hpp` 直接読込):
 - 16-bit signed integer interleaved、 mono(1) または stereo(2) のみ
 - `setChannelsChangedCallback` のシグネチャは `void()` 引数なし
 
-Sample rate 戦略 (Void-LinkAudio README からの一次引用):
+Sample rate 制約 (Void-LinkAudio README からの一次引用):
 - Link Audio は **内部リサンプリングなし** → publisher / subscriber SR 不一致時に ring buffer overflow（44.1k vs 48k で ~8% 連続ドロップ）
-- → **scsynth `-S 48000` 強制起動が必須**（Live default 一致）
-- フォールバック: 48kHz 不可ハードウェア時は plugin 側で簡易リサンプリング（Step 2 で実装判断）
+- 当初は scsynth `-S 48000` 強制起動を検討したが、 ユーザーレビューで撤回 → 後述の確定方針へ
 
-ライセンス分離方針:
+License 概況:
 - Link 公式: GPL-2.0-or-later（標準 GPL v2、 改変条項なし）または proprietary commercial
 - OrbitScore 本体: `LicenseRef-Signal-compose-FairTrade-1.0`
-- → **`.scx` plugin を独立 GPL-2.0-or-later artifact として分離配布**、 `.vsix` bundle 同梱時は LICENSE.GPL-2.0 + NOTICE で aggregation 明記
-- 商用配布フェーズに移行する際は `link-devs@ableton.com` に proprietary license 申請判断（現状は research / personal use フェーズで OK）
+
+**ユーザーレビューで確定した設計決定** (LINK_AUDIO_API.md §0 参照):
+
+1. **出力モード**: `init global.linkAudio([SR])` で **once-per-file 宣言**、 hardware 出力と排他。 当初の per-sequence destination 案 (`seq.output("link-audio", "ch")`) から簡素化
+2. **Per-sequence syntax**: `seq.output("channel-name")` — kind 引数不要 (Global mode から implicit)
+3. **Sample rate**: scsynth は hardware SR 任せ、 plugin 内で target SR へリサンプリング (auto-detect → DSL override → 48k fallback)。 hardware 環境差異吸収と Live セッション SR 柔軟対応のため
+4. **License**: `.scx` を独立 GPL-2.0-or-later artifact として分離配布、 `.vsix` bundle 同梱時は LICENSE.GPL-2.0 + NOTICE で mere aggregation 明記
+5. **Channel 上限**: self-imposed 制限なし、 LinkAudio 仕様任せ
+6. **Plugin lifecycle**: `init global.linkAudio()` 宣言時 load + enable、 scsynth shutdown 時 disable / unload。 ランタイム切替は v1.2.0 では非対応
 
 **変更内容**:
 
-- `docs/research/LINK_AUDIO_API.md` 新規作成（API surface / SR 戦略 / ライセンス分離 / 設計追加確定 / 残不確定要素を網羅、 一次情報 URL 引用付き）
+- `docs/research/LINK_AUDIO_API.md` 新規作成（一次情報 URL 引用、 API surface / SR / License / 設計追加確定 / 残不確定要素を網羅 + Section 0 にユーザーレビュー後の確定設計決定を集約）
 
-**Epic plan への影響**: 仮説に対する破壊的 findings なし、 補強のみ。 plan file (Epic #187 内記載) はそのまま Step 2 着手可能。
+**Epic plan への影響**:
+- 一次情報による破壊的 findings なし
+- ユーザーレビューによる設計簡素化あり (per-sequence destination → Global mode 排他)
+- Epic Issue #187 body は本コミット後に簡素化された設計で update
 
 **残不確定要素 (Step 2 着手前に解消)**:
 - `linkaudio/AudioPlatform.hpp` の commit ループ実装パターン (submodule 取り込み後直接読む)
-- supercolliderjs の bootOptions が `-S` フラグを渡せるかの動作確認
+- LinkAudio peer info / OS API による target SR auto-detect 可否
+- Plugin 内リサンプリングの実装方式（線形 / 簡易 sinc / rubato 相当）
 - SC Plugin SDK のバージョン pinning と scsynth bundle (3.14.x) との ABI 一致
 
 **次の Step**: Step 2 (SC plugin 実装) を別 branch / 別 Issue で着手予定。
