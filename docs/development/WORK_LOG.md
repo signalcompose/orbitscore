@@ -17,7 +17,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.80 Issue #194 / Epic #187: SC plugin skeleton (Step 2.1) (May 07, 2026)
+### 6.78 Issue #194 / Epic #187: SC plugin skeleton (Step 2.1) (May 07, 2026)
 
 **Date**: May 07, 2026
 **Status**: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
@@ -66,6 +66,168 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - PR #194 (Step 2.1 skeleton、 本 sub-step) → main 起点で独立、 PR #191 の merge 順序とは無関係
 
 **次の Step**: 着陸後 PR review + tag push を待機。 飛行機内で進められる範囲はここまで (Step 2.2 以降は SC SDK + Ableton/link の git clone が必要、 着陸環境で着手)。
+
+---
+
+### 6.77 Issue #188 / Epic #187: Link Audio API research finalized (Step 1) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR レビュー待ち）
+**Branch**: `188-link-audio-research`
+**Issue**: #188 (Step 1) / Epic: #187
+
+**動機**: Ableton Live 12.4 (2026-05-05 公開) で導入された Link Audio を OrbitScore に統合する Epic #187 の前段階として、 SDK の API surface・サンプルレート挙動・ライセンス条件を一次情報で確定し、 後続 Step 2 (SC plugin 実装) / Step 3 (DSL 構文) / Step 4 (ビルドパイプライン) が安心して着手できる解像度を確保する。
+
+**設計方針** (Epic #187 の plan を引き継ぎ):
+- scsynth は維持、 LinkAudio 専用ブリッジを SC plugin (C++ UGen) として実装
+- DSL `seq.output("link-audio", "channel-name")` で出力先指定（MIDI 拡張余地を残す形）
+- macOS arm64 only、 Link Audio API は alpha のため wrapper 1 ファイルに集約
+- MIDI は別 Issue（DSL 構文だけ拡張余地確保）
+
+**主な findings (一次情報確定)**:
+
+API surface (`LinkAudio.hpp` 直接読込):
+- `LinkAudio` は `Link` を継承 → tempo / beat / phase / transport は base Link メソッドで取得
+- `LinkAudioSink::BufferHandle::commit()` は realtime-safe（SC plugin audio thread から呼べる）
+- `commit()` に sample rate を毎回渡せる仕様（API 上は SR 固定不要）
+- 16-bit signed integer interleaved、 mono(1) または stereo(2) のみ
+- `setChannelsChangedCallback` のシグネチャは `void()` 引数なし
+
+Sample rate 制約 (Void-LinkAudio README からの一次引用):
+- Link Audio は **内部リサンプリングなし** → publisher / subscriber SR 不一致時に ring buffer overflow（44.1k vs 48k で ~8% 連続ドロップ）
+- 当初は scsynth `-S 48000` 強制起動を検討したが、 ユーザーレビューで撤回 → 後述の確定方針へ
+
+License 概況:
+- Link 公式: GPL-2.0-or-later（標準 GPL v2、 改変条項なし）または proprietary commercial
+- OrbitScore 本体: `LicenseRef-Signal-compose-FairTrade-1.0`
+
+**ユーザーレビューで確定した設計決定** (LINK_AUDIO_API.md §0 参照):
+
+1. **出力モード**: `init global.linkAudio([SR])` で **once-per-file 宣言**、 hardware 出力と排他。 当初の per-sequence destination 案 (`seq.output("link-audio", "ch")`) から簡素化
+2. **Per-sequence syntax**: `seq.output("channel-name")` — kind 引数不要 (Global mode から implicit)
+3. **Sample rate**: scsynth は hardware SR 任せ、 plugin 内で target SR へリサンプリング (auto-detect → DSL override → 48k fallback)。 hardware 環境差異吸収と Live セッション SR 柔軟対応のため
+4. **License**: `.scx` を独立 GPL-2.0-or-later artifact として分離配布、 `.vsix` bundle 同梱時は LICENSE.GPL-2.0 + NOTICE で mere aggregation 明記
+5. **Channel 上限**: self-imposed 制限なし、 LinkAudio 仕様任せ
+6. **Plugin lifecycle**: `init global.linkAudio()` 宣言時 load + enable、 scsynth shutdown 時 disable / unload。 ランタイム切替は v1.2.0 では非対応
+
+**変更内容**:
+
+- `docs/research/LINK_AUDIO_API.md` 新規作成（一次情報 URL 引用、 API surface / SR / License / 設計追加確定 / 残不確定要素を網羅 + Section 0 にユーザーレビュー後の確定設計決定を集約）
+
+**Epic plan への影響**:
+- 一次情報による破壊的 findings なし
+- ユーザーレビューによる設計簡素化あり (per-sequence destination → Global mode 排他)
+- Epic Issue #187 body は本コミット後に簡素化された設計で update
+
+**残不確定要素 (Step 2 着手前に解消)**:
+- `linkaudio/AudioPlatform.hpp` の commit ループ実装パターン (submodule 取り込み後直接読む)
+- LinkAudio peer info / OS API による target SR auto-detect 可否
+- Plugin 内リサンプリングの実装方式（線形 / 簡易 sinc / rubato 相当）
+- SC Plugin SDK のバージョン pinning と scsynth bundle (3.14.x) との ABI 一致
+
+**次の Step**: Step 2 (SC plugin 実装) を別 branch / 別 Issue で着手予定。
+
+---
+
+### 6.76 Gate Marketplace/Open VSX publish on PUBLISH_MARKETPLACE variable (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS (PR #196 に同梱)
+**Branch**: `claude/prepare-orbitscore-release-0Q6uK`
+**関連 Issue**: #197 (Marketplace / Open VSX 登録追跡)
+**関連 PR**: #196 (release v1.1.0 cut)
+
+**動機**: v1.1.0 stable tag push 後、 `release.yml` の `Publish to VS Code Marketplace` step が `VSCE_PAT` 未登録のため fail-loud で失敗 (run id 25484379033)。 GitHub Release 作成と .vsix asset 添付は完了しているが、 publisher account / PAT 準備が整うまでは workflow を成功させたい。
+
+**経緯**:
+- v1.1.0 tag push は 6.75 で完了、 release workflow が起動
+- Build / bundle / .vsix package / GitHub Release create までは success
+- `Publish to VS Code Marketplace (stable only)` step が `VSCE_PAT` secret 未登録で fail-loud を意図通り発火
+- Open VSX publish step は依存関係で skipped
+- 利用者は publisher account 準備前であり、 暫定で publish step を gate する必要がある
+
+**変更内容**:
+
+- `release.yml` の publish step に repo variable `PUBLISH_MARKETPLACE == 'true'` の gate を追加:
+  - `Publish to VS Code Marketplace (stable only)` の `if` に追加
+  - `Publish to Open VSX (stable only)` の `if` に追加
+  - 未設定 (`!= 'true'`) の場合、 stable tag push でも publish step は skip される (GitHub Release は引き続き作成)
+- workflow header コメントに gating model を追記 (PUBLISH_MARKETPLACE の意味、 issue #197 への参照)
+- error message を更新: 「VSCE_PAT 未登録」 → 「PUBLISH_MARKETPLACE=true なのに VSCE_PAT 未登録」 (variable と secret の不整合を明示)
+- `Summary` step に新しい分岐を追加: stable release だが publish gated off の状態を表示
+
+**設計判断**:
+- `if: false` でハードコード disable する案より、 repo variable gate にすることで
+  - 復旧操作が `gh variable set PUBLISH_MARKETPLACE --body 'true'` の 1 コマンドで完結 (workflow 再編集不要)
+  - secret 登録 + variable 有効化を分離して、 variable 有効化時に secret 未登録なら fail-loud (誤設定検出可)
+  - 状態が GitHub UI 上で可視 (Settings → Secrets and variables → Actions → Variables)
+- prerelease (`v*-rc1` 等) は別ロジック (`is_prerelease == 'false'`) で既に skip 済、 PUBLISH_MARKETPLACE と独立
+
+**復旧手順 (issue #197 完了時)**:
+1. `gh secret set VSCE_PAT --repo signalcompose/orbitscore`
+2. `gh secret set OVSX_PAT --repo signalcompose/orbitscore`
+3. `gh variable set PUBLISH_MARKETPLACE --body 'true' --repo signalcompose/orbitscore`
+4. 次の stable tag (例: v1.1.1) で publish が走ることを確認
+
+---
+
+### 6.75 Release v1.1.0 stable — promote RC sequence to stable (May 06, 2026)
+
+**Date**: May 06, 2026 (tag push: May 07, 2026)
+**Status**: ✅ DONE (tag push 完了 + GitHub Release 作成済、 Marketplace publish は #197 で gated)
+**Branch**: `claude/prepare-orbitscore-release-0Q6uK`
+**Tag**: `v1.1.0` (v1.1.0-rc1/rc2/rc3 を経た初の stable 化)
+
+**動機**: ICMC 2026 Hamburg (5/10-16) 発表前に、 既に rc1/rc2/rc3 を切り終えた v1.1.0 を stable として正式タグ付けし、 `release.yml` workflow による Marketplace / Open VSX / GitHub Release の自動配信パイプラインを起動する。 RC 連番をきちんと stable で締めくくることで `v1.0.1 → v1.1.0-rc{1,2,3} → v1.1.0 stable` の canonical な lineage を残す。
+
+**バージョン選択の根拠**:
+- 当初 v1.2.0 案で実装着手したが、 過去タグ (v1.0.1, v1.1.0-rc{1,2,3}) を `git fetch --tags` で確認した結果、 v1.1.0 RC が 3 本も切られているのに stable promote が未実施という宙吊り状態が判明
+- post-rc3 の変更 (.orbs rename / 学習サイト / diagnostics) は「v1.1.0 の最終スコープに取り込まれた追加分」 として位置づけ可能、 別 minor を切る積極的理由なし
+- README / WORK_LOG にも「ICMC v1.1.0 release-ready」 という記述があり、 そもそも 1.1.0 が出すべきバージョンだった
+- semver 上 `.osc` → `.orbs` は breaking だが、 利用者影響範囲を考慮して minor (1.1.0) 扱い、 CHANGELOG Changed 冒頭で明示
+
+**Proxy 制約 (重要)**:
+- Claude session の git proxy は `refs/tags/*` への push を 403 で全面ブロック
+- annotated/lightweight 問わず、 また tag 名のパターンに依らず拒否される
+- これは tag push が release.yml workflow を起動して Marketplace publish まで自動実行する高権限操作だからで、 安全装置として人間の手動 push を強制する設計
+- 結果、 commit + branch push までは Claude が完了、 最後の `git push origin v1.1.0` のみ利用者側で実行が必要
+
+**変更内容**:
+
+- `CHANGELOG.md` 新規作成 (Keep a Changelog 準拠、 1.1.0 が初エントリ)
+- `package.json` (root) `1.1.2` → `1.1.0` (※ 後方への version down は package.json 上の数値のみ、 git tag は新規)
+- `packages/vscode-extension/package.json` `1.1.2` → `1.1.0`
+- `package-lock.json` workspace ルートと vscode-extension entry を 1.1.0 に同期
+
+**含まれる主な変更 (v1.1.0-rc3 以降)**:
+- 拡張子 `.osc` → `.orbs` (af9b887) ※ 利用者リネーム必要
+- 診断機能: global once-per-file / audioPath ordering (0666633, 2c3d793)
+- ユーザー向け学習サイト 8 章 (65a11b8)
+- 開発者向け学習サイト 16 章 (671481f)
+- i18n: dev 18 章 / user 8 章の英訳 (136c4b6, d4e1850)
+- GitHub Pages deploy workflow (36dae32)
+- 環境非依存 audio path 解決 fix (f972ddc)
+
+**自動化フロー**:
+1. tag `v1.1.0` を push (利用者側で実行)
+2. `.github/workflows/release.yml` が trigger:
+   - macOS arm64 で extension をビルド
+   - scsynth bundle 抽出 + 整合性検証
+   - `.vsix` package 化
+   - `gh release create --generate-notes` で GitHub Release 作成 + .vsix を asset 添付
+   - VS Code Marketplace + Open VSX に publish (stable tag のみ)
+3. CHANGELOG.md は repo 内 canonical 詳細記録、 GitHub Release notes は workflow による auto-generated 形式
+
+**Post-tag-push 完了報告 (May 07, 2026)**:
+- `git push origin v1.1.0` 成功 (lightweight tag、 `cc1342a` を指す)
+- release workflow 実行 (run id 25484379033): build / bundle / .vsix package / GitHub Release 作成までは success
+- `Publish to VS Code Marketplace (stable only)` step が `VSCE_PAT` 未登録で fail-loud (意図通り)
+- → 6.76 で `PUBLISH_MARKETPLACE` repo variable gate を追加して暫定対応 (#197 で publisher account 準備を追跡)
+- PR #196 の Claude review で以下を検出 → 順次修正:
+  - 🔴 Critical: `package-lock.json` の `packages[""]` entry が `1.2.0` のまま (c24bd69 v1.2.0 cut の残骸を cc1342a retarget が取りこぼし) → `npm install --package-lock-only` で 1.1.0 に同期修正 (commit `affbd9b`)
+  - 🟠 Minor: CHANGELOG.md の Keep a Changelog 標準フォーマット差異 (`# Changelog` ヘッダー欠落、 `[Unreleased]` セクション欠落、 SemVer リンク欠落) → ヘッダー / intro / `[Unreleased]` / compare link を追加 (commit `a64d6c9`)
+  - 🟠 Minor: `.osc` → `.orbs` の breaking change が `### Changed` に埋もれていた → `### Breaking Changes` セクションに移動、 semver 上 major 相当だが minor として release した経緯も明記 (commit `a64d6c9` 同梱)
+  - 🟡 Warning: 1.1.2 → 1.1.0 への version 後退の説明不足 → CHANGELOG 1.1.0 セクション冒頭に Note を追加し、 本 WORK_LOG への参照を明記 (commit `a64d6c9` 同梱)
 
 ---
 
