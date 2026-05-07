@@ -40,6 +40,9 @@ export const GLOBAL_ONCE_METHODS = new Set([
   'normalizer',
   'limiter',
   'compressor',
+  // LinkAudio mode declaration is a state setter (see DSL spec §8.1.1) and
+  // therefore once-per-file like the other globals.
+  'linkAudio',
 ])
 
 /**
@@ -161,6 +164,53 @@ export function analyzeAudioPathOrdering(text: string): DiagnosticIssue[] {
         startCol,
         endCol: startCol + m[0].length,
         message,
+      })
+    }
+  }
+
+  return issues
+}
+
+/**
+ * Detection: any `\.output(...)` call when the file does not declare
+ * `global.linkAudio()`. Per DSL spec §8.1.2 the channel name is recorded but
+ * has no effect until LinkAudio mode is enabled, so the user almost certainly
+ * forgot the declaration. Emit one warning per orphaned `.output()` call so
+ * each location is surfaced individually.
+ *
+ * @param text ドキュメント全体のテキスト
+ * @returns LinkAudio mode が宣言されていない状態での `.output()` 呼出位置
+ */
+export function analyzeOutputWithoutLinkAudio(text: string): DiagnosticIssue[] {
+  const issues: DiagnosticIssue[] = []
+  const lines = text.split('\n')
+
+  const linkAudioPattern = /\bglobal\s*\.\s*linkAudio\s*\(/
+  let hasLinkAudio = false
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    const line = stripLineComment(raw)
+    if (linkAudioPattern.test(line)) {
+      hasLinkAudio = true
+      break
+    }
+  }
+  if (hasLinkAudio) return issues
+
+  const outputCallPattern = /\.output\s*\(\s*["']([^"']*)["']\s*\)/g
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    const line = stripLineComment(raw)
+    for (const m of line.matchAll(outputCallPattern)) {
+      const startCol = m.index ?? 0
+      issues.push({
+        line: i,
+        startCol,
+        endCol: startCol + m[0].length,
+        message:
+          'seq.output() requires global.linkAudio() to be declared in this file. Without LinkAudio mode the channel name is recorded but the sequence still routes through the hardware bus.',
       })
     }
   }

@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.79 Epic #187: Link Audio docs + VS Code support (Step 3.3 + 3.5) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR #191 draft、 着陸後 review 待ち）
+**Branch**: `190-link-audio-dsl-syntax` (consolidated PR)
+**Issue**: Epic #187 / Step 3.3 (syntax + completion + diagnostic) と Step 3.5 (docs + examples)
+
+**動機**: 当初は Step 3.x を sub-step ごとに別 PR にする計画だったが、 review 負担最適化のため TypeScript + docs で完結する全 sub-step を PR #191 に統合。 本エントリは Step 3.3 と Step 3.5 のコミットをまとめて記録する。 PR #193 (Step 3.2) は #191 に fast-forward マージして close 済。
+
+**Step 3.5 — DSL spec + examples + E2E checklist** (commit `2879ca1`):
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8 (DAW Integration) を全面改訂、 §8.1 (Link Audio Output) として正式仕様化:
+  - §8.1.1 Global mode declaration (`global.linkAudio([SR])`、 once-per-file、 hardware と排他)
+  - §8.1.2 Per-sequence channel binding (`seq.output("name")`、 同名 channel sum)
+  - §8.1.3 Plugin lifecycle (scsynth 起動 / 終了 紐づけ、 ランタイム切替は v1.2.0 非対応)
+  - §8.1.4 Live 側操作手順
+- `examples/10_link_audio.orbs` 新規 (single channel publish / drums bus sum / per-sequence gain+pan の 3 パターン)
+- `examples/README.md` チュートリアル一覧と ファイル一覧を更新
+- `docs/LINK_AUDIO_E2E_CHECKLIST.md` 新規 (Live 12.4+ + plugin の手動 E2E、 A〜G の 7 セクション + トラブルシュート)
+
+**Step 3.3 — VS Code 拡張対応**:
+
+- `packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json`:
+  - global methods に `linkAudio` を追加
+  - sequence methods に `output` を追加
+  - 両方の patterns で entity.name.function ハイライトに乗せる
+- `packages/vscode-extension/src/completion-context.ts`:
+  - MethodChainContext に hasLinkAudio / hasOutput フラグ追加
+  - global completion に `linkAudio(${1:48000})` を追加 (まだ宣言されていないとき)
+  - sequence completion に `output("${1:channel-name}")` を追加 (audio 設定後 + まだ output 未指定時)
+- `packages/vscode-extension/src/diagnostics-analysis.ts`:
+  - GLOBAL_ONCE_METHODS に `linkAudio` を追加 (existing once-per-file diagnostic を再利用)
+  - 新規 `analyzeOutputWithoutLinkAudio()` — `seq.output()` が呼ばれているのに `global.linkAudio()` が宣言されていない場合に警告。 file 全体走査、 行コメント除去、 commented-out も正しく無視
+- `packages/vscode-extension/src/extension.ts`:
+  - `updateDiagnostics` 末尾に `analyzeOutputWithoutLinkAudio` を wire
+- `tests/vscode-extension/diagnostics-analysis.spec.ts`:
+  - 新規 8 ケース (analyzeOutputWithoutLinkAudio: 6 ケース + global once linkAudio 重複: 2 ケース)
+
+**検証**: npm test で 314 件 pass / 23 件 skip (累計 +48 件、 regression なし)。 husky pre-commit hook で全 commit が lint + format + build pass。
+
+**Step 3 consolidated PR (#191) の最終姿**:
+- Step 3.1 DSL syntax (4 commits)
+- Step 3.2 dispatch wiring (5 commits、 旧 PR #193 から fast-forward)
+- Step 3.5 docs + examples (1 commit)
+- Step 3.3 VS Code 拡張 (本コミット)
+- 計 11+ commits、 約 1500 行の追加 (TypeScript + docs)
+
+**Step 3.4 (動的切替 + latency offset) は本 PR スコープ外** (v1.2.x 持ち越し)。 当初 Issue #190 の checklist にあったが、 着地後の review で必要性を再判断する想定。
+
+**残作業**:
+- Step 2: SC plugin (C++ UGen) `OrbitLinkAudioOut` 実装、 別 branch / 別 PR
+- Step 4: ブート pipeline での plugin available 検出 + flip、 build pipeline の `.scx` 同梱、 別 PR
+- Step 3.4: 動的切替 + latency offset (v1.2.x 検討)
+
+**次の Step**: γ (Step 2.1 SC plugin skeleton) を別 branch / 別 PR で着手。
+
+---
+
 ### 6.78 Issue #192 / Epic #187: Link Audio dispatch wiring (Step 3.2) (May 07, 2026)
 
 **Date**: May 07, 2026

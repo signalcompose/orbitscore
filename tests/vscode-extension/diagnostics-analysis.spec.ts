@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   analyzeAudioPathOrdering,
   analyzeGlobalOncePerFile,
+  analyzeOutputWithoutLinkAudio,
 } from '../../packages/vscode-extension/src/diagnostics-analysis'
 
 describe('analyzeGlobalOncePerFile', () => {
@@ -215,5 +216,82 @@ describe('integration: getting started example', () => {
   it('should not flag the well-formed example', () => {
     expect(analyzeGlobalOncePerFile(exampleText)).toEqual([])
     expect(analyzeAudioPathOrdering(exampleText)).toEqual([])
+  })
+})
+
+describe('analyzeOutputWithoutLinkAudio', () => {
+  it('returns no issues when global.linkAudio() is declared above seq.output()', () => {
+    const text = [
+      'global.linkAudio()',
+      'var s = init global.seq',
+      's.audio("kick.wav").output("kick")',
+    ].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('returns no issues when global.linkAudio(SR) declared anywhere in the file', () => {
+    // Declared after the .output() call — still counts as "file declares
+    // LinkAudio mode" because the analyzer is whole-file.
+    const text = ['s.audio("kick.wav").output("kick")', 'global.linkAudio(48000)'].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('flags every .output() when global.linkAudio() is missing', () => {
+    const text = [
+      'var s1 = init global.seq',
+      's1.audio("kick.wav").output("kick")',
+      'var s2 = init global.seq',
+      's2.audio("snare.wav").output("snare")',
+    ].join('\n')
+
+    const issues = analyzeOutputWithoutLinkAudio(text)
+    expect(issues).toHaveLength(2)
+    expect(issues[0].line).toBe(1)
+    expect(issues[0].message).toContain('global.linkAudio()')
+    expect(issues[1].line).toBe(3)
+  })
+
+  it('ignores commented-out .output() calls', () => {
+    const text = ['// s1.audio("kick.wav").output("kick")', 's1.audio("kick.wav").chop(1)'].join(
+      '\n',
+    )
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('ignores commented-out global.linkAudio() (still flags real .output() calls)', () => {
+    const text = ['// global.linkAudio()', 's.audio("kick.wav").output("kick")'].join('\n')
+
+    const issues = analyzeOutputWithoutLinkAudio(text)
+    expect(issues).toHaveLength(1)
+  })
+
+  it('returns no issues when there are no .output() calls at all', () => {
+    const text = [
+      'global.tempo(120)',
+      'var s = init global.seq',
+      's.audio("kick.wav").play(1, 0, 1, 0)',
+    ].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+})
+
+describe('analyzeGlobalOncePerFile — linkAudio entry', () => {
+  it('flags the second occurrence of global.linkAudio()', () => {
+    const text = ['global.linkAudio()', 'global.linkAudio(48000)'].join('\n')
+
+    const issues = analyzeGlobalOncePerFile(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].line).toBe(1)
+    expect(issues[0].message).toContain('Duplicate global.linkAudio()')
+  })
+
+  it('does not flag a single occurrence of global.linkAudio()', () => {
+    const text = ['global.tempo(120)', 'global.linkAudio()'].join('\n')
+
+    expect(analyzeGlobalOncePerFile(text)).toEqual([])
   })
 })

@@ -11,6 +11,8 @@ interface MethodChainContext {
   hasLength: boolean
   hasTempo: boolean
   hasRun: boolean
+  hasOutput: boolean
+  hasLinkAudio: boolean
   lastMethod: string
 }
 
@@ -26,6 +28,8 @@ export function analyzeMethodChain(lineText: string, position: number): MethodCh
     hasLength: false,
     hasTempo: false,
     hasRun: false,
+    hasOutput: false,
+    hasLinkAudio: false,
     lastMethod: '',
   }
 
@@ -64,6 +68,12 @@ export function analyzeMethodChain(lineText: string, position: number): MethodCh
   }
   if (chainText.includes('.run(')) {
     context.hasRun = true
+  }
+  if (chainText.includes('.output(')) {
+    context.hasOutput = true
+  }
+  if (chainText.includes('.linkAudio(')) {
+    context.hasLinkAudio = true
   }
 
   // Find the last method before the cursor
@@ -116,6 +126,17 @@ export function getContextualCompletions(
       ),
     )
 
+    // LinkAudio output mode (once-per-file, mutually exclusive with hardware out)
+    if (!context.hasLinkAudio) {
+      completions.push(
+        createCompletion(
+          'linkAudio',
+          'Enable Ableton Link Audio output mode (once-per-file). Optional target sample rate; auto-detect with 48000 fallback when omitted.',
+          'linkAudio(${1:48000})',
+        ),
+      )
+    }
+
     // Transport commands always available
     completions.push(createCompletion('run', 'Start all sequences', 'run()'))
     completions.push(createCompletion('loop', 'Loop all sequences', 'loop()'))
@@ -149,6 +170,18 @@ export function getContextualCompletions(
       if (!context.hasPlay) {
         completions.push(
           createCompletion('play', 'Define playback pattern', 'play(${1:1, 0, 1, 0})'),
+        )
+      }
+      // .output() is meaningful once audio is bound; suggest from this point
+      // forward as well as after .play() (handled below). Keeping the
+      // suggestion idempotent — the !hasOutput guard avoids duplicates.
+      if (!context.hasOutput) {
+        completions.push(
+          createCompletion(
+            'output',
+            'Bind this sequence to a Link Audio channel name (requires global.linkAudio()). Sequences sharing a name are summed by the SC plugin.',
+            'output("${1:channel-name}")',
+          ),
         )
       }
     }

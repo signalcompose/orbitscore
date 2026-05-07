@@ -6,7 +6,11 @@ import * as fs from 'fs'
 import * as vscode from 'vscode'
 
 import { analyzeMethodChain, getContextualCompletions } from './completion-context'
-import { analyzeAudioPathOrdering, analyzeGlobalOncePerFile } from './diagnostics-analysis'
+import {
+  analyzeAudioPathOrdering,
+  analyzeGlobalOncePerFile,
+  analyzeOutputWithoutLinkAudio,
+} from './diagnostics-analysis'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -1280,6 +1284,15 @@ async function updateDiagnostics(
     )
   }
   for (const issue of analyzeAudioPathOrdering(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Warning,
+      ),
+    )
+  }
+  for (const issue of analyzeOutputWithoutLinkAudio(text)) {
     diagnostics.push(
       new vscode.Diagnostic(
         new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
