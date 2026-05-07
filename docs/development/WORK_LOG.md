@@ -111,7 +111,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - release workflow 実行 (run id 25484379033): build / bundle / .vsix package / GitHub Release 作成までは success
 - `Publish to VS Code Marketplace (stable only)` step が `VSCE_PAT` 未登録で fail-loud (意図通り)
 - → 6.76 で `PUBLISH_MARKETPLACE` repo variable gate を追加して暫定対応 (#197 で publisher account 準備を追跡)
-- PR #196 の Claude review で `package-lock.json` の `packages[""]` entry が `1.2.0` のまま残っていることが検出 (c24bd69 v1.2.0 cut の残骸を cc1342a retarget が取りこぼし) → `npm install --package-lock-only` で 1.1.0 に同期修正
+- PR #196 の Claude review で以下を検出 → 順次修正:
+  - 🔴 Critical: `package-lock.json` の `packages[""]` entry が `1.2.0` のまま (c24bd69 v1.2.0 cut の残骸を cc1342a retarget が取りこぼし) → `npm install --package-lock-only` で 1.1.0 に同期修正 (commit `affbd9b`)
+  - 🟠 Minor: CHANGELOG.md の Keep a Changelog 標準フォーマット差異 (`# Changelog` ヘッダー欠落、 `[Unreleased]` セクション欠落、 SemVer リンク欠落) → ヘッダー / intro / `[Unreleased]` / compare link を追加 (commit `a64d6c9`)
+  - 🟠 Minor: `.osc` → `.orbs` の breaking change が `### Changed` に埋もれていた → `### Breaking Changes` セクションに移動、 semver 上 major 相当だが minor として release した経緯も明記 (commit `a64d6c9` 同梱)
+  - 🟡 Warning: 1.1.2 → 1.1.0 への version 後退の説明不足 → CHANGELOG 1.1.0 セクション冒頭に Note を追加し、 本 WORK_LOG への参照を明記 (commit `a64d6c9` 同梱)
 
 ---
 
