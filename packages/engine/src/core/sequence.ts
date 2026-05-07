@@ -319,7 +319,21 @@ export class Sequence {
       loopStartTime: this.stateManager.getLoopStartTime(),
       masterGainDb: this.global.getMasterGainDb(),
       patternDuration: this.getPatternDuration(),
+      outputChannel: this.resolveDispatchChannel(),
     })
+  }
+
+  /**
+   * Resolve the channel to forward to the scheduler. Only emits the channel
+   * name when both Global LinkAudio mode is on AND the sequence has called
+   * .output(). Otherwise returns undefined so the scheduler keeps using the
+   * existing hardware path.
+   */
+  private resolveDispatchChannel(): string | undefined {
+    if (!this.global.isLinkAudioEnabled()) {
+      return undefined
+    }
+    return this._outputChannel
   }
 
   async scheduleEvents(
@@ -350,6 +364,7 @@ export class Sequence {
       sequenceName: this.stateManager.getName(),
       masterGainDb: this.global.getMasterGainDb(),
       patternDuration: this.getPatternDuration(),
+      outputChannel: this.resolveDispatchChannel(),
     })
 
     this.stateManager.setPlaying(true)

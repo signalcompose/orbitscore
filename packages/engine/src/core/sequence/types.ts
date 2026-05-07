@@ -111,6 +111,9 @@ export interface ScheduleEventsOptions {
   sequenceName: string
   masterGainDb: number
   patternDuration: number
+  // LinkAudio dispatch — set only when Global.linkAudio() is enabled AND the
+  // sequence has a channel name from .output(). Absent means hardware bus.
+  outputChannel?: string
 }
 
 /**
@@ -131,4 +134,6 @@ export interface ScheduleEventsFromTimeOptions {
   loopStartTime?: number
   masterGainDb: number
   patternDuration: number
+  // LinkAudio dispatch — see ScheduleEventsOptions.outputChannel.
+  outputChannel?: string
 }
