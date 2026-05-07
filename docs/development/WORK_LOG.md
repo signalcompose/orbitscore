@@ -61,8 +61,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### 6.75 Release v1.1.0 stable — promote RC sequence to stable (May 06, 2026)
 
-**Date**: May 06, 2026
-**Status**: ⏳ READY (tag push 待ち、 proxy 制約により利用者側で push 必要)
+**Date**: May 06, 2026 (tag push: May 07, 2026)
+**Status**: ✅ DONE (tag push 完了 + GitHub Release 作成済、 Marketplace publish は #197 で gated)
 **Branch**: `claude/prepare-orbitscore-release-0Q6uK`
 **Tag**: `v1.1.0` (v1.1.0-rc1/rc2/rc3 を経た初の stable 化)
 
@@ -105,6 +105,13 @@ A design and implementation project for a new music DSL (Domain Specific Languag
    - `gh release create --generate-notes` で GitHub Release 作成 + .vsix を asset 添付
    - VS Code Marketplace + Open VSX に publish (stable tag のみ)
 3. CHANGELOG.md は repo 内 canonical 詳細記録、 GitHub Release notes は workflow による auto-generated 形式
+
+**Post-tag-push 完了報告 (May 07, 2026)**:
+- `git push origin v1.1.0` 成功 (lightweight tag、 `cc1342a` を指す)
+- release workflow 実行 (run id 25484379033): build / bundle / .vsix package / GitHub Release 作成までは success
+- `Publish to VS Code Marketplace (stable only)` step が `VSCE_PAT` 未登録で fail-loud (意図通り)
+- → 6.76 で `PUBLISH_MARKETPLACE` repo variable gate を追加して暫定対応 (#197 で publisher account 準備を追跡)
+- PR #196 の Claude review で `package-lock.json` の `packages[""]` entry が `1.2.0` のまま残っていることが検出 (c24bd69 v1.2.0 cut の残骸を cc1342a retarget が取りこぼし) → `npm install --package-lock-only` で 1.1.0 に同期修正
 
 ---
 
