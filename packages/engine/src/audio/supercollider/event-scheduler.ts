@@ -27,11 +27,12 @@ export class EventScheduler {
     gainDb = 0,
     pan = 0,
     sequenceName = '',
+    outputChannel?: string,
   ): void {
     const play: ScheduledPlay = {
       time: startTimeMs,
       filepath,
-      options: { gainDb, pan },
+      options: { gainDb, pan, outputChannel },
       sequenceName,
     }
 
@@ -113,6 +114,7 @@ export class EventScheduler {
     gainDb = 0,
     pan = 0,
     sequenceName = '',
+    outputChannel?: string,
   ): void {
     const { sliceDuration, startPos } = this.calculateSlicePosition(
       filepath,
@@ -130,6 +132,7 @@ export class EventScheduler {
         startPos,
         duration: sliceDuration,
         rate,
+        outputChannel,
       },
       sequenceName,
     }

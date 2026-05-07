@@ -16,6 +16,10 @@ export interface ScheduledPlay {
     startPos?: number // Start position in seconds
     duration?: number // Duration in seconds
     rate?: number // Playback rate (1.0 = normal, 2.0 = double speed, 0.5 = half speed)
+    // LinkAudio dispatch: when set, route to LinkAudio plugin via channel id
+    // (set by Sequence layer only when Global.linkAudio() is enabled). Absent
+    // means hardware bus routing via the existing orbitPlayBuf SynthDef.
+    outputChannel?: string
   }
   sequenceName: string
 }
@@ -33,6 +37,8 @@ export interface PlaybackOptions {
   startPos?: number
   duration?: number
   rate?: number
+  // See ScheduledPlay.options.outputChannel for semantics.
+  outputChannel?: string
 }
 
 export interface EffectParams {

@@ -100,8 +100,16 @@ export class SuperColliderPlayer {
     gainDb = 0,
     pan = 0,
     sequenceName = '',
+    outputChannel?: string,
   ): void {
-    this.eventScheduler.scheduleEvent(filepath, startTimeMs, gainDb, pan, sequenceName)
+    this.eventScheduler.scheduleEvent(
+      filepath,
+      startTimeMs,
+      gainDb,
+      pan,
+      sequenceName,
+      outputChannel,
+    )
   }
 
   /**
@@ -116,6 +124,7 @@ export class SuperColliderPlayer {
     gainDb = 0,
     pan = 0,
     sequenceName = '',
+    outputChannel?: string,
   ): void {
     this.eventScheduler.scheduleSliceEvent(
       filepath,
@@ -126,6 +135,7 @@ export class SuperColliderPlayer {
       gainDb,
       pan,
       sequenceName,
+      outputChannel,
     )
   }
 
