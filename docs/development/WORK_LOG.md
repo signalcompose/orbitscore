@@ -17,6 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.77 Issue #190 / Epic #187: Link Audio DSL syntax (Step 3.1) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
+**Branch**: `190-link-audio-dsl-syntax`
+**Issue**: #190 (Step 3.1) / Epic: #187
+
+**動機**: Epic #187 の Step 3.1。 LinkAudio output layer の DSL 表面構文 (`global.linkAudio([SR])` + `seq.output("channel-name")`) を parser・AST・コア state レベルで受理し、 単体テストでカバーする。 SC plugin / dispatch / VS Code 拡張は別 sub-step (3.2 / 3.3 / 3.4 / 3.5) で扱い、 本 Issue は **DSL 表面の文法対応のみ** に絞る。
+
+**設計方針** (Epic #187 §0 を継承):
+- LinkAudio mode は once-per-file 宣言で hardware 出力と排他
+- `seq.output("name")` は channel name のみ (kind は Global mode から implicit)
+- ランタイム切替は v1.2.0 非対応 (immediate 系 `_method()` は本 sub-step では未実装)
+- SR 戦略は plugin 内リサンプリング (auto-detect → DSL override → 48k fallback)
+
+**変更内容**:
+
+`packages/engine/src/core/global/link-audio-manager.ts` 新規:
+- LinkAudioManager クラス。 _enabled / _targetSampleRate を保持、 linkAudio(targetSR?) で enable
+
+`packages/engine/src/core/global/types.ts`:
+- GlobalState に linkAudioEnabled / linkAudioTargetSampleRate を追加
+
+`packages/engine/src/core/global.ts`:
+- LinkAudioManager をインスタンス化、 linkAudio(targetSR?) / isLinkAudioEnabled() メソッド追加、 getState() に LinkAudio state を merge
+
+`packages/engine/src/core/sequence.ts`:
+- _outputChannel フィールド追加、 output(channelName) メソッド (chainable) + getOutputChannel() アクセサ
+- output() 呼出時に Global.linkAudio() 未宣言なら console.warn (例外を投げない、 厳密チェックは Step 3.3 の VS Code diagnostic で)
+
+`packages/engine/src/core/sequence/types.ts`:
+- SequenceState に outputChannel?: string を追加
+
+`tests/core/global-link-audio.spec.ts` 新規 (7 ケース):
+- default disabled、 有効化、 明示 SR、 44.1k 受理、 chainable、 上書き、 explicit→undefined への戻し
+
+`tests/core/sequence-output.spec.ts` 新規 (7 ケース):
+- default undefined、 記録、 chainable、 上書き、 Global 未宣言時 warn、 Global 宣言済み時 warn なし、 hyphen + underscore 受理
+
+`tests/audio-parser/link-audio-syntax.spec.ts` 新規 (8 ケース):
+- tokenizer / parser を変更せずに既存 method-call 経路で受理されることを確認
+- global.linkAudio() の args の有無 + 値伝播
+- seq.output() の hyphen / underscore 受理、 chain 組み合わせ
+- 複合プログラム (global.tempo + global.linkAudio + var init + seq chain)
+
+**parser を触らなかった理由**:
+既存 tokenizer keyword は `var, init, by, GLOBAL, force, RUN, LOOP, MUTE` のみで、 `linkAudio` / `output` は IDENTIFIER として通る。 AST は generic な `target / method / args` 構造なので追加メソッドのために schema 変更は不要。
+
+**`init` prefix の扱い (要 review)**:
+ユーザーレビューで「init global.linkAudio()」 案が選択されたが、 既存 parser では `init` は変数宣言専用 (`var x = init GLOBAL` / `var s = init global.seq`)。 厳密に `init global.linkAudio()` 形を実装するには parser 拡張 (`parseGlobalInit` を method-call 受理に拡張) が必要。 本 PR では既存 conventions (`global.tempo()` 等) と揃った `global.linkAudio()` 形を採用 (parser 拡張不要)。 着陸後の review で「init prefix 必須かどうか」 をユーザー判断仰ぐ。
+
+**コミット構成 (小コミット 3 本)**:
+- `68fb4d6` feat(engine): add Global.linkAudio() for LinkAudio mode declaration
+- `7cfd85b` feat(engine): add Sequence.output() for LinkAudio channel binding
+- `d1ffdcf` test(parser): verify LinkAudio DSL syntax parses via existing generic path
+
+**検証**: npm test で 288 件 pass / 23 件 skip (新規 22 件追加)、 regression なし。 lint-staged hook (eslint + prettier) を 3 commit すべて pass、 build も pass。
+
+**残作業 (別 sub-issue)**:
+- Step 3.2: dispatch ロジック (SuperColliderPlayer 側 SynthDef 切替、 channel ID 管理)
+- Step 3.3: VS Code 拡張対応 (syntax / completion / 厳密 diagnostic)
+- Step 3.4: 動的切替 + latency offset
+- Step 3.5: docs (`INSTRUCTION_ORBITSCORE_DSL.md`) + examples
+
+**次の Step**: Step 1 PR (#189) merge → Step 2 (SC plugin 実装) 着手。 Step 3 残 sub-step は Step 2 の進捗と並行可能。
+
+---
+
 ### 6.74 Deploy user + dev learning sites to GitHub Pages (May 06, 2026)
 
 **Date**: May 06, 2026
