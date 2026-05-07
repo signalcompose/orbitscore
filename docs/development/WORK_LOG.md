@@ -17,6 +17,76 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.78 Issue #192 / Epic #187: Link Audio dispatch wiring (Step 3.2) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
+**Branch**: `192-link-audio-dispatch` (stacked on `190-link-audio-dsl-syntax`)
+**Issue**: #192 (Step 3.2) / Epic: #187
+
+**動機**: Step 3.1 (#190) で導入した DSL state (`Global._linkAudioEnabled`, `Sequence._outputChannel`) を **実際のスケジューリング経路** に流す。 SC plugin (Step 2) が未実装の段階でも contract layer を完成させ、 plugin 着地時に SynthDef 名と channel ID が噛み合うよう scaffolding を準備する。
+
+**設計方針**:
+- outputChannel を optional param として scheduler interface に追加 (完全な後方互換)
+- Sequence layer で「Global.linkAudio() 有効時のみ outputChannel を渡す」 判定を一元化 (resolveDispatchChannel)
+- EventScheduler.sendPlaybackMessage で 3 通り dispatch:
+  1. outputChannel + plugin available → `orbitPlayBufLink` SynthDef + channel arg
+  2. outputChannel + plugin missing → `orbitPlayBuf` fallback + 1 回 warn
+  3. outputChannel なし → 既存 `orbitPlayBuf`
+- plugin available フラグは default false、 Step 4 のブート pipeline で SynthDef discovery 後に true へ flip する想定
+
+**変更内容** (4 commit):
+
+1. `feat(engine): add LinkAudioChannelRegistry for name → channelId mapping` (4b271e5)
+   - `packages/engine/src/audio/supercollider/link-audio-channels.ts` (新規)
+   - 同名 channel への複数 sequence は idempotent に同じ ID 解決 (sum-by-name 前提)
+   - `tests/audio/link-audio-channels.spec.ts` (6 ケース)
+
+2. `refactor(engine): thread outputChannel through scheduler signatures` (d2cfc88)
+   - Scheduler interface (`global/types.ts`) に outputChannel?: string optional 追加
+   - SuperColliderPlayer / EventScheduler signatures + ScheduledPlay/PlaybackOptions types を拡張
+   - 完全な後方互換 (既存呼出は undefined を渡してパス)
+
+3. `feat(engine): dispatch SynthDef based on outputChannel with hardware fallback` (d79968e)
+   - EventScheduler に LinkAudioChannelRegistry インスタンス + plugin available フラグ + warn フラグ
+   - `setLinkAudioPluginAvailable()` / `isLinkAudioPluginAvailable()` / `getLinkAudioChannelRegistry()` public API
+   - sendPlaybackMessage で 3 通り dispatch + plugin 不在時 1 回 warn
+   - `tests/audio/link-audio-dispatch.spec.ts` (8 ケース)
+
+4. `feat(engine): wire Sequence dispatch channel to global LinkAudio mode` (125ab5f)
+   - Sequence に resolveDispatchChannel() 追加 — linkAudio off ならば undefined 返す
+   - ScheduleEventsOptions / ScheduleEventsFromTimeOptions に outputChannel?: string 追加
+   - sequence-side helper (`scheduling/event-scheduler.ts`) で scheduler.scheduleEvent / scheduleSliceEvent への thread
+   - `tests/core/sequence-link-audio-integration.spec.ts` (4 ケース)
+
+**End-to-end dispatch contract が成立**:
+
+DSL → core → scheduler → plugin の全レイヤーで outputChannel 配線完了:
+1. DSL: `seq.output("kick")` (Step 3.1)
+2. Core: `Sequence._outputChannel` + `Global._linkAudioEnabled` (Step 3.1)
+3. Dispatch decision: `resolveDispatchChannel()` (本 sub-step)
+4. Scheduling pipeline: `ScheduleEventsOptions.outputChannel` (本 sub-step)
+5. SC Player: `scheduleEvent(..., outputChannel)` (本 sub-step)
+6. EventScheduler: SynthDef 名切替 + channel id 解決 (本 sub-step)
+7. SC plugin の `orbitPlayBufLink` (Step 2 で実装予定)
+
+**検証**: npm test で 306 件 pass / 23 件 skip (新規 18 件追加)、 regression なし。 husky pre-commit hook で 4 commit すべて lint + format + build pass。
+
+**残作業 (別 sub-issue)**:
+- Step 2: SC plugin (C++ UGen) 実装 — `orbitPlayBufLink` SynthDef 提供、 plugin available フラグの flip タイミング Step 4 で wire
+- Step 3.3: VS Code 拡張対応 (syntax highlighting、 completion、 厳密 diagnostic)
+- Step 3.4: 動的切替 (immediate output) + latency offset
+- Step 3.5: docs (`INSTRUCTION_ORBITSCORE_DSL.md`) + examples
+
+**stacked PR の状態**:
+- PR #189 (Step 1 research) → main 待ち
+- PR #190 (Step 3.1 DSL syntax) → main 待ち
+- PR #192 (Step 3.2 dispatch、 本 sub-step) → 190-link-audio-dsl-syntax を base に作成、 #190 が main に landing したら自動 rebase
+
+**次の Step**: Step 1 PR (#189) merge → Step 3.1 PR (#190) merge → 本 PR (#192) merge → Step 2 (SC plugin 実装) 着手。 Step 3.3 / 3.4 / 3.5 は Step 2 と並行可能。
+
+---
+
 ### 6.77 Issue #190 / Epic #187: Link Audio DSL syntax (Step 3.1) (May 07, 2026)
 
 **Date**: May 07, 2026
