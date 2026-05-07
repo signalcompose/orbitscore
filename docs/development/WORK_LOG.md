@@ -17,6 +17,66 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.77 Issue #188 / Epic #187: Link Audio API research finalized (Step 1) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR レビュー待ち）
+**Branch**: `188-link-audio-research`
+**Issue**: #188 (Step 1) / Epic: #187
+
+**動機**: Ableton Live 12.4 (2026-05-05 公開) で導入された Link Audio を OrbitScore に統合する Epic #187 の前段階として、 SDK の API surface・サンプルレート挙動・ライセンス条件を一次情報で確定し、 後続 Step 2 (SC plugin 実装) / Step 3 (DSL 構文) / Step 4 (ビルドパイプライン) が安心して着手できる解像度を確保する。
+
+**設計方針** (Epic #187 の plan を引き継ぎ):
+- scsynth は維持、 LinkAudio 専用ブリッジを SC plugin (C++ UGen) として実装
+- DSL `seq.output("link-audio", "channel-name")` で出力先指定（MIDI 拡張余地を残す形）
+- macOS arm64 only、 Link Audio API は alpha のため wrapper 1 ファイルに集約
+- MIDI は別 Issue（DSL 構文だけ拡張余地確保）
+
+**主な findings (一次情報確定)**:
+
+API surface (`LinkAudio.hpp` 直接読込):
+- `LinkAudio` は `Link` を継承 → tempo / beat / phase / transport は base Link メソッドで取得
+- `LinkAudioSink::BufferHandle::commit()` は realtime-safe（SC plugin audio thread から呼べる）
+- `commit()` に sample rate を毎回渡せる仕様（API 上は SR 固定不要）
+- 16-bit signed integer interleaved、 mono(1) または stereo(2) のみ
+- `setChannelsChangedCallback` のシグネチャは `void()` 引数なし
+
+Sample rate 制約 (Void-LinkAudio README からの一次引用):
+- Link Audio は **内部リサンプリングなし** → publisher / subscriber SR 不一致時に ring buffer overflow（44.1k vs 48k で ~8% 連続ドロップ）
+- 当初は scsynth `-S 48000` 強制起動を検討したが、 ユーザーレビューで撤回 → 後述の確定方針へ
+
+License 概況:
+- Link 公式: GPL-2.0-or-later（標準 GPL v2、 改変条項なし）または proprietary commercial
+- OrbitScore 本体: `LicenseRef-Signal-compose-FairTrade-1.0`
+
+**ユーザーレビューで確定した設計決定** (LINK_AUDIO_API.md §0 参照):
+
+1. **出力モード**: `init global.linkAudio([SR])` で **once-per-file 宣言**、 hardware 出力と排他。 当初の per-sequence destination 案 (`seq.output("link-audio", "ch")`) から簡素化
+2. **Per-sequence syntax**: `seq.output("channel-name")` — kind 引数不要 (Global mode から implicit)
+3. **Sample rate**: scsynth は hardware SR 任せ、 plugin 内で target SR へリサンプリング (auto-detect → DSL override → 48k fallback)。 hardware 環境差異吸収と Live セッション SR 柔軟対応のため
+4. **License**: `.scx` を独立 GPL-2.0-or-later artifact として分離配布、 `.vsix` bundle 同梱時は LICENSE.GPL-2.0 + NOTICE で mere aggregation 明記
+5. **Channel 上限**: self-imposed 制限なし、 LinkAudio 仕様任せ
+6. **Plugin lifecycle**: `init global.linkAudio()` 宣言時 load + enable、 scsynth shutdown 時 disable / unload。 ランタイム切替は v1.2.0 では非対応
+
+**変更内容**:
+
+- `docs/research/LINK_AUDIO_API.md` 新規作成（一次情報 URL 引用、 API surface / SR / License / 設計追加確定 / 残不確定要素を網羅 + Section 0 にユーザーレビュー後の確定設計決定を集約）
+
+**Epic plan への影響**:
+- 一次情報による破壊的 findings なし
+- ユーザーレビューによる設計簡素化あり (per-sequence destination → Global mode 排他)
+- Epic Issue #187 body は本コミット後に簡素化された設計で update
+
+**残不確定要素 (Step 2 着手前に解消)**:
+- `linkaudio/AudioPlatform.hpp` の commit ループ実装パターン (submodule 取り込み後直接読む)
+- LinkAudio peer info / OS API による target SR auto-detect 可否
+- Plugin 内リサンプリングの実装方式（線形 / 簡易 sinc / rubato 相当）
+- SC Plugin SDK のバージョン pinning と scsynth bundle (3.14.x) との ABI 一致
+
+**次の Step**: Step 2 (SC plugin 実装) を別 branch / 別 Issue で着手予定。
+
+---
+
 ### 6.76 Gate Marketplace/Open VSX publish on PUBLISH_MARKETPLACE variable (May 07, 2026)
 
 **Date**: May 07, 2026
