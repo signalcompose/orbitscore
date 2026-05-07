@@ -35,6 +35,9 @@ export class Sequence {
   private _audioFilePath?: string
   private _chopDivisions?: number
 
+  // LinkAudio output channel (only meaningful when Global.linkAudio() is enabled)
+  private _outputChannel?: string
+
   constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
     this.audioEngine = audioEngine
@@ -176,6 +179,34 @@ export class Sequence {
     this.panManager.setPan({ value })
     this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
     return this
+  }
+
+  /**
+   * Set the LinkAudio output channel name for this sequence.
+   *
+   * Effective only when `Global.linkAudio()` was declared earlier in the same
+   * .orbs file. Without that declaration the assignment is recorded but the
+   * sequence still routes through the hardware bus, and a runtime warning is
+   * emitted once. Multiple sequences sharing the same channel name are summed
+   * by the SC plugin (Step 2).
+   *
+   * The dispatch wiring (SynthDef switch, channel-id allocation) lands in
+   * Step 3.2; this method only persists the intent on the sequence.
+   */
+  output(channelName: string): this {
+    this._outputChannel = channelName
+    if (!this.global.isLinkAudioEnabled()) {
+      console.warn(
+        `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}") ` +
+          `was called without 'init global.linkAudio()'. The channel name is recorded ` +
+          `but will not take effect until LinkAudio mode is declared.`,
+      )
+    }
+    return this
+  }
+
+  getOutputChannel(): string | undefined {
+    return this._outputChannel
   }
 
   /**
@@ -522,6 +553,7 @@ export class Sequence {
       gainRandom: gainState.gainRandom,
       pan: panState.pan,
       panRandom: panState.panRandom,
+      outputChannel: this._outputChannel,
     }
   }
 }

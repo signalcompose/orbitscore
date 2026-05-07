@@ -27,6 +27,7 @@ export interface SequenceState {
   isLooping: boolean
   audioFilePath?: string
   chopDivisions?: number
+  outputChannel?: string
 }
 
 /**
