@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.76 Issue #188 / Epic #187: Link Audio API research finalized (Step 1) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR レビュー待ち）
+**Branch**: `188-link-audio-research`
+**Issue**: #188 (Step 1) / Epic: #187
+
+**動機**: Ableton Live 12.4 (2026-05-05 公開) で導入された Link Audio を OrbitScore に統合する Epic #187 の前段階として、 SDK の API surface・サンプルレート挙動・ライセンス条件を一次情報で確定し、 後続 Step 2 (SC plugin 実装) / Step 3 (DSL 構文) / Step 4 (ビルドパイプライン) が安心して着手できる解像度を確保する。
+
+**設計方針** (Epic #187 の plan を引き継ぎ):
+- scsynth は維持、 LinkAudio 専用ブリッジを SC plugin (C++ UGen) として実装
+- DSL `seq.output("link-audio", "channel-name")` で出力先指定（MIDI 拡張余地を残す形）
+- macOS arm64 only、 Link Audio API は alpha のため wrapper 1 ファイルに集約
+- MIDI は別 Issue（DSL 構文だけ拡張余地確保）
+
+**主な findings (一次情報確定)**:
+
+API surface (`LinkAudio.hpp` 直接読込):
+- `LinkAudio` は `Link` を継承 → tempo / beat / phase / transport は base Link メソッドで取得
+- `LinkAudioSink::BufferHandle::commit()` は realtime-safe（SC plugin audio thread から呼べる）
+- `commit()` に sample rate を毎回渡せる仕様（API 上は SR 固定不要）
+- 16-bit signed integer interleaved、 mono(1) または stereo(2) のみ
+- `setChannelsChangedCallback` のシグネチャは `void()` 引数なし
+
+Sample rate 戦略 (Void-LinkAudio README からの一次引用):
+- Link Audio は **内部リサンプリングなし** → publisher / subscriber SR 不一致時に ring buffer overflow（44.1k vs 48k で ~8% 連続ドロップ）
+- → **scsynth `-S 48000` 強制起動が必須**（Live default 一致）
+- フォールバック: 48kHz 不可ハードウェア時は plugin 側で簡易リサンプリング（Step 2 で実装判断）
+
+ライセンス分離方針:
+- Link 公式: GPL-2.0-or-later（標準 GPL v2、 改変条項なし）または proprietary commercial
+- OrbitScore 本体: `LicenseRef-Signal-compose-FairTrade-1.0`
+- → **`.scx` plugin を独立 GPL-2.0-or-later artifact として分離配布**、 `.vsix` bundle 同梱時は LICENSE.GPL-2.0 + NOTICE で aggregation 明記
+- 商用配布フェーズに移行する際は `link-devs@ableton.com` に proprietary license 申請判断（現状は research / personal use フェーズで OK）
+
+**変更内容**:
+
+- `docs/research/LINK_AUDIO_API.md` 新規作成（API surface / SR 戦略 / ライセンス分離 / 設計追加確定 / 残不確定要素を網羅、 一次情報 URL 引用付き）
+
+**Epic plan への影響**: 仮説に対する破壊的 findings なし、 補強のみ。 plan file (Epic #187 内記載) はそのまま Step 2 着手可能。
+
+**残不確定要素 (Step 2 着手前に解消)**:
+- `linkaudio/AudioPlatform.hpp` の commit ループ実装パターン (submodule 取り込み後直接読む)
+- supercolliderjs の bootOptions が `-S` フラグを渡せるかの動作確認
+- SC Plugin SDK のバージョン pinning と scsynth bundle (3.14.x) との ABI 一致
+
+**次の Step**: Step 2 (SC plugin 実装) を別 branch / 別 Issue で着手予定。
+
+---
+
 ### 6.74 Deploy user + dev learning sites to GitHub Pages (May 06, 2026)
 
 **Date**: May 06, 2026
