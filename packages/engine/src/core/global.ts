@@ -12,6 +12,7 @@ import { AudioManager } from './global/audio-manager'
 import { EffectsManager } from './global/effects-manager'
 import { TransportControl } from './global/transport-control'
 import { SequenceRegistry } from './global/sequence-registry'
+import { LinkAudioManager } from './global/link-audio-manager'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -20,6 +21,7 @@ export class Global {
   private effectsManager: EffectsManager
   private transportControl: TransportControl
   private sequenceRegistry: SequenceRegistry
+  private linkAudioManager: LinkAudioManager
 
   // Core dependencies
   private audioEngine: AudioEngine
@@ -38,6 +40,7 @@ export class Global {
     // Initialize managers
     this.tempoManager = new TempoManager()
     this.audioManager = new AudioManager(audioEngine)
+    this.linkAudioManager = new LinkAudioManager()
     this.sequenceRegistry = new SequenceRegistry(audioEngine, this)
     this.effectsManager = new EffectsManager(
       this.globalScheduler,
@@ -94,6 +97,24 @@ export class Global {
   audioDevice(deviceName: string): this {
     this.audioManager.audioDevice(deviceName)
     return this
+  }
+
+  /**
+   * Enable LinkAudio output mode. Once declared, all sequences route through
+   * Ableton Link Audio instead of the hardware bus. Hardware output and
+   * LinkAudio cannot coexist within the same .orbs file.
+   *
+   * @param targetSampleRate Optional explicit target SR for plugin-side
+   *                         resampling. Auto-detect with 48000 fallback when
+   *                         omitted.
+   */
+  linkAudio(targetSampleRate?: number): this {
+    this.linkAudioManager.linkAudio(targetSampleRate)
+    return this
+  }
+
+  isLinkAudioEnabled(): boolean {
+    return this.linkAudioManager.isEnabled()
   }
 
   /**
@@ -187,6 +208,7 @@ export class Global {
       ...this.audioManager.getState(),
       ...this.effectsManager.getState(),
       ...this.transportControl.getState(),
+      ...this.linkAudioManager.getState(),
     }
   }
 }

@@ -55,4 +55,6 @@ export interface GlobalState {
   masterEffects: MasterEffect[]
   isRunning: boolean
   isLooping: boolean
+  linkAudioEnabled: boolean
+  linkAudioTargetSampleRate?: number
 }
