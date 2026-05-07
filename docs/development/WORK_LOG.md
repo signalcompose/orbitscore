@@ -17,6 +17,108 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.76 Gate Marketplace/Open VSX publish on PUBLISH_MARKETPLACE variable (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS (PR #196 に同梱)
+**Branch**: `claude/prepare-orbitscore-release-0Q6uK`
+**関連 Issue**: #197 (Marketplace / Open VSX 登録追跡)
+**関連 PR**: #196 (release v1.1.0 cut)
+
+**動機**: v1.1.0 stable tag push 後、 `release.yml` の `Publish to VS Code Marketplace` step が `VSCE_PAT` 未登録のため fail-loud で失敗 (run id 25484379033)。 GitHub Release 作成と .vsix asset 添付は完了しているが、 publisher account / PAT 準備が整うまでは workflow を成功させたい。
+
+**経緯**:
+- v1.1.0 tag push は 6.75 で完了、 release workflow が起動
+- Build / bundle / .vsix package / GitHub Release create までは success
+- `Publish to VS Code Marketplace (stable only)` step が `VSCE_PAT` secret 未登録で fail-loud を意図通り発火
+- Open VSX publish step は依存関係で skipped
+- 利用者は publisher account 準備前であり、 暫定で publish step を gate する必要がある
+
+**変更内容**:
+
+- `release.yml` の publish step に repo variable `PUBLISH_MARKETPLACE == 'true'` の gate を追加:
+  - `Publish to VS Code Marketplace (stable only)` の `if` に追加
+  - `Publish to Open VSX (stable only)` の `if` に追加
+  - 未設定 (`!= 'true'`) の場合、 stable tag push でも publish step は skip される (GitHub Release は引き続き作成)
+- workflow header コメントに gating model を追記 (PUBLISH_MARKETPLACE の意味、 issue #197 への参照)
+- error message を更新: 「VSCE_PAT 未登録」 → 「PUBLISH_MARKETPLACE=true なのに VSCE_PAT 未登録」 (variable と secret の不整合を明示)
+- `Summary` step に新しい分岐を追加: stable release だが publish gated off の状態を表示
+
+**設計判断**:
+- `if: false` でハードコード disable する案より、 repo variable gate にすることで
+  - 復旧操作が `gh variable set PUBLISH_MARKETPLACE --body 'true'` の 1 コマンドで完結 (workflow 再編集不要)
+  - secret 登録 + variable 有効化を分離して、 variable 有効化時に secret 未登録なら fail-loud (誤設定検出可)
+  - 状態が GitHub UI 上で可視 (Settings → Secrets and variables → Actions → Variables)
+- prerelease (`v*-rc1` 等) は別ロジック (`is_prerelease == 'false'`) で既に skip 済、 PUBLISH_MARKETPLACE と独立
+
+**復旧手順 (issue #197 完了時)**:
+1. `gh secret set VSCE_PAT --repo signalcompose/orbitscore`
+2. `gh secret set OVSX_PAT --repo signalcompose/orbitscore`
+3. `gh variable set PUBLISH_MARKETPLACE --body 'true' --repo signalcompose/orbitscore`
+4. 次の stable tag (例: v1.1.1) で publish が走ることを確認
+
+---
+
+### 6.75 Release v1.1.0 stable — promote RC sequence to stable (May 06, 2026)
+
+**Date**: May 06, 2026 (tag push: May 07, 2026)
+**Status**: ✅ DONE (tag push 完了 + GitHub Release 作成済、 Marketplace publish は #197 で gated)
+**Branch**: `claude/prepare-orbitscore-release-0Q6uK`
+**Tag**: `v1.1.0` (v1.1.0-rc1/rc2/rc3 を経た初の stable 化)
+
+**動機**: ICMC 2026 Hamburg (5/10-16) 発表前に、 既に rc1/rc2/rc3 を切り終えた v1.1.0 を stable として正式タグ付けし、 `release.yml` workflow による Marketplace / Open VSX / GitHub Release の自動配信パイプラインを起動する。 RC 連番をきちんと stable で締めくくることで `v1.0.1 → v1.1.0-rc{1,2,3} → v1.1.0 stable` の canonical な lineage を残す。
+
+**バージョン選択の根拠**:
+- 当初 v1.2.0 案で実装着手したが、 過去タグ (v1.0.1, v1.1.0-rc{1,2,3}) を `git fetch --tags` で確認した結果、 v1.1.0 RC が 3 本も切られているのに stable promote が未実施という宙吊り状態が判明
+- post-rc3 の変更 (.orbs rename / 学習サイト / diagnostics) は「v1.1.0 の最終スコープに取り込まれた追加分」 として位置づけ可能、 別 minor を切る積極的理由なし
+- README / WORK_LOG にも「ICMC v1.1.0 release-ready」 という記述があり、 そもそも 1.1.0 が出すべきバージョンだった
+- semver 上 `.osc` → `.orbs` は breaking だが、 利用者影響範囲を考慮して minor (1.1.0) 扱い、 CHANGELOG Changed 冒頭で明示
+
+**Proxy 制約 (重要)**:
+- Claude session の git proxy は `refs/tags/*` への push を 403 で全面ブロック
+- annotated/lightweight 問わず、 また tag 名のパターンに依らず拒否される
+- これは tag push が release.yml workflow を起動して Marketplace publish まで自動実行する高権限操作だからで、 安全装置として人間の手動 push を強制する設計
+- 結果、 commit + branch push までは Claude が完了、 最後の `git push origin v1.1.0` のみ利用者側で実行が必要
+
+**変更内容**:
+
+- `CHANGELOG.md` 新規作成 (Keep a Changelog 準拠、 1.1.0 が初エントリ)
+- `package.json` (root) `1.1.2` → `1.1.0` (※ 後方への version down は package.json 上の数値のみ、 git tag は新規)
+- `packages/vscode-extension/package.json` `1.1.2` → `1.1.0`
+- `package-lock.json` workspace ルートと vscode-extension entry を 1.1.0 に同期
+
+**含まれる主な変更 (v1.1.0-rc3 以降)**:
+- 拡張子 `.osc` → `.orbs` (af9b887) ※ 利用者リネーム必要
+- 診断機能: global once-per-file / audioPath ordering (0666633, 2c3d793)
+- ユーザー向け学習サイト 8 章 (65a11b8)
+- 開発者向け学習サイト 16 章 (671481f)
+- i18n: dev 18 章 / user 8 章の英訳 (136c4b6, d4e1850)
+- GitHub Pages deploy workflow (36dae32)
+- 環境非依存 audio path 解決 fix (f972ddc)
+
+**自動化フロー**:
+1. tag `v1.1.0` を push (利用者側で実行)
+2. `.github/workflows/release.yml` が trigger:
+   - macOS arm64 で extension をビルド
+   - scsynth bundle 抽出 + 整合性検証
+   - `.vsix` package 化
+   - `gh release create --generate-notes` で GitHub Release 作成 + .vsix を asset 添付
+   - VS Code Marketplace + Open VSX に publish (stable tag のみ)
+3. CHANGELOG.md は repo 内 canonical 詳細記録、 GitHub Release notes は workflow による auto-generated 形式
+
+**Post-tag-push 完了報告 (May 07, 2026)**:
+- `git push origin v1.1.0` 成功 (lightweight tag、 `cc1342a` を指す)
+- release workflow 実行 (run id 25484379033): build / bundle / .vsix package / GitHub Release 作成までは success
+- `Publish to VS Code Marketplace (stable only)` step が `VSCE_PAT` 未登録で fail-loud (意図通り)
+- → 6.76 で `PUBLISH_MARKETPLACE` repo variable gate を追加して暫定対応 (#197 で publisher account 準備を追跡)
+- PR #196 の Claude review で以下を検出 → 順次修正:
+  - 🔴 Critical: `package-lock.json` の `packages[""]` entry が `1.2.0` のまま (c24bd69 v1.2.0 cut の残骸を cc1342a retarget が取りこぼし) → `npm install --package-lock-only` で 1.1.0 に同期修正 (commit `affbd9b`)
+  - 🟠 Minor: CHANGELOG.md の Keep a Changelog 標準フォーマット差異 (`# Changelog` ヘッダー欠落、 `[Unreleased]` セクション欠落、 SemVer リンク欠落) → ヘッダー / intro / `[Unreleased]` / compare link を追加 (commit `a64d6c9`)
+  - 🟠 Minor: `.osc` → `.orbs` の breaking change が `### Changed` に埋もれていた → `### Breaking Changes` セクションに移動、 semver 上 major 相当だが minor として release した経緯も明記 (commit `a64d6c9` 同梱)
+  - 🟡 Warning: 1.1.2 → 1.1.0 への version 後退の説明不足 → CHANGELOG 1.1.0 セクション冒頭に Note を追加し、 本 WORK_LOG への参照を明記 (commit `a64d6c9` 同梱)
+
+---
+
 ### 6.74 Deploy user + dev learning sites to GitHub Pages (May 06, 2026)
 
 **Date**: May 06, 2026
