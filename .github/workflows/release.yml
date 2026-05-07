@@ -13,8 +13,13 @@ name: Release
 # Required GitHub secrets (set via gh secret set <name> --repo signalcompose/orbitscore):
 #   - VSCE_PAT  : VS Code Marketplace publisher token (Azure DevOps)
 #   - OVSX_PAT  : Open VSX namespace token (Eclipse Foundation account)
-# The publish steps abort with an error if these are unset, so a stable tag push on a repo
-# without secrets fails loud rather than silently skipping.
+# Required GitHub repo variable (set via gh variable set <name> --body 'true' --repo signalcompose/orbitscore):
+#   - PUBLISH_MARKETPLACE : enable Marketplace + Open VSX publish on stable tags ('true' to enable)
+# Publish gating model:
+#   - PUBLISH_MARKETPLACE != 'true' : Marketplace + Open VSX steps are skipped (GitHub Release still runs).
+#     Used while publisher accounts / PATs are not yet provisioned. Tracked in issue #197.
+#   - PUBLISH_MARKETPLACE == 'true' : Marketplace + Open VSX steps run; abort with an error if the
+#     corresponding secret is unset (fail loud rather than silently skipping).
 # Apple Developer ID secrets are NOT required — the bundled scsynth retains the SuperCollider
 # project's existing notarized signature (see docs/research/CODESIGN_PIPELINE.md).
 
@@ -137,7 +142,10 @@ jobs:
 
       - name: Publish to VS Code Marketplace (stable only)
         id: vsce_publish
-        if: startsWith(github.ref, 'refs/tags/v') && steps.release_type.outputs.is_prerelease == 'false'
+        # Gated on PUBLISH_MARKETPLACE repo variable so stable tag pushes don't fail
+        # while publisher accounts / PATs are still being provisioned (tracked in #197).
+        # Set the variable to 'true' once VSCE_PAT is registered to re-enable.
+        if: startsWith(github.ref, 'refs/tags/v') && steps.release_type.outputs.is_prerelease == 'false' && vars.PUBLISH_MARKETPLACE == 'true'
         working-directory: packages/vscode-extension
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
@@ -146,21 +154,22 @@ jobs:
           # Fail loud rather than letting vsce attempt auth with empty token
           # (which produces a confusing error vs an actionable "secret missing" message).
           if [ -z "${VSCE_PAT:-}" ]; then
-            echo "::error::VSCE_PAT secret is not set. Register it via 'gh secret set VSCE_PAT --repo signalcompose/orbitscore' before tagging stable releases." >&2
+            echo "::error::VSCE_PAT secret is not set even though PUBLISH_MARKETPLACE=true. Register it via 'gh secret set VSCE_PAT --repo signalcompose/orbitscore', or unset the variable to skip publish." >&2
             exit 1
           fi
           npx vsce publish --target "$VSIX_TARGET" --packagePath orbitscore-"$VSIX_TARGET"-*.vsix
 
       - name: Publish to Open VSX (stable only)
         id: ovsx_publish
-        if: startsWith(github.ref, 'refs/tags/v') && steps.release_type.outputs.is_prerelease == 'false'
+        # Same PUBLISH_MARKETPLACE gate as the Marketplace step. See #197.
+        if: startsWith(github.ref, 'refs/tags/v') && steps.release_type.outputs.is_prerelease == 'false' && vars.PUBLISH_MARKETPLACE == 'true'
         working-directory: packages/vscode-extension
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
           set -euo pipefail
           if [ -z "${OVSX_PAT:-}" ]; then
-            echo "::error::OVSX_PAT secret is not set. Register it via 'gh secret set OVSX_PAT --repo signalcompose/orbitscore' before tagging stable releases." >&2
+            echo "::error::OVSX_PAT secret is not set even though PUBLISH_MARKETPLACE=true. Register it via 'gh secret set OVSX_PAT --repo signalcompose/orbitscore', or unset the variable to skip publish." >&2
             exit 1
           fi
           npx ovsx publish orbitscore-"$VSIX_TARGET"-*.vsix -p "$OVSX_PAT"
@@ -172,6 +181,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
           IS_PRERELEASE: ${{ steps.release_type.outputs.is_prerelease }}
+          PUBLISH_MARKETPLACE: ${{ vars.PUBLISH_MARKETPLACE }}
           GH_RELEASE_OUTCOME: ${{ steps.gh_release.outcome }}
           VSCE_OUTCOME: ${{ steps.vsce_publish.outcome }}
           OVSX_OUTCOME: ${{ steps.ovsx_publish.outcome }}
@@ -184,6 +194,8 @@ jobs:
             PRERELEASE_LABEL="❓ **Unknown release type**"
           elif [ "$IS_PRERELEASE" = "true" ]; then
             PRERELEASE_LABEL="🧪 **Prerelease** — GitHub Release only, Marketplace/Open VSX skipped"
+          elif [ "${PUBLISH_MARKETPLACE:-}" != "true" ]; then
+            PRERELEASE_LABEL="🚀 **Stable release** — Marketplace/Open VSX gated off (PUBLISH_MARKETPLACE != 'true', see #197)"
           else
             PRERELEASE_LABEL="🚀 **Stable release** target — per-channel results below"
           fi

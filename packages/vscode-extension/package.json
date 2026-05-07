@@ -3,7 +3,7 @@
   "displayName": "OrbitScore",
   "description": "Live coding music DSL with bundled SuperCollider audio engine. macOS (Apple Silicon) only.",
   "publisher": "local",
-  "version": "1.1.2",
+  "version": "1.1.0",
   "author": "Signal compose Inc.",
   "license": "SEE LICENSE IN ../../LICENSE",
   "repository": {
