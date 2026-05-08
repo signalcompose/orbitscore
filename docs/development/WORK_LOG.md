@@ -17,6 +17,83 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.83 Issue #198 / Epic #187: SC plugin UGen 実装 (Step 2.2) (May 08, 2026)
+
+**Date**: May 08, 2026
+**Status**: ⏳ IN PROGRESS (draft PR、 着陸後 review)
+**Branch**: `198-link-audio-ugen-impl`
+**Issue**: signalcompose/orbitscore#198
+
+**動機**: PR #195 で landing した `packages/sc-link-audio/` skeleton に、 LinkAudio (Ableton/link) + SC Plugin SDK の git submodule を取り込み、 `OrbitLinkAudioOut` UGen の C++ 実装を完成させる。 これにより scsynth プロセス内で LinkAudio へ直接 commit し、 仮想ループバック無しで Live トラックへ音声をルーティングする経路が確保される。
+
+#### 主要な実装内容
+
+1. **submodule 追加**:
+   - `packages/sc-link-audio/external_libraries/supercollider-sdk/` → `github.com/supercollider/supercollider` tag `Version-3.14.0` に pin (sc_api_version = 3、 ローカル `scsynth 3.14.0` と整合)
+   - `packages/sc-link-audio/external_libraries/link/` → `github.com/Ableton/link` master + `modules/asio-standalone` (LinkAudio.hpp / Link.hpp / asio header-only)
+   - `git clone --depth 1 --filter=blob:none` (treeless partial clone) で SC SDK の容量を抑制 — 通常の shallow clone は curl 18 (RPC partial) でタイムアウトしたため
+
+2. **LinkAudio API surface 確定** (`docs/research/LINK_AUDIO_API.md` §1 に対する一次情報レビュー):
+   - `LinkAudio(double bpm, std::string name)` ctor、 `enableLinkAudio(bool)`、 `captureAudioSessionState()` (RT-safe per docs)、 `clock().micros()` で beat 時刻取得
+   - `LinkAudioSink(LinkAudio&, std::string name, size_t maxNumSamples)` で channel 公開、 `BufferHandle::commit(SessionState, beats, quantum, numFrames, numChannels, sr)` で per-block commit
+   - **重要発見**: `<ableton/Link.hpp>` と `<ableton/LinkAudio.hpp>` の include 順に注意。 両者の `ApiConfig.hpp` は `LINK_API_CONTROLLER` という同一 macro guard を使うため、 `Link.hpp` を先に include すると `link_audio/ApiConfig.hpp` の typedef (`ChannelId` / `PeerId` / `SessionId`) が skip され、 `LinkAudio.hpp:307` (`LinkAudioSource::id() const`) で `unknown type name 'ChannelId'` で fail する。 facade で `LinkAudio.hpp` を先に include することで回避
+
+3. **`link_audio_facade.hpp` 完成版**: 上記 include 順を強制する 1 ファイル wrapper。 alpha API 変更追従を 1 翻訳単位に閉じ込める
+
+4. **`channel_registry.hpp/cpp`**:
+   - `Impl::sinks` を `std::unordered_map<int32_t, std::unique_ptr<LinkAudioSink>>` で実装、 `std::mutex` で保護
+   - `LinkAudio` singleton は registry が `std::unique_ptr<LinkAudio>` で所有 (`PluginLoad` で生成、 `PluginUnload` で破棄)
+   - `lookup()` は registry が一度割り当てた sink を Step 2.2 では erase しないことを契約とし、 UGen Ctor で raw pointer を cache。 audio thread (`next()`) は cached pointer のみ使用 (lock-free)
+
+5. **`orbit_link_audio_out.cpp`**:
+   - `IN(0)` / `IN(1)` で stereo audio input、 `IN0(2)` で `channel` (control-rate constant)
+   - `next()` で `std::clamp(f, -1.0f, 1.0f) * 32767.0f` の order で float → int16 変換 (clamp 後の scale でないと wrap-around distortion)
+   - `BufferHandle` を per-block で取得・commit、 RAII 解放。 missing subscriber は `operator bool()` false で skip
+   - `captureAudioSessionState()` + `link.clock().micros()` で `beatsAtBufferBegin` を計算、 quantum=4.0 で 4/4 mapping (polymeter は v1.2.x で対応)
+   - `commit()` には `unit->mWorld->mSampleRate` (scsynth hardware SR) をそのまま渡す。 plugin 内 resampling は本 PR scope 外、 v1.2.x で対応 (`docs/research/LINK_AUDIO_API.md` §0.3)
+   - 各 UGen は scratch buffer (`int16_t[2048 * 2]`) を Unit struct に持ち、 audio thread で alloc 不要
+
+6. **OSC `/cmd /orbit/registerLinkAudioChannel <id> <name>` ハンドラ**:
+   - Live は `LinkAudioSink` の `name()` を表示するため、 TS dispatch (Step 3) が送る integer channelId とは別経路で human-readable 名を plugin に伝える必要があった
+   - `DefinePlugInCmd` で `/orbit/registerLinkAudioChannel` を登録、 `args->geti()` + `args->gets()` で id + name を読んで `ChannelRegistry::registerChannel()` 呼出
+   - TS-side の dispatch wiring (`acquire(name)` 時の `/cmd` 送信) は **Step 4 (boot pipeline 統合) で実装**。 本 PR scope 外
+   - 設計選択肢 (a-c) は実装着手前にユーザーレビューで合意 ((b) `/cmd` 別途登録を採用)
+
+7. **`OrbitLinkAudio.sc` (sclang クラス stub)**:
+   - sclang から `SynthDef` 内で `OrbitLinkAudioOut.ar(left, right, channel)` を使えるように、 UGen 用の sclang サブクラスを定義
+   - SC Extensions に `.scx` と並べて install (CMake は build のみ、 install は手動 / Step 4 で自動化)
+   - `checkInputs` で audio rate 強制 (left / right が control rate だと C++ 側が float* で control rate の 1 sample buffer を読んで silent failure するため)
+
+8. **CMakeLists の post-build codesign**:
+   - macOS は signed parent process (`scsynth` 本体は SuperCollider team で署名済) からの unsigned bundle dlopen を `signal: SIGKILL (Code Signature Invalid)` で殺す
+   - `add_custom_command(... codesign --force --sign - ...)` で build 直後に ad-hoc 署名を実施
+   - 署名なしで install して試した最初の load で scsynth が即時 crash、 `~/Library/Logs/DiagnosticReports/scsynth-*.ips` で診断
+   - production 配布版 (Step 4 `.vsix`) は Developer ID で再署名する想定
+
+9. **検証 (`packages/sc-link-audio/scripts/verify-plugin.scd`)**:
+   - sclang harness で 5 段階の検証: class load / scsynth boot / `/cmd` 受理 / SynthDef instantiate / 2 秒間 `next()` 走行
+   - 全 OK で完了、 server `/quit` も正常 (PluginUnload も正しく fire)
+   - Live 12.4+ 受信を含む完全 E2E (`docs/LINK_AUDIO_E2E_CHECKLIST.md` §B-G) は Step 4 で TS dispatch / boot pipeline 統合後に実施可能
+
+#### 既知の制限 (本 PR で対応しない)
+
+- **sum-by-name (Step 2.3)**: 同一 channel に複数 sequence が commit する場合の集約は未実装。 現状は last-write-wins per audio tick (各 UGen が独立に `BufferHandle` を取って commit するため)。 Step 2.3 で per-channel mix buffer + tick-end commit パターンを導入予定
+- **Plugin 内 resampling (v1.2.x)**: target SR はと scsynth hardware SR を一致させる前提。 不一致時は LinkAudio 側で ring buffer drops が発生する (Void-LinkAudio README 引用)。 plugin 内 resampling 実装は v1.2.x の課題
+- **TS dispatch wiring (Step 4)**: `LinkAudioChannelRegistry.acquire()` の新規 name 割当時に `/cmd /orbit/registerLinkAudioChannel <id> <name>` を送る wire は未実装。 Step 4 boot pipeline 統合 PR でまとめて対応
+
+#### Submodule pinning 注意点
+
+- `external_libraries/supercollider-sdk` は **Version-3.14.0 tag** に pin (sc_api_version = 3、 ローカル / bundle scsynth と整合)。 master tip (sc_api_version = 6) に動かすと `API version mismatch` で plugin load 失敗
+- `external_libraries/link` は **master** に追従。 LinkAudio API は alpha なので将来 breaking change の可能性あり、 facade で吸収する方針
+
+**残作業 (本 PR 着陸後)**:
+- Step 2.3: sum-by-name (per-channel mix buffer + tick-end commit)、 別 issue / PR
+- Step 4: TS dispatch `/cmd /orbit/registerLinkAudioChannel` wire + boot pipeline での `setLinkAudioPluginAvailable(true)` flip + `.vsix` bundle 統合 + Developer ID 再署名 (本 PR の ad-hoc 署名を置換)、 別 issue / PR
+
+**次の Step**: PR #198 のユーザー確認 → review → merge → Step 4 着手。
+
+---
+
 ### 6.82 Epic #187 / PR #191: claude bot review fixes + LinkAudio strict mode (May 08, 2026)
 
 **Latest follow-up (May 08, post-PR-review-team)**: claude bot 最新レビュー (commit b640469 後) の Minor 指摘から、 ユーザー混乱を防ぐ価値が高い 1 件 (`output("")` の edit-time vs runtime 不整合) を反映:
