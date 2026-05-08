@@ -7,6 +7,14 @@ import { BufferManager } from './buffer-manager'
 import { OSCClient } from './osc-client'
 import { LinkAudioChannelRegistry } from './link-audio-channels'
 
+// SynthDef names registered on the scsynth side. Keeping these as named
+// constants ensures the two dispatch paths in `sendPlaybackMessage` can't
+// drift apart from each other or from the plugin registration via a typo —
+// a typo here would silently send the wrong SynthDef name to scsynth and
+// produce no audio (or wrong routing) with no TS-level error.
+const SYNTHDEF_HARDWARE = 'orbitPlayBuf'
+const SYNTHDEF_LINK = 'orbitPlayBufLink'
+
 export class EventScheduler {
   public isRunning = false
   public startTime = 0
@@ -14,10 +22,10 @@ export class EventScheduler {
   private sequenceEvents: Map<string, ScheduledPlay[]> = new Map()
   private intervalId: NodeJS.Timeout | null = null
 
-  // LinkAudio dispatch state — plugin availability flips to true once the SC
-  // OrbitLinkAudio plugin is confirmed loaded (Step 2 / Step 4 will wire that
-  // discovery). Until then, sequences with outputChannel set fall back to the
-  // hardware bus and emit a one-shot warning.
+  // LinkAudio dispatch state — plugin availability defaults to false and is
+  // flipped by the boot pipeline once the OrbitLinkAudio SC plugin is
+  // confirmed loaded. Until then, sequences with outputChannel set fall back
+  // to the hardware bus and emit a one-shot warning.
   private linkAudioChannels = new LinkAudioChannelRegistry()
   private linkAudioPluginAvailable = false
   private warnedAboutMissingPlugin = false
@@ -29,8 +37,8 @@ export class EventScheduler {
 
   /**
    * Mark the OrbitLinkAudio SC plugin as loaded / unloaded. Called by the boot
-   * pipeline after SynthDef discovery (Step 4). When false, dispatch falls
-   * back to the hardware bus and warns once per session.
+   * pipeline after SynthDef discovery. When false, dispatch falls back to the
+   * hardware bus and warns once per session.
    */
   setLinkAudioPluginAvailable(available: boolean): void {
     this.linkAudioPluginAvailable = available
@@ -44,7 +52,7 @@ export class EventScheduler {
   }
 
   /**
-   * Internal accessor — exposes the channel registry. Used by Step 4 boot
+   * Internal accessor — exposes the channel registry. Used by the boot
    * pipeline to query allocated ids for telemetry / debug snapshots, and by
    * the test suite to assert idempotent acquire() behavior. Not part of the
    * public DSL surface — production code outside the boot pipeline should not
@@ -237,6 +245,9 @@ export class EventScheduler {
     this.stop()
     this.scheduledPlays = []
     this.sequenceEvents.clear()
+    // Reset LinkAudio channel id allocation on engine restart so a new
+    // session does not inherit stale ids from the previous one.
+    this.linkAudioChannels.clear()
   }
 
   /**
@@ -346,14 +357,13 @@ export class EventScheduler {
    * Send OSC playback message to SuperCollider.
    *
    * Dispatch logic:
-   *   - When `options.outputChannel` is set AND the OrbitLinkAudio plugin is
-   *     available, route through `orbitPlayBufLink` with the resolved channel
-   *     id (Step 2 will wire the SynthDef in the SC plugin).
-   *   - When `outputChannel` is set but the plugin is not available, fall back
-   *     to the hardware `orbitPlayBuf` path and emit a one-shot warning (the
-   *     warning resets on plugin reload via setLinkAudioPluginAvailable(true)).
-   *   - When `outputChannel` is unset, the existing hardware path is taken
-   *     unchanged.
+   *   - `outputChannel` set AND plugin available → SYNTHDEF_LINK with the
+   *     resolved channel id.
+   *   - `outputChannel` set AND plugin missing → SYNTHDEF_HARDWARE fallback +
+   *     one-shot warning. The warning resets on plugin reload via
+   *     `setLinkAudioPluginAvailable(true)` so a re-install during the same
+   *     session re-arms the warning.
+   *   - `outputChannel` unset → SYNTHDEF_HARDWARE.
    */
   private async sendPlaybackMessage(
     bufnum: number,
@@ -370,7 +380,7 @@ export class EventScheduler {
       if (this.linkAudioPluginAvailable) {
         await this.oscClient.sendMessage([
           '/s_new',
-          'orbitPlayBufLink',
+          SYNTHDEF_LINK,
           -1,
           0,
           0,
@@ -394,7 +404,7 @@ export class EventScheduler {
       if (!this.warnedAboutMissingPlugin) {
         console.warn(
           `⚠️  LinkAudio plugin not loaded — sequence with outputChannel="${options.outputChannel}" ` +
-            `falls back to the hardware bus. Install OrbitLinkAudio.scx (see Step 2 of Epic #187).`,
+            `falls back to the hardware bus. Install the OrbitLinkAudio.scx SuperCollider plugin to enable LinkAudio routing.`,
         )
         this.warnedAboutMissingPlugin = true
       }
@@ -403,7 +413,7 @@ export class EventScheduler {
 
     await this.oscClient.sendMessage([
       '/s_new',
-      'orbitPlayBuf',
+      SYNTHDEF_HARDWARE,
       -1,
       0,
       0,
@@ -432,8 +442,7 @@ export class EventScheduler {
   /**
    * Test-only accessor — exposes the private `executePlayback()` so unit tests
    * can drive the dispatch path directly without standing up the scheduling
-   * loop. Pre-existing pattern (introduced in PR #23, Phase 4-2 refactor) used
-   * by tests across `tests/audio/`. Not part of the public API.
+   * loop. Not part of the public API.
    *
    * @internal
    */

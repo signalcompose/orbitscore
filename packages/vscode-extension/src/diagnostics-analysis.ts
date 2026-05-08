@@ -70,6 +70,24 @@ function stripLineComment(line: string): string {
 }
 
 /**
+ * 0-indexed line of the first non-comment match for `pattern`, or -1 if
+ * the pattern never appears.
+ */
+function findFirstMatchingLine(lines: string[], pattern: RegExp): number {
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    if (pattern.test(stripLineComment(raw))) return i
+  }
+  return -1
+}
+
+// Module-scope DSL pattern shared by all analyzers that look for the
+// LinkAudio mode declaration. Hoisted so the syntax has a single point of
+// change if the DSL ever evolves.
+const LINK_AUDIO_PATTERN = /\bglobal\s*\.\s*linkAudio\s*\(/
+
+/**
  * Detection: `global.<method>(` の重複呼び出し。
  *
  * @param text ドキュメント全体のテキスト
@@ -124,18 +142,8 @@ export function analyzeAudioPathOrdering(text: string): DiagnosticIssue[] {
   const issues: DiagnosticIssue[] = []
   const lines = text.split('\n')
 
-  // 最初の global.audioPath() 出現行を取得
   const audioPathPattern = /\bglobal\s*\.\s*audioPath\s*\(/
-  let firstAudioPathLine = -1
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]
-    if (!raw || raw.trim().startsWith('//')) continue
-    const line = stripLineComment(raw)
-    if (audioPathPattern.test(line)) {
-      firstAudioPathLine = i
-      break
-    }
-  }
+  const firstAudioPathLine = findFirstMatchingLine(lines, audioPathPattern)
 
   const audioCallPattern = /\.audio\s*\(\s*["']([^"']+)["']\s*\)/g
   for (let i = 0; i < lines.length; i++) {
@@ -191,18 +199,8 @@ export function analyzeOutputWithoutLinkAudio(text: string): DiagnosticIssue[] {
   const issues: DiagnosticIssue[] = []
   const lines = text.split('\n')
 
-  const linkAudioPattern = /\bglobal\s*\.\s*linkAudio\s*\(/
   // -1 = not found anywhere. Otherwise the 0-indexed line of the first call.
-  let firstLinkAudioLine = -1
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]
-    if (!raw || raw.trim().startsWith('//')) continue
-    const line = stripLineComment(raw)
-    if (linkAudioPattern.test(line)) {
-      firstLinkAudioLine = i
-      break
-    }
-  }
+  const firstLinkAudioLine = findFirstMatchingLine(lines, LINK_AUDIO_PATTERN)
 
   const outputCallPattern = /\.output\s*\(\s*["']([^"']*)["']\s*\)/g
   for (let i = 0; i < lines.length; i++) {
@@ -253,20 +251,11 @@ export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
 
   // Bail early if the file does not declare LinkAudio — the strict-mode
   // requirement does not apply.
-  const linkAudioPattern = /\bglobal\s*\.\s*linkAudio\s*\(/
-  let hasLinkAudio = false
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]
-    if (!raw || raw.trim().startsWith('//')) continue
-    if (linkAudioPattern.test(stripLineComment(raw))) {
-      hasLinkAudio = true
-      break
-    }
-  }
-  if (!hasLinkAudio) return issues
+  if (findFirstMatchingLine(lines, LINK_AUDIO_PATTERN) === -1) return issues
 
-  // Collect sequence variable names from `var X = init global.seq` declarations.
-  const seqDeclPattern = /\bvar\s+(\w+)\s*=\s*init\s+global\s*\.\s*seq\b/
+  // Collect sequence variable names. Both `init global.seq` (current) and
+  // `init GLOBAL.seq` (legacy, still supported by the parser) are matched.
+  const seqDeclPattern = /\bvar\s+(\w+)\s*=\s*init\s+(?:global|GLOBAL)\s*\.\s*seq\b/
   const sequenceNames = new Set<string>()
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
@@ -276,16 +265,21 @@ export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
   }
   if (sequenceNames.size === 0) return issues
 
-  // For each sequence name, scan the file for `<name>.output(` references.
-  // Sequences without any output() call are flagged at every `<name>.play(`.
+  // Precompile per-sequence patterns once. Without this, the inner regex
+  // would be compiled on every line × every name on every keystroke, since
+  // updateDiagnostics fires on `onDidChangeTextDocument`. Word-boundary
+  // anchored to avoid `kicker.output()` matching `kick`.
+  const outputPatterns = new Map<string, RegExp>()
+  for (const name of sequenceNames) {
+    outputPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.output\\s*\\(`))
+  }
+
   const namesWithOutput = new Set<string>()
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
     if (!raw || raw.trim().startsWith('//')) continue
     const line = stripLineComment(raw)
-    for (const name of sequenceNames) {
-      // Word-boundary anchored to avoid `kicker.output()` matching `kick`.
-      const pattern = new RegExp(`\\b${name}\\b[^\\n]*\\.output\\s*\\(`)
+    for (const [name, pattern] of outputPatterns) {
       if (pattern.test(line)) namesWithOutput.add(name)
     }
   }
@@ -296,16 +290,19 @@ export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
   }
   if (orphans.size === 0) return issues
 
+  const playPatterns = new Map<string, RegExp>()
+  for (const name of orphans) {
+    playPatterns.set(name, new RegExp(`\\b${name}\\s*\\.\\s*play\\s*\\(`, 'g'))
+  }
+
   // Flag each `<orphan>.play(` call so the issue surfaces where audio is
-  // actually produced. play() is the trigger for runtime dispatch resolution
-  // and therefore the most actionable location.
+  // actually produced. play() is the trigger for runtime dispatch resolution.
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
     if (!raw || raw.trim().startsWith('//')) continue
     const line = stripLineComment(raw)
-    for (const name of orphans) {
-      const playPattern = new RegExp(`\\b${name}\\s*\\.\\s*play\\s*\\(`, 'g')
-      for (const m of line.matchAll(playPattern)) {
+    for (const [name, pattern] of playPatterns) {
+      for (const m of line.matchAll(pattern)) {
         const startCol = m.index ?? 0
         issues.push({
           line: i,

@@ -53,8 +53,8 @@ export class LinkAudioManager {
     if (!COMMON_SAMPLE_RATES.has(targetSampleRate)) {
       console.warn(
         `⚠️  global.linkAudio(${targetSampleRate}): non-standard sample rate. ` +
-          `Common values are 44100 / 48000 / 88200 / 96000. Proceeding anyway — ` +
-          `the plugin will resample.`,
+          `Common values are 44100 / 48000 / 88200 / 96000 / 176400 / 192000. ` +
+          `Proceeding anyway — the plugin will resample.`,
       )
     }
     this._targetSampleRate = targetSampleRate

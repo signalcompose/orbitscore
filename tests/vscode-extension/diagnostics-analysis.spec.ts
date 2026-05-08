@@ -391,6 +391,22 @@ describe('analyzeLinkAudioMissingOutput', () => {
 
     expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
   })
+
+  it('also recognizes legacy `init GLOBAL.seq` (uppercase) declarations', () => {
+    // The parser still supports `init GLOBAL.seq` for backward compatibility,
+    // so the diagnostic must too — otherwise users on the old syntax get no
+    // strict-mode coverage.
+    const text = [
+      'global.linkAudio()',
+      'var kick = init GLOBAL.seq',
+      'kick.audio("kick.wav")',
+      'kick.play(1, 0)',
+    ].join('\n')
+
+    const issues = analyzeLinkAudioMissingOutput(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].message).toContain("Sequence 'kick'")
+  })
 })
 
 describe('analyzeGlobalOncePerFile — linkAudio entry', () => {

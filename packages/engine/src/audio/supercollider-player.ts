@@ -206,8 +206,11 @@ export class SuperColliderPlayer {
   }
 
   /**
-   * Test helper: Execute playback (exposes internal method for testing)
-   * @deprecated Only for testing purposes
+   * Test-only accessor — forwards to `EventScheduler.testExecutePlayback`
+   * so unit tests can drive the dispatch path directly without standing up
+   * the scheduling loop. Not part of the public API.
+   *
+   * @internal
    */
   async testExecutePlayback(
     filepath: string,

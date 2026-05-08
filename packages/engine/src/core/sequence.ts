@@ -188,10 +188,7 @@ export class Sequence {
    * .orbs file. Without that declaration the assignment is recorded but the
    * sequence still routes through the hardware bus, and a runtime warning is
    * emitted once. Multiple sequences sharing the same channel name are summed
-   * by the SC plugin (Step 2).
-   *
-   * The dispatch wiring (SynthDef switch, channel-id allocation) lands in
-   * Step 3.2; this method only persists the intent on the sequence.
+   * by the SC plugin.
    */
   output(channelName: string): this {
     this._outputChannel = channelName

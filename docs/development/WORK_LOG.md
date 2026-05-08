@@ -80,7 +80,23 @@ PR #191 の claude bot review (3 件) で指摘された必須 / 推奨項目へ
    - HEAD の 6.79 (Step 3.3+3.5) → 6.81、 6.78 (Step 3.2) → 6.80、 6.77 (Step 3.1) → 6.79 に renumber
    - origin/main の 6.78 (Step 2.1) / 6.77 (Step 1) / 6.76 (Marketplace gate) / 6.75 (v1.1.0) は保持
 
-**検証**: `npm run build` (clean) → success、 `npm test` で 330 件 pass / 23 件 skip (元 314 件から +16 件)、 regression なし。
+**検証**: `npm run build` (clean) → success、 `npm test` で 331 件 pass / 23 件 skip (元 314 件から +17 件)、 regression なし。
+
+**追加対応 (simplify pass、 May 08)**: `/simplify` (3 agent 並列: code-reuse / code-quality / efficiency) の指摘に対応:
+
+- **code-reuse**:
+  - `LINK_AUDIO_PATTERN` を module-scope に hoist (重複定義 2 箇所解消)
+  - `findFirstMatchingLine()` helper 抽出 (3 箇所の同 scaffold を統一)
+  - `seqDeclPattern` で legacy `init GLOBAL.seq` (uppercase) も match (parser 互換) — test 1 件追加
+- **code-quality**:
+  - SynthDef 名 `'orbitPlayBuf'` / `'orbitPlayBufLink'` を `SYNTHDEF_HARDWARE` / `SYNTHDEF_LINK` 定数化 (typo silent failure 防止)
+  - `SuperColliderPlayer.testExecutePlayback` の `@deprecated` を `@internal` に修正 (IDE strike-through 誤誘導の解消)
+  - epic step / 過去 PR 番号 narration コメントを除去 (event-scheduler.ts x4、 sequence.ts x1、 link-audio-channels.ts x1)
+  - 警告メッセージから epic 内部参照 (`see Step 2 of Epic #187`) を削除、 actionable hint に置換
+  - SR validation の warn 文言を 6 値 set と一致 (44100/48000/88200/96000/176400/192000)
+- **efficiency**:
+  - `analyzeLinkAudioMissingOutput` の inner-loop 内 RegExp 動的生成を precompile 化 (200 行 × 10 sequences の file で keystroke ごとの ~2000 regex compile を回避)
+  - `EventScheduler.stopAll()` で `linkAudioChannels.clear()` を call (long live-coding session で nextId 単調増加を防ぐ、 engine restart で fresh state)
 
 **残作業 (本 PR 着陸後)**:
 - Step 2.2: SC plugin (UGen 実装 + submodule mount)、 別 branch
