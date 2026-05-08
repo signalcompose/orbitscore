@@ -7,8 +7,16 @@
 #include "channel_registry.hpp"
 
 #ifdef ORBIT_SC_PLUGIN_BUILD
+#include <SC_PlugIn.h>  // Print macro = (*ft->fPrint), NRT-safe via InterfaceTable
+
+#include <exception>
 #include <mutex>
 #include <unordered_map>
+
+// `ft` is defined with external linkage in orbit_link_audio_out.cpp (set in
+// PluginLoad before any /cmd or UGen call can fire). The `Print` macro from
+// SC_PlugIn.h dereferences it; we just need the symbol to exist at link time.
+extern InterfaceTable* ft;
 #endif
 
 namespace orbitscore {
@@ -29,8 +37,19 @@ void ChannelRegistry::initLinkAudio(double bpm, const std::string& peerName) {
   if (impl_->link) {
     return;
   }
-  impl_->link = std::make_unique<link_audio::LinkAudio>(bpm, peerName);
-  impl_->link->enableLinkAudio(true);
+  // LinkAudio is alpha — its ctor and enableLinkAudio() error contract is not
+  // formally documented. Catch defensively so a failed init leaves the plugin
+  // in a clean "disabled" state rather than crashing scsynth.
+  try {
+    impl_->link = std::make_unique<link_audio::LinkAudio>(bpm, peerName);
+    impl_->link->enableLinkAudio(true);
+  } catch (const std::exception& e) {
+    Print("OrbitLinkAudio: initLinkAudio failed: %s\n", e.what());
+    impl_->link.reset();
+  } catch (...) {
+    Print("OrbitLinkAudio: initLinkAudio failed (unknown exception)\n");
+    impl_->link.reset();
+  }
 }
 
 void ChannelRegistry::shutdownLinkAudio() {
@@ -47,18 +66,32 @@ void ChannelRegistry::shutdownLinkAudio() {
 void ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) {
   std::lock_guard<std::mutex> lock(impl_->mtx);
   if (!impl_->link) {
+    Print("OrbitLinkAudio: registerChannel called before initLinkAudio "
+             "(channel id %d) — ignoring\n", channelId);
     return;
   }
 
   auto it = impl_->sinks.find(channelId);
   if (it != impl_->sinks.end()) {
-    it->second->setName(std::move(name));
+    // The TS-side dispatcher only emits /cmd on first occurrence of a name,
+    // so re-registration is effectively unused in production. We deliberately
+    // do NOT call setName() here: LinkAudio.hpp documents LinkAudioSink as
+    // "Thread-safe: no", and a setName() on the OSC thread would race with
+    // BufferHandle ctor/commit on the audio thread on the same sink object.
     return;
   }
 
-  auto sink = std::make_unique<link_audio::LinkAudioSink>(
-      *impl_->link, std::move(name), kSinkInitialMaxNumSamples);
-  impl_->sinks.emplace(channelId, std::move(sink));
+  try {
+    auto sink = std::make_unique<link_audio::LinkAudioSink>(
+        *impl_->link, std::move(name), kSinkInitialMaxNumSamples);
+    impl_->sinks.emplace(channelId, std::move(sink));
+  } catch (const std::exception& e) {
+    Print("OrbitLinkAudio: failed to allocate sink for channel id %d: %s\n",
+             channelId, e.what());
+  } catch (...) {
+    Print("OrbitLinkAudio: failed to allocate sink for channel id %d "
+             "(unknown exception)\n", channelId);
+  }
 }
 
 link_audio::LinkAudioSink* ChannelRegistry::lookup(std::int32_t channelId) {

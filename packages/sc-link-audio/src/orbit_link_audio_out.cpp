@@ -27,8 +27,10 @@
 //     never re-enters the registry mutex.
 //   - No allocations / locks / blocking calls in `next()`. The int16 scratch
 //     buffer is part of the Unit struct.
-//   - `captureAudioSessionState`, `commit`, `requestMaxNumSamples` are
-//     documented as realtime-safe in `LinkAudio.hpp`.
+//   - `captureAudioSessionState` and `commit` are documented as realtime-safe
+//     in `LinkAudio.hpp`. We deliberately avoid `requestMaxNumSamples` at
+//     runtime — the sink is seeded with `kSinkInitialMaxNumSamples` at
+//     registration time so per-block memcpy fits without resizing.
 //
 // Multi-sequence to the same channel (sum-by-name):
 //   When two sequences share a channel id, both UGens currently `commit`
@@ -43,12 +45,14 @@
 #include <SC_PlugIn.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <string>
 
-static InterfaceTable* ft;
+// External linkage so channel_registry.cpp can also use the `Print` macro,
+// which expands to `(*ft->fPrint)` and routes through the InterfaceTable
+// (NRT-safe; the only host printer available to MH_BUNDLE plugins).
+InterfaceTable* ft;
 
 namespace {
 
@@ -86,9 +90,11 @@ struct OrbitLinkAudioOut : public Unit {
 };
 
 void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
-  // A non-null sink already implies LinkAudio was initialised before
-  // registerChannel ran — see channel_registry.cpp::registerChannel.
-  if (!unit->sink) {
+  // A non-null sink already implies LinkAudio was initialised at the time
+  // registerChannel ran (see channel_registry.cpp). The defensive `!link`
+  // guard catches the post-shutdown case where PluginUnload has run but
+  // some Unit instance is still being scheduled by scsynth.
+  if (!unit->sink || !unit->link) {
     return;
   }
 
@@ -130,8 +136,6 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
   // Beat at buffer begin. We use the Link clock at "now" as a proxy for the
   // start of this audio block. The error is at most one block (~1.4 ms at
   // 48 kHz / 64 frames), well below the human-perceptible Link sync window.
-  // Refining to a hardware-derived buffer-begin timestamp is left to a future
-  // pass once the boot pipeline is wired.
   auto sessionState = unit->link->captureAudioSessionState();
   const auto now = unit->link->clock().micros();
   const double beatsAtBufferBegin = sessionState.beatAtTime(now, kQuantum);
@@ -151,6 +155,15 @@ void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
   unit->sampleRate = static_cast<std::uint32_t>(unit->mWorld->mSampleRate);
   std::memset(unit->scratch, 0, sizeof(unit->scratch));
 
+  if (!unit->sink) {
+    // Without this diagnostic the symptom (silent Synth) is identical to
+    // "Live not subscribed" — the user has no path to discover that they
+    // forgot to send /cmd /orbit/registerLinkAudioChannel.
+    Print("OrbitLinkAudioOut: channel id %d has no registered sink — "
+             "send /cmd /orbit/registerLinkAudioChannel before s_new\n",
+             static_cast<int>(channelId));
+  }
+
   SETCALC(OrbitLinkAudioOut_next);
 }
 
@@ -162,8 +175,19 @@ void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
 void OrbitLinkAudioOut_RegisterChannel(World* /*world*/, void* /*userData*/,
                                        sc_msg_iter* args, void* /*replyAddr*/) {
   const std::int32_t id = args->geti();
-  const char* name = args->gets("");
+  // Pass nullptr as the default so `gets` returns nullptr both for missing
+  // arguments and for type mismatches — without this the empty default `""`
+  // hides a malformed message under a valid-looking empty string.
+  const char* name = args->gets(nullptr);
   if (name == nullptr) {
+    Print("OrbitLinkAudio: /cmd registerLinkAudioChannel id=%d missing or "
+             "malformed string argument — ignoring\n", static_cast<int>(id));
+    return;
+  }
+  if (name[0] == '\0') {
+    Print("OrbitLinkAudio: /cmd registerLinkAudioChannel id=%d empty "
+             "channel name rejected (would appear blank in Live)\n",
+             static_cast<int>(id));
     return;
   }
   g_channelRegistry.registerChannel(id, std::string(name));

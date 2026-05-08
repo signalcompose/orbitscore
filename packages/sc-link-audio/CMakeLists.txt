@@ -82,8 +82,9 @@ set_target_properties(OrbitLinkAudio PROPERTIES
 
 # === Post-build: ad-hoc codesign ===
 # macOS code signing enforcement (post-Big-Sur) refuses to dlopen unsigned
-# Mach-O bundles in signed parent processes — and the bundled `scsynth` IS
-# signed (TeamIdentifier=HE5VJFE9E4). The result without a signature is a
+# Mach-O bundles in signed parent processes — and the standard SuperCollider
+# `scsynth` build is signed by the SuperCollider project (verify locally with
+# `codesign -dvv $(which scsynth)`). The result without a signature is a
 # silent crash with `signal: SIGKILL (Code Signature Invalid)` in the
 # diagnostic report and zero output on the scsynth log. Ad-hoc signing
 # (`-sign -`) is sufficient for local development; production distribution
