@@ -19,6 +19,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### 6.82 Epic #187 / PR #191: claude bot review fixes + LinkAudio strict mode (May 08, 2026)
 
+**Latest follow-up (May 08, post-PR-review-team)**: claude bot 最新レビュー (commit b640469 後) の Minor 指摘から、 ユーザー混乱を防ぐ価値が高い 1 件 (`output("")` の edit-time vs runtime 不整合) を反映:
+- 新規 `analyzeEmptyOutputArg()` analyzer を追加し、 `.output("")` および whitespace-only 引数を edit-time で `Error` severity flag (commit `52ee2db`)
+- 5 ケース test 追加で 354 件 pass
+- 残り Minor (resolveDispatchChannel の二重呼び出し / completion-context のライン局所性 / lookup() 未テスト) は本 PR scope 外、 今後の改善候補
+
 **Date**: May 08, 2026
 **Status**: ⏳ IN PROGRESS（PR #191 review-iteration、 main 取り込み済）
 **Branch**: `190-link-audio-dsl-syntax`
