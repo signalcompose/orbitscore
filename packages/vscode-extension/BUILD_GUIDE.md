@@ -57,7 +57,19 @@ fallback を持ちません。bundle が無ければ `ScsynthNotFoundError` で 
   または `build:bundle` で bundle を抽出してから実行
 
 ```bash
-# SC.app から抽出 (default: SC.app 不在時 fail-fast)
+# 1. (任意) OrbitLinkAudio plugin (LinkAudio dispatch UGen) を build。
+# build 済みの .scx があれば extract-scsynth-bundle.sh が自動で同梱する。
+# 未 build の場合は warn + skip し、 stock SC plugin のみ bundle される
+# (この .vsix は LinkAudio 経路を使えないが、 hardware fallback では動く)。
+# 初回 configure は SDK + Link の path 指定が必須 (CMakeLists.txt が
+# FATAL_ERROR を返す)。
+cmake -S packages/sc-link-audio -B packages/sc-link-audio/build \
+  -DSC_PATH=packages/sc-link-audio/external_libraries/supercollider-sdk \
+  -DLINK_AUDIO_PATH=packages/sc-link-audio/external_libraries/link
+cmake --build packages/sc-link-audio/build
+
+# 2. SC.app から bundle 抽出 + (上記が build 済なら) OrbitLinkAudio.scx を同梱
+#    default: SC.app 不在時 fail-fast
 cd packages/vscode-extension
 npm run build:bundle
 
@@ -74,14 +86,14 @@ packages/vscode-extension/engine/scsynth/
 ├── Contents/
 │   ├── Resources/
 │   │   ├── scsynth                (1.5 MB, universal arm64+x86_64)
-│   │   └── plugins/               (26 .scx ファイル、5.1 MB)
+│   │   └── plugins/               (26 stock .scx + OrbitLinkAudio.scx if built)
 │   └── Frameworks/
 │       └── libsndfile.dylib       (4.9 MB)
 ├── LICENSE.GPL-3.0                (legal/scsynth-LICENSE.GPL-3.0 から copy)
 └── NOTICE                          (legal/scsynth-NOTICE から copy)
 ```
 
-詳細: [`docs/research/SCSYNTH_BUNDLE_MANIFEST.md`](../../docs/research/SCSYNTH_BUNDLE_MANIFEST.md)
+詳細: [`docs/research/SCSYNTH_BUNDLE_MANIFEST.md`](../../docs/research/SCSYNTH_BUNDLE_MANIFEST.md)、 OrbitLinkAudio plugin: [`packages/sc-link-audio/README.md`](../sc-link-audio/README.md)
 
 ### 5. パッケージ化
 
@@ -127,6 +139,8 @@ binary 上は動く可能性があるが未テスト。
 
 - engine のみ: 約 3.3 MB（2458ファイル）
 - scsynth bundle 同梱版: 約 14.8 MB (上記 + scsynth/plugins/libsndfile)
+- scsynth bundle + OrbitLinkAudio plugin: 約 15 MB (内訳: scsynth 1.4 MB +
+  libsndfile 4.8 MB + 26 stock plugins ~3.4 MB + OrbitLinkAudio.scx ~5.3 MB)
 - `engine/node_modules` を含む（supercolliderjs + wavefile のランタイム依存）
 
 ### scsynth bundle ディレクトリの取り扱い

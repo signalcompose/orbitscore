@@ -133,11 +133,43 @@ if [ -f "$LEGAL_SRC/scsynth-NOTICE" ]; then
 fi
 
 # ============================================================
+# OrbitLinkAudio plugin (custom UGen for LinkAudio dispatch)
+# ============================================================
+# `packages/sc-link-audio/build/OrbitLinkAudio.scx` に build 済の plugin が
+# あれば bundle に同梱する。 build 自体は CMake で別途実行する想定:
+#   cmake -S packages/sc-link-audio -B packages/sc-link-audio/build
+#   cmake --build packages/sc-link-audio/build
+# CI では plugin build step → bundle extract の順で走らせる。 dev では
+# build 済でない場合 warn して skip する (stock SC plugin だけで .vsix が
+# 動作する path を保つため)。
+ORBIT_PLUGIN_SRC="$REPO_ROOT/packages/sc-link-audio/build/OrbitLinkAudio.scx"
+if [ -f "$ORBIT_PLUGIN_SRC" ]; then
+  cp "$ORBIT_PLUGIN_SRC" "$DEST/Resources/plugins/OrbitLinkAudio.scx"
+  echo "  Bundled OrbitLinkAudio.scx (custom LinkAudio UGen)"
+else
+  # First-time configure needs the SDK + Link path overrides; subsequent
+  # `cmake --build` calls reuse the cache. CMakeLists.txt FATAL_ERRORs if
+  # either is missing on a fresh checkout.
+  echo "  ⚠️  OrbitLinkAudio.scx not found at $ORBIT_PLUGIN_SRC" >&2
+  echo "      Build it first with:" >&2
+  echo "        cmake -S packages/sc-link-audio -B packages/sc-link-audio/build \\" >&2
+  echo "          -DSC_PATH=packages/sc-link-audio/external_libraries/supercollider-sdk \\" >&2
+  echo "          -DLINK_AUDIO_PATH=packages/sc-link-audio/external_libraries/link" >&2
+  echo "        cmake --build packages/sc-link-audio/build" >&2
+  echo "      Bundle will be packaged WITHOUT LinkAudio support." >&2
+fi
+
+# ============================================================
 # Verification
 # ============================================================
 echo "─────────────────────────────────────────────"
 echo "Bundle size: $(du -sh "$DEST" | cut -f1)"
-echo "Plugin count: $plugin_count (expected: 26 for SC 3.14.x)"
+# Re-count includes OrbitLinkAudio.scx if it was bundled — `plugin_count`
+# only tracks the stock SC extraction loop above. The supernova exclusion
+# filter is kept here for symmetry with the stock loop, even though the
+# extraction step never copies supernova files into the destination.
+total_plugin_count=$(find "$DEST/Resources/plugins" -name "*.scx" ! -name '*_supernova.scx' | wc -l | tr -d '[:space:]')
+echo "Plugin count: $plugin_count stock SC + $((total_plugin_count - plugin_count)) custom = $total_plugin_count total (expected stock: 26 for SC 3.14.x)"
 
 if [ "$plugin_count" -ne 26 ]; then
   echo "WARN: expected 26 non-supernova plugins, got $plugin_count" >&2

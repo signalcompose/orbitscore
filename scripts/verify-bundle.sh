@@ -38,12 +38,24 @@ fi
 [ -d "$TARGET/Contents/Resources/plugins" ] && ok "plugins directory exists" || fail "plugins directory missing"
 [ -f "$TARGET/Contents/Frameworks/libsndfile.dylib" ] && ok "libsndfile.dylib exists" || fail "libsndfile.dylib missing"
 
-# 2. Plugin count (non-supernova)
-plugin_count=$(find "$TARGET/Contents/Resources/plugins" -name '*.scx' ! -name '*_supernova.scx' 2>/dev/null | wc -l | tr -d ' ')
-if [ "$plugin_count" -eq 26 ]; then
-  ok "26 non-supernova plugins"
-elif [ "$plugin_count" -gt 0 ]; then
-  fail "expected 26 plugins, got $plugin_count (SC version may differ — verify against SCSYNTH_BUNDLE_MANIFEST.md)"
+# 2. Plugin count (non-supernova). Stock SC contributes 26 plugins; the
+# custom OrbitLinkAudio.scx is optionally bundled by extract-scsynth-bundle.sh
+# when packages/sc-link-audio/build/OrbitLinkAudio.scx exists. Validate the
+# stock count separately so a missing OrbitLinkAudio doesn't false-negative
+# the regression check, and a present OrbitLinkAudio doesn't false-negative
+# the stock count check.
+total_count=$(find "$TARGET/Contents/Resources/plugins" -name '*.scx' ! -name '*_supernova.scx' 2>/dev/null | wc -l | tr -d ' ')
+if [ -f "$TARGET/Contents/Resources/plugins/OrbitLinkAudio.scx" ]; then
+  orbit_present=1
+  ok "OrbitLinkAudio.scx present (custom LinkAudio UGen)"
+else
+  orbit_present=0
+fi
+stock_count=$((total_count - orbit_present))
+if [ "$stock_count" -eq 26 ]; then
+  ok "26 stock non-supernova plugins"
+elif [ "$total_count" -gt 0 ]; then
+  fail "expected 26 stock plugins, got $stock_count (SC version may differ — verify against SCSYNTH_BUNDLE_MANIFEST.md)"
 else
   fail "no plugins found"
 fi
