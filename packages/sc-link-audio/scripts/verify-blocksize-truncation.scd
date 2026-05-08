@@ -31,6 +31,11 @@
 //   - Print content matching (sclang harness can only observe transcript;
 //     parsing the Print text reliably needs a wrapping shell grep, which
 //     would make the script CI-runner-dependent)
+//   - driver-level block-size fallback (CoreAudio silently using a smaller
+//     hardware buffer than requested while scsynth still reports the
+//     requested `s.options.blockSize`). The harness checks for the sclang-
+//     side clamp but cannot observe the actual `mBufLength` in the running
+//     scsynth without an additional /cmd echo path
 
 (
 "=== OrbitLinkAudio blockSize truncation verification ===".postln;
@@ -70,6 +75,18 @@ SystemClock.sched(30, {
 });
 
 s.waitForBoot({
+    // Vacuous-pass guard: if sclang's `s.options.blockSize = 4096` request
+    // was silently clamped (e.g. by a future SC version that imposes a hard
+    // cap below 4096), the truncation path under test would never execute
+    // and the harness would exit 0 vacuously. Catch the sclang-side clamp
+    // here. A driver-level fallback (CoreAudio rejecting the buffer size
+    // and scsynth running at a smaller mBufLength) is not detectable from
+    // sclang and is documented as a residual gap.
+    if (s.options.blockSize != 4096) {
+        ("FAIL: requested blockSize=4096 but s.options.blockSize="
+            ++ s.options.blockSize ++ " — sclang-side clamp detected").postln;
+        1.exit;
+    };
     "  [OK] scsynth booted with blockSize=4096".postln;
 
     // Register a channel and instantiate a Synth. The Ctor will Print the

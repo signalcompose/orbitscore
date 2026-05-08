@@ -32,18 +32,20 @@
 //   8. Synths on two distinct registered channel ids run concurrently
 //      (cross-channel isolation no-crash check)
 //   9. /cmd missing string argument is rejected via `gets(nullptr)` sentinel
-//  10. /done /orbit/registerLinkAudioChannel arrives exactly 3 times — once
-//      per successful registration. Verifies the DoAsynchronousCommand
-//      stage4 OSC-reply plumbing (alloc-failure paths emit no /done).
+//  10. /done /orbit/registerLinkAudioChannel arrives exactly 3 times —
+//      once per /cmd that returns true from `registerChannel` (covers both
+//      new allocations and idempotent re-registrations). Verifies the
+//      DoAsynchronousCommand stage4 OSC-reply plumbing; alloc-failure and
+//      argument-validation paths emit no /done.
 //
-// Note on assertion strength: this harness can only detect a crash, missing
-// class, or boot timeout. The Print diagnostics added in iter 1 (sink null
-// at Ctor, /cmd reject paths, re-register no-op) are visible in the
-// transcript but not asserted from sclang — verifying their content
-// requires either an OSC reply protocol or a wrapper that grep's stdout.
-// Each `/cmd` is followed by `s.sync` so a regression that would crash
-// scsynth from inside the handler surfaces immediately rather than at the
-// next sync point.
+// Note on assertion strength: this harness detects (a) crashes, (b) missing
+// class registration, (c) boot timeout, and (d) /done-reply count mismatch
+// for the DoAsynchronousCommand stage4 path (step 10). The Print diagnostics
+// (sink null at Ctor, /cmd reject paths, re-register no-op) are visible in
+// the transcript but not asserted from sclang — verifying their content
+// requires a shell wrapper that grep's stdout. Each `/cmd` is followed by
+// `s.sync` so a regression that would crash scsynth from inside the handler
+// surfaces immediately rather than at the next sync point.
 
 (
 "=== OrbitLinkAudio plugin verification ===".postln;
@@ -179,8 +181,12 @@ s.waitForBoot({
     "  [OK] held for 2 s — no crash, no errors above => plugin is functional".postln;
 
     // Assert /done OSC reply count. Argument-validation rejects emit no
-    // /done (synchronous path), so only successful sink allocations are
-    // counted. Of the 6 /cmd sends above, 3 succeed and 3 reject.
+    // /done (synchronous path); only /cmd sends that return true from
+    // `registerChannel` reach stage4 → /done. Both new sink allocations and
+    // idempotent re-registrations of an existing id return true. Of the 6
+    // /cmd sends above, 3 return true (id=1 new, id=1 rename, id=3 new) and
+    // 3 are synchronous rejects (id=2 empty name, id=-5 sentinel, id=4 no
+    // string).
     if (doneCount != 3) {
         "  FAIL: expected 3 /done /orbit/registerLinkAudioChannel replies, got %"
             .format(doneCount).postln;

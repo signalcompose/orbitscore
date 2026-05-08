@@ -49,6 +49,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <new>  // std::nothrow
 #include <limits>
 #include <string>
 
@@ -62,10 +63,10 @@ namespace {
 orbitscore::ChannelRegistry g_channelRegistry;
 
 // Single source of truth for the /cmd path string. Used by the
-// `DefinePlugInCmd` registration, the `DoAsynchronousCommand` cmdName arg
-// (which becomes the /done reply name), and verified verbatim against the
-// `OSCFunc("/done")` listener in `scripts/verify-plugin.scd`. A rename
-// requires touching that test in lockstep.
+// `DefinePlugInCmd` registration and the `DoAsynchronousCommand` cmdName
+// arg (the latter becomes the /done reply name). The string value must
+// match the `msg[1]` comparison in `scripts/verify-plugin.scd` — a rename
+// here requires updating that test's literal in lockstep.
 constexpr const char* kRegisterLinkAudioChannelCmd =
     "/orbit/registerLinkAudioChannel";
 
@@ -316,11 +317,17 @@ void OrbitLinkAudioOut_RegisterChannel(World* world, void* /*userData*/,
   // Synchronous registration (the previous design) had no way to signal
   // success/failure to the caller, leaving the TS side in a split-brain
   // state when the sink ctor threw.
-  // Stage2 always overwrites cmd->success before stage4 reads it, so no
-  // explicit init is needed; value-initialised `{}` zeroes the POD members
-  // for clean reads in case a future stage4 short-circuit reads it before
-  // stage2.
-  auto* cmd = new RegisterChannelCmd{};
+  // Use nothrow so a `std::bad_alloc` cannot escape the OSC dispatch loop
+  // (mirrors the defensive-catch pattern in `initLinkAudio` /
+  // `registerChannel`). `{}` value-initialises POD members so a future
+  // refactor that adds an early-return path in the stage chain cannot
+  // observe an uninitialised `success`.
+  auto* cmd = new (std::nothrow) RegisterChannelCmd{};
+  if (!cmd) {
+    Print("OrbitLinkAudio: /cmd registerLinkAudioChannel id=%d cmdData "
+          "allocation failed — ignoring\n", static_cast<int>(id));
+    return;
+  }
   cmd->id = id;
   // Truncate over-long names rather than refusing — name was already
   // validated as non-null and non-empty above.
