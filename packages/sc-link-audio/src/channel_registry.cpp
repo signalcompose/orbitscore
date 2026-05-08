@@ -56,9 +56,25 @@ void ChannelRegistry::shutdownLinkAudio() {
   std::lock_guard<std::mutex> lock(impl_->mtx);
   // Sinks hold weak references back into LinkAudio internals; destroy them
   // first so LinkAudio teardown does not race against `BufferHandle` users.
-  impl_->sinks.clear();
+  // The teardown path is symmetric with initLinkAudio() — alpha API, error
+  // contract not formally documented — so wrap defensively. An exception
+  // escaping into PluginUnload would crash scsynth on user-initiated server
+  // quit, the worst possible time to take down the audio process.
+  try {
+    impl_->sinks.clear();
+  } catch (const std::exception& e) {
+    Print("OrbitLinkAudio: error during sink teardown: %s\n", e.what());
+  } catch (...) {
+    Print("OrbitLinkAudio: error during sink teardown (unknown exception)\n");
+  }
   if (impl_->link) {
-    impl_->link->enableLinkAudio(false);
+    try {
+      impl_->link->enableLinkAudio(false);
+    } catch (const std::exception& e) {
+      Print("OrbitLinkAudio: enableLinkAudio(false) failed: %s\n", e.what());
+    } catch (...) {
+      Print("OrbitLinkAudio: enableLinkAudio(false) failed (unknown exception)\n");
+    }
     impl_->link.reset();
   }
 }
@@ -78,9 +94,17 @@ void ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) 
     // do NOT call setName() here: LinkAudio.hpp documents LinkAudioSink as
     // "Thread-safe: no", and a setName() on the OSC thread would race with
     // BufferHandle ctor/commit on the audio thread on the same sink object.
+    // The Print acts as a regression detector — if the TS dispatcher ever
+    // starts re-emitting, this surfaces immediately.
+    Print("OrbitLinkAudio: re-registration of channel id %d ignored "
+          "(rename to \"%s\" discarded; setName would race with audio "
+          "thread)\n", channelId, name.c_str());
     return;
   }
 
+  // Catch defensively — LinkAudioSink ctor's exception contract is undocumented
+  // in the alpha API. A throw must not escape into the OSC /cmd dispatch loop
+  // and crash scsynth (mirrors the rationale in initLinkAudio above).
   try {
     auto sink = std::make_unique<link_audio::LinkAudioSink>(
         *impl_->link, std::move(name), kSinkInitialMaxNumSamples);

@@ -90,10 +90,11 @@ struct OrbitLinkAudioOut : public Unit {
 };
 
 void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
-  // A non-null sink already implies LinkAudio was initialised at the time
-  // registerChannel ran (see channel_registry.cpp). The defensive `!link`
-  // guard catches the post-shutdown case where PluginUnload has run but
-  // some Unit instance is still being scheduled by scsynth.
+  // `!sink` covers the normal case (no /cmd was sent for this channel id
+  // before s_new). `!link` is belt-and-suspenders for the rare path where
+  // initLinkAudio's try-block threw and `getLinkAudio()` returned nullptr at
+  // Ctor — a dangling pointer post-PluginUnload would still be UB on deref,
+  // so this guard cannot protect that case; PluginUnload ordering must.
   if (!unit->sink || !unit->link) {
     return;
   }
@@ -164,6 +165,18 @@ void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
              static_cast<int>(channelId));
   }
 
+  // Server block size > our scratch capacity → next() will silently drop the
+  // tail of every block. We can't warn from next() (RT thread, no Print) but
+  // we can warn here once per Synth instantiation. mBufLength is the per-block
+  // frame count of the host scsynth.
+  const int blockSize = static_cast<int>(unit->mWorld->mBufLength);
+  if (blockSize > kMaxBlockFrames) {
+    Print("OrbitLinkAudioOut: server blockSize=%d exceeds kMaxBlockFrames=%d "
+          "— audio output will be truncated per block. Reduce blockSize or "
+          "rebuild the plugin with a larger kMaxBlockFrames.\n",
+          blockSize, kMaxBlockFrames);
+  }
+
   SETCALC(OrbitLinkAudioOut_next);
 }
 
@@ -174,7 +187,17 @@ void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
 //   - s : displayed channel name in Live ("kick", "drums", ...)
 void OrbitLinkAudioOut_RegisterChannel(World* /*world*/, void* /*userData*/,
                                        sc_msg_iter* args, void* /*replyAddr*/) {
-  const std::int32_t id = args->geti();
+  // Pass an out-of-band sentinel as the default. The TS-side
+  // `LinkAudioChannelRegistry` allocates ids starting at 1, so any non-positive
+  // id is malformed (missing or wrong-type integer argument). Without this,
+  // a missing/malformed integer would silently register channel 0 — a TS
+  // serialization bug would never surface as a diagnostic.
+  const std::int32_t id = args->geti(-1);
+  if (id <= 0) {
+    Print("OrbitLinkAudio: /cmd registerLinkAudioChannel missing or malformed "
+          "integer id argument (got %d) — ignoring\n", static_cast<int>(id));
+    return;
+  }
   // Pass nullptr as the default so `gets` returns nullptr both for missing
   // arguments and for type mismatches — without this the empty default `""`
   // hides a malformed message under a valid-looking empty string.

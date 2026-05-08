@@ -35,6 +35,10 @@ namespace orbitscore {
 // Initial max-samples seed used when constructing a `LinkAudioSink`. Exposed
 // so the UGen can `static_assert` that its per-block memcpy fits within the
 // seed without ever needing `requestMaxNumSamples` at runtime.
+//
+// Coupled to `kMaxBlockFrames * kNumChannels * 2` in orbit_link_audio_out.cpp
+// — update both together, the UGen's `static_assert` enforces the
+// `seed >= max-block × 2` relationship.
 constexpr std::size_t kSinkInitialMaxNumSamples = 8192;
 
 class ChannelRegistry {
@@ -55,7 +59,11 @@ class ChannelRegistry {
   void shutdownLinkAudio();
 
   // Register a channel id → name mapping. First call for an id constructs the
-  // backing `LinkAudioSink`; subsequent calls update the displayed name.
+  // backing `LinkAudioSink`. Subsequent calls for the same id are a deliberate
+  // no-op: `LinkAudioSink` is documented as "Thread-safe: no", so calling
+  // `setName()` from the OSC `/cmd` thread would race with `BufferHandle`
+  // ctor/commit on the audio thread. The TS-side dispatcher only emits `/cmd`
+  // on first occurrence of a name, so no rename path exists in production.
   // Called from the OSC `/cmd` thread.
   void registerChannel(std::int32_t channelId, std::string name);
 

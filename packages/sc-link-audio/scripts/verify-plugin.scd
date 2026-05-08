@@ -17,10 +17,20 @@
 //   2. scsynth boots without crashing on plugin dlopen
 //   3. /cmd /orbit/registerLinkAudioChannel is accepted by the plugin
 //      (positive: "test-channel"; negative: empty name; negative: rename
-//      no-op for an existing id)
+//      no-op for an existing id; negative: malformed/missing id rejected
+//      via sentinel default)
 //   4. SynthDef using OrbitLinkAudioOut compiles + instantiates
 //   5. UGen `next()` runs for 2 s without server crash on a registered id
 //   6. UGen `next()` skips safely when given an unregistered channel id
+//
+// Note on assertion strength: this harness can only detect a crash, missing
+// class, or boot timeout. The Print diagnostics added in iter 1 (sink null
+// at Ctor, /cmd reject paths, re-register no-op) are visible in the
+// transcript but not asserted from sclang — verifying their content
+// requires either an OSC reply protocol or a wrapper that grep's stdout.
+// Each `/cmd` is followed by `s.sync` so a regression that would crash
+// scsynth from inside the handler surfaces immediately rather than at the
+// next sync point.
 
 (
 "=== OrbitLinkAudio plugin verification ===".postln;
@@ -49,21 +59,25 @@ s.waitForBoot({
     "  [OK] scsynth booted with plugin loaded (no crash on dlopen)".postln;
 
     // Positive registration. The plugin should accept this without erroring
-    // even if no Live peer is currently subscribed.
+    // even if no Live peer is currently subscribed. s.sync flushes the
+    // command queue so a crash inside the handler is observed before the
+    // next test step.
     s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", 1, "test-channel");
-    "  [OK] /cmd registerLinkAudioChannel id=1 'test-channel' sent".postln;
+    s.sync;
+    "  [OK] /cmd registerLinkAudioChannel id=1 'test-channel' sent + synced".postln;
 
-    // Negative: empty channel name. The plugin's /cmd handler should log a
-    // rejection and not crash. We have no read-back from sclang to assert
-    // the rejection directly, but a crash here would surface as scsynth dying.
+    // Negative: empty channel name. Handler should log a rejection and not
+    // crash. Look for "empty channel name rejected" in the transcript above.
     s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", 2, "");
-    "  [OK] /cmd registerLinkAudioChannel id=2 '' (empty) sent — plugin should reject".postln;
+    s.sync;
+    "  [OK] /cmd registerLinkAudioChannel id=2 '' (empty) sent — expect 'rejected' Print above".postln;
 
-    // Negative: rename of an existing id. The plugin no-ops to avoid the
-    // setName-vs-BufferHandle race documented in channel_registry.cpp.
-    // Again we only check that the server stays up.
+    // Negative: rename of an existing id. Handler is a no-op + Print to avoid
+    // the setName-vs-BufferHandle race documented in channel_registry.cpp.
+    // Look for "re-registration of channel id 1 ignored" above.
     s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", 1, "test-channel-renamed");
-    "  [OK] /cmd registerLinkAudioChannel id=1 rename sent — plugin should no-op".postln;
+    s.sync;
+    "  [OK] /cmd registerLinkAudioChannel id=1 rename sent — expect 're-registration ignored' Print above".postln;
 
     SynthDef(\orbitLinkAudioTest, { |channel = 1|
         var sig = SinOsc.ar(440) * 0.1;
@@ -74,12 +88,12 @@ s.waitForBoot({
     s.sync;
     0.5.wait;
     Synth(\orbitLinkAudioTest, [\channel, 1]);
-    "  [OK] SynthDef instantiated on registered channel id=1".postln;
+    "  [OK] SynthDef instantiated on registered channel id=1 (no 'no registered sink' Print expected)".postln;
 
-    // Negative: unregistered channel id. UGen Ctor will scprintf a warning
-    // and next() will early-return on null sink — server stays up.
+    // Negative: unregistered channel id. Ctor logs a Print + next() early
+    // returns on null sink. Look for "channel id 999 has no registered sink".
     Synth(\orbitLinkAudioTest, [\channel, 999]);
-    "  [OK] SynthDef instantiated on unregistered channel id=999 — should warn + skip".postln;
+    "  [OK] SynthDef instantiated on unregistered channel id=999 — expect 'no registered sink' Print above".postln;
 
     2.0.wait;
     "  [OK] held for 2 s — no crash, no errors above => plugin is functional".postln;
