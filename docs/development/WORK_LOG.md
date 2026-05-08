@@ -17,6 +17,78 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.84 Issue #200 / Epic #187: Link Audio sum-by-name (Step 2.3) (May 08, 2026)
+
+**Date**: May 08, 2026
+**Status**: ⏳ IN PROGRESS (draft PR pending)
+**Branch**: `200-link-audio-sum-by-name`
+**Issue**: signalcompose/orbitscore#200
+
+**目的**: 同一 channel に bind された複数 Synth の音声を sink ごとに加算 mix する。Step 2.2 直後の状態では `LinkAudioSink::BufferHandle` を Synth ごとに直接 commit しており、 同 tick 内で複数 Synth が走ると後勝ちになっていた (E2E checklist §C 未達)。
+
+**実装内容**:
+
+1. **`SinkEntry` 構造体導入** (`channel_registry.hpp`)
+   - `LinkAudioSink` + `ChannelMixState` を1つの owning struct に同梱
+   - UGen Ctor 時の lookup を 1 回で済ませ、 sink と mix 状態に同じキャッシュ済み pointer から到達できるよう変更
+   - `lookup()` 戻り値を `LinkAudioSink*` から `SinkEntry*` に変更
+
+2. **`ChannelMixState` 設計**
+   - `float mixBuffer[kLinkAudioMaxBlockFrames * kLinkAudioNumChannels]` で float 加算 accumulator (int32 ではなく float — sum 中の早期 int16 量子化を避ける)
+   - `currentBufCounter` で tick 識別 (-1 = 未accumulate; uint32 → int64 cast で sentinel 共存)
+   - `currentSessionState` は `std::optional<LinkSessionState>` (`SessionState` に default ctor が無いため。 flush gate `currentBufCounter >= 0` の時点で has_value 保証)
+   - `currentFrames` / `currentSampleRate` / `currentBeatsAtBufferBegin` は flush 時に commit へ渡す凍結値
+
+3. **deferred commit パターン** (`orbit_link_audio_out.cpp::OrbitLinkAudioOut_next`)
+   - 各 tick の **最初** の Synth 呼び出しで前 tick の accumulator を flush。 flush 条件は `bufCounter == prev + 1` (tick 隣接時のみ)
+   - gap > 1 の場合は捨てる: audio thread スターブや UGen が複数 tick を skip した場合、 captured session state の beat が Live 現在位置と乖離 → 古いデータの commit は誤同期になる
+   - flush 後、 mix buffer を memset し、 新 tick 用に session state を capture
+   - 同 tick 内の後続 Synth は `mixBuffer[i*2+ch] += in[i]` で追加加算 (per-Synth clamp 無し — flush 時に sum 後一括 clamp)
+   - net で 1-tick latency (≈ 21 ms @ 48 kHz/1024 frames; 通常 ~1.3 ms @ 64 frames) が発生するが、 Link sync 同期窓を充分下回る
+
+4. **scratch buffer 廃止** (`orbit_link_audio_out.cpp`)
+   - Per-Unit `int16 scratch[]` field を削除 (mix buffer は `SinkEntry::mix` 側に1個に集約)
+   - float → int16 quantise + clamp は flush path 内で `bh.samples` へ直接書き込み
+   - Sum-by-name と RT 安全性 (allocation-free) を両立
+
+5. **共通定数の `channel_registry.hpp` への移動**
+   - `kLinkAudioMaxBlockFrames` (= 2048) / `kLinkAudioNumChannels` (= 2) / `kSinkInitialMaxNumSamples` (= 8192) を header に集約
+   - `ChannelMixState::mixBuffer` の実サイズ計算と UGen 側の `static_assert`、 `LinkAudioSink` seed 生成が同じ単一 source of truth を参照
+
+6. **link_audio_facade に `LinkSessionState` alias 追加**
+   - `using LinkSessionState = ::ableton::LinkAudio::SessionState;` (BasicLink<Clock>::SessionState 継承経路を caller から隠蔽)
+
+7. **検証 script の拡張**
+   - `verify-plugin.scd`: 既存 channel id=1 に 2 Synth を同時起動して、 deferred-commit 経路の no-crash 検証を追加 (audio content 検証は Live 側でしかできないので scope 外)
+   - `verify-live-receive.scd`: `test-tone` (single Synth) に加え `test-sum` channel に 220 Hz + 330 Hz 2 Synth を同時 publish。 operator が Live UI で chord として聞こえれば accumulator 正常、 単音だけなら last-writer-wins 退行
+
+**実装ファイル**:
+- `packages/sc-link-audio/src/channel_registry.hpp` — SinkEntry / ChannelMixState 追加、 共通定数集約 (+103/-15)
+- `packages/sc-link-audio/src/channel_registry.cpp` — sinks map 型変更、 lookup 戻り値型変更 (+5/-5)
+- `packages/sc-link-audio/src/orbit_link_audio_out.cpp` — Ctor cache + next() deferred-commit 全面書き換え (+118/-93)
+- `packages/sc-link-audio/src/link_audio_facade.hpp` — LinkSessionState alias (+5)
+- `packages/sc-link-audio/scripts/verify-plugin.scd` — 2-Synth same-channel テスト追加 (+16)
+- `packages/sc-link-audio/scripts/verify-live-receive.scd` — sum-by-name 用 test-sum channel 追加 (+19/-6)
+
+**検証結果**:
+- `cmake --build build` 成功 (warning なし)
+- `verify-plugin.scd` 全 step 通過、 sum-by-name no-crash step 含む
+- E2E checklist §C (Live UI で chord 確認) は operator 検収 (verify-live-receive.scd 実行時)
+
+**設計上の判断**:
+- **1-tick latency は許容**: Link 同期は ms オーダー、 audio block は通常 1〜2 ms 程度。 deferred commit を pipeline 化して同 tick で flush する案もあったが、 「最初の Synth が tick の最後の Synth であるか」を Synth 毎に判定する手段が SC_PlugIn から提供されていないため、 1-tick deferral が最も自然
+- **sum 後 clamp**: 2 Synth 各 0.6 → sum 1.2 → clamp 1.0 が mixer 標準動作。 per-Synth clamp は信号を破壊する
+- **silent stale-tick drop**: gap > 1 を Print できない (RT thread 制約)。 観測性が必要なら別 issue で `mWorld->mBufCounter` 連続性 metric を Live 側 OSC reply で出す follow-up
+- **`SessionState` を optional 化**: `LinkAudio` 参照を SinkEntry ctor に追加する案もあったが、 SinkEntry ctor は forwarding template で `LinkAudioSink` ctor 引数を素通しさせる設計を維持したかった。 optional は 1 byte の has_value flag だけで RT path への overhead は無視できる
+
+**残課題** (本 PR scope 外):
+- E2E checklist §C operator 検収 (Live 実機で chord 受信確認)
+- Step 2.4 Sample rate mismatch detection
+- Step 2.5 Hardware fallback
+- Step 4 build/distribution pipeline (Issue #201)
+
+---
+
 ### 6.83 Issue #198 / Epic #187: SC plugin UGen 実装 (Step 2.2) (May 08, 2026)
 
 **Date**: May 08, 2026

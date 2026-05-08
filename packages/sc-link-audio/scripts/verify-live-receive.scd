@@ -26,7 +26,13 @@
 //     scsynth side has no transport of its own, so the tone keeps playing
 //     but Link clock advances at Live's rate)
 //
-// Sum-by-name (E2E checklist §C) is NOT exercised here — Step 2.3 work.
+// Sum-by-name (E2E checklist §C):
+//   - "test-sum" also appears in Live's Link Audio source list
+//   - Routing the track to "test-sum" produces a chord of 220 Hz + 330 Hz
+//     played simultaneously (perfect fifth, ratio 3:2, audible as a distinct
+//     two-pitch chord)
+//   - If only one pitch is audible, the sum-by-name accumulator is broken —
+//     last-writer-wins per tick is the regression mode
 
 (
 "=== OrbitLinkAudio live-receive verification ===".postln;
@@ -35,7 +41,11 @@
 
 s = Server.local;
 s.options.numOutputBusChannels = 2;
-s.options.numInputBusChannels = 2;
+// Disable input — same reasoning as verify-plugin.scd. The Live-receive
+// path only needs scsynth's audio OUTPUT to commit into LinkAudio; input
+// is unused. Leaving it enabled risks SR-mismatch boot failures on hosts
+// where the input device runs at a different rate than the output device.
+s.options.numInputBusChannels = 0;
 
 // Wall-clock guard: the script publishes for ~30 s and then quits, but if
 // boot or `s.quit` hangs we don't want a stranded process. 60 s gives a
@@ -49,8 +59,9 @@ s.waitForBoot({
     "  [OK] scsynth booted".postln;
 
     s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", 1, "test-tone");
+    s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", 2, "test-sum");
     s.sync;
-    "  [OK] registered channel id=1 name='test-tone'".postln;
+    "  [OK] registered channel id=1 'test-tone' and id=2 'test-sum'".postln;
 
     SynthDef(\orbitLinkAudioLiveTest, { |channel = 1|
         // 440 Hz / 660 Hz alternating every second so Live's meter clearly
@@ -63,10 +74,23 @@ s.waitForBoot({
         OrbitLinkAudioOut.ar(stereo[0], stereo[1], channel);
     }).add;
 
+    // Sum-by-name SynthDef: a single fixed frequency, parameterised so we can
+    // run two of them on the same channel id with different pitches. The
+    // amplitude is halved (0.05) so two summed Synths still land near the
+    // -20 dBFS reference of the single-channel test rather than clipping.
+    SynthDef(\orbitLinkAudioSumTest, { |channel = 2, freq = 220|
+        var sig = SinOsc.ar(freq) * 0.05;
+        var stereo = Pan2.ar(sig, 0);
+        OrbitLinkAudioOut.ar(stereo[0], stereo[1], channel);
+    }).add;
+
     s.sync;
     0.5.wait;
     Synth(\orbitLinkAudioLiveTest, [\channel, 1]);
-    "  [OK] publishing 'test-tone' (440/660 Hz alternating @ -20 dBFS)".postln;
+    Synth(\orbitLinkAudioSumTest, [\channel, 2, \freq, 220]);
+    Synth(\orbitLinkAudioSumTest, [\channel, 2, \freq, 330]);
+    "  [OK] publishing 'test-tone' (440/660 Hz @ -20 dBFS, single Synth)".postln;
+    "  [OK] publishing 'test-sum' (220 Hz + 330 Hz, two Synths summed)".postln;
     "  --> Verify in Live UI now. Holding for 30 s...".postln;
 
     30.0.wait;
