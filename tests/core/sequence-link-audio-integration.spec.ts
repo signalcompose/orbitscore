@@ -46,6 +46,29 @@ describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
     seq.setName('kick')
   })
 
+  // C1: Verify that run() and loop() eagerly call resolveDispatchChannel() so
+  // the strict-mode throw propagates via the awaited call chain (not as an
+  // unhandled rejection inside the fire-and-forget scheduleEventsFn callback).
+  describe('strict-mode eager validation in run() / loop()', () => {
+    it('seq.run() rejects when LinkAudio enabled but .output() missing', async () => {
+      global.linkAudio()
+      await expect(seq.run()).rejects.toThrow(/no \.output\(\) channel set/)
+    })
+
+    it('seq.loop() rejects when LinkAudio enabled but .output() missing', async () => {
+      global.linkAudio()
+      await expect(seq.loop()).rejects.toThrow(/no \.output\(\) channel set/)
+    })
+
+    it('seq.run() succeeds (does not throw) when .output() is set', async () => {
+      // preparePlayback will return null (no audio file) → run() returns early.
+      // What matters is that resolveDispatchChannel does NOT throw.
+      global.linkAudio()
+      seq.output('kick')
+      await expect(seq.run()).resolves.toBe(seq)
+    })
+  })
+
   // The behavior we verify lives in `resolveDispatchChannel`. Drive it via the
   // public API surface (Global.linkAudio + seq.output) and read state back —
   // running an actual scheduling cycle would require audio assets/wave decode.

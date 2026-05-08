@@ -187,10 +187,19 @@ export class Sequence {
    * Effective only when `Global.linkAudio()` was declared earlier in the same
    * .orbs file. Without that declaration the assignment is recorded but the
    * sequence still routes through the hardware bus, and a runtime warning is
-   * emitted once. Multiple sequences sharing the same channel name are summed
-   * by the SC plugin.
+   * emitted on each call when LinkAudio mode is not enabled. Multiple sequences
+   * sharing the same channel name are summed by the SC plugin.
+   *
+   * Channel changes take effect at the next scheduling cycle; in-flight loop
+   * iterations are not rewritten (no `seamlessParameterUpdate` — channel
+   * switching mid-loop is a separate feature, planned for Step 3.4).
    */
   output(channelName: string): this {
+    if (!channelName || !channelName.trim()) {
+      throw new Error(
+        `Sequence '${this.stateManager.getName() || 'sequence'}': output(channelName) requires a non-empty channel name.`,
+      )
+    }
     this._outputChannel = channelName
     if (!this.global.isLinkAudioEnabled()) {
       console.warn(
@@ -398,6 +407,11 @@ export class Sequence {
    * @internal - Reserved keywords use only. Use RUN(seq) instead.
    */
   async run(): Promise<this> {
+    // Validate the strict-mode contract eagerly so the throw propagates through
+    // the awaited call chain to the REPL catch block, instead of becoming an
+    // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
+    this.resolveDispatchChannel()
+
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
       audioFilePath: this._audioFilePath,
@@ -434,6 +448,11 @@ export class Sequence {
    * @internal - Reserved keywords use only. Use LOOP(seq) instead.
    */
   async loop(): Promise<this> {
+    // Validate the strict-mode contract eagerly so the throw propagates through
+    // the awaited call chain to the REPL catch block, instead of becoming an
+    // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
+    this.resolveDispatchChannel()
+
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
       audioFilePath: this._audioFilePath,

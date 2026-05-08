@@ -105,6 +105,21 @@ PR #191 の claude bot review (3 件) で指摘された必須 / 推奨項目へ
 
 **次の Step**: PR #191 のユーザー確認 → merge (project rule に従い `--merge`、 `--squash` ではない) → Step 2.2 着手。
 
+#### PR review team pass (May 08)
+
+4 agent PR review team + simplify pass の指摘のうち本 PR スコープに該当する Critical 2 件・Important 6 件を反映。
+
+- **C1**: `Sequence.run()` / `loop()` の冒頭で `resolveDispatchChannel()` を eager 呼び出し — strict-mode throw が fire-and-forget scheduleEventsFn 内の unhandled rejection で消失する問題を解消。 pipeline test 3 件追加 (`sequence-link-audio-integration.spec.ts`)
+- **C2**: `link-audio-channels.ts` docstring の `§B` → `§0.2` (正しいセクション参照に修正)
+- **I1**: `Sequence.output("")` 空文字列 / whitespace-only を即時 throw するバリデーション追加
+- **I2**: `output()` JSDoc の "emitted once" → "emitted on each call when LinkAudio mode is not enabled" に訂正 (実装と整合)
+- **I3**: `output()` JSDoc に asymmetry 注記 ("channel changes take effect at next scheduling cycle; no seamlessParameterUpdate — see Step 3.4")
+- **I4**: `link-audio-dispatch.spec.ts` fallback テストのテスト名を "no channel arg" に改訂 + `expect(sentMessages[0]).not.toContain('channel')` assertion 追加
+- **I5**: `stopAll()` の channel registry clear を integration test 化 (`link-audio-dispatch.spec.ts` に 1 ケース追加)
+- **I6**: `completion-context.ts` の新規 logic を unit test 化 — `tests/vscode-extension/completion-context.spec.ts` を新規作成 (vscode mock + 10 ケース: analyzeMethodChain 5 件 / global completions 2 件 / sequence completions 3 件)
+
+**検証**: 335 件 pass / 23 件 skip (元 331 件から +4 件、 regression なし)。 なお daemon-client.spec.ts の 10 件は sandbox ネットワーク制限 (EPERM listen) による pre-existing 失敗で今回変更と無関係。
+
 ---
 
 ### 6.81 Epic #187: Link Audio docs + VS Code support (Step 3.3 + 3.5) (May 07, 2026)

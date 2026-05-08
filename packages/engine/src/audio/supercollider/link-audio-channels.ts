@@ -2,7 +2,7 @@
  * Channel name → integer channelId registry for LinkAudio dispatch.
  *
  * 同名 channel を指定した複数 sequence は同じ channelId に束ねられ、 SC plugin 内で
- * 加算合成される。 詳細は `docs/research/LINK_AUDIO_API.md` §0.5 / §B 参照。
+ * 加算合成される。 詳細は `docs/research/LINK_AUDIO_API.md` §0.2 / §0.5 参照。
  *
  * release は dynamic-channel-switch feature 用に予約 (現状は acquire のみ使用)。
  */

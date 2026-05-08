@@ -103,8 +103,35 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
     })
   })
 
+  describe('stopAll() channel registry lifecycle', () => {
+    it('clears the channel registry so the next acquire after stopAll gets id 1 again', async () => {
+      scheduler.setLinkAudioPluginAvailable(true)
+      // First session: acquire 'kick' → id 1
+      await scheduler.testExecutePlayback(
+        '/audio/kick.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'kick' },
+        '',
+        0,
+      )
+      expect(scheduler.getLinkAudioChannelRegistry().lookup('kick')).toBe(1)
+
+      // Engine restart equivalent
+      scheduler.stopAll()
+      expect(scheduler.getLinkAudioChannelRegistry().size()).toBe(0)
+
+      // Next session: registry cleared — fresh acquire should return 1 again
+      await scheduler.testExecutePlayback(
+        '/audio/kick.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'kick' },
+        '',
+        0,
+      )
+      expect(scheduler.getLinkAudioChannelRegistry().lookup('kick')).toBe(1)
+    })
+  })
+
   describe('LinkAudio fallback (outputChannel set, plugin missing)', () => {
-    it('falls back to orbitPlayBuf and warns once per session', async () => {
+    it('falls back to orbitPlayBuf (no channel arg) and warns once per session', async () => {
       // plugin not marked available — default false
       await scheduler.testExecutePlayback(
         '/audio/kick.wav',
@@ -122,6 +149,9 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
       expect(sentMessages).toHaveLength(2)
       expect(sentMessages[0]?.[1]).toBe('orbitPlayBuf')
       expect(sentMessages[1]?.[1]).toBe('orbitPlayBuf')
+      // fallback path must NOT include 'channel' arg in the OSC message
+      expect(sentMessages[0]).not.toContain('channel')
+      expect(sentMessages[1]).not.toContain('channel')
       // warned exactly once across the two events
       expect(warnSpy).toHaveBeenCalledTimes(1)
       expect(warnSpy.mock.calls[0]?.[0]).toContain('LinkAudio plugin not loaded')
