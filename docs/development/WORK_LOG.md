@@ -17,6 +17,321 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.82 Epic #187 / PR #191: claude bot review fixes + LinkAudio strict mode (May 08, 2026)
+
+**Latest follow-up (May 08, post-PR-review-team)**: claude bot 最新レビュー (commit b640469 後) の Minor 指摘から、 ユーザー混乱を防ぐ価値が高い 1 件 (`output("")` の edit-time vs runtime 不整合) を反映:
+- 新規 `analyzeEmptyOutputArg()` analyzer を追加し、 `.output("")` および whitespace-only 引数を edit-time で `Error` severity flag (commit `52ee2db`)
+- 5 ケース test 追加で 354 件 pass
+- 残り Minor (resolveDispatchChannel の二重呼び出し / completion-context のライン局所性 / lookup() 未テスト) は本 PR scope 外、 今後の改善候補
+
+**Date**: May 08, 2026
+**Status**: ⏳ IN PROGRESS（PR #191 review-iteration、 main 取り込み済）
+**Branch**: `190-link-audio-dsl-syntax`
+**関連 PR**: #191 (Step 3 consolidated)、 issue: Epic #187 / #190 / #192
+
+**動機**:
+
+PR #191 の claude bot review (3 件) で指摘された必須 / 推奨項目への対応と、 ユーザーレビューで spec を strict mode に確定 (linkAudio 宣言時に `.output()` 無い sequence は error 扱い、 silent fallback 禁止)。 同時に main 起点で landed した #189 (Step 1) / #195 (Step 2.1) / #196 (release pipeline) を本 branch へ取り込み、 WORK_LOG numbering を 6.79-6.81 に renumber して main の 6.75-6.78 と整合させる。
+
+**Strict mode 確定 (DSL spec §8.1.2 改訂)**:
+
+「全 sequence が LinkAudio 経由」 という §8.1.1 の宣言と整合させるため、 LinkAudio mode 宣言下で `.output()` を持たない sequence は **runtime error** + **VS Code Error diagnostic** とする。 これまでの「silent fallback to hardware + console warn」 は廃止。 hardware/LinkAudio 混在は仕様レベルで禁止 (§8.1.1) なので、 「.output() 忘れ」 は誤動作 (一部 sequence が hardware に流れる) より error で止める方が安全という判断。
+
+**変更内容**:
+
+1. **必須 fix #1 — warn message correction** (`packages/engine/src/core/sequence.ts`):
+   - `.output()` の console.warn が `'init global.linkAudio()'` を含んでいた → `'global.linkAudio()'` に修正。 DSL では `init` は変数宣言専用 (`var x = init GLOBAL`)、 method call の前に置くと parser error になるため、 ユーザーが警告メッセージをそのままコピペするとハマる。
+   - `tests/core/sequence-output.spec.ts`、 `docs/LINK_AUDIO_E2E_CHECKLIST.md` の対応箇所も更新
+
+2. **必須 fix #2 — testExecutePlayback `@internal` annotation**:
+   - `EventScheduler.testExecutePlayback` (PR #23 Phase 4-2 で導入済み pre-existing API、 本 PR の追加ではない) と `SuperColliderPlayer.testExecutePlayback` に `@internal` JSDoc + 趣旨コメント。 既存の `tests/audio/supercollider-gain-pan.spec.ts` 等で広く使われているため call site の置換は scope 外、 但し新規 test (`link-audio-dispatch.spec.ts`) でも採用したのでマーキングだけは更新。
+
+3. **推奨 fix #3 — sample rate validation** (`link-audio-manager.ts`):
+   - `linkAudio(targetSampleRate?)` で SR を validate:
+     - 非正整数 / NaN / Infinity → warn + override drop (mode flip は維持、 auto-detect にフォールバック)
+     - 非標準値 (32000 等) → warn (hint) のみ、 plugin 内 resampling で受理
+     - 標準値 (44100 / 48000 / 88200 / 96000 / 176400 / 192000) → silent
+   - `tests/core/global-link-audio.spec.ts` に validation block 追加 (6 ケース)
+
+4. **推奨 fix #4 — order-dependent `analyzeOutputWithoutLinkAudio` diagnostic**:
+   - 旧実装は file 全体 scan (`linkAudio` がどこかで宣言されていれば OK) → 行順序依存に変更
+   - `.output()` が `global.linkAudio()` より前の行にある場合 (live coding 上行から評価) も flag
+   - メッセージに違反箇所 `declared at line N` を含める
+   - 旧 test `'declared anywhere in the file'` を `'declared on the same line as .output() or earlier'` + `'order violation'` の 2 ケースに置換
+
+5. **推奨 fix #5 — `getLinkAudioChannelRegistry()` accessor comment**:
+   - 旧 "Test / debug accessor" → Step 4 boot pipeline + test で使用される旨を明記、 `@internal` 付加
+
+6. **NEW — LinkAudio strict mode runtime + diagnostic**:
+   - **runtime**: `Sequence.resolveDispatchChannel()` を public に昇格 (Step 4 boot pipeline + test 用)、 LinkAudio enabled かつ `_outputChannel` 未設定なら throw (sequence name + 修正手順を含むメッセージ)
+   - **VS Code diagnostic**: 新 `analyzeLinkAudioMissingOutput()` — `init global.seq` 宣言から sequence 名を抽出、 `<name>.output(` 参照を探し、 LinkAudio 宣言下で output 無い sequence の `<name>.play(` を全 location で **Error** として flag (Warning ではなく Error)
+   - `extension.ts` で strict-mode analyzer を wire (`vscode.DiagnosticSeverity.Error`)
+   - 旧 strict-mode 判定が無かったので `tests/core/sequence-link-audio-integration.spec.ts` の test 1 件を error 期待に書き換え + 2 ケース (sequence name 含有 / 修正手順 hint) 追加
+   - VS Code diagnostic test 7 ケース新規 (orphan flag、 output あり non-flag、 linkAudio 無し no-op、 partial mix、 multi-play、 word-boundary、 commented-out)
+
+7. **DSL spec §8.1.2 改訂** (`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`):
+   - 旧 「`.output()` 未指定は hardware にフォールバック」 → strict mode: runtime error
+   - 「`global.linkAudio()` 未宣言で `.output()` 呼出」 のフェイルセーフ警告は別経路として残置 (mode 有効化忘れ用)
+
+8. **vsce package CI failure 修正** (`packages/vscode-extension/.vscodeignore`):
+   - PR #195 で `packages/sc-link-audio/` が main に landed したため、 PR #191 の release.yml CI で `vsce package` が `invalid relative path: extension/../sc-link-audio/.gitignore` で失敗
+   - 原因: vsce 3.x の `.vscodeignore` パターンは vsce が emit する literal な相対パス文字列に対してマッチする。 既存の `../../**` は repo root レベル (2 階層上) を対象とするためsibling package には効かない。 `../engine/**` は engine だけ個別指定する形で、 新しい sibling が増えるたびに exception を足す必要があった
+   - 修正: per-package 指定 (`../engine/**` + `../sc-link-audio/**`) を一括 sibling exclusion (`../*/**`) に置き換え。 これで現状の sc-link-audio + 将来の sibling package (midi-engine 等) も自動でカバーされる。 bundled engine は `engine/` (no `../`) に build:copy-engine でコピーされる経路なので影響なし
+   - 本来 #195 で対応すべきだったが当時 release.yml の paths filter (`packages/sc-link-audio/**` を含まない) のため CI で検知されず、 PR #191 で初めて顕在化した。 main の release.yml は tag push でのみ走るので次の release tag までは不顕性
+   - 「なぜ vsce が sibling を enumerate するのか」 の根本原因調査は別 issue で追跡 (本 PR の merge gate ではない)
+
+9. **main 取り込み + WORK_LOG renumber**:
+   - `git merge origin/main` → conflict は WORK_LOG.md のみ (sc-link-audio/ 等 add は auto-merge)
+   - HEAD の 6.79 (Step 3.3+3.5) → 6.81、 6.78 (Step 3.2) → 6.80、 6.77 (Step 3.1) → 6.79 に renumber
+   - origin/main の 6.78 (Step 2.1) / 6.77 (Step 1) / 6.76 (Marketplace gate) / 6.75 (v1.1.0) は保持
+
+**検証**: `npm run build` (clean) → success、 `npm test` で 331 件 pass / 23 件 skip (元 314 件から +17 件)、 regression なし。
+
+**追加対応 (simplify pass、 May 08)**: `/simplify` (3 agent 並列: code-reuse / code-quality / efficiency) の指摘に対応:
+
+- **code-reuse**:
+  - `LINK_AUDIO_PATTERN` を module-scope に hoist (重複定義 2 箇所解消)
+  - `findFirstMatchingLine()` helper 抽出 (3 箇所の同 scaffold を統一)
+  - `seqDeclPattern` で legacy `init GLOBAL.seq` (uppercase) も match (parser 互換) — test 1 件追加
+- **code-quality**:
+  - SynthDef 名 `'orbitPlayBuf'` / `'orbitPlayBufLink'` を `SYNTHDEF_HARDWARE` / `SYNTHDEF_LINK` 定数化 (typo silent failure 防止)
+  - `SuperColliderPlayer.testExecutePlayback` の `@deprecated` を `@internal` に修正 (IDE strike-through 誤誘導の解消)
+  - epic step / 過去 PR 番号 narration コメントを除去 (event-scheduler.ts x4、 sequence.ts x1、 link-audio-channels.ts x1)
+  - 警告メッセージから epic 内部参照 (`see Step 2 of Epic #187`) を削除、 actionable hint に置換
+  - SR validation の warn 文言を 6 値 set と一致 (44100/48000/88200/96000/176400/192000)
+- **efficiency**:
+  - `analyzeLinkAudioMissingOutput` の inner-loop 内 RegExp 動的生成を precompile 化 (200 行 × 10 sequences の file で keystroke ごとの ~2000 regex compile を回避)
+  - `EventScheduler.stopAll()` で `linkAudioChannels.clear()` を call (long live-coding session で nextId 単調増加を防ぐ、 engine restart で fresh state)
+
+**残作業 (本 PR 着陸後)**:
+- Step 2.2: SC plugin (UGen 実装 + submodule mount)、 別 branch
+- Step 4: build pipeline で `.scx` 同梱 + plugin available フラグ flip
+- Step 3.4: 動的切替 + latency offset (v1.2.x 検討)
+
+**次の Step**: PR #191 のユーザー確認 → merge (project rule に従い `--merge`、 `--squash` ではない) → Step 2.2 着手。
+
+#### PR review team pass (May 08)
+
+4 agent PR review team + simplify pass の指摘のうち本 PR スコープに該当する Critical 2 件・Important 6 件を反映。
+
+- **C1**: `Sequence.run()` / `loop()` の冒頭で `resolveDispatchChannel()` を eager 呼び出し — strict-mode throw が fire-and-forget scheduleEventsFn 内の unhandled rejection で消失する問題を解消。 pipeline test 3 件追加 (`sequence-link-audio-integration.spec.ts`)
+- **C2**: `link-audio-channels.ts` docstring の `§B` → `§0.2` (正しいセクション参照に修正)
+- **I1**: `Sequence.output("")` 空文字列 / whitespace-only を即時 throw するバリデーション追加
+- **I2**: `output()` JSDoc の "emitted once" → "emitted on each call when LinkAudio mode is not enabled" に訂正 (実装と整合)
+- **I3**: `output()` JSDoc に asymmetry 注記 ("channel changes take effect at next scheduling cycle; no seamlessParameterUpdate — see Step 3.4")
+- **I4**: `link-audio-dispatch.spec.ts` fallback テストのテスト名を "no channel arg" に改訂 + `expect(sentMessages[0]).not.toContain('channel')` assertion 追加
+- **I5**: `stopAll()` の channel registry clear を integration test 化 (`link-audio-dispatch.spec.ts` に 1 ケース追加)
+- **I6**: `completion-context.ts` の新規 logic を unit test 化 — `tests/vscode-extension/completion-context.spec.ts` を新規作成 (vscode mock + 10 ケース: analyzeMethodChain 5 件 / global completions 2 件 / sequence completions 3 件)
+
+**検証**: 335 件 pass / 23 件 skip (元 331 件から +4 件、 regression なし)。 なお daemon-client.spec.ts の 10 件は sandbox ネットワーク制限 (EPERM listen) による pre-existing 失敗で今回変更と無関係。
+
+#### PR review team pass — iteration 2 follow-up (May 08)
+
+iteration 1 fix 後の 4 agent re-review で残った test gap (Critical 1 件・Important 1 件) を解消。
+
+- **Critical**: `output("")` / `output("   ")` の空文字列 throw guard が untested だった。 `tests/core/sequence-output.spec.ts` に `describe('output() empty-string guard')` ブロックを追加し、 空文字列 throw / whitespace-only throw / valid channel no-throw の 3 ケースを verify。
+- **Important**: `seq.loop()` success path (`.output()` 設定済みで throw しない) が untested だった。 `tests/core/sequence-link-audio-integration.spec.ts` に `seq.run()` success test と対称の `seq.loop()` success test を追加。
+
+**検証**: 339 件 pass / 23 件 skip (335 件から +4 件、 regression なし)。
+
+---
+
+### 6.81 Epic #187: Link Audio docs + VS Code support (Step 3.3 + 3.5) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR #191 draft、 着陸後 review 待ち）
+**Branch**: `190-link-audio-dsl-syntax` (consolidated PR)
+**Issue**: Epic #187 / Step 3.3 (syntax + completion + diagnostic) と Step 3.5 (docs + examples)
+
+**動機**: 当初は Step 3.x を sub-step ごとに別 PR にする計画だったが、 review 負担最適化のため TypeScript + docs で完結する全 sub-step を PR #191 に統合。 本エントリは Step 3.3 と Step 3.5 のコミットをまとめて記録する。 PR #193 (Step 3.2) は #191 に fast-forward マージして close 済。
+
+**Step 3.5 — DSL spec + examples + E2E checklist** (commit `2879ca1`):
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8 (DAW Integration) を全面改訂、 §8.1 (Link Audio Output) として正式仕様化:
+  - §8.1.1 Global mode declaration (`global.linkAudio([SR])`、 once-per-file、 hardware と排他)
+  - §8.1.2 Per-sequence channel binding (`seq.output("name")`、 同名 channel sum)
+  - §8.1.3 Plugin lifecycle (scsynth 起動 / 終了 紐づけ、 ランタイム切替は v1.2.0 非対応)
+  - §8.1.4 Live 側操作手順
+- `examples/10_link_audio.orbs` 新規 (single channel publish / drums bus sum / per-sequence gain+pan の 3 パターン)
+- `examples/README.md` チュートリアル一覧と ファイル一覧を更新
+- `docs/LINK_AUDIO_E2E_CHECKLIST.md` 新規 (Live 12.4+ + plugin の手動 E2E、 A〜G の 7 セクション + トラブルシュート)
+
+**Step 3.3 — VS Code 拡張対応**:
+
+- `packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json`:
+  - global methods に `linkAudio` を追加
+  - sequence methods に `output` を追加
+  - 両方の patterns で entity.name.function ハイライトに乗せる
+- `packages/vscode-extension/src/completion-context.ts`:
+  - MethodChainContext に hasLinkAudio / hasOutput フラグ追加
+  - global completion に `linkAudio(${1:48000})` を追加 (まだ宣言されていないとき)
+  - sequence completion に `output("${1:channel-name}")` を追加 (audio 設定後 + まだ output 未指定時)
+- `packages/vscode-extension/src/diagnostics-analysis.ts`:
+  - GLOBAL_ONCE_METHODS に `linkAudio` を追加 (existing once-per-file diagnostic を再利用)
+  - 新規 `analyzeOutputWithoutLinkAudio()` — `seq.output()` が呼ばれているのに `global.linkAudio()` が宣言されていない場合に警告。 file 全体走査、 行コメント除去、 commented-out も正しく無視
+- `packages/vscode-extension/src/extension.ts`:
+  - `updateDiagnostics` 末尾に `analyzeOutputWithoutLinkAudio` を wire
+- `tests/vscode-extension/diagnostics-analysis.spec.ts`:
+  - 新規 8 ケース (analyzeOutputWithoutLinkAudio: 6 ケース + global once linkAudio 重複: 2 ケース)
+
+**検証**: npm test で 314 件 pass / 23 件 skip (累計 +48 件、 regression なし)。 husky pre-commit hook で全 commit が lint + format + build pass。
+
+**Step 3 consolidated PR (#191) の最終姿**:
+- Step 3.1 DSL syntax (4 commits)
+- Step 3.2 dispatch wiring (5 commits、 旧 PR #193 から fast-forward)
+- Step 3.5 docs + examples (1 commit)
+- Step 3.3 VS Code 拡張 (本コミット)
+- 計 11+ commits、 約 1500 行の追加 (TypeScript + docs)
+
+**Step 3.4 (動的切替 + latency offset) は本 PR スコープ外** (v1.2.x 持ち越し)。 当初 Issue #190 の checklist にあったが、 着地後の review で必要性を再判断する想定。
+
+**残作業**:
+- Step 2: SC plugin (C++ UGen) `OrbitLinkAudioOut` 実装、 別 branch / 別 PR
+- Step 4: ブート pipeline での plugin available 検出 + flip、 build pipeline の `.scx` 同梱、 別 PR
+- Step 3.4: 動的切替 + latency offset (v1.2.x 検討)
+
+**次の Step**: γ (Step 2.1 SC plugin skeleton) を別 branch / 別 PR で着手。
+
+---
+
+### 6.80 Issue #192 / Epic #187: Link Audio dispatch wiring (Step 3.2) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
+**Branch**: `192-link-audio-dispatch` (stacked on `190-link-audio-dsl-syntax`)
+**Issue**: #192 (Step 3.2) / Epic: #187
+
+**動機**: Step 3.1 (#190) で導入した DSL state (`Global._linkAudioEnabled`, `Sequence._outputChannel`) を **実際のスケジューリング経路** に流す。 SC plugin (Step 2) が未実装の段階でも contract layer を完成させ、 plugin 着地時に SynthDef 名と channel ID が噛み合うよう scaffolding を準備する。
+
+**設計方針**:
+- outputChannel を optional param として scheduler interface に追加 (完全な後方互換)
+- Sequence layer で「Global.linkAudio() 有効時のみ outputChannel を渡す」 判定を一元化 (resolveDispatchChannel)
+- EventScheduler.sendPlaybackMessage で 3 通り dispatch:
+  1. outputChannel + plugin available → `orbitPlayBufLink` SynthDef + channel arg
+  2. outputChannel + plugin missing → `orbitPlayBuf` fallback + 1 回 warn
+  3. outputChannel なし → 既存 `orbitPlayBuf`
+- plugin available フラグは default false、 Step 4 のブート pipeline で SynthDef discovery 後に true へ flip する想定
+
+**変更内容** (4 commit):
+
+1. `feat(engine): add LinkAudioChannelRegistry for name → channelId mapping` (4b271e5)
+   - `packages/engine/src/audio/supercollider/link-audio-channels.ts` (新規)
+   - 同名 channel への複数 sequence は idempotent に同じ ID 解決 (sum-by-name 前提)
+   - `tests/audio/link-audio-channels.spec.ts` (6 ケース)
+
+2. `refactor(engine): thread outputChannel through scheduler signatures` (d2cfc88)
+   - Scheduler interface (`global/types.ts`) に outputChannel?: string optional 追加
+   - SuperColliderPlayer / EventScheduler signatures + ScheduledPlay/PlaybackOptions types を拡張
+   - 完全な後方互換 (既存呼出は undefined を渡してパス)
+
+3. `feat(engine): dispatch SynthDef based on outputChannel with hardware fallback` (d79968e)
+   - EventScheduler に LinkAudioChannelRegistry インスタンス + plugin available フラグ + warn フラグ
+   - `setLinkAudioPluginAvailable()` / `isLinkAudioPluginAvailable()` / `getLinkAudioChannelRegistry()` public API
+   - sendPlaybackMessage で 3 通り dispatch + plugin 不在時 1 回 warn
+   - `tests/audio/link-audio-dispatch.spec.ts` (8 ケース)
+
+4. `feat(engine): wire Sequence dispatch channel to global LinkAudio mode` (125ab5f)
+   - Sequence に resolveDispatchChannel() 追加 — linkAudio off ならば undefined 返す
+   - ScheduleEventsOptions / ScheduleEventsFromTimeOptions に outputChannel?: string 追加
+   - sequence-side helper (`scheduling/event-scheduler.ts`) で scheduler.scheduleEvent / scheduleSliceEvent への thread
+   - `tests/core/sequence-link-audio-integration.spec.ts` (4 ケース)
+
+**End-to-end dispatch contract が成立**:
+
+DSL → core → scheduler → plugin の全レイヤーで outputChannel 配線完了:
+1. DSL: `seq.output("kick")` (Step 3.1)
+2. Core: `Sequence._outputChannel` + `Global._linkAudioEnabled` (Step 3.1)
+3. Dispatch decision: `resolveDispatchChannel()` (本 sub-step)
+4. Scheduling pipeline: `ScheduleEventsOptions.outputChannel` (本 sub-step)
+5. SC Player: `scheduleEvent(..., outputChannel)` (本 sub-step)
+6. EventScheduler: SynthDef 名切替 + channel id 解決 (本 sub-step)
+7. SC plugin の `orbitPlayBufLink` (Step 2 で実装予定)
+
+**検証**: npm test で 306 件 pass / 23 件 skip (新規 18 件追加)、 regression なし。 husky pre-commit hook で 4 commit すべて lint + format + build pass。
+
+**残作業 (別 sub-issue)**:
+- Step 2: SC plugin (C++ UGen) 実装 — `orbitPlayBufLink` SynthDef 提供、 plugin available フラグの flip タイミング Step 4 で wire
+- Step 3.3: VS Code 拡張対応 (syntax highlighting、 completion、 厳密 diagnostic)
+- Step 3.4: 動的切替 (immediate output) + latency offset
+- Step 3.5: docs (`INSTRUCTION_ORBITSCORE_DSL.md`) + examples
+
+**stacked PR の状態**:
+- PR #189 (Step 1 research) → main 待ち
+- PR #190 (Step 3.1 DSL syntax) → main 待ち
+- PR #192 (Step 3.2 dispatch、 本 sub-step) → 190-link-audio-dsl-syntax を base に作成、 #190 が main に landing したら自動 rebase
+
+**次の Step**: Step 1 PR (#189) merge → Step 3.1 PR (#190) merge → 本 PR (#192) merge → Step 2 (SC plugin 実装) 着手。 Step 3.3 / 3.4 / 3.5 は Step 2 と並行可能。
+
+---
+
+### 6.79 Issue #190 / Epic #187: Link Audio DSL syntax (Step 3.1) (May 07, 2026)
+
+**Date**: May 07, 2026
+**Status**: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
+**Branch**: `190-link-audio-dsl-syntax`
+**Issue**: #190 (Step 3.1) / Epic: #187
+
+**動機**: Epic #187 の Step 3.1。 LinkAudio output layer の DSL 表面構文 (`global.linkAudio([SR])` + `seq.output("channel-name")`) を parser・AST・コア state レベルで受理し、 単体テストでカバーする。 SC plugin / dispatch / VS Code 拡張は別 sub-step (3.2 / 3.3 / 3.4 / 3.5) で扱い、 本 Issue は **DSL 表面の文法対応のみ** に絞る。
+
+**設計方針** (Epic #187 §0 を継承):
+- LinkAudio mode は once-per-file 宣言で hardware 出力と排他
+- `seq.output("name")` は channel name のみ (kind は Global mode から implicit)
+- ランタイム切替は v1.2.0 非対応 (immediate 系 `_method()` は本 sub-step では未実装)
+- SR 戦略は plugin 内リサンプリング (auto-detect → DSL override → 48k fallback)
+
+**変更内容**:
+
+`packages/engine/src/core/global/link-audio-manager.ts` 新規:
+- LinkAudioManager クラス。 _enabled / _targetSampleRate を保持、 linkAudio(targetSR?) で enable
+
+`packages/engine/src/core/global/types.ts`:
+- GlobalState に linkAudioEnabled / linkAudioTargetSampleRate を追加
+
+`packages/engine/src/core/global.ts`:
+- LinkAudioManager をインスタンス化、 linkAudio(targetSR?) / isLinkAudioEnabled() メソッド追加、 getState() に LinkAudio state を merge
+
+`packages/engine/src/core/sequence.ts`:
+- _outputChannel フィールド追加、 output(channelName) メソッド (chainable) + getOutputChannel() アクセサ
+- output() 呼出時に Global.linkAudio() 未宣言なら console.warn (例外を投げない、 厳密チェックは Step 3.3 の VS Code diagnostic で)
+
+`packages/engine/src/core/sequence/types.ts`:
+- SequenceState に outputChannel?: string を追加
+
+`tests/core/global-link-audio.spec.ts` 新規 (7 ケース):
+- default disabled、 有効化、 明示 SR、 44.1k 受理、 chainable、 上書き、 explicit→undefined への戻し
+
+`tests/core/sequence-output.spec.ts` 新規 (7 ケース):
+- default undefined、 記録、 chainable、 上書き、 Global 未宣言時 warn、 Global 宣言済み時 warn なし、 hyphen + underscore 受理
+
+`tests/audio-parser/link-audio-syntax.spec.ts` 新規 (8 ケース):
+- tokenizer / parser を変更せずに既存 method-call 経路で受理されることを確認
+- global.linkAudio() の args の有無 + 値伝播
+- seq.output() の hyphen / underscore 受理、 chain 組み合わせ
+- 複合プログラム (global.tempo + global.linkAudio + var init + seq chain)
+
+**parser を触らなかった理由**:
+既存 tokenizer keyword は `var, init, by, GLOBAL, force, RUN, LOOP, MUTE` のみで、 `linkAudio` / `output` は IDENTIFIER として通る。 AST は generic な `target / method / args` 構造なので追加メソッドのために schema 変更は不要。
+
+**`init` prefix の扱い (要 review)**:
+ユーザーレビューで「init global.linkAudio()」 案が選択されたが、 既存 parser では `init` は変数宣言専用 (`var x = init GLOBAL` / `var s = init global.seq`)。 厳密に `init global.linkAudio()` 形を実装するには parser 拡張 (`parseGlobalInit` を method-call 受理に拡張) が必要。 本 PR では既存 conventions (`global.tempo()` 等) と揃った `global.linkAudio()` 形を採用 (parser 拡張不要)。 着陸後の review で「init prefix 必須かどうか」 をユーザー判断仰ぐ。
+
+**コミット構成 (小コミット 3 本)**:
+- `68fb4d6` feat(engine): add Global.linkAudio() for LinkAudio mode declaration
+- `7cfd85b` feat(engine): add Sequence.output() for LinkAudio channel binding
+- `d1ffdcf` test(parser): verify LinkAudio DSL syntax parses via existing generic path
+
+**検証**: npm test で 288 件 pass / 23 件 skip (新規 22 件追加)、 regression なし。 lint-staged hook (eslint + prettier) を 3 commit すべて pass、 build も pass。
+
+**残作業 (別 sub-issue)**:
+- Step 3.2: dispatch ロジック (SuperColliderPlayer 側 SynthDef 切替、 channel ID 管理)
+- Step 3.3: VS Code 拡張対応 (syntax / completion / 厳密 diagnostic)
+- Step 3.4: 動的切替 + latency offset
+- Step 3.5: docs (`INSTRUCTION_ORBITSCORE_DSL.md`) + examples
+
+**次の Step**: Step 1 PR (#189) merge → Step 2 (SC plugin 実装) 着手。 Step 3 残 sub-step は Step 2 の進捗と並行可能。
+
+---
+
 ### 6.78 Issue #194 / Epic #187: SC plugin skeleton (Step 2.1) (May 07, 2026)
 
 **Date**: May 07, 2026

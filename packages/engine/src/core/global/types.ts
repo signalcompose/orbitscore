@@ -23,6 +23,7 @@ export interface Scheduler {
     gainDb: number,
     pan: number,
     sequenceName: string,
+    outputChannel?: string,
   ): void
   scheduleSliceEvent(
     filepath: string,
@@ -33,6 +34,7 @@ export interface Scheduler {
     gainDb: number,
     pan: number,
     sequenceName: string,
+    outputChannel?: string,
   ): void
   getAudioDuration(filepath: string): number
   loadBuffer?(filepath: string): Promise<any>
@@ -55,4 +57,6 @@ export interface GlobalState {
   masterEffects: MasterEffect[]
   isRunning: boolean
   isLooping: boolean
+  linkAudioEnabled: boolean
+  linkAudioTargetSampleRate?: number
 }

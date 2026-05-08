@@ -17,7 +17,15 @@ vsc-extension-quickstart.md
 *.vsix
 *.tgz
 ../../**
-../engine/**
+# All sibling workspace packages — the bundled engine is copied into
+# engine/ (no ../) inside this package via build:copy-engine, and any
+# other sibling (sc-link-audio shipping as separate GPL-2.0-or-later
+# artifact under Epic #187, plus future packages like midi-engine) is
+# not part of the .vsix. .vscodeignore patterns match the literal
+# relative path string vsce emits, so the previous `../engine/**`
+# entry was per-package by accident — generalizing it to `../*/**`
+# avoids needing a new exception every time a sibling package is added.
+../*/**
 engine/package-lock.json
 engine/package.json
 # Keep built engine, SuperCollider files, and runtime dependencies

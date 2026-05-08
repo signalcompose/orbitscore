@@ -35,6 +35,9 @@ export class Sequence {
   private _audioFilePath?: string
   private _chopDivisions?: number
 
+  // LinkAudio output channel (only meaningful when Global.linkAudio() is enabled)
+  private _outputChannel?: string
+
   constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
     this.audioEngine = audioEngine
@@ -179,6 +182,40 @@ export class Sequence {
   }
 
   /**
+   * Set the LinkAudio output channel name for this sequence.
+   *
+   * Effective only when `Global.linkAudio()` was declared earlier in the same
+   * .orbs file. Without that declaration the assignment is recorded but the
+   * sequence still routes through the hardware bus, and a runtime warning is
+   * emitted on each call when LinkAudio mode is not enabled. Multiple sequences
+   * sharing the same channel name are summed by the SC plugin.
+   *
+   * Channel changes take effect at the next scheduling cycle; in-flight loop
+   * iterations are not rewritten (no `seamlessParameterUpdate` — channel
+   * switching mid-loop is a separate feature, planned for Step 3.4).
+   */
+  output(channelName: string): this {
+    if (!channelName || !channelName.trim()) {
+      throw new Error(
+        `Sequence '${this.stateManager.getName() || 'sequence'}': output(channelName) requires a non-empty channel name.`,
+      )
+    }
+    this._outputChannel = channelName
+    if (!this.global.isLinkAudioEnabled()) {
+      console.warn(
+        `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}") ` +
+          `was called without 'global.linkAudio()'. The channel name is recorded ` +
+          `but will not take effect until LinkAudio mode is declared.`,
+      )
+    }
+    return this
+  }
+
+  getOutputChannel(): string | undefined {
+    return this._outputChannel
+  }
+
+  /**
    * Set default pan (initial pan position) without immediate playback.
    * This sets the pan value but does not trigger seamless parameter update.
    * Use this to configure initial pan before starting playback.
@@ -288,7 +325,41 @@ export class Sequence {
       loopStartTime: this.stateManager.getLoopStartTime(),
       masterGainDb: this.global.getMasterGainDb(),
       patternDuration: this.getPatternDuration(),
+      outputChannel: this.resolveDispatchChannel(),
     })
+  }
+
+  /**
+   * Resolve the channel to forward to the scheduler.
+   *
+   * Strict-mode contract (per DSL spec §8.1.2):
+   *   - Global LinkAudio off, regardless of `.output()` → returns undefined
+   *     (sequence routes through the hardware bus, existing behavior).
+   *   - Global LinkAudio on AND `.output()` set → returns the channel name.
+   *   - Global LinkAudio on AND `.output()` unset → throws. Hardware/LinkAudio
+   *     mixing within the same file is forbidden, so a sequence with no
+   *     declared destination is a hard error rather than a silent fallback.
+   *     The VS Code diagnostic `analyzeLinkAudioMissingOutput` surfaces this
+   *     at edit time; this throw is the runtime safety net for engines /
+   *     CLIs / tests that bypass the editor.
+   *
+   * Public so the boot pipeline (Step 4) and the test suite can exercise the
+   * dispatch contract without going through the full scheduling loop.
+   */
+  resolveDispatchChannel(): string | undefined {
+    if (!this.global.isLinkAudioEnabled()) {
+      return undefined
+    }
+    if (!this._outputChannel) {
+      throw new Error(
+        `Sequence '${this.stateManager.getName() || 'sequence'}' has no .output() ` +
+          `channel set, but global.linkAudio() is enabled. LinkAudio mode requires ` +
+          `every sequence to declare an output channel name. Add .output("name") ` +
+          `to the sequence chain, or remove global.linkAudio() to fall back to ` +
+          `hardware output.`,
+      )
+    }
+    return this._outputChannel
   }
 
   async scheduleEvents(
@@ -319,6 +390,7 @@ export class Sequence {
       sequenceName: this.stateManager.getName(),
       masterGainDb: this.global.getMasterGainDb(),
       patternDuration: this.getPatternDuration(),
+      outputChannel: this.resolveDispatchChannel(),
     })
 
     this.stateManager.setPlaying(true)
@@ -335,6 +407,11 @@ export class Sequence {
    * @internal - Reserved keywords use only. Use RUN(seq) instead.
    */
   async run(): Promise<this> {
+    // Validate the strict-mode contract eagerly so the throw propagates through
+    // the awaited call chain to the REPL catch block, instead of becoming an
+    // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
+    this.resolveDispatchChannel()
+
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
       audioFilePath: this._audioFilePath,
@@ -371,6 +448,11 @@ export class Sequence {
    * @internal - Reserved keywords use only. Use LOOP(seq) instead.
    */
   async loop(): Promise<this> {
+    // Validate the strict-mode contract eagerly so the throw propagates through
+    // the awaited call chain to the REPL catch block, instead of becoming an
+    // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
+    this.resolveDispatchChannel()
+
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
       audioFilePath: this._audioFilePath,
@@ -522,6 +604,7 @@ export class Sequence {
       gainRandom: gainState.gainRandom,
       pan: panState.pan,
       panRandom: panState.panRandom,
+      outputChannel: this._outputChannel,
     }
   }
 }

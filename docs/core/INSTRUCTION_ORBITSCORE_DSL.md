@@ -486,10 +486,68 @@ For backward compatibility and ease of use:
 
 ## 8. DAW Integration
 
-- **MIDI**: use macOS **IAC Bus** for routing when MIDI features are enabled later.  
-- **Audio**: OrbitScore outputs audio internally.  
-- **DAW Plugin**: provide a VST/AU plugin that can connect to OrbitScore and select which `seqN` output to route.  
-- Plugin acts as the bridge for DAW integration.
+OrbitScore は 2 系統の DAW 連携経路を持つ:
+
+- **Audio out → Ableton Link Audio (Live 12.4+)** ... v1.2.0 で導入。 名前付きチャンネルを LAN 上で stream する。 詳細は §8.1。
+- **MIDI out → IAC Bus**: macOS IAC Bus で routing 予定。 v1.2.0 では未実装、 別 Issue で扱う。
+
+DAW 側 (Ableton Live 等) にプラグインを別途 install する形式は採らない。 OrbitScore の出力経路は scsynth (hardware bus) または Link Audio (名前付き channel) のいずれか。
+
+### 8.1 Ableton Link Audio Output
+
+LinkAudio は Live 12.4 (2026-05-05 公開) で導入された Link の上位互換。 tempo / beat / phase / start-stop の同期に加えて、 LAN 上で名前付きの音声 channel を publish / subscribe できる。 ライセンスは GPL-2.0-or-later / proprietary commercial の dual。 OrbitScore は publisher 側 (Sink) のみを実装する。
+
+#### 8.1.1 Global mode declaration
+
+ファイル単位で LinkAudio 出力モードに切り替えるには、 `global.linkAudio()` を **once-per-file** で宣言する。 既存の `global.tempo()` 等と同じ scope (state-setting メソッド)。
+
+```orbs
+global.tempo(120)
+global.linkAudio()           // LinkAudio mode を有効化、 target SR は plugin が auto-detect (fallback 48000)
+global.linkAudio(48000)      // 明示的に target SR を指定 (override)
+```
+
+宣言中は **全 sequence が LinkAudio 経由** に出力される。 hardware (scsynth Out.ar) との混在は不可。 宣言なしの .orbs ファイルは従来通り hardware 出力のみ。
+
+target sample rate は plugin 内で scsynth (hardware SR) の出力をリサンプリングするための値。 LinkAudio 自身は内部リサンプリングを行わないため、 publisher と subscriber (Live) の SR が一致しないと連続的なサンプルドロップが発生する (Live default 48kHz と異なる場合は必ず明示する)。
+
+#### 8.1.2 Per-sequence channel binding
+
+各 sequence の出力チャンネル名を `seq.output(name)` で指定する。 channel name は ASCII 英数 + `-` + `_`、 max 64 chars 推奨 (LinkAudio 仕様には明示的な上限なし)。
+
+```orbs
+global.linkAudio()
+var s = init global.seq
+s.audio("../audio/kick.wav").output("kick")        // → Live で channel "kick" を受信
+```
+
+同名 channel を指定した複数 sequence は **plugin 内で加算合成 (sum)** される。 これにより drums bus 等の汎用的な再生制御が DSL 側 1 行で実現できる。
+
+```orbs
+global.linkAudio()
+var k = init global.seq
+var s = init global.seq
+k.audio("kick.wav").output("drums")
+s.audio("snare.wav").output("drums")               // kick と snare が同 channel に合成されて Live で受信
+```
+
+**Strict mode (v1.2.0+)**: `global.linkAudio()` を宣言したファイル内では、 全ての発音 sequence が `.output(name)` で channel を宣言する必要がある。 `.output()` を持たない sequence が `.play()` した時点で **runtime error** を投げる (`Sequence.resolveDispatchChannel`)。 これは「LinkAudio mode 中は全 sequence が LinkAudio 経由」 という §8.1.1 の宣言と整合させるための strict 制約で、 hardware 出力との silent fallback は行わない (hardware/LinkAudio 混在は不可、 §8.1.1 参照)。 編集時には VS Code 拡張が `analyzeLinkAudioMissingOutput` で同等の error 診断を出す (§10)。
+
+`global.linkAudio()` 未宣言で `seq.output()` を呼んだ場合は別経路: channel name は記録されるが hardware path に流れ、 console に一度だけ警告が出る (LinkAudio mode を有効化し忘れたケースのフェイルセーフ)。 編集時の order-violation 検出は §10 参照。
+
+#### 8.1.3 Plugin lifecycle
+
+LinkAudio mode は scsynth プロセス内で動作する SC plugin (`OrbitLinkAudio.scx`、 GPL-2.0-or-later 別 artifact) に依存する。 plugin の load / unload は scsynth 起動 / 終了に紐づく。 ランタイム切替 (演奏中の LinkAudio on/off) は v1.2.0 では非対応。
+
+plugin が load されていない状態で `global.linkAudio()` を宣言した場合は hardware path にフォールバックし警告を出す。 plugin の有無は `EventScheduler.setLinkAudioPluginAvailable()` を経由してブート pipeline (Step 4) が flip する。
+
+#### 8.1.4 Live 側の操作
+
+1. Live 12.4+ を起動、 セッション SR を 48kHz (デフォルト) または `global.linkAudio(SR)` で指定した SR に合わせる
+2. Audio トラックの "Audio From" で OrbitScore peer の channel name を選択
+3. OrbitScore 側で sequence を再生 → Live のメーターで受信を確認
+
+tempo / beat / phase / Start-Stop は LinkAudio に内包された Link 機能で双方向同期される。 Live 側で tempo 変更 → OrbitScore に反映、 OrbitScore で `global.tempo()` 変更 → Live に反映。
 
 ---
 

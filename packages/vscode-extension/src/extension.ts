@@ -6,7 +6,13 @@ import * as fs from 'fs'
 import * as vscode from 'vscode'
 
 import { analyzeMethodChain, getContextualCompletions } from './completion-context'
-import { analyzeAudioPathOrdering, analyzeGlobalOncePerFile } from './diagnostics-analysis'
+import {
+  analyzeAudioPathOrdering,
+  analyzeEmptyOutputArg,
+  analyzeGlobalOncePerFile,
+  analyzeLinkAudioMissingOutput,
+  analyzeOutputWithoutLinkAudio,
+} from './diagnostics-analysis'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -1285,6 +1291,38 @@ async function updateDiagnostics(
         new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
         issue.message,
         vscode.DiagnosticSeverity.Warning,
+      ),
+    )
+  }
+  for (const issue of analyzeOutputWithoutLinkAudio(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Warning,
+      ),
+    )
+  }
+  // Strict-mode error: sequences without .output() under LinkAudio mode are
+  // flagged as Error (not Warning) — runtime will throw, so we surface it
+  // accordingly at edit time. See DSL spec §8.1.2.
+  for (const issue of analyzeLinkAudioMissingOutput(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Error,
+      ),
+    )
+  }
+  // Same severity reasoning as the missing-output analyzer: an empty
+  // .output("") argument throws at runtime regardless of LinkAudio mode.
+  for (const issue of analyzeEmptyOutputArg(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Error,
       ),
     )
   }

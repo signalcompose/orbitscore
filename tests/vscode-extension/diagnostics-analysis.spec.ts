@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest'
 
 import {
   analyzeAudioPathOrdering,
+  analyzeEmptyOutputArg,
   analyzeGlobalOncePerFile,
+  analyzeLinkAudioMissingOutput,
+  analyzeOutputWithoutLinkAudio,
 } from '../../packages/vscode-extension/src/diagnostics-analysis'
 
 describe('analyzeGlobalOncePerFile', () => {
@@ -215,5 +218,247 @@ describe('integration: getting started example', () => {
   it('should not flag the well-formed example', () => {
     expect(analyzeGlobalOncePerFile(exampleText)).toEqual([])
     expect(analyzeAudioPathOrdering(exampleText)).toEqual([])
+  })
+})
+
+describe('analyzeOutputWithoutLinkAudio', () => {
+  it('returns no issues when global.linkAudio() is declared above seq.output()', () => {
+    const text = [
+      'global.linkAudio()',
+      'var s = init global.seq',
+      's.audio("kick.wav").output("kick")',
+    ].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('flags .output() that appears before global.linkAudio() (order violation)', () => {
+    // Order matters: live coding reads top-to-bottom, so a .output() call
+    // before the linkAudio() declaration would route hardware on first eval.
+    const text = ['s.audio("kick.wav").output("kick")', 'global.linkAudio(48000)'].join('\n')
+
+    const issues = analyzeOutputWithoutLinkAudio(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].line).toBe(0)
+    expect(issues[0].message).toContain('declared at line 2')
+  })
+
+  it('returns no issues when global.linkAudio() is declared on the same line as .output() or earlier', () => {
+    // The analyzer treats .output() at or after the linkAudio() line as fine;
+    // this matches the runtime where the .orbs file is evaluated top-to-bottom.
+    const text = [
+      'global.linkAudio(48000)',
+      'var s = init global.seq',
+      's.audio("kick.wav").output("kick")',
+    ].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('flags every .output() when global.linkAudio() is missing', () => {
+    const text = [
+      'var s1 = init global.seq',
+      's1.audio("kick.wav").output("kick")',
+      'var s2 = init global.seq',
+      's2.audio("snare.wav").output("snare")',
+    ].join('\n')
+
+    const issues = analyzeOutputWithoutLinkAudio(text)
+    expect(issues).toHaveLength(2)
+    expect(issues[0].line).toBe(1)
+    expect(issues[0].message).toContain('global.linkAudio()')
+    expect(issues[1].line).toBe(3)
+  })
+
+  it('ignores commented-out .output() calls', () => {
+    const text = ['// s1.audio("kick.wav").output("kick")', 's1.audio("kick.wav").chop(1)'].join(
+      '\n',
+    )
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('ignores commented-out global.linkAudio() (still flags real .output() calls)', () => {
+    const text = ['// global.linkAudio()', 's.audio("kick.wav").output("kick")'].join('\n')
+
+    const issues = analyzeOutputWithoutLinkAudio(text)
+    expect(issues).toHaveLength(1)
+  })
+
+  it('returns no issues when there are no .output() calls at all', () => {
+    const text = [
+      'global.tempo(120)',
+      'var s = init global.seq',
+      's.audio("kick.wav").play(1, 0, 1, 0)',
+    ].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+})
+
+describe('analyzeEmptyOutputArg', () => {
+  it('flags .output("") with empty string', () => {
+    const text = ['var s = init global.seq', 's.audio("k.wav").output("")'].join('\n')
+    const issues = analyzeEmptyOutputArg(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].line).toBe(1)
+    expect(issues[0].message).toContain('non-empty channel name')
+  })
+
+  it('flags .output("   ") with whitespace-only argument', () => {
+    const text = ['var s = init global.seq', 's.audio("k.wav").output("   ")'].join('\n')
+    const issues = analyzeEmptyOutputArg(text)
+    expect(issues).toHaveLength(1)
+  })
+
+  it('does not flag .output("valid")', () => {
+    const text = ['var s = init global.seq', 's.audio("k.wav").output("kick")'].join('\n')
+    expect(analyzeEmptyOutputArg(text)).toEqual([])
+  })
+
+  it('ignores commented-out empty calls', () => {
+    const text = ['// s.output("")', 's.audio("k.wav").output("kick")'].join('\n')
+    expect(analyzeEmptyOutputArg(text)).toEqual([])
+  })
+
+  it('flags multiple empty calls independently', () => {
+    const text = [
+      'var a = init global.seq',
+      'var b = init global.seq',
+      'a.output("")',
+      "b.output('')",
+    ].join('\n')
+    expect(analyzeEmptyOutputArg(text)).toHaveLength(2)
+  })
+})
+
+describe('analyzeLinkAudioMissingOutput', () => {
+  it('flags a sequence that has .play() but no .output() under linkAudio mode', () => {
+    const text = [
+      'global.linkAudio()',
+      'var kick = init global.seq',
+      'kick.audio("kick.wav")',
+      'kick.play(1, 0, 1, 0)',
+    ].join('\n')
+
+    const issues = analyzeLinkAudioMissingOutput(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].line).toBe(3)
+    expect(issues[0].message).toContain("Sequence 'kick'")
+    expect(issues[0].message).toContain('global.linkAudio()')
+  })
+
+  it('does not flag sequences that have .output() set', () => {
+    const text = [
+      'global.linkAudio()',
+      'var kick = init global.seq',
+      'kick.audio("kick.wav").output("kick")',
+      'kick.play(1, 0, 1, 0)',
+    ].join('\n')
+
+    expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
+  })
+
+  it('does not run when linkAudio is not declared (the other analyzer handles that)', () => {
+    const text = [
+      'var kick = init global.seq',
+      'kick.audio("kick.wav")',
+      'kick.play(1, 0, 1, 0)',
+    ].join('\n')
+
+    expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
+  })
+
+  it('flags only the orphaned sequences when others have .output()', () => {
+    const text = [
+      'global.linkAudio()',
+      'var kick = init global.seq',
+      'var snare = init global.seq',
+      'kick.audio("kick.wav").output("kick")',
+      'snare.audio("snare.wav")',
+      'kick.play(1, 0, 1, 0)',
+      'snare.play(0, 0, 1, 0)',
+    ].join('\n')
+
+    const issues = analyzeLinkAudioMissingOutput(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].message).toContain("Sequence 'snare'")
+    expect(issues[0].line).toBe(6)
+  })
+
+  it('reports every .play() call on the orphan sequence', () => {
+    const text = [
+      'global.linkAudio()',
+      'var kick = init global.seq',
+      'kick.audio("kick.wav")',
+      'kick.play(1, 0, 1, 0)',
+      'kick.play(0, 1, 0, 1)',
+    ].join('\n')
+
+    const issues = analyzeLinkAudioMissingOutput(text)
+    expect(issues).toHaveLength(2)
+    expect(issues.map((i) => i.line)).toEqual([3, 4])
+  })
+
+  it('uses word-boundary matching so prefix names do not falsely satisfy each other', () => {
+    // kick.output() must not satisfy kicker — the analyzer should still flag kicker.
+    const text = [
+      'global.linkAudio()',
+      'var kick = init global.seq',
+      'var kicker = init global.seq',
+      'kick.audio("k.wav").output("k")',
+      'kicker.audio("ker.wav")',
+      'kick.play(1, 0)',
+      'kicker.play(1, 0)',
+    ].join('\n')
+
+    const issues = analyzeLinkAudioMissingOutput(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].message).toContain("Sequence 'kicker'")
+  })
+
+  it('ignores commented-out lines', () => {
+    const text = [
+      'global.linkAudio()',
+      'var kick = init global.seq',
+      '// kick.output("disabled")',
+      'kick.audio("kick.wav").output("kick")',
+      'kick.play(1, 0)',
+    ].join('\n')
+
+    expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
+  })
+
+  it('also recognizes legacy `init GLOBAL.seq` (uppercase) declarations', () => {
+    // The parser still supports `init GLOBAL.seq` for backward compatibility,
+    // so the diagnostic must too — otherwise users on the old syntax get no
+    // strict-mode coverage.
+    const text = [
+      'global.linkAudio()',
+      'var kick = init GLOBAL.seq',
+      'kick.audio("kick.wav")',
+      'kick.play(1, 0)',
+    ].join('\n')
+
+    const issues = analyzeLinkAudioMissingOutput(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].message).toContain("Sequence 'kick'")
+  })
+})
+
+describe('analyzeGlobalOncePerFile — linkAudio entry', () => {
+  it('flags the second occurrence of global.linkAudio()', () => {
+    const text = ['global.linkAudio()', 'global.linkAudio(48000)'].join('\n')
+
+    const issues = analyzeGlobalOncePerFile(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].line).toBe(1)
+    expect(issues[0].message).toContain('Duplicate global.linkAudio()')
+  })
+
+  it('does not flag a single occurrence of global.linkAudio()', () => {
+    const text = ['global.tempo(120)', 'global.linkAudio()'].join('\n')
+
+    expect(analyzeGlobalOncePerFile(text)).toEqual([])
   })
 })

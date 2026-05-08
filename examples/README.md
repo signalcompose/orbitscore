@@ -70,6 +70,15 @@
   - 複数シーケンスの同時制御
   - ミュート機能
 
+### 10. `10_link_audio.orbs` 🆕 v1.2.0
+- **目的**: Ableton Live 12.4+ に Link Audio で出力
+- **内容**:
+  - `global.linkAudio()` で once-per-file 宣言
+  - `seq.output("channel-name")` で channel 指定
+  - 同名 channel の sum 動作（drums bus パターン）
+  - gain / pan は per-sequence で pre-mix
+  - tempo / phase / start-stop は LinkAudio 内蔵 Link で双方向同期
+
 ## 🎵 ライブパフォーマンス用
 
 ### `live-demo.orbs`
@@ -146,6 +155,7 @@ examples/
 ├── 07_audio_control.orbs            # 音量・パン制御
 ├── 08_timing_verification.orbs      # タイミング精度検証
 ├── 09_reserved_keywords.orbs        # Reserved Keywords
+├── 10_link_audio.orbs               # Link Audio 出力（Ableton Live 12.4+）
 ├── live-demo.orbs                   # ライブコーディングテンプレート
 └── performance-demo.orbs            # 総合パフォーマンスデモ
 ```

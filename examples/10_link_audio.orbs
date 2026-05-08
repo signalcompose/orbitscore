@@ -1,0 +1,68 @@
+// Link Audio Output - OrbitScore Audio DSL (v1.2.0+)
+// Demonstrates routing sequence output to Ableton Live via Link Audio.
+//
+// Prerequisites:
+//   - Ableton Live 12.4+ running with Link enabled
+//   - OrbitLinkAudio.scx plugin installed (Step 2 deliverable; without it the
+//     sequences fall back to the hardware bus and a one-shot warning logs)
+//   - Live session SR matches the target SR below (default 48000)
+
+// === Initialization ===
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// Declare LinkAudio output mode for this file.
+// All sequences below route through Link Audio instead of the hardware bus.
+// Hardware output and Link Audio cannot mix within the same .orbs file.
+global.linkAudio()
+// Or pin the target sample rate explicitly:
+// global.linkAudio(48000)
+
+// === Pattern 1: Single channel per sequence ===
+// Live receives "kick" and "snare" as separate Audio From sources.
+var kick = init global.seq
+kick.length(1)
+kick.audio("../test-assets/audio/kick.wav").output("kick")
+kick.play(1, 0, 0, 0)
+
+var snare = init global.seq
+snare.length(1)
+snare.audio("../test-assets/audio/snare.wav").output("snare")
+snare.play(0, 0, 1, 0)
+
+// === Pattern 2: Same channel name → automatic sum ===
+// Both sequences land on a "drums" channel and are mixed by the SC plugin.
+// Useful for routing a stereo drum bus to one Live track.
+var hat_closed = init global.seq
+hat_closed.length(1)
+hat_closed.audio("../test-assets/audio/hihat_closed.wav").output("drums")
+hat_closed.play(1, 1, 1, 0)
+
+var hat_open = init global.seq
+hat_open.length(1)
+hat_open.audio("../test-assets/audio/hihat_open.wav").output("drums")
+hat_open.play(0, 0, 0, 1)
+
+// === Pattern 3: gain / pan still apply per sequence pre-mix ===
+// Each sequence's gain/pan is applied before the sum on the channel.
+var ghost = init global.seq
+ghost.length(1)
+ghost.audio("../test-assets/audio/snare.wav").output("drums")
+ghost.gain(-12).pan(-30)
+ghost.play(0, (0, 1), 0, (1, 0))
+
+// === Start playback ===
+// In Live: set Audio From of an audio track to the OrbitScore peer's
+// "kick" / "snare" / "drums" channel and unmute monitoring.
+global.start()
+RUN(kick, snare, hat_closed, hat_open, ghost)
+
+// === Notes ===
+// - global.linkAudio() must appear once per file, before sequences start
+// - seq.output("name") is no-op when global.linkAudio() is absent (and a
+//   single warning is logged so the omission is visible during live coding)
+// - LinkAudio (Live 12.4+) is GPL-2.0-or-later; the OrbitLinkAudio.scx is
+//   distributed as a separate artifact (mere aggregation in .vsix)
+// - Tempo, beat, phase, start-stop are inherited from Live via the embedded
+//   Link session; no separate Link client is needed

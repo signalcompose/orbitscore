@@ -68,6 +68,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
     sequenceName,
     masterGainDb,
     patternDuration,
+    outputChannel,
   } = options
 
   if (!audioFilePath || !timedEvents || timedEvents.length === 0) {
@@ -103,9 +104,17 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
           finalGainDb,
           eventPan,
           sequenceName,
+          outputChannel,
         )
       } else {
-        scheduler.scheduleEvent(resolvedFilePath, startTimeMs, finalGainDb, eventPan, sequenceName)
+        scheduler.scheduleEvent(
+          resolvedFilePath,
+          startTimeMs,
+          finalGainDb,
+          eventPan,
+          sequenceName,
+          outputChannel,
+        )
       }
     }
   }
@@ -130,6 +139,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
     loopStartTime,
     masterGainDb,
     patternDuration,
+    outputChannel,
   } = options
 
   if (!timedEvents || !audioFilePath) {
@@ -186,6 +196,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
             finalGainDb,
             eventPan,
             sequenceName,
+            outputChannel,
           )
         } else {
           scheduler.scheduleEvent(
@@ -194,6 +205,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
             finalGainDb,
             eventPan,
             sequenceName,
+            outputChannel,
           )
         }
       }

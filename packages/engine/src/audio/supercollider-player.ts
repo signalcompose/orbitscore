@@ -100,8 +100,16 @@ export class SuperColliderPlayer {
     gainDb = 0,
     pan = 0,
     sequenceName = '',
+    outputChannel?: string,
   ): void {
-    this.eventScheduler.scheduleEvent(filepath, startTimeMs, gainDb, pan, sequenceName)
+    this.eventScheduler.scheduleEvent(
+      filepath,
+      startTimeMs,
+      gainDb,
+      pan,
+      sequenceName,
+      outputChannel,
+    )
   }
 
   /**
@@ -116,6 +124,7 @@ export class SuperColliderPlayer {
     gainDb = 0,
     pan = 0,
     sequenceName = '',
+    outputChannel?: string,
   ): void {
     this.eventScheduler.scheduleSliceEvent(
       filepath,
@@ -126,6 +135,7 @@ export class SuperColliderPlayer {
       gainDb,
       pan,
       sequenceName,
+      outputChannel,
     )
   }
 
@@ -196,8 +206,11 @@ export class SuperColliderPlayer {
   }
 
   /**
-   * Test helper: Execute playback (exposes internal method for testing)
-   * @deprecated Only for testing purposes
+   * Test-only accessor — forwards to `EventScheduler.testExecutePlayback`
+   * so unit tests can drive the dispatch path directly without standing up
+   * the scheduling loop. Not part of the public API.
+   *
+   * @internal
    */
   async testExecutePlayback(
     filepath: string,

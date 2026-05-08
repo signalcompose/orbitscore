@@ -75,11 +75,11 @@
       "patterns": [
         {
           "name": "support.function.global.orbitscore",
-          "match": "\\b(tempo|tick|beat|key|run|loop|stop|mute|unmute)(?=\\()"
+          "match": "\\b(tempo|tick|beat|key|run|loop|stop|mute|unmute|linkAudio)(?=\\()"
         },
         {
           "name": "support.function.sequence.orbitscore",
-          "match": "\\b(audio|chop|play)(?=\\()"
+          "match": "\\b(audio|chop|play|output)(?=\\()"
         },
         {
           "name": "support.function.transport.orbitscore",
@@ -87,7 +87,7 @@
         },
         {
           "name": "entity.name.function.orbitscore",
-          "match": "\\.(tempo|tick|beat|key|audio|chop|play)(?=\\()"
+          "match": "\\.(tempo|tick|beat|key|audio|chop|play|output|linkAudio)(?=\\()"
         }
       ]
     },
