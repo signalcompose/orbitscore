@@ -26,10 +26,11 @@
 //     scsynth side has no transport of its own, so the tone keeps playing
 //     but Link clock advances at Live's rate)
 //
-// Sum-by-name (E2E checklist §C, Step 2.3):
+// Sum-by-name (E2E checklist §C):
 //   - "test-sum" also appears in Live's Link Audio source list
 //   - Routing the track to "test-sum" produces a chord of 220 Hz + 330 Hz
-//     played simultaneously (perfect fifth, ~Hz interval audible as harmonic)
+//     played simultaneously (perfect fifth, ratio 3:2, audible as a distinct
+//     two-pitch chord)
 //   - If only one pitch is audible, the sum-by-name accumulator is broken —
 //     last-writer-wins per tick is the regression mode
 

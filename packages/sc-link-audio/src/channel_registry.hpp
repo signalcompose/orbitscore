@@ -25,6 +25,8 @@
 //
 // Sum-by-name:
 //   Per-channel `ChannelMixState` is owned exclusively by the audio thread.
+//   UGens cache `SinkEntry*` once at Ctor time and never call `lookup()` from
+//   `next()`, so the registry mutex is never contended from the RT thread.
 //   Single-thread serial UGen execution makes `+=` accumulation race-free.
 
 #pragma once
@@ -43,10 +45,11 @@ namespace orbitscore {
 //
 // Largest scsynth block size we will ever see. SC_PlugIn does not expose a
 // hard upper bound, but production servers default to 64 with rare bumps to
-// 1024. We size scratch / mix buffers at 2048 stereo frames (= 8192 bytes for
-// int16, 16384 bytes for float) to absorb that with 2× headroom over the
-// LinkAudioSink seed. Larger blocks fall back to dropping the tail of the
-// buffer (better than tearing on a memcpy overrun) and Ctor logs a warning.
+// 1024. We cap our internal buffers at 2048 stereo frames so the
+// `LinkAudioSink` seed (`kSinkInitialMaxNumSamples`) gives 2× headroom over
+// the largest expected block. Larger blocks fall back to dropping the tail
+// of the buffer (better than tearing on a memcpy overrun) and Ctor logs a
+// warning.
 constexpr int kLinkAudioMaxBlockFrames = 2048;
 
 // The stereo contract is fixed at the SynthDef level. The DSL's mono inputs
@@ -54,7 +57,7 @@ constexpr int kLinkAudioMaxBlockFrames = 2048;
 constexpr int kLinkAudioNumChannels = 2;
 
 // Initial max-samples seed used when constructing a `LinkAudioSink`. Set so
-// that the per-block memcpy in `OrbitLinkAudioOut::next()` always fits without
+// that the per-tick memcpy in `OrbitLinkAudioOut::next()` always fits without
 // the UGen ever needing `requestMaxNumSamples` at runtime. Coupled to
 // `kLinkAudioMaxBlockFrames * kLinkAudioNumChannels * 2` — the UGen's
 // `static_assert` enforces the seed >= max-block × 2 relationship.
@@ -87,6 +90,10 @@ struct ChannelMixState {
   // Frozen at the start of each tick's accumulation; reused at flush so the
   // commit's SessionState matches the audio data being committed. Optional<>
   // is required because `LinkSessionState` has no default constructor.
+  // Invariant: `has_value()` whenever `currentBufCounter >= 0`. The new-tick
+  // branch in next() is the only writer of currentBufCounter, and it always
+  // emplaces the optional in the same straight-line code with no early
+  // return between. The flush gate relies on this to skip a null check.
   int currentFrames;
   std::optional<link_audio::LinkSessionState> currentSessionState;
   double currentBeatsAtBufferBegin;

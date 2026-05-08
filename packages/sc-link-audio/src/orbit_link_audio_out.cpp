@@ -119,9 +119,9 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
         const std::size_t totalSamples =
             static_cast<std::size_t>(mix.currentFrames) *
             static_cast<std::size_t>(orbitscore::kLinkAudioNumChannels);
-        // Clamp + int16 quantise AFTER summation. Per-UGen clamp would lose
-        // signal: two inputs at 0.6 each should sum to 1.0 (full scale), not
-        // be clamped twice to 0.6 then summed to 1.2 then clamped to 1.0.
+        // Clamp + int16 quantise AFTER summation: two inputs at 0.6 each
+        // sum to 1.2, which the post-sum clamp brings to 1.0 (full scale).
+        // floatToInt16 internally clamps to [-1, 1 - 1/32768] before scaling.
         for (std::size_t i = 0; i < totalSamples; ++i) {
           bh.samples[i] = ableton::util::floatToInt16(mix.mixBuffer[i]);
         }
