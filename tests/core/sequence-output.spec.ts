@@ -71,4 +71,22 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
     seq.output('drum-bus_01')
     expect(seq.getOutputChannel()).toBe('drum-bus_01')
   })
+
+  describe('output() empty-string guard', () => {
+    it('throws when called with an empty string', () => {
+      global.linkAudio()
+      expect(() => seq.output('')).toThrow(/requires a non-empty channel name/)
+    })
+
+    it('throws when called with a whitespace-only string', () => {
+      global.linkAudio()
+      expect(() => seq.output('   ')).toThrow(/requires a non-empty channel name/)
+    })
+
+    it('does not throw when called with a valid channel name (regression guard)', () => {
+      global.linkAudio()
+      expect(() => seq.output('valid')).not.toThrow()
+      expect(seq.getOutputChannel()).toBe('valid')
+    })
+  })
 })

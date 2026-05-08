@@ -120,6 +120,15 @@ PR #191 の claude bot review (3 件) で指摘された必須 / 推奨項目へ
 
 **検証**: 335 件 pass / 23 件 skip (元 331 件から +4 件、 regression なし)。 なお daemon-client.spec.ts の 10 件は sandbox ネットワーク制限 (EPERM listen) による pre-existing 失敗で今回変更と無関係。
 
+#### PR review team pass — iteration 2 follow-up (May 08)
+
+iteration 1 fix 後の 4 agent re-review で残った test gap (Critical 1 件・Important 1 件) を解消。
+
+- **Critical**: `output("")` / `output("   ")` の空文字列 throw guard が untested だった。 `tests/core/sequence-output.spec.ts` に `describe('output() empty-string guard')` ブロックを追加し、 空文字列 throw / whitespace-only throw / valid channel no-throw の 3 ケースを verify。
+- **Important**: `seq.loop()` success path (`.output()` 設定済みで throw しない) が untested だった。 `tests/core/sequence-link-audio-integration.spec.ts` に `seq.run()` success test と対称の `seq.loop()` success test を追加。
+
+**検証**: 339 件 pass / 23 件 skip (335 件から +4 件、 regression なし)。
+
 ---
 
 ### 6.81 Epic #187: Link Audio docs + VS Code support (Step 3.3 + 3.5) (May 07, 2026)

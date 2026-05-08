@@ -67,6 +67,14 @@ describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
       seq.output('kick')
       await expect(seq.run()).resolves.toBe(seq)
     })
+
+    it('seq.loop() succeeds (does not throw) when .output() is set', async () => {
+      // preparePlayback will return null (no audio file) → loop() returns early.
+      // Mirrors the run() success test — validates symmetry between run() and loop().
+      global.linkAudio()
+      seq.output('kick')
+      await expect(seq.loop()).resolves.toBe(seq)
+    })
   })
 
   // The behavior we verify lives in `resolveDispatchChannel`. Drive it via the
