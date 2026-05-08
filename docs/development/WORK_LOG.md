@@ -70,9 +70,10 @@ PR #191 の claude bot review (3 件) で指摘された必須 / 推奨項目へ
 
 8. **vsce package CI failure 修正** (`packages/vscode-extension/.vscodeignore`):
    - PR #195 で `packages/sc-link-audio/` が main に landed したため、 PR #191 の release.yml CI で `vsce package` が `invalid relative path: extension/../sc-link-audio/.gitignore` で失敗
-   - 原因: vsce 3.x は sibling workspace package を walk し、 `../sc-link-audio/` を .vsix に含めようとするが、 vsix 内では `..` を含む path が許されない
-   - 修正: `.vscodeignore` に `../sc-link-audio/**` を追加 (既存の `../engine/**` と同 pattern)。 sc-link-audio は GPL-2.0-or-later の独立 artifact (Step 2 / 4) として別配布する設計なので .vsix 同梱は元々スコープ外
+   - 原因: vsce 3.x の `.vscodeignore` パターンは vsce が emit する literal な相対パス文字列に対してマッチする。 既存の `../../**` は repo root レベル (2 階層上) を対象とするためsibling package には効かない。 `../engine/**` は engine だけ個別指定する形で、 新しい sibling が増えるたびに exception を足す必要があった
+   - 修正: per-package 指定 (`../engine/**` + `../sc-link-audio/**`) を一括 sibling exclusion (`../*/**`) に置き換え。 これで現状の sc-link-audio + 将来の sibling package (midi-engine 等) も自動でカバーされる。 bundled engine は `engine/` (no `../`) に build:copy-engine でコピーされる経路なので影響なし
    - 本来 #195 で対応すべきだったが当時 release.yml の paths filter (`packages/sc-link-audio/**` を含まない) のため CI で検知されず、 PR #191 で初めて顕在化した。 main の release.yml は tag push でのみ走るので次の release tag までは不顕性
+   - 「なぜ vsce が sibling を enumerate するのか」 の根本原因調査は別 issue で追跡 (本 PR の merge gate ではない)
 
 9. **main 取り込み + WORK_LOG renumber**:
    - `git merge origin/main` → conflict は WORK_LOG.md のみ (sc-link-audio/ 等 add は auto-merge)
