@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.86 Issue #201 (Step 4-1) / Epic #187: .vsix bundle に OrbitLinkAudio.scx 同梱 (May 08, 2026)
+
+**Date**: May 08, 2026
+**Status**: ⏳ IN PROGRESS (PR pending)
+**Branch**: `201-vsix-bundle-orbit-plugin`
+**Issue**: signalcompose/orbitscore#201 (Step 4 sub-task 4-1)
+
+**目的**: Issue #201 (Epic #187 Step 4) の 4 sub-task のうち最初の 1 つ。 release build で stock SuperCollider plugin (26 個) と並んで `OrbitLinkAudio.scx` (LinkAudio dispatch UGen) を同梱し、 エンドユーザーが `.vsix` install するだけで LinkAudio 経路が使える状態を整える。
+
+残り 3 sub-task は別 PR で対応:
+- **4-2**: boot pipeline で plugin available フラグ flip (engine TS layer)
+- **4-3**: release CI workflow に sc-link-audio build step を追加
+- **4-4**: 統合 E2E checklist §A-G の自動化検収
+
+**実装内容**:
+
+- `scripts/extract-scsynth-bundle.sh` を拡張、 stock SC plugin の copy 後に
+  `packages/sc-link-audio/build/OrbitLinkAudio.scx` を bundle
+  (`Resources/plugins/`) に同梱する step を追加。 build 済 `.scx` が存在
+  しない dev workflow では warn + skip して bundle 抽出自体は成功させる
+  (LinkAudio 経路が使えない `.vsix` だが hardware fallback では動く)
+- bundle 検証 line を更新: `Plugin count: 26 stock SC + 1 custom = 27 total`
+  形式で stock 数の regression check (ABS = 26) と total count を区別
+- `packages/vscode-extension/BUILD_GUIDE.md` にビルド手順 (cmake build →
+  extract-scsynth-bundle.sh 順序) を追記、 同梱後の構造図と plugin count
+  を 27 に更新
+
+**実装ファイル**:
+- `scripts/extract-scsynth-bundle.sh` — OrbitLinkAudio.scx 同梱 step + plugin count 検証強化
+- `packages/vscode-extension/BUILD_GUIDE.md` — build 順序 + 構造図 + サイズ更新
+
+**検証結果**:
+- `bash scripts/extract-scsynth-bundle.sh` 実行成功、 OrbitLinkAudio.scx が
+  `engine/scsynth/Contents/Resources/plugins/` に正しく配置
+- `Plugin count: 26 stock SC + 1 custom = 27 total` の出力確認
+- bundle 内の OrbitLinkAudio.scx が ad-hoc 署名済 (build 時の codesign が
+  そのまま残る — Developer ID 再署名は release CI scope で別途対応予定)
+
+**設計上の判断**:
+- **同梱条件: `.scx` 存在チェックのみ**: build 失敗時に bundle 抽出も巻き
+  添えで失敗するのは過剰。 dev workflow の柔軟性を保ち、 LinkAudio 経路は
+  optional として扱う。 production の release CI では sc-link-audio の
+  cmake build step が prerequisite なので、 そちらで失敗 fail-fast に任せる
+- **bundle path**: `Resources/plugins/` 直下に置く。 SC convention (UGen
+  plugin の標準位置) と一致させ、 scsynth が `-U` で plugin path を指定
+  された時に自動で発見する
+- **Developer ID 署名は別 PR**: 本 PR は dev workflow の bundle 同梱が
+  scope。 macOS Gatekeeper 通過のための Developer ID 再署名は release CI
+  workflow (Step 4-3) と一緒に追加するのが自然
+
+**残課題** (本 PR scope 外):
+- Step 4-2: engine TS の `linkAudioPluginAvailable` フラグ flip
+- Step 4-3: release CI に sc-link-audio cmake build step + Developer ID
+  再署名
+- Step 4-4: 統合 E2E checklist 自動化
+
+---
+
 ### 6.85 Issue #205 + #206 / Epic #187: LinkAudio plugin follow-ups (May 08, 2026)
 
 **Date**: May 08, 2026
