@@ -45,11 +45,11 @@ namespace orbitscore {
 //
 // Largest scsynth block size we will ever see. SC_PlugIn does not expose a
 // hard upper bound, but production servers default to 64 with rare bumps to
-// 1024. We cap our internal buffers at 2048 stereo frames so the
-// `LinkAudioSink` seed (`kSinkInitialMaxNumSamples`) gives 2× headroom over
-// the largest expected block. Larger blocks fall back to dropping the tail
-// of the buffer (better than tearing on a memcpy overrun) and Ctor logs a
-// warning.
+// 1024. We cap our internal buffers at 2048 stereo frames — 2× the largest
+// expected production block size of 1024 — so the `LinkAudioSink` seed
+// (`kSinkInitialMaxNumSamples`) covers the worst case without slack above
+// the computed minimum. Larger blocks fall back to dropping the tail of the
+// buffer (better than tearing on a memcpy overrun) and Ctor logs a warning.
 constexpr int kLinkAudioMaxBlockFrames = 2048;
 
 // The stereo contract is fixed at the SynthDef level. The DSL's mono inputs

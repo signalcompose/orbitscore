@@ -14,9 +14,10 @@
 //
 // Sum-by-name commit is deferred by one tick: the first UGen of each new
 // tick flushes the previous tick's accumulator and starts a fresh one.
-// 1-tick latency (≤ 21 ms @ 48 kHz / 1024 frames) sits well below the Link
-// sync window. A gap > 1 between ticks drops the stored accumulator silently
-// — its captured beat would mismatch Live's current position.
+// 1-tick latency (≈ 21 ms @ 48 kHz / 1024 frames; ≈ 1.3 ms @ 64 frames) sits
+// well below the Link sync window. A gap > 1 between ticks drops the stored
+// accumulator silently — its captured beat would mismatch Live's current
+// position.
 //
 // Realtime safety:
 //   - `SinkEntry*` and `LinkAudio*` are looked up once in `Ctor` (NRT command

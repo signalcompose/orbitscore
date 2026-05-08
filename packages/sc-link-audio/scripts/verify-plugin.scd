@@ -16,9 +16,9 @@
 //   1. OrbitLinkAudioOut class is recognized by sclang
 //   2. scsynth boots without crashing on plugin dlopen
 //   3. /cmd /orbit/registerLinkAudioChannel is accepted by the plugin
-//      (positive: "test-channel"; negative: empty name; negative: rename
-//      no-op for an existing id; negative: malformed/missing id rejected
-//      via sentinel default)
+//      (positive: "test-channel"; negative: empty name + Print rejection;
+//      negative: rename for existing id is a no-op + Print; negative:
+//      malformed/missing id rejected via sentinel default + Print)
 //   4. SynthDef using OrbitLinkAudioOut compiles + instantiates
 //   5. UGen `next()` runs for 2 s without server crash on a registered id
 //   6. UGen `next()` skips safely when given an unregistered channel id

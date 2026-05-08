@@ -44,7 +44,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
    - gap > 1 の場合は捨てる: audio thread スターブや UGen が複数 tick を skip した場合、 captured session state の beat が Live 現在位置と乖離 → 古いデータの commit は誤同期になる
    - flush 後、 mix buffer を memset し、 新 tick 用に session state を capture
    - 同 tick 内の後続 Synth は `mixBuffer[i*2+ch] += in[i]` で追加加算 (per-Synth clamp 無し — flush 時に sum 後一括 clamp)
-   - net で 1-tick latency (≤ 21 ms @ 48 kHz/1024 frames; 通常 ~1.3 ms @ 64 frames) が発生するが、 Link sync 同期窓を充分下回る
+   - net で 1-tick latency (≈ 21 ms @ 48 kHz/1024 frames; 通常 ~1.3 ms @ 64 frames) が発生するが、 Link sync 同期窓を充分下回る
 
 4. **scratch buffer 廃止** (`orbit_link_audio_out.cpp`)
    - Per-Unit `int16 scratch[]` field を削除 (mix buffer は `SinkEntry::mix` 側に1個に集約)
