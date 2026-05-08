@@ -2,29 +2,31 @@
 
 OrbitScore 用 SuperCollider plugin (`OrbitLinkAudio.scx`)。 scsynth プロセス内で Ableton Link Audio (`<ableton/LinkAudio.hpp>`) に直接 commit する `OrbitLinkAudioOut` UGen を提供する。
 
-> **本パッケージは現状 skeleton（Step 2.1 deliverable）。 実装は Step 2.2 以降で着手する。**
+> **Step 2.2 実装完了 — `OrbitLinkAudioOut` UGen + `/cmd /orbit/registerLinkAudioChannel` ハンドラ + LinkAudio singleton ライフサイクルが揃った状態。 sum-by-name (Step 2.3) と TS dispatch / boot pipeline 統合 (Step 4) は別 PR。**
 
 ## 目的
 
 - DSL `seq.output("channel-name")` で指定された sequence の出力を、 仮想ループバックデバイス無しで Live トラックに直結する
 - macOS arm64 only (v1.x release target)
-- 加算合成 (sum-by-name) は plugin 内で実装、 同名 channel への複数 commit を 1 channel に集約
+- 加算合成 (sum-by-name) を plugin 内で実装予定 — 同名 channel への複数 commit を 1 channel に集約する (Step 2.3、 issue #200)。 本 PR の段階では「last-write-wins per audio tick」 の挙動
 
 ## ディレクトリ構造
 
 ```
 packages/sc-link-audio/
 ├── README.md                    # 本ファイル
-├── CMakeLists.txt               # SC Plugin SDK + LinkAudio.hpp との結線
+├── CMakeLists.txt               # SC Plugin SDK + LinkAudio.hpp との結線 + 自動 ad-hoc codesign
 ├── .gitignore                   # build/ 成果物
 ├── src/
-│   ├── orbit_link_audio_out.cpp # OrbitLinkAudioOut UGen 本体
+│   ├── orbit_link_audio_out.cpp # OrbitLinkAudioOut UGen + /cmd registerChannel ハンドラ + PluginLoad/Unload
 │   ├── link_audio_facade.hpp    # alpha API 変更を吸収する 1 ファイル wrapper
-│   ├── channel_registry.hpp     # channelId → LinkAudioSink* lookup
+│   ├── channel_registry.hpp     # channelId → LinkAudioSink* lookup + LinkAudio singleton ownership
 │   └── channel_registry.cpp
-└── external_libraries/          # submodule mount point (現状 placeholder)
-    ├── supercollider-sdk/       # github.com/supercollider/supercollider plugin_interface (Step 2.2 で submodule add)
-    └── link/                    # github.com/Ableton/link 全体 (LinkAudio.hpp を含む、 Step 2.2 で submodule add)
+├── sc-classes/
+│   └── OrbitLinkAudio.sc        # sclang クラス stub (SynthDef ビルダー用)
+└── external_libraries/          # submodule mount point
+    ├── supercollider-sdk/       # github.com/supercollider/supercollider tag Version-3.14.0 に pin
+    └── link/                    # github.com/Ableton/link master (LinkAudio.hpp を含む)
 ```
 
 ## ライセンス
@@ -33,43 +35,95 @@ packages/sc-link-audio/
 
 商用配布フェーズに移行する場合は Ableton (`link-devs@ableton.com`) への proprietary license 申請を判断する。
 
-## ビルド前提 (Step 2.2 以降で完成)
+## ビルド (macOS arm64)
 
 ```bash
-# 1. submodule の初期化 (Step 2.2 で正式追加予定)
-cd external_libraries
-git submodule add https://github.com/supercollider/supercollider.git supercollider-sdk
-git submodule add https://github.com/Ableton/link.git link
-cd ..
+# 1. submodule 初期化 (clone 直後の clean state に対する初回のみ)
+#
+#    SuperCollider repo は 200 MB+ あるので `--depth 1` を付けて
+#    shallow clone を推奨。 ローカル scsynth と整合する Version-3.14.0
+#    tag のみ取得できれば十分で、 history は不要。 Ableton/link も
+#    header-only なので shallow で問題ない。
+git submodule update --init --recursive --depth 1 packages/sc-link-audio
 
-# 2. macOS arm64 (Apple Silicon) only
-mkdir build && cd build
+# 2. CMake configure + build
+#    macOS arm64 (Apple Silicon) only。 absolute path で SC_PATH と
+#    LINK_AUDIO_PATH を渡すこと (CMake の relative-path 評価は build dir
+#    起点になるためトラブルになりやすい)。
+cd packages/sc-link-audio
+mkdir -p build && cd build
 cmake .. \
-  -DSC_PATH=../external_libraries/supercollider-sdk \
-  -DLINK_AUDIO_PATH=../external_libraries/link
+  -DSC_PATH=$(pwd)/../external_libraries/supercollider-sdk \
+  -DLINK_AUDIO_PATH=$(pwd)/../external_libraries/link
 make
 
-# 3. .scx を SC extensions ディレクトリへ install
-cp OrbitLinkAudio.scx ~/Library/Application\ Support/SuperCollider/Extensions/
+# 3. SC Extensions に install (.scx + sclang クラス stub の両方)
+EXT_DIR="$HOME/Library/Application Support/SuperCollider/Extensions"
+mkdir -p "$EXT_DIR"
+cp OrbitLinkAudio.scx "$EXT_DIR/"
+cp ../sc-classes/OrbitLinkAudio.sc "$EXT_DIR/"
 ```
 
-`.vsix` bundle に同梱される配布版はリリースパイプライン (Step 4) が `scripts/extract-scsynth-bundle.sh` 経由で `Resources/plugins/OrbitLinkAudio.scx` を組み込む。
+CMake が build 完了後に自動で ad-hoc codesign を実施する (詳細は `CMakeLists.txt` 末尾の note 参照)。 macOS は signed parent process (SuperCollider.app `scsynth` は Ableton ではなく SuperCollider team で署名済) からの unsigned bundle dlopen を `signal: SIGKILL (Code Signature Invalid)` で殺すため、 ad-hoc 署名 (`codesign --force --sign -`) が必須。
+
+`.vsix` bundle に同梱される配布版はリリースパイプライン (Step 4) が `scripts/extract-scsynth-bundle.sh` 経由で `Resources/plugins/OrbitLinkAudio.scx` を組み込み、 同時に Developer ID で再署名する想定。
+
+## 動作確認 (sclang)
+
+build + install 後、 sclang スクリプトで plugin が SC スタックの全レイヤーで機能していることを確認できる:
+
+```bash
+/Applications/SuperCollider.app/Contents/MacOS/sclang \
+  packages/sc-link-audio/scripts/verify-plugin.scd
+```
+
+期待出力 (抜粋):
+```
+=== OrbitLinkAudio plugin verification ===
+  [OK] OrbitLinkAudioOut class loaded
+  [OK] scsynth booted with plugin loaded (no crash on dlopen)
+  [OK] /cmd registerLinkAudioChannel id=1 'test-channel' sent + synced
+OrbitLinkAudio: /cmd registerLinkAudioChannel id=2 empty channel name rejected ...
+  [OK] /cmd registerLinkAudioChannel id=2 '' (empty) sent — expect 'rejected' Print above
+OrbitLinkAudio: re-registration of channel id 1 ignored ...
+  [OK] /cmd registerLinkAudioChannel id=1 rename sent — expect 're-registration ignored' Print above
+OrbitLinkAudio: /cmd registerLinkAudioChannel missing or malformed integer id argument (got -5) — ignoring
+  [OK] /cmd registerLinkAudioChannel id=-5 sent — expect 'malformed integer id' Print above
+  [OK] SynthDef instantiated on registered channel id=1 ...
+OrbitLinkAudioOut: channel id 999 has no registered sink ...
+  [OK] SynthDef instantiated on unregistered channel id=999 — expect 'no registered sink' Print above
+  [OK] held for 2 s — no crash, no errors above => plugin is functional
+=== verification complete ===
+```
+
+成功時 exit code 0、 失敗 (class load 失敗 / 30 s 内に boot 完了せず / sync hang) で 1 を返すので CI からも chain 可能。 各 `/cmd` 後に `s.sync` を入れているので、 ハンドラ内クラッシュ系の regression は次の `[OK]` 到達前に検出される。
+
+Live 12.4+ で channel が UI に列挙され、 audio が受信できるかの目視確認は手動 harness で実施できる:
+
+```bash
+/Applications/SuperCollider.app/Contents/MacOS/sclang \
+  packages/sc-link-audio/scripts/verify-live-receive.scd
+```
+
+これは 30 秒間 `test-tone` channel に 440 / 660 Hz 交互トーンを publish するので、 operator が Live を立ち上げて Audio Track の "Audio From" で `test-tone` を選択し、 メーターが触れることを確認する手順。 詳細は `docs/testing/LINK_AUDIO_E2E_CHECKLIST.md` 「Plugin 単体検収」 セクションを参照。
+
+§A-G の完全な E2E (boot pipeline と TS dispatch wiring の整合確認込み) は Step 4 (issue #201) 完了後に実施可能。
 
 ## 関連 Issue / PR
 
 - Epic: signalcompose/orbitscore#187
 - Step 1 research: signalcompose/orbitscore#188 / `docs/research/LINK_AUDIO_API.md`
 - Step 3 (TS 側 contract): signalcompose/orbitscore#190 + #192 (consolidated PR)
-- 本 sub-step (Step 2.1 skeleton): signalcompose/orbitscore#194
-- Step 2.2 (UGen 実装): TBD
+- Step 2.1 skeleton: signalcompose/orbitscore#194
+- 本 sub-step (Step 2.2 UGen 実装): signalcompose/orbitscore#198
 - Step 4 (build pipeline 統合): TBD
 
 ## ステータス
 
 | Sub-step | 内容 | 状態 |
 |---|---|---|
-| 2.1 | skeleton (本パッケージ作成) | ✅ in this PR |
-| 2.2 | `OrbitLinkAudioOut` UGen の単一 channel commit 実装 | ⏳ TBD |
+| 2.1 | skeleton (本パッケージ作成) | ✅ |
+| 2.2 | `OrbitLinkAudioOut` UGen の単一 channel commit 実装 | ✅ in this PR |
 | 2.3 | channelId → sink 動的 add/remove (sum-by-name) | ⏳ TBD |
 | 2.4 | 同名 sum 動作の検収 | ⏳ TBD |
-| 2.5 | tempo / phase / transport sync (LinkAudio 内蔵 Link) | ⏳ TBD |
+| 2.5 | tempo / phase / transport sync (LinkAudio 内蔵 Link) | ⏳ TBD (実装は本 PR で完了、 検収は Step 4 と統合 E2E で) |

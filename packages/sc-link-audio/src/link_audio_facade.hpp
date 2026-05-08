@@ -1,45 +1,40 @@
-// link_audio_facade.hpp — single-file wrapper around <ableton/LinkAudio.hpp>
+// link_audio_facade.hpp — single-file wrapper around <ableton/LinkAudio.hpp>.
 //
-// LinkAudio is documented as an alpha API. Every call OrbitScore needs flows
-// through this header so that breaking changes upstream are absorbed in one
-// translation unit. Step 2.2 will fill in the actual surface (Sink ctor,
-// BufferHandle commit, channels callback, enable/disable). Step 2.1 keeps the
-// declarations as stubs gated behind ORBIT_SC_PLUGIN_BUILD so source files
-// compile in tools that lack the SDK paths (linters, IDE indexers).
+// LinkAudio is documented as an alpha API. Pinning every direct dependency
+// here lets us absorb upstream renames in one translation unit. Source files
+// (`channel_registry.cpp`, `orbit_link_audio_out.cpp`) include this header
+// instead of `<ableton/LinkAudio.hpp>` directly.
 
 #pragma once
 
 #ifdef ORBIT_SC_PLUGIN_BUILD
+// IMPORTANT: include order. Both `<ableton/link/ApiConfig.hpp>` and
+// `<ableton/link_audio/ApiConfig.hpp>` use the same `LINK_API_CONTROLLER`
+// guard. If `Link.hpp` is included first, it pulls in
+// `link/ApiConfig.hpp` which sets the guard — then
+// `link_audio/ApiConfig.hpp` (which defines `ChannelId` / `PeerId` /
+// `SessionId` aliases used by `LinkAudioSource` etc.) gets skipped, and
+// `LinkAudio.hpp` fails to compile with "unknown type name 'ChannelId'".
+//
+// Workaround: pull `LinkAudio.hpp` in FIRST so the link_audio variant of
+// the guard wins. `LinkAudio.hpp` transitively includes Link.hpp at the
+// tail of `link_audio/ApiConfig.hpp`, so we still get the full Link API.
 #include <ableton/LinkAudio.hpp>
-#include <cstdint>
-#include <string>
+#else
+namespace ableton {
+class LinkAudio;
+class LinkAudioSink;
+}  // namespace ableton
 #endif
 
 namespace orbitscore::link_audio {
 
 #ifdef ORBIT_SC_PLUGIN_BUILD
-// Real type aliases. Once Step 2.2 starts using the SDK, prefer these aliases
-// over `ableton::*` directly so future renames stay local.
 using LinkAudio = ::ableton::LinkAudio;
 using LinkAudioSink = ::ableton::LinkAudioSink;
 #else
-// Stub forward declarations so Step 2.1 source files type-check in
-// environments without the SDK on the include path. These never appear in
-// the final .scx — they're only here to keep the skeleton self-contained.
 class LinkAudio;
 class LinkAudioSink;
 #endif
-
-// Step 2.2 will populate these. Keeping the signatures here documents the
-// intended surface and gives reviewers a single place to inspect the API
-// dependency.
-//
-//   void enableLinkAudio(LinkAudio&, bool);
-//   bool isLinkAudioEnabled(const LinkAudio&);
-//   void publishChannel(LinkAudio&, std::string name, std::size_t maxNumSamples);
-//   void commitInterleavedInt16(LinkAudioSink&, const std::int16_t* samples,
-//                               std::size_t numFrames, std::size_t numChannels,
-//                               std::uint32_t sampleRate, double beatsAtBufferBegin,
-//                               double quantum);
 
 }  // namespace orbitscore::link_audio

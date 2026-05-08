@@ -16,6 +16,26 @@
 
 ---
 
+## Plugin 単体検収 (Step 2.2 完了で実施可能)
+
+§A-G の統合 E2E は Step 4 (boot pipeline 統合 + `.vsix` 同梱) 完了後に実施する想定。 Step 2.2 (`OrbitLinkAudioOut` UGen 実装、 Issue #198 / PR #199) 単体までは以下で検収できる:
+
+- **自動検収** — `packages/sc-link-audio/scripts/verify-plugin.scd`
+  ```bash
+  /Applications/SuperCollider.app/Contents/MacOS/sclang \
+    packages/sc-link-audio/scripts/verify-plugin.scd
+  ```
+  確認項目: sclang クラス load / scsynth boot (no SIGKILL) / `/cmd /orbit/registerLinkAudioChannel` 受理 / SynthDef instantiation / 2 秒の `next()` 走行
+
+- **Live UI 受信の手動検収** — `packages/sc-link-audio/scripts/verify-live-receive.scd`
+  ```bash
+  /Applications/SuperCollider.app/Contents/MacOS/sclang \
+    packages/sc-link-audio/scripts/verify-live-receive.scd
+  ```
+  Live 12.4+ を開いて Link Audio source に `test-tone` channel が列挙され、 audio が受信できるか operator が目視確認 (30 秒間 publish)。 これは下記 §B (single channel publish) の subset。
+
+---
+
 ## テストフロー
 
 ### A. Plugin 検出と起動
