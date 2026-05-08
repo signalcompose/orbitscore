@@ -79,6 +79,13 @@ s.waitForBoot({
     s.sync;
     "  [OK] /cmd registerLinkAudioChannel id=1 rename sent — expect 're-registration ignored' Print above".postln;
 
+    // Negative: non-positive id. The handler's `geti(-1)` default + `id <= 0`
+    // sentinel reject should fire and Print, simulating a TS-side
+    // serialization regression that drops the integer argument.
+    s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", -5, "should-not-register");
+    s.sync;
+    "  [OK] /cmd registerLinkAudioChannel id=-5 sent — expect 'malformed integer id' Print above".postln;
+
     SynthDef(\orbitLinkAudioTest, { |channel = 1|
         var sig = SinOsc.ar(440) * 0.1;
         var stereo = Pan2.ar(sig, 0);

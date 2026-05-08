@@ -75,7 +75,13 @@ void ChannelRegistry::shutdownLinkAudio() {
     } catch (...) {
       Print("OrbitLinkAudio: enableLinkAudio(false) failed (unknown exception)\n");
     }
-    impl_->link.reset();
+    try {
+      impl_->link.reset();
+    } catch (const std::exception& e) {
+      Print("OrbitLinkAudio: LinkAudio dtor threw: %s\n", e.what());
+    } catch (...) {
+      Print("OrbitLinkAudio: LinkAudio dtor threw (unknown exception)\n");
+    }
   }
 }
 
