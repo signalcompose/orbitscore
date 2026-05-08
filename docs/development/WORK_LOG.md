@@ -76,15 +76,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
    - 全 OK で exit code 0、 server `/quit` も正常 (PluginUnload も正しく fire)
    - Live 12.4+ 受信を含む完全 E2E (`docs/testing/LINK_AUDIO_E2E_CHECKLIST.md` §B-G) は Step 4 で TS dispatch / boot pipeline 統合後に実施可能
 
-#### PR review team pass — iteration 1 + 2 反映 (May 08)
+#### PR review team pass — iteration 1〜3 反映 (May 08)
 
-draft PR 作成後に simplify pass (3 並列 agent) + pr-review-team (4 並列 agent × 2 iteration) を回し、 Critical 1 件 + Important 多数を反映。
+draft PR 作成後に simplify pass (3 並列 agent) + pr-review-team (4 並列 agent × 3 iteration) を回し、 Critical 1 件 + Important 多数を反映、 iteration 4 で **Critical = 0, Important = 0** を確認。
 
 - **RT 安全性 (simplify pass)**: `next()` 内の registry mutex 取得を除去 (`LinkAudio*` を Ctor で cache)、 `mWorld->mSampleRate` も Ctor cache、 dead `requestMaxNumSamples` branch を `static_assert` 化
 - **Critical**: `verify-plugin.scd` の FAIL 経路が `0.exit` 固定だった (CI で pass / fail 区別不能) → `1.exit` + 30 s タイムアウト
-- **silent failure 系 (iter 1 + 2)**: Ctor で sink miss 時に `Print` 警告 / `next()` の `unit->link` null guard / `registerChannel` + `initLinkAudio` + `shutdownLinkAudio` を try/catch 化 / `/cmd` の `geti(-1)` + `gets(nullptr)` で malformed 引数を sentinel reject + Print / `setName` 経路を no-op + Print (LinkAudio.hpp が `LinkAudioSink` を "Thread-safe: no" と明記する race の回避) / Ctor で server blockSize > kMaxBlockFrames を 1 行警告
+- **silent failure 系 (iter 1〜3)**: Ctor で sink miss 時に `Print` 警告 / `next()` の `unit->link` null guard / `registerChannel` + `initLinkAudio` を try/catch 化 / `shutdownLinkAudio` を 3 段 try/catch (sinks.clear / enableLinkAudio(false) / link dtor 各々) / `/cmd` の `geti(-1)` + `gets(nullptr)` で malformed 引数を sentinel reject + Print / `setName` 経路を no-op + Print (LinkAudio.hpp が `LinkAudioSink` を "Thread-safe: no" と明記する race の回避) / Ctor で server blockSize > kMaxBlockFrames を 1 行警告
 - **logging mechanism**: `scprintf` は MH_BUNDLE plugin から link 不可なので SC plugin SDK の `Print` macro (= `(*ft->fPrint)`) 経由に統一。 `ft` を file scope の external linkage に変更し、 `channel_registry.cpp` から `extern InterfaceTable* ft;` で参照
-- **負例 test**: `verify-plugin.scd` に unregistered id / empty name / rename / 各 `/cmd` 後の `s.sync` を追加。 assertion 強度は「server crash しない」 + transcript の Print 目視確認 (full 自動化は OSC reply 拡張または stdout grep wrapper が必要、 別作業)
+- **負例 test**: `verify-plugin.scd` に unregistered id (id=999) / empty name (id=2, "") / rename no-op (id=1 への 2 度目登録) / sentinel id reject (id=-5) の 4 件、 各 `/cmd` 後に `s.sync`、 期待される Print 出力を `[OK]` メッセージに明示。 assertion 強度は「server crash しない」 + transcript の Print 目視確認 (full 自動化は OSC reply 拡張または stdout grep wrapper が必要、 別作業)
 - **comment 整理**: WORK_LOG 6.83 / Step 番号 narration を除去し、 RT-safety / dlopen codesign / sink lifetime invariant など WHY が non-obvious なものは保持。 `channel_registry.hpp` の `registerChannel` doc を「subsequent calls update the displayed name」 から no-op + race 回避 rationale に更新
 
 #### 既知の制限 (本 PR で対応しない)
