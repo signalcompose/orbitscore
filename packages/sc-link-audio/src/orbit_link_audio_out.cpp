@@ -154,10 +154,14 @@ void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
   // undefined behaviour per C++. Reject both classes and fall through to the
   // `id <= 0` reject path in registerChannel / lookup.
   const float rawChannel = IN0(2);
+  // INT32_MIN (= -2^31) IS representable in float32, so >= comparison is fine.
+  // INT32_MAX (= 2^31 - 1) is NOT representable and rounds up to 2^31.0f, so
+  // we must use a strict < against 2^31.0f. Otherwise rawChannel == 2^31.0f
+  // would pass the bounds check and the subsequent cast would still be UB.
   constexpr float kIntMin = static_cast<float>(std::numeric_limits<std::int32_t>::min());
-  constexpr float kIntMax = static_cast<float>(std::numeric_limits<std::int32_t>::max());
+  constexpr float kIntMaxExclusive = static_cast<float>(1ll << 31);
   const std::int32_t channelId =
-      (std::isfinite(rawChannel) && rawChannel >= kIntMin && rawChannel <= kIntMax)
+      (std::isfinite(rawChannel) && rawChannel >= kIntMin && rawChannel < kIntMaxExclusive)
           ? static_cast<std::int32_t>(rawChannel)
           : -1;
   unit->sink = g_channelRegistry.lookup(channelId);

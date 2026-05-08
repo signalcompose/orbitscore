@@ -1,6 +1,14 @@
 [submodule "packages/sc-link-audio/external_libraries/link"]
 	path = packages/sc-link-audio/external_libraries/link
 	url = https://github.com/Ableton/link.git
+	# Intentionally tracks master. LinkAudio is alpha; we pin via the
+	# committed submodule SHA and absorb breaking changes in
+	# packages/sc-link-audio/src/link_audio_facade.hpp. Do NOT advance the
+	# submodule pointer without re-running verify-plugin.scd.
 [submodule "packages/sc-link-audio/external_libraries/supercollider-sdk"]
 	path = packages/sc-link-audio/external_libraries/supercollider-sdk
 	url = https://github.com/supercollider/supercollider.git
+	# Pinned to the Version-3.14.0 tag (sc_api_version = 3, matching the
+	# locally bundled scsynth). Do NOT advance to master — current master
+	# is sc_api_version = 6 and scsynth will reject the plugin at load with
+	# an API version mismatch.

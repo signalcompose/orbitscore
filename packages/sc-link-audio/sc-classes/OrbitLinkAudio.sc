@@ -26,12 +26,11 @@ OrbitLinkAudioOut : UGen {
     }
 
     checkInputs {
-        // OrbitLinkAudioOut has no audible output; treat it as a sink and skip
-        // SC's default rate-checks. We still need both audio inputs to be
-        // audio-rate so the C++ side reads valid sample buffers, and `channel`
-        // must NOT be audio-rate — the C++ Ctor reads it once via IN0(2),
-        // so an audio-rate signal would silently use only the first sample.
-        if (rate != 'audio', { ^"OrbitLinkAudioOut must be audio rate" });
+        // *ar forces this UGen's own rate to 'audio', so no self-rate check.
+        // Both stereo inputs must be audio-rate so the C++ side reads valid
+        // sample buffers. `channel` must NOT be audio-rate — the C++ Ctor
+        // reads it once via IN0(2), so an audio-rate signal would silently
+        // use only the first sample.
         if (inputs[0].rate != 'audio', { ^"left input must be audio rate" });
         if (inputs[1].rate != 'audio', { ^"right input must be audio rate" });
         if (inputs[2].rate == 'audio', { ^"channel must be control or scalar rate" });
