@@ -26,7 +26,7 @@ namespace orbitscore {
 struct ChannelRegistry::Impl {
   std::mutex mtx;
   std::unique_ptr<link_audio::LinkAudio> link;
-  std::unordered_map<std::int32_t, std::unique_ptr<link_audio::LinkAudioSink>> sinks;
+  std::unordered_map<std::int32_t, std::unique_ptr<SinkEntry>> sinks;
 };
 
 ChannelRegistry::ChannelRegistry() : impl_(std::make_unique<Impl>()) {}
@@ -112,9 +112,9 @@ void ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) 
   // in the alpha API. A throw must not escape into the OSC /cmd dispatch loop
   // and crash scsynth (mirrors the rationale in initLinkAudio above).
   try {
-    auto sink = std::make_unique<link_audio::LinkAudioSink>(
+    auto entry = std::make_unique<SinkEntry>(
         *impl_->link, std::move(name), kSinkInitialMaxNumSamples);
-    impl_->sinks.emplace(channelId, std::move(sink));
+    impl_->sinks.emplace(channelId, std::move(entry));
   } catch (const std::exception& e) {
     Print("OrbitLinkAudio: failed to allocate sink for channel id %d: %s\n",
              channelId, e.what());
@@ -124,7 +124,7 @@ void ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) 
   }
 }
 
-link_audio::LinkAudioSink* ChannelRegistry::lookup(std::int32_t channelId) {
+SinkEntry* ChannelRegistry::lookup(std::int32_t channelId) {
   std::lock_guard<std::mutex> lock(impl_->mtx);
   auto it = impl_->sinks.find(channelId);
   return (it != impl_->sinks.end()) ? it->second.get() : nullptr;
@@ -145,7 +145,7 @@ ChannelRegistry::~ChannelRegistry() = default;
 void ChannelRegistry::initLinkAudio(double, const std::string&) {}
 void ChannelRegistry::shutdownLinkAudio() {}
 void ChannelRegistry::registerChannel(std::int32_t, std::string) {}
-link_audio::LinkAudioSink* ChannelRegistry::lookup(std::int32_t) { return nullptr; }
+SinkEntry* ChannelRegistry::lookup(std::int32_t) { return nullptr; }
 link_audio::LinkAudio* ChannelRegistry::getLinkAudio() { return nullptr; }
 
 #endif  // ORBIT_SC_PLUGIN_BUILD

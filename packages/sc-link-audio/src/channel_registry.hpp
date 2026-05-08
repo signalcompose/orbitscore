@@ -21,7 +21,16 @@
 //     `release()` would invalidate cached pointers held by `next()` — adding
 //     erase requires a cache-invalidation strategy on the audio thread).
 //   - The audio thread itself never touches the registry — UGens cache the
-//     `LinkAudioSink*` once in their `Ctor` and use it lock-free in `next()`.
+//     `SinkEntry*` once in their `Ctor` and use it lock-free in `next()`.
+//
+// Sum-by-name (Step 2.3):
+//   Each `SinkEntry` carries a per-channel `ChannelMixState`. Multiple UGens
+//   bound to the same channel id accumulate float samples into the shared mix
+//   buffer during `next()`; the FIRST `next()` of each new audio tick first
+//   flushes the previous tick's accumulated buffer to LinkAudio (deferred
+//   commit), then resets and starts the new tick's accumulation. This works
+//   because the audio thread is single — all UGens for a given block run
+//   serially, with no synchronisation needed on the mix state.
 
 #pragma once
 
@@ -30,18 +39,87 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace orbitscore {
 
-// Initial max-samples seed used when constructing a `LinkAudioSink`. Exposed
-// so the UGen can `static_assert` that its per-block memcpy fits within the
-// seed without ever needing `requestMaxNumSamples` at runtime.
+// === Block-size constants ===
 //
-// Coupled to `kMaxBlockFrames * kNumChannels * 2` in orbit_link_audio_out.cpp
-// — update both together, the UGen's `static_assert` enforces the
-// `seed >= max-block × 2` relationship.
+// Largest scsynth block size we will ever see. SC_PlugIn does not expose a
+// hard upper bound, but production servers default to 64 with rare bumps to
+// 1024. We size scratch / mix buffers at 2048 stereo frames (= 8192 bytes for
+// int16, 16384 bytes for float) to absorb that with 2× headroom over the
+// LinkAudioSink seed. Larger blocks fall back to dropping the tail of the
+// buffer (better than tearing on a memcpy overrun) and Ctor logs a warning.
+constexpr int kLinkAudioMaxBlockFrames = 2048;
+
+// The stereo contract is fixed at the SynthDef level. The DSL's mono inputs
+// are upmixed via Pan2 in `orbitPlayBufLink` before they reach the UGen.
+constexpr int kLinkAudioNumChannels = 2;
+
+// Initial max-samples seed used when constructing a `LinkAudioSink`. Set so
+// that the per-block memcpy in `OrbitLinkAudioOut::next()` always fits without
+// the UGen ever needing `requestMaxNumSamples` at runtime. Coupled to
+// `kLinkAudioMaxBlockFrames * kLinkAudioNumChannels * 2` — the UGen's
+// `static_assert` enforces the seed >= max-block × 2 relationship.
 constexpr std::size_t kSinkInitialMaxNumSamples = 8192;
+
+#ifdef ORBIT_SC_PLUGIN_BUILD
+
+// Per-channel sum-by-name accumulation state. Lives inside `SinkEntry` so the
+// audio thread sees it via the same cached pointer as the sink itself.
+//
+// Concurrency: only the scsynth audio thread touches this struct after
+// initialisation. UGens for the same block run serially on that thread, so
+// `+= input` accumulation across UGens for the same channel is naturally
+// race-free without atomics.
+struct ChannelMixState {
+  // Float accumulator across all UGens publishing to this channel within a
+  // single audio tick. Cleared at the start of each new tick (see next() flow
+  // in orbit_link_audio_out.cpp). Float is preferred over int32 because it
+  // avoids an early int16 quantisation step when accumulating multiple float
+  // inputs.
+  float mixBuffer[kLinkAudioMaxBlockFrames * kLinkAudioNumChannels];
+
+  // scsynth's `mWorld->mBufCounter` value of the tick currently being
+  // accumulated. -1 means "no current accumulation in flight". Used by next()
+  // to detect tick transitions: when the value differs from the live
+  // mBufCounter, the previous tick's accumulator is flushed to LinkAudio
+  // (only when the gap is exactly 1 — see comment on flush in next()).
+  std::int64_t currentBufCounter;
+
+  // Captured at the start of accumulation for the current tick. Reused at
+  // flush time so the LinkAudio commit sees a SessionState consistent with
+  // the audio data being committed. SessionState has no default ctor (it
+  // wraps an opaque link::ApiState), so wrap in optional and assign at the
+  // start of each new tick — flush is gated on currentBufCounter >= 0 which
+  // implies a value is present.
+  int currentFrames;
+  std::uint32_t currentSampleRate;
+  std::optional<link_audio::LinkSessionState> currentSessionState;
+  double currentBeatsAtBufferBegin;
+};
+
+// Owning pair held inside the registry. The audio thread caches a pointer to
+// this struct (not to the inner `LinkAudioSink`) so `next()` can reach both
+// the sink (for `BufferHandle` ctor + commit) and the mix state (for
+// accumulation) with a single Ctor-time lookup.
+struct SinkEntry {
+  link_audio::LinkAudioSink sink;
+  ChannelMixState mix;
+
+  template <typename... Args>
+  explicit SinkEntry(Args&&... sinkArgs)
+      : sink(std::forward<Args>(sinkArgs)...), mix{} {
+    mix.currentBufCounter = -1;
+  }
+};
+
+#else  // ORBIT_SC_PLUGIN_BUILD
+// Forward declaration only — non-plugin builds don't need the layout.
+struct SinkEntry;
+#endif
 
 class ChannelRegistry {
  public:
@@ -69,11 +147,12 @@ class ChannelRegistry {
   // Called from the OSC `/cmd` thread.
   void registerChannel(std::int32_t channelId, std::string name);
 
-  // Look up the sink for a channel id. Returns nullptr if `registerChannel`
-  // was never called for this id, or if `initLinkAudio` was never called.
-  // Called from the UGen Ctor (NRT command thread). The returned pointer is
-  // valid for the registry's lifetime; entries are never erased during a session.
-  link_audio::LinkAudioSink* lookup(std::int32_t channelId);
+  // Look up the SinkEntry for a channel id. Returns nullptr if
+  // `registerChannel` was never called for this id, or if `initLinkAudio`
+  // was never called. Called from the UGen Ctor (NRT command thread). The
+  // returned pointer is valid for the registry's lifetime; entries are never
+  // erased during a session.
+  SinkEntry* lookup(std::int32_t channelId);
 
   // Borrowed pointer to the singleton. Used by the UGen to capture audio
   // session state and read the current beat position. nullptr until

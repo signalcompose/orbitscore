@@ -32,9 +32,14 @@ namespace orbitscore::link_audio {
 #ifdef ORBIT_SC_PLUGIN_BUILD
 using LinkAudio = ::ableton::LinkAudio;
 using LinkAudioSink = ::ableton::LinkAudioSink;
+// `SessionState` is a nested class on `BasicLink<Clock>` (which `LinkAudio`
+// inherits via `BasicLinkAudio<Clock>`). Aliasing it here keeps callers from
+// having to spell the inheritance path themselves.
+using LinkSessionState = ::ableton::LinkAudio::SessionState;
 #else
 class LinkAudio;
 class LinkAudioSink;
+class LinkSessionState;
 #endif
 
 }  // namespace orbitscore::link_audio

@@ -22,6 +22,9 @@
 //   4. SynthDef using OrbitLinkAudioOut compiles + instantiates
 //   5. UGen `next()` runs for 2 s without server crash on a registered id
 //   6. UGen `next()` skips safely when given an unregistered channel id
+//   7. Two Synths sharing one channel id (Step 2.3 sum-by-name) accumulate
+//      into a single LinkAudioSink without crashing — exercises the
+//      tick-transition flush path in `next()`
 //
 // Note on assertion strength: this harness can only detect a crash, missing
 // class, or boot timeout. The Print diagnostics added in iter 1 (sink null
@@ -104,6 +107,19 @@ s.waitForBoot({
     Synth(\orbitLinkAudioTest, [\channel, 999]);
     s.sync;
     "  [OK] SynthDef instantiated on unregistered channel id=999 — expect 'no registered sink' Print above".postln;
+
+    // Sum-by-name (Step 2.3): two Synths bound to the same registered channel
+    // id should accumulate into the SinkEntry's mix buffer rather than
+    // last-writer-wins. We can't assert the actual mixed audio from sclang —
+    // verifying a clean tick-transition flush requires a Live peer or an
+    // OSC-replyable diagnostic — so this step only verifies that the
+    // accumulation + deferred-commit code path doesn't crash scsynth when two
+    // Synths run concurrently on the same channel.
+    Synth(\orbitLinkAudioTest, [\channel, 1]);
+    Synth(\orbitLinkAudioTest, [\channel, 1]);
+    s.sync;
+    1.0.wait;
+    "  [OK] two Synths on channel id=1 ran concurrently (sum-by-name path no-crash)".postln;
 
     2.0.wait;
     "  [OK] held for 2 s — no crash, no errors above => plugin is functional".postln;
