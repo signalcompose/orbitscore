@@ -1,0 +1,6 @@
+[submodule "packages/sc-link-audio/external_libraries/link"]
+	path = packages/sc-link-audio/external_libraries/link
+	url = https://github.com/Ableton/link.git
+[submodule "packages/sc-link-audio/external_libraries/supercollider-sdk"]
+	path = packages/sc-link-audio/external_libraries/supercollider-sdk
+	url = https://github.com/supercollider/supercollider.git

@@ -1,6 +1,0 @@
-# Submodule mount points for Step 2.2:
-#   - supercollider-sdk/   github.com/supercollider/supercollider (plugin_interface headers)
-#   - link/                github.com/Ableton/link (LinkAudio.hpp + asio bundle)
-#
-# This .gitkeep keeps the directory in VCS while the actual clones are
-# user-managed (see ../README.md "ビルド前提").

@@ -81,8 +81,24 @@ set_target_properties(OrbitLinkAudio PROPERTIES
   OSX_ARCHITECTURES "arm64"
 )
 
+# === Post-build: ad-hoc codesign ===
+# macOS code signing enforcement (post-Big-Sur) refuses to dlopen unsigned
+# Mach-O bundles in signed parent processes — and the bundled `scsynth` IS
+# signed (TeamIdentifier=HE5VJFE9E4). The result without a signature is a
+# silent crash with `signal: SIGKILL (Code Signature Invalid)` in the
+# diagnostic report and zero output on the scsynth log. Ad-hoc signing
+# (`-sign -`) is sufficient for local development; production distribution
+# (Step 4 `.vsix` bundle) will replace this with a Developer ID signature
+# during the release pipeline.
+add_custom_command(TARGET OrbitLinkAudio POST_BUILD
+  COMMAND codesign --force --sign - $<TARGET_FILE:OrbitLinkAudio>
+  COMMENT "Ad-hoc signing OrbitLinkAudio.scx (required by macOS dlopen enforcement)"
+  VERBATIM
+)
+
 # === Notes ===
 # - LinkAudio.hpp is header-only; no separate library link step is required.
 # - The SC plugin SDK is also header-only for the UGen surface used here.
-# - Step 2.2 will add real implementation in src/*.cpp and may extend
-#   target_link_libraries if Link's asio bundle requires platform libs.
+# - The companion sclang stub (`sc-classes/OrbitLinkAudio.sc`) is NOT installed
+#   by this build — manually copy it next to the `.scx` in the SC Extensions
+#   directory, or let the Step 4 release pipeline bundle both.
