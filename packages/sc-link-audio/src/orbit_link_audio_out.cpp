@@ -336,8 +336,8 @@ void OrbitLinkAudioOut_RegisterChannel(World* world, void* /*userData*/,
   // visible if it ever does.
   if (std::strlen(name) >= sizeof(cmd->name)) {
     Print("OrbitLinkAudio: /cmd registerLinkAudioChannel id=%d name "
-          "truncated from %zu to %zu bytes — Live will display the "
-          "shortened form\n",
+          "truncated from %zu to %zu bytes — sink registered with the "
+          "shortened name\n",
           static_cast<int>(id), std::strlen(name),
           sizeof(cmd->name) - 1);
   }
