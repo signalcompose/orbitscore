@@ -41,7 +41,11 @@
 
 s = Server.local;
 s.options.numOutputBusChannels = 2;
-s.options.numInputBusChannels = 2;
+// Disable input — same reasoning as verify-plugin.scd. The Live-receive
+// path only needs scsynth's audio OUTPUT to commit into LinkAudio; input
+// is unused. Leaving it enabled risks SR-mismatch boot failures on hosts
+// where the input device runs at a different rate than the output device.
+s.options.numInputBusChannels = 0;
 
 // Wall-clock guard: the script publishes for ~30 s and then quits, but if
 // boot or `s.quit` hangs we don't want a stranded process. 60 s gives a

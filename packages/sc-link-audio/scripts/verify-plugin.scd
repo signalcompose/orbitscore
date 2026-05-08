@@ -26,10 +26,12 @@
 //      single LinkAudioSink without crashing — exercises the tick-transition
 //      flush path in `next()`. Note: with no Live peer subscribed during the
 //      headless run, the int16 conversion + `bh.commit(...)` paths are not
-//      exercised (BufferHandle is falsy). Audio content correctness requires
-//      the Live-side check in `verify-live-receive.scd`.
-//   8. Two Synths on two distinct registered channel ids run concurrently
+//      exercised — BufferHandle is falsy when no Live subscriber has
+//      requested audio. Audio content correctness requires the Live-side
+//      check in `verify-live-receive.scd`.
+//   8. Synths on two distinct registered channel ids run concurrently
 //      (cross-channel isolation no-crash check)
+//   9. /cmd missing string argument is rejected via `gets(nullptr)` sentinel
 //
 // Note on assertion strength: this harness can only detect a crash, missing
 // class, or boot timeout. The Print diagnostics added in iter 1 (sink null
@@ -53,7 +55,13 @@ if (\OrbitLinkAudioOut.asClass.isNil) {
 
 s = Server.local;
 s.options.numOutputBusChannels = 2;
-s.options.numInputBusChannels = 2;
+// Disable input — the harness only exercises the output path
+// (`OrbitLinkAudioOut.ar(...)`). Leaving input enabled couples scsynth's
+// boot to whatever input device the host happens to expose, and a SR
+// mismatch (e.g. AirPods at 24 kHz vs an output device at 48 kHz) makes
+// the boot fail with "could not initialize audio". CI / dev should not
+// depend on the host's audio input config.
+s.options.numInputBusChannels = 0;
 
 // Wall-clock timeout — fires only if the boot block below never reaches
 // the success exit. Any hang in scsynth boot or sync now produces a
@@ -126,11 +134,13 @@ s.waitForBoot({
     1.0.wait;
     "  [OK] two Synths on channel id=1 ran concurrently (sum-by-name path no-crash)".postln;
 
-    // Cross-channel isolation: register a second channel and run a Synth on
-    // each id concurrently. A regression that aliased SinkEntry pointers (e.g.
-    // a hash collision or a refactor that shared mix state across channels)
-    // would either crash here or silently corrupt — neither would be caught by
-    // the same-channel sum step alone, since that exercises only one entry.
+    // Cross-channel isolation: register a second channel and add a Synth on
+    // each id (Synths from earlier steps are still alive — `s.freeAll` is
+    // omitted to keep the harness linear, so step 8 actually runs ≥3 Synths
+    // on id=1 plus 1 on id=3). A pointer-aliasing regression (hash collision,
+    // refactor that shared mix state across channels) would crash here.
+    // Silent-corrupt aliasing (wrong audio content, no crash) still requires
+    // the Live-side check in `verify-live-receive.scd`.
     s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", 3, "test-channel-3");
     s.sync;
     Synth(\orbitLinkAudioTest, [\channel, 1]);
@@ -138,6 +148,13 @@ s.waitForBoot({
     s.sync;
     1.0.wait;
     "  [OK] Synths on channels id=1 and id=3 ran concurrently (cross-channel isolation no-crash)".postln;
+
+    // Negative: /cmd missing the string argument. Handler's `gets(nullptr)`
+    // sentinel should produce a "missing or malformed string argument" Print.
+    // Mirrors the id=-5 step that exercises the integer-arg sentinel.
+    s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", 4);
+    s.sync;
+    "  [OK] /cmd registerLinkAudioChannel id=4 (no string arg) sent — expect 'missing or malformed string argument' Print above".postln;
 
     2.0.wait;
     "  [OK] held for 2 s — no crash, no errors above => plugin is functional".postln;

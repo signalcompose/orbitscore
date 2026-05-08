@@ -59,8 +59,9 @@ constexpr int kLinkAudioNumChannels = 2;
 // Initial max-samples seed used when constructing a `LinkAudioSink`. Set so
 // that the per-tick memcpy in `OrbitLinkAudioOut::next()` always fits without
 // the UGen ever needing `requestMaxNumSamples` at runtime. Coupled to
-// `kLinkAudioMaxBlockFrames * kLinkAudioNumChannels * 2` — the UGen's
-// `static_assert` enforces the seed >= max-block × 2 relationship.
+// `kLinkAudioMaxBlockFrames * kLinkAudioNumChannels * sizeof(int16_t)` —
+// the UGen's `static_assert` verifies this equals the seed value at the
+// current block-size cap (no slack above the computed minimum).
 constexpr std::size_t kSinkInitialMaxNumSamples = 8192;
 
 #ifdef ORBIT_SC_PLUGIN_BUILD
@@ -81,19 +82,22 @@ struct ChannelMixState {
   float mixBuffer[kLinkAudioMaxBlockFrames * kLinkAudioNumChannels];
 
   // scsynth's `mWorld->mBufCounter` value of the tick currently being
-  // accumulated. -1 means "no current accumulation in flight". Used by next()
-  // to detect tick transitions: when the value differs from the live
-  // mBufCounter, the previous tick's accumulator is flushed to LinkAudio
-  // (only when the gap is exactly 1 — see comment on flush in next()).
+  // accumulated. Negative means "no current accumulation in flight" — the
+  // SinkEntry constructor seeds it to -1, and the flush gate uses `>= 0` so
+  // any negative value short-circuits the flush. Used by next() to detect
+  // tick transitions: when the value differs from the live mBufCounter, the
+  // previous tick's accumulator is flushed to LinkAudio (only when the gap
+  // is exactly 1 — see comment on flush in next()).
   std::int64_t currentBufCounter;
 
   // Frozen at the start of each tick's accumulation; reused at flush so the
   // commit's SessionState matches the audio data being committed. Optional<>
   // is required because `LinkSessionState` has no default constructor.
-  // Invariant: `has_value()` whenever `currentBufCounter >= 0`. The new-tick
-  // branch in next() is the only writer of currentBufCounter, and it always
-  // emplaces the optional in the same straight-line code with no early
-  // return between. The flush gate relies on this to skip a null check.
+  // Invariant: `has_value()` whenever `currentBufCounter >= 0`. Made
+  // structural by the next() write order: emplace runs BEFORE
+  // `currentBufCounter = bufCounter`, so a hypothetical throw between the
+  // two cannot leave the gate open with an empty optional. The flush gate
+  // relies on this to dereference without a null check.
   int currentFrames;
   std::optional<link_audio::LinkSessionState> currentSessionState;
   double currentBeatsAtBufferBegin;

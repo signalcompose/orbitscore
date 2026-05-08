@@ -69,8 +69,9 @@ constexpr double kQuantum = 4.0;
 // of `next()` doesn't have to step over a static_assert mid-RT-code.
 static_assert(orbitscore::kSinkInitialMaxNumSamples >=
                   orbitscore::kLinkAudioMaxBlockFrames *
-                      orbitscore::kLinkAudioNumChannels * 2,
-              "LinkAudioSink seed must cover max block with 2x headroom");
+                      orbitscore::kLinkAudioNumChannels * sizeof(std::int16_t),
+              "LinkAudioSink seed must cover max-block stereo frames "
+              "in int16 bytes (no slack above this minimum at the cap)");
 
 struct OrbitLinkAudioOut : public Unit {
   // Cached at Ctor time; lifetime owned by g_channelRegistry which never
@@ -138,18 +139,25 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
     // at flush time — the captured state describes when the audio was
     // generated, so Live queues it correctly even though we commit one tick
     // later. emplace() avoids a copy of the opaque ApiState through optional.
+    //
+    // Ordering: emplace + frame state are written FIRST, then `currentBufCounter`
+    // is set last. The flush gate (`currentBufCounter >= 0`) opens only after
+    // the optional is populated, so a hypothetical throw from
+    // captureAudioSessionState cannot leave the gate open with an empty
+    // optional. Makes the invariant on ChannelMixState::currentSessionState
+    // structural rather than relying on an unstated no-throw contract.
     const int n =
         std::min(inNumSamples, orbitscore::kLinkAudioMaxBlockFrames);
     const std::size_t clearSamples =
         static_cast<std::size_t>(n) *
         static_cast<std::size_t>(orbitscore::kLinkAudioNumChannels);
     std::memset(mix.mixBuffer, 0, clearSamples * sizeof(float));
-    mix.currentBufCounter = bufCounter;
     mix.currentFrames = n;
     mix.currentSessionState.emplace(unit->link->captureAudioSessionState());
     const auto now = unit->link->clock().micros();
     mix.currentBeatsAtBufferBegin =
         mix.currentSessionState->beatAtTime(now, kQuantum);
+    mix.currentBufCounter = bufCounter;
   }
 
   // Accumulate this UGen's contribution. scsynth guarantees a uniform block
