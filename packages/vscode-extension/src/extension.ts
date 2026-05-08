@@ -8,6 +8,7 @@ import * as vscode from 'vscode'
 import { analyzeMethodChain, getContextualCompletions } from './completion-context'
 import {
   analyzeAudioPathOrdering,
+  analyzeEmptyOutputArg,
   analyzeGlobalOncePerFile,
   analyzeLinkAudioMissingOutput,
   analyzeOutputWithoutLinkAudio,
@@ -1306,6 +1307,17 @@ async function updateDiagnostics(
   // flagged as Error (not Warning) — runtime will throw, so we surface it
   // accordingly at edit time. See DSL spec §8.1.2.
   for (const issue of analyzeLinkAudioMissingOutput(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Error,
+      ),
+    )
+  }
+  // Same severity reasoning as the missing-output analyzer: an empty
+  // .output("") argument throws at runtime regardless of LinkAudio mode.
+  for (const issue of analyzeEmptyOutputArg(text)) {
     diagnostics.push(
       new vscode.Diagnostic(
         new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),

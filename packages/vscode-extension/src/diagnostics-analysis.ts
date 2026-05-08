@@ -228,6 +228,46 @@ export function analyzeOutputWithoutLinkAudio(text: string): DiagnosticIssue[] {
 }
 
 /**
+ * Detection: `.output("")` or whitespace-only argument. This mirrors the
+ * runtime guard in `Sequence.output()` — without an edit-time analyzer,
+ * the user types `.output("")`, sees no squiggle, then hits a runtime throw
+ * with no idea why. Flagged independently of `global.linkAudio()` because
+ * the runtime throw fires regardless of mode.
+ *
+ * @param text ドキュメント全体のテキスト
+ * @returns 空文字列 / whitespace のみを引数とする `.output()` 呼出位置
+ */
+export function analyzeEmptyOutputArg(text: string): DiagnosticIssue[] {
+  const issues: DiagnosticIssue[] = []
+  const lines = text.split('\n')
+
+  // Match .output("") and .output("   ") (whitespace-only) — distinct from
+  // the LinkAudio analyzers which only care about the presence of any
+  // .output() call regardless of argument.
+  const emptyOutputPattern = /\.output\s*\(\s*["']\s*["']\s*\)/g
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    const line = stripLineComment(raw)
+    for (const m of line.matchAll(emptyOutputPattern)) {
+      const startCol = m.index ?? 0
+      issues.push({
+        line: i,
+        startCol,
+        endCol: startCol + m[0].length,
+        message:
+          'seq.output() requires a non-empty channel name. An empty or whitespace-only ' +
+          'argument throws at runtime — drop the .output() call or supply a name like ' +
+          '.output("kick").',
+      })
+    }
+  }
+
+  return issues
+}
+
+/**
  * Detection: any `init global.seq` chain that has `.play(...)` (i.e. produces
  * audio) but never calls `.output(...)`, when the file declares
  * `global.linkAudio()`. Per DSL spec §8.1.2 strict-mode contract, every

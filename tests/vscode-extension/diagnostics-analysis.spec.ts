@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import {
   analyzeAudioPathOrdering,
+  analyzeEmptyOutputArg,
   analyzeGlobalOncePerFile,
   analyzeLinkAudioMissingOutput,
   analyzeOutputWithoutLinkAudio,
@@ -292,6 +293,42 @@ describe('analyzeOutputWithoutLinkAudio', () => {
     ].join('\n')
 
     expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+})
+
+describe('analyzeEmptyOutputArg', () => {
+  it('flags .output("") with empty string', () => {
+    const text = ['var s = init global.seq', 's.audio("k.wav").output("")'].join('\n')
+    const issues = analyzeEmptyOutputArg(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].line).toBe(1)
+    expect(issues[0].message).toContain('non-empty channel name')
+  })
+
+  it('flags .output("   ") with whitespace-only argument', () => {
+    const text = ['var s = init global.seq', 's.audio("k.wav").output("   ")'].join('\n')
+    const issues = analyzeEmptyOutputArg(text)
+    expect(issues).toHaveLength(1)
+  })
+
+  it('does not flag .output("valid")', () => {
+    const text = ['var s = init global.seq', 's.audio("k.wav").output("kick")'].join('\n')
+    expect(analyzeEmptyOutputArg(text)).toEqual([])
+  })
+
+  it('ignores commented-out empty calls', () => {
+    const text = ['// s.output("")', 's.audio("k.wav").output("kick")'].join('\n')
+    expect(analyzeEmptyOutputArg(text)).toEqual([])
+  })
+
+  it('flags multiple empty calls independently', () => {
+    const text = [
+      'var a = init global.seq',
+      'var b = init global.seq',
+      'a.output("")',
+      "b.output('')",
+    ].join('\n')
+    expect(analyzeEmptyOutputArg(text)).toHaveLength(2)
   })
 })
 
