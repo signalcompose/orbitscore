@@ -45,6 +45,7 @@
 #include <SC_PlugIn.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -71,6 +72,13 @@ constexpr int kNumChannels = 2;
 // Quantum 4 = beats per Link cycle (4/4 mapping). Polymeter handling lives in
 // the engine-side scheduler, not in this UGen.
 constexpr double kQuantum = 4.0;
+
+// Build-time check that the per-block memcpy in `next()` fits within the seed
+// buffer size set in channel_registry.cpp. Hoisted to TU scope so a reader of
+// `next()` doesn't have to step over a static_assert mid-RT-code.
+static_assert(orbitscore::kSinkInitialMaxNumSamples >=
+                  kMaxBlockFrames * kNumChannels * 2,
+              "LinkAudioSink seed must cover max block with 2x headroom");
 
 struct OrbitLinkAudioOut : public Unit {
   // Cached at Ctor time; lifetime owned by g_channelRegistry which never
@@ -123,15 +131,6 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
 
   const std::size_t totalSamples =
       static_cast<std::size_t>(n) * static_cast<std::size_t>(kNumChannels);
-  // The sink is seeded with kSinkInitialMaxNumSamples interleaved samples in
-  // channel_registry.cpp, which leaves a 2× headroom over the worst case here
-  // (kMaxBlockFrames * kNumChannels). If either constant changes such that
-  // the headroom disappears we want to break the build, not silently drop
-  // blocks at runtime.
-  static_assert(orbitscore::kSinkInitialMaxNumSamples >=
-                    kMaxBlockFrames * kNumChannels * 2,
-                "LinkAudioSink seed must cover max block with 2x headroom");
-
   std::memcpy(bh.samples, out, totalSamples * sizeof(std::int16_t));
 
   // Beat at buffer begin. We use the Link clock at "now" as a proxy for the
@@ -148,9 +147,12 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
 
 void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
   // `channel` is a control-rate constant arg — `IN0(2)` reads the value.
-  // Cast through `int32_t` so a bogus float (e.g., NaN from a SynthDef bug)
-  // becomes a deterministic id rather than UB.
-  const std::int32_t channelId = static_cast<std::int32_t>(IN0(2));
+  // Casting NaN / ±inf to `int32_t` is undefined behaviour per C++; bypass
+  // the cast for non-finite values and synthesise a sentinel that will fall
+  // through the `id <= 0` reject path in registerChannel / lookup.
+  const float rawChannel = IN0(2);
+  const std::int32_t channelId =
+      std::isfinite(rawChannel) ? static_cast<std::int32_t>(rawChannel) : -1;
   unit->sink = g_channelRegistry.lookup(channelId);
   unit->link = g_channelRegistry.getLinkAudio();
   unit->sampleRate = static_cast<std::uint32_t>(unit->mWorld->mSampleRate);

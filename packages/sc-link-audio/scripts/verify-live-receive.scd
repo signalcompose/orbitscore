@@ -46,7 +46,9 @@ s.waitForBoot({
     SynthDef(\orbitLinkAudioLiveTest, { |channel = 1|
         // 440 Hz / 660 Hz alternating every second so Live's meter clearly
         // shows the signal is changing (a flat tone could be mistaken for DC).
-        var freq = Select.kr(LFPulse.kr(0.5) > 0.5, [440, 660]);
+        // LFPulse outputs 0 or 1 directly, so it can drive Select.kr without
+        // a comparison.
+        var freq = Select.kr(LFPulse.kr(0.5), [440, 660]);
         var sig = SinOsc.ar(freq) * 0.1;  // ~ -20 dBFS
         var stereo = Pan2.ar(sig, 0);
         OrbitLinkAudioOut.ar(stereo[0], stereo[1], channel);
