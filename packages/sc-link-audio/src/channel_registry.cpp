@@ -85,27 +85,26 @@ void ChannelRegistry::shutdownLinkAudio() {
   }
 }
 
-void ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) {
+bool ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) {
   std::lock_guard<std::mutex> lock(impl_->mtx);
   if (!impl_->link) {
     Print("OrbitLinkAudio: registerChannel called before initLinkAudio "
              "(channel id %d) — ignoring\n", channelId);
-    return;
+    return false;
   }
 
   auto it = impl_->sinks.find(channelId);
   if (it != impl_->sinks.end()) {
-    // The TS-side dispatcher only emits /cmd on first occurrence of a name,
-    // so re-registration is effectively unused in production. We deliberately
-    // do NOT call setName() here: LinkAudio.hpp documents LinkAudioSink as
-    // "Thread-safe: no", and a setName() on the OSC thread would race with
-    // BufferHandle ctor/commit on the audio thread on the same sink object.
-    // The Print acts as a regression detector — if the TS dispatcher ever
-    // starts re-emitting, this surfaces immediately.
+    // Re-registration must NOT call setName(): LinkAudio.hpp documents
+    // LinkAudioSink as "Thread-safe: no", so a setName from the /cmd thread
+    // would race with BufferHandle ctor/commit on the audio thread. The TS
+    // dispatcher only emits /cmd on first-name occurrence, so this branch
+    // doubles as a regression detector. Return true: the channel id is
+    // already usable — the discarded rename is not a hard failure.
     Print("OrbitLinkAudio: re-registration of channel id %d ignored "
           "(rename to \"%s\" discarded; setName would race with audio "
           "thread)\n", channelId, name.c_str());
-    return;
+    return true;
   }
 
   // Catch defensively — LinkAudioSink ctor's exception contract is undocumented
@@ -115,12 +114,15 @@ void ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) 
     auto entry = std::make_unique<SinkEntry>(
         *impl_->link, std::move(name), kSinkInitialMaxNumSamples);
     impl_->sinks.emplace(channelId, std::move(entry));
+    return true;
   } catch (const std::exception& e) {
     Print("OrbitLinkAudio: failed to allocate sink for channel id %d: %s\n",
              channelId, e.what());
+    return false;
   } catch (...) {
     Print("OrbitLinkAudio: failed to allocate sink for channel id %d "
              "(unknown exception)\n", channelId);
+    return false;
   }
 }
 
@@ -144,7 +146,7 @@ ChannelRegistry::ChannelRegistry() : impl_(nullptr) {}
 ChannelRegistry::~ChannelRegistry() = default;
 void ChannelRegistry::initLinkAudio(double, const std::string&) {}
 void ChannelRegistry::shutdownLinkAudio() {}
-void ChannelRegistry::registerChannel(std::int32_t, std::string) {}
+bool ChannelRegistry::registerChannel(std::int32_t, std::string) { return false; }
 SinkEntry* ChannelRegistry::lookup(std::int32_t) { return nullptr; }
 link_audio::LinkAudio* ChannelRegistry::getLinkAudio() { return nullptr; }
 

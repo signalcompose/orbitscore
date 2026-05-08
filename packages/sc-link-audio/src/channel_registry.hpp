@@ -146,8 +146,14 @@ class ChannelRegistry {
   // `setName()` from the OSC `/cmd` thread would race with `BufferHandle`
   // ctor/commit on the audio thread. The TS-side dispatcher only emits `/cmd`
   // on first occurrence of a name, so no rename path exists in production.
-  // Called from the OSC `/cmd` thread.
-  void registerChannel(std::int32_t channelId, std::string name);
+  // Called from the OSC `/cmd` thread (or from an async stage2 NRT callback).
+  //
+  // Returns true on success (sink allocated OR id already registered — both
+  // are observable to the caller as "channel id is now usable"). Returns
+  // false only when the sink ctor throws or the registry's LinkAudio
+  // singleton is missing — both are observability-worthy failure modes that
+  // the OSC reply path uses to decide between sending /done vs. swallowing.
+  bool registerChannel(std::int32_t channelId, std::string name);
 
   // Look up the SinkEntry for a channel id. Returns nullptr if
   // `registerChannel` was never called for this id, or if `initLinkAudio`

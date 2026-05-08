@@ -17,6 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.85 Issue #205 + #206 / Epic #187: LinkAudio plugin follow-ups (May 08, 2026)
+
+**Date**: May 08, 2026
+**Status**: ⏳ IN PROGRESS (PR pending)
+**Branch**: `205-206-link-audio-plugin-followup`
+**Issues**: signalcompose/orbitscore#205, signalcompose/orbitscore#206
+
+**目的**: PR #204 (Step 2.3 sum-by-name) merge 後の review-team で deferred とした 2 件の Important 指摘を解消する。 plugin 内部品質と test harness カバレッジを改善し、 v1.x release 前の technical debt を削減。
+
+**実装内容**:
+
+#### Issue #206: blockSize truncation test harness
+
+- `scripts/verify-blocksize-truncation.scd` 新規追加
+- `s.options.blockSize = 4096` (>`kLinkAudioMaxBlockFrames` = 2048) で boot
+- `s.options.hardwareBufferSize = 4096` も同時に設定 (engine block ≤ HW buffer 制約のため)
+- 検証項目:
+  - scsynth が oversized block で boot 成功
+  - `OrbitLinkAudioOut_Ctor` が "server blockSize=4096 exceeds kLinkAudioMaxBlockFrames=2048" の warning Print を emit
+  - `next()` が `std::min(inNumSamples, kLinkAudioMaxBlockFrames)` で安全に truncate、 crash しない
+
+**なぜ別 harness にしたか**: `verify-plugin.scd` 本体は default block size で動作確認するので、 oversize 検証だけ別 boot が必要。 同 harness 内で blockSize 変更すると全 Synth で warn が flood され、 既存 [OK] line の signal が劣化する。
+
+#### Issue #205: /cmd registerLinkAudioChannel OSC reply via DoAsynchronousCommand
+
+- `ChannelRegistry::registerChannel(...)` を `void` → `bool` 戻りに変更
+  - `true`: 新規登録成功、 または既存 id (idempotent re-register)
+  - `false`: alloc 例外、 LinkAudio singleton 未初期化
+- `OrbitLinkAudioOut_RegisterChannel` を `DoAsynchronousCommand` ベースに refactor
+  - 4 stage callback (stage2 NRT / stage3 RT / stage4 NRT / cleanup NRT)
+  - stage2: `g_channelRegistry.registerChannel` を呼んで `cmd->success` に格納
+  - stage3: `return true` (RT で work なし、 chain 継続のため必須 — false だと scsynth 観測上 stage4 が呼ばれない)
+  - stage4: `return cmd->success` → true 時のみ scsynth が `/done /orbit/registerLinkAudioChannel` を OSC 経由で送信
+  - cleanup: cmdData の delete
+- 即時 reject (id ≤ 0 / name nullptr / name 空) は同期 path で従来通り Print + early return (DoAsync 不要)
+- TS 側の使用想定:
+  - 成功 → `/done` 受信
+  - 失敗 (alloc 系) → `/done` timeout で検出 (scsynth log にも diagnostic Print が残る)
+  - 失敗 (validation 系) → `/done` timeout、 これは TS 側 client bug の signal
+
+**verify-plugin.scd 拡張**:
+- OSCFunc で `/done /orbit/registerLinkAudioChannel` を listen、 `doneCount` を集計
+- 期待値: 3 件 (id=1 first time / id=1 rename idempotent / id=3 cross-channel)
+  - validation reject 3 件 (id=2 empty / id=-5 / id=4 no string) は `/done` 送らない
+- 末尾で `if (doneCount != 3) { 1.exit }` で assertion
+
+**実装ファイル**:
+- `scripts/verify-blocksize-truncation.scd` — 新規 (#206)
+- `scripts/verify-plugin.scd` — `/done` listen + assertion 追加 (#205)
+- `src/channel_registry.hpp` — `registerChannel` 戻り値 bool 化 (#205)
+- `src/channel_registry.cpp` — 戻り値 propagate (#205)
+- `src/orbit_link_audio_out.cpp` — DoAsynchronousCommand 4 stage 実装 (#205)
+
+**検証結果**:
+- `cmake --build build` 成功
+- `verify-plugin.scd` 全 10 step 通過 (新規 step 10 = `/done` 受信 assertion)
+- `verify-blocksize-truncation.scd` 通過 (warn Print 確認 + no-crash)
+
+**設計上の判断**:
+- **stage3 を `return true` に固定**: SDK header コメントは "completion msg performed if stage3 returns true" としか書かないが、 観測上 false だと stage4 まで chain が続かず /done が送られない。 RT 側で work しないので unconditional true は安全
+- **失敗時は /done を送らない (vs 別 reply で /fail を送る)**: public plugin SDK に `/fail` 送信 API なし、 framework の自動送信 `/fail` は alloc-failure の特定 message 用。 「失敗 = timeout」の契約は SC built-in command (`/b_alloc` 等) と一致しており、 TS 側で extra branch logic 不要
+- **fixed-size 256 byte name buffer**: 動的 alloc を避けて cmdData を POD 化、 cleanup で `delete cmd` だけで済む。 256 chars は Live channel name の実用上限を充分上回る
+
+**残課題** (本 PR scope 外):
+- Step 4 build/distribution pipeline (Issue #201)
+
+---
+
 ### 6.84 Issue #200 / Epic #187: Link Audio sum-by-name (Step 2.3) (May 08, 2026)
 
 **Date**: May 08, 2026

@@ -32,6 +32,9 @@
 //   8. Synths on two distinct registered channel ids run concurrently
 //      (cross-channel isolation no-crash check)
 //   9. /cmd missing string argument is rejected via `gets(nullptr)` sentinel
+//  10. /done /orbit/registerLinkAudioChannel arrives exactly 3 times — once
+//      per successful registration. Verifies the DoAsynchronousCommand
+//      stage4 OSC-reply plumbing (alloc-failure paths emit no /done).
 //
 // Note on assertion strength: this harness can only detect a crash, missing
 // class, or boot timeout. The Print diagnostics added in iter 1 (sink null
@@ -72,6 +75,22 @@ SystemClock.sched(30, {
 });
 
 s.waitForBoot({
+    var doneCount = 0;
+    // Listen for /done /orbit/registerLinkAudioChannel — the plugin sends
+    // this via DoAsynchronousCommand stage4 only on successful sink
+    // allocation. Argument-validation rejects (id ≤ 0, empty/missing name)
+    // are synchronous and do NOT trigger /done. Counting the success arrivals
+    // lets the harness assert the plumbing works end-to-end.
+    // sclang's OSCFunc surfaces OSC strings as Symbols, so compare via
+    // `.asString` to keep the literal expectation readable. The path string
+    // mirrors `kRegisterLinkAudioChannelCmd` in `src/orbit_link_audio_out.cpp` —
+    // a rename in either direction must update both.
+    var doneListener = OSCFunc({ |msg|
+        if (msg[1].asString == "/orbit/registerLinkAudioChannel") {
+            doneCount = doneCount + 1;
+        };
+    }, "/done").fix;
+
     "  [OK] scsynth booted with plugin loaded (no crash on dlopen)".postln;
 
     // Positive registration. The plugin should accept this without erroring
@@ -158,6 +177,22 @@ s.waitForBoot({
 
     2.0.wait;
     "  [OK] held for 2 s — no crash, no errors above => plugin is functional".postln;
+
+    // Assert /done OSC reply count. Argument-validation rejects emit no
+    // /done (synchronous path), so only successful sink allocations are
+    // counted. Of the 6 /cmd sends above, 3 succeed and 3 reject.
+    if (doneCount != 3) {
+        "  FAIL: expected 3 /done /orbit/registerLinkAudioChannel replies, got %"
+            .format(doneCount).postln;
+        1.exit;
+    } {
+        "  [OK] received exactly 3 /done /orbit/registerLinkAudioChannel replies (DoAsynchronousCommand stage4 path verified)".postln;
+    };
+    // Free the listener even though `0.exit` would tear it down — keeps the
+    // harness usable from an interactive sclang session without leaking
+    // counted matches into a subsequent `waitForBoot` block.
+    doneListener.free;
+
     "=== verification complete ===".postln;
     s.quit;
     0.5.wait;
