@@ -99,7 +99,10 @@ s.waitForBoot({
 
     // Negative: unregistered channel id. Ctor logs a Print + next() early
     // returns on null sink. Look for "channel id 999 has no registered sink".
+    // s.sync ensures the Ctor's Print flushes before the [OK] line, matching
+    // the pattern used for the registered Synth above.
     Synth(\orbitLinkAudioTest, [\channel, 999]);
+    s.sync;
     "  [OK] SynthDef instantiated on unregistered channel id=999 — expect 'no registered sink' Print above".postln;
 
     2.0.wait;

@@ -10,14 +10,16 @@
 //
 // Threading model:
 //   - `initLinkAudio` / `shutdownLinkAudio`: PluginLoad / PluginUnload (server
-//     startup / shutdown thread). Single-shot.
+//     startup / shutdown thread). Single-shot. PluginUnload is assumed to run
+//     after scsynth has stopped its audio engine — sinks held by live UGens
+//     would otherwise race with `BufferHandle` consumers.
 //   - `registerChannel`: OSC `/cmd` handler thread. Holds the mutex briefly
 //     to insert into the map and ctor a new sink.
 //   - `lookup`: UGen ctor (server NRT command thread). Holds the mutex briefly
 //     to read; the returned raw pointer stays valid for the registry lifetime
 //     because the registry never erases entries during a session (a future
-//     `release()` could change this — keep the audio thread cache invalidation
-//     story in mind if so).
+//     `release()` would invalidate cached pointers held by `next()` — adding
+//     erase requires a cache-invalidation strategy on the audio thread).
 //   - The audio thread itself never touches the registry — UGens cache the
 //     `LinkAudioSink*` once in their `Ctor` and use it lock-free in `next()`.
 

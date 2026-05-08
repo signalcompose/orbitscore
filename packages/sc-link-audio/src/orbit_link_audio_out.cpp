@@ -134,6 +134,9 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
 
   const std::size_t totalSamples =
       static_cast<std::size_t>(n) * static_cast<std::size_t>(kNumChannels);
+  // bh.samples capacity is guaranteed by the static_assert at TU scope:
+  // kSinkInitialMaxNumSamples >= kMaxBlockFrames * kNumChannels * 2, so
+  // totalSamples (≤ kMaxBlockFrames * kNumChannels) always fits.
   std::memcpy(bh.samples, out, totalSamples * sizeof(std::int16_t));
 
   // Beat at buffer begin. We use the Link clock at "now" as a proxy for the
