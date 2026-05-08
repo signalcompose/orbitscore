@@ -68,7 +68,13 @@ PR #191 の claude bot review (3 件) で指摘された必須 / 推奨項目へ
    - 旧 「`.output()` 未指定は hardware にフォールバック」 → strict mode: runtime error
    - 「`global.linkAudio()` 未宣言で `.output()` 呼出」 のフェイルセーフ警告は別経路として残置 (mode 有効化忘れ用)
 
-8. **main 取り込み + WORK_LOG renumber**:
+8. **vsce package CI failure 修正** (`packages/vscode-extension/.vscodeignore`):
+   - PR #195 で `packages/sc-link-audio/` が main に landed したため、 PR #191 の release.yml CI で `vsce package` が `invalid relative path: extension/../sc-link-audio/.gitignore` で失敗
+   - 原因: vsce 3.x は sibling workspace package を walk し、 `../sc-link-audio/` を .vsix に含めようとするが、 vsix 内では `..` を含む path が許されない
+   - 修正: `.vscodeignore` に `../sc-link-audio/**` を追加 (既存の `../engine/**` と同 pattern)。 sc-link-audio は GPL-2.0-or-later の独立 artifact (Step 2 / 4) として別配布する設計なので .vsix 同梱は元々スコープ外
+   - 本来 #195 で対応すべきだったが当時 release.yml の paths filter (`packages/sc-link-audio/**` を含まない) のため CI で検知されず、 PR #191 で初めて顕在化した。 main の release.yml は tag push でのみ走るので次の release tag までは不顕性
+
+9. **main 取り込み + WORK_LOG renumber**:
    - `git merge origin/main` → conflict は WORK_LOG.md のみ (sc-link-audio/ 等 add は auto-merge)
    - HEAD の 6.79 (Step 3.3+3.5) → 6.81、 6.78 (Step 3.2) → 6.80、 6.77 (Step 3.1) → 6.79 に renumber
    - origin/main の 6.78 (Step 2.1) / 6.77 (Step 1) / 6.76 (Marketplace gate) / 6.75 (v1.1.0) は保持

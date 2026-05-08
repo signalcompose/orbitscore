@@ -18,6 +18,12 @@ vsc-extension-quickstart.md
 *.tgz
 ../../**
 ../engine/**
+# packages/sc-link-audio/ is a sibling workspace member that ships as a
+# separate GPL-2.0-or-later artifact (Step 2 / Step 4 of Epic #187), not
+# as part of the .vsix. Without this exclusion vsce 3.x walks the workspace
+# and tries to package the sibling, which fails with
+# "invalid relative path: extension/../sc-link-audio/.gitignore".
+../sc-link-audio/**
 engine/package-lock.json
 engine/package.json
 # Keep built engine, SuperCollider files, and runtime dependencies
