@@ -41,6 +41,7 @@ s.waitForBoot({
     "  [OK] scsynth booted".postln;
 
     s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", 1, "test-tone");
+    s.sync;
     "  [OK] registered channel id=1 name='test-tone'".postln;
 
     SynthDef(\orbitLinkAudioLiveTest, { |channel = 1|

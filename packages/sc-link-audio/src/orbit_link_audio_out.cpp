@@ -61,9 +61,11 @@ orbitscore::ChannelRegistry g_channelRegistry;
 
 // Largest scsynth block size we will ever see. SC_PlugIn does not expose a
 // hard upper bound, but production servers default to 64 with rare bumps to
-// 1024. We size scratch at 2048 stereo frames to absorb that without RT
-// allocation. Larger blocks fall back to dropping the tail of the buffer
-// (better than tearing on a memcpy overrun).
+// 1024. We size scratch at 2048 stereo frames (= 8192 bytes per Unit) to
+// absorb that with 2× headroom, which also matches the LinkAudioSink seed
+// size in channel_registry.hpp via the static_assert below. Larger blocks
+// fall back to dropping the tail of the buffer (better than tearing on a
+// memcpy overrun) and Ctor logs a warning so the operator notices.
 constexpr int kMaxBlockFrames = 2048;
 constexpr int kNumChannels = 2;
 

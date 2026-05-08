@@ -39,7 +39,12 @@ packages/sc-link-audio/
 
 ```bash
 # 1. submodule 初期化 (clone 直後の clean state に対する初回のみ)
-git submodule update --init --recursive packages/sc-link-audio
+#
+#    SuperCollider repo は 200 MB+ あるので `--depth 1` を付けて
+#    shallow clone を推奨。 ローカル scsynth と整合する Version-3.14.0
+#    tag のみ取得できれば十分で、 history は不要。 Ableton/link も
+#    header-only なので shallow で問題ない。
+git submodule update --init --recursive --depth 1 packages/sc-link-audio
 
 # 2. CMake configure + build
 #    macOS arm64 (Apple Silicon) only。 absolute path で SC_PATH と
