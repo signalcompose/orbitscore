@@ -330,7 +330,17 @@ void OrbitLinkAudioOut_RegisterChannel(World* world, void* /*userData*/,
   }
   cmd->id = id;
   // Truncate over-long names rather than refusing — name was already
-  // validated as non-null and non-empty above.
+  // validated as non-null and non-empty above. Live channel names are
+  // conventionally < 64 chars, so the 256-byte cap should never bite in
+  // production; the Print on truncation makes the silent truncation
+  // visible if it ever does.
+  if (std::strlen(name) >= sizeof(cmd->name)) {
+    Print("OrbitLinkAudio: /cmd registerLinkAudioChannel id=%d name "
+          "truncated from %zu to %zu bytes — Live will display the "
+          "shortened form\n",
+          static_cast<int>(id), std::strlen(name),
+          sizeof(cmd->name) - 1);
+  }
   std::strncpy(cmd->name, name, sizeof(cmd->name) - 1);
   cmd->name[sizeof(cmd->name) - 1] = '\0';
 

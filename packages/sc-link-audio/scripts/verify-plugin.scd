@@ -79,10 +79,11 @@ SystemClock.sched(30, {
 s.waitForBoot({
     var doneCount = 0;
     // Listen for /done /orbit/registerLinkAudioChannel — the plugin sends
-    // this via DoAsynchronousCommand stage4 only on successful sink
-    // allocation. Argument-validation rejects (id ≤ 0, empty/missing name)
-    // are synchronous and do NOT trigger /done. Counting the success arrivals
-    // lets the harness assert the plumbing works end-to-end.
+    // this via DoAsynchronousCommand stage4 when `registerChannel` returns
+    // true (covers both new sink allocations AND idempotent re-registrations
+    // of an existing id). Argument-validation rejects (id ≤ 0, empty/missing
+    // name) are synchronous and do NOT trigger /done. Counting these
+    // arrivals lets the harness assert the plumbing works end-to-end.
     // sclang's OSCFunc surfaces OSC strings as Symbols, so compare via
     // `.asString` to keep the literal expectation readable. The path string
     // mirrors `kRegisterLinkAudioChannelCmd` in `src/orbit_link_audio_out.cpp` —
