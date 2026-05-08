@@ -49,6 +49,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <new>  // std::nothrow
 #include <limits>
 #include <string>
 
@@ -60,6 +61,14 @@ InterfaceTable* ft;
 namespace {
 
 orbitscore::ChannelRegistry g_channelRegistry;
+
+// Single source of truth for the /cmd path string. Used by the
+// `DefinePlugInCmd` registration and the `DoAsynchronousCommand` cmdName
+// arg (the latter becomes the /done reply name). The string value must
+// match the `msg[1]` comparison in `scripts/verify-plugin.scd` — a rename
+// here requires updating that test's literal in lockstep.
+constexpr const char* kRegisterLinkAudioChannelCmd =
+    "/orbit/registerLinkAudioChannel";
 
 // Quantum 4 = beats per Link cycle (4/4 mapping). Polymeter handling lives in
 // the engine-side scheduler, not in this UGen.
@@ -223,8 +232,59 @@ void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
 // The TS-side dispatcher emits this once per first occurrence of a name. Args:
 //   - i : channel id (matches the integer the UGen sees on `IN0(2)`)
 //   - s : displayed channel name in Live ("kick", "drums", ...)
-void OrbitLinkAudioOut_RegisterChannel(World* /*world*/, void* /*userData*/,
-                                       sc_msg_iter* args, void* /*replyAddr*/) {
+//
+// OSC reply contract:
+//   - Success path: `/done /orbit/registerLinkAudioChannel` is sent to the
+//     OSC client via the standard `DoAsynchronousCommand` stage4 mechanism.
+//     The TS-side `LinkAudioChannelRegistry` can rely on /done arrival to
+//     confirm the sink was allocated and the channel id is usable.
+//   - Allocation failure (sink ctor throws / link uninit): /done is NOT
+//     sent — stage4 returns false. The TS side observes failure as a
+//     /done timeout. scsynth stderr also carries the diagnostic Print.
+//   - Argument validation failure (malformed id or name): rejected
+//     synchronously here with a Print — DoAsynchronousCommand is not used
+//     for these because the rejection has no async work to perform. The TS
+//     side still observes failure as a /done timeout. The asymmetry is
+//     acceptable: argument-validation rejects are TS bugs (the client
+//     should never send them in production), while alloc failures are
+//     server-side resource issues.
+
+// cmdData payload for the registration async command. The OSC name string
+// is copied into a fixed-size buffer so the cmdData itself is plain-old-data
+// — no heap pointers to manage during stage transitions, just `delete cmd`
+// in cleanup. 256 chars covers Live's display-name length (which is
+// effectively unbounded in the API but conventionally < 64) with margin.
+struct RegisterChannelCmd {
+  std::int32_t id;
+  char name[256];
+  bool success;
+};
+
+bool RegisterChannelCmd_Stage2(World* /*world*/, void* cmdData) {
+  auto* cmd = static_cast<RegisterChannelCmd*>(cmdData);
+  cmd->success = g_channelRegistry.registerChannel(
+      cmd->id, std::string(cmd->name));
+  return true;
+}
+
+bool RegisterChannelCmd_Stage3(World* /*world*/, void* /*cmdData*/) {
+  // SDK header reads "completion msg performed if stage3 returns true", but
+  // observed behaviour is stricter: stage4 is not dispatched unless stage3
+  // returns true. Pure pass-through, RT-safe (no work).
+  return true;
+}
+
+bool RegisterChannelCmd_Stage4(World* /*world*/, void* cmdData) {
+  auto* cmd = static_cast<RegisterChannelCmd*>(cmdData);
+  return cmd->success;
+}
+
+void RegisterChannelCmd_Cleanup(World* /*world*/, void* cmdData) {
+  delete static_cast<RegisterChannelCmd*>(cmdData);
+}
+
+void OrbitLinkAudioOut_RegisterChannel(World* world, void* /*userData*/,
+                                       sc_msg_iter* args, void* replyAddr) {
   // Pass an out-of-band sentinel as the default. The TS-side
   // `LinkAudioChannelRegistry` allocates ids starting at 1, so any non-positive
   // id is malformed (missing or wrong-type integer argument). Without this,
@@ -251,7 +311,43 @@ void OrbitLinkAudioOut_RegisterChannel(World* /*world*/, void* /*userData*/,
              static_cast<int>(id));
     return;
   }
-  g_channelRegistry.registerChannel(id, std::string(name));
+
+  // Defer the registry mutation to an async stage so we can route a /done
+  // reply back to the OSC client via the framework's stage4 → /done path.
+  // Synchronous registration (the previous design) had no way to signal
+  // success/failure to the caller, leaving the TS side in a split-brain
+  // state when the sink ctor threw.
+  // Use nothrow so a `std::bad_alloc` cannot escape the OSC dispatch loop
+  // (mirrors the defensive-catch pattern in `initLinkAudio` /
+  // `registerChannel`). `{}` value-initialises POD members so a future
+  // refactor that adds an early-return path in the stage chain cannot
+  // observe an uninitialised `success`.
+  auto* cmd = new (std::nothrow) RegisterChannelCmd{};
+  if (!cmd) {
+    Print("OrbitLinkAudio: /cmd registerLinkAudioChannel id=%d cmdData "
+          "allocation failed — ignoring\n", static_cast<int>(id));
+    return;
+  }
+  cmd->id = id;
+  // Truncate over-long names rather than refusing — name was already
+  // validated as non-null and non-empty above. Live channel names are
+  // conventionally < 64 chars, so the 256-byte cap should never bite in
+  // production; the Print on truncation makes the silent truncation
+  // visible if it ever does.
+  if (std::strlen(name) >= sizeof(cmd->name)) {
+    Print("OrbitLinkAudio: /cmd registerLinkAudioChannel id=%d name "
+          "truncated from %zu to %zu bytes — sink registered with the "
+          "shortened name\n",
+          static_cast<int>(id), std::strlen(name),
+          sizeof(cmd->name) - 1);
+  }
+  std::strncpy(cmd->name, name, sizeof(cmd->name) - 1);
+  cmd->name[sizeof(cmd->name) - 1] = '\0';
+
+  DoAsynchronousCommand(world, replyAddr, kRegisterLinkAudioChannelCmd, cmd,
+                        RegisterChannelCmd_Stage2, RegisterChannelCmd_Stage3,
+                        RegisterChannelCmd_Stage4, RegisterChannelCmd_Cleanup,
+                        0, nullptr);
 }
 
 }  // namespace
@@ -264,7 +360,7 @@ PluginLoad(OrbitLinkAudio) {
   // what other peers (Live, etc.) display in their Link UI.
   g_channelRegistry.initLinkAudio(120.0, "OrbitScore");
 
-  DefinePlugInCmd("/orbit/registerLinkAudioChannel",
+  DefinePlugInCmd(kRegisterLinkAudioChannelCmd,
                   OrbitLinkAudioOut_RegisterChannel, nullptr);
   DefineSimpleUnit(OrbitLinkAudioOut);
 }
