@@ -48,6 +48,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 
 // External linkage so channel_registry.cpp can also use the `Print` macro,
@@ -149,12 +150,16 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
 
 void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
   // `channel` is a control-rate constant arg — `IN0(2)` reads the value.
-  // Casting NaN / ±inf to `int32_t` is undefined behaviour per C++; bypass
-  // the cast for non-finite values and synthesise a sentinel that will fall
-  // through the `id <= 0` reject path in registerChannel / lookup.
+  // Casting NaN / ±inf or any finite value outside `int32_t` range to int is
+  // undefined behaviour per C++. Reject both classes and fall through to the
+  // `id <= 0` reject path in registerChannel / lookup.
   const float rawChannel = IN0(2);
+  constexpr float kIntMin = static_cast<float>(std::numeric_limits<std::int32_t>::min());
+  constexpr float kIntMax = static_cast<float>(std::numeric_limits<std::int32_t>::max());
   const std::int32_t channelId =
-      std::isfinite(rawChannel) ? static_cast<std::int32_t>(rawChannel) : -1;
+      (std::isfinite(rawChannel) && rawChannel >= kIntMin && rawChannel <= kIntMax)
+          ? static_cast<std::int32_t>(rawChannel)
+          : -1;
   unit->sink = g_channelRegistry.lookup(channelId);
   unit->link = g_channelRegistry.getLinkAudio();
   unit->sampleRate = static_cast<std::uint32_t>(unit->mWorld->mSampleRate);

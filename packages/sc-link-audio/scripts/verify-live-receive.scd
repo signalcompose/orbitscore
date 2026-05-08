@@ -37,6 +37,14 @@ s = Server.local;
 s.options.numOutputBusChannels = 2;
 s.options.numInputBusChannels = 2;
 
+// Wall-clock guard: the script publishes for ~30 s and then quits, but if
+// boot or `s.quit` hangs we don't want a stranded process. 60 s gives a
+// generous margin over the intentional 30 s hold.
+SystemClock.sched(60, {
+    "FAIL: verify-live-receive timed out after 60 s".postln;
+    1.exit;
+});
+
 s.waitForBoot({
     "  [OK] scsynth booted".postln;
 
