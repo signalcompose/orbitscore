@@ -17,24 +17,23 @@
 //   2. acquire `LinkAudioSink::BufferHandle`
 //   3. memcpy into the buffer
 //   4. compute `beatsAtBufferBegin` from `captureAudioSessionState` + Link clock
-//   5. commit at the scsynth hardware sample rate (Step 2.2 commits at the
-//      input SR; resampling to a separate target SR is left to a follow-up;
-//      see WORK_LOG 6.83).
+//   5. commit at the scsynth hardware sample rate (resampling to a different
+//      target SR is a future follow-up — currently we expect the host to be
+//      configured at the LinkAudio peer's SR).
 //
 // Realtime safety:
-//   - The LinkAudioSink lookup happens once in `Ctor` (NRT command thread).
-//     `next()` only dereferences a cached raw pointer.
+//   - The LinkAudioSink and LinkAudio* are looked up once in `Ctor` (NRT
+//     command thread). `next()` only dereferences cached raw pointers and
+//     never re-enters the registry mutex.
 //   - No allocations / locks / blocking calls in `next()`. The int16 scratch
 //     buffer is part of the Unit struct.
 //   - `captureAudioSessionState`, `commit`, `requestMaxNumSamples` are
 //     documented as realtime-safe in `LinkAudio.hpp`.
 //
-// Multi-sequence to the same channel (sum-by-name, E2E checklist §C):
-//   Step 2.2 only routes a single sequence per channel cleanly. When two
-//   sequences share a channel id, both UGens currently `commit` independently
-//   and the last write per audio tick wins. Step 2.3 will introduce a
-//   per-channel mix buffer + commit serialization. Documented as a known
-//   limitation in WORK_LOG.
+// Multi-sequence to the same channel (sum-by-name):
+//   When two sequences share a channel id, both UGens currently `commit`
+//   independently and the last write per audio tick wins. A per-channel mix
+//   buffer + commit serialization is tracked separately as a follow-up.
 
 #include "channel_registry.hpp"
 #include "link_audio_facade.hpp"
@@ -65,12 +64,21 @@ constexpr int kNumChannels = 2;
 
 // The stereo contract is fixed at the SynthDef level. The DSL's mono inputs
 // are upmixed via Pan2 in `orbitPlayBufLink` before they reach this UGen.
-constexpr double kQuantum = 4.0;  // Standard 4/4 mapping. See WORK_LOG 6.83 for polymeter follow-up.
+// Quantum 4 = beats per Link cycle (4/4 mapping). Polymeter handling lives in
+// the engine-side scheduler, not in this UGen.
+constexpr double kQuantum = 4.0;
 
 struct OrbitLinkAudioOut : public Unit {
   // Cached at Ctor time; lifetime owned by g_channelRegistry which never
-  // erases entries during a session (release() is reserved for v1.2.x).
+  // erases entries during a session.
   orbitscore::link_audio::LinkAudioSink* sink;
+
+  // Cached at Ctor time so `next()` never touches g_channelRegistry's mutex
+  // (the audio thread must remain lock-free).
+  orbitscore::link_audio::LinkAudio* link;
+
+  // Cached SR so `next()` doesn't dereference `mWorld->mSampleRate` per block.
+  std::uint32_t sampleRate;
 
   // Per-block scratch for float → int16 interleaved conversion. Living inside
   // the Unit avoids any RT allocation in `next()`.
@@ -78,11 +86,9 @@ struct OrbitLinkAudioOut : public Unit {
 };
 
 void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
+  // A non-null sink already implies LinkAudio was initialised before
+  // registerChannel ran — see channel_registry.cpp::registerChannel.
   if (!unit->sink) {
-    return;
-  }
-  auto* link = g_channelRegistry.getLinkAudio();
-  if (!link) {
     return;
   }
 
@@ -110,29 +116,29 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
 
   const std::size_t totalSamples =
       static_cast<std::size_t>(n) * static_cast<std::size_t>(kNumChannels);
-  if (bh.maxNumSamples < totalSamples) {
-    // The sink's buffer is too small. Request a bigger buffer for the next
-    // tick (RT-safe per `LinkAudio.hpp`) and skip this commit. This typically
-    // only fires on the very first block before the sink has settled.
-    unit->sink->requestMaxNumSamples(totalSamples * 2);
-    return;
-  }
+  // The sink is seeded with kSinkInitialMaxNumSamples interleaved samples in
+  // channel_registry.cpp, which leaves a 2× headroom over the worst case here
+  // (kMaxBlockFrames * kNumChannels). If either constant changes such that
+  // the headroom disappears we want to break the build, not silently drop
+  // blocks at runtime.
+  static_assert(orbitscore::kSinkInitialMaxNumSamples >=
+                    kMaxBlockFrames * kNumChannels * 2,
+                "LinkAudioSink seed must cover max block with 2x headroom");
 
   std::memcpy(bh.samples, out, totalSamples * sizeof(std::int16_t));
 
   // Beat at buffer begin. We use the Link clock at "now" as a proxy for the
   // start of this audio block. The error is at most one block (~1.4 ms at
   // 48 kHz / 64 frames), well below the human-perceptible Link sync window.
-  // Refining to a hardware-derived buffer-begin timestamp is a Step 4 follow-up.
-  auto sessionState = link->captureAudioSessionState();
-  const auto now = link->clock().micros();
+  // Refining to a hardware-derived buffer-begin timestamp is left to a future
+  // pass once the boot pipeline is wired.
+  auto sessionState = unit->link->captureAudioSessionState();
+  const auto now = unit->link->clock().micros();
   const double beatsAtBufferBegin = sessionState.beatAtTime(now, kQuantum);
-  const std::uint32_t sr =
-      static_cast<std::uint32_t>(unit->mWorld->mSampleRate);
 
   bh.commit(sessionState, beatsAtBufferBegin, kQuantum,
             static_cast<std::size_t>(n),
-            static_cast<std::size_t>(kNumChannels), sr);
+            static_cast<std::size_t>(kNumChannels), unit->sampleRate);
 }
 
 void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
@@ -141,6 +147,8 @@ void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
   // becomes a deterministic id rather than UB.
   const std::int32_t channelId = static_cast<std::int32_t>(IN0(2));
   unit->sink = g_channelRegistry.lookup(channelId);
+  unit->link = g_channelRegistry.getLinkAudio();
+  unit->sampleRate = static_cast<std::uint32_t>(unit->mWorld->mSampleRate);
   std::memset(unit->scratch, 0, sizeof(unit->scratch));
 
   SETCALC(OrbitLinkAudioOut_next);
@@ -148,8 +156,7 @@ void OrbitLinkAudioOut_Ctor(OrbitLinkAudioOut* unit) {
 
 // `/cmd /orbit/registerLinkAudioChannel <id> <name>` handler.
 //
-// TS-side dispatcher emits this once per first occurrence of a name (see
-// follow-up patch on `link-audio-channels.ts`). Args:
+// The TS-side dispatcher emits this once per first occurrence of a name. Args:
 //   - i : channel id (matches the integer the UGen sees on `IN0(2)`)
 //   - s : displayed channel name in Live ("kick", "drums", ...)
 void OrbitLinkAudioOut_RegisterChannel(World* /*world*/, void* /*userData*/,

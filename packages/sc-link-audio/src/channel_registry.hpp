@@ -15,7 +15,9 @@
 //     to insert into the map and ctor a new sink.
 //   - `lookup`: UGen ctor (server NRT command thread). Holds the mutex briefly
 //     to read; the returned raw pointer stays valid for the registry lifetime
-//     because Step 2.2 never erases entries (release() is reserved for v1.2.x).
+//     because the registry never erases entries during a session (a future
+//     `release()` could change this — keep the audio thread cache invalidation
+//     story in mind if so).
 //   - The audio thread itself never touches the registry — UGens cache the
 //     `LinkAudioSink*` once in their `Ctor` and use it lock-free in `next()`.
 
@@ -23,11 +25,17 @@
 
 #include "link_audio_facade.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 
 namespace orbitscore {
+
+// Initial max-samples seed used when constructing a `LinkAudioSink`. Exposed
+// so the UGen can `static_assert` that its per-block memcpy fits within the
+// seed without ever needing `requestMaxNumSamples` at runtime.
+constexpr std::size_t kSinkInitialMaxNumSamples = 8192;
 
 class ChannelRegistry {
  public:
@@ -54,7 +62,7 @@ class ChannelRegistry {
   // Look up the sink for a channel id. Returns nullptr if `registerChannel`
   // was never called for this id, or if `initLinkAudio` was never called.
   // Called from the UGen Ctor (NRT command thread). The returned pointer is
-  // valid for the registry's lifetime; Step 2.2 never erases entries.
+  // valid for the registry's lifetime; entries are never erased during a session.
   link_audio::LinkAudioSink* lookup(std::int32_t channelId);
 
   // Borrowed pointer to the singleton. Used by the UGen to capture audio

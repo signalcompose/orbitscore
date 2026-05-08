@@ -18,7 +18,7 @@
 //   s.sendMsg(\cmd, "/orbit/registerLinkAudioChannel", channelId, name);
 //
 // See `packages/engine/src/audio/supercollider/event-scheduler.ts` for the
-// production dispatch path. (TS-side `/cmd` wiring lands in Step 4.)
+// production dispatch path that emits the `/cmd` from the engine side.
 
 OrbitLinkAudioOut : UGen {
     *ar { |left, right, channel = 0|
@@ -29,9 +29,9 @@ OrbitLinkAudioOut : UGen {
         // OrbitLinkAudioOut has no audible output; treat it as a sink and skip
         // SC's default rate-checks. We still need both audio inputs to be
         // audio-rate so the C++ side reads valid sample buffers.
-        if (rate != 'audio', { ^("OrbitLinkAudioOut must be audio rate").format });
-        if (inputs[0].rate != 'audio', { ^("left input must be audio rate") });
-        if (inputs[1].rate != 'audio', { ^("right input must be audio rate") });
+        if (rate != 'audio', { ^"OrbitLinkAudioOut must be audio rate" });
+        if (inputs[0].rate != 'audio', { ^"left input must be audio rate" });
+        if (inputs[1].rate != 'audio', { ^"right input must be audio rate" });
         ^this.checkValidInputs;
     }
 }

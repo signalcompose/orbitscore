@@ -15,15 +15,6 @@ namespace orbitscore {
 
 #ifdef ORBIT_SC_PLUGIN_BUILD
 
-namespace {
-
-// Sized for the largest expected scsynth audio block (1024 samples) at
-// stereo with a 2× upsample headroom. Sinks reallocate via
-// `requestMaxNumSamples` if a UGen needs more, so this is just the seed.
-constexpr std::size_t kInitialMaxNumSamples = 8192;
-
-}  // namespace
-
 struct ChannelRegistry::Impl {
   std::mutex mtx;
   std::unique_ptr<link_audio::LinkAudio> link;
@@ -66,7 +57,7 @@ void ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) 
   }
 
   auto sink = std::make_unique<link_audio::LinkAudioSink>(
-      *impl_->link, std::move(name), kInitialMaxNumSamples);
+      *impl_->link, std::move(name), kSinkInitialMaxNumSamples);
   impl_->sinks.emplace(channelId, std::move(sink));
 }
 
