@@ -23,14 +23,9 @@
 //   - The audio thread itself never touches the registry — UGens cache the
 //     `SinkEntry*` once in their `Ctor` and use it lock-free in `next()`.
 //
-// Sum-by-name (Step 2.3):
-//   Each `SinkEntry` carries a per-channel `ChannelMixState`. Multiple UGens
-//   bound to the same channel id accumulate float samples into the shared mix
-//   buffer during `next()`; the FIRST `next()` of each new audio tick first
-//   flushes the previous tick's accumulated buffer to LinkAudio (deferred
-//   commit), then resets and starts the new tick's accumulation. This works
-//   because the audio thread is single — all UGens for a given block run
-//   serially, with no synchronisation needed on the mix state.
+// Sum-by-name:
+//   Per-channel `ChannelMixState` is owned exclusively by the audio thread.
+//   Single-thread serial UGen execution makes `+=` accumulation race-free.
 
 #pragma once
 
@@ -89,14 +84,10 @@ struct ChannelMixState {
   // (only when the gap is exactly 1 — see comment on flush in next()).
   std::int64_t currentBufCounter;
 
-  // Captured at the start of accumulation for the current tick. Reused at
-  // flush time so the LinkAudio commit sees a SessionState consistent with
-  // the audio data being committed. SessionState has no default ctor (it
-  // wraps an opaque link::ApiState), so wrap in optional and assign at the
-  // start of each new tick — flush is gated on currentBufCounter >= 0 which
-  // implies a value is present.
+  // Frozen at the start of each tick's accumulation; reused at flush so the
+  // commit's SessionState matches the audio data being committed. Optional<>
+  // is required because `LinkSessionState` has no default constructor.
   int currentFrames;
-  std::uint32_t currentSampleRate;
   std::optional<link_audio::LinkSessionState> currentSessionState;
   double currentBeatsAtBufferBegin;
 };

@@ -12,27 +12,11 @@
 //                      `LinkAudioChannelRegistry`. The human-readable name
 //                      arrives separately via `/cmd /orbit/registerLinkAudioChannel`.
 //
-// Sum-by-name (Step 2.3) flow per audio tick:
-//   1. First `next()` of a new tick (detected via `mBufCounter` change):
-//      - if previous tick's accumulator is exactly 1 tick old, flush it: convert
-//        float mix → int16 (clamp at flush, not per UGen), acquire
-//        `BufferHandle`, commit using the session state captured when that
-//        tick's accumulation started.
-//      - clear the float mix buffer, capture this tick's session state,
-//        record `currentBufCounter = bufCounter`.
-//   2. Every UGen on this channel within the same tick (including the first):
-//      - accumulate `mix.mixBuffer[i*2+ch] += inputF` into the shared per-
-//        channel buffer. No clamp per UGen — clamp once at flush after sum.
-//
-//   Net effect: commit is deferred by exactly one tick. The 1-tick latency is
-//   acceptable because a tick is ≤ 1024 frames at 48 kHz (= ~21 ms worst
-//   case; 64 frames = ~1.3 ms typical) — well below the human-perceptible
-//   Link sync window.
-//
-//   Stale-tick guard: if `bufCounter > currentBufCounter + 1` (audio thread
-//   starved, or this UGen skipped multiple ticks), the stored accumulator is
-//   too old to commit safely — its session state's beat would mismatch where
-//   Live is now. We drop it silently and start a fresh tick.
+// Sum-by-name commit is deferred by one tick: the first UGen of each new
+// tick flushes the previous tick's accumulator and starts a fresh one.
+// 1-tick latency (≤ 21 ms @ 48 kHz / 1024 frames) sits well below the Link
+// sync window. A gap > 1 between ticks drops the stored accumulator silently
+// — its captured beat would mismatch Live's current position.
 //
 // Realtime safety:
 //   - `SinkEntry*` and `LinkAudio*` are looked up once in `Ctor` (NRT command
@@ -58,6 +42,7 @@
 #ifdef ORBIT_SC_PLUGIN_BUILD
 
 #include <SC_PlugIn.h>
+#include <ableton/util/FloatIntConversion.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -131,33 +116,28 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
         bufCounter == mix.currentBufCounter + 1) {
       orbitscore::link_audio::LinkAudioSink::BufferHandle bh(sink);
       if (bh) {
-        const int prevFrames = std::min(
-            mix.currentFrames, orbitscore::kLinkAudioMaxBlockFrames);
         const std::size_t totalSamples =
-            static_cast<std::size_t>(prevFrames) *
+            static_cast<std::size_t>(mix.currentFrames) *
             static_cast<std::size_t>(orbitscore::kLinkAudioNumChannels);
         // Clamp + int16 quantise AFTER summation. Per-UGen clamp would lose
         // signal: two inputs at 0.6 each should sum to 1.0 (full scale), not
         // be clamped twice to 0.6 then summed to 1.2 then clamped to 1.0.
-        // Single post-sum clamp is the standard mixer behaviour.
         for (std::size_t i = 0; i < totalSamples; ++i) {
-          float s = std::clamp(mix.mixBuffer[i], -1.0f, 1.0f);
-          bh.samples[i] = static_cast<std::int16_t>(s * 32767.0f);
+          bh.samples[i] = ableton::util::floatToInt16(mix.mixBuffer[i]);
         }
         // The flush gate (`currentBufCounter >= 0`) implies the optional
-        // SessionState was assigned in a prior new-tick branch, so `*` is
-        // never on an empty optional.
+        // SessionState was assigned in a prior new-tick branch.
         bh.commit(*mix.currentSessionState, mix.currentBeatsAtBufferBegin,
-                  kQuantum, static_cast<std::size_t>(prevFrames),
+                  kQuantum, static_cast<std::size_t>(mix.currentFrames),
                   static_cast<std::size_t>(orbitscore::kLinkAudioNumChannels),
-                  mix.currentSampleRate);
+                  unit->sampleRate);
       }
     }
 
-    // Start fresh accumulator for this tick. Capture session state NOW (at
-    // the start of the tick's audio data), not at flush time — the captured
-    // state describes when the audio was generated, so the consumer (Live)
-    // queues it correctly even though we commit one tick later.
+    // Capture session state NOW (at the start of the tick's audio data), not
+    // at flush time — the captured state describes when the audio was
+    // generated, so Live queues it correctly even though we commit one tick
+    // later. emplace() avoids a copy of the opaque ApiState through optional.
     const int n =
         std::min(inNumSamples, orbitscore::kLinkAudioMaxBlockFrames);
     const std::size_t clearSamples =
@@ -166,21 +146,19 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
     std::memset(mix.mixBuffer, 0, clearSamples * sizeof(float));
     mix.currentBufCounter = bufCounter;
     mix.currentFrames = n;
-    mix.currentSampleRate = unit->sampleRate;
-    mix.currentSessionState = unit->link->captureAudioSessionState();
+    mix.currentSessionState.emplace(unit->link->captureAudioSessionState());
     const auto now = unit->link->clock().micros();
     mix.currentBeatsAtBufferBegin =
         mix.currentSessionState->beatAtTime(now, kQuantum);
   }
 
-  // Accumulate this UGen's contribution. All UGens on this channel within
-  // the same block run serially on the single audio thread, so `+=` is
-  // race-free without atomics. No clamp per UGen — see post-sum clamp at
-  // flush time above.
-  const int n = std::min(inNumSamples, mix.currentFrames);
+  // Accumulate this UGen's contribution. scsynth guarantees a uniform block
+  // size across UGens within one tick, so `mix.currentFrames` (set by the
+  // first UGen of this tick above) is the correct cap. No per-UGen clamp —
+  // see post-sum clamp at flush time.
   const float* lin = IN(0);
   const float* rin = IN(1);
-  for (int i = 0; i < n; ++i) {
+  for (int i = 0; i < mix.currentFrames; ++i) {
     mix.mixBuffer[i * 2 + 0] += lin[i];
     mix.mixBuffer[i * 2 + 1] += rin[i];
   }
