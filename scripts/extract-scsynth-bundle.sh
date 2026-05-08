@@ -165,8 +165,10 @@ fi
 echo "─────────────────────────────────────────────"
 echo "Bundle size: $(du -sh "$DEST" | cut -f1)"
 # Re-count includes OrbitLinkAudio.scx if it was bundled — `plugin_count`
-# only tracks the stock SC extraction loop above.
-total_plugin_count=$(find "$DEST/Resources/plugins" -name "*.scx" | wc -l | tr -d '[:space:]')
+# only tracks the stock SC extraction loop above. The supernova exclusion
+# filter is kept here for symmetry with the stock loop, even though the
+# extraction step never copies supernova files into the destination.
+total_plugin_count=$(find "$DEST/Resources/plugins" -name "*.scx" ! -name '*_supernova.scx' | wc -l | tr -d '[:space:]')
 echo "Plugin count: $plugin_count stock SC + $((total_plugin_count - plugin_count)) custom = $total_plugin_count total (expected stock: 26 for SC 3.14.x)"
 
 if [ "$plugin_count" -ne 26 ]; then
