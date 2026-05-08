@@ -147,9 +147,14 @@ if [ -f "$ORBIT_PLUGIN_SRC" ]; then
   cp "$ORBIT_PLUGIN_SRC" "$DEST/Resources/plugins/OrbitLinkAudio.scx"
   echo "  Bundled OrbitLinkAudio.scx (custom LinkAudio UGen)"
 else
+  # First-time configure needs the SDK + Link path overrides; subsequent
+  # `cmake --build` calls reuse the cache. CMakeLists.txt FATAL_ERRORs if
+  # either is missing on a fresh checkout.
   echo "  ⚠️  OrbitLinkAudio.scx not found at $ORBIT_PLUGIN_SRC" >&2
   echo "      Build it first with:" >&2
-  echo "        cmake -S packages/sc-link-audio -B packages/sc-link-audio/build" >&2
+  echo "        cmake -S packages/sc-link-audio -B packages/sc-link-audio/build \\" >&2
+  echo "          -DSC_PATH=packages/sc-link-audio/external_libraries/supercollider-sdk \\" >&2
+  echo "          -DLINK_AUDIO_PATH=packages/sc-link-audio/external_libraries/link" >&2
   echo "        cmake --build packages/sc-link-audio/build" >&2
   echo "      Bundle will be packaged WITHOUT LinkAudio support." >&2
 fi
