@@ -531,7 +531,9 @@ k.audio("kick.wav").output("drums")
 s.audio("snare.wav").output("drums")               // kick と snare が同 channel に合成されて Live で受信
 ```
 
-`global.linkAudio()` 未宣言で `seq.output()` を呼んだ場合、 channel name は記録されるものの hardware path にフォールバックし、 一度だけ警告が console に出る。 厳密な VS Code diagnostic は §10 参照。
+**Strict mode (v1.2.0+)**: `global.linkAudio()` を宣言したファイル内では、 全ての発音 sequence が `.output(name)` で channel を宣言する必要がある。 `.output()` を持たない sequence が `.play()` した時点で **runtime error** を投げる (`Sequence.resolveDispatchChannel`)。 これは「LinkAudio mode 中は全 sequence が LinkAudio 経由」 という §8.1.1 の宣言と整合させるための strict 制約で、 hardware 出力との silent fallback は行わない (hardware/LinkAudio 混在は不可、 §8.1.1 参照)。 編集時には VS Code 拡張が `analyzeLinkAudioMissingOutput` で同等の error 診断を出す (§10)。
+
+`global.linkAudio()` 未宣言で `seq.output()` を呼んだ場合は別経路: channel name は記録されるが hardware path に流れ、 console に一度だけ警告が出る (LinkAudio mode を有効化し忘れたケースのフェイルセーフ)。 編集時の order-violation 検出は §10 参照。
 
 #### 8.1.3 Plugin lifecycle
 

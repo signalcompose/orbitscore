@@ -172,46 +172,151 @@ export function analyzeAudioPathOrdering(text: string): DiagnosticIssue[] {
 }
 
 /**
- * Detection: any `\.output(...)` call when the file does not declare
- * `global.linkAudio()`. Per DSL spec §8.1.2 the channel name is recorded but
- * has no effect until LinkAudio mode is enabled, so the user almost certainly
- * forgot the declaration. Emit one warning per orphaned `.output()` call so
- * each location is surfaced individually.
+ * Detection: any `\.output(...)` call that is not preceded by a
+ * `global.linkAudio()` declaration on an earlier line. Per DSL spec §8.1.2 the
+ * declaration is order-sensitive — a sequence's `.output()` only resolves
+ * correctly once LinkAudio mode is on. Two cases this catches:
+ *
+ *   1. `.output()` with no `global.linkAudio()` anywhere in the file (the
+ *      original orphan case).
+ *   2. `.output()` appearing on a line BEFORE the first `global.linkAudio()`
+ *      declaration (the order-violation case — flagged because live coding
+ *      reads top-to-bottom and the sequence will be evaluated against an
+ *      unset mode).
  *
  * @param text ドキュメント全体のテキスト
- * @returns LinkAudio mode が宣言されていない状態での `.output()` 呼出位置
+ * @returns LinkAudio mode が `.output()` より前に宣言されていない位置
  */
 export function analyzeOutputWithoutLinkAudio(text: string): DiagnosticIssue[] {
   const issues: DiagnosticIssue[] = []
   const lines = text.split('\n')
 
   const linkAudioPattern = /\bglobal\s*\.\s*linkAudio\s*\(/
-  let hasLinkAudio = false
+  // -1 = not found anywhere. Otherwise the 0-indexed line of the first call.
+  let firstLinkAudioLine = -1
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
     if (!raw || raw.trim().startsWith('//')) continue
     const line = stripLineComment(raw)
     if (linkAudioPattern.test(line)) {
-      hasLinkAudio = true
+      firstLinkAudioLine = i
       break
     }
   }
-  if (hasLinkAudio) return issues
 
   const outputCallPattern = /\.output\s*\(\s*["']([^"']*)["']\s*\)/g
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
     if (!raw || raw.trim().startsWith('//')) continue
+    // .output() that comes after the linkAudio() declaration is fine.
+    if (firstLinkAudioLine !== -1 && i >= firstLinkAudioLine) continue
     const line = stripLineComment(raw)
     for (const m of line.matchAll(outputCallPattern)) {
       const startCol = m.index ?? 0
+      const message =
+        firstLinkAudioLine === -1
+          ? 'seq.output() requires global.linkAudio() to be declared in this file. Without LinkAudio mode the channel name has no effect.'
+          : `seq.output() appears before global.linkAudio() (declared at line ${firstLinkAudioLine + 1}). LinkAudio mode must be declared first or the sequence routes hardware on first evaluation.`
       issues.push({
         line: i,
         startCol,
         endCol: startCol + m[0].length,
-        message:
-          'seq.output() requires global.linkAudio() to be declared in this file. Without LinkAudio mode the channel name is recorded but the sequence still routes through the hardware bus.',
+        message,
       })
+    }
+  }
+
+  return issues
+}
+
+/**
+ * Detection: any `init global.seq` chain that has `.play(...)` (i.e. produces
+ * audio) but never calls `.output(...)`, when the file declares
+ * `global.linkAudio()`. Per DSL spec §8.1.2 strict-mode contract, every
+ * sequence in a LinkAudio file must declare a destination channel — silent
+ * fallback to hardware is forbidden because hardware/LinkAudio cannot mix
+ * within a single file. This is the edit-time counterpart to
+ * `Sequence.resolveDispatchChannel()`'s runtime throw.
+ *
+ * Note: detection is name-scoped — we look at each `var X = init global.seq`
+ * declaration and check whether the file contains any `X.output(` reference.
+ * Chained-on-declaration calls (`var X = init global.seq.audio(...).output(...)`)
+ * are not in current example style but are also covered because the regex
+ * matches `<name>.output(` anywhere downstream.
+ *
+ * @param text ドキュメント全体のテキスト
+ * @returns LinkAudio mode 宣言下で `.output()` を持たない sequence の `.play(` 呼出位置
+ */
+export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
+  const issues: DiagnosticIssue[] = []
+  const lines = text.split('\n')
+
+  // Bail early if the file does not declare LinkAudio — the strict-mode
+  // requirement does not apply.
+  const linkAudioPattern = /\bglobal\s*\.\s*linkAudio\s*\(/
+  let hasLinkAudio = false
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    if (linkAudioPattern.test(stripLineComment(raw))) {
+      hasLinkAudio = true
+      break
+    }
+  }
+  if (!hasLinkAudio) return issues
+
+  // Collect sequence variable names from `var X = init global.seq` declarations.
+  const seqDeclPattern = /\bvar\s+(\w+)\s*=\s*init\s+global\s*\.\s*seq\b/
+  const sequenceNames = new Set<string>()
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    const m = stripLineComment(raw).match(seqDeclPattern)
+    if (m) sequenceNames.add(m[1])
+  }
+  if (sequenceNames.size === 0) return issues
+
+  // For each sequence name, scan the file for `<name>.output(` references.
+  // Sequences without any output() call are flagged at every `<name>.play(`.
+  const namesWithOutput = new Set<string>()
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    const line = stripLineComment(raw)
+    for (const name of sequenceNames) {
+      // Word-boundary anchored to avoid `kicker.output()` matching `kick`.
+      const pattern = new RegExp(`\\b${name}\\b[^\\n]*\\.output\\s*\\(`)
+      if (pattern.test(line)) namesWithOutput.add(name)
+    }
+  }
+
+  const orphans = new Set<string>()
+  for (const name of sequenceNames) {
+    if (!namesWithOutput.has(name)) orphans.add(name)
+  }
+  if (orphans.size === 0) return issues
+
+  // Flag each `<orphan>.play(` call so the issue surfaces where audio is
+  // actually produced. play() is the trigger for runtime dispatch resolution
+  // and therefore the most actionable location.
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    const line = stripLineComment(raw)
+    for (const name of orphans) {
+      const playPattern = new RegExp(`\\b${name}\\s*\\.\\s*play\\s*\\(`, 'g')
+      for (const m of line.matchAll(playPattern)) {
+        const startCol = m.index ?? 0
+        issues.push({
+          line: i,
+          startCol,
+          endCol: startCol + m[0].length,
+          message:
+            `Sequence '${name}' has no .output() channel set, but global.linkAudio() is enabled. ` +
+            `Add .output("name") to the sequence chain — hardware/LinkAudio mixing is forbidden ` +
+            `within a LinkAudio file.`,
+        })
+      }
     }
   }
 

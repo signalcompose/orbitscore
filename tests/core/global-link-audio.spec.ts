@@ -65,4 +65,55 @@ describe('Global.linkAudio() — Link Audio mode declaration', () => {
     expect(global.getState().linkAudioTargetSampleRate).toBeUndefined()
     expect(global.isLinkAudioEnabled()).toBe(true)
   })
+
+  describe('targetSampleRate validation', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>
+
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    })
+
+    it('should warn and drop SR override for negative values, but still enable mode', () => {
+      global.linkAudio(-1)
+      expect(global.isLinkAudioEnabled()).toBe(true)
+      expect(global.getState().linkAudioTargetSampleRate).toBeUndefined()
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      expect(warnSpy.mock.calls[0]?.[0]).toContain('invalid target sample rate')
+    })
+
+    it('should warn and drop SR override for zero', () => {
+      global.linkAudio(0)
+      expect(global.getState().linkAudioTargetSampleRate).toBeUndefined()
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('should warn and drop SR override for non-integer values', () => {
+      global.linkAudio(48000.5)
+      expect(global.getState().linkAudioTargetSampleRate).toBeUndefined()
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('should warn and drop SR override for NaN', () => {
+      global.linkAudio(Number.NaN)
+      expect(global.getState().linkAudioTargetSampleRate).toBeUndefined()
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('should accept common rates without warning', () => {
+      for (const sr of [44100, 48000, 88200, 96000, 176400, 192000]) {
+        warnSpy.mockClear()
+        global.linkAudio(sr)
+        expect(global.getState().linkAudioTargetSampleRate).toBe(sr)
+        expect(warnSpy).not.toHaveBeenCalled()
+      }
+    })
+
+    it('should accept uncommon-but-positive integer rates with a hint', () => {
+      // Plugin can resample any positive integer rate; we hint, not block.
+      global.linkAudio(32000)
+      expect(global.getState().linkAudioTargetSampleRate).toBe(32000)
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+      expect(warnSpy.mock.calls[0]?.[0]).toContain('non-standard sample rate')
+    })
+  })
 })

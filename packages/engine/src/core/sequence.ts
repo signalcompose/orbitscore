@@ -198,7 +198,7 @@ export class Sequence {
     if (!this.global.isLinkAudioEnabled()) {
       console.warn(
         `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}") ` +
-          `was called without 'init global.linkAudio()'. The channel name is recorded ` +
+          `was called without 'global.linkAudio()'. The channel name is recorded ` +
           `but will not take effect until LinkAudio mode is declared.`,
       )
     }
@@ -324,14 +324,34 @@ export class Sequence {
   }
 
   /**
-   * Resolve the channel to forward to the scheduler. Only emits the channel
-   * name when both Global LinkAudio mode is on AND the sequence has called
-   * .output(). Otherwise returns undefined so the scheduler keeps using the
-   * existing hardware path.
+   * Resolve the channel to forward to the scheduler.
+   *
+   * Strict-mode contract (per DSL spec §8.1.2):
+   *   - Global LinkAudio off, regardless of `.output()` → returns undefined
+   *     (sequence routes through the hardware bus, existing behavior).
+   *   - Global LinkAudio on AND `.output()` set → returns the channel name.
+   *   - Global LinkAudio on AND `.output()` unset → throws. Hardware/LinkAudio
+   *     mixing within the same file is forbidden, so a sequence with no
+   *     declared destination is a hard error rather than a silent fallback.
+   *     The VS Code diagnostic `analyzeLinkAudioMissingOutput` surfaces this
+   *     at edit time; this throw is the runtime safety net for engines /
+   *     CLIs / tests that bypass the editor.
+   *
+   * Public so the boot pipeline (Step 4) and the test suite can exercise the
+   * dispatch contract without going through the full scheduling loop.
    */
-  private resolveDispatchChannel(): string | undefined {
+  resolveDispatchChannel(): string | undefined {
     if (!this.global.isLinkAudioEnabled()) {
       return undefined
+    }
+    if (!this._outputChannel) {
+      throw new Error(
+        `Sequence '${this.stateManager.getName() || 'sequence'}' has no .output() ` +
+          `channel set, but global.linkAudio() is enabled. LinkAudio mode requires ` +
+          `every sequence to declare an output channel name. Add .output("name") ` +
+          `to the sequence chain, or remove global.linkAudio() to fall back to ` +
+          `hardware output.`,
+      )
     }
     return this._outputChannel
   }

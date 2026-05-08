@@ -5,17 +5,18 @@ import { Sequence } from '../../packages/engine/src/core/sequence'
 import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
 
 /**
- * Step 3.2 (Issue #192): integration check that the LinkAudio outputChannel
- * is forwarded from Sequence → scheduling pipeline → SuperColliderPlayer
- * scheduleEvent based on Global mode + sequence .output() state.
+ * Step 3.2 (Issue #192) + strict-mode follow-up: integration check that the
+ * LinkAudio outputChannel is forwarded from Sequence → scheduling pipeline →
+ * SuperColliderPlayer scheduleEvent based on Global mode + sequence .output()
+ * state.
  *
  * The wiring rule (resolveDispatchChannel):
- *   - Global.linkAudio() OFF + seq.output("X") → outputChannel = undefined
- *     (sequence does not yet take effect, hardware path)
- *   - Global.linkAudio() ON + seq.output("X")  → outputChannel = "X"
+ *   - Global.linkAudio() OFF + seq.output("X") → undefined
+ *     (sequence routes through hardware, existing behavior)
+ *   - Global.linkAudio() ON + seq.output("X")  → "X"
  *     (LinkAudio path)
- *   - Global.linkAudio() ON + no .output()      → outputChannel = undefined
- *     (declaration alone is no-op until a channel is set)
+ *   - Global.linkAudio() ON + no .output()      → throws (strict mode,
+ *     per DSL spec §8.1.2 — hardware/LinkAudio mixing forbidden)
  */
 describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
   let global: Global
@@ -56,9 +57,8 @@ describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
       expect(warnSpy).toHaveBeenCalledTimes(1)
       expect(global.isLinkAudioEnabled()).toBe(false)
       expect(seq.getOutputChannel()).toBe('kick')
-      // Effective dispatch channel is undefined (would route hardware)
-      // Internal: resolveDispatchChannel is private, but visible behavior is
-      // captured by the combination of isLinkAudioEnabled + getOutputChannel.
+      // Effective dispatch channel is undefined — hardware path retained
+      expect(seq.resolveDispatchChannel()).toBeUndefined()
     })
 
     it('with linkAudio ON + .output set → effective dispatch channel = name', () => {
@@ -66,12 +66,26 @@ describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
       seq.output('kick')
       expect(global.isLinkAudioEnabled()).toBe(true)
       expect(seq.getOutputChannel()).toBe('kick')
+      expect(seq.resolveDispatchChannel()).toBe('kick')
     })
 
-    it('with linkAudio ON + no .output → effective dispatch channel = undefined', () => {
+    it('with linkAudio ON + no .output → throws (strict mode, no silent fallback)', () => {
       global.linkAudio()
       expect(global.isLinkAudioEnabled()).toBe(true)
       expect(seq.getOutputChannel()).toBeUndefined()
+      // resolveDispatchChannel is the runtime gate that enforces the spec rule.
+      expect(() => seq.resolveDispatchChannel()).toThrow(/no \.output\(\) channel set/)
+      expect(() => seq.resolveDispatchChannel()).toThrow(/global\.linkAudio\(\) is enabled/)
+    })
+
+    it('strict-mode error references the sequence name for diagnosability', () => {
+      global.linkAudio()
+      expect(() => seq.resolveDispatchChannel()).toThrow(/'kick'/)
+    })
+
+    it('strict-mode error suggests a remediation path (.output or remove linkAudio)', () => {
+      global.linkAudio()
+      expect(() => seq.resolveDispatchChannel()).toThrow(/Add \.output\("name"\)|hardware/)
     })
 
     it('explicit target SR is propagated through GlobalState', () => {

@@ -58,7 +58,7 @@
 
 - [ ] **F-1**: `global.linkAudio()` を **書かない** .orbs ファイルを作成
 - [ ] **F-2**: その中で `seq.output("test")` を呼ぶ
-- [ ] **F-3**: 実行 → console に「`init global.linkAudio()` was not declared」 警告 (1 回のみ)
+- [ ] **F-3**: 実行 → console に `global.linkAudio()` 未宣言の警告 (1 回のみ)
 - [ ] **F-4**: 音声は通常通り hardware (ローカルスピーカー) から出る
 
 ### G. Plugin 不在時のフォールバック (Step 3.2 確認済)

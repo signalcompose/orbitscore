@@ -9,6 +9,7 @@ import { analyzeMethodChain, getContextualCompletions } from './completion-conte
 import {
   analyzeAudioPathOrdering,
   analyzeGlobalOncePerFile,
+  analyzeLinkAudioMissingOutput,
   analyzeOutputWithoutLinkAudio,
 } from './diagnostics-analysis'
 
@@ -1298,6 +1299,18 @@ async function updateDiagnostics(
         new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
         issue.message,
         vscode.DiagnosticSeverity.Warning,
+      ),
+    )
+  }
+  // Strict-mode error: sequences without .output() under LinkAudio mode are
+  // flagged as Error (not Warning) — runtime will throw, so we surface it
+  // accordingly at edit time. See DSL spec §8.1.2.
+  for (const issue of analyzeLinkAudioMissingOutput(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Error,
       ),
     )
   }

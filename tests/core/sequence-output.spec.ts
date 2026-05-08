@@ -54,7 +54,10 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
     seq.output('orphan-channel')
     expect(seq.getOutputChannel()).toBe('orphan-channel')
     expect(warnSpy).toHaveBeenCalledTimes(1)
-    expect(warnSpy.mock.calls[0]?.[0]).toContain('init global.linkAudio()')
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('global.linkAudio()')
+    // Ensure the (incorrect) `init` prefix is NOT present in the message —
+    // `init` is reserved for variable declarations, not method calls.
+    expect(warnSpy.mock.calls[0]?.[0]).not.toContain('init global.linkAudio()')
   })
 
   it('should not warn when Global.linkAudio() is enabled before output()', () => {

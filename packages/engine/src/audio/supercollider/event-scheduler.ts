@@ -44,8 +44,13 @@ export class EventScheduler {
   }
 
   /**
-   * Test / debug accessor — exposes the channel registry so callers can inspect
-   * which channel ids have been allocated.
+   * Internal accessor — exposes the channel registry. Used by Step 4 boot
+   * pipeline to query allocated ids for telemetry / debug snapshots, and by
+   * the test suite to assert idempotent acquire() behavior. Not part of the
+   * public DSL surface — production code outside the boot pipeline should not
+   * depend on this method.
+   *
+   * @internal
    */
   getLinkAudioChannelRegistry(): LinkAudioChannelRegistry {
     return this.linkAudioChannels
@@ -425,7 +430,12 @@ export class EventScheduler {
   }
 
   /**
-   * テスト用: 再生を実行（内部メソッドを公開）
+   * Test-only accessor — exposes the private `executePlayback()` so unit tests
+   * can drive the dispatch path directly without standing up the scheduling
+   * loop. Pre-existing pattern (introduced in PR #23, Phase 4-2 refactor) used
+   * by tests across `tests/audio/`. Not part of the public API.
+   *
+   * @internal
    */
   async testExecutePlayback(
     filepath: string,
