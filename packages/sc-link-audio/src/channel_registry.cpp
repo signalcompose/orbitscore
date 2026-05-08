@@ -1,36 +1,99 @@
-// channel_registry.cpp — Step 2.1 stub.
+// channel_registry.cpp — implementation.
 //
-// Step 2.2 will implement:
-//   - LinkAudio instance ownership (singleton tied to plugin load)
-//   - thread-safe channelId → LinkAudioSink* map
-//   - lazy-create of LinkAudioSink on first acquire()
-//   - cleanup on release() / plugin unload
-//
-// This stub keeps the symbol set defined so the plugin links cleanly without
-// the full SDK during Step 2.1 review.
+// See channel_registry.hpp for the threading contract. The mutex here is
+// only ever held by non-realtime threads (server startup / OSC `/cmd` /
+// UGen ctor). The audio thread reads a cached pointer obtained at ctor time.
 
 #include "channel_registry.hpp"
 
+#ifdef ORBIT_SC_PLUGIN_BUILD
+#include <mutex>
+#include <unordered_map>
+#endif
+
 namespace orbitscore {
 
+#ifdef ORBIT_SC_PLUGIN_BUILD
+
+namespace {
+
+// Sized for the largest expected scsynth audio block (1024 samples) at
+// stereo with a 2× upsample headroom. Sinks reallocate via
+// `requestMaxNumSamples` if a UGen needs more, so this is just the seed.
+constexpr std::size_t kInitialMaxNumSamples = 8192;
+
+}  // namespace
+
 struct ChannelRegistry::Impl {
-  // intentionally empty — Step 2.2 fills in the map + LinkAudio handle
+  std::mutex mtx;
+  std::unique_ptr<link_audio::LinkAudio> link;
+  std::unordered_map<std::int32_t, std::unique_ptr<link_audio::LinkAudioSink>> sinks;
 };
 
-ChannelRegistry::ChannelRegistry() : impl_(new Impl()) {}
+ChannelRegistry::ChannelRegistry() : impl_(std::make_unique<Impl>()) {}
+ChannelRegistry::~ChannelRegistry() = default;
 
-ChannelRegistry::~ChannelRegistry() {
-  delete impl_;
+void ChannelRegistry::initLinkAudio(double bpm, const std::string& peerName) {
+  std::lock_guard<std::mutex> lock(impl_->mtx);
+  if (impl_->link) {
+    return;
+  }
+  impl_->link = std::make_unique<link_audio::LinkAudio>(bpm, peerName);
+  impl_->link->enableLinkAudio(true);
 }
 
-link_audio::LinkAudioSink* ChannelRegistry::acquire(std::int32_t /*channelId*/) {
-  // Step 2.2: lazy-create or look up an existing sink for this id.
-  return nullptr;
+void ChannelRegistry::shutdownLinkAudio() {
+  std::lock_guard<std::mutex> lock(impl_->mtx);
+  // Sinks hold weak references back into LinkAudio internals; destroy them
+  // first so LinkAudio teardown does not race against `BufferHandle` users.
+  impl_->sinks.clear();
+  if (impl_->link) {
+    impl_->link->enableLinkAudio(false);
+    impl_->link.reset();
+  }
 }
 
-void ChannelRegistry::release(std::int32_t /*channelId*/) {
-  // Step 2.2 / Step 3.4: tear down the sink when no sequences reference the
-  // channel anymore. No-op for now.
+void ChannelRegistry::registerChannel(std::int32_t channelId, std::string name) {
+  std::lock_guard<std::mutex> lock(impl_->mtx);
+  if (!impl_->link) {
+    return;
+  }
+
+  auto it = impl_->sinks.find(channelId);
+  if (it != impl_->sinks.end()) {
+    it->second->setName(std::move(name));
+    return;
+  }
+
+  auto sink = std::make_unique<link_audio::LinkAudioSink>(
+      *impl_->link, std::move(name), kInitialMaxNumSamples);
+  impl_->sinks.emplace(channelId, std::move(sink));
 }
+
+link_audio::LinkAudioSink* ChannelRegistry::lookup(std::int32_t channelId) {
+  std::lock_guard<std::mutex> lock(impl_->mtx);
+  auto it = impl_->sinks.find(channelId);
+  return (it != impl_->sinks.end()) ? it->second.get() : nullptr;
+}
+
+link_audio::LinkAudio* ChannelRegistry::getLinkAudio() {
+  std::lock_guard<std::mutex> lock(impl_->mtx);
+  return impl_->link.get();
+}
+
+#else  // ORBIT_SC_PLUGIN_BUILD
+
+// Non-plugin builds (linters, IDE indexers) get an empty translation unit.
+// The header still declares the API; nothing to instantiate without the SDK.
+struct ChannelRegistry::Impl {};
+ChannelRegistry::ChannelRegistry() : impl_(nullptr) {}
+ChannelRegistry::~ChannelRegistry() = default;
+void ChannelRegistry::initLinkAudio(double, const std::string&) {}
+void ChannelRegistry::shutdownLinkAudio() {}
+void ChannelRegistry::registerChannel(std::int32_t, std::string) {}
+link_audio::LinkAudioSink* ChannelRegistry::lookup(std::int32_t) { return nullptr; }
+link_audio::LinkAudio* ChannelRegistry::getLinkAudio() { return nullptr; }
+
+#endif  // ORBIT_SC_PLUGIN_BUILD
 
 }  // namespace orbitscore
