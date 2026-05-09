@@ -72,7 +72,8 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // scheduled at startTime and the first wait is reduced from one full
   // patternDuration to (patternDuration - leadIn) so subsequent boundaries
   // stay on startTime + n × patternDuration.
-  const effectiveStart = startTime !== undefined && startTime > currentTime ? startTime : currentTime
+  const effectiveStart =
+    startTime !== undefined && startTime > currentTime ? startTime : currentTime
   const leadInMs = effectiveStart - currentTime
 
   if (leadInMs > 0) {
@@ -117,9 +118,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
       if (wasMuted && !isMuted) {
         // Just unmuted! Reschedule events from current time
         const now = Date.now() - scheduler.startTime
-        console.log(
-          `🔓 ${sequenceName}: detected unmute in LOOP timer, rescheduling from ${now}ms`,
-        )
+        console.log(`🔓 ${sequenceName}: detected unmute in LOOP timer, rescheduling from ${now}ms`)
 
         // Clear old events (if any)
         clearSequenceEventsFn(sequenceName)

@@ -65,10 +65,7 @@ describe('getContextualCompletions — global context', () => {
   })
 
   it('omits quantize completion when hasQuantize is true', () => {
-    const items = getContextualCompletions(
-      { ...baseGlobalContext, hasQuantize: true },
-      true,
-    )
+    const items = getContextualCompletions({ ...baseGlobalContext, hasQuantize: true }, true)
     const labels = items.map((i) => i.label as string)
     expect(labels).not.toContain('quantize')
   })

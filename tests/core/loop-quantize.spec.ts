@@ -35,18 +35,11 @@ describe('LOOP quantize startup', () => {
     mockPlayer = {
       boot: vi.fn().mockResolvedValue(undefined),
       getCurrentTime: vi.fn(() => elapsedMs),
-      scheduleEvent: vi.fn(
-        (filepath: string, time: number) => {
-          captured.push({ filepath, time, sliceIndex: 0, totalSlices: 0 })
-        },
-      ),
+      scheduleEvent: vi.fn((filepath: string, time: number) => {
+        captured.push({ filepath, time, sliceIndex: 0, totalSlices: 0 })
+      }),
       scheduleSliceEvent: vi.fn(
-        (
-          filepath: string,
-          time: number,
-          sliceIndex: number,
-          totalSlices: number,
-        ) => {
+        (filepath: string, time: number, sliceIndex: number, totalSlices: number) => {
           captured.push({ filepath, time, sliceIndex, totalSlices })
         },
       ),
