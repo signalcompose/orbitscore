@@ -50,6 +50,10 @@ export function quantizeDurationMs(value: QuantizeValue, tempo: number, beat: Me
       return barMs * 4
     case '8bar':
       return barMs * 8
+    default: {
+      const _exhaustive: never = value
+      throw new Error(`quantizeDurationMs: unhandled QuantizeValue ${String(_exhaustive)}`)
+    }
   }
 }
 
