@@ -12,6 +12,7 @@ import { AudioManager } from './global/audio-manager'
 import { EffectsManager } from './global/effects-manager'
 import { TransportControl } from './global/transport-control'
 import { SequenceRegistry } from './global/sequence-registry'
+import { QuantizeManager, QuantizeValue } from './global/quantize-manager'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -20,6 +21,7 @@ export class Global {
   private effectsManager: EffectsManager
   private transportControl: TransportControl
   private sequenceRegistry: SequenceRegistry
+  private quantizeManager: QuantizeManager
 
   // Core dependencies
   private audioEngine: AudioEngine
@@ -38,6 +40,7 @@ export class Global {
     // Initialize managers
     this.tempoManager = new TempoManager()
     this.audioManager = new AudioManager(audioEngine)
+    this.quantizeManager = new QuantizeManager()
     this.sequenceRegistry = new SequenceRegistry(audioEngine, this)
     this.effectsManager = new EffectsManager(
       this.globalScheduler,
@@ -94,6 +97,26 @@ export class Global {
   audioDevice(deviceName: string): this {
     this.audioManager.audioDevice(deviceName)
     return this
+  }
+
+  /**
+   * Set the global launch-quantize value.
+   *
+   * Controls when LOOP() starts and when LOOP-time play() updates take
+   * effect, by waiting until the next quantized boundary derived from the
+   * global tempo and meter. RUN() (one-shot) is unaffected and stays
+   * immediate. Sequences may override this with `seq.quantize("...")`.
+   *
+   * Accepted values: "off" | "beat" | "bar" | "2bar" | "4bar" | "8bar".
+   * Default: "bar".
+   */
+  quantize(value: QuantizeValue): this {
+    this.quantizeManager.setQuantize(value)
+    return this
+  }
+
+  getQuantize(): QuantizeValue {
+    return this.quantizeManager.getQuantize()
   }
 
   /**

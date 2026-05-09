@@ -11,6 +11,7 @@ interface MethodChainContext {
   hasLength: boolean
   hasTempo: boolean
   hasRun: boolean
+  hasQuantize: boolean
   lastMethod: string
 }
 
@@ -26,6 +27,7 @@ export function analyzeMethodChain(lineText: string, position: number): MethodCh
     hasLength: false,
     hasTempo: false,
     hasRun: false,
+    hasQuantize: false,
     lastMethod: '',
   }
 
@@ -65,6 +67,9 @@ export function analyzeMethodChain(lineText: string, position: number): MethodCh
   if (chainText.includes('.run(')) {
     context.hasRun = true
   }
+  if (chainText.includes('.quantize(')) {
+    context.hasQuantize = true
+  }
 
   // Find the last method before the cursor
   const methodMatch = chainText.match(/\.(\w+)\([^)]*\)(?!.*\.\w+\([^)]*\))/)
@@ -92,8 +97,15 @@ export function getContextualCompletions(
     if (!context.hasBeat) {
       completions.push(createCompletion('beat', 'Set time signature', 'beat(${1:4} by ${2:4})'))
     }
-    completions.push(createCompletion('tick', 'Set tick resolution', 'tick(${1:480})'))
-    completions.push(createCompletion('key', 'Set global key', 'key(${1:C})'))
+    if (!context.hasQuantize) {
+      completions.push(
+        createCompletion(
+          'quantize',
+          'Set launch quantize for LOOP() and play() updates. Values: "off" | "beat" | "bar" | "2bar" | "4bar" | "8bar". Default "bar".',
+          'quantize("${1|bar,2bar,4bar,8bar,beat,off|}")',
+        ),
+      )
+    }
     completions.push(
       createCompletion('audioPath', 'Set audio file base path', 'audioPath("${1:path/to/audio}")'),
     )
@@ -157,13 +169,19 @@ export function getContextualCompletions(
     if (context.hasPlay) {
       completions.push(createCompletion('gain', 'Set volume in dB', 'gain(${1:0})'))
       completions.push(createCompletion('pan', 'Set pan position (-100 to 100)', 'pan(${1:0})'))
+      if (!context.hasQuantize) {
+        completions.push(
+          createCompletion(
+            'quantize',
+            'Override the global launch quantize for this sequence. Values: "off" | "beat" | "bar" | "2bar" | "4bar" | "8bar".',
+            'quantize("${1|bar,2bar,4bar,8bar,beat,off|}")',
+          ),
+        )
+      }
 
-      // Future features (parsed by parser but not yet implemented in audio engine):
-      // - fixpitch(): Pitch-preserving time-stretch (requires granular synthesis)
-      // - time(): Time-stretch factor (requires granular synthesis)
-      // Uncomment when granular synthesis is implemented in SuperCollider
-      // completions.push(createCompletion('fixpitch', 'Set pitch offset in semitones', 'fixpitch(${1:0})'))
-      // completions.push(createCompletion('time', 'Set time stretch factor', 'time(${1:1.0})'))
+      // Future features (planned, see GitHub issue #213):
+      // - fixpitch(): Pitch shift in semitones (planned)
+      // - time(): Time stretch factor (planned)
     }
 
     // Transport commands (usually at the end)

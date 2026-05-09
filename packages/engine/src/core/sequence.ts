@@ -18,6 +18,8 @@ import { prepareSlices as prepareSlicesUtil } from './sequence/audio/prepare-sli
 import { GainManager } from './sequence/parameters/gain-manager'
 import { PanManager } from './sequence/parameters/pan-manager'
 import { TempoManager } from './sequence/parameters/tempo-manager'
+import { SequenceQuantizeManager } from './sequence/parameters/quantize-manager'
+import { QuantizeValue, nextQuantizedTime } from './global/quantize-manager'
 import { StateManager } from './sequence/state/state-manager'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
 
@@ -29,6 +31,7 @@ export class Sequence {
   private gainManager: GainManager
   private panManager: PanManager
   private tempoManager: TempoManager
+  private quantizeManager: SequenceQuantizeManager
   private stateManager: StateManager
 
   // Audio properties
@@ -43,7 +46,41 @@ export class Sequence {
     this.gainManager = new GainManager()
     this.panManager = new PanManager()
     this.tempoManager = new TempoManager()
+    this.quantizeManager = new SequenceQuantizeManager()
     this.stateManager = new StateManager()
+  }
+
+  /**
+   * Resolve the effective quantize value for this sequence: explicit override
+   * if set via `seq.quantize(...)`, otherwise the global value.
+   */
+  private resolveQuantize(): QuantizeValue {
+    return this.quantizeManager.getQuantize() ?? this.global.getQuantize()
+  }
+
+  /**
+   * Compute the next quantized boundary (ms since scheduler start) at or after
+   * `currentTime`. Uses the master grid (global tempo + beat) so that
+   * polymeter sequences still align on global bars by default. Returns
+   * `currentTime` unchanged when the resolved quantize is "off".
+   */
+  private nextQuantizedTime(currentTime: number): number {
+    const globalState = this.global.getState()
+    return nextQuantizedTime(
+      currentTime,
+      this.resolveQuantize(),
+      globalState.tempo || 120,
+      globalState.beat,
+    )
+  }
+
+  /**
+   * Set per-sequence launch quantize, overriding the global value. Accepted
+   * values: "off" | "beat" | "bar" | "2bar" | "4bar" | "8bar".
+   */
+  quantize(value: QuantizeValue): this {
+    this.quantizeManager.setQuantize(value)
+    return this
   }
 
   // Set the name (called when assigned to a variable)
@@ -90,30 +127,35 @@ export class Sequence {
   }
 
   /**
-   * Seamlessly update parameter during playback
-   * Reschedules future events with new parameter value
+   * Seamlessly update parameter during playback.
+   *
+   * Behavior by parameter:
+   * - tempo / beat / length: defer to next cycle. recalculateTiming() has
+   *   already refreshed the timed events; the loop timer's
+   *   getPatternDurationFn() will pick up the new duration on the next tick.
+   * - play: defer to next cycle. The new pattern is already on stateManager,
+   *   so the next loopSequence iteration will schedule from it. Rhythm
+   *   changes mid-bar would smear the groove; waiting for the bar boundary
+   *   keeps swaps musical.
+   * - gain / pan / audio / chop: reschedule immediately. Volume / panning
+   *   are real-time mixer-style adjustments, and audio / chop swaps are rare
+   *   enough that the live-coding "instant feedback" wins over alignment.
    */
   private seamlessParameterUpdate(parameterName: string, description: string): void {
     if (this.stateManager.isLooping() || this.stateManager.isPlaying()) {
       const scheduler = this.global.getScheduler()
 
       if (scheduler.isRunning && this.stateManager.getLoopStartTime() !== undefined) {
-        const isTimingChange = ['tempo', 'beat', 'length'].includes(parameterName)
+        const deferToNextCycle = ['tempo', 'beat', 'length', 'play'].includes(parameterName)
 
-        if (isTimingChange && this.stateManager.isLooping()) {
-          // For timing changes during loop: defer to next bar boundary.
-          // recalculateTiming() already updated timedEvents.
-          // The loop timer's getPatternDurationFn() will return the new duration.
-          // The next cycle will automatically use new timing and events.
-          // This avoids rhythm discontinuity from restarting mid-beat.
+        if (deferToNextCycle && this.stateManager.isLooping()) {
           console.log(
             `🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (next cycle)`,
           )
           return
         }
 
-        // Non-timing changes (gain, pan, play, audio, chop):
-        // Reschedule immediately for seamless update
+        // Immediate reschedule for the remaining parameters
         const now = Date.now()
         const currentTime = now - scheduler.startTime
         scheduler.clearSequenceEvents(this.stateManager.getName())
@@ -389,10 +431,15 @@ export class Sequence {
     this.stateManager.setLooping(true)
     this.stateManager.setPlaying(true)
 
+    // Quantize the loop start to the next bar boundary on the master grid so
+    // newly-started LOOPs slot in cleanly with whatever is already running.
+    const startTime = this.nextQuantizedTime(currentTime)
+
     const result = loopSequence({
       sequenceName: this.stateManager.getName(),
       scheduler,
       currentTime,
+      startTime,
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       scheduleEventsFromTimeFn: (sched, fromTime) => this.scheduleEventsFromTime(sched, fromTime),
       getPatternDurationFn: () => this.getPatternDuration(),
