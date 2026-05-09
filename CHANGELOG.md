@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **DSL: launch quantize** ([`#212`](https://github.com/signalcompose/orbitscore/issues/212))
+  - `global.quantize("bar")` (default) で `LOOP()` の起動を次のグローバル小節境界まで待機
+  - `seq.quantize(...)` で per-sequence override
+  - 値: `"off"` | `"beat"` | `"bar"` | `"2bar"` | `"4bar"` | `"8bar"`
+  - `RUN()` (one-shot) は常に即時 (quantize 影響なし)
+- **VS Code: `quantize` 補完 / hover** を global / sequence 両方に追加
+
+### Changed
+
+- **LOOP 中の `play()` 差し替えを次サイクル待機に変更** ([`#212`](https://github.com/signalcompose/orbitscore/issues/212))
+  - 従来は即時で再スケジュール (リズムが小節をまたいで崩れる)
+  - 新挙動: 次の小節境界で新パターンが発火
+  - `gain` / `pan` / `audio` / `chop` は従来通り即時で反映
+  - `tempo` / `beat` / `length` は従来通り次サイクル待機
+- **VS Code 補完から実装が削除済の `global.tick()` / `global.key()` を除外**
+  - 構文ハイライト (`orbitscore-audio.tmLanguage.json`) からも除去
+- **`fixpitch` の hover を「(planned, see #213)」表記に変更**
+
+### Fixed
+
+- LOOP 起動が即時で行われていたため、 走行中の他ループとの整列ができなかった問題 ([`#212`](https://github.com/signalcompose/orbitscore/issues/212))
+
 ## [1.1.0] - 2026-05-06
 
 ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 を経て、 学習サイト群の公開、 .orbs 拡張子への切替、 診断機能の追加を最終スコープに取り込んで stable 化。

@@ -59,15 +59,16 @@ describe('Seamless Parameter Update', () => {
       expect(state.tempo).toBe(140)
     })
 
-    it('should trigger seamless update for play() during LOOP', async () => {
+    it('should defer play() change to next loop cycle during LOOP', async () => {
       seq.tempo(120).play(1, 0, 1, 0)
       await seq.loop()
       consoleLogSpy.mockClear()
 
       seq.play(1, 1, 1, 1)
 
+      // play() changes are deferred to next bar boundary so swaps stay musical
       expect(consoleLogSpy).toHaveBeenCalledWith(
-        expect.stringContaining('🎚️ test: play=1 1 1 1 (seamless)'),
+        expect.stringContaining('🎚️ test: play=1 1 1 1 (next cycle)'),
       )
       const state = seq.getState()
       expect(state.playPattern).toEqual([1, 1, 1, 1])

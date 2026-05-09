@@ -58,41 +58,50 @@ describe('analyzeMethodChain', () => {
   })
 })
 
+const baseGlobalContext = {
+  hasAudio: false,
+  hasChop: false,
+  hasPlay: false,
+  hasBeat: false,
+  hasLength: false,
+  hasTempo: false,
+  hasRun: false,
+  hasOutput: false,
+  hasLinkAudio: false,
+  hasQuantize: false,
+  lastMethod: '',
+}
+
 describe('getContextualCompletions — global context', () => {
   it('includes linkAudio completion when hasLinkAudio is false', () => {
-    const context = {
-      hasAudio: false,
-      hasChop: false,
-      hasPlay: false,
-      hasBeat: false,
-      hasLength: false,
-      hasTempo: false,
-      hasRun: false,
-      hasOutput: false,
-      hasLinkAudio: false,
-      lastMethod: '',
-    }
-    const items = getContextualCompletions(context, true)
+    const items = getContextualCompletions({ ...baseGlobalContext }, true)
     const labels = items.map((i) => i.label as string)
     expect(labels).toContain('linkAudio')
   })
 
   it('omits linkAudio completion when hasLinkAudio is true (already declared)', () => {
-    const context = {
-      hasAudio: false,
-      hasChop: false,
-      hasPlay: false,
-      hasBeat: false,
-      hasLength: false,
-      hasTempo: false,
-      hasRun: false,
-      hasOutput: false,
-      hasLinkAudio: true,
-      lastMethod: '',
-    }
-    const items = getContextualCompletions(context, true)
+    const items = getContextualCompletions({ ...baseGlobalContext, hasLinkAudio: true }, true)
     const labels = items.map((i) => i.label as string)
     expect(labels).not.toContain('linkAudio')
+  })
+
+  it('includes quantize completion by default', () => {
+    const items = getContextualCompletions({ ...baseGlobalContext }, true)
+    const labels = items.map((i) => i.label as string)
+    expect(labels).toContain('quantize')
+  })
+
+  it('omits quantize completion when hasQuantize is true', () => {
+    const items = getContextualCompletions({ ...baseGlobalContext, hasQuantize: true }, true)
+    const labels = items.map((i) => i.label as string)
+    expect(labels).not.toContain('quantize')
+  })
+
+  it('does not suggest the removed tick or key methods', () => {
+    const items = getContextualCompletions({ ...baseGlobalContext }, true)
+    const labels = items.map((i) => i.label as string)
+    expect(labels).not.toContain('tick')
+    expect(labels).not.toContain('key')
   })
 })
 
@@ -107,6 +116,7 @@ describe('getContextualCompletions — sequence context', () => {
     hasRun: false,
     hasOutput: false,
     hasLinkAudio: false,
+    hasQuantize: false,
     lastMethod: '',
   }
 
@@ -129,5 +139,32 @@ describe('getContextualCompletions — sequence context', () => {
     const items = getContextualCompletions(context, false)
     const labels = items.map((i) => i.label as string)
     expect(labels).not.toContain('output')
+  })
+
+  it('includes quantize completion once hasPlay=true', () => {
+    const context = { ...baseContext, hasAudio: true, hasPlay: true }
+    const items = getContextualCompletions(context, false)
+    const labels = items.map((i) => i.label as string)
+    expect(labels).toContain('quantize')
+  })
+
+  it('omits quantize completion when hasQuantize=true', () => {
+    const context = {
+      ...baseContext,
+      hasAudio: true,
+      hasPlay: true,
+      hasQuantize: true,
+    }
+    const items = getContextualCompletions(context, false)
+    const labels = items.map((i) => i.label as string)
+    expect(labels).not.toContain('quantize')
+  })
+
+  it('does not suggest fixpitch or time as completions on a sequence', () => {
+    const context = { ...baseContext, hasAudio: true, hasPlay: true }
+    const items = getContextualCompletions(context, false)
+    const labels = items.map((i) => i.label as string)
+    expect(labels).not.toContain('fixpitch')
+    expect(labels).not.toContain('time')
   })
 })
