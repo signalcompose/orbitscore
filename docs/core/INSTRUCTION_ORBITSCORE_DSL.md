@@ -220,6 +220,46 @@ seq1.play(1, (0, 1, 2, 3, 4))    // 1 gets 1/2 (2 beats), then 5-tuplet in remai
 
 ## 5. Transport Commands
 
+### Launch Quantize (`quantize`)
+
+`LOOP()` の起動と LOOP 中の `play()` 差し替えは、デフォルトで「現在進行中の小節が終わるまで待機」してから反映される。これは Ableton Live の Global Quantization と同様の挙動で、複数のループを並走させているときに新しいループが小節境界で揃って入る。`RUN()`(one-shot) は常に即時実行で、 `quantize` の影響を受けない。
+
+```js
+global.quantize("bar")   // default. 次の小節頭まで待機
+global.quantize("off")   // 旧来通り即時実行 (live coding でトリガー感を残したい場合)
+global.quantize("2bar")  // 2 小節に 1 回だけ受け付ける
+global.quantize("beat")  // 1 拍単位 (グローバル meter の denominator 基準)
+```
+
+**設定可能な値:**
+
+| value | 意味 |
+|---|---|
+| `"off"` | 即時実行 (legacy 挙動) |
+| `"beat"` | 1 拍 (= `60_000 / tempo` ms) |
+| `"bar"` | 1 小節 (グローバル `beat()` 基準) **default** |
+| `"2bar"` | 2 小節 |
+| `"4bar"` | 4 小節 |
+| `"8bar"` | 8 小節 |
+
+**シーケンス側 override:**
+
+```js
+seq.quantize("off")    // この seq だけ即時起動 (drop / fill 用)
+seq.quantize("2bar")   // この seq だけ 2 小節間隔
+```
+
+`seq.quantize()` 未指定時はグローバル値を継承する。
+
+**スコープ:**
+
+- 影響する: `LOOP()` の新規起動、 LOOP 中の `play(...)` 差し替え。
+- 影響しない: `RUN()` (常に即時)、 LOOP 中の `gain()` / `pan()` / `audio()` / `chop()` (常に即時)、 LOOP 中の `tempo()` / `beat()` / `length()` (もとから次サイクル待機)。
+
+**ポリメーター時の挙動:**
+
+`quantize` のグリッドは「グローバル `beat()` × `tempo()`」で決まる。 `seq.beat(5 by 4)` のような per-seq meter override がある場合でも、グローバル小節境界が起動の基準。シーケンス自身の小節境界に揃えたい場合は post-1.1 で別オプションとして検討。
+
 ### Global Transport
 Available on `global`:
 
