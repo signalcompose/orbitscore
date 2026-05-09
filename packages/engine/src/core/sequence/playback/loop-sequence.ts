@@ -6,7 +6,16 @@ import type { Scheduler } from '../../global/types'
 export interface LoopSequenceOptions {
   sequenceName: string
   scheduler: Scheduler
+  /** Wall-clock-relative time (ms since scheduler.startTime) when loop() was invoked. */
   currentTime: number
+  /**
+   * Quantized start time (ms since scheduler.startTime). When omitted or
+   * equal to `currentTime`, the loop starts immediately. When greater, the
+   * first iteration is scheduled at this time and the first inter-iteration
+   * timer is delayed by `startTime - currentTime` so subsequent boundaries
+   * land on `startTime + n × patternDuration`.
+   */
+  startTime?: number
   scheduleEventsFn: (scheduler: Scheduler, offset: number, baseTime: number) => void
   scheduleEventsFromTimeFn: (scheduler: Scheduler, fromTime: number) => void
   getPatternDurationFn: () => number
@@ -43,6 +52,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
     sequenceName,
     scheduler,
     currentTime,
+    startTime,
     scheduleEventsFn,
     scheduleEventsFromTimeFn,
     getPatternDurationFn,
@@ -55,15 +65,28 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // Clear old events for this sequence first
   clearSequenceEventsFn(sequenceName)
 
-  console.log(`🔄 ${sequenceName} (loop started)`)
-
   // Calculate initial pattern duration
   let patternDuration = getPatternDurationFn()
 
-  // Track next scheduled time (cumulative, to avoid drift)
-  let nextScheduleTime = currentTime
+  // Quantized start: if startTime is in the future, the first iteration is
+  // scheduled at startTime and the first wait is reduced from one full
+  // patternDuration to (patternDuration - leadIn) so subsequent boundaries
+  // stay on startTime + n × patternDuration.
+  const effectiveStart = startTime !== undefined && startTime > currentTime ? startTime : currentTime
+  const leadInMs = effectiveStart - currentTime
 
-  // Schedule first iteration
+  if (leadInMs > 0) {
+    console.log(
+      `🔄 ${sequenceName} (loop queued, +${Math.round(leadInMs)}ms to next quantize boundary)`,
+    )
+  } else {
+    console.log(`🔄 ${sequenceName} (loop started)`)
+  }
+
+  // Track next scheduled time (cumulative, to avoid drift)
+  let nextScheduleTime = effectiveStart
+
+  // Schedule first iteration at the quantized start
   scheduleEventsFn(scheduler, 0, nextScheduleTime)
 
   // Track previous mute state for transition detection
@@ -73,7 +96,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // (setInterval can't change its interval after creation)
   let loopTimer: NodeJS.Timeout = undefined as unknown as NodeJS.Timeout
 
-  const scheduleNextIteration = () => {
+  const scheduleNextIteration = (delayMs: number) => {
     loopTimer = setTimeout(() => {
       const isMuted = getIsMutedFn()
       const isLooping = getIsLoopingFn()
@@ -93,9 +116,9 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
       // Detect mute -> unmute transition
       if (wasMuted && !isMuted) {
         // Just unmuted! Reschedule events from current time
-        const currentTime = Date.now() - scheduler.startTime
+        const now = Date.now() - scheduler.startTime
         console.log(
-          `🔓 ${sequenceName}: detected unmute in LOOP timer, rescheduling from ${currentTime}ms`,
+          `🔓 ${sequenceName}: detected unmute in LOOP timer, rescheduling from ${now}ms`,
         )
 
         // Clear old events (if any)
@@ -105,10 +128,10 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
         scheduler.reinitializeSequenceTracking(sequenceName)
 
         // Schedule events from current time (seamless resume)
-        scheduleEventsFromTimeFn(scheduler, currentTime)
+        scheduleEventsFromTimeFn(scheduler, now)
 
         // Update nextScheduleTime to align with current time
-        nextScheduleTime = currentTime
+        nextScheduleTime = now
       } else if (!isMuted) {
         // Advance by the PREVIOUS duration (matches the setTimeout interval)
         // This keeps the bar boundary aligned with when the callback actually fired
@@ -122,18 +145,20 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
       wasMuted = isMuted
 
       // Schedule next iteration with current pattern duration
-      scheduleNextIteration()
-    }, patternDuration)
+      scheduleNextIteration(patternDuration)
+    }, delayMs)
     // Update stateManager with current timer ID so stop() can cancel it
     setLoopTimerFn?.(loopTimer)
   }
 
-  scheduleNextIteration()
+  // First wait absorbs the lead-in to the quantize boundary plus one pattern,
+  // so iteration 1 events land at effectiveStart + patternDuration.
+  scheduleNextIteration(leadInMs + patternDuration)
 
   return {
     isPlaying: true,
     isLooping: true,
-    loopStartTime: currentTime,
+    loopStartTime: effectiveStart,
     loopTimer,
   }
 }
