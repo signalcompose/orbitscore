@@ -24,7 +24,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **Branch**: `212-loop-run-quantize`
 **Issue**: signalcompose/orbitscore#212
 **Related Issue**: signalcompose/orbitscore#213 (`fixpitch()` / `time()` 実装、 別 PR)
-**Commit**: `[PENDING]`
+**Commits**:
+- `61ec990` feat(scheduler): quantize LOOP startup and play() updates to bar boundary
+- `856fbca` fix(vscode): align completions with implementation, add quantize support
+- `7f14096` test(scheduler): cover quantize math, LOOP boundary snap, and completion
+- `aae395d` docs: document launch quantize, log #212 and CHANGELOG entry
 
 **動機**: ライブコーディング中に `LOOP(seq)` を発火するとループの途中から音が出てしまい、 走っている他ループとリズムが噛み合わない。 `play()` の差し替えも即時で反映されてバーをまたぐ swap がリズムを崩す。 ユーザー要望:
 > 本来であれば、その時に走っているループが終わり次第実行がされるというのが良いかと思っています。これはLOOPを回したまま各トラックの内容を変更した時にも同じことが言えます。
