@@ -75,7 +75,7 @@
       "patterns": [
         {
           "name": "support.function.global.orbitscore",
-          "match": "\\b(tempo|tick|beat|key|run|loop|stop|mute|unmute|linkAudio)(?=\\()"
+          "match": "\\b(tempo|beat|quantize|run|loop|stop|mute|unmute|linkAudio)(?=\\()"
         },
         {
           "name": "support.function.sequence.orbitscore",
@@ -87,7 +87,7 @@
         },
         {
           "name": "entity.name.function.orbitscore",
-          "match": "\\.(tempo|tick|beat|key|audio|chop|play|output|linkAudio)(?=\\()"
+          "match": "\\.(tempo|beat|quantize|audio|chop|play|output|linkAudio)(?=\\()"
         }
       ]
     },

@@ -1177,9 +1177,12 @@ function registerHoverProvider(context: vscode.ExtensionContext) {
         global: '**global**\n\nGlobal transport object for controlling playback',
         tempo: '**tempo(bpm)**\n\nSet tempo in beats per minute (20-999)',
         beat: '**beat(n by m)**\n\nSet time signature (e.g., 4 by 4, 5 by 4)',
+        quantize:
+          '**quantize(value)**\n\nLaunch quantize for `LOOP()` and LOOP-time `play()` updates.\n\nValues: `"off"` | `"beat"` | `"bar"` | `"2bar"` | `"4bar"` | `"8bar"`. Default: `"bar"`. `RUN()` is always immediate.',
         play: '**play(...slices)**\n\nPlay audio slices. Supports numbers, nested structures, and modifiers',
         chop: '**chop(n)**\n\nDivide audio into n equal slices',
-        fixpitch: '**fixpitch(semitones)**\n\nPreserve pitch while time-stretching',
+        fixpitch:
+          '**fixpitch(semitones)** _(planned, not yet implemented — see issue #213)_\n\nPitch shift in semitones, preserving slice duration.',
         var: '**var**\n\nDeclare a variable',
         init: '**init**\n\nInitialize a transport or sequence',
         GLOBAL: '**GLOBAL**\n\nGlobal transport constant',
