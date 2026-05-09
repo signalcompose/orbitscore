@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.77 Issue #216 (1.1.x backport): PUBLISH_MARKETPLACE gate を release.yml に追加 (May 09, 2026)
+
+**Date**: May 09, 2026
+**Status**: ⏳ IN PROGRESS (PR pending)
+**Branch**: `216-backport-publish-marketplace-gate-1.1.x`
+**Issue**: signalcompose/orbitscore#216
+**Origin**: main の entry 6.76 (Issue #197) で導入された gate を 1.1.x にも backport
+
+**動機**: v1.1.1 tag push (release run 25605590449, May 09) で `Publish to VS Code Marketplace` step が `VSCE_PAT` 未登録のまま failure、 `Publish to Open VSX` も skip された partial failure が発生。 main 側では entry 6.76 (May 07) で `vars.PUBLISH_MARKETPLACE == 'true'` gate を入れて、 secret 未登録環境でも GitHub Release だけ成功する clean run になるよう整備していたが、 1.1.x line に backport されておらず ICMC 直前で再露呈した。
+
+**変更内容** (`.github/workflows/release.yml`):
+
+1. **header docstring 更新**: `PUBLISH_MARKETPLACE` repo variable の役割と publish gating model (`!= 'true'` → skip / `== 'true'` → 必須) を明記
+2. **`Publish to VS Code Marketplace` step の `if:` 条件**:
+   - 旧: `startsWith(github.ref, 'refs/tags/v') && steps.release_type.outputs.is_prerelease == 'false'`
+   - 新: 上記に `&& vars.PUBLISH_MARKETPLACE == 'true'` を追加
+3. **`Publish to Open VSX` step の `if:` 条件**: 同 gate を追加
+4. **error message 更新**: 「`VSCE_PAT` 未登録なのに `PUBLISH_MARKETPLACE=true` が立っている」 という actionable な文言に書き換え
+5. **`Summary` step**: `PUBLISH_MARKETPLACE` を env に注入、 stable + gate off 時は `🚀 Stable release — Marketplace/Open VSX gated off (PUBLISH_MARKETPLACE != 'true', see #197)` を表示
+
+**期待効果**:
+- v1.1.1 を tag 打ち直しした際、 secret 未整備のまま Marketplace/Open VSX step が `if:` で skip され、 GitHub Release のみ作成の clean SUCCESS run になる
+- secret 整備後は `gh variable set PUBLISH_MARKETPLACE --body 'true' --repo signalcompose/orbitscore` で gate を開けば再 enable
+
+**スコープ外**:
+- `VSCE_PAT` / `OVSX_PAT` 自体の登録は本 PR では扱わない (Yamato 側の credentials)
+- main の v1.2.0 line への影響なし (main 側は entry 6.76 で導入済)
+
 ### 6.76 Issue #212 (1.1.x backport): LOOP/RUN scheduler を quantize 起動に変更 (May 09, 2026)
 
 **Date**: May 09, 2026
