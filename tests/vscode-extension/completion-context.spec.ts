@@ -80,10 +80,7 @@ describe('getContextualCompletions — global context', () => {
   })
 
   it('omits linkAudio completion when hasLinkAudio is true (already declared)', () => {
-    const items = getContextualCompletions(
-      { ...baseGlobalContext, hasLinkAudio: true },
-      true,
-    )
+    const items = getContextualCompletions({ ...baseGlobalContext, hasLinkAudio: true }, true)
     const labels = items.map((i) => i.label as string)
     expect(labels).not.toContain('linkAudio')
   })
@@ -95,10 +92,7 @@ describe('getContextualCompletions — global context', () => {
   })
 
   it('omits quantize completion when hasQuantize is true', () => {
-    const items = getContextualCompletions(
-      { ...baseGlobalContext, hasQuantize: true },
-      true,
-    )
+    const items = getContextualCompletions({ ...baseGlobalContext, hasQuantize: true }, true)
     const labels = items.map((i) => i.label as string)
     expect(labels).not.toContain('quantize')
   })
