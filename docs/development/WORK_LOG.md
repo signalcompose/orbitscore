@@ -24,7 +24,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **Branch**: `release/1.1.x-212-loop-run-quantize` (cherry-pick from `212-loop-run-quantize`)
 **Issue**: signalcompose/orbitscore#212
 **Related Issue**: signalcompose/orbitscore#213 (`fixpitch()` / `time()` 実装、 別 PR)
-**Commits**: `[PENDING]` (cherry-pick hashes from main-based PR)
+**Commits** (cherry-picked from `212-loop-run-quantize`):
+- `53e26ba` feat(scheduler): quantize LOOP startup and play() updates to bar boundary
+- `cf5f62f` fix(vscode): align completions with implementation, add quantize support
+- `ce39754` test(scheduler): cover quantize math, LOOP boundary snap, and completion
+- `e79b220` docs: document launch quantize, log #212 and CHANGELOG entry
 **Target**: v1.1.1 stable (`release/1.1.x` lineage)
 
 **動機**: ライブコーディング中に `LOOP(seq)` を発火するとループの途中から音が出てしまい、 走っている他ループとリズムが噛み合わない。 `play()` の差し替えも即時で反映されてバーをまたぐ swap がリズムを崩す。 ユーザー要望:
