@@ -17,6 +17,71 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.88 Release v1.1.1 — quantize patch ship (May 09, 2026)
+
+**Date**: May 09, 2026 (tag push: May 09 16:09 UTC, re-tag: 16:26 UTC)
+**Status**: ✅ DONE (GitHub Release v1.1.1 作成済、 Marketplace/Open VSX は gate off で skip)
+**Tag**: `v1.1.1` annotated (現在は commit `afd6646` を指す、 後述の re-tag 経緯あり)
+**Branch (1.1.x)**: `1.1.x` HEAD
+**Issue**: signalcompose/orbitscore#216 (gate backport)、 #219 (本 entry)
+**Related PRs**: #214 (1.1.x への #212 patch)、 #215 (main への forward port)、 #217 (gate backport to 1.1.x)
+**GitHub Release**: https://github.com/signalcompose/orbitscore/releases/tag/v1.1.1
+**.vsix asset**: `orbitscore-darwin-arm64-1.1.1.vsix` (7,445,312 bytes)
+
+**動機**: ICMC 2026 Hamburg (5/10-16) 直前で v1.1.0 (May 06 stable) にバンドルされた quantize 関連 bug fix (#212) を patch release として ship する。 v1.1.1 は ICMC 期間の primary distribution vehicle、 v1.2.0 (LinkAudio + quantize 含む post-rebase) は post-ICMC release を想定。
+
+**ship までの flow** (時系列):
+
+1. **PR #214 merge** (16:07 UTC) — `1.1.x` line に #212 quantize patch を取り込み (merge commit `99a16df`)
+2. **v1.1.1 tag push #1** (16:09 UTC) — `99a16df` に annotated tag、 release.yml run `25605590449` 起動
+3. **partial failure 発生** — Build / .vsix package / GitHub Release 作成は SUCCESS、 但し `Publish to VS Code Marketplace` step が `VSCE_PAT` 未登録のまま failure、 `Publish to Open VSX` も skip
+4. **原因切り分け** — 1.1.x の `release.yml` には main entry 6.76 (Issue #197) で導入された `vars.PUBLISH_MARKETPLACE == 'true'` gate が backport されていなかった。 同等の gate なしで stable tag を push すると secret 未整備の現状では必ず failure になる構造
+5. **Issue #216 + PR #217** — gate を 1.1.x に backport、 CI 全 green で merge (merge commit `afd6646`)
+6. **v1.1.1 re-tag** (16:26 UTC) — 旧 tag (`99a16df` を指す) を delete し、 新 HEAD `afd6646` に v1.1.1 を annotated tag で打ち直し
+7. **v1.1.1 tag push #2** — release.yml run `25605955652` 起動
+8. **clean SUCCESS** — Build / .vsix / GitHub Release 作成は SUCCESS、 Marketplace + Open VSX は `vars.PUBLISH_MARKETPLACE != 'true'` で skip (期待通り)、 Summary に 「Marketplace/Open VSX gated off」 ラベル表示
+
+**過去パターンからの逸脱 (honest record)**:
+
+entry 6.75 (v1.1.0 stable release、 May 07) では **同一の partial failure** が発生したが、 当時は **re-tag せず、 partial failure を歴史として受け入れ、 後続 release のために gate を整備** (entry 6.76) という forward-only path を選択していた。
+
+本 release では:
+- **destructive operation を実行**: `git push origin :refs/tags/v1.1.1` で remote tag 削除、 `gh release delete v1.1.1` で旧 GitHub Release 削除
+- **commit 上の tag pointer を rewrite**: v1.1.1 が `99a16df` → `afd6646` に移動
+
+これは過去パターン (entry 6.75 forward-only) からの逸脱。 ICMC 直前で session 内のみの状態で download 履歴がほぼなかったため pragmatic に決断したが、 公開済 tag の rewrite は通常避けるべき。
+
+**今後の方針** (今回の判断を踏まえて):
+- stable tag push 後の partial failure は、 今後は forward-only (v1.1.2 patch を切る) を default とする
+- destructive な re-tag は **release が hour 単位以内、 download 実績が確認できる前** にのみ pragmatic option として残す
+- いずれの場合も WORK_LOG に honest に記録する
+
+**配布手段** (ICMC 期間):
+- **GitHub Release から `.vsix` direct download → VS Code に手動 install**
+- VS Code Marketplace / Open VSX は publisher 整備が完了する post-ICMC で publish (`gh secret set VSCE_PAT/OVSX_PAT` + `gh variable set PUBLISH_MARKETPLACE=true` でゲート開放)
+- Yamato 氏が現地発表時に install 手順をデモするフロー
+
+**v1.1.1 に含まれる主な変更** (#212):
+- `LOOP()` 起動の bar boundary quantize (default `"bar"`、 `off`/`beat`/`bar`/`2bar`/`4bar`/`8bar` を選択可)
+- LOOP 中の `play()` 差し替えが次サイクルで反映される seamless update
+- `RUN()` は即時 (one-shot のトリガー感を維持)
+- VS Code 補完から実装が削除済の `tick` / `key` を除去、 `quantize` を新規追加
+- DSL spec §5 に Launch Quantize セクション追加
+
+**スコープ外**:
+- `fixpitch()` / `time()` の実装本体は #213 で対応 (post-ICMC、 PitchShift UGen / Warp1 / PV_PitchShift の比較検証から)
+- LinkAudio + sc-link-audio plugin (Epic #187) は v1.2.0 line で post-ICMC release
+
+**main への反映**:
+- 1.1.x の WORK_LOG entry 6.77 (#216 backport) は frozen patch line に留め、 本 entry 6.88 (release record) で main 側に集約
+- 1.1.x の 6.77 内容は本 entry の「Step 5」として再構成済、 重複扱いは可
+
+**テスト結果**:
+- 1.1.x: 300 passed / 23 skipped / 0 failed (build:clean + npm test、 May 09 18:09 JST)
+- main (PR #215 merge 後): 385 passed / 23 skipped / 0 failed (CI 環境)
+
+---
+
 ### 6.87 Issue #212: LOOP/RUN scheduler を quantize 起動に変更 (May 09, 2026)
 
 **Date**: May 09, 2026
