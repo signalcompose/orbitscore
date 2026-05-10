@@ -89,12 +89,20 @@ export class Global {
   //   For audio, key detection feature needs to be implemented first
 
   // Audio path and device management
-  audioPath(value?: string): string | this {
-    const result = this.audioManager.audioPath(value)
+  audioPath(...values: (string | string[])[]): string | this {
+    const result = this.audioManager.audioPath(...values)
     if (typeof result === 'string') {
       return result
     }
     return this
+  }
+
+  /**
+   * Resolve a sample spec (path or bare bank name) to an absolute file path.
+   * Used by Sequence.audio() so it does not have to know the resolution rules.
+   */
+  resolveAudioSpec(spec: string): string {
+    return this.audioManager.resolve(spec)
   }
 
   audioDevice(deviceName: string): this {

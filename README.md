@@ -190,7 +190,7 @@ Project documentation is organized in the [`docs/`](docs/) folder:
 
 ### Parser & Interpreter
 
-- ✅ Global settings (`GLOBAL`, `tempo()`, `beat()`, `audioPath()`)
+- ✅ Global settings (`GLOBAL`, `tempo()`, `beat()`, `audioPath()` — variadic / array, with `~/` expansion and TidalCycles-style sample bank lookup `audio("bd:2")` since v1.2.1)
 - ✅ Sequence settings (`global.seq`, `beat()`, `length()`, `audio()`)
 - ✅ Pattern definition (`play()`, `chop()`)
 - ✅ Method chaining syntax
@@ -251,7 +251,7 @@ Project documentation is organized in the [`docs/`](docs/) folder:
 npm test
 ```
 
-**230/253 tests passing (90.9%)**:
+**424/447 tests passing (94.9%, 23 skipped for SC integration)**:
 
 - Parser: ✅ Complete (50 tests)
 - Audio Engine: ✅ Complete (15 tests)
