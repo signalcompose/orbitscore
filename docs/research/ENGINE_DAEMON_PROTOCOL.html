@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engine Daemon IPC Protocol Specification (v0.1 draft) — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="engine-daemon-ipc-protocol-specification-v01-draft">Engine Daemon IPC Protocol Specification (v0.1 draft)</h1>
+<p><strong>ステータス</strong>: Draft（Issue #93 の初期設計）
+<strong>最終更新</strong>: 2026-04-17
+<strong>対象バージョン</strong>: protocol v0.1 (Phase 1b)
+<strong>関連 Issue</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/93">#93</a>, <a href="https://github.com/signalcompose/orbitscore/issues/107">#107</a>, <a href="https://github.com/signalcompose/orbitscore/issues/108">#108</a></p>
+<hr>
+<h2 id="1-目的">1. 目的</h2>
+<p>TypeScript 側アプリケーション層（VS Code extension / interpreter）と Rust 側 audio engine (<code>orbit-audio-daemon</code>) を繋ぐ <strong>IPC プロトコル</strong>を定義する。</p>
+<p>このプロトコルは以下を満たす:</p>
+<ul>
+<li><strong>汎用</strong>: OrbitScore 以外のアプリケーションも同じ daemon を使える</li>
+<li><strong>明示的</strong>: 全てのコマンドとイベントが型付き JSON メッセージ</li>
+<li><strong>秒ベース</strong>: Musical time (BPM / 拍子) は呼び出し側が秒に変換して渡す</li>
+<li><strong>拡張可能</strong>: Phase 2 以降の MIDI Event / Plugin 操作を破壊的変更なしに追加できる</li>
+</ul>
+<hr>
+<h2 id="2-トランスポートと接続">2. トランスポートと接続</h2>
+<h3 id="21-トランスポート">2.1 トランスポート</h3>
+<ul>
+<li><strong>WebSocket over localhost</strong>: <code>ws://127.0.0.1:&lt;port&gt;</code></li>
+<li><code>&lt;port&gt;</code> は daemon 起動時に自動選択（OS から free port 取得）</li>
+<li>daemon は選択した port を <strong>stdout に 1 行 JSON</strong>（改行終端、即 flush）で出力:</li>
+</ul>
+<pre><code class="language-json">{&quot;ready&quot;: true, &quot;port&quot;: 52913, &quot;protocol_version&quot;: &quot;0.1&quot;}
+</code></pre>
+<p>クライアントは stdout をキャプチャしてこれを読み、接続する。
+改行コードは <code>\n</code>（LF）を正、Windows でも <code>\r</code> をトリムして解釈すること。</p>
+<h3 id="211-起動失敗の通知と-stderr-監視">2.1.1 起動失敗の通知と stderr 監視</h3>
+<p>daemon が起動中に失敗した場合（audio device 取得失敗、port bind 失敗、Rust panic 等）:</p>
+<ul>
+<li><strong>stderr</strong> に 1 行 JSON を出力して非ゼロ終了コードで exit:</li>
+</ul>
+<pre><code class="language-json">{&quot;ready&quot;: false, &quot;error&quot;: {&quot;code&quot;: &quot;DEVICE_NOT_FOUND&quot;, &quot;message&quot;: &quot;No audio device available&quot;}}
+</code></pre>
+<p>クライアントは以下の順序とタイムアウトで起動を監視する:</p>
+<ol>
+<li><strong>stderr は stdout と並行監視</strong>を開始（sequential ではない）</li>
+<li>stdout の ready line を最大 <strong>10 秒</strong>待つ</li>
+<li>ready line 未到達で期限到来 → stderr の内容を error として報告、daemon を kill</li>
+<li>ready line 到達 → WebSocket 接続開始。接続タイムアウト <strong>3 秒</strong></li>
+<li>WebSocket connect 失敗 → <strong>その時点での stderr 出力を error 診断情報として含めて</strong>報告、daemon を kill</li>
+<li>WebSocket connect 成功 → handshake フレーム待ち最大 <strong>5 秒</strong></li>
+<li>handshake timeout → 同様に stderr を確認してから報告</li>
+</ol>
+<h3 id="22-認証--権限">2.2 認証 / 権限</h3>
+<ul>
+<li><code>127.0.0.1</code> のみ bind（外部接続拒否）</li>
+<li>トークン認証なし（localhost 前提）</li>
+<li>将来的にリモート対応する場合は別 protocol version で token ベース認証を追加</li>
+</ul>
+<h3 id="23-エンコーディング">2.3 エンコーディング</h3>
+<ul>
+<li>UTF-8 JSON テキストフレーム</li>
+<li>バイナリフレームは使用しない（大きいサンプルデータはパス渡し）</li>
+</ul>
+<h3 id="24-接続ライフサイクル">2.4 接続ライフサイクル</h3>
+<pre><code>Client                          Daemon
+  |------ WebSocket connect ------&gt;|
+  |&lt;----- OK (handshake frame) -----|
+  |------ Command (id=1) ---------&gt;|
+  |&lt;----- Response (id=1) ---------|
+  |                                |
+  |&lt;----- Event (notification) ----|
+  |                                |
+  |------ Command (id=2) ---------&gt;|
+  |&lt;----- Response (id=2) ---------|
+  |                                |
+  |------ WebSocket close --------&gt;|
+</code></pre>
+<h3 id="25-ハンドシェイク">2.5 ハンドシェイク</h3>
+<p>最初のフレームとして daemon が送信:</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;handshake&quot;,
+  &quot;protocol_version&quot;: &quot;0.1&quot;,
+  &quot;daemon_version&quot;: &quot;0.0.1&quot;,
+  &quot;capabilities&quot;: [&quot;playback&quot;, &quot;src&quot;]
+}
+</code></pre>
+<ul>
+<li>クライアントはハンドシェイク到達を <strong>5 秒</strong>のタイムアウトで待つ</li>
+<li>期限内に届かなければ WebSocket を閉じ、daemon プロセスを kill してエラー通知</li>
+<li><code>protocol_version</code> の <strong>major</strong> 不一致なら即切断（v0.x と v1.x は互換なし）</li>
+<li><strong>minor</strong> 違いは警告ログを出して継続（forward-compatible fields は無視）</li>
+</ul>
+<hr>
+<h2 id="3-メッセージの種類">3. メッセージの種類</h2>
+<p>3 種類のメッセージを扱う:</p>
+<table>
+<thead>
+<tr>
+<th>タイプ</th>
+<th>方向</th>
+<th>識別</th>
+<th>応答</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Command</strong></td>
+<td>Client → Daemon</td>
+<td><code>id</code> 必須</td>
+<td>同 <code>id</code> の Response が返る</td>
+</tr>
+<tr>
+<td><strong>Response</strong></td>
+<td>Daemon → Client</td>
+<td>同 <code>id</code></td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>Event</strong></td>
+<td>Daemon → Client</td>
+<td><code>id</code> なし</td>
+<td>—</td>
+</tr>
+</tbody></table>
+<h3 id="31-command-フォーマット">3.1 Command フォーマット</h3>
+<p>JSON-RPC 2.0 の影響を受けた独自形式:</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;uuid-v4&quot;,
+  &quot;method&quot;: &quot;LoadSample&quot;,
+  &quot;params&quot;: { &quot;path&quot;: &quot;/abs/path.wav&quot; }
+}
+</code></pre>
+<ul>
+<li><code>id</code>: クライアントが生成する UUID v4（応答照合用）</li>
+<li><code>method</code>: CamelCase のコマンド名</li>
+<li><code>params</code>: メソッド固有のパラメータオブジェクト</li>
+</ul>
+<h3 id="32-response-フォーマット">3.2 Response フォーマット</h3>
+<p>成功時:</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;uuid-v4&quot;,
+  &quot;result&quot;: { &quot;sample_id&quot;: &quot;s-123&quot; }
+}
+</code></pre>
+<p>失敗時:</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;uuid-v4&quot;,
+  &quot;error&quot;: {
+    &quot;code&quot;: &quot;SAMPLE_NOT_FOUND&quot;,
+    &quot;message&quot;: &quot;file does not exist&quot;,
+    &quot;details&quot;: { &quot;path&quot;: &quot;/abs/path.wav&quot; }
+  }
+}
+</code></pre>
+<h3 id="33-event-フォーマット">3.3 Event フォーマット</h3>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;event&quot;,
+  &quot;event&quot;: &quot;PlayEnded&quot;,
+  &quot;data&quot;: { &quot;play_id&quot;: &quot;p-456&quot;, &quot;ended_at_sec&quot;: 2.345 }
+}
+</code></pre>
+<ul>
+<li><code>id</code> がないことで Event と判別</li>
+<li><code>event</code> は CamelCase のイベント名</li>
+</ul>
+<h3 id="34-command-タイムアウト--接続断ポリシー">3.4 Command タイムアウト / 接続断ポリシー</h3>
+<ul>
+<li><strong>Command timeout</strong>: 既定 <strong>30 秒</strong>。指定時間内に <code>id</code> 一致の Response が届かなければ
+クライアントは <code>COMMAND_TIMEOUT</code> エラーとして扱い、WebSocket 接続を fatal とみなす</li>
+<li><strong>自動 retry なし</strong>: 既定では失敗 Command を再送しない（副作用の二重実行防止）</li>
+<li><strong>WebSocket 切断</strong>: fatal として扱う<ul>
+<li>in-flight Command は全て失敗として reject</li>
+<li>自動 reconnect は行わず、クライアント UI にエラー通知</li>
+<li>再接続はユーザーアクション（明示的な再接続コマンド）に限定</li>
+<li><strong>daemon 側の責務</strong>: TCP FIN 受信時点で全ての再生 / ロード済みサンプルを即座にクリーンアップ。クライアントが Stop 等で後始末を送る必要はない（送れないため）</li>
+</ul>
+</li>
+<li><strong>idempotency</strong>: 本 protocol の command は<strong>非冪等</strong>を前提。再送は呼び出し側が判断</li>
+</ul>
+<hr>
+<h2 id="4-phase-1-commands必須">4. Phase 1 Commands（必須）</h2>
+<h3 id="loadsample">LoadSample</h3>
+<p>音声ファイルを daemon にロードし、後続の <code>PlayAt</code> で参照できる <code>sample_id</code> を返す。</p>
+<pre><code class="language-json">// Request
+{
+  &quot;id&quot;: &quot;u1&quot;,
+  &quot;method&quot;: &quot;LoadSample&quot;,
+  &quot;params&quot;: { &quot;path&quot;: &quot;/abs/path/kick.wav&quot; }
+}
+
+// Response
+{
+  &quot;id&quot;: &quot;u1&quot;,
+  &quot;result&quot;: { &quot;sample_id&quot;: &quot;s-7b4e&quot;, &quot;frames&quot;: 24000, &quot;channels&quot;: 1, &quot;sample_rate&quot;: 48000 }
+}
+</code></pre>
+<ul>
+<li><code>path</code> は絶対パス（symlink は解決される）</li>
+<li>daemon はロード時に project SR へ自動リサンプル（Issue #100 の実装）</li>
+</ul>
+<h3 id="unloadsample">UnloadSample</h3>
+<p>ロード済みサンプルを破棄（メモリ解放）。</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;u2&quot;,
+  &quot;method&quot;: &quot;UnloadSample&quot;,
+  &quot;params&quot;: { &quot;sample_id&quot;: &quot;s-7b4e&quot; }
+}
+</code></pre>
+<h3 id="playat">PlayAt</h3>
+<p>指定時刻にサンプルを発音。</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;u3&quot;,
+  &quot;method&quot;: &quot;PlayAt&quot;,
+  &quot;params&quot;: {
+    &quot;time_sec&quot;: 0.5,
+    &quot;sample_id&quot;: &quot;s-7b4e&quot;,
+    &quot;gain&quot;: 1.0,
+    &quot;pan&quot;: 0.0
+  }
+}
+
+// Response
+{
+  &quot;id&quot;: &quot;u3&quot;,
+  &quot;result&quot;: { &quot;play_id&quot;: &quot;p-a9f2&quot; }
+}
+</code></pre>
+<ul>
+<li><code>time_sec</code>: daemon 内部 transport の基準時刻（起動時に 0.0 からスタート、<code>ResetTransport</code> で reset 可能 / Phase 2 で検討）。詳細はセクション 11 の Open Questions 参照</li>
+<li><code>gain</code>: <code>[0.0, ∞)</code>。範囲外（負値）は <code>PARAM_OUT_OF_RANGE</code> で reject。上限超過はクリッピング前提で accept</li>
+<li><code>pan</code>: <code>[-1.0, 1.0]</code>。範囲外は自動 clamp（UX 優先、reject しない）、省略時は 0.0</li>
+</ul>
+<h3 id="stop">Stop</h3>
+<p>発音中の再生を停止（冪等: 存在しない / 終了済み play_id でも成功）。</p>
+<pre><code class="language-json">// Request
+{
+  &quot;id&quot;: &quot;u4&quot;,
+  &quot;method&quot;: &quot;Stop&quot;,
+  &quot;params&quot;: { &quot;play_id&quot;: &quot;p-a9f2&quot; }
+}
+
+// Response (playing / already-stopped 両方とも同じ構造)
+{
+  &quot;id&quot;: &quot;u4&quot;,
+  &quot;result&quot;: { &quot;play_id&quot;: &quot;p-a9f2&quot;, &quot;status&quot;: &quot;stopped&quot; | &quot;already_stopped&quot; | &quot;not_found&quot; }
+}
+</code></pre>
+<h3 id="setglobalgain">SetGlobalGain</h3>
+<p>マスターゲインを設定（ramp 付き）。</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;u5&quot;,
+  &quot;method&quot;: &quot;SetGlobalGain&quot;,
+  &quot;params&quot;: { &quot;value&quot;: 0.8, &quot;ramp_sec&quot;: 0.1 }
+}
+</code></pre>
+<h3 id="getstatus">GetStatus</h3>
+<p>daemon の状態取得。</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;u6&quot;,
+  &quot;method&quot;: &quot;GetStatus&quot;
+}
+
+// Response
+{
+  &quot;id&quot;: &quot;u6&quot;,
+  &quot;result&quot;: {
+    &quot;daemon_version&quot;: &quot;0.0.1&quot;,
+    &quot;protocol_version&quot;: &quot;0.1&quot;,
+    &quot;uptime_sec&quot;: 123.4,
+    &quot;output_sample_rate&quot;: 48000,
+    &quot;output_channels&quot;: 2,
+    &quot;loaded_samples&quot;: 12,
+    &quot;active_plays&quot;: 3
+  }
+}
+</code></pre>
+<h3 id="ping">Ping</h3>
+<p>接続確認。</p>
+<pre><code class="language-json">{ &quot;id&quot;: &quot;u7&quot;, &quot;method&quot;: &quot;Ping&quot; }
+// Response
+{ &quot;id&quot;: &quot;u7&quot;, &quot;result&quot;: &quot;pong&quot; }
+</code></pre>
+<hr>
+<h2 id="5-phase-2-予約-commands実装は-107-以降">5. Phase 2 予約 Commands（実装は #107 以降）</h2>
+<h3 id="plugin-関連">Plugin 関連</h3>
+<ul>
+<li><code>LoadPlugin { path, kind: &quot;vst3&quot; | &quot;clap&quot; | &quot;midi_out&quot; }</code> → <code>plugin_id</code></li>
+<li><code>UnloadPlugin { plugin_id }</code></li>
+<li><code>PluginMidiEvent { plugin_id, time_sec, event: MidiEvent }</code></li>
+<li><code>PluginParam { plugin_id, param_id, value, ramp_sec? }</code></li>
+<li><code>ConnectNode { src: NodeId, dst: NodeId, bus? }</code></li>
+<li><code>DisconnectNode { src, dst }</code></li>
+<li><code>ScanPlugins { kind }</code> → プラグイン一覧</li>
+</ul>
+<h3 id="transport-関連">Transport 関連</h3>
+<ul>
+<li><code>SetTempo { bpm, time_sec? }</code>（ホストプラグインが欲しがる場合）</li>
+<li><code>SetTimeSignature { numerator, denominator }</code></li>
+</ul>
+<h3 id="midi-event-型共通">MIDI Event 型（共通）</h3>
+<pre><code class="language-json">// NoteOn
+{ &quot;kind&quot;: &quot;NoteOn&quot;, &quot;channel&quot;: 0, &quot;pitch&quot;: 60, &quot;velocity&quot;: 100 }
+
+// NoteOff
+{ &quot;kind&quot;: &quot;NoteOff&quot;, &quot;channel&quot;: 0, &quot;pitch&quot;: 60, &quot;velocity&quot;: 64 }
+
+// CC
+{ &quot;kind&quot;: &quot;CC&quot;, &quot;channel&quot;: 0, &quot;controller&quot;: 74, &quot;value&quot;: 80 }
+
+// PitchBend
+{ &quot;kind&quot;: &quot;PitchBend&quot;, &quot;channel&quot;: 0, &quot;value&quot;: 8192 }
+
+// ProgramChange
+{ &quot;kind&quot;: &quot;ProgramChange&quot;, &quot;channel&quot;: 0, &quot;program&quot;: 42 }
+
+// Aftertouch
+{ &quot;kind&quot;: &quot;Aftertouch&quot;, &quot;channel&quot;: 0, &quot;value&quot;: 50 }
+</code></pre>
+<p>Plugin が必要になったら <a href="https://github.com/signalcompose/orbitscore/issues/107">Issue #107</a> で実装する。現時点では <strong>型定義のみ</strong>を protocol に予約しておく。</p>
+<hr>
+<h2 id="6-phase-1-events">6. Phase 1 Events</h2>
+<h3 id="playstarted">PlayStarted</h3>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;event&quot;,
+  &quot;event&quot;: &quot;PlayStarted&quot;,
+  &quot;data&quot;: { &quot;play_id&quot;: &quot;p-a9f2&quot;, &quot;sample_id&quot;: &quot;s-7b4e&quot;, &quot;time_sec&quot;: 0.5 }
+}
+</code></pre>
+<h3 id="playended">PlayEnded</h3>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;event&quot;,
+  &quot;event&quot;: &quot;PlayEnded&quot;,
+  &quot;data&quot;: { &quot;play_id&quot;: &quot;p-a9f2&quot;, &quot;ended_at_sec&quot;: 1.0 }
+}
+</code></pre>
+<h3 id="streamstats定期送信">StreamStats（定期送信）</h3>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;event&quot;,
+  &quot;event&quot;: &quot;StreamStats&quot;,
+  &quot;data&quot;: { &quot;cpu_load&quot;: 0.12, &quot;xruns&quot;: 0, &quot;buffer_underruns&quot;: 0, &quot;now_sec&quot;: 12.34 }
+}
+</code></pre>
+<ul>
+<li>送信頻度: <strong>1 Hz 固定</strong>（Phase 1。Phase 2 で opt-in / rate 調整を検討）</li>
+<li>クライアントが処理しない場合は無視して良い（WebSocket 側で自然に drop される想定）</li>
+</ul>
+<h3 id="daemonerror">DaemonError</h3>
+<p>処理中の異常を通知。重大度で 2 分類:</p>
+<pre><code class="language-json">// Fatal: クライアントは接続を閉じてユーザーに通知すべき
+{
+  &quot;type&quot;: &quot;event&quot;,
+  &quot;event&quot;: &quot;DaemonError&quot;,
+  &quot;data&quot;: { &quot;severity&quot;: &quot;fatal&quot;, &quot;code&quot;: &quot;DEVICE_LOST&quot;, &quot;message&quot;: &quot;Audio device disappeared&quot; }
+}
+
+// Warning: 続行可能、ログのみ推奨
+{
+  &quot;type&quot;: &quot;event&quot;,
+  &quot;event&quot;: &quot;DaemonError&quot;,
+  &quot;data&quot;: { &quot;severity&quot;: &quot;warning&quot;, &quot;code&quot;: &quot;STREAM_XRUN&quot;, &quot;message&quot;: &quot;Buffer underrun occurred&quot; }
+}
+</code></pre>
+<p><strong>fatal コード例</strong>: <code>DEVICE_LOST</code>, <code>FATAL_PANIC</code>
+<strong>warning コード例</strong>: <code>STREAM_XRUN</code>, <code>STREAM_OVERRUN</code></p>
+<hr>
+<h2 id="7-エラーコード">7. エラーコード</h2>
+<table>
+<thead>
+<tr>
+<th>Code</th>
+<th>意味</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>SAMPLE_NOT_FOUND</code></td>
+<td>LoadSample / PlayAt で指定 sample が存在しない</td>
+</tr>
+<tr>
+<td><code>FILE_DECODE_ERROR</code></td>
+<td>LoadSample でデコードに失敗</td>
+</tr>
+<tr>
+<td><code>UNSUPPORTED_FORMAT</code></td>
+<td>サポート外の sample format</td>
+</tr>
+<tr>
+<td><code>RESAMPLE_ERROR</code></td>
+<td>SRC 変換失敗</td>
+</tr>
+<tr>
+<td><code>DEVICE_NOT_FOUND</code></td>
+<td>起動時に audio device が見つからない</td>
+</tr>
+<tr>
+<td><code>DEVICE_CONFIG_ERROR</code></td>
+<td>config 取得失敗</td>
+</tr>
+<tr>
+<td><code>PLAY_ID_NOT_FOUND</code></td>
+<td>Stop で指定 play が存在しない</td>
+</tr>
+<tr>
+<td><code>PROTOCOL_VERSION_MISMATCH</code></td>
+<td>handshake で version 不一致</td>
+</tr>
+<tr>
+<td><code>MALFORMED_REQUEST</code></td>
+<td>JSON / method / params が不正</td>
+</tr>
+<tr>
+<td><code>COMMAND_TIMEOUT</code></td>
+<td>クライアント側でタイムアウト検出（Response 欠落）</td>
+</tr>
+<tr>
+<td><code>PARAM_OUT_OF_RANGE</code></td>
+<td>PlayAt の gain / pan 等が仕様範囲外</td>
+</tr>
+<tr>
+<td><code>SAMPLE_IN_USE</code></td>
+<td>UnloadSample で再生中のサンプルを unload しようとした</td>
+</tr>
+<tr>
+<td><code>INTERNAL_ERROR</code></td>
+<td>上記以外の予期しないエラー</td>
+</tr>
+</tbody></table>
+<p>Phase 2 で追加予定のコード（<code>PLUGIN_NOT_FOUND</code>, <code>PLUGIN_INCOMPATIBLE</code>, <code>PLUGIN_INIT_ERROR</code>, <code>NODE_NOT_FOUND</code> 等）は #107 実装時に確定する。</p>
+<h3 id="71-unload--stop-の冪等性">7.1 Unload / Stop の冪等性</h3>
+<ul>
+<li><code>UnloadSample</code>: サンプルが再生中なら <code>SAMPLE_IN_USE</code> でエラー（呼び出し側が Stop 後に unload）</li>
+<li><code>Stop</code>: <code>play_id</code> が既に終了済み or 存在しない場合は<strong>成功として扱う</strong>（冪等）</li>
+</ul>
+<hr>
+<h2 id="8-mcp-model-context-protocol-との関係">8. MCP (Model Context Protocol) との関係</h2>
+<p>MCP は LLM agent とツールを繋ぐ標準プロトコル。本プロトコルとの比較:</p>
+<table>
+<thead>
+<tr>
+<th>観点</th>
+<th>本 protocol (v0.1)</th>
+<th>MCP</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>目的</td>
+<td>Audio engine のリアルタイム制御</td>
+<td>LLM agent のツール呼び出し</td>
+</tr>
+<tr>
+<td>トランスポート</td>
+<td>WebSocket</td>
+<td>stdio / SSE / HTTP</td>
+</tr>
+<tr>
+<td>リアルタイム性</td>
+<td>必須（音声タイミング）</td>
+<td>低レイテンシだが必須ではない</td>
+</tr>
+<tr>
+<td>Event / Streaming</td>
+<td>必須（<code>PlayEnded</code> 等）</td>
+<td>Streaming 対応あり</td>
+</tr>
+<tr>
+<td>ツール記述</td>
+<td>不要（クライアントが契約を知っている）</td>
+<td>必須（LLM が動的に発見）</td>
+</tr>
+</tbody></table>
+<p><strong>結論</strong>: 本 protocol は MCP とは別物として設計するが、<strong>将来 LLM agent から daemon を触りたい場合は、MCP→本 protocol のブリッジ</strong>を別途作る（Issue <a href="https://github.com/signalcompose/orbitscore/issues/96">#96</a> のスコープ）。</p>
+<p>互換性を取る必要はないが、メッセージ型は <strong>MCP 風の Command/Response/Event トリプル</strong>に揃えることで、将来 MCP アダプタを書きやすくしておく。</p>
+<hr>
+<h2 id="9-バージョニング">9. バージョニング</h2>
+<h3 id="プロトコルバージョン">プロトコルバージョン</h3>
+<ul>
+<li><code>protocol_version</code>: semver 風文字列（例 <code>&quot;0.1&quot;</code>, <code>&quot;1.0&quot;</code>, <code>&quot;1.1&quot;</code>）</li>
+<li>後方互換な追加（新 command / 新 event）: minor bump（<code>0.1</code> → <code>0.2</code>）</li>
+<li>破壊的変更: major bump（<code>1.0</code> → <code>2.0</code>）</li>
+</ul>
+<p>クライアントと daemon の major が不一致なら即切断。</p>
+<h3 id="command-の後方互換性">Command の後方互換性</h3>
+<ul>
+<li>新 command を追加するのは後方互換</li>
+<li>既存 command に <strong>必須</strong> params を追加するのは破壊的変更</li>
+<li>既存 command に <strong>オプショナル</strong> params を追加するのは互換</li>
+<li>Response スキーマへのフィールド追加は互換（クライアントは未知フィールドを無視する）</li>
+</ul>
+<hr>
+<h2 id="10-実装上の注意点107--108-向け">10. 実装上の注意点（#107 / #108 向け）</h2>
+<h3 id="rust-daemon-側107">Rust daemon 側（#107）</h3>
+<ul>
+<li>WebSocket 受信スレッドと audio callback は別スレッド</li>
+<li>Command 受信 → internal command queue (ringbuf or crossbeam channel) → audio thread が consume</li>
+<li>Audio callback 内でロックや allocation を避ける</li>
+<li>Sample データは <code>Arc&lt;Vec&lt;f32&gt;&gt;</code> で共有（load 時に固定）</li>
+<li>長時間実行されるが panic で落ちないこと。panic したら client に <code>DaemonError</code> を送ってから exit</li>
+</ul>
+<h3 id="typescript-側108">TypeScript 側（#108）</h3>
+<ul>
+<li>daemon 子プロセス管理: <code>child_process.spawn</code> + stdout 監視</li>
+<li>WebSocket クライアント: <code>ws</code> or <code>reconnecting-websocket</code></li>
+<li>接続断時の reconnection policy（指数 backoff）</li>
+<li>Command は Promise で包み、<code>id</code> で Response を照合（タイムアウトあり）</li>
+<li>Event は EventEmitter として expose</li>
+<li>既存の <code>osc-client</code> と同じインターフェースで wrap すれば、interpreter 側の変更を最小化できる</li>
+</ul>
+<hr>
+<h2 id="11-検討中--open-questions">11. 検討中 / Open Questions</h2>
+<table>
+<thead>
+<tr>
+<th>質問</th>
+<th>優先度</th>
+<th>決定期限</th>
+<th>現案 / 判断基準</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>時刻基準</strong></td>
+<td>HIGH</td>
+<td>#107 実装前</td>
+<td>daemon 内部 transport 基準、起動時 0.0 開始。<code>ResetTransport</code> / <code>SeekTransport</code> は Phase 2 で検討</td>
+</tr>
+<tr>
+<td><strong>Sample hot reload</strong></td>
+<td>MEDIUM</td>
+<td>#107 実装時</td>
+<td>同一ファイルでも常に新規 ID（シンプル優先）</td>
+</tr>
+<tr>
+<td><strong>Streaming decode</strong></td>
+<td>LOW</td>
+<td>Phase 3</td>
+<td>大きい WAV のストリーミング再生は Phase 3 で評価</td>
+</tr>
+<tr>
+<td><strong>Buffer size 指定</strong></td>
+<td>LOW</td>
+<td>必要時</td>
+<td>daemon 一括決定（呼び出し側から指定不可）</td>
+</tr>
+<tr>
+<td><strong>Error details per code</strong></td>
+<td>MEDIUM</td>
+<td>#107 実装時</td>
+<td>各 error code 固有の <code>details</code> フィールド仕様は実装時に確定</td>
+</tr>
+<tr>
+<td><strong>Sample channel mismatch</strong></td>
+<td>MEDIUM</td>
+<td>#107 実装時</td>
+<td>mono ↔ stereo の自動 upmix / downmix か、<code>CHANNEL_MISMATCH</code> 拒否か、実装時に選定</td>
+</tr>
+<tr>
+<td><strong>Phase 2 error codes</strong></td>
+<td>LOW</td>
+<td>Phase 2 実装時</td>
+<td>Plugin / Node 関連のエラーコードは実装時に確定</td>
+</tr>
+<tr>
+<td><del><strong>パラメータ検証厳密度</strong></del></td>
+<td>✅ RESOLVED</td>
+<td>—</td>
+<td>Section 4 PlayAt で確定: 負の gain は reject、pan は clamp</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="12-参考">12. 参考</h2>
+<ul>
+<li><a href="https://github.com/signalcompose/orbitscore/issues/105">Epic #105</a></li>
+<li><a href="../planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.html">docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md</a></li>
+<li><a href="https://www.jsonrpc.org/specification">JSON-RPC 2.0 Specification</a></li>
+<li><a href="https://modelcontextprotocol.io/">Model Context Protocol</a></li>
+<li><a href="https://datatracker.ietf.org/doc/html/rfc6455">WebSocket RFC 6455</a></li>
+</ul>
+
+</main>
+</body>
+</html>

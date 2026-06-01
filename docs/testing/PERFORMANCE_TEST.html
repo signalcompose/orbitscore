@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore Performance Testing — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-performance-testing">OrbitScore Performance Testing</h1>
+<p><strong>Last Updated</strong>: 2025-10-26
+<strong>Test Environment</strong>: macOS, Node.js v22+, VS Code / Cursor / Claude Code</p>
+<h2 id="-overview">📚 Overview</h2>
+<p>This document provides procedures for performance testing OrbitScore&#39;s live coding capabilities in IDE environments (VS Code, Cursor, Claude Code). Tests verify audio quality, system performance, and user experience.</p>
+<h2 id="-prerequisites">🎯 Prerequisites</h2>
+<h3 id="system-requirements">System Requirements</h3>
+<ul>
+<li>Node.js v22.0.0+</li>
+<li>SuperCollider (audio engine)</li>
+<li>VS Code / Cursor / Claude Code</li>
+<li>Audio device (speakers or headphones)</li>
+</ul>
+<h3 id="setup">Setup</h3>
+<ol>
+<li><strong>Build the engine</strong>:</li>
+</ol>
+<pre><code class="language-bash">cd packages/engine
+npm install
+npm run build
+</code></pre>
+<ol start="2">
+<li><strong>Install VS Code extension</strong>:</li>
+</ol>
+<pre><code class="language-bash">code --install-extension packages/vscode-extension/orbitscore-0.0.1.vsix
+</code></pre>
+<ol start="3">
+<li><strong>Verify audio files</strong>:</li>
+</ol>
+<pre><code class="language-bash">ls -la test-assets/audio/
+# Required: kick.wav, snare.wav, hihat.wav, bass.wav, arpeggio_c.wav
+</code></pre>
+<hr>
+<h2 id="-performance-test-procedures">🧪 Performance Test Procedures</h2>
+<h3 id="test-file">Test File</h3>
+<p>Open <code>examples/performance-test.orbs</code> in your IDE (VS Code/Cursor/Claude Code)</p>
+<h3 id="phase-1-basic-functionality">Phase 1: Basic Functionality</h3>
+<h4 id="step-1-global-initialization">Step 1: Global Initialization</h4>
+<ol>
+<li>Select global initialization lines:</li>
+</ol>
+<pre><code class="language-osc">var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath(&quot;../test-assets/audio&quot;)
+global.start()
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong> (Mac) or <strong>Ctrl+Enter</strong> (Linux/Windows)</li>
+<li><strong>Expected</strong>: No errors, global context created</li>
+<li><strong>Check</strong>: Output panel shows successful execution</li>
+</ol>
+<h4 id="step-2-kick-drum-pattern">Step 2: Kick Drum Pattern</h4>
+<ol>
+<li>Select kick drum setup:</li>
+</ol>
+<pre><code class="language-osc">var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio(&quot;kick.wav&quot;)
+kick.play(1, 0, 1, 0)
+LOOP(kick)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Kick drum plays 4-on-the-floor pattern</li>
+<li><strong>Check</strong>: Audio plays at 120 BPM, kick on beats 1 and 3</li>
+<li><strong>Measure</strong>: Latency from Cmd+Enter to audio start</li>
+</ol>
+<h4 id="step-3-add-hi-hat">Step 3: Add Hi-Hat</h4>
+<ol>
+<li>Select hi-hat setup:</li>
+</ol>
+<pre><code class="language-osc">var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio(&quot;hihat.wav&quot;)
+hihat.play(1, 1, 1, 1)
+LOOP(kick, hihat)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Hi-hat joins kick drum with quarter note pattern</li>
+<li><strong>Check</strong>: Both kick and hi-hat play simultaneously in sync</li>
+</ol>
+<h4 id="step-4-add-snare">Step 4: Add Snare</h4>
+<ol>
+<li>Select snare setup:</li>
+</ol>
+<pre><code class="language-osc">var snare = init global.seq
+snare.beat(4 by 4).length(1)
+snare.audio(&quot;snare.wav&quot;)
+snare.play(0, 1, 0, 1)
+LOOP(kick, hihat, snare)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Snare adds to the rhythm on beats 2 and 4</li>
+<li><strong>Check</strong>: Full drum kit sound with tight synchronization</li>
+</ol>
+<h3 id="phase-2-advanced-features">Phase 2: Advanced Features</h3>
+<h4 id="step-5-bassline-with-chop">Step 5: Bassline with Chop</h4>
+<ol>
+<li>Select bassline setup:</li>
+</ol>
+<pre><code class="language-osc">var bass = init global.seq
+bass.beat(4 by 4).length(2)
+bass.audio(&quot;bass.wav&quot;).chop(8)
+bass.play(1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0)
+LOOP(kick, hihat, snare, bass)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Bassline plays with sliced audio (8 slices)</li>
+<li><strong>Check</strong>: Bass plays different slices creating melodic pattern</li>
+<li><strong>Verify</strong>: Audio slicing is accurate (no clicks or pops)</li>
+</ol>
+<h4 id="step-6-complex-nested-pattern">Step 6: Complex Nested Pattern</h4>
+<ol>
+<li>Select arpeggio setup:</li>
+</ol>
+<pre><code class="language-osc">var arp = init global.seq
+arp.beat(4 by 4).length(1)
+arp.audio(&quot;arpeggio_c.wav&quot;).chop(16)
+arp.play(1, 0, 3, 0, 5, 0, 3, 0, 8, 0, 5, 0, 3, 0, 1, 0)
+LOOP(kick, hihat, snare, bass, arp)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Arpeggio plays complex melodic pattern</li>
+<li><strong>Check</strong>: Timing is accurate with all other sequences</li>
+<li><strong>Monitor</strong>: CPU usage during complex multi-track playback</li>
+</ol>
+<h3 id="phase-3-real-time-manipulation">Phase 3: Real-Time Manipulation</h3>
+<h4 id="step-7-tempo-change">Step 7: Tempo Change</h4>
+<ol>
+<li>Select tempo change:</li>
+</ol>
+<pre><code class="language-osc">global._tempo(140)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: All sequences speed up to 140 BPM on next bar</li>
+<li><strong>Check</strong>: No audio dropouts, smooth tempo transition</li>
+<li><strong>Measure</strong>: Time for tempo change to take effect</li>
+</ol>
+<h4 id="step-8-pattern-modification">Step 8: Pattern Modification</h4>
+<ol>
+<li>Select pattern change:</li>
+</ol>
+<pre><code class="language-osc">kick._play(1, 0, 0, 1, 0, 1, 0, 0)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Kick pattern changes to breakbeat style</li>
+<li><strong>Check</strong>: Change takes effect on next bar boundary</li>
+</ol>
+<h4 id="step-9-slice-reordering">Step 9: Slice Reordering</h4>
+<ol>
+<li>Select bassline slice reorder:</li>
+</ol>
+<pre><code class="language-osc">bass._play(5, 0, 3, 0, 1, 0, 7, 0, 6, 0, 2, 0, 4, 0, 0, 0)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Bassline plays slices in different order</li>
+<li><strong>Check</strong>: Melodic pattern changes immediately</li>
+</ol>
+<h3 id="phase-4-transport-control">Phase 4: Transport Control</h3>
+<h4 id="step-10-individual-muting">Step 10: Individual Muting</h4>
+<ol>
+<li>Select mute command:</li>
+</ol>
+<pre><code class="language-osc">MUTE(hihat, snare)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Hi-hat and snare muted, kick and bass continue</li>
+<li><strong>Check</strong>: Muted sequences stop, others maintain timing</li>
+</ol>
+<h4 id="step-11-unmute-unidirectional-toggle">Step 11: Unmute (Unidirectional Toggle)</h4>
+<ol>
+<li>Select unmute command (remove from MUTE list):</li>
+</ol>
+<pre><code class="language-osc">MUTE()
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: All sequences unmute</li>
+<li><strong>Check</strong>: All sequences resume in sync</li>
+</ol>
+<h4 id="step-12-selective-loop">Step 12: Selective Loop</h4>
+<ol>
+<li>Select loop subset:</li>
+</ol>
+<pre><code class="language-osc">LOOP(kick, bass)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Only kick and bass continue, others auto-stop</li>
+<li><strong>Check</strong>: Unidirectional Toggle behavior (exclusion-based)</li>
+</ol>
+<h3 id="phase-5-polymeter-test">Phase 5: Polymeter Test</h3>
+<h4 id="step-13-different-meter-54">Step 13: Different Meter (5/4)</h4>
+<ol>
+<li>Select 5/4 sequence:</li>
+</ol>
+<pre><code class="language-osc">var poly5 = init global.seq
+poly5.beat(5 by 4).length(1)
+poly5.audio(&quot;kick.wav&quot;)
+poly5.play(1, 0, 0, 1, 0)
+LOOP(kick, poly5)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: 5/4 plays alongside 4/4</li>
+<li><strong>Check</strong>: Polymeter works correctly, independent timing</li>
+</ol>
+<h4 id="step-14-odd-meter-78">Step 14: Odd Meter (7/8)</h4>
+<ol>
+<li>Select 7/8 sequence:</li>
+</ol>
+<pre><code class="language-osc">var poly7 = init global.seq
+poly7.beat(7 by 8).length(1)
+poly7.audio(&quot;hihat.wav&quot;)
+poly7.play(1, 1, 0, 1, 1, 0, 1)
+LOOP(kick, poly5, poly7)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Three different meters play simultaneously (4/4, 5/4, 7/8)</li>
+<li><strong>Check</strong>: All sequences maintain their own timing accurately</li>
+</ol>
+<h3 id="phase-6-stress-test">Phase 6: Stress Test</h3>
+<h4 id="step-15-multiple-sequences">Step 15: Multiple Sequences</h4>
+<ol>
+<li>Create 6-8 simultaneous sequences</li>
+<li>Press <strong>Cmd+Enter</strong> for each</li>
+<li><strong>Expected</strong>: All sequences play simultaneously</li>
+<li><strong>Monitor</strong>:<ul>
+<li>CPU usage</li>
+<li>Memory usage</li>
+<li>Audio dropouts (should be none)</li>
+<li>Synchronization accuracy</li>
+</ul>
+</li>
+</ol>
+<h4 id="step-16-rapid-pattern-changes">Step 16: Rapid Pattern Changes</h4>
+<ol>
+<li>Execute pattern changes every 4 bars</li>
+<li><strong>Expected</strong>: Changes take effect smoothly</li>
+<li><strong>Monitor</strong>: System stability and response time</li>
+</ol>
+<h4 id="step-17-error-handling">Step 17: Error Handling</h4>
+<ol>
+<li>Select intentional error (e.g., missing audio file):</li>
+</ol>
+<pre><code class="language-osc">var err = init global.seq
+err.audio(&quot;nonexistent.wav&quot;)
+err.play(1, 1, 1, 1)
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Error message displayed, other sequences continue</li>
+<li><strong>Check</strong>: System remains stable after error</li>
+</ol>
+<h3 id="phase-7-cleanup">Phase 7: Cleanup</h3>
+<h4 id="step-18-stop-all">Step 18: Stop All</h4>
+<ol>
+<li>Select stop command:</li>
+</ol>
+<pre><code class="language-osc">global.stop()
+</code></pre>
+<ol start="2">
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: All audio stops immediately</li>
+<li><strong>Check</strong>: Clean stop, no hanging processes</li>
+</ol>
+<hr>
+<h2 id="-performance-metrics">📊 Performance Metrics</h2>
+<h3 id="audio-quality-benchmarks">Audio Quality Benchmarks</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Target</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Latency</td>
+<td>&lt; 10ms</td>
+<td>✅ 0-2ms</td>
+</tr>
+<tr>
+<td>Dropouts</td>
+<td>None</td>
+<td>✅ None</td>
+</tr>
+<tr>
+<td>Sync Accuracy</td>
+<td>&lt; 10ms drift</td>
+<td>✅ Accurate</td>
+</tr>
+<tr>
+<td>Sample Rate</td>
+<td>48kHz</td>
+<td>✅ 48kHz</td>
+</tr>
+<tr>
+<td>Bit Depth</td>
+<td>24bit</td>
+<td>✅ 24bit</td>
+</tr>
+</tbody></table>
+<h3 id="system-performance-benchmarks">System Performance Benchmarks</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Target</th>
+<th>Measured</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>CPU Usage (4 tracks)</td>
+<td>&lt; 30%</td>
+<td>📝 Measure</td>
+</tr>
+<tr>
+<td>CPU Usage (8 tracks)</td>
+<td>&lt; 50%</td>
+<td>📝 Measure</td>
+</tr>
+<tr>
+<td>Memory Usage</td>
+<td>Stable</td>
+<td>📝 Measure</td>
+</tr>
+<tr>
+<td>Response Time (Cmd+Enter)</td>
+<td>&lt; 100ms</td>
+<td>📝 Measure</td>
+</tr>
+</tbody></table>
+<h3 id="user-experience-metrics">User Experience Metrics</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Expected Behavior</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Syntax Highlighting</td>
+<td>Real-time</td>
+<td>✅ Working</td>
+</tr>
+<tr>
+<td>Autocomplete</td>
+<td>Suggestions on <code>.</code></td>
+<td>✅ Working</td>
+</tr>
+<tr>
+<td>Error Messages</td>
+<td>Clear, with line numbers</td>
+<td>✅ Working</td>
+</tr>
+<tr>
+<td>Visual Feedback</td>
+<td>Status updates in output panel</td>
+<td>✅ Working</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="-troubleshooting">🐛 Troubleshooting</h2>
+<h3 id="no-audio-output">No Audio Output</h3>
+<p><strong>Check</strong>:</p>
+<ol>
+<li>SuperCollider is running</li>
+<li>Audio files exist in correct path</li>
+<li>System audio settings</li>
+<li>Output panel for error messages</li>
+</ol>
+<p><strong>Solution</strong>:</p>
+<pre><code class="language-bash"># Verify SuperCollider process
+ps aux | grep scsynth
+
+# Check audio files
+ls -la test-assets/audio/*.wav
+
+# Restart engine
+global.stop()
+global.start()
+</code></pre>
+<h3 id="high-cpu-usage">High CPU Usage</h3>
+<p><strong>Check</strong>:</p>
+<ol>
+<li>Number of simultaneous sequences</li>
+<li>Complex chop patterns</li>
+<li>System processes</li>
+</ol>
+<p><strong>Solution</strong>:</p>
+<ul>
+<li>Reduce number of sequences</li>
+<li>Simplify chop patterns</li>
+<li>Use <code>MUTE()</code> to disable unused sequences</li>
+</ul>
+<h3 id="timing-drift">Timing Drift</h3>
+<p><strong>Check</strong>:</p>
+<ol>
+<li>System clock accuracy</li>
+<li>Tempo settings</li>
+<li>Polymeter configurations</li>
+</ol>
+<p><strong>Solution</strong>:</p>
+<ul>
+<li>Restart global scheduler: <code>global.stop()</code> → <code>global.start()</code></li>
+<li>Simplify meter configurations</li>
+<li>Verify no other audio applications are running</li>
+</ul>
+<h3 id="cmdenter-not-working">Cmd+Enter Not Working</h3>
+<p><strong>Check</strong>:</p>
+<ol>
+<li>File has <code>.orbs</code> extension</li>
+<li>Extension is activated</li>
+<li>Keybinding is registered</li>
+</ol>
+<p><strong>Solution</strong>:</p>
+<ul>
+<li>Restart IDE</li>
+<li>Use Command Palette: &quot;OrbitScore: Run Selection&quot;</li>
+<li>Verify extension installation</li>
+</ul>
+<hr>
+<h2 id="-test-report-template">📝 Test Report Template</h2>
+<p>After completing performance tests, document results:</p>
+<pre><code class="language-markdown"># Performance Test Report
+
+## Test Date: YYYY-MM-DD
+## Tester: [Name]
+## Environment: [macOS/Linux/Windows], [IDE: VS Code/Cursor/Claude Code]
+
+### Test Results Summary
+- [ ] All basic functionality tests passed
+- [ ] Real-time manipulation works
+- [ ] Complex patterns play correctly
+- [ ] Performance is acceptable
+- [ ] Error handling works
+
+### Performance Metrics
+- Average Latency: [X]ms
+- Peak CPU Usage: [X]%
+- Memory Usage: [X]MB
+- Synchronization Accuracy: [X]ms drift
+
+### Issues Found
+1. [Issue description]
+2. [Issue description]
+
+### Recommendations
+1. [Improvement suggestion]
+2. [Improvement suggestion]
+</code></pre>
+<hr>
+<h2 id="-related-documentation">🔗 Related Documentation</h2>
+<ul>
+<li><strong>DSL Specification</strong>: <a href="../core/INSTRUCTION_ORBITSCORE_DSL.html"><code>../core/INSTRUCTION_ORBITSCORE_DSL.md</code></a></li>
+<li><strong>Testing Guide</strong>: <a href="./TESTING_GUIDE.html"><code>./TESTING_GUIDE.md</code></a></li>
+<li><strong>User Manual</strong>: <a href="../user/ja/USER_MANUAL.html"><code>../user/ja/USER_MANUAL.md</code></a></li>
+<li><strong>Implementation Plan</strong>: <a href="../development/IMPLEMENTATION_PLAN.html"><code>../development/IMPLEMENTATION_PLAN.md</code></a></li>
+</ul>
+
+</main>
+</body>
+</html>

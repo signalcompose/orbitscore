@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore Development Work Log - 2026-02 Archive — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-development-work-log---2026-02-archive">OrbitScore Development Work Log - 2026-02 Archive</h1>
+<p><strong>Archive Period</strong>: 2026-02
+<strong>Note</strong>: This is an archived version of the work log. For recent work, see <a href="../development/WORK_LOG.html">../development/WORK_LOG.md</a></p>
+<hr>
+<h3 id="650-issue-85-fix-audio-relative-path-resolution-february-27-2026">6.50 Issue #85: Fix audio relative path resolution (February 27, 2026)</h3>
+<p><strong>Date</strong>: February 27, 2026
+<strong>Status</strong>: ✅ COMPLETE
+<strong>Branch</strong>: <code>85-fix-audio-relative-path-resolution</code>
+<strong>Issue</strong>: #85</p>
+<p><strong>Work Content</strong>: Normal Mode でオーディオファイルの相対パスが <code>.osc</code> ファイルの場所ではなく <code>process.cwd()</code> を基準に解決されるバグを修正。<code>sequence.audio()</code> でパスを設定する時点で絶対パスに解決するようにした。</p>
+<p><strong>Root Cause</strong>: <code>sequence.audio()</code> が <code>globalState.audioPath</code> 未設定時に相対パスをそのまま保存し、<code>process-statement.ts</code> の RUN/LOOP が <code>process.cwd()</code> を基準に解決していた。Extension が注入する <code>setDocumentDirectory()</code> の <code>_documentDirectory</code> が使われていなかった。</p>
+<p><strong>Changes</strong>:</p>
+<ul>
+<li><code>packages/engine/src/core/global/types.ts</code> — <code>GlobalState</code> 型に <code>documentDirectory</code> フィールドを追加</li>
+<li><code>packages/engine/src/core/global/audio-manager.ts</code> — <code>getState()</code> で <code>documentDirectory</code> を返すように変更</li>
+<li><code>packages/engine/src/core/sequence.ts</code> — <code>audio()</code> / <code>_audio()</code> で相対パスを <code>documentDirectory</code> を基準に絶対パスへ解決</li>
+<li><code>packages/engine/src/interpreter/process-statement.ts</code> — RUN/LOOP のバッファプリロードで <code>documentDirectory</code> を使うフォールバックを追加</li>
+</ul>
+<p><strong>Tests</strong>: 225 passed, 23 skipped (all passing)</p>
+<hr>
+<h3 id="649-issue-84-include-engine-runtime-deps-in-extension-package-february-27-2026">6.49 Issue #84: Include engine runtime deps in extension package (February 27, 2026)</h3>
+<p><strong>Date</strong>: February 27, 2026
+<strong>Status</strong>: ✅ COMPLETE
+<strong>Branch</strong>: <code>84-fix-extension-engine-deps</code>
+<strong>Issue</strong>: #84</p>
+<p><strong>Work Content</strong>: VS Code拡張パッケージにエンジンのランタイム依存関係（supercolliderjs, wavefile）が含まれていなかった問題を修正。</p>
+<p><strong>Changes</strong>:</p>
+<ul>
+<li><code>scripts/install-engine-deps.sh</code> を新規作成（エンジン依存関係のインストール + パッチ適用）</li>
+<li><code>packages/vscode-extension/package.json</code> の <code>build:engine</code> スクリプトに依存関係インストールステップを追加</li>
+<li><code>.vscodeignore</code> から <code>engine/node_modules/**</code> の除外を解除</li>
+<li><code>BUILD_GUIDE.md</code> を更新</li>
+</ul>
+<p><strong>パッケージサイズ</strong>: 93 KB → 3.3 MB（ランタイム依存を含む）</p>
+<h3 id="648-issue-82-fix-scsynth-boot-timeout-february-27-2026">6.48 Issue #82: Fix scsynth boot timeout (February 27, 2026)</h3>
+<p><strong>Date</strong>: February 27, 2026
+<strong>Status</strong>: ✅ COMPLETE
+<strong>Branch</strong>: <code>82-fix-scsynth-boot-timeout</code>
+<strong>Issue</strong>: #82</p>
+<p><strong>Work Content</strong>: supercolliderjs の <code>Server.boot()</code> に3秒のハードコードタイムアウトがあり、scynthのデバイス初期化に3秒以上かかるとエンジンがクラッシュする問題を修正。</p>
+<p><strong>Changes</strong>:</p>
+<ul>
+<li><code>scripts/patch-supercolliderjs.sh</code> を作成（タイムアウト 3s → 30s にパッチ）</li>
+<li><code>package.json</code> に <code>postinstall</code> スクリプトを追加（<code>npm install</code> 時に自動パッチ）</li>
+</ul>
+<hr>
+<h3 id="647-issue-80-fix-hardcoded-input-device-in-scsynth-boot-february-27-2026">6.47 Issue #80: Fix hardcoded input device in scsynth boot (February 27, 2026)</h3>
+<p><strong>Date</strong>: February 27, 2026
+<strong>Status</strong>: ✅ COMPLETE
+<strong>Branch</strong>: <code>80-fix-hardcoded-input-device</code>
+<strong>Issue</strong>: #80</p>
+<p><strong>Work Content</strong>: <code>osc-client.ts</code> の <code>boot()</code> で入力デバイス <code>&#39;MacBook Airの&#39;</code> がハードコードされており、外付けオーディオインターフェースが使用できない問題を修正。</p>
+<p><strong>Changes</strong>:</p>
+<ul>
+<li><code>bootOptions.device = [&#39;MacBook Airの&#39;, outputDevice]</code> → <code>bootOptions.device = outputDevice</code> に変更</li>
+<li>OrbitScoreは出力のみ使用するため、入力デバイス指定を削除</li>
+<li>scynthのデフォルト入力デバイスに委任</li>
+</ul>
+<hr>
+<h3 id="646-issue-78-migrate-from-git-flow-to-github-flow-february-27-2026">6.46 Issue #78: Migrate from Git Flow to GitHub Flow (February 27, 2026)</h3>
+<p><strong>Date</strong>: February 27, 2026
+<strong>Status</strong>: ✅ COMPLETE
+<strong>Branch</strong>: <code>78-migrate-github-flow</code>
+<strong>Issue</strong>: #78
+<strong>PR</strong>: TBD
+<strong>Commit</strong>: 1325935</p>
+<p><strong>Work Content</strong>: Git Flow（main + develop + feature branches）から GitHub Flow（main + feature branches）への移行。</p>
+<h4 id="背景">背景</h4>
+<ul>
+<li>develop と main の内容が実質同一で、develop ブランチが形骸化していた</li>
+<li>ワークフローを簡素化し、GitHub Flow に一本化</li>
+</ul>
+<h4 id="作業内容">作業内容</h4>
+<ol>
+<li><strong>リモートブランチ削除</strong>: マージ済み8本 + 未マージ31本 + develop = 40本</li>
+<li><strong>develop ブランチ保護ルール削除</strong>: GitHub API経由で保護ルールを解除後、ブランチ削除</li>
+<li><strong>ドキュメント更新</strong>:<ul>
+<li><code>CLAUDE.md</code>: develop参照をすべて削除、GitHub Flowに書き換え</li>
+<li><code>docs/core/PROJECT_RULES.md</code>: ブランチ構造、ワークフロー、PR作成手順を更新</li>
+<li><code>CONTRIBUTING.md</code>: Git Flow → GitHub Flow に変更</li>
+</ul>
+</li>
+<li><strong>Hook スクリプト更新</strong>:<ul>
+<li><code>pre-edit-check.sh</code>: develop チェック削除（mainのみ保護）</li>
+<li><code>pre-commit-check.sh</code>: develop チェック削除</li>
+<li><code>session-start.sh</code>: develop 警告 → main 警告に変更</li>
+<li><code>hooks/README.md</code>: 説明を更新</li>
+</ul>
+</li>
+<li><strong>CI/CD更新</strong>:<ul>
+<li><code>claude-code-review.yml</code>: main PR除外条件を削除（全PRでレビュー実行）</li>
+</ul>
+</li>
+<li><strong>コミット戦略ルール追加</strong>:<ul>
+<li>Conventional Commits 形式の採用を明記</li>
+<li>小さいコミットを積み重ねるルールを追加</li>
+</ul>
+</li>
+</ol>
+<h4 id="技術的決定">技術的決定</h4>
+<ul>
+<li>squash merge の禁止ルールは維持（コミット履歴の保全のため）</li>
+<li>main ブランチの保護ルールはそのまま維持</li>
+</ul>
+<hr>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,1599 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore Development Work Log - 2026-05 Archive — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-development-work-log---2026-05-archive">OrbitScore Development Work Log - 2026-05 Archive</h1>
+<p><strong>Archive Period</strong>: 2026-05
+<strong>Note</strong>: This is an archived version of the work log. For recent work, see <a href="../development/WORK_LOG.html">../development/WORK_LOG.md</a></p>
+<hr>
+<h3 id="686-issue-201-step-4-1--epic-187-vsix-bundle-に-orbitlinkaudioscx-同梱-may-08-2026">6.86 Issue #201 (Step 4-1) / Epic #187: .vsix bundle に OrbitLinkAudio.scx 同梱 (May 08, 2026)</h3>
+<p><strong>Date</strong>: May 08, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS (PR pending)
+<strong>Branch</strong>: <code>201-vsix-bundle-orbit-plugin</code>
+<strong>Issue</strong>: signalcompose/orbitscore#201 (Step 4 sub-task 4-1)</p>
+<p><strong>目的</strong>: Issue #201 (Epic #187 Step 4) の 4 sub-task のうち最初の 1 つ。 release build で stock SuperCollider plugin (26 個) と並んで <code>OrbitLinkAudio.scx</code> (LinkAudio dispatch UGen) を同梱し、 エンドユーザーが <code>.vsix</code> install するだけで LinkAudio 経路が使える状態を整える。</p>
+<p>残り 3 sub-task は別 PR で対応:</p>
+<ul>
+<li><strong>4-2</strong>: boot pipeline で plugin available フラグ flip (engine TS layer)</li>
+<li><strong>4-3</strong>: release CI workflow に sc-link-audio build step を追加</li>
+<li><strong>4-4</strong>: 統合 E2E checklist §A-G の自動化検収</li>
+</ul>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li><code>scripts/extract-scsynth-bundle.sh</code> を拡張、 stock SC plugin の copy 後に
+<code>packages/sc-link-audio/build/OrbitLinkAudio.scx</code> を bundle
+(<code>Resources/plugins/</code>) に同梱する step を追加。 build 済 <code>.scx</code> が存在
+しない dev workflow では warn + skip して bundle 抽出自体は成功させる
+(LinkAudio 経路が使えない <code>.vsix</code> だが hardware fallback では動く)</li>
+<li>bundle 検証 line を更新: <code>Plugin count: 26 stock SC + 1 custom = 27 total</code>
+形式で stock 数の regression check (ABS = 26) と total count を区別</li>
+<li><code>packages/vscode-extension/BUILD_GUIDE.md</code> にビルド手順 (cmake build →
+extract-scsynth-bundle.sh 順序) を追記、 同梱後の構造図と plugin count
+を 27 に更新</li>
+</ul>
+<p><strong>実装ファイル</strong>:</p>
+<ul>
+<li><code>scripts/extract-scsynth-bundle.sh</code> — OrbitLinkAudio.scx 同梱 step + plugin count 検証強化</li>
+<li><code>packages/vscode-extension/BUILD_GUIDE.md</code> — build 順序 + 構造図 + サイズ更新</li>
+</ul>
+<p><strong>検証結果</strong>:</p>
+<ul>
+<li><code>bash scripts/extract-scsynth-bundle.sh</code> 実行成功、 OrbitLinkAudio.scx が
+<code>engine/scsynth/Contents/Resources/plugins/</code> に正しく配置</li>
+<li><code>Plugin count: 26 stock SC + 1 custom = 27 total</code> の出力確認</li>
+<li>bundle 内の OrbitLinkAudio.scx が ad-hoc 署名済 (build 時の codesign が
+そのまま残る — Developer ID 再署名は release CI scope で別途対応予定)</li>
+</ul>
+<p><strong>設計上の判断</strong>:</p>
+<ul>
+<li><strong>同梱条件: <code>.scx</code> 存在チェックのみ</strong>: build 失敗時に bundle 抽出も巻き
+添えで失敗するのは過剰。 dev workflow の柔軟性を保ち、 LinkAudio 経路は
+optional として扱う。 production の release CI では sc-link-audio の
+cmake build step が prerequisite なので、 そちらで失敗 fail-fast に任せる</li>
+<li><strong>bundle path</strong>: <code>Resources/plugins/</code> 直下に置く。 SC convention (UGen
+plugin の標準位置) と一致させ、 scsynth が <code>-U</code> で plugin path を指定
+された時に自動で発見する</li>
+<li><strong>Developer ID 署名は別 PR</strong>: 本 PR は dev workflow の bundle 同梱が
+scope。 macOS Gatekeeper 通過のための Developer ID 再署名は release CI
+workflow (Step 4-3) と一緒に追加するのが自然</li>
+</ul>
+<p><strong>残課題</strong> (本 PR scope 外):</p>
+<ul>
+<li>Step 4-2: engine TS の <code>linkAudioPluginAvailable</code> フラグ flip</li>
+<li>Step 4-3: release CI に sc-link-audio cmake build step + Developer ID
+再署名</li>
+<li>Step 4-4: 統合 E2E checklist 自動化</li>
+</ul>
+<hr>
+<h3 id="685-issue-205--206--epic-187-linkaudio-plugin-follow-ups-may-08-2026">6.85 Issue #205 + #206 / Epic #187: LinkAudio plugin follow-ups (May 08, 2026)</h3>
+<p><strong>Date</strong>: May 08, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS (PR pending)
+<strong>Branch</strong>: <code>205-206-link-audio-plugin-followup</code>
+<strong>Issues</strong>: signalcompose/orbitscore#205, signalcompose/orbitscore#206</p>
+<p><strong>目的</strong>: PR #204 (Step 2.3 sum-by-name) merge 後の review-team で deferred とした 2 件の Important 指摘を解消する。 plugin 内部品質と test harness カバレッジを改善し、 v1.x release 前の technical debt を削減。</p>
+<p><strong>実装内容</strong>:</p>
+<h4 id="issue-206-blocksize-truncation-test-harness">Issue #206: blockSize truncation test harness</h4>
+<ul>
+<li><code>scripts/verify-blocksize-truncation.scd</code> 新規追加</li>
+<li><code>s.options.blockSize = 4096</code> (&gt;<code>kLinkAudioMaxBlockFrames</code> = 2048) で boot</li>
+<li><code>s.options.hardwareBufferSize = 4096</code> も同時に設定 (engine block ≤ HW buffer 制約のため)</li>
+<li>検証項目:<ul>
+<li>scsynth が oversized block で boot 成功</li>
+<li><code>OrbitLinkAudioOut_Ctor</code> が &quot;server blockSize=4096 exceeds kLinkAudioMaxBlockFrames=2048&quot; の warning Print を emit</li>
+<li><code>next()</code> が <code>std::min(inNumSamples, kLinkAudioMaxBlockFrames)</code> で安全に truncate、 crash しない</li>
+</ul>
+</li>
+</ul>
+<p><strong>なぜ別 harness にしたか</strong>: <code>verify-plugin.scd</code> 本体は default block size で動作確認するので、 oversize 検証だけ別 boot が必要。 同 harness 内で blockSize 変更すると全 Synth で warn が flood され、 既存 [OK] line の signal が劣化する。</p>
+<h4 id="issue-205-cmd-registerlinkaudiochannel-osc-reply-via-doasynchronouscommand">Issue #205: /cmd registerLinkAudioChannel OSC reply via DoAsynchronousCommand</h4>
+<ul>
+<li><code>ChannelRegistry::registerChannel(...)</code> を <code>void</code> → <code>bool</code> 戻りに変更<ul>
+<li><code>true</code>: 新規登録成功、 または既存 id (idempotent re-register)</li>
+<li><code>false</code>: alloc 例外、 LinkAudio singleton 未初期化</li>
+</ul>
+</li>
+<li><code>OrbitLinkAudioOut_RegisterChannel</code> を <code>DoAsynchronousCommand</code> ベースに refactor<ul>
+<li>4 stage callback (stage2 NRT / stage3 RT / stage4 NRT / cleanup NRT)</li>
+<li>stage2: <code>g_channelRegistry.registerChannel</code> を呼んで <code>cmd-&gt;success</code> に格納</li>
+<li>stage3: <code>return true</code> (RT で work なし、 chain 継続のため必須 — false だと scsynth 観測上 stage4 が呼ばれない)</li>
+<li>stage4: <code>return cmd-&gt;success</code> → true 時のみ scsynth が <code>/done /orbit/registerLinkAudioChannel</code> を OSC 経由で送信</li>
+<li>cleanup: cmdData の delete</li>
+</ul>
+</li>
+<li>即時 reject (id ≤ 0 / name nullptr / name 空) は同期 path で従来通り Print + early return (DoAsync 不要)</li>
+<li>TS 側の使用想定:<ul>
+<li>成功 → <code>/done</code> 受信</li>
+<li>失敗 (alloc 系) → <code>/done</code> timeout で検出 (scsynth log にも diagnostic Print が残る)</li>
+<li>失敗 (validation 系) → <code>/done</code> timeout、 これは TS 側 client bug の signal</li>
+</ul>
+</li>
+</ul>
+<p><strong>verify-plugin.scd 拡張</strong>:</p>
+<ul>
+<li>OSCFunc で <code>/done /orbit/registerLinkAudioChannel</code> を listen、 <code>doneCount</code> を集計</li>
+<li>期待値: 3 件 (id=1 first time / id=1 rename idempotent / id=3 cross-channel)<ul>
+<li>validation reject 3 件 (id=2 empty / id=-5 / id=4 no string) は <code>/done</code> 送らない</li>
+</ul>
+</li>
+<li>末尾で <code>if (doneCount != 3) { 1.exit }</code> で assertion</li>
+</ul>
+<p><strong>実装ファイル</strong>:</p>
+<ul>
+<li><code>scripts/verify-blocksize-truncation.scd</code> — 新規 (#206)</li>
+<li><code>scripts/verify-plugin.scd</code> — <code>/done</code> listen + assertion 追加 (#205)</li>
+<li><code>src/channel_registry.hpp</code> — <code>registerChannel</code> 戻り値 bool 化 (#205)</li>
+<li><code>src/channel_registry.cpp</code> — 戻り値 propagate (#205)</li>
+<li><code>src/orbit_link_audio_out.cpp</code> — DoAsynchronousCommand 4 stage 実装 (#205)</li>
+</ul>
+<p><strong>検証結果</strong>:</p>
+<ul>
+<li><code>cmake --build build</code> 成功</li>
+<li><code>verify-plugin.scd</code> 全 10 step 通過 (新規 step 10 = <code>/done</code> 受信 assertion)</li>
+<li><code>verify-blocksize-truncation.scd</code> 通過 (warn Print 確認 + no-crash)</li>
+</ul>
+<p><strong>設計上の判断</strong>:</p>
+<ul>
+<li><strong>stage3 を <code>return true</code> に固定</strong>: SDK header コメントは &quot;completion msg performed if stage3 returns true&quot; としか書かないが、 観測上 false だと stage4 まで chain が続かず /done が送られない。 RT 側で work しないので unconditional true は安全</li>
+<li><strong>失敗時は /done を送らない (vs 別 reply で /fail を送る)</strong>: public plugin SDK に <code>/fail</code> 送信 API なし、 framework の自動送信 <code>/fail</code> は alloc-failure の特定 message 用。 「失敗 = timeout」の契約は SC built-in command (<code>/b_alloc</code> 等) と一致しており、 TS 側で extra branch logic 不要</li>
+<li><strong>fixed-size 256 byte name buffer</strong>: 動的 alloc を避けて cmdData を POD 化、 cleanup で <code>delete cmd</code> だけで済む。 256 chars は Live channel name の実用上限を充分上回る</li>
+</ul>
+<p><strong>残課題</strong> (本 PR scope 外):</p>
+<ul>
+<li>Step 4 build/distribution pipeline (Issue #201)</li>
+</ul>
+<hr>
+<h3 id="684-issue-200--epic-187-link-audio-sum-by-name-step-23-may-08-2026">6.84 Issue #200 / Epic #187: Link Audio sum-by-name (Step 2.3) (May 08, 2026)</h3>
+<p><strong>Date</strong>: May 08, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS (draft PR pending)
+<strong>Branch</strong>: <code>200-link-audio-sum-by-name</code>
+<strong>Issue</strong>: signalcompose/orbitscore#200</p>
+<p><strong>目的</strong>: 同一 channel に bind された複数 Synth の音声を sink ごとに加算 mix する。Step 2.2 直後の状態では <code>LinkAudioSink::BufferHandle</code> を Synth ごとに直接 commit しており、 同 tick 内で複数 Synth が走ると後勝ちになっていた (E2E checklist §C 未達)。</p>
+<p><strong>実装内容</strong>:</p>
+<ol>
+<li><p><strong><code>SinkEntry</code> 構造体導入</strong> (<code>channel_registry.hpp</code>)</p>
+<ul>
+<li><code>LinkAudioSink</code> + <code>ChannelMixState</code> を1つの owning struct に同梱</li>
+<li>UGen Ctor 時の lookup を 1 回で済ませ、 sink と mix 状態に同じキャッシュ済み pointer から到達できるよう変更</li>
+<li><code>lookup()</code> 戻り値を <code>LinkAudioSink*</code> から <code>SinkEntry*</code> に変更</li>
+</ul>
+</li>
+<li><p><strong><code>ChannelMixState</code> 設計</strong></p>
+<ul>
+<li><code>float mixBuffer[kLinkAudioMaxBlockFrames * kLinkAudioNumChannels]</code> で float 加算 accumulator (int32 ではなく float — sum 中の早期 int16 量子化を避ける)</li>
+<li><code>currentBufCounter</code> で tick 識別 (-1 = 未accumulate; uint32 → int64 cast で sentinel 共存)</li>
+<li><code>currentSessionState</code> は <code>std::optional&lt;LinkSessionState&gt;</code> (<code>SessionState</code> に default ctor が無いため。 flush gate <code>currentBufCounter &gt;= 0</code> の時点で has_value 保証)</li>
+<li><code>currentFrames</code> / <code>currentSampleRate</code> / <code>currentBeatsAtBufferBegin</code> は flush 時に commit へ渡す凍結値</li>
+</ul>
+</li>
+<li><p><strong>deferred commit パターン</strong> (<code>orbit_link_audio_out.cpp::OrbitLinkAudioOut_next</code>)</p>
+<ul>
+<li>各 tick の <strong>最初</strong> の Synth 呼び出しで前 tick の accumulator を flush。 flush 条件は <code>bufCounter == prev + 1</code> (tick 隣接時のみ)</li>
+<li>gap &gt; 1 の場合は捨てる: audio thread スターブや UGen が複数 tick を skip した場合、 captured session state の beat が Live 現在位置と乖離 → 古いデータの commit は誤同期になる</li>
+<li>flush 後、 mix buffer を memset し、 新 tick 用に session state を capture</li>
+<li>同 tick 内の後続 Synth は <code>mixBuffer[i*2+ch] += in[i]</code> で追加加算 (per-Synth clamp 無し — flush 時に sum 後一括 clamp)</li>
+<li>net で 1-tick latency (≈ 21 ms @ 48 kHz/1024 frames; 通常 ~1.3 ms @ 64 frames) が発生するが、 Link sync 同期窓を充分下回る</li>
+</ul>
+</li>
+<li><p><strong>scratch buffer 廃止</strong> (<code>orbit_link_audio_out.cpp</code>)</p>
+<ul>
+<li>Per-Unit <code>int16 scratch[]</code> field を削除 (mix buffer は <code>SinkEntry::mix</code> 側に1個に集約)</li>
+<li>float → int16 quantise + clamp は flush path 内で <code>bh.samples</code> へ直接書き込み</li>
+<li>Sum-by-name と RT 安全性 (allocation-free) を両立</li>
+</ul>
+</li>
+<li><p><strong>共通定数の <code>channel_registry.hpp</code> への移動</strong></p>
+<ul>
+<li><code>kLinkAudioMaxBlockFrames</code> (= 2048) / <code>kLinkAudioNumChannels</code> (= 2) / <code>kSinkInitialMaxNumSamples</code> (= 8192) を header に集約</li>
+<li><code>ChannelMixState::mixBuffer</code> の実サイズ計算と UGen 側の <code>static_assert</code>、 <code>LinkAudioSink</code> seed 生成が同じ単一 source of truth を参照</li>
+</ul>
+</li>
+<li><p><strong>link_audio_facade に <code>LinkSessionState</code> alias 追加</strong></p>
+<ul>
+<li><code>using LinkSessionState = ::ableton::LinkAudio::SessionState;</code> (BasicLink<Clock>::SessionState 継承経路を caller から隠蔽)</li>
+</ul>
+</li>
+<li><p><strong>検証 script の拡張</strong></p>
+<ul>
+<li><code>verify-plugin.scd</code>: 既存 channel id=1 に 2 Synth を同時起動して、 deferred-commit 経路の no-crash 検証を追加 (audio content 検証は Live 側でしかできないので scope 外)</li>
+<li><code>verify-live-receive.scd</code>: <code>test-tone</code> (single Synth) に加え <code>test-sum</code> channel に 220 Hz + 330 Hz 2 Synth を同時 publish。 operator が Live UI で chord として聞こえれば accumulator 正常、 単音だけなら last-writer-wins 退行</li>
+</ul>
+</li>
+</ol>
+<p><strong>実装ファイル</strong>:</p>
+<ul>
+<li><code>packages/sc-link-audio/src/channel_registry.hpp</code> — SinkEntry / ChannelMixState 追加、 共通定数集約 (+103/-15)</li>
+<li><code>packages/sc-link-audio/src/channel_registry.cpp</code> — sinks map 型変更、 lookup 戻り値型変更 (+5/-5)</li>
+<li><code>packages/sc-link-audio/src/orbit_link_audio_out.cpp</code> — Ctor cache + next() deferred-commit 全面書き換え (+118/-93)</li>
+<li><code>packages/sc-link-audio/src/link_audio_facade.hpp</code> — LinkSessionState alias (+5)</li>
+<li><code>packages/sc-link-audio/scripts/verify-plugin.scd</code> — 2-Synth same-channel テスト追加 (+16)</li>
+<li><code>packages/sc-link-audio/scripts/verify-live-receive.scd</code> — sum-by-name 用 test-sum channel 追加 (+19/-6)</li>
+</ul>
+<p><strong>検証結果</strong>:</p>
+<ul>
+<li><code>cmake --build build</code> 成功 (warning なし)</li>
+<li><code>verify-plugin.scd</code> 全 step 通過、 sum-by-name no-crash step 含む</li>
+<li>E2E checklist §C (Live UI で chord 確認) は operator 検収 (verify-live-receive.scd 実行時)</li>
+</ul>
+<p><strong>設計上の判断</strong>:</p>
+<ul>
+<li><strong>1-tick latency は許容</strong>: Link 同期は ms オーダー、 audio block は通常 1〜2 ms 程度。 deferred commit を pipeline 化して同 tick で flush する案もあったが、 「最初の Synth が tick の最後の Synth であるか」を Synth 毎に判定する手段が SC_PlugIn から提供されていないため、 1-tick deferral が最も自然</li>
+<li><strong>sum 後 clamp</strong>: 2 Synth 各 0.6 → sum 1.2 → clamp 1.0 が mixer 標準動作。 per-Synth clamp は信号を破壊する</li>
+<li><strong>silent stale-tick drop</strong>: gap &gt; 1 を Print できない (RT thread 制約)。 観測性が必要なら別 issue で <code>mWorld-&gt;mBufCounter</code> 連続性 metric を Live 側 OSC reply で出す follow-up</li>
+<li><strong><code>SessionState</code> を optional 化</strong>: <code>LinkAudio</code> 参照を SinkEntry ctor に追加する案もあったが、 SinkEntry ctor は forwarding template で <code>LinkAudioSink</code> ctor 引数を素通しさせる設計を維持したかった。 optional は 1 byte の has_value flag だけで RT path への overhead は無視できる</li>
+</ul>
+<p><strong>残課題</strong> (本 PR scope 外):</p>
+<ul>
+<li>E2E checklist §C operator 検収 (Live 実機で chord 受信確認)</li>
+<li>Step 2.4 Sample rate mismatch detection</li>
+<li>Step 2.5 Hardware fallback</li>
+<li>Step 4 build/distribution pipeline (Issue #201)</li>
+</ul>
+<hr>
+<h3 id="683-issue-198--epic-187-sc-plugin-ugen-実装-step-22-may-08-2026">6.83 Issue #198 / Epic #187: SC plugin UGen 実装 (Step 2.2) (May 08, 2026)</h3>
+<p><strong>Date</strong>: May 08, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS (draft PR、 着陸後 review)
+<strong>Branch</strong>: <code>198-link-audio-ugen-impl</code>
+<strong>Issue</strong>: signalcompose/orbitscore#198</p>
+<p><strong>動機</strong>: PR #195 で landing した <code>packages/sc-link-audio/</code> skeleton に、 LinkAudio (Ableton/link) + SC Plugin SDK の git submodule を取り込み、 <code>OrbitLinkAudioOut</code> UGen の C++ 実装を完成させる。 これにより scsynth プロセス内で LinkAudio へ直接 commit し、 仮想ループバック無しで Live トラックへ音声をルーティングする経路が確保される。</p>
+<h4 id="主要な実装内容">主要な実装内容</h4>
+<ol>
+<li><p><strong>submodule 追加</strong>:</p>
+<ul>
+<li><code>packages/sc-link-audio/external_libraries/supercollider-sdk/</code> → <code>github.com/supercollider/supercollider</code> tag <code>Version-3.14.0</code> に pin (sc_api_version = 3、 ローカル <code>scsynth 3.14.0</code> と整合)</li>
+<li><code>packages/sc-link-audio/external_libraries/link/</code> → <code>github.com/Ableton/link</code> master + <code>modules/asio-standalone</code> (LinkAudio.hpp / Link.hpp / asio header-only)</li>
+<li><code>git clone --depth 1 --filter=blob:none</code> (treeless partial clone) で SC SDK の容量を抑制 — 通常の shallow clone は curl 18 (RPC partial) でタイムアウトしたため</li>
+</ul>
+</li>
+<li><p><strong>LinkAudio API surface 確定</strong> (<code>docs/research/LINK_AUDIO_API.md</code> §1 に対する一次情報レビュー):</p>
+<ul>
+<li><code>LinkAudio(double bpm, std::string name)</code> ctor、 <code>enableLinkAudio(bool)</code>、 <code>captureAudioSessionState()</code> (RT-safe per docs)、 <code>clock().micros()</code> で beat 時刻取得</li>
+<li><code>LinkAudioSink(LinkAudio&amp;, std::string name, size_t maxNumSamples)</code> で channel 公開、 <code>BufferHandle::commit(SessionState, beats, quantum, numFrames, numChannels, sr)</code> で per-block commit</li>
+<li><strong>重要発見</strong>: <code>&lt;ableton/Link.hpp&gt;</code> と <code>&lt;ableton/LinkAudio.hpp&gt;</code> の include 順に注意。 両者の <code>ApiConfig.hpp</code> は <code>LINK_API_CONTROLLER</code> という同一 macro guard を使うため、 <code>Link.hpp</code> を先に include すると <code>link_audio/ApiConfig.hpp</code> の typedef (<code>ChannelId</code> / <code>PeerId</code> / <code>SessionId</code>) が skip され、 <code>LinkAudio.hpp:307</code> (<code>LinkAudioSource::id() const</code>) で <code>unknown type name &#39;ChannelId&#39;</code> で fail する。 facade で <code>LinkAudio.hpp</code> を先に include することで回避</li>
+</ul>
+</li>
+<li><p><strong><code>link_audio_facade.hpp</code> 完成版</strong>: 上記 include 順を強制する 1 ファイル wrapper。 alpha API 変更追従を 1 翻訳単位に閉じ込める</p>
+</li>
+<li><p><strong><code>channel_registry.hpp/cpp</code></strong>:</p>
+<ul>
+<li><code>Impl::sinks</code> を <code>std::unordered_map&lt;int32_t, std::unique_ptr&lt;LinkAudioSink&gt;&gt;</code> で実装、 <code>std::mutex</code> で保護</li>
+<li><code>LinkAudio</code> singleton は registry が <code>std::unique_ptr&lt;LinkAudio&gt;</code> で所有 (<code>PluginLoad</code> で生成、 <code>PluginUnload</code> で破棄)</li>
+<li><code>lookup()</code> は registry が一度割り当てた sink を Step 2.2 では erase しないことを契約とし、 UGen Ctor で raw pointer を cache。 audio thread (<code>next()</code>) は cached pointer のみ使用 (lock-free)</li>
+</ul>
+</li>
+<li><p><strong><code>orbit_link_audio_out.cpp</code></strong>:</p>
+<ul>
+<li><code>IN(0)</code> / <code>IN(1)</code> で stereo audio input、 <code>IN0(2)</code> で <code>channel</code> (control-rate constant)</li>
+<li><code>next()</code> で <code>std::clamp(f, -1.0f, 1.0f) * 32767.0f</code> の order で float → int16 変換 (clamp 後の scale でないと wrap-around distortion)</li>
+<li><code>BufferHandle</code> を per-block で取得・commit、 RAII 解放。 missing subscriber は <code>operator bool()</code> false で skip</li>
+<li><code>captureAudioSessionState()</code> + <code>link.clock().micros()</code> で <code>beatsAtBufferBegin</code> を計算、 quantum=4.0 で 4/4 mapping (polymeter は v1.2.x で対応)</li>
+<li><code>commit()</code> には <code>unit-&gt;mWorld-&gt;mSampleRate</code> (scsynth hardware SR) をそのまま渡す。 plugin 内 resampling は本 PR scope 外、 v1.2.x で対応 (<code>docs/research/LINK_AUDIO_API.md</code> §0.3)</li>
+<li>各 UGen は scratch buffer (<code>int16_t[2048 * 2]</code>) を Unit struct に持ち、 audio thread で alloc 不要</li>
+</ul>
+</li>
+<li><p><strong>OSC <code>/cmd /orbit/registerLinkAudioChannel &lt;id&gt; &lt;name&gt;</code> ハンドラ</strong>:</p>
+<ul>
+<li>Live は <code>LinkAudioSink</code> の <code>name()</code> を表示するため、 TS dispatch (Step 3) が送る integer channelId とは別経路で human-readable 名を plugin に伝える必要があった</li>
+<li><code>DefinePlugInCmd</code> で <code>/orbit/registerLinkAudioChannel</code> を登録、 <code>args-&gt;geti()</code> + <code>args-&gt;gets()</code> で id + name を読んで <code>ChannelRegistry::registerChannel()</code> 呼出</li>
+<li>TS-side の dispatch wiring (<code>acquire(name)</code> 時の <code>/cmd</code> 送信) は <strong>Step 4 (boot pipeline 統合) で実装</strong>。 本 PR scope 外</li>
+<li>設計選択肢 (a-c) は実装着手前にユーザーレビューで合意 ((b) <code>/cmd</code> 別途登録を採用)</li>
+</ul>
+</li>
+<li><p><strong><code>OrbitLinkAudio.sc</code> (sclang クラス stub)</strong>:</p>
+<ul>
+<li>sclang から <code>SynthDef</code> 内で <code>OrbitLinkAudioOut.ar(left, right, channel)</code> を使えるように、 UGen 用の sclang サブクラスを定義</li>
+<li>SC Extensions に <code>.scx</code> と並べて install (CMake は build のみ、 install は手動 / Step 4 で自動化)</li>
+<li><code>checkInputs</code> で audio rate 強制 (left / right が control rate だと C++ 側が float* で control rate の 1 sample buffer を読んで silent failure するため)</li>
+</ul>
+</li>
+<li><p><strong>CMakeLists の post-build codesign</strong>:</p>
+<ul>
+<li>macOS は signed parent process (<code>scsynth</code> 本体は SuperCollider team で署名済) からの unsigned bundle dlopen を <code>signal: SIGKILL (Code Signature Invalid)</code> で殺す</li>
+<li><code>add_custom_command(... codesign --force --sign - ...)</code> で build 直後に ad-hoc 署名を実施</li>
+<li>署名なしで install して試した最初の load で scsynth が即時 crash、 <code>~/Library/Logs/DiagnosticReports/scsynth-*.ips</code> で診断</li>
+<li>production 配布版 (Step 4 <code>.vsix</code>) は Developer ID で再署名する想定</li>
+</ul>
+</li>
+<li><p><strong>検証 (<code>packages/sc-link-audio/scripts/verify-plugin.scd</code>)</strong>:</p>
+<ul>
+<li>sclang harness で 6 段階の検証: class load / scsynth boot (no dlopen crash) / <code>/cmd</code> 受理 (positive + 負例 3 件: empty name 拒否、 rename no-op + Print、 unregistered id sink-null Ctor warn) / SynthDef instantiate / 2 秒間 <code>next()</code> 走行 (registered id) / unregistered id (id=999) で Ctor warn + next() early-return</li>
+<li>FAIL 経路は <code>1.exit</code>、 30 s タイムアウト guard で hang 検出</li>
+<li>全 OK で exit code 0、 server <code>/quit</code> も正常 (PluginUnload も正しく fire)</li>
+<li>Live 12.4+ 受信を含む完全 E2E (<code>docs/testing/LINK_AUDIO_E2E_CHECKLIST.md</code> §B-G) は Step 4 で TS dispatch / boot pipeline 統合後に実施可能</li>
+</ul>
+</li>
+</ol>
+<h4 id="pr-review-team-pass--iteration-13-反映-may-08">PR review team pass — iteration 1〜3 反映 (May 08)</h4>
+<p>draft PR 作成後に simplify pass (3 並列 agent) + pr-review-team (4 並列 agent × 3 iteration) を回し、 Critical 1 件 + Important 多数を反映、 iteration 4 で <strong>Critical = 0, Important = 0</strong> を確認。</p>
+<ul>
+<li><strong>RT 安全性 (simplify pass)</strong>: <code>next()</code> 内の registry mutex 取得を除去 (<code>LinkAudio*</code> を Ctor で cache)、 <code>mWorld-&gt;mSampleRate</code> も Ctor cache、 dead <code>requestMaxNumSamples</code> branch を <code>static_assert</code> 化</li>
+<li><strong>Critical</strong>: <code>verify-plugin.scd</code> の FAIL 経路が <code>0.exit</code> 固定だった (CI で pass / fail 区別不能) → <code>1.exit</code> + 30 s タイムアウト</li>
+<li><strong>silent failure 系 (iter 1〜3)</strong>: Ctor で sink miss 時に <code>Print</code> 警告 / <code>next()</code> の <code>unit-&gt;link</code> null guard / <code>registerChannel</code> + <code>initLinkAudio</code> を try/catch 化 / <code>shutdownLinkAudio</code> を 3 段 try/catch (sinks.clear / enableLinkAudio(false) / link dtor 各々) / <code>/cmd</code> の <code>geti(-1)</code> + <code>gets(nullptr)</code> で malformed 引数を sentinel reject + Print / <code>setName</code> 経路を no-op + Print (LinkAudio.hpp が <code>LinkAudioSink</code> を &quot;Thread-safe: no&quot; と明記する race の回避) / Ctor で server blockSize &gt; kMaxBlockFrames を 1 行警告</li>
+<li><strong>logging mechanism</strong>: <code>scprintf</code> は MH_BUNDLE plugin から link 不可なので SC plugin SDK の <code>Print</code> macro (= <code>(*ft-&gt;fPrint)</code>) 経由に統一。 <code>ft</code> を file scope の external linkage に変更し、 <code>channel_registry.cpp</code> から <code>extern InterfaceTable* ft;</code> で参照</li>
+<li><strong>負例 test</strong>: <code>verify-plugin.scd</code> に unregistered id (id=999) / empty name (id=2, &quot;&quot;) / rename no-op (id=1 への 2 度目登録) / sentinel id reject (id=-5) の 4 件、 各 <code>/cmd</code> 後に <code>s.sync</code>、 期待される Print 出力を <code>[OK]</code> メッセージに明示。 assertion 強度は「server crash しない」 + transcript の Print 目視確認 (full 自動化は OSC reply 拡張または stdout grep wrapper が必要、 別作業)</li>
+<li><strong>comment 整理</strong>: WORK_LOG 6.83 / Step 番号 narration を除去し、 RT-safety / dlopen codesign / sink lifetime invariant など WHY が non-obvious なものは保持。 <code>channel_registry.hpp</code> の <code>registerChannel</code> doc を「subsequent calls update the displayed name」 から no-op + race 回避 rationale に更新</li>
+</ul>
+<h4 id="既知の制限-本-pr-で対応しない">既知の制限 (本 PR で対応しない)</h4>
+<ul>
+<li><strong>sum-by-name (Step 2.3)</strong>: 同一 channel に複数 sequence が commit する場合の集約は未実装。 現状は last-write-wins per audio tick (各 UGen が独立に <code>BufferHandle</code> を取って commit するため)。 Step 2.3 で per-channel mix buffer + tick-end commit パターンを導入予定</li>
+<li><strong>Plugin 内 resampling (v1.2.x)</strong>: target SR はと scsynth hardware SR を一致させる前提。 不一致時は LinkAudio 側で ring buffer drops が発生する (Void-LinkAudio README 引用)。 plugin 内 resampling 実装は v1.2.x の課題</li>
+<li><strong>TS dispatch wiring (Step 4)</strong>: <code>LinkAudioChannelRegistry.acquire()</code> の新規 name 割当時に <code>/cmd /orbit/registerLinkAudioChannel &lt;id&gt; &lt;name&gt;</code> を送る wire は未実装。 Step 4 boot pipeline 統合 PR でまとめて対応</li>
+</ul>
+<h4 id="submodule-pinning-注意点">Submodule pinning 注意点</h4>
+<ul>
+<li><code>external_libraries/supercollider-sdk</code> は <strong>Version-3.14.0 tag</strong> に pin (sc_api_version = 3、 ローカル / bundle scsynth と整合)。 master tip (sc_api_version = 6) に動かすと <code>API version mismatch</code> で plugin load 失敗</li>
+<li><code>external_libraries/link</code> は <strong>master</strong> に追従。 LinkAudio API は alpha なので将来 breaking change の可能性あり、 facade で吸収する方針</li>
+</ul>
+<p><strong>残作業 (本 PR 着陸後)</strong>:</p>
+<ul>
+<li>Step 2.3: sum-by-name (per-channel mix buffer + tick-end commit) — issue #200</li>
+<li>Step 4: TS dispatch <code>/cmd /orbit/registerLinkAudioChannel</code> wire + boot pipeline での <code>setLinkAudioPluginAvailable(true)</code> flip + <code>.vsix</code> bundle 統合 + Developer ID 再署名 (本 PR の ad-hoc 署名を置換) — issue #201</li>
+<li>PR #191 follow-up improvements (channel name 64 chars validation 等 7 件) — issue #202</li>
+</ul>
+<p><strong>Doc 整理 (本 PR で実施)</strong>:</p>
+<ul>
+<li><code>docs/LINK_AUDIO_E2E_CHECKLIST.md</code> を <code>docs/testing/LINK_AUDIO_E2E_CHECKLIST.md</code> に移動 (PR #191 review M2 / #5 指摘の improvement、 既存 <code>docs/testing/TESTING_GUIDE.md</code> 等との配置整合)</li>
+<li>同 checklist 冒頭に「Plugin 単体検収」 セクションを追加し、 <code>verify-plugin.scd</code> (自動) と <code>verify-live-receive.scd</code> (Live UI 手動) を案内 (Step 2.2 deliverable で実施可能になった項目を §A-G フル統合 E2E と区別)</li>
+</ul>
+<p><strong>次の Step</strong>: PR #198 のユーザー確認 → review → merge → Step 2.3 (#200) または Step 4 (#201) 着手。</p>
+<hr>
+<h3 id="682-epic-187--pr-191-claude-bot-review-fixes--linkaudio-strict-mode-may-08-2026">6.82 Epic #187 / PR #191: claude bot review fixes + LinkAudio strict mode (May 08, 2026)</h3>
+<p><strong>Latest follow-up (May 08, post-PR-review-team)</strong>: claude bot 最新レビュー (commit b640469 後) の Minor 指摘から、 ユーザー混乱を防ぐ価値が高い 1 件 (<code>output(&quot;&quot;)</code> の edit-time vs runtime 不整合) を反映:</p>
+<ul>
+<li>新規 <code>analyzeEmptyOutputArg()</code> analyzer を追加し、 <code>.output(&quot;&quot;)</code> および whitespace-only 引数を edit-time で <code>Error</code> severity flag (commit <code>52ee2db</code>)</li>
+<li>5 ケース test 追加で 354 件 pass</li>
+<li>残り Minor (resolveDispatchChannel の二重呼び出し / completion-context のライン局所性 / lookup() 未テスト) は本 PR scope 外、 今後の改善候補</li>
+</ul>
+<p><strong>Date</strong>: May 08, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（PR #191 review-iteration、 main 取り込み済）
+<strong>Branch</strong>: <code>190-link-audio-dsl-syntax</code>
+<strong>関連 PR</strong>: #191 (Step 3 consolidated)、 issue: Epic #187 / #190 / #192</p>
+<p><strong>動機</strong>:</p>
+<p>PR #191 の claude bot review (3 件) で指摘された必須 / 推奨項目への対応と、 ユーザーレビューで spec を strict mode に確定 (linkAudio 宣言時に <code>.output()</code> 無い sequence は error 扱い、 silent fallback 禁止)。 同時に main 起点で landed した #189 (Step 1) / #195 (Step 2.1) / #196 (release pipeline) を本 branch へ取り込み、 WORK_LOG numbering を 6.79-6.81 に renumber して main の 6.75-6.78 と整合させる。</p>
+<p><strong>Strict mode 確定 (DSL spec §8.1.2 改訂)</strong>:</p>
+<p>「全 sequence が LinkAudio 経由」 という §8.1.1 の宣言と整合させるため、 LinkAudio mode 宣言下で <code>.output()</code> を持たない sequence は <strong>runtime error</strong> + <strong>VS Code Error diagnostic</strong> とする。 これまでの「silent fallback to hardware + console warn」 は廃止。 hardware/LinkAudio 混在は仕様レベルで禁止 (§8.1.1) なので、 「.output() 忘れ」 は誤動作 (一部 sequence が hardware に流れる) より error で止める方が安全という判断。</p>
+<p><strong>変更内容</strong>:</p>
+<ol>
+<li><p><strong>必須 fix #1 — warn message correction</strong> (<code>packages/engine/src/core/sequence.ts</code>):</p>
+<ul>
+<li><code>.output()</code> の console.warn が <code>&#39;init global.linkAudio()&#39;</code> を含んでいた → <code>&#39;global.linkAudio()&#39;</code> に修正。 DSL では <code>init</code> は変数宣言専用 (<code>var x = init GLOBAL</code>)、 method call の前に置くと parser error になるため、 ユーザーが警告メッセージをそのままコピペするとハマる。</li>
+<li><code>tests/core/sequence-output.spec.ts</code>、 <code>docs/testing/LINK_AUDIO_E2E_CHECKLIST.md</code> の対応箇所も更新</li>
+</ul>
+</li>
+<li><p><strong>必須 fix #2 — testExecutePlayback <code>@internal</code> annotation</strong>:</p>
+<ul>
+<li><code>EventScheduler.testExecutePlayback</code> (PR #23 Phase 4-2 で導入済み pre-existing API、 本 PR の追加ではない) と <code>SuperColliderPlayer.testExecutePlayback</code> に <code>@internal</code> JSDoc + 趣旨コメント。 既存の <code>tests/audio/supercollider-gain-pan.spec.ts</code> 等で広く使われているため call site の置換は scope 外、 但し新規 test (<code>link-audio-dispatch.spec.ts</code>) でも採用したのでマーキングだけは更新。</li>
+</ul>
+</li>
+<li><p><strong>推奨 fix #3 — sample rate validation</strong> (<code>link-audio-manager.ts</code>):</p>
+<ul>
+<li><code>linkAudio(targetSampleRate?)</code> で SR を validate:<ul>
+<li>非正整数 / NaN / Infinity → warn + override drop (mode flip は維持、 auto-detect にフォールバック)</li>
+<li>非標準値 (32000 等) → warn (hint) のみ、 plugin 内 resampling で受理</li>
+<li>標準値 (44100 / 48000 / 88200 / 96000 / 176400 / 192000) → silent</li>
+</ul>
+</li>
+<li><code>tests/core/global-link-audio.spec.ts</code> に validation block 追加 (6 ケース)</li>
+</ul>
+</li>
+<li><p><strong>推奨 fix #4 — order-dependent <code>analyzeOutputWithoutLinkAudio</code> diagnostic</strong>:</p>
+<ul>
+<li>旧実装は file 全体 scan (<code>linkAudio</code> がどこかで宣言されていれば OK) → 行順序依存に変更</li>
+<li><code>.output()</code> が <code>global.linkAudio()</code> より前の行にある場合 (live coding 上行から評価) も flag</li>
+<li>メッセージに違反箇所 <code>declared at line N</code> を含める</li>
+<li>旧 test <code>&#39;declared anywhere in the file&#39;</code> を <code>&#39;declared on the same line as .output() or earlier&#39;</code> + <code>&#39;order violation&#39;</code> の 2 ケースに置換</li>
+</ul>
+</li>
+<li><p><strong>推奨 fix #5 — <code>getLinkAudioChannelRegistry()</code> accessor comment</strong>:</p>
+<ul>
+<li>旧 &quot;Test / debug accessor&quot; → Step 4 boot pipeline + test で使用される旨を明記、 <code>@internal</code> 付加</li>
+</ul>
+</li>
+<li><p><strong>NEW — LinkAudio strict mode runtime + diagnostic</strong>:</p>
+<ul>
+<li><strong>runtime</strong>: <code>Sequence.resolveDispatchChannel()</code> を public に昇格 (Step 4 boot pipeline + test 用)、 LinkAudio enabled かつ <code>_outputChannel</code> 未設定なら throw (sequence name + 修正手順を含むメッセージ)</li>
+<li><strong>VS Code diagnostic</strong>: 新 <code>analyzeLinkAudioMissingOutput()</code> — <code>init global.seq</code> 宣言から sequence 名を抽出、 <code>&lt;name&gt;.output(</code> 参照を探し、 LinkAudio 宣言下で output 無い sequence の <code>&lt;name&gt;.play(</code> を全 location で <strong>Error</strong> として flag (Warning ではなく Error)</li>
+<li><code>extension.ts</code> で strict-mode analyzer を wire (<code>vscode.DiagnosticSeverity.Error</code>)</li>
+<li>旧 strict-mode 判定が無かったので <code>tests/core/sequence-link-audio-integration.spec.ts</code> の test 1 件を error 期待に書き換え + 2 ケース (sequence name 含有 / 修正手順 hint) 追加</li>
+<li>VS Code diagnostic test 7 ケース新規 (orphan flag、 output あり non-flag、 linkAudio 無し no-op、 partial mix、 multi-play、 word-boundary、 commented-out)</li>
+</ul>
+</li>
+<li><p><strong>DSL spec §8.1.2 改訂</strong> (<code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code>):</p>
+<ul>
+<li>旧 「<code>.output()</code> 未指定は hardware にフォールバック」 → strict mode: runtime error</li>
+<li>「<code>global.linkAudio()</code> 未宣言で <code>.output()</code> 呼出」 のフェイルセーフ警告は別経路として残置 (mode 有効化忘れ用)</li>
+</ul>
+</li>
+<li><p><strong>vsce package CI failure 修正</strong> (<code>packages/vscode-extension/.vscodeignore</code>):</p>
+<ul>
+<li>PR #195 で <code>packages/sc-link-audio/</code> が main に landed したため、 PR #191 の release.yml CI で <code>vsce package</code> が <code>invalid relative path: extension/../sc-link-audio/.gitignore</code> で失敗</li>
+<li>原因: vsce 3.x の <code>.vscodeignore</code> パターンは vsce が emit する literal な相対パス文字列に対してマッチする。 既存の <code>../../**</code> は repo root レベル (2 階層上) を対象とするためsibling package には効かない。 <code>../engine/**</code> は engine だけ個別指定する形で、 新しい sibling が増えるたびに exception を足す必要があった</li>
+<li>修正: per-package 指定 (<code>../engine/**</code> + <code>../sc-link-audio/**</code>) を一括 sibling exclusion (<code>../*/**</code>) に置き換え。 これで現状の sc-link-audio + 将来の sibling package (midi-engine 等) も自動でカバーされる。 bundled engine は <code>engine/</code> (no <code>../</code>) に build:copy-engine でコピーされる経路なので影響なし</li>
+<li>本来 #195 で対応すべきだったが当時 release.yml の paths filter (<code>packages/sc-link-audio/**</code> を含まない) のため CI で検知されず、 PR #191 で初めて顕在化した。 main の release.yml は tag push でのみ走るので次の release tag までは不顕性</li>
+<li>「なぜ vsce が sibling を enumerate するのか」 の根本原因調査は別 issue で追跡 (本 PR の merge gate ではない)</li>
+</ul>
+</li>
+<li><p><strong>main 取り込み + WORK_LOG renumber</strong>:</p>
+<ul>
+<li><code>git merge origin/main</code> → conflict は WORK_LOG.md のみ (sc-link-audio/ 等 add は auto-merge)</li>
+<li>HEAD の 6.79 (Step 3.3+3.5) → 6.81、 6.78 (Step 3.2) → 6.80、 6.77 (Step 3.1) → 6.79 に renumber</li>
+<li>origin/main の 6.78 (Step 2.1) / 6.77 (Step 1) / 6.76 (Marketplace gate) / 6.75 (v1.1.0) は保持</li>
+</ul>
+</li>
+</ol>
+<p><strong>検証</strong>: <code>npm run build</code> (clean) → success、 <code>npm test</code> で 331 件 pass / 23 件 skip (元 314 件から +17 件)、 regression なし。</p>
+<p><strong>追加対応 (simplify pass、 May 08)</strong>: <code>/simplify</code> (3 agent 並列: code-reuse / code-quality / efficiency) の指摘に対応:</p>
+<ul>
+<li><strong>code-reuse</strong>:<ul>
+<li><code>LINK_AUDIO_PATTERN</code> を module-scope に hoist (重複定義 2 箇所解消)</li>
+<li><code>findFirstMatchingLine()</code> helper 抽出 (3 箇所の同 scaffold を統一)</li>
+<li><code>seqDeclPattern</code> で legacy <code>init GLOBAL.seq</code> (uppercase) も match (parser 互換) — test 1 件追加</li>
+</ul>
+</li>
+<li><strong>code-quality</strong>:<ul>
+<li>SynthDef 名 <code>&#39;orbitPlayBuf&#39;</code> / <code>&#39;orbitPlayBufLink&#39;</code> を <code>SYNTHDEF_HARDWARE</code> / <code>SYNTHDEF_LINK</code> 定数化 (typo silent failure 防止)</li>
+<li><code>SuperColliderPlayer.testExecutePlayback</code> の <code>@deprecated</code> を <code>@internal</code> に修正 (IDE strike-through 誤誘導の解消)</li>
+<li>epic step / 過去 PR 番号 narration コメントを除去 (event-scheduler.ts x4、 sequence.ts x1、 link-audio-channels.ts x1)</li>
+<li>警告メッセージから epic 内部参照 (<code>see Step 2 of Epic #187</code>) を削除、 actionable hint に置換</li>
+<li>SR validation の warn 文言を 6 値 set と一致 (44100/48000/88200/96000/176400/192000)</li>
+</ul>
+</li>
+<li><strong>efficiency</strong>:<ul>
+<li><code>analyzeLinkAudioMissingOutput</code> の inner-loop 内 RegExp 動的生成を precompile 化 (200 行 × 10 sequences の file で keystroke ごとの ~2000 regex compile を回避)</li>
+<li><code>EventScheduler.stopAll()</code> で <code>linkAudioChannels.clear()</code> を call (long live-coding session で nextId 単調増加を防ぐ、 engine restart で fresh state)</li>
+</ul>
+</li>
+</ul>
+<p><strong>残作業 (本 PR 着陸後)</strong>:</p>
+<ul>
+<li>Step 2.2: SC plugin (UGen 実装 + submodule mount)、 別 branch</li>
+<li>Step 4: build pipeline で <code>.scx</code> 同梱 + plugin available フラグ flip</li>
+<li>Step 3.4: 動的切替 + latency offset (v1.2.x 検討)</li>
+</ul>
+<p><strong>次の Step</strong>: PR #191 のユーザー確認 → merge (project rule に従い <code>--merge</code>、 <code>--squash</code> ではない) → Step 2.2 着手。</p>
+<h4 id="pr-review-team-pass-may-08">PR review team pass (May 08)</h4>
+<p>4 agent PR review team + simplify pass の指摘のうち本 PR スコープに該当する Critical 2 件・Important 6 件を反映。</p>
+<ul>
+<li><strong>C1</strong>: <code>Sequence.run()</code> / <code>loop()</code> の冒頭で <code>resolveDispatchChannel()</code> を eager 呼び出し — strict-mode throw が fire-and-forget scheduleEventsFn 内の unhandled rejection で消失する問題を解消。 pipeline test 3 件追加 (<code>sequence-link-audio-integration.spec.ts</code>)</li>
+<li><strong>C2</strong>: <code>link-audio-channels.ts</code> docstring の <code>§B</code> → <code>§0.2</code> (正しいセクション参照に修正)</li>
+<li><strong>I1</strong>: <code>Sequence.output(&quot;&quot;)</code> 空文字列 / whitespace-only を即時 throw するバリデーション追加</li>
+<li><strong>I2</strong>: <code>output()</code> JSDoc の &quot;emitted once&quot; → &quot;emitted on each call when LinkAudio mode is not enabled&quot; に訂正 (実装と整合)</li>
+<li><strong>I3</strong>: <code>output()</code> JSDoc に asymmetry 注記 (&quot;channel changes take effect at next scheduling cycle; no seamlessParameterUpdate — see Step 3.4&quot;)</li>
+<li><strong>I4</strong>: <code>link-audio-dispatch.spec.ts</code> fallback テストのテスト名を &quot;no channel arg&quot; に改訂 + <code>expect(sentMessages[0]).not.toContain(&#39;channel&#39;)</code> assertion 追加</li>
+<li><strong>I5</strong>: <code>stopAll()</code> の channel registry clear を integration test 化 (<code>link-audio-dispatch.spec.ts</code> に 1 ケース追加)</li>
+<li><strong>I6</strong>: <code>completion-context.ts</code> の新規 logic を unit test 化 — <code>tests/vscode-extension/completion-context.spec.ts</code> を新規作成 (vscode mock + 10 ケース: analyzeMethodChain 5 件 / global completions 2 件 / sequence completions 3 件)</li>
+</ul>
+<p><strong>検証</strong>: 335 件 pass / 23 件 skip (元 331 件から +4 件、 regression なし)。 なお daemon-client.spec.ts の 10 件は sandbox ネットワーク制限 (EPERM listen) による pre-existing 失敗で今回変更と無関係。</p>
+<h4 id="pr-review-team-pass--iteration-2-follow-up-may-08">PR review team pass — iteration 2 follow-up (May 08)</h4>
+<p>iteration 1 fix 後の 4 agent re-review で残った test gap (Critical 1 件・Important 1 件) を解消。</p>
+<ul>
+<li><strong>Critical</strong>: <code>output(&quot;&quot;)</code> / <code>output(&quot;   &quot;)</code> の空文字列 throw guard が untested だった。 <code>tests/core/sequence-output.spec.ts</code> に <code>describe(&#39;output() empty-string guard&#39;)</code> ブロックを追加し、 空文字列 throw / whitespace-only throw / valid channel no-throw の 3 ケースを verify。</li>
+<li><strong>Important</strong>: <code>seq.loop()</code> success path (<code>.output()</code> 設定済みで throw しない) が untested だった。 <code>tests/core/sequence-link-audio-integration.spec.ts</code> に <code>seq.run()</code> success test と対称の <code>seq.loop()</code> success test を追加。</li>
+</ul>
+<p><strong>検証</strong>: 339 件 pass / 23 件 skip (335 件から +4 件、 regression なし)。</p>
+<hr>
+<h3 id="681-epic-187-link-audio-docs--vs-code-support-step-33--35-may-07-2026">6.81 Epic #187: Link Audio docs + VS Code support (Step 3.3 + 3.5) (May 07, 2026)</h3>
+<p><strong>Date</strong>: May 07, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（PR #191 draft、 着陸後 review 待ち）
+<strong>Branch</strong>: <code>190-link-audio-dsl-syntax</code> (consolidated PR)
+<strong>Issue</strong>: Epic #187 / Step 3.3 (syntax + completion + diagnostic) と Step 3.5 (docs + examples)</p>
+<p><strong>動機</strong>: 当初は Step 3.x を sub-step ごとに別 PR にする計画だったが、 review 負担最適化のため TypeScript + docs で完結する全 sub-step を PR #191 に統合。 本エントリは Step 3.3 と Step 3.5 のコミットをまとめて記録する。 PR #193 (Step 3.2) は #191 に fast-forward マージして close 済。</p>
+<p><strong>Step 3.5 — DSL spec + examples + E2E checklist</strong> (commit <code>2879ca1</code>):</p>
+<ul>
+<li><code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code> §8 (DAW Integration) を全面改訂、 §8.1 (Link Audio Output) として正式仕様化:<ul>
+<li>§8.1.1 Global mode declaration (<code>global.linkAudio([SR])</code>、 once-per-file、 hardware と排他)</li>
+<li>§8.1.2 Per-sequence channel binding (<code>seq.output(&quot;name&quot;)</code>、 同名 channel sum)</li>
+<li>§8.1.3 Plugin lifecycle (scsynth 起動 / 終了 紐づけ、 ランタイム切替は v1.2.0 非対応)</li>
+<li>§8.1.4 Live 側操作手順</li>
+</ul>
+</li>
+<li><code>examples/10_link_audio.orbs</code> 新規 (single channel publish / drums bus sum / per-sequence gain+pan の 3 パターン)</li>
+<li><code>examples/README.md</code> チュートリアル一覧と ファイル一覧を更新</li>
+<li><code>docs/testing/LINK_AUDIO_E2E_CHECKLIST.md</code> 新規 (Live 12.4+ + plugin の手動 E2E、 A〜G の 7 セクション + トラブルシュート)</li>
+</ul>
+<p><strong>Step 3.3 — VS Code 拡張対応</strong>:</p>
+<ul>
+<li><code>packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json</code>:<ul>
+<li>global methods に <code>linkAudio</code> を追加</li>
+<li>sequence methods に <code>output</code> を追加</li>
+<li>両方の patterns で entity.name.function ハイライトに乗せる</li>
+</ul>
+</li>
+<li><code>packages/vscode-extension/src/completion-context.ts</code>:<ul>
+<li>MethodChainContext に hasLinkAudio / hasOutput フラグ追加</li>
+<li>global completion に <code>linkAudio(${1:48000})</code> を追加 (まだ宣言されていないとき)</li>
+<li>sequence completion に <code>output(&quot;${1:channel-name}&quot;)</code> を追加 (audio 設定後 + まだ output 未指定時)</li>
+</ul>
+</li>
+<li><code>packages/vscode-extension/src/diagnostics-analysis.ts</code>:<ul>
+<li>GLOBAL_ONCE_METHODS に <code>linkAudio</code> を追加 (existing once-per-file diagnostic を再利用)</li>
+<li>新規 <code>analyzeOutputWithoutLinkAudio()</code> — <code>seq.output()</code> が呼ばれているのに <code>global.linkAudio()</code> が宣言されていない場合に警告。 file 全体走査、 行コメント除去、 commented-out も正しく無視</li>
+</ul>
+</li>
+<li><code>packages/vscode-extension/src/extension.ts</code>:<ul>
+<li><code>updateDiagnostics</code> 末尾に <code>analyzeOutputWithoutLinkAudio</code> を wire</li>
+</ul>
+</li>
+<li><code>tests/vscode-extension/diagnostics-analysis.spec.ts</code>:<ul>
+<li>新規 8 ケース (analyzeOutputWithoutLinkAudio: 6 ケース + global once linkAudio 重複: 2 ケース)</li>
+</ul>
+</li>
+</ul>
+<p><strong>検証</strong>: npm test で 314 件 pass / 23 件 skip (累計 +48 件、 regression なし)。 husky pre-commit hook で全 commit が lint + format + build pass。</p>
+<p><strong>Step 3 consolidated PR (#191) の最終姿</strong>:</p>
+<ul>
+<li>Step 3.1 DSL syntax (4 commits)</li>
+<li>Step 3.2 dispatch wiring (5 commits、 旧 PR #193 から fast-forward)</li>
+<li>Step 3.5 docs + examples (1 commit)</li>
+<li>Step 3.3 VS Code 拡張 (本コミット)</li>
+<li>計 11+ commits、 約 1500 行の追加 (TypeScript + docs)</li>
+</ul>
+<p><strong>Step 3.4 (動的切替 + latency offset) は本 PR スコープ外</strong> (v1.2.x 持ち越し)。 当初 Issue #190 の checklist にあったが、 着地後の review で必要性を再判断する想定。</p>
+<p><strong>残作業</strong>:</p>
+<ul>
+<li>Step 2: SC plugin (C++ UGen) <code>OrbitLinkAudioOut</code> 実装、 別 branch / 別 PR</li>
+<li>Step 4: ブート pipeline での plugin available 検出 + flip、 build pipeline の <code>.scx</code> 同梱、 別 PR</li>
+<li>Step 3.4: 動的切替 + latency offset (v1.2.x 検討)</li>
+</ul>
+<p><strong>次の Step</strong>: γ (Step 2.1 SC plugin skeleton) を別 branch / 別 PR で着手。</p>
+<hr>
+<h3 id="680-issue-192--epic-187-link-audio-dispatch-wiring-step-32-may-07-2026">6.80 Issue #192 / Epic #187: Link Audio dispatch wiring (Step 3.2) (May 07, 2026)</h3>
+<p><strong>Date</strong>: May 07, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
+<strong>Branch</strong>: <code>192-link-audio-dispatch</code> (stacked on <code>190-link-audio-dsl-syntax</code>)
+<strong>Issue</strong>: #192 (Step 3.2) / Epic: #187</p>
+<p><strong>動機</strong>: Step 3.1 (#190) で導入した DSL state (<code>Global._linkAudioEnabled</code>, <code>Sequence._outputChannel</code>) を <strong>実際のスケジューリング経路</strong> に流す。 SC plugin (Step 2) が未実装の段階でも contract layer を完成させ、 plugin 着地時に SynthDef 名と channel ID が噛み合うよう scaffolding を準備する。</p>
+<p><strong>設計方針</strong>:</p>
+<ul>
+<li>outputChannel を optional param として scheduler interface に追加 (完全な後方互換)</li>
+<li>Sequence layer で「Global.linkAudio() 有効時のみ outputChannel を渡す」 判定を一元化 (resolveDispatchChannel)</li>
+<li>EventScheduler.sendPlaybackMessage で 3 通り dispatch:<ol>
+<li>outputChannel + plugin available → <code>orbitPlayBufLink</code> SynthDef + channel arg</li>
+<li>outputChannel + plugin missing → <code>orbitPlayBuf</code> fallback + 1 回 warn</li>
+<li>outputChannel なし → 既存 <code>orbitPlayBuf</code></li>
+</ol>
+</li>
+<li>plugin available フラグは default false、 Step 4 のブート pipeline で SynthDef discovery 後に true へ flip する想定</li>
+</ul>
+<p><strong>変更内容</strong> (4 commit):</p>
+<ol>
+<li><p><code>feat(engine): add LinkAudioChannelRegistry for name → channelId mapping</code> (4b271e5)</p>
+<ul>
+<li><code>packages/engine/src/audio/supercollider/link-audio-channels.ts</code> (新規)</li>
+<li>同名 channel への複数 sequence は idempotent に同じ ID 解決 (sum-by-name 前提)</li>
+<li><code>tests/audio/link-audio-channels.spec.ts</code> (6 ケース)</li>
+</ul>
+</li>
+<li><p><code>refactor(engine): thread outputChannel through scheduler signatures</code> (d2cfc88)</p>
+<ul>
+<li>Scheduler interface (<code>global/types.ts</code>) に outputChannel?: string optional 追加</li>
+<li>SuperColliderPlayer / EventScheduler signatures + ScheduledPlay/PlaybackOptions types を拡張</li>
+<li>完全な後方互換 (既存呼出は undefined を渡してパス)</li>
+</ul>
+</li>
+<li><p><code>feat(engine): dispatch SynthDef based on outputChannel with hardware fallback</code> (d79968e)</p>
+<ul>
+<li>EventScheduler に LinkAudioChannelRegistry インスタンス + plugin available フラグ + warn フラグ</li>
+<li><code>setLinkAudioPluginAvailable()</code> / <code>isLinkAudioPluginAvailable()</code> / <code>getLinkAudioChannelRegistry()</code> public API</li>
+<li>sendPlaybackMessage で 3 通り dispatch + plugin 不在時 1 回 warn</li>
+<li><code>tests/audio/link-audio-dispatch.spec.ts</code> (8 ケース)</li>
+</ul>
+</li>
+<li><p><code>feat(engine): wire Sequence dispatch channel to global LinkAudio mode</code> (125ab5f)</p>
+<ul>
+<li>Sequence に resolveDispatchChannel() 追加 — linkAudio off ならば undefined 返す</li>
+<li>ScheduleEventsOptions / ScheduleEventsFromTimeOptions に outputChannel?: string 追加</li>
+<li>sequence-side helper (<code>scheduling/event-scheduler.ts</code>) で scheduler.scheduleEvent / scheduleSliceEvent への thread</li>
+<li><code>tests/core/sequence-link-audio-integration.spec.ts</code> (4 ケース)</li>
+</ul>
+</li>
+</ol>
+<p><strong>End-to-end dispatch contract が成立</strong>:</p>
+<p>DSL → core → scheduler → plugin の全レイヤーで outputChannel 配線完了:</p>
+<ol>
+<li>DSL: <code>seq.output(&quot;kick&quot;)</code> (Step 3.1)</li>
+<li>Core: <code>Sequence._outputChannel</code> + <code>Global._linkAudioEnabled</code> (Step 3.1)</li>
+<li>Dispatch decision: <code>resolveDispatchChannel()</code> (本 sub-step)</li>
+<li>Scheduling pipeline: <code>ScheduleEventsOptions.outputChannel</code> (本 sub-step)</li>
+<li>SC Player: <code>scheduleEvent(..., outputChannel)</code> (本 sub-step)</li>
+<li>EventScheduler: SynthDef 名切替 + channel id 解決 (本 sub-step)</li>
+<li>SC plugin の <code>orbitPlayBufLink</code> (Step 2 で実装予定)</li>
+</ol>
+<p><strong>検証</strong>: npm test で 306 件 pass / 23 件 skip (新規 18 件追加)、 regression なし。 husky pre-commit hook で 4 commit すべて lint + format + build pass。</p>
+<p><strong>残作業 (別 sub-issue)</strong>:</p>
+<ul>
+<li>Step 2: SC plugin (C++ UGen) 実装 — <code>orbitPlayBufLink</code> SynthDef 提供、 plugin available フラグの flip タイミング Step 4 で wire</li>
+<li>Step 3.3: VS Code 拡張対応 (syntax highlighting、 completion、 厳密 diagnostic)</li>
+<li>Step 3.4: 動的切替 (immediate output) + latency offset</li>
+<li>Step 3.5: docs (<code>INSTRUCTION_ORBITSCORE_DSL.md</code>) + examples</li>
+</ul>
+<p><strong>stacked PR の状態</strong>:</p>
+<ul>
+<li>PR #189 (Step 1 research) → main 待ち</li>
+<li>PR #190 (Step 3.1 DSL syntax) → main 待ち</li>
+<li>PR #192 (Step 3.2 dispatch、 本 sub-step) → 190-link-audio-dsl-syntax を base に作成、 #190 が main に landing したら自動 rebase</li>
+</ul>
+<p><strong>次の Step</strong>: Step 1 PR (#189) merge → Step 3.1 PR (#190) merge → 本 PR (#192) merge → Step 2 (SC plugin 実装) 着手。 Step 3.3 / 3.4 / 3.5 は Step 2 と並行可能。</p>
+<hr>
+<h3 id="679-issue-190--epic-187-link-audio-dsl-syntax-step-31-may-07-2026">6.79 Issue #190 / Epic #187: Link Audio DSL syntax (Step 3.1) (May 07, 2026)</h3>
+<p><strong>Date</strong>: May 07, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
+<strong>Branch</strong>: <code>190-link-audio-dsl-syntax</code>
+<strong>Issue</strong>: #190 (Step 3.1) / Epic: #187</p>
+<p><strong>動機</strong>: Epic #187 の Step 3.1。 LinkAudio output layer の DSL 表面構文 (<code>global.linkAudio([SR])</code> + <code>seq.output(&quot;channel-name&quot;)</code>) を parser・AST・コア state レベルで受理し、 単体テストでカバーする。 SC plugin / dispatch / VS Code 拡張は別 sub-step (3.2 / 3.3 / 3.4 / 3.5) で扱い、 本 Issue は <strong>DSL 表面の文法対応のみ</strong> に絞る。</p>
+<p><strong>設計方針</strong> (Epic #187 §0 を継承):</p>
+<ul>
+<li>LinkAudio mode は once-per-file 宣言で hardware 出力と排他</li>
+<li><code>seq.output(&quot;name&quot;)</code> は channel name のみ (kind は Global mode から implicit)</li>
+<li>ランタイム切替は v1.2.0 非対応 (immediate 系 <code>_method()</code> は本 sub-step では未実装)</li>
+<li>SR 戦略は plugin 内リサンプリング (auto-detect → DSL override → 48k fallback)</li>
+</ul>
+<p><strong>変更内容</strong>:</p>
+<p><code>packages/engine/src/core/global/link-audio-manager.ts</code> 新規:</p>
+<ul>
+<li>LinkAudioManager クラス。 _enabled / _targetSampleRate を保持、 linkAudio(targetSR?) で enable</li>
+</ul>
+<p><code>packages/engine/src/core/global/types.ts</code>:</p>
+<ul>
+<li>GlobalState に linkAudioEnabled / linkAudioTargetSampleRate を追加</li>
+</ul>
+<p><code>packages/engine/src/core/global.ts</code>:</p>
+<ul>
+<li>LinkAudioManager をインスタンス化、 linkAudio(targetSR?) / isLinkAudioEnabled() メソッド追加、 getState() に LinkAudio state を merge</li>
+</ul>
+<p><code>packages/engine/src/core/sequence.ts</code>:</p>
+<ul>
+<li>_outputChannel フィールド追加、 output(channelName) メソッド (chainable) + getOutputChannel() アクセサ</li>
+<li>output() 呼出時に Global.linkAudio() 未宣言なら console.warn (例外を投げない、 厳密チェックは Step 3.3 の VS Code diagnostic で)</li>
+</ul>
+<p><code>packages/engine/src/core/sequence/types.ts</code>:</p>
+<ul>
+<li>SequenceState に outputChannel?: string を追加</li>
+</ul>
+<p><code>tests/core/global-link-audio.spec.ts</code> 新規 (7 ケース):</p>
+<ul>
+<li>default disabled、 有効化、 明示 SR、 44.1k 受理、 chainable、 上書き、 explicit→undefined への戻し</li>
+</ul>
+<p><code>tests/core/sequence-output.spec.ts</code> 新規 (7 ケース):</p>
+<ul>
+<li>default undefined、 記録、 chainable、 上書き、 Global 未宣言時 warn、 Global 宣言済み時 warn なし、 hyphen + underscore 受理</li>
+</ul>
+<p><code>tests/audio-parser/link-audio-syntax.spec.ts</code> 新規 (8 ケース):</p>
+<ul>
+<li>tokenizer / parser を変更せずに既存 method-call 経路で受理されることを確認</li>
+<li>global.linkAudio() の args の有無 + 値伝播</li>
+<li>seq.output() の hyphen / underscore 受理、 chain 組み合わせ</li>
+<li>複合プログラム (global.tempo + global.linkAudio + var init + seq chain)</li>
+</ul>
+<p><strong>parser を触らなかった理由</strong>:
+既存 tokenizer keyword は <code>var, init, by, GLOBAL, force, RUN, LOOP, MUTE</code> のみで、 <code>linkAudio</code> / <code>output</code> は IDENTIFIER として通る。 AST は generic な <code>target / method / args</code> 構造なので追加メソッドのために schema 変更は不要。</p>
+<p><strong><code>init</code> prefix の扱い (要 review)</strong>:
+ユーザーレビューで「init global.linkAudio()」 案が選択されたが、 既存 parser では <code>init</code> は変数宣言専用 (<code>var x = init GLOBAL</code> / <code>var s = init global.seq</code>)。 厳密に <code>init global.linkAudio()</code> 形を実装するには parser 拡張 (<code>parseGlobalInit</code> を method-call 受理に拡張) が必要。 本 PR では既存 conventions (<code>global.tempo()</code> 等) と揃った <code>global.linkAudio()</code> 形を採用 (parser 拡張不要)。 着陸後の review で「init prefix 必須かどうか」 をユーザー判断仰ぐ。</p>
+<p><strong>コミット構成 (小コミット 3 本)</strong>:</p>
+<ul>
+<li><code>68fb4d6</code> feat(engine): add Global.linkAudio() for LinkAudio mode declaration</li>
+<li><code>7cfd85b</code> feat(engine): add Sequence.output() for LinkAudio channel binding</li>
+<li><code>d1ffdcf</code> test(parser): verify LinkAudio DSL syntax parses via existing generic path</li>
+</ul>
+<p><strong>検証</strong>: npm test で 288 件 pass / 23 件 skip (新規 22 件追加)、 regression なし。 lint-staged hook (eslint + prettier) を 3 commit すべて pass、 build も pass。</p>
+<p><strong>残作業 (別 sub-issue)</strong>:</p>
+<ul>
+<li>Step 3.2: dispatch ロジック (SuperColliderPlayer 側 SynthDef 切替、 channel ID 管理)</li>
+<li>Step 3.3: VS Code 拡張対応 (syntax / completion / 厳密 diagnostic)</li>
+<li>Step 3.4: 動的切替 + latency offset</li>
+<li>Step 3.5: docs (<code>INSTRUCTION_ORBITSCORE_DSL.md</code>) + examples</li>
+</ul>
+<p><strong>次の Step</strong>: Step 1 PR (#189) merge → Step 2 (SC plugin 実装) 着手。 Step 3 残 sub-step は Step 2 の進捗と並行可能。</p>
+<hr>
+<h3 id="678-issue-194--epic-187-sc-plugin-skeleton-step-21-may-07-2026">6.78 Issue #194 / Epic #187: SC plugin skeleton (Step 2.1) (May 07, 2026)</h3>
+<p><strong>Date</strong>: May 07, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（PR draft、 着陸後 review 待ち）
+<strong>Branch</strong>: <code>194-link-audio-plugin-skeleton</code> (main から派生、 PR #191 とは独立)
+<strong>Issue</strong>: #194 (Step 2.1) / Epic: #187</p>
+<p><strong>動機</strong>: Epic #187 の Step 2.1。 <code>OrbitLinkAudio.scx</code> plugin の置き場 (<code>packages/sc-link-audio/</code>) を skeleton として整備し、 後続 Step 2.2 (UGen 実装) / Step 4 (build pipeline 統合) が着手できる足場を作る。 本 sub-step は <strong>ファイル配置とディレクトリ構造の確定が目的</strong> で、 実コンパイルは scope 外。</p>
+<p><strong>設計方針</strong> (Epic #187 §0 を継承):</p>
+<ul>
+<li>macOS arm64 only (v1.x release target、 Linux/Windows は scope 外)</li>
+<li>LinkAudio API は alpha → wrapper 1 ファイル (<code>link_audio_facade.hpp</code>) に集約</li>
+<li>GPL-2.0-or-later の独立 artifact、 OrbitScore 本体 (<code>LicenseRef-Signal-compose-FairTrade-1.0</code>) と mere aggregation</li>
+<li>submodule (SC SDK + Ableton/link) の物理追加は Step 2.2 で実施 (本 sub-step は placeholder のみ)</li>
+</ul>
+<p><strong>変更内容</strong> (1 commit):</p>
+<p>新規ファイル群:</p>
+<ul>
+<li><code>packages/sc-link-audio/README.md</code> — 目的、 ディレクトリ構造、 ライセンス、 ビルド前提、 関連 Issue/PR、 ステータス表</li>
+<li><code>packages/sc-link-audio/CMakeLists.txt</code> — C++17、 SC_PATH / LINK_AUDIO_PATH を configure-time 変数で受ける、 macOS arm64 強制、 OrbitLinkAudio.scx を <code>add_library(... MODULE)</code> で出力。 Step 2.1 では configure までを wire (実コンパイルは Step 2.2 の submodule 追加後)</li>
+<li><code>packages/sc-link-audio/.gitignore</code> — build/ 成果物 + submodule clone を ignore</li>
+<li><code>packages/sc-link-audio/external_libraries/.gitkeep</code> — submodule mount point の placeholder + コメントで Step 2.2 の手順を明記</li>
+<li><code>packages/sc-link-audio/src/link_audio_facade.hpp</code> — alpha API 変更を吸収する 1 ファイル wrapper の枠組み (型 alias + Step 2.2 で埋める関数シグネチャ コメント)</li>
+<li><code>packages/sc-link-audio/src/channel_registry.hpp</code> / <code>channel_registry.cpp</code> — TS 側 <code>LinkAudioChannelRegistry</code> (Step 3.2) と対になる server 側 lookup の宣言 + stub 実装 (lazy-create + sum-by-name 用)</li>
+<li><code>packages/sc-link-audio/src/orbit_link_audio_out.cpp</code> — <code>OrbitLinkAudioOut</code> UGen の skeleton (Ctor/Dtor/next が no-op、 Step 2.2 で実装)</li>
+</ul>
+<p>設計上の注意:</p>
+<ul>
+<li>全 C++ ソースに <code>#ifdef ORBIT_SC_PLUGIN_BUILD</code> を巻いて、 SC SDK が無い環境でも編集 / lint が破綻しない</li>
+<li><code>#include &quot;link_audio_facade.hpp&quot;</code> は ORBIT_SC_PLUGIN_BUILD 未定義時に stub forward declaration を提供 (linter 対応)</li>
+<li>workspace package.json は触らない (C++ プロジェクトのため、 npm workspaces とは無関係)</li>
+</ul>
+<p><strong>検証</strong>:</p>
+<ul>
+<li><code>npm test</code> で 266 件 pass / 23 件 skip (本 branch は main 起点のため、 PR #191 の +48 件は載っていない、 これは想定通り)</li>
+<li>regression なし、 TS toolchain への影響ゼロ</li>
+<li>husky pre-commit hook で commit が pass</li>
+</ul>
+<p><strong>残作業 (別 sub-issue)</strong>:</p>
+<ul>
+<li>Step 2.2: <code>OrbitLinkAudioOut</code> UGen 単一 channel commit 実装、 git submodule add (SC SDK + Ableton/link)</li>
+<li>Step 2.3: channelId → sink lookup の動的 add/remove</li>
+<li>Step 2.4: 同名 sum 動作の検収 (2 sequence で同一 channel に出して加算合成確認)</li>
+<li>Step 2.5: tempo / phase / transport sync (LinkAudio 内蔵 Link 経由)</li>
+<li>Step 4: ブート pipeline での plugin available 検出 + flip、 <code>.vsix</code> bundle 統合</li>
+</ul>
+<p><strong>stacked PR の状態</strong>:</p>
+<ul>
+<li>PR #189 (Step 1 research) → main 待ち</li>
+<li>PR #191 (Step 3.1 + 3.2 + 3.3 + 3.5 consolidated) → main 待ち、 Step 2 plugin 不在時の hardware fallback で機能完備</li>
+<li>PR #194 (Step 2.1 skeleton、 本 sub-step) → main 起点で独立、 PR #191 の merge 順序とは無関係</li>
+</ul>
+<p><strong>次の Step</strong>: 着陸後 PR review + tag push を待機。 飛行機内で進められる範囲はここまで (Step 2.2 以降は SC SDK + Ableton/link の git clone が必要、 着陸環境で着手)。</p>
+<hr>
+<h3 id="677-issue-188--epic-187-link-audio-api-research-finalized-step-1-may-07-2026">6.77 Issue #188 / Epic #187: Link Audio API research finalized (Step 1) (May 07, 2026)</h3>
+<p><strong>Date</strong>: May 07, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（PR レビュー待ち）
+<strong>Branch</strong>: <code>188-link-audio-research</code>
+<strong>Issue</strong>: #188 (Step 1) / Epic: #187</p>
+<p><strong>動機</strong>: Ableton Live 12.4 (2026-05-05 公開) で導入された Link Audio を OrbitScore に統合する Epic #187 の前段階として、 SDK の API surface・サンプルレート挙動・ライセンス条件を一次情報で確定し、 後続 Step 2 (SC plugin 実装) / Step 3 (DSL 構文) / Step 4 (ビルドパイプライン) が安心して着手できる解像度を確保する。</p>
+<p><strong>設計方針</strong> (Epic #187 の plan を引き継ぎ):</p>
+<ul>
+<li>scsynth は維持、 LinkAudio 専用ブリッジを SC plugin (C++ UGen) として実装</li>
+<li>DSL <code>seq.output(&quot;link-audio&quot;, &quot;channel-name&quot;)</code> で出力先指定（MIDI 拡張余地を残す形）</li>
+<li>macOS arm64 only、 Link Audio API は alpha のため wrapper 1 ファイルに集約</li>
+<li>MIDI は別 Issue（DSL 構文だけ拡張余地確保）</li>
+</ul>
+<p><strong>主な findings (一次情報確定)</strong>:</p>
+<p>API surface (<code>LinkAudio.hpp</code> 直接読込):</p>
+<ul>
+<li><code>LinkAudio</code> は <code>Link</code> を継承 → tempo / beat / phase / transport は base Link メソッドで取得</li>
+<li><code>LinkAudioSink::BufferHandle::commit()</code> は realtime-safe（SC plugin audio thread から呼べる）</li>
+<li><code>commit()</code> に sample rate を毎回渡せる仕様（API 上は SR 固定不要）</li>
+<li>16-bit signed integer interleaved、 mono(1) または stereo(2) のみ</li>
+<li><code>setChannelsChangedCallback</code> のシグネチャは <code>void()</code> 引数なし</li>
+</ul>
+<p>Sample rate 制約 (Void-LinkAudio README からの一次引用):</p>
+<ul>
+<li>Link Audio は <strong>内部リサンプリングなし</strong> → publisher / subscriber SR 不一致時に ring buffer overflow（44.1k vs 48k で ~8% 連続ドロップ）</li>
+<li>当初は scsynth <code>-S 48000</code> 強制起動を検討したが、 ユーザーレビューで撤回 → 後述の確定方針へ</li>
+</ul>
+<p>License 概況:</p>
+<ul>
+<li>Link 公式: GPL-2.0-or-later（標準 GPL v2、 改変条項なし）または proprietary commercial</li>
+<li>OrbitScore 本体: <code>LicenseRef-Signal-compose-FairTrade-1.0</code></li>
+</ul>
+<p><strong>ユーザーレビューで確定した設計決定</strong> (LINK_AUDIO_API.md §0 参照):</p>
+<ol>
+<li><strong>出力モード</strong>: <code>init global.linkAudio([SR])</code> で <strong>once-per-file 宣言</strong>、 hardware 出力と排他。 当初の per-sequence destination 案 (<code>seq.output(&quot;link-audio&quot;, &quot;ch&quot;)</code>) から簡素化</li>
+<li><strong>Per-sequence syntax</strong>: <code>seq.output(&quot;channel-name&quot;)</code> — kind 引数不要 (Global mode から implicit)</li>
+<li><strong>Sample rate</strong>: scsynth は hardware SR 任せ、 plugin 内で target SR へリサンプリング (auto-detect → DSL override → 48k fallback)。 hardware 環境差異吸収と Live セッション SR 柔軟対応のため</li>
+<li><strong>License</strong>: <code>.scx</code> を独立 GPL-2.0-or-later artifact として分離配布、 <code>.vsix</code> bundle 同梱時は LICENSE.GPL-2.0 + NOTICE で mere aggregation 明記</li>
+<li><strong>Channel 上限</strong>: self-imposed 制限なし、 LinkAudio 仕様任せ</li>
+<li><strong>Plugin lifecycle</strong>: <code>init global.linkAudio()</code> 宣言時 load + enable、 scsynth shutdown 時 disable / unload。 ランタイム切替は v1.2.0 では非対応</li>
+</ol>
+<p><strong>変更内容</strong>:</p>
+<ul>
+<li><code>docs/research/LINK_AUDIO_API.md</code> 新規作成（一次情報 URL 引用、 API surface / SR / License / 設計追加確定 / 残不確定要素を網羅 + Section 0 にユーザーレビュー後の確定設計決定を集約）</li>
+</ul>
+<p><strong>Epic plan への影響</strong>:</p>
+<ul>
+<li>一次情報による破壊的 findings なし</li>
+<li>ユーザーレビューによる設計簡素化あり (per-sequence destination → Global mode 排他)</li>
+<li>Epic Issue #187 body は本コミット後に簡素化された設計で update</li>
+</ul>
+<p><strong>残不確定要素 (Step 2 着手前に解消)</strong>:</p>
+<ul>
+<li><code>linkaudio/AudioPlatform.hpp</code> の commit ループ実装パターン (submodule 取り込み後直接読む)</li>
+<li>LinkAudio peer info / OS API による target SR auto-detect 可否</li>
+<li>Plugin 内リサンプリングの実装方式（線形 / 簡易 sinc / rubato 相当）</li>
+<li>SC Plugin SDK のバージョン pinning と scsynth bundle (3.14.x) との ABI 一致</li>
+</ul>
+<p><strong>次の Step</strong>: Step 2 (SC plugin 実装) を別 branch / 別 Issue で着手予定。</p>
+<hr>
+<h3 id="676-gate-marketplaceopen-vsx-publish-on-publish_marketplace-variable-may-07-2026">6.76 Gate Marketplace/Open VSX publish on PUBLISH_MARKETPLACE variable (May 07, 2026)</h3>
+<p><strong>Date</strong>: May 07, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS (PR #196 に同梱)
+<strong>Branch</strong>: <code>claude/prepare-orbitscore-release-0Q6uK</code>
+<strong>関連 Issue</strong>: #197 (Marketplace / Open VSX 登録追跡)
+<strong>関連 PR</strong>: #196 (release v1.1.0 cut)</p>
+<p><strong>動機</strong>: v1.1.0 stable tag push 後、 <code>release.yml</code> の <code>Publish to VS Code Marketplace</code> step が <code>VSCE_PAT</code> 未登録のため fail-loud で失敗 (run id 25484379033)。 GitHub Release 作成と .vsix asset 添付は完了しているが、 publisher account / PAT 準備が整うまでは workflow を成功させたい。</p>
+<p><strong>経緯</strong>:</p>
+<ul>
+<li>v1.1.0 tag push は 6.75 で完了、 release workflow が起動</li>
+<li>Build / bundle / .vsix package / GitHub Release create までは success</li>
+<li><code>Publish to VS Code Marketplace (stable only)</code> step が <code>VSCE_PAT</code> secret 未登録で fail-loud を意図通り発火</li>
+<li>Open VSX publish step は依存関係で skipped</li>
+<li>利用者は publisher account 準備前であり、 暫定で publish step を gate する必要がある</li>
+</ul>
+<p><strong>変更内容</strong>:</p>
+<ul>
+<li><code>release.yml</code> の publish step に repo variable <code>PUBLISH_MARKETPLACE == &#39;true&#39;</code> の gate を追加:<ul>
+<li><code>Publish to VS Code Marketplace (stable only)</code> の <code>if</code> に追加</li>
+<li><code>Publish to Open VSX (stable only)</code> の <code>if</code> に追加</li>
+<li>未設定 (<code>!= &#39;true&#39;</code>) の場合、 stable tag push でも publish step は skip される (GitHub Release は引き続き作成)</li>
+</ul>
+</li>
+<li>workflow header コメントに gating model を追記 (PUBLISH_MARKETPLACE の意味、 issue #197 への参照)</li>
+<li>error message を更新: 「VSCE_PAT 未登録」 → 「PUBLISH_MARKETPLACE=true なのに VSCE_PAT 未登録」 (variable と secret の不整合を明示)</li>
+<li><code>Summary</code> step に新しい分岐を追加: stable release だが publish gated off の状態を表示</li>
+</ul>
+<p><strong>設計判断</strong>:</p>
+<ul>
+<li><code>if: false</code> でハードコード disable する案より、 repo variable gate にすることで<ul>
+<li>復旧操作が <code>gh variable set PUBLISH_MARKETPLACE --body &#39;true&#39;</code> の 1 コマンドで完結 (workflow 再編集不要)</li>
+<li>secret 登録 + variable 有効化を分離して、 variable 有効化時に secret 未登録なら fail-loud (誤設定検出可)</li>
+<li>状態が GitHub UI 上で可視 (Settings → Secrets and variables → Actions → Variables)</li>
+</ul>
+</li>
+<li>prerelease (<code>v*-rc1</code> 等) は別ロジック (<code>is_prerelease == &#39;false&#39;</code>) で既に skip 済、 PUBLISH_MARKETPLACE と独立</li>
+</ul>
+<p><strong>復旧手順 (issue #197 完了時)</strong>:</p>
+<ol>
+<li><code>gh secret set VSCE_PAT --repo signalcompose/orbitscore</code></li>
+<li><code>gh secret set OVSX_PAT --repo signalcompose/orbitscore</code></li>
+<li><code>gh variable set PUBLISH_MARKETPLACE --body &#39;true&#39; --repo signalcompose/orbitscore</code></li>
+<li>次の stable tag (例: v1.1.1) で publish が走ることを確認</li>
+</ol>
+<hr>
+<h3 id="675-release-v110-stable--promote-rc-sequence-to-stable-may-06-2026">6.75 Release v1.1.0 stable — promote RC sequence to stable (May 06, 2026)</h3>
+<p><strong>Date</strong>: May 06, 2026 (tag push: May 07, 2026)
+<strong>Status</strong>: ✅ DONE (tag push 完了 + GitHub Release 作成済、 Marketplace publish は #197 で gated)
+<strong>Branch</strong>: <code>claude/prepare-orbitscore-release-0Q6uK</code>
+<strong>Tag</strong>: <code>v1.1.0</code> (v1.1.0-rc1/rc2/rc3 を経た初の stable 化)</p>
+<p><strong>動機</strong>: ICMC 2026 Hamburg (5/10-16) 発表前に、 既に rc1/rc2/rc3 を切り終えた v1.1.0 を stable として正式タグ付けし、 <code>release.yml</code> workflow による Marketplace / Open VSX / GitHub Release の自動配信パイプラインを起動する。 RC 連番をきちんと stable で締めくくることで <code>v1.0.1 → v1.1.0-rc{1,2,3} → v1.1.0 stable</code> の canonical な lineage を残す。</p>
+<p><strong>バージョン選択の根拠</strong>:</p>
+<ul>
+<li>当初 v1.2.0 案で実装着手したが、 過去タグ (v1.0.1, v1.1.0-rc{1,2,3}) を <code>git fetch --tags</code> で確認した結果、 v1.1.0 RC が 3 本も切られているのに stable promote が未実施という宙吊り状態が判明</li>
+<li>post-rc3 の変更 (.orbs rename / 学習サイト / diagnostics) は「v1.1.0 の最終スコープに取り込まれた追加分」 として位置づけ可能、 別 minor を切る積極的理由なし</li>
+<li>README / WORK_LOG にも「ICMC v1.1.0 release-ready」 という記述があり、 そもそも 1.1.0 が出すべきバージョンだった</li>
+<li>semver 上 <code>.osc</code> → <code>.orbs</code> は breaking だが、 利用者影響範囲を考慮して minor (1.1.0) 扱い、 CHANGELOG Changed 冒頭で明示</li>
+</ul>
+<p><strong>Proxy 制約 (重要)</strong>:</p>
+<ul>
+<li>Claude session の git proxy は <code>refs/tags/*</code> への push を 403 で全面ブロック</li>
+<li>annotated/lightweight 問わず、 また tag 名のパターンに依らず拒否される</li>
+<li>これは tag push が release.yml workflow を起動して Marketplace publish まで自動実行する高権限操作だからで、 安全装置として人間の手動 push を強制する設計</li>
+<li>結果、 commit + branch push までは Claude が完了、 最後の <code>git push origin v1.1.0</code> のみ利用者側で実行が必要</li>
+</ul>
+<p><strong>変更内容</strong>:</p>
+<ul>
+<li><code>CHANGELOG.md</code> 新規作成 (Keep a Changelog 準拠、 1.1.0 が初エントリ)</li>
+<li><code>package.json</code> (root) <code>1.1.2</code> → <code>1.1.0</code> (※ 後方への version down は package.json 上の数値のみ、 git tag は新規)</li>
+<li><code>packages/vscode-extension/package.json</code> <code>1.1.2</code> → <code>1.1.0</code></li>
+<li><code>package-lock.json</code> workspace ルートと vscode-extension entry を 1.1.0 に同期</li>
+</ul>
+<p><strong>含まれる主な変更 (v1.1.0-rc3 以降)</strong>:</p>
+<ul>
+<li>拡張子 <code>.osc</code> → <code>.orbs</code> (af9b887) ※ 利用者リネーム必要</li>
+<li>診断機能: global once-per-file / audioPath ordering (0666633, 2c3d793)</li>
+<li>ユーザー向け学習サイト 8 章 (65a11b8)</li>
+<li>開発者向け学習サイト 16 章 (671481f)</li>
+<li>i18n: dev 18 章 / user 8 章の英訳 (136c4b6, d4e1850)</li>
+<li>GitHub Pages deploy workflow (36dae32)</li>
+<li>環境非依存 audio path 解決 fix (f972ddc)</li>
+</ul>
+<p><strong>自動化フロー</strong>:</p>
+<ol>
+<li>tag <code>v1.1.0</code> を push (利用者側で実行)</li>
+<li><code>.github/workflows/release.yml</code> が trigger:<ul>
+<li>macOS arm64 で extension をビルド</li>
+<li>scsynth bundle 抽出 + 整合性検証</li>
+<li><code>.vsix</code> package 化</li>
+<li><code>gh release create --generate-notes</code> で GitHub Release 作成 + .vsix を asset 添付</li>
+<li>VS Code Marketplace + Open VSX に publish (stable tag のみ)</li>
+</ul>
+</li>
+<li>CHANGELOG.md は repo 内 canonical 詳細記録、 GitHub Release notes は workflow による auto-generated 形式</li>
+</ol>
+<p><strong>Post-tag-push 完了報告 (May 07, 2026)</strong>:</p>
+<ul>
+<li><code>git push origin v1.1.0</code> 成功 (lightweight tag、 <code>cc1342a</code> を指す)</li>
+<li>release workflow 実行 (run id 25484379033): build / bundle / .vsix package / GitHub Release 作成までは success</li>
+<li><code>Publish to VS Code Marketplace (stable only)</code> step が <code>VSCE_PAT</code> 未登録で fail-loud (意図通り)</li>
+<li>→ 6.76 で <code>PUBLISH_MARKETPLACE</code> repo variable gate を追加して暫定対応 (#197 で publisher account 準備を追跡)</li>
+<li>PR #196 の Claude review で以下を検出 → 順次修正:<ul>
+<li>🔴 Critical: <code>package-lock.json</code> の <code>packages[&quot;&quot;]</code> entry が <code>1.2.0</code> のまま (c24bd69 v1.2.0 cut の残骸を cc1342a retarget が取りこぼし) → <code>npm install --package-lock-only</code> で 1.1.0 に同期修正 (commit <code>affbd9b</code>)</li>
+<li>🟠 Minor: CHANGELOG.md の Keep a Changelog 標準フォーマット差異 (<code># Changelog</code> ヘッダー欠落、 <code>[Unreleased]</code> セクション欠落、 SemVer リンク欠落) → ヘッダー / intro / <code>[Unreleased]</code> / compare link を追加 (commit <code>a64d6c9</code>)</li>
+<li>🟠 Minor: <code>.osc</code> → <code>.orbs</code> の breaking change が <code>### Changed</code> に埋もれていた → <code>### Breaking Changes</code> セクションに移動、 semver 上 major 相当だが minor として release した経緯も明記 (commit <code>a64d6c9</code> 同梱)</li>
+<li>🟡 Warning: 1.1.2 → 1.1.0 への version 後退の説明不足 → CHANGELOG 1.1.0 セクション冒頭に Note を追加し、 本 WORK_LOG への参照を明記 (commit <code>a64d6c9</code> 同梱)</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h3 id="674-deploy-user--dev-learning-sites-to-github-pages-may-06-2026">6.74 Deploy user + dev learning sites to GitHub Pages (May 06, 2026)</h3>
+<p><strong>Date</strong>: May 06, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS (PR pending)
+<strong>Branch</strong>: <code>claude/review-issues-gyJUJ</code>
+<strong>関連 Issue</strong>: #183 (deploy user site), #165 (deploy dev site), #181 (translation sync gap), #166 Epic (dev learning site)</p>
+<p><strong>動機</strong>: ICMC 2026 Hamburg (5/10-16) の発表に向けて、user / dev 両学習サイトの公開導線を確立する。Twitter / QR / 論文から飛んできた閲覧者が Web 上で内容を読める状態にする。 user は内容完成・dev は「個人学習ノート」 として未完を含むまま公開する方針。</p>
+<p><strong>設計方針</strong>:</p>
+<ul>
+<li>同一 repo・GitHub Actions deploy・subpath split:<ul>
+<li>user → <code>https://signalcompose.github.io/orbitscore/</code></li>
+<li>dev → <code>https://signalcompose.github.io/orbitscore/dev/</code></li>
+</ul>
+</li>
+<li>カスタムドメイン (post-ICMC) は CNAME + <code>base</code> 切替で対応可</li>
+<li>dev サイトは未完 (#166 stub 章、#181 ja code comment 残存) を含むまま公開:<ul>
+<li>landing の disclaimer (「個人学習ノート」「code が SoT」) で読者期待値を制御</li>
+<li><code>.translation-glossary.md</code> で「code 内 ja コメントは byte-identical (英訳しない)」 を明文化</li>
+<li><code>what-is-orbitscore.md</code> stub には Glossary / ADR-002 への pointer を追加 (迷子防止)</li>
+</ul>
+</li>
+</ul>
+<p><strong>変更内容</strong>:</p>
+<p>Workflow:</p>
+<ul>
+<li><code>.github/workflows/deploy-sites.yml</code> 新規 — <code>main</code> の <code>sites/**</code> 変更で trigger、 user / dev を 1 artifact に集約 → Pages deploy</li>
+</ul>
+<p>VitePress config:</p>
+<ul>
+<li><code>sites/user/.vitepress/config.ts</code> — <code>base: &#39;/orbitscore/&#39;</code> 追加</li>
+<li><code>sites/dev/.vitepress/config.ts</code> — <code>base: &#39;/orbitscore/dev/&#39;</code> 追加、 KaTeX CSS link を base 込みに更新</li>
+</ul>
+<p>Translation glossary (#181 sync gap 対応):</p>
+<ul>
+<li><code>sites/dev/.translation-glossary.md</code> §2 を改訂:<ul>
+<li>「code 内 ja コメントは byte-identical (英訳しない)」 を明文化、citation 整合を最優先する根拠を記載</li>
+<li>「commit message 引用は ja のまま (verbatim quote)」 を追加</li>
+</ul>
+</li>
+</ul>
+<p>Stub 暫定対応 (#166 Epic 残作業):</p>
+<ul>
+<li><code>sites/dev/orientation/what-is-orbitscore.md</code> (ja/en) — stub のまま、Glossary と ADR-002 への pointer を追加、「暫定的な要点」 を 3 行で書き起こし、Epic #166 で yamato 直筆予定を明記</li>
+</ul>
+<p>README:</p>
+<ul>
+<li><code>README.md</code> (root) — Learning Sites (web) セクション追加、 4 link</li>
+<li><code>sites/user/README.md</code> — 「公開について」 → 「公開 URL」 に置換、 deploy workflow 説明</li>
+<li><code>sites/dev/README.md</code> — 「公開 URL」 セクション追加、 個人学習ノートとして未完を含むことを明記</li>
+</ul>
+<p><strong>ビルド確認</strong>:</p>
+<ul>
+<li><code>npm run docs:build -w @orbitscore/user-site</code> ✅ 成功 (18.57s)</li>
+<li><code>npm run docs:build -w @orbitscore/dev-site</code> ✅ 成功 (23.92s)</li>
+<li>生成 HTML の asset href が <code>/orbitscore/</code> および <code>/orbitscore/dev/</code> で正しく prefix 化されることを確認</li>
+<li>workflow の combine step (user dist → root + dev dist → /dev/) を local 模擬実行、両 index.html 生成確認</li>
+</ul>
+<p><strong>残タスク (post-deploy)</strong>:</p>
+<ul>
+<li>Repo Settings → Pages → Source = &quot;GitHub Actions&quot; を web UI で有効化 (yamato 操作)</li>
+<li>カスタムドメイン取得 + CNAME 設定 + <code>base</code> 切替 (post-ICMC、別 PR)</li>
+<li>#181 残作業: 8 ファイルの ja code comment は glossary 改訂で「byte-identical 規律」 として正規化 (修正不要)</li>
+<li>#166 Epic: <code>what-is-orbitscore.md</code> の本文完成 (post-ICMC、 yamato 直筆)</li>
+</ul>
+<h3 id="673-translation-prep-i18n-setup-glossaries-spike-translations-may-06-2026">6.73 Translation prep: i18n setup, glossaries, spike translations (May 06, 2026)</h3>
+<p><strong>Date</strong>: May 06, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（マージ前 review 待ち）
+<strong>Branch</strong>: <code>prep-translation-i18n-setup</code></p>
+<p><strong>動機</strong>: dev / user 両学習サイトの日英翻訳を効率化するための事前準備。bulk 翻訳は Claude on the Web / CronCreate routine に委ねる前提で、品質と整合性を保証するインフラを Claude Code 側で確立する。</p>
+<p><strong>設計方針</strong>:</p>
+<ul>
+<li>VitePress 標準の i18n 機能を使用（locales: ja root + en）</li>
+<li>用語ペア・トーン・do-not-translate を <code>.translation-glossary.md</code> に明示</li>
+<li>spike 章を Claude Code で完訳して on-the-web の reference template とする</li>
+<li>章単位 issue で並列翻訳できる workflow</li>
+</ul>
+<p><strong>変更内容</strong>:</p>
+<p><code>sites/user/</code>:</p>
+<ul>
+<li><code>.translation-glossary.md</code> 新規（用語ペア、ですます調 → polite English の翻訳例、章タイトル英訳一覧）</li>
+<li><code>.vitepress/config.ts</code> を <code>locales: { root, en }</code> 構造に書き換え</li>
+<li><code>.vitepress/sidebar.ts</code> を <code>sidebarJa</code> / <code>sidebarEn</code> に分離</li>
+<li><code>en/</code> 配下に全 10 章 stub を作成（warning ボックス表示）</li>
+<li><code>en/index.md</code> (章 1) を完訳（spike）</li>
+<li><code>en/getting-started/first-sound.md</code> (章 3) を完訳（spike）</li>
+</ul>
+<p><code>sites/dev/</code>:</p>
+<ul>
+<li><code>.translation-glossary.md</code> 新規（user とは別のトーン規律と verbatim 規律を含む、CRITICAL §4）</li>
+<li><code>.vitepress/config.ts</code> を i18n 対応化、README.md を srcExclude に追加</li>
+<li><code>.vitepress/sidebar.ts</code> を <code>sidebarJa</code> / <code>sidebarEn</code> に分離</li>
+<li><code>en/</code> 配下に全 19 章 stub を作成</li>
+<li><code>en/orientation/architecture-overview.md</code> (spike 章) を sub-agent dispatch で完訳</li>
+</ul>
+<p><code>docs/development/</code>:</p>
+<ul>
+<li><code>TRANSLATION_WORKFLOW.md</code> 新規（翻訳 workflow、章単位 issue テンプレ、ローカル実行例）</li>
+<li><code>TRANSLATION_STATUS.md</code> 新規（29 章の進捗 tracker、status 定義、ja 更新時の手順）</li>
+</ul>
+<p><strong>ビルド確認</strong>: 両サイト build クリーン通過。<code>/en/</code> 配下の各 stub と spike 章が表示でき、navbar 右上に言語スイッチャーが自動生成されることを確認。</p>
+<p><strong>残タスク（別 issue で扱う）</strong>:</p>
+<ul>
+<li>bulk 翻訳: user 残り 8 章 + dev 残り 18 章（章単位 issue で Claude on the Web に dispatch）</li>
+<li>ja 元更新時の en 自動 outdated 検出（CronCreate routine 化）</li>
+<li>Web デプロイ（GitHub Pages 等）</li>
+</ul>
+<hr>
+<h3 id="672-issue-174-build-user-facing-learning-site-sitesuser-may-06-2026">6.72 Issue #174: Build user-facing learning site (sites/user/) (May 06, 2026)</h3>
+<p><strong>Date</strong>: May 06, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（マージ前 review 待ち）
+<strong>Branch</strong>: <code>174-user-learning-site</code>
+<strong>Issue</strong>: #174</p>
+<p><strong>動機</strong>: ICMC で論文に興味を持った人や VS Code 拡張をインストールしたユーザーが、OrbitScore で実際に音を出してライブコーディングを始められるようにする「優しく丁寧な」初心者向け学習サイトを構築。dev サイト (<code>sites/dev/</code>) と並行して、UX 寄りの learning resource を整備する。</p>
+<p><strong>設計方針</strong>:</p>
+<ul>
+<li>場所: <code>sites/user/</code>（VitePress、<code>@orbitscore/user-site</code> workspace）</li>
+<li>言語: 日本語のみ（英語版は別 issue で on-the-web / CronCreate routine で後追い）</li>
+<li>想定読者: 完全初心者、小学校高学年〜中学生レベルでも理解可能、子供扱いせず</li>
+<li>トーン: ですます調、friendly、kind、親切丁寧</li>
+<li>表現: コードのみ（動画・GIF・スクリーンショットなし、必要なら Mermaid のみ）</li>
+<li>SoT 関係: <code>docs/user/ja/USER_MANUAL.md</code> を primary source として再構成（dev サイトとは異なり code 直接引用ではない）</li>
+</ul>
+<p><strong>章構成（10 章）</strong>:</p>
+<ol>
+<li>OrbitScore とは（landing 兼ねる）</li>
+<li>インストール</li>
+<li>はじめての音</li>
+<li>パターンを作る</li>
+<li>複数のシーケンス</li>
+<li>ポリメーター・ポリリズム</li>
+<li>オーディオ操作</li>
+<li>ライブコーディング</li>
+<li>リファレンス（チートシート）</li>
+<li>トラブルシューティング</li>
+</ol>
+<p><strong>変更内容</strong>:</p>
+<ul>
+<li><code>docs/development/USER_LEARNING_SITE.md</code> 新規作成（DEV_LEARNING_SITE.md 形式準拠の project brief）</li>
+<li><code>sites/user/</code> VitePress project 一式を新規作成（package.json、.vitepress/config.ts + sidebar.ts + theme/、STYLE_GUIDE.md、README.md）</li>
+<li>全 10 章を執筆（sub-agent 並列 dispatch、Group A/B/C で 9 章、spike 章 first-sound.md は手書き）</li>
+<li><code>docs/core/INDEX.md</code> に user 学習サイトの section を追加</li>
+</ul>
+<p><strong>執筆 workflow</strong>:</p>
+<ul>
+<li>spike 章: 章 3 first-sound.md を手書きでトーン基準を確立</li>
+<li>bulk: sub-agent を 3 並列で dispatch（Group A: 章 2, 10 / Group B: 章 4, 5, 6 / Group C: 章 7, 8, 9）</li>
+<li>self-check: ですます調違反、子供扱いトーン、過剰絵文字を grep で検出 → 違反なし</li>
+</ul>
+<p><strong>ビルド確認</strong>: <code>npm run -w sites/user docs:build</code> クリーン通過、dead link なし、syntax warning なし。</p>
+<p><strong>別 issue で扱う</strong>:</p>
+<ul>
+<li>英語版翻訳（dev サイトの英語化と同時に）</li>
+<li>Web デプロイ（GitHub Pages or Vercel）</li>
+<li>マーケットプレイス公開後の install ページ更新</li>
+</ul>
+<hr>
+<h3 id="671-issue-171-diagnostics-for-global-once-per-file--audiopath-ordering-may-06-2026">6.71 Issue #171: Diagnostics for global once-per-file &amp; audioPath ordering (May 06, 2026)</h3>
+<p><strong>Date</strong>: May 06, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（マージ前動作確認待ち）
+<strong>Branch</strong>: <code>171-global-once-per-file-diagnostics</code>
+<strong>Issue</strong>: #171
+<strong>Version</strong>: 1.1.1 → <strong>1.1.2</strong></p>
+<p><strong>動機</strong>:</p>
+<ul>
+<li>パス解決の runtime エラーは Output Channel にしか出ず、入力時点で気づきにくい（デモ中だと致命的）</li>
+<li>DSL の意図: <code>global</code> の state-setting メソッドは単一情報源、live coding の正攻法は「行を書き換えて再評価」</li>
+<li><code>global.audioPath()</code> は <code>seq.audio()</code> より前にないと、絶対化のタイミングがズレる</li>
+</ul>
+<p><strong>設計方針</strong>: VS Code 拡張の静的 diagnostic として実装（parser レベルでは syntax error にできない、構文上は valid）。Engine/parser 一切無変更、テストも無変更。</p>
+<p><strong>変更内容</strong>:</p>
+<p><code>packages/vscode-extension/src/extension.ts</code>:</p>
+<ul>
+<li>既存の <code>updateDiagnostics()</code> 関数末尾に 2 つの解析パスを追加</li>
+<li>Analysis 1: <code>global.&lt;method&gt;()</code> の重複検出（state-setting 10 メソッド対象）<ul>
+<li>対象: tempo, beat, audioPath, start, stop, gain, key, normalizer, limiter, compressor</li>
+<li>対象外: <code>init global.seq</code>, LOOP/RUN/MUTE</li>
+<li>2 回目以降の出現に Warning severity の Diagnostic</li>
+</ul>
+</li>
+<li>Analysis 2: audioPath ordering 検出<ul>
+<li>最初の <code>global.audioPath(</code> 出現位置を取得</li>
+<li>各 <code>\.audio(&quot;...&quot;)</code> 呼び出しについて、相対パスかつ audioPath より前に出現または audioPath 不在 → Warning</li>
+<li>絶対パス（<code>/</code>, <code>~/</code>, <code>C:\</code>）はスキップ</li>
+</ul>
+</li>
+</ul>
+<p><code>package.json</code> (root) / <code>packages/vscode-extension/package.json</code>: 1.1.1 → 1.1.2</p>
+<p><code>sites/dev/editor/execution-feedback.md</code>: 「診断のチェック内容は 3 種類」を 5 種類に拡張、新節 4・5 を追加</p>
+<p><strong>テスト結果</strong>: 247 passed / 23 skipped / 270 total（engine 無変更のため）</p>
+<p><strong>マージ前動作確認</strong>:</p>
+<ul>
+<li>once-per-file: tempo 重複に warning、init global.seq / LOOP は warning なし</li>
+<li>ordering: audio() が audioPath() より前で warning、絶対パスはスキップ</li>
+<li>既存ファイル: <code>05_live_coding_session.orbs</code> で tempo 2-3 回目に warning（想定通り）</li>
+</ul>
+<hr>
+<h3 id="670-issue-170-rename-file-extension-from-osc-to-orbs-may-06-2026">6.70 Issue #170: Rename file extension from .osc to .orbs (May 06, 2026)</h3>
+<p><strong>Date</strong>: May 06, 2026
+<strong>Status</strong>: ⏳ IN PROGRESS（マージ前動作確認待ち）
+<strong>Branch</strong>: <code>170-rename-extension-to-orbs</code>
+<strong>Issue</strong>: #170
+<strong>Version</strong>: 1.1.0 → <strong>1.1.1</strong></p>
+<p><strong>動機</strong>:</p>
+<ul>
+<li>OSC (Open Sound Control) との混同回避（ICMC コミュニティで衝突）</li>
+<li>論文では拡張子に言及がないため、ICMC 前のいまが切り替えタイミングとして最適</li>
+<li><code>.orbs</code> は orbit との語感連続性、ブランド整合、衝突小</li>
+</ul>
+<p><strong>設計方針</strong>: 後方互換なし（ICMC 前で外部影響限定的、清潔なコードベース優先）</p>
+<p><strong>変更内容</strong>:</p>
+<p>ファイルリネーム (82 ファイル、<code>.osc</code> → <code>.orbs</code>):</p>
+<ul>
+<li><code>examples/</code> (11 ファイル)</li>
+<li><code>test-assets/scores/</code> (66 ファイル)</li>
+<li><code>test-audio/</code> (5 ファイル)</li>
+</ul>
+<p>VS Code 拡張:</p>
+<ul>
+<li><code>packages/vscode-extension/package.json</code>: 言語登録の extensions を <code>.osc</code> → <code>.orbs</code> に変更、version 1.1.0 → 1.1.1</li>
+</ul>
+<p>ソースコード（コメント、JSDoc 例、エラーメッセージ）:</p>
+<ul>
+<li><code>packages/engine/src/cli-audio.ts</code>, <code>cli/execute-command.ts</code>, <code>cli/parse-arguments.ts</code>, <code>cli/play-mode.ts</code></li>
+<li><code>packages/engine/src/core/global.ts</code>, <code>core/global/audio-manager.ts</code>, <code>core/sequence.ts</code></li>
+<li><code>packages/vscode-extension/src/extension.ts</code></li>
+<li>すべてコメント・docstring・エラーメッセージ内の <code>.osc</code> 文字列のみ。プログラム的な拡張子チェック（<code>.endsWith(&#39;.osc&#39;)</code> 等）は元から存在せず</li>
+</ul>
+<p>ドキュメント:</p>
+<ul>
+<li><code>sites/dev/</code> 6 ファイル更新</li>
+<li><code>docs/</code> (active) 約 15 ファイル更新（archive は意図的に温存）</li>
+<li><code>README.md</code>, <code>CONTRIBUTING.md</code>, <code>examples/README.md</code>, <code>test-assets/README.md</code>, <code>packages/vscode-extension/README.md</code></li>
+</ul>
+<p>バージョンバンプ:</p>
+<ul>
+<li>root <code>package.json</code>: 1.0.1 → 1.1.1</li>
+<li><code>packages/vscode-extension/package.json</code>: 1.1.0 → 1.1.1</li>
+</ul>
+<p><strong>RC 番号を版番に含めない理由</strong>: VS Code Extension パネルが <code>1.1.0-rc3</code> の suffix を表示しないため、複数 .vsix を区別できない。patch を毎回上げる方式に切り替え。</p>
+<p><strong>未更新（意図的）</strong>:</p>
+<ul>
+<li><code>docs/archive/WORK_LOG_*.md</code>: 過去の作業記録、当時の事実として保存</li>
+<li><code>CLAUDE.md.backup</code>: 古い snapshot、編集対象外</li>
+</ul>
+<p><strong>テスト結果</strong>: 247 passed / 23 skipped / 270 total</p>
+<p><strong>.vsix</strong>: <code>packages/vscode-extension/orbitscore-1.1.1.vsix</code> (7.18 MB, 2510 files)</p>
+<p><strong>マージ前動作確認</strong>:</p>
+<ul>
+<li><input disabled="" type="checkbox"> <code>.orbs</code> ファイル開いて syntax highlight が効く</li>
+<li><input disabled="" type="checkbox"> <code>.orbs</code> ファイルで <code>Cmd+Enter</code> (runSelection) 動作</li>
+<li><input disabled="" type="checkbox"> <code>.orbs</code> ファイル開くと syntax highlight が効かない（プレーンテキスト扱い）</li>
+<li><input disabled="" type="checkbox"> CLI <code>orbitscore-audio play examples/01_getting_started.orbs</code> 動作</li>
+</ul>
+<hr>
+<h3 id="669-issue-168-eliminate-environment-dependent-audio-file-path-resolution-may-06-2026">6.69 Issue #168: Eliminate environment-dependent audio file path resolution (May 06, 2026)</h3>
+<p><strong>Date</strong>: May 06, 2026
+<strong>Status</strong>: ✅ COMPLETE
+<strong>Branch</strong>: <code>168-audio-path-environment-independence</code>
+<strong>Issue</strong>: #168</p>
+<p><strong>動機</strong>: <code>audioPath()</code> および <code>audio()</code> のパス解決に <code>process.cwd()</code> フォールバックが残っており、開発環境依存（VS Code workspace の有無、エンジン spawn 時の cwd 等）でサイレントに誤解決される懸念があった。デモ時に「音が鳴らない」事故になりうる。</p>
+<p><strong>設計方針</strong>:</p>
+<ul>
+<li>パスは 2 種類のみを許容: 絶対パス、または <code>.orbs</code> ファイルからの相対パス</li>
+<li><code>process.cwd()</code> フォールバックを完全排除 → 明示エラー</li>
+<li><code>documentDirectory</code> を常に保証する仕組みを engine / VS Code 拡張 / CLI 各層に整備</li>
+</ul>
+<p><strong>変更内容</strong>:</p>
+<p>Engine:</p>
+<ul>
+<li><code>packages/engine/src/core/global/audio-manager.ts</code>: 相対パス + documentDirectory 未設定の場合に明示エラー</li>
+<li><code>packages/engine/src/core/sequence.ts</code>: <code>audio()</code> で同様のエラー化</li>
+<li><code>packages/engine/src/interpreter/process-statement.ts</code>: 冗長な防御的解決を削除（<code>_audioFilePath</code> は常に絶対パス前提に簡素化）</li>
+<li><code>packages/engine/src/core/sequence/scheduling/event-scheduler.ts</code>: <code>process.cwd()</code> フォールバックを assertion に変更</li>
+<li><code>packages/engine/src/core/sequence/playback/prepare-playback.ts</code>: 同上</li>
+<li><code>packages/engine/src/interpreter/interpreter-v2.ts</code>: <code>execute()</code> に <code>documentDirectory</code> オプションを追加し、global 初期化後に自動セット</li>
+<li><code>packages/engine/src/cli/play-mode.ts</code>: <code>.orbs</code> ファイルパスから documentDirectory を自動導出して execute に渡す</li>
+</ul>
+<p>VS Code 拡張:</p>
+<ul>
+<li><code>packages/vscode-extension/src/extension.ts</code>: <code>setDocumentDirectory</code> の自動注入を「global ブロック評価時のみ」から拡張。<code>globalInitialized</code> フラグでセッション状態を追跡し、init 後の任意の評価でもコード先頭に prepend するように変更（<code>.orbs</code> ファイル切り替えにも追従）</li>
+</ul>
+<p>テスト:</p>
+<ul>
+<li><code>tests/core/audio-path-resolution.spec.ts</code> 新規追加（7 テスト）: 絶対パス受理、documentDirectory 経由解決、未設定エラー、各ケースを網羅</li>
+<li><code>tests/core/dsl-v3-underscore-methods.spec.ts</code>: setUp で <code>setDocumentDirectory(&#39;/tmp/test&#39;)</code> を追加</li>
+<li><code>tests/timing/chop-timing.spec.ts</code>: 同上</li>
+</ul>
+<p>ドキュメント:</p>
+<ul>
+<li><code>sites/dev/glossary.md</code>: <code>setDocumentDirectory</code> エントリを新仕様に更新（注入タイミング 2 種、CLI 自動導出、フォールバック非存在を明記）</li>
+<li><code>sites/dev/pipeline/selective-execution.md</code>: 注入ロジック節を書き換え</li>
+<li><code>sites/dev/editor/execution-feedback.md</code>: 同上</li>
+</ul>
+<p><strong>テスト結果</strong>: 247 passed / 23 skipped / 270 total</p>
+<p><strong>破壊的変更</strong>: 暗黙の <code>cwd</code> 依存で動いていたコードはエラーになる。ICMC 前のため外部影響は限定的と判断。</p>
+<hr>
+<h3 id="668-issue-162-scaffold-dev-learning-site--spike-chapter-0-2-may-05-2026">6.68 Issue #162: Scaffold dev learning site + spike chapter 0-2 (May 05, 2026)</h3>
+<p><strong>Date</strong>: May 05, 2026
+<strong>Status</strong>: ✅ COMPLETE (Phase A 完走、Phase B は別 issue)
+<strong>Branch</strong>: <code>162-scaffold-dev-learning-site</code>
+<strong>Issue</strong>: #162</p>
+<p><strong>Work Content</strong>: dev 学習サイトの <strong>Phase A</strong>: VitePress scaffold + spike 章 (0-2 アーキテクチャ全景) を 1 PR で end-to-end。前 PR #161 で skill 導入と project brief は済、本 PR はその次段。</p>
+<p><strong>目的</strong>: skill loop (Phase 4 scaffold → Phase 5 writing → Phase 6 build → Phase 7 verify → Phase 8 advisor audit) が機能するかを 1 章で validate し、Phase B の bulk parallel writing に進む前提条件を確立する。</p>
+<p><strong>新規 / 更新ファイル</strong>:</p>
+<ul>
+<li>新規: <code>sites/dev/</code> (VitePress project root、<code>type: module</code>)<ul>
+<li><code>package.json</code> (<code>@orbitscore/dev-site</code>、deps: vitepress, vitepress-plugin-mermaid, mermaid, @vscode/markdown-it-katex, katex)</li>
+<li><code>.vitepress/config.ts</code> (Mermaid + KaTeX 設定、cleanUrls、srcExclude STYLE_GUIDE)</li>
+<li><code>.vitepress/sidebar.ts</code> (16 章の TOC export)</li>
+<li><code>.vitepress/theme/index.ts</code> (default theme re-export、Vue component の global 登録は意図的に避けた)</li>
+<li><code>index.md</code> (landing、 個人学習ノート disclaimer + status table)</li>
+<li><code>STYLE_GUIDE.md</code> (frontmatter 規約、<code>## Sources</code> 規約、<code>## 次の深掘り候補</code> 必須、shallow first pass 制約 400-800 行目安、tone)</li>
+<li><code>orientation/architecture-overview.md</code> (spike 章、status <code>draft</code>、書き手 = sub-agent / advisor audit 通過)</li>
+<li>残り 15 章 stub (frontmatter <code>status: stub</code> + 1 行説明、Phase B で本文)</li>
+</ul>
+</li>
+<li>更新: root <code>package.json</code> (workspaces に <code>sites/*</code> 追加)</li>
+<li>更新: <code>.gitignore</code> (<code>sites/*/.vitepress/cache/</code>, <code>sites/*/.vitepress/dist/</code>)</li>
+<li>更新: <code>docs/core/INDEX.md</code> (新 section: dev 学習サイト)</li>
+</ul>
+<p><strong>spike 章執筆プロセス</strong>:</p>
+<ol>
+<li><strong>Phase 5 (writing)</strong>: general-purpose sub-agent (model: sonnet) を 1 つ dispatch、<code>packages/engine/src/</code> 全体構造 + <code>vscode-extension/src/extension.ts</code> + <code>audio/supercollider/scsynth-resolver.ts</code> 等を primary source として読ませて書かせた</li>
+<li><strong>Phase 6 (build)</strong>: 初回 build で 3 dead link 検出 (sub-agent が stub の path を guess していた)、normalize fix</li>
+<li><strong>Phase 8 (audit)</strong>: advisor で audit。 1 件 Critical (「Electron renderer」 → 正確には 「Extension Host (Node.js、Renderer から fork)」) + 2 件 Minor (UDP/TCP 不一致、heartbeat → /status query) を flag、すべて修正</li>
+</ol>
+<p><strong>学んだこと (Phase B 設計への反映)</strong>:</p>
+<ul>
+<li>sub-agent の cross-link は <strong>必ず stub の path を読み込ませる</strong> prompt にする (推測しがち)</li>
+<li>advisor audit が conceptual error (process model 誤認) を catch できることが実証された (cross-LLM-family audit に格上げしなくても spike 段階では十分)</li>
+<li>shallow first pass の 1 章は 318 行で overview として機能する。Phase B の他章も同 scale を狙う</li>
+</ul>
+<p><strong>完了条件</strong>:</p>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> <code>sites/dev/</code> で VitePress build pass (dead link 0)</li>
+<li><input checked="" disabled="" type="checkbox"> 0-2 章が <code>status: draft</code> で完成 (advisor audit critical / minor すべて適用済)</li>
+<li><input checked="" disabled="" type="checkbox"> 残り 15 章が <code>status: stub</code> で存在</li>
+<li><input checked="" disabled="" type="checkbox"> STYLE_GUIDE.md 完成</li>
+<li><input checked="" disabled="" type="checkbox"> WORK_LOG / INDEX 更新</li>
+</ul>
+<p><strong>未完了 (yamato 作業)</strong>:</p>
+<ul>
+<li>0-2 章を読み、code に戻って Sources の line range / code snippet 逐語性を verify</li>
+<li>mental model が更新できたら別 commit で <code>status: reviewed</code> に格上げ</li>
+</ul>
+<p><strong>Out of Scope (別 issue)</strong>:</p>
+<ul>
+<li>Phase B: 残り 15 章の bulk writing (Part 別 sub-agent 並列 dispatch)</li>
+<li>Phase C: cross-chapter polish + Glossary 統一 + 深掘り backlog 整理</li>
+<li>Phase D: GitHub Pages deploy (post-ICMC)</li>
+</ul>
+<hr>
+<h3 id="667-issue-160-install-vitepress-learning-site-skill-may-05-2026">6.67 Issue #160: Install vitepress-learning-site skill (May 05, 2026)</h3>
+<p><strong>Date</strong>: May 05, 2026
+<strong>Status</strong>: ✅ COMPLETE (infra のみ、scaffold は別 PR)
+<strong>Branch</strong>: <code>160-install-vitepress-learning-skill</code>
+<strong>Issue</strong>: #160</p>
+<p><strong>Work Content</strong>: dev 学習サイト構築 (post-ICMC) の前段として <a href="https://github.com/yuichkun/.claude/tree/main/skills/vitepress-learning-site">yuichkun/.claude</a> の <code>vitepress-learning-site</code> skill を <code>.claude/skills/</code> 配下に install。作者承諾済、verbatim copy (上流 commit <code>66e544d</code>)。本 PR は infra のみ、サイト本体の scaffold は別 issue で対応予定。</p>
+<p><strong>動機</strong>: LLM 駆動開発で生じる「実装レイヤーの理解の構造的欠落」 (仕様考案 → LLM 実装 → 動作確認、という cycle で実装中に知識が獲得されない問題) を補う仕組み。dev 学習サイトを開発サイクルに組み込むことで、code から explanation を生成 → audit → 著者が読んで編集する loop を回す。</p>
+<p><strong>install 構成</strong> (12 ファイル、verbatim):</p>
+<ul>
+<li><code>.claude/skills/vitepress-learning-site/SKILL.md</code></li>
+<li><code>.claude/skills/vitepress-learning-site/references/*.md</code> (8 ファイル)</li>
+<li><code>.claude/skills/vitepress-learning-site/assets/*</code> (3 ファイル)</li>
+</ul>
+<p><strong>設計上の決定 (advisor 経由で確定)</strong>:</p>
+<ul>
+<li><code>.claude/skills-config/</code> のような新規 convention を <strong>発明しない</strong> (Claude Code 公式 schema との衝突リスク、discovery が指示ベース、community precedent ゼロ、bus factor 悪化の懸念)</li>
+<li>代わりに <strong>既存 pattern (project CLAUDE.md → docs/development/ への参照)</strong> を使う</li>
+<li>skill overrides + project brief は <a href="DEV_LEARNING_SITE.html"><code>docs/development/DEV_LEARNING_SITE.md</code></a> に集約</li>
+<li>CLAUDE.md に <code>## 🎓 Skill: vitepress-learning-site の運用</code> section を追加し、skill 起動前に DEV_LEARNING_SITE.md を必ず読む指示を明記</li>
+</ul>
+<p><strong>新規 / 更新ファイル</strong>:</p>
+<ul>
+<li>新規: <code>.claude/skills/vitepress-learning-site/</code> 配下 12 ファイル</li>
+<li>新規: <code>docs/development/DEV_LEARNING_SITE.md</code> (project brief + skill Phase 1-8 overrides)</li>
+<li>更新: <code>CLAUDE.md</code> (skill 運用 section 追加、Documentation Structure list に DEV_LEARNING_SITE エントリ追加)</li>
+<li>更新: <code>docs/core/INDEX.md</code> (Development table に DEV_LEARNING_SITE エントリ追加)</li>
+<li>更新: 本ファイル (エントリ追加)</li>
+</ul>
+<p><strong>Skill overrides の主要決定</strong> (詳細は DEV_LEARNING_SITE.md):</p>
+<ul>
+<li>audience = self (yamato 自身、実装学習)</li>
+<li>language = 日本語 only (start)、en は post-ICMC で検討</li>
+<li>primary source = own codebase</li>
+<li>site location = <code>sites/dev/</code>、章構造は code tree mirror</li>
+<li>external audit = advisor (会話 context) で代替、Codex/Gemini は precondition でない</li>
+<li>各章 frontmatter に <code>verified-against: &lt;commit-sha&gt;</code> 必須 (doc rot を解消ではなく document する artifact framing)</li>
+<li>deploy = post-ICMC で GitHub Pages、initial は local-only</li>
+</ul>
+<p><strong>Out of Scope (別 issue / 別 PR で対応)</strong>:</p>
+<ul>
+<li>dev 学習サイト本体の scaffold (<code>sites/dev/</code> の VitePress 設定、章ファイル骨格)</li>
+<li>routine 設計 (PR merge 時の章更新 trigger 等、post-ICMC)</li>
+<li>ICMC 用 minimum user site</li>
+<li>既存 docs/ から dev/user 両サイトへの段階的移行</li>
+</ul>
+<hr>
+<h3 id="666-issue-137-marketplace--open-vsx-automated-publish-workflow-may-02-2026">6.66 Issue #137: Marketplace + Open VSX automated publish workflow (May 02, 2026)</h3>
+<p><strong>Date</strong>: May 02, 2026
+<strong>Status</strong>: ✅ COMPLETE (workflow file 完成、secrets 登録は user 作業)
+<strong>Branch</strong>: <code>137-marketplace-publish-workflow</code>
+<strong>Issue</strong>: #137 (Epic #131 Phase 1 — ICMC v1.0)</p>
+<p><strong>Work Content</strong>: PR #155 (Issue #136 scsynth bundle) マージ完了後の release 自動化。tag push (<code>v*</code>) trigger で GitHub Release / VS Code Marketplace / Open VSX に自動 publish する workflow を追加。<code>-rc</code> / <code>-alpha</code> / <code>-beta</code> suffix の prerelease tag は GitHub Release のみ自動化、Marketplace と Open VSX は stable tag のみ。</p>
+<p><strong>実装</strong>:</p>
+<ul>
+<li><code>.github/workflows/release.yml</code> 新規作成 (macos-14 runner)</li>
+<li>pipeline:<ol>
+<li>checkout + setup-node</li>
+<li><code>brew install --cask supercollider</code> (bundle source)</li>
+<li><code>npm ci</code> + <code>npm run build</code> (engine + extension)</li>
+<li><code>npm run build:bundle</code> (scsynth 抽出)</li>
+<li><code>npm run verify:bundle</code> (pre-package integrity gate)</li>
+<li><code>npx vsce package --target $VSIX_TARGET --no-yarn</code> (currently <code>darwin-arm64</code>、env var で集約)</li>
+<li><code>.vsix</code> 解凍 → verify-bundle.sh で <strong>post-package signature 維持</strong>確認</li>
+<li>tag で release type 判定 (stable iff <code>^v[0-9]+\.[0-9]+\.[0-9]+$</code>、それ以外は test/smoke tag も含めすべて prerelease 扱い)</li>
+<li><code>gh release create</code> (prerelease/stable + <code>--generate-notes</code> で auto changelog)</li>
+<li>stable のみ <code>vsce publish</code> + <code>ovsx publish</code></li>
+<li>GitHub Actions job summary に release 情報</li>
+</ol>
+</li>
+</ul>
+<p><strong>Security 対策</strong>: <code>${{ github.ref_name }}</code> を直接 <code>run:</code> で展開せず <code>env:</code> 経由で shell 変数として参照 (workflow injection 緩和、参照: github.blog/security/vulnerability-research/)。</p>
+<p><strong>必要 secrets</strong> (user 作業):</p>
+<ul>
+<li><code>VSCE_PAT</code>: VS Code Marketplace publisher token (Azure DevOps PAT)</li>
+<li><code>OVSX_PAT</code>: Open VSX namespace token (Eclipse Foundation アカウント)</li>
+<li><strong>Apple Developer ID 不要</strong> — SC project の既存 notarized signature を流用 (<code>docs/research/CODESIGN_PIPELINE.md</code> で確定)</li>
+</ul>
+<p><strong>動作シナリオ</strong>:</p>
+<ul>
+<li><code>git tag v1.1.0 &amp;&amp; git push origin v1.1.0</code> → 全 channel publish</li>
+<li><code>git tag v1.1.0-rc4 &amp;&amp; git push origin v1.1.0-rc4</code> → GitHub Release prerelease のみ</li>
+<li>既存の手動 prerelease (rc1-rc3) も同パイプラインで再現可能</li>
+</ul>
+<p><strong>後続</strong>:</p>
+<ul>
+<li>user による secrets 登録 (<code>gh secret set VSCE_PAT --repo signalcompose/orbitscore</code> 等)</li>
+<li>初回 publisher 取得 (Signal compose、Marketplace + Open VSX)</li>
+<li>動作確認: 試験 tag (<code>v0.0.0-test1</code> 等) で workflow が走るか smoke</li>
+</ul>
+<hr>
+<h3 id="665-issue-136-scsynth-bundle-integration-in-vscode-extension-may-02-2026">6.65 Issue #136: scsynth bundle integration in vscode-extension (May 02, 2026)</h3>
+<p><strong>Date</strong>: May 02, 2026
+<strong>Status</strong>: ✅ COMPLETE (PR pending review)
+<strong>Branch</strong>: <code>136-bundle-scsynth-vscode-extension</code>
+<strong>Issue</strong>: #136 (Epic #131 Phase 1 — ICMC v1.0)</p>
+<p><strong>Work Content</strong>: ICMC 2026 リリースの最大インストール障壁 (SC.app の手動 install 強要) を解消するため、scsynth + 26 plugins + libsndfile.dylib (~11.5MB) を <code>.vsix</code> に同梱、path resolver を extension/engine 共通化、bundle 不在時の first-run UX を実装。旧 #146 の (1)(2) (bundle 検出 + Notification) を統合 (CodeX レビュー承認、#146 close 済)。</p>
+<p><strong>Version</strong>: 1.0.1 → <strong>1.1.0</strong> (Phase 13 で minor bump、scsynth bundle 同梱は major feature)</p>
+<p><strong>実装</strong> (18 commits、各単独で <code>npm test</code> 通過):</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Commit</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td><code>63e298b</code></td>
+<td>feat(audio): add scsynth path resolver with multi-source fallback</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>24a2e5c</code></td>
+<td>refactor(audio): wire SuperColliderPlayer through scsynth resolver</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>a4bad3b</code></td>
+<td>feat(vscode-extension): add orbitscore.scsynthPath setting and pass to engine</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>7880462</code></td>
+<td>refactor(vscode-extension): unify selectAudioDevice through scsynth resolver</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>9663a83</code></td>
+<td>feat(vscode-extension): add bundle status bar and first-run notification</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>aca6450</code></td>
+<td>feat(build): add scsynth bundle extract/verify scripts and legal placeholders</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>e25894d</code></td>
+<td>docs(worklog,readme): record scsynth bundle integration</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>1569110</code></td>
+<td>refactor(audio): drop SC.app/spotlight fallback from scsynth resolver</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>08c2855</code></td>
+<td>refactor(vscode-extension): align UX with strict bundle requirement</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>5f93169</code></td>
+<td>docs(worklog,readme,build-guide): document strict resolver and dev workaround</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>98277db</code></td>
+<td>docs(platform): scope v1.0 to macOS Apple Silicon only</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>bb94fe6</code></td>
+<td>fix(review): address claude-review feedback (libsndfile LGPL, JSDoc, DRY, dead code)</td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>58d9825</code></td>
+<td>docs(extension-readme): restructure for marketplace + bump version to 1.1.0</td>
+</tr>
+<tr>
+<td>14</td>
+<td><code>df3e8f7</code></td>
+<td>refactor(vscode-extension): rename killSuperCollider command to forceKillScsynth</td>
+</tr>
+<tr>
+<td>15</td>
+<td><code>fbd033a</code></td>
+<td>fix(vscode-extension): exec→execFile in selectAudioDevice + status bar settings target</td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>e82e0ef</code></td>
+<td>fix(vscode-extension): skip engine spawn when scsynth unresolvable (avoid double error notice)</td>
+</tr>
+<tr>
+<td>17</td>
+<td><code>2f8f4d8</code></td>
+<td>refactor(vscode-extension): reuse pre-check resolution + execFile for all killall (review minors)</td>
+</tr>
+<tr>
+<td>18</td>
+<td>this</td>
+<td>docs(legal): embed GPL-3.0 verbatim + NOTICE aggregation clause (closes #139)</td>
+</tr>
+</tbody></table>
+<p><strong>新規ファイル</strong>:</p>
+<ul>
+<li><code>packages/engine/src/audio/supercollider/scsynth-resolver.ts</code> (resolver 本体、strict mode)</li>
+<li><code>tests/audio/scsynth-resolver.spec.ts</code> (10 unit tests、CI 実行可)</li>
+<li><code>scripts/extract-scsynth-bundle.sh</code> (SC.app 自動 discovery + 26 plugin filter + 検証)</li>
+<li><code>scripts/verify-bundle.sh</code> (<code>.vsix</code> 解凍後の signature/permission 確認)</li>
+<li><code>packages/vscode-extension/legal/scsynth-LICENSE.GPL-3.0</code> (#139 placeholder)</li>
+<li><code>packages/vscode-extension/legal/scsynth-NOTICE</code> (GPL-3.0 §6 corresponding source URL 明記)</li>
+</ul>
+<p><strong>Path resolver 仕様</strong> (engine 側に唯一存在、extension は <code>require</code> で再利用):</p>
+<ol>
+<li><code>opts.explicit</code> (caller 明示)</li>
+<li><code>process.env.ORBIT_SCSYNTH_PATH</code> (extension が settings から渡す)</li>
+<li>Bundle (<code>&lt;engine root&gt;/scsynth/Contents/Resources/scsynth</code>)</li>
+</ol>
+<p><strong>Strict mode の理由</strong> (本 PR レビュー過程で確定): 当初は SC.app fallback と Spotlight も持っていたが、ICMC リリース目標 (「SC が無くても動く」) に対して fallback はテストの意味を曖昧にすると判断。bundle 抽出失敗を SC.app が肩代わりして production の不具合を隠蔽するリスクを排除するため、Phase 8 で fallback を削除。bundle が無ければ即 <code>ScsynthNotFoundError</code> で fail loud。各候補で <code>fs.statSync</code> + 実行権限ビット (<code>mode &amp; 0o111</code>) を検査。<code>daemon-client.ts:417-433</code> の <code>resolveDaemonBinary()</code> パターン流用。</p>
+<p><strong>Dev workflow への影響</strong>:</p>
+<ul>
+<li>engine 単独 CLI (<code>npm run dev:engine</code>) で SC.app に依存していた dev は <code>ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth</code> を env で渡す</li>
+<li>vscode-extension 経由 (通常 user) は build pipeline で bundle 同梱、何もしなくて OK</li>
+</ul>
+<p><strong>First-run UX</strong> (CodeX 指摘「status bar degraded」反映 + Phase 9 で strict mode 整合):</p>
+<ul>
+<li>StatusBar item (priority 99) で source 別に icon: <code>bundle</code> (✅) / <code>env</code>/<code>explicit</code> (⚙️ custom) / 解決失敗 (❌ error 背景)</li>
+<li><code>startEngine()</code> 実行時に解決失敗 → 毎回 <code>showErrorMessage</code> (Open Settings / View Logs)</li>
+<li>当初設計の &quot;Don&#39;t Show Again&quot; dismiss 機構は廃止 (silent fallback がない以上、Notice を黙らせる選択肢自体が不適切)</li>
+</ul>
+<p><strong>リリース戦略</strong> (本 PR レビュー過程で確定):</p>
+<ul>
+<li>ICMC v1.0 初回は <strong>GitHub Release に <code>.vsix</code> を添付</strong>して配布、ユーザは ダウンロード + ダブルクリック (or <code>code --install-extension</code>) で install</li>
+<li>Marketplace 自動 publish (#137) は ICMC ブロッカーから降格可能 (別 issue で再整理)</li>
+</ul>
+<p><strong>動作環境</strong> (v1.0): <strong>macOS (Apple Silicon)</strong> のみ。bundle scsynth は universal binary だが、Intel Mac は未テスト。Windows / Linux は scsynth bundle に対応 binary が同梱されないため非対応 (cross-platform は将来 issue で扱う)。Marketplace publish 時は <code>vsce package --target darwin-arm64</code> で OS gate を明示する想定。</p>
+<p><strong>実機検証 (SC 3.14.1 環境)</strong>:</p>
+<ul>
+<li><code>npm run build:bundle</code> → 11MB bundle 生成、26 plugins、universal arm64+x86_64</li>
+<li><code>npm run verify:bundle</code> → 11/11 checks pass (signature valid、TeamIdentifier=HE5VJFE9E4)</li>
+<li>engine test 240 pass / 23 skipped (resolver 10 新規 + 既存 230 維持、Phase 8 で sc-app/spotlight test 1 件削減)</li>
+<li>TypeScript build clean、ESLint clean</li>
+</ul>
+<p><strong>スコープ外</strong> (本 PR で実装しない):</p>
+<ul>
+<li>#137 Marketplace 自動 publish workflow (リリース戦略変更で ICMC ブロッカーから降格、別 issue で再整理予定)</li>
+<li>#138 cold-install acceptance test (実機 SC-less Mac で別途検証)</li>
+<li>#151 OrbitScore: Check Audio Setup (post-icmc)</li>
+<li>#152 OrbitScore: Open Examples (post-icmc)</li>
+<li>#156 環境変数名統一 (post-icmc、Phase 15 review feedback)</li>
+</ul>
+<p><strong>スコープに吸収</strong> (本 PR で完了):</p>
+<ul>
+<li>#139 LICENSE/NOTICE 文言洗練 → Phase 18 で GPL-3.0 verbatim 同梱 + NOTICE に separate works (OSC IPC) aggregation 明記 + libsndfile LGPL-2.1 区別 (Phase 12)。本 PR マージで #139 close。</li>
+</ul>
+<p><strong>後続</strong>:</p>
+<ul>
+<li>本 PR マージ → #138 で SC-less Mac の cold-install 検証</li>
+<li>#138 通過 → 手動 GitHub Release で <code>.vsix</code> 配布開始</li>
+<li>ICMC 2026 リリース ready</li>
+</ul>
+<hr>
+<h3 id="664-issue-153-pre-edit-checksh-allow-plan-mode-plan-files-may-02-2026">6.64 Issue #153: pre-edit-check.sh allow plan-mode plan files (May 02, 2026)</h3>
+<p><strong>Date</strong>: May 02, 2026
+<strong>Status</strong>: ✅ COMPLETE
+<strong>Branch</strong>: <code>153-hook-allow-plans-dir</code>
+<strong>Issue</strong>: #153</p>
+<p><strong>Work Content</strong>: Claude Code plan mode の plan file (<code>.claude/plans/&lt;name&gt;.md</code>) 書込が main ブランチで <code>pre-edit-check.sh</code> にブロックされ workflow が完結しない問題を解決。Issue #136 (scsynth bundle) の plan 作成中に発見した hook 改善作業。</p>
+<p><strong>実装</strong>:</p>
+<ul>
+<li><code>.claude/hooks/pre-edit-check.sh</code> 修正<ul>
+<li>stdin から <code>tool_input.file_path</code> を読み取る処理を追加 (jq 優先、python3 fallback)</li>
+<li><code>case</code> 判定で <code>*/.claude/plans/*</code> パスは早期 <code>exit 0</code> で通過</li>
+</ul>
+</li>
+<li>既存の main 編集 deny ロジックと branch 命名警告は無改修</li>
+</ul>
+<p><strong>検証</strong>:</p>
+<ul>
+<li>Sanity test 7 ケースすべて pass<ul>
+<li>feature branch + 通常 file → exit 0 (既存通り)</li>
+<li>feature branch + plan file → exit 0 (新挙動、early allow)</li>
+<li>空 stdin / malformed JSON / <code>tool_input.file_path</code> 欠落 → exit 0 (graceful)</li>
+<li>simulated main + plan file → exit 0 (新挙動、early allow)</li>
+<li>simulated main + 通常 file → deny JSON 出力 + exit 0 (既存通り)</li>
+</ul>
+</li>
+</ul>
+<p><strong>後続</strong>:</p>
+<ul>
+<li>本 fix で plan mode workflow が main ブランチでも完結可能に</li>
+<li>将来 <code>claude-tools</code> リポジトリに汎用 branch-protection plugin を作る際の参考実装</li>
+</ul>
+<hr>
+
+</main>
+</body>
+</html>

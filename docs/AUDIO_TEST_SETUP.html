@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore 音声テストセットアップガイド — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-音声テストセットアップガイド">OrbitScore 音声テストセットアップガイド</h1>
+<h2 id="概要">概要</h2>
+<p>このガイドでは、OrbitScoreの音声テスト環境のセットアップ方法と、2種類のテスト方法について説明します。</p>
+<h2 id="テストの種類">テストの種類</h2>
+<h3 id="1-エージェント実行テストai実行型">1. エージェント実行テスト（AI実行型）</h3>
+<ul>
+<li><strong>目的</strong>: AIエージェントが実行し、ユーザーが音を聞いて確認</li>
+<li><strong>用途</strong>: 実装の検証、リグレッションテスト</li>
+<li><strong>特徴</strong>: 自動実行、期待値の事前説明、結果の確認</li>
+</ul>
+<h3 id="2-ライブコーディングテスト手動実行型">2. ライブコーディングテスト（手動実行型）</h3>
+<ul>
+<li><strong>目的</strong>: ユーザーが実際にライブコーディングを行い、機能を確認</li>
+<li><strong>用途</strong>: ライブパフォーマンスの動作確認、UX検証</li>
+<li><strong>特徴</strong>: 対話的、リアルタイム変更、実戦的な確認</li>
+</ul>
+<h2 id="前提条件">前提条件</h2>
+<h3 id="システム要件">システム要件</h3>
+<ul>
+<li>Node.js v22.0.0以上</li>
+<li>SuperCollider（オーディオエンジン）</li>
+<li>VS Code または Cursor</li>
+<li>オーディオデバイス（スピーカーまたはヘッドフォン）</li>
+</ul>
+<h3 id="supercolliderのインストール">SuperColliderのインストール</h3>
+<p><strong>macOS:</strong></p>
+<pre><code class="language-bash">brew install --cask supercollider
+</code></pre>
+<p><strong>Linux:</strong></p>
+<pre><code class="language-bash">sudo apt-get install supercollider
+</code></pre>
+<p><strong>Windows:</strong></p>
+<ul>
+<li><a href="https://supercollider.github.io/">SuperCollider公式サイト</a>からダウンロード</li>
+</ul>
+<h3 id="supercolliderの起動確認">SuperColliderの起動確認</h3>
+<pre><code class="language-bash"># macOS: SuperColliderの場所を確認
+ls -la /Applications/SuperCollider.app
+
+# scsynthの場所を確認
+find /Applications/SuperCollider.app -name scsynth -type f
+</code></pre>
+<h3 id="synthdefの準備">SynthDefの準備</h3>
+<p>OrbitScoreでは、専用のSynthDef（シンセサイザー定義）を使用します。
+既にコンパイル済みの<code>.scsyndef</code>ファイルが用意されているので、通常はそのまま使えます：</p>
+<pre><code class="language-bash"># SynthDefファイルの確認
+ls -la packages/engine/supercollider/synthdefs/
+# orbitPlayBuf.scsyndef    - メイン再生エンジン
+# fxCompressor.scsyndef    - コンプレッサー
+# fxLimiter.scsyndef       - リミッター
+# fxNormalizer.scsyndef    - ノーマライザー
+</code></pre>
+<p><strong>SynthDefの再ビルドが必要な場合：</strong></p>
+<pre><code class="language-bash">cd packages/engine/supercollider
+
+# 既存のsclangプロセスを終了
+killall sclang 2&gt;/dev/null
+
+# SynthDefをビルド（macOS）
+/Applications/SuperCollider.app/Contents/MacOS/sclang setup.scd
+
+# 成功メッセージを確認
+# ✅ All SynthDefs saved! が表示されればOK
+</code></pre>
+<h2 id="セットアップ手順">セットアップ手順</h2>
+<h3 id="step-1-プロジェクトのビルド">Step 1: プロジェクトのビルド</h3>
+<pre><code class="language-bash"># プロジェクトルートに移動
+cd /Users/yamato/Src/proj_livecoding/orbitscore
+
+# Engineパッケージのビルド
+cd packages/engine
+npm install
+npm run build
+
+# VSCode拡張機能のビルド
+cd ../vscode-extension
+npm install
+npm run build
+</code></pre>
+<h3 id="step-2-vscode拡張機能のインストール">Step 2: VSCode拡張機能のインストール</h3>
+<h4 id="方法a-開発モード推奨---デバッグ可能">方法A: 開発モード（推奨 - デバッグ可能）</h4>
+<ol>
+<li>VS Codeで<code>packages/vscode-extension</code>フォルダを開く</li>
+<li><code>F5</code>キーを押す</li>
+<li>新しいVS Codeウィンドウ（Extension Development Host）が開く</li>
+</ol>
+<h4 id="方法b-パッケージインストール">方法B: パッケージインストール</h4>
+<pre><code class="language-bash">cd packages/vscode-extension
+
+# パッケージ化
+npx vsce package
+
+# インストール
+# VS Codeで Cmd+Shift+P → &quot;Install from VSIX...&quot; → 生成された.vsixファイルを選択
+</code></pre>
+<h3 id="step-3-テストファイルの準備">Step 3: テストファイルの準備</h3>
+<p>テストファイルは<code>examples/</code>ディレクトリに用意されています：</p>
+<pre><code class="language-bash">ls examples/*.orbs
+</code></pre>
+<p>主なテストファイル：</p>
+<ul>
+<li><code>01_getting_started.orbs</code> - 基本動作確認</li>
+<li><code>05_drum_patterns_simple.orbs</code> - ドラムパターン</li>
+<li><code>07_audio_control.orbs</code> - 音量・パン制御</li>
+<li><code>08_timing_verification.orbs</code> - タイミング精度検証</li>
+</ul>
+<h2 id="エージェント実行テストtype-1">エージェント実行テスト（Type 1）</h2>
+<h3 id="テスト実行手順">テスト実行手順</h3>
+<p>AIエージェントが以下の手順でテストを実行します：</p>
+<ol>
+<li><p><strong>テスト内容の事前説明</strong></p>
+<ul>
+<li>使用する音声ファイル</li>
+<li><code>chop(n)</code>による分割数</li>
+<li><code>play()</code>による再生順序</li>
+<li>期待される音の流れ</li>
+<li>再生時間の目安</li>
+</ul>
+</li>
+<li><p><strong>コマンド実行</strong></p>
+<ul>
+<li>CLIを使用した実行</li>
+<li>または、VSCode拡張機能を使用した実行</li>
+</ul>
+</li>
+<li><p><strong>結果確認</strong></p>
+<ul>
+<li>ユーザーに「期待通りに聞こえましたか？」と確認</li>
+</ul>
+</li>
+</ol>
+<h3 id="cliでの実行例">CLIでの実行例</h3>
+<pre><code class="language-bash"># Engineディレクトリに移動
+cd packages/engine
+
+# 基本的な実行
+node dist/cli-audio.js ../../examples/01_getting_started.orbs
+
+# デバッグモード（詳細ログ）
+DEBUG=orbitscore:* node dist/cli-audio.js ../../examples/01_getting_started.orbs
+</code></pre>
+<h3 id="vscode拡張機能での実行例">VSCode拡張機能での実行例</h3>
+<ol>
+<li><code>.orbs</code>ファイルを開く</li>
+<li>ステータスバーをクリック → &quot;🚀 Start Engine&quot;</li>
+<li>ファイル全体を選択して<code>Cmd+Enter</code>で実行</li>
+</ol>
+<h2 id="ライブコーディングテストtype-2">ライブコーディングテスト（Type 2）</h2>
+<h3 id="テスト実行手順-1">テスト実行手順</h3>
+<p>ユーザーが実際にライブコーディングを行います：</p>
+<h3 id="step-1-エンジン起動">Step 1: エンジン起動</h3>
+<ol>
+<li>VS CodeでOrbitScoreプロジェクトを開く</li>
+<li><code>.orbs</code>ファイルを開く（例：<code>examples/live-demo.orbs</code>）</li>
+<li>ステータスバーをクリック<ul>
+<li><strong>通常モード</strong>: 🚀 Start Engine</li>
+<li><strong>デバッグモード</strong>: 🐛 Start Engine (Debug)</li>
+</ul>
+</li>
+</ol>
+<h3 id="step-2-オーディオデバイス選択オプション">Step 2: オーディオデバイス選択（オプション）</h3>
+<p>ステータスバーをクリック → &quot;🔊 Select Audio Device&quot;</p>
+<h3 id="step-3-ライブコーディング">Step 3: ライブコーディング</h3>
+<p>基本的なワークフロー：</p>
+<pre><code class="language-orbitscore">// 1. 定義を書く
+var global = init GLOBAL { bpm: 120 }
+
+let kick = new Sequence(&quot;kick&quot;)
+  .beat(&quot;x___&quot;)
+  .length(&quot;1/4&quot;)
+  .audio(&quot;test-assets/audio/kick.wav&quot;)
+  .chop(1)
+  .play(&quot;1&quot;)
+
+// 2. 保存（Cmd+S）- 定義が評価される
+
+// 3. 実行コマンドを選択して実行（Cmd+Enter）
+global.start()
+kick.loop()
+
+// 4. パラメータを変更して再度Cmd+Enter
+kick.gain(6)  // 音量を上げる
+kick.pan(-50) // 左に寄せる
+
+// 5. 停止
+kick.stop()
+global.stop()
+</code></pre>
+<h3 id="step-4-確認項目">Step 4: 確認項目</h3>
+<ul>
+<li><input disabled="" type="checkbox"> エンジンが正常に起動する</li>
+<li><input disabled="" type="checkbox"> 定義が正しく評価される（エラーが出ない）</li>
+<li><input disabled="" type="checkbox"> 音が期待通りに鳴る</li>
+<li><input disabled="" type="checkbox"> パラメータ変更がリアルタイムに反映される</li>
+<li><input disabled="" type="checkbox"> 停止コマンドが正しく動作する</li>
+<li><input disabled="" type="checkbox"> 複数シーケンスの同時実行が可能</li>
+<li><input disabled="" type="checkbox"> エラーメッセージが適切に表示される</li>
+</ul>
+<h2 id="トラブルシューティング">トラブルシューティング</h2>
+<h3 id="エンジンが起動しない">エンジンが起動しない</h3>
+<p><strong>症状</strong>: &quot;Engine not found&quot; エラー</p>
+<p><strong>解決策</strong>:</p>
+<pre><code class="language-bash">cd packages/engine
+npm run build
+</code></pre>
+<h3 id="supercolliderサーバーが起動しない">SuperColliderサーバーが起動しない</h3>
+<p><strong>症状</strong>: &quot;Could not connect to SuperCollider&quot; エラー</p>
+<p><strong>解決策</strong>:</p>
+<ol>
+<li>SuperColliderがインストールされているか確認</li>
+<li>ポート57110が使用されていないか確認</li>
+</ol>
+<pre><code class="language-bash">lsof -i :57110
+</code></pre>
+<ol start="3">
+<li>手動でSuperColliderサーバーを起動してテスト</li>
+</ol>
+<pre><code class="language-bash">scsynth -u 57110
+</code></pre>
+<h3 id="音が出ない">音が出ない</h3>
+<p><strong>症状</strong>: エラーは出ないが音が聞こえない</p>
+<p><strong>解決策</strong>:</p>
+<ol>
+<li>オーディオデバイスの音量を確認</li>
+<li>正しいオーディオデバイスが選択されているか確認</li>
+<li>音声ファイルのパスが正しいか確認</li>
+<li>デバッグモードで詳細ログを確認</li>
+</ol>
+<h3 id="パスエラー">パスエラー</h3>
+<p><strong>症状</strong>: &quot;File not found&quot; エラー</p>
+<p><strong>解決策</strong>:</p>
+<ul>
+<li>音声ファイルのパスを環境に合わせて変更</li>
+<li>絶対パスまたはプロジェクトルートからの相対パスを使用</li>
+</ul>
+<pre><code class="language-orbitscore">// 相対パス（プロジェクトルートから）
+.audio(&quot;test-assets/audio/kick.wav&quot;)
+
+// 絶対パス
+.audio(&quot;/Users/yamato/Src/proj_livecoding/orbitscore/test-assets/audio/kick.wav&quot;)
+</code></pre>
+<h2 id="テストケース例">テストケース例</h2>
+<h3 id="基本的な音出しテスト">基本的な音出しテスト</h3>
+<pre><code class="language-orbitscore">var global = init GLOBAL { bpm: 120 }
+
+// シンプルなキックドラム
+let kick = new Sequence(&quot;kick&quot;)
+  .beat(&quot;x___&quot;)
+  .length(&quot;1/4&quot;)
+  .audio(&quot;test-assets/audio/kick.wav&quot;)
+  .chop(1)
+  .play(&quot;1&quot;)
+
+global.start()
+kick.loop()
+</code></pre>
+<p>期待される結果：</p>
+<ul>
+<li>120 BPMで4拍子のキック（1拍ごと）が聞こえる</li>
+<li>リズムが安定している</li>
+<li>音量が適切</li>
+</ul>
+<h3 id="chopテスト">Chopテスト</h3>
+<pre><code class="language-orbitscore">var global = init GLOBAL { bpm: 120 }
+
+// アルペジオを4分割して順番に再生
+let arp = new Sequence(&quot;arp&quot;)
+  .beat(&quot;xxxx&quot;)
+  .length(&quot;1/16&quot;)
+  .audio(&quot;test-assets/audio/arpeggio_c.wav&quot;)
+  .chop(4)
+  .play(&quot;1 2 3 4&quot;)
+
+global.start()
+arp.loop()
+</code></pre>
+<p>期待される結果：</p>
+<ul>
+<li>アルペジオが4つのスライスに分割される</li>
+<li>各スライスが順番に再生される（1→2→3→4）</li>
+<li>タイミングが正確（16分音符ごと）</li>
+</ul>
+<h3 id="gainpan-テスト">Gain/Pan テスト</h3>
+<pre><code class="language-orbitscore">var global = init GLOBAL { bpm: 120 }
+
+let kick = new Sequence(&quot;kick&quot;)
+  .beat(&quot;x___&quot;)
+  .length(&quot;1/4&quot;)
+  .audio(&quot;test-assets/audio/kick.wav&quot;)
+  .chop(1)
+  .play(&quot;1&quot;)
+  .gain(-6)   // -6 dB（少し小さく）
+  .pan(-50)   // 左寄り
+
+global.start()
+kick.loop()
+
+// リアルタイムで変更
+kick.gain(6)  // +6 dB（大きく）
+kick.pan(50)  // 右寄り
+</code></pre>
+<p>期待される結果：</p>
+<ul>
+<li>音量が変更される（-6 dB → +6 dB）</li>
+<li>ステレオ位置が変わる（左 → 右）</li>
+<li>変更が即座に反映される</li>
+</ul>
+<h2 id="パフォーマンステスト">パフォーマンステスト</h2>
+<p>より高度なテストは<code>docs/PERFORMANCE_TEST_GUIDE.md</code>を参照してください：</p>
+<ul>
+<li>ポリメーター（異なる拍子）</li>
+<li>ポリテンポ（異なるBPM）</li>
+<li>ネストされたリズム（最大11レベル）</li>
+<li>マルチトラック（20トラック以上）</li>
+</ul>
+<h2 id="次のステップ">次のステップ</h2>
+<ul>
+<li><input disabled="" type="checkbox"> 基本的な音出しテストを実行</li>
+<li><input disabled="" type="checkbox"> Chopテストを実行</li>
+<li><input disabled="" type="checkbox"> Gain/Panテストを実行</li>
+<li><input disabled="" type="checkbox"> ライブコーディングでのリアルタイム変更テスト</li>
+<li><input disabled="" type="checkbox"> パフォーマンステストの実行</li>
+</ul>
+<h2 id="関連ドキュメント">関連ドキュメント</h2>
+<ul>
+<li><a href="PERFORMANCE_TEST_GUIDE.html">PERFORMANCE_TEST_GUIDE.md</a> - パフォーマンステストの詳細</li>
+<li><a href="INSTRUCTION_ORBITSCORE_DSL.html">INSTRUCTION_ORBITSCORE_DSL.md</a> - DSL仕様</li>
+<li><a href="../packages/vscode-extension/BUILD_GUIDE.md">BUILD_GUIDE.md</a> - ビルド手順</li>
+<li><a href="../examples/README.md">Examples README</a> - サンプルファイルの説明</li>
+</ul>
+
+</main>
+</body>
+</html>

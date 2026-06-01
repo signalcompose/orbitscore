@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>INSTRUCTION_ORBITSCORE_DSL.md — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="instruction_orbitscore_dslmd">INSTRUCTION_ORBITSCORE_DSL.md</h1>
+<h2 id="orbitscore-dsl-specification-v30--implemented">OrbitScore DSL Specification (v3.0 – Implemented)</h2>
+<p>This document defines the <strong>OrbitScore DSL</strong>.
+It is the <strong>single source of truth</strong> for the project.
+All implementation, testing, and planning must strictly follow this specification.</p>
+<p><strong>Last Updated</strong>: 2025-01-09
+<strong>Implementation Status</strong>: ✅ Core features implemented and tested (205/205 tests passing)</p>
+<hr>
+<h2 id="1-initialization">1. Initialization</h2>
+<h3 id="global-context">Global Context</h3>
+<pre><code class="language-js">// REQUIRED: First, initialize the global context
+var global = init GLOBAL
+// This creates the global transport and audio engine
+</code></pre>
+<p><strong>Implementation Details</strong>:</p>
+<ul>
+<li>Creates an instance of the <code>Global</code> class</li>
+<li>Initializes <code>AudioEngine</code> with SuperCollider</li>
+<li>Sets up <code>Transport</code> system for scheduling</li>
+<li>Default values: tempo=120, beat=4/4</li>
+<li><strong>Variable naming</strong>: The variable name &quot;global&quot; is conventional but not required - you can use any valid identifier (e.g., <code>var g = init GLOBAL</code>, <code>var master = init GLOBAL</code>)</li>
+<li><strong>Singleton behavior</strong>: Multiple <code>init GLOBAL</code> statements return the same Global instance</li>
+</ul>
+<h3 id="sequence-initialization">Sequence Initialization</h3>
+<pre><code class="language-js">// After global initialization, create sequences
+var seq1 = init global.seq
+var seq2 = init global.seq
+// Or with any global variable name:
+var kick = init g.seq
+var snare = init master.seq
+</code></pre>
+<p><strong>Implementation Details</strong>:</p>
+<ul>
+<li>Creates instances of the <code>Sequence</code> class through Global&#39;s factory method</li>
+<li>Each sequence maintains its own state (tempo, beat, length, audio, play pattern)</li>
+<li>Sequences inherit global parameters (tempo, beat) by default but can override them</li>
+<li>Each sequence is automatically registered with the global transport</li>
+<li><strong>Variable naming</strong>: Sequence variable names are arbitrary and user-defined (common names: kick, snare, hat, bass, lead, etc.)</li>
+</ul>
+<p><strong>Legacy Syntax Support</strong> (for backward compatibility):</p>
+<pre><code class="language-js">var seq = init GLOBAL.seq  // Still supported but deprecated
+</code></pre>
+<hr>
+<h2 id="2-global-parameters">2. Global Parameters</h2>
+<p>After initialization, configure the global context:</p>
+<h3 id="tempo">Tempo</h3>
+<pre><code class="language-js">global.tempo(140)   // set global tempo to 140 BPM
+</code></pre>
+<h3 id="meter-time-signature">Meter (Time Signature)</h3>
+<pre><code class="language-js">global.beat(4 by 4)   // equivalent to 4/4
+global.beat(5 by 4)   // 5/4
+global.beat(9 by 8)   // 9/8
+global.beat(3, 4)     // alternative syntax: 3/4
+</code></pre>
+<h3 id="audio-path-base-directory">Audio Path (Base Directory)</h3>
+<pre><code class="language-js">global.audioPath(&quot;../test-assets/audio&quot;)   // set base directory for audio files
+</code></pre>
+<p><strong>Implementation Details</strong>:</p>
+<ul>
+<li>Sets the base directory for resolving relative audio file paths</li>
+<li>When using <code>.audio(&quot;kick.wav&quot;)</code>, the path is resolved relative to:<ol>
+<li><strong>Document directory</strong> (if set by VS Code extension - automatic)</li>
+<li><strong>audioPath directory</strong> (if set via <code>global.audioPath()</code>)</li>
+<li><strong>Current working directory</strong> (fallback)</li>
+</ol>
+</li>
+<li><strong>Automatic document directory</strong>: VS Code extension automatically sets the document directory based on the <code>.orbs</code> file location</li>
+<li><strong>Singleton behavior</strong>: Setting the same path multiple times is a no-op (skipped)</li>
+<li>Path resolution priority: Absolute path &gt; Document directory &gt; audioPath &gt; CWD</li>
+</ul>
+<p><strong>Example</strong>:</p>
+<pre><code class="language-js">// In /Users/yamato/projects/myproject/songs/track01.orbs
+var global = init GLOBAL
+global.audioPath(&quot;../audio&quot;)  // resolves to /Users/yamato/projects/myproject/audio
+
+var kick = init global.seq
+kick.audio(&quot;kick.wav&quot;)  // resolves to /Users/yamato/projects/myproject/audio/kick.wav
+</code></pre>
+<p><strong>Note</strong>:</p>
+<ul>
+<li>tick() and key() have been removed from the current audio-based implementation</li>
+<li>tick(): MIDI resolution concept, not needed for audio-only playback</li>
+<li>key(): Will be added when MIDI support is implemented. For audio files, requires audio key detection feature.</li>
+<li>Composite meters like (4 by 4)(5 by 4) are not currently supported</li>
+</ul>
+<hr>
+<h2 id="3-sequences">3. Sequences</h2>
+<h3 id="configuration">Configuration</h3>
+<p>After initialization, sequences can be configured:</p>
+<pre><code class="language-js">seq1.tempo(120)       // independent tempo (polytempo support)
+seq1.beat(17 by 8)    // independent meter (polymeter support)
+seq1.length(2)        // loop length in bars (default: 1)
+</code></pre>
+<h3 id="method-chaining">Method Chaining</h3>
+<p>All sequence methods return the sequence object, allowing fluent chaining:</p>
+<pre><code class="language-js">// Multi-line (traditional)
+var snare = init global.seq
+snare.beat(4 by 4)
+snare.length(1)
+snare.audio(&quot;snare.wav&quot;)
+snare.chop(4)
+snare.play(0, 0, 1, 0)
+snare.run()
+
+// Single-line (method chaining)
+var snare = init global.seq
+snare.beat(4 by 4).length(1).audio(&quot;snare.wav&quot;).chop(4).play(0, 0, 1, 0).run()
+
+// Or even more concise (if parser supports)
+init global.seq.beat(4 by 4).length(1).audio(&quot;snare.wav&quot;).play(0, 0, 1, 0).run()
+</code></pre>
+<h3 id="multiline-parentheses--chaining">Multiline Parentheses &amp; Chaining</h3>
+<ul>
+<li>括弧で囲まれた引数リストやネスト構造は、<strong>どのメソッド/関数でも改行を挟んで記述可能</strong>です。</li>
+<li><code>global.beat()</code> や <code>seq.play()</code>、今後導入予定の <code>RUN()</code> など、DSL全体で同じ書き方ができます。</li>
+<li>カンマ区切りを守れば閉じ括弧の位置・インデントも自由に整形できます。</li>
+</ul>
+<pre><code class="language-js">global.beat(
+  5 by 4,
+)
+
+seq.audio(
+  &quot;../audio/snare.wav&quot;,
+).play(
+  (1, 0),
+  2,
+  (
+    3,
+    (4, 5),
+  ),
+)
+</code></pre>
+<blockquote>
+<p>注: <code>(1)(2)</code> のようなタプルネスト記法も改行混在で利用できます。閉じ括弧は任意の行に置いて構いません。</p>
+</blockquote>
+<h3 id="loop-length-and-pattern-relationship">Loop Length and Pattern Relationship</h3>
+<p>The <code>length</code> parameter defines how many bars the sequence loops over:</p>
+<ul>
+<li><code>length(1)</code> with <code>.chop(4)</code> = 4 slices per bar × 1 bar = 4 elements in <code>play()</code></li>
+<li><code>length(2)</code> with <code>.chop(8)</code> = 4 slices per bar × 2 bars = 8 elements in <code>play()</code></li>
+<li><code>length(4)</code> with <code>.chop(16)</code> = 4 slices per bar × 4 bars = 16 elements in <code>play()</code></li>
+</ul>
+<h3 id="slice-indexing-in-play">Slice Indexing in play()</h3>
+<p>When using <code>chop(n)</code>, the audio is divided into n slices numbered 1 through n:</p>
+<ul>
+<li><strong>0</strong> = silence (no playback)</li>
+<li><strong>1 to n</strong> = play slice number (1-indexed)</li>
+<li>Numbers can be reused and reordered freely</li>
+</ul>
+<p><strong>Special case</strong>: <code>chop(1)</code> means no division - the entire audio file is slice 1:</p>
+<pre><code class="language-js">// For drum hits - play the whole sample
+kick.audio(&quot;kick.wav&quot;).chop(1)  // or just kick.audio(&quot;kick.wav&quot;)
+kick.play(1, 0, 1, 0)           // Kick, silence, kick, silence
+
+// For sliced loops
+break.audio(&quot;break.wav&quot;).chop(8)  // Divide into 8 slices
+break.play(1,3,2,1, 5,7,0,4)      // Rearrange slices
+</code></pre>
+<p>Example:</p>
+<pre><code class="language-js">seq1.beat(4 by 4).length(2)     // 2-bar loop in 4/4
+seq1.audio(&quot;file.wav&quot;).chop(8)  // Creates slices 1-8
+seq1.play(1,3,2,1, 5,7,0,4)     // Play: slice1, slice3, slice2, slice1, slice5, slice7, silence, slice4
+seq1.play(1,1,1,1, 2,2,2,2)     // Repeat slices
+seq1.play(8,7,6,5, 4,3,2,1)     // Reverse order
+</code></pre>
+<hr>
+<h2 id="4-playback-and-structure">4. Playback and Structure</h2>
+<h3 id="play---rhythmic-division-with-nesting">Play - Rhythmic Division with Nesting</h3>
+<p>The <code>play()</code> method divides time hierarchically using nested structures:</p>
+<pre><code class="language-js">seq1.play(1)                     // play slice 1 for whole bar
+seq1.play(1, 2)                  // divide bar into 2: each gets 1/2
+seq1.play(1, (2, 3))              // 1 gets 1/2, then 2&amp;3 each get 1/4 (splitting the second 1/2)
+seq1.play((1, 2), (3, 4, 5))     // first half: 1&amp;2 (each 1/4), second half: 3,4,5 (each 1/6)
+seq1.play(1, (0, 1, 2, 3, 4))    // 1 gets 1/2 (2 beats), then 5-tuplet in remaining 1/2
+</code></pre>
+<p><strong>Implementation Details</strong>:</p>
+<ul>
+<li>Implemented via <code>TimingCalculator</code> class that recursively calculates timing</li>
+<li>Each nested structure creates a <code>TimedEvent</code> with <code>sliceNumber</code>, <code>startTime</code>, <code>duration</code>, and <code>depth</code></li>
+<li>Parser supports both <code>(1, 2)</code> and <code>(1)(2)</code> syntax for nesting</li>
+<li>Timing is calculated based on bar duration (tempo × meter)</li>
+</ul>
+<p><strong>Nesting Rule</strong>: Each level of parentheses divides its parent&#39;s time duration:</p>
+<ul>
+<li>Top level divides the bar</li>
+<li>Nested elements divide their parent&#39;s time slot equally</li>
+<li>0 = silence, 1-n = slice number from <code>chop(n)</code></li>
+</ul>
+<p><strong>Note</strong>: Play modifiers like .chop(), .time(), and .fixpitch() are planned for future release but not yet implemented.</p>
+<hr>
+<h2 id="5-transport-commands">5. Transport Commands</h2>
+<h3 id="launch-quantize-quantize">Launch Quantize (<code>quantize</code>)</h3>
+<p><code>LOOP()</code> の起動と LOOP 中の <code>play()</code> 差し替えは、デフォルトで「現在進行中の小節が終わるまで待機」してから反映される。これは Ableton Live の Global Quantization と同様の挙動で、複数のループを並走させているときに新しいループが小節境界で揃って入る。<code>RUN()</code>(one-shot) は常に即時実行で、 <code>quantize</code> の影響を受けない。</p>
+<pre><code class="language-js">global.quantize(&quot;bar&quot;)   // default. 次の小節頭まで待機
+global.quantize(&quot;off&quot;)   // 旧来通り即時実行 (live coding でトリガー感を残したい場合)
+global.quantize(&quot;2bar&quot;)  // 2 小節に 1 回だけ受け付ける
+global.quantize(&quot;beat&quot;)  // 1 拍単位 (グローバル meter の denominator 基準)
+</code></pre>
+<p><strong>設定可能な値:</strong></p>
+<table>
+<thead>
+<tr>
+<th>value</th>
+<th>意味</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>&quot;off&quot;</code></td>
+<td>即時実行 (legacy 挙動)</td>
+</tr>
+<tr>
+<td><code>&quot;beat&quot;</code></td>
+<td>1 拍 (= <code>60_000 / tempo</code> ms)</td>
+</tr>
+<tr>
+<td><code>&quot;bar&quot;</code></td>
+<td>1 小節 (グローバル <code>beat()</code> 基準) <strong>default</strong></td>
+</tr>
+<tr>
+<td><code>&quot;2bar&quot;</code></td>
+<td>2 小節</td>
+</tr>
+<tr>
+<td><code>&quot;4bar&quot;</code></td>
+<td>4 小節</td>
+</tr>
+<tr>
+<td><code>&quot;8bar&quot;</code></td>
+<td>8 小節</td>
+</tr>
+</tbody></table>
+<p><strong>シーケンス側 override:</strong></p>
+<pre><code class="language-js">seq.quantize(&quot;off&quot;)    // この seq だけ即時起動 (drop / fill 用)
+seq.quantize(&quot;2bar&quot;)   // この seq だけ 2 小節間隔
+</code></pre>
+<p><code>seq.quantize()</code> 未指定時はグローバル値を継承する。</p>
+<p><strong>スコープ:</strong></p>
+<ul>
+<li>影響する: <code>LOOP()</code> の新規起動、 LOOP 中の <code>play(...)</code> 差し替え。</li>
+<li>影響しない: <code>RUN()</code> (常に即時)、 LOOP 中の <code>gain()</code> / <code>pan()</code> / <code>audio()</code> / <code>chop()</code> (常に即時)、 LOOP 中の <code>tempo()</code> / <code>beat()</code> / <code>length()</code> (もとから次サイクル待機)。</li>
+</ul>
+<p><strong>ポリメーター時の挙動:</strong></p>
+<p><code>quantize</code> のグリッドは「グローバル <code>beat()</code> × <code>tempo()</code>」で決まる。 <code>seq.beat(5 by 4)</code> のような per-seq meter override がある場合でも、グローバル小節境界が起動の基準。シーケンス自身の小節境界に揃えたい場合は post-1.1 で別オプションとして検討。</p>
+<h3 id="global-transport">Global Transport</h3>
+<p>Available on <code>global</code>:</p>
+<pre><code class="language-js">global.start()            // start scheduler from next bar
+global.stop()             // stop scheduler
+</code></pre>
+<h3 id="sequence-transport---reserved-keywords-unidirectional-toggle">Sequence Transport - Reserved Keywords (Unidirectional Toggle)</h3>
+<p><strong>DSL v3.0 introduces片記号方式 (unidirectional toggle)</strong>:</p>
+<p>Use uppercase reserved keywords to control multiple sequences with <strong>unidirectional toggle</strong> semantics:</p>
+<pre><code class="language-js">RUN(kick)                 // Include ONLY kick in RUN group (one-shot playback)
+RUN(kick, snare, hihat)   // Include ONLY kick, snare, hihat in RUN group
+
+LOOP(bass)                // Include ONLY bass in LOOP group (others auto-stop)
+LOOP(kick, snare)         // Include ONLY kick, snare in LOOP group (hat stops if it was looping)
+
+MUTE(hihat)               // Set ONLY hihat&#39;s MUTE flag ON (others OFF, applies only to LOOP)
+MUTE(snare, hihat)        // Set ONLY snare and hihat&#39;s MUTE flags ON (others OFF)
+</code></pre>
+<p><strong>Unidirectional Toggle Behavior (片記号方式)</strong>:</p>
+<ul>
+<li><strong>RUN group</strong>: Lists sequences for one-shot playback. Only listed sequences are included.</li>
+<li><strong>LOOP group</strong>: Lists sequences for loop playback. <strong>Sequences not listed are automatically stopped.</strong></li>
+<li><strong>MUTE group</strong>: Sets MUTE flag ON for listed sequences, OFF for others. <strong>MUTE only affects LOOP playback</strong>, not RUN.</li>
+<li>Each command <strong>replaces</strong> the entire group with the new list (unidirectional - inclusion only)</li>
+</ul>
+<p><strong>Why no STOP or UNMUTE keywords?</strong></p>
+<ul>
+<li><strong>STOP is unnecessary</strong>: Use <code>LOOP(other_sequences)</code> to stop unwanted sequences automatically</li>
+<li><strong>UNMUTE is unnecessary</strong>: Use <code>MUTE(other_sequences)</code> to unmute by exclusion</li>
+<li>This design simplifies the DSL and makes the state explicit and predictable</li>
+</ul>
+<p><strong>RUN and LOOP Independence</strong>:</p>
+<ul>
+<li>RUN and LOOP are <strong>independent groups</strong> - the same sequence can be in both simultaneously</li>
+<li>When a sequence is in both RUN and LOOP, it plays both one-shot AND loops</li>
+<li>Example: <code>RUN(kick)</code> then <code>LOOP(kick)</code> → kick plays one-shot AND loops</li>
+</ul>
+<p><strong>MUTE Behavior</strong>:</p>
+<ul>
+<li>MUTE is a <strong>persistent flag</strong> that only affects LOOP playback</li>
+<li>Like a mixer mute button: LOOP continues but produces no sound</li>
+<li><strong>MUTE does NOT affect RUN playback</strong> - RUN sequences always play with sound</li>
+<li>MUTE flag persists even when sequence leaves/rejoins LOOP group</li>
+</ul>
+<p><strong>Examples:</strong></p>
+<pre><code class="language-js">// Setup
+var kick = init global.seq
+var snare = init global.seq
+var hat = init global.seq
+
+global.start()
+
+// Include kick and snare in RUN group
+RUN(kick, snare)              // kick and snare play one-shot
+
+// Replace LOOP group with only hat
+LOOP(hat)                     // Only hat loops (kick/snare NOT looping)
+
+// Both RUN and LOOP
+RUN(kick)                     // kick plays one-shot
+LOOP(kick)                    // kick ALSO loops (independent)
+
+// MUTE only affects LOOP
+LOOP(kick, snare, hat)        // All three loop
+MUTE(hat)                     // hat loops but muted (kick/snare unmuted)
+RUN(hat)                      // hat plays one-shot WITH sound (MUTE doesn&#39;t affect RUN)
+
+// Changing groups
+LOOP(kick, snare, hat)        // All three loop
+LOOP(kick)                    // Only kick loops (snare and hat auto-stop)
+
+// MUTE persistence
+MUTE(kick)                    // kick&#39;s MUTE flag ON
+LOOP(kick, snare)             // kick loops (muted), snare loops (unmuted)
+LOOP(snare)                   // kick stops, but MUTE flag persists
+LOOP(kick)                    // kick loops again, still muted (flag persisted)
+MUTE(snare)                   // kick&#39;s MUTE flag OFF, snare&#39;s MUTE flag ON
+</code></pre>
+<p><strong>Benefits of Reserved Keywords:</strong></p>
+<ul>
+<li><strong>Clearer intent</strong>: <code>RUN(kick, snare)</code> is more readable than <code>kick.run()</code> followed by <code>snare.run()</code></li>
+<li><strong>Unidirectional control</strong>: One statement defines the entire group state</li>
+<li><strong>Live coding friendly</strong>: Quick bulk updates with multiline support</li>
+</ul>
+<p><strong>Multiline support:</strong></p>
+<pre><code class="language-js">RUN(
+  kick,
+  snare,
+  hihat,
+)
+
+LOOP(
+  bass,
+  lead,
+)
+
+MUTE(
+  hihat,
+)
+</code></pre>
+<h3 id="editor-execution">Editor Execution</h3>
+<ul>
+<li>Any <code>global</code> or <code>seq</code> transport command can be executed by selecting it in the editor and pressing <strong>Command + Enter</strong>.</li>
+<li>Reserved keywords (<code>RUN</code>, <code>LOOP</code>, <code>MUTE</code>) can also be executed this way.</li>
+</ul>
+<hr>
+<h2 id="6-audio-playback">6. Audio Playback</h2>
+<h3 id="file-loading">File Loading</h3>
+<pre><code class="language-js">seq1.audio(&quot;../audio/piano1.wav&quot;).chop(6)  // Divide into 6 slices
+seq1.audio(&quot;../audio/kick.wav&quot;).chop(1)     // No division (whole file)
+seq1.audio(&quot;../audio/kick.wav&quot;)             // Default: chop(1)
+</code></pre>
+<ul>
+<li><code>.chop(n)</code> divides file into n equal slices (numbered 1 to n)</li>
+<li><code>.chop(1)</code> or omitting <code>.chop()</code> = no division (entire file is slice 1)</li>
+<li>Supported formats: wav, aiff, mp3, mp4</li>
+<li>Audio output: 48kHz / 24bit</li>
+</ul>
+<p><strong>Common patterns</strong>:</p>
+<ul>
+<li>Drum hits: Use <code>.chop(1)</code> or omit - triggers entire sample</li>
+<li>Loops/Breaks: Use <code>.chop(8)</code>, <code>.chop(16)</code> etc. for slicing and rearrangement</li>
+</ul>
+<h3 id="play-with-audio">Play with Audio</h3>
+<pre><code class="language-js">seq1.play(1)           // play slice 1
+seq1.play(1, 2, 3, 4)  // play slices in sequence
+</code></pre>
+<p><strong>Note</strong>: Audio manipulation features like fixpitch() and time() are planned for future release but not yet implemented.</p>
+<hr>
+<h2 id="7-underscore-prefix-pattern-setting-vs-application---v30">7. Underscore Prefix Pattern (Setting vs. Application) - v3.0</h2>
+<p><strong>DSL v3.0 introduces a consistent pattern for all configuration methods:</strong></p>
+<h3 id="the-pattern-method-vs-_method">The Pattern: <code>method()</code> vs. <code>_method()</code></h3>
+<ul>
+<li><strong><code>method(value)</code></strong>: <strong>Setting only</strong> - stores the value but does NOT trigger playback or apply immediately</li>
+<li><strong><code>_method(value)</code></strong>: <strong>Immediate application</strong> - sets the value AND triggers playback/applies immediately</li>
+</ul>
+<p>This pattern applies to ALL configuration methods that can affect running sequences.</p>
+<h3 id="applicable-methods">Applicable Methods</h3>
+<h4 id="sequence-configuration-methods">Sequence Configuration Methods</h4>
+<p>All sequence configuration methods follow this pattern:</p>
+<pre><code class="language-js">// Setting-only methods (no underscore)
+seq.audio(&quot;file.wav&quot;)     // Set audio file (no playback)
+seq.chop(8)               // Set chop divisions (no slicing applied yet)
+seq.play(1, 2, 3, 4)      // Set play pattern (no playback)
+seq.beat(4 by 4)          // Set meter (no timing change yet)
+seq.length(2)             // Set loop length (no change yet)
+seq.tempo(140)            // Set tempo (no tempo change yet)
+
+// Immediate application methods (with underscore)
+seq._audio(&quot;file.wav&quot;)    // Set audio file AND apply immediately (triggers playback if running)
+seq._chop(8)              // Set chop divisions AND re-slice immediately
+seq._play(1, 2, 3, 4)     // Set play pattern AND start playback immediately
+seq._beat(4 by 4)         // Set meter AND apply timing change immediately
+seq._length(2)            // Set loop length AND apply immediately
+seq._tempo(140)           // Set tempo AND apply immediately
+</code></pre>
+<h4 id="global-configuration-methods">Global Configuration Methods</h4>
+<p>Global also supports underscore methods for parameters that affect all sequences:</p>
+<pre><code class="language-js">// Setting-only methods (no underscore)
+global.tempo(140)         // Set global tempo (no immediate effect on sequences)
+global.beat(4 by 4)       // Set global beat (no immediate effect on sequences)
+
+// Immediate application methods (with underscore)
+global._tempo(140)        // Set global tempo AND update all sequences that inherit it
+global._beat(4 by 4)      // Set global beat AND update all sequences that inherit it
+</code></pre>
+<p><strong>Inheritance behavior</strong>:</p>
+<ul>
+<li>When a sequence hasn&#39;t overridden tempo/beat, it inherits from global</li>
+<li><code>global._tempo()</code> triggers seamless parameter updates for all inheriting sequences</li>
+<li><code>global._beat()</code> triggers seamless parameter updates for all inheriting sequences</li>
+<li>If a sequence has overridden a parameter (e.g., <code>seq.tempo(160)</code>), it ignores global changes</li>
+</ul>
+<h3 id="real-time-vs-buffered-parameters">Real-Time vs. Buffered Parameters</h3>
+<p><strong>Real-time parameters</strong> (apply immediately regardless of playback state):</p>
+<ul>
+<li><code>gain(dB)</code> and <code>_gain(dB)</code> - both apply immediately</li>
+<li><code>pan(position)</code> and <code>_pan(position)</code> - both apply immediately</li>
+<li>These are mixer-style controls that should respond instantly</li>
+</ul>
+<p><strong>Buffered parameters</strong> (timing-dependent):</p>
+<ul>
+<li>Non-underscore: Buffered until next <code>run()</code> or <code>loop()</code> call</li>
+<li>Underscore: Applied immediately even during playback</li>
+</ul>
+<h3 id="usage-patterns">Usage Patterns</h3>
+<p><strong>Pattern 1: Setup phase (before playback)</strong></p>
+<pre><code class="language-js">// During setup, use non-underscore methods (cleaner, no redundant playback triggers)
+var kick = init global.seq
+kick.audio(&quot;kick.wav&quot;)
+kick.chop(4)
+kick.play(1, 0, 1, 0)
+kick.beat(4 by 4)
+kick.length(1)
+
+// Start playback
+global.start()
+kick.run()                // Now all settings are applied
+</code></pre>
+<p><strong>Pattern 2: Live coding (during playback)</strong></p>
+<pre><code class="language-js">// Sequence is already running
+kick.run()
+
+// Non-underscore: Changes are buffered, applied at next run()/loop()
+kick.play(1, 1, 0, 0)     // Pattern buffered, not applied yet
+kick.run()                // NOW the new pattern is applied
+
+// Underscore: Changes apply immediately
+kick._play(1, 1, 0, 0)    // Pattern applied immediately, playback restarts
+</code></pre>
+<p><strong>Pattern 3: Real-time mixing</strong></p>
+<pre><code class="language-js">// These always apply immediately (mixer-style controls)
+kick.gain(-6)             // Immediate
+kick._gain(-6)            // Immediate (same effect)
+kick.pan(-50)             // Immediate
+kick._pan(-50)            // Immediate (same effect)
+
+// But other parameters are buffered without underscore
+kick.tempo(160)           // Buffered
+kick._tempo(160)          // Applied immediately
+</code></pre>
+<h3 id="benefits">Benefits</h3>
+<ol>
+<li><strong>Clear Intent</strong>: Underscore makes it explicit when you want immediate effect</li>
+<li><strong>Performance</strong>: Avoid redundant operations during setup phase</li>
+<li><strong>Live Coding</strong>: Quick updates with <code>_method()</code> during performance</li>
+<li><strong>Consistency</strong>: Same pattern across all configuration methods</li>
+</ol>
+<h3 id="default-behavior">Default Behavior</h3>
+<p>For backward compatibility and ease of use:</p>
+<ul>
+<li><code>defaultGain(dB)</code> - sets initial gain without triggering playback (use before <code>run()</code>)</li>
+<li><code>defaultPan(position)</code> - sets initial pan without triggering playback (use before <code>run()</code>)</li>
+<li><code>gain(dB)</code> / <code>pan(position)</code> - apply immediately during playback (real-time controls)</li>
+</ul>
+<hr>
+<h2 id="8-daw-integration">8. DAW Integration</h2>
+<p>OrbitScore は 2 系統の DAW 連携経路を持つ:</p>
+<ul>
+<li><strong>Audio out → Ableton Link Audio (Live 12.4+)</strong> ... v1.2.0 で導入。 名前付きチャンネルを LAN 上で stream する。 詳細は §8.1。</li>
+<li><strong>MIDI out → IAC Bus</strong>: macOS IAC Bus で routing 予定。 v1.2.0 では未実装、 別 Issue で扱う。</li>
+</ul>
+<p>DAW 側 (Ableton Live 等) にプラグインを別途 install する形式は採らない。 OrbitScore の出力経路は scsynth (hardware bus) または Link Audio (名前付き channel) のいずれか。</p>
+<h3 id="81-ableton-link-audio-output">8.1 Ableton Link Audio Output</h3>
+<p>LinkAudio は Live 12.4 (2026-05-05 公開) で導入された Link の上位互換。 tempo / beat / phase / start-stop の同期に加えて、 LAN 上で名前付きの音声 channel を publish / subscribe できる。 ライセンスは GPL-2.0-or-later / proprietary commercial の dual。 OrbitScore は publisher 側 (Sink) のみを実装する。</p>
+<h4 id="811-global-mode-declaration">8.1.1 Global mode declaration</h4>
+<p>ファイル単位で LinkAudio 出力モードに切り替えるには、 <code>global.linkAudio()</code> を <strong>once-per-file</strong> で宣言する。 既存の <code>global.tempo()</code> 等と同じ scope (state-setting メソッド)。</p>
+<pre><code class="language-orbs">global.tempo(120)
+global.linkAudio()           // LinkAudio mode を有効化、 target SR は plugin が auto-detect (fallback 48000)
+global.linkAudio(48000)      // 明示的に target SR を指定 (override)
+</code></pre>
+<p>宣言中は <strong>全 sequence が LinkAudio 経由</strong> に出力される。 hardware (scsynth Out.ar) との混在は不可。 宣言なしの .orbs ファイルは従来通り hardware 出力のみ。</p>
+<p>target sample rate は plugin 内で scsynth (hardware SR) の出力をリサンプリングするための値。 LinkAudio 自身は内部リサンプリングを行わないため、 publisher と subscriber (Live) の SR が一致しないと連続的なサンプルドロップが発生する (Live default 48kHz と異なる場合は必ず明示する)。</p>
+<h4 id="812-per-sequence-channel-binding">8.1.2 Per-sequence channel binding</h4>
+<p>各 sequence の出力チャンネル名を <code>seq.output(name)</code> で指定する。 channel name は ASCII 英数 + <code>-</code> + <code>_</code>、 max 64 chars 推奨 (LinkAudio 仕様には明示的な上限なし)。</p>
+<pre><code class="language-orbs">global.linkAudio()
+var s = init global.seq
+s.audio(&quot;../audio/kick.wav&quot;).output(&quot;kick&quot;)        // → Live で channel &quot;kick&quot; を受信
+</code></pre>
+<p>同名 channel を指定した複数 sequence は <strong>plugin 内で加算合成 (sum)</strong> される。 これにより drums bus 等の汎用的な再生制御が DSL 側 1 行で実現できる。</p>
+<pre><code class="language-orbs">global.linkAudio()
+var k = init global.seq
+var s = init global.seq
+k.audio(&quot;kick.wav&quot;).output(&quot;drums&quot;)
+s.audio(&quot;snare.wav&quot;).output(&quot;drums&quot;)               // kick と snare が同 channel に合成されて Live で受信
+</code></pre>
+<p><strong>Strict mode (v1.2.0+)</strong>: <code>global.linkAudio()</code> を宣言したファイル内では、 全ての発音 sequence が <code>.output(name)</code> で channel を宣言する必要がある。 <code>.output()</code> を持たない sequence が <code>.play()</code> した時点で <strong>runtime error</strong> を投げる (<code>Sequence.resolveDispatchChannel</code>)。 これは「LinkAudio mode 中は全 sequence が LinkAudio 経由」 という §8.1.1 の宣言と整合させるための strict 制約で、 hardware 出力との silent fallback は行わない (hardware/LinkAudio 混在は不可、 §8.1.1 参照)。 編集時には VS Code 拡張が <code>analyzeLinkAudioMissingOutput</code> で同等の error 診断を出す (§10)。</p>
+<p><code>global.linkAudio()</code> 未宣言で <code>seq.output()</code> を呼んだ場合は別経路: channel name は記録されるが hardware path に流れ、 console に一度だけ警告が出る (LinkAudio mode を有効化し忘れたケースのフェイルセーフ)。 編集時の order-violation 検出は §10 参照。</p>
+<h4 id="813-plugin-lifecycle">8.1.3 Plugin lifecycle</h4>
+<p>LinkAudio mode は scsynth プロセス内で動作する SC plugin (<code>OrbitLinkAudio.scx</code>、 GPL-2.0-or-later 別 artifact) に依存する。 plugin の load / unload は scsynth 起動 / 終了に紐づく。 ランタイム切替 (演奏中の LinkAudio on/off) は v1.2.0 では非対応。</p>
+<p>plugin が load されていない状態で <code>global.linkAudio()</code> を宣言した場合は hardware path にフォールバックし警告を出す。 plugin の有無は <code>EventScheduler.setLinkAudioPluginAvailable()</code> を経由してブート pipeline (Step 4) が flip する。</p>
+<h4 id="814-live-側の操作">8.1.4 Live 側の操作</h4>
+<ol>
+<li>Live 12.4+ を起動、 セッション SR を 48kHz (デフォルト) または <code>global.linkAudio(SR)</code> で指定した SR に合わせる</li>
+<li>Audio トラックの &quot;Audio From&quot; で OrbitScore peer の channel name を選択</li>
+<li>OrbitScore 側で sequence を再生 → Live のメーターで受信を確認</li>
+</ol>
+<p>tempo / beat / phase / Start-Stop は LinkAudio に内包された Link 機能で双方向同期される。 Live 側で tempo 変更 → OrbitScore に反映、 OrbitScore で <code>global.tempo()</code> 変更 → Live に反映。</p>
+<hr>
+<h2 id="8-implementation-notes">8. Implementation Notes</h2>
+<ul>
+<li>Parser must support nested <code>play</code> structures for hierarchical timing</li>
+<li>IR must represent play structures as tree-like data for timing calculation</li>
+<li>Scheduler must handle independent sequence tempos (polytempo) and meters (polymeter)</li>
+<li>Audio engine uses SuperCollider with 0-2ms latency</li>
+<li>Global underscore methods (_tempo, _beat) must trigger seamless parameter updates for inheriting sequences</li>
+</ul>
+<p><strong>Future Additions</strong>:</p>
+<ul>
+<li>Audio manipulation features (fixpitch, time) will require time-stretch and pitch-shift implementation</li>
+<li>Composite meters may require complex timing calculation algorithms</li>
+<li>tick/key will be added when MIDI support is implemented</li>
+</ul>
+<hr>
+<h2 id="9-testing-guidelines">9. Testing Guidelines</h2>
+<ul>
+<li><strong>Parser</strong>: Verify meter parsing, nested play structures, variable initialization</li>
+<li><strong>Timing</strong>: Ensure timing calculations are correct for nested play structures and different meters</li>
+<li><strong>Audio</strong>: Confirm playback speed matches tempo and sequences synchronize correctly</li>
+<li><strong>Transport</strong>: Global and sequence transport commands function as specified</li>
+<li><strong>Underscore Methods</strong>: Verify immediate application behavior for all _method() calls</li>
+<li><strong>Inheritance</strong>: Test that sequences inherit global parameters correctly and seamless updates work</li>
+</ul>
+<hr>
+<h2 id="10-vs-code-extension-features">10. VS Code Extension Features</h2>
+<h3 id="autocomplete-and-intellisense">Autocomplete and IntelliSense</h3>
+<ul>
+<li><strong>No abbreviations/shortcuts in DSL</strong>: Maintain full readability with descriptive names</li>
+<li><strong>Smart autocomplete</strong>: VS Code extension provides intelligent suggestions<ul>
+<li><code>global.</code> → suggests <code>tempo()</code>, <code>_tempo()</code>, <code>beat()</code>, <code>_beat()</code>, <code>start()</code>, <code>stop()</code>, <code>gain()</code>, etc.</li>
+<li><code>seq1.</code> → suggests <code>audio()</code>, <code>chop()</code>, <code>play()</code>, <code>tempo()</code>, <code>beat()</code>, <code>length()</code>, <code>run()</code>, <code>loop()</code>, <code>mute()</code>, etc.</li>
+<li>Method signatures with parameter hints</li>
+</ul>
+</li>
+<li><strong>Snippet expansion</strong>: Type-ahead for common patterns<ul>
+<li><code>init</code> → expands to <code>var seq = init GLOBAL.seq</code></li>
+<li><code>play</code> → expands to <code>seq.play()</code></li>
+</ul>
+</li>
+<li><strong>Hover documentation</strong>: Inline help for all methods and parameters</li>
+<li><strong>Parameter hints</strong>: Shows expected types and values as you type</li>
+</ul>
+<h3 id="design-philosophy">Design Philosophy</h3>
+<p>Instead of creating abbreviated forms that reduce readability (e.g., <code>gl.tem()</code>), we prioritize:</p>
+<ol>
+<li><strong>Full, descriptive method names</strong> for clarity</li>
+<li><strong>Fast input via autocomplete</strong> for efficiency</li>
+<li><strong>Code readability</strong> for collaboration and maintenance</li>
+</ol>
+<p>This approach ensures code remains self-documenting while maintaining fast input speed.</p>
+<h3 id="context-aware-autocomplete">Context-Aware Autocomplete</h3>
+<p><strong>Implementation Status</strong>: ✅ Fully implemented in VS Code extension</p>
+<p>The extension provides intelligent suggestions based on method chain context:</p>
+<pre><code class="language-js">// After &#39;var seq = init global.seq&#39;
+seq.┃  // Suggests: audio(), beat(), length(), tempo()
+
+// After &#39;seq.audio(&quot;file.wav&quot;)&#39;
+seq.audio(&quot;file.wav&quot;).┃  // Suggests: chop(), play(), run()
+
+// After &#39;seq.audio(&quot;file.wav&quot;).chop(8)&#39;
+seq.audio(&quot;file.wav&quot;).chop(8).┃  // Suggests: play(), run()
+
+// After &#39;seq.play(1, 2, 3)&#39;
+seq.play(1, 2, 3).┃  // Suggests: run(), loop(), mute()
+
+// After &#39;global.&#39;
+global.┃  // Suggests: tempo(), _tempo(), beat(), _beat(), start(), stop(), loop(), gain()
+</code></pre>
+<p><strong>Method Order Rules</strong>:</p>
+<ul>
+<li><code>audio()</code> must come before <code>chop()</code> and <code>play()</code></li>
+<li><code>beat()</code>, <code>length()</code>, <code>tempo()</code> can be called anytime after init</li>
+<li><code>play()</code> typically comes after <code>audio()</code> (with or without <code>chop()</code>)</li>
+<li><code>run()</code>, <code>loop()</code>, <code>mute()</code> are usually final in the chain</li>
+<li>Underscore methods (_audio, _chop, _play, _tempo, _beat, _length) can be used during live coding for immediate updates</li>
+</ul>
+<hr>
+<h2 id="11-complete-usage-example">11. Complete Usage Example</h2>
+<pre><code class="language-js">// STEP 1: Initialize global context first
+var global = init GLOBAL
+
+// STEP 2: Configure global parameters
+global.tempo(120)
+global.beat(4 by 4)
+
+// STEP 3: Initialize sequences from global
+var kick = init global.seq
+var bass = init global.seq
+var lead = init global.seq
+
+// STEP 4: Configure sequences
+kick.beat(4 by 4).length(1)
+bass.beat(4 by 4).length(2)
+lead.beat(4 by 4).length(4)
+
+// STEP 5: Load audio and create patterns
+kick.audio(&quot;kick.wav&quot;).chop(4)
+kick.play(1, 0, 0, 1)
+
+bass.audio(&quot;bass.wav&quot;).chop(8)
+bass.play(1, 0, 0, 1, 0, 0, 1, 0,
+          0, 1, 0, 1, 0, 0, 0, 0)
+
+lead.audio(&quot;synth.wav&quot;).chop(16)
+lead.play((1, 0, 0, 0), 0, 0, (1, 0, 0, 0),
+          0, 0, 0, 0, 0, 0, 0, 0,
+          1, 1, 1, 0)
+
+// STEP 5b: Set initial gain/pan (before playback)
+kick.defaultGain(-3).defaultPan(0)
+bass.defaultGain(-6).defaultPan(-30)
+lead.defaultGain(-9).defaultPan(30)
+
+// STEP 6: Start playback
+global.start()
+
+// STEP 7: Use reserved keywords for transport control
+RUN(kick, bass, lead)
+LOOP(kick, bass)
+MUTE(kick)          // Mute kick in LOOP (RUN still plays with sound)
+
+// STEP 8: Live manipulation (real-time changes during playback)
+bass.gain(-12)      // Real-time gain change
+lead.pan(0)         // Real-time pan change
+global._tempo(130)  // Change global tempo for all inheriting sequences
+</code></pre>
+<hr>
+<h2 id="12-implementation-status">12. Implementation Status</h2>
+<h3 id="completed-features-">Completed Features ✅</h3>
+<h4 id="core-dsl-v30">Core DSL (v3.0)</h4>
+<ul>
+<li><strong>Initialization</strong>: <code>init GLOBAL</code>, <code>init global.seq</code> (variable names are arbitrary, not hardcoded)</li>
+<li><strong>Global Parameters</strong>: tempo, beat</li>
+<li><strong>Sequence Configuration</strong>: tempo, beat, length, audio, chop</li>
+<li><strong>Play Patterns</strong>: Flat and nested structures with hierarchical timing</li>
+<li><strong>Method Chaining</strong>: All methods return <code>this</code> for fluent API</li>
+<li><strong>Transport Commands</strong>: run, stop, loop, mute, unmute</li>
+<li><strong>Underscore Prefix Pattern (v3.0)</strong>:<ul>
+<li>Sequence: <code>_audio()</code>, <code>_chop()</code>, <code>_play()</code>, <code>_beat()</code>, <code>_length()</code>, <code>_tempo()</code> for immediate application</li>
+<li>Global: <code>_tempo()</code>, <code>_beat()</code> for immediate application with seamless parameter updates</li>
+</ul>
+</li>
+<li><strong>Parameter Inheritance</strong>: Sequences inherit tempo/beat from Global unless overridden</li>
+<li><strong>Unidirectional Toggle (v3.0)</strong>: <code>RUN()</code>, <code>LOOP()</code>, <code>MUTE()</code> reserved keywords with片記号方式 semantics<ul>
+<li>RUN and LOOP are independent groups</li>
+<li>MUTE is persistent flag, only affects LOOP playback</li>
+<li>STOP keyword removed (use LOOP with different list)</li>
+</ul>
+</li>
+</ul>
+<p><strong>Removed (not yet implemented for audio-based DSL)</strong>:</p>
+<ul>
+<li>tick() and key() - MIDI-only concepts, will be added when MIDI support is implemented</li>
+</ul>
+<h4 id="parser">Parser</h4>
+<ul>
+<li><strong>Tokenizer</strong>: Complete lexical analysis</li>
+<li><strong>Parser</strong>: Full syntax support including nested play structures</li>
+<li><strong>IR Generation</strong>: Intermediate representation for execution</li>
+<li><strong>Error Handling</strong>: Graceful error reporting</li>
+</ul>
+<h4 id="audio-engine-supercollider">Audio Engine (SuperCollider)</h4>
+<ul>
+<li><strong>File Loading</strong>: WAV format support with buffer caching</li>
+<li><strong>Slicing</strong>: <code>chop(n)</code> divides audio into n equal parts with precise timing</li>
+<li><strong>Playback</strong>: 0-2ms latency via SuperCollider scsynth</li>
+<li><strong>Audio Control</strong>:<ul>
+<li><code>gain(dB)</code>: Real-time volume control in dB (-60 to +12, default 0) - applies immediately even during playback</li>
+<li><code>pan(position)</code>: Real-time stereo positioning (-100 to 100) - applies immediately even during playback</li>
+<li><code>defaultGain(dB)</code>: Set initial gain without triggering playback - use before <code>run()</code> or <code>loop()</code></li>
+<li><code>defaultPan(position)</code>: Set initial pan without triggering playback - use before <code>run()</code> or <code>loop()</code></li>
+<li>Random values: <code>r</code> (full random), <code>r0%10</code> (random walk)</li>
+</ul>
+</li>
+<li><strong>Global Mastering Effects</strong>:<ul>
+<li><code>global.compressor()</code>: Increase perceived loudness</li>
+<li><code>global.limiter()</code>: Prevent clipping</li>
+<li><code>global.normalizer()</code>: Maximize output level</li>
+</ul>
+</li>
+<li><strong>Audio Device Selection</strong>: Choose output device via command palette</li>
+<li><strong>Default Behavior</strong>: <code>chop(1)</code> or no chop treats file as single slice</li>
+</ul>
+<h4 id="object-oriented-architecture">Object-Oriented Architecture</h4>
+<ul>
+<li><strong>Global Class</strong>: Transport and audio engine management</li>
+<li><strong>Sequence Class</strong>: Individual sequence state and behavior</li>
+<li><strong>AudioEngine Class</strong>: Audio processing and playback</li>
+<li><strong>Transport Class</strong>: Scheduling and synchronization</li>
+<li><strong>InterpreterV2</strong>: DSL execution engine</li>
+</ul>
+<h4 id="vs-code-extension">VS Code Extension</h4>
+<ul>
+<li><strong>Syntax Highlighting</strong>: Complete DSL syntax support</li>
+<li><strong>Autocomplete</strong>: Context-aware intelligent suggestions</li>
+<li><strong>IntelliSense</strong>: Parameter hints and hover documentation</li>
+<li><strong>Diagnostics</strong>: Real-time error detection</li>
+<li><strong>Command Execution</strong>: Cmd+Enter to run selected code</li>
+</ul>
+<h3 id="not-yet-implemented-">Not Yet Implemented 📋</h3>
+<h4 id="audio-manipulation">Audio Manipulation</h4>
+<ul>
+<li><strong>fixpitch()</strong>: Pitch shift in semitones</li>
+<li><strong>time()</strong>: Time stretch/compression</li>
+<li><strong>offset()</strong>: Start position adjustment</li>
+<li><strong>reverse()</strong>: Reverse playback</li>
+<li><strong>fade()</strong>: Fade in/out</li>
+</ul>
+<h4 id="effects-per-sequence">Effects (Per-Sequence)</h4>
+<ul>
+<li><strong>delay()</strong>: Per-sequence delay effect</li>
+<li><strong>reverb()</strong>: Per-sequence reverb effect</li>
+<li><strong>filter()</strong>: Per-sequence filter effects</li>
+</ul>
+<h4 id="advanced-features">Advanced Features</h4>
+<ul>
+<li><strong>Composite Meters</strong>: <code>((3 by 4)(2 by 4))</code></li>
+<li><strong>Force Modifier</strong>: <code>.force</code> for transport commands</li>
+<li><strong>Effect Presets</strong>: Named preset system for effect chains</li>
+<li><strong>DAW Plugin</strong>: VST/AU plugin development</li>
+</ul>
+<h4 id="midi-support-deprecated">MIDI Support (Deprecated)</h4>
+<ul>
+<li><strong>MIDI Output</strong>: Original MIDI-based system has been replaced with SuperCollider audio engine</li>
+<li><strong>MIDI DSL</strong>: Old syntax (<code>sequence</code>, <code>bus</code>, <code>channel</code>, <code>degree</code>, <code>velocity</code>) is no longer supported</li>
+<li><strong>Note</strong>: All MIDI-related tests and implementations have been removed in favor of direct audio playback</li>
+</ul>
+<h3 id="testing-coverage-v30">Testing Coverage (v3.0)</h3>
+<ul>
+<li><strong>Audio Parser Tests</strong>: 50/50 passing</li>
+<li><strong>Parser Syntax Tests</strong>: 11/11 passing (v3.0: STOP removed)</li>
+<li><strong>Unidirectional Toggle Tests</strong>: 11/11 passing (v3.0: RUN/LOOP/MUTE semantics)</li>
+<li><strong>Underscore Methods Tests</strong>: 27/27 passing (v3.0: _audio, _chop, _play, etc.)</li>
+<li><strong>Timing Tests</strong>: 8/8 passing</li>
+<li><strong>Pitch Tests</strong>: 25/25 passing</li>
+<li><strong>Audio Slicer Tests</strong>: 9/9 passing</li>
+<li><strong>SuperCollider Tests</strong>: 15/15 passing</li>
+<li><strong>Sequence Tests</strong>: 20/20 passing</li>
+<li><strong>Setting Sync Tests</strong>: 13/13 passing (v3.0: RUN/LOOP buffering)</li>
+<li><strong>Total</strong>: 205+ tests passing</li>
+</ul>
+<hr>
+<h2 id="13-versioning">13. Versioning</h2>
+<p><strong>Current Version</strong>: v3.0 (Underscore Prefix + Unidirectional Toggle)</p>
+<ul>
+<li><p>v3.0 (2025-01-09): <strong>Underscore Prefix Pattern</strong> + <strong>Unidirectional Toggle (片記号方式)</strong></p>
+<ul>
+<li><strong>Underscore Prefix</strong>: <code>method()</code> = setting only, <code>_method()</code> = immediate application</li>
+<li><strong>Unidirectional Toggle</strong>: <code>RUN()</code>, <code>LOOP()</code>, <code>MUTE()</code> with inclusion-only semantics</li>
+<li>RUN and LOOP are independent groups (same sequence can be in both)</li>
+<li>MUTE is persistent flag, only affects LOOP playback</li>
+<li>Removed <code>STOP</code> keyword (use <code>LOOP()</code> with empty/different list instead)</li>
+<li>205+ tests passing including 11 new unidirectional toggle tests</li>
+</ul>
+</li>
+<li><p>v2.0 (2025-01-06): SuperCollider integration, global mastering effects, dB-based gain control</p>
+<ul>
+<li>SuperCollider audio engine for professional-grade timing</li>
+<li>Global mastering: compressor, limiter, normalizer</li>
+<li>dB-based gain control (-60 to +12 dB)</li>
+</ul>
+</li>
+<li><p>v1.0 (2024-12-25): Core implementation complete with 100% test coverage</p>
+<ul>
+<li>Parser, interpreter, timing calculator</li>
+<li>Nested play structures</li>
+<li>Method chaining</li>
+</ul>
+</li>
+<li><p>v0.1 (2024-09-28): Initial draft specification</p>
+</li>
+</ul>
+<p><strong>Migration Notes from v2.0 to v3.0</strong>:</p>
+<ul>
+<li><strong>STOP keyword removed</strong>: Use <code>LOOP(seq1)</code> then <code>LOOP(seq2)</code> to switch - seq1 auto-stops</li>
+<li><strong>UNMUTE keyword removed</strong>: Use <code>MUTE(seq2)</code> - seq1 auto-unmutes (unidirectional toggle)</li>
+<li><strong>New behavior</strong>: <code>RUN()</code> and <code>LOOP()</code> are independent - sequence can be in both simultaneously</li>
+<li><strong>MUTE semantics changed</strong>: MUTE only affects LOOP, not RUN playback</li>
+<li><strong>New pattern</strong>: Use <code>_method()</code> for immediate application during live coding</li>
+<li>All existing v2.0 code continues to work (backward compatible for non-keyword features)</li>
+</ul>
+<p><strong>Migration Notes from v1.0 to v2.0</strong>:</p>
+<ul>
+<li>MIDI output system has been completely replaced with SuperCollider audio engine</li>
+<li>Old MIDI DSL syntax is no longer supported</li>
+<li>All audio playback now goes through SuperCollider for professional-grade timing and quality</li>
+</ul>
+<p>Future changes must update this document first before implementation.</p>
+
+</main>
+</body>
+</html>

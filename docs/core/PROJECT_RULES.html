@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore Project Rules — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-project-rules">OrbitScore Project Rules</h1>
+<h2 id="-critical-rules---must-follow">🔴 CRITICAL RULES - MUST FOLLOW</h2>
+<h3 id="1-work_logmd-updates-最重要">1. WORK_LOG.md Updates (最重要)</h3>
+<p><strong>EVERY commit MUST be documented in WORK_LOG.md</strong></p>
+<ul>
+<li>Update WORK_LOG.md BEFORE committing</li>
+<li>Document what was changed, why, and the commit hash</li>
+<li>Keep chronological order</li>
+<li>Include technical decisions and challenges</li>
+<li><strong>MUST update README.md when WORK_LOG.md is updated</strong> to keep project status current</li>
+</ul>
+<h3 id="1a-work_logmd-archiving-アーカイブ管理">1a. WORK_LOG.md Archiving (アーカイブ管理)</h3>
+<p><strong>When WORK_LOG.md exceeds ~2,000 lines or ~100KB, archive older sections:</strong></p>
+<ul>
+<li><strong>Keep recent work</strong> (latest 15-20 sections) in main <code>docs/WORK_LOG.md</code></li>
+<li><strong>Archive older sections</strong> to <code>docs/archive/WORK_LOG_YYYY-MM.md</code> by month<ul>
+<li>Example: <code>docs/archive/WORK_LOG_2025-09.md</code> for September 2025 work</li>
+</ul>
+</li>
+<li><strong>Add reference link</strong> at the end of main WORK_LOG.md pointing to archived files</li>
+<li><strong>Add header to archived file</strong> with:<ul>
+<li>Archive period (start date - end date)</li>
+<li>Link back to main WORK_LOG.md</li>
+<li>Clear indication this is an archived version</li>
+</ul>
+</li>
+</ul>
+<p><strong>Purpose:</strong></p>
+<ul>
+<li>Maintain readability of main WORK_LOG.md</li>
+<li>Preserve complete development history for academic papers</li>
+<li>Keep technical information accessible but organized</li>
+<li>Reduce file size for better editor performance</li>
+</ul>
+<p><strong>Archive File Header Format:</strong></p>
+<pre><code class="language-markdown"># OrbitScore Development Work Log - [Month] [Year] Archive
+
+**Archive Period**: [Start Date] - [End Date]
+**Note**: This is an archived version of the work log. For recent work, see [../WORK_LOG.md](../WORK_LOG.md)
+
+---
+</code></pre>
+<h3 id="2-english-instruction-verification-英文チェック">2. English Instruction Verification (英文チェック)</h3>
+<p><strong>When the user provides instructions in English:</strong></p>
+<ul>
+<li><strong>Respond in Japanese using UTF-8 encoding</strong></li>
+<li>Provide &quot;Suggested English&quot; to improve the user&#39;s English writing skills</li>
+<li>Check if the English is grammatically correct</li>
+<li>If incorrect, provide the corrected version</li>
+<li>Suggest rephrasing for clarity</li>
+<li>Example response: &quot;I believe you meant: &#39;[corrected sentence]&#39;. Would you like me to proceed with this understanding?&quot;</li>
+<li>Help the user improve their English communication skills</li>
+<li>Always be respectful and supportive when making corrections</li>
+<li><strong>Purpose: To enhance the user&#39;s English writing ability through continuous feedback</strong></li>
+</ul>
+<h3 id="3-specification-adherence-仕様遵守">3. Specification Adherence (仕様遵守)</h3>
+<p><strong>MUST verify with specification before implementation:</strong></p>
+<ul>
+<li><strong>Primary specification</strong>: <code>docs/INSTRUCTION_ORBITSCORE_DSL.md</code></li>
+<li><strong>Required verification for undefined items</strong>:<ul>
+<li>Default values for parameters</li>
+<li>Error handling methods</li>
+<li>Value ranges and constraints</li>
+<li>Method chaining possibilities</li>
+</ul>
+</li>
+<li><strong>PROHIBITED</strong>: Adding features not in specification without confirmation<ul>
+<li>Example violations: <code>config()</code> method, <code>offset()</code> method</li>
+</ul>
+</li>
+<li><strong>When specification is unclear</strong>: MUST ask user for clarification</li>
+<li><strong>When implementation is blocked or encountering errors</strong>: MUST check official documentation first<ul>
+<li>Check library/framework documentation (e.g., SuperCollider docs, supercolliderjs docs)</li>
+<li>Search for similar issues or examples</li>
+<li>Verify API usage and parameter formats</li>
+<li>Only ask user after exhausting documentation resources</li>
+</ul>
+</li>
+</ul>
+<p><strong>DSL Code Writing (DSLコード記述時の必須ルール):</strong></p>
+<ul>
+<li><strong>BEFORE writing any <code>.orbs</code> file or DSL code</strong>: MUST read the relevant section in <code>docs/INSTRUCTION_ORBITSCORE_DSL.md</code></li>
+<li><strong>NEVER guess DSL syntax</strong>: Always verify with specification first</li>
+<li><strong>When creating examples or patterns</strong>:<ol>
+<li>Check <code>examples/</code> directory for similar patterns</li>
+<li>Read DSL specification for the methods you intend to use</li>
+<li>Verify parameter order, types, and expected values</li>
+<li>Understand what each method does (e.g., <code>beat()</code> sets time signature, NOT rhythm pattern)</li>
+</ol>
+</li>
+<li><strong>Common mistakes to avoid</strong>:<ul>
+<li><code>beat()</code> is for time signature and <strong>MUST use &quot;n by m&quot; notation</strong> (e.g., <code>beat(4 by 4)</code> = 4/4)</li>
+<li><strong>NEVER use single argument</strong> like <code>beat(4)</code> - this will cause an error</li>
+<li>This notation is essential for polymeter support where different time signatures create independent bar lengths</li>
+<li>Rhythm patterns are defined in <code>play()</code> (e.g., <code>play(1, 0, 0, 0)</code>)</li>
+<li>Don&#39;t invent new syntax or methods without checking specification</li>
+</ul>
+</li>
+<li><strong>Purpose</strong>: Prevent syntax errors, save time, and maintain consistency with specification</li>
+</ul>
+<h3 id="4-documentation-first">4. Documentation First</h3>
+<ul>
+<li>Update relevant docs (README, IMPLEMENTATION_PLAN, etc.) with each change</li>
+<li>Documentation is as important as code</li>
+<li>Keep specifications in sync with implementation</li>
+</ul>
+<h3 id="5-test-driven-development">5. Test-Driven Development</h3>
+<ul>
+<li>Write tests for new features</li>
+<li>Ensure all tests pass before committing</li>
+<li>Golden files for regression testing</li>
+</ul>
+<p><strong>Testing Strategy:</strong></p>
+<ol>
+<li><p><strong>Automated Unit Tests</strong> (CI環境で実行)</p>
+<ul>
+<li>パーサー、タイミング計算、オーディオスライサー等</li>
+<li>高速実行、自動化可能</li>
+<li>リグレッション検出に有効</li>
+</ul>
+</li>
+<li><p><strong>SuperCollider Integration Tests</strong> (ローカル環境のみ)</p>
+<ul>
+<li>SuperColliderサーバー起動が必要</li>
+<li>CI環境ではスキップ (<code>describe.skipIf(process.env.CI === &#39;true&#39;)</code>)</li>
+<li>数値計算ロジックは他のテストでカバー</li>
+<li>例: <code>tests/audio/supercollider-gain-pan.spec.ts</code></li>
+</ul>
+</li>
+<li><p><strong>Audio Playback Tests</strong> (将来実装予定)</p>
+<ul>
+<li>リファクタリング完了後に実装</li>
+<li>実際に音を鳴らして期待通りの音が出ているか確認</li>
+<li>音色、タイミング精度、エフェクト効果等をテスト</li>
+<li>人間の耳による確認が必要</li>
+</ul>
+</li>
+</ol>
+<p><strong>Note</strong>: SuperCollider関連テストはCI環境で複雑なセットアップが必要（Xvfb、ダミーオーディオドライバ等）のため、ローカル環境での手動確認を推奨。</p>
+<h3 id="6-tutorial-and-example-file-management">6. Tutorial and Example File Management</h3>
+<p><strong>チュートリアルファイルの参照を必須とする:</strong></p>
+<ul>
+<li><strong>新しい<code>.orbs</code>テストファイルを作成する前に、必ず既存のチュートリアルファイル（<code>examples/01_*.orbs</code> - <code>examples/08_*.orbs</code>）を確認すること</strong></li>
+<li>チュートリアルファイルに正しい構文例が記載されているため、それを参考にすること</li>
+<li>特に以下を確認：<ul>
+<li><code>var global = init GLOBAL</code> の初期化（<code>global</code>ではなく<code>GLOBAL</code>）</li>
+<li><code>.audio()</code> メソッド（<code>sample()</code>ではない）</li>
+</ul>
+</li>
+<li><code>global.start()</code> の呼び出しタイミング<ul>
+<li>メソッドチェーンの正しい使い方</li>
+</ul>
+</li>
+<li><strong>目的</strong>: 構文エラーや混乱を防ぎ、お互いの時間を節約する</li>
+</ul>
+<h3 id="7-user-confirmation-required-ユーザー確認必須">7. User Confirmation Required (ユーザー確認必須)</h3>
+<p><strong>CRITICAL: NEVER proceed with actions without explicit user confirmation</strong></p>
+<ul>
+<li><strong>When asking &quot;〜しますか？&quot; (Shall I do X?), ALWAYS wait for user&#39;s response</strong></li>
+<li><strong>NEVER execute the action immediately after asking</strong></li>
+<li>Examples of actions requiring confirmation:<ul>
+<li>Creating a PR</li>
+<li>Merging a PR</li>
+<li>Deleting branches</li>
+<li>Pushing to remote</li>
+<li>Making significant changes</li>
+<li>Running destructive operations</li>
+</ul>
+</li>
+<li><strong>Only proceed after receiving explicit &quot;yes&quot;, &quot;go ahead&quot;, &quot;お願いします&quot; or similar confirmation</strong></li>
+<li>If no response, ask again or wait</li>
+<li><strong>Purpose</strong>: Respect user&#39;s decision-making and avoid unwanted actions</li>
+</ul>
+<h3 id="8-tool-confirmation-policy-ツール確認ポリシー">8. Tool Confirmation Policy (ツール確認ポリシー)</h3>
+<p><strong>読み取り専用ツール（確認不要 - Read-only tools, no confirmation needed）:</strong></p>
+<ul>
+<li><strong>Serena系すべて</strong> - <code>find_symbol</code>, <code>find_referencing_symbols</code>, <code>search_for_pattern</code>, <code>get_symbols_overview</code>, <code>list_dir</code>, <code>find_file</code>, <code>read_memory</code>, <code>list_memories</code></li>
+<li><strong>ファイル読み取り</strong> - <code>Read</code>, <code>Grep</code>, <code>Glob</code>, <code>LS</code>, <code>SemanticSearch</code></li>
+<li><strong>外部ドキュメント</strong> - <code>Context7</code> (resolve-library-id, get-library-docs)</li>
+<li><strong>Git情報取得</strong> - <code>git status</code>, <code>git log</code>, <code>git diff</code> (読み取り専用)</li>
+</ul>
+<p><strong>書き込み・実行系ツール（確認必要 - Write/Execute tools, confirmation required）:</strong></p>
+<ul>
+<li><strong>コード編集</strong> - <code>StrReplace</code>, <code>MultiStrReplace</code>, <code>Write</code>, <code>Delete</code></li>
+<li><strong>Serena編集</strong> - <code>replace_symbol_body</code>, <code>insert_after_symbol</code>, <code>insert_before_symbol</code>, <code>write_memory</code>, <code>delete_memory</code></li>
+<li><strong>Shell実行</strong> - 特に破壊的操作 (rm, git push, npm publish など)</li>
+<li><strong>Git操作</strong> - <code>git commit</code>, <code>git push</code>, <code>gh pr create</code></li>
+</ul>
+<p><strong>⚠️ 禁止事項（AIエージェントは実行してはいけない）:</strong></p>
+<ul>
+<li><strong>PRのマージ</strong> - <code>gh pr merge</code> は原則として実行しない<ul>
+<li>ユーザーが「all check passed」を確認してからマージします</li>
+<li>AIエージェントはマージの準備（PR作成、レビュー対応）までを行い、マージ実行はユーザーに委ねます</li>
+<li>理由: テスト結果、ビルド結果、BugBotのコメントなど、最終的な品質確認はユーザーが行うべき</li>
+<li><strong>例外</strong>: ユーザーが明示的に「マージしてください」「マージをお願いします」と依頼した場合は実行可能</li>
+</ul>
+</li>
+<li><strong>ブランチの削除</strong> - <code>git branch -d</code> や <code>gh pr merge --delete-branch</code> は原則として実行しない<ul>
+<li>ブランチは履歴追跡のため保持します</li>
+<li><strong>例外</strong>: ユーザーが明示的に「ブランチを削除してください」と依頼した場合は実行可能</li>
+</ul>
+</li>
+</ul>
+<p><strong>理由:</strong></p>
+<ul>
+<li>読み取り専用ツールはプロジェクトに変更を加えないため、確認なしで実行しても安全</li>
+<li>書き込み・実行系ツールは意図しない変更を防ぐため、確認が必要</li>
+<li>作業効率と安全性のバランスを取る</li>
+<li><strong>品質保証</strong>: マージは最終的な品質確認を経てから実行されるべき</li>
+</ul>
+<p><strong>注意:</strong> MCPツールの確認設定はCursor/エディタ側で管理されるため、このポリシーはAIエージェントとユーザー間の共通理解として機能する</p>
+<h2 id="-development-workflow">📋 Development Workflow</h2>
+<h3 id="multi-model-development-workflow-推奨">Multi-Model Development Workflow (推奨)</h3>
+<p><strong>役割分担による効率的な開発サイクル:</strong></p>
+<pre><code>┌─────────────────────────────────────────────────────────┐
+│ Phase X-Y リファクタリング/実装サイクル                      │
+└─────────────────────────────────────────────────────────┘
+
+1. 【実装担当: Auto (Sonnet 3.5)】
+   - Issue/ブランチ作成
+   - Serenaメモリ更新（進行中ステータス）
+   - コード実装
+   - テスト実行
+   - コミット
+   - PR作成（`Closes #&lt;issue-number&gt;`）
+   
+   ⚠️ 問題発生時（ループ/ハルシネーション/行き詰まり）
+   ↓ エスカレーション（ユーザー判断）
+   
+   【問題解決: Claude 4.5 Sonnet】
+   - 問題の分析と診断
+   - 解決策の提案と実装
+   - Autoに戻すための明確な指示を残す
+   - Serenaメモリに解決策を記録
+   
+   ↓ 解決後、Autoに戻る（ユーザー判断）
+   
+   【実装再開: Auto (Sonnet 3.5)】
+   - 4.5の指示とSerenaメモリを参照
+   - 実装を継続
+   ↓
+
+🔄 **【モデル切り替え依頼: Auto (Sonnet 3.5)】**
+   - 実装完了後、ユーザーに以下を依頼:
+     &quot;実装が完了しました。評価・修正のためにClaude 4.5 Sonnetに切り替えてください。&quot;
+   - ユーザーがCursorでモデルを4.5 Sonnetに切り替え
+   ↓
+
+2. 【評価・修正: Claude 4.5 Sonnet】
+   - コーディング規約チェック
+   - 設計パターン検証
+   - テスト結果確認
+   - リンターエラー修正
+   - 必要に応じて追加修正
+   - コミット（修正があった場合）
+   ↓
+
+3. 【レビュー: BugBot（自動）】
+   - PR上で自動レビュー実行
+   ↓
+
+4. 【レビュー受け渡し: ユーザー】
+   - BugBotのコメントを確認
+   - 必要に応じて以下のコマンドで取得:
+     gh pr view &lt;PR番号&gt; --comments
+   - レビュー内容を4.5 Sonnetに伝える
+   ↓
+
+5. 【レビュー対応: Claude 4.5 Sonnet】
+   - BugBotの指摘に対応
+   - 修正実装
+   - テスト実行
+   - コミット
+   ↓
+
+6. 【マージ: ユーザー】
+   - &quot;all check passed&quot;を確認
+   - マージ実行（squash）
+   ↓
+
+7. 【次フェーズ準備: Claude 4.5 Sonnet】
+   - Serenaメモリ更新（完了ステータス）
+   - 次のPhaseの準備
+   - セッション終了報告
+</code></pre>
+<p><strong>利点:</strong></p>
+<ul>
+<li>✅ <strong>コスト効率</strong>: 実装はSonnet 3.5、評価・レビュー対応はSonnet 4.5で最適化</li>
+<li>✅ <strong>品質保証</strong>: 複数段階のチェック（評価 → BugBot → レビュー対応）</li>
+<li>✅ <strong>明確な役割分担</strong>: 各ステップで責任が明確</li>
+<li>✅ <strong>自動化</strong>: BugBotが自動レビュー、Issueも自動クローズ</li>
+<li>✅ <strong>エスカレーション</strong>: 問題発生時に4.5 Sonnetが介入して解決</li>
+</ul>
+<p><strong>🔄 正常完了時のモデル切り替え依頼（Auto → 4.5 Sonnet）:</strong></p>
+<p><strong>Autoが実装を完了した場合、必ずユーザーに以下を依頼:</strong></p>
+<pre><code>✅ 実装が完了しました。
+
+次のステップ: 評価・修正のためにClaude 4.5 Sonnetに切り替えてください。
+
+【完了した作業】
+- Issue作成・ブランチ作成
+- コード実装
+- テスト実行（115 passed, 15 skipped）
+- コミット・PR作成
+
+【4.5 Sonnetで実行する作業】
+- コーディング規約チェック
+- 設計パターン検証
+- リンターエラー修正
+- 必要に応じて追加修正
+
+Cursorでモデルを4.5 Sonnetに切り替えてから、評価・修正を開始してください。
+</code></pre>
+<p><strong>🚨 エスカレーション判断基準（Auto → 4.5 Sonnet）:</strong></p>
+<p><strong>Autoが以下の状況を検出した場合、ユーザーに報告すべき:</strong></p>
+<ol>
+<li><p><strong>ループ検出</strong></p>
+<ul>
+<li>同じエラーが3回以上繰り返される</li>
+<li>同じ修正を何度も試している</li>
+<li>進捗がないまま10回以上のツール呼び出し</li>
+</ul>
+</li>
+<li><p><strong>ハルシネーション</strong></p>
+<ul>
+<li>存在しないAPI/メソッドを使おうとする</li>
+<li>ドキュメントにない機能を実装しようとする</li>
+<li>Context7やSerenaで確認できない情報を使用</li>
+</ul>
+</li>
+<li><p><strong>行き詰まり</strong></p>
+<ul>
+<li>テストが通らず原因が特定できない</li>
+<li>複雑な設計判断が必要</li>
+<li>複数の解決策があり選択が困難</li>
+</ul>
+</li>
+<li><p><strong>仕様不明確</strong></p>
+<ul>
+<li>DSL仕様（<code>INSTRUCTION_ORBITSCORE_DSL.md</code>）に記載がない</li>
+<li>設計パターンの選択が必要</li>
+<li>アーキテクチャレベルの判断が必要</li>
+</ul>
+</li>
+</ol>
+<p><strong>エスカレーション時のAuto報告フォーマット:</strong></p>
+<pre><code>⚠️ エスカレーション推奨
+
+【問題】: [問題の簡潔な説明]
+【試行回数】: X回
+【試したこと】:
+- 試行1: [内容] → [結果]
+- 試行2: [内容] → [結果]
+【現在の状態】: [コードの状態、エラー内容]
+【判断が必要な点】: [何を決める必要があるか]
+
+4.5 Sonnetへのエスカレーションを推奨します。
+</code></pre>
+<p><strong>4.5 Sonnet解決後のハンドオフ:</strong></p>
+<p><strong>評価・修正完了後:</strong></p>
+<ul>
+<li>Serenaメモリに評価結果を記録（<code>refactoring_plan</code>を更新）</li>
+<li>修正内容をコミット（修正があった場合）</li>
+<li>ユーザーに「評価・修正完了」を報告</li>
+<li>次のPhaseの準備またはPRマージの準備</li>
+</ul>
+<p><strong>エスカレーション解決後:</strong></p>
+<ul>
+<li>Serenaメモリに解決策を記録（<code>current_issues</code>または新規メモリ）</li>
+<li>明確な次のステップを文書化</li>
+<li>Autoが参照できる形で指示を残す</li>
+<li>ユーザーに「Auto (Sonnet 3.5)に戻してください」を依頼</li>
+</ul>
+<p><strong>補助ツール（オプション）:</strong></p>
+<pre><code class="language-bash"># BugBotレビュー取得を簡単にするエイリアス
+alias review-get=&#39;gh pr view --comments | grep -A 100 &quot;bugbot&quot;&#39;
+</code></pre>
+<h3 id="traditional-workflow-for-each-phase">Traditional Workflow (For Each Phase):</h3>
+<ol>
+<li>Review IMPLEMENTATION_PLAN.md</li>
+<li>Create todo list</li>
+<li>Implement features</li>
+<li>Write/update tests</li>
+<li><strong>Update WORK_LOG.md</strong> (before committing, use <code>[PENDING]</code> for commit hash)</li>
+<li><strong>Update README.md</strong> (sync with WORK_LOG.md status)</li>
+<li>Update other documentation</li>
+<li><strong>Serenaを使って重要な変更を保存</strong> (必要に応じて)</li>
+<li><strong>Update USER_MANUAL.md</strong> (if user-facing changes)</li>
+<li><strong>Commit all changes including docs</strong></li>
+<li><strong>Get the commit hash</strong> (<code>git rev-parse --short HEAD</code>) - this is the &quot;実コミット&quot;</li>
+<li><strong>Update WORK_LOG.md with the first commit hash</strong> (replace <code>[PENDING]</code> with the hash from step 11)</li>
+<li><strong>Amend the commit</strong> (<code>git add docs/WORK_LOG.md &amp;&amp; git commit --amend --no-edit</code>)</li>
+</ol>
+<p><strong>Important</strong>: </p>
+<ul>
+<li>Record the <strong>first commit hash</strong> (from step 11) in WORK_LOG.md, not the final amended hash</li>
+<li>This hash represents the &quot;actual commit&quot; with all changes</li>
+<li>The amend only adds the commit hash reference to WORK_LOG.md</li>
+<li>This avoids infinite loop of updating hashes</li>
+</ul>
+<p><strong>Note</strong>: With Git Workflow (feature branches + PRs), we commit everything together before pushing, then create PR for review.</p>
+<h3 id="git-workflow-and-branch-protection">Git Workflow and Branch Protection:</h3>
+<p><strong>CRITICAL: Always create a feature branch before starting work</strong></p>
+<p><strong>Branch Structure (GitHub Flow):</strong></p>
+<ul>
+<li><code>main</code> - Production-ready code (protected, base for PRs)</li>
+<li><code>&lt;issue-number&gt;-description</code> - Feature/fix/refactor branches</li>
+</ul>
+<p><strong>Branch Protection Rules (main):</strong></p>
+<ul>
+<li>✅ Pull Request required before merging</li>
+<li>✅ At least 1 approval required</li>
+<li>✅ Dismiss stale pull request approvals when new commits are pushed</li>
+<li>✅ Administrators cannot bypass these settings</li>
+<li>✅ Status checks must pass before merging (if configured)</li>
+</ul>
+<p><strong>Creating a new feature branch:</strong></p>
+<pre><code class="language-bash"># Create and switch to new feature branch from main
+git checkout main
+git pull origin main
+git checkout -b &lt;issue-number&gt;-descriptive-name
+
+# Example branch names:
+# - 78-migrate-github-flow
+# - 55-improve-type-safety
+# - 61-audio-playback-testing
+</code></pre>
+<p><strong>Development Workflow (GitHub Flow):</strong></p>
+<pre><code>1. Create feature branch from main
+2. Implement changes
+3. Commit and push to origin
+4. Create PR to main
+5. Request review (Claude Code Review provides feedback)
+6. Address review comments
+7. Merge to main after approval
+</code></pre>
+<p><strong>Creating PRs:</strong></p>
+<pre><code class="language-bash"># Push branch to GitHub
+git push -u origin feature/branch-name
+
+# Create PR to main (with automatic Issue closing)
+gh pr create --base main --title &quot;feat: description&quot; --body &quot;Closes #&lt;issue-number&gt;
+
+detailed description&quot;
+</code></pre>
+<p><strong>Automatic Issue Closing:</strong></p>
+<ul>
+<li><strong>ALWAYS include <code>Closes #&lt;issue-number&gt;</code> in PR body</strong> to automatically close the related Issue when PR is merged</li>
+<li>Keywords that work: <code>Closes</code>, <code>Fixes</code>, <code>Resolves</code> (case-insensitive)</li>
+<li>Example: <code>Closes #14</code> will automatically close Issue #14 when PR is merged</li>
+<li><strong>Benefits</strong>:<ul>
+<li>✅ Never forget to close Issues</li>
+<li>✅ Clear connection between PR and Issue</li>
+<li>✅ Automatic workflow (GitHub handles it)</li>
+</ul>
+</li>
+<li><strong>Workflow</strong>: Issue → Branch → PR (with <code>Closes #N</code>) → Merge → Issue auto-closes</li>
+</ul>
+<p><strong>Merging PRs:</strong></p>
+<pre><code class="language-bash"># Merge with squash (DO NOT delete branch)
+gh pr merge &lt;number&gt; --squash
+
+# ❌ NEVER use --delete-branch flag
+# ✅ Keep branches for historical reference
+</code></pre>
+<p><strong>Important:</strong></p>
+<ul>
+<li><strong>ALWAYS create a branch before starting work</strong> - never commit directly to main</li>
+<li><strong>ALWAYS create PR to main</strong> - GitHub Flow workflow</li>
+<li><strong>Branch names MUST be in English only</strong> - no Japanese characters (日本語禁止)<ul>
+<li>✅ Good: <code>11-refactor-audio-slicer-phase-2-1</code></li>
+<li>❌ Bad: <code>11-refactor-audio-slicertsをモジュール分割phase-2-1</code></li>
+<li>Reason: Japanese characters in branch names can cause issues with some tools and environments</li>
+</ul>
+</li>
+<li><strong>Branches are kept for history</strong> - do not delete after merge</li>
+<li><strong>Cursor BugBot</strong> automatically provides change summaries on PRs (not actual code reviews)</li>
+<li>User typically handles merging, but agent may assist with complex implementations</li>
+<li>Always use <code>--squash</code> for clean commit history on main branch</li>
+<li><strong>Branch protection prevents accidental direct pushes</strong> to main</li>
+</ul>
+<h3 id="commit-message-format">Commit Message Format:</h3>
+<p><strong>Language: Japanese (日本語)</strong></p>
+<pre><code>&lt;type&gt;: &lt;日本語での説明&gt;
+
+&lt;詳細な説明&gt;
+
+&lt;何が変わったか&gt;
+&lt;なぜ変わったか&gt;
+&lt;影響&gt;
+</code></pre>
+<p>Types: feat, fix, docs, test, refactor, chore</p>
+<p><strong>Important</strong>: </p>
+<ul>
+<li>Commit messages MUST be written in Japanese</li>
+<li>Only the type prefix (feat, fix, etc.) remains in English</li>
+<li>This applies to both commit titles and detailed descriptions</li>
+</ul>
+<h3 id="progress-reporting">Progress Reporting</h3>
+<ul>
+<li>ハンドオフメッセージやサマリーでは、開発進捗をフェーズ別にパーセンテージで明示する（例: “Phase 4: 70%”）。</li>
+<li>パーセンテージの分母は <code>docs/IMPLEMENTATION_PLAN.md</code> のマイルストーンに基づいて定義する。</li>
+</ul>
+<h2 id="-core-principles">🎯 Core Principles</h2>
+<h3 id="1-code-organization-and-architecture">1. Code Organization and Architecture</h3>
+<h4 id="single-responsibility-principle-srp">Single Responsibility Principle (SRP)</h4>
+<ul>
+<li><strong>One Function, One Purpose</strong>: Each function should do exactly one thing</li>
+<li><strong>Small Functions</strong>: Aim for functions under 50 lines</li>
+<li><strong>Clear Names</strong>: Function names should clearly describe their single purpose</li>
+<li><strong>Example</strong>: <code>preparePlayback()</code> only prepares, <code>runSequence()</code> only executes</li>
+</ul>
+<h4 id="dry-dont-repeat-yourself">DRY (Don&#39;t Repeat Yourself)</h4>
+<ul>
+<li><strong>Extract Common Logic</strong>: If code appears in 2+ places, extract it to a shared function</li>
+<li><strong>Shared Utilities</strong>: Create utility modules for reusable logic</li>
+<li><strong>Refactoring Trigger</strong>: Duplicate code is a signal to refactor immediately</li>
+</ul>
+<h4 id="module-organization">Module Organization</h4>
+<ul>
+<li><strong>Group by Feature</strong>: Organize related functions in feature directories</li>
+<li><strong>Clear Directory Structure</strong>: Use descriptive directory names<pre><code>feature/
+├── operation-a.ts
+├── operation-b.ts
+└── shared-utility.ts
+</code></pre>
+</li>
+<li><strong>Example</strong>:<pre><code>sequence/
+├── playback/
+│   ├── prepare-playback.ts
+│   ├── run-sequence.ts
+│   └── loop-sequence.ts
+└── audio/
+    └── prepare-slices.ts
+</code></pre>
+</li>
+</ul>
+<h4 id="function-design">Function Design</h4>
+<ul>
+<li><strong>Pure Functions</strong>: Prefer pure functions without side effects when possible</li>
+<li><strong>Explicit Dependencies</strong>: Pass dependencies as parameters, not globals</li>
+<li><strong>Return Values</strong>: Return results rather than mutating state when possible</li>
+<li><strong>Type Safety</strong>: Use TypeScript interfaces for function options<pre><code class="language-typescript">export interface PreparePlaybackOptions {
+  sequenceName: string
+  audioFilePath?: string
+  // ...
+}
+
+export async function preparePlayback(
+  options: PreparePlaybackOptions
+): Promise&lt;PlaybackPreparation | null&gt;
+</code></pre>
+</li>
+</ul>
+<h4 id="reusability-guidelines">Reusability Guidelines</h4>
+<ul>
+<li><strong>Descriptive Names</strong>: Use names that describe what the function does, not where it&#39;s used<ul>
+<li>✅ Good: <code>preparePlayback()</code>, <code>scheduleEvents()</code></li>
+<li>❌ Bad: <code>helper1()</code>, <code>doStuff()</code></li>
+</ul>
+</li>
+<li><strong>Generic Parameters</strong>: Use options objects for flexibility</li>
+<li><strong>Documentation</strong>: Add JSDoc comments explaining purpose and usage</li>
+<li><strong>Export Public APIs</strong>: Export functions that might be useful elsewhere</li>
+</ul>
+<h4 id="class-design">Class Design</h4>
+<ul>
+<li><strong>Thin Controllers</strong>: Keep class methods thin (under 30 lines), delegate to utility functions</li>
+<li><strong>Composition over Inheritance</strong>: Prefer composing functionality from modules</li>
+<li><strong>Example</strong>:<pre><code class="language-typescript">class Sequence {
+  async run(): Promise&lt;this&gt; {
+    const prepared = await preparePlayback({ /* options */ })
+    if (!prepared) return this
+    
+    const result = runSequence({ /* options */ })
+    this._isPlaying = result.isPlaying
+    return this
+  }
+}
+</code></pre>
+</li>
+</ul>
+<h4 id="refactoring-triggers">Refactoring Triggers</h4>
+<p>When you see these patterns, <strong>refactor immediately</strong>:</p>
+<ol>
+<li><strong>Duplicate Code</strong>: Same logic in 2+ places → Extract to shared function</li>
+<li><strong>Long Methods</strong>: Methods over 50 lines → Break into smaller functions</li>
+<li><strong>Multiple Responsibilities</strong>: Function does many things → Split by responsibility</li>
+<li><strong>Hard to Test</strong>: Complex logic in class → Extract to pure function</li>
+<li><strong>Hard to Reuse</strong>: Logic tied to specific context → Generalize with parameters</li>
+</ol>
+<h3 id="2-degree-system-philosophy">2. Degree System Philosophy</h3>
+<ul>
+<li><strong>0 = rest/silence</strong> - Musical value, not just &quot;no sound&quot;</li>
+<li>1-12 = chromatic scale (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)</li>
+<li>This is a defining feature of OrbitScore</li>
+</ul>
+<h3 id="3-precision">3. Precision</h3>
+<ul>
+<li>小数第3位まで (3 decimal places)</li>
+<li>Random with seed for reproducibility</li>
+</ul>
+<h3 id="4-contract-based-design">4. Contract-Based Design</h3>
+<ul>
+<li>IR types are frozen contracts</li>
+<li>Breaking changes require new versions</li>
+</ul>
+<h2 id="-file-structure-rules">📁 File Structure Rules</h2>
+<h3 id="test-files">Test Files:</h3>
+<ul>
+<li>Location: <code>tests/&lt;module&gt;/&lt;feature&gt;.spec.ts</code></li>
+<li>Naming: descriptive, ends with <code>.spec.ts</code></li>
+</ul>
+<h3 id="source-files">Source Files:</h3>
+<ul>
+<li>Location: <code>packages/&lt;package&gt;/src/</code></li>
+<li>Exports: Explicit, no default exports</li>
+</ul>
+<h3 id="documentation">Documentation:</h3>
+<p><strong>形式ルール</strong>: <code>/docs</code> 配下のドキュメントは <strong>HTML 形式 (<code>.html</code>) で管理する</strong>。ローカルで使う開発ドキュメントはブラウザで開いて参照する自己完結型 HTML として直接編集し、Markdown ソースは残さない。公開向け学習サイト (<code>sites/dev/</code>, <code>sites/user/</code>) は VitePress による別管理（Markdown → HTML ビルド）であり、本ルールの対象外。</p>
+<ul>
+<li>WORK_LOG.html - Development history (UPDATE WITH EVERY COMMIT!)</li>
+<li>README.md - User guide（リポジトリルート、対象外）</li>
+<li>IMPLEMENTATION_PLAN.html - Technical roadmap</li>
+<li>INSTRUCTION_ORBITSCORE_DSL.html - Language specification</li>
+<li>PROJECT_RULES.html - This file</li>
+</ul>
+<h2 id="-things-to-avoid">🚫 Things to Avoid</h2>
+<ol>
+<li><strong>NEVER</strong> commit directly to main branch - always create a feature branch first</li>
+<li><strong>NEVER</strong> commit without updating WORK_LOG.md</li>
+<li><strong>NEVER</strong> change IR types without version consideration</li>
+<li><strong>NEVER</strong> skip tests for new features</li>
+<li><strong>NEVER</strong> use magic numbers - use constants</li>
+<li><strong>NEVER</strong> leave TODO comments without tracking</li>
+<li><strong>NEVER</strong> delete branches after merging (use <code>--squash</code> without <code>--delete-branch</code>)</li>
+</ol>
+<h2 id="-checklist-before-committing">✅ Checklist Before Committing</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Tests pass (<code>npm test</code>)</li>
+<li><input disabled="" type="checkbox"> WORK_LOG.md updated</li>
+<li><input disabled="" type="checkbox"> README.md updated (MUST reflect current status from WORK_LOG.md)</li>
+<li><input disabled="" type="checkbox"> Documentation updated if needed</li>
+<li><input disabled="" type="checkbox"> <strong>Serenaを使って重要な変更を保存</strong> (必要に応じて)</li>
+<li><input disabled="" type="checkbox"> Commit message is descriptive</li>
+<li><input disabled="" type="checkbox"> No console.log left in production code</li>
+<li><input disabled="" type="checkbox"> Types are properly defined</li>
+</ul>
+<h2 id="-continuous-practices">🔄 Continuous Practices</h2>
+<ol>
+<li><strong>Regular Testing</strong>: Run tests frequently during development</li>
+<li><strong>Incremental Commits</strong>: Small, focused commits</li>
+<li><strong>Documentation Sync</strong>: Keep docs in sync with code</li>
+<li><strong>Code Review</strong>: Review your own code before committing</li>
+</ol>
+<h2 id="-session-continuity-and-information-handoff">🔄 Session Continuity and Information Handoff</h2>
+<h3 id="基本方針">基本方針</h3>
+<p>Resume機能に依存せず、Serenaメモリとドキュメントで情報を引き継ぐ。</p>
+<h3 id="作業中の情報保存aiエージェントの責務">作業中の情報保存（AIエージェントの責務）</h3>
+<p>以下のタイミングで重要な情報をSerenaメモリに保存する：</p>
+<ol>
+<li><p><strong>複雑なアーキテクチャを理解した時</strong></p>
+<ul>
+<li><code>serena-write_memory</code>で要約を保存</li>
+<li>例：パーサーの設計、オーディオエンジンの仕組み</li>
+</ul>
+</li>
+<li><p><strong>重要な設計決定をした時</strong></p>
+<ul>
+<li>理由と経緯を記録</li>
+<li>例：ライブラリ選定、実装アプローチの変更</li>
+</ul>
+</li>
+<li><p><strong>大きなタスクが完了した時</strong></p>
+<ul>
+<li>実装の詳細と注意点を保存</li>
+<li>例：新機能の実装完了、リファクタリング完了</li>
+</ul>
+</li>
+<li><p><strong>コミット時（必須）</strong></p>
+<ul>
+<li>WORK_LOGに詳細を記録</li>
+<li>Serenaを使って重要な決定事項や変更を保存</li>
+</ul>
+</li>
+</ol>
+<h3 id="セッション開始時aiエージェントの責務">セッション開始時（AIエージェントの責務）</h3>
+<ol>
+<li><p><strong>既存メモリの確認</strong></p>
+<ul>
+<li><code>serena-list_memories</code>で保存されている知識を確認</li>
+<li>関連するメモリがあれば<code>serena-read_memory</code>で読み込む</li>
+</ul>
+</li>
+<li><p><strong>最新状況の把握</strong></p>
+<ul>
+<li>WORK_LOGの最新エントリを確認（必要に応じて）</li>
+<li>現在の実装フェーズを把握</li>
+</ul>
+</li>
+<li><p><strong>前回の作業内容の理解</strong></p>
+<ul>
+<li>Serenaメモリから前回の知見を取得</li>
+<li>継続作業の場合は文脈を復元</li>
+</ul>
+</li>
+</ol>
+<h3 id="resume機能の使用判断ユーザー判断">Resume機能の使用判断（ユーザー判断）</h3>
+<p><strong>基本方針：新規セッションを推奨</strong></p>
+<ul>
+<li>独立したタスク → 新規セッション</li>
+<li>時間が経過 → 新規セッション</li>
+<li>異なるトピック → 新規セッション</li>
+</ul>
+<p><strong>Resumeを使うべき例外的ケース：</strong></p>
+<ul>
+<li>複雑な議論・設計決定の途中</li>
+<li>大規模リファクタリングの段階的実施中</li>
+<li>デバッグの試行錯誤を継続する必要がある時</li>
+</ul>
+<p><strong>理由：</strong></p>
+<ul>
+<li>Serenaメモリで構造化された知識として蓄積</li>
+<li>新鮮な視点で問題を見られる</li>
+<li>トークン効率が良い</li>
+<li>会話履歴の管理が不要</li>
+</ul>
+<h2 id="-documentation-sync-rules">📝 Documentation Sync Rules</h2>
+<h3 id="work_logmd-structure">WORK_LOG.md Structure</h3>
+<p>Each phase section should include:</p>
+<ul>
+<li>Overview with date</li>
+<li>Work content details</li>
+<li>Technical decisions</li>
+<li>Challenges and solutions</li>
+<li>File changes</li>
+<li>Test results</li>
+<li>Commit history with hashes</li>
+<li>Next steps</li>
+</ul>
+<h3 id="readmemd-must-always-include">README.md Must Always Include:</h3>
+<ul>
+<li>Current development status (sync with WORK_LOG.md phases)</li>
+<li>Completed features list</li>
+<li>Test count and status</li>
+<li>Installation/usage instructions</li>
+<li><strong>MUST be updated whenever WORK_LOG.md changes</strong></li>
+</ul>
+<h2 id="-domain-specific-rules">🎵 Domain-Specific Rules</h2>
+<h3 id="music-dsl">Music DSL:</h3>
+<ul>
+<li>Degree 0 is sacred - it represents musical silence</li>
+<li>All durations are musical values</li>
+<li>Precision matters for timing</li>
+</ul>
+<h3 id="midi">MIDI:</h3>
+<ul>
+<li>Note range: 0-127</li>
+<li>PitchBend range: -8192 to +8191</li>
+<li>Channel 0 is reserved (use 1-15 for MPE)</li>
+</ul>
+<hr>
+<p><strong>Remember</strong>: This project values documentation and history as much as code. Every change tells a story that should be preserved in WORK_LOG.md!</p>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,2659 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2P協調ライブコーディング機能 開発プラン — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="p2p協調ライブコーディング機能-開発プラン">P2P協調ライブコーディング機能 開発プラン</h1>
+<p><strong>ステータス</strong>: 計画段階（未着手）
+<strong>優先度</strong>: 中（Electron版アプリ後に実装推奨）
+<strong>作成日</strong>: 2025-10-10
+<strong>最終更新</strong>: 2025-10-10</p>
+<hr>
+<h2 id="-プロジェクト概要">📋 プロジェクト概要</h2>
+<h3 id="背景">背景</h3>
+<p>VS Code Live ShareやOpen Collaboration toolsは以下の問題を抱えている：</p>
+<ul>
+<li>❌ 接続が不安定（頻繁に切断される）</li>
+<li>❌ レイテンシが高い（編集が遅延する）</li>
+<li>❌ 複雑な設定が必要（認証、ネットワーク設定）</li>
+<li>❌ OrbitScore固有の機能（エンジン状態同期、コード実行同期）に非対応</li>
+</ul>
+<h3 id="目標">目標</h3>
+<p><strong>「ゲームのマルチプレイのように簡単で安定した協調ライブコーディング環境」</strong></p>
+<ul>
+<li>✅ ホストが部屋を作成、仲間を招待（P2P接続）</li>
+<li>✅ ホストが落ちても他の人にホストが引き継がれる（ホストマイグレーション）</li>
+<li>✅ リアルタイムでコード編集・実行を共有</li>
+<li>✅ 各自のSuperColliderで音を鳴らす（ネットワーク遅延の影響を受けない）</li>
+<li>✅ 安定した接続（自動再接続、バックアップサーバー）</li>
+<li>✅ <strong>リアルタイムチャット</strong>（テキストメッセージ交換）</li>
+<li>✅ <strong>コードコメント機能</strong>（行を選択してコメント → チャットに表示 → クリックでその行にジャンプ）</li>
+</ul>
+<h3 id="ユースケース">ユースケース</h3>
+<h4 id="1-教育ワークショップ">1. 教育・ワークショップ</h4>
+<ul>
+<li>講師がホスト、生徒5-10人が参加</li>
+<li>講師がコードを書く → 全員にリアルタイム反映</li>
+<li>生徒も編集可能（ハンズオン）</li>
+<li>講師が途中退出しても、アシスタントがホストを引き継ぎ継続</li>
+</ul>
+<h4 id="2-協調パフォーマンス">2. 協調パフォーマンス</h4>
+<ul>
+<li>アーティスト3-5人が同時参加</li>
+<li>リアルタイムで音楽を共同制作</li>
+<li>誰かが接続トラブルでも、他のメンバーは演奏継続</li>
+</ul>
+<h4 id="3-リモートペアプログラミング">3. リモートペアプログラミング</h4>
+<ul>
+<li>開発者2人で新機能を実装</li>
+<li>リアルタイムでコードレビュー・編集</li>
+<li>どちらかが落ちても作業継続</li>
+</ul>
+<hr>
+<h2 id="️-アーキテクチャ設計">🏗️ アーキテクチャ設計</h2>
+<h3 id="p2p接続モデルwebrtc--シグナリングサーバー">P2P接続モデル（WebRTC + シグナリングサーバー）</h3>
+<pre><code>┌─────────────────────────────────────────────────────────┐
+│                  Signaling Server                        │
+│         (初期接続・ホスト発見のみ使用)                    │
+└────────────┬────────────────────────────┬────────────────┘
+             │                            │
+             │ (接続確立後はP2P)          │
+             │                            │
+        ┌────▼────┐                  ┌────▼────┐
+        │ Host    │◄────────────────►│ Peer 1  │
+        │ (Alice) │  WebRTC P2P      │ (Bob)   │
+        └────┬────┘                  └────┬────┘
+             │                            │
+             │                            │
+             │         ┌────────┐         │
+             └────────►│ Peer 2 │◄────────┘
+                       │(Charlie)│
+                       └────────┘
+</code></pre>
+<h3 id="ホストマイグレーション">ホストマイグレーション</h3>
+<pre><code>┌──────────────────────────────────────────────────────────┐
+│ Phase 1: 通常時                                           │
+├──────────────────────────────────────────────────────────┤
+│ Host (Alice) ◄───► Peer 1 (Bob) ◄───► Peer 2 (Charlie)  │
+│  [Primary]           [Backup]           [Member]         │
+└──────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────┐
+│ Phase 2: Aliceが切断 → Bobが自動的にHostに昇格           │
+├──────────────────────────────────────────────────────────┤
+│ Host (Bob) ◄───────────────────► Peer 2 (Charlie)        │
+│  [Primary]                         [Backup]              │
+└──────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────┐
+│ Phase 3: Aliceが再接続 → Peerとして参加                  │
+├──────────────────────────────────────────────────────────┤
+│ Host (Bob) ◄───► Peer 1 (Alice) ◄───► Peer 2 (Charlie)  │
+│  [Primary]         [Member]             [Backup]         │
+└──────────────────────────────────────────────────────────┘
+</code></pre>
+<h3 id="ホスト選出アルゴリズム">ホスト選出アルゴリズム</h3>
+<ol>
+<li><strong>起動順</strong>: 最初に部屋を作った人がホスト</li>
+<li><strong>Backup指定</strong>: ホストが次のホスト候補を指定可能</li>
+<li><strong>自動昇格</strong>: ホスト切断時、Backupが自動的にホストに昇格</li>
+<li><strong>Backupがいない場合</strong>: 接続時間が最も長いPeerが昇格</li>
+</ol>
+<hr>
+<h2 id="-実装タスク詳細">📝 実装タスク詳細</h2>
+<h3 id="phase-1-基盤実装推定-1週間">Phase 1: 基盤実装（推定: 1週間）</h3>
+<h4 id="11-パッケージセットアップ">1.1 パッケージセットアップ</h4>
+<p><strong>作成物</strong>: <code>packages/vscode-extension-collab/</code> または <code>packages/electron-app-collab/</code></p>
+<p><strong>どちらで実装するか</strong>:</p>
+<ul>
+<li><strong>VS Code Extension版</strong>: 開発環境向け、プロトタイプ実装に最適</li>
+<li><strong>Electron App統合版</strong>: エンドユーザー向け、最終製品</li>
+</ul>
+<p><strong>推奨</strong>: VS Code Extension版で先行実装 → 動作確認 → Electron版に移植</p>
+<p><strong>依存関係</strong>:</p>
+<pre><code class="language-json">{
+  &quot;dependencies&quot;: {
+    &quot;simple-peer&quot;: &quot;^9.11.1&quot;,        // WebRTC P2P接続
+    &quot;socket.io-client&quot;: &quot;^4.5.0&quot;,   // シグナリングサーバー接続
+    &quot;yjs&quot;: &quot;^13.6.0&quot;,                // CRDT（衝突解決）
+    &quot;y-webrtc&quot;: &quot;^10.2.5&quot;,           // Yjs WebRTC Provider
+    &quot;uuid&quot;: &quot;^9.0.0&quot;,                // セッションID生成
+    &quot;eventemitter3&quot;: &quot;^5.0.0&quot;        // イベント管理
+  }
+}
+</code></pre>
+<h4 id="12-シグナリングサーバー構築">1.2 シグナリングサーバー構築</h4>
+<p><strong>目的</strong>: P2P接続の初期確立（ICE候補交換、SDP交換）</p>
+<p><strong>技術</strong>: Socket.IO (Node.js)</p>
+<p><strong>実装</strong>: <code>packages/collab-signaling-server/</code></p>
+<pre><code class="language-typescript">// server.ts
+import { Server } from &#39;socket.io&#39;;
+import express from &#39;express&#39;;
+
+const app = express();
+const server = app.listen(3000);
+const io = new Server(server, {
+  cors: { origin: &#39;*&#39; }
+});
+
+interface Room {
+  id: string;
+  hostId: string;
+  backupId: string | null;
+  members: Set&lt;string&gt;;
+}
+
+const rooms = new Map&lt;string, Room&gt;();
+
+io.on(&#39;connection&#39;, (socket) =&gt; {
+  console.log(`[Connected] ${socket.id}`);
+
+  // 部屋作成
+  socket.on(&#39;create-room&#39;, (roomId: string) =&gt; {
+    rooms.set(roomId, {
+      id: roomId,
+      hostId: socket.id,
+      backupId: null,
+      members: new Set([socket.id])
+    });
+    socket.join(roomId);
+    socket.emit(&#39;room-created&#39;, { roomId, role: &#39;host&#39; });
+    console.log(`[Room Created] ${roomId} by ${socket.id}`);
+  });
+
+  // 部屋参加
+  socket.on(&#39;join-room&#39;, (roomId: string) =&gt; {
+    const room = rooms.get(roomId);
+    if (!room) {
+      socket.emit(&#39;error&#39;, &#39;Room not found&#39;);
+      return;
+    }
+
+    room.members.add(socket.id);
+    socket.join(roomId);
+
+    // 既存メンバーにシグナル
+    socket.to(roomId).emit(&#39;peer-joined&#39;, {
+      peerId: socket.id,
+      role: room.backupId === socket.id ? &#39;backup&#39; : &#39;member&#39;
+    });
+
+    // 新規参加者に既存メンバーリスト送信
+    const memberList = Array.from(room.members).map(id =&gt; ({
+      id,
+      role: id === room.hostId ? &#39;host&#39; : id === room.backupId ? &#39;backup&#39; : &#39;member&#39;
+    }));
+    socket.emit(&#39;room-joined&#39;, {
+      roomId,
+      role: room.backupId === socket.id ? &#39;backup&#39; : &#39;member&#39;,
+      members: memberList
+    });
+
+    console.log(`[Room Joined] ${socket.id} → ${roomId}`);
+  });
+
+  // WebRTC シグナリング
+  socket.on(&#39;signal&#39;, ({ to, signal }) =&gt; {
+    io.to(to).emit(&#39;signal&#39;, {
+      from: socket.id,
+      signal
+    });
+  });
+
+  // Backup指定
+  socket.on(&#39;set-backup&#39;, ({ roomId, backupId }) =&gt; {
+    const room = rooms.get(roomId);
+    if (room &amp;&amp; socket.id === room.hostId) {
+      room.backupId = backupId;
+      io.to(roomId).emit(&#39;backup-updated&#39;, { backupId });
+      console.log(`[Backup Set] ${roomId}: ${backupId}`);
+    }
+  });
+
+  // ホストマイグレーション
+  socket.on(&#39;disconnect&#39;, () =&gt; {
+    console.log(`[Disconnected] ${socket.id}`);
+
+    // 切断したユーザーがホストの場合
+    rooms.forEach((room, roomId) =&gt; {
+      if (room.hostId === socket.id) {
+        room.members.delete(socket.id);
+
+        if (room.members.size === 0) {
+          // 全員退出 → 部屋削除
+          rooms.delete(roomId);
+          console.log(`[Room Closed] ${roomId}`);
+        } else {
+          // Backupを新ホストに昇格
+          const newHostId = room.backupId || Array.from(room.members)[0];
+          room.hostId = newHostId;
+          room.backupId = null;
+
+          io.to(roomId).emit(&#39;host-migrated&#39;, {
+            newHostId,
+            reason: &#39;previous-host-disconnected&#39;
+          });
+
+          console.log(`[Host Migrated] ${roomId}: ${socket.id} → ${newHostId}`);
+        }
+      } else {
+        // 通常メンバーの切断
+        room.members.delete(socket.id);
+        io.to(roomId).emit(&#39;peer-left&#39;, { peerId: socket.id });
+      }
+    });
+  });
+});
+
+console.log(&#39;🚀 Signaling server started on http://localhost:3000&#39;);
+</code></pre>
+<p><strong>デプロイ</strong>:</p>
+<ul>
+<li>開発環境: ローカル起動 (<code>npm run signaling-server</code>)</li>
+<li>本番環境: Heroku, Railway, Render等の無料PaaSで公開</li>
+</ul>
+<h4 id="13-p2p接続マネージャー">1.3 P2P接続マネージャー</h4>
+<p><strong>ファイル</strong>: <code>src/p2p/connection-manager.ts</code></p>
+<pre><code class="language-typescript">import SimplePeer from &#39;simple-peer&#39;;
+import { io, Socket } from &#39;socket.io-client&#39;;
+import EventEmitter from &#39;eventemitter3&#39;;
+
+export type Role = &#39;host&#39; | &#39;backup&#39; | &#39;member&#39;;
+
+export interface Peer {
+  id: string;
+  role: Role;
+  connection: SimplePeer.Instance;
+}
+
+export class ConnectionManager extends EventEmitter {
+  private signalingSocket: Socket;
+  private peers = new Map&lt;string, Peer&gt;();
+  private myId: string = &#39;&#39;;
+  private myRole: Role = &#39;member&#39;;
+  private roomId: string = &#39;&#39;;
+
+  constructor(private signalingServerUrl: string) {
+    super();
+    this.signalingSocket = io(signalingServerUrl);
+    this.setupSignalingHandlers();
+  }
+
+  // 部屋作成（ホストとして）
+  createRoom(): string {
+    this.roomId = this.generateRoomId();
+    this.myRole = &#39;host&#39;;
+    this.signalingSocket.emit(&#39;create-room&#39;, this.roomId);
+    return this.roomId;
+  }
+
+  // 部屋参加（メンバーとして）
+  joinRoom(roomId: string): void {
+    this.roomId = roomId;
+    this.signalingSocket.emit(&#39;join-room&#39;, roomId);
+  }
+
+  // Backup指定（ホストのみ）
+  setBackup(peerId: string): void {
+    if (this.myRole !== &#39;host&#39;) {
+      throw new Error(&#39;Only host can set backup&#39;);
+    }
+    this.signalingSocket.emit(&#39;set-backup&#39;, {
+      roomId: this.roomId,
+      backupId: peerId
+    });
+  }
+
+  // 全Peerにデータ送信
+  broadcast(data: any): void {
+    this.peers.forEach(peer =&gt; {
+      if (peer.connection.connected) {
+        peer.connection.send(JSON.stringify(data));
+      }
+    });
+  }
+
+  // 特定Peerにデータ送信
+  sendTo(peerId: string, data: any): void {
+    const peer = this.peers.get(peerId);
+    if (peer &amp;&amp; peer.connection.connected) {
+      peer.connection.send(JSON.stringify(data));
+    }
+  }
+
+  private setupSignalingHandlers(): void {
+    this.signalingSocket.on(&#39;connect&#39;, () =&gt; {
+      this.myId = this.signalingSocket.id!;
+      this.emit(&#39;connected&#39;, { myId: this.myId });
+    });
+
+    this.signalingSocket.on(&#39;room-created&#39;, ({ roomId, role }) =&gt; {
+      this.myRole = role;
+      this.emit(&#39;room-created&#39;, { roomId, role });
+    });
+
+    this.signalingSocket.on(&#39;room-joined&#39;, ({ roomId, role, members }) =&gt; {
+      this.myRole = role;
+      this.emit(&#39;room-joined&#39;, { roomId, role });
+
+      // 既存メンバーとP2P接続確立
+      members.forEach(({ id, role }) =&gt; {
+        if (id !== this.myId) {
+          this.connectToPeer(id, role, true);
+        }
+      });
+    });
+
+    this.signalingSocket.on(&#39;peer-joined&#39;, ({ peerId, role }) =&gt; {
+      this.connectToPeer(peerId, role, false);
+    });
+
+    this.signalingSocket.on(&#39;peer-left&#39;, ({ peerId }) =&gt; {
+      this.disconnectPeer(peerId);
+    });
+
+    this.signalingSocket.on(&#39;signal&#39;, ({ from, signal }) =&gt; {
+      const peer = this.peers.get(from);
+      if (peer) {
+        peer.connection.signal(signal);
+      }
+    });
+
+    this.signalingSocket.on(&#39;backup-updated&#39;, ({ backupId }) =&gt; {
+      if (backupId === this.myId) {
+        this.myRole = &#39;backup&#39;;
+      }
+      this.emit(&#39;backup-updated&#39;, { backupId });
+    });
+
+    this.signalingSocket.on(&#39;host-migrated&#39;, ({ newHostId, reason }) =&gt; {
+      if (newHostId === this.myId) {
+        this.myRole = &#39;host&#39;;
+        this.emit(&#39;promoted-to-host&#39;, { reason });
+      }
+      this.emit(&#39;host-migrated&#39;, { newHostId, reason });
+    });
+  }
+
+  private connectToPeer(peerId: string, role: Role, initiator: boolean): void {
+    const peer = new SimplePeer({ initiator, trickle: false });
+
+    peer.on(&#39;signal&#39;, (signal) =&gt; {
+      this.signalingSocket.emit(&#39;signal&#39;, { to: peerId, signal });
+    });
+
+    peer.on(&#39;connect&#39;, () =&gt; {
+      console.log(`[P2P Connected] ${peerId}`);
+      this.emit(&#39;peer-connected&#39;, { peerId, role });
+    });
+
+    peer.on(&#39;data&#39;, (data) =&gt; {
+      const message = JSON.parse(data.toString());
+      this.emit(&#39;data&#39;, { peerId, data: message });
+    });
+
+    peer.on(&#39;close&#39;, () =&gt; {
+      console.log(`[P2P Closed] ${peerId}`);
+      this.disconnectPeer(peerId);
+    });
+
+    peer.on(&#39;error&#39;, (err) =&gt; {
+      console.error(`[P2P Error] ${peerId}:`, err);
+      this.emit(&#39;peer-error&#39;, { peerId, error: err });
+    });
+
+    this.peers.set(peerId, { id: peerId, role, connection: peer });
+  }
+
+  private disconnectPeer(peerId: string): void {
+    const peer = this.peers.get(peerId);
+    if (peer) {
+      peer.connection.destroy();
+      this.peers.delete(peerId);
+      this.emit(&#39;peer-disconnected&#39;, { peerId });
+    }
+  }
+
+  private generateRoomId(): string {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+  }
+
+  disconnect(): void {
+    this.peers.forEach(peer =&gt; peer.connection.destroy());
+    this.peers.clear();
+    this.signalingSocket.disconnect();
+  }
+}
+</code></pre>
+<p><strong>成果物</strong>: P2P接続が確立できる基盤</p>
+<hr>
+<h3 id="phase-2-データ同期実装推定-1週間">Phase 2: データ同期実装（推定: 1週間）</h3>
+<h4 id="21-crdt統合yjs">2.1 CRDT統合（Yjs）</h4>
+<p><strong>目的</strong>: 複数人が同時編集してもコンフリクトしない</p>
+<p><strong>ファイル</strong>: <code>src/sync/crdt-manager.ts</code></p>
+<pre><code class="language-typescript">import * as Y from &#39;yjs&#39;;
+import { WebrtcProvider } from &#39;y-webrtc&#39;;
+
+export class CRDTManager {
+  private ydoc: Y.Doc;
+  private provider: WebrtcProvider;
+  private ytext: Y.Text;
+
+  constructor(roomId: string, signalingServer: string) {
+    this.ydoc = new Y.Doc();
+    this.ytext = this.ydoc.getText(&#39;orbitscore-code&#39;);
+
+    // WebRTC Provider（Y.jsの標準WebRTC統合）
+    this.provider = new WebrtcProvider(roomId, this.ydoc, {
+      signaling: [signalingServer]
+    });
+  }
+
+  // テキスト取得
+  getText(): string {
+    return this.ytext.toString();
+  }
+
+  // テキスト挿入
+  insert(index: number, text: string): void {
+    this.ytext.insert(index, text);
+  }
+
+  // テキスト削除
+  delete(index: number, length: number): void {
+    this.ytext.delete(index, length);
+  }
+
+  // 変更監視
+  observe(callback: (event: Y.YTextEvent) =&gt; void): void {
+    this.ytext.observe(callback);
+  }
+
+  // カーソル位置同期（Awareness）
+  setAwareness(state: { name: string; color: string; cursor: number }): void {
+    this.provider.awareness.setLocalState(state);
+  }
+
+  getAwareness(): Map&lt;number, any&gt; {
+    return this.provider.awareness.getStates();
+  }
+
+  destroy(): void {
+    this.provider.destroy();
+    this.ydoc.destroy();
+  }
+}
+</code></pre>
+<h4 id="22-エディタ統合">2.2 エディタ統合</h4>
+<p><strong>ファイル</strong>: <code>src/sync/editor-sync.ts</code></p>
+<p><strong>VS Code版</strong>:</p>
+<pre><code class="language-typescript">import * as vscode from &#39;vscode&#39;;
+import { CRDTManager } from &#39;./crdt-manager&#39;;
+
+export class EditorSync {
+  private crdt: CRDTManager;
+  private editor: vscode.TextEditor;
+  private isRemoteChange = false;
+
+  constructor(editor: vscode.TextEditor, roomId: string, signalingServer: string) {
+    this.editor = editor;
+    this.crdt = new CRDTManager(roomId, signalingServer);
+    this.setupSync();
+  }
+
+  private setupSync(): void {
+    // ローカル編集 → CRDT
+    vscode.workspace.onDidChangeTextDocument((event) =&gt; {
+      if (event.document !== this.editor.document || this.isRemoteChange) {
+        return;
+      }
+
+      event.contentChanges.forEach((change) =&gt; {
+        this.crdt.delete(change.rangeOffset, change.rangeLength);
+        if (change.text) {
+          this.crdt.insert(change.rangeOffset, change.text);
+        }
+      });
+    });
+
+    // CRDT → ローカル編集
+    this.crdt.observe((event) =&gt; {
+      this.isRemoteChange = true;
+
+      const edit = new vscode.WorkspaceEdit();
+      event.changes.forEach((change) =&gt; {
+        if (change.action === &#39;insert&#39;) {
+          const pos = this.editor.document.positionAt(change.index);
+          edit.insert(this.editor.document.uri, pos, change.text);
+        } else if (change.action === &#39;delete&#39;) {
+          const start = this.editor.document.positionAt(change.index);
+          const end = this.editor.document.positionAt(change.index + change.length);
+          edit.delete(this.editor.document.uri, new vscode.Range(start, end));
+        }
+      });
+
+      vscode.workspace.applyEdit(edit).then(() =&gt; {
+        this.isRemoteChange = false;
+      });
+    });
+
+    // カーソル位置同期
+    vscode.window.onDidChangeTextEditorSelection((event) =&gt; {
+      if (event.textEditor === this.editor) {
+        const cursor = this.editor.document.offsetAt(event.selections[0].active);
+        this.crdt.setAwareness({
+          name: &#39;User&#39;, // TODO: ユーザー名取得
+          color: this.generateColor(),
+          cursor
+        });
+      }
+    });
+  }
+
+  private generateColor(): string {
+    const colors = [&#39;#FF6B6B&#39;, &#39;#4ECDC4&#39;, &#39;#45B7D1&#39;, &#39;#FFA07A&#39;, &#39;#98D8C8&#39;];
+    return colors[Math.floor(Math.random() * colors.length)];
+  }
+
+  destroy(): void {
+    this.crdt.destroy();
+  }
+}
+</code></pre>
+<p><strong>Monaco Editor版（Electron App用）</strong>:</p>
+<pre><code class="language-typescript">import * as monaco from &#39;monaco-editor&#39;;
+import { CRDTManager } from &#39;./crdt-manager&#39;;
+
+export class MonacoEditorSync {
+  private crdt: CRDTManager;
+  private editor: monaco.editor.IStandaloneCodeEditor;
+  private isRemoteChange = false;
+
+  constructor(
+    editor: monaco.editor.IStandaloneCodeEditor,
+    roomId: string,
+    signalingServer: string
+  ) {
+    this.editor = editor;
+    this.crdt = new CRDTManager(roomId, signalingServer);
+    this.setupSync();
+  }
+
+  private setupSync(): void {
+    const model = this.editor.getModel()!;
+
+    // ローカル編集 → CRDT
+    model.onDidChangeContent((event) =&gt; {
+      if (this.isRemoteChange) return;
+
+      event.changes.forEach((change) =&gt; {
+        this.crdt.delete(change.rangeOffset, change.rangeLength);
+        if (change.text) {
+          this.crdt.insert(change.rangeOffset, change.text);
+        }
+      });
+    });
+
+    // CRDT → ローカル編集
+    this.crdt.observe((event) =&gt; {
+      this.isRemoteChange = true;
+
+      const edits: monaco.editor.IIdentifiedSingleEditOperation[] = [];
+
+      event.changes.forEach((change) =&gt; {
+        if (change.action === &#39;insert&#39;) {
+          const pos = model.getPositionAt(change.index);
+          edits.push({
+            range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+            text: change.text,
+            forceMoveMarkers: true
+          });
+        } else if (change.action === &#39;delete&#39;) {
+          const start = model.getPositionAt(change.index);
+          const end = model.getPositionAt(change.index + change.length);
+          edits.push({
+            range: new monaco.Range(
+              start.lineNumber,
+              start.column,
+              end.lineNumber,
+              end.column
+            ),
+            text: &#39;&#39;,
+            forceMoveMarkers: true
+          });
+        }
+      });
+
+      model.applyEdits(edits);
+      this.isRemoteChange = false;
+    });
+
+    // カーソル位置同期
+    this.editor.onDidChangeCursorPosition((event) =&gt; {
+      const cursor = model.getOffsetAt(event.position);
+      this.crdt.setAwareness({
+        name: &#39;User&#39;,
+        color: this.generateColor(),
+        cursor
+      });
+    });
+  }
+
+  private generateColor(): string {
+    const colors = [&#39;#FF6B6B&#39;, &#39;#4ECDC4&#39;, &#39;#45B7D1&#39;, &#39;#FFA07A&#39;, &#39;#98D8C8&#39;];
+    return colors[Math.floor(Math.random() * colors.length)];
+  }
+
+  destroy(): void {
+    this.crdt.destroy();
+  }
+}
+</code></pre>
+<h4 id="23-エンジン状態同期">2.3 エンジン状態同期</h4>
+<p><strong>ファイル</strong>: <code>src/sync/engine-state-sync.ts</code></p>
+<pre><code class="language-typescript">import { ConnectionManager } from &#39;../p2p/connection-manager&#39;;
+
+export interface EngineState {
+  tempo: number;
+  tick: number;
+  beat: number;
+  runGroup: string[];
+  loopGroup: string[];
+  muteGroup: string[];
+}
+
+export class EngineStateSync {
+  private connectionManager: ConnectionManager;
+  private currentState: EngineState;
+
+  constructor(connectionManager: ConnectionManager) {
+    this.connectionManager = connectionManager;
+    this.currentState = {
+      tempo: 120,
+      tick: 16,
+      beat: 4,
+      runGroup: [],
+      loopGroup: [],
+      muteGroup: []
+    };
+
+    this.setupListeners();
+  }
+
+  // ローカルエンジン状態更新時に呼び出す
+  updateState(state: Partial&lt;EngineState&gt;): void {
+    this.currentState = { ...this.currentState, ...state };
+    this.broadcast();
+  }
+
+  private broadcast(): void {
+    this.connectionManager.broadcast({
+      type: &#39;engine-state&#39;,
+      state: this.currentState
+    });
+  }
+
+  private setupListeners(): void {
+    this.connectionManager.on(&#39;data&#39;, ({ peerId, data }) =&gt; {
+      if (data.type === &#39;engine-state&#39;) {
+        this.handleRemoteStateUpdate(data.state);
+      }
+    });
+  }
+
+  private handleRemoteStateUpdate(state: EngineState): void {
+    // リモート状態を適用（マージロジック）
+    // ホストの状態を優先（ホストマイグレーション時は新ホストの状態）
+    this.currentState = state;
+
+    // UIに反映（イベント発火）
+    this.emit(&#39;state-updated&#39;, state);
+  }
+
+  private emit(event: string, data: any): void {
+    // TODO: EventEmitter統合
+  }
+}
+</code></pre>
+<p><strong>成果物</strong>: リアルタイムで編集・状態が同期される</p>
+<hr>
+<h3 id="phase-3-コード実行同期推定-3-5日">Phase 3: コード実行同期（推定: 3-5日）</h3>
+<h4 id="31-実行イベント同期">3.1 実行イベント同期</h4>
+<p><strong>ファイル</strong>: <code>src/sync/execution-sync.ts</code></p>
+<pre><code class="language-typescript">import { ConnectionManager } from &#39;../p2p/connection-manager&#39;;
+
+export interface ExecutionEvent {
+  userId: string;
+  userName: string;
+  code: string;
+  timestamp: number;
+  rangeStart: number;
+  rangeEnd: number;
+}
+
+export class ExecutionSync {
+  private connectionManager: ConnectionManager;
+
+  constructor(connectionManager: ConnectionManager) {
+    this.connectionManager = connectionManager;
+    this.setupListeners();
+  }
+
+  // ローカルでコード実行時に呼び出す
+  broadcastExecution(event: ExecutionEvent): void {
+    this.connectionManager.broadcast({
+      type: &#39;code-execution&#39;,
+      event
+    });
+  }
+
+  private setupListeners(): void {
+    this.connectionManager.on(&#39;data&#39;, ({ peerId, data }) =&gt; {
+      if (data.type === &#39;code-execution&#39;) {
+        this.handleRemoteExecution(data.event);
+      }
+    });
+  }
+
+  private handleRemoteExecution(event: ExecutionEvent): void {
+    // リモート実行を各自のエンジンで再生
+    // TODO: エンジンに渡す
+
+    // UIにハイライト表示
+    this.highlightRemoteExecution(event);
+  }
+
+  private highlightRemoteExecution(event: ExecutionEvent): void {
+    // エディタ上で実行された範囲をハイライト
+    // ユーザー色でフラッシュ表示
+    // TODO: UI実装
+  }
+}
+</code></pre>
+<h4 id="32-音声出力モードの設計">3.2 音声出力モードの設計</h4>
+<p><strong>⚠️ 重要な問題</strong>: 複数人が同時に音を出すと、同じ音が重複して爆音になる</p>
+<p><strong>解決策: 3つの音声出力モード</strong></p>
+<h5 id="モード1-個別モードindividual-mode---デフォルト">モード1: <strong>個別モード（Individual Mode）</strong> - デフォルト</h5>
+<p>各自が独立して音を出す（教育・ハンズオン向け）</p>
+<p><strong>動作</strong>:</p>
+<ol>
+<li>ユーザーAがコード実行（Cmd+Enter）</li>
+<li><strong>ユーザーAのSuperColliderのみ</strong>で音が鳴る</li>
+<li>実行イベントが全員にブロードキャスト</li>
+<li>ユーザーB, Cは<strong>コード変更のみ受信</strong>（音は出さない）</li>
+<li>他のユーザーがエディタ上で「Aが実行中」を視覚的に確認</li>
+</ol>
+<p><strong>使用例</strong>:</p>
+<ul>
+<li>ワークショップで各自が練習</li>
+<li>講師がデモ → 生徒は聴くだけ</li>
+</ul>
+<h5 id="モード2-ホスト専用モードhost-only-mode">モード2: <strong>ホスト専用モード（Host-Only Mode）</strong></h5>
+<p>ホストだけが音を出せる（ライブパフォーマンス向け）</p>
+<p><strong>動作</strong>:</p>
+<ol>
+<li>ホストのみがコード実行可能</li>
+<li>他のメンバーは閲覧・編集のみ（実行は無効化）</li>
+<li>ホストが落ちた場合 → 新ホストに自動引き継ぎ（後述）</li>
+</ol>
+<p><strong>使用例</strong>:</p>
+<ul>
+<li>ライブパフォーマンス（ホスト = パフォーマー）</li>
+<li>リモートペアプロ（ホスト = ドライバー）</li>
+</ul>
+<h5 id="モード3-共有モードshared-mode---上級者向け">モード3: <strong>共有モード（Shared Mode）</strong> - 上級者向け</h5>
+<p>全員の音をミキサーで合成（協調パフォーマンス向け）</p>
+<p><strong>動作</strong>:</p>
+<ol>
+<li>各自のSuperColliderが異なるトラックを担当</li>
+<li>全員の音がミキサーに送られる</li>
+<li>ミキサーで合成 → スピーカー出力</li>
+</ol>
+<p><strong>使用例</strong>:</p>
+<ul>
+<li>複数人でのライブ演奏</li>
+<li>役割分担（Aがドラム、Bがベース、Cがメロディ）</li>
+</ul>
+<p><strong>⚠️ 注意</strong>: このモードは手動設定が必要（各自がオーディオルーティングを構成）</p>
+<h5 id="モード切り替え機能">モード切り替え機能</h5>
+<pre><code class="language-typescript">// src/sync/audio-output-mode.ts
+export type AudioOutputMode = &#39;individual&#39; | &#39;host-only&#39; | &#39;shared&#39;;
+
+export class AudioOutputManager {
+  private mode: AudioOutputMode = &#39;individual&#39;;
+  private connectionManager: ConnectionManager;
+  private isHost: boolean;
+
+  setMode(mode: AudioOutputMode): void {
+    this.mode = mode;
+    this.connectionManager.broadcast({
+      type: &#39;audio-mode-changed&#39;,
+      mode
+    });
+  }
+
+  shouldExecuteLocally(event: ExecutionEvent): boolean {
+    switch (this.mode) {
+      case &#39;individual&#39;:
+        // 自分が実行した場合のみ音を出す
+        return event.userId === this.connectionManager.myId;
+
+      case &#39;host-only&#39;:
+        // ホストの実行のみ音を出す
+        return event.userId === this.connectionManager.hostId;
+
+      case &#39;shared&#39;:
+        // 全員が音を出す（各自が異なるトラックを担当する想定）
+        return true;
+
+      default:
+        return false;
+    }
+  }
+}
+</code></pre>
+<p><strong>UI</strong>: モード選択ドロップダウン</p>
+<pre><code>Audio Output Mode:
+[ Individual ▼ ]  ← Host-Only / Shared
+</code></pre>
+<p><strong>デフォルト</strong>: <code>Individual</code> モード（最も安全）</p>
+<h5 id="スピーカー保護機能">スピーカー保護機能</h5>
+<p><strong>問題</strong>: 音が急に出る/止まるとスピーカーが破損する可能性</p>
+<p><strong>解決策</strong>: フェードイン/フェードアウト</p>
+<pre><code class="language-typescript">// src/audio/speaker-protection.ts
+export class SpeakerProtection {
+  private fadeInMs = 50;   // フェードイン時間
+  private fadeOutMs = 100; // フェードアウト時間
+
+  async fadeIn(engineManager: EngineManager): Promise&lt;void&gt; {
+    // SuperColliderのマスターボリュームを0→1に徐々に上げる
+    await engineManager.execute(`
+      s.volume.volume = 0;
+      s.volume.volume = 1.linlin(0, 1, 0, 1, ${this.fadeInMs / 1000});
+    `);
+  }
+
+  async fadeOut(engineManager: EngineManager): Promise&lt;void&gt; {
+    // SuperColliderのマスターボリュームを1→0に徐々に下げる
+    await engineManager.execute(`
+      s.volume.volume = 1.linlin(0, 1, 0, 1, ${this.fadeOutMs / 1000});
+    `);
+
+    // フェードアウト完了まで待機
+    await new Promise(resolve =&gt; setTimeout(resolve, this.fadeOutMs));
+  }
+
+  async safeMute(engineManager: EngineManager): Promise&lt;void&gt; {
+    await this.fadeOut(engineManager);
+    await engineManager.execute(&#39;s.freeAll&#39;); // 全音停止
+  }
+}
+</code></pre>
+<p><strong>適用シーン</strong>:</p>
+<ul>
+<li>ホストマイグレーション時（旧ホストの音をフェードアウト → 新ホストの音をフェードイン）</li>
+<li>モード切り替え時</li>
+<li>緊急停止時（Panic Button）</li>
+</ul>
+<p><strong>成果物</strong>: 音声出力の排他制御 + スピーカー保護</p>
+<hr>
+<h3 id="phase-4-uiux実装推定-1週間">Phase 4: UI/UX実装（推定: 1週間）</h3>
+<h4 id="41-セッション管理ui">4.1 セッション管理UI</h4>
+<p><strong>VS Code Extension版</strong>: サイドバーパネル</p>
+<pre><code>┌─────────────────────────────────┐
+│ 🌐 OrbitScore Collaboration     │
+├─────────────────────────────────┤
+│ [➕ Create Session]              │
+│ [🔗 Join Session]                │
+├─────────────────────────────────┤
+│ Status: Not Connected           │
+└─────────────────────────────────┘
+</code></pre>
+<p><strong>セッション作成時</strong>:</p>
+<pre><code>┌─────────────────────────────────┐
+│ 🌐 Collaboration Session        │
+├─────────────────────────────────┤
+│ Status: Active (Host)           │
+│ Room ID: ABC123                 │
+│ [📋 Copy Invite Link]           │
+│ [🛑 End Session]                │
+├─────────────────────────────────┤
+│ 👥 Participants (3)             │
+│ ● Alice (You, Host) 🔴         │
+│ ● Bob (Backup)     🔵          │
+│ ● Charlie          🟢          │
+│                                 │
+│ Right-click for options:        │
+│ - Set as Backup                 │
+│ - Kick User                     │
+└─────────────────────────────────┘
+</code></pre>
+<p><strong>実装</strong> (<code>src/ui/session-panel.ts</code>):</p>
+<pre><code class="language-typescript">import * as vscode from &#39;vscode&#39;;
+import { ConnectionManager } from &#39;../p2p/connection-manager&#39;;
+
+export class SessionPanel {
+  private panel: vscode.WebviewPanel;
+  private connectionManager: ConnectionManager;
+
+  constructor(context: vscode.ExtensionContext, connectionManager: ConnectionManager) {
+    this.connectionManager = connectionManager;
+
+    this.panel = vscode.window.createWebviewPanel(
+      &#39;orbitscoreCollab&#39;,
+      &#39;OrbitScore Collaboration&#39;,
+      vscode.ViewColumn.Two,
+      { enableScripts: true }
+    );
+
+    this.panel.webview.html = this.getHtmlContent();
+    this.setupMessageHandlers();
+  }
+
+  private getHtmlContent(): string {
+    return `
+      &lt;!DOCTYPE html&gt;
+      &lt;html&gt;
+      &lt;head&gt;
+        &lt;style&gt;
+          body { font-family: var(--vscode-font-family); padding: 20px; }
+          button { padding: 10px; margin: 5px 0; width: 100%; }
+          .participant { padding: 5px; margin: 5px 0; }
+          .host { color: #FF6B6B; }
+          .backup { color: #4ECDC4; }
+          .member { color: #98D8C8; }
+        &lt;/style&gt;
+      &lt;/head&gt;
+      &lt;body&gt;
+        &lt;h2&gt;🌐 OrbitScore Collaboration&lt;/h2&gt;
+        &lt;button id=&quot;create-btn&quot;&gt;➕ Create Session&lt;/button&gt;
+        &lt;button id=&quot;join-btn&quot;&gt;🔗 Join Session&lt;/button&gt;
+
+        &lt;div id=&quot;session-info&quot; style=&quot;display: none;&quot;&gt;
+          &lt;h3&gt;Status: &lt;span id=&quot;status&quot;&gt;Connected&lt;/span&gt;&lt;/h3&gt;
+          &lt;p&gt;Room ID: &lt;span id=&quot;room-id&quot;&gt;&lt;/span&gt;&lt;/p&gt;
+          &lt;button id=&quot;copy-link-btn&quot;&gt;📋 Copy Invite Link&lt;/button&gt;
+          &lt;button id=&quot;end-btn&quot;&gt;🛑 End Session&lt;/button&gt;
+
+          &lt;h3&gt;👥 Participants&lt;/h3&gt;
+          &lt;div id=&quot;participants&quot;&gt;&lt;/div&gt;
+        &lt;/div&gt;
+
+        &lt;script&gt;
+          const vscode = acquireVsCodeApi();
+
+          document.getElementById(&#39;create-btn&#39;).addEventListener(&#39;click&#39;, () =&gt; {
+            vscode.postMessage({ command: &#39;create-session&#39; });
+          });
+
+          document.getElementById(&#39;join-btn&#39;).addEventListener(&#39;click&#39;, () =&gt; {
+            vscode.postMessage({ command: &#39;join-session&#39; });
+          });
+
+          document.getElementById(&#39;copy-link-btn&#39;).addEventListener(&#39;click&#39;, () =&gt; {
+            const roomId = document.getElementById(&#39;room-id&#39;).textContent;
+            vscode.postMessage({ command: &#39;copy-link&#39;, roomId });
+          });
+
+          document.getElementById(&#39;end-btn&#39;).addEventListener(&#39;click&#39;, () =&gt; {
+            vscode.postMessage({ command: &#39;end-session&#39; });
+          });
+
+          window.addEventListener(&#39;message&#39;, (event) =&gt; {
+            const message = event.data;
+            switch (message.command) {
+              case &#39;session-created&#39;:
+                document.getElementById(&#39;room-id&#39;).textContent = message.roomId;
+                document.getElementById(&#39;session-info&#39;).style.display = &#39;block&#39;;
+                break;
+              case &#39;update-participants&#39;:
+                updateParticipants(message.participants);
+                break;
+            }
+          });
+
+          function updateParticipants(participants) {
+            const container = document.getElementById(&#39;participants&#39;);
+            container.innerHTML = participants.map(p =&gt;
+              \`&lt;div class=&quot;participant \${p.role}&quot;&gt;● \${p.name} (\${p.role})&lt;/div&gt;\`
+            ).join(&#39;&#39;);
+          }
+        &lt;/script&gt;
+      &lt;/body&gt;
+      &lt;/html&gt;
+    `;
+  }
+
+  private setupMessageHandlers(): void {
+    this.panel.webview.onDidReceiveMessage((message) =&gt; {
+      switch (message.command) {
+        case &#39;create-session&#39;:
+          this.createSession();
+          break;
+        case &#39;join-session&#39;:
+          this.joinSession();
+          break;
+        case &#39;copy-link&#39;:
+          this.copyInviteLink(message.roomId);
+          break;
+        case &#39;end-session&#39;:
+          this.endSession();
+          break;
+      }
+    });
+  }
+
+  private createSession(): void {
+    const roomId = this.connectionManager.createRoom();
+    this.panel.webview.postMessage({
+      command: &#39;session-created&#39;,
+      roomId
+    });
+
+    vscode.window.showInformationMessage(
+      `Session created! Room ID: ${roomId}`,
+      &#39;Copy Link&#39;
+    ).then((action) =&gt; {
+      if (action === &#39;Copy Link&#39;) {
+        this.copyInviteLink(roomId);
+      }
+    });
+  }
+
+  private async joinSession(): Promise&lt;void&gt; {
+    const roomId = await vscode.window.showInputBox({
+      prompt: &#39;Enter Room ID or paste invite link&#39;,
+      placeHolder: &#39;ABC123 or orbitscore://join/ABC123&#39;
+    });
+
+    if (roomId) {
+      const cleanRoomId = roomId.replace(/^orbitscore:\/\/join\//, &#39;&#39;);
+      this.connectionManager.joinRoom(cleanRoomId);
+    }
+  }
+
+  private copyInviteLink(roomId: string): void {
+    const link = `orbitscore://join/${roomId}`;
+    vscode.env.clipboard.writeText(link);
+    vscode.window.showInformationMessage(&#39;Invite link copied!&#39;);
+  }
+
+  private endSession(): void {
+    this.connectionManager.disconnect();
+    this.panel.webview.postMessage({ command: &#39;session-ended&#39; });
+    vscode.window.showInformationMessage(&#39;Session ended.&#39;);
+  }
+}
+</code></pre>
+<h4 id="42-カーソル位置選択範囲の表示">4.2 カーソル位置・選択範囲の表示</h4>
+<p><strong>他のユーザーのカーソル位置を色分け表示</strong></p>
+<p><strong>VS Code版</strong>:</p>
+<pre><code class="language-typescript">import * as vscode from &#39;vscode&#39;;
+import { CRDTManager } from &#39;../sync/crdt-manager&#39;;
+
+export class CursorDecorations {
+  private editor: vscode.TextEditor;
+  private crdt: CRDTManager;
+  private decorationTypes = new Map&lt;number, vscode.TextEditorDecorationType&gt;();
+
+  constructor(editor: vscode.TextEditor, crdt: CRDTManager) {
+    this.editor = editor;
+    this.crdt = crdt;
+    this.setupAwarenessListener();
+  }
+
+  private setupAwarenessListener(): void {
+    this.crdt.provider.awareness.on(&#39;change&#39;, () =&gt; {
+      this.updateCursorDecorations();
+    });
+  }
+
+  private updateCursorDecorations(): void {
+    const states = this.crdt.getAwareness();
+
+    states.forEach((state, clientId) =&gt; {
+      if (!state.cursor) return;
+
+      const position = this.editor.document.positionAt(state.cursor);
+      const range = new vscode.Range(position, position);
+
+      let decorationType = this.decorationTypes.get(clientId);
+      if (!decorationType) {
+        decorationType = vscode.window.createTextEditorDecorationType({
+          borderStyle: &#39;solid&#39;,
+          borderWidth: &#39;0 0 0 2px&#39;,
+          borderColor: state.color,
+          after: {
+            contentText: ` ${state.name}`,
+            color: state.color,
+            fontStyle: &#39;italic&#39;
+          }
+        });
+        this.decorationTypes.set(clientId, decorationType);
+      }
+
+      this.editor.setDecorations(decorationType, [range]);
+    });
+  }
+
+  destroy(): void {
+    this.decorationTypes.forEach(decoration =&gt; decoration.dispose());
+    this.decorationTypes.clear();
+  }
+}
+</code></pre>
+<p><strong>Monaco Editor版</strong>:</p>
+<pre><code class="language-typescript">import * as monaco from &#39;monaco-editor&#39;;
+import { CRDTManager } from &#39;../sync/crdt-manager&#39;;
+
+export class MonacoCursorDecorations {
+  private editor: monaco.editor.IStandaloneCodeEditor;
+  private crdt: CRDTManager;
+  private decorations: string[] = [];
+
+  constructor(editor: monaco.editor.IStandaloneCodeEditor, crdt: CRDTManager) {
+    this.editor = editor;
+    this.crdt = crdt;
+    this.setupAwarenessListener();
+  }
+
+  private setupAwarenessListener(): void {
+    this.crdt.provider.awareness.on(&#39;change&#39;, () =&gt; {
+      this.updateCursorDecorations();
+    });
+  }
+
+  private updateCursorDecorations(): void {
+    const model = this.editor.getModel()!;
+    const states = this.crdt.getAwareness();
+
+    const newDecorations: monaco.editor.IModelDeltaDecoration[] = [];
+
+    states.forEach((state, clientId) =&gt; {
+      if (!state.cursor) return;
+
+      const position = model.getPositionAt(state.cursor);
+
+      newDecorations.push({
+        range: new monaco.Range(
+          position.lineNumber,
+          position.column,
+          position.lineNumber,
+          position.column
+        ),
+        options: {
+          className: &#39;remote-cursor&#39;,
+          glyphMarginClassName: &#39;remote-cursor-glyph&#39;,
+          beforeContentClassName: &#39;remote-cursor-label&#39;,
+          hoverMessage: { value: state.name },
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+        }
+      });
+    });
+
+    this.decorations = this.editor.deltaDecorations(this.decorations, newDecorations);
+  }
+
+  destroy(): void {
+    this.editor.deltaDecorations(this.decorations, []);
+  }
+}
+</code></pre>
+<p><strong>CSS</strong>:</p>
+<pre><code class="language-css">.remote-cursor {
+  border-left: 2px solid var(--user-color);
+  position: relative;
+}
+
+.remote-cursor-label::before {
+  content: attr(data-user-name);
+  position: absolute;
+  top: -20px;
+  left: 0;
+  background: var(--user-color);
+  color: white;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+</code></pre>
+<p><strong>成果物</strong>: 美しいコラボレーションUI</p>
+<hr>
+<h3 id="phase-45-チャットコメント機能推定-1週間">Phase 4.5: チャット・コメント機能（推定: 1週間）</h3>
+<h4 id="451-リアルタイムチャット">4.5.1 リアルタイムチャット</h4>
+<p><strong>目的</strong>: コラボレーター同士がテキストでコミュニケーション</p>
+<p><strong>ファイル</strong>: <code>src/chat/chat-manager.ts</code></p>
+<pre><code class="language-typescript">import { ConnectionManager } from &#39;../p2p/connection-manager&#39;;
+import EventEmitter from &#39;eventemitter3&#39;;
+
+export interface ChatMessage {
+  id: string;
+  userId: string;
+  userName: string;
+  userColor: string;
+  text: string;
+  timestamp: number;
+  type: &#39;text&#39; | &#39;code-comment&#39; | &#39;system&#39;;
+
+  // code-commentの場合のみ
+  codeReference?: {
+    lineStart: number;
+    lineEnd: number;
+    code: string;
+    fileName?: string;
+  };
+}
+
+export class ChatManager extends EventEmitter {
+  private connectionManager: ConnectionManager;
+  private messages: ChatMessage[] = [];
+  private myUserId: string;
+  private myUserName: string;
+  private myUserColor: string;
+
+  constructor(
+    connectionManager: ConnectionManager,
+    userId: string,
+    userName: string,
+    userColor: string
+  ) {
+    super();
+    this.connectionManager = connectionManager;
+    this.myUserId = userId;
+    this.myUserName = userName;
+    this.myUserColor = userColor;
+    this.setupListeners();
+  }
+
+  // テキストメッセージ送信
+  sendMessage(text: string): void {
+    const message: ChatMessage = {
+      id: this.generateMessageId(),
+      userId: this.myUserId,
+      userName: this.myUserName,
+      userColor: this.myUserColor,
+      text,
+      timestamp: Date.now(),
+      type: &#39;text&#39;
+    };
+
+    this.addMessage(message);
+    this.broadcast(message);
+  }
+
+  // コードコメント送信
+  sendCodeComment(
+    text: string,
+    lineStart: number,
+    lineEnd: number,
+    code: string,
+    fileName?: string
+  ): void {
+    const message: ChatMessage = {
+      id: this.generateMessageId(),
+      userId: this.myUserId,
+      userName: this.myUserName,
+      userColor: this.myUserColor,
+      text,
+      timestamp: Date.now(),
+      type: &#39;code-comment&#39;,
+      codeReference: {
+        lineStart,
+        lineEnd,
+        code,
+        fileName
+      }
+    };
+
+    this.addMessage(message);
+    this.broadcast(message);
+  }
+
+  // システムメッセージ送信（参加/退出通知）
+  sendSystemMessage(text: string): void {
+    const message: ChatMessage = {
+      id: this.generateMessageId(),
+      userId: &#39;system&#39;,
+      userName: &#39;System&#39;,
+      userColor: &#39;#999999&#39;,
+      text,
+      timestamp: Date.now(),
+      type: &#39;system&#39;
+    };
+
+    this.addMessage(message);
+    this.broadcast(message);
+  }
+
+  // メッセージ履歴取得
+  getMessages(): ChatMessage[] {
+    return [...this.messages];
+  }
+
+  private broadcast(message: ChatMessage): void {
+    this.connectionManager.broadcast({
+      type: &#39;chat-message&#39;,
+      message
+    });
+  }
+
+  private setupListeners(): void {
+    this.connectionManager.on(&#39;data&#39;, ({ peerId, data }) =&gt; {
+      if (data.type === &#39;chat-message&#39;) {
+        this.handleRemoteMessage(data.message);
+      }
+    });
+
+    // 新規参加者にメッセージ履歴送信
+    this.connectionManager.on(&#39;peer-connected&#39;, ({ peerId }) =&gt; {
+      this.connectionManager.sendTo(peerId, {
+        type: &#39;chat-history&#39;,
+        messages: this.messages
+      });
+    });
+
+    // 参加者からメッセージ履歴を受信
+    this.connectionManager.on(&#39;data&#39;, ({ peerId, data }) =&gt; {
+      if (data.type === &#39;chat-history&#39;) {
+        // 既存メッセージとマージ（重複排除）
+        this.mergeMessages(data.messages);
+      }
+    });
+  }
+
+  private handleRemoteMessage(message: ChatMessage): void {
+    this.addMessage(message);
+  }
+
+  private addMessage(message: ChatMessage): void {
+    this.messages.push(message);
+    this.emit(&#39;message&#39;, message);
+
+    // 最大1000件まで保持（古いものから削除）
+    if (this.messages.length &gt; 1000) {
+      this.messages.shift();
+    }
+  }
+
+  private mergeMessages(newMessages: ChatMessage[]): void {
+    const existingIds = new Set(this.messages.map(m =&gt; m.id));
+
+    newMessages.forEach(msg =&gt; {
+      if (!existingIds.has(msg.id)) {
+        this.messages.push(msg);
+      }
+    });
+
+    // タイムスタンプでソート
+    this.messages.sort((a, b) =&gt; a.timestamp - b.timestamp);
+
+    this.emit(&#39;history-updated&#39;, this.messages);
+  }
+
+  private generateMessageId(): string {
+    return `${this.myUserId}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+  }
+
+  destroy(): void {
+    this.messages = [];
+    this.removeAllListeners();
+  }
+}
+</code></pre>
+<h4 id="452-チャットui">4.5.2 チャットUI</h4>
+<p><strong>VS Code Extension版</strong>: サイドバーパネルにチャットを追加</p>
+<pre><code>┌─────────────────────────────────┐
+│ 🌐 Collaboration Session        │
+├─────────────────────────────────┤
+│ Status: Active (Host)           │
+│ Room ID: ABC123                 │
+│ [📋 Copy Invite Link]           │
+│ [🛑 End Session]                │
+├─────────────────────────────────┤
+│ 👥 Participants (3)             │
+│ ● Alice (You, Host) 🔴         │
+│ ● Bob (Backup)     🔵          │
+│ ● Charlie          🟢          │
+├─────────────────────────────────┤
+│ 💬 Chat                         │
+├─────────────────────────────────┤
+│ [Alice] 10:30                   │
+│ Hey, let&#39;s try this pattern!    │
+│                                 │
+│ [Bob] 10:31 → Line 15-18        │
+│ ┌─────────────────────────┐    │
+│ │ kick.play(               │    │
+│ │   (0)(1)(2)(3)           │    │
+│ │ )                        │    │
+│ └─────────────────────────┘    │
+│ This sounds great!              │
+│                                 │
+│ [System] 10:32                  │
+│ Charlie joined the session      │
+├─────────────────────────────────┤
+│ [Type message...]         [Send]│
+└─────────────────────────────────┘
+</code></pre>
+<p><strong>実装</strong> (<code>src/ui/chat-panel.ts</code>):</p>
+<pre><code class="language-typescript">import * as vscode from &#39;vscode&#39;;
+import { ChatManager, ChatMessage } from &#39;../chat/chat-manager&#39;;
+
+export class ChatPanel {
+  private panel: vscode.WebviewPanel;
+  private chatManager: ChatManager;
+
+  constructor(
+    context: vscode.ExtensionContext,
+    chatManager: ChatManager
+  ) {
+    this.chatManager = chatManager;
+
+    this.panel = vscode.window.createWebviewPanel(
+      &#39;orbitscoreChat&#39;,
+      &#39;OrbitScore Chat&#39;,
+      vscode.ViewColumn.Two,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true
+      }
+    );
+
+    this.panel.webview.html = this.getHtmlContent();
+    this.setupMessageHandlers();
+    this.setupChatListeners();
+  }
+
+  private getHtmlContent(): string {
+    return `
+      &lt;!DOCTYPE html&gt;
+      &lt;html&gt;
+      &lt;head&gt;
+        &lt;style&gt;
+          body {
+            font-family: var(--vscode-font-family);
+            padding: 0;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+          }
+
+          #messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+          }
+
+          .message {
+            margin-bottom: 15px;
+            padding: 8px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.05);
+          }
+
+          .message-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 12px;
+            opacity: 0.7;
+          }
+
+          .message-author {
+            font-weight: bold;
+          }
+
+          .message-text {
+            margin-top: 5px;
+            white-space: pre-wrap;
+          }
+
+          .code-reference {
+            margin-top: 8px;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border-left: 3px solid var(--user-color);
+            font-family: &#39;Monaco&#39;, &#39;Menlo&#39;, monospace;
+            font-size: 12px;
+            cursor: pointer;
+            position: relative;
+          }
+
+          .code-reference:hover {
+            background: rgba(0, 0, 0, 0.5);
+          }
+
+          .code-reference::before {
+            content: &#39;→ Line &#39; attr(data-line-start) &#39;-&#39; attr(data-line-end);
+            position: absolute;
+            top: -18px;
+            left: 8px;
+            font-size: 10px;
+            color: var(--user-color);
+          }
+
+          .code-reference code {
+            white-space: pre;
+            display: block;
+          }
+
+          .system-message {
+            text-align: center;
+            font-style: italic;
+            opacity: 0.5;
+            font-size: 12px;
+          }
+
+          #input-container {
+            display: flex;
+            padding: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+          }
+
+          #message-input {
+            flex: 1;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: var(--vscode-editor-foreground);
+            border-radius: 4px;
+          }
+
+          #send-button {
+            margin-left: 10px;
+            padding: 8px 16px;
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+          }
+
+          #send-button:hover {
+            background: var(--vscode-button-hoverBackground);
+          }
+        &lt;/style&gt;
+      &lt;/head&gt;
+      &lt;body&gt;
+        &lt;div id=&quot;messages&quot;&gt;&lt;/div&gt;
+
+        &lt;div id=&quot;input-container&quot;&gt;
+          &lt;input
+            type=&quot;text&quot;
+            id=&quot;message-input&quot;
+            placeholder=&quot;Type message... (Ctrl+Enter to send)&quot;
+          /&gt;
+          &lt;button id=&quot;send-button&quot;&gt;Send&lt;/button&gt;
+        &lt;/div&gt;
+
+        &lt;script&gt;
+          const vscode = acquireVsCodeApi();
+          const messagesContainer = document.getElementById(&#39;messages&#39;);
+          const messageInput = document.getElementById(&#39;message-input&#39;);
+          const sendButton = document.getElementById(&#39;send-button&#39;);
+
+          // メッセージ送信
+          function sendMessage() {
+            const text = messageInput.value.trim();
+            if (text) {
+              vscode.postMessage({ command: &#39;send-message&#39;, text });
+              messageInput.value = &#39;&#39;;
+            }
+          }
+
+          sendButton.addEventListener(&#39;click&#39;, sendMessage);
+
+          messageInput.addEventListener(&#39;keydown&#39;, (e) =&gt; {
+            if (e.ctrlKey &amp;&amp; e.key === &#39;Enter&#39;) {
+              sendMessage();
+            }
+          });
+
+          // コード参照クリック → エディタにジャンプ
+          messagesContainer.addEventListener(&#39;click&#39;, (e) =&gt; {
+            const codeRef = e.target.closest(&#39;.code-reference&#39;);
+            if (codeRef) {
+              const messageId = codeRef.dataset.messageId;
+              const lineStart = parseInt(codeRef.dataset.lineStart);
+              const lineEnd = parseInt(codeRef.dataset.lineEnd);
+
+              vscode.postMessage({
+                command: &#39;jump-to-code&#39;,
+                messageId,
+                lineStart,
+                lineEnd
+              });
+            }
+          });
+
+          // メッセージ受信
+          window.addEventListener(&#39;message&#39;, (event) =&gt; {
+            const message = event.data;
+
+            switch (message.command) {
+              case &#39;add-message&#39;:
+                addMessage(message.message);
+                break;
+              case &#39;load-history&#39;:
+                messagesContainer.innerHTML = &#39;&#39;;
+                message.messages.forEach(msg =&gt; addMessage(msg));
+                break;
+            }
+          });
+
+          function addMessage(msg) {
+            const div = document.createElement(&#39;div&#39;);
+            div.className = &#39;message&#39;;
+
+            if (msg.type === &#39;system&#39;) {
+              div.classList.add(&#39;system-message&#39;);
+              div.textContent = msg.text;
+            } else {
+              const time = new Date(msg.timestamp).toLocaleTimeString(&#39;ja-JP&#39;, {
+                hour: &#39;2-digit&#39;,
+                minute: &#39;2-digit&#39;
+              });
+
+              let html = \`
+                &lt;div class=&quot;message-header&quot;&gt;
+                  &lt;span class=&quot;message-author&quot; style=&quot;color: \${msg.userColor}&quot;&gt;
+                    [\${msg.userName}]
+                  &lt;/span&gt;
+                  &lt;span class=&quot;message-time&quot;&gt;\${time}&lt;/span&gt;
+                &lt;/div&gt;
+              \`;
+
+              if (msg.codeReference) {
+                html += \`
+                  &lt;div
+                    class=&quot;code-reference&quot;
+                    style=&quot;--user-color: \${msg.userColor}&quot;
+                    data-message-id=&quot;\${msg.id}&quot;
+                    data-line-start=&quot;\${msg.codeReference.lineStart}&quot;
+                    data-line-end=&quot;\${msg.codeReference.lineEnd}&quot;
+                  &gt;
+                    &lt;code&gt;\${escapeHtml(msg.codeReference.code)}&lt;/code&gt;
+                  &lt;/div&gt;
+                \`;
+              }
+
+              html += \`&lt;div class=&quot;message-text&quot;&gt;\${escapeHtml(msg.text)}&lt;/div&gt;\`;
+
+              div.innerHTML = html;
+            }
+
+            messagesContainer.appendChild(div);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+          }
+
+          function escapeHtml(text) {
+            const div = document.createElement(&#39;div&#39;);
+            div.textContent = text;
+            return div.innerHTML;
+          }
+        &lt;/script&gt;
+      &lt;/body&gt;
+      &lt;/html&gt;
+    `;
+  }
+
+  private setupMessageHandlers(): void {
+    this.panel.webview.onDidReceiveMessage((message) =&gt; {
+      switch (message.command) {
+        case &#39;send-message&#39;:
+          this.chatManager.sendMessage(message.text);
+          break;
+
+        case &#39;jump-to-code&#39;:
+          this.jumpToCode(message.lineStart, message.lineEnd);
+          break;
+      }
+    });
+  }
+
+  private setupChatListeners(): void {
+    // 新規メッセージ受信
+    this.chatManager.on(&#39;message&#39;, (message: ChatMessage) =&gt; {
+      this.panel.webview.postMessage({
+        command: &#39;add-message&#39;,
+        message
+      });
+    });
+
+    // メッセージ履歴更新
+    this.chatManager.on(&#39;history-updated&#39;, (messages: ChatMessage[]) =&gt; {
+      this.panel.webview.postMessage({
+        command: &#39;load-history&#39;,
+        messages
+      });
+    });
+  }
+
+  private jumpToCode(lineStart: number, lineEnd: number): void {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    // 行番号は0-indexedに変換
+    const range = new vscode.Range(
+      new vscode.Position(lineStart - 1, 0),
+      new vscode.Position(lineEnd - 1, Number.MAX_VALUE)
+    );
+
+    editor.selection = new vscode.Selection(range.start, range.end);
+    editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+
+    // ハイライトアニメーション
+    const decoration = vscode.window.createTextEditorDecorationType({
+      backgroundColor: &#39;rgba(100, 150, 255, 0.3)&#39;,
+      isWholeLine: true
+    });
+
+    editor.setDecorations(decoration, [range]);
+
+    setTimeout(() =&gt; {
+      decoration.dispose();
+    }, 2000);
+  }
+}
+</code></pre>
+<h4 id="453-コードコメント機能">4.5.3 コードコメント機能</h4>
+<p><strong>VS Code Extension統合</strong>:</p>
+<pre><code class="language-typescript">// extension.ts に追加
+import { ChatManager } from &#39;./chat/chat-manager&#39;;
+import { ChatPanel } from &#39;./ui/chat-panel&#39;;
+
+let chatManager: ChatManager;
+let chatPanel: ChatPanel;
+
+// セッション作成時
+chatManager = new ChatManager(
+  connectionManager,
+  connectionManager.myId,
+  &#39;User&#39;, // TODO: ユーザー名入力UI
+  &#39;#FF6B6B&#39; // TODO: ランダム色生成
+);
+
+chatPanel = new ChatPanel(context, chatManager);
+
+// コードコメントコマンド登録
+context.subscriptions.push(
+  vscode.commands.registerCommand(&#39;orbitscore.commentOnSelection&#39;, async () =&gt; {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const selection = editor.selection;
+    if (selection.isEmpty) {
+      vscode.window.showWarningMessage(&#39;Please select code to comment on&#39;);
+      return;
+    }
+
+    // コメント入力
+    const comment = await vscode.window.showInputBox({
+      prompt: &#39;Enter your comment on the selected code&#39;,
+      placeHolder: &#39;This pattern is interesting!&#39;
+    });
+
+    if (!comment) return;
+
+    // 選択範囲の情報取得
+    const lineStart = selection.start.line + 1; // 1-indexed
+    const lineEnd = selection.end.line + 1;
+    const code = editor.document.getText(selection);
+    const fileName = editor.document.fileName;
+
+    // チャットに送信
+    chatManager.sendCodeComment(comment, lineStart, lineEnd, code, fileName);
+
+    vscode.window.showInformationMessage(&#39;Comment sent to chat!&#39;);
+  })
+);
+
+// キーバインド追加（package.json）
+{
+  &quot;command&quot;: &quot;orbitscore.commentOnSelection&quot;,
+  &quot;key&quot;: &quot;cmd+shift+c&quot;,
+  &quot;when&quot;: &quot;editorTextFocus &amp;&amp; editorLangId == orbitscore&quot;
+}
+</code></pre>
+<p><strong>使い方</strong>:</p>
+<ol>
+<li>コードを選択</li>
+<li><strong>Cmd+Shift+C</strong> (macOS) / <strong>Ctrl+Shift+C</strong> (Windows/Linux)</li>
+<li>コメント入力</li>
+<li>チャットに表示される</li>
+<li>他のユーザーはチャット内のコード参照をクリック → その行にジャンプ</li>
+</ol>
+<h4 id="454-monaco-editor版electron-app用">4.5.4 Monaco Editor版（Electron App用）</h4>
+<pre><code class="language-typescript">import * as monaco from &#39;monaco-editor&#39;;
+import { ChatManager } from &#39;../chat/chat-manager&#39;;
+
+export class MonacoChatIntegration {
+  private editor: monaco.editor.IStandaloneCodeEditor;
+  private chatManager: ChatManager;
+
+  constructor(
+    editor: monaco.editor.IStandaloneCodeEditor,
+    chatManager: ChatManager
+  ) {
+    this.editor = editor;
+    this.chatManager = chatManager;
+    this.setupContextMenu();
+  }
+
+  private setupContextMenu(): void {
+    // 右クリックメニューに「Comment on Selection」追加
+    this.editor.addAction({
+      id: &#39;orbitscore.comment-on-selection&#39;,
+      label: &#39;Comment on Selection&#39;,
+      contextMenuGroupId: &#39;orbitscore&#39;,
+      contextMenuOrder: 1,
+      keybindings: [
+        monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyC
+      ],
+      run: (editor) =&gt; {
+        this.handleCommentOnSelection();
+      }
+    });
+  }
+
+  private async handleCommentOnSelection(): Promise&lt;void&gt; {
+    const selection = this.editor.getSelection();
+    if (!selection || selection.isEmpty()) {
+      alert(&#39;Please select code to comment on&#39;);
+      return;
+    }
+
+    const model = this.editor.getModel();
+    if (!model) return;
+
+    // コメント入力（プロンプト表示）
+    const comment = prompt(&#39;Enter your comment on the selected code:&#39;);
+    if (!comment) return;
+
+    // 選択範囲の情報取得
+    const lineStart = selection.startLineNumber;
+    const lineEnd = selection.endLineNumber;
+    const code = model.getValueInRange(selection);
+
+    // チャットに送信
+    this.chatManager.sendCodeComment(comment, lineStart, lineEnd, code);
+
+    console.log(&#39;Comment sent to chat!&#39;);
+  }
+
+  jumpToCode(lineStart: number, lineEnd: number): void {
+    const range = new monaco.Range(lineStart, 1, lineEnd, Number.MAX_VALUE);
+
+    this.editor.setSelection(range);
+    this.editor.revealRangeInCenter(range, monaco.editor.ScrollType.Smooth);
+
+    // ハイライトアニメーション
+    const decorations = this.editor.deltaDecorations([], [
+      {
+        range: range,
+        options: {
+          isWholeLine: true,
+          className: &#39;jump-highlight&#39;,
+          inlineClassName: &#39;jump-highlight-inline&#39;
+        }
+      }
+    ]);
+
+    setTimeout(() =&gt; {
+      this.editor.deltaDecorations(decorations, []);
+    }, 2000);
+  }
+}
+</code></pre>
+<p><strong>CSS</strong> (Electron App用):</p>
+<pre><code class="language-css">.jump-highlight {
+  background-color: rgba(100, 150, 255, 0.3);
+  animation: pulse 0.5s ease-in-out 3;
+}
+
+.jump-highlight-inline {
+  background-color: rgba(100, 150, 255, 0.2);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+</code></pre>
+<p><strong>成果物</strong>: リアルタイムチャット + コード参照機能</p>
+<hr>
+<h3 id="phase-5-ホストマイグレーション推定-3-5日">Phase 5: ホストマイグレーション（推定: 3-5日）</h3>
+<h4 id="51-ホスト切断検出--確認フロー">5.1 ホスト切断検出 + 確認フロー</h4>
+<p><strong>⚠️ 重要</strong>: ホストマイグレーションは慎重に行う必要がある</p>
+<ul>
+<li>音が急に切れる/鳴り出すとスピーカーが破損する可能性</li>
+<li>意図しないタイミングでホストが変わるとパフォーマンスが台無しになる</li>
+</ul>
+<p><strong>解決策: 3段階の安全な引き継ぎフロー</strong></p>
+<h5 id="ステップ1-ホスト切断検出">ステップ1: ホスト切断検出</h5>
+<pre><code class="language-typescript">// src/p2p/host-migration.ts
+import { ConnectionManager, Role } from &#39;./connection-manager&#39;;
+
+export class HostMigration {
+  private connectionManager: ConnectionManager;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private hostTimeout: NodeJS.Timeout | null = null;
+  private migrationState: &#39;idle&#39; | &#39;confirming&#39; | &#39;migrating&#39; = &#39;idle&#39;;
+
+  constructor(connectionManager: ConnectionManager) {
+    this.connectionManager = connectionManager;
+    this.setupHeartbeat();
+    this.setupHostMigrationHandlers();
+  }
+
+  private setupHeartbeat(): void {
+    // ホストは定期的にハートビート送信（5秒ごと）
+    if (this.connectionManager.myRole === &#39;host&#39;) {
+      this.heartbeatInterval = setInterval(() =&gt; {
+        this.connectionManager.broadcast({
+          type: &#39;heartbeat&#39;,
+          timestamp: Date.now()
+        });
+      }, 5000);
+    }
+  }
+
+  private setupHostMigrationHandlers(): void {
+    this.connectionManager.on(&#39;data&#39;, ({ peerId, data }) =&gt; {
+      if (data.type === &#39;heartbeat&#39;) {
+        this.resetHostTimeout();
+      }
+    });
+  }
+
+  private resetHostTimeout(): void {
+    if (this.hostTimeout) {
+      clearTimeout(this.hostTimeout);
+    }
+
+    // ホストからのハートビートが15秒途絶えたら切断と判断
+    this.hostTimeout = setTimeout(() =&gt; {
+      this.handleHostDisconnected();
+    }, 15000);
+  }
+
+  private handleHostDisconnected(): void {
+    console.warn(&#39;[Host Disconnected] Starting migration confirmation...&#39;);
+
+    // ステップ2へ: 確認フェーズ開始
+    this.startMigrationConfirmation();
+  }
+
+  destroy(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+    }
+    if (this.hostTimeout) {
+      clearTimeout(this.hostTimeout);
+    }
+  }
+}
+</code></pre>
+<h5 id="ステップ2-引き継ぎ確認ダイアログ">ステップ2: 引き継ぎ確認ダイアログ</h5>
+<p><strong>動作フロー</strong>:</p>
+<ol>
+<li>ホスト切断検出</li>
+<li><strong>全メンバーにダイアログ表示</strong>: &quot;Host disconnected. Would you like to take over as the new host?&quot;</li>
+<li>最初に「Yes」を押した人が新ホストに昇格</li>
+<li>タイムアウト（30秒）までに誰も応答しない場合 → セッション終了</li>
+</ol>
+<pre><code class="language-typescript">// ステップ2の実装
+private startMigrationConfirmation(): void {
+  this.migrationState = &#39;confirming&#39;;
+
+  // 確認ダイアログを全員に送信
+  this.connectionManager.broadcast({
+    type: &#39;host-migration-confirmation-request&#39;,
+    timeout: 30000, // 30秒
+    timestamp: Date.now()
+  });
+
+  // ローカルにもダイアログ表示
+  this.showMigrationConfirmationDialog();
+
+  // タイムアウト設定
+  setTimeout(() =&gt; {
+    if (this.migrationState === &#39;confirming&#39;) {
+      // 誰も応答しなかった → セッション終了
+      this.handleMigrationTimeout();
+    }
+  }, 30000);
+}
+
+private async showMigrationConfirmationDialog(): Promise&lt;void&gt; {
+  // VS Code版
+  const response = await vscode.window.showWarningMessage(
+    &#39;⚠️ Host disconnected. Would you like to take over as the new host?&#39;,
+    { modal: true },
+    &#39;Yes, Take Over&#39;,
+    &#39;No, Let Others&#39;
+  );
+
+  if (response === &#39;Yes, Take Over&#39;) {
+    this.acceptHostRole();
+  }
+
+  // Electron版（同様のダイアログをModalで表示）
+}
+
+private acceptHostRole(): void {
+  if (this.migrationState !== &#39;confirming&#39;) {
+    // 既に他の人がホストになった
+    vscode.window.showInformationMessage(&#39;Another user has already taken over as host.&#39;);
+    return;
+  }
+
+  // 他のメンバーに通知
+  this.connectionManager.broadcast({
+    type: &#39;host-migration-accepted&#39;,
+    newHostId: this.connectionManager.myId,
+    timestamp: Date.now()
+  });
+
+  // ステップ3へ: 引き継ぎ処理開始
+  this.startMigration();
+}
+</code></pre>
+<p><strong>UI例（VS Code）</strong>:</p>
+<pre><code>┌──────────────────────────────────────────┐
+│ ⚠️  Host Disconnected                    │
+├──────────────────────────────────────────┤
+│ The current host has disconnected.       │
+│ Would you like to take over as the new   │
+│ host?                                    │
+│                                          │
+│ ⚠️ Warning: Taking over will make you    │
+│ responsible for audio output.            │
+│                                          │
+│ Timeout: 25 seconds remaining            │
+├──────────────────────────────────────────┤
+│ [Yes, Take Over]  [No, Let Others]       │
+└──────────────────────────────────────────┘
+</code></pre>
+<h5 id="ステップ3-安全な引き継ぎ処理">ステップ3: 安全な引き継ぎ処理</h5>
+<p><strong>動作</strong>:</p>
+<ol>
+<li><strong>旧ホストの音をフェードアウト</strong>（スピーカー保護）</li>
+<li><strong>新ホストに状態同期</strong>（エンジン状態、CRDT）</li>
+<li><strong>新ホストの音をフェードイン</strong></li>
+<li><strong>全員に通知</strong>: &quot;Alice is now the host&quot;</li>
+</ol>
+<pre><code class="language-typescript">private async startMigration(): Promise&lt;void&gt; {
+  this.migrationState = &#39;migrating&#39;;
+
+  // 1. 旧ホストの音をフェードアウト（もしまだ鳴っていれば）
+  await this.speakerProtection.fadeOut(this.engineManager);
+
+  // 2. 新ホストとしてハートビート開始
+  this.setupHeartbeat();
+  this.connectionManager.myRole = &#39;host&#39;;
+
+  // 3. 状態同期確認（CRDT経由で既に同期済みのはず）
+  const currentState = await this.syncState();
+
+  // 4. 新ホストの音をフェードイン
+  await this.speakerProtection.fadeIn(this.engineManager);
+
+  // 5. 全員に通知
+  this.connectionManager.broadcast({
+    type: &#39;host-migration-completed&#39;,
+    newHostId: this.connectionManager.myId,
+    timestamp: Date.now()
+  });
+
+  this.migrationState = &#39;idle&#39;;
+
+  vscode.window.showInformationMessage(&#39;✅ You are now the host!&#39;);
+  this.chatManager.sendSystemMessage(&#39;Host migrated successfully.&#39;);
+}
+
+private handleMigrationTimeout(): void {
+  this.migrationState = &#39;idle&#39;;
+
+  // 誰も引き継がなかった → セッション終了
+  vscode.window.showErrorMessage(
+    &#39;❌ No one accepted the host role. Session will be closed.&#39;
+  );
+
+  this.connectionManager.disconnect();
+}
+</code></pre>
+<p><strong>UI通知例</strong>:</p>
+<pre><code>┌──────────────────────────────────────────┐
+│ ✅ Host Migration Completed              │
+├──────────────────────────────────────────┤
+│ Alice is now the host.                   │
+│ Session continues normally.              │
+└──────────────────────────────────────────┘
+</code></pre>
+<p><strong>チャット通知例</strong>:</p>
+<pre><code>[System] 10:35
+⚠️ Bob (Host) disconnected
+
+[System] 10:35
+Alice accepted the host role
+
+[System] 10:35
+✅ Host migration completed
+</code></pre>
+<h5 id="エラーハンドリング">エラーハンドリング</h5>
+<p><strong>ケース1: 複数人が同時に「Yes」を押した</strong></p>
+<ul>
+<li><strong>解決</strong>: 最初にメッセージを送信した人が優先（タイムスタンプで判定）</li>
+<li>他の人には「Another user has already taken over」を表示</li>
+</ul>
+<p><strong>ケース2: 新ホストも直後に切断した</strong></p>
+<ul>
+<li><strong>解決</strong>: 再度確認フローを開始（最大3回まで）</li>
+<li>3回失敗したらセッション終了</li>
+</ul>
+<p><strong>ケース3: 音がフェードアウト中に新しいコードが実行された</strong></p>
+<ul>
+<li><strong>解決</strong>: フェードアウト完了まで実行をキューに溜める → フェードイン後に実行</li>
+</ul>
+<p><strong>成果物</strong>: 安全で確認フロー付きのホストマイグレーション</p>
+<h4 id="52-状態引き継ぎ">5.2 状態引き継ぎ</h4>
+<p><strong>問題</strong>: ホストマイグレーション時、新ホストは旧ホストの状態を引き継ぐ必要がある</p>
+<p><strong>解決策</strong>: CRDT（Y.js）が自動的に状態を同期しているため、追加実装不要</p>
+<ul>
+<li>エディタ内容: Y.jsが全Peerで同期済み</li>
+<li>エンジン状態: 最後にブロードキャストされた状態を保持</li>
+<li>カーソル位置: Awareness APIで同期済み</li>
+</ul>
+<p><strong>追加処理</strong>:</p>
+<pre><code class="language-typescript">// 新ホスト昇格時に全Peerに状態確認リクエスト
+this.connectionManager.broadcast({
+  type: &#39;request-state-sync&#39;,
+  timestamp: Date.now()
+});
+
+// 各Peerは最新状態を返信
+this.connectionManager.on(&#39;data&#39;, ({ peerId, data }) =&gt; {
+  if (data.type === &#39;request-state-sync&#39;) {
+    this.connectionManager.sendTo(peerId, {
+      type: &#39;state-sync-response&#39;,
+      editorContent: this.crdt.getText(),
+      engineState: this.engineState
+    });
+  }
+});
+</code></pre>
+<p><strong>成果物</strong>: ホストが落ちてもセッション継続</p>
+<hr>
+<h3 id="phase-6-安定性エラーハンドリング推定-3-5日">Phase 6: 安定性・エラーハンドリング（推定: 3-5日）</h3>
+<h4 id="61-自動再接続">6.1 自動再接続</h4>
+<pre><code class="language-typescript">export class AutoReconnect {
+  private connectionManager: ConnectionManager;
+  private roomId: string;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+
+  constructor(connectionManager: ConnectionManager, roomId: string) {
+    this.connectionManager = connectionManager;
+    this.roomId = roomId;
+    this.setupDisconnectHandler();
+  }
+
+  private setupDisconnectHandler(): void {
+    this.connectionManager.on(&#39;disconnected&#39;, () =&gt; {
+      this.attemptReconnect();
+    });
+  }
+
+  private async attemptReconnect(): Promise&lt;void&gt; {
+    if (this.reconnectAttempts &gt;= this.maxReconnectAttempts) {
+      console.error(&#39;[Reconnect Failed] Max attempts reached&#39;);
+      // TODO: ユーザーに通知
+      return;
+    }
+
+    this.reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000);
+
+    console.log(`[Reconnecting] Attempt ${this.reconnectAttempts} in ${delay}ms...`);
+
+    await new Promise(resolve =&gt; setTimeout(resolve, delay));
+
+    try {
+      await this.connectionManager.joinRoom(this.roomId);
+      this.reconnectAttempts = 0; // リセット
+      console.log(&#39;[Reconnected] Successfully&#39;);
+    } catch (err) {
+      console.error(&#39;[Reconnect Error]&#39;, err);
+      this.attemptReconnect(); // リトライ
+    }
+  }
+}
+</code></pre>
+<h4 id="62-バックアップサーバー">6.2 バックアップサーバー</h4>
+<p><strong>シグナリングサーバーの冗長化</strong>:</p>
+<pre><code class="language-typescript">const signalingServers = [
+  &#39;https://signaling1.orbitscore.com&#39;,
+  &#39;https://signaling2.orbitscore.com&#39;,
+  &#39;https://signaling3.orbitscore.com&#39;
+];
+
+let currentServerIndex = 0;
+
+function connectToSignalingServer(): Socket {
+  const socket = io(signalingServers[currentServerIndex]);
+
+  socket.on(&#39;connect_error&#39;, () =&gt; {
+    console.error(`[Signaling Server Error] ${signalingServers[currentServerIndex]}`);
+    currentServerIndex = (currentServerIndex + 1) % signalingServers.length;
+    console.log(`[Switching to Backup] ${signalingServers[currentServerIndex]}`);
+    socket.close();
+    return connectToSignalingServer(); // 次のサーバーに接続
+  });
+
+  return socket;
+}
+</code></pre>
+<p><strong>成果物</strong>: 安定した接続</p>
+<hr>
+<h3 id="phase-7-テストドキュメント推定-2-3日">Phase 7: テスト・ドキュメント（推定: 2-3日）</h3>
+<h4 id="71-テストシナリオ">7.1 テストシナリオ</h4>
+<p><strong>手動テスト</strong>:</p>
+<ul>
+<li><input disabled="" type="checkbox"> 2人でセッション作成・参加</li>
+<li><input disabled="" type="checkbox"> 3人で同時編集（コンフリクトなし）</li>
+<li><input disabled="" type="checkbox"> ホストが切断 → Backupが昇格</li>
+<li><input disabled="" type="checkbox"> ホストが再接続 → Memberとして参加</li>
+<li><input disabled="" type="checkbox"> 全員同時にコード実行 → 音が同期</li>
+<li><input disabled="" type="checkbox"> ネットワーク切断 → 自動再接続</li>
+</ul>
+<p><strong>負荷テスト</strong>:</p>
+<ul>
+<li><input disabled="" type="checkbox"> 10人同時接続</li>
+<li><input disabled="" type="checkbox"> 100行のコードを同時編集</li>
+<li><input disabled="" type="checkbox"> 5分間の連続セッション</li>
+</ul>
+<h4 id="72-ドキュメント">7.2 ドキュメント</h4>
+<p><strong>ファイル</strong>: <code>packages/vscode-extension-collab/README.md</code></p>
+<pre><code class="language-markdown"># OrbitScore Collaboration Extension
+
+P2P real-time collaboration for OrbitScore live coding.
+
+## Features
+- ✅ P2P connection (WebRTC)
+- ✅ Host migration (no single point of failure)
+- ✅ Real-time code sync (CRDT)
+- ✅ Cursor position sync
+- ✅ Code execution sync
+- ✅ Engine state sync
+
+## Installation
+```bash
+code --install-extension orbitscore-collab.vsix
+</code></pre>
+<h2 id="usage">Usage</h2>
+<h3 id="create-session-host">Create Session (Host)</h3>
+<ol>
+<li>Open Command Palette (Cmd+Shift+P)</li>
+<li>Run <code>OrbitScore: Create Collaboration Session</code></li>
+<li>Share Room ID with participants</li>
+</ol>
+<h3 id="join-session-guest">Join Session (Guest)</h3>
+<ol>
+<li>Open Command Palette (Cmd+Shift+P)</li>
+<li>Run <code>OrbitScore: Join Collaboration Session</code></li>
+<li>Enter Room ID</li>
+</ol>
+<h2 id="architecture">Architecture</h2>
+<ul>
+<li><strong>P2P</strong>: WebRTC (simple-peer)</li>
+<li><strong>CRDT</strong>: Yjs (conflict-free sync)</li>
+<li><strong>Signaling</strong>: Socket.IO server</li>
+</ul>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="connection-failed">Connection Failed</h3>
+<ul>
+<li>Check firewall settings</li>
+<li>Try different signaling server (automatic fallback)</li>
+</ul>
+<h3 id="audio-not-synced">Audio Not Synced</h3>
+<ul>
+<li>This is expected! Each user runs code on their own SuperCollider.</li>
+<li>Network latency: 10-50ms is normal.</li>
+</ul>
+<pre><code>
+**成果物**: 本番リリース可能な協調編集機能
+
+---
+
+## 📊 総推定工数
+
+| Phase | 内容 | 推定工数 | 難易度 |
+|-------|------|---------|--------|
+| Phase 1 | 基盤実装（P2P接続） | 1週間 | ⭐⭐⭐ |
+| Phase 2 | データ同期（CRDT） | 1週間 | ⭐⭐⭐⭐ |
+| Phase 3 | コード実行同期 | 3-5日 | ⭐⭐ |
+| Phase 4 | UI/UX実装 | 1週間 | ⭐⭐ |
+| **Phase 4.5** | **チャット・コメント機能** | **1週間** | **⭐⭐** |
+| Phase 5 | ホストマイグレーション | 3-5日 | ⭐⭐⭐⭐ |
+| Phase 6 | 安定性・エラーハンドリング | 3-5日 | ⭐⭐⭐ |
+| Phase 7 | テスト・ドキュメント | 2-3日 | ⭐ |
+| **合計** | | **約5-6週間** | |
+
+**実作業時間**: 約1.5-2ヶ月（1日4-6時間作業想定）
+
+---
+
+## 🎯 最小限の実装（MVP版）
+
+早期リリースが必要な場合、以下のスコープで **2-3週間** に短縮可能：
+
+### 含むもの（MVP）
+- ✅ Phase 1: P2P接続基盤
+- ✅ Phase 2: CRDT統合（基本同期）
+- ✅ Phase 3: コード実行同期
+- ✅ Phase 4: 最小限UI（Create/Join Session）
+- ✅ Phase 7: 基本テスト
+
+### 省略するもの（v1.1以降に延期）
+- ❌ ホストマイグレーション → ホストが落ちたらセッション終了
+- ❌ カーソル位置表示 → テキスト同期のみ
+- ❌ 自動再接続 → 手動で再接続
+- ❌ バックアップサーバー → 単一シグナリングサーバー
+
+**MVP版の制約**:
+- ホストが切断したらセッション終了（再作成が必要）
+- ネットワーク不安定時に再接続が必要
+
+---
+
+## ⚠️ 注意点・課題
+
+### 1. オーディオ同期の考え方
+
+**❌ 間違ったアプローチ**:
+音声ストリームをネットワーク経由で送信
+- ネットワーク遅延でリズムがずれる
+- 帯域幅が必要
+- エコーが発生
+
+**✅ 正しいアプローチ**:
+各自のSuperColliderで同じコードを実行
+- コード実行イベントのみ同期（軽量）
+- 各自のローカルで音を生成
+- ネットワーク遅延: 10-50ms程度（許容範囲内）
+
+**結果**: 全員がほぼ同期した音楽体験を得る
+
+### 2. OrbitScore利用時の制約
+
+**問題**: OrbitScoreはリアルタイム音声生成ツールなので、ネットワーク遅延の影響を受ける
+
+**対策**:
+- **コード実行の遅延**: 10-50ms（許容範囲内、人間は気づかない）
+- **エディタ編集の遅延**: CRDT（Y.js）により最小化（1-10ms）
+
+**Live ShareやOpen Collaboration toolsとの比較**:
+- Live Share: エディタ同期のみ、OrbitScoreエンジン状態は非同期
+- OrbitScore Collab: **エディタ + エンジン状態 + コード実行**を全て同期
+
+### 3. シグナリングサーバーの運用
+
+**コスト**:
+- 無料PaaS（Heroku, Railway, Render）で月$0-7
+- 有料サーバー（Linode, DigitalOcean）で月$5-10
+
+**スケーラビリティ**:
+- 1サーバーで100-200同時セッション対応可能
+- 負荷が高い場合は複数サーバーに分散
+
+**代替案**: P2P完全版（シグナリングサーバー不要）
+- WebRTC + STUN/TURNサーバー
+- NAT traversal問題（実装が複雑）
+- 初期リリースでは見送り、将来的に検討
+
+### 4. NAT/ファイアウォール問題
+
+**問題**: 企業ネットワークや厳格なファイアウォール環境ではP2P接続が失敗する
+
+**解決策**: TURNサーバー経由でリレー
+- TURN: STUN/TURN無料サービス（Google STUN, Twilio TURN等）
+- コスト: 無料版で十分（月10GB以下）
+
+**設定**:
+```typescript
+const peer = new SimplePeer({
+  initiator,
+  trickle: false,
+  config: {
+    iceServers: [
+      { urls: &#39;stun:stun.l.google.com:19302&#39; },
+      {
+        urls: &#39;turn:turn.example.com:3478&#39;,
+        username: &#39;user&#39;,
+        credential: &#39;pass&#39;
+      }
+    ]
+  }
+});
+</code></pre>
+<h3 id="5-セキュリティ">5. セキュリティ</h3>
+<p><strong>脅威</strong>:</p>
+<ul>
+<li>悪意のあるユーザーが部屋に侵入</li>
+<li>任意コード実行（SuperCollider経由）</li>
+</ul>
+<p><strong>対策</strong>:</p>
+<ul>
+<li>セッションIDは128bit UUID（推測困難）</li>
+<li>部屋にパスワード設定（オプション）</li>
+<li>ホストがユーザーをKick可能</li>
+<li>コード実行は各自のSuperColliderで（サンドボックス）</li>
+</ul>
+<hr>
+<h2 id="️-重要な設計上の注意点追加指摘への対応">⚠️ 重要な設計上の注意点（追加指摘への対応）</h2>
+<h3 id="1-音の排他制御">1. 音の排他制御</h3>
+<p><strong>問題</strong>: 複数人が同時に音を出すと、同じ音が重複して爆音になる</p>
+<p><strong>解決策</strong>: 3つの音声出力モードを実装（Phase 3.2参照）</p>
+<ul>
+<li><strong>Individual Mode</strong> (デフォルト): 自分が実行した音だけ出る</li>
+<li><strong>Host-Only Mode</strong>: ホストだけが音を出せる</li>
+<li><strong>Shared Mode</strong>: 全員が異なるトラックを担当（上級者向け）</li>
+</ul>
+<p><strong>実装箇所</strong>: <code>src/sync/audio-output-mode.ts</code></p>
+<h3 id="2-スピーカー保護">2. スピーカー保護</h3>
+<p><strong>問題</strong>: 音が急に出る/止まるとスピーカーが破損する可能性</p>
+<p><strong>解決策</strong>: フェードイン/フェードアウト機能を実装（Phase 3.2参照）</p>
+<ul>
+<li>フェードイン: 50ms</li>
+<li>フェードアウト: 100ms</li>
+<li>SuperColliderのマスターボリュームを徐々に変化</li>
+</ul>
+<p><strong>適用シーン</strong>:</p>
+<ul>
+<li>ホストマイグレーション時</li>
+<li>音声出力モード切り替え時</li>
+<li>緊急停止時（Panic Button）</li>
+</ul>
+<p><strong>実装箇所</strong>: <code>src/audio/speaker-protection.ts</code></p>
+<h3 id="3-ホストマイグレーションの確認フロー">3. ホストマイグレーションの確認フロー</h3>
+<p><strong>問題</strong>: 勝手にホストが変わるとパフォーマンスが台無しになる</p>
+<p><strong>解決策</strong>: 3段階の安全な引き継ぎフロー（Phase 5.1参照）</p>
+<h4 id="ステップ1-ホスト切断検出-1">ステップ1: ホスト切断検出</h4>
+<ul>
+<li>ハートビート途絶（15秒）で検出</li>
+</ul>
+<h4 id="ステップ2-確認ダイアログ">ステップ2: 確認ダイアログ</h4>
+<ul>
+<li><strong>全メンバーに確認</strong>: &quot;Would you like to take over as the new host?&quot;</li>
+<li><strong>最初にOKした人</strong>が新ホストに昇格</li>
+<li>タイムアウト（30秒）→ 誰も応答しない場合はセッション終了</li>
+</ul>
+<h4 id="ステップ3-安全な引き継ぎ">ステップ3: 安全な引き継ぎ</h4>
+<ol>
+<li>旧ホストの音をフェードアウト</li>
+<li>状態同期確認</li>
+<li>新ホストの音をフェードイン</li>
+<li>全員に通知</li>
+</ol>
+<p><strong>実装箇所</strong>: <code>src/p2p/host-migration.ts</code></p>
+<h3 id="4-エラーハンドリング">4. エラーハンドリング</h3>
+<p><strong>ケース1: 複数人が同時に「Yes」を押した</strong></p>
+<ul>
+<li>最初にメッセージを送信した人が優先（タイムスタンプで判定）</li>
+</ul>
+<p><strong>ケース2: 新ホストも直後に切断した</strong></p>
+<ul>
+<li>再度確認フローを開始（最大3回まで）</li>
+<li>3回失敗したらセッション終了</li>
+</ul>
+<p><strong>ケース3: 音がフェードアウト中に新しいコードが実行された</strong></p>
+<ul>
+<li>フェードアウト完了まで実行をキューに溜める</li>
+<li>フェードイン後に実行</li>
+</ul>
+<hr>
+<h2 id="-拡張アイデア将来版">🤔 拡張アイデア（将来版）</h2>
+<h3 id="v15-ボイスチャット統合">v1.5: ボイスチャット統合</h3>
+<ul>
+<li>WebRTC音声通話</li>
+<li>コラボレーション中に会話可能</li>
+</ul>
+<h3 id="v20-セッション録画再生">v2.0: セッション録画・再生</h3>
+<ul>
+<li>全編集履歴を記録</li>
+<li>タイムライン再生（教育用）</li>
+</ul>
+<h3 id="v25-ai-assistant統合">v2.5: AI Assistant統合</h3>
+<ul>
+<li>コード補完・提案をリアルタイム共有</li>
+<li>AIが音楽理論的アドバイスを提供</li>
+</ul>
+<hr>
+<h2 id="-開発開始手順">🚀 開発開始手順</h2>
+<p>このプランを実行する場合、以下の手順で開始します：</p>
+<h3 id="1-issue作成">1. Issue作成</h3>
+<pre><code class="language-bash">gh issue create \
+  --title &quot;P2P協調ライブコーディング機能開発&quot; \
+  --body &quot;$(cat docs/COLLABORATION_FEATURE_PLAN.md)&quot; \
+  --label &quot;enhancement,collaboration,p2p&quot;
+</code></pre>
+<h3 id="2-ブランチ作成">2. ブランチ作成</h3>
+<pre><code class="language-bash">git checkout main
+git pull origin main
+git checkout -b &lt;issue-number&gt;-p2p-collaboration
+</code></pre>
+<h3 id="3-パッケージ初期化">3. パッケージ初期化</h3>
+<pre><code class="language-bash">cd packages
+mkdir vscode-extension-collab
+cd vscode-extension-collab
+
+npm init -y
+
+npm install --save-dev \
+  @types/vscode@^1.99.0 \
+  typescript@^5.9.0
+
+npm install \
+  simple-peer@^9.11.1 \
+  socket.io-client@^4.5.0 \
+  yjs@^13.6.0 \
+  y-webrtc@^10.2.5 \
+  uuid@^9.0.0 \
+  eventemitter3@^5.0.0
+</code></pre>
+<h3 id="4-シグナリングサーバー構築">4. シグナリングサーバー構築</h3>
+<pre><code class="language-bash">cd packages
+mkdir collab-signaling-server
+cd collab-signaling-server
+
+npm init -y
+npm install express socket.io
+
+# server.ts作成（上記Phase 1.2参照）
+</code></pre>
+<h3 id="5-phase-1実装開始">5. Phase 1実装開始</h3>
+<pre><code class="language-bash"># P2P接続マネージャー実装
+touch src/p2p/connection-manager.ts
+
+# 開発開始！
+</code></pre>
+<hr>
+<h2 id="-関連ドキュメント">📚 関連ドキュメント</h2>
+<ul>
+<li><strong>Electron版アプリ</strong>: <code>docs/ELECTRON_APP_PLAN.md</code></li>
+<li><strong>DSL仕様</strong>: <code>docs/INSTRUCTION_ORBITSCORE_DSL.md</code></li>
+<li><strong>プロジェクトルール</strong>: <code>docs/PROJECT_RULES.md</code></li>
+<li><strong>実装計画</strong>: <code>docs/IMPLEMENTATION_PLAN.md</code></li>
+</ul>
+<hr>
+<h2 id="-次のアクション">🎯 次のアクション</h2>
+<p><strong>推奨実装順序</strong>:</p>
+<ol>
+<li><strong>Electron版アプリ</strong> (2.5-4週間) - UI/UXの基盤</li>
+<li><strong>P2P協調機能</strong> (4-5週間) - コラボレーション環境</li>
+</ol>
+<p><strong>理由</strong>:</p>
+<ul>
+<li>Electron版で安定したエディタ基盤を構築</li>
+<li>その上に協調機能を追加する方が効率的</li>
+<li>VS Code Extension版で協調機能のプロトタイプ実装も可能</li>
+</ul>
+<hr>
+<p><strong>このプランに関する質問や提案があれば、Issue/PRで議論してください。</strong></p>
+
+</main>
+</body>
+</html>

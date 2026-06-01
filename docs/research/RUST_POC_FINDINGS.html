@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research: Rust Audio Engine PoC (Issue #91) の初期所感 — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="research-rust-audio-engine-poc-issue-91-の初期所感">Research: Rust Audio Engine PoC (Issue #91) の初期所感</h1>
+<p><strong>調査日</strong>: 2026-04-17
+<strong>ブランチ</strong>: <code>91-rust-engine-poc</code>
+<strong>関連 Issue</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/91">#91</a></p>
+<h2 id="調査目的">調査目的</h2>
+<p>Rust + <code>cpal</code> + <code>symphonia</code> で最小の「WAV ロード → 時間軸スケジュール → デスクトップ再生」が現実的に実装できるかを確認する。これが通れば、Phase 2（本実装）に進む判断材料となる。</p>
+<h2 id="実装サマリ">実装サマリ</h2>
+<p><code>rust/</code> 配下に単一 crate（<code>orbitscore-engine</code>）を新設。モジュール構成:</p>
+<ul>
+<li><code>core/</code> — プラットフォーム非依存の <code>Engine</code> / <code>Sample</code> / <code>Scheduler</code></li>
+<li><code>native/</code> — <code>cpal</code> 経由の出力ストリームと <code>symphonia</code> デコーダ（<code>feature = &quot;native&quot;</code>）</li>
+<li><code>wasm/</code> — <code>wasm-bindgen</code> / <code>AudioWorklet</code> のスタブ（<code>feature = &quot;wasm&quot;</code>、将来のウェブ版 &quot;OrbitScore Lite&quot; 向け予約）</li>
+</ul>
+<p>Cargo features により <code>native</code> と <code>wasm</code> を排他的に選べる設計。デフォルトは <code>native</code>。</p>
+<h2 id="実行結果">実行結果</h2>
+<pre><code>$ cd rust &amp;&amp; cargo run --example poc_play -- ../test-assets/audio/kick.wav ../test-assets/audio/snare.wav
+loading ../test-assets/audio/kick.wav
+loading ../test-assets/audio/snare.wav
+  [0] sr=48000, ch=1, frames=24000, dur=0.500s
+  [1] sr=48000, ch=1, frames=9600, dur=0.200s
+output stream: sr=48000, ch=36
+done
+</code></pre>
+<ul>
+<li><code>symphonia</code> が OrbitScore の test-assets の WAV を正しくデコード</li>
+<li><code>cpal</code> のデフォルト出力デバイス（開発機は 36ch のインターフェース）でストリームが確立</li>
+<li>スケジューラが 500ms 間隔で kick / snare をラウンドロビン再生（6 秒間）</li>
+<li>クラッシュ / メモリリーク / パニック無し</li>
+</ul>
+<h2 id="発見知見">発見・知見</h2>
+<h3 id="1-デバイス構成に依存しない-api-設計">1. デバイス構成に依存しない API 設計</h3>
+<p>当初は <code>Engine::new(48_000, 2)</code> のように固定 config でエンジンを作っていたが、実機の <code>default_output_config</code> が 36ch を返す環境では出力が破綻した。</p>
+<p><code>start_default_output() -&gt; (Engine, OutputStream)</code> という形で、<strong>cpal のデバイス config に合わせて Engine を構築</strong>する API に変更。呼び出し側は config ミスマッチを意識しなくてよくなった。</p>
+<h3 id="2-モノラル--マルチチャンネル出力の扱い">2. モノラル → マルチチャンネル出力の扱い</h3>
+<p>scheduler の <code>render</code> で、出力チャンネル数が入力（モノラル）より多い場合は最後のチャンネルを繰り返す単純な duplicate 戦略を採った。本実装では <code>panLaw</code> や空間音響を考慮する必要がある（Phase 2 以降）。</p>
+<h3 id="3-symphonia-のサンプル形式正規化">3. symphonia のサンプル形式正規化</h3>
+<p><code>AudioBufferRef</code> が F32 / S16 / S32 / U8 など複数型を返す。各型を <code>f32 [-1.0, 1.0]</code> に正規化する boilerplate が必要。汎用ヘルパー（<code>append_interleaved</code>）を用意して処理を集約した。</p>
+<h3 id="4-コンパイル時間">4. コンパイル時間</h3>
+<p>初回フルビルド（cpal + symphonia + 依存）で約 17 秒（ノート PC）。インクリメンタルは 0.3 秒程度。許容範囲内。</p>
+<h3 id="5-cfgfeature--wasm-でのコード分離">5. <code>cfg(feature = &quot;wasm&quot;)</code> でのコード分離</h3>
+<p>WASM ビルドでは <code>cpal</code>, <code>symphonia</code> が不要。<code>dep:</code> プレフィックスで optional にすることで、<code>wasm</code> フィーチャだけ有効な時はこれらを引き込まないことを確認。実際の WASM ビルドは別 Issue（Phase 3）で検証。</p>
+<h2 id="known-limitationspoc-スコープ外">Known Limitations（PoC スコープ外）</h2>
+<h3 id="サンプリング周波数変換src未対応">サンプリング周波数変換（SRC）未対応</h3>
+<p>現状の scheduler はソース WAV と出力デバイスの SR が一致するときのみ正しく再生できる。異なる場合はピッチとテンポがずれる。</p>
+<table>
+<thead>
+<tr>
+<th>条件</th>
+<th>挙動</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>48kHz source + 48kHz output</td>
+<td>✅ 正しい（PoC が動いた条件）</td>
+</tr>
+<tr>
+<td>44.1kHz source + 48kHz output</td>
+<td>❌ 約 8.8% 早く再生（半音弱ピッチアップ）</td>
+</tr>
+<tr>
+<td>96kHz source + 48kHz output</td>
+<td>❌ 倍速再生（1 オクターブアップ）</td>
+</tr>
+</tbody></table>
+<p>対応 Issue: <a href="https://github.com/signalcompose/orbitscore/issues/100">#100 sample rate conversion on sample load</a></p>
+<h3 id="業界-daw-の-src-ハンドリング調査結果">業界 DAW の SRC ハンドリング（調査結果）</h3>
+<table>
+<thead>
+<tr>
+<th>DAW</th>
+<th>タイミング</th>
+<th>備考</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Pro Tools</td>
+<td><strong>オフライン（インポート時）</strong></td>
+<td>最高品質、&quot;conversion quality&quot; オプション</td>
+</tr>
+<tr>
+<td>Logic Pro</td>
+<td>オフライン（設定による）</td>
+<td>インポート時変換</td>
+</tr>
+<tr>
+<td>Ableton Live</td>
+<td>リアルタイム再生時</td>
+<td>SoX Resampler を採用していると言及されている（一次ソース未検証）</td>
+</tr>
+<tr>
+<td>Reaper</td>
+<td>リアルタイム再生時</td>
+<td>異なる SR の混在に柔軟</td>
+</tr>
+<tr>
+<td>Bitwig Studio</td>
+<td>リアルタイム再生時</td>
+<td>-</td>
+</tr>
+</tbody></table>
+<p>業界共通の<strong>ベストプラクティス</strong>は「プロジェクト SR を固定し、素材は事前変換」。</p>
+<h3 id="orbitscore-の選択-pro-tools--logic-pro-方式">OrbitScore の選択: Pro Tools / Logic Pro 方式</h3>
+<p>ライブコーディング用途では:</p>
+<ul>
+<li>サンプルは事前ロード（ストリーミングではない）</li>
+<li>低レイテンシ最重要</li>
+<li>繰り返し再生</li>
+</ul>
+<p>→ <strong>ロード時に <code>rubato</code> (MIT) で Project SR に変換</strong>するのが、品質・レイテンシ・実装容易性のバランスが最良。</p>
+<h2 id="次の検討事項">次の検討事項</h2>
+<p>本 PoC のスコープ外、次に詰めるべき論点:</p>
+<ol>
+<li><strong>サンプリング周波数変換</strong>（Issue #100）— <code>rubato</code> によるロード時 SRC</li>
+<li><strong>タイムストレッチ DSP</strong>（Issue #92）— SoundTouch vs Rubato vs 独自実装</li>
+<li><strong>ポリリズム / ポリメーター表現</strong>（scheduler の時間軸抽象化）</li>
+<li><strong>DSL パーサの統合</strong>（現行 TS エンジンの <code>interpreter</code> 部分を Rust に移植する経路）</li>
+<li><strong>リアルタイム性</strong>（現在は <code>Mutex</code> で単純同期、ロックフリー化を検討）</li>
+<li><strong>IPC プロトコル</strong>（Issue #93）— Node 側フロントエンドとの通信設計</li>
+</ol>
+<h2 id="結論">結論</h2>
+<p><strong>Rust 化は技術的に十分現実的</strong>。
+PoC のコード量はおよそ 300 行強で、cpal + symphonia のエコシステムが想像以上に成熟していた。Phase 2（本実装）に進めるだけの地固めは完了。</p>
+<p>WASM 対応を初日から意識した feature 分離もスムーズで、将来の &quot;OrbitScore Lite&quot; ウェブ版への道が確保できている。</p>
+<h2 id="成果物">成果物</h2>
+<ul>
+<li><code>rust/</code> Cargo プロジェクト一式</li>
+<li><code>rust/examples/poc_play.rs</code> — 実行可能な PoC</li>
+<li>本ドキュメント</li>
+</ul>
+
+</main>
+</body>
+</html>

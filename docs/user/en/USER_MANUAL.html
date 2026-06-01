@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore User Manual — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-user-manual">OrbitScore User Manual</h1>
+<p><strong>Version</strong>: 3.0 (Audio-Based DSL)
+<strong>Last Updated</strong>: 2025-10-26</p>
+<h2 id="table-of-contents">Table of Contents</h2>
+<ul>
+<li><a href="#introduction">Introduction</a></li>
+<li><a href="#installation">Installation</a></li>
+<li><a href="#basic-usage">Basic Usage</a></li>
+<li><a href="#dsl-syntax-guide">DSL Syntax Guide</a></li>
+<li><a href="#transport-control">Transport Control</a></li>
+<li><a href="#advanced-features">Advanced Features</a></li>
+<li><a href="#troubleshooting">Troubleshooting</a></li>
+</ul>
+<h2 id="introduction">Introduction</h2>
+<p>OrbitScore is an audio-based live coding DSL (Domain Specific Language) for modern music production. It allows you to manipulate audio files in real-time with features like time-stretching, audio slicing, and polymeter support.</p>
+<h3 id="features">Features</h3>
+<ul>
+<li><strong>Real-time Audio Playback</strong>: 0-2ms latency with SuperCollider</li>
+<li><strong>Audio Slicing</strong>: Divide audio files into equal parts with <code>.chop(n)</code></li>
+<li><strong>Live Coding</strong>: Execute code with Cmd+Enter in VS Code/Cursor/Claude Code</li>
+<li><strong>Polymeter Support</strong>: Independent time signatures per sequence</li>
+<li><strong>Method Chaining</strong>: Fluent API for readable code</li>
+</ul>
+<h2 id="installation">Installation</h2>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li>macOS (primary support)</li>
+<li>Node.js v22.0.0+</li>
+<li>SuperCollider</li>
+<li>VS Code / Cursor / Claude Code</li>
+</ul>
+<h3 id="supercollider-installation">SuperCollider Installation</h3>
+<p><strong>macOS</strong>:</p>
+<pre><code class="language-bash">brew install --cask supercollider
+</code></pre>
+<p><strong>Linux</strong>:</p>
+<pre><code class="language-bash">sudo apt-get install supercollider
+</code></pre>
+<p><strong>Windows</strong>:
+Download from <a href="https://supercollider.github.io/">SuperCollider official site</a></p>
+<h3 id="orbitscore-installation">OrbitScore Installation</h3>
+<pre><code class="language-bash"># Clone repository
+git clone https://github.com/yourusername/orbitscore.git
+cd orbitscore
+
+# Build engine
+cd packages/engine
+npm install
+npm run build
+
+# Build VS Code extension (optional)
+cd ../vscode-extension
+npm install
+npm run build
+</code></pre>
+<h3 id="synthdef-setup">SynthDef Setup</h3>
+<pre><code class="language-bash"># Stop existing sclang processes
+pkill sclang
+
+# Build SynthDefs (macOS)
+cd packages/engine/supercollider
+./build-synthdefs.sh
+
+# Verify success message
+# ✅ All SynthDefs saved! should appear
+</code></pre>
+<h2 id="basic-usage">Basic Usage</h2>
+<h3 id="your-first-program">Your First Program</h3>
+<p>Create a file <code>hello.orbs</code>:</p>
+<pre><code class="language-osc">// Initialize global context
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath(&quot;../test-assets/audio&quot;)
+global.start()
+
+// Create kick sequence
+var kick = init global.seq
+kick.audio(&quot;kick.wav&quot;)
+kick.play(1, 0, 1, 0)
+
+// Run kick
+LOOP(kick)
+</code></pre>
+<h3 id="execution">Execution</h3>
+<h4 id="in-vs-code--cursor--claude-code">In VS Code / Cursor / Claude Code</h4>
+<ol>
+<li>Select code lines</li>
+<li>Press <strong>Cmd+Enter</strong> (Mac) or <strong>Ctrl+Enter</strong> (Linux/Windows)</li>
+<li>Audio will start playing</li>
+</ol>
+<h4 id="in-cli">In CLI</h4>
+<pre><code class="language-bash">cd packages/engine
+npm run cli -- path/to/your/file.orbs
+</code></pre>
+<h2 id="dsl-syntax-guide">DSL Syntax Guide</h2>
+<h3 id="1-initialization">1. Initialization</h3>
+<h4 id="global-context">Global Context</h4>
+<pre><code class="language-osc">var global = init GLOBAL
+</code></pre>
+<p>Creates the global context that manages tempo, time signature, and scheduler.</p>
+<h4 id="sequence-creation">Sequence Creation</h4>
+<pre><code class="language-osc">var kick = init global.seq
+var snare = init global.seq
+</code></pre>
+<p>Creates sequences that inherit global settings.</p>
+<h3 id="2-global-parameters">2. Global Parameters</h3>
+<h4 id="tempo">Tempo</h4>
+<pre><code class="language-osc">global.tempo(120)    // Set to 120 BPM
+global._tempo(140)   // Apply immediately during playback
+</code></pre>
+<h4 id="time-signature-beat">Time Signature (Beat)</h4>
+<pre><code class="language-osc">global.beat(4 by 4)   // 4/4 time signature
+global.beat(7 by 8)   // 7/8 time signature
+</code></pre>
+<h4 id="audio-file-base-path">Audio File Base Path</h4>
+<pre><code class="language-osc">global.audioPath(&quot;./audio&quot;)           // Relative path
+global.audioPath(&quot;/absolute/path&quot;)    // Absolute path
+</code></pre>
+<h3 id="3-sequence-parameters">3. Sequence Parameters</h3>
+<h4 id="audio-file-loading">Audio File Loading</h4>
+<pre><code class="language-osc">kick.audio(&quot;kick.wav&quot;)                // Load audio file
+bass.audio(&quot;bass.wav&quot;).chop(8)        // Load and divide into 8 slices
+</code></pre>
+<h4 id="play-pattern">Play Pattern</h4>
+<pre><code class="language-osc">// Basic pattern (0 = rest, 1-n = play slice)
+kick.play(1, 0, 1, 0)
+
+// With audio slicing
+bass.chop(4)
+bass.play(1, 2, 3, 4)  // Play slices 1, 2, 3, 4 in order
+
+// Nested patterns
+hihat.play(1, (2, 3), 1, (4, 5, 6))
+</code></pre>
+<h4 id="time-signature-and-length">Time Signature and Length</h4>
+<pre><code class="language-osc">// Sequence-specific time signature
+poly.beat(5 by 4)     // 5/4 polymeter
+
+// Loop length in bars
+seq.length(2)         // Loop every 2 bars
+</code></pre>
+<h4 id="gain-and-pan-control">Gain and Pan Control</h4>
+<pre><code class="language-osc">// Set initial gain/pan (before playback)
+kick.defaultGain(-6)  // -6 dB
+kick.defaultPan(50)   // Pan right
+
+// Real-time control during playback
+kick.gain(-3)         // Apply immediately
+kick.pan(-50)         // Apply immediately
+</code></pre>
+<h3 id="4-method-chaining">4. Method Chaining</h3>
+<p>All methods return <code>this</code>, enabling fluent syntax:</p>
+<pre><code class="language-osc">var kick = init global.seq
+kick.audio(&quot;kick.wav&quot;).chop(4).play(1, 2, 3, 4).gain(-6)
+</code></pre>
+<h3 id="5-underscore-prefix-pattern">5. Underscore Prefix Pattern</h3>
+<p>Methods with <code>_</code> prefix apply changes immediately during playback:</p>
+<pre><code class="language-osc">// Normal: buffered, applied at next cycle
+kick.tempo(140)
+
+// Underscore: immediate application
+kick._tempo(140)
+kick._play(1, 1, 1, 1)
+kick._chop(8)
+</code></pre>
+<h2 id="transport-control">Transport Control</h2>
+<h3 id="reserved-keywords">Reserved Keywords</h3>
+<p>OrbitScore uses <strong>Unidirectional Toggle</strong> for transport control:</p>
+<h4 id="run---one-shot-playback">RUN() - One-shot Playback</h4>
+<pre><code class="language-osc">RUN(kick)              // Play kick once
+RUN(kick, snare)       // Play multiple sequences once
+RUN(kick, snare, hat)  // Variable arguments
+</code></pre>
+<h4 id="loop---loop-playback">LOOP() - Loop Playback</h4>
+<pre><code class="language-osc">LOOP(kick)             // Loop kick, auto-stop others
+LOOP(kick, snare)      // Loop kick and snare, stop others
+LOOP()                 // Stop all looping sequences
+</code></pre>
+<p><strong>Important</strong>: <code>LOOP()</code> automatically stops sequences not in the list.</p>
+<h4 id="mute---mute-flag">MUTE() - Mute Flag</h4>
+<pre><code class="language-osc">MUTE(kick)             // Mute kick (LOOP only, not RUN)
+MUTE(kick, snare)      // Mute multiple
+MUTE()                 // Unmute all
+</code></pre>
+<p><strong>Important</strong>: Mute flag persists across <code>LOOP()</code> changes.</p>
+<h3 id="why-no-stop-or-unmute">Why No STOP or UNMUTE?</h3>
+<ul>
+<li><strong>STOP is unnecessary</strong>: Use <code>LOOP(other_sequences)</code> to stop unwanted sequences</li>
+<li><strong>UNMUTE is unnecessary</strong>: Use <code>MUTE(other_sequences)</code> or <code>MUTE()</code> to unmute</li>
+</ul>
+<p>This design simplifies the DSL and makes state explicit.</p>
+<h3 id="example-workflow">Example Workflow</h3>
+<pre><code class="language-osc">// 1. Define sequences
+var kick = init global.seq
+kick.audio(&quot;kick.wav&quot;).play(1, 0, 1, 0)
+
+var snare = init global.seq
+snare.audio(&quot;snare.wav&quot;).play(0, 1, 0, 1)
+
+var hat = init global.seq
+hat.audio(&quot;hihat.wav&quot;).play(1, 1, 1, 1)
+
+// 2. Start global
+global.start()
+
+// 3. Loop kick
+LOOP(kick)
+
+// 4. Add snare to loop (kick continues)
+LOOP(kick, snare)
+
+// 5. Mute kick
+MUTE(kick)
+
+// 6. Unmute kick
+MUTE()
+
+// 7. Loop only snare (kick auto-stops)
+LOOP(snare)
+
+// 8. Stop all
+LOOP()
+</code></pre>
+<h2 id="advanced-features">Advanced Features</h2>
+<h3 id="polymeter">Polymeter</h3>
+<p>Different time signatures per sequence:</p>
+<pre><code class="language-osc">// 4/4 kick
+var kick = init global.seq
+kick.beat(4 by 4).audio(&quot;kick.wav&quot;).play(1, 0, 1, 0)
+
+// 5/4 sequence
+var poly5 = init global.seq
+poly5.beat(5 by 4).audio(&quot;synth.wav&quot;).play(1, 0, 0, 1, 0)
+
+// 7/8 sequence
+var poly7 = init global.seq
+poly7.beat(7 by 8).audio(&quot;hat.wav&quot;).play(1, 1, 0, 1, 1, 0, 1)
+
+// Loop all with independent timing
+LOOP(kick, poly5, poly7)
+</code></pre>
+<h3 id="audio-slicing-chop">Audio Slicing (Chop)</h3>
+<pre><code class="language-osc">// Divide into 8 slices
+bass.audio(&quot;bass.wav&quot;).chop(8)
+
+// Play slices in custom order
+bass.play(1, 0, 3, 0, 5, 0, 7, 0)
+
+// Reverse playback
+bass.play(8, 7, 6, 5, 4, 3, 2, 1)
+</code></pre>
+<h3 id="real-time-parameter-updates">Real-time Parameter Updates</h3>
+<pre><code class="language-osc">// Start looping
+LOOP(kick)
+
+// Change pattern (applies at next bar)
+kick.play(1, 1, 0, 1)
+
+// Change pattern immediately
+kick._play(1, 1, 1, 1)
+
+// Change tempo immediately
+global._tempo(140)
+</code></pre>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="no-audio-output">No Audio Output</h3>
+<p><strong>Check</strong>:</p>
+<ol>
+<li>SuperCollider is running</li>
+<li>Audio files exist in specified path</li>
+<li>System audio volume is up</li>
+<li>Correct audio device selected</li>
+</ol>
+<p><strong>Solution</strong>:</p>
+<pre><code class="language-bash"># Verify audio files
+ls -la test-assets/audio/*.wav
+
+# Check SuperCollider process
+ps aux | grep scsynth
+
+# Restart if needed
+global.stop()
+global.start()
+</code></pre>
+<h3 id="cmdenter-not-working">Cmd+Enter Not Working</h3>
+<p><strong>Check</strong>:</p>
+<ol>
+<li>File has <code>.orbs</code> extension</li>
+<li>VS Code extension is installed</li>
+<li>Extension is activated</li>
+</ol>
+<p><strong>Solution</strong>:</p>
+<ul>
+<li>Restart IDE</li>
+<li>Use Command Palette: &quot;OrbitScore: Run Selection&quot;</li>
+<li>Verify keybinding is registered</li>
+</ul>
+<h3 id="high-latency">High Latency</h3>
+<p><strong>Check</strong>:</p>
+<ol>
+<li>SuperCollider is properly configured</li>
+<li>Audio buffer sizes</li>
+<li>System audio settings</li>
+</ol>
+<p><strong>Solution</strong>:</p>
+<ul>
+<li>Reduce buffer sizes in SuperCollider</li>
+<li>Close other audio applications</li>
+<li>Check CPU usage</li>
+</ul>
+<h3 id="parser-errors">Parser Errors</h3>
+<p><strong>Common Errors</strong>:</p>
+<ul>
+<li>Missing parentheses in method calls</li>
+<li>Incorrect <code>by</code> syntax in time signatures</li>
+<li>Typos in keywords (<code>init</code>, <code>GLOBAL</code>, <code>RUN</code>, <code>LOOP</code>, <code>MUTE</code>)</li>
+</ul>
+<p><strong>Solution</strong>:</p>
+<ul>
+<li>Check error message for line number</li>
+<li>Verify syntax against examples</li>
+<li>Check for matching parentheses</li>
+</ul>
+<h2 id="see-also">See Also</h2>
+<ul>
+<li><a href="./GETTING_STARTED.html">Getting Started Guide</a> - Quick start guide</li>
+<li><a href="../../core/INSTRUCTION_ORBITSCORE_DSL.html">DSL Specification</a> - Complete language reference</li>
+<li><a href="../../testing/TESTING_GUIDE.html">Testing Guide</a> - Testing procedures</li>
+</ul>
+<hr>
+<p>For Japanese documentation, see <a href="../ja/USER_MANUAL.html">ユーザーマニュアル (日本語)</a>.</p>
+
+</main>
+</body>
+</html>

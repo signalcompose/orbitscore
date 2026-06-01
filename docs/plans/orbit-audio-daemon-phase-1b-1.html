@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan: orbit-audio-daemon Phase 1b-1 (scaffold + core commands) — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="plan-orbit-audio-daemon-phase-1b-1-scaffold--core-commands">Plan: orbit-audio-daemon Phase 1b-1 (scaffold + core commands)</h1>
+<p><strong>対象 Issue</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/107">#107</a>
+<strong>Epic</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/105">#105</a>
+<strong>前提</strong>: PR #110 (workspace split) + PR #111 (protocol spec) merged
+<strong>想定 effort</strong>: medium
+<strong>スコープ</strong>: 1 cycle で Phase 1b-1 を完結。Events / Stats は別 cycle (1b-2)</p>
+<hr>
+<h2 id="1-目的">1. 目的</h2>
+<p><code>docs/research/ENGINE_DAEMON_PROTOCOL.md</code> で定義した IPC protocol v0.1 のうち、<strong>サンプル再生に必要な最小 command 集合</strong>を実装する WebSocket daemon バイナリを新設する。</p>
+<hr>
+<h2 id="2-参照">2. 参照</h2>
+<ul>
+<li><code>docs/research/ENGINE_DAEMON_PROTOCOL.md</code> — 実装契約（必読）</li>
+<li><code>docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md</code> — 責務境界</li>
+<li><code>rust/crates/orbit-audio-native/</code> — 既存の音声 I/O 層（再利用）</li>
+</ul>
+<hr>
+<h2 id="3-スコープ">3. スコープ</h2>
+<h3 id="含む-phase-1b-1">含む (Phase 1b-1)</h3>
+<ul>
+<li><code>rust/crates/orbit-audio-daemon/</code> 新規 crate（binary）</li>
+<li><code>tokio</code> + <code>tokio-tungstenite</code> の async WebSocket server</li>
+<li>Startup シーケンス:<ul>
+<li>free port bind, stdout に <code>{&quot;ready&quot;: true, &quot;port&quot;: ..., &quot;protocol_version&quot;: &quot;0.1&quot;}</code> 出力</li>
+<li>失敗時 stderr + 非ゼロ exit</li>
+</ul>
+</li>
+<li>Handshake フレーム送出</li>
+<li>以下の Phase 1 commands を実装:<ul>
+<li><code>Ping</code> → <code>&quot;pong&quot;</code></li>
+<li><code>GetStatus</code> → 基本情報</li>
+<li><code>LoadSample { path }</code> → sample_id（orbit-audio-native::load_sample_resampled を使用）</li>
+<li><code>UnloadSample { sample_id }</code></li>
+<li><code>PlayAt { time_sec, sample_id, gain?, pan? }</code> → play_id</li>
+<li><code>Stop { play_id }</code> → status</li>
+<li><code>SetGlobalGain { value, ramp_sec? }</code></li>
+</ul>
+</li>
+<li>Engine 起動 (orbit-audio-native::start_default_output)</li>
+<li>エラー型を protocol の code に mapping</li>
+<li>最小 smoke test（内部 WS クライアントで往復確認）</li>
+</ul>
+<h3 id="含まない別-cycle-で">含まない（別 cycle で）</h3>
+<ul>
+<li>Events (PlayStarted / PlayEnded / StreamStats / DaemonError) — Phase 1b-2</li>
+<li>lock-free ringbuf 化（Phase 1b-1 は Mutex 経由で OK）</li>
+<li>Plugin 関連 command（Phase 2）</li>
+<li>TypeScript 側 client（Issue #108）</li>
+</ul>
+<hr>
+<h2 id="4-完了条件">4. 完了条件</h2>
+<ul>
+<li><input disabled="" type="checkbox"> <code>rust/crates/orbit-audio-daemon/</code> 新規 crate（<code>[[bin]]</code> target）</li>
+<li><input disabled="" type="checkbox"> <code>cargo check --workspace --all-targets</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo clippy --workspace --all-targets -- -D warnings</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo fmt --all --check</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo test --workspace --lib</code> 既存 17 tests 維持 + 新規 smoke test</li>
+<li><input disabled="" type="checkbox"> <code>cargo build --release --bin orbit-audio-daemon</code> 成功</li>
+<li><input disabled="" type="checkbox"> 手動動作確認:<ul>
+<li>daemon 起動 → stdout ready line 出力</li>
+<li>WebSocket 接続 → handshake frame 受信</li>
+<li><code>Ping</code> コマンド → <code>&quot;pong&quot;</code> Response</li>
+<li><code>LoadSample</code> + <code>PlayAt</code> コマンドで実機再生</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> workspace <code>Cargo.toml</code> の <code>members</code> に追加</li>
+</ul>
+<hr>
+<h2 id="5-実装方針">5. 実装方針</h2>
+<h3 id="crate-構成">Crate 構成</h3>
+<pre><code>rust/crates/orbit-audio-daemon/
+├── Cargo.toml
+└── src/
+    ├── main.rs          # main: tokio runtime, cli, 起動シーケンス
+    ├── server.rs        # WebSocket accept loop
+    ├── protocol.rs      # Command / Response / Event / Error の型
+    ├── session.rs       # 1 接続あたりの処理
+    └── engine_wrap.rs   # orbit-audio-native + 状態管理
+</code></pre>
+<h3 id="依存">依存</h3>
+<pre><code class="language-toml">[dependencies]
+orbit-audio-core = { path = &quot;../orbit-audio-core&quot; }
+orbit-audio-native = { path = &quot;../orbit-audio-native&quot; }
+tokio = { version = &quot;1&quot;, features = [&quot;rt-multi-thread&quot;, &quot;macros&quot;, &quot;sync&quot;, &quot;io-util&quot;, &quot;net&quot;] }
+tokio-tungstenite = &quot;0.24&quot;
+serde = { workspace = true, features = [&quot;derive&quot;] }
+serde_json = { workspace = true }
+uuid = { version = &quot;1&quot;, features = [&quot;v4&quot;] }
+thiserror = { workspace = true }
+tracing = { version = &quot;0.1&quot; }
+tracing-subscriber = { version = &quot;0.3&quot; }
+</code></pre>
+<p>workspace.dependencies への <code>serde</code> / <code>serde_json</code> / <code>uuid</code> / <code>tracing</code> / <code>tracing-subscriber</code> 追加も必要。</p>
+<h3 id="command--response-のシリアライズ">Command / Response のシリアライズ</h3>
+<ul>
+<li><code>#[derive(Serialize, Deserialize)]</code> + <code>#[serde(tag = &quot;method&quot;, content = &quot;params&quot;)]</code> で Command 判別</li>
+<li>UUID は <code>uuid::Uuid::new_v4().to_string()</code>（<code>id</code> マッチに使用）</li>
+</ul>
+<h3 id="state">State</h3>
+<ul>
+<li><code>Engine</code> と <code>loaded_samples: HashMap&lt;SampleId, Sample&gt;</code> と <code>active_plays: HashMap&lt;PlayId, ActivePlay&gt;</code> を Arc<Mutex> で wrap（PoC の簡略化）</li>
+<li>TS 側 CLose 時にクリーンアップ（drop_all samples / stop_all plays）</li>
+</ul>
+<h3 id="エラーマッピング">エラーマッピング</h3>
+<pre><code class="language-rust">impl From&lt;ResampleError&gt; for ProtocolError {
+    fn from(e: ResampleError) -&gt; Self { ... RESAMPLE_ERROR ... }
+}
+
+impl From&lt;LoaderError&gt; for ProtocolError {
+    // IO -&gt; FILE_DECODE_ERROR or SAMPLE_NOT_FOUND（std::io::ErrorKind::NotFound 判定）
+    // Decode -&gt; FILE_DECODE_ERROR
+    // Unsupported -&gt; UNSUPPORTED_FORMAT
+    // Resample(e) -&gt; e 経由
+}
+</code></pre>
+<h3 id="動作確認の-smoke-test">動作確認の smoke test</h3>
+<p><code>tests/smoke.rs</code> に integration test を配置。<code>tokio::main</code> で daemon を起動し、別タスクで WS クライアント接続、Ping を送って pong を受け取る。</p>
+<hr>
+<h2 id="6-ddd--ドキュメント更新">6. DDD / ドキュメント更新</h2>
+<ul>
+<li><input disabled="" type="checkbox"> <code>rust/README.md</code> の crate 一覧に <code>orbit-audio-daemon</code> を追加</li>
+<li><input disabled="" type="checkbox"> <code>docs/development/WORK_LOG.md</code> に 6.58 エントリを追加</li>
+<li><input disabled="" type="checkbox"> <code>docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md</code> Cargo workspace 節を実態に合わせて更新</li>
+</ul>
+<p><strong>DSL 仕様への言及はしない</strong>（実装を真実とする方針）。</p>
+<hr>
+<h2 id="7-検証項目">7. 検証項目</h2>
+<ul>
+<li><input disabled="" type="checkbox"> <code>cargo check --workspace --all-targets</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo clippy --workspace --all-targets -- -D warnings</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo fmt --all --check</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo test --workspace</code>: 既存 17 tests + 新規 smoke test 通過</li>
+<li><input disabled="" type="checkbox"> <code>cargo build --release --bin orbit-audio-daemon</code> 成功</li>
+<li><input disabled="" type="checkbox"> 手動: <code>cargo run --bin orbit-audio-daemon</code> → stdout ready → wscat でチェック</li>
+<li><input disabled="" type="checkbox"> 手動: LoadSample + PlayAt で実機音出し</li>
+</ul>
+<hr>
+<h2 id="8-非目標重要な再確認">8. 非目標（重要な再確認）</h2>
+<ul>
+<li><strong>Events (PlayStarted / PlayEnded / StreamStats / DaemonError) は未実装</strong>（Phase 1b-2）</li>
+<li><strong>lock-free ringbuf 化は未実装</strong>（Phase 1b-2 以降で必要になったとき）</li>
+<li><strong>DSL / interpreter / musical timing 不変</strong></li>
+<li><strong>TS クライアントは別 Issue #108</strong></li>
+<li><strong>Plugin 関連 command は Phase 2</strong></li>
+</ul>
+<hr>
+<h2 id="9-リスク">9. リスク</h2>
+<ul>
+<li><code>tokio-tungstenite</code> の version 選定。<code>0.24</code> で tokio <code>1</code> 系との互換性確認</li>
+<li>Audio callback (<code>cpal</code>) と WebSocket async runtime の cohabitation: cpal の callback は OS スレッドで動くので tokio 非依存、engine 状態を Arc<Mutex> で共有すれば問題なし</li>
+<li><code>serde</code> の <code>#[serde(tag = &quot;method&quot;)]</code> バリアント数が多いと macro 展開が長くなる → 問題になれば手書き impl に切替</li>
+</ul>
+<hr>
+<h2 id="10-次のステップ本-pr-merge-後">10. 次のステップ（本 PR merge 後）</h2>
+<ul>
+<li>Phase 1b-2: Events + StreamStats 実装</li>
+<li>Phase 1b-3: Issue #108 の TS client 着手</li>
+</ul>
+
+</main>
+</body>
+</html>

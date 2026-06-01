@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scsynth Bundle Manifest — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="scsynth-bundle-manifest">scsynth Bundle Manifest</h1>
+<p><strong>日付</strong>: 2026-04-23
+<strong>Last verified</strong>: 2026-04-23 (SC 3.14.1)
+<strong>対象 Issue</strong>: #134
+<strong>関連 Epic</strong>: #131 (v1.0 ICMC Ready Phase 1)
+<strong>前提</strong>: <a href="./SCSYNTH_STANDALONE.html">SCSYNTH_STANDALONE.md</a> で SC.app 外 standalone 起動検証済
+<strong>SC バージョン</strong>: SuperCollider 3.14.1 (Homebrew cask、universal binary)
+<strong>再検証トリガー</strong>: SC の Major/Minor bump 時 (section &quot;Update policy&quot; 参照)</p>
+<hr>
+<h2 id="目的">目的</h2>
+<p><code>.vsix</code> に同梱する最小セット (plugin / dylib) と配置構造を primary-source で確定する。下流 issue (#136 bundle 実装、#139 LICENSE 整備) の前提ドキュメント。</p>
+<hr>
+<h2 id="決定サマリ">決定サマリ</h2>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>決定</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Plugin 範囲</td>
+<td><strong>全 non-supernova 26 ファイル</strong> (5.1 MB)</td>
+<td>GPL-3.0 aggregation 性を強く保つ。選別 = &quot;改変&quot; 疑義。Sonic Pi 先例も全 plugin 同梱</td>
+</tr>
+<tr>
+<td>Architecture</td>
+<td><strong>universal (arm64 + x86_64) のまま</strong></td>
+<td>SC 公式 binary が既に universal。分離する利点なし</td>
+</tr>
+<tr>
+<td>dylib 範囲</td>
+<td><strong>libsndfile.dylib のみ</strong> (4.9 MB)</td>
+<td>scsynth の唯一の外部依存。<code>libfftw3f</code> は <strong>いずれの scx/scsynth も依存していないことを otool で確認</strong> → <strong>同梱しない</strong></td>
+</tr>
+<tr>
+<td>Bundle 配置</td>
+<td><code>packages/vscode-extension/engine/scsynth/Contents/{Resources,Frameworks}/</code></td>
+<td>scsynth の <code>@loader_path/../Frameworks/libsndfile.dylib</code> を壊さないため SC.app 同構造を保持</td>
+</tr>
+<tr>
+<td>抽出元</td>
+<td><strong>Homebrew cask <code>supercollider</code></strong> (推奨) / SC.app 公式 dmg (fallback)</td>
+<td>CI 自動化しやすい。個人マシンでも再現性高い</td>
+</tr>
+<tr>
+<td>Update policy</td>
+<td>Major/Minor bump のみ re-extract、Patch は据え置き</td>
+<td>実音 regression 通過版を昇格</td>
+</tr>
+</tbody></table>
+<p><strong>合計 bundle サイズ見込: ~11.5 MB</strong> (scsynth 1.5 MB + plugins 5.1 MB + libsndfile.dylib 4.9 MB)</p>
+<p>当初 plan の ~13 MB から <strong>libfftw3f 不要確定で 1.6 MB 削減</strong>。</p>
+<hr>
+<h2 id="synthdef--ugen-対応">SynthDef → UGen 対応</h2>
+<p><code>packages/engine/supercollider/setup.scd</code> に定義されている 4 SynthDef の使用 UGen:</p>
+<table>
+<thead>
+<tr>
+<th>SynthDef</th>
+<th>使用 UGen</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>orbitPlayBuf</code></td>
+<td><code>PlayBuf.ar</code>, <code>BufDur.kr</code>, <code>BufRateScale.kr</code>, <code>BufSampleRate.kr</code>, <code>Select.kr</code>, <code>EnvGen.kr</code>, <code>Env.linen</code>, <code>Pan2.ar</code>, <code>Out.ar</code></td>
+</tr>
+<tr>
+<td><code>fxCompressor</code></td>
+<td><code>In.ar</code>, <code>Compander.ar</code>, <code>ReplaceOut.ar</code></td>
+</tr>
+<tr>
+<td><code>fxLimiter</code></td>
+<td><code>In.ar</code>, <code>Limiter.ar</code>, <code>ReplaceOut.ar</code></td>
+</tr>
+<tr>
+<td><code>fxNormalizer</code></td>
+<td><code>In.ar</code>, <code>Normalizer.ar</code>, <code>ReplaceOut.ar</code></td>
+</tr>
+</tbody></table>
+<p>推定収録 plugin: <code>BufIO_UGens.scx</code> / <code>TriggerUGens.scx</code> (Select) / <code>LFUGens.scx</code> (EnvGen) / <code>IOUGens.scx</code> (In/Out/ReplaceOut) / <code>PanUGens.scx</code> (Pan2) / <code>FilterUGens.scx</code> (Compander/Limiter/Normalizer)。</p>
+<p>ただし個別 UGen が厳密にどの scx に収まるかは SC version で変動するため <strong>個別選別は行わない</strong>。#133 の E2E 検証 (orbitPlayBuf load + WAV 再生 /n_go→/n_end 成功) により、non-supernova 26 ファイル同梱で必要 UGen を全カバーすることを実証済。</p>
+<hr>
+<h2 id="non-supernova-plugin-一覧-26-ファイル51-mb">Non-supernova plugin 一覧 (26 ファイル、5.1 MB)</h2>
+<p>実測 (2026-04-23, SC 3.14.1):</p>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>ファイル</th>
+<th align="right">サイズ (bytes)</th>
+<th>想定収録 UGen</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>1</td>
+<td>BinaryOpUGens.scx</td>
+<td align="right">563,824</td>
+<td><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code> 等の二項演算</td>
+</tr>
+<tr>
+<td>2</td>
+<td>ChaosUGens.scx</td>
+<td align="right">167,760</td>
+<td>カオス系 noise</td>
+</tr>
+<tr>
+<td>3</td>
+<td>DelayUGens.scx</td>
+<td align="right">422,432</td>
+<td><code>DelayN</code>, <code>DelayL</code>, <code>CombC</code> 等</td>
+</tr>
+<tr>
+<td>4</td>
+<td>DemandUGens.scx</td>
+<td align="right">201,248</td>
+<td><code>Demand</code>, <code>Duty</code> 等</td>
+</tr>
+<tr>
+<td>5</td>
+<td>DemoUGens.scx</td>
+<td align="right">134,080</td>
+<td>サンプル UGen</td>
+</tr>
+<tr>
+<td>6</td>
+<td>DiskIO_UGens.scx</td>
+<td align="right">154,400</td>
+<td><code>DiskIn</code>, <code>DiskOut</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td>DynNoiseUGens.scx</td>
+<td align="right">84,656</td>
+<td>動的 noise</td>
+</tr>
+<tr>
+<td>8</td>
+<td>FFT_UGens.scx</td>
+<td align="right">203,904</td>
+<td><code>FFT</code>, <code>IFFT</code> (Accelerate.framework 経由、<strong>libfftw3f 非依存</strong>)</td>
+</tr>
+<tr>
+<td>9</td>
+<td>FilterUGens.scx</td>
+<td align="right">302,912</td>
+<td><code>Compander</code>, <code>Limiter</code>, <code>Normalizer</code> 等</td>
+</tr>
+<tr>
+<td>10</td>
+<td>GendynUGens.scx</td>
+<td align="right">134,048</td>
+<td><code>Gendy1</code> 等</td>
+</tr>
+<tr>
+<td>11</td>
+<td>GrainUGens.scx</td>
+<td align="right">233,664</td>
+<td><code>GrainBuf</code>, <code>GrainSin</code> 等</td>
+</tr>
+<tr>
+<td>12</td>
+<td>IOUGens.scx</td>
+<td align="right">168,672</td>
+<td><code>In</code>, <code>Out</code>, <code>ReplaceOut</code> 等</td>
+</tr>
+<tr>
+<td>13</td>
+<td>LFUGens.scx</td>
+<td align="right">237,776</td>
+<td><code>SinOsc</code>, <code>LFSaw</code>, <code>EnvGen</code> 等</td>
+</tr>
+<tr>
+<td>14</td>
+<td>ML_UGens.scx</td>
+<td align="right">251,888</td>
+<td><code>MFCC</code>, <code>Onsets</code> 等</td>
+</tr>
+<tr>
+<td>15</td>
+<td>MulAddUGens.scx</td>
+<td align="right">243,584</td>
+<td><code>MulAdd</code></td>
+</tr>
+<tr>
+<td>16</td>
+<td>NoiseUGens.scx</td>
+<td align="right">168,544</td>
+<td><code>WhiteNoise</code>, <code>PinkNoise</code> 等</td>
+</tr>
+<tr>
+<td>17</td>
+<td>OscUGens.scx</td>
+<td align="right">219,392</td>
+<td><code>Osc</code>, <code>COsc</code> 等</td>
+</tr>
+<tr>
+<td>18</td>
+<td>PanUGens.scx</td>
+<td align="right">168,112</td>
+<td><code>Pan2</code>, <code>Pan4</code>, <code>PanAz</code> 等</td>
+</tr>
+<tr>
+<td>19</td>
+<td>PhysicalModelingUGens.scx</td>
+<td align="right">84,416</td>
+<td><code>Spring</code> 等</td>
+</tr>
+<tr>
+<td>20</td>
+<td>PV_ThirdParty.scx</td>
+<td align="right">169,056</td>
+<td>Spectral 系</td>
+</tr>
+<tr>
+<td>21</td>
+<td>ReverbUGens.scx</td>
+<td align="right">150,608</td>
+<td><code>FreeVerb</code>, <code>GVerb</code> 等</td>
+</tr>
+<tr>
+<td>22</td>
+<td>TestUGens.scx</td>
+<td align="right">100,960</td>
+<td><code>CheckBadValues</code> 等</td>
+</tr>
+<tr>
+<td>23</td>
+<td>TriggerUGens.scx</td>
+<td align="right">187,904</td>
+<td><code>Trig</code>, <code>Select</code>, <code>Latch</code> 等</td>
+</tr>
+<tr>
+<td>24</td>
+<td>UIUGens.scx</td>
+<td align="right">136,464</td>
+<td>Keyboard/Mouse UGens</td>
+</tr>
+<tr>
+<td>25</td>
+<td>UnaryOpUGens.scx</td>
+<td align="right">256,272</td>
+<td><code>abs</code>, <code>neg</code>, <code>sin</code> 等</td>
+</tr>
+<tr>
+<td>26</td>
+<td>UnpackFFTUGens.scx</td>
+<td align="right">134,144</td>
+<td>Spectral 系</td>
+</tr>
+</tbody></table>
+<p>全ファイルは <strong>Mach-O universal binary (arm64 + x86_64)</strong>。</p>
+<p><code>_supernova.scx</code> suffix の 26 ファイル (multi-core scsynth 代替 &quot;supernova&quot; server 向け) は<strong>同梱しない</strong>。OrbitScore は <code>scsynth</code> のみを使用。</p>
+<hr>
+<h2 id="dylib-依存グラフ-otool-実測">dylib 依存グラフ (otool 実測)</h2>
+<h3 id="scsynth-の依存">scsynth の依存</h3>
+<pre><code>/Applications/SuperCollider.app/Contents/Resources/scsynth:
+  /usr/lib/libSystem.B.dylib                    ← macOS 標準
+  @loader_path/../Frameworks/libsndfile.dylib   ← ★同梱対象
+  /System/Library/Frameworks/CoreAudio          ← macOS 標準
+  /System/Library/Frameworks/Accelerate         ← macOS 標準
+  /System/Library/Frameworks/CoreServices       ← macOS 標準
+  /System/Library/Frameworks/Foundation         ← macOS 標準
+  /System/Library/Frameworks/AppKit             ← macOS 標準
+  /usr/lib/libobjc.A.dylib                      ← macOS 標準
+  /usr/lib/libc++.1.dylib                       ← macOS 標準
+  /System/Library/Frameworks/CFNetwork          ← macOS 標準
+  /System/Library/Frameworks/CoreFoundation     ← macOS 標準
+</code></pre>
+<h3 id="plugin-側の-dylib-依存">Plugin 側の dylib 依存</h3>
+<p>全 26 plugin を <code>otool -L | grep libfftw</code> で検索 → <strong>いずれも libfftw3f を参照せず</strong>。FFT_UGens.scx も <code>Accelerate.framework</code> の vDSP のみ使用。</p>
+<p>FFT_UGens.scx の依存 (代表):</p>
+<pre><code>/Applications/SuperCollider.app/Contents/Resources/plugins/FFT_UGens.scx:
+  /usr/lib/libSystem.B.dylib
+  /System/Library/Frameworks/Accelerate           ← FFT は Accelerate 経由
+  /usr/lib/libc++.1.dylib
+</code></pre>
+<p>→ <strong>libfftw3f.dylib は bundle 不要</strong>。元 plan の「同梱推奨」は撤回。</p>
+<h3 id="省く-dylib">省く dylib</h3>
+<ul>
+<li><strong>libfftw3f.dylib</strong>: 上記の通り誰も参照しない。macOS SC 3.14.1 は Accelerate を採用</li>
+<li><strong>libreadline.dylib</strong>: sclang (SC 言語コンパイラ) 専用で scsynth 非依存</li>
+<li><strong>Qt frameworks</strong>: SCIDE 専用、504 MB 相当を丸ごと省略</li>
+</ul>
+<hr>
+<h2 id="bundle-最終-manifest">Bundle 最終 manifest</h2>
+<pre><code>packages/vscode-extension/engine/scsynth/
+├── Contents/
+│   ├── Resources/
+│   │   ├── scsynth                         (1.5 MB, universal)
+│   │   └── plugins/
+│   │       ├── BinaryOpUGens.scx           (以下 26 ファイル計 5.1 MB)
+│   │       ├── ChaosUGens.scx
+│   │       ├── DelayUGens.scx
+│   │       ├── DemandUGens.scx
+│   │       ├── DemoUGens.scx
+│   │       ├── DiskIO_UGens.scx
+│   │       ├── DynNoiseUGens.scx
+│   │       ├── FFT_UGens.scx
+│   │       ├── FilterUGens.scx
+│   │       ├── GendynUGens.scx
+│   │       ├── GrainUGens.scx
+│   │       ├── IOUGens.scx
+│   │       ├── LFUGens.scx
+│   │       ├── ML_UGens.scx
+│   │       ├── MulAddUGens.scx
+│   │       ├── NoiseUGens.scx
+│   │       ├── OscUGens.scx
+│   │       ├── PanUGens.scx
+│   │       ├── PhysicalModelingUGens.scx
+│   │       ├── PV_ThirdParty.scx
+│   │       ├── ReverbUGens.scx
+│   │       ├── TestUGens.scx
+│   │       ├── TriggerUGens.scx
+│   │       ├── UIUGens.scx
+│   │       ├── UnaryOpUGens.scx
+│   │       └── UnpackFFTUGens.scx
+│   └── Frameworks/
+│       └── libsndfile.dylib                (4.9 MB, universal)
+├── LICENSE.GPL-3.0                          (#139 で整備)
+└── NOTICE                                   (#139 で整備、GPL 準拠 source URL 記載)
+</code></pre>
+<hr>
+<h2 id="抽出手順-再現可能">抽出手順 (再現可能)</h2>
+<h3 id="推奨-homebrew-cask-経由">推奨: Homebrew cask 経由</h3>
+<pre><code class="language-bash">#!/usr/bin/env bash
+set -euo pipefail
+
+SC_ROOT=&quot;/Applications/SuperCollider.app/Contents&quot;
+DEST=&quot;packages/vscode-extension/engine/scsynth/Contents&quot;
+
+# 1. SC install 確認 (fail-fast; 未導入なら Homebrew で install 試行)
+if ! [ -d /Applications/SuperCollider.app ]; then
+  echo &quot;SuperCollider.app not found. Attempting Homebrew install...&quot; &gt;&amp;2
+  brew install --cask supercollider
+fi
+if ! [ -f &quot;$SC_ROOT/Resources/scsynth&quot; ]; then
+  echo &quot;ERROR: scsynth binary not found at expected path&quot; &gt;&amp;2
+  echo &quot;  Expected: $SC_ROOT/Resources/scsynth&quot; &gt;&amp;2
+  exit 1
+fi
+if ! [ -f &quot;$SC_ROOT/Frameworks/libsndfile.dylib&quot; ]; then
+  echo &quot;ERROR: libsndfile.dylib not found&quot; &gt;&amp;2
+  exit 1
+fi
+
+# 2. ディレクトリ作成
+mkdir -p &quot;$DEST/Resources/plugins&quot; &quot;$DEST/Frameworks&quot;
+
+# 3. scsynth 本体
+cp &quot;$SC_ROOT/Resources/scsynth&quot; &quot;$DEST/Resources/scsynth&quot;
+
+# 4. plugins (non-supernova のみ)
+plugin_count=0
+for f in &quot;$SC_ROOT/Resources/plugins/&quot;*.scx; do
+  basename=$(basename &quot;$f&quot;)
+  if [[ &quot;$basename&quot; != *_supernova.scx ]]; then
+    cp &quot;$f&quot; &quot;$DEST/Resources/plugins/$basename&quot;
+    plugin_count=$((plugin_count + 1))
+  fi
+done
+if [ &quot;$plugin_count&quot; -ne 26 ]; then
+  echo &quot;ERROR: expected 26 non-supernova plugins, got $plugin_count&quot; &gt;&amp;2
+  echo &quot;  SC version may have added/removed plugins; update manifest doc.&quot; &gt;&amp;2
+  exit 1
+fi
+
+# 5. dylib (libsndfile のみ)
+cp &quot;$SC_ROOT/Frameworks/libsndfile.dylib&quot; &quot;$DEST/Frameworks/libsndfile.dylib&quot;
+
+# 6. 検証
+echo &quot;Bundle size:&quot;
+du -sh &quot;$DEST&quot;
+
+echo &quot;Architecture check (should show universal):&quot;
+file &quot;$DEST/Resources/scsynth&quot; | grep -E &quot;universal|arm64.*x86_64&quot; || {
+  echo &quot;ERROR: scsynth is not universal binary&quot; &gt;&amp;2
+  exit 1
+}
+
+echo &quot;Signature check (should be SC official, team HE5VJFE9E4):&quot;
+codesign --verify --verbose &quot;$DEST/Resources/scsynth&quot; 2&gt;&amp;1 | tail -3
+codesign -dv &quot;$DEST/Resources/scsynth&quot; 2&gt;&amp;1 | grep TeamIdentifier | grep -q HE5VJFE9E4 || {
+  echo &quot;ERROR: scsynth signature TeamIdentifier is not HE5VJFE9E4&quot; &gt;&amp;2
+  exit 1
+}
+echo &quot;OK: bundle prepared at $DEST&quot;
+</code></pre>
+<h3 id="fallback-scapp-discovery">Fallback: SC.app discovery</h3>
+<p>Homebrew 未導入 / 別 path にある場合:</p>
+<pre><code class="language-bash">SC_APP=$(
+  # Homebrew cask default
+  [ -d /Applications/SuperCollider.app ] &amp;&amp; echo /Applications/SuperCollider.app ||
+  # 旧 installer layout (念のため)
+  [ -d /Applications/SuperCollider/SuperCollider.app ] &amp;&amp; echo /Applications/SuperCollider/SuperCollider.app ||
+  # Spotlight 検索 (最終手段)
+  mdfind -name SuperCollider.app | head -1
+)
+</code></pre>
+<hr>
+<h2 id="update-policy">Update policy</h2>
+<table>
+<thead>
+<tr>
+<th>SC バージョン変動</th>
+<th>対応</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Major (3 → 4)</td>
+<td>Breaking 想定、full re-extract + 実音 regression 全通過まで保留</td>
+</tr>
+<tr>
+<td>Minor (3.14 → 3.15)</td>
+<td>re-extract、実音 regression 後に <code>.vsix</code> 昇格</td>
+</tr>
+<tr>
+<td>Patch (3.14.1 → 3.14.2)</td>
+<td><strong>即時追従しない</strong>。security fix 等 critical でなければ据え置き</td>
+</tr>
+</tbody></table>
+<p>SC 公式 release notes と <code>codesign -dv</code> Timestamp を定期 watch (~ quarterly)。</p>
+<hr>
+<h2 id="cold-install-verification-checklist-138-向け">Cold-install verification checklist (#138 向け)</h2>
+<p><code>.vsix</code> install 後の新規 Mac で以下を満たすこと:</p>
+<ul>
+<li><input disabled="" type="checkbox"> <code>scsynth</code> バイナリが <code>Contents/Resources/scsynth</code> に存在</li>
+<li><input disabled="" type="checkbox"> <code>plugins/</code> 配下に <strong>26 ファイル</strong> (non-supernova のみ) 存在、supernova variant は含まない</li>
+<li><input disabled="" type="checkbox"> <code>libsndfile.dylib</code> が <code>Contents/Frameworks/</code> に存在</li>
+<li><input disabled="" type="checkbox"> <code>scsynth</code> が実行権限付き (<code>-rwxr-xr-x</code> 等)</li>
+<li><input disabled="" type="checkbox"> <code>file</code> 出力が universal binary (arm64 + x86_64)</li>
+<li><input disabled="" type="checkbox"> <code>codesign --verify --verbose</code> が exit 0 で &quot;valid on disk&quot; + &quot;satisfies its Designated Requirement&quot; を stdout に含む</li>
+<li><input disabled="" type="checkbox"> <code>codesign -dv</code> の TeamIdentifier が <code>HE5VJFE9E4</code></li>
+<li><input disabled="" type="checkbox"> scsynth が standalone 起動 (<code>-u &lt;port&gt; -i 0</code>) 成功、<code>SuperCollider 3 server ready.</code> ログ出力</li>
+<li><input disabled="" type="checkbox"> OSC <code>/status</code> で <code>/status.reply</code> 受信</li>
+<li><input disabled="" type="checkbox"> <code>orbitPlayBuf.scsyndef</code> の <code>/d_recv</code> で <code>/done</code> 受信</li>
+<li><input disabled="" type="checkbox"> WAV <code>/b_allocRead</code> + <code>/s_new</code> で <code>/n_go</code> + <code>/n_end</code> 受信</li>
+</ul>
+<p>検証 script (再利用可): <a href="./scripts/verify-bundle.sh"><code>docs/research/scripts/verify-bundle.sh</code></a> として #136 実装時に整備。</p>
+<h3 id="失敗時の診断フロー">失敗時の診断フロー</h3>
+<table>
+<thead>
+<tr>
+<th>失敗箇所</th>
+<th>典型原因</th>
+<th>対応</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>項目 1-4 (ファイル配置)</td>
+<td>抽出 script の path 決定不良 / SC.app location 差異</td>
+<td>extract script 再実行、path 候補 fallback を追加</td>
+</tr>
+<tr>
+<td>項目 5-7 (codesign / TeamIdentifier)</td>
+<td>vsce packaging で LC_CODE_SIGNATURE 破損 / xattr 不正 stripping</td>
+<td>元 SC.app からの再抽出、vsce version 確認</td>
+</tr>
+<tr>
+<td>項目 8 (scsynth 起動失敗)</td>
+<td>ポート衝突 (default 57110)、権限不足、Gatekeeper 拒否</td>
+<td><code>lsof -i :57110</code> で占有確認 → 別ポートで再試行、<code>xattr -l</code> で quarantine 確認</td>
+</tr>
+<tr>
+<td>項目 9-11 (OSC round-trip 失敗)</td>
+<td>scsynth が boot 途中で crash / ファイアウォール</td>
+<td>scsynth stderr をキャプチャ、boot 完了を 10 秒 timeout で待機、失敗したら <code>scsynth -v</code> で verbose log 取得</td>
+</tr>
+</tbody></table>
+<p>タイムアウト目安 (#138 CI 向け):</p>
+<ul>
+<li>scsynth boot: <strong>10 秒</strong> (<code>SuperCollider 3 server ready.</code> 表示まで)</li>
+<li>OSC <code>/status</code> round-trip: <strong>2 秒</strong></li>
+<li><code>/d_recv</code> + <code>/b_allocRead</code> + <code>/s_new</code> → <code>/n_end</code>: <strong>5 秒</strong></li>
+</ul>
+<h2 id="136-実装時の注意点">#136 実装時の注意点</h2>
+<ol>
+<li><strong>ディレクトリ構造保持</strong>: <code>Contents/Resources/</code> + <code>Contents/Frameworks/</code> を崩すと scsynth の <code>@loader_path/../Frameworks/libsndfile.dylib</code> が解決失敗</li>
+<li><strong>Universal binary のまま同梱</strong>: <code>lipo -info &lt;binary&gt;</code> で arm64+x86_64 両方含まれること確認</li>
+<li><strong>permission</strong>: <code>chmod +x</code> で scsynth 実行権限が <code>.vsix</code> 展開後も残ること (zip は実行権限を保持する)</li>
+<li><strong>path resolution (<code>osc-client.ts</code>)</strong>: hardcode されている <code>/Applications/SuperCollider.app/...</code> を bundle 相対 path に差し替え、fallback として SC.app 検出ロジックを残す</li>
+<li><strong>GPL NOTICE</strong>: <code>LICENSE.GPL-3.0</code> と <code>NOTICE</code> は #139 で整備するが、bundle の隣に配置することは本 manifest の前提</li>
+</ol>
+<hr>
+<h2 id="関連ドキュメント">関連ドキュメント</h2>
+<ul>
+<li><a href="./SCSYNTH_STANDALONE.html">SCSYNTH_STANDALONE.md</a> — standalone 起動検証 (#133)</li>
+<li><a href="./CODESIGN_PIPELINE.html">CODESIGN_PIPELINE.md</a> — 署名戦略 (#135)</li>
+<li><a href="./ENGINE_DAEMON_PROTOCOL.html">ENGINE_DAEMON_PROTOCOL.md</a> — OSC protocol spec</li>
+<li><code>packages/engine/supercollider/setup.scd</code> — SynthDef 定義 (UGen inventory source)</li>
+<li><a href="https://github.com/supercollider/supercollider/releases/tag/Version-3.14.1">SuperCollider 3.14.1 Release</a> — corresponding source (GPL-3.0 §6)</li>
+</ul>
+
+</main>
+</body>
+</html>

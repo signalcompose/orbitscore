@@ -129,14 +129,14 @@ Closes #123"
 
 - **User documentation**: Located in `docs/user/` (bilingual: English and Japanese)
 - **Developer documentation**: Located in `docs/` (primarily Japanese)
-- **DSL specification**: [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) is the single source of truth
+- **DSL specification**: [`docs/core/INSTRUCTION_ORBITSCORE_DSL.html`](docs/core/INSTRUCTION_ORBITSCORE_DSL.html) is the single source of truth
 
 ### Documentation Updates
 
 If your change affects:
 - **User-facing features**: Update both English and Japanese user docs
 - **DSL syntax**: Update `INSTRUCTION_ORBITSCORE_DSL.md`
-- **Development workflow**: Update `docs/core/PROJECT_RULES.md`
+- **Development workflow**: Update `docs/core/PROJECT_RULES.html`
 
 ## Testing
 

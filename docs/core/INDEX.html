@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore Documentation Index — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-documentation-index">OrbitScore Documentation Index</h1>
+<p>OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider audio engine.</p>
+<p><strong>Current release</strong>: v1.1.1 (ICMC 2026 patch) — bundled scsynth, strict path resolver, automated release workflow, launch quantize (#212).
+<strong>Supported platforms</strong>: macOS (Apple Silicon, arm64) only. Intel macOS is untested. Windows / Linux is not supported in v1.x.</p>
+<hr>
+<h2 id="-top-level-entry-points">📚 Top-level entry points</h2>
+<ul>
+<li>🏠 <a href="../../README.md">README.md</a> — Project overview, install pointer, status table</li>
+<li>🛠️ <a href="../../CLAUDE.md">CLAUDE.md</a> — Claude Code session start guide</li>
+<li>📖 <a href="../user/ja/USER_MANUAL.html">USER_MANUAL.md (日本語)</a> — User manual (canonical, Japanese)</li>
+<li>🎵 <a href="INSTRUCTION_ORBITSCORE_DSL.html">INSTRUCTION_ORBITSCORE_DSL.md</a> — DSL specification (single source of truth, v3.0)</li>
+</ul>
+<hr>
+<h2 id="-core-docscore">🧭 Core (<code>docs/core/</code>)</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="INDEX.html">INDEX.md</a></td>
+<td>This file — top-level navigation</td>
+</tr>
+<tr>
+<td><a href="PROJECT_RULES.html">PROJECT_RULES.md</a></td>
+<td>Critical project rules — must-read before contributing</td>
+</tr>
+<tr>
+<td><a href="INSTRUCTION_ORBITSCORE_DSL.html">INSTRUCTION_ORBITSCORE_DSL.md</a></td>
+<td>DSL v3.0 specification — single source of truth</td>
+</tr>
+<tr>
+<td><a href="CONTEXT7_GUIDE.html">CONTEXT7_GUIDE.md</a></td>
+<td>Context7 (external library docs) usage</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="-development-docsdevelopment">🚧 Development (<code>docs/development/</code>)</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../development/WORK_LOG.html">WORK_LOG.md</a></td>
+<td>Recent development log (May 2026 onward; older entries archived by month)</td>
+</tr>
+<tr>
+<td><a href="../development/IMPLEMENTATION_PLAN.html">IMPLEMENTATION_PLAN.md</a></td>
+<td>Phase-by-phase technical roadmap</td>
+</tr>
+<tr>
+<td><a href="../development/BEAT_METER_SPECIFICATION.html">BEAT_METER_SPECIFICATION.md</a></td>
+<td>Beat / meter / polymeter specification</td>
+</tr>
+<tr>
+<td><a href="../development/DEV_LEARNING_SITE.html">DEV_LEARNING_SITE.md</a></td>
+<td>dev 学習サイト project brief + <code>vitepress-learning-site</code> skill 運用 overrides</td>
+</tr>
+<tr>
+<td><a href="../development/USER_LEARNING_SITE.html">USER_LEARNING_SITE.md</a></td>
+<td>user 学習サイト project brief + 執筆規律 overrides</td>
+</tr>
+</tbody></table>
+<h3 id="dev-learning-site-sitesdev">Dev Learning Site (<code>sites/dev/</code>)</h3>
+<p>dev 学習サイト本体 (VitePress、ローカル参照は <code>npm run -w sites/dev docs:dev</code>、deploy は post-ICMC で別 issue):</p>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../../sites/dev/"><code>sites/dev/</code></a></td>
+<td>dev 学習サイト VitePress プロジェクト、yamato 個人学習ノート</td>
+</tr>
+<tr>
+<td><a href="../../sites/dev/STYLE_GUIDE.md"><code>sites/dev/STYLE_GUIDE.md</code></a></td>
+<td>章執筆規約 (frontmatter / Sources / 次の深掘り候補 / shallow first pass)</td>
+</tr>
+<tr>
+<td><a href="../../sites/dev/orientation/architecture-overview.md"><code>sites/dev/orientation/architecture-overview.md</code></a></td>
+<td>spike 章 (0-2 アーキテクチャ全景)、status: draft</td>
+</tr>
+</tbody></table>
+<h3 id="user-learning-site-sitesuser">User Learning Site (<code>sites/user/</code>)</h3>
+<p>user 向け学習サイト本体 (VitePress、ローカル参照は <code>npm run -w sites/user docs:dev</code>、deploy はコンテンツ完了後に別 issue):</p>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../../sites/user/"><code>sites/user/</code></a></td>
+<td>user 学習サイト VitePress プロジェクト、初心者向け 10 章</td>
+</tr>
+<tr>
+<td><a href="../../sites/user/STYLE_GUIDE.md"><code>sites/user/STYLE_GUIDE.md</code></a></td>
+<td>章執筆規約 (ですます調、子供扱いしない、コードのみ)</td>
+</tr>
+<tr>
+<td><a href="../../sites/user/index.md"><code>sites/user/index.md</code></a></td>
+<td>章 1 「OrbitScore とは」 (landing 兼ねる)</td>
+</tr>
+</tbody></table>
+<h3 id="archived-work_log-docsarchive">Archived WORK_LOG (<code>docs/archive/</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>Period</th>
+<th>Archive</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>2025-09</td>
+<td><a href="../archive/WORK_LOG_2025-09.html">WORK_LOG_2025-09.md</a></td>
+</tr>
+<tr>
+<td>2025-10</td>
+<td><a href="../archive/WORK_LOG_2025-10.html">WORK_LOG_2025-10.md</a></td>
+</tr>
+<tr>
+<td>2026-02</td>
+<td><a href="../archive/WORK_LOG_2026-02.html">WORK_LOG_2026-02.md</a></td>
+</tr>
+<tr>
+<td>2026-04</td>
+<td><a href="../archive/WORK_LOG_2026-04.html">WORK_LOG_2026-04.md</a></td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="-testing-docstesting">🧪 Testing (<code>docs/testing/</code>)</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../testing/TESTING_GUIDE.html">TESTING_GUIDE.md</a></td>
+<td>Unit / integration test procedures</td>
+</tr>
+<tr>
+<td><a href="../testing/PERFORMANCE_TEST.html">PERFORMANCE_TEST.md</a></td>
+<td>Live coding performance benchmarks</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="-research-docsresearch">🔬 Research (<code>docs/research/</code>)</h2>
+<p>ICMC v1.x の bundle / signing / standalone 検証 (PR #155 で結論を実装に反映済):</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Status</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../research/SCSYNTH_BUNDLE_MANIFEST.html">SCSYNTH_BUNDLE_MANIFEST.md</a></td>
+<td>✅ Implemented (#136)</td>
+<td>scsynth bundle 構造、26 plugin 同梱</td>
+</tr>
+<tr>
+<td><a href="../research/SCSYNTH_STANDALONE.html">SCSYNTH_STANDALONE.md</a></td>
+<td>✅ Implemented (#133)</td>
+<td>scsynth standalone 起動検証</td>
+</tr>
+<tr>
+<td><a href="../research/CODESIGN_PIPELINE.html">CODESIGN_PIPELINE.md</a></td>
+<td>✅ Implemented (#135)</td>
+<td>macOS signing / notarize 戦略 (Apple Dev ID 不要)</td>
+</tr>
+<tr>
+<td><a href="../research/ENGINE_DAEMON_PROTOCOL.html">ENGINE_DAEMON_PROTOCOL.md</a></td>
+<td>📝 Draft</td>
+<td>Rust daemon IPC v0.1 (post-ICMC)</td>
+</tr>
+<tr>
+<td><a href="../research/RUST_POC_FINDINGS.html">RUST_POC_FINDINGS.md</a></td>
+<td>📝 PoC</td>
+<td>Rust audio engine 検証 (post-ICMC)</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="️-planning-docsplanning">🗺️ Planning (<code>docs/planning/</code>)</h2>
+<h3 id="current-active-for-v1x">Current (active for v1.x)</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../planning/ROADMAP_2026.html">ROADMAP_2026.md</a></td>
+<td>2026 ロードマップ (ICMC Hamburg 2026-05-10 〜 16 を含む)</td>
+</tr>
+<tr>
+<td><a href="../planning/IMPROVEMENT_RECOMMENDATIONS.html">IMPROVEMENT_RECOMMENDATIONS.md</a></td>
+<td>優先度付き改善提案</td>
+</tr>
+</tbody></table>
+<h3 id="post-icmc-deferred-until-after-icmc-2026">Post-ICMC (deferred until after ICMC 2026)</h3>
+<p><code>docs/planning/post-icmc/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../planning/post-icmc/COLLABORATION_FEATURE_PLAN.html">COLLABORATION_FEATURE_PLAN.md</a></td>
+<td>マルチユーザー協調機能設計</td>
+</tr>
+<tr>
+<td><a href="../planning/post-icmc/ELECTRON_APP_PLAN.html">ELECTRON_APP_PLAN.md</a></td>
+<td>スタンドアロン Electron アプリ計画</td>
+</tr>
+<tr>
+<td><a href="../planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.html">RUST_ENGINE_MIGRATION_PLAN.md</a></td>
+<td>Rust audio engine 移行ロードマップ</td>
+</tr>
+<tr>
+<td><a href="../planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.html">AUDIO_ENGINE_CORE_ARCHITECTURE.md</a></td>
+<td>3 層分離アーキテクチャ (Core / Plugins / App)</td>
+</tr>
+</tbody></table>
+<h3 id="short-term-implementation-plans-docsplans">Short-term implementation plans (<code>docs/plans/</code>)</h3>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../plans/orbit-audio-daemon-phase-1b-1.html">orbit-audio-daemon-phase-1b-1.md</a></td>
+<td>Rust daemon Phase 1b 実装計画</td>
+</tr>
+<tr>
+<td><a href="../plans/rust-audio-workspace-split.html">rust-audio-workspace-split.md</a></td>
+<td>Rust Cargo workspace 構造計画</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="-user-documentation-docsuser">👥 User documentation (<code>docs/user/</code>)</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><a href="../user/ja/USER_MANUAL.html">user/ja/USER_MANUAL.md</a></td>
+<td>日本語版ユーザーマニュアル (canonical)</td>
+</tr>
+<tr>
+<td><a href="../user/ja/GETTING_STARTED.html">user/ja/GETTING_STARTED.md</a></td>
+<td>日本語版スタートガイド</td>
+</tr>
+<tr>
+<td><a href="../user/en/USER_MANUAL.html">user/en/USER_MANUAL.md</a></td>
+<td>English user manual (bundle 反映 TODO)</td>
+</tr>
+<tr>
+<td><a href="../user/en/GETTING_STARTED.html">user/en/GETTING_STARTED.md</a></td>
+<td>English getting started</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="-archived-specifications-docsarchive">📦 Archived specifications (<code>docs/archive/</code>)</h2>
+<p>DSL 仕様の変遷 (論文執筆・研究用):</p>
+<table>
+<thead>
+<tr>
+<th>Version</th>
+<th>Document</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>v3.0 (current)</td>
+<td><a href="INSTRUCTION_ORBITSCORE_DSL.html">INSTRUCTION_ORBITSCORE_DSL.md</a></td>
+<td>✅ Active</td>
+</tr>
+<tr>
+<td>v1.0 (deprecated)</td>
+<td><a href="../archive/DSL_SPECIFICATION_v1.0_MIDI.html">archive/DSL_SPECIFICATION_v1.0_MIDI.md</a></td>
+<td>📚 Archived</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="-quick-links">🔗 Quick links</h2>
+<ul>
+<li><strong>Install / use</strong>: <a href="../user/ja/USER_MANUAL.html">USER_MANUAL.md</a></li>
+<li><strong>DSL syntax</strong>: <a href="INSTRUCTION_ORBITSCORE_DSL.html">INSTRUCTION_ORBITSCORE_DSL.md</a></li>
+<li><strong>Project rules</strong>: <a href="PROJECT_RULES.html">PROJECT_RULES.md</a></li>
+<li><strong>Recent dev log</strong>: <a href="../development/WORK_LOG.html">WORK_LOG.md</a></li>
+<li><strong>GitHub Releases (<code>.vsix</code> download)</strong>: <a href="https://github.com/signalcompose/orbitscore/releases">github.com/signalcompose/orbitscore/releases</a></li>
+<li><strong>Issue tracker</strong>: <a href="https://github.com/signalcompose/orbitscore/issues">github.com/signalcompose/orbitscore/issues</a></li>
+</ul>
+<hr>
+<p><em>Last updated: 2026-06-01 (v1.1.1 反映、docs を HTML 管理へ移行)</em></p>
+
+</main>
+</body>
+</html>

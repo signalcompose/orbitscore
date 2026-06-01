@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rust サウンドエンジン移行計画 — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="rust-サウンドエンジン移行計画">Rust サウンドエンジン移行計画</h1>
+<p><strong>ステータス</strong>: 構想段階（R&amp;D Issue 候補）
+<strong>最終更新</strong>: 2026-04-17
+<strong>関連 Issue</strong>: TBD（Rust 移行研究 Issue を別途作成予定）</p>
+<hr>
+<h2 id="1-背景と動機">1. 背景と動機</h2>
+<p>現在の OrbitScore は SuperCollider（<code>supercolliderjs</code>）をサウンドエンジンとして利用している。
+この構成には以下の課題がある:</p>
+<table>
+<thead>
+<tr>
+<th>課題</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>メンテナンス性</td>
+<td><code>supercolliderjs</code> の脆弱性（Dependabot 警告）、依存関係のパッチ運用</td>
+</tr>
+<tr>
+<td>パッケージサイズ</td>
+<td>VS Code 拡張の <code>.vsix</code> が 3.3 MB（ランタイム同梱のため）</td>
+</tr>
+<tr>
+<td>プラットフォーム制約</td>
+<td>デスクトップ限定、Web 展開不可</td>
+</tr>
+<tr>
+<td>拡張性</td>
+<td>VST3/CLAP 等の商用プラグインホスティング不可</td>
+</tr>
+<tr>
+<td>ライセンス</td>
+<td>SC のライセンス体系が商用配布と相性が悪い</td>
+</tr>
+</tbody></table>
+<p>同時に、以下の戦略目標が浮上している:</p>
+<ul>
+<li>商用プロダクト化（Steam / App Store / Gumroad 販売）</li>
+<li>Web 版デモによるユーザー獲得</li>
+<li>VST3/CLAP プラグインホスティング（DAW 統合、外部音源利用）</li>
+<li>LLM エージェント統合</li>
+</ul>
+<p>これらの目標を同時に実現するため、<strong>サウンドエンジンを Rust で再実装</strong>し、<strong>デーモン型アーキテクチャ</strong>へ移行する計画を立てる。</p>
+<hr>
+<h2 id="2-全体ロードマップ">2. 全体ロードマップ</h2>
+<h3 id="phase-0-脆弱性対応即座">Phase 0: 脆弱性対応（即座）</h3>
+<pre><code>・npm audit fix（非force）で SC 以外の脆弱性を解消
+・SC 関連の脆弱性は実質リスクが低く、将来的に置き換えるため手を出さない
+・Issue #73（リリース自動化）を完遂
+</code></pre>
+<h3 id="phase-1-技術検証-rd12ヶ月">Phase 1: 技術検証 R&amp;D（1〜2ヶ月）</h3>
+<pre><code>・Rust + Tauri の技術検証 Spike
+  └─ 「WAV 再生 + スケジューリング + cpal 出力」の PoC
+・タイムストレッチ方式の比較検証
+  └─ SoundTouch / Rubato / 独自 Phase Vocoder
+・DSL-to-Engine 通信プロトコルの設計
+  └─ WebSocket + JSON-RPC または MCP ライク
+</code></pre>
+<h3 id="phase-2-rust-エンジン本実装36ヶ月">Phase 2: Rust エンジン本実装（3〜6ヶ月）</h3>
+<pre><code>・Rust エンジン本実装（デーモン構造）
+・VS Code 拡張を「エンジンクライアント」として書き換え
+・既存テストスイート（220 tests）の移植
+・機能パリティ達成
+  └─ WAV/AIFF/MP3/MP4 デコード (symphonia)
+  └─ タイムストレッチ (SoundTouch 等)
+  └─ ポリメーター対応スケジューラ
+  └─ ゲイン・パン・ループ再生
+</code></pre>
+<h3 id="phase-3-スタンドアローンアプリ化23ヶ月">Phase 3: スタンドアローンアプリ化（2〜3ヶ月）</h3>
+<pre><code>・Tauri ベースのスタンドアローンアプリ開発
+・CodeMirror 6 エディタウィジェット組み込み
+・インストーラ（macOS DMG, Windows MSI, Linux AppImage）
+・v2.0 リリース
+</code></pre>
+<h3 id="phase-4-プラグイン拡張612ヶ月段階リリース">Phase 4: プラグイン拡張（6〜12ヶ月、段階リリース）</h3>
+<pre><code>v2.1: MIDI 出力（midir 経由、1〜2ヶ月）
+v2.2: CLAP ホスティング（clack-host、2〜3ヶ月）
+v2.3: VST3 ホスティング（vst3-sys、3〜4ヶ月）
+v3.0: Web 版（WAM: Web Audio Modules 対応）
+</code></pre>
+<hr>
+<h2 id="3-アーキテクチャ再フレーミング-engine-as-a-service">3. アーキテクチャ再フレーミング: Engine-as-a-Service</h2>
+<p>「VS Code 拡張 vs スタンドアローン」という二択ではなく、<strong>エンジンをデーモン化して複数フロントを持つ</strong>構造に統合する。</p>
+<pre><code>                    ┌───────────────────────────────┐
+                    │ orbitscore-engine (Rust バイナリ)│
+                    │ ・DSL Interpreter              │
+                    │ ・Audio I/O (cpal)            │
+                    │ ・Plugin Host (VST3/CLAP)     │
+                    │ ・Scheduler                    │
+                    │ ・WebSocket/gRPC API           │
+                    │ ・スタンドアロン実行 OK         │
+                    └───────────────┬───────────────┘
+                                    │ IPC (LSP-like protocol)
+            ┌───────────┬───────────┼───────────┬──────────┐
+            ▼           ▼           ▼           ▼          ▼
+       ┌────────┐  ┌────────┐  ┌────────┐ ┌────────┐ ┌────────┐
+       │ VS Code│  │ Tauri  │  │ Web    │ │ CLI    │ │ LLM    │
+       │ Ext    │  │ Standa-│  │ Editor │ │ Tool   │ │ Agent  │
+       │ (TS薄) │  │ lone   │  │ (将来) │ │        │ │ (MCP等)│
+       └────────┘  └────────┘  └────────┘ └────────┘ └────────┘
+</code></pre>
+<h3 id="この構造のメリット">この構造のメリット</h3>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>効果</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>VS Code 拡張を残せる</strong></td>
+<td>既存ユーザー・開発者向け UX を維持</td>
+</tr>
+<tr>
+<td><strong>スタンドアローンも実現</strong></td>
+<td>Tauri で 5〜10MB の軽量ネイティブアプリ</td>
+</tr>
+<tr>
+<td><strong>LLM 統合が自然</strong></td>
+<td>MCP サーバーやエージェント API を直接実装可能</td>
+</tr>
+<tr>
+<td><strong>プラグインホストが安定</strong></td>
+<td>VS Code プロセスと分離 → クラッシュ隔離</td>
+</tr>
+<tr>
+<td><strong>ファイルサイズ解決</strong></td>
+<td>拡張は数百 KB、エンジンは別プロセス</td>
+</tr>
+<tr>
+<td><strong>Web 版への道</strong></td>
+<td>同じ API を WebSocket で Web 版フロントに</td>
+</tr>
+<tr>
+<td><strong>単一コードベース</strong></td>
+<td>Rust コアを全フロントで共有</td>
+</tr>
+</tbody></table>
+<h3 id="実装スタック推奨">実装スタック推奨</h3>
+<table>
+<thead>
+<tr>
+<th>レイヤー</th>
+<th>技術</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Engine Core</td>
+<td>Rust</td>
+<td>性能、安全性、DSP 適性</td>
+</tr>
+<tr>
+<td>Engine API</td>
+<td>WebSocket + JSON-RPC / MCP</td>
+<td>LLM 統合と相性、デバッグ容易</td>
+</tr>
+<tr>
+<td>Standalone Shell</td>
+<td>Tauri</td>
+<td>Rust 直結、軽量、クロスプラットフォーム</td>
+</tr>
+<tr>
+<td>Editor Widget</td>
+<td>CodeMirror 6</td>
+<td>軽量、カスタマイズ容易</td>
+</tr>
+<tr>
+<td>VS Code Ext</td>
+<td>TypeScript（薄く）</td>
+<td>LSP 的にエンジンと通信するだけ</td>
+</tr>
+<tr>
+<td>インストーラ</td>
+<td><code>cargo-bundle</code> + GitHub Actions</td>
+<td>DMG / MSI / AppImage</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="4-重要な技術判断">4. 重要な技術判断</h2>
+<h3 id="41-タイムストレッチ実装最大のライセンス技術リスク">4.1 タイムストレッチ実装（最大のライセンス・技術リスク）</h3>
+<table>
+<thead>
+<tr>
+<th>選択肢</th>
+<th>品質</th>
+<th>ライセンス</th>
+<th>商用利用</th>
+<th>実装工数</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Rubber Band (GPL/商用)</td>
+<td>★★★★★</td>
+<td>GPL or 商用（有料）</td>
+<td>要ライセンス</td>
+<td>小（FFI）</td>
+</tr>
+<tr>
+<td><strong>SoundTouch (LGPL)</strong></td>
+<td>★★★★</td>
+<td>LGPL-2.1</td>
+<td>動的リンクで OK</td>
+<td>小（FFI）</td>
+</tr>
+<tr>
+<td>Rubato (Rust)</td>
+<td>★★★</td>
+<td>MIT</td>
+<td>◎</td>
+<td>中</td>
+</tr>
+<tr>
+<td>独自 Phase Vocoder</td>
+<td>調整次第</td>
+<td>自由</td>
+<td>◎</td>
+<td>大</td>
+</tr>
+</tbody></table>
+<p><strong>推奨</strong>: <strong>SoundTouch</strong> で開始。将来の差別化要因として独自実装を検討。
+Rubber Band の商用ライセンスは数千ドル単位で、OSS 戦略と相性が悪い。</p>
+<h3 id="42-rust-実装の現実的スコープ">4.2 Rust 実装の現実的スコープ</h3>
+<p>OrbitScore が SC に依存している機能は<strong>限定的</strong>:</p>
+<pre><code>必須（絶対移植）:
+├── WAV/AIFF/MP3/MP4 デコード (symphonia で解決)
+├── サンプル再生 + リング出力
+├── タイムストレッチ (SoundTouch/独自)
+├── ゲイン・パン
+└── ポリメーター対応のスケジューラ
+
+任意（後回し可）:
+├── リバーブ/ディレイ等の FX
+├── 合成シンセ
+└── 高度なルーティング
+</code></pre>
+<p><strong>12〜18 週の実装ボリューム</strong>で現状機能パリティに到達できる見込み。</p>
+<h3 id="43-vst3clap-ホスティング">4.3 VST3/CLAP ホスティング</h3>
+<table>
+<thead>
+<tr>
+<th>用途</th>
+<th>Rust crate</th>
+<th>備考</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>VST3 ホスト</td>
+<td><code>vst3-sys</code>, <code>nih-plug</code></td>
+<td><code>vst3-sys</code>: 低レベルバインディング、<code>nih-plug</code>: 高レベルホスト/プラグインフレームワーク</td>
+</tr>
+<tr>
+<td>CLAP ホスト</td>
+<td><code>clack-host</code></td>
+<td>CLAP は Rust 親和性が高い</td>
+</tr>
+<tr>
+<td>LV2 ホスト</td>
+<td><code>lv2-host</code> (Linux 中心)</td>
+<td>Linux ユーザー向け</td>
+</tr>
+<tr>
+<td>オーディオ I/O</td>
+<td><code>cpal</code></td>
+<td>クロスプラットフォーム</td>
+</tr>
+<tr>
+<td>MIDI ルーティング</td>
+<td><code>midir</code>, <code>coremidi</code></td>
+<td>デバイス・プラグイン間</td>
+</tr>
+</tbody></table>
+<p><strong>実装順序の推奨</strong>: MIDI → CLAP → VST3 → LV2
+（CLAP は API がクリーンなため、VST3 より先に設計パターンを固めやすい）</p>
+<h3 id="44-dsl-拡張イメージ">4.4 DSL 拡張イメージ</h3>
+<pre><code># MIDI
+sequence.midi([C4, E4, G4])
+  .device(&quot;Ableton via IAC&quot;)
+  .channel(1)
+  .cc(74, 0.8)
+
+# プラグイン (CLAP/VST3)
+sequence.plugin(&quot;Diva.clap&quot;)
+  .preset(&quot;Analog Lead 3&quot;)
+  .midi([C4, E4, G4])
+  .param(&quot;filter_cutoff&quot;, 0.7)
+  .automate(&quot;filter_cutoff&quot;, 0.3, 1.0, beats=8)
+
+# サイドチェイン・ルーティング
+kick.send_to(reverb, 0.5)
+bass.sidechain(kick, threshold=-20)
+</code></pre>
+<hr>
+<h2 id="5-戦略的意義">5. 戦略的意義</h2>
+<h3 id="51-競合との差別化">5.1 競合との差別化</h3>
+<table>
+<thead>
+<tr>
+<th>言語</th>
+<th>プラグインホスト</th>
+<th>シンセ</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>TidalCycles</td>
+<td>❌（SuperDirt 経由、VST 非対応）</td>
+<td>SC のみ</td>
+</tr>
+<tr>
+<td>Sonic Pi</td>
+<td>❌</td>
+<td>SC のみ</td>
+</tr>
+<tr>
+<td>Strudel</td>
+<td>❌</td>
+<td>WebAudio のみ</td>
+</tr>
+<tr>
+<td><strong>OrbitScore (将来)</strong></td>
+<td>✅ <strong>VST3/CLAP/LV2</strong></td>
+<td>Rust + 外部プラグイン</td>
+</tr>
+</tbody></table>
+<p><strong>「ライブコーディングで Serum や Kontakt を叩く」は現時点で事実上空白地帯</strong>。</p>
+<h3 id="52-商業展開パス">5.2 商業展開パス</h3>
+<pre><code>[現在]                    [将来]
+OrbitScore (VS Code)  →   OrbitScore (Rust core)
+                          ├─ VS Code Extension (無料 OSS)
+                          ├─ Web Editor (無料 Try)
+                          ├─ Standalone App (Steam/App Store 販売)
+                          ├─ DAW Plugin (VST3/CLAP 有料)
+                          └─ Mobile (iOS/Android 将来)
+</code></pre>
+<p>Signal compose Source-Available License により:</p>
+<ul>
+<li>ソースコードは公開（コミュニティ成長）</li>
+<li>販売される完成品は別 EULA（収益源）</li>
+<li>大規模商用利用は別途商用ライセンス要求</li>
+</ul>
+<hr>
+<h2 id="6-重要な意思決定ポイント">6. 重要な意思決定ポイント</h2>
+<p>これから決めるべき戦略変数:</p>
+<h3 id="61-ビジネス方針">6.1 ビジネス方針</h3>
+<ul>
+<li><input disabled="" type="checkbox"> 商用化の具体的時期（v2.0 / v3.0 / それ以降）</li>
+<li><input disabled="" type="checkbox"> 価格設定（Steam 販売価格、App Store 価格、商用ライセンス料金）</li>
+<li><input disabled="" type="checkbox"> モネタイゼーションモデル（買い切り / メジャーアップデート料金）</li>
+</ul>
+<h3 id="62-ターゲットユーザー">6.2 ターゲットユーザー</h3>
+<ul>
+<li><input disabled="" type="checkbox"> musician-coder（主に音楽家）向け: スタンドアローン優先</li>
+<li><input disabled="" type="checkbox"> coder-musician（主にプログラマ）向け: VS Code 拡張優先</li>
+<li><input disabled="" type="checkbox"> 両方同時対応（デーモン構造で可能）</li>
+</ul>
+<h3 id="63-チーム体制">6.3 チーム体制</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Rust + リアルタイム DSP 経験者の確保<ul>
+<li>採用 / 外部委託 / 自学（大和・森田・大石・池田）</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> 工数見積もりとタイムライン確定</li>
+</ul>
+<h3 id="64-予算">6.4 予算</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Rubber Band 商用ライセンス（数万〜数十万円）投資可否</li>
+<li><input disabled="" type="checkbox"> VST3 SDK 利用条件確認</li>
+<li><input disabled="" type="checkbox"> Apple Developer Program、Steam Publisher Fee 等の初期費用</li>
+</ul>
+<hr>
+<h2 id="7-次のアクション">7. 次のアクション</h2>
+<h3 id="完了済み">完了済み</h3>
+<ul>
+<li>✅ Dependabot 警告の安全な修正（Phase 0）— PR #90 (2026-04-17)</li>
+<li>✅ Research Issue 群の作成（下記）</li>
+<li>✅ ライセンス切り替え（MIT → Signal compose Source-Available License v1.0）— PR #88</li>
+<li>✅ Rust audio engine PoC — PR #99 (Issue #91)</li>
+<li>✅ Sample rate conversion on load via rubato — PR #103 (Issue #100)</li>
+<li>✅ 3-layer architecture 方針確定 — <a href="./AUDIO_ENGINE_CORE_ARCHITECTURE.html">docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md</a> (Epic #105)</li>
+</ul>
+<h3 id="進行中--次に取り組む">進行中 / 次に取り組む</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Issue #73: リリース自動化（エンドユーザー向け <code>.vsix</code> ワークフロー）</li>
+</ul>
+<h3 id="research--design-issuesphase-1-以降">Research / Design Issues（Phase 1 以降）</h3>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Issue #91: Rust audio engine proof of concept (PR #99 merged)</li>
+<li><input disabled="" type="checkbox"> Issue #92: <a href="https://github.com/signalcompose/orbitscore/issues/92">research: time-stretch DSP library selection for Rust engine</a> — Phase 2</li>
+<li><input disabled="" type="checkbox"> Issue #93: <a href="https://github.com/signalcompose/orbitscore/issues/93">design: engine daemon IPC protocol (WebSocket + JSON-RPC)</a> — Phase 1b</li>
+<li><input disabled="" type="checkbox"> Issue #94: <a href="https://github.com/signalcompose/orbitscore/issues/94">design: Tauri standalone application architecture</a> — Phase 3</li>
+<li><input disabled="" type="checkbox"> Issue #95: <a href="https://github.com/signalcompose/orbitscore/issues/95">research: VST3 and CLAP plugin hosting in Rust</a> — Phase 2</li>
+<li><input disabled="" type="checkbox"> Issue #96: <a href="https://github.com/signalcompose/orbitscore/issues/96">design: LLM agent integration architecture</a> — Phase 3</li>
+</ul>
+<h3 id="phase-1a--1b-実装-issues新規追加">Phase 1a / 1b 実装 Issues（新規追加）</h3>
+<ul>
+<li><input disabled="" type="checkbox"> Issue <a href="https://github.com/signalcompose/orbitscore/issues/105">#105 (Epic)</a> Audio Engine Core 3-layer architecture migration</li>
+<li><input disabled="" type="checkbox"> Issue <a href="https://github.com/signalcompose/orbitscore/issues/106">#106</a> feat(rust): Cargo workspace split for core/native/wasm separation — Phase 1a</li>
+<li><input disabled="" type="checkbox"> Issue <a href="https://github.com/signalcompose/orbitscore/issues/107">#107</a> feat(rust): orbit-audio-daemon binary with WebSocket IPC server — Phase 1b</li>
+<li><input disabled="" type="checkbox"> Issue <a href="https://github.com/signalcompose/orbitscore/issues/108">#108</a> feat(ts): rust-engine client replacing SuperCollider OSC path — Phase 1b</li>
+</ul>
+<h3 id="組織タスク">組織タスク</h3>
+<ul>
+<li><input disabled="" type="checkbox"> チーム合意形成（Signal compose ミーティングで議論）</li>
+<li><input disabled="" type="checkbox"> Rust + リアルタイム DSP 経験者の確保（採用 / 外部委託 / 自学）</li>
+<li><input disabled="" type="checkbox"> <code>license@signalcompose.com</code> メールアドレスのセットアップ（Google Workspace エイリアス等）</li>
+</ul>
+<hr>
+<h2 id="8-参考リンク">8. 参考リンク</h2>
+<ul>
+<li>Rust Audio エコシステム:<ul>
+<li><code>symphonia</code> (audio decoding): <a href="https://github.com/pdeljanov/Symphonia">https://github.com/pdeljanov/Symphonia</a></li>
+<li><code>cpal</code> (cross-platform audio I/O): <a href="https://github.com/RustAudio/cpal">https://github.com/RustAudio/cpal</a></li>
+<li><code>rubato</code> (resampling): <a href="https://github.com/HEnquist/rubato">https://github.com/HEnquist/rubato</a></li>
+<li><code>fundsp</code> (functional DSP): <a href="https://github.com/SamiPerttu/fundsp">https://github.com/SamiPerttu/fundsp</a></li>
+</ul>
+</li>
+<li>プラグインホスティング:<ul>
+<li><code>clack</code> (CLAP bindings): <a href="https://github.com/prokopyl/clack">https://github.com/prokopyl/clack</a></li>
+<li>VST3 SDK: <a href="https://steinbergmedia.github.io/vst3_doc/">https://steinbergmedia.github.io/vst3_doc/</a></li>
+</ul>
+</li>
+<li>Tauri: <a href="https://tauri.app/">https://tauri.app/</a></li>
+<li>Web Audio Modules (WAM): <a href="https://www.w3.org/community/webaudiomodules/">https://www.w3.org/community/webaudiomodules/</a></li>
+</ul>
+<hr>
+<p><strong>このロードマップは構想段階であり、実装に着手する前にチーム合意形成が必要。</strong></p>
+
+</main>
+</body>
+</html>

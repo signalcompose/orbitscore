@@ -4,7 +4,7 @@
 
 A new music production DSL focused on audio file manipulation, integrating time-stretching, pitch-shifting, and real-time transport control.
 
-> ⚠️ **Migration Notice**: The project is migrating from MIDI-based to audio-based DSL. See [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) for the new specification.
+> ⚠️ **Migration Notice**: The project is migrating from MIDI-based to audio-based DSL. See [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.html) for the new specification.
 
 ## Core Features (Audio-Based DSL v3.0)
 
@@ -81,7 +81,7 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 - ✅ Explicit scheduler control (no auto-start)
 - ✅ Polymeter support (independent time signatures per sequence)
 
-See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
+See [WORK_LOG.md](docs/development/WORK_LOG.html) for detailed resolution notes.
 
 ## Technology Stack
 
@@ -137,7 +137,7 @@ orbitscore/
 
 ### Completed Phases (Audio-Based Implementation)
 
-See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_PLAN.md) for details.
+See [`docs/development/IMPLEMENTATION_PLAN.html`](docs/development/IMPLEMENTATION_PLAN.html) for details.
 
 - ✅ **Phase 1-3** - Parser, Interpreter, Transport System
 - ✅ **Phase 4** - VS Code Extension (Syntax, Commands, IntelliSense)
@@ -171,20 +171,20 @@ See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_
 
 Project documentation is organized in the [`docs/`](docs/) folder:
 
-- 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.md) - Project rules (must-read)
-- 📝 [WORK_LOG.md](docs/development/WORK_LOG.md) - Development history
-- 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) - Language specification (Single Source of Truth)
-- 📖 [USER_MANUAL.md (日本語)](docs/user/ja/USER_MANUAL.md) - User manual (canonical, Japanese)
-- 🗺️ [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.md) - Implementation plan
-- 🧪 [TESTING_GUIDE.md](docs/testing/TESTING_GUIDE.md) - Testing guide
-- 📚 [INDEX.md](docs/core/INDEX.md) - Documentation index (overall structure)
+- 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.html) - Project rules (must-read)
+- 📝 [WORK_LOG.md](docs/development/WORK_LOG.html) - Development history
+- 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.html) - Language specification (Single Source of Truth)
+- 📖 [USER_MANUAL.md (日本語)](docs/user/ja/USER_MANUAL.html) - User manual (canonical, Japanese)
+- 🗺️ [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.html) - Implementation plan
+- 🧪 [TESTING_GUIDE.md](docs/testing/TESTING_GUIDE.html) - Testing guide
+- 📚 [INDEX.md](docs/core/INDEX.html) - Documentation index (overall structure)
 
 ### User Documentation (English/Japanese)
 
-- 📖 [User Manual (English)](docs/user/en/USER_MANUAL.md) - Coming soon
-- 📖 [ユーザーマニュアル (日本語)](docs/user/ja/USER_MANUAL.md) - Coming soon
-- 🚀 [Getting Started (English)](docs/user/en/GETTING_STARTED.md) - Coming soon
-- 🚀 [はじめに (日本語)](docs/user/ja/GETTING_STARTED.md) - Coming soon
+- 📖 [User Manual (English)](docs/user/en/USER_MANUAL.html) - Coming soon
+- 📖 [ユーザーマニュアル (日本語)](docs/user/ja/USER_MANUAL.html) - Coming soon
+- 🚀 [Getting Started (English)](docs/user/en/GETTING_STARTED.html) - Coming soon
+- 🚀 [はじめに (日本語)](docs/user/ja/GETTING_STARTED.html) - Coming soon
 
 ## Implemented Features (Audio-Based v3.0)
 

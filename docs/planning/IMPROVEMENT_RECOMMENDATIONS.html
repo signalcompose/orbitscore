@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore 改善提案書 — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-改善提案書">OrbitScore 改善提案書</h1>
+<h2 id="概要">概要</h2>
+<p>OrbitScore VS Code Live Coding Performance Testの結果に基づき、ライブコーディングパフォーマンスを向上させるための具体的な改善提案をまとめました。</p>
+<h2 id="緊急度別改善項目">緊急度別改善項目</h2>
+<h3 id="-緊急即座に実行">🔴 緊急（即座に実行）</h3>
+<h4 id="1-vs-code拡張のcmdenter機能テスト">1. VS Code拡張のCmd+Enter機能テスト</h4>
+<p><strong>問題</strong>: VS Code拡張のCmd+Enter機能が実際にテストされていない
+<strong>影響</strong>: ライブコーディングの核心機能が未検証
+<strong>解決策</strong>:</p>
+<pre><code class="language-bash"># VS Codeで拡張をインストールしてテスト
+code --install-extension packages/vscode-extension/orbitscore-0.0.1.vsix
+# examples/performance-test-simple.orbsを開いてCmd+Enterをテスト
+</code></pre>
+<h4 id="2-パーサーのコメント処理改善">2. パーサーのコメント処理改善</h4>
+<p><strong>問題</strong>: 複雑なコメント形式（<code>// =====</code>）でパーサーエラー
+<strong>影響</strong>: ユーザーが装飾的なコメントを使えない
+<strong>解決策</strong>:</p>
+<pre><code class="language-typescript">// packages/engine/src/parser/audio-parser.ts の改善
+private skipComment(): void {
+  while (!this.isEOF() &amp;&amp; this.currentChar() !== &#39;\n&#39;) {
+    this.advance()
+  }
+  // 改行もスキップ
+  if (!this.isEOF()) {
+    this.advance()
+  }
+}
+</code></pre>
+<h3 id="-高優先度1週間以内">🟡 高優先度（1週間以内）</h3>
+<h4 id="3-エラーハンドリングの強化">3. エラーハンドリングの強化</h4>
+<p><strong>問題</strong>: エラー後の回復機能が不十分
+<strong>影響</strong>: ライブコーディング中にエラーが発生すると全体が停止
+<strong>解決策</strong>:</p>
+<ul>
+<li>エラー発生時も他のシーケンスは継続再生</li>
+<li>より詳細なエラーメッセージ（行番号、文字位置、修正提案）</li>
+<li>エラーから自動回復する機能</li>
+</ul>
+<h4 id="4-パフォーマンス監視機能の追加">4. パフォーマンス監視機能の追加</h4>
+<p><strong>問題</strong>: CPU/メモリ使用量の詳細測定が不足
+<strong>影響</strong>: 長時間ライブコーディング時の安定性が不明
+<strong>解決策</strong>:</p>
+<pre><code class="language-typescript">// パフォーマンス監視クラスの追加
+class PerformanceMonitor {
+  private cpuUsage: number = 0
+  private memoryUsage: number = 0
+  
+  startMonitoring() {
+    setInterval(() =&gt; {
+      this.cpuUsage = process.cpuUsage().user / 1000000
+      this.memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024
+      console.log(`CPU: ${this.cpuUsage.toFixed(2)}%, Memory: ${this.memoryUsage.toFixed(2)}MB`)
+    }, 1000)
+  }
+}
+</code></pre>
+<h3 id="-中優先度1ヶ月以内">🟢 中優先度（1ヶ月以内）</h3>
+<h4 id="5-fixpitch機能の実装">5. fixpitch機能の実装</h4>
+<p><strong>問題</strong>: fixpitch機能がプレースホルダーのみ
+<strong>影響</strong>: ピッチを変えずにテンポ変更ができない
+<strong>解決策</strong>:</p>
+<ul>
+<li>WSOLA（Waveform Similarity Overlap-Add）アルゴリズムの実装</li>
+<li>またはRubber Bandライブラリの統合</li>
+</ul>
+<h4 id="6-より高品質なタイムストレッチ">6. より高品質なタイムストレッチ</h4>
+<p><strong>問題</strong>: 基本的なテンポ調整のみ
+<strong>影響</strong>: オーディオ品質が劣化する可能性
+<strong>解決策</strong>:</p>
+<ul>
+<li>高品質なタイムストレッチアルゴリズムの実装</li>
+<li>リアルタイム処理の最適化</li>
+</ul>
+<h4 id="7-複数オーディオフォーマットサポート">7. 複数オーディオフォーマットサポート</h4>
+<p><strong>問題</strong>: WAVのみ完全サポート、AIFF/MP3/MP4はプレースホルダー
+<strong>影響</strong>: ユーザーが様々なオーディオファイルを使えない
+<strong>解決策</strong>:</p>
+<ul>
+<li>FFmpegライブラリの統合</li>
+<li>各フォーマットの読み込み機能実装</li>
+</ul>
+<h3 id="-低優先度将来の改善">🔵 低優先度（将来の改善）</h3>
+<h4 id="8-ユーザビリティの向上">8. ユーザビリティの向上</h4>
+<p><strong>改善項目</strong>:</p>
+<ul>
+<li>より詳細なドキュメント</li>
+<li>インタラクティブなチュートリアル</li>
+<li>デモビデオの作成</li>
+<li>コミュニティフォーラムの設置</li>
+</ul>
+<h4 id="9-高度な機能の追加">9. 高度な機能の追加</h4>
+<p><strong>改善項目</strong>:</p>
+<ul>
+<li>オーディオエフェクト（リバーブ、ディストーション等）</li>
+<li>MIDI出力機能</li>
+<li>DAWプラグイン開発</li>
+<li>クラウド同期機能</li>
+</ul>
+<h2 id="技術的改善提案">技術的改善提案</h2>
+<h3 id="アーキテクチャの改善">アーキテクチャの改善</h3>
+<h4 id="1-モジュラー設計の強化">1. モジュラー設計の強化</h4>
+<pre><code class="language-typescript">// より柔軟なプラグインシステム
+interface AudioProcessor {
+  process(audio: AudioBuffer): AudioBuffer
+}
+
+class TimeStretchProcessor implements AudioProcessor {
+  constructor(private algorithm: &#39;WSOLA&#39; | &#39;PSOLA&#39; | &#39;PhaseVocoder&#39;) {}
+  process(audio: AudioBuffer): AudioBuffer {
+    // 実装
+  }
+}
+</code></pre>
+<h4 id="2-非同期処理の最適化">2. 非同期処理の最適化</h4>
+<pre><code class="language-typescript">// 非同期オーディオ処理の改善
+class AsyncAudioEngine {
+  private processingQueue: AudioTask[] = []
+  
+  async processAudio(task: AudioTask): Promise&lt;AudioBuffer&gt; {
+    return new Promise((resolve) =&gt; {
+      this.processingQueue.push(task)
+      // バックグラウンドで処理
+      setImmediate(() =&gt; this.processQueue())
+    })
+  }
+}
+</code></pre>
+<h3 id="パフォーマンス最適化">パフォーマンス最適化</h3>
+<h4 id="1-メモリ管理の改善">1. メモリ管理の改善</h4>
+<pre><code class="language-typescript">// オーディオバッファのプール管理
+class AudioBufferPool {
+  private pool: AudioBuffer[] = []
+  
+  getBuffer(size: number): AudioBuffer {
+    const buffer = this.pool.find(b =&gt; b.length === size)
+    return buffer || this.createBuffer(size)
+  }
+  
+  returnBuffer(buffer: AudioBuffer): void {
+    this.pool.push(buffer)
+  }
+}
+</code></pre>
+<h4 id="2-スケジューラーの最適化">2. スケジューラーの最適化</h4>
+<pre><code class="language-typescript">// より効率的なスケジューリング
+class OptimizedScheduler {
+  private eventHeap: PriorityQueue&lt;AudioEvent&gt; = new PriorityQueue()
+  
+  schedule(event: AudioEvent): void {
+    this.eventHeap.push(event)
+  }
+  
+  processEvents(): void {
+    const now = performance.now()
+    while (!this.eventHeap.isEmpty() &amp;&amp; this.eventHeap.peek().time &lt;= now) {
+      const event = this.eventHeap.pop()
+      this.executeEvent(event)
+    }
+  }
+}
+</code></pre>
+<h2 id="実装ロードマップ">実装ロードマップ</h2>
+<h3 id="phase-1-緊急修正1週間">Phase 1: 緊急修正（1週間）</h3>
+<ul>
+<li><input disabled="" type="checkbox"> VS Code拡張のCmd+Enterテスト</li>
+<li><input disabled="" type="checkbox"> パーサーのコメント処理修正</li>
+<li><input disabled="" type="checkbox"> 基本的なエラーハンドリング改善</li>
+</ul>
+<h3 id="phase-2-機能強化1ヶ月">Phase 2: 機能強化（1ヶ月）</h3>
+<ul>
+<li><input disabled="" type="checkbox"> fixpitch機能の実装</li>
+<li><input disabled="" type="checkbox"> パフォーマンス監視機能</li>
+<li><input disabled="" type="checkbox"> より詳細なエラーメッセージ</li>
+</ul>
+<h3 id="phase-3-品質向上3ヶ月">Phase 3: 品質向上（3ヶ月）</h3>
+<ul>
+<li><input disabled="" type="checkbox"> 高品質タイムストレッチ</li>
+<li><input disabled="" type="checkbox"> 複数オーディオフォーマットサポート</li>
+<li><input disabled="" type="checkbox"> 長時間実行テスト</li>
+</ul>
+<h3 id="phase-4-拡張機能6ヶ月">Phase 4: 拡張機能（6ヶ月）</h3>
+<ul>
+<li><input disabled="" type="checkbox"> オーディオエフェクト</li>
+<li><input disabled="" type="checkbox"> MIDI出力</li>
+<li><input disabled="" type="checkbox"> DAWプラグイン</li>
+</ul>
+<h2 id="成功指標">成功指標</h2>
+<h3 id="技術指標">技術指標</h3>
+<ul>
+<li><strong>レイテンシ</strong>: &lt; 10ms（現在: 2-4ms ✅）</li>
+<li><strong>CPU使用率</strong>: &lt; 20%（長時間実行時）</li>
+<li><strong>メモリ使用量</strong>: &lt; 100MB（複数シーケンス時）</li>
+<li><strong>エラー率</strong>: &lt; 1%（ライブコーディング中）</li>
+</ul>
+<h3 id="ユーザビリティ指標">ユーザビリティ指標</h3>
+<ul>
+<li><strong>学習時間</strong>: &lt; 30分（基本的な使い方）</li>
+<li><strong>セットアップ時間</strong>: &lt; 5分（初回使用時）</li>
+<li><strong>エラー回復時間</strong>: &lt; 5秒（エラー発生時）</li>
+</ul>
+<h2 id="結論">結論</h2>
+<p>OrbitScoreはライブコーディングに使用可能な状態にあり、提案された改善により機能と安定性が向上します。</p>
+<p><strong>最重要項目</strong>:</p>
+<ol>
+<li>VS Code拡張の実際のテスト</li>
+<li>パーサーの柔軟性向上</li>
+<li>エラーハンドリングの強化</li>
+</ol>
+<p>これらの改善により、OrbitScoreの実用性が向上します。</p>
+<h2 id="beatmeter-validation拍子記号の検証---将来的な改善">Beat/Meter Validation（拍子記号の検証 - 将来的な改善）</h2>
+<h3 id="概要-1">概要</h3>
+<p>現在は<code>beat(n1 by n2)</code>の分母（n2）に制限がありませんが、より厳密な音楽理論に基づいた制約を導入する予定です。</p>
+<h3 id="提案内容">提案内容</h3>
+<ul>
+<li><strong>分母を2のべき乗に制限</strong>: 1, 2, 4, 8, 16, 32, 64, 128のみ許可</li>
+<li><strong>理由</strong>: 音楽理論上の標準的な拍子記号に準拠（8/9などの非標準形を排除）</li>
+<li><strong><code>tempo()</code> → <code>bpm()</code>へのエイリアス追加</strong>: より直感的な名称で使いやすく</li>
+<li><strong>より厳密な小節長計算のテスト追加</strong>: ポリメーター機能の精度向上</li>
+</ul>
+<h3 id="詳細ドキュメント">詳細ドキュメント</h3>
+<p><a href="../development/BEAT_METER_SPECIFICATION.html">Beat/Meter Specification</a>を参照してください。</p>
+<hr>
+<p><em>この改善提案書は2024年12月25日のパフォーマンステスト結果に基づいています。</em></p>
+
+</main>
+</body>
+</html>
