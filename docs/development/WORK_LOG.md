@@ -43,6 +43,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **コンテンツ検証**: 変換後 HTML の可視テキストを元 Markdown と突き合わせ、差分 0.3〜1.7% (リンク URL・見出し id・title 等の正規化誤差範囲) で実質的なコンテンツ消失なしを確認。
 
+**追補2 (claude-review 指摘対応)**: PR #223 のレビュー指摘を受け、`docs/core/INDEX.html` に欠落していたアーカイブ `WORK_LOG_2026-05` 行を追加し、リンクの表示文字に残っていた `.md` 拡張子 38 件を href の実体 (`.html`) に整合 (アクティブ WORK_LOG は `.md` で text/href 一致)。CLAUDE.md の省略パス参照 (Additional Resources) は既に修正済みのため対応不要 (bot は古い状態をレビュー)。
+
 ---
 
 ### 6.89 Issue #221 — audioPath search resolution + sample bank lookup (May 10, 2026)
