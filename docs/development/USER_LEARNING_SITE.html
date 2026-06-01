@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User Learning Site — Project Brief  Skill Overrides — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="user-learning-site--project-brief--skill-overrides">User Learning Site — Project Brief &amp; Skill Overrides</h1>
+<p><strong>Status</strong>: Brief 確定 (2026-05-06)、初版 scaffold + 全章執筆は Issue #174 で対応
+<strong>Skill</strong>: <a href="../../.claude/skills/vitepress-learning-site/"><code>.claude/skills/vitepress-learning-site/</code></a> (yuichkun/.claude 由来、verbatim install、作者承諾済)
+<strong>Related Issue</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/174">#174</a> (本サイト構築)</p>
+<blockquote>
+<p><strong>用語</strong>: 本文書の「post-ICMC」は <strong>ICMC 2026 Hamburg (2026-05-10 〜 16)</strong> 開催以降を指す。</p>
+</blockquote>
+<hr>
+<h2 id="1-位置付け--なぜ作るか">1. 位置付け — なぜ作るか</h2>
+<h3 id="動機">動機</h3>
+<p>OrbitScore はライブコーディング音楽 DSL であり、ICMC で論文発表後に興味を持った人が試したくなる。そのとき:</p>
+<ul>
+<li>VS Code 拡張をインストールするだけで音は出せる</li>
+<li>だが「何を書けばどう鳴るか」「どの順序で覚えれば全体像をつかめるか」 が <code>.vsix</code> だけでは伝わらない</li>
+</ul>
+<p><code>docs/user/ja/USER_MANUAL.md</code> (741 行) は仕様書としては網羅的だが、<strong>仕様書を読み下せる読者層は限定的</strong>。初心者は手順 → 試す → わかる → 次の手順、というシーケンシャルな学習を求める。</p>
+<h3 id="応答としての本サイト">応答としての本サイト</h3>
+<p><code>sites/user/</code> を <strong>「やりたいこと → やり方」 順に再構成した usage-oriented リソース</strong> として整備する:</p>
+<ul>
+<li>章 1〜3: 「とにかく音を出す」 まで</li>
+<li>章 4〜8: 「自分の作りたい音楽を作る」 ための個別技法</li>
+<li>章 9〜10: リファレンス + トラブルシューティング</li>
+</ul>
+<p>トーンは ですます調、初心者の不安に寄り添う書き方で、<strong>しかし子供扱いはしない</strong>（「〜だよ！」「やってみよう！」 のような幼稚なトーンは避ける）。</p>
+<h3 id="single-source-of-truth-sot-階層">Single Source of Truth (SoT) 階層</h3>
+<pre><code>真の階層:
+  code             ← 実行レベルの真実 (動作の SoT)
+  DDD ドキュメント   ← 意図レベルの SoT (yamato が真実を保証)
+  user site        ← DDD 由来の derivative (本サイト、ユーザー読者向け)
+  dev learning site ← DDD 由来の derivative (実装学習用)
+</code></pre>
+<p><strong>重要</strong>: user サイトは <code>docs/user/ja/USER_MANUAL.md</code> および <code>docs/user/ja/GETTING_STARTED.md</code> を <strong>primary source として再構成</strong>する。code 直接引用は不要（dev サイトとはここが大きく異なる）。</p>
+<p>DSL 仕様の真実は <code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code>、ユーザー向け説明の真実は <code>docs/user/ja/USER_MANUAL.md</code>。user site はその UX 寄り表現で、両者を参照しながら初心者向けに再パッケージする。</p>
+<hr>
+<h2 id="2-skill-phase-1--事前確定事項-interview-を-skip-するための-pre-filled-answers">2. Skill Phase 1 — 事前確定事項 (interview を skip するための pre-filled answers)</h2>
+<p>skill の Phase 1 (Discovery interview) では audience / scope / language 等を grilling するが、本プロジェクトでは以下の通り確定済。skill 起動時は再 interview しない。</p>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>確定値</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>audience</strong></td>
+<td>完全初心者（音楽プログラミング・コーディングどちらも経験浅め）。小学校高学年〜中学生でも理解できる平易さを目標とする</td>
+</tr>
+<tr>
+<td><strong>content language</strong></td>
+<td>日本語 only (initial)。英語版は別 issue で on-the-web / CronCreate routine を使って後追い</td>
+</tr>
+<tr>
+<td><strong>primary source</strong></td>
+<td><code>docs/user/ja/USER_MANUAL.md</code>、<code>docs/user/ja/GETTING_STARTED.md</code>、<code>examples/*.orbs</code></td>
+</tr>
+<tr>
+<td><strong>secondary source</strong></td>
+<td><code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code>（DSL 仕様の真実、必要時に確認）</td>
+</tr>
+<tr>
+<td><strong>scope (含む)</strong></td>
+<td>DSL 構文の使い方、典型的なライブコーディング workflow、トラブルシューティング</td>
+</tr>
+<tr>
+<td><strong>scope (含まない)</strong></td>
+<td>実装内部（dev サイトに譲る）、SuperCollider 内部、ICMC 論文内容</td>
+</tr>
+<tr>
+<td><strong>voice / tone</strong></td>
+<td>ですます調、friendly、kind、子供扱いしない、技術用語は適切に噛み砕く</td>
+</tr>
+<tr>
+<td><strong>math rendering</strong></td>
+<td>不要（KaTeX 依存を入れない）</td>
+</tr>
+<tr>
+<td><strong>diagram density</strong></td>
+<td>low — Mermaid 必要時のみ。動画・GIF・スクリーンショット動画は使わない（コスト対効果）</td>
+</tr>
+<tr>
+<td><strong>interactivity</strong></td>
+<td>なし — 単純 Markdown のみ。WASM 化された Rust エンジン経由の interactive demo は将来の別 issue</td>
+</tr>
+<tr>
+<td><strong>bridge chapter</strong></td>
+<td>不要</td>
+</tr>
+<tr>
+<td><strong>external audit</strong></td>
+<td>advisor で代替 (詳細は §5)</td>
+</tr>
+<tr>
+<td><strong>research depth</strong></td>
+<td>beginner-friendly recompose（仕様逐語ではなく、初心者の頭で再構成）</td>
+</tr>
+<tr>
+<td><strong>deploy target</strong></td>
+<td>コンテンツ完成後に別 issue で判断（GitHub Pages 想定）</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="3-skill-phase-4--site-location--structure">3. Skill Phase 4 — Site Location &amp; Structure</h2>
+<h3 id="ディレクトリ">ディレクトリ</h3>
+<pre><code>sites/user/                  ← VitePress project root
+├── package.json             ← @orbitscore/user-site
+├── .vitepress/
+│   ├── config.ts            ← title, lang ja-JP, srcExclude
+│   ├── sidebar.ts           ← 10 章フラット構成
+│   └── theme/
+│       └── index.ts         ← default theme re-export
+├── index.md                 ← 章 1 「OrbitScore とは」 兼 landing
+├── STYLE_GUIDE.md           ← user 用簡易 style guide (srcExclude 対象)
+├── README.md                ← サイト運用 README
+├── getting-started/
+│   ├── installation.md      ← 章 2
+│   └── first-sound.md       ← 章 3
+├── basics/
+│   ├── patterns.md          ← 章 4
+│   ├── multiple-sequences.md ← 章 5
+│   ├── polyrhythm.md        ← 章 6
+│   ├── audio-manipulation.md ← 章 7
+│   └── live-coding.md       ← 章 8
+├── reference/
+│   └── methods.md           ← 章 9
+└── troubleshooting.md       ← 章 10
+</code></pre>
+<h3 id="章構成の原則">章構成の原則</h3>
+<ul>
+<li><strong>目的別フラット</strong>: dev サイトの「code tree mirror」 とは異なる。ユーザーが「やりたいこと」 から逆引きで章にたどり着けるように</li>
+<li><strong>シーケンシャル前提</strong>: 章番号順に読み進めれば学習曲線が滑らかになる構成</li>
+<li><strong>横断参照</strong>: 章 9 リファレンスは他章から飛んで来る用途を想定</li>
+</ul>
+<hr>
+<h2 id="4-skill-phase-5--writing-規律-user-専用dev-とは別">4. Skill Phase 5 — Writing 規律 (user 専用、dev とは別)</h2>
+<p>dev サイトの「code を verbatim 引用」「<code>&lt;file&gt;:&lt;start&gt;-&lt;end&gt;</code> line range」 規律は <strong>user サイトでは適用しない</strong>。理由: 初心者向けの説明では line range 引用は逆に難読化要因。</p>
+<h3 id="採用する規律">採用する規律</h3>
+<h4 id="frontmatter-必須項目緩和版">Frontmatter 必須項目（緩和版）</h4>
+<p>各章 Markdown の先頭に YAML frontmatter:</p>
+<pre><code class="language-yaml">---
+title: &lt;chapter title&gt;
+description: &lt;one-line summary&gt;
+---
+</code></pre>
+<p><code>verified-against</code> (commit-sha) や <code>status</code> (draft/reviewed/stable) は user では不要。代わりに「primary source の USER_MANUAL.md / GETTING_STARTED.md / examples/ と整合する」 ことを advisor audit で検証する。</p>
+<h4 id="コードブロック">コードブロック</h4>
+<ul>
+<li>DSL コード例は <strong><code>examples/*.orbs</code> にある書き方と整合</strong>するように</li>
+<li>ファイル名 (<code>.orbs</code> 拡張子) を含める（例: <code>demo.orbs</code>）</li>
+<li>本文中で必要なら example file への link で済ませる</li>
+</ul>
+<h4 id="トーン">トーン</h4>
+<ul>
+<li><strong>ですます調</strong>を統一</li>
+<li>「〜してみてください」「〜できます」 のような穏やかな指示</li>
+<li><strong>以下のような幼稚なトーンは禁止</strong>:<ul>
+<li>「〜してみよう！」「〜だよ！」「やった！できたね！」</li>
+<li>過剰な絵文字（🎉、🚀、✨ 等の連発）</li>
+<li>子供扱いの励まし</li>
+</ul>
+</li>
+<li>技術用語は適切に噛み砕く<ul>
+<li>例: 「DSL」 → 初出時は「特定の用途に特化した小さなプログラミング言語」 と添える</li>
+<li>例: 「シーケンス」 → 初出時は「音のパターンの 1 まとまり」 と添える</li>
+</ul>
+</li>
+<li>失敗・エラーへの言及は「もし動かない場合は…」 のように断定を避ける</li>
+</ul>
+<h4 id="図">図</h4>
+<ul>
+<li>動画・GIF・スクリーンショット動画は <strong>使わない</strong></li>
+<li>必要に応じて Mermaid 図のみ</li>
+<li>静止画（PNG / JPG）も基本不要、 どうしても必要なら個別判断</li>
+</ul>
+<h3 id="phase-b-以降の-writing-agent-dispatch-時の必須事項">Phase B 以降の writing agent dispatch 時の必須事項</h3>
+<p><code>.claude/skills/vitepress-learning-site/references/writing-agent-template.md</code> の prompt skeleton に加え、<strong>user 用の追加規律</strong>:</p>
+<ol>
+<li>ですます調の徹底（agent 出力で「だ・である」 が混入しないよう明示指示）</li>
+<li>子供扱いトーンの禁止（具体例を prompt に列挙）</li>
+<li>primary source からの逸脱禁止（USER_MANUAL.md にない仕様を勝手に追加しない）</li>
+<li>動画・GIF への言及禁止</li>
+<li>章相互の cross-reference は VitePress link 構文で（<code>[章名](./other.md)</code>）</li>
+</ol>
+<hr>
+<h2 id="5-skill-phase-8--audit-substitution">5. Skill Phase 8 — Audit Substitution</h2>
+<p>dev サイト同様、advisor 単段で十分（user 向けは hallucination リスクが dev より低い、primary source の USER_MANUAL.md が SoT として機能するため）。</p>
+<h3 id="必須運用">必須運用</h3>
+<ul>
+<li>各章 writing agent output は advisor audit を 1 回経てから commit</li>
+<li>audit で flag された箇所は writing agent に渡して fix の二巡目</li>
+<li><strong>最終 check は著者</strong>: ですます調が崩れていないか、子供扱いトーンが入っていないか、説明が初心者にとって自然か</li>
+</ul>
+<h3 id="future-upgrade">Future Upgrade</h3>
+<ul>
+<li>著者以外の初心者ユーザーに読んでもらってのフィードバック収集（post-ICMC）</li>
+<li>en 翻訳時に native speaker review</li>
+</ul>
+<hr>
+<h2 id="6-skill-phase-9--deployment">6. Skill Phase 9 — Deployment</h2>
+<ul>
+<li><strong>Initial</strong>: local-only (<code>docs:dev</code> で hot reload)。飛行機内オフラインでも動く</li>
+<li><strong>post-content-completion</strong>: 別 issue で判断<ul>
+<li>候補: GitHub Pages、Vercel、カスタムドメイン</li>
+<li>URL 案: <code>signalcompose.github.io/orbitscore/</code>、<code>orbitscore.signalcompose.com</code>、<code>orbitscore.dev</code> 等</li>
+<li>dev サイトの URL とは別パスを与えるか、user を default にして dev は <code>/dev</code> 配下に置くか、はデプロイ時に決定</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="7-未決事項--別-issue-で順次決定">7. 未決事項 — 別 issue で順次決定</h2>
+<ul>
+<li><input disabled="" type="checkbox"> 英語版翻訳の workflow（on-the-web vs CronCreate routine vs 手動）と着手時期</li>
+<li><input disabled="" type="checkbox"> Web デプロイ先（GitHub Pages / Vercel / 独自ドメイン）と URL 構造</li>
+<li><input disabled="" type="checkbox"> マーケットプレイス公開後の install ページ更新</li>
+<li><input disabled="" type="checkbox"> WASM 化 Rust エンジン経由の interactive demo 埋め込み（はるか先）</li>
+<li><input disabled="" type="checkbox"> 章 9 リファレンスの auto-generation（USER_MANUAL.md からの抽出を仕組み化するか）</li>
+</ul>
+<hr>
+<h2 id="8-関連ドキュメント">8. 関連ドキュメント</h2>
+<ul>
+<li><a href="../../.claude/skills/vitepress-learning-site/SKILL.md"><code>.claude/skills/vitepress-learning-site/SKILL.md</code></a> — skill 本体</li>
+<li><a href="./DEV_LEARNING_SITE.html">DEV_LEARNING_SITE.md</a> — dev 学習サイトの project brief（本ファイルのテンプレート元）</li>
+<li><a href="../user/ja/USER_MANUAL.html">USER_MANUAL.md</a> — user サイトの primary source</li>
+<li><a href="../user/ja/GETTING_STARTED.html">GETTING_STARTED.md</a> — user サイトの primary source</li>
+<li><a href="https://github.com/signalcompose/orbitscore/issues/174">Issue #174</a> — 本サイト構築 issue</li>
+<li><a href="../../CLAUDE.md">CLAUDE.md</a> — skill 起動時の必須読み込み指示</li>
+</ul>
+
+</main>
+</body>
+</html>

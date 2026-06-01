@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore Roadmap 2026 — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-roadmap-2026">OrbitScore Roadmap 2026</h1>
+<p><strong>Last updated</strong>: 2026-04-20
+<strong>Primary milestone</strong>: ICMC 2026 Hamburg (May 10-16)</p>
+<hr>
+<h2 id="現状-2026-04-20">現状 (2026-04-20)</h2>
+<ul>
+<li>DSL v3.0 の主要機能は完成 (230 tests passed, 23 skipped)</li>
+<li>SuperCollider (SC 3.14.1) ベースで動作、SC.app の別インストールが必要 (macOS only)</li>
+<li>Paper (camera-ready) 提出済み: SC 前提の実装</li>
+<li>Rust audio daemon の Phase 1 scaffold (TS client) は PR #124 で main に merge 済み</li>
+<li>ICMC 2026 Hamburg 開催まで <strong>約 3 週間</strong></li>
+</ul>
+<hr>
+<h2 id="ゴール設定">ゴール設定</h2>
+<p>ICMC マイルストーンを基準に以下を達成:</p>
+<ol>
+<li><strong>ICMC 本番演奏</strong>: 現 SC 経路で安定演奏</li>
+<li><strong><code>.vsix</code> 単独インストール</strong>: attendee が当日その場で試せる体験</li>
+<li><strong>利用者向け Web ガイド</strong>: VitePress で docs / examples / tutorial</li>
+<li><strong>post-ICMC</strong>: MIDI DSL 拡張 → Rust engine 移行の順で v1.1 / v2.0 を計画</li>
+</ol>
+<hr>
+<h2 id="phase--plan-構造">Phase / Plan 構造</h2>
+<h3 id="v10-icmc-ready-epic-131--t-20-days">v1.0 &quot;ICMC Ready&quot; (Epic #131) — T-20 days</h3>
+<h4 id="phase-1-scsynth-bundle-vsix-単独インストール">Phase 1: scsynth bundle (.vsix 単独インストール)</h4>
+<p>Sonic Pi パターン (GPL-3.0 aggregation) で scsynth を拡張に同梱し、SC.app 別インストールを不要化。</p>
+<ul>
+<li>対応子 Issue: #133, #134, #135, #136, #139, #146, #137, #138</li>
+</ul>
+<p><strong>技術方針</strong>:</p>
+<ul>
+<li>bundle 対象: <code>scsynth</code> (1.5 MB) + non-supernova plugins (5.1 MB) + <code>libsndfile.dylib</code> (5.1 MB) + 必要に応じて <code>libfftw3f.dylib</code></li>
+<li>arm64/x86_64 universal binary で単一 .vsix</li>
+<li>Apple Developer ID で codesign + notarize</li>
+<li>VS Code Marketplace + OpenVSX publish</li>
+<li>推定 <code>.vsix</code> サイズ: 現 3.3 MB → 15-18 MB</li>
+</ul>
+<p><strong>License 整合</strong>:</p>
+<ul>
+<li>OrbitScore 本体: Signal compose Fair Trade License</li>
+<li>bundled scsynth: GPL-3.0 (aggregation、OSC で独立プロセス通信)</li>
+<li>GPL-3.0 §6 corresponding source: SC 公式 GitHub release tag URL 記載</li>
+<li>Sonic Pi 先例 (MIT + bundled GPL scsynth) と同型</li>
+</ul>
+<h4 id="phase-2-documentation-site-vitepress">Phase 2: Documentation site (VitePress)</h4>
+<ul>
+<li>対応子 Issue: #140, #141, #142, #143, #144, #145, #147</li>
+</ul>
+<p><strong>構造</strong>:</p>
+<ul>
+<li><code>/guide/getting-started</code> — install + first patch</li>
+<li><code>/guide/tutorial/T1-T8</code> — 段階的学習</li>
+<li><code>/reference/dsl</code> — DSL syntax 全網羅</li>
+<li><code>/theory/mlts</code> — paper §3 の平易版</li>
+<li><code>/examples</code> — 完成 patch gallery</li>
+<li>GitHub Pages + カスタムドメイン (<code>orbitscore.signalcompose.com</code> 想定)</li>
+</ul>
+<p><strong>Tutorial 内訳</strong>:</p>
+<ul>
+<li>T1: Hello Kick</li>
+<li>T2: Layered Beats</li>
+<li>T3: First Polymeter (paper Fig 2)</li>
+<li>T4: Tresillo</li>
+<li>T5: Three Layers (LCM=60, paper §3.4.2)</li>
+<li>T6: Slicing with chop</li>
+<li>T7: Dynamic Layering</li>
+<li>T8: 7-beat polymeter</li>
+</ul>
+<hr>
+<h3 id="v11-midi-integration-epic-132--post-icmc">v1.1 &quot;MIDI Integration&quot; (Epic #132) — post-ICMC</h3>
+<p>Paper §7.4 Future Directions の &quot;External MIDI Integration&quot; を実装。
+Ableton Live / 外部ハードウェアシンセ / ソフトウェアシンセとの同期による演奏体験拡張。</p>
+<p><strong>アーキテクチャ Stage 1 (monorepo engine 抽象化)</strong>:</p>
+<ul>
+<li><code>packages/engine-core/</code> (DSL, parser, scheduler, <strong>EventRouter</strong>) — 分離</li>
+<li><code>packages/engine-sc/</code> (現 SC adapter) — 分離</li>
+<li><code>packages/engine-midi/</code> (MIDI adapter) — 新規</li>
+<li><code>packages/engine-rust/</code> (Rust adapter) — v2.0 で追加</li>
+</ul>
+<p><strong>DSL 拡張</strong>:</p>
+<ul>
+<li>MIDI event syntax (例: <code>seq.midi(note, vel, ch)</code> or <code>seq.out(midi(&quot;IAC&quot;, 1))</code>)</li>
+<li>IAC driver (macOS) / 仮想 MIDI bus 自動列挙</li>
+<li>ノート / ベロシティ / CC / プログラムチェンジ対応</li>
+<li>MLTS polymeter を維持したまま MIDI 出力</li>
+</ul>
+<p><strong>なぜ v2.0 Rust engine より先か</strong>:</p>
+<ul>
+<li>Paper reviewer からの期待 (MIDI 対応) を先に満たす</li>
+<li>EventRouter 抽象化が v2.0 の Rust engine 統合を clean にする</li>
+<li>ユーザ価値が明確 (DAW / hw synth 連携 = 音色選択の自由)</li>
+<li>低リスク (audio path を触らない)</li>
+</ul>
+<hr>
+<h3 id="v20-cross-platform-audio-engine-epic-105--after-v11">v2.0 &quot;Cross-platform Audio Engine&quot; (Epic #105) — after v1.1</h3>
+<p>Rust ベースの独自 audio engine に移行し、SC 依存を完全除去。</p>
+<p><strong>スコープ</strong>:</p>
+<ul>
+<li><code>packages/engine-rust/</code> の Rust daemon 機能パリティ完成<ul>
+<li>rate / pan / start_pos / duration / envelope 対応</li>
+<li>Master gain + mastering chain (fundsp)</li>
+</ul>
+</li>
+<li>cross-platform binary (macOS arm64/x86_64, Linux x64, Windows x64)</li>
+<li>EventRouter の 1 destination として組み込み (v1.1 の抽象上に乗る)</li>
+<li>SC 経路を fallback に残す期間を経て、最終的に deprecated</li>
+</ul>
+<p><strong>既存 Issue</strong>:</p>
+<ul>
+<li>#105 Epic (更新済)</li>
+<li>#107 orbit-audio-daemon binary</li>
+<li>#108 TS rust-engine client (PR #124 merged、続き v2.0 で)</li>
+<li>#92 time-stretch DSP selection</li>
+<li>#125-130 PR #124 review follow-ups</li>
+</ul>
+<p><strong>Stage 2 fork 戦略 (optional)</strong>:</p>
+<ul>
+<li><code>orbitscore-engine-rust</code> として別 repo に切り出す可能性</li>
+<li>判断基準: リリース cycle の分離が必要、Rust 側依存が重くなりすぎた場合</li>
+<li><strong>DSL 本体は fork しない</strong>。engine のみの切り出し</li>
+</ul>
+<hr>
+<h2 id="v30-long-term-94-95-96">v3.0+ (long-term, #94, #95, #96)</h2>
+<ul>
+<li><strong>Tauri standalone</strong> (#94)</li>
+<li><strong>VST3/CLAP hosting in Rust</strong> (#95)</li>
+<li><strong>LLM agent integration</strong> (#96)</li>
+<li>Web版 (WAM、strudel 的)</li>
+</ul>
+<hr>
+<h2 id="決定事項ログ">決定事項ログ</h2>
+<table>
+<thead>
+<tr>
+<th>日付</th>
+<th>決定</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>2026-04-20</td>
+<td>SC 3.14.1 固定</td>
+<td>Homebrew 最新安定版、動作確認済</td>
+</tr>
+<tr>
+<td>2026-04-20</td>
+<td>GPL-3.0 aggregation 方式で scsynth bundle</td>
+<td>Sonic Pi 先例、legal 確認済</td>
+</tr>
+<tr>
+<td>2026-04-20</td>
+<td>Apple Developer ID 取得済 (Signal compose)</td>
+<td>notarize 必要</td>
+</tr>
+<tr>
+<td>2026-04-20</td>
+<td>Marketplace publisher 新規作成</td>
+<td>Signal compose 名義</td>
+</tr>
+<tr>
+<td>2026-04-20</td>
+<td>Docs 英語メイン</td>
+<td>国際的読者を想定</td>
+</tr>
+<tr>
+<td>2026-04-20</td>
+<td>Plan 1 (MIDI) を Plan 2 (Rust) より先行</td>
+<td>reviewer 期待 + EventRouter 抽象化を先取り</td>
+</tr>
+<tr>
+<td>2026-04-20</td>
+<td>monorepo engine 抽象化 Stage 1、fork は Stage 2 optional</td>
+<td>DSL は共通、engine のみ切出し可</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="既存-issue-整合マップ">既存 Issue 整合マップ</h2>
+<table>
+<thead>
+<tr>
+<th>旧 Issue</th>
+<th>新ポジション</th>
+<th>label</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>#73 Release workflow</td>
+<td>subsumed by #131 (closed)</td>
+<td>—</td>
+</tr>
+<tr>
+<td>#105 Epic Audio Engine</td>
+<td>v2.0 (Plan 2)</td>
+<td>plan-2-rust, post-icmc</td>
+</tr>
+<tr>
+<td>#107 orbit-audio-daemon</td>
+<td>#105 子 (v2.0)</td>
+<td>plan-2-rust, post-icmc</td>
+</tr>
+<tr>
+<td>#108 TS rust-engine client</td>
+<td>#105 子 (v2.0、PR #124 merged)</td>
+<td>plan-2-rust, post-icmc</td>
+</tr>
+<tr>
+<td>#92 time-stretch DSP</td>
+<td>#105 子 (v2.0 中盤)</td>
+<td>plan-2-rust, post-icmc</td>
+</tr>
+<tr>
+<td>#94 Tauri standalone</td>
+<td>v3.0+</td>
+<td>long-term</td>
+</tr>
+<tr>
+<td>#95 VST3/CLAP hosting</td>
+<td>v3.0+</td>
+<td>long-term</td>
+</tr>
+<tr>
+<td>#96 LLM agent integration</td>
+<td>別トラック v3.0+</td>
+<td>long-term</td>
+</tr>
+<tr>
+<td>#125-130 PR #124 followups</td>
+<td>v2.0 で消化</td>
+<td>post-icmc</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="3-週間スプリント計画">3 週間スプリント計画</h2>
+<h3 id="week-1-apr-21-27-phase-1--vitepress-scaffold">Week 1 (Apr 21-27): Phase 1 + VitePress scaffold</h3>
+<ul>
+<li>#133 scsynth standalone 検証</li>
+<li>#134 plugin 最小セット決定</li>
+<li>#135 codesign パイプライン設計</li>
+<li>#140 VitePress scaffold</li>
+<li>#141 Getting Started draft</li>
+</ul>
+<h3 id="week-2-apr-28-may-4-phase-1-実装--phase-2-content">Week 2 (Apr 28-May 4): Phase 1 実装 + Phase 2 content</h3>
+<ul>
+<li>#136 bundle impl</li>
+<li>#139 LICENSE/NOTICE</li>
+<li>#146 first-run check</li>
+<li>#142 Tutorial T1-T8</li>
+<li>#143 DSL Reference</li>
+<li>#144 MLTS Theory</li>
+</ul>
+<h3 id="week-3-may-5-9-publish--rehearsal">Week 3 (May 5-9): Publish + Rehearsal</h3>
+<ul>
+<li>#137 CI Marketplace publish</li>
+<li>#138 cold-install smoke test</li>
+<li>#147 Marketplace README</li>
+<li>#145 Examples Gallery</li>
+<li>本番 demo patch 確定</li>
+</ul>
+<h3 id="icmc-may-10-16">ICMC (May 10-16)</h3>
+<ul>
+<li>演奏</li>
+<li>attendee への QR 配布 (VitePress サイト)</li>
+<li>feedback 収集</li>
+</ul>
+<hr>
+<h2 id="success-criteria-v10">Success Criteria (v1.0)</h2>
+<ul>
+<li><input disabled="" type="checkbox"> Marketplace で <code>signalcompose.orbitscore</code> 公開</li>
+<li><input disabled="" type="checkbox"> SC 未インストール macOS で <code>.vsix</code> install → example 再生が 3 ステップ以内</li>
+<li><input disabled="" type="checkbox"> VitePress サイトが公開されている</li>
+<li><input disabled="" type="checkbox"> ICMC attendee が当日 QR から install 完了できる</li>
+<li><input disabled="" type="checkbox"> 本番演奏が既存 SC 経路で安定動作 (T-1 日にリハ合格)</li>
+</ul>
+
+</main>
+</body>
+</html>

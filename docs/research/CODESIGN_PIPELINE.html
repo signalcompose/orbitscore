@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Codesign / Notarize Pipeline — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="codesign--notarize-pipeline">Codesign / Notarize Pipeline</h1>
+<p><strong>日付</strong>: 2026-04-23
+<strong>Last verified</strong>: 2026-04-23 (SC 3.14.1、macOS Sonoma / Sequoia 時代)
+<strong>対象 Issue</strong>: #135
+<strong>関連 Epic</strong>: #131 (v1.0 ICMC Ready Phase 1)
+<strong>前提</strong>: <a href="./SCSYNTH_BUNDLE_MANIFEST.html">SCSYNTH_BUNDLE_MANIFEST.md</a> で bundle 構成確定
+<strong>SC バージョン</strong>: SuperCollider 3.14.1 (Homebrew cask、universal binary)
+<strong>再検証トリガー</strong>: SC 版上げ、Apple notarize policy 変更、macOS Major 版上げ</p>
+<hr>
+<h2 id="目的">目的</h2>
+<p>scsynth bundle を <code>.vsix</code> に同梱するにあたり、macOS 署名 / notarize / Gatekeeper 挙動を primary-source で確認し、CI パイプライン設計を固める。下流 issue (#137 Marketplace publish workflow) の前提ドキュメント。</p>
+<hr>
+<h2 id="決定サマリ">決定サマリ</h2>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>決定</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>scsynth 本体の再署名</td>
+<td><strong>しない</strong></td>
+<td>既に Apple Developer ID (SC project: Joshua Parmenter, team HE5VJFE9E4) で署名 + hardened runtime + notarize 済</td>
+</tr>
+<tr>
+<td>libsndfile.dylib 再署名</td>
+<td><strong>しない</strong></td>
+<td>同上 (team HE5VJFE9E4 で署名済)</td>
+</tr>
+<tr>
+<td>Plugin .scx 再署名</td>
+<td><strong>しない</strong></td>
+<td>同上 (team HE5VJFE9E4 で署名済)</td>
+</tr>
+<tr>
+<td><code>.vsix</code> 全体 signing</td>
+<td><strong>vsce publish の Marketplace publisher 証明のみ</strong></td>
+<td>Marketplace は publisher 証明で十分、追加 Apple 署名は不要</td>
+</tr>
+<tr>
+<td>Notarize 追加作業</td>
+<td><strong>不要</strong></td>
+<td>各 binary は SC project が既に notarize 済、Apple のオンラインサービスで検証される</td>
+</tr>
+<tr>
+<td>Apple Developer ID 要件</td>
+<td><strong>不要</strong></td>
+<td>再署名しないため certificate 取得不要 (fallback plan のみ用意)</td>
+</tr>
+<tr>
+<td>GitHub Actions secrets</td>
+<td><code>VSCE_PAT</code> のみ</td>
+<td>Apple 関連 secret ゼロで足りる</td>
+</tr>
+</tbody></table>
+<p><strong>結論</strong>: SC project の既存署名を温存するだけで macOS 署名要件をすべて満たす。</p>
+<hr>
+<h2 id="sc-公式-signature-の-primary-source-確認">SC 公式 signature の primary-source 確認</h2>
+<p>実測 (2026-04-23):</p>
+<h3 id="scsynth-本体">scsynth 本体</h3>
+<pre><code>$ codesign -dv --verbose=4 /Applications/SuperCollider.app/Contents/Resources/scsynth
+
+Executable=/Applications/SuperCollider.app/Contents/Resources/scsynth
+Identifier=scsynth
+Format=Mach-O universal (x86_64 arm64)
+CodeDirectory v=20500 size=1811 flags=0x10000(runtime) hashes=46+7 location=embedded
+VersionMin=720896
+VersionSDK=983040
+CDHash=ca3c4e92ca54f4ab2ba7b8355987d15b04e38f6c
+Signature size=8982
+Authority=Developer ID Application: Joshua Parmenter (HE5VJFE9E4)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+Timestamp=Nov 25, 2025 at 1:51:11
+TeamIdentifier=HE5VJFE9E4
+Runtime Version=15.0.0
+</code></pre>
+<p>重要ポイント:</p>
+<ul>
+<li><strong>Developer ID Application</strong>: 通常の Apple Developer ID (Mac App Store 外配布向け)</li>
+<li><strong>hardened runtime 有効</strong> (<code>flags=0x10000(runtime)</code>)</li>
+<li><strong>Apple RFC 3161 timestamp server</strong> (<code>Timestamp=Nov 25, 2025</code>) → Apple notarize 送信済の証跡</li>
+<li><strong>Apple Root CA</strong> まで証明書チェーンが通る → 有効</li>
+</ul>
+<h3 id="libsndfiledylib">libsndfile.dylib</h3>
+<pre><code>Identifier=libsndfile
+Format=Mach-O universal (x86_64 arm64)
+CodeDirectory flags=0x10000(runtime)
+Timestamp=Nov 25, 2025 at 1:51:18
+TeamIdentifier=HE5VJFE9E4
+</code></pre>
+<p>scsynth と同じ team ID、同じ hardened runtime 付き。</p>
+<h3 id="代表-plugin-fft_ugensscx">代表 plugin (FFT_UGens.scx)</h3>
+<pre><code>Identifier=FFT_UGens
+Format=Mach-O universal (x86_64 arm64)
+CodeDirectory flags=0x10000(runtime)
+Timestamp=Nov 25, 2025 at 1:51:14
+TeamIdentifier=HE5VJFE9E4
+</code></pre>
+<p>全 plugin が同じ team で署名されていることを確認。</p>
+<hr>
+<h2 id="gatekeeper-policy-の実測">Gatekeeper policy の実測</h2>
+<p><code>spctl --assess</code> の挙動:</p>
+<pre><code>$ spctl --assess --type exec /Applications/SuperCollider.app/Contents/Resources/scsynth
+/Applications/SuperCollider.app/Contents/Resources/scsynth: rejected
+  (the code is valid but does not seem to be an app)
+origin=Developer ID Application: Joshua Parmenter (HE5VJFE9E4)
+</code></pre>
+<pre><code>$ spctl --assess --type install /Applications/SuperCollider.app
+/Applications/SuperCollider.app: rejected
+</code></pre>
+<h3 id="これは問題か">これは問題か?</h3>
+<p><strong>Gatekeeper の実起動判定には影響しない</strong>。rejected 理由は &quot;code is valid but does not seem to be an app&quot;、つまり <strong>code signature 自体は valid</strong> で、<code>spctl --type exec/install</code> policy が &quot;app bundle expected&quot; を強制しているだけ。</p>
+<p><strong>実運用 (VS Code 拡張から scsynth を child process として spawn) では</strong>:</p>
+<ul>
+<li>親 VS Code は Microsoft 署名済の signed app</li>
+<li>child binary の code signature を macOS が online で検証 (quarantine xattr 付きなら)</li>
+<li>spctl policy mismatch の警告は発生しない (Launch Services は別経路で判定)</li>
+</ul>
+<p><strong>ただし以下のケースは要注意</strong> (#138 smoke test で実測必須):</p>
+<ul>
+<li>user が <code>scsynth</code> を Finder から直接 double-click → spctl policy mismatch で拒否の可能性</li>
+<li>user の VS Code が未署名 nightly / portable build → 親の信頼が継承されない</li>
+<li>offline 環境で quarantine 付きファイル起動 → notarize online check 失敗</li>
+</ul>
+<p>実際の Gatekeeper 挙動は Launch Services が管理しており、以下で決まる:</p>
+<ol>
+<li>実行ファイルが <strong>signed</strong> であること → ✅</li>
+<li><strong>hardened runtime</strong> 有効 → ✅</li>
+<li><strong>notarized</strong> (online verification で確認) → ✅</li>
+<li><strong>quarantine xattr</strong> の扱い</li>
+<li><strong>親プロセス経由の起動</strong> の場合は親の信頼を継承</li>
+</ol>
+<h3 id="実運用での-gatekeeper-挙動">実運用での Gatekeeper 挙動</h3>
+<p><code>.vsix</code> 経由で VS Code extension として配布する場合のフロー:</p>
+<pre><code>(1) ユーザーが Marketplace / 直接 DL で .vsix install
+    ↓ VS Code が extension zip を展開
+(2) 展開ファイルに quarantine xattr 付与される (macOS の standard 挙動)
+    ↓ VS Code extension activation で child process として scsynth spawn
+(3) child process spawn:
+    - 親 (VS Code) は Microsoft 署名済・notarize 済 signed app
+    - child (scsynth) は Developer ID + hardened runtime + notarize 済
+    - macOS は child の signature を online で検証
+    - notarize ticket は Apple CDN から取得 (online) → valid → 起動許可
+</code></pre>
+<h3 id="stapler-ticket">Stapler ticket</h3>
+<pre><code>$ xcrun stapler validate scsynth
+scsynth does not have a ticket stapled to it.
+</code></pre>
+<p><strong>ticket stapling は無い</strong>が、これは <strong>online verification で代替可能</strong>。Apple の notarize 判定は binary の CDHash をサーバに問い合わせて判定するため、offline 環境でなければ staple 無しでも pass する。</p>
+<h3 id="リスクと-mitigation">リスクと mitigation</h3>
+<table>
+<thead>
+<tr>
+<th>リスク</th>
+<th>可能性</th>
+<th>Mitigation</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>初回起動時のオフライン (notarize check 不能)</td>
+<td>低</td>
+<td>VS Code extension install 自体がネットワーク必須なので現実的な懸念ではない</td>
+</tr>
+<tr>
+<td>quarantine xattr で spawn 失敗</td>
+<td>中</td>
+<td>#138 cold-install smoke test で実測、必要なら VS Code extension activation で <code>xattr -d com.apple.quarantine</code> を通知</td>
+</tr>
+<tr>
+<td>SC project が署名なしリリースを出す</td>
+<td>低</td>
+<td>SC 3.14.1 時点は署名済。将来バージョンで変わったら自前署名に切替 (fallback plan 後述)</td>
+</tr>
+<tr>
+<td>Apple が notarize policy を厳格化 (staple 必須化)</td>
+<td>低〜中</td>
+<td>staple されてる CDN が切れた場合のみ影響。自前 staple に切替 (fallback plan 後述)</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="bundle-後も-signature-を保持できるか">Bundle 後も signature を保持できるか</h2>
+<h3 id="vsce-packaging-の仕組み">vsce packaging の仕組み</h3>
+<p><code>vsce package</code> が生成する <code>.vsix</code> は <strong>zip archive</strong> (OPC format)。</p>
+<p>重要: zip は <strong>Mach-O binary 内部の LC_CODE_SIGNATURE load command を保持する</strong>。Code signature は binary body に埋め込まれているため zip compress/decompress で失われない。xattr (<code>com.apple.cs.*</code> 等) は喪失する可能性があるが、Gatekeeper は LC_CODE_SIGNATURE を読むので無関係。</p>
+<p>実行権限 (mode 0755 等) は vsce 内部の <code>yazl</code> で保持される (要 #138 実機検証)。</p>
+<p>bundle ディレクトリ構造の詳細は <a href="./SCSYNTH_BUNDLE_MANIFEST.html">SCSYNTH_BUNDLE_MANIFEST.md § Bundle 最終 manifest</a> を参照。</p>
+<h3 id="検証コマンド-publish-前-smoke-test">検証コマンド (publish 前 smoke test)</h3>
+<pre><code class="language-bash"># .vsix 解凍 → scsynth の signature 検証
+unzip -o orbitscore-1.0.0.vsix -d /tmp/vsix-extract
+codesign --verify --verbose=4 /tmp/vsix-extract/extension/engine/scsynth/Contents/Resources/scsynth
+# → &quot;valid on disk&quot; + &quot;satisfies its Designated Requirement&quot;
+
+# 実行権限確認
+file /tmp/vsix-extract/extension/engine/scsynth/Contents/Resources/scsynth
+# → &quot;Mach-O universal binary with 2 architectures: ...&quot;
+
+# 実起動テスト
+/tmp/vsix-extract/extension/engine/scsynth/Contents/Resources/scsynth -u 57999 -i 0 &amp;
+sleep 2
+kill %1
+# → &quot;SuperCollider 3 server ready.&quot; が出れば OK
+</code></pre>
+<hr>
+<h2 id="github-actions-workflow-設計-骨子">GitHub Actions workflow 設計 (骨子)</h2>
+<p>実装は #137 で行う。以下は設計指針:</p>
+<h3 id="runner">Runner</h3>
+<ul>
+<li><strong>macos-14</strong> (arm64) を採用<ul>
+<li>SC universal binary を手元で抽出できる</li>
+<li><code>.vsix</code> build に Node.js 必要</li>
+</ul>
+</li>
+<li>代替: <code>macos-13</code> (x86_64) でも OK (binary は universal なので arch 非依存)</li>
+</ul>
+<h3 id="steps-擬似コード">Steps (擬似コード)</h3>
+<pre><code class="language-yaml">jobs:
+  publish:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: &#39;20&#39;
+      - name: Install SuperCollider via Homebrew
+        run: brew install --cask supercollider
+      - name: Extract scsynth bundle
+        run: bash scripts/extract-scsynth-bundle.sh   # #136 で実装
+      - name: Verify pre-package signatures
+        run: |
+          codesign --verify --verbose packages/vscode-extension/engine/scsynth/Contents/Resources/scsynth
+          codesign --verify --verbose packages/vscode-extension/engine/scsynth/Contents/Frameworks/libsndfile.dylib
+      - name: Install deps and build
+        run: npm install &amp;&amp; npm run build
+      - name: Package .vsix
+        run: npx vsce package
+      - name: Verify post-package signatures preserved (MANDATORY gate)
+        run: |
+          unzip -o packages/vscode-extension/*.vsix -d /tmp/vsix-check
+          codesign --verify --verbose /tmp/vsix-check/extension/engine/scsynth/Contents/Resources/scsynth
+          codesign --verify --verbose /tmp/vsix-check/extension/engine/scsynth/Contents/Frameworks/libsndfile.dylib
+          # 万一 Mach-O LC_CODE_SIGNATURE が vsce packaging で壊れたら publish 中止
+      - name: Publish to Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish
+</code></pre>
+<h3 id="ci-assertion-成功基準-138-で厳密化">CI assertion 成功基準 (#138 で厳密化)</h3>
+<p>各検証ステップが真となる場合のみ次工程に進むこと:</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>成功条件</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>codesign --verify --verbose &lt;binary&gt;</code></td>
+<td>exit code 0 AND stderr に <code>valid on disk</code> AND <code>satisfies its Designated Requirement</code> を含む</td>
+</tr>
+<tr>
+<td><code>codesign -dv &lt;binary&gt;</code></td>
+<td>stdout に <code>TeamIdentifier=HE5VJFE9E4</code> を含む</td>
+</tr>
+<tr>
+<td><code>file &lt;binary&gt;</code></td>
+<td>stdout に <code>Mach-O universal binary</code> を含む (arm64 + x86_64)</td>
+</tr>
+<tr>
+<td><code>scsynth -u &lt;port&gt; -i 0</code> 起動</td>
+<td>stdout/stderr に <code>SuperCollider 3 server ready.</code> を含み、exit しない (signal KILL で止めるまで)</td>
+</tr>
+<tr>
+<td>OSC <code>/status</code> round-trip</td>
+<td>UDP に <code>/status.reply</code> frame が戻る</td>
+</tr>
+</tbody></table>
+<p>これらを満たさない場合は CI fail、publish しない。</p>
+<h3 id="required-secrets">Required secrets</h3>
+<ul>
+<li><strong><code>VSCE_PAT</code></strong>: VS Code Marketplace publisher token (Azure DevOps)</li>
+</ul>
+<p><strong>Apple 関連 secret は不要</strong> (SC project signature を流用するため)。ただし fallback plan (後述) 発動時は以下を追加:</p>
+<ul>
+<li><code>APPLE_DEVELOPER_ID_CERT</code> (p12 base64)</li>
+<li><code>APPLE_DEVELOPER_ID_CERT_PASSWORD</code></li>
+<li><code>APPLE_ID</code>, <code>APPLE_ID_PASSWORD</code> (app-specific)</li>
+<li><code>APPLE_TEAM_ID</code></li>
+</ul>
+<hr>
+<h2 id="fallback-plan-将来-sc-側-signature-が使えなくなった場合">Fallback plan (将来 SC 側 signature が使えなくなった場合)</h2>
+<p>発動条件: SC project が署名なしリリースを出す、または Apple の notarize server で verification が失敗する。</p>
+<p>切替手順 (概略):</p>
+<ol>
+<li>Apple Developer Program ($99/年、Signal compose Inc. 法人名義) 加入</li>
+<li>Developer ID Application 証明書生成</li>
+<li><code>codesign --force --sign &quot;Developer ID Application: Signal compose Inc.&quot; --options runtime --timestamp --entitlements scsynth.entitlements</code> で scsynth + dylib + plugins を再署名</li>
+<li><code>xcrun notarytool submit &lt;vsix&gt; --wait</code> で notarize 申請</li>
+<li>GitHub secrets (<code>APPLE_DEVELOPER_ID_CERT</code>, <code>APPLE_ID</code>, <code>APPLE_ID_PASSWORD</code>, <code>APPLE_TEAM_ID</code>) を追加</li>
+</ol>
+<p>Entitlements 例 (OSC / audio 用): <code>com.apple.security.network.server</code>, <code>network.client</code>, <code>device.audio-input</code> を <code>true</code> に設定。詳細は Apple 公式 Entitlements 仕様を参照。</p>
+<p>現時点では発動不要 (SC 公式署名を流用)。</p>
+<hr>
+<h2 id="検証手順まとめ-publish-前-smoke-test">検証手順まとめ (publish 前 smoke test)</h2>
+<pre><code class="language-bash"># 1. Bundle 後の scsynth signature 有効性
+codesign --verify --verbose=4 \
+  packages/vscode-extension/engine/scsynth/Contents/Resources/scsynth
+
+# 2. .vsix 解凍 → signature 継承確認
+unzip -o packages/vscode-extension/*.vsix -d /tmp/vsix-check
+codesign --verify --verbose=4 \
+  /tmp/vsix-check/extension/engine/scsynth/Contents/Resources/scsynth
+
+# 3. 新規 macOS アカウントで .vsix install → 実起動 (#138 で詳細)
+</code></pre>
+<hr>
+<h2 id="下流-issue-への前提">下流 Issue への前提</h2>
+<h3 id="137-ci-marketplace-publish-workflow">#137 (CI Marketplace publish workflow)</h3>
+<p>本ドキュメントの &quot;GitHub Actions workflow 設計&quot; 節をベースに実装。主な作業:</p>
+<ul>
+<li><code>scripts/extract-scsynth-bundle.sh</code> 作成 (#136 で一部実装)</li>
+<li><code>.github/workflows/publish.yml</code> 作成</li>
+<li><code>VSCE_PAT</code> secret 登録 (publisher 新規作成手続きは別途)</li>
+</ul>
+<h3 id="138-cold-install-smoke-test">#138 (Cold-install smoke test)</h3>
+<p>本ドキュメントの &quot;検証手順&quot; を実機で実行:</p>
+<ul>
+<li>新規 macOS アカウント or VM で <code>.vsix</code> install</li>
+<li>scsynth の実起動 (Gatekeeper 通過確認)</li>
+<li>quarantine xattr 影響確認</li>
+<li>OSC 経由の playback 成功確認</li>
+</ul>
+<hr>
+<h2 id="関連ドキュメント">関連ドキュメント</h2>
+<ul>
+<li><a href="./SCSYNTH_STANDALONE.html">SCSYNTH_STANDALONE.md</a> — standalone 起動検証 (#133)</li>
+<li><a href="./SCSYNTH_BUNDLE_MANIFEST.html">SCSYNTH_BUNDLE_MANIFEST.md</a> — bundle 構成 (#134)</li>
+<li><a href="https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution">Apple Notarizing macOS Software</a></li>
+<li><a href="https://code.visualstudio.com/api/working-with-extensions/publishing-extension">vsce publishing guide</a></li>
+<li><a href="https://github.com/supercollider/supercollider/releases/tag/Version-3.14.1">SuperCollider 3.14.1 Release</a></li>
+</ul>
+
+</main>
+</body>
+</html>

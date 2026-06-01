@@ -17,6 +17,36 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.90 docs を HTML 管理へ移行 (WORK_LOG は Markdown 例外) (Jun 01, 2026)
+
+**Date**: Jun 01, 2026
+**Status**: ✅ DONE
+**Branch**: `claude/peaceful-knuth-pOU7I` (PR #223)
+
+**動機**: `/docs` 配下のローカル開発ドキュメントを、可読性向上・図表表現・オフライン参照のため HTML 形式で管理する方針に変更。公開向け学習サイト (`sites/dev/`, `sites/user/`) は従来どおり VitePress による別管理 (Markdown ソース) であり対象外。
+
+**変更内容**:
+
+- `docs/` 配下の Markdown を自己完結型 HTML へ変換 (marked + 共通 CSS、見出し id でページ内アンカー維持、docs 内部の相対 `.md` リンクは `.html` へリライト、docs 外/sites を指すリンクは `.md` 維持)
+- 内容更新: `docs/core/INDEX` の Current release を v1.1.0 → v1.1.1 (quantize #212 反映)
+- ドキュメント形式ルールを `CLAUDE.md` / `docs/core/PROJECT_RULES` に明記
+- ルート参照 (README / CLAUDE / CONTRIBUTING / CHANGELOG) の `docs/*.md` リンクを `.html` へ更新
+
+**WORK_LOG は Markdown 例外 (Option A 採用)**:
+
+- `docs/development/WORK_LOG` は **コミット毎に人手/エージェントが追記する高頻度の運用ログ**であり、HTML 手編集は非実用的・タグ事故のリスクが大きいため **Markdown のまま維持**する。
+- この判断は repo の @claude (PR #223 上のメンション回答)、独立 advisor、実装担当の三者が一致して Option A を推奨したことによる。
+- **境界指針**: 高頻度に人手で追記する運用ログ系 (WORK_LOG、将来の同種ログ) は **Markdown**。更新頻度の低い安定リファレンス (DSL 仕様 / PROJECT_RULES / INDEX / IMPLEMENTATION_PLAN / ROADMAP) と凍結アーカイブ (`docs/archive/`) は **HTML 直接管理**。
+- `.claude/hooks/pre-commit-check.sh` の WORK_LOG 参照は `.md` を維持。
+
+**main マージ (#221)**: 移行中に main の #221 (audioPath search resolution + sample bank lookup) を取り込み。`INSTRUCTION_ORBITSCORE_DSL` の Audio Path 仕様更新 (search list / bank lookup) を HTML へ反映。
+
+**コンテンツ検証**: 変換後 HTML の可視テキストを元 Markdown と突き合わせ、差分 0.3〜1.7% (リンク URL・見出し id・title 等の正規化誤差範囲) で実質的なコンテンツ消失なしを確認。
+
+**追補2 (claude-review 指摘対応)**: PR #223 のレビュー指摘を受け、`docs/core/INDEX.html` に欠落していたアーカイブ `WORK_LOG_2026-05` 行を追加し、リンクの表示文字に残っていた `.md` 拡張子 38 件を href の実体 (`.html`) に整合 (アクティブ WORK_LOG は `.md` で text/href 一致)。CLAUDE.md の省略パス参照 (Additional Resources) は既に修正済みのため対応不要 (bot は古い状態をレビュー)。
+
+---
+
 ### 6.89 Issue #221 — audioPath search resolution + sample bank lookup (May 10, 2026)
 
 **Date**: May 10, 2026

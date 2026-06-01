@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore Audio-Based DSL Implementation Plan — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-audio-based-dsl-implementation-plan">OrbitScore Audio-Based DSL Implementation Plan</h1>
+<h2 id="overview">Overview</h2>
+<p>Implementation plan for the new audio-based OrbitScore DSL as defined in <code>INSTRUCTION_ORBITSCORE_DSL.md</code>.</p>
+<p><strong>Single Source of Truth</strong>: <a href="../core/INSTRUCTION_ORBITSCORE_DSL.html"><code>../core/INSTRUCTION_ORBITSCORE_DSL.md</code></a></p>
+<h2 id="migration-status">Migration Status</h2>
+<ul>
+<li><strong>Old System</strong>: MIDI-based DSL (deprecated)</li>
+<li><strong>New System</strong>: Audio-based DSL (✅ Core implementation complete)</li>
+<li><strong>Migration Date</strong>: December 25, 2024</li>
+<li><strong>Completion Status</strong>: ~90% (Core features complete, advanced features pending)</li>
+<li><strong>Refactoring Status</strong>: ✅ Phase 1-7 Complete (All major refactoring completed)</li>
+<li><strong>DSL Version</strong>: v3.0 (Underscore prefix + Unidirectional toggle)</li>
+</ul>
+<h2 id="current-implementation-summary">Current Implementation Summary</h2>
+<h3 id="-completed-tested">✅ Completed (tested)</h3>
+<ul>
+<li><strong>Parser</strong>: Full DSL syntax support with 50 tests</li>
+<li><strong>Object-Oriented Architecture</strong>: Global and Sequence classes</li>
+<li><strong>Audio Engine</strong>: WAV loading, slicing, SuperCollider-based playback</li>
+<li><strong>Transport System</strong>: Scheduling, polymeter, mute/unmute</li>
+<li><strong>VS Code Extension</strong>: Syntax highlighting, autocomplete, execution</li>
+<li><strong>Timing Calculation</strong>: Hierarchical play patterns</li>
+<li><strong>Method Chaining</strong>: Fluent API across all components</li>
+<li><strong>Audio Slicing (chop)</strong>: SuperCollider buffer-based partial playback</li>
+<li><strong>CLI with Timeout</strong>: Auto-stop feature for testing</li>
+<li><strong>Real Audio Playback</strong>: Verified with kick, snare, hihat, bass, arpeggio</li>
+</ul>
+<h3 id="️-partially-implemented">⚠️ Partially Implemented</h3>
+<ul>
+<li><strong>Audio Formats</strong>: Only WAV fully supported (AIFF/MP3/MP4 placeholders)</li>
+<li><strong>Time Stretching</strong>: Basic tempo adjustment (needs quality algorithm)</li>
+<li><strong>Pitch Shifting</strong>: Placeholder only (needs DSP implementation)</li>
+<li><strong>Infinite Loop</strong>: length(n) provides finite loops (needs loop() method)</li>
+</ul>
+<h3 id="-not-yet-implemented">📋 Not Yet Implemented</h3>
+<ul>
+<li><strong>Force Modifier</strong>: <code>.force</code> for immediate transport</li>
+<li><strong>Composite Meters</strong>: <code>((3 by 4)(2 by 4))</code> syntax</li>
+<li><strong>Advanced Audio</strong>: offset, reverse, fade</li>
+<li><strong>DAW Plugin</strong>: VST/AU development (Phase A5)</li>
+</ul>
+<h3 id="-testing-coverage">📊 Testing Coverage</h3>
+<ul>
+<li><strong>Total Tests</strong>: 220 passed, 23 skipped (243 total) = 90.5%</li>
+<li><strong>Parser Tests</strong>: 50/50</li>
+<li><strong>Interpreter Tests</strong>: 83/83</li>
+<li><strong>DSL v3.0 Tests</strong>: 56/56 (Unidirectional Toggle, Underscore Prefix, Gain/Pan)</li>
+<li><strong>Audio Engine Tests</strong>: 15/15 (SuperCollider integration)</li>
+<li><strong>Real Audio Tests</strong>: Verified with actual playback (kick, snare, hihat, bass, arpeggio)</li>
+</ul>
+<h2 id="implementation-phases">Implementation Phases</h2>
+<h3 id="phase-a1-new-parser-implementation--completed">Phase A1: New Parser Implementation ✅ COMPLETED</h3>
+<p><strong>Goal</strong>: Implement parser for the audio-based DSL syntax
+<strong>Status</strong>: Fully implemented and tested</p>
+<h4 id="a11-tokenizer-updates">A1.1 Tokenizer Updates</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Support for <code>by</code> keyword (meter syntax)</li>
+<li><input checked="" disabled="" type="checkbox"> Support for <code>.</code> operator (method calls)</li>
+<li><input checked="" disabled="" type="checkbox"> Support for <code>var</code> keyword</li>
+<li><input checked="" disabled="" type="checkbox"> Support for <code>init</code> keyword</li>
+<li><input checked="" disabled="" type="checkbox"> Support for parentheses in expressions</li>
+</ul>
+<h4 id="a12-global-parameter-parsing">A1.2 Global Parameter Parsing</h4>
+<pre><code class="language-js">global.tempo(140)
+global.tick(480)
+global.beat(4 by 4)
+global.beat((3 by 4)(2 by 4))
+global.key(C)
+</code></pre>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Parse method call syntax</li>
+<li><input checked="" disabled="" type="checkbox"> Parse <code>n by m</code> meter notation</li>
+<li><input disabled="" type="checkbox"> Parse composite meters (partially)</li>
+<li><input disabled="" type="checkbox"> Parse shorthand aliases (not implemented, using autocomplete instead)</li>
+</ul>
+<h4 id="a13-initialization-parsing">A1.3 Initialization Parsing</h4>
+<pre><code class="language-js">var global = init GLOBAL
+var seq1 = init GLOBAL.seq
+</code></pre>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Parse variable declarations</li>
+<li><input checked="" disabled="" type="checkbox"> Parse init expressions (both <code>init GLOBAL</code> and <code>init global.seq</code>)</li>
+<li><input checked="" disabled="" type="checkbox"> Track initialized sequences</li>
+</ul>
+<h4 id="a14-sequence-configuration">A1.4 Sequence Configuration</h4>
+<pre><code class="language-js">seq1.tempo(120)
+seq1.beat(17 by 8)
+seq1.audio(&quot;../audio/piano1.wav&quot;).chop(6)
+</code></pre>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Parse sequence method calls</li>
+<li><input checked="" disabled="" type="checkbox"> Parse audio loading</li>
+<li><input checked="" disabled="" type="checkbox"> Parse chop parameters</li>
+</ul>
+<h4 id="a15-play-structure-parsing">A1.5 Play Structure Parsing</h4>
+<pre><code class="language-js">seq1.play(0)
+seq1.play((0)(0))
+seq1.play((0)((0)(0)))
+seq1.play(0.chop(5), 0.chop(4))
+seq1.play(1).fixpitch(0)
+</code></pre>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Parse nested play structures (both <code>(1, 2)</code> and <code>(1)(2)</code> syntax)</li>
+<li><input checked="" disabled="" type="checkbox"> Parse functional form (.chop, .time)</li>
+<li><input checked="" disabled="" type="checkbox"> Parse fixpitch modifier</li>
+<li><input checked="" disabled="" type="checkbox"> Parse slice numbers (1-n for chop(n))</li>
+</ul>
+<h4 id="a16-transport-command-parsing">A1.6 Transport Command Parsing</h4>
+<pre><code class="language-js">global.start()
+global.start.force()
+global.loop(seq1, seq2)
+seq1.mute()
+</code></pre>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Parse transport methods</li>
+<li><input disabled="" type="checkbox"> Parse force modifier (not yet implemented)</li>
+<li><input checked="" disabled="" type="checkbox"> Parse targeted sequences</li>
+</ul>
+<h4 id="a17-testing">A1.7 Testing</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Create test suite for all syntax variants (31 parser tests)</li>
+<li><input checked="" disabled="" type="checkbox"> Generate IR for sample files</li>
+<li><input checked="" disabled="" type="checkbox"> Validate parser error handling</li>
+</ul>
+<h3 id="phase-a2-audio-engine-integration--mostly-completed">Phase A2: Audio Engine Integration ✅ MOSTLY COMPLETED</h3>
+<p><strong>Goal</strong>: Implement audio playback and processing
+<strong>Status</strong>: Core features implemented, some advanced features pending</p>
+<h4 id="a21-audio-file-loading">A2.1 Audio File Loading</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> WAV format support (fully implemented)</li>
+<li><input disabled="" type="checkbox"> AIFF format support (placeholder)</li>
+<li><input disabled="" type="checkbox"> MP3 format support (placeholder)</li>
+<li><input disabled="" type="checkbox"> MP4 format support (placeholder)</li>
+<li><input checked="" disabled="" type="checkbox"> Sample rate conversion to 48kHz</li>
+</ul>
+<h4 id="a22-audio-slicing">A2.2 Audio Slicing</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Implement chop(n) functionality</li>
+<li><input checked="" disabled="" type="checkbox"> Calculate slice boundaries</li>
+<li><input checked="" disabled="" type="checkbox"> Handle edge cases (chop(1), default behavior)</li>
+</ul>
+<h4 id="a23-time-stretching">A2.3 Time-Stretching</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Default playback (tempo-adjusted)</li>
+<li><input disabled="" type="checkbox"> Implement quality time-stretch algorithm (WSOLA)</li>
+<li><input disabled="" type="checkbox"> Maintain audio quality</li>
+</ul>
+<h4 id="a24-pitch-shifting">A2.4 Pitch Shifting</h4>
+<ul>
+<li><input disabled="" type="checkbox"> Implement fixpitch(n) functionality (placeholder only)</li>
+<li><input disabled="" type="checkbox"> Granular synthesis or Phase Vocoder</li>
+<li><input disabled="" type="checkbox"> Preserve formants option</li>
+</ul>
+<h4 id="a25-audio-output">A2.5 Audio Output</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Web Audio API integration (node-web-audio-api)</li>
+<li><input checked="" disabled="" type="checkbox"> Buffer management</li>
+<li><input disabled="" type="checkbox"> Latency optimization</li>
+</ul>
+<h3 id="phase-a3-transport-system--mostly-completed">Phase A3: Transport System ✅ MOSTLY COMPLETED</h3>
+<p><strong>Goal</strong>: Implement real-time transport controls
+<strong>Status</strong>: Core transport implemented, some advanced features pending</p>
+<h4 id="a31-global-transport">A3.1 Global Transport</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> run() - start transport</li>
+<li><input disabled="" type="checkbox"> start.force() - immediate start (not implemented)</li>
+<li><input checked="" disabled="" type="checkbox"> loop() - loop mode</li>
+<li><input disabled="" type="checkbox"> loop.force() - immediate loop (not implemented)</li>
+<li><input checked="" disabled="" type="checkbox"> stop() - stop transport</li>
+</ul>
+<h4 id="a32-sequence-transport">A3.2 Sequence Transport</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Per-sequence run/loop/stop</li>
+<li><input checked="" disabled="" type="checkbox"> Mute/unmute functionality</li>
+<li><input checked="" disabled="" type="checkbox"> Targeted transport (specific sequences)</li>
+</ul>
+<h4 id="a33-scheduling">A3.3 Scheduling</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Bar boundary quantization</li>
+<li><input checked="" disabled="" type="checkbox"> Independent sequence timing</li>
+<li><input checked="" disabled="" type="checkbox"> Polymeter support (tested with 5/4 vs 4/4)</li>
+</ul>
+<h4 id="a34-state-management">A3.4 State Management</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Track playing sequences</li>
+<li><input checked="" disabled="" type="checkbox"> Handle sequence synchronization</li>
+<li><input disabled="" type="checkbox"> Manage loop points (partial)</li>
+</ul>
+<h3 id="phase-a4-vs-code-extension-update--completed">Phase A4: VS Code Extension Update ✅ COMPLETED</h3>
+<p><strong>Goal</strong>: Update extension for audio DSL support
+<strong>Status</strong>: Fully implemented with context-aware features</p>
+<h4 id="a41-syntax-highlighting">A4.1 Syntax Highlighting</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Update grammar for new syntax</li>
+<li><input checked="" disabled="" type="checkbox"> Highlight method calls</li>
+<li><input checked="" disabled="" type="checkbox"> Highlight transport commands</li>
+</ul>
+<h4 id="a42-command-execution">A4.2 Command Execution</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Implement Cmd+Enter execution</li>
+<li><input checked="" disabled="" type="checkbox"> Parse selected text</li>
+<li><input checked="" disabled="" type="checkbox"> Send to engine via IPC</li>
+</ul>
+<h4 id="a43-intellisense-and-autocomplete">A4.3 IntelliSense and Autocomplete</h4>
+<ul>
+<li><input checked="" disabled="" type="checkbox"> Method autocomplete<ul>
+<li><input checked="" disabled="" type="checkbox"> Context-aware suggestions (global vs sequence methods)</li>
+<li><input checked="" disabled="" type="checkbox"> Method signature display</li>
+<li><input checked="" disabled="" type="checkbox"> Quick info tooltips</li>
+</ul>
+</li>
+<li><input checked="" disabled="" type="checkbox"> Parameter hints<ul>
+<li><input checked="" disabled="" type="checkbox"> Type information</li>
+<li><input checked="" disabled="" type="checkbox"> Valid value ranges</li>
+<li>Example values</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Documentation hover<ul>
+<li>Method descriptions</li>
+<li>Usage examples</li>
+<li>Links to documentation</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> Snippet support<ul>
+<li>Common patterns (init, play, etc.)</li>
+<li>Template expansion</li>
+<li>Cursor positioning</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> NO abbreviations in DSL<ul>
+<li>Full readable names only</li>
+<li>Speed through autocomplete, not shortcuts</li>
+<li>Maintain code readability</li>
+</ul>
+</li>
+</ul>
+<h4 id="a44-diagnostics">A4.4 Diagnostics</h4>
+<ul>
+<li><input disabled="" type="checkbox"> Real-time syntax checking</li>
+<li><input disabled="" type="checkbox"> Error highlighting</li>
+<li><input disabled="" type="checkbox"> Warning for deprecated features</li>
+</ul>
+<h3 id="phase-a5-daw-plugin-development">Phase A5: DAW Plugin Development</h3>
+<p><strong>Goal</strong>: Create VST/AU plugin for DAW integration</p>
+<h4 id="a51-plugin-architecture">A5.1 Plugin Architecture</h4>
+<ul>
+<li><input disabled="" type="checkbox"> VST3 wrapper implementation</li>
+<li><input disabled="" type="checkbox"> AU wrapper implementation</li>
+<li><input disabled="" type="checkbox"> IPC with OrbitScore engine</li>
+</ul>
+<h4 id="a52-audio-routing">A5.2 Audio Routing</h4>
+<ul>
+<li><input disabled="" type="checkbox"> Select sequence output</li>
+<li><input disabled="" type="checkbox"> Multi-channel support</li>
+<li><input disabled="" type="checkbox"> Sync with DAW transport</li>
+</ul>
+<h4 id="a53-parameter-automation">A5.3 Parameter Automation</h4>
+<ul>
+<li><input disabled="" type="checkbox"> Expose parameters to DAW</li>
+<li><input disabled="" type="checkbox"> Handle automation curves</li>
+<li><input disabled="" type="checkbox"> Real-time parameter updates</li>
+</ul>
+<h2 id="testing-strategy">Testing Strategy</h2>
+<h3 id="unit-tests">Unit Tests</h3>
+<ul>
+<li>Parser: All syntax variants</li>
+<li>Audio Engine: File formats, slicing, stretching</li>
+<li>Transport: State transitions, timing</li>
+</ul>
+<h3 id="integration-tests">Integration Tests</h3>
+<ul>
+<li>End-to-end playback</li>
+<li>Multi-sequence synchronization</li>
+<li>Editor command execution</li>
+</ul>
+<h3 id="performance-tests">Performance Tests</h3>
+<ul>
+<li>Audio latency measurement</li>
+<li>CPU usage optimization</li>
+<li>Memory management</li>
+</ul>
+<h2 id="success-criteria">Success Criteria</h2>
+<ol>
+<li><strong>Parser</strong>: Successfully parse all DSL syntax from <a href="../core/INSTRUCTION_ORBITSCORE_DSL.html"><code>../core/INSTRUCTION_ORBITSCORE_DSL.md</code></a></li>
+<li><strong>Audio</strong>: Play sliced audio with tempo adjustment and optional pitch preservation</li>
+<li><strong>Transport</strong>: Execute all transport commands with proper timing</li>
+<li><strong>Editor</strong>: Cmd+Enter execution works for all commands</li>
+<li><strong>DAW</strong>: Plugin routes audio to DAW tracks</li>
+</ol>
+<h2 id="migration-path">Migration Path</h2>
+<h3 id="deprecated-components">Deprecated Components</h3>
+<ul>
+<li><code>packages/engine/src/midi.ts</code> - MIDI output</li>
+<li><code>packages/engine/src/pitch.ts</code> - Degree to MIDI conversion</li>
+<li>Old parser for MIDI-based syntax</li>
+</ul>
+<h3 id="new-components-needed">New Components Needed</h3>
+<ul>
+<li><code>packages/engine/src/audio/</code> - Audio engine</li>
+<li><code>packages/engine/src/transport/</code> - Transport system</li>
+<li><code>packages/engine/src/parser/audio-parser.ts</code> - New parser</li>
+<li><code>packages/daw-plugin/</code> - DAW plugin package</li>
+</ul>
+<h2 id="risk-mitigation">Risk Mitigation</h2>
+<ol>
+<li><strong>Audio Latency</strong>: Use appropriate buffer sizes, implement look-ahead</li>
+<li><strong>Time-Stretching Quality</strong>: Research best algorithms (Rubber Band, SoundTouch)</li>
+<li><strong>Cross-Platform</strong>: Initially focus on macOS, plan for Windows/Linux</li>
+<li><strong>DAW Compatibility</strong>: Test with major DAWs (Ableton, Logic, Cubase)</li>
+</ol>
+<h2 id="timeline-estimate">Timeline Estimate</h2>
+<ul>
+<li>Phase A1 (Parser): 1 week</li>
+<li>Phase A2 (Audio Engine): 2-3 weeks</li>
+<li>Phase A3 (Transport): 1 week</li>
+<li>Phase A4 (VS Code Extension): 1 week</li>
+<li>Phase A5 (DAW Plugin): 2-3 weeks</li>
+</ul>
+<p><strong>Total</strong>: 7-10 weeks for full implementation</p>
+<h2 id="future-improvements-post-dsl-v30">Future Improvements (Post DSL v3.0)</h2>
+<h3 id="中優先度次のprで対処可能">中優先度（次のPRで対処可能）</h3>
+<h4 id="️-エッジケーステストの追加">⚠️ エッジケーステストの追加</h4>
+<p><strong>関連Issue</strong>: Claude Review #45 項目5
+<strong>目的</strong>: RUN/LOOP/MUTEコマンドの堅牢性向上
+<strong>内容</strong>:</p>
+<ul>
+<li>空のコマンド: <code>RUN()</code>, <code>LOOP()</code>, <code>MUTE()</code></li>
+<li>重複シーケンス: <code>RUN(kick, kick, kick)</code></li>
+<li>存在しないシーケンス: <code>RUN(nonexistent)</code>（現在は警告のみ）</li>
+<li>RUN→LOOP遷移時の挙動確認</li>
+<li>同一シーケンスの複数グループ所属</li>
+</ul>
+<p><strong>実装場所</strong>: <code>tests/interpreter/unidirectional-toggle.spec.ts</code></p>
+<h4 id="️-パフォーマンス最適化">⚠️ パフォーマンス最適化</h4>
+<p><strong>関連Issue</strong>: Claude Review #45 項目4
+<strong>目的</strong>: handleLoopCommandの処理効率向上
+<strong>内容</strong>:</p>
+<ul>
+<li>現在の二重ループを単一ループに統合</li>
+<li>oldLoopGroupとnewLoopGroupの差分処理を最適化</li>
+<li>メモリアロケーション削減</li>
+</ul>
+<p><strong>実装場所</strong>: <code>packages/engine/src/interpreter/process-statement.ts</code>
+<strong>推定工数</strong>: 0.5日</p>
+<h3 id="低優先度将来的な改善">低優先度（将来的な改善）</h3>
+<h4 id="-ドキュメント充実">📚 ドキュメント充実</h4>
+<p><strong>関連Issue</strong>: Claude Review #45 項目6
+<strong>目的</strong>: 実践的なユースケースの提供
+<strong>内容</strong>:</p>
+<ul>
+<li>より多くの実用例（ライブコーディングパターン）</li>
+<li>DSL v2.0からv3.0への移行ガイド</li>
+<li>RUN/LOOP/MUTEの組み合わせパターン集</li>
+<li>トラブルシューティングガイド</li>
+</ul>
+<p><strong>実装場所</strong>:</p>
+<ul>
+<li><code>docs/USER_MANUAL.md</code></li>
+<li><code>docs/MIGRATION_GUIDE_v3.md</code>（新規作成）</li>
+<li><code>examples/live-coding-patterns/</code>（新規ディレクトリ）</li>
+</ul>
+<p><strong>推定工数</strong>: 1-2日</p>
+<h4 id="-シームレス更新ロジックの統一コメント追加">📚 シームレス更新ロジックの統一・コメント追加</h4>
+<p><strong>関連Issue</strong>: Claude Review #45 項目1
+<strong>目的</strong>: 全_method()実装の一貫性確保
+<strong>内容</strong>:</p>
+<ul>
+<li>現在の_method()実装レビュー</li>
+<li>&quot;Future: immediate application logic&quot;コメントの具体化</li>
+<li>統一的なシームレス更新パターンの設計</li>
+<li>実装ガイドライン文書化</li>
+</ul>
+<p><strong>実装場所</strong>:</p>
+<ul>
+<li><code>packages/engine/src/core/sequence.ts</code></li>
+<li><code>packages/engine/src/core/global.ts</code></li>
+<li><code>docs/DEVELOPER_GUIDE.md</code>（新規セクション）</li>
+</ul>
+<p><strong>推定工数</strong>: 2-3日（設計含む）</p>
+<hr>
+<p><em>Last Updated: 2025-10-26</em>
+<em>Canonical Reference: <a href="../core/INSTRUCTION_ORBITSCORE_DSL.html"><code>../core/INSTRUCTION_ORBITSCORE_DSL.md</code></a></em></p>
+
+</main>
+</body>
+</html>

@@ -20,7 +20,7 @@ EOF
   fi
 fi
 
-# Check if WORK_LOG.md is staged
+# Check if WORK_LOG is staged (高頻度の運用ログのため Markdown 例外: docs/development/WORK_LOG.md)
 if ! git diff --cached --name-only | grep -q "docs/development/WORK_LOG.md"; then
   cat << 'EOF'
 {

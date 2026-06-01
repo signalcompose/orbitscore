@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research: Ableton Link Audio API 調査結果（Issue #188 / Epic #187） — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="research-ableton-link-audio-api-調査結果issue-188--epic-187">Research: Ableton Link Audio API 調査結果（Issue #188 / Epic #187）</h1>
+<p><strong>調査日</strong>: 2026-05-07
+<strong>ブランチ</strong>: <code>188-link-audio-research</code>
+<strong>関連 Issue</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/188">#188</a> (Step 1) / <a href="https://github.com/signalcompose/orbitscore/issues/187">#187</a> (Epic)</p>
+<h2 id="調査目的">調査目的</h2>
+<p>Ableton Live 12.4 (2026-05-05 公開) で導入された <strong>Link Audio</strong> を OrbitScore に統合するため、 SDK の API surface・サンプルレート挙動・ライセンス条件を一次情報で確定する。 後続の Step 2 (SC plugin 実装) / Step 3 (DSL 構文) / Step 4 (ビルドパイプライン) が安心して着手できる解像度を確保する。</p>
+<h2 id="一次情報のソース">一次情報のソース</h2>
+<ul>
+<li>Ableton/link 公式リポジトリ: <a href="https://github.com/Ableton/link">https://github.com/Ableton/link</a></li>
+<li>LinkAudio.hpp 直接取得: <a href="https://raw.githubusercontent.com/Ableton/link/master/include/ableton/LinkAudio.hpp">https://raw.githubusercontent.com/Ableton/link/master/include/ableton/LinkAudio.hpp</a></li>
+<li>参考実装: gluon/Void-LinkAudio (<a href="https://github.com/gluon/Void-LinkAudio">https://github.com/gluon/Void-LinkAudio</a>) — Max/PD/TouchDesigner/VCV/oF 用 host adapter、 GPL-2.0-or-later</li>
+<li>LinkAudioHut example: <a href="https://github.com/Ableton/link/tree/master/examples/linkaudiohut">https://github.com/Ableton/link/tree/master/examples/linkaudiohut</a></li>
+</ul>
+<h2 id="0-確定した設計決定-post-research-review">0. 確定した設計決定 (post-research review)</h2>
+<p>調査結果を元にユーザーと判断した設計上の決定事項。 詳細な根拠は以下のセクションを参照。</p>
+<h3 id="01-出力モード--global-で明示宣言-ファイル単位で-hardware-と排他">0.1 出力モード — Global で明示宣言、 ファイル単位で hardware と排他</h3>
+<pre><code>init global.linkAudio()           # 有効化、 target SR 自動検出 (fallback 48000)
+init global.linkAudio(48000)      # 明示 target SR で有効化（auto-detect 不可時の override）
+</code></pre>
+<ul>
+<li>once-per-file diagnostic の対象に追加（既存の <code>global.tempo()</code> 等と同様）</li>
+<li>宣言中は <strong>全 sequence が LinkAudio 経由</strong>、 hardware 出力との混在不可</li>
+<li>宣言なし → 既存通り hardware 出力のみ（既存挙動を保持）</li>
+</ul>
+<h3 id="02-per-sequence-channel-指定">0.2 Per-sequence channel 指定</h3>
+<pre><code>seq.output(&quot;kick-channel&quot;)        # channel name のみ (kind は Global mode から implicit)
+</code></pre>
+<ul>
+<li><code>init global.linkAudio()</code> 未宣言で <code>seq.output()</code> を使った場合は VS Code diagnostic で warning（Step 3 で実装）</li>
+<li>channel name 制約: ASCII 英数 + <code>-_</code>、 max 64 chars（API 仕様未明、 安全側、 Step 2 で再確認）</li>
+</ul>
+<h3 id="03-sample-rate-戦略">0.3 Sample rate 戦略</h3>
+<ul>
+<li>scsynth は <strong>hardware SR</strong>（boot option で強制しない）</li>
+<li>plugin が target SR へ resample してから commit</li>
+<li>target SR の決定優先順: <strong>auto-detect → DSL override → 48k fallback</strong></li>
+<li>auto-detect 戦略は LinkAudio peer info / OS query を試みる（実装可能性は Step 2.1 で検証）</li>
+</ul>
+<h3 id="04-license-分離-mere-aggregation">0.4 License 分離 (mere aggregation)</h3>
+<ul>
+<li><code>.scx</code> plugin を独立 <strong>GPL-2.0-or-later artifact</strong> として分離配布</li>
+<li><code>.vsix</code> bundle に同梱する場合は LICENSE.GPL-2.0 + NOTICE で aggregation 明記</li>
+<li>OrbitScore 本体 (<code>LicenseRef-Signal-compose-FairTrade-1.0</code>) は GPL の影響を受けない</li>
+<li>商用配布フェーズ移行時に Ableton への proprietary license 申請判断（現状 research / personal use フェーズで OK）</li>
+</ul>
+<h3 id="05-channel-同時公開上限">0.5 Channel 同時公開上限</h3>
+<p><strong>API / LinkAudio 仕様レベル</strong>: self-imposed 制限なし。 LinkAudio ライブラリ仕様に任せる。</p>
+<p><strong>OrbitScore 推奨上限</strong> (§4.1 参照): 同時シーケンス数の現実的な目安として 16 を推奨。 これは API による hard limit ではなく、 一般的な live coding セッションでの可読性 / 演奏性を考慮した soft guideline。</p>
+<h3 id="06-plugin-ライフサイクル">0.6 Plugin ライフサイクル</h3>
+<ul>
+<li><code>init global.linkAudio()</code> 宣言時に plugin load + <code>enableLinkAudio(true)</code></li>
+<li>scsynth shutdown 時に自動 disable / unload</li>
+<li>ランタイム切替（演奏中に LinkAudio mode を on/off）は v1.2.0 では非対応（次版で検討）</li>
+</ul>
+<h2 id="1-api-surface">1. API surface</h2>
+<h3 id="11-クラス階層">1.1 クラス階層</h3>
+<pre><code>BasicLink&lt;Clock&gt;  (既存、 tempo/beat/phase/transport 同期を担当)
+  └─ BasicLinkAudio&lt;Clock&gt;  (Link を継承し audio 機能を追加)
+       └─ LinkAudio = BasicLinkAudio&lt;link::platform::Clock&gt;
+</code></pre>
+<p><strong>重要</strong>: <code>LinkAudio</code> は <code>Link</code> を継承しているため、 既存 Link の tempo / beat / phase / start-stop API がそのまま利用できる。 <strong>Link Audio が「Link の上位互換」と説明される根拠はこの継承関係</strong>。 ユーザープロンプトの「Link と LinkAudio の同時使用は不可、 LinkAudio に統一する」 は正しい（同 peer name で 2 つの Link オブジェクトを作ると衝突する）。</p>
+<h3 id="12-linkaudio-クラスの主要メソッド">1.2 LinkAudio クラスの主要メソッド</h3>
+<pre><code class="language-cpp">LinkAudio(double bpm, std::string name);              // コンストラクタ
+
+bool isLinkAudioEnabled() const;                      // 状態取得
+void enableLinkAudio(bool bEnable);                   // ランタイム有効/無効切替
+
+std::string peerName() const;
+void setPeerName(std::string name);
+
+template &lt;typename Callback&gt;
+void setChannelsChangedCallback(Callback callback);   // callback シグネチャ: void()
+                                                      // 引数なし、 内部で channels() を呼んで取得
+
+std::vector&lt;Channel&gt; channels() const;                // 現在の Sink 一覧
+
+template &lt;typename Function&gt;
+void callOnLinkThread(Function func);                 // Link 内部スレッドへタスク dispatch
+</code></pre>
+<h3 id="13-channel-struct">1.3 Channel struct</h3>
+<pre><code class="language-cpp">struct Channel {
+  ChannelId id;          // 内部 ID (peer 内一意)
+  std::string name;      // 公開名 (利用者 visible)
+  PeerId peerId;         // 発信元 peer ID
+  std::string peerName;  // 発信元 peer 名
+};
+</code></pre>
+<p><strong>永続性</strong>: ChannelId と PeerId は再起動を跨いで永続的（リファレンス記述は LinkAudio.hpp ではなく Live 12.4 release notes 由来、 同一 peer 内で名前を変えても ID は不変）。</p>
+<h3 id="14-linkaudiosink-publish-側">1.4 LinkAudioSink (publish 側)</h3>
+<pre><code class="language-cpp">template &lt;typename LinkAudio&gt;
+LinkAudioSink(LinkAudio&amp; link, std::string name, size_t maxNumSamples);
+
+std::string name() const;
+void setName(std::string name);                       // ※ 注意: name 系は thread-safe ではない
+void requestMaxNumSamples(size_t numSamples);
+size_t maxNumSamples() const;
+
+// RAII で commit する内部構造
+struct BufferHandle {
+  BufferHandle(LinkAudioSink&amp;);                       // ロック取得
+  ~BufferHandle();                                    // ロック解放
+  operator bool() const;                              // 有効かチェック
+  int16_t* samples;                                   // 16-bit signed int 書き込み先
+  size_t maxNumSamples;
+
+  template &lt;typename SessionState&gt;
+  bool commit(const SessionState&amp;,
+              double beatsAtBufferBegin,              // バッファ先頭ビート位置
+              double quantum,                         // 量子化単位 (拍数)
+              size_t numFrames,                       // フレーム数
+              size_t numChannels,                     // 1 (mono) または 2 (stereo)
+              uint32_t sampleRate);                   // ★ commit ごとに渡す（固定不要）
+};
+</code></pre>
+<p><strong>重要発見</strong>:</p>
+<ul>
+<li><code>commit()</code> は <strong>realtime-safe</strong> と明記（SC plugin の audio thread から直接呼んで OK）</li>
+<li><code>sampleRate</code> は <strong>commit ごとに任意の値</strong>を渡せる仕様 → API 上は SR 固定不要</li>
+<li>ただし後述「2. Sample rate 戦略」で別の制約あり</li>
+</ul>
+<h3 id="15-linkaudiosource-subscribe-側--orbitscore-では使わない">1.5 LinkAudioSource (subscribe 側 — OrbitScore では使わない)</h3>
+<pre><code class="language-cpp">template &lt;typename LinkAudio, typename Callback&gt;
+LinkAudioSource(LinkAudio&amp; link, ChannelId id, Callback callback);
+// Callback: void (BufferHandle bufferHandle)
+
+ChannelId id() const;
+~LinkAudioSource();
+
+// BufferHandle は callback で渡される
+struct BufferHandle {
+  int16_t* samples;
+  Info info;  // numChannels, numFrames, sampleRate, sessionBeatTime, tempo, etc.
+};
+</code></pre>
+<p>OrbitScore は publisher のみ実装するため Source 側は本 Epic では使わない（Live が subscribe する側）。</p>
+<h2 id="2-sample-rate-戦略最重要">2. Sample rate 戦略（最重要）</h2>
+<p><strong>API 上は柔軟だが、 実用上は publisher と subscriber の SR を一致させる必要がある。</strong></p>
+<h3 id="根拠-void-linkaudio-readme-からの一次引用">根拠 (Void-LinkAudio README からの一次引用)</h3>
+<blockquote>
+<p>Pd vanilla performs no internal SRC. If Pd runs at 44.1 kHz against a publisher at 48 kHz (Live default), the receive ring buffer overflows continuously at the rate ratio (~8 % continuous drops).</p>
+</blockquote>
+<p>つまり Link Audio 自身は <strong>内部リサンプリングを行わない</strong>。 publisher が 48k で出して subscriber が 44.1k で受けると、 ring buffer が ~8% 連続でオーバーフローし、 連続的にサンプルがドロップする。</p>
+<h3 id="live-124-のデフォルト">Live 12.4 のデフォルト</h3>
+<p>Live のデフォルト SR は <strong>48kHz</strong> （Live 12 は 44.1 もサポートするがプロジェクト設定依存、 Link Audio の peer 間整合は 48k 想定で運用するのが事実上の標準）。</p>
+<h3 id="orbitscore-scsynth-側の方針">OrbitScore (scsynth) 側の方針</h3>
+<p><strong>確定方針 (Section 0.3 参照): scsynth は hardware SR のまま、 plugin 内で target SR へリサンプリング。</strong></p>
+<p>当初は <code>-S 48000</code> 強制起動も候補だったが、 ユーザーレビューで以下の理由で plugin リサンプリング経路を採用:</p>
+<ul>
+<li>macOS audio device で 48kHz 不可なケースでの起動失敗を避け、 hardware 環境差異を吸収できる</li>
+<li>target SR を <code>init global.linkAudio(SR)</code> で .orbs ファイル単位に設定可能、 Live のセッション SR (44.1 等) にも対応できる柔軟性</li>
+</ul>
+<h3 id="step-2-への申し送り">Step 2 への申し送り</h3>
+<ul>
+<li>scsynth boot は既存通り (hardware SR 任せ)</li>
+<li>plugin 内で <code>LinkAudioSink::commit()</code> に target SR を渡す前にリサンプリング実装</li>
+<li>target SR の auto-detect 実装可能性を Step 2.1 で検証（LinkAudio peer info / OS query / その他）、 不可なら 48k fallback + DSL override</li>
+<li>リサンプリング実装は alpha 段階では線形補間 / 簡易 sinc などで最小実装、 後続で rubato 相当に置換も検討</li>
+</ul>
+<h2 id="3-ライセンス分離方針">3. ライセンス分離方針</h2>
+<h3 id="31-ableton-link-のライセンス">3.1 Ableton Link のライセンス</h3>
+<ul>
+<li><strong>GPL-2.0-or-later</strong> (確認済、 標準 GPL v2 テキストに改変なし) または <strong>proprietary commercial license</strong></li>
+<li>商用配布する場合は <code>link-devs@ableton.com</code> への申請が必要</li>
+<li>header-only ライブラリ（関数定義がヘッダに含まれるため、 コンパイル時にバイナリへ直接取り込まれる）→ コンパイル結果の <code>.scx</code> は GPL-2.0-or-later の派生作物として扱われる (GPL FAQ: &quot;linking with header-only code&quot; は派生作物を構成する)</li>
+</ul>
+<h3 id="32-orbitscore-本体ライセンス">3.2 OrbitScore 本体ライセンス</h3>
+<ul>
+<li>root: <code>LicenseRef-Signal-compose-FairTrade-1.0</code> (Cargo.toml workspace で確認、 LICENSE ファイル参照)</li>
+<li>VS Code extension: <code>SEE LICENSE IN ../../LICENSE</code></li>
+</ul>
+<h3 id="33-sc-plugin-orbitlinkaudioscx-のライセンス扱い">3.3 SC plugin (<code>OrbitLinkAudio.scx</code>) のライセンス扱い</h3>
+<p><strong>結論: SC plugin (<code>.scx</code>) を独立 GPL-2.0-or-later artifact として分離配布する。</strong></p>
+<ul>
+<li><code>.scx</code> 内に LinkAudio.hpp の inline コードがコンパイル結果として含まれる → 派生作品 → GPL-2.0-or-later 適用</li>
+<li>OrbitScore 本体（TypeScript / Rust / その他）は GPL の影響を受けない（プロセス分離 = scsynth 内 plugin、 OrbitScore は OSC client にすぎない）</li>
+<li><code>.vsix</code> bundle に <code>.scx</code> を同梱する場合:<ul>
+<li><code>LICENSE.GPL-2.0</code> を <code>Resources/plugins/</code> 配下に同梱（<code>scripts/extract-scsynth-bundle.sh</code> で copy）</li>
+<li><code>NOTICE</code> ファイルに「<code>Resources/plugins/OrbitLinkAudio.scx</code> is licensed under GPL-2.0-or-later, separate from the OrbitScore base license」と明記</li>
+<li>distributing aggregation (mere aggregation) として扱える（GPL FAQ）→ OrbitScore 全体が GPL になることはない</li>
+</ul>
+</li>
+</ul>
+<h3 id="34-商用配布判断">3.4 商用配布判断</h3>
+<p>OrbitScore が将来商用配布フェーズに入る場合:</p>
+<ul>
+<li>選択肢 A: GPL plugin のまま配布、 利用者は GPL 義務を理解</li>
+<li>選択肢 B: Ableton から proprietary license を取得して GPL 制約を外す</li>
+<li>現状は research / personal use フェーズ → 選択肢 A で問題なし。 Step 4 のリリースパイプライン整備時に re-review</li>
+</ul>
+<h3 id="35-legal-review-が必要な箇所明文化">3.5 Legal review が必要な箇所（明文化）</h3>
+<ul>
+<li><code>.scx</code> 配布時の LICENSE / NOTICE 文言の最終確認</li>
+<li><code>.vsix</code> bundle 内での aggregation 認定の有効性（mere aggregation かどうか）</li>
+<li>Marketplace 配布時の Microsoft / Open VSX のライセンス表記要件</li>
+</ul>
+<h2 id="4-設計上の追加確定事項">4. 設計上の追加確定事項</h2>
+<h3 id="41-channel-name-の制約">4.1 channel name の制約</h3>
+<p>公式仕様では明示されていない。 安全側で以下を採用:</p>
+<ul>
+<li>許容文字: ASCII 英数 + <code>-</code> + <code>_</code>（peer 間で文字化け回避）</li>
+<li>最大長: 64 chars（推測の安全側、 LinkAudio 仕様で上限が確認できれば更新）</li>
+<li>最大 channel 数 / peer: 制約なし（複数 Sink 公開は API 上自由）。 OrbitScore 側で実用上 16 を上限とする（同時シーケンス数の現実的上限）</li>
+</ul>
+<h3 id="42-enabledisable-ライフサイクル">4.2 enable/disable ライフサイクル</h3>
+<ul>
+<li><code>enableLinkAudio(true)</code> を plugin load 時に呼ぶ</li>
+<li><code>enableLinkAudio(false)</code> は scsynth shutdown 時に呼ぶ（デストラクタ任せでも良い）</li>
+<li>ランタイム切替（Live セッション中に LinkAudio をオフにする等）は v1.2.0 では非対応とする（次バージョンで検討）</li>
+</ul>
+<h3 id="43-link-単独同時使用ガード">4.3 Link 単独同時使用ガード</h3>
+<ul>
+<li>既存 OrbitScore に Link 単独統合は <strong>無し</strong>（探索済、 <code>node-abletonlink</code> 等の依存なし）</li>
+<li>将来追加した場合は OrbitScore 起動時に検出して エラー終了する guard を実装（Step 4 で対応）</li>
+</ul>
+<h3 id="44-channels-callback-の使い道">4.4 channels callback の使い道</h3>
+<ul>
+<li><code>setChannelsChangedCallback</code> のシグネチャは <code>void()</code>（引数なし）</li>
+<li>内部で <code>channels()</code> を呼んで現在の channel リストを取得する</li>
+<li>OrbitScore 用途では「他 peer が新 channel を公開した」 通知に使えるが、 publisher only 実装のため当面は <strong>logging のみ</strong>（debugging / status display 用途）</li>
+</ul>
+<h2 id="5-プランへの修正提案">5. プランへの修正提案</h2>
+<h3 id="51-修正なし仮説が一次情報で裏付けられた項目">5.1 修正なし（仮説が一次情報で裏付けられた項目）</h3>
+<ul>
+<li>SC plugin (C++ UGen) 経路の妥当性 ✅</li>
+<li><code>LinkAudio</code> が <code>Link</code> を継承するため tempo/beat/phase/transport は base クラスで取れる ✅</li>
+<li>16-bit signed int interleaved 形式 ✅</li>
+<li>mono / stereo のみ ✅</li>
+<li><code>BufferHandle::commit()</code> は realtime-safe で SC plugin の audio thread から呼べる ✅</li>
+<li>alpha API、 wrapper 1 ファイルでの追従戦略 ✅</li>
+</ul>
+<h3 id="52-追加補強">5.2 追加・補強</h3>
+<ul>
+<li><strong>出力モードを Global で排他化</strong>: 当初の per-sequence destination 案 (<code>seq.output(&quot;link-audio&quot;, &quot;ch&quot;)</code>) から、 <code>init global.linkAudio()</code> による file 単位の mode 宣言 + sequence 側は channel name のみ (<code>seq.output(&quot;ch&quot;)</code>) へ簡素化（Section 0.1, 0.2）</li>
+<li><strong>scsynth は hardware SR 任せ + plugin 内リサンプリング</strong>: 当初の <code>-S 48000</code> 強制起動案を撤回、 hardware 環境差異吸収と Live セッション SR 柔軟対応のため (Section 0.3)</li>
+<li><strong>target SR は auto-detect → DSL override → 48k fallback</strong>: <code>init global.linkAudio(SR)</code> でファイル単位設定可能</li>
+<li><strong>LinkAudio enable/disable ライフサイクル</strong>: <code>init global.linkAudio()</code> 宣言時に load + enable、 scsynth shutdown 時 disable / unload (Section 0.6)</li>
+<li><strong>channels callback は debug/logging 用途</strong>: publisher only 実装のため現段階で機能的役割なし</li>
+<li><strong>Channel 同時公開上限</strong>: self-imposed 制限なし、 LinkAudio 仕様任せ (Section 0.5)</li>
+<li><strong>Channel name policy</strong>: ASCII + <code>-_</code>、 max 64 chars（API 仕様未明、 安全側）</li>
+</ul>
+<h3 id="53-step-2-着手前の-todo">5.3 Step 2 着手前の TODO</h3>
+<ul>
+<li>LinkAudioHut example の <code>AudioPlatform</code> 抽象を読み込んで commit ループの実装パターンを確定（404 で取得できなかった <code>linkaudio/AudioPlatform.hpp</code> を git submodule 取り込み後に直接読む）</li>
+<li>target SR auto-detect 戦略の実装可能性検証 (Step 2.1): LinkAudio peer info / OS query / その他の API surface を確認</li>
+<li>Plugin 内リサンプリング実装方針確定: 線形補間 / 簡易 sinc / rubato 相当のいずれを選ぶか（alpha 段階では最小実装で開始）</li>
+<li>SC Plugin SDK のバージョン整合（scsynth bundle 3.14.x との ABI 一致を <code>verify-bundle.sh</code> で assert）</li>
+</ul>
+<h2 id="6-残る不確定要素">6. 残る不確定要素</h2>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>影響度</th>
+<th>解決時期</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>linkaudio/AudioPlatform.hpp</code> の commit ループ実装パターン</td>
+<td>中</td>
+<td>Step 2.1 で submodule 取り込み後</td>
+</tr>
+<tr>
+<td>LinkAudio peer info / OS API による target SR auto-detect 可否</td>
+<td>中</td>
+<td>Step 2.1 で API surface 直接確認</td>
+</tr>
+<tr>
+<td>Plugin 内リサンプリングの実装方式（線形 / sinc / rubato 相当）</td>
+<td>中</td>
+<td>Step 2.2 で audio quality 評価しつつ確定</td>
+</tr>
+<tr>
+<td><code>.vsix</code> bundle 内の aggregation 法的扱い</td>
+<td>中</td>
+<td>Step 4 (リリースパイプライン) で legal review</td>
+</tr>
+<tr>
+<td>LinkAudio.hpp の SDK バージョン pinning 戦略</td>
+<td>中</td>
+<td>Step 2.1 submodule 設定時</td>
+</tr>
+</tbody></table>
+<h2 id="7-結論">7. 結論</h2>
+<p><strong>Step 1 ゴール達成。</strong> API surface・SR 戦略・ライセンス分離方針・設計上の追加確定事項がすべて一次情報ベースで明文化され、 ユーザーレビューにより設計決定 (Section 0) が確定した。 当初の per-sequence destination + 48kHz 強制案からは、 <strong>Global mode 宣言 + plugin 内リサンプリング + per-sequence channel name only</strong> へ簡素化されたが、 これは破壊的 finding に基づく変更ではなく UX 設計上の judgment call。 Epic #187 のプラン本体は Section 0 を反映した形で update が必要 (Step 2 着手前に Epic body を update 予定)。 後続 Step 2 (SC plugin 実装) は本ドキュメントの確定事項を前提に着手可能。</p>
+<hr>
+<p><strong>参考: 直接引用元の URL 一覧</strong></p>
+<ul>
+<li>LinkAudio.hpp: <a href="https://raw.githubusercontent.com/Ableton/link/master/include/ableton/LinkAudio.hpp">https://raw.githubusercontent.com/Ableton/link/master/include/ableton/LinkAudio.hpp</a></li>
+<li>Ableton/link README: <a href="https://github.com/Ableton/link/blob/master/README.md">https://github.com/Ableton/link/blob/master/README.md</a></li>
+<li>Ableton/link GPL v2.0 license file: <a href="https://raw.githubusercontent.com/Ableton/link/master/GNU-GPL-v2.0.md">https://raw.githubusercontent.com/Ableton/link/master/GNU-GPL-v2.0.md</a></li>
+<li>Void-LinkAudio README: <a href="https://raw.githubusercontent.com/gluon/Void-LinkAudio/main/README.md">https://raw.githubusercontent.com/gluon/Void-LinkAudio/main/README.md</a></li>
+<li>LinkAudioHut example: <a href="https://github.com/Ableton/link/tree/master/examples/linkaudiohut">https://github.com/Ableton/link/tree/master/examples/linkaudiohut</a></li>
+<li>scsynth <code>-S</code> フラグ: <a href="https://manpages.debian.org/testing/supercollider-server/scsynth.1.en.html">https://manpages.debian.org/testing/supercollider-server/scsynth.1.en.html</a></li>
+<li>ServerOptions sample rate: <a href="https://doc.sccode.org/Classes/ServerOptions.html">https://doc.sccode.org/Classes/ServerOptions.html</a></li>
+</ul>
+
+</main>
+</body>
+</html>

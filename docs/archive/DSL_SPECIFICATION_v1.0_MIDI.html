@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore DSL 仕様書 v1.0 (ARCHIVED) — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-dsl-仕様書-v10-archived">OrbitScore DSL 仕様書 v1.0 (ARCHIVED)</h1>
+<blockquote>
+<p>⚠️ <strong>この文書はアーカイブされています</strong></p>
+<ul>
+<li><strong>現行仕様</strong>: <a href="../INSTRUCTION_ORBITSCORE_DSL.html">../INSTRUCTION_ORBITSCORE_DSL.md</a></li>
+<li><strong>アーカイブ日</strong>: 2025-10-06</li>
+<li><strong>理由</strong>: v2.0でSuperCollider Audio Engineに移行（MIDIベースからオーディオベースへ）</li>
+<li><strong>用途</strong>: 開発過程の記録・論文執筆の参考資料</li>
+</ul>
+<p>この文書は、OrbitScoreの初期設計思想であるMIDIベースの度数システムを記録しています。
+実装の変遷については<a href="../WORK_LOG.md">../WORK_LOG.md</a>を参照してください。</p>
+</blockquote>
+<h2 id="概要">概要</h2>
+<p>OrbitScoreは、半音階度数システムを基盤とした音楽記述言語（DSL）です。最大の特徴は、<strong>度数0を休符として定義</strong>し、音と無音を同じ体系で扱うことです。これにより、リズムパターンの記述が直感的になり、ポリリズムやポリメーターの表現が容易になります。</p>
+<h2 id="基本思想">基本思想</h2>
+<h3 id="度数システム革新的特徴">度数システム（革新的特徴）</h3>
+<ul>
+<li><strong>度数0 = 休符/無音</strong> - 音楽的価値を持つ無音として定義</li>
+<li><strong>度数1-12 = 半音階</strong> - C, C#, D, D#, E, F, F#, G, G#, A, A#, B</li>
+<li>音と無音を同じ体系で扱うことで、シーケンスの記述が統一的に</li>
+</ul>
+<h3 id="精度とランダム性">精度とランダム性</h3>
+<ul>
+<li>小数第3位までの精度</li>
+<li>数値末尾の<code>r</code>は[0, 0.999]の範囲でランダム値を加算</li>
+<li><code>randseed</code>による再現可能なランダム性</li>
+</ul>
+<h2 id="文法仕様">文法仕様</h2>
+<h3 id="1-グローバル設定">1. グローバル設定</h3>
+<p>ファイル全体に適用される基本設定です。シーケンス内で上書き可能。</p>
+<pre><code class="language-osc">key &lt;ROOT&gt;              # 調性: C, Db, D, Eb, E, F, Gb, G, Ab, A, Bb, B
+tempo &lt;BPM&gt;             # テンポ: 整数または小数（例: 120, 132.5）
+meter &lt;N&gt;/&lt;D&gt; &lt;align&gt;   # 拍子: N/D形式、align = shared | independent
+randseed &lt;INT&gt;          # 乱数シード: 整数値（再現性のため）
+</code></pre>
+<h4 id="メーターの概念">メーターの概念</h4>
+<ul>
+<li><strong>shared</strong>: すべてのシーケンスが同じ小節線を共有（ポリリズム）</li>
+<li><strong>independent</strong>: 各シーケンスが独立した小節線を持つ（ポリメーター）</li>
+</ul>
+<h3 id="2-シーケンス定義">2. シーケンス定義</h3>
+<p>個別の楽器パートや音源を定義します。</p>
+<pre><code class="language-osc">sequence &lt;name&gt; {
+  # MIDI出力設定
+  bus &quot;&lt;IAC Bus名&gt;&quot;      # MIDIバス名（IAC Driver Bus 1など）
+  channel &lt;1-16&gt;         # MIDIチャンネル
+  
+  # 音楽的設定（グローバル設定を上書き）
+  key &lt;ROOT&gt;             # このシーケンス固有の調
+  tempo &lt;BPM&gt;            # このシーケンス固有のテンポ
+  meter &lt;N&gt;/&lt;D&gt; &lt;align&gt;  # このシーケンス固有の拍子
+  
+  # ピッチ関連
+  octave &lt;FLOAT&gt;         # 基本オクターブ（例: 4.0 = 中央C付近）
+  octmul &lt;FLOAT&gt;         # 度数間音程係数（1.0=標準12半音）
+  bendRange &lt;SEMITONES&gt;  # ピッチベンド範囲（半音単位）
+  mpe &lt;true|false&gt;       # MPE（多次元表現）モード
+  
+  # その他
+  defaultDur &lt;DUR&gt;       # デフォルト音価
+  randseed &lt;INT&gt;         # シーケンス固有の乱数シード
+  
+  # イベント列
+  &lt;events...&gt;
+}
+</code></pre>
+<h3 id="3-イベント記法">3. イベント記法</h3>
+<h4 id="度数表記">度数表記</h4>
+<pre><code class="language-osc"># 基本度数（1-12）
+1     # C
+2     # C#
+3     # D
+4     # D#
+5     # E
+6     # F
+7     # F#
+8     # G
+9     # G#
+10    # A
+11    # A#
+12    # B
+0     # 休符（無音）
+
+# 小数度数（微分音）
+1.5   # CとC#の中間（ピッチベンドで表現）
+3.25  # Dより1/4半音高い
+
+# ランダム
+1.0r  # 1.0 + [0, 0.999]のランダム値
+</code></pre>
+<h4 id="音価duration記法">音価（Duration）記法</h4>
+<pre><code class="language-osc"># 秒単位
+@2s        # 2秒
+@0.5s      # 0.5秒
+
+# 単位（Unit）- 拍子の分母を1とする
+@U1        # 4/4拍子なら四分音符
+@U0.5      # 八分音符
+@U2        # 二分音符
+@U1.5      # 付点四分音符
+
+# パーセンテージ
+@25%2bars  # 2小節の25%
+@50%1bar   # 1小節の50%
+
+# 連符
+@[3:2]*U1  # 3連符（U1の時間に3つ）
+@[5:4]*U2  # 5連符（U2の時間に5つ）
+</code></pre>
+<h4 id="修飾子">修飾子</h4>
+<pre><code class="language-osc"># オクターブシフト
+3^+1       # 度数3を1オクターブ上げる
+5^-2       # 度数5を2オクターブ下げる
+
+# デチューン（微調整）
+3~+0.5     # 度数3を0.5半音上げる
+7~-0.25    # 度数7を0.25半音下げる
+
+# 組み合わせ
+3^+1~-0.2  # 1オクターブ上げて0.2半音下げる
+</code></pre>
+<h4 id="和音記法">和音記法</h4>
+<pre><code class="language-osc"># 基本和音（同時発音）
+(1, 5, 8)           # C, E, Gの和音
+
+# 異なる音価を持つ和音
+(1@U1, 5@U0.5, 8@U2)  # 各音が異なる長さ
+
+# 修飾子付き和音
+(1^+1, 5~+0.3, 8)  # 各音に異なる修飾
+</code></pre>
+<h2 id="サンプルコード集">サンプルコード集</h2>
+<h3 id="例1-基本的なメロディー">例1: 基本的なメロディー</h3>
+<pre><code class="language-osc"># シンプルなCメジャースケール
+key C
+tempo 120
+meter 4/4 shared
+
+sequence melody {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  octave 4
+  defaultDur @U1
+  
+  # ドレミファソラシド
+  1 3 5 6 8 10 12 1^+1
+  
+  # 下降
+  1^+1 12 10 8 6 5 3 1
+}
+</code></pre>
+<h3 id="例2-リズムパターン休符を活用">例2: リズムパターン（休符を活用）</h3>
+<pre><code class="language-osc">key C
+tempo 140
+meter 4/4 shared
+
+sequence drums {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 10  # ドラムチャンネル
+  octave 3
+  
+  # キック・スネア・休符のパターン
+  1@U0.5 0@U0.5 5@U0.5 0@U0.5
+  1@U0.25 1@U0.25 5@U0.5 0@U1
+}
+</code></pre>
+<h3 id="例3-ポリリズムshared-meter">例3: ポリリズム（shared meter）</h3>
+<pre><code class="language-osc">key G
+tempo 120
+meter 4/4 shared  # 全シーケンスが小節線を共有
+
+sequence bass {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  octave 2
+  
+  # 4拍パターン
+  1@U1 1@U1 5@U1 5@U1
+}
+
+sequence melody {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 2
+  octave 4
+  
+  # 3拍パターン（4/4の中で）
+  1@U1.333 3@U1.333 5@U1.334
+}
+</code></pre>
+<h3 id="例4-ポリメーターindependent-meter">例4: ポリメーター（independent meter）</h3>
+<pre><code class="language-osc">key F
+tempo 108
+meter 4/4 shared
+
+sequence piano {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  meter 5/4 independent  # 独立した5/4拍子
+  octave 4
+  
+  # 5拍のパターンが独立して回る
+  1@U1 3@U1 5@U1 8@U1 10@U1
+}
+
+sequence bass {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 2
+  meter 3/4 independent  # 独立した3/4拍子
+  octave 2
+  
+  # 3拍のパターン
+  1@U1 5@U1 8@U1
+}
+</code></pre>
+<h3 id="例5-和音とアルペジオ">例5: 和音とアルペジオ</h3>
+<pre><code class="language-osc">key Eb
+tempo 90
+meter 6/8 shared
+
+sequence harmony {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  octave 4
+  
+  # 和音進行
+  (1, 5, 8)@U3          # Ebメジャー
+  (6, 10, 1^+1)@U3      # Abメジャー
+  (8, 12, 3^+1)@U3      # Bbメジャー
+  (1, 5, 8)@U3          # Ebメジャー
+}
+
+sequence arpeggio {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 2
+  octave 5
+  
+  # アルペジオ（分散和音）
+  1@U0.5 5@U0.5 8@U0.5
+  8@U0.5 5@U0.5 1@U0.5
+}
+</code></pre>
+<h3 id="例6-微分音とピッチベンド">例6: 微分音とピッチベンド</h3>
+<pre><code class="language-osc">key C
+tempo 60
+meter 4/4 shared
+
+sequence microtonal {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  octave 4
+  bendRange 2  # ±2半音のベンド範囲
+  
+  # 微分音のメロディー
+  1      # C
+  1.5    # C + 1/4音
+  2      # C#
+  2.5    # D - 1/4音
+  3      # D
+  
+  # デチューンを使った効果
+  5~+0.15  # Eより少し高く
+  5        # E
+  5~-0.15  # Eより少し低く
+}
+</code></pre>
+<h3 id="例7-ランダム要素">例7: ランダム要素</h3>
+<pre><code class="language-osc">key A
+tempo 150
+meter 4/4 shared
+randseed 12345  # 再現可能なランダム
+
+sequence random_melody {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  octave 4
+  
+  # ランダムな変化を含むメロディー
+  1@U1
+  3.0r@U1    # 3 + [0, 0.999]のランダム
+  5@U1
+  8.0r@U1    # 8 + [0, 0.999]のランダム
+  
+  # ランダムな音価
+  10@U1r     # U1 + ランダム
+}
+</code></pre>
+<h3 id="例8-連符の使用">例8: 連符の使用</h3>
+<pre><code class="language-osc">key D
+tempo 100
+meter 4/4 shared
+
+sequence tuplets {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  octave 4
+  
+  # 通常の8分音符
+  1@U0.5 3@U0.5 5@U0.5 8@U0.5
+  
+  # 3連符（2拍に3つの音）
+  1@[3:2]*U1 3@[3:2]*U1 5@[3:2]*U1
+  
+  # 5連符（1拍に5つの音）
+  1@[5:4]*U1 2@[5:4]*U1 3@[5:4]*U1 4@[5:4]*U1 5@[5:4]*U1
+}
+</code></pre>
+<h3 id="例9-octmulによる音程システムの変更">例9: octmulによる音程システムの変更</h3>
+<pre><code class="language-osc">key C
+tempo 120
+meter 4/4 shared
+
+sequence normal {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  octave 4
+  octmul 1.0  # 標準12半音システム
+  
+  1 2 3 4 5  # C, C#, D, D#, E
+}
+
+sequence compressed {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 2
+  octave 4
+  octmul 0.5  # 6半音に圧縮
+  
+  1 2 3 4 5  # より狭い音程で進行
+}
+
+sequence expanded {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 3
+  octave 4
+  octmul 2.0  # 24半音に拡張
+  
+  1 2 3 4 5  # より広い音程で進行
+}
+</code></pre>
+<h3 id="例10-複雑な楽曲構造">例10: 複雑な楽曲構造</h3>
+<pre><code class="language-osc"># グローバル設定
+key Bb
+tempo 96
+meter 4/4 shared
+randseed 808
+
+# ベースライン
+sequence bass {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 1
+  octave 2
+  defaultDur @U1
+  
+  # 4小節のループパターン
+  1 0 1 0  5 0 5 0  # 小節1-2
+  6 0 6 0  5 0 3 0  # 小節3-4
+}
+
+# コード進行
+sequence chords {
+  bus &quot;IAC Driver Bus 1&quot;  
+  channel 2
+  octave 4
+  
+  # Bb - Eb - F - Bb
+  (1, 5, 8)@U4           # Bb
+  (6, 10, 1^+1)@U4       # Eb
+  (8, 12, 3^+1)@U4       # F
+  (1, 5, 8)@U4           # Bb
+}
+
+# メロディーライン
+sequence lead {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 3
+  octave 5
+  
+  # メロディーフレーズ
+  0@U1 8@U0.5 10@U0.5 12@U1 10@U1
+  8@U2 0@U1 5@U1
+  6@U0.5 8@U0.5 5@U1 3@U1 1@U1
+  0@U2 0@U2
+}
+
+# パーカッション的要素
+sequence percussion {
+  bus &quot;IAC Driver Bus 1&quot;
+  channel 10
+  meter 3/4 independent  # 独立した3/4でポリメーター
+  octave 3
+  
+  # 3拍子のパターン
+  1@U0.333 1@U0.333 1@U0.334
+  0@U0.5 5@U0.5
+  1@U0.5 0@U0.5
+}
+</code></pre>
+<h2 id="パラメータリファレンス">パラメータリファレンス</h2>
+<h3 id="グローバルパラメータ">グローバルパラメータ</h3>
+<table>
+<thead>
+<tr>
+<th>パラメータ</th>
+<th>値の範囲</th>
+<th>デフォルト</th>
+<th>説明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>key</td>
+<td>C, C#/Db, D, D#/Eb, E, F, F#/Gb, G, G#/Ab, A, A#/Bb, B</td>
+<td>C</td>
+<td>調性</td>
+</tr>
+<tr>
+<td>tempo</td>
+<td>1-999</td>
+<td>120</td>
+<td>BPM（1分あたりの拍数）</td>
+</tr>
+<tr>
+<td>meter</td>
+<td>N/D shared|independent</td>
+<td>4/4 shared</td>
+<td>拍子とメーター共有設定</td>
+</tr>
+<tr>
+<td>randseed</td>
+<td>整数</td>
+<td>0</td>
+<td>ランダム生成のシード値</td>
+</tr>
+</tbody></table>
+<h3 id="シーケンスパラメータ">シーケンスパラメータ</h3>
+<table>
+<thead>
+<tr>
+<th>パラメータ</th>
+<th>値の範囲</th>
+<th>デフォルト</th>
+<th>説明</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>bus</td>
+<td>文字列</td>
+<td>なし</td>
+<td>MIDI出力先（IAC Bus名）</td>
+</tr>
+<tr>
+<td>channel</td>
+<td>1-16</td>
+<td>1</td>
+<td>MIDIチャンネル</td>
+</tr>
+<tr>
+<td>octave</td>
+<td>0.0-10.0</td>
+<td>4.0</td>
+<td>基本オクターブ</td>
+</tr>
+<tr>
+<td>octmul</td>
+<td>0.1-10.0</td>
+<td>1.0</td>
+<td>度数間音程係数</td>
+</tr>
+<tr>
+<td>bendRange</td>
+<td>1-24</td>
+<td>2</td>
+<td>ピッチベンド範囲（半音単位）</td>
+</tr>
+<tr>
+<td>mpe</td>
+<td>true/false</td>
+<td>false</td>
+<td>MPEモード</td>
+</tr>
+<tr>
+<td>defaultDur</td>
+<td>音価記法</td>
+<td>@U1</td>
+<td>デフォルト音価</td>
+</tr>
+</tbody></table>
+<h2 id="実装状況と制約">実装状況と制約</h2>
+<h3 id="実装済み機能">実装済み機能</h3>
+<ul>
+<li>✅ 基本的なパーサー</li>
+<li>✅ 度数システム（0=休符、1-12=半音階）</li>
+<li>✅ 音価記法（秒、単位、パーセント、連符）</li>
+<li>✅ 和音記法</li>
+<li>✅ オクターブシフトとデチューン</li>
+<li>✅ Pitch/Bend変換</li>
+<li>✅ スケジューラー（shared/independent）</li>
+<li>✅ MIDI出力（CoreMIDI）</li>
+<li>✅ VS Code拡張（シンタックスハイライト、実行）</li>
+<li>✅ ライブコーディング機能</li>
+</ul>
+<h3 id="未実装機能">未実装機能</h3>
+<ul>
+<li>⏳ keyパラメータの実際の適用</li>
+<li>⏳ tempoパラメータの動的変更</li>
+<li>⏳ defaultDurの適用</li>
+<li>⏳ シーケンスループ再生</li>
+<li>⏳ DJライクな制御（.stop, .mute, .unmute）</li>
+</ul>
+<h3 id="制約事項">制約事項</h3>
+<ol>
+<li><strong>MIDI制約</strong>: 微分音は1チャンネルに1音のみ（MPE推奨）</li>
+<li><strong>精度</strong>: 小数第3位まで</li>
+<li><strong>プラットフォーム</strong>: macOS専用（CoreMIDI使用）</li>
+<li><strong>出力</strong>: IAC Bus経由のMIDIのみ（音源は含まない）</li>
+</ol>
+<h2 id="今後の拡張予定">今後の拡張予定</h2>
+<h3 id="フェーズ11-シーケンス制御">フェーズ11: シーケンス制御</h3>
+<ul>
+<li>シーケンスごとのループ再生</li>
+<li><code>.stop</code>, <code>.mute</code>, <code>.unmute</code>コマンド</li>
+<li>グローバル/シーケンス設定の分離実行</li>
+</ul>
+<h3 id="フェーズ12-パラメータ完全実装">フェーズ12: パラメータ完全実装</h3>
+<ul>
+<li>すべてのパラメータの動作実装</li>
+<li>パラメータデバッグ機能</li>
+<li>リアルタイムパラメータ変更</li>
+</ul>
+<h3 id="フェーズ13-vs-code拡張強化">フェーズ13: VS Code拡張強化</h3>
+<ul>
+<li>リアルタイム構文チェック</li>
+<li>オートコンプリート</li>
+<li>パラメータヒント表示</li>
+</ul>
+<h3 id="フェーズ14-高度な機能">フェーズ14: 高度な機能</h3>
+<ul>
+<li>エフェクト記述</li>
+<li>MIDI CC自動化</li>
+<li>OSC出力サポート</li>
+<li>複数ファイルのインポート/インクルード</li>
+</ul>
+<h2 id="まとめ">まとめ</h2>
+<p>OrbitScore DSLは、<strong>度数0を休符として定義</strong>することで、音と無音を統一的に扱える革新的な音楽記述言語です。ポリリズムやポリメーター、微分音、ライブコーディングなど、現代的な音楽制作に必要な機能を備えています。</p>
+<p>シンプルな記法で複雑な音楽構造を表現でき、VS Code拡張によって快適な制作環境を提供します。今後も継続的に機能拡張を行い、より表現力豊かな音楽制作ツールを目指します。</p>
+
+</main>
+</body>
+</html>

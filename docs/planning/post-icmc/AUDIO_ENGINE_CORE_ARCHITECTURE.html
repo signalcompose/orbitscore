@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audio Engine Core Architecture — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="audio-engine-core-architecture">Audio Engine Core Architecture</h1>
+<p><strong>ステータス</strong>: 設計方針確定（実装は段階的）
+<strong>最終更新</strong>: 2026-04-17
+<strong>関連 Issue</strong>: Epic <a href="https://github.com/signalcompose/orbitscore/issues/105">#105</a></p>
+<hr>
+<h2 id="1-背景と動機">1. 背景と動機</h2>
+<p>PR #99 / #103 で Rust audio engine の PoC を構築した結果、全機能が単一 crate に入った形になった。今後の拡張（プラグインホスト、Web 版、他プロダクトへの転用）を見据え、<strong>責務を層で分離</strong>する必要がある。</p>
+<p>加えて、Signal compose の戦略として <strong>音声スタックを OrbitScore 専用ではなく「汎用 Rust audio engine」として育て、他プロダクト・OSS 貢献・商用プロダクトの基盤とする</strong>ことを目指す。</p>
+<hr>
+<h2 id="2-目標アーキテクチャ最終形">2. 目標アーキテクチャ（最終形）</h2>
+<pre><code>┌──────────────────────────────────────────────┐
+│ App Layer (OrbitScore)                         │
+│  ├─ VS Code Extension                          │
+│  ├─ DSL parser / interpreter                   │
+│  ├─ Musical timing (BPM / 拍子 / polymeter)    │
+│  ├─ Project management                         │
+│  └─ LLM agent / UI                             │
+└──────────────┬───────────────────────────────┘
+               │ IPC (WebSocket + JSON-RPC)
+┌──────────────▼───────────────────────────────┐
+│ Plugins (Rust, 差し替え可能)                   │
+│  ├─ VST3 / CLAP host                           │
+│  ├─ MIDI I/O                                   │
+│  ├─ Time-stretch wrapper (rubberband/SoundTouch)│
+│  └─ Third-party Node impls                     │
+├──────────────────────────────────────────────┤
+│ Audio Engine Core (Rust, 汎用)                 │
+│  ├─ Audio I/O (cpal / AudioWorklet)            │
+│  ├─ Audio graph (Node trait + bus routing)    │
+│  ├─ Sample-accurate scheduler                  │
+│  ├─ Sample management (load, mix, SRC)         │
+│  ├─ Parameter system (automation, timed set)   │
+│  ├─ Realtime-safe primitives (lock-free)       │
+│  └─ Built-in Node types (SamplePlayer, Bus等)  │
+└──────────────────────────────────────────────┘
+</code></pre>
+<p><strong>橋渡しは &quot;層&quot; ではなく &quot;プロトコル&quot;</strong>: IPC は Core のコマンド型を JSON-RPC on WebSocket で配線する薄い通信路。</p>
+<hr>
+<h2 id="3-責務の分離原則">3. 責務の分離原則</h2>
+<h3 id="core-は以下を知らない">Core は以下を「知らない」</h3>
+<ul>
+<li>DSL の構文 / 意味論</li>
+<li>Musical time (BPM / 拍子 / ポリリズム)</li>
+<li>ファイル形式（<code>.orbs</code> 等）</li>
+<li>ネットワーク / IPC（デーモン化の詳細）</li>
+<li>UI / エディタ</li>
+</ul>
+<h3 id="core-が扱うのは以下のみ">Core が扱うのは以下のみ</h3>
+<ul>
+<li><strong>秒（または sample 単位）</strong> の時刻軸</li>
+<li>入出力バッファとオーディオグラフ</li>
+<li>Node trait によるノード抽象</li>
+<li><code>LoadSample</code> / <code>PlayAt</code> / <code>ConnectNode</code> 等の <strong>命令</strong></li>
+</ul>
+<h3 id="plugins-は-core-の-node-trait-を実装">Plugins は Core の Node trait を実装</h3>
+<ul>
+<li>VST3 host / CLAP host も「Node の一種」</li>
+<li>MIDI I/O も Node として graph に繋がる</li>
+<li>サードパーティ拡張も同じ trait を通る</li>
+</ul>
+<h3 id="apptypescriptの責務">App（TypeScript）の責務</h3>
+<ul>
+<li>DSL parse</li>
+<li>Musical timing → 秒変換</li>
+<li>Note 列 → MIDI Event 列への展開</li>
+<li>UI（VS Code 拡張、将来は Tauri）</li>
+<li>プロジェクトファイル管理</li>
+</ul>
+<hr>
+<h2 id="4-dsl--midi-変換の方針">4. DSL → MIDI 変換の方針</h2>
+<h3 id="ソフトシンセ--vst-エフェクト利用時の流れ">ソフトシンセ / VST エフェクト利用時の流れ</h3>
+<pre><code>TS engine:
+  DSL パース
+  ↓ musical timing 適用（BPM → 秒）
+  ↓ Note sequence → 時刻付き MIDI Event 列
+  ↓ IPC メッセージ生成
+       ├─ LoadPlugin { path }
+       ├─ PluginMidiEvent { plugin_id, time_sec, event }
+       └─ PluginParam { plugin_id, param_id, value }
+
+Rust plugin host:
+  MIDI Event を sample-accurate に plugin へ
+  Plugin が audio を生成
+  Audio graph の bus に合流
+  → 出力
+</code></pre>
+<h3 id="重要な契約">重要な契約</h3>
+<ul>
+<li><strong>Plugin host は MIDI Event を受け取る</strong>（DSL を知らない）</li>
+<li><strong>TS interpreter が DSL → MIDI 変換を担う</strong></li>
+<li><strong>業界標準の MIDI を IPC メッセージにする</strong>ことで、Plugin 層の universality を確保</li>
+</ul>
+<hr>
+<h2 id="5-musical-timing-はどこに置くか">5. Musical timing はどこに置くか</h2>
+<h3 id="結論-phase-12-は-typescript-側に残す">結論: <strong>Phase 1〜2 は TypeScript 側に残す</strong></h3>
+<p>既存の <code>packages/engine/</code> には BPM / 拍子 / polymeter / polytempo / seamless parameter update 等の musical timing ロジックが実装済み。既存テストも通過。<strong>これを活かす</strong>のが合理的。</p>
+<h3 id="rust-に移す判断タイミング">Rust に移す判断タイミング</h3>
+<ul>
+<li>Web / WASM 版の開発着手時（TS が動かない環境）</li>
+<li>または複数のフロント（standalone / web / plugin 版）が同じ timing を使う必要が出た時</li>
+</ul>
+<p>この時点で初めて <code>orbit-music-timing</code> crate を切り出す。それまでは TS 側に留める。</p>
+<h3 id="今の-layering">今の layering</h3>
+<pre><code>Phase 1〜2:
+  [TS: DSL + interpreter + musical timing]
+         ↓ IPC (秒ベース)
+  [Rust: audio-core + plugins]
+
+Phase 3 以降（Web 版着手時に検討）:
+  [TS or WASM: DSL + interpreter]
+         ↓
+  [Rust: orbit-music-timing] ← ここで独立 crate 化
+         ↓
+  [Rust: audio-core + plugins]
+</code></pre>
+<hr>
+<h2 id="6-フェーズ別移行計画">6. フェーズ別移行計画</h2>
+<h3 id="phase-1a-cargo-workspace-再構成">Phase 1a: Cargo workspace 再構成</h3>
+<ul>
+<li>現 <code>rust/</code> 単一 crate → 複数 crate に分割</li>
+<li><code>orbit-audio-core</code> / <code>orbit-audio-native</code> / <code>orbit-audio-wasm</code></li>
+<li>Issue <a href="https://github.com/signalcompose/orbitscore/issues/106">#106</a></li>
+</ul>
+<h3 id="phase-1b-ipc-ブリッジ">Phase 1b: IPC ブリッジ</h3>
+<ul>
+<li>IPC プロトコル設計（Issue <a href="https://github.com/signalcompose/orbitscore/issues/93">#93</a>）</li>
+<li><code>orbit-audio-daemon</code> binary（Issue <a href="https://github.com/signalcompose/orbitscore/issues/107">#107</a>）</li>
+<li>TS 側の rust-engine client（Issue <a href="https://github.com/signalcompose/orbitscore/issues/108">#108</a>）</li>
+<li>SuperCollider 経路を段階的に置き換え</li>
+</ul>
+<h3 id="phase-2-プラグイン段階投入">Phase 2: プラグイン段階投入</h3>
+<ul>
+<li>Time-stretch（Issue <a href="https://github.com/signalcompose/orbitscore/issues/92">#92</a>）</li>
+<li>VST3 / CLAP plugin host（Issue <a href="https://github.com/signalcompose/orbitscore/issues/95">#95</a>）</li>
+<li>MIDI I/O plugin</li>
+</ul>
+<h3 id="phase-3-スタンドアローン--web-拡張">Phase 3: スタンドアローン / Web 拡張</h3>
+<ul>
+<li>Tauri standalone（Issue <a href="https://github.com/signalcompose/orbitscore/issues/94">#94</a>）</li>
+<li>LLM agent 統合（Issue <a href="https://github.com/signalcompose/orbitscore/issues/96">#96</a>）</li>
+<li>Web 版（WAM 対応、ここで musical timing の Rust 化検討）</li>
+</ul>
+<hr>
+<h2 id="7-cargo-workspace-構造提案">7. Cargo workspace 構造（提案）</h2>
+<pre><code>rust/
+├── Cargo.toml (workspace root)
+└── crates/
+    ├── orbit-audio-core/       # platform-agnostic, publishable
+    ├── orbit-audio-native/     # cpal backend + symphonia + SRC
+    ├── orbit-audio-wasm/       # wasm-bindgen + AudioWorklet
+    ├── orbit-audio-daemon/     # binary with WebSocket server
+    ├── orbit-audio-midi/       # MIDI I/O plugin (Phase 2)
+    ├── orbit-audio-vst3/       # VST3 host plugin (Phase 2)
+    ├── orbit-audio-clap/       # CLAP host plugin (Phase 2)
+    └── orbit-audio-timestretch/# rubberband/soundtouch wrapper (Phase 2)
+</code></pre>
+<h3 id="公開戦略">公開戦略</h3>
+<ul>
+<li><code>orbit-audio-core</code>: <strong>MIT / Apache 2.0</strong> で OSS 公開候補（Rust audio コミュニティ貢献）</li>
+<li>Plugins: 各 crate のライセンスに従う（LGPL の SoundTouch 等は別 crate で隔離）</li>
+<li><code>orbit-audio-daemon</code> / <code>orbitscore-app</code>: <strong>Signal compose Source-Available License</strong>（商用戦略）</li>
+</ul>
+<hr>
+<h2 id="8-plugin-host-の-midi-event-契約">8. Plugin Host の MIDI Event 契約</h2>
+<pre><code class="language-rust">pub enum MidiEvent {
+    NoteOn { channel: u8, pitch: u8, velocity: u8 },
+    NoteOff { channel: u8, pitch: u8, velocity: u8 },
+    CC { channel: u8, controller: u8, value: u8 },
+    PitchBend { channel: u8, value: i16 },
+    ProgramChange { channel: u8, program: u8 },
+    Aftertouch { channel: u8, value: u8 },
+    // 必要に応じ拡張
+}
+
+pub trait MidiSink: Node {
+    fn handle_midi(&amp;mut self, time_sec: f64, event: MidiEvent);
+}
+</code></pre>
+<p>この trait を VST3 host / CLAP host / MIDI I/O plugin / 将来のカスタム DSP が<strong>統一的に実装</strong>する。IPC 越しの command はこの形をそのままシリアライズしたもの。</p>
+<hr>
+<h2 id="9-非目標本設計で扱わない">9. 非目標（本設計で扱わない）</h2>
+<ul>
+<li><strong>DSL 仕様変更</strong>: 実装を真とする。本ドキュメントでは DSL 具体論を書かない</li>
+<li><strong>musical timing の Rust 化</strong>: Phase 1〜2 では TS 側に留める</li>
+<li><strong>TS engine の既存テスト 220+ を壊すこと</strong>: 既存動作を保ちながら置き換える</li>
+<li><strong>特定のシンセや DAW との密結合</strong>: Plugin 層は汎用 MIDI Event を契約とする</li>
+<li><strong>リアルタイム MIDI 入力の完全サポート</strong>: まずは内部生成 MIDI から着手（外部入力は MIDI I/O plugin で追加）</li>
+</ul>
+<hr>
+<h2 id="10-open-questionsphase-進行中に解決">10. Open Questions（Phase 進行中に解決）</h2>
+<ul>
+<li>cpal の audio callback と WebSocket 受信スレッド間の lock-free 通信方式（<code>ringbuf</code> or <code>rtrb</code>）</li>
+<li>Plugin の process() 呼び出し周期と、MIDI event のサンプル精度 alignment 手法</li>
+<li>Time-stretch の商用ライセンス判断（Rubberband vs SoundTouch vs 独自）</li>
+<li>daemon プロセスのライフサイクル管理（VS Code extension から子プロセス管理）</li>
+<li><code>orbit-audio-core</code> を crates.io に公開するタイミング / 命名の最終決定</li>
+</ul>
+<hr>
+<h2 id="11-参考">11. 参考</h2>
+<ul>
+<li><a href="./RUST_ENGINE_MIGRATION_PLAN.html">docs/planning/RUST_ENGINE_MIGRATION_PLAN.md</a> - 全体ロードマップ</li>
+<li><a href="../research/RUST_POC_FINDINGS.html">docs/research/RUST_POC_FINDINGS.md</a> - PoC 所感</li>
+<li><a href="../research/ENGINE_DAEMON_PROTOCOL.html">docs/research/ENGINE_DAEMON_PROTOCOL.md</a> - IPC プロトコル仕様 (v0.1 draft)</li>
+<li><a href="https://github.com/signalcompose/orbitscore/issues/105">Epic #105</a></li>
+<li>Node trait の設計参考: JUCE AudioProcessor, Web Audio API AudioNode</li>
+</ul>
+
+</main>
+</body>
+</html>

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dev Learning Site — Project Brief  Skill Overrides — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="dev-learning-site--project-brief--skill-overrides">Dev Learning Site — Project Brief &amp; Skill Overrides</h1>
+<p><strong>Status</strong>: Brief 確定 (2026-05-05)、scaffold は別 issue で対応予定
+<strong>Skill</strong>: <a href="../../.claude/skills/vitepress-learning-site/"><code>.claude/skills/vitepress-learning-site/</code></a> (yuichkun/.claude 由来、verbatim install、作者承諾済)
+<strong>Skill upstream pin</strong>: <a href="https://github.com/yuichkun/.claude/tree/66e544d704cf57ee6256a4dfe7eddc8097b53381/skills/vitepress-learning-site">yuichkun/.claude <code>66e544d704cf57ee6256a4dfe7eddc8097b53381</code></a> (install 時点)
+<strong>Related Issue</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/160">#160</a> (skill install)</p>
+<blockquote>
+<p><strong>用語</strong>: 本文書の「post-ICMC」は <strong>ICMC 2026 Hamburg (2026-05-10 〜 16)</strong> 開催以降を指す。当該会期前に着手しない作業項目すべてに該当。</p>
+</blockquote>
+<hr>
+<h2 id="1-位置付け--なぜ作るか">1. 位置付け — なぜ作るか</h2>
+<h3 id="動機">動機</h3>
+<p>OrbitScore は LLM (Claude Code 等) を主要な実装担当として運用している。これは速度・カバレッジで利点がある一方、<strong>実装レイヤーの理解が著者 (yamato) 側に蓄積しない</strong> 構造的弱点を生む:</p>
+<pre><code>従来開発:    仕様考案 → 実装 → 動作確認
+            (理解は実装作業中に副産物として獲得される)
+
+LLM 駆動:    仕様考案 (人) → 実装 (LLM) → 動作確認 (人)
+            (実装段階の &quot;書きながら理解する&quot; ステップが消失)
+</code></pre>
+<p>その結果、著者は <strong>仕様レイヤーの理解</strong> (自分で考えた) と <strong>挙動レイヤーの理解</strong> (テストした) は持つが、<strong>実装レイヤーの理解は構造的に欠落</strong> する。これは LLM 駆動開発に固有の deficit で、放置すれば「ブラックボックス債務」 として累積する。</p>
+<h3 id="応答としての本サイト">応答としての本サイト</h3>
+<p>dev 学習サイトを正規のフェーズとして開発サイクルに組み込むことで、3 レイヤーの理解を揃える:</p>
+<pre><code>新サイクル:  仕様考案 → 実装 → 動作確認 → dev 学習サイト更新 → (人による読解と編集)
+                                            ↑ 実装レイヤー理解の獲得儀式
+</code></pre>
+<p>LLM が code から explanation を draft → external audit が hallucination を潰す → 著者が読んで違和感を感じ、code に戻り、編集する。<strong>サイト更新作業 = 学習作業</strong> という運用。</p>
+<h3 id="single-source-of-truth-sot-階層">Single Source of Truth (SoT) 階層</h3>
+<p>本サイトは <strong>DDD 由来の derivative であって SoT そのものではない</strong>:</p>
+<pre><code>真の階層:
+  code             ← 実行レベルの真実 (動作の SoT)
+  DDD ドキュメント   ← 意図レベルの SoT (yamato が真実を保証)
+  user site         ← DDD 由来の derivative (ユーザー読者向け)
+  dev learning site ← DDD 由来の derivative (実装学習用)
+</code></pre>
+<p>dev サイトは「ドキュメント」ではなく <strong>「個人の学習ノート」</strong> として運用する。各章 top に「現時点の理解の snapshot」 disclaimer を入れ、code との drift は document するが解消はしない (artifact framing)。</p>
+<hr>
+<h2 id="2-skill-phase-1--事前確定事項-interview-を-skip-するための-pre-filled-answers">2. Skill Phase 1 — 事前確定事項 (interview を skip するための pre-filled answers)</h2>
+<p>skill の Phase 1 (Discovery interview) では audience / scope / language 等を grilling するが、本プロジェクトでは以下の通り確定済。skill 起動時は再 interview しない。</p>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>確定値</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>audience</strong></td>
+<td>self (yamato、実装学習が主目的)。contributor onboarding は副次効果として歓迎</td>
+</tr>
+<tr>
+<td><strong>content language</strong></td>
+<td>日本語 only (start)。en は post-ICMC で i18n 追加検討</td>
+</tr>
+<tr>
+<td><strong>primary source</strong></td>
+<td>own codebase: <code>packages/engine/src/</code>、<code>packages/vscode-extension/src/</code></td>
+</tr>
+<tr>
+<td><strong>scope (含む)</strong></td>
+<td>parser / DSL runtime / scheduler / audio / vscode-extension の <strong>内部実装</strong></td>
+</tr>
+<tr>
+<td><strong>scope (含まない)</strong></td>
+<td>SuperCollider 内部、Vue 内部、VS Code API 内部 (引用と link に留める)</td>
+</tr>
+<tr>
+<td><strong>voice / tone</strong></td>
+<td>technical-explanatory、sempai 寄り (warmth 中程度)。詳細は STYLE_GUIDE で確定</td>
+</tr>
+<tr>
+<td><strong>math rendering</strong></td>
+<td>KaTeX 必要 (BEAT_METER 関連、MLTS 数式)</td>
+</tr>
+<tr>
+<td><strong>diagram density</strong></td>
+<td>Mermaid 中程度 (architecture overview / data flow)</td>
+</tr>
+<tr>
+<td><strong>interactivity</strong></td>
+<td>low — Vue component は必要時のみ (timing 図など state visualization が効く章)</td>
+</tr>
+<tr>
+<td><strong>bridge chapter</strong></td>
+<td>不要 (本サイト自体が ulterior project への bridge ではない)</td>
+</tr>
+<tr>
+<td><strong>external audit</strong></td>
+<td>advisor で代替 (詳細は §5)</td>
+</tr>
+<tr>
+<td><strong>research depth</strong></td>
+<td>spec-grade (primary source = code 自身、reading 時は逐語引用)</td>
+</tr>
+<tr>
+<td><strong>deploy target</strong></td>
+<td>post-ICMC で GitHub Pages、initial は local-only (<code>docs:dev</code>)</td>
+</tr>
+</tbody></table>
+<hr>
+<blockquote>
+<p><strong>Skill Phase 2 / 3 の扱い</strong>: Phase 2 (Source research) と Phase 3 (Plan &amp; user sign-off) は本ファイルでは事前確定事項を持たない。両 Phase は skill 本体 (<a href="../../.claude/skills/vitepress-learning-site/SKILL.md"><code>SKILL.md</code></a>) の手順通り、章を起こす都度に実行する (該当章が依拠する code path / 外部仕様の bind、章プラン起案 → 著者 sign-off)。</p>
+</blockquote>
+<h2 id="3-skill-phase-4--site-location--structure">3. Skill Phase 4 — Site Location &amp; Structure</h2>
+<h3 id="ディレクトリ">ディレクトリ</h3>
+<pre><code>sites/dev/                  ← VitePress project root
+├── .vitepress/
+│   ├── config.ts
+│   └── theme/
+└── src/
+    ├── index.md            ← landing
+    ├── parser/             ← packages/engine/src/parser/ を mirror
+    ├── audio/              ← packages/engine/src/audio/ を mirror
+    │   ├── supercollider/
+    │   └── rust-engine/    ← TODO: post-ICMC で着手 (Issue #105/#107/#108、現 v1.x stack には未統合)
+    ├── scheduler/
+    ├── dsl-runtime/
+    ├── vscode-extension/
+    └── overview/
+        ├── architecture.md ← 3 層構造図
+        ├── decisions.md    ← ADR (architectural decision records)
+        └── glossary.md
+</code></pre>
+<h3 id="章構造の原則">章構造の原則</h3>
+<ul>
+<li><strong>code tree mirror</strong>: 実装ディレクトリと章ディレクトリを 1:1 で対応させる</li>
+<li><strong>横断章は <code>overview/</code></strong>: 単一モジュールに紐づかない設計判断 (ADR)、用語集、全体アーキテクチャは別建て</li>
+<li><strong>章とファイルの粒度</strong>: 1 章 = 1 module または 1 design unit (細かすぎる場合は section 分割で対応)</li>
+</ul>
+<hr>
+<h2 id="4-skill-phase-5--writing-規律-skill-default--orbitscore-上乗せ">4. Skill Phase 5 — Writing 規律 (skill default + OrbitScore 上乗せ)</h2>
+<p>skill default の規律 (verbatim citation / <code>## Sources</code> section / unverified marker) は維持。OrbitScore 固有で <strong>以下を追加要求</strong>:</p>
+<h3 id="frontmatter-必須項目">Frontmatter 必須項目</h3>
+<p>各章 Markdown の先頭に YAML frontmatter:</p>
+<pre><code class="language-yaml">---
+title: &lt;chapter title&gt;
+verified-against: &lt;commit-sha&gt;     # この章が code と整合確認された時点の commit
+verified-at: &lt;YYYY-MM-DD&gt;          # 確認日
+status: draft | reviewed | stable  # 編集状態
+---
+</code></pre>
+<p><code>verified-against</code> を必須にする理由: doc rot を <strong>document する</strong> (解消ではない)。半年後に著者が読み返した時、章の信頼度を commit hash で判断できる。</p>
+<h3 id="-sources-section-の最低要件"><code>## Sources</code> section の最低要件</h3>
+<p>skill default は URL/file path レベル。OrbitScore では:</p>
+<ul>
+<li>ファイル参照は <strong><code>&lt;file&gt;:&lt;start&gt;-&lt;end&gt;</code> の line range 付き</strong> で記述</li>
+<li>外部仕様 (SC OSC protocol 等) は URL + 章/節指定</li>
+</ul>
+<h3 id="本文中コードブロック-引用-の規律">本文中コードブロック (引用) の規律</h3>
+<p><strong>code が SoT</strong> の前提を崩さないため、章本文の TypeScript snippet は以下を必須:</p>
+<ul>
+<li><strong>文字単位 verbatim</strong>: <code>// &lt;file&gt;:&lt;start&gt;-&lt;end&gt;</code> 行コメント付きのコードブロックは、actual code と文字単位で一致 (空白・改行・インデント・comment を黙って reformat しない)</li>
+<li><strong>省略は <code>// ...</code> で明示</strong>: 一部行を削る場合、削除位置に <code>// ...</code> を必ず置く。 黙って削除は禁止</li>
+<li><strong>末尾 <code>// ...</code> は actual code がさらに続く時のみ</strong>: range の最終行で snippet が終わる場合は <code>// ...</code> を置かない (誤読防止)</li>
+<li><strong>些細な要素も verbatim</strong>: <code>console.log</code> / inline comment / error handler 等を「ノイズだから」 と削らない。それも SoT の一部</li>
+<li><strong>範囲精度</strong>: range の <code>&lt;start&gt;-&lt;end&gt;</code> と actual code の対応が off-by-one なら違反</li>
+</ul>
+<p>詳細は <a href="../../sites/dev/STYLE_GUIDE.md"><code>sites/dev/STYLE_GUIDE.md</code></a> §5-bis 参照。</p>
+<h3 id="phase-b-以降の-writing-agent-dispatch-時の必須事項">Phase B 以降の writing agent dispatch 時の必須事項</h3>
+<p><code>.claude/skills/vitepress-learning-site/references/writing-agent-template.md</code> の prompt skeleton に加え、<strong>OrbitScore 用の追加規律として以下を必ず明記</strong>:</p>
+<ol>
+<li>STYLE_GUIDE §5-bis の verbatim 規律を遵守 (上記参照)</li>
+<li>本文中 code snippet の <code>&lt;file&gt;:&lt;start&gt;-&lt;end&gt;</code> range は <strong>書く前にその行範囲を Read で確認</strong>、書いた後に <strong>再度突き合わせて diff が無いか self-check</strong></li>
+<li>省略を入れる場合 <code>// ...</code> を必ず明示、 silent omission 禁止</li>
+<li>末尾 <code>// ...</code> は range の最終行で snippet が終わる場合は禁止</li>
+</ol>
+<p>例:</p>
+<pre><code class="language-markdown">## Sources
+
+- `packages/engine/src/audio/supercollider/scsynth-resolver.ts:76-99` — `resolveScsynthPath()` の優先順位ロジック
+- PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — strict mode 採用の経緯
+- [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) — `/s_new`、`/n_set` の正確な引数
+</code></pre>
+<h3 id="disclaimer-の必須位置">Disclaimer の必須位置</h3>
+<p>各章先頭 (frontmatter の直後) に以下相当の文を 1 行入れる:</p>
+<blockquote>
+<p><strong>Note</strong>: 本ページは {YYYY-MM-DD} 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。</p>
+</blockquote>
+<hr>
+<h2 id="5-skill-phase-8--audit-substitution">5. Skill Phase 8 — Audit Substitution</h2>
+<p>skill default は別 LLM family (Codex / Gemini 等) を independent reviewer として要求。OrbitScore では:</p>
+<h3 id="採用方針">採用方針</h3>
+<ul>
+<li><strong>第 1 layer (LLM audit)</strong>: advisor (会話 context の reviewer モデル) が writing agent の output を audit<ul>
+<li>rationale: vantage point が writer (= sub-agent) と異なるため genuine な独立性は確保される</li>
+<li>Codex / Gemini は precondition ではない (training distribution 重複により完全独立とは言えず、必須化のメリットが薄い)</li>
+</ul>
+</li>
+<li><strong>第 2 layer (final check)</strong>: <strong>著者 (yamato) によるコード照合</strong>が最終 check<ul>
+<li>重要な observation: LLM audit は同分布の盲点を共有する可能性がある。<strong>真の独立 check は人間がコードに戻って trace する行為のみ</strong></li>
+<li>サイトはその「trace を affordable にする」 ための足場であって、人間 trace を不要にするものではない</li>
+</ul>
+</li>
+</ul>
+<h3 id="必須運用">必須運用</h3>
+<ul>
+<li>writing agent output は <strong>必ず</strong> advisor audit を経てから章として commit する</li>
+<li>audit で flag された箇所は writing agent に渡して fix の二巡目を回す (skill 流儀通り)</li>
+<li>重要章 (architecture overview / parser core / audio engine 中核 等) は <strong>著者自身が code と章を突き合わせる時間</strong> をスケジュールする</li>
+</ul>
+<h3 id="future-upgrade">Future Upgrade</h3>
+<p>cross-LLM-family audit に格上げする選択肢は post-ICMC で検討:</p>
+<ul>
+<li>Codex / Gemini を audit phase の追加 reviewer として導入</li>
+<li>ハルシネーションのトリプルチェック体制 (writer / advisor / external LLM family)</li>
+</ul>
+<hr>
+<h2 id="6-skill-phase-9--deployment">6. Skill Phase 9 — Deployment</h2>
+<ul>
+<li><strong>Initial</strong>: local-only (<code>docs:dev</code> で hot reload)。飛行機内などのオフライン作業もこれで足りる</li>
+<li><strong>post-ICMC</strong>: GitHub Pages に deploy<ul>
+<li>URL 案: <code>signalcompose.github.io/orbitscore-internals/</code> (or 独自 subdomain)</li>
+<li>公開範囲: public (OSS なので隠す理由なし、contributor 用途でも有用)</li>
+<li>「個人の学習ノート」 disclaimer は landing page でも明記</li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 id="7-未決事項--別-issue-で順次決定し本ファイルに追記">7. 未決事項 — 別 issue で順次決定し本ファイルに追記</h2>
+<ul>
+<li><input disabled="" type="checkbox"> 章の優先順位 (parser から書く? audio から書く? small/recent な scsynth-resolver から?)</li>
+<li><input disabled="" type="checkbox"> ADR (overview/decisions/) の format (Michael Nygard 形式準拠? 独自?)</li>
+<li><input disabled="" type="checkbox"> <strong>Routine 設計</strong>: PR merge 時の sub-agent dispatch、verified-against 古い章の自動 flag、章更新の trigger 条件 (post-ICMC で着手)</li>
+<li><input disabled="" type="checkbox"> 飛行機内オフライン作業時の routine 動作確認 (Anthropic API は要 net、ローカルのみで完結する task の切り分け)</li>
+<li><input disabled="" type="checkbox"> STYLE_GUIDE.md の中身 (sempai トーンの具体化、コードブロック規則、図注規則)</li>
+<li><input disabled="" type="checkbox"> cross-LLM-family audit の post-ICMC 導入時期と評価指標</li>
+<li><input disabled="" type="checkbox"> チャプター粒度 — 「1 ファイル 1 章」 か 「1 module 1 章」 か (mirror 構造の解釈)</li>
+</ul>
+<hr>
+<h2 id="8-関連ドキュメント">8. 関連ドキュメント</h2>
+<ul>
+<li><a href="../../.claude/skills/vitepress-learning-site/SKILL.md"><code>.claude/skills/vitepress-learning-site/SKILL.md</code></a> — skill 本体 (verbatim、yuichkun/.claude 由来)</li>
+<li><a href="../../.claude/skills/vitepress-learning-site/references/"><code>.claude/skills/vitepress-learning-site/references/</code></a> — skill の reference 集 (interview-checklist, research-discipline, bootstrap-recipe, browser-verification, external-audit-template, writing-agent-template, deployment, gotchas)</li>
+<li><a href="../../CLAUDE.md">CLAUDE.md</a> — skill 起動時の必須読み込み指示が含まれる</li>
+<li><a href="https://github.com/signalcompose/orbitscore/issues/160">Issue #160</a> — skill install の経緯</li>
+</ul>
+
+</main>
+</body>
+</html>

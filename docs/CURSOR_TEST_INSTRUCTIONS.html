@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cursor でのOrbitScore拡張テスト手順 — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="cursor-でのorbitscore拡張テスト手順">Cursor でのOrbitScore拡張テスト手順</h1>
+<h2 id="事前準備">事前準備</h2>
+<ol>
+<li>✅ 拡張がインストール済み</li>
+<li>エンジンがビルド済み（<code>packages/engine/dist/cli.js</code>が存在）</li>
+</ol>
+<h2 id="テスト手順">テスト手順</h2>
+<h3 id="step-1-テストファイルを開く">Step 1: テストファイルを開く</h3>
+<p>Cursorで以下のファイルを開いてください：</p>
+<pre><code>examples/performance-test-simple.orbs
+</code></pre>
+<h3 id="step-2-構文ハイライトの確認">Step 2: 構文ハイライトの確認</h3>
+<ul>
+<li>ファイルが<code>.orbs</code>拡張子で認識されているか確認</li>
+<li>キーワード（<code>var</code>, <code>init</code>, <code>GLOBAL</code>）が色付けされているか確認</li>
+<li>メソッド名（<code>tempo</code>, <code>beat</code>, <code>play</code>）が色付けされているか確認</li>
+</ul>
+<h3 id="step-3-オートコンプリートのテスト">Step 3: オートコンプリートのテスト</h3>
+<p>新しい行で以下を試してください：</p>
+<ol>
+<li><code>global.</code> と入力 → <code>tempo()</code>, <code>beat()</code>, <code>run()</code> などが提案されるか確認</li>
+<li><code>kick.</code> と入力 → <code>play()</code>, <code>audio()</code>, <code>mute()</code> などが提案されるか確認</li>
+</ol>
+<h3 id="step-4-cmdenter機能のテスト">Step 4: Cmd+Enter機能のテスト</h3>
+<h4 id="テスト-4-1-グローバル初期化">テスト 4-1: グローバル初期化</h4>
+<ol>
+<li>以下の3行を選択：</li>
+</ol>
+<pre><code class="language-osc">var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+</code></pre>
+<ol start="2">
+<li><strong>Cmd+Enter</strong>を押す</li>
+<li><strong>期待される結果</strong>:<ul>
+<li>出力パネルが開く</li>
+<li>&quot;Code executed successfully&quot; または実行ログが表示される</li>
+<li>エラーが出ないこと</li>
+</ul>
+</li>
+</ol>
+<h4 id="テスト-4-2-キックドラムの追加">テスト 4-2: キックドラムの追加</h4>
+<ol>
+<li>以下の行を選択：</li>
+</ol>
+<pre><code class="language-osc">var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio(&quot;../test-assets/audio/kick.wav&quot;).chop(1)
+kick.play(1, 0, 1, 0)
+kick.run()
+</code></pre>
+<ol start="2">
+<li><strong>Cmd+Enter</strong>を押す</li>
+<li><strong>期待される結果</strong>:<ul>
+<li>キックドラムの音が聞こえる</li>
+<li>4分音符で2回鳴る（1拍目と3拍目）</li>
+</ul>
+</li>
+</ol>
+<h4 id="テスト-4-3-ハイハットの追加">テスト 4-3: ハイハットの追加</h4>
+<ol>
+<li>以下の行を選択：</li>
+</ol>
+<pre><code class="language-osc">var hihat = init global.seq
+hihat.beat(4 by 4).length(1)
+hihat.audio(&quot;../test-assets/audio/hihat.wav&quot;).chop(1)
+hihat.play(1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0)
+hihat.run()
+</code></pre>
+<ol start="2">
+<li><strong>Cmd+Enter</strong>を押す</li>
+<li><strong>期待される結果</strong>:<ul>
+<li>ハイハットの音が聞こえる</li>
+<li>キックドラムと同時に鳴り続ける</li>
+</ul>
+</li>
+</ol>
+<h4 id="テスト-4-4-リアルタイムパターン変更">テスト 4-4: リアルタイムパターン変更</h4>
+<ol>
+<li>キックとハイハットが鳴っている状態で以下を選択：</li>
+</ol>
+<pre><code class="language-osc">kick.play(1, 0, 0, 1, 0, 1, 0, 0)
+</code></pre>
+<ol start="2">
+<li><strong>Cmd+Enter</strong>を押す</li>
+<li><strong>期待される結果</strong>:<ul>
+<li>キックのパターンがブレイクビーツ風に変わる</li>
+<li>音が途切れない</li>
+</ul>
+</li>
+</ol>
+<h4 id="テスト-4-5-テンポ変更">テスト 4-5: テンポ変更</h4>
+<ol>
+<li>以下を選択：</li>
+</ol>
+<pre><code class="language-osc">global.tempo(140)
+</code></pre>
+<ol start="2">
+<li><strong>Cmd+Enter</strong>を押す</li>
+<li><strong>期待される結果</strong>:<ul>
+<li>全体のテンポが速くなる</li>
+<li>スムーズに切り替わる</li>
+</ul>
+</li>
+</ol>
+<h4 id="テスト-4-6-ミュートアンミュート">テスト 4-6: ミュート/アンミュート</h4>
+<ol>
+<li>以下を選択：</li>
+</ol>
+<pre><code class="language-osc">hihat.mute()
+</code></pre>
+<ol start="2">
+<li><p><strong>Cmd+Enter</strong>を押す</p>
+</li>
+<li><p><strong>期待される結果</strong>:</p>
+<ul>
+<li>ハイハットの音が止まる</li>
+<li>キックは鳴り続ける</li>
+</ul>
+</li>
+<li><p>以下を選択：</p>
+</li>
+</ol>
+<pre><code class="language-osc">hihat.unmute()
+</code></pre>
+<ol start="5">
+<li><strong>Cmd+Enter</strong>を押す</li>
+<li><strong>期待される結果</strong>:<ul>
+<li>ハイハットが再び鳴り始める</li>
+</ul>
+</li>
+</ol>
+<h4 id="テスト-4-7-停止">テスト 4-7: 停止</h4>
+<ol>
+<li>以下を選択：</li>
+</ol>
+<pre><code class="language-osc">global.stop()
+</code></pre>
+<ol start="2">
+<li><strong>Cmd+Enter</strong>を押す</li>
+<li><strong>期待される結果</strong>:<ul>
+<li>すべての音が停止する</li>
+</ul>
+</li>
+</ol>
+<h2 id="トラブルシューティング">トラブルシューティング</h2>
+<h3 id="問題-cmdenterを押しても何も起こらない">問題: Cmd+Enterを押しても何も起こらない</h3>
+<p><strong>確認項目</strong>:</p>
+<ol>
+<li>ファイルが<code>.orbs</code>拡張子で保存されているか</li>
+<li>拡張が有効化されているか（Cursor再起動）</li>
+<li>キーバインドが正しく設定されているか</li>
+</ol>
+<p><strong>解決策</strong>:</p>
+<ul>
+<li>Cursorを再起動</li>
+<li>コマンドパレット（Cmd+Shift+P）で &quot;OrbitScore: Run Selection&quot; を手動実行</li>
+</ul>
+<h3 id="問題-engine-not-found-エラー">問題: &quot;Engine not found&quot; エラー</h3>
+<p><strong>原因</strong>: エンジンがビルドされていない</p>
+<p><strong>解決策</strong>:</p>
+<pre><code class="language-bash">cd packages/engine
+npm run build
+</code></pre>
+<h3 id="問題-オーディオが聞こえない">問題: オーディオが聞こえない</h3>
+<p><strong>確認項目</strong>:</p>
+<ol>
+<li>オーディオファイルが存在するか（<code>test-assets/audio/kick.wav</code>等）</li>
+<li>システムの音量設定</li>
+<li>出力パネルにエラーメッセージがないか</li>
+</ol>
+<p><strong>解決策</strong>:</p>
+<ul>
+<li>オーディオファイルのパスを確認</li>
+<li>絶対パスで試してみる</li>
+</ul>
+<h3 id="問題-パーサーエラー">問題: パーサーエラー</h3>
+<p><strong>よくあるエラー</strong>:</p>
+<ul>
+<li>&quot;Unknown character &#39;=&#39; at line X&quot;
+→ コメント形式を確認（装飾的な<code>====</code>は避ける）</li>
+<li>&quot;Unexpected token&quot;
+→ 構文を確認（括弧の対応等）</li>
+</ul>
+<h2 id="テスト結果の記録">テスト結果の記録</h2>
+<p>各テストを実行したら、以下の表を埋めてください：</p>
+<table>
+<thead>
+<tr>
+<th>テスト項目</th>
+<th>成功/失敗</th>
+<th>備考</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>構文ハイライト</td>
+<td>⬜</td>
+<td></td>
+</tr>
+<tr>
+<td>オートコンプリート</td>
+<td>⬜</td>
+<td></td>
+</tr>
+<tr>
+<td>グローバル初期化</td>
+<td>⬜</td>
+<td></td>
+</tr>
+<tr>
+<td>キックドラム再生</td>
+<td>⬜</td>
+<td></td>
+</tr>
+<tr>
+<td>ハイハット追加</td>
+<td>⬜</td>
+<td></td>
+</tr>
+<tr>
+<td>パターン変更</td>
+<td>⬜</td>
+<td></td>
+</tr>
+<tr>
+<td>テンポ変更</td>
+<td>⬜</td>
+<td></td>
+</tr>
+<tr>
+<td>ミュート/アンミュート</td>
+<td>⬜</td>
+<td></td>
+</tr>
+<tr>
+<td>停止</td>
+<td>⬜</td>
+<td></td>
+</tr>
+</tbody></table>
+<h2 id="次のステップ">次のステップ</h2>
+<p>テストが完了したら：</p>
+<ol>
+<li>結果を報告（成功/失敗/問題点）</li>
+<li>パフォーマンスメトリクス（レイテンシ、安定性）を記録</li>
+<li>改善提案をまとめる</li>
+</ol>
+<hr>
+<p><em>テストを楽しんでください！🎵</em></p>
+
+</main>
+</body>
+</html>

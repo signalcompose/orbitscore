@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore VS Code Live Coding Performance Test Guide — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-vs-code-live-coding-performance-test-guide">OrbitScore VS Code Live Coding Performance Test Guide</h1>
+<h2 id="overview">Overview</h2>
+<p>This guide provides step-by-step instructions for testing OrbitScore&#39;s VS Code extension live coding capabilities using the <code>examples/performance-test.orbs</code> file.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<ol>
+<li><strong>VS Code Extension Installed</strong>: The OrbitScore extension should be installed and active</li>
+<li><strong>Audio Files Available</strong>: Ensure test audio files exist in <code>test-assets/audio/</code></li>
+<li><strong>Engine Built</strong>: The OrbitScore engine should be compiled and ready</li>
+</ol>
+<h2 id="test-setup">Test Setup</h2>
+<h3 id="1-open-the-performance-test-file">1. Open the Performance Test File</h3>
+<ul>
+<li>Open <code>examples/performance-test.orbs</code> in VS Code</li>
+<li>Ensure the file is recognized as OrbitScore language (<code>.orbs</code> extension)</li>
+</ul>
+<h3 id="2-verify-extension-functionality">2. Verify Extension Functionality</h3>
+<ul>
+<li>Check that syntax highlighting is working</li>
+<li>Verify autocomplete works (type <code>global.</code> and see suggestions)</li>
+<li>Confirm Cmd+Enter keybinding is registered</li>
+</ul>
+<h3 id="3-check-audio-assets">3. Check Audio Assets</h3>
+<p>Verify these files exist:</p>
+<ul>
+<li><code>test-assets/audio/kick.wav</code></li>
+<li><code>test-assets/audio/hihat.wav</code></li>
+<li><code>test-assets/audio/snare.wav</code></li>
+<li><code>test-assets/audio/bass.wav</code></li>
+<li><code>test-assets/audio/arpeggio.wav</code></li>
+</ul>
+<h2 id="test-execution-steps">Test Execution Steps</h2>
+<h3 id="phase-1-basic-functionality-test">Phase 1: Basic Functionality Test</h3>
+<h4 id="step-1-global-initialization">Step 1: Global Initialization</h4>
+<ol>
+<li>Select lines 5-8 (global initialization)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: No errors, global context created</li>
+<li><strong>Check</strong>: Output panel shows &quot;Code executed successfully&quot;</li>
+</ol>
+<h4 id="step-2-kick-drum-pattern">Step 2: Kick Drum Pattern</h4>
+<ol>
+<li>Select lines 12-19 (kick drum setup)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Kick drum starts playing 4-on-the-floor pattern</li>
+<li><strong>Check</strong>: Audio plays at 120 BPM, kick on beats 1 and 3</li>
+</ol>
+<h4 id="step-3-add-hi-hat">Step 3: Add Hi-Hat</h4>
+<ol>
+<li>Select lines 24-30 (hi-hat setup)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Hi-hat joins kick drum with 16th note pattern</li>
+<li><strong>Check</strong>: Both kick and hi-hat play simultaneously</li>
+</ol>
+<h4 id="step-4-add-snare">Step 4: Add Snare</h4>
+<ol>
+<li>Select lines 35-41 (snare setup)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Snare adds to the rhythm on beats 2 and 4</li>
+<li><strong>Check</strong>: Full drum kit sound with kick, hi-hat, and snare</li>
+</ol>
+<h3 id="phase-2-advanced-features-test">Phase 2: Advanced Features Test</h3>
+<h4 id="step-5-bassline-with-chop">Step 5: Bassline with Chop</h4>
+<ol>
+<li>Select lines 46-52 (bassline setup)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Bassline plays with sliced audio</li>
+<li><strong>Check</strong>: Bass plays different slices creating melodic pattern</li>
+</ol>
+<h4 id="step-6-complex-nested-pattern">Step 6: Complex Nested Pattern</h4>
+<ol>
+<li>Select lines 57-63 (arpeggio setup)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Arpeggio plays complex nested rhythm</li>
+<li><strong>Check</strong>: Timing is accurate despite complex nesting</li>
+</ol>
+<h3 id="phase-3-real-time-manipulation-test">Phase 3: Real-Time Manipulation Test</h3>
+<h4 id="step-7-tempo-change">Step 7: Tempo Change</h4>
+<ol>
+<li>Select lines 68-69 (tempo change)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: All sequences speed up to 140 BPM</li>
+<li><strong>Check</strong>: No audio dropouts, smooth tempo transition</li>
+</ol>
+<h4 id="step-8-pattern-modification">Step 8: Pattern Modification</h4>
+<ol>
+<li>Select lines 74-75 (kick pattern change)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Kick pattern changes to breakbeat style</li>
+<li><strong>Check</strong>: Change takes effect on next bar boundary</li>
+</ol>
+<h4 id="step-9-slice-reordering">Step 9: Slice Reordering</h4>
+<ol>
+<li>Select lines 80-82 (bassline slice reorder)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Bassline plays slices in reverse order</li>
+<li><strong>Check</strong>: Melodic pattern changes immediately</li>
+</ol>
+<h3 id="phase-4-transport-control-test">Phase 4: Transport Control Test</h3>
+<h4 id="step-10-individual-muting">Step 10: Individual Muting</h4>
+<ol>
+<li>Select lines 87-88 (mute hi-hat and snare)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Only kick and bass continue playing</li>
+<li><strong>Check</strong>: Muted sequences stop, others continue</li>
+</ol>
+<h4 id="step-11-unmute-and-modify">Step 11: Unmute and Modify</h4>
+<ol>
+<li>Select lines 93-95 (unmute and change hi-hat)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Hi-hat returns with new pattern</li>
+<li><strong>Check</strong>: Hi-hat plays quarter note pattern</li>
+</ol>
+<h3 id="phase-5-complex-pattern-test">Phase 5: Complex Pattern Test</h3>
+<h4 id="step-12-nested-structure">Step 12: Nested Structure</h4>
+<ol>
+<li>Select lines 100-106 (complex nested pattern)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Complex timing pattern plays correctly</li>
+<li><strong>Check</strong>: Hierarchical timing is accurate</li>
+</ol>
+<h4 id="step-13-different-meter">Step 13: Different Meter</h4>
+<ol>
+<li>Select lines 111-117 (5/4 meter test)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Quintuple meter plays alongside 4/4</li>
+<li><strong>Check</strong>: Polymeter works correctly</li>
+</ol>
+<h4 id="step-14-polymeter-test">Step 14: Polymeter Test</h4>
+<ol>
+<li>Select lines 122-128 (7/8 meter test)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Three different meters play simultaneously</li>
+<li><strong>Check</strong>: All sequences maintain their own timing</li>
+</ol>
+<h3 id="phase-6-performance-test">Phase 6: Performance Test</h3>
+<h4 id="step-15-method-chaining">Step 15: Method Chaining</h4>
+<ol>
+<li>Select lines 133 (method chaining test)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Single line creates and runs sequence</li>
+<li><strong>Check</strong>: Fluent API works correctly</li>
+</ol>
+<h4 id="step-16-error-handling">Step 16: Error Handling</h4>
+<ol>
+<li>Select lines 138-142 (intentional error)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Error message displayed, other sequences continue</li>
+<li><strong>Check</strong>: System remains stable after error</li>
+</ol>
+<h4 id="step-17-multiple-sequences">Step 17: Multiple Sequences</h4>
+<ol>
+<li>Select lines 147-152 (performance test)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Four sequences play simultaneously</li>
+<li><strong>Check</strong>: CPU usage remains reasonable, no audio dropouts</li>
+</ol>
+<h3 id="phase-7-transport-system-test">Phase 7: Transport System Test</h3>
+<h4 id="step-18-stop-all">Step 18: Stop All</h4>
+<ol>
+<li>Select lines 157-158 (stop all sequences)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: All audio stops immediately</li>
+<li><strong>Check</strong>: Clean stop, no hanging processes</li>
+</ol>
+<h4 id="step-19-restart">Step 19: Restart</h4>
+<ol>
+<li>Select lines 163-164 (restart with new tempo)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: All sequences restart at 100 BPM</li>
+<li><strong>Check</strong>: Clean restart, new tempo applied</li>
+</ol>
+<h4 id="step-20-loop-mode">Step 20: Loop Mode</h4>
+<ol>
+<li>Select lines 169-170 (enable loop mode)</li>
+<li>Press <strong>Cmd+Enter</strong></li>
+<li><strong>Expected</strong>: Sequences loop continuously</li>
+<li><strong>Check</strong>: Seamless looping without gaps</li>
+</ol>
+<h2 id="performance-metrics-to-monitor">Performance Metrics to Monitor</h2>
+<h3 id="audio-quality">Audio Quality</h3>
+<ul>
+<li><strong>Latency</strong>: Time between Cmd+Enter and audio start</li>
+<li><strong>Dropouts</strong>: Any audio interruptions or glitches</li>
+<li><strong>Synchronization</strong>: All sequences stay in time</li>
+<li><strong>Quality</strong>: Audio clarity and fidelity</li>
+</ul>
+<h3 id="system-performance">System Performance</h3>
+<ul>
+<li><strong>CPU Usage</strong>: Monitor during complex patterns</li>
+<li><strong>Memory Usage</strong>: Check for memory leaks</li>
+<li><strong>Response Time</strong>: Cmd+Enter execution speed</li>
+<li><strong>Stability</strong>: No crashes or freezes</li>
+</ul>
+<h3 id="user-experience">User Experience</h3>
+<ul>
+<li><strong>Visual Feedback</strong>: Status messages and error reporting</li>
+<li><strong>Autocomplete</strong>: Speed and accuracy of suggestions</li>
+<li><strong>Syntax Highlighting</strong>: Real-time error detection</li>
+<li><strong>Workflow</strong>: Smooth live coding experience</li>
+</ul>
+<h2 id="expected-results">Expected Results</h2>
+<h3 id="successful-test-indicators">Successful Test Indicators</h3>
+<ul>
+<li>✅ All steps execute without errors</li>
+<li>✅ Audio plays immediately after Cmd+Enter</li>
+<li>✅ Real-time changes take effect smoothly</li>
+<li>✅ Multiple sequences play simultaneously</li>
+<li>✅ Complex patterns maintain accurate timing</li>
+<li>✅ Error handling works gracefully</li>
+<li>✅ Transport controls function correctly</li>
+</ul>
+<h3 id="performance-benchmarks">Performance Benchmarks</h3>
+<ul>
+<li><strong>Latency</strong>: &lt; 100ms from Cmd+Enter to audio</li>
+<li><strong>CPU Usage</strong>: &lt; 30% during complex patterns</li>
+<li><strong>Memory</strong>: Stable, no leaks during extended use</li>
+<li><strong>Synchronization</strong>: &lt; 10ms drift between sequences</li>
+</ul>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<h3 id="common-issues">Common Issues</h3>
+<h4 id="no-audio-output">No Audio Output</h4>
+<ul>
+<li>Check audio file paths are correct</li>
+<li>Verify audio files exist and are valid</li>
+<li>Check system audio settings</li>
+<li>Ensure engine process is running</li>
+</ul>
+<h4 id="cmdenter-not-working">Cmd+Enter Not Working</h4>
+<ul>
+<li>Verify extension is installed and active</li>
+<li>Check keybinding is registered</li>
+<li>Ensure file has <code>.orbs</code> extension</li>
+<li>Check VS Code language mode</li>
+</ul>
+<h4 id="performance-issues">Performance Issues</h4>
+<ul>
+<li>Monitor CPU usage during tests</li>
+<li>Check for memory leaks</li>
+<li>Verify audio buffer sizes</li>
+<li>Test with fewer simultaneous sequences</li>
+</ul>
+<h4 id="timing-issues">Timing Issues</h4>
+<ul>
+<li>Check tempo settings</li>
+<li>Verify meter calculations</li>
+<li>Monitor sequence synchronization</li>
+<li>Test with simpler patterns first</li>
+</ul>
+<h2 id="test-report-template">Test Report Template</h2>
+<p>After completing all tests, document results in <code>docs/PERFORMANCE_TEST_REPORT.md</code>:</p>
+<pre><code class="language-markdown"># Performance Test Report
+
+## Test Date: [DATE]
+## Tester: [NAME]
+## Environment: [OS, VS Code Version, etc.]
+
+### Test Results Summary
+- [ ] All basic functionality tests passed
+- [ ] Real-time manipulation works
+- [ ] Complex patterns play correctly
+- [ ] Performance is acceptable
+- [ ] Error handling works
+
+### Performance Metrics
+- Average Latency: [X]ms
+- Peak CPU Usage: [X]%
+- Memory Usage: [X]MB
+- Synchronization Accuracy: [X]ms
+
+### Issues Found
+1. [Issue description]
+2. [Issue description]
+
+### Recommendations
+1. [Improvement suggestion]
+2. [Improvement suggestion]
+</code></pre>
+<h2 id="next-steps">Next Steps</h2>
+<p>After completing the performance test:</p>
+<ol>
+<li><strong>Document Results</strong>: Create detailed test report</li>
+<li><strong>Identify Issues</strong>: List any problems found</li>
+<li><strong>Prioritize Fixes</strong>: Rank issues by severity</li>
+<li><strong>Plan Improvements</strong>: Create roadmap for enhancements</li>
+<li><strong>Share Feedback</strong>: Report findings to development team</li>
+</ol>
+<hr>
+<p><em>This guide should be updated as new features are added to OrbitScore.</em></p>
+
+</main>
+</body>
+</html>

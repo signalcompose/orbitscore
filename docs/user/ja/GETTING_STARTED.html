@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore はじめに — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-はじめに">OrbitScore はじめに</h1>
+<p><strong>OrbitScore オーディオベースライブコーディングDSLのクイックスタートガイド</strong></p>
+<h2 id="前提条件">前提条件</h2>
+<p>始める前に、以下を用意してください：</p>
+<ul>
+<li><strong>macOS</strong>（主要サポート）</li>
+<li><strong>Node.js</strong> v22.0.0以上</li>
+<li><strong>SuperCollider</strong>（オーディオエンジン）</li>
+<li><strong>VS Code、Cursor、またはClaude Code</strong>（推奨エディタ）</li>
+</ul>
+<h2 id="ステップ1-supercolliderのインストール">ステップ1: SuperColliderのインストール</h2>
+<p>SuperColliderはオーディオ再生に必要です。</p>
+<h3 id="macos">macOS</h3>
+<pre><code class="language-bash">brew install --cask supercollider
+</code></pre>
+<h3 id="linux">Linux</h3>
+<pre><code class="language-bash">sudo apt-get install supercollider
+</code></pre>
+<h3 id="windows">Windows</h3>
+<p><a href="https://supercollider.github.io/">SuperCollider公式サイト</a>からダウンロード</p>
+<h2 id="ステップ2-orbitscoreのクローンとビルド">ステップ2: OrbitScoreのクローンとビルド</h2>
+<pre><code class="language-bash"># リポジトリをクローン
+git clone https://github.com/yourusername/orbitscore.git
+cd orbitscore
+
+# 依存関係のインストールとビルド
+npm install
+npm run build
+</code></pre>
+<h2 id="ステップ3-synthdefのビルド">ステップ3: SynthDefのビルド</h2>
+<p>SynthDefはSuperCollider統合に必要です。</p>
+<pre><code class="language-bash"># supercolliderディレクトリへ移動
+cd packages/engine/supercollider
+
+# 既存のsclangプロセスを停止
+pkill sclang
+
+# SynthDefをビルド
+./build-synthdefs.sh
+</code></pre>
+<p><strong>期待される出力</strong>: <code>✅ All SynthDefs saved!</code></p>
+<h2 id="ステップ4-vs-code拡張機能のインストールオプション">ステップ4: VS Code拡張機能のインストール（オプション）</h2>
+<p>VS Code/Cursor/Claude Codeでのライブコーディングに使用：</p>
+<pre><code class="language-bash">cd packages/vscode-extension
+npm install
+npm run build
+
+# 拡張機能をインストール
+code --install-extension orbitscore-0.0.1.vsix
+</code></pre>
+<h2 id="ステップ5-インストールの確認">ステップ5: インストールの確認</h2>
+<p>テストファイル <code>test.orbs</code> を作成：</p>
+<pre><code class="language-osc">var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath(&quot;../test-assets/audio&quot;)
+global.start()
+
+var kick = init global.seq
+kick.audio(&quot;kick.wav&quot;)
+kick.play(1, 0, 1, 0)
+
+LOOP(kick)
+</code></pre>
+<h3 id="cliで実行">CLIで実行</h3>
+<pre><code class="language-bash">cd packages/engine
+npm run cli -- /path/to/test.orbs
+</code></pre>
+<h3 id="vs-codeで実行">VS Codeで実行</h3>
+<ol>
+<li>VS Codeで <code>test.orbs</code> を開く</li>
+<li>すべての行を選択</li>
+<li><strong>Cmd+Enter</strong>（Mac）または <strong>Ctrl+Enter</strong>（Linux/Windows）を押す</li>
+<li>キックドラムが再生されます</li>
+</ol>
+<h2 id="ステップ6-サンプルを試す">ステップ6: サンプルを試す</h2>
+<p><code>examples/</code> ディレクトリのサンプルファイルを確認：</p>
+<pre><code class="language-bash">cd examples
+ls *.orbs
+</code></pre>
+<p>推奨サンプル：</p>
+<ul>
+<li><code>01_hello_world.orbs</code> - 基本的な使い方</li>
+<li><code>09_reserved_keywords.orbs</code> - トランスポート制御</li>
+<li><code>performance-demo.orbs</code> - 高度な機能</li>
+</ul>
+<h2 id="次のステップ">次のステップ</h2>
+<ul>
+<li><a href="./USER_MANUAL.html">ユーザーマニュアル</a>で詳細な構文ガイドを確認</li>
+<li><a href="../../core/INSTRUCTION_ORBITSCORE_DSL.html">DSL仕様書</a>で完全な言語リファレンスを確認</li>
+<li><a href="../../testing/TESTING_GUIDE.html">テストガイド</a>でテスト手順を確認</li>
+</ul>
+<h2 id="トラブルシューティング">トラブルシューティング</h2>
+<h3 id="問題-オーディオが出力されない">問題: オーディオが出力されない</h3>
+<p><strong>解決方法</strong>:</p>
+<ol>
+<li>SuperColliderがインストールされているか確認: <code>which scsynth</code></li>
+<li>オーディオファイルが存在するか確認: <code>ls test-assets/audio/*.wav</code></li>
+<li>グローバルスケジューラーを再起動: <code>global.stop()</code> → <code>global.start()</code></li>
+</ol>
+<h3 id="問題-cmdenterが動作しない">問題: Cmd+Enterが動作しない</h3>
+<p><strong>解決方法</strong>:</p>
+<ol>
+<li>ファイルに <code>.orbs</code> 拡張子があるか確認</li>
+<li>VS Codeを再起動</li>
+<li>コマンドパレットを使用: &quot;OrbitScore: Run Selection&quot;</li>
+</ol>
+<h3 id="問題-synthdefビルドが失敗">問題: SynthDefビルドが失敗</h3>
+<p><strong>解決方法</strong>:</p>
+<ol>
+<li>sclangが実行されていないことを確認: <code>pkill sclang</code></li>
+<li>SuperColliderが正しくインストールされているか確認</li>
+<li>ビルドスクリプトを再実行</li>
+</ol>
+<h2 id="追加リソース">追加リソース</h2>
+<ul>
+<li><a href="https://doc.sccode.org/">SuperColliderドキュメント</a></li>
+<li><a href="https://github.com/yourusername/orbitscore">OrbitScore GitHub</a></li>
+<li><a href="https://github.com/yourusername/orbitscore/issues">Issue Tracker</a></li>
+</ul>
+<hr>
+<p>English version: <a href="../en/GETTING_STARTED.html">Getting Started (English)</a></p>
+
+</main>
+</body>
+</html>

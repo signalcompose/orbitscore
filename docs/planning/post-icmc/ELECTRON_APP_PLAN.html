@@ -1,0 +1,1871 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Electron + Monaco統合版 アプリ開発プラン — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="electron--monaco統合版-アプリ開発プラン">Electron + Monaco統合版 アプリ開発プラン</h1>
+<p><strong>ステータス</strong>: 計画段階（未着手）
+<strong>優先度</strong>: 中〜高（比較的早期に実装予定）
+<strong>作成日</strong>: 2025-10-10
+<strong>最終更新</strong>: 2025-10-10</p>
+<hr>
+<h2 id="-プロジェクト概要">📋 プロジェクト概要</h2>
+<h3 id="目標">目標</h3>
+<p>OrbitScoreをスタンドアロンのElectronアプリとして配布する。</p>
+<h3 id="主な特徴">主な特徴</h3>
+<ul>
+<li><strong>Monaco Editor</strong>: VS Codeと同じエディタエンジンによる快適な編集体験</li>
+<li><strong>Node.js統合</strong>: SuperColliderエンジンとの直接通信（低レイテンシ）</li>
+<li><strong>クロスプラットフォーム</strong>: macOS, Windows, Linux対応</li>
+<li><strong>スタンドアロン</strong>: VS Code不要で動作する専用ライブコーディング環境</li>
+</ul>
+<h3 id="vs-code-extension版との比較">VS Code Extension版との比較</h3>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>VS Code Extension</th>
+<th>Electron App</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>インストール</td>
+<td>VS Code必須</td>
+<td>スタンドアロン</td>
+</tr>
+<tr>
+<td>UI拡張性</td>
+<td>限定的</td>
+<td>自由度高</td>
+</tr>
+<tr>
+<td>配布</td>
+<td>.vsix</td>
+<td>.dmg/.exe/.AppImage</td>
+</tr>
+<tr>
+<td>カスタマイズ</td>
+<td>VS Code設定に依存</td>
+<td>独自設定可能</td>
+</tr>
+<tr>
+<td>機能追加の容易さ</td>
+<td>中</td>
+<td>高</td>
+</tr>
+<tr>
+<td>ターゲットユーザー</td>
+<td>開発者寄り</td>
+<td>一般ユーザー含む</td>
+</tr>
+</tbody></table>
+<p><strong>このプランの動機</strong>: UIや機能を追加する際の自由度が高く、OrbitScore専用の最適化されたユーザー体験を提供できる。</p>
+<hr>
+<h2 id="️-アーキテクチャ設計">🏗️ アーキテクチャ設計</h2>
+<h3 id="パッケージ構成">パッケージ構成</h3>
+<pre><code>packages/
+├── engine/              # 既存（変更なし）
+│   ├── src/
+│   └── dist/
+├── vscode-extension/    # 既存（参考実装として継続メンテナンス）
+│   └── src/
+└── electron-app/        # 新規作成
+    ├── src/
+    │   ├── main/        # Main Process（Node.js）
+    │   │   ├── main.ts
+    │   │   ├── engine-manager.ts
+    │   │   └── ipc-handlers.ts
+    │   ├── renderer/    # Renderer Process（Monaco Editor）
+    │   │   ├── index.html
+    │   │   ├── editor.ts
+    │   │   ├── language-orbitscore.ts
+    │   │   ├── completion-provider.ts
+    │   │   └── styles.css
+    │   └── preload/     # Preload Script（IPC Bridge）
+    │       └── preload.ts
+    ├── assets/          # アイコン等
+    └── dist/            # ビルド出力
+</code></pre>
+<h3 id="プロセス分離electronの標準構成">プロセス分離（Electronの標準構成）</h3>
+<h4 id="1-main-process-nodejs環境">1. Main Process (Node.js環境)</h4>
+<p><strong>役割</strong>: バックエンド処理</p>
+<ul>
+<li>SuperColliderエンジンの起動・管理</li>
+<li>ファイルシステムアクセス</li>
+<li>IPC通信のハンドラー</li>
+<li>メニューバー・ウィンドウ管理</li>
+</ul>
+<p><strong>技術</strong>: Node.js, Electron Main API</p>
+<h4 id="2-renderer-process-chromium環境">2. Renderer Process (Chromium環境)</h4>
+<p><strong>役割</strong>: フロントエンド UI</p>
+<ul>
+<li>Monaco Editorの表示・操作</li>
+<li>シンタックスハイライト</li>
+<li>ユーザー入力処理</li>
+<li>コード実行トリガー</li>
+</ul>
+<p><strong>技術</strong>: Monaco Editor, HTML/CSS, TypeScript</p>
+<h4 id="3-preload-script">3. Preload Script</h4>
+<p><strong>役割</strong>: セキュリティブリッジ</p>
+<ul>
+<li>contextBridge経由でIPC APIを安全に公開</li>
+<li>Main ↔ Renderer間の型安全な通信</li>
+</ul>
+<p><strong>セキュリティ</strong>: <code>contextIsolation: true</code>, <code>nodeIntegration: false</code></p>
+<hr>
+<h2 id="-実装タスク詳細">📝 実装タスク詳細</h2>
+<h3 id="phase-1-プロジェクトセットアップ推定-1日">Phase 1: プロジェクトセットアップ（推定: 1日）</h3>
+<h4 id="11-パッケージ初期化">1.1 パッケージ初期化</h4>
+<ul>
+<li><input disabled="" type="checkbox"> <code>packages/electron-app/</code> ディレクトリ作成</li>
+<li><input disabled="" type="checkbox"> <code>package.json</code> 作成<pre><code class="language-json">{
+  &quot;name&quot;: &quot;@orbitscore/electron-app&quot;,
+  &quot;version&quot;: &quot;0.1.0&quot;,
+  &quot;main&quot;: &quot;dist/main/main.js&quot;,
+  &quot;devDependencies&quot;: {
+    &quot;electron&quot;: &quot;^28.0.0&quot;,
+    &quot;electron-builder&quot;: &quot;^24.0.0&quot;,
+    &quot;electron-vite&quot;: &quot;^2.0.0&quot;,
+    &quot;monaco-editor&quot;: &quot;^0.50.0&quot;,
+    &quot;typescript&quot;: &quot;^5.9.0&quot;
+  }
+}
+</code></pre>
+</li>
+</ul>
+<h4 id="12-ビルド環境構築">1.2 ビルド環境構築</h4>
+<ul>
+<li><input disabled="" type="checkbox"> <code>electron.vite.config.ts</code> 作成<ul>
+<li>Main Process用設定</li>
+<li>Renderer Process用設定</li>
+<li>Monaco Editor Worker設定（5つのworker: editor, json, css, html, ts）</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> 開発用スクリプト追加<pre><code class="language-json">&quot;scripts&quot;: {
+  &quot;dev&quot;: &quot;electron-vite dev&quot;,
+  &quot;build&quot;: &quot;electron-vite build&quot;,
+  &quot;preview&quot;: &quot;electron-vite preview&quot;,
+  &quot;pack&quot;: &quot;electron-builder --dir&quot;,
+  &quot;dist&quot;: &quot;electron-builder&quot;
+}
+</code></pre>
+</li>
+</ul>
+<p><strong>成果物</strong>: 空のElectronアプリが起動する（Hello World表示）</p>
+<hr>
+<h3 id="phase-2-main-process実装推定-2-3日">Phase 2: Main Process実装（推定: 2-3日）</h3>
+<h4 id="21-エンジン管理モジュール">2.1 エンジン管理モジュール</h4>
+<p><strong>ファイル</strong>: <code>src/main/engine-manager.ts</code></p>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li>SuperColliderエンジン起動ロジック移植（<code>extension.ts:startEngine</code>から）</li>
+<li>プロセス管理（spawn, kill, restart）</li>
+<li>stdout/stderr監視</li>
+<li>エラーハンドリング</li>
+<li>デバッグモード対応</li>
+</ul>
+<p><strong>参考コード</strong>: <code>packages/vscode-extension/src/extension.ts:595-656</code></p>
+<pre><code class="language-typescript">class EngineManager {
+  private engineProcess: ChildProcess | null = null;
+
+  async start(options: { debugMode?: boolean; audioDevice?: string }): Promise&lt;void&gt;
+  async stop(): Promise&lt;void&gt;
+  async restart(): Promise&lt;void&gt;
+  async execute(code: string): Promise&lt;void&gt;
+  getStatus(): EngineStatus
+}
+</code></pre>
+<h4 id="22-ipc通信ハンドラー">2.2 IPC通信ハンドラー</h4>
+<p><strong>ファイル</strong>: <code>src/main/ipc-handlers.ts</code></p>
+<p><strong>実装するチャンネル</strong>:</p>
+<ul>
+<li><code>engine:start</code> - エンジン起動</li>
+<li><code>engine:stop</code> - エンジン停止</li>
+<li><code>engine:restart</code> - エンジン再起動</li>
+<li><code>engine:execute</code> - コード実行（stdin書き込み）</li>
+<li><code>engine:status</code> - 状態取得（running/stopped/error）</li>
+<li><code>engine:output</code> - 出力イベント（stdout/stderrをRendererに配信）</li>
+<li><code>audio-device:list</code> - オーディオデバイス一覧取得</li>
+<li><code>audio-device:select</code> - デバイス選択</li>
+<li><code>file:open</code> - ファイルを開く（ダイアログ表示）</li>
+<li><code>file:save</code> - ファイル保存</li>
+<li><code>file:save-as</code> - 名前をつけて保存</li>
+</ul>
+<pre><code class="language-typescript">export function registerIpcHandlers(engineManager: EngineManager) {
+  ipcMain.handle(&#39;engine:start&#39;, async (event, options) =&gt; { ... });
+  ipcMain.handle(&#39;engine:execute&#39;, async (event, code) =&gt; { ... });
+  // ...
+}
+</code></pre>
+<h4 id="23-メインウィンドウ作成">2.3 メインウィンドウ作成</h4>
+<p><strong>ファイル</strong>: <code>src/main/main.ts</code></p>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li><code>BrowserWindow</code> 初期化（800x600、ダークモード対応）</li>
+<li>メニューバー設定<ul>
+<li>File: New, Open, Save, Save As, Quit</li>
+<li>Edit: Undo, Redo, Cut, Copy, Paste</li>
+<li>View: Reload, Toggle DevTools, Zoom</li>
+<li>Run: Start Engine, Stop Engine, Execute Selection (Cmd+Enter)</li>
+</ul>
+</li>
+<li>ライフサイクル管理<ul>
+<li><code>app.whenReady()</code>: IPC登録、ウィンドウ作成</li>
+<li><code>app.on(&#39;window-all-closed&#39;)</code>: macOSでは終了しない</li>
+<li><code>app.on(&#39;activate&#39;)</code>: macOSでウィンドウ再作成</li>
+</ul>
+</li>
+</ul>
+<p><strong>成果物</strong>: エンジン起動・停止ができるMain Process</p>
+<hr>
+<h3 id="phase-3-monaco-editor統合推定-3-4日">Phase 3: Monaco Editor統合（推定: 3-4日）</h3>
+<h4 id="31-monaco-editorセットアップ">3.1 Monaco Editorセットアップ</h4>
+<p><strong>ファイル</strong>: <code>src/renderer/editor.ts</code></p>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li>Monaco Editor初期化</li>
+<li>基本設定（テーマ、フォント、行番号、ミニマップ）</li>
+<li>Worker環境設定（Web Worker経由でシンタックス解析）</li>
+</ul>
+<pre><code class="language-typescript">import * as monaco from &#39;monaco-editor&#39;;
+
+// Worker設定
+self.MonacoEnvironment = {
+  getWorkerUrl: function (moduleId, label) {
+    if (label === &#39;json&#39;) return &#39;./json.worker.js&#39;;
+    if (label === &#39;css&#39; || label === &#39;scss&#39; || label === &#39;less&#39;)
+      return &#39;./css.worker.js&#39;;
+    if (label === &#39;html&#39; || label === &#39;handlebars&#39; || label === &#39;razor&#39;)
+      return &#39;./html.worker.js&#39;;
+    if (label === &#39;typescript&#39; || label === &#39;javascript&#39;)
+      return &#39;./ts.worker.js&#39;;
+    return &#39;./editor.worker.js&#39;;
+  }
+};
+
+// エディタ作成
+const editor = monaco.editor.create(document.getElementById(&#39;container&#39;), {
+  value: &#39;// Welcome to OrbitScore\n&#39;,
+  language: &#39;orbitscore&#39;,
+  theme: &#39;vs-dark&#39;,
+  fontSize: 14,
+  minimap: { enabled: true },
+  lineNumbers: &#39;on&#39;,
+  automaticLayout: true
+});
+</code></pre>
+<h4 id="32-カスタム言語サポート">3.2 カスタム言語サポート</h4>
+<p><strong>ファイル</strong>: <code>src/renderer/language-orbitscore.ts</code></p>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li>言語定義登録（<code>monaco.languages.register</code>）</li>
+<li>Monarch Tokenizer移植（<code>orbitscore-audio.tmLanguage.json</code>から変換）</li>
+<li>シンタックスハイライトルール</li>
+</ul>
+<p><strong>変換作業</strong>: TextMate Grammar → Monaco Monarch Tokenizer</p>
+<ul>
+<li>TextMate: <code>.tmLanguage.json</code> 形式（VS Code標準）</li>
+<li>Monarch: Monaco Editor独自形式（より軽量）</li>
+</ul>
+<pre><code class="language-typescript">monaco.languages.register({ id: &#39;orbitscore&#39; });
+
+monaco.languages.setMonarchTokensProvider(&#39;orbitscore&#39;, {
+  keywords: [&#39;var&#39;, &#39;init&#39;, &#39;GLOBAL&#39;, &#39;RUN&#39;, &#39;LOOP&#39;, &#39;MUTE&#39;, &#39;by&#39;, &#39;force&#39;],
+
+  tokenizer: {
+    root: [
+      [/\/\/.*$/, &#39;comment&#39;],
+      [/#.*$/, &#39;comment&#39;],
+      [/\b(var|init|GLOBAL|RUN|LOOP|MUTE)\b/, &#39;keyword&#39;],
+      [/\b(global|seq\d*|drums|bass|piano)\b/, &#39;variable&#39;],
+      [/\b(tempo|tick|beat|audio|chop|play|gain|pan)\b(?=\()/, &#39;function&#39;],
+      [/&quot;([^&quot;\\]|\\.)*$/, &#39;string.invalid&#39;],
+      [/&quot;/, &#39;string&#39;, &#39;@string&#39;],
+      [/\d+\.\d+/, &#39;number.float&#39;],
+      [/\d+/, &#39;number&#39;],
+      // ...
+    ],
+    string: [
+      [/[^\\&quot;]+/, &#39;string&#39;],
+      [/\\./, &#39;string.escape&#39;],
+      [/&quot;/, &#39;string&#39;, &#39;@pop&#39;]
+    ]
+  }
+});
+</code></pre>
+<p><strong>参考</strong>: <code>packages/vscode-extension/syntaxes/orbitscore-audio.tmLanguage.json</code></p>
+<h4 id="33-補完機能intellisense">3.3 補完機能（IntelliSense）</h4>
+<p><strong>ファイル</strong>: <code>src/renderer/completion-provider.ts</code></p>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li><code>monaco.languages.registerCompletionItemProvider</code> 登録</li>
+<li>コンテキスト認識（<code>global.</code>, <code>seq.</code>, トップレベル）</li>
+<li>グローバルメソッド補完<ul>
+<li><code>tempo(bpm)</code>, <code>tick(n)</code>, <code>beat(n)</code>, <code>key(note)</code>, <code>gain(level)</code>, <code>pan(position)</code></li>
+</ul>
+</li>
+<li>シーケンスメソッド補完<ul>
+<li><code>audio(path)</code>, <code>chop(n)</code>, <code>play(...)</code>, <code>tempo(bpm)</code>, <code>beat(n)</code>, <code>length(bars)</code>, <code>gain(level)</code>, <code>pan(position)</code></li>
+</ul>
+</li>
+<li>キーワード補完<ul>
+<li><code>var</code>, <code>init</code>, <code>GLOBAL</code>, <code>RUN()</code>, <code>LOOP()</code>, <code>MUTE()</code></li>
+</ul>
+</li>
+</ul>
+<pre><code class="language-typescript">monaco.languages.registerCompletionItemProvider(&#39;orbitscore&#39;, {
+  provideCompletionItems: (model, position) =&gt; {
+    const textUntilPosition = model.getValueInRange({
+      startLineNumber: position.lineNumber,
+      startColumn: 1,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column
+    });
+
+    // global. の後
+    if (/global\.\w*$/.test(textUntilPosition)) {
+      return {
+        suggestions: [
+          {
+            label: &#39;tempo&#39;,
+            kind: monaco.languages.CompletionItemKind.Method,
+            insertText: &#39;tempo(${1:120})&#39;,
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            documentation: &#39;Set global tempo in BPM&#39;
+          },
+          // ...
+        ]
+      };
+    }
+
+    // seq. の後
+    if (/\b(seq\d*|[a-z_]\w*)\.\w*$/.test(textUntilPosition)) {
+      return { suggestions: [ /* シーケンスメソッド */ ] };
+    }
+
+    // トップレベル
+    return { suggestions: [ /* キーワード */ ] };
+  }
+});
+</code></pre>
+<p><strong>参考</strong>: <code>packages/vscode-extension/src/completion-context.ts</code></p>
+<h4 id="34-ui実装">3.4 UI実装</h4>
+<p><strong>ファイル</strong>: <code>src/renderer/index.html</code></p>
+<pre><code class="language-html">&lt;!DOCTYPE html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+  &lt;meta charset=&quot;UTF-8&quot;&gt;
+  &lt;title&gt;OrbitScore&lt;/title&gt;
+  &lt;link rel=&quot;stylesheet&quot; href=&quot;styles.css&quot;&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;div id=&quot;app&quot;&gt;
+    &lt;!-- ツールバー --&gt;
+    &lt;div id=&quot;toolbar&quot;&gt;
+      &lt;button id=&quot;btn-start-engine&quot;&gt;▶ Start Engine&lt;/button&gt;
+      &lt;button id=&quot;btn-stop-engine&quot;&gt;■ Stop Engine&lt;/button&gt;
+      &lt;button id=&quot;btn-execute&quot;&gt;⚡ Execute (Cmd+Enter)&lt;/button&gt;
+    &lt;/div&gt;
+
+    &lt;!-- エディタコンテナ --&gt;
+    &lt;div id=&quot;editor-container&quot;&gt;&lt;/div&gt;
+
+    &lt;!-- ステータスバー --&gt;
+    &lt;div id=&quot;statusbar&quot;&gt;
+      &lt;span id=&quot;engine-status&quot;&gt;Engine: Stopped&lt;/span&gt;
+      &lt;span id=&quot;cursor-position&quot;&gt;Ln 1, Col 1&lt;/span&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+
+  &lt;script type=&quot;module&quot; src=&quot;./renderer.js&quot;&gt;&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre>
+<p><strong>ファイル</strong>: <code>src/renderer/styles.css</code></p>
+<pre><code class="language-css">body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: &#39;Menlo&#39;, &#39;Monaco&#39;, &#39;Courier New&#39;, monospace;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#toolbar {
+  height: 40px;
+  background: #2d2d30;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 10px;
+}
+
+#editor-container {
+  flex: 1;
+  overflow: hidden;
+}
+
+#statusbar {
+  height: 24px;
+  background: #007acc;
+  color: white;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  justify-content: space-between;
+  font-size: 12px;
+}
+</code></pre>
+<p><strong>成果物</strong>: OrbitScore DSLがシンタックスハイライトされる美しいエディタ</p>
+<hr>
+<h3 id="phase-4-ipc通信とコード実行推定-2-3日">Phase 4: IPC通信とコード実行（推定: 2-3日）</h3>
+<h4 id="41-preload-script">4.1 Preload Script</h4>
+<p><strong>ファイル</strong>: <code>src/preload/preload.ts</code></p>
+<p><strong>実装内容</strong>: contextBridgeでIPC APIを安全に公開</p>
+<pre><code class="language-typescript">import { contextBridge, ipcRenderer } from &#39;electron&#39;;
+
+// 型定義
+export interface ElectronAPI {
+  // エンジン操作
+  startEngine: (options?: { debugMode?: boolean }) =&gt; Promise&lt;void&gt;;
+  stopEngine: () =&gt; Promise&lt;void&gt;;
+  executeCode: (code: string) =&gt; Promise&lt;void&gt;;
+  getEngineStatus: () =&gt; Promise&lt;string&gt;;
+
+  // イベントリスナー
+  onEngineOutput: (callback: (data: string) =&gt; void) =&gt; void;
+  onEngineError: (callback: (error: string) =&gt; void) =&gt; void;
+
+  // ファイル操作
+  openFile: () =&gt; Promise&lt;string | null&gt;;
+  saveFile: (content: string, path?: string) =&gt; Promise&lt;void&gt;;
+
+  // オーディオデバイス
+  listAudioDevices: () =&gt; Promise&lt;string[]&gt;;
+  selectAudioDevice: (device: string) =&gt; Promise&lt;void&gt;;
+}
+
+contextBridge.exposeInMainWorld(&#39;electronAPI&#39;, {
+  startEngine: (options) =&gt; ipcRenderer.invoke(&#39;engine:start&#39;, options),
+  stopEngine: () =&gt; ipcRenderer.invoke(&#39;engine:stop&#39;),
+  executeCode: (code) =&gt; ipcRenderer.invoke(&#39;engine:execute&#39;, code),
+  getEngineStatus: () =&gt; ipcRenderer.invoke(&#39;engine:status&#39;),
+
+  onEngineOutput: (callback) =&gt; {
+    ipcRenderer.on(&#39;engine:output&#39;, (_event, data) =&gt; callback(data));
+  },
+  onEngineError: (callback) =&gt; {
+    ipcRenderer.on(&#39;engine:error&#39;, (_event, error) =&gt; callback(error));
+  },
+
+  openFile: () =&gt; ipcRenderer.invoke(&#39;file:open&#39;),
+  saveFile: (content, path) =&gt; ipcRenderer.invoke(&#39;file:save&#39;, content, path),
+
+  listAudioDevices: () =&gt; ipcRenderer.invoke(&#39;audio-device:list&#39;),
+  selectAudioDevice: (device) =&gt; ipcRenderer.invoke(&#39;audio-device:select&#39;, device)
+});
+
+// TypeScript型定義をグローバルに追加
+declare global {
+  interface Window {
+    electronAPI: ElectronAPI;
+  }
+}
+</code></pre>
+<h4 id="42-renderer--main通信">4.2 Renderer → Main通信</h4>
+<p><strong>ファイル</strong>: <code>src/renderer/engine-client.ts</code></p>
+<p><strong>実装内容</strong>: エンジン操作のAPIラッパー</p>
+<pre><code class="language-typescript">class EngineClient {
+  private outputCallbacks: Array&lt;(data: string) =&gt; void&gt; = [];
+
+  constructor() {
+    // エンジン出力のイベントリスナー登録
+    window.electronAPI.onEngineOutput((data) =&gt; {
+      this.outputCallbacks.forEach(cb =&gt; cb(data));
+    });
+
+    window.electronAPI.onEngineError((error) =&gt; {
+      console.error(&#39;Engine error:&#39;, error);
+      this.updateStatusBar(&#39;error&#39;, error);
+    });
+  }
+
+  async start(debugMode = false): Promise&lt;void&gt; {
+    await window.electronAPI.startEngine({ debugMode });
+    this.updateStatusBar(&#39;running&#39;, &#39;🎵 Engine: Ready&#39;);
+  }
+
+  async stop(): Promise&lt;void&gt; {
+    await window.electronAPI.stopEngine();
+    this.updateStatusBar(&#39;stopped&#39;, &#39;Engine: Stopped&#39;);
+  }
+
+  async execute(code: string): Promise&lt;void&gt; {
+    await window.electronAPI.executeCode(code);
+  }
+
+  onOutput(callback: (data: string) =&gt; void): void {
+    this.outputCallbacks.push(callback);
+  }
+
+  private updateStatusBar(status: string, message: string): void {
+    const statusEl = document.getElementById(&#39;engine-status&#39;);
+    if (statusEl) statusEl.textContent = message;
+  }
+}
+</code></pre>
+<h4 id="43-コード実行機能">4.3 コード実行機能</h4>
+<p><strong>ファイル</strong>: <code>src/renderer/execution.ts</code></p>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li>キーバインド実装（Cmd+Enter / Ctrl+Enter）</li>
+<li>選択範囲の実行</li>
+<li>カーソル行の実行（選択なしの場合）</li>
+<li>ファイル全体の評価（初回のみ、バックグラウンド）</li>
+<li>実行時のビジュアルフィードバック</li>
+</ul>
+<pre><code class="language-typescript">import * as monaco from &#39;monaco-editor&#39;;
+
+class ExecutionManager {
+  private editor: monaco.editor.IStandaloneCodeEditor;
+  private engineClient: EngineClient;
+  private hasEvaluatedFile = false;
+
+  constructor(editor: monaco.editor.IStandaloneCodeEditor, engineClient: EngineClient) {
+    this.editor = editor;
+    this.engineClient = engineClient;
+    this.registerKeyBindings();
+  }
+
+  private registerKeyBindings(): void {
+    // Cmd+Enter / Ctrl+Enter
+    this.editor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter,
+      () =&gt; this.executeSelection()
+    );
+  }
+
+  async executeSelection(): Promise&lt;void&gt; {
+    const selection = this.editor.getSelection();
+    let code: string;
+
+    if (!selection || selection.isEmpty()) {
+      // 現在行を実行
+      const position = this.editor.getPosition();
+      if (!position) return;
+      code = this.editor.getModel()?.getLineContent(position.lineNumber) || &#39;&#39;;
+    } else {
+      // 選択範囲を実行
+      code = this.editor.getModel()?.getValueInRange(selection) || &#39;&#39;;
+    }
+
+    // 初回のみファイル全体を評価（定義のみフィルタ）
+    if (!this.hasEvaluatedFile) {
+      await this.evaluateFileInBackground();
+      this.hasEvaluatedFile = true;
+      // 500ms待機（評価完了待ち）
+      await new Promise(resolve =&gt; setTimeout(resolve, 500));
+    }
+
+    // コード実行
+    await this.engineClient.execute(code.trim());
+
+    // ビジュアルフィードバック
+    this.flashExecutedLines(selection);
+  }
+
+  private async evaluateFileInBackground(): Promise&lt;void&gt; {
+    const model = this.editor.getModel();
+    if (!model) return;
+
+    const fullText = model.getValue();
+    const definitionsOnly = this.filterDefinitionsOnly(fullText);
+
+    await this.engineClient.execute(definitionsOnly);
+  }
+
+  private filterDefinitionsOnly(text: string): string {
+    // var, init, GLOBAL のみを抽出（RUN/LOOP/MUTEは除外）
+    return text
+      .split(&#39;\n&#39;)
+      .filter(line =&gt; {
+        const trimmed = line.trim();
+        return (
+          trimmed.startsWith(&#39;var &#39;) ||
+          trimmed.includes(&#39;.init&#39;) ||
+          trimmed.startsWith(&#39;GLOBAL&#39;)
+        ) &amp;&amp; !trimmed.includes(&#39;//&#39;);
+      })
+      .join(&#39;\n&#39;);
+  }
+
+  private flashExecutedLines(selection: monaco.Selection | null): void {
+    if (!selection) return;
+
+    const range = selection.isEmpty()
+      ? new monaco.Range(
+          selection.startLineNumber,
+          1,
+          selection.startLineNumber,
+          Number.MAX_VALUE
+        )
+      : selection;
+
+    // デコレーション作成（背景色フラッシュ）
+    const decorations = this.editor.deltaDecorations([], [
+      {
+        range: range,
+        options: {
+          isWholeLine: selection.isEmpty(),
+          className: &#39;flash-executed-line&#39;,
+          inlineClassName: &#39;flash-executed-inline&#39;
+        }
+      }
+    ]);
+
+    // 150ms後にデコレーション削除（3回繰り返し）
+    let flashCount = 0;
+    const flashInterval = setInterval(() =&gt; {
+      flashCount++;
+      if (flashCount &gt;= 3) {
+        clearInterval(flashInterval);
+        this.editor.deltaDecorations(decorations, []);
+      } else {
+        // Toggle visibility
+        this.editor.deltaDecorations(decorations, []);
+        setTimeout(() =&gt; {
+          this.editor.deltaDecorations([], [
+            {
+              range: range,
+              options: {
+                isWholeLine: selection.isEmpty(),
+                className: &#39;flash-executed-line&#39;
+              }
+            }
+          ]);
+        }, 100);
+      }
+    }, 250);
+  }
+}
+</code></pre>
+<p><strong>CSS</strong> (styles.cssに追加):</p>
+<pre><code class="language-css">.flash-executed-line {
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.flash-executed-inline {
+  background-color: rgba(100, 150, 255, 0.2);
+}
+</code></pre>
+<p><strong>参考</strong>: <code>extension.ts:runSelection()</code> (888-986行)</p>
+<p><strong>成果物</strong>: Cmd+Enterでコードが実行できるエディタ</p>
+<hr>
+<h3 id="phase-5-機能拡張推定-2-3日">Phase 5: 機能拡張（推定: 2-3日）</h3>
+<h4 id="51-ファイル操作">5.1 ファイル操作</h4>
+<p><strong>実装内容</strong>:</p>
+<p><strong>メニューバー</strong> (<code>src/main/menu.ts</code>):</p>
+<pre><code class="language-typescript">import { Menu, dialog, BrowserWindow } from &#39;electron&#39;;
+
+export function createMenu(mainWindow: BrowserWindow): void {
+  const template: MenuItemConstructorOptions[] = [
+    {
+      label: &#39;File&#39;,
+      submenu: [
+        {
+          label: &#39;New&#39;,
+          accelerator: &#39;CmdOrCtrl+N&#39;,
+          click: () =&gt; mainWindow.webContents.send(&#39;file:new&#39;)
+        },
+        {
+          label: &#39;Open...&#39;,
+          accelerator: &#39;CmdOrCtrl+O&#39;,
+          click: async () =&gt; {
+            const result = await dialog.showOpenDialog({
+              properties: [&#39;openFile&#39;],
+              filters: [
+                { name: &#39;OrbitScore Files&#39;, extensions: [&#39;osc&#39;] },
+                { name: &#39;All Files&#39;, extensions: [&#39;*&#39;] }
+              ]
+            });
+            if (!result.canceled &amp;&amp; result.filePaths.length &gt; 0) {
+              const content = fs.readFileSync(result.filePaths[0], &#39;utf-8&#39;);
+              mainWindow.webContents.send(&#39;file:opened&#39;, {
+                path: result.filePaths[0],
+                content
+              });
+            }
+          }
+        },
+        {
+          label: &#39;Save&#39;,
+          accelerator: &#39;CmdOrCtrl+S&#39;,
+          click: () =&gt; mainWindow.webContents.send(&#39;file:save&#39;)
+        },
+        {
+          label: &#39;Save As...&#39;,
+          accelerator: &#39;CmdOrCtrl+Shift+S&#39;,
+          click: () =&gt; mainWindow.webContents.send(&#39;file:save-as&#39;)
+        },
+        { type: &#39;separator&#39; },
+        { role: &#39;quit&#39; }
+      ]
+    },
+    {
+      label: &#39;Edit&#39;,
+      submenu: [
+        { role: &#39;undo&#39; },
+        { role: &#39;redo&#39; },
+        { type: &#39;separator&#39; },
+        { role: &#39;cut&#39; },
+        { role: &#39;copy&#39; },
+        { role: &#39;paste&#39; },
+        { role: &#39;selectAll&#39; }
+      ]
+    },
+    {
+      label: &#39;View&#39;,
+      submenu: [
+        { role: &#39;reload&#39; },
+        { role: &#39;toggleDevTools&#39; },
+        { type: &#39;separator&#39; },
+        { role: &#39;resetZoom&#39; },
+        { role: &#39;zoomIn&#39; },
+        { role: &#39;zoomOut&#39; }
+      ]
+    },
+    {
+      label: &#39;Run&#39;,
+      submenu: [
+        {
+          label: &#39;Start Engine&#39;,
+          accelerator: &#39;CmdOrCtrl+Shift+E&#39;,
+          click: () =&gt; mainWindow.webContents.send(&#39;engine:start&#39;)
+        },
+        {
+          label: &#39;Stop Engine&#39;,
+          accelerator: &#39;CmdOrCtrl+Shift+S&#39;,
+          click: () =&gt; mainWindow.webContents.send(&#39;engine:stop&#39;)
+        },
+        { type: &#39;separator&#39; },
+        {
+          label: &#39;Execute Selection&#39;,
+          accelerator: &#39;CmdOrCtrl+Enter&#39;,
+          click: () =&gt; mainWindow.webContents.send(&#39;code:execute&#39;)
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+}
+</code></pre>
+<p><strong>最近開いたファイル履歴</strong> (electron-storeで永続化):</p>
+<pre><code class="language-typescript">import Store from &#39;electron-store&#39;;
+
+const store = new Store();
+
+function addToRecentFiles(filePath: string): void {
+  const recent = store.get(&#39;recentFiles&#39;, []) as string[];
+  const updated = [filePath, ...recent.filter(p =&gt; p !== filePath)].slice(0, 10);
+  store.set(&#39;recentFiles&#39;, updated);
+}
+</code></pre>
+<p><strong>ドラッグ&amp;ドロップ対応</strong> (<code>src/renderer/file-handler.ts</code>):</p>
+<pre><code class="language-typescript">document.addEventListener(&#39;drop&#39;, async (e) =&gt; {
+  e.preventDefault();
+  const file = e.dataTransfer?.files[0];
+  if (file &amp;&amp; file.name.endsWith(&#39;.orbs&#39;)) {
+    const content = await file.text();
+    editor.setValue(content);
+  }
+});
+
+document.addEventListener(&#39;dragover&#39;, (e) =&gt; {
+  e.preventDefault();
+});
+</code></pre>
+<h4 id="52-エディタ機能強化">5.2 エディタ機能強化</h4>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li>ミニマップ表示切り替え</li>
+<li>検索/置換（Cmd+F / Cmd+H）（Monaco標準機能）</li>
+<li>マルチカーソル（Monaco標準機能）</li>
+<li>コマンドパレット（Cmd+Shift+P）</li>
+</ul>
+<pre><code class="language-typescript">// ミニマップトグル
+editor.updateOptions({
+  minimap: { enabled: !editor.getOptions().get(monaco.editor.EditorOption.minimap).enabled }
+});
+
+// 検索/置換（Monaco標準で対応済み）
+// Cmd+F: 検索
+// Cmd+H: 置換
+// Cmd+G: 次を検索
+// Cmd+Shift+G: 前を検索
+</code></pre>
+<h4 id="53-設定パネル">5.3 設定パネル</h4>
+<p><strong>実装内容</strong>: Preferences画面（モーダルウィンドウ）</p>
+<p><strong>UI</strong> (<code>src/renderer/preferences.html</code>):</p>
+<pre><code class="language-html">&lt;div id=&quot;preferences-modal&quot; class=&quot;modal&quot;&gt;
+  &lt;div class=&quot;modal-content&quot;&gt;
+    &lt;h2&gt;Preferences&lt;/h2&gt;
+
+    &lt;section&gt;
+      &lt;h3&gt;Audio&lt;/h3&gt;
+      &lt;label&gt;Output Device:&lt;/label&gt;
+      &lt;select id=&quot;audio-device-select&quot;&gt;
+        &lt;!-- デバイス一覧が動的に追加される --&gt;
+      &lt;/select&gt;
+    &lt;/section&gt;
+
+    &lt;section&gt;
+      &lt;h3&gt;Editor&lt;/h3&gt;
+      &lt;label&gt;Theme:&lt;/label&gt;
+      &lt;select id=&quot;theme-select&quot;&gt;
+        &lt;option value=&quot;vs-dark&quot;&gt;Dark&lt;/option&gt;
+        &lt;option value=&quot;vs-light&quot;&gt;Light&lt;/option&gt;
+      &lt;/select&gt;
+
+      &lt;label&gt;Font Size:&lt;/label&gt;
+      &lt;input type=&quot;number&quot; id=&quot;font-size&quot; min=&quot;10&quot; max=&quot;24&quot; value=&quot;14&quot;&gt;
+    &lt;/section&gt;
+
+    &lt;section&gt;
+      &lt;h3&gt;Flash Settings&lt;/h3&gt;
+      &lt;label&gt;Flash Count:&lt;/label&gt;
+      &lt;input type=&quot;number&quot; id=&quot;flash-count&quot; min=&quot;1&quot; max=&quot;5&quot; value=&quot;3&quot;&gt;
+
+      &lt;label&gt;Flash Duration (ms):&lt;/label&gt;
+      &lt;input type=&quot;number&quot; id=&quot;flash-duration&quot; min=&quot;50&quot; max=&quot;500&quot; step=&quot;50&quot; value=&quot;150&quot;&gt;
+
+      &lt;label&gt;Flash Color:&lt;/label&gt;
+      &lt;input type=&quot;color&quot; id=&quot;flash-color&quot; value=&quot;#ff6b6b&quot;&gt;
+    &lt;/section&gt;
+
+    &lt;div class=&quot;modal-buttons&quot;&gt;
+      &lt;button id=&quot;btn-save-prefs&quot;&gt;Save&lt;/button&gt;
+      &lt;button id=&quot;btn-cancel-prefs&quot;&gt;Cancel&lt;/button&gt;
+    &lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;
+</code></pre>
+<p><strong>設定の永続化</strong> (<code>src/main/settings.ts</code>):</p>
+<pre><code class="language-typescript">import Store from &#39;electron-store&#39;;
+
+interface Settings {
+  audioDevice?: string;
+  theme: &#39;vs-dark&#39; | &#39;vs-light&#39;;
+  fontSize: number;
+  flashCount: number;
+  flashDuration: number;
+  flashColor: string;
+}
+
+const settingsStore = new Store&lt;Settings&gt;({
+  defaults: {
+    theme: &#39;vs-dark&#39;,
+    fontSize: 14,
+    flashCount: 3,
+    flashDuration: 150,
+    flashColor: &#39;#ff6b6b&#39;
+  }
+});
+
+export function getSettings(): Settings {
+  return settingsStore.store;
+}
+
+export function updateSettings(settings: Partial&lt;Settings&gt;): void {
+  settingsStore.set(settings);
+}
+</code></pre>
+<h4 id="54-ステータスバー">5.4 ステータスバー</h4>
+<p><strong>実装内容</strong>:</p>
+<ul>
+<li>エンジン状態表示（Stopped / Ready / Running / Error）</li>
+<li>現在のBPM表示（エンジンから取得）</li>
+<li>カーソル位置（行・列）</li>
+<li>選択範囲の行数・文字数</li>
+</ul>
+<pre><code class="language-typescript">class StatusBar {
+  private engineStatusEl: HTMLElement;
+  private cursorPosEl: HTMLElement;
+  private bpmEl: HTMLElement;
+
+  constructor() {
+    this.engineStatusEl = document.getElementById(&#39;engine-status&#39;)!;
+    this.cursorPosEl = document.getElementById(&#39;cursor-position&#39;)!;
+    this.bpmEl = document.getElementById(&#39;bpm-display&#39;)!;
+
+    // カーソル位置更新
+    editor.onDidChangeCursorPosition((e) =&gt; {
+      this.cursorPosEl.textContent = `Ln ${e.position.lineNumber}, Col ${e.position.column}`;
+    });
+
+    // 選択範囲更新
+    editor.onDidChangeCursorSelection((e) =&gt; {
+      if (!e.selection.isEmpty()) {
+        const model = editor.getModel();
+        if (model) {
+          const text = model.getValueInRange(e.selection);
+          const lines = text.split(&#39;\n&#39;).length;
+          const chars = text.length;
+          this.cursorPosEl.textContent += ` (${lines} lines, ${chars} chars selected)`;
+        }
+      }
+    });
+  }
+
+  setEngineStatus(status: &#39;stopped&#39; | &#39;ready&#39; | &#39;running&#39; | &#39;error&#39;, message?: string): void {
+    const icons = {
+      stopped: &#39;⚫&#39;,
+      ready: &#39;🟢&#39;,
+      running: &#39;🔵&#39;,
+      error: &#39;🔴&#39;
+    };
+    this.engineStatusEl.textContent = `${icons[status]} ${message || status}`;
+  }
+
+  setBPM(bpm: number): void {
+    this.bpmEl.textContent = `♩ = ${bpm}`;
+  }
+}
+</code></pre>
+<p><strong>成果物</strong>: フル機能のプロフェッショナルなエディタアプリ</p>
+<hr>
+<h3 id="phase-6-パッケージング配布推定-2-3日">Phase 6: パッケージング・配布（推定: 2-3日）</h3>
+<h4 id="61-electron-builder設定">6.1 electron-builder設定</h4>
+<p><strong>ファイル</strong>: <code>electron-builder.yml</code></p>
+<pre><code class="language-yaml">appId: com.orbitscore.app
+productName: OrbitScore
+copyright: Copyright © 2026 Signal compose Inc.
+
+directories:
+  output: release
+  buildResources: assets
+
+files:
+  - dist/**/*
+  - package.json
+
+# macOS
+mac:
+  category: public.app-category.music
+  icon: assets/icon.icns
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: assets/entitlements.mac.plist
+  entitlementsInherit: assets/entitlements.mac.plist
+
+dmg:
+  title: &quot;${productName} ${version}&quot;
+  icon: assets/icon.icns
+  background: assets/dmg-background.png
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# Windows
+win:
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+  publisherName: OrbitScore
+  verifyUpdateCodeSignature: false
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+# Linux
+linux:
+  icon: assets/icon.png
+  target:
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  category: Audio
+  maintainer: orbitscore@example.com
+
+# 自動更新（オプション）
+publish:
+  provider: github
+  owner: signalcompose
+  repo: orbitscore
+</code></pre>
+<h4 id="62-アイコンアセット">6.2 アイコン・アセット</h4>
+<p><strong>作成物</strong>:</p>
+<ul>
+<li><code>assets/icon.png</code> - 512x512 PNGマスター画像</li>
+<li><code>assets/icon.icns</code> - macOS用（iconutil で変換）</li>
+<li><code>assets/icon.ico</code> - Windows用（複数サイズ: 16x16, 32x32, 48x48, 256x256）</li>
+<li><code>assets/dmg-background.png</code> - macOS DMGインストーラー背景</li>
+</ul>
+<p><strong>macOS .icns作成手順</strong>:</p>
+<pre><code class="language-bash"># 1. iconset フォルダ作成
+mkdir icon.iconset
+
+# 2. 各サイズのPNG生成
+sips -z 16 16     icon.png --out icon.iconset/icon_16x16.png
+sips -z 32 32     icon.png --out icon.iconset/icon_16x16@2x.png
+sips -z 32 32     icon.png --out icon.iconset/icon_32x32.png
+sips -z 64 64     icon.png --out icon.iconset/icon_32x32@2x.png
+sips -z 128 128   icon.png --out icon.iconset/icon_128x128.png
+sips -z 256 256   icon.png --out icon.iconset/icon_128x128@2x.png
+sips -z 256 256   icon.png --out icon.iconset/icon_256x256.png
+sips -z 512 512   icon.png --out icon.iconset/icon_256x256@2x.png
+sips -z 512 512   icon.png --out icon.iconset/icon_512x512.png
+cp icon.png icon.iconset/icon_512x512@2x.png
+
+# 3. .icns変換
+iconutil -c icns icon.iconset
+</code></pre>
+<h4 id="63-自動更新機能オプション">6.3 自動更新機能（オプション）</h4>
+<p><strong>実装内容</strong>: electron-updater統合</p>
+<pre><code class="language-typescript">import { autoUpdater } from &#39;electron-updater&#39;;
+
+// Main Process (main.ts)
+app.on(&#39;ready&#39;, () =&gt; {
+  // 起動時にアップデートチェック
+  autoUpdater.checkForUpdatesAndNotify();
+});
+
+autoUpdater.on(&#39;update-available&#39;, (info) =&gt; {
+  dialog.showMessageBox({
+    type: &#39;info&#39;,
+    title: &#39;Update Available&#39;,
+    message: `Version ${info.version} is available. Download now?`,
+    buttons: [&#39;Yes&#39;, &#39;No&#39;]
+  }).then((result) =&gt; {
+    if (result.response === 0) {
+      autoUpdater.downloadUpdate();
+    }
+  });
+});
+
+autoUpdater.on(&#39;update-downloaded&#39;, () =&gt; {
+  dialog.showMessageBox({
+    type: &#39;info&#39;,
+    title: &#39;Update Ready&#39;,
+    message: &#39;Update downloaded. Restart now?&#39;,
+    buttons: [&#39;Restart&#39;, &#39;Later&#39;]
+  }).then((result) =&gt; {
+    if (result.response === 0) {
+      autoUpdater.quitAndInstall();
+    }
+  });
+});
+</code></pre>
+<p><strong>GitHub Releases連携</strong>:</p>
+<ul>
+<li><code>package.json</code> に <code>publish</code> 設定追加</li>
+<li>GitHub Personal Access Token設定</li>
+<li>CI/CD（GitHub Actions）で自動ビルド・リリース</li>
+</ul>
+<h4 id="64-コード署名オプション">6.4 コード署名（オプション）</h4>
+<p><strong>macOS</strong>:</p>
+<ul>
+<li>Apple Developer Program登録 ($99/年)</li>
+<li>Developer ID Application証明書取得</li>
+<li><code>electron-builder.yml</code> に証明書設定</li>
+</ul>
+<pre><code class="language-yaml">mac:
+  identity: &quot;Developer ID Application: Your Name (TEAM_ID)&quot;
+  hardenedRuntime: true
+  entitlements: assets/entitlements.mac.plist
+</code></pre>
+<p><strong>entitlements.mac.plist</strong>:</p>
+<pre><code class="language-xml">&lt;?xml version=&quot;1.0&quot; encoding=&quot;UTF-8&quot;?&gt;
+&lt;!DOCTYPE plist PUBLIC &quot;-//Apple//DTD PLIST 1.0//EN&quot; &quot;http://www.apple.com/DTDs/PropertyList-1.0.dtd&quot;&gt;
+&lt;plist version=&quot;1.0&quot;&gt;
+&lt;dict&gt;
+  &lt;key&gt;com.apple.security.cs.allow-unsigned-executable-memory&lt;/key&gt;
+  &lt;true/&gt;
+  &lt;key&gt;com.apple.security.cs.disable-library-validation&lt;/key&gt;
+  &lt;true/&gt;
+&lt;/dict&gt;
+&lt;/plist&gt;
+</code></pre>
+<p><strong>Windows</strong>:</p>
+<ul>
+<li>Code Signing証明書購入（Sectigo, DigiCertなど）</li>
+<li><code>electron-builder.yml</code> に証明書設定</li>
+</ul>
+<pre><code class="language-yaml">win:
+  certificateFile: path/to/certificate.pfx
+  certificatePassword: ${WINDOWS_CERT_PASSWORD}
+</code></pre>
+<p><strong>注意</strong>: 署名なしでも配布可能だが、macOSではGatekeeperの警告が表示される。</p>
+<p><strong>成果物</strong>:</p>
+<ul>
+<li><strong>macOS</strong>: <code>release/OrbitScore-1.0.0.dmg</code> (Universal: x64 + arm64)</li>
+<li><strong>Windows</strong>: <code>release/OrbitScore-Setup-1.0.0.exe</code></li>
+<li><strong>Linux</strong>: <code>release/OrbitScore-1.0.0.AppImage</code></li>
+</ul>
+<hr>
+<h3 id="phase-7-テストドキュメント推定-1-2日">Phase 7: テスト・ドキュメント（推定: 1-2日）</h3>
+<h4 id="71-手動テスト">7.1 手動テスト</h4>
+<p><strong>テストチェックリスト</strong>:</p>
+<p><strong>macOS</strong>:</p>
+<ul>
+<li><input disabled="" type="checkbox"> アプリ起動（dmgからインストール）</li>
+<li><input disabled="" type="checkbox"> エンジン起動・停止</li>
+<li><input disabled="" type="checkbox"> コード実行（Cmd+Enter）</li>
+<li><input disabled="" type="checkbox"> シンタックスハイライト確認</li>
+<li><input disabled="" type="checkbox"> IntelliSense動作確認（補完表示）</li>
+<li><input disabled="" type="checkbox"> ファイル操作（New, Open, Save, Save As）</li>
+<li><input disabled="" type="checkbox"> ドラッグ&amp;ドロップでファイルを開く</li>
+<li><input disabled="" type="checkbox"> 設定パネル（オーディオデバイス選択、テーマ変更）</li>
+<li><input disabled="" type="checkbox"> ステータスバー表示更新</li>
+<li><input disabled="" type="checkbox"> 実行時のフラッシュアニメーション</li>
+<li><input disabled="" type="checkbox"> SuperColliderとの統合（音が鳴る）</li>
+</ul>
+<p><strong>Windows</strong> (可能なら):</p>
+<ul>
+<li><input disabled="" type="checkbox"> 同上（Ctrl+Enter）</li>
+</ul>
+<p><strong>Linux</strong> (可能なら):</p>
+<ul>
+<li><input disabled="" type="checkbox"> 同上</li>
+</ul>
+<h4 id="72-ドキュメント作成">7.2 ドキュメント作成</h4>
+<p><strong>ファイル</strong>: <code>packages/electron-app/README.md</code></p>
+<pre><code class="language-markdown"># OrbitScore Electron App
+
+Standalone desktop application for OrbitScore live coding environment.
+
+## Development
+
+### Prerequisites
+- Node.js 22+
+- SuperCollider (for audio engine)
+
+### Setup
+```bash
+cd packages/electron-app
+npm install
+</code></pre>
+<h3 id="run-development-mode">Run Development Mode</h3>
+<pre><code class="language-bash">npm run dev
+</code></pre>
+<h3 id="build">Build</h3>
+<pre><code class="language-bash">npm run build
+</code></pre>
+<h3 id="package-for-distribution">Package for Distribution</h3>
+<pre><code class="language-bash"># macOS
+npm run dist -- --mac
+
+# Windows
+npm run dist -- --win
+
+# Linux
+npm run dist -- --linux
+</code></pre>
+<h2 id="debugging">Debugging</h2>
+<h3 id="main-process">Main Process</h3>
+<p>Use VS Code debugger with the following configuration:</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;node&quot;,
+  &quot;request&quot;: &quot;launch&quot;,
+  &quot;name&quot;: &quot;Electron Main&quot;,
+  &quot;runtimeExecutable&quot;: &quot;${workspaceFolder}/node_modules/.bin/electron&quot;,
+  &quot;args&quot;: [&quot;.&quot;, &quot;--remote-debugging-port=9222&quot;]
+}
+</code></pre>
+<h3 id="renderer-process">Renderer Process</h3>
+<ol>
+<li>Start dev mode: <code>npm run dev</code></li>
+<li>Open DevTools: Cmd+Option+I (macOS) / Ctrl+Shift+I (Windows/Linux)</li>
+</ol>
+<h2 id="architecture">Architecture</h2>
+<ul>
+<li><strong>Main Process</strong>: Node.js environment, manages SuperCollider engine</li>
+<li><strong>Renderer Process</strong>: Chromium, Monaco Editor UI</li>
+<li><strong>Preload Script</strong>: IPC bridge with contextBridge</li>
+</ul>
+<h2 id="folder-structure">Folder Structure</h2>
+<pre><code>src/
+├── main/         # Main process
+├── renderer/     # Renderer process (UI)
+└── preload/      # Preload script
+</code></pre>
+<pre><code>
+**ファイル**: `docs/USER_MANUAL.md` 更新（Electronアプリ版の使い方を追記）
+
+```markdown
+## Installation (Electron App)
+
+### macOS
+1. Download `OrbitScore-1.0.0.dmg`
+2. Open the DMG file
+3. Drag OrbitScore to Applications folder
+4. Launch OrbitScore from Applications
+
+**Note**: First launch may show &quot;OrbitScore cannot be opened because the developer cannot be verified.&quot;
+- Right-click → Open → Open again to bypass Gatekeeper.
+
+### Windows
+1. Download `OrbitScore-Setup-1.0.0.exe`
+2. Run the installer
+3. Follow installation wizard
+4. Launch from Start Menu
+
+### Linux
+1. Download `OrbitScore-1.0.0.AppImage`
+2. Make executable: `chmod +x OrbitScore-1.0.0.AppImage`
+3. Run: `./OrbitScore-1.0.0.AppImage`
+
+## Basic Usage
+
+### Starting the Engine
+1. Launch OrbitScore
+2. Click &quot;▶ Start Engine&quot; or press Cmd+Shift+E (macOS) / Ctrl+Shift+E (Windows/Linux)
+3. Wait for status bar to show &quot;🟢 Engine: Ready&quot;
+
+### Writing Code
+1. Type OrbitScore DSL code in the editor
+2. Enjoy syntax highlighting and auto-completion
+
+### Executing Code
+1. Select code (or place cursor on a line)
+2. Press Cmd+Enter (macOS) / Ctrl+Enter (Windows/Linux)
+3. See the line flash to confirm execution
+
+### Keyboard Shortcuts
+- **Cmd+Enter** (macOS) / **Ctrl+Enter** (Windows/Linux): Execute selection
+- **Cmd+N**: New file
+- **Cmd+O**: Open file
+- **Cmd+S**: Save file
+- **Cmd+Shift+S**: Save As
+- **Cmd+F**: Find
+- **Cmd+H**: Replace
+- **Cmd+Shift+E**: Start Engine
+- **Cmd+Shift+S**: Stop Engine
+</code></pre>
+<p><strong>成果物</strong>: リリース可能なアプリケーション + 完全なドキュメント</p>
+<hr>
+<h2 id="-総推定工数">📊 総推定工数</h2>
+<table>
+<thead>
+<tr>
+<th>Phase</th>
+<th>内容</th>
+<th>推定工数</th>
+<th>難易度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Phase 1</td>
+<td>プロジェクトセットアップ</td>
+<td>1日</td>
+<td>⭐</td>
+</tr>
+<tr>
+<td>Phase 2</td>
+<td>Main Process実装</td>
+<td>2-3日</td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td>Phase 3</td>
+<td>Monaco Editor統合</td>
+<td>3-4日</td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td>Phase 4</td>
+<td>IPC通信とコード実行</td>
+<td>2-3日</td>
+<td>⭐⭐⭐</td>
+</tr>
+<tr>
+<td>Phase 5</td>
+<td>機能拡張</td>
+<td>2-3日</td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td>Phase 6</td>
+<td>パッケージング・配布</td>
+<td>2-3日</td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td>Phase 7</td>
+<td>テスト・ドキュメント</td>
+<td>1-2日</td>
+<td>⭐</td>
+</tr>
+<tr>
+<td><strong>合計</strong></td>
+<td></td>
+<td><strong>13-19日</strong></td>
+<td></td>
+</tr>
+</tbody></table>
+<p><strong>実作業時間</strong>: 約2.5週間〜4週間（1日4-6時間作業想定）</p>
+<hr>
+<h2 id="-最小限の実装mvp版">🎯 最小限の実装（MVP版）</h2>
+<p>早期リリースが必要な場合、以下のスコープで <strong>5-7日</strong> に短縮可能：</p>
+<h3 id="含むものmvp">含むもの（MVP）</h3>
+<ul>
+<li>✅ Phase 1: プロジェクトセットアップ</li>
+<li>✅ Phase 2: Main Process実装（基本機能のみ）<ul>
+<li>エンジン起動・停止・コード実行のみ</li>
+</ul>
+</li>
+<li>✅ Phase 3: Monaco Editor統合（シンタックスハイライトのみ）<ul>
+<li>IntelliSense補完は省略</li>
+</ul>
+</li>
+<li>✅ Phase 4: IPC通信とコード実行（Cmd+Enter実行のみ）</li>
+<li>✅ Phase 6: パッケージング（macOSのみ）</li>
+</ul>
+<h3 id="省略するものv11以降に延期">省略するもの（v1.1以降に延期）</h3>
+<ul>
+<li>❌ ファイル操作メニュー → ドラッグ&amp;ドロップで代用</li>
+<li>❌ IntelliSense補完 → 手動入力</li>
+<li>❌ 設定パネル → コンフィグファイル編集で代用</li>
+<li>❌ クロスプラットフォーム対応 → macOS先行リリース</li>
+<li>❌ コード署名 → 未署名版として配布</li>
+</ul>
+<p><strong>MVP版のメリット</strong>:</p>
+<ul>
+<li>開発期間が約60%短縮</li>
+<li>コア機能（ライブコーディング）に集中</li>
+<li>ユーザーフィードバックを早期に取得</li>
+<li>段階的に機能追加可能</li>
+</ul>
+<hr>
+<h2 id="-技術スタック推奨">🔧 技術スタック推奨</h2>
+<h3 id="必須ライブラリ">必須ライブラリ</h3>
+<table>
+<thead>
+<tr>
+<th>ライブラリ</th>
+<th>バージョン</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>electron</strong></td>
+<td>^28.0.0</td>
+<td>アプリケーションフレームワーク</td>
+</tr>
+<tr>
+<td><strong>monaco-editor</strong></td>
+<td>^0.50.0</td>
+<td>コードエディタ</td>
+</tr>
+<tr>
+<td><strong>typescript</strong></td>
+<td>^5.9.0</td>
+<td>型安全な開発</td>
+</tr>
+</tbody></table>
+<h3 id="ビルドツールどちらか選択">ビルドツール（どちらか選択）</h3>
+<table>
+<thead>
+<tr>
+<th>ツール</th>
+<th>特徴</th>
+<th>推奨度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>electron-vite</strong></td>
+<td>簡単、高速、Monaco統合が容易</td>
+<td>⭐⭐⭐⭐⭐ (推奨)</td>
+</tr>
+<tr>
+<td><strong>electron-forge</strong></td>
+<td>柔軟性高、プラグイン豊富</td>
+<td>⭐⭐⭐⭐</td>
+</tr>
+<tr>
+<td><strong>webpack</strong></td>
+<td>完全制御可能、学習コスト高</td>
+<td>⭐⭐⭐</td>
+</tr>
+</tbody></table>
+<p><strong>推奨</strong>: electron-vite（理由: Monaco Editorとの統合が簡単、Viteの高速ビルド）</p>
+<h3 id="補助ライブラリ">補助ライブラリ</h3>
+<table>
+<thead>
+<tr>
+<th>ライブラリ</th>
+<th>用途</th>
+<th>必須度</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>electron-store</strong></td>
+<td>設定の永続化</td>
+<td>高</td>
+</tr>
+<tr>
+<td><strong>electron-builder</strong></td>
+<td>アプリ配布用パッケージング</td>
+<td>高</td>
+</tr>
+<tr>
+<td><strong>electron-updater</strong></td>
+<td>自動更新機能</td>
+<td>中（オプション）</td>
+</tr>
+<tr>
+<td><strong>vitest</strong></td>
+<td>テスト（既存）</td>
+<td>低（手動テストで代用可）</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="-既存コードの再利用">📦 既存コードの再利用</h2>
+<p>以下のコードは<strong>ほぼそのまま移植可能</strong>：</p>
+<h3 id="1-エンジン管理extensionts--srcmainengine-managerts">1. エンジン管理（<code>extension.ts</code> → <code>src/main/engine-manager.ts</code>）</h3>
+<ul>
+<li><code>startEngine()</code> (595-656行) → Main Process</li>
+<li><code>stopEngine()</code> → Main Process</li>
+<li><code>killSuperCollider()</code> → Main Process</li>
+<li><code>setupStdoutHandler()</code>, <code>setupStderrHandler()</code>, <code>setupExitHandler()</code> → Main Process</li>
+</ul>
+<p><strong>再利用率</strong>: 約80%（VS Code APIを削除するだけ）</p>
+<h3 id="2-コード実行extensionts--srcrendererexecutionts">2. コード実行（<code>extension.ts</code> → <code>src/renderer/execution.ts</code>）</h3>
+<ul>
+<li><code>runSelection()</code> (888-986行) のロジック → Renderer Process</li>
+<li><code>evaluateFileInBackground()</code> → Main Process経由で実行</li>
+<li><code>filterDefinitionsOnly()</code> → Renderer Process</li>
+</ul>
+<p><strong>再利用率</strong>: 約70%（VS Code APIをMonaco APIに置き換え）</p>
+<h3 id="3-シンタックス定義syntaxes--srcrendererlanguage-orbitscorets">3. シンタックス定義（<code>syntaxes/</code> → <code>src/renderer/language-orbitscore.ts</code>）</h3>
+<ul>
+<li><code>orbitscore-audio.tmLanguage.json</code> → Monaco Monarch Tokenizerに変換</li>
+</ul>
+<p><strong>変換作業</strong>: TextMate Grammar → Monarch（手動変換、約2-3時間）</p>
+<h3 id="4-補完機能completion-contextts--srcrenderercompletion-providerts">4. 補完機能（<code>completion-context.ts</code> → <code>src/renderer/completion-provider.ts</code>）</h3>
+<ul>
+<li><code>getGlobalCompletions()</code> → Monaco CompletionProvider</li>
+<li><code>getSequenceCompletions()</code> → Monaco CompletionProvider</li>
+<li><code>getTopLevelCompletions()</code> → Monaco CompletionProvider</li>
+</ul>
+<p><strong>再利用率</strong>: 約60%（VS Code APIをMonaco APIに置き換え）</p>
+<h3 id="総再利用率-約60-70">総再利用率: 約60-70%</h3>
+<p><strong>新規実装が必要な部分</strong>:</p>
+<ul>
+<li>Electron Main/Renderer/Preload構造</li>
+<li>IPC通信（型定義、ハンドラー）</li>
+<li>Monaco Editor UI（HTML/CSS）</li>
+<li>ファイル操作（ダイアログ）</li>
+<li>設定パネルUI</li>
+</ul>
+<hr>
+<h2 id="️-注意点課題">⚠️ 注意点・課題</h2>
+<h3 id="1-supercolliderのバンドル">1. SuperColliderのバンドル</h3>
+<p><strong>問題</strong>: SuperCollider (scsynth) をアプリに同梱する必要がある</p>
+<p><strong>解決策（macOS）</strong>:</p>
+<ul>
+<li><code>scsynth</code> バイナリをアプリリソースに同梱</li>
+<li><code>app.asar.unpacked</code> に配置（実行権限維持）</li>
+<li><code>electron-builder.yml</code> の <code>extraResources</code> で指定</li>
+</ul>
+<pre><code class="language-yaml">extraResources:
+  - from: resources/supercollider/scsynth
+    to: supercollider/scsynth
+</code></pre>
+<p><strong>解決策（Windows/Linux）</strong>:</p>
+<ul>
+<li>初期リリースではユーザーに別途インストールを求める</li>
+<li>将来的にインストーラーでSuperColliderも同梱</li>
+</ul>
+<p><strong>影響</strong>: アプリサイズが約+50MB増加（scsynth + プラグイン）</p>
+<h3 id="2-monaco-editorのバンドルサイズ">2. Monaco Editorのバンドルサイズ</h3>
+<p><strong>問題</strong>: Monaco Editorの全言語サポート版は約5MB</p>
+<p><strong>解決策</strong>:</p>
+<ul>
+<li><code>monaco-editor-webpack-plugin</code> でOrbitScoreのみバンドル</li>
+<li>不要な言語サポートを除外（JSON, CSS, HTML, TypeScriptのworkerのみ保持）</li>
+<li>カスタムビルド: 約1MB</li>
+</ul>
+<pre><code class="language-typescript">// electron.vite.config.ts
+import MonacoWebpackPlugin from &#39;monaco-editor-webpack-plugin&#39;;
+
+export default {
+  renderer: {
+    plugins: [
+      new MonacoWebpackPlugin({
+        languages: [], // OrbitScoreのみ（カスタム言語）
+        features: [&#39;bracketMatching&#39;, &#39;find&#39;, &#39;folding&#39;, &#39;hover&#39;, &#39;suggest&#39;]
+      })
+    ]
+  }
+};
+</code></pre>
+<p><strong>影響</strong>: ビルド時間が若干増加（約+30秒）</p>
+<h3 id="3-コード署名コスト">3. コード署名コスト</h3>
+<p><strong>macOS</strong>:</p>
+<ul>
+<li>Apple Developer Program: $99/年</li>
+<li>証明書取得後、<code>electron-builder</code> で自動署名</li>
+</ul>
+<p><strong>Windows</strong>:</p>
+<ul>
+<li>Code Signing証明書: $100-400/年（業者により異なる）</li>
+<li>Extended Validation (EV) 証明書推奨（SmartScreen警告回避）</li>
+</ul>
+<p><strong>Linux</strong>:</p>
+<ul>
+<li>署名不要</li>
+</ul>
+<p><strong>回避策</strong>:</p>
+<ul>
+<li>初期リリースは署名なしで配布</li>
+<li>macOS: ユーザーに「右クリック → 開く」を案内</li>
+<li>Windows: SmartScreen警告を承知でリリース</li>
+<li>ユーザー数が増えたら署名導入</li>
+</ul>
+<h3 id="4-クロスプラットフォームテスト">4. クロスプラットフォームテスト</h3>
+<p><strong>問題</strong>: Windows/Linuxでの動作確認が困難（開発環境がmacOS想定）</p>
+<p><strong>解決策</strong>:</p>
+<ul>
+<li><strong>macOS</strong>: メイン開発・テスト環境</li>
+<li><strong>Windows</strong>: GitHub ActionsでCI/CDビルド + 仮想環境でテスト</li>
+<li><strong>Linux</strong>: Docker環境でビルドテスト</li>
+</ul>
+<p><strong>CI/CD設定例（GitHub Actions）</strong>:</p>
+<pre><code class="language-yaml">name: Build &amp; Release
+
+on:
+  push:
+    tags:
+      - &#39;v*&#39;
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - run: npm run dist
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.os }}-build
+          path: release/*
+</code></pre>
+<hr>
+<h2 id="-開発開始手順">🚀 開発開始手順</h2>
+<p>このプランを実行する場合、以下の手順で開始します：</p>
+<h3 id="1-issue作成">1. Issue作成</h3>
+<pre><code class="language-bash">gh issue create \
+  --title &quot;Electron + Monaco統合版アプリ開発&quot; \
+  --body &quot;$(cat docs/ELECTRON_APP_PLAN.md)&quot; \
+  --label &quot;enhancement,electron,high-priority&quot;
+</code></pre>
+<h3 id="2-ブランチ作成">2. ブランチ作成</h3>
+<pre><code class="language-bash">git checkout main
+git pull origin main
+git checkout -b &lt;issue-number&gt;-electron-monaco-app
+</code></pre>
+<h3 id="3-パッケージ初期化">3. パッケージ初期化</h3>
+<pre><code class="language-bash">cd packages
+mkdir electron-app
+cd electron-app
+
+# package.json初期化
+npm init -y
+
+# 依存関係インストール
+npm install --save-dev \
+  electron@^28.0.0 \
+  electron-vite@^2.0.0 \
+  electron-builder@^24.0.0 \
+  monaco-editor@^0.50.0 \
+  typescript@^5.9.0 \
+  electron-store@^8.0.0
+
+# ディレクトリ構造作成
+mkdir -p src/{main,renderer,preload}
+mkdir -p assets
+</code></pre>
+<h3 id="4-phase-1実装開始">4. Phase 1実装開始</h3>
+<pre><code class="language-typescript">// src/main/main.ts
+import { app, BrowserWindow } from &#39;electron&#39;;
+
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, &#39;../preload/preload.js&#39;)
+    }
+  });
+
+  win.loadFile(&#39;src/renderer/index.html&#39;);
+}
+
+app.whenReady().then(createWindow);
+</code></pre>
+<hr>
+<h2 id="-拡張性についての考察">🤔 拡張性についての考察</h2>
+<h3 id="ユーザーによる機能拡張の可能性">ユーザーによる機能拡張の可能性</h3>
+<h4 id="オプション1-ソースコード公開--ビルド環境提供推奨">オプション1: ソースコード公開 + ビルド環境提供（推奨）</h4>
+<p><strong>アプローチ</strong>: &quot;開発したい人はソース落としてVS Codeでやってね&quot;</p>
+<p><strong>メリット</strong>:</p>
+<ul>
+<li>実装がシンプル（プラグインシステム不要）</li>
+<li>セキュリティリスクが低い</li>
+<li>メンテナンスコストが低い</li>
+<li>TypeScript/Electronの知識があれば拡張可能</li>
+</ul>
+<p><strong>デメリット</strong>:</p>
+<ul>
+<li>ビルド環境の構築が必要（Node.js, Electron, SuperCollider）</li>
+<li>技術的ハードルが高い（一般ユーザーには困難）</li>
+<li>フォークが乱立する可能性</li>
+</ul>
+<p><strong>適用シーン</strong>:</p>
+<ul>
+<li>初期リリース（v1.0）</li>
+<li>コミュニティが小規模な間</li>
+<li>開発者向けツールとして位置づける場合</li>
+</ul>
+<h4 id="オプション2-プラグインシステム導入">オプション2: プラグインシステム導入</h4>
+<p><strong>アプローチ</strong>: ユーザーがJavaScript/TypeScriptでプラグインを作成、アプリに読み込み</p>
+<p><strong>実装例</strong>:</p>
+<pre><code class="language-typescript">// プラグインAPI
+interface OrbitScorePlugin {
+  name: string;
+  version: string;
+  activate(api: PluginAPI): void;
+  deactivate(): void;
+}
+
+interface PluginAPI {
+  // エディタ拡張
+  editor: {
+    registerCommand(id: string, handler: () =&gt; void): void;
+    registerLanguageFeature(feature: LanguageFeature): void;
+  };
+
+  // DSL拡張
+  dsl: {
+    registerMethod(name: string, handler: (...args: any[]) =&gt; void): void;
+    registerKeyword(keyword: string): void;
+  };
+
+  // UI拡張
+  ui: {
+    registerPanel(id: string, component: React.Component): void;
+    registerStatusBarItem(item: StatusBarItem): void;
+  };
+}
+
+// プラグイン例（ユーザー作成）
+const myPlugin: OrbitScorePlugin = {
+  name: &#39;my-custom-plugin&#39;,
+  version: &#39;1.0.0&#39;,
+  activate(api) {
+    // カスタムコマンド追加
+    api.editor.registerCommand(&#39;myPlugin.customAction&#39;, () =&gt; {
+      console.log(&#39;Custom action!&#39;);
+    });
+
+    // カスタムDSLメソッド追加
+    api.dsl.registerMethod(&#39;myCustomMethod&#39;, (arg1, arg2) =&gt; {
+      // SuperCollider経由で音声処理
+    });
+  },
+  deactivate() {
+    // クリーンアップ
+  }
+};
+</code></pre>
+<p><strong>メリット</strong>:</p>
+<ul>
+<li>一般ユーザーでも拡張可能（ビルド不要）</li>
+<li>プラグインの配布が容易（npm, GitHub）</li>
+<li>アプリ本体のアップデートと独立</li>
+</ul>
+<p><strong>デメリット</strong>:</p>
+<ul>
+<li>プラグインAPI設計が複雑</li>
+<li>セキュリティリスク（任意コード実行）</li>
+<li>サンドボックス環境の構築が必要</li>
+<li>メンテナンスコストが高い</li>
+<li>開発工数が大幅に増加（+2-3週間）</li>
+</ul>
+<p><strong>適用シーン</strong>:</p>
+<ul>
+<li>ユーザーコミュニティが成長した後（v2.0以降）</li>
+<li>プロフェッショナルユーザーが多い場合</li>
+<li>商用ツールとして展開する場合</li>
+</ul>
+<h4 id="オプション3-スクリプト拡張軽量版プラグイン">オプション3: スクリプト拡張（軽量版プラグイン）</h4>
+<p><strong>アプローチ</strong>: ユーザーがOrbitScore DSLのスーパーセットでスクリプトを書く</p>
+<p><strong>実装例</strong>:</p>
+<pre><code class="language-javascript">// ~/.orbitscore/scripts/my-custom-functions.orbs
+// ユーザー定義関数（DSL拡張）
+function myPattern(seq, n) {
+  seq.play(
+    (0).chop(2),
+    (1).chop(2),
+    (n).chop(4)
+  );
+}
+
+// 使用例
+kick.myPattern(3);
+</code></pre>
+<p><strong>メリット</strong>:</p>
+<ul>
+<li>実装が比較的簡単（パーサー拡張のみ）</li>
+<li>セキュリティリスクが低い（DSLの範囲内）</li>
+<li>ユーザーの学習コストが低い</li>
+</ul>
+<p><strong>デメリット</strong>:</p>
+<ul>
+<li>拡張範囲が限定的（DSL構文のみ）</li>
+<li>UI拡張はできない</li>
+<li>SuperCollider直接操作はできない</li>
+</ul>
+<p><strong>適用シーン</strong>:</p>
+<ul>
+<li>中期リリース（v1.5）</li>
+<li>DSLパターンライブラリの共有が活発になった場合</li>
+</ul>
+<h3 id="推奨アプローチ段階的実装">推奨アプローチ（段階的実装）</h3>
+<h4 id="v10-初期リリース">v1.0 (初期リリース)</h4>
+<ul>
+<li><strong>拡張方法</strong>: ソースコード公開 + ビルド環境ドキュメント</li>
+<li><strong>ターゲット</strong>: 開発者、アーリーアダプター</li>
+<li><strong>理由</strong>: 機能開発に集中、プラグインシステムは見送り</li>
+</ul>
+<h4 id="v15-中期">v1.5 (中期)</h4>
+<ul>
+<li><strong>拡張方法</strong>: スクリプト拡張（DSLユーザー定義関数）</li>
+<li><strong>ターゲット</strong>: ライブコーディング経験者</li>
+<li><strong>理由</strong>: ユーザーからのパターン共有ニーズに応える</li>
+</ul>
+<h4 id="v20-長期">v2.0 (長期)</h4>
+<ul>
+<li><strong>拡張方法</strong>: プラグインシステム導入</li>
+<li><strong>ターゲット</strong>: プロフェッショナルユーザー、コミュニティ開発者</li>
+<li><strong>理由</strong>: エコシステム構築、商用展開の可能性</li>
+</ul>
+<h3 id="実装判断の基準">実装判断の基準</h3>
+<p><strong>プラグインシステムを導入すべきタイミング</strong>:</p>
+<ul>
+<li>✅ ユーザー数が100人以上</li>
+<li>✅ GitHub Issuesで拡張機能のリクエストが月10件以上</li>
+<li>✅ コミュニティフォーラムが活発</li>
+<li>✅ 開発チームに2人以上のコントリビューター</li>
+</ul>
+<p><strong>当面見送る判断</strong>:</p>
+<ul>
+<li>❌ ユーザー数が少ない（&lt;50人）</li>
+<li>❌ 拡張ニーズが不明確</li>
+<li>❌ コア機能の開発が優先</li>
+<li>❌ メンテナンスリソース不足</li>
+</ul>
+<hr>
+<h2 id="-関連ドキュメント">📚 関連ドキュメント</h2>
+<ul>
+<li><strong>DSL仕様</strong>: <code>docs/INSTRUCTION_ORBITSCORE_DSL.md</code></li>
+<li><strong>プロジェクトルール</strong>: <code>docs/PROJECT_RULES.md</code></li>
+<li><strong>実装計画</strong>: <code>docs/IMPLEMENTATION_PLAN.md</code></li>
+<li><strong>ユーザーマニュアル</strong>: <code>docs/USER_MANUAL.md</code></li>
+<li><strong>開発履歴</strong>: <code>docs/WORK_LOG.md</code></li>
+</ul>
+<hr>
+<h2 id="-次のアクション">🎯 次のアクション</h2>
+<p>このプランを実行する場合:</p>
+<ol>
+<li><strong>Issue作成</strong>: 上記の「開発開始手順」に従う</li>
+<li><strong>技術スタック確定</strong>: electron-vite vs electron-forge を決定</li>
+<li><strong>Phase 1開始</strong>: プロジェクトセットアップ（1日）</li>
+<li><strong>プロトタイプ作成</strong>: MVP版を5-7日で実装</li>
+<li><strong>フィードバック収集</strong>: アーリーアダプターに配布</li>
+<li><strong>機能拡張</strong>: Phase 5-7を段階的に実装</li>
+</ol>
+<hr>
+<p><strong>このプランに関する質問や提案があれば、Issue/PRで議論してください。</strong></p>
+
+</main>
+</body>
+</html>

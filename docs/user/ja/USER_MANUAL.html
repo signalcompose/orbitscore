@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OrbitScore ユーザーマニュアル — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="orbitscore-ユーザーマニュアル">OrbitScore ユーザーマニュアル</h1>
+<h2 id="目次">目次</h2>
+<ol>
+<li><a href="#%E3%81%AF%E3%81%98%E3%82%81%E3%81%AB">はじめに</a></li>
+<li><a href="#%E3%82%A4%E3%83%B3%E3%82%B9%E3%83%88%E3%83%BC%E3%83%AB">インストール</a></li>
+<li><a href="#%E5%9F%BA%E6%9C%AC%E7%9A%84%E3%81%AA%E4%BD%BF%E3%81%84%E6%96%B9">基本的な使い方</a></li>
+<li><a href="#dsl%E6%A7%8B%E6%96%87%E3%82%AC%E3%82%A4%E3%83%89">DSL構文ガイド</a><ul>
+<li>4.1 <a href="#1-%E5%88%9D%E6%9C%9F%E5%8C%96">初期化</a></li>
+<li>4.2 <a href="#2-%E3%82%B0%E3%83%AD%E3%83%BC%E3%83%90%E3%83%AB%E3%83%91%E3%83%A9%E3%83%A1%E3%83%BC%E3%82%BF">グローバルパラメータ</a></li>
+<li>4.3 <a href="#3-%E3%82%B7%E3%83%BC%E3%82%B1%E3%83%B3%E3%82%B9%E3%83%91%E3%83%A9%E3%83%A1%E3%83%BC%E3%82%BF">シーケンスパラメータ</a></li>
+<li>4.4 <a href="#4-%E3%83%AA%E3%82%BA%E3%83%A0%E3%83%91%E3%82%BF%E3%83%BC%E3%83%B3play">リズムパターン（play()）</a></li>
+<li>4.5 <a href="#5-%E3%83%88%E3%83%A9%E3%83%B3%E3%82%B9%E3%83%9D%E3%83%BC%E3%83%88%E3%82%B3%E3%83%9E%E3%83%B3%E3%83%89">トランスポートコマンド</a></li>
+<li>4.6 <a href="#6-%E9%9F%B3%E9%87%8F%E3%81%A8%E3%82%B9%E3%83%86%E3%83%AC%E3%82%AA%E4%BD%8D%E7%BD%AE">音量とステレオ位置</a></li>
+<li>4.7 <a href="#7-%E3%82%A2%E3%83%B3%E3%83%80%E3%83%BC%E3%82%B9%E3%82%B3%E3%82%A2%E3%83%97%E3%83%AC%E3%83%95%E3%82%A3%E3%83%83%E3%82%AF%E3%82%B9%E3%83%91%E3%82%BF%E3%83%BC%E3%83%B3dsl-v30">アンダースコアプレフィックスパターン（DSL v3.0）</a></li>
+<li>4.8 <a href="#8-%E3%83%A1%E3%82%BD%E3%83%83%E3%83%89%E3%83%81%E3%82%A7%E3%83%BC%E3%83%B3">メソッドチェーン</a></li>
+</ul>
+</li>
+<li><a href="#%E3%82%88%E3%81%8F%E3%81%82%E3%82%8B%E9%96%93%E9%81%95%E3%81%84">よくある間違い</a></li>
+<li><a href="#%E3%83%88%E3%83%A9%E3%83%96%E3%83%AB%E3%82%B7%E3%83%A5%E3%83%BC%E3%83%86%E3%82%A3%E3%83%B3%E3%82%B0">トラブルシューティング</a></li>
+</ol>
+<hr>
+<h2 id="はじめに">はじめに</h2>
+<p>OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング用オーディオエンジンです。SuperColliderをバックエンドとして使用し、リアルタイムでの音楽制作を可能にします。</p>
+<h3 id="特徴">特徴</h3>
+<ul>
+<li><strong>シンプルなDSL</strong>: 直感的なメソッドチェーン構文</li>
+<li><strong>リアルタイム制御</strong>: パラメータをライブで変更可能</li>
+<li><strong>SuperCollider統合</strong>: 0-2msレイテンシのオーディオエンジン</li>
+<li><strong>VS Code拡張機能</strong>: 統合開発環境</li>
+<li><strong>アンダースコアプレフィックス（v3.0）</strong>: 設定のみ vs 即時適用を明示的に制御</li>
+<li><strong>片記号方式（v3.0）</strong>: RUN/LOOP/MUTEによる一方向トグル制御</li>
+</ul>
+<hr>
+<h2 id="インストール">インストール</h2>
+<h3 id="動作環境">動作環境</h3>
+<table>
+<thead>
+<tr>
+<th>OS / Arch</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>macOS Apple Silicon (arm64)</td>
+<td>✅ サポート対象</td>
+</tr>
+<tr>
+<td>macOS Intel (x86_64)</td>
+<td>⚠️ Universal binary だが未テスト</td>
+</tr>
+<tr>
+<td>Windows / Linux</td>
+<td>❌ v1.x では非対応</td>
+</tr>
+<tr>
+<td>VS Code / Cursor</td>
+<td>1.99.0 以上</td>
+</tr>
+</tbody></table>
+<h3 id="インストール手順">インストール手順</h3>
+<p>OrbitScore VS Code 拡張は <strong>scsynth (~11.5 MB) を同梱</strong>しているため、SuperCollider.app の手動インストールは<strong>不要</strong>です。</p>
+<h4 id="推奨方法">推奨方法</h4>
+<p><a href="https://github.com/signalcompose/orbitscore/releases">GitHub Releases</a> から最新の <code>orbitscore-*.vsix</code> をダウンロードし、以下のいずれかで install:</p>
+<ol>
+<li><strong><code>.vsix</code> ファイルをダブルクリック</strong> (VS Code が開きます)</li>
+<li>VS Code で <strong><code>Extensions: Install from VSIX...</code></strong> コマンド経由</li>
+<li>CLI: <strong><code>code --install-extension orbitscore-*.vsix</code></strong></li>
+</ol>
+<blockquote>
+<p>将来は VS Code Marketplace と Open VSX からも install 可能になる予定です。</p>
+</blockquote>
+<h4 id="既存-supercollider-ユーザー向け-オプション">既存 SuperCollider ユーザー向け (オプション)</h4>
+<p>すでに SuperCollider をインストール済で、bundled scsynth ではなくシステムの SuperCollider を使いたい場合は、VS Code 設定 <code>orbitscore.scsynthPath</code> にバイナリのパスを指定:</p>
+<pre><code class="language-json">{
+  &quot;orbitscore.scsynthPath&quot;: &quot;/Applications/SuperCollider.app/Contents/Resources/scsynth&quot;
+}
+</code></pre>
+<h3 id="status-bar-で状態確認">Status Bar で状態確認</h3>
+<p>拡張インストール後、VS Code の status bar 右側に scsynth の状態が表示されます:</p>
+<table>
+<thead>
+<tr>
+<th>表示</th>
+<th>意味</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>✅ scsynth (bundled)</code></td>
+<td>同梱の scsynth を使用中 (通常)</td>
+</tr>
+<tr>
+<td><code>⚙️ scsynth (custom)</code></td>
+<td><code>orbitscore.scsynthPath</code> 設定値を使用中</td>
+</tr>
+<tr>
+<td><code>❌ scsynth: not found</code></td>
+<td>bundle 不在 + override 未設定 (要対処)</td>
+</tr>
+<tr>
+<td><code>❓ scsynth: unknown source</code></td>
+<td>resolver が未知の source を返した (通常起こらない、起きたら拡張を再インストール)</td>
+</tr>
+</tbody></table>
+<p>ステータスバーをクリックすると <code>orbitscore.scsynthPath</code> 設定画面が開きます。</p>
+<h3 id="troubleshooting-scsynth-not-found">Troubleshooting: <code>scsynth not found</code></h3>
+<p>bundle が認識できない場合:</p>
+<ol>
+<li><strong>拡張を再インストール</strong> (<code>.vsix</code> ダウンロードからやり直し)</li>
+<li>または <code>orbitscore.scsynthPath</code> にシステムの scsynth パスを設定</li>
+<li><code>View → Output → OrbitScore</code> で resolver の失敗理由を確認</li>
+</ol>
+<h3 id="開発用-ソースから">開発用 (ソースから)</h3>
+<p>開発者向けの build 手順は <a href="../../../packages/vscode-extension/BUILD_GUIDE.md"><code>packages/vscode-extension/BUILD_GUIDE.md</code></a> を参照。SuperCollider.app + Node.js 22 が必要 (リリース手順は CI workflow に整備済)。</p>
+<hr>
+<h2 id="基本的な使い方">基本的な使い方</h2>
+<h3 id="最初のプログラム">最初のプログラム</h3>
+<p>以下は、シンプルなキックドラムを再生する例です。</p>
+<pre><code class="language-orbitscore">// グローバル設定
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4)
+global.audioPath(&quot;/path/to/your/audio/files&quot;)
+
+// キックドラムシーケンス
+var kick = init global.seq
+kick.length(1)
+kick.audio(&quot;kick.wav&quot;).chop(1)
+kick.play(1, 0, 0, 0)
+
+// 実行
+global.start()
+kick.run()
+</code></pre>
+<h3 id="実行方法">実行方法</h3>
+<h4 id="vs-code--cursor-での実行">VS Code / Cursor での実行</h4>
+<ol>
+<li><strong>エンジン起動</strong>: ステータスバーをクリック → &quot;🚀 Start Engine&quot;</li>
+<li><strong>ファイルを開く</strong>: <code>.orbs</code> ファイルを開く</li>
+<li><strong>保存</strong>: <code>Cmd+S</code> で定義を評価</li>
+<li><strong>実行</strong>: コマンドを選択して <code>Cmd+Enter</code></li>
+</ol>
+<h4 id="cliでの実行">CLIでの実行</h4>
+<pre><code class="language-bash">cd packages/engine
+node dist/cli-audio.js play your-file.orbs 10  # 10秒間再生
+</code></pre>
+<hr>
+<h2 id="dsl構文ガイド">DSL構文ガイド</h2>
+<h3 id="1-初期化">1. 初期化</h3>
+<h4 id="グローバルコンテキスト">グローバルコンテキスト</h4>
+<pre><code class="language-orbitscore">var global = init GLOBAL
+</code></pre>
+<p>すべてのOrbitScoreプログラムは、グローバルコンテキストの初期化から始まります。これにより、トランスポートとオーディオエンジンが作成されます。</p>
+<p><strong>注意</strong>: <code>global</code>という変数名は慣例ですが、任意の名前を使用できます（例: <code>var g = init GLOBAL</code>）。</p>
+<h4 id="シーケンス作成">シーケンス作成</h4>
+<pre><code class="language-orbitscore">var seq = init global.seq
+</code></pre>
+<p>シーケンスは音楽のパターンを表現する基本単位です。</p>
+<h3 id="2-グローバルパラメータ">2. グローバルパラメータ</h3>
+<h4 id="テンポ設定">テンポ設定</h4>
+<pre><code class="language-orbitscore">global.tempo(120)   // 120 BPM
+global.tempo(140)   // 140 BPM
+</code></pre>
+<h4 id="拍子設定time-signature">拍子設定（Time Signature）</h4>
+<pre><code class="language-orbitscore">global.beat(4)        // 4/4拍子
+global.beat(3)        // 3/4拍子
+global.beat(5 by 4)   // 5/4拍子
+global.beat(7 by 8)   // 7/8拍子
+</code></pre>
+<p><strong>重要</strong>: <code>beat()</code>は拍子（タイムシグネチャ）を設定するメソッドです。リズムパターンを定義するものではありません。</p>
+<h4 id="オーディオファイルのベースパス">オーディオファイルのベースパス</h4>
+<pre><code class="language-orbitscore">global.audioPath(&quot;/Users/you/audio&quot;)
+</code></pre>
+<p>このパスを設定すると、<code>sequence.audio()</code>で相対パスを使用できます。</p>
+<h3 id="3-シーケンスパラメータ">3. シーケンスパラメータ</h3>
+<h4 id="ループの長さ">ループの長さ</h4>
+<pre><code class="language-orbitscore">seq.length(1)   // 1小節ループ
+seq.length(2)   // 2小節ループ
+seq.length(4)   // 4小節ループ
+</code></pre>
+<p><strong>重要な動作</strong>: <code>length()</code>は各イベントの時間を変更し、結果として音程（playback rate）も変化します。</p>
+<p><strong>例: 120 BPM, 4/4拍子, 1秒のオーディオを<code>chop(4)</code>した場合</strong></p>
+<ul>
+<li><code>length(1)</code>: 4イベントが1小節（2秒）に分散 → 各イベント500ms → rate = 0.5</li>
+<li><code>length(2)</code>: 4イベントが2小節（4秒）に分散 → 各イベント1000ms → rate = 0.25（1オクターブ下）</li>
+<li><code>length(4)</code>: 4イベントが4小節（8秒）に分散 → 各イベント2000ms → rate = 0.125（2オクターブ下）</li>
+</ul>
+<pre><code class="language-orbitscore">// 例: length(2)で音程が1オクターブ下がる
+var arp = init global.seq
+arp.audio(&quot;arpeggio.wav&quot;).chop(4)
+arp.play(1, 2, 3, 4)
+
+arp.length(1)   // 通常の音程
+arp.length(2)   // 1オクターブ下
+arp.length(0.5) // 1オクターブ上
+</code></pre>
+<p>これにより、<code>length()</code>を使って意図的に音程を変えることができます。</p>
+<h4 id="音声ファイルの読み込み">音声ファイルの読み込み</h4>
+<pre><code class="language-orbitscore">// audioPath()を使用した相対パス
+global.audioPath(&quot;/path/to/audio&quot;)
+seq.audio(&quot;kick.wav&quot;)
+
+// 絶対パス
+seq.audio(&quot;/full/path/to/kick.wav&quot;)
+
+// 相対パス（カレントディレクトリから）
+seq.audio(&quot;../audio/kick.wav&quot;)
+</code></pre>
+<h4 id="chop音声分割">Chop（音声分割）</h4>
+<pre><code class="language-orbitscore">seq.chop(1)   // 分割しない（全体を1つのスライスとして使用）
+seq.chop(4)   // 4つのスライスに分割
+seq.chop(8)   // 8つのスライスに分割
+seq.chop(16)  // 16つのスライスに分割
+</code></pre>
+<p><strong>用途:</strong></p>
+<ul>
+<li><strong>ドラムサンプル</strong>: <code>chop(1)</code> または省略（全体を再生）</li>
+<li><strong>ループ素材</strong>: <code>chop(8)</code>, <code>chop(16)</code> など（スライスして並べ替え）</li>
+</ul>
+<h3 id="4-リズムパターンplay">4. リズムパターン（play()）</h3>
+<p><code>play()</code>メソッドでリズムパターンを定義します。</p>
+<pre><code class="language-orbitscore">seq.play(1, 0, 0, 0)     // 1拍目だけ再生
+seq.play(1, 0, 1, 0)     // 1拍目と3拍目
+seq.play(1, 1, 1, 1)     // 全拍で再生
+</code></pre>
+<p><strong>数値の意味:</strong></p>
+<ul>
+<li><strong>0</strong>: 休符（silence）</li>
+<li><strong>1-n</strong>: スライス番号（<code>chop(n)</code>で分割したスライス）</li>
+</ul>
+<p><strong>例: 4分割したアルペジオを順番に再生</strong></p>
+<pre><code class="language-orbitscore">var arp = init global.seq
+arp.audio(&quot;arpeggio.wav&quot;).chop(4)
+arp.play(1, 2, 3, 4)  // スライス1→2→3→4の順で再生
+</code></pre>
+<h4 id="ネストされたリズムパターン">ネストされたリズムパターン</h4>
+<p>括弧 <code>()</code> を使ってリズムを階層的に細分化できます：</p>
+<pre><code class="language-orbitscore">seq.play(1, (2, 3))              // 1拍目に1、2拍目を2分割して2と3
+seq.play((1, 2), (3, 4, 5))     // 複雑な分割
+seq.play(1, 0, (1, 0), 0)       // 3拍目を2分割
+</code></pre>
+<p><strong>ネストの動作原理:</strong></p>
+<ol>
+<li>トップレベルの要素は小節（または<code>length()</code>で指定された長さ）を等分割します</li>
+<li>ネストされた要素は、親要素の時間をさらに等分割します</li>
+<li>各イベントの再生速度（rate）は、イベントの長さに合わせて自動調整されます</li>
+</ol>
+<p><strong>実例: 120 BPM, 4/4拍子（1小節 = 2秒）</strong></p>
+<pre><code class="language-orbitscore">// 基本パターン
+arp.play(1, 2, 3, 4)
+// → 各要素500ms（0.5秒）
+
+// ネストパターン
+arp.play((1, 0), 2, (3, 2, 3), 4)
+// → 1番目: (1, 0)が500msを2分割 → 各250ms
+//    2番目: 2が500ms
+//    3番目: (3, 2, 3)が500msを3分割 → 各166ms
+//    4番目: 4が500ms
+</code></pre>
+<p><strong>確認済みの動作例:</strong></p>
+<pre><code class="language-orbitscore">var global = init GLOBAL
+global.tempo(120)
+global.beat(4)
+global.audioPath(&quot;/path/to/audio&quot;)
+
+var arp = init global.seq
+arp.audio(&quot;arpeggio_c.wav&quot;).chop(4)
+
+// 基本: スライス1→2→3→4
+arp.play(1, 2, 3, 4)
+
+// 休符を挟む: スライス1→休符→スライス2→休符→...
+arp.play(1, 0, 2, 0, 3, 0, 4, 0)
+
+// ネスト: 1番目と3番目を細分化
+arp.play((1, 0), 2, (3, 2, 3), 4)
+// → 聞こえる順: 1(速い)→2→3(速い)→2(速い)→3(速い)→4
+
+global.start()
+arp.loop()
+</code></pre>
+<p><strong>音程（pitch）の変化:</strong>
+ネストで時間が短くなると、自動的に再生速度が上がり、音程が高くなります。</p>
+<ul>
+<li>2分割 → 2倍速 → 1オクターブ上</li>
+<li>3分割 → 3倍速 → 約1.58倍の周波数（完全5度 + 長3度）</li>
+</ul>
+<h3 id="5-トランスポートコマンド">5. トランスポートコマンド</h3>
+<h4 id="スケジューラーの起動">スケジューラーの起動</h4>
+<pre><code class="language-orbitscore">global.start()   // スケジューラーを起動（必須）
+</code></pre>
+<p><strong>重要</strong>: シーケンスを実行する前に、必ず<code>global.start()</code>でスケジューラーを起動する必要があります。</p>
+<h4 id="トランスポート制御---予約キーワードdsl-v30">トランスポート制御 - 予約キーワード（DSL v3.0）</h4>
+<p>**片記号方式（Unidirectional Toggle）**を使って、複数のシーケンスを一括制御できます：</p>
+<pre><code class="language-orbitscore">// RUN: ワンショット再生グループ（指定したシーケンスのみ実行）
+RUN(kick)                 // kickのみワンショット再生
+RUN(kick, snare, hihat)   // kick, snare, hihatをワンショット再生
+
+// LOOP: ループ再生グループ（指定したシーケンスのみループ、他は自動停止）
+LOOP(bass)                // bassのみループ（他のループは自動停止）
+LOOP(kick, snare)         // kick, snareのみループ
+
+// MUTE: ミュートフラグ（LOOPにのみ影響、RUNには影響なし）
+MUTE(hihat)               // hihatのミュートフラグON（他はOFF）
+MUTE(snare, hihat)        // snare, hihatのミュートフラグON
+</code></pre>
+<p><strong>片記号方式の特徴:</strong></p>
+<ol>
+<li><p><strong>一方向制御</strong>: <code>RUN(kick, snare)</code> = kick と snare <strong>のみ</strong> RUNグループに含める</p>
+<ul>
+<li>指定しなかったシーケンスは自動的にグループから除外される</li>
+<li><strong>STOPキーワードは不要</strong>: <code>LOOP(other_sequences)</code>で自動停止</li>
+<li><strong>UNMUTEキーワードは不要</strong>: <code>MUTE(other_sequences)</code>で除外により自動アンミュート</li>
+</ul>
+</li>
+<li><p><strong>RUNとLOOPの独立性</strong>: 同じシーケンスが両方のグループに所属可能</p>
+<pre><code class="language-orbitscore">RUN(kick)    // kickをワンショット再生
+LOOP(kick)   // kickをループ再生（両方同時に動作）
+</code></pre>
+</li>
+<li><p><strong>MUTEはLOOPのみに影響</strong>: ミュートフラグはループ再生にのみ作用</p>
+<pre><code class="language-orbitscore">LOOP(kick, snare, hat)   // 3つ全てループ
+MUTE(hat)                // hatはループするが音は出ない
+RUN(hat)                 // hatはワンショット再生で音が出る（MUTEは影響しない）
+</code></pre>
+</li>
+<li><p><strong>MUTE永続性</strong>: MUTEフラグはLOOP離脱後も維持される</p>
+<pre><code class="language-orbitscore">MUTE(kick)               // kickのMUTEフラグON
+LOOP(kick, snare)        // kickループ（ミュート）、snareループ
+LOOP(snare)              // kickはループ停止するが、MUTEフラグは維持
+LOOP(kick)               // kickループ再開、まだミュートされている
+</code></pre>
+</li>
+</ol>
+<p><strong>マルチライン記法:</strong></p>
+<pre><code class="language-orbitscore">RUN(
+  kick,
+  snare,
+  hihat,
+)
+
+LOOP(
+  bass,
+  lead,
+)
+
+MUTE(
+  hihat,
+)
+</code></pre>
+<h4 id="全体の停止">全体の停止</h4>
+<pre><code class="language-orbitscore">global.stop()   // すべてのシーケンスを停止
+</code></pre>
+<h3 id="6-音量とステレオ位置">6. 音量とステレオ位置</h3>
+<h4 id="音量gain">音量（Gain）</h4>
+<pre><code class="language-orbitscore">seq.gain(0)     // 0 dB（デフォルト）
+seq.gain(6)     // +6 dB（大きく）
+seq.gain(-6)    // -6 dB（小さく）
+seq.gain(-60)   // ほぼ無音
+</code></pre>
+<p>範囲: -60 dB ～ +12 dB</p>
+<h4 id="ステレオ位置pan">ステレオ位置（Pan）</h4>
+<pre><code class="language-orbitscore">seq.pan(0)      // 中央（デフォルト）
+seq.pan(-100)   // 完全に左
+seq.pan(100)    // 完全に右
+seq.pan(-50)    // やや左
+seq.pan(50)     // やや右
+</code></pre>
+<p>範囲: -100（左） ～ 100（右）</p>
+<h3 id="7-アンダースコアプレフィックスパターンdsl-v30">7. アンダースコアプレフィックスパターン（DSL v3.0）</h3>
+<p><strong>DSL v3.0から、全ての設定メソッドに「設定のみ」と「即時適用」の2つのバージョンがあります。</strong></p>
+<h4 id="パターン-method-vs-_method">パターン: <code>method()</code> vs <code>_method()</code></h4>
+<ul>
+<li><strong><code>method(value)</code></strong>: <strong>設定のみ</strong> - 値を保存するだけで、再生トリガーや即時反映は行わない</li>
+<li><strong><code>_method(value)</code></strong>: <strong>即時適用</strong> - 値を保存し、かつ即座に再生トリガー/反映を行う</li>
+</ul>
+<p><strong>対象メソッド:</strong></p>
+<p><strong>Sequenceメソッド:</strong></p>
+<ul>
+<li><code>audio()</code> / <code>_audio()</code> - オーディオファイル設定</li>
+<li><code>chop()</code> / <code>_chop()</code> - スライス分割</li>
+<li><code>play()</code> / <code>_play()</code> - プレイパターン</li>
+<li><code>beat()</code> / <code>_beat()</code> - ビート設定</li>
+<li><code>length()</code> / <code>_length()</code> - ループ長</li>
+<li><code>tempo()</code> / <code>_tempo()</code> - テンポ設定</li>
+<li><code>gain()</code> / <code>_gain()</code> - 音量（リアルタイムパラメータ - 両方とも即時反映）</li>
+<li><code>pan()</code> / <code>_pan()</code> - パン（リアルタイムパラメータ - 両方とも即時反映）</li>
+</ul>
+<p><strong>Globalメソッド:</strong></p>
+<ul>
+<li><code>tempo()</code> / <code>_tempo()</code> - グローバルテンポ設定（アンダースコアあり版は全シーケンスに即時反映）</li>
+<li><code>beat()</code> / <code>_beat()</code> - グローバル拍子設定（アンダースコアあり版は全シーケンスに即時反映）</li>
+</ul>
+<h4 id="使い分け">使い分け</h4>
+<p><strong>1. セットアップフェーズ（再生前）</strong></p>
+<p>再生前の初期設定では、アンダースコアなしのメソッドを使用します：</p>
+<pre><code class="language-orbitscore">var global = init GLOBAL
+global.tempo(120)
+
+var kick = init global.seq
+kick.audio(&quot;kick.wav&quot;)     // 設定のみ
+kick.chop(4)               // 設定のみ
+kick.play(1, 0, 1, 0)      // 設定のみ
+kick.gain(-3)              // 音量は即時反映（リアルタイムパラメータ）
+
+global.start()
+kick.run()                 // ここで全ての設定が適用される
+</code></pre>
+<p><strong>2. ライブコーディング（再生中）</strong></p>
+<p>再生中にパターンを変更する場合、アンダースコアありのメソッドで即座に反映：</p>
+<pre><code class="language-orbitscore">// シーケンスは既にループ中
+kick.loop()
+
+// アンダースコアなし: 設定はバッファされ、次のrun()/loop()で適用
+kick.play(1, 1, 0, 0)      // パターン変更はまだ反映されない
+kick.tempo(140)            // テンポ変更もまだ反映されない
+kick.run()                 // ここで適用される
+
+// アンダースコアあり: 即座に適用・再生
+kick._play(1, 1, 0, 0)     // パターンが即座に変更され、再生開始
+kick._tempo(160)           // テンポが即座に変更
+</code></pre>
+<p><strong>3. グローバルパラメータの即時反映（再生中）</strong></p>
+<p>Globalのアンダースコアメソッドは、そのパラメータを継承している全シーケンスに即座に反映されます：</p>
+<pre><code class="language-orbitscore">var g = init GLOBAL
+g.tempo(120)
+
+var kick = init g.seq
+kick.play(1, 0, 1, 0)
+// kickはグローバルのテンポ(120)を継承
+
+var bass = init g.seq
+bass.tempo(90)  // bassは独自のテンポを設定（グローバルを上書き）
+bass.play(1, 0, 0, 0)
+
+g.start()
+kick.loop()
+bass.loop()
+
+// グローバルテンポを即座に変更（継承しているkickのみ影響）
+g._tempo(140)
+// → kickは140 BPMで再生（即座に反映）
+// → bassは90 BPM（変更なし、独自テンポを使用中）
+
+// グローバル拍子を即座に変更
+g._beat(3, 4)
+// → 継承している全シーケンスが3/4拍子に変更
+</code></pre>
+<p><strong>継承とオーバーライドのルール:</strong></p>
+<ul>
+<li>シーケンスは初期状態でGlobalのtempo/beatを継承</li>
+<li><code>sequence.tempo()</code>や<code>sequence.beat()</code>を呼ぶと、その時点で継承を解除し独自値を使用</li>
+<li><code>global._tempo()</code>や<code>global._beat()</code>は、<strong>継承しているシーケンスのみ</strong>に即座に反映</li>
+</ul>
+<p><strong>4. リアルタイムミキシング</strong></p>
+<p><code>gain()</code>と<code>pan()</code>は<strong>リアルタイムパラメータ</strong>なので、アンダースコアの有無に関わらず常に即時反映されます：</p>
+<pre><code class="language-orbitscore">// 以下は全て即座に反映される
+kick.gain(-6)              // 即座に音量変更
+kick._gain(-6)             // 同じ効果
+kick.pan(-50)              // 即座にパン変更
+kick._pan(-50)             // 同じ効果
+</code></pre>
+<h4 id="初期値設定メソッド">初期値設定メソッド</h4>
+<p>再生前に音量やパンの初期値を設定する場合は、専用のメソッドを使用できます：</p>
+<pre><code class="language-orbitscore">kick.defaultGain(-3)       // 初期音量を設定（再生トリガーなし）
+kick.defaultPan(-20)       // 初期パンを設定（再生トリガーなし）
+
+global.start()
+kick.run()                 // 設定された初期値で再生開始
+</code></pre>
+<h4 id="メリット">メリット</h4>
+<ul>
+<li><strong>セットアップ時</strong>: 冗長な再生トリガーを回避し、クリーンな初期化</li>
+<li><strong>ライブコーディング時</strong>: <code>_method()</code>で即座に変更を反映</li>
+<li><strong>一貫性</strong>: 全メソッドで統一されたパターン</li>
+<li><strong>明示性</strong>: コードの意図が明確</li>
+</ul>
+<h3 id="8-メソッドチェーン">8. メソッドチェーン</h3>
+<p>すべてのシーケンスメソッドはチェーン可能です：</p>
+<pre><code class="language-orbitscore">var snare = init global.seq
+  .length(1)
+  .audio(&quot;snare.wav&quot;)
+  .chop(1)
+  .play(0, 0, 1, 0)
+  .gain(-3)
+  .pan(20)
+</code></pre>
+<hr>
+<h2 id="よくある間違い">よくある間違い</h2>
+<h3 id="1-beatの誤用">1. beat()の誤用</h3>
+<p>❌ <strong>間違い:</strong></p>
+<pre><code class="language-orbitscore">seq.beat(&quot;x___&quot;)  // beat()はリズムパターンではない
+</code></pre>
+<p>✅ <strong>正しい:</strong></p>
+<pre><code class="language-orbitscore">global.beat(4)         // 4/4拍子（第2引数は省略可、デフォルト=4）
+global.beat(3, 4)      // 3/4拍子
+global.beat(5, 4)      // 5/4拍子
+seq.play(1, 0, 0, 0)   // リズムパターン
+</code></pre>
+<p><strong>重要</strong>: <code>beat()</code>は**拍子（Time Signature）**を設定するメソッドです。リズムパターンは<code>play()</code>で定義します。</p>
+<h3 id="2-スケジューラーの起動忘れ">2. スケジューラーの起動忘れ</h3>
+<p>❌ <strong>間違い:</strong></p>
+<pre><code class="language-orbitscore">kick.run()   // global.start()を呼んでいない
+</code></pre>
+<p>✅ <strong>正しい:</strong></p>
+<pre><code class="language-orbitscore">global.start()   // スケジューラー起動（必須）
+kick.run()       // シーケンス実行
+</code></pre>
+<h3 id="3-音声ファイルパスの問題">3. 音声ファイルパスの問題</h3>
+<p>❌ <strong>間違い:</strong></p>
+<pre><code class="language-orbitscore">seq.audio(&quot;kick.wav&quot;)  // audioPath未設定で相対パスを使用
+</code></pre>
+<p>✅ <strong>正しい方法1（audioPathを使用）:</strong></p>
+<pre><code class="language-orbitscore">global.audioPath(&quot;/path/to/audio&quot;)
+seq.audio(&quot;kick.wav&quot;)
+</code></pre>
+<p>✅ <strong>正しい方法2（絶対パス）:</strong></p>
+<pre><code class="language-orbitscore">seq.audio(&quot;/full/path/to/kick.wav&quot;)
+</code></pre>
+<h3 id="4-playの数値の意味を誤解">4. play()の数値の意味を誤解</h3>
+<p>❌ <strong>間違い:</strong></p>
+<pre><code class="language-orbitscore">seq.play(&quot;1&quot;)  // 文字列ではなく数値を使用
+</code></pre>
+<p>✅ <strong>正しい:</strong></p>
+<pre><code class="language-orbitscore">seq.play(1, 0, 0, 0)  // 数値で指定
+</code></pre>
+<hr>
+<h2 id="トラブルシューティング">トラブルシューティング</h2>
+<h3 id="音が出ない">音が出ない</h3>
+<p><strong>症状</strong>: エラーは出ないが音が聞こえない</p>
+<p><strong>原因と解決策:</strong></p>
+<ol>
+<li><p><strong>スケジューラーが起動していない</strong></p>
+<pre><code class="language-orbitscore">global.start()  // これを追加
+kick.run()
+</code></pre>
+</li>
+<li><p><strong>音声ファイルが見つからない</strong></p>
+<ul>
+<li>パスが正しいか確認</li>
+<li><code>global.audioPath()</code>を設定</li>
+<li>絶対パスを試す</li>
+</ul>
+</li>
+<li><p><strong>オーディオデバイスの音量を確認</strong></p>
+<ul>
+<li>システムの音量設定を確認</li>
+<li>正しいオーディオデバイスが選択されているか確認</li>
+</ul>
+</li>
+</ol>
+<h3 id="supercolliderサーバーが起動しない">SuperColliderサーバーが起動しない</h3>
+<p><strong>症状</strong>: &quot;Server failed to start&quot; エラー</p>
+<p><strong>原因</strong>: ポート57110が既に使用されている</p>
+<p><strong>解決策:</strong></p>
+<p>VS Code の Command Palette から <strong><code>OrbitScore: Force Kill scsynth</code></strong> を実行 (旧名 <code>Kill SuperCollider</code>)。または CLI で:</p>
+<pre><code class="language-bash">killall scsynth
+</code></pre>
+<blockquote>
+<p>bundle 同梱版を使っている場合 <code>killall scsynth</code> は bundled プロセスも system の scsynth も両方 kill します (escape hatch として意図的)。<code>sclang</code> は OrbitScore では使用しないため kill 不要です。</p>
+</blockquote>
+<h3 id="音声ファイルが読み込めない">音声ファイルが読み込めない</h3>
+<p><strong>症状</strong>: &quot;File could not be opened&quot; エラー</p>
+<p><strong>解決策:</strong></p>
+<ol>
+<li><p><strong>ファイルが存在するか確認</strong></p>
+<pre><code class="language-bash">ls -la /path/to/audio/kick.wav
+</code></pre>
+</li>
+<li><p><strong>パスを修正</strong></p>
+<pre><code class="language-orbitscore">// 絶対パスを試す
+seq.audio(&quot;/Users/you/audio/kick.wav&quot;)
+</code></pre>
+</li>
+<li><p><strong>audioPath()を使用</strong></p>
+<pre><code class="language-orbitscore">global.audioPath(&quot;/Users/you/audio&quot;)
+seq.audio(&quot;kick.wav&quot;)
+</code></pre>
+</li>
+</ol>
+<h3 id="synthdefが見つからない">SynthDefが見つからない</h3>
+<p><strong>症状</strong>: SynthDefエラー</p>
+<p><strong>原因</strong>: bundle 同梱版を使っている場合は通常起こりません。SynthDef (<code>orbitPlayBuf</code> 等) は engine の <code>supercollider/synthdefs/</code> に同梱され、<code>SynthDefLoader</code> が起動時に自動 load します。</p>
+<p><strong>解決策:</strong></p>
+<ol>
+<li><strong>拡張を再インストール</strong> — <code>.vsix</code> のbundle が破損している可能性</li>
+<li><strong><code>View → Output → OrbitScore</code></strong> で boot ログを確認 (<code>✅ SynthDef loaded</code> が出ているか)</li>
+<li>dev source build の場合のみ、SynthDef を再生成:<pre><code class="language-bash">cd packages/engine/supercollider
+# Note: requires SC.app installed locally (dev only, not for users)
+/Applications/SuperCollider.app/Contents/MacOS/sclang setup.scd
+</code></pre>
+</li>
+</ol>
+<hr>
+<h2 id="次のステップ">次のステップ</h2>
+<ul>
+<li><a href="INSTRUCTION_ORBITSCORE_DSL.html">DSL仕様書</a> - 完全なDSL仕様</li>
+<li><a href="../examples/README.html">サンプル集</a> - 実践的な例</li>
+<li><a href="PERFORMANCE_TEST_GUIDE.html">パフォーマンステストガイド</a> - 高度な機能</li>
+</ul>
+<hr>
+<p><strong>Version</strong>: 3.1
+<strong>Last Updated</strong>: 2025-10-09</p>
+<p><strong>変更履歴:</strong></p>
+<ul>
+<li><strong>v3.1 (2025-10-09)</strong>: Issue #57対応 - tick/key削除、Global._tempo()/_beat()追加、継承システム説明追加</li>
+<li><strong>v3.0 (2025-01-09)</strong>: アンダースコアプレフィックスパターン + 片記号方式（Unidirectional Toggle）追加</li>
+<li><strong>v1.0 (2024-10-08)</strong>: 初版公開</li>
+</ul>
+
+</main>
+</body>
+</html>

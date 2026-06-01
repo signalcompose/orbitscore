@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan: Rust Audio Workspace Split (Phase 1a) — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="plan-rust-audio-workspace-split-phase-1a">Plan: Rust Audio Workspace Split (Phase 1a)</h1>
+<p><strong>対象 Issue</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/106">#106</a>
+<strong>Epic</strong>: <a href="https://github.com/signalcompose/orbitscore/issues/105">#105</a>
+<strong>前提</strong>: PR #99, #103 がマージされた状態の main
+<strong>想定 effort</strong>: medium
+<strong>想定 dev-cycle</strong>: 1 cycle で完結</p>
+<hr>
+<h2 id="1-目的">1. 目的</h2>
+<p>単一 crate <code>orbitscore-engine</code> に入っている Rust コードを <strong>Cargo workspace</strong> に再構成し、<code>orbit-audio-core</code> を platform-agnostic な独立 crate として切り出す。将来のプラグイン分離・他プロダクト転用・OSS 公開の<strong>土台</strong>を作る。</p>
+<p><strong>本プランは純粋な構造リファクタであり、新機能の追加は一切行わない。</strong></p>
+<hr>
+<h2 id="2-参照すべきドキュメント">2. 参照すべきドキュメント</h2>
+<p>作業前に必ず目を通す:</p>
+<ul>
+<li><a href="../planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.html">docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md</a> — 全体設計方針と責務分離原則</li>
+<li><a href="../planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.html">docs/planning/RUST_ENGINE_MIGRATION_PLAN.md</a> — 段階的ロードマップ</li>
+<li><code>rust/</code> の現状コード（17 tests + PoC example が動く状態）</li>
+</ul>
+<hr>
+<h2 id="3-スコープ">3. スコープ</h2>
+<h3 id="含む">含む</h3>
+<ul>
+<li><code>rust/</code> を Cargo workspace に再構成</li>
+<li>3 crates に分割:<ul>
+<li><code>rust/crates/orbit-audio-core/</code> — 現 <code>src/core/</code> 相当（platform-agnostic）</li>
+<li><code>rust/crates/orbit-audio-native/</code> — 現 <code>src/native/</code> 相当（cpal + symphonia + rubato）</li>
+<li><code>rust/crates/orbit-audio-wasm/</code> — 現 <code>src/wasm/</code> 相当（スタブ）</li>
+</ul>
+</li>
+<li><code>rust/Cargo.toml</code> を workspace root に（<code>[workspace]</code> セクション）</li>
+<li>各 crate の <code>Cargo.toml</code> を適切な dependencies 記述で構成</li>
+<li>既存の features (<code>native</code> / <code>wasm</code>) のポリシーは workspace 全体で整合性を保つ形に移行</li>
+<li><code>rust/examples/poc_play.rs</code> を <code>orbit-audio-native</code> の examples へ移設</li>
+<li><code>rust/target/</code> gitignore / <code>rust/Cargo.lock</code> は workspace 共通で 1 箇所</li>
+<li><code>rust-toolchain.toml</code> は workspace root に維持</li>
+</ul>
+<h3 id="含まないphase-1b-以降">含まない（Phase 1b 以降）</h3>
+<ul>
+<li>新機能の追加</li>
+<li>daemon binary crate の新設</li>
+<li>IPC / WebSocket の実装</li>
+<li>TS 側の変更</li>
+<li>DSL / interpreter / musical timing の改修</li>
+<li>プラグイン host 実装</li>
+<li>crates.io への公開</li>
+</ul>
+<hr>
+<h2 id="4-完了条件">4. 完了条件</h2>
+<ul>
+<li><input disabled="" type="checkbox"> <code>rust/crates/orbit-audio-core/</code> が作成され、core モジュール相当が移設されている</li>
+<li><input disabled="" type="checkbox"> <code>rust/crates/orbit-audio-native/</code> が作成され、native モジュールと poc_play example が移設されている</li>
+<li><input disabled="" type="checkbox"> <code>rust/crates/orbit-audio-wasm/</code> が作成され、wasm スタブが移設されている</li>
+<li><input disabled="" type="checkbox"> <code>rust/Cargo.toml</code> が workspace root として機能（<code>[workspace]</code> members 定義）</li>
+<li><input disabled="" type="checkbox"> <code>cargo check --workspace --all-targets</code> が全て成功</li>
+<li><input disabled="" type="checkbox"> <code>cargo clippy --workspace --all-targets -- -D warnings</code> が成功</li>
+<li><input disabled="" type="checkbox"> <code>cargo fmt --check</code> が成功</li>
+<li><input disabled="" type="checkbox"> <code>cargo test --workspace --lib</code> で既存 17 tests が全部通る</li>
+<li><input disabled="" type="checkbox"> <code>cd rust &amp;&amp; cargo run --example poc_play -- ../test-assets/audio/kick.wav ../test-assets/audio/snare.wav</code> が動作（実機再生）</li>
+<li><input disabled="" type="checkbox"> <code>cargo build --release</code> 成功</li>
+</ul>
+<hr>
+<h2 id="5-実装手順推奨シーケンス">5. 実装手順（推奨シーケンス）</h2>
+<ol>
+<li>ブランチ <code>106-rust-workspace-split</code> を作成</li>
+<li><code>rust/Cargo.toml</code> を workspace root に変換（メンバー定義のみ）</li>
+<li><code>rust/crates/orbit-audio-core/</code> を作成し <code>src/core/</code> を移設</li>
+<li><code>rust/crates/orbit-audio-native/</code> を作成し <code>src/native/</code> を移設（<code>orbit-audio-core</code> に依存）</li>
+<li><code>rust/crates/orbit-audio-wasm/</code> を作成し <code>src/wasm/</code> を移設（<code>orbit-audio-core</code> に依存）</li>
+<li><code>examples/poc_play.rs</code> を <code>crates/orbit-audio-native/examples/</code> に移動</li>
+<li>旧 <code>rust/src/</code>, <code>rust/Cargo.toml</code> の残骸を整理</li>
+<li><code>cargo check</code> / <code>clippy</code> / <code>fmt</code> / <code>test</code> / <code>run --example</code> をすべて確認</li>
+<li>PoC を実機再生で動作確認</li>
+</ol>
+<h3 id="crate-命名ポリシー">crate 命名ポリシー</h3>
+<ul>
+<li>パッケージ名は <strong><code>orbit-audio-*</code></strong> 形式（ハイフン区切り）</li>
+<li>Rust 内モジュール名は <strong><code>orbit_audio_*</code></strong>（snake_case 自動変換）</li>
+<li>version は初期 <code>0.0.1</code> に揃える</li>
+<li>license は <code>LicenseRef-Signal-compose-FairTrade-1.0</code></li>
+<li>description は Signal compose 由来の汎用 audio crate である旨を明記</li>
+</ul>
+<h3 id="feature-flag-方針">feature flag 方針</h3>
+<ul>
+<li><code>orbit-audio-core</code>: 基本は <code>no_std</code> 志向だが、まずは <code>std</code> ありで spawn。feature なし</li>
+<li><code>orbit-audio-native</code>: cpal / symphonia / rubato / audioadapter-buffers を直接 require（optional ではなく必須依存）</li>
+<li><code>orbit-audio-wasm</code>: wasm-bindgen / web-sys を直接 require</li>
+<li><strong>旧 <code>native</code> / <code>wasm</code> feature flag は crate 分割によって不要になるため削除</strong></li>
+<li>旧 <code>lib.rs</code> の <code>compile_error!</code> は不要になる（crate 単位で選ぶようになるため）</li>
+</ul>
+<hr>
+<h2 id="6-ddd--ドキュメント更新項目">6. DDD / ドキュメント更新項目</h2>
+<p>実装 PR に含めるべき更新:</p>
+<ul>
+<li><input disabled="" type="checkbox"> <code>rust/README.md</code> を <strong>ワークスペース全体の overview</strong> に刷新<ul>
+<li>各 crate の役割と依存関係</li>
+<li>主要コマンド（<code>cargo test --workspace</code> 等）</li>
+<li>既存の Known Limitations は維持</li>
+</ul>
+</li>
+<li><input disabled="" type="checkbox"> <code>docs/development/WORK_LOG.md</code> に 6.56 エントリ追加（作業内容）</li>
+<li><input disabled="" type="checkbox"> <code>docs/planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.md</code> Phase 1 section の進捗更新（Phase 1a 完了にチェック）</li>
+<li><input disabled="" type="checkbox"> <code>docs/planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md</code> の「Cargo workspace 構造」セクションを実装実態に合わせて調整</li>
+<li><input disabled="" type="checkbox"> <code>CLAUDE.md</code> の Development Commands 欄に <code>cargo</code> 系コマンド（workspace）を追加（任意、対象的なら）</li>
+</ul>
+<p><strong>DSL 仕様については本プランでは言及しない</strong>。実装を唯一の真実とする方針。</p>
+<hr>
+<h2 id="7-検証項目pr-作成前チェックリスト">7. 検証項目（PR 作成前チェックリスト）</h2>
+<ul>
+<li><input disabled="" type="checkbox"> <code>cargo check --workspace --all-targets</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo clippy --workspace --all-targets -- -D warnings</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo fmt --check</code> clean</li>
+<li><input disabled="" type="checkbox"> <code>cargo test --workspace --lib</code>: 17 passed（PoC / #100 SRC の tests 合計）</li>
+<li><input disabled="" type="checkbox"> <code>cargo build --release</code> 成功</li>
+<li><input disabled="" type="checkbox"> <code>cd rust &amp;&amp; cargo run --example poc_play -- ../test-assets/audio/kick.wav ../test-assets/audio/snare.wav</code> で音が出る</li>
+<li><input disabled="" type="checkbox"> <code>git diff main..HEAD</code> を確認し、移設以外の意図しない変更がないこと</li>
+<li><input disabled="" type="checkbox"> <code>cargo tree --workspace</code> で依存が正しく解決されているか確認</li>
+</ul>
+<hr>
+<h2 id="8-リスクと注意点">8. リスクと注意点</h2>
+<ul>
+<li><strong>Cargo.lock の差し替え</strong>: workspace 化で lock の構造が変わる。再生成すると依存バージョンがズレる可能性があるので、既存の pin を極力維持する</li>
+<li><strong>feature flag の消滅</strong>: 旧 <code>native</code> / <code>wasm</code> features 前提のビルドスクリプトやドキュメントが残っていないか要確認</li>
+<li><strong>path dependency</strong>: crate 間依存は <strong><code>{ path = &quot;../orbit-audio-core&quot; }</code></strong> を使う（未公開段階なので version 指定不可）</li>
+<li><strong>example の path</strong>: <code>test-assets/audio/*.wav</code> への相対パスが <code>crates/orbit-audio-native/examples/</code> からだと変わる。poc_play.rs 内の相対パス or README のコマンド例を調整</li>
+</ul>
+<hr>
+<h2 id="9-非目標重要な再確認">9. 非目標（重要な再確認）</h2>
+<ul>
+<li>DSL 仕様への言及は一切行わない（間違いの元になる）</li>
+<li>musical timing は触らない（TS 側に残す）</li>
+<li>新規 Rust コードを書かない（リファクタのみ）</li>
+<li>daemon / IPC 実装は <strong>Phase 1b (#107) で別途</strong></li>
+</ul>
+<hr>
+<h2 id="10-次のステップ本-pr-完了後">10. 次のステップ（本 PR 完了後）</h2>
+<ol>
+<li>PR マージ後に Epic #105 のチェックリストを更新</li>
+<li>Issue #106 クローズ</li>
+<li>Phase 1b に進む場合: Issue #93 → #107 → #108 の順で着手</li>
+</ol>
+<hr>
+<h2 id="11-参考">11. 参考</h2>
+<ul>
+<li><a href="https://github.com/signalcompose/orbitscore/issues/105">Epic #105</a></li>
+<li><a href="https://github.com/signalcompose/orbitscore/issues/106">Issue #106</a> ← 本プランが対応する Issue</li>
+<li><a href="../planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.html">docs/planning/AUDIO_ENGINE_CORE_ARCHITECTURE.md</a></li>
+<li><a href="https://doc.rust-lang.org/cargo/reference/workspaces.html">Cargo workspace 公式ドキュメント</a></li>
+</ul>
+
+</main>
+</body>
+</html>

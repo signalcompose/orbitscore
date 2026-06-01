@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beat/Meter Specification - 拍子記号の仕様 — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="beatmeter-specification---拍子記号の仕様">Beat/Meter Specification - 拍子記号の仕様</h1>
+<h2 id="概要">概要</h2>
+<p>OrbitScoreの<code>beat(n1 by n2)</code>構文における数値的制約と動作仕様を定義します。</p>
+<h2 id="現在の実装v20時点">現在の実装（v2.0時点）</h2>
+<h3 id="構文">構文</h3>
+<pre><code class="language-js">global.beat(4 by 4)   // 4/4拍子
+seq.beat(5 by 4)      // 5/4拍子（ポリメーター）
+seq.beat(7 by 8)      // 7/8拍子
+</code></pre>
+<h3 id="動作">動作</h3>
+<ul>
+<li><strong>分子（n1）の制限</strong>: なし（任意の正の整数）</li>
+<li><strong>分母（n2）の制限</strong>: なし（任意の正の数値）</li>
+<li><strong>計算</strong>: 数学的には正しく動作するが、音楽理論的な妥当性は検証されない</li>
+</ul>
+<h3 id="小節長の計算式">小節長の計算式</h3>
+<pre><code class="language-typescript">// 4分音符の長さ（ms）= 60000 / tempo
+// 1小節の長さ（ms）= (60000 / tempo) × (numerator / denominator × 4)
+</code></pre>
+<h2 id="将来の仕様案厳密化---phase-2以降">将来の仕様案（厳密化 - Phase 2以降）</h2>
+<h3 id="分母の制約">分母の制約</h3>
+<p><strong>許可される値</strong>: <code>1, 2, 4, 8, 16, 32, 64, 128</code>（2のべき乗のみ）</p>
+<p><strong>理由</strong>:</p>
+<ul>
+<li><strong>音楽理論の枠組みを維持</strong>: 既存の音楽家が<code>4/4, 120bpm</code>を見て「1分間に120回ビートが刻まれる速さの4分音符を基礎としてその4つ分が1小節」と即座に理解できる</li>
+<li><strong>計算の直感性</strong>: <code>4/5</code>のような表記は音楽家にとって計算が困難</li>
+<li><strong>MIDIサポートとの整合性</strong>: 将来的なMIDI出力時に標準的な拍子記号として正しく表現される</li>
+<li><strong>ICMC等での実績</strong>: 4/4と5/4の位相ずれ（最小公倍数）は既に実績があり、演奏難易度も適切</li>
+<li><strong>過度な拡張の回避</strong>: 音楽理論の枠組みを逸脱しすぎない</li>
+</ul>
+<h3 id="小節長の計算例">小節長の計算例</h3>
+<h4 id="グローバル設定の場合">グローバル設定の場合</h4>
+<p><strong>例1: tempo(60) beat(4 by 4)</strong></p>
+<pre><code>4分音符の長さ = 60000ms / 60 = 1000ms
+1小節の長さ = 1000ms × (4 / 4 × 4) = 1000ms × 4 = 4000ms
+→ 1拍 = 1秒、1小節 = 4秒
+</code></pre>
+<p><strong>例2: tempo(60) beat(7 by 8)</strong></p>
+<pre><code>4分音符の長さ = 60000ms / 60 = 1000ms
+1小節の長さ = 1000ms × (7 / 8 × 4) = 1000ms × 3.5 = 3500ms
+→ 1拍（8分音符） = 500ms、1小節 = 3.5秒
+</code></pre>
+<p><strong>例3: tempo(120) beat(5 by 4)</strong></p>
+<pre><code>4分音符の長さ = 60000ms / 120 = 500ms
+1小節の長さ = 500ms × (5 / 4 × 4) = 500ms × 5 = 2500ms
+→ 1拍 = 500ms、1小節 = 2.5秒
+</code></pre>
+<p><strong>一般式</strong>:</p>
+<pre><code>4分音符の長さ = 60000 / tempo (ms)
+1小節の長さ = (60000 / tempo) × (numerator / denominator × 4) (ms)
+</code></pre>
+<h4 id="シーケンス個別設定ポリメーター">シーケンス個別設定（ポリメーター）</h4>
+<p>ポリメーター機能では、各シーケンスが独立した拍子を持ち、小節線が徐々にずれていきます。</p>
+<p><strong>例: グローバルとシーケンスで異なる拍子</strong></p>
+<pre><code class="language-js">global.tempo(60)
+global.beat(4 by 4)        // グローバル: 1小節 = 4秒
+
+var kick = init global.seq
+kick.beat(4 by 4)          // キック: 1小節 = 4秒（グローバルと同期）
+
+var snare = init global.seq
+snare.beat(5 by 4)         // スネア: 1小節 = 5秒（グローバルより長い）
+
+// 結果: kickは4秒でループ、snareは5秒でループ
+// → 20秒後に再び同期（最小公倍数）
+</code></pre>
+<p><strong>計算</strong>:</p>
+<pre><code>グローバル: 1000ms × 4 = 4000ms/bar
+シーケンス: 1000ms × 5 = 5000ms/bar
+→ 位相差が徐々に蓄積し、パターンが回り込む
+</code></pre>
+<h2 id="用語の改善案">用語の改善案</h2>
+<h3 id="tempo--bpmへの移行"><code>tempo</code> → <code>bpm</code>への移行</h3>
+<p><strong>現状</strong>: <code>global.tempo(120)</code>
+<strong>提案</strong>: <code>global.bpm(120)</code></p>
+<p><strong>理由</strong>:</p>
+<ul>
+<li>BPM（Beats Per Minute）はより一般的で理解しやすい</li>
+<li>DAWやシーケンサーで標準的に使われる用語</li>
+<li>音楽家にとって直感的</li>
+</ul>
+<p><strong>移行計画</strong>:</p>
+<ol>
+<li>Phase 2で<code>bpm()</code>メソッドを追加</li>
+<li><code>tempo()</code>と<code>bpm()</code>を両方サポート（エイリアス）</li>
+<li>ドキュメントでは<code>bpm()</code>を推奨表記とする</li>
+<li>後方互換性のため<code>tempo()</code>は廃止しない</li>
+</ol>
+<h2 id="実装の優先度">実装の優先度</h2>
+<h3 id="phase-1現在---v20-現状維持">Phase 1（現在 - v2.0）: 現状維持</h3>
+<ul>
+<li>✅ 分母の制限なし</li>
+<li>✅ 数学的に正しい計算</li>
+<li>✅ ポリメーター機能は動作する</li>
+<li>✅ テストは基本的なケースのみ</li>
+</ul>
+<p><strong>方針</strong>: ポリメーター機能の動作を優先し、厳密な制約は後回し</p>
+<h3 id="phase-2将来---v21以降-厳密化">Phase 2（将来 - v2.1以降）: 厳密化</h3>
+<h4 id="1-パーサーでの分母検証">1. パーサーでの分母検証</h4>
+<pre><code class="language-typescript">// packages/engine/src/parser/parse-expression.ts
+const validDenominators = [1, 2, 4, 8, 16, 32, 64, 128]
+if (!validDenominators.includes(denominator)) {
+  throw new Error(
+    `Invalid meter denominator: ${denominator}. ` +
+    `Must be a power of 2 (1, 2, 4, 8, 16, 32, 64, 128). ` +
+    `This ensures compatibility with standard music notation and MIDI output.`
+  )
+}
+</code></pre>
+<h4 id="2-テストケースの追加">2. テストケースの追加</h4>
+<ul>
+<li>各分母での小節長計算の正確性（標準的な拍子のみ）</li>
+<li>エラーケース（3, 5, 6, 7, 9などの分母）</li>
+<li>ポリメーター機能の厳密な同期テスト</li>
+<li>長時間実行での位相ずれの測定</li>
+</ul>
+<h4 id="3-ドキュメント更新">3. ドキュメント更新</h4>
+<ul>
+<li>DSL仕様書に分母の制約を明記</li>
+<li>標準例を追加（7/8, 9/8, 5/4など）</li>
+<li>MIDIサポートとの整合性を説明</li>
+<li>ポリメーターの数学的説明を詳細化</li>
+</ul>
+<h2 id="テストが必要な項目">テストが必要な項目</h2>
+<h3 id="小節長計算の正確性phase-2">小節長計算の正確性（Phase 2）</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <code>tempo(60) beat(4 by 4)</code> → 4000ms</li>
+<li><input disabled="" type="checkbox"> <code>tempo(60) beat(3 by 4)</code> → 3000ms</li>
+<li><input disabled="" type="checkbox"> <code>tempo(60) beat(7 by 8)</code> → 3500ms</li>
+<li><input disabled="" type="checkbox"> <code>tempo(60) beat(9 by 8)</code> → 4500ms</li>
+<li><input disabled="" type="checkbox"> <code>tempo(120) beat(5 by 4)</code> → 2500ms</li>
+<li><input disabled="" type="checkbox"> <code>tempo(140) beat(7 by 4)</code> → ~4285.7ms</li>
+</ul>
+<h3 id="ポリメーター機能phase-2">ポリメーター機能（Phase 2）</h3>
+<ul>
+<li><input disabled="" type="checkbox"> グローバル4/4、シーケンス5/4で位相ずれを確認</li>
+<li><input disabled="" type="checkbox"> グローバル4/4、シーケンス7/8で位相ずれを確認</li>
+<li><input disabled="" type="checkbox"> 複数シーケンス（3つ以上）で異なる拍子を同時実行</li>
+<li><input disabled="" type="checkbox"> 長時間実行（60秒以上）での同期精度</li>
+</ul>
+<h3 id="エラーケースphase-2">エラーケース（Phase 2）</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <code>beat(4 by 3)</code> → エラー（非標準的な分母）</li>
+<li><input disabled="" type="checkbox"> <code>beat(5 by 7)</code> → エラー（非標準的な分母）</li>
+<li><input disabled="" type="checkbox"> <code>beat(8 by 9)</code> → エラー（非標準的な分母）</li>
+<li><input disabled="" type="checkbox"> <code>beat(4 by 0)</code> → エラー（ゼロ除算）</li>
+<li><input disabled="" type="checkbox"> <code>beat(4 by -4)</code> → エラー（負の値）</li>
+<li><input disabled="" type="checkbox"> <code>beat(0 by 4)</code> → エラー（分子がゼロ）</li>
+</ul>
+<h2 id="関連ドキュメント">関連ドキュメント</h2>
+<ul>
+<li><a href="INSTRUCTION_ORBITSCORE_DSL.html">DSL Specification</a></li>
+<li><a href="FUTURE_ENHANCEMENTS.html">Future Enhancements</a></li>
+<li><a href="PROJECT_RULES.html">Project Rules</a></li>
+</ul>
+<h2 id="備考">備考</h2>
+<ul>
+<li>この仕様は将来的な実装のためのガイドラインです</li>
+<li>Phase 1では厳密な制約を課さず、柔軟性を優先します</li>
+<li><strong>Phase 2では2のべき乗の制約を導入します</strong>:<ul>
+<li>音楽理論の枠組みを維持し、既存の音楽家にとって直感的</li>
+<li>MIDIサポートとの整合性を確保</li>
+<li>ICMC等での実績がある4/4と5/4の位相ずれを活用</li>
+<li>過度な拡張を避け、音楽理論の枠組みを逸脱しすぎない</li>
+</ul>
+</li>
+<li>数値計算の例は概算であり、実装時に再検証が必要です</li>
+</ul>
+
+</main>
+</body>
+</html>

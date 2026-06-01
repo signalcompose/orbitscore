@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Link Audio End-to-End テスト - チェックリスト — OrbitScore docs</title>
+<style>
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+    "Noto Sans JP", Meiryo, sans-serif;
+  line-height: 1.7; color: #1f2328; background: #ffffff;
+  max-width: 920px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: #0969da; text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.3; margin: 1.8em 0 0.6em; font-weight: 600; }
+h1 { font-size: 2rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid #d1d9e0; padding-bottom: .3em; }
+h3 { font-size: 1.25rem; }
+code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: .88em; background: rgba(129,139,152,.16); padding: .2em .4em; border-radius: 6px; }
+pre { background: #f6f8fa; padding: 1rem; border-radius: 8px; overflow: auto; }
+pre code { background: none; padding: 0; font-size: .85em; }
+blockquote { margin: 1em 0; padding: 0 1em; color: #59636e; border-left: .25em solid #d1d9e0; }
+table { border-collapse: collapse; display: block; overflow: auto; margin: 1em 0; }
+th, td { border: 1px solid #d1d9e0; padding: .5em .9em; }
+th { background: #f6f8fa; }
+tr:nth-child(2n) { background: #f6f8fa44; }
+img { max-width: 100%; }
+hr { border: none; border-top: 1px solid #d1d9e0; margin: 2em 0; }
+ul, ol { padding-left: 1.6em; }
+li { margin: .2em 0; }
+.doc-meta { color: #59636e; font-size: .85rem; margin-bottom: 2rem;
+  padding-bottom: 1rem; border-bottom: 1px dashed #d1d9e0; }
+@media (prefers-color-scheme: dark) {
+  body { color: #e6edf3; background: #0d1117; }
+  a { color: #4493f8; }
+  h1, h2 { border-bottom-color: #30363d; }
+  pre { background: #161b22; }
+  th { background: #161b22; }
+  blockquote { color: #9198a1; border-left-color: #30363d; }
+  th, td { border-color: #30363d; }
+  hr { border-top-color: #30363d; }
+  .doc-meta { border-bottom-color: #30363d; }
+}
+</style>
+</head>
+<body>
+<main>
+<h1 id="link-audio-end-to-end-テスト---チェックリスト">Link Audio End-to-End テスト - チェックリスト</h1>
+<p><strong>作成日</strong>: 2026-05-07
+<strong>目的</strong>: Epic #187 / Step 2 + Step 3.x 着地後の Live 12.4+ 連携の動作確認
+<strong>担当</strong>: AI（テストファイル作成） + ユーザー（Live 操作と音質確認）</p>
+<hr>
+<h2 id="前提環境">前提環境</h2>
+<ul>
+<li><input disabled="" type="checkbox"> macOS (Apple Silicon)</li>
+<li><input disabled="" type="checkbox"> OrbitScore VS Code 拡張がインストール済 (<code>.vsix</code> from Step 4 release)</li>
+<li><input disabled="" type="checkbox"> Ableton Live 12.4+ 起動可能、 Link 機能有効</li>
+<li><input disabled="" type="checkbox"> <code>OrbitLinkAudio.scx</code> plugin が <code>~/Library/Application Support/SuperCollider/Extensions/</code> にある (Step 2 / Step 4 deliverable)</li>
+<li><input disabled="" type="checkbox"> テスト用 .orbs ファイル: <code>examples/10_link_audio.orbs</code></li>
+</ul>
+<hr>
+<h2 id="plugin-単体検収-step-22-完了で実施可能">Plugin 単体検収 (Step 2.2 完了で実施可能)</h2>
+<p>§A-G の統合 E2E は Step 4 (boot pipeline 統合 + <code>.vsix</code> 同梱) 完了後に実施する想定。 Step 2.2 (<code>OrbitLinkAudioOut</code> UGen 実装、 Issue #198 / PR #199) 単体までは以下で検収できる:</p>
+<ul>
+<li><p><strong>自動検収</strong> — <code>packages/sc-link-audio/scripts/verify-plugin.scd</code></p>
+<pre><code class="language-bash">/Applications/SuperCollider.app/Contents/MacOS/sclang \
+  packages/sc-link-audio/scripts/verify-plugin.scd
+</code></pre>
+<p>確認項目: sclang クラス load / scsynth boot (no SIGKILL) / <code>/cmd /orbit/registerLinkAudioChannel</code> 受理 / SynthDef instantiation / 2 秒の <code>next()</code> 走行</p>
+</li>
+<li><p><strong>Live UI 受信の手動検収</strong> — <code>packages/sc-link-audio/scripts/verify-live-receive.scd</code></p>
+<pre><code class="language-bash">/Applications/SuperCollider.app/Contents/MacOS/sclang \
+  packages/sc-link-audio/scripts/verify-live-receive.scd
+</code></pre>
+<p>Live 12.4+ を開いて Link Audio source に <code>test-tone</code> channel が列挙され、 audio が受信できるか operator が目視確認 (30 秒間 publish)。 これは下記 §B (single channel publish) の subset。</p>
+</li>
+</ul>
+<hr>
+<h2 id="テストフロー">テストフロー</h2>
+<h3 id="a-plugin-検出と起動">A. Plugin 検出と起動</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <strong>A-1</strong>: VS Code 拡張のステータスバー → <code>🚀 Start Engine</code> でエンジン起動</li>
+<li><input disabled="" type="checkbox"> <strong>A-2</strong>: ログに <code>LinkAudio plugin loaded</code> 相当の表示が出る (Step 4 で wire される flip)</li>
+<li><input disabled="" type="checkbox"> <strong>A-3</strong>: 一方、 plugin が無い環境で <code>examples/10_link_audio.orbs</code> を実行 → console に「LinkAudio plugin not loaded — falls back to the hardware bus」 が <strong>1 回だけ</strong> 表示される (Step 3.2 fallback)</li>
+</ul>
+<h3 id="b-single-channel-publish">B. Single channel publish</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <strong>B-1</strong>: <code>examples/10_link_audio.orbs</code> を VS Code で開く</li>
+<li><input disabled="" type="checkbox"> <strong>B-2</strong>: ファイル全体を保存して定義評価 (<code>Cmd+S</code>)</li>
+<li><input disabled="" type="checkbox"> <strong>B-3</strong>: Live 12.4 を起動、 Link を有効化</li>
+<li><input disabled="" type="checkbox"> <strong>B-4</strong>: Live で空のセッションを開き、 Audio トラックを 2 つ作成 (kick / snare)</li>
+<li><input disabled="" type="checkbox"> <strong>B-5</strong>: 各 Audio トラックの &quot;Audio From&quot; で OrbitScore peer の <code>kick</code> / <code>snare</code> を選択</li>
+<li><input disabled="" type="checkbox"> <strong>B-6</strong>: OrbitScore で <code>RUN(kick, snare)</code> を実行 (Step 3.5 example の最後)</li>
+<li><input disabled="" type="checkbox"> <strong>B-7</strong>: Live のメーターで両 channel に音が来ていることを確認 (kick / snare の発音タイミングが Live の grid と一致)</li>
+</ul>
+<h3 id="c-sum-by-name-drums-bus">C. Sum-by-name (drums bus)</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <strong>C-1</strong>: Live で 1 つの Audio トラックを <code>drums</code> channel に向ける</li>
+<li><input disabled="" type="checkbox"> <strong>C-2</strong>: OrbitScore で <code>RUN(hat_closed, hat_open, ghost)</code> (3 sequence が同 <code>drums</code> channel)</li>
+<li><input disabled="" type="checkbox"> <strong>C-3</strong>: Live メーターで、 全 3 sequence のミックス済み音声が <strong>1 channel に合成されて</strong> 受信されていることを確認</li>
+<li><input disabled="" type="checkbox"> <strong>C-4</strong>: ghost sequence の <code>gain(-12).pan(-30)</code> が Live 受信音に反映されている (左寄りで小さい音)</li>
+</ul>
+<h3 id="d-tempo--phase-双方向同期">D. Tempo / phase 双方向同期</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <strong>D-1</strong>: OrbitScore 側 <code>global.tempo(140)</code> を実行 → Live の Tempo display が <code>140 BPM</code> に追従</li>
+<li><input disabled="" type="checkbox"> <strong>D-2</strong>: Live 側で Tempo を <code>100</code> に変更 → OrbitScore のスケジューラが 100 BPM 相当の間隔で発音</li>
+<li><input disabled="" type="checkbox"> <strong>D-3</strong>: Live 側で Play/Stop 操作 → OrbitScore の scheduler が同期して start/stop (LinkAudio embedded transport)</li>
+</ul>
+<h3 id="e-sample-rate-mismatch-detection">E. Sample rate mismatch detection</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <strong>E-1</strong>: Live セッション SR を <code>44100</code> に変更</li>
+<li><input disabled="" type="checkbox"> <strong>E-2</strong>: OrbitScore で <code>global.linkAudio()</code> (auto-detect) を実行 → console に target SR が <code>44100</code> に解決された旨が表示 (Step 2 plugin の auto-detect 結果)</li>
+<li><input disabled="" type="checkbox"> <strong>E-3</strong>: あるいは <code>global.linkAudio(44100)</code> で明示宣言 → 同上、 mismatch 警告なし</li>
+<li><input disabled="" type="checkbox"> <strong>E-4</strong>: Live セッション SR を <code>48000</code> に戻し、 <code>global.linkAudio(44100)</code> で実行 → ring buffer の連続ドロップ警告が console に出るか、 plugin 内で 44100→48000 のリサンプリングが行われる (Step 2 実装方針による)</li>
+</ul>
+<h3 id="f-hardware-fallback">F. Hardware fallback</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <strong>F-1</strong>: <code>global.linkAudio()</code> を <strong>書かない</strong> .orbs ファイルを作成</li>
+<li><input disabled="" type="checkbox"> <strong>F-2</strong>: その中で <code>seq.output(&quot;test&quot;)</code> を呼ぶ</li>
+<li><input disabled="" type="checkbox"> <strong>F-3</strong>: 実行 → console に <code>global.linkAudio()</code> 未宣言の警告 (1 回のみ)</li>
+<li><input disabled="" type="checkbox"> <strong>F-4</strong>: 音声は通常通り hardware (ローカルスピーカー) から出る</li>
+</ul>
+<h3 id="g-plugin-不在時のフォールバック-step-32-確認済">G. Plugin 不在時のフォールバック (Step 3.2 確認済)</h3>
+<ul>
+<li><input disabled="" type="checkbox"> <strong>G-1</strong>: <code>~/Library/Application Support/SuperCollider/Extensions/OrbitLinkAudio.scx</code> を一時的に外す</li>
+<li><input disabled="" type="checkbox"> <strong>G-2</strong>: VS Code でエンジン再起動</li>
+<li><input disabled="" type="checkbox"> <strong>G-3</strong>: <code>global.linkAudio()</code> 宣言 + <code>seq.output(&quot;kick&quot;)</code> を実行</li>
+<li><input disabled="" type="checkbox"> <strong>G-4</strong>: console に「LinkAudio plugin not loaded — falls back to the hardware bus」 が <strong>1 回だけ</strong> 表示される</li>
+<li><input disabled="" type="checkbox"> <strong>G-5</strong>: 音声はローカルスピーカーから出る (Live は受信しない)</li>
+<li><input disabled="" type="checkbox"> <strong>G-6</strong>: plugin を戻して再起動 → 通常の LinkAudio 経路に戻る</li>
+</ul>
+<hr>
+<h2 id="既知の制限-v120">既知の制限 (v1.2.0)</h2>
+<ul>
+<li>ランタイム切替 (演奏中の <code>linkAudio()</code> on/off) は未対応 (v1.2.x で検討)</li>
+<li>mono / stereo (2ch まで)、 サラウンドや MultiChannel 出力は LinkAudio 仕様外</li>
+<li>LinkAudio API は alpha のため、 Live 側のマイナーアップデートで挙動が変わる可能性あり (<code>packages/sc-link-audio/src/link_audio_facade.hpp</code> で吸収)</li>
+<li>macOS arm64 only (Linux / Windows ビルドは scope 外)</li>
+</ul>
+<hr>
+<h2 id="トラブルシュート">トラブルシュート</h2>
+<table>
+<thead>
+<tr>
+<th>症状</th>
+<th>原因候補</th>
+<th>対処</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Live で channel 一覧に出ない</td>
+<td>Live 12.4 未満 / Link Audio 設定オフ</td>
+<td>Live のバージョン確認、 環境設定 → Link で Link Audio 有効化</td>
+</tr>
+<tr>
+<td>連続ドロップ / プチプチ</td>
+<td>publisher / subscriber SR 不一致</td>
+<td><code>global.linkAudio(N)</code> で明示、 Live セッション SR を一致</td>
+</tr>
+<tr>
+<td>音が出ない (Live メーター反応なし)</td>
+<td>scsynth が boot していない</td>
+<td>VS Code ステータスバーで engine 状態確認、 <code>🚀 Start Engine</code></td>
+</tr>
+<tr>
+<td>同名 channel 合成されない</td>
+<td>別 plugin instance / 別 peer</td>
+<td>OrbitScore は単一 peer 前提。 plugin の channel registry を再起動でリセット</td>
+</tr>
+<tr>
+<td>console に warn が連発</td>
+<td>未対応シナリオ (本仕様外)</td>
+<td>warn 文を確認、 該当 issue (Epic #187) に再現条件を report</td>
+</tr>
+</tbody></table>
+<hr>
+<h2 id="関連ドキュメント">関連ドキュメント</h2>
+<ul>
+<li><a href="core/INSTRUCTION_ORBITSCORE_DSL.html"><code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code></a> §8.1 — Link Audio 仕様</li>
+<li><a href="research/LINK_AUDIO_API.html"><code>docs/research/LINK_AUDIO_API.md</code></a> — Link Audio SDK 一次情報</li>
+<li><code>examples/10_link_audio.orbs</code> — 動作する .orbs サンプル</li>
+<li>Epic #187 — 全 sub-step のトラッキング</li>
+</ul>
+
+</main>
+</body>
+</html>
