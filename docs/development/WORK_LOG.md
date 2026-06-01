@@ -17,6 +17,86 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.89 Issue #221 — audioPath search resolution + sample bank lookup (May 10, 2026)
+
+**Date**: May 10, 2026
+**Status**: ✅ DONE (実装、テスト、docs 更新完了。 commit hash: `bacf4e0`)
+**Issue**: signalcompose/orbitscore#221
+**Branch**: `claude/review-issue-221-RkVzz`
+**Version target**: v1.2.1 (forward-only patch、 v1.2.0 LinkAudio とは独立)
+
+**動機**: TidalCycles 系 sample collection (Clean-Samples 等) を OrbitScore で利用可能にする。 SuperDirt / sclang を経由せず、 単なる WAV file 群として独立配布されている collection を user が自分で配置し、 OrbitScore はその sample 名 (`bd`, `sd`, `hh:5` 等) で参照できる仕組みを提供。 既存 TidalCycles user の barrier を下げ、 既存 `audio() + chop() + play()` の DSL style がそのまま使えるようにする。
+
+**設計判断 (Hybrid 採用)**:
+
+Issue #221 本文の strict 仕様 (`audioPath(string[])` のみ、 bare name は常に bank lookup) を厳密適用すると、 既存の 30+ `.orbs` ファイル / VS Code extension / unit test (旧 `audioPath(string)` + `audio("kick.wav")` join 挙動依存) が全部 break する。 v1.2.1 は patch version で breaking change 想定外のため、 user に確認のうえ **Hybrid 方式** を採用:
+
+- `audioPath()` は `string | string[] | variadic` の 3 形式を受ける (旧 single string と新 array の共存)
+- `audio()` は path-direct → bank lookup → legacy join の優先順で解決
+- 拡張子付き bare name (`kick.wav`) は bank lookup hit せず legacy join 経路に fallback
+- 既存 30+ `.orbs` ファイル / VS Code extension / 既存 7 件の unit test を一切触らずに新機能追加
+
+**実装内容**:
+
+1. **新規 `packages/engine/src/core/global/audio-resolver.ts`** (約 165 行)
+   - `looksLikePath(spec)` — path-direct 判定
+   - `expandHome(p)` — `~`, `~/foo` を `os.homedir()` で展開
+   - `resolveAudio({ spec, audioPaths, documentDirectory, cache })` — 統合 resolver
+   - `bd:N` の variant index parsing (modulo wraparound、 NaN/負数/非整数は throw)
+   - 拡張子 filter `wav|aif|aiff|mp3|mp4|flac` (大文字小文字不問)
+   - 解決失敗時の error には available banks の hint 同梱
+
+2. **`packages/engine/src/core/global/audio-manager.ts`** 拡張
+   - 内部 storage を `_audioPath: string` → `_audioPaths: string[]` に変更
+   - `audioPath(...values: (string | string[])[]): string | this` で variadic + array 両対応
+   - 解決結果 cache (`Map<string, string>`)、 audioPath 再設定 / documentDirectory 変更で invalidate
+   - getter `audioPath()` は配列の 0 番目を string で返す (legacy compat)
+   - `resolve(spec)` を新設、 内部で audio-resolver に委譲
+
+3. **`packages/engine/src/core/global/types.ts`** — `GlobalState` に `audioPaths: string[]` 追加 (旧 `audioPath: string` も legacy compat で残す)
+
+4. **`packages/engine/src/core/global.ts`**
+   - `audioPath()` を variadic 化、 audio-manager に転送
+   - `resolveAudioSpec(spec): string` を新設、 audio-manager `.resolve()` への薄い wrapper
+
+5. **`packages/engine/src/core/sequence.ts`** の `audio()` 簡素化
+   - 自前の path resolution logic を削除
+   - `this.global.resolveAudioSpec(filepath)` 1 行に置換
+   - 既存 chop / `_audioFilePath` 周辺は変更なし
+
+6. **新規 `tests/core/audio-bank-resolution.spec.ts`** (39 件)
+   - looksLikePath / expandHome の pure function tests
+   - resolveAudio の path-direct / bank lookup / `bank:N` variant / multi-path traversal / 拡張子 filter / cache hit
+   - 解決失敗時の error message validation
+   - Global.audioPath() の variadic + array + `~/` 展開
+   - Sequence.audio() integration (bare name, legacy join, `~/`, cache invalidation)
+
+**テスト結果**:
+- 全 447 件 pass (424 passed, 23 skipped) — 旧 230 から 217 件増加、 既存全 pass
+- 新規 39 件 (audio-bank-resolution) + 既存 7 件 (audio-path-resolution) 全 green
+- `npm run build` clean、 `npm run lint` clean (1 件の warning は既存の audio-slicer.spec.ts、 本件と無関係)
+
+**触らなかった領域** (Issue 仕様の 「既存 layer に手を入れない」 を遵守):
+- `BufferManager` / OSC layer / `EventScheduler` / DSL parser (`tokenizer.ts`, `parse-expression.ts`)
+- VS Code extension の completion / diagnostic (legacy single-string API でも動作継続)
+- 既存の 30+ `test-assets/scores/*.orbs` ファイル
+
+**Sample collection license に関する文書化**:
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` で Clean-Samples (GPL-3.0) を最初の推奨として案内
+- Dirt-Samples は LICENSE 不在 / provenance unknown を明示、 OrbitScore 側 bundle / auto-download は実装しない方針を明記
+- README 更新 (本変更と同一 PR 内で実施)
+
+**変更ファイル**:
+- 新規: `packages/engine/src/core/global/audio-resolver.ts`、 `tests/core/audio-bank-resolution.spec.ts`
+- 編集: `packages/engine/src/core/global/audio-manager.ts`、 `packages/engine/src/core/global/types.ts`、 `packages/engine/src/core/global.ts`、 `packages/engine/src/core/sequence.ts`、 `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`、 `docs/development/WORK_LOG.md`、 `README.md`
+
+**Next steps**:
+- Issue #221 を closing する PR 作成 (ユーザー承認後)
+- v1.2.1 release notes に本機能を含める
+- `.orbs` parser への配列 literal 対応は別 issue (現状 variadic で代替可能)
+
+---
+
 ### 6.88 Release v1.1.1 — quantize patch ship (May 09, 2026)
 
 **Date**: May 09, 2026 (tag push: May 09 16:09 UTC, re-tag: 16:26 UTC)

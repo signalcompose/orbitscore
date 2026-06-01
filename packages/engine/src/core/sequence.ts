@@ -270,24 +270,10 @@ export class Sequence {
   }
 
   audio(filepath: string): this {
-    // Calculate full path - resolve to absolute at set time
-    const globalState = this.global.getState()
-    let fullPath: string
-
-    if (path.isAbsolute(filepath)) {
-      fullPath = filepath
-    } else if (globalState.audioPath) {
-      // Join with global audioPath (already absolute)
-      fullPath = path.join(globalState.audioPath, filepath)
-    } else if (globalState.documentDirectory) {
-      // Resolve relative to the .orbs file's directory
-      fullPath = path.resolve(globalState.documentDirectory, filepath)
-    } else {
-      throw new Error(
-        `Cannot resolve relative audio("${filepath}"): no audioPath() or document context. ` +
-          `Set audioPath() first, save the .orbs file, or use an absolute path.`,
-      )
-    }
+    // Resolve to absolute path. Supports path-direct forms (./, ../, ~/, /,
+    // contains '/') and bare bank names like "bd" or "bd:2" via the global
+    // audioPath search list. See audio-resolver.ts for the rules.
+    const fullPath = this.global.resolveAudioSpec(filepath)
 
     this._audioFilePath = fullPath
     this._chopDivisions = 1 // Reset chop when audio changes
