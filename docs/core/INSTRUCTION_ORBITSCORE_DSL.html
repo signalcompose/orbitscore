@@ -104,30 +104,62 @@ global.beat(5 by 4)   // 5/4
 global.beat(9 by 8)   // 9/8
 global.beat(3, 4)     // alternative syntax: 3/4
 </code></pre>
-<h3 id="audio-path-base-directory">Audio Path (Base Directory)</h3>
-<pre><code class="language-js">global.audioPath(&quot;../test-assets/audio&quot;)   // set base directory for audio files
+<h3 id="audio-path-search-list">Audio Path (Search List)</h3>
+<pre><code class="language-js">global.audioPath(&quot;../test-assets/audio&quot;)                  // 旧: 単一の base directory
+global.audioPath(&quot;~/Clean-Samples&quot;, &quot;./samples&quot;)          // v1.2.1+: 複数 search path (variadic)
+global.audioPath([&quot;~/Clean-Samples&quot;, &quot;./samples&quot;])        // v1.2.1+: 配列形式 (TypeScript ergonomic)
 </code></pre>
-<p><strong>Implementation Details</strong>:</p>
+<p><strong>Forms</strong>:</p>
 <ul>
-<li>Sets the base directory for resolving relative audio file paths</li>
-<li>When using <code>.audio(&quot;kick.wav&quot;)</code>, the path is resolved relative to:<ol>
-<li><strong>Document directory</strong> (if set by VS Code extension - automatic)</li>
-<li><strong>audioPath directory</strong> (if set via <code>global.audioPath()</code>)</li>
-<li><strong>Current working directory</strong> (fallback)</li>
-</ol>
-</li>
-<li><strong>Automatic document directory</strong>: VS Code extension automatically sets the document directory based on the <code>.orbs</code> file location</li>
-<li><strong>Singleton behavior</strong>: Setting the same path multiple times is a no-op (skipped)</li>
-<li>Path resolution priority: Absolute path &gt; Document directory &gt; audioPath &gt; CWD</li>
+<li><code>audioPath()</code> — getter, returns the first entry as a string (legacy compat)</li>
+<li><code>audioPath(&quot;a&quot;)</code> — single search path (legacy)</li>
+<li><code>audioPath(&quot;a&quot;, &quot;b&quot;, &quot;c&quot;)</code> — variadic, multiple search paths in priority order</li>
+<li><code>audioPath([&quot;a&quot;, &quot;b&quot;])</code> — array form</li>
 </ul>
-<p><strong>Example</strong>:</p>
-<pre><code class="language-js">// In /Users/yamato/projects/myproject/songs/track01.orbs
-var global = init GLOBAL
-global.audioPath(&quot;../audio&quot;)  // resolves to /Users/yamato/projects/myproject/audio
+<p>各 entry には <code>~/</code> を home directory への展開記号として使える。相対 path は <code>.orbs</code> ファイル直下に対して解決。</p>
+<p><strong>Audio file resolution rules</strong> (適用順):</p>
+<p><code>.audio(spec)</code> の <code>spec</code> 文字列は次のいずれかとして解釈される:</p>
+<ol>
+<li><p><strong>Path-direct</strong> — <code>./</code>, <code>../</code>, <code>~/</code>, <code>/</code> で始まる、または <code>/</code> を含む
+→ 既存挙動の path 解決 (<code>~/</code> は home に展開、相対 path は document directory 基準)</p>
+</li>
+<li><p><strong>Bank lookup</strong> — bare name (separator なし)
+→ <code>audioPath</code> の各 entry を順に traverse、<code>&lt;entry&gt;/&lt;bank&gt;/</code> フォルダ内の sorted Nth audio file を返す
+→ variant index は <code>bd:N</code> 表記で指定 (file 数で modulo wrap)</p>
+</li>
+<li><p><strong>Legacy fallback</strong> — bare name + 拡張子 (例 <code>kick.wav</code>) で bank lookup が hit しない場合
+→ 各 entry 内に該当 file が物理的にあれば直接返す。なければ最初の entry と join (旧 <code>audioPath(string) + audio(&quot;file.wav&quot;)</code> 互換)</p>
+</li>
+</ol>
+<p><strong>Examples</strong>:</p>
+<pre><code class="language-js">// 1. Path-direct
+seq.audio(&quot;./pad.wav&quot;)           // ./pad.wav (そのまま)
+seq.audio(&quot;/abs/path/kick.wav&quot;)  // /abs/path/kick.wav
+seq.audio(&quot;~/sample.wav&quot;)        // ~ を home directory に展開
 
-var kick = init global.seq
-kick.audio(&quot;kick.wav&quot;)  // resolves to /Users/yamato/projects/myproject/audio/kick.wav
+// 2. Bank lookup (TidalCycles 系 sample collection 互換)
+global.audioPath(&quot;~/Clean-Samples&quot;)
+seq.audio(&quot;bd&quot;)     // ~/Clean-Samples/bd/ 内の sorted 0 番目
+seq.audio(&quot;bd:2&quot;)   // ~/Clean-Samples/bd/ 内の sorted 2 番目
+seq.audio(&quot;hh:5&quot;)   // ~/Clean-Samples/hh/ 内の sorted 5 番目 (file 数で modulo)
+
+// 3. Legacy join (互換)
+global.audioPath(&quot;../audio&quot;)
+seq.audio(&quot;kick.wav&quot;)  // ../audio/kick.wav (bank 不在時の fallback)
 </code></pre>
+<p><strong>Supported audio extensions</strong> (大文字小文字不問): <code>wav</code>, <code>aif</code>, <code>aiff</code>, <code>mp3</code>, <code>mp4</code>, <code>flac</code></p>
+<p><strong>Resolution cache</strong>:</p>
+<ul>
+<li>解決結果は in-memory <code>Map</code> で cache</li>
+<li><code>audioPath()</code> 再設定時または <code>setDocumentDirectory()</code> 変更時に invalidate</li>
+<li>live coding 中の繰り返し呼び出しを高速化</li>
+</ul>
+<p><strong>Sample collection 案内</strong>:</p>
+<ul>
+<li>✅ <a href="https://github.com/tidalcycles/Clean-Samples">Clean-Samples</a> (GPL-3.0、properly sourced) を最初の推奨</li>
+<li>⚠️  <a href="https://github.com/tidalcycles/Dirt-Samples">Dirt-Samples</a> は LICENSE file 不在で provenance largely unknown (yaxu maintainer 自認)。OrbitScore は bundle / auto-download せず、user 個人利用の判断に委ねる</li>
+<li>OrbitScore 自体は sample collection を再配布しない設計</li>
+</ul>
 <p><strong>Note</strong>:</p>
 <ul>
 <li>tick() and key() have been removed from the current audio-based implementation</li>

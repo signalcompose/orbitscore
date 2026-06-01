@@ -64,32 +64,117 @@ li { margin: .2em 0; }
 </ul>
 <hr>
 <h2 id="recent-work">Recent Work</h2>
-<h3 id="689-docs-を-markdown-から-html-管理へ移行-jun-01-2026">6.89 docs を Markdown から HTML 管理へ移行 (Jun 01, 2026)</h3>
+<h3 id="690-docs-を-markdown-から-html-管理へ移行-jun-01-2026">6.90 docs を Markdown から HTML 管理へ移行 (Jun 01, 2026)</h3>
 <p><strong>Date</strong>: Jun 01, 2026
 <strong>Status</strong>: ✅ DONE
 <strong>Branch</strong>: <code>claude/peaceful-knuth-pOU7I</code></p>
 <p><strong>動機</strong>: <code>/docs</code> 配下のローカル開発ドキュメントを、今後は HTML 形式で管理する方針に変更。公開向け学習サイト (<code>sites/dev/</code>, <code>sites/user/</code>) は従来どおり VitePress による別管理（Markdown ソース）であり、本移行の対象外。</p>
 <p><strong>変更内容</strong>:</p>
 <ul>
-<li><code>docs/</code> 配下の全 Markdown (46 ファイル) を自己完結型の <code>.html</code> へ変換し、<code>.md</code> ソースを削除（真の移行）<ul>
+<li><code>docs/</code> 配下の全 Markdown を自己完結型の <code>.html</code> へ変換し、<code>.md</code> ソースを削除（真の移行）<ul>
 <li>変換は <code>marked</code> で本文を生成し、共通 CSS を埋め込んだ HTML テンプレートでラップ（ブラウザでオフライン参照可能）</li>
+<li>見出しに GitHub 互換 slug の id を付与しページ内アンカーを維持</li>
 <li><code>docs/</code> 内部の相対 <code>.md</code> リンクは <code>.html</code> へ自動リライト。<code>docs/</code> 外（ルートの <code>README.md</code> / <code>CLAUDE.md</code> 等、<code>sites/</code> 配下）を指すリンクは <code>.md</code> のまま維持</li>
 </ul>
 </li>
-<li>内容更新: <code>docs/core/INDEX.html</code> の Current release を v1.1.0 → v1.1.1（quantize #212 反映）、Last updated を更新</li>
-<li>ドキュメント形式ルールを追記:<ul>
-<li><code>CLAUDE.md</code> の Documentation Rules に「<code>/docs</code> は HTML 管理」を明記</li>
-<li><code>docs/core/PROJECT_RULES</code> の File Structure Rules に同ルールを追記</li>
-</ul>
-</li>
-<li>ルート参照の更新: <code>README.md</code> / <code>CONTRIBUTING.md</code> 内の <code>docs/*.md</code> リンクを <code>.html</code> へ更新</li>
-</ul>
-<p><strong>対象外 / 既知の follow-up</strong>:</p>
-<ul>
-<li><code>sites/</code> 配下から <code>docs/*.md</code> を指す GitHub blob URL は別管理のため本 PR では変更せず（公開サイト側の運用で対応）</li>
-<li><code>packages/**/src/</code> のコメント内に残る <code>docs/*.md</code> 参照（プロセス上の参照、機能影響なし）</li>
+<li>内容更新: <code>docs/core/INDEX</code> の Current release を v1.1.0 → v1.1.1（quantize #212 反映）、Last updated を更新</li>
+<li>ドキュメント形式ルールを追記: <code>CLAUDE.md</code> の Documentation Rules と <code>docs/core/PROJECT_RULES</code> の File Structure Rules に「<code>/docs</code> は HTML 管理」を明記</li>
+<li>ルート参照の更新: <code>README.md</code> / <code>CLAUDE.md</code> / <code>CONTRIBUTING.md</code> / <code>CHANGELOG.md</code> 内の <code>docs/*.md</code> リンクを <code>.html</code> へ更新</li>
 </ul>
 <p><strong>追補 (同日)</strong>: <code>CLAUDE.md</code> の Quick Reference に残っていた省略パス参照（例 <code>docs/INDEX.md</code> ＝実体は <code>docs/core/INDEX.html</code>）16 箇所を正しい <code>.html</code> 実体パスへ修正。あわせて <code>.claude/hooks/pre-commit-check.sh</code> の WORK_LOG 参照を <code>.md</code> → <code>.html</code> に追従。</p>
+<p><strong>main マージ (#221)</strong>: 本ブランチの HTML 移行中に main へ #221（audioPath search resolution + sample bank lookup）が merge され、<code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code> と <code>docs/development/WORK_LOG.md</code> が modify/delete でコンフリクト。main の Markdown 変更を取り込んだうえで HTML へ再変換し、<code>.md</code> は削除維持で解決。</p>
+<hr>
+<h3 id="689-issue-221--audiopath-search-resolution--sample-bank-lookup-may-10-2026">6.89 Issue #221 — audioPath search resolution + sample bank lookup (May 10, 2026)</h3>
+<p><strong>Date</strong>: May 10, 2026
+<strong>Status</strong>: ✅ DONE (実装、テスト、docs 更新完了。 commit hash: <code>bacf4e0</code>)
+<strong>Issue</strong>: signalcompose/orbitscore#221
+<strong>Branch</strong>: <code>claude/review-issue-221-RkVzz</code>
+<strong>Version target</strong>: v1.2.1 (forward-only patch、 v1.2.0 LinkAudio とは独立)</p>
+<p><strong>動機</strong>: TidalCycles 系 sample collection (Clean-Samples 等) を OrbitScore で利用可能にする。 SuperDirt / sclang を経由せず、 単なる WAV file 群として独立配布されている collection を user が自分で配置し、 OrbitScore はその sample 名 (<code>bd</code>, <code>sd</code>, <code>hh:5</code> 等) で参照できる仕組みを提供。 既存 TidalCycles user の barrier を下げ、 既存 <code>audio() + chop() + play()</code> の DSL style がそのまま使えるようにする。</p>
+<p><strong>設計判断 (Hybrid 採用)</strong>:</p>
+<p>Issue #221 本文の strict 仕様 (<code>audioPath(string[])</code> のみ、 bare name は常に bank lookup) を厳密適用すると、 既存の 30+ <code>.orbs</code> ファイル / VS Code extension / unit test (旧 <code>audioPath(string)</code> + <code>audio(&quot;kick.wav&quot;)</code> join 挙動依存) が全部 break する。 v1.2.1 は patch version で breaking change 想定外のため、 user に確認のうえ <strong>Hybrid 方式</strong> を採用:</p>
+<ul>
+<li><code>audioPath()</code> は <code>string | string[] | variadic</code> の 3 形式を受ける (旧 single string と新 array の共存)</li>
+<li><code>audio()</code> は path-direct → bank lookup → legacy join の優先順で解決</li>
+<li>拡張子付き bare name (<code>kick.wav</code>) は bank lookup hit せず legacy join 経路に fallback</li>
+<li>既存 30+ <code>.orbs</code> ファイル / VS Code extension / 既存 7 件の unit test を一切触らずに新機能追加</li>
+</ul>
+<p><strong>実装内容</strong>:</p>
+<ol>
+<li><p><strong>新規 <code>packages/engine/src/core/global/audio-resolver.ts</code></strong> (約 165 行)</p>
+<ul>
+<li><code>looksLikePath(spec)</code> — path-direct 判定</li>
+<li><code>expandHome(p)</code> — <code>~</code>, <code>~/foo</code> を <code>os.homedir()</code> で展開</li>
+<li><code>resolveAudio({ spec, audioPaths, documentDirectory, cache })</code> — 統合 resolver</li>
+<li><code>bd:N</code> の variant index parsing (modulo wraparound、 NaN/負数/非整数は throw)</li>
+<li>拡張子 filter <code>wav|aif|aiff|mp3|mp4|flac</code> (大文字小文字不問)</li>
+<li>解決失敗時の error には available banks の hint 同梱</li>
+</ul>
+</li>
+<li><p><strong><code>packages/engine/src/core/global/audio-manager.ts</code></strong> 拡張</p>
+<ul>
+<li>内部 storage を <code>_audioPath: string</code> → <code>_audioPaths: string[]</code> に変更</li>
+<li><code>audioPath(...values: (string | string[])[]): string | this</code> で variadic + array 両対応</li>
+<li>解決結果 cache (<code>Map&lt;string, string&gt;</code>)、 audioPath 再設定 / documentDirectory 変更で invalidate</li>
+<li>getter <code>audioPath()</code> は配列の 0 番目を string で返す (legacy compat)</li>
+<li><code>resolve(spec)</code> を新設、 内部で audio-resolver に委譲</li>
+</ul>
+</li>
+<li><p><strong><code>packages/engine/src/core/global/types.ts</code></strong> — <code>GlobalState</code> に <code>audioPaths: string[]</code> 追加 (旧 <code>audioPath: string</code> も legacy compat で残す)</p>
+</li>
+<li><p><strong><code>packages/engine/src/core/global.ts</code></strong></p>
+<ul>
+<li><code>audioPath()</code> を variadic 化、 audio-manager に転送</li>
+<li><code>resolveAudioSpec(spec): string</code> を新設、 audio-manager <code>.resolve()</code> への薄い wrapper</li>
+</ul>
+</li>
+<li><p><strong><code>packages/engine/src/core/sequence.ts</code></strong> の <code>audio()</code> 簡素化</p>
+<ul>
+<li>自前の path resolution logic を削除</li>
+<li><code>this.global.resolveAudioSpec(filepath)</code> 1 行に置換</li>
+<li>既存 chop / <code>_audioFilePath</code> 周辺は変更なし</li>
+</ul>
+</li>
+<li><p><strong>新規 <code>tests/core/audio-bank-resolution.spec.ts</code></strong> (39 件)</p>
+<ul>
+<li>looksLikePath / expandHome の pure function tests</li>
+<li>resolveAudio の path-direct / bank lookup / <code>bank:N</code> variant / multi-path traversal / 拡張子 filter / cache hit</li>
+<li>解決失敗時の error message validation</li>
+<li>Global.audioPath() の variadic + array + <code>~/</code> 展開</li>
+<li>Sequence.audio() integration (bare name, legacy join, <code>~/</code>, cache invalidation)</li>
+</ul>
+</li>
+</ol>
+<p><strong>テスト結果</strong>:</p>
+<ul>
+<li>全 447 件 pass (424 passed, 23 skipped) — 旧 230 から 217 件増加、 既存全 pass</li>
+<li>新規 39 件 (audio-bank-resolution) + 既存 7 件 (audio-path-resolution) 全 green</li>
+<li><code>npm run build</code> clean、 <code>npm run lint</code> clean (1 件の warning は既存の audio-slicer.spec.ts、 本件と無関係)</li>
+</ul>
+<p><strong>触らなかった領域</strong> (Issue 仕様の 「既存 layer に手を入れない」 を遵守):</p>
+<ul>
+<li><code>BufferManager</code> / OSC layer / <code>EventScheduler</code> / DSL parser (<code>tokenizer.ts</code>, <code>parse-expression.ts</code>)</li>
+<li>VS Code extension の completion / diagnostic (legacy single-string API でも動作継続)</li>
+<li>既存の 30+ <code>test-assets/scores/*.orbs</code> ファイル</li>
+</ul>
+<p><strong>Sample collection license に関する文書化</strong>:</p>
+<ul>
+<li><code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code> で Clean-Samples (GPL-3.0) を最初の推奨として案内</li>
+<li>Dirt-Samples は LICENSE 不在 / provenance unknown を明示、 OrbitScore 側 bundle / auto-download は実装しない方針を明記</li>
+<li>README 更新 (本変更と同一 PR 内で実施)</li>
+</ul>
+<p><strong>変更ファイル</strong>:</p>
+<ul>
+<li>新規: <code>packages/engine/src/core/global/audio-resolver.ts</code>、 <code>tests/core/audio-bank-resolution.spec.ts</code></li>
+<li>編集: <code>packages/engine/src/core/global/audio-manager.ts</code>、 <code>packages/engine/src/core/global/types.ts</code>、 <code>packages/engine/src/core/global.ts</code>、 <code>packages/engine/src/core/sequence.ts</code>、 <code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code>、 <code>docs/development/WORK_LOG.md</code>、 <code>README.md</code></li>
+</ul>
+<p><strong>Next steps</strong>:</p>
+<ul>
+<li>Issue #221 を closing する PR 作成 (ユーザー承認後)</li>
+<li>v1.2.1 release notes に本機能を含める</li>
+<li><code>.orbs</code> parser への配列 literal 対応は別 issue (現状 variadic で代替可能)</li>
+</ul>
+<hr>
 <h3 id="688-release-v111--quantize-patch-ship-may-09-2026">6.88 Release v1.1.1 — quantize patch ship (May 09, 2026)</h3>
 <p><strong>Date</strong>: May 09, 2026 (tag push: May 09 16:09 UTC, re-tag: 16:26 UTC)
 <strong>Status</strong>: ✅ DONE (GitHub Release v1.1.1 作成済、 Marketplace/Open VSX は gate off で skip)
