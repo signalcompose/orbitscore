@@ -81,7 +81,7 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 - ✅ Explicit scheduler control (no auto-start)
 - ✅ Polymeter support (independent time signatures per sequence)
 
-See [WORK_LOG.md](docs/development/WORK_LOG.html) for detailed resolution notes.
+See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
 
 ## Technology Stack
 
@@ -172,7 +172,7 @@ See [`docs/development/IMPLEMENTATION_PLAN.html`](docs/development/IMPLEMENTATIO
 Project documentation is organized in the [`docs/`](docs/) folder:
 
 - 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.html) - Project rules (must-read)
-- 📝 [WORK_LOG.md](docs/development/WORK_LOG.html) - Development history
+- 📝 [WORK_LOG.md](docs/development/WORK_LOG.md) - Development history
 - 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.html) - Language specification (Single Source of Truth)
 - 📖 [USER_MANUAL.md (日本語)](docs/user/ja/USER_MANUAL.html) - User manual (canonical, Japanese)
 - 🗺️ [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.html) - Implementation plan

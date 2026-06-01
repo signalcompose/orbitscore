@@ -669,9 +669,10 @@ export async function preparePlayback(
 <li>Exports: Explicit, no default exports</li>
 </ul>
 <h3 id="documentation">Documentation:</h3>
-<p><strong>形式ルール</strong>: <code>/docs</code> 配下のドキュメントは <strong>HTML 形式 (<code>.html</code>) で管理する</strong>。ローカルで使う開発ドキュメントはブラウザで開いて参照する自己完結型 HTML として直接編集し、Markdown ソースは残さない。公開向け学習サイト (<code>sites/dev/</code>, <code>sites/user/</code>) は VitePress による別管理（Markdown → HTML ビルド）であり、本ルールの対象外。</p>
+<p><strong>形式ルール</strong>: <code>/docs</code> 配下のドキュメントは <strong>原則 HTML 形式 (<code>.html</code>) で管理する</strong>。ローカルで使う開発ドキュメントはブラウザで開いて参照する自己完結型 HTML として直接編集する。公開向け学習サイト (<code>sites/dev/</code>, <code>sites/user/</code>) は VitePress による別管理（Markdown → HTML ビルド）であり、本ルールの対象外。</p>
+<p><strong>例外（運用ログは Markdown）</strong>: <code>docs/development/WORK_LOG.md</code> のように <strong>コミット毎に人手/エージェントが直接追記する高頻度の運用ログ</strong>は、HTML 手編集が非実用的でタグ崩れの事故リスクが高いため Markdown を正とする。境界の目安は「高頻度に追記する運用ログ系 = Markdown / 更新頻度の低い安定リファレンス・凍結アーカイブ (<code>docs/archive/</code>) = HTML 直接管理」。</p>
 <ul>
-<li>WORK_LOG.html - Development history (UPDATE WITH EVERY COMMIT!)</li>
+<li>WORK_LOG.md - Development history (UPDATE WITH EVERY COMMIT! 高頻度更新のため Markdown 例外)</li>
 <li>README.md - User guide（リポジトリルート、対象外）</li>
 <li>IMPLEMENTATION_PLAN.html - Technical roadmap</li>
 <li>INSTRUCTION_ORBITSCORE_DSL.html - Language specification</li>

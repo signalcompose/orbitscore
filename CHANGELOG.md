@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ICMC 2026 Hamburg 発表整備の stable リリース。 v1.1.0-rc1 / rc2 / rc3 を経て、 学習サイト群の公開、 .orbs 拡張子への切替、 診断機能の追加を最終スコープに取り込んで stable 化。
 
-> **Note**: `package.json` 上のバージョンは v1.1.0-rc 系列の retarget 整理に伴い `1.1.2` から `1.1.0` に戻している。 これは git tag (`v1.1.0`) を canonical な version reference として扱う運用のため、 npm registry 等の外部利用には影響しない。 詳細は [`docs/development/WORK_LOG.html`](docs/development/WORK_LOG.html) 6.75 を参照。
+> **Note**: `package.json` 上のバージョンは v1.1.0-rc 系列の retarget 整理に伴い `1.1.2` から `1.1.0` に戻している。 これは git tag (`v1.1.0`) を canonical な version reference として扱う運用のため、 npm registry 等の外部利用には影響しない。 詳細は [`docs/development/WORK_LOG.md`](docs/development/WORK_LOG.md) 6.75 を参照。
 
 ### Breaking Changes
 
