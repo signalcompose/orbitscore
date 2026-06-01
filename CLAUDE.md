@@ -142,15 +142,15 @@ npm run lint             # ESLint + Prettier
 - **Testing**: Vitest (Unit + Integration tests)
 - **Key Features**: Audio File Playback (WAV/AIFF/MP3/MP4), Time-stretching, Polymeter
 
-**Details**: See [`docs/INDEX.md`](docs/INDEX.md)
+**Details**: See [`docs/core/INDEX.html`](docs/core/INDEX.html)
 
 ### Key Conventions
-- **DSL Specification**: [`docs/INSTRUCTION_ORBITSCORE_DSL.md`](docs/INSTRUCTION_ORBITSCORE_DSL.md) - Single Source of Truth
-- **Work Log**: Every commit MUST be documented in [`docs/WORK_LOG.md`](docs/WORK_LOG.md)
+- **DSL Specification**: [`docs/core/INSTRUCTION_ORBITSCORE_DSL.html`](docs/core/INSTRUCTION_ORBITSCORE_DSL.html) - Single Source of Truth
+- **Work Log**: Every commit MUST be documented in [`docs/development/WORK_LOG.html`](docs/development/WORK_LOG.html)
 - **Branch Names**: `<issue-number>-description` (English only, e.g., `61-audio-playback-testing`)
 - **Commits/PRs**: Japanese (e.g., `feat: オーディオ録音機能を追加`)
 
-**Details**: See [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md)
+**Details**: See [`docs/core/PROJECT_RULES.html`](docs/core/PROJECT_RULES.html)
 
 ---
 
@@ -198,7 +198,7 @@ npm run lint             # ESLint + Prettier
 
 See `.claude/settings.json` for Hook configuration.
 
-**Details**: See [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md), [`.claude/hooks/README.md`](.claude/hooks/README.md)
+**Details**: See [`docs/core/PROJECT_RULES.html`](docs/core/PROJECT_RULES.html), [`.claude/hooks/README.md`](.claude/hooks/README.md)
 
 ---
 
@@ -244,13 +244,13 @@ git checkout -b <issue-number>-description
 npm test
 
 # 4. Update WORK_LOG.md
-# Edit docs/WORK_LOG.md
+# Edit docs/development/WORK_LOG.html
 
 # 5. Create PR
 gh pr create --base main --body "Closes #N"
 ```
 
-**Details**: See [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) Section 2
+**Details**: See [`docs/core/PROJECT_RULES.html`](docs/core/PROJECT_RULES.html) Section 2
 
 ---
 
@@ -273,7 +273,7 @@ gh pr create --base main --body "Closes #N"
 
 **Exception**: Project-specific docs (`/docs`) use Read tool directly.
 
-**Details**: See [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md)
+**Details**: See [`docs/core/CONTEXT7_GUIDE.html`](docs/core/CONTEXT7_GUIDE.html)
 
 ---
 
@@ -402,11 +402,11 @@ feat(dsl): add polymeter support
 ## Additional Resources
 
 すべての詳細ルールとドキュメントは以下を参照：
-- **📚 [`docs/INDEX.md`](docs/INDEX.md)** - ドキュメント目次（必読）
-- **🎵 [`docs/INSTRUCTION_ORBITSCORE_DSL.md`](docs/INSTRUCTION_ORBITSCORE_DSL.md)** - DSL仕様（単一信頼情報源）
-- **📏 [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md)** - 開発ルール（包括的ガイドライン）
-- **📝 [`docs/WORK_LOG.md`](docs/WORK_LOG.md)** - 開発履歴（技術的決定事項）
-- **🗺️ [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)** - ロードマップとフェーズ
-- **📖 [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md)** - ユーザー向けドキュメント
-- **📚 [`docs/CONTEXT7_GUIDE.md`](docs/CONTEXT7_GUIDE.md)** - 外部ライブラリドキュメント参照ガイド
+- **📚 [`docs/core/INDEX.html`](docs/core/INDEX.html)** - ドキュメント目次（必読）
+- **🎵 [`docs/core/INSTRUCTION_ORBITSCORE_DSL.html`](docs/core/INSTRUCTION_ORBITSCORE_DSL.html)** - DSL仕様（単一信頼情報源）
+- **📏 [`docs/core/PROJECT_RULES.html`](docs/core/PROJECT_RULES.html)** - 開発ルール（包括的ガイドライン）
+- **📝 [`docs/development/WORK_LOG.html`](docs/development/WORK_LOG.html)** - 開発履歴（技術的決定事項）
+- **🗺️ [`docs/development/IMPLEMENTATION_PLAN.html`](docs/development/IMPLEMENTATION_PLAN.html)** - ロードマップとフェーズ
+- **📖 [`docs/user/ja/USER_MANUAL.html`](docs/user/ja/USER_MANUAL.html)** - ユーザー向けドキュメント
+- **📚 [`docs/core/CONTEXT7_GUIDE.html`](docs/core/CONTEXT7_GUIDE.html)** - 外部ライブラリドキュメント参照ガイド
 - **🪝 [`.claude/hooks/README.md`](.claude/hooks/README.md)** - Hooksの説明

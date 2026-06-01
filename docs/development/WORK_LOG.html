@@ -89,6 +89,7 @@ li { margin: .2em 0; }
 <li><code>sites/</code> 配下から <code>docs/*.md</code> を指す GitHub blob URL は別管理のため本 PR では変更せず（公開サイト側の運用で対応）</li>
 <li><code>packages/**/src/</code> のコメント内に残る <code>docs/*.md</code> 参照（プロセス上の参照、機能影響なし）</li>
 </ul>
+<p><strong>追補 (同日)</strong>: <code>CLAUDE.md</code> の Quick Reference に残っていた省略パス参照（例 <code>docs/INDEX.md</code> ＝実体は <code>docs/core/INDEX.html</code>）16 箇所を正しい <code>.html</code> 実体パスへ修正。あわせて <code>.claude/hooks/pre-commit-check.sh</code> の WORK_LOG 参照を <code>.md</code> → <code>.html</code> に追従。</p>
 <h3 id="688-release-v111--quantize-patch-ship-may-09-2026">6.88 Release v1.1.1 — quantize patch ship (May 09, 2026)</h3>
 <p><strong>Date</strong>: May 09, 2026 (tag push: May 09 16:09 UTC, re-tag: 16:26 UTC)
 <strong>Status</strong>: ✅ DONE (GitHub Release v1.1.1 作成済、 Marketplace/Open VSX は gate off で skip)

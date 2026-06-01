@@ -20,8 +20,8 @@ EOF
   fi
 fi
 
-# Check if WORK_LOG.md is staged
-if ! git diff --cached --name-only | grep -q "docs/development/WORK_LOG.md"; then
+# Check if WORK_LOG is staged (HTML 管理へ移行済み: docs/development/WORK_LOG.html)
+if ! git diff --cached --name-only | grep -q "docs/development/WORK_LOG.html"; then
   cat << 'EOF'
 {
   "notification": "⚠️ **コミット前チェック**\n\nWORK_LOG.mdが更新されていません。\n\n以下を確認してください：\n- docs/development/WORK_LOG.mdに今回の変更を記録しましたか？\n- 何を変更し、なぜ変更したかを記録しましたか？\n\nPROJECT_RULESでは、すべてのコミットでWORK_LOG.mdの更新が必須です。"
