@@ -17,6 +17,30 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.95 Issue #228 — Phase 1 増分3: MidiOutput (@julusian/midi ラッパー) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分3。 commit hash: `e36e6cf`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: raw MIDI 送出層。 ポート解決・note 送出・active note tracking・パニックを担う隔離モジュール。 §5 委譲方針に従い実装は Sonnet サブエージェントに委譲、 契約 (interface) と統合品質レビューは main (Opus)。
+
+**変更内容**:
+
+- `packages/engine/package.json`: `@julusian/midi@^3.6.1` を依存追加
+- `midi-output.ts` (main 作成): 契約定義 — `MidiOutput` interface、 `MidiBackend` 注入 seam (テストで mock 可)、 `ActiveNote`
+- `rtmidi-output.ts` (Sonnet 実装 + main レビュー): `RtMidiOutput implements MidiOutput`。 ポート名 case-insensitive substring 解決 (ローカライズ名 `"IACドライバ バス1"` を `"iac"` で当てる、 §1)、 note-on/off、 pitch bend (±2半音固定)、 active note tracking、 `releaseOwner` (LOOP除外/MUTE/play差し替え時の解放)、 `panic` (CC123+CC120 全ch、 §7-2)
+- `tests/midi/midi-output.spec.ts`: mock backend で 41 件 (ポート解決・note tracking・releaseOwner・panic・**hanging note 不変条件**・pitch bend)
+
+**main によるレビュー改善**: `noteOn`/`noteOff`/`pitchBend` が毎回 `ensurePort` (ポート再列挙) を呼ぶとライブ演奏で1音ごとに CoreMIDI 列挙が走るため、 解決済みポート名のキャッシュ高速パス (`resolveOpenPort`) を追加。
+
+**テスト結果**: 820 passed / 23 skipped (843 total)。 midi-output +41、 回帰なし。
+
+**次**: 増分4 (MidiScheduler: TS lookahead) [Sonnet 委譲]。
+
+---
+
 ### 6.94 Issue #228 — Phase 1 増分2b: TimedEvent シンボリックピッチ拡張 (§7-0) (Jun 13, 2026)
 
 **Date**: 2026-06-13
