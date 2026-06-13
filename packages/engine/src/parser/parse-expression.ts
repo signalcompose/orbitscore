@@ -593,8 +593,8 @@ export class ExpressionParser {
 
   /**
    * Apply the §6.5 / §3 postfix operators to a just-completed element, LEFT TO
-   * RIGHT: `*n` repetition (→ PlayRepeat) and `.root()/.mode()/.oct()` chains
-   * (→ PlayScoped). Public so the statement-level arg parser shares one
+   * RIGHT: `*n` repetition (→ PlayRepeat) and `.root()/.mode()/.oct()/.hold()`
+   * scope chains (→ PlayScoped). Public so the statement-level arg parser shares one
    * implementation. Returns `changed` so the caller can close the juxtaposition
    * run (Q1: a `*n` / chain closes the run, like a group chain does).
    *
@@ -610,9 +610,7 @@ export class ExpressionParser {
   } {
     let el = element
     let changed = false
-    let acting = true
-    while (acting) {
-      acting = false
+    for (;;) {
       const t = ParserUtils.current(this.tokens, this.pos).type
       if (t === 'ASTERISK') {
         if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
@@ -623,13 +621,14 @@ export class ExpressionParser {
         if (!Number.isInteger(count) || count < 1) {
           throw new Error(
             `*n repetition count must be an integer ≥ 1 (got ${count}); ` +
-              `*0 is a diagnostic error and *1 is identity (§6.5).`,
+              `*0 is rejected at parse time and *1 is identity (§6.5).`,
           )
         }
         el = { type: 'repeat', element: el, count }
         changed = true
-        acting = true
-      } else if (t === 'DOT') {
+        continue
+      }
+      if (t === 'DOT') {
         const method = ParserUtils.peek(this.tokens, this.pos).value
         if (method === 'root' || method === 'mode' || method === 'oct' || method === 'hold') {
           if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
@@ -637,9 +636,10 @@ export class ExpressionParser {
           this.assertChainClosesRun()
           el = { type: 'scoped', groups: [el], ...scope }
           changed = true
-          acting = true
+          continue
         }
       }
+      break
     }
     return { value: el, newPos: this.pos, changed }
   }

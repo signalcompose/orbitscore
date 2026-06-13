@@ -72,6 +72,20 @@ export async function processStatement(
 }
 
 /**
+ * Return the active global, or null after logging a "requires a global" error.
+ * The three `var`-binding handlers (import / chord / pattern) all mutate the
+ * active global's namespace, so they share this guard; `label` names the
+ * construct for the message (e.g. `` `import chords` ``, `chord "foo"`).
+ */
+function requireGlobal(state: InterpreterState, label: string) {
+  if (!state.currentGlobal) {
+    console.error(`${label} requires a global (declare \`var g = init GLOBAL\` first).`)
+    return null
+  }
+  return state.currentGlobal
+}
+
+/**
  * Process `import chords` (§6): load the stdlib chord qualities into the active
  * global's chord namespace. Statements execute in source order, so a later play()
  * sees the imported chords (評価時値渡し).
@@ -81,33 +95,23 @@ function processImportStatement(statement: ImportStatement, state: InterpreterSt
     console.warn(`Unknown import "${statement.module}" — v1.1 supports only \`import chords\`.`)
     return
   }
-  if (!state.currentGlobal) {
-    console.error('`import chords` requires a global (declare `var g = init GLOBAL` first).')
-    return
-  }
-  state.currentGlobal.importChords()
+  requireGlobal(state, '`import chords`')?.importChords()
 }
 
 /** Process `var NAME = chord([ ... ])` (§6): bind the evaluated chord value. */
 function processChordBinding(statement: ChordBinding, state: InterpreterState): void {
-  if (!state.currentGlobal) {
-    console.error(
-      `chord "${statement.variableName}" requires a global (declare \`var g = init GLOBAL\` first).`,
-    )
-    return
-  }
-  state.currentGlobal.defineChord(statement.variableName, statement.voices)
+  requireGlobal(state, `chord "${statement.variableName}"`)?.defineChord(
+    statement.variableName,
+    statement.voices,
+  )
 }
 
 /** Process `var NAME = <play-expr>` (§6.5): bind the raw pattern value. */
 function processPatternBinding(statement: PatternBinding, state: InterpreterState): void {
-  if (!state.currentGlobal) {
-    console.error(
-      `pattern "${statement.variableName}" requires a global (declare \`var g = init GLOBAL\` first).`,
-    )
-    return
-  }
-  state.currentGlobal.definePattern(statement.variableName, statement.elements)
+  requireGlobal(state, `pattern "${statement.variableName}"`)?.definePattern(
+    statement.variableName,
+    statement.elements,
+  )
 }
 
 /**

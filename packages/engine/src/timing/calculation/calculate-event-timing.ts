@@ -255,7 +255,10 @@ export function calculateEventTiming(
           scopeStack,
         )
         if (nestedEvents.length > 0) {
-          const tailStart = Math.max(...nestedEvents.map((e) => e.startTime))
+          let tailStart = nestedEvents[0].startTime
+          for (const ev of nestedEvents) {
+            if (ev.startTime > tailStart) tailStart = ev.startTime
+          }
           for (const ev of nestedEvents) {
             if (ev.startTime < tailStart) ev.legato = true
           }
