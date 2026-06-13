@@ -60,6 +60,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **テスト**: `tie-legato-parsing.spec.ts` 7件 / `tie-legato-timing.spec.ts` 3件 / `sequence-tie-legato-dispatch.spec.ts` 8件（legato overlap 順序・`_` 二音・先頭 `_`=休符・`_n` 抑制+fallback・hold 自動タイ+#8単音除外）/ hanging-note 不変条件に Phase 4 パターンの 100× LOOP swap を追加。全体 971 passed / 23 skipped。**Phase 4 完了 → Phase R + Phase 4 完了**。
 
+**追加コミット（実機検証ハーネス + デモ）**: 実エンジン（parse→度数解決→MIDI→IAC）で**実在の PD 曲**を鳴らして Phase R/4 を検証するため、MIDI→OrbitScore 変換器 `tools/midi2orbs/`（`smf.js` / 声部モード `midi2orbs.js` / 和音モード `midi2orbs-chordal.js` + README）と PD デモ `tools/midi-monitor/{pavane,chorale,phase-r4-tour}.orbs` を追加。ピッチ列を元 MIDI と照合して一致を確認（パヴァーヌ=3声・度数+`^`、コラール=`[ ]`+`_n` 声部タイ）。著作権 MIDI 本体は非コミット。判明した DSL フィードバック（度数モデルのオクターブ越え friction / 多声の2手段 / tie↔tree-duration の相補性）は README に記録。コード変更なし（ツール/デモ/ドキュメントのみ）。
+
 ### 6.108 Issue #250 — 設計記録: アイデンティティ・スコープ原則・表現 2 軸モデル (Jun 13, 2026)
 
 **Date**: 2026-06-13
