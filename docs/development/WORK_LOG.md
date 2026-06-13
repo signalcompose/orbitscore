@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.109 Issue #227 + #236 — Phase R (`*n`+パターン変数) + Phase 4 (タイ/レガート/hold) (Jun 14, 2026)
+
+**Date**: 2026-06-14
+**Status**: 🚧 IN PROGRESS（Phase R の `*n` 完了。パターン変数 → Phase 4 と続く。1 ブランチ）
+**Issue**: signalcompose/orbitscore#227, #236
+**Branch**: `227-phase-r-and-phase-4`
+
+**方針**: Phase R（パーサー/評価器・低リスク）→ Phase 4（dispatch）を 1 ブランチ・コミット群分離で。Phase 3 の namespace 基盤（Global registry / `BoundValue.kind`）を再利用。code-architect blueprint 済（`PlayRepeat` ノード + eval 時展開、`chord_ref` を「名前参照」に一般化し kind 分岐、`*n` 後置は左→右で chain と合成）。
+
+**本コミット（R: `*n` 反復, §6.5）**:
+- `parser/types.ts`: `ASTERISK` トークン、`PlayRepeat`（transient、L2 で n 兄弟へ展開）を PlayElement union に。`PlayChordRef` を「名前参照（chord/pattern を kind で分岐）」と再定義
+- `parser/tokenizer.ts`: `*` トークン
+- `parser/parse-expression.ts`: `parsePostfix`（`*n`→PlayRepeat / `.root()`→PlayScoped を左→右、§6.5 例 `riff*4.root(3)`・`(a)(b).root(2)*2`）。`collapseScopedRun` 後に適用、`*n`/chain は run を閉じる（Q1）。bare 文字列名は wrap 時のみ chord_ref へ昇格（`global.key(C)` は不変）
+- `parser/parse-statement.ts`: `parseArguments` でも `parsePostfix` 共有
+- `midi/chord/resolve-chords.ts`: `BindingLookup`（name→BoundValue）へ一般化。`resolveElements`（1→N walker）で `*n` 展開（deep clone）・名前参照を kind 分岐（chord→縦 stack / pattern→横 splice）・unknown は warning。stack 内の名前は chord 限定（pattern/unbound は warning）
+- `core/global.ts`: `definePattern` / `getBinding`（chord namespace を pattern と共有）
+- `core/sequence.ts`: `play()` の resolver を `getBinding` に
+- `timing/calculate-event-timing.ts`: 未解決 `repeat` の internal-error ガード
+
+**決定（blueprint）**: `chord_ref` はリネームせず「名前参照」として kind 分岐（churn 回避）。Tidal 差異: OrbitScore `*n` はスロット占有反復（Tidal `!`）、スロット内分割は nest `(1,1)`。
+
+**テスト**: `repeat-parsing.spec.ts` 7件 / `repeat-timing.spec.ts` 5件（`*0` エラー・`*1` 恒等・左→右 postfix・グループ内反復・audio スライス値で pitch 非依存）。chord 系テストの unknown 警告文言を「unknown name」へ更新。全体 939 passed / 23 skipped。
+
 ### 6.108 Issue #250 — 設計記録: アイデンティティ・スコープ原則・表現 2 軸モデル (Jun 13, 2026)
 
 **Date**: 2026-06-13

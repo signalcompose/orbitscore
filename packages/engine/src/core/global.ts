@@ -4,7 +4,7 @@
  */
 
 import { AudioEngine } from '../audio/types'
-import { StackElement } from '../parser/types'
+import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
 import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
@@ -156,10 +156,24 @@ export class Global {
     return this
   }
 
-  /** The voices of a bound chord, or undefined if the name is unbound. */
+  /** The voices of a bound chord, or undefined if the name is unbound / a pattern. */
   getChordVoices(name: string): ChordVoice[] | undefined {
     const bound = this.chordRegistry.get(name)
     return bound?.kind === 'chord' ? bound.voices : undefined
+  }
+
+  /**
+   * `var NAME = <play-expr>` (§6.5): bind a pattern value (raw play-elements). Shares
+   * the chord namespace — a bare name reference dispatches on `kind` at resolution.
+   */
+  definePattern(name: string, elements: PlayElement[]): this {
+    this.setChord(name, { kind: 'pattern', elements })
+    return this
+  }
+
+  /** The bound value (chord or pattern) for a name, or undefined if unbound. */
+  getBinding(name: string): BoundValue | undefined {
+    return this.chordRegistry.get(name)
   }
 
   /** Bind a chord value, warning on overwrite (§10-4: global binding + conflict warning). */

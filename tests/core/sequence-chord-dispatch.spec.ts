@@ -124,7 +124,7 @@ describe('Phase 3 — chord values dispatch (§6)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const out = await playChords(() => {}, '[mystery]')
     expect(notesOf(out)).toHaveLength(0)
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/unknown chord "mystery"/))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/unknown name "mystery"/))
     warn.mockRestore()
   })
 })

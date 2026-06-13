@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { resolveChords, ChordLookup } from '../../packages/engine/src/midi/chord/resolve-chords'
+import { resolveChords, BindingLookup } from '../../packages/engine/src/midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../../packages/engine/src/midi/chord/predefined-chords'
 
 /**
@@ -9,7 +9,8 @@ import { PREDEFINED_CHORDS } from '../../packages/engine/src/midi/chord/predefin
  * the evaluator is tested in isolation from the parser and the namespace.
  */
 
-const lookup: ChordLookup = (name) => PREDEFINED_CHORDS[name]
+const lookup: BindingLookup = (name) =>
+  PREDEFINED_CHORDS[name] ? { kind: 'chord', voices: PREDEFINED_CHORDS[name]! } : undefined
 
 const ref = (name: string, octaveShift = 0) => ({ type: 'chord_ref' as const, name, octaveShift })
 const rm = (degree: number, alteration = 0) => ({
@@ -93,7 +94,7 @@ describe('Phase 3 — chord resolution (§6)', () => {
   it('an unknown chord name resolves to no voices + a warning', () => {
     const { stack, warnings } = resolveStack([ref('nope')])
     expect(stack.voices).toEqual([])
-    expect(warnings[0]).toMatch(/unknown chord "nope"/)
+    expect(warnings[0]).toMatch(/unknown name "nope"/)
   })
 
   it('a bare chord ref as a standalone element becomes a one-slot stack', () => {

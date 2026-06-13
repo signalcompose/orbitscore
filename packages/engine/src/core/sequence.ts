@@ -406,7 +406,7 @@ export class Sequence {
     // (no chord_ref reaches the timing walk). 評価時値渡し — a later chord
     // redefinition does not retro-affect this already-resolved pattern (§6.5.2).
     const { elements: resolved, warnings } = resolveChords(elements, (name) =>
-      this.global.getChordVoices(name),
+      this.global.getBinding(name),
     )
     for (const w of warnings) {
       console.warn(`⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ${w}`)

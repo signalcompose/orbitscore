@@ -243,6 +243,10 @@ export class AudioTokenizer {
           tokens.push({ type: 'PERCENT', value: '%', line, column })
           this.advance()
           break
+        case '*':
+          tokens.push({ type: 'ASTERISK', value: '*', line, column })
+          this.advance()
+          break
         default:
           // Skip unknown characters
           this.advance()

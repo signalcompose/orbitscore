@@ -577,6 +577,59 @@ export class ExpressionParser {
   }
 
   /**
+   * Apply the §6.5 / §3 postfix operators to a just-completed element, LEFT TO
+   * RIGHT: `*n` repetition (→ PlayRepeat) and `.root()/.mode()/.oct()` chains
+   * (→ PlayScoped). Public so the statement-level arg parser shares one
+   * implementation. Returns `changed` so the caller can close the juxtaposition
+   * run (Q1: a `*n` / chain closes the run, like a group chain does).
+   *
+   * A bare name (a string identifier, top-level play arg) is lifted to a chord_ref
+   * before wrapping so the wrapped node stays a typed PlayElement; a name with NO
+   * postfix is left untouched (so `global.key(C)` keeps its bare-string arg — only
+   * play resolution treats a bare string as a name reference).
+   */
+  parsePostfix(element: PlayElement | string): {
+    value: PlayElement | string
+    newPos: number
+    changed: boolean
+  } {
+    let el = element
+    let changed = false
+    let acting = true
+    while (acting) {
+      acting = false
+      const t = ParserUtils.current(this.tokens, this.pos).type
+      if (t === 'ASTERISK') {
+        if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        const numTok = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+        this.pos = numTok.newPos
+        const count = ParserUtils.parseNumber(numTok.token)
+        if (!Number.isInteger(count) || count < 1) {
+          throw new Error(
+            `*n repetition count must be an integer ≥ 1 (got ${count}); ` +
+              `*0 is a diagnostic error and *1 is identity (§6.5).`,
+          )
+        }
+        el = { type: 'repeat', element: el, count }
+        changed = true
+        acting = true
+      } else if (t === 'DOT') {
+        const method = ParserUtils.peek(this.tokens, this.pos).value
+        if (method === 'root' || method === 'mode' || method === 'oct') {
+          if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
+          const scope = this.parseScopeChain()
+          this.assertChainClosesRun()
+          el = { type: 'scoped', groups: [el], ...scope }
+          changed = true
+          acting = true
+        }
+      }
+    }
+    return { value: el, newPos: this.pos, changed }
+  }
+
+  /**
    * Parse nested play structure
    */
   private parseNestedPlay(): {
@@ -601,6 +654,14 @@ export class ExpressionParser {
       }
       this.parseNestedPlayElement(elements)
       collapseScopedRun(elements, runStart)
+
+      // §6.5 / §3 postfix on the just-completed element (`*n`, then a chain).
+      const lastIdx = elements.length - 1
+      const post = this.parsePostfix(elements[lastIdx]!)
+      if (post.changed) {
+        elements[lastIdx] = post.value as PlayElement
+        runStart = lastIdx // a *n / chain closes the juxtaposition run (§6.5 Q1)
+      }
 
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       // Handle comma or continue. A comma ends the juxtaposition run.

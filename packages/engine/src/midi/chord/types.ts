@@ -7,6 +7,8 @@
  * namespace (Global), populated by `import chords` and `var X = chord([...])`.
  */
 
+import { PlayElement } from '../../parser/types'
+
 /**
  * One voice of a chord: a symbolic degree against the (later) placement scope.
  * Mirrors the pitched subset of {@link import('../types').SymbolicPitch} — but
@@ -21,8 +23,13 @@ export interface ChordVoice {
 }
 
 /**
- * A bound value in the chord namespace. The `kind` discriminant keeps the
- * namespace shared-ready: Phase R (#227) adds its own value kind (e.g. a tree
- * pattern variable) to the same table without disturbing chord values.
+ * A bound value in the namespace (§6 / §6.5). The `kind` discriminant lets one
+ * registry hold both vertical chord values and horizontal pattern variables; a
+ * bare name reference dispatches on `kind` at evaluation.
+ * - `chord`: a vertical degree stack (resolved against the placement scope)
+ * - `pattern` (§6.5): a horizontal/tree value — 1+ top-level play siblings, spliced
+ *   at the use site (length > 1 = a juxtaposition binding)
  */
-export type BoundValue = { kind: 'chord'; voices: ChordVoice[] }
+export type BoundValue =
+  | { kind: 'chord'; voices: ChordVoice[] }
+  | { kind: 'pattern'; elements: PlayElement[] }

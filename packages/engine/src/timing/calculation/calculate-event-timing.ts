@@ -226,6 +226,13 @@ export function calculateEventTiming(
           `Internal: unresolved chord ref "${element.name}" reached the timing walk; ` +
             `chord refs must be evaluated before scheduling (§6).`,
         )
+      } else if (element.type === 'repeat') {
+        // §6.5: a `*n` repeat is expanded (spliced) by the resolver BEFORE timing.
+        // Reaching here means resolution was skipped — a wiring bug.
+        throw new Error(
+          `Internal: unresolved repeat (*${element.count}) reached the timing walk; ` +
+            `repetitions must be expanded before scheduling (§6.5).`,
+        )
       }
     }
   }

@@ -449,6 +449,17 @@ export class StatementParser {
       args.push(argResult.value)
       collapseScopedRun(args, runStart)
 
+      // §6.5 / §3 postfix on the just-completed arg (`*n`, then a chain). Shared
+      // with the nested-level parser via ExpressionParser.parsePostfix.
+      const lastIdx = args.length - 1
+      const postParser = new ExpressionParser(this.tokens, this.pos)
+      const post = postParser.parsePostfix(args[lastIdx])
+      if (post.changed) {
+        this.pos = post.newPos
+        args[lastIdx] = post.value
+        runStart = lastIdx // a *n / chain closes the juxtaposition run (§6.5 Q1)
+      }
+
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
         const commaResult = ParserUtils.advance(this.tokens, this.pos)
