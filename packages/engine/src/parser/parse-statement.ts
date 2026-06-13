@@ -360,6 +360,9 @@ export class StatementParser {
     const lparenResult = ParserUtils.expect(this.tokens, this.pos, 'LPAREN')
     this.pos = lparenResult.newPos
     const args: any[] = []
+    // Index where the current juxtaposition run began (reset after each comma).
+    // A `.root()/.mode()/.oct()` chain collapses the run since this index (§3).
+    let runStart = 0
 
     while (
       ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
@@ -372,13 +375,21 @@ export class StatementParser {
       const expressionParser = new ExpressionParser(this.tokens, this.pos)
       const argResult = expressionParser.parseArgument()
       this.pos = argResult.newPos
-      args.push(argResult.value)
+      const arg = argResult.value
+      // A scope chain (PlayScoped) applies to the whole juxtaposition run: pull
+      // the preceding sibling groups (since the last comma) into its groups so
+      // `(A)(B).root(X)` shares one scope. No-chain `(A)(B)` stays separate.
+      if (arg && typeof arg === 'object' && arg.type === 'scoped' && runStart < args.length) {
+        arg.groups = [...args.splice(runStart), ...arg.groups]
+      }
+      args.push(arg)
 
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
         const commaResult = ParserUtils.advance(this.tokens, this.pos)
         this.pos = commaResult.newPos
         this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+        runStart = args.length // comma ends the run
       } else if (ParserUtils.current(this.tokens, this.pos).type === 'RPAREN') {
         // End of arguments
         break

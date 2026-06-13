@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.106 Issue #230 — Phase 2: `.root()`/`.mode()`/`.oct()` グループスコープ — パーサー層 (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (パーサー層完了。dispatch のスコープ解決は後続コミット)
+**Issue**: signalcompose/orbitscore#230
+**Branch**: `230-phase-2-root-group-chains`
+
+**設計**: code-architect で blueprint を策定（PlayScoped 新ノード、スコープは calculateEventTiming のツリー walk で捕捉しフラット dispatch では per-event descriptor で消費、共有 run ヘルパで no-chain 並置の splice を保全、build sequence B0-B8）。spec §2.3/§3 正本。
+
+**本コミット（パーサー層 B1-B4 のパーサー部分）**:
+- `parser/types.ts`: `PlayScoped`/`ScopeRoot`/`ScopeMode` を追加、PlayElement union に。スコープチェーンが有る時だけ生成（no-chain 並置は従来通り別 sibling）
+- `parser/parse-expression.ts`: `parseScopeChain`（root/mode/oct、重複・root+mode 衝突を diagnostic エラー、last-wins 不採用）、`parseRootArg`（音名 F#/Bb/C をトークンから再構成 + 度数 3/b6、`noteNameToPitchClass` 再利用）、`parseModeArg`（mode 予約＝raw 捕捉、dispatch で throw 予定）、`assertChainClosesRun`（チェーン直後カンマなし `(` = エラー §3）、`collapseScopedRun`（並置 run を1スコープに集約）
+- `parser/parse-statement.ts`: `parseArguments` に run 集約（`(A)(B).root(X)` を1ノードに、カンマが run 境界）
+
+**テスト**: `tests/audio-parser/scope-chain-parsing.spec.ts` 20件（音名/度数 root、oct、mode 予約、重複/衝突/chain-closes エラー、並置 run 集約、§3 入れ子 override 例、no-chain 並置の回帰ガード）。全体 848 passed / 23 skipped。
+
+**次**: B5 timing 透過 + scope descriptor 付与 → B6 dispatch スコープ解決（inner→outer→seq→error）→ B7 `.oct()`×`^N` 合成（要・大和確認: additive 推奨）→ VS Code セマンティックハイライト（Sonnet 委譲）→ core spec 反映。
+
+---
+
 ### 6.105 Issue #228 — Phase 1: 度数記法の再設計 (pitch range / スティッキー `^N`) (Jun 13, 2026)
 
 **Date**: 2026-06-13
