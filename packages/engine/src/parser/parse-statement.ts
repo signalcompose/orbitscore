@@ -10,8 +10,10 @@ import {
   Statement,
   MethodChain,
   ChordBinding,
+  PatternBinding,
   ImportStatement,
   PlayStack,
+  PlayElement,
 } from './types'
 import { ParserUtils } from './parser-utils'
 import { ExpressionParser, collapseScopedRun } from './parse-expression'
@@ -64,7 +66,7 @@ export class StatementParser {
    * Parse variable declaration
    */
   private parseVarDeclaration(): {
-    statement: GlobalInit | SequenceInit | ChordBinding
+    statement: GlobalInit | SequenceInit | ChordBinding | PatternBinding
     newPos: number
   } {
     const varResult = ParserUtils.expect(this.tokens, this.pos, 'VAR')
@@ -79,6 +81,12 @@ export class StatementParser {
     const rhs = ParserUtils.current(this.tokens, this.pos)
     if (rhs.type === 'IDENTIFIER' && rhs.value === 'chord') {
       return this.parseChordBinding(varNameResult.token.value)
+    }
+
+    // `var NAME = (...)` / `(...)(...)` / `(...).root()` / `(...)*n` — a pattern
+    // binding (§6.5). No existing var RHS starts with `(`, so this is unambiguous.
+    if (rhs.type === 'LPAREN') {
+      return this.parsePatternBinding(varNameResult.token.value)
     }
 
     const initResult = ParserUtils.expect(this.tokens, this.pos, 'INIT')
@@ -141,6 +149,49 @@ export class StatementParser {
       throw new Error(`Unknown import "${module}". v1.1 supports only \`import chords\` (§6).`)
     }
     return { statement: { type: 'import', module }, newPos: this.pos }
+  }
+
+  /**
+   * Parse `var NAME = <play-expr>` (§6.5): a pattern binding. The RHS is a run of
+   * top-level play siblings (a group, a juxtaposition `(...)(...)`, or a chained /
+   * `*n` form), parsed exactly like inline play-args (collapseScopedRun + the
+   * `*n`/chain postfix) minus the wrapping parens. Terminates at the statement end.
+   * A top-level comma is rejected (§6.5 Q2): a binding is a single root-scope cell
+   * or a juxtaposition run, not a comma list.
+   */
+  private parsePatternBinding(variableName: string): { statement: PatternBinding; newPos: number } {
+    const elements: PlayElement[] = []
+    let runStart = 0
+
+    for (;;) {
+      const argParser = new ExpressionParser(this.tokens, this.pos)
+      const argResult = argParser.parseArgument()
+      this.pos = argResult.newPos
+      elements.push(argResult.value)
+      collapseScopedRun(elements, runStart)
+
+      const lastIdx = elements.length - 1
+      const post = new ExpressionParser(this.tokens, this.pos).parsePostfix(elements[lastIdx]!)
+      if (post.changed) {
+        this.pos = post.newPos
+        elements[lastIdx] = post.value as PlayElement
+        runStart = lastIdx
+      }
+
+      const t = ParserUtils.current(this.tokens, this.pos).type
+      if (t === 'COMMA') {
+        throw new Error(
+          'a pattern binding is a single cell or a juxtaposition run; ' +
+            'use juxtaposition `(...)(...)`, not commas (§6.5).',
+        )
+      }
+      if (t === 'LPAREN') {
+        continue // juxtaposition: another group with no comma
+      }
+      break // NEWLINE / EOF / end of statement
+    }
+
+    return { statement: { type: 'pattern_binding', variableName, elements }, newPos: this.pos }
   }
 
   /**

@@ -40,6 +40,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **テスト**: `repeat-parsing.spec.ts` 7件 / `repeat-timing.spec.ts` 5件（`*0` エラー・`*1` 恒等・左→右 postfix・グループ内反復・audio スライス値で pitch 非依存）。chord 系テストの unknown 警告文言を「unknown name」へ更新。全体 939 passed / 23 skipped。
 
+**追加コミット（R: パターン変数, §6.5）**:
+- `parser/parse-statement.ts`: `parseVarDeclaration` に `var NAME = (...)` 分岐（RHS が `(` 始まり。init/chord は不変）、`parsePatternBinding`（トップレベル兄弟 run を parseArgument+collapseScopedRun+postfix で。トップレベルのカンマは拒否＝Q2、NEWLINE/EOF で終端、juxtaposition は LPAREN で継続）
+- `interpreter/process-statement.ts`: `pattern_binding` を currentGlobal.definePattern に配線
+- 解決は R の `*n` コミットで導入済（`resolveName` の pattern 分岐＝横 splice、chord と同一 namespace を kind 分岐）。単一グループ→1スロット / juxtaposition→複数兄弟 splice。`riff*3`・`riff.root(3)`・chord と共存。評価時値渡し（play() 時点で解決、再定義は走行中パターンに非影響）
+- core spec は specs-v2 を正本として参照（§6.5 + Tidal 差異注記は PITCH_DSL_SPEC が正本。core sync は別 Issue #237）
+
+**テスト**: `pattern-binding-parsing.spec.ts` 5件 / `sequence-pattern-dispatch.spec.ts` 8件（単一/juxtaposition splice・`*n`・`.root()`・chord 共存・評価時値渡し・unknown warning・interpreter 配線）。全体 952 passed / 23 skipped。**Phase R 完了**。
+
 ### 6.108 Issue #250 — 設計記録: アイデンティティ・スコープ原則・表現 2 軸モデル (Jun 13, 2026)
 
 **Date**: 2026-06-13

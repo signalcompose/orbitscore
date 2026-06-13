@@ -9,6 +9,7 @@ import {
   SequenceStatement,
   TransportStatement,
   ChordBinding,
+  PatternBinding,
   ImportStatement,
 } from '../parser/audio-parser'
 
@@ -61,6 +62,9 @@ export async function processStatement(
     case 'chord_binding':
       processChordBinding(statement, state)
       break
+    case 'pattern_binding':
+      processPatternBinding(statement, state)
+      break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
       console.warn(`Unknown statement type: ${(statement as any).type}`)
@@ -93,6 +97,17 @@ function processChordBinding(statement: ChordBinding, state: InterpreterState): 
     return
   }
   state.currentGlobal.defineChord(statement.variableName, statement.voices)
+}
+
+/** Process `var NAME = <play-expr>` (§6.5): bind the raw pattern value. */
+function processPatternBinding(statement: PatternBinding, state: InterpreterState): void {
+  if (!state.currentGlobal) {
+    console.error(
+      `pattern "${statement.variableName}" requires a global (declare \`var g = init GLOBAL\` first).`,
+    )
+    return
+  }
+  state.currentGlobal.definePattern(statement.variableName, statement.elements)
 }
 
 /**
