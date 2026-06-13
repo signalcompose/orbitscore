@@ -1,0 +1,642 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OrbitScore MIDI Monitor + Synth</title>
+    <style>
+      :root {
+        --bg: #16181d;
+        --panel: #1e2128;
+        --ink: #e6e6e6;
+        --sub: #9aa0aa;
+        --hair: #2c3038;
+        --accent: #4f9cff;
+        --rec: #b4231f;
+        --ok: #38b000;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          14px/1.6 -apple-system,
+          'Hiragino Sans',
+          'Yu Gothic',
+          sans-serif;
+      }
+      header {
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--hair);
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      h1 {
+        font-size: 1.1rem;
+        margin: 0;
+        font-weight: 700;
+      }
+      .status {
+        font-size: 0.85rem;
+        color: var(--sub);
+      }
+      .status.on {
+        color: var(--ok);
+      }
+      .status.err {
+        color: var(--rec);
+      }
+      .badge {
+        font-size: 0.7rem;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: 4px;
+        padding: 1px 6px;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        padding: 16px 20px;
+        max-width: 1100px;
+      }
+      @media (max-width: 720px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--hair);
+        border-radius: 8px;
+        padding: 14px 16px;
+      }
+      .panel h2 {
+        font-size: 0.9rem;
+        margin: 0 0 12px;
+        color: var(--sub);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      button {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 14px;
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #333842;
+        color: var(--ink);
+      }
+      button.danger {
+        background: var(--rec);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      label {
+        display: block;
+        margin: 10px 0 4px;
+        font-size: 0.8rem;
+        color: var(--sub);
+      }
+      select,
+      input[type='range'] {
+        width: 100%;
+      }
+      select {
+        background: #14161b;
+        color: var(--ink);
+        border: 1px solid var(--hair);
+        border-radius: 6px;
+        padding: 6px 8px;
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      #log {
+        height: 320px;
+        overflow-y: auto;
+        background: #14161b;
+        border: 1px solid var(--hair);
+        border-radius: 6px;
+        padding: 8px 10px;
+        font:
+          12px/1.5 'SF Mono',
+          Menlo,
+          monospace;
+        white-space: pre-wrap;
+      }
+      .ev-on {
+        color: #7ee787;
+      }
+      .ev-off {
+        color: var(--sub);
+      }
+      .ev-cc {
+        color: #d2a8ff;
+      }
+      .ev-bend {
+        color: #ffa657;
+      }
+      .ev-panic {
+        color: var(--rec);
+        font-weight: 700;
+      }
+      .ev-pattern {
+        color: var(--accent);
+        font-weight: 700;
+        border-top: 1px dashed var(--hair);
+        margin-top: 4px;
+        padding-top: 4px;
+      }
+      #active {
+        font:
+          13px 'SF Mono',
+          Menlo,
+          monospace;
+        color: var(--ok);
+        min-height: 1.5em;
+      }
+      .note {
+        font-size: 0.8rem;
+        color: var(--sub);
+        margin-top: 6px;
+      }
+      code {
+        background: #14161b;
+        padding: 1px 5px;
+        border-radius: 3px;
+      }
+      #waveRow.hidden {
+        display: none;
+      }
+      #patternPanel {
+        margin: 16px 20px 0;
+        max-width: 1100px;
+      }
+      #patternPanel[hidden] {
+        display: none;
+      }
+      #patternMeta {
+        font-size: 0.78rem;
+        color: var(--sub);
+        margin-bottom: 8px;
+      }
+      #patternMeta .label {
+        color: var(--accent);
+        font-weight: 700;
+      }
+      #patternSrc {
+        margin: 0;
+        background: #14161b;
+        border: 1px solid var(--hair);
+        border-radius: 6px;
+        padding: 10px 12px;
+        font:
+          12px/1.55 'SF Mono',
+          Menlo,
+          monospace;
+        color: #cdd3dc;
+        white-space: pre-wrap;
+        max-height: 220px;
+        overflow-y: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>OrbitScore MIDI Monitor + Synth</h1>
+      <button id="enable">Enable audio &amp; MIDI</button>
+      <button id="testTone" class="secondary" disabled>Test tone</button>
+      <button id="panic" class="danger" disabled>Panic (all notes off)</button>
+      <span id="status" class="status">クリックして開始してください</span>
+      <span id="reportBadge" class="badge" hidden>report → /events</span>
+    </header>
+
+    <section id="patternPanel" class="panel" hidden>
+      <h2>Now playing (DSL)</h2>
+      <div id="patternMeta">— (送信側からのパターン報告待ち) —</div>
+      <pre id="patternSrc"></pre>
+    </section>
+
+    <main>
+      <section class="panel">
+        <h2>Input &amp; Instrument</h2>
+
+        <label for="midiIn">MIDI input</label>
+        <select id="midiIn"><option>— (Enable で取得) —</option></select>
+        <div class="note">
+          IAC ポートが出ない場合: Audio MIDI 設定 → IAC ドライバ → 「装置はオンライン」を ON。
+          日本語環境では <code>IACドライバ バス1</code> と表示されます。
+        </div>
+
+        <label for="instrument">Instrument</label>
+        <select id="instrument">
+          <option value="piano">Piano</option>
+          <option value="organ">Organ</option>
+          <option value="synth">Synth (waveform)</option>
+        </select>
+
+        <div id="waveRow" class="hidden">
+          <label for="wave">Waveform (synth)</label>
+          <select id="wave">
+            <option value="triangle">triangle</option>
+            <option value="sawtooth">sawtooth</option>
+            <option value="square">square</option>
+            <option value="sine">sine</option>
+          </select>
+        </div>
+
+        <label for="vol">Master volume <span id="volVal">0.3</span></label>
+        <input id="vol" type="range" min="0" max="1" step="0.01" value="0.3" />
+
+        <label for="cutoff">Lowpass cutoff <span id="cutVal">5000</span> Hz</label>
+        <input id="cutoff" type="range" min="200" max="12000" step="50" value="5000" />
+
+        <div class="note">
+          velocity → 音量、 pitch bend → ±2半音 (エンジンの detune 範囲に一致)、
+          CC123/CC120 → 全 note-off。
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Monitor</h2>
+        <div class="row" style="margin-bottom: 8px">
+          <strong style="font-size: 0.8rem; color: var(--sub)">Sounding:</strong>
+          <span id="active">—</span>
+        </div>
+        <div id="log"></div>
+        <div class="row" style="margin-top: 8px">
+          <button id="clearLog" class="secondary">Clear log</button>
+          <span class="note" id="counts">on: 0 / off: 0</span>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // ---- Optional event reporting (for joint testing) ----------------------
+      // Enabled with ?report=1. POSTs each event to /events so a collaborating
+      // observer (dev-server.py) can see what the browser received. Off by
+      // default; fails silently if no server endpoint.
+      const REPORT = new URLSearchParams(location.search).has('report')
+      function report(obj) {
+        if (!REPORT) return
+        try {
+          fetch('/events', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...obj, t: Date.now() }),
+            keepalive: true,
+          }).catch(() => {})
+        } catch (e) {
+          /* ignore */
+        }
+      }
+
+      // ---- Web Audio: a small polyphonic synth -------------------------------
+      let audio = null
+      let masterGain = null
+      let lowpass = null
+      // active voices keyed by "channel:note" → { oscs:[...], gain, channel }
+      const voices = new Map()
+      // pitch bend in semitones per channel (1..16), default 0
+      const bend = new Array(17).fill(0)
+      let onCount = 0
+      let offCount = 0
+
+      const $ = (id) => document.getElementById(id)
+      const statusEl = $('status')
+
+      function ensureAudio() {
+        if (audio) return
+        audio = new (window.AudioContext || window.webkitAudioContext)()
+        masterGain = audio.createGain()
+        masterGain.gain.value = parseFloat($('vol').value)
+        lowpass = audio.createBiquadFilter()
+        lowpass.type = 'lowpass'
+        lowpass.frequency.value = parseFloat($('cutoff').value)
+        lowpass.connect(masterGain).connect(audio.destination)
+      }
+
+      function midiToFreq(note) {
+        return 440 * Math.pow(2, (note - 69) / 12)
+      }
+
+      function voiceKey(channel, note) {
+        return channel + ':' + note
+      }
+
+      // Build a voice for the selected instrument. Returns { oscs, gain, channel }.
+      function makeVoice(channel, note, velocity) {
+        const inst = $('instrument').value
+        const freq = midiToFreq(note)
+        const level = velocity / 127
+        const now = audio.currentTime
+        const detune = bend[channel] * 100 // semitones → cents
+
+        const out = audio.createGain()
+        out.connect(lowpass)
+        const oscs = []
+
+        const addOsc = (type, mult, amp) => {
+          const o = audio.createOscillator()
+          o.type = type
+          o.frequency.value = freq * mult
+          o.detune.value = detune
+          const g = audio.createGain()
+          g.gain.value = amp
+          o.connect(g).connect(out)
+          o.start()
+          oscs.push(o)
+        }
+
+        if (inst === 'organ') {
+          // Additive drawbar-ish tone: flat sustain, fast attack/release.
+          addOsc('sine', 1, 1.0)
+          addOsc('sine', 2, 0.6)
+          addOsc('sine', 3, 0.4)
+          addOsc('sine', 4, 0.25)
+          out.gain.setValueAtTime(0, now)
+          out.gain.linearRampToValueAtTime(level * 0.4, now + 0.012)
+        } else if (inst === 'piano') {
+          // Struck tone: bright attack partial + body, decays toward zero.
+          addOsc('triangle', 1, 1.0)
+          addOsc('sine', 2, 0.35)
+          addOsc('sine', 3, 0.12)
+          out.gain.setValueAtTime(0, now)
+          out.gain.linearRampToValueAtTime(level * 0.9, now + 0.004)
+          out.gain.exponentialRampToValueAtTime(Math.max(level * 0.18, 0.0001), now + 0.9)
+          out.gain.exponentialRampToValueAtTime(0.0001, now + 2.4)
+        } else {
+          // Raw synth waveform with a short decay→sustain.
+          addOsc($('wave').value, 1, 1.0)
+          out.gain.setValueAtTime(0, now)
+          out.gain.linearRampToValueAtTime(level * 0.9, now + 0.005)
+          out.gain.exponentialRampToValueAtTime(Math.max(level * 0.7, 0.0001), now + 0.25)
+        }
+
+        return { oscs, gain: out, channel }
+      }
+
+      function noteOn(channel, note, velocity) {
+        ensureAudio()
+        noteOff(channel, note, true) // retrigger: clear existing voice first
+        voices.set(voiceKey(channel, note), makeVoice(channel, note, velocity))
+        refreshActive()
+      }
+
+      function noteOff(channel, note, immediate) {
+        const key = voiceKey(channel, note)
+        const v = voices.get(key)
+        if (!v) return
+        const now = audio.currentTime
+        const release = immediate ? 0.01 : 0.14
+        try {
+          v.gain.gain.cancelScheduledValues(now)
+          v.gain.gain.setValueAtTime(Math.max(v.gain.gain.value, 0.0001), now)
+          v.gain.gain.exponentialRampToValueAtTime(0.0001, now + release)
+          for (const o of v.oscs) o.stop(now + release + 0.03)
+        } catch (e) {
+          /* voice already stopped */
+        }
+        voices.delete(key)
+        refreshActive()
+      }
+
+      function allNotesOff() {
+        for (const [, v] of voices) {
+          for (const o of v.oscs) {
+            try {
+              o.stop()
+            } catch (e) {
+              /* noop */
+            }
+          }
+        }
+        voices.clear()
+        refreshActive()
+      }
+
+      function applyBend(channel) {
+        for (const [, v] of voices) {
+          if (v.channel === channel) for (const o of v.oscs) o.detune.value = bend[channel] * 100
+        }
+      }
+
+      function refreshActive() {
+        const names = [...voices.keys()].map((k) => noteName(parseInt(k.split(':')[1]))).sort()
+        $('active').textContent = names.length ? names.join('  ') : '—'
+      }
+
+      const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+      function noteName(n) {
+        return NAMES[n % 12] + (Math.floor(n / 12) - 1)
+      }
+
+      // ---- MIDI message handling ---------------------------------------------
+      function handleMidi(message) {
+        const [statusByte, d1, d2] = message.data
+        const type = statusByte & 0xf0
+        const channel = (statusByte & 0x0f) + 1
+
+        if (type === 0x90 && d2 > 0) {
+          onCount++
+          noteOn(channel, d1, d2)
+          log('ev-on', `ch${channel} note-on  ${noteName(d1)} (${d1}) vel ${d2}`)
+          report({ kind: 'note-on', ch: channel, note: d1, name: noteName(d1), vel: d2 })
+        } else if (type === 0x80 || (type === 0x90 && d2 === 0)) {
+          offCount++
+          noteOff(channel, d1)
+          log('ev-off', `ch${channel} note-off ${noteName(d1)} (${d1})`)
+          report({ kind: 'note-off', ch: channel, note: d1, name: noteName(d1) })
+        } else if (type === 0xb0) {
+          if (d1 === 123 || d1 === 120) {
+            allNotesOff()
+            log('ev-panic', `ch${channel} CC${d1} — ALL NOTES OFF (panic)`)
+            report({ kind: 'panic', ch: channel, cc: d1 })
+          } else {
+            log('ev-cc', `ch${channel} CC${d1} = ${d2}`)
+            report({ kind: 'cc', ch: channel, cc: d1, value: d2 })
+          }
+        } else if (type === 0xe0) {
+          const value14 = (d2 << 7) | d1
+          const semis = ((value14 - 8192) / 8192) * 2 // ±2 semitone range
+          bend[channel] = semis
+          applyBend(channel)
+          log('ev-bend', `ch${channel} pitch-bend ${semis.toFixed(3)} st`)
+          report({ kind: 'bend', ch: channel, semitones: +semis.toFixed(3) })
+        }
+        updateCounts()
+      }
+
+      // ---- MIDI access setup -------------------------------------------------
+      let midiAccess = null
+      let currentInput = null
+
+      function populateInputs() {
+        const sel = $('midiIn')
+        const inputs = [...midiAccess.inputs.values()]
+        const options = inputs.map((input) => {
+          const opt = document.createElement('option')
+          opt.value = input.id
+          opt.textContent = input.name
+          return opt
+        })
+        if (options.length === 0) {
+          const opt = document.createElement('option')
+          opt.textContent = '(no MIDI inputs found)'
+          sel.replaceChildren(opt)
+          report({ kind: 'inputs', names: [] })
+          return
+        }
+        sel.replaceChildren(...options)
+        const iac = inputs.find((i) => /iac/i.test(i.name))
+        sel.value = (iac || inputs[0]).id
+        report({ kind: 'inputs', names: inputs.map((i) => i.name) })
+        selectInput(sel.value)
+      }
+
+      function selectInput(id) {
+        if (currentInput) currentInput.onmidimessage = null
+        currentInput = [...midiAccess.inputs.values()].find((i) => i.id === id) || null
+        if (currentInput) {
+          currentInput.onmidimessage = handleMidi
+          statusEl.textContent = `listening: ${currentInput.name}`
+          statusEl.className = 'status on'
+          report({ kind: 'listening', name: currentInput.name })
+        }
+      }
+
+      async function enable() {
+        ensureAudio()
+        await audio.resume()
+        $('testTone').disabled = false
+        $('panic').disabled = false
+        report({ kind: 'enabled', instrument: $('instrument').value })
+
+        if (!navigator.requestMIDIAccess) {
+          statusEl.textContent = 'Web MIDI 非対応ブラウザです (Chrome 推奨)。Test tone は使えます。'
+          statusEl.className = 'status err'
+          report({ kind: 'midi-unavailable' })
+          return
+        }
+        try {
+          midiAccess = await navigator.requestMIDIAccess({ sysex: false })
+          populateInputs()
+          midiAccess.onstatechange = populateInputs // hot-plug / IAC online toggle
+        } catch (e) {
+          statusEl.textContent = 'MIDI アクセスが拒否されました: ' + e.message
+          statusEl.className = 'status err'
+          report({ kind: 'midi-denied', error: String(e.message || e) })
+        }
+      }
+
+      // ---- Monitor log -------------------------------------------------------
+      const logEl = $('log')
+      const MAX_LINES = 300
+      function log(cls, text) {
+        const t = new Date().toLocaleTimeString('ja-JP', { hour12: false })
+        const line = document.createElement('div')
+        line.className = cls
+        line.textContent = `${t}  ${text}`
+        logEl.appendChild(line)
+        while (logEl.childElementCount > MAX_LINES) logEl.removeChild(logEl.firstChild)
+        logEl.scrollTop = logEl.scrollHeight
+      }
+      function updateCounts() {
+        $('counts').textContent = `on: ${onCount} / off: ${offCount}`
+      }
+
+      // ---- "Now playing (DSL)" — poll the dev-server's /pattern --------------
+      // The sender (a CLI script, or later the engine's eval path) POSTs the
+      // DSL pattern it is playing to /pattern; we poll it and show it alongside
+      // the resulting MIDI. Only active in dev-server mode (?report=1).
+      let lastPatternT = 0
+      async function pollPattern() {
+        try {
+          const res = await fetch('/pattern', { cache: 'no-store' })
+          if (res.ok) {
+            const p = await res.json()
+            if (p && p.t && p.t !== lastPatternT) {
+              const firstLoad = lastPatternT === 0
+              lastPatternT = p.t
+              $('patternSrc').textContent = p.source || ''
+              // Also drop a marker into the monitor log so the pattern change
+              // is recorded chronologically alongside the MIDI it produced.
+              // Skip the very first poll (existing state, not a fresh change).
+              if (!firstLoad) {
+                const head = p.label ? `pattern [${p.label}]` : 'pattern'
+                log('ev-pattern', `▶ ${head}\n${p.source || ''}`)
+              }
+              const when = new Date(p.t).toLocaleTimeString('ja-JP', { hour12: false })
+              const meta = $('patternMeta')
+              meta.replaceChildren()
+              if (p.label) {
+                const b = document.createElement('span')
+                b.className = 'label'
+                b.textContent = p.label
+                meta.appendChild(b)
+                meta.appendChild(document.createTextNode(' · '))
+              }
+              meta.appendChild(document.createTextNode(`reported ${when}`))
+            }
+          }
+        } catch (e) {
+          /* no dev-server / offline — ignore */
+        }
+      }
+
+      // ---- UI wiring ---------------------------------------------------------
+      if (REPORT) {
+        $('reportBadge').hidden = false
+        $('patternPanel').hidden = false
+        pollPattern()
+        setInterval(pollPattern, 500)
+      }
+      function syncInstrumentUI() {
+        $('waveRow').classList.toggle('hidden', $('instrument').value !== 'synth')
+      }
+      syncInstrumentUI()
+
+      $('enable').addEventListener('click', enable)
+      $('midiIn').addEventListener('change', (e) => selectInput(e.target.value))
+      $('instrument').addEventListener('change', () => {
+        syncInstrumentUI()
+        report({ kind: 'instrument', value: $('instrument').value })
+      })
+      $('vol').addEventListener('input', (e) => {
+        $('volVal').textContent = e.target.value
+        if (masterGain) masterGain.gain.value = parseFloat(e.target.value)
+      })
+      $('cutoff').addEventListener('input', (e) => {
+        $('cutVal').textContent = e.target.value
+        if (lowpass) lowpass.frequency.value = parseFloat(e.target.value)
+      })
+      $('clearLog').addEventListener('click', () => logEl.replaceChildren())
+      $('panic').addEventListener('click', () => {
+        allNotesOff()
+        log('ev-panic', 'manual panic (UI)')
+        report({ kind: 'panic-ui' })
+      })
+      $('testTone').addEventListener('click', () => {
+        noteOn(1, 60, 100)
+        setTimeout(() => noteOff(1, 60), 500)
+        log('ev-on', 'test tone C4 (no MIDI)')
+        report({ kind: 'test-tone', note: 60, instrument: $('instrument').value })
+      })
+    </script>
+  </body>
+</html>

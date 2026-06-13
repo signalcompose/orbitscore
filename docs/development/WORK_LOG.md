@@ -17,6 +17,385 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.105 Issue #228 — Phase 1: 度数記法の再設計 (pitch range / スティッキー `^N`) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (PR #245 に同梱)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: Phase 1 実機検証 (6.103) で2オクターブスケールを度数 `1..15` で鳴らしたところ、大和さんが「度数仕様が想定と違う」と指摘。`8,10,12,14` はバークリーで使わない非音楽的な数字で、メロディはルート上のコード度数 (1-7 + テンション 9/11/13) で書く。第四議論を経て **pitch range (音域状態) モデル**に収束 (DESIGN_DISCUSSION_RECORD §9、決定ログ #33-38)。
+
+**確定した仕様 (spec が正本)**:
+
+- **度数 = 和声的位置**: `1-7` (スケール) + テンション `9/11/13` (メロディでも明示可、`2/4/6` の +1オクターブ)。
+- **`^N` = スティッキー pitch range**: 音/休符に付き、その地点から running range を base+N に設定。play() 内で読み順に持続、各 play() 先頭でリセット、`^0` で戻る。`0^N` = 無音で音域変更。独立 `^` マーカーは無し。3オクターブ上 = `3^3` 一発。
+- **range は全度数に効く (統一ルール、linear)**。`^N`(linear/persistent) と `.oct()`(lexical/group、Phase 2) は別軸の道具。
+- **度数受理 = {1-9, 11, 13}**。`8` = オクターブ上ルート (8va、`1^1` 等価)。`10/12/14/15+` は**エラー** (`^N` を案内)。後方互換は取らない (未リリース機能ゆえ)。
+
+**変更内容**:
+
+- `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` + `.html`: §9 第四議論を追記 (9.1-9.7、決定ログ #33-38)。`.html` は直接編集で同期 (pandoc 不使用 — 仕様 HTML は手書き保守が方針、`.md` のテーマを壊さないため)
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.html` §2.1 (度数受理 / `o`=running range)、§2.4 (`^N` スティッキー pitch range)
+- `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`: テスト網羅項を新ルールに
+- `midi/degree-resolution.ts`: 受理度数 {1-9,11,13} 検証 (10/12/14/15+ は throw)
+- `parser/types.ts` + `parse-expression.ts`: PlayPitch に `rangeSet` (「`^` を書いたか」=スティッキー set point)
+- `midi/types.ts`: SymbolicPitch に `rangeSet?` (出力段の running range スレッド用)
+- `timing/calculation/calculate-event-timing.ts`: `rangeSet` を pitch に伝播
+- `core/sequence.ts` `scheduleMidiEvents`: 読み順で **running range をスレッド** (rangeSet で更新、以降の全度数に effective range を適用)
+
+**テスト (821 passed / 23 skipped)**: degree 受理 {1-9,11,13} / 拒否 {10,12,14,15+}、スティッキー range の持続 (`play(1, 3^1, 5)` → C4 E5 **G5** で +1 が残る ≠ one-shot の G4)、`^0` リセット / `0^N` 無音音域変更、parser の `rangeSet` (`3^1`=true / `b3`=false / `1^0`=true)。
+
+**未決/確認済**: `^N` × `.root()` グループの相互作用は **linear で確定** (大和さん、グループを抜けても range 持続)。chord 値内の `^N` (§6 ヴォイシング) は Phase 2+ で別途確認。
+
+**/code:pr-review-team イテレーション1 (2026-06-13)**: 4 専門レビュアー (code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer) で PR #245 をレビュー。Critical 2 + Important 6 を修正:
+- **(Critical) 度数拒否が run() に伝播していなかった**: bad degree (10/12/14/15+) は fire-and-forget の scheduleEventsFn callback 内で throw され unhandled rejection になっていた (eager 検証は root だけだった)。`validateMidiDispatch()` を追加し、run()/loop() の eager ブロックで root + 全度数を事前解決 → 拒否度数が awaited チェーンで reject するように。テストで実証 (`play(10)`/`play(15)` → run() rejects)。
+- **(Critical) README**: 「Ctrl+C = パニック」を graceful LOOP() に訂正。
+- **(Important) MidiScheduler ピッチベンド残留**: detune≠0 の note の後、ベンドが中央に戻らず次の note を detune させていた → offTime に `pitchBend(…, 0)` reset を追加 + テスト。
+- **(Important) MidiScheduler.tick() の throw 耐性**: `action.run()` が throw すると queue cleanup がスキップされ double-send / hanging note → try/catch + log で継続。
+- **(Important) seq.root(0) のサイレント fallback**: 0 は休符で root 不正 → 正の整数を検証 (throw)。
+- **(Important) テスト追加**: テンション 9/11/13 + range 継承、変化記号 + range 継承 (`3^1, b5`)、度数拒否の dispatch 伝播。
+- **(Important) comment**: parsePitchModifiers docstring を sticky pitch range に更新。
+- minor: degree-resolution 式コメントを `range o` に、dev-server `do_GET` の `/pattern` を exact match に。
+- テスト 827 passed / 23 skipped。
+
+**/code:pr-review-team イテレーション2 (2026-06-13)**: 再レビュー (code-reviewer / silent-failure-hunter) でイテレーション1の修正が正しく、新規問題なしを確認 (Critical 0 / Important 0)。surface された Minor を1件修正:
+- **ループ中 play(不正度数) の crash 防止**: deferred (setTimeout) の scheduleEventsFn は awaited チェーン外なので、ループ中に不正度数を play() すると次サイクルで throw → Node>=22 で unhandled rejection / 未捕捉例外 = プロセス crash。イテレーション1の eager 検証は run()/loop() 入口だけ救済しており mid-loop は crash する非対称があった。`loop-sequence.ts` に `safeSchedule` ラッパを追加し deferred 呼び出しを catch+log、ループは last good schedule で継続。`tests/core/loop-sequence-resilience.spec.ts` で実証。
+- セキュリティチェックリスト: secrets/injection/XSS なし。dev-server が 0.0.0.0 bind + 無認証だが localhost dev ツール (機微データなし、cross-machine 共同検証用途) ゆえ pass (信頼ネットワーク限定の注記つき)。
+- 完了条件達成: **Critical 0 / Important 0 / security pass**。テスト 828 passed / 23 skipped。
+
+**次**: PR #245 レビュー/マージ。その後 Phase 2 (#230) / L1 (#229)。
+
+---
+
+### 6.104 Issue #246 — MIDI モニターに「Now playing (DSL)」パターン表示 (`/pattern`) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (PR #245 に同梱)
+**Issue**: signalcompose/orbitscore#246
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: 大和さん「テストツールで今どの DSL パターンが実行されているか見たい」「ログ的に見れるといい」。手作り MIDI と表示の食い違いを防ぎ、共同検証で「今鳴っている DSL」を一目で確認するため。
+
+**変更内容**:
+
+- `tools/midi-monitor/dev-server.py`: `POST /pattern` (送信側が実行中の DSL を `{source,label}` で報告、`latest_pattern` に保持) + `GET /pattern` (最新を返す) を追加
+- `tools/midi-monitor/index.html`: 「Now playing (DSL)」パネル — `/pattern` をポーリングして実評価ソースを表示 (`replaceChildren`/`createElement` で XSS 回避)
+
+**経緯メモ**: headless runner (6.103、コミット `2bd34ef`) は `POST /pattern` を呼ぶが、**endpoint 側 (本変更) が未コミットだった**。本エントリで endpoint を確定し、midi-run.ts の `/pattern` 報告が実際に機能する。表示=エンジンが評価した実ソースなので、音と表示が原理的に一致する。
+
+**/simplify パス (2026-06-13)**: 4 観点 (reuse/simplification/efficiency/altitude) で session 変更 (`2bd34ef..HEAD` の code) をレビュー。適用: `dev-server.py` の `/pattern` で `datetime.now()` を2回呼んでいたのを1回に集約。スキップ: index.html の meta DOM (textContent 化は `.label` のスタイルを落とすため)、`SymbolicPitch.rangeSet`/dual `octaveShift` の altitude (spec §9.4 で現レイヤを是認済・#240 score rendering 向けの tracked smell)。reuse/efficiency は実所見ゼロ。
+
+---
+
+### 6.103 Issue #228 — Phase 1: headless MIDI CLI runner (実エンジン .orbs → IAC) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 実機検証ツール。 commit hash: `a9a350b`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: 大和さんの指摘「手で MIDI を作るのでなく、 DSL を CLI で実行してロジックを通過させて MIDI を送れ」。 これが Phase 1 の本当の実機検証。 TransportClock 分離 (6.102) により audio engine なしで MIDI を走らせられるようになった。
+
+**変更内容**:
+
+- `packages/engine/src/cli/midi-run.ts`: `.orbs` を実エンジン経路で評価する headless ランナー。 `parseAudioDSL` + `processGlobalInit/SequenceInit/Statement` (InterpreterV2 を迂回、 SC ブートを回避)、 no-op audio engine + デフォルト MidiManager (実 RtMidiOutput → IAC)。 評価した DSL ソースを monitor の `/pattern` に報告 (表示=真実)。 SIGINT で panic 停止
+- `package.json`: `npm run midi-run -- <file.orbs>` スクリプト追加 (ts-node)
+- `tools/midi-monitor/README.md`: headless runner の使い方を追記
+
+**実機検証 (end-to-end)**: `npm run midi-run -- tools/midi-monitor/example.orbs` で、 `piano.play(1, 2, 3, 4, 5, 6, 7, 1^+1)` を**エンジンが度数解決**して C4-C5 (60,62,64,65,67,69,71,72) を IAC に送出 → ブラウザ Web MIDI で受信・発音をログ確認。 `/pattern` に `label: example.orbs` + 実ソースが報告され、 表示=エンジン評価ソースで音と一致 (以前の手作り MIDI の食い違い問題を原理的に解消)。 **SC は一切ブートせず**。
+
+**意義**: DSL → パーサー → 度数解決 (§7-0 出力最終段) → MidiOutput → IAC の Phase 1 全経路を実機で確証。 WCTM の実機テスト基盤にもなる。
+
+**追記 (graceful stop + REPL)**: 大和さんの指摘「パニックでなく LOOP() で止めたい」を反映。 Ctrl+C / SIGTERM は `global.stop()` のパニック (CC123/120) ではなく **`LOOP()` を評価して正規の per-sequence note-off** で停止 (§7-2、 実機でブラウザ受信が note-off のみ・panic 無しを確認)。 加えて **stdin live-coding REPL** を追加 — 実行中に DSL 行 (`LOOP()` / `LOOP(piano)` / `piano.play(...)`) を評価できる (OrbitScore のライブコーディング)。
+
+**次**: PR #245 レビュー/マージ判断。 その後 Phase 2 (#230) / L1 (#229)。
+
+---
+
+### 6.102 Issue #228 — Phase 1: TransportClock で MIDI を SC から分離 (同期維持) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 改善。 commit hash: `312e73e`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: 大和さんの指摘「IAC 経由は SC を絡ませない方がすっきり」。 ただし audio/MIDI を同時に使うとき**同期が壊れてはいけない**。 調査の結論: audio スケジューラも MIDI スケジューラも `Date.now()` ポーリングで、 同期は**共有する時刻原点 (`startTime`)** で実現されている。 従来は MIDI が audio scheduler オブジェクトから startTime を読んでいた (= コード結合だが、 これが同期の源)。
+
+**設計判断**: 共有「トランスポート時計」に巻き上げる。 audio も MIDI も同一の `Date.now()` 原点を参照し、 MIDI は audio engine を参照しない。
+
+**変更内容**:
+
+- `core/global/transport-clock.ts`: `TransportClock` (startTime/running、 `global.start()` で一度だけ `Date.now()` をスタンプ) = 唯一のクロック原点
+- `core/global/midi-transport-scheduler.ts`: `MidiTransportScheduler implements Scheduler` — TransportClock backed、 audio メソッドは no-op。 MIDI シーケンスはこれを使い **audio scheduler を一切参照しない**
+- `core/global.ts`: TransportClock 所有、 `start()` で原点スタンプ (audio scheduler 始動より先) → 同期維持、 `stop()` で停止。 `getMidiTransport()`/`isTransportRunning()` 追加
+- `core/sequence.ts`: `activeScheduler()` = MIDI なら MidiTransport、 audio なら SC scheduler。 seamlessParameterUpdate / run / loop / unmute の per-sequence scheduler を振り替え。 **audio 経路は無変更**
+- `tests/core/transport-clock.spec.ts`: 5件 (原点スタンプ・冪等・**no-op audio engine でも MIDI 動作** = 分離実証)。 MIDI dispatch / hanging-note テストは `global.start()` 追加で更新
+
+**同期の保証**: audio scheduler と MidiTransport は同じ `global.start()` の `Date.now()` 原点を共有 → 同音楽時刻のイベントは同 `Date.now()` 発火。 下流レイテンシ差は `midiLatency()` + ポート lead で補正 (§9、 既存)。 MIDI 専用セッションは SC を一切ブートしない。
+
+**テスト結果**: 878 passed / 23 skipped (901 total)。 +5、 audio 回帰なし。
+
+**次**: headless MIDI CLI ランナー (ts-node)。 TransportClock のおかげで audio engine 不要の綺麗な実装に。
+
+---
+
+### 6.101 Issue #246 — ブラウザ MIDI モニター + シンセ (.orbs 検証ツール) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 ブランチに同梱。 commit hash: `8217af3`)
+**Issue**: signalcompose/orbitscore#246
+**Branch**: `228-phase-1-midi-output` (PR #245 に同梱)
+
+**動機**: Phase 1 の MIDI 出力を DAW やソフトシンセのセットアップなしで確認するため (大和さん提案)。 Phase 1 と同じブランチに入れることで、 同じ PR のレビュー/テストで早速使える。
+
+**変更内容 (`tools/midi-monitor/`)**:
+
+- `index.html`: 単一静的ページ (ビルド不要・依存なし・vanilla JS)。 Web MIDI で IAC 受信 + Web Audio でポリフォニックシンセ (osc + ADSR + lowpass)。 velocity→音量、 pitch bend→±2半音 (エンジンの bend range に一致)、 CC123/120→全 note-off、 MIDI モニターログ + 発音中ノート表示、 MIDI 無しの Test tone。 `innerHTML` は使わず `replaceChildren`/`createElement` (XSS 回避)
+- `example.orbs`: IAC へ C メジャースケールを送る最小例。 port は substring `"IAC"` で日英両環境対応
+- `README.md`: 使い方 + IAC オンライン化手順
+
+**位置づけ**: 人間/リハ用の検証ハーネス (CI 自動化用ではない)。 WCTM のソフトピアノ代替 (WCTM_SYSTEM_SPEC §9 / #232) にも転用可。
+
+**検証**: localhost 配信で HTTP 200、 主要要素・コード存在確認、 inline JS の `node --check` 構文OK。 実 IAC→発音は Chrome での人手確認 (Web MIDI は secure context 必須)。
+
+**追記 (commit `7ff89e2`)**: 楽器選択 (Piano / Organ / Synth) + 任意のイベントレポート (`?report=1`) + `dev-server.py` (静的配信 + POST /events を stdout) を追加。 **実機 end-to-end 検証済み**: CLI (`@julusian/midi`) → `IACドライバ バス1` → ブラウザ Web MIDI で C メジャースケール + 和音をビット単位一致で受信・発音、 ピッチ正常を人手確認。 先頭音落ちはタブ非フォーカス時の AudioContext スロットルが原因 (README 明記)。 `dev-server.py` 経由でブラウザ受信イベントを観測しながら人間/エージェント連携でテストできることを実証。
+
+---
+
+### 6.100 Issue #228 — Phase 1 増分5d: hanging note 不変条件 + `[ ]` 予約 (Phase 1 機能完成) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 機能完成。 commit hash: `d8d0dd3`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: Phase 1 のゲート条件 (hanging note ゼロ) の受け入れテストと、 audio `[ ]` の diagnostic 予約 (§10-5)。 これで Phase 1 の機能が出揃う。
+
+**変更内容**:
+
+- `tests/core/midi-hanging-note-invariant.spec.ts`: 実 RtMidiOutput (recording backend) + fake timers で 3 件:
+  - **LOOP play() 差し替え100回で hanging note ゼロ** (Phase 1 ゲート条件)
+  - MUTE で sounding note 全解放
+  - global.stop() で panic (CC123+CC120 全ch、 active note ゼロ)
+- `[ ]` 予約 (§10-5): `tokenizer` に LBRACKET/RBRACKET 追加 (従来は default で黙って破棄)。 `parse-expression` でパースエラー (「v1.1 では未対応・予約」)。 黙って無視せずエラーにすることで将来の開放 (Phase 3 の MIDI chord / audio レイヤリング) を純粋な追加変更にする
+- `tests/audio-parser/pitch-parsing.spec.ts`: `[ ]` 予約テスト 3 件追加
+
+**テスト結果**: 873 passed / 23 skipped (896 total)。 +6、 回帰なし。
+
+**Phase 1 機能チェックリスト (受け入れ基準)**:
+- ✅ `seq.midi(port, ch)` + ポート名ロケール対応 (`/iac/i`)
+- ✅ root スコープ度数解決 (§2.1)、 `seq.root()`/global.key()/octave
+- ✅ §7-0 シンボリックピッチ保持 (番号化は出力最終段のみ)
+- ✅ active note tracking + パニック CC123/120
+- ✅ **LOOP 差し替え100回で hanging note ゼロ**
+- ✅ hanging note 不変条件 (note-on = note-off)
+- ✅ 度数解決の網羅テスト (326件)
+- ✅ detune (pitch bend ±2)、 gate/vel/octave、 midiLatency + ポート lead
+- ✅ audio `[ ]` の diagnostic 予約
+- ✅ 既存テストグリーン (回帰なし)
+- ⏭ L1 ログ同乗 (#229)、 VS Code ハイライト (Phase 2)、 core spec 反映 (#237) は別 Issue
+
+**Phase 1 コミット**: 増分1 `38b3040` / 2a `f7ee68b` / 2b `f275b45` / 3 `2e23104` / 4 `876cec7` / 5a `c849119` / 5b `4c3f50b` / 5c `0c36eb6` / 5d (本コミット)。 全 9 コミット、 MIDI 関連テスト +445。
+
+**次**: PR 作成 (#228 Closes) → レビュー → マージ。 その後 Phase 2 (#230 `.root()` グループチェーン)。
+
+---
+
+### 6.99 Issue #228 — Phase 1 増分5c: MIDI ディスパッチ配線 (発音つながる) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分5c。 commit hash: `ba12399`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: パイプライン最後の配線。 MIDI シーケンスの play() を実際に発音させる。 これで DSL `b3` → パーサー → timing → **度数解決 (出力最終段) → MidiScheduler → MidiOutput → 🔊** がつながる。
+
+**設計判断**: 既存の audio 中心 `loop-sequence`/`run-sequence`/`prepare-playback` はコールバック駆動で audio/MIDI 非依存だったため**そのまま再利用**。MIDI 固有部分だけを Sequence 側のコールバックで差し替える (最小の中枢変更)。 時刻基底は audio scheduler の startTime を共有 (併走同期)。
+
+**変更内容 (`core/sequence.ts`)**:
+
+- `scheduleMidiEvents()`: TimedEvent → `resolveDegree(symbolic, rootContext)` → `ScheduledMidiNote` → MidiScheduler。 §7-0 の番号化を**ここ (出力最終段) で**実施。 rest (度数0) はスキップ、 detune は pitch bend へ、 onTime = `schedulerStartTime + baseTime + ev.startTime + sendDelay`
+- `resolveRootContext()`: global.key() + seq.root(degree) + seq.octave から RootContext。 key 未宣言 + 度数ありはエラー (§2.3)。 run()/loop() で eager 検証 (resolveDispatchChannel と同じ理由で early throw)
+- `clearEvents()`: MIDI は `MidiScheduler.clearOwner` (pending 除去 + sounding note 解放、 §7-2)、 audio は従来通り。 run/loop/stop/mute/unmute/play差し替え の全クリア経路を振り替え
+- `scheduleEvents`/`scheduleEventsFromTime` に MIDI 分岐 (従来は `!_audioFilePath` で早期 return していた箇所)
+- `tests/core/sequence-midi-dispatch.spec.ts`: fake timers + mock 出力で 6 件 (度数→MIDI番号 end-to-end、 b3→Eb4、 octave、 gate の note-off 対、 stop で releaseOwner、 key 未宣言エラー)
+
+**テスト結果**: 867 passed / 23 skipped (890 total)。 +6、 回帰なし。
+
+**次**: 増分5d (hanging note 不変条件: LOOP差し替え100回でゼロ — Phase 1 ゲート条件)。 残: audio `[ ]` の diagnostic 予約 (§10-5、 `[ ]` トークンは Phase 3 で導入のため要検討)。
+
+---
+
+### 6.98 Issue #228 — Phase 1 増分5b: Sequence MIDI 設定面 + audio排他 (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分5b。 commit hash: `3289c01`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: Sequence のユーザー向け MIDI 設定メソッド。 これで MIDI シーケンスの宣言面が揃う (実際の発音配線は 5c)。
+
+**変更内容 (`core/sequence.ts`)**:
+
+- `midi(portName, channel)`: MIDI モード宣言。 ポートを eager 解決 (ローカライズ substring、 未知ポートは宣言時エラー)。 channel 1..16 検証。 `audio()` 済みなら排他エラー
+- `gate(v)` (0..1)、 `vel(v)` (1..127)、 `octave(v)`、 `root(degree)` セッター。 既定 gate=0.8/vel=96/octave=4 (§1)
+- `isMidi()`、 `audio()`/`chop()` に MIDI 排他チェック
+- `getState()` に midiPort/midiChannel/gate/vel/octave/rootDegree を追加
+- `tests/core/sequence-midi-config.spec.ts`: 10 件 (ポート解決・channel検証・排他双方向・clamp・既定値)
+
+**テスト結果**: 861 passed / 23 skipped (884 total)。 +10、 回帰なし。
+
+**次**: 増分5c (MIDI ディスパッチ配線: run/loop/play/stop/mute → MidiScheduler、 TimedEvent → 度数解決 → ScheduledMidiNote)、 5d (hanging note 不変条件 100回)。
+
+---
+
+### 6.97 Issue #228 — Phase 1 増分5a: Global MIDI インフラ + key/midiLatency (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分5a。 commit hash: `a0e999f`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: Sequence MIDI 統合 (増分5) の土台。 全 MIDI シーケンスが共有する MidiOutput + MidiScheduler を Global が lazy に所有し、 グローバル key と midiLatency を提供する。
+
+**変更内容**:
+
+- `midi/note-name.ts`: 音名 → ピッチクラス解析 (`"C"`/`"F#"`/`"Bb"`/`"C##"`、 octave 境界 wrap、 case-insensitive)。 §1/§2.3
+- `core/global/midi-manager.ts`: `MidiManager` — lazy な MidiOutput+MidiScheduler 所有 (audio-only セッションは CoreMIDI に触れない)、 グローバル key、 midiLatency、 ポート単位 lead オフセット (Disklavier 機構レイテンシ、 §9)。 出力は注入可能 (テストで mock)
+- `core/global.ts`: `key(name)`、 `midiLatency(ms)`、 `getMidiManager()` を追加。 `start()`/`stop()` で scheduler を起動/停止。 constructor に MidiManager 注入口
+- `tests/midi/note-name.spec.ts` (5件)、 `tests/midi/midi-manager.spec.ts` (5件)
+
+**確認**: インタプリタは動的ディスパッチ (`obj[method].apply`) なので `global.key()`/`global.midiLatency()` は自動的に届く (whitelist なし)。
+
+**テスト結果**: 851 passed / 23 skipped (874 total)。 +10、 回帰なし。
+
+**次**: 増分5b (Sequence の midi()/gate/vel/octave/root + audio排他)、 5c (MIDI ディスパッチ配線 + 度数解決)、 5d (hanging note 不変条件)。
+
+---
+
+### 6.96 Issue #228 — Phase 1 増分4: MidiScheduler (TS lookahead) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分4。 commit hash: `b866454`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: RtMidi は即時送信のみのため、 TS 側で note タイミングを駆動する lookahead スケジューラ。 §5 に従い Sonnet に実装委譲、 契約 (型) と統合レビューは main。
+
+**設計判断**: §7-0 のシンボリックピッチ→MIDI番号の解決はディスパッチ層 (増分5、 出力最終段) で行うため、 MidiScheduler は **解決済みノート** (`ScheduledMidiNote`) を受け取る。 時刻は `Date.now()` 基準の絶対 epoch ms (audio スケジューラと同一クロック基底で併走可)。
+
+**変更内容**:
+
+- `midi-scheduler.ts`: 契約 (main 作成) — `ScheduledMidiNote` (owner/port/channel/note/velocity/detune/onTime/offTime)、 `MidiSchedulerOptions`。 `MidiScheduler` クラス (Sonnet 実装) — `setInterval(tickMs=5)` ポーリング、 各 tick で `Date.now()` をスナップして `time <= now` のアクションを `(time,seq)` 順に発火 (ドリフト補正は tick 毎の壁時計比較)。 detune は note-on 直前に pitch bend。 `start`(冪等)/`stop`(panic)/`clearOwner`(pending除去 + releaseOwner)
+- `tests/midi/midi-scheduler.spec.ts`: fake timers + mock MidiOutput で 21 件 (発火タイミング、 順序、 detune→bend、 clearOwner、 stop→panic、 過去時刻の翌tick発火、 start冪等)
+
+**テスト結果**: 841 passed / 23 skipped (864 total)。 midi-scheduler +21、 回帰なし。
+
+**次**: 増分5 (Sequence MIDI 統合: midi() + ディスパッチ + 値=度数解釈 + 排他 + パラメータ + audio[]予約 + hanging note 不変条件) [main 直列]。
+
+---
+
+### 6.95 Issue #228 — Phase 1 増分3: MidiOutput (@julusian/midi ラッパー) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分3。 commit hash: `e36e6cf`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: raw MIDI 送出層。 ポート解決・note 送出・active note tracking・パニックを担う隔離モジュール。 §5 委譲方針に従い実装は Sonnet サブエージェントに委譲、 契約 (interface) と統合品質レビューは main (Opus)。
+
+**変更内容**:
+
+- `packages/engine/package.json`: `@julusian/midi@^3.6.1` を依存追加
+- `midi-output.ts` (main 作成): 契約定義 — `MidiOutput` interface、 `MidiBackend` 注入 seam (テストで mock 可)、 `ActiveNote`
+- `rtmidi-output.ts` (Sonnet 実装 + main レビュー): `RtMidiOutput implements MidiOutput`。 ポート名 case-insensitive substring 解決 (ローカライズ名 `"IACドライバ バス1"` を `"iac"` で当てる、 §1)、 note-on/off、 pitch bend (±2半音固定)、 active note tracking、 `releaseOwner` (LOOP除外/MUTE/play差し替え時の解放)、 `panic` (CC123+CC120 全ch、 §7-2)
+- `tests/midi/midi-output.spec.ts`: mock backend で 41 件 (ポート解決・note tracking・releaseOwner・panic・**hanging note 不変条件**・pitch bend)
+
+**main によるレビュー改善**: `noteOn`/`noteOff`/`pitchBend` が毎回 `ensurePort` (ポート再列挙) を呼ぶとライブ演奏で1音ごとに CoreMIDI 列挙が走るため、 解決済みポート名のキャッシュ高速パス (`resolveOpenPort`) を追加。
+
+**テスト結果**: 820 passed / 23 skipped (843 total)。 midi-output +41、 回帰なし。
+
+**次**: 増分4 (MidiScheduler: TS lookahead) [Sonnet 委譲]。
+
+---
+
+### 6.94 Issue #228 — Phase 1 増分2b: TimedEvent シンボリックピッチ拡張 (§7-0) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分2b。 commit hash: `e9abf90`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: パース (増分2a) で生成した `PlayPitch` を、 タイミング計算を通してシンボリックピッチのまま運ぶ。 これで「パース → timing」がつながり、 §7-0 (MIDI 番号化は出力最終段のみ) を pipeline で守る。
+
+**変更内容**:
+
+- `timing/calculation/types.ts`: `TimedEvent` に optional `pitch?: SymbolicPitch` を追加 (非破壊。 audio スライスイベントは未設定のまま)。 midi/types から SymbolicPitch を import (timing→midi の一方向依存、 循環なし)
+- `calculate-event-timing.ts`: `element.type === 'pitch'` を処理。 リズム木が startTime/duration を与え、 シンボリックピッチを未解決のまま carry。 sliceNumber は degree をフォールバックとしてミラー
+- `tests/timing/pitch-timing.spec.ts`: 4 件 (pitch carry、 octave shift/detune 透過、 ネスト内 pitch、 audio 回帰)
+
+**設計判断**: TimedEvent は解決済み midiNote を持たず **シンボリックピッチのみ** を運ぶ。 root context (rootPitchClass/octave) の適用と MIDI 番号化は出力アダプタ最終段 (増分3-5) で行う。
+
+**テスト結果**: 779 passed / 23 skipped (802 total)。 pitch-timing +4、 回帰なし。
+
+**次**: 増分3 (MidiOutput: @julusian/midi ラッパー) [Sonnet 委譲]。
+
+---
+
+### 6.93 Issue #228 — Phase 1 増分2a: ピッチトークン + パーサー (§2.1 / §2.4) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分2a。 commit hash: `356afcb`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: MIDI 度数記法 (`b3`, `#5`, `bb7`, `##1`, `3^+1`, `b7~-0.25`) を DSL でパースできるようにする。 共有トークナイザーに触れる最重要作業のため main (Opus) が直列で実施 (§5)。
+
+**事前確認**: audio DSL のコメントは `//` で `#` と衝突しない。 `#`/`^`/`~`/`b+数字` は既存 .orbs / テストで未使用 → 新トークン追加は既存パースを壊さない (grep 確認済み)。
+
+**変更内容**:
+
+- `tokenizer.ts`: ACCIDENTAL (`#`/`##`/`b`/`bb` ラン)、 CARET (`^`)、 TILDE (`~`)、 PLUS (`+`) トークンを追加。 `b` ランは「直後が数字」のときのみ alteration とみなし、 そうでなければ識別子にフォールバック (変数名 `b` を保護)
+- `parser/types.ts`: 新トークン型 + `PlayPitch` AST ノード (degree/alteration/octaveShift/detune) を `PlayElement` union に追加。 裸の整数は `number` のまま (audio スライス番号互換)
+- `parse-expression.ts`: accidental + number + `^`/`~` 修飾を `PlayPitch` に解析。 トップレベルとネスト両対応。 `bb`/`##` = ±2、 3個以上で warning (spec §2.1)
+- `tests/audio-parser/pitch-parsing.spec.ts`: トークナイザー/パーサーテスト 21 件
+
+**設計判断**: 裸整数を `number` のまま残すことで audio スライス番号パースを完全に無変更に保つ。 `PlayPitch` は accidental か `^`/`~` がある場合のみ生成。 値=度数の解釈は MIDI ディスパッチ時 (増分3以降)。
+
+**既知の制約**: `b7` 等は flat-7 記法として予約されるため、 同名の変数定義は不可 (spec の設計通り)。
+
+**テスト結果**: 775 passed / 23 skipped (798 total)。 pitch-parsing +21、 回帰なし。
+
+**次**: 増分2b (TimedEvent シンボリックピッチ拡張 + timing 計算のピッチ対応)。
+
+---
+
+### 6.92 Issue #228 — Phase 1 増分1: 度数解決コア (§2.1 / §7-0) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 全体の増分1。 commit hash: `283e56f`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+**Epic**: signalcompose/orbitscore#224
+
+**動機**: Phase 1 (raw MIDI 出力) の基盤として、 MIDI ハードウェア・スケジューラに依存しない純関数部分から着手。 §7-0 シンボリックピッチ保持の型契約と §2.1 度数解決を最初に確立する (パイプライン全体がこの型に乗るため、 最初に固めないと後で取り返せない)。
+
+**増分1の内容 (新規 `packages/engine/src/midi/`)**:
+
+- `types.ts` — §7-0 契約の型定義: `SymbolicPitch` (degree/alteration/octaveShift/detune)、 `RootContext` (rootPitchClass/octave)、 `ResolvedPitch` (midiNote + シンボリック情報を保持)。 MIDI 番号化は出力最終段のみという §7-0 を型レベルで強制
+- `degree-resolution.ts` — §2.1 の IONIAN 式による純関数 `resolveDegree()`。 度数 0 = 休符 (null)、 度数 9/11/13/15 はオクターブ折り返しが式から自然導出、 C4=60 規約
+- `index.ts` — モジュール公開面
+- `tests/midi/degree-resolution.spec.ts` — プロパティテスト 326 件 (全度数 1-15 × 変化記号 ±2 × octave 2-5 の網羅 + C4=60 + テンション折り返し + §7-0 保持 + detune 透過 + バリデーション)
+
+**設計判断**: spec §3 のアーキテクチャ決定に従い `packages/engine/src/midi/` を AudioEngine と並置 (EventRouter フル分離はしない)。 型契約は中枢に影響するため main (Opus) が直接定義。 度数解決の数理は §2.1 が完全な契約。
+
+**テスト結果**: 754 passed / 23 skipped (777 total)。 midi +326、 回帰なし。
+
+**Phase 1 の残り増分 (次セッション以降)**: ① パーサー拡張 (`b3`/`#5`/`3^+1`/`b7~-0.25` トークン)、 ② MidiOutput (@julusian/midi ラッパー、 ポート名ロケール対応、 active note tracking、 パニック CC123/120) [Sonnet 委譲可]、 ③ MidiScheduler (TS lookahead 50-100ms、 ドリフト補正) [Sonnet 委譲可]、 ④ Sequence への `midi()` メソッド + ディスパッチフラグ + 値=度数解釈、 ⑤ `global.key()`/`midiLatency()` + ポート単位オフセット、 ⑥ seq.gate/vel/octave、 ⑦ audio `[ ]` の diagnostic エラー予約、 ⑧ hanging note 不変条件テスト。
+
+---
+
 ### 6.91 Issue #226 — Phase 0 事前検証4項目 (Jun 13, 2026)
 
 **Date**: 2026-06-13

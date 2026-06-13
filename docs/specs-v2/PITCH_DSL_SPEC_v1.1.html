@@ -367,18 +367,24 @@ diagnostic。不一致時はエラー(利用可能ポート一覧を提示)。</
 変化記号。</p>
 <pre><code>IONIAN = [0, 2, 4, 5, 7, 9, 11]   // semitones for degrees 1..7
 
-resolve(degree n, alteration a, octaveShift o):
+resolve(degree n, alteration a, range o):
   semitones = IONIAN[(n-1) mod 7] + 12 * floor((n-1) / 7) + a
-  pitch     = rootPitch + semitones + 12 * o</code></pre>
+  pitch     = rootPitch + semitones + 12 * o
+  // o = 現在の running pitch range (§2.4 の ^N が設定。default 0、play() 先頭でリセット)</code></pre>
 <ul>
 <li><code>a</code>: <code>b</code> = -1, <code>#</code> = +1,
 <code>bb</code>/<code>##</code> = ±2。重複可だが diagnostic で
 warning(2個まで)。</li>
-<li>度数は 1 以上の整数。<code>2↔︎9</code>, <code>4↔︎11</code>,
-<code>6↔︎13</code>
-は同ピッチクラスのオクターブ違いとして式から自然に導出される(9 =
-IONIAN[1] + 12)。13
-を超える度数(15=2オクターブ上のルート等)も式の通り有効。</li>
+<li><strong>受理される度数 = <code>{1-9, 11, 13}</code></strong>。<code>1-7</code>
+= Ionian スケール度数、<code>8</code> = オクターブ上のルート(8va、<code>1^1</code>
+と等価)、<code>9/11/13</code> = テンション(<code>2/4/6</code>
+の +1オクターブと同ピッチクラス。式から自然に導出: 9 = IONIAN[1] +
+12。メロディでも明示使用可)。</li>
+<li><strong><code>10, 12, 14</code> および <code>15</code> 以上は
+<em>エラー</em></strong>(diagnostic: 「オクターブは <code>^N</code> で書く。例
+<code>3^1</code>」)。リニアな高数字は非音楽的で可読性が悪いため受理しない
+(v1.1 は本機能の pre-release ゆえ後方互換は取らない)。コードトーンのオクターブ上は
+<code>^N</code> pitch range(§2.4)で書く。</li>
 <li><code>0</code> = 休符。</li>
 <li><code>rootPitch</code> は現在の root
 スコープ(§3)が決める。<code>seq.octave()</code> が度数1の MIDI
@@ -422,10 +428,38 @@ IONIAN[1] + 12)。13
 の指定はメソッド形のみ。プロパティ形(<code>.root.F</code>)は採用しない(<code>F#</code>
 等で破綻するため)。</li>
 </ul>
-<h3 id="event-modifiers-v1.0-から継承">2.4 Event modifiers (v1.0
-から継承)</h3>
-<div class="sourceCode" id="cb7"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dv">3</span><span class="op">^+</span><span class="dv">1</span>       <span class="co">// オクターブシフト</span></span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>b7<span class="op">~-</span><span class="fl">0.25</span>   <span class="co">// デチューン(半音単位、ピッチベンドで実現。bendRange は将来課題、当面±2半音固定)</span></span></code></pre></div>
+<h3 id="event-modifiers-v1.0-から継承">2.4 Event modifiers:
+<code>^N</code> pitch range / <code>~</code> detune</h3>
+<div class="sourceCode" id="cb7"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dv">3</span><span class="op">^</span><span class="dv">1</span>        <span class="co">// pitch range を +1 に設定(スティッキー、以降持続)</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="dv">3</span><span class="op">^</span><span class="dv">3</span>        <span class="co">// 3オクターブ上を一発(+ は省略可、^+3 と等価)</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="dv">3</span><span class="op">^-</span><span class="dv">1</span>       <span class="co">// 下方向は符号で</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a><span class="dv">1</span><span class="op">^</span><span class="dv">0</span>        <span class="co">// base range に戻す</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="dv">0</span><span class="op">^</span><span class="dv">2</span>        <span class="co">// 休符に付けて無音で音域だけ +2 に</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>b7<span class="op">~-</span><span class="fl">0.25</span>   <span class="co">// デチューン(半音単位、ピッチベンドで実現。bendRange は将来課題、当面±2半音固定)</span></span></code></pre></div>
+<p><strong><code>^N</code> = スティッキー pitch
+range(音域状態)。</strong>音または休符 <code>0</code>
+に付き、その地点から <strong>running range</strong> を base+N
+オクターブに設定する。<code>play()</code>
+内では<strong>読み順(時間順)に持続</strong>し、以降のすべての度数に効く(統一ルール:
+range +1 で <code>2</code>=D5, <code>9</code>=D6)。</p>
+<ul>
+<li><strong>リセット契機</strong>: 各 <code>play()</code> の先頭(base =
+range 0 に戻る)/ 後続の <code>^M</code> / <code>^0</code>。それ以外では持続。</li>
+<li><strong><code>^</code> は必ず音/休符に付く</strong>。独立した
+<code>^N</code> マーカー(裸の <code>^1</code>)は構文エラー。音域だけ静かに変えるときは
+<code>0^N</code>。</li>
+<li><strong>符号</strong>: <code>^+N</code> の <code>+</code>
+は省略可(<code>3^3</code> ≡ <code>3^+3</code>)。下方向は <code>^-N</code>。</li>
+<li><strong><code>^N</code>(linear/persistent)と <code>.oct(N)</code>(lexical/group、§3, Phase 2)は別軸の道具</strong>。<code>^N</code>
+は読み順でフラットに持続し、<code>.root()</code> やグループ境界では<strong>リセットしない</strong>(range
+と root は直交。グループ単位で音域を閉じたいときは <code>.oct(N)</code>)。<em>※
+<code>.root()</code> グループとの相互作用は DESIGN_DISCUSSION_RECORD §9.4
+で linear と確定。</em></li>
+<li><strong>running range が走るのは play() の<em>時間軸(メロディ)要素列</em></strong>。要素がコード/スタック(<code>[...]</code>
+/ <code>chord()</code>)のとき、running range はそのコード全体の音域を決め、コード内の各声部の
+<code>^N</code>(§6 のヴォイシング、例 So What)は<strong>その声部の構造的オクターブ配置</strong>として
+range の上に重なる。コード内 <code>^N</code> は running range を変えない(コードは1スロット)。</li>
+</ul>
 <hr />
 <h2 id="scope-rules">3. Scope Rules</h2>
 <p><code>.root()</code> / <code>.mode()</code>

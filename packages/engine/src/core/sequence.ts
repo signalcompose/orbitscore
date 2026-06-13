@@ -8,6 +8,8 @@ import * as path from 'path'
 
 import { AudioEngine } from '../audio/types'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
+import { resolveDegree } from '../midi/degree-resolution'
+import { RootContext } from '../midi/types'
 
 import { Global } from './global'
 import { Scheduler } from './global/types'
@@ -40,6 +42,15 @@ export class Sequence {
 
   // LinkAudio output channel (only meaningful when Global.linkAudio() is enabled)
   private _outputChannel?: string
+
+  // MIDI properties (only meaningful when seq.midi() was declared).
+  // A MIDI sequence interprets play() values as degrees, not slice numbers.
+  private _midiPort?: string // resolved actual port name
+  private _midiChannel?: number // 1..16
+  private _gate = 0.8 // default gate length (fraction of slot). spec §1
+  private _vel = 96 // default velocity 1..127. spec §1
+  private _octave = 4 // base octave; degree 1 MIDI note. default 4 (C4=60)
+  private _rootDegree?: number // seq.root(n): numeric root = degree of global.key()
 
   constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
@@ -146,7 +157,7 @@ export class Sequence {
    */
   private seamlessParameterUpdate(parameterName: string, description: string): void {
     if (this.stateManager.isLooping() || this.stateManager.isPlaying()) {
-      const scheduler = this.global.getScheduler()
+      const scheduler = this.activeScheduler()
 
       if (scheduler.isRunning && this.stateManager.getLoopStartTime() !== undefined) {
         const deferToNextCycle = ['tempo', 'beat', 'length', 'play'].includes(parameterName)
@@ -161,7 +172,7 @@ export class Sequence {
         // Immediate reschedule for the remaining parameters
         const now = Date.now()
         const currentTime = now - scheduler.startTime
-        scheduler.clearSequenceEvents(this.stateManager.getName())
+        this.clearEvents(this.stateManager.getName())
         this.scheduleEventsFromTime(scheduler, currentTime)
         console.log(`🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`)
       }
@@ -190,7 +201,7 @@ export class Sequence {
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       scheduleEventsFromTimeFn: (sched, fromTime) => this.scheduleEventsFromTime(sched, fromTime),
       getPatternDurationFn: () => this.getPatternDuration(),
-      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
+      clearSequenceEventsFn: (name) => this.clearEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
       setLoopTimerFn: (timer) => this.stateManager.setLoopTimer(timer),
@@ -269,7 +280,81 @@ export class Sequence {
     return this
   }
 
+  /**
+   * Declare this sequence as a MIDI output (§1). `play()` values are then
+   * interpreted as degrees, not slice numbers. Cannot be combined with
+   * `audio()` / `chop()`. Coexists with the SuperCollider audio path (no
+   * LinkAudio-style exclusion).
+   *
+   * @param portName CoreMIDI output port (case-insensitive substring, e.g.
+   *                 "iac" matches "IACドライバ バス1"). Resolved eagerly so an
+   *                 unknown port errors at declaration time.
+   * @param channel  MIDI channel 1..16.
+   */
+  midi(portName: string, channel: number): this {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this._audioFilePath !== undefined) {
+      throw new Error(`Sequence '${name}': midi() cannot be combined with audio()/chop().`)
+    }
+    if (!Number.isInteger(channel) || channel < 1 || channel > 16) {
+      throw new Error(
+        `Sequence '${name}': midi() channel must be an integer 1..16, got ${channel}.`,
+      )
+    }
+    // Resolve the port eagerly (throws listing available ports on no match).
+    this._midiPort = this.global.getMidiManager().getOutput().ensurePort(portName)
+    this._midiChannel = channel
+    return this
+  }
+
+  /** True when this sequence outputs MIDI (declared via `seq.midi()`). */
+  isMidi(): boolean {
+    return this._midiPort !== undefined
+  }
+
+  /** Default gate length as a fraction of the slot (0..1). spec §1. */
+  gate(value: number): this {
+    this._gate = Math.max(0, Math.min(1, value))
+    return this
+  }
+
+  /** Default MIDI velocity (1..127). spec §1. */
+  vel(value: number): this {
+    this._vel = Math.max(1, Math.min(127, Math.round(value)))
+    return this
+  }
+
+  /** Base octave determining the MIDI note of degree 1 (default 4, C4=60). */
+  octave(value: number): this {
+    this._octave = Math.round(value)
+    return this
+  }
+
+  /**
+   * Sequence-default root as a numeric degree of `global.key()` (§2.3).
+   * Note-name roots (`F#`) are Phase 2. Resolved against the key at dispatch;
+   * a numeric root with no `global.key()` declared is an error then.
+   */
+  root(degree: number): this {
+    // A root must be a positive degree. degree 0 is a rest, not a pitch center;
+    // without this guard root(0) resolves to null and silently falls back to
+    // the key tonic (§2.3), playing the wrong center with no error.
+    if (!Number.isInteger(degree) || degree < 1) {
+      throw new Error(
+        `Sequence '${this.stateManager.getName() || 'sequence'}': ` +
+          `root() degree must be a positive integer (1+), got ${degree}. ` +
+          `Degree 0 is a rest, not a valid root.`,
+      )
+    }
+    this._rootDegree = degree
+    return this
+  }
+
   audio(filepath: string): this {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this.isMidi()) {
+      throw new Error(`Sequence '${name}': audio() cannot be combined with midi().`)
+    }
     // Resolve to absolute path. Supports path-direct forms (./, ../, ~/, /,
     // contains '/') and bare bank names like "bd" or "bd:2" via the global
     // audioPath search list. See audio-resolver.ts for the rules.
@@ -289,6 +374,11 @@ export class Sequence {
   }
 
   chop(divisions: number): this {
+    if (this.isMidi()) {
+      throw new Error(
+        `Sequence '${this.stateManager.getName() || 'sequence'}': chop() cannot be combined with midi().`,
+      )
+    }
     this._chopDivisions = divisions
 
     if (!this._audioFilePath) {
@@ -328,8 +418,156 @@ export class Sequence {
     return this
   }
 
+  /**
+   * The scheduler this sequence schedules against: the MIDI transport (a shared
+   * TransportClock, no SuperCollider) for MIDI sequences, the SC audio engine
+   * for audio sequences. Both share the same Date.now() origin, so audio and
+   * MIDI stay in sync (§1).
+   */
+  private activeScheduler(): Scheduler {
+    return this.isMidi() ? this.global.getMidiTransport() : this.global.getScheduler()
+  }
+
+  /**
+   * Clear this sequence's scheduled events, routing to the right scheduler.
+   * For MIDI, `clearOwner` also releases any sounding notes (§7-2), so loop /
+   * mute / play swaps never leave hanging notes.
+   */
+  private clearEvents(name: string): void {
+    if (this.isMidi()) {
+      this.global.getMidiManager().getScheduler().clearOwner(name)
+    } else {
+      this.global.getScheduler().clearSequenceEvents(name)
+    }
+  }
+
+  /**
+   * Resolve this sequence's root context for degree resolution (§2.1, §2.3).
+   *
+   * Phase 1 supports the sequence default only: a numeric `seq.root(n)` is the
+   * n-th degree of `global.key()`; with no `seq.root()`, the key tonic is the
+   * root. A degree with neither a key nor a root is a hard error.
+   */
+  private resolveRootContext(): RootContext {
+    const name = this.stateManager.getName() || 'sequence'
+    const keyPC = this.global.getMidiManager().getKeyPitchClass()
+
+    if (keyPC === undefined) {
+      throw new Error(
+        `Sequence '${name}': MIDI degrees need a root. Declare global.key("C") (or set seq.root()).`,
+      )
+    }
+
+    let rootPitchClass = keyPC
+    if (this._rootDegree !== undefined) {
+      // The numeric root resolves against the key exactly like any degree (§2.3).
+      const resolved = resolveDegree(
+        { degree: this._rootDegree, alteration: 0, octaveShift: 0, detune: 0 },
+        { rootPitchClass: keyPC, octave: 0 },
+      )
+      if (resolved) {
+        rootPitchClass = ((resolved.midiNote % 12) + 12) % 12
+      }
+    }
+
+    return { rootPitchClass, octave: this._octave }
+  }
+
+  /**
+   * Eagerly validate a MIDI sequence's dispatch before scheduling: resolve the
+   * root context (key/root errors) AND resolve every degree once (so a rejected
+   * degree — 10/12/14/15+, §2.1 — throws here). This runs synchronously in the
+   * awaited run()/loop() chain, NOT in the fire-and-forget scheduleEventsFn
+   * callback, so the error reaches the caller (REPL/test) instead of becoming an
+   * unhandled rejection. The resolved notes are discarded; scheduleMidiEvents
+   * recomputes them with the running pitch range (§2.4).
+   */
+  private validateMidiDispatch(): void {
+    if (!this.isMidi()) return
+    const context = this.resolveRootContext()
+    const timedEvents = this.stateManager.getTimedEvents()
+    if (!timedEvents) return
+    for (const ev of timedEvents) {
+      const symbolic = ev.pitch ?? {
+        degree: ev.sliceNumber,
+        alteration: 0,
+        octaveShift: 0,
+        detune: 0,
+      }
+      resolveDegree(symbolic, context) // throws on a rejected/invalid degree
+    }
+  }
+
+  /**
+   * Schedule this sequence's timed events as MIDI notes (§7-0 output stage:
+   * symbolic pitch is resolved to a MIDI note number here, at the last moment).
+   *
+   * @param schedulerStartTime epoch ms of the audio scheduler start (shared clock)
+   * @param baseTime           ms since scheduler start for this iteration's bar
+   */
+  private scheduleMidiEvents(schedulerStartTime: number, baseTime: number): void {
+    const timedEvents = this.stateManager.getTimedEvents()
+    if (!timedEvents || timedEvents.length === 0 || this.stateManager.isMuted()) {
+      return
+    }
+
+    const midi = this.global.getMidiManager()
+    const scheduler = midi.getScheduler()
+    scheduler.start() // idempotent — ensure the lookahead loop is running
+
+    const owner = this.stateManager.getName()
+    const port = this._midiPort!
+    const channel = this._midiChannel!
+    const context = this.resolveRootContext()
+    const sendDelay = midi.sendDelayFor(port)
+
+    // §2.4 sticky pitch range: a note/rest with an explicit `^N` (rangeSet) sets
+    // the running range; every following degree inherits it in reading order
+    // until the next `^M`/`^0`. The range resets to base (0) here — i.e. at the
+    // top of each play() evaluation — so re-evaluations stay deterministic.
+    let runningRange = 0
+    for (const ev of timedEvents) {
+      const written = ev.pitch ?? {
+        degree: ev.sliceNumber,
+        alteration: 0,
+        octaveShift: 0,
+        detune: 0,
+      }
+      // An explicit `^N` (including `^0` and a `0^N` rest) moves the running
+      // range; the move persists even when the carrying event is a rest.
+      if (written.rangeSet) {
+        runningRange = written.octaveShift
+      }
+      // Resolve at the effective running range, not the per-note `^N` literal.
+      const symbolic = { ...written, octaveShift: runningRange }
+      const resolved = resolveDegree(symbolic, context)
+      if (!resolved) {
+        continue // rest (degree 0)
+      }
+      const onTime = schedulerStartTime + baseTime + ev.startTime + sendDelay
+      const offTime = onTime + ev.duration * this._gate
+      scheduler.scheduleNote({
+        owner,
+        port,
+        channel,
+        note: resolved.midiNote,
+        velocity: this._vel,
+        detune: resolved.detune,
+        onTime,
+        offTime,
+      })
+    }
+
+    this.stateManager.setPlaying(true)
+  }
+
   // Schedule events from a specific time onwards (for seamless parameter changes)
   private scheduleEventsFromTime(scheduler: Scheduler, fromTime: number): void {
+    if (this.isMidi()) {
+      this.scheduleMidiEvents(scheduler.startTime, fromTime)
+      return
+    }
+
     const timedEvents = this.stateManager.getTimedEvents()
     if (!timedEvents || !this._audioFilePath) {
       return
@@ -395,6 +633,11 @@ export class Sequence {
     loopIteration: number = 0,
     baseTime: number = 0,
   ): Promise<void> {
+    if (this.isMidi()) {
+      this.scheduleMidiEvents(scheduler.startTime, baseTime)
+      return
+    }
+
     const timedEvents = this.stateManager.getTimedEvents()
     if (!this._audioFilePath || !timedEvents || timedEvents.length === 0) {
       return
@@ -439,6 +682,7 @@ export class Sequence {
     // the awaited call chain to the REPL catch block, instead of becoming an
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
+    this.validateMidiDispatch() // eager root + degree validation (same rationale)
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -446,7 +690,7 @@ export class Sequence {
       chopDivisions: this._chopDivisions,
       loopTimer: this.stateManager.getLoopTimer(),
       prepareSlicesFn: () => this.prepareSlices(),
-      getScheduler: () => this.global.getScheduler(),
+      getScheduler: () => this.activeScheduler(),
     })
 
     if (!prepared) return this
@@ -463,7 +707,7 @@ export class Sequence {
       isPlaying: this.stateManager.isPlaying(),
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
-      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
+      clearSequenceEventsFn: (name) => this.clearEvents(name),
     })
 
     this.stateManager.setPlaying(result.isPlaying)
@@ -480,6 +724,7 @@ export class Sequence {
     // the awaited call chain to the REPL catch block, instead of becoming an
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
+    this.validateMidiDispatch() // eager root + degree validation (same rationale)
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -487,7 +732,7 @@ export class Sequence {
       chopDivisions: this._chopDivisions,
       loopTimer: this.stateManager.getLoopTimer(),
       prepareSlicesFn: () => this.prepareSlices(),
-      getScheduler: () => this.global.getScheduler(),
+      getScheduler: () => this.activeScheduler(),
     })
 
     if (!prepared) return this
@@ -511,7 +756,7 @@ export class Sequence {
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       scheduleEventsFromTimeFn: (sched, fromTime) => this.scheduleEventsFromTime(sched, fromTime),
       getPatternDurationFn: () => this.getPatternDuration(),
-      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
+      clearSequenceEventsFn: (name) => this.clearEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
       setLoopTimerFn: (timer) => this.stateManager.setLoopTimer(timer),
@@ -530,9 +775,8 @@ export class Sequence {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
 
-    // Clear scheduled events from scheduler
-    const scheduler = this.global.getScheduler()
-    scheduler.clearSequenceEvents(sequenceName)
+    // Clear scheduled events (MIDI: also releases sounding notes, §7-2)
+    this.clearEvents(sequenceName)
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
@@ -561,10 +805,9 @@ export class Sequence {
     const sequenceName = this.stateManager.getName()
     this.stateManager.setMuted(true)
 
-    // Clear any scheduled events when muting
-    // This prevents accumulated events from playing when unmuting
-    const scheduler = this.global.getScheduler()
-    scheduler.clearSequenceEvents(sequenceName)
+    // Clear any scheduled events when muting (MIDI: also releases sounding
+    // notes, §7-2). Prevents accumulated events from playing when unmuting.
+    this.clearEvents(sequenceName)
 
     return this
   }
@@ -580,15 +823,16 @@ export class Sequence {
     // If this sequence is currently looping, clear old events and reschedule from current time
     // This prevents accumulated events from playing when unmuting
     if (wasLooping) {
-      const scheduler = this.global.getScheduler()
+      const scheduler = this.activeScheduler()
       const currentTime = Date.now() - scheduler.startTime
 
       console.log(`🔓 ${sequenceName}: unmuting and rescheduling from ${currentTime}ms`)
 
-      // Clear old scheduled events (removes from scheduledPlays and sequenceEvents Map)
-      scheduler.clearSequenceEvents(sequenceName)
+      // Clear old scheduled events (MIDI: also releases sounding notes, §7-2)
+      this.clearEvents(sequenceName)
 
-      // Reinitialize tracking so new events won't be skipped
+      // Reinitialize tracking so new events won't be skipped (audio scheduler;
+      // a no-op for the MIDI path, which tracks per-owner in MidiOutput)
       scheduler.reinitializeSequenceTracking(sequenceName)
 
       // Reschedule from current time (seamless resume)
@@ -638,6 +882,12 @@ export class Sequence {
       pan: panState.pan,
       panRandom: panState.panRandom,
       outputChannel: this._outputChannel,
+      midiPort: this._midiPort,
+      midiChannel: this._midiChannel,
+      gate: this._gate,
+      vel: this._vel,
+      octave: this._octave,
+      rootDegree: this._rootDegree,
     }
   }
 }

@@ -16,6 +16,7 @@
     "cli": "cd ../.. && node packages/engine/dist/cli-audio.js"
   },
   "dependencies": {
+    "@julusian/midi": "^3.6.1",
     "supercolliderjs": "^1.0.1",
     "uuid": "^13.0.0",
     "wavefile": "^11.0.0",

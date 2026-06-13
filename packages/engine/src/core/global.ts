@@ -14,6 +14,9 @@ import { TransportControl } from './global/transport-control'
 import { SequenceRegistry } from './global/sequence-registry'
 import { LinkAudioManager } from './global/link-audio-manager'
 import { QuantizeManager, QuantizeValue } from './global/quantize-manager'
+import { MidiManager } from './global/midi-manager'
+import { TransportClock } from './global/transport-clock'
+import { MidiTransportScheduler } from './global/midi-transport-scheduler'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -24,6 +27,14 @@ export class Global {
   private sequenceRegistry: SequenceRegistry
   private linkAudioManager: LinkAudioManager
   private quantizeManager: QuantizeManager
+  private midiManager: MidiManager
+
+  // Shared transport clock — the single Date.now() origin for both the audio
+  // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
+  // schedule against `midiTransport` (TransportClock-backed) instead of the SC
+  // audio engine, so a MIDI-only session never touches SuperCollider.
+  private transportClock = new TransportClock()
+  private midiTransport = new MidiTransportScheduler(this.transportClock)
 
   // Core dependencies
   private audioEngine: AudioEngine
@@ -32,8 +43,9 @@ export class Global {
   /**
    * Creates a new Global instance with all manager components
    * @param audioEngine - The audio engine instance
+   * @param midiManager - Optional MidiManager (inject a mock-backed one in tests)
    */
-  constructor(audioEngine: AudioEngine) {
+  constructor(audioEngine: AudioEngine, midiManager?: MidiManager) {
     this.audioEngine = audioEngine
     // Type assertion: AudioEngine implementations must also implement Scheduler
     // This is true for SuperColliderPlayer
@@ -44,6 +56,7 @@ export class Global {
     this.audioManager = new AudioManager(audioEngine)
     this.linkAudioManager = new LinkAudioManager()
     this.quantizeManager = new QuantizeManager()
+    this.midiManager = midiManager ?? new MidiManager()
     this.sequenceRegistry = new SequenceRegistry(audioEngine, this)
     this.effectsManager = new EffectsManager(
       this.globalScheduler,
@@ -83,10 +96,33 @@ export class Global {
     return this
   }
 
-  // Note: tick() and key() have been removed
-  // - tick(): MIDI resolution, not needed for audio-only implementation
-  // - key(): Will be added when MIDI support is implemented
-  //   For audio, key detection feature needs to be implemented first
+  // Note: tick() has been removed (MIDI resolution, not needed for audio-only).
+
+  /**
+   * Set the global key from a note name (e.g. "C", "F#", "Bb").
+   *
+   * Establishes the tonic that numeric sequence roots resolve against (§2.3).
+   * MIDI sequences with bare degrees resolve relative to this key when no
+   * `seq.root()` overrides it.
+   */
+  key(name: string): this {
+    this.midiManager.key(name)
+    return this
+  }
+
+  /**
+   * Set the global MIDI send latency in milliseconds (§1). Applied to every
+   * MIDI send to align the MIDI path against the SuperCollider audio path.
+   */
+  midiLatency(ms: number): this {
+    this.midiManager.midiLatency(ms)
+    return this
+  }
+
+  /** Accessor for the shared MIDI manager (used by Sequence MIDI dispatch). */
+  getMidiManager(): MidiManager {
+    return this.midiManager
+  }
 
   // Audio path and device management
   audioPath(...values: (string | string[])[]): string | this {
@@ -194,8 +230,12 @@ export class Global {
 
   // Transport control
   start(): this {
+    // Stamp the shared clock origin FIRST so the audio scheduler (started by
+    // transportControl) and the MIDI scheduler share the same Date.now() base.
+    this.transportClock.start()
     this.transportControl.start()
     this.effectsManager.setRunningState(true)
+    this.midiManager.start()
     return this
   }
 
@@ -211,6 +251,8 @@ export class Global {
   stop(): this {
     this.transportControl.stop()
     this.effectsManager.setRunningState(false)
+    this.midiManager.stop()
+    this.transportClock.stop()
     return this
   }
 
@@ -227,9 +269,24 @@ export class Global {
     return this.sequenceRegistry.getSequence(name)
   }
 
-  // Get the global scheduler (used by sequences for scheduling)
+  // Get the global scheduler (used by audio sequences for scheduling)
   getScheduler(): Scheduler {
     return this.globalScheduler
+  }
+
+  /**
+   * Get the MIDI transport scheduler — a TransportClock-backed Scheduler that
+   * MIDI sequences use instead of the SC audio engine. Shares the same
+   * Date.now() origin as the audio scheduler (set at `start()`), so audio and
+   * MIDI stay in sync while MIDI stays free of SuperCollider.
+   */
+  getMidiTransport(): Scheduler {
+    return this.midiTransport
+  }
+
+  /** True while the transport is running (set by `start()` / cleared by `stop()`). */
+  isTransportRunning(): boolean {
+    return this.transportClock.running
   }
 
   // Get internal state for compatibility

@@ -93,6 +93,25 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // Track previous mute state for transition detection
   let wasMuted = getIsMutedFn()
 
+  // Deferred (setTimeout) scheduling runs detached from any awaited chain, so a
+  // throw/rejection there — e.g. a rejected degree (§2.1) introduced via a
+  // mid-loop play() — would be an uncaught exception / unhandled rejection,
+  // i.e. a process crash on Node>=22. Surface it as a logged error and keep the
+  // loop alive (with the last good schedule) instead. run() / loop() ENTRY
+  // still validates eagerly, so entry errors reach the caller as before.
+  const safeSchedule = (run: () => void): void => {
+    try {
+      const r = run() as unknown as void | Promise<void>
+      if (r && typeof (r as Promise<void>).catch === 'function') {
+        ;(r as Promise<void>).catch((e) =>
+          console.error(`${sequenceName}: loop scheduling error:`, e),
+        )
+      }
+    } catch (e) {
+      console.error(`${sequenceName}: loop scheduling error:`, e)
+    }
+  }
+
   // Use setTimeout-based loop to allow dynamic pattern duration
   // (setInterval can't change its interval after creation)
   let loopTimer: NodeJS.Timeout = undefined as unknown as NodeJS.Timeout
@@ -127,7 +146,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
         scheduler.reinitializeSequenceTracking(sequenceName)
 
         // Schedule events from current time (seamless resume)
-        scheduleEventsFromTimeFn(scheduler, now)
+        safeSchedule(() => scheduleEventsFromTimeFn(scheduler, now))
 
         // Update nextScheduleTime to align with current time
         nextScheduleTime = now
@@ -137,7 +156,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
         nextScheduleTime += previousDuration
         // Clear old scheduled events for this sequence before scheduling new ones
         clearSequenceEventsFn(sequenceName)
-        scheduleEventsFn(scheduler, 0, nextScheduleTime)
+        safeSchedule(() => scheduleEventsFn(scheduler, 0, nextScheduleTime))
       }
 
       // Update previous mute state for next iteration
