@@ -157,7 +157,7 @@ export class Sequence {
    */
   private seamlessParameterUpdate(parameterName: string, description: string): void {
     if (this.stateManager.isLooping() || this.stateManager.isPlaying()) {
-      const scheduler = this.global.getScheduler()
+      const scheduler = this.activeScheduler()
 
       if (scheduler.isRunning && this.stateManager.getLoopStartTime() !== undefined) {
         const deferToNextCycle = ['tempo', 'beat', 'length', 'play'].includes(parameterName)
@@ -409,6 +409,16 @@ export class Sequence {
   }
 
   /**
+   * The scheduler this sequence schedules against: the MIDI transport (a shared
+   * TransportClock, no SuperCollider) for MIDI sequences, the SC audio engine
+   * for audio sequences. Both share the same Date.now() origin, so audio and
+   * MIDI stay in sync (§1).
+   */
+  private activeScheduler(): Scheduler {
+    return this.isMidi() ? this.global.getMidiTransport() : this.global.getScheduler()
+  }
+
+  /**
    * Clear this sequence's scheduled events, routing to the right scheduler.
    * For MIDI, `clearOwner` also releases any sounding notes (§7-2), so loop /
    * mute / play swaps never leave hanging notes.
@@ -635,7 +645,7 @@ export class Sequence {
       chopDivisions: this._chopDivisions,
       loopTimer: this.stateManager.getLoopTimer(),
       prepareSlicesFn: () => this.prepareSlices(),
-      getScheduler: () => this.global.getScheduler(),
+      getScheduler: () => this.activeScheduler(),
     })
 
     if (!prepared) return this
@@ -679,7 +689,7 @@ export class Sequence {
       chopDivisions: this._chopDivisions,
       loopTimer: this.stateManager.getLoopTimer(),
       prepareSlicesFn: () => this.prepareSlices(),
-      getScheduler: () => this.global.getScheduler(),
+      getScheduler: () => this.activeScheduler(),
     })
 
     if (!prepared) return this
@@ -770,7 +780,7 @@ export class Sequence {
     // If this sequence is currently looping, clear old events and reschedule from current time
     // This prevents accumulated events from playing when unmuting
     if (wasLooping) {
-      const scheduler = this.global.getScheduler()
+      const scheduler = this.activeScheduler()
       const currentTime = Date.now() - scheduler.startTime
 
       console.log(`🔓 ${sequenceName}: unmuting and rescheduling from ${currentTime}ms`)

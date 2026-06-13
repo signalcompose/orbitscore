@@ -50,10 +50,12 @@ function mockScheduler() {
     isRunning: true,
     startTime: T0,
     getCurrentTime: () => 0,
+    start: vi.fn(),
+    stop: vi.fn(),
+    stopAll: vi.fn(),
     clearSequenceEvents: vi.fn(),
     reinitializeSequenceTracking: vi.fn(),
     getMasterGainDb: () => 0,
-    stopAll: vi.fn(),
   } as never
 }
 
@@ -71,6 +73,7 @@ describe('MIDI hanging-note invariant (§7-2 acceptance)', () => {
     const sched = mockScheduler()
     global = new Global(sched, new MidiManager(() => out))
     global.key('C')
+    global.start() // stamps the shared TransportClock
     seq = new Sequence(global, sched)
     seq.setName('piano')
     seq.midi('iac', 1)

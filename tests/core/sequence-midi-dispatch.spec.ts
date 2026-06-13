@@ -34,6 +34,9 @@ function mockScheduler() {
     isRunning: true,
     startTime: T0,
     getCurrentTime: () => 0,
+    start: vi.fn(),
+    stop: vi.fn(),
+    stopAll: vi.fn(),
     clearSequenceEvents: vi.fn(),
     reinitializeSequenceTracking: vi.fn(),
     getMasterGainDb: () => 0,
@@ -52,6 +55,7 @@ describe('Sequence MIDI dispatch (§7-0 output stage)', () => {
     out = mockMidiOutput()
     global = new Global(sched, new MidiManager(() => out))
     global.key('C')
+    global.start() // stamps the shared TransportClock (Date.now() = T0 under fake timers)
     seq = new Sequence(global, sched)
     seq.setName('piano')
     seq.midi('iac', 1).octave(4)

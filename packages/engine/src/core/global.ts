@@ -15,6 +15,8 @@ import { SequenceRegistry } from './global/sequence-registry'
 import { LinkAudioManager } from './global/link-audio-manager'
 import { QuantizeManager, QuantizeValue } from './global/quantize-manager'
 import { MidiManager } from './global/midi-manager'
+import { TransportClock } from './global/transport-clock'
+import { MidiTransportScheduler } from './global/midi-transport-scheduler'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -26,6 +28,13 @@ export class Global {
   private linkAudioManager: LinkAudioManager
   private quantizeManager: QuantizeManager
   private midiManager: MidiManager
+
+  // Shared transport clock — the single Date.now() origin for both the audio
+  // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
+  // schedule against `midiTransport` (TransportClock-backed) instead of the SC
+  // audio engine, so a MIDI-only session never touches SuperCollider.
+  private transportClock = new TransportClock()
+  private midiTransport = new MidiTransportScheduler(this.transportClock)
 
   // Core dependencies
   private audioEngine: AudioEngine
@@ -221,6 +230,9 @@ export class Global {
 
   // Transport control
   start(): this {
+    // Stamp the shared clock origin FIRST so the audio scheduler (started by
+    // transportControl) and the MIDI scheduler share the same Date.now() base.
+    this.transportClock.start()
     this.transportControl.start()
     this.effectsManager.setRunningState(true)
     this.midiManager.start()
@@ -240,6 +252,7 @@ export class Global {
     this.transportControl.stop()
     this.effectsManager.setRunningState(false)
     this.midiManager.stop()
+    this.transportClock.stop()
     return this
   }
 
@@ -256,9 +269,24 @@ export class Global {
     return this.sequenceRegistry.getSequence(name)
   }
 
-  // Get the global scheduler (used by sequences for scheduling)
+  // Get the global scheduler (used by audio sequences for scheduling)
   getScheduler(): Scheduler {
     return this.globalScheduler
+  }
+
+  /**
+   * Get the MIDI transport scheduler — a TransportClock-backed Scheduler that
+   * MIDI sequences use instead of the SC audio engine. Shares the same
+   * Date.now() origin as the audio scheduler (set at `start()`), so audio and
+   * MIDI stay in sync while MIDI stays free of SuperCollider.
+   */
+  getMidiTransport(): Scheduler {
+    return this.midiTransport
+  }
+
+  /** True while the transport is running (set by `start()` / cleared by `stop()`). */
+  isTransportRunning(): boolean {
+    return this.transportClock.running
   }
 
   // Get internal state for compatibility

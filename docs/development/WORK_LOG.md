@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.102 Issue #228 — Phase 1: TransportClock で MIDI を SC から分離 (同期維持) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 改善。 commit hash: `312e73e`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: 大和さんの指摘「IAC 経由は SC を絡ませない方がすっきり」。 ただし audio/MIDI を同時に使うとき**同期が壊れてはいけない**。 調査の結論: audio スケジューラも MIDI スケジューラも `Date.now()` ポーリングで、 同期は**共有する時刻原点 (`startTime`)** で実現されている。 従来は MIDI が audio scheduler オブジェクトから startTime を読んでいた (= コード結合だが、 これが同期の源)。
+
+**設計判断**: 共有「トランスポート時計」に巻き上げる。 audio も MIDI も同一の `Date.now()` 原点を参照し、 MIDI は audio engine を参照しない。
+
+**変更内容**:
+
+- `core/global/transport-clock.ts`: `TransportClock` (startTime/running、 `global.start()` で一度だけ `Date.now()` をスタンプ) = 唯一のクロック原点
+- `core/global/midi-transport-scheduler.ts`: `MidiTransportScheduler implements Scheduler` — TransportClock backed、 audio メソッドは no-op。 MIDI シーケンスはこれを使い **audio scheduler を一切参照しない**
+- `core/global.ts`: TransportClock 所有、 `start()` で原点スタンプ (audio scheduler 始動より先) → 同期維持、 `stop()` で停止。 `getMidiTransport()`/`isTransportRunning()` 追加
+- `core/sequence.ts`: `activeScheduler()` = MIDI なら MidiTransport、 audio なら SC scheduler。 seamlessParameterUpdate / run / loop / unmute の per-sequence scheduler を振り替え。 **audio 経路は無変更**
+- `tests/core/transport-clock.spec.ts`: 5件 (原点スタンプ・冪等・**no-op audio engine でも MIDI 動作** = 分離実証)。 MIDI dispatch / hanging-note テストは `global.start()` 追加で更新
+
+**同期の保証**: audio scheduler と MidiTransport は同じ `global.start()` の `Date.now()` 原点を共有 → 同音楽時刻のイベントは同 `Date.now()` 発火。 下流レイテンシ差は `midiLatency()` + ポート lead で補正 (§9、 既存)。 MIDI 専用セッションは SC を一切ブートしない。
+
+**テスト結果**: 878 passed / 23 skipped (901 total)。 +5、 audio 回帰なし。
+
+**次**: headless MIDI CLI ランナー (ts-node)。 TransportClock のおかげで audio engine 不要の綺麗な実装に。
+
+---
+
 ### 6.101 Issue #246 — ブラウザ MIDI モニター + シンセ (.orbs 検証ツール) (Jun 13, 2026)
 
 **Date**: 2026-06-13
