@@ -51,6 +51,13 @@
       .status.err {
         color: var(--rec);
       }
+      .badge {
+        font-size: 0.7rem;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: 4px;
+        padding: 1px 6px;
+      }
       main {
         display: grid;
         grid-template-columns: 1fr 1fr;
@@ -166,6 +173,9 @@
         padding: 1px 5px;
         border-radius: 3px;
       }
+      #waveRow.hidden {
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -175,11 +185,12 @@
       <button id="testTone" class="secondary" disabled>Test tone</button>
       <button id="panic" class="danger" disabled>Panic (all notes off)</button>
       <span id="status" class="status">クリックして開始してください</span>
+      <span id="reportBadge" class="badge" hidden>report → /events</span>
     </header>
 
     <main>
       <section class="panel">
-        <h2>Input &amp; Synth</h2>
+        <h2>Input &amp; Instrument</h2>
 
         <label for="midiIn">MIDI input</label>
         <select id="midiIn"><option>— (Enable で取得) —</option></select>
@@ -188,19 +199,28 @@
           日本語環境では <code>IACドライバ バス1</code> と表示されます。
         </div>
 
-        <label for="wave">Waveform</label>
-        <select id="wave">
-          <option value="triangle">triangle</option>
-          <option value="sawtooth">sawtooth</option>
-          <option value="square">square</option>
-          <option value="sine">sine</option>
+        <label for="instrument">Instrument</label>
+        <select id="instrument">
+          <option value="piano">Piano</option>
+          <option value="organ">Organ</option>
+          <option value="synth">Synth (waveform)</option>
         </select>
+
+        <div id="waveRow" class="hidden">
+          <label for="wave">Waveform (synth)</label>
+          <select id="wave">
+            <option value="triangle">triangle</option>
+            <option value="sawtooth">sawtooth</option>
+            <option value="square">square</option>
+            <option value="sine">sine</option>
+          </select>
+        </div>
 
         <label for="vol">Master volume <span id="volVal">0.3</span></label>
         <input id="vol" type="range" min="0" max="1" step="0.01" value="0.3" />
 
-        <label for="cutoff">Lowpass cutoff <span id="cutVal">3000</span> Hz</label>
-        <input id="cutoff" type="range" min="200" max="8000" step="50" value="3000" />
+        <label for="cutoff">Lowpass cutoff <span id="cutVal">5000</span> Hz</label>
+        <input id="cutoff" type="range" min="200" max="12000" step="50" value="5000" />
 
         <div class="note">
           velocity → 音量、 pitch bend → ±2半音 (エンジンの detune 範囲に一致)、
@@ -223,11 +243,30 @@
     </main>
 
     <script>
+      // ---- Optional event reporting (for joint testing) ----------------------
+      // Enabled with ?report=1. POSTs each event to /events so a collaborating
+      // observer (dev-server.py) can see what the browser received. Off by
+      // default; fails silently if no server endpoint.
+      const REPORT = new URLSearchParams(location.search).has('report')
+      function report(obj) {
+        if (!REPORT) return
+        try {
+          fetch('/events', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...obj, t: Date.now() }),
+            keepalive: true,
+          }).catch(() => {})
+        } catch (e) {
+          /* ignore */
+        }
+      }
+
       // ---- Web Audio: a small polyphonic synth -------------------------------
       let audio = null
       let masterGain = null
       let lowpass = null
-      // active voices keyed by "channel:note" → { osc, gain, channel }
+      // active voices keyed by "channel:note" → { oscs:[...], gain, channel }
       const voices = new Map()
       // pitch bend in semitones per channel (1..16), default 0
       const bend = new Array(17).fill(0)
@@ -256,26 +295,62 @@
         return channel + ':' + note
       }
 
+      // Build a voice for the selected instrument. Returns { oscs, gain, channel }.
+      function makeVoice(channel, note, velocity) {
+        const inst = $('instrument').value
+        const freq = midiToFreq(note)
+        const level = velocity / 127
+        const now = audio.currentTime
+        const detune = bend[channel] * 100 // semitones → cents
+
+        const out = audio.createGain()
+        out.connect(lowpass)
+        const oscs = []
+
+        const addOsc = (type, mult, amp) => {
+          const o = audio.createOscillator()
+          o.type = type
+          o.frequency.value = freq * mult
+          o.detune.value = detune
+          const g = audio.createGain()
+          g.gain.value = amp
+          o.connect(g).connect(out)
+          o.start()
+          oscs.push(o)
+        }
+
+        if (inst === 'organ') {
+          // Additive drawbar-ish tone: flat sustain, fast attack/release.
+          addOsc('sine', 1, 1.0)
+          addOsc('sine', 2, 0.6)
+          addOsc('sine', 3, 0.4)
+          addOsc('sine', 4, 0.25)
+          out.gain.setValueAtTime(0, now)
+          out.gain.linearRampToValueAtTime(level * 0.4, now + 0.012)
+        } else if (inst === 'piano') {
+          // Struck tone: bright attack partial + body, decays toward zero.
+          addOsc('triangle', 1, 1.0)
+          addOsc('sine', 2, 0.35)
+          addOsc('sine', 3, 0.12)
+          out.gain.setValueAtTime(0, now)
+          out.gain.linearRampToValueAtTime(level * 0.9, now + 0.004)
+          out.gain.exponentialRampToValueAtTime(Math.max(level * 0.18, 0.0001), now + 0.9)
+          out.gain.exponentialRampToValueAtTime(0.0001, now + 2.4)
+        } else {
+          // Raw synth waveform with a short decay→sustain.
+          addOsc($('wave').value, 1, 1.0)
+          out.gain.setValueAtTime(0, now)
+          out.gain.linearRampToValueAtTime(level * 0.9, now + 0.005)
+          out.gain.exponentialRampToValueAtTime(Math.max(level * 0.7, 0.0001), now + 0.25)
+        }
+
+        return { oscs, gain: out, channel }
+      }
+
       function noteOn(channel, note, velocity) {
         ensureAudio()
-        // Retrigger: stop an existing voice on the same key first.
-        noteOff(channel, note, true)
-
-        const osc = audio.createOscillator()
-        osc.type = $('wave').value
-        osc.frequency.value = midiToFreq(note)
-        osc.detune.value = bend[channel] * 100 // semitones → cents
-
-        const g = audio.createGain()
-        const level = (velocity / 127) * 0.9
-        const now = audio.currentTime
-        g.gain.setValueAtTime(0, now)
-        g.gain.linearRampToValueAtTime(level, now + 0.005) // fast attack
-        g.gain.exponentialRampToValueAtTime(Math.max(level * 0.7, 0.0001), now + 0.25) // decay→sustain
-
-        osc.connect(g).connect(lowpass)
-        osc.start()
-        voices.set(voiceKey(channel, note), { osc, gain: g, channel })
+        noteOff(channel, note, true) // retrigger: clear existing voice first
+        voices.set(voiceKey(channel, note), makeVoice(channel, note, velocity))
         refreshActive()
       }
 
@@ -284,12 +359,12 @@
         const v = voices.get(key)
         if (!v) return
         const now = audio.currentTime
-        const release = immediate ? 0.01 : 0.12
+        const release = immediate ? 0.01 : 0.14
         try {
           v.gain.gain.cancelScheduledValues(now)
           v.gain.gain.setValueAtTime(Math.max(v.gain.gain.value, 0.0001), now)
           v.gain.gain.exponentialRampToValueAtTime(0.0001, now + release)
-          v.osc.stop(now + release + 0.02)
+          for (const o of v.oscs) o.stop(now + release + 0.03)
         } catch (e) {
           /* voice already stopped */
         }
@@ -299,10 +374,12 @@
 
       function allNotesOff() {
         for (const [, v] of voices) {
-          try {
-            v.osc.stop()
-          } catch (e) {
-            /* noop */
+          for (const o of v.oscs) {
+            try {
+              o.stop()
+            } catch (e) {
+              /* noop */
+            }
           }
         }
         voices.clear()
@@ -311,14 +388,12 @@
 
       function applyBend(channel) {
         for (const [, v] of voices) {
-          if (v.channel === channel) v.osc.detune.value = bend[channel] * 100
+          if (v.channel === channel) for (const o of v.oscs) o.detune.value = bend[channel] * 100
         }
       }
 
       function refreshActive() {
-        const names = [...voices.keys()]
-          .map((k) => noteName(parseInt(k.split(':')[1])))
-          .sort()
+        const names = [...voices.keys()].map((k) => noteName(parseInt(k.split(':')[1]))).sort()
         $('active').textContent = names.length ? names.join('  ') : '—'
       }
 
@@ -337,16 +412,20 @@
           onCount++
           noteOn(channel, d1, d2)
           log('ev-on', `ch${channel} note-on  ${noteName(d1)} (${d1}) vel ${d2}`)
+          report({ kind: 'note-on', ch: channel, note: d1, name: noteName(d1), vel: d2 })
         } else if (type === 0x80 || (type === 0x90 && d2 === 0)) {
           offCount++
           noteOff(channel, d1)
           log('ev-off', `ch${channel} note-off ${noteName(d1)} (${d1})`)
+          report({ kind: 'note-off', ch: channel, note: d1, name: noteName(d1) })
         } else if (type === 0xb0) {
           if (d1 === 123 || d1 === 120) {
             allNotesOff()
             log('ev-panic', `ch${channel} CC${d1} — ALL NOTES OFF (panic)`)
+            report({ kind: 'panic', ch: channel, cc: d1 })
           } else {
             log('ev-cc', `ch${channel} CC${d1} = ${d2}`)
+            report({ kind: 'cc', ch: channel, cc: d1, value: d2 })
           }
         } else if (type === 0xe0) {
           const value14 = (d2 << 7) | d1
@@ -354,6 +433,7 @@
           bend[channel] = semis
           applyBend(channel)
           log('ev-bend', `ch${channel} pitch-bend ${semis.toFixed(3)} st`)
+          report({ kind: 'bend', ch: channel, semitones: +semis.toFixed(3) })
         }
         updateCounts()
       }
@@ -362,7 +442,6 @@
       let midiAccess = null
       let currentInput = null
 
-      /** Replace the <select> options with one <option> per MIDI input. */
       function populateInputs() {
         const sel = $('midiIn')
         const inputs = [...midiAccess.inputs.values()]
@@ -376,12 +455,13 @@
           const opt = document.createElement('option')
           opt.textContent = '(no MIDI inputs found)'
           sel.replaceChildren(opt)
+          report({ kind: 'inputs', names: [] })
           return
         }
         sel.replaceChildren(...options)
-        // Auto-select an IAC port if present (localized: matches "IACドライバ" too).
         const iac = inputs.find((i) => /iac/i.test(i.name))
         sel.value = (iac || inputs[0]).id
+        report({ kind: 'inputs', names: inputs.map((i) => i.name) })
         selectInput(sel.value)
       }
 
@@ -392,6 +472,7 @@
           currentInput.onmidimessage = handleMidi
           statusEl.textContent = `listening: ${currentInput.name}`
           statusEl.className = 'status on'
+          report({ kind: 'listening', name: currentInput.name })
         }
       }
 
@@ -400,10 +481,12 @@
         await audio.resume()
         $('testTone').disabled = false
         $('panic').disabled = false
+        report({ kind: 'enabled', instrument: $('instrument').value })
 
         if (!navigator.requestMIDIAccess) {
           statusEl.textContent = 'Web MIDI 非対応ブラウザです (Chrome 推奨)。Test tone は使えます。'
           statusEl.className = 'status err'
+          report({ kind: 'midi-unavailable' })
           return
         }
         try {
@@ -413,6 +496,7 @@
         } catch (e) {
           statusEl.textContent = 'MIDI アクセスが拒否されました: ' + e.message
           statusEl.className = 'status err'
+          report({ kind: 'midi-denied', error: String(e.message || e) })
         }
       }
 
@@ -433,8 +517,18 @@
       }
 
       // ---- UI wiring ---------------------------------------------------------
+      if (REPORT) $('reportBadge').hidden = false
+      function syncInstrumentUI() {
+        $('waveRow').classList.toggle('hidden', $('instrument').value !== 'synth')
+      }
+      syncInstrumentUI()
+
       $('enable').addEventListener('click', enable)
       $('midiIn').addEventListener('change', (e) => selectInput(e.target.value))
+      $('instrument').addEventListener('change', () => {
+        syncInstrumentUI()
+        report({ kind: 'instrument', value: $('instrument').value })
+      })
       $('vol').addEventListener('input', (e) => {
         $('volVal').textContent = e.target.value
         if (masterGain) masterGain.gain.value = parseFloat(e.target.value)
@@ -447,12 +541,13 @@
       $('panic').addEventListener('click', () => {
         allNotesOff()
         log('ev-panic', 'manual panic (UI)')
+        report({ kind: 'panic-ui' })
       })
       $('testTone').addEventListener('click', () => {
-        // Synthesize a note without MIDI, to verify the audio path independently.
         noteOn(1, 60, 100)
-        setTimeout(() => noteOff(1, 60), 400)
+        setTimeout(() => noteOff(1, 60), 500)
         log('ev-on', 'test tone C4 (no MIDI)')
+        report({ kind: 'test-tone', note: 60, instrument: $('instrument').value })
       })
     </script>
   </body>

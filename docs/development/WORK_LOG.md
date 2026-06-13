@@ -36,6 +36,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **検証**: localhost 配信で HTTP 200、 主要要素・コード存在確認、 inline JS の `node --check` 構文OK。 実 IAC→発音は Chrome での人手確認 (Web MIDI は secure context 必須)。
 
+**追記 (commit `7ff89e2`)**: 楽器選択 (Piano / Organ / Synth) + 任意のイベントレポート (`?report=1`) + `dev-server.py` (静的配信 + POST /events を stdout) を追加。 **実機 end-to-end 検証済み**: CLI (`@julusian/midi`) → `IACドライバ バス1` → ブラウザ Web MIDI で C メジャースケール + 和音をビット単位一致で受信・発音、 ピッチ正常を人手確認。 先頭音落ちはタブ非フォーカス時の AudioContext スロットルが原因 (README 明記)。 `dev-server.py` 経由でブラウザ受信イベントを観測しながら人間/エージェント連携でテストできることを実証。
+
 ---
 
 ### 6.100 Issue #228 — Phase 1 増分5d: hanging note 不変条件 + `[ ]` 予約 (Phase 1 機能完成) (Jun 13, 2026)
