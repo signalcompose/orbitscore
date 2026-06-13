@@ -39,7 +39,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - `core/sequence.ts`: `resolveScopeToContext(scope, getSeqDefault)` を追加し scheduleMidiEvents / validateMidiDispatch で per-event 解決。音名 root は key 不要・度数 root は key 必須（未宣言はエラー）・mode は throw。seq 既定は遅延算出（音名 root のみのシーケンスが key を要求されないように）
 - テスト: `scope-timing.spec.ts` 4件（timing 透過 + inner→outer + groupOct）、`sequence-scope-dispatch.spec.ts` 8件（音名/度数 root、並置共有、入れ子 override、key 有無、mode 拒否）。全体 860 passed。
 
-**次**: B7 `.oct()`×`^N` 合成（**要・大和確認**: additive 推奨）→ VS Code セマンティックハイライト（Sonnet 委譲）→ core spec 反映。
+**追加コミット (B7: `.oct()`×`^N` 合成)**: 大和確認で **additive** に決定。`effectiveOctave = runningRange + groupOct`（§9.3 直交＝足し合わせ）。`^N` は `.oct()` グループを抜けても持続（§9.4 linear）、groupOct は running range にフィードバックしない。テスト3件追加（加算合成 / oct 単独 / `^N` 持続）。全体 863 passed。
+
+**次**: VS Code セマンティックハイライト（Sonnet 委譲）→ core spec 反映（B8）→ Phase 2 PR。
 
 ---
 

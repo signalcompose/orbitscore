@@ -593,9 +593,12 @@ export class Sequence {
       // Per-event group scope (§3): a group `.root()` overrides the sequence
       // default for this note (inner→outer already collapsed in the timing walk).
       const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
-      // Resolve at the effective running range, not the per-note `^N` literal.
-      // (`.oct()` group register composition with `^N` arrives in B7.)
-      const symbolic = { ...written, octaveShift: runningRange }
+      // Effective octave = sticky running range (`^N`, linear) + group register
+      // (`.oct()`, lexical). The two are orthogonal axes and compose additively
+      // (§9.3); `.oct()` is local to its group, while `^N` persists across group
+      // boundaries (§9.4), so groupOct never feeds back into runningRange.
+      const effectiveOctave = runningRange + (ev.scope?.groupOct ?? 0)
+      const symbolic = { ...written, octaveShift: effectiveOctave }
       const resolved = resolveDegree(symbolic, context)
       if (!resolved) {
         continue // rest (degree 0)

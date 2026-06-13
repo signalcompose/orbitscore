@@ -144,4 +144,27 @@ describe('Sequence group-scope dispatch (§3)', () => {
     seq.play(...(args as never[]))
     await expect(seq.run()).rejects.toThrow(/mode.*not implemented/i)
   })
+
+  it('.oct(N) composes additively with the sticky ^N range (§9.3)', async () => {
+    const out = await playKeyed('3^1, (1).oct(1)')
+    // 3^1 → E5 (range +1: 64 + 12 = 76); (1).oct(1) → range(+1)+oct(+1)=+2 → C6 (84)
+    expect(notesOf(out)).toEqual(expect.arrayContaining([76, 84]))
+    expect(notesOf(out)).toHaveLength(2)
+  })
+
+  it('.oct(N) alone lifts the group register', async () => {
+    const out = await playKeyed('(1, 5).oct(1)')
+    // range 0 + oct +1 → degree 1 = C5 (72), degree 5 = G5 (79)
+    expect(notesOf(out)).toEqual(expect.arrayContaining([72, 79]))
+    expect(notesOf(out)).toHaveLength(2)
+  })
+
+  it('^N persists past a .oct() group; the group oct does not leak out (§9.4)', async () => {
+    const out = await playKeyed('3^1, (1).oct(2), 1')
+    // 3^1 → E5 (76, range +1); (1).oct(2) → +1+2 = +3 → C7 (96);
+    // trailing 1 → range +1 persists, oct gone → C5 (72)
+    expect(notesOf(out)).toEqual(expect.arrayContaining([76, 96, 72]))
+    expect(notesOf(out)).toHaveLength(3)
+    expect(notesOf(out)).not.toContain(60) // would be C4 if ^N had been reset by the group
+  })
 })
