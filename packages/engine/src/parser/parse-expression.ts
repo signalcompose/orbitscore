@@ -543,9 +543,11 @@ export class ExpressionParser {
    */
   private expectRootDegree(token: AudioToken): number {
     const degree = ParserUtils.parseNumber(token)
-    if (degree < 1) {
+    // Match the seq.root() setter guard: a positive integer. 0 is a rest, and a
+    // fractional degree is meaningless (would otherwise throw later at resolve).
+    if (!Number.isInteger(degree) || degree < 1) {
       throw new Error(
-        `.root() degree must be a positive degree (1+); 0 is a rest, not a valid root.`,
+        `.root() degree must be a positive integer (1+); 0 is a rest, not a valid root.`,
       )
     }
     return degree

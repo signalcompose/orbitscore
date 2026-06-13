@@ -61,7 +61,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **(test) カバレッジ +9**: nested レベルの run-collapse（`((1)(2).root(3), 5)`、/simplify の共有関数を両経路で検証）、不正 root 引数（`.root(0)`/`.root(b0)`/`.root(H)`/空）、note-root + bare degree 混在で no-key reject、inner `.oct()` × outer `.root()` 別フレーム、`.oct(-N)`。
 - code-reviewer は Critical/Important ゼロ。872 passed。
 
-**次**: イテレーション2（再レビュー）→ マージ判断。follow-up: span レベルハイライト（PlayScoped offset 要）、Phase 3 (#231)。
+**/code:pr-review-team イテレーション2 (#247)**: 再レビュー（code-reviewer + silent-failure-hunter）でイテレーション1修正が正しく新規問題なしを確認（Critical 0 / Important 0）。surfaced Minor 1件を fold-in: `expectRootDegree` に `Number.isInteger` チェック追加（seq.root() setter と対称、`.root(1.5)` を parse エラーに）+ テスト。**完了条件達成: Critical 0 / Important 0 / security pass**。873 passed / 23 skipped。
+
+**次**: #247 マージ判断（ユーザー指示待ち）。follow-up: span レベルハイライト（PlayScoped offset 要）、Phase 3 (#231 `[ ]` スタック + chord 値)。
 
 ---
 

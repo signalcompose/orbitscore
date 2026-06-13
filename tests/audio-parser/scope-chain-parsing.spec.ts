@@ -171,6 +171,9 @@ describe('Phase 2 — invalid .root() arguments error at parse', () => {
   it('.root(b0) — altered degree 0 — throws', () => {
     expect(() => parseAudioDSL('seq1.play((1).root(b0))')).toThrow(/positive degree|rest/)
   })
+  it('.root(1.5) — fractional degree — throws (positive integer required)', () => {
+    expect(() => parseAudioDSL('seq1.play((1).root(1.5))')).toThrow(/positive integer/)
+  })
   it('.root(H) — invalid note letter — throws', () => {
     expect(() => parseAudioDSL('seq1.play((1).root(H))')).toThrow(/note letter/)
   })
