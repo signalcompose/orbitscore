@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.107 Issue #231 — Phase 3: `[ ]` スタック + chord 値 (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS（スタック core 完了 B0-B4。chord 値 spread/除去/import は後続コミット B5-B7）
+**Issue**: signalcompose/orbitscore#231
+**Branch**: `231-phase-3-stack-chord`
+
+**設計**: code-architect で blueprint を策定（4層パイプライン: L1 parse→PlayStack（生）/ L2 evaluate（chord 名解決・spread・除去・^N、namespace を持つ唯一の層）/ L3 timing（並列再帰）/ L4 dispatch（同時 note-on は等 startTime から自動的に従う、audio 拒否は生パターン走査）。spec §4/§6/§10 正本。advisor で「Phase R 未実装＝chord 値用の値束縛基盤を本フェーズで最小構築」を確認）。
+
+**前提の訂正**: 直前要約は Phase R (#227 パターン変数) 完了を前提にしていたが、#227 は OPEN・値束縛/`import`/`*n` 基盤は未実装。chord 値の namespace は本フェーズで chord 専用に最小構築し、`kind` discriminant で Phase R と共有可能にする（`*n`・汎用タプルパターン変数は作らない）。
+
+**本コミット（スタック core B0-B4）**:
+- `parser/types.ts`: `PlayStack`（voices + 任意 octaveShift）/`StackElement`/`PlayChordRef`/`PlayChordRemoval` を追加、PlayElement union に PlayStack
+- `parser/parse-expression.ts`: `parseStack`/`parseStackElement`（`[ ]` を常に PlayStack へ。LBRACKET の旧 `bracketReservedMessage` throw を撤去）、`parseChordRef`（bare 識別子 + `^N`）、`parseChordRemoval`（`-N`/`-bN`、`[ ]` 内 `-` は常に除去）、`asStackVoice`（スタック voice の `^N` は構造的＝rangeSet クリア §2.4）
+- `timing/calculation/calculate-event-timing.ts`: `stack` 分岐（voice ごとに `[voice]` を全長・等 startTime で並列再帰、`[1,(5,3,2,1)]` のサブツリーは同一スパンを再分割）+ `applyStackOctaveShift`（whole-stack `^N` を構造的に加算）。未解決 chord_ref/removal が来たら internal error
+- `core/sequence.ts`: dispatch の octaveShift を加算式に修正（`runningRange + groupOct + (rangeSet?0:octaveShift)`。構造的シフトを上乗せ、従来の旋律音は no-op）。`validateNonMidiDispatch` + `containsStack`（生パターン再帰走査、`( )`/scope/modifier 内のスタックも検出）を追加し run()/loop() で eager 拒否（§10-5 audio スタック予約）
+
+**テスト**: `stack-parsing.spec.ts` 10件 / `stack-timing.spec.ts` 5件 / `sequence-stack-dispatch.spec.ts` 7件（同時 note-on、scope 合成、voice/whole `^N` の加算、running range 非干渉、audio 拒否）。`pitch-parsing.spec.ts` の旧「`[ ]` reserved＝parse throw」3件を新仕様（PlayStack へ parse、拒否は dispatch）に更新。全体 895 passed / 23 skipped。
+
 ### 6.106 Issue #230 — Phase 2: `.root()`/`.mode()`/`.oct()` グループスコープ — パーサー層 (Jun 13, 2026)
 
 **Date**: 2026-06-13

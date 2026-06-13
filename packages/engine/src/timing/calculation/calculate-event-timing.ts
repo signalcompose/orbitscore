@@ -44,6 +44,26 @@ function resolveScope(stack: ScopeFrame[]): TimedEventScope | undefined {
 }
 
 /**
+ * Apply a whole-stack octave shift (§6 `m7^+1`) to a stack voice's timed event.
+ * Structural: it adds to the symbolic pitch's `octaveShift` WITHOUT setting
+ * `rangeSet`, so it never perturbs the §2.4 running range. A bare-number voice
+ * (no `pitch` yet) is promoted to a symbolic pitch carrying the shift.
+ */
+function applyStackOctaveShift(ev: TimedEvent, shift: number): void {
+  if (ev.pitch) {
+    ev.pitch = { ...ev.pitch, octaveShift: ev.pitch.octaveShift + shift }
+  } else {
+    ev.pitch = {
+      degree: ev.sliceNumber,
+      alteration: 0,
+      octaveShift: shift,
+      rangeSet: false,
+      detune: 0,
+    }
+  }
+}
+
+/**
  * Calculate timing for play() arguments
  *
  * This function recursively processes nested play() patterns and calculates
@@ -124,6 +144,40 @@ export function calculateEventTiming(
           [...scopeStack, frame],
         )
         events.push(...nestedEvents)
+      } else if (element.type === 'stack') {
+        // §4: a stack occupies ONE sibling slot; every voice shares the SAME
+        // startTime and the FULL slot duration (NOT divided like `( )`). Recurse
+        // each voice as a singleton so it gets the full span (÷1) at the same
+        // start, reusing every leaf handler — `[1, (5,3,2,1)]` falls out (the 1
+        // holds the slot while the subtree subdivides the same span). scopeStack
+        // threads UNCHANGED so chord degrees resolve against the enclosing group
+        // scope (the placement scope, §6).
+        for (const voice of element.voices) {
+          if (
+            voice &&
+            typeof voice === 'object' &&
+            (voice.type === 'chord_ref' || voice.type === 'chord_removal')
+          ) {
+            // §6: chord refs/removals are resolved (spread/removal) by the chord
+            // evaluator BEFORE timing. Reaching here means evaluation was skipped
+            // — a wiring bug, surfaced loudly rather than mis-rendered.
+            throw new Error(
+              `Internal: unresolved ${voice.type} reached the timing walk; ` +
+                `chord stacks must be evaluated before scheduling (§6).`,
+            )
+          }
+          const voiceEvents = calculateEventTiming(
+            [voice],
+            elementDuration,
+            elementStartTime,
+            depth + 1,
+            scopeStack,
+          )
+          if (element.octaveShift) {
+            for (const ev of voiceEvents) applyStackOctaveShift(ev, element.octaveShift)
+          }
+          events.push(...voiceEvents)
+        }
       } else if (element.type === 'pitch') {
         // MIDI degree with alteration / octave-shift / detune (§2.1, §2.4).
         // The rhythm tree gives timing; the symbolic pitch is carried unresolved

@@ -14,6 +14,10 @@ import {
   PlayModifier,
   PlayPitch,
   PlayScoped,
+  PlayStack,
+  StackElement,
+  PlayChordRef,
+  PlayChordRemoval,
   ScopeRoot,
   ScopeMode,
   Meter,
@@ -81,24 +85,10 @@ export class ExpressionParser {
     }
 
     if (token.type === 'LBRACKET') {
-      throw new Error(this.bracketReservedMessage())
+      return this.parseStack()
     }
 
     throw new Error(`Unexpected token in argument: ${token.type}`)
-  }
-
-  /**
-   * The stack `[ ]` syntax is reserved but not implemented in v1.1 (spec §10-5).
-   * We tokenize `[`/`]` and raise this diagnostic rather than silently dropping
-   * them, so the future opening (MIDI chords in Phase 3, audio layering later)
-   * is a pure addition.
-   */
-  private bracketReservedMessage(): string {
-    return (
-      'Stack "[ ]" is not yet supported in v1.1 (reserved). ' +
-      'Chord stacks for MIDI arrive in a later phase; audio slice layering is reserved. ' +
-      'See PITCH_DSL_SPEC §4 / §10-5.'
-    )
   }
 
   /**
@@ -649,6 +639,136 @@ export class ExpressionParser {
   }
 
   /**
+   * Parse a `[ ]` simultaneous-note-on stack (§4). Voices are parallel — NOT a
+   * juxtaposition run — so, unlike parseNestedPlay, this never calls
+   * collapseScopedRun. A trailing `^N` on the `]` is a whole-stack octave shift
+   * (§6 `m7^+1`). Always produces a PlayStack regardless of sequence domain; the
+   * audio-vs-MIDI rejection (§10-5) is a dispatch-time diagnostic.
+   */
+  private parseStack(): { value: PlayStack; newPos: number } {
+    const voices: StackElement[] = []
+    const lbracket = ParserUtils.expect(this.tokens, this.pos, 'LBRACKET')
+    this.pos = lbracket.newPos
+
+    while (
+      ParserUtils.current(this.tokens, this.pos).type !== 'RBRACKET' &&
+      !ParserUtils.isEOF(this.tokens, this.pos)
+    ) {
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'RBRACKET') {
+        break
+      }
+      this.parseStackElement(voices)
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      } else {
+        break
+      }
+    }
+
+    const rbracket = ParserUtils.expect(this.tokens, this.pos, 'RBRACKET')
+    this.pos = rbracket.newPos
+
+    // Optional trailing `^N`: a whole-stack octave shift (§6). Structural — never
+    // a running-range set point (§2.4), so it lives on the node, not in a voice.
+    if (ParserUtils.current(this.tokens, this.pos).type === 'CARET') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      const octaveShift = this.parseSignedNumber()
+      return { value: { type: 'stack', voices, octaveShift }, newPos: this.pos }
+    }
+
+    return { value: { type: 'stack', voices }, newPos: this.pos }
+  }
+
+  /**
+   * Parse a single voice within a `[ ]` stack. Extends the nested-element grammar
+   * with the two chord markers: a bare IDENTIFIER → {@link PlayChordRef} (a bound
+   * chord value, resolved at evaluation), and a leading MINUS → {@link
+   * PlayChordRemoval} (§6 literal removal — inside `[ ]` a `-` is always a removal,
+   * never a negative number, since stack voices are degrees ≥ 1). A `^N` on a
+   * pitched voice is STRUCTURAL (rangeSet cleared, §2.4).
+   */
+  private parseStackElement(voices: StackElement[]): void {
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+    const cur = ParserUtils.current(this.tokens, this.pos).type
+
+    if (cur === 'LBRACKET') {
+      const stackResult = this.parseStack()
+      this.pos = stackResult.newPos
+      voices.push(stackResult.value)
+    } else if (cur === 'LPAREN') {
+      // Independent subtree voice, e.g. [1, (5, 3, 2, 1)] (one-part polyphony, §4).
+      const nestedResult = this.parseNestedPlay()
+      this.pos = nestedResult.newPos
+      voices.push(nestedResult.value)
+    } else if (cur === 'MINUS') {
+      voices.push(this.parseChordRemoval())
+    } else if (cur === 'IDENTIFIER') {
+      voices.push(this.parseChordRef())
+    } else if (cur === 'ACCIDENTAL') {
+      const pitchResult = this.parsePitch()
+      this.pos = pitchResult.newPos
+      voices.push(this.asStackVoice(pitchResult.value))
+    } else if (cur === 'NUMBER') {
+      const numResult = ParserUtils.advance(this.tokens, this.pos)
+      this.pos = numResult.newPos
+      const value = ParserUtils.parseNumber(numResult.token)
+      const next = ParserUtils.current(this.tokens, this.pos).type
+      if (next === 'CARET' || next === 'TILDE') {
+        const pitchResult = this.parsePitchModifiers(value, 0)
+        this.pos = pitchResult.newPos
+        voices.push(this.asStackVoice(pitchResult.value))
+      } else {
+        voices.push(value)
+      }
+    } else {
+      throw new Error(`Unexpected token in stack [ ]: ${cur}`)
+    }
+  }
+
+  /**
+   * Mark a PlayPitch as a stack voice: clear `rangeSet` so a voice `^N` is
+   * structural (§2.4 — stack-internal `^N` places the voice's octave but does NOT
+   * move the running range, unlike a melodic `^N`).
+   */
+  private asStackVoice(pitch: PlayPitch): PlayPitch {
+    return pitch.rangeSet ? { ...pitch, rangeSet: false } : pitch
+  }
+
+  /**
+   * Parse a bare chord-name reference inside a stack: IDENTIFIER [`^N`] (§6). The
+   * name is resolved at evaluation against the chord namespace. A trailing `^N` is
+   * a whole-chord structural octave shift applied to the spread voices.
+   */
+  private parseChordRef(): PlayChordRef {
+    const id = ParserUtils.advance(this.tokens, this.pos)
+    this.pos = id.newPos
+    if (ParserUtils.current(this.tokens, this.pos).type === 'CARET') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      return { type: 'chord_ref', name: id.token.value, octaveShift: this.parseSignedNumber() }
+    }
+    return { type: 'chord_ref', name: id.token.value, octaveShift: 0 }
+  }
+
+  /**
+   * Parse a removal marker inside a stack: MINUS [ACCIDENTAL] NUMBER (`-5`, `-b3`).
+   * Inside `[ ]` a leading `-` is always a removal (§6), never a negative number.
+   */
+  private parseChordRemoval(): PlayChordRemoval {
+    this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // MINUS
+    let alteration = 0
+    const cur = ParserUtils.current(this.tokens, this.pos)
+    if (cur.type === 'ACCIDENTAL') {
+      alteration = this.accidentalToAlteration(cur.value)
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+    }
+    const num = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+    this.pos = num.newPos
+    return { type: 'chord_removal', degree: ParserUtils.parseNumber(num.token), alteration }
+  }
+
+  /**
    * Parse a single element within a nested play structure
    */
   private parseNestedPlayElement(elements: PlayElement[]): void {
@@ -657,8 +777,11 @@ export class ExpressionParser {
     const cur = ParserUtils.current(this.tokens, this.pos).type
 
     if (cur === 'LBRACKET') {
-      // Stack [ ] is reserved (spec §10-5) — error rather than silently ignore.
-      throw new Error(this.bracketReservedMessage())
+      // Stack [ ] (§4): a simultaneous-note-on group. Parsed here; the audio-vs-
+      // MIDI rejection (§10-5) is a dispatch-time diagnostic, not a parse error.
+      const stackResult = this.parseStack()
+      this.pos = stackResult.newPos
+      elements.push(stackResult.value)
     } else if (cur === 'LPAREN') {
       // Nested element
       const nestedResult = this.parseNestedPlay()
