@@ -43,9 +43,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **B8 core spec 反映**: Phase 1 の前例に倣い、core spec (`INSTRUCTION_ORBITSCORE_DSL.md`) は line 12 の「v1.1 は specs-v2 が正本」ポインタで反映済みとする（§2.3/§3 を core spec に複製すると specs-v2 と二重保守＝乖離リスク。operating rule #7 の眼目「乖離を作らない」はポインタで満たす）。v1.1 安定後にまとめて fold-in する方針。
 
-**VS Code セマンティックハイライト**: Sonnet subagent に委譲（packages/vscode-extension、§5「拡張側に閉じる」）。完了時に別コミットで同梱。
+**VS Code エディタ支援**（Sonnet subagent、§5「拡張側に閉じる」、main がレビュー）:
+- `syntaxes/orbitscore-audio.tmLanguage.json`: `.root()`/`.mode()`/`.oct()` チェーンの TextMate ハイライト（begin/end で引数内の `F#` を保護）+ 音名/度数/整数の引数ハイライト
+- `src/extension.ts`: root/mode/oct の hover + play() 引数内 `).` 文脈での補完（paren balance ガードで `play(...).` の誤発火を回避）
+- **main レビューで修正**: (1) grammar の legacy `#.*$` コメント規則を**削除**（OrbitScore のコメントは `//`、`#` は ACCIDENTAL。この規則が `#5`/`F#`/`##1` を全域でコメント誤認していた＝Phase 1 シャープ表示のバグ。agent の begin/end 回避の根本原因を除去）。(2) hover 例の `(1 2 3)` → `(1, 2, 3)`（OrbitScore はカンマ区切り）
+- **span レベルのセマンティックハイライト（並置 run の可視化）は見送り**: `PlayScoped` ノードにソース位置(offset)が無く、実装には engine パーサー拡張（PlayScoped に startOffset/endOffset）+ `DocumentSemanticTokensProvider` + package.json の semanticTokenTypes が必要。「`.root()`+カンマ両忘れ→静かな併合」緩和の本命だが engine 変更を伴うため follow-up（chain-closes/重複のパースエラーで多くは既に検出される）。
 
-**次**: VS Code ハイライト fold-in → Phase 2 PR → レビュー。
+**Phase 2 完了**: パーサー + timing + dispatch + エディタ支援。テスト 863 passed / 23 skipped。core spec はポインタ規約で反映。
+
+**次**: Phase 2 PR 作成 → レビュー。follow-up: span レベルハイライト（PlayScoped offset 要）、Phase 3 (#231 `[ ]` スタック + chord 値)。
 
 ---
 

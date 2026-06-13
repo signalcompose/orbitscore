@@ -1151,6 +1151,28 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
           return undefined
         }
 
+        // Detect pitch-scope chain context: cursor is after `).` and we are INSIDE
+        // the argument list of a .play() call (paren balance > 0 after the last .play(
+        // token). This distinguishes the inner-group position `play((A)(B).` (balance 1)
+        // from the post-play position `play(1,2,3).` (balance 0). The check also avoids
+        // firing when .play( is on an earlier line (linePrefix won't contain it at all).
+        if (/\)\.$/.test(linePrefix)) {
+          const playIdx = linePrefix.lastIndexOf('.play(')
+          if (playIdx !== -1) {
+            const afterPlay = linePrefix.slice(playIdx + 1) // starts with "play("
+            let balance = 0
+            for (const ch of afterPlay) {
+              if (ch === '(') balance++
+              else if (ch === ')') balance--
+            }
+            // balance > 0: the play( is still open → cursor is inside play args
+            if (balance > 0) {
+              return getPitchScopeCompletions()
+            }
+            // balance === 0: play() has closed → fall through to existing completions
+          }
+        }
+
         // Analyze the method chain context
         const chainContext = analyzeMethodChain(lineText, position.character)
 
@@ -1167,6 +1189,38 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
   context.subscriptions.push(completionProvider)
 }
 
+/**
+ * Completion items for pitch-scope group chains: .root() / .mode() / .oct() (§2.3, §3).
+ * Offered when the cursor follows a `)` inside a play() argument list.
+ */
+function getPitchScopeCompletions(): vscode.CompletionItem[] {
+  const root = new vscode.CompletionItem('root', vscode.CompletionItemKind.Method)
+  root.documentation = new vscode.MarkdownString(
+    '**root(note | degree)** — Set pitch-class root for the preceding group or juxtaposition run (§2.3, §3).\n\n' +
+      'Note names: `C`, `Db`, `D`, `Eb`, `E`, `F`, `F#`, `Gb`, `G`, `Ab`, `A`, `Bb`, `B`\n\n' +
+      'Degrees (of `global.key()`): `1`–`12`, `b3`, `#5`, etc.\n\n' +
+      'Examples: `(1, 2, 3).root(F#)` · `(A)(B).root(Bb)` · `(A).root(b6)`',
+  )
+  root.insertText = new vscode.SnippetString('root(${1:F})')
+  root.sortText = '1'
+
+  const mode = new vscode.CompletionItem('mode', vscode.CompletionItemKind.Method)
+  mode.documentation = new vscode.MarkdownString(
+    '**mode(name)** — Set modal context for the group (§2.3). _v1.1: syntax reserved; dispatch throws. Arrives in Phase 2.2._',
+  )
+  mode.insertText = new vscode.SnippetString('mode(${1:dorian})')
+  mode.sortText = '2'
+
+  const oct = new vscode.CompletionItem('oct', vscode.CompletionItemKind.Method)
+  oct.documentation = new vscode.MarkdownString(
+    '**oct(N)** — Set group-lexical octave register (§2.3, §3). Integer.\n\nExample: `(1, 2, 3).oct(4)` · `(A)(B).root(C).oct(5)`',
+  )
+  oct.insertText = new vscode.SnippetString('oct(${1:4})')
+  oct.sortText = '3'
+
+  return [root, mode, oct]
+}
+
 function registerHoverProvider(context: vscode.ExtensionContext) {
   const provider = vscode.languages.registerHoverProvider('orbitscore', {
     provideHover(document, position) {
@@ -1180,6 +1234,9 @@ function registerHoverProvider(context: vscode.ExtensionContext) {
         quantize:
           '**quantize(value)**\n\nLaunch quantize for `LOOP()` and LOOP-time `play()` updates.\n\nValues: `"off"` | `"beat"` | `"bar"` | `"2bar"` | `"4bar"` | `"8bar"`. Default: `"bar"`. `RUN()` is always immediate.',
         play: '**play(...slices)**\n\nPlay audio slices. Supports numbers, nested structures, and modifiers',
+        root: '**root(note | degree)**\n\nSet the pitch-class root for a group or juxtaposition run (§2.3, §3).\n\nExamples: `(1, 2, 3).root(F#)` · `(A)(B).root(Bb)` · `(1, 2).root(3)` · `(A).root(b6)`\n\nNote names: `C`, `Db`, `D`, `Eb`, `E`, `F`, `F#`, `Gb`, `G`, `Ab`, `A`, `Bb`, `B`\nDegrees (of `global.key()`): `1`–`12`, `b3`, `#5`, etc.',
+        mode: '**mode(name)**\n\nSet the modal context for a group (§2.3). _v1.1: syntax reserved; dispatch throws. Arrives in Phase 2.2._',
+        oct: '**oct(N)**\n\nSet the group-lexical octave register for a group or run (§2.3, §3). Integer.\n\nExample: `(1, 2, 3).oct(4)` · `(A)(B).root(C).oct(5)`',
         chop: '**chop(n)**\n\nDivide audio into n equal slices',
         fixpitch:
           '**fixpitch(semitones)** _(planned, not yet implemented — see issue #213)_\n\nPitch shift in semitones, preserving slice duration.',
