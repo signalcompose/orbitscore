@@ -24,6 +24,7 @@ export class AudioTokenizer {
     'RUN',
     'LOOP',
     'MUTE',
+    'import',
   ])
 
   constructor(src: string) {

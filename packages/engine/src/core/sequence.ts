@@ -9,6 +9,7 @@ import * as path from 'path'
 import { AudioEngine } from '../audio/types'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
+import { resolveChords } from '../midi/chord/resolve-chords'
 import { RootContext } from '../midi/types'
 import { TimedEventScope } from '../timing/calculation/types'
 
@@ -400,19 +401,30 @@ export class Sequence {
   }
 
   play(...elements: PlayElement[]): this {
-    this.stateManager.setPlayPattern(elements)
+    // §6 evaluation (L2): resolve chord-name refs / `-N` removals / `^N` against the
+    // global chord namespace BEFORE timing, so the stored pattern is pure symbolic
+    // (no chord_ref reaches the timing walk). 評価時値渡し — a later chord
+    // redefinition does not retro-affect this already-resolved pattern (§6.5.2).
+    const { elements: resolved, warnings } = resolveChords(elements, (name) =>
+      this.global.getChordVoices(name),
+    )
+    for (const w of warnings) {
+      console.warn(`⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ${w}`)
+    }
+
+    this.stateManager.setPlayPattern(resolved)
 
     // Calculate timing for the play pattern
     const globalState = this.global.getState()
     const timedEvents = this.tempoManager.calculateEventTiming(
-      elements,
+      resolved,
       globalState.tempo || 120,
       globalState.beat,
     )
 
     this.stateManager.setTimedEvents(timedEvents)
 
-    const patternStr = elements
+    const patternStr = resolved
       .map((e) => (typeof e === 'object' ? JSON.stringify(e) : e))
       .join(' ')
     this.seamlessParameterUpdate('play', patternStr)

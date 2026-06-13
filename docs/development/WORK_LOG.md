@@ -20,7 +20,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.107 Issue #231 — Phase 3: `[ ]` スタック + chord 値 (Jun 13, 2026)
 
 **Date**: 2026-06-13
-**Status**: 🚧 IN PROGRESS（スタック core 完了 B0-B4。chord 値 spread/除去/import は後続コミット B5-B7）
+**Status**: ✅ 実装完了（B0-B7。スタック core + chord 値 spread/除去/import。/simplify + レビュー前）
 **Issue**: signalcompose/orbitscore#231
 **Branch**: `231-phase-3-stack-chord`
 
@@ -44,6 +44,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - `timing/calculate-event-timing.ts`: 未解決 chord_ref が timing walk に来たら internal error（silent drop 防止）
 
 **テスト**: `chord-resolution.spec.ts` 11件（spread/add/除去/不一致 warning/`^N`/standalone/unknown/whole-stack `^N` 保持/predefined テーブル）。全体 906 passed / 23 skipped。
+
+**追加コミット（B6/B7: chord 値の parse + namespace + 配線）**:
+- `parser/types.ts`: `IMPORT` トークン、`ChordBinding`/`ImportStatement` を Statement union に
+- `parser/tokenizer.ts`: `import` キーワード
+- `parser/parse-statement.ts`: `parseVarDeclaration` を `chord([...])` 束縛に分岐（`init` パスは不変）、`parseImport`（`import chords` のみ受理）
+- `parser/parse-expression.ts`: `parseNestedPlayElement` に IDENTIFIER → chord_ref（§9.1 の `(0, m7, 0)` グループ要素）
+- `core/global.ts`: chord namespace（`importChords`/`defineChord`/`getChordVoices`、衝突 warning §10-4）を Global に（`global.key()` と同様 program-global、interpreter/直接 seq 両経路で共有）
+- `core/sequence.ts`: `play()` で timing 前に `resolveChords`（chord ref を spread/除去/`^N` 解決し純シンボリックに）。warning は console.warn
+- `midi/chord/resolve-chords.ts`: `evaluateChordDefinition`（`var = chord()` の束縛時評価）
+- `interpreter/process-statement.ts`: `import`/`chord_binding` を currentGlobal に配線
+
+**決定（spec 範囲内）**: 除去 `-N` の字面一致は (degree, alteration)（§6 字面一致の具体化）。namespace 衝突は last-write-wins + warning（§10-4）。未定義 chord 名参照は warning + 空展開（§6 は未規定、no-op+warning 哲学に整合）。`{ }` レガート・`_` タイ（§5）と top-level bare chord 名は Phase 3 範囲外（§9.1 のそれらは Phase 4）。
+
+**テスト**: `chord-binding-parsing.spec.ts` 8件 / `sequence-chord-dispatch.spec.ts` 11件（import+`[m7]`、`(0,m7,0,m7).root(3)`、spread+add/除去、whole-chord `^+1`、defineChord、unknown warning、registry、interpreter 配線）。全体 925 passed / 23 skipped。core spec は specs-v2 を正本として参照（§4/§6 は PITCH_DSL_SPEC が正本、乖離なし）。
 
 ### 6.106 Issue #230 — Phase 2: `.root()`/`.mode()`/`.oct()` グループスコープ — パーサー層 (Jun 13, 2026)
 

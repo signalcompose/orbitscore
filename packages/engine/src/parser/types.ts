@@ -12,6 +12,7 @@ export type AudioTokenType =
   | 'RUN' // RUN reserved keyword
   | 'LOOP' // LOOP reserved keyword
   | 'MUTE' // MUTE reserved keyword
+  | 'IMPORT' // import keyword (e.g. `import chords`, §6)
   | 'IDENTIFIER' // variable names, method names
   | 'NUMBER' // numeric values
   | 'STRING' // string literals
@@ -56,7 +57,30 @@ export type SequenceInit = {
   globalVariable?: string // For new syntax: init global.seq
 }
 
-export type Statement = GlobalStatement | SequenceStatement | TransportStatement
+export type Statement =
+  | GlobalStatement
+  | SequenceStatement
+  | TransportStatement
+  | ChordBinding
+  | ImportStatement
+
+/**
+ * `var NAME = chord([ ... ])` — a chord-value binding (§6). Distinct from the
+ * `var x = init ...` initializers (GlobalInit / SequenceInit). Carries the RAW
+ * `[ ]` voices so the interpreter evaluates them (spread/removal/`^N`) at execution
+ * order against the chord namespace as it exists then (§6.5.2 評価時値渡し).
+ */
+export type ChordBinding = {
+  type: 'chord_binding'
+  variableName: string
+  voices: StackElement[]
+}
+
+/** `import chords` — populate the global chord namespace from the stdlib (§6, §10-4). */
+export type ImportStatement = {
+  type: 'import'
+  module: string // 'chords' (the only module accepted in v1.1)
+}
 
 export type GlobalStatement = {
   type: 'global'

@@ -792,6 +792,10 @@ export class ExpressionParser {
       const pitchResult = this.parsePitch()
       this.pos = pitchResult.newPos
       elements.push(pitchResult.value)
+    } else if (cur === 'IDENTIFIER') {
+      // A bare chord-name element inside a group, e.g. (0, m7, 0).root(3) (§6/§9.1).
+      // Resolved (spread to a one-slot stack) at evaluation against the namespace.
+      elements.push(this.parseChordRef())
     } else if (cur === 'NUMBER') {
       const numResult = ParserUtils.advance(this.tokens, this.pos)
       this.pos = numResult.newPos

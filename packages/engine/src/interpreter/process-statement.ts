@@ -8,6 +8,8 @@ import {
   GlobalStatement,
   SequenceStatement,
   TransportStatement,
+  ChordBinding,
+  ImportStatement,
 } from '../parser/audio-parser'
 
 import { InterpreterState } from './types'
@@ -53,10 +55,44 @@ export async function processStatement(
     case 'transport':
       await processTransportStatement(statement, state)
       break
+    case 'import':
+      processImportStatement(statement, state)
+      break
+    case 'chord_binding':
+      processChordBinding(statement, state)
+      break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
       console.warn(`Unknown statement type: ${(statement as any).type}`)
   }
+}
+
+/**
+ * Process `import chords` (§6): load the stdlib chord qualities into the active
+ * global's chord namespace. Statements execute in source order, so a later play()
+ * sees the imported chords (評価時値渡し).
+ */
+function processImportStatement(statement: ImportStatement, state: InterpreterState): void {
+  if (statement.module !== 'chords') {
+    console.warn(`Unknown import "${statement.module}" — v1.1 supports only \`import chords\`.`)
+    return
+  }
+  if (!state.currentGlobal) {
+    console.error('`import chords` requires a global (declare `var g = init GLOBAL` first).')
+    return
+  }
+  state.currentGlobal.importChords()
+}
+
+/** Process `var NAME = chord([ ... ])` (§6): bind the evaluated chord value. */
+function processChordBinding(statement: ChordBinding, state: InterpreterState): void {
+  if (!state.currentGlobal) {
+    console.error(
+      `chord "${statement.variableName}" requires a global (declare \`var g = init GLOBAL\` first).`,
+    )
+    return
+  }
+  state.currentGlobal.defineChord(statement.variableName, statement.voices)
 }
 
 /**

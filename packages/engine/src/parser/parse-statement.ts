@@ -3,7 +3,16 @@
  * Based on specification: docs/INSTRUCTION_ORBITSCORE_DSL.md
  */
 
-import { AudioToken, GlobalInit, SequenceInit, Statement, MethodChain } from './types'
+import {
+  AudioToken,
+  GlobalInit,
+  SequenceInit,
+  Statement,
+  MethodChain,
+  ChordBinding,
+  ImportStatement,
+  PlayStack,
+} from './types'
 import { ParserUtils } from './parser-utils'
 import { ExpressionParser, collapseScopedRun } from './parse-expression'
 
@@ -25,9 +34,14 @@ export class StatementParser {
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
-    // Variable declaration: var x = init GLOBAL
+    // Variable declaration: var x = init GLOBAL  /  var m7 = chord([...])
     if (token.type === 'VAR') {
       return this.parseVarDeclaration()
+    }
+
+    // Module import: import chords (§6)
+    if (token.type === 'IMPORT') {
+      return this.parseImport()
     }
 
     // Reserved keywords: RUN(), LOOP(), MUTE()
@@ -49,13 +63,24 @@ export class StatementParser {
   /**
    * Parse variable declaration
    */
-  private parseVarDeclaration(): { statement: GlobalInit | SequenceInit; newPos: number } {
+  private parseVarDeclaration(): {
+    statement: GlobalInit | SequenceInit | ChordBinding
+    newPos: number
+  } {
     const varResult = ParserUtils.expect(this.tokens, this.pos, 'VAR')
     this.pos = varResult.newPos
     const varNameResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = varNameResult.newPos
     const equalsResult = ParserUtils.expect(this.tokens, this.pos, 'EQUALS')
     this.pos = equalsResult.newPos
+
+    // `var m7 = chord([ ... ])` — a chord-value binding (§6). The `init ...`
+    // initializers below are unchanged.
+    const rhs = ParserUtils.current(this.tokens, this.pos)
+    if (rhs.type === 'IDENTIFIER' && rhs.value === 'chord') {
+      return this.parseChordBinding(varNameResult.token.value)
+    }
+
     const initResult = ParserUtils.expect(this.tokens, this.pos, 'INIT')
     this.pos = initResult.newPos
 
@@ -72,7 +97,50 @@ export class StatementParser {
       return this.parseSequenceInit(varNameResult.token.value)
     }
 
-    throw new Error('Expected GLOBAL or variable name after init')
+    throw new Error('Expected GLOBAL, a variable name, or chord([...]) after `=`')
+  }
+
+  /**
+   * Parse `var NAME = chord([ ... ])` (§6). The bracket contents are parsed by the
+   * expression parser (a PlayStack); only its raw voices are kept on the binding,
+   * to be evaluated (spread/removal/`^N`) by the interpreter at execution order.
+   */
+  private parseChordBinding(variableName: string): { statement: ChordBinding; newPos: number } {
+    const chordKw = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER') // 'chord'
+    this.pos = chordKw.newPos
+    const lparen = ParserUtils.expect(this.tokens, this.pos, 'LPAREN')
+    this.pos = lparen.newPos
+
+    if (ParserUtils.current(this.tokens, this.pos).type !== 'LBRACKET') {
+      throw new Error('chord(...) expects a `[ ... ]` stack literal, e.g. chord([1, b3, 5, b7])')
+    }
+    const ep = new ExpressionParser(this.tokens, this.pos)
+    const stackResult = ep.parseArgument()
+    this.pos = stackResult.newPos
+    const stack = stackResult.value as PlayStack
+
+    const rparen = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
+    this.pos = rparen.newPos
+
+    return {
+      statement: { type: 'chord_binding', variableName, voices: stack.voices },
+      newPos: this.pos,
+    }
+  }
+
+  /**
+   * Parse `import chords` (§6). Only the `chords` stdlib is accepted in v1.1.
+   */
+  private parseImport(): { statement: ImportStatement; newPos: number } {
+    const importKw = ParserUtils.expect(this.tokens, this.pos, 'IMPORT')
+    this.pos = importKw.newPos
+    const moduleResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = moduleResult.newPos
+    const module = moduleResult.token.value
+    if (module !== 'chords') {
+      throw new Error(`Unknown import "${module}". v1.1 supports only \`import chords\` (§6).`)
+    }
+    return { statement: { type: 'import', module }, newPos: this.pos }
   }
 
   /**

@@ -148,3 +148,60 @@ export function resolveChords(elements: PlayElement[], getChord: ChordLookup): R
   const resolved = elements.map((e) => resolveElement(e, getChord, warnings))
   return { elements: resolved, warnings }
 }
+
+export interface ChordDefinitionResult {
+  voices: ChordVoice[]
+  warnings: string[]
+}
+
+/**
+ * Evaluate a `chord([ ... ])` definition (§6) to a flat voice list for storage in
+ * the namespace. Like the stack evaluator but in {@link ChordVoice} space: it
+ * spreads refs to other chords (`chord([m7, 9])`), removes literal matches
+ * (`chord([m7, -5])`), and folds a ref's `^N` into the spread voices. Chord
+ * definitions are flat degree stacks (§6) — a non-flat voice (subtree/stack) is a
+ * diagnostic warning and skipped, not silently dropped.
+ */
+export function evaluateChordDefinition(
+  voices: StackElement[],
+  getChord: ChordLookup,
+): ChordDefinitionResult {
+  const result: ChordVoice[] = []
+  const warnings: string[] = []
+  for (const voice of voices) {
+    if (typeof voice === 'number') {
+      result.push({ degree: voice, alteration: 0, octaveShift: 0, detune: 0 })
+    } else if (voice && typeof voice === 'object' && voice.type === 'chord_ref') {
+      const spread = getChord(voice.name)
+      if (!spread) {
+        warnings.push(`unknown chord "${voice.name}" in chord definition — skipped (§6).`)
+        continue
+      }
+      for (const vc of spread) {
+        result.push({ ...vc, octaveShift: vc.octaveShift + voice.octaveShift })
+      }
+    } else if (voice && typeof voice === 'object' && voice.type === 'chord_removal') {
+      const before = result.length
+      for (let i = result.length - 1; i >= 0; i--) {
+        if (result[i]!.degree === voice.degree && result[i]!.alteration === voice.alteration) {
+          result.splice(i, 1)
+        }
+      }
+      if (result.length === before) {
+        const acc =
+          voice.alteration < 0 ? 'b'.repeat(-voice.alteration) : '#'.repeat(voice.alteration)
+        warnings.push(`removal "-${acc}${voice.degree}" matched no voice in chord — no-op (§6).`)
+      }
+    } else if (voice && typeof voice === 'object' && voice.type === 'pitch') {
+      result.push({
+        degree: voice.degree,
+        alteration: voice.alteration,
+        octaveShift: voice.octaveShift,
+        detune: voice.detune,
+      })
+    } else {
+      warnings.push('a chord definition must be a flat degree stack (§6) — voice skipped.')
+    }
+  }
+  return { voices: result, warnings }
+}
