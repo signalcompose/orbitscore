@@ -17,6 +17,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.104 Issue #246 — MIDI モニターに「Now playing (DSL)」パターン表示 (`/pattern`) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (PR #245 に同梱)
+**Issue**: signalcompose/orbitscore#246
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: 大和さん「テストツールで今どの DSL パターンが実行されているか見たい」「ログ的に見れるといい」。手作り MIDI と表示の食い違いを防ぎ、共同検証で「今鳴っている DSL」を一目で確認するため。
+
+**変更内容**:
+
+- `tools/midi-monitor/dev-server.py`: `POST /pattern` (送信側が実行中の DSL を `{source,label}` で報告、`latest_pattern` に保持) + `GET /pattern` (最新を返す) を追加
+- `tools/midi-monitor/index.html`: 「Now playing (DSL)」パネル — `/pattern` をポーリングして実評価ソースを表示 (`replaceChildren`/`createElement` で XSS 回避)
+
+**経緯メモ**: headless runner (6.103、コミット `2bd34ef`) は `POST /pattern` を呼ぶが、**endpoint 側 (本変更) が未コミットだった**。本エントリで endpoint を確定し、midi-run.ts の `/pattern` 報告が実際に機能する。表示=エンジンが評価した実ソースなので、音と表示が原理的に一致する。
+
+---
+
 ### 6.103 Issue #228 — Phase 1: headless MIDI CLI runner (実エンジン .orbs → IAC) (Jun 13, 2026)
 
 **Date**: 2026-06-13
