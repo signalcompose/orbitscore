@@ -59,6 +59,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - minor: degree-resolution 式コメントを `range o` に、dev-server `do_GET` の `/pattern` を exact match に。
 - テスト 827 passed / 23 skipped。
 
+**/code:pr-review-team イテレーション2 (2026-06-13)**: 再レビュー (code-reviewer / silent-failure-hunter) でイテレーション1の修正が正しく、新規問題なしを確認 (Critical 0 / Important 0)。surface された Minor を1件修正:
+- **ループ中 play(不正度数) の crash 防止**: deferred (setTimeout) の scheduleEventsFn は awaited チェーン外なので、ループ中に不正度数を play() すると次サイクルで throw → Node>=22 で unhandled rejection / 未捕捉例外 = プロセス crash。イテレーション1の eager 検証は run()/loop() 入口だけ救済しており mid-loop は crash する非対称があった。`loop-sequence.ts` に `safeSchedule` ラッパを追加し deferred 呼び出しを catch+log、ループは last good schedule で継続。`tests/core/loop-sequence-resilience.spec.ts` で実証。
+- セキュリティチェックリスト: secrets/injection/XSS なし。dev-server が 0.0.0.0 bind + 無認証だが localhost dev ツール (機微データなし、cross-machine 共同検証用途) ゆえ pass (信頼ネットワーク限定の注記つき)。
+- 完了条件達成: **Critical 0 / Important 0 / security pass**。テスト 828 passed / 23 skipped。
+
 **次**: PR #245 レビュー/マージ。その後 Phase 2 (#230) / L1 (#229)。
 
 ---
