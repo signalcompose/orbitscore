@@ -59,12 +59,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 data = json.loads(body)
             except json.JSONDecodeError:
                 data = {"source": body}
+            now = datetime.datetime.now()
             latest_pattern = {
                 "source": data.get("source", ""),
                 "label": data.get("label", ""),
-                "t": int(datetime.datetime.now().timestamp() * 1000),
+                "t": int(now.timestamp() * 1000),
             }
-            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            ts = now.strftime("%H:%M:%S")
             label = latest_pattern["label"]
             first = latest_pattern["source"].splitlines()[0] if latest_pattern["source"] else ""
             sys.stdout.write(f"{ts} [pattern{(' ' + label) if label else ''}] {first}\n")

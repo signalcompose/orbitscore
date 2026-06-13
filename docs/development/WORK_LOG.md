@@ -68,6 +68,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **経緯メモ**: headless runner (6.103、コミット `2bd34ef`) は `POST /pattern` を呼ぶが、**endpoint 側 (本変更) が未コミットだった**。本エントリで endpoint を確定し、midi-run.ts の `/pattern` 報告が実際に機能する。表示=エンジンが評価した実ソースなので、音と表示が原理的に一致する。
 
+**/simplify パス (2026-06-13)**: 4 観点 (reuse/simplification/efficiency/altitude) で session 変更 (`2bd34ef..HEAD` の code) をレビュー。適用: `dev-server.py` の `/pattern` で `datetime.now()` を2回呼んでいたのを1回に集約。スキップ: index.html の meta DOM (textContent 化は `.label` のスタイルを落とすため)、`SymbolicPitch.rangeSet`/dual `octaveShift` の altitude (spec §9.4 で現レイヤを是認済・#240 score rendering 向けの tracked smell)。reuse/efficiency は実所見ゼロ。
+
 ---
 
 ### 6.103 Issue #228 — Phase 1: headless MIDI CLI runner (実エンジン .orbs → IAC) (Jun 13, 2026)
