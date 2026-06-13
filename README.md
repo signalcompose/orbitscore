@@ -32,6 +32,8 @@ A new music production DSL focused on audio file manipulation, integrating time-
 
 ## Current Implementation Status
 
+> 🎯 **In progress — v1.1 Pitch DSL + Session Log + WCTM** (hard deadline 2026-08-07, concert). Spec set: [`docs/specs-v2/`](docs/specs-v2/). Progress tracked in [Epic #224](https://github.com/signalcompose/orbitscore/issues/224). Top priority: Pitch DSL (degree / root / mode / chord, MIDI output via IAC).
+
 ### 📦 Legacy MIDI-Based Implementation (Deprecated)
 
 The previous MIDI-based implementation (Phases 1-10) is now deprecated but preserved for research purposes.

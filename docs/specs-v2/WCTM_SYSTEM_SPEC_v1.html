@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Who Conducts the Machine? — System Specification v1</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <style>
+  :root{
+    --ink:#16181D; --paper:#FAFAF8; --sub:#5A5A60; --hair:#E4E4E0;
+    --rec:#B4231F; --recbg:#FFF3F2; --panel:#F2F2EF; --code:#F4F4F1;
+  }
+  *{box-sizing:border-box}
+  html{font-size:16px}
+  body{
+    margin:0; padding:0; background:var(--paper); color:var(--ink);
+    font-family:"Hiragino Sans","Yu Gothic","Noto Sans JP",-apple-system,sans-serif;
+    line-height:1.95; font-feature-settings:"palt";
+  }
+  main,body>header,body>*{max-width:880px}
+  body{padding:48px 28px 96px; margin:0 auto;}
+  h1{
+    font-size:1.9rem; line-height:1.4; letter-spacing:.01em; font-weight:700;
+    margin:0 0 .4rem; border-bottom:3px solid var(--ink); padding-bottom:.6rem;
+  }
+  /* meta strip: doc header styled like an .orbslog meta line */
+  h1 + p strong:first-child{color:var(--ink)}
+  .metaline, h1 + p em{font-style:normal}
+  h2{
+    font-size:1.28rem; font-weight:700; margin:3.2rem 0 1rem;
+    padding:.35rem 0 .35rem .9rem; border-left:4px solid var(--ink);
+  }
+  h3{font-size:1.05rem; font-weight:700; margin:2.2rem 0 .8rem; color:var(--ink)}
+  h3::before{content:"§ "; color:var(--rec); font-weight:600}
+  p{margin:.9rem 0}
+  strong{font-weight:700}
+  a{color:var(--ink); text-decoration-color:var(--rec); text-underline-offset:3px}
+  hr{border:none; border-top:1px solid var(--hair); margin:2.6rem 0}
+  ul,ol{padding-left:1.5em} li{margin:.35rem 0}
+  blockquote{
+    margin:1.2rem 0; padding:.7rem 1.1rem; background:var(--recbg);
+    border-left:3px solid var(--rec); color:var(--ink); font-size:.95rem;
+  }
+  blockquote p{margin:.3rem 0}
+  code{
+    font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.86em;
+    background:var(--code); padding:.1em .35em; border-radius:3px;
+  }
+  pre{
+    background:var(--code); border:1px solid var(--hair); border-radius:6px;
+    padding:1rem 1.2rem; overflow-x:auto; line-height:1.65; margin:1.2rem 0;
+  }
+  pre code{background:none; padding:0; font-size:.84rem}
+  table{
+    border-collapse:collapse; width:100%; margin:1.4rem 0; font-size:.92rem; line-height:1.7;
+  }
+  th{
+    text-align:left; border-bottom:2px solid var(--ink); padding:.5rem .7rem;
+    font-weight:700; background:none;
+  }
+  td{border-bottom:1px solid var(--hair); padding:.55rem .7rem; vertical-align:top}
+  tr:hover td{background:var(--panel)}
+  svg{display:block; margin:1.6rem auto; background:#fff; border:1px solid var(--hair); border-radius:6px; padding:10px}
+  /* doc id strip */
+  header#title-block-header{display:none}
+  .docmeta{
+    font-family:"SF Mono",Menlo,monospace; font-size:.74rem; color:var(--sub);
+    background:var(--panel); border:1px solid var(--hair); border-radius:4px;
+    padding:.5rem .8rem; margin:0 0 2.4rem; overflow-x:auto; white-space:nowrap;
+  }
+  .docmeta .dot{color:var(--rec)}
+  @media (max-width:640px){ body{padding:28px 16px 64px} h1{font-size:1.5rem} }
+  @media print{ body{max-width:none} svg{break-inside:avoid} }
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Who Conducts the Machine? — System Specification
+v1</h1>
+<div class="docmeta">{"type":"meta"<span class="dot">,</span>"doc":"WCTM_SYSTEM_SPEC","version":"1","concert":"2026-08-07 Geidai Senju Hall 7","ensemble":"dr/tp/gt + player-piano + LLM + ops"}</div>
+</header>
+<h1 id="who-conducts-the-machine-system-specification-v1">Who Conducts
+the Machine? — System Specification v1</h1>
+<p><strong>Status</strong>: Draft for implementation
+<strong>Date</strong>: 2026-06-12 <strong>Concert</strong>:
+Maxサマースクール・イン・藝大 2026 / 2026-08-07 / 東京藝術大学
+千住キャンパス 第7ホール / 上演10分 <strong>Authors</strong>: Hiroshi
+Yamato (design decisions) / Claude (drafting)
+<strong>Relations</strong>: PITCH_DSL_SPEC_v1.1(ピッチ
+DSL)・SESSION_LOG_SPEC_v1(記録)の上に成立する。実装順序は
+IMPLEMENTATION_INSTRUCTIONS
+参照。プロポーザル本文(maxss2026_proposal.pdf)が作品コンセプトの正本。</p>
+<hr />
+<h2 id="design-principles-normative">0. Design Principles
+(normative)</h2>
+<ol type="1">
+<li><strong>三つの時間スケールへの分業</strong>: ms =
+Max(センシング・MIDI ルーティング・音響処理)、拍〜小節 = OrbitScore
+エンジン(決定論的タイミング)、フレーズ = LLM(意図の書き換え)。LLM
+の往復レイテンシ(数秒)は欠陥ではなく、quantize
+により「次の小節から効く」遅延に量子化される設計原理である。</li>
+<li><strong>沈黙しないシステム</strong>: OrbitScore の LOOP
+は自己持続する。LLM・ネットワーク・Bridge
+のいかなる障害でも、ピアノは最後のパターンを弾き続ける。障害時の最悪挙動は「変化しなくなる」であり「止まる」ではない。</li>
+<li><strong>評価経路の完全統一</strong>:
+LLM・人間オペレーター・(将来の)リプレイヤーはすべて同一の評価経路を通る「評価送信者」である。エンジンに
+LLM 専用経路を作らない。帰結として、LLM の演奏は人間と同形式で .orbslog
+に記録され(<code>evalSource</code> で識別)、本番ログが次の few-shot
+素材になる。</li>
+<li><strong>介助は機構ではなく同格性</strong>:
+オペレーターの介助(舵取り・直接評価・ゲート)は、評価送信者の同格性から特別な機構なしに導出される。</li>
+<li><strong>最小実装</strong>: §7
+の「作らないもの」を遵守する。本番まで約8週間。</li>
+</ol>
+<hr />
+<h2 id="system-architecture">1. System Architecture</h2>
+<svg viewBox="0 0 920 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WCTM システム構成図" style="max-width:100%;height:auto;font-family:'Hiragino Sans','Yu Gothic',sans-serif;">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16181D"/>
+    </marker>
+    <marker id="arrR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#B4231F"/>
+    </marker>
+  </defs>
+  <style>
+    .box{fill:#FFFFFF;stroke:#16181D;stroke-width:1.4;}
+    .boxNew{fill:#FFF3F2;stroke:#B4231F;stroke-width:1.4;}
+    .boxHuman{fill:#F2F2EF;stroke:#16181D;stroke-width:1.4;stroke-dasharray:4 3;}
+    .lbl{font-size:14px;fill:#16181D;font-weight:600;}
+    .sub{font-size:11px;fill:#5A5A60;}
+    .edge{stroke:#16181D;stroke-width:1.3;fill:none;}
+    .edgeR{stroke:#B4231F;stroke-width:1.3;fill:none;}
+    .elbl{font-size:11px;fill:#16181D;}
+    .elblR{font-size:11px;fill:#B4231F;}
+    .plane{fill:none;stroke:#9A9AA0;stroke-width:1;stroke-dasharray:6 4;}
+    .planeLbl{font-size:11px;fill:#9A9AA0;letter-spacing:.08em;}
+  </style>
+
+  <!-- Link sync plane -->
+  <rect x="20" y="20" width="880" height="64" class="plane"/>
+  <text x="34" y="40" class="planeLbl">ABLETON LINK — TEMPO + PHASE (同期ファブリック)</text>
+  <text x="34" y="58" class="sub">ドラム起点。結合度(追従の硬さ)はオペレーターの連続パラメータ</text>
+
+  <!-- Performers -->
+  <rect x="30" y="120" width="170" height="86" class="boxHuman"/>
+  <text x="46" y="146" class="lbl">生演奏</text>
+  <text x="46" y="166" class="sub">Drums / Trumpet / Guitar</text>
+  <text x="46" y="182" class="sub">(ドラムがクロック起点)</text>
+
+  <!-- Max IN -->
+  <rect x="260" y="120" width="180" height="86" class="box"/>
+  <text x="276" y="146" class="lbl">Max — 入力側</text>
+  <text x="276" y="166" class="sub">オンセット / ピッチ / 密度</text>
+  <text x="276" y="182" class="sub">ビートトラッキング → Link 駆動</text>
+
+  <!-- Bridge -->
+  <rect x="500" y="108" width="190" height="110" class="boxNew"/>
+  <text x="516" y="134" class="lbl">Agent Bridge (MCP)</text>
+  <text x="516" y="154" class="sub">特徴量の小節整列・集約</text>
+  <text x="516" y="170" class="sub">DSL 検証 → 評価投入</text>
+  <text x="516" y="186" class="sub">.orbslog 末尾の提供</text>
+  <text x="516" y="206" class="sub" fill="#B4231F">脳は持たない(配管のみ)</text>
+
+  <!-- LLM runtime -->
+  <rect x="740" y="108" width="160" height="110" class="boxNew"/>
+  <text x="756" y="134" class="lbl">LLM ランタイム</text>
+  <text x="756" y="154" class="sub">A: Claude Code(試作)</text>
+  <text x="756" y="170" class="sub">B: 専用ループ(候補)</text>
+  <text x="756" y="190" class="sub">スキル = リードシート.orbs</text>
+  <text x="756" y="206" class="sub">+ 演奏指示書</text>
+
+  <!-- Engine -->
+  <rect x="260" y="290" width="220" height="100" class="box"/>
+  <text x="276" y="316" class="lbl">OrbitScore Engine</text>
+  <text x="276" y="336" class="sub">決定論的タイミング / quantize</text>
+  <text x="276" y="352" class="sub">LOOP 自己持続(沈黙しない)</text>
+  <text x="276" y="368" class="sub">Link ピアとして追従</text>
+
+  <!-- Log -->
+  <rect x="540" y="290" width="180" height="100" class="boxNew"/>
+  <text x="556" y="316" class="lbl">.orbslog</text>
+  <text x="556" y="336" class="sub">evalSource: human / agent</text>
+  <text x="556" y="352" class="sub">全評価の因果記録</text>
+  <text x="556" y="368" class="sub">= LLM の作業記憶</text>
+
+  <!-- Operator -->
+  <rect x="760" y="290" width="140" height="100" class="boxHuman"/>
+  <text x="776" y="316" class="lbl">オペレーター</text>
+  <text x="776" y="336" class="sub">舵取り(プロンプト)</text>
+  <text x="776" y="352" class="sub">直接評価 / ゲート</text>
+  <text x="776" y="368" class="sub">結合度 / パニック</text>
+
+  <!-- Max OUT -->
+  <rect x="260" y="448" width="180" height="80" class="box"/>
+  <text x="276" y="474" class="lbl">Max — 出力側</text>
+  <text x="276" y="494" class="sub">MIDI ルーティング</text>
+  <text x="276" y="510" class="sub">音響処理 / 監視</text>
+
+  <!-- Piano -->
+  <rect x="510" y="448" width="180" height="80" class="box"/>
+  <text x="526" y="474" class="lbl">自動演奏ピアノ</text>
+  <text x="526" y="494" class="sub">Disklavier 等(MIDI 受け)</text>
+  <text x="526" y="510" class="sub">機構レイテンシ要校正</text>
+
+  <!-- Projection -->
+  <rect x="740" y="448" width="160" height="80" class="boxHuman"/>
+  <text x="756" y="474" class="lbl">投影</text>
+  <text x="756" y="494" class="sub">Claude Code 画面</text>
+  <text x="756" y="510" class="sub">+ Max 特徴量表示</text>
+
+  <!-- Edges -->
+  <path class="edge" d="M200,163 L254,163" marker-end="url(#arr)"/>
+  <text x="207" y="156" class="elbl">音</text>
+  <path class="edge" d="M440,150 L494,150" marker-end="url(#arr)"/>
+  <text x="448" y="143" class="elbl">OSC 特徴量</text>
+  <path class="edgeR" d="M690,140 L734,140" marker-end="url(#arrR)"/>
+  <text x="694" y="133" class="elblR">MCP tools</text>
+  <path class="edgeR" d="M740,180 L696,180" marker-end="url(#arrR)"/>
+  <text x="698" y="198" class="elblR">DSL コード</text>
+  <path class="edgeR" d="M560,218 L420,290" marker-end="url(#arrR)"/>
+  <text x="430" y="252" class="elblR">評価(検証済)</text>
+  <path class="edge" d="M480,340 L534,340" marker-end="url(#arr)"/>
+  <text x="488" y="333" class="elbl">記録</text>
+  <path class="edgeR" d="M720,320 L620,238 L598,224" marker-end="url(#arrR)"/>
+  <text x="640" y="262" class="elblR">ログ末尾→文脈</text>
+  <path class="edge" d="M830,290 L830,236 L700,180" marker-end="url(#arr)" stroke-dasharray="4 3"/>
+  <text x="836" y="262" class="elbl">舵取り</text>
+  <path class="edge" d="M790,390 L520,420 L450,448" marker-end="url(#arr)" stroke-dasharray="4 3"/>
+  <text x="560" y="416" class="elbl">直接評価 / パニック</text>
+  <path class="edge" d="M350,390 L350,442" marker-end="url(#arr)"/>
+  <text x="358" y="420" class="elbl">IAC MIDI</text>
+  <path class="edge" d="M440,488 L504,488" marker-end="url(#arr)"/>
+  <text x="450" y="481" class="elbl">MIDI</text>
+  <path class="edge" d="M600,448 C600,420 140,420 118,210" marker-end="url(#arr)" stroke-dasharray="2 4"/>
+  <text x="130" y="240" class="elbl">ピアノの音は奏者へ(聴き合うループ)</text>
+  <path class="edge" d="M115,120 L115,84" marker-end="url(#arr)"/>
+  <path class="edge" d="M350,120 L350,84" marker-end="url(#arr)"/>
+  <path class="edge" d="M390,290 L390,84" marker-end="url(#arr)"/>
+  <text x="396" y="250" class="elbl">Link ピア</text>
+</svg>
+<p>凡例: 赤枠 = 本作のための新規開発(Bridge / ランタイム /
+ログ拡張)、実線黒枠 = 既存または v1.1 で実装、破線枠 =
+人間。上部の破線帯 = Ableton Link 同期面(Max
+がドラムから駆動し、エンジンがピアとして追従)。</p>
+<hr />
+<h2 id="clock-ドラマー起点-link-結合度">2. Clock — ドラマー起点 + Link +
+結合度</h2>
+<p><strong>決定</strong>:
+バンドのクロックはドラマー。「齟齬が面白さにつながる。そのための介助者」。</p>
+<ul>
+<li><strong>同期ファブリック = Ableton
+Link</strong>。テンポだけでなく<strong>位相</strong>(小節頭)の整列が必要であり(テンポ一致でも位相はドリフトする)、Link
+のテンポ/位相合意がこれを既製で解く。Max 側: Link
+オブジェクトでセッションを駆動。エンジン側: Link ピアとして beat/phase
+に追従。</li>
+<li><strong>要検証(着手前)</strong>: 現行エンジンの Link
+統合が<strong>スケジューリングまで</strong> Link beat/phase
+に従うか、LinkAudio のオーディオ受け渡しに留まるか。後者なら「Link
+追従スケジューリング」が新規実装項目(IMPLEMENTATION_INSTRUCTIONS Phase 0
+に追加済み)。</li>
+<li><strong>結合度(coupling)</strong>:
+追従の硬さをオペレーターの連続パラメータとする。タイト =
+ピアノがドラマーに吸い付く / ルーズ =
+機械の慣性が露出。実装は追従速度係数 +
+<strong>信頼度ゲート</strong>(ビートトラッキング確度低下時は追従を凍結 =
+最終防衛と同一機構)。</li>
+<li>ビートトラッキングは Max
+既存エコシステムを用いる(自作しない)。手法選定は Max
+オペレーターに委譲。トリガーマイク等の入力系も Max 側の裁量。</li>
+</ul>
+<h2 id="agent-bridge-脳のない-mcp-サーバー">3. Agent Bridge — 脳のない
+MCP サーバー</h2>
+<p>Bridge
+は配管のみを担う。<strong>考える主体(ランタイム)を持たない</strong>ことで、ランタイムを差し替え可能にする。</p>
+<h3 id="mcp-tools">3.1 MCP Tools</h3>
+<pre><code>get_performance_features(bars: int) → FeatureWindow[]
+  直近 n 小節の特徴量。小節整列(エンジンのトランスポート時刻でラベル付け)。
+  楽器別: onsetCount, energyMean, registerCentroid + アンサンブル密度。
+  スキーマは Max オペレーターと協議の上で最小から開始し、固定はしない。
+
+evaluate_orbitscore(code: string) → {ok} | {error: diagnostic}
+  ①パース ②メソッド許可リスト照合 ③評価投入(evalSource:&quot;agent&quot;)。
+  失敗時は diagnostic を返す(ランタイム側で自己修復1回まで)。
+
+get_session_tail(n: int) → OrbsLogEntry[]
+  .orbslog 末尾 n 件。エージェントの作業記憶。</code></pre>
+<h3 id="入力-max-bridge">3.2 入力 (Max → Bridge)</h3>
+<p>OSC。例: <code>/wctm/onset &lt;instr&gt; &lt;vel&gt;</code>
+<code>/wctm/pitch &lt;instr&gt; &lt;midi&gt; &lt;conf&gt;</code> を
+Bridge
+が受け、エンジンのトランスポートを参照して小節窓に集約する。<strong>特徴量はすべて音楽時間(bar:beat)でラベル付けする</strong>——LLM
+が小節で思考できることが本質要件。</p>
+<h3 id="検証規則ガードレール">3.3 検証規則(ガードレール)</h3>
+<ul>
+<li>パース成功が必須。</li>
+<li>メソッド許可リスト:
+<code>play / root / mode / chord 値 / gain / pan / vel / gate / MUTE / LOOP / RUN / tempo(範囲制限)</code>。<strong>禁止</strong>:
+<code>global.stop()</code>, <code>audioPath()</code>,
+<code>midi()</code>(出力先変更), <code>init GLOBAL</code>。</li>
+<li>動的サンドボックスは作らない。quantize
+により悪いパターンの被害は「次の修正までの数小節」に量子化されるため、静的検証+介助ゲートで足りる(原則
+2 と合わせて)。</li>
+</ul>
+<h2 id="llm-runtime-二段構え">4. LLM Runtime — 二段構え</h2>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th></th>
+<th>A: Claude Code</th>
+<th>B: 専用ループ</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>駆動</td>
+<td>スラッシュコマンド(/monitor 系)+ MCP tools</td>
+<td>Bridge 内ループ + Messages API</td>
+</tr>
+<tr class="even">
+<td>利点</td>
+<td>即日動く。自己修復組み込み。<strong>開発ツールがバンドメンバーになる</strong>という作品的意味。画面をそのまま投影可能</td>
+<td>周期(2〜4小節)とレイテンシが予測可能。スキルをプロンプトキャッシュ化</td>
+</tr>
+<tr class="odd">
+<td>弱点</td>
+<td>ターン所要時間が読みにくい。足場のオーバーヘッド</td>
+<td>実装が一つ増える</td>
+</tr>
+</tbody>
+</table>
+<p><strong>方針</strong>: W3–4 は A
+で試作し、リハ実測(レイテンシ分布・応答品質)に基づき <strong>W5
+に本番ランタイムを確定</strong>する。MCP
+という形により、どちらに転んでも配管は無駄にならない。モデル・周期はオペレーター可変とする。</p>
+<h2 id="operator-介助の三段機構なしで成立">5. Operator —
+介助の三段(機構なしで成立)</h2>
+<ol type="1">
+<li><strong>舵取り</strong>:
+ランタイムへのプロンプト注入(「もっと疎に」「次セクションへ」)。</li>
+<li><strong>直接評価</strong>: オペレーター自身が OrbitScore
+を評価(<code>evalSource:"human"</code>)。LLM と同格の共演者。</li>
+<li><strong>ゲート</strong>:
+ランタイムの評価を保留/破棄するスイッチ(検証を通った音楽的不適切への最終防衛)。</li>
+</ol>
+<p>加えて:
+<strong>結合度操作</strong>(§2)、<strong>パニック</strong>(全チャンネル
+CC123/CC120。Disklavier
+の押しっぱなしは舞台事故なので、物理的に押しやすい位置に置く)。</p>
+<h2 id="skill-出発点のみ確定詳細は先送り">6. Skill —
+出発点のみ確定(詳細は先送り)</h2>
+<p>イベントループ完成後に設計する。出発点:
+<strong>ジャズスタンダード(All The Things You Are 等)のリードシートを
+.orbs 形式にしたもの + 演奏指示書</strong>。</p>
+<ul>
+<li>人間奏者のリードシートと LLM
+のスキルを<strong>同じ度数語彙</strong>(root 進行 + chord
+値)で書く——「OrbitScore が AI
+と人間の理解ギャップの橋になるか」の橋そのもの。</li>
+<li>リードシート .orbs は<strong>ピッチ DSL
+の受け入れテストを兼ねる</strong>(ATTYA
+は転調が多く、<code>root(音名)</code> と度数語彙の検証に適する)。</li>
+<li>スキル文書はコード進行・形式・密度指針・美学的指針のみを含む(旋律は人間側。著作権上もこの構成が安全)。</li>
+<li>パターン変数(PITCH_DSL_SPEC
+§6.5.2)による語彙制約は生成信頼性の装置として後続検討。</li>
+</ul>
+<h2 id="minimal-build-作らないもの">7. Minimal Build — 作らないもの</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>作らない</th>
+<th>代替</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>専用オペレーターコンソール</td>
+<td>Max 側 UI(結合度・ゲート)+ Claude Code 端末 + Bridge CLI フラグ</td>
+</tr>
+<tr class="even">
+<td>専用投影アプリ</td>
+<td>Claude Code 画面 + Max 特徴量表示の画面投影</td>
+</tr>
+<tr class="odd">
+<td>ビートトラッカー自作</td>
+<td>Max 既存エコシステム</td>
+</tr>
+<tr class="even">
+<td>譜面表示・mode(Phase 5)・リプレイヤー(L2)</td>
+<td>本番不要。L2 は本番後</td>
+</tr>
+<tr class="odd">
+<td>LLM 専用評価経路</td>
+<td>統一評価経路(原則 3)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="failure-modes">8. Failure Modes</h2>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>障害</th>
+<th>挙動</th>
+<th>対処</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>ネットワーク断 / API 障害</td>
+<td>LLM
+の更新が止まる。<strong>ピアノは最後のパターンを弾き続ける</strong>(原則
+2)</td>
+<td>モバイル回線フォールバック(プロポーザル記載)。復旧までオペレーターが直接評価</td>
+</tr>
+<tr class="even">
+<td>LLM が不正コード</td>
+<td>検証で弾かれ diagnostic 返却 → 自己修復1回 → 失敗なら破棄</td>
+<td>ログに残る(誤読も素材)</td>
+</tr>
+<tr class="odd">
+<td>LLM が音楽的に不適切</td>
+<td>quantize により被害は数小節</td>
+<td>ゲート / 直接評価で上書き</td>
+</tr>
+<tr class="even">
+<td>ビートトラッキング誤追従</td>
+<td>位相が暴れる</td>
+<td>信頼度ゲートで追従凍結(結合度 0)</td>
+</tr>
+<tr class="odd">
+<td>MIDI ノート押しっぱなし</td>
+<td>物理音が止まらない</td>
+<td>active note tracking(v1.1 Phase 1)+ パニックボタン</td>
+</tr>
+<tr class="even">
+<td>エンジンクラッシュ</td>
+<td>音停止。.orbslog は最終行まで残る</td>
+<td>再起動 → プリアンブル相当を手動再評価(リハで手順化)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="venue-hardware-checklist">9. Venue / Hardware Checklist</h2>
+<ul>
+<li>Disklavier の<strong>機構レイテンシ校正</strong>:
+モデルにより数十〜数百ms。<code>midiLatency</code>
+をポート単位の先行送出(負方向オフセット)に拡張して会場で実測・補正(lookahead
+スケジューラのため技術的に可能。IMPLEMENTATION_INSTRUCTIONS
+に項目化)。</li>
+<li>ネットワーク(会場回線 or
+モバイル)、投影系統、ドラムのセンシング(マイク/トリガー)、リハ用 MIDI
+ピアノ(Disklavier
+不在環境ではソフトピアノで代替し、レイテンシ以外の全系統を検証)。</li>
+</ul>
+<h2 id="open-questions">10. Open Questions</h2>
+<ol type="1">
+<li>エンジンの Link 追従スケジューリングの現状(§2、Phase 0 検証)。</li>
+<li>特徴量スキーマの確定(Max オペレーターとの協議。最小から開始)。</li>
+<li>ランタイム確定(W5、リハ実測)。</li>
+<li>テンポ変更の権限設計: スキル内で LLM に <code>tempo()</code>
+を許可する範囲(§3.3 の範囲制限の具体値)。</li>
+<li>10分の形式設計(セクション構成、結合度の演出プラン)——スキル設計と同時に。</li>
+</ol>
+</body>
+</html>
