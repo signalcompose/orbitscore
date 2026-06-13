@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.99 Issue #228 — Phase 1 増分5c: MIDI ディスパッチ配線 (発音つながる) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分5c。 commit hash: `ba12399`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: パイプライン最後の配線。 MIDI シーケンスの play() を実際に発音させる。 これで DSL `b3` → パーサー → timing → **度数解決 (出力最終段) → MidiScheduler → MidiOutput → 🔊** がつながる。
+
+**設計判断**: 既存の audio 中心 `loop-sequence`/`run-sequence`/`prepare-playback` はコールバック駆動で audio/MIDI 非依存だったため**そのまま再利用**。MIDI 固有部分だけを Sequence 側のコールバックで差し替える (最小の中枢変更)。 時刻基底は audio scheduler の startTime を共有 (併走同期)。
+
+**変更内容 (`core/sequence.ts`)**:
+
+- `scheduleMidiEvents()`: TimedEvent → `resolveDegree(symbolic, rootContext)` → `ScheduledMidiNote` → MidiScheduler。 §7-0 の番号化を**ここ (出力最終段) で**実施。 rest (度数0) はスキップ、 detune は pitch bend へ、 onTime = `schedulerStartTime + baseTime + ev.startTime + sendDelay`
+- `resolveRootContext()`: global.key() + seq.root(degree) + seq.octave から RootContext。 key 未宣言 + 度数ありはエラー (§2.3)。 run()/loop() で eager 検証 (resolveDispatchChannel と同じ理由で early throw)
+- `clearEvents()`: MIDI は `MidiScheduler.clearOwner` (pending 除去 + sounding note 解放、 §7-2)、 audio は従来通り。 run/loop/stop/mute/unmute/play差し替え の全クリア経路を振り替え
+- `scheduleEvents`/`scheduleEventsFromTime` に MIDI 分岐 (従来は `!_audioFilePath` で早期 return していた箇所)
+- `tests/core/sequence-midi-dispatch.spec.ts`: fake timers + mock 出力で 6 件 (度数→MIDI番号 end-to-end、 b3→Eb4、 octave、 gate の note-off 対、 stop で releaseOwner、 key 未宣言エラー)
+
+**テスト結果**: 867 passed / 23 skipped (890 total)。 +6、 回帰なし。
+
+**次**: 増分5d (hanging note 不変条件: LOOP差し替え100回でゼロ — Phase 1 ゲート条件)。 残: audio `[ ]` の diagnostic 予約 (§10-5、 `[ ]` トークンは Phase 3 で導入のため要検討)。
+
+---
+
 ### 6.98 Issue #228 — Phase 1 増分5b: Sequence MIDI 設定面 + audio排他 (Jun 13, 2026)
 
 **Date**: 2026-06-13

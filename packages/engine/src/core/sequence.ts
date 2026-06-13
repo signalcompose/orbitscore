@@ -8,6 +8,8 @@ import * as path from 'path'
 
 import { AudioEngine } from '../audio/types'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
+import { resolveDegree } from '../midi/degree-resolution'
+import { RootContext } from '../midi/types'
 
 import { Global } from './global'
 import { Scheduler } from './global/types'
@@ -170,7 +172,7 @@ export class Sequence {
         // Immediate reschedule for the remaining parameters
         const now = Date.now()
         const currentTime = now - scheduler.startTime
-        scheduler.clearSequenceEvents(this.stateManager.getName())
+        this.clearEvents(this.stateManager.getName())
         this.scheduleEventsFromTime(scheduler, currentTime)
         console.log(`🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`)
       }
@@ -199,7 +201,7 @@ export class Sequence {
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       scheduleEventsFromTimeFn: (sched, fromTime) => this.scheduleEventsFromTime(sched, fromTime),
       getPatternDurationFn: () => this.getPatternDuration(),
-      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
+      clearSequenceEventsFn: (name) => this.clearEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
       setLoopTimerFn: (timer) => this.stateManager.setLoopTimer(timer),
@@ -406,8 +408,109 @@ export class Sequence {
     return this
   }
 
+  /**
+   * Clear this sequence's scheduled events, routing to the right scheduler.
+   * For MIDI, `clearOwner` also releases any sounding notes (§7-2), so loop /
+   * mute / play swaps never leave hanging notes.
+   */
+  private clearEvents(name: string): void {
+    if (this.isMidi()) {
+      this.global.getMidiManager().getScheduler().clearOwner(name)
+    } else {
+      this.global.getScheduler().clearSequenceEvents(name)
+    }
+  }
+
+  /**
+   * Resolve this sequence's root context for degree resolution (§2.1, §2.3).
+   *
+   * Phase 1 supports the sequence default only: a numeric `seq.root(n)` is the
+   * n-th degree of `global.key()`; with no `seq.root()`, the key tonic is the
+   * root. A degree with neither a key nor a root is a hard error.
+   */
+  private resolveRootContext(): RootContext {
+    const name = this.stateManager.getName() || 'sequence'
+    const keyPC = this.global.getMidiManager().getKeyPitchClass()
+
+    if (keyPC === undefined) {
+      throw new Error(
+        `Sequence '${name}': MIDI degrees need a root. Declare global.key("C") (or set seq.root()).`,
+      )
+    }
+
+    let rootPitchClass = keyPC
+    if (this._rootDegree !== undefined) {
+      // The numeric root resolves against the key exactly like any degree (§2.3).
+      const resolved = resolveDegree(
+        { degree: this._rootDegree, alteration: 0, octaveShift: 0, detune: 0 },
+        { rootPitchClass: keyPC, octave: 0 },
+      )
+      if (resolved) {
+        rootPitchClass = ((resolved.midiNote % 12) + 12) % 12
+      }
+    }
+
+    return { rootPitchClass, octave: this._octave }
+  }
+
+  /**
+   * Schedule this sequence's timed events as MIDI notes (§7-0 output stage:
+   * symbolic pitch is resolved to a MIDI note number here, at the last moment).
+   *
+   * @param schedulerStartTime epoch ms of the audio scheduler start (shared clock)
+   * @param baseTime           ms since scheduler start for this iteration's bar
+   */
+  private scheduleMidiEvents(schedulerStartTime: number, baseTime: number): void {
+    const timedEvents = this.stateManager.getTimedEvents()
+    if (!timedEvents || timedEvents.length === 0 || this.stateManager.isMuted()) {
+      return
+    }
+
+    const midi = this.global.getMidiManager()
+    const scheduler = midi.getScheduler()
+    scheduler.start() // idempotent — ensure the lookahead loop is running
+
+    const owner = this.stateManager.getName()
+    const port = this._midiPort!
+    const channel = this._midiChannel!
+    const context = this.resolveRootContext()
+    const sendDelay = midi.sendDelayFor(port)
+
+    for (const ev of timedEvents) {
+      const symbolic = ev.pitch ?? {
+        degree: ev.sliceNumber,
+        alteration: 0,
+        octaveShift: 0,
+        detune: 0,
+      }
+      const resolved = resolveDegree(symbolic, context)
+      if (!resolved) {
+        continue // rest (degree 0)
+      }
+      const onTime = schedulerStartTime + baseTime + ev.startTime + sendDelay
+      const offTime = onTime + ev.duration * this._gate
+      scheduler.scheduleNote({
+        owner,
+        port,
+        channel,
+        note: resolved.midiNote,
+        velocity: this._vel,
+        detune: resolved.detune,
+        onTime,
+        offTime,
+      })
+    }
+
+    this.stateManager.setPlaying(true)
+  }
+
   // Schedule events from a specific time onwards (for seamless parameter changes)
   private scheduleEventsFromTime(scheduler: Scheduler, fromTime: number): void {
+    if (this.isMidi()) {
+      this.scheduleMidiEvents(scheduler.startTime, fromTime)
+      return
+    }
+
     const timedEvents = this.stateManager.getTimedEvents()
     if (!timedEvents || !this._audioFilePath) {
       return
@@ -473,6 +576,11 @@ export class Sequence {
     loopIteration: number = 0,
     baseTime: number = 0,
   ): Promise<void> {
+    if (this.isMidi()) {
+      this.scheduleMidiEvents(scheduler.startTime, baseTime)
+      return
+    }
+
     const timedEvents = this.stateManager.getTimedEvents()
     if (!this._audioFilePath || !timedEvents || timedEvents.length === 0) {
       return
@@ -517,6 +625,9 @@ export class Sequence {
     // the awaited call chain to the REPL catch block, instead of becoming an
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
+    if (this.isMidi()) {
+      this.resolveRootContext() // eager root validation (same rationale)
+    }
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -541,7 +652,7 @@ export class Sequence {
       isPlaying: this.stateManager.isPlaying(),
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
-      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
+      clearSequenceEventsFn: (name) => this.clearEvents(name),
     })
 
     this.stateManager.setPlaying(result.isPlaying)
@@ -558,6 +669,9 @@ export class Sequence {
     // the awaited call chain to the REPL catch block, instead of becoming an
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
+    if (this.isMidi()) {
+      this.resolveRootContext() // eager root validation (same rationale)
+    }
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -589,7 +703,7 @@ export class Sequence {
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       scheduleEventsFromTimeFn: (sched, fromTime) => this.scheduleEventsFromTime(sched, fromTime),
       getPatternDurationFn: () => this.getPatternDuration(),
-      clearSequenceEventsFn: (name) => scheduler.clearSequenceEvents(name),
+      clearSequenceEventsFn: (name) => this.clearEvents(name),
       getIsLoopingFn: () => this.stateManager.isLooping(),
       getIsMutedFn: () => this.stateManager.isMuted(),
       setLoopTimerFn: (timer) => this.stateManager.setLoopTimer(timer),
@@ -608,9 +722,8 @@ export class Sequence {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
 
-    // Clear scheduled events from scheduler
-    const scheduler = this.global.getScheduler()
-    scheduler.clearSequenceEvents(sequenceName)
+    // Clear scheduled events (MIDI: also releases sounding notes, §7-2)
+    this.clearEvents(sequenceName)
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
@@ -639,10 +752,9 @@ export class Sequence {
     const sequenceName = this.stateManager.getName()
     this.stateManager.setMuted(true)
 
-    // Clear any scheduled events when muting
-    // This prevents accumulated events from playing when unmuting
-    const scheduler = this.global.getScheduler()
-    scheduler.clearSequenceEvents(sequenceName)
+    // Clear any scheduled events when muting (MIDI: also releases sounding
+    // notes, §7-2). Prevents accumulated events from playing when unmuting.
+    this.clearEvents(sequenceName)
 
     return this
   }
@@ -663,10 +775,11 @@ export class Sequence {
 
       console.log(`🔓 ${sequenceName}: unmuting and rescheduling from ${currentTime}ms`)
 
-      // Clear old scheduled events (removes from scheduledPlays and sequenceEvents Map)
-      scheduler.clearSequenceEvents(sequenceName)
+      // Clear old scheduled events (MIDI: also releases sounding notes, §7-2)
+      this.clearEvents(sequenceName)
 
-      // Reinitialize tracking so new events won't be skipped
+      // Reinitialize tracking so new events won't be skipped (audio scheduler;
+      // a no-op for the MIDI path, which tracks per-owner in MidiOutput)
       scheduler.reinitializeSequenceTracking(sequenceName)
 
       // Reschedule from current time (seamless resume)
