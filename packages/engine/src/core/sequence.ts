@@ -459,19 +459,26 @@ export class Sequence {
       )
     }
 
-    let rootPitchClass = keyPC
-    if (this._rootDegree !== undefined) {
-      // The numeric root resolves against the key exactly like any degree (§2.3).
-      const resolved = resolveDegree(
-        { degree: this._rootDegree, alteration: 0, octaveShift: 0, detune: 0 },
-        { rootPitchClass: keyPC, octave: 0 },
-      )
-      if (resolved) {
-        rootPitchClass = ((resolved.midiNote % 12) + 12) % 12
-      }
-    }
+    // The numeric root resolves against the key exactly like any degree (§2.3).
+    const rootPitchClass =
+      this._rootDegree !== undefined
+        ? this.degreeRootToPitchClass(this._rootDegree, 0, keyPC)
+        : keyPC
 
     return { rootPitchClass, octave: this._octave }
+  }
+
+  /**
+   * Resolve a degree against the key to a pitch class — shared by the sequence
+   * root (§2.3) and a group `.root(degree)` scope. The degree numbers from the
+   * key tonic at octave 0; only the resulting pitch class is kept.
+   */
+  private degreeRootToPitchClass(degree: number, alteration: number, keyPC: number): number {
+    const resolved = resolveDegree(
+      { degree, alteration, octaveShift: 0, detune: 0 },
+      { rootPitchClass: keyPC, octave: 0 },
+    )
+    return resolved ? ((resolved.midiNote % 12) + 12) % 12 : keyPC
   }
 
   /**
@@ -495,7 +502,8 @@ export class Sequence {
     const name = this.stateManager.getName() || 'sequence'
     if (scope.mode !== undefined) {
       throw new Error(
-        `Sequence '${name}': .mode() is not implemented in v1.1 (the mode lattice is Phase 2.2).`,
+        `Sequence '${name}': .mode(${scope.mode.raw}) is not implemented in v1.1 ` +
+          `(the mode lattice is Phase 2.2).`,
       )
     }
     const root = scope.root!
@@ -509,12 +517,10 @@ export class Sequence {
         `Sequence '${name}': a degree root (.root(${root.degree})) needs global.key("C").`,
       )
     }
-    const resolved = resolveDegree(
-      { degree: root.degree, alteration: root.alteration, octaveShift: 0, detune: 0 },
-      { rootPitchClass: keyPC, octave: 0 },
-    )
-    const rootPitchClass = resolved ? ((resolved.midiNote % 12) + 12) % 12 : keyPC
-    return { rootPitchClass, octave: this._octave }
+    return {
+      rootPitchClass: this.degreeRootToPitchClass(root.degree, root.alteration, keyPC),
+      octave: this._octave,
+    }
   }
 
   /**

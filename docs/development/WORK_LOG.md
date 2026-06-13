@@ -51,7 +51,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Phase 2 完了**: パーサー + timing + dispatch + エディタ支援。テスト 863 passed / 23 skipped。core spec はポインタ規約で反映。
 
-**次**: Phase 2 PR 作成 → レビュー。follow-up: span レベルハイライト（PlayScoped offset 要）、Phase 3 (#231 `[ ]` スタック + chord 値)。
+**Phase 2 PR**: #247 作成済み。
+
+**/simplify パス (2026-06-13)**: 4観点で Phase 2 production code (787行) をレビュー。適用4件: (A) 共有 `collapseScopedRun` で parser の run-collapse 重複を統合（pre/post-push の drift 解消、3 agent が指摘）、(B) 共有 `degreeRootToPitchClass` で度数解決カーネル統合、(D) `resolveScope` 空スタック早期 return、(E) `.mode()` エラーが `ScopeMode.raw` を使用（dead field 解消）。スキップ: 条件スプレッド・timing/dispatch 分離（正しい層）、microopt、diff 外の paren ループ。863 passed 維持。
+
+**次**: `/code:pr-review-team` で #247 をレビュー（critical/important=0 まで）→ マージ判断。follow-up: span レベルハイライト（PlayScoped offset 要）、Phase 3 (#231 `[ ]` スタック + chord 値)。
 
 ---
 

@@ -21,6 +21,7 @@ interface ScopeFrame {
  * group declared a scope (= sequence default).
  */
 function resolveScope(stack: ScopeFrame[]): TimedEventScope | undefined {
+  if (stack.length === 0) return undefined // common case: no enclosing scope group
   let root: ScopeRoot | undefined
   let mode: ScopeMode | undefined
   let groupOct: number | undefined

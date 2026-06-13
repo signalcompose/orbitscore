@@ -21,6 +21,24 @@ import {
 import { ParserUtils } from './parser-utils'
 
 /**
+ * If the last element of `list` is a scope chain (PlayScoped) and there are
+ * preceding sibling groups since `runStart`, collapse the juxtaposition run
+ * into its `groups`, so `(A)(B).root(X)` shares one scope (§3). No-op otherwise
+ * — a no-chain run stays as separate siblings. Shared by the nested-level
+ * (ExpressionParser) and statement-level (StatementParser) parse loops; both
+ * call it AFTER pushing the just-parsed element, so the run rule lives in one
+ * place (the pre-/post-push arithmetic is otherwise an easy source of drift).
+ */
+export function collapseScopedRun(list: PlayElement[], runStart: number): void {
+  const lastIdx = list.length - 1
+  const last = list[lastIdx]
+  if (last && typeof last === 'object' && last.type === 'scoped' && runStart < lastIdx) {
+    const preceding = list.splice(runStart, lastIdx - runStart)
+    last.groups = [...preceding, ...last.groups]
+  }
+}
+
+/**
  * Expression parser for audio DSL
  */
 export class ExpressionParser {
@@ -575,7 +593,7 @@ export class ExpressionParser {
         break
       }
       this.parseNestedPlayElement(elements)
-      this.collapseScopedRun(elements, runStart)
+      collapseScopedRun(elements, runStart)
 
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       // Handle comma or continue. A comma ends the juxtaposition run.
@@ -611,21 +629,6 @@ export class ExpressionParser {
     }
 
     return { value: { type: 'nested', elements }, newPos: this.pos }
-  }
-
-  /**
-   * If the element just pushed is a scope chain (PlayScoped), collapse the
-   * preceding juxtaposition run (the sibling groups since `runStart`) into its
-   * `groups`, so `(A)(B).root(X)` shares one scope (§3). No-op otherwise — a
-   * no-chain run stays as separate siblings.
-   */
-  private collapseScopedRun(elements: PlayElement[], runStart: number): void {
-    const lastIdx = elements.length - 1
-    const last = elements[lastIdx]
-    if (last && typeof last === 'object' && last.type === 'scoped' && runStart < lastIdx) {
-      const preceding = elements.splice(runStart, lastIdx - runStart)
-      last.groups = [...preceding, ...last.groups]
-    }
   }
 
   /**

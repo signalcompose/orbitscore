@@ -5,7 +5,7 @@
 
 import { AudioToken, GlobalInit, SequenceInit, Statement, MethodChain } from './types'
 import { ParserUtils } from './parser-utils'
-import { ExpressionParser } from './parse-expression'
+import { ExpressionParser, collapseScopedRun } from './parse-expression'
 
 /**
  * Statement parser for audio DSL
@@ -375,14 +375,11 @@ export class StatementParser {
       const expressionParser = new ExpressionParser(this.tokens, this.pos)
       const argResult = expressionParser.parseArgument()
       this.pos = argResult.newPos
-      const arg = argResult.value
       // A scope chain (PlayScoped) applies to the whole juxtaposition run: pull
       // the preceding sibling groups (since the last comma) into its groups so
       // `(A)(B).root(X)` shares one scope. No-chain `(A)(B)` stays separate.
-      if (arg && typeof arg === 'object' && arg.type === 'scoped' && runStart < args.length) {
-        arg.groups = [...args.splice(runStart), ...arg.groups]
-      }
-      args.push(arg)
+      args.push(argResult.value)
+      collapseScopedRun(args, runStart)
 
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
