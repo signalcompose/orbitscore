@@ -57,7 +57,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **決定（spec 範囲内）**: 除去 `-N` の字面一致は (degree, alteration)（§6 字面一致の具体化）。namespace 衝突は last-write-wins + warning（§10-4）。未定義 chord 名参照は warning + 空展開（§6 は未規定、no-op+warning 哲学に整合）。`{ }` レガート・`_` タイ（§5）と top-level bare chord 名は Phase 3 範囲外（§9.1 のそれらは Phase 4）。
 
-**テスト**: `chord-binding-parsing.spec.ts` 8件 / `sequence-chord-dispatch.spec.ts` 11件（import+`[m7]`、`(0,m7,0,m7).root(3)`、spread+add/除去、whole-chord `^+1`、defineChord、unknown warning、registry、interpreter 配線）。全体 925 passed / 23 skipped。core spec は specs-v2 を正本として参照（§4/§6 は PITCH_DSL_SPEC が正本、乖離なし）。
+**テスト**: `chord-binding-parsing.spec.ts` 8件 / `sequence-chord-dispatch.spec.ts` 12件（import+`[m7]`、`(0,m7,0,m7).root(3)`、spread+add/除去、whole-chord `^+1`、defineChord、unknown warning、registry、interpreter 配線、**§9.1 正本 bar 3**）。`sequence-stack-dispatch.spec.ts` に **§9.1 正本 bar 4**（`[1,3,b7,13]`/`b13` の高次テンション 13/b13）を追加。全体 927 passed / 23 skipped。core spec は specs-v2 を正本として参照（§4/§6 は PITCH_DSL_SPEC が正本、乖離なし）。
 
 ### 6.106 Issue #230 — Phase 2: `.root()`/`.mode()`/`.oct()` グループスコープ — パーサー層 (Jun 13, 2026)
 

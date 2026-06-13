@@ -113,6 +113,13 @@ describe('Phase 3 — chord values dispatch (§6)', () => {
     expect(notesOf(out).sort((a, b) => a - b)).toEqual([60, 63, 70])
   })
 
+  it('§9.1 bar 3 (normative): (0, [m7, 9], 0, [m7, 9]).root(2) in C', async () => {
+    const out = await playChords((g) => g.importChords(), '(0, [m7, 9], 0, [m7, 9]).root(2)')
+    // root degree 2 of C = D (62). m7 on D → 62, 65, 69, 72; + 9 = IONIAN[1]+12 = 14 → 76.
+    // Two chords (slots 2 and 4); slots 1 and 3 are rests.
+    expect(notesOf(out)).toEqual([62, 65, 69, 72, 76, 62, 65, 69, 72, 76])
+  })
+
   it('an unknown chord name warns and plays nothing', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const out = await playChords(() => {}, '[mystery]')

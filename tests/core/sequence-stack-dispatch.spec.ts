@@ -106,6 +106,13 @@ describe('Phase 3 — stack MIDI dispatch (§4)', () => {
     expect(notesOf(out)).toHaveLength(4)
     expect(notesOf(out)).not.toContain(60) // would be C4 if the stack had reset the range
   })
+
+  it('§9.1 bar 4 (normative): ([1, 3, b7, 13], 0, 0, [1, 3, b7, b13]).root(5) in C', async () => {
+    const out = await playKeyed('([1, 3, b7, 13], 0, 0, [1, 3, b7, b13]).root(5)')
+    // root degree 5 of C = G (pc 7, oct 4) → rootPitch 67. 1→67, 3→71, b7→77,
+    // 13 = IONIAN[5]+12 = 21 → 88 ; b13 = 20 → 87. Two stacks (slots 1 and 4).
+    expect(notesOf(out)).toEqual([67, 71, 77, 88, 67, 71, 77, 87])
+  })
 })
 
 describe('Phase 3 — `[ ]` rejected in audio sequences (§10-5)', () => {
