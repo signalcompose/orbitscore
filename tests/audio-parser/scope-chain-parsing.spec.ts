@@ -143,6 +143,42 @@ describe('Phase 2 — juxtaposition run shares one scope (§3)', () => {
   })
 })
 
+describe('Phase 2 — run-collapse at the NESTED level (§3)', () => {
+  it('(A)(B).root(X) inside an outer group collapses to one PlayScoped (nested path)', () => {
+    // ((1)(2).root(3), 5): inside the outer group, the (1)(2) run shares root 3,
+    // then a comma, then bare 5. Exercises collapseScopedRun in parseNestedPlay.
+    const outer = firstArg('seq1.play(((1)(2).root(3), 5))')
+    expect(outer).toMatchObject({ type: 'nested' })
+    const els = (outer as any).elements
+    expect(els[0]).toMatchObject({ type: 'scoped', root: { kind: 'degree', degree: 3 } })
+    expect((els[0] as any).groups).toHaveLength(2)
+    expect(els[1]).toBe(5)
+  })
+
+  it('comma bounds the nested run: (0, (1)(2).root(5)) keeps 0 separate', () => {
+    const outer = firstArg('seq1.play((0, (1)(2).root(5)))')
+    const els = (outer as any).elements
+    expect(els[0]).toBe(0)
+    expect(els[1]).toMatchObject({ type: 'scoped' })
+    expect((els[1] as any).groups).toHaveLength(2)
+  })
+})
+
+describe('Phase 2 — invalid .root() arguments error at parse', () => {
+  it('.root(0) — degree 0 is a rest, not a root — throws', () => {
+    expect(() => parseAudioDSL('seq1.play((1).root(0))')).toThrow(/positive degree|rest/)
+  })
+  it('.root(b0) — altered degree 0 — throws', () => {
+    expect(() => parseAudioDSL('seq1.play((1).root(b0))')).toThrow(/positive degree|rest/)
+  })
+  it('.root(H) — invalid note letter — throws', () => {
+    expect(() => parseAudioDSL('seq1.play((1).root(H))')).toThrow(/note letter/)
+  })
+  it('.root() — empty argument — throws', () => {
+    expect(() => parseAudioDSL('seq1.play((1).root())')).toThrow(/\.root\(\) expects/)
+  })
+})
+
 describe('Phase 2 — no-chain juxtaposition is unaffected (regression guard)', () => {
   it('a bare group stays a plain nested node (not scoped)', () => {
     expect(firstArg('seq1.play((1, 3, 5))')).toMatchObject({ type: 'nested' })

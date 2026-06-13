@@ -167,4 +167,31 @@ describe('Sequence group-scope dispatch (§3)', () => {
     expect(notesOf(out)).toHaveLength(3)
     expect(notesOf(out)).not.toContain(60) // would be C4 if ^N had been reset by the group
   })
+
+  it('inner .oct() + outer .root() resolve from different frames (independent axes)', async () => {
+    // ((1, 5).oct(2)).root(3): outer root = III of C = E (64); inner oct = +2.
+    const out = await playKeyed('((1, 5).oct(2)).root(3)')
+    expect(notesOf(out)).toEqual(expect.arrayContaining([88, 95])) // E6(64+24), B6(64+7+24)
+    expect(notesOf(out)).toHaveLength(2)
+  })
+
+  it('.oct(-N) offsets downward', async () => {
+    const out = await playKeyed('(1).oct(-2)')
+    expect(notesOf(out)).toContain(36) // C2 = C4(60) - 24
+  })
+
+  it('a bare degree alongside a note-rooted group still needs global.key()', async () => {
+    vi.setSystemTime(T0)
+    const sched = mockScheduler()
+    const out = mockMidiOutput()
+    const g = new Global(sched, new MidiManager(() => out)) // no key
+    g.start()
+    const seq = new Sequence(g, sched)
+    seq.setName('lead')
+    seq.midi('iac', 1).octave(4)
+    // (1).root(C) needs no key, but the bare 5 falls back to the seq default → needs key
+    const args = parseAudioDSL('p.play((1).root(C), 5)').statements[0].args
+    seq.play(...(args as never[]))
+    await expect(seq.run()).rejects.toThrow(/key|root/i)
+  })
 })

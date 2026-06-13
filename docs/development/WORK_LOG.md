@@ -55,7 +55,13 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **/simplify パス (2026-06-13)**: 4観点で Phase 2 production code (787行) をレビュー。適用4件: (A) 共有 `collapseScopedRun` で parser の run-collapse 重複を統合（pre/post-push の drift 解消、3 agent が指摘）、(B) 共有 `degreeRootToPitchClass` で度数解決カーネル統合、(D) `resolveScope` 空スタック早期 return、(E) `.mode()` エラーが `ScopeMode.raw` を使用（dead field 解消）。スキップ: 条件スプレッド・timing/dispatch 分離（正しい層）、microopt、diff 外の paren ループ。863 passed 維持。
 
-**次**: `/code:pr-review-team` で #247 をレビュー（critical/important=0 まで）→ マージ判断。follow-up: span レベルハイライト（PlayScoped offset 要）、Phase 3 (#231 `[ ]` スタック + chord 値)。
+**/code:pr-review-team イテレーション1 (#247)**: 4 専門レビュアー。Critical 0、Important 修正:
+- **(silent-failure) `.root(0)` のサイレント tonic fallback**: 群 `.root()` は seq.root() の guard が無く degree 0 が黙って key tonic に落ちていた → `parseRootArg` に degree<1 の parse エラー（`expectRootDegree`）+ `degreeRootToPitchClass` の silent fallback を throw に。
+- **(comment) 度数範囲 `1-12` 誤記**（受理は {1-9,11,13}）→ tmLanguage + 補完 + hover の3箇所を `1-9, 11, 13` に修正。
+- **(test) カバレッジ +9**: nested レベルの run-collapse（`((1)(2).root(3), 5)`、/simplify の共有関数を両経路で検証）、不正 root 引数（`.root(0)`/`.root(b0)`/`.root(H)`/空）、note-root + bare degree 混在で no-key reject、inner `.oct()` × outer `.root()` 別フレーム、`.oct(-N)`。
+- code-reviewer は Critical/Important ゼロ。872 passed。
+
+**次**: イテレーション2（再レビュー）→ マージ判断。follow-up: span レベルハイライト（PlayScoped offset 要）、Phase 3 (#231)。
 
 ---
 

@@ -478,7 +478,13 @@ export class Sequence {
       { degree, alteration, octaveShift: 0, detune: 0 },
       { rootPitchClass: keyPC, octave: 0 },
     )
-    return resolved ? ((resolved.midiNote % 12) + 12) % 12 : keyPC
+    if (!resolved) {
+      // resolveDegree returns null only for degree 0 (a rest). A rest is not a
+      // valid pitch center — never silently fall back to the key tonic. (Both
+      // callers also guard upstream: seq.root() setter + parseRootArg.)
+      throw new Error('root degree 0 is a rest, not a valid root.')
+    }
+    return ((resolved.midiNote % 12) + 12) % 12
   }
 
   /**

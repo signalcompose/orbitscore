@@ -523,17 +523,32 @@ export class ExpressionParser {
       this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
       const num = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
       this.pos = num.newPos
-      return { kind: 'degree', degree: ParserUtils.parseNumber(num.token), alteration }
+      return { kind: 'degree', degree: this.expectRootDegree(num.token), alteration }
     }
 
     if (cur.type === 'NUMBER') {
       this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-      return { kind: 'degree', degree: ParserUtils.parseNumber(cur), alteration: 0 }
+      return { kind: 'degree', degree: this.expectRootDegree(cur), alteration: 0 }
     }
 
     throw new Error(
       `.root() expects a note name (e.g. F#) or a degree (e.g. 3, b6), got ${cur.type}`,
     )
+  }
+
+  /**
+   * Parse a degree-root number, rejecting 0 (a rest is not a valid pitch center).
+   * Parallels the `seq.root()` setter guard — `.root(0)` must error, not silently
+   * fall back to the key tonic (§2.3).
+   */
+  private expectRootDegree(token: AudioToken): number {
+    const degree = ParserUtils.parseNumber(token)
+    if (degree < 1) {
+      throw new Error(
+        `.root() degree must be a positive degree (1+); 0 is a rest, not a valid root.`,
+      )
+    }
+    return degree
   }
 
   /**

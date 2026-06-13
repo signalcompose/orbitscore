@@ -60,7 +60,7 @@
               "match": "(?:b{1,2}|#{1,2})[1-9][0-9]?"
             },
             {
-              "comment": "Bare degree root: 1-12",
+              "comment": "Bare degree root: bare integer; semantically valid degrees are 1-9, 11, 13",
               "name": "constant.numeric.degree.orbitscore",
               "match": "\\b[1-9][0-9]?\\b"
             }

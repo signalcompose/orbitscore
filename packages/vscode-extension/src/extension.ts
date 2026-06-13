@@ -1198,7 +1198,7 @@ function getPitchScopeCompletions(): vscode.CompletionItem[] {
   root.documentation = new vscode.MarkdownString(
     '**root(note | degree)** — Set pitch-class root for the preceding group or juxtaposition run (§2.3, §3).\n\n' +
       'Note names: `C`, `Db`, `D`, `Eb`, `E`, `F`, `F#`, `Gb`, `G`, `Ab`, `A`, `Bb`, `B`\n\n' +
-      'Degrees (of `global.key()`): `1`–`12`, `b3`, `#5`, etc.\n\n' +
+      'Degrees (of `global.key()`): `1`–`9`, `11`, `13`, `b3`, `#5`, etc.\n\n' +
       'Examples: `(1, 2, 3).root(F#)` · `(A)(B).root(Bb)` · `(A).root(b6)`',
   )
   root.insertText = new vscode.SnippetString('root(${1:F})')
@@ -1234,7 +1234,7 @@ function registerHoverProvider(context: vscode.ExtensionContext) {
         quantize:
           '**quantize(value)**\n\nLaunch quantize for `LOOP()` and LOOP-time `play()` updates.\n\nValues: `"off"` | `"beat"` | `"bar"` | `"2bar"` | `"4bar"` | `"8bar"`. Default: `"bar"`. `RUN()` is always immediate.',
         play: '**play(...slices)**\n\nPlay audio slices. Supports numbers, nested structures, and modifiers',
-        root: '**root(note | degree)**\n\nSet the pitch-class root for a group or juxtaposition run (§2.3, §3).\n\nExamples: `(1, 2, 3).root(F#)` · `(A)(B).root(Bb)` · `(1, 2).root(3)` · `(A).root(b6)`\n\nNote names: `C`, `Db`, `D`, `Eb`, `E`, `F`, `F#`, `Gb`, `G`, `Ab`, `A`, `Bb`, `B`\nDegrees (of `global.key()`): `1`–`12`, `b3`, `#5`, etc.',
+        root: '**root(note | degree)**\n\nSet the pitch-class root for a group or juxtaposition run (§2.3, §3).\n\nExamples: `(1, 2, 3).root(F#)` · `(A)(B).root(Bb)` · `(1, 2).root(3)` · `(A).root(b6)`\n\nNote names: `C`, `Db`, `D`, `Eb`, `E`, `F`, `F#`, `Gb`, `G`, `Ab`, `A`, `Bb`, `B`\nDegrees (of `global.key()`): `1`–`9`, `11`, `13`, `b3`, `#5`, etc.',
         mode: '**mode(name)**\n\nSet the modal context for a group (§2.3). _v1.1: syntax reserved; dispatch throws. Arrives in Phase 2.2._',
         oct: '**oct(N)**\n\nSet the group-lexical octave register for a group or run (§2.3, §3). Integer.\n\nExample: `(1, 2, 3).oct(4)` · `(A)(B).root(C).oct(5)`',
         chop: '**chop(n)**\n\nDivide audio into n equal slices',
