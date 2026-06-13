@@ -740,8 +740,10 @@ root)」「コードとスタック(chord
 </ul>
 <h2 id="testing-strategy">9. Testing Strategy</h2>
 <ul>
-<li><strong>純関数網羅</strong>: 度数解決(全度数1–15 × b/# ×
-octave、mode 格子、root 音名/数値/key 未宣言エラー)、<code>*n</code>
+<li><strong>純関数網羅</strong>: 度数解決(受理度数 <code>{1-9,11,13}</code>
+× b/# × pitch range <code>^N</code>(スティッキー)、不正度数
+<code>{10,12,14,15+}</code> のエラー、mode 格子、root
+音名/数値/key 未宣言エラー)、<code>*n</code>
 等価性(<code>(1,0)*2</code> ≡ <code>(1,0)(1,0)</code>
 のタイミング列)、spread/<code>-</code>。</li>
 <li><strong>パーサー</strong>:

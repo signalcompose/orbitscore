@@ -168,14 +168,18 @@ export class ExpressionParser {
     alteration: number,
   ): { value: PlayPitch; newPos: number } {
     let octaveShift = 0
+    let rangeSet = false
     let detune = 0
     let parsed = true
     while (parsed) {
       parsed = false
       const t = ParserUtils.current(this.tokens, this.pos).type
       if (t === 'CARET') {
+        // `^N` sets the sticky pitch range (§2.4). rangeSet marks this note as a
+        // running-range set point so the scheduling walk persists it onward.
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         octaveShift = this.parseSignedNumber()
+        rangeSet = true
         parsed = true
       } else if (t === 'TILDE') {
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
@@ -184,7 +188,7 @@ export class ExpressionParser {
       }
     }
     return {
-      value: { type: 'pitch', degree, alteration, octaveShift, detune },
+      value: { type: 'pitch', degree, alteration, octaveShift, rangeSet, detune },
       newPos: this.pos,
     }
   }

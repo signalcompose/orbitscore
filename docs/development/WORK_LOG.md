@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.105 Issue #228 — Phase 1: 度数記法の再設計 (pitch range / スティッキー `^N`) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (PR #245 に同梱)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: Phase 1 実機検証 (6.103) で2オクターブスケールを度数 `1..15` で鳴らしたところ、大和さんが「度数仕様が想定と違う」と指摘。`8,10,12,14` はバークリーで使わない非音楽的な数字で、メロディはルート上のコード度数 (1-7 + テンション 9/11/13) で書く。第四議論を経て **pitch range (音域状態) モデル**に収束 (DESIGN_DISCUSSION_RECORD §9、決定ログ #33-38)。
+
+**確定した仕様 (spec が正本)**:
+
+- **度数 = 和声的位置**: `1-7` (スケール) + テンション `9/11/13` (メロディでも明示可、`2/4/6` の +1オクターブ)。
+- **`^N` = スティッキー pitch range**: 音/休符に付き、その地点から running range を base+N に設定。play() 内で読み順に持続、各 play() 先頭でリセット、`^0` で戻る。`0^N` = 無音で音域変更。独立 `^` マーカーは無し。3オクターブ上 = `3^3` 一発。
+- **range は全度数に効く (統一ルール、linear)**。`^N`(linear/persistent) と `.oct()`(lexical/group、Phase 2) は別軸の道具。
+- **度数受理 = {1-9, 11, 13}**。`8` = オクターブ上ルート (8va、`1^1` 等価)。`10/12/14/15+` は**エラー** (`^N` を案内)。後方互換は取らない (未リリース機能ゆえ)。
+
+**変更内容**:
+
+- `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md`: §9 第四議論を追記 (9.1-9.7、決定ログ #33-38)
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.html` §2.1 (度数受理 / `o`=running range)、§2.4 (`^N` スティッキー pitch range)
+- `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`: テスト網羅項を新ルールに
+- `midi/degree-resolution.ts`: 受理度数 {1-9,11,13} 検証 (10/12/14/15+ は throw)
+- `parser/types.ts` + `parse-expression.ts`: PlayPitch に `rangeSet` (「`^` を書いたか」=スティッキー set point)
+- `midi/types.ts`: SymbolicPitch に `rangeSet?` (出力段の running range スレッド用)
+- `timing/calculation/calculate-event-timing.ts`: `rangeSet` を pitch に伝播
+- `core/sequence.ts` `scheduleMidiEvents`: 読み順で **running range をスレッド** (rangeSet で更新、以降の全度数に effective range を適用)
+
+**テスト (821 passed / 23 skipped)**: degree 受理 {1-9,11,13} / 拒否 {10,12,14,15+}、スティッキー range の持続 (`play(1, 3^1, 5)` → C4 E5 **G5** で +1 が残る ≠ one-shot の G4)、`^0` リセット / `0^N` 無音音域変更、parser の `rangeSet` (`3^1`=true / `b3`=false / `1^0`=true)。
+
+**未決/確認済**: `^N` × `.root()` グループの相互作用は **linear で確定** (大和さん、グループを抜けても range 持続)。chord 値内の `^N` (§6 ヴォイシング) は Phase 2+ で別途確認。
+
+**次**: PR #245 にコミット → レビュー/マージ。その後 Phase 2 (#230) / L1 (#229)。
+
+---
+
 ### 6.104 Issue #246 — MIDI モニターに「Now playing (DSL)」パターン表示 (`/pattern`) (Jun 13, 2026)
 
 **Date**: 2026-06-13

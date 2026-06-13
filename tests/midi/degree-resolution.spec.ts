@@ -42,8 +42,8 @@ describe('resolveDegree — root scope (§2.1)', () => {
     }
   })
 
-  describe('tension degrees fold to the next octave (9, 11, 13, 15)', () => {
-    // 9 = D5 (62+12=74), 11 = F5 (65+12=77), 13 = A5 (69+12=81), 15 = C6 (60+24=84)
+  describe('tension degrees fold to the next octave (9, 11, 13)', () => {
+    // 9 = D5 (62+12=74), 11 = F5 (65+12=77), 13 = A5 (69+12=81)
     it('degree 9 = degree 2 + 12 (D5 = 74)', () => {
       expect(resolveDegree(pitch(9), C4_CONTEXT)?.midiNote).toBe(74)
       expect(resolveDegree(pitch(9), C4_CONTEXT)!.midiNote).toBe(
@@ -56,9 +56,25 @@ describe('resolveDegree — root scope (§2.1)', () => {
     it('degree 13 = degree 6 + 12 (A5 = 81)', () => {
       expect(resolveDegree(pitch(13), C4_CONTEXT)?.midiNote).toBe(81)
     })
-    it('degree 15 = root two octaves up (C6 = 84)', () => {
-      expect(resolveDegree(pitch(15), C4_CONTEXT)?.midiNote).toBe(84)
+  })
+
+  describe('degree acceptance (§2.1): {1-9, 11, 13}; 10/12/14/≥15 rejected', () => {
+    it('degree 8 = octave-up root (C5 = 72), equivalent to 1^1', () => {
+      expect(resolveDegree(pitch(8), C4_CONTEXT)?.midiNote).toBe(72)
+      expect(resolveDegree(pitch(8), C4_CONTEXT)!.midiNote).toBe(
+        resolveDegree(pitch(1, { octaveShift: 1 }), C4_CONTEXT)!.midiNote,
+      )
     })
+    for (const ok of [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13]) {
+      it(`accepts degree ${ok}`, () => {
+        expect(() => resolveDegree(pitch(ok), C4_CONTEXT)).not.toThrow()
+      })
+    }
+    for (const bad of [10, 12, 14, 15, 16, 20]) {
+      it(`rejects degree ${bad} (octave register is written with ^N)`, () => {
+        expect(() => resolveDegree(pitch(bad), C4_CONTEXT)).toThrow(/受理されません|\^N/)
+      })
+    }
   })
 
   describe('alterations (b = -1, # = +1, bb/## = ±2)', () => {
@@ -121,9 +137,9 @@ describe('resolveDegree — root scope (§2.1)', () => {
     })
   })
 
-  describe('exhaustive: degrees 1..15 × alterations × octaves match the formula', () => {
+  describe('exhaustive: accepted degrees × alterations × octaves match the formula', () => {
     const IONIAN = [0, 2, 4, 5, 7, 9, 11]
-    for (let degree = 1; degree <= 15; degree++) {
+    for (const degree of [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 13]) {
       for (const alteration of [-2, -1, 0, 1, 2]) {
         for (const octave of [2, 3, 4, 5]) {
           it(`degree ${degree} alt ${alteration} octave ${octave}`, () => {

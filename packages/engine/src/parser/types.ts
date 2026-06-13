@@ -106,7 +106,8 @@ export type PlayPitch = {
   type: 'pitch'
   degree: number // 1+ pitched, 0 = rest
   alteration: number // semitones from accidentals: b=-1, #=+1, bb/##=±2
-  octaveShift: number // from `^` (e.g. 3^+1 → +1). 0 if absent
+  octaveShift: number // from `^N`: the running pitch range this note SETS (§2.4). 0 if no `^`.
+  rangeSet: boolean // true if `^` was written (sticky range set point); false = inherit running range
   detune: number // semitones from `~` (e.g. b7~-0.25 → -0.25). 0 if absent
 }
 

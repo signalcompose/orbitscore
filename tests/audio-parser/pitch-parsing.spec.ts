@@ -96,12 +96,49 @@ describe('parser — PlayPitch nodes', () => {
     expect(playArgs('seq1.play(##1)')[0]).toMatchObject({ type: 'pitch', degree: 1, alteration: 2 })
   })
 
-  it('octave shift `3^+1` → octaveShift +1', () => {
+  it('octave shift `3^+1` → octaveShift +1, rangeSet true (§2.4)', () => {
     expect(playArgs('seq1.play(3^+1)')[0]).toMatchObject({
       type: 'pitch',
       degree: 3,
       alteration: 0,
       octaveShift: 1,
+      rangeSet: true, // `^` written → sticky range set point
+    })
+  })
+
+  it('`3^3` (sign omitted) → octaveShift +3, rangeSet true', () => {
+    expect(playArgs('seq1.play(3^3)')[0]).toMatchObject({
+      type: 'pitch',
+      degree: 3,
+      octaveShift: 3,
+      rangeSet: true,
+    })
+  })
+
+  it('`1^0` resets range → octaveShift 0 but rangeSet true (distinct from no `^`)', () => {
+    expect(playArgs('seq1.play(1^0)')[0]).toMatchObject({
+      type: 'pitch',
+      degree: 1,
+      octaveShift: 0,
+      rangeSet: true,
+    })
+  })
+
+  it('`0^2` rest carries a silent range change → degree 0, octaveShift 2, rangeSet true', () => {
+    expect(playArgs('seq1.play(0^2)')[0]).toMatchObject({
+      type: 'pitch',
+      degree: 0,
+      octaveShift: 2,
+      rangeSet: true,
+    })
+  })
+
+  it('accidental without `^` (`b3`) → rangeSet false (inherits running range)', () => {
+    expect(playArgs('seq1.play(b3)')[0]).toMatchObject({
+      type: 'pitch',
+      degree: 3,
+      octaveShift: 0,
+      rangeSet: false,
     })
   })
 

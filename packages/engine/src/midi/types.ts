@@ -28,15 +28,28 @@ export type Alteration = number
  */
 export interface SymbolicPitch {
   /**
-   * Scale degree. 1+ = pitched, interpreted as the Ionian-based interval
-   * vocabulary (§2.1). 0 = rest. Degrees above 7 (9, 11, 13, 15, ...) are
-   * valid and fold to the next octave naturally via the resolution formula.
+   * Scale degree. Accepted: 1-9, 11, 13 (scale degrees + octave + odd
+   * tensions 9/11/13). 0 = rest. 10/12/14 and ≥15 are rejected at
+   * resolution (§2.1) — non-musical linear numbers; octave register is
+   * expressed with the `^N` pitch range (§2.4), not by counting upward.
    */
   degree: number
   /** Accidental offset in semitones (`b`/`#`/`bb`/`##`). Default 0. */
   alteration: Alteration
-  /** Octave shift from the `^` modifier (e.g. `3^+1` → +1). Default 0. */
+  /**
+   * Effective octave offset (= the running pitch range, §2.4) applied at
+   * resolution: `pitch += 12 * octaveShift`. At the output stage this carries
+   * the running range in effect for this note, not the per-note `^N` literal.
+   * Default 0.
+   */
   octaveShift: number
+  /**
+   * Whether an explicit `^N` set the pitch range at this note (§2.4 sticky
+   * semantics). When true, this note becomes a running-range set point;
+   * when false/absent, the note inherits the current running range. Used by
+   * the scheduling walk; irrelevant to the pure {@link resolveDegree} formula.
+   */
+  rangeSet?: boolean
   /**
    * Detune in semitones from the `~` modifier (e.g. `b7~-0.25` → -0.25).
    * Realized via pitch bend at the output stage. Default 0.

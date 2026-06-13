@@ -79,6 +79,7 @@ export function calculateEventTiming(
             degree: element.degree,
             alteration: element.alteration,
             octaveShift: element.octaveShift,
+            rangeSet: element.rangeSet, // §2.4: carry the `^N` set-point flag for the sticky-range walk
             detune: element.detune,
           },
         })

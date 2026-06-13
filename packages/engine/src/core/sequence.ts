@@ -486,13 +486,25 @@ export class Sequence {
     const context = this.resolveRootContext()
     const sendDelay = midi.sendDelayFor(port)
 
+    // §2.4 sticky pitch range: a note/rest with an explicit `^N` (rangeSet) sets
+    // the running range; every following degree inherits it in reading order
+    // until the next `^M`/`^0`. The range resets to base (0) here — i.e. at the
+    // top of each play() evaluation — so re-evaluations stay deterministic.
+    let runningRange = 0
     for (const ev of timedEvents) {
-      const symbolic = ev.pitch ?? {
+      const written = ev.pitch ?? {
         degree: ev.sliceNumber,
         alteration: 0,
         octaveShift: 0,
         detune: 0,
       }
+      // An explicit `^N` (including `^0` and a `0^N` rest) moves the running
+      // range; the move persists even when the carrying event is a rest.
+      if (written.rangeSet) {
+        runningRange = written.octaveShift
+      }
+      // Resolve at the effective running range, not the per-note `^N` literal.
+      const symbolic = { ...written, octaveShift: runningRange }
       const resolved = resolveDegree(symbolic, context)
       if (!resolved) {
         continue // rest (degree 0)

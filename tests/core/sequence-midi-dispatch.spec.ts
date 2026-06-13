@@ -100,6 +100,58 @@ describe('Sequence MIDI dispatch (§7-0 output stage)', () => {
     expect(notes).toContain(72) // 1^+1 = C5
   })
 
+  it('§2.4 sticky pitch range: `^N` persists to following degrees (not one-shot)', async () => {
+    const { parseAudioDSL } = await import('../../packages/engine/src/parser/audio-parser')
+    // play(1, 3^1, 5): 1=C4(60); 3^1 enters +1 → E5(76); 5 INHERITS +1 → G5(79).
+    // A one-shot `^` would give the trailing 5 = G4(67); sticky gives G5(79).
+    const args = parseAudioDSL('p.play(1, 3^1, 5)').statements[0].args
+    seq.play(...(args as never[]))
+    await seq.run()
+    await vi.advanceTimersByTimeAsync(2100)
+
+    const notes = (out.noteOn as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[2])
+    expect(notes).toContain(60) // 1 = C4 (base range)
+    expect(notes).toContain(76) // 3^1 = E5 (range +1 set here)
+    expect(notes).toContain(79) // 5 = G5 (range +1 persists) ← sticky proof
+    expect(notes).not.toContain(67) // would be G4 if one-shot
+    expect(notes).toHaveLength(3)
+  })
+
+  it('§2.4 `^0` resets the range; `0^N` moves the range silently on a rest', async () => {
+    const { parseAudioDSL } = await import('../../packages/engine/src/parser/audio-parser')
+    // play(0^2, 1, 1^0, 1): 0^2 = rest that sets range +2 (no note);
+    // 1 = C6(84); 1^0 resets → C4(60); trailing 1 = C4(60).
+    const args = parseAudioDSL('p.play(0^2, 1, 1^0, 1)').statements[0].args
+    seq.play(...(args as never[]))
+    await seq.run()
+    await vi.advanceTimersByTimeAsync(2100)
+
+    const notes = (out.noteOn as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[2])
+    expect(notes).toContain(84) // 1 at range +2 = C6 (0^2 moved the range, fired nothing)
+    expect(notes).toContain(60) // after 1^0 → C4
+    expect(notes).not.toContain(72) // never C5 — range went +2 then straight to 0
+    expect(notes).toHaveLength(3) // C6, C4, C4 — the 0^2 rest produced no note
+  })
+
+  it('§2.4 running range persists PAST a nested group boundary (linear, not lexical)', async () => {
+    const { parseAudioDSL } = await import('../../packages/engine/src/parser/audio-parser')
+    // play((1, 5^1, 1), 1, 5): 5^1 sets +1 inside the tuple; the trailing 1 and 5
+    // are OUTSIDE the tuple. Linear (confirmed): range +1 persists past the group →
+    // trailing 5 = G5(79). Lexical would reset at the group exit → trailing 5 = G4(67).
+    // Flattened reading order: [1, 5^1, 1, 1, 5] → 60, 79(G5), 72(C5), 72(C5), 79(G5).
+    const args = parseAudioDSL('p.play((1, 5^1, 1), 1, 5)').statements[0].args
+    seq.play(...(args as never[]))
+    await seq.run()
+    await vi.advanceTimersByTimeAsync(2100)
+
+    const notes = (out.noteOn as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[2])
+    expect(notes).toContain(60) // first 1 = C4 (base, before ^1)
+    expect(notes).toContain(79) // 5^1 = G5, AND trailing 5 = G5 (range persisted)
+    expect(notes).toContain(72) // 1 at range +1 = C5
+    expect(notes).not.toContain(67) // never G4 — proves the trailing 5 kept +1 past the group
+    expect(notes).toHaveLength(5)
+  })
+
   it('honors seq.octave for the base register', async () => {
     seq.octave(5) // degree 1 now C5 = 72
     seq.play(1)
