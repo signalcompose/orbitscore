@@ -161,3 +161,17 @@ describe('parser — PlayPitch nodes', () => {
     expect(ir.statements[0].args[0]).toMatchObject({ numerator: 4, denominator: 4 })
   })
 })
+
+describe('stack [ ] is reserved (§10-5) — diagnostic, not silently ignored', () => {
+  it('top-level [ ] throws a reserved-syntax error', () => {
+    expect(() => parseAudioDSL('seq1.play([1, 3, 5])')).toThrow(/not yet supported|reserved/i)
+  })
+
+  it('nested [ ] throws a reserved-syntax error', () => {
+    expect(() => parseAudioDSL('seq1.play(1, [1, 3, 5], 0)')).toThrow(/not yet supported|reserved/i)
+  })
+
+  it('tokenizer emits LBRACKET / RBRACKET (not silently dropped)', () => {
+    expect(tokenTypes('[ ]')).toEqual(['LBRACKET', 'RBRACKET'])
+  })
+})

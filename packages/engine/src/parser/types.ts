@@ -26,6 +26,8 @@ export type AudioTokenType =
   | 'ACCIDENTAL' // pitch alteration prefix: b, bb, #, ## (degree b/# notation)
   | 'CARET' // ^ (octave shift modifier, e.g. 3^+1)
   | 'TILDE' // ~ (detune modifier, e.g. b7~-0.25)
+  | 'LBRACKET' // [ (stack — reserved, not yet supported in v1.1)
+  | 'RBRACKET' // ] (stack — reserved, not yet supported in v1.1)
   | 'NEWLINE' // line break
   | 'EOF' // end of file
 

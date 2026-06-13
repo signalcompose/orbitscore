@@ -57,7 +57,25 @@ export class ExpressionParser {
       return this.parseParenthesizedExpression()
     }
 
+    if (token.type === 'LBRACKET') {
+      throw new Error(this.bracketReservedMessage())
+    }
+
     throw new Error(`Unexpected token in argument: ${token.type}`)
+  }
+
+  /**
+   * The stack `[ ]` syntax is reserved but not implemented in v1.1 (spec §10-5).
+   * We tokenize `[`/`]` and raise this diagnostic rather than silently dropping
+   * them, so the future opening (MIDI chords in Phase 3, audio layering later)
+   * is a pure addition.
+   */
+  private bracketReservedMessage(): string {
+    return (
+      'Stack "[ ]" is not yet supported in v1.1 (reserved). ' +
+      'Chord stacks for MIDI arrive in a later phase; audio slice layering is reserved. ' +
+      'See PITCH_DSL_SPEC §4 / §10-5.'
+    )
   }
 
   /**
@@ -441,7 +459,10 @@ export class ExpressionParser {
 
     const cur = ParserUtils.current(this.tokens, this.pos).type
 
-    if (cur === 'LPAREN') {
+    if (cur === 'LBRACKET') {
+      // Stack [ ] is reserved (spec §10-5) — error rather than silently ignore.
+      throw new Error(this.bracketReservedMessage())
+    } else if (cur === 'LPAREN') {
       // Nested element
       const nestedResult = this.parseNestedPlay()
       this.pos = nestedResult.newPos

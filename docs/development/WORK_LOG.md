@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.100 Issue #228 — Phase 1 増分5d: hanging note 不変条件 + `[ ]` 予約 (Phase 1 機能完成) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 機能完成。 commit hash: `d8d0dd3`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: Phase 1 のゲート条件 (hanging note ゼロ) の受け入れテストと、 audio `[ ]` の diagnostic 予約 (§10-5)。 これで Phase 1 の機能が出揃う。
+
+**変更内容**:
+
+- `tests/core/midi-hanging-note-invariant.spec.ts`: 実 RtMidiOutput (recording backend) + fake timers で 3 件:
+  - **LOOP play() 差し替え100回で hanging note ゼロ** (Phase 1 ゲート条件)
+  - MUTE で sounding note 全解放
+  - global.stop() で panic (CC123+CC120 全ch、 active note ゼロ)
+- `[ ]` 予約 (§10-5): `tokenizer` に LBRACKET/RBRACKET 追加 (従来は default で黙って破棄)。 `parse-expression` でパースエラー (「v1.1 では未対応・予約」)。 黙って無視せずエラーにすることで将来の開放 (Phase 3 の MIDI chord / audio レイヤリング) を純粋な追加変更にする
+- `tests/audio-parser/pitch-parsing.spec.ts`: `[ ]` 予約テスト 3 件追加
+
+**テスト結果**: 873 passed / 23 skipped (896 total)。 +6、 回帰なし。
+
+**Phase 1 機能チェックリスト (受け入れ基準)**:
+- ✅ `seq.midi(port, ch)` + ポート名ロケール対応 (`/iac/i`)
+- ✅ root スコープ度数解決 (§2.1)、 `seq.root()`/global.key()/octave
+- ✅ §7-0 シンボリックピッチ保持 (番号化は出力最終段のみ)
+- ✅ active note tracking + パニック CC123/120
+- ✅ **LOOP 差し替え100回で hanging note ゼロ**
+- ✅ hanging note 不変条件 (note-on = note-off)
+- ✅ 度数解決の網羅テスト (326件)
+- ✅ detune (pitch bend ±2)、 gate/vel/octave、 midiLatency + ポート lead
+- ✅ audio `[ ]` の diagnostic 予約
+- ✅ 既存テストグリーン (回帰なし)
+- ⏭ L1 ログ同乗 (#229)、 VS Code ハイライト (Phase 2)、 core spec 反映 (#237) は別 Issue
+
+**Phase 1 コミット**: 増分1 `38b3040` / 2a `f7ee68b` / 2b `f275b45` / 3 `2e23104` / 4 `876cec7` / 5a `c849119` / 5b `4c3f50b` / 5c `0c36eb6` / 5d (本コミット)。 全 9 コミット、 MIDI 関連テスト +445。
+
+**次**: PR 作成 (#228 Closes) → レビュー → マージ。 その後 Phase 2 (#230 `.root()` グループチェーン)。
+
+---
+
 ### 6.99 Issue #228 — Phase 1 増分5c: MIDI ディスパッチ配線 (発音つながる) (Jun 13, 2026)
 
 **Date**: 2026-06-13

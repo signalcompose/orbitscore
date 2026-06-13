@@ -230,6 +230,14 @@ export class AudioTokenizer {
           tokens.push({ type: 'TILDE', value: '~', line, column })
           this.advance()
           break
+        case '[':
+          tokens.push({ type: 'LBRACKET', value: '[', line, column })
+          this.advance()
+          break
+        case ']':
+          tokens.push({ type: 'RBRACKET', value: ']', line, column })
+          this.advance()
+          break
         case '%':
           tokens.push({ type: 'PERCENT', value: '%', line, column })
           this.advance()
