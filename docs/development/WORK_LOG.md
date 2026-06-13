@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.103 Issue #228 — Phase 1: headless MIDI CLI runner (実エンジン .orbs → IAC) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 実機検証ツール。 commit hash: `a9a350b`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: 大和さんの指摘「手で MIDI を作るのでなく、 DSL を CLI で実行してロジックを通過させて MIDI を送れ」。 これが Phase 1 の本当の実機検証。 TransportClock 分離 (6.102) により audio engine なしで MIDI を走らせられるようになった。
+
+**変更内容**:
+
+- `packages/engine/src/cli/midi-run.ts`: `.orbs` を実エンジン経路で評価する headless ランナー。 `parseAudioDSL` + `processGlobalInit/SequenceInit/Statement` (InterpreterV2 を迂回、 SC ブートを回避)、 no-op audio engine + デフォルト MidiManager (実 RtMidiOutput → IAC)。 評価した DSL ソースを monitor の `/pattern` に報告 (表示=真実)。 SIGINT で panic 停止
+- `package.json`: `npm run midi-run -- <file.orbs>` スクリプト追加 (ts-node)
+- `tools/midi-monitor/README.md`: headless runner の使い方を追記
+
+**実機検証 (end-to-end)**: `npm run midi-run -- tools/midi-monitor/example.orbs` で、 `piano.play(1, 2, 3, 4, 5, 6, 7, 1^+1)` を**エンジンが度数解決**して C4-C5 (60,62,64,65,67,69,71,72) を IAC に送出 → ブラウザ Web MIDI で受信・発音をログ確認。 `/pattern` に `label: example.orbs` + 実ソースが報告され、 表示=エンジン評価ソースで音と一致 (以前の手作り MIDI の食い違い問題を原理的に解消)。 **SC は一切ブートせず**。
+
+**意義**: DSL → パーサー → 度数解決 (§7-0 出力最終段) → MidiOutput → IAC の Phase 1 全経路を実機で確証。 WCTM の実機テスト基盤にもなる。
+
+**次**: PR #245 レビュー/マージ判断。 その後 Phase 2 (#230) / L1 (#229)。
+
+---
+
 ### 6.102 Issue #228 — Phase 1: TransportClock で MIDI を SC から分離 (同期維持) (Jun 13, 2026)
 
 **Date**: 2026-06-13
