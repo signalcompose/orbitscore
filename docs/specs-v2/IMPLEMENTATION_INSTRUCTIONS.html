@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Implementation Instructions — v1.1 + Session Log + WCTM</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <style>
+  :root{
+    --ink:#16181D; --paper:#FAFAF8; --sub:#5A5A60; --hair:#E4E4E0;
+    --rec:#B4231F; --recbg:#FFF3F2; --panel:#F2F2EF; --code:#F4F4F1;
+  }
+  *{box-sizing:border-box}
+  html{font-size:16px}
+  body{
+    margin:0; padding:0; background:var(--paper); color:var(--ink);
+    font-family:"Hiragino Sans","Yu Gothic","Noto Sans JP",-apple-system,sans-serif;
+    line-height:1.95; font-feature-settings:"palt";
+  }
+  main,body>header,body>*{max-width:880px}
+  body{padding:48px 28px 96px; margin:0 auto;}
+  h1{
+    font-size:1.9rem; line-height:1.4; letter-spacing:.01em; font-weight:700;
+    margin:0 0 .4rem; border-bottom:3px solid var(--ink); padding-bottom:.6rem;
+  }
+  /* meta strip: doc header styled like an .orbslog meta line */
+  h1 + p strong:first-child{color:var(--ink)}
+  .metaline, h1 + p em{font-style:normal}
+  h2{
+    font-size:1.28rem; font-weight:700; margin:3.2rem 0 1rem;
+    padding:.35rem 0 .35rem .9rem; border-left:4px solid var(--ink);
+  }
+  h3{font-size:1.05rem; font-weight:700; margin:2.2rem 0 .8rem; color:var(--ink)}
+  h3::before{content:"§ "; color:var(--rec); font-weight:600}
+  p{margin:.9rem 0}
+  strong{font-weight:700}
+  a{color:var(--ink); text-decoration-color:var(--rec); text-underline-offset:3px}
+  hr{border:none; border-top:1px solid var(--hair); margin:2.6rem 0}
+  ul,ol{padding-left:1.5em} li{margin:.35rem 0}
+  blockquote{
+    margin:1.2rem 0; padding:.7rem 1.1rem; background:var(--recbg);
+    border-left:3px solid var(--rec); color:var(--ink); font-size:.95rem;
+  }
+  blockquote p{margin:.3rem 0}
+  code{
+    font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.86em;
+    background:var(--code); padding:.1em .35em; border-radius:3px;
+  }
+  pre{
+    background:var(--code); border:1px solid var(--hair); border-radius:6px;
+    padding:1rem 1.2rem; overflow-x:auto; line-height:1.65; margin:1.2rem 0;
+  }
+  pre code{background:none; padding:0; font-size:.84rem}
+  table{
+    border-collapse:collapse; width:100%; margin:1.4rem 0; font-size:.92rem; line-height:1.7;
+  }
+  th{
+    text-align:left; border-bottom:2px solid var(--ink); padding:.5rem .7rem;
+    font-weight:700; background:none;
+  }
+  td{border-bottom:1px solid var(--hair); padding:.55rem .7rem; vertical-align:top}
+  tr:hover td{background:var(--panel)}
+  svg{display:block; margin:1.6rem auto; background:#fff; border:1px solid var(--hair); border-radius:6px; padding:10px}
+  /* doc id strip */
+  header#title-block-header{display:none}
+  .docmeta{
+    font-family:"SF Mono",Menlo,monospace; font-size:.74rem; color:var(--sub);
+    background:var(--panel); border:1px solid var(--hair); border-radius:4px;
+    padding:.5rem .8rem; margin:0 0 2.4rem; overflow-x:auto; white-space:nowrap;
+  }
+  .docmeta .dot{color:var(--rec)}
+  @media (max-width:640px){ body{padding:28px 16px 64px} h1{font-size:1.5rem} }
+  @media print{ body{max-width:none} svg{break-inside:avoid} }
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Implementation Instructions — v1.1 + Session Log +
+WCTM</h1>
+<div class="docmeta">{"type":"meta"<span class="dot">,</span>"doc":"IMPLEMENTATION_INSTRUCTIONS","for":"Claude Code (Opus 4.8)","deadline":"2026-08-07","stages":"note-DSL → record → WCTM"}</div>
+</header>
+<h1
+id="implementation-instructions-orbitscore-v1.1-session-log-wctm">Implementation
+Instructions — OrbitScore v1.1 + Session Log + WCTM</h1>
+<p><strong>For</strong>: Claude Code (Opus 4.8) working in
+<code>signalcompose/orbitscore</code> <strong>Companion
+specs</strong>(正本。本書は作業手順・委譲方針・既知文脈):
+PITCH_DSL_SPEC_v1.1 / SESSION_LOG_SPEC_v1 / WCTM_SYSTEM_SPEC_v1 /
+DESIGN_DISCUSSION_RECORD <strong>Date</strong>: 2026-06-12 <strong>Hard
+deadline</strong>: 2026-08-07
+コンサート本番(WCTM)。逆算で全工程が決まる。</p>
+<hr />
+<h2 id="scope-and-stage-order">1. Scope and Stage Order</h2>
+<p>スコープは3段: <strong>Stage 1 = note DSL(ピッチ/MIDI)→ Stage 2 =
+記録 → Stage 3 =
+WCTM</strong>。ただし依存関係により一部は同乗・並行する。下図が正。</p>
+<svg viewBox="0 0 920 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="実装依存グラフと週次計画" style="max-width:100%;height:auto;font-family:'Hiragino Sans','Yu Gothic',sans-serif;">
+  <defs>
+    <marker id="da" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#16181D"/>
+    </marker>
+  </defs>
+  <style>
+    .ph{fill:#FFFFFF;stroke:#16181D;stroke-width:1.4;}
+    .phR{fill:#FFF3F2;stroke:#B4231F;stroke-width:1.4;}
+    .phO{fill:#F2F2EF;stroke:#9A9AA0;stroke-width:1.2;}
+    .t{font-size:13px;fill:#16181D;font-weight:600;}
+    .s{font-size:10.5px;fill:#5A5A60;}
+    .e{stroke:#16181D;stroke-width:1.2;fill:none;}
+    .wk{font-size:10px;fill:#9A9AA0;letter-spacing:.06em;}
+    .wkl{stroke:#E4E4E0;stroke-width:1;}
+  </style>
+  <!-- week bands -->
+  <line x1="20" y1="34" x2="20" y2="400" class="wkl"/><text x="24" y="30" class="wk">W1 (6/15-)</text>
+  <line x1="190" y1="34" x2="190" y2="400" class="wkl"/><text x="194" y="30" class="wk">W2</text>
+  <line x1="340" y1="34" x2="340" y2="400" class="wkl"/><text x="344" y="30" class="wk">W3 ※SPReAD 7/3</text>
+  <line x1="490" y1="34" x2="490" y2="400" class="wkl"/><text x="494" y="30" class="wk">W4</text>
+  <line x1="620" y1="34" x2="620" y2="400" class="wkl"/><text x="624" y="30" class="wk">W5</text>
+  <line x1="730" y1="34" x2="730" y2="400" class="wkl"/><text x="734" y="30" class="wk">W6 リハ#1</text>
+  <line x1="830" y1="34" x2="830" y2="400" class="wkl"/><text x="834" y="30" class="wk">W7-8 → 8/7</text>
+
+  <!-- Stage1 row -->
+  <rect x="28" y="50" width="130" height="52" class="ph"/>
+  <text x="38" y="70" class="t">Phase 0 検証</text>
+  <text x="38" y="86" class="s">並置/quantize/MIDI/Link</text>
+  <rect x="28" y="120" width="130" height="46" class="ph"/>
+  <text x="38" y="140" class="t">Phase R</text>
+  <text x="38" y="156" class="s">*n + パターン変数</text>
+  <rect x="198" y="50" width="130" height="52" class="ph"/>
+  <text x="208" y="70" class="t">Phase 1 MIDI</text>
+  <text x="208" y="86" class="s">IAC/note管理/§7-0</text>
+  <rect x="348" y="50" width="130" height="46" class="ph"/>
+  <text x="358" y="70" class="t">Phase 2 .root()</text>
+  <text x="358" y="86" class="s">スコープ/音名</text>
+  <rect x="498" y="50" width="110" height="46" class="ph"/>
+  <text x="508" y="70" class="t">Phase 3</text>
+  <text x="508" y="86" class="s">[ ]/chord/spread</text>
+  <rect x="738" y="50" width="80" height="46" class="phO"/>
+  <text x="746" y="70" class="t">Phase 4</text>
+  <text x="746" y="86" class="s">余力時</text>
+
+  <!-- Stage2 row -->
+  <rect x="198" y="120" width="130" height="46" class="phR"/>
+  <text x="208" y="140" class="t">L1 ログ書出し</text>
+  <text x="208" y="156" class="s">Phase 1 に同乗</text>
+  <rect x="838" y="120" width="74" height="46" class="phO"/>
+  <text x="846" y="140" class="t">L2</text>
+  <text x="846" y="156" class="s">本番後</text>
+
+  <!-- Stage3 row -->
+  <rect x="348" y="200" width="130" height="52" class="phR"/>
+  <text x="358" y="220" class="t">W1: Bridge MCP</text>
+  <text x="358" y="236" class="s">3ツール+検証</text>
+  <rect x="498" y="200" width="110" height="52" class="phR"/>
+  <text x="508" y="220" class="t">W2: Runtime A</text>
+  <text x="508" y="236" class="s">Claude Code 試作</text>
+  <rect x="628" y="200" width="90" height="52" class="phR"/>
+  <text x="636" y="220" class="t">W3: 自律</text>
+  <text x="636" y="236" class="s">ループ+介助</text>
+  <rect x="738" y="200" width="80" height="52" class="phR"/>
+  <text x="746" y="220" class="t">確定</text>
+  <text x="746" y="236" class="s">Runtime A/B</text>
+  <rect x="838" y="200" width="74" height="52" class="phR"/>
+  <text x="846" y="220" class="t">会場</text>
+  <text x="846" y="236" class="s">校正/通し</text>
+
+  <!-- Human/Max parallel track -->
+  <rect x="198" y="300" width="280" height="52" class="phO"/>
+  <text x="208" y="320" class="t">Max パッチ(人間主導・並行)</text>
+  <text x="208" y="336" class="s">入力センシング+Link駆動 / 出力ルーティング</text>
+  <rect x="628" y="300" width="190" height="52" class="phO"/>
+  <text x="636" y="320" class="t">スキル: ATTYA .orbs</text>
+  <text x="636" y="336" class="s">+演奏指示書(W6 リハで検証)</text>
+
+  <!-- edges -->
+  <path class="e" d="M158,76 L192,76" marker-end="url(#da)"/>
+  <path class="e" d="M158,143 L192,143" marker-end="url(#da)"/>
+  <path class="e" d="M328,76 L342,76" marker-end="url(#da)"/>
+  <path class="e" d="M478,73 L492,73" marker-end="url(#da)"/>
+  <path class="e" d="M263,102 L263,114" marker-end="url(#da)"/>
+  <path class="e" d="M328,143 L380,143 L405,200" marker-end="url(#da)"/>
+  <path class="e" d="M478,226 L492,226" marker-end="url(#da)"/>
+  <path class="e" d="M608,226 L622,226" marker-end="url(#da)"/>
+  <path class="e" d="M718,226 L732,226" marker-end="url(#da)"/>
+  <path class="e" d="M818,226 L832,226" marker-end="url(#da)"/>
+  <path class="e" d="M608,96 L640,140 L660,200" marker-end="url(#da)"/>
+  <path class="e" d="M478,326 L520,300 L540,252" marker-end="url(#da)" stroke-dasharray="3 3"/>
+</svg>
+<p>要点: <strong>L1 は Phase 1
+に同乗</strong>(評価経路の傍受点が同一、かつ Bridge の
+<code>get_session_tail</code> が L1 に依存)。<strong>WCTM Bridge は
+Phase 2 完了を待たず評価経路+特徴量で着手可</strong>。Phase
+4(タイ/hold)・L2(リプレイヤー)・Phase
+5(mode)は本番のクリティカルパス外。Max
+パッチとスキルは人間主導の並行トラック。</p>
+<h2 id="repository-context-調査済み事実">2. Repository Context
+(調査済み事実)</h2>
+<ul>
+<li>ROADMAP_2026.md の v1.1 “MIDI Integration”(Epic #132)が Stage 1
+の親。EventRouter は 2026-06 時点で未実装(grep 確認済み)。</li>
+<li>パッケージ: <code>packages/engine</code>(supercolliderjs, uuid,
+wavefile, ws / Node 22 /
+CommonJS)、<code>packages/sc-link-audio</code>、<code>packages/vscode-extension</code>。</li>
+<li>LinkAudio 統合(Epic
+#187)は直近の完了作業。<code>docs/research/LINK_AUDIO_API.md</code>
+に設計決定。<strong>MIDI に LinkAudio 型の排他は適用しない</strong>(SC
+オーディオと併走可)。</li>
+<li><code>docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md</code>: 初期 MIDI
+設計。<code>^</code>/<code>~</code>
+修飾と度数0=休符は継承、クロマチック度数と丸括弧和音
+<code>(1,5,8)</code> は<strong>継承しない</strong>(丸括弧は v3.0
+で時間分割に割当済み)。</li>
+<li>タイミング計算は
+<code>TimingCalculator</code>(再帰、<code>TimedEvent { sliceNumber, startTime, duration, depth }</code>)。ピッチ
+DSL では型拡張が必要(spec §7-0 厳守)。</li>
+<li>既存テスト 230 passed / 23 skipped。audio の play()
+意味論は一切変更しない。</li>
+</ul>
+<h2 id="architecture-decisions">3. Architecture Decisions</h2>
+<ul>
+<li><strong>EventRouter
+フル分離はやらない</strong>。<code>packages/engine/src/midi/</code> に
+<code>MidiOutput</code> + <code>MidiScheduler</code> を新設し
+AudioEngine と並置。ディスパッチは Sequence
+側フラグ。抽象の切り出しは出力先が2例安定してから(v2.0)。</li>
+<li><strong>MIDI ライブラリ =
+<code>@julusian/midi</code></strong>(MIT、RtMidi/CoreMIDI、Node 22
+prebuilds、<code>midi</code> API 互換)。即時送信のみ → TS 側 lookahead
+スケジューラ(50–100ms、ドリフト補正)。<code>global.midiLatency()</code>
+に加え、<strong>ポート単位の負方向オフセット(先行送出)</strong>を実装(Disklavier
+機構レイテンシ校正用。WCTM §9)。</li>
+<li><strong>Bridge = MCP サーバー</strong>(WCTM
+§3)。<code>/mnt/skills</code> の mcp-builder
+スキル類を参照可能なら活用。TypeScript、エンジンと同居可。OSC 受信 +
+エンジン評価口 + ログ末尾。</li>
+</ul>
+<h2 id="implementation-phases">4. Implementation Phases</h2>
+<h3 id="phase-0-事前検証コードを書く前にすべて-main-agent">Phase 0:
+事前検証(コードを書く前に。すべて main agent)</h3>
+<ol type="1">
+<li><strong><code>(1)(2)</code>
+タプル並置の現行挙動</strong>をテストで確定(spec §3.3 の前提)。</li>
+<li><strong><code>quantize("bar")</code> の <code>play()</code>
+差し替え挙動</strong>を実機検証(仕様通りか未確認とユーザー認識。MIDI
+note-off と WCTM の小節整列の前提)。</li>
+<li><strong><code>@julusian/midi</code> 素振り</strong>: IAC
+列挙・送出、Node 22 + macOS prebuild。</li>
+<li><strong>Link 追従スケジューリングの現状確認</strong>: エンジンの
+Link 統合がスケジューリングまで beat/phase に従うか、LinkAudio
+のオーディオ受け渡しのみか。後者なら「Link 追従スケジューリング」を
+Phase 1 の実装項目に昇格(WCTM §2 の前提)。</li>
+</ol>
+<h3
+id="phase-r-n-反復-パターン変数spec-6.5phase-0-直後phase-1-と並行可">Phase
+R: <code>*n</code> 反復 + パターン変数(spec §6.5。Phase 0 直後、Phase 1
+と並行可)</h3>
+<p>MIDI 非依存の純パーサー/評価器機能。audio に即効。<code>x*n</code> =
+並置への書き換え(裸イベントは単元グループ化)、<code>*0</code>
+エラー、後置演算子は左→右。パターン変数 = 裸タプル var
+束縛、評価時値渡し。Tidal の
+<code>*</code>(スロット内分割)との意味差をドキュメント明記。WCTM
+ではスキルの語彙制約装置として効く。</p>
+<h3 id="phase-1-raw-midi-出力-l1-ログ本番経路の核">Phase 1: Raw MIDI
+出力 + L1 ログ(本番経路の核)</h3>
+<ul>
+<li><code>seq.midi(port, ch)</code> / <code>gate</code> /
+<code>vel</code> / <code>octave</code> / <code>global.key()</code> /
+<code>midiLatency</code>(ポート単位オフセット込み)。</li>
+<li>root スコープの度数解決(spec §2.1)。<code>seq.root()</code>
+のみ(チェーンは Phase 2)。</li>
+<li><strong>TimedEvent 型拡張は spec §7-0 厳守</strong>:
+シンボリックピッチをパイプライン全体で保持、MIDI
+番号化は出力アダプタ最終段のみ。譜面エピックの前提であり、Phase 1
+のデータ構造で守らないと取り返せない。</li>
+<li><strong>Active note tracking +
+パニック(CC123/CC120)を必ず本フェーズで</strong>。Disklavier
+では舞台事故防止(WCTM §8)。受け入れ基準: LOOP 差し替え100回で hanging
+note ゼロ。</li>
+<li>audio シーケンス内の <code>[ ]</code> は diagnostic
+エラーとして予約(spec §10-5)。</li>
+<li><strong>L1 同乗</strong>:
+評価経路傍受(一箇所)、<code>global.start()</code>
+でファイル生成+プリアンブル、三重スタンプ(wall/transport/effect ※effect
+は Phase 0-2
+の検証結果に依存)、<code>&lt;basename&gt;.&lt;timestamp&gt;.orbslog</code>、<code>evalSource</code>、行単位フラッシュ(異常終了耐性)。</li>
+</ul>
+<h3 id="phase-2-.root-グループチェーンパーサー作業の中心">Phase 2:
+<code>.root()</code> グループチェーン(パーサー作業の中心)</h3>
+<ul>
+<li>グループ閉じ後のメソッドチェーン。レキシカルスコープ(内→外→seq
+既定)、同一グループ重複は diagnostic
+エラー、並置全体への適用、「チェーンは並置を閉じる」(チェーン直後のカンマなし
+<code>(</code> はパースエラー)。</li>
+<li>音名トークン(<code>F#</code>,
+<code>Bb</code>)の字句解析(<code>.root()</code>
+引数位置の文脈依存トークンが安全)。<code>#</code>
+とコメントの衝突確認。</li>
+<li>VS Code 拡張: root
+スコープのセマンティックハイライト(両忘れ併合の緩和。必須に近い優先度)。</li>
+</ul>
+<h3 id="phase-3-スタック-chord-値wctm-の和声コンピングに必須">Phase 3:
+スタック <code>[ ]</code> + chord 値(WCTM の和声コンピングに必須)</h3>
+<ul>
+<li><code>[ ]</code>
+同時発音、スタック要素の独立サブツリー(TimingCalculator 並列再帰)。</li>
+<li><code>chord([...])</code>、spread、<code>-</code>
+除去(字面一致)、<code>^+1</code>
+スタック修飾、<code>import chords</code>(TS 事前定義テーブル)。</li>
+</ul>
+<h3 id="phase-w-wctmwctm_system_spec-正本phase-1-完了後に着手可">Phase
+W: WCTM(WCTM_SYSTEM_SPEC 正本。Phase 1 完了後に着手可)</h3>
+<ul>
+<li><strong>W-Bridge</strong>: MCP サーバー(3ツール:
+get_performance_features / evaluate_orbitscore / get_session_tail)。OSC
+受信、小節整列集約、検証(パース+許可リスト+自己修復1回)、evalSource:“agent”。</li>
+<li><strong>W-RuntimeA</strong>: Claude Code
+用スラッシュコマンド(/monitor 系、claude-tools
+の流儀)。スキル読み込み+ループ駆動。</li>
+<li><strong>W-Link</strong>: Link 追従スケジューリング(Phase 0-4
+の結果次第)+ 結合度パラメータ(追従速度係数+信頼度ゲート)。</li>
+<li><strong>W-Ops</strong>:
+ゲート/パニック/結合度の操作系(専用アプリは作らない。Max UI +
+CLI)。</li>
+<li>Max パッチ(入力/出力)とスキル(ATTYA .orbs +
+指示書)は人間主導の並行トラック。Claude Code は Max の [js]/node4max
+コード支援に留める。</li>
+</ul>
+<h3 id="phase-4余力時-l2phase-5本番後">Phase 4(余力時)/ L2・Phase
+5(本番後)</h3>
+<p><code>_</code> タイ・<code>_n</code>
+声部タイ・<code>{ }</code>・<code>.hold()</code>(ピアノ的価値は高いが本番から落とせる)。L2
+リプレイヤー、mode は本番後。</p>
+<h2 id="delegation-profile-for-opus-4.8subagent-モデル委譲の根拠">5.
+Delegation Profile for Opus 4.8(subagent / モデル委譲の根拠)</h2>
+<p>判断基準は<strong>爆発半径</strong>と<strong>仕様の閉性</strong>:
+影響が中枢(レキサー/パーサー/スケジューラ)に及ぶものは main
+agent(Opus)が直列で持つ。仕様書のセクションが完全な契約になっている純関数・隔離モジュールは
+Sonnet subagent に並列委譲してよい。</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>タスク</th>
+<th>担当</th>
+<th>根拠</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Phase 0 全項目</td>
+<td>main (Opus)</td>
+<td>検証結果が後続仕様を変えうる。判断を伴う</td>
+</tr>
+<tr class="even">
+<td>レキサー/パーサー変更(R/2/3 の構文)</td>
+<td>main (Opus)、直列</td>
+<td>爆発半径最大。既存230テストのグリーンが各ゲート</td>
+</tr>
+<tr class="odd">
+<td>度数解決の数理(spec §2.1/§2.2)+ プロパティテスト</td>
+<td>Sonnet subagent、並列可</td>
+<td>純関数。仕様の数式が完全な契約</td>
+</tr>
+<tr class="even">
+<td><code>*n</code> 書き換え・spread・<code>-</code>
+除去の評価器(構文確定後)</td>
+<td>Sonnet subagent</td>
+<td>書き換え規則として閉じている</td>
+</tr>
+<tr class="odd">
+<td>MidiOutput / MidiScheduler</td>
+<td>Sonnet subagent</td>
+<td>隔離モジュール。モック MIDI でテスト可能</td>
+</tr>
+<tr class="even">
+<td>L1 ログライター</td>
+<td>Sonnet subagent(傍受点定義は main)</td>
+<td>形式は SESSION_LOG_SPEC で閉じている</td>
+</tr>
+<tr class="odd">
+<td>W-Bridge (MCP)</td>
+<td>Sonnet subagent(ツール契約は spec に閉じている)。mcp-builder
+スキル参照</td>
+<td>隔離プロセス</td>
+</tr>
+<tr class="even">
+<td>W-RuntimeA スラッシュコマンド</td>
+<td>main (Opus)</td>
+<td>プロンプト設計は品質判断を伴う</td>
+</tr>
+<tr class="odd">
+<td>VS Code ハイライト</td>
+<td>Sonnet subagent</td>
+<td>拡張側に閉じる</td>
+</tr>
+<tr class="even">
+<td>Max パッチ</td>
+<td>人間(大和/オペレーター)。Claude は [js] コード支援のみ</td>
+<td>.maxpat の生成信頼性が低い</td>
+</tr>
+</tbody>
+</table>
+<p><strong>運用規則</strong>: (1) フェーズゲート = 既存全テスト +
+当該フェーズ受け入れ基準。ゲート前に依存フェーズへ進まない。(2) subagent
+への入力は該当 spec セクション(契約)+
+対象ファイルに限定し、決定済み事項の再設計を試みた場合は §7
+の表を提示して却下する。(3) パーサーへの変更は必ず main が行い、subagent
+はパース済み AST 以降のみを扱う。</p>
+<h2 id="github-issues-to-create着手時に起票">6. GitHub Issues to
+Create(着手時に起票)</h2>
+<ol type="1">
+<li><strong><code>[ ]</code> stack for audio
+sequences</strong>(将来開放。構文は diagnostic エラーで予約済み。#2
+と相互参照)。</li>
+<li><strong><code>slice()</code> — transient-based audio
+slicing</strong>(chop の等分に対するオンセット分割。記録のみ)。</li>
+<li><strong>Real-time score rendering / human performer
+driving</strong>(別エピック、ICLC 2027 候補):
+ネイティブ経路一本(WebSocket + Verovio/VexFlow。Max/MaxScore
+経由は棄却済み——MIDI
+で情報喪失)。奏者一人=Webページ一つ(譜面+視覚メトロノーム)。M5StickS3
+は触覚段階の拡張。構造的優位: §7-0 のスペリング保存 +
+リズム木と記譜構造の同型性(転写問題が存在しない)。quantize=視奏ルックアヘッド。先行研究:
+INScore / SmartVox / Decibel ScorePlayer / Quintet.net・MaxScore (Hajdu,
+HfMT Hamburg)。</li>
+<li><strong>L2 Replayer CLI</strong>(本番後):
+<code>orbitscore replay</code>、<code>--until</code> /
+<code>--render</code> / <code>--verify</code>。</li>
+<li><strong>WCTM 本番後の分析</strong>: .orbslog から evalSource
+比率・タイミングの事後分析(論文素材)。</li>
+</ol>
+<h2 id="known-decisions確定済み再議論しない">7. Known
+Decisions(確定済み。再議論しない)</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>決定</th>
+<th>棄却した代替案</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>ハーモニーはリズム木内のレキシカルスコープ</td>
+<td>グローバル進行レーン(共有グリッド再導入)</td>
+</tr>
+<tr class="even">
+<td>基底意味論 = root(Ionian 基準 + b/#)。クオリティは表記が持つ</td>
+<td>scale-index 基底</td>
+</tr>
+<tr class="odd">
+<td>mode = ユーザー定義ピッチ格子(オプトイン)</td>
+<td>教会旋法プリミティブ</td>
+</tr>
+<tr class="even">
+<td>chord = ルート未束縛の値、spread + <code>-</code>(字面一致)</td>
+<td>ビルダー API / 解決後ピッチ照合</td>
+</tr>
+<tr class="odd">
+<td>声部タイ <code>_n</code>
+はピッチ照合+発音フォールバック。<code>.hold()</code>
+はスタック間限定</td>
+<td>声部位置対応 / 単音連打適用</td>
+</tr>
+<tr class="even">
+<td>root 共有 =
+タプル並置(改行可)+「チェーンは並置を閉じる」。重複指定はエラー</td>
+<td>外側括弧 / last-wins</td>
+</tr>
+<tr class="odd">
+<td>無指定区間は seq 既定(stateless)。key 未宣言の数値 root
+はエラー</td>
+<td>直前維持 / C 基準</td>
+</tr>
+<tr class="even">
+<td><code>*n</code> = 並置書き換え(スロット占有)。パターン変数 =
+評価時値渡し</td>
+<td>Tidal 型 <code>*</code> / リアクティブ束縛</td>
+</tr>
+<tr class="odd">
+<td>audio の <code>[ ]</code> は diagnostic エラーで予約</td>
+<td>即時開放 / 黙って無視</td>
+</tr>
+<tr class="even">
+<td>TimedEvent はシンボリックピッチ保持、番号化は出力最終段のみ</td>
+<td>解決済み番号の伝搬</td>
+</tr>
+<tr class="odd">
+<td>MIDI と SC オーディオは併走可</td>
+<td>LinkAudio 型排他</td>
+</tr>
+<tr class="even">
+<td>記録 =
+因果(評価ログ)。キーストローク/画面は「録音」でスコープ外</td>
+<td>三層フル記録</td>
+</tr>
+<tr class="odd">
+<td>再現性 = 因果的同一性(ランダムは再度引く)</td>
+<td>値の記録</td>
+</tr>
+<tr class="even">
+<td>フライトレコーダー: <code>global.start()</code>
+起点+プリアンブル。<code>.orbs</code> 並置・basename 継承</td>
+<td>明示 record() / 集約ディレクトリ</td>
+</tr>
+<tr class="odd">
+<td>リプレイは音楽時間駆動(三重スタンプ)。分岐 = エンジン状態</td>
+<td>壁時計駆動 / エディタ復元</td>
+</tr>
+<tr class="even">
+<td>WCTM: クロックはドラマー起点 + Link + 結合度パラメータ</td>
+<td>エンジンマスター / PLL 自作</td>
+</tr>
+<tr class="odd">
+<td>Bridge = 脳なし MCP。Runtime A 試作→W5 確定。評価経路統一 +
+evalSource</td>
+<td>Bridge にループ固定 / LLM 専用経路</td>
+</tr>
+<tr class="even">
+<td>初期スキル = スタンダードのリードシート .orbs + 指示書。WCTM
+は最小実装(§ WCTM-7)</td>
+<td>専用曲事前設計 / フルスタック構築</td>
+</tr>
+<tr class="odd">
+<td>EventRouter フル分離は v1.1 でやらない</td>
+<td>ROADMAP Stage 1</td>
+</tr>
+</tbody>
+</table>
+<h2 id="documentation-tasks差分吸収と反映">8. Documentation
+Tasks(差分吸収と反映)</h2>
+<p><strong>配置</strong>: 本仕様群(<code>PITCH_DSL_SPEC</code> /
+<code>SESSION_LOG_SPEC</code> / <code>WCTM_SYSTEM_SPEC</code> / 本書 /
+<code>DESIGN_DISCUSSION_RECORD</code>)は
+<strong><code>docs/specs-v2/</code></strong> に置く。HTML
+版が正(アーキテクチャ図を含むため。議論記録のみ md 併存)。</p>
+<h3 id="差分吸収既存ドキュメントの整合">8.1
+差分吸収(既存ドキュメントの整合)</h3>
+<ol type="1">
+<li><code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code> が single
+source of truth(自己宣言)。<code>docs/specs-v2/</code> への参照リンクを
+core spec に追加し、<strong>各フェーズのゲート時に当該機能のセクションを
+core spec へ反映する</strong>(specs-v2 と core spec
+の乖離を作らない)。</li>
+<li><code>docs/user/en|ja/USER_MANUAL.md</code> は
+stale(2025-10-26。audioPath 複数/quantize/LinkAudio
+未反映)。<strong>廃止方向</strong>: deprecation notice + VitePress
+への誘導。core spec → VitePress reference の一方向生成に一本化。</li>
+<li>LinkAudio の DSL 構文(<code>init global.linkAudio()</code>,
+<code>seq.output()</code>)は research doc にのみ存在。core spec
+に統合。</li>
+<li>v1.0 アーカイブ冒頭に「v1.1 で MIDI 対応が別設計で実現」+
+<code>docs/specs-v2/</code> への参照を追記(系譜資料)。</li>
+</ol>
+<h3 id="ラーニングサイトvitepressへの反映-特にピッチ-dsl">8.2
+ラーニングサイト(VitePress)への反映 — 特にピッチ DSL</h3>
+<p>ユーザー向け学習サイト(signalcompose.github.io/orbitscore)に v1.1
+の新機能を反映する。これは仕様の転記ではなく<strong>チュートリアルとしての書き直し</strong>(既存
+T1–T8 のトーンに合わせる)。</p>
+<ul>
+<li>新チャプター案: 「MIDI
+出力のセットアップ(IAC/ソフトシンセ)」「はじめての note(度数と
+root)」「コードとスタック(chord
+値・spread)」「タイ・レガート・hold」「反復とパターン変数(audio
+にも使える)」。リファレンスページに新メソッド群を追加。</li>
+<li><strong>Tidal の <code>*</code> との意味差</strong>(spec §6.5.1
+の注記)はユーザー文書側に必ず明記。</li>
+<li>日英両言語。既存の翻訳ワークフロー(<code>docs/development/TRANSLATION_WORKFLOW.md</code>,
+<code>docs/development/translation-prompts/</code>)に従う。</li>
+<li><strong>タイミング</strong>: Phase 3 ゲート後に着手可、ただし WCTM
+クリティカルパス外なので Sonnet subagent への委譲対象(spec
+セクション+既存チュートリアルのトーンが契約)。本番前に間に合わなければ本番後最優先。8.1-1
+の core spec
+反映だけは各フェーズゲートで必ず行う(こちらは乖離が実害になるため)。</li>
+</ul>
+<h2 id="testing-strategy">9. Testing Strategy</h2>
+<ul>
+<li><strong>純関数網羅</strong>: 度数解決(全度数1–15 × b/# ×
+octave、mode 格子、root 音名/数値/key 未宣言エラー)、<code>*n</code>
+等価性(<code>(1,0)*2</code> ≡ <code>(1,0)(1,0)</code>
+のタイミング列)、spread/<code>-</code>。</li>
+<li><strong>パーサー</strong>:
+新トークン群、スコープ解決(内外・並置・重複エラー・チェーン後カンマなしエラー)、audio
+構文の回帰(230 テスト維持)。</li>
+<li><strong>MIDI</strong>: モック出力で note-on/off 完全性、tie
+抑制、legato 順序。<strong>hanging note 不変条件</strong>(note-on 数 =
+note-off 数)を LOOP 差し替え/MUTE/quantize 待機中差し替え/stop
+の全経路でプロパティテスト。</li>
+<li><strong>L1</strong>: 記録→(将来 L2
+で)リプレイのラウンドトリップを見据え、まずプリアンブル完全性・三重スタンプ整合・複数ファイル
+sourceFile・異常終了(kill -9)での行単位耐性。</li>
+<li><strong>WCTM</strong>: Bridge
+ツールの契約テスト(不正コード→diagnostic、許可リスト)、E2E
+は手動チェックリスト(<code>docs/testing/</code> に WCTM_E2E_CHECKLIST
+を新設: ソフトピアノ代替系統→Disklavier 校正手順)。</li>
+</ul>
+</body>
+</html>

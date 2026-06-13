@@ -25,6 +25,42 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
+## 🎯 現在進行中: v1.1 Pitch DSL + Session Log + WCTM（締切 2026-08-07）
+
+**CRITICAL**: ピッチ DSL / MIDI 出力 (v1.1)・セッションログ (.orbslog)・コンサートシステム WCTM の開発が進行中。
+ハード締切は **2026-08-07 の WCTM 本番**（逆算で全工程が決まる）。**最優先は Pitch DSL (Phase 1→2→3)**。
+
+### 正本仕様（`docs/specs-v2/`）を必ずこの順で読む
+
+実装に着手する前に、以下を順に読むこと（**HTML が正本**。SVG のアーキテクチャ図も仕様の一部）:
+
+1. [`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`](docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html) — 作業指示書（フェーズ・依存グラフ・委譲方針・確定済み決定）
+2. [`docs/specs-v2/PITCH_DSL_SPEC_v1.1.html`](docs/specs-v2/PITCH_DSL_SPEC_v1.1.html) — Stage 1 (note DSL) の仕様正本
+3. [`docs/specs-v2/SESSION_LOG_SPEC_v1.html`](docs/specs-v2/SESSION_LOG_SPEC_v1.html) — 記録 (.orbslog) の仕様正本
+4. [`docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html`](docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html) — コンサートシステムの仕様正本
+5. [`docs/specs-v2/DESIGN_DISCUSSION_RECORD.md`](docs/specs-v2/DESIGN_DISCUSSION_RECORD.md) — 設計経緯と棄却済み代替案（判断に迷ったときの参照）
+
+### 進捗・タスク管理 = GitHub Epic #224
+
+フェーズ構成・依存関係・受け入れ基準・子 Issue は **Epic #224** で管理。実装着手前に必ず参照する。
+各フェーズ専用 Issue: #225(docs)→#226(Phase 0)→#227(Phase R)/#228(Phase 1)+#229(L1)→#230(Phase 2)→#231(Phase 3)→W系(#232-235)。
+
+### 🔴 全フェーズ共通の運用規則（違反禁止）
+
+1. **IMPLEMENTATION_INSTRUCTIONS §7「Known Decisions」(+ DESIGN_DISCUSSION_RECORD の決定ログ #1-32) は確定済み。再設計・再議論しない。** より良い代替案を思いついても実装せず、提案として報告に含める。
+2. **フェーズゲート**: 既存テスト全グリーン + 当該フェーズの受け入れ基準を満たすまで、依存する次フェーズに着手しない。
+3. **委譲は §5 Delegation Profile に従う**: レキサー/パーサー変更とプロンプト設計は main (Opus) が直列で持つ。純関数（度数解決等）と隔離モジュール（MidiOutput / L1 / Bridge）は Sonnet subagent に並列委譲可。subagent への入力は該当 spec セクション + 対象ファイルに限定し、決定済み事項の再設計を試みたら §7 の表を提示して却下する。
+4. 仕様に曖昧さ・矛盾を見つけたら、解釈で埋めずに**選択肢と推奨を添えて質問する**。
+5. **audio シーケンスの `play()` 意味論は一切変更しない。**
+6. 実装が仕様から逸脱する必要が生じたら、**spec 側を先に更新**してから実装する（spec が正本）。
+7. 各フェーズゲート時に core spec ([`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](docs/core/INSTRUCTION_ORBITSCORE_DSL.md)) へ当該機能セクションを反映する（specs-v2 との乖離を作らない）。
+
+### 🔴 Phase 0 の停止条件
+
+Phase 0 (#226) の事前検証4項目のうち、**仕様の前提を崩す結果が出た項目があれば、実装に進まず停止して報告する。**
+
+---
+
 ## 🚀 セッション開始時の必須アクション
 
 **CRITICAL: これらのステップを必ず実行すること。プロジェクトの仕様とルールを把握せずに作業を開始してはいけない。**

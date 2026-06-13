@@ -17,6 +17,39 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.90 Issue #225 — specs-v2 配置 + CLAUDE.md オンボーディング (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: ✅ DONE (commit hash: `19141f1`)
+**Issue**: signalcompose/orbitscore#225
+**Branch**: `225-docs-specs-v2`
+**Epic**: signalcompose/orbitscore#224 (v1.1 Pitch DSL + Session Log + WCTM、 締切 2026-08-07)
+
+**動機**: v1.1 Pitch DSL / MIDI 出力・Session Log (.orbslog)・WCTM コンサートシステムの正本仕様5文書をリポジトリに配置し、 後続の実装セッション (Opus) が迷わず作業を開始できる土台を作る。 Epic #224 配下の最初のタスクであり、 全実装フェーズの前提。
+
+**作業内容**:
+
+- ローカル未追跡だった `docs/spec-v2/` を、 指示書 §8 指定の **`docs/specs-v2/`** にリネームして git 管理下に配置 (5文書: 4 HTML + DESIGN_DISCUSSION_RECORD は md/html 併存。 HTML が正本、 SVG アーキテクチャ図を含む)
+- **CLAUDE.md** に「🎯 現在進行中」セクションを追記 (全書き換えはせずセクション単位の追記。 Context Collapse 防止): specs-v2 の読み順、 §7 Known Decisions 再議論禁止ルール、 Epic #224 参照、 委譲方針 (§5)、 Phase 0 停止条件
+- **docs/core/INDEX.md** に「Active spec set」セクションを追加 (読み順テーブル + 再議論禁止の注記)
+- **docs/core/INSTRUCTION_ORBITSCORE_DSL.md** (SoT) 冒頭に specs-v2 への参照 + 各フェーズゲートでの SoT 反映ルール (§8.1-1) を追記
+
+**正本仕様 (docs/specs-v2/、 読み順)**:
+
+1. `IMPLEMENTATION_INSTRUCTIONS.html` — 作業指示書 (フェーズ・依存グラフ・委譲方針・Known Decisions §7)
+2. `PITCH_DSL_SPEC_v1.1.html` — Stage 1 = note DSL の仕様正本
+3. `SESSION_LOG_SPEC_v1.html` — 記録 .orbslog の仕様正本
+4. `WCTM_SYSTEM_SPEC_v1.html` — コンサートシステムの仕様正本
+5. `DESIGN_DISCUSSION_RECORD.md` — 設計経緯と棄却済み代替案 (決定ログ #1-32)
+
+**起票した Issue 群 (2026-06-13)**: Epic #224、 実装系 #225-237 (Phase 0/R/1/L1/2/3/4・W-Bridge/RuntimeA/Link/Ops・docs sync)、 将来予約 #238-242 (audio `[ ]`・slice()・譜面レンダリング Epic・L2 Replayer・WCTM 事後分析)。 ラベル `wctm` / `session-log`、 マイルストーン「WCTM 2026-08-07」を新設。
+
+**テスト結果**: 424 passed / 23 skipped (447 total)。 ドキュメントのみの変更で回帰なし。
+
+**次のステップ**: #226 Phase 0 (事前検証4項目。 仕様前提が崩れたら停止して報告)。
+
+---
+
 ### 6.89 Issue #221 — audioPath search resolution + sample bank lookup (May 10, 2026)
 
 **Date**: May 10, 2026

@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>OrbitScore Pitch DSL Specification v1.1</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <style>
+  :root{
+    --ink:#16181D; --paper:#FAFAF8; --sub:#5A5A60; --hair:#E4E4E0;
+    --rec:#B4231F; --recbg:#FFF3F2; --panel:#F2F2EF; --code:#F4F4F1;
+  }
+  *{box-sizing:border-box}
+  html{font-size:16px}
+  body{
+    margin:0; padding:0; background:var(--paper); color:var(--ink);
+    font-family:"Hiragino Sans","Yu Gothic","Noto Sans JP",-apple-system,sans-serif;
+    line-height:1.95; font-feature-settings:"palt";
+  }
+  main,body>header,body>*{max-width:880px}
+  body{padding:48px 28px 96px; margin:0 auto;}
+  h1{
+    font-size:1.9rem; line-height:1.4; letter-spacing:.01em; font-weight:700;
+    margin:0 0 .4rem; border-bottom:3px solid var(--ink); padding-bottom:.6rem;
+  }
+  /* meta strip: doc header styled like an .orbslog meta line */
+  h1 + p strong:first-child{color:var(--ink)}
+  .metaline, h1 + p em{font-style:normal}
+  h2{
+    font-size:1.28rem; font-weight:700; margin:3.2rem 0 1rem;
+    padding:.35rem 0 .35rem .9rem; border-left:4px solid var(--ink);
+  }
+  h3{font-size:1.05rem; font-weight:700; margin:2.2rem 0 .8rem; color:var(--ink)}
+  h3::before{content:"§ "; color:var(--rec); font-weight:600}
+  p{margin:.9rem 0}
+  strong{font-weight:700}
+  a{color:var(--ink); text-decoration-color:var(--rec); text-underline-offset:3px}
+  hr{border:none; border-top:1px solid var(--hair); margin:2.6rem 0}
+  ul,ol{padding-left:1.5em} li{margin:.35rem 0}
+  blockquote{
+    margin:1.2rem 0; padding:.7rem 1.1rem; background:var(--recbg);
+    border-left:3px solid var(--rec); color:var(--ink); font-size:.95rem;
+  }
+  blockquote p{margin:.3rem 0}
+  code{
+    font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.86em;
+    background:var(--code); padding:.1em .35em; border-radius:3px;
+  }
+  pre{
+    background:var(--code); border:1px solid var(--hair); border-radius:6px;
+    padding:1rem 1.2rem; overflow-x:auto; line-height:1.65; margin:1.2rem 0;
+  }
+  pre code{background:none; padding:0; font-size:.84rem}
+  table{
+    border-collapse:collapse; width:100%; margin:1.4rem 0; font-size:.92rem; line-height:1.7;
+  }
+  th{
+    text-align:left; border-bottom:2px solid var(--ink); padding:.5rem .7rem;
+    font-weight:700; background:none;
+  }
+  td{border-bottom:1px solid var(--hair); padding:.55rem .7rem; vertical-align:top}
+  tr:hover td{background:var(--panel)}
+  svg{display:block; margin:1.6rem auto; background:#fff; border:1px solid var(--hair); border-radius:6px; padding:10px}
+  /* doc id strip */
+  header#title-block-header{display:none}
+  .docmeta{
+    font-family:"SF Mono",Menlo,monospace; font-size:.74rem; color:var(--sub);
+    background:var(--panel); border:1px solid var(--hair); border-radius:4px;
+    padding:.5rem .8rem; margin:0 0 2.4rem; overflow-x:auto; white-space:nowrap;
+  }
+  .docmeta .dot{color:var(--rec)}
+  @media (max-width:640px){ body{padding:28px 16px 64px} h1{font-size:1.5rem} }
+  @media print{ body{max-width:none} svg{break-inside:avoid} }
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">OrbitScore Pitch DSL Specification v1.1</h1>
+<div class="docmeta">{"type":"meta"<span class="dot">,</span>"doc":"PITCH_DSL_SPEC","version":"1.1","status":"draft-for-implementation","date":"2026-06-12","authors":"Yamato (decisions) / Claude (drafting)"}</div>
+</header>
+<h1
+id="orbitscore-pitch-dsl-specification-v1.1-midi-integration">OrbitScore
+Pitch DSL Specification — v1.1 “MIDI Integration”</h1>
+<p><strong>Status</strong>: Draft for implementation
+<strong>Date</strong>: 2026-06-12 <strong>Authors</strong>: Hiroshi
+Yamato (design decisions) / Claude (drafting) <strong>Relation to
+existing docs</strong>: - Extends
+<code>docs/core/INSTRUCTION_ORBITSCORE_DSL.md</code> (v3.0, single
+source of truth) - Supersedes the pitch system of
+<code>docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md</code> (chromatic
+degree system) - Implements ROADMAP_2026.md v1.1 “MIDI Integration”
+(Epic #132) with a revised DSL design</p>
+<hr />
+<h2 id="design-principles-normative">0. Design Principles
+(normative)</h2>
+<ol type="1">
+<li><strong>構造=リズム、値=コンテンツ</strong>: v3.0
+の不変条件を維持する。<code>play()</code>
+のネスト木が時間分割を、要素の値が内容を表す。audio
+シーケンスでは値=スライス番号、MIDI
+シーケンスでは値=度数。<code>0</code> = 休符は両者で共通。</li>
+<li><strong>メロディと和声は同一ストリームに同居する</strong>:
+ハーモニーを独立したタイムライン(グローバルなコード進行レーン)として持たない。和声は度数スタック
+<code>[ ]</code> として旋律と同じ play()
+内に書かれる。ピッチコンテキスト(root/mode)はリズム木のグループに付くレキシカルスコープであり、時間的な参照ではない。</li>
+<li><strong>MLTS との整合</strong>:
+ピッチコンテキストがリズム木の内部にあるため、ハーモニックリズムも層ごとに独立する。共有グリッドをいかなる形でも再導入しない。</li>
+<li><strong>クオリティは表記が持つ</strong>: 基底意味論(root
+スコープ)では度数表記が音程クオリティを自己完結的に表す。<code>b3</code>
+はどの文脈でも「ルートの短3度上」。スコープ宣言を遡らないと実音が分からない設計(scale-index
+方式)は基底には採用しない。</li>
+<li><strong>コードシンボルを構文に持たない</strong>:
+コードは度数スタックの値(<code>chord([...])</code>)であり、命名はユーザー変数に委ねる。</li>
+<li><strong>記譜可逆性</strong>: 本 DSL
+の根底にある問題定義は「譜面を簡単に書くための DSL
+の不在」である。内部表現(ネスト分割木 +
+シンボリックピッチ)は記譜構造(連符の入れ子 + 音名スペリング +
+タイ/スラー)とほぼ同型であり、この同型性を実装上も保存する(§7-0)。譜面生成は本仕様のスコープ外だが、その可能性を閉じる実装判断を禁止する。</li>
+</ol>
+<hr />
+<h2 id="midi-output-declaration">1. MIDI Output Declaration</h2>
+<div class="sourceCode" id="cb1"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">midi</span>(<span class="st">&quot;IAC Driver Bus 1&quot;</span><span class="op">,</span> <span class="dv">1</span>)   <span class="co">// (portName, channel 1-16)</span></span></code></pre></div>
+<ul>
+<li>portName は CoreMIDI 出力ポート名と部分一致(case-insensitive
+substring match)で解決。複数一致時は最初のポート + warning
+diagnostic。不一致時はエラー(利用可能ポート一覧を提示)。</li>
+<li><code>seq.midi()</code> を宣言したシーケンスは MIDI
+シーケンスとなり、<code>play()</code>
+の値は度数として解釈される。<code>audio()</code>/<code>chop()</code>
+との併用はエラー。</li>
+<li><strong>SC オーディオ経路との併走は可</strong>(LinkAudio
+のような排他制約は設けない)。</li>
+</ul>
+<h3 id="sequence-level-parameters">Sequence-level parameters</h3>
+<div class="sourceCode" id="cb2"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">gate</span>(<span class="fl">0.8</span>)      <span class="co">// デフォルトゲート長(スロット長に対する比)。default: 0.8</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">vel</span>(<span class="dv">96</span>)        <span class="co">// デフォルトベロシティ 1-127。default: 96</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">octave</span>(<span class="dv">4</span>)      <span class="co">// 基準オクターブ。度数1のオクターブ配置。default: 4 (C4=60基準)</span></span></code></pre></div>
+<h3 id="global-parameters">Global parameters</h3>
+<div class="sourceCode" id="cb3"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="bu">global</span><span class="op">.</span><span class="fu">key</span>(<span class="st">&quot;C&quot;</span>)          <span class="co">// 数値 root の基準キー。音名トークン</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="bu">global</span><span class="op">.</span><span class="fu">midiLatency</span>(<span class="dv">20</span>)   <span class="co">// MIDI 送出への固定オフセット(ms)。SC 経路との耳合わせ用。default: 0</span></span></code></pre></div>
+<hr />
+<h2 id="pitch-resolution-semantics">2. Pitch Resolution Semantics</h2>
+<h3 id="root-scope-基底意味論">2.1 Root scope (基底意味論)</h3>
+<p>度数 = <strong>Ionian 基準のインターバル語彙</strong> +
+変化記号。</p>
+<pre><code>IONIAN = [0, 2, 4, 5, 7, 9, 11]   // semitones for degrees 1..7
+
+resolve(degree n, alteration a, octaveShift o):
+  semitones = IONIAN[(n-1) mod 7] + 12 * floor((n-1) / 7) + a
+  pitch     = rootPitch + semitones + 12 * o</code></pre>
+<ul>
+<li><code>a</code>: <code>b</code> = -1, <code>#</code> = +1,
+<code>bb</code>/<code>##</code> = ±2。重複可だが diagnostic で
+warning(2個まで)。</li>
+<li>度数は 1 以上の整数。<code>2↔︎9</code>, <code>4↔︎11</code>,
+<code>6↔︎13</code>
+は同ピッチクラスのオクターブ違いとして式から自然に導出される(9 =
+IONIAN[1] + 12)。13
+を超える度数(15=2オクターブ上のルート等)も式の通り有効。</li>
+<li><code>0</code> = 休符。</li>
+<li><code>rootPitch</code> は現在の root
+スコープ(§3)が決める。<code>seq.octave()</code> が度数1の MIDI
+ノート番号を決定する:
+<code>rootPitch = 12 * (octave + 1) + rootPitchClass</code>(C4=60
+規約)。</li>
+</ul>
+<h3 id="mode-scope-ユーザー定義ピッチ格子">2.2 Mode scope
+(ユーザー定義ピッチ格子)</h3>
+<div class="sourceCode" id="cb5"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> dorian      <span class="op">=</span> <span class="fu">mode</span>(<span class="dv">1</span><span class="op">,</span> <span class="dv">2</span><span class="op">,</span> b3<span class="op">,</span> <span class="dv">4</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">6</span><span class="op">,</span> b7)</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> holdsworth1 <span class="op">=</span> <span class="fu">mode</span>(<span class="dv">1</span><span class="op">,</span> <span class="dv">2</span><span class="op">,</span> b3<span class="op">,</span> <span class="dv">4</span><span class="op">,</span> #<span class="dv">5</span><span class="op">,</span> <span class="dv">6</span><span class="op">,</span> <span class="dv">7</span><span class="op">,</span> <span class="dv">9</span><span class="op">,</span> #<span class="dv">11</span><span class="op">,</span> b13<span class="op">,</span> <span class="dv">7</span><span class="op">^+</span><span class="dv">1</span>)   <span class="co">// 2オクターブモード</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> custom      <span class="op">=</span> <span class="fu">mode</span>(<span class="dv">1</span><span class="op">,</span> <span class="dv">2</span><span class="op">,</span> b3<span class="op">,</span> <span class="op">...</span>)<span class="op">.</span><span class="fu">period</span>(<span class="dv">19</span>)                    <span class="co">// 反復周期の明示(半音数)</span></span></code></pre></div>
+<ul>
+<li>mode の定義要素は <strong>root
+スコープの度数表記</strong>で書く(Ionian 基準 + b/# +
+<code>^</code>/<code>~</code> 修飾)。つまり mode は root
+意味論の上に定義される格子。</li>
+<li>mode スコープ内では、メロディーの度数 n
+は<strong>格子への純粋なインデックス</strong>:
+<code>pitch = lattice[(n-1) mod len] + period * floor((n-1) / len)</code>。</li>
+<li><code>period()</code>
+省略時は最終要素の半音位置から次のオクターブ境界へ切り上げて推定(7音教会旋法なら
+12)。非オクターブ周期・マイクロトーナル(<code>~</code>
+デチューン併用)も許容。</li>
+<li><strong>mode スコープでは 2↔︎9
+のテンション折り返し規則は成立しない</strong>(格子が 7
+音とは限らないため)。ドキュメントで明示すること。</li>
+<li>mode 内の変化記号 <code>b3</code>
+等は「格子の該当インデックスの音から半音変位」として解決する。</li>
+<li>教会旋法はライブラリ(事前定義 var
+群)として提供。言語プリミティブではない。</li>
+</ul>
+<h3 id="root-の指定">2.3 Root の指定</h3>
+<div class="sourceCode" id="cb6"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="op">.</span><span class="fu">root</span>(F)      <span class="co">// 音名トークン: C, C#, Db, D, ..., B (字句レベルで # / b を含む音名を許容)</span></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="op">.</span><span class="fu">root</span>(<span class="dv">3</span>)      <span class="co">// global.key() のメジャースケール上のダイアトニック度数 (key C → E)</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="op">.</span><span class="fu">root</span>(b6)     <span class="co">// 非ダイアトニック度数 (key C → Ab)。解決規則は §2.1 と同一(再帰適用)</span></span></code></pre></div>
+<ul>
+<li><strong><code>global.key()</code> 未宣言時、数値 root
+はエラー</strong>(音名 root のみ可)。事故防止を優先。</li>
+<li><code>.root()</code>
+の指定はメソッド形のみ。プロパティ形(<code>.root.F</code>)は採用しない(<code>F#</code>
+等で破綻するため)。</li>
+</ul>
+<h3 id="event-modifiers-v1.0-から継承">2.4 Event modifiers (v1.0
+から継承)</h3>
+<div class="sourceCode" id="cb7"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="dv">3</span><span class="op">^+</span><span class="dv">1</span>       <span class="co">// オクターブシフト</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>b7<span class="op">~-</span><span class="fl">0.25</span>   <span class="co">// デチューン(半音単位、ピッチベンドで実現。bendRange は将来課題、当面±2半音固定)</span></span></code></pre></div>
+<hr />
+<h2 id="scope-rules">3. Scope Rules</h2>
+<p><code>.root()</code> / <code>.mode()</code>
+はリズム木のグループ(丸括弧)へのメソッドチェーンとして付く。</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">play</span>(</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">9</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> (<span class="dv">3</span><span class="op">,</span> <span class="dv">1</span>)<span class="op">,</span> [<span class="dv">1</span><span class="op">,</span><span class="dv">3</span><span class="op">,</span><span class="dv">5</span><span class="op">,</span><span class="dv">7</span>])<span class="op">.</span><span class="fu">root</span>(<span class="dv">2</span>)<span class="op">,</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  ((<span class="dv">1</span><span class="op">,</span> b3)<span class="op">.</span><span class="fu">root</span>(b6)<span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">1</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">2</span>)<span class="op">,</span>    <span class="co">// 内側の .root(b6) がその半拍だけ優先</span></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">1</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">1</span><span class="op">,</span> <span class="dv">5</span>)<span class="op">,</span>                         <span class="co">// 指定なし → シーケンス既定</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">root</span>(C)   <span class="co">// シーケンス既定のピッチコンテキスト</span></span></code></pre></div>
+<ol type="1">
+<li><strong>解決順位</strong>: 内側グループ → 外側グループ →
+シーケンス既定(<code>seq.root()</code> / <code>seq.mode()</code>) →
+エラー(既定未設定で度数が現れた場合は diagnostic)。</li>
+<li><strong>無指定区間はシーケンス既定に戻る</strong>(直前スコープの維持はしない。stateless
+を優先)。</li>
+<li><strong>タプル並置への適用</strong>: <code>(...)(...).root(X)</code>
+のチェーンは<strong>並置全体に掛かる</strong>。並置されたグループは時間的には兄弟(各々が自身のスロットを保持)のまま、ピッチコンテキストのみ共有する。これが「複数小節で1コード」の標準記法。改行は字句的に無意味(現行仕様の
+multiline 規則を継承)なので、長いスパンは縦書きが推奨形:</li>
+</ol>
+<div class="sourceCode" id="cb9"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a>piano<span class="op">.</span><span class="fu">play</span>(</span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> m7<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> m7)</span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> m7<span class="op">,</span> <span class="dv">1</span><span class="op">,</span> <span class="dv">0</span>)</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">7</span><span class="op">,</span> m7<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">0</span>)</span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> m7<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> m7)<span class="op">.</span><span class="fu">root</span>(<span class="dv">3</span>)<span class="op">,</span>     <span class="co">// 4小節を III ルートで共有。カンマがスコープ終端</span></span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> m7<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> m7)</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">0</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">6</span>)<span class="op">,</span></span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<ul>
+<li><strong>チェーンは並置を閉じる</strong>:
+メソッドチェーンが付いたグループ列の直後にカンマなしで <code>(</code>
+が続く場合はパースエラー(diagnostic: “expected comma after chained
+group”)。<code>.root()</code> 後のカンマ忘れを構文段階で検出する。</li>
+<li><strong>既知のリスク</strong>: <code>.root()</code>
+とカンマの両方を書き忘れると、後続ブロックに静かに併合される(構文上合法のため検出不能)。緩和策として
+VS Code 拡張で root
+スコープ単位のセマンティックハイライト(同一スコープの並置範囲の可視化)を実装すること。</li>
+<li>同型反復の冗長性は反復 <code>*n</code>(§6.5)で解消する:
+<code>(0, m7, 0, m7)*4.root(3)</code>。</li>
+</ul>
+<ol start="4" type="1">
+<li><strong>同一グループへの重複指定</strong>(<code>.root(2).root(5)</code>
+のチェーン連結、または root と mode の同時指定)は <strong>diagnostic
+エラー</strong>。last-wins
+は採用しない(ライブ差し替え時の消し忘れが無音の事故になるため)。ネストによる上書きのみが合法な上書き手段。</li>
+<li><code>.root()</code>/<code>.mode()</code> チェーンの後に他の play
+modifier が続く場合の評価順は左から右(ただし v1.1 時点で他の play
+modifier は未実装)。</li>
+</ol>
+<hr />
+<h2 id="brackets">4. Brackets</h2>
+<svg viewBox="0 0 880 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="リズム木と時間軸の対応" style="max-width:100%;height:auto;font-family:'Hiragino Sans','Yu Gothic',sans-serif;">
+  <style>
+    .n{fill:#FFFFFF;stroke:#16181D;stroke-width:1.3;}
+    .nr{fill:#FFF3F2;stroke:#B4231F;stroke-width:1.3;}
+    .t{font-size:13px;fill:#16181D;}
+    .tt{font-size:13px;fill:#16181D;font-weight:600;}
+    .s{font-size:11px;fill:#5A5A60;}
+    .e{stroke:#16181D;stroke-width:1.1;fill:none;}
+    .tl{stroke:#16181D;stroke-width:1.4;}
+    .tick{stroke:#16181D;stroke-width:1.1;}
+    .seg{fill:#F2F2EF;stroke:#16181D;stroke-width:1.1;}
+    .segR{fill:#FFF3F2;stroke:#B4231F;stroke-width:1.1;}
+  </style>
+  <text x="20" y="28" class="tt">play( 1, (3, 5), [1,3,5], 0 ).root(2) — 木構造と時間軸の対応</text>
+  <!-- tree -->
+  <rect x="330" y="46" width="120" height="26" class="n"/><text x="352" y="64" class="t">bar (1/1)</text>
+  <path class="e" d="M390,72 L120,104"/><path class="e" d="M390,72 L330,104"/><path class="e" d="M390,72 L520,104"/><path class="e" d="M390,72 L680,104"/>
+  <rect x="90" y="104" width="60" height="24" class="n"/><text x="112" y="121" class="t">1</text>
+  <rect x="285" y="104" width="90" height="24" class="n"/><text x="300" y="121" class="t">( 3, 5 )</text>
+  <rect x="470" y="104" width="100" height="24" class="nr"/><text x="482" y="121" class="t">[ 1, 3, 5 ]</text>
+  <rect x="650" y="104" width="60" height="24" class="n"/><text x="672" y="121" class="t">0</text>
+  <path class="e" d="M310,128 L300,150"/><path class="e" d="M350,128 L360,150"/>
+  <rect x="275" y="150" width="46" height="22" class="n"/><text x="293" y="166" class="t">3</text>
+  <rect x="340" y="150" width="46" height="22" class="n"/><text x="358" y="166" class="t">5</text>
+  <!-- timeline -->
+  <line x1="60" y1="214" x2="820" y2="214" class="tl"/>
+  <rect x="60" y="196" width="190" height="18" class="seg"/><text x="135" y="209" class="s">1 (1/4)</text>
+  <rect x="250" y="196" width="95" height="18" class="seg"/><text x="278" y="209" class="s">3 (1/8)</text>
+  <rect x="345" y="196" width="95" height="18" class="seg"/><text x="373" y="209" class="s">5 (1/8)</text>
+  <rect x="440" y="196" width="190" height="18" class="segR"/><text x="478" y="209" class="s">1+3+5 同時 (1/4)</text>
+  <rect x="630" y="196" width="190" height="18" class="seg" fill-opacity="0.3"/><text x="700" y="209" class="s">rest (1/4)</text>
+  <text x="60" y="240" class="s">ネスト = 親スロットの等分。木はそのまま記譜のリズム構造(連符の入れ子)に対応する(設計原則 6: 記譜可逆性)</text>
+</svg>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>記法</th>
+<th>意味</th>
+<th>時間</th>
+<th>MIDI 実現</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>( )</code></td>
+<td>時間分割(既存)</td>
+<td>親スロットを要素数で等分</td>
+<td>—</td>
+</tr>
+<tr class="even">
+<td><code>[ ]</code></td>
+<td>スタック(同時発音)</td>
+<td>全要素が親スロット全長を共有</td>
+<td>同時 note-on</td>
+</tr>
+<tr class="odd">
+<td><code>{ }</code></td>
+<td>レガートグループ</td>
+<td><code>( )</code> と同一の分割規則</td>
+<td>note-off を次の note-on の後に送る(オーバーラップ)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><code>[ ]</code>
+の各要素は<strong>独立にサブツリーを展開できる</strong>:
+<code>[1, (5, 3, 2, 1)]</code> = 度数1を保持しつつ同一時間内で 5,3,2,1
+のラインが走る(一パート内ポリフォニー)。実装は TimedEvent
+生成を要素ごとに並列再帰させる。</li>
+<li><code>{ }</code> のオーバーラップ量は実装定義(推奨: 次 note-on の
+10-30ms 後に note-off)。グループ末尾の音は通常の gate 規則に従う。</li>
+<li><code>{ }</code> 内に <code>[ ]</code>
+がある場合、スタック全声部がオーバーラップ対象。</li>
+</ul>
+<hr />
+<h2 id="ties-slurs-voice-leading">5. Ties, Slurs, Voice Leading</h2>
+<h3 id="event-level-tie-_-単独トークン">5.1 Event-level tie:
+<code>_</code> (単独トークン)</h3>
+<p>直前イベントを 1 スロット延長(再トリガーなし)。ネスト内でも機能:
+<code>play(1, (_, 3))</code> = 度数1が 1.5 スロット。</p>
+<ul>
+<li><strong>スコープ境界をまたぐタイ</strong>:
+発音時に解決されたピッチを保持する(再解決しない)。II 上で発音した
+9度(E)を V7 の小節頭まで延ばすと、その E は G7 上では結果的に 13
+として響く——コモントーンの機能再解釈が定義から導出される。</li>
+<li>パターン先頭の <code>_</code>
+は「前サイクル末尾からの持ち越し」(LOOP 時)。RUN
+一発目など先行音が存在しない場合は休符として扱う。</li>
+</ul>
+<h3 id="voice-level-tie-_-接頭辞スタック内">5.2 Voice-level tie:
+<code>_</code> 接頭辞(スタック内)</h3>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>(<span class="dv">0</span><span class="op">,</span> [<span class="dv">1</span><span class="op">,</span> b3<span class="op">,</span> _5<span class="op">,</span> _b7]<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> m7)<span class="op">.</span><span class="fu">root</span>(<span class="dv">6</span>)</span></code></pre></div>
+<ul>
+<li><code>_5</code> =
+「解決後のピッチと同じ音がこのシーケンスで現在発音中なら
+note-off/note-on を抑制して延長、なければ通常発音」。</li>
+<li>照合は<strong>解決後ピッチの一致</strong>で行う(前和音の声部位置との対応ではない)。声部数が異なる和音間でも意味が壊れず、ライブ差し替え時は発音側にフォールバックするため事故にならない。</li>
+</ul>
+<h3 id="hold-自動コモントーンタイ">5.3 <code>.hold()</code> —
+自動コモントーンタイ</h3>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>piano<span class="op">.</span><span class="fu">hold</span>()   <span class="co">// 連続するスタック間のコモントーンを自動でタイする</span></span></code></pre></div>
+<ul>
+<li>効果範囲は<strong>スタック間限定</strong>(単音の同音連打には適用しない。適用すると
+repeated note が全てタイになりリズムが消えるため)。</li>
+<li>意味論は §5.2 の自動適用として定義する(基底仕様は増えない)。</li>
+<li>シーケンスレベルおよびグループレベル(<code>(...).hold()</code>)で指定可。</li>
+</ul>
+<h3 id="slur">5.4 Slur</h3>
+<p>和音・旋律の滑らかな接続は <code>{ }</code>
+で表す。声部ごとに独立したグライド(voice-per-channel)は MPE の領域であり
+<strong>v1.1 スコープ外</strong>(v1.0 仕様の <code>mpe</code>
+フラグを将来の参照点とする)。</p>
+<hr />
+<h2 id="chord-values">6. Chord Values</h2>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7      <span class="op">=</span> <span class="fu">chord</span>([<span class="dv">1</span><span class="op">,</span> b3<span class="op">,</span> <span class="dv">5</span><span class="op">,</span> b7])      <span class="co">// ルート未束縛の度数スタック(値)</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7omit5 <span class="op">=</span> <span class="fu">chord</span>([m7<span class="op">,</span> <span class="op">-</span><span class="dv">5</span>])             <span class="co">// spread + 除去</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7add9  <span class="op">=</span> <span class="fu">chord</span>([m7<span class="op">,</span> <span class="dv">9</span>])              <span class="co">// spread + 追加</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> so_what <span class="op">=</span> <span class="fu">chord</span>([<span class="dv">1</span><span class="op">,</span> <span class="dv">11</span><span class="op">,</span> b7<span class="op">^+</span><span class="dv">1</span><span class="op">,</span> b3<span class="op">^+</span><span class="dv">1</span><span class="op">,</span> <span class="dv">5</span><span class="op">^+</span><span class="dv">1</span>])</span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> chords                              <span class="co">// 標準ライブラリ: m7, maj7, dom7, m7b5, dim7, sus4, ...</span></span></code></pre></div>
+<ul>
+<li>chord 値は play() /
+スタック内に置かれた時点のスコープ(root/mode)で解決される。コンテキスト(root)とは別物:
+root はコンテキスト、chord は値。</li>
+<li><strong>Spread</strong>: スタック <code>[ ]</code> の中に chord
+値を置くと展開される。定義サイト(<code>chord([m7, 9])</code>)と使用サイト(<code>play([m7, 9], ...)</code>)で同一規則。</li>
+<li><strong>除去 <code>-</code></strong>: <code>-5</code>
+は展開後のスタックから<strong>字面一致</strong>する要素(<code>5</code>)を除去する。解決後ピッチでの照合は採用しない(<code>-3</code>
+が文脈依存になり予測不能なため)。一致要素が無い場合は no-op + warning
+diagnostic。</li>
+<li><code>m7^+1</code> = スタック全体を 1 オクターブシフト(単音の
+<code>^</code> と同一文法のトークン修飾)。</li>
+<li>ビルダー API(<code>.add()</code>, <code>.omit()</code>,
+<code>.drop()</code>)は<strong>採用しない</strong>。すべて値合成(spread
++ <code>-</code> + 明示定義)で表現する。drop2 等は
+<code>var m7drop2 = chord([5^-1, 1, b3, b7])</code>
+のように明示定義。</li>
+</ul>
+<hr />
+<h2 id="repetition-n-and-pattern-variables-ドメイン共通">6.5 Repetition
+<code>*n</code> and Pattern Variables (ドメイン共通)</h2>
+<p>本節の機能は<strong>リズム木の構造操作</strong>であり、ピッチ意味論に依存しない。MIDI
+シーケンスと audio
+シーケンス(値=スライス番号)の両方で同一に機能する。</p>
+<h3 id="反復-n">6.5.1 反復 <code>*n</code></h3>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>x<span class="op">*</span>n  ≡  x を n 回並置したもの</span></code></pre></div>
+<ul>
+<li>x が裸のイベントの場合は単元グループ <code>(x)</code> とみなす:
+<code>1*3</code> ≡ <code>(1)(1)(1)</code>。</li>
+<li><strong>カンマへの書き換えではなく並置への書き換え</strong>である(カンマは
+root スコープ境界のため)。したがって <code>riff*4.root(3)</code>
+は4回分すべてに root が掛かる。</li>
+<li><code>n</code> は整数 1 以上。<code>*0</code> は diagnostic
+エラー、<code>*1</code> は恒等。</li>
+<li>後置演算子(<code>*n</code>・メソッドチェーン)は左から右に適用:
+<code>(a)(b).root(2)*2</code> = ルート付きセル全体の2回反復(合法)。</li>
+<li>audio 例: <code>kick.play((1, 0, 1, 0)*4)</code> =
+4小節分の反復を1グループで記述。</li>
+</ul>
+<blockquote>
+<p><strong>TidalCycles との相違(要ドキュメント明記)</strong>: Tidal の
+<code>*</code> はスロット内分割(同一スロット内で n 回=速度 n
+倍)、スロット占有の反復は <code>!</code>。OrbitScore の <code>*n</code>
+は<strong>スロットを n 個占有する反復</strong>(Tidal の <code>!</code>
+相当)。スロット内反復が必要な場合はネスト <code>(1, 1)</code>
+で書く。</p>
+</blockquote>
+<h3 id="パターン変数">6.5.2 パターン変数</h3>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> riff <span class="op">=</span> (<span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> (<span class="dv">3</span><span class="op">,</span> <span class="dv">5</span>)<span class="op">,</span> <span class="dv">7</span>)            <span class="co">// 裸タプル束縛。コンストラクタ不要</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> fill <span class="op">=</span> (<span class="dv">7</span><span class="op">,</span> (<span class="dv">5</span><span class="op">,</span> <span class="dv">3</span>)<span class="op">,</span> <span class="dv">1</span><span class="op">,</span> <span class="dv">0</span>)</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> A    <span class="op">=</span> (<span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">0</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">3</span>)          <span class="co">// チェーン込みの束縛も値として合法</span></span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> AA   <span class="op">=</span> (<span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">0</span>)(<span class="dv">0</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">1</span><span class="op">,</span> <span class="dv">0</span>)      <span class="co">// 並置の束縛 → 使用箇所に複数兄弟としてスプライス</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">play</span>(riff<span class="op">*</span><span class="dv">3</span><span class="op">,</span> fill)</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">play</span>(A<span class="op">,</span> A<span class="op">,</span> riff<span class="op">.</span><span class="fu">root</span>(<span class="dv">6</span>)<span class="op">,</span> fill<span class="op">.</span><span class="fu">root</span>(<span class="dv">5</span>))</span></code></pre></div>
+<ul>
+<li><strong>評価時値渡し</strong>: 変数の置換は <code>play()</code>
+の評価時点で行われる。<code>riff</code>
+を再定義しても、走行中のパターンには影響せず、<code>play()</code>
+行の再実行で反映される。リアクティブ束縛(再定義の自動伝播)は採用しない(quantize
+との相互作用と暗黙状態の増加を避ける)。</li>
+<li>変数が単一グループなら1スロット(トップレベルなら1要素)を占有、並置なら複数兄弟としてスプライス。</li>
+<li>chord 値(§6)との区別: chord
+はスタック(縦)の値、パターン変数はツリー(横)の値。どちらも play()
+内で参照される値だが型が異なる。</li>
+</ul>
+<hr />
+<h2 id="midi-realization-rules">7. MIDI Realization Rules</h2>
+<ol start="0" type="1">
+<li><strong>Symbolic pitch preservation (記譜対応の前提)</strong>:
+TimedEvent
+パイプラインは<strong>シンボリックなピッチ情報(度数・変化記号・octave
+shift・解決に用いた root/mode
+コンテキスト・タイ/レガート属性)を保持</strong>し、MIDI
+ノート番号への解決は MIDI
+出力アダプタの最終段でのみ行う。解決済みノート番号だけを流す設計は禁止。理由:
+度数表記は音名スペリング(D#/Eb
+の区別)・タイ・スラーを一意に保存しており、将来のリアルタイム譜面生成エピック(人間奏者の駆動。本仕様のスコープ外)がこの情報に依存する。MIDI
+番号化した時点でこれらは不可逆に失われる。</li>
+<li><strong>Note lifecycle</strong>: 各イベント →
+note-on(vel)、<code>slotDuration * gate</code> 後に note-off。tie は
+note-off/on ペアの抑制、legato は note-off の遅延。</li>
+<li><strong>Active note tracking</strong>:
+シーケンスごとに発音中ノート(pitch,
+channel)を追跡。以下で確実に解放する:
+<ul>
+<li><code>LOOP()</code>
+からの除外・<code>MUTE()</code>・<code>play()</code> 差し替え時:
+当該シーケンスの保留ノートに note-off</li>
+<li><code>global.stop()</code> / エンジン終了 / クラッシュハンドラ:
+全チャンネルに CC123 (All Notes Off) + CC120 (All Sound Off)</li>
+</ul></li>
+<li><strong>Quantize との関係</strong>: 既存仕様(§5
+quantize)に従う。<code>play()</code> 差し替えが quantize
+待機する間も現行パターンのノートは正常に off される。</li>
+<li><strong>Scheduling</strong>: TS 側 lookahead スケジューラ(RtMidi
+は即時送信のみのため)。推奨 lookahead 50-100ms、タイマー駆動 +
+ドリフト補正。<code>global.midiLatency()</code> を送出時刻に加算。</li>
+<li><strong>Detune <code>~</code></strong>:
+ピッチベンドで実現。同チャンネル同時発音中の異デチューンは不可(warning)。本格対応は
+MPE(スコープ外)。</li>
+</ol>
+<hr />
+<h2 id="out-of-scope-v1.1">8. Out of Scope (v1.1)</h2>
+<ul>
+<li>MPE / voice-per-channel グライド</li>
+<li>per-event velocity / duration 修飾(v1.0 の <code>@U1</code>,
+<code>@v</code> 系) — 将来 <code>@</code> 系として再導入予定</li>
+<li>CC / Program Change 出力(ROADMAP には記載あり。v1.1.x で追加)</li>
+<li>8音以上のコレクションでの mode テンション規則(当面 root スコープ +
+b/# で書く)</li>
+<li>VST/AU ホスティング(v3.0+ #95)</li>
+<li>MIDI 入力</li>
+</ul>
+<hr />
+<h2 id="examples-normative-reference">9. Examples (normative
+reference)</h2>
+<h3 id="chordbar-key-c">9.1 3-6-2-5, 1 chord/bar, key C</h3>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> <span class="bu">global</span> <span class="op">=</span> init <span class="bu">GLOBAL</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="bu">global</span><span class="op">.</span><span class="fu">tempo</span>(<span class="dv">120</span>)</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="bu">global</span><span class="op">.</span><span class="fu">beat</span>(<span class="dv">4</span> by <span class="dv">4</span>)</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="bu">global</span><span class="op">.</span><span class="fu">key</span>(<span class="st">&quot;C&quot;</span>)</span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="bu">global</span><span class="op">.</span><span class="fu">start</span>()</span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> chords</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> piano <span class="op">=</span> init <span class="bu">global</span><span class="op">.</span><span class="at">seq</span></span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>piano<span class="op">.</span><span class="fu">midi</span>(<span class="st">&quot;IAC Driver Bus 1&quot;</span><span class="op">,</span> <span class="dv">1</span>)<span class="op">.</span><span class="fu">octave</span>(<span class="dv">4</span>)<span class="op">.</span><span class="fu">gate</span>(<span class="fl">0.7</span>)</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>piano<span class="op">.</span><span class="fu">length</span>(<span class="dv">4</span>)</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>piano<span class="op">.</span><span class="fu">play</span>(</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> m7<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> m7)<span class="op">.</span><span class="fu">root</span>(<span class="dv">3</span>)<span class="op">,</span></span>
+<span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> [<span class="dv">1</span><span class="op">,</span> b3<span class="op">,</span> _5<span class="op">,</span> _b7]<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> m7)<span class="op">.</span><span class="fu">root</span>(<span class="dv">6</span>)<span class="op">,</span></span>
+<span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> [m7<span class="op">,</span> <span class="dv">9</span>]<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> [m7<span class="op">,</span> <span class="dv">9</span>])<span class="op">.</span><span class="fu">root</span>(<span class="dv">2</span>)<span class="op">,</span></span>
+<span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>  ([<span class="dv">1</span><span class="op">,</span> <span class="dv">3</span><span class="op">,</span> b7<span class="op">,</span> <span class="dv">13</span>]<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> [<span class="dv">1</span><span class="op">,</span> <span class="dv">3</span><span class="op">,</span> b7<span class="op">,</span> b13])<span class="op">.</span><span class="fu">root</span>(<span class="dv">5</span>)<span class="op">,</span></span>
+<span id="cb15-17"><a href="#cb15-17" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb15-18"><a href="#cb15-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-19"><a href="#cb15-19" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> bass <span class="op">=</span> init <span class="bu">global</span><span class="op">.</span><span class="at">seq</span></span>
+<span id="cb15-20"><a href="#cb15-20" aria-hidden="true" tabindex="-1"></a>bass<span class="op">.</span><span class="fu">midi</span>(<span class="st">&quot;IAC Driver Bus 1&quot;</span><span class="op">,</span> <span class="dv">2</span>)<span class="op">.</span><span class="fu">octave</span>(<span class="dv">2</span>)<span class="op">.</span><span class="fu">gate</span>(<span class="fl">0.9</span>)</span>
+<span id="cb15-21"><a href="#cb15-21" aria-hidden="true" tabindex="-1"></a>bass<span class="op">.</span><span class="fu">length</span>(<span class="dv">4</span>)</span>
+<span id="cb15-22"><a href="#cb15-22" aria-hidden="true" tabindex="-1"></a>bass<span class="op">.</span><span class="fu">play</span>(</span>
+<span id="cb15-23"><a href="#cb15-23" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">0</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">3</span>)<span class="op">,</span></span>
+<span id="cb15-24"><a href="#cb15-24" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">0</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">6</span>)<span class="op">,</span></span>
+<span id="cb15-25"><a href="#cb15-25" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">0</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">2</span>)<span class="op">,</span></span>
+<span id="cb15-26"><a href="#cb15-26" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">1</span><span class="op">,</span> <span class="dv">0</span><span class="op">,</span> (<span class="dv">5</span><span class="op">,</span> b5)<span class="op">,</span> <span class="dv">0</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">5</span>)<span class="op">,</span></span>
+<span id="cb15-27"><a href="#cb15-27" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb15-28"><a href="#cb15-28" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-29"><a href="#cb15-29" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> lead <span class="op">=</span> init <span class="bu">global</span><span class="op">.</span><span class="at">seq</span></span>
+<span id="cb15-30"><a href="#cb15-30" aria-hidden="true" tabindex="-1"></a>lead<span class="op">.</span><span class="fu">midi</span>(<span class="st">&quot;IAC Driver Bus 1&quot;</span><span class="op">,</span> <span class="dv">3</span>)<span class="op">.</span><span class="fu">octave</span>(<span class="dv">5</span>)<span class="op">.</span><span class="fu">vel</span>(<span class="dv">96</span>)</span>
+<span id="cb15-31"><a href="#cb15-31" aria-hidden="true" tabindex="-1"></a>lead<span class="op">.</span><span class="fu">length</span>(<span class="dv">4</span>)</span>
+<span id="cb15-32"><a href="#cb15-32" aria-hidden="true" tabindex="-1"></a>lead<span class="op">.</span><span class="fu">play</span>(</span>
+<span id="cb15-33"><a href="#cb15-33" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">5</span><span class="op">,</span> _<span class="op">,</span> (b3<span class="op">,</span> <span class="dv">1</span>)<span class="op">,</span> b7)<span class="op">.</span><span class="fu">root</span>(<span class="dv">3</span>)<span class="op">,</span></span>
+<span id="cb15-34"><a href="#cb15-34" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">1</span><span class="op">,</span> _<span class="op">,</span> {<span class="dv">9</span><span class="op">,</span> <span class="dv">1</span><span class="op">,</span> b7}<span class="op">,</span> <span class="dv">5</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">6</span>)<span class="op">,</span></span>
+<span id="cb15-35"><a href="#cb15-35" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">9</span><span class="op">,</span> <span class="dv">11</span><span class="op">,</span> <span class="dv">9</span><span class="op">,</span> _)<span class="op">.</span><span class="fu">root</span>(<span class="dv">2</span>)<span class="op">,</span></span>
+<span id="cb15-36"><a href="#cb15-36" aria-hidden="true" tabindex="-1"></a>  (_<span class="op">,</span> <span class="dv">13</span><span class="op">,</span> (<span class="dv">3</span><span class="op">,</span> <span class="dv">9</span>)<span class="op">,</span> <span class="dv">1</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">5</span>)<span class="op">,</span></span>
+<span id="cb15-37"><a href="#cb15-37" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb15-38"><a href="#cb15-38" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-39"><a href="#cb15-39" aria-hidden="true" tabindex="-1"></a><span class="fu">LOOP</span>(piano<span class="op">,</span> bass<span class="op">,</span> lead)</span></code></pre></div>
+<h3 id="小節1コード並置-root-共有">9.2 2小節1コード(並置 + root
+共有)</h3>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>piano<span class="op">.</span><span class="fu">play</span>(</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> m7<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> m7)(<span class="dv">0</span><span class="op">,</span> m7<span class="op">,</span> [_1<span class="op">,</span> _b3<span class="op">,</span> <span class="dv">5</span>]<span class="op">,</span> <span class="dv">0</span>)<span class="op">.</span><span class="fu">root</span>(<span class="dv">3</span>)<span class="op">,</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  (<span class="dv">0</span><span class="op">,</span> m7<span class="op">,</span> <span class="dv">0</span><span class="op">,</span> m7)<span class="op">.</span><span class="fu">root</span>(<span class="dv">6</span>)<span class="op">,</span></span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h3 id="ユーザー定義モード">9.3 ユーザー定義モード</h3>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> holdsworth1 <span class="op">=</span> <span class="fu">mode</span>(<span class="dv">1</span><span class="op">,</span> <span class="dv">2</span><span class="op">,</span> b3<span class="op">,</span> <span class="dv">4</span><span class="op">,</span> #<span class="dv">5</span><span class="op">,</span> <span class="dv">6</span><span class="op">,</span> <span class="dv">7</span><span class="op">,</span> <span class="dv">9</span><span class="op">,</span> #<span class="dv">11</span><span class="op">,</span> b13<span class="op">,</span> <span class="dv">7</span><span class="op">^+</span><span class="dv">1</span>)</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>lead<span class="op">.</span><span class="fu">mode</span>(holdsworth1)        <span class="co">// シーケンス既定として</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a>lead<span class="op">.</span><span class="fu">play</span>((<span class="dv">1</span><span class="op">,</span> <span class="dv">4</span><span class="op">,</span> <span class="dv">8</span><span class="op">,</span> <span class="dv">11</span>)<span class="op">,</span> (<span class="dv">9</span><span class="op">,</span> _<span class="op">,</span> <span class="dv">5</span><span class="op">,</span> <span class="dv">2</span>))</span></code></pre></div>
+<h3 id="ポリメーター-ハーモニックリズムの干渉mlts-拡張">9.4 ポリメーター
+× ハーモニックリズムの干渉(MLTS 拡張)</h3>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a>bass<span class="op">.</span><span class="fu">beat</span>(<span class="dv">7</span> by <span class="dv">8</span>)   <span class="co">// bass のコードチェンジは自身の 7/8 小節構造に従い、</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a>                    <span class="co">// 4/4 の piano とは位相がずれて周期的に干渉する</span></span></code></pre></div>
+<hr />
+<h2 id="open-questions-実装中に確定">10. Open Questions
+(実装中に確定)</h2>
+<ol type="1">
+<li><code>(1)(2)</code> 並置の現行パーサー挙動の確認(§3.3
+の前提)。兄弟展開でない場合は並置意味論の定義から着手。</li>
+<li><code>{ }</code>
+オーバーラップ量の既定値(リスニングテストで決定)。</li>
+<li>mode の <code>period()</code> 推定規則の境界ケース(最終要素が
+<code>^</code>/<code>~</code> 修飾を持つ場合)。</li>
+<li><code>import chords</code> の名前空間設計(グローバル束縛か
+<code>chords.m7</code> か)。当面はグローバル束縛 + 衝突時 warning
+を推奨。</li>
+<li><del>括弧のドメイン非依存性</del> →
+<strong>確定(2026-06-12)</strong>: audio シーケンス内の <code>[ ]</code>
+は v1.1 では <strong>diagnostic エラーとして予約</strong>する(“not yet
+supported in audio
+sequences”)。黙って無視せずエラーにすることで構文を予約し、将来の開放(複数スライスの同時トリガー=レイヤリング)を純粋な追加変更にする。GitHub
+Issue 化して先送り。関連 Issue として、トランジェント検出ベースの
+<code>slice()</code>(等分 <code>chop</code>
+に対するアタックポイント分割)も別途起票し相互参照する(<code>[ ]</code>
+audio 開放と組み合わせるとスライスレイヤリングが可能になるため)。</li>
+</ol>
+</body>
+</html>

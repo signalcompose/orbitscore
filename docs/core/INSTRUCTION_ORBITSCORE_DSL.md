@@ -9,6 +9,10 @@ All implementation, testing, and planning must strictly follow this specificatio
 **Last Updated**: 2025-01-09
 **Implementation Status**: ✅ Core features implemented and tested (205/205 tests passing)
 
+> 🎯 **進行中の v1.1 拡張（Pitch DSL / MIDI・Session Log・WCTM）の仕様は [`docs/specs-v2/`](../specs-v2/) が正本**（締切 2026-08-07、進捗は GitHub Epic #224）。
+> 各フェーズのゲート時に、当該機能のセクションを本ドキュメント（SoT）へ反映し、specs-v2 との乖離を作らないこと（指示書 §8.1-1）。
+> 読み順: [IMPLEMENTATION_INSTRUCTIONS](../specs-v2/IMPLEMENTATION_INSTRUCTIONS.html) → [PITCH_DSL_SPEC_v1.1](../specs-v2/PITCH_DSL_SPEC_v1.1.html) → [SESSION_LOG_SPEC_v1](../specs-v2/SESSION_LOG_SPEC_v1.html) → [WCTM_SYSTEM_SPEC_v1](../specs-v2/WCTM_SYSTEM_SPEC_v1.html) → [DESIGN_DISCUSSION_RECORD](../specs-v2/DESIGN_DISCUSSION_RECORD.md)。
+
 ---
 
 ## 1. Initialization

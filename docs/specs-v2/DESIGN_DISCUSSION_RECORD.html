@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>Design Discussion Record — OrbitScore</title>
+  <style>
+    html {
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <style>
+  :root{
+    --ink:#16181D; --paper:#FAFAF8; --sub:#5A5A60; --hair:#E4E4E0;
+    --rec:#B4231F; --recbg:#FFF3F2; --panel:#F2F2EF; --code:#F4F4F1;
+  }
+  *{box-sizing:border-box}
+  html{font-size:16px}
+  body{
+    margin:0; padding:0; background:var(--paper); color:var(--ink);
+    font-family:"Hiragino Sans","Yu Gothic","Noto Sans JP",-apple-system,sans-serif;
+    line-height:1.95; font-feature-settings:"palt";
+  }
+  main,body>header,body>*{max-width:880px}
+  body{padding:48px 28px 96px; margin:0 auto;}
+  h1{
+    font-size:1.9rem; line-height:1.4; letter-spacing:.01em; font-weight:700;
+    margin:0 0 .4rem; border-bottom:3px solid var(--ink); padding-bottom:.6rem;
+  }
+  /* meta strip: doc header styled like an .orbslog meta line */
+  h1 + p strong:first-child{color:var(--ink)}
+  .metaline, h1 + p em{font-style:normal}
+  h2{
+    font-size:1.28rem; font-weight:700; margin:3.2rem 0 1rem;
+    padding:.35rem 0 .35rem .9rem; border-left:4px solid var(--ink);
+  }
+  h3{font-size:1.05rem; font-weight:700; margin:2.2rem 0 .8rem; color:var(--ink)}
+  h3::before{content:"§ "; color:var(--rec); font-weight:600}
+  p{margin:.9rem 0}
+  strong{font-weight:700}
+  a{color:var(--ink); text-decoration-color:var(--rec); text-underline-offset:3px}
+  hr{border:none; border-top:1px solid var(--hair); margin:2.6rem 0}
+  ul,ol{padding-left:1.5em} li{margin:.35rem 0}
+  blockquote{
+    margin:1.2rem 0; padding:.7rem 1.1rem; background:var(--recbg);
+    border-left:3px solid var(--rec); color:var(--ink); font-size:.95rem;
+  }
+  blockquote p{margin:.3rem 0}
+  code{
+    font-family:"SF Mono",Menlo,Consolas,monospace; font-size:.86em;
+    background:var(--code); padding:.1em .35em; border-radius:3px;
+  }
+  pre{
+    background:var(--code); border:1px solid var(--hair); border-radius:6px;
+    padding:1rem 1.2rem; overflow-x:auto; line-height:1.65; margin:1.2rem 0;
+  }
+  pre code{background:none; padding:0; font-size:.84rem}
+  table{
+    border-collapse:collapse; width:100%; margin:1.4rem 0; font-size:.92rem; line-height:1.7;
+  }
+  th{
+    text-align:left; border-bottom:2px solid var(--ink); padding:.5rem .7rem;
+    font-weight:700; background:none;
+  }
+  td{border-bottom:1px solid var(--hair); padding:.55rem .7rem; vertical-align:top}
+  tr:hover td{background:var(--panel)}
+  svg{display:block; margin:1.6rem auto; background:#fff; border:1px solid var(--hair); border-radius:6px; padding:10px}
+  /* doc id strip */
+  header#title-block-header{display:none}
+  .docmeta{
+    font-family:"SF Mono",Menlo,monospace; font-size:.74rem; color:var(--sub);
+    background:var(--panel); border:1px solid var(--hair); border-radius:4px;
+    padding:.5rem .8rem; margin:0 0 2.4rem; overflow-x:auto; white-space:nowrap;
+  }
+  .docmeta .dot{color:var(--rec)}
+  @media (max-width:640px){ body{padding:28px 16px 64px} h1{font-size:1.5rem} }
+  @media print{ body{max-width:none} svg{break-inside:avoid} }
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">Design Discussion Record — OrbitScore</h1>
+<div class="docmeta">{"type":"meta"<span class="dot">,</span>"doc":"DESIGN_DISCUSSION_RECORD","purpose":"paper-source","spans":"pitch-DSL / record / WCTM","date":"2026-06-12"}</div>
+</header>
+<h1 id="design-discussion-record-orbitscore-pitch-dsl">Design Discussion
+Record — OrbitScore Pitch DSL</h1>
+<p><strong>目的</strong>: 本記録は OrbitScore v1.1 ピッチ DSL
+の設計過程を、論文執筆(JASPM / ICLC 2027 / TENOR
+想定)の一次資料として保存するもの。設計の最終形だけでなく、<strong>棄却された案とその棄却理由</strong>を残すことに主眼がある。記譜法設計における理論的選択がどのような帰結を生むかの実例として、修論の「記譜法がリズムの多様性を構造的に制約する」という主張を和声次元に拡張する素材になる。</p>
+<p><strong>日付</strong>: 2026-06-12 <strong>参加者</strong>:
+大和比呂志(設計判断) / Claude(調査・草案・対案) <strong>文脈</strong>:
+ICMC 2026 Hamburg 発表(Paper #721)後、ROADMAP v1.1 “MIDI Integration”
+の具体化。LinkAudio 統合(Epic #187)完了直後。</p>
+<hr />
+<h2 id="設計の出発点">1. 設計の出発点</h2>
+<p>技術的動機は単純: VST ホスティング(開発コスト高)を避け、IAC Bus
+経由でソフトシンセを鳴らす。しかし MIDI 出力は「音高」の概念を DSL
+に要求するため、ピッチ記譜の設計問題が必然的に開いた。</p>
+<p><strong>根底にある問題定義(2026-06-12
+の議論末尾で大和が明示)</strong>: <strong>「譜面を簡単に書くための DSL
+が存在しないこと」</strong>。OrbitScore
+の自己理解として、ライブコーディング言語が結果的に譜面と同型だったのではなく、譜面記述
+DSL
+の不在が出発点であり、ライブコーディングはその実行形態である——という因果の向きを記録しておく。既存言語の布置で言えば:
+LilyPond / ABC / MusicXML
+は譜面記述言語だが「簡単」ではなく実行(演奏)もしない。TidalCycles
+系は簡単で実行可能だが記譜的構造を志向しない。<strong>「簡単に書けて、実行可能で、記譜構造を保存する」の三点を同時に満たす空白</strong>に
+OrbitScore を置く。この position claim は TENOR
+投稿の骨格にそのまま使える。</p>
+<p>初期方針(大和):
+クラシックの記譜ではなくバークリーメソッド的アプローチ。ただしコードシンボル(C7,
+Dm7)は構文に入れない。ルートからの度数を 1, 9, 3, 11, 5, 13, 7
+のテンション数字で扱い、メロディーをコード構成音の度数換算で書けるようにする。</p>
+<p>歴史的前提: v1.0 仕様(2025、アーカイブ済み)は MIDI
+ベースのクロマチック度数システム(1-12 = 半音階、0 =
+休符)だった。v2.0/v3.0
+でオーディオベースに移行した際、丸括弧は時間分割ネストに再割当てされ、v1.0
+の和音記法 <code>(1, 5, 8)</code> は現行文法と衝突する状態にあった。</p>
+<hr />
+<h2 id="設計の変遷4-イテレーション">2. 設計の変遷(4 イテレーション)</h2>
+<h3 id="iteration-1-グローバルハーモニーレーン提案-棄却">Iteration 1:
+グローバルハーモニーレーン(提案 → 棄却)</h3>
+<p><strong>提案(Claude)</strong>: コード進行を
+<code>global.harmony</code>
+という独立タイムラインとして持ち、メロディーシーケンスは「イベント発音時刻に鳴っているコード」に対して度数解決する。<code>h.play()</code>
+の差し替えで全メロディーが自動リハーモナイズされる。</p>
+<p><strong>棄却(大和)</strong>:
+「ハーモニーコンテキストとして和音を分けてしまうと、コードとメロディが分離してしまう」。MLTS
+は小節線のずれや拍子の独立を許すが、譜面の中身は通常のメロディと和声を<strong>同時に</strong>扱えるものであるべき。</p>
+<p><strong>棄却の理論的含意(事後の分析)</strong>:
+グローバルハーモニーレーンは「全シーケンスが共有する単一のハーモニックタイムライン」、すなわち<strong>共有グリッドの再導入</strong>だった。拍子とテンポが層ごとに独立できるのに和声だけグローバル格子に縛られるのは
+MLTS
+の思想と矛盾する。また、これはリードシートの構造(コードシンボルがメロディーとは別チャンネルとして上部に浮く)の無批判な移植であり、修論で批判対象とした記譜形式の制約をそのまま持ち込むものだった。<strong>リードシートという記譜形式が「ハーモニーは旋律から分離した共有レイヤーである」という前提を埋め込んでいる</strong>ことが、DSL
+設計の失敗として具体的に観察された——論文での中心的エピソードになりうる。</p>
+<h3 id="iteration-2-fieldroot-scale-スコープ化提案-部分棄却">Iteration
+2: field(root, scale) — スコープ化(提案 → 部分棄却)</h3>
+<p><strong>提案(Claude)</strong>:
+ピッチコンテキストをリズム木のグループに付くレキシカルスコープ
+<code>.field(root, chordScale)</code>
+にする。度数はコードスケールへのインデックス(<code>pitch = scale[(n-1) mod 7] + oct</code>)。1,3,5,7
+= コードトーン、9,11,13 = テンション、2,4,6 =
+同ピッチクラスのオクターブ内配置が mod 7 から自然に導出される。</p>
+<p><strong>この時点で確立し最終仕様まで生き残った要素</strong>: -
+ピッチコンテキストは時間的参照ではなくレキシカルスコープ(構文上の入れ子)。ライブコーディングでの予測可能性が向上。
+- ハーモニックリズムが層ごとに独立 →
+<strong>和声フィールドの干渉</strong>という新しい層が追加機構ゼロで MLTS
+に組み込まれる(5/4 のパートと 4/4
+のパートでコードチェンジの位相が周期的にずれる)。 -
+転調・セカンダリードミナントが入れ子で書ける(階層的調性構造がリズム木と同じ構造原理に乗る)。
+- 検証課題: 3-6-2-5
+進行のサンプルで、フィールド境界をまたぐタイが「発音時ピッチ保持」の定義からコモントーンの機能再解釈(II
+上の 9度 E が G7 上で 13
+として読み替わる)を追加仕様なしに導出することを確認。</p>
+<p><strong>部分棄却(大和)</strong>: scale
+指定を意味論の基底に置くことへの疑義。「モード自体は度数の表記で考えればいいもの」「意味論的にモードに寄せてしまうのは自由度的には下がる」。</p>
+<h3 id="iteration-3-root-基底-mode-オプトイン確定">Iteration 3: root
+基底 + mode オプトイン(確定)</h3>
+<p><strong>分析(Claude、大和の指摘を受けて)</strong>: scale-index
+方式は<strong>クオリティの決定権を記譜からスケール宣言へ移す</strong>設計だった。「同じ
+[1,3,5,7]
+がコードごとに別クオリティに解決される」一点の優雅さと引き換えに:</p>
+<ol type="1">
+<li>表記の自己完結性を失う(<code>3</code> の実音が遠隔の mode
+宣言に依存。譜面の一部だけ読んで歌えない)</li>
+<li>7
+音コレクションに度数体系を縛る(クロマチシズムが二重写像になる)</li>
+<li><strong>バークリーのテンション命名(T9, Tb9, T#11,
+Tb13)自体がルートからの音程クオリティで定義されており、スケールインデックスではない</strong>——前案はコードスケール理論の「スケール」側に引きずられた設計であり、テンション表記の側から見れば
+root 方式が原型</li>
+<li>LLM パイプラインで隠れ状態(遠隔文脈依存)が増える</li>
+</ol>
+<p><strong>確定仕様</strong>: 基底意味論は root スコープ(度数 = Ionian
+基準インターバル + b/#)。E-7 のコードトーンは
+<code>[1, b3, 5, b7]</code>
+と書き、クオリティが譜面上に見える。変化記号の出現箇所 =
+スケール外の音、という視覚的対応が成立する(従来のコードシンボル+音名表記にない性質)。</p>
+<p><strong>mode の再定義(大和)</strong>: mode
+の価値は教会旋法プリセットではなく、<strong>「度数が何を指すか」の空間そのものを演奏者が定義できる</strong>こと。例としてアラン・ホールズワースの
+2 オクターブモード。→ mode =
+ユーザー定義ピッチ格子(<code>period()</code>
+で非オクターブ周期も許容)、教会旋法はそのライブラリの一頁。v1.0 の
+<code>octmul</code>(度数間音程係数)の問題意識が <code>period()</code>
+として正統に回収された。</p>
+<p><strong>構文の簡素化(大和)</strong>: <code>var</code> 束縛 +
+<code>field()</code> 経由は不要。<code>.root(F)</code>
+をグループに直付けすればよい。var は中間オブジェクト
+<code>field()</code> の人工的な産物だった。</p>
+<h3 id="iteration-4-chord-値声部タイ合成規則確定">Iteration 4: chord
+値・声部タイ・合成規則(確定)</h3>
+<p><strong>chord 値(大和)</strong>:
+<code>var m7 = chord([1, b3, 5, b7])</code>
+のようにルート未束縛の度数スタックを値として定義し、ライブラリ化する。「これと
+field でコードのルートを定義するのはちょっと別」——root
+はコンテキスト、chord は値、という型的分離。</p>
+<p><strong>ビルダー API の棄却(大和)</strong>: Claude
+が将来課題として挙げた <code>m7.add(9)</code> / <code>m7.omit(5)</code>
+等に対し、「<code>chord([1, b3, -5, b7])</code>
+みたいに書けばいいのでは」。→ メソッド API 撤回。値合成(スタック内
+spread <code>[m7, 9]</code> + 除去
+<code>-5</code>)で全ケースをカバー。定義サイトと使用サイトで同一規則。<code>-</code>
+の照合は字面一致(解決後ピッチ照合は <code>-3</code>
+が文脈依存になり予測不能のため棄却)。</p>
+<p><strong>声部タイ(大和の問題提起 → Claude 設計)</strong>:
+「コードワークの中でコモントーンをタイで繋ぐとかそういう処理」。→
+スタック内 <code>_</code>
+接頭辞(<code>[1, b3, _5, _b7]</code>)。照合は<strong>解決後ピッチの一致</strong>(声部位置対応ではない——声部数が異なる和音間でも壊れず、ライブ差し替え時は発音にフォールバック)。自動版
+<code>.hold()</code>
+はスタック間限定(単音連打に適用するとリズムが消える)。ダイアトニックな 4
+度進行ではコモントーンが常に「前の 1・b3 → 次の
+5・7」に現れるため、voice leading の記譜がこの一機構で成立する。</p>
+<p><strong>複数グループの root 共有(大和の質問 → 確定)</strong>:
+「最後の root が採用される?」に対し、タプル並置
+<code>(...)(...).root(X)</code>
+で並置全体に適用、と確定。外側括弧で包む案は時間分割を変えてしまい、last-wins
+は差し替え時の消し忘れが無音事故になるため棄却。同一グループへの重複指定は
+diagnostic エラー。</p>
+<hr />
+<h2 id="最終仕様の骨格詳細は-pitch_dsl_spec_v1.1.md">3.
+最終仕様の骨格(詳細は PITCH_DSL_SPEC_v1.1.md)</h2>
+<ul>
+<li><code>( )</code> 時間分割 / <code>[ ]</code> スタック(同時) /
+<code>{ }</code> レガート</li>
+<li><code>_</code> タイ(イベントレベル)・<code>_n</code>
+声部タイ(スタック内接頭辞)・<code>-n</code> 除去</li>
+<li><code>.root(音名|キー度数)</code> =
+基底コンテキスト、<code>.mode(格子)</code> =
+オプトイン、レキシカルスコープ(内→外→seq 既定)</li>
+<li><code>chord([...])</code> = ルート未束縛の値、spread 合成</li>
+<li>度数 = Ionian 基準 + b/#(root)/ 格子インデックス(mode)</li>
+<li>MIDI: IAC Bus、active note tracking、SC 経路と併走可</li>
+</ul>
+<hr />
+<h2 id="論文化に向けた論点メモ">4. 論文化に向けた論点メモ</h2>
+<h3 id="jaspm記譜法がリズムの多様性を構造的に制約するへの接続">4.1
+JASPM(記譜法がリズムの多様性を構造的に制約する)への接続</h3>
+<ul>
+<li>Iteration 1 の失敗が直接の証拠: リードシート形式(コードシンボル =
+分離チャンネル)を DSL
+に移植すると、和声が共有グリッドに縛られ、層独立のハーモニックリズムが<strong>記述不能</strong>になる。記譜形式の前提が表現可能な音楽の空間を切り詰める実例。</li>
+<li>逆方向の証拠も: 度数 =
+スコープ付き解決という設計が、コードシンボル表記では書きにくい階層的調性構造(入れ子の転調)を一段の入れ子で書けるようにした。記譜形式の選択が表現空間を<strong>拡張</strong>する方向の実例。</li>
+<li>五線譜・リードシート・DAW
+グリッド批判(修論前半)に対する「では代替はどう設計されるべきか」の構成的応答として位置付けられる。</li>
+</ul>
+<h3 id="iclc-2027テーマ-dialoguesへの接続">4.2 ICLC 2027(テーマ
+“Dialogues”)への接続</h3>
+<ul>
+<li>レキシカルスコープ vs 時間的参照:
+ライブコーディングにおける<strong>予測可能性</strong>の設計原理。画面上のコード片を文脈遡行なしに音として読めるか(自己完結性)は演奏上の認知負荷に直結する。</li>
+<li>和声フィールドの干渉 = MLTS
+の和声次元拡張。ポリメーター下でコードチェンジの位相がずれる現象は、演奏作品(ジャズコンボ
++ 弦楽四重奏の会場提供)で直接デモ可能。</li>
+<li>LLM 媒介パイプライン(Guitar → Quimera → LLM → DSL)との関係:
+クオリティが表記に明示される = 隠れ状態が少ない表記は、LLM
+による生成・解析の双方で遠隔文脈依存を減らす。「人間とLLMの双方にとって読みやすい記譜」という設計基準は
+Dialogues テーマに乗る。</li>
+</ul>
+<h3 id="tenor記譜テクノロジーへの接続">4.3
+TENOR(記譜テクノロジー)への接続</h3>
+<ul>
+<li>mode =
+ユーザー定義ピッチ格子(非オクターブ周期・マイクロトーナル許容)は、度数記譜の一般化として単独で議論可能。</li>
+<li>タイの「発音時ピッチ保持」定義からコモントーン機能再解釈が導出される件は、記譜の意味論設計が音楽理論的現象を生成する例。</li>
+</ul>
+<h3 id="設計方法論として">4.4 設計方法論として</h3>
+<ul>
+<li><strong>不変条件の配当</strong>: <code>*n</code>
+反復とパターン変数は、ピッチ DSL の文脈(12小節 root
+共有の冗長性)で生まれたが、リズム木の構造操作であるためピッチ意味論に依存せず、audio
+シーケンスにそのまま移転した(大和の指摘により確認)。「構造=リズム、値=コンテンツ」という設計不変条件が、一方のドメインで設計した機能を他方へ無償で移転させた最初の実例。記譜言語における直交性の価値の具体的証拠として論文で使える。逆にこの原則は
+<code>[ ]</code> スタックの audio
+適用可否(レイヤリング)という新しい問いも開いた(spec §10-5)。</li>
+<li>本記録自体が「LLM との対話による DSL
+設計」の事例。大和が方向と棄却判断を、Claude
+が調査・形式化・帰結の分析を担う分業。ACM/Okitegami 論文(LLM
+コーディングエージェントの暗黙フィードバック)との接続可能性。</li>
+<li>4
+回のイテレーションすべてで、棄却の根拠が「理論との整合(MLTS)」「演奏時の認知負荷」「事故耐性(ライブ差し替え)」のいずれかに還元される。DSL
+設計の評価軸として明文化できる。</li>
+</ul>
+<hr />
+<h3
+id="リアルタイム譜面生成による人間奏者の駆動2026-06-12-追記別エピック">4.5
+リアルタイム譜面生成による人間奏者の駆動(2026-06-12
+追記、別エピック)</h3>
+<p>大和の提起:
+ソフトシンセではなく<strong>人間の奏者を駆動する</strong>——弦楽四重奏 +
+ライブコーディング(ICMC / ICLC)。ICLC 2027 Antwerp
+は弦楽四重奏を会場提供しており、テーマ “Dialogues”
+に「コードを書く人間と譜面を読む人間の対話」として正面から接続できる。</p>
+<p>OrbitScore
+がこれに構造的に向いている根拠(設計の偶然ではなく帰結):</p>
+<ol type="1">
+<li><strong>度数表記が音名スペリングを保存する</strong>: root + Ionian
+基準インターバル + b/# は綴り(D#/Eb)を一意に決定する。MIDI
+ノート番号派生の記譜が失う情報を、ピッチ DSL
+の基底意味論が最初から保持している。タイ <code>_</code>・レガート
+<code>{ }</code>・声部タイ <code>_n</code> も記譜要素に直接対応。→ spec
+§7-0(シンボリックピッチのパイプライン保持)として v1.1
+実装に前提条件を埋め込み済み。</li>
+<li><strong>quantize = 視奏ルックアヘッド</strong>:
+仕様上、<code>play()</code>
+差し替えは次の小節頭まで待機するため、次小節の内容は常に1小節前に確定している。ライブコーディングの量子化機構が、そのまま初見演奏に必要な先読みバッファとして機能する。<code>quantize("2bar")</code>
+で猶予を延長可能。<strong>※実装が仕様通りかは未検証(大和指摘)。v1.1
+Phase 0 の検証項目に追加済み。</strong></li>
+<li><strong>奏者駆動スタックの構成要素</strong>: M5StickS3 OSC
+パルス配信(奏者ごとのポリリズミックメトロノーム)は<strong>構想段階であり未実装</strong>——譜面表示と合わせて新規開発となる。各奏者が自分の拍子・自分の小節線で譜面を見る——修論の「五線譜は
+MLTS
+を記述できない」問題への実演的応答、という位置付けは変わらない。</li>
+</ol>
+<p><strong>経路の収束(大和の指摘による)</strong>: 当初 Max/MaxScore
+経由をプロトタイプ経路として検討したが、ネイティブ経路(node で Web
+を立て socket 通信で譜面を見る)が直接可能である以上、Max
+を経由する必要性自体がない、との指摘で棄却。Max
+案の唯一の利点「追加実装ゼロ」も、Max
+側セットアップを考えれば成立しない。ブラウザクライアントは奏者への配布が
+URL ひとつで済み、拍キュー(視覚メトロノーム、各奏者自身の拍子)も同一
+WebSocket に同居できるため、初期構成は「奏者一人 =
+Webページ一つ」に畳み込まれる。M5StickS3
+パルスデバイス構想は触覚フィードバック段階の拡張に位置付け直し。</p>
+<p><strong>追加の構造的優位(2026-06-12、議論中に発見)</strong>: play()
+のネスト分割木は記譜のリズム構造(連符の入れ子)と同型である。<code>(1, (2, 3))</code>
+はそのまま「2分割の後半が2連符」という記譜構造に対応する。MIDI
+からの譜面起こしに必須の転写問題(クオンタイズ・連符推定・連桁判定)が<strong>最初から存在しない</strong>。スペリング保存(§7-0)と合わせると、「ライブコーディング言語から譜面を生成する」のではなく<strong>「この言語の内部表現が既にほぼ譜面である」</strong>という主張が立つ。記譜法を批判的に再設計した言語が、結果として記譜への逆変換可能性を最大限保存していた——修論テーゼの構成的裏付けとして論文の核に近い。</p>
+<p>なお実装の優先順位は明確で、まず v1.1 の核(ノート情報の体系的記述 +
+IAC → Ableton Live のソフトシンセ)。記録・エフェクトは Ableton
+エコシステムに委譲する、という分業がこのフェーズの設計思想。譜面エピックはその後。</p>
+<p>先行研究系譜: INScore (Fober/GRAME、OSC
+駆動リアルタイム楽譜)、SmartVox (Bell、分散譜面配信)、Decibel
+ScorePlayer、Quintet.net / MaxScore (Hajdu、HfMT Hamburg — ICMC 2026
+開催地であり接触可能性)、Magnusson の live notation 論。</p>
+<h3 id="audio-側への波及と棄却2026-06-12">4.6 audio
+側への波及と棄却(2026-06-12)</h3>
+<p><code>[ ]</code> スタックの audio
+適用(スライスの同時トリガー=レイヤリング)は「魅力的だが使用イメージが不明瞭」(大和)として
+v1.1 では開放せず、<strong>diagnostic
+エラーとして構文予約</strong>(将来の開放を純粋な追加変更にする)+ Issue
+化。同時に提起された transient ベースの <code>slice()</code>(chop
+の等分に対するアタックポイント分割)も Issue
+として記録。設計リソースは「ノート情報をシンプルかつ体系的に記述できるようにする」方向に集中するという優先順位判断。</p>
+<h2 id="決定ログ">5. 決定ログ</h2>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>#</th>
+<th>決定</th>
+<th>棄却した代替案</th>
+<th>主な根拠</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>1</td>
+<td>ハーモニーはリズム木内のレキシカルスコープ</td>
+<td>グローバル進行レーン</td>
+<td>共有グリッド再導入の回避(MLTS)、旋律と和声の同居</td>
+</tr>
+<tr class="even">
+<td>2</td>
+<td>基底意味論 = root(Ionian 基準 + b/#)</td>
+<td>scale-index 基底</td>
+<td>自己文書性、クロマチシズムの自由度、テンション命名の原義、LLM
+適性</td>
+</tr>
+<tr class="odd">
+<td>3</td>
+<td>mode = ユーザー定義ピッチ格子(オプトイン)</td>
+<td>教会旋法プリミティブ</td>
+<td>自由度(2オクターブモード等)、octmul の正統な回収</td>
+</tr>
+<tr class="even">
+<td>4</td>
+<td><code>.root()</code> グループ直付け、メソッド形のみ</td>
+<td>var 必須 / プロパティ形 <code>.root.F</code></td>
+<td>構文の簡素化 / <code>F#</code> で破綻</td>
+</tr>
+<tr class="odd">
+<td>5</td>
+<td>chord = ルート未束縛の値、spread + <code>-</code> 合成</td>
+<td>ビルダー API</td>
+<td>一行定義で足りる言語に API は過剰、定義/使用サイトの規則統一</td>
+</tr>
+<tr class="even">
+<td>6</td>
+<td><code>-</code> 除去は字面一致</td>
+<td>解決後ピッチ照合</td>
+<td>予測可能性</td>
+</tr>
+<tr class="odd">
+<td>7</td>
+<td>声部タイはピッチ照合 + 発音フォールバック</td>
+<td>声部位置対応</td>
+<td>声部数変化への頑健性、ライブ差し替え耐性</td>
+</tr>
+<tr class="even">
+<td>8</td>
+<td><code>.hold()</code> はスタック間限定</td>
+<td>単音連打にも適用</td>
+<td>リズム消失の回避</td>
+</tr>
+<tr class="odd">
+<td>9</td>
+<td>root 共有 = タプル並置 + チェーン</td>
+<td>外側括弧 / last-wins</td>
+<td>時間分割の保存 / 消し忘れ事故の回避</td>
+</tr>
+<tr class="even">
+<td>10</td>
+<td>同一グループ root 重複 = エラー</td>
+<td>last-wins</td>
+<td>同上</td>
+</tr>
+<tr class="odd">
+<td>11</td>
+<td>無指定区間は seq 既定(stateless)</td>
+<td>直前スコープ維持</td>
+<td>ライブでの状態追跡負荷(※実運用で再評価予定)</td>
+</tr>
+<tr class="even">
+<td>12</td>
+<td>key 未宣言時の数値 root = エラー</td>
+<td>C 基準フォールバック</td>
+<td>事故防止</td>
+</tr>
+<tr class="odd">
+<td>13</td>
+<td>括弧割当: <code>[ ]</code> 同時 / <code>{ }</code> レガート /
+<code>_</code> タイ</td>
+<td>v1.0 の <code>(1,5,8)</code> 和音</td>
+<td>丸括弧は時間分割に割当済み</td>
+</tr>
+<tr class="even">
+<td>14</td>
+<td>MIDI と SC オーディオは併走可</td>
+<td>LinkAudio 型の排他</td>
+<td>排他にする技術的理由がない</td>
+</tr>
+<tr class="odd">
+<td>15</td>
+<td>長スパン root
+共有は改行並置(縦書き)、チェーンは並置を閉じる(カンマ忘れをパースエラー化)</td>
+<td>専用ブロック構文の新設</td>
+<td>既存 multiline
+規則からの導出で足りる。カンマ=スコープ境界の意味付け</td>
+</tr>
+<tr class="even">
+<td>16</td>
+<td><code>*n</code> = 並置への書き換え(スロット占有反復)。v1.1
+に昇格、audio にも適用</td>
+<td>Tidal 型 <code>*</code>(スロット内分割) / 将来送り</td>
+<td>カンマ書き換えでは root 共有が壊れる。ドメイン非依存の構造操作</td>
+</tr>
+<tr class="odd">
+<td>17</td>
+<td>パターン変数 = 裸タプル束縛、評価時値渡し</td>
+<td>コンストラクタ包装 / リアクティブ束縛</td>
+<td>文法の簡素化 / quantize との相互作用と暗黙状態の回避</td>
+</tr>
+<tr class="even">
+<td>18</td>
+<td>audio の <code>[ ]</code> は diagnostic エラーとして構文予約 + Issue
+化</td>
+<td>即時開放 / 黙って無視</td>
+<td>使用イメージ不明瞭、ノート記述への集中 /
+無視は将来の意味付けと衝突</td>
+</tr>
+<tr class="odd">
+<td>19</td>
+<td>TimedEvent はシンボリックピッチを保持、MIDI
+番号化は出力最終段のみ</td>
+<td>解決済みノート番号の伝搬</td>
+<td>譜面生成(人間奏者駆動)の前提。スペリング・タイ・スラーは番号化で不可逆喪失</td>
+</tr>
+</tbody>
+</table>
+<h2 id="未解決将来再訪">6. 未解決・将来再訪</h2>
+<ul>
+<li>「2小節1コード」記法は並置で解決したが、12小節級の同型反復では並置の冗長性が残る。反復糖衣
+<code>(...)​*n</code>(並置への純粋な書き換え)を将来候補として記録。</li>
+<li>決定
+11(stateless)はジャズの臨時記号感覚(直前維持)と割れる可能性を当初から認識済み。演奏実践後に再評価。</li>
+<li>per-event 修飾(<code>@</code>
+音価・ベロシティ)、CC/PC、MPE、8音コレクションのテンション規則は v1.1
+スコープ外として明示的に先送り。</li>
+</ul>
+<hr />
+<h2 id="第二議論-記録-2026-06-12ピッチ-dsl-確定後">7. 第二議論: 記録
+(2026-06-12、ピッチ DSL 確定後)</h2>
+<p><strong>問題提起(大和)</strong>:
+ライブコーディングには時間軸の記録がない。MIDI/LinkAudio
+でのレコーディングは結果であり過程は消える。コードは再利用可能だが<strong>再現性は担保されていない</strong>。テキスト実行であることを利用し、実行ログから時間軸の記録を取り、再現を可能にしたい。</p>
+<p>仕様は SESSION_LOG_SPEC_v1.md
+に確定。ここでは論文素材となる概念的決定を記録する。</p>
+<h3 id="記録録音の区別分析語彙として">7.1
+記録/録音の区別(分析語彙として)</h3>
+<p>記録対象の三層(評価ログ/キーストローク/エンジンイベント)のうち、キーストローク・画面捕捉を大和が「それは記録ではなく録音に近い」として棄却。この線引きを概念化すると:
+<strong>記録 = 原因の保存(起きたことを引き起こすもの)、録音 =
+現象の保存(起きたことの像)</strong>。評価ログは前者。日本語の「記録/録音」の対が分析語彙としてそのまま機能するため、JASPM
+では日本語のまま概念化する価値がある。</p>
+<p>Seeger の prescriptive / descriptive notation(1958)との接続:
+録音・スクリーンキャプチャは descriptive、楽譜は
+prescriptive。因果ログは <strong>descriptive に取得され prescriptive
+として機能する第三項</strong>であり、この古典的二分法を潰す。「ライブコーディングの時間軸記録」への答えが、録音でも録画でもなく<strong>再実行可能かつ記譜可能な文書</strong>である、という主張の理論的フック。</p>
+<h3 id="因果的同一性としての再現性">7.2 因果的同一性としての再現性</h3>
+<p>ランダム(<code>r</code>)の扱いで再現性の定義が確定した。大和:
+「r=random
+なども<strong>つまりは因果でしかない</strong>ので『ランダム』という再現がされていればいい」。→
+ログは原因(コード)を記録し、リプレイは再度ランダムを引く。本システムの再現性は<strong>因果的同一性であって音響的同一性ではない</strong>。「ここは毎回違ってよい」という演奏者の意図ごと再現される。検証層はランダム由来イベントを構造比較に落とす、という実装帰結。</p>
+<h3 id="主要な技術的決定">7.3 主要な技術的決定</h3>
+<ul>
+<li><strong>壁時計では再現できない</strong>: quantize
+により、評価が小節境界の前後どちらかで反映小節が丸ごとずれる。→
+三重スタンプ(wall / transport=bar:beat /
+effect=解決済み効果時刻)、リプレイは音楽時間駆動。テンポ変更自体がログイベントなので参照系はログ内で自己完結。</li>
+<li><strong>イベントソーシング</strong>:
+ログが真実の源泉、状態はログの畳み込み。再生モード4種: 忠実リプレイ /
+オフラインレンダー(faster-than-realtime) /
+分岐リプレイ(<code>--until</code>、演奏のバージョン管理) / 譜面抽出(§7-0
+シンボリック保持との合流——演奏終了後にその演奏の総譜が出る)。</li>
+<li><strong>分岐の出発点 = エンジン状態</strong>(大和):
+エディタ復元はしない。録音層の棄却とこの決定が相互に支え合う(エディタ復元にはキーストローク層が必要だった)。</li>
+<li><strong>フライトレコーダー、起点は
+<code>global.start()</code></strong>(大和): start
+前の評価(init、設定、seq
+定義)は因果連鎖の一部なので、ローリングバッファからプリアンブルとして書き出す。最良の演奏は録るつもりのないセッションで起きる。</li>
+<li><strong>命名は <code>.orbs</code>
+から継承し同ディレクトリに並置</strong>(大和):
+<code>&lt;basename&gt;.&lt;timestamp&gt;.orbslog</code>。同一ファイル複数セッションはタイムスタンプで弁別。セッションはファイルでなくエンジンに束縛され、複数ファイルセッションは
+per-eval の sourceFile で忠実に残る。</li>
+<li><strong>Ableton との分業の再適用</strong>: Ableton
+は音響結果を、OrbitScore
+は因果過程を記録する。両者で演奏の完全なドキュメンテーション。</li>
+</ul>
+<h3 id="先行研究と新規性の線">7.4 先行研究と新規性の線</h3>
+<p>SuperCollider History クラス(Rohrhuber / JITLib
+周辺、評価コードのタイムスタンプ記録・再実行)が最直接の先例。ほか
+Troop(協調セッションログ)、asciinema(端末記録=「録音」側の代表)、イベントソーシング(SWE)。OrbitScore
+の差分: (a) quantize と音楽時間参照系の明示的扱い(SC History
+は壁時計ベースのはず——実装前に一次確認)、(b)
+シンボリック保持経由の譜面抽出、(c) 分岐リプレイ。</p>
+<h3 id="llm-バンドメンバーへの接続次回議論予告のみ">7.5 LLM
+バンドメンバーへの接続(次回議論、予告のみ)</h3>
+<p>大和より: Max
+サマースクールに提出したコンサートプロポーザル——<strong>ライブコーディングする
+LLM をバンドの一員として加える</strong>——が ICLC/ICMC
+に接続する。本記録仕様との関係: <code>.orbslog</code>
+は「どの音楽的文脈で・何を・いつ評価したか」の最小完全形であり、LLM の
+few-shot
+素材としてそのまま機能する。<strong>人間用とエージェント用で形式を分けない</strong>(SESSION_LOG_SPEC
+原則 5)ことで追加コストゼロ。ACM/Okitegami
+論文(エージェントの暗黙フィードバック捕捉)と同じ問題系の音楽版。詳細は記録実装後に別途議論。</p>
+<h3 id="決定ログ続き">7.6 決定ログ(続き)</h3>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>#</th>
+<th>決定</th>
+<th>棄却した代替案</th>
+<th>主な根拠</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>20</td>
+<td>記録 = 評価ログ(因果)。キーストローク/画面はスコープ外</td>
+<td>三層フル記録</td>
+<td>「それは録音」(大和)。記録/録音の概念的区別</td>
+</tr>
+<tr class="even">
+<td>21</td>
+<td>再現性 = 因果的同一性。ランダムは再度引く</td>
+<td>値の記録(音響的同一性)</td>
+<td>ランダムも因果。意図ごと再現する</td>
+</tr>
+<tr class="odd">
+<td>22</td>
+<td>フライトレコーダー、<code>global.start()</code> 起点 +
+プリアンブル</td>
+<td>明示的 record() / init 起点</td>
+<td>録り逃しゼロ / start 前の因果の完全性</td>
+</tr>
+<tr class="even">
+<td>23</td>
+<td>ログは <code>.orbs</code> 並置、basename 継承 + タイムスタンプ</td>
+<td>集約ディレクトリ</td>
+<td>どのセッションか即座に分かる。git に乗る</td>
+</tr>
+<tr class="odd">
+<td>24</td>
+<td>リプレイは音楽時間駆動(三重スタンプ)</td>
+<td>壁時計駆動</td>
+<td>quantize 境界で再現が壊れる</td>
+</tr>
+<tr class="even">
+<td>25</td>
+<td>分岐の出発点 = エンジン状態</td>
+<td>エディタ状態復元</td>
+<td>録音層なしで成立。音が正しければコードは再構築できる</td>
+</tr>
+<tr class="odd">
+<td>26</td>
+<td>人間/LLM で形式を分けない</td>
+<td>エージェント専用形式</td>
+<td>few-shot 最小完全形が既に満たされている</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="第三議論-who-conducts-the-machine-2026-06-12記録仕様確定後">8.
+第三議論: Who Conducts the Machine? (2026-06-12、記録仕様確定後)</h2>
+<p><strong>文脈</strong>: Maxサマースクール・イン・藝大 2026
+コンサート応募作品(2026-08-07、千住第7ホール、10分)。ドラム(吉島智仁)・トランペット(池谷恵司)・ギター(大和)の生演奏
++ 自動演奏ピアノ(Disklavier 等)を、LLM(Claude)が OrbitScore
+のライブコーディングで駆動する。Max
+は参加条件(必須)であり、センシング(入口)と MIDI
+ルーティング+音響処理(出口)を担う。中心の問い:
+<strong>学習なし・スキル(インコンテキスト)のみで自発的なバンドメンバーは成立するか</strong>。オペレーター(森田・大石)の介助込みで音楽が成立すること自体が主題。仕様は
+WCTM_SYSTEM_SPEC に確定。</p>
+<h3 id="三つの時間スケールへの分業レイテンシの設計原理化">8.1
+三つの時間スケールへの分業(レイテンシの設計原理化)</h3>
+<p>LLM の往復レイテンシ(数秒)を欠陥でなく設計原理に昇格: <strong>ms =
+Max(センシング/ルーティング)、拍〜小節 = OrbitScore
+エンジン(決定論的タイミング、LOOP の自己持続)、フレーズ =
+LLM(意図の書き換え)</strong>。quantize(“bar”) により LLM
+の数秒の遅延は「次の小節から効く」という音楽的に解釈可能な遅延に量子化される。プロポーザルの「ズレ・遅延・誤読を素材として扱う」のアーキテクチャ的実装。コンピングのピアニストの判断は実際フレーズ単位で起き、拍の正確さは身体(=エンジン)が担う、という音楽的対応。</p>
+<h3 id="クロック-ドラマー起点大和の決定">8.2 クロック:
+ドラマー起点(大和の決定)</h3>
+<p>「バンドとしてはドラマーがクリックであるべき。<strong>齟齬が面白さにつながる。そのための介助者</strong>」(大和)。機械に人間を従わせるなら作品の問いが立たない、という作品論とアーキテクチャの一致。技術的精密化(Claude):
+テンポ一致だけでは小節頭の<strong>位相</strong>がドリフトするため、テンポ+位相の両追従が必要
+= 実質 PLL。<strong>Ableton Link
+を同期ファブリックとして再利用</strong>(LinkAudio
+調査済みの継承関係により tempo/beat/phase API がそのまま使える。Max
+側には Link オブジェクトが存在)することで PLL
+自作を回避。さらに「齟齬を面白さに」の実装として<strong>追従の硬さ(結合度)をオペレーターの連続パラメータ化</strong>——人間と機械の結合度そのものが演奏可能なパラメータになり、介助の仕事に音楽的次元が加わる。信頼度ゲート(トラッキング確度低下時の追従凍結)が最終防衛を兼ねる。</p>
+<h3 id="agent-bridge-mcp-サーバー脳のない配管">8.3 Agent Bridge = MCP
+サーバー(脳のない配管)</h3>
+<p>当初の「Agent
+Bridge」の説明が「誰が考えるか」と混線していたことを大和が指摘(「Claude
+Code の /monitor で Max をモニターする想定だった」)。整理: Bridge
+は<strong>配管のみ</strong>(①Max
+OSC→小節整列の特徴量集約、②検証つき評価投入、③ログ末尾提供)であり、<strong>MCP
+サーバーとして実装</strong>すれば「脳」= LLM
+ランタイムを差し替え可能になる。ランタイム A = Claude
+Code(即日動く、自己修復組み込み、開発ツールがバンドメンバーになるという作品的意味、画面をそのまま投影可能)、ランタイム
+B = 専用ループ(Messages API
+直叩き、周期とレイテンシが予測可能)。<strong>A でプロトタイピング →
+リハ実測で W5 に本番ランタイムを決定</strong>。大和の Claude Code 案と
+MCP Bridge 案は対立せず、「モニター部分をツール化したものが
+Bridge」。</p>
+<h3 id="評価経路の統一が作品の問いをデータ構造に写像する">8.4
+評価経路の統一が作品の問いをデータ構造に写像する</h3>
+<p>LLM・オペレーター・リプレイヤーはすべて「評価送信者」として同一経路を通る(専用経路なし)。帰結:
+(1) LLM の演奏は人間と同形式で .orbslog
+に記録され、<strong>本番ログが次の本番の few-shot
+素材になる</strong>(ログ=エージェントの作業記憶。Okitegami
+の問題系の実装的回収)。(2) <code>evalSource: human|agent|replay</code>
+フィールドにより、<strong>“Who Conducts the Machine?”
+への答えが評価単位で観測可能</strong>——介助と自律が同一ストリーム内で識別される。作品の問いがデータ構造に写像された。</p>
+<h3 id="スキルの方針先送り出発点のみ確定">8.5
+スキルの方針(先送り、出発点のみ確定)</h3>
+<p>スキル(LLM
+への楽曲枠組み)の詳細設計はイベントループ完成後で遅くない(大和)。出発点:
+<strong>ジャズスタンダード(All The Things You Are 等)のリードシートを
+.orbs 形式にしたもの + 演奏指示書</strong>。人間奏者のリードシートと LLM
+のスキルを同じ度数語彙(root 進行 + chord 値)で書く——「OrbitScore が AI
+と人間の理解ギャップの橋になるか」の橋の素材そのもの。リードシート .orbs
+はピッチ DSL(特に
+root(音名)、転調の多い曲での検証)の受け入れテストを兼ねる。パターン変数による語彙制約(LLM
+の生成信頼性装置)は後続。</p>
+<h3 id="最小実装の原則">8.6 最小実装の原則</h3>
+<p>開発スピードが勝負(本番まで約8週、SPReAD 締切 7/3 が W3
+に重なる)。<strong>作らないもの</strong>を明示:
+専用オペレーターコンソール(Max UI + Claude Code 端末 + Bridge CLI
+で代替)、専用投影アプリ(Claude Code 画面 + Max
+表示の投影で代替)、ビートトラッカー自作(Max
+既存エコシステム)、譜面表示、mode(Phase
+5)、リプレイヤー(L2、本番後)。スコープ順序: <strong>note DSL → 記録 →
+WCTM</strong>(ただし L1 は Phase 1 に同乗、WCTM Bridge
+は評価経路確立後に並行可)。</p>
+<h3 id="決定ログ続き-1">8.7 決定ログ(続き)</h3>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>#</th>
+<th>決定</th>
+<th>棄却した代替案</th>
+<th>主な根拠</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>27</td>
+<td>クロックはドラマー起点。結合度(追従の硬さ)をオペレーターの連続パラメータ化</td>
+<td>OrbitScore マスター+クリック追従</td>
+<td>「齟齬が面白さ、そのための介助者」(大和)。作品の問いとの整合</td>
+</tr>
+<tr class="even">
+<td>28</td>
+<td>同期ファブリック = Ableton Link(テンポ+位相)</td>
+<td>PLL 自作 / テンポのみ追従</td>
+<td>LinkAudio 実装の再利用。位相ドリフト問題の既製解</td>
+</tr>
+<tr class="odd">
+<td>29</td>
+<td>Bridge = 脳のない MCP サーバー。ランタイムは A(Claude Code)で試作し
+W5 に確定</td>
+<td>Bridge にループを固定実装</td>
+<td>脳の差し替え可能性。即日プロトタイピング</td>
+</tr>
+<tr class="even">
+<td>30</td>
+<td>評価経路の完全統一(LLM/人間/リプレイ同一の口)+ evalSource</td>
+<td>LLM 専用経路</td>
+<td>ログ=few-shot 素材、介助/自律の観測可能性</td>
+</tr>
+<tr class="odd">
+<td>31</td>
+<td>初期スキル = ジャズスタンダードのリードシート .orbs +
+指示書。詳細設計は先送り</td>
+<td>専用曲・パターン語彙の事前設計</td>
+<td>イベントループ優先(大和)。ピッチ DSL の受け入れテスト兼用</td>
+</tr>
+<tr class="even">
+<td>32</td>
+<td>最小実装(専用コンソール/投影アプリ/ビートトラッカー自作はしない)</td>
+<td>フルスタック構築</td>
+<td>8週間。Max エコシステムと Claude Code 画面の流用</td>
+</tr>
+</tbody>
+</table>
+<h3 id="論文素材メモ">8.8 論文素材メモ</h3>
+<ul>
+<li><strong>結合度パラメータ</strong>:
+人間-機械の追従強度を連続的に演奏すること自体が、HCI/NIME 的にも MLTS
+的にも(グリッド間干渉の強度制御として)論点になる。ICLC/ICMC
+投稿時の中核候補。</li>
+<li><strong>evalSource による介助の定量化</strong>:
+本番ログから「自律評価と介助評価の比率・タイミング・音楽的文脈」が事後分析できる。「成立したか」の問いに対する経験的データ。GIVE
+WAY(2018)→ visible/hidden/revisible(2019)→
+WCTM(2026)の系譜で、学習ベース→インコンテキストベースへの移行を作品史として論述可能。</li>
+<li>リードシート(人間)とスキル(LLM)の同一語彙化は、第一議論の「記譜可逆性」原則の対人間/対機械への同時適用。</li>
+</ul>
+</body>
+</html>
