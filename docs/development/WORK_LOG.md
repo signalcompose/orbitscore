@@ -36,6 +36,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **テスト**: `stack-parsing.spec.ts` 10件 / `stack-timing.spec.ts` 5件 / `sequence-stack-dispatch.spec.ts` 7件（同時 note-on、scope 合成、voice/whole `^N` の加算、running range 非干渉、audio 拒否）。`pitch-parsing.spec.ts` の旧「`[ ]` reserved＝parse throw」3件を新仕様（PlayStack へ parse、拒否は dispatch）に更新。全体 895 passed / 23 skipped。
 
+**追加コミット（B5: chord 評価器 — 純関数モジュール）**:
+- `midi/chord/types.ts`: `ChordVoice`（degree/alteration/構造的 octaveShift/detune）、`BoundValue`（`kind:'chord'` discriminant で Phase R と namespace 共有可能に）
+- `midi/chord/predefined-chords.ts`: `import chords` 標準テーブル（maj/min/dim/aug/sus4/sus2/6/m6/maj7/m7/dom7/m7b5/dim7/mMaj7/maj9/m9/dom9）。度数は長音階基準、quality は accidental に（m7 = 1,b3,5,b7）
+- `midi/chord/resolve-chords.ts`: `resolveChords(elements, getChord)` — spread（ref 展開）/ 除去 `-N`（字面一致 degree+alteration、不一致は warning）/ ref `^N`（spread voice に構造的加算）/ standalone ref → 一スロット stack。namespace は `getChord` 注入で純関数化（§6.5.2 評価時値渡し）
+- `parser/types.ts`: PlayElement union に `PlayChordRef`（§9.1 の `(0, m7, 0)` グループ要素対応、L2 で解決され timing には到達しない transient）、StackElement を `PlayElement | PlayChordRemoval` に整理
+- `timing/calculate-event-timing.ts`: 未解決 chord_ref が timing walk に来たら internal error（silent drop 防止）
+
+**テスト**: `chord-resolution.spec.ts` 11件（spread/add/除去/不一致 warning/`^N`/standalone/unknown/whole-stack `^N` 保持/predefined テーブル）。全体 906 passed / 23 skipped。
+
 ### 6.106 Issue #230 — Phase 2: `.root()`/`.mode()`/`.oct()` グループスコープ — パーサー層 (Jun 13, 2026)
 
 **Date**: 2026-06-13

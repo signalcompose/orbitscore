@@ -87,6 +87,7 @@ export type PlayElement =
   | PlayPitch // degree with alteration / octave-shift / detune (e.g. b3, #5, 3^+1)
   | PlayScoped // group(s) with a .root()/.mode()/.oct() pitch-scope chain (§2.3, §3)
   | PlayStack // `[ ]` simultaneous-note-on stack (§4)
+  | PlayChordRef // a bare chord-name element (§6); transient — resolved away at L2 (resolveChords)
 
 export type PlayNested = {
   type: 'nested'
@@ -123,17 +124,18 @@ export type PlayStack = {
 }
 
 /**
- * A raw `[ ]` stack element before chord evaluation: a {@link PlayElement} plus
- * the two evaluation-only markers ({@link PlayChordRef}, {@link PlayChordRemoval}).
- * The chord evaluator (§6) resolves these to plain PlayElement voices.
+ * A raw `[ ]` stack element before chord evaluation: a {@link PlayElement} (which
+ * already includes {@link PlayChordRef}) plus the stack-only removal marker
+ * {@link PlayChordRemoval}. The chord evaluator (§6) resolves these to plain voices.
  */
-export type StackElement = PlayElement | PlayChordRef | PlayChordRemoval
+export type StackElement = PlayElement | PlayChordRemoval
 
 /**
- * A bare identifier inside a `[ ]` stack (or as a bare play arg): a reference to a
- * bound chord value, resolved at evaluation against the chord namespace (§6).
- * `octaveShift` carries a trailing `^N` (`m7^+1`) — a whole-chord structural shift
- * applied to the spread voices.
+ * A bare chord-name reference (§6): inside a `[ ]` stack it spreads into the stack;
+ * as a standalone group element (`(0, m7, 0)`, §9.1) it becomes a one-slot
+ * simultaneous chord. Resolved at evaluation (L2) against the chord namespace, so
+ * it never reaches the timing walk. `octaveShift` carries a trailing `^N` (`m7^+1`)
+ * — a whole-chord structural shift applied to the spread voices.
  */
 export type PlayChordRef = {
   type: 'chord_ref'

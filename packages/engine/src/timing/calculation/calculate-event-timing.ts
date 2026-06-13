@@ -218,6 +218,14 @@ export function calculateEventTiming(
           )
           events.push(...nestedEvents)
         }
+      } else if (element.type === 'chord_ref') {
+        // §6: a bare chord ref is resolved (spread) by the chord evaluator BEFORE
+        // timing. Reaching here means evaluation was skipped — a wiring bug,
+        // surfaced loudly rather than dropped silently.
+        throw new Error(
+          `Internal: unresolved chord ref "${element.name}" reached the timing walk; ` +
+            `chord refs must be evaluated before scheduling (§6).`,
+        )
       }
     }
   }
