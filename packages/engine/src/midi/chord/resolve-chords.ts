@@ -76,12 +76,19 @@ function spreadChordVoices(voices: ChordVoice[], octaveShift: number): PlayEleme
  * - chord → a one-slot simultaneous stack (vertical), `^N` shifts the whole chord
  * - pattern → splice the bound elements (horizontal, 1→N), resolving them recursively
  * - unbound → warning + nothing
+ *
+ * `visiting` holds the pattern names on the current expansion branch (added before
+ * recursing, removed after) so a circular reference (`var a = (a)`, or mutual
+ * `a → b → a`) is reported and stopped instead of overflowing the stack. It is a
+ * branch set, not a global seen-set, so legitimate sibling reuse (`play(riff, riff)`)
+ * is unaffected.
  */
 function resolveName(
   name: string,
   octaveShift: number,
   getBinding: BindingLookup,
   warnings: string[],
+  visiting: Set<string>,
 ): PlayElement[] {
   const bound = getBinding(name)
   if (!bound) {
@@ -94,10 +101,23 @@ function resolveName(
     return [{ type: 'stack', voices: spreadChordVoices(bound.voices, octaveShift) }]
   }
   // pattern: a horizontal/tree value — splice its (recursively resolved) elements.
+  if (visiting.has(name)) {
+    warnings.push(
+      `circular pattern reference "${name}" — expansion stopped (§6.5). A pattern must not refer to itself.`,
+    )
+    return []
+  }
   if (octaveShift !== 0) {
     warnings.push(`"${name}": \`^N\` is undefined on a pattern reference — ignored (§6.5).`)
   }
-  return resolveElements(bound.elements, getBinding, warnings)
+  visiting.add(name)
+  try {
+    return resolveElements(bound.elements, getBinding, warnings, visiting)
+  } finally {
+    // Always unmark, even if resolution throws, so a later sibling reuse of this
+    // name is not falsely flagged as circular (the set stays a clean branch set).
+    visiting.delete(name)
+  }
 }
 
 /**
@@ -109,6 +129,7 @@ function evaluateStackVoices(
   voices: StackElement[],
   getBinding: BindingLookup,
   warnings: string[],
+  visiting: Set<string>,
 ): PlayElement[] {
   const result: PlayElement[] = []
   for (const voice of voices) {
@@ -136,7 +157,7 @@ function evaluateStackVoices(
     } else {
       // A literal voice (number / PlayPitch) or a subtree voice ((5,3,2,1) etc.):
       // recurse so any name ref / repeat nested inside a subtree is also resolved.
-      result.push(resolveElement(voice as PlayElement, getBinding, warnings))
+      result.push(resolveElement(voice as PlayElement, getBinding, warnings, visiting))
     }
   }
   return result
@@ -147,29 +168,36 @@ function resolveElement(
   el: PlayElement,
   getBinding: BindingLookup,
   warnings: string[],
+  visiting: Set<string>,
 ): PlayElement {
   if (!el || typeof el !== 'object') return el // bare degree / slice number
   switch (el.type) {
     case 'stack': {
-      const resolved = evaluateStackVoices(el.voices, getBinding, warnings)
+      const resolved = evaluateStackVoices(el.voices, getBinding, warnings, visiting)
       return el.octaveShift !== undefined
         ? { type: 'stack', voices: resolved, octaveShift: el.octaveShift }
         : { type: 'stack', voices: resolved }
     }
     case 'nested':
-      return { type: 'nested', elements: resolveElements(el.elements, getBinding, warnings) }
+      return {
+        type: 'nested',
+        elements: resolveElements(el.elements, getBinding, warnings, visiting),
+      }
     case 'legato':
       // §5.4: a legato group's interior may hold chord refs / `*n` — resolve them.
-      return { type: 'legato', elements: resolveElements(el.elements, getBinding, warnings) }
+      return {
+        type: 'legato',
+        elements: resolveElements(el.elements, getBinding, warnings, visiting),
+      }
     case 'scoped':
-      return { ...el, groups: resolveElements(el.groups, getBinding, warnings) }
+      return { ...el, groups: resolveElements(el.groups, getBinding, warnings, visiting) }
     case 'modified':
       return el.value && typeof el.value === 'object' && el.value.type === 'nested'
         ? {
             ...el,
             value: {
               type: 'nested',
-              elements: resolveElements(el.value.elements, getBinding, warnings),
+              elements: resolveElements(el.value.elements, getBinding, warnings, visiting),
             },
           }
         : el
@@ -187,20 +215,21 @@ function resolveElements(
   els: readonly (PlayElement | string)[],
   getBinding: BindingLookup,
   warnings: string[],
+  visiting: Set<string>,
 ): PlayElement[] {
   const out: PlayElement[] = []
   for (const el of els) {
     if (typeof el === 'string') {
       // A bare name (top-level play arg, e.g. `play(riff, fill)`).
-      out.push(...resolveName(el, 0, getBinding, warnings))
+      out.push(...resolveName(el, 0, getBinding, warnings, visiting))
     } else if (el && typeof el === 'object' && el.type === 'repeat') {
       // §6.5: `x*n` — n juxtaposed copies of the resolved element (1→N inner ok).
-      const inner = resolveElements([el.element], getBinding, warnings)
+      const inner = resolveElements([el.element], getBinding, warnings, visiting)
       for (let i = 0; i < el.count; i++) for (const e of inner) out.push(cloneElement(e))
     } else if (el && typeof el === 'object' && el.type === 'chord_ref') {
-      out.push(...resolveName(el.name, el.octaveShift, getBinding, warnings))
+      out.push(...resolveName(el.name, el.octaveShift, getBinding, warnings, visiting))
     } else {
-      out.push(resolveElement(el, getBinding, warnings))
+      out.push(resolveElement(el, getBinding, warnings, visiting))
     }
   }
   return out
@@ -215,7 +244,7 @@ export function resolveChords(
   getBinding: BindingLookup,
 ): ResolveResult {
   const warnings: string[] = []
-  const resolved = resolveElements(elements, getBinding, warnings)
+  const resolved = resolveElements(elements, getBinding, warnings, new Set())
   return { elements: resolved, warnings }
 }
 

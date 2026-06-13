@@ -153,3 +153,92 @@ describe('Phase 4 — `_n` voice tie + `.hold()` (§5.2/§5.3)', () => {
     expectBalanced(log)
   })
 })
+
+/**
+ * A `_` event tie extends the previous EVENT (§5.1). For a `[ ]` stack that is the
+ * whole chord (all voices share one onset, §4), so these tests assert FIRE TIME, not
+ * just order: the recording backend stamps `Date.now() - T0` (fake-timer time) on
+ * each note so we can prove every voice extends together rather than just the last.
+ */
+describe('Phase 4 — `_` after a stack / a rest (§5.1)', () => {
+  type EvT = { type: 'on' | 'off'; note: number; t: number }
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  function recordingOutputT(log: EvT[]): MidiOutput {
+    return {
+      ensurePort: vi.fn((q: string) => (/iac/i.test(q) ? 'IACドライバ バス1' : q)),
+      noteOn: vi.fn((_p: string, _c: number, note: number) =>
+        log.push({ type: 'on', note, t: Date.now() - T0 }),
+      ),
+      noteOff: vi.fn((_p: string, _c: number, note: number) =>
+        log.push({ type: 'off', note, t: Date.now() - T0 }),
+      ),
+      pitchBend: vi.fn(),
+      releaseOwner: vi.fn(),
+      panic: vi.fn(),
+      getActiveNotes: vi.fn(() => []),
+      listPorts: vi.fn(() => ['IACドライバ バス1']),
+      closeAll: vi.fn(),
+    }
+  }
+
+  async function playLogT(src: string): Promise<EvT[]> {
+    vi.setSystemTime(T0)
+    const sched = mockScheduler()
+    const log: EvT[] = []
+    const global = new Global(sched, new MidiManager(() => recordingOutputT(log)))
+    global.key('C')
+    global.start()
+    const seq = new Sequence(global, sched)
+    seq.setName('piano')
+    seq.midi('iac', 1).octave(4)
+    seq.play(...(parseAudioDSL(`p.play(${src})`).statements[0].args as never[]))
+    await seq.run()
+    await vi.advanceTimersByTimeAsync(3000)
+    return log
+  }
+
+  const offTimeOf = (log: EvT[], note: number) =>
+    log.find((e) => e.type === 'off' && e.note === note)?.t ?? -1
+
+  it('`[1, 3, 5], _` sustains the WHOLE chord, not just one voice', async () => {
+    const log = await playLogT('[1, 3, 5], _')
+    // No retrigger: each of C/E/G sounds exactly once.
+    expect(
+      log
+        .filter((e) => e.type === 'on')
+        .map((e) => e.note)
+        .sort((a, b) => a - b),
+    ).toEqual([60, 64, 67])
+    expect(
+      log
+        .filter((e) => e.type === 'off')
+        .map((e) => e.note)
+        .sort((a, b) => a - b),
+    ).toEqual([60, 64, 67])
+    // All three note-offs fire at the same extended time. Under the single-voice
+    // bug the lower two would cut a full slot (~900ms) early — so they cluster.
+    const offT = log.filter((e) => e.type === 'off').map((e) => e.t)
+    expect(Math.max(...offT) - Math.min(...offT)).toBeLessThan(150)
+  })
+
+  it('`_` after a rest extends nothing — the rest breaks the tie chain', async () => {
+    // 1, 0, _, 5 (4 slots of 500ms): the rest (0) clears the chain, so the `_`
+    // extends nothing and the C is NOT sustained across it.
+    const tied = await playLogT('1, _, 0, 5') // `_` right after C → C spans 2 slots
+    const broken = await playLogT('1, 0, _, 5') // rest before `_` → C spans 1 slot
+    expect(offTimeOf(tied, 60)).toBeGreaterThan(offTimeOf(broken, 60) + 200)
+  })
+
+  it('`_` after a stack carrying a voice tie also extends the held note (§5.1+§5.2)', async () => {
+    // [3,5],[3,_5],_ : the 5 is held from stack 1 across stack 2 (`_5`), and the
+    // trailing `_` must extend that held note too. Compare against `,0` (a rest in
+    // the same slot, which must NOT extend it) at an identical 3-slot grid.
+    const tied = await playLogT('[3, 5], [3, _5], _')
+    const rested = await playLogT('[3, 5], [3, _5], 0')
+    // G (67) sounds once (held), and the trailing `_` pushes its note-off later.
+    expect(tied.filter((e) => e.type === 'on' && e.note === 67)).toHaveLength(1)
+    expect(offTimeOf(tied, 67)).toBeGreaterThan(offTimeOf(rested, 67) + 200)
+  })
+})

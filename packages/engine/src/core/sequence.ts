@@ -341,7 +341,6 @@ export class Sequence {
     return this._midiPort !== undefined
   }
 
-  /** Default gate length as a fraction of the slot (0..1). spec §1. */
   /**
    * Enable auto common-tone ties between consecutive stacks (§5.3). A pitch shared
    * by two adjacent stacks is held (note-off/on suppressed) rather than retriggered
@@ -353,6 +352,7 @@ export class Sequence {
     return this
   }
 
+  /** Default gate length as a fraction of the slot (0..1). spec §1. */
   gate(value: number): this {
     this._gate = Math.max(0, Math.min(1, value))
     return this
@@ -723,8 +723,17 @@ export class Sequence {
 
     // ── Stage B: compute final offTime + suppress (preserves the on==off invariant) ──
     this.absorbEventTies(plans) // §5.1 `_`
-    this.applyGateAndLegato(plans) // gate + §4/§5.4 `{ }` overlap
-    this.applyVoiceTiesAndHold(plans) // §5.2 `_n` + §5.3 `.hold()`
+    // Group emitting notes by onset once — both gate/legato and voice-tie/hold walk it.
+    const slots = new Map<number, PlannedNote[]>()
+    for (const p of plans) {
+      if (p.note === null) continue
+      const slot = slots.get(p.onTime)
+      if (slot) slot.push(p)
+      else slots.set(p.onTime, [p])
+    }
+    const onsetTimes = [...slots.keys()].sort((a, b) => a - b)
+    this.applyGateAndLegato(plans, onsetTimes) // gate + §4/§5.4 `{ }` overlap
+    this.applyVoiceTiesAndHold(slots, onsetTimes) // §5.2 `_n` + §5.3 `.hold()`
 
     // ── Stage C: emit one scheduleNote per surviving note (exactly one off each) ──
     for (const p of plans) {
@@ -762,18 +771,27 @@ export class Sequence {
   }
 
   /**
-   * §5.1: absorb each `_` event tie into the previous EMITTING note (extend its
-   * span by the tie's slot, no retrigger). A leading `_` (no preceding note) or a
-   * `_` after a rest extends nothing → silence. A rest breaks the tie chain.
+   * §5.1: absorb each `_` event tie into the previous EMITTING event (extend its
+   * span by the tie's slot, no retrigger). The "previous event" is every note at
+   * the most recent onset — for a `[ ]` stack that is ALL its voices (they share
+   * one onset, §4), so `[1,3,5], _` sustains the whole chord, not just one voice.
+   * A leading `_` (no preceding note) or a `_` after a rest extends nothing →
+   * silence. A rest (note === null) breaks the tie chain.
    */
   private absorbEventTies(plans: PlannedNote[]): void {
-    let lastEmitted: PlannedNote | undefined
+    let lastGroup: PlannedNote[] = []
     for (const p of plans) {
       if (p.tie) {
-        if (lastEmitted) lastEmitted.tieSlots += p.slotDur
+        for (const note of lastGroup) note.tieSlots += p.slotDur
         continue
       }
-      lastEmitted = p.note === null ? undefined : p
+      if (p.note === null) {
+        lastGroup = [] // a rest extends nothing and breaks the tie chain
+      } else if (lastGroup.length > 0 && p.onTime === lastGroup[0]!.onTime) {
+        lastGroup.push(p) // same onset → another voice of the current stack
+      } else {
+        lastGroup = [p] // a new onset → a fresh event
+      }
     }
   }
 
@@ -782,10 +800,7 @@ export class Sequence {
    * §4 legato override — an interior `{ }` note's off is delayed to the next
    * note-on + overlap. A pattern-tail legato note (no next note-on) keeps gate.
    */
-  private applyGateAndLegato(plans: PlannedNote[]): void {
-    const onsetTimes = [...new Set(plans.filter((p) => p.note !== null).map((p) => p.onTime))].sort(
-      (a, b) => a - b,
-    )
+  private applyGateAndLegato(plans: PlannedNote[], onsetTimes: number[]): void {
     for (const p of plans) {
       if (p.note === null) continue
       p.offTime = p.onTime + (p.slotDur + p.tieSlots) * this._gate
@@ -800,20 +815,11 @@ export class Sequence {
    * §5.2 `_n` voice tie + §5.3 `.hold()`: a note whose RESOLVED pitch is sounding
    * from the immediately-preceding slot is held (its predecessor's off is extended,
    * its own on/off suppressed) instead of retriggered. `_n` applies per-voice;
-   * `.hold()` applies to every common tone but only between two STACKS (slot size
-   * > 1) — so repeated single notes never auto-tie (decision #8). Matching is by
+   * `.hold()` applies to every common tone but only between two STACKS (slot
+   * note-count > 1) — so repeated single notes never auto-tie (decision #8). Matching is by
    * resolved-pitch equality (decision #7); no match → play normally (fallback).
    */
-  private applyVoiceTiesAndHold(plans: PlannedNote[]): void {
-    const slots = new Map<number, PlannedNote[]>()
-    for (const p of plans) {
-      if (p.note === null) continue
-      const slot = slots.get(p.onTime)
-      if (slot) slot.push(p)
-      else slots.set(p.onTime, [p])
-    }
-    const onsetTimes = [...slots.keys()].sort((a, b) => a - b)
-
+  private applyVoiceTiesAndHold(slots: Map<number, PlannedNote[]>, onsetTimes: number[]): void {
     let prevSounding = new Map<number, PlannedNote>() // pitch → held note from previous slot
     let prevWasStack = false
     for (const t of onsetTimes) {
@@ -825,7 +831,8 @@ export class Sequence {
         const held = prevSounding.get(n.note!)
         if (wantTie && held) {
           // suppress this retrigger; extend the held note to cover this slot
-          held.offTime = Math.max(held.offTime, n.onTime + n.slotDur * this._gate)
+          // (plus any `_` event tie absorbed onto the suppressed note, §5.1).
+          held.offTime = Math.max(held.offTime, n.onTime + (n.slotDur + n.tieSlots) * this._gate)
           n.emit = false
           curSounding.set(n.note!, held) // chain: the same note may hold across 3+ stacks
         } else {

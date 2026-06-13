@@ -108,3 +108,33 @@ describe('Phase 3 — chord resolution (§6)', () => {
     expect(warnings).toHaveLength(0)
   })
 })
+
+describe('Phase R — pattern resolution cycle guard (§6.5)', () => {
+  it('a self-referential pattern (`var riff = (riff)`) warns and stops, no overflow', () => {
+    const self: BindingLookup = (name) =>
+      name === 'riff' ? { kind: 'pattern', elements: [ref('riff')] } : undefined
+    const { elements, warnings } = resolveChords([ref('riff') as any], self)
+    expect(elements).toEqual([])
+    expect(warnings.some((w) => /circular pattern reference "riff"/.test(w))).toBe(true)
+  })
+
+  it('mutual recursion (`a → b → a`) is caught, not run to a stack overflow', () => {
+    const mutual: BindingLookup = (name) => {
+      if (name === 'a') return { kind: 'pattern', elements: [ref('b')] }
+      if (name === 'b') return { kind: 'pattern', elements: [ref('a')] }
+      return undefined
+    }
+    const { warnings } = resolveChords([ref('a') as any], mutual)
+    expect(warnings.some((w) => /circular pattern reference/.test(w))).toBe(true)
+  })
+
+  it('legitimate sibling reuse (`play(riff, riff)`) is NOT flagged as circular', () => {
+    // visiting is a per-branch set (removed after each expansion), so reusing the
+    // same finished pattern as a sibling is fine — only a name on the LIVE branch loops.
+    const reuse: BindingLookup = (name) =>
+      name === 'riff' ? { kind: 'pattern', elements: [1, 5] } : undefined
+    const { elements, warnings } = resolveChords([ref('riff') as any, ref('riff') as any], reuse)
+    expect(elements).toEqual([1, 5, 1, 5])
+    expect(warnings).toHaveLength(0)
+  })
+})
