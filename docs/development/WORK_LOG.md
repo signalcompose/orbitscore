@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.92 Issue #228 — Phase 1 増分1: 度数解決コア (§2.1 / §7-0) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 全体の増分1。 commit hash: `283e56f`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+**Epic**: signalcompose/orbitscore#224
+
+**動機**: Phase 1 (raw MIDI 出力) の基盤として、 MIDI ハードウェア・スケジューラに依存しない純関数部分から着手。 §7-0 シンボリックピッチ保持の型契約と §2.1 度数解決を最初に確立する (パイプライン全体がこの型に乗るため、 最初に固めないと後で取り返せない)。
+
+**増分1の内容 (新規 `packages/engine/src/midi/`)**:
+
+- `types.ts` — §7-0 契約の型定義: `SymbolicPitch` (degree/alteration/octaveShift/detune)、 `RootContext` (rootPitchClass/octave)、 `ResolvedPitch` (midiNote + シンボリック情報を保持)。 MIDI 番号化は出力最終段のみという §7-0 を型レベルで強制
+- `degree-resolution.ts` — §2.1 の IONIAN 式による純関数 `resolveDegree()`。 度数 0 = 休符 (null)、 度数 9/11/13/15 はオクターブ折り返しが式から自然導出、 C4=60 規約
+- `index.ts` — モジュール公開面
+- `tests/midi/degree-resolution.spec.ts` — プロパティテスト 326 件 (全度数 1-15 × 変化記号 ±2 × octave 2-5 の網羅 + C4=60 + テンション折り返し + §7-0 保持 + detune 透過 + バリデーション)
+
+**設計判断**: spec §3 のアーキテクチャ決定に従い `packages/engine/src/midi/` を AudioEngine と並置 (EventRouter フル分離はしない)。 型契約は中枢に影響するため main (Opus) が直接定義。 度数解決の数理は §2.1 が完全な契約。
+
+**テスト結果**: 754 passed / 23 skipped (777 total)。 midi +326、 回帰なし。
+
+**Phase 1 の残り増分 (次セッション以降)**: ① パーサー拡張 (`b3`/`#5`/`3^+1`/`b7~-0.25` トークン)、 ② MidiOutput (@julusian/midi ラッパー、 ポート名ロケール対応、 active note tracking、 パニック CC123/120) [Sonnet 委譲可]、 ③ MidiScheduler (TS lookahead 50-100ms、 ドリフト補正) [Sonnet 委譲可]、 ④ Sequence への `midi()` メソッド + ディスパッチフラグ + 値=度数解釈、 ⑤ `global.key()`/`midiLatency()` + ポート単位オフセット、 ⑥ seq.gate/vel/octave、 ⑦ audio `[ ]` の diagnostic エラー予約、 ⑧ hanging note 不変条件テスト。
+
+---
+
 ### 6.91 Issue #226 — Phase 0 事前検証4項目 (Jun 13, 2026)
 
 **Date**: 2026-06-13
