@@ -35,7 +35,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **変更内容**:
 
-- `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md`: §9 第四議論を追記 (9.1-9.7、決定ログ #33-38)
+- `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` + `.html`: §9 第四議論を追記 (9.1-9.7、決定ログ #33-38)。`.html` は直接編集で同期 (pandoc 不使用 — 仕様 HTML は手書き保守が方針、`.md` のテーマを壊さないため)
 - `docs/specs-v2/PITCH_DSL_SPEC_v1.1.html` §2.1 (度数受理 / `o`=running range)、§2.4 (`^N` スティッキー pitch range)
 - `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`: テスト網羅項を新ルールに
 - `midi/degree-resolution.ts`: 受理度数 {1-9,11,13} 検証 (10/12/14/15+ は throw)

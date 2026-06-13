@@ -912,5 +912,252 @@ WAY(2018)→ visible/hidden/revisible(2019)→
 WCTM(2026)の系譜で、学習ベース→インコンテキストベースへの移行を作品史として論述可能。</li>
 <li>リードシート(人間)とスキル(LLM)の同一語彙化は、第一議論の「記譜可逆性」原則の対人間/対機械への同時適用。</li>
 </ul>
+<hr />
+<h2 id="第四議論-pitch-range-オクターブ記法-2026-06-13phase-1-実機検証中">9.
+第四議論: pitch range / オクターブ記法 (2026-06-13、Phase 1 実機検証中)</h2>
+<p><strong>文脈</strong>: Phase 1 (#228, PR #245) の MIDI
+実機検証で2オクターブメジャースケールを度数 <code>1..15</code>
+で鳴らしたところ、大和が「ノートの度数の仕様が想定と違う」と指摘。現状
+§2.1 は度数を<strong>リニアな音階インデックス</strong>(<code>1=C4 … 8=C5 …
+15=C6</code>、式 <code>IONIAN[(n-1)%7] + 12·floor((n-1)/7)</code>)として
+解決しており、数字が増えるほど単純に上行する。これがバークリー的な度数語彙
+(メロディはルート上のコード度数で書く)と乖離していた。Iteration 3
+で確定した「root 基底 + Ionian」自体は維持しつつ、<strong>オクターブを
+またぐ書き方</strong>を再設計する議論。</p>
+<h3 id="問題の切り分け-pitch">9.1 問題の切り分け</h3>
+<p>大和の指摘は3つの実問題に分解された:</p>
+<ol type="1">
+<li><strong><code>8,10,12,14</code> はバークリーで使わない数字</strong>(<code>8</code>=8va
+はギリギリ)。リニア式は数学的に綺麗だが非音楽的な数字を露出する。</li>
+<li><strong>メロディはルート上のコード度数で書く</strong>: <code>2=9</code>、<code>4=11</code>、<code>6=13</code>
+が同ピッチクラスのオクターブ違いで対応している必要がある(現状の式でも
+満たされる: <code>2</code>=D4, <code>9</code>=D5)。</li>
+<li><strong>コードトーン(1,3,5,7)のオクターブ上に名前がない</strong>: <code>9/11/13</code>
+はテンション名があるが <code>3</code> の1オクターブ上は “10”
+とは呼ばない。現状は <code>3^+1</code>、2オクターブ上は <code>3^+2</code>
+だが、毎回書くと書法的に煩雑。「より直感的にメロディと和声を扱いたい」。</li>
+</ol>
+<h3 id="概念の分離-和声的度数-a-と-pitch-range-b">9.2 概念の分離: 和声的度数
+(A) と pitch range (B)</h3>
+<p>度数記法は本来2つの独立な情報を運ぶ —— <strong>A:
+和声的度数</strong>(コード/スケール上の位置: root, 3rd, 5th, 7th,
+テンション)と <strong>B: 音域(register)</strong>。現状はこれを1本の数字(<code>1..15</code>
+リニア)に融合していた。直感性のためこれを分離する:</p>
+<ul>
+<li><strong>A</strong> = 音楽的な数字(<code>1-7</code> + テンション <code>9/11/13</code>)</li>
+<li><strong>B</strong> = コンパクトなオクターブ記号(<code>^N</code>)</li>
+</ul>
+<p>大和の言葉で「<strong>pitch range(音域の状態)</strong>」というモデルに
+収束。<code>^</code> は「今いる音域に入る」操作で、以降の度数はその音域で
+解決され、<code>^0</code> でデフォルト音域に戻る。LilyPond の relative
+モードに近い register state の発想。<strong>3オクターブ上を直接書く</strong>(<code>3</code>
+→ E7)ケースでリニア方式との差が決定的: リニアは <code>24</code>(=3+3×7、
+直感ゼロ)、分離方式は <strong><code>3^3</code> 一発</strong>。</p>
+<h3 id="確定した規則">9.3 確定した規則</h3>
+<ul>
+<li><strong>度数 = 和声的位置</strong>: <code>1-7</code>(root から Ionian
+スケール度数) + テンション <code>9/11/13</code>(メロディでも明示使用可、<code>2/4/6</code>
+の +1オクターブと同ピッチクラス)。変化記号 <code>b/#/bb/##</code>・detune
+<code>~</code> は従来通り。</li>
+<li><strong><code>^N</code> = スティッキー pitch range</strong>: 音または
+休符 <code>0</code> に付き、その地点から <strong>running range</strong> を
+base+N オクターブに設定する。<code>play()</code> 内では<strong>読み順(時間順)に
+持続</strong>し、以降のすべての度数に効く。各 <code>play()</code> の先頭で
+base(range 0)にリセット。<code>^0</code> で base に戻す。<code>0^N</code>
+= 無音で音域だけ変更(休符に付ける)。
+<ul>
+<li><strong>独立 <code>^</code> マーカーは無し</strong>(裸の <code>^1</code>
+が play() 内に音と並ぶのは表記的に不自然、という大和の指摘)。音域だけ
+静かに変えるときは <code>0^N</code>。</li>
+<li>符号: <code>^+N</code> の <code>+</code> は省略可(<code>3^3</code> ≡
+<code>3^+3</code>)。下方向は <code>^-N</code>。<code>^0</code> リセット。</li>
+</ul></li>
+<li><strong>range は全度数に効く(統一ルール)</strong>: range +1 のとき
+<code>2</code>=D5, <code>9</code>=D6(<code>9</code> 固有の +1オクターブに
+range +1 が乗って合成される)。大和の根拠「スティッキーならその後に影響
+しないとならない」より、range は読み順で後続に作用する <strong>linear
+running state</strong>。</li>
+<li><strong><code>.oct(N)</code> = グループのレキシカル・スコープ</strong>(<code>.root()</code>
+と同じスコープ規則、持続しない)。「このまとまりだけ別音域」を安全に書く
+道具。<strong>Phase 2</strong> のグループチェーンで実装。<code>^N</code>(linear/persistent)と
+<code>.oct()</code>(lexical/group)は<strong>異なる軸の道具</strong>として
+併存(大和「oct() もあれば使う」)。</li>
+</ul>
+<h3 id="n-linear-と-root-lexical-の直交性-実装注意">9.4 <code>^N</code>(linear)
+と <code>.root()</code>(lexical) の直交性 —— 実装注意</h3>
+<blockquote>
+<p>⚠️ <strong>本議論では <code>.root()</code>
+グループ境界との相互作用を明示的には詰めていない</strong>。確定した pitch
+range モデル(音域 = 時間軸の状態)と「<code>^N</code> / <code>.oct()</code>
+の二道具分離」決定から、spec では以下のように解決する。実装前に大和の確認を
+取る項目。<strong>→ 2026-06-13 に linear で確定(大和確認、§9.7
+末尾)。</strong></p>
+</blockquote>
+<p><code>.root()</code> は読み順上のグループに対し<strong>レキシカル</strong>に
+ルートを切り替えるが、<code>^N</code> の running range は<strong>それと独立に
+読み順(フラットな時間順)でスレッドされる</strong>。両者は別の軸(root =
+和声基準、range = 音域)なので、グループ境界(<code>.root()</code> のスコープ
+終端や入れ子タプル)は range をリセットしない。range のリセット契機は
+<strong>play() の先頭</strong> と <strong>後続の <code>^M</code> /
+<code>^0</code></strong> のみ。入れ子タプルはリズム(時間分割)にのみ効き、running
+range には影響しない。グループ単位で音域を閉じたいときは <code>.oct(N)</code>(Phase
+2)を使う。</p>
+<p><strong>実装メモ</strong>(Opus 向け): “スティッキー”
+はトークナイザの関心事ではない。パーサーは従来通り音ごとに <code>^N</code>
+アノテーション(octaveShift)を記録し、<strong>play() の要素ストリームを
+読み順に walk するときに running range をスレッド</strong>する。range
+の閉じ込め単位(フラット読み順 vs グループ構造)が §9.4 の linear/lexical
+判断そのもの。度数解決の式 <code>pitch = rootPitch + semitones + 12·o</code>
+は不変で、<code>o</code> の供給元が「音ごとのリテラル」から「running range
+状態」に変わるだけ。</p>
+<h3 id="例-pitch">9.5 例</h3>
+<pre><code>play(1, 2, 3, 3^1, 4, 5, 1^0, 1)
+      C4 D4 E4  E5   F5 G5  C4   C4
+                └ ここから +1 が持続 ┘ └ ^0 で戻る</code></pre>
+<p><code>3^1</code> で +1 音域に「入り」、以降の <code>4</code>,<code>5</code>
+も +1。<code>1^0</code> で base に戻る(<code>^</code> を毎回書かなくてよい
+—— 元の不満の解消)。</p>
+<pre><code>play(1, 5, 9, 3^2, 1)
+      C4 G4 D5  E6   C6
+                     └ 3^2 で range +2 になり、後続の 1 にも残る(スティッキー)</code></pre>
+<p><code>9</code>=D5(テンション、base range)、<code>3^2</code>=E6(度数3 +
+range+2)、最後の <code>1</code>=C6(running range +2
+が持続)。単発で1音だけ跳ばしてレンジを残したくないときは <code>.oct()</code>(Phase
+2)で包む。</p>
+<h3 id="度数の受理範囲-decision-38-改訂-後方互換を取らない">9.6
+度数の受理範囲(decision #38 改訂) —— 後方互換を取らない</h3>
+<p>当初は <code>8,10,12,14</code> を「warning だが有効(後方互換)」とする
+方針だったが、大和が再考: 「音楽的じゃないので推奨しかねる。<code>14</code>
+とか描かれたくない、可読性が悪い。後方互換取る必要あるのかな、今実装してる
+時に。<code>8</code> はオクターブ上の1として残してもいい」。</p>
+<p><strong>判断</strong>: v1.1 ピッチ DSL は<strong>未リリースの新機能</strong>(PR
+#245 も未マージ)で、リニア高数字に依存した既存 <code>.orbs</code>
+は存在しない。よって<strong>後方互換は取らず</strong>、非音楽的な数字を<strong>エラー</strong>にして「オクターブは
+<code>^N</code> で書く」を言語レベルで一貫させる。</p>
+<table>
+<colgroup>
+<col style="width: 22%" />
+<col style="width: 18%" />
+<col style="width: 60%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>度数</th>
+<th>扱い</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>1-7</code></td>
+<td>受理</td>
+<td>スケール度数</td>
+</tr>
+<tr class="even">
+<td><code>8</code></td>
+<td>受理</td>
+<td>オクターブ上のルート(<code>1..8</code> の1オクターブスケール = 8va)。<code>1^1</code>
+と等価</td>
+</tr>
+<tr class="odd">
+<td><code>9, 11, 13</code></td>
+<td>受理</td>
+<td>テンション(<code>2/4/6</code> の +8va)。メロディでも明示可</td>
+</tr>
+<tr class="even">
+<td><code>10, 12, 14</code> ・ <code>15</code> 以上</td>
+<td><strong>エラー</strong></td>
+<td>非音楽的・可読性が悪い。diagnostic「オクターブは <code>^N</code>(例
+<code>3^1</code>)」</td>
+</tr>
+<tr class="odd">
+<td><code>0</code></td>
+<td>休符</td>
+<td>従来通り</td>
+</tr>
+</tbody>
+</table>
+<p><code>#11</code> / <code>b13</code> 等は度数 11/13 + 変化記号なので引き続き
+受理。2オクターブ上のテンションは <code>9^1</code> 等(度数 +
+range)で書く。</p>
+<h3 id="決定ログ続き-2">9.7 決定ログ(続き)</h3>
+<table>
+<colgroup>
+<col style="width: 6%" />
+<col style="width: 34%" />
+<col style="width: 28%" />
+<col style="width: 31%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>#</th>
+<th>決定</th>
+<th>棄却した代替案</th>
+<th>主な根拠</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>33</td>
+<td>度数記法を A(和声的度数)と B(pitch range)に分離</td>
+<td>リニア <code>1..15</code> 単一数字の維持</td>
+<td><code>8,10,12,14</code> の非音楽的数字を露出しない。メロディ=コード度数で
+書く直感性</td>
+</tr>
+<tr class="even">
+<td>34</td>
+<td><code>^N</code> = スティッキー pitch range(音/休符に付き読み順で持続、play()
+先頭でリセット、<code>^0</code> で戻る)</td>
+<td>ワンショット <code>^N</code>(その音だけ)</td>
+<td>「pitch range(音域に入る)」モデル。毎回 <code>^</code> を書く煩雑さの
+解消(大和)</td>
+</tr>
+<tr class="odd">
+<td>35</td>
+<td>独立 <code>^</code> マーカーは作らない(必ず音/休符に付く、無音変更は
+<code>0^N</code>)</td>
+<td>裸の <code>^N</code> フローティングマーカー</td>
+<td>「play() に裸の <code>^1</code> が並ぶのは表記的に変」(大和)</td>
+</tr>
+<tr class="even">
+<td>36</td>
+<td>range は全度数に効く(統一ルール、linear running)</td>
+<td>9/11/13 は range 非依存</td>
+<td>「スティッキーならその後に影響しないとならない」(大和)。ルール1本で
+明快</td>
+</tr>
+<tr class="odd">
+<td>37</td>
+<td><code>^N</code>(linear/persistent)と <code>.oct(N)</code>(lexical/group)を
+別軸の道具として併存</td>
+<td>どちらか一方に統一</td>
+<td>「oct() もあれば使う」(大和)。持続=音域移動、グループ=局所音域</td>
+</tr>
+<tr class="even">
+<td>38</td>
+<td>度数の受理 = <code>{1-9, 11, 13}</code>。<code>10,12,14</code> と
+<code>15+</code> はエラー(<code>^N</code> を案内)。後方互換は取らない</td>
+<td><code>8,10,12,14</code> を warning で残す</td>
+<td>「14 とか描かれたくない、可読性が悪い」「後方互換取る必要あるのか今
+実装してる時に」(大和)。未リリースゆえ依存無し</td>
+</tr>
+</tbody>
+</table>
+<p><strong>確認済 / 未決</strong>:</p>
+<ol type="1">
+<li>✅ <strong>確認済(2026-06-13)</strong>: §9.4 の <code>^N</code>(linear)
+× <code>.root()</code>(lexical) の相互作用は <strong>linear
+で確定</strong>(大和確認)。range はグループ境界で消えず読み順で持続。<code>.oct()</code>
+で囲ったときだけ局所化。実装は <strong>PR #245(228 ブランチ)に
+同梱</strong>。</li>
+<li><strong>コード内 <code>^N</code> × running range(未決、Phase
+2+)</strong>: コード値(<code>[...]</code>/<code>chord()</code>)内の声部
+<code>^N</code>(§6 のヴォイシング、例 So
+What)は議論対象外。spec ドラフトは「running range が走るのは play()
+の時間軸メロディ要素列。コードは1スロットで、コード内 <code>^N</code>
+は声部の構造的配置として range の上に重なり、running range
+自体は変えない」で解決。chord が Phase 2+ のため Phase 1
+はブロックしない。chord 実装時に最終確認。</li>
+</ol>
 </body>
 </html>
