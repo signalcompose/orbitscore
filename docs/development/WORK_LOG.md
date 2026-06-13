@@ -48,7 +48,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **未決/確認済**: `^N` × `.root()` グループの相互作用は **linear で確定** (大和さん、グループを抜けても range 持続)。chord 値内の `^N` (§6 ヴォイシング) は Phase 2+ で別途確認。
 
-**次**: PR #245 にコミット → レビュー/マージ。その後 Phase 2 (#230) / L1 (#229)。
+**/code:pr-review-team イテレーション1 (2026-06-13)**: 4 専門レビュアー (code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer) で PR #245 をレビュー。Critical 2 + Important 6 を修正:
+- **(Critical) 度数拒否が run() に伝播していなかった**: bad degree (10/12/14/15+) は fire-and-forget の scheduleEventsFn callback 内で throw され unhandled rejection になっていた (eager 検証は root だけだった)。`validateMidiDispatch()` を追加し、run()/loop() の eager ブロックで root + 全度数を事前解決 → 拒否度数が awaited チェーンで reject するように。テストで実証 (`play(10)`/`play(15)` → run() rejects)。
+- **(Critical) README**: 「Ctrl+C = パニック」を graceful LOOP() に訂正。
+- **(Important) MidiScheduler ピッチベンド残留**: detune≠0 の note の後、ベンドが中央に戻らず次の note を detune させていた → offTime に `pitchBend(…, 0)` reset を追加 + テスト。
+- **(Important) MidiScheduler.tick() の throw 耐性**: `action.run()` が throw すると queue cleanup がスキップされ double-send / hanging note → try/catch + log で継続。
+- **(Important) seq.root(0) のサイレント fallback**: 0 は休符で root 不正 → 正の整数を検証 (throw)。
+- **(Important) テスト追加**: テンション 9/11/13 + range 継承、変化記号 + range 継承 (`3^1, b5`)、度数拒否の dispatch 伝播。
+- **(Important) comment**: parsePitchModifiers docstring を sticky pitch range に更新。
+- minor: degree-resolution 式コメントを `range o` に、dev-server `do_GET` の `/pattern` を exact match に。
+- テスト 827 passed / 23 skipped。
+
+**次**: PR #245 レビュー/マージ。その後 Phase 2 (#230) / L1 (#229)。
 
 ---
 

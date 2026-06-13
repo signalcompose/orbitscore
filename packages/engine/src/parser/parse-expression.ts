@@ -160,8 +160,13 @@ export class ExpressionParser {
   }
 
   /**
-   * Parse optional `^` (octave shift) and `~` (detune) modifiers onto a degree,
-   * producing a PlayPitch. Both modifiers are optional and order-independent.
+   * Parse optional `^` (pitch range set-point) and `~` (detune) modifiers onto a
+   * degree, producing a PlayPitch. Both modifiers are optional and order-
+   * independent. `^N` is STICKY (§2.4): it records `octaveShift` AND sets
+   * `rangeSet`, marking this note as a running-range set point — the value
+   * propagates to subsequent degrees in the play() (threaded at dispatch) until
+   * another `^M`/`^0` overrides it. The parser only records the per-note
+   * annotation; the running range is applied during scheduling, not here.
    */
   private parsePitchModifiers(
     degree: number,

@@ -76,7 +76,7 @@ SuperCollider はブートしない（MIDI シーケンスは TransportClock で
 npm run midi-run -- tools/midi-monitor/example.orbs
 # → IAC に MIDI が出てブラウザが発音、 評価した DSL ソースが /pattern に報告され
 #   「Now playing (DSL)」に表示される（表示=エンジンの実評価ソースなので音と必ず一致）
-# Ctrl+C で停止（全 note-off のパニックを送って終了）
+# Ctrl+C で停止（LOOP() を評価して各シーケンスを graceful に note-off。失敗時のみ panic fallback）
 ```
 
 第2引数で monitor の URL を変更可（既定 `http://localhost:8137`）。実装: `packages/engine/src/cli/midi-run.ts`。

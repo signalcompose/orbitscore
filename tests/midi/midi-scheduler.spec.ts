@@ -218,6 +218,26 @@ describe('MidiScheduler — detune / pitch bend', () => {
     expect(output.callsFor('pitchBend')).toHaveLength(0)
     expect(output.callsFor('noteOn')).toHaveLength(1)
   })
+
+  it('detune !== 0 resets pitch bend to center after note-off (no residual on the channel)', () => {
+    const n = makeNote({ detune: 1, onTime: BASE_TIME + 100, offTime: BASE_TIME + 300 })
+    scheduler.scheduleNote(n)
+    scheduler.start()
+
+    // Advance past offTime so both the detune bend (at onTime) and the reset
+    // (at offTime) fire.
+    vi.advanceTimersByTime(310)
+
+    const bends = output.callsFor('pitchBend')
+    expect(bends).toHaveLength(2)
+    expect(bends[0]?.args).toEqual(['TestPort', 1, 1]) // detune at note-on
+    expect(bends[1]?.args).toEqual(['TestPort', 1, 0]) // reset to center after note-off
+
+    // The reset must come after the note-off, leaving the channel centered.
+    const offIdx = output.calls.findIndex((c) => c.method === 'noteOff')
+    const resetIdx = output.calls.map((c) => c.method).lastIndexOf('pitchBend')
+    expect(offIdx).toBeLessThan(resetIdx)
+  })
 })
 
 // ---------------------------------------------------------------------------

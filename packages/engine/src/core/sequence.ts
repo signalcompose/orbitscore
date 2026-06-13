@@ -336,6 +336,16 @@ export class Sequence {
    * a numeric root with no `global.key()` declared is an error then.
    */
   root(degree: number): this {
+    // A root must be a positive degree. degree 0 is a rest, not a pitch center;
+    // without this guard root(0) resolves to null and silently falls back to
+    // the key tonic (§2.3), playing the wrong center with no error.
+    if (!Number.isInteger(degree) || degree < 1) {
+      throw new Error(
+        `Sequence '${this.stateManager.getName() || 'sequence'}': ` +
+          `root() degree must be a positive integer (1+), got ${degree}. ` +
+          `Degree 0 is a rest, not a valid root.`,
+      )
+    }
     this._rootDegree = degree
     return this
   }
@@ -461,6 +471,31 @@ export class Sequence {
     }
 
     return { rootPitchClass, octave: this._octave }
+  }
+
+  /**
+   * Eagerly validate a MIDI sequence's dispatch before scheduling: resolve the
+   * root context (key/root errors) AND resolve every degree once (so a rejected
+   * degree — 10/12/14/15+, §2.1 — throws here). This runs synchronously in the
+   * awaited run()/loop() chain, NOT in the fire-and-forget scheduleEventsFn
+   * callback, so the error reaches the caller (REPL/test) instead of becoming an
+   * unhandled rejection. The resolved notes are discarded; scheduleMidiEvents
+   * recomputes them with the running pitch range (§2.4).
+   */
+  private validateMidiDispatch(): void {
+    if (!this.isMidi()) return
+    const context = this.resolveRootContext()
+    const timedEvents = this.stateManager.getTimedEvents()
+    if (!timedEvents) return
+    for (const ev of timedEvents) {
+      const symbolic = ev.pitch ?? {
+        degree: ev.sliceNumber,
+        alteration: 0,
+        octaveShift: 0,
+        detune: 0,
+      }
+      resolveDegree(symbolic, context) // throws on a rejected/invalid degree
+    }
   }
 
   /**
@@ -647,9 +682,7 @@ export class Sequence {
     // the awaited call chain to the REPL catch block, instead of becoming an
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
-    if (this.isMidi()) {
-      this.resolveRootContext() // eager root validation (same rationale)
-    }
+    this.validateMidiDispatch() // eager root + degree validation (same rationale)
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -691,9 +724,7 @@ export class Sequence {
     // the awaited call chain to the REPL catch block, instead of becoming an
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
-    if (this.isMidi()) {
-      this.resolveRootContext() // eager root validation (same rationale)
-    }
+    this.validateMidiDispatch() // eager root + degree validation (same rationale)
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),

@@ -7,9 +7,9 @@
  *
  *   IONIAN = [0, 2, 4, 5, 7, 9, 11]   // semitones for degrees 1..7
  *
- *   resolve(degree n, alteration a, octaveShift o):
+ *   resolve(degree n, alteration a, range o):
  *     semitones = IONIAN[(n-1) mod 7] + 12 * floor((n-1) / 7) + a
- *     pitch     = rootPitch + semitones + 12 * o
+ *     pitch     = rootPitch + semitones + 12 * o   // o = running pitch range (§2.4)
  *
  *   rootPitch = 12 * (octave + 1) + rootPitchClass    // C4 = 60
  *

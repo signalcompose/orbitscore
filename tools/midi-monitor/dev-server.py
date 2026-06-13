@@ -77,7 +77,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
 
     def do_GET(self):
-        if self.path.startswith("/pattern"):
+        # Exact match (ignoring any query string) — startswith would also match
+        # unrelated paths like /patternXYZ and shadow them with the JSON reply.
+        if self.path.split("?")[0] == "/pattern":
             self._send_json(latest_pattern)
             return
         super().do_GET()

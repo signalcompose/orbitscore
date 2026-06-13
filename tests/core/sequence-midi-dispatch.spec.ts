@@ -152,6 +152,46 @@ describe('Sequence MIDI dispatch (§7-0 output stage)', () => {
     expect(notes).toHaveLength(5)
   })
 
+  it('§2.1 rejected degree 10 propagates as a run() rejection (not swallowed at dispatch)', async () => {
+    seq.play(10) // outside {1-9, 11, 13}
+    await expect(seq.run()).rejects.toThrow(/受理されません|\^N/)
+  })
+
+  it('§2.1 rejected degree 15 propagates as a run() rejection', async () => {
+    seq.play(15)
+    await expect(seq.run()).rejects.toThrow()
+  })
+
+  it('§2.4 tension degrees 9/11/13 inherit the running range', async () => {
+    const { parseAudioDSL } = await import('../../packages/engine/src/parser/audio-parser')
+    // 9^1 sets range +1 → D6 (base D5 74 + 12 = 86); 11 inherits +1 → F6 (77 + 12 = 89)
+    const args = parseAudioDSL('p.play(9^1, 11)').statements[0].args
+    seq.play(...(args as never[]))
+    await seq.run()
+    await vi.advanceTimersByTimeAsync(2100)
+
+    const notes = (out.noteOn as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[2])
+    expect(notes).toContain(86) // D6 = tension 9 at range +1
+    expect(notes).toContain(89) // F6 = tension 11 inheriting range +1
+    expect(notes).not.toContain(74) // D5 would mean range was not applied
+    expect(notes).toHaveLength(2)
+  })
+
+  it('§2.4 altered degree inherits the running range (play(3^1, b5) → E5, Gb5)', async () => {
+    const { parseAudioDSL } = await import('../../packages/engine/src/parser/audio-parser')
+    // 3^1 sets range +1 → E5 (76); b5 has rangeSet:false, inherits +1 → Gb5 (66 + 12 = 78)
+    const args = parseAudioDSL('p.play(3^1, b5)').statements[0].args
+    seq.play(...(args as never[]))
+    await seq.run()
+    await vi.advanceTimersByTimeAsync(2100)
+
+    const notes = (out.noteOn as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[2])
+    expect(notes).toContain(76) // E5 = degree 3 at range +1
+    expect(notes).toContain(78) // Gb5 = b5 inheriting range +1
+    expect(notes).not.toContain(66) // Gb4 would mean range was not inherited
+    expect(notes).toHaveLength(2)
+  })
+
   it('honors seq.octave for the base register', async () => {
     seq.octave(5) // degree 1 now C5 = 72
     seq.play(1)

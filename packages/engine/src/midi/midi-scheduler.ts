@@ -142,6 +142,15 @@ export class MidiScheduler {
     this.enqueue(n.offTime, n.owner, () => {
       this.output.noteOff(n.port, n.channel, n.note, n.owner)
     })
+    if (n.detune !== 0) {
+      // Reset the channel pitch bend to center after the detuned note ends, so
+      // a following non-detuned note on the same channel is not left bent
+      // (pitch bend is per-channel; without this the residual offset detunes
+      // the next note, which sends no bend of its own when its detune is 0).
+      this.enqueue(n.offTime, n.owner, () => {
+        this.output.pitchBend(n.port, n.channel, 0)
+      })
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -203,7 +212,15 @@ export class MidiScheduler {
     due.sort((a, b) => a.time - b.time || a.seq - b.seq)
 
     for (const action of due) {
-      action.run()
+      try {
+        action.run()
+      } catch (e) {
+        // A failed send (e.g. IAC port disconnected mid-loop) must not abort
+        // the tick: aborting would skip the queue cleanup below (fired actions
+        // re-fire next tick = double-send) and drop the remaining due actions
+        // (a paired note-off → hanging note). Log and continue.
+        console.error(`MidiScheduler: action failed (owner=${action.owner}):`, e)
+      }
     }
 
     // Remove fired actions. Use a Set for O(n) removal.
