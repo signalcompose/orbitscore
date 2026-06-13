@@ -27,6 +27,32 @@ import { QuantizeValue, nextQuantizedTime } from './global/quantize-manager'
 import { StateManager } from './sequence/state/state-manager'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
 
+/**
+ * `{ }` legato overlap (§4): how long the interior note rings past the next
+ * note-on. §10-2 leaves the exact value to a listening test; 20ms is the middle
+ * of the recommended 10-30ms. TODO(§10-2): finalize by ear.
+ */
+const LEGATO_OVERLAP_MS = 20
+
+/**
+ * One MIDI note planned from a TimedEvent during scheduling (§5/§4 output stage).
+ * Stage A fills the resolved pitch + flags; Stage B computes `offTime` and `emit`
+ * (tie absorption / voice-tie suppression / legato overlap); Stage C emits.
+ */
+interface PlannedNote {
+  onTime: number
+  slotDur: number
+  note: number | null // null = rest, or a `_` event-tie marker (no pitch)
+  detune: number
+  tie: boolean // `_` event tie — absorbed into the previous emitting note
+  legato: boolean
+  voiceTie: boolean
+  hold: boolean
+  tieSlots: number // extra slot duration absorbed from following `_` ties
+  offTime: number
+  emit: boolean
+}
+
 export class Sequence {
   private global: Global
   private audioEngine: AudioEngine
@@ -51,6 +77,7 @@ export class Sequence {
   private _midiChannel?: number // 1..16
   private _gate = 0.8 // default gate length (fraction of slot). spec §1
   private _vel = 96 // default velocity 1..127. spec §1
+  private _hold = false // §5.3: auto common-tone tie between consecutive stacks
   private _octave = 4 // base octave; degree 1 MIDI note. default 4 (C4=60)
   private _rootDegree?: number // seq.root(n): numeric root = degree of global.key()
 
@@ -315,6 +342,17 @@ export class Sequence {
   }
 
   /** Default gate length as a fraction of the slot (0..1). spec §1. */
+  /**
+   * Enable auto common-tone ties between consecutive stacks (§5.3). A pitch shared
+   * by two adjacent stacks is held (note-off/on suppressed) rather than retriggered
+   * — automatic application of the §5.2 voice tie. Stack-to-stack only (a repeated
+   * single note never auto-ties, so rhythm is preserved — decision #8).
+   */
+  hold(): this {
+    this._hold = true
+    return this
+  }
+
   gate(value: number): this {
     this._gate = Math.max(0, Math.min(1, value))
     return this
@@ -640,57 +678,163 @@ export class Sequence {
     const getSeqDefault = (): RootContext => (seqDefault ??= this.resolveRootContext())
     const sendDelay = midi.sendDelayFor(port)
 
+    // ── Stage A: resolve each event to a PlannedNote (§7-0 output stage) ──
     // §2.4 sticky pitch range: a note/rest with an explicit `^N` (rangeSet) sets
-    // the running range; every following degree inherits it in reading order
-    // until the next `^M`/`^0`. The range resets to base (0) here — i.e. at the
-    // top of each play() evaluation — so re-evaluations stay deterministic.
+    // the running range; following degrees inherit it until the next `^M`/`^0`.
+    // It resets to 0 at the top of each play() so re-evaluations stay deterministic.
     let runningRange = 0
-    for (const ev of timedEvents) {
+    const plans: PlannedNote[] = timedEvents.map((ev) => {
       const written = ev.pitch ?? {
         degree: ev.sliceNumber,
         alteration: 0,
         octaveShift: 0,
         detune: 0,
       }
-      // An explicit `^N` (including `^0` and a `0^N` rest) moves the running
-      // range; the move persists even when the carrying event is a rest.
-      if (written.rangeSet) {
-        runningRange = written.octaveShift
+      const onTime = schedulerStartTime + baseTime + ev.startTime + sendDelay
+      if (ev.tie) {
+        // §5.1: a `_` event tie carries no pitch and never touches the running
+        // range; Stage B1 absorbs its slot into the previous emitting note.
+        return this.makeTiePlan(onTime, ev.duration)
       }
-      // Per-event group scope (§3): a group `.root()` overrides the sequence
-      // default for this note (inner→outer already collapsed in the timing walk).
+      // An explicit `^N` (including `^0` / a `0^N` rest) moves the running range.
+      if (written.rangeSet) runningRange = written.octaveShift
       const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
-      // Effective octave = sticky running range (`^N`, linear) + group register
-      // (`.oct()`, lexical) + the voice's structural shift. The first two are
-      // orthogonal axes that compose additively (§9.3); `.oct()` is local to its
-      // group, while `^N` persists across group boundaries (§9.4), so groupOct
-      // never feeds back into runningRange. The structural part is a stack voice's
-      // own `^N` (§4/§6 `b7^+1`, rangeSet=false): it layers ON TOP of the running
-      // range without moving it (§2.4). A melodic `^N` (rangeSet=true) has already
-      // folded into runningRange above, so its structural part is 0 — keeping this
-      // additive is a no-op for every pre-stack note.
+      // Effective octave = running range (`^N`) + group register (`.oct()`) + the
+      // voice's structural shift (a stack voice's own `^N`, rangeSet=false, §4/§6).
+      // A melodic `^N` (rangeSet=true) folded into runningRange already, so its
+      // structural part is 0 — additive is a no-op for every pre-stack note (§9.3/§9.4).
       const structural = written.rangeSet ? 0 : written.octaveShift
       const effectiveOctave = runningRange + (ev.scope?.groupOct ?? 0) + structural
-      const symbolic = { ...written, octaveShift: effectiveOctave }
-      const resolved = resolveDegree(symbolic, context)
-      if (!resolved) {
-        continue // rest (degree 0)
+      const resolved = resolveDegree({ ...written, octaveShift: effectiveOctave }, context)
+      return {
+        onTime,
+        slotDur: ev.duration,
+        note: resolved ? resolved.midiNote : null, // null = rest (degree 0)
+        detune: resolved ? resolved.detune : 0,
+        tie: false,
+        legato: !!ev.legato,
+        voiceTie: !!ev.voiceTie,
+        hold: this._hold || !!ev.scope?.hold,
+        tieSlots: 0,
+        offTime: 0,
+        emit: resolved !== null,
       }
-      const onTime = schedulerStartTime + baseTime + ev.startTime + sendDelay
-      const offTime = onTime + ev.duration * this._gate
+    })
+
+    // ── Stage B: compute final offTime + suppress (preserves the on==off invariant) ──
+    this.absorbEventTies(plans) // §5.1 `_`
+    this.applyGateAndLegato(plans) // gate + §4/§5.4 `{ }` overlap
+    this.applyVoiceTiesAndHold(plans) // §5.2 `_n` + §5.3 `.hold()`
+
+    // ── Stage C: emit one scheduleNote per surviving note (exactly one off each) ──
+    for (const p of plans) {
+      if (!p.emit || p.note === null) continue
       scheduler.scheduleNote({
         owner,
         port,
         channel,
-        note: resolved.midiNote,
+        note: p.note,
         velocity: this._vel,
-        detune: resolved.detune,
-        onTime,
-        offTime,
+        detune: p.detune,
+        onTime: p.onTime,
+        offTime: p.offTime,
       })
     }
 
     this.stateManager.setPlaying(true)
+  }
+
+  /** A `_` event-tie PlannedNote: no pitch, never emits — absorbed in Stage B1. */
+  private makeTiePlan(onTime: number, slotDur: number): PlannedNote {
+    return {
+      onTime,
+      slotDur,
+      note: null,
+      detune: 0,
+      tie: true,
+      legato: false,
+      voiceTie: false,
+      hold: false,
+      tieSlots: 0,
+      offTime: 0,
+      emit: false,
+    }
+  }
+
+  /**
+   * §5.1: absorb each `_` event tie into the previous EMITTING note (extend its
+   * span by the tie's slot, no retrigger). A leading `_` (no preceding note) or a
+   * `_` after a rest extends nothing → silence. A rest breaks the tie chain.
+   */
+  private absorbEventTies(plans: PlannedNote[]): void {
+    let lastEmitted: PlannedNote | undefined
+    for (const p of plans) {
+      if (p.tie) {
+        if (lastEmitted) lastEmitted.tieSlots += p.slotDur
+        continue
+      }
+      lastEmitted = p.note === null ? undefined : p
+    }
+  }
+
+  /**
+   * Base note-off per emitting note: gate over the (tie-extended) span, then the
+   * §4 legato override — an interior `{ }` note's off is delayed to the next
+   * note-on + overlap. A pattern-tail legato note (no next note-on) keeps gate.
+   */
+  private applyGateAndLegato(plans: PlannedNote[]): void {
+    const onsetTimes = [...new Set(plans.filter((p) => p.note !== null).map((p) => p.onTime))].sort(
+      (a, b) => a - b,
+    )
+    for (const p of plans) {
+      if (p.note === null) continue
+      p.offTime = p.onTime + (p.slotDur + p.tieSlots) * this._gate
+      if (p.legato) {
+        const next = onsetTimes.find((t) => t > p.onTime)
+        if (next !== undefined) p.offTime = next + LEGATO_OVERLAP_MS
+      }
+    }
+  }
+
+  /**
+   * §5.2 `_n` voice tie + §5.3 `.hold()`: a note whose RESOLVED pitch is sounding
+   * from the immediately-preceding slot is held (its predecessor's off is extended,
+   * its own on/off suppressed) instead of retriggered. `_n` applies per-voice;
+   * `.hold()` applies to every common tone but only between two STACKS (slot size
+   * > 1) — so repeated single notes never auto-tie (decision #8). Matching is by
+   * resolved-pitch equality (decision #7); no match → play normally (fallback).
+   */
+  private applyVoiceTiesAndHold(plans: PlannedNote[]): void {
+    const slots = new Map<number, PlannedNote[]>()
+    for (const p of plans) {
+      if (p.note === null) continue
+      const slot = slots.get(p.onTime)
+      if (slot) slot.push(p)
+      else slots.set(p.onTime, [p])
+    }
+    const onsetTimes = [...slots.keys()].sort((a, b) => a - b)
+
+    let prevSounding = new Map<number, PlannedNote>() // pitch → held note from previous slot
+    let prevWasStack = false
+    for (const t of onsetTimes) {
+      const slot = slots.get(t)!
+      const curIsStack = slot.length > 1
+      const curSounding = new Map<number, PlannedNote>()
+      for (const n of slot) {
+        const wantTie = n.voiceTie || (n.hold && prevWasStack && curIsStack)
+        const held = prevSounding.get(n.note!)
+        if (wantTie && held) {
+          // suppress this retrigger; extend the held note to cover this slot
+          held.offTime = Math.max(held.offTime, n.onTime + n.slotDur * this._gate)
+          n.emit = false
+          curSounding.set(n.note!, held) // chain: the same note may hold across 3+ stacks
+        } else {
+          curSounding.set(n.note!, n)
+        }
+      }
+      prevSounding = curSounding
+      prevWasStack = curIsStack
+    }
   }
 
   // Schedule events from a specific time onwards (for seamless parameter changes)

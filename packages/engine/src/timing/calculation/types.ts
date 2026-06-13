@@ -15,6 +15,7 @@ export interface TimedEventScope {
   root?: ScopeRoot
   mode?: ScopeMode
   groupOct?: number
+  hold?: boolean // §5.3 group-level `.hold()` — auto common-tone tie between stacks
 }
 
 /**
@@ -45,4 +46,16 @@ export interface TimedEvent {
    * and the group-octave offset (independent of the sticky `^N` running range).
    */
   scope?: TimedEventScope
+  /**
+   * Phase 4 (§5/§4) articulation/tie attributes, realized at the output stage:
+   * - `tie`: a `_` event-tie marker — occupies a slot, carries no pitch; extends
+   *   the previous emitting note (no retrigger).
+   * - `legato`: an interior `{ }` note — its note-off is delayed past the next
+   *   note-on (overlap). The group-tail note is NOT tagged (normal gate).
+   * - `voiceTie`: a `_n` stack voice — if its resolved pitch is sounding from the
+   *   previous stack, suppress the off/on and extend; else play normally.
+   */
+  tie?: boolean
+  legato?: boolean
+  voiceTie?: boolean
 }

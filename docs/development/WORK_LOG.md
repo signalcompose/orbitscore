@@ -20,7 +20,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.109 Issue #227 + #236 — Phase R (`*n`+パターン変数) + Phase 4 (タイ/レガート/hold) (Jun 14, 2026)
 
 **Date**: 2026-06-14
-**Status**: 🚧 IN PROGRESS（Phase R の `*n` 完了。パターン変数 → Phase 4 と続く。1 ブランチ）
+**Status**: ✅ 実装完了（Phase R + Phase 4、1 ブランチ。/simplify + レビュー前）
 **Issue**: signalcompose/orbitscore#227, #236
 **Branch**: `227-phase-r-and-phase-4`
 
@@ -47,6 +47,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - core spec は specs-v2 を正本として参照（§6.5 + Tidal 差異注記は PITCH_DSL_SPEC が正本。core sync は別 Issue #237）
 
 **テスト**: `pattern-binding-parsing.spec.ts` 5件 / `sequence-pattern-dispatch.spec.ts` 8件（単一/juxtaposition splice・`*n`・`.root()`・chord 共存・評価時値渡し・unknown warning・interpreter 配線）。全体 952 passed / 23 skipped。**Phase R 完了**。
+
+**追加コミット（Phase 4: タイ / 声部タイ / レガート / hold, §5/§4）**:
+- `parser/tokenizer.ts`: `UNDERSCORE`（先頭 `_` を傍受。中間 `_` の識別子は不変）/ `LBRACE` / `RBRACE`
+- `parser/types.ts`: `PlayTie`（`_` イベントタイ）/ `PlayLegato`（`{ }`）を PlayElement へ。`PlayPitch.tie`（`_n` 声部タイ）/ `PlayScoped.hold`
+- `parser/parse-expression.ts`: `parseLegato`、`parseNestedPlayElement`/`parseArgument` の UNDERSCORE/LBRACE 分岐、`parseStackElement` の UNDERSCORE 分岐（`_5`/`_b7` を chord_ref より先に傍受）、`parseScopeChain` に `.hold()`
+- `timing/calculate-event-timing.ts`: `tie` 分岐（スロット占有マーカー、pitch 無し）/ `legato` 分岐（`( )` 同分割、内部音に legato タグ・末尾は通常 gate）/ voiceTie タグ / `hold` を resolveScope に
+- `core/sequence.ts`: `scheduleMidiEvents` を **3段パス**に再構成（resolve→offTime算出/抑制→emit）。`_` 吸収・`_n`/hold 静的ピッチ照合抑制・`{ }` overlap。on数=off数を構造的に保証（hanging note 不変条件）。`hold()` メソッド + `LEGATO_OVERLAP_MS=20`
+- `midi/chord/resolve-chords.ts`: `legato` 再帰 arm
+
+**仕様補足（DESIGN_DISCUSSION_RECORD §11、決定 #44-46）**: 先頭 `_` の LOOP 持ち越しは clearOwner 衝突のため v1.1 では休符（真の持ち越しは follow-up）。overlap=20ms。`.hold()` のスタック判定 = slot size>1（単音連打は非対象 #8）。`_n`/hold は静的・解決後ピッチ照合（動的照会は不変条件リスク）。
+
+**テスト**: `tie-legato-parsing.spec.ts` 7件 / `tie-legato-timing.spec.ts` 3件 / `sequence-tie-legato-dispatch.spec.ts` 8件（legato overlap 順序・`_` 二音・先頭 `_`=休符・`_n` 抑制+fallback・hold 自動タイ+#8単音除外）/ hanging-note 不変条件に Phase 4 パターンの 100× LOOP swap を追加。全体 971 passed / 23 skipped。**Phase 4 完了 → Phase R + Phase 4 完了**。
 
 ### 6.108 Issue #250 — 設計記録: アイデンティティ・スコープ原則・表現 2 軸モデル (Jun 13, 2026)
 

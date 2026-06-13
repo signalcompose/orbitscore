@@ -176,8 +176,17 @@ export class AudioTokenizer {
         continue
       }
 
+      // A LEADING `_` is the tie token (§5.1 event tie / §5.2 voice-tie prefix),
+      // not an identifier start. Mid-identifier `_` (e.g. my_var) is still read by
+      // readIdentifier below — only a token that STARTS with `_` is intercepted.
+      if (char === '_') {
+        tokens.push({ type: 'UNDERSCORE', value: '_', line, column })
+        this.advance()
+        continue
+      }
+
       // Identifiers and keywords
-      if (/[a-zA-Z_]/.test(char)) {
+      if (/[a-zA-Z]/.test(char)) {
         const id = this.readIdentifier()
         const type = AudioTokenizer.KEYWORDS.has(id)
           ? (id.toUpperCase() as AudioTokenType)
@@ -237,6 +246,14 @@ export class AudioTokenizer {
           break
         case ']':
           tokens.push({ type: 'RBRACKET', value: ']', line, column })
+          this.advance()
+          break
+        case '{':
+          tokens.push({ type: 'LBRACE', value: '{', line, column })
+          this.advance()
+          break
+        case '}':
+          tokens.push({ type: 'RBRACE', value: '}', line, column })
           this.advance()
           break
         case '%':

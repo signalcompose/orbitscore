@@ -158,6 +158,9 @@ function resolveElement(
     }
     case 'nested':
       return { type: 'nested', elements: resolveElements(el.elements, getBinding, warnings) }
+    case 'legato':
+      // §5.4: a legato group's interior may hold chord refs / `*n` — resolve them.
+      return { type: 'legato', elements: resolveElements(el.elements, getBinding, warnings) }
     case 'scoped':
       return { ...el, groups: resolveElements(el.groups, getBinding, warnings) }
     case 'modified':

@@ -51,7 +51,7 @@ function notesOf(out: MidiOutput): number[] {
 
 /** The raw bound elements of a `var NAME = <play-expr>` statement, for definePattern(). */
 function patternElements(rhs: string): any[] {
-  return (parseAudioDSL(`var _ = ${rhs}`).statements[0] as any).elements
+  return (parseAudioDSL(`var tmp = ${rhs}`).statements[0] as any).elements
 }
 
 async function playWith(setup: (g: Global) => void, src: string, key = 'C'): Promise<MidiOutput> {

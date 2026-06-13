@@ -30,6 +30,9 @@ export type AudioTokenType =
   | 'TILDE' // ~ (detune modifier, e.g. b7~-0.25)
   | 'LBRACKET' // [ (stack — reserved, not yet supported in v1.1)
   | 'RBRACKET' // ] (stack — reserved, not yet supported in v1.1)
+  | 'LBRACE' // { (legato group, §4/§5.4)
+  | 'RBRACE' // } (legato group, §4/§5.4)
+  | 'UNDERSCORE' // _ (tie token: §5.1 event tie / §5.2 voice-tie prefix)
   | 'NEWLINE' // line break
   | 'EOF' // end of file
 
@@ -133,6 +136,8 @@ export type PlayElement =
   | PlayStack // `[ ]` simultaneous-note-on stack (§4)
   | PlayChordRef // a bare name element (§6/§6.5); transient — resolved away at L2 (resolveChords)
   | PlayRepeat // `x*n` repetition (§6.5); transient — expanded to n siblings at L2
+  | PlayTie // `_` event-level tie (§5.1): extends the previous event by one slot
+  | PlayLegato // `{ }` legato group (§4/§5.4): note-off delayed past the next note-on
 
 export type PlayNested = {
   type: 'nested'
@@ -213,6 +218,26 @@ export type PlayRepeat = {
 }
 
 /**
+ * A bare `_` event-level tie (§5.1): occupies a slot but plays no new note —
+ * it extends the PREVIOUS emitting event by that slot (no retrigger). Carried
+ * symbolically to the timing walk (§7-0) and realized at the output stage. A
+ * pattern-leading `_` with no preceding note is treated as a rest (v1.1; true
+ * LOOP carryover is a documented follow-up — DESIGN_DISCUSSION_RECORD §11).
+ */
+export type PlayTie = { type: 'tie' }
+
+/**
+ * A `{ }` legato group (§4 / §5.4): the same time-division rule as `( )`, but the
+ * interior note-offs are delayed past the next note-on (overlap) — the sustain-past-
+ * slot end of the articulation axis (DESIGN_DISCUSSION_RECORD §10.3). The group-tail
+ * note follows the normal gate. A `[ ]` inside `{ }` overlaps as a whole stack.
+ */
+export type PlayLegato = {
+  type: 'legato'
+  elements: PlayElement[]
+}
+
+/**
  * A removal marker `-N` / `-bN` inside a `[ ]` stack (§6): after spread, remove the
  * voice whose literal `(degree, alteration)` matches. No match = no-op + warning
  * (literal match only; resolved-pitch matching is rejected — `-3` would become
@@ -244,6 +269,7 @@ export type PlayScoped = {
   root?: ScopeRoot // present iff `.root()` was chained
   mode?: ScopeMode // present iff `.mode()` was chained (v1.1: parsed + reserved; dispatch throws)
   oct?: number // present iff `.oct(N)` was chained (group-lexical octave register)
+  hold?: boolean // present iff `.hold()` was chained (§5.3 auto common-tone tie, group-level)
 }
 
 /**
@@ -278,6 +304,7 @@ export type PlayPitch = {
   octaveShift: number // from `^N`: the running pitch range this note SETS (§2.4). 0 if no `^`.
   rangeSet: boolean // true if `^` was written (sticky range set point); false = inherit running range
   detune: number // semitones from `~` (e.g. b7~-0.25 → -0.25). 0 if absent
+  tie?: boolean // §5.2 voice-level tie: a `_` prefix inside a stack ([1, _5]) — resolved-pitch-match suppress
 }
 
 export type PlayWithModifier = {
