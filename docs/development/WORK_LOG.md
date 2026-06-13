@@ -41,7 +41,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **追加コミット (B7: `.oct()`×`^N` 合成)**: 大和確認で **additive** に決定。`effectiveOctave = runningRange + groupOct`（§9.3 直交＝足し合わせ）。`^N` は `.oct()` グループを抜けても持続（§9.4 linear）、groupOct は running range にフィードバックしない。テスト3件追加（加算合成 / oct 単独 / `^N` 持続）。全体 863 passed。
 
-**次**: VS Code セマンティックハイライト（Sonnet 委譲）→ core spec 反映（B8）→ Phase 2 PR。
+**B8 core spec 反映**: Phase 1 の前例に倣い、core spec (`INSTRUCTION_ORBITSCORE_DSL.md`) は line 12 の「v1.1 は specs-v2 が正本」ポインタで反映済みとする（§2.3/§3 を core spec に複製すると specs-v2 と二重保守＝乖離リスク。operating rule #7 の眼目「乖離を作らない」はポインタで満たす）。v1.1 安定後にまとめて fold-in する方針。
+
+**VS Code セマンティックハイライト**: Sonnet subagent に委譲（packages/vscode-extension、§5「拡張側に閉じる」）。完了時に別コミットで同梱。
+
+**次**: VS Code ハイライト fold-in → Phase 2 PR → レビュー。
 
 ---
 
