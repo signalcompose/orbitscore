@@ -11,40 +11,48 @@ for(let t=0;t<ntrk;t++){if(buf.toString('ascii',p,p+4)!=='MTrk')break;p+=4;const
   else if(type===0x80){const n=u8();u8();const k=n+'|'+ch;if(on[k]!=null){notes.push({tick:on[k],note:n,dur:tick-on[k]});delete on[k]}}
   else if(type===0xc0||type===0xd0){u8()}else{u8();u8()}}
  p=end}
-const NBARS=+(process.env.BARS||8), bar=4*div, beat=div, slots=NBARS*4
-const tonicPc=+(process.env.TONIC_PC||2) /*D*/, octave=4, ROOT=12*(octave+1)+tonicPc, IONIAN=[0,2,4,5,7,9,11]
+// --- config (env) ---
+const BEATS=+(process.env.BEATS||4)            // beats per bar (3 for 3/4)
+const SUB=+(process.env.SUB||1)                // grid slots per beat (1=quarter, 2=eighth)
+const bar=BEATS*div, slot=div/SUB, perBar=BEATS*SUB
+const lastTick=notes.reduce((m,e)=>Math.max(m,e.tick+e.dur),0)
+const NBARS=+(process.env.BARS||Math.ceil(lastTick/bar))
+const tonicPc=+(process.env.TONIC_PC||2) /*D*/, octave=+(process.env.OCT||4), ROOT=12*(octave+1)+tonicPc, IONIAN=[0,2,4,5,7,9,11]
 const SCALE={0:[1,0],2:[2,0],4:[3,0],5:[4,0],7:[5,0],9:[6,0],11:[7,0],1:[1,1],3:[3,-1],6:[4,1],8:[6,-1],10:[7,-1]}
 const tok=n=>{const sem=((n-tonicPc)%12+12)%12;const[d,alt]=SCALE[sem];const nat=ROOT+IONIAN[d-1]+alt;const range=Math.round((n-nat)/12)
  return (alt<0?'b'.repeat(-alt):alt>0?'#'.repeat(alt):'')+d+(range!==0?'^'+(range>0?'+':'')+range:'')}
-const bars=[]; const HOLD=process.env.HOLD==='1'
-for(let b=0;b<NBARS;b++){const beats=[]
- for(let q=0;q<4;q++){const tk=b*bar+q*beat
+// --- vertical slice → [ ] stacks, onset→attack / held→`_` voice tie ---
+const bars=[]
+for(let b=0;b<NBARS;b++){const cells=[]
+ for(let q=0;q<perBar;q++){const tk=b*bar+q*slot
   const cover=notes.filter(e=>e.tick<=tk+1&&e.tick+e.dur>tk+1)
   const seen=new Set(); const voices=[]
   for(const e of cover.sort((a,b)=>a.note-b.note)){ if(seen.has(e.note))continue; seen.add(e.note)
-   const onset=Math.abs(e.tick-tk) < beat/4   // a note that STARTS at this beat = attack; else held = tie
+   const onset=Math.abs(e.tick-tk) < slot/2   // starts at this slot = attack; else held = `_` tie
    voices.push((onset?'':'_')+tok(e.note)) }
-  beats.push(voices.length?('['+voices.join(', ')+']'):'0')}
- bars.push('  ('+beats.join(', ')+')')}
+  cells.push(voices.length?('['+voices.join(', ')+']'):'0')}
+ bars.push('  ('+cells.join(', ')+')')}
 const tempo=process.env.TEMPO||60, transport=process.env.TRANSPORT||'LOOP', KEY=process.env.KEY||'D'
-const orbs=`// Bach — Chorale "O Haupt voll Blut und Wunden" (Passion Chorale), opening ${NBARS} bars.
-// AUTO-TRANSCRIBED (public-domain MIDI, Mutopia) by tools/midi2orbs-chordal.js —
-// CHORDAL mode: each beat = the sounding pitches as a [ ] stack (structural ^ per voice,
-// no sticky-range bleed). This is where [ ] is the natural fit (homophony). Verified vs source.
+const TITLE=process.env.TITLE||'chordal transcription', SEQ=process.env.SEQ||'piano'
+const orbs=`// ${TITLE}
+// AUTO-TRANSCRIBED from a public-domain MIDI by tools/midi2orbs/midi2orbs-chordal.js —
+// CHORDAL mode: each grid slot = the sounding pitches as a [ ] stack (structural ^ per
+// voice, no sticky-range bleed); a held voice is a \`_\` voice tie. ${NBARS} bars, ${BEATS}/4,
+// ${SUB===2?'eighth':'quarter'} grid. Verified vs source MIDI.
 var global = init GLOBAL
 global.tempo(${tempo})
-global.beat(4 by 4)
+global.beat(${BEATS} by 4)
 global.key("${KEY}")
 global.start()
 
-var choir = init global.seq
-choir.midi("IAC", 1).octave(${octave}).gate(0.95).vel(78)
-choir.length(${NBARS})
-choir.play(
+var ${SEQ} = init global.seq
+${SEQ}.midi("IAC", 1).octave(${octave}).gate(0.95).vel(76)
+${SEQ}.length(${NBARS})
+${SEQ}.play(
 ${bars.join(',\n')}
 )
 
-${transport}(choir)
+${transport}(${SEQ})
 `
-fs.writeFileSync(process.env.OUT||'/tmp/chorale.orbs',orbs)
-console.log(orbs)
+fs.writeFileSync(process.env.OUT||'/tmp/out.orbs',orbs)
+console.log(`wrote ${process.env.OUT||'/tmp/out.orbs'} — ${NBARS} bars, ${BEATS}/4, ${SUB===2?'eighth':'quarter'} grid`)

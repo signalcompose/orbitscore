@@ -62,6 +62,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **追加コミット（実機検証ハーネス + デモ）**: 実エンジン（parse→度数解決→MIDI→IAC）で**実在の PD 曲**を鳴らして Phase R/4 を検証するため、MIDI→OrbitScore 変換器 `tools/midi2orbs/`（`smf.js` / 声部モード `midi2orbs.js` / 和音モード `midi2orbs-chordal.js` + README）と PD デモ `tools/midi-monitor/{pavane,chorale,phase-r4-tour}.orbs` を追加。ピッチ列を元 MIDI と照合して一致を確認（パヴァーヌ=3声・度数+`^`、コラール=`[ ]`+`_n` 声部タイ）。著作権 MIDI 本体は非コミット。判明した DSL フィードバック（度数モデルのオクターブ越え friction / 多声の2手段 / tie↔tree-duration の相補性）は README に記録。コード変更なし（ツール/デモ/ドキュメントのみ）。
 
+**追加（Gymnopédie 全曲）**: transcriber 和音モードを 3/4・サブビートグリッド・全長対応に拡張し、Satie「ジムノペディ No.1」全78小節を `tools/midi-monitor/gymnopedie.orbs` として生成（`[ ]` 和音 + 左手バスの `_n` 保持、Gmaj7⇄Dmaj7 を元 MIDI と照合一致）。実曲テストで surfaced した将来課題: (a) key 中心の絶対音域指定、(b) セクション変数（複数小節の楽節束縛・曲構成での再利用）。
+
 ### 6.108 Issue #250 — 設計記録: アイデンティティ・スコープ原則・表現 2 軸モデル (Jun 13, 2026)
 
 **Date**: 2026-06-13
