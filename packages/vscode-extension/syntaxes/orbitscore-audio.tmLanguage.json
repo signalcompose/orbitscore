@@ -6,6 +6,9 @@
       "include": "#comments"
     },
     {
+      "include": "#pitch-scope-chains"
+    },
+    {
       "include": "#variables"
     },
     {
@@ -31,15 +34,85 @@
     }
   ],
   "repository": {
+    "pitch-scope-chains": {
+      "comment": "Pitch-scope group chains: (group).root(F#) / .mode(dorian) / .oct(2) — §2.3, §3. Uses begin/end so that '#' inside the argument (e.g. F#) is not captured as a line comment by the top-level '#comments' rule.",
+      "patterns": [
+        {
+          "comment": ".root(<note-name|degree>) — e.g. .root(F#), .root(Bb), .root(3), .root(b6)",
+          "name": "meta.pitch-scope.root.orbitscore",
+          "begin": "\\.(root)\\(",
+          "beginCaptures": {
+            "1": { "name": "entity.name.function.scope.orbitscore" }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.parameters.end.orbitscore" }
+          },
+          "patterns": [
+            {
+              "comment": "Note-name root: C, Db, D, Eb, E, F, F#, Gb, G, Ab, A, Bb, B, C#, D#, G#, A#",
+              "name": "variable.other.pitch-class.orbitscore",
+              "match": "\\b[A-G][b#]?(?:#)?"
+            },
+            {
+              "comment": "Altered degree root: b3, #5, bb7, ##2, etc.",
+              "name": "variable.other.degree.orbitscore",
+              "match": "(?:b{1,2}|#{1,2})[1-9][0-9]?"
+            },
+            {
+              "comment": "Bare degree root: bare integer; semantically valid degrees are 1-9, 11, 13",
+              "name": "constant.numeric.degree.orbitscore",
+              "match": "\\b[1-9][0-9]?\\b"
+            }
+          ]
+        },
+        {
+          "comment": ".mode(<name>) — e.g. .mode(dorian). v1.1: syntax reserved, parsed but dispatch throws.",
+          "name": "meta.pitch-scope.mode.orbitscore",
+          "begin": "\\.(mode)\\(",
+          "beginCaptures": {
+            "1": { "name": "entity.name.function.scope.orbitscore" }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.parameters.end.orbitscore" }
+          },
+          "patterns": [
+            {
+              "comment": "Mode name argument (identifier or string)",
+              "name": "variable.other.mode-name.orbitscore",
+              "match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+            },
+            {
+              "include": "#strings"
+            }
+          ]
+        },
+        {
+          "comment": ".oct(N) — group-lexical octave register, integer (possibly signed)",
+          "name": "meta.pitch-scope.oct.orbitscore",
+          "begin": "\\.(oct)\\(",
+          "beginCaptures": {
+            "1": { "name": "entity.name.function.scope.orbitscore" }
+          },
+          "end": "\\)",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.parameters.end.orbitscore" }
+          },
+          "patterns": [
+            {
+              "name": "constant.numeric.integer.orbitscore",
+              "match": "-?\\d+"
+            }
+          ]
+        }
+      ]
+    },
     "comments": {
       "patterns": [
         {
           "name": "comment.line.double-slash.orbitscore",
           "match": "//.*$"
-        },
-        {
-          "name": "comment.line.number-sign.orbitscore",
-          "match": "#.*$"
         }
       ]
     },

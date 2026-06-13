@@ -3,6 +3,8 @@
  * Based on specification: docs/INSTRUCTION_ORBITSCORE_DSL.md
  */
 
+import { noteNameToPitchClass } from '../midi/note-name'
+
 import {
   AudioToken,
   RandomValue,
@@ -11,9 +13,30 @@ import {
   PlayWithModifier,
   PlayModifier,
   PlayPitch,
+  PlayScoped,
+  ScopeRoot,
+  ScopeMode,
   Meter,
 } from './types'
 import { ParserUtils } from './parser-utils'
+
+/**
+ * If the last element of `list` is a scope chain (PlayScoped) and there are
+ * preceding sibling groups since `runStart`, collapse the juxtaposition run
+ * into its `groups`, so `(A)(B).root(X)` shares one scope (§3). No-op otherwise
+ * — a no-chain run stays as separate siblings. Shared by the nested-level
+ * (ExpressionParser) and statement-level (StatementParser) parse loops; both
+ * call it AFTER pushing the just-parsed element, so the run rule lives in one
+ * place (the pre-/post-push arithmetic is otherwise an easy source of drift).
+ */
+export function collapseScopedRun(list: PlayElement[], runStart: number): void {
+  const lastIdx = list.length - 1
+  const last = list[lastIdx]
+  if (last && typeof last === 'object' && last.type === 'scoped' && runStart < lastIdx) {
+    const preceding = list.splice(runStart, lastIdx - runStart)
+    last.groups = [...preceding, ...last.groups]
+  }
+}
 
 /**
  * Expression parser for audio DSL
@@ -421,10 +444,158 @@ export class ExpressionParser {
   }
 
   /**
+   * Parse a `.root()` / `.mode()` / `.oct()` pitch-scope chain after a group
+   * (§2.3, §3). Returns the accumulated scope. Duplicate or conflicting chains
+   * (`.root().root()`, `.root()`+`.mode()`) are diagnostic errors — last-wins is
+   * not allowed; only nesting overrides (§3, decision #10). The scope stays
+   * symbolic here; it is resolved lexically at dispatch (§7-0).
+   */
+  private parseScopeChain(): { root?: ScopeRoot; mode?: ScopeMode; oct?: number } {
+    const scope: { root?: ScopeRoot; mode?: ScopeMode; oct?: number } = {}
+
+    while (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
+      const method = ParserUtils.peek(this.tokens, this.pos).value
+      if (method !== 'root' && method !== 'mode' && method !== 'oct') break
+
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // DOT
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // method IDENTIFIER
+      const lparen = ParserUtils.expect(this.tokens, this.pos, 'LPAREN')
+      this.pos = lparen.newPos
+
+      if (method === 'root') {
+        if (scope.root !== undefined) {
+          throw new Error(
+            'duplicate .root() on the same group — last-wins is not allowed; ' +
+              'override only by nesting (§3)',
+          )
+        }
+        if (scope.mode !== undefined) {
+          throw new Error('.root() and .mode() cannot both be set on the same group (§3)')
+        }
+        scope.root = this.parseRootArg()
+      } else if (method === 'mode') {
+        if (scope.mode !== undefined) {
+          throw new Error('duplicate .mode() on the same group (§3)')
+        }
+        if (scope.root !== undefined) {
+          throw new Error('.root() and .mode() cannot both be set on the same group (§3)')
+        }
+        scope.mode = this.parseModeArg()
+      } else {
+        if (scope.oct !== undefined) {
+          throw new Error('duplicate .oct() on the same group (§3)')
+        }
+        scope.oct = this.parseSignedNumber()
+      }
+
+      const rparen = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
+      this.pos = rparen.newPos
+    }
+
+    return scope
+  }
+
+  /**
+   * Parse a `.root()` argument: a note name (`F#`, `Bb`, `C`) or a degree of
+   * `global.key()` (`3`, `b6`). Note names are reassembled from tokens here (no
+   * tokenizer mode): `Bb`/`C` arrive as one IDENTIFIER; `F#` as IDENTIFIER + a
+   * `#` ACCIDENTAL. The pitch class is resolved now; the spelling is kept for
+   * §7-0 reversibility. Degree roots resolve against the key at dispatch.
+   */
+  private parseRootArg(): ScopeRoot {
+    const cur = ParserUtils.current(this.tokens, this.pos)
+
+    if (cur.type === 'IDENTIFIER') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      let spelling = cur.value
+      // `Bb`/`Db` already carry their flats in the identifier; only a sharp run
+      // lexes separately as an ACCIDENTAL, so append that if present.
+      const next = ParserUtils.current(this.tokens, this.pos)
+      if (next.type === 'ACCIDENTAL' && next.value[0] === '#') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        spelling += next.value
+      }
+      return { kind: 'note', pitchClass: noteNameToPitchClass(spelling), spelling }
+    }
+
+    if (cur.type === 'ACCIDENTAL') {
+      const alteration = this.accidentalToAlteration(cur.value)
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      const num = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = num.newPos
+      return { kind: 'degree', degree: this.expectRootDegree(num.token), alteration }
+    }
+
+    if (cur.type === 'NUMBER') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      return { kind: 'degree', degree: this.expectRootDegree(cur), alteration: 0 }
+    }
+
+    throw new Error(
+      `.root() expects a note name (e.g. F#) or a degree (e.g. 3, b6), got ${cur.type}`,
+    )
+  }
+
+  /**
+   * Parse a degree-root number, rejecting 0 (a rest is not a valid pitch center).
+   * Parallels the `seq.root()` setter guard — `.root(0)` must error, not silently
+   * fall back to the key tonic (§2.3).
+   */
+  private expectRootDegree(token: AudioToken): number {
+    const degree = ParserUtils.parseNumber(token)
+    // Match the seq.root() setter guard: a positive integer. 0 is a rest, and a
+    // fractional degree is meaningless (would otherwise throw later at resolve).
+    if (!Number.isInteger(degree) || degree < 1) {
+      throw new Error(
+        `.root() degree must be a positive integer (1+); 0 is a rest, not a valid root.`,
+      )
+    }
+    return degree
+  }
+
+  /**
+   * Parse a `.mode()` argument. v1.1 reserves the syntax (mode lattice = Phase
+   * 2.2): capture the raw arg for duplicate/conflict diagnostics; dispatch
+   * throws not-implemented (parallel to time()/fixpitch()).
+   */
+  private parseModeArg(): ScopeMode {
+    const parts: string[] = []
+    while (
+      ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
+      !ParserUtils.isEOF(this.tokens, this.pos)
+    ) {
+      parts.push(String(ParserUtils.current(this.tokens, this.pos).value ?? ''))
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+    }
+    return { kind: 'unimplemented', raw: parts.join(' ') }
+  }
+
+  /**
+   * §3 "a chain closes the juxtaposition run": after a `.root()/.mode()/.oct()`
+   * chain, a `(` with no comma is a parse error — the comma (or `)` / arg end)
+   * bounds the run. Newlines are lexically insignificant, so skip them first.
+   * Peeks only; does not advance.
+   */
+  private assertChainClosesRun(): void {
+    const after = ParserUtils.skipNewlines(this.tokens, this.pos)
+    if (ParserUtils.current(this.tokens, after).type === 'LPAREN') {
+      throw new Error(
+        'expected comma after chained group: a .root()/.mode()/.oct() chain ' +
+          'closes the juxtaposition run (§3)',
+      )
+    }
+  }
+
+  /**
    * Parse nested play structure
    */
-  private parseNestedPlay(): { value: PlayNested | PlayWithModifier; newPos: number } {
+  private parseNestedPlay(): {
+    value: PlayNested | PlayWithModifier | PlayScoped
+    newPos: number
+  } {
     const elements: PlayElement[] = []
+    // Start of the current juxtaposition run within this group (reset on comma).
+    let runStart = 0
 
     // Parse nested structure like ((1)(2)) or (1, 2, 3)
     const lparenResult = ParserUtils.expect(this.tokens, this.pos, 'LPAREN')
@@ -439,11 +610,16 @@ export class ExpressionParser {
         break
       }
       this.parseNestedPlayElement(elements)
+      collapseScopedRun(elements, runStart)
 
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
-      // Handle comma or continue
+      // Handle comma or continue. A comma ends the juxtaposition run.
+      const sepType = ParserUtils.current(this.tokens, this.pos).type
       if (!this.handleNestedPlaySeparator()) {
         break
+      }
+      if (sepType === 'COMMA') {
+        runStart = elements.length
       }
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
     }
@@ -451,8 +627,20 @@ export class ExpressionParser {
     const rparenResult = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
     this.pos = rparenResult.newPos
 
-    // Check for modifiers on the nested structure itself
+    // Check for a chain on the group itself. `.root()/.mode()/.oct()` are pitch-
+    // scope chains → a PlayScoped node (§3); `.chop()` is the audio modifier.
     if (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
+      const method = ParserUtils.peek(this.tokens, this.pos).value
+      if (method === 'root' || method === 'mode' || method === 'oct') {
+        const scope = this.parseScopeChain()
+        this.assertChainClosesRun()
+        // B2: single group. Juxtaposition runs (multiple groups sharing the
+        // scope) are assembled by the caller (B3).
+        return {
+          value: { type: 'scoped', groups: [{ type: 'nested', elements }], ...scope },
+          newPos: this.pos,
+        }
+      }
       const modifierResult = this.parsePlayWithModifier({ type: 'nested', elements })
       return { value: modifierResult.value, newPos: modifierResult.newPos }
     }

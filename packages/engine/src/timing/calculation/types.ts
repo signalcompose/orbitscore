@@ -3,6 +3,19 @@
  */
 
 import { SymbolicPitch } from '../../midi/types'
+import { ScopeRoot, ScopeMode } from '../../parser/types'
+
+/**
+ * The lexical pitch scope (§2.3, §3) resolved for a MIDI event during the
+ * timing walk — the nearest enclosing `.root()`/`.mode()` (one axis) and the
+ * nearest enclosing `.oct()` (independent axis). Resolved to a RootContext /
+ * octave offset at the output stage. Absent = sequence default.
+ */
+export interface TimedEventScope {
+  root?: ScopeRoot
+  mode?: ScopeMode
+  groupOct?: number
+}
 
 /**
  * Represents a scheduled playback event.
@@ -25,4 +38,11 @@ export interface TimedEvent {
    * using the sequence's root context.
    */
   pitch?: SymbolicPitch
+  /**
+   * Phase 2 (§3): the lexical group scope (`.root()`/`.mode()`/`.oct()`) in
+   * effect for this event, resolved inner→outer during the timing walk. Absent
+   * = sequence default. Consumed at the output stage to build the RootContext
+   * and the group-octave offset (independent of the sticky `^N` running range).
+   */
+  scope?: TimedEventScope
 }

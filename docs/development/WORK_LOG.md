@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.106 Issue #230 — Phase 2: `.root()`/`.mode()`/`.oct()` グループスコープ — パーサー層 (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (パーサー層完了。dispatch のスコープ解決は後続コミット)
+**Issue**: signalcompose/orbitscore#230
+**Branch**: `230-phase-2-root-group-chains`
+
+**設計**: code-architect で blueprint を策定（PlayScoped 新ノード、スコープは calculateEventTiming のツリー walk で捕捉しフラット dispatch では per-event descriptor で消費、共有 run ヘルパで no-chain 並置の splice を保全、build sequence B0-B8）。spec §2.3/§3 正本。
+
+**本コミット（パーサー層 B1-B4 のパーサー部分）**:
+- `parser/types.ts`: `PlayScoped`/`ScopeRoot`/`ScopeMode` を追加、PlayElement union に。スコープチェーンが有る時だけ生成（no-chain 並置は従来通り別 sibling）
+- `parser/parse-expression.ts`: `parseScopeChain`（root/mode/oct、重複・root+mode 衝突を diagnostic エラー、last-wins 不採用）、`parseRootArg`（音名 F#/Bb/C をトークンから再構成 + 度数 3/b6、`noteNameToPitchClass` 再利用）、`parseModeArg`（mode 予約＝raw 捕捉、dispatch で throw 予定）、`assertChainClosesRun`（チェーン直後カンマなし `(` = エラー §3）、`collapseScopedRun`（並置 run を1スコープに集約）
+- `parser/parse-statement.ts`: `parseArguments` に run 集約（`(A)(B).root(X)` を1ノードに、カンマが run 境界）
+
+**テスト**: `tests/audio-parser/scope-chain-parsing.spec.ts` 20件（音名/度数 root、oct、mode 予約、重複/衝突/chain-closes エラー、並置 run 集約、§3 入れ子 override 例、no-chain 並置の回帰ガード）。全体 848 passed / 23 skipped。
+
+**追加コミット (B5-B6: dispatch スコープ解決)**:
+- `timing/calculation/types.ts`: `TimedEvent.scope`（TimedEventScope: root/mode/groupOct）追加
+- `timing/calculation/calculate-event-timing.ts`: scope スタックをツリー walk でスレッド、PlayScoped は timing 透過（並置と同じスロット）+ frame push、各リーフに inner→outer 解決した scope を付与
+- `core/sequence.ts`: `resolveScopeToContext(scope, getSeqDefault)` を追加し scheduleMidiEvents / validateMidiDispatch で per-event 解決。音名 root は key 不要・度数 root は key 必須（未宣言はエラー）・mode は throw。seq 既定は遅延算出（音名 root のみのシーケンスが key を要求されないように）
+- テスト: `scope-timing.spec.ts` 4件（timing 透過 + inner→outer + groupOct）、`sequence-scope-dispatch.spec.ts` 8件（音名/度数 root、並置共有、入れ子 override、key 有無、mode 拒否）。全体 860 passed。
+
+**追加コミット (B7: `.oct()`×`^N` 合成)**: 大和確認で **additive** に決定。`effectiveOctave = runningRange + groupOct`（§9.3 直交＝足し合わせ）。`^N` は `.oct()` グループを抜けても持続（§9.4 linear）、groupOct は running range にフィードバックしない。テスト3件追加（加算合成 / oct 単独 / `^N` 持続）。全体 863 passed。
+
+**B8 core spec 反映**: Phase 1 の前例に倣い、core spec (`INSTRUCTION_ORBITSCORE_DSL.md`) は line 12 の「v1.1 は specs-v2 が正本」ポインタで反映済みとする（§2.3/§3 を core spec に複製すると specs-v2 と二重保守＝乖離リスク。operating rule #7 の眼目「乖離を作らない」はポインタで満たす）。v1.1 安定後にまとめて fold-in する方針。
+
+**VS Code エディタ支援**（Sonnet subagent、§5「拡張側に閉じる」、main がレビュー）:
+- `syntaxes/orbitscore-audio.tmLanguage.json`: `.root()`/`.mode()`/`.oct()` チェーンの TextMate ハイライト（begin/end で引数内の `F#` を保護）+ 音名/度数/整数の引数ハイライト
+- `src/extension.ts`: root/mode/oct の hover + play() 引数内 `).` 文脈での補完（paren balance ガードで `play(...).` の誤発火を回避）
+- **main レビューで修正**: (1) grammar の legacy `#.*$` コメント規則を**削除**（OrbitScore のコメントは `//`、`#` は ACCIDENTAL。この規則が `#5`/`F#`/`##1` を全域でコメント誤認していた＝Phase 1 シャープ表示のバグ。agent の begin/end 回避の根本原因を除去）。(2) hover 例の `(1 2 3)` → `(1, 2, 3)`（OrbitScore はカンマ区切り）
+- **span レベルのセマンティックハイライト（並置 run の可視化）は見送り**: `PlayScoped` ノードにソース位置(offset)が無く、実装には engine パーサー拡張（PlayScoped に startOffset/endOffset）+ `DocumentSemanticTokensProvider` + package.json の semanticTokenTypes が必要。「`.root()`+カンマ両忘れ→静かな併合」緩和の本命だが engine 変更を伴うため follow-up（chain-closes/重複のパースエラーで多くは既に検出される）。
+
+**Phase 2 完了**: パーサー + timing + dispatch + エディタ支援。テスト 863 passed / 23 skipped。core spec はポインタ規約で反映。
+
+**Phase 2 PR**: #247 作成済み。
+
+**/simplify パス (2026-06-13)**: 4観点で Phase 2 production code (787行) をレビュー。適用4件: (A) 共有 `collapseScopedRun` で parser の run-collapse 重複を統合（pre/post-push の drift 解消、3 agent が指摘）、(B) 共有 `degreeRootToPitchClass` で度数解決カーネル統合、(D) `resolveScope` 空スタック早期 return、(E) `.mode()` エラーが `ScopeMode.raw` を使用（dead field 解消）。スキップ: 条件スプレッド・timing/dispatch 分離（正しい層）、microopt、diff 外の paren ループ。863 passed 維持。
+
+**/code:pr-review-team イテレーション1 (#247)**: 4 専門レビュアー。Critical 0、Important 修正:
+- **(silent-failure) `.root(0)` のサイレント tonic fallback**: 群 `.root()` は seq.root() の guard が無く degree 0 が黙って key tonic に落ちていた → `parseRootArg` に degree<1 の parse エラー（`expectRootDegree`）+ `degreeRootToPitchClass` の silent fallback を throw に。
+- **(comment) 度数範囲 `1-12` 誤記**（受理は {1-9,11,13}）→ tmLanguage + 補完 + hover の3箇所を `1-9, 11, 13` に修正。
+- **(test) カバレッジ +9**: nested レベルの run-collapse（`((1)(2).root(3), 5)`、/simplify の共有関数を両経路で検証）、不正 root 引数（`.root(0)`/`.root(b0)`/`.root(H)`/空）、note-root + bare degree 混在で no-key reject、inner `.oct()` × outer `.root()` 別フレーム、`.oct(-N)`。
+- code-reviewer は Critical/Important ゼロ。872 passed。
+
+**/code:pr-review-team イテレーション2 (#247)**: 再レビュー（code-reviewer + silent-failure-hunter）でイテレーション1修正が正しく新規問題なしを確認（Critical 0 / Important 0）。surfaced Minor 1件を fold-in: `expectRootDegree` に `Number.isInteger` チェック追加（seq.root() setter と対称、`.root(1.5)` を parse エラーに）+ テスト。**完了条件達成: Critical 0 / Important 0 / security pass**。873 passed / 23 skipped。
+
+**次**: #247 マージ判断（ユーザー指示待ち）。follow-up: span レベルハイライト（PlayScoped offset 要）、Phase 3 (#231 `[ ]` スタック + chord 値)。
+
+---
+
 ### 6.105 Issue #228 — Phase 1: 度数記法の再設計 (pitch range / スティッキー `^N`) (Jun 13, 2026)
 
 **Date**: 2026-06-13
