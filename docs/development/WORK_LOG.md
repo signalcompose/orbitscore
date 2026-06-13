@@ -64,6 +64,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **追加（Gymnopédie 全曲）**: transcriber 和音モードを 3/4・サブビートグリッド・全長対応に拡張し、Satie「ジムノペディ No.1」全78小節を `tools/midi-monitor/gymnopedie.orbs` として生成（`[ ]` 和音 + 左手バスの `_n` 保持、Gmaj7⇄Dmaj7 を元 MIDI と照合一致）。実曲テストで surfaced した将来課題: (a) key 中心の絶対音域指定、(b) セクション変数（複数小節の楽節束縛・曲構成での再利用）。
 
+**追加コミット（/simplify + PR #252 レビュー反映）**: `/simplify`（4エージェント並列）→ `/code:pr-review-team`（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer の4専門 + 再レビュー）を実施し critical/important=0 まで収束。
+
+- **/simplify 適用（挙動不変）**: scheduleMidiEvents Stage B の onset グルーピングを 1 回構築し `applyGateAndLegato`/`applyVoiceTiesAndHold` で共有（F2）/ import・chord・pattern binding ガードを `requireGlobal(state,label)` に集約（F3）/ `parsePostfix` を for ループ化（F4）/ legato tail の `Math.max(...map)` を単一パスへ（F5）。**スキップ**: `parseNestedPlay`/`parseLegato` の共通化（F1）= 区切り文法が別物（`( )` は LPAREN のみ並置継続 / `{ }` は LPAREN/LBRACE/LBRACKET）で統合すると Phase 2/3 scope テストが依存する挙動が変わるため。
+- **レビュー修正（Critical/Important）**:
+  - **循環パターン参照ガード（Critical）**: `var riff = (riff)` / 相互 `a→b→a` が `resolveName` 無限再帰 → stack overflow。`resolve-chords.ts` に分岐ローカルの `visiting: Set<string>`（add-before-recurse / `try-finally` で delete-after）を threading し、検出時は warning + `[]`。兄弟再利用 `play(riff, riff)` は誤検出しない。
+  - **`[chord], _` が全声部を延長（Important）**: `absorbEventTies` を単一 `lastEmitted` → 直近 onset の全 plan（スタックは同一 onset を共有＝1イベント）を保持する `lastGroup` に。spec §5.1「直前**イベント**を1スロット延長」+ 構造表「`[ ]`=同時発音=全声部が親スロット全長を共有」を grep 確認し、単声部のみ延長は spec 違反のバグと確定（解釈ではない）。
+  - **声部タイ+イベントタイの `tieSlots` 引き継ぎ（Important）**: `applyVoiceTiesAndHold` の held 延長を `n.slotDur` → `(n.slotDur + n.tieSlots)` に（`_n` で抑制される音に吸収された `_` の延長分を held 音へ伝播）。
+  - **コメント（Important）**: `parsePostfix` docstring に `.hold()` 追記 / `gate()` の orphaned docstring を本来位置へ復元 / `*0`「diagnostic error」→「parse 時に拒否」/「slot size>1」→「slot note-count>1」/ phase-r4-tour.orbs の hold() コメント修正。
+  - **却下（false positive・証拠付き）**: F4「console.warn→Sentry」= engine に `logError`/Sentry 基盤は皆無、`console.warn`/`console.error` が確立規約。F3「`modified` が `chord_ref` を包んで silent drop」= `modified.value` は `number|PlayNested` 型で文法上 bare chord_ref を包めない。**降格**: pattern binding の GLOBAL 無し時は `console.error` が変数名付きで発火済（Sentry 前提が崩れたため Minor）。
+- **テスト追加（+6、非空虚性を実機確認）**: `chord-resolution.spec.ts` に循環参照3件（自己/相互/兄弟再利用）。`sequence-tie-legato-dispatch.spec.ts` に発火時刻スタンプ付き backend で 3件（`[1,3,5],_` 和音全延長・rest がタイ鎖を断つ・`_n`+`_` の held 延長）。C1/C2 テストは修正を一時 revert すると確かに fail することを確認。全体 **977 passed / 23 skipped**。
+- **後続 Issue 候補**: 未束縛名のスロット消失 vs 休符（C3）/ 空パターン `var x=()` 診断（F5）は error-path の判断事項として follow-up。
+
 ### 6.108 Issue #250 — 設計記録: アイデンティティ・スコープ原則・表現 2 軸モデル (Jun 13, 2026)
 
 **Date**: 2026-06-13
