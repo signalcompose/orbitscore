@@ -66,6 +66,22 @@ export function calculateEventTiming(
           depth + 1,
         )
         events.push(...nestedEvents)
+      } else if (element.type === 'pitch') {
+        // MIDI degree with alteration / octave-shift / detune (§2.1, §2.4).
+        // The rhythm tree gives timing; the symbolic pitch is carried unresolved
+        // (§7-0). sliceNumber mirrors the degree as a fallback only.
+        events.push({
+          sliceNumber: element.degree,
+          startTime: elementStartTime,
+          duration: elementDuration,
+          depth,
+          pitch: {
+            degree: element.degree,
+            alteration: element.alteration,
+            octaveShift: element.octaveShift,
+            detune: element.detune,
+          },
+        })
       } else if (element.type === 'modified') {
         // Modified element (e.g., with .chop())
         // For now, treat the value as a simple number

@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.94 Issue #228 — Phase 1 増分2b: TimedEvent シンボリックピッチ拡張 (§7-0) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分2b。 commit hash: `e9abf90`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: パース (増分2a) で生成した `PlayPitch` を、 タイミング計算を通してシンボリックピッチのまま運ぶ。 これで「パース → timing」がつながり、 §7-0 (MIDI 番号化は出力最終段のみ) を pipeline で守る。
+
+**変更内容**:
+
+- `timing/calculation/types.ts`: `TimedEvent` に optional `pitch?: SymbolicPitch` を追加 (非破壊。 audio スライスイベントは未設定のまま)。 midi/types から SymbolicPitch を import (timing→midi の一方向依存、 循環なし)
+- `calculate-event-timing.ts`: `element.type === 'pitch'` を処理。 リズム木が startTime/duration を与え、 シンボリックピッチを未解決のまま carry。 sliceNumber は degree をフォールバックとしてミラー
+- `tests/timing/pitch-timing.spec.ts`: 4 件 (pitch carry、 octave shift/detune 透過、 ネスト内 pitch、 audio 回帰)
+
+**設計判断**: TimedEvent は解決済み midiNote を持たず **シンボリックピッチのみ** を運ぶ。 root context (rootPitchClass/octave) の適用と MIDI 番号化は出力アダプタ最終段 (増分3-5) で行う。
+
+**テスト結果**: 779 passed / 23 skipped (802 total)。 pitch-timing +4、 回帰なし。
+
+**次**: 増分3 (MidiOutput: @julusian/midi ラッパー) [Sonnet 委譲]。
+
+---
+
 ### 6.93 Issue #228 — Phase 1 増分2a: ピッチトークン + パーサー (§2.1 / §2.4) (Jun 13, 2026)
 
 **Date**: 2026-06-13
