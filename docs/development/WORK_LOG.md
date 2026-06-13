@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.108 Issue #250 — 設計記録: アイデンティティ・スコープ原則・表現 2 軸モデル (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: ✅ 記録完了（正本 spec 反映は確定後）
+**Issue**: signalcompose/orbitscore#250
+**Branch**: `250-design-principles-expression-model`
+
+Phase 3 確定後の設計対話を `DESIGN_DISCUSSION_RECORD.md` に §10 + 決定 #39-43 として記録（コード変更なし）:
+- **アイデンティティ**:「譜面的構造をプログラム的抽象化で書く DAW の MIDI 部」/ 完全な楽譜再現は非目標（度数・`^N`・chord 値の抽象の延長）
+- **スコープ判定基準**（デザインプリンシパル）: 速記性 / 直交性 / リアルタイム演奏可能性の3条件を満たす機能だけ採用。記譜記号の網羅は非目標
+- **表現 2 軸**: velocity 軸（`@v`・アクセント=相対ブースト）+ articulation 軸（per-seq `gate` → per-note articulation → `{ }` レガートを統一）。音価はツリー+タイが持ち、絶対音価 `@u`(v1.0) は棄却（二重管理）。`@`系トークン文法は Phase 4 後の専用フェーズ
+- **Phase 4 スコープ確定**: `_`/`_n`(必須)/`{ }`/`.hold()`(採用) 全部入り
+- §9.7 未決「コード内 `^N` × running range」を Phase 3 (PR #249) で確定済み（✅ 化）
+
+正本 PITCH_DSL_SPEC（HTML）への反映は方針確定後（本記録は方針＝デザインプリンシパルの保全）。
+
 ### 6.107 Issue #231 — Phase 3: `[ ]` スタック + chord 値 (Jun 13, 2026)
 
 **Date**: 2026-06-13
