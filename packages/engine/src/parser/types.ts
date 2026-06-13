@@ -12,6 +12,7 @@ export type AudioTokenType =
   | 'RUN' // RUN reserved keyword
   | 'LOOP' // LOOP reserved keyword
   | 'MUTE' // MUTE reserved keyword
+  | 'IMPORT' // import keyword (e.g. `import chords`, §6)
   | 'IDENTIFIER' // variable names, method names
   | 'NUMBER' // numeric values
   | 'STRING' // string literals
@@ -56,7 +57,30 @@ export type SequenceInit = {
   globalVariable?: string // For new syntax: init global.seq
 }
 
-export type Statement = GlobalStatement | SequenceStatement | TransportStatement
+export type Statement =
+  | GlobalStatement
+  | SequenceStatement
+  | TransportStatement
+  | ChordBinding
+  | ImportStatement
+
+/**
+ * `var NAME = chord([ ... ])` — a chord-value binding (§6). Distinct from the
+ * `var x = init ...` initializers (GlobalInit / SequenceInit). Carries the RAW
+ * `[ ]` voices so the interpreter evaluates them (spread/removal/`^N`) at execution
+ * order against the chord namespace as it exists then (§6.5.2 評価時値渡し).
+ */
+export type ChordBinding = {
+  type: 'chord_binding'
+  variableName: string
+  voices: StackElement[]
+}
+
+/** `import chords` — populate the global chord namespace from the stdlib (§6, §10-4). */
+export type ImportStatement = {
+  type: 'import'
+  module: string // 'chords' (the only module accepted in v1.1)
+}
 
 export type GlobalStatement = {
   type: 'global'
@@ -86,10 +110,73 @@ export type PlayElement =
   | PlayWithModifier // with .chop(), .time(), etc.
   | PlayPitch // degree with alteration / octave-shift / detune (e.g. b3, #5, 3^+1)
   | PlayScoped // group(s) with a .root()/.mode()/.oct() pitch-scope chain (§2.3, §3)
+  | PlayStack // `[ ]` simultaneous-note-on stack (§4)
+  | PlayChordRef // a bare chord-name element (§6); transient — resolved away at L2 (resolveChords)
 
 export type PlayNested = {
   type: 'nested'
   elements: PlayElement[]
+}
+
+/**
+ * A `[ ]` simultaneous-note-on stack (§4 / DESIGN_DISCUSSION_RECORD §9).
+ *
+ * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §4, §6
+ *
+ * Unlike `( )` (which divides its slot among children in time), a stack occupies
+ * ONE sibling slot and all `voices` share the SAME start time and the FULL slot
+ * duration — they sound at once. A voice may itself be a subtree (`[1, (5,3,2,1)]`
+ * = one-part polyphony): the nested `( )` subdivides the same span the held voice
+ * occupies (timing implements this as parallel recursion, §4).
+ *
+ * The node is produced by the parser ALWAYS — appearing in an AUDIO sequence is a
+ * dispatch-time diagnostic error (§10-5, "[ ] reserved in audio"), mirroring how a
+ * PlayPitch in an audio sequence errors at dispatch rather than at parse.
+ *
+ * `voices` is the RAW element list before chord evaluation: it may carry
+ * {@link PlayChordRef} / {@link PlayChordRemoval} markers that the evaluator (§6)
+ * resolves away. After evaluation it is plain {@link PlayElement}[] (symbolic only).
+ */
+export type PlayStack = {
+  type: 'stack'
+  voices: StackElement[]
+  /**
+   * A whole-stack octave shift from a trailing `^N` on the `]` or a chord name
+   * (§6 `m7^+1`). Structural (does NOT move the §2.4 running range). 0/absent = none.
+   */
+  octaveShift?: number
+}
+
+/**
+ * A raw `[ ]` stack element before chord evaluation: a {@link PlayElement} (which
+ * already includes {@link PlayChordRef}) plus the stack-only removal marker
+ * {@link PlayChordRemoval}. The chord evaluator (§6) resolves these to plain voices.
+ */
+export type StackElement = PlayElement | PlayChordRemoval
+
+/**
+ * A bare chord-name reference (§6): inside a `[ ]` stack it spreads into the stack;
+ * as a standalone group element (`(0, m7, 0)`, §9.1) it becomes a one-slot
+ * simultaneous chord. Resolved at evaluation (L2) against the chord namespace, so
+ * it never reaches the timing walk. `octaveShift` carries a trailing `^N` (`m7^+1`)
+ * — a whole-chord structural shift applied to the spread voices.
+ */
+export type PlayChordRef = {
+  type: 'chord_ref'
+  name: string
+  octaveShift: number // from `^N`; 0 if none
+}
+
+/**
+ * A removal marker `-N` / `-bN` inside a `[ ]` stack (§6): after spread, remove the
+ * voice whose literal `(degree, alteration)` matches. No match = no-op + warning
+ * (literal match only; resolved-pitch matching is rejected — `-3` would become
+ * context-dependent, §6).
+ */
+export type PlayChordRemoval = {
+  type: 'chord_removal'
+  degree: number
+  alteration: number
 }
 
 /**

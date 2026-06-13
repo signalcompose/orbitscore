@@ -25,6 +25,8 @@ export type {
   GlobalStatement,
   SequenceStatement,
   TransportStatement,
+  ChordBinding,
+  ImportStatement,
   MethodChain,
   RandomValue,
   PlayElement,

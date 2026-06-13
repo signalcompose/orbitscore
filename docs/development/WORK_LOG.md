@@ -17,6 +17,48 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.107 Issue #231 — Phase 3: `[ ]` スタック + chord 値 (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: ✅ 実装完了（B0-B7。スタック core + chord 値 spread/除去/import。/simplify + レビュー前）
+**Issue**: signalcompose/orbitscore#231
+**Branch**: `231-phase-3-stack-chord`
+
+**設計**: code-architect で blueprint を策定（4層パイプライン: L1 parse→PlayStack（生）/ L2 evaluate（chord 名解決・spread・除去・^N、namespace を持つ唯一の層）/ L3 timing（並列再帰）/ L4 dispatch（同時 note-on は等 startTime から自動的に従う、audio 拒否は生パターン走査）。spec §4/§6/§10 正本。advisor で「Phase R 未実装＝chord 値用の値束縛基盤を本フェーズで最小構築」を確認）。
+
+**前提の訂正**: 直前要約は Phase R (#227 パターン変数) 完了を前提にしていたが、#227 は OPEN・値束縛/`import`/`*n` 基盤は未実装。chord 値の namespace は本フェーズで chord 専用に最小構築し、`kind` discriminant で Phase R と共有可能にする（`*n`・汎用タプルパターン変数は作らない）。
+
+**本コミット（スタック core B0-B4）**:
+- `parser/types.ts`: `PlayStack`（voices + 任意 octaveShift）/`StackElement`/`PlayChordRef`/`PlayChordRemoval` を追加、PlayElement union に PlayStack
+- `parser/parse-expression.ts`: `parseStack`/`parseStackElement`（`[ ]` を常に PlayStack へ。LBRACKET の旧 `bracketReservedMessage` throw を撤去）、`parseChordRef`（bare 識別子 + `^N`）、`parseChordRemoval`（`-N`/`-bN`、`[ ]` 内 `-` は常に除去）、`asStackVoice`（スタック voice の `^N` は構造的＝rangeSet クリア §2.4）
+- `timing/calculation/calculate-event-timing.ts`: `stack` 分岐（voice ごとに `[voice]` を全長・等 startTime で並列再帰、`[1,(5,3,2,1)]` のサブツリーは同一スパンを再分割）+ `applyStackOctaveShift`（whole-stack `^N` を構造的に加算）。未解決 chord_ref/removal が来たら internal error
+- `core/sequence.ts`: dispatch の octaveShift を加算式に修正（`runningRange + groupOct + (rangeSet?0:octaveShift)`。構造的シフトを上乗せ、従来の旋律音は no-op）。`validateNonMidiDispatch` + `containsStack`（生パターン再帰走査、`( )`/scope/modifier 内のスタックも検出）を追加し run()/loop() で eager 拒否（§10-5 audio スタック予約）
+
+**テスト**: `stack-parsing.spec.ts` 10件 / `stack-timing.spec.ts` 5件 / `sequence-stack-dispatch.spec.ts` 7件（同時 note-on、scope 合成、voice/whole `^N` の加算、running range 非干渉、audio 拒否）。`pitch-parsing.spec.ts` の旧「`[ ]` reserved＝parse throw」3件を新仕様（PlayStack へ parse、拒否は dispatch）に更新。全体 895 passed / 23 skipped。
+
+**追加コミット（B5: chord 評価器 — 純関数モジュール）**:
+- `midi/chord/types.ts`: `ChordVoice`（degree/alteration/構造的 octaveShift/detune）、`BoundValue`（`kind:'chord'` discriminant で Phase R と namespace 共有可能に）
+- `midi/chord/predefined-chords.ts`: `import chords` 標準テーブル（maj/min/dim/aug/sus4/sus2/6/m6/maj7/m7/dom7/m7b5/dim7/mMaj7/maj9/m9/dom9）。度数は長音階基準、quality は accidental に（m7 = 1,b3,5,b7）
+- `midi/chord/resolve-chords.ts`: `resolveChords(elements, getChord)` — spread（ref 展開）/ 除去 `-N`（字面一致 degree+alteration、不一致は warning）/ ref `^N`（spread voice に構造的加算）/ standalone ref → 一スロット stack。namespace は `getChord` 注入で純関数化（§6.5.2 評価時値渡し）
+- `parser/types.ts`: PlayElement union に `PlayChordRef`（§9.1 の `(0, m7, 0)` グループ要素対応、L2 で解決され timing には到達しない transient）、StackElement を `PlayElement | PlayChordRemoval` に整理
+- `timing/calculate-event-timing.ts`: 未解決 chord_ref が timing walk に来たら internal error（silent drop 防止）
+
+**テスト**: `chord-resolution.spec.ts` 11件（spread/add/除去/不一致 warning/`^N`/standalone/unknown/whole-stack `^N` 保持/predefined テーブル）。全体 906 passed / 23 skipped。
+
+**追加コミット（B6/B7: chord 値の parse + namespace + 配線）**:
+- `parser/types.ts`: `IMPORT` トークン、`ChordBinding`/`ImportStatement` を Statement union に
+- `parser/tokenizer.ts`: `import` キーワード
+- `parser/parse-statement.ts`: `parseVarDeclaration` を `chord([...])` 束縛に分岐（`init` パスは不変）、`parseImport`（`import chords` のみ受理）
+- `parser/parse-expression.ts`: `parseNestedPlayElement` に IDENTIFIER → chord_ref（§9.1 の `(0, m7, 0)` グループ要素）
+- `core/global.ts`: chord namespace（`importChords`/`defineChord`/`getChordVoices`、衝突 warning §10-4）を Global に（`global.key()` と同様 program-global、interpreter/直接 seq 両経路で共有）
+- `core/sequence.ts`: `play()` で timing 前に `resolveChords`（chord ref を spread/除去/`^N` 解決し純シンボリックに）。warning は console.warn
+- `midi/chord/resolve-chords.ts`: `evaluateChordDefinition`（`var = chord()` の束縛時評価）
+- `interpreter/process-statement.ts`: `import`/`chord_binding` を currentGlobal に配線
+
+**決定（spec 範囲内）**: 除去 `-N` の字面一致は (degree, alteration)（§6 字面一致の具体化）。namespace 衝突は last-write-wins + warning（§10-4）。未定義 chord 名参照は warning + 空展開（§6 は未規定、no-op+warning 哲学に整合）。`{ }` レガート・`_` タイ（§5）と top-level bare chord 名は Phase 3 範囲外（§9.1 のそれらは Phase 4）。
+
+**テスト**: `chord-binding-parsing.spec.ts` 8件 / `sequence-chord-dispatch.spec.ts` 12件（import+`[m7]`、`(0,m7,0,m7).root(3)`、spread+add/除去、whole-chord `^+1`、defineChord、unknown warning、registry、interpreter 配線、**§9.1 正本 bar 3**）。`sequence-stack-dispatch.spec.ts` に **§9.1 正本 bar 4**（`[1,3,b7,13]`/`b13` の高次テンション 13/b13）を追加。全体 927 passed / 23 skipped。core spec は specs-v2 を正本として参照（§4/§6 は PITCH_DSL_SPEC が正本、乖離なし）。
+
 ### 6.106 Issue #230 — Phase 2: `.root()`/`.mode()`/`.oct()` グループスコープ — パーサー層 (Jun 13, 2026)
 
 **Date**: 2026-06-13

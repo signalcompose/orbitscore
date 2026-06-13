@@ -199,13 +199,24 @@ describe('parser — PlayPitch nodes', () => {
   })
 })
 
-describe('stack [ ] is reserved (§10-5) — diagnostic, not silently ignored', () => {
-  it('top-level [ ] throws a reserved-syntax error', () => {
-    expect(() => parseAudioDSL('seq1.play([1, 3, 5])')).toThrow(/not yet supported|reserved/i)
+describe('stack [ ] parses into a PlayStack (Phase 3, §4)', () => {
+  // Phase 3 (#231) opened `[ ]` for MIDI: it parses into a PlayStack instead of
+  // throwing at parse. The audio-vs-MIDI rejection (§10-5) moved to dispatch — see
+  // tests/core/sequence-stack-dispatch.spec.ts. Stack shape is covered in detail in
+  // tests/audio-parser/stack-parsing.spec.ts; these are the parse-time regression
+  // guards left where the old reserved-syntax tests lived.
+  it('top-level [ ] no longer throws — it is a PlayStack', () => {
+    expect(parseAudioDSL('seq1.play([1, 3, 5])').statements[0].args[0]).toEqual({
+      type: 'stack',
+      voices: [1, 3, 5],
+    })
   })
 
-  it('nested [ ] throws a reserved-syntax error', () => {
-    expect(() => parseAudioDSL('seq1.play(1, [1, 3, 5], 0)')).toThrow(/not yet supported|reserved/i)
+  it('nested [ ] parses as a stack sibling slot', () => {
+    const args = parseAudioDSL('seq1.play(1, [1, 3, 5], 0)').statements[0].args
+    expect(args[0]).toBe(1)
+    expect(args[1]).toEqual({ type: 'stack', voices: [1, 3, 5] })
+    expect(args[2]).toBe(0)
   })
 
   it('tokenizer emits LBRACKET / RBRACKET (not silently dropped)', () => {

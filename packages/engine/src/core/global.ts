@@ -4,6 +4,10 @@
  */
 
 import { AudioEngine } from '../audio/types'
+import { StackElement } from '../parser/types'
+import { BoundValue, ChordVoice } from '../midi/chord/types'
+import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
+import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -122,6 +126,48 @@ export class Global {
   /** Accessor for the shared MIDI manager (used by Sequence MIDI dispatch). */
   getMidiManager(): MidiManager {
     return this.midiManager
+  }
+
+  // ─── Chord namespace (§6) ──────────────────────────────────────────────────
+  // A program-global table of chord values, read by Sequence.play to spread chord
+  // refs (§6, 評価時値渡し). Lives here — like global.key() — so the interpreter
+  // and direct sequence use share one namespace. Phase R (#227) will add its own
+  // value kind to the same table via the BoundValue `kind` discriminant.
+  private chordRegistry = new Map<string, BoundValue>()
+
+  /** `import chords` (§6): load the stdlib chord qualities into the namespace. */
+  importChords(): this {
+    for (const [name, voices] of Object.entries(PREDEFINED_CHORDS)) {
+      this.setChord(name, { kind: 'chord', voices })
+    }
+    return this
+  }
+
+  /**
+   * `var NAME = chord([ ... ])` (§6): evaluate the raw stack (spread refs to chords
+   * already bound, apply `-N` removals / `^N`) and bind the resulting voice list.
+   */
+  defineChord(name: string, voices: StackElement[]): this {
+    const { voices: resolved, warnings } = evaluateChordDefinition(voices, (n) =>
+      this.getChordVoices(n),
+    )
+    for (const w of warnings) console.warn(`⚠️  chord ${name}: ${w}`)
+    this.setChord(name, { kind: 'chord', voices: resolved })
+    return this
+  }
+
+  /** The voices of a bound chord, or undefined if the name is unbound. */
+  getChordVoices(name: string): ChordVoice[] | undefined {
+    const bound = this.chordRegistry.get(name)
+    return bound?.kind === 'chord' ? bound.voices : undefined
+  }
+
+  /** Bind a chord value, warning on overwrite (§10-4: global binding + conflict warning). */
+  private setChord(name: string, value: BoundValue): void {
+    if (this.chordRegistry.has(name)) {
+      console.warn(`⚠️  chord namespace: "${name}" redefined (last-write-wins, §10-4).`)
+    }
+    this.chordRegistry.set(name, value)
   }
 
   // Audio path and device management

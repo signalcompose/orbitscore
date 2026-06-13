@@ -9,6 +9,7 @@ import * as path from 'path'
 import { AudioEngine } from '../audio/types'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
+import { resolveChords } from '../midi/chord/resolve-chords'
 import { RootContext } from '../midi/types'
 import { TimedEventScope } from '../timing/calculation/types'
 
@@ -400,19 +401,30 @@ export class Sequence {
   }
 
   play(...elements: PlayElement[]): this {
-    this.stateManager.setPlayPattern(elements)
+    // §6 evaluation (L2): resolve chord-name refs / `-N` removals / `^N` against the
+    // global chord namespace BEFORE timing, so the stored pattern is pure symbolic
+    // (no chord_ref reaches the timing walk). 評価時値渡し — a later chord
+    // redefinition does not retro-affect this already-resolved pattern (§6.5.2).
+    const { elements: resolved, warnings } = resolveChords(elements, (name) =>
+      this.global.getChordVoices(name),
+    )
+    for (const w of warnings) {
+      console.warn(`⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ${w}`)
+    }
+
+    this.stateManager.setPlayPattern(resolved)
 
     // Calculate timing for the play pattern
     const globalState = this.global.getState()
     const timedEvents = this.tempoManager.calculateEventTiming(
-      elements,
+      resolved,
       globalState.tempo || 120,
       globalState.beat,
     )
 
     this.stateManager.setTimedEvents(timedEvents)
 
-    const patternStr = elements
+    const patternStr = resolved
       .map((e) => (typeof e === 'object' ? JSON.stringify(e) : e))
       .join(' ')
     this.seamlessParameterUpdate('play', patternStr)
@@ -560,6 +572,49 @@ export class Sequence {
   }
 
   /**
+   * Eager guard: a `[ ]` stack (§4) is reserved as a diagnostic error in AUDIO
+   * sequences (§10-5) — simultaneous note-on is a MIDI feature in v1.1; audio
+   * slice layering is a future addition. By dispatch the timing walk has dissolved
+   * the stack into overlapping events, so this scans the RAW play pattern instead,
+   * in the awaited run()/loop() chain (same rationale as validateMidiDispatch) so
+   * the throw reaches the caller rather than becoming an unhandled rejection.
+   */
+  private validateNonMidiDispatch(): void {
+    if (this.isMidi()) return
+    const pattern = this.stateManager.getPlayPattern()
+    if (pattern && this.containsStack(pattern)) {
+      throw new Error(
+        'Stack "[ ]" is not yet supported in audio sequences (reserved, §10-5). ' +
+          'Simultaneous note-on is a MIDI feature in v1.1; audio slice layering is ' +
+          'a future addition. See PITCH_DSL_SPEC §4 / §10-5.',
+      )
+    }
+  }
+
+  /**
+   * Recursively detect a `[ ]` stack anywhere in a raw play pattern — including
+   * inside `( )` groups, `.root()`/`.oct()` scope groups, and `.chop()` modifiers
+   * (a stack nested in `([...]).root(2)` must still be found).
+   */
+  private containsStack(elements: PlayElement[]): boolean {
+    for (const el of elements) {
+      if (!el || typeof el !== 'object') continue
+      if (el.type === 'stack') return true
+      if (el.type === 'nested' && this.containsStack(el.elements)) return true
+      if (el.type === 'scoped' && this.containsStack(el.groups)) return true
+      if (
+        el.type === 'modified' &&
+        typeof el.value === 'object' &&
+        el.value.type === 'nested' &&
+        this.containsStack(el.value.elements)
+      ) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
    * Schedule this sequence's timed events as MIDI notes (§7-0 output stage:
    * symbolic pitch is resolved to a MIDI note number here, at the last moment).
    *
@@ -606,10 +661,16 @@ export class Sequence {
       // default for this note (inner→outer already collapsed in the timing walk).
       const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
       // Effective octave = sticky running range (`^N`, linear) + group register
-      // (`.oct()`, lexical). The two are orthogonal axes and compose additively
-      // (§9.3); `.oct()` is local to its group, while `^N` persists across group
-      // boundaries (§9.4), so groupOct never feeds back into runningRange.
-      const effectiveOctave = runningRange + (ev.scope?.groupOct ?? 0)
+      // (`.oct()`, lexical) + the voice's structural shift. The first two are
+      // orthogonal axes that compose additively (§9.3); `.oct()` is local to its
+      // group, while `^N` persists across group boundaries (§9.4), so groupOct
+      // never feeds back into runningRange. The structural part is a stack voice's
+      // own `^N` (§4/§6 `b7^+1`, rangeSet=false): it layers ON TOP of the running
+      // range without moving it (§2.4). A melodic `^N` (rangeSet=true) has already
+      // folded into runningRange above, so its structural part is 0 — keeping this
+      // additive is a no-op for every pre-stack note.
+      const structural = written.rangeSet ? 0 : written.octaveShift
+      const effectiveOctave = runningRange + (ev.scope?.groupOct ?? 0) + structural
       const symbolic = { ...written, octaveShift: effectiveOctave }
       const resolved = resolveDegree(symbolic, context)
       if (!resolved) {
@@ -754,6 +815,7 @@ export class Sequence {
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
+    this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -796,6 +858,7 @@ export class Sequence {
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
+    this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
