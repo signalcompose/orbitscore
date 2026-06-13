@@ -17,6 +17,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.101 Issue #246 — ブラウザ MIDI モニター + シンセ (.orbs 検証ツール) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 ブランチに同梱。 commit hash: `8217af3`)
+**Issue**: signalcompose/orbitscore#246
+**Branch**: `228-phase-1-midi-output` (PR #245 に同梱)
+
+**動機**: Phase 1 の MIDI 出力を DAW やソフトシンセのセットアップなしで確認するため (大和さん提案)。 Phase 1 と同じブランチに入れることで、 同じ PR のレビュー/テストで早速使える。
+
+**変更内容 (`tools/midi-monitor/`)**:
+
+- `index.html`: 単一静的ページ (ビルド不要・依存なし・vanilla JS)。 Web MIDI で IAC 受信 + Web Audio でポリフォニックシンセ (osc + ADSR + lowpass)。 velocity→音量、 pitch bend→±2半音 (エンジンの bend range に一致)、 CC123/120→全 note-off、 MIDI モニターログ + 発音中ノート表示、 MIDI 無しの Test tone。 `innerHTML` は使わず `replaceChildren`/`createElement` (XSS 回避)
+- `example.orbs`: IAC へ C メジャースケールを送る最小例。 port は substring `"IAC"` で日英両環境対応
+- `README.md`: 使い方 + IAC オンライン化手順
+
+**位置づけ**: 人間/リハ用の検証ハーネス (CI 自動化用ではない)。 WCTM のソフトピアノ代替 (WCTM_SYSTEM_SPEC §9 / #232) にも転用可。
+
+**検証**: localhost 配信で HTTP 200、 主要要素・コード存在確認、 inline JS の `node --check` 構文OK。 実 IAC→発音は Chrome での人手確認 (Web MIDI は secure context 必須)。
+
+---
+
 ### 6.100 Issue #228 — Phase 1 増分5d: hanging note 不変条件 + `[ ]` 予約 (Phase 1 機能完成) (Jun 13, 2026)
 
 **Date**: 2026-06-13

@@ -1,0 +1,21 @@
+// OrbitScore MIDI Monitor — minimal example
+// Sends a C major scale to the IAC bus. Open tools/midi-monitor/index.html
+// (served on localhost), Enable, select the IAC input, then run this file.
+//
+// The port name uses the substring "IAC" so it resolves on both English
+// ("IAC Driver Bus 1") and Japanese ("IACドライバ バス1") systems.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.key("C")
+global.start()
+
+var piano = init global.seq
+piano.midi("IAC", 1).octave(4).gate(0.7).vel(96)
+piano.length(1)
+
+// Degrees 1..7 then the octave (1 shifted up): C D E F G A B C
+piano.play(1, 2, 3, 4, 5, 6, 7, 1^+1)
+
+LOOP(piano)
