@@ -17,6 +17,30 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.97 Issue #228 — Phase 1 増分5a: Global MIDI インフラ + key/midiLatency (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分5a。 commit hash: `a0e999f`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: Sequence MIDI 統合 (増分5) の土台。 全 MIDI シーケンスが共有する MidiOutput + MidiScheduler を Global が lazy に所有し、 グローバル key と midiLatency を提供する。
+
+**変更内容**:
+
+- `midi/note-name.ts`: 音名 → ピッチクラス解析 (`"C"`/`"F#"`/`"Bb"`/`"C##"`、 octave 境界 wrap、 case-insensitive)。 §1/§2.3
+- `core/global/midi-manager.ts`: `MidiManager` — lazy な MidiOutput+MidiScheduler 所有 (audio-only セッションは CoreMIDI に触れない)、 グローバル key、 midiLatency、 ポート単位 lead オフセット (Disklavier 機構レイテンシ、 §9)。 出力は注入可能 (テストで mock)
+- `core/global.ts`: `key(name)`、 `midiLatency(ms)`、 `getMidiManager()` を追加。 `start()`/`stop()` で scheduler を起動/停止。 constructor に MidiManager 注入口
+- `tests/midi/note-name.spec.ts` (5件)、 `tests/midi/midi-manager.spec.ts` (5件)
+
+**確認**: インタプリタは動的ディスパッチ (`obj[method].apply`) なので `global.key()`/`global.midiLatency()` は自動的に届く (whitelist なし)。
+
+**テスト結果**: 851 passed / 23 skipped (874 total)。 +10、 回帰なし。
+
+**次**: 増分5b (Sequence の midi()/gate/vel/octave/root + audio排他)、 5c (MIDI ディスパッチ配線 + 度数解決)、 5d (hanging note 不変条件)。
+
+---
+
 ### 6.96 Issue #228 — Phase 1 増分4: MidiScheduler (TS lookahead) (Jun 13, 2026)
 
 **Date**: 2026-06-13

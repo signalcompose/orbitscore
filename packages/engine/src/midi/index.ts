@@ -15,3 +15,4 @@ export type { MidiOutput, MidiBackend, MidiBackendPort, ActiveNote } from './mid
 export { RtMidiOutput, createJulusianBackend } from './rtmidi-output'
 export type { ScheduledMidiNote, MidiSchedulerOptions } from './midi-scheduler'
 export { MidiScheduler } from './midi-scheduler'
+export { noteNameToPitchClass } from './note-name'
