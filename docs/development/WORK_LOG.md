@@ -36,6 +36,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **意義**: DSL → パーサー → 度数解決 (§7-0 出力最終段) → MidiOutput → IAC の Phase 1 全経路を実機で確証。 WCTM の実機テスト基盤にもなる。
 
+**追記 (graceful stop + REPL)**: 大和さんの指摘「パニックでなく LOOP() で止めたい」を反映。 Ctrl+C / SIGTERM は `global.stop()` のパニック (CC123/120) ではなく **`LOOP()` を評価して正規の per-sequence note-off** で停止 (§7-2、 実機でブラウザ受信が note-off のみ・panic 無しを確認)。 加えて **stdin live-coding REPL** を追加 — 実行中に DSL 行 (`LOOP()` / `LOOP(piano)` / `piano.play(...)`) を評価できる (OrbitScore のライブコーディング)。
+
 **次**: PR #245 レビュー/マージ判断。 その後 Phase 2 (#230) / L1 (#229)。
 
 ---

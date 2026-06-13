@@ -18,6 +18,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
+import * as readline from 'readline'
 
 import { parseAudioDSL } from '../parser/audio-parser'
 import { processGlobalInit, processSequenceInit } from '../interpreter/process-initialization'
@@ -95,21 +96,50 @@ async function main(): Promise<void> {
     await processStatement(stmt, state)
   }
 
-  console.log(`▶ running ${path.basename(file)} → IAC (Ctrl+C to stop)`)
+  console.log(`▶ running ${path.basename(file)} → IAC`)
+  console.log(`  live-code: type DSL lines (e.g. LOOP() to stop, LOOP(piano) to restart).`)
+  console.log(`  Ctrl+C stops gracefully (LOOP() — proper note-offs, not a panic).`)
 
-  const shutdown = (): void => {
-    try {
-      state.currentGlobal?.stop() // panic: all notes off
-    } catch {
-      // ignore
+  /** Evaluate one line of DSL against the running engine (live coding). */
+  async function evalLine(src: string): Promise<void> {
+    const trimmed = src.trim()
+    if (!trimmed) return
+    const lineIr = parseAudioDSL(trimmed)
+    for (const stmt of lineIr.statements) {
+      await processStatement(stmt, state)
     }
-    process.exit(0)
+    await reportPattern(monitorUrl, trimmed, 'live')
+  }
+
+  // Live-coding REPL: each stdin line is evaluated against the running engine.
+  const rl = readline.createInterface({ input: process.stdin })
+  rl.on('line', (line) => {
+    evalLine(line).catch((e) => console.error('  ✗', e?.message ?? e))
+  })
+
+  // Graceful stop: LOOP() excludes every sequence from the loop group, which
+  // stops each one with proper per-sequence note-offs (§7-2) — NOT the CC123/
+  // CC120 panic. `global.stop()` remains the hard safety net if that fails.
+  let stopping = false
+  const shutdown = async (): Promise<void> => {
+    if (stopping) return
+    stopping = true
+    try {
+      await evalLine('LOOP()') // graceful: clean note-offs
+    } catch {
+      try {
+        state.currentGlobal?.stop() // fallback: panic
+      } catch {
+        // ignore
+      }
+    }
+    // Give the @julusian sends a moment to flush, then exit.
+    setTimeout(() => process.exit(0), 80)
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)
 
-  // LOOP keeps the event loop alive via the MidiScheduler interval. Add a
-  // backstop heartbeat so a RUN-only file also stays up until Ctrl+C.
+  // LOOP keeps the event loop alive via the MidiScheduler interval + readline.
   setInterval(() => {}, 1 << 30)
 }
 
