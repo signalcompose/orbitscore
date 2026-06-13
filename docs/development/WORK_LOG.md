@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.91 Issue #226 — Phase 0 事前検証4項目 (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: ✅ DONE (commit hash: `93dad80`)
+**Issue**: signalcompose/orbitscore#226
+**Branch**: `226-phase-0-verification`
+**Epic**: signalcompose/orbitscore#224
+
+**動機**: v1.1 Pitch DSL 実装に着手する前に、 仕様が依拠する4つの前提をコードを書く前に検証する (指示書 §4 Phase 0)。 仕様の前提を崩す結果が出たら停止して報告する条件付き。
+
+**検証結果 (停止条件には1件も該当せず)**:
+
+- **0-1 `(1)(2)` タプル並置**: ✅ 前提成立。 兄弟展開される (parse-statement.ts:383 が意図的に連続処理)。 ただしパーサーは並置とカンマ区切りを区別せずフラット化するため、 Phase 2 の `.root()` スコープ規則には AST 区別の拡張が必要 (spec 織り込み済み)。 再現テスト `tests/phase0/juxtaposition-verification.spec.ts` (4件) で固定
+- **0-2 `quantize("bar")` play() 差し替え**: ✅ 前提成立・実装済み。 `seamlessParameterUpdate` の deferToNextCycle に 'play' が含まれ次サイクル反映。 既存34テスト (loop-quantize / seamless-parameter-update / quantize) で担保。 Issue #212 修正が PR #215 でマージ済み
+- **0-3 `@julusian/midi`**: ✅ 動作確認。 Node 22.17.1 + macOS arm64 で prebuild `midi-darwin-arm64` 込みインストール成功。 実 IAC ポート `"IACドライバ バス1"` への note 送出に成功。 ⚠️ ポート名がロケール依存 (英語例 `"IAC Driver Bus 1"` と不一致) のため Phase 1 で `/iac/i` 等の言語非依存マッチが必要。 `openVirtualPort()` も利用可
+- **0-4 Link 追従**: ⚠️ オーディオ受け渡しのみ。 スケジューリングは内部クロック (`Date.now()` + `setInterval`) 独立で Link beat/phase を参照しない。 → W-Link (#234) に「Link 追従スケジューリング」を新規実装項目として昇格 (spec 織り込み済み、 停止条件外)
+
+**成果物**: `docs/research/PHASE0_VERIFICATION_REPORT.md` (各項目の結果 + 後続フェーズへの影響評価)、 `tests/phase0/juxtaposition-verification.spec.ts`。
+
+**テスト結果**: 428 passed / 23 skipped (451 total)。 phase0 テスト +4、 回帰なし。
+
+**次のステップ**: Phase R (#227) または Phase 1 (#228)。 0-1/0-3 の含意を各フェーズ着手時に反映。
+
+---
+
 ### 6.90 Issue #225 — specs-v2 配置 + CLAUDE.md オンボーディング (Jun 13, 2026)
 
 **Date**: 2026-06-13
