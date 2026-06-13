@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.93 Issue #228 — Phase 1 増分2a: ピッチトークン + パーサー (§2.1 / §2.4) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分2a。 commit hash: `356afcb`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: MIDI 度数記法 (`b3`, `#5`, `bb7`, `##1`, `3^+1`, `b7~-0.25`) を DSL でパースできるようにする。 共有トークナイザーに触れる最重要作業のため main (Opus) が直列で実施 (§5)。
+
+**事前確認**: audio DSL のコメントは `//` で `#` と衝突しない。 `#`/`^`/`~`/`b+数字` は既存 .orbs / テストで未使用 → 新トークン追加は既存パースを壊さない (grep 確認済み)。
+
+**変更内容**:
+
+- `tokenizer.ts`: ACCIDENTAL (`#`/`##`/`b`/`bb` ラン)、 CARET (`^`)、 TILDE (`~`)、 PLUS (`+`) トークンを追加。 `b` ランは「直後が数字」のときのみ alteration とみなし、 そうでなければ識別子にフォールバック (変数名 `b` を保護)
+- `parser/types.ts`: 新トークン型 + `PlayPitch` AST ノード (degree/alteration/octaveShift/detune) を `PlayElement` union に追加。 裸の整数は `number` のまま (audio スライス番号互換)
+- `parse-expression.ts`: accidental + number + `^`/`~` 修飾を `PlayPitch` に解析。 トップレベルとネスト両対応。 `bb`/`##` = ±2、 3個以上で warning (spec §2.1)
+- `tests/audio-parser/pitch-parsing.spec.ts`: トークナイザー/パーサーテスト 21 件
+
+**設計判断**: 裸整数を `number` のまま残すことで audio スライス番号パースを完全に無変更に保つ。 `PlayPitch` は accidental か `^`/`~` がある場合のみ生成。 値=度数の解釈は MIDI ディスパッチ時 (増分3以降)。
+
+**既知の制約**: `b7` 等は flat-7 記法として予約されるため、 同名の変数定義は不可 (spec の設計通り)。
+
+**テスト結果**: 775 passed / 23 skipped (798 total)。 pitch-parsing +21、 回帰なし。
+
+**次**: 増分2b (TimedEvent シンボリックピッチ拡張 + timing 計算のピッチ対応)。
+
+---
+
 ### 6.92 Issue #228 — Phase 1 増分1: 度数解決コア (§2.1 / §7-0) (Jun 13, 2026)
 
 **Date**: 2026-06-13

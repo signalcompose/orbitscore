@@ -89,6 +89,29 @@ export class AudioTokenizer {
     return id
   }
 
+  /**
+   * Count a run of flat markers (`b`) starting at the current position that
+   * forms a pitch alteration, i.e. one or more `b` immediately followed by a
+   * digit (the degree). Returns 0 when the `b` run is not an alteration (so it
+   * falls through to identifier reading — e.g. a variable literally named `b`).
+   *
+   * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §2.1 (`b` = -1, `bb` = -2).
+   */
+  private peekFlatAlterationRun(): number {
+    let i = 0
+    while (this.peek(i) === 'b') i++
+    return i > 0 && /[0-9]/.test(this.peek(i)) ? i : 0
+  }
+
+  /** Read a run of identical accidental characters (`#...` or `b...`). */
+  private readAccidentalRun(marker: string): string {
+    let run = ''
+    while (this.peek() === marker) {
+      run += this.advance()
+    }
+    return run
+  }
+
   private readString(): string {
     const quote = this.advance() // consume opening quote
     let str = ''
@@ -135,6 +158,23 @@ export class AudioTokenizer {
         continue
       }
 
+      // Pitch alteration prefixes: `#`/`##` and `b`/`bb` (followed by a degree).
+      // The audio DSL comments with `//`, so `#` never collides with a comment
+      // (verified: no existing .orbs uses bare `#`). A `b` run is an alteration
+      // only when followed by a digit; otherwise it falls through to identifier
+      // reading so a variable named `b` still works.
+      if (char === '#') {
+        const run = this.readAccidentalRun('#')
+        tokens.push({ type: 'ACCIDENTAL', value: run, line, column })
+        continue
+      }
+      const flatRun = this.peekFlatAlterationRun()
+      if (flatRun > 0) {
+        const run = this.readAccidentalRun('b')
+        tokens.push({ type: 'ACCIDENTAL', value: run, line, column })
+        continue
+      }
+
       // Identifiers and keywords
       if (/[a-zA-Z_]/.test(char)) {
         const id = this.readIdentifier()
@@ -176,6 +216,18 @@ export class AudioTokenizer {
           break
         case '-':
           tokens.push({ type: 'MINUS', value: '-', line, column })
+          this.advance()
+          break
+        case '+':
+          tokens.push({ type: 'PLUS', value: '+', line, column })
+          this.advance()
+          break
+        case '^':
+          tokens.push({ type: 'CARET', value: '^', line, column })
+          this.advance()
+          break
+        case '~':
+          tokens.push({ type: 'TILDE', value: '~', line, column })
           this.advance()
           break
         case '%':

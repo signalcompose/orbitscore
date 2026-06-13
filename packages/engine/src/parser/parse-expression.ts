@@ -10,6 +10,7 @@ import {
   PlayNested,
   PlayWithModifier,
   PlayModifier,
+  PlayPitch,
   Meter,
 } from './types'
 import { ParserUtils } from './parser-utils'
@@ -34,6 +35,10 @@ export class ExpressionParser {
 
     if (token.type === 'MINUS') {
       return this.parseNegativeNumber()
+    }
+
+    if (token.type === 'ACCIDENTAL') {
+      return this.parsePitch()
     }
 
     if (token.type === 'NUMBER') {
@@ -96,7 +101,87 @@ export class ExpressionParser {
       return { value: modifierResult.value, newPos: modifierResult.newPos }
     }
 
+    // Check for pitch modifiers (^ octave shift, ~ detune) → bare degree becomes
+    // a PlayPitch (e.g. 3^+1, 7~-0.25). A bare integer with no modifier stays a
+    // plain number so audio slice-number parsing is unaffected.
+    const afterNum = ParserUtils.current(this.tokens, this.pos).type
+    if (afterNum === 'CARET' || afterNum === 'TILDE') {
+      return this.parsePitchModifiers(value, 0)
+    }
+
     return { value, newPos: this.pos }
+  }
+
+  /**
+   * Convert an accidental run ("#", "##", "b", "bb") to a semitone offset.
+   * Spec §2.1: b=-1, #=+1, bb/##=±2; duplicates allowed but warn beyond 2.
+   */
+  private accidentalToAlteration(run: string): number {
+    const sign = run[0] === '#' ? 1 : -1
+    if (run.length > 2) {
+      console.warn(
+        `⚠️  Accidental "${run}" has ${run.length} markers; the spec recommends at most 2 (bb / ##).`,
+      )
+    }
+    return sign * run.length
+  }
+
+  /** Read an optional +/- sign followed by a NUMBER and return the signed value. */
+  private parseSignedNumber(): number {
+    let sign = 1
+    const t = ParserUtils.current(this.tokens, this.pos).type
+    if (t === 'PLUS') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+    } else if (t === 'MINUS') {
+      sign = -1
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+    }
+    const numResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+    this.pos = numResult.newPos
+    return sign * ParserUtils.parseNumber(numResult.token)
+  }
+
+  /**
+   * Parse optional `^` (octave shift) and `~` (detune) modifiers onto a degree,
+   * producing a PlayPitch. Both modifiers are optional and order-independent.
+   */
+  private parsePitchModifiers(
+    degree: number,
+    alteration: number,
+  ): { value: PlayPitch; newPos: number } {
+    let octaveShift = 0
+    let detune = 0
+    let parsed = true
+    while (parsed) {
+      parsed = false
+      const t = ParserUtils.current(this.tokens, this.pos).type
+      if (t === 'CARET') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        octaveShift = this.parseSignedNumber()
+        parsed = true
+      } else if (t === 'TILDE') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        detune = this.parseSignedNumber()
+        parsed = true
+      }
+    }
+    return {
+      value: { type: 'pitch', degree, alteration, octaveShift, detune },
+      newPos: this.pos,
+    }
+  }
+
+  /** Parse an accidental-prefixed pitch: ACCIDENTAL NUMBER [^...] [~...]. */
+  private parsePitch(): { value: PlayPitch; newPos: number } {
+    const accResult = ParserUtils.advance(this.tokens, this.pos)
+    this.pos = accResult.newPos
+    const alteration = this.accidentalToAlteration(accResult.token.value)
+
+    const numResult = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+    this.pos = numResult.newPos
+    const degree = ParserUtils.parseNumber(numResult.token)
+
+    return this.parsePitchModifiers(degree, alteration)
   }
 
   /**
@@ -354,21 +439,34 @@ export class ExpressionParser {
   private parseNestedPlayElement(elements: PlayElement[]): void {
     this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
 
-    if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
+    const cur = ParserUtils.current(this.tokens, this.pos).type
+
+    if (cur === 'LPAREN') {
       // Nested element
       const nestedResult = this.parseNestedPlay()
       this.pos = nestedResult.newPos
       elements.push(nestedResult.value)
-    } else if (ParserUtils.current(this.tokens, this.pos).type === 'NUMBER') {
+    } else if (cur === 'ACCIDENTAL') {
+      // Altered degree, e.g. b3, #5, bb7
+      const pitchResult = this.parsePitch()
+      this.pos = pitchResult.newPos
+      elements.push(pitchResult.value)
+    } else if (cur === 'NUMBER') {
       const numResult = ParserUtils.advance(this.tokens, this.pos)
       this.pos = numResult.newPos
       const value = ParserUtils.parseNumber(numResult.token)
 
-      // Check for modifiers
-      if (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
+      const next = ParserUtils.current(this.tokens, this.pos).type
+      if (next === 'DOT') {
+        // Audio slice modifier (.chop)
         const modifierResult = this.parsePlayWithModifier(value)
         this.pos = modifierResult.newPos
         elements.push(modifierResult.value)
+      } else if (next === 'CARET' || next === 'TILDE') {
+        // Bare degree with octave-shift / detune modifier, e.g. 3^+1, 7~-0.25
+        const pitchResult = this.parsePitchModifiers(value, 0)
+        this.pos = pitchResult.newPos
+        elements.push(pitchResult.value)
       } else {
         elements.push(value)
       }

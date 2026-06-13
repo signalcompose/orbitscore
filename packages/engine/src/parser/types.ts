@@ -21,7 +21,11 @@ export type AudioTokenType =
   | 'COMMA' // ,
   | 'EQUALS' // =
   | 'MINUS' // - (for negative numbers)
+  | 'PLUS' // + (for octave shift / detune sign, e.g. 3^+1)
   | 'PERCENT' // % (for random range)
+  | 'ACCIDENTAL' // pitch alteration prefix: b, bb, #, ## (degree b/# notation)
+  | 'CARET' // ^ (octave shift modifier, e.g. 3^+1)
+  | 'TILDE' // ~ (detune modifier, e.g. b7~-0.25)
   | 'NEWLINE' // line break
   | 'EOF' // end of file
 
@@ -75,13 +79,33 @@ export type MethodChain = {
 
 // Play structure types
 export type PlayElement =
-  | number // slice number (e.g., 1, 2, 3)
+  | number // slice number (audio) or bare degree (MIDI), e.g. 1, 2, 3
   | PlayNested // nested structure (e.g., (1)(2))
   | PlayWithModifier // with .chop(), .time(), etc.
+  | PlayPitch // degree with alteration / octave-shift / detune (e.g. b3, #5, 3^+1)
 
 export type PlayNested = {
   type: 'nested'
   elements: PlayElement[]
+}
+
+/**
+ * A MIDI degree carrying pitch alteration and event modifiers.
+ *
+ * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §2.1, §2.4
+ *
+ * Produced only when an accidental (`b`/`#`/`bb`/`##`) or a modifier
+ * (`^` octave shift, `~` detune) is present. A bare integer stays a `number`
+ * (degree 0 = rest), so audio slice-number parsing is unaffected. The value is
+ * interpreted as a degree at MIDI dispatch; appearing in an audio sequence is a
+ * diagnostic error (a slice number has no alteration).
+ */
+export type PlayPitch = {
+  type: 'pitch'
+  degree: number // 1+ pitched, 0 = rest
+  alteration: number // semitones from accidentals: b=-1, #=+1, bb/##=±2
+  octaveShift: number // from `^` (e.g. 3^+1 → +1). 0 if absent
+  detune: number // semitones from `~` (e.g. b7~-0.25 → -0.25). 0 if absent
 }
 
 export type PlayWithModifier = {
