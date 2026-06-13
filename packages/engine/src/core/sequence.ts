@@ -10,6 +10,7 @@ import { AudioEngine } from '../audio/types'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
 import { RootContext } from '../midi/types'
+import { TimedEventScope } from '../timing/calculation/types'
 
 import { Global } from './global'
 import { Scheduler } from './global/types'
@@ -474,6 +475,49 @@ export class Sequence {
   }
 
   /**
+   * Resolve a per-event lexical group scope (§3) to a RootContext. A group
+   * `.root()` (already collapsed inner→outer in the timing walk) overrides the
+   * sequence default; `.mode()` is reserved (throws — Phase 2.2); no scope (or
+   * an oct-only scope) falls back to the sequence default. A degree root
+   * resolves against `global.key()` exactly like a sequence root (§2.3) — a
+   * numeric/degree root with no key declared is an error here.
+   */
+  private resolveScopeToContext(
+    scope: TimedEventScope | undefined,
+    getSeqDefault: () => RootContext,
+  ): RootContext {
+    // The seq default is taken lazily: a note-name-rooted event needs no key
+    // (§2.3), so a sequence that only uses note roots must not be forced to
+    // declare global.key() just to compute a default it never uses.
+    if (!scope || (scope.root === undefined && scope.mode === undefined)) {
+      return getSeqDefault()
+    }
+    const name = this.stateManager.getName() || 'sequence'
+    if (scope.mode !== undefined) {
+      throw new Error(
+        `Sequence '${name}': .mode() is not implemented in v1.1 (the mode lattice is Phase 2.2).`,
+      )
+    }
+    const root = scope.root!
+    if (root.kind === 'note') {
+      return { rootPitchClass: root.pitchClass, octave: this._octave }
+    }
+    // Degree root: resolve against the key (key-undeclared = error).
+    const keyPC = this.global.getMidiManager().getKeyPitchClass()
+    if (keyPC === undefined) {
+      throw new Error(
+        `Sequence '${name}': a degree root (.root(${root.degree})) needs global.key("C").`,
+      )
+    }
+    const resolved = resolveDegree(
+      { degree: root.degree, alteration: root.alteration, octaveShift: 0, detune: 0 },
+      { rootPitchClass: keyPC, octave: 0 },
+    )
+    const rootPitchClass = resolved ? ((resolved.midiNote % 12) + 12) % 12 : keyPC
+    return { rootPitchClass, octave: this._octave }
+  }
+
+  /**
    * Eagerly validate a MIDI sequence's dispatch before scheduling: resolve the
    * root context (key/root errors) AND resolve every degree once (so a rejected
    * degree — 10/12/14/15+, §2.1 — throws here). This runs synchronously in the
@@ -484,10 +528,15 @@ export class Sequence {
    */
   private validateMidiDispatch(): void {
     if (!this.isMidi()) return
-    const context = this.resolveRootContext()
     const timedEvents = this.stateManager.getTimedEvents()
     if (!timedEvents) return
+    let seqDefault: RootContext | undefined
+    const getSeqDefault = (): RootContext => (seqDefault ??= this.resolveRootContext())
     for (const ev of timedEvents) {
+      // Resolve the per-event group scope (§3) so a bad scope (.mode, a degree
+      // root with no key) or a rejected degree throws here, in the awaited
+      // chain, rather than later in the fire-and-forget scheduling callback.
+      const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
       const symbolic = ev.pitch ?? {
         degree: ev.sliceNumber,
         alteration: 0,
@@ -518,7 +567,10 @@ export class Sequence {
     const owner = this.stateManager.getName()
     const port = this._midiPort!
     const channel = this._midiChannel!
-    const context = this.resolveRootContext()
+    // Sequence-default context, computed lazily (only if some event falls back
+    // to it — a note-name-rooted-only sequence needs no key, §2.3).
+    let seqDefault: RootContext | undefined
+    const getSeqDefault = (): RootContext => (seqDefault ??= this.resolveRootContext())
     const sendDelay = midi.sendDelayFor(port)
 
     // §2.4 sticky pitch range: a note/rest with an explicit `^N` (rangeSet) sets
@@ -538,7 +590,11 @@ export class Sequence {
       if (written.rangeSet) {
         runningRange = written.octaveShift
       }
+      // Per-event group scope (§3): a group `.root()` overrides the sequence
+      // default for this note (inner→outer already collapsed in the timing walk).
+      const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
       // Resolve at the effective running range, not the per-note `^N` literal.
+      // (`.oct()` group register composition with `^N` arrives in B7.)
       const symbolic = { ...written, octaveShift: runningRange }
       const resolved = resolveDegree(symbolic, context)
       if (!resolved) {

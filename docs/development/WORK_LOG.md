@@ -33,7 +33,13 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **テスト**: `tests/audio-parser/scope-chain-parsing.spec.ts` 20件（音名/度数 root、oct、mode 予約、重複/衝突/chain-closes エラー、並置 run 集約、§3 入れ子 override 例、no-chain 並置の回帰ガード）。全体 848 passed / 23 skipped。
 
-**次**: B5 timing 透過 + scope descriptor 付与 → B6 dispatch スコープ解決（inner→outer→seq→error）→ B7 `.oct()`×`^N` 合成（要・大和確認: additive 推奨）→ VS Code セマンティックハイライト（Sonnet 委譲）→ core spec 反映。
+**追加コミット (B5-B6: dispatch スコープ解決)**:
+- `timing/calculation/types.ts`: `TimedEvent.scope`（TimedEventScope: root/mode/groupOct）追加
+- `timing/calculation/calculate-event-timing.ts`: scope スタックをツリー walk でスレッド、PlayScoped は timing 透過（並置と同じスロット）+ frame push、各リーフに inner→outer 解決した scope を付与
+- `core/sequence.ts`: `resolveScopeToContext(scope, getSeqDefault)` を追加し scheduleMidiEvents / validateMidiDispatch で per-event 解決。音名 root は key 不要・度数 root は key 必須（未宣言はエラー）・mode は throw。seq 既定は遅延算出（音名 root のみのシーケンスが key を要求されないように）
+- テスト: `scope-timing.spec.ts` 4件（timing 透過 + inner→outer + groupOct）、`sequence-scope-dispatch.spec.ts` 8件（音名/度数 root、並置共有、入れ子 override、key 有無、mode 拒否）。全体 860 passed。
+
+**次**: B7 `.oct()`×`^N` 合成（**要・大和確認**: additive 推奨）→ VS Code セマンティックハイライト（Sonnet 委譲）→ core spec 反映。
 
 ---
 
