@@ -41,6 +41,15 @@ export class Sequence {
   // LinkAudio output channel (only meaningful when Global.linkAudio() is enabled)
   private _outputChannel?: string
 
+  // MIDI properties (only meaningful when seq.midi() was declared).
+  // A MIDI sequence interprets play() values as degrees, not slice numbers.
+  private _midiPort?: string // resolved actual port name
+  private _midiChannel?: number // 1..16
+  private _gate = 0.8 // default gate length (fraction of slot). spec §1
+  private _vel = 96 // default velocity 1..127. spec §1
+  private _octave = 4 // base octave; degree 1 MIDI note. default 4 (C4=60)
+  private _rootDegree?: number // seq.root(n): numeric root = degree of global.key()
+
   constructor(global: Global, audioEngine: AudioEngine) {
     this.global = global
     this.audioEngine = audioEngine
@@ -269,7 +278,71 @@ export class Sequence {
     return this
   }
 
+  /**
+   * Declare this sequence as a MIDI output (§1). `play()` values are then
+   * interpreted as degrees, not slice numbers. Cannot be combined with
+   * `audio()` / `chop()`. Coexists with the SuperCollider audio path (no
+   * LinkAudio-style exclusion).
+   *
+   * @param portName CoreMIDI output port (case-insensitive substring, e.g.
+   *                 "iac" matches "IACドライバ バス1"). Resolved eagerly so an
+   *                 unknown port errors at declaration time.
+   * @param channel  MIDI channel 1..16.
+   */
+  midi(portName: string, channel: number): this {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this._audioFilePath !== undefined) {
+      throw new Error(`Sequence '${name}': midi() cannot be combined with audio()/chop().`)
+    }
+    if (!Number.isInteger(channel) || channel < 1 || channel > 16) {
+      throw new Error(
+        `Sequence '${name}': midi() channel must be an integer 1..16, got ${channel}.`,
+      )
+    }
+    // Resolve the port eagerly (throws listing available ports on no match).
+    this._midiPort = this.global.getMidiManager().getOutput().ensurePort(portName)
+    this._midiChannel = channel
+    return this
+  }
+
+  /** True when this sequence outputs MIDI (declared via `seq.midi()`). */
+  isMidi(): boolean {
+    return this._midiPort !== undefined
+  }
+
+  /** Default gate length as a fraction of the slot (0..1). spec §1. */
+  gate(value: number): this {
+    this._gate = Math.max(0, Math.min(1, value))
+    return this
+  }
+
+  /** Default MIDI velocity (1..127). spec §1. */
+  vel(value: number): this {
+    this._vel = Math.max(1, Math.min(127, Math.round(value)))
+    return this
+  }
+
+  /** Base octave determining the MIDI note of degree 1 (default 4, C4=60). */
+  octave(value: number): this {
+    this._octave = Math.round(value)
+    return this
+  }
+
+  /**
+   * Sequence-default root as a numeric degree of `global.key()` (§2.3).
+   * Note-name roots (`F#`) are Phase 2. Resolved against the key at dispatch;
+   * a numeric root with no `global.key()` declared is an error then.
+   */
+  root(degree: number): this {
+    this._rootDegree = degree
+    return this
+  }
+
   audio(filepath: string): this {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this.isMidi()) {
+      throw new Error(`Sequence '${name}': audio() cannot be combined with midi().`)
+    }
     // Resolve to absolute path. Supports path-direct forms (./, ../, ~/, /,
     // contains '/') and bare bank names like "bd" or "bd:2" via the global
     // audioPath search list. See audio-resolver.ts for the rules.
@@ -289,6 +362,11 @@ export class Sequence {
   }
 
   chop(divisions: number): this {
+    if (this.isMidi()) {
+      throw new Error(
+        `Sequence '${this.stateManager.getName() || 'sequence'}': chop() cannot be combined with midi().`,
+      )
+    }
     this._chopDivisions = divisions
 
     if (!this._audioFilePath) {
@@ -638,6 +716,12 @@ export class Sequence {
       pan: panState.pan,
       panRandom: panState.panRandom,
       outputChannel: this._outputChannel,
+      midiPort: this._midiPort,
+      midiChannel: this._midiChannel,
+      gate: this._gate,
+      vel: this._vel,
+      octave: this._octave,
+      rootDegree: this._rootDegree,
     }
   }
 }

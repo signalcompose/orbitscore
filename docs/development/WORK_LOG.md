@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.98 Issue #228 — Phase 1 増分5b: Sequence MIDI 設定面 + audio排他 (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分5b。 commit hash: `3289c01`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: Sequence のユーザー向け MIDI 設定メソッド。 これで MIDI シーケンスの宣言面が揃う (実際の発音配線は 5c)。
+
+**変更内容 (`core/sequence.ts`)**:
+
+- `midi(portName, channel)`: MIDI モード宣言。 ポートを eager 解決 (ローカライズ substring、 未知ポートは宣言時エラー)。 channel 1..16 検証。 `audio()` 済みなら排他エラー
+- `gate(v)` (0..1)、 `vel(v)` (1..127)、 `octave(v)`、 `root(degree)` セッター。 既定 gate=0.8/vel=96/octave=4 (§1)
+- `isMidi()`、 `audio()`/`chop()` に MIDI 排他チェック
+- `getState()` に midiPort/midiChannel/gate/vel/octave/rootDegree を追加
+- `tests/core/sequence-midi-config.spec.ts`: 10 件 (ポート解決・channel検証・排他双方向・clamp・既定値)
+
+**テスト結果**: 861 passed / 23 skipped (884 total)。 +10、 回帰なし。
+
+**次**: 増分5c (MIDI ディスパッチ配線: run/loop/play/stop/mute → MidiScheduler、 TimedEvent → 度数解決 → ScheduledMidiNote)、 5d (hanging note 不変条件 100回)。
+
+---
+
 ### 6.97 Issue #228 — Phase 1 増分5a: Global MIDI インフラ + key/midiLatency (Jun 13, 2026)
 
 **Date**: 2026-06-13
