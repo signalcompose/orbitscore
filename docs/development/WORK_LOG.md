@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.96 Issue #228 — Phase 1 増分4: MidiScheduler (TS lookahead) (Jun 13, 2026)
+
+**Date**: 2026-06-13
+**Status**: 🚧 IN PROGRESS (Phase 1 増分4。 commit hash: `b866454`)
+**Issue**: signalcompose/orbitscore#228
+**Branch**: `228-phase-1-midi-output`
+
+**動機**: RtMidi は即時送信のみのため、 TS 側で note タイミングを駆動する lookahead スケジューラ。 §5 に従い Sonnet に実装委譲、 契約 (型) と統合レビューは main。
+
+**設計判断**: §7-0 のシンボリックピッチ→MIDI番号の解決はディスパッチ層 (増分5、 出力最終段) で行うため、 MidiScheduler は **解決済みノート** (`ScheduledMidiNote`) を受け取る。 時刻は `Date.now()` 基準の絶対 epoch ms (audio スケジューラと同一クロック基底で併走可)。
+
+**変更内容**:
+
+- `midi-scheduler.ts`: 契約 (main 作成) — `ScheduledMidiNote` (owner/port/channel/note/velocity/detune/onTime/offTime)、 `MidiSchedulerOptions`。 `MidiScheduler` クラス (Sonnet 実装) — `setInterval(tickMs=5)` ポーリング、 各 tick で `Date.now()` をスナップして `time <= now` のアクションを `(time,seq)` 順に発火 (ドリフト補正は tick 毎の壁時計比較)。 detune は note-on 直前に pitch bend。 `start`(冪等)/`stop`(panic)/`clearOwner`(pending除去 + releaseOwner)
+- `tests/midi/midi-scheduler.spec.ts`: fake timers + mock MidiOutput で 21 件 (発火タイミング、 順序、 detune→bend、 clearOwner、 stop→panic、 過去時刻の翌tick発火、 start冪等)
+
+**テスト結果**: 841 passed / 23 skipped (864 total)。 midi-scheduler +21、 回帰なし。
+
+**次**: 増分5 (Sequence MIDI 統合: midi() + ディスパッチ + 値=度数解釈 + 排他 + パラメータ + audio[]予約 + hanging note 不変条件) [main 直列]。
+
+---
+
 ### 6.95 Issue #228 — Phase 1 増分3: MidiOutput (@julusian/midi ラッパー) (Jun 13, 2026)
 
 **Date**: 2026-06-13

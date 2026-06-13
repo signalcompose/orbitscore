@@ -13,3 +13,5 @@ export type { Alteration, SymbolicPitch, RootContext, ResolvedPitch } from './ty
 export { resolveDegree } from './degree-resolution'
 export type { MidiOutput, MidiBackend, MidiBackendPort, ActiveNote } from './midi-output'
 export { RtMidiOutput, createJulusianBackend } from './rtmidi-output'
+export type { ScheduledMidiNote, MidiSchedulerOptions } from './midi-scheduler'
+export { MidiScheduler } from './midi-scheduler'
