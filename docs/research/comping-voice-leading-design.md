@@ -93,9 +93,11 @@ OrbitScore は既に **eval-time・シンボリック**（§12.3 voicing）と *
 
 | サブモデル | 軸 | 既存対応 |
 |---|---|---|
-| ボイシング選択（`.lead()` 経由） | **eval-time・シンボリック** | §6.1 voicing と同契約 |
+| ボイシング選択（`.voicelead()` 経由） | **決定論・出力段で一度走る**（下記訂正） | §6.1 と近いが eval-time ではない |
 | オクターブ散らし / thinning | **dispatch-time・確率的** | 既存 `.r` / `^r` |
 | **リズム生成** | **dispatch-time・確率的（毎サイクル）** | （新規。下記 2.4）|
+
+> **訂正（C1 #269 実装で判明）**: 初稿は voice-leading を「eval-time・シンボリック（§6.1 と同契約）」としていたが、これは誤り。§6.1 voicing は和音内の**ルート相対**インターバルで完結するため eval-time だが、voice-leading は**コード間の絶対ピッチ**（root context）を要し、root context は dispatch でしか解決されない。よって voice-leading は eval-time に置けず、**「決定論・context 依存・出力段で一度だけ走る」**パスになる（per-cycle の確率処理とは別。結果は `octaveShift` にシンボリック書き戻し、§7-0 維持）。正本は PITCH_DSL_SPEC §6.3。
 
 これにより緊張「構造=リズムはユーザが書く ↔ `.comp` が自動生成」は**解消**する: `.comp` がリズム木へ展開するのは `*n` や chord-spread が eval 時に構造へ展開するのと**同じ機構**であり、展開結果は依然として具体的なツリーになる。「構造=リズム」原則は破られない。`.orbslog` での freeze/編集は nice-to-have（load-bearing な正当化ではない）。
 
@@ -105,13 +107,13 @@ OrbitScore は既に **eval-time・シンボリック**（§12.3 voicing）と *
 
 したがって §2.1（dispatch・確率的）と §2.4（subdivision の dispatch-time 可変）は矛盾せず両立する。両者を繋ぐのがこの2段モデルで、C2 の実装上の重心は「dispatch が *subdivision の有無そのもの* を実現できるか」に置かれる（下記 2.4）。
 
-### 2.2 機能① `.lead()` — auto voice-leading（決定論・即設計可能）
+### 2.2 機能① `.voicelead()` / `.vl()` — auto voice-leading（決定論・実装済 C1 #269）
 
-**位置づけ**: §6.1 voicing operators と**同契約**の決定論的・eval-time・シンボリック変換。ただし単一スタックでなく**連続するスタック列**に作用する（直前ボイシングを文脈に取るため、play() レベル / シーケンスレベルの演算子）。
+**位置づけ**: 連続する**コード列**を最小移動で再ボイシングする**決定論的・出力段で一度走る**変換（上記訂正参照: 絶対ピッチ=root context を要するため eval-time ではない。`validateMidiDispatch` と同型・同 awaited チェーン、per-cycle ではない）。結果は各声部の `octaveShift` にシンボリック書き戻し、`^N`/`.oct()`/`^r` が上に加算（§7-0 維持）。play() グループ単位 `(...).voicelead()` と シーケンス既定 `seq.voicelead()` の両方に付く。
 
-**アルゴリズム**（各スタック境界で）:
-1. 直前スタックを半音に解決（§2.1 `resolve()`）
-2. 次スタックをベースオクターブ（`^0`）で解決
+**アルゴリズム**（各コード境界で、出力段で root context 解決後に）:
+1. 直前コードを絶対半音に解決
+2. 次コードをベースオクターブ（octave 0）で解決
 3. 等カーディナリティ: ソート後 n 通りの cyclic rotation の L1 を評価し最小を選択 / 不一致: 二部マッチング（小規模なので総当たり可）
 4. 選択された割当で各声部の半音変位が最小になるよう個別に `^N`（octaveShift）を付与
 5. **出力は degree + `^N` のシンボリック表現**（実音へ解決して戻さない。§7-0 整合）
@@ -165,11 +167,11 @@ OrbitScore は既に **eval-time・シンボリック**（§12.3 voicing）と *
 
 | 段階 | 内容 | 依存 | 性質 |
 |---|---|---|---|
-| **C1** | `.lead()` auto voice-leading（決定論・eval-time・シンボリック）| 既存 §6.1 + resolve() | 定義明確・即実装可・単独で有用。**別 issue 候補** |
+| **C1** | `.voicelead()`/`.vl()` auto voice-leading（決定論・出力段 once-run・シンボリック）| 既存 §6.1 + 出力段 resolve | **実装済 #269 / PR #270**。単独で有用 |
 | **C2** | リズムエンジン（subdivision グリッド primitive + 名前付きセル + density/swing/anticipate）| dispatch パイプライン拡張（2.4）| 設計面積大・真の新規点 |
 | **C3** | 完全 `.comp` = ボイシング自動選択（rootless A/B 等）+ C2 リズム + thinning の合成 | C1 + C2 | selection policy |
 
-`.lead()`(C1) は `.comp` 全体と切り離して単独で価値があり、独立 issue にできる。→ ユーザー判断。
+`.voicelead()`(C1) は `.comp` 全体と切り離して単独で価値があり、独立 issue（#269）として先行実装済み（PR #270）。
 
 ### 2.7 Use cases（illustrative — syntax は暫定、呼び出し面は未決 #7）
 
