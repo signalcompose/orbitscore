@@ -43,7 +43,8 @@ export function voiceLeadOctaves(prev: number[], curBase: number[]): number[] {
   const snap = (c: number, t: number): number => Math.round((t - c) / 12)
 
   if (m === n) {
-    let best: number[] | null = null
+    // n >= 1 here, so the loop always replaces `best` on its first iteration.
+    let best = shifts
     let bestCost = Infinity
     for (let r = 0; r < n; r++) {
       const cand = new Array<number>(m).fill(0)
@@ -61,7 +62,7 @@ export function voiceLeadOctaves(prev: number[], curBase: number[]): number[] {
         best = cand
       }
     }
-    return best ?? shifts
+    return best
   }
 
   // Unequal cardinality: lead the min(n,m) lowest-sorted voices; extras stay at 0.

@@ -35,6 +35,15 @@ const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootle
  */
 const SCOPE_CHAIN_OPS = new Set(['root', 'mode', 'oct', 'hold', 'voicelead', 'vl'])
 
+/** The accumulated pitch-scope chain on a group (§3): the result of {@link ExpressionParser.parseScopeChain}. */
+type ScopeChain = {
+  root?: ScopeRoot
+  mode?: ScopeMode
+  oct?: number
+  hold?: boolean
+  voicelead?: boolean
+}
+
 /** Per-op `[min, max]` argument arity (§12.3): drop ≥1, invert exactly 1, the rest 0. */
 const VOICING_ARITY: Record<string, [number, number]> = {
   drop: [1, Infinity],
@@ -542,20 +551,8 @@ export class ExpressionParser {
    * not allowed; only nesting overrides (§3, decision #10). The scope stays
    * symbolic here; it is resolved lexically at dispatch (§7-0).
    */
-  private parseScopeChain(): {
-    root?: ScopeRoot
-    mode?: ScopeMode
-    oct?: number
-    hold?: boolean
-    voicelead?: boolean
-  } {
-    const scope: {
-      root?: ScopeRoot
-      mode?: ScopeMode
-      oct?: number
-      hold?: boolean
-      voicelead?: boolean
-    } = {}
+  private parseScopeChain(): ScopeChain {
+    const scope: ScopeChain = {}
 
     while (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
       const method = ParserUtils.peek(this.tokens, this.pos).value

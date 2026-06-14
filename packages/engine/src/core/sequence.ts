@@ -11,7 +11,7 @@ import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
 import { resolveChords } from '../midi/chord/resolve-chords'
 import { voiceLeadOctaves } from '../midi/voice-leading'
-import { RootContext } from '../midi/types'
+import { RootContext, SymbolicPitch } from '../midi/types'
 import { TimedEvent, TimedEventScope } from '../timing/calculation/types'
 
 import { Global } from './global'
@@ -54,6 +54,24 @@ interface PlannedNote {
   emit: boolean
   velocity: number // §10.3 resolved per-note velocity (`@v`/seq.vel())
   articulation?: number // §10.3 per-note gate ratio (`@g`); undefined = use seq.gate()
+}
+
+/**
+ * The symbolic pitch for a timed event: its explicit `pitch` (§7-0), or a bare-degree
+ * fallback built from `sliceNumber` (a plain MIDI degree carries no PlayPitch). Shared by
+ * every output-stage walk (validate / voice-leading / scheduling) so the fallback shape
+ * stays in one place.
+ */
+function writtenPitchOf(ev: TimedEvent): SymbolicPitch {
+  return (
+    ev.pitch ?? {
+      degree: ev.sliceNumber,
+      alteration: 0,
+      octaveShift: 0,
+      rangeSet: false,
+      detune: 0,
+    }
+  )
 }
 
 export class Sequence {
@@ -637,13 +655,7 @@ export class Sequence {
       // root with no key) or a rejected degree throws here, in the awaited
       // chain, rather than later in the fire-and-forget scheduling callback.
       const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
-      const symbolic = ev.pitch ?? {
-        degree: ev.sliceNumber,
-        alteration: 0,
-        octaveShift: 0,
-        detune: 0,
-      }
-      resolveDegree(symbolic, context) // throws on a rejected/invalid degree
+      resolveDegree(writtenPitchOf(ev), context) // throws on a rejected/invalid degree
     }
   }
 
@@ -689,13 +701,7 @@ export class Sequence {
       // Resolve each non-rest voice to an absolute pitch (octave 0 = authored octave subsumed).
       const voices: { ev: TimedEvent; base: number }[] = []
       for (const ev of byOnset.get(onset)!) {
-        const written = ev.pitch ?? {
-          degree: ev.sliceNumber,
-          alteration: 0,
-          octaveShift: 0,
-          rangeSet: false,
-          detune: 0,
-        }
+        const written = writtenPitchOf(ev)
         if (written.degree === 0) continue // rest — not a voice
         const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
         // First chord: keep authored octave (anchor); later: octave 0 (VL re-places it).
@@ -711,16 +717,9 @@ export class Sequence {
       if (prev) {
         const shifts = voiceLeadOctaves(prev, base)
         voices.forEach((v, i) => {
-          const written = v.ev.pitch ?? {
-            degree: v.ev.sliceNumber,
-            alteration: 0,
-            octaveShift: 0,
-            rangeSet: false,
-            detune: 0,
-          }
-          v.ev.pitch = { ...written, octaveShift: shifts[i]! } // subsume authored octave
+          v.ev.pitch = { ...writtenPitchOf(v.ev), octaveShift: shifts[i]! } // subsume authored octave
         })
-        prev = voices.map((v, i) => v.base + 12 * shifts[i]!)
+        prev = base.map((b, i) => b + 12 * shifts[i]!) // reuse base[] — single traversal
       } else {
         prev = base // anchor at authored placement; leave events untouched
       }
@@ -802,12 +801,7 @@ export class Sequence {
     // It resets to 0 at the top of each play() so re-evaluations stay deterministic.
     let runningRange = 0
     const plans: PlannedNote[] = timedEvents.map((ev) => {
-      const written = ev.pitch ?? {
-        degree: ev.sliceNumber,
-        alteration: 0,
-        octaveShift: 0,
-        detune: 0,
-      }
+      const written = writtenPitchOf(ev)
       const onTime = schedulerStartTime + baseTime + ev.startTime + sendDelay
       if (ev.tie) {
         // §5.1: a `_` event tie carries no pitch and never touches the running
