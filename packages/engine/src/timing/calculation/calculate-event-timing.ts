@@ -279,6 +279,13 @@ export function calculateEventTiming(
           `Internal: unresolved repeat (*${element.count}) reached the timing walk; ` +
             `repetitions must be expanded before scheduling (§6.5).`,
         )
+      } else if (element.type === 'voicing') {
+        // §12: a voicing op is applied (to a plain stack) by the resolver BEFORE timing.
+        // Reaching here means resolution was skipped — a wiring bug.
+        throw new Error(
+          `Internal: unresolved voicing .${element.op}() reached the timing walk; ` +
+            `voicing must be applied before scheduling (§12).`,
+        )
       }
     }
   }

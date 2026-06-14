@@ -138,10 +138,28 @@ export type PlayElement =
   | PlayRepeat // `x*n` repetition (§6.5); transient — expanded to n siblings at L2
   | PlayTie // `_` event-level tie (§5.1): extends the previous event by one slot
   | PlayLegato // `{ }` legato group (§4/§5.4): note-off delayed past the next note-on
+  | PlayVoicing // `.drop()/.invert()/.open()/...` voicing op (§12); transient — applied at L2
 
 export type PlayNested = {
   type: 'nested'
   elements: PlayElement[]
+}
+
+/**
+ * A voicing operator applied to a chord value / `[ ]` stack (§12, decisions #49/#51):
+ * `.drop(n...)`, `.invert(n)`, `.open()`, `.close()`, `.shell()`, `.rootless()`.
+ *
+ * Transient: the resolver (L2, resolveChords) applies it to the target's resolved
+ * voices as a SYMBOLIC transform — per-voice `^N` (drop/invert/open/close) or a voice
+ * filter (shell/rootless) — and replaces the node with a plain {@link PlayStack}. It
+ * never reaches the timing walk (an unresolved one is an internal-error there).
+ * `target` is the `[ ]` stack or the bare name ref (`m7.drop(2)`) being voiced.
+ */
+export interface PlayVoicing {
+  type: 'voicing'
+  op: 'drop' | 'invert' | 'open' | 'close' | 'shell' | 'rootless'
+  args: number[] // drop: 1-based positions from the top; invert: [n]; open/close/shell/rootless: []
+  target: PlayElement
 }
 
 /**

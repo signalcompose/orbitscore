@@ -16,6 +16,7 @@ import {
   PlayScoped,
   PlayStack,
   PlayLegato,
+  PlayVoicing,
   StackElement,
   PlayChordRef,
   PlayChordRemoval,
@@ -24,6 +25,9 @@ import {
   Meter,
 } from './types'
 import { ParserUtils } from './parser-utils'
+
+/** Voicing operators parsed as postfix on a chord value / `[ ]` stack (§12, #49/#51). */
+const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootless'])
 
 /**
  * If the last element of `list` is a scope chain (PlayScoped) and there are
@@ -630,6 +634,14 @@ export class ExpressionParser {
       }
       if (t === 'DOT') {
         const method = ParserUtils.peek(this.tokens, this.pos).value
+        if (VOICING_OPS.has(method)) {
+          // §12: a voicing operator on a chord value / stack. A bare name lifts to a
+          // chord_ref first (`m7.drop(2)`), like the scope-chain case below.
+          if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
+          el = this.parseVoicingOp(el, method)
+          changed = true
+          continue
+        }
         if (method === 'root' || method === 'mode' || method === 'oct' || method === 'hold') {
           if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
           const scope = this.parseScopeChain()
@@ -642,6 +654,51 @@ export class ExpressionParser {
       break
     }
     return { value: el, newPos: this.pos, changed }
+  }
+
+  /**
+   * Parse a voicing postfix `.op(...)` (§12, #49/#51): `.drop(n...)` / `.invert(n)` /
+   * `.open()` / `.close()` / `.shell()` / `.rootless()`. All are method-call form with
+   * parens (like `.hold()`); drop/invert take 1-based positions, the rest take none.
+   * Wraps the just-parsed `target` (a stack or chord ref) in a {@link PlayVoicing} for
+   * the resolver to apply as a symbolic `^N` / filter transform.
+   */
+  private parseVoicingOp(target: PlayElement, op: string): PlayVoicing {
+    this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // DOT
+    this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // method IDENTIFIER
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'LPAREN').newPos
+
+    const args: number[] = []
+    while (
+      ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
+      !ParserUtils.isEOF(this.tokens, this.pos)
+    ) {
+      const numTok = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = numTok.newPos
+      const n = ParserUtils.parseNumber(numTok.token)
+      if (!Number.isInteger(n) || n < 1) {
+        throw new Error(`.${op}() positions must be integers ≥ 1 (got ${n})`)
+      }
+      args.push(n)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      } else break
+    }
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+
+    // Arity checks (§12.3): drop/invert need position(s); invert is single; the named
+    // position operators take none.
+    if ((op === 'drop' || op === 'invert') && args.length === 0) {
+      throw new Error(`.${op}() needs at least one position, e.g. .${op}(2)`)
+    }
+    if (op === 'invert' && args.length > 1) {
+      throw new Error('.invert(n) takes a single number')
+    }
+    if (op !== 'drop' && op !== 'invert' && args.length > 0) {
+      throw new Error(`.${op}() takes no arguments`)
+    }
+
+    return { type: 'voicing', op: op as PlayVoicing['op'], args, target }
   }
 
   /**
