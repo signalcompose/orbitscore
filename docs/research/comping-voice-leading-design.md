@@ -171,6 +171,68 @@ OrbitScore は既に **eval-time・シンボリック**（§12.3 voicing）と *
 
 `.lead()`(C1) は `.comp` 全体と切り離して単独で価値があり、独立 issue にできる。→ ユーザー判断。
 
+### 2.7 Use cases（illustrative — syntax は暫定、呼び出し面は未決 #7）
+
+以下は「`.comp` が実装されたら何が書けるか / その効果」の例。`.comp` のパラメータ面は OrbitScore の fluent-chaining 慣用（`.midi().octave()`）に倣った仮の形。入力 `changes` は「1小節1コードの進行」を section 変数で与える想定。
+
+**UC1 — リードシート → 即コンピング（中核価値）**
+
+手書き（rootless + Charleston 風を4小節、声部・オクターブ・stab 位置を毎小節手配置）:
+```js
+piano.midi("IAC Driver Bus 1", 1).octave(4).gate(0.7)
+piano.play(
+  (0, [b3,5,b7,9], 0, [b3,5,b7,9]).root(2),   // Dm7 rootless
+  ([3,13,b7,9], 0, [3,13,b7,9], 0).root(5),    // G7  rootless A形（5→13 置換）
+  (0, [7,9,3,5], 0, 0).root(1),                 // Cmaj7 rootless B形
+  ([7,9,3,5], 0, 0, 0).root(1),
+)
+```
+`.comp`:
+```js
+var changes = (m7).root(2), (dom7).root(5), (maj7).root(1), (maj7).root(1)  // Dm7 G7 Cmaj7 (key C)
+piano.midi("IAC Driver Bus 1", 1).octave(4)
+piano.comp(changes).style("medium-swing").density(0.6)
+```
+効果: 進行だけ書けば rootless A/B 形の自動交替・Charleston 系リズム・適切な音域が生成。**十数行 → 2行**。ライブ中の最大の時短。
+
+**UC2 — ソロの起伏に合わせた密度オートメーション**
+```js
+piano.comp(changes).density( line(0.2, 0.9) )      // 頭は薄く、山場へ密に
+piano.comp(changes).density( (0.3, 0, 0.6, 0.9) )  // 2小節目は完全沈黙（laying out）
+```
+効果: 「動くと薄く・間ができると埋める」「徐々に盛り上げる」コンピングの**呼吸**が一行で。density=0 = 弾かないも一等の表現。
+
+**UC3 — ボイシング・テクスチャのライブ切替**
+```js
+piano.comp(changes).voicing("rootless")   // モダンジャズ標準
+piano.comp(changes).voicing("quartal")    // So What 系モーダルの響き
+piano.comp(changes).voicing("shell")      // ガイドトーンのみ、sparse
+```
+効果: 進行を書き直さず**伴奏の質感だけ**を「bebop → modal → sparse」と一語で切替。
+
+**UC4 — ループしても機械的にならない（#53 毎サイクル再ロール）**
+```js
+LOOP(piano)   // piano.comp(changes) を延々ループ
+```
+効果: リズム生成と thinning が毎サイクル振り直され、同じ4小節を何周しても各コーラスが微妙に違う。手書き完全反復の「機械臭さ・聴き疲れ」が出ない。再現は `.orbslog`（seed なし）。
+
+**UC5 — `.comp` × 他パートでのスムーズな声部進行**
+```js
+bass.play((1,0,5,0).root(2), (1,0,5,0).root(5), (1,0,5,0).root(1), ...)  // walking
+piano.comp(changes)   // 内部で .lead() により内声が最小移動（guide tone が半音で繋がる）
+LOOP(bass, piano, lead)
+```
+効果: 土台の auto voice-leading（C1）でコード間の内声が最小移動。手で声部進行を計算せず滑らかな伴奏。
+
+**UC6 — アンティシペーション（前ノリ）**
+```js
+piano.comp(changes).anticipate(0.5)   // コード変更を8分早く先置き = 前ノリ
+piano.comp(changes).anticipate(0)     // ジャスト（比較用）
+```
+効果: 0.5 で各コードが半拍早く入り、ジャズ特有の前方向の推進力。0 との対比で「四角さ ↔ 躍動」の差が体感できる。
+
+> これらは設計の価値を可視化する例であり確定 API ではない。特に UC の呼び出し形（`.comp(changes).style(...)`）は未決 #7 に直結する。
+
 ---
 
 ## Part 3 — 未決事項（ユーザー判断 / 次の設計対話）
