@@ -1020,9 +1020,27 @@ m7.open() / m7.close() // open / close position; .shell() = R+3+7; .rootless() =
   on replay; no seed (decisions #50/#52/#53).
 - **`.comp`** (auto jazz comping) is a future generative macro over these primitives — see #259.
 
----
+### P.13 Auto voice-leading — `.voicelead()` / `.vl()` (正本 PITCH_DSL_SPEC §6.3, comp C1, #269)
 
-## 12. Implementation Status
+Connects consecutive **chord stacks** with minimal voice motion (octave placement only;
+pitch classes preserved). The deterministic foundation `.comp` builds on.
+
+```js
+([1,3,5], [5,7,2]).voicelead()   // C→G: the B drops an octave to stay near C/E/G
+seq.voicelead()                   // sequence default (alias: seq.vl())
+```
+
+- **Deterministic, context-dependent, computed once** — NOT eval-time (unlike §6.1 voicing) and
+  NOT per-cycle (unlike §6.2 randomness). It needs absolute pitch (the resolved root context), so
+  it runs as a once-run output-stage pass and writes each voice's `octaveShift` back symbolically;
+  `^N` / `.oct()` / `^r` still layer on top (§7-0 preserved). Independent of `.r`/`Xr` thinning.
+- Attaches at **group** `(...).voicelead()` and **sequence default** `seq.voicelead()` (same scope-chain
+  mechanism as `.root()`/`.oct()`). Operates on ≥2-voice chords; single notes pass through. The first
+  chord keeps its authored placement; later chords lead from it. Authored `^N` octaves are subsumed.
+- Algorithm: equal voice-count = sorted + n cyclic rotations (min L1, crossing-free); unequal = lead
+  min(n,m), extras at octave 0 (C1 simplification; full bipartite is C2+). **Limitation**: L1-minimal
+  does NOT guarantee tendency-tone resolution or parallel-5th/8ve avoidance — "smooth by default, user
+  controls specifics."
 
 ### Completed Features ✅
 

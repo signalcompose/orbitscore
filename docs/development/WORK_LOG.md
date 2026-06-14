@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.112 Issue #269 — auto voice-leading `.voicelead()` / `.vl()`（comp phase C1） (Jun 14, 2026)
+
+**Date**: 2026-06-14
+**Status**: ✅ 実装完了（C1。/simplify + レビュー前）
+**Issue**: signalcompose/orbitscore#269 / 親 #259 / 設計 #268
+**Branch**: `269-voicelead-c1`
+
+**概要**: `.comp` 段階実装の C1。連続するコード stack を直前に対し最小移動（L1 / Tymoczko）で再ボイシングする決定論的演算子 `.voicelead()`（alias `.vl()`）。`.comp` の土台。
+
+**設計上の重要な確定（実装調査で判明、advisor 検証済）**:
+- voice-leading は **絶対ピッチ（root context）を要する**ため §6.1 voicing のような eval-time ではなく、**出力段で一度だけ走る決定論パス**（`validateMidiDispatch` と同型・同 awaited チェーン、per-cycle ではない）。結果を各声部の `octaveShift` にシンボリックに書き戻し、`^N`/`.oct()`/`^r` が上に加算（§7-0 維持、eval/dispatch 軸の決定論側）。
+- 設計ドラフト #268 の「eval-time symbolic」記述はこの調査で誤りと判明 → #268 側を「deterministic, context-dependent, once-run」に訂正する（doc/impl 乖離防止）。
+
+**実装**:
+- `midi/voice-leading.ts`: 純関数 `voiceLeadOctaves(prev, curBase)`。等数はソート後 n 通り cyclic rotation の L1 最小、不一致は min(n,m) を lead・余剰はオクターブ 0（C1 簡略化、bipartite は C2+）。コモントーンは距離 0 で自然保持。
+- `parser`: `.voicelead()`/`.vl()` をスコープチェーン（`SCOPE_CHAIN_OPS`）に追加。`PlayScoped.voicelead` / `TimedEventScope.voicelead`、timing walk で伝播。
+- `core/sequence.ts`: `seq.voicelead()`/`vl()` setter + `applyVoiceLeading()`（onset でコードをグループ化し、≥2声部・voicelead スコープのコードを最小移動で octave 再配置）。run()/loop() の validateMidiDispatch 直後に実行。
+- `seq` 既定 と グループ `(...).voicelead()` の両対応。単音はスルー、最初のコードは記譜どおり（アンカー）、記譜 `^N` は VL が包摂。
+
+**spec**: PITCH_DSL_SPEC §6.3 に normative セクション追加（phase gate, rule #7）。音楽性限界（傾向音解決・並行回避を保証しない）を明記。
+
+**テスト**: `tests/midi/voice-leading.spec.ts` 11件（純関数の単体 + dispatch 統合 + parse + seq既定/group + 音楽性）。全体 1033 passed / 23 skipped。
+
 ### 6.110 Issue #266 — 正本 HTML の normative 同期（PITCH_DSL_SPEC ← as-built E1-E6） (Jun 14, 2026)
 
 **Date**: 2026-06-14
