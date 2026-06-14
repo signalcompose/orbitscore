@@ -69,6 +69,14 @@ describe('C2a — cellToGrid kernel (§6.4)', () => {
     expect(onsetIdx(mask)).toEqual([0, 4]) // density 0.25 grid, not the unknown cell
   })
 
+  it('a prototype-chain name ("__proto__") is treated as unknown, not a crash', () => {
+    const warn = vi.fn()
+    // own-property lookup only: must fall back to density, not hit Object.prototype.
+    const mask = cellToGrid('__proto__', 0.25, warn)
+    expect(onsetIdx(mask)).toEqual([0, 4])
+    expect(warn).toHaveBeenCalledOnce()
+  })
+
   it('a positive density that rounds to 0 onsets warns (a 0.05 typo, not silent)', () => {
     const warn = vi.fn()
     const mask = cellToGrid(undefined, 0.05, warn) // round(0.05×8)=0 → silent

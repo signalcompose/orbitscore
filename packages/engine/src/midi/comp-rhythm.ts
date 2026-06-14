@@ -62,7 +62,12 @@ export function cellToGrid(
   warn?: (msg: string) => void,
 ): boolean[] {
   if (cellName !== undefined) {
-    const cell = NAMED_CELLS[cellName]
+    // own-property lookup only: a crafted name like "__proto__"/"constructor" must
+    // fall to the density fallback, not hit Object.prototype (which would then throw
+    // on `cell.indices`).
+    const cell = Object.prototype.hasOwnProperty.call(NAMED_CELLS, cellName)
+      ? NAMED_CELLS[cellName]
+      : undefined
     if (cell) {
       const onsets = new Array<boolean>(cell.slots).fill(false)
       for (const i of cell.indices) onsets[i] = true
