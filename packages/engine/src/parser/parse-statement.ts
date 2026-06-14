@@ -19,6 +19,7 @@ import {
   PlayElement,
 } from './types'
 import { ParserUtils } from './parser-utils'
+import { ExpressionParser, collapseScopedRun } from './parse-expression'
 
 /** Semitone offset of one `mode(...)` element (a root-scope degree) from the tonic (§2.2). */
 function modeElementSemitone(el: PlayElement): number {
@@ -28,7 +29,6 @@ function modeElementSemitone(el: PlayElement): number {
   }
   throw new Error('mode(...) elements must be degrees (e.g. mode(1, 2, b3, 4, 5, 6, b7))')
 }
-import { ExpressionParser, collapseScopedRun } from './parse-expression'
 
 /**
  * Statement parser for audio DSL
