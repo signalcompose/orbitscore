@@ -28,6 +28,7 @@ export type AudioTokenType =
   | 'ACCIDENTAL' // pitch alteration prefix: b, bb, #, ## (degree b/# notation)
   | 'CARET' // ^ (octave shift modifier, e.g. 3^+1)
   | 'TILDE' // ~ (detune modifier, e.g. b7~-0.25)
+  | 'AT' // @ (expression modifier: @v velocity / @g articulation, §10.3 E5)
   | 'LBRACKET' // [ (stack — reserved, not yet supported in v1.1)
   | 'RBRACKET' // ] (stack — reserved, not yet supported in v1.1)
   | 'LBRACE' // { (legato group, §4/§5.4)
@@ -330,6 +331,9 @@ export type PlayPitch = {
   tie?: boolean // §5.2 voice-level tie: a `_` prefix inside a stack ([1, _5]) — resolved-pitch-match suppress
   random?: number // §12 `Xr`: presence probability (0..1) — rolled per cycle at dispatch. Absent = always
   randomOctave?: boolean // §12 `^r`: a random octave (±1) picked per cycle at dispatch
+  velocity?: number // §10.3 `@v<n>`: absolute per-note velocity (1..127). Overrides seq.vel()
+  velocityDelta?: number // §10.3 `@v+n`/`@v-n`: velocity relative to seq.vel() (accent)
+  articulation?: number // §10.3 `@g<ratio>`: per-note gate ratio (sounding fraction). Overrides seq.gate()
 }
 
 export type PlayWithModifier = {

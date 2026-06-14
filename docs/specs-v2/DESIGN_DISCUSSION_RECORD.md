@@ -533,3 +533,15 @@ var no5  = [m7, -5]            // 除去 -N もそのまま
 |---|---|---|---|
 | 54 | `global.key("D4")` で key-center octave を宣言（seq.octave > key octave > 4）。additive | 専用 `seq.register()` / 非 sticky 絶対オクターブ記法 | 実曲の `^` 連発緩和を最小・後方互換で。レジスタを1箇所に |
 | 55 | §6.5 Q2 改訂: パターン束縛の top-level comma = セクションセル区切り（多小節束縛） | Q2 維持（comma 拒否、juxtaposition のみ） | #254 曲構成（AABA）の直接記述。WCTM リードシート skill に直結 |
+
+### 13.4 表現 @v/@g（#42 の先送りを解消、E5/§10.3）
+
+決定 #42（@系トークン文法は Phase 4 後の専用フェーズ）を実装で確定。velocity 軸 + articulation 軸の2軸（#41）を per-note 後置 `@` で:
+- **`@v100`**: 絶対 velocity（1-127）。**`@v+20`/`@v-30`**: seq.vel() 相対（アクセント）。
+- **`@g30`**: articulation = gate **パーセント**（30=0.30 staccato / 120=1.20 legato 寄り）。`{ }` レガートと同一軸を per-note 連続値で。seq.gate() を上書き。
+- 実装注: lexer が `v100`/`g30` を1識別子に併合するため、letter+digits を分離。整数引数（gate は%）にして小数点でのトークン分断を回避。`@v+n` は符号が識別子を割る。
+
+| # | 決定 | 棄却した代替案 | 主な根拠 |
+|---|---|---|---|
+| 56 | per-note 表現 = `@v`（velocity, 絶対/相対）+ `@g`（articulation=gate比）。#42 の先送りを実装で解消 | 表現を更に先送り / 独立記号（accent `>` 等）を増やす | #41 の2軸モデルを最小トークンで。アクセント=velocity 相対に還元 |
+| 57 | `@v`/`@g` は整数引数（`@g` は gate パーセント `@g30`=0.30）。`@v(100)` paren 形は不採用 | `@g0.3` 小数形（lexer がトークン分断）/ paren 必須 | 速記性。lexer の letter+digit 併合と整合、小数点問題を回避 |

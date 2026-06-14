@@ -51,6 +51,8 @@ interface PlannedNote {
   tieSlots: number // extra slot duration absorbed from following `_` ties
   offTime: number
   emit: boolean
+  velocity: number // §10.3 resolved per-note velocity (`@v`/seq.vel())
+  articulation?: number // §10.3 per-note gate ratio (`@g`); undefined = use seq.gate()
 }
 
 export class Sequence {
@@ -724,6 +726,12 @@ export class Sequence {
       // (a rest) — no minimum-voice guarantee, silence is allowed (decision #52).
       const present = ev.random === undefined || Math.random() < ev.random
       const note = resolved && present ? resolved.midiNote : null
+      // §10.3 per-note velocity: absolute `@v` wins; else `@v±` relative to seq.vel(); else seq.vel().
+      const velocity =
+        ev.velocity ??
+        (ev.velocityDelta !== undefined
+          ? Math.max(1, Math.min(127, this._vel + ev.velocityDelta))
+          : this._vel)
       return {
         onTime,
         slotDur: ev.duration,
@@ -736,6 +744,8 @@ export class Sequence {
         tieSlots: 0,
         offTime: 0,
         emit: note !== null,
+        velocity,
+        ...(ev.articulation !== undefined && { articulation: ev.articulation }), // §10.3 `@g`
       }
     })
 
@@ -761,7 +771,7 @@ export class Sequence {
         port,
         channel,
         note: p.note,
-        velocity: this._vel,
+        velocity: p.velocity, // §10.3 per-note `@v` (or seq.vel())
         detune: p.detune,
         onTime: p.onTime,
         offTime: p.offTime,
@@ -785,6 +795,7 @@ export class Sequence {
       tieSlots: 0,
       offTime: 0,
       emit: false,
+      velocity: this._vel, // a tie plan never emits; value is irrelevant
     }
   }
 
@@ -821,7 +832,9 @@ export class Sequence {
   private applyGateAndLegato(plans: PlannedNote[], onsetTimes: number[]): void {
     for (const p of plans) {
       if (p.note === null) continue
-      p.offTime = p.onTime + (p.slotDur + p.tieSlots) * this._gate
+      // §10.3 per-note articulation (`@g`) overrides seq.gate() for the span.
+      const gate = p.articulation ?? this._gate
+      p.offTime = p.onTime + (p.slotDur + p.tieSlots) * gate
       if (p.legato) {
         const next = onsetTimes.find((t) => t > p.onTime)
         if (next !== undefined) p.offTime = next + LEGATO_OVERLAP_MS
@@ -850,7 +863,10 @@ export class Sequence {
         if (wantTie && held) {
           // suppress this retrigger; extend the held note to cover this slot
           // (plus any `_` event tie absorbed onto the suppressed note, §5.1).
-          held.offTime = Math.max(held.offTime, n.onTime + (n.slotDur + n.tieSlots) * this._gate)
+          held.offTime = Math.max(
+            held.offTime,
+            n.onTime + (n.slotDur + n.tieSlots) * (n.articulation ?? this._gate),
+          )
           n.emit = false
           curSounding.set(n.note!, held) // chain: the same note may hold across 3+ stacks
         } else {
