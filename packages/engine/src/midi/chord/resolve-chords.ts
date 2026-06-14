@@ -309,9 +309,12 @@ function resolveElement(
   switch (el.type) {
     case 'stack': {
       const resolved = evaluateStackVoices(el.voices, getBinding, warnings, visiting)
-      return el.octaveShift !== undefined
-        ? { type: 'stack', voices: resolved, octaveShift: el.octaveShift }
-        : { type: 'stack', voices: resolved }
+      return {
+        type: 'stack',
+        voices: resolved,
+        ...(el.octaveShift !== undefined && { octaveShift: el.octaveShift }),
+        ...(el.random !== undefined && { random: el.random }), // §12 `.r` thinning (carried to timing)
+      }
     }
     case 'nested':
       return {

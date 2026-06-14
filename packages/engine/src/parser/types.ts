@@ -189,6 +189,11 @@ export type PlayStack = {
    * (§6 `m7^+1`). Structural (does NOT move the §2.4 running range). 0/absent = none.
    */
   octaveShift?: number
+  /**
+   * §12 `.r` / `.r(p)`: random thinning probability (0..1) applied per voice — each
+   * voice has this chance to sound, rolled per cycle at dispatch. Absent = no thinning.
+   */
+  random?: number
 }
 
 /**
@@ -323,6 +328,8 @@ export type PlayPitch = {
   rangeSet: boolean // true if `^` was written (sticky range set point); false = inherit running range
   detune: number // semitones from `~` (e.g. b7~-0.25 → -0.25). 0 if absent
   tie?: boolean // §5.2 voice-level tie: a `_` prefix inside a stack ([1, _5]) — resolved-pitch-match suppress
+  random?: number // §12 `Xr`: presence probability (0..1) — rolled per cycle at dispatch. Absent = always
+  randomOctave?: boolean // §12 `^r`: a random octave (±1) picked per cycle at dispatch
 }
 
 export type PlayWithModifier = {
