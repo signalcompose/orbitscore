@@ -108,6 +108,26 @@ describe('L1 — session log via the interpreter (§1/§3)', () => {
     expect(lines.some((l) => l.includes('"event":"stop"'))).toBe(false) // no stop = valid truncated session
   })
 
+  it('a LOOP launch stamps a non-null effect (resolved quantize boundary)', async () => {
+    await run('var global = init GLOBAL', orbs('p.orbs'))
+    await run('var kick = init global.seq', orbs('p.orbs'))
+    await run('global.start()', orbs('p.orbs'))
+    await run('LOOP(kick)', orbs('p.orbs')) // quantized → effect = next boundary
+
+    const recs = readLog(logFiles()[0]!)
+    const loopRec = recs.find((r) => r.type === 'eval' && r.code === 'LOOP(kick)')
+    expect(loopRec).toBeDefined()
+    expect(loopRec.effect).toMatch(/^\d+:\d+\.\d+$/) // a resolved bar:beat, not null
+  })
+
+  it('a non-LOOP eval leaves effect null (v1 §3.1: LOOP launches only)', async () => {
+    await run('var global = init GLOBAL', orbs('p.orbs'))
+    await run('global.start()', orbs('p.orbs'))
+    await run('global.tempo(132)', orbs('p.orbs'))
+    const recs = readLog(logFiles()[0]!)
+    expect(recs.find((r) => r.code === 'global.tempo(132)').effect).toBeNull()
+  })
+
   it('a second global.start() after stop opens a fresh file', async () => {
     await run('var global = init GLOBAL', orbs('p.orbs'))
     await run('global.start()', orbs('p.orbs'))

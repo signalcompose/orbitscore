@@ -161,6 +161,37 @@ describe('L1 — SessionLogWriter (§1/§3)', () => {
     expect(fs.readdirSync(dir)).toHaveLength(0)
   })
 
+  it('two sessions with the same stamp get distinct files (collision counter)', () => {
+    const w = new SessionLogWriter(META, dir)
+    w.start(startArgs())
+    w.stop(1000, '1:1.000')
+    w.start(startArgs()) // same stamp, same source → must not overwrite the first
+    expect(w.getFilePath()).toBe(path.join(dir, 'mypiece.20260614-213005-2.orbslog'))
+    expect(fs.existsSync(path.join(dir, 'mypiece.20260614-213005.orbslog'))).toBe(true)
+  })
+
+  it('round-trips a non-human evalSource (agent / replay)', () => {
+    const w = new SessionLogWriter(META, dir)
+    w.start(startArgs())
+    w.recordEval(ev({ code: 'a', evalSource: 'agent' }))
+    w.recordEval(ev({ code: 'r', evalSource: 'replay' }))
+    const recs = readLog(path.join(dir, 'mypiece.20260614-213005.orbslog'))
+    expect(recs.find((r) => r.code === 'a').evalSource).toBe('agent')
+    expect(recs.find((r) => r.code === 'r').evalSource).toBe('replay')
+  })
+
+  it('a file-open failure disables logging WITHOUT throwing (a flight recorder must not break playback)', () => {
+    const w = new SessionLogWriter(META, dir)
+    // a sourceFile in a non-existent directory → writeFileSync throws ENOENT
+    expect(() =>
+      w.start(startArgs({ sourceFile: path.join(dir, 'no', 'such', 'dir', 'x.orbs') })),
+    ).not.toThrow()
+    expect(w.getFilePath()).toBeNull() // disabled, no open session
+    expect(() => w.recordEval(ev())).not.toThrow() // subsequent evals are silently dropped
+    expect(() => w.stop(1, '1:1.0')).not.toThrow()
+    expect(fs.readdirSync(dir)).toHaveLength(0)
+  })
+
   it('every written line is valid standalone JSON (strict JSONL)', () => {
     const w = new SessionLogWriter(META, dir)
     w.recordEval(ev({ code: 'pre', wall: 0 }))

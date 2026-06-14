@@ -40,7 +40,11 @@ export interface EvalRecord {
   wall: number
   /** Musical time `bar:beat`, or null before transport runs (§3 `transport`). */
   transport: string | null
-  /** Resolved quantize boundary `bar:beat`, or null for immediate ops (§3 `effect`). */
+  /**
+   * Resolved quantize boundary `bar:beat` at which this eval takes effect, else
+   * null. v1 (§3.1): non-null ONLY for LOOP launches; quantized `play()` swaps and
+   * tempo/beat/length changes use null (follow-up). (§3 `effect`)
+   */
   effect: string | null
   /** Originating `.orbs` (relative), or null on the unnamed editor path (§3 `sourceFile`). */
   sourceFile: string | null
@@ -78,6 +82,14 @@ export class SessionLogWriter {
   private preamble: EvalRecord[] = []
   /** Open session file path, or null when no session is active (pre-start / post-stop). */
   private filePath: string | null = null
+  /**
+   * Set after an I/O error: logging is a flight recorder, NOT a music component —
+   * a disk-full / permission failure mid-session must never break playback. Once
+   * an fs write throws, we warn once and go silent for the session (a fresh
+   * `start()` re-attempts). A flag, not `filePath = null`, so `recordEval` does
+   * NOT re-buffer into an unbounded preamble over a long broken-disk session.
+   */
+  private disabled = false
 
   constructor(meta: SessionMeta, cwd: string) {
     this.meta = meta
@@ -94,6 +106,7 @@ export class SessionLogWriter {
    * buffer (stamped at occurrence); after `start()` it is appended immediately.
    */
   recordEval(rec: EvalRecord): void {
+    if (this.disabled) return
     if (this.filePath === null) {
       this.preamble.push(rec)
       return
@@ -118,7 +131,6 @@ export class SessionLogWriter {
     for (let n = 2; fs.existsSync(candidate); n++) {
       candidate = path.join(dir, `${basename}.${s.stamp}-${n}.orbslog`)
     }
-    this.filePath = candidate
 
     const metaLine = JSON.stringify({
       type: 'meta',
@@ -128,15 +140,27 @@ export class SessionLogWriter {
       startedAt: s.startedAtISO,
       sourceFile: s.sourceFile,
     })
-    // Truncate-create the file with the meta header (a fresh session per start).
-    fs.writeFileSync(this.filePath, metaLine + '\n')
+    // Drain the preamble regardless of outcome (don't retain it on failure).
+    const buffered = this.preamble
+    this.preamble = []
+    this.disabled = false // a fresh session re-attempts after a prior failure
+    try {
+      // Truncate-create the file with the meta header (a fresh session per start).
+      fs.writeFileSync(candidate, metaLine + '\n')
+    } catch (e) {
+      this.disabled = true
+      this.filePath = null
+      console.warn(
+        `⚠️  session-log: failed to open ${candidate} — logging disabled (playback continues): ${e}`,
+      )
+      return
+    }
+    this.filePath = candidate
 
     // Preamble: every buffered eval, transport forced null (§1 — transport未走行).
-    for (const rec of this.preamble) {
+    for (const rec of buffered) {
       this.append(this.evalLine({ ...rec, transport: null, effect: null }))
     }
-    this.preamble = []
-
     this.append(JSON.stringify({ type: 'transport', wall: s.wall, event: 'start' }))
   }
 
@@ -164,8 +188,18 @@ export class SessionLogWriter {
     })
   }
 
-  /** Append one line + newline with a per-line fs write (crash loses ≤1 line, §1). */
+  /**
+   * Append one line + newline with a per-line fs write (crash loses ≤1 line, §1).
+   * Best-effort: an fs error disables logging for the session rather than throwing
+   * into the caller — a flight recorder must never break the music.
+   */
   private append(line: string): void {
-    fs.appendFileSync(this.filePath!, line + '\n')
+    if (this.disabled || this.filePath === null) return
+    try {
+      fs.appendFileSync(this.filePath, line + '\n')
+    } catch (e) {
+      this.disabled = true
+      console.warn(`⚠️  session-log: write error — logging disabled (playback continues): ${e}`)
+    }
   }
 }

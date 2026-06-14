@@ -309,13 +309,24 @@ export class Global {
 
   // Transport control
   start(): this {
+    // §L1: only open a NEW session on an actual stopped→running transition —
+    // transportClock.start() is idempotent, so a redundant start() while running
+    // must not open a second (orphaned) log file.
+    const wasRunning = this.transportClock.running
     // Stamp the shared clock origin FIRST so the audio scheduler (started by
     // transportControl) and the MIDI scheduler share the same Date.now() base.
     this.transportClock.start()
     this.transportControl.start()
     this.effectsManager.setRunningState(true)
     this.midiManager.start()
-    this._onTransportStart?.() // §L1: open the session log (clock origin is set)
+    if (!wasRunning) {
+      // §L1: best-effort — a log-open failure must never break playback.
+      try {
+        this._onTransportStart?.()
+      } catch (e) {
+        console.warn(`⚠️  session-log: start hook failed (playback continues): ${e}`)
+      }
+    }
     return this
   }
 
@@ -329,7 +340,16 @@ export class Global {
   }
 
   stop(): this {
-    this._onTransportStop?.() // §L1: write the stop record BEFORE the clock clears
+    // §L1: write the stop record BEFORE the clock clears, only if actually
+    // running, and never let a log-write error block the note-offs below (a
+    // throw here would otherwise leave MIDI notes hanging — music unstoppable).
+    if (this.transportClock.running) {
+      try {
+        this._onTransportStop?.()
+      } catch (e) {
+        console.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
+      }
+    }
     this.transportControl.stop()
     this.effectsManager.setRunningState(false)
     this.midiManager.stop()
@@ -340,8 +360,8 @@ export class Global {
   /**
    * §L1 (#229 §3 transport): the current musical position as `"bar:beat"`
    * (1-based bar, 1-based fractional beat in the meter's denominator unit), or
-   * null when transport is not running (the session-log preamble phase). Origin
-   * = `global.start()` (transportClock origin); bar 1 beat 1.0 at elapsed 0.
+   * null when transport is not running (before `start()` or after `stop()`).
+   * Origin = `global.start()` (transportClock origin); bar 1 beat 1.0 at elapsed 0.
    */
   getTransportPosition(): string | null {
     if (!this.transportClock.running) return null

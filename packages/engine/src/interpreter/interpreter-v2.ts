@@ -131,10 +131,12 @@ export class InterpreterV2 {
     const skipTransport = options?.skipTransportCommands ?? false
 
     // §L1 (#229): record this eval at occurrence. The interceptor is HERE — the
-    // single funnel every eval path passes through. `recordEval` buffers until
-    // global.start() (preamble) then appends; the start/stop transport records
-    // are emitted by the Global transport hooks (installSessionHooks). Guarded by
-    // `sessionLog` so the engine test suite (which never enables it) is unaffected.
+    // funnel every InterpreterV2.execute() caller passes through (CLI play / REPL;
+    // midi-run.ts drives the interpreter modules directly and is not logged in v1).
+    // `recordEval` buffers until global.start() (preamble) then appends; the
+    // start/stop transport records are emitted by the Global transport hooks
+    // (installSessionHooks). Guarded by `sessionLog` so the engine test suite
+    // (which never enables it) is unaffected.
     this.state.currentSourceFile = options?.sourceFile ?? null
     if (this.state.sessionLog && options?.source !== undefined) {
       const g = this.state.currentGlobal
