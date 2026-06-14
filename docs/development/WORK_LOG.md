@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.110 Issue #266 — 正本 HTML の normative 同期（PITCH_DSL_SPEC ← as-built E1-E6） (Jun 14, 2026)
+
+**Date**: 2026-06-14
+**Status**: ✅ 実装完了（ドキュメントのみ。/simplify + レビュー前）
+**Issue**: signalcompose/orbitscore#266
+**Branch**: `266-pitch-spec-normative-sync`
+
+**背景**: `docs/specs-v2/PITCH_DSL_SPEC_v1.1.html`（v1.1 の仕様正本）は 2026-06-12 の実装前ドラフトで、E1-E6 実装の確定決定（DESIGN_DISCUSSION_RECORD #47-59）と乖離・矛盾していた。spec-first 原則（規則 #6）に対し締切優先で code→spec の逆順になった負債を解消。オラクルは test の assertion（`tests/midi/{voicing,random,expression,mode,key-center}.spec.ts`, `tests/audio-parser/pattern-binding-parsing.spec.ts`）に固定し、各 normative 文を test と照合。
+
+**主な乖離解消**:
+- **§6 の矛盾**: 「ビルダー API `.drop()` 等は採用しない」と明記されていたが E2 で voicing 演算子を実装（決定 #49/#51）→ value 合成（構成音）と voicing（オクターブ配置）を別軸として整理し、採用理由を明記（コード名シンボルではないため設計原則5は保持）
+- **新規 §6.1 Voicing operators**（`.drop`/`.invert`/`.open`/`.close`/`.shell`/`.rootless`）、**§6.2 Randomness**（`Xr`/`.r`/`.r(p)`/`^r`、`r` を1プリミティブとして一箇所に集約）
+- **新規 §2.5 per-note expression**（`@v`/`@g`）+ §8 Out of Scope から `@v` を削除
+- **§2.2 mode period** 規則を「最終要素」→「最大半音位置」に修正（`mode(1, 7^-1)` 対策、E6 の review fix を反映）
+- **§1 key-center register**（`global.key("D4")`、優先 `seq.octave()` > key octave > 4、E3）、**§6.5.3 section variables**（トップレベルカンマ=セル区切り、E4）
+- **§10 Open Questions** の mode-period 境界ケースを解決済みに更新
+- header status を `draft-for-implementation` → `E1-E6 as-built`（全体 implemented とはせず、§3 group chains / Phase 2+ は別管理と明記）
+
+**advisor レビュー反映**: ①オラクル=test ②全体 implemented ラベル禁止（`.oct`/`.hold` の偽主張回避）③top-level renumber 回避・subsection 追加（編集後 `§` grep で dangling なし確認）④core MD P.11/P.12 の §参照を `正本 PITCH_DSL_SPEC §6.1-6.2 / §2.5` へ補正し cross-doc 不整合を解消 ⑤`r` ファミリを一箇所に集約。
+
+**確認**: 1022 passed / 23 skipped（ドキュメントのみ）。新規 5 id ユニーク、dangling cross-ref なし。HTML は手書き直接編集（[[specs-html-authoring]]、pandoc 不使用）。
+
 ### 6.109 Issue #227 + #236 — Phase R (`*n`+パターン変数) + Phase 4 (タイ/レガート/hold) (Jun 14, 2026)
 
 **Date**: 2026-06-14
