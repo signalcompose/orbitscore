@@ -221,6 +221,13 @@ describe('C2a — comp dispatch (§6.4)', () => {
     expect(relStabTimes(hits)).toEqual([0, 1000])
   })
 
+  it('quarters is a 4-slot flat-four — a stab on every beat (not an 8-grid)', async () => {
+    // 4/4 bar 2000ms / 4 slots → 500ms each. quarters {0,1,2,3} → 0,500,1000,1500.
+    const hits = await compHits('[1,3,5]', (s) => s.cell('quarters'))
+    expect(relStabTimes(hits)).toEqual([0, 500, 1000, 1500])
+    expect(hits).toHaveLength(12) // 3 notes × 4 beats
+  })
+
   it('density 0 lays out — a silent bar (no note-ons)', async () => {
     const hits = await compHits('[1,3,5]', (s) => s.density(0))
     expect(hits).toHaveLength(0)
@@ -247,11 +254,14 @@ describe('C2a — comp dispatch (§6.4)', () => {
     expect(plain.map((h) => h.note)).not.toContain(59)
   })
 
-  it('a named cell wins over density(): cell("twofour").density(1) fires 2 stabs, not 8', async () => {
+  it('a named cell wins over density(): cell("twofour").density(1) fires 2 stabs, not 8 (and warns)', async () => {
     // density(1) alone would hit all 8 slots; the cell must win → twofour {1,3} → 2 stabs.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const hits = await compHits('[1,3,5]', (s) => s.cell('twofour').density(1))
     expect(relStabTimes(hits)).toEqual([0, 1000])
     expect(hits).toHaveLength(6) // 3 notes × 2 stabs
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/the cell wins; density is ignored/))
+    warn.mockRestore()
   })
 
   it('density(1) over 3/4 hits all 8 slots evenly (structural polymeter)', async () => {

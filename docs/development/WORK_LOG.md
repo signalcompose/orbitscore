@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.114 Issue #273 — comp C2a polish（PR #272 bot レビュー反映） (Jun 14, 2026)
+
+**Date**: 2026-06-14
+**Status**: ✅ 実装完了（chore）
+**Issue**: signalcompose/orbitscore#273 / 親 #271（#272 マージ後の follow-up）
+**Branch**: `273-comp-c2a-polish`
+
+**概要**: PR #272 マージ後の claude bot レビュー（5件・全件高品質評価・Critical 0）のうち**有効な軽微指摘**を反映。bot の「multi-line コメントが CLAUDE.md 違反」指摘は**誤検知**（両 CLAUDE.md に該当規約なし＋既存コードは multi-line JSDoc 多用、grep で確認）のため対象外。
+
+**対応**:
+- `comp-rhythm.ts`: 未知セル警告の `density ?? 0.5` を `density` に（param 既定 0.5 で常に定義済＝デッドコード除去）。
+- `core/sequence.ts`: `.cell()` と `.density()` 併用時に `comp()` で warn（cell 優先で density 無視を discoverable に。挙動は不変）。`cell()` の持続性（`comp()` 後も残る）を doc 明記。
+- `tests/midi/comp.spec.ts`: `quarters`（4分割）の dispatch テスト追加、cell+density 併用 warn のアサート追加。
+
+**テスト**: comp.spec.ts 27件（+1）。全体 1064 passed / 23 skipped。
+
 ### 6.113 Issue #271 — comping rhythm engine `.comp()` / `.cell()` / `.density()`（comp phase C2a） (Jun 14, 2026)
 
 **Date**: 2026-06-14

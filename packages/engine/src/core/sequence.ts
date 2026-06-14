@@ -397,6 +397,8 @@ export class Sequence {
    * Select a named comping rhythm cell for {@link comp} (§6.4, C2a): `charleston`,
    * `redgarland`, `offbeats`, `quarters`, `twofour`. A cell is a meter-independent
    * figure (see comp-rhythm.ts); over an odd meter it rides an intentional polymeter.
+   * Like the other setters, this persists on the sequence — it applies to every
+   * later `comp()` until changed.
    */
   cell(name: string): this {
     this._compCell = name
@@ -445,6 +447,14 @@ export class Sequence {
     let cellName: string | undefined
     if (this._compCell !== undefined) {
       cellName = this._compCell
+      // A cell names specific onsets, so a co-set density() has no effect — say so
+      // rather than silently ignore it (a known cell takes precedence).
+      if (this._compDensity !== undefined) {
+        console.warn(
+          `⚠️  Sequence '${name}': both cell("${this._compCell}") and density() are set — ` +
+            `the cell wins; density is ignored.`,
+        )
+      }
     } else if (this._compDensity === undefined) {
       cellName = 'charleston'
     } // else: density mode — cellName stays undefined

@@ -74,7 +74,7 @@ export function cellToGrid(
       return onsets
     }
     warn?.(
-      `comp(): unknown cell "${cellName}" — using density ${(density ?? 0.5).toFixed(2)} instead. ` +
+      `comp(): unknown cell "${cellName}" — using density ${density.toFixed(2)} instead. ` +
         `Known cells: ${COMP_CELL_NAMES.join(', ')}.`,
     )
   }
