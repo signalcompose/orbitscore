@@ -570,10 +570,17 @@ export class Sequence {
     }
     const name = this.stateManager.getName() || 'sequence'
     if (scope.mode !== undefined) {
-      throw new Error(
-        `Sequence '${name}': .mode(${scope.mode.raw}) is not implemented in v1.1 ` +
-          `(the mode lattice is Phase 2.2).`,
-      )
+      // §2.2: apply the named mode lattice over the sequence's root (key tonic or
+      // seq.root()). root and mode are mutually exclusive on a group (§3), so the
+      // mode rides on the seq default root.
+      const bound = this.global.getBinding(scope.mode.name)
+      if (!bound || bound.kind !== 'mode') {
+        throw new Error(
+          `Sequence '${name}': .mode(${scope.mode.name}) — no such mode. ` +
+            `Declare \`var ${scope.mode.name} = mode(1, 2, b3, …)\` (§2.2).`,
+        )
+      }
+      return { ...getSeqDefault(), modeLattice: bound.lattice, modePeriod: bound.period }
     }
     const root = scope.root!
     if (root.kind === 'note') {

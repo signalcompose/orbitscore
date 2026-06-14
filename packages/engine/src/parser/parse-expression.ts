@@ -636,16 +636,11 @@ export class ExpressionParser {
    * 2.2): capture the raw arg for duplicate/conflict diagnostics; dispatch
    * throws not-implemented (parallel to time()/fixpitch()).
    */
+  /** Parse a `.mode(NAME)` argument (§2.2): the name of a `mode(...)` binding to apply. */
   private parseModeArg(): ScopeMode {
-    const parts: string[] = []
-    while (
-      ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
-      !ParserUtils.isEOF(this.tokens, this.pos)
-    ) {
-      parts.push(String(ParserUtils.current(this.tokens, this.pos).value ?? ''))
-      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-    }
-    return { kind: 'unimplemented', raw: parts.join(' ') }
+    const tok = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = tok.newPos
+    return { kind: 'mode', name: String(tok.token.value) }
   }
 
   /**

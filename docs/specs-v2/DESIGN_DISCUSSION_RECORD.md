@@ -545,3 +545,12 @@ var no5  = [m7, -5]            // 除去 -N もそのまま
 |---|---|---|---|
 | 56 | per-note 表現 = `@v`（velocity, 絶対/相対）+ `@g`（articulation=gate比）。#42 の先送りを実装で解消 | 表現を更に先送り / 独立記号（accent `>` 等）を増やす | #41 の2軸モデルを最小トークンで。アクセント=velocity 相対に還元 |
 | 57 | `@v`/`@g` は整数引数（`@g` は gate パーセント `@g30`=0.30）。`@v(100)` paren 形は不採用 | `@g0.3` 小数形（lexer がトークン分断）/ paren 必須 | 速記性。lexer の letter+digit 併合と整合、小数点問題を回避 |
+
+### 13.5 mode scope（§2.2, E6 — reserved を実装）
+
+`.mode()`（v1.1 で parse だけ予約・dispatch throw）を実装。`var X = mode(1,2,b3,…)[.period(n)]` で度数→半音格子（degree 1 = lattice[0]）を構築、`(...).mode(X)` で格子インデックス解決（degree n = lattice[(n-1) mod len] + period·⌊(n-1)/len⌋ + alteration）。{1-9,11,13} 受理は mode 内では不適用（任意長）。period 既定 = 最終要素の次オクターブ境界。mode は seq root（key tonic / seq.root）に乗る（root と mode は同一グループ排他、§3）。mode を play 値に使うと warning（scope であって値ではない）。
+
+| # | 決定 | 棄却した代替案 | 主な根拠 |
+|---|---|---|---|
+| 58 | mode lattice = `mode(...)` 構造体（格子は半音オフセット、degree 1=lattice[0]）。`.mode(name)` で適用、`.period(n)` 上書き、既定=次オクターブ境界 | reserved 据え置き / scale-index 方式を基底にも | §2.2 の定義をそのまま実装。教会旋法はライブラリ var 群（言語プリミティブにしない） |
+| 59 | mode は seq root に乗る（root/mode は同一グループ排他）。mode を play 値で使うと warning | mode に独自 root を許す / mode を値として展開 | §3 の排他規則に従う。mode は scope、chord/pattern は値、と型分離を保つ |

@@ -78,11 +78,11 @@ describe('Phase 2 — .oct() scope chain parsing', () => {
   })
 })
 
-describe('Phase 2 — .mode() reserved (parsed, dispatch throws later)', () => {
-  it('`.mode(dorian)` parses to an unimplemented scope marker', () => {
+describe('E6 — .mode() scope (§2.2, implemented)', () => {
+  it('`.mode(dorian)` parses to a mode-name scope marker', () => {
     expect(firstArg('seq1.play((1).mode(dorian))')).toMatchObject({
       type: 'scoped',
-      mode: { kind: 'unimplemented' },
+      mode: { kind: 'mode', name: 'dorian' },
     })
   })
 })

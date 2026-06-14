@@ -171,6 +171,12 @@ export class Global {
     return this
   }
 
+  /** §2.2: bind a user pitch lattice (mode) into the namespace, referenced by `.mode(name)`. */
+  defineMode(name: string, lattice: number[], period: number): this {
+    this.setChord(name, { kind: 'mode', lattice, period })
+    return this
+  }
+
   /** The bound value (chord or pattern) for a name, or undefined if unbound. */
   getBinding(name: string): BoundValue | undefined {
     return this.chordRegistry.get(name)

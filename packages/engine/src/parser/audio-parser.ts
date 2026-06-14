@@ -27,6 +27,7 @@ export type {
   TransportStatement,
   ChordBinding,
   PatternBinding,
+  ModeBinding,
   ImportStatement,
   MethodChain,
   RandomValue,

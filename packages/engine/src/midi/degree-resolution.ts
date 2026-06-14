@@ -53,6 +53,24 @@ export function resolveDegree(pitch: SymbolicPitch, context: RootContext): Resol
     return null
   }
 
+  // §2.2 mode scope: a melodic degree is a pure index into the user lattice (any length;
+  // the {1-9,11,13} acceptance does NOT apply). Alteration applies after the lookup, and
+  // the 2↔9 tension wrap-around does not hold (the lattice need not be 7 notes).
+  if (context.modeLattice && context.modeLattice.length > 0) {
+    const lat = context.modeLattice
+    const len = lat.length
+    const period = context.modePeriod ?? 12
+    const semitones =
+      lat[(degree - 1) % len]! + period * Math.floor((degree - 1) / len) + pitch.alteration
+    const rootPitch = 12 * (context.octave + 1) + context.rootPitchClass
+    return {
+      midiNote: rootPitch + semitones + 12 * pitch.octaveShift,
+      detune: pitch.detune,
+      symbolic: pitch,
+      context,
+    }
+  }
+
   // §2.1 degree acceptance: only {1-9, 11, 13} are musical. 10/12/14 and ≥15 are
   // non-musical linear numbers — reject with a hint to use the `^N` pitch range.
   if (!ACCEPTED_DEGREES.has(degree)) {

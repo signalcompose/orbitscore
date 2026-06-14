@@ -72,6 +72,15 @@ export interface RootContext {
    *   rootPitch = 12 * (octave + 1) + rootPitchClass   (C4 = 60 convention).
    */
   octave: number
+  /**
+   * §2.2 mode scope: a user pitch lattice — semitone offsets from the root, with
+   * degree 1 = `lattice[0]`. When present, a melodic degree `n` indexes the lattice
+   * (`lattice[(n-1) mod len] + period * floor((n-1)/len)`) instead of the Ionian
+   * vocabulary; the {1-9,11,13} acceptance no longer applies (any length is allowed).
+   */
+  modeLattice?: number[]
+  /** §2.2 mode repeat period in semitones (default = octave boundary above the last element). */
+  modePeriod?: number
 }
 
 /**

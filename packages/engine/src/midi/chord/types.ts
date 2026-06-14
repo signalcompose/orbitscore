@@ -29,7 +29,9 @@ export interface ChordVoice {
  * - `chord`: a vertical degree stack (resolved against the placement scope)
  * - `pattern` (§6.5): a horizontal/tree value — 1+ top-level play siblings, spliced
  *   at the use site (length > 1 = a juxtaposition binding)
+ * - `mode` (§2.2): a user pitch lattice (semitone offsets) referenced by `.mode(name)`
  */
 export type BoundValue =
   | { kind: 'chord'; voices: ChordVoice[] }
   | { kind: 'pattern'; elements: PlayElement[] }
+  | { kind: 'mode'; lattice: number[]; period: number }

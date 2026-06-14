@@ -102,6 +102,13 @@ function resolveName(
   if (bound.kind === 'chord') {
     return [{ type: 'stack', voices: spreadChordVoices(bound.voices, octaveShift) }]
   }
+  if (bound.kind === 'mode') {
+    // §2.2: a mode is a scope applied via `.mode(name)`, not a playable value.
+    warnings.push(
+      `"${name}" is a mode — apply it with \`(...).mode(${name})\`, not as a value (§2.2).`,
+    )
+    return [0]
+  }
   // pattern: a horizontal/tree value — splice its (recursively resolved) elements.
   if (visiting.has(name)) {
     warnings.push(
