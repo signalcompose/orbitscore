@@ -92,10 +92,12 @@ function resolveName(
 ): PlayElement[] {
   const bound = getBinding(name)
   if (!bound) {
+    // #255: an unbound standalone name is rendered as a REST (occupies its slot) rather
+    // than dropped — a typo must not silently re-time the rest of the bar (decision: a).
     warnings.push(
-      `unknown name "${name}" — neither a chord nor a pattern (§6/§6.5). Did you \`import chords\` / \`var ${name} = …\`?`,
+      `unknown name "${name}" — neither a chord nor a pattern (§6/§6.5); rendered as a rest. Did you \`import chords\` / \`var ${name} = …\`?`,
     )
-    return []
+    return [0]
   }
   if (bound.kind === 'chord') {
     return [{ type: 'stack', voices: spreadChordVoices(bound.voices, octaveShift) }]
