@@ -10,8 +10,9 @@ import { AudioEngine } from '../audio/types'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
 import { resolveChords } from '../midi/chord/resolve-chords'
+import { voiceLeadOctaves } from '../midi/voice-leading'
 import { RootContext } from '../midi/types'
-import { TimedEventScope } from '../timing/calculation/types'
+import { TimedEvent, TimedEventScope } from '../timing/calculation/types'
 
 import { Global } from './global'
 import { Scheduler } from './global/types'
@@ -80,6 +81,7 @@ export class Sequence {
   private _gate = 0.8 // default gate length (fraction of slot). spec §1
   private _vel = 96 // default velocity 1..127. spec §1
   private _hold = false // §5.3: auto common-tone tie between consecutive stacks
+  private _voicelead = false // §6.3 (C1): auto voice-leading between consecutive chord stacks
   private _octave?: number // base octave (degree 1) IF seq.octave() was set; else falls back
   private _rootDegree?: number // seq.root(n): numeric root = degree of global.key()
 
@@ -354,6 +356,22 @@ export class Sequence {
     return this
   }
 
+  /**
+   * Enable auto voice-leading between consecutive chord stacks (§6.3, comp phase
+   * C1). Each chord after the first is octave-placed to minimize total voice
+   * motion from the previous chord (pitch classes unchanged). Deterministic,
+   * computed once. `.vl()` is an alias. Also settable per group: `(...).voicelead()`.
+   */
+  voicelead(): this {
+    this._voicelead = true
+    return this
+  }
+
+  /** Alias of {@link voicelead} (§6.3, C1). */
+  vl(): this {
+    return this.voicelead()
+  }
+
   /** Default gate length as a fraction of the slot (0..1). spec §1. */
   gate(value: number): this {
     this._gate = Math.max(0, Math.min(1, value))
@@ -626,6 +644,86 @@ export class Sequence {
         detune: 0,
       }
       resolveDegree(symbolic, context) // throws on a rejected/invalid degree
+    }
+  }
+
+  /**
+   * Auto voice-leading (§6.3, comp phase C1): a deterministic, once-run pass that
+   * annotates each chord stack's symbolic `octaveShift` so consecutive chords move
+   * minimally (Tymoczko L1). It needs ABSOLUTE pitch (the resolved root context),
+   * which only exists at the output stage — so it runs here in the awaited chain
+   * (a sibling of {@link validateMidiDispatch}), NOT per cycle, and writes the
+   * choice back symbolically: scheduleMidiEvents then consumes it as the voice's
+   * `structural` octave, with `^N` / `.oct()` / `^r` still layering additively on
+   * top (§7-0 preserved; deterministic side of the eval/dispatch axis).
+   *
+   * Operates only on chord stacks (≥2 pitched voices at one onset) under a
+   * `.voicelead()`/`.vl()` scope (seq default or group). Single notes pass through
+   * and do not anchor. The first chord keeps its authored placement; later chords
+   * subsume their authored octave and lead from the previous chord. Stochastic
+   * thinning (`.r`/`Xr`) is independent — VL sees the full chord regardless.
+   */
+  private applyVoiceLeading(): void {
+    if (!this.isMidi()) return
+    const timedEvents = this.stateManager.getTimedEvents()
+    if (!timedEvents) return
+    const seqVl = this._voicelead
+    if (!seqVl && !timedEvents.some((e) => e.scope?.voicelead)) return
+
+    let seqDefault: RootContext | undefined
+    const getSeqDefault = (): RootContext => (seqDefault ??= this.resolveRootContext())
+
+    // Group voicelead-scoped pitched events by onset (a chord = voices sharing a startTime).
+    const byOnset = new Map<number, TimedEvent[]>()
+    for (const ev of timedEvents) {
+      if (ev.tie) continue
+      if (!(seqVl || ev.scope?.voicelead)) continue
+      const arr = byOnset.get(ev.startTime)
+      if (arr) arr.push(ev)
+      else byOnset.set(ev.startTime, [ev])
+    }
+    const onsets = [...byOnset.keys()].sort((a, b) => a - b)
+
+    let prev: number[] | null = null
+    for (const onset of onsets) {
+      // Resolve each non-rest voice to an absolute pitch (octave 0 = authored octave subsumed).
+      const voices: { ev: TimedEvent; base: number }[] = []
+      for (const ev of byOnset.get(onset)!) {
+        const written = ev.pitch ?? {
+          degree: ev.sliceNumber,
+          alteration: 0,
+          octaveShift: 0,
+          rangeSet: false,
+          detune: 0,
+        }
+        if (written.degree === 0) continue // rest — not a voice
+        const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
+        // First chord: keep authored octave (anchor); later: octave 0 (VL re-places it).
+        const r = resolveDegree(
+          { ...written, octaveShift: prev ? 0 : written.octaveShift },
+          context,
+        )
+        if (r) voices.push({ ev, base: r.midiNote })
+      }
+      if (voices.length < 2) continue // VL connects chords, not single notes/rests
+
+      const base = voices.map((v) => v.base)
+      if (prev) {
+        const shifts = voiceLeadOctaves(prev, base)
+        voices.forEach((v, i) => {
+          const written = v.ev.pitch ?? {
+            degree: v.ev.sliceNumber,
+            alteration: 0,
+            octaveShift: 0,
+            rangeSet: false,
+            detune: 0,
+          }
+          v.ev.pitch = { ...written, octaveShift: shifts[i]! } // subsume authored octave
+        })
+        prev = voices.map((v, i) => v.base + 12 * shifts[i]!)
+      } else {
+        prev = base // anchor at authored placement; leave events untouched
+      }
     }
   }
 
@@ -1007,6 +1105,7 @@ export class Sequence {
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
+    this.applyVoiceLeading() // §6.3 (C1): deterministic auto voice-leading annotation
     this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
 
     const prepared = await preparePlayback({
@@ -1050,6 +1149,7 @@ export class Sequence {
     // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
     this.resolveDispatchChannel()
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
+    this.applyVoiceLeading() // §6.3 (C1): deterministic auto voice-leading annotation
     this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
 
     const prepared = await preparePlayback({

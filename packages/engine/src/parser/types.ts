@@ -308,6 +308,7 @@ export type PlayScoped = {
   mode?: ScopeMode // present iff `.mode(name)` was chained (§2.2, E6: applies a user lattice)
   oct?: number // present iff `.oct(N)` was chained (group-lexical octave register)
   hold?: boolean // present iff `.hold()` was chained (§5.3 auto common-tone tie, group-level)
+  voicelead?: boolean // present iff `.voicelead()`/`.vl()` was chained (§6.3 auto voice-leading, C1)
 }
 
 /**
