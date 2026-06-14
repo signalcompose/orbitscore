@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.111 Issue #259 — `.comp` + auto voice-leading 設計ドラフト（調査 + 提案） (Jun 14, 2026)
+
+**Date**: 2026-06-14
+**Status**: 🟡 設計ドラフト（pre-decision / ユーザーレビュー待ち。実装着手前）
+**Issue**: signalcompose/orbitscore#259
+**Branch**: `259-comp-voiceleading-design`
+
+**背景**: `.comp`（自動ジャズコンピング、#259）は「土台（E2 primitives）は揃ったが実装対象としては未定義」状態。エビデンスベースで設計を練るため、3並列リサーチ（コンピングのリズム＋先行ソフト / ジャズボイシング＋音域 / ボイスリーディング理論＋アルゴリズム、いずれも WebSearch・出典付き）を実施し、`docs/research/comping-voice-leading-design.md` に調査 + 設計提案をまとめた。
+
+**設計の要点（advisor レビュー反映）**:
+- **2機能に分離**: ① `.lead()` auto voice-leading（決定論・eval-time・シンボリック、min-L1 cyclic-rotation、§6.1 と同契約・即設計可）/ ② `.comp` 生成マクロ（リズム生成 + ボイシング選択 + thinning の合成）
+- **既存2軸へマッピング**で「構造=リズムはユーザが書く ↔ `.comp` 自動生成」の緊張を解消（`.comp` のツリー展開は `*n`/spread と同機構）。**真の新規点 = リズムの subdivision が dispatch-time 可変になる初ケース**を明示
+- **リズムモデル**: mode と同形のハイブリッド（subdivision グリッド primitive + 名前付きセル ライブラリ）を推奨
+- **決定 #53 準拠**（seed なし・毎サイクル再ロール）。seed 案は「#53 再検討を要する提案」として保留（設計フォークにしない）
+- **`.rootless()` primitive（root 除去）は正しい**。jazz rootless（A/B 形・Dom7 の 5→13 置換・m7b5 ルート復活）は上位テンプレートと明確化（コード修正ではない、footgun 回避）
+- **段階分割**: C1 `.lead()` → C2 リズムエンジン → C3 完全 `.comp`。C1 は独立 issue 候補
+
+**重要**: 本ドラフトは確定仕様ではない。`.comp` は WCTM クリティカルパス外。未決6項目（段階分割・命名・リズムモデル・seed・自動性の範囲・L1 の音楽性限界）はユーザー判断待ち。合意後に正本（specs-v2）へ昇格する。
+
 ### 6.110 Issue #266 — 正本 HTML の normative 同期（PITCH_DSL_SPEC ← as-built E1-E6） (Jun 14, 2026)
 
 **Date**: 2026-06-14
