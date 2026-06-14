@@ -32,11 +32,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   const globalInterpreter = new InterpreterV2()
 
   // §L1 (#229): the REPL is a real entry point — record the session (idempotent).
-  globalInterpreter.enableSessionLog({
-    engineVersion: '1.1.0',
-    dslVersion: '1.1',
-    cwd: process.cwd(),
-  })
+  globalInterpreter.enableSessionLog({ cwd: process.cwd() })
 
   // Boot SuperCollider once at startup with optional audio device
   await globalInterpreter.boot(options.audioDevice)

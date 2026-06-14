@@ -9,6 +9,8 @@ import {
   EvalRecord,
 } from '../../packages/engine/src/core/session-log/session-log-writer'
 
+import { readOrbsLog } from './helpers'
+
 /**
  * L1 (#229) — `.orbslog` session log writer. The writer is pure I/O + buffering:
  * the caller supplies the triple stamp, so these assert the file lifecycle —
@@ -30,14 +32,7 @@ function ev(over: Partial<EvalRecord> = {}): EvalRecord {
   }
 }
 
-/** Read a written .orbslog back as parsed JSONL records. */
-function readLog(file: string): any[] {
-  return fs
-    .readFileSync(file, 'utf8')
-    .split('\n')
-    .filter((l) => l.length > 0)
-    .map((l) => JSON.parse(l))
-}
+const readLog = readOrbsLog
 
 describe('L1 — SessionLogWriter (§1/§3)', () => {
   let dir: string

@@ -57,7 +57,7 @@ export async function playFile(options: PlayOptions): Promise<PlayResult> {
 
   // §L1 (#229): the CLI is a real entry point — record the session (idempotent;
   // a reused interpreter keeps its rolling buffer). `untitled` fallback dir = cwd.
-  interpreter.enableSessionLog({ engineVersion: '1.1.0', dslVersion: '1.1', cwd: process.cwd() })
+  interpreter.enableSessionLog({ cwd: process.cwd() })
 
   await interpreter.execute(ir, {
     documentDirectory,

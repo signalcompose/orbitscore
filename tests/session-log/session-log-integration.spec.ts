@@ -7,6 +7,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 import { InterpreterV2 } from '../../packages/engine/src/interpreter/interpreter-v2'
 
+import { readOrbsLog } from './helpers'
+
 /**
  * L1 (#229) integration — the interpreter is the single eval-path interceptor.
  * With session logging enabled, driving real evals through `execute()` must
@@ -40,12 +42,7 @@ describe('L1 — session log via the interpreter (§1/§3)', () => {
     await interpreter.execute(parseAudioDSL(src), { source: src, sourceFile, evalSource: 'human' })
   }
   const logFiles = () => fs.readdirSync(dir).filter((f) => f.endsWith('.orbslog'))
-  const readLog = (f: string) =>
-    fs
-      .readFileSync(path.join(dir, f), 'utf8')
-      .split('\n')
-      .filter((l) => l.length > 0)
-      .map((l) => JSON.parse(l))
+  const readLog = (f: string) => readOrbsLog(path.join(dir, f))
 
   it('no .orbslog exists until global.start()', async () => {
     await run('var global = init GLOBAL', orbs('p.orbs'))

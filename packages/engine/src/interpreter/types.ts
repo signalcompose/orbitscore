@@ -5,7 +5,7 @@
 import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
 import { SuperColliderPlayer } from '../audio/supercollider-player'
-import { SessionLogWriter, EvalSource } from '../core/session-log/session-log-writer'
+import { SessionLogWriter } from '../core/session-log/session-log-writer'
 
 /**
  * Interpreter state containing globals and sequences
@@ -25,9 +25,10 @@ export interface InterpreterState {
   // §L1 (#229) session log — present ONLY when explicitly enabled at a real
   // entry point (CLI / REPL). Absent in unit-test paths, so logging is inert.
   sessionLog?: SessionLogWriter
-  engineT0?: number // epoch ms at interpreter construction = rolling-buffer origin (§3 wall)
-  currentSourceFile?: string | null // the .orbs the current eval came from (§3 sourceFile / §2 naming)
-  currentEvalSource?: EvalSource // provenance of the current eval (§3 evalSource)
+  engineT0: number // epoch ms at interpreter construction = rolling-buffer origin (§3 wall)
+  // The .orbs the current eval came from — read by the transport-hook closures
+  // when start()/stop() fire synchronously within that eval (§3 sourceFile / §2 naming).
+  currentSourceFile?: string | null
 }
 
 /**

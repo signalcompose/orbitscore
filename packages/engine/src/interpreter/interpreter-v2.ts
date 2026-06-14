@@ -14,6 +14,7 @@ import {
   EvalSource,
   formatLogStamp,
 } from '../core/session-log/session-log-writer'
+import { ENGINE_VERSION, DSL_VERSION } from '../version'
 
 import { InterpreterState } from './types'
 import { processGlobalInit, processSequenceInit } from './process-initialization'
@@ -27,6 +28,8 @@ import { processStatement } from './process-statement'
  */
 export class InterpreterV2 {
   private state: InterpreterState
+  /** §L1: guards installing the Global transport hooks exactly once per session. */
+  private sessionHooksInstalled = false
 
   constructor() {
     this.state = {
@@ -51,36 +54,40 @@ export class InterpreterV2 {
    * the engine's own test suite stays file-free. `cwd` is the untitled-fallback
    * directory; `engineVersion`/`dslVersion` go in the meta header.
    */
-  enableSessionLog(opts: { engineVersion: string; dslVersion: string; cwd: string }): void {
+  enableSessionLog(opts: { cwd: string; engineVersion?: string; dslVersion?: string }): void {
     if (this.state.sessionLog) return // idempotent — keep the existing rolling buffer
     this.state.sessionLog = new SessionLogWriter(
-      { engineVersion: opts.engineVersion, dslVersion: opts.dslVersion },
+      {
+        engineVersion: opts.engineVersion ?? ENGINE_VERSION,
+        dslVersion: opts.dslVersion ?? DSL_VERSION,
+      },
       opts.cwd,
     )
   }
 
+  /** §L1 / §3 wall: ms since the rolling-buffer origin (interpreter construction). */
+  private wallMs(): number {
+    return Date.now() - this.state.engineT0
+  }
+
   /**
    * §L1: wire the global's transport start/stop to the session log. Closures
-   * read live `state` (sourceFile / engineT0) so each start/stop logs against
-   * the context of the eval that triggered it.
+   * read live `state.currentSourceFile` so a start/stop logs against the eval
+   * that triggered it (start/stop fire synchronously within that eval).
    */
   private installSessionHooks(global: Global): void {
-    const state = this.state
     global.setTransportHooks({
       onStart: () => {
         const now = new Date()
-        state.sessionLog!.start({
+        this.state.sessionLog!.start({
           startedAtISO: now.toISOString(),
           stamp: formatLogStamp(now),
-          wall: Date.now() - (state.engineT0 ?? Date.now()),
-          sourceFile: state.currentSourceFile ?? null,
+          wall: this.wallMs(),
+          sourceFile: this.state.currentSourceFile ?? null,
         })
       },
       onStop: () => {
-        state.sessionLog!.stop(
-          Date.now() - (state.engineT0 ?? Date.now()),
-          global.getTransportPosition(),
-        )
+        this.state.sessionLog!.stop(this.wallMs(), global.getTransportPosition())
       },
     })
   }
@@ -129,17 +136,18 @@ export class InterpreterV2 {
     // are emitted by the Global transport hooks (installSessionHooks). Guarded by
     // `sessionLog` so the engine test suite (which never enables it) is unaffected.
     this.state.currentSourceFile = options?.sourceFile ?? null
-    this.state.currentEvalSource = options?.evalSource ?? 'human'
     if (this.state.sessionLog && options?.source !== undefined) {
       const g = this.state.currentGlobal
+      // §3.1 v1: `effect` is stamped for LOOP launches only (other quantized
+      // swaps are follow-up; replay re-quantizes regardless).
       const hasLoop = ir.statements.some((s) => s.type === 'transport' && s.command === 'loop')
       this.state.sessionLog.recordEval({
         code: options.source,
-        wall: Date.now() - (this.state.engineT0 ?? Date.now()),
+        wall: this.wallMs(),
         transport: g?.getTransportPosition() ?? null,
         effect: hasLoop ? (g?.getQuantizedEffectPosition() ?? null) : null,
         sourceFile: this.state.currentSourceFile,
-        evalSource: this.state.currentEvalSource,
+        evalSource: options?.evalSource ?? 'human',
       })
     }
 
@@ -151,11 +159,12 @@ export class InterpreterV2 {
       await processGlobalInit(ir.globalInit, this.state)
     }
 
-    // §L1: install the session-log transport hooks on the global once it exists.
-    // The closures read live state (sourceFile / engineT0) at fire time, so a
-    // start/stop in a later eval logs against that eval's context. Idempotent.
-    if (this.state.sessionLog && this.state.currentGlobal) {
+    // §L1: install the session-log transport hooks on the global ONCE, when it
+    // first exists. The closures read live state.currentSourceFile at fire time,
+    // so a start/stop in a later eval logs against that eval's context.
+    if (this.state.sessionLog && this.state.currentGlobal && !this.sessionHooksInstalled) {
       this.installSessionHooks(this.state.currentGlobal)
+      this.sessionHooksInstalled = true
     }
 
     // Set documentDirectory on global so audioPath() / audio() can resolve relative paths

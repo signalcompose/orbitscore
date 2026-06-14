@@ -357,9 +357,9 @@ export class Global {
     if (!this.transportClock.running) return null
     const q = this.quantizeManager.getQuantize()
     if (q === 'off') return null
-    const { tempo, beat } = this.transportParams()
+    const params = this.transportParams()
     const currentMs = Date.now() - this.transportClock.startTime
-    return this.msToBarBeat(nextQuantizedTime(currentMs, q, tempo, beat))
+    return this.msToBarBeat(nextQuantizedTime(currentMs, q, params.tempo, params.beat), params)
   }
 
   /** Tempo + meter in effect now (global defaults; §3 transport reference frame). */
@@ -372,8 +372,14 @@ export class Global {
   }
 
   /** Convert elapsed transport ms to a `"bar:beat"` string (§3). */
-  private msToBarBeat(elapsedMs: number): string {
-    const { tempo, beat } = this.transportParams()
+  private msToBarBeat(
+    elapsedMs: number,
+    params: {
+      tempo: number
+      beat: { numerator: number; denominator: number }
+    } = this.transportParams(),
+  ): string {
+    const { tempo, beat } = params
     const beatUnitMs = ((60_000 / tempo) * 4) / beat.denominator // one meter-beat
     const totalBeatUnits = Math.max(0, elapsedMs) / beatUnitMs
     const bar = Math.floor(totalBeatUnits / beat.numerator) + 1
