@@ -80,6 +80,7 @@ async function main(): Promise<void> {
     runGroup: new Set(),
     loopGroup: new Set(),
     muteGroup: new Set(),
+    engineT0: Date.now(), // §L1 rolling-buffer origin (no session log enabled on this path)
   }
 
   // Report the DSL to the monitor — honest: this is the exact source the engine

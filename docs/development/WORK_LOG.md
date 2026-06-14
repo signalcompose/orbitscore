@@ -17,6 +17,30 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.115 Issue #229 — session log writer `.orbslog`（Phase 1-L1） (Jun 15, 2026)
+
+**Date**: 2026-06-15
+**Status**: ✅ 実装完了（L1。/simplify + /code:pr-review-team 予定）
+**Issue**: signalcompose/orbitscore#229 / 親 Epic #224 / 正本 SESSION_LOG_SPEC_v1
+**Branch**: `229-session-log-writer`
+
+**概要**: 評価の因果記録 `.orbslog` の書き出し層 L1。フライトレコーダー方式（常時ローリングバッファ → `global.start()` でファイル生成 + meta + preamble + 以降追記）。傍受点定義は main、writer 本体は自己完結。
+
+**設計の確定（advisor 検証 + コード確認で spec 曖昧点を解消、正本 §3/§3.1 に反映）**:
+- **傍受点 = `InterpreterV2.execute()`**（全 eval 経路の単一 funnel）。`options.source/sourceFile/evalSource` を thread。
+- **wall 原点** = engine/buffer 起動、発生時スタンプ（§3 文言修正）。
+- **start/stop フックは Global.start()/stop() 境界**: `global.stop()` は `transportCommands` に stop が無く method 経路を通るため、両者が必ず通る Global 境界でフック（process-statement ではない）。
+- **writer は opt-in**（実エントリのみ装着）→ 既存テストはファイル生成なし。
+- **effect は LOOP のみ**（`nextQuantizedTime` 流用、Phase 0-2 確認済）/ **命名は CLI 完全・editor は untitled** / **tempo 二重記録は follow-up**（§3.1 に明記）。
+
+**実装**:
+- `core/session-log/session-log-writer.ts`（新規）: ローリング preamble バッファ・行単位 `appendFileSync`（kill-9 で最大1行）・命名（同一秒衝突は連番）・stop・再start=新ファイル。純 I/O。
+- `core/global.ts`: `getTransportPosition()`/`getQuantizedEffectPosition()`/`msToBarBeat()` + opt-in `setTransportHooks()`。
+- `interpreter/`: `enableSessionLog()` + execute() で eval 記録 + `installSessionHooks()`。
+- `cli/play-mode.ts`・`repl-mode.ts`: 実エントリで `enableSessionLog` + source 供給。
+
+**テスト**: writer 単体 9件 + interpreter 統合 6件（preamble 完全性 / 三重スタンプ整合 / 複数ファイル sourceFile / kill-9 行耐性 / 再start / inert）。全体 1079 passed / 23 skipped（既存回帰なし）。
+
 ### 6.114 Issue #273 — comp C2a polish（PR #272 bot レビュー反映） (Jun 14, 2026)
 
 **Date**: 2026-06-14

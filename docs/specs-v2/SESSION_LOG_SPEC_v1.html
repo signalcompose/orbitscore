@@ -364,7 +364,7 @@ Lifecycle (フライトレコーダー方式)</h2>
 <tbody>
 <tr class="odd">
 <td><code>wall</code></td>
-<td>セッション開始(メタヘッダ書き出し)からの壁時計ミリ秒</td>
+<td>エンジン/ローリングバッファ起動からの壁時計ミリ秒。各レコードは<strong>発生時刻でスタンプ</strong>する(プリアンブルを flush 時に再スタンプしない)。よってプリアンブルの <code>wall</code> は start レコードより小さい(例: preamble <code>wall:0</code> &lt; start <code>wall:3500</code>)。メタヘッダの <code>startedAt</code> は <code>global.start()</code> 時刻の ISO</td>
 </tr>
 <tr class="even">
 <td><code>transport</code></td>
@@ -404,6 +404,15 @@ Lifecycle (フライトレコーダー方式)</h2>
 quantize 境界の前後 10ms
 の差が反映小節を丸ごとずらし、再現が壊れる。<code>effect</code>
 は検証とログの可読性(「この差し替えは何小節目から効いたか」)のため。テンポ変更自体がログイベントなので、音楽時間の参照系はログ内で自己完結する。</p>
+<h3 id="v1-implementation-scope">3.1 v1 (L1 #229) 実装スコープと既知の割り切り</h3>
+<p>L1 writer の初版(#229)は以下を確定スコープとする。いずれも因果記録としての正しさは保つ(より細粒度・CLI 完全)が、editor 経路の一部は follow-up に送る。</p>
+<ul>
+<li><strong>writer は opt-in(既定 inert)</strong>: 実エントリ(CLI play / REPL / 拡張)でのみ writer を装着する。ユニットテストが叩く <code>Global</code>/<code>Sequence</code> 構築経路では writer は不在で、<code>global.start()</code> は<strong>ファイルを生成しない</strong>(既存テスト群の汚染防止)。</li>
+<li><strong><code>code</code> 粒度 = <code>execute()</code> 単位</strong>: REPL/editor 経路はパース成立した単位(独立にパース可能なら文ごと)、CLI play はファイル全体が 1 レコード。1 選択 = 1 レコードにする selection-atomic framing は protocol 追加が要るため follow-up(細粒度でも因果記録としては有効)。</li>
+<li><strong>命名/<code>sourceFile</code></strong>: CLI 経路は <code>.orbs</code> パスを持つので basename 命名・<code>sourceFile</code> が完全に機能する。editor 経路は現状エンジンへファイル名を渡さない(<code>setDocumentDirectory</code> はディレクトリのみ)ため v1 は <code>untitled.&lt;timestamp&gt;.orbslog</code> フォールバック。editor からのファイル名伝達(ログに混じらない制御チャネル)は follow-up。</li>
+<li><strong><code>effect</code> 範囲</strong>: v1 は <strong>LOOP 起動</strong>の解決済み境界のみ <code>nextQuantizedTime</code> で算出。走行中ループへの <code>play()</code> 差し替え・<code>tempo/beat/length</code> の次サイクル遅延は <code>effect:null</code>(follow-up)。replay は <code>transport</code> 駆動で再 quantize するため再現性に影響せず、<code>effect</code> は可読性/検証の補助に留まる。</li>
+<li><strong>tempo の二重記録</strong>: v1 は <code>start</code>/<code>stop</code> のみ <code>transport</code> レコード化。<code>tempo</code> 変更は <code>eval</code> レコードとして残す(上の例に一致)。<code>tempo</code> の <code>transport</code> 二重記録は follow-up。</li>
+</ul>
 <h2 id="replay">4. Replay</h2>
 <pre><code>orbitscore replay mypiece.20260612-2130.orbslog              # 忠実リプレイ(実時間)
 orbitscore replay &lt;log&gt; --until 57:1                          # 分岐リプレイ: bar 57 頭まで畳み込み、ライブに引き継ぐ

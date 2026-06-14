@@ -31,6 +31,9 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   // Create a global interpreter
   const globalInterpreter = new InterpreterV2()
 
+  // §L1 (#229): the REPL is a real entry point — record the session (idempotent).
+  globalInterpreter.enableSessionLog({ cwd: process.cwd() })
+
   // Boot SuperCollider once at startup with optional audio device
   await globalInterpreter.boot(options.audioDevice)
 
@@ -94,8 +97,9 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
     // Try to parse and execute the buffer
     // If parsing fails due to incomplete input, keep buffering
     try {
-      const ir = parseAudioDSL(buffer.trim())
-      await interpreter.execute(ir)
+      const code = buffer.trim()
+      const ir = parseAudioDSL(code)
+      await interpreter.execute(ir, { source: code, evalSource: 'human' }) // §L1
       console.log('✓') // Success indicator
       buffer = '' // Reset buffer on success
       if (process.env.ORBITSCORE_DEBUG) {
@@ -136,7 +140,7 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
 
     try {
       const ir = parseAudioDSL(code)
-      await interpreter.execute(ir)
+      await interpreter.execute(ir, { source: code, evalSource: 'human' }) // §L1
       console.log('✓') // Success indicator
     } catch (error: any) {
       console.error(`[ERROR] ${error.message}`)
