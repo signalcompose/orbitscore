@@ -787,6 +787,8 @@ piano.vel(96)          // default velocity 1-127. default 96
 piano.gate(0.8)        // default gate: sounding fraction of a slot. default 0.8
 
 global.key("C")        // numeric-root reference key (note-name token)
+global.key("D3")       // #253 key-center register: note + octave → tonic D, degree 1 at octave 3
+                       //   (the whole piece's register in one place; seq.octave() still overrides)
 global.midiLatency(20) // fixed send offset in ms (for ear-matching the SC path). default 0
 ```
 

@@ -78,7 +78,7 @@ export class Sequence {
   private _gate = 0.8 // default gate length (fraction of slot). spec §1
   private _vel = 96 // default velocity 1..127. spec §1
   private _hold = false // §5.3: auto common-tone tie between consecutive stacks
-  private _octave = 4 // base octave; degree 1 MIDI note. default 4 (C4=60)
+  private _octave?: number // base octave (degree 1) IF seq.octave() was set; else falls back
   private _rootDegree?: number // seq.root(n): numeric root = degree of global.key()
 
   constructor(global: Global, audioEngine: AudioEngine) {
@@ -499,6 +499,17 @@ export class Sequence {
    * n-th degree of `global.key()`; with no `seq.root()`, the key tonic is the
    * root. A degree with neither a key nor a root is a hard error.
    */
+  /**
+   * The base octave for degree 1 (§2.1 / #253 key-center register): an explicit
+   * `seq.octave(N)` wins; otherwise the global key octave from `global.key("D4")`
+   * (the whole piece's register, declared once); otherwise 4 (C4 = 60). This is the
+   * key-center register — it lets a low/high piece be placed in one place instead of
+   * setting `seq.octave()` (or a `^N` range) on every sequence.
+   */
+  private baseOctave(): number {
+    return this._octave ?? this.global.getMidiManager().getKeyOctave() ?? 4
+  }
+
   private resolveRootContext(): RootContext {
     const name = this.stateManager.getName() || 'sequence'
     const keyPC = this.global.getMidiManager().getKeyPitchClass()
@@ -515,7 +526,7 @@ export class Sequence {
         ? this.degreeRootToPitchClass(this._rootDegree, 0, keyPC)
         : keyPC
 
-    return { rootPitchClass, octave: this._octave }
+    return { rootPitchClass, octave: this.baseOctave() }
   }
 
   /**
@@ -564,7 +575,7 @@ export class Sequence {
     }
     const root = scope.root!
     if (root.kind === 'note') {
-      return { rootPitchClass: root.pitchClass, octave: this._octave }
+      return { rootPitchClass: root.pitchClass, octave: this.baseOctave() }
     }
     // Degree root: resolve against the key (key-undeclared = error).
     const keyPC = this.global.getMidiManager().getKeyPitchClass()
@@ -575,7 +586,7 @@ export class Sequence {
     }
     return {
       rootPitchClass: this.degreeRootToPitchClass(root.degree, root.alteration, keyPC),
-      octave: this._octave,
+      octave: this.baseOctave(),
     }
   }
 
@@ -1178,7 +1189,7 @@ export class Sequence {
       midiChannel: this._midiChannel,
       gate: this._gate,
       vel: this._vel,
-      octave: this._octave,
+      octave: this.baseOctave(),
       rootDegree: this._rootDegree,
     }
   }
