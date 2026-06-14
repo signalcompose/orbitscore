@@ -6,8 +6,8 @@ This document defines the **OrbitScore DSL**.
 It is the **single source of truth** for the project.
 All implementation, testing, and planning must strictly follow this specification.
 
-**Last Updated**: 2025-01-09
-**Implementation Status**: ✅ Core features implemented and tested (205/205 tests passing)
+**Last Updated**: 2026-06-14
+**Implementation Status**: ✅ v3.0 audio engine + v1.1 Pitch DSL (MIDI) Phases 1/2/3/R/4 implemented and tested
 
 > 🎯 **進行中の v1.1 拡張（Pitch DSL / MIDI・Session Log・WCTM）の仕様は [`docs/specs-v2/`](../specs-v2/) が正本**（締切 2026-08-07、進捗は GitHub Epic #224）。
 > 各フェーズのゲート時に、当該機能のセクションを本ドキュメント（SoT）へ反映し、specs-v2 との乖離を作らないこと（指示書 §8.1-1）。
@@ -765,6 +765,213 @@ global._tempo(130)  // Change global tempo for all inheriting sequences
 
 ---
 
+## Pitch DSL (v1.1 — MIDI Output)
+
+The v1.1 line adds a **MIDI output path** and a **symbolic pitch language** on top of
+the v3.0 audio engine. A sequence is an *audio* sequence (values = slice numbers) **or**
+a *MIDI* sequence (values = degrees) — never both. The two paths can run side by side in
+the same file. `0 = rest` in both domains, and the `( )` rhythm-division tree is shared.
+
+> **Canonical source**: this is the implemented-feature reference. The full design,
+> rationale, and edge cases live in [`docs/specs-v2/PITCH_DSL_SPEC_v1.1.html`](../specs-v2/PITCH_DSL_SPEC_v1.1.html)
+> (the `§N` pointers below refer to it). Where this section and specs-v2 ever disagree,
+> specs-v2 wins and this section is the bug.
+
+### P.1 MIDI output declaration (§1)
+
+```js
+var piano = init global.seq
+piano.midi("IAC", 1)   // (portName substring, channel 1-16) → makes this a MIDI sequence
+piano.octave(4)        // base octave: the octave of degree 1. default 4 (C4 = 60)
+piano.vel(96)          // default velocity 1-127. default 96
+piano.gate(0.8)        // default gate: sounding fraction of a slot. default 0.8
+
+global.key("C")        // numeric-root reference key (note-name token)
+global.midiLatency(20) // fixed send offset in ms (for ear-matching the SC path). default 0
+```
+
+- `portName` resolves by case-insensitive substring match against CoreMIDI output ports
+  (multiple matches → first + warning; no match → error listing available ports).
+- A `midi()` sequence interprets `play()` values as **degrees**. Combining `midi()` with
+  `audio()`/`chop()` is an error. Running alongside the SC audio path is allowed (no
+  LinkAudio-style exclusivity).
+
+### P.2 Degrees and pitch resolution (§2.1)
+
+Degrees are an **Ionian-relative interval vocabulary** plus accidentals — `b3` is "a minor
+third above the root" in *any* context (quality is carried by the notation, not by walking
+back to a scale declaration).
+
+```
+IONIAN = [0, 2, 4, 5, 7, 9, 11]   // semitones for degrees 1..7
+semitones = IONIAN[(n-1) mod 7] + 12*floor((n-1)/7) + alteration
+pitch     = rootPitch + semitones + 12*range          // range = sticky ^N (P.3)
+rootPitch = 12*(octave+1) + rootPitchClass            // C4 = 60
+```
+
+- Accidentals: `b = -1`, `#` = +1, `bb`/`##` = ±2 (stacking allowed, warns beyond 2).
+- **Accepted degrees = {1–9, 11, 13}** (decision #38): 1–7 Ionian, 8 = octave root (≡ `1^1`),
+  9/11/13 = tensions. **10, 12, 14, ≥15 are an error** — write octaves with `^N`
+  (e.g. `3^1`), not as large linear numbers. v1.1 takes no backward-compat here.
+- `0 = rest`.
+
+### P.3 Pitch range `^N` (sticky) and detune `~` (§2.4)
+
+```js
+3^1      // set running range to +1 octave; STICKY — persists for following degrees
+3^-1     // down an octave (sign required for down; `^+N` plus is optional)
+1^0      // back to base range
+0^2      // a rest that silently shifts the range to +2
+b7~-0.25 // detune in semitones (pitch-bend; ±2 semitone bend range for now)
+```
+
+- `^N` is a **linear / persistent** range state attached to a note or rest. It runs in
+  read (time) order and resets only at the top of each `play()` or on a later `^M`/`^0`.
+- A bare `^N` marker (no note) is a syntax error — use `0^N`.
+- **`^N` (linear) and `.oct(N)` (lexical/group, P.5) are orthogonal axes** (§9.4): `^N`
+  does **not** reset at `.root()` or group boundaries; `.oct(N)` closes a range to a group.
+- For a stack/chord, `^N` sets the whole chord's register; a voice's own `^N` (P.7 voicing)
+  is structural on top and does **not** move the running range (a chord is one slot).
+
+### P.4 Mode scope (§2.2) — RESERVED (not implemented in v1.1)
+
+> **Status**: the `.mode()` scope-chain syntax **parses** but **throws at dispatch**
+> ("`.mode()` is not implemented in v1.1"), and the `mode(...)` definition constructor /
+> `.period()` do not exist yet. Mode lattices are a future phase. The design below is
+> recorded for forward-compatibility; do not rely on it in v1.1.
+
+```js
+var dorian = mode(1, 2, b3, 4, 5, 6, b7)                  // (future)
+var custom = mode(1, 2, b3, 4, #5, 6, 7, 9).period(19)   // (future) explicit period (semitones)
+```
+
+- A `mode` is a user-defined pitch lattice written in root-scope degree notation. Inside a
+  mode scope a melodic degree `n` is a pure index into the lattice:
+  `pitch = lattice[(n-1) mod len] + period * floor((n-1)/len)`.
+- `period()` defaults to the next octave boundary above the last element (12 for a 7-note
+  church mode). The `2↔9` tension wrap-around does **not** hold in a mode (the lattice need
+  not be 7 notes). Church modes would ship as a library of predefined `var`s, not primitives.
+
+### P.5 Scope rules — `.root()` / `.oct()` group chains (§3, Phase 2)
+
+`.root()` and `.oct()` attach as method chains to a `( )` rhythm-tree group (`.mode()`
+parses but is reserved — see P.4).
+
+```js
+seq.root(C)               // sequence default pitch context
+seq.play(
+  (9, 5, (3, 1), [1,3,5,7]).root(2),     // this group resolves at root = II
+  ((1, b3).root(b6), 5, 1).root(2),       // inner .root(b6) wins for its half-slot
+  (1, 5, 1, 5),                           // no chain → sequence default
+)
+```
+
+- Resolution order: inner group → outer group → sequence default (`seq.root()`/`seq.mode()`)
+  → error (a degree with no default set is a diagnostic). Unspecified spans fall back to the
+  sequence default — **stateless** (the previous scope is not retained).
+- `.root(F)` takes a note-name token; `.root(3)` a diatonic degree of `global.key()`;
+  `.root(b6)` a non-diatonic degree (resolved by P.2). Numeric root with no `global.key()`
+  is an error (note-name root only).
+- **A chain applies to a whole juxtaposition run**: `(...)(...)... .root(X)` shares the
+  pitch context across siblings (each keeps its own time slot) — the standard "one chord
+  over several bars" notation. A chained group followed by `(` with no comma is a parse
+  error ("expected comma after chained group"). Duplicate scope on one group
+  (`.root(2).root(5)`, or root + mode together) is a diagnostic error (no last-wins).
+
+### P.6 Brackets — `( )` / `[ ]` / `{ }` (§4)
+
+| Notation | Meaning | Time | MIDI realization |
+|----------|---------|------|------------------|
+| `( )` | rhythm division (existing) | parent slot split evenly by element count | — |
+| `[ ]` | **stack** (simultaneous) | all voices share the full parent slot | simultaneous note-on |
+| `{ }` | **legato group** | same split as `( )` | note-off delayed past the next note-on (overlap) |
+
+- A `[ ]` voice can itself be a subtree: `[1, (5, 3, 2, 1)]` holds degree 1 while a 5-3-2-1
+  line runs in the same span (intra-part polyphony).
+- `{ }` overlap is implementation-defined (10–30 ms after the next note-on; 20 ms used). The
+  group-tail note follows the normal gate. A `[ ]` inside `{ }` overlaps all its voices.
+
+### P.7 Chord values (§6, Phase 3)
+
+```js
+import chords                          // stdlib: m7, maj7, dom7, m7b5, dim7, sus4, ...
+var m7      = chord([1, b3, 5, b7])    // root-unbound degree stack (a value)
+var m7omit5 = chord([m7, -5])          // spread + literal removal
+var m7add9  = chord([m7, 9])           // spread + add
+var so_what = chord([1, 11, b7^+1, b3^+1, 5^+1])
+```
+
+- A chord value resolves against the **scope where it is placed** (root/mode) — *root is the
+  context, chord is the value*. Spreading happens inside a `[ ]` stack or as a bare element.
+- `-N` removes the **literal-matching** voice (degree + alteration) from the spread; no match
+  → no-op + warning. `m7^+1` shifts the whole chord an octave (same `^N` token). Builder APIs
+  (`.add()`/`.omit()`) are not adopted — everything is value composition.
+
+### P.8 Ties, voice leading (§5, Phase 4)
+
+```js
+play(1, _, 3)                 // `_` event tie: extends the PREVIOUS event one slot (no retrigger)
+play([1,3,5], _)              // a `_` after a stack extends the WHOLE chord
+play([1, 3, _5], ...)         // `_n` voice tie: prefix inside a stack
+piano.hold()                  // auto common-tone tie between consecutive stacks
+play({1, 3, 5})               // `{ }` slur: smooth (overlapping) connection
+```
+
+- **`_` event tie**: extends the previous *event* (for a stack, every voice) by one slot. A
+  leading `_` or a `_` after a rest extends nothing (a rest breaks the tie chain).
+- **`_n` voice tie**: "if the resolved pitch is already sounding in this sequence, suppress
+  the note-off/on and hold; otherwise play normally." Matching is by **resolved pitch**, not
+  by voice position — safe across chords of different sizes and live swaps.
+- **`.hold()`**: auto-applies the voice tie to every common tone, but **only between two
+  stacks** (a repeated single note never auto-ties, so rhythm is preserved — decision #8).
+  Settable per-sequence and per-group (`(...).hold()`).
+
+### P.9 Repetition `*n` and pattern variables (§6.5, Phase R — domain-shared)
+
+These are rhythm-tree structure operations, independent of pitch — they work the same for
+MIDI and audio sequences.
+
+```js
+1*3                            // ≡ (1)(1)(1) — n juxtaposed copies (a bare event → a 1-group)
+(0, m7, 0, m7)*4.root(3)       // postfix is left-to-right; the .root() covers all 4 copies
+var riff = (1, 0, (3, 5), 7)   // pattern variable — a bare-tuple value, no constructor
+var AA   = (1,0,5,0)(0,5,1,0)  // a juxtaposition binding → splices as multiple siblings
+seq.play(riff*3, fill, AA)
+```
+
+- `n` is an integer ≥ 1: `*0` is an error, `*1` is identity.
+- **Tidal difference (must be documented to users)**: Tidal `*` is *in-slot* division
+  (n times within one slot); OrbitScore `*n` *occupies n slots* (≡ Tidal `!`). For in-slot
+  repetition, nest: `(1, 1)`.
+- **Evaluation-time value semantics**: a variable is substituted when `play()` is evaluated.
+  Redefining it does not retro-affect a running pattern (re-run the `play()` line). No
+  reactive binding. A chord value is a *vertical* value; a pattern variable is a *horizontal*
+  (tree) value.
+
+### P.10 MIDI realization rules (§7)
+
+- **Symbolic preservation**: the TimedEvent pipeline carries symbolic pitch (degree,
+  alteration, octave shift, the root/mode context, tie/legato flags); resolution to a MIDI
+  note number happens **only** in the final output stage (a future real-time score-rendering
+  epic depends on this — never flow resolved numbers through the pipeline).
+- **Note lifecycle**: each event → note-on(vel), note-off after `slotDuration * gate`; a tie
+  suppresses the note-off/on pair, legato delays the note-off.
+- **Active-note tracking / cleanup**: per-sequence sounding notes are released on LOOP
+  exclusion, MUTE, and `play()` swap (note-off the held notes); `global.stop()` / engine
+  shutdown / crash sends CC123 (All Notes Off) + CC120 (All Sound Off) on all channels.
+- **Scheduling**: a TS-side lookahead scheduler (RtMidi sends immediately); `midiLatency()`
+  is added to the send time. Detune is realized by pitch bend; bend is per-channel, so
+  different detunes sounding on one channel at once collide (last bend wins) — the canonical
+  spec specifies a warning for this case, but it is not yet implemented. MPE is out of scope.
+
+> **Expression model (velocity / articulation) — not yet specified here.** The per-note
+> `@v` velocity and articulation axes are a confirmed *principle* but their token grammar is
+> a dedicated post-Phase-4 phase; spec reflection is **deferred per decision #42**. See
+> [`DESIGN_DISCUSSION_RECORD.md`](../specs-v2/DESIGN_DISCUSSION_RECORD.md) §10. `@u` absolute
+> duration (v1.0 `@U`) is **rejected** — duration is carried by the tree + ties.
+
+---
+
 ## 12. Implementation Status
 
 ### Completed Features ✅
@@ -785,8 +992,22 @@ global._tempo(130)  // Change global tempo for all inheriting sequences
   - MUTE is persistent flag, only affects LOOP playback
   - STOP keyword removed (use LOOP with different list)
 
-**Removed (not yet implemented for audio-based DSL)**:
-- tick() and key() - MIDI-only concepts, will be added when MIDI support is implemented
+**MIDI-only concepts**:
+- `global.key()` is **implemented** as part of the v1.1 Pitch DSL (the numeric-root
+  reference key — see "Pitch DSL (v1.1 — MIDI Output)" P.1). `tick()` remains future.
+
+#### Pitch DSL (v1.1 — MIDI Output)
+See the "Pitch DSL (v1.1 — MIDI Output)" section for the full reference. Implemented across
+Epic #224 phases 1/2/3/R/4:
+- **MIDI output** (Phase 1): `seq.midi()`, `octave()`, `vel()`, `gate()`, `global.key()`,
+  `global.midiLatency()`; degree resolution, lookahead scheduler, active-note tracking
+- **Group scope chains** (Phase 2): `.root()` / `.oct()` on `( )` groups (`.mode()` reserved — throws)
+- **Stacks + chord values** (Phase 3): `[ ]` simultaneous stacks, `chord([...])`, spread,
+  `-N` removal, `^N` chord shift, `import chords`
+- **Repetition + pattern variables** (Phase R): `*n`, `var NAME = <pattern>`
+- **Ties / legato / hold** (Phase 4): `_` event tie, `_n` voice tie, `{ }` legato, `.hold()`
+- **Not yet specified**: per-note expression (`@v` velocity / articulation) — deferred per
+  decision #42 (see breadcrumb above)
 
 #### Parser
 - **Tokenizer**: Complete lexical analysis
@@ -845,10 +1066,13 @@ global._tempo(130)  // Change global tempo for all inheriting sequences
 - **Effect Presets**: Named preset system for effect chains
 - **DAW Plugin**: VST/AU plugin development
 
-#### MIDI Support (Deprecated)
-- **MIDI Output**: Original MIDI-based system has been replaced with SuperCollider audio engine
-- **MIDI DSL**: Old syntax (`sequence`, `bus`, `channel`, `degree`, `velocity`) is no longer supported
-- **Note**: All MIDI-related tests and implementations have been removed in favor of direct audio playback
+#### Legacy MIDI DSL (Deprecated — superseded by the v1.1 design)
+- **Old flat syntax** (`sequence`, `bus`, `channel`, `degree`, `velocity`) from the original
+  MIDI-only system is no longer supported; that implementation was removed when the v2.0
+  SuperCollider audio engine landed.
+- **Not a removal of MIDI itself**: the **v1.1 Pitch DSL (MIDI Output)** above is a *different*
+  design — `seq.midi()` + symbolic degree resolution as a path that runs **alongside** the SC
+  audio engine, not a return of the deprecated `bus`/`channel`/`degree` syntax.
 
 ### Testing Coverage (v3.0)
 - **Audio Parser Tests**: 50/50 passing
@@ -867,7 +1091,21 @@ global._tempo(130)  // Change global tempo for all inheriting sequences
 
 ## 13. Versioning
 
-**Current Version**: v3.0 (Underscore Prefix + Unidirectional Toggle)
+> **Two version tracks.** The `vN.0` numbers below are the **audio-engine line** (v0.1 →
+> v1.0 → v2.0 → v3.0). The **`v1.1` Pitch DSL / MIDI line** is a separate, later workstream
+> (2026, Epic #224) layered *on top of* the v3.0 audio engine — it is not a predecessor of
+> v3.0 despite the lower number. Read the two as parallel tracks, not a single sequence.
+
+**Current Version**: v3.0 audio engine + v1.1 Pitch DSL (MIDI) — Phases 1/2/3/R/4
+
+- v1.1 Pitch DSL / MIDI (2026, Epic #224): **MIDI output path + symbolic pitch language**,
+  layered on the v3.0 audio engine. See "Pitch DSL (v1.1 — MIDI Output)".
+  - Phase 1: `seq.midi()` output, degree resolution, scheduler, active-note tracking
+  - Phase 2: `.root()`/`.oct()` group scope chains (`.mode()` reserved — throws)
+  - Phase 3: `[ ]` stacks + `chord([...])` values
+  - Phase R: `*n` repetition + pattern variables
+  - Phase 4: `_` / `_n` ties, `{ }` legato, `.hold()`
+  - Deferred: per-note expression (`@v` / articulation), per decision #42
 
 - v3.0 (2025-01-09): **Underscore Prefix Pattern** + **Unidirectional Toggle (片記号方式)**
   - **Underscore Prefix**: `method()` = setting only, `_method()` = immediate application
