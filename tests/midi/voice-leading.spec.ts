@@ -138,4 +138,32 @@ describe('C1 — voice-leading dispatch (§6.3)', () => {
     // F major [4,6,1] at base = F4(65) A4(69) C4(60); unchanged without VL
     expect(plain).toEqual(expect.arrayContaining([60, 64, 67, 65, 69, 60]))
   })
+
+  it('3-chord progression threads the REALIZED (shifted) chord, not the base', async () => {
+    // C→G→([7,2,4]=B/D/F). chord2 voice-leads B down to B3(59); realized chord2 = [67,59,62].
+    // chord3 must lead from the REALIZED chord2 (B at 59), so its B also lands at B3(59).
+    // If `prev` wrongly used the unshifted base (B at 71), chord3's B would stay B4(71).
+    const led = await ons('([1,3,5], [5,7,2], [7,2,4]).voicelead()')
+    expect(led).toContain(59) // B3 — chord2 & chord3 both led down
+    expect(led).not.toContain(71) // B4 never appears: threading uses the realized chord
+  })
+
+  it('cross-root: common tones are kept across a `.root()` change (resolved-semitone level)', async () => {
+    // ([1,3,5]).root(5) in key C = G root → G4/B4/D5 (67/71/74) anchor.
+    // chord2 [5,7,2] in C default = G4/B4/D4 base; G(67) & B(71) are common tones → kept in place.
+    const led = await ons('(([1,3,5]).root(5), [5,7,2]).voicelead()')
+    expect(led).toContain(67) // G common tone retained (distance 0)
+    expect(led).toContain(71) // B common tone retained (distance 0)
+    expect(led).not.toContain(62) // chord2's D is voice-led up to D5(74), not left at D4(62)
+  })
+
+  it('unequal cardinality at dispatch: a 3-voice chord leads from a 4-voice anchor', async () => {
+    // chord1 [1,3,5,7] (4 voices) anchors; chord2 [5,7,2] (3 voices) leads min(4,3)=3 voices.
+    const led = await ons('([1,3,5,7], [5,7,2]).voicelead()')
+    // chord1 anchor present (C/E/G/B = 60/64/67/71)
+    expect(led).toEqual(expect.arrayContaining([60, 64, 67, 71]))
+    // chord2 (G/B/D) is voice-led near chord1; B stays at 71 (common tone), G at 67, D near.
+    expect(led).toContain(67) // G common tone
+    expect(led).toContain(71) // B common tone
+  })
 })

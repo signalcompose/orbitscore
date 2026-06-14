@@ -20,9 +20,12 @@
  * @param curBase current chord's resolved semitones at octave 0 (authored octave subsumed)
  * @returns one octave shift per `curBase` voice (same length, same order)
  *
- * Equal cardinality: the optimal crossing-free assignment is one of the n cyclic
- * rotations of the sorted pairing (sorted-cur[i] ↔ sorted-prev[(i+r) mod n]);
- * each voice then octave-snaps to its paired previous pitch. Common tones land at
+ * Equal cardinality: the minimum-L1 assignment is one of the n cyclic rotations of
+ * the sorted pairing (sorted-cur[i] ↔ sorted-prev[(i+r) mod n]) — a result from
+ * Tymoczko (MTO 16.1). Each voice then octave-snaps to its paired previous pitch.
+ * Note: "crossing-free" describes the SORTED assignment before snapping; per-voice
+ * independent snapping can reorder the final absolute pitches when voices snap by
+ * different amounts (pitch CLASSES are always preserved). Common tones land at
  * distance 0, so common-tone retention falls out for free.
  *
  * Unequal cardinality (a C1 simplification — full bipartite/doubling is C2+):

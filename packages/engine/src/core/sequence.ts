@@ -670,10 +670,11 @@ export class Sequence {
    * top (§7-0 preserved; deterministic side of the eval/dispatch axis).
    *
    * Operates only on chord stacks (≥2 pitched voices at one onset) under a
-   * `.voicelead()`/`.vl()` scope (seq default or group). Single notes pass through
-   * and do not anchor. The first chord keeps its authored placement; later chords
-   * subsume their authored octave and lead from the previous chord. Stochastic
-   * thinning (`.r`/`Xr`) is independent — VL sees the full chord regardless.
+   * `.voicelead()`/`.vl()` scope (seq default or group). Single notes and `_` event
+   * ties pass through and do not anchor. The first chord keeps its authored placement;
+   * later chords subsume their authored octave (octaveShift replaced, rangeSet cleared)
+   * and lead from the previous chord. Stochastic thinning (`.r`/`Xr`) is independent —
+   * VL sees the full chord regardless.
    */
   private applyVoiceLeading(): void {
     if (!this.isMidi()) return
@@ -698,13 +699,13 @@ export class Sequence {
 
     let prev: number[] | null = null
     for (const onset of onsets) {
-      // Resolve each non-rest voice to an absolute pitch (octave 0 = authored octave subsumed).
+      // Resolve each non-rest voice to an absolute pitch. First chord: authored octave
+      // (anchor); subsequent chords: octave 0, so VL re-places it (authored octave subsumed).
       const voices: { ev: TimedEvent; base: number }[] = []
       for (const ev of byOnset.get(onset)!) {
         const written = writtenPitchOf(ev)
         if (written.degree === 0) continue // rest — not a voice
         const context = this.resolveScopeToContext(ev.scope, getSeqDefault)
-        // First chord: keep authored octave (anchor); later: octave 0 (VL re-places it).
         const r = resolveDegree(
           { ...written, octaveShift: prev ? 0 : written.octaveShift },
           context,
@@ -717,12 +718,24 @@ export class Sequence {
       if (prev) {
         const shifts = voiceLeadOctaves(prev, base)
         voices.forEach((v, i) => {
-          v.ev.pitch = { ...writtenPitchOf(v.ev), octaveShift: shifts[i]! } // subsume authored octave
+          // Subsume the authored octave fully: replace octaveShift AND clear rangeSet, so the
+          // VL placement is the voice's `structural` octave at dispatch and never perturbs the
+          // §2.4 running range (a stack voice's `^N` is overridden by VL, not propagated).
+          v.ev.pitch = { ...writtenPitchOf(v.ev), octaveShift: shifts[i]!, rangeSet: false }
         })
         prev = base.map((b, i) => b + 12 * shifts[i]!) // reuse base[] — single traversal
       } else {
         prev = base // anchor at authored placement; leave events untouched
       }
+    }
+
+    // Discoverability: `.voicelead()` is active but no chord stack (≥2 pitched voices at one
+    // onset) was found, so it had no effect — likely a missing `[ ]` around intended chords.
+    if (prev === null) {
+      console.warn(
+        `⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': .voicelead() found no ` +
+          `chord stacks (≥2 voices at one onset); voice-leading had no effect. Use [a, b, ...] stacks.`,
+      )
     }
   }
 
