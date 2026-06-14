@@ -34,7 +34,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **`.rootless()` primitive（root 除去）は正しい**。jazz rootless（A/B 形・Dom7 の 5→13 置換・m7b5 ルート復活）は上位テンプレートと明確化（コード修正ではない、footgun 回避）
 - **段階分割**: C1 `.lead()` → C2 リズムエンジン → C3 完全 `.comp`。C1 は独立 issue 候補
 
-**重要**: 本ドラフトは確定仕様ではない。`.comp` は WCTM クリティカルパス外。未決6項目（段階分割・命名・リズムモデル・seed・自動性の範囲・L1 の音楽性限界）はユーザー判断待ち。合意後に正本（specs-v2）へ昇格する。
+**重要**: 本ドラフトは確定仕様ではない。`.comp` は WCTM クリティカルパス外。未決7項目（段階分割・命名・リズムモデル・seed・自動性の範囲・L1 の音楽性限界・呼び出し/入力面）はユーザー判断待ち。合意後に正本（specs-v2）へ昇格する。リズムの「2段」モデル（eval 時に確率的 subdivision ノードへ展開 → dispatch で毎サイクル実現）が C2 の設計重心。
 
 ### 6.110 Issue #266 — 正本 HTML の normative 同期（PITCH_DSL_SPEC ← as-built E1-E6） (Jun 14, 2026)
 
