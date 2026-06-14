@@ -405,9 +405,18 @@ export class Sequence {
 
   /**
    * Comping density 0..1 for cell-less {@link comp} (§6.4, C2a): 0 = laying out
-   * (silent), 1 = every slot. Ignored when a named {@link cell} is set.
+   * (silent), 1 = every slot. Ignored when a *known* named {@link cell} is set;
+   * still used as the fallback if the cell name is unrecognized.
    */
   density(value: number): this {
+    if (!Number.isFinite(value)) {
+      console.warn(
+        `⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': ` +
+          `density(${value}) is not a finite number — defaulting to 0.5.`,
+      )
+      this._compDensity = 0.5
+      return this
+    }
     this._compDensity = Math.max(0, Math.min(1, value))
     return this
   }

@@ -30,7 +30,7 @@
  */
 const NAMED_CELLS: Record<string, { slots: number; indices: number[] }> = {
   charleston: { slots: 8, indices: [0, 3] }, // beat 1 + beat 2& — the iconic comp figure
-  redgarland: { slots: 8, indices: [3, 7] }, // beat 2& + 4& — off-beats only (Red Garland)
+  redgarland: { slots: 8, indices: [3, 7] }, // beat 2& + 4& — sparse off-beat comp (Red Garland)
   offbeats: { slots: 8, indices: [1, 3, 5, 7] }, // every "and"
   quarters: { slots: 4, indices: [0, 1, 2, 3] }, // every beat — Freddie Green flat-four
   twofour: { slots: 4, indices: [1, 3] }, // beats 2 & 4 — Basie-sparse
@@ -69,19 +69,30 @@ export function cellToGrid(
       return onsets
     }
     warn?.(
-      `comp(): unknown cell "${cellName}" — using density instead. ` +
+      `comp(): unknown cell "${cellName}" — using density ${(density ?? 0.5).toFixed(2)} instead. ` +
         `Known cells: ${COMP_CELL_NAMES.join(', ')}.`,
     )
   }
-  return densityGrid(density)
+  return densityGrid(density, warn)
 }
 
 /** Place `round(density × DENSITY_SLOTS)` onsets evenly over the default grid. */
-function densityGrid(density: number): boolean[] {
+function densityGrid(density: number, warn?: (msg: string) => void): boolean[] {
   const d = Math.max(0, Math.min(1, density))
   const onsets = new Array<boolean>(DENSITY_SLOTS).fill(false)
   const hits = Math.round(d * DENSITY_SLOTS)
-  if (hits === 0) return onsets // laying out — a silent bar (also guards the /hits below)
+  if (hits === 0) {
+    // density 0 = intentional laying out (silent). But a positive density that
+    // rounds to 0 (e.g. a `0.06` typo for `0.6`) would also fall silent — warn so
+    // it is not mistaken for a bug. (Also guards the `/hits` division below.)
+    if (d > 0) {
+      warn?.(
+        `comp(): density ${density} is too low for the ${DENSITY_SLOTS}-slot grid — ` +
+          `rounded to 0 onsets (silent bar). Use density ≥ ${(1 / DENSITY_SLOTS).toFixed(3)}.`,
+      )
+    }
+    return onsets
+  }
   for (let i = 0; i < hits; i++) {
     onsets[Math.floor((i * DENSITY_SLOTS) / hits)] = true
   }

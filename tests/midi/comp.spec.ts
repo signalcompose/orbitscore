@@ -69,6 +69,20 @@ describe('C2a — cellToGrid kernel (§6.4)', () => {
     expect(onsetIdx(mask)).toEqual([0, 4]) // density 0.25 grid, not the unknown cell
   })
 
+  it('a positive density that rounds to 0 onsets warns (a 0.05 typo, not silent)', () => {
+    const warn = vi.fn()
+    const mask = cellToGrid(undefined, 0.05, warn) // round(0.05×8)=0 → silent
+    expect(onsetIdx(mask)).toEqual([])
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn.mock.calls[0]![0]).toMatch(/too low/)
+  })
+
+  it('density exactly 0 lays out WITHOUT a warning (intentional)', () => {
+    const warn = vi.fn()
+    expect(onsetIdx(cellToGrid(undefined, 0, warn))).toEqual([])
+    expect(warn).not.toHaveBeenCalled()
+  })
+
   it('exposes the known cell names for discoverability', () => {
     expect(COMP_CELL_NAMES).toEqual(
       expect.arrayContaining(['charleston', 'redgarland', 'offbeats', 'quarters', 'twofour']),
@@ -129,6 +143,36 @@ async function compHits(
   await seq.run()
   await vi.advanceTimersByTimeAsync(advanceMs)
   return log
+}
+
+/**
+ * Like {@link compHits} but records note-off times too, returning the sounding
+ * duration (off − on) of each note. Used to assert that `gate()` shapes the
+ * comped stab length (the documented mechanism, §6.4).
+ */
+async function compNoteDurations(src: string, setup: (seq: Sequence) => void): Promise<number[]> {
+  vi.setSystemTime(T0)
+  const sched = mockScheduler()
+  const ons: Hit[] = []
+  const offs: Hit[] = []
+  const out: MidiOutput = {
+    ...recordingOutput(ons),
+    noteOff: vi.fn((_p: string, _c: number, note: number) =>
+      offs.push({ note, t: Date.now() - T0 }),
+    ),
+  }
+  const global = new Global(sched, new MidiManager(() => out))
+  global.key('C')
+  global.start()
+  const seq = new Sequence(global, sched)
+  seq.setName('piano')
+  seq.midi('iac', 1).octave(4)
+  setup(seq)
+  seq.comp(...(parseAudioDSL(`p.comp(${src})`).statements[0].args as never[]))
+  await seq.run()
+  await vi.advanceTimersByTimeAsync(5000)
+  // single-onset source → each note appears once; pair on→off by note.
+  return ons.map((on) => offs.find((o) => o.note === on.note)!.t - on.t)
 }
 
 describe('C2a — comp dispatch (§6.4)', () => {
@@ -193,5 +237,72 @@ describe('C2a — comp dispatch (§6.4)', () => {
     const plain = await compHits('[1,3,5], [5,7,2]')
     expect(plain.map((h) => h.note)).toContain(71)
     expect(plain.map((h) => h.note)).not.toContain(59)
+  })
+
+  it('a named cell wins over density(): cell("twofour").density(1) fires 2 stabs, not 8', async () => {
+    // density(1) alone would hit all 8 slots; the cell must win → twofour {1,3} → 2 stabs.
+    const hits = await compHits('[1,3,5]', (s) => s.cell('twofour').density(1))
+    expect(relStabTimes(hits)).toEqual([0, 1000])
+    expect(hits).toHaveLength(6) // 3 notes × 2 stabs
+  })
+
+  it('density(1) over 3/4 hits all 8 slots evenly (structural polymeter)', async () => {
+    // 1500ms bar / 8 = 187.5ms; 8 onsets at 0,187.5,…,1312.5 → 8 distinct stab times.
+    const hits = await compHits('[1,3,5]', (s) => s.beat(3, 4).density(1))
+    expect(relStabTimes(hits)).toHaveLength(8)
+    expect(hits).toHaveLength(24) // 3 notes × 8 stabs — the full eighth grid over 3/4
+  })
+
+  it('a single-degree arg (not a stack) is comped as a one-note "chord"', async () => {
+    const hits = await compHits('3') // degree 3 in key C = E4 = 64
+    expect([...new Set(hits.map((h) => h.note))]).toEqual([64])
+    expect(hits).toHaveLength(2) // charleston → 2 stabs of the single note
+  })
+
+  it('a rest (0) as a chord arg lays out that bar silently', async () => {
+    // bar1 = C major, bar2 = rest, bar3 = C major → bars 1 & 3 sound, bar 2 silent.
+    const hits = await compHits('[1,3,5], 0, [1,3,5]', () => {}, 8000)
+    const t0 = Math.min(...hits.map((h) => h.t))
+    const bar2 = hits.filter((h) => h.t - t0 >= 2000 && h.t - t0 < 4000)
+    expect(bar2).toHaveLength(0) // the rest bar is silent
+    expect(hits.filter((h) => h.t - t0 >= 4000).length).toBe(6) // bar 3 sounds again
+  })
+
+  it('gate() shapes the comped stab length (off at gate × slot)', async () => {
+    // density(0.125) → exactly 1 onset/bar (slot 0); 4/4 slot = 250ms.
+    // gate 0.4 → each note sounds ~100ms; default gate 0.8 → ~200ms.
+    const tight = await compNoteDurations('[1,3,5]', (s) => s.density(0.125).gate(0.4))
+    tight.forEach((d) => expect(d).toBeGreaterThan(80))
+    tight.forEach((d) => expect(d).toBeLessThan(140))
+    const loose = await compNoteDurations('[1,3,5]', (s) => s.density(0.125).gate(0.8))
+    loose.forEach((d) => expect(d).toBeGreaterThan(180))
+    loose.forEach((d) => expect(d).toBeLessThan(240))
+  })
+
+  it('comp() with no chords is a no-op and warns', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.setSystemTime(T0)
+    const sched = mockScheduler()
+    const log: Hit[] = []
+    const global = new Global(sched, new MidiManager(() => recordingOutput(log)))
+    global.key('C')
+    global.start()
+    const seq = new Sequence(global, sched)
+    seq.setName('piano')
+    seq.midi('iac', 1).octave(4)
+    seq.comp() // no chords
+    await seq.run()
+    await vi.advanceTimersByTimeAsync(2100)
+    expect(log).toHaveLength(0) // nothing scheduled
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/needs at least one chord/))
+    warn.mockRestore()
+  })
+
+  it('density(NaN) warns and falls back to 0.5 (4 stabs), not a silent bar', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const hits = await compHits('[1,3,5]', (s) => s.density(NaN))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/not a finite number/))
+    expect(relStabTimes(hits)).toEqual([0, 500, 1000, 1500]) // density 0.5 = 4 quarter pulses
+    warn.mockRestore()
   })
 })

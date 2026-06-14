@@ -1061,7 +1061,7 @@ piano.comp([1,3,5], [5,7,2]).voicelead()  // composes with §6.3
   structure. The meter sets the bar's real duration; the cell sets how many equal parts.
 - **Off slots are rests; stab length is `gate`** (predominant comping is articulated/short — Freddie
   Green flat-four; sustained/let-ring is a future option). Density mode places `round(d×8)` onsets
-  evenly on an eighth grid.
+  evenly across 8 equal bar divisions (an eighth-note grid in 4/4).
 - **Scope boundary**: `.comp` is the *mechanism* (which onsets, what subdivision). The *intelligence*
   — choosing the cell/voicing, density shaping, when to sustain, reacting to a soloist — is **out of
   DSL scope (comp C3)**: it belongs to an LLM bandmate skill that live-codes the DSL, keeping the DSL
