@@ -215,6 +215,9 @@ export function calculateEventTiming(
           ...(scope && { scope }),
           ...(element.random !== undefined && { random: element.random }), // §12 `Xr`
           ...(element.randomOctave && { randomOctave: true }), // §12 `^r`
+          ...(element.velocity !== undefined && { velocity: element.velocity }), // §10.3 `@v`
+          ...(element.velocityDelta !== undefined && { velocityDelta: element.velocityDelta }),
+          ...(element.articulation !== undefined && { articulation: element.articulation }), // `@g`
         })
       } else if (element.type === 'modified') {
         // Modified element (e.g., with .chop())

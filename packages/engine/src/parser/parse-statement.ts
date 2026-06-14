@@ -160,8 +160,10 @@ export class StatementParser {
    * top-level play siblings (a group, a juxtaposition `(...)(...)`, or a chained /
    * `*n` form), parsed exactly like inline play-args (collapseScopedRun + the
    * `*n`/chain postfix) minus the wrapping parens. Terminates at the statement end.
-   * A top-level comma is rejected (§6.5 Q2): a binding is a single root-scope cell
-   * or a juxtaposition run, not a comma list.
+   * A top-level comma separates SECTION cells (§6.5 Q2, revised by #254): a binding may
+   * be a multi-bar section (`var A = (bar1), (bar2), ...`) for song forms, spliced as
+   * siblings at the use site — `play(A, A, B, A)` writes an AABA structure. A comma ends
+   * the current root-scope juxtaposition run (like a play() comma).
    */
   private parsePatternBinding(variableName: string): { statement: PatternBinding; newPos: number } {
     const elements: PlayElement[] = []
@@ -182,15 +184,17 @@ export class StatementParser {
         runStart = lastIdx
       }
 
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       const t = ParserUtils.current(this.tokens, this.pos).type
       if (t === 'COMMA') {
-        throw new Error(
-          'a pattern binding is a single cell or a juxtaposition run; ' +
-            'use juxtaposition `(...)(...)`, not commas (§6.5).',
-        )
+        // #254 section cell separator: advance, open a fresh juxtaposition run.
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+        runStart = elements.length
+        continue
       }
       if (t === 'LPAREN') {
-        continue // juxtaposition: another group with no comma
+        continue // juxtaposition: another group with no comma (shares the run)
       }
       break // NEWLINE / EOF / end of statement
     }

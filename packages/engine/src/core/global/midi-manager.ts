@@ -23,6 +23,8 @@ export class MidiManager {
 
   /** Global key pitch class (0..11), undefined until `global.key()` is called. */
   private keyPitchClass?: number
+  /** Global key-center octave (#253), set by `global.key("D4")`; undefined = none. */
+  private keyOctave?: number
   /** Global send latency in ms applied to every MIDI send (§1). */
   private midiLatencyMs = 0
   /** Per-port lead (negative offset) in ms — sends this much earlier (§9). */
@@ -53,14 +55,32 @@ export class MidiManager {
     return this.scheduler !== undefined
   }
 
-  /** Set the global key from a note name (e.g. "C", "F#", "Bb"). */
+  /**
+   * Set the global key from a note name, with an optional **key-center octave**
+   * (#253): `"C"` / `"F#"` / `"Bb"` set only the pitch class; `"D4"` / `"Bb3"` /
+   * `"F#5"` also set the base octave for degree 1 — the whole piece's register in
+   * one place (a per-sequence `seq.octave()` still overrides it). A name without an
+   * octave clears any previous key octave.
+   */
   key(name: string): void {
-    this.keyPitchClass = noteNameToPitchClass(name)
+    const m = name.match(/^([A-Ga-g][#b]*)(-?\d+)$/)
+    if (m) {
+      this.keyPitchClass = noteNameToPitchClass(m[1]!)
+      this.keyOctave = parseInt(m[2]!, 10)
+    } else {
+      this.keyPitchClass = noteNameToPitchClass(name)
+      this.keyOctave = undefined
+    }
   }
 
   /** The global key pitch class, or undefined if `global.key()` was never called. */
   getKeyPitchClass(): number | undefined {
     return this.keyPitchClass
+  }
+
+  /** The global key-center octave (#253), or undefined if `global.key()` had no octave. */
+  getKeyOctave(): number | undefined {
+    return this.keyOctave
   }
 
   /** Set the global MIDI send latency (ms). */

@@ -787,6 +787,8 @@ piano.vel(96)          // default velocity 1-127. default 96
 piano.gate(0.8)        // default gate: sounding fraction of a slot. default 0.8
 
 global.key("C")        // numeric-root reference key (note-name token)
+global.key("D3")       // #253 key-center register: note + octave → tonic D, degree 1 at octave 3
+                       //   (the whole piece's register in one place; seq.octave() still overrides)
 global.midiLatency(20) // fixed send offset in ms (for ear-matching the SC path). default 0
 ```
 
@@ -939,7 +941,9 @@ MIDI and audio sequences.
 (0, m7, 0, m7)*4.root(3)       // postfix is left-to-right; the .root() covers all 4 copies
 var riff = (1, 0, (3, 5), 7)   // pattern variable — a bare-tuple value, no constructor
 var AA   = (1,0,5,0)(0,5,1,0)  // a juxtaposition binding → splices as multiple siblings
+var A    = (1,0,5,0), (0,5,1,0)  // #254 SECTION: comma-separated multi-cell binding
 seq.play(riff*3, fill, AA)
+seq.play(A, A, B, A)           // song form (AABA) — sections spliced and reused
 ```
 
 - `n` is an integer ≥ 1: `*0` is an error, `*1` is identity.
@@ -950,6 +954,10 @@ seq.play(riff*3, fill, AA)
   Redefining it does not retro-affect a running pattern (re-run the `play()` line). No
   reactive binding. A chord value is a *vertical* value; a pattern variable is a *horizontal*
   (tree) value.
+- **Section variables** (#254, §6.5 Q2 revised): a top-level **comma** in a pattern binding
+  separates *section cells* (`var A = (bar1), (bar2), …`), spliced as siblings at the use
+  site — `play(A, A, B, A)` writes a song form. (A comma-less juxtaposition `(..)(..)` shares
+  one root-scope run; a comma ends the run, exactly as in `play()`.)
 
 ### P.10 MIDI realization rules (§7)
 
@@ -967,11 +975,25 @@ seq.play(riff*3, fill, AA)
   different detunes sounding on one channel at once collide (last bend wins) — the canonical
   spec specifies a warning for this case, but it is not yet implemented. MPE is out of scope.
 
-> **Expression model (velocity / articulation) — not yet specified here.** The per-note
-> `@v` velocity and articulation axes are a confirmed *principle* but their token grammar is
-> a dedicated post-Phase-4 phase; spec reflection is **deferred per decision #42**. See
-> [`DESIGN_DISCUSSION_RECORD.md`](../specs-v2/DESIGN_DISCUSSION_RECORD.md) §10. `@u` absolute
-> duration (v1.0 `@U`) is **rejected** — duration is carried by the tree + ties.
+### P.12 Per-note expression — `@v` velocity / `@g` articulation (§10.3, E5)
+
+The two expression axes (decision #41): velocity and articulation. Per-note `@` postfix
+modifiers; `@u` absolute duration (v1.0 `@U`) is **rejected** — duration is carried by the
+tree + ties.
+
+```js
+5@v110          // absolute velocity 110 (1..127) — overrides seq.vel()
+5@v+20  5@v-30  // velocity relative to seq.vel() (an accent / de-emphasis)
+5@g30           // articulation = gate PERCENT: 30 = 0.30 (staccato) — overrides seq.gate()
+5@g120          // 120 = 1.20 gate (legato-leaning); the axis `{ }` legato also lives on
+5@v100@g30      // compose; also orthogonal to `^N` / `~` / `r`
+```
+
+- **`@v`** = velocity. Absolute `@v<n>` (1..127) or relative `@v+<n>`/`@v-<n>` (accent,
+  added to `seq.vel()` and clamped). An accent is just a velocity boost — no separate token.
+- **`@g`** = articulation as a gate **percent** (`@g30` = 0.30). It is the per-note point on
+  the same axis as `{ }` legato (`@g` > 100 rings past the slot). Overrides `seq.gate()` for
+  that note. Integer/percent args avoid a decimal point splitting the token.
 
 ### P.11 Voicing operators & randomness (§12)
 
@@ -1037,8 +1059,9 @@ Epic #224 phases 1/2/3/R/4:
 - **Ties / legato / hold** (Phase 4): `_` event tie, `_n` voice tie, `{ }` legato, `.hold()`
 - **Voicing + randomness** (E2 / §12): `.drop(n...)`/`.invert(n)`/`.open()`/`.close()`/`.shell()`/
   `.rootless()`; `Xr`/`.r`/`^r` random (see P.11)
-- **Not yet specified**: per-note expression (`@v` velocity / articulation) — deferred per
-  decision #42 (see breadcrumb above)
+- **Key-center register** (E3 / #253): `global.key("D4")` base octave (see P.1)
+- **Section variables** (E4 / #254): comma-separated multi-bar bindings (see P.9)
+- **Per-note expression** (E5 / §10.3): `@v` velocity (absolute / relative) + `@g` articulation (see P.12)
 
 #### Parser
 - **Tokenizer**: Complete lexical analysis

@@ -240,6 +240,11 @@ export class AudioTokenizer {
           tokens.push({ type: 'TILDE', value: '~', line, column })
           this.advance()
           break
+        case '@':
+          // §10.3 expression (E5): `@v` velocity / `@g` articulation per-note modifiers.
+          tokens.push({ type: 'AT', value: '@', line, column })
+          this.advance()
+          break
         case '[':
           tokens.push({ type: 'LBRACKET', value: '[', line, column })
           this.advance()

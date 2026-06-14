@@ -66,4 +66,13 @@ export interface TimedEvent {
    */
   random?: number
   randomOctave?: boolean
+  /**
+   * §10.3 per-note expression (E5), applied at the output stage:
+   * - `velocity`: absolute per-note velocity (1..127), overriding `seq.vel()`.
+   * - `velocityDelta`: velocity relative to `seq.vel()` (an accent), clamped at dispatch.
+   * - `articulation`: per-note gate ratio (sounding fraction), overriding `seq.gate()`.
+   */
+  velocity?: number
+  velocityDelta?: number
+  articulation?: number
 }

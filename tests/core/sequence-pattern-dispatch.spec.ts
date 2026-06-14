@@ -88,6 +88,12 @@ describe('Phase R — pattern variables dispatch (§6.5)', () => {
     expect(notesOf(out)).toEqual([60, 67])
   })
 
+  it('a multi-cell section splices and is reusable: A = (1),(5); play(A, A) → AA (#254)', async () => {
+    const out = await playWith((g) => g.definePattern('a', patternElements('(1), (5)')), 'a, a')
+    // A = two section cells [1][5]; play(A, A) writes the section twice (song-form reuse)
+    expect(notesOf(out)).toEqual([60, 67, 60, 67])
+  })
+
   it('`*n` on a pattern ref repeats the splice: riff*3, riff = (1, 5)', async () => {
     const out = await playWith((g) => g.definePattern('riff', patternElements('(1, 5)')), 'riff*3')
     expect(notesOf(out)).toEqual([60, 67, 60, 67, 60, 67])

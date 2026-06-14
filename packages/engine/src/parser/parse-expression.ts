@@ -196,12 +196,13 @@ export class ExpressionParser {
    * another `^M`/`^0` overrides it. The parser only records the per-note
    * annotation; the running range is applied during scheduling, not here.
    */
-  /** True if the current token starts a pitch modifier: `^N` / `^r`, `~`, or a trailing `r`. */
+  /** True if the current token starts a pitch modifier: `^N`/`^r`, `~`, `@v`/`@g`, or `r`. */
   private nextIsPitchModifier(): boolean {
     const cur = ParserUtils.current(this.tokens, this.pos)
     return (
       cur.type === 'CARET' ||
       cur.type === 'TILDE' ||
+      cur.type === 'AT' ||
       (cur.type === 'IDENTIFIER' && cur.value === 'r')
     )
   }
@@ -215,11 +216,45 @@ export class ExpressionParser {
     let detune = 0
     let random: number | undefined
     let randomOctave = false
+    let velocity: number | undefined
+    let velocityDelta: number | undefined
+    let articulation: number | undefined
     let parsed = true
     while (parsed) {
       parsed = false
       const t = ParserUtils.current(this.tokens, this.pos).type
-      if (t === 'CARET') {
+      if (t === 'AT') {
+        // §10.3 expression (E5): `@v100` absolute velocity / `@v+20`/`@v-30` relative
+        // (accent) / `@g30` articulation as a gate PERCENT (30 = 0.30, 120 = 1.20).
+        // The lexer merges `v100`/`g30` into one identifier, so split letter + digits;
+        // integer args avoid a decimal point splitting the token.
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        const sub = ParserUtils.current(this.tokens, this.pos)
+        const raw = sub.type === 'IDENTIFIER' ? String(sub.value) : ''
+        const kind = raw[0]
+        const rest = raw.slice(1)
+        if (kind !== 'v' && kind !== 'g') {
+          throw new Error(`expected @v (velocity) or @g (articulation), got @${raw || '?'}`)
+        }
+        if (rest !== '' && !/^\d+$/.test(rest)) {
+          throw new Error(`@${kind} expects an integer, e.g. @v100 or @g30 (got @${raw})`)
+        }
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        if (kind === 'v') {
+          if (rest === '') {
+            // `@v` alone → a relative accent `@v+n` / `@v-n` (the sign split the identifier).
+            const next = ParserUtils.current(this.tokens, this.pos).type
+            if (next === 'PLUS' || next === 'MINUS') velocityDelta = this.parseSignedNumber()
+            else throw new Error('@v needs a value, e.g. @v100 or @v+20')
+          } else {
+            velocity = Math.max(1, Math.min(127, parseInt(rest, 10)))
+          }
+        } else {
+          if (rest === '') throw new Error('@g needs a gate percent, e.g. @g30 (= 0.30)')
+          articulation = parseInt(rest, 10) / 100 // percent → ratio (@g120 = 1.20 legato)
+        }
+        parsed = true
+      } else if (t === 'CARET') {
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         // `^r` = a random octave (§12, #53); otherwise `^N` sets the sticky range (§2.4),
         // rangeSet marking this note as a running-range set point for the walk.
@@ -253,6 +288,9 @@ export class ExpressionParser {
         detune,
         ...(random !== undefined && { random }),
         ...(randomOctave && { randomOctave: true }),
+        ...(velocity !== undefined && { velocity }),
+        ...(velocityDelta !== undefined && { velocityDelta }),
+        ...(articulation !== undefined && { articulation }),
       },
       newPos: this.pos,
     }
