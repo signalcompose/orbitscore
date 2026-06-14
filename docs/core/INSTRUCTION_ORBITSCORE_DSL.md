@@ -941,7 +941,9 @@ MIDI and audio sequences.
 (0, m7, 0, m7)*4.root(3)       // postfix is left-to-right; the .root() covers all 4 copies
 var riff = (1, 0, (3, 5), 7)   // pattern variable — a bare-tuple value, no constructor
 var AA   = (1,0,5,0)(0,5,1,0)  // a juxtaposition binding → splices as multiple siblings
+var A    = (1,0,5,0), (0,5,1,0)  // #254 SECTION: comma-separated multi-cell binding
 seq.play(riff*3, fill, AA)
+seq.play(A, A, B, A)           // song form (AABA) — sections spliced and reused
 ```
 
 - `n` is an integer ≥ 1: `*0` is an error, `*1` is identity.
@@ -952,6 +954,10 @@ seq.play(riff*3, fill, AA)
   Redefining it does not retro-affect a running pattern (re-run the `play()` line). No
   reactive binding. A chord value is a *vertical* value; a pattern variable is a *horizontal*
   (tree) value.
+- **Section variables** (#254, §6.5 Q2 revised): a top-level **comma** in a pattern binding
+  separates *section cells* (`var A = (bar1), (bar2), …`), spliced as siblings at the use
+  site — `play(A, A, B, A)` writes a song form. (A comma-less juxtaposition `(..)(..)` shares
+  one root-scope run; a comma ends the run, exactly as in `play()`.)
 
 ### P.10 MIDI realization rules (§7)
 

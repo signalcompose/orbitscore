@@ -32,8 +32,19 @@ describe('Phase R — pattern binding parsing (§6.5)', () => {
     expect(stmt.elements[1]).toMatchObject({ type: 'nested', elements: [0, 5, 1, 0] })
   })
 
-  it('a top-level comma in a binding is rejected (§6.5 — use juxtaposition)', () => {
-    expect(() => parseAudioDSL('var x = (1, 0), (5, 0)')).toThrow(/juxtaposition|single cell/)
+  it('a top-level comma binds a multi-cell SECTION (#254, §6.5 Q2 revised)', () => {
+    const stmt = parseAudioDSL('var A = (1, 0), (5, 0)').statements[0] as any
+    expect(stmt.type).toBe('pattern_binding')
+    expect(stmt.elements).toHaveLength(2) // two section cells, spliced at the use site
+    expect(stmt.elements[0]).toMatchObject({ type: 'nested', elements: [1, 0] })
+    expect(stmt.elements[1]).toMatchObject({ type: 'nested', elements: [5, 0] })
+  })
+
+  it('a section may mix bars and per-cell `.root()` chains (`var A = (..).root(3), (..)`)', () => {
+    const stmt = parseAudioDSL('var A = (1, 0).root(3), (5, 0)').statements[0] as any
+    expect(stmt.elements).toHaveLength(2)
+    expect(stmt.elements[0]).toMatchObject({ type: 'scoped', root: { kind: 'degree', degree: 3 } })
+    expect(stmt.elements[1]).toMatchObject({ type: 'nested', elements: [5, 0] })
   })
 
   it('init declarations are unaffected (regression)', () => {
