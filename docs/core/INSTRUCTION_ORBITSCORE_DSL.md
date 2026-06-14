@@ -973,6 +973,32 @@ seq.play(riff*3, fill, AA)
 > [`DESIGN_DISCUSSION_RECORD.md`](../specs-v2/DESIGN_DISCUSSION_RECORD.md) §10. `@u` absolute
 > duration (v1.0 `@U`) is **rejected** — duration is carried by the tree + ties.
 
+### P.11 Voicing operators & randomness (§12)
+
+Postfix operators on a chord value / `[ ]` stack that raise the abstraction of *how* a
+chord is voiced and add aleatoric comping. Full design + rationale: [`DESIGN_DISCUSSION_RECORD.md`](../specs-v2/DESIGN_DISCUSSION_RECORD.md) §12 (decisions #47–53).
+
+```js
+[1,3,5,7].drop(2,4)    // drop the 2nd & 4th voices from the top an octave (drop2&4)
+[1,3,5,7].invert(2)    // raise the bottom 2 voices an octave
+m7.open() / m7.close() // open / close position; .shell() = R+3+7; .rootless() = drop the root
+[1,3,5,7].r            // random thinning: each voice ~50% to sound this cycle (.r(p) to tune)
+(1, 3, 5r, 7)          // `Xr`: this element randomly sounds or rests
+5^r                    // `^r`: a random octave (±1) this cycle
+```
+
+- **Voicing operators** (`.drop(n...)` / `.invert(n)` / `.open()` / `.close()` / `.shell()` /
+  `.rootless()`) are **deterministic, evaluation-time, symbolic** — sugar over per-voice `^N`
+  (or a voice filter), so they preserve §7-0 symbolic pitch and compose with `.root()`/`.oct()`.
+  "Position N from the top" counts the structural (written/ascending) order. Method form,
+  parens required (like `.hold()`). `.drop(...)`/`.invert(n)` take positions; the rest take none.
+- **Randomness** (`Xr` / `.r` / `.r(p)` / `^r`) is **runtime, per-cycle re-rolled**: `Xr` =
+  element presence (default 0.5), `.r` = chord thinning (no minimum-voice guarantee — silence is
+  allowed), `^r` = random octave ±1. `r` is one primitive whose effect depends on its position.
+  Reproducibility is by `.orbslog` (execution record, not a result recording) — random re-rolls
+  on replay; no seed (decisions #50/#52/#53).
+- **`.comp`** (auto jazz comping) is a future generative macro over these primitives — see #259.
+
 ---
 
 ## 12. Implementation Status
@@ -1009,6 +1035,8 @@ Epic #224 phases 1/2/3/R/4:
   `-N` removal, `^N` chord shift, `import chords`
 - **Repetition + pattern variables** (Phase R): `*n`, `var NAME = <pattern>`
 - **Ties / legato / hold** (Phase 4): `_` event tie, `_n` voice tie, `{ }` legato, `.hold()`
+- **Voicing + randomness** (E2 / §12): `.drop(n...)`/`.invert(n)`/`.open()`/`.close()`/`.shell()`/
+  `.rootless()`; `Xr`/`.r`/`^r` random (see P.11)
 - **Not yet specified**: per-note expression (`@v` velocity / articulation) — deferred per
   decision #42 (see breadcrumb above)
 
@@ -1108,6 +1136,7 @@ Epic #224 phases 1/2/3/R/4:
   - Phase 3: `[ ]` stacks + bare `[ ]` chord values
   - Phase R: `*n` repetition + pattern variables
   - Phase 4: `_` / `_n` ties, `{ }` legato, `.hold()`
+  - Harmony/voicing (§12): bare `[ ]` chord literal, `.drop/.invert/.open/.close/.shell/.rootless`, `Xr`/`.r`/`^r` random
   - Deferred: per-note expression (`@v` / articulation), per decision #42
 
 - v3.0 (2025-01-09): **Underscore Prefix Pattern** + **Unidirectional Toggle (片記号方式)**
