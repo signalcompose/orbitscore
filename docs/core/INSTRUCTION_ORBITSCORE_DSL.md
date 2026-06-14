@@ -974,7 +974,7 @@ seq.play(A, A, B, A)           // song form (AABA) — sections spliced and reus
   different detunes sounding on one channel at once collide (last bend wins) — the canonical
   spec specifies a warning for this case, but it is not yet implemented. MPE is out of scope.
 
-### P.12 Per-note expression — `@v` velocity / `@g` articulation (§10.3, E5)
+### P.12 Per-note expression — `@v` velocity / `@g` articulation (正本 PITCH_DSL_SPEC §2.5 / DESIGN §10.3, E5)
 
 The two expression axes (decision #41): velocity and articulation. Per-note `@` postfix
 modifiers; `@u` absolute duration (v1.0 `@U`) is **rejected** — duration is carried by the
@@ -994,7 +994,7 @@ tree + ties.
   the same axis as `{ }` legato (`@g` > 100 rings past the slot). Overrides `seq.gate()` for
   that note. Integer/percent args avoid a decimal point splitting the token.
 
-### P.11 Voicing operators & randomness (§12)
+### P.11 Voicing operators & randomness (正本 PITCH_DSL_SPEC §6.1–6.2 / DESIGN §12)
 
 Postfix operators on a chord value / `[ ]` stack that raise the abstraction of *how* a
 chord is voiced and add aleatoric comping. Full design + rationale: [`DESIGN_DISCUSSION_RECORD.md`](../specs-v2/DESIGN_DISCUSSION_RECORD.md) §12 (decisions #47–53).
