@@ -31,6 +31,13 @@ describe('E6 — mode binding parse (§2.2)', () => {
     expect(stmt.lattice).toEqual([0, 4, 7, 23])
     expect(stmt.period).toBe(24)
   })
+
+  it('a below-tonic last element does not yield a zero/negative default period', () => {
+    // 7^-1 = -1 (a below-tonic element); the default period must use the max (0) → 12, not 0
+    const stmt = parseAudioDSL('var m = mode(1, 7^-1)').statements[0] as any
+    expect(stmt.lattice).toEqual([0, -1])
+    expect(stmt.period).toBe(12)
+  })
 })
 
 // ── dispatch harness: define a mode, play degrees under `.mode()` ──

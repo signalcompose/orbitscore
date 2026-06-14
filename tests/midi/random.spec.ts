@@ -115,6 +115,22 @@ describe('E2 — random dispatch behavior (§12, statistical)', () => {
     expect(notes.size).toBeGreaterThan(1) // more than one octave actually occurs
   }, 30000)
 
+  it('a per-voice `Xr` wins over a stack `.r(p)` (keeps its own probability)', async () => {
+    // [1, 3r, 5].r(1): stack thinning = 1.0 (all present) but the 3 keeps its own 0.5 →
+    // C(60)/G(67) always, E(64) ~half.
+    let droppedE = false
+    let presentE = false
+    for (let i = 0; i < N; i++) {
+      const ons = await onceOns('[1, 3r, 5].r(1)')
+      expect(ons).toContain(60) // C always (stack .r(1))
+      expect(ons).toContain(67) // G always
+      if (ons.includes(64)) presentE = true
+      else droppedE = true
+    }
+    expect(droppedE).toBe(true) // the 3's own Xr overrides the stack 1.0
+    expect(presentE).toBe(true)
+  }, 30000)
+
   it('`(1, 3, 5r, 7)` randomly rests the 5 (melodic), 1/3/7 always sound', async () => {
     let droppedG = false
     let presentG = false

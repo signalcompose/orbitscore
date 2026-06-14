@@ -200,9 +200,11 @@ export class StatementParser {
       this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
     }
 
-    // Default period: round the last element's semitone up to the next octave boundary.
-    const last = lattice[lattice.length - 1]!
-    const defaultPeriod = (Math.floor(last / 12) + 1) * 12
+    // Default period: round the lattice's HIGHEST semitone up to the next octave boundary
+    // (use max, not the last element, so a non-ascending / below-tonic element can't yield a
+    // zero/negative period — e.g. `mode(1, 7^-1)`). Always at least one octave.
+    const top = Math.max(...lattice)
+    const defaultPeriod = top < 0 ? 12 : (Math.floor(top / 12) + 1) * 12
 
     return {
       statement: { type: 'mode_binding', variableName, lattice, period: period ?? defaultPeriod },

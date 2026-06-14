@@ -28,6 +28,10 @@ describe('E5 — expression parse shape (§10.3)', () => {
     expect(arg('5@g30')).toMatchObject({ degree: 5, articulation: 0.3 })
   })
 
+  it('`5@g120` → a legato gate ratio above 1.0 (1.2)', () => {
+    expect(arg('5@g120')).toMatchObject({ degree: 5, articulation: 1.2 })
+  })
+
   it('`5@v100@g30` → velocity and articulation compose', () => {
     expect(arg('5@v100@g30')).toMatchObject({ degree: 5, velocity: 100, articulation: 0.3 })
   })

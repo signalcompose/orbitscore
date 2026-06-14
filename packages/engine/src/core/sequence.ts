@@ -495,13 +495,6 @@ export class Sequence {
   }
 
   /**
-   * Resolve this sequence's root context for degree resolution (§2.1, §2.3).
-   *
-   * Phase 1 supports the sequence default only: a numeric `seq.root(n)` is the
-   * n-th degree of `global.key()`; with no `seq.root()`, the key tonic is the
-   * root. A degree with neither a key nor a root is a hard error.
-   */
-  /**
    * The base octave for degree 1 (§2.1 / #253 key-center register): an explicit
    * `seq.octave(N)` wins; otherwise the global key octave from `global.key("D4")`
    * (the whole piece's register, declared once); otherwise 4 (C4 = 60). This is the
@@ -512,6 +505,13 @@ export class Sequence {
     return this._octave ?? this.global.getMidiManager().getKeyOctave() ?? 4
   }
 
+  /**
+   * Resolve this sequence's root context for degree resolution (§2.1, §2.3).
+   *
+   * Phase 1 supports the sequence default only: a numeric `seq.root(n)` is the
+   * n-th degree of `global.key()`; with no `seq.root()`, the key tonic is the
+   * root. A degree with neither a key nor a root is a hard error.
+   */
   private resolveRootContext(): RootContext {
     const name = this.stateManager.getName() || 'sequence'
     const keyPC = this.global.getMidiManager().getKeyPitchClass()

@@ -197,15 +197,6 @@ export class ExpressionParser {
     return sign * ParserUtils.parseNumber(numResult.token)
   }
 
-  /**
-   * Parse optional `^` (pitch range set-point) and `~` (detune) modifiers onto a
-   * degree, producing a PlayPitch. Both modifiers are optional and order-
-   * independent. `^N` is STICKY (§2.4): it records `octaveShift` AND sets
-   * `rangeSet`, marking this note as a running-range set point — the value
-   * propagates to subsequent degrees in the play() (threaded at dispatch) until
-   * another `^M`/`^0` overrides it. The parser only records the per-note
-   * annotation; the running range is applied during scheduling, not here.
-   */
   /** True if the current token starts a pitch modifier: `^N`/`^r`, `~`, `@v`/`@g`, or `r`. */
   private nextIsPitchModifier(): boolean {
     const cur = ParserUtils.current(this.tokens, this.pos)
@@ -217,6 +208,15 @@ export class ExpressionParser {
     )
   }
 
+  /**
+   * Parse optional `^` (pitch range set-point), `~` (detune), `@v`/`@g` (expression, §10.3),
+   * and `r`/`^r` (random, §12) modifiers onto a degree, producing a PlayPitch. Modifiers are
+   * optional and order-independent. `^N` is STICKY (§2.4): it records `octaveShift` AND sets
+   * `rangeSet`, marking this note as a running-range set point — the value propagates to
+   * subsequent degrees in the play() (threaded at dispatch) until another `^M`/`^0` overrides
+   * it. The parser only records the per-note annotation; the running range is applied at
+   * scheduling, not here.
+   */
   private parsePitchModifiers(
     degree: number,
     alteration: number,
@@ -642,12 +642,7 @@ export class ExpressionParser {
     return degree
   }
 
-  /**
-   * Parse a `.mode()` argument. v1.1 reserves the syntax (mode lattice = Phase
-   * 2.2): capture the raw arg for duplicate/conflict diagnostics; dispatch
-   * throws not-implemented (parallel to time()/fixpitch()).
-   */
-  /** Parse a `.mode(NAME)` argument (§2.2): the name of a `mode(...)` binding to apply. */
+  /** Parse a `.mode(NAME)` argument (§2.2, E6): the name of a `mode(...)` binding to apply. */
   private parseModeArg(): ScopeMode {
     const tok = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = tok.newPos

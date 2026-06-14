@@ -124,4 +124,10 @@ describe('E2 — deterministic voicing transforms (§12.3)', () => {
     expect(stack.type).toBe('stack')
     expect(stack.random).toBe(0.5) // .r thinning must not be dropped by applyVoicing
   })
+
+  it('a voicing preserves per-voice expression on the moved voice (`@v` survives `.drop`)', () => {
+    // [1, 3@v100, 5].drop(2): position 2 from top = the 3 voice → octave -1, BUT @v100 kept
+    const { stack } = voice('[1, 3@v100, 5].drop(2)')
+    expect(stack.voices[1]).toMatchObject({ degree: 3, octaveShift: -1, velocity: 100 })
+  })
 })

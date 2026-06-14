@@ -178,21 +178,43 @@ function evaluateStackVoices(
   return result
 }
 
-/** A chord voice in a form the voicing ops can manipulate (mirrors {@link ChordVoice}). */
-type VoicingWork = ChordVoice
+/**
+ * A chord voice in a form the voicing ops can manipulate ({@link ChordVoice} fields for
+ * the position math) plus `orig` — the original voice element, so per-voice expression
+ * (`@v`/`@g`/`Xr`/`^r`) survives a voicing transform that only moves the octave.
+ */
+type VoicingWork = ChordVoice & { orig: PlayElement }
 
 /** A resolved stack voice → workable form, or null for a non-flat voice (a subtree). */
 function voiceToWork(v: StackElement): VoicingWork | null {
-  if (typeof v === 'number') return { degree: v, alteration: 0, octaveShift: 0, detune: 0 }
+  if (typeof v === 'number') return { degree: v, alteration: 0, octaveShift: 0, detune: 0, orig: v }
   if (v && typeof v === 'object' && v.type === 'pitch') {
     return {
       degree: v.degree,
       alteration: v.alteration,
       octaveShift: v.octaveShift,
       detune: v.detune,
+      orig: v,
     }
   }
   return null
+}
+
+/**
+ * Rebuild a voiced voice → a play element, OVERRIDING only `octaveShift` (the only field
+ * a voicing op changes) so all other original fields — detune and per-voice expression
+ * (`@v`/`@g`/`Xr`/`^r`) — are preserved. A bare-degree voice round-trips via voiceToElement.
+ */
+function workToElement(w: VoicingWork): PlayElement {
+  if (w.orig && typeof w.orig === 'object' && w.orig.type === 'pitch') {
+    return w.octaveShift === w.orig.octaveShift ? w.orig : { ...w.orig, octaveShift: w.octaveShift }
+  }
+  return voiceToElement({
+    degree: w.degree,
+    alteration: w.alteration,
+    octaveShift: w.octaveShift,
+    detune: w.detune,
+  })
 }
 
 /** Root-relative semitone of a voice (for the close/open position math, §12.3). */
@@ -300,7 +322,7 @@ function applyVoicing(
   // Preserve the stack's `octaveShift` and `.r` thinning (a `.r` chained before the voicing).
   return {
     type: 'stack',
-    voices: out.map(voiceToElement),
+    voices: out.map(workToElement),
     ...(stack.octaveShift !== undefined && { octaveShift: stack.octaveShift }),
     ...(stack.random !== undefined && { random: stack.random }),
   }

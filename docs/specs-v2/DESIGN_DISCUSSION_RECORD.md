@@ -554,3 +554,11 @@ var no5  = [m7, -5]            // 除去 -N もそのまま
 |---|---|---|---|
 | 58 | mode lattice = `mode(...)` 構造体（格子は半音オフセット、degree 1=lattice[0]）。`.mode(name)` で適用、`.period(n)` 上書き、既定=次オクターブ境界 | reserved 据え置き / scale-index 方式を基底にも | §2.2 の定義をそのまま実装。教会旋法はライブラリ var 群（言語プリミティブにしない） |
 | 59 | mode は seq root に乗る（root/mode は同一グループ排他）。mode を play 値で使うと warning | mode に独自 root を許す / mode を値として展開 | §3 の排他規則に従う。mode は scope、chord/pattern は値、と型分離を保つ |
+
+### 13.6 既知の制約（E1-E6 レビューで surfaced、層構造由来・現状は仕様）
+
+PR レビューチーム（#260-265 累積）で出た、修正でなく**記録**にとどめる項目:
+
+1. **voicing × `.mode()`**: `.open()`/`.close()`/`.invert()` 等の位置計算は **Ionian 半音距離**で行う（voicing は L2 解決時、`.mode()` 格子適用は dispatch 時で層が分かれるため）。mode 格子上で「最近接」にはならない。回避: voicing を `.mode()` と組み合わせる場合は結果を確認するか、mode を使わないコンテキストで voice する。両者の併用は稀（voicing=縦、mode=旋律）。
+2. **極端な `@g`**: `@g`（articulation）の上限はクランプしない。`@g300` 等は note-off が後続スロットへオーバーランし、同ピッチの後続音を食う可能性がある（`{ }` レガート等の overlap と同じ一般的性質）。意図的な表現自由度を優先し、クランプより記録を選択。
+3. **レビュー後の残テスト gap（Minor）**: mode が seq.root に乗るケース / 相対 velocity の 127 クランプ / 不正 key 文字列 throw / mode 名を値で使った warning は dispatch テスト未追加（parse/ロジックは実装済・低リスク）。
