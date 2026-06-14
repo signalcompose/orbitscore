@@ -8,6 +8,12 @@
 
 import { AudioIR } from '../parser/audio-parser'
 import { SuperColliderPlayer } from '../audio/supercollider-player'
+import { Global } from '../core/global'
+import {
+  SessionLogWriter,
+  EvalSource,
+  formatLogStamp,
+} from '../core/session-log/session-log-writer'
 
 import { InterpreterState } from './types'
 import { processGlobalInit, processSequenceInit } from './process-initialization'
@@ -33,7 +39,50 @@ export class InterpreterV2 {
       runGroup: new Set(),
       loopGroup: new Set(),
       muteGroup: new Set(),
+      // §L1: the rolling-buffer origin (§3 wall). The writer itself stays absent
+      // until enableSessionLog() — so logging is inert in unit-test paths.
+      engineT0: Date.now(),
     }
+  }
+
+  /**
+   * §L1 (#229): install a session-log writer (opt-in — call ONLY at a real entry
+   * point: CLI / REPL). Until called, `global.start()` writes no `.orbslog`, so
+   * the engine's own test suite stays file-free. `cwd` is the untitled-fallback
+   * directory; `engineVersion`/`dslVersion` go in the meta header.
+   */
+  enableSessionLog(opts: { engineVersion: string; dslVersion: string; cwd: string }): void {
+    if (this.state.sessionLog) return // idempotent — keep the existing rolling buffer
+    this.state.sessionLog = new SessionLogWriter(
+      { engineVersion: opts.engineVersion, dslVersion: opts.dslVersion },
+      opts.cwd,
+    )
+  }
+
+  /**
+   * §L1: wire the global's transport start/stop to the session log. Closures
+   * read live `state` (sourceFile / engineT0) so each start/stop logs against
+   * the context of the eval that triggered it.
+   */
+  private installSessionHooks(global: Global): void {
+    const state = this.state
+    global.setTransportHooks({
+      onStart: () => {
+        const now = new Date()
+        state.sessionLog!.start({
+          startedAtISO: now.toISOString(),
+          stamp: formatLogStamp(now),
+          wall: Date.now() - (state.engineT0 ?? Date.now()),
+          sourceFile: state.currentSourceFile ?? null,
+        })
+      },
+      onStop: () => {
+        state.sessionLog!.stop(
+          Date.now() - (state.engineT0 ?? Date.now()),
+          global.getTransportPosition(),
+        )
+      },
+    })
   }
 
   /**
@@ -61,9 +110,38 @@ export class InterpreterV2 {
    */
   async execute(
     ir: AudioIR,
-    options?: { skipTransportCommands?: boolean; documentDirectory?: string },
+    options?: {
+      skipTransportCommands?: boolean
+      documentDirectory?: string
+      /** §L1: the verbatim evaluated source (the `code` field). */
+      source?: string
+      /** §L1: the originating `.orbs` (drives `sourceFile` + filename). */
+      sourceFile?: string | null
+      /** §L1: who evaluated this (default `human`). */
+      evalSource?: EvalSource
+    },
   ): Promise<void> {
     const skipTransport = options?.skipTransportCommands ?? false
+
+    // §L1 (#229): record this eval at occurrence. The interceptor is HERE — the
+    // single funnel every eval path passes through. `recordEval` buffers until
+    // global.start() (preamble) then appends; the start/stop transport records
+    // are emitted by the Global transport hooks (installSessionHooks). Guarded by
+    // `sessionLog` so the engine test suite (which never enables it) is unaffected.
+    this.state.currentSourceFile = options?.sourceFile ?? null
+    this.state.currentEvalSource = options?.evalSource ?? 'human'
+    if (this.state.sessionLog && options?.source !== undefined) {
+      const g = this.state.currentGlobal
+      const hasLoop = ir.statements.some((s) => s.type === 'transport' && s.command === 'loop')
+      this.state.sessionLog.recordEval({
+        code: options.source,
+        wall: Date.now() - (this.state.engineT0 ?? Date.now()),
+        transport: g?.getTransportPosition() ?? null,
+        effect: hasLoop ? (g?.getQuantizedEffectPosition() ?? null) : null,
+        sourceFile: this.state.currentSourceFile,
+        evalSource: this.state.currentEvalSource,
+      })
+    }
 
     // Ensure SuperCollider is booted
     await this.ensureBooted()
@@ -71,6 +149,13 @@ export class InterpreterV2 {
     // Process global initialization
     if (ir.globalInit) {
       await processGlobalInit(ir.globalInit, this.state)
+    }
+
+    // §L1: install the session-log transport hooks on the global once it exists.
+    // The closures read live state (sourceFile / engineT0) at fire time, so a
+    // start/stop in a later eval logs against that eval's context. Idempotent.
+    if (this.state.sessionLog && this.state.currentGlobal) {
+      this.installSessionHooks(this.state.currentGlobal)
     }
 
     // Set documentDirectory on global so audioPath() / audio() can resolve relative paths

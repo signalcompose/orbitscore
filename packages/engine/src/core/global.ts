@@ -17,7 +17,7 @@ import { EffectsManager } from './global/effects-manager'
 import { TransportControl } from './global/transport-control'
 import { SequenceRegistry } from './global/sequence-registry'
 import { LinkAudioManager } from './global/link-audio-manager'
-import { QuantizeManager, QuantizeValue } from './global/quantize-manager'
+import { QuantizeManager, QuantizeValue, nextQuantizedTime } from './global/quantize-manager'
 import { MidiManager } from './global/midi-manager'
 import { TransportClock } from './global/transport-clock'
 import { MidiTransportScheduler } from './global/midi-transport-scheduler'
@@ -294,6 +294,19 @@ export class Global {
     return this
   }
 
+  /**
+   * §L1 (#229): optional session-log hooks fired at transport start/stop. Set
+   * ONLY by the interpreter when logging is enabled — unset by default, so a
+   * `Global` constructed in a unit test never writes a `.orbslog`. `onStop` runs
+   * BEFORE the clock is cleared so the stop record can read the transport time.
+   */
+  private _onTransportStart?: () => void
+  private _onTransportStop?: () => void
+  setTransportHooks(hooks: { onStart?: () => void; onStop?: () => void }): void {
+    this._onTransportStart = hooks.onStart
+    this._onTransportStop = hooks.onStop
+  }
+
   // Transport control
   start(): this {
     // Stamp the shared clock origin FIRST so the audio scheduler (started by
@@ -302,6 +315,7 @@ export class Global {
     this.transportControl.start()
     this.effectsManager.setRunningState(true)
     this.midiManager.start()
+    this._onTransportStart?.() // §L1: open the session log (clock origin is set)
     return this
   }
 
@@ -315,11 +329,56 @@ export class Global {
   }
 
   stop(): this {
+    this._onTransportStop?.() // §L1: write the stop record BEFORE the clock clears
     this.transportControl.stop()
     this.effectsManager.setRunningState(false)
     this.midiManager.stop()
     this.transportClock.stop()
     return this
+  }
+
+  /**
+   * §L1 (#229 §3 transport): the current musical position as `"bar:beat"`
+   * (1-based bar, 1-based fractional beat in the meter's denominator unit), or
+   * null when transport is not running (the session-log preamble phase). Origin
+   * = `global.start()` (transportClock origin); bar 1 beat 1.0 at elapsed 0.
+   */
+  getTransportPosition(): string | null {
+    if (!this.transportClock.running) return null
+    return this.msToBarBeat(Date.now() - this.transportClock.startTime)
+  }
+
+  /**
+   * §L1 (#229 §3 effect): the resolved quantize boundary `"bar:beat"` at which a
+   * quantized op evaluated *now* would take effect, or null when transport is
+   * not running or quantize is off. Reuses {@link nextQuantizedTime} (Phase 0-2).
+   */
+  getQuantizedEffectPosition(): string | null {
+    if (!this.transportClock.running) return null
+    const q = this.quantizeManager.getQuantize()
+    if (q === 'off') return null
+    const { tempo, beat } = this.transportParams()
+    const currentMs = Date.now() - this.transportClock.startTime
+    return this.msToBarBeat(nextQuantizedTime(currentMs, q, tempo, beat))
+  }
+
+  /** Tempo + meter in effect now (global defaults; §3 transport reference frame). */
+  private transportParams(): { tempo: number; beat: { numerator: number; denominator: number } } {
+    const state = this.tempoManager.getState()
+    return {
+      tempo: state.tempo ?? 120,
+      beat: state.beat ?? { numerator: 4, denominator: 4 },
+    }
+  }
+
+  /** Convert elapsed transport ms to a `"bar:beat"` string (§3). */
+  private msToBarBeat(elapsedMs: number): string {
+    const { tempo, beat } = this.transportParams()
+    const beatUnitMs = ((60_000 / tempo) * 4) / beat.denominator // one meter-beat
+    const totalBeatUnits = Math.max(0, elapsedMs) / beatUnitMs
+    const bar = Math.floor(totalBeatUnits / beat.numerator) + 1
+    const beatInBar = (totalBeatUnits % beat.numerator) + 1
+    return `${bar}:${beatInBar.toFixed(3)}`
   }
 
   // Sequence management

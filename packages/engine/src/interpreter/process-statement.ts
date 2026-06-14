@@ -284,7 +284,10 @@ export async function processTransportStatement(
     return
   }
 
-  // Handle global commands (e.g., g.start() where g is a global variable)
+  // Handle global commands (e.g., g.start() where g is a global variable).
+  // Note: §L1 session-log start/stop hooks live on Global.start()/stop() (the
+  // boundary both `start` (transport-routed) and `stop` (method-routed) pass
+  // through), not here — so they fire regardless of how the command is parsed.
   const global = state.globals.get(target)
   if (global) {
     await handleGlobalTransportCommand(global, command)

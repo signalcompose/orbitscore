@@ -23,6 +23,15 @@ import * as path from 'path'
 /** Who initiated an eval (§3 `evalSource`). */
 export type EvalSource = 'human' | 'agent' | 'replay'
 
+/** Format a Date as `YYYYMMDD-HHMMSS` (local time) for the log filename (§2). */
+export function formatLogStamp(d: Date): string {
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return (
+    `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+  )
+}
+
 /** One `eval` record's payload (the triple stamp is filled by the caller). */
 export interface EvalRecord {
   /** Verbatim evaluated source (§3 `code`). */
@@ -103,7 +112,13 @@ export class SessionLogWriter {
       ? path.basename(s.sourceFile, path.extname(s.sourceFile))
       : 'untitled'
     const dir = s.sourceFile ? path.dirname(s.sourceFile) : this.cwd
-    this.filePath = path.join(dir, `${basename}.${s.stamp}.orbslog`)
+    // Two sessions opened within the same second collide on the timestamp; add a
+    // counter so a stop→start within one second doesn't overwrite the first file.
+    let candidate = path.join(dir, `${basename}.${s.stamp}.orbslog`)
+    for (let n = 2; fs.existsSync(candidate); n++) {
+      candidate = path.join(dir, `${basename}.${s.stamp}-${n}.orbslog`)
+    }
+    this.filePath = candidate
 
     const metaLine = JSON.stringify({
       type: 'meta',

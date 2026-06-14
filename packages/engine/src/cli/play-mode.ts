@@ -55,7 +55,16 @@ export async function playFile(options: PlayOptions): Promise<PlayResult> {
     console.log('♻️ Reusing existing interpreter')
   }
 
-  await interpreter.execute(ir, { documentDirectory })
+  // §L1 (#229): the CLI is a real entry point — record the session (idempotent;
+  // a reused interpreter keeps its rolling buffer). `untitled` fallback dir = cwd.
+  interpreter.enableSessionLog({ engineVersion: '1.1.0', dslVersion: '1.1', cwd: process.cwd() })
+
+  await interpreter.execute(ir, {
+    documentDirectory,
+    source,
+    sourceFile: path.resolve(filepath),
+    evalSource: 'human',
+  })
 
   // Get final state
   const state = interpreter.getState()
