@@ -412,6 +412,7 @@ quantize 境界の前後 10ms
 <li><strong>命名/<code>sourceFile</code></strong>: CLI 経路は <code>.orbs</code> パスを持つので basename 命名・<code>sourceFile</code> が完全に機能する。editor 経路は現状エンジンへファイル名を渡さない(<code>setDocumentDirectory</code> はディレクトリのみ)ため v1 は <code>untitled.&lt;timestamp&gt;.orbslog</code> フォールバック。editor からのファイル名伝達(ログに混じらない制御チャネル)は follow-up。</li>
 <li><strong><code>effect</code> 範囲</strong>: v1 は <strong>LOOP 起動</strong>の解決済み境界のみ <code>nextQuantizedTime</code> で算出。走行中ループへの <code>play()</code> 差し替え・<code>tempo/beat/length</code> の次サイクル遅延は <code>effect:null</code>(follow-up)。replay は <code>transport</code> 駆動で再 quantize するため再現性に影響せず、<code>effect</code> は可読性/検証の補助に留まる。</li>
 <li><strong>tempo の二重記録</strong>: v1 は <code>start</code>/<code>stop</code> のみ <code>transport</code> レコード化。<code>tempo</code> 変更は <code>eval</code> レコードとして残す(上の例に一致)。<code>tempo</code> の <code>transport</code> 二重記録は follow-up。</li>
+<li><strong>単一 GLOBAL 前提</strong>: transport フックは最初の <code>GLOBAL</code> に一度だけ装着する。同一セッションで2つ目の <code>init GLOBAL</code> を定義・使用した場合、その global の <code>start()/stop()</code> はログに記録されない。通常 1 セッション = 1 GLOBAL のため v1 ではスコープ外(follow-up)。</li>
 </ul>
 <h2 id="replay">4. Replay</h2>
 <pre><code>orbitscore replay mypiece.20260612-2130.orbslog              # 忠実リプレイ(実時間)
@@ -459,6 +460,8 @@ LLM)の学習素材とする。形式を分けない(原則
 5)ため追加コストなし。別途議論予定。</li>
 <li><strong>セッション間 diff</strong>:
 同一曲の複数セッションの構造比較(リハーサル分析)。</li>
+<li><strong>preamble バッファの上限</strong>(#276 deferred): <code>start()</code> を呼ばず eval を延々続けると preamble が無制限に成長する。ただし「oldest を捨てる」は <code>init GLOBAL</code> 等の因果の根を失うため不可。早期 flush 等の正しい上限設計は v2。通常用途では <code>start()</code> を早期に呼ぶため実害なし。</li>
+<li><strong>version の自動同期</strong>(#276 deferred): meta ヘッダの <code>engineVersion</code> は現状 <code>version.ts</code> にハードコード。monorepo(engine パッケージ版 ≠ 製品版)+ dist layout のため動的読みは脆く、ビルド時注入/リリーススクリプトで解くべき v2 事項。</li>
 </ol>
 <h2 id="open-questions">8. Open Questions</h2>
 <ol type="1">

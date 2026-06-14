@@ -125,12 +125,6 @@ export class SessionLogWriter {
       ? path.basename(s.sourceFile, path.extname(s.sourceFile))
       : 'untitled'
     const dir = s.sourceFile ? path.dirname(s.sourceFile) : this.cwd
-    // Two sessions opened within the same second collide on the timestamp; add a
-    // counter so a stop→start within one second doesn't overwrite the first file.
-    let candidate = path.join(dir, `${basename}.${s.stamp}.orbslog`)
-    for (let n = 2; fs.existsSync(candidate); n++) {
-      candidate = path.join(dir, `${basename}.${s.stamp}-${n}.orbslog`)
-    }
 
     const metaLine = JSON.stringify({
       type: 'meta',
@@ -144,16 +138,29 @@ export class SessionLogWriter {
     const buffered = this.preamble
     this.preamble = []
     this.disabled = false // a fresh session re-attempts after a prior failure
-    try {
-      // Truncate-create the file with the meta header (a fresh session per start).
-      fs.writeFileSync(candidate, metaLine + '\n')
-    } catch (e) {
-      this.disabled = true
-      this.filePath = null
-      console.warn(
-        `⚠️  session-log: failed to open ${candidate} — logging disabled (playback continues): ${e}`,
-      )
-      return
+
+    // Two sessions sharing the same second collide on the timestamp. Use an
+    // atomic exclusive create (`wx`): EEXIST → try the next `-N` name. This is
+    // race-free (no existsSync→write TOCTOU gap) so a parallel REPL cannot
+    // silently overwrite an existing session log. Any other fs error disables
+    // logging rather than breaking playback (best-effort flight recorder).
+    let candidate = path.join(dir, `${basename}.${s.stamp}.orbslog`)
+    for (let n = 2; ; n++) {
+      try {
+        fs.writeFileSync(candidate, metaLine + '\n', { flag: 'wx' })
+        break
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === 'EEXIST') {
+          candidate = path.join(dir, `${basename}.${s.stamp}-${n}.orbslog`)
+          continue
+        }
+        this.disabled = true
+        this.filePath = null
+        console.warn(
+          `⚠️  session-log: failed to open ${candidate} — logging disabled (playback continues): ${e}`,
+        )
+        return
+      }
     }
     this.filePath = candidate
 

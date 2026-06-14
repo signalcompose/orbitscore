@@ -170,6 +170,17 @@ describe('L1 — SessionLogWriter (§1/§3)', () => {
     expect(fs.existsSync(path.join(dir, 'mypiece.20260614-213005.orbslog'))).toBe(true)
   })
 
+  it('never overwrites a pre-existing log of the same name (atomic exclusive create)', () => {
+    // A file already at the target name (e.g. written by a parallel REPL) must
+    // not be clobbered — start() takes the next `-N` name instead.
+    const taken = path.join(dir, 'mypiece.20260614-213005.orbslog')
+    fs.writeFileSync(taken, 'PRE-EXISTING\n')
+    const w = new SessionLogWriter(META, dir)
+    w.start(startArgs())
+    expect(w.getFilePath()).toBe(path.join(dir, 'mypiece.20260614-213005-2.orbslog'))
+    expect(fs.readFileSync(taken, 'utf8')).toBe('PRE-EXISTING\n') // untouched
+  })
+
   it('round-trips a non-human evalSource (agent / replay)', () => {
     const w = new SessionLogWriter(META, dir)
     w.start(startArgs())
