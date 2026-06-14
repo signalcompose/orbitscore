@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.116 Issue #276 — session log L1 polish（PR #275 bot レビュー反映） (Jun 15, 2026)
+
+**Date**: 2026-06-15
+**Status**: ✅ 実装完了（chore）
+**Issue**: signalcompose/orbitscore#276 / 親 #229（#275 マージ後の follow-up）
+**Branch**: `276-session-log-l1-polish`
+
+**概要**: PR #275（L1）マージ後の claude bot レビューの軽微指摘のうち v1 ハードニング2点を反映。Critical/Important なし。
+
+**対応（v1）**:
+- **衝突ループの TOCTOU 解消**: `fs.writeFileSync(candidate, meta, { flag: 'wx' })`（原子的排他作成）に置換。`existsSync`→`write` の隙間競合を排し、ループも簡潔化（EEXIST→次候補、他の I/O エラーは disabled で best-effort 維持）。並列 REPL でも既存ログを無音上書きしない。
+- **単一 GLOBAL 前提を明記**: `sessionHooksInstalled` は最初の GLOBAL のみフックする旨を SESSION_LOG_SPEC §3.1 + コードコメントに明記。
+
+**deferred（v2 と判断、§7 Future Directions に記録）**:
+- preamble 無上限（素朴な oldest 破棄は init 行を失い因果記録を壊す → 正しい上限設計は v2）
+- version.ts 手動同期（monorepo + dist layout で動的読みが脆い → ビルド時注入/リリーススクリプトの領域）
+
+**テスト**: 既存ファイルを上書きしない wx 原子性テストを追加（+1）。session-log 26件、全体 1090 passed / 23 skipped。
+
 ### 6.115 Issue #229 — session log writer `.orbslog`（Phase 1-L1） (Jun 15, 2026)
 
 **Date**: 2026-06-15

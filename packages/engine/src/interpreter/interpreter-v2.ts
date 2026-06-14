@@ -164,6 +164,8 @@ export class InterpreterV2 {
     // §L1: install the session-log transport hooks on the global ONCE, when it
     // first exists. The closures read live state.currentSourceFile at fire time,
     // so a start/stop in a later eval logs against that eval's context.
+    // v1 (§3.1) assumes a SINGLE global per session — a second `init GLOBAL`
+    // would not get hooked, so its transport would go unlogged (out of v1 scope).
     if (this.state.sessionLog && this.state.currentGlobal && !this.sessionHooksInstalled) {
       this.installSessionHooks(this.state.currentGlobal)
       this.sessionHooksInstalled = true
