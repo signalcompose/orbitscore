@@ -483,7 +483,7 @@ range の上に重なる。コード内 <code>^N</code> は running range を変
 5@v100@g30      // 合成可。^N / ~ / r とも直交</code></pre>
 <ul>
 <li><strong><code>@v</code> = ベロシティ</strong>(決定 #56/#57、E5)。絶対 <code>@v&lt;n&gt;</code>(1..127)または相対 <code>@v+&lt;n&gt;</code>/<code>@v-&lt;n&gt;</code>(<code>seq.vel()</code> に加算しクランプ)。アクセントはベロシティの増減であり専用トークンを持たない。</li>
-<li><strong><code>@g</code> = アーティキュレーション</strong>をゲート<strong>パーセント</strong>で表す(<code>@g30</code> = 0.30、<code>@g120</code> = 1.20)。<code>{ }</code> レガートと同一軸上の per-note 値で、100 超は次スロットへ食い込む(レガート寄り)。当該ノートの <code>seq.gate()</code> を上書きする。<code>{ }</code> を併用した場合は <code>{ }</code> レガートが <code>@g</code> を上書きする(legato が優先)。</li>
+<li><strong><code>@g</code> = アーティキュレーション</strong>をゲート<strong>パーセント</strong>で表す(<code>@g30</code> = 0.30、<code>@g120</code> = 1.20)。<code>{ }</code> レガートと同一軸上の per-note 値で、100 超は次スロットへ食い込む(レガート寄り)。当該ノートの <code>seq.gate()</code> を上書きする。<code>{ }</code> を併用した場合は <code>{ }</code> レガートが <code>@g</code> を上書きする(legato が優先。例: <code>{5@g120}</code> は <code>@g120</code> ではなく <code>{ }</code> のオーバーラップ量で鳴る)。</li>
 <li><strong>整数(パーセント)引数</strong>を採るのは、小数点がレキサーでトークンを分断するのを避けるため(<code>@g0.3</code> ではなく <code>@g30</code>)。同一ノートで重複指定した場合は last-wins(警告なし)。</li>
 <li>絶対長さ修飾 <code>@u</code>(v1.0 の <code>@U</code>)は<strong>非対応</strong>(#41)。長さはリズム木+タイが持つ。</li>
 <li>ランダム化の per-note 修飾 <code>r</code>(要素確率)/ <code>^r</code>(ランダムオクターブ)も同じく per-note 修飾子だが、スタックの <code>.r</code> thinning と<strong>同一プリミティブ</strong>のため §6.2 にまとめて定義する。</li>
@@ -712,7 +712,7 @@ m7.drop(2)             // コード変数にも適用可</code></pre>
 <li><code>r</code> は<strong>1つのプリミティブ</strong>で、付く位置によって意味が決まる: 要素直後 <code>Xr</code> = その要素の発音確率(既定 0.5)、スタック直後 <code>.r</code>/<code>.r(p)</code> = スタックの間引き、<code>^</code> と組んだ <code>^r</code> = ランダムオクターブ ±1。</li>
 <li><strong>ランタイム・サイクル毎に再抽選</strong>: dispatch の各ループ反復で振り直す。<code>.orbslog</code> は実行記録であって結果の録音ではないため、再生時も振り直し、シードは持たない(決定 #50/#52/#53)。</li>
 <li><strong>最小声部の保証はない</strong>: <code>.r</code> は全声部が落ちて無音になるサイクルも許容する。</li>
-<li>要素自身の <code>Xr</code> はスタックの <code>.r(p)</code> に優先する(<code>[1, 3r, 5].r(1)</code> は 1/5 が常に鳴り、3 は自身の 0.5 に従う)。</li>
+<li>要素自身の <code>Xr</code> はスタックの <code>.r(p)</code> に優先する: <code>[1, 3r, 5].r(1)</code> は<strong>度数 1 と度数 5</strong> が常に鳴り(スタックの <code>.r(1)</code>=確率 1.0)、<strong>度数 3</strong> は自身の <code>3r</code>(0.5)に従う(test: <code>tests/midi/random.spec.ts</code>)。</li>
 </ul>
 <hr />
 <h2 id="repetition-n-and-pattern-variables-ドメイン共通">6.5 Repetition
