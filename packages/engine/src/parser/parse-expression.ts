@@ -590,9 +590,13 @@ export class ExpressionParser {
       } else if (method === 'hold') {
         // .hold() — group-level auto common-tone tie (§5.3). Takes no argument.
         scope.hold = true
-      } else {
+      } else if (method === 'voicelead' || method === 'vl') {
         // .voicelead() / .vl() — group-level auto voice-leading (§6.3, C1). No argument.
         scope.voicelead = true
+      } else {
+        // Defensive: any method in SCOPE_CHAIN_OPS must be handled above. A new entry
+        // added to the set without a branch here is a wiring bug, surfaced loudly.
+        throw new Error(`Internal: unhandled scope-chain method '${method}' (§3)`)
       }
 
       const rparen = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')

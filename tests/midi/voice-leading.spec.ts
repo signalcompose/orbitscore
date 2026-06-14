@@ -157,6 +157,18 @@ describe('C1 — voice-leading dispatch (§6.3)', () => {
     expect(led).not.toContain(62) // chord2's D is voice-led up to D5(74), not left at D4(62)
   })
 
+  it('an anchor chord with authored `^N` keeps its octave; the next chord leads from it', async () => {
+    // chord1 [1^1, 3^1, 5^1] anchors UP an octave: C5/E5/G5 (72/76/79). chord2 [5,7,2]
+    // (G/B/D) leads from that raised anchor — voices land in the C5 register, not C4.
+    const led = await ons('([1^1, 3^1, 5^1], [5,7,2]).voicelead()')
+    expect(led).toContain(72) // C5 anchor (authored ^1 kept on the first chord)
+    expect(led).toContain(79) // G5 anchor
+    expect(led).not.toContain(60) // not C4 — the anchor's authored octave was honored
+    // chord2's G is a common tone with the anchor's G5(79) → retained up high, not pulled to G4(67)
+    expect(led).toContain(79)
+    expect(led).not.toContain(67) // G4 absent — chord2 led into the raised register
+  })
+
   it('unequal cardinality at dispatch: a 3-voice chord leads from a 4-voice anchor', async () => {
     // chord1 [1,3,5,7] (4 voices) anchors; chord2 [5,7,2] (3 voices) leads min(4,3)=3 voices.
     const led = await ons('([1,3,5,7], [5,7,2]).voicelead()')
