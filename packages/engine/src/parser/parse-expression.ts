@@ -29,6 +29,21 @@ import { ParserUtils } from './parser-utils'
 /** Voicing operators parsed as postfix on a chord value / `[ ]` stack (§12, #49/#51). */
 const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootless'])
 
+/**
+ * Pitch-scope chain methods on a group (§3): `.root()`/`.mode()`/`.oct()`/`.hold()`
+ * and `.voicelead()`/`.vl()` (§6.3 auto voice-leading, C1). All build a PlayScoped node.
+ */
+const SCOPE_CHAIN_OPS = new Set(['root', 'mode', 'oct', 'hold', 'voicelead', 'vl'])
+
+/** The accumulated pitch-scope chain on a group (§3): the result of {@link ExpressionParser.parseScopeChain}. */
+type ScopeChain = {
+  root?: ScopeRoot
+  mode?: ScopeMode
+  oct?: number
+  hold?: boolean
+  voicelead?: boolean
+}
+
 /** Per-op `[min, max]` argument arity (§12.3): drop ≥1, invert exactly 1, the rest 0. */
 const VOICING_ARITY: Record<string, [number, number]> = {
   drop: [1, Infinity],
@@ -536,12 +551,12 @@ export class ExpressionParser {
    * not allowed; only nesting overrides (§3, decision #10). The scope stays
    * symbolic here; it is resolved lexically at dispatch (§7-0).
    */
-  private parseScopeChain(): { root?: ScopeRoot; mode?: ScopeMode; oct?: number; hold?: boolean } {
-    const scope: { root?: ScopeRoot; mode?: ScopeMode; oct?: number; hold?: boolean } = {}
+  private parseScopeChain(): ScopeChain {
+    const scope: ScopeChain = {}
 
     while (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
       const method = ParserUtils.peek(this.tokens, this.pos).value
-      if (method !== 'root' && method !== 'mode' && method !== 'oct' && method !== 'hold') break
+      if (!SCOPE_CHAIN_OPS.has(method)) break
 
       this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // DOT
       this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // method IDENTIFIER
@@ -572,9 +587,16 @@ export class ExpressionParser {
           throw new Error('duplicate .oct() on the same group (§3)')
         }
         scope.oct = this.parseSignedNumber()
-      } else {
+      } else if (method === 'hold') {
         // .hold() — group-level auto common-tone tie (§5.3). Takes no argument.
         scope.hold = true
+      } else if (method === 'voicelead' || method === 'vl') {
+        // .voicelead() / .vl() — group-level auto voice-leading (§6.3, C1). No argument.
+        scope.voicelead = true
+      } else {
+        // Defensive: any method in SCOPE_CHAIN_OPS must be handled above. A new entry
+        // added to the set without a branch here is a wiring bug, surfaced loudly.
+        throw new Error(`Internal: unhandled scope-chain method '${method}' (§3)`)
       }
 
       const rparen = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
@@ -719,7 +741,7 @@ export class ExpressionParser {
           changed = true
           continue
         }
-        if (method === 'root' || method === 'mode' || method === 'oct' || method === 'hold') {
+        if (SCOPE_CHAIN_OPS.has(method)) {
           if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
           const scope = this.parseScopeChain()
           this.assertChainClosesRun()
@@ -853,11 +875,12 @@ export class ExpressionParser {
     const rparenResult = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
     this.pos = rparenResult.newPos
 
-    // Check for a chain on the group itself. `.root()/.mode()/.oct()` are pitch-
-    // scope chains → a PlayScoped node (§3); `.chop()` is the audio modifier.
+    // Check for a chain on the group itself. `.root()/.mode()/.oct()/.hold()` and
+    // `.voicelead()/.vl()` are pitch-scope chains → a PlayScoped node (§3); `.chop()`
+    // is the audio modifier.
     if (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
       const method = ParserUtils.peek(this.tokens, this.pos).value
-      if (method === 'root' || method === 'mode' || method === 'oct' || method === 'hold') {
+      if (SCOPE_CHAIN_OPS.has(method)) {
         const scope = this.parseScopeChain()
         this.assertChainClosesRun()
         // B2: single group. Juxtaposition runs (multiple groups sharing the

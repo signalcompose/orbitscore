@@ -13,6 +13,7 @@ interface ScopeFrame {
   mode?: ScopeMode
   oct?: number
   hold?: boolean
+  voicelead?: boolean
 }
 
 /**
@@ -27,6 +28,7 @@ function resolveScope(stack: ScopeFrame[]): TimedEventScope | undefined {
   let mode: ScopeMode | undefined
   let groupOct: number | undefined
   let hold: boolean | undefined
+  let voicelead: boolean | undefined
   let haveContext = false
   for (let i = stack.length - 1; i >= 0; i--) {
     const f = stack[i]
@@ -39,11 +41,12 @@ function resolveScope(stack: ScopeFrame[]): TimedEventScope | undefined {
       groupOct = f.oct
     }
     if (f.hold) hold = true // §5.3: any enclosing .hold() group enables hold for the leaf
+    if (f.voicelead) voicelead = true // §6.3: any enclosing .voicelead()/.vl() group enables it
   }
-  if (!haveContext && groupOct === undefined && !hold) {
+  if (!haveContext && groupOct === undefined && !hold && !voicelead) {
     return undefined
   }
-  return { root, mode, groupOct, ...(hold && { hold }) }
+  return { root, mode, groupOct, ...(hold && { hold }), ...(voicelead && { voicelead }) }
 }
 
 /**
@@ -143,6 +146,7 @@ export function calculateEventTiming(
           mode: element.mode,
           oct: element.oct,
           hold: element.hold,
+          voicelead: element.voicelead,
         }
         const nestedEvents = calculateEventTiming(
           element.groups,

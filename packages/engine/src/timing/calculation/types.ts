@@ -16,6 +16,7 @@ export interface TimedEventScope {
   mode?: ScopeMode
   groupOct?: number
   hold?: boolean // §5.3 group-level `.hold()` — auto common-tone tie between stacks
+  voicelead?: boolean // §6.3 group-level `.voicelead()`/`.vl()` — auto voice-leading (C1)
 }
 
 /**
