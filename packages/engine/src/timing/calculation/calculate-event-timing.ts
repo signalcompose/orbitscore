@@ -7,11 +7,12 @@ import { ScopeRoot, ScopeMode } from '../../parser/types'
 
 import { TimedEvent, TimedEventScope } from './types'
 
-/** One enclosing `.root()`/`.mode()`/`.oct()` group on the path to a leaf. */
+/** One enclosing `.root()`/`.mode()`/`.oct()`/`.hold()` group on the path to a leaf. */
 interface ScopeFrame {
   root?: ScopeRoot
   mode?: ScopeMode
   oct?: number
+  hold?: boolean
 }
 
 /**
@@ -25,6 +26,7 @@ function resolveScope(stack: ScopeFrame[]): TimedEventScope | undefined {
   let root: ScopeRoot | undefined
   let mode: ScopeMode | undefined
   let groupOct: number | undefined
+  let hold: boolean | undefined
   let haveContext = false
   for (let i = stack.length - 1; i >= 0; i--) {
     const f = stack[i]
@@ -36,11 +38,12 @@ function resolveScope(stack: ScopeFrame[]): TimedEventScope | undefined {
     if (groupOct === undefined && f.oct !== undefined) {
       groupOct = f.oct
     }
+    if (f.hold) hold = true // §5.3: any enclosing .hold() group enables hold for the leaf
   }
-  if (!haveContext && groupOct === undefined) {
+  if (!haveContext && groupOct === undefined && !hold) {
     return undefined
   }
-  return { root, mode, groupOct }
+  return { root, mode, groupOct, ...(hold && { hold }) }
 }
 
 /**
@@ -135,7 +138,12 @@ export function calculateEventTiming(
         // among its groups exactly as a nested of equal length would (so
         // `(A)(B).root(X)` has the same slots as `(A)(B)`). Push the group's
         // scope frame so descendant leaves resolve inner→outer.
-        const frame: ScopeFrame = { root: element.root, mode: element.mode, oct: element.oct }
+        const frame: ScopeFrame = {
+          root: element.root,
+          mode: element.mode,
+          oct: element.oct,
+          hold: element.hold,
+        }
         const nestedEvents = calculateEventTiming(
           element.groups,
           elementDuration,
@@ -175,6 +183,11 @@ export function calculateEventTiming(
           )
           if (element.octaveShift) {
             for (const ev of voiceEvents) applyStackOctaveShift(ev, element.octaveShift)
+          }
+          // §5.2: a `_n` voice (a tie-flagged PlayPitch) tags its events so the
+          // output stage can resolved-pitch-match against the previous stack.
+          if (voice && typeof voice === 'object' && voice.type === 'pitch' && voice.tie) {
+            for (const ev of voiceEvents) ev.voiceTie = true
           }
           events.push(...voiceEvents)
         }
@@ -218,6 +231,39 @@ export function calculateEventTiming(
           )
           events.push(...nestedEvents)
         }
+      } else if (element.type === 'tie') {
+        // §5.1: a `_` event tie occupies its slot but carries no pitch — it extends
+        // the PREVIOUS emitting note. The output stage absorbs it; here it just
+        // claims the slot duration (sliceNumber 0, no pitch) so the span is right.
+        events.push({
+          sliceNumber: 0,
+          startTime: elementStartTime,
+          duration: elementDuration,
+          depth,
+          tie: true,
+          ...(scope && { scope }),
+        })
+      } else if (element.type === 'legato') {
+        // §4/§5.4: same `( )` time-division; tag interior events legato (their
+        // note-off is delayed past the next note-on). The group-tail note (the max
+        // startTime) follows the normal gate, so it is NOT tagged.
+        const nestedEvents = calculateEventTiming(
+          element.elements,
+          elementDuration,
+          elementStartTime,
+          depth + 1,
+          scopeStack,
+        )
+        if (nestedEvents.length > 0) {
+          let tailStart = nestedEvents[0].startTime
+          for (const ev of nestedEvents) {
+            if (ev.startTime > tailStart) tailStart = ev.startTime
+          }
+          for (const ev of nestedEvents) {
+            if (ev.startTime < tailStart) ev.legato = true
+          }
+        }
+        events.push(...nestedEvents)
       } else if (element.type === 'chord_ref') {
         // §6: a bare chord ref is resolved (spread) by the chord evaluator BEFORE
         // timing. Reaching here means evaluation was skipped — a wiring bug,
@@ -225,6 +271,13 @@ export function calculateEventTiming(
         throw new Error(
           `Internal: unresolved chord ref "${element.name}" reached the timing walk; ` +
             `chord refs must be evaluated before scheduling (§6).`,
+        )
+      } else if (element.type === 'repeat') {
+        // §6.5: a `*n` repeat is expanded (spliced) by the resolver BEFORE timing.
+        // Reaching here means resolution was skipped — a wiring bug.
+        throw new Error(
+          `Internal: unresolved repeat (*${element.count}) reached the timing walk; ` +
+            `repetitions must be expanded before scheduling (§6.5).`,
         )
       }
     }

@@ -15,6 +15,7 @@ import {
   PlayPitch,
   PlayScoped,
   PlayStack,
+  PlayLegato,
   StackElement,
   PlayChordRef,
   PlayChordRemoval,
@@ -86,6 +87,17 @@ export class ExpressionParser {
 
     if (token.type === 'LBRACKET') {
       return this.parseStack()
+    }
+
+    if (token.type === 'LBRACE') {
+      return this.parseLegato()
+    }
+
+    if (token.type === 'UNDERSCORE') {
+      // A bare `_` event-level tie (§5.1). At the top level / in a group it carries
+      // no degree; the voice-tie prefix form (`_5`) lives inside `[ ]` (parseStack).
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      return { value: { type: 'tie' as const }, newPos: this.pos }
     }
 
     throw new Error(`Unexpected token in argument: ${token.type}`)
@@ -440,12 +452,12 @@ export class ExpressionParser {
    * not allowed; only nesting overrides (§3, decision #10). The scope stays
    * symbolic here; it is resolved lexically at dispatch (§7-0).
    */
-  private parseScopeChain(): { root?: ScopeRoot; mode?: ScopeMode; oct?: number } {
-    const scope: { root?: ScopeRoot; mode?: ScopeMode; oct?: number } = {}
+  private parseScopeChain(): { root?: ScopeRoot; mode?: ScopeMode; oct?: number; hold?: boolean } {
+    const scope: { root?: ScopeRoot; mode?: ScopeMode; oct?: number; hold?: boolean } = {}
 
     while (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
       const method = ParserUtils.peek(this.tokens, this.pos).value
-      if (method !== 'root' && method !== 'mode' && method !== 'oct') break
+      if (method !== 'root' && method !== 'mode' && method !== 'oct' && method !== 'hold') break
 
       this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // DOT
       this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // method IDENTIFIER
@@ -471,11 +483,14 @@ export class ExpressionParser {
           throw new Error('.root() and .mode() cannot both be set on the same group (§3)')
         }
         scope.mode = this.parseModeArg()
-      } else {
+      } else if (method === 'oct') {
         if (scope.oct !== undefined) {
           throw new Error('duplicate .oct() on the same group (§3)')
         }
         scope.oct = this.parseSignedNumber()
+      } else {
+        // .hold() — group-level auto common-tone tie (§5.3). Takes no argument.
+        scope.hold = true
       }
 
       const rparen = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
@@ -577,6 +592,59 @@ export class ExpressionParser {
   }
 
   /**
+   * Apply the §6.5 / §3 postfix operators to a just-completed element, LEFT TO
+   * RIGHT: `*n` repetition (→ PlayRepeat) and `.root()/.mode()/.oct()/.hold()`
+   * scope chains (→ PlayScoped). Public so the statement-level arg parser shares one
+   * implementation. Returns `changed` so the caller can close the juxtaposition
+   * run (Q1: a `*n` / chain closes the run, like a group chain does).
+   *
+   * A bare name (a string identifier, top-level play arg) is lifted to a chord_ref
+   * before wrapping so the wrapped node stays a typed PlayElement; a name with NO
+   * postfix is left untouched (so `global.key(C)` keeps its bare-string arg — only
+   * play resolution treats a bare string as a name reference).
+   */
+  parsePostfix(element: PlayElement | string): {
+    value: PlayElement | string
+    newPos: number
+    changed: boolean
+  } {
+    let el = element
+    let changed = false
+    for (;;) {
+      const t = ParserUtils.current(this.tokens, this.pos).type
+      if (t === 'ASTERISK') {
+        if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        const numTok = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+        this.pos = numTok.newPos
+        const count = ParserUtils.parseNumber(numTok.token)
+        if (!Number.isInteger(count) || count < 1) {
+          throw new Error(
+            `*n repetition count must be an integer ≥ 1 (got ${count}); ` +
+              `*0 is rejected at parse time and *1 is identity (§6.5).`,
+          )
+        }
+        el = { type: 'repeat', element: el, count }
+        changed = true
+        continue
+      }
+      if (t === 'DOT') {
+        const method = ParserUtils.peek(this.tokens, this.pos).value
+        if (method === 'root' || method === 'mode' || method === 'oct' || method === 'hold') {
+          if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
+          const scope = this.parseScopeChain()
+          this.assertChainClosesRun()
+          el = { type: 'scoped', groups: [el], ...scope }
+          changed = true
+          continue
+        }
+      }
+      break
+    }
+    return { value: el, newPos: this.pos, changed }
+  }
+
+  /**
    * Parse nested play structure
    */
   private parseNestedPlay(): {
@@ -602,6 +670,14 @@ export class ExpressionParser {
       this.parseNestedPlayElement(elements)
       collapseScopedRun(elements, runStart)
 
+      // §6.5 / §3 postfix on the just-completed element (`*n`, then a chain).
+      const lastIdx = elements.length - 1
+      const post = this.parsePostfix(elements[lastIdx]!)
+      if (post.changed) {
+        elements[lastIdx] = post.value as PlayElement
+        runStart = lastIdx // a *n / chain closes the juxtaposition run (§6.5 Q1)
+      }
+
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       // Handle comma or continue. A comma ends the juxtaposition run.
       const sepType = ParserUtils.current(this.tokens, this.pos).type
@@ -621,7 +697,7 @@ export class ExpressionParser {
     // scope chains → a PlayScoped node (§3); `.chop()` is the audio modifier.
     if (ParserUtils.current(this.tokens, this.pos).type === 'DOT') {
       const method = ParserUtils.peek(this.tokens, this.pos).value
-      if (method === 'root' || method === 'mode' || method === 'oct') {
+      if (method === 'root' || method === 'mode' || method === 'oct' || method === 'hold') {
         const scope = this.parseScopeChain()
         this.assertChainClosesRun()
         // B2: single group. Juxtaposition runs (multiple groups sharing the
@@ -697,6 +773,30 @@ export class ExpressionParser {
       const stackResult = this.parseStack()
       this.pos = stackResult.newPos
       voices.push(stackResult.value)
+    } else if (cur === 'LBRACE') {
+      // A legato subtree voice, e.g. [{1, 2}, 3] (a polyphonic legato line, §4).
+      const legatoResult = this.parseLegato()
+      this.pos = legatoResult.newPos
+      voices.push(legatoResult.value)
+    } else if (cur === 'UNDERSCORE') {
+      // Voice-level tie `_n` (§5.2): a `_` prefix on a stack voice (`_5`, `_b7`).
+      // Intercepted BEFORE the IDENTIFIER branch (the tokenizer emits UNDERSCORE,
+      // not IDENTIFIER, for a leading `_`). Resolved-pitch-matched at dispatch.
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      const after = ParserUtils.current(this.tokens, this.pos)
+      if (after.type === 'ACCIDENTAL') {
+        const pitchResult = this.parsePitch()
+        this.pos = pitchResult.newPos
+        voices.push({ ...this.asStackVoice(pitchResult.value), tie: true })
+      } else if (after.type === 'NUMBER') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        const modResult = this.parsePitchModifiers(ParserUtils.parseNumber(after), 0)
+        this.pos = modResult.newPos
+        voices.push({ ...this.asStackVoice(modResult.value), tie: true })
+      } else {
+        // a bare `_` voice (degenerate) — an event-tie marker
+        voices.push({ type: 'tie' })
+      }
     } else if (cur === 'LPAREN') {
       // Independent subtree voice, e.g. [1, (5, 3, 2, 1)] (one-part polyphony, §4).
       const nestedResult = this.parseNestedPlay()
@@ -769,6 +869,53 @@ export class ExpressionParser {
   }
 
   /**
+   * Parse a `{ }` legato group (§4 / §5.4). Same element grammar and time-division
+   * as a `( )` group (it reuses parseNestedPlayElement + collapseScopedRun + the
+   * `*n`/chain postfix); the legato semantics (note-off delayed past the next
+   * note-on) are realized at the output stage. A trailing chain on the group itself
+   * is not part of v1.1 legato grammar.
+   */
+  private parseLegato(): { value: PlayLegato; newPos: number } {
+    const elements: PlayElement[] = []
+    let runStart = 0
+    const lbrace = ParserUtils.expect(this.tokens, this.pos, 'LBRACE')
+    this.pos = lbrace.newPos
+
+    while (
+      ParserUtils.current(this.tokens, this.pos).type !== 'RBRACE' &&
+      !ParserUtils.isEOF(this.tokens, this.pos)
+    ) {
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'RBRACE') break
+      this.parseNestedPlayElement(elements)
+      collapseScopedRun(elements, runStart)
+
+      const lastIdx = elements.length - 1
+      const post = this.parsePostfix(elements[lastIdx]!)
+      if (post.changed) {
+        elements[lastIdx] = post.value as PlayElement
+        runStart = lastIdx
+      }
+
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      const sepType = ParserUtils.current(this.tokens, this.pos).type
+      if (sepType === 'COMMA') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        runStart = elements.length
+      } else if (sepType === 'RBRACE') {
+        break
+      } else if (sepType !== 'LPAREN' && sepType !== 'LBRACE' && sepType !== 'LBRACKET') {
+        break // not a comma and not a juxtaposition starter → let expect(RBRACE) report
+      }
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+    }
+
+    const rbrace = ParserUtils.expect(this.tokens, this.pos, 'RBRACE')
+    this.pos = rbrace.newPos
+    return { value: { type: 'legato', elements }, newPos: this.pos }
+  }
+
+  /**
    * Parse a single element within a nested play structure
    */
   private parseNestedPlayElement(elements: PlayElement[]): void {
@@ -782,6 +929,15 @@ export class ExpressionParser {
       const stackResult = this.parseStack()
       this.pos = stackResult.newPos
       elements.push(stackResult.value)
+    } else if (cur === 'LBRACE') {
+      // Legato group { } (§4/§5.4).
+      const legatoResult = this.parseLegato()
+      this.pos = legatoResult.newPos
+      elements.push(legatoResult.value)
+    } else if (cur === 'UNDERSCORE') {
+      // Event-level tie `_` (§5.1): occupies a slot, extends the previous event.
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      elements.push({ type: 'tie' })
     } else if (cur === 'LPAREN') {
       // Nested element
       const nestedResult = this.parseNestedPlay()

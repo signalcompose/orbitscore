@@ -1,0 +1,25 @@
+// Bach — Chorale "O Haupt voll Blut und Wunden" (Passion Chorale), opening 8 bars.
+// AUTO-TRANSCRIBED (public-domain MIDI, Mutopia) by tools/midi2orbs-chordal.js —
+// CHORDAL mode: each beat = the sounding pitches as a [ ] stack (structural ^ per voice,
+// no sticky-range bleed). This is where [ ] is the natural fit (homophony). Verified vs source.
+var global = init GLOBAL
+global.tempo(60)
+global.beat(4 by 4)
+global.key("D")
+global.start()
+
+var choir = init global.seq
+choir.midi("IAC", 1).octave(4).gate(0.95).vel(78)
+choir.length(8)
+choir.play(
+  ([1, b3, 5], [b6^-1, 1, b3, 1^+1], [5^-1, b3, 5, b7], [4^-1, 1, 4, b6]),
+  ([b3^-1, b7^-1, b3, 5], [b6^-2, 1, b3, 4], [b7^-2, b7^-1, 2, _4], [b3^-1, b7^-1, b3, 5]),
+  ([7^-2, 2, 5, 2^+1], [1^-1, 2, 5, b3^+1], [b3^-1, 1, 5, b3^+1], [5^-1, 1, 5, 2^+1]),
+  ([5^-2, 7^-1, 5, 2^+1], [1^-1, 5^-1, b3, 1^+1], [_1^-1, _5^-1, _b3, _1^+1], [_1^-1, _5^-1, _b3, _1^+1]),
+  ([1, b3, 5], [b6^-1, 1, b3, 1^+1], [5^-1, b3, 5, b7], [4^-1, 1, 4, b6]),
+  ([b3^-1, b7^-1, b3, 5], [b6^-2, 1, b3, 4], [b7^-2, b7^-1, 2, _4], [b3^-1, b7^-1, b3, 5]),
+  ([7^-2, 2, 5, 2^+1], [1^-1, 2, 5, b3^+1], [b3^-1, 1, 5, b3^+1], [5^-1, 1, 5, 2^+1]),
+  ([5^-2, 7^-1, 5, 2^+1], [1^-1, 5^-1, b3, 1^+1], [_1^-1, _5^-1, _b3, _1^+1], [_1^-1, _5^-1, _b3, _1^+1])
+)
+
+LOOP(choir)

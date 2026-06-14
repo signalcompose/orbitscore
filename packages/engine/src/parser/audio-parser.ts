@@ -26,6 +26,7 @@ export type {
   SequenceStatement,
   TransportStatement,
   ChordBinding,
+  PatternBinding,
   ImportStatement,
   MethodChain,
   RandomValue,
@@ -33,6 +34,7 @@ export type {
   PlayNested,
   PlayWithModifier,
   PlayModifier,
+  PlayRepeat,
   Meter,
 } from './types'
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { resolveChords, ChordLookup } from '../../packages/engine/src/midi/chord/resolve-chords'
+import { resolveChords, BindingLookup } from '../../packages/engine/src/midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../../packages/engine/src/midi/chord/predefined-chords'
 
 /**
@@ -9,7 +9,8 @@ import { PREDEFINED_CHORDS } from '../../packages/engine/src/midi/chord/predefin
  * the evaluator is tested in isolation from the parser and the namespace.
  */
 
-const lookup: ChordLookup = (name) => PREDEFINED_CHORDS[name]
+const lookup: BindingLookup = (name) =>
+  PREDEFINED_CHORDS[name] ? { kind: 'chord', voices: PREDEFINED_CHORDS[name]! } : undefined
 
 const ref = (name: string, octaveShift = 0) => ({ type: 'chord_ref' as const, name, octaveShift })
 const rm = (degree: number, alteration = 0) => ({
@@ -93,7 +94,7 @@ describe('Phase 3 — chord resolution (§6)', () => {
   it('an unknown chord name resolves to no voices + a warning', () => {
     const { stack, warnings } = resolveStack([ref('nope')])
     expect(stack.voices).toEqual([])
-    expect(warnings[0]).toMatch(/unknown chord "nope"/)
+    expect(warnings[0]).toMatch(/unknown name "nope"/)
   })
 
   it('a bare chord ref as a standalone element becomes a one-slot stack', () => {
@@ -104,6 +105,36 @@ describe('Phase 3 — chord resolution (§6)', () => {
   it('a literal stack with no chord refs is unchanged', () => {
     const { stack, warnings } = resolveStack([1, 3, 5])
     expect(stack).toEqual({ type: 'stack', voices: [1, 3, 5] })
+    expect(warnings).toHaveLength(0)
+  })
+})
+
+describe('Phase R — pattern resolution cycle guard (§6.5)', () => {
+  it('a self-referential pattern (`var riff = (riff)`) warns and stops, no overflow', () => {
+    const self: BindingLookup = (name) =>
+      name === 'riff' ? { kind: 'pattern', elements: [ref('riff')] } : undefined
+    const { elements, warnings } = resolveChords([ref('riff') as any], self)
+    expect(elements).toEqual([])
+    expect(warnings.some((w) => /circular pattern reference "riff"/.test(w))).toBe(true)
+  })
+
+  it('mutual recursion (`a → b → a`) is caught, not run to a stack overflow', () => {
+    const mutual: BindingLookup = (name) => {
+      if (name === 'a') return { kind: 'pattern', elements: [ref('b')] }
+      if (name === 'b') return { kind: 'pattern', elements: [ref('a')] }
+      return undefined
+    }
+    const { warnings } = resolveChords([ref('a') as any], mutual)
+    expect(warnings.some((w) => /circular pattern reference/.test(w))).toBe(true)
+  })
+
+  it('legitimate sibling reuse (`play(riff, riff)`) is NOT flagged as circular', () => {
+    // visiting is a per-branch set (removed after each expansion), so reusing the
+    // same finished pattern as a sibling is fine — only a name on the LIVE branch loops.
+    const reuse: BindingLookup = (name) =>
+      name === 'riff' ? { kind: 'pattern', elements: [1, 5] } : undefined
+    const { elements, warnings } = resolveChords([ref('riff') as any, ref('riff') as any], reuse)
+    expect(elements).toEqual([1, 5, 1, 5])
     expect(warnings).toHaveLength(0)
   })
 })

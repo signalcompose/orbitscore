@@ -17,6 +17,65 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.109 Issue #227 + #236 — Phase R (`*n`+パターン変数) + Phase 4 (タイ/レガート/hold) (Jun 14, 2026)
+
+**Date**: 2026-06-14
+**Status**: ✅ 実装完了（Phase R + Phase 4、1 ブランチ。/simplify + レビュー前）
+**Issue**: signalcompose/orbitscore#227, #236
+**Branch**: `227-phase-r-and-phase-4`
+
+**方針**: Phase R（パーサー/評価器・低リスク）→ Phase 4（dispatch）を 1 ブランチ・コミット群分離で。Phase 3 の namespace 基盤（Global registry / `BoundValue.kind`）を再利用。code-architect blueprint 済（`PlayRepeat` ノード + eval 時展開、`chord_ref` を「名前参照」に一般化し kind 分岐、`*n` 後置は左→右で chain と合成）。
+
+**本コミット（R: `*n` 反復, §6.5）**:
+- `parser/types.ts`: `ASTERISK` トークン、`PlayRepeat`（transient、L2 で n 兄弟へ展開）を PlayElement union に。`PlayChordRef` を「名前参照（chord/pattern を kind で分岐）」と再定義
+- `parser/tokenizer.ts`: `*` トークン
+- `parser/parse-expression.ts`: `parsePostfix`（`*n`→PlayRepeat / `.root()`→PlayScoped を左→右、§6.5 例 `riff*4.root(3)`・`(a)(b).root(2)*2`）。`collapseScopedRun` 後に適用、`*n`/chain は run を閉じる（Q1）。bare 文字列名は wrap 時のみ chord_ref へ昇格（`global.key(C)` は不変）
+- `parser/parse-statement.ts`: `parseArguments` でも `parsePostfix` 共有
+- `midi/chord/resolve-chords.ts`: `BindingLookup`（name→BoundValue）へ一般化。`resolveElements`（1→N walker）で `*n` 展開（deep clone）・名前参照を kind 分岐（chord→縦 stack / pattern→横 splice）・unknown は warning。stack 内の名前は chord 限定（pattern/unbound は warning）
+- `core/global.ts`: `definePattern` / `getBinding`（chord namespace を pattern と共有）
+- `core/sequence.ts`: `play()` の resolver を `getBinding` に
+- `timing/calculate-event-timing.ts`: 未解決 `repeat` の internal-error ガード
+
+**決定（blueprint）**: `chord_ref` はリネームせず「名前参照」として kind 分岐（churn 回避）。Tidal 差異: OrbitScore `*n` はスロット占有反復（Tidal `!`）、スロット内分割は nest `(1,1)`。
+
+**テスト**: `repeat-parsing.spec.ts` 7件 / `repeat-timing.spec.ts` 5件（`*0` エラー・`*1` 恒等・左→右 postfix・グループ内反復・audio スライス値で pitch 非依存）。chord 系テストの unknown 警告文言を「unknown name」へ更新。全体 939 passed / 23 skipped。
+
+**追加コミット（R: パターン変数, §6.5）**:
+- `parser/parse-statement.ts`: `parseVarDeclaration` に `var NAME = (...)` 分岐（RHS が `(` 始まり。init/chord は不変）、`parsePatternBinding`（トップレベル兄弟 run を parseArgument+collapseScopedRun+postfix で。トップレベルのカンマは拒否＝Q2、NEWLINE/EOF で終端、juxtaposition は LPAREN で継続）
+- `interpreter/process-statement.ts`: `pattern_binding` を currentGlobal.definePattern に配線
+- 解決は R の `*n` コミットで導入済（`resolveName` の pattern 分岐＝横 splice、chord と同一 namespace を kind 分岐）。単一グループ→1スロット / juxtaposition→複数兄弟 splice。`riff*3`・`riff.root(3)`・chord と共存。評価時値渡し（play() 時点で解決、再定義は走行中パターンに非影響）
+- core spec は specs-v2 を正本として参照（§6.5 + Tidal 差異注記は PITCH_DSL_SPEC が正本。core sync は別 Issue #237）
+
+**テスト**: `pattern-binding-parsing.spec.ts` 5件 / `sequence-pattern-dispatch.spec.ts` 8件（単一/juxtaposition splice・`*n`・`.root()`・chord 共存・評価時値渡し・unknown warning・interpreter 配線）。全体 952 passed / 23 skipped。**Phase R 完了**。
+
+**追加コミット（Phase 4: タイ / 声部タイ / レガート / hold, §5/§4）**:
+- `parser/tokenizer.ts`: `UNDERSCORE`（先頭 `_` を傍受。中間 `_` の識別子は不変）/ `LBRACE` / `RBRACE`
+- `parser/types.ts`: `PlayTie`（`_` イベントタイ）/ `PlayLegato`（`{ }`）を PlayElement へ。`PlayPitch.tie`（`_n` 声部タイ）/ `PlayScoped.hold`
+- `parser/parse-expression.ts`: `parseLegato`、`parseNestedPlayElement`/`parseArgument` の UNDERSCORE/LBRACE 分岐、`parseStackElement` の UNDERSCORE 分岐（`_5`/`_b7` を chord_ref より先に傍受）、`parseScopeChain` に `.hold()`
+- `timing/calculate-event-timing.ts`: `tie` 分岐（スロット占有マーカー、pitch 無し）/ `legato` 分岐（`( )` 同分割、内部音に legato タグ・末尾は通常 gate）/ voiceTie タグ / `hold` を resolveScope に
+- `core/sequence.ts`: `scheduleMidiEvents` を **3段パス**に再構成（resolve→offTime算出/抑制→emit）。`_` 吸収・`_n`/hold 静的ピッチ照合抑制・`{ }` overlap。on数=off数を構造的に保証（hanging note 不変条件）。`hold()` メソッド + `LEGATO_OVERLAP_MS=20`
+- `midi/chord/resolve-chords.ts`: `legato` 再帰 arm
+
+**仕様補足（DESIGN_DISCUSSION_RECORD §11、決定 #44-46）**: 先頭 `_` の LOOP 持ち越しは clearOwner 衝突のため v1.1 では休符（真の持ち越しは follow-up）。overlap=20ms。`.hold()` のスタック判定 = slot size>1（単音連打は非対象 #8）。`_n`/hold は静的・解決後ピッチ照合（動的照会は不変条件リスク）。
+
+**テスト**: `tie-legato-parsing.spec.ts` 7件 / `tie-legato-timing.spec.ts` 3件 / `sequence-tie-legato-dispatch.spec.ts` 8件（legato overlap 順序・`_` 二音・先頭 `_`=休符・`_n` 抑制+fallback・hold 自動タイ+#8単音除外）/ hanging-note 不変条件に Phase 4 パターンの 100× LOOP swap を追加。全体 971 passed / 23 skipped。**Phase 4 完了 → Phase R + Phase 4 完了**。
+
+**追加コミット（実機検証ハーネス + デモ）**: 実エンジン（parse→度数解決→MIDI→IAC）で**実在の PD 曲**を鳴らして Phase R/4 を検証するため、MIDI→OrbitScore 変換器 `tools/midi2orbs/`（`smf.js` / 声部モード `midi2orbs.js` / 和音モード `midi2orbs-chordal.js` + README）と PD デモ `tools/midi-monitor/{pavane,chorale,phase-r4-tour}.orbs` を追加。ピッチ列を元 MIDI と照合して一致を確認（パヴァーヌ=3声・度数+`^`、コラール=`[ ]`+`_n` 声部タイ）。著作権 MIDI 本体は非コミット。判明した DSL フィードバック（度数モデルのオクターブ越え friction / 多声の2手段 / tie↔tree-duration の相補性）は README に記録。コード変更なし（ツール/デモ/ドキュメントのみ）。
+
+**追加（Gymnopédie 全曲）**: transcriber 和音モードを 3/4・サブビートグリッド・全長対応に拡張し、Satie「ジムノペディ No.1」全78小節を `tools/midi-monitor/gymnopedie.orbs` として生成（`[ ]` 和音 + 左手バスの `_n` 保持、Gmaj7⇄Dmaj7 を元 MIDI と照合一致）。実曲テストで surfaced した将来課題: (a) key 中心の絶対音域指定、(b) セクション変数（複数小節の楽節束縛・曲構成での再利用）。
+
+**追加コミット（/simplify + PR #252 レビュー反映）**: `/simplify`（4エージェント並列）→ `/code:pr-review-team`（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer の4専門 + 再レビュー）を実施し critical/important=0 まで収束。
+
+- **/simplify 適用（挙動不変）**: scheduleMidiEvents Stage B の onset グルーピングを 1 回構築し `applyGateAndLegato`/`applyVoiceTiesAndHold` で共有（F2）/ import・chord・pattern binding ガードを `requireGlobal(state,label)` に集約（F3）/ `parsePostfix` を for ループ化（F4）/ legato tail の `Math.max(...map)` を単一パスへ（F5）。**スキップ**: `parseNestedPlay`/`parseLegato` の共通化（F1）= 区切り文法が別物（`( )` は LPAREN のみ並置継続 / `{ }` は LPAREN/LBRACE/LBRACKET）で統合すると Phase 2/3 scope テストが依存する挙動が変わるため。
+- **レビュー修正（Critical/Important）**:
+  - **循環パターン参照ガード（Critical）**: `var riff = (riff)` / 相互 `a→b→a` が `resolveName` 無限再帰 → stack overflow。`resolve-chords.ts` に分岐ローカルの `visiting: Set<string>`（add-before-recurse / `try-finally` で delete-after）を threading し、検出時は warning + `[]`。兄弟再利用 `play(riff, riff)` は誤検出しない。
+  - **`[chord], _` が全声部を延長（Important）**: `absorbEventTies` を単一 `lastEmitted` → 直近 onset の全 plan（スタックは同一 onset を共有＝1イベント）を保持する `lastGroup` に。spec §5.1「直前**イベント**を1スロット延長」+ 構造表「`[ ]`=同時発音=全声部が親スロット全長を共有」を grep 確認し、単声部のみ延長は spec 違反のバグと確定（解釈ではない）。
+  - **声部タイ+イベントタイの `tieSlots` 引き継ぎ（Important）**: `applyVoiceTiesAndHold` の held 延長を `n.slotDur` → `(n.slotDur + n.tieSlots)` に（`_n` で抑制される音に吸収された `_` の延長分を held 音へ伝播）。
+  - **コメント（Important）**: `parsePostfix` docstring に `.hold()` 追記 / `gate()` の orphaned docstring を本来位置へ復元 / `*0`「diagnostic error」→「parse 時に拒否」/「slot size>1」→「slot note-count>1」/ phase-r4-tour.orbs の hold() コメント修正。
+  - **却下（false positive・証拠付き）**: F4「console.warn→Sentry」= engine に `logError`/Sentry 基盤は皆無、`console.warn`/`console.error` が確立規約。F3「`modified` が `chord_ref` を包んで silent drop」= `modified.value` は `number|PlayNested` 型で文法上 bare chord_ref を包めない。**降格**: pattern binding の GLOBAL 無し時は `console.error` が変数名付きで発火済（Sentry 前提が崩れたため Minor）。
+- **テスト追加（+6、非空虚性を実機確認）**: `chord-resolution.spec.ts` に循環参照3件（自己/相互/兄弟再利用）。`sequence-tie-legato-dispatch.spec.ts` に発火時刻スタンプ付き backend で 3件（`[1,3,5],_` 和音全延長・rest がタイ鎖を断つ・`_n`+`_` の held 延長）。C1/C2 テストは修正を一時 revert すると確かに fail することを確認。全体 **977 passed / 23 skipped**。
+- **後続 Issue 候補**: 未束縛名のスロット消失 vs 休符（C3）/ 空パターン `var x=()` 診断（F5）は error-path の判断事項として follow-up。
+
 ### 6.108 Issue #250 — 設計記録: アイデンティティ・スコープ原則・表現 2 軸モデル (Jun 13, 2026)
 
 **Date**: 2026-06-13

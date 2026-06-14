@@ -5,6 +5,7 @@ import { Sequence } from '../../packages/engine/src/core/sequence'
 import { MidiManager } from '../../packages/engine/src/core/global/midi-manager'
 import { RtMidiOutput } from '../../packages/engine/src/midi/rtmidi-output'
 import { MidiBackend, MidiBackendPort } from '../../packages/engine/src/midi/midi-output'
+import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 
 /**
  * Phase 1 (#228) — acceptance: hanging-note invariant (§7-2)
@@ -106,6 +107,35 @@ describe('MIDI hanging-note invariant (§7-2 acceptance)', () => {
     const { on, off } = countNotes(rec.messages)
     expect(off).toBeGreaterThanOrEqual(on)
     expect(on).toBeGreaterThan(0) // sanity: notes actually played
+  })
+
+  it('Phase 4: LOOP swaps among tie / legato / voice-tie / hold patterns leave zero hanging notes', async () => {
+    // §5/§4 suppress note-offs (tie/hold) and delay them (legato) — the invariant
+    // must still hold: every note-on gets one note-off, nothing left sounding.
+    seq.hold()
+    const patterns = [
+      '{1, 2, 3}', // legato overlap
+      '1, _, 3', // event tie
+      '[1, 3, 5], [1, 3, _5]', // voice tie (common 5 held)
+      '[1, 3, 5], [1, 3, 5]', // hold auto-tie (all common)
+      '{[1, 3, 5], 2}', // legato over a stack
+    ]
+    const play = (p: string) =>
+      seq.play(...(parseAudioDSL(`p.play(${p})`).statements[0].args as never[]))
+
+    play(patterns[0]!)
+    await seq.loop()
+    for (let i = 0; i < 100; i++) {
+      play(patterns[i % patterns.length]!)
+      await vi.advanceTimersByTimeAsync(250)
+    }
+    await vi.advanceTimersByTimeAsync(3000)
+    seq.stop()
+
+    expect(out.getActiveNotes()).toHaveLength(0)
+    const { on, off } = countNotes(rec.messages)
+    expect(off).toBeGreaterThanOrEqual(on)
+    expect(on).toBeGreaterThan(0)
   })
 
   it('MUTE during a LOOP releases all sounding notes', async () => {

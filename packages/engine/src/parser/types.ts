@@ -24,11 +24,15 @@ export type AudioTokenType =
   | 'MINUS' // - (for negative numbers)
   | 'PLUS' // + (for octave shift / detune sign, e.g. 3^+1)
   | 'PERCENT' // % (for random range)
+  | 'ASTERISK' // * (for x*n repetition, §6.5)
   | 'ACCIDENTAL' // pitch alteration prefix: b, bb, #, ## (degree b/# notation)
   | 'CARET' // ^ (octave shift modifier, e.g. 3^+1)
   | 'TILDE' // ~ (detune modifier, e.g. b7~-0.25)
   | 'LBRACKET' // [ (stack — reserved, not yet supported in v1.1)
   | 'RBRACKET' // ] (stack — reserved, not yet supported in v1.1)
+  | 'LBRACE' // { (legato group, §4/§5.4)
+  | 'RBRACE' // } (legato group, §4/§5.4)
+  | 'UNDERSCORE' // _ (tie token: §5.1 event tie / §5.2 voice-tie prefix)
   | 'NEWLINE' // line break
   | 'EOF' // end of file
 
@@ -62,6 +66,7 @@ export type Statement =
   | SequenceStatement
   | TransportStatement
   | ChordBinding
+  | PatternBinding
   | ImportStatement
 
 /**
@@ -80,6 +85,24 @@ export type ChordBinding = {
 export type ImportStatement = {
   type: 'import'
   module: string // 'chords' (the only module accepted in v1.1)
+}
+
+/**
+ * `var NAME = <play-expr>` (§6.5) — a pattern-variable binding. The RHS is a play
+ * expression (a `(...)` group, a juxtaposition `(...)(...)`, or a chained / `*n`
+ * form), parsed as play-args and stored RAW. Bound 評価時値渡し: resolved at the
+ * USE site (the play() that references it), so a later redefinition does not affect
+ * an already-running pattern (reactive binding is rejected, §6.5).
+ *
+ * Distinct from {@link ChordBinding} (a vertical/stack value via `chord([...])`): a
+ * pattern is a horizontal/tree value bound from a bare play expression. `elements`
+ * holds 1+ top-level siblings — length > 1 = a juxtaposition binding that splices
+ * as multiple siblings at the use site.
+ */
+export type PatternBinding = {
+  type: 'pattern_binding'
+  variableName: string
+  elements: PlayElement[]
 }
 
 export type GlobalStatement = {
@@ -111,7 +134,10 @@ export type PlayElement =
   | PlayPitch // degree with alteration / octave-shift / detune (e.g. b3, #5, 3^+1)
   | PlayScoped // group(s) with a .root()/.mode()/.oct() pitch-scope chain (§2.3, §3)
   | PlayStack // `[ ]` simultaneous-note-on stack (§4)
-  | PlayChordRef // a bare chord-name element (§6); transient — resolved away at L2 (resolveChords)
+  | PlayChordRef // a bare name element (§6/§6.5); transient — resolved away at L2 (resolveChords)
+  | PlayRepeat // `x*n` repetition (§6.5); transient — expanded to n siblings at L2
+  | PlayTie // `_` event-level tie (§5.1): extends the previous event by one slot
+  | PlayLegato // `{ }` legato group (§4/§5.4): note-off delayed past the next note-on
 
 export type PlayNested = {
   type: 'nested'
@@ -155,16 +181,60 @@ export type PlayStack = {
 export type StackElement = PlayElement | PlayChordRemoval
 
 /**
- * A bare chord-name reference (§6): inside a `[ ]` stack it spreads into the stack;
- * as a standalone group element (`(0, m7, 0)`, §9.1) it becomes a one-slot
- * simultaneous chord. Resolved at evaluation (L2) against the chord namespace, so
- * it never reaches the timing walk. `octaveShift` carries a trailing `^N` (`m7^+1`)
- * — a whole-chord structural shift applied to the spread voices.
+ * A bare NAME reference (§6 / §6.5): a bare identifier appearing where a play
+ * element is expected. The parser cannot know what the name is bound to, so the
+ * binding kind is dispatched at evaluation (L2) against the namespace:
+ * - `kind: 'chord'` → vertical spread (inside a `[ ]` stack it spreads into the
+ *   stack; as a standalone group element `(0, m7, 0)` it becomes a one-slot chord)
+ * - `kind: 'pattern'` (§6.5) → horizontal splice of the bound play-elements
+ *
+ * Transient: resolved away at L2, never reaches the timing walk. `octaveShift`
+ * carries a trailing `^N` (`m7^+1`) — a whole-chord structural shift for a chord
+ * binding (ignored with a warning for a pattern binding). The `chord_ref` tag is a
+ * (contained) misnomer kept to avoid a churn-only rename; it means "name ref".
  */
 export type PlayChordRef = {
   type: 'chord_ref'
   name: string
   octaveShift: number // from `^N`; 0 if none
+}
+
+/**
+ * `x*n` repetition (§6.5): repeat `element` by JUXTAPOSITION n times (NOT comma —
+ * comma is a root-scope boundary, juxtaposition is not). `1*3 ≡ (1)(1)(1)`.
+ *
+ * Transient like {@link PlayChordRef}: the resolver (L2) splices `count` sibling
+ * copies into the surrounding element list, so it never reaches the timing walk.
+ * `count` is an integer ≥ 1 (the parser rejects `*0` and non-integers; `*1` is
+ * identity). Postfix operators apply LEFT-TO-RIGHT (§6.5): `riff*4.root(3)` parses
+ * as `.root(3)` wrapping the PlayRepeat (the run shares the root); `(a)(b).root(2)*2`
+ * parses as a PlayRepeat whose `element` is the PlayScoped (the rooted cell repeats).
+ * Domain-common: works for audio slice-number values too (pure structural, §6.5).
+ */
+export type PlayRepeat = {
+  type: 'repeat'
+  element: PlayElement
+  count: number
+}
+
+/**
+ * A bare `_` event-level tie (§5.1): occupies a slot but plays no new note —
+ * it extends the PREVIOUS emitting event by that slot (no retrigger). Carried
+ * symbolically to the timing walk (§7-0) and realized at the output stage. A
+ * pattern-leading `_` with no preceding note is treated as a rest (v1.1; true
+ * LOOP carryover is a documented follow-up — DESIGN_DISCUSSION_RECORD §11).
+ */
+export type PlayTie = { type: 'tie' }
+
+/**
+ * A `{ }` legato group (§4 / §5.4): the same time-division rule as `( )`, but the
+ * interior note-offs are delayed past the next note-on (overlap) — the sustain-past-
+ * slot end of the articulation axis (DESIGN_DISCUSSION_RECORD §10.3). The group-tail
+ * note follows the normal gate. A `[ ]` inside `{ }` overlaps as a whole stack.
+ */
+export type PlayLegato = {
+  type: 'legato'
+  elements: PlayElement[]
 }
 
 /**
@@ -199,6 +269,7 @@ export type PlayScoped = {
   root?: ScopeRoot // present iff `.root()` was chained
   mode?: ScopeMode // present iff `.mode()` was chained (v1.1: parsed + reserved; dispatch throws)
   oct?: number // present iff `.oct(N)` was chained (group-lexical octave register)
+  hold?: boolean // present iff `.hold()` was chained (§5.3 auto common-tone tie, group-level)
 }
 
 /**
@@ -233,6 +304,7 @@ export type PlayPitch = {
   octaveShift: number // from `^N`: the running pitch range this note SETS (§2.4). 0 if no `^`.
   rangeSet: boolean // true if `^` was written (sticky range set point); false = inherit running range
   detune: number // semitones from `~` (e.g. b7~-0.25 → -0.25). 0 if absent
+  tie?: boolean // §5.2 voice-level tie: a `_` prefix inside a stack ([1, _5]) — resolved-pitch-match suppress
 }
 
 export type PlayWithModifier = {

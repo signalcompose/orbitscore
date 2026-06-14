@@ -51,7 +51,7 @@ function notesOf(out: MidiOutput): number[] {
 
 /** Raw `[ ]` voices of a `chord([...])` expression, for direct defineChord() calls. */
 function chordVoices(expr: string): any[] {
-  return (parseAudioDSL(`var _ = ${expr}`).statements[0] as any).voices
+  return (parseAudioDSL(`var tmp = ${expr}`).statements[0] as any).voices
 }
 
 /** Build a keyed MIDI sequence, run `setup(global)` (e.g. importChords), play `src`. */
@@ -124,7 +124,7 @@ describe('Phase 3 — chord values dispatch (§6)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const out = await playChords(() => {}, '[mystery]')
     expect(notesOf(out)).toHaveLength(0)
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/unknown chord "mystery"/))
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/unknown name "mystery"/))
     warn.mockRestore()
   })
 })

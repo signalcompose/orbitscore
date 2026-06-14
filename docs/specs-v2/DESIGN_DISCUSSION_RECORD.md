@@ -398,3 +398,32 @@ Phase 4(#236、§5)は **全部入り**で確定:
 
 1. `@` 系(velocity / articulation)のトークン文法設計 = Phase 4 後の専用フェーズ(別 Issue)。確定後に PITCH_DSL_SPEC(正本 HTML)へ反映。
 2. §10.2 の判定基準は、確定後に正本 spec の「Design Principles / Non-Goals」節へ昇格する候補。
+
+---
+
+## 11. Phase 4 実装メモ・仕様補足 (2026-06-14、§5/§4 実装時)
+
+Phase 4(`_` タイ / `_n` 声部タイ / `{ }` レガート / `.hold()`)の実装で確定した、spec が曖昧 or 未規定だった点。正本 PITCH_DSL_SPEC への反映は他の確定事項とまとめて後日。
+
+### 11.1 先送り: パターン先頭 `_` の LOOP 持ち越し（§5.1）
+
+spec §5.1 は「パターン先頭の `_` = 前サイクル末尾からの持ち越し(LOOP 時)」とするが、これは **hanging note 不変条件と衝突する**: `loop-sequence` は毎イテレーション `clearOwner` で全発音を強制 note-off するため、持ち越すべき音そのものを解放してしまう。**v1.1 実装ではパターン先頭 `_` を RUN/LOOP とも休符として描画**(decision #44)。真の持ち越しは「クリア時に1音だけ生かす」別機構が要るため follow-up とする。
+
+### 11.2 確定した実装定義（spec が「実装定義」とした項目）
+
+- **`{ }` レガートのオーバーラップ量** = **20ms**(§10-2 はリスニングテスト送り。10-30ms 推奨の中央。`sequence.ts` の `LEGATO_OVERLAP_MS`、TODO 注記つき）
+- **タイ延長と gate の関係**: `_` 延長後の音価全体に gate を掛ける(`off = onTime + (slot+tieSlots)*gate`)。長い単音と同じ articulation に揃える（decision #45）
+- **`.hold()` の「スタック」判定** = 同一 onTime に2音以上(slot size > 1)。単音(size 1)は対象外なので、`[1],[1]` や `1,1` の連打は自動タイされない（#8 を構文非依存に実現）。声部タイ `_n` は明示指定なので size 不問
+- **レガート末尾 / 次音なし** は通常 gate にフォールバック(ループ境界をまたがない)
+
+### 11.3 dispatch アーキテクチャ（§7-1 の実装）
+
+`scheduleMidiEvents` を **3段パス**に書き換え（resolve → offTime算出/抑制 → emit）。note-on/off を個別 enqueue せず、emit 前に offTime を確定するため、抑制音は on/off とも出さず、延長音は owner 追跡が残り `clearOwner`/panic で解放される ⇒ **on 数 = off 数が構造的に保証**(hanging note 不変条件)。`_n`/hold は fire-time の動的 `getActiveNotes()` 照会ではなく、**直前スロットとの静的・解決後ピッチ照合**（tick との競合を避ける）。
+
+### 11.4 決定ログ(続き)
+
+| # | 決定 | 棄却した代替案 | 主な根拠 |
+|---|---|---|---|
+| 44 | パターン先頭 `_` は v1.1 では休符（RUN/LOOP とも）。真の LOOP 持ち越しは follow-up | spec 通り前サイクル末尾を持ち越す | 毎イテレーションの `clearOwner` と衝突し hanging note 不変条件を壊す。別機構が必要 |
+| 45 | `_` タイ延長は音価全体に gate を掛ける | 延長部のみ gate / 延長部は gate 無視 | 長い単音と同じ articulation。実装が一本道 |
+| 46 | `_n`/`.hold()` は直前スロットとの静的・解決後ピッチ照合 | fire-time の `getActiveNotes()` 動的照会 | 動的照会は enqueue 済みアクションと競合し hanging note リスク。静的照合は不変条件安全 |
