@@ -68,6 +68,7 @@ export type Statement =
   | TransportStatement
   | ChordBinding
   | PatternBinding
+  | ModeBinding
   | ImportStatement
 
 /**
@@ -104,6 +105,19 @@ export type PatternBinding = {
   type: 'pattern_binding'
   variableName: string
   elements: PlayElement[]
+}
+
+/**
+ * `var NAME = mode(1, 2, b3, …)[.period(n)]` (§2.2): a user pitch lattice. The mode
+ * elements are root-scope degrees; the parser computes the semitone `lattice` (degree 1
+ * = lattice[0]) and the repeat `period` (default = the octave boundary above the last
+ * element). Referenced by `(...).mode(NAME)` to index the lattice instead of Ionian.
+ */
+export type ModeBinding = {
+  type: 'mode_binding'
+  variableName: string
+  lattice: number[]
+  period: number
 }
 
 export type GlobalStatement = {
@@ -291,7 +305,7 @@ export type PlayScoped = {
   type: 'scoped'
   groups: PlayElement[]
   root?: ScopeRoot // present iff `.root()` was chained
-  mode?: ScopeMode // present iff `.mode()` was chained (v1.1: parsed + reserved; dispatch throws)
+  mode?: ScopeMode // present iff `.mode(name)` was chained (§2.2, E6: applies a user lattice)
   oct?: number // present iff `.oct(N)` was chained (group-lexical octave register)
   hold?: boolean // present iff `.hold()` was chained (§5.3 auto common-tone tie, group-level)
 }
@@ -307,8 +321,8 @@ export type ScopeRoot =
   | { kind: 'note'; pitchClass: number; spelling: string }
   | { kind: 'degree'; degree: number; alteration: number }
 
-/** A `.mode()` argument. v1.1 reserves the syntax; dispatch throws (mode = Phase 2.2). */
-export type ScopeMode = { kind: 'unimplemented'; raw: string }
+/** A `.mode(name)` argument (§2.2, E6): the name of a `mode(...)` lattice to apply at dispatch. */
+export type ScopeMode = { kind: 'mode'; name: string }
 
 /**
  * A MIDI degree carrying pitch alteration and event modifiers.

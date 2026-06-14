@@ -835,29 +835,28 @@ b7~-0.25 // detune in semitones (pitch-bend; ±2 semitone bend range for now)
 - For a stack/chord, `^N` sets the whole chord's register; a voice's own `^N` (P.7 voicing)
   is structural on top and does **not** move the running range (a chord is one slot).
 
-### P.4 Mode scope (§2.2) — RESERVED (not implemented in v1.1)
-
-> **Status**: the `.mode()` scope-chain syntax **parses** but **throws at dispatch**
-> ("`.mode()` is not implemented in v1.1"), and the `mode(...)` definition constructor /
-> `.period()` do not exist yet. Mode lattices are a future phase. The design below is
-> recorded for forward-compatibility; do not rely on it in v1.1.
+### P.4 Mode scope (§2.2, E6)
 
 ```js
-var dorian = mode(1, 2, b3, 4, 5, 6, b7)                  // (future)
-var custom = mode(1, 2, b3, 4, #5, 6, 7, 9).period(19)   // (future) explicit period (semitones)
+var dorian = mode(1, 2, b3, 4, 5, 6, b7)                  // a pitch lattice (degree 1 = lattice[0])
+var custom = mode(1, 2, b3, 4, #5, 6, 7, 9).period(19)   // explicit period (semitones)
+seq.play((1, 3, 5, 7).mode(dorian))                       // in C dorian: C Eb G Bb (60 63 67 70)
 ```
 
 - A `mode` is a user-defined pitch lattice written in root-scope degree notation. Inside a
-  mode scope a melodic degree `n` is a pure index into the lattice:
-  `pitch = lattice[(n-1) mod len] + period * floor((n-1)/len)`.
-- `period()` defaults to the next octave boundary above the last element (12 for a 7-note
-  church mode). The `2↔9` tension wrap-around does **not** hold in a mode (the lattice need
-  not be 7 notes). Church modes would ship as a library of predefined `var`s, not primitives.
+  `(...).mode(name)` scope a melodic degree `n` is a pure index into the lattice:
+  `pitch = rootPitch + lattice[(n-1) mod len] + period * floor((n-1)/len)` (degree 8 wraps to
+  the next period). The `{1-9,11,13}` Ionian acceptance does **not** apply (any length is
+  allowed); an accidental alters the looked-up lattice tone.
+- `.period(n)` defaults to the next octave boundary above the last element (12 for a 7-note
+  church mode); non-octave / microtonal periods are allowed. The `2↔9` tension wrap-around
+  does **not** hold in a mode (the lattice need not be 7 notes).
+- A mode rides on the sequence's root (key tonic or `seq.root()`); `.root()` and `.mode()` are
+  mutually exclusive on one group (§3). A mode name used as a play *value* warns (it is a scope).
 
-### P.5 Scope rules — `.root()` / `.oct()` group chains (§3, Phase 2)
+### P.5 Scope rules — `.root()` / `.mode()` / `.oct()` group chains (§3, Phase 2)
 
-`.root()` and `.oct()` attach as method chains to a `( )` rhythm-tree group (`.mode()`
-parses but is reserved — see P.4).
+`.root()`, `.mode()` (P.4) and `.oct()` attach as method chains to a `( )` rhythm-tree group.
 
 ```js
 seq.root(C)               // sequence default pitch context
@@ -1052,7 +1051,7 @@ See the "Pitch DSL (v1.1 — MIDI Output)" section for the full reference. Imple
 Epic #224 phases 1/2/3/R/4:
 - **MIDI output** (Phase 1): `seq.midi()`, `octave()`, `vel()`, `gate()`, `global.key()`,
   `global.midiLatency()`; degree resolution, lookahead scheduler, active-note tracking
-- **Group scope chains** (Phase 2): `.root()` / `.oct()` on `( )` groups (`.mode()` reserved — throws)
+- **Group scope chains** (Phase 2 / E6): `.root()` / `.mode()` / `.oct()` on `( )` groups (mode = §2.2 lattice)
 - **Stacks + chord values** (Phase 3): `[ ]` simultaneous stacks, bare `[ ]` chord values, spread,
   `-N` removal, `^N` chord shift, `import chords`
 - **Repetition + pattern variables** (Phase R): `*n`, `var NAME = <pattern>`
@@ -1062,6 +1061,7 @@ Epic #224 phases 1/2/3/R/4:
 - **Key-center register** (E3 / #253): `global.key("D4")` base octave (see P.1)
 - **Section variables** (E4 / #254): comma-separated multi-bar bindings (see P.9)
 - **Per-note expression** (E5 / §10.3): `@v` velocity (absolute / relative) + `@g` articulation (see P.12)
+- **Mode scope** (E6 / §2.2): `mode(...)` user lattice + `(...).mode(name)` + `.period(n)` (see P.4)
 
 #### Parser
 - **Tokenizer**: Complete lexical analysis
@@ -1155,7 +1155,7 @@ Epic #224 phases 1/2/3/R/4:
 - v1.1 Pitch DSL / MIDI (2026, Epic #224): **MIDI output path + symbolic pitch language**,
   layered on the v3.0 audio engine. See "Pitch DSL (v1.1 — MIDI Output)".
   - Phase 1: `seq.midi()` output, degree resolution, scheduler, active-note tracking
-  - Phase 2: `.root()`/`.oct()` group scope chains (`.mode()` reserved — throws)
+  - Phase 2 / E6: `.root()`/`.mode()`/`.oct()` group scope chains (mode = §2.2 user lattice)
   - Phase 3: `[ ]` stacks + bare `[ ]` chord values
   - Phase R: `*n` repetition + pattern variables
   - Phase 4: `_` / `_n` ties, `{ }` legato, `.hold()`

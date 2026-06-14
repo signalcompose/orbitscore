@@ -29,6 +29,16 @@ import { ParserUtils } from './parser-utils'
 /** Voicing operators parsed as postfix on a chord value / `[ ]` stack (§12, #49/#51). */
 const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootless'])
 
+/** Per-op `[min, max]` argument arity (§12.3): drop ≥1, invert exactly 1, the rest 0. */
+const VOICING_ARITY: Record<string, [number, number]> = {
+  drop: [1, Infinity],
+  invert: [1, 1],
+  open: [0, 0],
+  close: [0, 0],
+  shell: [0, 0],
+  rootless: [0, 0],
+}
+
 /**
  * If the last element of `list` is a scope chain (PlayScoped) and there are
  * preceding sibling groups since `runStart`, collapse the juxtaposition run
@@ -187,15 +197,6 @@ export class ExpressionParser {
     return sign * ParserUtils.parseNumber(numResult.token)
   }
 
-  /**
-   * Parse optional `^` (pitch range set-point) and `~` (detune) modifiers onto a
-   * degree, producing a PlayPitch. Both modifiers are optional and order-
-   * independent. `^N` is STICKY (§2.4): it records `octaveShift` AND sets
-   * `rangeSet`, marking this note as a running-range set point — the value
-   * propagates to subsequent degrees in the play() (threaded at dispatch) until
-   * another `^M`/`^0` overrides it. The parser only records the per-note
-   * annotation; the running range is applied during scheduling, not here.
-   */
   /** True if the current token starts a pitch modifier: `^N`/`^r`, `~`, `@v`/`@g`, or `r`. */
   private nextIsPitchModifier(): boolean {
     const cur = ParserUtils.current(this.tokens, this.pos)
@@ -207,6 +208,15 @@ export class ExpressionParser {
     )
   }
 
+  /**
+   * Parse optional `^` (pitch range set-point), `~` (detune), `@v`/`@g` (expression, §10.3),
+   * and `r`/`^r` (random, §12) modifiers onto a degree, producing a PlayPitch. Modifiers are
+   * optional and order-independent. `^N` is STICKY (§2.4): it records `octaveShift` AND sets
+   * `rangeSet`, marking this note as a running-range set point — the value propagates to
+   * subsequent degrees in the play() (threaded at dispatch) until another `^M`/`^0` overrides
+   * it. The parser only records the per-note annotation; the running range is applied at
+   * scheduling, not here.
+   */
   private parsePitchModifiers(
     degree: number,
     alteration: number,
@@ -222,7 +232,8 @@ export class ExpressionParser {
     let parsed = true
     while (parsed) {
       parsed = false
-      const t = ParserUtils.current(this.tokens, this.pos).type
+      const cur = ParserUtils.current(this.tokens, this.pos)
+      const t = cur.type
       if (t === 'AT') {
         // §10.3 expression (E5): `@v100` absolute velocity / `@v+20`/`@v-30` relative
         // (accent) / `@g30` articulation as a gate PERCENT (30 = 0.30, 120 = 1.20).
@@ -271,7 +282,7 @@ export class ExpressionParser {
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         detune = this.parseSignedNumber()
         parsed = true
-      } else if (t === 'IDENTIFIER' && ParserUtils.current(this.tokens, this.pos).value === 'r') {
+      } else if (t === 'IDENTIFIER' && cur.value === 'r') {
         // Trailing `r` = random presence (§12, #50/#52): default 50% chance to sound.
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         random = 0.5
@@ -631,21 +642,11 @@ export class ExpressionParser {
     return degree
   }
 
-  /**
-   * Parse a `.mode()` argument. v1.1 reserves the syntax (mode lattice = Phase
-   * 2.2): capture the raw arg for duplicate/conflict diagnostics; dispatch
-   * throws not-implemented (parallel to time()/fixpitch()).
-   */
+  /** Parse a `.mode(NAME)` argument (§2.2, E6): the name of a `mode(...)` binding to apply. */
   private parseModeArg(): ScopeMode {
-    const parts: string[] = []
-    while (
-      ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
-      !ParserUtils.isEOF(this.tokens, this.pos)
-    ) {
-      parts.push(String(ParserUtils.current(this.tokens, this.pos).value ?? ''))
-      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-    }
-    return { kind: 'unimplemented', raw: parts.join(' ') }
+    const tok = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = tok.newPos
+    return { kind: 'mode', name: String(tok.token.value) }
   }
 
   /**
@@ -789,16 +790,15 @@ export class ExpressionParser {
     }
     this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
 
-    // Arity checks (§12.3): drop/invert need position(s); invert is single; the named
-    // position operators take none.
-    if ((op === 'drop' || op === 'invert') && args.length === 0) {
-      throw new Error(`.${op}() needs at least one position, e.g. .${op}(2)`)
-    }
-    if (op === 'invert' && args.length > 1) {
-      throw new Error('.invert(n) takes a single number')
-    }
-    if (op !== 'drop' && op !== 'invert' && args.length > 0) {
-      throw new Error(`.${op}() takes no arguments`)
+    // Arity contract (§12.3): drop = ≥1 position, invert = exactly 1, the named
+    // position operators take none. One [min, max] check covers all of them.
+    const [min, max] = VOICING_ARITY[op]!
+    if (args.length < min || args.length > max) {
+      throw new Error(
+        max === 0
+          ? `.${op}() takes no arguments`
+          : `.${op}() takes ${min === max ? `${min}` : `${min}+`} position(s), e.g. .${op}(2)`,
+      )
     }
 
     return { type: 'voicing', op: op as PlayVoicing['op'], args, target }

@@ -10,6 +10,7 @@ import {
   TransportStatement,
   ChordBinding,
   PatternBinding,
+  ModeBinding,
   ImportStatement,
 } from '../parser/audio-parser'
 
@@ -65,6 +66,9 @@ export async function processStatement(
     case 'pattern_binding':
       processPatternBinding(statement, state)
       break
+    case 'mode_binding':
+      processModeBinding(statement, state)
+      break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
       console.warn(`Unknown statement type: ${(statement as any).type}`)
@@ -111,6 +115,15 @@ function processPatternBinding(statement: PatternBinding, state: InterpreterStat
   requireGlobal(state, `pattern "${statement.variableName}"`)?.definePattern(
     statement.variableName,
     statement.elements,
+  )
+}
+
+/** Process `var NAME = mode(...)` (§2.2): bind the user pitch lattice. */
+function processModeBinding(statement: ModeBinding, state: InterpreterState): void {
+  requireGlobal(state, `mode "${statement.variableName}"`)?.defineMode(
+    statement.variableName,
+    statement.lattice,
+    statement.period,
   )
 }
 

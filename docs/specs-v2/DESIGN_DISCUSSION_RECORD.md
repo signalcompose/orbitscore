@@ -545,3 +545,24 @@ var no5  = [m7, -5]            // 除去 -N もそのまま
 |---|---|---|---|
 | 56 | per-note 表現 = `@v`（velocity, 絶対/相対）+ `@g`（articulation=gate比）。#42 の先送りを実装で解消 | 表現を更に先送り / 独立記号（accent `>` 等）を増やす | #41 の2軸モデルを最小トークンで。アクセント=velocity 相対に還元 |
 | 57 | `@v`/`@g` は整数引数（`@g` は gate パーセント `@g30`=0.30）。`@v(100)` paren 形は不採用 | `@g0.3` 小数形（lexer がトークン分断）/ paren 必須 | 速記性。lexer の letter+digit 併合と整合、小数点問題を回避 |
+
+### 13.5 mode scope（§2.2, E6 — reserved を実装）
+
+`.mode()`（v1.1 で parse だけ予約・dispatch throw）を実装。`var X = mode(1,2,b3,…)[.period(n)]` で度数→半音格子（degree 1 = lattice[0]）を構築、`(...).mode(X)` で格子インデックス解決（degree n = lattice[(n-1) mod len] + period·⌊(n-1)/len⌋ + alteration）。{1-9,11,13} 受理は mode 内では不適用（任意長）。period 既定 = 最終要素の次オクターブ境界。mode は seq root（key tonic / seq.root）に乗る（root と mode は同一グループ排他、§3）。mode を play 値に使うと warning（scope であって値ではない）。
+
+| # | 決定 | 棄却した代替案 | 主な根拠 |
+|---|---|---|---|
+| 58 | mode lattice = `mode(...)` 構造体（格子は半音オフセット、degree 1=lattice[0]）。`.mode(name)` で適用、`.period(n)` 上書き、既定=次オクターブ境界 | reserved 据え置き / scale-index 方式を基底にも | §2.2 の定義をそのまま実装。教会旋法はライブラリ var 群（言語プリミティブにしない） |
+| 59 | mode は seq root に乗る（root/mode は同一グループ排他）。mode を play 値で使うと warning | mode に独自 root を許す / mode を値として展開 | §3 の排他規則に従う。mode は scope、chord/pattern は値、と型分離を保つ |
+
+### 13.6 既知の制約（E1-E6 レビューで surfaced、層構造由来・現状は仕様）
+
+PR レビューチーム（#260-265 累積）で出た、修正でなく**記録**にとどめる項目:
+
+1. **voicing × `.mode()`**: `.open()`/`.close()`/`.invert()` 等の位置計算は **Ionian 半音距離**で行う（voicing は L2 解決時、`.mode()` 格子適用は dispatch 時で層が分かれるため）。mode 格子上で「最近接」にはならない。回避: voicing を `.mode()` と組み合わせる場合は結果を確認するか、mode を使わないコンテキストで voice する。両者の併用は稀（voicing=縦、mode=旋律）。
+2. **極端な `@g`**: `@g`（articulation）の上限はクランプしない。`@g300` 等は note-off が後続スロットへオーバーランし、同ピッチの後続音を食う可能性がある（`{ }` レガート等の overlap と同じ一般的性質）。意図的な表現自由度を優先し、クランプより記録を選択。
+3. **レビュー後の残テスト gap（Minor）**: mode が seq.root に乗るケース / 相対 velocity の 127 クランプ / 不正 key 文字列 throw / mode 名を値で使った warning は dispatch テスト未追加（parse/ロジックは実装済・低リスク）。
+4. **`@v` / `@g` の意味論（CI bot #263 が確認要望）**: いずれも意図した仕様として確定。
+   - `@v0` は `@v1` にクランプ（velocity 値域 1..127。0 は休符でなく最弱音、`@v` は休符記法ではない）。
+   - 同一ノートで `@v`/`@g` を重複指定（`5@v100@v80`）した場合は **last-wins**（後者優先、warning なし）。修飾子の上書きは音楽記譜で一般的。
+   - `{ }` レガートは `@g` を上書きする（legato overlap が articulation より優先）。`@g120` 等の legato 寄り指定より `{ }` 明示が強い、という優先順位。

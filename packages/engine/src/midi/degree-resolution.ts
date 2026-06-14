@@ -23,7 +23,18 @@
 import { ResolvedPitch, RootContext, SymbolicPitch } from './types'
 
 /** Semitone offsets for degrees 1..7 in the Ionian reference (§2.1). */
-const IONIAN = [0, 2, 4, 5, 7, 9, 11] as const
+export const IONIAN = [0, 2, 4, 5, 7, 9, 11] as const
+
+/**
+ * The root-relative semitone of a bare degree (§2.1): `IONIAN[(d-1)%7] + 12·⌊(d-1)/7⌋`
+ * plus optional accidental / structural octave. The shared kernel of the degree formula —
+ * used by chord-voicing position math (§12) and mode-lattice construction (§2.2).
+ */
+export function degreeToSemitone(degree: number, alteration = 0, octaveShift = 0): number {
+  return (
+    IONIAN[(degree - 1) % 7] + 12 * Math.floor((degree - 1) / 7) + alteration + 12 * octaveShift
+  )
+}
 
 /**
  * Accepted degrees (§2.1): scale 1-7, octave 8, odd tensions 9/11/13. 0 = rest.
@@ -51,6 +62,24 @@ export function resolveDegree(pitch: SymbolicPitch, context: RootContext): Resol
   // 0 = rest (musical silence). No note is produced.
   if (degree === 0) {
     return null
+  }
+
+  // §2.2 mode scope: a melodic degree is a pure index into the user lattice (any length;
+  // the {1-9,11,13} acceptance does NOT apply). Alteration applies after the lookup, and
+  // the 2↔9 tension wrap-around does not hold (the lattice need not be 7 notes).
+  if (context.modeLattice && context.modeLattice.length > 0) {
+    const lat = context.modeLattice
+    const len = lat.length
+    const period = context.modePeriod ?? 12
+    const semitones =
+      lat[(degree - 1) % len]! + period * Math.floor((degree - 1) / len) + pitch.alteration
+    const rootPitch = 12 * (context.octave + 1) + context.rootPitchClass
+    return {
+      midiNote: rootPitch + semitones + 12 * pitch.octaveShift,
+      detune: pitch.detune,
+      symbolic: pitch,
+      context,
+    }
   }
 
   // §2.1 degree acceptance: only {1-9, 11, 13} are musical. 10/12/14 and ≥15 are

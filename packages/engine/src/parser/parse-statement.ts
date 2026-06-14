@@ -3,6 +3,8 @@
  * Based on specification: docs/INSTRUCTION_ORBITSCORE_DSL.md
  */
 
+import { degreeToSemitone } from '../midi/degree-resolution'
+
 import {
   AudioToken,
   GlobalInit,
@@ -11,12 +13,22 @@ import {
   MethodChain,
   ChordBinding,
   PatternBinding,
+  ModeBinding,
   ImportStatement,
   PlayStack,
   PlayElement,
 } from './types'
 import { ParserUtils } from './parser-utils'
 import { ExpressionParser, collapseScopedRun } from './parse-expression'
+
+/** Semitone offset of one `mode(...)` element (a root-scope degree) from the tonic (§2.2). */
+function modeElementSemitone(el: PlayElement): number {
+  if (typeof el === 'number') return degreeToSemitone(el)
+  if (el && typeof el === 'object' && el.type === 'pitch') {
+    return degreeToSemitone(el.degree, el.alteration, el.octaveShift)
+  }
+  throw new Error('mode(...) elements must be degrees (e.g. mode(1, 2, b3, 4, 5, 6, b7))')
+}
 
 /**
  * Statement parser for audio DSL
@@ -66,7 +78,7 @@ export class StatementParser {
    * Parse variable declaration
    */
   private parseVarDeclaration(): {
-    statement: GlobalInit | SequenceInit | ChordBinding | PatternBinding
+    statement: GlobalInit | SequenceInit | ChordBinding | PatternBinding | ModeBinding
     newPos: number
   } {
     const varResult = ParserUtils.expect(this.tokens, this.pos, 'VAR')
@@ -89,6 +101,11 @@ export class StatementParser {
         '`chord([...])` was removed (§6, decision #48): write the chord value as a bare ' +
           'stack, e.g. `var m7 = [1, b3, 5, b7]`.',
       )
+    }
+
+    // `var dorian = mode(1, 2, b3, …)` — a user pitch lattice (§2.2).
+    if (rhs.type === 'IDENTIFIER' && rhs.value === 'mode') {
+      return this.parseModeBinding(varNameResult.token.value)
     }
 
     // `var m7 = [1, b3, 5, b7]` — a chord-value binding (§6). A bare `[ ]` stack is the
@@ -136,6 +153,61 @@ export class StatementParser {
 
     return {
       statement: { type: 'chord_binding', variableName, voices: stack.voices },
+      newPos: this.pos,
+    }
+  }
+
+  /**
+   * Parse `var NAME = mode(1, 2, b3, …)[.period(n)]` (§2.2): a user pitch lattice. Each
+   * element is a root-scope degree → its semitone offset; degree 1 = lattice[0]. The
+   * repeat period defaults to the octave boundary above the last element (12 for a 7-note
+   * church mode); `.period(n)` overrides it (non-octave / microtonal modes).
+   */
+  private parseModeBinding(variableName: string): { statement: ModeBinding; newPos: number } {
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER').newPos // 'mode'
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'LPAREN').newPos
+
+    const lattice: number[] = []
+    while (
+      ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
+      !ParserUtils.isEOF(this.tokens, this.pos)
+    ) {
+      const arg = new ExpressionParser(this.tokens, this.pos).parseArgument()
+      this.pos = arg.newPos
+      lattice.push(modeElementSemitone(arg.value as PlayElement))
+      if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      } else break
+    }
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+
+    if (lattice.length === 0) {
+      throw new Error('mode(...) needs at least one degree, e.g. mode(1, 2, b3, 4, 5, 6, b7)')
+    }
+
+    // Optional `.period(n)` — explicit repeat period in semitones.
+    let period: number | undefined
+    if (
+      ParserUtils.current(this.tokens, this.pos).type === 'DOT' &&
+      ParserUtils.peek(this.tokens, this.pos).value === 'period'
+    ) {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // DOT
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // 'period'
+      this.pos = ParserUtils.expect(this.tokens, this.pos, 'LPAREN').newPos
+      const num = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = num.newPos
+      period = ParserUtils.parseNumber(num.token)
+      this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+    }
+
+    // Default period: round the lattice's HIGHEST semitone up to the next octave boundary
+    // (use max, not the last element, so a non-ascending / below-tonic element can't yield a
+    // zero/negative period — e.g. `mode(1, 7^-1)`). Always at least one octave.
+    const top = Math.max(...lattice)
+    const defaultPeriod = top < 0 ? 12 : (Math.floor(top / 12) + 1) * 12
+
+    return {
+      statement: { type: 'mode_binding', variableName, lattice, period: period ?? defaultPeriod },
       newPos: this.pos,
     }
   }

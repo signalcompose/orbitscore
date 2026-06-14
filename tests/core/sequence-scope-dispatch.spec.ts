@@ -130,7 +130,7 @@ describe('Sequence group-scope dispatch (§3)', () => {
     await expect(seq.run()).rejects.toThrow(/key|root/i)
   })
 
-  it('.mode() rejects run() (reserved in v1.1)', async () => {
+  it('.mode() with an undefined mode rejects run() (E6, §2.2)', async () => {
     vi.setSystemTime(T0)
     const sched = mockScheduler()
     const out = mockMidiOutput()
@@ -142,7 +142,7 @@ describe('Sequence group-scope dispatch (§3)', () => {
     seq.midi('iac', 1).octave(4)
     const args = parseAudioDSL('p.play((1).mode(dorian))').statements[0].args
     seq.play(...(args as never[]))
-    await expect(seq.run()).rejects.toThrow(/mode.*not implemented/i)
+    await expect(seq.run()).rejects.toThrow(/no such mode/i)
   })
 
   it('.oct(N) composes additively with the sticky ^N range (§9.3)', async () => {
