@@ -20,7 +20,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.112 Issue #269 — auto voice-leading `.voicelead()` / `.vl()`（comp phase C1） (Jun 14, 2026)
 
 **Date**: 2026-06-14
-**Status**: ✅ 実装完了（C1。/simplify + レビュー前）
+**Status**: ✅ 実装完了（C1。/simplify + /code:pr-review-team 済）
 **Issue**: signalcompose/orbitscore#269 / 親 #259 / 設計 #268
 **Branch**: `269-voicelead-c1`
 
@@ -28,7 +28,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **設計上の重要な確定（実装調査で判明、advisor 検証済）**:
 - voice-leading は **絶対ピッチ（root context）を要する**ため §6.1 voicing のような eval-time ではなく、**出力段で一度だけ走る決定論パス**（`validateMidiDispatch` と同型・同 awaited チェーン、per-cycle ではない）。結果を各声部の `octaveShift` にシンボリックに書き戻し、`^N`/`.oct()`/`^r` が上に加算（§7-0 維持、eval/dispatch 軸の決定論側）。
-- 設計ドラフト #268 の「eval-time symbolic」記述はこの調査で誤りと判明 → #268 側を「deterministic, context-dependent, once-run」に訂正する（doc/impl 乖離防止）。
+- 設計ドラフト #268 の「eval-time symbolic」記述はこの調査で誤りと判明 → #268 側を「deterministic, context-dependent, once-run」に訂正済（doc/impl 乖離防止）。
 
 **実装**:
 - `midi/voice-leading.ts`: 純関数 `voiceLeadOctaves(prev, curBase)`。等数はソート後 n 通り cyclic rotation の L1 最小、不一致は min(n,m) を lead・余剰はオクターブ 0（C1 簡略化、bipartite は C2+）。コモントーンは距離 0 で自然保持。
@@ -38,7 +38,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **spec**: PITCH_DSL_SPEC §6.3 に normative セクション追加（phase gate, rule #7）。音楽性限界（傾向音解決・並行回避を保証しない）を明記。
 
-**テスト**: `tests/midi/voice-leading.spec.ts` 11件（純関数の単体 + dispatch 統合 + parse + seq既定/group + 音楽性）。全体 1033 passed / 23 skipped。
+**レビュー**: /simplify（4 agent）+ /code:pr-review-team（4 専門 + CI bot）。VL 書き戻しの `rangeSet:false` クリア（`^N` running range 汚染遮断）、parseScopeChain の else フォールバック明示分岐化（時限爆弾除去）、3コード threading / cross-root / unequal / anchor-^N テスト追加。Critical=0 / Important=0 / security 全合格。
+
+**テスト**: `tests/midi/voice-leading.spec.ts` 15件（純関数単体 + dispatch 統合 + parse + seq既定/group + cross-root + threading + 音楽性）。全体 1036 passed / 23 skipped。
+
+### 6.111 Issue #259 — `.comp` + auto voice-leading 設計ドラフト（調査 + 提案） (Jun 14, 2026)
+
+**Date**: 2026-06-14
+**Status**: 🟡 設計ドラフト（pre-decision → 一部確定。C1 着手済）
+**Issue**: signalcompose/orbitscore#259
+**Branch**: `259-comp-voiceleading-design`
+
+**背景**: `.comp`（自動ジャズコンピング、#259）は「土台（E2 primitives）は揃ったが実装対象としては未定義」状態。エビデンスベースで設計を練るため、3並列リサーチ（コンピングのリズム＋先行ソフト / ジャズボイシング＋音域 / ボイスリーディング理論＋アルゴリズム、いずれも WebSearch・出典付き）を実施し、`docs/research/comping-voice-leading-design.md` に調査 + 設計提案をまとめた。
+
+**設計の要点（advisor レビュー反映）**:
+- **2機能に分離**: ① auto voice-leading（決定論・出力段 once-run・シンボリック、min-L1 cyclic-rotation。命名 `.voicelead()`/`.vl()`）/ ② `.comp` 生成マクロ（リズム生成 + ボイシング選択 + thinning の合成）
+- **既存2軸へマッピング**で「構造=リズムはユーザが書く ↔ `.comp` 自動生成」の緊張を解消（`.comp` のツリー展開は `*n`/spread と同機構）。**真の新規点 = リズムの subdivision が dispatch-time 可変になる初ケース**を明示
+- **リズムモデル**: mode と同形のハイブリッド（subdivision グリッド primitive + 名前付きセル ライブラリ）を推奨
+- **決定 #53 準拠**（seed なし・毎サイクル再ロール）
+- **`.rootless()` primitive（root 除去）は正しい**。jazz rootless は上位テンプレートと明確化
+- **段階分割**: C1（実装済 #269/#270）→ C2 リズムエンジン → C3 完全 `.comp`
+
+**確定（2026-06-14, ユーザー）**: C1→C2→C3 段階 / 命名 `.voicelead()`+`.vl()` / 呼び出しは seq・group 両対応 / リズムはハイブリッド / seed なし。`.comp` は WCTM クリティカルパス外。
 
 ### 6.110 Issue #266 — 正本 HTML の normative 同期（PITCH_DSL_SPEC ← as-built E1-E6） (Jun 14, 2026)
 
