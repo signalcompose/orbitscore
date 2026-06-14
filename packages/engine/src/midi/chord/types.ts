@@ -4,7 +4,7 @@
  * A chord value is a ROOT-UNBOUND degree stack — a vertical value resolved against
  * the scope (root/mode) where it is placed, distinct from the placement context
  * itself (§6: "root はコンテキスト、chord は値"). Chord values live in a runtime
- * namespace (Global), populated by `import chords` and `var X = chord([...])`.
+ * namespace (Global), populated by `import chords` and `var X = [...]` (§6, #48).
  */
 
 import { PlayElement } from '../../parser/types'

@@ -70,9 +70,9 @@ export type Statement =
   | ImportStatement
 
 /**
- * `var NAME = chord([ ... ])` — a chord-value binding (§6). Distinct from the
- * `var x = init ...` initializers (GlobalInit / SequenceInit). Carries the RAW
- * `[ ]` voices so the interpreter evaluates them (spread/removal/`^N`) at execution
+ * `var NAME = [ ... ]` — a chord-value binding (§6, bare `[ ]` literal, decision #48).
+ * Distinct from the `var x = init ...` initializers (GlobalInit / SequenceInit). Carries
+ * the RAW `[ ]` voices so the interpreter evaluates them (spread/removal/`^N`) at execution
  * order against the chord namespace as it exists then (§6.5.2 評価時値渡し).
  */
 export type ChordBinding = {
@@ -94,7 +94,7 @@ export type ImportStatement = {
  * USE site (the play() that references it), so a later redefinition does not affect
  * an already-running pattern (reactive binding is rejected, §6.5).
  *
- * Distinct from {@link ChordBinding} (a vertical/stack value via `chord([...])`): a
+ * Distinct from {@link ChordBinding} (a vertical/stack value via bare `[...]`): a
  * pattern is a horizontal/tree value bound from a bare play expression. `elements`
  * holds 1+ top-level siblings — length > 1 = a juxtaposition binding that splices
  * as multiple siblings at the use site.

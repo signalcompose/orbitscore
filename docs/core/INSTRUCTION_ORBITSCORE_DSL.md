@@ -895,12 +895,15 @@ seq.play(
 
 ```js
 import chords                          // stdlib: m7, maj7, dom7, m7b5, dim7, sus4, ...
-var m7      = chord([1, b3, 5, b7])    // root-unbound degree stack (a value)
-var m7omit5 = chord([m7, -5])          // spread + literal removal
-var m7add9  = chord([m7, 9])           // spread + add
-var so_what = chord([1, 11, b7^+1, b3^+1, 5^+1])
+var m7      = [1, b3, 5, b7]           // root-unbound degree stack (a value); bare [ ] (#48)
+var m7omit5 = [m7, -5]                 // spread + literal removal
+var m7add9  = [m7, 9]                  // spread + add
+var so_what = [1, 11, b7^+1, b3^+1, 5^+1]
 ```
 
+- A chord value is a **bare `[ ]` degree stack** (§6 decision #48 — the `chord([...])` wrapper
+  was removed). The var-binding type follows the bracket: `[ ]` = vertical (chord value),
+  `( )` = horizontal (pattern variable, §6.5) — the same discriminant as in `play()`.
 - A chord value resolves against the **scope where it is placed** (root/mode) — *root is the
   context, chord is the value*. Spreading happens inside a `[ ]` stack or as a bare element.
 - `-N` removes the **literal-matching** voice (degree + alteration) from the spread; no match
@@ -1002,7 +1005,7 @@ Epic #224 phases 1/2/3/R/4:
 - **MIDI output** (Phase 1): `seq.midi()`, `octave()`, `vel()`, `gate()`, `global.key()`,
   `global.midiLatency()`; degree resolution, lookahead scheduler, active-note tracking
 - **Group scope chains** (Phase 2): `.root()` / `.oct()` on `( )` groups (`.mode()` reserved — throws)
-- **Stacks + chord values** (Phase 3): `[ ]` simultaneous stacks, `chord([...])`, spread,
+- **Stacks + chord values** (Phase 3): `[ ]` simultaneous stacks, bare `[ ]` chord values, spread,
   `-N` removal, `^N` chord shift, `import chords`
 - **Repetition + pattern variables** (Phase R): `*n`, `var NAME = <pattern>`
 - **Ties / legato / hold** (Phase 4): `_` event tie, `_n` voice tie, `{ }` legato, `.hold()`
@@ -1102,7 +1105,7 @@ Epic #224 phases 1/2/3/R/4:
   layered on the v3.0 audio engine. See "Pitch DSL (v1.1 — MIDI Output)".
   - Phase 1: `seq.midi()` output, degree resolution, scheduler, active-note tracking
   - Phase 2: `.root()`/`.oct()` group scope chains (`.mode()` reserved — throws)
-  - Phase 3: `[ ]` stacks + `chord([...])` values
+  - Phase 3: `[ ]` stacks + bare `[ ]` chord values
   - Phase R: `*n` repetition + pattern variables
   - Phase 4: `_` / `_n` ties, `{ }` legato, `.hold()`
   - Deferred: per-note expression (`@v` / articulation), per decision #42

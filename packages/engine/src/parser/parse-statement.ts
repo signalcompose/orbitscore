@@ -36,7 +36,7 @@ export class StatementParser {
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
-    // Variable declaration: var x = init GLOBAL  /  var m7 = chord([...])
+    // Variable declaration: var x = init GLOBAL  /  var m7 = [...]
     if (token.type === 'VAR') {
       return this.parseVarDeclaration()
     }
@@ -76,10 +76,24 @@ export class StatementParser {
     const equalsResult = ParserUtils.expect(this.tokens, this.pos, 'EQUALS')
     this.pos = equalsResult.newPos
 
-    // `var m7 = chord([ ... ])` — a chord-value binding (§6). The `init ...`
-    // initializers below are unchanged.
+    // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
+    //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
+    //   `init ...` → global / sequence initializer (below).
     const rhs = ParserUtils.current(this.tokens, this.pos)
+
+    // §6 decision #48: the `chord([...])` wrapper was removed in favour of the bare
+    // `[ ... ]` literal. Surface the migration explicitly rather than failing with a
+    // generic "expected init" error.
     if (rhs.type === 'IDENTIFIER' && rhs.value === 'chord') {
+      throw new Error(
+        '`chord([...])` was removed (§6, decision #48): write the chord value as a bare ' +
+          'stack, e.g. `var m7 = [1, b3, 5, b7]`.',
+      )
+    }
+
+    // `var m7 = [1, b3, 5, b7]` — a chord-value binding (§6). A bare `[ ]` stack is the
+    // vertical value; spread (`[m7, 9]`) and removal (`[m7, -5]`) work as in play().
+    if (rhs.type === 'LBRACKET') {
       return this.parseChordBinding(varNameResult.token.value)
     }
 
@@ -109,26 +123,16 @@ export class StatementParser {
   }
 
   /**
-   * Parse `var NAME = chord([ ... ])` (§6). The bracket contents are parsed by the
-   * expression parser (a PlayStack); only its raw voices are kept on the binding,
-   * to be evaluated (spread/removal/`^N`) by the interpreter at execution order.
+   * Parse `var NAME = [ ... ]` (§6, decision #48): a chord-value binding. The bare
+   * `[ ]` stack is parsed by the expression parser (a PlayStack); only its raw voices
+   * are kept on the binding, to be evaluated (spread/removal/`^N`) by the interpreter
+   * at execution order.
    */
   private parseChordBinding(variableName: string): { statement: ChordBinding; newPos: number } {
-    const chordKw = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER') // 'chord'
-    this.pos = chordKw.newPos
-    const lparen = ParserUtils.expect(this.tokens, this.pos, 'LPAREN')
-    this.pos = lparen.newPos
-
-    if (ParserUtils.current(this.tokens, this.pos).type !== 'LBRACKET') {
-      throw new Error('chord(...) expects a `[ ... ]` stack literal, e.g. chord([1, b3, 5, b7])')
-    }
     const ep = new ExpressionParser(this.tokens, this.pos)
     const stackResult = ep.parseArgument()
     this.pos = stackResult.newPos
     const stack = stackResult.value as PlayStack
-
-    const rparen = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
-    this.pos = rparen.newPos
 
     return {
       statement: { type: 'chord_binding', variableName, voices: stack.voices },

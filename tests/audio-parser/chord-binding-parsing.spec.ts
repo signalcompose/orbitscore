@@ -3,9 +3,10 @@ import { describe, it, expect } from 'vitest'
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 
 /**
- * Phase 3 (#231) — `import chords` / `var X = chord([...])` parsing + bare
+ * Phase 3 (#231) — `import chords` / `var X = [...]` chord-value parsing + bare
  * chord-name group elements (§6, §9.1). Statement shape only; resolution and MIDI
- * dispatch are covered in tests/core/sequence-chord-dispatch.spec.ts.
+ * dispatch are covered in tests/core/sequence-chord-dispatch.spec.ts. (§6 decision
+ * #48: chord values are bare `[ ]` literals; the `chord([...])` wrapper was removed.)
  */
 
 describe('Phase 3 — import chords parsing', () => {
@@ -21,9 +22,9 @@ describe('Phase 3 — import chords parsing', () => {
   })
 })
 
-describe('Phase 3 — var = chord([...]) parsing', () => {
-  it('`var m7 = chord([1, b3, 5, b7])` → a chord_binding with raw voices', () => {
-    const stmt = parseAudioDSL('var m7 = chord([1, b3, 5, b7])').statements[0] as any
+describe('§6 — bare `[ ]` chord-value parsing (decision #48)', () => {
+  it('`var m7 = [1, b3, 5, b7]` → a chord_binding with raw voices', () => {
+    const stmt = parseAudioDSL('var m7 = [1, b3, 5, b7]').statements[0] as any
     expect(stmt.type).toBe('chord_binding')
     expect(stmt.variableName).toBe('m7')
     expect(stmt.voices[0]).toBe(1)
@@ -37,15 +38,15 @@ describe('Phase 3 — var = chord([...]) parsing', () => {
     expect(stmt.voices[3]).toMatchObject({ type: 'pitch', degree: 7, alteration: -1 })
   })
 
-  it('`var m7omit5 = chord([m7, -5])` keeps the ref + removal markers raw', () => {
-    const stmt = parseAudioDSL('var m7omit5 = chord([m7, -5])').statements[0] as any
+  it('`var m7omit5 = [m7, -5]` keeps the ref + removal markers raw', () => {
+    const stmt = parseAudioDSL('var m7omit5 = [m7, -5]').statements[0] as any
     expect(stmt.type).toBe('chord_binding')
     expect(stmt.voices[0]).toEqual({ type: 'chord_ref', name: 'm7', octaveShift: 0 })
     expect(stmt.voices[1]).toEqual({ type: 'chord_removal', degree: 5, alteration: 0 })
   })
 
-  it('chord(...) requires a `[ ]` stack literal', () => {
-    expect(() => parseAudioDSL('var x = chord(1, 3, 5)')).toThrow(/expects a `\[ \.\.\. \]` stack/)
+  it('the removed `chord([...])` wrapper throws a migration error', () => {
+    expect(() => parseAudioDSL('var m7 = chord([1, b3, 5, b7])')).toThrow(/chord\(\[/)
   })
 })
 

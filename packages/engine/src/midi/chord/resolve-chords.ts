@@ -11,7 +11,7 @@
  *
  * Rules (§6):
  *  - Spread: a chord ref inside a `[ ]` stack (or as a bare group element) expands
- *    to its voices; same rule at definition site (`chord([m7, 9])`) and use site.
+ *    to its voices; same rule at definition site (`[m7, 9]`) and use site.
  *  - Removal `-N`: removes the LITERAL-matching voice (degree + alteration) from the
  *    spread stack; no match = no-op + warning (literal match only — §6 rejects
  *    resolved-pitch matching as context-dependent).
@@ -254,10 +254,10 @@ export interface ChordDefinitionResult {
 }
 
 /**
- * Evaluate a `chord([ ... ])` definition (§6) to a flat voice list for storage in
- * the namespace. Like the stack evaluator but in {@link ChordVoice} space: it
- * spreads refs to other chords (`chord([m7, 9])`), removes literal matches
- * (`chord([m7, -5])`), and folds a ref's `^N` into the spread voices. Chord
+ * Evaluate a `var X = [ ... ]` chord definition (§6) to a flat voice list for storage
+ * in the namespace. Like the stack evaluator but in {@link ChordVoice} space: it
+ * spreads refs to other chords (`[m7, 9]`), removes literal matches
+ * (`[m7, -5]`), and folds a ref's `^N` into the spread voices. Chord
  * definitions are flat degree stacks (§6) — a non-flat voice (subtree/stack) is a
  * diagnostic warning and skipped, not silently dropped.
  */

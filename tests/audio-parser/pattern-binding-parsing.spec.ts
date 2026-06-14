@@ -36,10 +36,7 @@ describe('Phase R — pattern binding parsing (§6.5)', () => {
     expect(() => parseAudioDSL('var x = (1, 0), (5, 0)')).toThrow(/juxtaposition|single cell/)
   })
 
-  it('init declarations and chord bindings are unaffected (regression)', () => {
+  it('init declarations are unaffected (regression)', () => {
     expect(parseAudioDSL('var g = init GLOBAL').globalInit).toMatchObject({ type: 'global_init' })
-    expect(parseAudioDSL('var m7 = chord([1, b3, 5, b7])').statements[0]).toMatchObject({
-      type: 'chord_binding',
-    })
   })
 })
