@@ -30,9 +30,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **衝突ループの TOCTOU 解消**: `fs.writeFileSync(candidate, meta, { flag: 'wx' })`（原子的排他作成）に置換。`existsSync`→`write` の隙間競合を排し、ループも簡潔化（EEXIST→次候補、他の I/O エラーは disabled で best-effort 維持）。並列 REPL でも既存ログを無音上書きしない。
 - **単一 GLOBAL 前提を明記**: `sessionHooksInstalled` は最初の GLOBAL のみフックする旨を SESSION_LOG_SPEC §3.1 + コードコメントに明記。
 
+**バージョン整合（大和さん確定 2026-06-15）**: v1.1.1 以降 175 コミットで MIDI 出力（新ピラー）+ Pitch DSL + comp + session log が積まれた。すべて追加的（破壊なし）で厳密 semver では 1.2.0 だが、MIDI という新ピラー + 録音の世代交代として **WCTM マイルストーンを 2.0.0 とする**（製品ポジショニング判断）。`version.ts` の `ENGINE_VERSION` を `2.0.0-dev` に整合（`.orbslog` meta の engineVersion）。`DSL_VERSION` は別軸なので `1.1` 維持。package.json 群の bump + タグはリリース時に実施（現状 root 1.1.0 / engine 0.0.1 のドリフトはリリースで解消）。
+
 **deferred（v2 と判断、§7 Future Directions に記録）**:
 - preamble 無上限（素朴な oldest 破棄は init 行を失い因果記録を壊す → 正しい上限設計は v2）
-- version.ts 手動同期（monorepo + dist layout で動的読みが脆い → ビルド時注入/リリーススクリプトの領域）
+- version.ts の package.json からの**自動同期**（monorepo + dist layout で動的読みが脆い → ビルド時注入/リリーススクリプトの領域。値の整合自体は上記で実施済）
 
 **テスト**: 既存ファイルを上書きしない wx 原子性テストを追加（+1）。session-log 26件、全体 1090 passed / 23 skipped。
 
