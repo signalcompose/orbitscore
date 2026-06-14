@@ -3,6 +3,8 @@
  * Based on specification: docs/INSTRUCTION_ORBITSCORE_DSL.md
  */
 
+import { degreeToSemitone } from '../midi/degree-resolution'
+
 import {
   AudioToken,
   GlobalInit,
@@ -15,20 +17,14 @@ import {
   ImportStatement,
   PlayStack,
   PlayElement,
-  PlayPitch,
 } from './types'
 import { ParserUtils } from './parser-utils'
 
-/** Ionian semitone vocabulary for degrees 1..7 (§2.1), for the mode-lattice math. */
-const MODE_IONIAN = [0, 2, 4, 5, 7, 9, 11]
-
 /** Semitone offset of one `mode(...)` element (a root-scope degree) from the tonic (§2.2). */
 function modeElementSemitone(el: PlayElement): number {
-  const semi = (d: number) => MODE_IONIAN[(d - 1) % 7]! + 12 * Math.floor((d - 1) / 7)
-  if (typeof el === 'number') return semi(el)
+  if (typeof el === 'number') return degreeToSemitone(el)
   if (el && typeof el === 'object' && el.type === 'pitch') {
-    const p = el as PlayPitch
-    return semi(p.degree) + p.alteration + 12 * p.octaveShift
+    return degreeToSemitone(el.degree, el.alteration, el.octaveShift)
   }
   throw new Error('mode(...) elements must be degrees (e.g. mode(1, 2, b3, 4, 5, 6, b7))')
 }

@@ -23,7 +23,18 @@
 import { ResolvedPitch, RootContext, SymbolicPitch } from './types'
 
 /** Semitone offsets for degrees 1..7 in the Ionian reference (§2.1). */
-const IONIAN = [0, 2, 4, 5, 7, 9, 11] as const
+export const IONIAN = [0, 2, 4, 5, 7, 9, 11] as const
+
+/**
+ * The root-relative semitone of a bare degree (§2.1): `IONIAN[(d-1)%7] + 12·⌊(d-1)/7⌋`
+ * plus optional accidental / structural octave. The shared kernel of the degree formula —
+ * used by chord-voicing position math (§12) and mode-lattice construction (§2.2).
+ */
+export function degreeToSemitone(degree: number, alteration = 0, octaveShift = 0): number {
+  return (
+    IONIAN[(degree - 1) % 7] + 12 * Math.floor((degree - 1) / 7) + alteration + 12 * octaveShift
+  )
+}
 
 /**
  * Accepted degrees (§2.1): scale 1-7, octave 8, odd tensions 9/11/13. 0 = rest.

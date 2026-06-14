@@ -18,6 +18,7 @@
  *  - `^N` on a ref = a whole-chord structural octave shift on that ref's voices.
  */
 import { PlayElement, PlayChordRemoval, StackElement } from '../../parser/types'
+import { degreeToSemitone } from '../degree-resolution'
 
 import { ChordVoice, BoundValue } from './types'
 
@@ -38,8 +39,13 @@ function cloneElement(el: PlayElement): PlayElement {
   return el && typeof el === 'object' ? (structuredClone(el) as PlayElement) : el
 }
 
-/** A close-position chord voice → a play element (a bare degree when plain). */
-function voiceToElement(voice: ChordVoice): PlayElement {
+/** A chord voice (degree + alteration + octave + detune) → a play element (bare degree when plain). */
+function voiceToElement(voice: {
+  degree: number
+  alteration: number
+  octaveShift: number
+  detune: number
+}): PlayElement {
   if (voice.alteration === 0 && voice.octaveShift === 0 && voice.detune === 0) {
     return voice.degree
   }
@@ -172,15 +178,8 @@ function evaluateStackVoices(
   return result
 }
 
-const IONIAN_SEMI = [0, 2, 4, 5, 7, 9, 11]
-
-/** A chord voice in a form the voicing ops can manipulate (degree + alteration + octave). */
-interface VoicingWork {
-  degree: number
-  alteration: number
-  octaveShift: number
-  detune: number
-}
+/** A chord voice in a form the voicing ops can manipulate (mirrors {@link ChordVoice}). */
+type VoicingWork = ChordVoice
 
 /** A resolved stack voice → workable form, or null for a non-flat voice (a subtree). */
 function voiceToWork(v: StackElement): VoicingWork | null {
@@ -196,27 +195,22 @@ function voiceToWork(v: StackElement): VoicingWork | null {
   return null
 }
 
-/** Workable voice → a play element (a bare degree when plain, §6 voiceToElement parity). */
-function workToVoice(w: VoicingWork): PlayElement {
-  if (w.alteration === 0 && w.octaveShift === 0 && w.detune === 0) return w.degree
-  return {
-    type: 'pitch',
-    degree: w.degree,
-    alteration: w.alteration,
-    octaveShift: w.octaveShift,
-    rangeSet: false, // §2.4: a chord voice's octave is structural, never a range set point
-    detune: w.detune,
-  }
-}
-
 /** Root-relative semitone of a voice (for the close/open position math, §12.3). */
 function voiceSemitone(w: VoicingWork): number {
-  return (
-    IONIAN_SEMI[(w.degree - 1) % 7]! +
-    12 * Math.floor((w.degree - 1) / 7) +
-    w.alteration +
-    12 * w.octaveShift
-  )
+  return degreeToSemitone(w.degree, w.alteration, w.octaveShift)
+}
+
+/** Filter a chord's voices by a predicate; on an empty result warn and keep the original (§12). */
+function filterVoices(
+  works: VoicingWork[],
+  keep: (w: VoicingWork) => boolean,
+  emptyWarning: string,
+  warnings: string[],
+): VoicingWork[] {
+  const out = works.filter(keep)
+  if (out.length > 0) return out
+  warnings.push(emptyWarning)
+  return works
 }
 
 /** Closest position: stack voices ascending, each the nearest chord tone above the previous. */
@@ -243,7 +237,7 @@ function closePosition(works: VoicingWork[]): VoicingWork[] {
  * Returns the stack unchanged (+ a warning) if a voice is non-flat (a subtree).
  */
 function applyVoicing(
-  stack: { type: 'stack'; voices: StackElement[]; octaveShift?: number },
+  stack: { type: 'stack'; voices: StackElement[]; octaveShift?: number; random?: number },
   op: 'drop' | 'invert' | 'open' | 'close' | 'shell' | 'rootless',
   args: number[],
   warnings: string[],
@@ -277,18 +271,20 @@ function applyVoicing(
       break
     }
     case 'shell':
-      out = works.filter((w) => w.degree === 1 || w.degree === 3 || w.degree === 7)
-      if (out.length === 0) {
-        warnings.push('.shell(): no root/3rd/7th present — left unchanged (§12).')
-        out = works
-      }
+      out = filterVoices(
+        works,
+        (w) => w.degree === 1 || w.degree === 3 || w.degree === 7,
+        '.shell(): no root/3rd/7th present — left unchanged (§12).',
+        warnings,
+      )
       break
     case 'rootless':
-      out = works.filter((w) => w.degree !== 1)
-      if (out.length === 0) {
-        warnings.push('.rootless(): only the root present — left unchanged (§12).')
-        out = works
-      }
+      out = filterVoices(
+        works,
+        (w) => w.degree !== 1,
+        '.rootless(): only the root present — left unchanged (§12).',
+        warnings,
+      )
       break
     case 'close':
       out = closePosition(works)
@@ -301,10 +297,13 @@ function applyVoicing(
       break
   }
 
-  const voices = out.map(workToVoice)
-  return stack.octaveShift !== undefined
-    ? { type: 'stack', voices, octaveShift: stack.octaveShift }
-    : { type: 'stack', voices }
+  // Preserve the stack's `octaveShift` and `.r` thinning (a `.r` chained before the voicing).
+  return {
+    type: 'stack',
+    voices: out.map(voiceToElement),
+    ...(stack.octaveShift !== undefined && { octaveShift: stack.octaveShift }),
+    ...(stack.random !== undefined && { random: stack.random }),
+  }
 }
 
 /** Resolve a single play element (1→1), recursing through groups / stacks / modifiers. */

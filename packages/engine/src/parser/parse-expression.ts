@@ -29,6 +29,16 @@ import { ParserUtils } from './parser-utils'
 /** Voicing operators parsed as postfix on a chord value / `[ ]` stack (§12, #49/#51). */
 const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootless'])
 
+/** Per-op `[min, max]` argument arity (§12.3): drop ≥1, invert exactly 1, the rest 0. */
+const VOICING_ARITY: Record<string, [number, number]> = {
+  drop: [1, Infinity],
+  invert: [1, 1],
+  open: [0, 0],
+  close: [0, 0],
+  shell: [0, 0],
+  rootless: [0, 0],
+}
+
 /**
  * If the last element of `list` is a scope chain (PlayScoped) and there are
  * preceding sibling groups since `runStart`, collapse the juxtaposition run
@@ -222,7 +232,8 @@ export class ExpressionParser {
     let parsed = true
     while (parsed) {
       parsed = false
-      const t = ParserUtils.current(this.tokens, this.pos).type
+      const cur = ParserUtils.current(this.tokens, this.pos)
+      const t = cur.type
       if (t === 'AT') {
         // §10.3 expression (E5): `@v100` absolute velocity / `@v+20`/`@v-30` relative
         // (accent) / `@g30` articulation as a gate PERCENT (30 = 0.30, 120 = 1.20).
@@ -271,7 +282,7 @@ export class ExpressionParser {
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         detune = this.parseSignedNumber()
         parsed = true
-      } else if (t === 'IDENTIFIER' && ParserUtils.current(this.tokens, this.pos).value === 'r') {
+      } else if (t === 'IDENTIFIER' && cur.value === 'r') {
         // Trailing `r` = random presence (§12, #50/#52): default 50% chance to sound.
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         random = 0.5
@@ -784,16 +795,15 @@ export class ExpressionParser {
     }
     this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
 
-    // Arity checks (§12.3): drop/invert need position(s); invert is single; the named
-    // position operators take none.
-    if ((op === 'drop' || op === 'invert') && args.length === 0) {
-      throw new Error(`.${op}() needs at least one position, e.g. .${op}(2)`)
-    }
-    if (op === 'invert' && args.length > 1) {
-      throw new Error('.invert(n) takes a single number')
-    }
-    if (op !== 'drop' && op !== 'invert' && args.length > 0) {
-      throw new Error(`.${op}() takes no arguments`)
+    // Arity contract (§12.3): drop = ≥1 position, invert = exactly 1, the named
+    // position operators take none. One [min, max] check covers all of them.
+    const [min, max] = VOICING_ARITY[op]!
+    if (args.length < min || args.length > max) {
+      throw new Error(
+        max === 0
+          ? `.${op}() takes no arguments`
+          : `.${op}() takes ${min === max ? `${min}` : `${min}+`} position(s), e.g. .${op}(2)`,
+      )
     }
 
     return { type: 'voicing', op: op as PlayVoicing['op'], args, target }

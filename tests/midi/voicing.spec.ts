@@ -33,8 +33,8 @@ describe('E2 — voicing parse shape (§12)', () => {
   })
 
   it('`.invert(2)` rejects extra args; `.drop()` needs a position; `.open(1)` rejects args', () => {
-    expect(() => parseAudioDSL('p.play([1,3,5].invert(2,3))')).toThrow(/single number/)
-    expect(() => parseAudioDSL('p.play([1,3,5].drop())')).toThrow(/needs at least one/)
+    expect(() => parseAudioDSL('p.play([1,3,5].invert(2,3))')).toThrow(/invert\(\) takes 1/)
+    expect(() => parseAudioDSL('p.play([1,3,5].drop())')).toThrow(/takes 1\+ position/)
     expect(() => parseAudioDSL('p.play([1,3,5].open(1))')).toThrow(/no arguments/)
   })
 })
@@ -117,5 +117,11 @@ describe('E2 — deterministic voicing transforms (§12.3)', () => {
   it('`.drop(9)` on a 4-voice chord warns (position out of range) and skips it', () => {
     const { warnings } = voice('[1,3,5,7].drop(9)')
     expect(warnings.some((w) => /4 voices/.test(w))).toBe(true)
+  })
+
+  it('a voicing preserves a chained `.r` thinning (random survives the transform)', () => {
+    const { stack } = voice('[1,3,5,7].r.drop(2)')
+    expect(stack.type).toBe('stack')
+    expect(stack.random).toBe(0.5) // .r thinning must not be dropped by applyVoicing
   })
 })
