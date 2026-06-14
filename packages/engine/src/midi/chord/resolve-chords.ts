@@ -11,7 +11,7 @@
  *
  * Rules (§6):
  *  - Spread: a chord ref inside a `[ ]` stack (or as a bare group element) expands
- *    to its voices; same rule at definition site (`chord([m7, 9])`) and use site.
+ *    to its voices; same rule at definition site (`[m7, 9]`) and use site.
  *  - Removal `-N`: removes the LITERAL-matching voice (degree + alteration) from the
  *    spread stack; no match = no-op + warning (literal match only — §6 rejects
  *    resolved-pitch matching as context-dependent).
@@ -92,10 +92,12 @@ function resolveName(
 ): PlayElement[] {
   const bound = getBinding(name)
   if (!bound) {
+    // #255: an unbound standalone name is rendered as a REST (occupies its slot) rather
+    // than dropped — a typo must not silently re-time the rest of the bar (decision: a).
     warnings.push(
-      `unknown name "${name}" — neither a chord nor a pattern (§6/§6.5). Did you \`import chords\` / \`var ${name} = …\`?`,
+      `unknown name "${name}" — neither a chord nor a pattern (§6/§6.5); rendered as a rest. Did you \`import chords\` / \`var ${name} = …\`?`,
     )
-    return []
+    return [0]
   }
   if (bound.kind === 'chord') {
     return [{ type: 'stack', voices: spreadChordVoices(bound.voices, octaveShift) }]
@@ -163,6 +165,141 @@ function evaluateStackVoices(
   return result
 }
 
+const IONIAN_SEMI = [0, 2, 4, 5, 7, 9, 11]
+
+/** A chord voice in a form the voicing ops can manipulate (degree + alteration + octave). */
+interface VoicingWork {
+  degree: number
+  alteration: number
+  octaveShift: number
+  detune: number
+}
+
+/** A resolved stack voice → workable form, or null for a non-flat voice (a subtree). */
+function voiceToWork(v: StackElement): VoicingWork | null {
+  if (typeof v === 'number') return { degree: v, alteration: 0, octaveShift: 0, detune: 0 }
+  if (v && typeof v === 'object' && v.type === 'pitch') {
+    return {
+      degree: v.degree,
+      alteration: v.alteration,
+      octaveShift: v.octaveShift,
+      detune: v.detune,
+    }
+  }
+  return null
+}
+
+/** Workable voice → a play element (a bare degree when plain, §6 voiceToElement parity). */
+function workToVoice(w: VoicingWork): PlayElement {
+  if (w.alteration === 0 && w.octaveShift === 0 && w.detune === 0) return w.degree
+  return {
+    type: 'pitch',
+    degree: w.degree,
+    alteration: w.alteration,
+    octaveShift: w.octaveShift,
+    rangeSet: false, // §2.4: a chord voice's octave is structural, never a range set point
+    detune: w.detune,
+  }
+}
+
+/** Root-relative semitone of a voice (for the close/open position math, §12.3). */
+function voiceSemitone(w: VoicingWork): number {
+  return (
+    IONIAN_SEMI[(w.degree - 1) % 7]! +
+    12 * Math.floor((w.degree - 1) / 7) +
+    w.alteration +
+    12 * w.octaveShift
+  )
+}
+
+/** Closest position: stack voices ascending, each the nearest chord tone above the previous. */
+function closePosition(works: VoicingWork[]): VoicingWork[] {
+  const base = works
+    .map((w) => ({ ...w, octaveShift: 0 }))
+    .sort((a, b) => voiceSemitone(a) - voiceSemitone(b))
+  let prev = -Infinity
+  for (const w of base) {
+    let semi = voiceSemitone(w)
+    while (semi <= prev) {
+      w.octaveShift += 1
+      semi += 12
+    }
+    prev = semi
+  }
+  return base
+}
+
+/**
+ * Apply a voicing operator (§12, decisions #49/#51) to a RESOLVED stack as a symbolic
+ * transform: drop/invert/open/close move voices by `^N` octaves; shell/rootless filter.
+ * "Position N from the top" counts the structural (written/ascending) order, top = last.
+ * Returns the stack unchanged (+ a warning) if a voice is non-flat (a subtree).
+ */
+function applyVoicing(
+  stack: { type: 'stack'; voices: StackElement[]; octaveShift?: number },
+  op: 'drop' | 'invert' | 'open' | 'close' | 'shell' | 'rootless',
+  args: number[],
+  warnings: string[],
+): PlayElement {
+  const works: VoicingWork[] = []
+  for (const v of stack.voices) {
+    const w = voiceToWork(v)
+    if (!w) {
+      warnings.push(`.${op}() needs a flat chord (no subtree voice) — voicing skipped (§12).`)
+      return stack
+    }
+    works.push(w)
+  }
+  const n = works.length
+  if (n === 0) return stack
+
+  let out: VoicingWork[] = works
+  switch (op) {
+    case 'drop':
+      for (const p of args) {
+        if (p > n) {
+          warnings.push(`.drop(${p}): the chord has ${n} voices — position skipped (§12).`)
+          continue
+        }
+        works[n - p]!.octaveShift -= 1
+      }
+      break
+    case 'invert': {
+      const k = Math.min(args[0]!, n)
+      for (let i = 0; i < k; i++) works[i]!.octaveShift += 1
+      break
+    }
+    case 'shell':
+      out = works.filter((w) => w.degree === 1 || w.degree === 3 || w.degree === 7)
+      if (out.length === 0) {
+        warnings.push('.shell(): no root/3rd/7th present — left unchanged (§12).')
+        out = works
+      }
+      break
+    case 'rootless':
+      out = works.filter((w) => w.degree !== 1)
+      if (out.length === 0) {
+        warnings.push('.rootless(): only the root present — left unchanged (§12).')
+        out = works
+      }
+      break
+    case 'close':
+      out = closePosition(works)
+      break
+    case 'open':
+      // SATB close→open: from closest position, drop the 2nd-from-top voice an octave.
+      out = closePosition(works)
+      if (out.length >= 2) out[out.length - 2]!.octaveShift -= 1
+      out.sort((a, b) => voiceSemitone(a) - voiceSemitone(b))
+      break
+  }
+
+  const voices = out.map(workToVoice)
+  return stack.octaveShift !== undefined
+    ? { type: 'stack', voices, octaveShift: stack.octaveShift }
+    : { type: 'stack', voices }
+}
+
 /** Resolve a single play element (1→1), recursing through groups / stacks / modifiers. */
 function resolveElement(
   el: PlayElement,
@@ -174,9 +311,12 @@ function resolveElement(
   switch (el.type) {
     case 'stack': {
       const resolved = evaluateStackVoices(el.voices, getBinding, warnings, visiting)
-      return el.octaveShift !== undefined
-        ? { type: 'stack', voices: resolved, octaveShift: el.octaveShift }
-        : { type: 'stack', voices: resolved }
+      return {
+        type: 'stack',
+        voices: resolved,
+        ...(el.octaveShift !== undefined && { octaveShift: el.octaveShift }),
+        ...(el.random !== undefined && { random: el.random }), // §12 `.r` thinning (carried to timing)
+      }
     }
     case 'nested':
       return {
@@ -189,6 +329,17 @@ function resolveElement(
         type: 'legato',
         elements: resolveElements(el.elements, getBinding, warnings, visiting),
       }
+    case 'voicing': {
+      // §12: resolve the target (a `[ ]` stack or a chord name ref) to a single stack,
+      // then apply the voicing as a symbolic `^N` / filter transform.
+      const resolved = resolveElements([el.target], getBinding, warnings, visiting)
+      const target = resolved.length === 1 ? resolved[0] : undefined
+      if (!target || typeof target !== 'object' || target.type !== 'stack') {
+        warnings.push(`.${el.op}() expects a chord / [ ] stack target (§12) — left unchanged.`)
+        return target ?? { type: 'stack', voices: [] }
+      }
+      return applyVoicing(target, el.op, el.args, warnings)
+    }
     case 'scoped':
       return { ...el, groups: resolveElements(el.groups, getBinding, warnings, visiting) }
     case 'modified':
@@ -254,10 +405,10 @@ export interface ChordDefinitionResult {
 }
 
 /**
- * Evaluate a `chord([ ... ])` definition (§6) to a flat voice list for storage in
- * the namespace. Like the stack evaluator but in {@link ChordVoice} space: it
- * spreads refs to other chords (`chord([m7, 9])`), removes literal matches
- * (`chord([m7, -5])`), and folds a ref's `^N` into the spread voices. Chord
+ * Evaluate a `var X = [ ... ]` chord definition (§6) to a flat voice list for storage
+ * in the namespace. Like the stack evaluator but in {@link ChordVoice} space: it
+ * spreads refs to other chords (`[m7, 9]`), removes literal matches
+ * (`[m7, -5]`), and folds a ref's `^N` into the spread voices. Chord
  * definitions are flat degree stacks (§6) — a non-flat voice (subtree/stack) is a
  * diagnostic warning and skipped, not silently dropped.
  */

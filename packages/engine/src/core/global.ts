@@ -144,7 +144,7 @@ export class Global {
   }
 
   /**
-   * `var NAME = chord([ ... ])` (§6): evaluate the raw stack (spread refs to chords
+   * `var NAME = [ ... ]` (§6): evaluate the raw stack (spread refs to chords
    * already bound, apply `-N` removals / `^N`) and bind the resulting voice list.
    */
   defineChord(name: string, voices: StackElement[]): this {

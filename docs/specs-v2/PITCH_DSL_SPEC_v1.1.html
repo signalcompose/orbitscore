@@ -332,7 +332,7 @@ degree system) - Implements ROADMAP_2026.md v1.1 “MIDI Integration”
 はどの文脈でも「ルートの短3度上」。スコープ宣言を遡らないと実音が分からない設計(scale-index
 方式)は基底には採用しない。</li>
 <li><strong>コードシンボルを構文に持たない</strong>:
-コードは度数スタックの値(<code>chord([...])</code>)であり、命名はユーザー変数に委ねる。</li>
+コードは度数スタックの値(bare <code>[...]</code> 値、#48)であり、命名はユーザー変数に委ねる。</li>
 <li><strong>記譜可逆性</strong>: 本 DSL
 の根底にある問題定義は「譜面を簡単に書くための DSL
 の不在」である。内部表現(ネスト分割木 +
@@ -634,17 +634,17 @@ repeated note が全てタイになりリズムが消えるため)。</li>
 <hr />
 <h2 id="chord-values">6. Chord Values</h2>
 <div class="sourceCode" id="cb12"><pre
-class="sourceCode js"><code class="sourceCode javascript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7      <span class="op">=</span> <span class="fu">chord</span>([<span class="dv">1</span><span class="op">,</span> b3<span class="op">,</span> <span class="dv">5</span><span class="op">,</span> b7])      <span class="co">// ルート未束縛の度数スタック(値)</span></span>
-<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7omit5 <span class="op">=</span> <span class="fu">chord</span>([m7<span class="op">,</span> <span class="op">-</span><span class="dv">5</span>])             <span class="co">// spread + 除去</span></span>
-<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7add9  <span class="op">=</span> <span class="fu">chord</span>([m7<span class="op">,</span> <span class="dv">9</span>])              <span class="co">// spread + 追加</span></span>
-<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> so_what <span class="op">=</span> <span class="fu">chord</span>([<span class="dv">1</span><span class="op">,</span> <span class="dv">11</span><span class="op">,</span> b7<span class="op">^+</span><span class="dv">1</span><span class="op">,</span> b3<span class="op">^+</span><span class="dv">1</span><span class="op">,</span> <span class="dv">5</span><span class="op">^+</span><span class="dv">1</span>])</span>
+class="sourceCode js"><code class="sourceCode javascript"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7      <span class="op">=</span> [<span class="dv">1</span><span class="op">,</span> b3<span class="op">,</span> <span class="dv">5</span><span class="op">,</span> b7]      <span class="co">// ルート未束縛の度数スタック(値)。bare [ ] が chord 値(#48)</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7omit5 <span class="op">=</span> [m7<span class="op">,</span> <span class="op">-</span><span class="dv">5</span>]             <span class="co">// spread + 除去</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> m7add9  <span class="op">=</span> [m7<span class="op">,</span> <span class="dv">9</span>]              <span class="co">// spread + 追加</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="kw">var</span> so_what <span class="op">=</span> [<span class="dv">1</span><span class="op">,</span> <span class="dv">11</span><span class="op">,</span> b7<span class="op">^+</span><span class="dv">1</span><span class="op">,</span> b3<span class="op">^+</span><span class="dv">1</span><span class="op">,</span> <span class="dv">5</span><span class="op">^+</span><span class="dv">1</span>]</span>
 <span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="im">import</span> chords                              <span class="co">// 標準ライブラリ: m7, maj7, dom7, m7b5, dim7, sus4, ...</span></span></code></pre></div>
 <ul>
 <li>chord 値は play() /
 スタック内に置かれた時点のスコープ(root/mode)で解決される。コンテキスト(root)とは別物:
 root はコンテキスト、chord は値。</li>
 <li><strong>Spread</strong>: スタック <code>[ ]</code> の中に chord
-値を置くと展開される。定義サイト(<code>chord([m7, 9])</code>)と使用サイト(<code>play([m7, 9], ...)</code>)で同一規則。</li>
+値を置くと展開される。定義サイト(<code>var x = [m7, 9]</code>)と使用サイト(<code>play([m7, 9], ...)</code>)で同一規則。</li>
 <li><strong>除去 <code>-</code></strong>: <code>-5</code>
 は展開後のスタックから<strong>字面一致</strong>する要素(<code>5</code>)を除去する。解決後ピッチでの照合は採用しない(<code>-3</code>
 が文脈依存になり予測不能なため)。一致要素が無い場合は no-op + warning
@@ -654,7 +654,7 @@ diagnostic。</li>
 <li>ビルダー API(<code>.add()</code>, <code>.omit()</code>,
 <code>.drop()</code>)は<strong>採用しない</strong>。すべて値合成(spread
 + <code>-</code> + 明示定義)で表現する。drop2 等は
-<code>var m7drop2 = chord([5^-1, 1, b3, b7])</code>
+<code>var m7drop2 = [5^-1, 1, b3, b7]</code>
 のように明示定義。</li>
 </ul>
 <hr />

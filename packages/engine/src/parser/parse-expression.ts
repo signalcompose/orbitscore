@@ -16,6 +16,7 @@ import {
   PlayScoped,
   PlayStack,
   PlayLegato,
+  PlayVoicing,
   StackElement,
   PlayChordRef,
   PlayChordRemoval,
@@ -24,6 +25,9 @@ import {
   Meter,
 } from './types'
 import { ParserUtils } from './parser-utils'
+
+/** Voicing operators parsed as postfix on a chord value / `[ ]` stack (§12, #49/#51). */
+const VOICING_OPS = new Set(['drop', 'invert', 'open', 'close', 'shell', 'rootless'])
 
 /**
  * If the last element of `list` is a scope chain (PlayScoped) and there are
@@ -147,8 +151,7 @@ export class ExpressionParser {
     // Check for pitch modifiers (^ octave shift, ~ detune) → bare degree becomes
     // a PlayPitch (e.g. 3^+1, 7~-0.25). A bare integer with no modifier stays a
     // plain number so audio slice-number parsing is unaffected.
-    const afterNum = ParserUtils.current(this.tokens, this.pos).type
-    if (afterNum === 'CARET' || afterNum === 'TILDE') {
+    if (this.nextIsPitchModifier()) {
       return this.parsePitchModifiers(value, 0)
     }
 
@@ -193,6 +196,16 @@ export class ExpressionParser {
    * another `^M`/`^0` overrides it. The parser only records the per-note
    * annotation; the running range is applied during scheduling, not here.
    */
+  /** True if the current token starts a pitch modifier: `^N` / `^r`, `~`, or a trailing `r`. */
+  private nextIsPitchModifier(): boolean {
+    const cur = ParserUtils.current(this.tokens, this.pos)
+    return (
+      cur.type === 'CARET' ||
+      cur.type === 'TILDE' ||
+      (cur.type === 'IDENTIFIER' && cur.value === 'r')
+    )
+  }
+
   private parsePitchModifiers(
     degree: number,
     alteration: number,
@@ -200,25 +213,47 @@ export class ExpressionParser {
     let octaveShift = 0
     let rangeSet = false
     let detune = 0
+    let random: number | undefined
+    let randomOctave = false
     let parsed = true
     while (parsed) {
       parsed = false
       const t = ParserUtils.current(this.tokens, this.pos).type
       if (t === 'CARET') {
-        // `^N` sets the sticky pitch range (§2.4). rangeSet marks this note as a
-        // running-range set point so the scheduling walk persists it onward.
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-        octaveShift = this.parseSignedNumber()
-        rangeSet = true
+        // `^r` = a random octave (§12, #53); otherwise `^N` sets the sticky range (§2.4),
+        // rangeSet marking this note as a running-range set point for the walk.
+        const after = ParserUtils.current(this.tokens, this.pos)
+        if (after.type === 'IDENTIFIER' && after.value === 'r') {
+          this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+          randomOctave = true
+        } else {
+          octaveShift = this.parseSignedNumber()
+          rangeSet = true
+        }
         parsed = true
       } else if (t === 'TILDE') {
         this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
         detune = this.parseSignedNumber()
         parsed = true
+      } else if (t === 'IDENTIFIER' && ParserUtils.current(this.tokens, this.pos).value === 'r') {
+        // Trailing `r` = random presence (§12, #50/#52): default 50% chance to sound.
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        random = 0.5
+        parsed = true
       }
     }
     return {
-      value: { type: 'pitch', degree, alteration, octaveShift, rangeSet, detune },
+      value: {
+        type: 'pitch',
+        degree,
+        alteration,
+        octaveShift,
+        rangeSet,
+        detune,
+        ...(random !== undefined && { random }),
+        ...(randomOctave && { randomOctave: true }),
+      },
       newPos: this.pos,
     }
   }
@@ -630,6 +665,21 @@ export class ExpressionParser {
       }
       if (t === 'DOT') {
         const method = ParserUtils.peek(this.tokens, this.pos).value
+        if (method === 'r') {
+          // §12 `.r` / `.r(p)`: random thinning of a chord/stack (runtime, per cycle).
+          if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
+          el = this.parseRandomThin(el)
+          changed = true
+          continue
+        }
+        if (VOICING_OPS.has(method)) {
+          // §12: a voicing operator on a chord value / stack. A bare name lifts to a
+          // chord_ref first (`m7.drop(2)`), like the scope-chain case below.
+          if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
+          el = this.parseVoicingOp(el, method)
+          changed = true
+          continue
+        }
         if (method === 'root' || method === 'mode' || method === 'oct' || method === 'hold') {
           if (typeof el === 'string') el = { type: 'chord_ref', name: el, octaveShift: 0 }
           const scope = this.parseScopeChain()
@@ -642,6 +692,78 @@ export class ExpressionParser {
       break
     }
     return { value: el, newPos: this.pos, changed }
+  }
+
+  /**
+   * Parse `.r` / `.r(p)` (§12, #50/#52): random thinning of a chord/stack — each voice
+   * has probability `p` (default 0.5) to sound, rolled per cycle at dispatch (silence is
+   * allowed). Stored as `random` on the {@link PlayStack}; a bare name ref is wrapped in
+   * a one-voice stack so `m7.r` works.
+   */
+  private parseRandomThin(target: PlayElement): PlayElement {
+    this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // DOT
+    this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // 'r'
+    let p = 0.5
+    if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      const numTok = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = numTok.newPos
+      p = ParserUtils.parseNumber(numTok.token)
+      if (!(p >= 0 && p <= 1)) throw new Error('.r(p) probability must be between 0 and 1')
+      this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+    }
+    if (target && typeof target === 'object' && target.type === 'stack') {
+      return { ...target, random: p }
+    }
+    if (target && typeof target === 'object' && target.type === 'chord_ref') {
+      return { type: 'stack', voices: [target], random: p }
+    }
+    throw new Error('.r applies to a chord / `[ ]` stack, e.g. `[1,3,5,7].r` or `m7.r`')
+  }
+
+  /**
+   * Parse a voicing postfix `.op(...)` (§12, #49/#51): `.drop(n...)` / `.invert(n)` /
+   * `.open()` / `.close()` / `.shell()` / `.rootless()`. All are method-call form with
+   * parens (like `.hold()`); drop/invert take 1-based positions, the rest take none.
+   * Wraps the just-parsed `target` (a stack or chord ref) in a {@link PlayVoicing} for
+   * the resolver to apply as a symbolic `^N` / filter transform.
+   */
+  private parseVoicingOp(target: PlayElement, op: string): PlayVoicing {
+    this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // DOT
+    this.pos = ParserUtils.advance(this.tokens, this.pos).newPos // method IDENTIFIER
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'LPAREN').newPos
+
+    const args: number[] = []
+    while (
+      ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
+      !ParserUtils.isEOF(this.tokens, this.pos)
+    ) {
+      const numTok = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = numTok.newPos
+      const n = ParserUtils.parseNumber(numTok.token)
+      if (!Number.isInteger(n) || n < 1) {
+        throw new Error(`.${op}() positions must be integers ≥ 1 (got ${n})`)
+      }
+      args.push(n)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      } else break
+    }
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+
+    // Arity checks (§12.3): drop/invert need position(s); invert is single; the named
+    // position operators take none.
+    if ((op === 'drop' || op === 'invert') && args.length === 0) {
+      throw new Error(`.${op}() needs at least one position, e.g. .${op}(2)`)
+    }
+    if (op === 'invert' && args.length > 1) {
+      throw new Error('.invert(n) takes a single number')
+    }
+    if (op !== 'drop' && op !== 'invert' && args.length > 0) {
+      throw new Error(`.${op}() takes no arguments`)
+    }
+
+    return { type: 'voicing', op: op as PlayVoicing['op'], args, target }
   }
 
   /**
@@ -814,8 +936,7 @@ export class ExpressionParser {
       const numResult = ParserUtils.advance(this.tokens, this.pos)
       this.pos = numResult.newPos
       const value = ParserUtils.parseNumber(numResult.token)
-      const next = ParserUtils.current(this.tokens, this.pos).type
-      if (next === 'CARET' || next === 'TILDE') {
+      if (this.nextIsPitchModifier()) {
         const pitchResult = this.parsePitchModifiers(value, 0)
         this.pos = pitchResult.newPos
         voices.push(this.asStackVoice(pitchResult.value))
@@ -963,8 +1084,8 @@ export class ExpressionParser {
         const modifierResult = this.parsePlayWithModifier(value)
         this.pos = modifierResult.newPos
         elements.push(modifierResult.value)
-      } else if (next === 'CARET' || next === 'TILDE') {
-        // Bare degree with octave-shift / detune modifier, e.g. 3^+1, 7~-0.25
+      } else if (this.nextIsPitchModifier()) {
+        // Bare degree with octave-shift / detune / random modifier (e.g. 3^+1, 7~-0.25, 5r)
         const pitchResult = this.parsePitchModifiers(value, 0)
         this.pos = pitchResult.newPos
         elements.push(pitchResult.value)

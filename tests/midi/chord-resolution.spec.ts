@@ -128,6 +128,14 @@ describe('Phase R — pattern resolution cycle guard (§6.5)', () => {
     expect(warnings.some((w) => /circular pattern reference/.test(w))).toBe(true)
   })
 
+  it('an unbound standalone name resolves to a REST, preserving its slot (#255)', () => {
+    // play(1, bogus, 3): bogus is unbound → a rest (0), so the bar stays 3 slots
+    // (a typo must not silently re-time the rest of the bar).
+    const { elements, warnings } = resolveChords([1, ref('bogus') as any, 3], lookup)
+    expect(elements).toEqual([1, 0, 3])
+    expect(warnings.some((w) => /rendered as a rest/.test(w))).toBe(true)
+  })
+
   it('legitimate sibling reuse (`play(riff, riff)`) is NOT flagged as circular', () => {
     // visiting is a per-branch set (removed after each expansion), so reusing the
     // same finished pattern as a sibling is fine — only a name on the LIVE branch loops.

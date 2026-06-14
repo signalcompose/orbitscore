@@ -70,9 +70,9 @@ export type Statement =
   | ImportStatement
 
 /**
- * `var NAME = chord([ ... ])` — a chord-value binding (§6). Distinct from the
- * `var x = init ...` initializers (GlobalInit / SequenceInit). Carries the RAW
- * `[ ]` voices so the interpreter evaluates them (spread/removal/`^N`) at execution
+ * `var NAME = [ ... ]` — a chord-value binding (§6, bare `[ ]` literal, decision #48).
+ * Distinct from the `var x = init ...` initializers (GlobalInit / SequenceInit). Carries
+ * the RAW `[ ]` voices so the interpreter evaluates them (spread/removal/`^N`) at execution
  * order against the chord namespace as it exists then (§6.5.2 評価時値渡し).
  */
 export type ChordBinding = {
@@ -94,7 +94,7 @@ export type ImportStatement = {
  * USE site (the play() that references it), so a later redefinition does not affect
  * an already-running pattern (reactive binding is rejected, §6.5).
  *
- * Distinct from {@link ChordBinding} (a vertical/stack value via `chord([...])`): a
+ * Distinct from {@link ChordBinding} (a vertical/stack value via bare `[...]`): a
  * pattern is a horizontal/tree value bound from a bare play expression. `elements`
  * holds 1+ top-level siblings — length > 1 = a juxtaposition binding that splices
  * as multiple siblings at the use site.
@@ -138,10 +138,28 @@ export type PlayElement =
   | PlayRepeat // `x*n` repetition (§6.5); transient — expanded to n siblings at L2
   | PlayTie // `_` event-level tie (§5.1): extends the previous event by one slot
   | PlayLegato // `{ }` legato group (§4/§5.4): note-off delayed past the next note-on
+  | PlayVoicing // `.drop()/.invert()/.open()/...` voicing op (§12); transient — applied at L2
 
 export type PlayNested = {
   type: 'nested'
   elements: PlayElement[]
+}
+
+/**
+ * A voicing operator applied to a chord value / `[ ]` stack (§12, decisions #49/#51):
+ * `.drop(n...)`, `.invert(n)`, `.open()`, `.close()`, `.shell()`, `.rootless()`.
+ *
+ * Transient: the resolver (L2, resolveChords) applies it to the target's resolved
+ * voices as a SYMBOLIC transform — per-voice `^N` (drop/invert/open/close) or a voice
+ * filter (shell/rootless) — and replaces the node with a plain {@link PlayStack}. It
+ * never reaches the timing walk (an unresolved one is an internal-error there).
+ * `target` is the `[ ]` stack or the bare name ref (`m7.drop(2)`) being voiced.
+ */
+export interface PlayVoicing {
+  type: 'voicing'
+  op: 'drop' | 'invert' | 'open' | 'close' | 'shell' | 'rootless'
+  args: number[] // drop: 1-based positions from the top; invert: [n]; open/close/shell/rootless: []
+  target: PlayElement
 }
 
 /**
@@ -171,6 +189,11 @@ export type PlayStack = {
    * (§6 `m7^+1`). Structural (does NOT move the §2.4 running range). 0/absent = none.
    */
   octaveShift?: number
+  /**
+   * §12 `.r` / `.r(p)`: random thinning probability (0..1) applied per voice — each
+   * voice has this chance to sound, rolled per cycle at dispatch. Absent = no thinning.
+   */
+  random?: number
 }
 
 /**
@@ -305,6 +328,8 @@ export type PlayPitch = {
   rangeSet: boolean // true if `^` was written (sticky range set point); false = inherit running range
   detune: number // semitones from `~` (e.g. b7~-0.25 → -0.25). 0 if absent
   tie?: boolean // §5.2 voice-level tie: a `_` prefix inside a stack ([1, _5]) — resolved-pitch-match suppress
+  random?: number // §12 `Xr`: presence probability (0..1) — rolled per cycle at dispatch. Absent = always
+  randomOctave?: boolean // §12 `^r`: a random octave (±1) picked per cycle at dispatch
 }
 
 export type PlayWithModifier = {

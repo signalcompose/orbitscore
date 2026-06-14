@@ -98,7 +98,7 @@ function processImportStatement(statement: ImportStatement, state: InterpreterSt
   requireGlobal(state, '`import chords`')?.importChords()
 }
 
-/** Process `var NAME = chord([ ... ])` (§6): bind the evaluated chord value. */
+/** Process `var NAME = [ ... ]` (§6): bind the evaluated chord value. */
 function processChordBinding(statement: ChordBinding, state: InterpreterState): void {
   requireGlobal(state, `chord "${statement.variableName}"`)?.defineChord(
     statement.variableName,

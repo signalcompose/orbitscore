@@ -189,6 +189,11 @@ export function calculateEventTiming(
           if (voice && typeof voice === 'object' && voice.type === 'pitch' && voice.tie) {
             for (const ev of voiceEvents) ev.voiceTie = true
           }
+          // §12 `.r`: a stack-level random thinning probability applies to each voice
+          // that does not already carry its own (per-voice `Xr` wins).
+          if (element.random !== undefined) {
+            for (const ev of voiceEvents) if (ev.random === undefined) ev.random = element.random
+          }
           events.push(...voiceEvents)
         }
       } else if (element.type === 'pitch') {
@@ -208,6 +213,8 @@ export function calculateEventTiming(
             detune: element.detune,
           },
           ...(scope && { scope }),
+          ...(element.random !== undefined && { random: element.random }), // §12 `Xr`
+          ...(element.randomOctave && { randomOctave: true }), // §12 `^r`
         })
       } else if (element.type === 'modified') {
         // Modified element (e.g., with .chop())
@@ -278,6 +285,13 @@ export function calculateEventTiming(
         throw new Error(
           `Internal: unresolved repeat (*${element.count}) reached the timing walk; ` +
             `repetitions must be expanded before scheduling (§6.5).`,
+        )
+      } else if (element.type === 'voicing') {
+        // §12: a voicing op is applied (to a plain stack) by the resolver BEFORE timing.
+        // Reaching here means resolution was skipped — a wiring bug.
+        throw new Error(
+          `Internal: unresolved voicing .${element.op}() reached the timing walk; ` +
+            `voicing must be applied before scheduling (§12).`,
         )
       }
     }

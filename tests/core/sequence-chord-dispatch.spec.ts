@@ -11,7 +11,7 @@ import { InterpreterState } from '../../packages/engine/src/interpreter/types'
 /**
  * Phase 3 (#231) — chord values end to end (§6): the global chord namespace,
  * Sequence.play spread/removal/`^N` resolution, and the interpreter routing for
- * `import chords` / `var = chord([...])`. Built on the direct Global+Sequence MIDI
+ * `import chords` / `var = [...]`. Built on the direct Global+Sequence MIDI
  * harness (the interpreter's full path needs SuperCollider and is skipped).
  */
 
@@ -49,7 +49,7 @@ function notesOf(out: MidiOutput): number[] {
   return (out.noteOn as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[2])
 }
 
-/** Raw `[ ]` voices of a `chord([...])` expression, for direct defineChord() calls. */
+/** Raw voices of a bare `[ ]` chord-value literal, for direct defineChord() calls. */
 function chordVoices(expr: string): any[] {
   return (parseAudioDSL(`var tmp = ${expr}`).statements[0] as any).voices
 }
@@ -108,7 +108,7 @@ describe('Phase 3 — chord values dispatch (§6)', () => {
   it('a user chord built by spread+removal plays back', async () => {
     const out = await playChords((g) => {
       g.importChords()
-      g.defineChord('m7omit5', chordVoices('chord([m7, -5])'))
+      g.defineChord('m7omit5', chordVoices('[m7, -5]'))
     }, '[m7omit5]')
     expect(notesOf(out).sort((a, b) => a - b)).toEqual([60, 63, 70])
   })
@@ -149,7 +149,7 @@ describe('Phase 3 — chord namespace registry (§6, §10-4)', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const g = freshGlobal()
     g.importChords()
-    g.defineChord('m7', chordVoices('chord([1, 3, 5, 7])')) // shadow stdlib m7 with maj7 voicing
+    g.defineChord('m7', chordVoices('[1, 3, 5, 7]')) // shadow stdlib m7 with maj7 voicing
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/"m7" redefined/))
     expect(g.getChordVoices('m7')).toEqual([
       { degree: 1, alteration: 0, octaveShift: 0, detune: 0 },
@@ -182,10 +182,10 @@ describe('Phase 3 — interpreter routing for import / chord_binding (§6)', () 
     expect(g.getChordVoices('maj7')).toBeDefined()
   })
 
-  it('`var X = chord([...])` binds via the interpreter', async () => {
+  it('`var X = [...]` binds via the interpreter', async () => {
     const g = new Global(mockScheduler(), new MidiManager(() => mockMidiOutput()))
     const state = stateWith(g)
-    const binding = parseAudioDSL('var triad = chord([1, 3, 5])').statements[0]
+    const binding = parseAudioDSL('var triad = [1, 3, 5]').statements[0]
     await processStatement(binding as never, state)
     expect(g.getChordVoices('triad')).toEqual([
       { degree: 1, alteration: 0, octaveShift: 0, detune: 0 },

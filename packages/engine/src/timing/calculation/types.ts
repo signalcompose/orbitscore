@@ -58,4 +58,12 @@ export interface TimedEvent {
   tie?: boolean
   legato?: boolean
   voiceTie?: boolean
+  /**
+   * §12 randomness, rolled per cycle at the output stage (decisions #50/#52/#53):
+   * - `random`: presence probability (0..1) — the note has this chance to sound this
+   *   cycle, else it is silent (a rest). No minimum-voice guarantee (silence allowed).
+   * - `randomOctave`: pick a random octave shift in {-1, 0, +1} for this note this cycle.
+   */
+  random?: number
+  randomOctave?: boolean
 }

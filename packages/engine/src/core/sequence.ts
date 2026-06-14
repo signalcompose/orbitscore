@@ -704,12 +704,19 @@ export class Sequence {
       // A melodic `^N` (rangeSet=true) folded into runningRange already, so its
       // structural part is 0 — additive is a no-op for every pre-stack note (§9.3/§9.4).
       const structural = written.rangeSet ? 0 : written.octaveShift
-      const effectiveOctave = runningRange + (ev.scope?.groupOct ?? 0) + structural
+      // §12 `^r`: a per-cycle random octave in {-1, 0, +1} (added to the effective octave
+      // only — it is transient, never a running-range set point).
+      const randomOctave = ev.randomOctave ? Math.floor(Math.random() * 3) - 1 : 0
+      const effectiveOctave = runningRange + (ev.scope?.groupOct ?? 0) + structural + randomOctave
       const resolved = resolveDegree({ ...written, octaveShift: effectiveOctave }, context)
+      // §12 `Xr` / `.r`: per-cycle presence roll. On failure the note is silent this cycle
+      // (a rest) — no minimum-voice guarantee, silence is allowed (decision #52).
+      const present = ev.random === undefined || Math.random() < ev.random
+      const note = resolved && present ? resolved.midiNote : null
       return {
         onTime,
         slotDur: ev.duration,
-        note: resolved ? resolved.midiNote : null, // null = rest (degree 0)
+        note, // null = rest (degree 0) or a random-suppressed voice this cycle
         detune: resolved ? resolved.detune : 0,
         tie: false,
         legato: !!ev.legato,
@@ -717,7 +724,7 @@ export class Sequence {
         hold: this._hold || !!ev.scope?.hold,
         tieSlots: 0,
         offTime: 0,
-        emit: resolved !== null,
+        emit: note !== null,
       }
     })
 
