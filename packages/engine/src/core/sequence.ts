@@ -9,8 +9,9 @@ import * as path from 'path'
 import { AudioEngine } from '../audio/types'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
-import { resolveChords } from '../midi/chord/resolve-chords'
+import { resolveChords, cloneElement } from '../midi/chord/resolve-chords'
 import { voiceLeadOctaves } from '../midi/voice-leading'
+import { cellToGrid } from '../midi/comp-rhythm'
 import { RootContext, SymbolicPitch } from '../midi/types'
 import { TimedEvent, TimedEventScope } from '../timing/calculation/types'
 
@@ -100,6 +101,8 @@ export class Sequence {
   private _vel = 96 // default velocity 1..127. spec §1
   private _hold = false // §5.3: auto common-tone tie between consecutive stacks
   private _voicelead = false // §6.3 (C1): auto voice-leading between consecutive chord stacks
+  private _compCell?: string // §6.4 (C2a): selected comping rhythm cell (charleston, quarters, ...)
+  private _compDensity?: number // §6.4 (C2a): comping density 0..1 (cell-less mode)
   private _octave?: number // base octave (degree 1) IF seq.octave() was set; else falls back
   private _rootDegree?: number // seq.root(n): numeric root = degree of global.key()
 
@@ -388,6 +391,65 @@ export class Sequence {
   /** Alias of {@link voicelead} (§6.3, C1). */
   vl(): this {
     return this.voicelead()
+  }
+
+  /**
+   * Select a named comping rhythm cell for {@link comp} (§6.4, C2a): `charleston`,
+   * `redgarland`, `offbeats`, `quarters`, `twofour`. A cell is a meter-independent
+   * figure (see comp-rhythm.ts); over an odd meter it rides an intentional polymeter.
+   */
+  cell(name: string): this {
+    this._compCell = name
+    return this
+  }
+
+  /**
+   * Comping density 0..1 for cell-less {@link comp} (§6.4, C2a): 0 = laying out
+   * (silent), 1 = every slot. Ignored when a named {@link cell} is set.
+   */
+  density(value: number): this {
+    this._compDensity = Math.max(0, Math.min(1, value))
+    return this
+  }
+
+  /**
+   * Comping macro (§6.4, comp phase C2a). Each argument is ONE bar's chord; the
+   * bar is comped with the current {@link cell} (default `charleston`) /
+   * {@link density} and expanded to an ordinary play pattern — so chord
+   * resolution, timing, and `.voicelead()` all compose unchanged. `N` chords →
+   * `N` bars (length is set to `N`).
+   *
+   * The cell's slot count is meter-independent, so an even-grid cell over an odd
+   * meter yields an intentional cross-rhythm (polymeter), and each slot may be
+   * further subdivided by the multi-layer time structure. Off slots are rests;
+   * stab length is controlled by {@link gate} (sustained/let-ring comping is a
+   * future option — predominant comping is articulated, per §6.4).
+   */
+  comp(...chords: PlayElement[]): this {
+    const name = this.stateManager.getName() || 'sequence'
+    if (chords.length === 0) {
+      console.warn(`⚠️  Sequence '${name}': comp() needs at least one chord — ignored.`)
+      return this
+    }
+    // Pick the figure: an explicit cell wins; with neither cell nor density set a
+    // bare `.comp(...)` defaults to charleston; density-only stays in density mode.
+    let cellName: string | undefined
+    if (this._compCell !== undefined) {
+      cellName = this._compCell
+    } else if (this._compDensity === undefined) {
+      cellName = 'charleston'
+    } // else: density mode — cellName stays undefined
+    const onsets = cellToGrid(cellName, this._compDensity, (msg) =>
+      console.warn(`⚠️  Sequence '${name}': ${msg}`),
+    )
+    // Expand each chord into a comped bar: a `( )` group with one slot per cell
+    // slot, the chord (a fresh clone per onset, mirroring `*n`) at onsets, 0 else.
+    const bars: PlayElement[] = chords.map((chord) => ({
+      type: 'nested',
+      elements: onsets.map((on) => (on ? cloneElement(chord) : 0)),
+    }))
+    this.length(chords.length)
+    return this.play(...bars)
   }
 
   /** Default gate length as a fraction of the slot (0..1). spec §1. */

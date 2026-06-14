@@ -34,8 +34,8 @@ export interface ResolveResult {
   warnings: string[]
 }
 
-/** Deep-clone a play element so repeated (`*n`) copies are independent objects. */
-function cloneElement(el: PlayElement): PlayElement {
+/** Deep-clone a play element so repeated (`*n` / comp onset) copies are independent objects. */
+export function cloneElement(el: PlayElement): PlayElement {
   return el && typeof el === 'object' ? (structuredClone(el) as PlayElement) : el
 }
 

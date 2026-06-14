@@ -1018,7 +1018,7 @@ m7.open() / m7.close() // open / close position; .shell() = R+3+7; .rootless() =
   allowed), `^r` = random octave ±1. `r` is one primitive whose effect depends on its position.
   Reproducibility is by `.orbslog` (execution record, not a result recording) — random re-rolls
   on replay; no seed (decisions #50/#52/#53).
-- **`.comp`** (auto jazz comping) is a future generative macro over these primitives — see #259.
+- **`.comp`** (jazz comping rhythm) is implemented as a *primitive* macro — see P.14 (comp C2a).
 
 ### P.13 Auto voice-leading — `.voicelead()` / `.vl()` (正本 PITCH_DSL_SPEC §6.3, comp C1, #269)
 
@@ -1041,6 +1041,31 @@ seq.voicelead()                   // sequence default (alias: seq.vl())
   min(n,m), extras at octave 0 (C1 simplification; full bipartite is C2+). **Limitation**: L1-minimal
   does NOT guarantee tendency-tone resolution or parallel-5th/8ve avoidance — "smooth by default, user
   controls specifics."
+
+### P.14 Comping rhythm — `.comp()` / `.cell()` / `.density()` (正本 PITCH_DSL_SPEC §6.4, comp C2a, #271)
+
+A *primitive* macro: each argument is one bar's chord, expanded by a comping **cell** into an
+ordinary play pattern (so chord resolution / timing / `.voicelead()` compose unchanged — no parser
+change). `N` chords → `N` bars (`length` set to `N`).
+
+```js
+piano.comp([1,3,5], [5,7,2])           // 1 chord/bar; default cell = charleston
+piano.cell("quarters").comp([1,3,5])   // charleston / redgarland / offbeats / quarters / twofour
+piano.density(0.6).comp([1,3,5])       // cell-less: density 0..1 (0 = laying out)
+piano.comp([1,3,5], [5,7,2]).voicelead()  // composes with §6.3
+```
+
+- **Cells are meter-independent fixed subdivisions** (charleston = 8 slots, quarters/twofour = 4).
+  The bar is cut into the cell's own slot count, so an even-grid cell over an odd meter rides an
+  intentional **polymeter** (e.g. 8-against-3) — a feature, composable with the multi-layer time
+  structure. The meter sets the bar's real duration; the cell sets how many equal parts.
+- **Off slots are rests; stab length is `gate`** (predominant comping is articulated/short — Freddie
+  Green flat-four; sustained/let-ring is a future option). Density mode places `round(d×8)` onsets
+  evenly on an eighth grid.
+- **Scope boundary**: `.comp` is the *mechanism* (which onsets, what subdivision). The *intelligence*
+  — choosing the cell/voicing, density shaping, when to sustain, reacting to a soloist — is **out of
+  DSL scope (comp C3)**: it belongs to an LLM bandmate skill that live-codes the DSL, keeping the DSL
+  a controllable primitive set rather than an auto-composer (philosophy: user/AI control, not autogen).
 
 ### Completed Features ✅
 

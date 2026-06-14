@@ -726,6 +726,21 @@ seq.voicelead()                   // シーケンス既定としても可(alias:
 <li><strong>音楽性の限界(明示)</strong>: L1 最小は<strong>傾向音解決(導音・7→3)も並行5度/8度回避も保証しない</strong>。本機能は「デフォルトで滑らか + 細部はユーザー制御」という位置づけで、傾向音や声部独立性が要るときは明示 degree / voicing operator で書く。</li>
 </ul>
 <hr />
+<h3 id="comping-cells">6.4 Comping rhythm: <code>.comp()</code> / <code>.cell()</code> / <code>.density()</code> (comp C2a)</h3>
+<pre><code class="sourceCode javascript">piano.midi("IAC", 1).octave(4)
+piano.comp([1,3,5], [5,7,2])              // 1 引数 = 1 小節のコード。既定セル charleston で展開
+piano.cell("quarters").comp([1,3,5])      // 名前付きセルを選択(charleston/redgarland/offbeats/quarters/twofour)
+piano.density(0.6).comp([1,3,5])          // セル無しは density(0..1)で onset を生成(0=laying out)
+piano.comp([1,3,5], [5,7,2]).voicelead()  // §6.3 と直交合成(コンプされた各コードがボイスリードされる)</code></pre>
+<ul>
+<li><code>.comp(c1, c2, …)</code> は<strong>各引数を1小節ぶんのコード</strong>として受け取り、コンピングのリズム<strong>セル</strong>で各小節を展開する<strong>マクロ</strong>。N 個のコード → N 小節(<code>length</code> は N に設定)。展開結果は<strong>通常の play パターン</strong>(<code>( )</code> 等分割の入れ子)なので、コード解決・タイミング・<code>.voicelead()</code> がそのまま合成される(パーサ変更なし。コンピングの<em>知能</em>=どのセル/ボイシングを選ぶかは DSL でなく LLM バンドメイト側スキルの担当 — comp C3 は DSL スコープ外)。</li>
+<li><strong>セルは meter 非依存の固定分割</strong>: 各セルは固有のスロット数(Charleston=8, quarters/twofour=4)を持ち、その数だけ小節を<strong>等分割</strong>して onset スロットにコードを置く。スロット数を meter から導出しないため、偶数グリッドのセルを<strong>奇数拍子に乗せると意図的なポリメーター</strong>(例: 8-against-3)が小節単位で生まれる(バグでなく機能)。多層時間構造(各スロットをさらに <code>( )</code> 分割)と掛け算できる。meter は小節の<strong>実時間長</strong>だけを決め、セルは<strong>何等分するか</strong>だけを決める。</li>
+<li><strong>標準セル</strong>(Jens Larsen / Freddie Green / Red Garland 由来): <code>charleston</code>(8分割, beat1 + 2&)・<code>redgarland</code>(8分割, 2& + 4&)・<code>offbeats</code>(8分割, 全ての裏)・<code>quarters</code>(4分割, 全拍 = flat-four)・<code>twofour</code>(4分割, beat 2 & 4)。未知のセル名は警告して density にフォールバック。</li>
+<li><strong>密度モード</strong>: <code>.cell()</code> 未指定で <code>.density(d)</code> のみのとき、既定グリッド(8分割)に <code>round(d×8)</code> 個の onset を等間隔配置する(<code>d=0</code> は完全な無音 = laying out、<code>d=1</code> は全スロット)。<code>.cell()</code> と <code>.density()</code> の両方未指定の素の <code>.comp()</code> は <code>charleston</code> を既定とする。</li>
+<li><strong>音価は <code>gate</code> で制御</strong>: off スロットは rest。各 stab は1スロットを <code>gate</code> 比で発音する(調査: 標準コンピングは Freddie Green 的に<strong>歯切れよく短い</strong>のが基本で、pad/legato の持続は別スタイル)。「空けば次の onset まで伸ばす」持続コンピングは将来オプション(タイ <code>_</code> 機構の上に乗る。密度連動の選択は LLM スキル側 = C3)。</li>
+<li>対象は任意の play 要素(コード stack <code>[ ]</code> でも単音でも可)。単音はリズムだけが乗る(ボイスリードは §6.3 のとおり単音をスルー)。引数ゼロは警告して no-op。</li>
+</ul>
+<hr />
 <h2 id="repetition-n-and-pattern-variables-ドメイン共通">6.5 Repetition
 <code>*n</code> and Pattern Variables (ドメイン共通)</h2>
 <p>本節の機能は<strong>リズム木の構造操作</strong>であり、ピッチ意味論に依存しない。MIDI

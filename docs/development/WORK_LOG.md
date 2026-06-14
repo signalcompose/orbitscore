@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.113 Issue #271 — comping rhythm engine `.comp()` / `.cell()` / `.density()`（comp phase C2a） (Jun 14, 2026)
+
+**Date**: 2026-06-14
+**Status**: ✅ 実装完了（C2a。/simplify + /code:pr-review-team 予定）
+**Issue**: signalcompose/orbitscore#271 / 親 #259 / 設計 docs/research/comping-voice-leading-design.md
+**Branch**: `271-comp-c2a`
+
+**概要**: `.comp` 段階実装の C2a。各引数を1小節のコードとして受け取り、コンピングのリズム**セル**で各小節を展開する**primitive マクロ**。N コード → N 小節。展開結果は通常の play パターン（`( )` 等分割）なので、コード解決・タイミング・`.voicelead()`（C1）がそのまま合成される（**パーサ変更ゼロ**: `parseArguments` は method 非依存で play-element をパース、`callMethod` が generic dispatch）。
+
+**設計上の重要な確定（ユーザー指摘 + 調査 + advisor 検証）**:
+- **セルは meter 非依存の固定分割**: 各セルは固有スロット数（Charleston=8, quarters/twofour=4）を持ち、小節をその数で等分割する。偶数グリッドのセルを奇数拍子に乗せたときの「ズレ」は**意図的なポリメーター**（8:3 等）として歓迎（多層時間構造と掛け算可能）。meter 由来 slotsPerBar 計算・収まり判定は廃止 → 単純化。
+- **音価は `gate`、off は rest**（調査根拠: 標準コンピングは Freddie Green 的に短い、pad/legato 持続は別スタイル。出典: Piano With Jonny / TJPS / Hal Galper / Acoustic Guitar / Jazz Library）。タイ持続は将来オプション。
+- **コンピング知能（旧 C3: voicing 自動選択・rootless A/B・密度連動 sustain）は DSL 関数にしない → LLM バンドメイトスキルへ移管**。DSL はメカニズム/primitive に徹し、音楽的判断は LLM 側が持つ（哲学「ユーザー/AI 制御が主役・自動作曲ではない」と整合）。DSL 側コンピングは C2a で primitive 出揃い一区切り。C2b（per-cycle 可変 subdivision）はメカニズム寄りで保留（WCTM クリティカルパス外）。
+
+**実装**:
+- `midi/comp-rhythm.ts`: 純関数 `cellToGrid(cellName, density, warn?)` → `{slots, onsets}`。名前付きセル（charleston/redgarland/offbeats/quarters/twofour）＋ density モード（既定 8 分割に `round(d×8)` 個を等間隔）。未知セルは警告して density フォールバック。
+- `core/sequence.ts`: `seq.cell(name)` / `seq.density(n)` setter + `comp(...chords)`。各コードを `( )` 入れ子（onset にコード clone、else `0`）へ展開し `length(N)` → `play(...)`。素の `.comp()` は charleston 既定。
+
+**spec**: PITCH_DSL_SPEC §6.4 + core INSTRUCTION P.14 に normative セクション追加（メカニズム/知能の境界 = C3 は DSL スコープ外を明記）。
+
+**テスト**: `tests/midi/comp.spec.ts` 16件（カーネル単体 10: セル/density/clamp/未知セル + dispatch 6: 既定 charleston / 3-4 ポリメーター発火時刻 / named cell / density 0 laying out / N 小節 / voicelead 合成）。全体 1053 passed / 23 skipped。
+
 ### 6.112 Issue #269 — auto voice-leading `.voicelead()` / `.vl()`（comp phase C1） (Jun 14, 2026)
 
 **Date**: 2026-06-14
