@@ -42,9 +42,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **QA Finding（記録済 / 要子 Issue 化）**:
 - **FINDING-1**: `seq.root(<note-name>)`（例 `lead.root(C)`）が runtime で拒否される（"root() degree must be a positive integer"）。グループレベル note root（`(1,3,5).root(F)`）は動作。spec P.5 は `seq.root(C)` を有効と記載 → spec/実装の乖離。example 13 は数値 seq root + group note root で回避。子 Issue **#280** 起票済。
 
+**PR レビュー反映（`/code:pr-review-team`、4 エージェント並列）**:
+- **Critical（silent-failure-hunter）**: スモークの失敗トークン denylist が不完全で、部分破損（健全 seq + 壊れ seq の混在）を PASS で握り潰す穴。インタプリタの silent-error 文字列（`Method not found:` / `do not exist and will be ignored` / `Variable not found:` 等）を ENGINE_FAIL に追加。
+- **Important**: マルチ seq のスケジュール数を期待数と照合（silent ドロップ検出）/ `loop started` を SCHEDULED に追加。
+- **Minor（code-reviewer）**: `midi-run` を npm 経由でなく ts-node 直接起動（SIGINT がグレースフル shutdown に届き、孤児 node / 鳴りっぱなし MIDI を残さない）/ 空 FILES 配列の bash 3.2 ガード / `printf %s` を `[@]` に / 死んだ `✗` トークン除去。
+- **comment-analyzer / pr-test-analyzer**: example 13/17 の Expected コメント訂正、README ファイル一覧に 11–18 追記、QA マトリクスの test 引用 3 件を正確化。
+- 検証: ネガティブテスト2種（`global.start()` 欠落、RUN が存在しない seq）で FAIL を確認。直接 ts-node 化後の孤児プロセス 0 を確認。全8スモーク PASS 維持。
+
 **人間ゲート（このセッションでは到達不能）**: 実音 QA・LinkAudio Ableton E2E・`.scx` Gatekeeper（#210）・#209 実装・PR マージ。2.0.0 リリースはこれら完了後。
 
-**Commit**: `3fe2185`
+**Commit**: `3fe2185`（初回）/ レビュー反映は追加コミット
 
 ### 6.116 Issue #276 — session log L1 polish（PR #275 bot レビュー反映） (Jun 15, 2026)
 

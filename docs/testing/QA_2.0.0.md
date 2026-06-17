@@ -28,7 +28,9 @@
 
 `scripts/qa-midi-smoke.sh` が各 example を実エンジン経路（parser → degree 解決 → MidiScheduler → MidiOutput → IAC）に通す。**SuperCollider 不要**。
 
-PASS 判定は4条件: ①`▶ running … → IAC` 到達（parse/statement 健全）②`midi-run error:` 無し ③握り潰し失敗トークン無し（`MidiScheduler: action failed` / `scheduler not running` / `✗`）④**実スケジュール証拠あり**（`(one-shot)` または `loop queued`）。④③が重要 — `→ IAC` は statement ループ後・scheduler tick 前に出力され、degree→note の解決は tick 時（最終出力段）で起き、エンジンは tick 失敗を resilience のため握り潰すため、`→ IAC` 単独では「何もスケジュールしなかった/tick で失敗した」ケースを見逃す。ネガティブテスト（`global.start()` 欠落）で本判定が FAIL することを確認済。
+PASS 判定は4条件: ①`▶ running … → IAC` 到達（parse/statement 健全）②`midi-run error:` 無し ③**握り潰しエラートークン無し** ④**期待数のシーケンスがスケジュールされた証拠**（`(one-shot)` / `loop queued` / `loop started` の数 ≥ そのファイルの RUN/LOOP が指すシーケンス数）。
+
+③④が重要 — `→ IAC` は statement ループ後・scheduler tick 前に出力され、degree→note の解決は tick 時（最終出力段）で起きる。さらにエンジンは多くの失敗を**握り潰して継続する**: MidiScheduler は失敗 tick を `console.error` してループ継続、インタプリタは「変数/シーケンス/global 不在」「メソッド不明」「RUN/LOOP が存在しないシーケンス名」等を throw せず `console.error` して継続する。よって `→ IAC` 単独・あるいは `midi-run error:` 無しだけでは、**部分破損（健全な seq + 壊れた seq の混在）**を見逃す。③ はこれらの silent-error 文字列（`MidiScheduler: action failed` / `scheduler not running` / `loop scheduling error:` / `do not exist and will be ignored` / `Variable not found:` / `Sequence instance not found:` / `Global instance not found:` / `Method not found:` / `Transport target not found:` / `No global instance available` / `requires a global`）を全て検出し、④ はシーケンスが silent にドロップされていないことを数で保証する。ネガティブテスト（`global.start()` 欠落、および RUN が存在しない seq を指す部分破損）で本判定が FAIL することを確認済。スクリプトは `midi-run` を ts-node 直接起動し、SIGINT がグレースフル shutdown に届く（鳴りっぱなし MIDI / 孤児プロセスを残さない）。
 
 | example | 対象ピラー | スモーク |
 |---|---|---|
@@ -63,14 +65,14 @@ PASS 判定は4条件: ①`▶ running … → IAC` 到達（parse/statement 健
 | 機能 | 区分 | 確認手段 | 期待結果 | spec | 状態 |
 |---|---|---|---|---|---|
 | E1: bare `[ ]` chord-value literal | P | smoke 12 / `tests/core/sequence-chord-dispatch.spec.ts` | `[m7]` → C Eb G Bb 等 | P.7 §6 / #48 | ✅ |
-| E2: voicing 演算子 `.drop/.invert/.open/.close/.shell/.rootless` | P | smoke 17 / ユニット | 各 voicing の決定論的 octave 配置 | P.11 §12 | ✅ |
+| E2: voicing 演算子 `.drop/.invert/.open/.close/.shell/.rootless` | P | smoke 17（`.drop/.invert/.open/.r`）/ ユニット `tests/midi/voicing.spec.ts`（`.close/.shell/.rootless` を含む全演算子） | 各 voicing の決定論的 octave 配置 | P.11 §12 | ✅ |
 | E2: random `Xr` / `.r` / `^r`（per-cycle 再ロール） | P | smoke 17 / ユニット | パース・スケジュール（毎サイクル再ロール） | P.11 / #53 | ✅ |
 | E3: key-center register `global.key("D4")` | P | ユニット | tonic + 基準オクターブ設定 | P.1 / #253 | ✅ |
 | E4: section 変数（`,` multi-bar） | P | smoke 15 / `tests/core/sequence-pattern-dispatch.spec.ts` | `play(A,A)` で section 再利用 | P.9 / #254 | ✅ |
 | E5: per-note `@v` velocity / `@g` articulation | P | smoke 16 / ユニット | 絶対/相対 velocity・gate% が反映 | P.12 / #262 | ✅ |
-| E6: mode scope `mode(...)` + `.mode(name)` + `.period()` | P | smoke 13 / ユニット | lattice index で degree 解決 | P.4 / #264 | ✅ |
+| E6: mode scope `mode(...)` + `.mode(name)` + `.period()` | P | smoke 13（`.mode`）/ ユニット `tests/midi/mode.spec.ts`（`.period()` を含む） | lattice index で degree 解決 | P.4 / #264 | ✅ |
 | Phase 2: scope chains `.root()/.mode()/.oct()` | P | smoke 13 / `tests/core/sequence-scope-dispatch.spec.ts` | inner→outer→seq 既定の解決順 | P.5 §3 | ✅ 🐛 |
-| Phase 3: `[ ]` stack 同時 note-on / spread / `-N` / `^N` | P | smoke 12 / `tests/core/sequence-stack-dispatch.spec.ts` | 同時発音・spread・除去・octave 移動 | P.6/P.7 | ✅ |
+| Phase 3: `[ ]` stack 同時 note-on / spread / `-N` / `^N` | P | smoke 12 / `tests/core/sequence-stack-dispatch.spec.ts`（stack）+ `tests/core/sequence-chord-dispatch.spec.ts`（`-N` 除去・spread・`^N`） | 同時発音・spread・除去・octave 移動 | P.6/P.7 | ✅ |
 | Phase 4: `_` tie / `_n` voice tie / `{ }` legato / `.hold()` | P | smoke 14 / `tests/core/sequence-tie-legato-dispatch.spec.ts` | retrigger 抑制・overlap・common-tone tie | P.8 §5 | ✅ |
 | Phase R: `*n` repetition / pattern 変数 / unbound→rest | P | smoke 15 / ユニット, #255 | n スロット占有・splice・slot 保持 | P.9 §6.5 | ✅ |
 | 上記すべての **実音の正しさ**（和音・voicing・key・expression・mode） | H | 実機: IAC → monitor/DAW | 音として正しい（drop2 が drop2 に聞こえる 等） | — | ⏳ |

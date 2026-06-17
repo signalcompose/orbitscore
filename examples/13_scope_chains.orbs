@@ -3,8 +3,9 @@
 // Resolution order: inner group → outer group → sequence default.
 //
 // Run:  npm run midi-run -- examples/13_scope_chains.orbs
-// Expected (human): one triad shape transposed by each group's root/octave,
-//   plus a line read through a user-defined Dorian lattice on a second channel.
+// Expected (human): a triad shape transposed by root (II, F, C) in the first three
+//   groups, then a two-note shape lifted one octave; a second channel plays a
+//   C Dorian melody.
 
 var global = init GLOBAL
 global.tempo(110)

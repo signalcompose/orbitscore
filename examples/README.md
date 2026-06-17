@@ -192,6 +192,14 @@ examples/
 ├── 08_timing_verification.orbs      # タイミング精度検証
 ├── 09_reserved_keywords.orbs        # Reserved Keywords
 ├── 10_link_audio.orbs               # Link Audio 出力（Ableton Live 12.4+）
+├── 11_midi_degrees.orbs             # MIDI degree → note（最小 MIDI）
+├── 12_chords_stacks.orbs            # 和音・stack（[ ] / chord value）
+├── 13_scope_chains.orbs             # スコープチェーン・モード
+├── 14_ties_legato.orbs              # タイ・レガート・ホールド
+├── 15_repetition_sections.orbs      # 反復・セクション
+├── 16_expression.orbs               # ノートごとの表現（@v / @g）
+├── 17_voicing_random.orbs           # voicing 演算子・ランダム性
+├── 18_voicelead_comp.orbs           # ボイスリーディング・comping
 ├── live-demo.orbs                   # ライブコーディングテンプレート
 └── performance-demo.orbs            # 総合パフォーマンスデモ
 ```

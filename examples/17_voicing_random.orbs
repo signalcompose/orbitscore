@@ -4,7 +4,9 @@
 // Randomness is runtime, per-cycle re-rolled: `Xr` element, `.r` thinning, `^r` octave.
 //
 // Run:  npm run midi-run -- examples/17_voicing_random.orbs
-// Expected (human): four differently-voiced chords; the second sequence varies each loop.
+// Expected (human): four differently-voiced chords on the first pass; BOTH sequences
+//   vary each loop — the first via `.r` chord thinning, the second via `Xr` element
+//   random + `^r` random octave.
 
 var global = init GLOBAL
 global.tempo(100)
