@@ -115,6 +115,11 @@ degree → MIDI 出力と記号的ピッチ言語の example 群。**SuperCollid
 - **目的**: 自動ボイスリーディングと comping（comp C1 §6.3 / C2a §6.4）
 - **内容**: `.voicelead()` / `.cell("charleston").comp(...)`
 
+### 19. `19_iac_linkaudio_coexist.orbs` 🆕 v2.0.0-dev
+- **目的**: IAC (MIDI) と LinkAudio (Audio) を同一ファイルで共存させる（#209 / #278）
+- **内容**: Pavane 3声を IAC ch1-3 へ、ドラム4種を LinkAudio の別チャンネル（kick/snare/hat/openhat）へ。`.midi()` は `global.linkAudio()` の影響を受けない独立経路であることを示す
+- **前提**: Ableton Live 12.4+（Link + Link Audio 有効、SR=48000、テンポを `global.tempo()` と一致）
+
 ## 🎵 ライブパフォーマンス用
 
 ### `live-demo.orbs`
@@ -200,6 +205,7 @@ examples/
 ├── 16_expression.orbs               # ノートごとの表現（@v / @g）
 ├── 17_voicing_random.orbs           # voicing 演算子・ランダム性
 ├── 18_voicelead_comp.orbs           # ボイスリーディング・comping
+├── 19_iac_linkaudio_coexist.orbs    # IAC(MIDI) + LinkAudio(Audio) 共存
 ├── live-demo.orbs                   # ライブコーディングテンプレート
 └── performance-demo.orbs            # 総合パフォーマンスデモ
 ```

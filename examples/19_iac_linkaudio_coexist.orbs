@@ -1,0 +1,105 @@
+// IAC (MIDI) + LinkAudio coexistence — OrbitScore v2.0.0-dev
+//
+// 同一ファイル内で2つの出力経路を共存させるデモ:
+//   - IAC Bus 3トラック (MIDI)  : Ravel «亡き王女のためのパヴァーヌ» 3声 (IAC ch 1/2/3)
+//   - LinkAudio 4トラック (Audio): ドラム4種を別チャンネルで Ableton へストリーム
+//
+// MIDI (.midi) はオーディオバスを通らない独立経路なので、global.linkAudio() が
+// 有効でも throw しない。LinkAudio 制約「hardware と audio の混在禁止」はあくまで
+// *オーディオ* 系列の話で、MIDI は第3の経路として共存できる。
+//
+// 前提 (Ableton Live 12.4+):
+//   - Link 有効 + Link Audio 有効
+//   - Live のテンポを下の global.tempo() と一致させる (MIDI と Audio の同期に必須)
+//   - Live のサンプルレート = 48000 (global.linkAudio() の既定)
+//   - MIDI トラック x3 : Input = IAC Driver Bus 1, ch 1 / ch 2 / ch 3
+//   - Audio トラック x4: Audio From = OrbitScore の "kick" / "snare" / "hat" / "openhat"
+//
+// 注: Pavane は原曲どおり3声。IAC=3 / LinkAudio=4 の構成。
+
+// === Initialization ===
+var global = init GLOBAL
+global.tempo(60)
+global.beat(4 by 4)
+global.key("G")
+
+// このファイルの全 *オーディオ* 系列を LinkAudio 経由にする。
+// MIDI 系列 (.midi) はこの宣言の影響を受けず IAC へそのまま出る。
+global.linkAudio()
+global.start()
+
+// ============================================================
+// IAC Bus — MIDI 3声 (Ravel: Pavane pour une infante défunte, 冒頭8小節)
+//   tools/midi-monitor/pavane.orbs から流用。度数+^range / _ = tie / G major。
+// ============================================================
+var piano = init global.seq
+piano.midi("IAC", 1).octave(4).gate(0.95).vel(84)
+piano.length(8)
+piano.play(
+  (1, _, _, _, _, 2, 7^-1, 6),
+  (5, _, 6, 7, 7, 6, 6, _),
+  (3^+0, _, _, _, _, 4, 2, 1),
+  (7^-1, _, 1^+0, 2, _, 3, 1, 7^-1),
+  (6, _, 7, 1^+0, _, 2, 7^-1, 6),
+  (7, _, _, _, 0, 2^+0, 7^-1, 6),
+  (7, 0, 3^+0, _, _, _, 3, _),
+  (3, _, _, _, _, 2, 5, 3)
+)
+
+var inner = init global.seq
+inner.midi("IAC", 2).octave(4).gate(0.85).vel(58)
+inner.length(8)
+inner.play(
+  (3^-1, 5, 3, 5, 3, 6, 3, 6),
+  (7^-2, 3^-1, 7^-2, 3^-1, 1, 3, 1, 3),
+  (4, 6, 4, 6, 4, 6, 4, 6),
+  (4, 5, 4, 5, 3, 5, 3, 5),
+  (3, 4, 3, 4, 2, 4, 2, 4),
+  (7^-2, 3^-1, 5, 3, 0, 2^+0, 7^-1, 6),
+  (7, 5, 0, 0, 0, 0, 0, 0),
+  (0, 6, 1^+0, 6^-1, 4, 6, 1^+0, 6^-1)
+)
+
+var bass = init global.seq
+bass.midi("IAC", 3).octave(4).gate(0.95).vel(66)
+bass.length(8)
+bass.play(
+  (0, 0, 1^-2, 0, 4^-3, 0, 6^-2, 0),
+  (5^-3, 0, 3^-2, 0, 6^-3, 0, 5^-2, 0),
+  (0, 0, 1^-1, 0, 2^-2, 0, 1^-1, 0),
+  (5^-2, 0, 4^-1, 0, 1^-2, 0, 7, 0),
+  (4, 0, 3^-1, 0, 7^-3, 0, 6^-2, 0),
+  (3, 0, 0, 0, 7^-3, _, 1^-2, 2),
+  (5, _, _, _, 3^-3, _, _, _),
+  (2, _, _, _, _, _, _, _)
+)
+
+// ============================================================
+// LinkAudio — オーディオ4トラック (ドラム)
+//   各 .output() が Live 側で独立した "Audio From" ソースになる。
+//   examples/10_link_audio.orbs のテストパターンを4チャンネルに分けたもの。
+// ============================================================
+var kick = init global.seq
+kick.length(1)
+kick.audio("../test-assets/audio/kick.wav").output("kick")
+kick.play(1, 0, 1, 0)
+
+var snare = init global.seq
+snare.length(1)
+snare.audio("../test-assets/audio/snare.wav").output("snare")
+snare.play(0, 1, 0, 1)
+
+var hat = init global.seq
+hat.length(1)
+hat.audio("../test-assets/audio/hihat_closed.wav").output("hat")
+hat.play((1, 1), (1, 1), (1, 1), (1, 0))
+
+var openhat = init global.seq
+openhat.length(1)
+openhat.audio("../test-assets/audio/hihat_open.wav").output("openhat")
+openhat.play(0, 0, 0, (0, 1))
+
+// === Start playback ===
+// IAC 3声 + ドラム4chを同時にループ。
+// Live: MIDIトラックx3 (IAC ch1-3) + Audioトラックx4 (kick/snare/hat/openhat)。
+LOOP(piano, inner, bass, kick, snare, hat, openhat)
