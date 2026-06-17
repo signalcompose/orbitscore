@@ -46,6 +46,7 @@
 #include <ableton/util/FloatIntConversion.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -61,6 +62,21 @@ InterfaceTable* ft;
 namespace {
 
 orbitscore::ChannelRegistry g_channelRegistry;
+
+// Sample-accurate Link beat anchor (#209). The previous code derived each
+// block's beat from clock().micros() AT next() TIME, but scsynth burst-processes
+// several control blocks per audio callback (they share a wall clock) and next()
+// timing jitters — so consecutive commits got near-identical or jittery beats,
+// which Live's per-source rate adapter turned into level swell/decay/drift.
+//
+// Instead we capture ONE global anchor (host time + control-block counter) on
+// the first committing block, then derive every block's host time by advancing
+// the anchor by the exact audio duration of the elapsed blocks. All channels
+// share this single time base, so there is no per-channel differential drift and
+// no wall-clock jitter — only the negligible audio-vs-host ppm drift over a set.
+bool g_beatAnchorSet = false;
+std::int64_t g_anchorBufCounter = 0;
+std::chrono::microseconds g_anchorMicros{0};
 
 // Single source of truth for the /cmd path string. Used by the
 // `DefinePlugInCmd` registration and the `DoAsynchronousCommand` cmdName
@@ -164,9 +180,27 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
     std::memset(mix.mixBuffer, 0, clearSamples * sizeof(float));
     mix.currentFrames = n;
     mix.currentSessionState.emplace(unit->link->captureAudioSessionState());
-    const auto now = unit->link->clock().micros();
+
+    // Beat at this block, from the sample-accurate host time (#209). Capture a
+    // single global anchor (host time + bufCounter) once, then advance by the
+    // exact audio duration of the blocks elapsed since the anchor. This makes
+    // consecutive beats advance monotonically with the audio regardless of when
+    // next() actually fires (scsynth bursts several blocks per audio callback),
+    // killing the level swell/decay/drift that beatAtTime(clock().micros())
+    // produced. `n` is the (uniform) control-block frame count.
+    if (!g_beatAnchorSet) {
+      g_anchorMicros = unit->link->clock().micros();
+      g_anchorBufCounter = bufCounter;
+      g_beatAnchorSet = true;
+    }
+    const std::int64_t framesSinceAnchor =
+        (bufCounter - g_anchorBufCounter) * static_cast<std::int64_t>(n);
+    const std::chrono::microseconds blockTime =
+        g_anchorMicros +
+        std::chrono::microseconds(
+            (framesSinceAnchor * 1000000LL) / static_cast<std::int64_t>(unit->sampleRate));
     mix.currentBeatsAtBufferBegin =
-        mix.currentSessionState->beatAtTime(now, kQuantum);
+        mix.currentSessionState->beatAtTime(blockTime, kQuantum);
     mix.currentBufCounter = bufCounter;
   }
 
