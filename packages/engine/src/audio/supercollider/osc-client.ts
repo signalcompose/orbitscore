@@ -74,6 +74,45 @@ export class OSCClient {
   }
 
   /**
+   * Register a LinkAudio channel name with the OrbitLinkAudio plugin (#209).
+   *
+   * Sends `/cmd /orbit/registerLinkAudioChannel <channelId> <name>` so the
+   * plugin has a sink for `orbitPlayBufLink` synths dispatched on `channelId`,
+   * and waits for the plugin's `/done /orbit/registerLinkAudioChannel` reply.
+   *
+   * Returns `true` on `/done`, `false` on timeout. The timeout doubles as
+   * plugin-presence detection: if the OrbitLinkAudio plugin is not loaded,
+   * nothing replies and we fall back to the hardware bus.
+   */
+  async registerLinkAudioChannel(
+    channelId: number,
+    name: string,
+    timeoutMs = 2000,
+  ): Promise<boolean> {
+    if (!this.server) {
+      throw new Error('SuperCollider server not running')
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        this.server.callAndResponse({
+          call: ['/cmd', '/orbit/registerLinkAudioChannel', channelId, name],
+          response: ['/done', '/orbit/registerLinkAudioChannel'],
+        }),
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('registerLinkAudioChannel timeout')), timeoutMs)
+        }),
+      ])
+      return true
+    } catch {
+      // Timeout or transport error → treat as plugin-absent; caller falls back.
+      return false
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
+
+  /**
    * サーバーが起動しているかチェック
    */
   isRunning(): boolean {

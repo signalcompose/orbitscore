@@ -27,7 +27,12 @@ export class EventScheduler {
   // confirmed loaded. Until then, sequences with outputChannel set fall back
   // to the hardware bus and emit a one-shot warning.
   private linkAudioChannels = new LinkAudioChannelRegistry()
-  private linkAudioPluginAvailable = false
+  // null = not yet probed; set true/false either explicitly (boot / tests) or
+  // lazily on the first outputChannel dispatch via the plugin's /done reply.
+  private linkAudioPluginAvailable: boolean | null = null
+  // channel ids already registered with the plugin this session (so we send the
+  // `/cmd /orbit/registerLinkAudioChannel` once per channel, not per note).
+  private registeredChannels = new Set<number>()
   private warnedAboutMissingPlugin = false
 
   constructor(
@@ -48,7 +53,7 @@ export class EventScheduler {
   }
 
   isLinkAudioPluginAvailable(): boolean {
-    return this.linkAudioPluginAvailable
+    return this.linkAudioPluginAvailable === true
   }
 
   /**
@@ -248,6 +253,8 @@ export class EventScheduler {
     // Reset LinkAudio channel id allocation on engine restart so a new
     // session does not inherit stale ids from the previous one.
     this.linkAudioChannels.clear()
+    // Re-register channels with the plugin on the next session's first dispatch.
+    this.registeredChannels.clear()
   }
 
   /**
@@ -377,7 +384,30 @@ export class EventScheduler {
 
     if (options.outputChannel) {
       const channelId = this.linkAudioChannels.acquire(options.outputChannel)
+
+      // Lazy plugin detection: on the first link dispatch with unknown
+      // availability, register this channel and use the plugin's /done reply as
+      // the presence probe (no /done within the timeout → plugin absent → fall
+      // back to the hardware bus below).
+      if (this.linkAudioPluginAvailable === null) {
+        const detected = await this.oscClient.registerLinkAudioChannel(
+          channelId,
+          options.outputChannel,
+        )
+        this.linkAudioPluginAvailable = detected
+        if (detected) {
+          this.registeredChannels.add(channelId)
+        }
+      }
+
       if (this.linkAudioPluginAvailable) {
+        // Register each distinct channel with the plugin exactly once before its
+        // first synth, so the plugin has a registered sink for this channel id
+        // (an unregistered channel makes OrbitLinkAudioOut drop the audio).
+        if (!this.registeredChannels.has(channelId)) {
+          await this.oscClient.registerLinkAudioChannel(channelId, options.outputChannel)
+          this.registeredChannels.add(channelId)
+        }
         await this.oscClient.sendMessage([
           '/s_new',
           SYNTHDEF_LINK,

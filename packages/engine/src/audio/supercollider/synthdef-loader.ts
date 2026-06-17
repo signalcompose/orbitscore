@@ -10,6 +10,7 @@ import { EffectParams } from './types'
 
 export class SynthDefLoader {
   private synthDefPath: string
+  private linkSynthDefPath: string
   private effectSynths: Map<string, Map<string, number>> = new Map() // Track mastering effect synths by target and type
   private nextSynthId = 2000 // Start from 2000 to avoid conflicts with other synths
 
@@ -18,6 +19,10 @@ export class SynthDefLoader {
     this.synthDefPath = path.join(
       __dirname,
       '../../../supercollider/synthdefs/orbitPlayBuf.scsyndef',
+    )
+    this.linkSynthDefPath = path.join(
+      __dirname,
+      '../../../supercollider/synthdefs/orbitPlayBufLink.scsyndef',
     )
   }
 
@@ -36,6 +41,32 @@ export class SynthDefLoader {
     await new Promise((resolve) => setTimeout(resolve, 200))
 
     console.log('✅ SynthDef loaded')
+  }
+
+  /**
+   * LinkAudio の `orbitPlayBufLink` SynthDef を読み込み (#209)。
+   *
+   * Best-effort: `.scsyndef` が存在しない (hardware-only ビルド) 場合は黙って
+   * skip し、existing の hardware 経路を壊さない。実際にこの SynthDef が使われる
+   * のは plugin が検出され outputChannel 付き sequence が再生されるときだけ。
+   *
+   * @returns ロードを試行して成功すれば true、ファイル不在/未起動なら false。
+   */
+  async loadLinkAudioSynthDef(): Promise<boolean> {
+    if (!this.oscClient.isRunning()) {
+      return false
+    }
+    if (!fs.existsSync(this.linkSynthDefPath)) {
+      console.log(
+        'ℹ️  orbitPlayBufLink.scsyndef not present — LinkAudio sample playback disabled (hardware-only build)',
+      )
+      return false
+    }
+    const synthDefData = fs.readFileSync(this.linkSynthDefPath)
+    await this.oscClient.sendMessage(['/d_recv', synthDefData])
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    console.log('✅ orbitPlayBufLink SynthDef loaded')
+    return true
   }
 
   /**

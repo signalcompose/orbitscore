@@ -18,6 +18,9 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
         sentMessages.push(msg)
         return Promise.resolve()
       }),
+      // #209: channel registration / plugin-presence probe. Returns true so the
+      // link path is taken; tracked separately from sentMessages (s_new only).
+      registerLinkAudioChannel: vi.fn().mockResolvedValue(true),
     } as any
     mockBuffer = {
       loadBuffer: vi.fn().mockResolvedValue({ bufnum: 42, duration: 1.0 }),
@@ -101,6 +104,59 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
       )
       expect(warnSpy).not.toHaveBeenCalled()
     })
+
+    it('registers each distinct channel with the plugin exactly once (#209)', async () => {
+      await scheduler.testExecutePlayback(
+        '/a.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'drums' },
+        '',
+        0,
+      )
+      await scheduler.testExecutePlayback(
+        '/b.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'drums' },
+        '',
+        0,
+      )
+      await scheduler.testExecutePlayback(
+        '/c.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'bass' },
+        '',
+        0,
+      )
+      // 'drums' registered once (not per-note), 'bass' once → 2 registrations,
+      // but 3 synths dispatched.
+      expect(mockOsc.registerLinkAudioChannel).toHaveBeenCalledTimes(2)
+      expect(sentMessages).toHaveLength(3)
+      expect(sentMessages.every((m) => m[1] === 'orbitPlayBufLink')).toBe(true)
+    })
+  })
+
+  describe('lazy plugin detection (availability not set explicitly)', () => {
+    it('detects the plugin via the registration /done and takes the link path', async () => {
+      // mockOsc.registerLinkAudioChannel resolves true → detected as present.
+      await scheduler.testExecutePlayback(
+        '/a.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'kick' },
+        '',
+        0,
+      )
+      expect(sentMessages[0]?.[1]).toBe('orbitPlayBufLink')
+      expect(scheduler.isLinkAudioPluginAvailable()).toBe(true)
+    })
+
+    it('falls back to hardware when the plugin does not answer (no /done)', async () => {
+      ;(mockOsc.registerLinkAudioChannel as any).mockResolvedValue(false)
+      await scheduler.testExecutePlayback(
+        '/a.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'kick' },
+        '',
+        0,
+      )
+      expect(sentMessages[0]?.[1]).toBe('orbitPlayBuf') // hardware fallback
+      expect(scheduler.isLinkAudioPluginAvailable()).toBe(false)
+      expect(warnSpy).toHaveBeenCalled()
+    })
   })
 
   describe('stopAll() channel registry lifecycle', () => {
@@ -131,8 +187,13 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
   })
 
   describe('LinkAudio fallback (outputChannel set, plugin missing)', () => {
+    beforeEach(() => {
+      // "plugin missing" now = the registration probe gets no /done → false.
+      ;(mockOsc.registerLinkAudioChannel as any).mockResolvedValue(false)
+    })
+
     it('falls back to orbitPlayBuf (no channel arg) and warns once per session', async () => {
-      // plugin not marked available — default false
+      // plugin probe returns false → lazy detection concludes absent
       await scheduler.testExecutePlayback(
         '/audio/kick.wav',
         { gainDb: 0, pan: 0, outputChannel: 'kick' },

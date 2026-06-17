@@ -47,6 +47,18 @@ export class SuperColliderPlayer {
     await this.oscClient.boot(outputDevice, mergedOptions)
     await this.synthDefLoader.loadMainSynthDef()
     await this.synthDefLoader.loadMasteringEffectSynthDefs()
+    // LinkAudio (#209): load the orbitPlayBufLink SynthDef so sample playback can
+    // route to Ableton via the OrbitLinkAudio plugin. Best-effort — a missing
+    // .scsyndef or load error must not break boot; plugin presence itself is
+    // detected lazily on the first outputChannel dispatch (event-scheduler).
+    try {
+      await this.synthDefLoader.loadLinkAudioSynthDef()
+    } catch (e) {
+      console.warn(
+        '⚠️  LinkAudio SynthDef load failed — continuing with hardware-only playback:',
+        e,
+      )
+    }
   }
 
   /**
