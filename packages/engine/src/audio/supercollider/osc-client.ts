@@ -33,7 +33,12 @@ export class OSCClient {
       // Tradeoff: synth onset timing quantises to ~one block (~10.7ms @48k).
       // The proper fix (sample-accurate beat from a frame counter, keeping
       // -z=64) is tracked as a post-show issue. Overridable via `options`.
-      blockSize: 512,
+      //
+      // NOTE: the value MUST be a STRING — supercolliderjs only emits the `-z`
+      // flag's value when it is a string/array (otherwise it logs "Bad type"
+      // and drops the value, corrupting the following args). Mirrors the
+      // `numInputBusChannels = '0'` string below.
+      blockSize: '512',
       ...options,
     }
 
