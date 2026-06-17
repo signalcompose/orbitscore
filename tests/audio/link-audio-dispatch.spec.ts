@@ -27,6 +27,8 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
       // #209: persistent keepalive committer per channel + node free on stopAll.
       startLinkAudioKeepalive: vi.fn().mockResolvedValue(undefined),
       freeNode: vi.fn().mockResolvedValue(undefined),
+      // #283: Link tempo leader push.
+      setLinkTempo: vi.fn().mockResolvedValue(undefined),
     } as any
     mockBuffer = {
       loadBuffer: vi.fn().mockResolvedValue({ bufnum: 42, duration: 1.0 }),
@@ -194,6 +196,19 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
       await scheduler.ensureLinkAudioChannelRegistered('kick')
       scheduler.stopAll()
       expect(mockOsc.freeNode).toHaveBeenCalledWith(800001)
+    })
+  })
+
+  describe('Link tempo leader (#283)', () => {
+    it('delegates setLinkTempo to the OSC client when the server is running', async () => {
+      await scheduler.setLinkTempo(72)
+      expect(mockOsc.setLinkTempo).toHaveBeenCalledWith(72)
+    })
+
+    it('is a no-op when the server is not running', async () => {
+      ;(mockOsc.isRunning as any).mockReturnValue(false)
+      await scheduler.setLinkTempo(72)
+      expect(mockOsc.setLinkTempo).not.toHaveBeenCalled()
     })
   })
 

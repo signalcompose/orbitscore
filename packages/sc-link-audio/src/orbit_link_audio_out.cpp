@@ -86,6 +86,17 @@ std::chrono::microseconds g_anchorMicros{0};
 constexpr const char* kRegisterLinkAudioChannelCmd =
     "/orbit/registerLinkAudioChannel";
 
+// `/cmd /orbit/setLinkTempo <bpm>` — push OrbitScore's tempo to the Link
+// session so peers follow (#283). Single source of truth for the path string,
+// matched in scripts/verify-plugin.scd if that test is extended.
+constexpr const char* kSetLinkTempoCmd = "/orbit/setLinkTempo";
+
+// Sanity bounds for an incoming tempo. Below/above this is almost certainly a
+// serialization bug on the TS side rather than a musical intent; reject so a
+// stray value cannot drive the whole Link session to an absurd rate.
+constexpr double kMinLinkTempo = 20.0;
+constexpr double kMaxLinkTempo = 999.0;
+
 // Quantum 4 = beats per Link cycle (4/4 mapping). Polymeter handling lives in
 // the engine-side scheduler, not in this UGen.
 constexpr double kQuantum = 4.0;
@@ -384,6 +395,29 @@ void OrbitLinkAudioOut_RegisterChannel(World* world, void* /*userData*/,
                         0, nullptr);
 }
 
+// `/cmd /orbit/setLinkTempo <bpm>` handler (#283).
+//
+// Pushes OrbitScore's tempo onto the Link session so peers (Ableton Live, etc.)
+// follow. Handled synchronously here — capturing/committing an app session
+// state is trivial and there is no async work to perform, so unlike
+// registerChannel we do not route a /done reply. The TS side fires this
+// best-effort (it does not await confirmation; tempo leadership is advisory).
+//
+// `getf` coerces an int OSC arg ('i' tag) to float, so a whole-number bpm sent
+// as an integer by the JS layer still reads correctly. Reject non-finite and
+// out-of-range values rather than driving the whole session to an absurd rate.
+void OrbitLinkAudioOut_SetLinkTempo(World* /*world*/, void* /*userData*/,
+                                    sc_msg_iter* args, void* /*replyAddr*/) {
+  const double bpm = static_cast<double>(args->getf(0.0f));
+  if (!std::isfinite(bpm) || bpm < kMinLinkTempo || bpm > kMaxLinkTempo) {
+    Print("OrbitLinkAudio: /cmd setLinkTempo bpm out of range or malformed "
+          "(got %f, expected %f..%f) — ignoring\n",
+          bpm, kMinLinkTempo, kMaxLinkTempo);
+    return;
+  }
+  g_channelRegistry.setLinkTempo(bpm);
+}
+
 }  // namespace
 
 PluginLoad(OrbitLinkAudio) {
@@ -396,6 +430,7 @@ PluginLoad(OrbitLinkAudio) {
 
   DefinePlugInCmd(kRegisterLinkAudioChannelCmd,
                   OrbitLinkAudioOut_RegisterChannel, nullptr);
+  DefinePlugInCmd(kSetLinkTempoCmd, OrbitLinkAudioOut_SetLinkTempo, nullptr);
   DefineSimpleUnit(OrbitLinkAudioOut);
 }
 

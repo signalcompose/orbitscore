@@ -147,6 +147,23 @@ export class OSCClient {
   }
 
   /**
+   * Push a tempo to the Link session via the OrbitLinkAudio plugin (#283).
+   *
+   * Sends `/cmd /orbit/setLinkTempo <bpm>` so the plugin makes OrbitScore the
+   * Link tempo leader — connected peers (Ableton Live, etc.) follow this BPM.
+   * Best-effort and fire-and-forget: no `/done` is awaited (tempo leadership is
+   * advisory, and the plugin handles or ignores the command depending on
+   * presence). No-op when the server is not running. The `/cmd` is harmless if
+   * the plugin is absent (scsynth logs an unknown-command notice at most).
+   */
+  async setLinkTempo(bpm: number): Promise<void> {
+    if (!this.server) {
+      return
+    }
+    await this.sendMessage(['/cmd', '/orbit/setLinkTempo', bpm])
+  }
+
+  /**
    * サーバーが起動しているかチェック
    */
   isRunning(): boolean {

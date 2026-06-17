@@ -117,3 +117,64 @@ describe('Global.linkAudio() — Link Audio mode declaration', () => {
     })
   })
 })
+
+describe('Global — Link tempo leader (#283)', () => {
+  let global: Global
+  let mockPlayer: SuperColliderPlayer
+  let setLinkTempo: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    setLinkTempo = vi.fn().mockResolvedValue(undefined)
+    mockPlayer = {
+      boot: vi.fn().mockResolvedValue(undefined),
+      getCurrentTime: vi.fn().mockReturnValue(0),
+      scheduleEvent: vi.fn(),
+      scheduleSliceEvent: vi.fn(),
+      getMasterGainDb: vi.fn().mockReturnValue(0),
+      // start() routes through TransportControl → globalScheduler.start()
+      // (globalScheduler === the audio engine cast as Scheduler).
+      start: vi.fn(),
+      setLinkTempo,
+    } as any
+    global = new Global(mockPlayer)
+  })
+
+  it('pushes the tempo to the Link session when tempo() is set in LinkAudio mode', () => {
+    global.linkAudio()
+    setLinkTempo.mockClear() // ignore the linkAudio()-time push of the default
+    global.tempo(72)
+    expect(setLinkTempo).toHaveBeenCalledWith(72)
+  })
+
+  it('does NOT push tempo when LinkAudio mode is off', () => {
+    global.tempo(72)
+    expect(setLinkTempo).not.toHaveBeenCalled()
+  })
+
+  it('pushes the already-set tempo when linkAudio() is called (file order: tempo then linkAudio)', () => {
+    global.tempo(60) // before linkAudio(): no push yet
+    expect(setLinkTempo).not.toHaveBeenCalled()
+    global.linkAudio() // now captures the standing tempo
+    expect(setLinkTempo).toHaveBeenCalledWith(60)
+  })
+
+  it('re-asserts leadership on start() in LinkAudio mode', () => {
+    global.tempo(90)
+    global.linkAudio()
+    setLinkTempo.mockClear()
+    global.start()
+    expect(setLinkTempo).toHaveBeenCalledWith(90)
+  })
+
+  it('does not throw when the engine lacks setLinkTempo (optional capability)', () => {
+    const bare = new Global({
+      boot: vi.fn().mockResolvedValue(undefined),
+      getCurrentTime: vi.fn().mockReturnValue(0),
+      scheduleEvent: vi.fn(),
+      scheduleSliceEvent: vi.fn(),
+      getMasterGainDb: vi.fn().mockReturnValue(0),
+    } as any)
+    bare.linkAudio()
+    expect(() => bare.tempo(120)).not.toThrow()
+  })
+})

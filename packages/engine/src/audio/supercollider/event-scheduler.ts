@@ -124,6 +124,25 @@ export class EventScheduler {
   }
 
   /**
+   * Push a tempo to the Link session so OrbitScore leads (#283). Delegates to
+   * the OSC client; no-op when the server is not running. Best-effort — tempo
+   * leadership is advisory, so a failure must never break playback. Not gated
+   * on plugin-availability detection: the OrbitLinkAudio plugin registers the
+   * `/cmd` at PluginLoad (boot), independent of channel registration, so the
+   * push is valid as soon as the server is up.
+   */
+  async setLinkTempo(bpm: number): Promise<void> {
+    if (!this.oscClient.isRunning()) {
+      return
+    }
+    try {
+      await this.oscClient.setLinkTempo(bpm)
+    } catch {
+      // best-effort — a failed tempo push must never break playback
+    }
+  }
+
+  /**
    * Internal accessor — exposes the channel registry. Used by the boot
    * pipeline to query allocated ids for telemetry / debug snapshots, and by
    * the test suite to assert idempotent acquire() behavior. Not part of the

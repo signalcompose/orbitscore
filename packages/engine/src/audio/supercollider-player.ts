@@ -78,6 +78,16 @@ export class SuperColliderPlayer {
   }
 
   /**
+   * Push a tempo to the Link session so OrbitScore leads (#283, AudioEngine
+   * surface). Called from Global when `global.tempo()` is set / linkAudio() is
+   * enabled / start() runs, in LinkAudio mode. Delegates to the event
+   * scheduler; best-effort.
+   */
+  async setLinkTempo(bpm: number): Promise<void> {
+    await this.eventScheduler.setLinkTempo(bpm)
+  }
+
+  /**
    * Get current output device
    */
   getCurrentOutputDevice(): AudioDevice | undefined {

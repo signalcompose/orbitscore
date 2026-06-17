@@ -143,6 +143,30 @@ link_audio::LinkAudio* ChannelRegistry::getLinkAudio() {
   return impl_->link.get();
 }
 
+void ChannelRegistry::setLinkTempo(double bpm) {
+  std::lock_guard<std::mutex> lock(impl_->mtx);
+  if (!impl_->link) {
+    Print("OrbitLinkAudio: setLinkTempo called before initLinkAudio "
+             "(bpm %f) — ignoring\n", bpm);
+    return;
+  }
+  // App-thread session-state edit: capture → setTempo(now) → commit. Link keeps
+  // the beat phase continuous across the rate change (only the rate jumps), so
+  // the UGen's per-block beatAtTime stays monotonic and the keepalive stream is
+  // unbroken through the change. clock().micros() = "apply at now". Defensive
+  // try/catch mirrors initLinkAudio (alpha API; a throw must not escape the OSC
+  // /cmd dispatch loop and crash scsynth).
+  try {
+    auto state = impl_->link->captureAppSessionState();
+    state.setTempo(bpm, impl_->link->clock().micros());
+    impl_->link->commitAppSessionState(state);
+  } catch (const std::exception& e) {
+    Print("OrbitLinkAudio: setLinkTempo(%f) failed: %s\n", bpm, e.what());
+  } catch (...) {
+    Print("OrbitLinkAudio: setLinkTempo(%f) failed (unknown exception)\n", bpm);
+  }
+}
+
 #else  // ORBIT_SC_PLUGIN_BUILD
 
 // Non-plugin builds (linters, IDE indexers) get an empty translation unit.
@@ -155,6 +179,7 @@ void ChannelRegistry::shutdownLinkAudio() {}
 bool ChannelRegistry::registerChannel(std::int32_t, std::string) { return false; }
 SinkEntry* ChannelRegistry::lookup(std::int32_t) { return nullptr; }
 link_audio::LinkAudio* ChannelRegistry::getLinkAudio() { return nullptr; }
+void ChannelRegistry::setLinkTempo(double) {}
 
 #endif  // ORBIT_SC_PLUGIN_BUILD
 

@@ -47,6 +47,13 @@ export interface AudioEngine {
    * Best-effort and idempotent. No-op on engines without LinkAudio (optional).
    */
   registerLinkAudioChannel?(channelName: string): Promise<void>
+
+  /**
+   * Push a tempo to the Link session so OrbitScore is the Link tempo leader and
+   * connected peers (Ableton Live, etc.) follow `global.tempo()` (#283).
+   * Best-effort. No-op on engines without LinkAudio (optional).
+   */
+  setLinkTempo?(bpm: number): Promise<void>
 }
 
 /**
