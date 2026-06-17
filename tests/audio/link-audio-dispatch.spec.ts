@@ -24,6 +24,9 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
       // booted by default — eager registration (ensureLinkAudioChannelRegistered)
       // only proceeds when the server is running.
       isRunning: vi.fn().mockReturnValue(true),
+      // #209: persistent keepalive committer per channel + node free on stopAll.
+      startLinkAudioKeepalive: vi.fn().mockResolvedValue(undefined),
+      freeNode: vi.fn().mockResolvedValue(undefined),
     } as any
     mockBuffer = {
       loadBuffer: vi.fn().mockResolvedValue({ bufnum: 42, duration: 1.0 }),
@@ -159,6 +162,38 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
       ;(mockOsc.isRunning as any).mockReturnValue(false)
       await scheduler.ensureLinkAudioChannelRegistered('snare')
       expect(mockOsc.registerLinkAudioChannel).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('LinkAudio keepalive (#209 continuous stream)', () => {
+    it('starts a persistent keepalive synth when a channel is first registered', async () => {
+      await scheduler.ensureLinkAudioChannelRegistered('kick')
+      expect(mockOsc.startLinkAudioKeepalive).toHaveBeenCalledTimes(1)
+      // channel id 1 → keepalive node 800000 + 1
+      expect(mockOsc.startLinkAudioKeepalive).toHaveBeenCalledWith(1, 800001)
+    })
+
+    it('starts the keepalive once per channel, not per dispatch', async () => {
+      await scheduler.ensureLinkAudioChannelRegistered('kick')
+      await scheduler.testExecutePlayback(
+        '/a.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'kick' },
+        '',
+        0,
+      )
+      await scheduler.testExecutePlayback(
+        '/b.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'kick' },
+        '',
+        0,
+      )
+      expect(mockOsc.startLinkAudioKeepalive).toHaveBeenCalledTimes(1)
+    })
+
+    it('frees the keepalive node on stopAll', async () => {
+      await scheduler.ensureLinkAudioChannelRegistered('kick')
+      scheduler.stopAll()
+      expect(mockOsc.freeNode).toHaveBeenCalledWith(800001)
     })
   })
 

@@ -17,6 +17,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.122 fix(link-audio): 連続ストリーム化 — per-channel keepalive committer (#209) (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 実装・wiring 検証済（実音は実機 Live 確認中）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**ユーザー診断（正しい）**: latency を 100ms→2.0s に上げると「レベル一定だがブツ切り」。LinkAudio は連続オーディオストリームなのにブツ切り＝**送信ストリームに穴**。「送り方が間違っている」。
+
+**根本**: `orbitPlayBufLink` は transient（doneAction:2）で、サンプルが鳴っている間しか commit しない。疎なパターン（0.5s hit / 1.5s gap）だと**ストリームに穴** → 受信側が underrun（低 latency でドリフト）or 穴を再生（高 latency でブツ切り）。実測でも送信側の beat は単調・音は無傷・ドロップ無しだったので、原因は「穴」だと確定。
+
+**修正（2点で根治）**:
+1. **サンプル精度ビート**（commit efec707, 6.121内）: beat 位置を壁時計でなくグローバルアンカー+サンプル数で算出 → 配置を単調正確化（dBeat=0.002666 一定を実測確認）。
+2. **per-channel keepalive committer**: `orbitLinkAudioKeepalive` SynthDef（`OrbitLinkAudioOut(DC.ar(0),DC.ar(0),ch)` で無音を毎ブロック commit）を追加。engine がチャンネル登録時に1つ常駐起動（node=800000+ch、stopAll で n_free）。これでストリームが途切れず、サンプル synth は plugin の per-channel mix にビートを合わせて加算。
+
+**検証**: cli-audio(supercolliderjs 経路)+bundled scsynth で keepalive ロード + 3 チャンネル分の s_new + エラー無しを確認。ユニット 1099 passed（keepalive 起動/once-per-channel/stopAll free の3テスト追加）。計測 Print は除去済。
+
+**Commit**: [PENDING-122]
+
 ### 6.121 fix(link-audio): blockSize=512 緩和を試行 → **revert**（ドリフト未解決） (Jun 17, 2026)
 
 **Date**: 2026-06-17

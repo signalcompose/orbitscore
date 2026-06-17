@@ -11,6 +11,7 @@ import { EffectParams } from './types'
 export class SynthDefLoader {
   private synthDefPath: string
   private linkSynthDefPath: string
+  private linkKeepaliveSynthDefPath: string
   private effectSynths: Map<string, Map<string, number>> = new Map() // Track mastering effect synths by target and type
   private nextSynthId = 2000 // Start from 2000 to avoid conflicts with other synths
 
@@ -23,6 +24,10 @@ export class SynthDefLoader {
     this.linkSynthDefPath = path.join(
       __dirname,
       '../../../supercollider/synthdefs/orbitPlayBufLink.scsyndef',
+    )
+    this.linkKeepaliveSynthDefPath = path.join(
+      __dirname,
+      '../../../supercollider/synthdefs/orbitLinkAudioKeepalive.scsyndef',
     )
   }
 
@@ -66,6 +71,15 @@ export class SynthDefLoader {
     await this.oscClient.sendMessage(['/d_recv', synthDefData])
     await new Promise((resolve) => setTimeout(resolve, 100))
     console.log('✅ orbitPlayBufLink SynthDef loaded')
+
+    // Keepalive committer (#209) — keeps each LinkAudio channel's stream
+    // continuous between transient sample hits. Best-effort: skip if absent.
+    if (fs.existsSync(this.linkKeepaliveSynthDefPath)) {
+      const keepaliveData = fs.readFileSync(this.linkKeepaliveSynthDefPath)
+      await this.oscClient.sendMessage(['/d_recv', keepaliveData])
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      console.log('✅ orbitLinkAudioKeepalive SynthDef loaded')
+    }
     return true
   }
 

@@ -113,6 +113,40 @@ export class OSCClient {
   }
 
   /**
+   * Start the persistent keepalive synth for a LinkAudio channel (#209).
+   *
+   * LinkAudio is a CONTINUOUS audio stream. A transient `orbitPlayBufLink` synth
+   * only commits while its sample plays, so a sparse pattern (0.5s hit / 1.5s
+   * gap) leaves holes in the stream → the receiver underruns (level drift at low
+   * latency) or plays the holes (choppy at high latency). This synth commits
+   * silence every audio block for the channel's lifetime, keeping the stream
+   * unbroken; sample synths sum their audio on top via the plugin's per-channel
+   * mix accumulator. Added at the group tail; one per channel.
+   */
+  async startLinkAudioKeepalive(channelId: number, nodeId: number): Promise<void> {
+    if (!this.server) {
+      throw new Error('SuperCollider server not running')
+    }
+    await this.sendMessage([
+      '/s_new',
+      'orbitLinkAudioKeepalive',
+      nodeId,
+      1, // addToTail
+      0, // target group
+      'channel',
+      channelId,
+    ])
+  }
+
+  /** Free a node by id — used to stop keepalive synths on engine restart. */
+  async freeNode(nodeId: number): Promise<void> {
+    if (!this.server) {
+      return
+    }
+    await this.sendMessage(['/n_free', nodeId])
+  }
+
+  /**
    * サーバーが起動しているかチェック
    */
   isRunning(): boolean {

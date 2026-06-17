@@ -187,8 +187,20 @@ if (\OrbitLinkAudioOut.asClass.notNil) {
         OrbitLinkAudioOut.ar(stereo[0], stereo[1], channel);
     }).writeDefFile(~synthdefDir);
     "✅ orbitPlayBufLink SynthDef saved!".postln;
+
+    // orbitLinkAudioKeepalive (#209): a PERSISTENT per-channel committer that
+    // commits silence every audio block. LinkAudio is a CONTINUOUS audio stream;
+    // if we only commit while a transient sample synth is alive, the stream has
+    // gaps between hits (0.5s on / 1.5s off) → the receiver underruns (level
+    // drift at low latency) or plays the holes (choppy at high latency). One
+    // keepalive per channel keeps the stream unbroken; orbitPlayBufLink synths
+    // sum their audio on top via the plugin's per-channel mix accumulator.
+    SynthDef(\orbitLinkAudioKeepalive, { |channel = 0|
+        OrbitLinkAudioOut.ar(DC.ar(0), DC.ar(0), channel);
+    }).writeDefFile(~synthdefDir);
+    "✅ orbitLinkAudioKeepalive SynthDef saved!".postln;
 } {
-    "⚠️ OrbitLinkAudioOut not installed — skipping orbitPlayBufLink (hardware-only build)".postln;
+    "⚠️ OrbitLinkAudioOut not installed — skipping LinkAudio SynthDefs (hardware-only build)".postln;
 };
 
 "✅ All SynthDefs saved!".postln;

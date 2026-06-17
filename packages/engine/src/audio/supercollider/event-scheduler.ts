@@ -16,6 +16,11 @@ const SYNTHDEF_HARDWARE = 'orbitPlayBuf'
 const SYNTHDEF_LINK = 'orbitPlayBufLink'
 
 export class EventScheduler {
+  // Reserved node-id base for per-channel LinkAudio keepalive synths (#209).
+  // Channel id N → keepalive node KEEPALIVE_NODE_BASE + N. Kept well clear of
+  // the auto-assigned (-1) playback synths and the 2000+ mastering-effect ids.
+  private static readonly KEEPALIVE_NODE_BASE = 800000
+
   public isRunning = false
   public startTime = 0
   private scheduledPlays: ScheduledPlay[] = []
@@ -71,7 +76,7 @@ export class EventScheduler {
       const detected = await this.oscClient.registerLinkAudioChannel(channelId, name)
       this.linkAudioPluginAvailable = detected
       if (detected) {
-        this.registeredChannels.add(channelId)
+        await this.onChannelRegistered(channelId)
       }
     }
     if (!this.linkAudioPluginAvailable) {
@@ -79,9 +84,25 @@ export class EventScheduler {
     }
     if (!this.registeredChannels.has(channelId)) {
       await this.oscClient.registerLinkAudioChannel(channelId, name)
-      this.registeredChannels.add(channelId)
+      await this.onChannelRegistered(channelId)
     }
     return channelId
+  }
+
+  /**
+   * Mark a channel as registered with the plugin AND start its persistent
+   * keepalive committer (#209) so the channel's Link stream stays continuous
+   * between transient sample hits. Idempotent — one keepalive per channel.
+   */
+  private async onChannelRegistered(channelId: number): Promise<void> {
+    if (this.registeredChannels.has(channelId)) {
+      return
+    }
+    this.registeredChannels.add(channelId)
+    await this.oscClient.startLinkAudioKeepalive(
+      channelId,
+      EventScheduler.KEEPALIVE_NODE_BASE + channelId,
+    )
   }
 
   /**
@@ -296,6 +317,11 @@ export class EventScheduler {
     this.stop()
     this.scheduledPlays = []
     this.sequenceEvents.clear()
+    // Free the per-channel keepalive synths (#209) so they don't keep committing
+    // silence after the session ends.
+    for (const channelId of this.registeredChannels) {
+      void this.oscClient.freeNode(EventScheduler.KEEPALIVE_NODE_BASE + channelId)
+    }
     // Reset LinkAudio channel id allocation on engine restart so a new
     // session does not inherit stale ids from the previous one.
     this.linkAudioChannels.clear()
