@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.119 fix: 拡張同梱 engine deps に @julusian/midi 等が欠落（VS Code でエンジン起動不可） (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 修正・実物検証済
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**症状**: インストールした `2.0.0-dev` 拡張でエンジン起動 → `Error: Cannot find module '@julusian/midi'` でクラッシュ（`rtmidi-output.js` 起点）。
+
+**原因**: `scripts/install-engine-deps.sh` が同梱 engine に **`supercolliderjs` + `wavefile` の2つしか**インストールしていなかった。v1.1 で MIDI 用に増えた `@julusian/midi` / `uuid` / `ws` が同期されず、拡張だけが欠落していた。ソースツリー実行（root node_modules に全部ある）では再現せず見逃していた（＝実 artifact での検証不足）。
+
+**修正**: `install-engine-deps.sh` を **engine の package.json から production deps を自動導出**する方式に変更（将来また欠ける事故を防止）。再ビルド → `@julusian/midi`（arm64 prebuild 同梱）/`uuid`/`ws` が bundle に入ることを確認 → vsix 再パッケージ → 再インストール → **インストール済み実物の cli-audio.js が module 解決して起動することを確認**。
+
+**副次（オーディオデバイス検出 "Regex matches: 0"）**: 検出は別 scsynth を `-u 57199` で起動してデバイスを開くため、**クラッシュ残骸 scsynth がデバイスを掴んでいると失敗**していた。残骸を掃除して拡張同一ロジックを再現すると 4 デバイス正常検出。→ エンジン正常起動（本修正）で解消。**注意: エンジン稼働中はデバイス検出が競合する**ため、デバイス選択はエンジン停止中に行う。手動設定は `<workspace>/.orbitscore.json` の `audioDevice`。
+
+**Commit**: [PENDING-119]
+
 ### 6.118 #209 LinkAudio engine routing — orbitPlayBufLink + boot配線 + channel登録 (Jun 17, 2026)
 
 **Date**: 2026-06-17
