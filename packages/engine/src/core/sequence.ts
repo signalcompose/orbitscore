@@ -308,7 +308,18 @@ export class Sequence {
       )
     }
     this._outputChannel = channelName
-    if (!this.global.isLinkAudioEnabled()) {
+    if (this.global.isLinkAudioEnabled()) {
+      // Eagerly register the channel with the plugin so its source appears in
+      // Live's "Audio From" list NOW (at declaration), letting the operator
+      // pre-route Ableton tracks before playback. Fire-and-forget + best-effort:
+      // the dispatch path re-registers idempotently if this races the boot.
+      this.audioEngine.registerLinkAudioChannel?.(channelName)?.catch((err) => {
+        console.warn(
+          `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}"): ` +
+            `eager LinkAudio channel registration failed (will retry on playback): ${err}`,
+        )
+      })
+    } else {
       console.warn(
         `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}") ` +
           `was called without 'global.linkAudio()'. The channel name is recorded ` +

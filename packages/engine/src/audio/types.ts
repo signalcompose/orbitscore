@@ -39,6 +39,14 @@ export interface AudioEngine {
    * Set available audio devices (optional)
    */
   setAvailableDevices?(devices: AudioDevice[]): void
+
+  /**
+   * Eagerly register a LinkAudio channel with the plugin so its source appears
+   * in the Live "Audio From" list at `.output()` declaration time (before
+   * playback) — lets the operator pre-route Ableton tracks ahead of a show.
+   * Best-effort and idempotent. No-op on engines without LinkAudio (optional).
+   */
+  registerLinkAudioChannel?(channelName: string): Promise<void>
 }
 
 /**

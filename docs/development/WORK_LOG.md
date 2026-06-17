@@ -17,6 +17,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.120 feat(link-audio): `.output()` 評価時に channel を即登録（本番の事前ルーティング用） (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 実装・テスト済（1096 passed）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**要望（ユーザー）**: LinkAudio の channel が **再生時（初回 dispatch）にしか Live に出ない**ため、本番前に Ableton 側のトラック入力をセットできない。`snare.output("snare")` を**評価した時点**で Live の Link Audio ソースに出てほしい。
+
+**変更**:
+- `AudioEngine` に optional `registerLinkAudioChannel(name)` を追加（types.ts）。
+- `EventScheduler`: 遅延登録ロジックを `resolveLinkAudioChannel(name)` に共通化し、dispatch 経路と eager 経路で共有。eager 用の public `ensureLinkAudioChannelRegistered(name)`（未 boot なら no-op、best-effort）を追加。
+- `SuperColliderPlayer.registerLinkAudioChannel(name)` → scheduler に委譲。
+- `Sequence.output(name)`: linkAudio 有効時に `audioEngine.registerLinkAudioChannel(name)` を fire-and-forget で即呼ぶ。dispatch 時の登録は idempotent フォールバックとして維持（`registeredChannels` set で二重登録防止）。
+
+**結果**: `.output("name")` 評価で Live に "OrbitScore"/name ソースが即出現 → 本番前ルーティング可能。テスト +3（eager 登録/idempotent/未 boot no-op）。vsix 再パッケージ・再インストール済。
+
+**Commit**: [PENDING-120]
+
 ### 6.119 fix: 拡張同梱 engine deps に @julusian/midi 等が欠落（VS Code でエンジン起動不可） (Jun 17, 2026)
 
 **Date**: 2026-06-17

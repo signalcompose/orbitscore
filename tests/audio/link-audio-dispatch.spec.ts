@@ -21,6 +21,9 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
       // #209: channel registration / plugin-presence probe. Returns true so the
       // link path is taken; tracked separately from sentMessages (s_new only).
       registerLinkAudioChannel: vi.fn().mockResolvedValue(true),
+      // booted by default — eager registration (ensureLinkAudioChannelRegistered)
+      // only proceeds when the server is running.
+      isRunning: vi.fn().mockReturnValue(true),
     } as any
     mockBuffer = {
       loadBuffer: vi.fn().mockResolvedValue({ bufnum: 42, duration: 1.0 }),
@@ -129,6 +132,33 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
       expect(mockOsc.registerLinkAudioChannel).toHaveBeenCalledTimes(2)
       expect(sentMessages).toHaveLength(3)
       expect(sentMessages.every((m) => m[1] === 'orbitPlayBufLink')).toBe(true)
+    })
+  })
+
+  describe('eager channel registration (#209 / Sequence.output pre-routing)', () => {
+    it('registers the channel with the plugin before any playback dispatch', async () => {
+      await scheduler.ensureLinkAudioChannelRegistered('snare')
+      expect(mockOsc.registerLinkAudioChannel).toHaveBeenCalledWith(1, 'snare')
+      expect(scheduler.isLinkAudioPluginAvailable()).toBe(true)
+    })
+
+    it('does not re-register on the later dispatch (idempotent)', async () => {
+      await scheduler.ensureLinkAudioChannelRegistered('snare')
+      ;(mockOsc.registerLinkAudioChannel as any).mockClear()
+      await scheduler.testExecutePlayback(
+        '/a.wav',
+        { gainDb: 0, pan: 0, outputChannel: 'snare' },
+        '',
+        0,
+      )
+      expect(mockOsc.registerLinkAudioChannel).not.toHaveBeenCalled()
+      expect(sentMessages.some((m) => m[1] === 'orbitPlayBufLink')).toBe(true)
+    })
+
+    it('is a no-op when the server is not booted (dispatch path registers later)', async () => {
+      ;(mockOsc.isRunning as any).mockReturnValue(false)
+      await scheduler.ensureLinkAudioChannelRegistered('snare')
+      expect(mockOsc.registerLinkAudioChannel).not.toHaveBeenCalled()
     })
   })
 

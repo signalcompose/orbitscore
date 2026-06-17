@@ -69,6 +69,15 @@ export class SuperColliderPlayer {
   }
 
   /**
+   * Eagerly register a LinkAudio channel with the plugin (AudioEngine surface).
+   * Called from Sequence.output() so the channel's source appears in Live before
+   * playback. Delegates to the event scheduler; best-effort.
+   */
+  async registerLinkAudioChannel(channelName: string): Promise<void> {
+    await this.eventScheduler.ensureLinkAudioChannelRegistered(channelName)
+  }
+
+  /**
    * Get current output device
    */
   getCurrentOutputDevice(): AudioDevice | undefined {

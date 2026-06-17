@@ -57,6 +57,52 @@ export class EventScheduler {
   }
 
   /**
+   * Acquire the channel id for `name` and ensure it is registered with the
+   * OrbitLinkAudio plugin (exactly once). On the very first link channel, the
+   * plugin's `/done` reply doubles as presence detection. Returns the channel id
+   * when LinkAudio should be used, or `null` to fall back to the hardware bus.
+   *
+   * Shared by the dispatch path (sendPlaybackMessage) and the eager path
+   * (ensureLinkAudioChannelRegistered ← Sequence.output()).
+   */
+  private async resolveLinkAudioChannel(name: string): Promise<number | null> {
+    const channelId = this.linkAudioChannels.acquire(name)
+    if (this.linkAudioPluginAvailable === null) {
+      const detected = await this.oscClient.registerLinkAudioChannel(channelId, name)
+      this.linkAudioPluginAvailable = detected
+      if (detected) {
+        this.registeredChannels.add(channelId)
+      }
+    }
+    if (!this.linkAudioPluginAvailable) {
+      return null
+    }
+    if (!this.registeredChannels.has(channelId)) {
+      await this.oscClient.registerLinkAudioChannel(channelId, name)
+      this.registeredChannels.add(channelId)
+    }
+    return channelId
+  }
+
+  /**
+   * Eagerly register a LinkAudio channel so its source appears in Live's
+   * "Audio From" list at `.output()` declaration time — before any playback —
+   * letting the operator pre-route Ableton tracks ahead of a performance.
+   * Best-effort: a no-op if the server is not booted yet (the dispatch path
+   * will register it later) and never throws.
+   */
+  async ensureLinkAudioChannelRegistered(name: string): Promise<void> {
+    if (!this.oscClient.isRunning()) {
+      return
+    }
+    try {
+      await this.resolveLinkAudioChannel(name)
+    } catch {
+      // best-effort — dispatch-time registration remains as a fallback
+    }
+  }
+
+  /**
    * Internal accessor — exposes the channel registry. Used by the boot
    * pipeline to query allocated ids for telemetry / debug snapshots, and by
    * the test suite to assert idempotent acquire() behavior. Not part of the
@@ -383,31 +429,11 @@ export class EventScheduler {
     const rate = options.rate ?? 1.0
 
     if (options.outputChannel) {
-      const channelId = this.linkAudioChannels.acquire(options.outputChannel)
-
-      // Lazy plugin detection: on the first link dispatch with unknown
-      // availability, register this channel and use the plugin's /done reply as
-      // the presence probe (no /done within the timeout → plugin absent → fall
-      // back to the hardware bus below).
-      if (this.linkAudioPluginAvailable === null) {
-        const detected = await this.oscClient.registerLinkAudioChannel(
-          channelId,
-          options.outputChannel,
-        )
-        this.linkAudioPluginAvailable = detected
-        if (detected) {
-          this.registeredChannels.add(channelId)
-        }
-      }
-
-      if (this.linkAudioPluginAvailable) {
-        // Register each distinct channel with the plugin exactly once before its
-        // first synth, so the plugin has a registered sink for this channel id
-        // (an unregistered channel makes OrbitLinkAudioOut drop the audio).
-        if (!this.registeredChannels.has(channelId)) {
-          await this.oscClient.registerLinkAudioChannel(channelId, options.outputChannel)
-          this.registeredChannels.add(channelId)
-        }
+      // Resolve + register the channel with the plugin (idempotent). This is the
+      // dispatch-time path; Sequence.output() also calls the registration eagerly
+      // so the source appears in Live before playback (pre-show routing).
+      const channelId = await this.resolveLinkAudioChannel(options.outputChannel)
+      if (channelId !== null) {
         await this.oscClient.sendMessage([
           '/s_new',
           SYNTHDEF_LINK,
