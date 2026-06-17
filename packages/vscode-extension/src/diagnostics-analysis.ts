@@ -324,9 +324,29 @@ export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
     }
   }
 
+  // MIDI sequences (`<name>.midi(...)`) emit to a MIDI bus, never to an SC audio
+  // bus, so the strict-mode `.output()` requirement does not apply to them
+  // (decision #14: MIDI と SC オーディオは併走可; spec §8.1.2 scopes the rule to
+  // "発音 sequences"). Mirror the runtime exemption in
+  // Sequence.resolveDispatchChannel() so a `.midi()` sequence in a LinkAudio file
+  // is not flagged at edit time (#282).
+  const namesWithMidi = new Set<string>()
+  const midiPatterns = new Map<string, RegExp>()
+  for (const name of sequenceNames) {
+    midiPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.midi\\s*\\(`))
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw || raw.trim().startsWith('//')) continue
+    const line = stripLineComment(raw)
+    for (const [name, pattern] of midiPatterns) {
+      if (pattern.test(line)) namesWithMidi.add(name)
+    }
+  }
+
   const orphans = new Set<string>()
   for (const name of sequenceNames) {
-    if (!namesWithOutput.has(name)) orphans.add(name)
+    if (!namesWithOutput.has(name) && !namesWithMidi.has(name)) orphans.add(name)
   }
   if (orphans.size === 0) return issues
 

@@ -17,6 +17,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.123 fix(link-audio): MIDI シーケンスを LinkAudio strict-mode から除外 (#282) (Jun 18, 2026)
+
+**Date**: 2026-06-18
+**Status**: ✅ 修正・テスト済（実機再テストは大和さん）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**発見**: IAC(MIDI) + LinkAudio(Audio) 共存サンプル（examples/19）の MIDI 部分を
+`LOOP(piano, inner, bass)` した時点で runtime error:
+`Sequence 'piano' has no .output() channel set, but global.linkAudio() is enabled.`
+
+**原因**: `Sequence.run()`(sequence.ts:1205) と `loop()`(1249) が `resolveDispatchChannel()`
+を **`isMidi()` ガード無しで** eager 呼び出し。schedule 経路(1115/1185)は MIDI で早期
+return するが eager validation は通らず、LinkAudio strict-mode の「`.output()` 必須」が
+MIDI シーケンスにも誤適用されていた。VS Code 診断 `analyzeLinkAudioMissingOutput` にも同型バグ。
+
+**仕様（共存は正本で支持済み・spec 変更不要）**:
+- DESIGN_DISCUSSION_RECORD #14「MIDI と SC オーディオは併走可 / 排他にする技術的理由がない」
+- IMPLEMENTATION_INSTRUCTIONS「MIDI に LinkAudio 型の排他は適用しない」
+- core spec §8.1.2「全ての**発音** sequence が `.output()`」← 発音=オーディオ限定
+
+**修正**:
+1. engine `resolveDispatchChannel()` 冒頭に `if (this.isMidi()) return undefined`（全4呼出点を一括で MIDI 安全化）。
+2. vscode-extension `analyzeLinkAudioMissingOutput` で `.midi(` を持つ名前を orphan から除外。
+
+**検証**: ユーザーの throw を正確に再現する unit test（MIDI+linkAudio+no output →
+`resolveDispatchChannel()` が undefined / audio は throw 継続）+ 診断テスト（MIDI 非 flag /
+混在ファイルで audio のみ flag）。全 1104 passed（+5）。engine dist と extension dist
+（vsix 同梱）の両方に反映を確認。
+
+**Commit**: 5dc2975
+
 ### 6.122 fix(link-audio): 連続ストリーム化 — per-channel keepalive committer (#209) (Jun 17, 2026)
 
 **Date**: 2026-06-17

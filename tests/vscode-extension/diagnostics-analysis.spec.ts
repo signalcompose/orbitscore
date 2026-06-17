@@ -444,6 +444,43 @@ describe('analyzeLinkAudioMissingOutput', () => {
     expect(issues).toHaveLength(1)
     expect(issues[0].message).toContain("Sequence 'kick'")
   })
+
+  // #282 — MIDI sequences route to a MIDI bus, never to an SC audio bus, so the
+  // strict-mode `.output()` requirement does not apply (decision #14; spec
+  // §8.1.2 "発音 sequences"). Mirror the runtime exemption in
+  // Sequence.resolveDispatchChannel().
+  it('does not flag a MIDI sequence (.midi) with no .output() under linkAudio mode', () => {
+    const text = [
+      'global.linkAudio()',
+      'var piano = init global.seq',
+      'piano.midi("IAC", 1).octave(4)',
+      'piano.play(1, 2, 3, 4)',
+    ].join('\n')
+
+    expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
+  })
+
+  it('flags only the orphan AUDIO sequence in a mixed MIDI + LinkAudio file (#282 coexistence)', () => {
+    // Mirrors examples/19_iac_linkaudio_coexist.orbs: MIDI voices (no .output(),
+    // exempt) coexisting with audio channels. Only the audio sequence missing
+    // .output() should be flagged.
+    const text = [
+      'global.linkAudio()',
+      'var piano = init global.seq',
+      'piano.midi("IAC", 1)',
+      'var kick = init global.seq',
+      'kick.audio("kick.wav").output("kick")',
+      'var snare = init global.seq',
+      'snare.audio("snare.wav")', // orphan audio — should be flagged
+      'piano.play(1, 2, 3, 4)',
+      'kick.play(1, 0, 1, 0)',
+      'snare.play(0, 0, 1, 0)',
+    ].join('\n')
+
+    const issues = analyzeLinkAudioMissingOutput(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].message).toContain("Sequence 'snare'")
+  })
 })
 
 describe('analyzeGlobalOncePerFile — linkAudio entry', () => {
