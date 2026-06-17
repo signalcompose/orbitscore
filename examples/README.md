@@ -120,6 +120,16 @@ degree → MIDI 出力と記号的ピッチ言語の example 群。**SuperCollid
 - **内容**: Pavane 3声を IAC ch1-3 へ、ドラム4種を LinkAudio の別チャンネル（kick/snare/hat/openhat）へ。`.midi()` は `global.linkAudio()` の影響を受けない独立経路であることを示す
 - **前提**: Ableton Live 12.4+（Link + Link Audio 有効、SR=48000、テンポを `global.tempo()` と一致）
 
+### 20. `20_gymnopedie_linkaudio.orbs` 🆕 v2.0.0-dev
+- **目的**: Satie ジムノペティ No.1（3/4）+ LinkAudio ドラムの共存（#209 / #278 / #283）
+- **内容**: 全曲を `[ ]` 和音で IAC ch1 へ、3/4 ワルツのドラム4ch（kick/rim/hat/bell）。サンプルは差し替え前提のプレースホルダ
+- **前提**: Live 12.4+。`global.tempo(66)` が Link tempo を駆動（#283）→ Live 自動追従。Live のテンポは触らない
+
+### 21. `21_chorale_linkaudio.orbs` 🆕 v2.0.0-dev
+- **目的**: Bach コラール（4/4）+ LinkAudio ドラムの共存（#209 / #278 / #283）
+- **内容**: «O Haupt voll Blut und Wunden» 8小節を `[ ]` 和音で IAC ch1 へ、4/4 ドラム4ch（kick/snare/hat/ride）。例19/20とは別グルーヴ
+- **前提**: Live 12.4+。`global.tempo(60)` が Link tempo を駆動（#283）→ Live 自動追従。Live のテンポは触らない
+
 ## 🎵 ライブパフォーマンス用
 
 ### `live-demo.orbs`
@@ -206,6 +216,8 @@ examples/
 ├── 17_voicing_random.orbs           # voicing 演算子・ランダム性
 ├── 18_voicelead_comp.orbs           # ボイスリーディング・comping
 ├── 19_iac_linkaudio_coexist.orbs    # IAC(MIDI) + LinkAudio(Audio) 共存
+├── 20_gymnopedie_linkaudio.orbs     # ジムノペティ(3/4) + LinkAudio ドラム
+├── 21_chorale_linkaudio.orbs        # バッハ コラール(4/4) + LinkAudio ドラム
 ├── live-demo.orbs                   # ライブコーディングテンプレート
 └── performance-demo.orbs            # 総合パフォーマンスデモ
 ```

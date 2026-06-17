@@ -1,0 +1,54 @@
+// Bach Chorale + LinkAudio coexistence — OrbitScore v2.0.0-dev (#209/#278/#283)
+//
+// IAC (MIDI): «O Haupt voll Blut und Wunden» 8小節を [ ] 和音で IAC ch1 へ (choir)。
+// LinkAudio (Audio): ドラム4ch。本ファイル固有の 4/4 グルーヴ
+//   (hat=4分, kick=3拍目を分割, ride=3拍目) — 例19/ジムノペティとは別パターン。
+//
+// 前提: Ableton Live 12.4+ (Link + Link Audio 有効, SR 48000)。
+//   #283 によりこのファイルの global.tempo(60) が Link tempo を駆動 → Live は自動追従。
+//   テンポは OrbitScore 側で設定し、Live のテンポは触らない (last-setter-wins)。
+//   MIDI トラック x1 = IAC ch1。Audio トラック x4 = OrbitScore の kick/snare/hat/ride。
+// 注: サンプルは差し替え前提のプレースホルダ (test-assets のドラム音)。
+var global = init GLOBAL
+global.tempo(60)
+global.beat(4 by 4)
+global.key("D")
+global.linkAudio()
+global.start()
+
+var choir = init global.seq
+choir.midi("IAC", 1).octave(4).gate(0.95).vel(78)
+choir.length(8)
+choir.play(
+  ([1, b3, 5], [b6^-1, 1, b3, 1^+1], [5^-1, b3, 5, b7], [4^-1, 1, 4, b6]),
+  ([b3^-1, b7^-1, b3, 5], [b6^-2, 1, b3, 4], [b7^-2, b7^-1, 2, _4], [b3^-1, b7^-1, b3, 5]),
+  ([7^-2, 2, 5, 2^+1], [1^-1, 2, 5, b3^+1], [b3^-1, 1, 5, b3^+1], [5^-1, 1, 5, 2^+1]),
+  ([5^-2, 7^-1, 5, 2^+1], [1^-1, 5^-1, b3, 1^+1], [_1^-1, _5^-1, _b3, _1^+1], [_1^-1, _5^-1, _b3, _1^+1]),
+  ([1, b3, 5], [b6^-1, 1, b3, 1^+1], [5^-1, b3, 5, b7], [4^-1, 1, 4, b6]),
+  ([b3^-1, b7^-1, b3, 5], [b6^-2, 1, b3, 4], [b7^-2, b7^-1, 2, _4], [b3^-1, b7^-1, b3, 5]),
+  ([7^-2, 2, 5, 2^+1], [1^-1, 2, 5, b3^+1], [b3^-1, 1, 5, b3^+1], [5^-1, 1, 5, 2^+1]),
+  ([5^-2, 7^-1, 5, 2^+1], [1^-1, 5^-1, b3, 1^+1], [_1^-1, _5^-1, _b3, _1^+1], [_1^-1, _5^-1, _b3, _1^+1])
+)
+
+// === LinkAudio drums (4/4, chorale-specific groove) ===
+var kick = init global.seq
+kick.length(1)
+kick.audio("../test-assets/audio/kick.wav").output("kick")
+kick.play(1, 0, (1, 0), 0)
+
+var snare = init global.seq
+snare.length(1)
+snare.audio("../test-assets/audio/snare.wav").output("snare")
+snare.play(0, 1, 0, 1)
+
+var hat = init global.seq
+hat.length(1)
+hat.audio("../test-assets/audio/hihat_closed.wav").output("hat")
+hat.play(1, 1, 1, 1)
+
+var ride = init global.seq
+ride.length(1)
+ride.audio("../test-assets/audio/hihat_open.wav").output("ride")
+ride.play(0, 0, 1, 0)
+
+LOOP(choir, kick, snare, hat, ride)
