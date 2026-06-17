@@ -17,10 +17,12 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.121 fix(link-audio): blockSize=512 で LinkAudio レベルドリフトを緩和（probe 確認） (Jun 17, 2026)
+### 6.121 fix(link-audio): blockSize=512 緩和を試行 → **revert**（ドリフト未解決） (Jun 17, 2026)
 
 **Date**: 2026-06-17
-**Status**: ✅ 緩和（single-channel probe で安定確認、multi-channel 実機検証中）
+**Status**: ⛔ revert 済（緩和にならず、全 synth に 10ms 量子化を足す副作用のみ）
+**続報**: probe ハーネス（system scsynth, 単一ch）では一見安定したが、**拡張の実使用（bundled scsynth, 単一キック loop）では blockSize=512 でもドリフト**。さらに supercolliderjs は数値 blockSize を弾く（要文字列 '512'、commit 576278e で対処）が、根治せず。advisor 助言で **-z を既知良好の 64 に revert**（hardware 経路はフルレベル・安定・tempo 同期で正常＝ドリフトは LinkAudio commit 側で確定）。
+**切り分け結論**: hardware(orbitPlayBuf) はクリーン。LinkAudio(orbitPlayBufLink) の **commit timing（beat を壁時計から取得）が quiet+drift の根本**。正しい修正は beat 位置をサンプル精度で出す UGen 改修（深夜の本番直前 RT 改修は不可 → post-show issue）。kick が raw と違って聞こえた件はファイル同形式（mono/48k/F32）でモニタ（MacBook スピーカーの低域不足）由来の可能性大。
 **Branch**: `279-qa-2.0.0-matrix-smoke-examples`
 
 **症状**: LinkAudio で時間とともにレベルがドリフト（snare 膨らむ/kick 痩せて消える、単一チャンネルでも loud→inaudible）。Live 設定・SR・バッファドロップではない。
