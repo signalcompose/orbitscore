@@ -23,6 +23,17 @@ export class OSCClient {
 
     const bootOptions: any = {
       debug: false,
+      // LinkAudio drift mitigation (#209): set the control block size (-z) to
+      // match a typical hardware buffer (512) so scsynth does NOT burst-process
+      // several control blocks per audio callback. The OrbitLinkAudio plugin
+      // stamps each block's Link beat from the wall clock at next() time;
+      // bursting makes several blocks share one timestamp, which Live's
+      // per-source rate adapter reacts to as a level swell/decay. One block per
+      // callback gives each commit a distinct, monotonically-advancing beat.
+      // Tradeoff: synth onset timing quantises to ~one block (~10.7ms @48k).
+      // The proper fix (sample-accurate beat from a frame counter, keeping
+      // -z=64) is tracked as a post-show issue. Overridable via `options`.
+      blockSize: 512,
       ...options,
     }
 

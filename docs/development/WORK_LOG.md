@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.121 fix(link-audio): blockSize=512 で LinkAudio レベルドリフトを緩和（probe 確認） (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 緩和（single-channel probe で安定確認、multi-channel 実機検証中）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**症状**: LinkAudio で時間とともにレベルがドリフト（snare 膨らむ/kick 痩せて消える、単一チャンネルでも loud→inaudible）。Live 設定・SR・バッファドロップではない。
+
+**根本**: プラグインは各ブロックの Link ビート位置を `beatAtTime(clock().micros())`（next() 実行時の壁時計）から取る。scsynth はハードウェアバッファ(512)ごとに `-z`(=既定64) ブロックを**バースト処理**するため、バースト内の複数ブロックがほぼ同一壁時計＝同一ビートにコミットされ、Live の per-source レート補正が反応してレベルが暴れる/ドリフトする（advisor 確認）。
+
+**緩和（低リスク・RT 音声コード不変更）**: scsynth の `-z` を 512 に（`osc-client.ts` boot に `blockSize: 512`）。バッファ=512 と 1:1 になりバースト解消。probe（`verify-sample-playback.scd` に `s.options.blockSize=512`）の単一チャンネルで 60s レベル安定を確認。
+- トレードオフ: synth onset timing が ~10.7ms 量子化。Link は元々 100ms 遅延なので本番は許容。
+- **本丸（post-show）**: ビート位置をサンプル精度（frame counter）で出す UGen 修正で -z=64 のまま levels 安定 + tight timing。要 issue 化。
+
+**Commit**: [PENDING-121]
+
 ### 6.120 feat(link-audio): `.output()` 評価時に channel を即登録（本番の事前ルーティング用） (Jun 17, 2026)
 
 **Date**: 2026-06-17

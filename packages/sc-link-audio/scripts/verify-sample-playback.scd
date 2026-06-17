@@ -46,6 +46,14 @@ if (File.exists(wavPath).not) {
 s = Server.local;
 s.options.sampleRate = 48000;   // must match Live's session SR
 s.options.numInputBusChannels = 0;
+// PROBE (#209 level-drift): set the control block size equal to a typical
+// hardware buffer so scsynth does NOT burst-process several -z blocks per audio
+// callback. The plugin stamps each block's beat from the wall clock at next()
+// time; bursting makes several blocks share one timestamp, which Live's
+// per-source rate adapter reacts to (level swell/decay). One block per callback
+// gives each commit a distinct, monotonically-advancing timestamp. If this
+// stabilises the level over ~60 s, the engine boot should set blockSize too.
+s.options.blockSize = 512;
 s.waitForBoot({
     var buf;
     // Load the compiled production SynthDef (the exact artifact the engine ships).
