@@ -133,7 +133,7 @@ PASS 判定は4条件: ①`▶ running … → IAC` 到達（parse/statement 健
 
 ## 人間 QA チェックリスト（H 項目 / yamato 実機）
 
-> このチェックリストは Phase C「学習サイト walkthrough」（`sites/user/`）に取り込み、「歩けば全機能に触れる」形にする。各 example を `npm run midi-run -- <file>` で再生し、IAC を monitor synth か DAW で受ける。
+> **実行手順の正本は [`QA_2.0.0_HUMAN_RUNBOOK.md`](QA_2.0.0_HUMAN_RUNBOOK.md)**（セットアップ・コマンド・期待・記録までのステップ手順）。以下は要約チェックリスト。Phase C「学習サイト walkthrough」（`sites/user/`）にも取り込み、「歩けば全機能に触れる」形にする。各 example を `npm run midi-run -- <file>` で再生し、IAC を monitor synth か DAW で受ける。
 
 - [ ] **MIDI 基本** (`11`): C-E-G-C のアルペジオが正しい音で鳴る。`midiLatency` でタイミング調整。
 - [ ] **和音/stack** (`12`): Cmaj 三和音 → Cm7 → Cm7add9 → Cm7(+1oct) が和音として正しい。

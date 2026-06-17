@@ -49,6 +49,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **comment-analyzer / pr-test-analyzer**: example 13/17 の Expected コメント訂正、README ファイル一覧に 11–18 追記、QA マトリクスの test 引用 3 件を正確化。
 - 検証: ネガティブテスト2種（`global.start()` 欠落、RUN が存在しない seq）で FAIL を確認。直接 ts-node 化後の孤児プロセス 0 を確認。全8スモーク PASS 維持。
 
+**人間 QA ランブック**: `docs/testing/QA_2.0.0_HUMAN_RUNBOOK.md` を追加（ユーザー依頼）。実機・実音 QA の step-by-step（IAC/monitor/DAW セットアップ → example 11-18 の実音確認 → session-log → LinkAudio verify-live-receive → リリースまでの残タスク）。コマンド・期待・記録欄つき。§1（MIDI 実音）は #209 不要で着手可能、§4b のみ #209 後。
+
 **人間ゲート（このセッションでは到達不能）**: 実音 QA・LinkAudio Ableton E2E・`.scx` Gatekeeper（#210）・#209 実装・PR マージ。2.0.0 リリースはこれら完了後。
 
 **Commit**: `3fe2185`（初回）/ レビュー反映は追加コミット
