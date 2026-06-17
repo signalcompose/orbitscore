@@ -43,6 +43,12 @@ void ChannelRegistry::initLinkAudio(double bpm, const std::string& peerName) {
   try {
     impl_->link = std::make_unique<link_audio::LinkAudio>(bpm, peerName);
     impl_->link->enableLinkAudio(true);
+    // enableLinkAudio() only toggles the audio-sharing layer. The base Link
+    // session's NETWORK discovery is a separate switch — without enable(true)
+    // the session never goes on the wire, so no other peer (Ableton Live, etc.)
+    // can ever discover "OrbitScore". (#209 — this missing call made the peer
+    // invisible in Live despite the plugin loading and registering channels.)
+    impl_->link->enable(true);
   } catch (const std::exception& e) {
     Print("OrbitLinkAudio: initLinkAudio failed: %s\n", e.what());
     impl_->link.reset();

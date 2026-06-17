@@ -20,7 +20,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.118 #209 LinkAudio engine routing — orbitPlayBufLink + boot配線 + channel登録 (Jun 17, 2026)
 
 **Date**: 2026-06-17
-**Status**: ✅ 実装完了（実音 E2E は実機 Ableton で検証中）
+**Status**: ✅ 実装完了 + **実機 Ableton で実音確認済**（2026-06-17 夜）
 **Issue**: signalcompose/orbitscore#209（Epic #187 Step 4-2 / Epic #278 §4b）
 **Branch**: `279-qa-2.0.0-matrix-smoke-examples`（明日のライブ向け緊急対応のため QA ブランチに同梱。後で分割可）
 
@@ -32,10 +32,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 3. **boot 配線**（`supercollider-player.ts` + `synthdef-loader.ts`）: `loadLinkAudioSynthDef()` で link SynthDef を best-effort ロード。
 4. **遅延検出 + channel 登録**（`event-scheduler.ts` + `osc-client.ts`）: 初回 link dispatch で `/cmd /orbit/registerLinkAudioChannel` を送り `/done` で plugin 存在を検出（タイムアウト=不在→hardware fallback）。channel ごとに1回だけ登録（`registeredChannels` set）。`linkAudioPluginAvailable` を tri-state（null=未検出）に。stopAll で登録もクリア。
 
+**5. 🔴 プラグイン修正（実音が出なかった根本原因, channel_registry.cpp）**:
+- 実機 Ableton で "OrbitScore" ピアが **発見されない**問題を調査 → scsynth が Link 発見ポート(20808)を一切開いていないと判明。
+- 原因: `initLinkAudio` が `enableLinkAudio(true)`（音声共有層）は呼ぶが、**基底 Link のネットワーク発見 `enable(true)` を呼んでいなかった**。LinkAudio は Link を継承するが両者は別スイッチ。
+- 修正: `initLinkAudio` に `impl_->link->enable(true);` を追加 → プラグイン再ビルド(cmake, ad-hoc署名) → Extensions に再導入。scsynth が `*:20808` を開き、Live に "OrbitScore" ピアが出現、トラック接続で **実音が鳴ることを実機確認**。
+- 副次: 切り分け中に Tailscale(utun/100.64.x CGNAT)が Link のインターフェース選択を乱す可能性も確認（ユーザーが一時オフ）。最終的な決め手は enable(true)。
+
 **検証**:
-- `verify-sample-playback.scd`（新規）: 実 wav → orbitPlayBufLink → channel 'test' を SC 側で再生。"no registered sink"・クラッシュ無しで16+ hits を確認。
-- 実音が Ableton に届くかは実機 Live で検証中（最終ゲート）。
+- `verify-sample-playback.scd`（新規, Ctrl+C まで連続再生）: 実 wav → orbitPlayBufLink → channel 'test'。修正後、Live で **ピア出現 + 実音確認済**。
+- 実エンジン E2E: `node dist/cli-audio.js play examples/10_link_audio.orbs`（ORBIT_SCSYNTH_PATH=システムscsynth）で plugin検出→channel登録→link経路dispatch を確認。
 - ユニット: 1093 passed（link 登録1回・lazy 検出 true/false の3テスト追加）/ build 緑。
+
+**残**: 修正版 `.scx` を vsix の bundled scsynth にも反映して本番 artifact 更新。本番が source経路かvsix経路かで使う scsynth が変わる点に注意。
 
 **Commit**: [PENDING-209]
 

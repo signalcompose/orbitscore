@@ -59,14 +59,20 @@ s.waitForBoot({
 
     "".postln;
     "================================================================".postln;
-    ("  Playing chord_c_major.wav via orbitPlayBufLink → channel '" ++ chanName ++ "'").postln;
-    "  In Ableton: track input = OrbitScore / 'test', Link ON, monitor ON.".postln;
-    "  You should HEAR a C-major chord ~every 1.5 s for ~30 s.".postln;
+    ("  Publishing channel '" ++ chanName ++ "' as Link Audio peer 'OrbitScore'.").postln;
+    "  1) In Ableton, the 'OrbitScore' peer should now appear in Preferences →".postln;
+    "     Link → Peers (and channel 'test' in a track's 'Audio From' input).".postln;
+    "  2) Make an audio track, set Audio From = OrbitScore / 'test', Monitor In.".postln;
+    "  3) You should HEAR a C-major chord ~every 1.5 s.".postln;
+    "  Runs until you press Ctrl+C (take your time setting up Live).".postln;
     "================================================================".postln;
     "".postln;
 
+    // Keep the peer alive and firing until interrupted, so there is time to
+    // configure the Live track. Ctrl+C stops it.
     Routine({
-        20.do({ |i|
+        var i = 0;
+        loop {
             s.sendMsg(\s_new, \orbitPlayBufLink, -1, 0, 0,
                 \bufnum, buf.bufnum,
                 \amp, 0.8,
@@ -76,12 +82,10 @@ s.waitForBoot({
                 \duration, 0,
                 \channel, chanId
             );
-            ("  hit " ++ (i + 1) ++ "/20").postln;
+            i = i + 1;
+            ("  hit " ++ i ++ " (Ctrl+C to stop)").postln;
             1.5.wait;
-        });
-        "  done — stopping.".postln;
-        0.5.wait;
-        0.exit;
+        };
     }).play;
 });
 )
