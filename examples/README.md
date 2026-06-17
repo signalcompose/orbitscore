@@ -79,6 +79,42 @@
   - gain / pan は per-sequence で pre-mix
   - tempo / phase / start-stop は LinkAudio 内蔵 Link で双方向同期
 
+## 🎹 MIDI / Pitch DSL（v1.1+, 2.0.0-dev）
+
+degree → MIDI 出力と記号的ピッチ言語の example 群。**SuperCollider 不要**、IAC ポート（macOS の Audio MIDI Setup で online）に送出する。各ファイルは `npm run midi-run -- examples/NN_*.orbs` で実行でき、parse/schedule 健全性は `scripts/qa-midi-smoke.sh` で一括スモークできる（QA は [`docs/testing/QA_2.0.0.md`](../docs/testing/QA_2.0.0.md)、Epic #278）。
+
+### 11. `11_midi_degrees.orbs` 🆕
+- **目的**: 最小の MIDI シーケンス（degree → MIDI note）
+- **内容**: `seq.midi("IAC", ch)` / `octave()` / `vel()` / `global.key()` / `RUN`
+
+### 12. `12_chords_stacks.orbs` 🆕
+- **目的**: 和音と stack（Phase 3, §6）
+- **内容**: `[ ]` stack（同時発音）/ bare `[ ]` chord value / `import chords` / spread `[m7, 9]` / `(m7^+1)` octave shift
+
+### 13. `13_scope_chains.orbs` 🆕
+- **目的**: スコープチェーンとモード（Phase 2 §3 + E6 §2.2）
+- **内容**: `.root()`（数値 / group-level note-name）/ `.oct()` / `mode(...)` + `.mode(name)` lattice
+
+### 14. `14_ties_legato.orbs` 🆕
+- **目的**: タイ・レガート・ホールド（Phase 4 §5）
+- **内容**: `_` event tie / `{ }` legato slur / `.hold()` common-tone tie
+
+### 15. `15_repetition_sections.orbs` 🆕
+- **目的**: 反復とセクション（Phase R §6.5 + E4 #254）
+- **内容**: `*n`（n スロット占有）/ pattern 変数 / `,` multi-cell section（song form）
+
+### 16. `16_expression.orbs` 🆕
+- **目的**: ノートごとの表現（E5 §10.3）
+- **内容**: `@v` velocity（絶対 / 相対アクセント）/ `@g` articulation（gate %）
+
+### 17. `17_voicing_random.orbs` 🆕
+- **目的**: voicing 演算子とランダム性（E2 §12）
+- **内容**: `.drop()/.invert()/.open()` / `Xr` 要素確率 / `.r` thinning / `^r` random octave
+
+### 18. `18_voicelead_comp.orbs` 🆕
+- **目的**: 自動ボイスリーディングと comping（comp C1 §6.3 / C2a §6.4）
+- **内容**: `.voicelead()` / `.cell("charleston").comp(...)`
+
 ## 🎵 ライブパフォーマンス用
 
 ### `live-demo.orbs`

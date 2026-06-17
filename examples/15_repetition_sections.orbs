@@ -1,0 +1,29 @@
+// Repetition & Sections → IAC — OrbitScore Pitch DSL (v1.1+, Phase R §6.5 + E4 #254)
+// `*n` occupies n slots (≡ Tidal `!`, NOT in-slot division). A pattern variable is
+// a bare-tuple value; a comma-separated binding is a multi-cell section (song form).
+//
+// Run:  npm run midi-run -- examples/15_repetition_sections.orbs
+// Expected (human): a bass riff repeated, and a lead whose two-cell section plays twice.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.key("C")
+
+var riff = (1, 5, 8, 5)              // pattern variable (one cell)
+var sec  = (1, 3, 5), (5, 3, 1)     // a 2-cell section (#254)
+
+var bass = init global.seq
+bass.midi("IAC", 1)
+bass.octave(3)
+bass.length(1)
+bass.play(riff*2)                   // riff occupies 2× the slots (repeated)
+
+var lead = init global.seq
+lead.midi("IAC", 2)
+lead.octave(4)
+lead.length(1)
+lead.play(sec, sec)                 // section spliced twice (reuse)
+
+global.start()
+RUN(bass, lead)

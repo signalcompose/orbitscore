@@ -1,0 +1,38 @@
+// Scope Chains & Modes → IAC — OrbitScore Pitch DSL (v1.1+, Phase 2 §3 + E6 §2.2)
+// `.root()` / `.mode()` / `.oct()` attach to a `( )` rhythm-tree group.
+// Resolution order: inner group → outer group → sequence default.
+//
+// Run:  npm run midi-run -- examples/13_scope_chains.orbs
+// Expected (human): one triad shape transposed by each group's root/octave,
+//   plus a line read through a user-defined Dorian lattice on a second channel.
+
+var global = init GLOBAL
+global.tempo(110)
+global.beat(4 by 4)
+global.key("C")
+
+// A user pitch lattice (E6): degree 1 = lattice[0].
+var dorian = mode(1, 2, b3, 4, 5, 6, b7)
+
+var lead = init global.seq
+lead.midi("IAC", 1)
+lead.octave(4)
+lead.length(1)
+lead.root(1)             // sequence default = degree 1 (tonic C of global.key)
+                         // NOTE: seq.root(<note-name>) like lead.root(C) is currently
+                         // rejected at runtime; group-level note roots (below) work.
+lead.play(
+  (1, 3, 5).root(2),     // numeric degree root = II
+  (1, 3, 5).root(F),     // note-name root = F (group-level note roots resolve)
+  (1, 3, 5),             // no chain → sequence default (tonic C)
+  (1, 5).oct(1),         // same shape lifted one octave by group scope
+)
+
+var modal = init global.seq
+modal.midi("IAC", 2)
+modal.octave(4)
+modal.length(1)
+modal.play((1, 3, 5, 7, 8, 7, 5, 3).mode(dorian))   // C Dorian melody
+
+global.start()
+RUN(lead, modal)

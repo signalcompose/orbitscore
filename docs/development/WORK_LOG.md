@@ -17,6 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.117 Epic #278 Phase A+B — 2.0.0-dev QA マトリクス + MIDI example + スモーク (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 実装完了（QA / docs / examples）
+**Issue**: signalcompose/orbitscore#279（Epic #278 の Phase A+B = PR ①）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`（main から）
+
+**概要**: v1.1.1 → 2.0.0-dev で積まれた新ピラー（MIDI 出力 / Pitch DSL E1–E6・Phase 3·4·R / comp C1·C2a / session-log L1 / LinkAudio）の実機 E2E QA 基盤を整備。プログラム的に検証可能な範囲を確定し、人間 QA に渡す境界を明示。
+
+**Phase 0（ブランチ衛生）**:
+- `wctm-architecture-docs` の `.gitignore`（`docs/WCTM/` scratch ignore）をローカルコミットで park（d908687）。QA 子ブランチは main から切る。
+- ベースライン検証: `npm test` → **1090 passed | 23 skipped (1113)** / `npm run build` 成功（main @ b4b513d）。
+
+**Phase A（QA マトリクス）**:
+- `docs/testing/QA_2.0.0.md` を新規作成。全インベントリを **P（プログラム検証可）/ H（人間・実機のみ）** に分類、各行に確認手段・期待結果・spec 参照・状態。人間 QA チェックリスト（Phase C 学習サイトへ取り込む）も収録。
+
+**Phase B（example + スモーク + session-log 検証）**:
+- 新 MIDI example 8 件を作成: `examples/11_midi_degrees`〜`18_voicelead_comp.orbs`（degree→MIDI / chords·stacks / scope·mode / ties·legato·hold / repetition·sections / expression / voicing·random / voicelead·comp）。
+- スモークランナー `scripts/qa-midi-smoke.sh` を作成（`midi-run` に通し `→ IAC` 到達＋engine error 無しを判定。macOS に `timeout` が無いため background + perl sleep + SIGINT 方式）。**8 passed, 0 failed**。
+- session-log `.orbslog` の内容・原子性を実ファイル probe + 既存 13 ユニットで確認（inert→atomic create→meta→preamble→評価レコード triple stamp→stop）。
+- 回帰ガード: `npm test` 再実行 → 1090 passed 維持。
+
+**QA Finding（記録済 / 要子 Issue 化）**:
+- **FINDING-1**: `seq.root(<note-name>)`（例 `lead.root(C)`）が runtime で拒否される（"root() degree must be a positive integer"）。グループレベル note root（`(1,3,5).root(F)`）は動作。spec P.5 は `seq.root(C)` を有効と記載 → spec/実装の乖離。example 13 は数値 seq root + group note root で回避。子 Issue **#280** 起票済。
+
+**人間ゲート（このセッションでは到達不能）**: 実音 QA・LinkAudio Ableton E2E・`.scx` Gatekeeper（#210）・#209 実装・PR マージ。2.0.0 リリースはこれら完了後。
+
+**Commit**: `3fe2185`
+
 ### 6.116 Issue #276 — session log L1 polish（PR #275 bot レビュー反映） (Jun 15, 2026)
 
 **Date**: 2026-06-15

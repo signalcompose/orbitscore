@@ -1,0 +1,30 @@
+// Ties, Legato & Hold → IAC — OrbitScore Pitch DSL (v1.1+, Phase 4 §5)
+// `_` event tie extends the previous note; `{ }` is a legato (overlapping) slur;
+// `.hold()` auto-ties common tones between consecutive chord stacks.
+//
+// Run:  npm run midi-run -- examples/14_ties_legato.orbs
+// Expected (human): a melody where note 1 sustains across two slots and the last
+//   two notes slur, plus a pad whose common chord tones ring across the change.
+
+var global = init GLOBAL
+global.tempo(96)
+global.beat(4 by 4)
+global.key("C")
+
+var lead = init global.seq
+lead.midi("IAC", 1)
+lead.octave(4)
+lead.length(1)
+// slot1: degree 1, slot2: `_` ties it (no retrigger), slot3: degree 3,
+// slot4: `{5, 8}` a legato pair (overlapping note-offs)
+lead.play(1, _, 3, {5, 8})
+
+var pad = init global.seq
+pad.midi("IAC", 2)
+pad.octave(3)
+pad.length(1)
+pad.hold()               // auto common-tone tie between the two stacks (shared degree 1)
+pad.play([1, 3, 5], [1, 4, 6])
+
+global.start()
+RUN(lead, pad)
