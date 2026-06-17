@@ -104,10 +104,10 @@ PASS 判定は4条件: ①`▶ running … → IAC` 到達（parse/statement 健
 | engine: `Global.linkAudio()` / `Sequence.output()` / channel registry / hardware fallback | P | ユニット `tests/audio/link-audio-channels.spec.ts`, `tests/audio-parser/*` | name→channelId 解決、未配線時 hardware fallback | WCTM/LinkAudio | ✅ |
 | VS Code 拡張: LinkAudio syntax / completion / diagnostic | P | ユニット `tests/vscode-extension/diagnostics-analysis.spec.ts` | 空 `.output("")` フラグ等 | Step 3.3 | ✅ |
 | plugin / UGen（`OrbitLinkAudioOut`, per-channel sum, `.scx` build） | P/H | build 済 `.scx`。`packages/sc-link-audio/scripts/verify-plugin.scd` | plugin load・UGen 動作 | Step 2 | ⏳ |
-| **#209 未配線**: `orbitPlayBufLink` SynthDef + boot 検出 + `setLinkAudioPluginAvailable(true)` | P | **本 Epic Phase #209 で実装**（別 PR） | 実 `.orbs` のサンプル再生が Link Audio 経路を選択 | #209 | ⛔ 未実装 |
-| plugin↔Ableton 受信（test-tone / test-sum / テンポ位相追従） | H | `packages/sc-link-audio/scripts/verify-live-receive.scd` | Live に test-tone/test-sum 受信、BPM 変更で追従 | `docs/testing/LINK_AUDIO_E2E_CHECKLIST.md` | ⏳ |
-| #209 後: 実 `.orbs`（`examples/10_link_audio.orbs`）→ Link Audio → Ableton | H | 実機 E2E | サンプル音が Live のチャンネルに出る | #209 | ⏳ |
-| `.scx` の Gatekeeper load（Apple Silicon、#210 関連） | H | 実機 | Gatekeeper に弾かれず load | #210 | ⏳ |
+| **#209 配線**: `orbitPlayBufLink` SynthDef + boot ロード + plugin 検出 + channel 登録 | P | commit `0ad2bc5`/`a670b0a`、実エンジン E2E（`cli-audio play examples/10`） | 実 `.orbs` が Link 経路で dispatch（fallback せず） | #209 | ✅ 実装済 |
+| plugin↔Ableton 受信（実サンプル → Live） | H | `verify-sample-playback.scd`（実 wav → orbitPlayBufLink → channel 'test'） | Live に "OrbitScore" ピア出現、トラック接続で実音 | #209 | ✅ 実機確認済（2026-06-17） |
+| 実 `.orbs`（`examples/10_link_audio.orbs`）→ Link Audio → Ableton | H/P | 実エンジン E2E（system / bundled 両 scsynth で `*:20808` 開放 + dispatch 確認） | サンプル音が Live のチャンネルに出る | #209 | ✅ 経路検証済（実音 §B 同様） |
+| `.scx` の Gatekeeper load（Apple Silicon） | H | system scsynth(Extensions) + bundled scsynth(.vsix 同梱) 両方で load 成功 | Gatekeeper に弾かれず load | #210 | ✅ ad-hoc 署名で load 確認 |
 
 ### 6. その他
 
@@ -128,6 +128,14 @@ PASS 判定は4条件: ①`▶ running … → IAC` 到達（parse/statement 健
 - **影響**: 小（回避策あり: グループレベル note root か `seq.root(<degree>)`）。ただし spec が正本なので、実装 or spec のどちらかを直す必要。
 - **暫定対応**: `examples/13_scope_chains.orbs` は `seq.root(1)`（数値）+ グループ note root で記述し、コメントで本 finding に言及。
 - **要対応**: **子 Issue #280 起票済**（実装をシーケンスレベル note-name root に対応させる、または spec を「note root はグループのみ」に修正する。判断は #237 core spec sync と連動）。
+
+### FINDING-2 ✅ 修正済: LinkAudio プラグインが Link ネットワーク発見を開始していなかった（実音が Live に届かない）
+
+- **症状**: 実機 Ableton Live (12.4.5b3) の Link Audio Peers に "OrbitScore" が出ず、サンプルが届かない。scsynth は Link 発見ポート(20808)を一切開いていなかった。
+- **原因**: `channel_registry.cpp` の `initLinkAudio` が `enableLinkAudio(true)`（音声共有層）は呼ぶが、**基底 Link のネットワーク発見スイッチ `enable(true)` を呼んでいなかった**。`LinkAudio` は `Link` を継承するが両者は独立スイッチ。発見が始まらないので誰からも見えない。`verify-plugin.scd` は in-process のみ検証で、E2E checklist の Live 受信は "⏳ TBD" のまま未確認だった（本セッションが初の実機 E2E）。
+- **修正**: `initLinkAudio` に `impl_->link->enable(true);` を追加（commit `a670b0a`）→ プラグイン再ビルド + ad-hoc 署名 + Extensions/同梱 scsynth へ再導入。scsynth が `*:20808` を開き、Live に "OrbitScore" 出現、トラック接続で **実音再生を実機確認**。
+- **切り分けの副次**: Tailscale (utun/`100.64.x` CGNAT) が Link のインターフェース選択を乱す可能性も確認（ユーザーが一時オフ）。ただし決め手は `enable(true)`。
+- **影響**: 大（これが無いと LinkAudio が全く機能しない）→ 修正により §4b 成立。**`.vsix` は修正版プラグイン同梱で再パッケージ済**（system / bundled 両 scsynth で 20808 開放を確認）。
 
 ---
 
