@@ -1,12 +1,10 @@
 # OrbitScore
 
-**Audio-based live coding DSL for modern music production**
+**Live-coding music DSL with a SuperCollider audio engine and MIDI output**
 
-A new music production DSL focused on audio file manipulation, integrating time-stretching, pitch-shifting, and real-time transport control.
+Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives both a SuperCollider audio engine (sample playback) and MIDI output (Pitch DSL, chords, comp, Ableton Link). Version 2.0.0 is the released state.
 
-> ⚠️ **Migration Notice**: The project is migrating from MIDI-based to audio-based DSL. See [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) for the new specification.
-
-## Core Features (Audio-Based DSL v3.0)
+## Core Features (2.0.0)
 
 ### 🎵 Audio Processing
 
@@ -22,53 +20,51 @@ A new music production DSL focused on audio file manipulation, integrating time-
 - **Real-time Control**: Bar-quantized transport with look-ahead
 - **Polymeter Support**: Independent sequence timing
 
+### 🎹 MIDI & Pitch (2.0.0)
+
+- **MIDI Output**: Degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
+- **Pitch DSL**: Musical pitch via scale degrees, chords, voicing, mode, and expression
+- **comp**: Automatic accompaniment — voice-leading (C1) + comp rhythm (C2a)
+- **Ableton Link Audio (LinkAudio)**: OrbitScore as the Link tempo leader; Ableton Live follows OrbitScore's tempo
+- **quantize**: Bar-quantized scheduling control
+
 ### 🔧 Technical Features
 
 - **0-2ms Latency**: SuperCollider audio engine
-- **48kHz/24bit Audio**: High-quality audio output
 - **VS Code Extension**: Syntax highlighting and live execution
-- **DAW Integration**: VST/AU plugin for routing (planned)
 - **macOS Optimized**: CoreAudio integration
 
 ## Current Implementation Status
 
-> 🎯 **In progress — v1.1 Pitch DSL + Session Log + WCTM** (hard deadline 2026-08-07, concert). Spec set: [`docs/specs-v2/`](docs/specs-v2/). Progress tracked in [Epic #224](https://github.com/signalcompose/orbitscore/issues/224). Top priority: Pitch DSL (degree / root / mode / chord, MIDI output via IAC).
+**2.0.0 is released.** OrbitScore 2.0.0 is a dual-output live-coding DSL:
 
-### 📦 Legacy MIDI-Based Implementation (Deprecated)
+- **MIDI output** — degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
+- **Pitch DSL** — scale degrees, chords, voicing, mode, and expression (DSL_VERSION 1.1)
+- **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
+- **Ableton Link Audio (LinkAudio)** — OrbitScore as the Link tempo leader (Ableton Live follows OrbitScore's tempo)
+- **quantize** — bar-quantized scheduling control
+- **Audio foundation** — scsynth sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, time-stretching, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport, bundled scsynth
 
-The previous MIDI-based implementation (Phases 1-10) is now deprecated but preserved for research purposes.
+**Supported platforms**: macOS Apple Silicon (arm64). Intel x86_64 untested. Windows / Linux not supported currently.
 
-### 🚧 New Audio-Based Implementation
+See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
 
-| Phase | Status | Progress | Description |
-|-------|--------|----------|-------------|
-| **Phase 1-3** | ✅ Complete | 100% | Parser, Interpreter, Transport System |
-| **Phase 4** | ✅ Complete | 100% | VS Code Extension (Syntax, Commands, IntelliSense) |
-| **Phase 5** | ✅ Complete | 100% | Audio Playback Verification |
-| **Phase 6** | ✅ Complete | 100% | Live Coding Workflow |
-| **Phase 7** | ✅ Complete | 100% | SuperCollider Integration (0-2ms Latency) |
-| **Git Workflow** | ✅ Complete | 100% | Development Environment Setup |
-| **Phase 8** | 📝 Next | 0% | Polymeter Testing & Advanced Features |
-| **Phase 9** | 📝 Planned | 0% | DAW Plugin Development |
+<details>
+<summary>Development history (audio phases, ICMC release, legacy MIDI phases)</summary>
 
-**Current Status**: ICMC v1.1.0 release-ready 🚀 (bundle + release pipeline merged, awaiting publisher account setup + cold-install verification)
+### Audio-Based Implementation Phases
 
-**Supported platforms**: macOS Apple Silicon (arm64) only. Intel x86_64 untested. Windows / Linux not supported in v1.x. (Bundled `scsynth` ships only macOS Mach-O binaries; cross-platform is a post-ICMC effort.)
-
-**ICMC v1.1.0 (Epic #131 Phase 1)** — `.vsix` install だけで音が鳴る + tag push で全 channel に自動 publish:
-
-| Issue | Status | Description |
+| Phase | Status | Description |
 |-------|--------|-------------|
-| #136 | ✅ Merged ([PR #155](https://github.com/signalcompose/orbitscore/pull/155)) | scsynth + 26 plugins + libsndfile bundle (~11.5MB), strict path resolver, first-run UX |
-| #137 | ✅ Merged ([PR #157](https://github.com/signalcompose/orbitscore/pull/157)) | GitHub Actions release workflow (Marketplace + Open VSX + GitHub Release) |
-| #139 | ✅ Closed (吸収 in #155) | LICENSE.GPL-3.0 verbatim + NOTICE aggregation clause |
-| #146 | ✅ Closed (吸収 in #155) | First-run check / status bar / settings override |
-| #138 | ⏳ Pending | Cold-install acceptance test on SC-less macOS (manual verification) |
+| **Phase 1-3** | ✅ Complete | Parser, Interpreter, Transport System |
+| **Phase 4** | ✅ Complete | VS Code Extension (Syntax, Commands, IntelliSense) |
+| **Phase 5** | ✅ Complete | Audio Playback Verification |
+| **Phase 6** | ✅ Complete | Live Coding Workflow |
+| **Phase 7** | ✅ Complete | SuperCollider Integration (0-2ms Latency) |
 
 **Phase 7 Achievements**:
 - ✅ SuperCollider audio engine (replaced sox)
 - ✅ 0-2ms latency (was 140-150ms)
-- ✅ 48kHz/24bit audio output via scsynth
 - ✅ 3-track synchronization
 - ✅ Chop functionality (8-beat hihat with closed/open)
 - ✅ Buffer preloading and management
@@ -83,19 +79,38 @@ The previous MIDI-based implementation (Phases 1-10) is now deprecated but prese
 - ✅ Explicit scheduler control (no auto-start)
 - ✅ Polymeter support (independent time signatures per sequence)
 
-See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
+### ICMC v1.1.0 bundle release (Epic #131)
+
+`.vsix` install だけで音が鳴る + tag push で全 channel に自動 publish:
+
+| Issue | Status | Description |
+|-------|--------|-------------|
+| #136 | ✅ Merged ([PR #155](https://github.com/signalcompose/orbitscore/pull/155)) | scsynth + 26 plugins + libsndfile bundle (~11.5MB), strict path resolver, first-run UX |
+| #137 | ✅ Merged ([PR #157](https://github.com/signalcompose/orbitscore/pull/157)) | GitHub Actions release workflow (Marketplace + Open VSX + GitHub Release) |
+| #139 | ✅ Closed (吸収 in #155) | LICENSE.GPL-3.0 verbatim + NOTICE aggregation clause |
+| #146 | ✅ Closed (吸収 in #155) | First-run check / status bar / settings override |
+| #138 | ⏳ Pending | Cold-install acceptance test on SC-less macOS (manual verification) |
+
+### Legacy pre-2.0 MIDI phases (historical)
+
+The pre-audio MIDI-based implementation (Phases 1-5) is preserved for historical reference.
+
+- ✅ **Phase 1** - Parser implementation
+- ✅ **Phase 2** - Pitch/Bend conversion (degree → MIDI note + PitchBend, octave/octmul/detune/MPE)
+- ✅ **Phase 3** - Scheduler + Transport (real-time playback, Loop/Jump, Mute/Solo)
+- ✅ **Phase 4** - VS Code extension (syntax highlighting, Cmd+Enter execution, Transport UI)
+- ✅ **Phase 5** - MIDI output implementation (CoreMIDI / IAC Bus)
+
+</details>
 
 ## Technology Stack
 
-### Current (Audio-Based)
 - TypeScript
 - VS Code Extension API
 - SuperCollider (scsynth + supercolliderjs)
 - OSC (Open Sound Control)
-
-### Legacy (Deprecated / Not Implemented)
-- ~~CoreMIDI (@julusian/midi)~~ - Legacy, not implemented
-- ~~macOS IAC Bus~~ - Legacy, not implemented
+- MIDI output (CoreMIDI / IAC virtual port)
+- Ableton Link (LinkAudio tempo sync)
 
 ## Project Structure
 
@@ -137,7 +152,7 @@ orbitscore/
 
 ## Development Status
 
-### Completed Phases (Audio-Based Implementation)
+### Completed Phases (2.0.0)
 
 See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_PLAN.md) for details.
 
@@ -147,10 +162,8 @@ See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_
 - ✅ **Phase 6** - Live Coding Workflow
 - ✅ **Phase 7** - SuperCollider Integration (0-2ms Latency)
 
-### Legacy Completed Phases (MIDI-Based / Deprecated)
-
 <details>
-<summary>Legacy phases (for reference)</summary>
+<summary>Pre-2.0 phases (historical)</summary>
 
 - ✅ **Phase 1** - Parser implementation
 - ✅ **Phase 2** - Pitch/Bend conversion (degree → MIDI note + PitchBend, octave/octmul/detune/MPE)
@@ -176,19 +189,30 @@ Project documentation is organized in the [`docs/`](docs/) folder:
 - 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.md) - Project rules (must-read)
 - 📝 [WORK_LOG.md](docs/development/WORK_LOG.md) - Development history
 - 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) - Language specification (Single Source of Truth)
-- 📖 [USER_MANUAL.md (日本語)](docs/user/ja/USER_MANUAL.md) - User manual (canonical, Japanese)
 - 🗺️ [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.md) - Implementation plan
 - 🧪 [TESTING_GUIDE.md](docs/testing/TESTING_GUIDE.md) - Testing guide
 - 📚 [INDEX.md](docs/core/INDEX.md) - Documentation index (overall structure)
 
-### User Documentation (English/Japanese)
+### User Documentation
 
-- 📖 [User Manual (English)](docs/user/en/USER_MANUAL.md) - Coming soon
-- 📖 [ユーザーマニュアル (日本語)](docs/user/ja/USER_MANUAL.md) - Coming soon
-- 🚀 [Getting Started (English)](docs/user/en/GETTING_STARTED.md) - Coming soon
-- 🚀 [はじめに (日本語)](docs/user/ja/GETTING_STARTED.md) - Coming soon
+Current user docs live at the **User Learning Site**:
 
-## Implemented Features (Audio-Based v3.0)
+- 🎓 [User Learning Site (ja)](https://signalcompose.github.io/orbitscore/) — beginner-friendly tutorial
+- 🎓 [User Learning Site (en)](https://signalcompose.github.io/orbitscore/en/)
+
+In-repo USER_MANUAL files are **deprecated** (historical reference only):
+- [USER_MANUAL.md (ja)](docs/user/ja/USER_MANUAL.md) — deprecated, see learning site above
+- [USER_MANUAL.md (en)](docs/user/en/USER_MANUAL.md) — deprecated, see learning site above
+
+## Implemented Features (2.0.0)
+
+### 🎹 MIDI & Pitch (2.0.0 pillars)
+
+- ✅ MIDI output — degrees/notes → MIDI notes + velocity, emitted to CoreMIDI / IAC virtual port
+- ✅ Pitch DSL — scale degrees, chords, voicing, mode, expression
+- ✅ comp — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
+- ✅ Ableton Link Audio (LinkAudio) — OrbitScore as Link tempo leader; Live follows OrbitScore's tempo
+- ✅ quantize — bar-quantized scheduling control
 
 ### Parser & Interpreter
 
@@ -215,13 +239,13 @@ Project documentation is organized in the [`docs/`](docs/) folder:
 
 ### VS Code Extension
 
-- ✅ Syntax highlighting (Audio DSL v3.0)
+- ✅ Syntax highlighting (2.0.0)
 - ✅ Cmd+Enter execution
 - ✅ Engine control commands
 - ✅ Real-time feedback
 
 <details>
-<summary>Legacy implemented features (MIDI-Based / Deprecated)</summary>
+<summary>Legacy pre-2.0 MIDI-pitch internals (historical)</summary>
 
 ### Parser (Phase 1)
 
@@ -253,17 +277,9 @@ Project documentation is organized in the [`docs/`](docs/) folder:
 npm test
 ```
 
-**1090/1113 tests passing (97.9%, 23 skipped for SC integration)** — 2.0.0-dev (v1.1 Pitch DSL + MIDI + session log):
+**1129 passed, 23 skipped (1152 total) — 2.0.0**
 
-- Parser: ✅ Complete (50 tests)
-- Audio Engine: ✅ Complete (15 tests)
-- Timing Calculator: ✅ Complete (10 tests)
-- Interpreter: ✅ Complete (83 tests)
-- DSL v3.0: ✅ Complete (56 tests)
-- Setting Sync: ✅ Complete (19 tests)
-- Live Coding Workflow: ✅ Verified (manual testing)
-
-**Note**: 23 tests skipped (SuperCollider integration tests require local environment).
+Run `npm test` to see the current breakdown. 23 tests are skipped (SuperCollider integration tests require a local environment).
 
 ## Getting Started
 
@@ -300,7 +316,7 @@ npm run build          # Incremental build
 npm run build:clean    # Clean build
 ```
 
-### Basic DSL Syntax (Audio-Based v3.0)
+### Basic DSL Syntax
 
 ```osc
 // Global settings
@@ -328,6 +344,8 @@ snare.play(0, 1, 0, 1)
 LOOP(kick)
 RUN(snare)
 ```
+
+MIDI/Pitch DSL examples (degrees, chords, comp) live in `examples/` and the [User Learning Site](https://signalcompose.github.io/orbitscore/).
 
 <details>
 <summary>Legacy MIDI syntax (for reference / Deprecated)</summary>

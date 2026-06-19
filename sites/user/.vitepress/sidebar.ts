@@ -26,11 +26,23 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'MIDI とピッチ表現（v2.0.0）',
+    collapsed: false,
+    items: [
+      { text: '9. MIDI 出力', link: '/midi/' },
+      { text: '10. ピッチ DSL（度数・コード）', link: '/midi/pitch-dsl' },
+      { text: '11. モードとスケール', link: '/midi/mode-scale' },
+      { text: '12. ボイシングと voice leading', link: '/midi/voicing' },
+      { text: '13. LinkAudio', link: '/midi/link-audio' },
+      { text: '14. Launch Quantize', link: '/midi/quantize' },
+    ],
+  },
+  {
     text: '困ったときは',
     collapsed: false,
     items: [
-      { text: '9. リファレンス', link: '/reference/methods' },
-      { text: '10. トラブルシューティング', link: '/troubleshooting' },
+      { text: '15. リファレンス', link: '/reference/methods' },
+      { text: '16. トラブルシューティング', link: '/troubleshooting' },
     ],
   },
 ]
@@ -61,11 +73,23 @@ export const sidebarEn: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'MIDI and Pitch DSL (v2.0.0)',
+    collapsed: false,
+    items: [
+      { text: '9. MIDI Output', link: '/en/midi/' },
+      { text: '10. Pitch DSL (Degrees & Chords)', link: '/en/midi/pitch-dsl' },
+      { text: '11. Modes & Scales', link: '/en/midi/mode-scale' },
+      { text: '12. Voicing & Voice Leading', link: '/en/midi/voicing' },
+      { text: '13. LinkAudio', link: '/en/midi/link-audio' },
+      { text: '14. Launch Quantize', link: '/en/midi/quantize' },
+    ],
+  },
+  {
     text: 'Help',
     collapsed: false,
     items: [
-      { text: '9. Reference', link: '/en/reference/methods' },
-      { text: '10. Troubleshooting', link: '/en/troubleshooting' },
+      { text: '15. Reference', link: '/en/reference/methods' },
+      { text: '16. Troubleshooting', link: '/en/troubleshooting' },
     ],
   },
 ]
