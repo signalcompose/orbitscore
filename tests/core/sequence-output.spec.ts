@@ -37,6 +37,10 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
       scheduleEvent: vi.fn(),
       scheduleSliceEvent: vi.fn(),
       getMasterGainDb: vi.fn().mockReturnValue(0),
+      // TA4: registerLinkAudioChannel is the eager-registration hook wired from
+      // output(). Without it the existing tests still pass (optional-chained),
+      // but its absence meant the output()→register wiring was never exercised.
+      registerLinkAudioChannel: vi.fn().mockResolvedValue(undefined),
     } as any
 
     global = new Global(mockPlayer)
@@ -90,6 +94,21 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
     global.linkAudio()
     seq.output('drum-bus_01')
     expect(seq.getOutputChannel()).toBe('drum-bus_01')
+  })
+
+  describe('output()→registerLinkAudioChannel wiring (TA4)', () => {
+    it('calls registerLinkAudioChannel with the channel name when linkAudio is on', () => {
+      global.linkAudio()
+      seq.output('kick')
+      // output() fire-and-forgets the call (optional-chain + .catch).
+      // The spy is invoked synchronously on the same tick.
+      expect(mockPlayer.registerLinkAudioChannel).toHaveBeenCalledWith('kick')
+    })
+
+    it('does NOT call registerLinkAudioChannel when linkAudio is off', () => {
+      seq.output('kick')
+      expect(mockPlayer.registerLinkAudioChannel).not.toHaveBeenCalled()
+    })
   })
 
   describe('output() empty-string guard', () => {

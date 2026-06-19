@@ -239,6 +239,36 @@ describe('EventScheduler — LinkAudio SynthDef dispatch', () => {
     })
   })
 
+  describe('TA5 — resolveLinkAudioChannel graceful on transport error (server-down)', () => {
+    it('resolves to hardware path (no throw) when the OSC register call rejects with a transport error', async () => {
+      // Simulates server not running / socket closed — a non-timeout rethrow from
+      // registerLinkAudioChannel. The scheduler must NOT propagate the rejection
+      // (it would terminate the setInterval loop); instead it falls back to the
+      // hardware bus and leaves linkAudioPluginAvailable=null for a later re-probe.
+      ;(mockOsc.registerLinkAudioChannel as any).mockRejectedValue(new Error('socket closed'))
+
+      // testExecutePlayback drives the dispatch path directly — should not throw.
+      await expect(
+        scheduler.testExecutePlayback(
+          '/a.wav',
+          { gainDb: 0, pan: 0, outputChannel: 'kick' },
+          '',
+          0,
+        ),
+      ).resolves.toBeUndefined()
+
+      // Hardware fallback is observable: orbitPlayBuf with no 'channel' arg.
+      expect(sentMessages).toHaveLength(1)
+      expect(sentMessages[0]?.[1]).toBe('orbitPlayBuf')
+      expect(sentMessages[0]).not.toContain('channel')
+
+      // isLinkAudioPluginAvailable() returns false for both null and false.
+      // After a transport error the internal state stays null (transient — not
+      // permanently latched absent), so a later dispatch will re-probe.
+      expect(scheduler.isLinkAudioPluginAvailable()).toBe(false)
+    })
+  })
+
   describe('stopAll() channel registry lifecycle', () => {
     it('clears the channel registry so the next acquire after stopAll gets id 1 again', async () => {
       scheduler.setLinkAudioPluginAvailable(true)

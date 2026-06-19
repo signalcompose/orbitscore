@@ -9,6 +9,7 @@ import { InterpreterV2 } from '../interpreter/interpreter-v2'
 import { parseAudioDSL } from '../parser/audio-parser'
 
 import { PlayOptions, PlayResult } from './types'
+import { shouldEnableSessionLog } from './session-log-gate'
 
 /**
  * Play an OrbitScore file
@@ -60,7 +61,7 @@ export async function playFile(options: PlayOptions): Promise<PlayResult> {
   // 合わず生成されない / LinkAudio トラックを捕捉しない、という設計ミスマッチが判明したため、
   // session-scoped で再設計するまで明示 opt-in に退避（writer/API/13 ユニットは保持・resurrect 可）。
   // 詳細・redesign 北極星: docs/development/POST_2.0_ROADMAP_NOTES.md
-  if (process.env.ORBITSCORE_SESSION_LOG === '1') {
+  if (shouldEnableSessionLog()) {
     interpreter.enableSessionLog({ cwd: process.cwd() })
   }
 
