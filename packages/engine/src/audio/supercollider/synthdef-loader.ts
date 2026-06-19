@@ -32,6 +32,14 @@ export class SynthDefLoader {
   }
 
   /**
+   * `/d_recv` 後にサーバへの SynthDef 反映を待つ固定ディレイ（best-effort）。
+   * `d_recv` の完了 OSC を待たない簡易方式のため、各ロード箇所で共有する。
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
+  /**
    * メインのSynthDefを読み込み
    */
   async loadMainSynthDef(): Promise<void> {
@@ -43,7 +51,7 @@ export class SynthDefLoader {
     await this.oscClient.sendMessage(['/d_recv', synthDefData])
 
     // Wait for SynthDef to be ready
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    await this.sleep(200)
 
     console.log('✅ SynthDef loaded')
   }
@@ -69,7 +77,7 @@ export class SynthDefLoader {
     }
     const synthDefData = fs.readFileSync(this.linkSynthDefPath)
     await this.oscClient.sendMessage(['/d_recv', synthDefData])
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await this.sleep(100)
     console.log('✅ orbitPlayBufLink SynthDef loaded')
 
     // Keepalive committer (#209) — keeps each LinkAudio channel's stream
@@ -77,7 +85,7 @@ export class SynthDefLoader {
     if (fs.existsSync(this.linkKeepaliveSynthDefPath)) {
       const keepaliveData = fs.readFileSync(this.linkKeepaliveSynthDefPath)
       await this.oscClient.sendMessage(['/d_recv', keepaliveData])
-      await new Promise((resolve) => setTimeout(resolve, 100))
+      await this.sleep(100)
       console.log('✅ orbitLinkAudioKeepalive SynthDef loaded')
     }
     return true
@@ -99,7 +107,7 @@ export class SynthDefLoader {
       if (fs.existsSync(synthDefPath)) {
         const synthDefData = fs.readFileSync(synthDefPath)
         await this.oscClient.sendMessage(['/d_recv', synthDefData])
-        await new Promise((resolve) => setTimeout(resolve, 50))
+        await this.sleep(50)
       }
     }
 
