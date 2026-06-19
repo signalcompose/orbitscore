@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OrbitScore Post-2.0 マスター計画</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --bg: #fdfdfd;
+    --muted: #5b6470;
+    --line: #e2e6ea;
+    --accent-a: #1f6feb;   /* engine track */
+    --accent-b: #8957e5;   /* app track */
+    --accent-c: #1a7f5a;   /* pitch/song track */
+    --warn-bg: #fff8e6;
+    --warn-bd: #e6c34a;
+    --stop-bg: #fdecef;
+    --stop-bd: #e5736f;
+    --inv-bg: #eef4ff;
+    --inv-bd: #1f6feb;
+    --code-bg: #f4f6f8;
+  }
+  html { color: var(--ink); background: var(--bg); }
+  body {
+    margin: 0 auto; max-width: 52em;
+    padding: 48px 28px 96px;
+    font: 16px/1.65 -apple-system, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+  h1 { font-size: 1.9em; margin: 0 0 .2em; letter-spacing: .01em; }
+  h2 { font-size: 1.35em; margin: 2.2em 0 .6em; padding-bottom: .25em; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.1em; margin: 1.6em 0 .4em; }
+  .sub { color: var(--muted); margin: 0 0 1.5em; font-size: .95em; }
+  p { margin: .8em 0; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font: 13.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; font: 13px/1.55 ui-monospace, Menlo, monospace; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: .3em 0; }
+  a { color: var(--accent-a); }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .92em; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .badge { display: inline-block; font-size: .72em; font-weight: 700; padding: .12em .6em; border-radius: 999px; vertical-align: middle; letter-spacing: .03em; }
+  .b-decided { background: #def7e6; color: #1a7f3c; }
+  .b-feas   { background: #fff2cc; color: #8a6d12; }
+  .b-spec   { background: #e6efff; color: #1f5fc0; }
+  .b-tent   { background: #fde2e2; color: #b53a37; }
+  .callout { border-left: 4px solid; border-radius: 0 6px 6px 0; padding: 12px 16px; margin: 1.2em 0; }
+  .c-inv  { background: var(--inv-bg);  border-color: var(--inv-bd); }
+  .c-warn { background: var(--warn-bg); border-color: var(--warn-bd); }
+  .c-stop { background: var(--stop-bg); border-color: var(--stop-bd); }
+  .callout .lbl { font-weight: 700; display: block; margin-bottom: .2em; }
+  .track { border: 1px solid var(--line); border-radius: 8px; padding: 4px 20px 16px; margin: 1.2em 0; border-top: 4px solid; }
+  .track.a { border-top-color: var(--accent-a); }
+  .track.b { border-top-color: var(--accent-b); }
+  .track.c { border-top-color: var(--accent-c); }
+  .track h3 { color: inherit; }
+  .start { background: #0d1117; color: #e6edf3; border-radius: 8px; padding: 18px 22px; margin: 1.5em 0; }
+  .start h2 { color: #fff; border: none; margin: 0 0 .5em; }
+  .start a { color: #7cc4ff; }
+  .start code { background: #1f2630; color: #e6edf3; }
+  .spine { font-weight: 600; }
+  .small { color: var(--muted); font-size: .88em; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2.5em 0; }
+  .legend span { margin-right: 1.2em; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<h1>OrbitScore Post-2.0 マスター計画</h1>
+<p class="sub">
+  作成 2026-06-20 ・ ステータス: <strong>ドラフト（レビュー用）</strong> ・ 対象: post-2.0 を実行する新規セッション<br />
+  正本ノート: <code>docs/development/POST_2.0_ROADMAP_NOTES.md</code> /
+  <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md</code> / <code>POST_2.0_PITCH_MODEL_NOTES.md</code>
+</p>
+
+<div class="start">
+  <h2>▶ Start here（新規セッションの起点）</h2>
+  <ol>
+    <li><strong>必読を順に読む</strong>（下記「必読」）。本書は探索ノートを<em>実行可能な形</em>に変換した入口であり、決定の正本はノート側。</li>
+    <li><strong>唯一の不変条件</strong>を頭に入れる → <em>permissive ライセンス規律</em>（§1）。これを破ると freemium 戦略が崩れる。</li>
+    <li><strong>最初の1手</strong>に着手 → <span class="spine">A0（RT 統合設計）+ S1（CLAP ホスティング・スパイク）</span>（§3 / §4-A）。他の全フェーズはここの結果待ち。</li>
+    <li>確定済み決定（§6）は<strong>再議論しない</strong>。より良い代替案は実装せず提案として報告に含める。</li>
+  </ol>
+  <p class="small" style="color:#9da7b3">本書は engine-first の土台トラック。締切なし。WCTM（Epic #224・締切 2026-08-07）は<strong>並行する別トラック</strong>で、post-2.0 はその時間を侵食しない。</p>
+</div>
+
+<h2>必読（この順で）</h2>
+<table>
+  <tr><th>#</th><th>ドキュメント</th><th>何が書いてあるか</th></tr>
+  <tr><td>1</td><td><code>POST_2.0_ROADMAP_NOTES.md</code></td><td>大方針 = engine-first。土台 vs 上物の分離。スパイク順序。</td></tr>
+  <tr><td>2</td><td><code>POST_2.0_ENGINE_AND_DISTRIBUTION.md</code></td><td>engine = Rust 確定の根拠。アーキ（薄いホスト+プラグイン DSP）。ライセンス/収益/配布。</td></tr>
+  <tr><td>3</td><td><code>POST_2.0_PITCH_MODEL_NOTES.md</code></td><td>pitch 2軸モデル（root 後置 / key.mode）。song/arrange 層（暫定）。</td></tr>
+  <tr><td>4</td><td><code>docs/research/RUST_PLUGIN_HOSTING.md</code></td><td>CLAP/VST3/AU の Rust binding feasibility（確認済）。</td></tr>
+  <tr><td>5</td><td><code>docs/research/ENGINE_DAEMON_PROTOCOL.md</code> / <code>rust/</code></td><td>既存 Rust エンジン（PoC・daemon WebSocket 契約）。</td></tr>
+</table>
+
+<h2 id="invariant">§1. 唯一の不変条件 — permissive ライセンス規律</h2>
+<div class="callout c-inv">
+  <span class="lbl">INVARIANT（全戦略の土台・これだけは守る）</span>
+  <strong>engine の依存を permissive に保ち、GPL は隔離する。</strong>
+  これが load-bearing なのは「機能ロック課金（freemium）は GPL では不可能」だから。permissive コアだからこそ free / freemium / クローズド / 商用を上に何でも乗せられる。
+</div>
+<ul>
+  <li>time-stretch = <strong>Signalsmith（permissive）</strong>。Rubber Band（GPL）は避ける。</li>
+  <li><strong>Ableton Link（GPL）は別プロセス / 別 crate の隔離モジュール</strong>に留める。</li>
+  <li>engine は外販しない（自社内部基盤）。「engine 市場で競合する」負担を背負わない。</li>
+</ul>
+<p class="small"><strong>自コードのライセンス vs 依存のライセンス</strong>: 上の不変条件は<em>依存（dependency）</em>の話。自社コードのライセンスはコンポーネント別に自由に選べる（全て自社 IP）。<strong>現状は維持</strong> — Signal compose <strong>Source-Available License v1.0</strong>（Apache 2.0 + Commons Clause + Fair Revenue $250k 閾値 + Academic 例外・source-available）。</p>
+<div class="callout c-warn">
+  <span class="lbl">TODO（別タスク・post-2.0 をブロックしない）</span>
+  Signal compose repo 間でライセンスの<strong>名称が不一致</strong>（MaxMCP=「Fair Trade License v1.0」/ godot-mcp・OrbitScore=「Source-Available License v1.0」。OrbitScore は README/docs が「Fair Trade」と呼ぶ内部不一致もあり）。<strong>理念は全 repo 共通</strong>（Apache + Commons + fair contribution + academic）。将来 canonical な名称/条項へ統一（最低限<strong>名称統一</strong>）を横断タスクで検討。2026-06-20 #ops に共有済み。
+</div>
+
+<h2 id="spine">§2. 依存スパイン（何が何を待つか）</h2>
+<p>3 トラックの依存関係。<strong>engine（A）が最も多くを gate し、最も未知が大きい</strong>。pitch/song（C）は engine 非依存で<strong>並行可能</strong>。</p>
+<pre>
+Track A（engine, Rust） ──┬─→ Track B（OrbitStudio アプリ / VSCodium）
+  A0 RT統合設計            │     ※ engine に足が付いてから（A1–A2 後）
+  S1 CLAP hosting  ★最初  │
+  S2 daemon seam 差替      │
+  A3 time-stretch          │
+  A4 LinkAudio(Rust隔離)   │
+
+Track C（pitch / song）  ──── engine 非依存・A と並行可
+  C1 pitch モデル（spec先行）
+  C2 song/arrange 層（暫定・"使って検証"・最後）
+</pre>
+<p class="legend small">
+  確信度: <span><span class="badge b-decided">DECIDED</span> 決定済</span>
+  <span><span class="badge b-feas">FEASIBILITY</span> 実現性のみ確認</span>
+  <span><span class="badge b-spec">SPEC-FIRST</span> spec 先行で採用</span>
+  <span><span class="badge b-tent">TENTATIVE</span> 暫定・使って検証</span>
+</p>
+
+<h2 id="firststep">§3. 最初の1手（次セッションが1つだけやるなら）</h2>
+<div class="callout c-warn">
+  <span class="lbl">▶ A0 + S1 — これがクリティカルパスの先頭</span>
+  <strong>A0（設計）:</strong> 既存 <code>orbit-audio</code> の cpal callback + WebSocket daemon に対し、3rd-party プラグインを <em>RT 安全に</em>統合する方式を設計（同一 callback / 別スレッド / プロセス分離のどれか）。binding が在ることと production で動くことは別。<br />
+  <strong>S1（スパイク）:</strong> <code>clack-host</code> を<strong>既存 orbit-audio の cpal callback に統合</strong>し、実 CLAP 楽器を 1 つロードして発音 → post-mix を tap → 既存 <code>LinkAudioSink::commit</code>（RT-safe）へ流す。
+</div>
+<p>S1 が証明するのは <strong>scsynth parity だけでなく「載せ替えの動機そのもの（=外部プラグインをホストできる）」</strong>。最成熟（MeadowlarkDAW が clack で前例）かつ editor 非依存で、現行スタックを壊さず並行できる。<strong>資産再利用</strong>: ゼロから DAW を書くのではなく、既にある orbit-audio スケジューラ/ミキサーに hosting を「足す」。</p>
+
+<h2>§4. 3 トラック詳細</h2>
+
+<div class="track a">
+  <h3>Track A — ネイティブエンジン（Rust） <span class="badge b-decided">DECIDED（engine=Rust）</span> <span class="badge b-feas">hosting=FEASIBILITY</span></h3>
+  <p>現状 scsynth(OSC) を、既存自社 <code>rust/</code> ワークスペースの発展で置換。<strong>engine=Rust は決定</strong>（既存 Rust が foundation を既にカバー + permissive が freemium を可能にする）。<strong>ただしプラグインホスティングは feasibility 確認止まりで production 実証はこれから</strong> — S1 がそれを feasibility→proof に変える。</p>
+  <p class="small">アーキ: 薄い permissive ホスト（再生/ミックス/ルーティング/スケジュール=実装済）+ DSP/FX/楽器は <strong>3rd-party プラグイン</strong>。time-stretch だけは engine 内（OrbitScore の音声 DSL は MIDI より豊かなため）。1st-party プラグインは nih-plug。</p>
+  <p class="small"><strong>スコープ境界（MIDI/IAC は engine 非依存）</strong>: MIDI/IAC 出力は TS 層（interpreter → MidiScheduler → <code>@julusian/midi</code> → CoreMIDI/IAC）で完結する。Track A が置換するのは<em>音声</em>ディスパッチの <code>OSCClient</code> seam のみで、<strong>MIDI には触れない</strong>。唯一の接点 = <strong>クロック同期</strong>（現 <code>TransportClock</code> が MIDI を SC から分離して同期）→ 音声バックエンド差し替え時に「MIDI↔音声のタイミング同期」だけ再確認する（再設計ではなく統合チェックポイント）。MIDI/pitch の DSL 進化は <strong>Track C</strong> と deferred 側で扱う。</p>
+  <table>
+    <tr><th>フェーズ</th><th>内容（既存資産の拡張として）</th><th>ゲート</th></tr>
+    <tr><td><strong>A0</strong></td><td>RT 統合設計（cpal callback + daemon への RT 安全な統合方式）</td><td>S1 着手の前提</td></tr>
+    <tr><td><strong>S1 ★</strong></td><td>CLAP ホスティング: <code>clack-host</code> を既存 cpal callback に統合 → 実プラグイン発音 → tap → <code>LinkAudioSink::commit</code></td><td>動機の実証。これが通らなければ §5 停止条件へ</td></tr>
+    <tr><td><strong>S2</strong></td><td>TS/Node から別プロセス+IPC で駆動 → 既存 <code>OSCClient</code> seam に差し替えで嵌まる確認（DSL/スケジューラ無傷）</td><td>parity</td></tr>
+    <tr><td><strong>A3</strong></td><td>time-stretch（Signalsmith）を native sample ノードに。DSL 面は #213 <code>fixpitch()</code>/<code>time()</code>（今 stub）を実装</td><td>—</td></tr>
+    <tr><td><strong>A4</strong></td><td>LinkAudio を Rust 側で隔離 GPL モジュールに（現 C++ <code>.scx</code> から）。lock-free 化（現 Mutex+try_lock）</td><td>license 規律 §1</td></tr>
+    <tr><td>後続</td><td>AU（<code>objc2-avf-audio</code>）→ VST3（<code>vst3</code> crate, MIT・工数最大）</td><td>S1 後に成熟度順</td></tr>
+  </table>
+</div>
+
+<div class="track b">
+  <h3>Track B — OrbitStudio アプリ（VSCodium） <span class="badge b-decided">DECIDED（専用アプリ化）</span></h3>
+  <p>専用デスクトップアプリ。<strong>engine に足が付いてから（A1–A2 後）</strong>着手。VSCodium は fork ではなく上流 vscode の rebuild スクリプト群なので、<strong>段階選択</strong>できる:</p>
+  <ol>
+    <li><strong>B1 リブランド rebuild</strong>（低保守）から始める</li>
+    <li><strong>B2 patch 付き rebuild</strong>（VST GUI 共存などの要求分だけ）</li>
+    <li><strong>B3 hard fork</strong>（Cursor 流・高保守・必要になったら）</li>
+  </ol>
+  <p class="small">「専用アプリにするか」ではなく「どの重さの手段で専用アプリ感を出すか」。VST GUI の Electron 共存は未確証項目（要スパイク）。配布 = <strong>Steam + Developer ID notarize の直接 .dmg</strong>（App Store はプラグインホスト型を sandbox が弾く）。notarize は既存 #210 と地続き。</p>
+</div>
+
+<div class="track c">
+  <h3>Track C — Pitch モデル + Song 層（engine 非依存・並行可）</h3>
+  <p><strong>C1 pitch モデル再設計</strong> <span class="badge b-spec">SPEC-FIRST</span><br />
+  pitch は直交 2 軸（anchor=root/tonic、lattice=scale/mode）× global→sequence→group カスケード。<code>key</code> = (tonic, デフォルトラティス)。</p>
+  <ul>
+    <li><strong>root はグループ後置に一本化</strong>: 絶対=音名 <code>(...)F</code> / 相対=大文字ローマ <code>(...)bII</code>。<code>.root()</code>・<code>seq.root()</code> は<strong>廃止</strong>（→ #280 バグはこれで消滅）。anchor は <code>seq.key()</code>。</li>
+    <li><code>key("C").mode("minor" | customVar)</code>、省略で Ionian。ラティスエンジンは実装済（長ラティス + period 対応）。net-new は配線/砂糖のみ。</li>
+    <li>移調は <code>transpose()</code>（<code>transport</code> は再生ヘッドと衝突するので<strong>不可</strong>）。コード名は別レイヤー（クロマティック・意図的 2 層）。</li>
+  </ul>
+  <div class="callout c-warn" style="margin:.8em 0">
+    <span class="lbl">注意（spec 先行で採用）</span>
+    pitch モデルは <code>specs-v2/DESIGN_DISCUSSION_RECORD.md</code> の<strong>確定決定 #1–32 を将来変更する候補</strong>（<code>.root()</code> 廃止等）を含む。採用時は<strong>必ず spec を先に更新</strong>してから実装。今は決定を書き換えない。
+  </div>
+  <p><strong>C2 song / arrange 層</strong> <span class="badge b-tent">TENTATIVE — 最後・"使って検証"</span><br />
+  転調（key over time）の置き場所であり、複数 seq を時間軸に構成する層。playable 統一（RUN/LOOP は seq でも song でも）/ part（co-active な seq 集合）/ conductor（節の基準クロック）/ 境界ポリシー（hard/musical）/ per-part key。</p>
+  <div class="callout c-stop" style="margin:.8em 0">
+    <span class="lbl">⚠ song 層は最もテンタティブ</span>
+    大和さん曰く「<strong>記法・名前は暫定 / 使ってみないと分からない</strong>」。<strong>ハード実装に走らない</strong>。pitch（C1）と live-coding core が固まってから、実使用で検証して記法を固める。Track C 内で最後にシーケンスする。<strong>資産再利用</strong>: song 層は既存 <code>[...]</code>/<code>*n</code>/#254 section 変数の再帰適用（フラクタル・ゼロ新規ではない）。
+  </div>
+</div>
+
+<h2 id="gates">§5. フェーズゲート / 停止条件</h2>
+<div class="callout c-stop">
+  <span class="lbl">STOP & REPORT（解釈で埋めず、選択肢と推奨を添えて報告）</span>
+  <ul style="margin:.3em 0">
+    <li><strong>S1 が通らない</strong>（clack pre-1.0 の breaking / RT 統合が解けない / tap → commit が成立しない）→ engine 載せ替えの前提が崩れる。実装を進めず停止し、Tracktion フォールバック（license 動機は消滅済だが技術フォールバックとして）を含め再検討。</li>
+    <li><strong>license 規律（§1）を破る依存が必要</strong>になったら停止。GPL を engine コアに入れない。</li>
+    <li>song 層（C2）で<strong>実使用前に記法を固めようとしている</strong>自分に気づいたら停止 → 使って検証フェーズへ。</li>
+  </ul>
+</div>
+<p class="small">各フェーズは「既存テスト全グリーン + 当該フェーズの受け入れ基準」を満たすまで次に進まない（v1.1 と同じ規律）。spec から逸脱が要るなら spec を先に更新。</p>
+
+<h2 id="deferred">§6. 確定済み決定（再議論しない） / 棚卸し対象</h2>
+<table>
+  <tr><th>確定</th><th>内容</th></tr>
+  <tr><td>engine</td><td>Rust（既存 <code>rust/</code>）。Tracktion ではない。</td></tr>
+  <tr><td>hosting 順</td><td>CLAP（最成熟）→ AU → VST3。</td></tr>
+  <tr><td>アプリ</td><td>VSCodium 段階選択。名称 = OrbitStudio（候補）。OrbitScore = 言語。</td></tr>
+  <tr><td>配布</td><td>Steam + notarize 直接 .dmg。App Store 不可。</td></tr>
+  <tr><td>収益</td><td>freemium アプリ + permissive 1st-party プラグイン（無料同梱+単体販売）+ open 言語。</td></tr>
+  <tr><td>.vsix</td><td>2.0.0 で feature freeze（廃止でなく）。アプリが実用品を出すまで 2.0.x パッチ口を残す。</td></tr>
+  <tr><td>命名</td><td>移調 = <code>transpose()</code>（<code>transport</code> 不可）。</td></tr>
+</table>
+<p><strong>土台後に再検討する deferred バックログ</strong>（今ロードマップに固定しない）:</p>
+<ul>
+  <li><strong>engine 非依存（先行可）</strong>: #280（<code>seq.root(note-name)</code> バグ→ C1 で消滅）/ #255（resolver 診断）/ #248（Phase 2 follow-up）。</li>
+  <li><strong>棚卸し（実装済なのに Issue OPEN）</strong>: #259（<code>.comp</code> C2a）・#212（launch quantize）→ 実体に合わせクローズ。</li>
+  <li><strong>engine 待ち</strong>: #239（<code>slice()</code>）/ #213（<code>fixpitch()</code>/<code>time()</code> 本体）/ #238（audio <code>[ ]</code> stack）。S1 が固まるまで深追いしない。</li>
+  <li><strong>session-log（<code>.orbslog</code>）再設計</strong>: 2.0.0 で dormant 化済（opt-in）。北極星 = ① session-scoped ② 全アクティブトラック捕捉（LinkAudio 含む）③ L2 replay(#241)/post-concert 分析(#242) が乗る形式。engine era の項目。</li>
+</ul>
+
+<h2 id="delegation">§7. Delegation Profile — Opus / Sonnet（トークン効率）</h2>
+<p>v1.1 <code>IMPLEMENTATION_INSTRUCTIONS.html</code> §5 と同じ思想。<strong>判断・seam は Opus（main 直列）、固定インターフェース内の実装は Sonnet（subagent 並列）</strong>。リストに無いタスクも下記ルールで分類する。</p>
+<div class="callout c-inv">
+  <span class="lbl">判定ルール（これ 1 つで分類する）</span>
+  <strong>Sonnet</strong>: インターフェースが確定済 <em>かつ</em> 正しさが安価に検証可能（テスト / ビルド / spec 差分）なとき。<br />
+  <strong>Opus</strong>: その作業<em>自体</em>がインターフェース / seam / 判断であるとき、<strong>または</strong>「誤答が安価な検証をすり抜ける」とき（← この後半が load-bearing）。
+</div>
+<div class="callout c-warn">
+  <span class="lbl">⚠ 委譲は fire-and-forget ではない — Opus が実ゲートで検証する</span>
+  「agent が done と報告」≠ done。<strong>本セッションで実証済み</strong>: doc 精度の Sonnet agent は「build 緑・dead link 無し」と報告したが、実際には <strong>5 件の実装乖離</strong>があり、さらに bot レビューが 6 件目（<code>gate(1.2)</code>）を発見した。→ <strong>delegated output は Opus が実ゲート（実装照合 / 実機 / spec）に照らして検証する</strong>。検証コストを織り込んで委譲する。
+</div>
+<p><strong>Opus（委譲不可・隠れ誤りが高コストな判断）</strong>:</p>
+<ul>
+  <li><strong>A0 RT 統合設計</strong> と <strong>S1 スパイクの RT 安全性の判定（verdict）</strong> — スパイクの価値は「驚き」。Sonnet の「動いた」は、スパイクが暴くべき RT 問題を隠す。機械的な統合サブ手順は Sonnet 可だが、結論は Opus が出す。</li>
+  <li><strong>新依存ごとの license チェック（§1）</strong> — supercolliderjs が GPL 隣接 transitive（minimatch/lodash/immutable）を誰も直接足さずに引いた件で実証済。Sonnet の crate 追加は transitive の license 違反を見逃す。</li>
+  <li>pitch モデルの <strong>spec 変更</strong>（Known Decisions #1–32 を動かす → spec 先行）/ <strong>song 層の記法</strong>（taste/判断）/ <strong>lexer・parser・DSL 意味論</strong> / <strong>public API 面</strong>。</li>
+</ul>
+<p><strong>Sonnet（固定インターフェース内・検証容易 → 並列委譲）</strong>: 隔離モジュール実装（CLAP host ラッパ / time-stretch ノード / daemon コマンドハンドラ）・純関数・テスト記述・docs / 翻訳・research 要約・機械的リファクタ・spec 適合監査。<span class="small">いずれも「インターフェースを Opus が固定 → Sonnet が中身を埋める → Opus が実ゲートで検証」の順。</span></p>
+
+<h2 id="rules">§8. 新規セッションの運用規則</h2>
+<ol>
+  <li><strong>必読（上記）を先に読む</strong>。決定の正本は本書でなくノート側。</li>
+  <li><strong>§6 の確定決定を再議論しない</strong>。代替案は実装せず提案として報告。</li>
+  <li><strong>spec 先行</strong>: 実装が pitch の確定決定（#1–32）から逸脱するなら、spec / DESIGN_DISCUSSION_RECORD を先に更新。</li>
+  <li><strong>委譲は §7 Delegation Profile に従う</strong>（Opus=判断 / seam、Sonnet=固定インターフェース内の実装、<strong>delegated output は Opus が実ゲートで検証</strong>）。</li>
+  <li><strong>license 規律（§1）を毎フェーズ確認</strong>。新依存を足すたびに permissive か検証。</li>
+  <li>audio シーケンスの <code>play()</code> 意味論は変更しない（v1.1 規律の継続）。</li>
+</ol>
+
+<h2 id="epic">§9. 提案する Epic / Issue 構成（承認後に作成）</h2>
+<p class="small">以下は<strong>本ドラフトの提案であり、まだ作成していない</strong>。大和さんの承認後に Epic + 子 Issue 化する。</p>
+<ul>
+  <li><strong>Epic: Post-2.0 Native Engine &amp; OrbitStudio</strong>（締切なし・WCTM と別）
+    <ul>
+      <li>A0 RT 統合設計（doc）</li>
+      <li>S1 CLAP hosting スパイク ★</li>
+      <li>S2 daemon ↔ OSCClient seam 差し替え</li>
+      <li>A3 time-stretch（Signalsmith + #213）</li>
+      <li>A4 LinkAudio Rust 隔離 + lock-free 化</li>
+      <li>B1 VSCodium リブランド rebuild</li>
+      <li>C1 pitch モデル再設計（spec 先行）</li>
+      <li>C2 song/arrange 層（"使って検証" / 暫定）</li>
+    </ul>
+  </li>
+</ul>
+
+<h2 id="open">§10. Open Questions</h2>
+<ul>
+  <li><strong>engine</strong>: cpal callback + daemon の RT 安全統合方式（A0 で決める）。time-stretch の Rust binding（<code>ssstretch</code>/<code>signalsmith-stretch</code> 存在の兆候・詳細未確認）。clack pre-1.0 breaking 耐性。</li>
+  <li><strong>app</strong>: VST GUI の Electron 共存方式。VSCodium 段階のどこから始めるか。fork 保守の定量。</li>
+  <li><strong>pitch</strong>: period≠12 スケールでの <code>^N</code> 定義（+12 か +period か）。組み込み mode 名一覧 / minor 既定。<code>.root()</code> 廃止に伴う既存 example 移行。</li>
+  <li><strong>song（使って検証で詰める）</strong>: 境界ポリシー hard/musical 既定。節境界をまたぐ seq の継続 vs リスタート。ポリテンポ時の基準クロック。#254 section 変数との統合度。名前・記法の最終確定。</li>
+</ul>
+
+<hr />
+<p class="small">
+  関連: WCTM = Epic #224（並行・締切 2026-08-07・<code>docs/specs-v2/</code>）。本書 = post-2.0 土台トラック（締切なし）。<br />
+  本書は探索ノートの統合入口。確信度勾配（DECIDED / FEASIBILITY / SPEC-FIRST / TENTATIVE）を保つこと。
+</p>
+
+</body>
+</html>
