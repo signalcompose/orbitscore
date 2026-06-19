@@ -1,3 +1,5 @@
+> ⚠️ **DEPRECATED（非推奨・2.0.0 時点）** — 本マニュアルは pre-2.0（audio-only）の内容で、2.0.0 の新機能（MIDI 出力 / Pitch DSL / comp / LinkAudio / quantize）を含みません。**最新のユーザー向けドキュメントは VitePress user site（`sites/user/`）を参照**してください。本ファイルは履歴として保持しています（#237）。
+
 # OrbitScore ユーザーマニュアル
 
 ## 目次

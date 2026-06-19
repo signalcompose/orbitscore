@@ -1,3 +1,5 @@
+> ⚠️ **DEPRECATED (as of 2.0.0)** — This manual covers the pre-2.0 (audio-only) DSL and does NOT include the 2.0.0 features (MIDI output / Pitch DSL / comp / LinkAudio / quantize). See the **VitePress user site (`sites/user/`)** for current user documentation. Kept for history (#237). Note: the "brew install supercollider" step below is obsolete — 2.0.0 bundles scsynth.
+
 # OrbitScore User Manual
 
 **Version**: 3.0 (Audio-Based DSL)

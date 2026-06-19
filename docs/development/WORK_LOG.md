@@ -17,6 +17,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.135 docs(user): deprecate USER_MANUAL ja/en → VitePress (#237) (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ deprecate バナーのみ（本体は履歴保持）
+**Branch**: `237-doc-reconciliation-2.0.0`
+
+`docs/user/ja|en/USER_MANUAL.md` は完全に pre-2.0（audio-only・新ピラー 0・en は `brew install supercollider` のまま）。先頭に **DEPRECATED バナー**を追加し VitePress user site（`sites/user/`）へ誘導。本体は履歴として保持（削除しない）。
+
 ### 6.134 docs(spec): SoT spec を 2.0.0 実態へ整合 (#237) (Jun 19, 2026)
 
 **Date**: 2026-06-19
