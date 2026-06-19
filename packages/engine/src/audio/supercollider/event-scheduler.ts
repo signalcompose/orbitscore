@@ -182,8 +182,11 @@ export class EventScheduler {
     }
     try {
       await this.resolveLinkAudioChannel(name)
-    } catch {
-      // best-effort — dispatch-time registration remains as a fallback
+    } catch (err) {
+      // best-effort — dispatch-time registration remains as a fallback.
+      // resolveLinkAudioChannel catches internally and should not throw; log if
+      // it ever does so a future regression is visible rather than silent.
+      console.warn(`⚠️  eager LinkAudio channel registration for '${name}' failed:`, err)
     }
   }
 
@@ -201,8 +204,11 @@ export class EventScheduler {
     }
     try {
       await this.oscClient.setLinkTempo(bpm)
-    } catch {
-      // best-effort — a failed tempo push must never break playback
+    } catch (err) {
+      // best-effort — a failed tempo push must never break playback, but surface
+      // it so a crashed server mid-set is diagnosable (otherwise the global.ts
+      // .catch never sees it — this layer would eat it silently).
+      console.warn('⚠️  Link tempo push failed:', err)
     }
   }
 
@@ -418,6 +424,12 @@ export class EventScheduler {
     // Re-probe plugin availability next session — the plugin may have been
     // installed (or removed) between sessions, so a cached result is stale.
     this.linkAudioPluginAvailable = null
+    // Drop any in-flight channel-resolution promises so a probe still pending at
+    // stop time can't leak a stale result into the next session's first dispatch.
+    this.resolvingChannel.clear()
+    // Allow the plugin-absent warning to fire again next session (paired with the
+    // linkAudioPluginAvailable reset above).
+    this.warnedAboutMissingPlugin = false
   }
 
   /**
