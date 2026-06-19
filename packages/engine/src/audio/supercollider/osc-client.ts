@@ -6,6 +6,20 @@ import * as sc from 'supercolliderjs'
 
 import { BootOptions, AudioDevice } from './types'
 
+/**
+ * Sentinel marking a `registerLinkAudioChannel` rejection as OUR registration
+ * timeout (no `/done` arrived in time) — which is how plugin absence presents.
+ * Distinct from a transport error (socket closed / server crash): the caller
+ * latches `linkAudioPluginAvailable=false` only on this sentinel, never on a
+ * transport error (which it re-probes instead).
+ */
+class LinkAudioRegisterTimeoutError extends Error {
+  constructor() {
+    super('registerLinkAudioChannel timeout')
+    this.name = 'LinkAudioRegisterTimeoutError'
+  }
+}
+
 export class OSCClient {
   private server: any = null
   private availableDevices: AudioDevice[] = []
@@ -80,9 +94,17 @@ export class OSCClient {
    * plugin has a sink for `orbitPlayBufLink` synths dispatched on `channelId`,
    * and waits for the plugin's `/done /orbit/registerLinkAudioChannel` reply.
    *
-   * Returns `true` on `/done`, `false` on timeout. The timeout doubles as
-   * plugin-presence detection: if the OrbitLinkAudio plugin is not loaded,
-   * nothing replies and we fall back to the hardware bus.
+   * Returns `true` on `/done` and `false` on OUR registration timeout — the
+   * timeout doubles as plugin-presence detection: if the OrbitLinkAudio plugin
+   * is not loaded, nothing replies and the caller falls back to the hardware bus
+   * and latches the absence. A genuine transport error (socket closed / server
+   * crash) is NOT a timeout, so it is rethrown rather than mapped to `false`;
+   * the caller treats a rethrow as transient and re-probes later instead of
+   * permanently latching the plugin as absent.
+   *
+   * Our manual `timeoutMs` (2000) is shorter than supercolliderjs's own
+   * `callAndResponse` timeout (4000ms), so a plugin-absent no-reply always
+   * settles via our sentinel first.
    */
   async registerLinkAudioChannel(
     channelId: number,
@@ -100,13 +122,19 @@ export class OSCClient {
           response: ['/done', '/orbit/registerLinkAudioChannel'],
         }),
         new Promise((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error('registerLinkAudioChannel timeout')), timeoutMs)
+          timer = setTimeout(() => reject(new LinkAudioRegisterTimeoutError()), timeoutMs)
         }),
       ])
       return true
-    } catch {
-      // Timeout or transport error → treat as plugin-absent; caller falls back.
-      return false
+    } catch (err) {
+      // Our registration timeout → plugin absent; caller falls back + latches.
+      if (err instanceof LinkAudioRegisterTimeoutError) {
+        return false
+      }
+      // Transport error (socket closed / server crash) → not plugin-absence.
+      // Rethrow so the caller can treat it as transient and re-probe later
+      // rather than permanently latching `linkAudioPluginAvailable=false`.
+      throw err
     } finally {
       if (timer) clearTimeout(timer)
     }

@@ -260,7 +260,9 @@ export class Global {
     if (!this.isLinkAudioEnabled()) return
     const bpm = this.tempoManager.tempo()
     if (typeof bpm !== 'number') return
-    void this.audioEngine.setLinkTempo?.(bpm)?.catch(() => {})
+    void this.audioEngine
+      .setLinkTempo?.(bpm)
+      ?.catch((err) => console.warn('⚠️  Link tempo push failed:', err))
   }
 
   /**

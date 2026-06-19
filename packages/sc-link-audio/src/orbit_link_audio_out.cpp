@@ -74,6 +74,14 @@ orbitscore::ChannelRegistry g_channelRegistry;
 // the anchor by the exact audio duration of the elapsed blocks. All channels
 // share this single time base, so there is no per-channel differential drift and
 // no wall-clock jitter — only the negligible audio-vs-host ppm drift over a set.
+//
+// These are TU-level globals. scsynth can reboot the server within one host
+// process (internal server / repeated boots in a long-lived process), and
+// PluginLoad re-runs on each such (re)load. A stale anchor across a reboot would
+// make `bufCounter < g_anchorBufCounter`, so `framesSinceAnchor` underflows
+// negative and the derived beat is garbage. PluginLoad resets all three to their
+// initial values so the anchor is re-captured fresh on the first committing block
+// after every (re)load.
 bool g_beatAnchorSet = false;
 std::int64_t g_anchorBufCounter = 0;
 std::chrono::microseconds g_anchorMicros{0};
@@ -427,6 +435,14 @@ PluginLoad(OrbitLinkAudio) {
   // peer with a different tempo joins the session. Peer name "OrbitScore" is
   // what other peers (Live, etc.) display in their Link UI.
   g_channelRegistry.initLinkAudio(120.0, "OrbitScore");
+
+  // Reset the beat anchor on every (re)load (#209). These TU-level globals
+  // survive a server reboot within the same host process, so without this a
+  // stale anchor would make framesSinceAnchor underflow negative after a reboot.
+  // Re-captured fresh on the first committing block (see decl block above).
+  g_beatAnchorSet = false;
+  g_anchorBufCounter = 0;
+  g_anchorMicros = std::chrono::microseconds{0};
 
   DefinePlugInCmd(kRegisterLinkAudioChannelCmd,
                   OrbitLinkAudioOut_RegisterChannel, nullptr);

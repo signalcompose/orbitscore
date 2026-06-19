@@ -87,6 +87,14 @@ export class SynthDefLoader {
       await this.oscClient.sendMessage(['/d_recv', keepaliveData])
       await this.sleep(100)
       console.log('✅ orbitLinkAudioKeepalive SynthDef loaded')
+    } else {
+      // Without the keepalive, each channel's Link stream is only committed while
+      // a transient sample plays — sparse patterns leave gaps that the receiver
+      // underruns or plays as silence. Warn rather than fail silently.
+      console.warn(
+        '⚠️  orbitLinkAudioKeepalive.scsyndef not present — LinkAudio keepalive synths ' +
+          'will not start; channel streams may gap between transient sample hits.',
+      )
     }
     return true
   }

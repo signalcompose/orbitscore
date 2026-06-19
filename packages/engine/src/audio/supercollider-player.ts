@@ -49,11 +49,21 @@ export class SuperColliderPlayer {
     await this.synthDefLoader.loadMasteringEffectSynthDefs()
     // LinkAudio (#209): load the orbitPlayBufLink SynthDef so sample playback can
     // route to Ableton via the OrbitLinkAudio plugin. Best-effort — a missing
-    // .scsyndef or load error must not break boot; plugin presence itself is
-    // detected lazily on the first outputChannel dispatch (event-scheduler).
+    // .scsyndef or load error must not break boot.
+    //
+    // When the SynthDef is absent (false) LinkAudio cannot work, so eagerly mark
+    // the plugin unavailable: this short-circuits the lazy /done probe and avoids
+    // a 2000ms timeout on the first outputChannel dispatch in hardware-only
+    // builds. When it loads (true) we leave availability as `null` so the lazy
+    // probe still confirms actual plugin presence on first dispatch (SynthDef
+    // presence ≠ plugin presence).
     try {
-      await this.synthDefLoader.loadLinkAudioSynthDef()
+      const linkAudioLoaded = await this.synthDefLoader.loadLinkAudioSynthDef()
+      if (!linkAudioLoaded) {
+        this.eventScheduler.setLinkAudioPluginAvailable(false)
+      }
     } catch (e) {
+      this.eventScheduler.setLinkAudioPluginAvailable(false)
       console.warn(
         '⚠️  LinkAudio SynthDef load failed — continuing with hardware-only playback:',
         e,
