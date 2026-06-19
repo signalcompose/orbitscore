@@ -6,13 +6,13 @@ Write `.orbs` patches and run them line by line with `Cmd+Enter`. No separate Su
 
 ## Supported Platforms
 
-**macOS (Apple Silicon)** only as of v1.x.
+**macOS (Apple Silicon)** only as of 2.0.0.
 
 | OS / Arch | Status |
 |---|---|
 | macOS Apple Silicon (arm64) | ✅ Supported |
 | macOS Intel (x86_64) | ⚠️ Untested (bundled binary is universal but not actively verified) |
-| Windows / Linux | ❌ Not supported in v1.x |
+| Windows / Linux | ❌ Not supported currently |
 
 Cross-platform support is tracked as a future effort.
 
@@ -44,6 +44,14 @@ LOOP(kick)
 - Real-time syntax diagnostics
 - Status bar indicators for engine state and audio backend
 - Bundled `scsynth` (~11.5 MB, no manual SuperCollider install)
+
+### New in 2.0.0
+
+- **MIDI output** — scale degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
+- **Pitch DSL** — musical pitch via scale degrees, chords, voicing, mode, and expression
+- **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
+- **Ableton Link Audio (LinkAudio)** — OrbitScore acts as the Link tempo leader; Ableton Live follows OrbitScore's tempo
+- **quantize** — bar-quantized scheduling control
 
 ## Commands
 
@@ -91,6 +99,8 @@ The bundled `scsynth` could not be located. Try:
 ## Links
 
 - 📦 [Download the latest `.vsix`](https://github.com/signalcompose/orbitscore/releases) — GitHub Releases
+- 🎓 [User Learning Site (ja)](https://signalcompose.github.io/orbitscore/) — full feature docs (MIDI, Pitch DSL, comp, LinkAudio)
+- 🎓 [User Learning Site (en)](https://signalcompose.github.io/orbitscore/en/)
 - 🐛 [Report an issue](https://github.com/signalcompose/orbitscore/issues)
 - 📖 [Source code](https://github.com/signalcompose/orbitscore) — Contributions welcome
 - 📜 License: Signal compose Fair Trade License (extension), GPL-3.0 (bundled SuperCollider), LGPL-2.1 (bundled libsndfile). See `engine/scsynth/NOTICE` for details.

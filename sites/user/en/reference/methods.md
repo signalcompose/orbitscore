@@ -249,7 +249,56 @@ MUTE(
 
 ---
 
-## 6. Method Chains
+## 6. MIDI Output (v2.0.0 Pitch DSL)
+
+Methods for MIDI sequences and related global settings. See [MIDI Output](/en/midi/) for full documentation.
+
+### Global — MIDI Settings
+
+| Signature | Description | Example |
+|---|---|---|
+| `key("C")` | Sets the tonic (root note) for MIDI sequences ⚠️ | `global.key("C")` |
+| `key("D3")` | Sets the tonic and register in one declaration ⚠️ | `global.key("D3")` |
+| `midiLatency(ms)` | Fixed MIDI send offset in ms for timing alignment (default 0) | `global.midiLatency(20)` |
+| `quantize(val)` | LOOP launch grid: `"bar"`(default) / `"beat"` / `"2bar"` / `"4bar"` / `"8bar"` / `"off"` | `global.quantize("bar")` |
+| `linkAudio()` | Enable LinkAudio mode (streams audio to Live; macOS + Live 12.4+) | `global.linkAudio()` |
+| `linkAudio(SR)` | Enable LinkAudio with explicit sample rate | `global.linkAudio(48000)` |
+
+> ⚠️ `global.key()` / `seq.root()` and related root/key interfaces are scheduled for redesign post-2.0.
+
+### Sequence — MIDI Declaration
+
+| Signature | Description | Example |
+|---|---|---|
+| `midi(port, ch)` | Switches this sequence to MIDI mode (port = substring match, ch = 1–16) | `piano.midi("IAC", 1)` |
+| `octave(N)` | Base octave (the octave degree 1 belongs to; default 4 = C4) | `piano.octave(4)` |
+| `vel(N)` | Default velocity (1–127; default 96) | `piano.vel(96)` |
+| `gate(N)` | Default gate ratio (0.8 = 80% of slot; default 0.8) | `piano.gate(0.8)` |
+| `root(N)` | Sequence-default root (degree only) ⚠️ | `piano.root(1)` |
+| `voicelead()` | Apply automatic voice leading to the whole sequence (alias: `vl()`) | `piano.voicelead()` |
+| `quantize(val)` | Per-sequence LOOP launch grid override | `fill.quantize("off")` |
+| `output("name")` | LinkAudio channel name (required when `global.linkAudio()` is active) | `kick.output("kick")` |
+
+### play() values for MIDI sequences
+
+| Notation | Meaning |
+|---|---|
+| `0` | Rest |
+| `1`–`9`, `11`, `13` | Degrees (Ionian-relative) |
+| `b3`, `#5` | Flat / sharp accidentals |
+| `5^+1` | Shift up 1 octave (sticky) |
+| `[1, 3, 5]` | Chord stack (simultaneous note-on) |
+| `_` | Tie — extend previous event one slot |
+| `5r` | Element randomly sounds ~50% of cycles |
+| `5^r` | Random octave ±1 each cycle |
+| `[1,3,5].r` | Chord thinning (each voice ~50%) |
+| `5@v110` | Absolute velocity per note |
+| `5@g30` | Gate percent per note (30 = staccato) |
+| `riff*3` | Repeat pattern 3 slots wide |
+
+---
+
+## 7. Method Chains
 
 All sequence methods can be connected with `.`.
 
