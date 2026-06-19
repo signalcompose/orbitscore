@@ -55,9 +55,14 @@ export async function playFile(options: PlayOptions): Promise<PlayResult> {
     console.log('♻️ Reusing existing interpreter')
   }
 
-  // §L1 (#229): the CLI is a real entry point — record the session (idempotent;
-  // a reused interpreter keeps its rolling buffer). `untitled` fallback dir = cwd.
-  interpreter.enableSessionLog({ cwd: process.cwd() })
+  // §L1 (#229): session-log は 2.0.0 では dormant（既定 off）。実機ライブで
+  // 「複数ファイルをまたぐ1セッション」に file-scoped ログ（<basename>.<stamp>.orbslog）が
+  // 合わず生成されない / LinkAudio トラックを捕捉しない、という設計ミスマッチが判明したため、
+  // session-scoped で再設計するまで明示 opt-in に退避（writer/API/13 ユニットは保持・resurrect 可）。
+  // 詳細・redesign 北極星: docs/development/POST_2.0_ROADMAP_NOTES.md
+  if (process.env.ORBITSCORE_SESSION_LOG === '1') {
+    interpreter.enableSessionLog({ cwd: process.cwd() })
+  }
 
   await interpreter.execute(ir, {
     documentDirectory,

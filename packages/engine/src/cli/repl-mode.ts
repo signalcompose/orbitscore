@@ -31,8 +31,13 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   // Create a global interpreter
   const globalInterpreter = new InterpreterV2()
 
-  // §L1 (#229): the REPL is a real entry point — record the session (idempotent).
-  globalInterpreter.enableSessionLog({ cwd: process.cwd() })
+  // §L1 (#229): session-log は 2.0.0 では dormant（既定 off）。file-scoped ログが
+  // 複数ファイルをまたぐライブセッションに合わない設計ミスマッチのため、session-scoped で
+  // 再設計するまで明示 opt-in に退避（writer/API/ユニットは保持・resurrect 可）。
+  // 詳細・redesign 北極星: docs/development/POST_2.0_ROADMAP_NOTES.md
+  if (process.env.ORBITSCORE_SESSION_LOG === '1') {
+    globalInterpreter.enableSessionLog({ cwd: process.cwd() })
+  }
 
   // Boot SuperCollider once at startup with optional audio device
   await globalInterpreter.boot(options.audioDevice)
