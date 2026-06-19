@@ -11,7 +11,7 @@
  * and bump the package.json files + tag. (Auto-sync from package.json is deferred
  * — SESSION_LOG_SPEC §7 / #276.)
  */
-export const ENGINE_VERSION = '2.0.0-dev'
+export const ENGINE_VERSION = '2.0.0'
 
 /** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
 export const DSL_VERSION = '1.1'
