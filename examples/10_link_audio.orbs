@@ -16,6 +16,7 @@ global.beat(4 by 4)
 // All sequences below route through Link Audio instead of the hardware bus.
 // Hardware output and Link Audio cannot mix within the same .orbs file.
 global.linkAudio()
+global.start()
 // Or pin the target sample rate explicitly:
 // global.linkAudio(48000)
 
@@ -23,8 +24,9 @@ global.linkAudio()
 // Live receives "kick" and "snare" as separate Audio From sources.
 var kick = init global.seq
 kick.length(1)
+kick.beat(5 by 4)
 kick.audio("../test-assets/audio/kick.wav").output("kick")
-kick.play(1, 0, 0, 0)
+kick.play(1, 1, 1, 1)
 
 var snare = init global.seq
 snare.length(1)
@@ -55,8 +57,10 @@ ghost.play(0, (0, 1), 0, (1, 0))
 // === Start playback ===
 // In Live: set Audio From of an audio track to the OrbitScore peer's
 // "kick" / "snare" / "drums" channel and unmute monitoring.
-global.start()
-RUN(kick, snare, hat_closed, hat_open, ghost)
+LOOP(kick, snare, hat_closed, hat_open, ghost)
+LOOP(kick)
+LOOP(kick, snare)
+LOOP()
 
 // === Notes ===
 // - global.linkAudio() must appear once per file, before sequences start

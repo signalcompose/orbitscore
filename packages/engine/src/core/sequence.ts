@@ -308,7 +308,18 @@ export class Sequence {
       )
     }
     this._outputChannel = channelName
-    if (!this.global.isLinkAudioEnabled()) {
+    if (this.global.isLinkAudioEnabled()) {
+      // Eagerly register the channel with the plugin so its source appears in
+      // Live's "Audio From" list NOW (at declaration), letting the operator
+      // pre-route Ableton tracks before playback. Fire-and-forget + best-effort:
+      // the dispatch path re-registers idempotently if this races the boot.
+      this.audioEngine.registerLinkAudioChannel?.(channelName)?.catch((err) => {
+        console.warn(
+          `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}"): ` +
+            `eager LinkAudio channel registration failed (will retry on playback): ${err}`,
+        )
+      })
+    } else {
       console.warn(
         `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}") ` +
           `was called without 'global.linkAudio()'. The channel name is recorded ` +
@@ -1123,6 +1134,17 @@ export class Sequence {
    * dispatch contract without going through the full scheduling loop.
    */
   resolveDispatchChannel(): string | undefined {
+    // MIDI sequences emit to a MIDI bus (IAC etc.), never to an SC audio bus,
+    // so the LinkAudio strict-mode `.output()` requirement does not apply to
+    // them. Design decision #14 (DESIGN_DISCUSSION_RECORD): "MIDI と SC オーディオ
+    // は併走可 / 排他にする技術的理由がない"; IMPLEMENTATION_INSTRUCTIONS: "MIDI に
+    // LinkAudio 型の排他は適用しない". Spec §8.1.2 scopes the requirement to
+    // "発音 (sounding) sequences". Without this, run()/loop() (which call this
+    // eagerly, unlike the schedule paths that early-return for MIDI) wrongly
+    // throw for a `.midi()` sequence in a `global.linkAudio()` file (#282).
+    if (this.isMidi()) {
+      return undefined
+    }
     if (!this.global.isLinkAudioEnabled()) {
       return undefined
     }

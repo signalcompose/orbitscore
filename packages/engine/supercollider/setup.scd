@@ -12,6 +12,12 @@
 //   - 実行すると synthdefs/ ディレクトリに .scsyndef ファイルが生成されます
 // ============================================
 
+// 出力先 synthdefs/ ディレクトリ。旧来は proj_livecoding を絶対パスで
+// ハードコードしていたが、チェックアウト場所に依存しないよう、この .scd の
+// 位置 (nowExecutingPath) を基準に相対解決する。
+~synthdefDir = PathName(thisProcess.nowExecutingPath).pathOnly ++ "synthdefs";
+("synthdefs dir: " ++ ~synthdefDir).postln;
+
 // orbitPlayBuf SynthDef (chop サポート付き)
 SynthDef(\orbitPlayBuf, {
     arg out = 0, bufnum = 0, rate = 1, amp = 0.5, pan = 0, 
@@ -56,7 +62,7 @@ SynthDef(\orbitPlayBuf, {
     
     // 出力
     Out.ar(out, sig);
-}).writeDefFile("/Users/yamato/Src/proj_livecoding/orbitscore/packages/engine/supercollider/synthdefs".standardizePath);
+}).writeDefFile(~synthdefDir);
 
 "✅ orbitPlayBuf SynthDef saved!".postln;
 
@@ -93,7 +99,7 @@ SynthDef(\fxCompressor, {
     
     // バス0に書き戻し（ReplaceOut）
     ReplaceOut.ar(0, compressed);
-}).writeDefFile("/Users/yamato/Src/proj_livecoding/orbitscore/packages/engine/supercollider/synthdefs".standardizePath);
+}).writeDefFile(~synthdefDir);
 
 "✅ fxCompressor SynthDef saved!".postln;
 
@@ -112,7 +118,7 @@ SynthDef(\fxLimiter, {
     
     // バス0に書き戻し
     ReplaceOut.ar(0, limited);
-}).writeDefFile("/Users/yamato/Src/proj_livecoding/orbitscore/packages/engine/supercollider/synthdefs".standardizePath);
+}).writeDefFile(~synthdefDir);
 
 "✅ fxLimiter SynthDef saved!".postln;
 
@@ -131,9 +137,71 @@ SynthDef(\fxNormalizer, {
     
     // バス0に書き戻し
     ReplaceOut.ar(0, normalized);
-}).writeDefFile("/Users/yamato/Src/proj_livecoding/orbitscore/packages/engine/supercollider/synthdefs".standardizePath);
+}).writeDefFile(~synthdefDir);
 
 "✅ fxNormalizer SynthDef saved!".postln;
+
+// ============================================
+// LinkAudio: orbitPlayBufLink (#209)
+// orbitPlayBuf と同じ再生/エンベロープロジック。出力のみ Out.ar から
+// OrbitLinkAudioOut(L, R, channel) に差し替えて Ableton Link Audio に commit する。
+// 引数はエンジンの link 経路 dispatch と一致: bufnum/amp/pan/rate/startPos/duration/channel。
+// OrbitLinkAudio.scx (OrbitLinkAudioOut UGen) が無い環境ではコンパイルできないため
+// プラグイン有無でガードする (hardware-only ビルドを壊さない)。
+// ============================================
+if (\OrbitLinkAudioOut.asClass.notNil) {
+    SynthDef(\orbitPlayBufLink, {
+        arg bufnum = 0, rate = 1, amp = 0.5, pan = 0,
+            startPos = 0,      // 開始位置（秒）
+            duration = 0,      // 再生時間（秒、0 = 全体）
+            channel = 0;       // LinkAudio channel id (registry が解決)
+
+        var sig, env, actualDuration, fadeOut, sustain, stereo;
+
+        actualDuration = Select.kr(duration > 0, [
+            BufDur.kr(bufnum) - startPos,
+            duration
+        ]);
+
+        sig = PlayBuf.ar(
+            numChannels: 1,
+            bufnum: bufnum,
+            rate: rate * BufRateScale.kr(bufnum),
+            trigger: 1,
+            startPos: startPos * BufSampleRate.kr(bufnum),
+            loop: 0,
+            doneAction: 0
+        );
+
+        // クリック音防止のフェードアウト + 再生終了で自動削除 (hardware 経路と同じ)
+        fadeOut = min(0.008, actualDuration * 0.04);
+        sustain = max(0, actualDuration - fadeOut);
+        env = EnvGen.kr(
+            Env.linen(0, sustain, fadeOut),
+            doneAction: 2
+        );
+        sig = sig * env;
+
+        // ステレオ化してパン → Out.ar の代わりに LinkAudio へ commit
+        stereo = Pan2.ar(sig, pan, amp);
+        OrbitLinkAudioOut.ar(stereo[0], stereo[1], channel);
+    }).writeDefFile(~synthdefDir);
+    "✅ orbitPlayBufLink SynthDef saved!".postln;
+
+    // orbitLinkAudioKeepalive (#209): a PERSISTENT per-channel committer that
+    // commits silence every audio block. LinkAudio is a CONTINUOUS audio stream;
+    // if we only commit while a transient sample synth is alive, the stream has
+    // gaps between hits (0.5s on / 1.5s off) → the receiver underruns (level
+    // drift at low latency) or plays the holes (choppy at high latency). One
+    // keepalive per channel keeps the stream unbroken; orbitPlayBufLink synths
+    // sum their audio on top via the plugin's per-channel mix accumulator.
+    SynthDef(\orbitLinkAudioKeepalive, { |channel = 0|
+        OrbitLinkAudioOut.ar(DC.ar(0), DC.ar(0), channel);
+    }).writeDefFile(~synthdefDir);
+    "✅ orbitLinkAudioKeepalive SynthDef saved!".postln;
+} {
+    "⚠️ OrbitLinkAudioOut not installed — skipping LinkAudio SynthDefs (hardware-only build)".postln;
+};
 
 "✅ All SynthDefs saved!".postln;
 0.exit;

@@ -253,7 +253,7 @@ Project documentation is organized in the [`docs/`](docs/) folder:
 npm test
 ```
 
-**424/447 tests passing (94.9%, 23 skipped for SC integration)**:
+**1090/1113 tests passing (97.9%, 23 skipped for SC integration)** — 2.0.0-dev (v1.1 Pitch DSL + MIDI + session log):
 
 - Parser: ✅ Complete (50 tests)
 - Audio Engine: ✅ Complete (15 tests)

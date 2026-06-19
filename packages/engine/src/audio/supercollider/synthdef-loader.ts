@@ -10,6 +10,8 @@ import { EffectParams } from './types'
 
 export class SynthDefLoader {
   private synthDefPath: string
+  private linkSynthDefPath: string
+  private linkKeepaliveSynthDefPath: string
   private effectSynths: Map<string, Map<string, number>> = new Map() // Track mastering effect synths by target and type
   private nextSynthId = 2000 // Start from 2000 to avoid conflicts with other synths
 
@@ -19,6 +21,22 @@ export class SynthDefLoader {
       __dirname,
       '../../../supercollider/synthdefs/orbitPlayBuf.scsyndef',
     )
+    this.linkSynthDefPath = path.join(
+      __dirname,
+      '../../../supercollider/synthdefs/orbitPlayBufLink.scsyndef',
+    )
+    this.linkKeepaliveSynthDefPath = path.join(
+      __dirname,
+      '../../../supercollider/synthdefs/orbitLinkAudioKeepalive.scsyndef',
+    )
+  }
+
+  /**
+   * `/d_recv` 後にサーバへの SynthDef 反映を待つ固定ディレイ（best-effort）。
+   * `d_recv` の完了 OSC を待たない簡易方式のため、各ロード箇所で共有する。
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
   }
 
   /**
@@ -33,9 +51,52 @@ export class SynthDefLoader {
     await this.oscClient.sendMessage(['/d_recv', synthDefData])
 
     // Wait for SynthDef to be ready
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    await this.sleep(200)
 
     console.log('✅ SynthDef loaded')
+  }
+
+  /**
+   * LinkAudio の `orbitPlayBufLink` SynthDef を読み込み (#209)。
+   *
+   * Best-effort: `.scsyndef` が存在しない (hardware-only ビルド) 場合は黙って
+   * skip し、existing の hardware 経路を壊さない。実際にこの SynthDef が使われる
+   * のは plugin が検出され outputChannel 付き sequence が再生されるときだけ。
+   *
+   * @returns ロードを試行して成功すれば true、ファイル不在/未起動なら false。
+   */
+  async loadLinkAudioSynthDef(): Promise<boolean> {
+    if (!this.oscClient.isRunning()) {
+      return false
+    }
+    if (!fs.existsSync(this.linkSynthDefPath)) {
+      console.log(
+        'ℹ️  orbitPlayBufLink.scsyndef not present — LinkAudio sample playback disabled (hardware-only build)',
+      )
+      return false
+    }
+    const synthDefData = fs.readFileSync(this.linkSynthDefPath)
+    await this.oscClient.sendMessage(['/d_recv', synthDefData])
+    await this.sleep(100)
+    console.log('✅ orbitPlayBufLink SynthDef loaded')
+
+    // Keepalive committer (#209) — keeps each LinkAudio channel's stream
+    // continuous between transient sample hits. Best-effort: skip if absent.
+    if (fs.existsSync(this.linkKeepaliveSynthDefPath)) {
+      const keepaliveData = fs.readFileSync(this.linkKeepaliveSynthDefPath)
+      await this.oscClient.sendMessage(['/d_recv', keepaliveData])
+      await this.sleep(100)
+      console.log('✅ orbitLinkAudioKeepalive SynthDef loaded')
+    } else {
+      // Without the keepalive, each channel's Link stream is only committed while
+      // a transient sample plays — sparse patterns leave gaps that the receiver
+      // underruns or plays as silence. Warn rather than fail silently.
+      console.warn(
+        '⚠️  orbitLinkAudioKeepalive.scsyndef not present — LinkAudio keepalive synths ' +
+          'will not start; channel streams may gap between transient sample hits.',
+      )
+    }
+    return true
   }
 
   /**
@@ -54,7 +115,7 @@ export class SynthDefLoader {
       if (fs.existsSync(synthDefPath)) {
         const synthDefData = fs.readFileSync(synthDefPath)
         await this.oscClient.sendMessage(['/d_recv', synthDefData])
-        await new Promise((resolve) => setTimeout(resolve, 50))
+        await this.sleep(50)
       }
     }
 

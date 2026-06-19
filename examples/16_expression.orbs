@@ -1,0 +1,22 @@
+// Per-note Expression → IAC — OrbitScore Pitch DSL (v1.1+, E5 §10.3)
+// `@v` = velocity (absolute `@v110`, or relative accent `@v+20` / `@v-30`).
+// `@g` = articulation as a gate PERCENT (`@g30` = 0.30 staccato, > 100 rings past the slot).
+//
+// Run:  npm run midi-run -- examples/16_expression.orbs
+// Expected (human): note 1 loud, note 3 accented, note 5 softer, note 8 short/staccato.
+
+var global = init GLOBAL
+global.tempo(100)
+global.beat(4 by 4)
+global.key("C")
+
+var piano = init global.seq
+piano.midi("IAC", 1)
+piano.octave(4)
+piano.vel(80)            // baseline velocity (overridden / offset per note below)
+piano.gate(0.8)          // baseline gate (overridden per note below)
+piano.length(1)
+piano.play(1@v110, 3@v+20, 5@v-30, 8@g30)
+
+global.start()
+RUN(piano)

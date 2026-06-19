@@ -167,6 +167,18 @@ class ChannelRegistry {
   // `initLinkAudio` has run.
   link_audio::LinkAudio* getLinkAudio();
 
+  // Propose a session tempo to the Link network — makes OrbitScore the Link
+  // tempo leader so peers (Ableton Live, etc.) follow `global.tempo()` (#283).
+  // Uses the APP-thread session-state API (captureAppSessionState / setTempo /
+  // commitAppSessionState), which is the intended counterpart to the audio
+  // thread's captureAudioSessionState — Link reconciles app↔audio internally,
+  // so this is safe to call concurrently with the UGen's per-block capture.
+  // Called from the OSC `/cmd /orbit/setLinkTempo` handler thread. Holds the
+  // same mutex as the other registry ops (audio thread never takes it). No-op
+  // when LinkAudio is uninitialised. Link is last-setter-wins: if a peer sets
+  // tempo afterwards, that wins until the next push.
+  void setLinkTempo(double bpm);
+
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

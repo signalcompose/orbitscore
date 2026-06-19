@@ -309,12 +309,19 @@ export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
   // would be compiled on every line × every name on every keystroke, since
   // updateDiagnostics fires on `onDidChangeTextDocument`. Word-boundary
   // anchored to avoid `kicker.output()` matching `kick`.
+  // `.output()` (SC audio bus binding) と `.midi()` (MIDI bus — strict-mode の
+  // .output() 要件は適用外。decision #14: MIDI と SC オーディオは併走可; spec
+  // §8.1.2 は "発音 sequences" に限定。Sequence.resolveDispatchChannel() の
+  // runtime exemption をミラー、#282) を、ドキュメント1パスで同時に分類する。
   const outputPatterns = new Map<string, RegExp>()
+  const midiPatterns = new Map<string, RegExp>()
   for (const name of sequenceNames) {
     outputPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.output\\s*\\(`))
+    midiPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.midi\\s*\\(`))
   }
 
   const namesWithOutput = new Set<string>()
+  const namesWithMidi = new Set<string>()
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
     if (!raw || raw.trim().startsWith('//')) continue
@@ -322,11 +329,14 @@ export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
     for (const [name, pattern] of outputPatterns) {
       if (pattern.test(line)) namesWithOutput.add(name)
     }
+    for (const [name, pattern] of midiPatterns) {
+      if (pattern.test(line)) namesWithMidi.add(name)
+    }
   }
 
   const orphans = new Set<string>()
   for (const name of sequenceNames) {
-    if (!namesWithOutput.has(name)) orphans.add(name)
+    if (!namesWithOutput.has(name) && !namesWithMidi.has(name)) orphans.add(name)
   }
   if (orphans.size === 0) return issues
 

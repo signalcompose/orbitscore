@@ -8,6 +8,7 @@ import { InterpreterV2 } from '../interpreter/interpreter-v2'
 import { parseAudioDSL } from '../parser/audio-parser'
 
 import { REPLOptions } from './types'
+import { shouldEnableSessionLog } from './session-log-gate'
 
 /**
  * Start REPL mode for live coding
@@ -31,8 +32,13 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   // Create a global interpreter
   const globalInterpreter = new InterpreterV2()
 
-  // §L1 (#229): the REPL is a real entry point — record the session (idempotent).
-  globalInterpreter.enableSessionLog({ cwd: process.cwd() })
+  // §L1 (#229): session-log は 2.0.0 では dormant（既定 off）。file-scoped ログが
+  // 複数ファイルをまたぐライブセッションに合わない設計ミスマッチのため、session-scoped で
+  // 再設計するまで明示 opt-in に退避（writer/API/ユニットは保持・resurrect 可）。
+  // 詳細・redesign 北極星: docs/development/POST_2.0_ROADMAP_NOTES.md
+  if (shouldEnableSessionLog()) {
+    globalInterpreter.enableSessionLog({ cwd: process.cwd() })
+  }
 
   // Boot SuperCollider once at startup with optional audio device
   await globalInterpreter.boot(options.audioDevice)

@@ -16,19 +16,41 @@ const SYNTHDEF_HARDWARE = 'orbitPlayBuf'
 const SYNTHDEF_LINK = 'orbitPlayBufLink'
 
 export class EventScheduler {
+  // Reserved node-id base for per-channel LinkAudio keepalive synths (#209).
+  // Channel id N → keepalive node KEEPALIVE_NODE_BASE + N. Kept well clear of
+  // the auto-assigned (-1) playback synths and the 2000+ mastering-effect ids.
+  private static readonly KEEPALIVE_NODE_BASE = 800000
+
   public isRunning = false
   public startTime = 0
   private scheduledPlays: ScheduledPlay[] = []
   private sequenceEvents: Map<string, ScheduledPlay[]> = new Map()
   private intervalId: NodeJS.Timeout | null = null
 
-  // LinkAudio dispatch state — plugin availability defaults to false and is
-  // flipped by the boot pipeline once the OrbitLinkAudio SC plugin is
-  // confirmed loaded. Until then, sequences with outputChannel set fall back
-  // to the hardware bus and emit a one-shot warning.
+  // LinkAudio dispatch state.
   private linkAudioChannels = new LinkAudioChannelRegistry()
-  private linkAudioPluginAvailable = false
+  // Plugin-availability tri-state:
+  //   null  = not yet probed. Boot leaves it null when the LinkAudio SynthDef
+  //           loaded (SynthDef presence ≠ plugin presence), and it is resolved
+  //           lazily on the first outputChannel dispatch by the plugin's
+  //           `/done` reply (true) or our registration timeout (false).
+  //   false = plugin confirmed absent — boot sets this when the LinkAudio
+  //           SynthDef failed to load, and the lazy probe sets it on timeout.
+  //           Dispatch falls back to the hardware bus and warns once per session.
+  //   true  = plugin confirmed present (lazy `/done` probe, or a test override).
+  // A transport error during probing leaves it null so a later dispatch
+  // re-probes rather than permanently latching absence.
+  private linkAudioPluginAvailable: boolean | null = null
+  // channel ids already registered with the plugin this session (so we send the
+  // `/cmd /orbit/registerLinkAudioChannel` once per channel, not per note).
+  private registeredChannels = new Set<number>()
   private warnedAboutMissingPlugin = false
+  // In-flight resolutions keyed by channel name. The first dispatch for a name
+  // probes/registers async; concurrent dispatches for the SAME name (e.g. a
+  // burst of notes, or eager output() + first note racing) must reuse that
+  // in-flight promise instead of double-probing / double-registering. Cleared in
+  // a `finally` so a later dispatch can re-attempt (e.g. after a transient error).
+  private resolvingChannel = new Map<string, Promise<number | null>>()
 
   constructor(
     private bufferManager: BufferManager,
@@ -36,8 +58,12 @@ export class EventScheduler {
   ) {}
 
   /**
-   * Mark the OrbitLinkAudio SC plugin as loaded / unloaded. Called by the boot
-   * pipeline after SynthDef discovery. When false, dispatch falls back to the
+   * Explicitly set plugin availability. Called by the boot pipeline with `false`
+   * only when the LinkAudio SynthDef failed to load (so dispatch short-circuits
+   * to the hardware bus without the lazy probe's timeout); also a test override
+   * hook. Boot does NOT call this with `true` — when the SynthDef loads, boot
+   * leaves availability `null` so the lazy `/done` probe confirms actual plugin
+   * presence on the first dispatch. When `false`, dispatch falls back to the
    * hardware bus and warns once per session.
    */
   setLinkAudioPluginAvailable(available: boolean): void {
@@ -48,7 +74,142 @@ export class EventScheduler {
   }
 
   isLinkAudioPluginAvailable(): boolean {
-    return this.linkAudioPluginAvailable
+    return this.linkAudioPluginAvailable === true
+  }
+
+  /**
+   * Acquire the channel id for `name` and ensure it is registered with the
+   * OrbitLinkAudio plugin (exactly once). On the very first link channel, the
+   * plugin's `/done` reply doubles as presence detection. Returns the channel id
+   * when LinkAudio should be used, or `null` to fall back to the hardware bus.
+   *
+   * Shared by the dispatch path (sendPlaybackMessage) and the eager path
+   * (ensureLinkAudioChannelRegistered ← Sequence.output()).
+   *
+   * Concurrency guard: memoizes the in-flight resolution per channel name so
+   * concurrent first-dispatches for the same channel reuse one probe/register
+   * round-trip rather than racing. The memo entry is cleared in `finally`, so a
+   * later dispatch re-attempts (idempotency keeps a successful re-attempt cheap).
+   */
+  private async resolveLinkAudioChannel(name: string): Promise<number | null> {
+    const inFlight = this.resolvingChannel.get(name)
+    if (inFlight) {
+      return inFlight
+    }
+    const resolution = this.doResolveLinkAudioChannel(name)
+    this.resolvingChannel.set(name, resolution)
+    try {
+      return await resolution
+    } finally {
+      this.resolvingChannel.delete(name)
+    }
+  }
+
+  /**
+   * Inner resolution logic for {@link resolveLinkAudioChannel} (kept separate so
+   * the public method is a thin concurrency-memo wrapper). Single try/catch wraps
+   * both `registerLinkAudioChannel` call sites so a transport-error rethrow never
+   * escapes to the caller (sendPlaybackMessage has no catch). A transport error
+   * leaves `linkAudioPluginAvailable` untouched (stays `null`/`true`) so a later
+   * dispatch re-probes; only a genuine timeout (return `false`) latches absence.
+   */
+  private async doResolveLinkAudioChannel(name: string): Promise<number | null> {
+    const channelId = this.linkAudioChannels.acquire(name)
+    try {
+      if (this.linkAudioPluginAvailable === null) {
+        const detected = await this.oscClient.registerLinkAudioChannel(channelId, name)
+        this.linkAudioPluginAvailable = detected
+        if (detected) {
+          await this.onChannelRegistered(channelId)
+        }
+      }
+      if (!this.linkAudioPluginAvailable) {
+        return null
+      }
+      if (!this.registeredChannels.has(channelId)) {
+        const registered = await this.oscClient.registerLinkAudioChannel(channelId, name)
+        if (!registered) {
+          // The plugin was confirmed present earlier but this channel's
+          // registration timed out — fall back to the hardware bus for this
+          // dispatch WITHOUT latching absence or marking the channel registered,
+          // so a later dispatch retries.
+          console.warn(
+            `⚠️  LinkAudio channel "${name}" registration timed out — falling back to the hardware bus for this dispatch.`,
+          )
+          return null
+        }
+        await this.onChannelRegistered(channelId)
+      }
+      return channelId
+    } catch (err) {
+      // Transport error (socket closed / server crash), not a plugin-absent
+      // timeout. Leave `linkAudioPluginAvailable` as-is (null/true) so a later
+      // dispatch re-probes rather than permanently latching the plugin absent.
+      console.warn(
+        `⚠️  LinkAudio channel "${name}" resolution failed (transport error) — falling back to the hardware bus for this dispatch:`,
+        err,
+      )
+      return null
+    }
+  }
+
+  /**
+   * Mark a channel as registered with the plugin AND start its persistent
+   * keepalive committer (#209) so the channel's Link stream stays continuous
+   * between transient sample hits. Idempotent — one keepalive per channel.
+   */
+  private async onChannelRegistered(channelId: number): Promise<void> {
+    if (this.registeredChannels.has(channelId)) {
+      return
+    }
+    this.registeredChannels.add(channelId)
+    await this.oscClient.startLinkAudioKeepalive(
+      channelId,
+      EventScheduler.KEEPALIVE_NODE_BASE + channelId,
+    )
+  }
+
+  /**
+   * Eagerly register a LinkAudio channel so its source appears in Live's
+   * "Audio From" list at `.output()` declaration time — before any playback —
+   * letting the operator pre-route Ableton tracks ahead of a performance.
+   * Best-effort: a no-op if the server is not booted yet (the dispatch path
+   * will register it later) and never throws.
+   */
+  async ensureLinkAudioChannelRegistered(name: string): Promise<void> {
+    if (!this.oscClient.isRunning()) {
+      return
+    }
+    try {
+      await this.resolveLinkAudioChannel(name)
+    } catch (err) {
+      // best-effort — dispatch-time registration remains as a fallback.
+      // resolveLinkAudioChannel catches internally and should not throw; log if
+      // it ever does so a future regression is visible rather than silent.
+      console.warn(`⚠️  eager LinkAudio channel registration for '${name}' failed:`, err)
+    }
+  }
+
+  /**
+   * Push a tempo to the Link session so OrbitScore leads (#283). Delegates to
+   * the OSC client; no-op when the server is not running. Best-effort — tempo
+   * leadership is advisory, so a failure must never break playback. Not gated
+   * on plugin-availability detection: the OrbitLinkAudio plugin registers the
+   * `/cmd` at PluginLoad (boot), independent of channel registration, so the
+   * push is valid as soon as the server is up.
+   */
+  async setLinkTempo(bpm: number): Promise<void> {
+    if (!this.oscClient.isRunning()) {
+      return
+    }
+    try {
+      await this.oscClient.setLinkTempo(bpm)
+    } catch (err) {
+      // best-effort — a failed tempo push must never break playback, but surface
+      // it so a crashed server mid-set is diagnosable (otherwise the global.ts
+      // .catch never sees it — this layer would eat it silently).
+      console.warn('⚠️  Link tempo push failed:', err)
+    }
   }
 
   /**
@@ -245,9 +406,30 @@ export class EventScheduler {
     this.stop()
     this.scheduledPlays = []
     this.sequenceEvents.clear()
+    // Free the per-channel keepalive synths (#209) so they don't keep committing
+    // silence after the session ends. Fire-and-forget, but handle the rejection
+    // so a transient OSC error can't surface as an unhandled promise rejection.
+    for (const channelId of this.registeredChannels) {
+      this.oscClient
+        .freeNode(EventScheduler.KEEPALIVE_NODE_BASE + channelId)
+        .catch((err) =>
+          console.warn(`⚠️  Failed to free keepalive synth for channel ${channelId}:`, err),
+        )
+    }
     // Reset LinkAudio channel id allocation on engine restart so a new
     // session does not inherit stale ids from the previous one.
     this.linkAudioChannels.clear()
+    // Re-register channels with the plugin on the next session's first dispatch.
+    this.registeredChannels.clear()
+    // Re-probe plugin availability next session — the plugin may have been
+    // installed (or removed) between sessions, so a cached result is stale.
+    this.linkAudioPluginAvailable = null
+    // Drop any in-flight channel-resolution promises so a probe still pending at
+    // stop time can't leak a stale result into the next session's first dispatch.
+    this.resolvingChannel.clear()
+    // Allow the plugin-absent warning to fire again next session (paired with the
+    // linkAudioPluginAvailable reset above).
+    this.warnedAboutMissingPlugin = false
   }
 
   /**
@@ -376,8 +558,11 @@ export class EventScheduler {
     const rate = options.rate ?? 1.0
 
     if (options.outputChannel) {
-      const channelId = this.linkAudioChannels.acquire(options.outputChannel)
-      if (this.linkAudioPluginAvailable) {
+      // Resolve + register the channel with the plugin (idempotent). This is the
+      // dispatch-time path; Sequence.output() also calls the registration eagerly
+      // so the source appears in Live before playback (pre-show routing).
+      const channelId = await this.resolveLinkAudioChannel(options.outputChannel)
+      if (channelId !== null) {
         await this.oscClient.sendMessage([
           '/s_new',
           SYNTHDEF_LINK,

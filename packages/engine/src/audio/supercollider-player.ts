@@ -47,6 +47,28 @@ export class SuperColliderPlayer {
     await this.oscClient.boot(outputDevice, mergedOptions)
     await this.synthDefLoader.loadMainSynthDef()
     await this.synthDefLoader.loadMasteringEffectSynthDefs()
+    // LinkAudio (#209): load the orbitPlayBufLink SynthDef so sample playback can
+    // route to Ableton via the OrbitLinkAudio plugin. Best-effort — a missing
+    // .scsyndef or load error must not break boot.
+    //
+    // When the SynthDef is absent (false) LinkAudio cannot work, so eagerly mark
+    // the plugin unavailable: this short-circuits the lazy /done probe and avoids
+    // a 2000ms timeout on the first outputChannel dispatch in hardware-only
+    // builds. When it loads (true) we leave availability as `null` so the lazy
+    // probe still confirms actual plugin presence on first dispatch (SynthDef
+    // presence ≠ plugin presence).
+    try {
+      const linkAudioLoaded = await this.synthDefLoader.loadLinkAudioSynthDef()
+      if (!linkAudioLoaded) {
+        this.eventScheduler.setLinkAudioPluginAvailable(false)
+      }
+    } catch (e) {
+      this.eventScheduler.setLinkAudioPluginAvailable(false)
+      console.warn(
+        '⚠️  LinkAudio SynthDef load failed — continuing with hardware-only playback:',
+        e,
+      )
+    }
   }
 
   /**
@@ -54,6 +76,25 @@ export class SuperColliderPlayer {
    */
   getAvailableDevices(): AudioDevice[] {
     return this.oscClient.getAvailableDevices()
+  }
+
+  /**
+   * Eagerly register a LinkAudio channel with the plugin (AudioEngine surface).
+   * Called from Sequence.output() so the channel's source appears in Live before
+   * playback. Delegates to the event scheduler; best-effort.
+   */
+  async registerLinkAudioChannel(channelName: string): Promise<void> {
+    await this.eventScheduler.ensureLinkAudioChannelRegistered(channelName)
+  }
+
+  /**
+   * Push a tempo to the Link session so OrbitScore leads (#283, AudioEngine
+   * surface). Called from Global when `global.tempo()` is set / linkAudio() is
+   * enabled / start() runs, in LinkAudio mode. Delegates to the event
+   * scheduler; best-effort.
+   */
+  async setLinkTempo(bpm: number): Promise<void> {
+    await this.eventScheduler.setLinkTempo(bpm)
   }
 
   /**

@@ -17,6 +17,327 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.133 chore: @claude bot レビューの low 指摘対応 + 初回ノート遅延を #285 で追跡 (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ build 緑 / 1129 passed | 23 skipped
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+PR #281 の `@claude` bot レビュー（結論「マージブロッカー無し・round-1/2 fix を追認」）の非ブロッカー指摘に対応:
+- `packages/engine/supercollider/setup.scd`: 末尾改行追加（cosmetic・複数回指摘）
+- `scripts/qa-midi-smoke.sh`: `perl -e "sleep ${DWELL}"` → `perl -e 'sleep $ARGV[0]' -- "${DWELL}"`（env 値が perl コードとして展開されるのを回避）
+- **[Medium] 初回ノート最大2秒ブロック**（plugin-present の lazy probe・`timeoutMs=2000`）は **#285 で post-release 追跡**（2.0.0 ブロッカーではない。plugin-absent は boot 配線済みで回避済み）。
+
+### 6.132 chore(deps): npm audit fix — resolve shipped `ws` (high) before 2.0.0 (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ build 緑 / 1129 passed | 23 skipped
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+2.0.0 リリース前の dependabot 対応。**.vsix に出荷される production 依存**を切り分けて非破壊修正:
+- `npm audit fix`（semver 互換のみ・`package-lock.json` のみ変更）で production の **`ws`(high: memory disclosure / DoS)** 等を解消。
+- 修正後の production audit: **6 moderate のみ**（すべて supercolliderjs(alpha) の transitive。非破壊では直せず upstream 待ち。攻撃面は localhost scsynth 接続のみで実リスク低）。**出荷物の high/critical は 0**。
+- 残る critical 1 / high は **devDependency（vitest/eslint/build 等・.vsix 非同梱）**。`--force`（破壊的）を要しリリース toolchain を不安定化させ得るため post-release / dependabot PR で追跡（2.0.0 はブロックしない）。
+
+### 6.131 release(2.0.0): drop -dev, finalize 2.0.0 — last feature .vsix (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ build 緑 / 1129 passed | 23 skipped / simplify + pr-review-team(Critical=0/Important=0) + security PASS
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+`2.0.0-dev` → `2.0.0` に確定。v1.1.1 以降の新ピラー（MIDI 出力 / Pitch DSL / comp / session-log / LinkAudio）を束ねた**最後の機能 .vsix リリース**（post-2.0 は専用アプリ OrbitStudio へ移行。`docs/development/POST_2.0_ROADMAP_NOTES.md`）:
+- `packages/engine/src/version.ts`: `ENGINE_VERSION` `2.0.0-dev` → `2.0.0`
+- `packages/vscode-extension/package.json`: version `2.0.0-dev` → `2.0.0`（= .vsix 版）
+- 配布は **GitHub Release のみ**（marketplace は後日・#197 PAT 未登録）。merge 後に tag + Release。
+- session-log は dormant（既定 off・#229 redesign は post-2.0）/ #280（`seq.root(note-name)`）は known issue（post-2.0 の root 後置一本化で解消予定）。
+- 残 QA（実音 H 項目・学習サイト walkthrough）は OrbitStudio へ defer（Epic #278 disposition）。
+
+### 6.130 fix(link-audio): pr-review-team round 2 — clear in-flight probe map on stopAll + log best-effort catches (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ build 緑 / 1129 passed | 23 skipped
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+round-2 再レビュー（code-reviewer + silent-failure-hunter）で round-1 の Critical/Important が全解消と確認。round-1 の並行ガード fix が導入した新規 Important 1 件 + minor を修正:
+- **Important**: `stopAll()` で `resolvingChannel`（in-flight probe memo）が未クリア → stop-then-play の狭いレースで stale 結果共有 → `this.resolvingChannel.clear()` 追加。
+- minor: `stopAll()` で `warnedAboutMissingPlugin=false` リセット（次セッションで plugin 不在 warn 復活）/ `setLinkTempo` の空 catch → warn（global.ts の round-1 fix がこの層で握り潰されていた）/ `ensureLinkAudioChannelRegistered` の空 catch → warn（防御的）。
+
+→ pr-review-team は **Critical=0 / Important=0** に収束（round 1 fix → round 2 verify → round 2 新規 Important を本コミットで修正）。
+
+### 6.129 test(link-audio): pr-review-team round 1 — close test-coverage gaps (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ 1129 passed | 23 skipped（+18 tests・regression 0）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+pr-test-analyzer の Critical/Important カバレッジギャップを補完:
+- TA1 `OSCClient.registerLinkAudioChannel`: /done→true / timeout→false / transport error→rethrow（`tests/audio/osc-client-register.spec.ts`）
+- TA2 `loadLinkAudioSynthDef`: file 不在→false/送信0 / 両在→`/d_recv` 2回順序 / keepalive 欠如→1回+warn（`tests/audio/synthdef-loader.spec.ts`）
+- TA3 session-log gate: `shouldEnableSessionLog()` を `cli/session-log-gate.ts` に抽出（play/repl から使用・挙動不変）+ 全分岐 test（`tests/cli/session-log-gate.spec.ts`）
+- TA4 `output()→registerLinkAudioChannel` 配線（`sequence-output.spec.ts` の mock + assert）
+- TA5 `resolveLinkAudioChannel` が transport error で throw せず hardware fallback（`link-audio-dispatch.spec.ts`）
+- TA6 `boot()` が load 失敗時に `setLinkAudioPluginAvailable(false)` + warn（`supercollider-player-boot.spec.ts`）
+
+### 6.128 fix(link-audio): pr-review-team round 1 — correctness/robustness fixes (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ build 緑 / 1111 tests passed / C++ cmake compile 検証済
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+`/code:pr-review-team`（code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer）の Critical/Important を修正（テスト追加は別コミット）:
+- **Critical**: `orbit_link_audio_out.cpp` の `g_beatAnchorSet`/`g_anchorBufCounter`/`g_anchorMicros` を `PluginLoad` でリセット（scsynth プロセス内再起動時の符号付きアンダーフロー → beat 破綻を防止）。
+- **Important**:
+  - `event-scheduler.stopAll()`: `linkAudioPluginAvailable=null` リセット（次セッション再 probe）。
+  - `supercollider-player.boot()`: `loadLinkAudioSynthDef()` 戻り値を `setLinkAudioPluginAvailable(false)` に配線（plugin 不在時の 2000ms lazy timeout 解消）。
+  - `event-scheduler.resolveLinkAudioChannel()`: per-channel 並行ガード（in-flight memo）+ 2本目以降の登録 boolean 捕捉（timeout は warn + fallback）。
+  - `osc-client.registerLinkAudioChannel()`: catch を timeout（`false` latch）と transport error（rethrow → `null` 維持で再 probe）に分離。
+  - `synthdef-loader`: keepalive `.scsyndef` 欠如時の warn。
+  - `event-scheduler.stopAll()`: `void freeNode` → `.catch`+warn。
+  - `global.pushLinkTempoIfLeading`: 空 `.catch(()=>{})` → warn。
+  - stale コメント（"boot pipeline が flip" 系）を実態（null=未 probe / boot は load-fail 時のみ false / lazy probe が true）に修正。
+
+### 6.127 refactor(engine): /simplify pass の挙動不変クリーンアップを適用 (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ build 緑 / 1111 tests passed
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+2.0.0 finalize 前の `/simplify`（4 agent: reuse/simplification/efficiency/altitude）の**挙動不変な品質 fix のみ**を適用:
+- `diagnostics-analysis.ts`: `.output()` と `.midi()` の重複スキャン2パスを**単一パス**に統合（keystroke ごとの hot-path コスト削減・分類結果は不変）。3 agent 一致指摘。
+- `synthdef-loader.ts`: 4箇所の inline `setTimeout` を private `sleep(ms)` に抽出（delay 値据え置き）。
+
+**skip（simplify スコープ外＝挙動変更/correctness → pr-review-team へ回送）**:
+- altitude #1: `g_beatAnchorSet`(C++) が scsynth 再起動で未リセット → 負オフセットの恐れ。
+- altitude #2: `stopAll()` で `linkAudioPluginAvailable` 未クリア（セッション跨ぎの stale state）。
+- altitude #4: boot の `loadLinkAudioSynthDef()` 戻り値未配線 → plugin 不在時に初回 dispatch で 2000ms timeout。
+- C: event-scheduler の冗長 `has()` ガード（agent 間で見解割れ・リスク回避で保留）。
+- D: `removeEffect` の `/n_free` 直送 → 新 `freeNode()` 置換（diff 外の既存行のため保留）。
+
+### 6.126 docs(post-2.0): engine/pitch/song/distribution 方向 + Rust hosting research を記録 (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ 記録のみ（実装なし・探索段階/未確定・post-2.0）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**内容**: 2.0.0 以降の方向性を大和さんと議論し durable 化（WCTM とは別トラック）。
+- `docs/development/POST_2.0_ROADMAP_NOTES.md` — engine-first / 全体方向 / features deferred / session-log redesign 北極星。
+- `docs/development/POST_2.0_PITCH_MODEL_NOTES.md` — root/key/scale + song(arrange) 層の再設計（root=後置一本化〔絶対=音名/相対=大文字ローマ〕, key=2軸カスケード頂点, conductor 等）。
+- `docs/development/POST_2.0_ENGINE_AND_DISTRIBUTION.md` — engine=Rust(既存 `rust/`) 方向 / 薄いホスト+DSPプラグイン / Fair Trade 内部基盤 / freemium⟺permissive / 層構造 monetization / Steam+notarize 配布 / OrbitScore=言語・OrbitStudio=アプリ。
+- `docs/research/NATIVE_ENGINE_TRACKTION_VSCODIUM.md`（結論は ENGINE_AND_DISTRIBUTION が更新）/ `docs/research/RUST_PLUGIN_HOSTING.md` — Rust 3rd-party ホスティング feasibility（CLAP>AU>VST3・VST3 は SDK 3.8 で MIT 単独化・engine=Rust 確定方向、残る証明は CLAP 統合スパイク+RT 統合設計）。
+
+### 6.125 fix(session-log): make .orbslog dormant (opt-in) for 2.0.0 finalize (Jun 19, 2026)
+
+**Date**: 2026-06-19
+**Status**: ✅ build 緑 / session-log ユニット 26 件緑
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**背景**: 6/18 ライブで `.orbslog` が生成されない / LinkAudio 送出トラックが記録されない不具合。原因は現行が **file-scoped**（`<basename>.<stamp>.orbslog`）で、複数ファイルをまたぐ1セッションに合わない**設計ミスマッチ**。finalize 中にパッチせず dormant 化し、redesign（session-scoped・全トラック捕捉・L2 replay #241/分析 #242 対応）は post-2.0 へ（`POST_2.0_ROADMAP_NOTES.md`）。
+
+**変更**:
+- `cli/play-mode.ts` / `cli/repl-mode.ts` の `enableSessionLog()` を **`ORBITSCORE_SESSION_LOG=1` の opt-in 裏に退避**（既定 off・既存 `ORBITSCORE_DEBUG` と prefix 整合）。
+- writer (`core/session-log/`) / API / 26 ユニットは**保持**（resurrect 可）。
+
+### 6.124 feat(link-audio): OrbitScore を Link テンポリーダーに (#283) (Jun 18, 2026)
+
+**Date**: 2026-06-18
+**Status**: ✅ 実装・テスト済（実機受け入れは大和さん: `global.tempo(72)` eval → Ableton BPM 追従を目視）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**要望（大和）**: `global.tempo()` を設定すると Ableton が追従してほしい = OrbitScore を Link テンポリーダーに。
+
+**設計（advisor 承認・「軽い方の道」）**: plugin が tempo を push する → `global.tempo == Link tempo`
+が構造的に保証 → MIDI(global.tempo 自走) と Audio(Link beat) が**自動で揃う**。scheduler を
+Link beat 駆動に作り変える必要がない（その逆方向 follower 強化の方が重い）。
+
+**実装**:
+- C++ `ChannelRegistry::setLinkTempo(bpm)`: app スレッドの `captureAppSessionState()` →
+  `setTempo(bpm, clock().micros())` → `commitAppSessionState()`。audio スレッドの
+  `captureAudioSessionState` と並行安全（Link の app/audio session-state 分離の正規用法）。
+- C++ `/cmd /orbit/setLinkTempo <bpm>` ハンドラ（同期・/done 不要、bpm を 20..999 で検証、
+  `getf` が int/float 両対応）。PluginLoad で登録。
+- engine: `OSCClient.setLinkTempo` → `EventScheduler.setLinkTempo` → `SuperColliderPlayer.setLinkTempo`、
+  `AudioEngine.setLinkTempo?`、`Global.pushLinkTempoIfLeading()` を tempo()/linkAudio()/start() から呼ぶ
+  （ファイル順 tempo→linkAudio を吸収するため3点）。
+
+**制約（重要・本番ルール）**: Link は last-setter-wins。OrbitScore が唯一のテンポ設定者である間だけ
+MIDI/Audio が揃う。**Live 側でテンポを動かすと Link tempo が global.tempo と乖離し MIDI がドリフト**
+（scheduler は Link に追従しない）。本番は「テンポは OrbitScore のコードで設定、Live のテンポは触らない」。
+
+**検証**: unit（global.tempo→setLinkTempo 送信 / linkAudio off は非送信 / ファイル順吸収 /
+start 再アサート / 任意能力欠如で throw なし、EventScheduler 委譲）。全 1111 passed（+7）。
+.scx に `/orbit/setLinkTempo` シンボル + vsix 同梱を確認。**実機受け入れ（Ableton BPM 追従の目視）は大和さん**。
+
+**Commit**: fdbfc10
+
+### 6.123 fix(link-audio): MIDI シーケンスを LinkAudio strict-mode から除外 (#282) (Jun 18, 2026)
+
+**Date**: 2026-06-18
+**Status**: ✅ 修正・テスト済（実機再テストは大和さん）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**発見**: IAC(MIDI) + LinkAudio(Audio) 共存サンプル（examples/19）の MIDI 部分を
+`LOOP(piano, inner, bass)` した時点で runtime error:
+`Sequence 'piano' has no .output() channel set, but global.linkAudio() is enabled.`
+
+**原因**: `Sequence.run()`(sequence.ts:1205) と `loop()`(1249) が `resolveDispatchChannel()`
+を **`isMidi()` ガード無しで** eager 呼び出し。schedule 経路(1115/1185)は MIDI で早期
+return するが eager validation は通らず、LinkAudio strict-mode の「`.output()` 必須」が
+MIDI シーケンスにも誤適用されていた。VS Code 診断 `analyzeLinkAudioMissingOutput` にも同型バグ。
+
+**仕様（共存は正本で支持済み・spec 変更不要）**:
+- DESIGN_DISCUSSION_RECORD #14「MIDI と SC オーディオは併走可 / 排他にする技術的理由がない」
+- IMPLEMENTATION_INSTRUCTIONS「MIDI に LinkAudio 型の排他は適用しない」
+- core spec §8.1.2「全ての**発音** sequence が `.output()`」← 発音=オーディオ限定
+
+**修正**:
+1. engine `resolveDispatchChannel()` 冒頭に `if (this.isMidi()) return undefined`（全4呼出点を一括で MIDI 安全化）。
+2. vscode-extension `analyzeLinkAudioMissingOutput` で `.midi(` を持つ名前を orphan から除外。
+
+**検証**: ユーザーの throw を正確に再現する unit test（MIDI+linkAudio+no output →
+`resolveDispatchChannel()` が undefined / audio は throw 継続）+ 診断テスト（MIDI 非 flag /
+混在ファイルで audio のみ flag）。全 1104 passed（+5）。engine dist と extension dist
+（vsix 同梱）の両方に反映を確認。
+
+**Commit**: 5dc2975
+
+### 6.122 fix(link-audio): 連続ストリーム化 — per-channel keepalive committer (#209) (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 実装・wiring 検証済 + **実機 Live で正常再生を確認（2026-06-17 大和さん）**
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**ユーザー診断（正しい）**: latency を 100ms→2.0s に上げると「レベル一定だがブツ切り」。LinkAudio は連続オーディオストリームなのにブツ切り＝**送信ストリームに穴**。「送り方が間違っている」。
+
+**根本**: `orbitPlayBufLink` は transient（doneAction:2）で、サンプルが鳴っている間しか commit しない。疎なパターン（0.5s hit / 1.5s gap）だと**ストリームに穴** → 受信側が underrun（低 latency でドリフト）or 穴を再生（高 latency でブツ切り）。実測でも送信側の beat は単調・音は無傷・ドロップ無しだったので、原因は「穴」だと確定。
+
+**修正（2点で根治）**:
+1. **サンプル精度ビート**（commit efec707, 6.121内）: beat 位置を壁時計でなくグローバルアンカー+サンプル数で算出 → 配置を単調正確化（dBeat=0.002666 一定を実測確認）。
+2. **per-channel keepalive committer**: `orbitLinkAudioKeepalive` SynthDef（`OrbitLinkAudioOut(DC.ar(0),DC.ar(0),ch)` で無音を毎ブロック commit）を追加。engine がチャンネル登録時に1つ常駐起動（node=800000+ch、stopAll で n_free）。これでストリームが途切れず、サンプル synth は plugin の per-channel mix にビートを合わせて加算。
+
+**検証**: cli-audio(supercolliderjs 経路)+bundled scsynth で keepalive ロード + 3 チャンネル分の s_new + エラー無しを確認。ユニット 1099 passed（keepalive 起動/once-per-channel/stopAll free の3テスト追加）。計測 Print は除去済。**実機 Live 再生で正常を確認（2026-06-17）** — 最大リスクの「Ableton ミキサー/FX を通す LinkAudio 経路」が機能。
+
+**Commit**: e693d6e（keepalive） / efec707（サンプル精度ビート）
+
+### 6.121 fix(link-audio): blockSize=512 緩和を試行 → **revert**（ドリフト未解決） (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ⛔ revert 済（緩和にならず、全 synth に 10ms 量子化を足す副作用のみ）
+**続報**: probe ハーネス（system scsynth, 単一ch）では一見安定したが、**拡張の実使用（bundled scsynth, 単一キック loop）では blockSize=512 でもドリフト**。さらに supercolliderjs は数値 blockSize を弾く（要文字列 '512'、commit 576278e で対処）が、根治せず。advisor 助言で **-z を既知良好の 64 に revert**（hardware 経路はフルレベル・安定・tempo 同期で正常＝ドリフトは LinkAudio commit 側で確定）。
+**切り分け結論**: hardware(orbitPlayBuf) はクリーン。LinkAudio(orbitPlayBufLink) の **commit timing（beat を壁時計から取得）が quiet+drift の根本**。正しい修正は beat 位置をサンプル精度で出す UGen 改修（深夜の本番直前 RT 改修は不可 → post-show issue）。kick が raw と違って聞こえた件はファイル同形式（mono/48k/F32）でモニタ（MacBook スピーカーの低域不足）由来の可能性大。
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**症状**: LinkAudio で時間とともにレベルがドリフト（snare 膨らむ/kick 痩せて消える、単一チャンネルでも loud→inaudible）。Live 設定・SR・バッファドロップではない。
+
+**根本**: プラグインは各ブロックの Link ビート位置を `beatAtTime(clock().micros())`（next() 実行時の壁時計）から取る。scsynth はハードウェアバッファ(512)ごとに `-z`(=既定64) ブロックを**バースト処理**するため、バースト内の複数ブロックがほぼ同一壁時計＝同一ビートにコミットされ、Live の per-source レート補正が反応してレベルが暴れる/ドリフトする（advisor 確認）。
+
+**緩和（低リスク・RT 音声コード不変更）**: scsynth の `-z` を 512 に（`osc-client.ts` boot に `blockSize: 512`）。バッファ=512 と 1:1 になりバースト解消。probe（`verify-sample-playback.scd` に `s.options.blockSize=512`）の単一チャンネルで 60s レベル安定を確認。
+- トレードオフ: synth onset timing が ~10.7ms 量子化。Link は元々 100ms 遅延なので本番は許容。
+- **本丸（post-show）**: ビート位置をサンプル精度（frame counter）で出す UGen 修正で -z=64 のまま levels 安定 + tight timing。要 issue 化。
+
+**Commit**: [PENDING-121]
+
+### 6.120 feat(link-audio): `.output()` 評価時に channel を即登録（本番の事前ルーティング用） (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 実装・テスト済（1096 passed）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**要望（ユーザー）**: LinkAudio の channel が **再生時（初回 dispatch）にしか Live に出ない**ため、本番前に Ableton 側のトラック入力をセットできない。`snare.output("snare")` を**評価した時点**で Live の Link Audio ソースに出てほしい。
+
+**変更**:
+- `AudioEngine` に optional `registerLinkAudioChannel(name)` を追加（types.ts）。
+- `EventScheduler`: 遅延登録ロジックを `resolveLinkAudioChannel(name)` に共通化し、dispatch 経路と eager 経路で共有。eager 用の public `ensureLinkAudioChannelRegistered(name)`（未 boot なら no-op、best-effort）を追加。
+- `SuperColliderPlayer.registerLinkAudioChannel(name)` → scheduler に委譲。
+- `Sequence.output(name)`: linkAudio 有効時に `audioEngine.registerLinkAudioChannel(name)` を fire-and-forget で即呼ぶ。dispatch 時の登録は idempotent フォールバックとして維持（`registeredChannels` set で二重登録防止）。
+
+**結果**: `.output("name")` 評価で Live に "OrbitScore"/name ソースが即出現 → 本番前ルーティング可能。テスト +3（eager 登録/idempotent/未 boot no-op）。vsix 再パッケージ・再インストール済。
+
+**Commit**: [PENDING-120]
+
+### 6.119 fix: 拡張同梱 engine deps に @julusian/midi 等が欠落（VS Code でエンジン起動不可） (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 修正・実物検証済
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`
+
+**症状**: インストールした `2.0.0-dev` 拡張でエンジン起動 → `Error: Cannot find module '@julusian/midi'` でクラッシュ（`rtmidi-output.js` 起点）。
+
+**原因**: `scripts/install-engine-deps.sh` が同梱 engine に **`supercolliderjs` + `wavefile` の2つしか**インストールしていなかった。v1.1 で MIDI 用に増えた `@julusian/midi` / `uuid` / `ws` が同期されず、拡張だけが欠落していた。ソースツリー実行（root node_modules に全部ある）では再現せず見逃していた（＝実 artifact での検証不足）。
+
+**修正**: `install-engine-deps.sh` を **engine の package.json から production deps を自動導出**する方式に変更（将来また欠ける事故を防止）。再ビルド → `@julusian/midi`（arm64 prebuild 同梱）/`uuid`/`ws` が bundle に入ることを確認 → vsix 再パッケージ → 再インストール → **インストール済み実物の cli-audio.js が module 解決して起動することを確認**。
+
+**副次（オーディオデバイス検出 "Regex matches: 0"）**: 検出は別 scsynth を `-u 57199` で起動してデバイスを開くため、**クラッシュ残骸 scsynth がデバイスを掴んでいると失敗**していた。残骸を掃除して拡張同一ロジックを再現すると 4 デバイス正常検出。→ エンジン正常起動（本修正）で解消。**注意: エンジン稼働中はデバイス検出が競合する**ため、デバイス選択はエンジン停止中に行う。手動設定は `<workspace>/.orbitscore.json` の `audioDevice`。
+
+**Commit**: [PENDING-119]
+
+### 6.118 #209 LinkAudio engine routing — orbitPlayBufLink + boot配線 + channel登録 (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 実装完了 + **実機 Ableton で実音確認済**（2026-06-17 夜）
+**Issue**: signalcompose/orbitscore#209（Epic #187 Step 4-2 / Epic #278 §4b）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`（明日のライブ向け緊急対応のため QA ブランチに同梱。後で分割可）
+
+**背景**: 当初 #209 は「SC ツールチェーンが無いので不可」と判断していたが、これは**誤り**だった。実機（このMac）に SuperCollider + OrbitLinkAudio plugin が導入済で、`verify-plugin.scd` が全項目 pass。明日のライブで §4b（実 `.orbs` → Link Audio → Ableton）が必須のため緊急実装。
+
+**実装（4つの欠け配線を補完）**:
+1. **`orbitPlayBufLink` SynthDef**（`setup.scd`）: orbitPlayBuf の再生/エンベロープを流用し、出力のみ `Out.ar` → `OrbitLinkAudioOut(L,R,channel)` に差し替え。引数は engine dispatch と一致（bufnum/amp/pan/rate/startPos/duration/channel）。plugin 有無で `if(\OrbitLinkAudioOut.asClass.notNil)` ガード。`sclang setup.scd` で `orbitPlayBufLink.scsyndef` 生成。
+2. **setup.scd の出力パス修正**: 旧 `proj_livecoding` ハードコードを `~synthdefDir`（nowExecutingPath 基準の相対）に。
+3. **boot 配線**（`supercollider-player.ts` + `synthdef-loader.ts`）: `loadLinkAudioSynthDef()` で link SynthDef を best-effort ロード。
+4. **遅延検出 + channel 登録**（`event-scheduler.ts` + `osc-client.ts`）: 初回 link dispatch で `/cmd /orbit/registerLinkAudioChannel` を送り `/done` で plugin 存在を検出（タイムアウト=不在→hardware fallback）。channel ごとに1回だけ登録（`registeredChannels` set）。`linkAudioPluginAvailable` を tri-state（null=未検出）に。stopAll で登録もクリア。
+
+**5. 🔴 プラグイン修正（実音が出なかった根本原因, channel_registry.cpp）**:
+- 実機 Ableton で "OrbitScore" ピアが **発見されない**問題を調査 → scsynth が Link 発見ポート(20808)を一切開いていないと判明。
+- 原因: `initLinkAudio` が `enableLinkAudio(true)`（音声共有層）は呼ぶが、**基底 Link のネットワーク発見 `enable(true)` を呼んでいなかった**。LinkAudio は Link を継承するが両者は別スイッチ。
+- 修正: `initLinkAudio` に `impl_->link->enable(true);` を追加 → プラグイン再ビルド(cmake, ad-hoc署名) → Extensions に再導入。scsynth が `*:20808` を開き、Live に "OrbitScore" ピアが出現、トラック接続で **実音が鳴ることを実機確認**。
+- 副次: 切り分け中に Tailscale(utun/100.64.x CGNAT)が Link のインターフェース選択を乱す可能性も確認（ユーザーが一時オフ）。最終的な決め手は enable(true)。
+
+**検証**:
+- `verify-sample-playback.scd`（新規, Ctrl+C まで連続再生）: 実 wav → orbitPlayBufLink → channel 'test'。修正後、Live で **ピア出現 + 実音確認済**。
+- 実エンジン E2E: `node dist/cli-audio.js play examples/10_link_audio.orbs`（ORBIT_SCSYNTH_PATH=システムscsynth）で plugin検出→channel登録→link経路dispatch を確認。
+- ユニット: 1093 passed（link 登録1回・lazy 検出 true/false の3テスト追加）/ build 緑。
+
+**残**: 修正版 `.scx` を vsix の bundled scsynth にも反映して本番 artifact 更新。本番が source経路かvsix経路かで使う scsynth が変わる点に注意。
+
+**Commit**: [PENDING-209]
+
+### 6.117 Epic #278 Phase A+B — 2.0.0-dev QA マトリクス + MIDI example + スモーク (Jun 17, 2026)
+
+**Date**: 2026-06-17
+**Status**: ✅ 実装完了（QA / docs / examples）
+**Issue**: signalcompose/orbitscore#279（Epic #278 の Phase A+B = PR ①）
+**Branch**: `279-qa-2.0.0-matrix-smoke-examples`（main から）
+
+**概要**: v1.1.1 → 2.0.0-dev で積まれた新ピラー（MIDI 出力 / Pitch DSL E1–E6・Phase 3·4·R / comp C1·C2a / session-log L1 / LinkAudio）の実機 E2E QA 基盤を整備。プログラム的に検証可能な範囲を確定し、人間 QA に渡す境界を明示。
+
+**Phase 0（ブランチ衛生）**:
+- `wctm-architecture-docs` の `.gitignore`（`docs/WCTM/` scratch ignore）をローカルコミットで park（d908687）。QA 子ブランチは main から切る。
+- ベースライン検証: `npm test` → **1090 passed | 23 skipped (1113)** / `npm run build` 成功（main @ b4b513d）。
+
+**Phase A（QA マトリクス）**:
+- `docs/testing/QA_2.0.0.md` を新規作成。全インベントリを **P（プログラム検証可）/ H（人間・実機のみ）** に分類、各行に確認手段・期待結果・spec 参照・状態。人間 QA チェックリスト（Phase C 学習サイトへ取り込む）も収録。
+
+**Phase B（example + スモーク + session-log 検証）**:
+- 新 MIDI example 8 件を作成: `examples/11_midi_degrees`〜`18_voicelead_comp.orbs`（degree→MIDI / chords·stacks / scope·mode / ties·legato·hold / repetition·sections / expression / voicing·random / voicelead·comp）。
+- スモークランナー `scripts/qa-midi-smoke.sh` を作成（`midi-run` に通し `→ IAC` 到達＋engine error 無しを判定。macOS に `timeout` が無いため background + perl sleep + SIGINT 方式）。**8 passed, 0 failed**。
+- session-log `.orbslog` の内容・原子性を実ファイル probe + 既存 13 ユニットで確認（inert→atomic create→meta→preamble→評価レコード triple stamp→stop）。
+- 回帰ガード: `npm test` 再実行 → 1090 passed 維持。
+
+**QA Finding（記録済 / 要子 Issue 化）**:
+- **FINDING-1**: `seq.root(<note-name>)`（例 `lead.root(C)`）が runtime で拒否される（"root() degree must be a positive integer"）。グループレベル note root（`(1,3,5).root(F)`）は動作。spec P.5 は `seq.root(C)` を有効と記載 → spec/実装の乖離。example 13 は数値 seq root + group note root で回避。子 Issue **#280** 起票済。
+
+**PR レビュー反映（`/code:pr-review-team`、4 エージェント並列）**:
+- **Critical（silent-failure-hunter）**: スモークの失敗トークン denylist が不完全で、部分破損（健全 seq + 壊れ seq の混在）を PASS で握り潰す穴。インタプリタの silent-error 文字列（`Method not found:` / `do not exist and will be ignored` / `Variable not found:` 等）を ENGINE_FAIL に追加。
+- **Important**: マルチ seq のスケジュール数を期待数と照合（silent ドロップ検出）/ `loop started` を SCHEDULED に追加。
+- **Minor（code-reviewer）**: `midi-run` を npm 経由でなく ts-node 直接起動（SIGINT がグレースフル shutdown に届き、孤児 node / 鳴りっぱなし MIDI を残さない）/ 空 FILES 配列の bash 3.2 ガード / `printf %s` を `[@]` に / 死んだ `✗` トークン除去。
+- **comment-analyzer / pr-test-analyzer**: example 13/17 の Expected コメント訂正、README ファイル一覧に 11–18 追記、QA マトリクスの test 引用 3 件を正確化。
+- 検証: ネガティブテスト2種（`global.start()` 欠落、RUN が存在しない seq）で FAIL を確認。直接 ts-node 化後の孤児プロセス 0 を確認。全8スモーク PASS 維持。
+
+**人間 QA ランブック**: `docs/testing/QA_2.0.0_HUMAN_RUNBOOK.md` を追加（ユーザー依頼）。実機・実音 QA の step-by-step（IAC/monitor/DAW セットアップ → example 11-18 の実音確認 → session-log → LinkAudio verify-live-receive → リリースまでの残タスク）。コマンド・期待・記録欄つき。§1（MIDI 実音）は #209 不要で着手可能、§4b のみ #209 後。
+
+**人間ゲート（このセッションでは到達不能）**: 実音 QA・LinkAudio Ableton E2E・`.scx` Gatekeeper（#210）・#209 実装・PR マージ。2.0.0 リリースはこれら完了後。
+
+**Commit**: `3fe2185`（初回）/ レビュー反映は追加コミット
+
 ### 6.116 Issue #276 — session log L1 polish（PR #275 bot レビュー反映） (Jun 15, 2026)
 
 **Date**: 2026-06-15

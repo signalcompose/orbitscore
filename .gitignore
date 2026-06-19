@@ -7,6 +7,12 @@ logs/
 *.tsbuildinfo
 .orbitscore.json
 
+# OrbitScore session logs (.orbslog) — runtime recordings, not source
+*.orbslog
+
+# WCTM architecture docs — managed as local working files (wctm-architecture-docs branch)
+docs/WCTM/
+
 # VitePress (sites/*)
 sites/*/.vitepress/cache/
 sites/*/.vitepress/dist/

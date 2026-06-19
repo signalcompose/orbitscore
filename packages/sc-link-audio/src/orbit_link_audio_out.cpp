@@ -46,6 +46,7 @@
 #include <ableton/util/FloatIntConversion.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -62,6 +63,29 @@ namespace {
 
 orbitscore::ChannelRegistry g_channelRegistry;
 
+// Sample-accurate Link beat anchor (#209). The previous code derived each
+// block's beat from clock().micros() AT next() TIME, but scsynth burst-processes
+// several control blocks per audio callback (they share a wall clock) and next()
+// timing jitters — so consecutive commits got near-identical or jittery beats,
+// which Live's per-source rate adapter turned into level swell/decay/drift.
+//
+// Instead we capture ONE global anchor (host time + control-block counter) on
+// the first committing block, then derive every block's host time by advancing
+// the anchor by the exact audio duration of the elapsed blocks. All channels
+// share this single time base, so there is no per-channel differential drift and
+// no wall-clock jitter — only the negligible audio-vs-host ppm drift over a set.
+//
+// These are TU-level globals. scsynth can reboot the server within one host
+// process (internal server / repeated boots in a long-lived process), and
+// PluginLoad re-runs on each such (re)load. A stale anchor across a reboot would
+// make `bufCounter < g_anchorBufCounter`, so `framesSinceAnchor` underflows
+// negative and the derived beat is garbage. PluginLoad resets all three to their
+// initial values so the anchor is re-captured fresh on the first committing block
+// after every (re)load.
+bool g_beatAnchorSet = false;
+std::int64_t g_anchorBufCounter = 0;
+std::chrono::microseconds g_anchorMicros{0};
+
 // Single source of truth for the /cmd path string. Used by the
 // `DefinePlugInCmd` registration and the `DoAsynchronousCommand` cmdName
 // arg (the latter becomes the /done reply name). The string value must
@@ -69,6 +93,17 @@ orbitscore::ChannelRegistry g_channelRegistry;
 // here requires updating that test's literal in lockstep.
 constexpr const char* kRegisterLinkAudioChannelCmd =
     "/orbit/registerLinkAudioChannel";
+
+// `/cmd /orbit/setLinkTempo <bpm>` — push OrbitScore's tempo to the Link
+// session so peers follow (#283). Single source of truth for the path string,
+// matched in scripts/verify-plugin.scd if that test is extended.
+constexpr const char* kSetLinkTempoCmd = "/orbit/setLinkTempo";
+
+// Sanity bounds for an incoming tempo. Below/above this is almost certainly a
+// serialization bug on the TS side rather than a musical intent; reject so a
+// stray value cannot drive the whole Link session to an absurd rate.
+constexpr double kMinLinkTempo = 20.0;
+constexpr double kMaxLinkTempo = 999.0;
 
 // Quantum 4 = beats per Link cycle (4/4 mapping). Polymeter handling lives in
 // the engine-side scheduler, not in this UGen.
@@ -164,9 +199,27 @@ void OrbitLinkAudioOut_next(OrbitLinkAudioOut* unit, int inNumSamples) {
     std::memset(mix.mixBuffer, 0, clearSamples * sizeof(float));
     mix.currentFrames = n;
     mix.currentSessionState.emplace(unit->link->captureAudioSessionState());
-    const auto now = unit->link->clock().micros();
+
+    // Beat at this block, from the sample-accurate host time (#209). Capture a
+    // single global anchor (host time + bufCounter) once, then advance by the
+    // exact audio duration of the blocks elapsed since the anchor. This makes
+    // consecutive beats advance monotonically with the audio regardless of when
+    // next() actually fires (scsynth bursts several blocks per audio callback),
+    // killing the level swell/decay/drift that beatAtTime(clock().micros())
+    // produced. `n` is the (uniform) control-block frame count.
+    if (!g_beatAnchorSet) {
+      g_anchorMicros = unit->link->clock().micros();
+      g_anchorBufCounter = bufCounter;
+      g_beatAnchorSet = true;
+    }
+    const std::int64_t framesSinceAnchor =
+        (bufCounter - g_anchorBufCounter) * static_cast<std::int64_t>(n);
+    const std::chrono::microseconds blockTime =
+        g_anchorMicros +
+        std::chrono::microseconds(
+            (framesSinceAnchor * 1000000LL) / static_cast<std::int64_t>(unit->sampleRate));
     mix.currentBeatsAtBufferBegin =
-        mix.currentSessionState->beatAtTime(now, kQuantum);
+        mix.currentSessionState->beatAtTime(blockTime, kQuantum);
     mix.currentBufCounter = bufCounter;
   }
 
@@ -350,6 +403,29 @@ void OrbitLinkAudioOut_RegisterChannel(World* world, void* /*userData*/,
                         0, nullptr);
 }
 
+// `/cmd /orbit/setLinkTempo <bpm>` handler (#283).
+//
+// Pushes OrbitScore's tempo onto the Link session so peers (Ableton Live, etc.)
+// follow. Handled synchronously here — capturing/committing an app session
+// state is trivial and there is no async work to perform, so unlike
+// registerChannel we do not route a /done reply. The TS side fires this
+// best-effort (it does not await confirmation; tempo leadership is advisory).
+//
+// `getf` coerces an int OSC arg ('i' tag) to float, so a whole-number bpm sent
+// as an integer by the JS layer still reads correctly. Reject non-finite and
+// out-of-range values rather than driving the whole session to an absurd rate.
+void OrbitLinkAudioOut_SetLinkTempo(World* /*world*/, void* /*userData*/,
+                                    sc_msg_iter* args, void* /*replyAddr*/) {
+  const double bpm = static_cast<double>(args->getf(0.0f));
+  if (!std::isfinite(bpm) || bpm < kMinLinkTempo || bpm > kMaxLinkTempo) {
+    Print("OrbitLinkAudio: /cmd setLinkTempo bpm out of range or malformed "
+          "(got %f, expected %f..%f) — ignoring\n",
+          bpm, kMinLinkTempo, kMaxLinkTempo);
+    return;
+  }
+  g_channelRegistry.setLinkTempo(bpm);
+}
+
 }  // namespace
 
 PluginLoad(OrbitLinkAudio) {
@@ -360,8 +436,17 @@ PluginLoad(OrbitLinkAudio) {
   // what other peers (Live, etc.) display in their Link UI.
   g_channelRegistry.initLinkAudio(120.0, "OrbitScore");
 
+  // Reset the beat anchor on every (re)load (#209). These TU-level globals
+  // survive a server reboot within the same host process, so without this a
+  // stale anchor would make framesSinceAnchor underflow negative after a reboot.
+  // Re-captured fresh on the first committing block (see decl block above).
+  g_beatAnchorSet = false;
+  g_anchorBufCounter = 0;
+  g_anchorMicros = std::chrono::microseconds{0};
+
   DefinePlugInCmd(kRegisterLinkAudioChannelCmd,
                   OrbitLinkAudioOut_RegisterChannel, nullptr);
+  DefinePlugInCmd(kSetLinkTempoCmd, OrbitLinkAudioOut_SetLinkTempo, nullptr);
   DefineSimpleUnit(OrbitLinkAudioOut);
 }
 

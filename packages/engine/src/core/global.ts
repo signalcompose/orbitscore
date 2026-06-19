@@ -85,6 +85,9 @@ export class Global {
       seq.notifyGlobalTempoChange()
     }
 
+    // #283: in LinkAudio mode, lead the session tempo so peers follow.
+    this.pushLinkTempoIfLeading()
+
     return this
   }
 
@@ -223,11 +226,43 @@ export class Global {
    */
   linkAudio(targetSampleRate?: number): this {
     this.linkAudioManager.linkAudio(targetSampleRate)
+    // #283: assert leadership for a tempo set before this call (usual order is
+    // global.tempo() then global.linkAudio()).
+    this.pushLinkTempoIfLeading()
     return this
   }
 
   isLinkAudioEnabled(): boolean {
     return this.linkAudioManager.isEnabled()
+  }
+
+  /**
+   * #283 — When LinkAudio mode is on, push the current tempo to the Link
+   * session so OrbitScore is the tempo leader and peers (Ableton Live, etc.)
+   * follow `global.tempo()`. Fire-and-forget / best-effort: a failed push must
+   * never break playback, and the OSC layer no-ops when the engine is not
+   * running.
+   *
+   * Called from three points so leadership is asserted regardless of statement
+   * order in the .orbs file:
+   *   - tempo()     — live tempo changes propagate to the session.
+   *   - linkAudio() — captures a tempo set BEFORE the mode was enabled (the
+   *                   usual order is `global.tempo(60)` then `global.linkAudio()`).
+   *   - start()     — re-asserts once the transport is running.
+   *
+   * Leader model: Link is last-setter-wins, so if a peer (Live) sets tempo
+   * afterwards it wins until the next push. The MIDI scheduler free-runs at
+   * `global.tempo()` while audio commits at the Link beat — they stay aligned
+   * only while OrbitScore is the sole tempo-setter. Practical rule: set tempo in
+   * OrbitScore, do not drive tempo from Live.
+   */
+  private pushLinkTempoIfLeading(): void {
+    if (!this.isLinkAudioEnabled()) return
+    const bpm = this.tempoManager.tempo()
+    if (typeof bpm !== 'number') return
+    void this.audioEngine
+      .setLinkTempo?.(bpm)
+      ?.catch((err) => console.warn('⚠️  Link tempo push failed:', err))
   }
 
   /**
@@ -327,6 +362,8 @@ export class Global {
         console.warn(`⚠️  session-log: start hook failed (playback continues): ${e}`)
       }
     }
+    // #283: re-assert Link tempo leadership once the transport is running.
+    this.pushLinkTempoIfLeading()
     return this
   }
 
