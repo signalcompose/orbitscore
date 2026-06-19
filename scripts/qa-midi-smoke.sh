@@ -90,7 +90,7 @@ for f in "${FILES[@]}"; do
   node node_modules/.bin/ts-node --transpile-only \
     packages/engine/src/cli/midi-run.ts "$f" > "$log" 2>&1 &
   bg=$!
-  perl -e "sleep ${DWELL}"
+  perl -e 'sleep $ARGV[0]' -- "${DWELL}"
   kill -INT "$bg" 2>/dev/null
   perl -e 'sleep 1'
   kill "$bg" 2>/dev/null
