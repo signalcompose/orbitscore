@@ -2,6 +2,8 @@
  * SuperColliderイベントスケジューラー
  */
 
+import { gainDbToAmplitude } from '../audio-gain-utils'
+
 import { ScheduledPlay, PlaybackOptions } from './types'
 import { BufferManager } from './buffer-manager'
 import { OSCClient } from './osc-client'
@@ -502,7 +504,7 @@ export class EventScheduler {
 
     this.logPlaybackDebugInfo(sequenceName, scheduledTime)
     const { bufnum } = await this.bufferManager.loadBuffer(filepath)
-    const amplitude = this.convertGainToAmplitude(options.gainDb)
+    const amplitude = gainDbToAmplitude(options.gainDb)
     await this.sendPlaybackMessage(bufnum, amplitude, options)
   }
 
@@ -518,21 +520,6 @@ export class EventScheduler {
         `🔊 Playing: ${sequenceName} at ${actualStartTime}ms (scheduled: ${scheduledTime}ms, drift: ${drift}ms)`,
       )
     }
-  }
-
-  /**
-   * Convert dB gain to amplitude
-   * amplitude = 10^(dB/20)
-   * Default: 0 dB = 1.0 (100%)
-   */
-  private convertGainToAmplitude(gainDb: number | undefined): number {
-    if (gainDb === undefined) {
-      return 1.0 // 0 dB default
-    }
-    if (gainDb === -Infinity) {
-      return 0.0 // Complete silence
-    }
-    return Math.pow(10, gainDb / 20)
   }
 
   /**

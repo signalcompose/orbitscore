@@ -31,6 +31,7 @@
  *    内部 `ScheduledPlay` は pan を保持（param-complete）し、後の pan 追加を配線だけにする。
  */
 
+import { gainDbToAmplitude } from '../audio-gain-utils'
 import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
 
@@ -90,7 +91,11 @@ export interface RustEnginePlayerOptions {
    * @internal
    */
   wsUrlOverride?: string
-  /** 各 dispatch の観測コールバック（telemetry / timing 計測）。 */
+  /**
+   * 各 dispatch の観測コールバック（任意・副作用なしの telemetry seam）。A0 の実機
+   * timing 計測 spec が lead/drift を読むのに使う。`createAudioEngine()` の production
+   * 経路では渡さない（hook 無しが既定）。production で常用するなら factory へ昇格する。
+   */
   onDispatch?: (info: DispatchInfo) => void
 }
 
@@ -99,12 +104,12 @@ const POLL_INTERVAL_MS = 1
 /** SC EventScheduler と同じく、過大 drift のイベントは古い残骸として skip する閾値。 */
 const MAX_DRIFT_MS = 1000
 
-/** dB → linear amplitude（SC `convertGainToAmplitude` と同一規則）。 */
-function convertGainToAmplitude(gainDb: number | undefined): number {
-  if (gainDb === undefined) return 1.0
-  if (gainDb === -Infinity) return 0.0
-  return Math.pow(10, gainDb / 20)
-}
+/** feature gap warning の初期状態（constructor / stopAll で再 arm に使う）。 */
+const freshWarned = (): Record<GapKind, boolean> => ({
+  pan: false,
+  slice: false,
+  outputChannel: false,
+})
 
 export class RustEnginePlayer implements AudioEngineBackend {
   private readonly daemon: DaemonClient
@@ -115,7 +120,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   // --- lean scheduler state（SC EventScheduler の mirror） ---
   private scheduledPlays: ScheduledPlay[] = []
-  private readonly sequenceEvents = new Map<string, ScheduledPlay[]>()
+  /** 生きているシーケンス名の集合。clear/mute されると消え、queue 残存イベントが skip される。 */
+  private readonly liveSequences = new Set<string>()
   private intervalId: ReturnType<typeof setInterval> | null = null
   isRunning = false
   startTime = 0
@@ -130,7 +136,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
 
   /** feature gap の 1 回限り warning。stopAll で再 arm する。 */
-  private warned: Record<GapKind, boolean> = { pan: false, slice: false, outputChannel: false }
+  private warned: Record<GapKind, boolean> = freshWarned()
 
   constructor(options: RustEnginePlayerOptions = {}) {
     this.daemon = new DaemonClient()
@@ -142,10 +148,21 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   // --- AudioEngine surface ---
 
+  /** StreamStats(1Hz) の transport now_sec で anchor を前進補正する handler（audio/wall drift 吸収）。 */
+  private readonly onStreamStats = (data: unknown): void => {
+    const nowSec = Number((data as { now_sec?: unknown }).now_sec)
+    if (Number.isFinite(nowSec)) {
+      this.clockAnchor = { tsMs: Date.now(), daemonSec: nowSec }
+    }
+  }
+
   /**
    * daemon を起動し WebSocket 接続を確立する。`outputDevice` は S2 では未対応
-   * （daemon は既定デバイスを選択）。確立後、transport clock の anchor を置き、
-   * StreamStats で継続補正する subscription を張る。
+   * （daemon は既定デバイスを選択）。**一度だけ呼ぶ前提**（InterpreterV2 は isBooted で guard）。
+   *
+   * 順序が load-bearing: getStatus で初期 anchor を確定**してから** StreamStats を subscribe する。
+   * 逆順だと、getStatus の await 中に届いた StreamStats（精緻な transport now_sec）を、後続の
+   * getStatus(uptime_sec) が後退上書きしうる。先に初期 anchor を置けば StreamStats は常に前進補正。
    */
   async boot(outputDevice?: string): Promise<void> {
     if (outputDevice) {
@@ -154,18 +171,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
       )
     }
 
-    // StreamStats(1Hz) の transport now_sec で anchor を継続補正（audio/wall drift 吸収）。
-    this.daemon.on('stream-stats', (data: unknown) => {
-      const nowSec = Number((data as { now_sec?: unknown }).now_sec)
-      if (Number.isFinite(nowSec)) {
-        this.clockAnchor = { tsMs: Date.now(), daemonSec: nowSec }
-      }
-    })
-
     await this.daemon.start({ daemonPath: this.daemonPath, wsUrlOverride: this.wsUrlOverride })
 
     // 暫定 anchor: uptime_sec ≈ transport now_sec（共に stream 開始から実時間で進む）。
-    // 初回 StreamStats（≤約1s）で精緻化される。
     try {
       const status = await this.daemon.getStatus()
       const uptime = Number(status.uptime_sec)
@@ -173,6 +181,10 @@ export class RustEnginePlayer implements AudioEngineBackend {
     } catch {
       this.clockAnchor = { tsMs: Date.now(), daemonSec: 0 }
     }
+
+    // 初期 anchor 確定後に subscribe。off→on で二重 boot 時の listener 累積も防ぐ。
+    this.daemon.off('stream-stats', this.onStreamStats)
+    this.daemon.on('stream-stats', this.onStreamStats)
   }
 
   async quit(): Promise<void> {
@@ -265,7 +277,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       while (this.scheduledPlays.length > 0 && this.scheduledPlays[0].time <= now) {
         const play = this.scheduledPlays.shift()!
         // clear 済みシーケンスのイベントは skip（poll-level チェック）。
-        if (play.sequenceName && !this.sequenceEvents.has(play.sequenceName)) {
+        if (play.sequenceName && !this.liveSequences.has(play.sequenceName)) {
           continue
         }
         this.executePlayback(play).catch((err) => {
@@ -286,20 +298,20 @@ export class RustEnginePlayer implements AudioEngineBackend {
   stopAll(): void {
     this.stop()
     this.scheduledPlays = []
-    this.sequenceEvents.clear()
-    this.warned = { pan: false, slice: false, outputChannel: false }
+    this.liveSequences.clear()
+    this.warned = freshWarned()
     // 注: 既に daemon へ送信済み（発音中）の voice は自然減衰で終わる。即時 hard-stop は
     // play_id 追跡 or daemon 側 StopAll コマンドが要る後続課題（短サンプル前提で proof は許容）。
   }
 
   clearSequenceEvents(sequenceName: string): void {
     this.scheduledPlays = this.scheduledPlays.filter((p) => p.sequenceName !== sequenceName)
-    // Map から消すことで、まだ queue に残るイベントも poll/exec 時に skip される。
-    this.sequenceEvents.delete(sequenceName)
+    // 集合から消すことで、まだ queue に残るイベントも poll/exec 時に skip される。
+    this.liveSequences.delete(sequenceName)
   }
 
   reinitializeSequenceTracking(sequenceName: string): void {
-    this.sequenceEvents.set(sequenceName, [])
+    this.liveSequences.add(sequenceName)
   }
 
   /** pre-load（optional Scheduler 面）。daemon へ事前ロードして first-hit latency を抑える。 */
@@ -319,22 +331,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
     this.scheduledPlays.push(play)
     this.scheduledPlays.sort((a, b) => a.time - b.time)
     if (play.sequenceName) {
-      if (!this.sequenceEvents.has(play.sequenceName)) {
-        this.sequenceEvents.set(play.sequenceName, [])
-      }
-      this.sequenceEvents.get(play.sequenceName)!.push(play)
+      this.liveSequences.add(play.sequenceName)
     }
   }
 
   private async executePlayback(play: ScheduledPlay): Promise<void> {
     if (play.sequenceName) {
       // async 待ち中に clear された場合の二重チェック（SC executePlayback と同形）。
-      if (!this.sequenceEvents.has(play.sequenceName)) return
+      if (!this.liveSequences.has(play.sequenceName)) return
       const drift = Date.now() - this.startTime - play.time
       if (drift > MAX_DRIFT_MS) return
     }
 
-    const amplitude = convertGainToAmplitude(play.gainDb)
+    const amplitude = gainDbToAmplitude(play.gainDb)
     if (amplitude <= 0) return // 無音はスキップ（音響的に同一）。
 
     const sampleId = await this.ensureLoaded(play.filepath)

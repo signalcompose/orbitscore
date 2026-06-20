@@ -135,7 +135,7 @@ describe('RustEnginePlayer with mock daemon', () => {
       buffer_underruns: 0,
       now_sec: 50,
     })
-    await waitFor(() => true, { timeoutMs: 30 }) // event を受け取る猶予
+    await new Promise((r) => setTimeout(r, 30)) // StreamStats event を受け取る猶予
     p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
     p.start()
     await waitFor(() => playAtRecords().length >= 1)
