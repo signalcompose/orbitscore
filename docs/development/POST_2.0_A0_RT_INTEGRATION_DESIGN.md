@@ -284,6 +284,16 @@ S1 の未 retire 3 項目（高レイテンシ限定 / debug / static-load）を
 
 単一プラグイン・ノードグラフ無し（`ConnectNode`）/ `OutputEvents::void()`（plugin→host 未処理）/ block 先頭一括 event / cpal F32 のみ / hot-uninstall（deactivate ハンドオフ）。
 
+### S2/A4 carry-forward（bot second-opinion・RT/clack correctness）
+
+PR #294 で `@claude` bot に RT/clack correctness を second-opinion 依頼し、**internal pr-review-team が拾わなかった CLAP-spec-subtle な 3 件**を検出（Critical 0 / Important 3）。**いずれも spike の PASS verdict に影響なし**（テストシンセが当該パスを踏まない）。**spike binary は patch しない** — S2 はこの crate のコピーでなく daemon 統合の fresh 実装のため、「正しいパターンを記録して S2 が一度で正しく作る」方が durable（advisor 判断）。
+
+- **#1 teardown スレッド**: `drop(stream)` は `StartedPluginAudioProcessor::drop` → `stop_processing()` を **main thread** で呼ぶが、CLAP は `process()` と同じ **audio thread** を要求。→ S2 は clack example の **`deactivate_and_stop_stream()` パターン**（stream 停止前に audio thread で `proc.stop_processing()`）を踏む。暗黙 Drop に頼ると strict なプラグインで UB になりうる。
+- **#2 `request_callback` の RT 非安全**: `host.rs` の `mpsc::Sender::send()` は alloc + 内部 mutex。プラグインが `process()` 内から `host.request_callback()` を呼ぶのは CLAP 上合法 → audio thread で RT 違反。→ S2 は **lock-free 通知**（`Arc<AtomicBool>` を main pump が poll 等）に置換。
+- **#3 `EventBuffer` realloc 不変条件**: Vec-backed のため容量超過で callback 内 realloc。spike では `event_scratch.len() <= 1024` の **`debug_assert` で regression guard 追加済**。→ S2 は固定サイズ CLAP event ring へ。
+
+bot レビュー全文: PR #294 コメント（GitHub Actions `runs/27862509329`）。
+
 ## 11. 関連
 
 - Epic #292 / Issue #293 / Issue #295（S1b） / research #95

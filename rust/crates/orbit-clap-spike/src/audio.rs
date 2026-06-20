@@ -200,6 +200,14 @@ impl OrbitAudioProcessor {
                 &mut self.event_scratch,
                 self.note_port_index,
             );
+            // Regression guard (bot second-opinion #3): event_scratch is sized to the event
+            // ring capacity (1024) so a full drain never reallocs. If a future change grows
+            // the ring or emits >1 CLAP event per PluginEvent, this catches the RT-unsafe
+            // realloc in debug builds before it ships.
+            debug_assert!(
+                self.event_scratch.len() <= 1024,
+                "event_scratch exceeded ring capacity (1024) — would realloc on the audio thread"
+            );
             let input_events = self.event_scratch.as_input();
 
             // Ensure plugin buffers match actual data size (zero-cost with BufferSize::Fixed).
