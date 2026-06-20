@@ -221,6 +221,126 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(p.getAudioDuration('/audio/kick.wav')).toBeCloseTo(1.0, 5)
     expect(p.getAudioDuration('/audio/unknown.wav')).toBe(0)
   })
+
+  it('loadSample 失敗は当該 note のみ落とし、再スケジュールで再ロードを試みる', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let badLoadCount = 0
+    const p = await boot(
+      defaultHandlers({
+        LoadSample: (params) => {
+          if (params.path === '/audio/bad.wav') {
+            badLoadCount++
+            const err = new Error('decode failed') as Error & { code?: string }
+            err.code = 'FILE_DECODE_ERROR'
+            throw err
+          }
+          return {
+            sample_id: `s-${String(params.path)}`,
+            frames: 48000,
+            channels: 2,
+            sample_rate: 48000,
+          }
+        },
+      }),
+    )
+    p.scheduleEvent('/audio/bad.wav', 0, 0, 0, 'seqA')
+    p.scheduleEvent('/audio/good.wav', 0, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => playAtRecords().length >= 1)
+    await new Promise((r) => setTimeout(r, 20))
+    // good.wav のみ発音、bad.wav は落ちる（poll loop は生存）。
+    expect(playAtRecords().length).toBe(1)
+    expect(playAtRecords()[0].sample_id).toBe('s-/audio/good.wav')
+    // inflight は finally でクリアされるので、再スケジュールで再ロードを試みる。
+    p.scheduleEvent('/audio/bad.wav', 0, 0, 0, 'seqA')
+    await waitFor(() => badLoadCount >= 2)
+    expect(badLoadCount).toBe(2)
+    errorSpy.mockRestore()
+  })
+
+  it('boot は GetStatus 失敗でも resolve し、anchor=0 にフォールバックする', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const url = await server.start(
+      defaultHandlers({
+        GetStatus: () => {
+          throw new Error('status unavailable')
+        },
+      }),
+    )
+    const p = new RustEnginePlayer({ wsUrlOverride: url, lookaheadSec: 0.05 })
+    await p.boot() // reject しない
+    player = p
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => playAtRecords().length >= 1)
+    // anchor=0 なので time_sec は lookahead 付近（uptime 10 由来ではない）。
+    expect(playAtRecords()[0].time_sec as number).toBeLessThan(1)
+    warn.mockRestore()
+  })
+
+  it('stopAll は warn-once を再 arm する（次セッションで再び warn）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 50, 'seqA') // pan=50
+    p.start()
+    await waitFor(() => playAtRecords().length >= 1)
+    p.stopAll()
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 50, 'seqB') // 次セッション
+    p.start()
+    await waitFor(() => playAtRecords().length >= 2)
+    const panWarns = warn.mock.calls.filter((c) => String(c[0]).includes('pan'))
+    expect(panWarns.length).toBe(2) // stopAll で再 arm
+    warn.mockRestore()
+  })
+
+  it('過大 drift（> MAX_DRIFT_MS）のイベントは executePlayback で skip される', async () => {
+    const p = await boot()
+    // time=-2000ms → poll で即 due だが drift 2000ms > 1000ms。
+    p.scheduleEvent('/audio/kick.wav', -2000, 0, 0, 'seqA')
+    p.scheduleEvent('/audio/snare.wav', 0, 0, 0, 'seqA') // これは出る
+    p.start()
+    await waitFor(() => playAtRecords().length >= 1)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(playAtRecords().length).toBe(1)
+    expect(playAtRecords()[0].sample_id).toBe('s-/audio/snare.wav')
+  })
+
+  it('ロード中（async）に clear されたイベントは発音しない（executePlayback 二重チェック）', async () => {
+    let releaseLoad: (() => void) | null = null
+    const p = await boot(
+      defaultHandlers({
+        LoadSample: (params) =>
+          new Promise((resolve) => {
+            releaseLoad = () =>
+              resolve({
+                sample_id: `s-${String(params.path)}`,
+                frames: 48000,
+                channels: 2,
+                sample_rate: 48000,
+              })
+          }),
+      }),
+    )
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
+    p.start()
+    // LoadSample 応答待ちで止まっている間に clear。
+    await waitFor(() => releaseLoad !== null)
+    p.clearSequenceEvents('seqA')
+    releaseLoad!() // ロード解決 → executePlayback の liveSequences 再チェックで skip
+    await new Promise((r) => setTimeout(r, 30))
+    expect(playAtRecords().length).toBe(0)
+  })
+
+  it('master effect は 1 回 warn して no-op（addEffect/removeEffect）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    await p.addEffect('master', 'compressor', { threshold: -12 })
+    await p.addEffect('master', 'limiter', {})
+    await p.removeEffect('master', 'compressor')
+    const fxWarns = warn.mock.calls.filter((c) => String(c[0]).includes('master effect'))
+    expect(fxWarns.length).toBe(1) // warn-once
+    warn.mockRestore()
+  })
 })
 
 describe('createAudioEngine() / resolveEngineKind()', () => {

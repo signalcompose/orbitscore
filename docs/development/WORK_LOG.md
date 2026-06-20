@@ -29,10 +29,11 @@ post-2.0 **S2**（master plan §4-A）。TS interpreter の音声ディスパッ
 - **seam（Opus 判断・確定）= バックエンドレベル**: `AudioEngineBackend`（`Scheduler` + AudioEngine 面）を新設し、`SuperColliderPlayer` と新規 `RustEnginePlayer` が**ともに**満たす。`InterpreterState.audioEngine` を具象型→interface 化、`createAudioEngine()` が env で分岐。**既存 SC 経路は無改変**（1129 既存テスト無傷）。
 - **lean daemon scheduler**: SC EventScheduler は LinkAudio/bufnum/`/s_new` 結合が重いため再利用せず、独立の最小スケジューラ（1ms poll を mirror）を新設。
 - **timing モデル = poll-and-fire-now + 定数 lookahead**: SC=fire-now / daemon=schedule-ahead（自前 transport clock）を、poll 発火時に `playAt(daemonNowSec + lookahead)` で繋ぐ。clock anchor は StreamStats(1Hz) の transport now_sec で継続補正。
-- **実機 timing verdict（ground-truth = observer 接続の StreamStats）**: lead `time_sec − trueNow` = **min 47.6ms / max 57.8ms（全て正 → onset clip しない）**、anchor drift max **7.8ms**、inter-onset 誤差 max **5.1ms / 300ms（相対 timing 保存）**、xruns **0**、transport rate **1.004**。→ load-bearing unknown を retire。
-- **feature gap は boundary で明示**（見かけの parity を作らない）: pan≠0 → 1回 warn + 中央定位 / slice → 1回 warn + skip / outputChannel(LinkAudio) → 1回 warn + hardware fallback。内部 `ScheduledPlay` は pan を保持（param-complete）。
-- **テスト**: 新規 unit 15件（MockDaemonServer）+ gated 実機 spec（`ORBIT_REAL_DAEMON=1`）。cargo test --workspace 全緑（core 14 / daemon protocol 13 + smoke 1 / native 16 / clap-spike 7）。
-- **観測 hook**: `RustEnginePlayer` に `onDispatch`（telemetry / timing 計測）を追加。
+- **実機 timing verdict（ground-truth = observer 接続の StreamStats）**: 代表 run で lead `time_sec − trueNow` ≈ **min 45ms / max 50ms（複数 run で 44.8–57.8ms・全て正 → onset clip しない）**、anchor drift max ≈ **5ms（2.9–7.8ms）**、inter-onset 誤差 max ≈ **3ms（1.8–5.1ms / 300ms・相対 timing 保存）**、xruns **0**、transport rate ≈ **1.00**。gated テストは境界を assert（minLead>0 等）。→ load-bearing unknown を retire。
+- **feature gap は boundary で明示**（見かけの parity を作らない）: pan≠0 → 1回 warn + 中央定位 / slice → 1回 warn + skip / outputChannel(LinkAudio) → 1回 warn + hardware fallback / master effects → 1回 warn + no-op。内部 `ScheduledPlay` は pan を保持（param-complete）。
+- **テスト**: 新規 unit 21件（MockDaemonServer）+ gated 実機 spec（`ORBIT_REAL_DAEMON=1`）。cargo test --workspace 全緑（core 14 / daemon protocol 13 + smoke 1 / native 16 / clap-spike 7）。
+- **観測 hook**: `RustEnginePlayer` に `onDispatch`（telemetry / timing 計測・送信前に wallMs/daemonNowSec を coherent 採取）を追加。
+- **PR レビュー（/simplify + /code:pr-review-team）反映**: getStatus 失敗の空 catch に warn 追加 / daemon 切断時は poll を停止し単一通知（console.error flood 回避・teardown race は isRunning ガードで抑制）/ master effects の silent no-op を warn 化 / ロード中 clear の再チェック追加。
 - **A0 doc §14 に S2 verdict を記録**。DSL/MIDI 意味論は無改変（core spec 変更不要）。
 
 ### 6.148 review(spike): @claude bot second-opinion 対応 + PR レビュー規則を CLAUDE.md 化 (#294) (Jun 20, 2026)
