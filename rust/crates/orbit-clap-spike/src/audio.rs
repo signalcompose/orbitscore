@@ -1,7 +1,6 @@
 //! Audio-thread integration: Engine + CLAP plugin + rtrb seam + PostMixSink (A0 §4.1).
 
 use crate::buffers::HostAudioBuffers;
-use crate::config::FullAudioConfig;
 use crate::events::{PluginEventConsumer, drain_to_event_buffer};
 use crate::host::OrbitClapHost;
 use crate::sink::PostMixSink;
@@ -42,6 +41,10 @@ pub struct AudioThreadStats {
     /// Buffer resize events (should be 0 with BufferSize::Fixed, A0 §5).
     /// Incremented from ensure_buffer_size_matches via the shared Arc.
     pub buffer_resize_count: AtomicU64,
+    /// Callback index at which the plugin was hot-installed via the install ring.
+    /// u64::MAX = never installed via channel (static mode installs before the stream).
+    /// S1b-2: proves the dynamic ownership handoff landed on the audio thread.
+    pub installed_at_callback: AtomicU64,
 }
 
 impl AudioThreadStats {
@@ -54,6 +57,7 @@ impl AudioThreadStats {
             sink_frames: AtomicU64::new(0),
             hist_us: std::array::from_fn(|_| AtomicU64::new(0)),
             buffer_resize_count: AtomicU64::new(0),
+            installed_at_callback: AtomicU64::new(u64::MAX),
         })
     }
 
@@ -80,52 +84,82 @@ impl AudioThreadStats {
     }
 }
 
+/// A hot-install payload moved from the control thread to the audio thread (S1b-2).
+///
+/// All fields are `Send` and pre-allocated on the control thread, so installing
+/// them in the callback is a plain move (no alloc / no lock). This is the dynamic
+/// `LoadPlugin`-at-runtime ownership handoff A0 §8 flagged as the key unknown.
+pub struct InstallMsg {
+    pub plugin: StartedPluginAudioProcessor<OrbitClapHost>,
+    pub buffers: HostAudioBuffers,
+    pub note_port_index: u16,
+}
+
+/// Consumer side of the install ring (audio thread).
+pub type InstallConsumer = rtrb::Consumer<InstallMsg>;
+
 /// Audio-thread owner of all RT state (A0 §4.1).
 ///
 /// Owned by the cpal closure (`move |data, _| proc.process(data)`).
 /// Lives exclusively on the audio thread after stream construction.
+///
+/// `plugin`/`buffers` are `Option` so the stream can run engine-only until a plugin
+/// is installed — either synchronously before the stream (static, S1) or via the
+/// install ring while the stream runs (dynamic hot-install, S1b-2).
 pub struct OrbitAudioProcessor {
     /// Existing sample-playback engine (unchanged, A0 §4.1 step a).
     engine: Engine,
-    /// CLAP plugin audio processor (Mutex no soto, A0 §4.1).
-    plugin: StartedPluginAudioProcessor<OrbitClapHost>,
+    /// CLAP plugin audio processor (Mutex no soto, A0 §4.1). None until installed.
+    plugin: Option<StartedPluginAudioProcessor<OrbitClapHost>>,
     /// Lock-free event ring consumer (A0 §4.2).
     event_consumer: PluginEventConsumer,
     /// Pre-allocated CLAP event buffer (cleared each callback, no RT alloc).
     event_scratch: EventBuffer,
-    /// Pre-allocated plugin audio buffers (holds Arc<AudioThreadStats> for resize_count).
-    buffers: HostAudioBuffers,
+    /// Pre-allocated plugin audio buffers (arrive with the plugin). None until installed.
+    buffers: Option<HostAudioBuffers>,
     /// tap destination (A0 §4.4).
     sink: Box<dyn PostMixSink>,
     /// Steady sample counter (A0 §4.1 step f).
     steady_counter: u64,
-    /// Note port index queried from plugin at setup time.
+    /// Note port index (set at install time).
     note_port_index: u16,
     /// Shared stats with the reporting thread (main thread reads after drop(stream)).
     stats: Arc<AudioThreadStats>,
+    /// Hot-install ring (control -> audio). Popped once, when plugin is None.
+    install_rx: InstallConsumer,
 }
 
 impl OrbitAudioProcessor {
+    /// Construct an engine-only processor. The plugin is installed later, either
+    /// synchronously via [`install`](Self::install) (static mode) or via `install_rx`
+    /// while the stream runs (hot-install mode).
     pub fn new(
         engine: Engine,
-        plugin: StartedPluginAudioProcessor<OrbitClapHost>,
         event_consumer: PluginEventConsumer,
-        config: FullAudioConfig,
         sink: Box<dyn PostMixSink>,
-        note_port_index: u16,
         stats: Arc<AudioThreadStats>,
+        install_rx: InstallConsumer,
     ) -> Self {
         Self {
             engine,
-            plugin,
+            plugin: None,
             event_consumer,
             event_scratch: EventBuffer::with_capacity(256),
-            buffers: HostAudioBuffers::from_config(config, stats.clone()),
+            buffers: None,
             sink,
             steady_counter: 0,
-            note_port_index,
+            note_port_index: 0,
             stats,
+            install_rx,
         }
+    }
+
+    /// Install a plugin synchronously (control thread, before the stream is built).
+    /// Used by static mode for S1 parity.
+    pub fn install(&mut self, msg: InstallMsg) {
+        self.plugin = Some(msg.plugin);
+        self.buffers = Some(msg.buffers);
+        self.note_port_index = msg.note_port_index;
     }
 
     /// Called from cpal callback with the output buffer (interleaved f32).
@@ -136,41 +170,57 @@ impl OrbitAudioProcessor {
         // In production this should be replaced with a lock-free timer.
         let t0 = Instant::now();
 
+        // Hot-install (S1b-2): if no plugin yet, try to receive one from the control
+        // thread. pop() is wait-free; installing is a plain move (no alloc / no lock).
+        if self.plugin.is_none() {
+            if let Ok(msg) = self.install_rx.pop() {
+                self.plugin = Some(msg.plugin);
+                self.buffers = Some(msg.buffers);
+                self.note_port_index = msg.note_port_index;
+                let at = self.stats.callback_count.load(Ordering::Relaxed);
+                self.stats.installed_at_callback.store(at, Ordering::Relaxed);
+            }
+        }
+
         // (a) Render existing sample engine into data.
         self.engine.render(data);
 
-        // (b) Drain rtrb ring -> CLAP InputEvents (block-start offsets, A0 §4.2).
-        drain_to_event_buffer(
-            &mut self.event_consumer,
-            &mut self.event_scratch,
-            self.note_port_index,
-        );
-        let input_events = self.event_scratch.as_input();
+        // (b)-(d) Plugin path — only once a plugin is installed.
+        if let (Some(plugin), Some(buffers)) = (self.plugin.as_mut(), self.buffers.as_mut()) {
+            // Drain rtrb ring -> CLAP InputEvents (block-start offsets, A0 §4.2).
+            drain_to_event_buffer(
+                &mut self.event_consumer,
+                &mut self.event_scratch,
+                self.note_port_index,
+            );
+            let input_events = self.event_scratch.as_input();
 
-        // Ensure plugin buffers match actual data size (should be zero-cost with BufferSize::Fixed).
-        self.buffers.ensure_buffer_size_matches(data.len());
+            // Ensure plugin buffers match actual data size (zero-cost with BufferSize::Fixed).
+            buffers.ensure_buffer_size_matches(data.len());
+            let frame_count = buffers.cpal_buf_len_to_frame_count(data.len());
+            let (ins, mut outs) = buffers.prepare_plugin_buffers(data.len());
 
-        // (c) Process plugin.
-        let frame_count = self.buffers.cpal_buf_len_to_frame_count(data.len());
-        let (ins, mut outs) = self.buffers.prepare_plugin_buffers(data.len());
+            let _ = plugin.process(
+                &ins,
+                &mut outs,
+                &input_events,
+                &mut OutputEvents::void(),
+                Some(self.steady_counter),
+                None,
+            );
 
-        let _ = self.plugin.process(
-            &ins,
-            &mut outs,
-            &input_events,
-            &mut OutputEvents::void(),
-            Some(self.steady_counter),
-            None,
-        );
+            // (d) Add-mix plugin output into data (A0 §4.1 step d: engine + plugin summed).
+            buffers.add_to_cpal_buffer(data);
 
-        // (d) Add-mix plugin output into data (A0 §4.1 step d: engine + plugin summed).
-        self.buffers.add_to_cpal_buffer(data);
+            // (f) Advance steady counter.
+            self.steady_counter += frame_count as u64;
+        } else {
+            // No plugin yet: drain-and-discard queued notes so the ring never stalls.
+            while self.event_consumer.pop().is_ok() {}
+        }
 
         // (e) tap post-mix (PostMixSink sees the fully-summed signal).
         self.sink.commit(data);
-
-        // (f) Advance steady counter.
-        self.steady_counter += frame_count as u64;
 
         // --- Metrics (no alloc, no lock) ---
         let elapsed_ns = t0.elapsed().as_nanos() as u64;

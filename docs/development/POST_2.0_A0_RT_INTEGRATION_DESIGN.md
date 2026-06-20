@@ -1,6 +1,6 @@
 # A0 — RT 統合設計（CLAP プラグインを orbit-audio に RT 安全に載せる）
 
-> **ステータス: S1 実行完了 — verdict = PASS（feasibility→proof 達成）。詳細は §12。post-2.0 / Epic #292 / Issue #293。** 2026-06-20 作成・同日 S1 実行。
+> **ステータス: S1 + S1b 実行完了 — verdict = PASS（feasibility→proof 達成）。S1=§12 / S1b（低レイテンシ・release・dynamic hot-install）=§13。post-2.0 / Epic #292 / Issue #293・#295。** 2026-06-20 作成・同日 S1/S1b 実行。
 > 正本ロードマップ: `docs/development/POST_2.0_MASTER_PLAN.html`（§3 最初の1手 = A0+S1）。
 > hosting feasibility 一次情報: `docs/research/RUST_PLUGIN_HOSTING.md`。daemon 契約: `docs/research/ENGINE_DAEMON_PROTOCOL.md`。
 
@@ -241,17 +241,52 @@ A0 §4 のアーキ（同一 callback / プラグイン Mutex 外 / rtrb event s
 - S2 以降の **production RT 監視は callback duration ベース**にする（daemon の `StreamStats.xruns` を信頼しない）。`ENGINE_DAEMON_PROTOCOL` の `StreamStats` イベントに callback-time 分布を足すべき。
 - これにより good-mode の「clean」は**実証検知できる計測上の clean** であり vibes ではない（advisor §6-3b の要求を満たした）。
 
-### Caveats / S1 が retire していないもの（→ S1b / S2、A0 §8）
+### Caveats / S1 が retire していないもの
 
-- **1024 フレーム（≈23ms・高レイテンシ）ブロックでの測定**。good の 2.2% 余裕から小バッファでも余裕は大きいと推測できるが、**低レイテンシ（128–256 フレーム）での厳格テストは未実施 = S1b**。
-- **debug build**（release はより速い＝より安全側）。
-- **static-load のみ**。dynamic hot-install（daemon の `LoadPlugin` 実行時差し込み・`StartedPluginAudioProcessor` の所有権ハンドオフ）は未実証 = S1b/S2。
-- プラグイン 1 個・ノードグラフ無し。`OutputEvents::void()`（plugin→host イベント未処理）。event は block 先頭一括（sample-accurate オフセット無し）。
+> **更新（2026-06-20）**: 下記のうち ①高レイテンシ限定 ②debug 限定 ③static-load のみ は **S1b で retire 済（§13）**。
+
+- ~~**1024 フレーム（高レイテンシ）限定**~~ → S1b-1 で 128/256 frame を実証（§13）。
+- ~~**debug build**~~ → S1b-1 で release を実証（§13）。
+- ~~**static-load のみ**~~ → S1b-2 で dynamic hot-install を実証（§13）。
+- プラグイン 1 個・ノードグラフ無し。`OutputEvents::void()`（plugin→host イベント未処理）。event は block 先頭一括（sample-accurate オフセット無し）。hot-uninstall（deactivate ハンドオフ）は未実証。
 - A0 からの逸脱: cpal sample format は **F32 のみ**対応（I16/I32/U16 は未実装・spike 簡略化）。
+
+## 13. S1b 実行結果（2026-06-20）— 低レイテンシ + release + dynamic hot-install
+
+S1 の未 retire 3 項目（高レイテンシ限定 / debug / static-load）を潰した（Issue #295）。
+
+### S1b-1 — 低レイテンシ + release（`--buffer-frames`）
+
+| 構成 | budget | callback max | xrun | resize | 発音 |
+|---|---|---|---|---|---|
+| 128 frame・debug | 2.9ms | 31µs（1.07%） | 0 | 0 | peak 0.25 |
+| 256 frame・debug | 5.8ms | 91µs（1.57%） | 0 | 0 | peak 0.25 |
+| **128 frame・release** | 2.9ms | **10.8µs（0.37%）** | 0 | 0 | peak 0.25 |
+
+→ 低レイテンシ（128 frame = 2.9ms）でも debug/release とも RT 安全。小バッファほど 1 callback の仕事が小さく相対余裕はむしろ大きい。（p99=0 は callback が全て <50µs でヒスト最小バケットに入るため。worst-case は `max_ns` が示す。）
+
+### S1b-2 — dynamic hot-install（`--hot-install-after-secs`）
+
+稼働中ストリームを engine-only で開始 → N 秒後に**主スレッドで `activate` + buffers 構築 → `StartedPluginAudioProcessor`(Send) を wait-free rtrb ring で audio thread に move → callback が一度だけ pop して install**（A0 §8 の所有権ハンドオフ）。
+
+| 構成 | install callback | callback max | xrun | 発音 |
+|---|---|---|---|---|
+| 256 frame・+5s | #862（=5s@256） | 49µs（0.84%） | 0 | peak 0.25（install 後） |
+| 128 frame・+5s | #1722（=5s@128） | 45µs（1.54%） | 0 | peak 0.25（install 後） |
+
+→ install は期待 callback で着地、**move は alloc/lock 無し**、install callback で時間スパイク無し（max 45–49µs に留まる）、install 後に発音。static 経路も回帰なし。
+
+### 実装
+
+`OrbitAudioProcessor` の `plugin`/`buffers` を `Option` 化し、static（stream 前に同期 install）と hot（`InstallMsg` を rtrb で受領）を統一。`InstallMsg{StartedPluginAudioProcessor, HostAudioBuffers, note_port_index}` は全 `Send`（buffers は control thread で事前確保）。CLAP `activate`/`start_processing` は主スレッド、`process` は audio thread。
+
+### S1b 後に残る未実証（さらに後続）
+
+単一プラグイン・ノードグラフ無し（`ConnectNode`）/ `OutputEvents::void()`（plugin→host 未処理）/ block 先頭一括 event / cpal F32 のみ / hot-uninstall（deactivate ハンドオフ）。
 
 ## 11. 関連
 
-- Epic #292 / Issue #293 / research #95
+- Epic #292 / Issue #293 / Issue #295（S1b） / research #95
 - `docs/development/POST_2.0_MASTER_PLAN.html`（§3, §5, §7）
 - `docs/research/RUST_PLUGIN_HOSTING.md`（§0, §A, §6）
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md`（§5 Plugin 予約コマンド・§10 ringbuf 指針）

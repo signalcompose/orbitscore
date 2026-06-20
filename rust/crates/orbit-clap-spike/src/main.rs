@@ -20,7 +20,8 @@ mod events;
 mod host;
 mod sink;
 
-use crate::audio::{AudioThreadStats, OrbitAudioProcessor};
+use crate::audio::{AudioThreadStats, InstallMsg, OrbitAudioProcessor};
+use crate::buffers::HostAudioBuffers;
 use crate::config::FullAudioConfig;
 use crate::discovery::{FoundPlugin, list_plugins_in_file, load_plugin_id_from_path};
 use crate::events::{PluginEvent, make_event_ring};
@@ -44,6 +45,12 @@ struct Cli {
     plugin_id: Option<String>,
     measure_secs: u64,
     bpm: f64,
+    /// Force a fixed cpal buffer size (frames). Overrides negotiated default (1024).
+    /// S1b-1: low-latency strict test (e.g. 128 / 256).
+    buffer_frames: Option<u32>,
+    /// S1b-2 dynamic hot-install: start the stream engine-only, then install the
+    /// plugin into the RUNNING stream after this many seconds. 0 = static (S1 parity).
+    hot_install_after_secs: u64,
 }
 
 fn parse_args() -> anyhow::Result<Cli> {
@@ -52,9 +59,24 @@ fn parse_args() -> anyhow::Result<Cli> {
     let mut plugin_id: Option<String> = None;
     let mut measure_secs: u64 = 10;
     let mut bpm: f64 = 120.0;
+    let mut buffer_frames: Option<u32> = None;
+    let mut hot_install_after_secs: u64 = 0;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--buffer-frames" => {
+                buffer_frames = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--buffer-frames requires a value"))?
+                        .parse()?,
+                );
+            }
+            "--hot-install-after-secs" => {
+                hot_install_after_secs = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--hot-install-after-secs requires a value"))?
+                    .parse()?;
+            }
             "--file-path" | "-f" => {
                 file_path = Some(
                     args.next()
@@ -90,6 +112,8 @@ fn parse_args() -> anyhow::Result<Cli> {
         plugin_id,
         measure_secs,
         bpm,
+        buffer_frames,
+        hot_install_after_secs,
     })
 }
 
@@ -143,26 +167,26 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         .default_output_device()
         .ok_or_else(|| anyhow::anyhow!("no default output device"))?;
 
-    let audio_config = FullAudioConfig::find_best_from(&device, &mut instance)?;
+    let mut audio_config = FullAudioConfig::find_best_from(&device, &mut instance)?;
+    // S1b-1: force a fixed buffer size for low-latency strict testing.
+    // Setting min == max pins both the cpal Fixed() request and the CLAP activate window.
+    if let Some(frames) = cli.buffer_frames {
+        audio_config.min_buffer_size = frames;
+        audio_config.max_likely_buffer_size = frames;
+    }
     println!("Audio config: {audio_config}");
 
     let sample_rate = audio_config.sample_rate;
     let output_channel_count = audio_config.output_channel_count;
     let cpal_config = audio_config.as_cpal_stream_config();
     let clap_config = audio_config.as_clack_plugin_config();
-
-    // --- Activate + start_processing (main thread, before stream) ---------
-    let stopped_proc = instance
-        .activate(|_, _| (), clap_config)
-        .map_err(|e| anyhow::anyhow!("activate failed: {e}"))?;
-
-    let plugin_proc = stopped_proc
-        .start_processing()
-        .map_err(|e| anyhow::anyhow!("start_processing failed: {e}"))?;
+    // Hold config + clap config until the (one-time) plugin install. Static mode
+    // installs before the stream; hot-install hands these over while running.
+    let mut pending_config = Some((audio_config, clap_config));
 
     // --- Sinks -----------------------------------------------------------
     let (counting_sink, counting_frames, counting_peak) = CountingSink::new();
-    let ring_cap = (sample_rate as usize) * audio_config.output_channel_count * 5; // 5 seconds
+    let ring_cap = (sample_rate as usize) * output_channel_count * 5; // 5 seconds
     let (ring_sink, _ring_consumer, ring_drops) = RingTapSink::new(ring_cap);
     let sink: Box<dyn PostMixSink> = Box::new(DualSink {
         a: counting_sink,
@@ -172,23 +196,35 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     // --- Event ring -------------------------------------------------------
     let (event_producer, event_consumer) = make_event_ring(1024);
 
+    // --- Install ring (control -> audio thread, S1b-2) -------------------
+    let (mut install_tx, install_rx) = rtrb::RingBuffer::<InstallMsg>::new(1);
+
     // --- Build Engine (existing orbit-audio sample path) -----------------
-    let engine = Engine::new(sample_rate, audio_config.output_channel_count as u16);
+    let engine = Engine::new(sample_rate, output_channel_count as u16);
 
     // --- Stats ------------------------------------------------------------
     let xrun_counter = Arc::new(AtomicU64::new(0));
     let stats = AudioThreadStats::new();
 
-    // --- Audio processor (moved into cpal closure) ------------------------
+    // --- Audio processor (engine-only; plugin installed below) -----------
     let mut processor = OrbitAudioProcessor::new(
         engine,
-        plugin_proc,
         event_consumer,
-        audio_config,
         sink,
-        note_port_index,
         stats.clone(),
+        install_rx,
     );
+
+    let hot_secs = cli.hot_install_after_secs;
+    if hot_secs == 0 {
+        // STATIC (S1 parity): activate + install synchronously before the stream.
+        let (ac, cc) = pending_config.take().expect("config pending");
+        let msg = build_install_msg(&mut instance, ac, cc, note_port_index, stats.clone())?;
+        processor.install(msg);
+        println!("Plugin installed (static, before stream).");
+    } else {
+        println!("Hot-install mode: stream starts engine-only; plugin installed at +{hot_secs}s.");
+    }
 
     // --- Build cpal stream (F32 -- A0 deviation: F32-only) ----------------
     let xrun_ctr = xrun_counter.clone();
@@ -255,26 +291,26 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 
     // --- Main-thread pump (CLAP requirement: callbacks on main thread) ----
     // PluginInstance<OrbitClapHost> is !Send, so we pump here on main thread.
-    // Use recv_timeout so we stop pumping after measure time.
     let pump_deadline = Instant::now() + measure_duration + Duration::from_millis(200);
-    loop {
-        let timeout = pump_deadline.saturating_duration_since(Instant::now());
-        if timeout.is_zero() {
-            break;
+    if hot_secs > 0 {
+        // Phase 1: engine-only for hot_secs (notes are discarded until install).
+        pump_until(
+            &mut instance,
+            &receiver,
+            Instant::now() + Duration::from_secs(hot_secs),
+        );
+        // Hot-install (S1b-2): activate + build buffers on the main thread, then hand
+        // the started processor to the audio thread via the wait-free install ring.
+        let (ac, cc) = pending_config.take().expect("config pending");
+        let msg = build_install_msg(&mut instance, ac, cc, note_port_index, stats.clone())?;
+        match install_tx.push(msg) {
+            Ok(()) => println!("[hot-install] plugin handed to audio thread at +{hot_secs}s"),
+            Err(_) => anyhow::bail!("install ring full — hot-install failed"),
         }
-        match receiver.recv_timeout(timeout.min(Duration::from_millis(10))) {
-            Ok(MainThreadMessage::RunOnMainThread) => {
-                instance.call_on_main_thread_callback();
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if Instant::now() >= pump_deadline {
-                    break;
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                break;
-            }
-        }
+        // Phase 2: remaining time with the plugin live.
+        pump_until(&mut instance, &receiver, pump_deadline);
+    } else {
+        pump_until(&mut instance, &receiver, pump_deadline);
     }
 
     // Wait for driver
@@ -304,6 +340,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let max_ns = stats.max_ns.load(Ordering::Relaxed);
     let sum_ns = stats.sum_ns.load(Ordering::Relaxed);
     let resize_count = stats.buffer_resize_count.load(Ordering::Relaxed);
+    let installed_at = stats.installed_at_callback.load(Ordering::Relaxed);
     // post-mix peak amplitude (abs). > 0 proves the plugin actually produced sound
     // (callbacks running != audible output).
     let post_mix_peak = f32::from_bits(counting_peak.load(Ordering::Relaxed));
@@ -332,6 +369,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     println!("sink_frames:          {sink_frames}");
     println!("ring_tap_drops:       {ring_drop_count}");
     println!("buffer_resize_count:  {resize_count}");
+    let install_str = if installed_at == u64::MAX {
+        "(static / before stream)".to_string()
+    } else {
+        format!("callback #{installed_at}")
+    };
+    println!("plugin_installed_at:  {install_str}");
     println!("driver_beats_sent:    {beats}");
     println!("=============================================");
 
@@ -362,6 +405,54 @@ fn select_plugin(path: &Path, id: Option<&str>) -> anyhow::Result<FoundPlugin> {
             let found = load_plugin_id_from_path(path, id)
                 .map_err(|e| anyhow::anyhow!("Discovery error: {e}"))?;
             found.ok_or_else(|| anyhow::anyhow!("No plugin with id '{id}' in {}", path.display()))
+        }
+    }
+}
+
+/// Activate the plugin and assemble an [`InstallMsg`] (control thread).
+///
+/// `activate` + `start_processing` run on the main thread (CLAP requirement); the
+/// resulting `StartedPluginAudioProcessor` is `Send` and can be handed to the audio
+/// thread. Buffers are pre-allocated here so installing in the callback never allocs.
+fn build_install_msg(
+    instance: &mut PluginInstance<OrbitClapHost>,
+    audio_config: FullAudioConfig,
+    clap_config: PluginAudioConfiguration,
+    note_port_index: u16,
+    stats: std::sync::Arc<AudioThreadStats>,
+) -> anyhow::Result<InstallMsg> {
+    let plugin = instance
+        .activate(|_, _| (), clap_config)
+        .map_err(|e| anyhow::anyhow!("activate failed: {e}"))?
+        .start_processing()
+        .map_err(|e| anyhow::anyhow!("start_processing failed: {e}"))?;
+    let buffers = HostAudioBuffers::from_config(audio_config, stats);
+    Ok(InstallMsg {
+        plugin,
+        buffers,
+        note_port_index,
+    })
+}
+
+/// Pump main-thread CLAP callbacks until `deadline`.
+fn pump_until(
+    instance: &mut PluginInstance<OrbitClapHost>,
+    receiver: &mpsc::Receiver<MainThreadMessage>,
+    deadline: Instant,
+) {
+    loop {
+        let timeout = deadline.saturating_duration_since(Instant::now());
+        if timeout.is_zero() {
+            break;
+        }
+        match receiver.recv_timeout(timeout.min(Duration::from_millis(10))) {
+            Ok(MainThreadMessage::RunOnMainThread) => instance.call_on_main_thread_callback(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 }
