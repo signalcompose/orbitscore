@@ -1,6 +1,6 @@
 # Post-2.0 エンジン方針 + ライセンス/配布/収益モデル
 
-> **ステータス: 方向収束 + 次フェーズ・アーキ確定。post-2.0。2026-06-19 engine=Rust 決定 / 2026-06-21（Issue #298）楽器配置・fault・egress・シーケンス確定（§2）。** A0+S1+S1b（PR #294）+S2（PR #297）実装済、次フェーズ（α/β/γ/δ）は未着手。`docs/research/NATIVE_ENGINE_TRACKTION_VSCODIUM.md`（Tracktion feasibility）の Tracktion 寄り結論を**本書が更新**する。
+> **ステータス: 方向収束 + 次フェーズ・アーキ確定。post-2.0。2026-06-19 engine=Rust 決定 / 2026-06-21（Issue #298）楽器配置・fault・egress 確定 + ロードマップを「土台2本→改良層」に再優先順位化（§2.5）。** A0+S1+S1b（PR #294）+S2（PR #297）実装済。**土台 = ① VSCodium化（OrbitStudio・最初の /goal = 2.0.0 parity・先決）+ ② ネイティブエンジン（α #300〜）／ 改良層（β audio DSL⊇pitch・audio 機能）は土台の後**。`docs/research/NATIVE_ENGINE_TRACKTION_VSCODIUM.md`（Tracktion feasibility）の Tracktion 寄り結論を**本書が更新**する。
 
 ---
 
@@ -58,8 +58,13 @@
   - **LinkAudio** は **非 DAW / inter-app 補助**（live rig 同期等）に位置づけ降格（便利だが運用が重い）。
 - **設計制約**: **engine を clean に埋め込み可能に保つ（daemon/engine ↔ editor の分離を崩さない）** — b2 の feasibility を担保する。今すぐ作る話ではなく「壊さない」制約。
 
-### 2.5 シーケンス
-**α recovery floor（fault ①）→ β audio DSL ⊇ pitch DSL（+ #213 `fixpitch()`/`time()`・in-process・S1 基盤）→ γ out-of-process sandbox（3rd-party + effects 隔離・fault ②）→ δ 3rd-party VST3/AU（最難・最後）**。fault と features-as-plugin の**分離性**で staging 可（β は sandbox 非依存で先行可）。β は **C1 pitch モデル spec 先行**が前提。
+### 2.5 ロードマップ（2026-06-21 owner 再優先順位化 = 土台2本 → 改良層）
+**今後の様々な改良が載る土台は2本: ① VSCodium化（OrbitStudio）+ ② ネイティブ音声エンジン。** DSL 拡張・audio 機能は**土台が成ってから**（今の `.orbs` DSL は表現力として充分・急がない・やる時はそれに集中する）。
+
+- **土台① OrbitStudio（VSCodium）→ 2.0.0 parity（近期 focus・先決）**: 既存 SC スタックで動くアプリを VSCodium で（Track B / B1 rebrand rebuild）。**engine 非依存**（2.0.0 は SC 既定）なので ② と別コードベース＝並行可だが、focus は ① に置く。
+- **土台② ネイティブ音声エンジン（Rust）**: S1/S2 済 → **α recovery floor（fault ①・issue #300）** → 成熟（**γ out-of-process sandbox（fault ②・3rd-party + effects）** → **δ 3rd-party VST3/AU** → 既定 cutover #108）。
+- **改良層（土台の後・集中して）**: **β audio DSL ⊇ pitch DSL（+ #213 `fixpitch()`/`time()`・in-process・C1 pitch spec 先行が前提）** / audio 機能（slice #239 / audio `[ ]` #238）。
+- **旧版（α→β→γ→δ 一直線）からの変更**: **VSCodium を土台として前倒し**（master plan の「Track B は engine の後（A1–A2 後）」を撤回）/ **β を改良層へ後置**（engine 土台が成る後）。fault と features-as-plugin の分離性は維持（staging の自由度）。
 
 ### 2.6 売り物化 = DSP を共有 crate に
 - stretch / sampler DSP を再利用可能 crate にし、**engine ノード（DSL 駆動・in-process）**と、任意の **standalone サンプラー製品（MIDI/標準駆動・他 DAW・単体販売）**の2フロントエンドで共有。engine を plugin 境界に通さずに製品も作れる。1st-party プラグイン shell = **nih-plug（Rust・ISC・CLAP+VST3 を1コードベース）**。
@@ -97,17 +102,24 @@
 - **pitch/song 再設計はアプリ優先**、必要なら `.vsix` に backport（VS Code 利用者カバーは二次目標）。
 - 命名: **OrbitScore = 言語（拡張でもアプリでも中で生きる）/ OrbitStudio = 専用アプリ（候補名）**。移調は `transpose()`（`transport` は再生ヘッド連想で不可）。
 
-## 7. 次の一手（スパイク完了 → 次フェーズ・アーキ確定）
+## 7. 次の一手（スパイク完了 → 土台2本 → 改良層・§2.5 と同一）
 
 **完了**: feasibility research（`docs/research/RUST_PLUGIN_HOSTING.md`）→ **A0+S1+S1b（PR #294）= CLAP hosting が RT 安全に成立**（in-process clack-host）→ **S2（PR #297）= daemon dispatch seam parity**。詳細 `POST_2.0_A0_RT_INTEGRATION_DESIGN.md`。
 
-**次フェーズ・シーケンス（2026-06-21 確定・§2.5 と同一・Issue #298）**:
-- **α: recovery floor（fault ①）** — daemon supervision + auto-respawn + 最小 recovery contract（接続再確立 + active loops 復帰 / 可聴ギャップ許容 / in-flight one-shot drop / transport 再 anchor）。Done = fault-injection kill-test（kill -9 daemon + 故意 segfault プラグイン〔S1b misbehave synth を拡張・再利用〕で liveness + 復旧後 correctness〔transport desync・orphaned play_id 無し〕）+ 既存テスト全緑 / SC 既定無改変。
-- **β: audio DSL ⊇ pitch DSL** — `#213 fixpitch()/time()` 本体（今 stub）含む。in-process・S1 基盤。**C1 pitch モデル spec 先行が前提**（pitch を audio の真部分集合に設計）。
-- **γ: out-of-process sandbox（fault ②）** — 3rd-party + effects 隔離。shared-mem audio / RT-safe event IPC / watchdog→respawn / sample-bank 子転送 / +~1 block latency。**最大の未構築サブシステム**。
-- **δ: 3rd-party VST3/AU** — 成熟度順（AU は `objc2-avf-audio`/AVAudioEngine・AUv3 registration の落とし穴 / VST3 は `vst3` crate MIT・host 手書きで工数最大）。最後。
+**土台層（先に作る・両方が改良の土台）**:
+- **① OrbitStudio（VSCodium）→ 2.0.0 parity（近期 focus・先決・最初の `/goal`・issue #301）** — 既存 SC スタックで動くアプリを VSCodium で（Track B / B1 rebrand rebuild）。engine 非依存。未確証 = VSCodium で既存 .vsix/extension を動かす形 / VST GUI の Electron 共存（着手時に feasibility）。
+- **② ネイティブ音声エンジン（Rust）** — ①と並行可（別コードベース）。S1/S2 済 →
+  - **α recovery floor（fault ①・issue #300）** — daemon supervision + auto-respawn + 最小 recovery contract（接続再確立 + active loops 復帰 / 可聴ギャップ許容 / one-shot drop / transport 再 anchor）。Done = fault-injection kill-test（kill -9 + 故意 segfault プラグイン〔S1b misbehave synth 拡張・再利用〕で liveness + 復旧後 correctness〔transport desync・orphaned play_id 無し〕）+ 既存テスト全緑 / SC 既定無改変。
+  - **γ out-of-process sandbox（fault ②）** — 3rd-party + effects 隔離。shared-mem audio / RT-safe event IPC / watchdog→respawn / +~1 block latency。**最大の未構築サブシステム**。
+  - **δ 3rd-party VST3/AU** — 成熟度順（AU `objc2-avf-audio` / VST3 `vst3` crate MIT・工数最大）。
+  - 既定 cutover（#108・Rust を default audio backend に）。
+
+**改良層（土台の後・集中して）**:
+- **β audio DSL ⊇ pitch DSL** — `#213 fixpitch()/time()`（今 stub）含む。in-process・S1 基盤。**C1 pitch モデル spec 先行が前提**（pitch を audio の真部分集合に）。
+- audio 機能: slice #239 / audio `[ ]` #238。
 - **egress**（§2.4）: b1 bridge プラグイン主案 / b2 engine 埋め込み（後付け）/ LinkAudio は非DAW補助。
-- **別途調査(open)**: time-stretch Signalsmith の Rust binding（`ssstretch`/`signalsmith-stretch` 兆候・詳細未確認）/ 配布（App Store sandbox・notarize/Steam）。
+
+**別途調査(open)**: time-stretch Signalsmith の Rust binding（`ssstretch`/`signalsmith-stretch`・詳細未確認）/ 配布（App Store sandbox・notarize/Steam）/ γ out-of-process・b2 engine-as-plugin の feasibility。
 
 ## 8. Caveats
 - 既存 Rust engine は PoC（v0.0.1・Mutex・stretch 無し）。「foundation 済」であって「完成」ではない。
