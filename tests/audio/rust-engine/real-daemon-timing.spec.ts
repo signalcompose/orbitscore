@@ -31,6 +31,7 @@ const RUN = process.env.ORBIT_REAL_DAEMON === '1'
 const REPO_ROOT = path.resolve(__dirname, '../../../')
 const DAEMON_BIN = path.join(REPO_ROOT, 'rust/target/release/orbit-audio-daemon')
 const KICK = path.join(REPO_ROOT, 'test-assets/audio/kick.wav')
+const SNARE = path.join(REPO_ROOT, 'test-assets/audio/snare.wav')
 
 interface StatsSample {
   wallMs: number
@@ -171,6 +172,60 @@ describe.runIf(RUN)('RustEnginePlayer timing against real daemon', () => {
     expect(minLead).toBeGreaterThan(0) // 全 dispatch が cursor を上回る = onset clip しない
     expect(maxAbsDrift).toBeLessThan(0.05) // anchor 推定が真値と 50ms 以内
     expect(maxDeltaErr).toBeLessThan(0.05) // 相対 timing が ±50ms 以内で保存
+    expect(maxXruns).toBe(0)
+  }, 20_000)
+
+  it('polymeter: 2 シーケンスが各自の周期を独立に保持する（3:4）', async () => {
+    // seqA(KICK)=400ms 周期・seqB(SNARE)=300ms 周期 を同時走行。各シーケンスの
+    // inter-onset が自分の周期を保てば、daemon 経路で polymeter parity が成立する
+    // （周期計算は不変の TS Sequence 層の責務。本テストは backend が与えられた時刻を
+    // 崩さないことを実証する）。
+    const dispatches: Array<DispatchInfo & { file: string }> = []
+    const player = new RustEnginePlayer({
+      wsUrlOverride: daemon.url,
+      lookaheadSec: 0.05,
+      onDispatch: (info) => dispatches.push({ ...info, file: info.filepath }),
+    })
+    await player.boot()
+    await player.loadBuffer(KICK)
+    await player.loadBuffer(SNARE)
+
+    const A_MS = 400 // 3 against
+    const B_MS = 300 // 4 against
+    const SPAN_MS = 2400 // LCM 周期
+    for (let t = 0; t <= SPAN_MS; t += A_MS) player.scheduleEvent(KICK, t, 0, 0, 'seqA')
+    for (let t = 0; t <= SPAN_MS; t += B_MS) player.scheduleEvent(SNARE, t, 0, 0, 'seqB')
+    player.start()
+    await new Promise((r) => setTimeout(r, SPAN_MS + 1200))
+    await player.quit()
+
+    const interOnsetErr = (file: string, periodMs: number): number => {
+      const times = dispatches
+        .filter((d) => d.file === file)
+        .map((d) => d.timeSec)
+        .sort((a, b) => a - b)
+      let maxErr = 0
+      for (let i = 1; i < times.length; i++) {
+        maxErr = Math.max(maxErr, Math.abs(times[i] - times[i - 1] - periodMs / 1000))
+      }
+      return maxErr
+    }
+    const aCount = dispatches.filter((d) => d.file === KICK).length
+    const bCount = dispatches.filter((d) => d.file === SNARE).length
+    const aErr = interOnsetErr(KICK, A_MS)
+    const bErr = interOnsetErr(SNARE, B_MS)
+    const maxXruns = Math.max(...stats.map((s) => s.xruns))
+
+    console.log('\n===== S2 polymeter verdict (real daemon) =====')
+    console.log(`seqA(400ms): ${aCount} hits, inter-onset max err = ${(aErr * 1000).toFixed(1)}ms`)
+    console.log(`seqB(300ms): ${bCount} hits, inter-onset max err = ${(bErr * 1000).toFixed(1)}ms`)
+    console.log(`max observed xruns: ${maxXruns}`)
+    console.log('==============================================\n')
+
+    expect(aCount).toBe(SPAN_MS / A_MS + 1) // 7 hits
+    expect(bCount).toBe(SPAN_MS / B_MS + 1) // 9 hits
+    expect(aErr).toBeLessThan(0.05) // seqA の 400ms 周期が保存
+    expect(bErr).toBeLessThan(0.05) // seqB の 300ms 周期が独立に保存
     expect(maxXruns).toBe(0)
   }, 20_000)
 })
