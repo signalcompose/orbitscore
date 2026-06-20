@@ -18,7 +18,8 @@ pub trait PostMixSink: Send {
 
 // ---- CountingSink -------------------------------------------------------
 
-/// Minimal no-alloc sink: counts received frames and tracks peak amplitude.
+/// Minimal no-alloc sink: counts received interleaved samples (frames × channels) and
+/// tracks peak amplitude.
 /// Peak is stored as f32 bits in an AtomicU32 (non-negative only — we store abs()).
 pub struct CountingSink {
     pub frames_received: Arc<AtomicU64>,
