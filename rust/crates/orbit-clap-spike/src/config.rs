@@ -183,7 +183,16 @@ impl PluginAudioPortsConfig {
 /// Query a plugin's audio ports via the AudioPorts extension.
 pub fn get_config_from_ports(handle: &mut PluginMainThreadHandle, is_input: bool) -> PluginAudioPortsConfig {
     let Some(ports) = handle.get_extension::<PluginAudioPorts>() else {
-        return PluginAudioPortsConfig::default_stereo();
+        eprintln!(
+            "[orbit-clap-spike] plugin has no AudioPorts extension; assuming {}",
+            if is_input { "no input" } else { "default stereo output" }
+        );
+        // empty() for input (a synth has none), default stereo for output.
+        return if is_input {
+            PluginAudioPortsConfig::empty()
+        } else {
+            PluginAudioPortsConfig::default_stereo()
+        };
     };
 
     let mut buf = AudioPortInfoBuffer::new();
@@ -192,6 +201,7 @@ pub fn get_config_from_ports(handle: &mut PluginMainThreadHandle, is_input: bool
 
     for i in 0..ports.count(handle, is_input) {
         let Some(info) = ports.get(handle, i, is_input, &mut buf) else {
+            eprintln!("[orbit-clap-spike] port info unavailable for index {i}; skipping");
             continue;
         };
 

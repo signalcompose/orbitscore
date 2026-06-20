@@ -125,6 +125,15 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
+    // Usability guard: installing at/after the measurement ends means the driver finishes
+    // sending notes before the plugin exists, so it would receive none (misleading 0 output).
+    if cli.hot_install_after_secs > 0 && cli.hot_install_after_secs >= cli.measure_secs {
+        eprintln!(
+            "[orbit-clap-spike] WARN: --hot-install-after-secs ({}) >= --measure-secs ({}); plugin will receive no notes",
+            cli.hot_install_after_secs, cli.measure_secs
+        );
+    }
+
     // --- Discover plugin --------------------------------------------------
     let found = select_plugin(&cli.file_path, cli.plugin_id.as_deref())?;
     println!(
@@ -262,6 +271,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             }
             let beat_start = Instant::now();
 
+            // push drop is safe here: the event rate (a few notes/sec) is far below the
+            // 1024-slot ring capacity, so the ring never fills under the driver pattern.
             let _ = event_prod.push(PluginEvent::NoteOn {
                 key: 60,
                 channel: 0,
@@ -313,8 +324,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         pump_until(&mut instance, &receiver, pump_deadline);
     }
 
-    // Wait for driver
-    let beats = driver_thread.join().unwrap_or(0);
+    // Wait for driver. A driver panic invalidates the measurement, so fail loudly rather
+    // than silently reporting a normal-looking run with beats=0.
+    let beats = match driver_thread.join() {
+        Ok(b) => b,
+        Err(_) => anyhow::bail!("driver thread panicked — measurement invalid"),
+    };
     println!("Driver sent {beats} beats. Stopping stream...");
 
     // --- Stop stream (drop before deactivating instance) ------------------
@@ -341,6 +356,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let sum_ns = stats.sum_ns.load(Ordering::Relaxed);
     let resize_count = stats.buffer_resize_count.load(Ordering::Relaxed);
     let installed_at = stats.installed_at_callback.load(Ordering::Relaxed);
+    let process_errors = stats.process_error_count.load(Ordering::Relaxed);
     // post-mix peak amplitude (abs). > 0 proves the plugin actually produced sound
     // (callbacks running != audible output).
     let post_mix_peak = f32::from_bits(counting_peak.load(Ordering::Relaxed));
@@ -369,6 +385,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     println!("sink_frames:          {sink_frames}");
     println!("ring_tap_drops:       {ring_drop_count}");
     println!("buffer_resize_count:  {resize_count}");
+    println!("plugin_process_errors:{process_errors}");
     let install_str = if installed_at == u64::MAX {
         "(static / before stream)".to_string()
     } else {
@@ -452,7 +469,12 @@ fn pump_until(
                     break;
                 }
             }
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // All senders dropped. Expected only at teardown; if it happens mid-run the
+                // plugin stops getting main-thread callbacks, so surface it.
+                eprintln!("[orbit-clap-spike] main-thread pump: sender disconnected");
+                break;
+            }
         }
     }
 }

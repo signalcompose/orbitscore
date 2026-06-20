@@ -1,9 +1,13 @@
 //! Plugin audio buffer management (A0 §4.1).
 //!
 //! Ported from clack cpal example `host/audio/buffers.rs`.
-//! Key difference from example: write_to_cpal_buffer no longer overwrites --
+//! Key difference from example: `add_to_cpal_buffer` no longer overwrites --
 //! it ADD-mixes into the destination (A0 §4.1 step d: plugin_out + data).
 //! PostMixSink sees the fully-summed signal (engine + plugin).
+//!
+//! RT assumption: audio port channel count is stable for the host's lifetime (port
+//! rescan is not supported — `host.rs` returns false). Under that assumption
+//! `prepare_plugin_buffers` reuses pre-allocated buffers with no RT alloc.
 
 use crate::audio::AudioThreadStats;
 use crate::config::FullAudioConfig;
@@ -87,8 +91,12 @@ impl HostAudioBuffers {
     pub fn ensure_buffer_size_matches(&mut self, cpal_buffer_len: usize) {
         let frames = self.cpal_buf_len_to_frame_count(cpal_buffer_len);
         if frames > self.actual_frame_count {
-            // Potential alloc in RT -- counted atomically and surfaced (A0 §5).
+            // RT-safe only when buffer size is stable (BufferSize::Fixed, A0 §5): the
+            // resize/eprintln below are themselves RT violations and fire ONLY if cpal
+            // breaks the fixed-size contract. The atomic counter (RT-safe) always records
+            // it; the eprintln is debug-only to keep the syscall out of release builds.
             self.stats.buffer_resize_count.fetch_add(1, Ordering::Relaxed);
+            #[cfg(debug_assertions)]
             eprintln!(
                 "[orbit-clap-spike] WARN: buffer resize ({} -> {} frames) -- indicates BufferSize::Fixed did not hold",
                 self.actual_frame_count, frames,
@@ -216,12 +224,69 @@ impl HostAudioBuffers {
                     };
                 }
             }
-            _ => {}
+            _ => {
+                // Unreachable today (config.rs filters output to 1/2 ch). Defensive: zero
+                // `muxed` so a future channel-count change cannot add-mix stale data.
+                muxed.fill(0.0);
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[orbit-clap-spike] WARN: unhandled channel layout plugin_ch={plugin_ch} out_ch={out_ch}; plugin mix skipped"
+                );
+            }
         }
 
         // Add-mix (A0 §4.1): do NOT overwrite engine contribution already in `destination`.
         for (dst, &src) in destination.iter_mut().zip(muxed.iter()) {
             *dst += src;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{AudioPortLayout, PluginAudioPortInfo, PluginAudioPortsConfig};
+
+    fn stereo_config(frames: u32) -> FullAudioConfig {
+        let out = PluginAudioPortsConfig {
+            main_port_index: 0,
+            ports: vec![PluginAudioPortInfo {
+                _id: None,
+                port_layout: AudioPortLayout::Stereo,
+                name: "out".into(),
+            }],
+        };
+        FullAudioConfig {
+            plugin_output_port_config: out,
+            plugin_input_port_config: PluginAudioPortsConfig {
+                main_port_index: 0,
+                ports: vec![],
+            },
+            output_channel_count: 2,
+            min_buffer_size: frames,
+            max_likely_buffer_size: frames,
+            sample_rate: 48_000,
+        }
+    }
+
+    #[test]
+    fn add_to_cpal_buffer_sums_instead_of_overwriting() {
+        // Core A0 §4.1 step (d) invariant: plugin output is ADDED to the engine's, not
+        // overwritten. A future change that overwrites would silently drop the engine.
+        let stats = AudioThreadStats::new();
+        let mut buffers = HostAudioBuffers::from_config(stereo_config(4), stats);
+
+        // Plugin output: planar [ch0 frames .. ch1 frames], all 0.5.
+        for v in buffers.output_port_channels[0].iter_mut() {
+            *v = 0.5;
+        }
+
+        // Engine already wrote 1.0 (2 frames interleaved stereo = 4 samples).
+        let mut dest = vec![1.0f32; 4];
+        buffers.add_to_cpal_buffer(&mut dest);
+
+        for &s in &dest {
+            assert!((s - 1.5).abs() < 1e-6, "expected add-mix 1.5, got {s}");
         }
     }
 }

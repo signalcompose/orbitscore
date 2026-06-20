@@ -88,3 +88,26 @@ impl PostMixSink for RingTapSink {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counting_sink_tracks_abs_peak_and_frame_count() {
+        let (mut sink, frames, peak) = CountingSink::new();
+        sink.commit(&[0.1, -0.7, 0.3, -0.2]);
+        assert_eq!(frames.load(Ordering::Relaxed), 4);
+        let p = f32::from_bits(peak.load(Ordering::Relaxed));
+        assert!((p - 0.7).abs() < 1e-6, "abs peak should be 0.7, got {p}");
+    }
+
+    #[test]
+    fn ring_tap_sink_counts_drops_when_full() {
+        // Capacity 4, push 6 interleaved samples -> at least 2 must be dropped + counted
+        // (A0 §6 acceptance 5: ring-full drops are counted, never blocking).
+        let (mut sink, _consumer, drops) = RingTapSink::new(4);
+        sink.commit(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert!(drops.load(Ordering::Relaxed) >= 2);
+    }
+}

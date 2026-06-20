@@ -35,16 +35,22 @@ pub struct AudioThreadStats {
     pub sum_ns: AtomicU64,
     /// Total samples received by the sink (interleaved, so frames x channels).
     pub sink_frames: AtomicU64,
-    /// p99 histogram: HIST_BUCKETS x 1 us buckets.
-    /// Bucket i covers [i us, (i+1) us). Bucket HIST_BUCKETS-1 = >=63 us overflow.
+    /// p99 histogram: HIST_BUCKETS x BUCKET_NS (50 us) buckets, covering 0..51.2 ms.
+    /// Bucket i covers [i*50us, (i+1)*50us). Bucket HIST_BUCKETS-1 = >=51.15 ms overflow.
+    /// Resolution/range track the BUCKET_NS / HIST_BUCKETS constants above.
     pub hist_us: [AtomicU64; HIST_BUCKETS],
     /// Buffer resize events (should be 0 with BufferSize::Fixed, A0 §5).
     /// Incremented from ensure_buffer_size_matches via the shared Arc.
     pub buffer_resize_count: AtomicU64,
-    /// Callback index at which the plugin was hot-installed via the install ring.
-    /// u64::MAX = never installed via channel (static mode installs before the stream).
-    /// S1b-2: proves the dynamic ownership handoff landed on the audio thread.
+    /// Number of callbacks completed before the plugin was hot-installed via the install
+    /// ring (i.e. the install landed on the next callback). u64::MAX = never installed via
+    /// channel (static mode installs before the stream). S1b-2: proves the dynamic
+    /// ownership handoff landed on the audio thread.
     pub installed_at_callback: AtomicU64,
+    /// Count of callbacks where `plugin.process(...)` returned Err. Surfaced so a
+    /// plugin failing every block is not silently invisible (peak would read 0 with
+    /// no other signal). Single fetch_add — RT-safe.
+    pub process_error_count: AtomicU64,
 }
 
 impl AudioThreadStats {
@@ -58,6 +64,7 @@ impl AudioThreadStats {
             hist_us: std::array::from_fn(|_| AtomicU64::new(0)),
             buffer_resize_count: AtomicU64::new(0),
             installed_at_callback: AtomicU64::new(u64::MAX),
+            process_error_count: AtomicU64::new(0),
         })
     }
 
@@ -113,7 +120,10 @@ pub struct OrbitAudioProcessor {
     plugin: Option<StartedPluginAudioProcessor<OrbitClapHost>>,
     /// Lock-free event ring consumer (A0 §4.2).
     event_consumer: PluginEventConsumer,
-    /// Pre-allocated CLAP event buffer (cleared each callback, no RT alloc).
+    /// Pre-allocated CLAP event buffer (cleared each callback). No RT alloc as long as
+    /// the events drained per callback stay within its capacity. It is sized to the
+    /// event ring capacity (1024, see main.rs), so a single full drain never exceeds it.
+    /// Production (S2) should use a fixed-size CLAP event ring rather than a Vec-backed buffer.
     event_scratch: EventBuffer,
     /// Pre-allocated plugin audio buffers (arrive with the plugin). None until installed.
     buffers: Option<HostAudioBuffers>,
@@ -144,7 +154,9 @@ impl OrbitAudioProcessor {
             engine,
             plugin: None,
             event_consumer,
-            event_scratch: EventBuffer::with_capacity(256),
+            // Sized to the event ring capacity (main.rs make_event_ring(1024)) so a single
+            // drain of the whole ring never reallocates on the audio thread.
+            event_scratch: EventBuffer::with_capacity(1024),
             buffers: None,
             sink,
             steady_counter: 0,
@@ -200,19 +212,30 @@ impl OrbitAudioProcessor {
             let frame_count = buffers.cpal_buf_len_to_frame_count(data.len());
             let (ins, mut outs) = buffers.prepare_plugin_buffers(data.len());
 
-            let _ = plugin.process(
-                &ins,
-                &mut outs,
-                &input_events,
-                &mut OutputEvents::void(),
-                Some(self.steady_counter),
-                None,
-            );
+            // RT discard is correct (cannot return/panic from the callback), but a plugin
+            // erroring every block would otherwise be invisible — count it instead.
+            if plugin
+                .process(
+                    &ins,
+                    &mut outs,
+                    &input_events,
+                    &mut OutputEvents::void(),
+                    Some(self.steady_counter),
+                    None,
+                )
+                .is_err()
+            {
+                self.stats
+                    .process_error_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
 
             // (d) Add-mix plugin output into data (A0 §4.1 step d: engine + plugin summed).
             buffers.add_to_cpal_buffer(data);
 
-            // (f) Advance steady counter.
+            // Advance steady counter (A0 §4.1 step f). Note: step (f) executes here, inside
+            // the plugin branch, before the unconditional step (e) tap below — intentional
+            // (the counter only advances when the plugin processed a block).
             self.steady_counter += frame_count as u64;
         } else {
             // No plugin yet: drain-and-discard queued notes so the ring never stalls.
@@ -235,5 +258,45 @@ impl OrbitAudioProcessor {
         // Update p99 histogram: bucket = floor(elapsed_ns / BUCKET_NS), capped at overflow bucket.
         let bucket = ((elapsed_ns / BUCKET_NS) as usize).min(HIST_BUCKETS - 1);
         self.stats.hist_us[bucket].fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn p99_none_when_no_callbacks() {
+        let s = AudioThreadStats::new();
+        assert_eq!(s.p99_ns(), None);
+    }
+
+    #[test]
+    fn p99_all_in_bucket_zero_returns_zero() {
+        let s = AudioThreadStats::new();
+        s.callback_count.store(100, Ordering::Relaxed);
+        s.hist_us[0].store(100, Ordering::Relaxed);
+        // 99th percentile of 100 callbacks all in bucket 0 -> lower bound of bucket 0.
+        assert_eq!(s.p99_ns(), Some(0));
+    }
+
+    #[test]
+    fn p99_all_in_overflow_returns_overflow_lower_bound() {
+        let s = AudioThreadStats::new();
+        s.callback_count.store(50, Ordering::Relaxed);
+        s.hist_us[HIST_BUCKETS - 1].store(50, Ordering::Relaxed);
+        assert_eq!(s.p99_ns(), Some((HIST_BUCKETS - 1) as u64 * BUCKET_NS));
+    }
+
+    #[test]
+    fn p99_crosses_into_tail_bucket() {
+        // 99 callbacks at bucket 2, 1 slow callback at bucket 10.
+        // ceil(99% of 100) = 99; cumulative reaches 99 only at bucket 2 (the 99th),
+        // so p99 = bucket 2 lower bound.
+        let s = AudioThreadStats::new();
+        s.callback_count.store(100, Ordering::Relaxed);
+        s.hist_us[2].store(99, Ordering::Relaxed);
+        s.hist_us[10].store(1, Ordering::Relaxed);
+        assert_eq!(s.p99_ns(), Some(2 * BUCKET_NS));
     }
 }

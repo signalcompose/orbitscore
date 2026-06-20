@@ -76,6 +76,8 @@ impl<'a> SharedHandler<'a> for OrbitHostShared {
     }
 
     fn request_callback(&self) {
+        // Ignore send errors: a closed channel means the main thread has already exited,
+        // which only happens at teardown.
         let _ = self.sender.send(MainThreadMessage::RunOnMainThread);
     }
 }

@@ -33,8 +33,23 @@ pub struct PluginDescriptor {
 
 impl PluginDescriptor {
     pub fn try_from(p: &clack_host::plugin::PluginDescriptor) -> Option<Self> {
+        // Log skips so a present-but-unparseable plugin is not reported as "no plugins found".
+        let Some(id_cstr) = p.id() else {
+            eprintln!("[orbit-clap-spike] skipping plugin with no id");
+            return None;
+        };
+        let id = match id_cstr.to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                eprintln!(
+                    "[orbit-clap-spike] skipping plugin with non-UTF8 id: {:?}",
+                    id_cstr.to_bytes()
+                );
+                return None;
+            }
+        };
         Some(Self {
-            id: p.id()?.to_str().ok()?.to_string(),
+            id,
             name: p.name().map(|v| v.to_string_lossy().to_string()),
             version: p.version().map(|v| v.to_string_lossy().to_string()),
         })
