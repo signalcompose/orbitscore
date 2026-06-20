@@ -1,6 +1,6 @@
 # A0 — RT 統合設計（CLAP プラグインを orbit-audio に RT 安全に載せる）
 
-> **ステータス: ドラフト（S1 着手の前提）。post-2.0 / Epic #292 / Issue #293。** 2026-06-20 作成。
+> **ステータス: S1 実行完了 — verdict = PASS（feasibility→proof 達成）。詳細は §12。post-2.0 / Epic #292 / Issue #293。** 2026-06-20 作成・同日 S1 実行。
 > 正本ロードマップ: `docs/development/POST_2.0_MASTER_PLAN.html`（§3 最初の1手 = A0+S1）。
 > hosting feasibility 一次情報: `docs/research/RUST_PLUGIN_HOSTING.md`。daemon 契約: `docs/research/ENGINE_DAEMON_PROTOCOL.md`。
 
@@ -210,6 +210,44 @@ S1 で追加する依存と license（2026-06-20 GitHub 一次確認）:
 - **`output.rs` の改変範囲**: 既存 `start_default_output` は無改変で温存し、S1 用に並行の `start_output_with_plugin`（仮）を足すか、closure を差し替え可能にするか。既存テストを壊さない加算的設計を優先。
 
 ---
+
+## 12. S1 実行結果 / Verdict（2026-06-20）
+
+実装: `rust/crates/orbit-clap-spike`（host・ワークスペース member・`publish=false`）+ `rust-spike/clap-test-synth`（自作 CLAP synth・良性/故意違反）。clack を `f874e85` に git pin。macOS aarch64・cargo 1.96・**debug build**。config = 2ch F32 @ 44100Hz・**1024 フレームブロック（budget ≈ 23.2ms）**。120bpm で C4 を NoteOn/NoteOff 連打。
+
+### 計測結果
+
+| 指標 | good（60s 持続） | misbehave（12s・RT 違反注入） |
+|---|---|---|
+| total_callbacks | 2594 | **24（崩壊）** |
+| **xruns**（cpal err_fn） | 0 | **0** ← §下記の重要知見 |
+| callback_min | 123µs | 408µs |
+| callback_mean | 339µs | **494ms** |
+| callback_p99 | 400µs | 51ms（ヒスト飽和） |
+| callback_max | **509µs（budget の 2.2%）** | **1.94 秒** |
+| post_mix_peak | **0.25（発音確認）** | 0.25 |
+| buffer_resize_count | 0 | 0 |
+| ring_tap_drops | 4.87M（consumer 未 drain・想定通り） | 0 |
+
+### Verdict = **PASS（条件付き）**
+
+A0 §4 のアーキ（同一 callback / プラグイン Mutex 外 / rtrb event seam / PostMixSink tap / static-load）で、**外部 CLAP プラグインを既存 orbit-audio の cpal callback に統合し、60 秒持続で xrun 相当ゼロ・callback 最悪 509µs（予算の 2.2%）・実発音（peak 0.25）・in-callback realloc ゼロ**を達成。Stop&Report 条件（clack breaking / RT 統合不能 / tap 不成立）はいずれも非該当。→ **hosting feasibility を proof に変えた。**
+
+### ★ 重要知見（A0 §6 と production monitoring を更新する）
+
+**macOS CoreAudio + cpal では、audio callback が 2 秒ブロックしても `cpal` の `StreamError`（err_fn）= xruns は発火しない**（good/misbehave 両方で 0）。→ **`xruns`（err_fn / 既存 `StreamStats`）単独は RT 違反の検知に使えない（false-negative）**。代わりに **callback 実測時間（mean/max/p99）＋ callback 数 vs 期待値の崩壊**が違反を決定的に検知した（misbehave で mean 494ms・max 1.94s・callback 数 2594→24）。
+
+含意:
+- S2 以降の **production RT 監視は callback duration ベース**にする（daemon の `StreamStats.xruns` を信頼しない）。`ENGINE_DAEMON_PROTOCOL` の `StreamStats` イベントに callback-time 分布を足すべき。
+- これにより good-mode の「clean」は**実証検知できる計測上の clean** であり vibes ではない（advisor §6-3b の要求を満たした）。
+
+### Caveats / S1 が retire していないもの（→ S1b / S2、A0 §8）
+
+- **1024 フレーム（≈23ms・高レイテンシ）ブロックでの測定**。good の 2.2% 余裕から小バッファでも余裕は大きいと推測できるが、**低レイテンシ（128–256 フレーム）での厳格テストは未実施 = S1b**。
+- **debug build**（release はより速い＝より安全側）。
+- **static-load のみ**。dynamic hot-install（daemon の `LoadPlugin` 実行時差し込み・`StartedPluginAudioProcessor` の所有権ハンドオフ）は未実証 = S1b/S2。
+- プラグイン 1 個・ノードグラフ無し。`OutputEvents::void()`（plugin→host イベント未処理）。event は block 先頭一括（sample-accurate オフセット無し）。
+- A0 からの逸脱: cpal sample format は **F32 のみ**対応（I16/I32/U16 は未実装・spike 簡略化）。
 
 ## 11. 関連
 

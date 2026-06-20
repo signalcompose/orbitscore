@@ -1,0 +1,32 @@
+# clap-test-synth — S1 spike (Issue #293): minimal CLAP instrument plugin
+#
+# standalone crate (NOT a member of rust/ workspace). The empty [workspace] table
+# below prevents any ancestor Cargo.toml from absorbing this crate.
+#
+# Two modes (controlled by env var CLAP_TEST_SYNTH_MISBEHAVE):
+#   good (default, CLAP_TEST_SYNTH_MISBEHAVE unset):  process() is RT-safe.
+#   bad  (CLAP_TEST_SYNTH_MISBEHAVE=1):               process() heap-allocates + mutex-blocks
+#                                                      intentionally to provoke xruns.
+[workspace]
+
+[package]
+name = "clap-test-synth"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Minimal CLAP instrument for S1 CLAP hosting RT-safety spike"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clack-plugin = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744", features = [
+  "clack-plugin",
+  "audio-ports",
+  "note-ports",
+] }
+
+[dev-dependencies]
+# Used by tests/load_test.rs to dlopen the built cdylib and walk the PluginFactory.
+clack-host = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744" }

@@ -25,6 +25,7 @@ sites/*/.vitepress/dist/
 
 # Rust build artifacts (Cargo)
 rust/target/
+rust-spike/**/target/
 
 # Ignore custom audio files (keep only tutorial samples)
 test-assets/audio/*.wav

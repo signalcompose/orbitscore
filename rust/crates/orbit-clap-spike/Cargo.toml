@@ -1,0 +1,31 @@
+# orbit-clap-spike — S1 (Issue #293) CLAP hosting RT-integration spike.
+#
+# 本 crate は post-2.0 engine の「外部 CLAP プラグインを既存 orbit-audio の
+# cpal callback に RT 安全に統合できるか」を実証するスパイク。production crate
+# ではない（publish = false）。設計は docs/development/POST_2.0_A0_RT_INTEGRATION_DESIGN.md。
+#
+# clack は pre-1.0（breaking 可能性・Stop&Report 条件 §7）のため、A0 を grounding
+# した既読コミットに git pin する（crates.io 版との drift を避ける）。
+[package]
+name = "orbit-clap-spike"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+orbit-audio-core = { path = "../orbit-audio-core" }
+orbit-audio-native = { path = "../orbit-audio-native" }
+cpal.workspace = true
+rtrb = "0.3"
+anyhow = "1"
+clack-host = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744", features = [
+  "clack-host",
+  "audio-ports",
+  "note-ports",
+  "log",
+  "params",
+] }
