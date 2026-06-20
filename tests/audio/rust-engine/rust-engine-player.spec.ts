@@ -341,6 +341,26 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(fxWarns.length).toBe(1) // warn-once
     warn.mockRestore()
   })
+
+  it('daemon 切断時は poll を停止し error を一度だけ出す（flood しない）', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // LoadSample を hang させ、複数イベントを in-flight のまま切断する。
+    const p = await boot(defaultHandlers({ LoadSample: () => new Promise(() => {}) }))
+    p.scheduleEvent('/audio/a.wav', 0, 0, 0, 'seqA')
+    p.scheduleEvent('/audio/b.wav', 0, 0, 0, 'seqA')
+    p.scheduleEvent('/audio/c.wav', 0, 0, 0, 'seqA')
+    p.start()
+    // 3 件の LoadSample が daemon に届き pending になるのを待つ。
+    await waitFor(() => server.received.filter((r) => r.method === 'LoadSample').length >= 3)
+    // WebSocket を閉じる → pending が全て DaemonConnectionError で reject。
+    await server.stop()
+    await waitFor(() => !p.isRunning) // 切断検出で scheduler 停止
+    await new Promise((r) => setTimeout(r, 20))
+    const connLostLogs = errorSpy.mock.calls.filter((c) => String(c[0]).includes('connection lost'))
+    expect(connLostLogs.length).toBe(1) // 3 件失敗しても通知は 1 度だけ
+    expect(p.isRunning).toBe(false)
+    errorSpy.mockRestore()
+  })
 })
 
 describe('createAudioEngine() / resolveEngineKind()', () => {
