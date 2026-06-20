@@ -235,31 +235,33 @@ See `.claude/settings.json` for Hook configuration.
 
 ---
 
-## 🔴 /code:autopilot Pipeline 実行ルール
+## 🔴 PR レビューワークフロー（コード変更時・MUST USE SLASH COMMAND）
 
-`/code:autopilot` pipeline を走らせるとき、**各 phase の専用 skill を必ず Skill tool 経由で invoke する**こと。Agent tool で review を代替したり、`autopilot-state.sh advance` を連打して phase を飛ばしてはならない。
+**コード変更を含む PR をレビューするときは、以下を必ずスラッシュコマンド（Skill tool）で実行する。Agent tool でのハンドロール代用・反復ループの手動組み立ては禁止。**
 
-### 必須: 各 phase → 対応 skill
+1. **`/simplify`** — reuse / simplification / efficiency / altitude の cleanup を適用。
+2. **`/code:pr-review-team`** — **Critical/Important = 0 になるまでスキル内蔵の反復ループに収束させる**（自分で round を手組みしない・「Critical/Important=0」を自己判断で宣言しない）。
 
-| phase | 必ず呼ぶ skill |
-|---|---|
-| sprint | `code:sprint-impl` |
-| audit | `code:audit-compliance` |
-| simplify | `simplify` (3 agents 並列: code-reuse / code-quality / efficiency が必須) |
-| ship | `code:shipping-pr` (`--skip-review` 指定) |
-| post-pr-review | `code:pr-review-team` |
-| retrospective | `code:retrospective` |
+### レビュー通過後（bot レビュー）
+
+3. 内部レビュー通過後、**advisor に相談**する: ① bot レビュー（`@claude` GitHub review）を受けるか ② 受ける場合のスコープ（load-bearing な箇所に絞る）。必要なら `@claude` を PR コメントで起動し、**bot のレビュー内容を watch して確認**する（bot は「作業中」placeholder を後から更新する方式なので、本文が確定するまでポーリングする）。
+4. bot レビューの**修正内容を advisor と確認**し、**再度 PR レビュー（1・2）が必要か**を判断する。
+
+### ドキュメントのみの変更
+
+5. **docs のみの変更**は full PR レビュー（simplify + pr-review-team）がオーバーエンジニアリングになる。**advisor と相談してレビュー方法を決める**（例: comment-analyzer のみ / advisor の直接確認 / bot second-opinion 等）。
 
 ### 禁止事項
 
-- ❌ `simplify` を `pr-review-toolkit:code-reviewer` agent 1 件で代用する
-- ❌ `code:audit-compliance` / `code:retrospective` を inline text 処理で済ませる
-- ❌ `autopilot-state.sh advance` を連続実行して複数 phase を一気にジャンプさせる
-- ❌ Security checklist を stop hook の催促を待って読む（PR 作成直後 / review 完了時点で自発的に読む）
+- ❌ `/simplify` / `/code:pr-review-team` を Agent tool でハンドロールして代用する
+- ❌ `/code:pr-review-team` の反復ループを自分で round 分割して手動実行する（スキルに収束まで委ねる）
+- ❌ 内部レビュー通過の判定を自己判断で済ませる（独立した再レビュー or bot で裏付ける）
 
 ### 理由
 
-各 skill には固有の `verify-workflow.sh` hook が付随しており、iteration 収束の計測・security checklist 参照・phase 完了条件のチェックを行う。skill を bypass すると hook が発火せず、品質ゲートが形骸化する。過去に PR #121 と #124 (Issue #108 Phase 1) で同じ bypass を 2 度繰り返した。
+各 skill には固有の hook（`verify-workflow.sh` 等）が付随し、iteration 収束の計測・security checklist 参照・完了条件チェックを行う。Agent tool でハンドロール代用すると hook が発火せず品質ゲートが形骸化する。過去に PR #121 / #124 で同じ bypass を繰り返した（本セッションでも pr-review-team の 2 周目検証を手組みして指摘を受けた）。
+
+---
 
 ### Branch Structure
 - `main` - Production (protected, base for PRs)
