@@ -77,10 +77,14 @@
 
 <div class="start">
   <h2>▶ Start here（新規セッションの起点）</h2>
+  <div class="callout c-warn">
+    <span class="lbl">2026-06-21 UPDATE（Issue #298）— スパイク完了 + 次フェーズ・アーキ確定</span>
+    <strong>A0 + S1 + S1b（PR #294）+ S2（PR #297）は MERGED 済</strong>（CLAP hosting が in-process で RT 安全に成立 + daemon dispatch seam parity）。次フェーズの設計を確定: <strong>楽器（サンプラー/audio DSL）= in-process（crown jewel）／ effects + 3rd-party = out-of-process sandboxed plugin ／ audio DSL ⊇ pitch DSL ／ egress は楽器でなく音を出す（薄い bridge プラグイン b1 主案）</strong>。<strong>シーケンス = α recovery floor → β audio DSL⊇pitch（+ #213）→ γ out-of-process sandbox（3rd-party+effects）→ δ 3rd-party VST3/AU</strong>。詳細の正本 = <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2</code>。
+  </div>
   <ol>
     <li><strong>必読を順に読む</strong>（下記「必読」）。本書は探索ノートを<em>実行可能な形</em>に変換した入口であり、決定の正本はノート側。</li>
     <li><strong>唯一の不変条件</strong>を頭に入れる → <em>permissive ライセンス規律</em>（§1）。これを破ると freemium 戦略が崩れる。</li>
-    <li><strong>最初の1手</strong>に着手 → <span class="spine">A0（RT 統合設計）+ S1（CLAP ホスティング・スパイク）</span>（§3 / §4-A）。他の全フェーズはここの結果待ち。</li>
+    <li><strong>最初の1手</strong>: A0/S1/S1b/S2 は<strong>完了済</strong>。次は <span class="spine">α recovery floor または β audio DSL⊇pitch</span>（§3 / §4-A・どちらを先にするかは owner 判断）。</li>
     <li>確定済み決定（§6）は<strong>再議論しない</strong>。より良い代替案は実装せず提案として報告に含める。</li>
   </ol>
   <p class="small" style="color:#9da7b3">本書は engine-first の土台トラック。締切なし。WCTM（Epic #224・締切 2026-08-07）は<strong>並行する別トラック</strong>で、post-2.0 はその時間を侵食しない。</p>
@@ -117,14 +121,16 @@
 <p>3 トラックの依存関係。<strong>engine（A）が最も多くを gate し、最も未知が大きい</strong>。pitch/song（C）は engine 非依存で<strong>並行可能</strong>。</p>
 <pre>
 Track A（engine, Rust） ──┬─→ Track B（OrbitStudio アプリ / VSCodium）
-  A0 RT統合設計            │     ※ engine に足が付いてから（A1–A2 後）
-  S1 CLAP hosting  ★最初  │
-  S2 daemon seam 差替      │
-  A3 time-stretch          │
-  A4 LinkAudio(Rust隔離)   │
+  A0/S1/S1b CLAP hosting ✅│     ※ engine に足が付いてから（A1–A2 後）
+  S2 daemon seam parity  ✅│
+  α recovery floor (fault①)│
+  β audio DSL⊇pitch (+#213)│  ← C1 pitch spec が前提
+  γ out-of-proc sandbox(②) │
+  δ 3rd-party VST3/AU      │
+  egress: b1 bridge / LinkAudio
 
 Track C（pitch / song）  ──── engine 非依存・A と並行可
-  C1 pitch モデル（spec先行）
+  C1 pitch モデル（spec先行）★ β の前提
   C2 song/arrange 層（暫定・"使って検証"・最後）
 </pre>
 <p class="legend small">
@@ -134,29 +140,31 @@ Track C（pitch / song）  ──── engine 非依存・A と並行可
   <span><span class="badge b-tent">TENTATIVE</span> 暫定・使って検証</span>
 </p>
 
-<h2 id="firststep">§3. 最初の1手（次セッションが1つだけやるなら）</h2>
+<h2 id="firststep">§3. 最初の1手（A0/S1/S2 完了済 → 次は α か β）</h2>
 <div class="callout c-warn">
-  <span class="lbl">▶ A0 + S1 — これがクリティカルパスの先頭</span>
-  <strong>A0（設計）:</strong> 既存 <code>orbit-audio</code> の cpal callback + WebSocket daemon に対し、3rd-party プラグインを <em>RT 安全に</em>統合する方式を設計（同一 callback / 別スレッド / プロセス分離のどれか）。binding が在ることと production で動くことは別。<br />
-  <strong>S1（スパイク）:</strong> <code>clack-host</code> を<strong>既存 orbit-audio の cpal callback に統合</strong>し、実 CLAP 楽器を 1 つロードして発音 → post-mix を tap → 既存 <code>LinkAudioSink::commit</code>（RT-safe）へ流す。
+  <span class="lbl">▶ A0/S1/S1b/S2 完了 — 次は α recovery floor か β audio DSL⊇pitch</span>
+  <strong>完了済</strong>: A0+S1+S1b（PR #294・in-process CLAP hosting が RT 安全に成立）/ S2（PR #297・daemon dispatch seam parity）。<br />
+  <strong>次フェーズ（owner 判断）:</strong> <strong>α</strong>＝recovery floor（fault ①・daemon supervision + auto-respawn + 最小 recovery contract・kill-test で Done・concrete）／ <strong>β</strong>＝audio DSL ⊇ pitch DSL（+ #213・in-process・S1 基盤・<em>C1 pitch モデル spec 先行が前提</em>・design 重め）。両者は概ね独立（α=engine 堅牢化 / β=DSL 設計）で並行も可。最初の <code>/goal</code> はどちらかを別 issue で起草。
 </div>
-<p>S1 が証明するのは <strong>scsynth parity だけでなく「載せ替えの動機そのもの（=外部プラグインをホストできる）」</strong>。最成熟（MeadowlarkDAW が clack で前例）かつ editor 非依存で、現行スタックを壊さず並行できる。<strong>資産再利用</strong>: ゼロから DAW を書くのではなく、既にある orbit-audio スケジューラ/ミキサーに hosting を「足す」。</p>
+<p><strong>資産再利用</strong>: ゼロから DAW を書くのではなく、既にある orbit-audio スケジューラ/ミキサー + S1 の in-process hosting 基盤に「足す」。詳細の正本 = <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2</code>（楽器配置・fault 3層・egress・シーケンス）。</p>
 
 <h2>§4. 3 トラック詳細</h2>
 
 <div class="track a">
   <h3>Track A — ネイティブエンジン（Rust） <span class="badge b-decided">DECIDED（engine=Rust）</span> <span class="badge b-feas">hosting=FEASIBILITY</span></h3>
   <p>現状 scsynth(OSC) を、既存自社 <code>rust/</code> ワークスペースの発展で置換。<strong>engine=Rust は決定</strong>（既存 Rust が foundation を既にカバー + permissive が freemium を可能にする）。<strong>ただしプラグインホスティングは feasibility 確認止まりで production 実証はこれから</strong> — S1 がそれを feasibility→proof に変える。</p>
-  <p class="small">アーキ: 薄い permissive ホスト（再生/ミックス/ルーティング/スケジュール=実装済）+ DSP/FX/楽器は <strong>3rd-party プラグイン</strong>。time-stretch だけは engine 内（OrbitScore の音声 DSL は MIDI より豊かなため）。1st-party プラグインは nih-plug。</p>
+  <p class="small">アーキ（2026-06-21 確定・正本 <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2</code>）: 薄い permissive ホスト（再生/ミックス/ルーティング/スケジュール=実装済・transport 所有）。<strong>楽器（サンプラー/audio DSL）= in-process</strong>（楽器は DSL 表現力の着地点なので flatten 境界を経由させない。in-process は表現力を自由に進化させる + 自社 Rust で隔離不要）。<strong>effects + 3rd-party = out-of-process sandboxed plugin</strong>（audio→audio の下流 / 非信頼 crash を隔離）。判定 = DSL が per-note/per-slice 制御を要する→楽器側 / 純 audio→audio→plugin 側。1st-party は standard CLAP + <code>com.orbitscore.*</code> 超集合拡張、shell は nih-plug。<em>旧根拠「MIDI より豊かなため」は CLAP≠MIDI で superseded。</em></p>
   <p class="small"><strong>スコープ境界（MIDI/IAC は engine 非依存）</strong>: MIDI/IAC 出力は TS 層（interpreter → MidiScheduler → <code>@julusian/midi</code> → CoreMIDI/IAC）で完結する。Track A が置換するのは<em>音声</em>ディスパッチの <code>OSCClient</code> seam のみで、<strong>MIDI には触れない</strong>。唯一の接点 = <strong>クロック同期</strong>（現 <code>TransportClock</code> が MIDI を SC から分離して同期）→ 音声バックエンド差し替え時に「MIDI↔音声のタイミング同期」だけ再確認する（再設計ではなく統合チェックポイント）。MIDI/pitch の DSL 進化は <strong>Track C</strong> と deferred 側で扱う。</p>
   <table>
-    <tr><th>フェーズ</th><th>内容（既存資産の拡張として）</th><th>ゲート</th></tr>
-    <tr><td><strong>A0</strong></td><td>RT 統合設計（cpal callback + daemon への RT 安全な統合方式）</td><td>S1 着手の前提</td></tr>
-    <tr><td><strong>S1 ★</strong></td><td>CLAP ホスティング: <code>clack-host</code> を既存 cpal callback に統合 → 実プラグイン発音 → tap → <code>LinkAudioSink::commit</code></td><td>動機の実証。これが通らなければ §5 停止条件へ</td></tr>
-    <tr><td><strong>S2</strong></td><td>TS/Node から別プロセス+IPC で駆動 → 既存 <code>OSCClient</code> seam に差し替えで嵌まる確認（DSL/スケジューラ無傷）</td><td>parity</td></tr>
-    <tr><td><strong>A3</strong></td><td>time-stretch（Signalsmith）を native sample ノードに。DSL 面は #213 <code>fixpitch()</code>/<code>time()</code>（今 stub）を実装</td><td>—</td></tr>
-    <tr><td><strong>A4</strong></td><td>LinkAudio を Rust 側で隔離 GPL モジュールに（現 C++ <code>.scx</code> から）。lock-free 化（現 Mutex+try_lock）</td><td>license 規律 §1</td></tr>
-    <tr><td>後続</td><td>AU（<code>objc2-avf-audio</code>）→ VST3（<code>vst3</code> crate, MIT・工数最大）</td><td>S1 後に成熟度順</td></tr>
+    <tr><th>フェーズ</th><th>内容（既存資産の拡張として）</th><th>状態 / ゲート</th></tr>
+    <tr><td><strong>A0</strong></td><td>RT 統合設計（cpal callback + daemon への RT 安全な統合方式）</td><td>✅ 完了（PR #294）</td></tr>
+    <tr><td><strong>S1 / S1b</strong></td><td>CLAP ホスティング: <code>clack-host</code> を既存 cpal callback に統合 → 実プラグイン発音 → tap（in-process・RT 安全）。S1b = 低レイテンシ + dynamic hot-install</td><td>✅ 完了（PR #294 `813802f`）</td></tr>
+    <tr><td><strong>S2</strong></td><td>音声ディスパッチ seam を SC OSC→Rust daemon に差し替え可能化（parity proof・SC 既定）</td><td>✅ 完了（PR #297 `06cf131`）</td></tr>
+    <tr><td><strong>α</strong></td><td>recovery floor（fault ①）: daemon supervision + auto-respawn + 最小 recovery contract（接続再確立 + active loops 復帰 / 可聴ギャップ許容 / one-shot drop / transport 再 anchor）</td><td>kill-test で Done / SC 無改変</td></tr>
+    <tr><td><strong>β</strong></td><td>audio DSL ⊇ pitch DSL（+ #213 <code>fixpitch()</code>/<code>time()</code>・in-process・S1 基盤）。Signalsmith stretch を native 楽器に</td><td>C1 pitch モデル spec 先行が前提</td></tr>
+    <tr><td><strong>γ</strong></td><td>out-of-process sandbox（fault ②）: 3rd-party + effects を子プロセス隔離（shared-mem audio / RT-safe event IPC / watchdog→respawn）</td><td>最大の未構築サブシステム</td></tr>
+    <tr><td><strong>δ</strong></td><td>3rd-party VST3/AU ホスティング（sandbox 内）。AU（<code>objc2-avf-audio</code>）→ VST3（<code>vst3</code> crate, MIT・工数最大）</td><td>成熟度順・最後</td></tr>
+    <tr><td>A4→egress</td><td>LinkAudio を Rust 隔離 GPL モジュール化 + lock-free。egress（§2.4）= b1 bridge プラグイン主案 / b2 engine 埋め込み</td><td>license 規律 §1</td></tr>
   </table>
 </div>
 
@@ -218,7 +226,7 @@ Track C（pitch / song）  ──── engine 非依存・A と並行可
 <ul>
   <li><strong>engine 非依存（先行可）</strong>: #280（<code>seq.root(note-name)</code> バグ→ C1 で消滅）/ #255（resolver 診断）/ #248（Phase 2 follow-up）。</li>
   <li><strong>棚卸し（実装済なのに Issue OPEN）</strong>: #259（<code>.comp</code> C2a）・#212（launch quantize）→ 実体に合わせクローズ。</li>
-  <li><strong>engine 待ち</strong>: #239（<code>slice()</code>）/ #213（<code>fixpitch()</code>/<code>time()</code> 本体）/ #238（audio <code>[ ]</code> stack）。S1 が固まるまで深追いしない。</li>
+  <li><strong>β（audio DSL⊇pitch）に編入</strong>: #239（<code>slice()</code>）/ #213（<code>fixpitch()</code>/<code>time()</code> 本体）/ #238（audio <code>[ ]</code> stack）。S1 完了済 → これらは β（in-process 楽器の DSL 表現力）で扱う。<strong>C1 pitch モデル spec 先行が前提</strong>。</li>
   <li><strong>session-log（<code>.orbslog</code>）再設計</strong>: 2.0.0 で dormant 化済（opt-in）。北極星 = ① session-scoped ② 全アクティブトラック捕捉（LinkAudio 含む）③ L2 replay(#241)/post-concert 分析(#242) が乗る形式。engine era の項目。</li>
 </ul>
 
@@ -251,26 +259,28 @@ Track C（pitch / song）  ──── engine 非依存・A と並行可
   <li>audio シーケンスの <code>play()</code> 意味論は変更しない（v1.1 規律の継続）。</li>
 </ol>
 
-<h2 id="epic">§9. 提案する Epic / Issue 構成（承認後に作成）</h2>
-<p class="small">以下は<strong>本ドラフトの提案であり、まだ作成していない</strong>。大和さんの承認後に Epic + 子 Issue 化する。</p>
+<h2 id="epic">§9. Epic / Issue 構成（作成済）</h2>
+<p class="small"><strong>Epic #292「Post-2.0 Native Engine &amp; OrbitStudio」作成済</strong>（締切なし・WCTM と別）。アーキ決定記録 = #298。</p>
 <ul>
-  <li><strong>Epic: Post-2.0 Native Engine &amp; OrbitStudio</strong>（締切なし・WCTM と別）
+  <li><strong>Epic #292</strong>
     <ul>
-      <li>A0 RT 統合設計（doc）</li>
-      <li>S1 CLAP hosting スパイク ★</li>
-      <li>S2 daemon ↔ OSCClient seam 差し替え</li>
-      <li>A3 time-stretch（Signalsmith + #213）</li>
-      <li>A4 LinkAudio Rust 隔離 + lock-free 化</li>
+      <li>A0 / S1 / S1b CLAP hosting（PR #294）✅</li>
+      <li>S2 daemon dispatch seam parity（PR #297）✅</li>
+      <li>#298 アーキ決定記録 + spec 反映（楽器配置 / fault 3層 / egress / シーケンス）</li>
+      <li><strong>α</strong> recovery floor（fault ①）— 次フェーズ候補</li>
+      <li><strong>β</strong> audio DSL ⊇ pitch DSL（+ #213 / #239 / #238）— C1 前提</li>
+      <li><strong>γ</strong> out-of-process sandbox（fault ②・3rd-party + effects）</li>
+      <li><strong>δ</strong> 3rd-party VST3/AU（成熟度順・最後）</li>
+      <li>A4 LinkAudio Rust 隔離 + lock-free / egress（b1 bridge・b2 engine 埋め込み）</li>
       <li>B1 VSCodium リブランド rebuild</li>
-      <li>C1 pitch モデル再設計（spec 先行）</li>
-      <li>C2 song/arrange 層（"使って検証" / 暫定）</li>
+      <li>C1 pitch モデル再設計（spec 先行・β 前提）/ C2 song/arrange 層（"使って検証" / 暫定）</li>
     </ul>
   </li>
 </ul>
 
 <h2 id="open">§10. Open Questions</h2>
 <ul>
-  <li><strong>engine</strong>: cpal callback + daemon の RT 安全統合方式（A0 で決める）。time-stretch の Rust binding（<code>ssstretch</code>/<code>signalsmith-stretch</code> 存在の兆候・詳細未確認）。clack pre-1.0 breaking 耐性。</li>
+  <li><strong>engine</strong>: RT 安全統合方式は A0/S1 で解決（in-process clack-host）。<strong>残る大物 = γ out-of-process sandbox の実装</strong>（shared-mem audio / RT-safe event IPC / watchdog・未構築）と <strong>b2 engine-as-plugin の feasibility</strong>（nested hosting / AUv3 sandbox / multi-instance）。time-stretch の Rust binding（<code>ssstretch</code>/<code>signalsmith-stretch</code>・詳細未確認）。clack pre-1.0 breaking 耐性。</li>
   <li><strong>app</strong>: VST GUI の Electron 共存方式。VSCodium 段階のどこから始めるか。fork 保守の定量。</li>
   <li><strong>pitch</strong>: period≠12 スケールでの <code>^N</code> 定義（+12 か +period か）。組み込み mode 名一覧 / minor 既定。<code>.root()</code> 廃止に伴う既存 example 移行。</li>
   <li><strong>song（使って検証で詰める）</strong>: 境界ポリシー hard/musical 既定。節境界をまたぐ seq の継続 vs リスタート。ポリテンポ時の基準クロック。#254 section 変数との統合度。名前・記法の最終確定。</li>
