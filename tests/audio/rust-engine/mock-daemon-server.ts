@@ -17,12 +17,17 @@ type CommandRecord = {
   params: Record<string, unknown>
 }
 
+/** ハンドラは値 or Promise を返せる（async handler で遅延応答を模擬できる）。 */
+type MockHandler = (
+  params: Record<string, unknown>,
+) => Record<string, unknown> | Promise<Record<string, unknown>>
+
 export interface MockDaemonHandlers {
-  LoadSample?: (params: Record<string, unknown>) => Record<string, unknown>
-  PlayAt?: (params: Record<string, unknown>) => Record<string, unknown>
-  Stop?: (params: Record<string, unknown>) => Record<string, unknown>
-  SetGlobalGain?: (params: Record<string, unknown>) => Record<string, unknown>
-  GetStatus?: (params: Record<string, unknown>) => Record<string, unknown>
+  LoadSample?: MockHandler
+  PlayAt?: MockHandler
+  Stop?: MockHandler
+  SetGlobalGain?: MockHandler
+  GetStatus?: MockHandler
 }
 
 export class MockDaemonServer {
@@ -51,7 +56,7 @@ export class MockDaemonServer {
         )
       }
 
-      socket.on('message', (raw) => {
+      socket.on('message', async (raw) => {
         let parsed: CommandRecord
         try {
           parsed = JSON.parse(raw.toString()) as CommandRecord
@@ -75,7 +80,7 @@ export class MockDaemonServer {
           return
         }
         try {
-          const result = handler(parsed.params)
+          const result = await handler(parsed.params)
           socket.send(JSON.stringify({ id: parsed.id, result }))
         } catch (e) {
           const err = e as Error & { code?: string }

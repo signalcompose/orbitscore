@@ -9,11 +9,16 @@ import { BufferManager } from './supercollider/buffer-manager'
 import { EventScheduler } from './supercollider/event-scheduler'
 import { SynthDefLoader } from './supercollider/synthdef-loader'
 import { resolveScsynthPath } from './supercollider/scsynth-resolver'
+import type { AudioEngineBackend } from './engine-backend'
 
 /**
- * SuperCollider audio player with low-latency scheduling
+ * SuperCollider audio player with low-latency scheduling.
+ *
+ * `AudioEngineBackend`（Scheduler + AudioEngine 面）を満たす音声バックエンド。
+ * `RustEnginePlayer` の sibling で、`createAudioEngine()` が既定で選ぶ。`implements`
+ * 宣言は契約を型でロックする（interface 変更時に差分をコンパイラが報告する）。
  */
-export class SuperColliderPlayer {
+export class SuperColliderPlayer implements AudioEngineBackend {
   private oscClient: OSCClient
   private bufferManager: BufferManager
   private eventScheduler: EventScheduler

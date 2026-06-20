@@ -7,7 +7,8 @@
  */
 
 import { AudioIR } from '../parser/audio-parser'
-import { SuperColliderPlayer } from '../audio/supercollider-player'
+import { createAudioEngine } from '../audio/create-audio-engine'
+import { AudioEngineBackend } from '../audio/engine-backend'
 import { Global } from '../core/global'
 import {
   SessionLogWriter,
@@ -33,7 +34,7 @@ export class InterpreterV2 {
 
   constructor() {
     this.state = {
-      audioEngine: new SuperColliderPlayer(),
+      audioEngine: createAudioEngine(),
       globals: new Map(),
       sequences: new Map(),
       currentGlobal: undefined,
@@ -216,7 +217,7 @@ export class InterpreterV2 {
    * Get audio engine for testing/debugging
    * @deprecated Direct access to audioEngine. Use getState() instead.
    */
-  get audioEngine(): SuperColliderPlayer {
+  get audioEngine(): AudioEngineBackend {
     return this.state.audioEngine
   }
 }

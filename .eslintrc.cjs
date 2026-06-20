@@ -24,6 +24,9 @@ module.exports = {
     '@typescript-eslint/no-explicit-any': 'off',
     'import/no-unresolved': 'off',
     'import/namespace': 'off',
+    // `_` 接頭辞の引数は「意図的に未使用」(interface 実装で要求されるが本体が使わない等)。
+    // typescript-eslint 標準慣習。通常の未使用変数の検出は維持する。
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     // Prettierは.prettierrc.jsonに委譲
   },
   ignorePatterns: [
