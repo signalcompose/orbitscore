@@ -93,15 +93,19 @@ impl Display for DiscoveryError {
 
 impl std::error::Error for DiscoveryError {}
 
-/// Load all plugins from a .clap bundle at `path`.
-pub fn list_plugins_in_file(path: &Path) -> Result<Vec<FoundPlugin>, DiscoveryError> {
+/// Load a .clap bundle's entry — the unsafe FFI shared by both lookups below.
+/// (The `PluginFactory` borrows the entry, so callers acquire it themselves.)
+fn open_bundle(path: &Path) -> Result<PluginEntry, DiscoveryError> {
     let bundle_path =
         CString::new(path.to_string_lossy().as_bytes()).map_err(|_| DiscoveryError::NullBundlePath)?;
-
     // SAFETY: loading a native library is inherently unsafe.
     let library = unsafe { LibraryEntry::load_from_path(path) }?;
-    let entry = unsafe { PluginEntry::load_from(library, &bundle_path) }?;
+    Ok(unsafe { PluginEntry::load_from(library, &bundle_path) }?)
+}
 
+/// Load all plugins from a .clap bundle at `path`.
+pub fn list_plugins_in_file(path: &Path) -> Result<Vec<FoundPlugin>, DiscoveryError> {
+    let entry = open_bundle(path)?;
     let factory = entry
         .get_plugin_factory()
         .ok_or(DiscoveryError::MissingPluginFactory)?;
@@ -122,13 +126,7 @@ pub fn load_plugin_id_from_path(
     path: &Path,
     id: &str,
 ) -> Result<Option<FoundPlugin>, DiscoveryError> {
-    let bundle_path =
-        CString::new(path.to_string_lossy().as_bytes()).map_err(|_| DiscoveryError::NullBundlePath)?;
-
-    // SAFETY: loading a native library is inherently unsafe.
-    let library = unsafe { LibraryEntry::load_from_path(path) }?;
-    let entry = unsafe { PluginEntry::load_from(library, &bundle_path) }?;
-
+    let entry = open_bundle(path)?;
     let factory = entry
         .get_plugin_factory()
         .ok_or(DiscoveryError::MissingPluginFactory)?;

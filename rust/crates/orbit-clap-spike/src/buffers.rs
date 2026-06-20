@@ -59,18 +59,8 @@ impl HostAudioBuffers {
             .map(|p| vec![0.0f32; frame_count * p.port_layout.channel_count() as usize])
             .collect();
 
-        let total_in = config
-            .plugin_input_port_config
-            .ports
-            .iter()
-            .map(|p| p.port_layout.channel_count() as usize)
-            .sum();
-        let total_out = config
-            .plugin_output_port_config
-            .ports
-            .iter()
-            .map(|p| p.port_layout.channel_count() as usize)
-            .sum();
+        let total_in = config.plugin_input_port_config.total_channel_count();
+        let total_out = config.plugin_output_port_config.total_channel_count();
 
         Self {
             input_ports: AudioPorts::with_capacity(total_in, config.plugin_input_port_config.ports.len()),

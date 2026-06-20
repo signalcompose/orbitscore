@@ -33,8 +33,6 @@ pub struct AudioThreadStats {
     pub max_ns: AtomicU64,
     /// Sum of durations (nanoseconds), for mean.
     pub sum_ns: AtomicU64,
-    /// Total samples received by the sink (interleaved, so frames x channels).
-    pub sink_frames: AtomicU64,
     /// p99 histogram: HIST_BUCKETS x BUCKET_NS (50 us) buckets, covering 0..51.2 ms.
     /// Bucket i covers [i*50us, (i+1)*50us). Bucket HIST_BUCKETS-1 = >=51.15 ms overflow.
     /// Resolution/range track the BUCKET_NS / HIST_BUCKETS constants above.
@@ -60,7 +58,6 @@ impl AudioThreadStats {
             min_ns: AtomicU64::new(u64::MAX),
             max_ns: AtomicU64::new(0),
             sum_ns: AtomicU64::new(0),
-            sink_frames: AtomicU64::new(0),
             hist_us: std::array::from_fn(|_| AtomicU64::new(0)),
             buffer_resize_count: AtomicU64::new(0),
             installed_at_callback: AtomicU64::new(u64::MAX),
@@ -186,9 +183,7 @@ impl OrbitAudioProcessor {
         // thread. pop() is wait-free; installing is a plain move (no alloc / no lock).
         if self.plugin.is_none() {
             if let Ok(msg) = self.install_rx.pop() {
-                self.plugin = Some(msg.plugin);
-                self.buffers = Some(msg.buffers);
-                self.note_port_index = msg.note_port_index;
+                self.install(msg); // same move as static install (no lock/alloc)
                 let at = self.stats.callback_count.load(Ordering::Relaxed);
                 self.stats.installed_at_callback.store(at, Ordering::Relaxed);
             }
@@ -251,9 +246,6 @@ impl OrbitAudioProcessor {
         self.stats.min_ns.fetch_min(elapsed_ns, Ordering::Relaxed);
         self.stats.max_ns.fetch_max(elapsed_ns, Ordering::Relaxed);
         self.stats.sum_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
-        self.stats
-            .sink_frames
-            .fetch_add(data.len() as u64, Ordering::Relaxed);
 
         // Update p99 histogram: bucket = floor(elapsed_ns / BUCKET_NS), capped at overflow bucket.
         let bucket = ((elapsed_ns / BUCKET_NS) as usize).min(HIST_BUCKETS - 1);

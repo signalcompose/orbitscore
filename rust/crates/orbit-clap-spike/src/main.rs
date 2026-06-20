@@ -318,11 +318,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             Ok(()) => println!("[hot-install] plugin handed to audio thread at +{hot_secs}s"),
             Err(_) => anyhow::bail!("install ring full — hot-install failed"),
         }
-        // Phase 2: remaining time with the plugin live.
-        pump_until(&mut instance, &receiver, pump_deadline);
-    } else {
-        pump_until(&mut instance, &receiver, pump_deadline);
     }
+    // Static: the full duration. Hot: phase 2 (remaining time with the plugin live).
+    pump_until(&mut instance, &receiver, pump_deadline);
 
     // Wait for driver. A driver panic invalidates the measurement, so fail loudly rather
     // than silently reporting a normal-looking run with beats=0.

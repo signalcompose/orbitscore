@@ -171,7 +171,6 @@ impl PluginAudioPortsConfig {
         &self.ports[self.main_port_index as usize]
     }
 
-    #[allow(dead_code)]
     pub fn total_channel_count(&self) -> usize {
         self.ports
             .iter()

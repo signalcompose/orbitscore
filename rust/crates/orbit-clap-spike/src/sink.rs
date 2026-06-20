@@ -8,6 +8,10 @@ use std::sync::Arc;
 /// A receiver for the post-mix signal (A0 §4.4).
 ///
 /// Called from the cpal audio thread — implementors MUST NOT allocate, lock, or block.
+///
+/// By design `commit` carries no format metadata (channel count / sample rate / frame
+/// count): the sink is told its format at construction. The A4 production sink should
+/// treat this as deliberate, not a deficiency to "fix" by making commit self-describing.
 pub trait PostMixSink: Send {
     fn commit(&mut self, post_mix: &[f32]);
 }
@@ -41,12 +45,14 @@ impl PostMixSink for CountingSink {
         self.frames_received
             .fetch_add(post_mix.len() as u64, Ordering::Relaxed);
 
-        for &s in post_mix {
-            let abs_bits = s.abs().to_bits();
-            // fetch_max on f32 bits is only valid for non-negative IEEE754 floats,
-            // which abs() guarantees.
-            self.peak_bits.fetch_max(abs_bits, Ordering::Relaxed);
-        }
+        // fetch_max on f32 bits is valid only for non-negative IEEE754 floats, which abs()
+        // guarantees. Fold the block peak locally, then do ONE atomic RMW (not per-sample).
+        let block_peak = post_mix
+            .iter()
+            .map(|s| s.abs().to_bits())
+            .max()
+            .unwrap_or(0);
+        self.peak_bits.fetch_max(block_peak, Ordering::Relaxed);
     }
 }
 
@@ -94,10 +100,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn counting_sink_tracks_abs_peak_and_frame_count() {
-        let (mut sink, frames, peak) = CountingSink::new();
+    fn counting_sink_tracks_abs_peak_and_sample_count() {
+        let (mut sink, samples, peak) = CountingSink::new();
+        // frames_received counts interleaved samples (not frames): 4 samples in -> 4.
         sink.commit(&[0.1, -0.7, 0.3, -0.2]);
-        assert_eq!(frames.load(Ordering::Relaxed), 4);
+        assert_eq!(samples.load(Ordering::Relaxed), 4);
         let p = f32::from_bits(peak.load(Ordering::Relaxed));
         assert!((p - 0.7).abs() < 1e-6, "abs peak should be 0.7, got {p}");
     }

@@ -10,11 +10,7 @@ use clack_extensions::params::{
     HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
 };
 use clack_host::prelude::*;
-use std::sync::{
-    mpsc::Sender,
-    OnceLock,
-};
-use clack_extensions::audio_ports::PluginAudioPorts;
+use std::sync::mpsc::Sender;
 
 /// Messages that plugin threads send to the main thread.
 pub enum MainThreadMessage {
@@ -39,33 +35,21 @@ impl HostHandlers for OrbitClapHost {
     }
 }
 
-/// Callbacks stored once during `initializing`.
-#[allow(dead_code)]
-struct PluginCallbacks {
-    audio_ports: Option<PluginAudioPorts>,
-}
-
 /// Data accessible from any thread.
 pub struct OrbitHostShared {
     sender: Sender<MainThreadMessage>,
-    callbacks: OnceLock<PluginCallbacks>,
 }
 
 impl OrbitHostShared {
     pub fn new(sender: Sender<MainThreadMessage>) -> Self {
-        Self {
-            sender,
-            callbacks: OnceLock::new(),
-        }
+        Self { sender }
     }
 }
 
 impl<'a> SharedHandler<'a> for OrbitHostShared {
-    fn initializing(&self, instance: InitializingPluginHandle<'a>) {
-        let _ = self.callbacks.set(PluginCallbacks {
-            audio_ports: instance.get_extension(),
-        });
-    }
+    // `initializing` uses the trait default (no-op): the spike does not cache plugin
+    // extension handles on the shared side — audio-ports/note-ports are queried directly
+    // at config time, and params are not tracked.
 
     fn request_restart(&self) {
         // S1: restart not supported
