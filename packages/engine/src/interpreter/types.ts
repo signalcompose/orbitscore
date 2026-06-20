@@ -4,7 +4,7 @@
 
 import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
-import { SuperColliderPlayer } from '../audio/supercollider-player'
+import { AudioEngineBackend } from '../audio/engine-backend'
 import { SessionLogWriter } from '../core/session-log/session-log-writer'
 
 /**
@@ -14,7 +14,7 @@ export interface InterpreterState {
   globals: Map<string, Global>
   sequences: Map<string, Sequence>
   currentGlobal?: Global
-  audioEngine: SuperColliderPlayer
+  audioEngine: AudioEngineBackend
   isBooted: boolean
 
   // Unidirectional toggle groups (DSL v3.0)
