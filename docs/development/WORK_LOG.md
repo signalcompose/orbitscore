@@ -44,7 +44,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **/code:pr-review-team（4専門エージェント並列 + 反復）round-1**: Critical 1 + Important 4 を反映。① **selftest 再設計**: 各検出器を 1 ケース 1 摂動で単独 flip 検証（level/pan/onset-ours/onset-librosa）+ spurious assert。従来は L/R 等倍摂動で **pan 検出器が未検証**（Critical）・librosa_matched/空 onset 経路も未駆動だった。② **`detect_onset_matched` を scheduled 真値と整合確認**（従来は Rust が出力するのみで Python 未消費＝「4 プリミティブ grounding」が過大主張）。③ **PCM frame 数を `rust.json["frames"]` と照合**（stale/truncated PCM の silent pass を防ぐ）。④ robustness: `onsetFrameThreshold=null` の TypeError ガード / near-zero RMS 相対誤差の分母 floor / `_selftest*` gitignore / コメント精密化。CI gate 無し方針ゆえ selftest が唯一の自動ガードなので各検出器の単独 flip 検証が要。**round-2**: ⑤ selftest の単独 flip を compare.json の **per-metric フラグで assert**（verdict bool は disjunctive で isolation を保証しない）、⑥ **matched-FAIL 経路を selftest でカバー**（`_selftest_onset_matched`）+ Rust 側で per_event_gain[0] の matched が None なら **expect で loud に**（silent null = grounding 消失を防ぐ）、⑦ burst2 コメント修正。**round-3** で両 reviewer が収束確認（Critical/Important=0）。収束推移: round-1 (C1+I1〜I4) → round-2 (I-A・I-B = round-1 の selftest 強化の深化) → round-3 (0)。
 
-**CI 補足（owner 2026-06-21）**: 現状スプリント優先で CI gate にしないが**将来導入の意図あり**。導入時は版固定 venv を job 化し `export_verify_pcm`→`cross_check.py`（exit code gate）を回す（生成物は決定論）。
+**CI 補足（owner 2026-06-21）**: 現状 CI gate にしないが**将来導入予定**。導入時は版固定 venv を job 化し `export_verify_pcm`→`cross_check.py`（exit code gate）を回す（生成物は決定論）。
 
 **スコープ外（後続）**: 上記 render_golden dedup（両 harness 共有・#315）/ CLI `play --capture out.wav`（決定論 offline-clocking）/ madmom フルスイート / 広い DSL 機能網羅（polymeter/quantize onset）/ 知覚指標 / CI 導入。selftest の残 Minor（`ours=None`・空 onset の guard 分岐の edge path 未テスト・sev 2-3）は意図的に追わない（検証ツールの guard 分岐で収束に影響なし）。
 

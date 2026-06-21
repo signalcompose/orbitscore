@@ -98,12 +98,12 @@ spurious（fade 尾）の超過検出は記録して verdict は「全 scheduled
 
 ## CI 方針（owner 確定 2026-06-21）
 
-**現状は CI gate にしない**（スプリント優先）。committed script + 版固定 `requirements.txt` + 本 README の
+**現状は CI gate にしない**。committed script + 版固定 `requirements.txt` + 本 README の
 「Recorded validation」節 + `cross_check.py --selftest`（合成 PCM で機構の正常/異常検出を回帰ガード）で担保する。
 理由: librosa/numba は版脆弱・onset は frame 解像度で gate だと flaky・回帰は既存 Rust アンカーテストがカバー。
 grounding は一度実施して記録する性質。
 
-**将来 CI 導入の意図あり**（owner）。導入時は版固定 venv を job 化し、`cargo run --example export_verify_pcm`
+**将来導入予定**（owner）。導入時は版固定 venv を job 化し、`cargo run --example export_verify_pcm`
 → `cross_check.py`（exit code を gate）を回せばよい（生成物は決定論）。その際は flaky 回避のため許容を再校正する。
 
 ## 実行手順（再現）
