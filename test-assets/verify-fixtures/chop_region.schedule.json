@@ -1,0 +1,28 @@
+{
+  "fixture": "chop_region",
+  "sampleRate": 48000,
+  "events": [
+    {
+      "onsetSec": 0.1,
+      "sample": "arpeggio_c.wav",
+      "gain": 0.7079457843841379,
+      "pan": 0,
+      "offsetSec": 0,
+      "durationSec": 0.5,
+      "gainDb": -3,
+      "panRaw": 0,
+      "sequenceName": "chop"
+    },
+    {
+      "onsetSec": 1.1,
+      "sample": "arpeggio_c.wav",
+      "gain": 0.7079457843841379,
+      "pan": 0,
+      "offsetSec": 0.5,
+      "durationSec": 0.5,
+      "gainDb": -3,
+      "panRaw": 0,
+      "sequenceName": "chop"
+    }
+  ]
+}

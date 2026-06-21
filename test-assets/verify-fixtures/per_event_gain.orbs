@@ -1,0 +1,23 @@
+// #311 phase 2 tier(c) — per-event gain 検証 fixture
+// tempo 60 / 4-4 / length 1 → bar 4.0s、4 subdivisions = 1.0s 刻み。
+// kick.wav = 0.5s mono / slice 無し / pan 中央(0)。
+// 2 sequence、defaultGain だけ変える（loud=-3 / quiet=-9 → 6dB 差）。
+// play(1,0,0,0) で先頭 slot のみ発火、onset 差 3.0s（kick 0.5s < 間隔）で十分な無音。
+var global = init GLOBAL
+global.tempo(60)
+global.beat(4 by 4)
+
+var loud = init global.seq
+loud.length(1)
+loud.audio("../audio/kick.wav")
+loud.defaultGain(-3).defaultPan(0)
+loud.play(1, 0, 0, 0)
+
+var quiet = init global.seq
+quiet.length(1)
+quiet.audio("../audio/kick.wav")
+quiet.defaultGain(-9).defaultPan(0)
+quiet.play(0, 0, 0, 1)
+
+global.start()
+RUN(loud, quiet)

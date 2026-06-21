@@ -16,7 +16,10 @@ use std::path::PathBuf;
 
 use orbit_audio_daemon::engine_wrap::EngineWrap;
 use orbit_audio_daemon::backend::StubBackend;
-use orbit_audio_verify::{channel_rms, pan_from_lr_rms, region_rms, CapturedAudio, PAN_TOLERANCE};
+use orbit_audio_verify::{
+    channel_rms, db_difference, pan_from_lr_rms, region_rms, CapturedAudio, GAIN_DB_TOLERANCE,
+    PAN_TOLERANCE,
+};
 use serde::Deserialize;
 
 const BLOCK_FRAMES: usize = 512;
@@ -147,4 +150,86 @@ fn pan_three_voices_render_matches_schedule() {
     assert!(gap < 1e-5, "イベント間は無音のはず（RMS={gap:.6}）");
     // 公開 API の軽い疎通。
     let _ = channel_rms(&cap, 0);
+}
+
+#[test]
+fn chop_region_render_matches_schedule() {
+    //! Leg 1 — chop_region。
+    //! golden: arpeggio_c.wav 1.0s / chop(2) / tempo 120 / 4拍 / length 1。
+    //!   slice1: onset=0.1s, offset=0.0s, duration=0.5s（前半）
+    //!   slice2: onset=1.1s, offset=0.5s, duration=0.5s（後半）
+    //! 各 slice 窓 [onset, onset+durationSec] に信号あり。
+    //! イベント間（slice1 終端 0.6s 〜 slice2 開始 1.1s の中央 0.85s あたり）は無音。
+    let golden = load_golden("chop_region");
+    let (cap, _sample_frames) = render_golden(&golden);
+    let sr = golden.sample_rate as f64;
+
+    for ev in &golden.events {
+        // slice 領域: [onset, onset+durationSec]（durationSec > 0 = slice）。
+        assert!(ev.duration_sec > 0.0, "chop fixture は slice を持つはず");
+        let onset = (ev.onset_sec * sr).round() as usize;
+        // 信号確認: onset 後 256 frame 〜 slice 終端 600 frame 前を本体窓とする。
+        let slice_end = onset + (ev.duration_sec * sr).round() as usize;
+        let w_start = onset + 256;
+        let w_end = slice_end.saturating_sub(600);
+        assert!(w_start < w_end, "slice 窓が狭すぎる: [{w_start}, {w_end})");
+        // pan=0 → L/R ほぼ等しい。少なくとも max(L,R) > 1e-3 を確認。
+        let l = region_rms(&cap, 0, w_start, w_end);
+        let r = region_rms(&cap, 1, w_start, w_end);
+        assert!(
+            l.max(r) > 1e-3,
+            "onset={:.3}s の slice 窓に信号が必要（L={l:.5}, R={r:.5}）",
+            ev.onset_sec
+        );
+    }
+
+    // イベント間（slice1 終端 0.6s 〜 slice2 開始 1.1s の中央 0.85s）は無音。
+    let gap_start = (0.65 * sr) as usize;
+    let gap_end   = (0.95 * sr) as usize;
+    let gap = region_rms(&cap, 0, gap_start, gap_end);
+    assert!(gap < 1e-5, "chop イベント間は無音のはず（RMS={gap:.6}）");
+}
+
+#[test]
+fn per_event_gain_render_matches_schedule() {
+    //! Leg 1 — per_event_gain。
+    //! golden: kick.wav 0.5s / slice 無し / tempo 60 / 4拍 / length 1。
+    //!   loud : onset=0.1s, gainDb=-3, pan=0（中央）
+    //!   quiet: onset=3.1s, gainDb=-9, pan=0（中央）
+    //! 期待 dB 差 = -9 - (-3) = -6.0 dB（quiet が loud より 6dB 小さい）。
+    let golden = load_golden("per_event_gain");
+    let (cap, sample_frames) = render_golden(&golden);
+    let sr = golden.sample_rate as f64;
+
+    // 各イベントの body 窓 RMS を取得（gainDb 昇順に並んでいるとは限らないので gain_db で判別）。
+    assert_eq!(golden.events.len(), 2, "per_event_gain は 2 イベントのはず");
+    let mut rms_by_gain: Vec<(f64, f32)> = Vec::new(); // (gainDb, rms)
+
+    for ev in &golden.events {
+        let onset = (ev.onset_sec * sr).round() as usize;
+        let play_frames = sample_frames[&ev.sample];
+        let w_start = onset + 256;
+        let w_end = onset + play_frames - 256; // kick は短いので余裕を小さく
+        assert!(w_start < w_end, "onset={:.3}s の body 窓が狭すぎる", ev.onset_sec);
+        let l = region_rms(&cap, 0, w_start, w_end);
+        let r = region_rms(&cap, 1, w_start, w_end);
+        // pan=0 → L/R ほぼ等しい。平均 RMS を使う。
+        let rms = (l + r) / 2.0;
+        assert!(rms > 1e-4, "onset={:.3}s に信号が必要（RMS={rms:.5}）", ev.onset_sec);
+        rms_by_gain.push((ev.gain_db, rms));
+    }
+
+    // gainDb で並べて loud(-3) / quiet(-9) を識別する。
+    rms_by_gain.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap()); // 降順 = loud first
+    let rms_loud  = rms_by_gain[0].1;
+    let rms_quiet = rms_by_gain[1].1;
+
+    // db_difference(quiet, loud) = 20*log10(quiet/loud) ≈ -6.0 dB。
+    let measured_diff = db_difference(rms_quiet, rms_loud);
+    let expected_diff = -6.0_f32; // -9 - (-3) = -6 dB
+    assert!(
+        (measured_diff - expected_diff).abs() <= GAIN_DB_TOLERANCE,
+        "quiet/loud の dB 差: 期待 {expected_diff:.1} dB、計測 {measured_diff:.2} dB \
+         (rms_loud={rms_loud:.5}, rms_quiet={rms_quiet:.5})"
+    );
 }
