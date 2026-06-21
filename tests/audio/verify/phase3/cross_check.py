@@ -21,6 +21,7 @@ Rust の pan_from_lr_rms(l, r) と同じ式:
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import math
 import sys
@@ -271,15 +272,13 @@ def run_fixture(
         if not result["eventOk"]:
             all_ok = False
 
-    # spurious onset 件数（全 scheduled onset にマッチしなかった librosa 検出）
+    # spurious onset 件数（全 scheduled onset にマッチしなかった librosa 検出）。
+    # 各 librosa 検出について最近接 scheduled までの距離をベクトルで出し、許容超過を数える。
     scheduled_positions = np.array(
         [ev["onsetFrameScheduled"] for ev in rust["events"]], dtype=np.int64
     )
-    spurious_count = 0
-    for lib_onset in librosa_onsets:
-        diffs = np.abs(scheduled_positions - lib_onset)
-        if diffs.min() > ONSET_LIBROSA_FRAMES:
-            spurious_count += 1
+    nearest_dist = np.abs(librosa_onsets[:, None] - scheduled_positions[None, :]).min(axis=1)
+    spurious_count = int(np.sum(nearest_dist > ONSET_LIBROSA_FRAMES))
 
     compare = {
         "fixture": fixture_name,
@@ -304,8 +303,7 @@ def run_fixture(
         json.dump(compare, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
-    status = "PASS" if all_ok else "FAIL"
-    print(f"  [{status}] {fixture_name} → {out_path}")
+    print(f"  [{compare['verdict']}] {fixture_name} → {out_path}")
     if not all_ok:
         for ev_r in event_results:
             if not ev_r["eventOk"]:
@@ -385,8 +383,8 @@ def run_selftest(phase3_dir: Path, python_ver: str) -> None:
     sp_start = silence_frames + burst_frames + gap_frames // 2
     sp_end = sp_start + 480
     noise_sp = (rng.standard_normal(sp_end - sp_start) * 0.3).astype(np.float32)
-    pcm[sp_start:sp_end, 0] = noise_sp.astype(np.float32)
-    pcm[sp_start:sp_end, 1] = noise_sp.astype(np.float32)
+    pcm[sp_start:sp_end, 0] = noise_sp
+    pcm[sp_start:sp_end, 1] = noise_sp
 
     # .gen/ に保存（phase3_dir は tests/audio/verify/phase3/ なので parents[3] = project root）
     project_root = phase3_dir.parents[3]
@@ -395,15 +393,19 @@ def run_selftest(phase3_dir: Path, python_ver: str) -> None:
     pcm_path = gen_dir / "_selftest.pcm"
     pcm.astype("<f4").tofile(str(pcm_path))
 
-    # body windows（burst のほぼ全域を使う）
+    # body windows（burst のほぼ全域を使う）。256/64 は Rust body_window と意味的に対応させた
+    # 任意値（selftest は合成 PCM なので Rust 定数との完全一致は不要）。
     b1_body = [b1_start + 256, b1_end - 64]
     b2_body = [b2_start + 256, b2_end - 64]
 
-    # burst 1 の RMS（参照計算 — Rust と同じ定義 sqrt(mean(x²))）
-    b1_l_rms = float(np.sqrt(np.mean(pcm[b1_body[0]:b1_body[1], 0] ** 2)))
-    b1_r_rms = float(np.sqrt(np.mean(pcm[b1_body[0]:b1_body[1], 1] ** 2)))
-    b2_l_rms = float(np.sqrt(np.mean(pcm[b2_body[0]:b2_body[1], 0] ** 2)))
-    b2_r_rms = float(np.sqrt(np.mean(pcm[b2_body[0]:b2_body[1], 1] ** 2)))
+    # 参照 RMS（Rust と同じ定義 sqrt(mean(x²))。measure_level_librosa は使わない＝比較対象だから）。
+    def _rms(arr: np.ndarray) -> float:
+        return float(np.sqrt(np.mean(arr ** 2)))
+
+    b1_l_rms = _rms(pcm[b1_body[0]:b1_body[1], 0])
+    b1_r_rms = _rms(pcm[b1_body[0]:b1_body[1], 1])
+    b2_l_rms = _rms(pcm[b2_body[0]:b2_body[1], 0])
+    b2_r_rms = _rms(pcm[b2_body[0]:b2_body[1], 1])
 
     b1_pan = pan_from_lr_rms_python(b1_l_rms, b1_r_rms)
     b2_pan = pan_from_lr_rms_python(b2_l_rms, b2_r_rms)
@@ -436,9 +438,9 @@ def run_selftest(phase3_dir: Path, python_ver: str) -> None:
         ],
     }
 
+    # fixtures_dir は gen_dir（その子）を parents=True で作った時点で存在する。
     fixtures_dir = project_root / "test-assets" / "verify-fixtures" / "phase3"
     rust_json_path = fixtures_dir / "_selftest.rust.json"
-    fixtures_dir.mkdir(parents=True, exist_ok=True)
     with open(rust_json_path, "w") as f:
         json.dump(rust_normal, f, indent=2)
         f.write("\n")
@@ -455,39 +457,34 @@ def run_selftest(phase3_dir: Path, python_ver: str) -> None:
         _cleanup_selftest(rust_json_path, pcm_path)
         sys.exit(1)
 
-    # -- 異常系: 値を意図的にずらして FAIL を期待 --
+    # -- 異常系: 値を意図的にずらして FAIL を期待（正常系と同じ run_fixture を通す）--
     print("[selftest] 異常系テスト（FAIL が期待値）...")
-    rust_bad = json.loads(json.dumps(rust_normal))
-    # RMS を意図的に 50% ずらす（LEVEL_REL_TOL=3% を大幅超過）
-    rust_bad["events"][0]["lRms"] *= 1.5
+    rust_bad = copy.deepcopy(rust_normal)  # pcmFile は同じ PCM を指す
+    rust_bad["fixture"] = "_selftest_bad"
+    rust_bad["events"][0]["lRms"] *= 1.5    # RMS を 50% ずらす（LEVEL_REL_TOL=3% を大幅超過）
     rust_bad["events"][0]["rRms"] *= 1.5
-    # onset を 300ms ずらす（ONSET_OURS_FRAMES=96fr を大幅超過）
-    rust_bad["events"][0]["onsetFrameThreshold"] += 15000
+    rust_bad["events"][0]["onsetFrameThreshold"] += 15000  # onset を 300ms ずらす（96fr 超過）
 
     rust_json_bad = fixtures_dir / "_selftest_bad.rust.json"
-    # pcmFile は同じ PCM を指す
     with open(rust_json_bad, "w") as f:
         json.dump(rust_bad, f, indent=2)
         f.write("\n")
 
-    mono = pcm.mean(axis=1).astype(np.float32)
-    librosa_onsets = detect_onsets_librosa(mono, sr)
-    results_bad = [
-        compare_event(ev, pcm, sr, librosa_onsets)
-        for ev in rust_bad["events"]
-    ]
-    got_fail = any(not r["eventOk"] for r in results_bad)
+    got_fail = not run_fixture("_selftest_bad", fixtures_dir, fixtures_dir, python_ver)
+    compare_json_bad = fixtures_dir / "_selftest_bad.compare.json"
     if got_fail:
         print("[selftest] 異常系 FAIL（期待通り）")
     else:
         print("[selftest ERROR] 異常系が PASS — 検出ロジックに問題あり", file=sys.stderr)
-        _cleanup_selftest(rust_json_path, pcm_path, rust_json_bad)
+        _cleanup_selftest(rust_json_path, pcm_path, rust_json_bad, compare_json_bad)
         sys.exit(1)
 
-    # クリーンアップ（rust.json / compare.json / _selftest.pcm / bad.json）。
-    # gen_dir 全体ではなく selftest が作った _selftest.pcm のみ削除（本物の PCM を保護）。
+    # クリーンアップ（rust.json / compare.json / _selftest.pcm / bad.{rust,compare}.json）。
+    # gen_dir 全体ではなく selftest が作ったファイルのみ削除（本物の PCM を保護）。
     compare_json = fixtures_dir / "_selftest.compare.json"
-    _cleanup_selftest(rust_json_path, compare_json, pcm_path, rust_json_bad)
+    _cleanup_selftest(
+        rust_json_path, compare_json, pcm_path, rust_json_bad, compare_json_bad
+    )
     print("[selftest] 完了 — 正常系 PASS / 異常系 FAIL 検出 確認済み")
 
 

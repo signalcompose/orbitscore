@@ -46,10 +46,8 @@ struct GoldenEvent {
     pan: f32,
     offset_sec: f64,
     duration_sec: f64,
-    #[allow(dead_code)]
     gain_db: f64,
-    #[allow(dead_code)]
-    pan_raw: f64,
+    // panRaw は JSON に存在するが未使用。serde は未知フィールドを無視するため宣言しない。
     sequence_name: String,
 }
 
@@ -97,10 +95,19 @@ fn frame_at(sec: f64, sr: f64) -> usize {
     (sec * sr).round() as usize
 }
 
-/// body 窓 `[onset+256, onset+span-tail_trim)`。
+/// イベントの再生尺フレーム。whole（durationSec=0）= サンプル全尺 / slice = durationSec フレーム。
+fn play_span(ev: &GoldenEvent, sample_frames: &HashMap<String, usize>, sr: f64) -> usize {
+    if ev.duration_sec > 0.0 {
+        frame_at(ev.duration_sec, sr)
+    } else {
+        sample_frames[&ev.sample]
+    }
+}
+
+/// body 窓 `[onset+BODY_HEAD_OFFSET, onset+span-tail_trim)`。
 /// verify_schedule_pcm.rs の `body_window` と同じ（import 不可のため複製）。
 fn body_window(onset: usize, span: usize, tail_trim: usize) -> (usize, usize) {
-    (onset + 256, onset + span.saturating_sub(tail_trim))
+    (onset + BODY_HEAD_OFFSET, onset + span.saturating_sub(tail_trim))
 }
 
 /// stereo interleaved `cap.data` から mono mix `(L+R)/2` の `CapturedAudio` を生成。
@@ -163,17 +170,12 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
             ev.duration_sec,
         )
         .expect("play_at");
-        let play_frames = if ev.duration_sec > 0.0 {
-            frame_at(ev.duration_sec, sr)
-        } else {
-            sample_frames[&ev.sample]
-        };
-        let end = frame_at(ev.onset_sec, sr) + play_frames;
+        let end = frame_at(ev.onset_sec, sr) + play_span(ev, &sample_frames, sr);
         last_end_frame = last_end_frame.max(end);
     }
 
     let total_frames = last_end_frame + golden.sample_rate as usize / 4; // +0.25s 余白
-    let data = wrap.render_offline(total_frames, 512);
+    let data = wrap.render_offline(total_frames, BLOCK_FRAMES);
     (
         CapturedAudio::new(data, 2, golden.sample_rate),
         sample_frames,
@@ -182,8 +184,16 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
 
 // ─── 1 fixture の処理 ─────────────────────────────────────────────────────
 
+/// render の block 分割粒度（実 cpal callback の粒度を模す）。verify_schedule_pcm.rs と同値。
+const BLOCK_FRAMES: usize = 512;
+/// onset 閾値 = この比率 × body-window の mono peak（README 由来の校正値）。
 const ONSET_THRESHOLD_RATIO: f64 = 0.3;
+/// body 窓の先頭オフセット（onset 直後の block straddle を除外）。BODY_TAIL_TRIM と対で見直す。
+const BODY_HEAD_OFFSET: usize = 256;
+/// body 窓の末尾トリム（末尾 fade を除外）。attack fade 追加時は BODY_HEAD_OFFSET と同時に見直す。
 const BODY_TAIL_TRIM: usize = 600;
+/// onset 探索区間の先頭マージン（10ms @48k）。±96 frame 許容より広く取り先行イベント誤マッチを回避。
+const ONSET_SEARCH_MARGIN: usize = 480;
 
 fn process_fixture(fixture_name: &str) {
     // golden をロードしてレンダ。
@@ -229,12 +239,8 @@ fn process_fixture(fixture_name: &str) {
     for (i, ev) in golden.events.iter().enumerate() {
         let onset_scheduled = frame_at(ev.onset_sec, sr);
 
-        // body 窓（RMS 用）。span: whole = サンプル全尺 / slice = durationSec フレーム。
-        let span = if ev.duration_sec > 0.0 {
-            frame_at(ev.duration_sec, sr)
-        } else {
-            sample_frames[&ev.sample]
-        };
+        // body 窓（RMS 用）。
+        let span = play_span(ev, &sample_frames, sr);
         let (w_start, w_end) = body_window(onset_scheduled, span, BODY_TAIL_TRIM);
 
         // L/R RMS → pan。
@@ -248,7 +254,7 @@ fn process_fixture(fixture_name: &str) {
         // ─── onset 検出（threshold 法）────────────────────────────────
         // 探索区間: [onset_scheduled - 480, 次イベントの scheduled or frames)。
         // 先行イベントが先に当たるのを防ぐためイベントごとに区間を限定する。
-        let search_start = onset_scheduled.saturating_sub(480);
+        let search_start = onset_scheduled.saturating_sub(ONSET_SEARCH_MARGIN);
         let search_end = if i + 1 < n_events {
             frame_at(golden.events[i + 1].onset_sec, sr)
         } else {
@@ -266,12 +272,12 @@ fn process_fixture(fixture_name: &str) {
             .map(|local_f| local_f + search_start);
 
         // ─── onset 検出（matched filter 法）──────────────────────────
-        // per_event_gain の第1イベントのみ実施。template = onset 直後 256 frame。
+        // matched filter の demo は per_event_gain 第1イベントのみ（他 fixture は threshold で
+        // 十分なので意図的に追加しない）。template = onset 直後 BODY_HEAD_OFFSET frame を
+        // mono 配列から直接切り出す（sub_mono でなく mono.data から）。
         let onset_frame_matched = if fixture_name == "per_event_gain" && i == 0 {
-            // template を mono 配列から直接切り出す（sub_mono でなく mono.data から）。
-            let tmpl_start = onset_scheduled;
-            let tmpl_end = (onset_scheduled + 256).min(mono.frames());
-            let template: Vec<f32> = mono.data[tmpl_start..tmpl_end].to_vec();
+            let tmpl_end = (onset_scheduled + BODY_HEAD_OFFSET).min(mono.frames());
+            let template: Vec<f32> = mono.data[onset_scheduled..tmpl_end].to_vec();
             detect_onset_matched(&mono.data, &template)
         } else {
             None
