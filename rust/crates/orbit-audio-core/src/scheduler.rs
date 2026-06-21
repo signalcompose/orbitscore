@@ -512,6 +512,49 @@ mod tests {
     }
 
     #[test]
+    fn resolve_slice_region_clamps_offset_and_len() {
+        // scheduler の render 尺と daemon の PlayEnded 尺が共有する単一式。境界を直接 pin する。
+        // offset == total → start=total, len=0（`total - start` の usize underflow を防ぐ）
+        assert_eq!(resolve_slice_region(100, 100, 0), (100, 0));
+        assert_eq!(resolve_slice_region(100, 100, 50), (100, 0));
+        // offset > total → total で clamp
+        assert_eq!(resolve_slice_region(100, 150, 10), (100, 0));
+        // offset=0, len=0 → 全体
+        assert_eq!(resolve_slice_region(100, 0, 0), (0, 100));
+        // offset>0, len=0 → offset 以降すべて
+        assert_eq!(resolve_slice_region(100, 30, 0), (30, 70));
+        // requested > remaining → remaining で clamp
+        assert_eq!(resolve_slice_region(100, 30, 1000), (30, 70));
+    }
+
+    #[test]
+    fn slice_region_stereo_source_reads_correct_channel_frames() {
+        // ステレオ素材で frame i の L=i, R=i+0.5。region [4,3] で frame 4,5,6 を読む。
+        // 中央パン（各 ch 1/√2 倍）で、L が L サンプル・R が R サンプルを読む
+        // （channel stride = src_frame*channels + ch が正しい）ことを確認する。
+        let frames = 20usize;
+        let data: Vec<f32> = (0..frames).flat_map(|i| [i as f32, i as f32 + 0.5]).collect();
+        let sample = Sample::new(data, 48_000, 2);
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, sample)
+                .with_pan(0.0)
+                .with_region(4, 3),
+        );
+        let mut buf = vec![0.0f32; 40]; // 20 frames stereo
+        s.render(&mut buf);
+        let k = std::f32::consts::FRAC_1_SQRT_2;
+        // 出力 frame 0 = 素材 frame 4: L=4.0, R=4.5（ch を取り違えていれば落ちる）
+        assert!((buf[0] - 4.0 * k).abs() < 1e-4, "f4 L={}", buf[0]);
+        assert!((buf[1] - 4.5 * k).abs() < 1e-4, "f4 R={}", buf[1]);
+        // 出力 frame 1 = 素材 frame 5: L=5.0
+        assert!((buf[2] - 5.0 * k).abs() < 1e-4, "f5 L={}", buf[2]);
+        // 出力 frame 3 は region（3 フレーム）外 → 無音
+        assert!(buf[6].abs() < 1e-5, "f7 L (region 後)={}", buf[6]);
+        assert_eq!(s.active_count(), 0);
+    }
+
+    #[test]
     fn set_global_gain_ramps_linearly_to_target() {
         let mut s = Scheduler::new(48_000, 2);
         // 直流 1.0 のモノラルサンプルを想定して 1ch 出力にすると計算が容易。

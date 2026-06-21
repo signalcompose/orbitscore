@@ -86,6 +86,43 @@ async fn play_at_then_play_started_and_play_ended() {
     assert!(saw_ended, "PlayEnded event missing");
 }
 
+/// PlayAt の duration_sec が負値の場合は PARAM_OUT_OF_RANGE で拒否する。
+/// engine_wrap は負 duration を `if duration_sec > 0.0 { .. } else { 0 }` で「0 = 全体再生」へ
+/// 潰すため、protocol 層のこの拒否は冗長な防御ではなく load-bearing（無言の全体再生を防ぐ）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn play_at_rejects_negative_duration_sec() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let wav_path = format!("{manifest_dir}/../../../test-assets/audio/kick.wav");
+    send_cmd(&mut ws, "l", "LoadSample", json!({ "path": wav_path })).await;
+    let load_resp = recv_reply_for_id(&mut ws, "l").await;
+    let sample_id = load_resp["result"]["sample_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("LoadSample resp missing sample_id: {load_resp}"))
+        .to_string();
+
+    send_cmd(
+        &mut ws,
+        "p",
+        "PlayAt",
+        json!({
+            "sample_id": sample_id,
+            "time_sec": 0.0,
+            "gain": 1.0,
+            "duration_sec": -0.5,
+        }),
+    )
+    .await;
+    let resp = recv_reply_for_id(&mut ws, "p").await;
+    assert_eq!(
+        resp["error"]["code"], "PARAM_OUT_OF_RANGE",
+        "negative duration_sec should be rejected, got: {resp}"
+    );
+}
+
 /// Stop された play_id では PlayEnded が発火しないことを確認する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn stop_suppresses_play_ended() {

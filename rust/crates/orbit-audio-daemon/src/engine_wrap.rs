@@ -192,7 +192,9 @@ impl EngineWrap {
                 gain,
                 pan,
                 slice_start_frame,
-                requested_len_frames,
+                // clamp 済みの実尺を渡す。生の requested_len_frames を渡すと、render 尺と
+                // PlayEnded 尺の一致が scheduler 内の再 clamp に依存してしまう（latent な desync）。
+                effective_len_frames,
                 play_id.clone(),
                 sample,
             )

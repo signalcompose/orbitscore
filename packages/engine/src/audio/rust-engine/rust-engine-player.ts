@@ -27,10 +27,13 @@
  *  - **pan は #304 で実装済み**（daemon PlayAt の pan・equal-power = SC `Pan2` 一致）。
  *    発火時に DSL の -100..100 を daemon の [-1,1] へ変換して送る。
  *
+ *  - **slice（chop 領域再生）は #304 で実装済み**（offset/duration の領域読み・rate=1.0）。
+ *    rate≠1.0（slice 尺をスロット尺へ詰める time-stretch）のみ 1回 warn し、slice 自体は
+ *    自然尺（rate=1.0）で発音する（skip しない）。time-stretch は #213/#239 へ defer。
+ *
  *  - **残る feature gap は boundary で明示**（見かけの parity を作らない・A0 方針）:
- *    slice → 1回 warn して skip / outputChannel(LinkAudio) → 1回 warn して hardware 発音
- *    （SC の plugin-missing fallback と同形）/ master effects（compressor/limiter/normalizer）→
- *    1回 warn して no-op。いずれも後続フェーズ（rate/slice=time-stretch 増分・LinkAudio/effects=A4 era）。
+ *    outputChannel(LinkAudio) → 1回 warn して hardware 発音（SC の plugin-missing fallback と同形）/
+ *    master effects（compressor/limiter/normalizer）→ 1回 warn して no-op。いずれも A4 era。
  */
 
 import { gainDbToAmplitude } from '../audio-gain-utils'
@@ -40,7 +43,13 @@ import type { AudioDevice } from '../supercollider/types'
 import { DaemonClient } from './daemon-client'
 import { DaemonConnectionError } from './errors'
 
-/** boundary で拒否する feature gap の種別。pan は #304 で実装済みのため gap ではない。 */
+/**
+ * boundary で明示する制約の種別。
+ * - `slice`: chop 領域再生は実装済み。rate≠1.0（time-stretch）未対応の warn 用で、slice 自体は
+ *   rate=1.0 で発音する（拒否しない）。
+ * - `outputChannel`(LinkAudio) / `masterEffect`: 未対応 feature gap（A4 era）。
+ * pan は #304 で実装済みのため gap ではない。
+ */
 type GapKind = 'slice' | 'outputChannel' | 'masterEffect'
 
 /** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
@@ -448,7 +457,10 @@ export class RustEnginePlayer implements AudioEngineBackend {
       this.stop()
       return
     }
-    console.error(`❌ [rust-engine] playback error for ${play.sequenceName}:`, err)
+    console.error(
+      `❌ [rust-engine] playback error for ${play.sequenceName} (${play.filepath}):`,
+      err,
+    )
   }
 
   /** filepath を daemon にロードし sample_id を返す（キャッシュ + single-flight）。 */
@@ -463,8 +475,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
       .loadSample(filepath)
       .then((res) => {
         this.sampleIds.set(filepath, res.sampleId)
-        if (res.sampleRate > 0) {
+        if (res.sampleRate > 0 && Number.isFinite(res.sampleRate)) {
           this.durations.set(filepath, res.frames / res.sampleRate)
+        } else {
+          // 尺が取れないと chop の領域が計算できず、slice が無言で全体再生に degrade する
+          // （#304 で durations が slice 再生に load-bearing 化した）。ソースで warn する。
+          console.warn(
+            `⚠️  [rust-engine] LoadSample for "${filepath}" returned invalid sample_rate=` +
+              `${res.sampleRate} — chop slice 領域を計算できず、slice は全体再生に degrade します。`,
+          )
         }
         return res.sampleId
       })
