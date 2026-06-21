@@ -1,6 +1,6 @@
 # Post-2.0 エンジン方針 + ライセンス/配布/収益モデル
 
-> **ステータス: 方向収束 + 次フェーズ・アーキ確定。post-2.0。2026-06-19 engine=Rust 決定 / 2026-06-21（Issue #298）楽器配置・fault・egress 確定 + ロードマップを「土台2本→改良層」に再優先順位化（§2.5）。** A0+S1+S1b（PR #294）+S2（PR #297）実装済。**土台 = ① VSCodium化（OrbitStudio・最初の /goal = 2.0.0 parity・先決）+ ② ネイティブエンジン（α #300〜）／ 改良層（β audio DSL⊇pitch・audio 機能）は土台の後**。`docs/research/NATIVE_ENGINE_TRACKTION_VSCODIUM.md`（Tracktion feasibility）の Tracktion 寄り結論を**本書が更新**する。
+> **ステータス: 方向収束 + 次フェーズ・アーキ確定。post-2.0。2026-06-19 engine=Rust 決定 / 2026-06-21（Issue #298）楽器配置・fault・egress 確定 + ロードマップを **engine-first** に確定（§2.5・#302）。** A0+S1+S1b（PR #294）+S2（PR #297）実装済。**engine-first**: ① native エンジンを `ORBITSCORE_ENGINE=rust` opt-in の裏で育て .vsix で dog-food → cutover #108 → ② **OrbitStudio(VSCodium) を native の上で**（scsynth 載せない・CLI+Claude 拡張必須）→ 改良層（β audio DSL⊇pitch・audio 機能）は後。**最初の `/goal` = engine 第1増分（pan/slice/per-slice gain + α・#300 系）**。`docs/research/NATIVE_ENGINE_TRACKTION_VSCODIUM.md` の Tracktion 寄り結論を**本書が更新**する。
 
 ---
 
@@ -58,13 +58,15 @@
   - **LinkAudio** は **非 DAW / inter-app 補助**（live rig 同期等）に位置づけ降格（便利だが運用が重い）。
 - **設計制約**: **engine を clean に埋め込み可能に保つ（daemon/engine ↔ editor の分離を崩さない）** — b2 の feasibility を担保する。今すぐ作る話ではなく「壊さない」制約。
 
-### 2.5 ロードマップ（2026-06-21 owner 再優先順位化 = 土台2本 → 改良層）
-**今後の様々な改良が載る土台は2本: ① VSCodium化（OrbitStudio）+ ② ネイティブ音声エンジン。** DSL 拡張・audio 機能は**土台が成ってから**（今の `.orbs` DSL は表現力として充分・急がない・やる時はそれに集中する）。
+### 2.5 ロードマップ（2026-06-21 確定・**engine-first**）
+**土台は ① ネイティブ音声エンジン + ② VSCodium化（OrbitStudio）の2本だが、順序は engine-first**（OrbitStudio は native エンジンの上で動かし、**scsynth は載せない**）。DSL 拡張・audio 機能は土台の後（今の `.orbs` DSL は表現力として充分・急がない・やる時はそれに集中する）。
 
-- **土台① OrbitStudio（VSCodium）→ 2.0.0 parity（近期 focus・先決）**: 既存 SC スタックで動くアプリを VSCodium で（Track B / B1 rebrand rebuild）。**engine 非依存**（2.0.0 は SC 既定）なので ② と別コードベース＝並行可だが、focus は ① に置く。
-- **土台② ネイティブ音声エンジン（Rust）**: S1/S2 済 → **α recovery floor（fault ①・issue #300）** → 成熟（**γ out-of-process sandbox（fault ②・3rd-party + effects）** → **δ 3rd-party VST3/AU** → 既定 cutover #108）。
+- **① native エンジンを opt-in の裏で育てる**: `ORBITSCORE_ENGINE=rust` opt-in（S2 で配線済）の裏で育て、**今の .vsix で dog-food**（scsynth 同梱なし・OrbitStudio 非依存・**throwaway ゼロ**）。engine の Studio 向け範囲 = **サンプラー(in-process) + plugin host(effects)**・**scsynth 同等ではない**。
+  - **第1増分（最初の `/goal`・issue #300 系）**: S2-defer の **pan / slice / per-slice gain** を埋める + **α recovery floor（fault ①）**。
+  - 後続増分: **time-stretch** / **LinkAudio（A4）** / **γ out-of-process sandbox（fault ②・effects + 3rd-party）** / **δ 3rd-party VST3/AU** → **cutover #108（default 切替・scsynth 退役）**。
+- **② OrbitStudio（VSCodium）を native エンジンの上で（cutover 後）**: scsynth は載せない・**CLI + Claude 拡張が動く**こと必須。engine 非依存な殻（VSCodium リブランド / node ランタイム / 署名 CI）は再利用可で並行着手も可だが、audio が使えるのは engine 後。
 - **改良層（土台の後・集中して）**: **β audio DSL ⊇ pitch DSL（+ #213 `fixpitch()`/`time()`・in-process・C1 pitch spec 先行が前提）** / audio 機能（slice #239 / audio `[ ]` #238）。
-- **旧版（α→β→γ→δ 一直線）からの変更**: **VSCodium を土台として前倒し**（master plan の「Track B は engine の後（A1–A2 後）」を撤回）/ **β を改良層へ後置**（engine 土台が成る後）。fault と features-as-plugin の分離性は維持（staging の自由度）。
+- **収束の経緯（#302）**: 一時「土台2本・OrbitStudio 先・2.0.0 parity on scsynth」と整理したが、「最終的に native が乗るのに scsynth を Studio に同梱する工数は無駄」（owner）+ opt-in dog-food で「使える」と「無駄ゼロ」が両立するため **engine-first に収束**（master plan 本来の方針）。アーキ §2.1–2.4 は不変。
 
 ### 2.6 売り物化 = DSP を共有 crate に
 - stretch / sampler DSP を再利用可能 crate にし、**engine ノード（DSL 駆動・in-process）**と、任意の **standalone サンプラー製品（MIDI/標準駆動・他 DAW・単体販売）**の2フロントエンドで共有。engine を plugin 境界に通さずに製品も作れる。1st-party プラグイン shell = **nih-plug（Rust・ISC・CLAP+VST3 を1コードベース）**。
@@ -102,17 +104,15 @@
 - **pitch/song 再設計はアプリ優先**、必要なら `.vsix` に backport（VS Code 利用者カバーは二次目標）。
 - 命名: **OrbitScore = 言語（拡張でもアプリでも中で生きる）/ OrbitStudio = 専用アプリ（候補名）**。移調は `transpose()`（`transport` は再生ヘッド連想で不可）。
 
-## 7. 次の一手（スパイク完了 → 土台2本 → 改良層・§2.5 と同一）
+## 7. 次の一手（スパイク完了 → engine-first・§2.5 と同一）
 
 **完了**: feasibility research（`docs/research/RUST_PLUGIN_HOSTING.md`）→ **A0+S1+S1b（PR #294）= CLAP hosting が RT 安全に成立**（in-process clack-host）→ **S2（PR #297）= daemon dispatch seam parity**。詳細 `POST_2.0_A0_RT_INTEGRATION_DESIGN.md`。
 
-**土台層（先に作る・両方が改良の土台）**:
-- **① OrbitStudio（VSCodium）→ 2.0.0 parity（近期 focus・先決・最初の `/goal`・issue #301）** — 既存 SC スタックで動くアプリを VSCodium で（Track B / B1 rebrand rebuild）。engine 非依存。未確証 = VSCodium で既存 .vsix/extension を動かす形 / VST GUI の Electron 共存（着手時に feasibility）。
-- **② ネイティブ音声エンジン（Rust）** — ①と並行可（別コードベース）。S1/S2 済 →
-  - **α recovery floor（fault ①・issue #300）** — daemon supervision + auto-respawn + 最小 recovery contract（接続再確立 + active loops 復帰 / 可聴ギャップ許容 / one-shot drop / transport 再 anchor）。Done = fault-injection kill-test（kill -9 + 故意 segfault プラグイン〔S1b misbehave synth 拡張・再利用〕で liveness + 復旧後 correctness〔transport desync・orphaned play_id 無し〕）+ 既存テスト全緑 / SC 既定無改変。
-  - **γ out-of-process sandbox（fault ②）** — 3rd-party + effects 隔離。shared-mem audio / RT-safe event IPC / watchdog→respawn / +~1 block latency。**最大の未構築サブシステム**。
-  - **δ 3rd-party VST3/AU** — 成熟度順（AU `objc2-avf-audio` / VST3 `vst3` crate MIT・工数最大）。
-  - 既定 cutover（#108・Rust を default audio backend に）。
+**① native エンジンを `ORBITSCORE_ENGINE=rust` opt-in の裏で育てる（今の .vsix で dog-food・scsynth 同梱なし・throwaway ゼロ）**:
+- **第1増分（最初の `/goal`・issue #300 系）** — S2-defer の **pan（daemon 実装）/ slice / per-slice gain** を埋める + **α recovery floor（fault ①）**: daemon supervision + auto-respawn + 最小 recovery contract（接続再確立 + active loops 復帰 / 可聴ギャップ許容 / one-shot drop / transport 再 anchor）。Done = opt-in で現行 .orbs audio が SC 同等に鳴る + **α kill-test**（kill -9 + 故意 segfault プラグイン〔S1b misbehave synth 拡張・再利用〕で liveness + 復旧後 correctness〔transport desync・orphaned play_id 無し〕）+ 既存テスト全緑 / SC 既定無改変。
+- **後続増分**: **time-stretch（Signalsmith）** / **LinkAudio（A4・Rust 隔離 GPL）** / **γ out-of-process sandbox（fault ②・effects + 3rd-party・shared-mem audio / RT-safe event IPC / watchdog）** / **δ 3rd-party VST3/AU** → **cutover #108（Rust を default backend に・scsynth 退役）**。
+
+**② OrbitStudio（VSCodium）を native エンジンの上で（cutover 後・issue #301）**: scsynth は載せない・**CLI + Claude 拡張が動く**こと必須。engine 非依存な殻（VSCodium リブランド / node ランタイム + `@julusian/midi` ABI / 署名 CI）は再利用可で並行着手も可だが、audio が使えるのは engine 後。
 
 **改良層（土台の後・集中して）**:
 - **β audio DSL ⊇ pitch DSL** — `#213 fixpitch()/time()`（今 stub）含む。in-process・S1 基盤。**C1 pitch モデル spec 先行が前提**（pitch を audio の真部分集合に）。
