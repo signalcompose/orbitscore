@@ -35,6 +35,16 @@ const FROZEN_NOW_MS = 1_000_000
 
 export const VERIFY_FIXTURES_DIR = resolve(__dirname, '../../../test-assets/verify-fixtures')
 
+/**
+ * fixture 相対の尺キーを絶対パスに直す（audio() が documentDirectory 基準で絶対化するため、
+ * seed 側も絶対パスで揃える）。`recordSchedule` と `resolveGolden` が共有する。
+ */
+function toAbsDurations(durations: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(durations).map(([rel, sec]) => [resolve(VERIFY_FIXTURES_DIR, rel), sec]),
+  )
+}
+
 /** golden schedule JSON の 1 イベント（Leg 1 が消費する解決済み daemon params）。 */
 export interface GoldenEvent {
   /** 発音 onset（秒・相対）。`time/1000`。 */
@@ -75,12 +85,7 @@ export async function recordSchedule(
   const fixturePath = resolve(VERIFY_FIXTURES_DIR, `${fixtureName}.orbs`)
   const source = readFileSync(fixturePath, 'utf8')
   const ir = parseAudioDSL(source)
-  // durations は絶対パス（audio() が documentDirectory 基準で絶対化する）で seed する。
-  const absDurations: Record<string, number> = {}
-  for (const [rel, sec] of Object.entries(durations)) {
-    absDurations[resolve(VERIFY_FIXTURES_DIR, rel)] = sec
-  }
-  const recording = new RecordingScheduler(absDurations)
+  const recording = new RecordingScheduler(toAbsDurations(durations))
   const interp = new InterpreterV2({ audioEngine: recording })
   await interp.execute(ir, { documentDirectory: dirname(fixturePath) })
   return recording.getRecorded()
@@ -98,8 +103,8 @@ export function resolveGolden(
   sampleRate = 48_000,
 ): GoldenSchedule {
   const player = new RustEnginePlayer()
-  for (const [rel, sec] of Object.entries(durations)) {
-    player.seedDuration(resolve(VERIFY_FIXTURES_DIR, rel), sec)
+  for (const [abs, sec] of Object.entries(toAbsDurations(durations))) {
+    player.seedDuration(abs, sec)
   }
   const events: GoldenEvent[] = recorded.map((play) => {
     const { gain, pan, offsetSec, durationSec } = player.toDaemonParams(play)

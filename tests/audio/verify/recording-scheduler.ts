@@ -29,11 +29,6 @@ export class RecordingScheduler implements AudioEngineBackend {
     }
   }
 
-  /** slice 解決などで尺が要る場合に既知 fixture 尺を seed する。 */
-  seedDuration(filepath: string, seconds: number): void {
-    this.durations.set(filepath, seconds)
-  }
-
   /** 記録した発音スケジュール（time 昇順のコピー）。 */
   getRecorded(): ScheduledPlay[] {
     return [...this.recorded].sort((a, b) => a.time - b.time)

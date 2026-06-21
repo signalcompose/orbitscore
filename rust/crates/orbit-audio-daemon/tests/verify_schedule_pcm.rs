@@ -99,12 +99,13 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
         )
         .expect("play_at");
         // 出力尺の見積もり（whole=サンプル尺 / slice=duration_sec）。
+        let sr = golden.sample_rate as f64;
         let play_frames = if ev.duration_sec > 0.0 {
-            (ev.duration_sec * golden.sample_rate as f64).round() as usize
+            frame_at(ev.duration_sec, sr)
         } else {
             sample_frames[&ev.sample]
         };
-        let end = (ev.onset_sec * golden.sample_rate as f64).round() as usize + play_frames;
+        let end = frame_at(ev.onset_sec, sr) + play_frames;
         last_end_frame = last_end_frame.max(end);
     }
 
@@ -116,6 +117,18 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
     )
 }
 
+/// 秒 → フレーム位置（四捨五入）。
+fn frame_at(sec: f64, sr: f64) -> usize {
+    (sec * sr).round() as usize
+}
+
+/// body 窓 `[onset+256, onset+span-tail_trim)`。onset 直後の block straddle と末尾 fade を
+/// 除外する。`span` は再生尺フレーム（whole=サンプル尺 / slice=領域尺）、`tail_trim` は
+/// fixture 固有の末尾除外幅（fade 尺に依存）。
+fn body_window(onset: usize, span: usize, tail_trim: usize) -> (usize, usize) {
+    (onset + 256, onset + span.saturating_sub(tail_trim))
+}
+
 #[test]
 fn pan_three_voices_render_matches_schedule() {
     let golden = load_golden("pan_three_voices");
@@ -123,11 +136,11 @@ fn pan_three_voices_render_matches_schedule() {
     let sr = golden.sample_rate as f64;
 
     for ev in &golden.events {
-        let onset = (ev.onset_sec * sr).round() as usize;
-        // whole-file 再生（duration_sec=0）。body 窓は onset 後 256 〜 末尾 fade 前。
+        let onset = frame_at(ev.onset_sec, sr);
+        // whole-file 再生（duration_sec=0）。body 窓は onset 後 256 〜 末尾 fade 前
+        // （fade ≤384 + 余裕を除外）。
         let play_frames = sample_frames[&ev.sample];
-        let w_start = onset + 256;
-        let w_end = onset + play_frames - 600; // 末尾 fade（≤384）+ 余裕を除外
+        let (w_start, w_end) = body_window(onset, play_frames, 600);
         let l = region_rms(&cap, 0, w_start, w_end);
         let r = region_rms(&cap, 1, w_start, w_end);
         assert!(
@@ -167,11 +180,10 @@ fn chop_region_render_matches_schedule() {
     for ev in &golden.events {
         // slice 領域: [onset, onset+durationSec]（durationSec > 0 = slice）。
         assert!(ev.duration_sec > 0.0, "chop fixture は slice を持つはず");
-        let onset = (ev.onset_sec * sr).round() as usize;
-        // 信号確認: onset 後 256 frame 〜 slice 終端 600 frame 前を本体窓とする。
-        let slice_end = onset + (ev.duration_sec * sr).round() as usize;
-        let w_start = onset + 256;
-        let w_end = slice_end.saturating_sub(600);
+        let onset = frame_at(ev.onset_sec, sr);
+        // 信号確認: onset 後 256 〜 slice 終端 600 frame 前を本体窓とする。
+        let slice_frames = frame_at(ev.duration_sec, sr);
+        let (w_start, w_end) = body_window(onset, slice_frames, 600);
         assert!(w_start < w_end, "slice 窓が狭すぎる: [{w_start}, {w_end})");
         // pan=0 → L/R ほぼ等しい。少なくとも max(L,R) > 1e-3 を確認。
         let l = region_rms(&cap, 0, w_start, w_end);
@@ -206,10 +218,9 @@ fn per_event_gain_render_matches_schedule() {
     let mut rms_by_gain: Vec<(f64, f32)> = Vec::new(); // (gainDb, rms)
 
     for ev in &golden.events {
-        let onset = (ev.onset_sec * sr).round() as usize;
+        let onset = frame_at(ev.onset_sec, sr);
         let play_frames = sample_frames[&ev.sample];
-        let w_start = onset + 256;
-        let w_end = onset + play_frames - 256; // kick は短いので余裕を小さく
+        let (w_start, w_end) = body_window(onset, play_frames, 256); // kick は短いので余裕を小さく
         assert!(w_start < w_end, "onset={:.3}s の body 窓が狭すぎる", ev.onset_sec);
         let l = region_rms(&cap, 0, w_start, w_end);
         let r = region_rms(&cap, 1, w_start, w_end);

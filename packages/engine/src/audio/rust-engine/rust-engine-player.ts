@@ -567,7 +567,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * slice 領域は load 済み尺（`this.durations`）に依存する。本番は `ensureLoaded` が尺を
    * 設定済み、検証は `seedDuration` で seed しておくこと。発音時刻は実時間 anchor 依存で
    * 非決定論なので含めない（呼び出し側が付与する）。
-   * @internal 検証ハーネス専用。本番経路は executePlayback から呼ぶ。
+   * @internal 本番 dispatch（executePlayback）と検証ハーネス（#311）が共有する変換。
+   *   `@internal` = 外部公開 API ではない、の意（テスト専用ではない）。
    */
   toDaemonParams(play: ScheduledPlay): DaemonPlayParams {
     // DSL pan（-100..100）を daemon の [-1,1] へ変換。範囲外は daemon 側で clamp。
