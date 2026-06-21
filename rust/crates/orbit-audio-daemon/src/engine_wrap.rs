@@ -263,6 +263,33 @@ impl EngineWrap {
         self.engine.now_sec().unwrap_or_else(|| self.uptime_sec())
     }
 
+    /// 検証ハーネス（#311 phase 2）用: スケジュール済みイベントを cpal を介さず
+    /// オフラインで `total_frames` 分 render し、interleaved f32 PCM を返す。
+    ///
+    /// 本番経路（cpal callback）とは独立した test-only API。`Engine::render` は内部で
+    /// `try_lock` するが、オフライン単スレッド駆動では競合がなく常に成功する。`block_frames`
+    /// 単位で回すことで、実 callback と同様にイベントが block 境界をまたぐ経路も通す。
+    /// `play_at` 由来の sec→frame 変換 / `resolve_slice_region` を経た出力を捕捉できる
+    /// （phase 1 の Scheduler 直接駆動が飛ばした層）。
+    ///
+    /// `block_frames == 0` は panic（テストハーネス用途なので不正設定は早期に落とす）。
+    #[doc(hidden)]
+    pub fn render_offline(&self, total_frames: usize, block_frames: usize) -> Vec<f32> {
+        assert!(block_frames > 0, "render_offline: block_frames must be > 0");
+        let channels = self.channels as usize;
+        let mut data = Vec::with_capacity(total_frames * channels);
+        let mut block = vec![0.0f32; block_frames * channels];
+        let mut rendered = 0usize;
+        while rendered < total_frames {
+            let this_frames = block_frames.min(total_frames - rendered);
+            let buf = &mut block[..this_frames * channels];
+            self.engine.render(buf);
+            data.extend_from_slice(buf);
+            rendered += this_frames;
+        }
+        data
+    }
+
     /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時。
     pub fn set_global_gain(&self, value: f32, ramp_sec: f64) -> Result<(), WrapError> {
         self.engine

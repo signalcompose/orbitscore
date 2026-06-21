@@ -1,0 +1,31 @@
+// #311 phase 2 tier(c) — pan 検証 fixture
+// tempo 60 / 4-4 / length 1 → bar 4.0s、4 subdivisions = 1.0s 刻み（onset 0/1/2/3s）。
+// 3 voices を時間分離し pan を判別:
+//   left  = hard-left (-100) @ 0s
+//   mid   = intermediate (-50) @ 2s   ← 中間値（等パワー則を線形則から判別する鍵）
+//   right = hard-right (+100) @ 3s
+// kick.wav は 0.5s mono → イベント間に無音。grid 一致で rate=1.0。
+var global = init GLOBAL
+global.tempo(60)
+global.beat(4 by 4)
+
+var left = init global.seq
+left.length(1)
+left.audio("../audio/kick.wav").chop(1)
+left.defaultGain(-3).defaultPan(-100)
+left.play(1, 0, 0, 0)
+
+var mid = init global.seq
+mid.length(1)
+mid.audio("../audio/kick.wav").chop(1)
+mid.defaultGain(-3).defaultPan(-50)
+mid.play(0, 0, 1, 0)
+
+var right = init global.seq
+right.length(1)
+right.audio("../audio/kick.wav").chop(1)
+right.defaultGain(-3).defaultPan(100)
+right.play(0, 0, 0, 1)
+
+global.start()
+RUN(left, mid, right)

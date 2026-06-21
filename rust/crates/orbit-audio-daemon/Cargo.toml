@@ -30,3 +30,6 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+# #311 phase 2 Leg 1: golden schedule を play_at でオフラインレンダし PCM を解析する検証に
+# phase-1 の assertion lib を再利用する（test-only）。
+orbit-audio-verify = { path = "../orbit-audio-verify" }
