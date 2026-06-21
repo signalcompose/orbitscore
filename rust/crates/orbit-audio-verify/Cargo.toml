@@ -1,0 +1,23 @@
+[package]
+name = "orbit-audio-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Signal compose audio output verification harness — capture the core renderer offline and assert objective PCM properties (pan / region / gain / onset / fade)"
+
+[lib]
+name = "orbit_audio_verify"
+
+[dependencies]
+# DUT (Device Under Test): the platform-agnostic core renderer we drive offline.
+# Intentionally the ONLY runtime dependency so the assertion lib stays light and
+# reusable, and so the checker cannot accidentally share render-side code (GRM
+# independence). `orbit-audio-native` (real WAV loader) is a dev-dependency only.
+orbit-audio-core = { path = "../orbit-audio-core" }
+
+[dev-dependencies]
+# Real WAV decode for end-to-end fixtures (load → schedule → render → assert).
+# Test-only: keeps cpal out of the library's dependency graph.
+orbit-audio-native = { path = "../orbit-audio-native" }

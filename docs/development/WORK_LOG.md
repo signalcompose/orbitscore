@@ -17,6 +17,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.154 feat(verify): audio output verification harness — capture + PCM assertion lib (#307) (Jun 21, 2026)
+
+**Date**: 2026-06-21
+**Status**: ✅ 実装 + 自動テスト全緑（cargo --workspace / npm）+ clippy clean。#304 の pan/領域/per-slice gain を **耳でなく PCM 解析で自動裏付け**
+**Branch**: `307-audio-verification-harness`
+
+**背景**: #304（PR #305）の native audio parity は OSC 値 parity と scheduler ユニットで固めた一方、「.orbs を end-to-end で鳴らした実レンダリング PCM」の確認は **owner の耳に依存**した。研究記録 #308（`docs/research/AUDIO_OUTPUT_VERIFICATION.md`）の tier (c)（レンダリング音 ↔ 静的スケジュールの突き合わせ）を **engine 層から着地させる第1歩**。
+
+**設計（advisor 承認）**:
+- **capture seam = `Scheduler` 直接駆動**。pan/領域/gain/末尾fade はすべて `orbit-audio-core::Scheduler::render` に入っており、それが DUT そのもの。`Engine` 経由（try_lock の理論上 drop）や daemon の `play_at`（sec→frame 変換 = tier(c) 射程外・protocol test で別途カバー）を通さず、最も決定論的な核を block 分割で回す。**実 WAV 要件は loader でロード→`Scheduler.schedule`→render で満たす**。
+- **GRM 独立性（差分検証の成立条件）**: checker は core の `equal_power_pan` / `resolve_slice_region` を **import しない**。pan は L/R RMS から `atan2` で独立逆算（レンダラは cos/sin）、領域境界・gain 比の期待値はテスト側に手計算で直書き。同式を共有すると同一バグが両側に乗り差分が消えるため。
+
+**新規 crate `orbit-audio-verify`**（lib 依存は core のみ / native は dev-dep）:
+- `capture.rs` — `CapturedAudio` + `capture(scheduler, channels, total_frames, block_frames)`。block 分割で `dst_offset_frames`（実 cpal callback のイベント境界またぎ）も通す。core 無改変のため channels は引数渡し。
+- `analysis.rs` — `region_rms` / `channel_rms` / `region_peak` / `channel_peak` / `linear_to_db` / `db_difference` / `pan_from_lr_rms`（atan2 独立逆算）+ tolerance 定数（`PAN_TOLERANCE=0.05` / `GAIN_DB_TOLERANCE=0.5` / `SILENCE_FLOOR_DB=-90`、本レンダラは完全線形ゆえ MPEG 系非線形校正不要）。
+- `onset.rs` — `detect_onset_threshold`（閾値立ち上がり）/ `detect_onset_matched`（matched filter 相互相関・整数フレーム）/ `fade_slope_is_linear`（最小二乗の正規化 RMSE で線形 release 判定）。
+
+**遡及検証テスト（#304 を PCM アサートで裏付け）**:
+- `tests/pan_real_wav.rs` — 実 WAV `sine_440.wav` を hard-left/center/hard-right でレンダ → L/R RMS から pan 逆算（±0.05）。
+- `tests/chop_region_real_wav.rs` — 実 WAV `arpeggio_c.wav` で領域 on/off（領域外は厳密 0）+ 合成 ramp で offset 同定（読んだ source フレーム == offset+local）。
+- `tests/per_slice_gain.rs` — 同尺・同素材・中央パンで線形 gain だけ変えた 2 イベント、body 窓 RMS の dB 差 == 指令比（±0.5 dBFS）。
+- `tests/onset_fade_capture.rs` — capture 経路で onset 検出（block 境界またぎ）+ 末尾 fade の線形性。
+
+**委譲（§5/§7 規律）**: Opus が capture seam / analysis コア（pan 逆算・tolerance）/ GRM 独立性 / spine（実 WAV pan）を凍結 → Sonnet が onset/fade 本体・残り遡及テスト・フィクスチャを並列実装。
+
+**検証**: orbit-audio-verify **19 unit + 7 integration = 26 passed**。cargo --workspace 全緑（core 23 / daemon 14+1 / native 16 / clap-spike 7・回帰なし）。npm test 1153 passed / 25 skipped / **0 failed**（SC 既定 `SuperColliderPlayer` / `event-scheduler.ts` 無改変・audio play() 意味論不変）。clippy clean。
+
+**スコープ外（後続増分）**: CLI `play --capture out.wav`（TS→daemon→render 全経路）/ DSL 静的スケジュールを GRM にした end-to-end tier (c) / librosa 相当の blind cross-check。
+
+**Commit**: (このコミットで確定)
+
 ### 6.153 docs(research): audio output verification — DSL static schedule vs rendered PCM (#308) (Jun 21, 2026)
 
 **Date**: 2026-06-21
