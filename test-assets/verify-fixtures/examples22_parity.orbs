@@ -1,0 +1,51 @@
+// #316 — examples/22 (#304 dog-food) を de-overlap した parity 検証 fixture。
+//
+// 生 examples/22 は 4 voice 同時並行で、各拍に複数 voice が重畳し per-event の
+// pan/gain を分離できない（研究 §4.4: per-event 検証はイベント分離・無音区間が前提）。
+// そこで同じ素材・同じ #304 パラメータを、イベント分離（十分な無音区間つき）で並べる:
+//   pan  -60 / +60 / 0 / +20（raw → daemon -0.6 / +0.6 / 0 / +0.2）
+//   gain -3 / -6 / -9 / -4 dB
+//   chop(1) 全体（kick/snare/hat）と chop(2) 領域（chopd）
+//
+// tempo 120 / beat 4/4 / length 4 → 8.0s。play 16 要素（= 4 拍 × 4 小節）→ subdivision
+// = 8.0/16 = 0.5s 刻み（spec: length(2)→8要素 と同型。subdivision は play 要素数で決まり
+// chop とは独立）。全サンプル f32 mono 48k: kick 0.5s / snare 0.2s / hihat_closed 0.05s /
+// arpeggio_c 1.0s。
+//   kick  @step0  = 0.0s  pan -60 gain -3  chop(1)全体 → [0.0,0.5]
+//   snare @step4  = 2.0s  pan +60 gain -6  chop(1)全体 → [2.0,2.2]
+//   hat   @step8  = 4.0s  pan  0  gain -9  chop(1)全体 → [4.0,4.05]
+//   chopd @step12 = 6.0s slice1 / @step14 = 7.0s slice2  pan +20 gain -4  chop(2)
+//     arpeggio 1.0s / chop(2) → sliceDur 0.5s = slot 0.5s → rate=1.0（time-stretch 回避）。
+//     slice1 → [6.0,6.5] / slice2 → [7.0,7.5]。
+// 各イベントは >=1s の無音で分離され、L/R RMS が単一 voice になるので pan/領域を per-event
+// で検証できる。
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+var kick = init global.seq
+kick.length(4)
+kick.audio("../audio/kick.wav").chop(1)
+kick.defaultGain(-3).defaultPan(-60)
+kick.play(1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+var snare = init global.seq
+snare.length(4)
+snare.audio("../audio/snare.wav").chop(1)
+snare.defaultGain(-6).defaultPan(60)
+snare.play(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+
+var hat = init global.seq
+hat.length(4)
+hat.audio("../audio/hihat_closed.wav").chop(1)
+hat.defaultGain(-9).defaultPan(0)
+hat.play(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)
+
+var chopd = init global.seq
+chopd.length(4)
+chopd.audio("../audio/arpeggio_c.wav").chop(2)
+chopd.defaultGain(-4).defaultPan(20)
+chopd.play(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 2, 0)
+
+global.start()
+RUN(kick, snare, hat, chopd)
