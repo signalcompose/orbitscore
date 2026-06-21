@@ -17,6 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.155 feat(verify): phase-2 tier-c — interpreter schedule vs rendered PCM (two-leg) (#311) (Jun 21, 2026)
+
+**Date**: 2026-06-21
+**Status**: ✅ 実装 + 自動テスト全緑（cargo --workspace / npm）+ clippy clean。tier(c) を end-to-end で閉じる第2増分
+**Branch**: `311-audio-verification-phase2-tier-c`
+
+**背景**: phase 1（#307/PR#310・6.154）は core レンダラ（Scheduler）を直接検証した。phase 2 は **interpreter が .orbs から計算したスケジュール（native 経路）を2本足で検証**し、tier(c)（レンダリング音 ↔ DSL 意味的スケジュール）を engine 層から閉じる。研究記録 = #308。
+
+**2本足（advisor 指摘で循環の罠を断つ）**:
+- **Leg 2（interpreter の計算が正しいか）**: `RecordingScheduler` 注入の `InterpreterV2` で fixture .orbs を実行 → 生の構造スケジュール（onset/gainDb/pan/slice index・total）を **.orbs + DSL 仕様から手書きした音楽単位オラクル**と比較。解決済み daemon param 同士の比較はトートロジー（slice offset/duration が両者同式）になるため**生のまま**比較。`calculateEventTiming` + DSL→schedule を直接テスト。
+- **Leg 1（renderer が忠実に再生するか）**: 構造スケジュール → 本番共有 `toDaemonParams` で解決 → golden JSON → Rust が実 `EngineWrap::play_at` でオフライン決定論レンダ → phase-1 analysis で PCM 検証。pan は atan2 独立逆算、**slice 領域は golden の offset/duration を再導出しない**（GRM 独立性）。
+
+**seam（本番経路と共有・drift 防止）**:
+- TS `RustEnginePlayer`: 発音変換を private `toDaemonParams` に lift（executePlayback と検証で**同一変換**: gainDbToAmplitude / pan÷100 / resolveSliceRegion）。`seedDuration` + `DaemonPlayParams` 型 + `ScheduledPlay`/`SliceSpec` export。behavior-preserving（rust-engine 24 + daemon-client 10 緑）。
+- TS `InterpreterV2`: audioEngine 注入 option（既定不変・SC 経路無改変）。
+- Rust `EngineWrap::render_offline`: cpal 不使用の block 駆動。play_at の sec→frame / resolve_slice_region を経た出力を捕捉（phase-1 が飛ばした層）。
+
+**決定論化の発見**: `preparePlayback` が `scheduler.isRunning` を要求（RecordingScheduler.start で立てる）、`runSequence` が `baseTime = (Date.now()-startTime)+100`（RUN 先読み）→ **fake timers で Date.now() 凍結**し記録 time = musical onset + 100 を決定論化。
+
+**fixture（3機能・判別力）**: `pan_three_voices`（hard-left/中間-50/hard-right・中間値が線形則を判別）/ `chop_region`（chop(2) grid 一致 rate=1.0・slice 領域の出力/無音）/ `per_event_gain`（gainDb -3/-9 の 6dB 差）。golden JSON は committed・staleness guard（`UPDATE_GOLDEN=1` で再生成）。
+
+**検証**: TS Leg 2 **6 passed**（pan/chop/gain × 2）+ Rust Leg 1 **3 passed**（verify_schedule_pcm）。cargo --workspace 全緑 / npm test 1159 passed / **0 failed**（SC 既定 `SuperColliderPlayer` / `event-scheduler.ts` + daemon 実時間経路 + audio play() 意味論 無改変）。clippy clean。
+
+**委譲**: Opus = seam（toDaemonParams lift / InterpreterV2 注入 / render_offline / 2本足構造）+ pan spine の end-to-end 疎通（決定論化の発見含む）。Sonnet = chop/gain fixture の複製。
+
+**スコープ外（後続）**: CLI `play --capture out.wav`（daemon offline render-to-WAV）/ librosa 相当 blind cross-check / 広い DSL 機能網羅。
+
+**Commit**: 301338e (spine) / 16e6434 (chop+gain)
+
 ### 6.154 feat(verify): audio output verification harness — capture + PCM assertion lib (#307) (Jun 21, 2026)
 
 **Date**: 2026-06-21

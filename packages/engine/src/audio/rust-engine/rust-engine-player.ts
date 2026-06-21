@@ -53,7 +53,7 @@ import { DaemonConnectionError } from './errors'
 type GapKind = 'slice' | 'outputChannel' | 'masterEffect'
 
 /** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
-interface SliceSpec {
+export interface SliceSpec {
   /** slice 番号（1 始まり）。 */
   index: number
   /** 分割数（`chop(n)` の n）。 */
@@ -63,7 +63,7 @@ interface SliceSpec {
 }
 
 /** lean scheduler が保持する 1 発音イベント。SC `ScheduledPlay` の daemon 版。 */
-interface ScheduledPlay {
+export interface ScheduledPlay {
   /** 再生開始時刻（`startTime` からの相対 ms）。 */
   time: number
   filepath: string
@@ -74,6 +74,23 @@ interface ScheduledPlay {
   sequenceName: string
   /** chop slice 情報。未指定なら全体再生。発火時に load 済み尺から領域を計算する。 */
   slice?: SliceSpec
+}
+
+/**
+ * daemon `PlayAt` の音響パラメータ（発音時刻を除く）。`toDaemonParams` の戻り値。
+ *
+ * 発火時刻（`timeSec`）は実時間 anchor 依存で非決定論なのでここには含めない。
+ * 検証ハーネス（#311）はこの決定論パラメータ列を schedule として取り出す。
+ */
+export interface DaemonPlayParams {
+  /** linear amplitude（`gainDb` から変換）。 */
+  gain: number
+  /** daemon pan [-1,1]（DSL の -100..100 から変換）。 */
+  pan: number
+  /** slice 領域開始（秒）。0 = 先頭。 */
+  offsetSec: number
+  /** slice 領域長（秒）。0 = `offsetSec` 以降すべて。 */
+  durationSec: number
 }
 
 /** daemon transport clock と TS wall clock の対応点。 */
@@ -410,24 +427,23 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
 
     const amplitude = gainDbToAmplitude(play.gainDb)
-    if (amplitude <= 0) return // 無音はスキップ（音響的に同一）。
+    if (amplitude <= 0) return // 無音はロード前にスキップ（音響的に同一）。
 
     const sampleId = await this.ensureLoaded(play.filepath)
     // ロード（async round-trip）中に clear された場合の再チェック（mute/stop への応答性）。
     if (play.sequenceName && !this.liveSequences.has(play.sequenceName)) return
-    // chop の slice 領域は load 済み尺から計算する（lazy load のためここで解決）。
-    const { offsetSec, durationSec } = this.resolveSliceRegion(play)
+    // 音響パラメータ（amplitude/pan/slice 領域）は本番発火と検証ハーネス（#311）で共有する
+    // 変換に集約する。slice 領域は ensureLoaded 後の尺（this.durations）を使う（lazy load）。
+    const { gain, pan, offsetSec, durationSec } = this.toDaemonParams(play)
     // daemonNowSec と wallMs は送信「前」に同一瞬間で採取する（onDispatch の lead/drift 計測が
     // coherent になるよう。playAt の await 後だと round-trip 分ずれる）。
     const wallMs = Date.now()
     const daemonNowSec = this.daemonNowSec()
     const timeSec = daemonNowSec + this.lookaheadSec
-    // DSL pan（-100..100）を daemon の [-1,1] へ変換。範囲外は daemon 側で clamp。
-    const pan = play.pan / 100
     const { playId } = await this.daemon.playAt(
       sampleId,
       timeSec,
-      amplitude,
+      gain,
       pan,
       offsetSec,
       durationSec,
@@ -439,7 +455,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       wallMs,
       daemonNowSec,
       timeSec,
-      gain: amplitude,
+      gain,
       playId,
     })
   }
@@ -541,6 +557,36 @@ export class RustEnginePlayer implements AudioEngineBackend {
       }
     }
     return { offsetSec, durationSec: sliceDuration }
+  }
+
+  /**
+   * `ScheduledPlay` を daemon `PlayAt` の音響パラメータ（amplitude / pan / slice 領域）へ
+   * 変換する。**本番発火（executePlayback）と検証ハーネス（schedule 抽出 #311）が同一の
+   * 変換を共有**し、片方だけが変わって検証が test double を見て緑になる drift を防ぐ。
+   *
+   * slice 領域は load 済み尺（`this.durations`）に依存する。本番は `ensureLoaded` が尺を
+   * 設定済み、検証は `seedDuration` で seed しておくこと。発音時刻は実時間 anchor 依存で
+   * 非決定論なので含めない（呼び出し側が付与する）。
+   * @internal 本番 dispatch（executePlayback）と検証ハーネス（#311）が共有する変換。
+   *   `@internal` = 外部公開 API ではない、の意（テスト専用ではない）。
+   */
+  toDaemonParams(play: ScheduledPlay): DaemonPlayParams {
+    // DSL pan（-100..100）を daemon の [-1,1] へ変換。範囲外は daemon 側で clamp。
+    return {
+      gain: gainDbToAmplitude(play.gainDb),
+      pan: play.pan / 100,
+      ...this.resolveSliceRegion(play),
+    }
+  }
+
+  /**
+   * 検証ハーネス（#311）用: slice 領域解決に使うサンプル尺（秒）を seed する。本番は
+   * `ensureLoaded` が daemon の LoadSample メタから設定するが、検証は daemon を立てずに
+   * `toDaemonParams` を呼ぶため、既知の fixture 尺をここで与える。
+   * @internal
+   */
+  seedDuration(filepath: string, seconds: number): void {
+    this.durations.set(filepath, seconds)
   }
 
   private warnOnce(kind: GapKind, message: string): void {

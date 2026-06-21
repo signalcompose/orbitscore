@@ -1,0 +1,17 @@
+// #311 phase 2 tier(c) — chop 領域検証 fixture
+// tempo 120 / 4-4 / length 1 → bar 2.0s、4 subdivisions = 0.5s 刻み。
+// arpeggio_c.wav = 1.0s mono / chop(2) → sliceDur 0.5s = slot → rate=1.0。
+// play(1, 0, 2, 0): slice1@0s, rest@0.5s, slice2@1.0s, rest@1.5s。
+// イベント間（各 slice は 0.5s、onset 差 1.0s）に無音が生じ、領域外無音を検証できる。
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+var chop = init global.seq
+chop.length(1)
+chop.audio("../audio/arpeggio_c.wav").chop(2)
+chop.defaultGain(-3).defaultPan(0)
+chop.play(1, 0, 2, 0)
+
+global.start()
+RUN(chop)
