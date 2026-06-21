@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { gainDbToAmplitude } from '../../../packages/engine/src/audio/audio-gain-utils'
 import { createAudioEngine } from '../../../packages/engine/src/audio/create-audio-engine'
 import { resolveEngineKind } from '../../../packages/engine/src/audio/engine-backend'
 import { RustEnginePlayer } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
@@ -112,7 +113,7 @@ describe('RustEnginePlayer with mock daemon', () => {
     p.scheduleEvent('/audio/snare.wav', 0, -6, 0, 'seqA') // -6 dB ≈ 0.501
     p.start()
     await waitFor(() => playAtRecords().length >= 1)
-    expect(playAtRecords()[0].gain as number).toBeCloseTo(Math.pow(10, -6 / 20), 4)
+    expect(playAtRecords()[0].gain as number).toBeCloseTo(gainDbToAmplitude(-6), 4)
   })
 
   it('PlayAt.time_sec は daemon now（anchor）+ 定数 lookahead', async () => {
@@ -194,7 +195,7 @@ describe('RustEnginePlayer with mock daemon', () => {
     p.start()
     await waitFor(() => playAtRecords().length >= 2)
     expect(playAtRecords()[0].gain as number).toBeCloseTo(1.0, 4)
-    expect(playAtRecords()[1].gain as number).toBeCloseTo(Math.pow(10, -6 / 20), 4)
+    expect(playAtRecords()[1].gain as number).toBeCloseTo(gainDbToAmplitude(-6), 4)
   })
 
   it('slice の rate≠1.0（time-stretch）は 1 回 warn し、自然尺で鳴らす', async () => {

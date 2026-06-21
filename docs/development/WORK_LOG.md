@@ -48,7 +48,15 @@ post-2.0 engine-first の第1増分（最初の `/goal`）。S2 で defer した
 
 **残**: time-stretch / LinkAudio / α recovery floor は後続増分。examples/22 が `RUN`（one-shot ≈2秒）で audition しづらい点は polish 候補（本増分の Done には非該当）。
 
-**Commit**: d3be514
+**post-review cleanup（/simplify）**: 4観点 cleanup agent の指摘を behavior-preserving に適用 —
+slice 長 clamp を core の `resolve_slice_region` に集約し scheduler の render 尺と daemon の
+PlayEnded 尺の単一情報源化 / 等パワーパンを `schedule()` で precompute して RT render から
+trig（sin/cos）と output_channels 分岐を排除 / render の `gain*env` を frame 単位へ hoist /
+session.rs の PlayAt param 抽出を `param_f64` ヘルパーで集約 / 旧 spec の `Math.pow` を
+`gainDbToAmplitude` に置換。SKIP: TS slice 数式/pan の SC `event-scheduler.ts` との共通化（保護対象の
+SC 経路を触るため follow-up）。検証: cargo --workspace 58 緑 / npm 1153 緑 / 変更ファイル clippy クリーン。
+
+**Commit**: d3be514（実装）, 9282e6c（log ref）, +simplify cleanup
 
 ### 6.151 docs(post-2.0): correct roadmap to engine-first (supersede OrbitStudio-first framing) (#302) (Jun 21, 2026)
 

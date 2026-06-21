@@ -69,6 +69,24 @@ fn equal_power_pan(pan: f32) -> (f32, f32) {
     (angle.cos(), angle.sin())
 }
 
+/// 再生領域（slice）をサンプル端で clamp し `(clamped_start, effective_len)` を返す。
+/// `offset_frames` をサンプル長で、`requested_len_frames`（0 = offset 以降すべて）を
+/// 残りフレーム数で clamp する。`Scheduler::schedule`（render 尺）と daemon の
+/// `play_at`（PlayEnded 尺）が同一値になるよう、両者がこの単一式を共有する。
+pub fn resolve_slice_region(
+    total_frames: usize,
+    offset_frames: usize,
+    requested_len_frames: usize,
+) -> (usize, usize) {
+    let start = offset_frames.min(total_frames);
+    let len = if requested_len_frames == 0 {
+        total_frames - start
+    } else {
+        requested_len_frames.min(total_frames - start)
+    };
+    (start, len)
+}
+
 /// スケジュール済みサンプル群を混合するミキサー。
 ///
 /// オーディオコールバック内で使うことを想定し、allocation 無しで
@@ -96,8 +114,10 @@ struct ActiveSample {
     start_frame: u64,
     /// ゲイン
     gain: f32,
-    /// パン定位（[-1.0, 1.0]、0.0 = 中央）。render で等パワー則を適用する。
-    pan: f32,
+    /// 等パワー則で precompute した左右ゲイン。pan は再生中不変なので schedule 時に
+    /// 一度だけ求め、RT render では trig 無しで読むだけにする。ステレオ以外は (1.0, 1.0)。
+    pan_l: f32,
+    pan_r: f32,
     /// 再生領域の開始フレーム（サンプル内オフセット）。`chop` の slice 開始。
     slice_start: usize,
     /// 再生領域の長さ（フレーム数）。サンプル端で clamp 済み。
@@ -152,13 +172,12 @@ impl Scheduler {
         let start_frame = (event.start_sec * self.output_sample_rate as f64).max(0.0) as u64;
 
         // 再生領域（slice）をサンプル端で clamp。len==0 は「offset 以降すべて」。
-        let total_frames = event.sample.frames();
-        let slice_start = event.slice_start_frame.min(total_frames);
-        let slice_len = if event.slice_len_frames == 0 {
-            total_frames - slice_start
-        } else {
-            event.slice_len_frames.min(total_frames - slice_start)
-        };
+        // daemon の PlayEnded 尺計算と同一式を共有する（resolve_slice_region）。
+        let (slice_start, slice_len) = resolve_slice_region(
+            event.sample.frames(),
+            event.slice_start_frame,
+            event.slice_len_frames,
+        );
 
         // 末尾フェードアウト（線形 release）。SC `orbitPlayBuf` の
         // `fadeOut = min(0.008, actualDuration * 0.04)` に一致させクリックを防ぐ。
@@ -167,10 +186,20 @@ impl Scheduler {
         let fade_sec = (out_dur_sec * 0.04).min(0.008);
         let fade_frames = (fade_sec * self.output_sample_rate as f64).round() as usize;
 
+        // 等パワーパンの左右ゲインを schedule 時（cold path）に precompute。pan は再生中
+        // 不変なので RT render から trig（sin/cos）と output_channels 分岐を追い出す。
+        // ステレオ出力でのみ定位し、それ以外（モノ/サラウンド）は素のゲインに戻す。
+        let (pan_l, pan_r) = if self.output_channels == 2 {
+            equal_power_pan(event.pan)
+        } else {
+            (1.0, 1.0)
+        };
+
         self.events.push(ActiveSample {
             start_frame,
             gain: event.gain,
-            pan: event.pan,
+            pan_l,
+            pan_r,
             slice_start,
             slice_len,
             fade_frames,
@@ -228,13 +257,9 @@ impl Scheduler {
             let writable_frames = frames_to_render.saturating_sub(dst_offset_frames);
             let frames_to_copy = writable_frames.min(remaining_src_frames);
 
-            // 等パワーパンの左右ゲイン。ステレオ出力でのみ定位し、それ以外（モノ/サラウンド）は
-            // 定位を適用せず素のゲインに戻す（pan_l == pan_r == 1.0）。SC の Pan2 に一致。
-            let (pan_l, pan_r) = if output_channels == 2 {
-                equal_power_pan(active.pan)
-            } else {
-                (1.0, 1.0)
-            };
+            // 左右ゲインは schedule 時に precompute 済み（RT から trig と output_channels
+            // 分岐を排除）。ステレオ以外では (1.0, 1.0)。SC の Pan2 に一致。
+            let (pan_l, pan_r) = (active.pan_l, active.pan_r);
 
             // 末尾フェードアウトの開始位置（slice 内相対）。fade_frames==0 ならフェードなし。
             let fade_start = active.slice_len.saturating_sub(active.fade_frames);
@@ -243,19 +268,21 @@ impl Scheduler {
                 let slice_pos = active.read_pos + i; // slice 領域内の相対位置
                 let src_frame = active.slice_start + slice_pos; // サンプル内の絶対フレーム
                 let dst_frame = dst_offset_frames + i;
-                // 線形 release エンベロープ（SC `linen` の fadeOut 部）。
-                // slice 末尾でクリックが出ないよう 1.0 → 0.0 へ線形に減衰させる。
+                // 線形 release エンベロープ（SC `linen` の fadeOut 部）。slice 末尾で
+                // クリックが出ないよう 1.0 → 0.0 へ線形に減衰させる。env は frame のみに
+                // 依存するので channel ループの外で 1 回求め、gain と束ねて amp にする。
                 let env = if active.fade_frames > 0 && slice_pos >= fade_start {
                     (active.slice_len - slice_pos) as f32 / active.fade_frames as f32
                 } else {
                     1.0
                 };
+                let amp = active.gain * env;
                 for ch in 0..output_channels {
                     let src_ch = ch.min(src_channels - 1);
                     let src_idx = src_frame * src_channels + src_ch;
                     let dst_idx = dst_frame * output_channels + ch;
                     let pan_mul = if ch == 0 { pan_l } else { pan_r };
-                    out[dst_idx] += active.sample.data[src_idx] * active.gain * pan_mul * env;
+                    out[dst_idx] += active.sample.data[src_idx] * amp * pan_mul;
                 }
             }
             active.read_pos += frames_to_copy;

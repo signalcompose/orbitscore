@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use orbit_audio_core::{Engine, Sample};
+use orbit_audio_core::{resolve_slice_region, Engine, Sample};
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
     StreamStatsSnapshot,
@@ -172,21 +172,18 @@ impl EngineWrap {
             .ok_or_else(|| WrapError::SampleNotFound(sample_id.to_string()))?;
         let sr = sample.sample_rate as f64;
         let total_frames = sample.frames();
-        // サンプル内オフセット（フレーム）。サンプル端で clamp。
-        let offset_frames = ((offset_sec.max(0.0)) * sr) as usize;
-        let offset_frames = offset_frames.min(total_frames);
-        // slice 長（フレーム）。0 = offset 以降すべて。
+        // サンプル内オフセット / slice 長（フレーム）。0 = offset 以降すべて。
+        // サンプル端 clamp は resolve_slice_region に集約する。
+        let offset_frames = (offset_sec.max(0.0) * sr) as usize;
         let requested_len_frames = if duration_sec > 0.0 {
             (duration_sec * sr).round() as usize
         } else {
             0
         };
-        // PlayEnded 用の出力尺は slice の実尺（rate=1.0）。サンプル端で clamp 済みの長さ。
-        let effective_len_frames = if requested_len_frames == 0 {
-            total_frames - offset_frames
-        } else {
-            requested_len_frames.min(total_frames - offset_frames)
-        };
+        // 再生領域を clamp。PlayEnded 用の出力尺（slice 実尺・rate=1.0）と、scheduler が
+        // render に使う尺が必ず一致するよう、両者が同一式（resolve_slice_region）を共有する。
+        let (slice_start_frame, effective_len_frames) =
+            resolve_slice_region(total_frames, offset_frames, requested_len_frames);
         let out_duration_sec = effective_len_frames as f64 / sr;
         let play_id = format!("p-{}", short_uuid());
         self.engine
@@ -194,7 +191,7 @@ impl EngineWrap {
                 time_sec,
                 gain,
                 pan,
-                offset_frames,
+                slice_start_frame,
                 requested_len_frames,
                 play_id.clone(),
                 sample,
