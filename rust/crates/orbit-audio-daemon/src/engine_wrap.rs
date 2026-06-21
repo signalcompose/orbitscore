@@ -153,8 +153,9 @@ impl EngineWrap {
     /// `pan` は [-1.0, 1.0]（0.0 = 中央、範囲外は core で clamp）。
     /// `offset_sec` / `duration_sec` は再生領域（`chop` の slice）。`duration_sec <= 0` で
     /// 「offset 以降すべて」。いずれもサンプル端で clamp。
-    /// 戻り値の `duration_sec` は **slice の実尺**（全体ではなく）なので、呼び出し側は
-    /// PlayEnded を slice 終端に合わせて遅延送信できる。
+    /// 戻り値の `duration_sec` は **実際に再生される区間の尺**（slice 指定時は slice 長、
+    /// whole-file 時はサンプル全尺）なので、呼び出し側は PlayEnded を再生終端に合わせて
+    /// 遅延送信できる。
     #[allow(clippy::too_many_arguments)]
     pub fn play_at(
         &self,

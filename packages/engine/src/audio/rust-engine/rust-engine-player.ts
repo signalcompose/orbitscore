@@ -89,7 +89,7 @@ export interface DaemonPlayParams {
   pan: number
   /** slice 領域開始（秒）。0 = 先頭。 */
   offsetSec: number
-  /** slice 領域長（秒）。0 = `offset` 以降すべて。 */
+  /** slice 領域長（秒）。0 = `offsetSec` 以降すべて。 */
   durationSec: number
 }
 

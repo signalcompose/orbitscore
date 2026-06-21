@@ -61,6 +61,14 @@ describe('#311 Leg 2 — chop_region: interpreter schedule vs hand oracle', () =
   it('golden schedule JSON matches committed (Leg 1 GRM・staleness guard)', async () => {
     const recorded = await recordSchedule(FIXTURE, DURATIONS)
     const golden = resolveGolden(FIXTURE, recorded, DURATIONS)
+    // resolveSliceRegion の出力（offset/duration）を**手計算定数**で直接検証する。
+    // golden staleness（toEqual）は committed が toDaemonParams 由来＝自己参照のため、式バグが
+    // UPDATE_GOLDEN で焼き込まれても緑のまま。手計算定数で式バグを GRM 独立に捕まえる。
+    // arpeggio_c 1.0s / chop(2): slice1 offset=(1-1)*0.5=0.0s, slice2=(2-1)*0.5=0.5s、各 dur 0.5s。
+    expect(golden.events[0].offsetSec).toBeCloseTo(0.0, 5)
+    expect(golden.events[1].offsetSec).toBeCloseTo(0.5, 5)
+    expect(golden.events[0].durationSec).toBeCloseTo(0.5, 5)
+    expect(golden.events[1].durationSec).toBeCloseTo(0.5, 5)
     const { updated, committed } = reconcileGolden(golden)
     if (updated) return // UPDATE_GOLDEN=1 で再生成した場合は突き合わせをスキップ。
     expect(committed, 'golden JSON missing — run with UPDATE_GOLDEN=1 to generate').not.toBeNull()

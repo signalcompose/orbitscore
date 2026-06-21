@@ -141,6 +141,7 @@ fn pan_three_voices_render_matches_schedule() {
         // （fade ≤384 + 余裕を除外）。
         let play_frames = sample_frames[&ev.sample];
         let (w_start, w_end) = body_window(onset, play_frames, 600);
+        assert!(w_start < w_end, "pan body 窓が狭すぎる: [{w_start}, {w_end})");
         let l = region_rms(&cap, 0, w_start, w_end);
         let r = region_rms(&cap, 1, w_start, w_end);
         assert!(
@@ -220,7 +221,9 @@ fn per_event_gain_render_matches_schedule() {
     for ev in &golden.events {
         let onset = frame_at(ev.onset_sec, sr);
         let play_frames = sample_frames[&ev.sample];
-        let (w_start, w_end) = body_window(onset, play_frames, 256); // kick は短いので余裕を小さく
+        // kick 0.5s も fade は最大 384 frames（min(0.5*0.04, 0.008)*48000）なので pan と同じ
+        // 600 で除外する。dB 差は fade 不変だが、窓に fade を混ぜないよう揃える。
+        let (w_start, w_end) = body_window(onset, play_frames, 600);
         assert!(w_start < w_end, "onset={:.3}s の body 窓が狭すぎる", ev.onset_sec);
         let l = region_rms(&cap, 0, w_start, w_end);
         let r = region_rms(&cap, 1, w_start, w_end);
@@ -243,4 +246,9 @@ fn per_event_gain_render_matches_schedule() {
         "quiet/loud の dB 差: 期待 {expected_diff:.1} dB、計測 {measured_diff:.2} dB \
          (rms_loud={rms_loud:.5}, rms_quiet={rms_quiet:.5})"
     );
+
+    // イベント間（loud 終端 0.6s 〜 quiet 開始 3.1s の 1.0〜2.5s）は無音。両イベントが
+    // 誤って onset=0 にレンダされる回帰（加算 RMS になり dB 差が崩れる）を捕まえる。
+    let gap = region_rms(&cap, 0, (1.0 * sr) as usize, (2.5 * sr) as usize);
+    assert!(gap < 1e-5, "per_event_gain イベント間は無音のはず（RMS={gap:.6}）");
 }

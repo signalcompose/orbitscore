@@ -139,14 +139,29 @@ export function reconcileGolden(golden: GoldenSchedule): {
   const path = goldenPath(golden.fixture)
   const serialized = JSON.stringify(golden, null, 2) + '\n'
   if (process.env.UPDATE_GOLDEN === '1') {
+    // CI で誤って UPDATE_GOLDEN が立つと staleness 検出が無言で死に、committed を
+    // 上書きしてしまう。意図（ローカル再生成専用）を機械強制し、ローカルでも上書きはログに残す。
+    if (process.env.CI) {
+      throw new Error(
+        'UPDATE_GOLDEN=1 は CI では使用不可です（golden staleness 検出を無効化し commit を上書きするため）',
+      )
+    }
+    console.warn(`[UPDATE_GOLDEN] committed golden を上書き: ${path}`)
     writeFileSync(path, serialized)
     return { updated: true, committed: golden }
   }
   let committed: GoldenSchedule | null = null
   try {
     committed = JSON.parse(readFileSync(path, 'utf8')) as GoldenSchedule
-  } catch {
-    committed = null
+  } catch (err) {
+    // ENOENT（未生成）は null で正しい。それ以外（JSON 破損 / truncate / merge conflict
+    // marker 等）を null 扱いすると「破損」を「未生成」と取り違え、UPDATE_GOLDEN でバグを
+    // 焼き込む経路になるため re-throw して loud に落とす。
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      committed = null
+    } else {
+      throw err
+    }
   }
   return { updated: false, committed }
 }
