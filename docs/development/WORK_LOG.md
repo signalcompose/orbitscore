@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.153 docs(research): audio output verification — DSL static schedule vs rendered PCM (#308) (Jun 21, 2026)
+
+**Date**: 2026-06-21
+**Status**: 調査記録（論文化の可能性あり）
+**Branch**: `308-audio-verification-research`
+
+#304 の audio parity 検証が owner の耳に依存したことを発端に、「**DSL が静的計算したスケジュール（onset サンプル/レベル dBFS/pan/slice 境界）を golden reference とし、オフラインレンダした実 PCM を解析して自動突き合わせ**」する自己検証機構の deep research（4観点並列 + LLM 角度の追加1本）を実施し、`docs/research/AUDIO_OUTPUT_VERIFICATION.md` に記録。
+
+- **枠組み**: golden-model conformance testing（GRM=DSL スケジュール / DUT=レンダラ / scoreboard=突き合わせ）。手法は HW/DSP 検証・MPEG conformance で成熟。
+- **新規性**: tier (c)（レンダリング音 ↔ DSL 意味的スケジュールのエンジン内蔵突き合わせ）は先行事例未発見。最近接の学術先行研究 = Antescofo/IRCAM のモデルベーステストだが**イベント時刻層で止まり PCM 非到達**。
+- **上位フレーミング**: これは **LLM の自己 PDCA（Plan-Do-Check-Act）の Check を audio で人間不在に成立させる機構**。agentic 自己修正は客観 oracle が必須（CRITIC / Huang et al. ICLR 2024）で、本機構は「audio の客観 oracle」を提供。`[LLM agent + 音楽 DSL + PCM 解析 + 静的 symbolic スケジュール + 推論時自律ループ]` の組み合わせは未発見。
+- 実装は #307（capture backend + assertion lib + CI gate）。本研究は #308。
+
+**Commit**: [PENDING]
+
 ### 6.152 feat(engine): native audio parity increment — pan / slice / per-slice gain (#304) (Jun 21, 2026)
 
 **Date**: 2026-06-21
