@@ -279,10 +279,14 @@ fn process_fixture(fixture_name: &str) {
         // matched filter の demo は per_event_gain 第1イベントのみ（他 fixture は threshold で
         // 十分なので意図的に追加しない）。template = onset 直後 BODY_HEAD_OFFSET frame を
         // mono 配列から直接切り出す（sub_mono でなく mono.data から）。
+        // ここで None = プリミティブ regression。silent null（grounding 消失）にせず loud に
+        // 落とす（cross_check.py 側の matched grounding が空洞化するのを防ぐ）。
         let onset_frame_matched = if fixture_name == "per_event_gain" && i == 0 {
             let tmpl_end = (onset_scheduled + BODY_HEAD_OFFSET).min(mono.frames());
             let template: Vec<f32> = mono.data[onset_scheduled..tmpl_end].to_vec();
-            detect_onset_matched(&mono.data, &template)
+            Some(detect_onset_matched(&mono.data, &template).expect(
+                "detect_onset_matched が per_event_gain[0] で None: matched grounding 喪失",
+            ))
         } else {
             None
         };

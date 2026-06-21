@@ -399,7 +399,7 @@ def run_selftest(phase3_dir: Path, python_ver: str) -> None:
     pcm[b1_start:b1_end, 0] = noise1
     pcm[b1_start:b1_end, 1] = noise1  # center: L=R
 
-    # burst 2: -6dB（= L channel のみ、半分のゲイン）
+    # burst 2: 半分の振幅で center pan（L=R）。burst1 との RMS 差を作るだけで pan は中央。
     b2_start = silence_frames + burst_frames + gap_frames
     b2_end = b2_start + burst_frames
     env2 = np.linspace(0.25, 0.005, burst_frames, dtype=np.float32)
@@ -499,35 +499,65 @@ def run_selftest(phase3_dir: Path, python_ver: str) -> None:
             fail(f"spurious burst が検出されない（spuriousOnsetCount={cmp['spuriousOnsetCount']}）")
         print("[selftest] 正常系 PASS / spurious 検出 確認")
 
-        # -- 異常系: 各検出器を単独で flip（level / pan / onset-ours / onset-librosa）--
-        # 1 ケース 1 摂動で、その検出器だけが verdict を FAIL にできることを確認する。
-        # librosa 検出から ±ONSET_LIBROSA_FRAMES 外の位置（burst から遠い gap 中央）。
-        far = b1_start + gap_frames // 4
+        # -- 異常系: 各検出器を単独で flip し、その検出器だけが赤・他は緑であることを
+        #    compare.json の per-metric フラグで assert する。verdict bool（disjunctive）だけ
+        #    だと「単独 flip」が空洞化し、将来検出器が結合しても FAIL は FAIL で素通りする。
+        far = b1_start + gap_frames // 4  # librosa 検出から ±720fr 外（burst から遠い gap 中央）
+
+        def _get(ev: dict[str, Any], path: str) -> Any:
+            cur: Any = ev
+            for key in path.split("."):
+                cur = cur[key]
+            return cur
+
+        # (name, mutate(event0), label, [(compare.json 内 event[0] からの path, 期待値), ...])
         cases = [
-            # level: L/R を同率拡大（pan 比は不変なので level だけが赤）
+            # level: L/R を同率拡大（pan 比は不変なので level だけ赤）
             ("_selftest_level",
-             lambda e: e.update(lRms=e["lRms"] * 1.5, rRms=e["rRms"] * 1.5), "level"),
-            # pan: pan フィールドを中央から外す（L/R 等倍では検出できない経路 = C1）
-            ("_selftest_pan", lambda e: e.update(pan=0.6), "pan"),
-            # onset-ours: threshold を 300ms ずらす（ours gate）
+             lambda e: e.update(lRms=e["lRms"] * 1.5, rRms=e["rRms"] * 1.5), "level",
+             [("level.withinTolerance", False), ("pan.withinTolerance", True),
+              ("onset.withinTolerance", True)]),
+            # pan: pan フィールドを中央から外す（L/R 等倍では捕まらない経路）
+            ("_selftest_pan", lambda e: e.update(pan=0.6), "pan",
+             [("level.withinTolerance", True), ("pan.withinTolerance", False),
+              ("onset.withinTolerance", True)]),
+            # onset-ours: threshold を 300ms ずらす（ours gate のみ）
             ("_selftest_onset_ours",
-             lambda e: e.update(onsetFrameThreshold=e["onsetFrameThreshold"] + 15000), "onset(ours)"),
-            # onset-librosa: scheduled を burst から遠ざけ ours を追従させる（librosa_matched gate）
+             lambda e: e.update(onsetFrameThreshold=e["onsetFrameThreshold"] + 15000), "onset(ours)",
+             [("level.withinTolerance", True), ("pan.withinTolerance", True),
+              ("onset.oursWithinTolerance", False), ("onset.librosaMatched", True)]),
+            # onset-librosa: scheduled を burst から遠ざけ ours を追従（librosa_matched gate のみ）
             ("_selftest_onset_lib",
              lambda e: e.update(onsetFrameScheduled=far, onsetFrameThreshold=far + 10),
-             "onset(librosa)"),
+             "onset(librosa)",
+             [("level.withinTolerance", True), ("pan.withinTolerance", True),
+              ("onset.oursWithinTolerance", True), ("onset.librosaMatched", False)]),
+            # onset-matched: 非 null の matched を許容外にずらす（matched gate のみ）。
+            # make_rust_dict は matched=null 固定なので、この経路は本ケースだけが駆動する。
+            ("_selftest_onset_matched",
+             lambda e: e.update(onsetFrameMatched=e["onsetFrameScheduled"] + 5000), "onset(matched)",
+             [("level.withinTolerance", True), ("pan.withinTolerance", True),
+              ("onset.oursWithinTolerance", True), ("onset.librosaMatched", True),
+              ("onset.matchedWithinTolerance", False)]),
         ]
-        for name, mutate, detector in cases:
-            print(f"[selftest] 異常系テスト [{detector}]（FAIL が期待値）...")
+        for name, mutate, detector, checks in cases:
+            print(f"[selftest] 異常系テスト [{detector}]（FAIL + isolation が期待値）...")
             bad = copy.deepcopy(rust_normal)
             mutate(bad["events"][0])
             if write_and_run(name, bad):
                 fail(f"異常系 [{detector}] が PASS — この検出器が verdict を flip できていない")
-            print(f"[selftest] 異常系 [{detector}] FAIL（期待通り）")
+            ev0 = json.loads((fixtures_dir / f"{name}.compare.json").read_text())["events"][0]
+            if ev0["eventOk"]:
+                fail(f"異常系 [{detector}] の eventOk が True（FAIL のはず）")
+            for path, expected in checks:
+                actual = _get(ev0, path)
+                if actual != expected:
+                    fail(f"異常系 [{detector}] isolation 不一致: {path}={actual}（期待 {expected}）")
+            print(f"[selftest] 異常系 [{detector}] FAIL + isolation 確認")
 
         print(
             "[selftest] 完了 — 正常系 PASS / spurious 検出 / "
-            "level・pan・onset(ours)・onset(librosa) 各 FAIL 確認済み"
+            "level・pan・onset(ours/librosa/matched) 各 FAIL + isolation 確認済み"
         )
     finally:
         # gen_dir 全体ではなく selftest が作ったファイルのみ削除（本物の PCM を保護）。
