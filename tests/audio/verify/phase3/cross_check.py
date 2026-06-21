@@ -5,7 +5,8 @@ Phase-3 librosa blind cross-check — audio verification.
 独立性の質の区別（README §"独立性の質を正直に書き分ける" 参照）:
   onset : アルゴリズム独立 — librosa は spectral-flux peak-picking (onset_detect)、
           Rust は threshold-based zero-crossing 検出。別アルゴリズムなので真の差分検証。
-  level : 実装独立 — どちらも sqrt(mean(x²)) だが librosa は独自フレーミングで計算。
+  level : 実装独立 — どちらも sqrt(mean(x²))。librosa は frame_length=窓全体に揃えて
+          自前の内部コード（framing/dtype/正規化）を通す（measure_level_librosa 参照）。
           配管バグ（channel stride / 窓境界 / dtype）を捕まえる。
           「RMS の数学を独立に再導出した」とは主張しない。
   pan   : 実装独立 — librosa の per-ch RMS から等パワー逆算（atan2 は Rust と共有の純粋数学）。
