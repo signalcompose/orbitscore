@@ -1,0 +1,137 @@
+{
+  "fixture": "pan_three_voices",
+  "pythonVersion": "3.11.14",
+  "librosaVersion": "0.11.0",
+  "numpyVersion": "2.4.6",
+  "tolerances": {
+    "levelRelTol": 0.03,
+    "panTol": 0.05,
+    "onsetOursVsScheduled_frames": 96,
+    "onsetLibrosaVsScheduled_frames": 720
+  },
+  "librosaOnsetCount": 3,
+  "spuriousOnsetCount": 0,
+  "events": [
+    {
+      "sequenceName": "left",
+      "level": {
+        "lRms_rust": 0.07047807,
+        "lRms_librosa": 0.070478,
+        "lRelErr": 0.0,
+        "rRms_rust": 0.0,
+        "rRms_librosa": 0.0,
+        "rRelErr": 0.0,
+        "tolerance": 0.03,
+        "withinTolerance": true,
+        "note": "実装独立: librosa feature.rms(frame_length=窓全体) vs Rust region_rms。overlap/dtype/正規化の実装差を検証する"
+      },
+      "pan": {
+        "pan_rust": -1.0,
+        "pan_librosa": -1.0,
+        "delta": 0.0,
+        "tolerance": 0.05,
+        "withinTolerance": true,
+        "note": "実装独立: per-ch RMS の一致を確認（atan2 の数学は Rust と共有=純粋数学）。atan2 の正しさは analysis.rs のアンカーテストで別途 pin 済み"
+      },
+      "onset": {
+        "scheduled": 4800,
+        "ours_onsetFrameThreshold": 4800,
+        "matched_onsetFrameMatched": null,
+        "librosa_nearest": 4608,
+        "deltaOursVsScheduled": 0,
+        "deltaMatchedVsScheduled": null,
+        "deltaOursVsLibrosa": 192,
+        "deltaLibrosaVsScheduled": -192,
+        "toleranceOursVsScheduled_frames": 96,
+        "toleranceLibrosaVsScheduled_frames": 720,
+        "oursWithinTolerance": true,
+        "matchedWithinTolerance": true,
+        "librosaMatched": true,
+        "withinTolerance": true,
+        "note": "アルゴリズム独立: librosa=spectral-flux vs Rust threshold。matched は scheduled 真値と整合確認"
+      },
+      "eventOk": true
+    },
+    {
+      "sequenceName": "mid",
+      "level": {
+        "lRms_rust": 0.06511324,
+        "lRms_librosa": 0.065113,
+        "lRelErr": 0.0,
+        "rRms_rust": 0.026970789,
+        "rRms_librosa": 0.026971,
+        "rRelErr": 0.0,
+        "tolerance": 0.03,
+        "withinTolerance": true,
+        "note": "実装独立: librosa feature.rms(frame_length=窓全体) vs Rust region_rms。overlap/dtype/正規化の実装差を検証する"
+      },
+      "pan": {
+        "pan_rust": -0.49999994,
+        "pan_librosa": -0.5,
+        "delta": -0.0,
+        "tolerance": 0.05,
+        "withinTolerance": true,
+        "note": "実装独立: per-ch RMS の一致を確認（atan2 の数学は Rust と共有=純粋数学）。atan2 の正しさは analysis.rs のアンカーテストで別途 pin 済み"
+      },
+      "onset": {
+        "scheduled": 100800,
+        "ours_onsetFrameThreshold": 100800,
+        "matched_onsetFrameMatched": null,
+        "librosa_nearest": 100352,
+        "deltaOursVsScheduled": 0,
+        "deltaMatchedVsScheduled": null,
+        "deltaOursVsLibrosa": 448,
+        "deltaLibrosaVsScheduled": -448,
+        "toleranceOursVsScheduled_frames": 96,
+        "toleranceLibrosaVsScheduled_frames": 720,
+        "oursWithinTolerance": true,
+        "matchedWithinTolerance": true,
+        "librosaMatched": true,
+        "withinTolerance": true,
+        "note": "アルゴリズム独立: librosa=spectral-flux vs Rust threshold。matched は scheduled 真値と整合確認"
+      },
+      "eventOk": true
+    },
+    {
+      "sequenceName": "right",
+      "level": {
+        "lRms_rust": 3.080694e-09,
+        "lRms_librosa": 0.0,
+        "lRelErr": 0.0,
+        "rRms_rust": 0.07047807,
+        "rRms_librosa": 0.070478,
+        "rRelErr": 0.0,
+        "tolerance": 0.03,
+        "withinTolerance": true,
+        "note": "実装独立: librosa feature.rms(frame_length=窓全体) vs Rust region_rms。overlap/dtype/正規化の実装差を検証する"
+      },
+      "pan": {
+        "pan_rust": 0.9999999,
+        "pan_librosa": 1.0,
+        "delta": 0.0,
+        "tolerance": 0.05,
+        "withinTolerance": true,
+        "note": "実装独立: per-ch RMS の一致を確認（atan2 の数学は Rust と共有=純粋数学）。atan2 の正しさは analysis.rs のアンカーテストで別途 pin 済み"
+      },
+      "onset": {
+        "scheduled": 148800,
+        "ours_onsetFrameThreshold": 148800,
+        "matched_onsetFrameMatched": null,
+        "librosa_nearest": 148480,
+        "deltaOursVsScheduled": 0,
+        "deltaMatchedVsScheduled": null,
+        "deltaOursVsLibrosa": 320,
+        "deltaLibrosaVsScheduled": -320,
+        "toleranceOursVsScheduled_frames": 96,
+        "toleranceLibrosaVsScheduled_frames": 720,
+        "oursWithinTolerance": true,
+        "matchedWithinTolerance": true,
+        "librosaMatched": true,
+        "withinTolerance": true,
+        "note": "アルゴリズム独立: librosa=spectral-flux vs Rust threshold。matched は scheduled 真値と整合確認"
+      },
+      "eventOk": true
+    }
+  ],
+  "verdict": "PASS"
+}

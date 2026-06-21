@@ -1,0 +1,42 @@
+{
+  "fixture": "per_event_gain",
+  "sampleRate": 48000,
+  "channels": 2,
+  "frames": 184800,
+  "pcmFile": ".gen/per_event_gain.pcm",
+  "onsetThresholdRatio": 0.3,
+  "events": [
+    {
+      "sequenceName": "loud",
+      "onsetSec": 0.1,
+      "onsetFrameScheduled": 4800,
+      "onsetFrameThreshold": 4800,
+      "onsetFrameMatched": 4800,
+      "bodyWindow": [
+        5056,
+        28200
+      ],
+      "lRms": 0.049835514,
+      "rRms": 0.049835514,
+      "monoRms": 0.049835514,
+      "pan": 0.0,
+      "gainDb": -3.0
+    },
+    {
+      "sequenceName": "quiet",
+      "onsetSec": 3.1,
+      "onsetFrameScheduled": 148800,
+      "onsetFrameThreshold": 148800,
+      "onsetFrameMatched": null,
+      "bodyWindow": [
+        149056,
+        172200
+      ],
+      "lRms": 0.024976926,
+      "rRms": 0.024976926,
+      "monoRms": 0.024976926,
+      "pan": 0.0,
+      "gainDb": -9.0
+    }
+  ]
+}
