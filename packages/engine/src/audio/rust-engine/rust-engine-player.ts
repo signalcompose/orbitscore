@@ -475,14 +475,21 @@ export class RustEnginePlayer implements AudioEngineBackend {
       .loadSample(filepath)
       .then((res) => {
         this.sampleIds.set(filepath, res.sampleId)
-        if (res.sampleRate > 0 && Number.isFinite(res.sampleRate)) {
+        // 尺計算には sample_rate と frames の両方が有限・正である必要がある。どちらかが
+        // 不正だと chop の領域が計算できず slice が無言で全体再生に degrade する
+        // （#304 で durations が slice 再生に load-bearing 化した）。ソースで warn する。
+        if (
+          res.sampleRate > 0 &&
+          Number.isFinite(res.sampleRate) &&
+          Number.isFinite(res.frames) &&
+          res.frames >= 0
+        ) {
           this.durations.set(filepath, res.frames / res.sampleRate)
         } else {
-          // 尺が取れないと chop の領域が計算できず、slice が無言で全体再生に degrade する
-          // （#304 で durations が slice 再生に load-bearing 化した）。ソースで warn する。
           console.warn(
-            `⚠️  [rust-engine] LoadSample for "${filepath}" returned invalid sample_rate=` +
-              `${res.sampleRate} — chop slice 領域を計算できず、slice は全体再生に degrade します。`,
+            `⚠️  [rust-engine] LoadSample for "${filepath}" returned invalid metadata ` +
+              `(sample_rate=${res.sampleRate}, frames=${res.frames}) — ` +
+              `chop slice 領域を計算できず、slice は全体再生に degrade します。`,
           )
         }
         return res.sampleId
@@ -514,7 +521,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     const spec = play.slice
     if (!spec) return { offsetSec: 0, durationSec: 0 }
     const totalDuration = this.durations.get(play.filepath) ?? 0
-    if (totalDuration <= 0 || spec.total <= 0) {
+    // NaN <= 0 は JS では false。尺が NaN/非有限でも確実に全体再生フォールバックへ落とす。
+    if (!Number.isFinite(totalDuration) || totalDuration <= 0 || spec.total <= 0) {
       // 尺不明 → 全体再生フォールバック（誤った領域で無音を作らない）。
       return { offsetSec: 0, durationSec: 0 }
     }
