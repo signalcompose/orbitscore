@@ -17,6 +17,32 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.157 verify(audio): retroactively self-verify #304 (examples/22 params) via harness — close #307 (#316) (Jun 21, 2026)
+
+**Date**: 2026-06-21
+**Status**: ✅ 実装 + 全テスト緑（cargo daemon verify_schedule_pcm 4 / verify 30 / npm 1161 passed）。#307 の受け入れ基準（examples/22 を耳なし PCM 検証）を達成
+**Branch**: `316-verify-examples22-goal1`
+
+**背景**: harness epic #307 の受け入れ基準に「examples/22（pan/slice/per-slice gain）を capture して PCM アサーションで #304 を遡及的に自己検証（耳に依存しない裏付け）」がある。phase 1〜3（#310/#312/#314）でハーネス・assertion lib・tier-c・librosa grounding は揃ったが、**#304 の実 deliverable を耳なし検証する最終増分が未達**だった。本増分でこれを満たし #307 をクローズ（完了済み phase-2 #311 も併せて）。
+
+**examples/22 の制約**: `examples/22_rust_engine_parity.orbs` は 4 voice 同時並行の dog-food デモで、各拍に複数 voice が重畳し L/R RMS がミックスになり per-event の pan/gain を分離不能（研究 §4.4）。→ **生ファイルに per-event assert を当てない**。
+
+**設計（advisor 承認・(A) offline）**: examples/22 と同じ素材（kick/snare/hihat/arpeggio）+ #304 の実パラメータ（pan -0.6/+0.6/0/+0.2・gain -3/-6/-9/-4・chop(1) 全体 と chop(2) 領域）を **de-overlap した検証 fixture** `examples22_parity.orbs` に組み、phase-2 の 2 本足で検証。tempo 120 / length 4 / 16 要素 → 0.5s grid（spec: length(2)→8要素 と同型・subdivision は play 要素数で決まり chop と独立）。kick@0s / snare@2s / hat@4s / chopd slice1@6s・slice2@7s（rate=1.0）。
+
+**2 本足**: Leg 2（TS）= InterpreterV2 schedule vs **手書き独立オラクル**（onset/gainDb/pan/slice を .orbs+DSL 仕様から導出・トートロジー回避）。**length>1 を harness で初めて通したが独立オラクルと一致**（interpreter が length>1 を正しく処理）。Leg 1（Rust）= golden → 実 `EngineWrap::play_at` offline render → PCM で **pan を atan2 独立逆算（kick -0.6 / snare +0.6 / hat 0 / chopd +0.2）+ chop(2) 領域 + イベント間無音** を検証。
+
+**gain の扱い（正直に）**: gain 値（-3/-6/-9/-4）は**異なるサンプル間で RMS 比較不能**（固有レベルが違う）ため Leg 1 では検証しない。gain は Leg 2（gainDb/linear の計算）+ phase-2 per_event_gain（同一サンプルの dB 差を実レンダで）でカバー済み。
+
+**スコープ外**: 生 examples/22 の literal smoke（examples/ 配下・別パス・重畳で friction 高く弱い検証）は見送り、de-overlap fixture で acceptance を満たす。CLI `play --capture`（#307 ②・重い）は /goal2（#300）へ defer（#307 が「capture は respawn 後の可聴ギャップ計測に効く」と明記）。
+
+**意義**: 以後の audio 増分（#239 slice / #213 time-stretch / effects）が「耳」でなく PCM で機械検証可能に。#307 が「capture は daemon respawn 後の可聴ギャップを PCM で測れる → goal2 検証に効く」と明記しており、goal2（#300 recovery floor）への橋にもなる。
+
+**/simplify（4観点並列）**: reuse/efficiency は重複・無駄なし（既存 phase-2 パターン踏襲）。altitude の 1 件のみ適用 = Rust `tail_trim` を動的式 `(span/4).min(600)`（本 fixture では全 span≥2400 で常に 600）から既存 fixture と対称な固定 `600` に簡約（挙動同一）。chopd assert のループ化等は「明示の方が読みやすい」で leave-as-is。
+
+**/code:pr-review-team（4専門・1 round 収束）**: Critical/Important=0。code-reviewer がオラクル全値（onset/gain linear+dB/pan raw+daemon/chop offset/sentinel）を .orbs+DSL 仕様から**独立再導出して一致確認**（循環でない裏付け）。Minor 3件適用: ① Leg1 ループ前に `assert_eq!(events.len(),5)` ガード追加（兄弟 per_event_gain テストと対称・golden truncation 時の vacuous green 防止）② `.orbs` の無音間隔表記を正確化（chopd slice1-slice2 間は 0.5s）③ slice 領域「内容」正しさは `chop_region_real_wav.rs` が担う旨の layering 注記。bot は新規外部主張なしで skip（advisor カリブレーション = verify 系は proportional）。
+
+**Commit**: b763abc（実装）+ /simplify cleanup + pr-review-team follow-up
+
 ### 6.156 feat(verify): phase-3 — ground measurement primitives against librosa (blind cross-check) (#313) (Jun 21, 2026)
 
 **Date**: 2026-06-21

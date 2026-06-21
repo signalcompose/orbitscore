@@ -252,3 +252,69 @@ fn per_event_gain_render_matches_schedule() {
     let gap = region_rms(&cap, 0, (1.0 * sr) as usize, (2.5 * sr) as usize);
     assert!(gap < 1e-5, "per_event_gain イベント間は無音のはず（RMS={gap:.6}）");
 }
+
+#[test]
+fn examples22_parity_render_matches_schedule() {
+    //! #316 Leg 1 — examples/22 (#304 dog-food) を de-overlap した parity fixture。
+    //! kick(pan -0.6)/snare(+0.6)/hat(0)/chopd(+0.2・chop(2) slice1+slice2) を per-event 検証。
+    //! 各イベントは無音で分離 → L/R RMS が単一 voice になり pan を atan2 で独立逆算できる。
+    //! gain 値（-3/-6/-9/-4）は **異なるサンプル間で RMS 比較できない**（固有レベルが違う）ので
+    //! ここでは検証しない。gain は Leg 2（schedule の gainDb/linear）+ phase-2 per_event_gain
+    //! （同一サンプルの dB 差を実レンダで）でカバー済み。ここは pan / 領域 / 分離を見る。
+    //! slice の「領域内容」正しさ（slice2 が arpeggio 後半 frame を読むか）は本テストでなく
+    //! orbit-audio-verify の chop_region_real_wav.rs（ramp サンプルで offset+local を frame 単位
+    //! 検証）が担う。ここは領域に信号があり外が無音であることまで。
+    let golden = load_golden("examples22_parity");
+    assert_eq!(
+        golden.events.len(),
+        5,
+        "examples22_parity は 5 イベントのはず (kick/snare/hat/chopd×2)"
+    );
+    let (cap, sample_frames) = render_golden(&golden);
+    let sr = golden.sample_rate as f64;
+
+    for ev in &golden.events {
+        let onset = frame_at(ev.onset_sec, sr);
+        // span: whole(durationSec=0) = サンプル全尺 / slice = durationSec フレーム。
+        let span = if ev.duration_sec > 0.0 {
+            frame_at(ev.duration_sec, sr)
+        } else {
+            sample_frames[&ev.sample]
+        };
+        // 末尾 trim は既存 fixture と同じ固定 600（fade ≤384 + 余裕を除外）。最短の
+        // hat(0.05s=2400fr)でも窓は [onset+256, onset+1800) = 1544fr 幅で潰れない。
+        let (w_start, w_end) = body_window(onset, span, 600);
+        assert!(
+            w_start < w_end,
+            "seq {} の body 窓が狭すぎる: [{w_start}, {w_end})",
+            ev.sequence_name
+        );
+        let l = region_rms(&cap, 0, w_start, w_end);
+        let r = region_rms(&cap, 1, w_start, w_end);
+        assert!(
+            l.max(r) > 1e-3,
+            "seq {} に信号が必要（L={l:.5}, R={r:.5}）",
+            ev.sequence_name
+        );
+        // 出力 pan を atan2 で独立逆算し schedule の pan と突き合わせる（GRM 独立）。
+        let measured = pan_from_lr_rms(l, r);
+        assert!(
+            (measured - ev.pan as f32).abs() <= PAN_TOLERANCE,
+            "seq {}: schedule pan {} → measured {measured} (L={l:.5}, R={r:.5})",
+            ev.sequence_name,
+            ev.pan
+        );
+    }
+
+    // イベント間の無音（分離の裏付け）。kick[0.1,0.6]/snare[2.1,2.3]/hat[4.1,4.15]/
+    // chopd slice1[6.1,6.6]/slice2[7.1,7.6] の隙間を各 ch で確認する。
+    for (gap_start, gap_end) in [(1.0, 1.8), (3.0, 3.8), (5.0, 5.8), (6.7, 7.0)] {
+        let gs = (gap_start * sr) as usize;
+        let ge = (gap_end * sr) as usize;
+        let gap = region_rms(&cap, 0, gs, ge).max(region_rms(&cap, 1, gs, ge));
+        assert!(
+            gap < 1e-5,
+            "examples22 イベント間 {gap_start}-{gap_end}s は無音のはず（RMS={gap:.6}）"
+        );
+    }
+}
