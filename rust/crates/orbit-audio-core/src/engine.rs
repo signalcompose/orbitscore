@@ -46,10 +46,19 @@ impl Engine {
     }
 
     /// `play_id` 付きでスケジュールする。後で `stop` で個別停止できる。
+    ///
+    /// `pan` は [-1.0, 1.0]（0.0 = 中央）。render 時に等パワー則（SC `Pan2` 一致）で
+    /// 適用され、範囲外は clamp される。
+    /// `slice_start_frame` / `slice_len_frames` は再生領域（`chop` の slice）。
+    /// `slice_len_frames == 0` で「offset 以降すべて」。サンプル端で clamp される。
+    #[allow(clippy::too_many_arguments)]
     pub fn schedule_with_play_id(
         &self,
         start_sec: f64,
         gain: f32,
+        pan: f32,
+        slice_start_frame: usize,
+        slice_len_frames: usize,
         play_id: String,
         sample: Sample,
     ) -> Result<(), EngineError> {
@@ -57,6 +66,8 @@ impl Engine {
         s.schedule(
             ScheduledSample::new(start_sec, sample)
                 .with_gain(gain)
+                .with_pan(pan)
+                .with_region(slice_start_frame, slice_len_frames)
                 .with_play_id(play_id),
         );
         Ok(())

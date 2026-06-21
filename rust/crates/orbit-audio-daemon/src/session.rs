@@ -275,8 +275,37 @@ async fn handle_command(
                     ProtocolError::new("PARAM_OUT_OF_RANGE", "gain must be >= 0"),
                 );
             }
+            // pan は [-1.0, 1.0]。範囲外は reject せず core 側で clamp（protocol 仕様: UX 優先）。
+            // 省略時は 0.0（中央）。
+            let pan = params
+                .get("pan")
+                .and_then(|v| v.as_f64())
+                .map(|x| x as f32)
+                .unwrap_or(0.0);
+            // offset_sec / duration_sec は再生領域（chop の slice）。負値は reject、
+            // 省略時はそれぞれ 0.0（先頭 / offset 以降すべて）。サンプル端 clamp は core。
+            let offset_sec = params
+                .get("offset_sec")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let duration_sec = params
+                .get("duration_sec")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            if offset_sec < 0.0 {
+                return err(
+                    &id,
+                    ProtocolError::new("PARAM_OUT_OF_RANGE", "offset_sec must be >= 0"),
+                );
+            }
+            if duration_sec < 0.0 {
+                return err(
+                    &id,
+                    ProtocolError::new("PARAM_OUT_OF_RANGE", "duration_sec must be >= 0"),
+                );
+            }
             match params.get("sample_id").and_then(|v| v.as_str()) {
-                Some(sid) => match engine.play_at(sid, time_sec, gain) {
+                Some(sid) => match engine.play_at(sid, time_sec, gain, pan, offset_sec, duration_sec) {
                     Ok(handle) => {
                         // 遅延タスクを先に spawn して await コストを避ける
                         schedule_play_ended(

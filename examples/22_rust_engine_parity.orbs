@@ -1,0 +1,46 @@
+// Rust engine parity dog-food (#304) — pan / chop 領域再生 / per-slice gain
+//
+// 使い方:
+//   - 既定 (SuperCollider): そのまま再生
+//   - native Rust エンジン: ORBITSCORE_ENGINE=rust を付けて再生し、SC と聴き比べる
+//
+// 注: rate≠1.0（slice 尺をイベントスロット尺へ詰める varispeed = time-stretch）は本増分
+//     対象外。下の chop は grid 一致（sliceDur=eventDur → rate=1.0）にしてあるので、
+//     native でも warn なしで SC と同等に鳴るはず。
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+
+// === pan + per-slice gain（chop(1) = 全体再生・rate なし）===
+// kick=左 / snare=右 / hihat=中央 で定位差、gain で音量差を確認する。
+var kick = init global.seq
+kick.length(1)
+kick.audio("../test-assets/audio/kick.wav").chop(1)
+kick.defaultGain(-3).defaultPan(-60)
+kick.play(1, 0, 1, 0)
+
+var snare = init global.seq
+snare.length(1)
+snare.audio("../test-assets/audio/snare.wav").chop(1)
+snare.defaultGain(-6).defaultPan(60)
+snare.play(0, 1, 0, 1)
+
+var hat = init global.seq
+hat.length(1)
+hat.audio("../test-assets/audio/hihat_closed.wav").chop(1)
+hat.defaultGain(-9).defaultPan(0)
+hat.play(1, 1, 1, 1)
+
+// === chop 領域再生（grid 一致 → rate=1.0）===
+// arpeggio_c.wav = 1.0 秒。tempo 120 / 4-4 / length 1 → barDur=2.0 秒。
+// chop(2) で sliceDur=0.5 秒。play 4 要素 → eventDur=2.0/4=0.5 秒 = sliceDur → rate=1.0。
+// slice1→slice2→slice1→slice2 を領域読み（startPos/duration）で再生する。
+var chopd = init global.seq
+chopd.beat(4 by 4).length(1)
+chopd.audio("../test-assets/audio/arpeggio_c.wav").chop(2)
+chopd.defaultGain(-4).defaultPan(20)
+chopd.play(1, 2, 1, 2)
+
+global.start()
+RUN(kick, snare, hat, chopd)

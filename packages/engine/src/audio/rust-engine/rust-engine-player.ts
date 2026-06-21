@@ -24,12 +24,13 @@
  *    フォールバック）。これで anchor を毎秒補正し audio/wall drift を吸収する。boot 直後は
  *    `GetStatus.uptime_sec`(≈transport) で暫定 anchor を置き、初回 StreamStats で精緻化する。
  *
- *  - **feature gap は boundary で明示**（見かけの parity を作らない・A0 方針）:
- *    pan≠0 → 1回 warn して中央定位で発音（pan drop）/ slice → 1回 warn して skip /
- *    outputChannel(LinkAudio) → 1回 warn して hardware 発音（SC の plugin-missing fallback と同形）/
- *    master effects（compressor/limiter/normalizer）→ 1回 warn して no-op。
- *    いずれも §6 確定の後続フェーズ（pan=小タスク・rate/slice=A3・LinkAudio/effects=A4 era）。
- *    内部 `ScheduledPlay` は pan を保持（param-complete）し、後の pan 追加を配線だけにする。
+ *  - **pan は #304 で実装済み**（daemon PlayAt の pan・equal-power = SC `Pan2` 一致）。
+ *    発火時に DSL の -100..100 を daemon の [-1,1] へ変換して送る。
+ *
+ *  - **残る feature gap は boundary で明示**（見かけの parity を作らない・A0 方針）:
+ *    slice → 1回 warn して skip / outputChannel(LinkAudio) → 1回 warn して hardware 発音
+ *    （SC の plugin-missing fallback と同形）/ master effects（compressor/limiter/normalizer）→
+ *    1回 warn して no-op。いずれも後続フェーズ（rate/slice=time-stretch 増分・LinkAudio/effects=A4 era）。
  */
 
 import { gainDbToAmplitude } from '../audio-gain-utils'
@@ -39,8 +40,18 @@ import type { AudioDevice } from '../supercollider/types'
 import { DaemonClient } from './daemon-client'
 import { DaemonConnectionError } from './errors'
 
-/** boundary で拒否する feature gap の種別。 */
-type GapKind = 'pan' | 'slice' | 'outputChannel' | 'masterEffect'
+/** boundary で拒否する feature gap の種別。pan は #304 で実装済みのため gap ではない。 */
+type GapKind = 'slice' | 'outputChannel' | 'masterEffect'
+
+/** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
+interface SliceSpec {
+  /** slice 番号（1 始まり）。 */
+  index: number
+  /** 分割数（`chop(n)` の n）。 */
+  total: number
+  /** イベントスロット尺（ms）。rate≠1.0 判定に使う（time-stretch 未対応の warn 用）。 */
+  eventDurationMs?: number
+}
 
 /** lean scheduler が保持する 1 発音イベント。SC `ScheduledPlay` の daemon 版。 */
 interface ScheduledPlay {
@@ -49,9 +60,11 @@ interface ScheduledPlay {
   filepath: string
   /** dB ゲイン（`scheduleEvent` の gainDb）。発火時に linear amplitude へ変換。 */
   gainDb: number
-  /** DSL pan（-100..100）。S2 では未適用だが param-complete のため保持。 */
+  /** DSL pan（-100..100）。発火時に daemon の [-1,1] へ変換。 */
   pan: number
   sequenceName: string
+  /** chop slice 情報。未指定なら全体再生。発火時に load 済み尺から領域を計算する。 */
+  slice?: SliceSpec
 }
 
 /** daemon transport clock と TS wall clock の対応点。 */
@@ -105,10 +118,11 @@ const DEFAULT_LOOKAHEAD_SEC = 0.05
 const POLL_INTERVAL_MS = 1
 /** SC EventScheduler と同じく、過大 drift のイベントは古い残骸として skip する閾値。 */
 const MAX_DRIFT_MS = 1000
+/** chop slice の rate が 1.0 からこの幅を超えて外れたら time-stretch 未対応として 1 回 warn する。 */
+const SLICE_RATE_TOLERANCE = 0.01
 
 /** feature gap warning の初期状態（フィールド初期化子で arm・stopAll で再 arm に使う）。 */
 const freshWarned = (): Record<GapKind, boolean> => ({
-  pan: false,
   slice: false,
   outputChannel: false,
   masterEffect: false,
@@ -269,35 +283,46 @@ export class RustEnginePlayer implements AudioEngineBackend {
         `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio) is not supported yet (A4) — playing on the hardware bus.`,
       )
     }
-    if (pan !== 0) {
-      this.warnOnce(
-        'pan',
-        `⚠️  [rust-engine] pan is not supported yet — events play centered. (Deferred follow-up; daemon PlayAt has no pan.)`,
-      )
-    }
+    // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
+    // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
     this.enqueue({ time, filepath, gainDb, pan, sequenceName })
   }
 
   /**
-   * slice/chop（rate/startPos/duration）は A3（time-stretch）/ #239 の担当。daemon の
-   * PlayAt は全体再生のみなので、誤った全体再生で見かけの parity を作らないよう
-   * 1 回 warn して skip する。
+   * chop の slice を領域再生（startPos/duration の切り出し・rate=1.0）でスケジュールする（#304）。
+   *
+   * slice 領域（offset/長さ）はサンプル尺に依存するが、daemon の load は lazy（初回発火時）
+   * のため、領域は `executePlayback` で load 完了後に計算する。ここでは slice 仕様だけ保持する。
+   *
+   * rate≠1.0（slice 尺をイベントスロット尺へ詰める varispeed = time-stretch）は本増分の対象外。
+   * 発火時に rate≠1.0 を検出したら 1 回 warn し、slice は自然尺（rate=1.0）で鳴らす
+   * （time-stretch 増分 #213/#239 へ defer）。per-slice gain は各 slice の gainDb がそのまま効く。
    */
   scheduleSliceEvent(
-    _filepath: string,
-    _time: number,
-    _sliceIndex: number,
-    _totalSlices: number,
-    _eventDurationMs: number | undefined,
-    _gainDb = 0,
-    _pan = 0,
-    _sequenceName = '',
-    _outputChannel?: string,
+    filepath: string,
+    time: number,
+    sliceIndex: number,
+    totalSlices: number,
+    eventDurationMs: number | undefined,
+    gainDb = 0,
+    pan = 0,
+    sequenceName = '',
+    outputChannel?: string,
   ): void {
-    this.warnOnce(
-      'slice',
-      `⚠️  [rust-engine] slice/chop playback is not supported yet (A3 time-stretch / #239) — these events are skipped on the rust engine.`,
-    )
+    if (outputChannel) {
+      this.warnOnce(
+        'outputChannel',
+        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio) is not supported yet (A4) — playing on the hardware bus.`,
+      )
+    }
+    this.enqueue({
+      time,
+      filepath,
+      gainDb,
+      pan,
+      sequenceName,
+      slice: { index: sliceIndex, total: totalSlices, eventDurationMs },
+    })
   }
 
   start(): void {
@@ -381,12 +406,23 @@ export class RustEnginePlayer implements AudioEngineBackend {
     const sampleId = await this.ensureLoaded(play.filepath)
     // ロード（async round-trip）中に clear された場合の再チェック（mute/stop への応答性）。
     if (play.sequenceName && !this.liveSequences.has(play.sequenceName)) return
+    // chop の slice 領域は load 済み尺から計算する（lazy load のためここで解決）。
+    const { offsetSec, durationSec } = this.resolveSliceRegion(play)
     // daemonNowSec と wallMs は送信「前」に同一瞬間で採取する（onDispatch の lead/drift 計測が
     // coherent になるよう。playAt の await 後だと round-trip 分ずれる）。
     const wallMs = Date.now()
     const daemonNowSec = this.daemonNowSec()
     const timeSec = daemonNowSec + this.lookaheadSec
-    const { playId } = await this.daemon.playAt(sampleId, timeSec, amplitude)
+    // DSL pan（-100..100）を daemon の [-1,1] へ変換。範囲外は daemon 側で clamp。
+    const pan = play.pan / 100
+    const { playId } = await this.daemon.playAt(
+      sampleId,
+      timeSec,
+      amplitude,
+      pan,
+      offsetSec,
+      durationSec,
+    )
     this.onDispatch?.({
       filepath: play.filepath,
       sampleId,
@@ -443,6 +479,41 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** TS wall clock から daemon transport now_sec を推定する（anchor + 経過時間）。 */
   private daemonNowSec(): number {
     return this.clockAnchor.daemonSec + (Date.now() - this.clockAnchor.tsMs) / 1000
+  }
+
+  /**
+   * chop の slice 領域（offset/長さ・秒）を load 済みサンプル尺から計算する。
+   *
+   * 全体再生（slice なし）は `{0, 0}`（= daemon は全体再生）。slice の場合は
+   * `sliceDuration = totalDuration / total`、`offset = (index-1) * sliceDuration` を返す。
+   * 尺が未取得（lazy load で frames/SR が 0）の場合は全体再生にフォールバックする。
+   *
+   * rate≠1.0（slice 尺をイベントスロット尺に詰める time-stretch）は本増分の対象外なので、
+   * 検出したら 1 回 warn する（slice 自体は自然尺 rate=1.0 で鳴る）。
+   */
+  private resolveSliceRegion(play: ScheduledPlay): { offsetSec: number; durationSec: number } {
+    const spec = play.slice
+    if (!spec) return { offsetSec: 0, durationSec: 0 }
+    const totalDuration = this.durations.get(play.filepath) ?? 0
+    if (totalDuration <= 0 || spec.total <= 0) {
+      // 尺不明 → 全体再生フォールバック（誤った領域で無音を作らない）。
+      return { offsetSec: 0, durationSec: 0 }
+    }
+    const sliceDuration = totalDuration / spec.total
+    const offsetSec = (spec.index - 1) * sliceDuration
+    // time-stretch（rate≠1.0）は未対応。slice 尺がスロット尺と一致しない場合のみ warn。
+    if (spec.eventDurationMs && spec.eventDurationMs > 0) {
+      const rate = (sliceDuration * 1000) / spec.eventDurationMs
+      if (Math.abs(rate - 1) > SLICE_RATE_TOLERANCE) {
+        this.warnOnce(
+          'slice',
+          `⚠️  [rust-engine] chop slice rate=${rate.toFixed(3)} (slice length ≠ event slot) — ` +
+            `time-stretch is not supported yet; the slice plays at natural length (rate=1.0). ` +
+            `Deferred to the time-stretch increment (#213/#239).`,
+        )
+      }
+    }
+    return { offsetSec, durationSec: sliceDuration }
   }
 
   private warnOnce(kind: GapKind, message: string): void {

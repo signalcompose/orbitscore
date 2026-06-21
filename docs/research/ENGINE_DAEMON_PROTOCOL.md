@@ -228,7 +228,9 @@ JSON-RPC 2.0 の影響を受けた独自形式:
     "time_sec": 0.5,
     "sample_id": "s-7b4e",
     "gain": 1.0,
-    "pan": 0.0
+    "pan": 0.0,
+    "offset_sec": 0.0,
+    "duration_sec": 0.0
   }
 }
 
@@ -242,6 +244,8 @@ JSON-RPC 2.0 の影響を受けた独自形式:
 - `time_sec`: daemon 内部 transport の基準時刻（起動時に 0.0 からスタート、`ResetTransport` で reset 可能 / Phase 2 で検討）。詳細はセクション 11 の Open Questions 参照
 - `gain`: `[0.0, ∞)`。範囲外（負値）は `PARAM_OUT_OF_RANGE` で reject。上限超過はクリッピング前提で accept
 - `pan`: `[-1.0, 1.0]`。範囲外は自動 clamp（UX 優先、reject しない）、省略時は 0.0
+- `offset_sec`: `[0.0, ∞)`。サンプル内の再生開始位置（秒）。省略時は 0.0（先頭）。`chop` の slice 開始位置に対応。負値は `PARAM_OUT_OF_RANGE` で reject
+- `duration_sec`: `[0.0, ∞)`。`offset_sec` から再生する長さ（秒）。0 または省略で「offset 以降すべて」。`chop` の slice 長に対応（natural rate=1.0 で再生）。負値は `PARAM_OUT_OF_RANGE` で reject。サンプル端を超える指定は端で clamp
 
 ### Stop
 
