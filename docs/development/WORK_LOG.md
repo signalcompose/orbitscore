@@ -30,7 +30,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **上位フレーミング**: これは **LLM の自己 PDCA（Plan-Do-Check-Act）の Check を audio で人間不在に成立させる機構**。agentic 自己修正は客観 oracle が必須（CRITIC / Huang et al. ICLR 2024）で、本機構は「audio の客観 oracle」を提供。`[LLM agent + 音楽 DSL + PCM 解析 + 静的 symbolic スケジュール + 推論時自律ループ]` の組み合わせは未発見。
 - 実装は #307（capture backend + assertion lib + CI gate）。本研究は #308。
 
-**Commit**: [PENDING]
+**Commit**: bc6f76a
 
 ### 6.152 feat(engine): native audio parity increment — pan / slice / per-slice gain (#304) (Jun 21, 2026)
 
