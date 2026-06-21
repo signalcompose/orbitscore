@@ -34,10 +34,16 @@ fn pan_is_recoverable_from_real_wav_render() {
 
     let slice_len = 4_800usize; // 0.1s
     // 開始フレームはいずれも BLOCK_FRAMES(512) の倍数ではない（境界またぎを通す）。
+    // 中間値（±0.5）を含めるのが要: ±1/0 だけだと片 ch=0 / L=R となり、等パワー則を
+    // 線形則など他の対称 pan 則から判別できない（どの則でも通ってしまう）。pan=-0.5 では
+    // 等パワー L=cos(π/8)≈0.924 / R=sin(π/8)≈0.383 → atan2 で -0.5、線形則なら ≈-0.59 と
+    // なり PAN_TOLERANCE を超えて落ちる。
     let events = [
-        (1_000usize, -1.0f32, -1.0f32), // (start, commanded pan, expected pan) hard-left
-        (10_000usize, 0.0f32, 0.0f32),  // center
-        (20_000usize, 1.0f32, 1.0f32),  // hard-right
+        (1_000usize, -1.0f32, -1.0f32),  // (start, commanded pan, expected pan) hard-left
+        (10_000usize, -0.5f32, -0.5f32), // 中間左（判別の鍵）
+        (20_000usize, 0.0f32, 0.0f32),   // center
+        (30_000usize, 0.5f32, 0.5f32),   // 中間右（判別の鍵）
+        (40_000usize, 1.0f32, 1.0f32),   // hard-right
     ];
 
     let mut s = Scheduler::new(SAMPLE_RATE, CHANNELS);
@@ -49,11 +55,12 @@ fn pan_is_recoverable_from_real_wav_render() {
         );
     }
 
-    let total_frames = 26_000usize; // 全イベントを含む
+    let total_frames = 46_000usize; // 全イベントを含む
     let cap = capture(&mut s, CHANNELS, total_frames, BLOCK_FRAMES);
 
     for (start, commanded, expected) in events {
-        // body 窓: 開始直後と末尾 fade（min(8ms, len*4%) = 192 frames）を避ける。
+        // body 窓: 開始直後と末尾 fade を避ける。fade_frames = min(0.1s*0.04, 0.008s)*48000
+        // = min(0.004s, 0.008s)*48000 = 192 フレーム < 256 マージン。
         // pan は左右で同包絡なので fade は比に効かないが、安全側で本体のみを測る。
         let w_start = start + 256;
         let w_end = start + slice_len - 256;

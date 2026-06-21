@@ -80,8 +80,9 @@ pub fn capture(
     while rendered < total_frames {
         let this_frames = block_frames.min(total_frames - rendered);
         let buf = &mut block[..this_frames * chs];
-        // Scheduler::render は先頭でゼロクリアしてから加算するので、block の
-        // 使い回し（前回値の残り）は出力に影響しない。
+        // block の使い回し（前回値の残り）は出力に影響しない。
+        // orbit_audio_core::Scheduler::render が先頭でゼロクリアしてから加算する前提
+        // （scheduler.rs 参照）。render が加算方式に変わったらこの前提を見直すこと。
         scheduler.render(buf);
         data.extend_from_slice(buf);
         rendered += this_frames;
@@ -130,5 +131,30 @@ mod tests {
         // 599 フレーム目までは無音、600 から非ゼロ。
         assert!(cap.at(599, 0).abs() < 1e-6, "before onset must be silent");
         assert!(cap.at(600, 0).abs() > 0.5, "onset frame must be non-zero");
+    }
+
+    /// 秒 → フレーム換算（公開 API）。
+    #[test]
+    fn frame_at_sec_converts_seconds_to_frames() {
+        let cap = CapturedAudio::new(vec![0.0; 4], 2, 48_000);
+        assert_eq!(cap.frame_at_sec(1.0), 48_000);
+        assert_eq!(cap.frame_at_sec(0.0), 0);
+        assert_eq!(cap.frame_at_sec(0.5), 24_000);
+    }
+
+    /// 不正設定（channels=0）は早期 panic（文書化済み契約）。
+    #[test]
+    #[should_panic(expected = "channels must be > 0")]
+    fn capture_panics_on_zero_channels() {
+        let mut s = Scheduler::new(48_000, 2);
+        capture(&mut s, 0, 10, 5);
+    }
+
+    /// 不正設定（block_frames=0）は早期 panic（文書化済み契約）。
+    #[test]
+    #[should_panic(expected = "block_frames must be > 0")]
+    fn capture_panics_on_zero_block_frames() {
+        let mut s = Scheduler::new(48_000, 2);
+        capture(&mut s, 2, 10, 0);
     }
 }

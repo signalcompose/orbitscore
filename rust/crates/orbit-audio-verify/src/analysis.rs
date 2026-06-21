@@ -74,8 +74,8 @@ pub fn linear_to_db(x: f32) -> f32 {
 }
 
 /// 2 つの線形 RMS のレベル差を dB で返す（`20·log10(a / b)`）。
-/// per-slice gain の「スライス間 dB 差」検証に使う。`b <= 0` は `+inf`、
-/// `a <= 0` は `-inf`。
+/// per-slice gain の「スライス間 dB 差」検証に使う。`b <= 0`（分母 = 参照信号が無音）は
+/// 信号が参照を無限大に上回るとみなして `+inf`、`a <= 0`（測定側が無音）は `-inf`。
 pub fn db_difference(a: f32, b: f32) -> f32 {
     if b <= 0.0 {
         return f32::INFINITY;
@@ -136,6 +136,18 @@ mod tests {
     }
 
     #[test]
+    fn region_peak_windows_clamps_and_guards() {
+        // ch0 = [0.2, -0.9, 0.5], ch1 = [0.1, 0.3, 0.4]（2ch・3 frames）。
+        // region_rms と同じ端処理（窓 / 空区間 / 無効 ch / end clamp）を直接 pin する。
+        let a = mk_audio(vec![0.2, 0.1, -0.9, 0.3, 0.5, 0.4], 2);
+        assert!((region_peak(&a, 0, 0, 2) - 0.9).abs() < 1e-6); // frame 0,1 → max(0.2,0.9)
+        assert!((region_peak(&a, 0, 0, 1) - 0.2).abs() < 1e-6); // frame 0 のみ
+        assert!(region_peak(&a, 0, 2, 2).abs() < 1e-6); // 空区間 → 0.0
+        assert!(region_peak(&a, 5, 0, 3).abs() < 1e-6); // 無効 ch → 0.0
+        assert!((region_peak(&a, 0, 0, 999) - 0.9).abs() < 1e-6); // end clamp
+    }
+
+    #[test]
     fn pan_inversion_hits_known_anchors() {
         let k = std::f32::consts::FRAC_1_SQRT_2; // 中央の左右ゲイン
         // hard-left: R=0 → pan -1。
@@ -158,6 +170,9 @@ mod tests {
         assert!(db_difference(0.3, 0.3).abs() < 1e-5);
         // -6 dB ≈ 0.5 倍。
         assert!((db_difference(0.5, 1.0) - (-6.0206)).abs() < 1e-3);
+        // 退化分岐（文書化済み契約）: b<=0 → +inf（分母無音）、a<=0 → -inf（測定側無音）。
+        assert_eq!(db_difference(1.0, 0.0), f32::INFINITY);
+        assert_eq!(db_difference(0.0, 1.0), f32::NEG_INFINITY);
     }
 
     #[test]

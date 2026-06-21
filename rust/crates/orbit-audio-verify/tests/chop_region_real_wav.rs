@@ -60,9 +60,11 @@ fn region_has_signal_and_outside_is_silent() {
     let body_end = schedule_start + region_len - 256;
     let body_rms_l = region_rms(&cap, 0, body_start, body_end);
     let body_rms_r = region_rms(&cap, 1, body_start, body_end);
+    // 中央パンなので L=R で両 ch に信号があるはず。&& にすることで、片 ch を
+    // 黙ってゼロ埋めする回帰（L/R swap 等）も捕まえる。
     assert!(
-        body_rms_l > 1e-3 || body_rms_r > 1e-3,
-        "領域内に信号が必要。L_RMS={body_rms_l:.5}, R_RMS={body_rms_r:.5}"
+        body_rms_l > 1e-3 && body_rms_r > 1e-3,
+        "領域内は両 ch に信号が必要。L_RMS={body_rms_l:.5}, R_RMS={body_rms_r:.5}"
     );
 
     // 領域外（slice 終端以降）: 本レンダラは加算のみで、終わったイベントからは
@@ -158,10 +160,12 @@ fn region_offset_is_correctly_applied_with_ramp_sample() {
         "fade 直前 local_pos={local_pos_check}: expected L={expected_l_check}, actual L={actual_l_check}"
     );
 
-    // slice 終端後（schedule_start + region_len 以降）は無音。
-    let after_frame = schedule_start + region_len + 50;
+    // slice 終端後（schedule_start + region_len 以降）は無音。spot-check（cap.at）だと
+    // total_frames を縮めたとき範囲外 0.0 fallback で誤 pass しうるため、窓 RMS で確認する
+    // （窓は total_frames まで取り、構造的に非空）。
+    let after_rms = region_rms(&cap, 0, schedule_start + region_len, total_frames);
     assert!(
-        cap.at(after_frame, 0).abs() < 1e-6,
-        "領域外フレーム {after_frame} の L は 0 のはず"
+        after_rms < 1e-5,
+        "領域外は無音のはず。RMS={after_rms:.6}"
     );
 }

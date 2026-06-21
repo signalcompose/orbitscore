@@ -124,4 +124,15 @@ fn fade_tail_captured_in_l_channel_is_linear() {
         envelope.first().unwrap_or(&0.0),
         envelope.last().unwrap_or(&0.0),
     );
+
+    // 末尾値が実際に下降していることを確認する。定数列（slope=0）も「線形」と判定される
+    // ため、fade_slope_is_linear だけでは「fade を落とさず定常 1.0 を出す」回帰を捕まえ
+    // られない。線形 release の最終フレーム env = (slice_len - (slice_len-1)) / fade_frames
+    // = 1/fade_frames = 1/40 = 0.025（手計算直書き・GRM 独立）。
+    let terminal = *envelope.last().expect("fade 窓は非空のはず");
+    let expected_terminal = 1.0 / fade_frames as f32;
+    assert!(
+        (terminal - expected_terminal).abs() < 0.01,
+        "fade 末尾値が期待値外: expected ≈ {expected_terminal:.4}, got {terminal:.4}"
+    );
 }
