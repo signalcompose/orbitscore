@@ -2,3 +2,6 @@
 # Do not commit; re-create with:
 #   cargo run -p orbit-audio-daemon --example export_verify_pcm
 .gen/
+
+# cross_check.py --selftest の一時成果物（best-effort cleanup の取りこぼし保険）。
+_selftest*

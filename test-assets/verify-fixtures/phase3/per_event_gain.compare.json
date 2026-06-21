@@ -36,16 +36,19 @@
       "onset": {
         "scheduled": 4800,
         "ours_onsetFrameThreshold": 4800,
+        "matched_onsetFrameMatched": 4800,
         "librosa_nearest": 4608,
         "deltaOursVsScheduled": 0,
+        "deltaMatchedVsScheduled": 0,
         "deltaOursVsLibrosa": 192,
         "deltaLibrosaVsScheduled": -192,
         "toleranceOursVsScheduled_frames": 96,
         "toleranceLibrosaVsScheduled_frames": 720,
         "oursWithinTolerance": true,
+        "matchedWithinTolerance": true,
         "librosaMatched": true,
         "withinTolerance": true,
-        "note": "アルゴリズム独立: librosa=spectral-flux, Rust=threshold-based"
+        "note": "アルゴリズム独立: librosa=spectral-flux vs Rust threshold。matched は scheduled 真値と整合確認"
       },
       "eventOk": true
     },
@@ -73,16 +76,19 @@
       "onset": {
         "scheduled": 148800,
         "ours_onsetFrameThreshold": 148800,
+        "matched_onsetFrameMatched": null,
         "librosa_nearest": 148480,
         "deltaOursVsScheduled": 0,
+        "deltaMatchedVsScheduled": null,
         "deltaOursVsLibrosa": 320,
         "deltaLibrosaVsScheduled": -320,
         "toleranceOursVsScheduled_frames": 96,
         "toleranceLibrosaVsScheduled_frames": 720,
         "oursWithinTolerance": true,
+        "matchedWithinTolerance": true,
         "librosaMatched": true,
         "withinTolerance": true,
-        "note": "アルゴリズム独立: librosa=spectral-flux, Rust=threshold-based"
+        "note": "アルゴリズム独立: librosa=spectral-flux vs Rust threshold。matched は scheduled 真値と整合確認"
       },
       "eventOk": true
     }

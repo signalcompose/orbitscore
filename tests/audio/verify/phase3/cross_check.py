@@ -154,8 +154,10 @@ def compare_event(
     l_rust = event["lRms"]
     r_rust = event["rRms"]
 
-    l_rel_err = abs(l_lib - l_rust) / (l_rust + 1e-12)
-    r_rel_err = abs(r_lib - r_rust) / (r_rust + 1e-12)
+    # 相対誤差。分母は 1e-6（≈ −120 dBFS）で floor し、無音 ch（denormal 振幅）での
+    # platform 依存の偽 FAIL を避ける（subnormal を片側だけ flush して比が暴れるのを防ぐ）。
+    l_rel_err = abs(l_lib - l_rust) / max(l_rust, 1e-6)
+    r_rel_err = abs(r_lib - r_rust) / max(r_rust, 1e-6)
     level_ok = l_rel_err <= LEVEL_REL_TOL and r_rel_err <= LEVEL_REL_TOL
 
     # -- pan (実装独立: per-ch RMS から逆算) --
@@ -168,16 +170,30 @@ def compare_event(
     scheduled = event["onsetFrameScheduled"]
     ours = event["onsetFrameThreshold"]
 
-    # ours ↔ scheduled
-    delta_ours_vs_scheduled = ours - scheduled
-    ours_ok = abs(delta_ours_vs_scheduled) <= ONSET_OURS_FRAMES
+    # ours（threshold 法）↔ scheduled。検出失敗（null）は FAIL として扱う（不能を緑にしない）。
+    if ours is None:
+        delta_ours_vs_scheduled = None
+        ours_ok = False
+    else:
+        delta_ours_vs_scheduled = ours - scheduled
+        ours_ok = abs(delta_ours_vs_scheduled) <= ONSET_OURS_FRAMES
+
+    # matched filter 法（onsetFrameMatched が出力されたイベントのみ）↔ scheduled。
+    # detect_onset_matched プリミティブを scheduled 真値に対して grounding する
+    # （librosa オラクルではなく Rust 別プリミティブ vs 真値の整合確認）。
+    matched = event.get("onsetFrameMatched")
+    if matched is None:
+        delta_matched_vs_scheduled = None
+        matched_ok = True  # 当該イベントで未測定 = 制約なし
+    else:
+        delta_matched_vs_scheduled = matched - scheduled
+        matched_ok = abs(delta_matched_vs_scheduled) <= ONSET_OURS_FRAMES
 
     # scheduled に最近接の librosa 検出を探す（scheduled → 最近接 librosa の向き）
     if librosa_onsets.size > 0:
         diffs = np.abs(librosa_onsets - scheduled)
-        idx = int(np.argmin(diffs))
-        nearest_lib = int(librosa_onsets[idx])
-        delta_ours_vs_librosa = ours - nearest_lib
+        nearest_lib = int(librosa_onsets[int(np.argmin(diffs))])
+        delta_ours_vs_librosa = None if ours is None else ours - nearest_lib
         delta_lib_vs_scheduled = nearest_lib - scheduled
         librosa_matched = abs(delta_lib_vs_scheduled) <= ONSET_LIBROSA_FRAMES
     else:
@@ -186,7 +202,7 @@ def compare_event(
         delta_lib_vs_scheduled = None
         librosa_matched = False
 
-    onset_ok = ours_ok and librosa_matched
+    onset_ok = ours_ok and matched_ok and librosa_matched
 
     return {
         "sequenceName": event.get("sequenceName"),
@@ -215,16 +231,19 @@ def compare_event(
         "onset": {
             "scheduled": scheduled,
             "ours_onsetFrameThreshold": ours,
+            "matched_onsetFrameMatched": matched,
             "librosa_nearest": nearest_lib,
             "deltaOursVsScheduled": delta_ours_vs_scheduled,
+            "deltaMatchedVsScheduled": delta_matched_vs_scheduled,
             "deltaOursVsLibrosa": delta_ours_vs_librosa,
             "deltaLibrosaVsScheduled": delta_lib_vs_scheduled,
             "toleranceOursVsScheduled_frames": ONSET_OURS_FRAMES,
             "toleranceLibrosaVsScheduled_frames": ONSET_LIBROSA_FRAMES,
             "oursWithinTolerance": ours_ok,
+            "matchedWithinTolerance": matched_ok,
             "librosaMatched": librosa_matched,
             "withinTolerance": onset_ok,
-            "note": "アルゴリズム独立: librosa=spectral-flux, Rust=threshold-based",
+            "note": "アルゴリズム独立: librosa=spectral-flux vs Rust threshold。matched は scheduled 真値と整合確認",
         },
         "eventOk": level_ok and pan_ok and onset_ok,
     }
@@ -257,6 +276,15 @@ def run_fixture(
     sr = rust["sampleRate"]
 
     pcm = read_pcm(pcm_path, channels)
+    # PCM frame 数を rust.json の期待値と照合（stale/truncated PCM を静かに通さない）。
+    if pcm.shape[0] != rust["frames"]:
+        print(
+            f"[ERROR] PCM フレーム数不一致: {pcm_path} は {pcm.shape[0]} frames、"
+            f"rust.json は {rust['frames']} frames を期待。PCM を再生成してください:\n"
+            "  cargo run -p orbit-audio-daemon --example export_verify_pcm",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     # mono mix (L+R)/2 — Rust と同じ定義
     mono = pcm.mean(axis=1).astype(np.float32)
@@ -420,6 +448,7 @@ def run_selftest(phase3_dir: Path, python_ver: str) -> None:
             "bodyWindow": body,
             "lRms": l_rms,
             "rRms": r_rms,
+            # 合成近似。compare_event は monoRms を参照しないため無害（厳密値は rms((L+R)/2)）。
             "monoRms": (l_rms + r_rms) / 2,
             "pan": pan_val,
             "gainDb": -3.0,
@@ -440,52 +469,69 @@ def run_selftest(phase3_dir: Path, python_ver: str) -> None:
 
     # fixtures_dir は gen_dir（その子）を parents=True で作った時点で存在する。
     fixtures_dir = project_root / "test-assets" / "verify-fixtures" / "phase3"
-    rust_json_path = fixtures_dir / "_selftest.rust.json"
-    with open(rust_json_path, "w") as f:
-        json.dump(rust_normal, f, indent=2)
-        f.write("\n")
 
-    # -- 正常系: 正確な値で PASS を期待 --
-    print("[selftest] 正常系テスト（PASS が期待値）...")
-    ok_normal = run_fixture("_selftest", fixtures_dir, fixtures_dir, python_ver)
-    if ok_normal:
-        print("[selftest] 正常系 PASS")
-    else:
-        print("[selftest ERROR] 正常系が FAIL — スクリプトに問題あり", file=sys.stderr)
-        # 実 PCM を巻き添えにしないよう、selftest 専用の _selftest.pcm のみ削除する
-        # （gen_dir 全体を rmtree すると同居する本物の <fixture>.pcm まで消える）。
-        _cleanup_selftest(rust_json_path, pcm_path)
-        sys.exit(1)
+    # selftest が作るファイルを集約し、try/finally で必ず掃除する（実 PCM
+    # .gen/<fixture>.pcm は決して触らない）。各 rust/compare.json は write_and_run が追加。
+    created: list[Path] = [pcm_path]
 
-    # -- 異常系: 値を意図的にずらして FAIL を期待（正常系と同じ run_fixture を通す）--
-    print("[selftest] 異常系テスト（FAIL が期待値）...")
-    rust_bad = copy.deepcopy(rust_normal)  # pcmFile は同じ PCM を指す
-    rust_bad["fixture"] = "_selftest_bad"
-    rust_bad["events"][0]["lRms"] *= 1.5    # RMS を 50% ずらす（LEVEL_REL_TOL=3% を大幅超過）
-    rust_bad["events"][0]["rRms"] *= 1.5
-    rust_bad["events"][0]["onsetFrameThreshold"] += 15000  # onset を 300ms ずらす（96fr 超過）
+    def write_and_run(name: str, rust_dict: dict[str, Any]) -> bool:
+        """rust_dict を <name>.rust.json に書いて run_fixture を回し、verdict ok を返す。"""
+        d = copy.deepcopy(rust_dict)
+        d["fixture"] = name
+        rj = fixtures_dir / f"{name}.rust.json"
+        with open(rj, "w") as f:
+            json.dump(d, f, indent=2)
+            f.write("\n")
+        created.extend([rj, fixtures_dir / f"{name}.compare.json"])
+        return run_fixture(name, fixtures_dir, fixtures_dir, python_ver)
 
-    rust_json_bad = fixtures_dir / "_selftest_bad.rust.json"
-    with open(rust_json_bad, "w") as f:
-        json.dump(rust_bad, f, indent=2)
-        f.write("\n")
+    def fail(msg: str) -> None:
+        print(f"[selftest ERROR] {msg}", file=sys.stderr)
+        sys.exit(1)  # finally で cleanup が走る
 
-    got_fail = not run_fixture("_selftest_bad", fixtures_dir, fixtures_dir, python_ver)
-    compare_json_bad = fixtures_dir / "_selftest_bad.compare.json"
-    if got_fail:
-        print("[selftest] 異常系 FAIL（期待通り）")
-    else:
-        print("[selftest ERROR] 異常系が PASS — 検出ロジックに問題あり", file=sys.stderr)
-        _cleanup_selftest(rust_json_path, pcm_path, rust_json_bad, compare_json_bad)
-        sys.exit(1)
+    try:
+        # -- 正常系: 全メトリクス正しく PASS。さらに spurious 検出も assert（I2）--
+        print("[selftest] 正常系テスト（PASS + spurious 検出 が期待値）...")
+        if not write_and_run("_selftest", rust_normal):
+            fail("正常系が FAIL — スクリプトに問題あり")
+        cmp = json.loads((fixtures_dir / "_selftest.compare.json").read_text())
+        if cmp["spuriousOnsetCount"] < 1:
+            fail(f"spurious burst が検出されない（spuriousOnsetCount={cmp['spuriousOnsetCount']}）")
+        print("[selftest] 正常系 PASS / spurious 検出 確認")
 
-    # クリーンアップ（rust.json / compare.json / _selftest.pcm / bad.{rust,compare}.json）。
-    # gen_dir 全体ではなく selftest が作ったファイルのみ削除（本物の PCM を保護）。
-    compare_json = fixtures_dir / "_selftest.compare.json"
-    _cleanup_selftest(
-        rust_json_path, compare_json, pcm_path, rust_json_bad, compare_json_bad
-    )
-    print("[selftest] 完了 — 正常系 PASS / 異常系 FAIL 検出 確認済み")
+        # -- 異常系: 各検出器を単独で flip（level / pan / onset-ours / onset-librosa）--
+        # 1 ケース 1 摂動で、その検出器だけが verdict を FAIL にできることを確認する。
+        # librosa 検出から ±ONSET_LIBROSA_FRAMES 外の位置（burst から遠い gap 中央）。
+        far = b1_start + gap_frames // 4
+        cases = [
+            # level: L/R を同率拡大（pan 比は不変なので level だけが赤）
+            ("_selftest_level",
+             lambda e: e.update(lRms=e["lRms"] * 1.5, rRms=e["rRms"] * 1.5), "level"),
+            # pan: pan フィールドを中央から外す（L/R 等倍では検出できない経路 = C1）
+            ("_selftest_pan", lambda e: e.update(pan=0.6), "pan"),
+            # onset-ours: threshold を 300ms ずらす（ours gate）
+            ("_selftest_onset_ours",
+             lambda e: e.update(onsetFrameThreshold=e["onsetFrameThreshold"] + 15000), "onset(ours)"),
+            # onset-librosa: scheduled を burst から遠ざけ ours を追従させる（librosa_matched gate）
+            ("_selftest_onset_lib",
+             lambda e: e.update(onsetFrameScheduled=far, onsetFrameThreshold=far + 10),
+             "onset(librosa)"),
+        ]
+        for name, mutate, detector in cases:
+            print(f"[selftest] 異常系テスト [{detector}]（FAIL が期待値）...")
+            bad = copy.deepcopy(rust_normal)
+            mutate(bad["events"][0])
+            if write_and_run(name, bad):
+                fail(f"異常系 [{detector}] が PASS — この検出器が verdict を flip できていない")
+            print(f"[selftest] 異常系 [{detector}] FAIL（期待通り）")
+
+        print(
+            "[selftest] 完了 — 正常系 PASS / spurious 検出 / "
+            "level・pan・onset(ours)・onset(librosa) 各 FAIL 確認済み"
+        )
+    finally:
+        # gen_dir 全体ではなく selftest が作ったファイルのみ削除（本物の PCM を保護）。
+        _cleanup_selftest(*created)
 
 
 def _cleanup_selftest(*paths: Path) -> None:

@@ -42,9 +42,13 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **/simplify（4観点並列 + 適用）**: in-file の簡約を適用（named const 化 `BLOCK_FRAMES`/`BODY_HEAD_OFFSET`/`ONSET_SEARCH_MARGIN`・未使用 `panRaw` 削除・`play_span` ヘルパ抽出・matched 分岐コメント / Python: spurious 件数のベクトル化・冗長 `status` 変数と重複 `mkdir` 除去・`_rms` ヘルパ・異常系 selftest を `run_fixture` に統一）。値は不変（rust.json / compare.json バイト一致を確認）。**reuse 最大指摘 = `render_golden`/golden 型 ~80行が phase-2 test と逐語複製**は defer: dedup には merged phase-2 test 改変 + daemon 本体への feature flag + orbit-audio-verify の dev-dep→optional 昇格が必要で reviewed diff の外。両 harness を触る focused follow-up とする。
 
-**スコープ外（後続）**: 上記 render_golden dedup（両 harness 共有）/ CLI `play --capture out.wav`（決定論 offline-clocking）/ madmom フルスイート / 広い DSL 機能網羅（polymeter/quantize onset）/ 知覚指標。
+**/code:pr-review-team（4専門エージェント並列 + 反復）round-1**: Critical 1 + Important 4 を反映。① **selftest 再設計**: 各検出器を 1 ケース 1 摂動で単独 flip 検証（level/pan/onset-ours/onset-librosa）+ spurious assert。従来は L/R 等倍摂動で **pan 検出器が未検証**（Critical）・librosa_matched/空 onset 経路も未駆動だった。② **`detect_onset_matched` を scheduled 真値と整合確認**（従来は Rust が出力するのみで Python 未消費＝「4 プリミティブ grounding」が過大主張）。③ **PCM frame 数を `rust.json["frames"]` と照合**（stale/truncated PCM の silent pass を防ぐ）。④ robustness: `onsetFrameThreshold=null` の TypeError ガード / near-zero RMS 相対誤差の分母 floor / `_selftest*` gitignore / コメント精密化。CI gate 無し方針ゆえ selftest が唯一の自動ガードなので各検出器の単独 flip 検証が要。
 
-**Commit**: 03c7088（実装）+ /simplify cleanup follow-up
+**CI 補足（owner 2026-06-21）**: 現状スプリント優先で CI gate にしないが**将来導入の意図あり**。導入時は版固定 venv を job 化し `export_verify_pcm`→`cross_check.py`（exit code gate）を回す（生成物は決定論）。
+
+**スコープ外（後続）**: 上記 render_golden dedup（両 harness 共有）/ CLI `play --capture out.wav`（決定論 offline-clocking）/ madmom フルスイート / 広い DSL 機能網羅（polymeter/quantize onset）/ 知覚指標 / CI 導入。
+
+**Commit**: 03c7088（実装）+ 4871fe6（/simplify）+ pr-review-team round-1 follow-up
 
 ### 6.155 feat(verify): phase-2 tier-c — interpreter schedule vs rendered PCM (two-leg) (#311) (Jun 21, 2026)
 

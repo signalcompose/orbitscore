@@ -26,7 +26,10 @@ use orbit_audio_verify::{
 };
 use serde::{Deserialize, Serialize};
 
-// ─── golden schedule の構造（verify_schedule_pcm.rs から複製）────────────────
+// ─── golden schedule の構造 ─────────────────────────────────────────────────
+// verify_schedule_pcm.rs と同一 JSON スキーマを共有するが、独立宣言（あちらは test binary
+// の private 型で import 不可）。panRaw は serde の unknown-field 無視で省略。共通化は
+// WORK_LOG §スコープ外の follow-up（両 harness を触る dedup）参照。
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,7 +108,8 @@ fn play_span(ev: &GoldenEvent, sample_frames: &HashMap<String, usize>, sr: f64) 
 }
 
 /// body 窓 `[onset+BODY_HEAD_OFFSET, onset+span-tail_trim)`。
-/// verify_schedule_pcm.rs の `body_window` と同じ（import 不可のため複製）。
+/// verify_schedule_pcm.rs の `body_window` と同値（あちらは test binary の private 関数で
+/// `orbit-audio-verify` には無く import 不可。共通化は follow-up）。
 fn body_window(onset: usize, span: usize, tail_trim: usize) -> (usize, usize) {
     (onset + BODY_HEAD_OFFSET, onset + span.saturating_sub(tail_trim))
 }
