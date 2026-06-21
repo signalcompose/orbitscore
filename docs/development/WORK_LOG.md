@@ -48,7 +48,7 @@ post-2.0 engine-first の第1増分（最初の `/goal`）。S2 で defer した
 
 **残**: time-stretch / LinkAudio / α recovery floor は後続増分。examples/22 が `RUN`（one-shot ≈2秒）で audition しづらい点は polish 候補（本増分の Done には非該当）。
 
-**Commit**: [PENDING]
+**Commit**: d3be514
 
 ### 6.151 docs(post-2.0): correct roadmap to engine-first (supersede OrbitStudio-first framing) (#302) (Jun 21, 2026)
 
