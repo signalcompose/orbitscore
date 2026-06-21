@@ -1,0 +1,91 @@
+{
+  "fixture": "per_event_gain",
+  "pythonVersion": "3.11.14",
+  "librosaVersion": "0.11.0",
+  "numpyVersion": "2.4.6",
+  "tolerances": {
+    "levelRelTol": 0.03,
+    "panTol": 0.05,
+    "onsetOursVsScheduled_frames": 96,
+    "onsetLibrosaVsScheduled_frames": 720
+  },
+  "librosaOnsetCount": 2,
+  "spuriousOnsetCount": 0,
+  "events": [
+    {
+      "sequenceName": "loud",
+      "level": {
+        "lRms_rust": 0.049835514,
+        "lRms_librosa": 0.049836,
+        "lRelErr": 0.0,
+        "rRms_rust": 0.049835514,
+        "rRms_librosa": 0.049836,
+        "rRelErr": 0.0,
+        "tolerance": 0.03,
+        "withinTolerance": true,
+        "note": "実装独立: librosa feature.rms(frame_length=窓全体) vs Rust region_rms。overlap/dtype/正規化の実装差を検証する"
+      },
+      "pan": {
+        "pan_rust": 0.0,
+        "pan_librosa": 0.0,
+        "delta": 0.0,
+        "tolerance": 0.05,
+        "withinTolerance": true,
+        "note": "実装独立: per-ch RMS の一致を確認（atan2 の数学は Rust と共有=純粋数学）。atan2 の正しさは analysis.rs のアンカーテストで別途 pin 済み"
+      },
+      "onset": {
+        "scheduled": 4800,
+        "ours_onsetFrameThreshold": 4800,
+        "librosa_nearest": 4608,
+        "deltaOursVsScheduled": 0,
+        "deltaOursVsLibrosa": 192,
+        "deltaLibrosaVsScheduled": -192,
+        "toleranceOursVsScheduled_frames": 96,
+        "toleranceLibrosaVsScheduled_frames": 720,
+        "oursWithinTolerance": true,
+        "librosaMatched": true,
+        "withinTolerance": true,
+        "note": "アルゴリズム独立: librosa=spectral-flux, Rust=threshold-based"
+      },
+      "eventOk": true
+    },
+    {
+      "sequenceName": "quiet",
+      "level": {
+        "lRms_rust": 0.024976926,
+        "lRms_librosa": 0.024977,
+        "lRelErr": 0.0,
+        "rRms_rust": 0.024976926,
+        "rRms_librosa": 0.024977,
+        "rRelErr": 0.0,
+        "tolerance": 0.03,
+        "withinTolerance": true,
+        "note": "実装独立: librosa feature.rms(frame_length=窓全体) vs Rust region_rms。overlap/dtype/正規化の実装差を検証する"
+      },
+      "pan": {
+        "pan_rust": 0.0,
+        "pan_librosa": 0.0,
+        "delta": 0.0,
+        "tolerance": 0.05,
+        "withinTolerance": true,
+        "note": "実装独立: per-ch RMS の一致を確認（atan2 の数学は Rust と共有=純粋数学）。atan2 の正しさは analysis.rs のアンカーテストで別途 pin 済み"
+      },
+      "onset": {
+        "scheduled": 148800,
+        "ours_onsetFrameThreshold": 148800,
+        "librosa_nearest": 148480,
+        "deltaOursVsScheduled": 0,
+        "deltaOursVsLibrosa": 320,
+        "deltaLibrosaVsScheduled": -320,
+        "toleranceOursVsScheduled_frames": 96,
+        "toleranceLibrosaVsScheduled_frames": 720,
+        "oursWithinTolerance": true,
+        "librosaMatched": true,
+        "withinTolerance": true,
+        "note": "アルゴリズム独立: librosa=spectral-flux, Rust=threshold-based"
+      },
+      "eventOk": true
+    }
+  ],
+  "verdict": "PASS"
+}

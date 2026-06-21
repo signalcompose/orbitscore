@@ -1,0 +1,30 @@
+# Phase-3 librosa cross-check — pinned versions resolved in venv (Python 3.11.14)
+# Re-create with:
+#   python3.11 -m venv tests/audio/verify/phase3/.venv
+#   tests/audio/verify/phase3/.venv/bin/pip install -r tests/audio/verify/phase3/requirements.txt
+audioread==3.1.0
+certifi==2026.6.17
+cffi==2.0.0
+charset-normalizer==3.4.7
+decorator==5.3.1
+idna==3.18
+joblib==1.5.3
+lazy-loader==0.5
+librosa==0.11.0
+llvmlite==0.47.0
+msgpack==1.2.1
+narwhals==2.22.1
+numba==0.65.1
+numpy==2.4.6
+packaging==26.2
+platformdirs==4.10.0
+pooch==1.9.0
+pycparser==3.0
+requests==2.34.2
+scikit-learn==1.9.0
+scipy==1.17.1
+soundfile==0.14.0
+soxr==1.1.0
+threadpoolctl==3.6.0
+typing_extensions==4.15.0
+urllib3==2.7.0

@@ -1,0 +1,58 @@
+{
+  "fixture": "pan_three_voices",
+  "sampleRate": 48000,
+  "channels": 2,
+  "frames": 184800,
+  "pcmFile": ".gen/pan_three_voices.pcm",
+  "onsetThresholdRatio": 0.3,
+  "events": [
+    {
+      "sequenceName": "left",
+      "onsetSec": 0.1,
+      "onsetFrameScheduled": 4800,
+      "onsetFrameThreshold": 4800,
+      "onsetFrameMatched": null,
+      "bodyWindow": [
+        5056,
+        28200
+      ],
+      "lRms": 0.07047807,
+      "rRms": 0.0,
+      "monoRms": 0.035239033,
+      "pan": -1.0,
+      "gainDb": -3.0
+    },
+    {
+      "sequenceName": "mid",
+      "onsetSec": 2.1,
+      "onsetFrameScheduled": 100800,
+      "onsetFrameThreshold": 100800,
+      "onsetFrameMatched": null,
+      "bodyWindow": [
+        101056,
+        124200
+      ],
+      "lRms": 0.06511324,
+      "rRms": 0.026970789,
+      "monoRms": 0.046042014,
+      "pan": -0.49999994,
+      "gainDb": -3.0
+    },
+    {
+      "sequenceName": "right",
+      "onsetSec": 3.1,
+      "onsetFrameScheduled": 148800,
+      "onsetFrameThreshold": 148800,
+      "onsetFrameMatched": null,
+      "bodyWindow": [
+        149056,
+        172200
+      ],
+      "lRms": 3.080694e-9,
+      "rRms": 0.07047807,
+      "monoRms": 0.03523903,
+      "pan": 0.9999999,
+      "gainDb": -3.0
+    }
+  ]
+}

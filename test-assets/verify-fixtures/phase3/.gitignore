@@ -1,0 +1,4 @@
+# Generated PCM — deterministically reproducible from Rust export_verify_pcm example.
+# Do not commit; re-create with:
+#   cargo run -p orbit-audio-daemon --example export_verify_pcm
+.gen/

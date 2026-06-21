@@ -1,0 +1,42 @@
+{
+  "fixture": "chop_region",
+  "sampleRate": 48000,
+  "channels": 2,
+  "frames": 88800,
+  "pcmFile": ".gen/chop_region.pcm",
+  "onsetThresholdRatio": 0.3,
+  "events": [
+    {
+      "sequenceName": "chop",
+      "onsetSec": 0.1,
+      "onsetFrameScheduled": 4800,
+      "onsetFrameThreshold": 4809,
+      "onsetFrameMatched": null,
+      "bodyWindow": [
+        5056,
+        28200
+      ],
+      "lRms": 0.21450026,
+      "rRms": 0.21450026,
+      "monoRms": 0.21450026,
+      "pan": 0.0,
+      "gainDb": -3.0
+    },
+    {
+      "sequenceName": "chop",
+      "onsetSec": 1.1,
+      "onsetFrameScheduled": 52800,
+      "onsetFrameThreshold": 52800,
+      "onsetFrameMatched": null,
+      "bodyWindow": [
+        53056,
+        76200
+      ],
+      "lRms": 0.21451654,
+      "rRms": 0.21451654,
+      "monoRms": 0.21451654,
+      "pan": 0.0,
+      "gainDb": -3.0
+    }
+  ]
+}

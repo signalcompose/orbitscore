@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.156 feat(verify): phase-3 — ground measurement primitives against librosa (blind cross-check) (#313) (Jun 21, 2026)
+
+**Date**: 2026-06-21
+**Status**: ✅ 実装 + 全テスト緑（cargo daemon+verify / npm 1159 passed）+ cross_check 3 fixture PASS（leader 独立再現）
+**Branch**: `313-verify-phase3-librosa-cross-check`
+
+**背景**: phase 1（#307/6.154）・phase 2（#311/6.155）の tier-c 検証が信頼してきたのは、ハーネス自身の**測定プリミティブ**（`orbit-audio-verify`: `region_rms` / `pan_from_lr_rms` の atan2 逆算 / `detect_onset_threshold`・`detect_onset_matched`）。これまでプリミティブは Rust 単体テスト（既知アンカー）でしか裏付けが無く、誰も**独立 MIR ツールと突き合わせていなかった**。tier-c の土台がプリミティブの正しさに乗っているため、librosa を独立 oracle に置いて**プリミティブ層で GRM 独立性を成立させる**（差分検証）。研究記録 = #308 / `docs/research/AUDIO_OUTPUT_VERIFICATION.md` §4.2/§4.4。
+
+**独立性の質を正直に書き分ける（中核）**:
+- **onset = アルゴリズム独立（本丸）**: librosa の spectral-flux peak-picking は ours（threshold / matched-filter）と別アルゴリズム。真の差分。librosa の検出値は ours とも scheduled とも異なる独立値（per_event_gain loud で librosa=4608, ours=scheduled=4800）。
+- **level = 実装独立**: librosa も `sqrt(mean(x²))`（式は同じ）。捕まえるのは生 PCM 読み込み（`np.fromfile` の interleave/reshape）・channel 取り出し・dtype の**配管**。「RMS の数学を独立に再導出した」とは主張しない。
+- **pan = 実装独立**: librosa 由来 per-ch RMS から atan2 逆算（atan2 は純粋数学・`analysis.rs` のアンカーで別途 pin 済）。grounding は per-ch RMS の一致に帰着。
+
+**seam（WAV codec を検証対象に混ぜない）**: Rust example `export_verify_pcm`（`orbit-audio-daemon`・example は dev-dep `orbit-audio-verify` を使える唯一の置き場）が phase-2 fixture を本番 `EngineWrap::play_at` でオフライン決定論レンダ → `CapturedAudio.data` を**生 LE interleaved f32** でダンプ（`.gen/`・gitignore・再生成可能）+ 自プリミティブ測定値を `<fixture>.rust.json`（committed）に出力。Python `cross_check.py` が生 PCM を `np.fromfile(dtype='<f4')` で読み **librosa を numpy 配列に直接**かけて突き合わせ、`<fixture>.compare.json`（committed）を出力。
+
+**onset 3-way**（ours / librosa / 既知スケジュール）: librosa 単独は hop=512≈10.7ms で弱いオラクル → scheduled を strong ground truth に据え librosa を独立 witness に。許容 = ours↔sched ±2ms(96fr) / librosa↔sched ±15ms(720fr) / level 相対 ≤3% / pan ±0.05。
+
+**結果（全 fixture PASS・leader 独立再現 exit 0）**: level lRelErr=0.0（窓一致で配管確認）/ pan Δ=0.0（left/mid/right=−1/−0.5/+1）/ onset ours 0〜+9fr（attack fade 無しでほぼ sample-accurate）/ librosa −64〜−448fr 先行（spectral-flux+backtrack の系統傾向・全件許容内）。`chop_region` の spurious 4 は chop 内部境界の再立ち上がり（scheduled 全件マッチで verdict 不変）。**librosa デフォルト `frame_length=2048` は減衰信号で ~30% 系統ズレ**→窓長明示が必須（py-crosscheck が発見・修正）。
+
+**CI 方針（owner 確定）**: **CI gate にしない**。版固定 `requirements.txt`（librosa==0.11.0 等）+ committed script + 本記録 + `tests/audio/verify/phase3/README.md` の Recorded validation。理由: librosa/numba は版脆弱・onset は frame 解像度で gate だと flaky・回帰は既存 Rust アンカーテストがカバー。self-test（`--selftest`）で機構の正常/異常検出を回帰ガード。
+
+**委譲**: Opus = cross-check 設計（突き合わせ量・許容校正・onset 3-way・GRM 独立性の書き分け・export seam・README/契約・統合/再現確認）。Sonnet = Rust example（render+生f32ダンプ+自測定JSON）/ Python script（librosa 測定+比較）+ 版固定 requirements。leader が selftest cleanup の footgun（`.gen` rmtree で実 PCM 巻き添え）を修正。
+
+**スコープ外（後続）**: CLI `play --capture out.wav`（決定論 offline-clocking）/ madmom フルスイート / 広い DSL 機能網羅（polymeter/quantize onset）/ 知覚指標。
+
+**Commit**: [PENDING]
+
 ### 6.155 feat(verify): phase-2 tier-c — interpreter schedule vs rendered PCM (two-leg) (#311) (Jun 21, 2026)
 
 **Date**: 2026-06-21
