@@ -207,6 +207,7 @@ CI gate（案）
 - **許容は校正値**。MPEG 閾値は codec 復号（線形演算）由来で、非線形合成には別途校正が要る。
 - **知覚品質は耳の領分**。客観量（レベル・定位・タイミング・領域境界・包絡）は機械化できるが、「音楽的気持ちよさ・音色」は人間評価が残る。本機構は**パリティに効く性質の自動化**が射程。
 - ChucK / RTcmix の内部テストは浅い確認のみ（分類に不確実性）。
+- **引用の検証状態（spot-verify 済 2026-06-21）**: 本記録の引用は LLM サブエージェントの web 検索出力に由来する。load-bearing + 高リスク（2025–2026 の新しい arXiv ID）13 件を一次情報で実在確認した結果、**11/13 VERIFIED**（Observability Gap 2603.26942 / AnalogAgent 2603.23910 / EnvTrace 2511.09964 / PEFA-AI 2511.03934 など新しい ID も実在）。**2 件の著者誤りを修正**: SMART = ~~Hang~~ → **Jonason, Casini & Sturm**（arXiv:2504.16839・題/venue は正） / AudioGenie = ~~Ren~~ → **Rong**（Yan Rong・arXiv:2505.22053・題/venue は正）。未検証の残り引用は論文 related-work 化の前に各自確認のこと。本記録は**予備調査（preliminary survey）であり「先行事例未発見」は absence-of-finding（不在の証明ではない）**。「novel」と断定せず「予備調査で直接の先行事例を見いだせず」と表現する。
 
 ---
 
@@ -274,8 +275,8 @@ CI gate（案）
 - MusicAgent, Yu et al. EMNLP 2023 — https://arxiv.org/abs/2310.11954
 - WavJourney, Liu et al. 2023 — https://arxiv.org/abs/2307.14335
 - Audio-Agent, Wang et al. 2024 — https://arxiv.org/abs/2410.03335
-- AudioGenie, Ren et al. ACM MM 2025 — https://arxiv.org/abs/2505.22053
-- SMART（symbolic→audio aesthetic reward）, Hang et al. 2025 — https://arxiv.org/abs/2504.16839
+- AudioGenie, Rong et al. ACM MM 2025 — https://arxiv.org/abs/2505.22053
+- SMART（symbolic→audio aesthetic reward）, Jonason, Casini & Sturm 2025 — https://arxiv.org/abs/2504.16839
 - SignalLLM, Ke et al. 2025 — https://arxiv.org/abs/2509.17197
 - Benchmarking LLM Code Gen for Audio (MaxMSP), Banar & Demeyer 2024 — https://arxiv.org/abs/2409.00856
 - A Survey on Evaluation Metrics for Music Generation, Kader et al. 2025 — https://arxiv.org/abs/2509.00051
