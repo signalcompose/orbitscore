@@ -261,7 +261,15 @@ fn examples22_parity_render_matches_schedule() {
     //! gain 値（-3/-6/-9/-4）は **異なるサンプル間で RMS 比較できない**（固有レベルが違う）ので
     //! ここでは検証しない。gain は Leg 2（schedule の gainDb/linear）+ phase-2 per_event_gain
     //! （同一サンプルの dB 差を実レンダで）でカバー済み。ここは pan / 領域 / 分離を見る。
+    //! slice の「領域内容」正しさ（slice2 が arpeggio 後半 frame を読むか）は本テストでなく
+    //! orbit-audio-verify の chop_region_real_wav.rs（ramp サンプルで offset+local を frame 単位
+    //! 検証）が担う。ここは領域に信号があり外が無音であることまで。
     let golden = load_golden("examples22_parity");
+    assert_eq!(
+        golden.events.len(),
+        5,
+        "examples22_parity は 5 イベントのはず (kick/snare/hat/chopd×2)"
+    );
     let (cap, sample_frames) = render_golden(&golden);
     let sr = golden.sample_rate as f64;
 

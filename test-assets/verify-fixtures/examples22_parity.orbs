@@ -17,8 +17,8 @@
 //   chopd @step12 = 6.0s slice1 / @step14 = 7.0s slice2  pan +20 gain -4  chop(2)
 //     arpeggio 1.0s / chop(2) → sliceDur 0.5s = slot 0.5s → rate=1.0（time-stretch 回避）。
 //     slice1 → [6.0,6.5] / slice2 → [7.0,7.5]。
-// 各イベントは >=1s の無音で分離され、L/R RMS が単一 voice になるので pan/領域を per-event
-// で検証できる。
+// kick/snare/hat/chopd 間は各 1.5s 以上、chopd slice1-slice2 間は 0.5s（同一 pan +20）の無音で
+// 分離され、L/R RMS が単一 voice になるので pan/領域を per-event で検証できる。
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
