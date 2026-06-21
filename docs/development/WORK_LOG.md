@@ -42,7 +42,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **委譲（§5/§7 規律）**: Opus が capture seam / analysis コア（pan 逆算・tolerance）/ GRM 独立性 / spine（実 WAV pan）を凍結 → Sonnet が onset/fade 本体・残り遡及テスト・フィクスチャを並列実装。
 
-**検証**: orbit-audio-verify **19 unit + 7 integration = 26 passed**。cargo --workspace 全緑（core 23 / daemon 14+1 / native 16 / clap-spike 7・回帰なし）。npm test 1153 passed / 25 skipped / **0 failed**（SC 既定 `SuperColliderPlayer` / `event-scheduler.ts` 無改変・audio play() 意味論不変）。clippy clean。
+**検証**: orbit-audio-verify **23 unit + 7 integration = 30 passed**（PR #310 レビューで判別力強化 +4: 中間 pan 値・fade 終端値・db_difference 退化分岐・region_peak/should_panic）。cargo --workspace 全緑（core 23 / daemon 14+1 / native 16 / clap-spike 7・回帰なし）。npm test 1153 passed / 25 skipped / **0 failed**（SC 既定 `SuperColliderPlayer` / `event-scheduler.ts` 無改変・audio play() 意味論不変）。clippy clean。
+
+**PR**: #310（`/simplify` + `/code:pr-review-team` 4 専門 → Critical/Important=0 収束。CI code-review pass）。
 
 **スコープ外（後続増分）**: CLI `play --capture out.wav`（TS→daemon→render 全経路）/ DSL 静的スケジュールを GRM にした end-to-end tier (c) / librosa 相当の blind cross-check。
 
