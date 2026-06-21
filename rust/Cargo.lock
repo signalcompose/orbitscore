@@ -919,6 +919,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-audio-verify"
+version = "0.0.1"
+dependencies = [
+ "orbit-audio-core",
+ "orbit-audio-native",
+]
+
+[[package]]
 name = "orbit-audio-wasm"
 version = "0.0.1"
 dependencies = [

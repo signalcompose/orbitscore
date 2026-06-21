@@ -5,6 +5,7 @@ members = [
   "crates/orbit-audio-native",
   "crates/orbit-audio-wasm",
   "crates/orbit-audio-daemon",
+  "crates/orbit-audio-verify",
   "crates/orbit-clap-spike",
 ]
 
