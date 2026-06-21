@@ -32,7 +32,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **関連 issue 再整理**: #301（OrbitStudio）= native の上・cutover 後・最初の /goal でない / #300（α）= engine 第1増分の構成要素 / #302（本訂正）。
 - **最初の `/goal`** = engine 第1増分（pan/slice/per-slice gain + α recovery floor）。owner が /goal セット済。
 
-**Commit**: （後で記入）
+**Commit**: dd5412b（PR #302）
 
 ### 6.150 docs(post-2.0): record engine architecture decision — in-process instruments + sandboxed plugins + audio egress (#298) (Jun 21, 2026)
 
