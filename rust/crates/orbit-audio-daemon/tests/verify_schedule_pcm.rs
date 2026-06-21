@@ -273,9 +273,9 @@ fn examples22_parity_render_matches_schedule() {
         } else {
             sample_frames[&ev.sample]
         };
-        // 末尾 trim は span の 1/4 を上限 600 で。hat(0.05s=2400fr)でも窓が潰れない。
-        let tail_trim = (span / 4).min(600);
-        let (w_start, w_end) = body_window(onset, span, tail_trim);
+        // 末尾 trim は既存 fixture と同じ固定 600（fade ≤384 + 余裕を除外）。最短の
+        // hat(0.05s=2400fr)でも窓は [onset+256, onset+1800) = 1544fr 幅で潰れない。
+        let (w_start, w_end) = body_window(onset, span, 600);
         assert!(
             w_start < w_end,
             "seq {} の body 窓が狭すぎる: [{w_start}, {w_end})",
