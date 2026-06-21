@@ -13,6 +13,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { gainDbToAmplitude } from '../../../packages/engine/src/audio/audio-gain-utils'
 import { createAudioEngine } from '../../../packages/engine/src/audio/create-audio-engine'
 import { resolveEngineKind } from '../../../packages/engine/src/audio/engine-backend'
 import { RustEnginePlayer } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
@@ -112,7 +113,7 @@ describe('RustEnginePlayer with mock daemon', () => {
     p.scheduleEvent('/audio/snare.wav', 0, -6, 0, 'seqA') // -6 dB ≈ 0.501
     p.start()
     await waitFor(() => playAtRecords().length >= 1)
-    expect(playAtRecords()[0].gain as number).toBeCloseTo(Math.pow(10, -6 / 20), 4)
+    expect(playAtRecords()[0].gain as number).toBeCloseTo(gainDbToAmplitude(-6), 4)
   })
 
   it('PlayAt.time_sec は daemon now（anchor）+ 定数 lookahead', async () => {
@@ -154,30 +155,61 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(loads.length).toBe(1)
   })
 
-  it('pan≠0 は 1 回 warn し、中央定位で PlayAt は出す', async () => {
+  it('pan を daemon の [-1,1] に変換して PlayAt.pan へ渡す（warn しない）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 50, 'seqA') // pan=50
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 50, 'seqA')
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 50, 'seqA') // DSL pan=50 → daemon 0.5
+    p.scheduleEvent('/audio/snare.wav', 0, 0, -100, 'seqA') // DSL pan=-100 → daemon -1.0
     p.start()
     await waitFor(() => playAtRecords().length >= 2)
+    expect(playAtRecords()[0].pan as number).toBeCloseTo(0.5, 5)
+    expect(playAtRecords()[1].pan as number).toBeCloseTo(-1.0, 5)
+    // pan は #304 で実装済み → 中央 drop の warn は出さない。
     const panWarns = warn.mock.calls.filter((c) => String(c[0]).includes('pan'))
-    expect(panWarns.length).toBe(1) // warn-once
+    expect(panWarns.length).toBe(0)
     warn.mockRestore()
   })
 
-  it('scheduleSliceEvent は 1 回 warn して skip（PlayAt を出さない）', async () => {
+  it('scheduleSliceEvent は slice 領域（offset/duration）を PlayAt で出す', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
-    p.scheduleSliceEvent('/audio/loop.wav', 0, 1, 4, 250, 0, 0, 'seqA')
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA') // これは出る
+    // loop.wav は 1.0 秒（mock: 48000 frames / 48000 Hz）。chop(4) の slice3 →
+    // sliceDuration=0.25, offset=(3-1)*0.25=0.5。eventDurationMs=250=sliceDuration → rate=1.0。
+    p.scheduleSliceEvent('/audio/loop.wav', 0, 3, 4, 250, 0, 0, 'seqA')
     p.start()
     await waitFor(() => playAtRecords().length >= 1)
-    // slice は skip されるので PlayAt は kick の 1 件のみ。
-    expect(playAtRecords().length).toBe(1)
-    expect(playAtRecords()[0].sample_id).toBe('s-/audio/kick.wav')
-    const sliceWarns = warn.mock.calls.filter((c) => String(c[0]).includes('slice'))
-    expect(sliceWarns.length).toBe(1)
+    const rec = playAtRecords()[0]
+    expect(rec.sample_id).toBe('s-/audio/loop.wav')
+    expect(rec.offset_sec as number).toBeCloseTo(0.5, 5)
+    expect(rec.duration_sec as number).toBeCloseTo(0.25, 5)
+    // rate=1.0 なので time-stretch warn は出ない。
+    const rateWarns = warn.mock.calls.filter((c) => String(c[0]).includes('rate='))
+    expect(rateWarns.length).toBe(0)
+    warn.mockRestore()
+  })
+
+  it('per-slice gain: 各 slice の gainDb が PlayAt.gain に独立反映される', async () => {
+    const p = await boot()
+    p.scheduleSliceEvent('/audio/loop.wav', 0, 1, 4, 250, 0, 0, 'seqA') // 0 dB → 1.0
+    p.scheduleSliceEvent('/audio/loop.wav', 10, 2, 4, 250, -6, 0, 'seqA') // -6 dB ≈ 0.501
+    p.start()
+    await waitFor(() => playAtRecords().length >= 2)
+    expect(playAtRecords()[0].gain as number).toBeCloseTo(1.0, 4)
+    expect(playAtRecords()[1].gain as number).toBeCloseTo(gainDbToAmplitude(-6), 4)
+  })
+
+  it('slice の rate≠1.0（time-stretch）は 1 回 warn し、自然尺で鳴らす', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // chop(8) → sliceDuration=0.125。eventDurationMs=500 → rate=0.25 ≠ 1.0。
+    p.scheduleSliceEvent('/audio/loop.wav', 0, 1, 8, 500, 0, 0, 'seqA')
+    p.scheduleSliceEvent('/audio/loop.wav', 10, 2, 8, 500, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => playAtRecords().length >= 2)
+    // rate≠1.0 でも slice は自然尺（duration=sliceDuration=0.125）で鳴る。
+    expect(playAtRecords()[0].duration_sec as number).toBeCloseTo(0.125, 5)
+    const rateWarns = warn.mock.calls.filter((c) => String(c[0]).includes('rate='))
+    expect(rateWarns.length).toBe(1) // warn-once
     warn.mockRestore()
   })
 
@@ -281,15 +313,17 @@ describe('RustEnginePlayer with mock daemon', () => {
   it('stopAll は warn-once を再 arm する（次セッションで再び warn）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 50, 'seqA') // pan=50
+    // outputChannel(LinkAudio) は未対応 gap（A4）として 1 回 warn する。pan は実装済みで
+    // gap ではないため、再 arm の検証には残存 gap である outputChannel を使う。
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', 'drums')
     p.start()
     await waitFor(() => playAtRecords().length >= 1)
     p.stopAll()
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 50, 'seqB') // 次セッション
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqB', 'drums') // 次セッション
     p.start()
     await waitFor(() => playAtRecords().length >= 2)
-    const panWarns = warn.mock.calls.filter((c) => String(c[0]).includes('pan'))
-    expect(panWarns.length).toBe(2) // stopAll で再 arm
+    const ocWarns = warn.mock.calls.filter((c) => String(c[0]).includes('outputChannel'))
+    expect(ocWarns.length).toBe(2) // stopAll で再 arm
     warn.mockRestore()
   })
 

@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.152 feat(engine): native audio parity increment — pan / slice / per-slice gain (#304) (Jun 21, 2026)
+
+**Date**: 2026-06-21
+**Status**: ✅ 実装 + 自動テスト全緑（cargo --workspace / npm）+ owner ear verdict 取得（pan/slice/per-slice gain いずれも rust で SC 同等に可聴）+ OSC 実値 parity 観測
+**Branch**: `304-audio-parity-increment`
+
+post-2.0 engine-first の第1増分（最初の `/goal`）。S2 で defer した audio gap のうち **pan / chop 領域再生 / per-slice gain** を native daemon 経路に実装し、`ORBITSCORE_ENGINE=rust` opt-in の裏で dog-food 可能にした。SC 既定経路は無改変。
+
+- **pan**（SC `Pan2` と同じ equal-power 則・中央 = -3dB / 1√2）: core scheduler render に等パワー定位を実装。daemon PlayAt の `pan`（既に protocol 仕様化済み・実装が追いついていなかった）を配線。TS は DSL の -100..100 を daemon の [-1,1] へ変換して送る。`scheduleEvent` の「pan 未対応」warn を撤去。
+- **chop 領域再生**（region-only・rate=1.0）: PlayAt に `offset_sec` / `duration_sec` を追加（spec 先行で `ENGINE_DAEMON_PROTOCOL.md` 更新）。core は ActiveSample に slice 領域（start/len）を持ち、領域だけを読む。SC `orbitPlayBuf` と同じ末尾 fadeout（`min(8ms, dur×4%)` 線形 release）でクリック防止。TS `scheduleSliceEvent` を実装（slice 領域は lazy load 後に `executePlayback` で解決）。物理 slice ファイル（`audioSlicer`）は live 未使用の dead path のため native では再現しない（startPos 領域読みのみ）。
+- **per-slice gain**: 各 slice event の gainDb が daemon PlayAt の gain に独立反映され、core render の per-event `active.gain` で適用される（新機構不要）。
+- **rate≠1.0（slice 尺→スロット尺の varispeed = time-stretch）は本増分の対象外**。検出時は 1 回 warn し、slice は自然尺（rate=1.0）で鳴らす（time-stretch 増分 #213/#239 へ defer）。`chop()` は「現状 scsynth 仕様をそのまま採用」（owner）が、rate フィットは roadmap の time-stretch 境界に従い defer。
+
+**用語整理（owner 確認）**: `chop()` = n 等分（既存・本増分）。`slice()`（`recycle()` でも可）= Re-Cycle 型のトランジェント/無音検出による文節切り = #239（将来 β）・本増分対象外。
+
+**主な変更ファイル**:
+- Rust: `orbit-audio-core/src/scheduler.rs`（pan equal-power + slice 領域 + fadeout）, `engine.rs`, `orbit-audio-daemon/src/engine_wrap.rs`（slice 出力尺で PlayEnded 補正）, `session.rs`（offset/duration parse + 検証）
+- TS: `rust-engine/daemon-client.ts`, `rust-engine/rust-engine-player.ts`（pan/slice 配線 + `resolveSliceRegion`）
+- docs: `docs/research/ENGINE_DAEMON_PROTOCOL.md`（PlayAt に offset_sec/duration_sec）
+- tests: core に pan 4件 + slice 3件、`rust-engine-player.spec.ts` を pan/slice 新仕様へ更新
+
+**テスト結果**:
+- cargo --workspace: 全緑（core 21 / daemon protocol 13 / smoke 1 / native 16 / clap 7）
+- npm test: 1153 passed, 25 skipped, 0 failed（回帰なし・SC 既定無改変）
+
+**並行成果**: DAW 標準機能リサーチ（`docs/research/DAW_AUDIO_ARCHITECTURE.md`）= 基礎後の routing/effects 層 roadmap 入力（insert 順序 = engine core の graph 管理 / EQ 等 = CLAP plugin / PDC が insert 順と不可分）。
+
+**SC parity 検証（owner）**: `ORBITSCORE_ENGINE=rust` で examples/22・pan sweep（-60→+60 等パワー）・per-slice gain 階段を ear 確認 → いずれも SC 同等（「パワー感も変わらない」= equal-power 一致）。さらに SC 既定経路を `ORBIT_SCSYNTH_PATH` で起動し、SC が scsynth に送る `/s_new`（amp/pan/startPos/duration）と rust が daemon `playAt` に送る値が**バイト一致**することを OSC ログで観測（耳の A/B 以上に厳密なパラメータ parity）。
+
+**Done のスコープ線引き（owner 確認 2026-06-21）**: audio parity（pan/slice/per-slice gain）は **CLI 経路**（`node cli-audio.js` + `ORBITSCORE_ENGINE=rust`）で実証。CLI と .vsix は同一の `RustEnginePlayer`→daemon コードを通るため音は同等だが、**パッケージ済み .vsix からのゼロ設定 daemon 解決は未対応**（`resolveDaemonBinary` は repo 相対パス + `ORBIT_AUDIO_DAEMON_PATH` を探索。.vsix は env 未設定だと未解決。build:copy-engine も daemon 未同梱）。これは distribution 課題として **#306** へ分離（最終形 OrbitStudio/VSCodium の配布で扱う。.vsix は途中の dog-food シェル）。暫定 dog-food は `ORBIT_AUDIO_DAEMON_PATH` 設定で可能。
+
+**残**: time-stretch / LinkAudio / α recovery floor は後続増分。daemon の .vsix/OrbitStudio 解決は **#306**。examples/22 が `RUN`（one-shot ≈2秒）で audition しづらい点は polish 候補（本増分の Done には非該当）。
+
+**post-review cleanup（/simplify）**: 4観点 cleanup agent の指摘を behavior-preserving に適用 —
+slice 長 clamp を core の `resolve_slice_region` に集約し scheduler の render 尺と daemon の
+PlayEnded 尺の単一情報源化 / 等パワーパンを `schedule()` で precompute して RT render から
+trig（sin/cos）と output_channels 分岐を排除 / render の `gain*env` を frame 単位へ hoist /
+session.rs の PlayAt param 抽出を `param_f64` ヘルパーで集約 / 旧 spec の `Math.pow` を
+`gainDbToAmplitude` に置換。SKIP: TS slice 数式/pan の SC `event-scheduler.ts` との共通化（保護対象の
+SC 経路を触るため follow-up）。検証: cargo --workspace 58 緑 / npm 1153 緑 / 変更ファイル clippy クリーン。
+
+**pr-review-team（round 1）修正**: code-reviewer の Important（engine_wrap が生 `requested_len_frames` を
+scheduler へ渡していた → clamp 済 `effective_len_frames` を渡し render/PlayEnded の一致を call site で保証）/
+silent-failure-hunter（`ensureLoaded` が sampleRate 不正時に無言で slice→全体再生 degrade → ソースで warn）/
+comment-analyzer（slice の旧「skip」コメントを領域再生実装済みへ更新）/ pr-test-analyzer（`resolve_slice_region`
+境界・ステレオ slice の channel stride・`duration_sec<0` 拒否の3テスト追加）。検証: cargo 61 緑 / npm 1153 緑。
+
+**pr-review-team（round 2）**: round-1 修正を独立再レビュー。code-reviewer/comment-analyzer/pr-test-analyzer は
+0 件（#R1 の effective_len_frames は全ケースで render/PlayEnded 一致・3 新テストも算術的に正しく load-bearing と確認）。
+silent-failure-hunter が sibling edge を 1 件検出（`ensureLoaded` が sample_rate のみ検証し `frames` 未検証 →
+`frames=NaN` だと `NaN<=0===false` で fallback guard 素通り）→ `frames` 有限・非負も検証 + `resolveSliceRegion`
+guard に `!Number.isFinite` を defense-in-depth 追加。検証: npm 1153 緑。
+
+**Commit**: d3be514（実装）, 9282e6c（log ref）, +simplify cleanup, +pr-review fixes（round 1/2）
+
 ### 6.151 docs(post-2.0): correct roadmap to engine-first (supersede OrbitStudio-first framing) (#302) (Jun 21, 2026)
 
 **Date**: 2026-06-21

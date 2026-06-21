@@ -260,23 +260,35 @@ async fn handle_command(
             ),
         },
         "PlayAt" => {
-            let time_sec = params
-                .get("time_sec")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let gain = params
-                .get("gain")
-                .and_then(|v| v.as_f64())
-                .map(|x| x as f32)
-                .unwrap_or(1.0);
+            let time_sec = param_f64(&params, "time_sec", 0.0);
+            let gain = param_f64(&params, "gain", 1.0) as f32;
             if gain < 0.0 {
                 return err(
                     &id,
                     ProtocolError::new("PARAM_OUT_OF_RANGE", "gain must be >= 0"),
                 );
             }
+            // pan は [-1.0, 1.0]。範囲外は reject せず core 側で clamp（protocol 仕様: UX 優先）。
+            // 省略時は 0.0（中央）。
+            let pan = param_f64(&params, "pan", 0.0) as f32;
+            // offset_sec / duration_sec は再生領域（chop の slice）。負値は reject、
+            // 省略時はそれぞれ 0.0（先頭 / offset 以降すべて）。サンプル端 clamp は core。
+            let offset_sec = param_f64(&params, "offset_sec", 0.0);
+            let duration_sec = param_f64(&params, "duration_sec", 0.0);
+            if offset_sec < 0.0 {
+                return err(
+                    &id,
+                    ProtocolError::new("PARAM_OUT_OF_RANGE", "offset_sec must be >= 0"),
+                );
+            }
+            if duration_sec < 0.0 {
+                return err(
+                    &id,
+                    ProtocolError::new("PARAM_OUT_OF_RANGE", "duration_sec must be >= 0"),
+                );
+            }
             match params.get("sample_id").and_then(|v| v.as_str()) {
-                Some(sid) => match engine.play_at(sid, time_sec, gain) {
+                Some(sid) => match engine.play_at(sid, time_sec, gain, pan, offset_sec, duration_sec) {
                     Ok(handle) => {
                         // 遅延タスクを先に spawn して await コストを避ける
                         schedule_play_ended(
@@ -385,6 +397,12 @@ fn schedule_play_ended(
         );
         let _ = tx.send(to_json_or_fallback(&evt)).await;
     });
+}
+
+/// `params` から f64 を取り出す（欠落 / 非数値は `default`）。PlayAt の time/gain/pan/
+/// offset/duration 抽出が同一の `get().and_then(as_f64).unwrap_or()` 定型だったのを集約する。
+fn param_f64(params: &Value, key: &str, default: f64) -> f64 {
+    params.get(key).and_then(|v| v.as_f64()).unwrap_or(default)
 }
 
 fn ok(id: &str, result: Value) -> Value {

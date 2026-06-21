@@ -194,11 +194,23 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
-  async playAt(sampleId: string, timeSec: number, gain: number): Promise<{ playId: string }> {
+  async playAt(
+    sampleId: string,
+    timeSec: number,
+    gain: number,
+    pan = 0,
+    offsetSec = 0,
+    durationSec = 0,
+  ): Promise<{ playId: string }> {
     const result = await this.request('PlayAt', {
       sample_id: sampleId,
       time_sec: timeSec,
       gain,
+      // pan は [-1.0, 1.0]（daemon 仕様）。範囲外は daemon 側で clamp。
+      pan,
+      // offset_sec / duration_sec は再生領域（chop の slice）。0/0 で全体再生。
+      offset_sec: offsetSec,
+      duration_sec: durationSec,
     })
     return { playId: String(result.play_id) }
   }

@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use orbit_audio_core::{Engine, Sample};
+use orbit_audio_core::{resolve_slice_region, Engine, Sample};
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
     StreamStatsSnapshot,
@@ -150,28 +150,59 @@ impl EngineWrap {
     /// sample を現在時刻 + offset でスケジュール。
     ///
     /// `time_sec` は daemon 起動からの経過秒（Engine transport 基準）。
-    /// 戻り値にサンプル再生時間を含めるので、呼び出し側は PlayEnded を
-    /// 遅延送信するためのタイマーを組める。
+    /// `pan` は [-1.0, 1.0]（0.0 = 中央、範囲外は core で clamp）。
+    /// `offset_sec` / `duration_sec` は再生領域（`chop` の slice）。`duration_sec <= 0` で
+    /// 「offset 以降すべて」。いずれもサンプル端で clamp。
+    /// 戻り値の `duration_sec` は **slice の実尺**（全体ではなく）なので、呼び出し側は
+    /// PlayEnded を slice 終端に合わせて遅延送信できる。
+    #[allow(clippy::too_many_arguments)]
     pub fn play_at(
         &self,
         sample_id: &str,
         time_sec: f64,
         gain: f32,
+        pan: f32,
+        offset_sec: f64,
+        duration_sec: f64,
     ) -> Result<PlayHandle, WrapError> {
         let sample = self
             .lock_samples()?
             .get(sample_id)
             .cloned()
             .ok_or_else(|| WrapError::SampleNotFound(sample_id.to_string()))?;
-        let duration_sec = sample.duration_secs();
+        let sr = sample.sample_rate as f64;
+        let total_frames = sample.frames();
+        // サンプル内オフセット / slice 長（フレーム）。0 = offset 以降すべて。
+        // サンプル端 clamp は resolve_slice_region に集約する。
+        let offset_frames = (offset_sec.max(0.0) * sr) as usize;
+        let requested_len_frames = if duration_sec > 0.0 {
+            (duration_sec * sr).round() as usize
+        } else {
+            0
+        };
+        // 再生領域を clamp。PlayEnded 用の出力尺（slice 実尺・rate=1.0）と、scheduler が
+        // render に使う尺が必ず一致するよう、両者が同一式（resolve_slice_region）を共有する。
+        let (slice_start_frame, effective_len_frames) =
+            resolve_slice_region(total_frames, offset_frames, requested_len_frames);
+        let out_duration_sec = effective_len_frames as f64 / sr;
         let play_id = format!("p-{}", short_uuid());
         self.engine
-            .schedule_with_play_id(time_sec, gain, play_id.clone(), sample)
+            .schedule_with_play_id(
+                time_sec,
+                gain,
+                pan,
+                slice_start_frame,
+                // clamp 済みの実尺を渡す。生の requested_len_frames を渡すと、render 尺と
+                // PlayEnded 尺の一致が scheduler 内の再 clamp に依存してしまう（latent な desync）。
+                effective_len_frames,
+                play_id.clone(),
+                sample,
+            )
             .map_err(|e| WrapError::Scheduler(e.to_string()))?;
         Ok(PlayHandle {
             play_id,
             start_sec: time_sec,
-            duration_sec,
+            duration_sec: out_duration_sec,
         })
     }
 
