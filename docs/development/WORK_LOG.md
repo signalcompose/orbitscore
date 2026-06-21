@@ -46,7 +46,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **スコープ外（後続増分）**: CLI `play --capture out.wav`（TS→daemon→render 全経路）/ DSL 静的スケジュールを GRM にした end-to-end tier (c) / librosa 相当の blind cross-check。
 
-**Commit**: (このコミットで確定)
+**Commit**: 8759187
 
 ### 6.153 docs(research): audio output verification — DSL static schedule vs rendered PCM (#308) (Jun 21, 2026)
 
