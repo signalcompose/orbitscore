@@ -17,3 +17,6 @@ cpal = { workspace = true }
 symphonia = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }
+# LinkAudio egress 用の lock-free ring。permissive(MIT/Apache)。producer 側(RT callback)を
+# native が持ち、consumer 側(Consumer<f32>)は GPL の orbit-link-audio が drain する(A4-2b-2)。
+rtrb = "0.3"

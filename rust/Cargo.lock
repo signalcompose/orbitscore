@@ -915,6 +915,7 @@ dependencies = [
  "audioadapter-buffers",
  "cpal",
  "orbit-audio-core",
+ "rtrb",
  "rubato",
  "symphonia",
  "thiserror 2.0.18",
@@ -956,6 +957,7 @@ name = "orbit-link-audio"
 version = "0.0.1"
 dependencies = [
  "cc",
+ "rtrb",
  "thiserror 2.0.18",
 ]
 
