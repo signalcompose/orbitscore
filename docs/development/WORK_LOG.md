@@ -51,6 +51,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Done（PR2a 受け入れ基準・達成）**: ✅ default `cargo build`/`test` 緑（orbit-link-audio 非ビルド）・✅ `cargo build -p orbit-audio-daemon --features link-audio` 緑・✅ cargo-deny default = GPL-free pass / leak で fail・✅ permissive crate に依存行ゼロ（構造的境界）・✅ 既存テスト全緑（npm + cargo）・SC 既定経路 無改変・audio `play()` 意味論 無改変。**audio egress 証明は PR2b・tempo lead は PR3**。
 
+**PR2b/PR3 設計 carry-forward（advisor 2026-06-22・本 PR では実装しない・失わないよう記録）**:
+- **① beat anchoring**: commit で "now"（`clock().micros()`）を buffer-begin の beat として渡すと、ring latency 分の位相ずれ（receiver 側で δ ずれる）になる。**tempo leader であることは beat 配置と直交で、これを無害化しない**（当初コメントの「tempo leader なので無害」は誤った根拠 → 本 PR でコメント訂正済）。PR2b で cumulative-frames-drained から `beatsAtBufferBegin` を決定論再構成する（efficiency review の指摘と一致）。
+- **② threading 分離**: 「GPL consumer thread = Link audio thread」は **未検証の仮定**（link+run gate は peer 無しで実時間 timing を検証できない）。さらに `set_tempo`（`captureAppSessionState` = app-thread・block しうる）は `commit`（audio-thread）と同一スレッドに置けない → **PR3 の tempo 経路は PR2b の egress と別スレッド**。shim が両方を露出していても共有スレッドは前提にしていない。
+- **③ PR2b は fresh design**（mechanical 継続ではない）: mode 所有 = `Sequence.resolveDispatchChannel` を読んで TS が hardware-vs-Link を解決し daemon を mode-agnostic に保てるか確認 / RingTapSink の synced 経路 drop は **hard-error 化**（silent drop は beat desync）/ 上記 anchoring・threading。design-first（scout + advisor）で着手する。
+
 **スコープ外（後続）**: PR2b（single-pass multi-buffer render + rtrb 本番化〔synced 経路の drop は hard-error 化〕+ 実 audio routing + wire〔session.rs channel_name + TS stubs〕+ `Sequence.resolveDispatchChannel` の mode 所有確認）/ PR3（tempo leader + 層B）/ PR4（across-respawn e2e）。
 
 ### 6.160 feat(engine): A4-1 named-channel routing + sum-by-name on rust mixer (post-2.0 A4 / #322) (Jun 22, 2026)

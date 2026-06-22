@@ -113,10 +113,12 @@ int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
     // PR2b 以降、この関数は GPL consumer thread(rtrb の drain 側)からのみ呼ぶ。
     // その thread が LinkAudio の "audio thread" として振る舞う。captureAudioSessionState
     // は Thread-safe:no / Realtime-safe:yes なので呼び出しスレッドを守る必要がある。
-    // ring latency の分だけ "now" は buffer-begin から遅れるが、OrbitScore は tempo
-    // leader なので可聴上は無害(精度要件なし・PR2b/層B で精緻化)。PR2a では threading
-    // contract は未配線。PR2a では Link を enable しないため captureAudioSessionState /
-    // beatAtTime は走っても無害で、egress(sample 書き込み + commit)が購読者なしで no-op。
+    // ⚠ PR2b 注意: ここで "now"(clock().micros())を buffer-begin の beat として渡すと、
+    // ring latency 分の位相ずれ(receiver 側で δ だけ音がずれる)になる。tempo leader で
+    // あることは beat 配置とは直交で、これを無害化しない。PR2b では cumulative-frames-
+    // drained から beatsAtBufferBegin を決定論再構成する(efficiency review の指摘)。
+    // PR2a では threading contract 未配線・Link 未 enable のため capture/beatAtTime は
+    // 走っても無害で、egress(sample 書き込み + commit)が購読者なしで no-op。
     auto state = link->link.captureAudioSessionState();
     const double beats_at_begin = state.beatAtTime(link->link.clock().micros(), quantum);
 
