@@ -484,6 +484,42 @@ async fn daemon_error_warning_on_xrun() {
     assert!(saw_warning, "STREAM_XRUN warning event not received");
 }
 
+/// LinkAudio egress drop が増えると DaemonError (severity=warning, code=LINK_EGRESS_DROP) が発火する。
+/// xrun と同じ 1 Hz ticker 経路。link-audio 無効の StubBackend でも `link_egress_drops_arc` の
+/// test 注入 seam（`stream_stats` の `record_xrun` と同型）で driver できる。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_link_egress_drop() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から egress drop を注入（1 Hz ticker が link_egress_ring_drops の増加を検知して発火）。
+    daemon
+        .engine
+        .link_egress_drops_arc()
+        .fetch_add(512, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut saw_warning = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "LINK_EGRESS_DROP"
+                {
+                    saw_warning = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(saw_warning, "LINK_EGRESS_DROP warning event not received");
+}
+
 /// device_lost が記録されると DaemonError (severity=fatal, code=DEVICE_LOST) が発火する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn daemon_error_fatal_on_device_lost() {

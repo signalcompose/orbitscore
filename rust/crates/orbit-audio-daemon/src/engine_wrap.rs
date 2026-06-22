@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
@@ -52,6 +53,10 @@ pub struct EngineWrap {
     /// Stop 経由で停止済みの play_id。PlayEnded 遅延タスクが自然発火を抑制するために参照する。
     /// PlayEnded 発火時に take（remove）されるため、通常ケースでは事後掃除不要。
     stopped_play_ids: Mutex<HashSet<String>>,
+    /// LinkAudio egress drop の **test 注入用** 集計カウンタ（本番は常に 0）。`link_egress_ring_drops`
+    /// がこれを加算するので、`StubBackend`（link-audio 無効）でも 1 Hz ticker の LINK_EGRESS_DROP 発火を
+    /// integration test から駆動できる（`stream_stats` の `record_xrun` seam と同型・[`Self::link_egress_drops_arc`]）。
+    link_egress_drops: Arc<AtomicU64>,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
     /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
@@ -148,6 +153,7 @@ impl EngineWrap {
             started_at: std::time::Instant::now(),
             stream_stats,
             stopped_play_ids: Mutex::new(HashSet::new()),
+            link_egress_drops: Arc::new(AtomicU64::new(0)),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
@@ -185,20 +191,30 @@ impl EngineWrap {
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
     /// daemon の 1 Hz ticker が polling して増加を WARNING event で surface する（非 RT observability）。
-    /// ロック競合時 / link 未初期化 / feature 無効時は 0。
+    /// ロック競合時 / link 未初期化 / feature 無効時は control 分が 0。test 注入分（本番 0）を必ず加える。
     #[cfg(feature = "link-audio")]
     pub fn link_egress_ring_drops(&self) -> u64 {
-        self.link
+        let control_drops = self
+            .link
             .try_lock()
             .ok()
             .and_then(|g| g.as_ref().map(|ctl| ctl.total_ring_drops()))
-            .unwrap_or(0)
+            .unwrap_or(0);
+        control_drops + self.link_egress_drops.load(Ordering::Relaxed)
     }
 
-    /// feature `link-audio` 無効ビルド用の stub（drop は常に 0）。
+    /// feature `link-audio` 無効ビルド用の stub。本番は常に 0（control が無い）。test 注入分のみ反映。
     #[cfg(not(feature = "link-audio"))]
     pub fn link_egress_ring_drops(&self) -> u64 {
-        0
+        self.link_egress_drops.load(Ordering::Relaxed)
+    }
+
+    /// test harness 用: LinkAudio egress drop の注入カウンタを取得する（`stream_stats_arc` と同型）。
+    /// integration test から `fetch_add` して 1 Hz ticker の LINK_EGRESS_DROP 発火を駆動する。
+    /// `#[doc(hidden)]` で公開 API としては扱わない。
+    #[doc(hidden)]
+    pub fn link_egress_drops_arc(&self) -> Arc<AtomicU64> {
+        self.link_egress_drops.clone()
     }
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から

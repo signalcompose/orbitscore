@@ -232,6 +232,24 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
+   * daemon の非 fatal な WARNING（STREAM_XRUN / LINK_EGRESS_DROP 等）を operator に surface する。
+   * daemon は 1 Hz ticker でこれらを `DaemonError` event として送るが、購読者が無いと void に消える。
+   * fatal（DEVICE_LOST）は `daemon-died` 経路が別途扱う想定だが、ここでも message として残す。
+   */
+  private readonly onDaemonError = (data: unknown): void => {
+    const { severity, code, message } = data as {
+      severity?: string
+      code?: string
+      message?: string
+    }
+    console.warn(
+      `⚠️  [rust-engine] daemon-error [${severity ?? 'unknown'}] ${code ?? 'UNKNOWN'}: ${
+        message ?? JSON.stringify(data)
+      }`,
+    )
+  }
+
+  /**
    * daemon を起動し WebSocket 接続を確立する。`outputDevice` は S2 では未対応
    * （daemon は既定デバイスを選択）。**一度だけ呼ぶ前提**（InterpreterV2 は isBooted で guard）。
    *
@@ -277,6 +295,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
     // 初期 anchor 確定後に subscribe。off→on で二重購読（再 boot / respawn）を防ぐ。
     this.daemon.off('stream-stats', this.onStreamStats)
     this.daemon.on('stream-stats', this.onStreamStats)
+    // daemon の WARNING（xrun / LinkAudio egress drop 等）を operator に届ける（無いと void に消える）。
+    this.daemon.off('daemon-error', this.onDaemonError)
+    this.daemon.on('daemon-error', this.onDaemonError)
   }
 
   /**
@@ -376,6 +397,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     this.stopAll()
     this.daemon.off('daemon-died', this.onDaemonDied)
     this.daemon.off('stream-stats', this.onStreamStats)
+    this.daemon.off('daemon-error', this.onDaemonError)
     // respawn 進行中なら収束を待ってから daemon を落とす（立てたばかりの daemon も回収する）。
     // disposed=true なので respawnLoop は次のチェックポイントで抜ける。
     if (this.respawnPromise) {

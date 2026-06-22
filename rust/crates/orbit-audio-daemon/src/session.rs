@@ -105,8 +105,9 @@ pub async fn run(
                 }
 
                 // LinkAudio egress の ring overflow drop（音が落ちた）を非 RT で surface（A4-2b-2b）。
-                // RT callback / consumer は drop を atomic counter に積むだけで log しないので、ここで
-                // 増加を検知して WARNING event を出す（feature 無効時 / drop なしは 0 のまま発火しない）。
+                // RT callback が drop を atomic counter に積み、consumer を含め hot path は log しない
+                // ので、ここで増加を検知して WARNING event を出す（feature 無効時 / drop なしは 0 のまま
+                // 発火しない）。
                 let link_drops = engine.link_egress_ring_drops();
                 if link_drops > last_link_drops {
                     let drop_evt = Event::new(

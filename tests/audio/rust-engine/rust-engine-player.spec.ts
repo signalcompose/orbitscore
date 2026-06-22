@@ -153,6 +153,21 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(timeSec).toBeLessThan(51)
   })
 
+  it('daemon の DaemonError WARNING（LINK_EGRESS_DROP 等）を operator に warn で surface する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // daemon が LinkAudio egress drop を 1 Hz ticker で通知する想定の event を流す。
+    server.broadcastEvent('DaemonError', {
+      severity: 'warning',
+      code: 'LINK_EGRESS_DROP',
+      message: 'LinkAudio egress dropped samples (512 total interleaved)',
+    })
+    // subscribe した onDaemonError が console.warn するまで待つ（void に消えないこと）。
+    await waitFor(() => warn.mock.calls.some((c) => String(c[0]).includes('LINK_EGRESS_DROP')))
+    void p
+    warn.mockRestore()
+  })
+
   it('同一 filepath は一度だけ LoadSample（キャッシュ + single-flight）', async () => {
     const p = await boot()
     p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
