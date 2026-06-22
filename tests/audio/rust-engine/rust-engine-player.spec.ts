@@ -175,7 +175,7 @@ describe('RustEnginePlayer with mock daemon', () => {
     const dropMark = server.received.length
     server.dropConnections()
     await waitFor(() => server.received.slice(dropMark).some((r) => r.method === 'GetStatus'), {
-      timeout: 2000,
+      timeoutMs: 2000,
     })
     // GetStatus 受信後、establishSession の off→on 購読が完了する猶予を置いてから 1 件だけ流す。
     await new Promise((r) => setTimeout(r, 30))
@@ -190,6 +190,25 @@ describe('RustEnginePlayer with mock daemon', () => {
     const dropWarns = warn.mock.calls.filter((c) => String(c[0]).includes('LINK_EGRESS_DROP'))
     expect(dropWarns.length).toBe(1)
     void p
+    warn.mockRestore()
+  })
+
+  it('fatal severity の daemon-error は console.error に出す（warn に埋もれさせない）', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // ticker 経由の fatal な DaemonError（DEVICE_LOST）を流す。daemon-died とは別経路。
+    server.broadcastEvent('DaemonError', {
+      severity: 'fatal',
+      code: 'DEVICE_LOST',
+      message: 'audio device disappeared',
+    })
+    await waitFor(() => error.mock.calls.some((c) => String(c[0]).includes('DEVICE_LOST')))
+    // fatal は console.error へ。severity を保ち、warning と同じ console.warn には出さない。
+    expect(error.mock.calls.some((c) => String(c[0]).includes('DEVICE_LOST'))).toBe(true)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('DEVICE_LOST'))).toBe(false)
+    void p
+    error.mockRestore()
     warn.mockRestore()
   })
 
