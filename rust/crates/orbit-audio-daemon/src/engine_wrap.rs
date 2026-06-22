@@ -183,6 +183,24 @@ impl EngineWrap {
         ))
     }
 
+    /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
+    /// daemon の 1 Hz ticker が polling して増加を WARNING event で surface する（非 RT observability）。
+    /// ロック競合時 / link 未初期化 / feature 無効時は 0。
+    #[cfg(feature = "link-audio")]
+    pub fn link_egress_ring_drops(&self) -> u64 {
+        self.link
+            .try_lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|ctl| ctl.total_ring_drops()))
+            .unwrap_or(0)
+    }
+
+    /// feature `link-audio` 無効ビルド用の stub（drop は常に 0）。
+    #[cfg(not(feature = "link-audio"))]
+    pub fn link_egress_ring_drops(&self) -> u64 {
+        0
+    }
+
     /// test harness 用: `StreamStats` への参照を取得し、外部から
     /// xrun / device_lost を駆動できるようにする。
     ///

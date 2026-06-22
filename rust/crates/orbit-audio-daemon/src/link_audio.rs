@@ -219,6 +219,11 @@ pub struct LinkAudioControl {
     /// callback 側で古い `LinkChannelActivate`（ring producer）が **RT スレッド上で drop** され、
     /// かつ新 ring を誰も drain せず egress が無音化する。同名は no-op、新規は cap までで受理する。
     registered: HashSet<String>,
+    /// 各 channel の RingTapSink が producer-side で drop した interleaved サンプル数（累積）の counter。
+    /// observability 用に control が clone を保持し（producer は callback・consumer thread が別 clone を
+    /// 持つ）、daemon の 1 Hz ticker が [`Self::total_ring_drops`] を polling して egress の drop を
+    /// 非 RT で surface する（A4-2b-2b・LinkEgressStats）。
+    drop_counters: Vec<Arc<AtomicU64>>,
 }
 
 impl LinkAudioControl {
@@ -255,12 +260,22 @@ impl LinkAudioControl {
                 sample_rate,
                 num_channels,
                 registered: HashSet::new(),
+                drop_counters: Vec::new(),
             },
             LinkAudioGuard {
                 shutdown,
                 handle: Some(handle),
             },
         ))
+    }
+
+    /// 全 channel の ring overflow drop（interleaved サンプル数）の合計。daemon の 1 Hz ticker が
+    /// polling して増加を WARNING event として surface する（A4-2b-2b・LinkEgressStats）。
+    pub fn total_ring_drops(&self) -> u64 {
+        self.drop_counters
+            .iter()
+            .map(|d| d.load(Ordering::Relaxed))
+            .sum()
     }
 
     /// 名前付き channel を登録する。`RingTapSink` と readiness flag を生成し、**sink+ready を callback
@@ -284,6 +299,9 @@ impl LinkAudioControl {
 
         let ring_capacity = self.sample_rate as usize * self.num_channels * RING_SECONDS;
         let (sink, consumer, drops) = RingTapSink::new(ring_capacity);
+        // observability 用に drop counter の clone を control 側に残す（producer/consumer とは別 clone・
+        // 配線成功後にのみ push する）。
+        let drops_for_stats = drops.clone();
         // callback と consumer が共有する readiness flag（consumer が Link 登録後に true にする）。
         let ready = Arc::new(AtomicBool::new(false));
         // consumer thread と callback の両方が所有する name を 1 回だけ確保する。
@@ -314,6 +332,8 @@ impl LinkAudioControl {
 
         // 両経路への配線が成功 → 登録済みとして記録（以後の同名再登録は冪等 no-op）。
         self.registered.insert(name);
+        // 配線成功した channel の drop counter を observability 用に保持。
+        self.drop_counters.push(drops_for_stats);
         Ok(())
     }
 }

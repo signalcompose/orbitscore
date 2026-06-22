@@ -19,8 +19,9 @@ use tracing::warn;
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError, ERROR_CODE_DEVICE_LOST,
-    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
-    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
+    ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
+    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
+    EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -62,6 +63,7 @@ pub async fn run(
             let mut ticker = tokio::time::interval_at(start, STREAM_STATS_INTERVAL);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_xruns: u64 = 0;
+            let mut last_link_drops: u64 = 0;
             let mut device_lost_reported = false;
             loop {
                 ticker.tick().await;
@@ -100,6 +102,28 @@ pub async fn run(
                         break;
                     }
                     last_xruns = snapshot.xruns;
+                }
+
+                // LinkAudio egress の ring overflow drop（音が落ちた）を非 RT で surface（A4-2b-2b）。
+                // RT callback / consumer は drop を atomic counter に積むだけで log しないので、ここで
+                // 増加を検知して WARNING event を出す（feature 無効時 / drop なしは 0 のまま発火しない）。
+                let link_drops = engine.link_egress_ring_drops();
+                if link_drops > last_link_drops {
+                    let drop_evt = Event::new(
+                        EVENT_DAEMON_ERROR,
+                        json!({
+                            "severity": ERROR_SEVERITY_WARNING,
+                            "code": ERROR_CODE_LINK_EGRESS_DROP,
+                            "message": format!(
+                                "LinkAudio egress dropped samples ({link_drops} total interleaved); \
+                                 consumer fell behind — audio gaps on Link",
+                            ),
+                        }),
+                    );
+                    if tx.send(to_json_or_fallback(&drop_evt)).await.is_err() {
+                        break;
+                    }
+                    last_link_drops = link_drops;
                 }
 
                 let stats_evt = Event::new(
