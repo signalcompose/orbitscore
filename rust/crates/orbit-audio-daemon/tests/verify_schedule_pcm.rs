@@ -442,6 +442,13 @@ fn rms_window(c: &CapturedAudio, a: f64, b: f64) -> f32 {
     region_rms(c, 0, s, e).max(region_rms(c, 1, s, e))
 }
 
+/// 窓 [a, b) 秒の L/R 平均 RMS（average power）。sum-by-name の dB 比較に使う。
+fn rms_avg(c: &CapturedAudio, a: f64, b: f64) -> f32 {
+    let sr = LINKAUDIO_SR as f64;
+    let (s, e) = ((a * sr) as usize, (b * sr) as usize);
+    (region_rms(c, 0, s, e) + region_rms(c, 1, s, e)) / 2.0
+}
+
 #[test]
 fn linkaudio_routing_separates_channels() {
     //! A4-1 層A — outputChannel routing。kickA→"drums"(0.1s)、kickB→"bass"(2.1s)。
@@ -474,17 +481,12 @@ fn linkaudio_routing_separates_channels() {
 fn linkaudio_sum_by_name_accumulates() {
     //! A4-1 層A — sum-by-name。同名 channel "drums" に kick を 2 つ同時 onset すると加算され、
     //! 単一 kick より約 +6dB（2x 振幅）。last-writer-wins の regression なら 0dB。
-    let body = |c: &CapturedAudio| -> f32 {
-        let sr = LINKAUDIO_SR as f64;
-        let (s, e) = ((0.12 * sr) as usize, (0.4 * sr) as usize);
-        (region_rms(c, 0, s, e) + region_rms(c, 1, s, e)) / 2.0
-    };
-    let single = body(&render_kick_channel(&[(0.1, "drums")], "drums", 0.7));
-    let summed = body(&render_kick_channel(
-        &[(0.1, "drums"), (0.1, "drums")],
-        "drums",
-        0.7,
-    ));
+    let single = rms_avg(&render_kick_channel(&[(0.1, "drums")], "drums", 0.7), 0.12, 0.4);
+    let summed = rms_avg(
+        &render_kick_channel(&[(0.1, "drums"), (0.1, "drums")], "drums", 0.7),
+        0.12,
+        0.4,
+    );
     assert!(
         single > 1e-4 && summed > 1e-4,
         "両方に信号が必要（single={single:.5}, summed={summed:.5}）"

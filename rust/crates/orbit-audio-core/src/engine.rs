@@ -114,14 +114,13 @@ impl Engine {
         Ok(())
     }
 
-    /// オーディオコールバックから呼び出される。`out` は interleaved f32。
-    ///
-    /// リアルタイムスレッドで呼ばれるため `try_lock` を用い、ロック競合時は
-    /// 無音（silent drop）を返してコールバックを即時完了させる。将来的には
-    /// lock-free ringbuffer に置き換える余地あり（Phase 2）。
-    pub fn render(&self, out: &mut [f32]) {
+    /// `try_lock` で Scheduler を借りて `f` を実行する。RT スレッドから呼ばれるため、ロック
+    /// 競合時は無音（silent drop）で即時 return する（将来 lock-free ringbuffer 化の余地あり・
+    /// Phase 2）。`render` / `render_channel` がこの try-lock + silent-drop 規約を共有する。
+    fn with_scheduler(&self, out: &mut [f32], f: impl FnOnce(&mut Scheduler, &mut [f32])) {
         match self.inner.try_lock() {
-            Ok(mut s) => s.render(out),
+            // MutexGuard を DerefMut で &mut Scheduler に再借用して closure に渡す。
+            Ok(mut s) => f(&mut s, out),
             Err(_) => {
                 for x in out.iter_mut() {
                     *x = 0.0;
@@ -130,18 +129,17 @@ impl Engine {
         }
     }
 
+    /// オーディオコールバックから呼び出される。`out` は interleaved f32。RT 競合時は無音。
+    pub fn render(&self, out: &mut [f32]) {
+        self.with_scheduler(out, |s, b| s.render(b));
+    }
+
     /// `render` の channel filter 版。指定 channel 名に属する event だけを `out` に加算する
-    /// （LinkAudio per-channel tap・#209）。RT 競合時は無音（silent drop）。
+    /// （LinkAudio per-channel tap・#209）。test/scaffolding 用（本番 RT caller は A4-2 で追加）。
     /// 本番 hardware `render` と同一 tick で混在させないこと（[`Scheduler::render_channel`] 参照）。
+    #[doc(hidden)]
     pub fn render_channel(&self, out: &mut [f32], channel: &str) {
-        match self.inner.try_lock() {
-            Ok(mut s) => s.render_channel(out, channel),
-            Err(_) => {
-                for x in out.iter_mut() {
-                    *x = 0.0;
-                }
-            }
-        }
+        self.with_scheduler(out, |s, b| s.render_channel(b, channel));
     }
 
     /// 現在の出力ストリーム時刻（秒）を返す。

@@ -41,6 +41,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **運用**: GPL/Ableton Link を一切導入しない permissive 増分。SC 既定経路 無改変・audio `play()` 意味論 無改変。Rust workspace は CI fmt/clippy 非 gate（追加コードは周囲スタイルに整合）。
 
+**/simplify 適用（4観点並列）**: ① `render_offline`/`render_offline_channel` を `render_offline_inner(closure)` に共通化 ② `Engine::render`/`render_channel` を `with_scheduler` ヘルパに集約 ③ altitude 指摘で `Engine::render_channel` に `#[doc(hidden)]`・`Scheduler::render_channel` を `pub(crate)` に絞り「混在呼び出し禁止」の prose-only 不変条件を crate 外へ露出しない（本番 RT caller は A4-2 で追加）④ テスト `body` クロージャを `rms_avg` ヘルパに hoist。efficiency = クリーン。test 構造重複（reuse minor）は test 閾値で skip。
+
 ### 6.159 feat(engine): slice varispeed parity — chop rate≠1.0 on rust engine (post-2.0 A3 / #319) (Jun 22, 2026)
 
 **Date**: 2026-06-22

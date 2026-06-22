@@ -285,7 +285,10 @@ impl Scheduler {
     /// transport（cursor / master gain ramp / 完了 event の掃除）は filter 有無に依らず 1 回
     /// 進むため、本番 hardware `render`（filter=None）と同一 tick での混在呼び出しはしない
     /// こと（per-channel 同時 render の multi-buffer 化は後続 PR）。
-    pub fn render_channel(&mut self, out: &mut [f32], channel: &str) {
+    ///
+    /// 本番 RT caller はまだ無い（A4-2 で追加）ので `pub(crate)` に絞り、crate 境界の外へ
+    /// 「混在呼び出し禁止」の prose-only 不変条件を露出しない（Engine 経由でのみ到達可能）。
+    pub(crate) fn render_channel(&mut self, out: &mut [f32], channel: &str) {
         self.render_filtered(out, Some(channel));
     }
 
