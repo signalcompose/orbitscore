@@ -162,4 +162,26 @@ void orbit_link_set_tempo(OrbitLink* link, double bpm) {
   }
 }
 
+// egress 開始時の beat anchor。captureAudioSessionState は audio-thread 専用なので、
+// GPL consumer thread(= Link "audio thread")から 1 回だけ呼ぶ。失敗時は 0.0。
+double orbit_link_capture_beat(OrbitLink* link, double quantum) {
+  if (!link) return 0.0;
+  try {
+    auto state = link->link.captureAudioSessionState();
+    return state.beatAtTime(link->link.clock().micros(), quantum);
+  } catch (...) {
+    return 0.0;
+  }
+}
+
+// 現在の session tempo(BPM)。beat/frame 換算用。consumer thread から 1 回 capture する。
+double orbit_link_session_tempo(OrbitLink* link) {
+  if (!link) return 0.0;
+  try {
+    return link->link.captureAudioSessionState().tempo();
+  } catch (...) {
+    return 0.0;
+  }
+}
+
 }  // extern "C"

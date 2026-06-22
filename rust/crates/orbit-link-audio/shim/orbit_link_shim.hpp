@@ -55,6 +55,12 @@ int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
 // Link テンポリーダーとして BPM を push する(app-thread 経路・PR3 で配線)。
 void orbit_link_set_tempo(OrbitLink* link, double bpm);
 
+// egress 開始時の beat anchor を取得する(GPL consumer thread = "audio thread" から 1 回)。
+double orbit_link_capture_beat(OrbitLink* link, double quantum);
+
+// 現在の session tempo(BPM)を取得する(beat/frame 換算用・consumer thread から)。
+double orbit_link_session_tempo(OrbitLink* link);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

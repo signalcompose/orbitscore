@@ -33,7 +33,11 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **beat anchoring（advisor・empirically-validated）**: session tempo 1 回 capture（default 120）→ 線形再構成 `beats_at_begin = beat_anchor + (produced_frames - frames_anchor) × (bpm/60)/sr`（per-block "now" を使わず ring latency 位相ずれを避ける）。`sr` は render/device SR = commit の sampleRate。tempo-change re-anchor は PR3（premature）。**層A 検証不可**（PCM は beat timestamp を持たない）→ 層B（2 インスタンス受信の Info.beginBeats）/dog-food。
 
-**第1増分（本 commit）**: shim `orbit_link_commit_channel` に `beats_at_begin: f64` 引数追加（内部の `beatAtTime(clock().micros())` 削除・`captureAudioSessionState` は bh.commit の state 用に残す）。hpp/cpp/Rust FFI/wrapper/smoke test を更新。standalone 3 緑。**次**: GPL consumer thread（cumulative-frames から beats_at_begin 再構成・drop で re-anchor）+ render_multi を cpal callback に配線 + EngineWrap で ring 生成・consumer spawn（feature 裏）+ RegisterLinkAudioChannel command + gated 層B テスト + TS registerLinkAudioChannel 実配線。
+**増分 1**: shim `orbit_link_commit_channel` に `beats_at_begin: f64` 引数追加（内部の `beatAtTime(clock().micros())` 削除・`captureAudioSessionState` は bh.commit の state 用に残す）。hpp/cpp/Rust FFI/wrapper/smoke test 更新。
+
+**増分 2（GPL consumer + beat anchoring・本 commit）**: shim に anchor 用 getter `orbit_link_capture_beat`/`orbit_link_session_tempo`（consumer thread = audio thread から 1 回 capture）。`LinkChannelEgress`（egress.rs）= rtrb `Consumer<f32>` を drain → `beats_at_begin` を **produced-frames から線形再構成**して commit。**advisor の最大 catch（drop = 永久 beat desync）を解決**: `produced_frames = drained + dropped`（drop counter 算入）→ drop 後も beat が producer の真の位置を追う（drained-only だと恒久ずれ）。beat 再構成を **Link 非依存の純関数**（`produced_frames`/`reconstruct_beat`）に分離し unit-test（drop-desync 防止を pin・計 7 緑）。orbit-link-audio に rtrb 依存追加（permissive・consumer 側）。
+
+**次（増分 3+）**: 層B receiver shim（`LinkAudioSource` wrapper）+ **gated 層B テスト**（2 インスタンス loopback で実 egress headless 受信・2b-2a Done 基準）+ render_multi を cpal callback に配線（RingTapSink port + 4 sample-format branch refactor）+ EngineWrap で ring 生成・consumer thread spawn（feature 裏）+ RegisterLinkAudioChannel command + TS registerLinkAudioChannel 実配線。**dynamic registration（pool + race）は 2b-2b**。
 
 ### 6.162 feat(engine): A4-2b-1 single-pass multi-buffer render + channel_name wire (post-2.0 A4 / #327) (Jun 23, 2026)
 

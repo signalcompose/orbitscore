@@ -23,6 +23,9 @@ path = "src/lib.rs"
 
 [dependencies]
 thiserror = "2.0"
+# rtrb は permissive(MIT/Apache)。GPL consumer 側で audio ring の Consumer<f32> を drain する。
+# permissive↔GPL 境界の ring 型を共有する(producer は native 側・本 crate は consumer 側)。
+rtrb = "0.3"
 
 [build-dependencies]
 cc = "1"

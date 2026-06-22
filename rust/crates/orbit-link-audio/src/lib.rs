@@ -15,6 +15,9 @@
 use std::ffi::{CString, NulError};
 use std::os::raw::{c_char, c_int};
 
+mod egress;
+pub use egress::LinkChannelEgress;
+
 #[repr(C)]
 struct OrbitLinkRaw {
     _private: [u8; 0],
@@ -42,6 +45,8 @@ extern "C" {
         quantum: f64,
     ) -> c_int;
     fn orbit_link_set_tempo(link: *mut OrbitLinkRaw, bpm: f64);
+    fn orbit_link_capture_beat(link: *mut OrbitLinkRaw, quantum: f64) -> f64;
+    fn orbit_link_session_tempo(link: *mut OrbitLinkRaw) -> f64;
 }
 
 /// LinkAudio FFI のエラー。
@@ -123,6 +128,7 @@ impl LinkAudioOutput {
     /// interleaved f32 の 1 ブロックを channel に commit する。`beats_at_begin` は呼び出し側
     /// (GPL consumer thread)が cumulative-frames から決定論再構成した buffer-begin の beat 位置
     /// (ring latency 分の位相ずれを避けるため shim 内では "now" から計算しない・A4-2b-2)。
+    #[allow(clippy::too_many_arguments)]
     pub fn commit_channel(
         &self,
         channel_id: i32,
@@ -173,6 +179,19 @@ impl LinkAudioOutput {
     pub fn set_tempo(&self, bpm: f64) {
         // SAFETY: raw は valid。
         unsafe { orbit_link_set_tempo(self.raw, bpm) };
+    }
+
+    /// egress 開始時の beat anchor を取得する(quantum 指定)。GPL consumer thread
+    /// (= Link "audio thread")から 1 回だけ呼ぶ。以後は cumulative-frames から線形再構成する。
+    pub fn capture_beat(&self, quantum: f64) -> f64 {
+        // SAFETY: raw は valid。
+        unsafe { orbit_link_capture_beat(self.raw, quantum) }
+    }
+
+    /// 現在の session tempo(BPM)。beat/frame 換算(beat_per_frame = (bpm/60)/sr)用。
+    pub fn session_tempo(&self) -> f64 {
+        // SAFETY: raw は valid。
+        unsafe { orbit_link_session_tempo(self.raw) }
     }
 }
 
