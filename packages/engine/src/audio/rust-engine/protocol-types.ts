@@ -20,6 +20,8 @@ export type CommandMethod =
   | 'UnloadSample'
   | 'PlayAt'
   | 'Stop'
+  // 全アクティブ再生の即時停止（hard-stop-all）。respawn / stopAll で in-flight voice を断つ。
+  | 'StopAll'
   | 'SetGlobalGain'
   | 'GetStatus'
   | 'Ping'

@@ -51,6 +51,7 @@ impl Engine {
     /// 適用され、範囲外は clamp される。
     /// `slice_start_frame` / `slice_len_frames` は再生領域（`chop` の slice）。
     /// `slice_len_frames == 0` で「offset 以降すべて」。サンプル端で clamp される。
+    /// `rate` は varispeed（1.0 = 自然尺・`<=0`/非有限は 1.0 に丸め）。
     #[allow(clippy::too_many_arguments)]
     pub fn schedule_with_play_id(
         &self,
@@ -59,6 +60,7 @@ impl Engine {
         pan: f32,
         slice_start_frame: usize,
         slice_len_frames: usize,
+        rate: f64,
         play_id: String,
         sample: Sample,
     ) -> Result<(), EngineError> {
@@ -68,6 +70,7 @@ impl Engine {
                 .with_gain(gain)
                 .with_pan(pan)
                 .with_region(slice_start_frame, slice_len_frames)
+                .with_rate(rate)
                 .with_play_id(play_id),
         );
         Ok(())
@@ -77,6 +80,12 @@ impl Engine {
     pub fn stop(&self, play_id: &str) -> Result<bool, EngineError> {
         let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
         Ok(s.stop(play_id))
+    }
+
+    /// 全イベントを即時停止する hard-stop-all。停止件数を返す（respawn / stopAll で使う）。
+    pub fn stop_all(&self) -> Result<usize, EngineError> {
+        let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
+        Ok(s.stop_all())
     }
 
     /// スケジュール中のイベント数（実時間で active な再生数）。

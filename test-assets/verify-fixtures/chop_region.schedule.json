@@ -9,6 +9,7 @@
       "pan": 0,
       "offsetSec": 0,
       "durationSec": 0.5,
+      "rate": 1,
       "gainDb": -3,
       "panRaw": 0,
       "sequenceName": "chop"
@@ -20,6 +21,7 @@
       "pan": 0,
       "offsetSec": 0.5,
       "durationSec": 0.5,
+      "rate": 1,
       "gainDb": -3,
       "panRaw": 0,
       "sequenceName": "chop"

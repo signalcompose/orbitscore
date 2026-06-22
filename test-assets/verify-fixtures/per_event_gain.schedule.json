@@ -9,6 +9,7 @@
       "pan": 0,
       "offsetSec": 0,
       "durationSec": 0,
+      "rate": 1,
       "gainDb": -3,
       "panRaw": 0,
       "sequenceName": "loud"
@@ -20,6 +21,7 @@
       "pan": 0,
       "offsetSec": 0,
       "durationSec": 0,
+      "rate": 1,
       "gainDb": -9,
       "panRaw": 0,
       "sequenceName": "quiet"

@@ -9,6 +9,7 @@
       "pan": -1,
       "offsetSec": 0,
       "durationSec": 0,
+      "rate": 1,
       "gainDb": -3,
       "panRaw": -100,
       "sequenceName": "left"
@@ -20,6 +21,7 @@
       "pan": -0.5,
       "offsetSec": 0,
       "durationSec": 0,
+      "rate": 1,
       "gainDb": -3,
       "panRaw": -50,
       "sequenceName": "mid"
@@ -31,6 +33,7 @@
       "pan": 1,
       "offsetSec": 0,
       "durationSec": 0,
+      "rate": 1,
       "gainDb": -3,
       "panRaw": 100,
       "sequenceName": "right"

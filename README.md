@@ -277,9 +277,9 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 npm test
 ```
 
-**1129 passed, 23 skipped (1152 total) — 2.0.0**
+**1168 passed, 27 skipped (1195 total) — post-2.0 (A3 slice varispeed)**
 
-Run `npm test` to see the current breakdown. 23 tests are skipped (SuperCollider integration tests require a local environment).
+Run `npm test` to see the current breakdown. Skipped tests are SuperCollider / real-daemon integration tests that require a local environment.
 
 ## Getting Started
 

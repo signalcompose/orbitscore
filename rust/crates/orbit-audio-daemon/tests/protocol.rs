@@ -209,6 +209,53 @@ async fn stop_unknown_id_returns_not_found() {
     );
 }
 
+/// StopAll は全アクティブ再生（発音中 + 開始待機中）を停止し件数を返す（hard-stop-all・#319）。
+/// 冪等: 空に対しては 0 を返す。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn stop_all_clears_scheduled_plays() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let wav_path = format!("{manifest_dir}/../../../test-assets/audio/kick.wav");
+    send_cmd(&mut ws, "l", "LoadSample", json!({ "path": wav_path })).await;
+    let load_resp = recv_reply_for_id(&mut ws, "l").await;
+    let sample_id = load_resp["result"]["sample_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("LoadSample resp missing sample_id: {load_resp}"))
+        .to_string();
+
+    // 未来時刻に 2 voice をスケジュール（transport 未到達でも scheduler に開始待機で居る）。
+    for (id, t) in [("p1", 10.0), ("p2", 11.0)] {
+        send_cmd(
+            &mut ws,
+            id,
+            "PlayAt",
+            json!({ "sample_id": sample_id, "time_sec": t, "gain": 1.0 }),
+        )
+        .await;
+        let _ = recv_reply_for_id(&mut ws, id).await;
+    }
+
+    send_cmd(&mut ws, "sa", "StopAll", json!({})).await;
+    let resp = recv_reply_for_id(&mut ws, "sa").await;
+    assert_eq!(
+        resp["result"]["stopped"].as_u64(),
+        Some(2),
+        "StopAll should clear both scheduled voices: {resp}"
+    );
+
+    // 冪等: 2 回目は 0。
+    send_cmd(&mut ws, "sa2", "StopAll", json!({})).await;
+    let resp2 = recv_reply_for_id(&mut ws, "sa2").await;
+    assert_eq!(
+        resp2["result"]["stopped"].as_u64(),
+        Some(0),
+        "second StopAll should be idempotent (0): {resp2}"
+    );
+}
+
 /// SetGlobalGain は正の値を受け入れる。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn set_global_gain_accepts() {

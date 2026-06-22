@@ -27,9 +27,10 @@
  *  - **pan は #304 で実装済み**（daemon PlayAt の pan・equal-power = SC `Pan2` 一致）。
  *    発火時に DSL の -100..100 を daemon の [-1,1] へ変換して送る。
  *
- *  - **slice（chop 領域再生）は #304 で実装済み**（offset/duration の領域読み・rate=1.0）。
- *    rate≠1.0（slice 尺をスロット尺へ詰める time-stretch）のみ 1回 warn し、slice 自体は
- *    自然尺（rate=1.0）で発音する（skip しない）。time-stretch は #213/#239 へ defer。
+ *  - **slice（chop 領域再生）は #304 で実装済み**（offset/duration の領域読み）。
+ *    rate≠1.0（slice 尺をイベントスロット尺へ詰める varispeed）は #319 で実装済み（daemon
+ *    PlayAt の rate・SC `PlayBuf.ar(rate:)` 一致＝ピッチも動く）。pitch-preserving な
+ *    time-stretch（fixpitch/time）は別物で #213 へ defer。
  *
  *  - **残る feature gap は boundary で明示**（見かけの parity を作らない・A0 方針）:
  *    outputChannel(LinkAudio) → 1回 warn して hardware 発音（SC の plugin-missing fallback と同形）/
@@ -44,13 +45,11 @@ import { DaemonClient } from './daemon-client'
 import { DaemonConnectionError, DaemonQuitError } from './errors'
 
 /**
- * boundary で明示する制約の種別。
- * - `slice`: chop 領域再生は実装済み。rate≠1.0（time-stretch）未対応の warn 用で、slice 自体は
- *   rate=1.0 で発音する（拒否しない）。
- * - `outputChannel`(LinkAudio) / `masterEffect`: 未対応 feature gap（A4 era）。
- * pan は #304 で実装済みのため gap ではない。
+ * boundary で明示する未対応 feature gap の種別（A4 era）。
+ * - `outputChannel`(LinkAudio) / `masterEffect`: 未対応 feature gap。
+ * pan / slice 領域 / slice varispeed（rate≠1.0）は実装済みのため gap ではない。
  */
-type GapKind = 'slice' | 'outputChannel' | 'masterEffect'
+type GapKind = 'outputChannel' | 'masterEffect'
 
 /** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
 export interface SliceSpec {
@@ -58,7 +57,10 @@ export interface SliceSpec {
   index: number
   /** 分割数（`chop(n)` の n）。 */
   total: number
-  /** イベントスロット尺（ms）。rate≠1.0 判定に使う（time-stretch 未対応の warn 用）。 */
+  /**
+   * イベントスロット尺（ms）。varispeed レート算出に使う
+   * （`rate = sliceDuration / eventSlotDuration`）。未指定 / 0 以下なら rate=1.0（自然尺）。
+   */
   eventDurationMs?: number
 }
 
@@ -91,6 +93,12 @@ export interface DaemonPlayParams {
   offsetSec: number
   /** slice 領域長（秒）。0 = `offsetSec` 以降すべて。 */
   durationSec: number
+  /**
+   * varispeed レート（1.0 = 自然尺）。chop slice 尺をイベントスロット尺へ詰める際に
+   * `rate = sliceDuration / eventSlotDuration` を送る（SC `calculatePlaybackRate` 一致）。
+   * >1 = 速く短く高ピッチ、<1 = 遅く長く低ピッチ（pitch も動く varispeed）。
+   */
+  rate: number
 }
 
 /** daemon transport clock と TS wall clock の対応点。 */
@@ -144,8 +152,6 @@ const DEFAULT_LOOKAHEAD_SEC = 0.05
 const POLL_INTERVAL_MS = 1
 /** SC EventScheduler と同じく、過大 drift のイベントは古い残骸として skip する閾値。 */
 const MAX_DRIFT_MS = 1000
-/** chop slice の rate が 1.0 からこの幅を超えて外れたら time-stretch 未対応として 1 回 warn する。 */
-const SLICE_RATE_TOLERANCE = 0.01
 /** daemon が死んだとき respawn を試みる最大回数。枯渇したら recovery を断念し poll を止める。 */
 const MAX_RESPAWN_ATTEMPTS = 5
 /** respawn 試行間の固定バックオフ（crash loop 緩和 + port 解放待ち）。 */
@@ -153,7 +159,6 @@ const RESPAWN_BACKOFF_MS = 150
 
 /** feature gap warning の初期状態（フィールド初期化子で arm・stopAll で再 arm に使う）。 */
 const freshWarned = (): Record<GapKind, boolean> => ({
-  slice: false,
   outputChannel: false,
   masterEffect: false,
 })
@@ -519,8 +524,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     this.scheduledPlays = []
     this.liveSequences.clear()
     this.warned = freshWarned()
-    // 注: 既に daemon へ送信済み（発音中）の voice は自然減衰で終わる。即時 hard-stop は
-    // play_id 追跡 or daemon 側 StopAll コマンドが要る後続課題（短サンプル前提で proof は許容）。
+    // daemon 側の in-flight voice（varispeed の rate<1.0 で長尺化した slice 含む）も即時
+    // hard-stop する（#319）。stopAll は同期契約なので fire-and-forget。失敗（接続喪失）は
+    // supervisor 任せで静かに drop する。teardown(quit)/respawn 中は対象が無い/置換されるので
+    // skip する（quit は daemon.quit() が、respawn は新 daemon が空であることが各々始末する）。
+    if (!this.disposed && !this.respawning && this.daemon.isRunning()) {
+      // 接続喪失（DaemonConnectionError 等）は想定内 — 死んだ daemon に stop は不要。
+      void this.daemon.stopAll().catch(() => {})
+    }
   }
 
   clearSequenceEvents(sequenceName: string): void {
@@ -576,7 +587,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (play.sequenceName && !this.liveSequences.has(play.sequenceName)) return
     // 音響パラメータ（amplitude/pan/slice 領域）は本番発火と検証ハーネス（#311）で共有する
     // 変換に集約する。slice 領域は ensureLoaded 後の尺（this.durations）を使う（lazy load）。
-    const { gain, pan, offsetSec, durationSec } = this.toDaemonParams(play)
+    const { gain, pan, offsetSec, durationSec, rate } = this.toDaemonParams(play)
     // daemonNowSec と wallMs は送信「前」に同一瞬間で採取する（onDispatch の lead/drift 計測が
     // coherent になるよう。playAt の await 後だと round-trip 分ずれる）。
     const wallMs = Date.now()
@@ -589,6 +600,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       pan,
       offsetSec,
       durationSec,
+      rate,
     )
     this.onDispatch?.({
       filepath: play.filepath,
@@ -673,39 +685,37 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * chop の slice 領域（offset/長さ・秒）を load 済みサンプル尺から計算する。
+   * chop の slice 領域（offset/長さ・秒）と varispeed レートを load 済みサンプル尺から計算する。
    *
-   * 全体再生（slice なし）は `{0, 0}`（= daemon は全体再生）。slice の場合は
+   * 全体再生（slice なし）は `{0, 0, 1}`（= daemon は全体再生・自然尺）。slice の場合は
    * `sliceDuration = totalDuration / total`、`offset = (index-1) * sliceDuration` を返す。
    * 尺が未取得（lazy load で frames/SR が 0）の場合は全体再生にフォールバックする。
    *
-   * rate≠1.0（slice 尺をイベントスロット尺に詰める time-stretch）は本増分の対象外なので、
-   * 検出したら 1 回 warn する（slice 自体は自然尺 rate=1.0 で鳴る）。
+   * varispeed: slice 自然尺をイベントスロット尺へ詰める `rate = sliceDuration / eventSlotDuration`
+   * を返す（SC `calculatePlaybackRate` 一致・>1 で速く高ピッチ、<1 で遅く低ピッチ）。
+   * `eventDurationMs` 未指定 / 0 以下なら自然尺（rate=1.0）。
    */
-  private resolveSliceRegion(play: ScheduledPlay): { offsetSec: number; durationSec: number } {
+  private resolveSliceRegion(play: ScheduledPlay): {
+    offsetSec: number
+    durationSec: number
+    rate: number
+  } {
     const spec = play.slice
-    if (!spec) return { offsetSec: 0, durationSec: 0 }
+    if (!spec) return { offsetSec: 0, durationSec: 0, rate: 1 }
     const totalDuration = this.durations.get(play.filepath) ?? 0
     // NaN <= 0 は JS では false。尺が NaN/非有限でも確実に全体再生フォールバックへ落とす。
     if (!Number.isFinite(totalDuration) || totalDuration <= 0 || spec.total <= 0) {
-      // 尺不明 → 全体再生フォールバック（誤った領域で無音を作らない）。
-      return { offsetSec: 0, durationSec: 0 }
+      // 尺不明 → 全体再生フォールバック（rate=1.0・誤った領域で無音を作らない）。
+      return { offsetSec: 0, durationSec: 0, rate: 1 }
     }
     const sliceDuration = totalDuration / spec.total
     const offsetSec = (spec.index - 1) * sliceDuration
-    // time-stretch（rate≠1.0）は未対応。slice 尺がスロット尺と一致しない場合のみ warn。
-    if (spec.eventDurationMs && spec.eventDurationMs > 0) {
-      const rate = (sliceDuration * 1000) / spec.eventDurationMs
-      if (Math.abs(rate - 1) > SLICE_RATE_TOLERANCE) {
-        this.warnOnce(
-          'slice',
-          `⚠️  [rust-engine] chop slice rate=${rate.toFixed(3)} (slice length ≠ event slot) — ` +
-            `time-stretch is not supported yet; the slice plays at natural length (rate=1.0). ` +
-            `Deferred to the time-stretch increment (#213/#239).`,
-        )
-      }
-    }
-    return { offsetSec, durationSec: sliceDuration }
+    // varispeed レート（SC calculatePlaybackRate と同形）。eventDurationMs 不在 / 0 以下は自然尺。
+    const rate =
+      spec.eventDurationMs && spec.eventDurationMs > 0
+        ? (sliceDuration * 1000) / spec.eventDurationMs
+        : 1
+    return { offsetSec, durationSec: sliceDuration, rate }
   }
 
   /**

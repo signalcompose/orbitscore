@@ -222,6 +222,7 @@ export class DaemonClient extends EventEmitter {
     pan = 0,
     offsetSec = 0,
     durationSec = 0,
+    rate = 1,
   ): Promise<{ playId: string }> {
     const result = await this.request('PlayAt', {
       sample_id: sampleId,
@@ -232,6 +233,8 @@ export class DaemonClient extends EventEmitter {
       // offset_sec / duration_sec は再生領域（chop の slice）。0/0 で全体再生。
       offset_sec: offsetSec,
       duration_sec: durationSec,
+      // rate は varispeed（1.0 = 自然尺）。<=0/非有限は daemon 側で 1.0 に丸め。
+      rate,
     })
     return { playId: String(result.play_id) }
   }
@@ -239,6 +242,12 @@ export class DaemonClient extends EventEmitter {
   async stop(playId: string): Promise<boolean> {
     const result = await this.request('Stop', { play_id: playId })
     return result.status === 'stopped'
+  }
+
+  /** daemon の全アクティブ再生を即時停止する（hard-stop-all）。停止件数を返す。 */
+  async stopAll(): Promise<number> {
+    const result = await this.request('StopAll', {})
+    return Number(result.stopped ?? 0)
   }
 
   async setGlobalGain(value: number, rampSec = 0): Promise<void> {
@@ -500,12 +509,16 @@ export class DaemonClient extends EventEmitter {
     const onMessage = (data: WebSocket.RawData) => this.handleFrame(data.toString())
     ws.on('message', onMessage)
     // daemon を kill -9 / segfault すると、socket は 'close' の前に 'error'（ECONNRESET 等）を
-    // emit しうる。connect 用の once('error') が消費済みだと 'error' に listener が無くなり、
-    // Node の EventEmitter が unhandled 'error' を throw して TS プロセスごと巻き込む。recovery
-    // floor の要は「daemon の死で app を落とさない」ことなので、永続 error listener で吸収する
-    // （実際の cleanup / respawn 駆動は 'close' ハンドラが行う）。
+    // emit しうる。listener が無いと Node の EventEmitter が unhandled 'error' を throw して TS
+    // プロセスごと巻き込む。recovery floor の要は「daemon の死で app を落とさない」ことなので、
+    // 永続 error listener で吸収する（実際の cleanup / respawn 駆動は 'close' ハンドラが行う）。
+    //
+    // ただし **connect 中は下の `onConnectError`（once）が error を担う**ので、`onError` は
+    // open 後にだけ attach する。connect 前から両方を付けると、connect 失敗時に onError の warn と
+    // connect reject が **二重ログ**になる（bot Finding 2）。open で onConnectError を detach し
+    // onError に引き継ぐことで、connect 失敗は単一経路（reject）に、post-connect の死は onError に
+    // 集約される。
     const onError = (err: Error): void => {
-      // listener が存在すること自体が第一の目的（unhandled 'error' の throw を防ぐ）。さらに
       // 詳細（ECONNRESET 等）を console.warn で必ず可視化する — 'close' ハンドラの daemon-died
       // 通知だけでは socket レベルの死因が消えるため。実際の cleanup / respawn 駆動は 'close' が行う。
       console.warn(
@@ -513,7 +526,6 @@ export class DaemonClient extends EventEmitter {
         err,
       )
     }
-    ws.on('error', onError)
     ws.on('close', () => {
       // running を倒す前に「起動成功後だったか」を捕まえる（死の判定に使う）。
       const wasRunning = this.running
@@ -540,14 +552,20 @@ export class DaemonClient extends EventEmitter {
     })
     await new Promise<void>((resolve, reject) => {
       const to = setTimeout(() => reject(new Error(`ws connect timeout: ${url}`)), timeoutMs)
-      ws.once('open', () => {
-        clearTimeout(to)
-        resolve()
-      })
-      ws.once('error', (err) => {
+      // connect 中の error 担当（once）。open 成功時に detach し、以後は永続 onError に引き継ぐ。
+      const onConnectError = (err: Error): void => {
         clearTimeout(to)
         reject(err)
+      }
+      ws.once('open', () => {
+        clearTimeout(to)
+        // connect 成功 → connect 用 error listener を外し、永続 onError に引き継ぐ
+        // （二重ログ防止・unhandled 'error' 防止の両立）。
+        ws.off('error', onConnectError)
+        ws.on('error', onError)
+        resolve()
       })
+      ws.once('error', onConnectError)
     })
   }
 

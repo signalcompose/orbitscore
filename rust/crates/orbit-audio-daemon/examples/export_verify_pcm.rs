@@ -49,9 +49,16 @@ struct GoldenEvent {
     pan: f32,
     offset_sec: f64,
     duration_sec: f64,
+    /// varispeed レート（1.0 = 自然尺）。rate を持たない既存 golden は 1.0 として parse する。
+    #[serde(default = "default_rate")]
+    rate: f64,
     gain_db: f64,
     // panRaw は JSON に存在するが未使用。serde は未知フィールドを無視するため宣言しない。
     sequence_name: String,
+}
+
+fn default_rate() -> f64 {
+    1.0
 }
 
 // ─── 出力 JSON（artifact 契約 ②）────────────────────────────────────────────
@@ -99,12 +106,15 @@ fn frame_at(sec: f64, sr: f64) -> usize {
 }
 
 /// イベントの再生尺フレーム。whole（durationSec=0）= サンプル全尺 / slice = durationSec フレーム。
+/// varispeed では出力尺 = source 尺 / rate。
 fn play_span(ev: &GoldenEvent, sample_frames: &HashMap<String, usize>, sr: f64) -> usize {
-    if ev.duration_sec > 0.0 {
+    let source_frames = if ev.duration_sec > 0.0 {
         frame_at(ev.duration_sec, sr)
     } else {
         sample_frames[&ev.sample]
-    }
+    };
+    let rate = if ev.rate.is_finite() && ev.rate > 0.0 { ev.rate } else { 1.0 };
+    (source_frames as f64 / rate).ceil() as usize
 }
 
 /// body 窓 `[onset+BODY_HEAD_OFFSET, onset+span-tail_trim)`。
@@ -172,6 +182,7 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
             ev.pan,
             ev.offset_sec,
             ev.duration_sec,
+            ev.rate,
         )
         .expect("play_at");
         let end = frame_at(ev.onset_sec, sr) + play_span(ev, &sample_frames, sr);

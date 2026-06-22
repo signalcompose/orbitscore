@@ -34,7 +34,7 @@ async function waitFor(
   throw new Error(`waitFor: condition not met within ${timeoutMs}ms`)
 }
 
-/** GetStatus + LoadSample + PlayAt の既定ハンドラ（uptime=10 で anchor を固定的に）。 */
+/** GetStatus + LoadSample + PlayAt + StopAll の既定ハンドラ（uptime=10 で anchor を固定的に）。 */
 function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers {
   let playSeq = 0
   return {
@@ -54,6 +54,7 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
       sample_rate: 48000,
     }),
     PlayAt: () => ({ play_id: `p-${playSeq++}` }),
+    StopAll: () => ({ stopped: 0 }),
     ...overrides,
   }
 }
@@ -182,6 +183,8 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(rec.sample_id).toBe('s-/audio/loop.wav')
     expect(rec.offset_sec as number).toBeCloseTo(0.5, 5)
     expect(rec.duration_sec as number).toBeCloseTo(0.25, 5)
+    // eventDurationMs=250=sliceDuration → rate=1.0（自然尺・varispeed なし）。
+    expect(rec.rate as number).toBeCloseTo(1.0, 5)
     // rate=1.0 なので time-stretch warn は出ない。
     const rateWarns = warn.mock.calls.filter((c) => String(c[0]).includes('rate='))
     expect(rateWarns.length).toBe(0)
@@ -198,18 +201,21 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(playAtRecords()[1].gain as number).toBeCloseTo(gainDbToAmplitude(-6), 4)
   })
 
-  it('slice の rate≠1.0（time-stretch）は 1 回 warn し、自然尺で鳴らす', async () => {
+  it('slice の rate≠1.0 は varispeed レートを PlayAt で送る（warn しない・#319）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
-    // chop(8) → sliceDuration=0.125。eventDurationMs=500 → rate=0.25 ≠ 1.0。
+    // chop(8) → sliceDuration=0.125。eventDurationMs=500 → rate=0.125/0.5=0.25（<1 = 遅く低ピッチ）。
     p.scheduleSliceEvent('/audio/loop.wav', 0, 1, 8, 500, 0, 0, 'seqA')
-    p.scheduleSliceEvent('/audio/loop.wav', 10, 2, 8, 500, 0, 0, 'seqA')
     p.start()
-    await waitFor(() => playAtRecords().length >= 2)
-    // rate≠1.0 でも slice は自然尺（duration=sliceDuration=0.125）で鳴る。
-    expect(playAtRecords()[0].duration_sec as number).toBeCloseTo(0.125, 5)
+    await waitFor(() => playAtRecords().length >= 1)
+    const rec = playAtRecords()[0]
+    // slice 領域は source 自然尺（duration=sliceDuration=0.125）、varispeed は rate=0.25 で
+    // daemon の render に委ねる（出力尺 = 0.125/0.25 = 0.5s = スロット尺）。
+    expect(rec.duration_sec as number).toBeCloseTo(0.125, 5)
+    expect(rec.rate as number).toBeCloseTo(0.25, 5)
+    // varispeed は実装済みなので time-stretch 未対応 warn は出ない。
     const rateWarns = warn.mock.calls.filter((c) => String(c[0]).includes('rate='))
-    expect(rateWarns.length).toBe(1) // warn-once
+    expect(rateWarns.length).toBe(0)
     warn.mockRestore()
   })
 
@@ -542,6 +548,50 @@ describe('RustEnginePlayer with mock daemon', () => {
     const statusAfter = server.received.filter((r) => r.method === 'GetStatus').length
     expect(statusAfter).toBe(statusBefore)
     expect(p.isRunning).toBe(false)
+  })
+
+  it('stopAll() は daemon に StopAll を送る（hard-stop-all・#319）', async () => {
+    const p = await boot()
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
+    p.start()
+    // 少なくとも 1 回 PlayAt が dispatch されてから stopAll を呼ぶ。
+    await waitFor(() => playAtRecords().length >= 1)
+    p.stopAll()
+    // stopAll は fire-and-forget（同期）。loopback WebSocket の往復を待つため waitFor を使う。
+    await waitFor(() => server.received.some((r) => r.method === 'StopAll'))
+    expect(server.received.some((r) => r.method === 'StopAll')).toBe(true)
+  })
+
+  it('respawn backoff 中に quit() しても clean に終わる（quit-during-respawn）', async () => {
+    // Gap5: daemon 死 → respawn が RESPAWN_BACKOFF_MS(150ms) の待機に入った直後に
+    // quit() を呼んでも unhandled rejection が出ず、respawn が完了せず clean に終わること。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const p = await boot()
+    p.scheduleEvent('/audio/a.wav', 0, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => server.received.some((r) => r.method === 'PlayAt'))
+    const statusBefore = server.received.filter((r) => r.method === 'GetStatus').length
+    // dropConnections: server は listen 継続（再接続可能）で daemon 死を模す。
+    // respawn が完全に通ると GetStatus が追加される — それを逆に「通らなかった」確認に使う。
+    server.dropConnections()
+    // onDaemonDied が respawning=true をセットし warn を出すまで待つ。
+    // この時点で respawnLoop は setTimeout(150) の中で backoff 待機中。
+    await waitFor(() => warnSpy.mock.calls.some((c) => String(c[0]).includes('respawning')), {
+      timeoutMs: 1000,
+    })
+    // backoff の 150ms が切れる前に quit() を発行する（disposed=true → backoff 後の
+    // disposed チェックで respawnLoop が早期 return する経路を踏む）。
+    await p.quit() // resolve するはずで、throw しない
+    player = null // afterEach の二重 quit を避ける
+    // quit 後に settle 猶予を置く。もし respawn が完了していれば GetStatus が増える。
+    await new Promise((r) => setTimeout(r, 300))
+    const statusAfter = server.received.filter((r) => r.method === 'GetStatus').length
+    // respawn は完了していない（disposed guard で早期 return）→ GetStatus は増えていない。
+    expect(statusAfter).toBe(statusBefore)
+    expect(p.isRunning).toBe(false)
+    warnSpy.mockRestore()
+    errorSpy.mockRestore()
   })
 })
 

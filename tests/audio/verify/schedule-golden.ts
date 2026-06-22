@@ -59,6 +59,8 @@ export interface GoldenEvent {
   offsetSec: number
   /** slice 領域長（秒）。0 = offset 以降すべて。 */
   durationSec: number
+  /** varispeed レート（1.0 = 自然尺）。slice 尺をスロット尺へ詰める rate。 */
+  rate: number
   /** トレーサビリティ用の生値。 */
   gainDb: number
   panRaw: number
@@ -107,7 +109,7 @@ export function resolveGolden(
     player.seedDuration(abs, sec)
   }
   const events: GoldenEvent[] = recorded.map((play) => {
-    const { gain, pan, offsetSec, durationSec } = player.toDaemonParams(play)
+    const { gain, pan, offsetSec, durationSec, rate } = player.toDaemonParams(play)
     return {
       onsetSec: play.time / 1000,
       sample: basename(play.filepath),
@@ -115,6 +117,7 @@ export function resolveGolden(
       pan,
       offsetSec,
       durationSec,
+      rate,
       gainDb: play.gainDb,
       panRaw: play.pan,
       sequenceName: play.sequenceName,

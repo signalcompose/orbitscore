@@ -15,6 +15,10 @@ pub struct ScheduledSample {
     pub slice_start_frame: usize,
     /// 再生フレーム数（slice 長）。0 = `slice_start_frame` 以降すべて。`chop` の slice 長。
     pub slice_len_frames: usize,
+    /// 再生レート（varispeed）。1.0 = 自然尺、>1 = 速く（短く・高ピッチ）、<1 = 遅く（長く・
+    /// 低ピッチ）。source を `rate` 倍の歩幅で分数走査し線形補間する（SC `PlayBuf.ar(rate:)`
+    /// 一致）。chop slice をイベントスロット尺へ詰める際に `rate = sliceNatural/slot` を渡す。
+    pub rate: f64,
     /// サンプル本体
     pub sample: Sample,
     /// Stop 命令での個別停止用識別子。`None` なら停止不可（fire-and-forget）。
@@ -29,6 +33,7 @@ impl ScheduledSample {
             pan: 0.0,
             slice_start_frame: 0,
             slice_len_frames: 0,
+            rate: 1.0,
             sample,
             play_id: None,
         }
@@ -36,6 +41,13 @@ impl ScheduledSample {
 
     pub fn with_gain(mut self, gain: f32) -> Self {
         self.gain = gain;
+        self
+    }
+
+    /// 再生レート（varispeed）を設定する。`<= 0` は無効なので 1.0 に丸める（無音化や逆再生を
+    /// 誤って起こさない）。逆再生は別 modifier（`reverse()`・#213 系）の領分。
+    pub fn with_rate(mut self, rate: f64) -> Self {
+        self.rate = if rate.is_finite() && rate > 0.0 { rate } else { 1.0 };
         self
     }
 
@@ -122,12 +134,16 @@ struct ActiveSample {
     slice_start: usize,
     /// 再生領域の長さ（フレーム数）。サンプル端で clamp 済み。
     slice_len: usize,
-    /// 末尾フェードアウトのフレーム数（クリック防止・SC `orbitPlayBuf` 一致）。
+    /// 末尾フェードアウトの **出力フレーム数**（クリック防止・SC `orbitPlayBuf` 一致）。
+    /// varispeed では出力尺 = slice_len/rate なので、source ではなく出力時間で数える。
     fade_frames: usize,
+    /// 再生レート（varispeed）。出力 1 フレームごとに `read_pos` を `rate` 進める。
+    rate: f64,
     /// サンプル本体
     sample: Sample,
-    /// 再生領域内で次に読むフレーム位置（0..slice_len の相対位置）
-    read_pos: usize,
+    /// 再生領域内で次に読む **分数**フレーム位置（0.0..slice_len の相対位置）。varispeed の
+    /// 分数走査のため f64。線形補間の基準点になる。
+    read_pos: f64,
     /// 個別停止用識別子
     play_id: Option<String>,
 }
@@ -179,10 +195,19 @@ impl Scheduler {
             event.slice_len_frames,
         );
 
+        // varispeed レート（<=0/非有限は 1.0 に丸め済み・with_rate 保証だが直接 schedule
+        // 経路でも安全側に倒す）。
+        let rate = if event.rate.is_finite() && event.rate > 0.0 {
+            event.rate
+        } else {
+            1.0
+        };
+
         // 末尾フェードアウト（線形 release）。SC `orbitPlayBuf` の
         // `fadeOut = min(0.008, actualDuration * 0.04)` に一致させクリックを防ぐ。
-        // rate=1.0 再生なので出力尺 = slice_len / sample_rate。
-        let out_dur_sec = slice_len as f64 / self.output_sample_rate as f64;
+        // varispeed では出力尺 = slice_len / (sample_rate * rate)。fade は **出力**フレーム
+        // 数で数える（render では出力残フレームで判定する）。
+        let out_dur_sec = slice_len as f64 / (self.output_sample_rate as f64 * rate);
         let fade_sec = (out_dur_sec * 0.04).min(0.008);
         let fade_frames = (fade_sec * self.output_sample_rate as f64).round() as usize;
 
@@ -203,8 +228,9 @@ impl Scheduler {
             slice_start,
             slice_len,
             fade_frames,
+            rate,
             sample: event.sample,
-            read_pos: 0,
+            read_pos: 0.0,
             play_id: event.play_id,
         });
     }
@@ -215,6 +241,15 @@ impl Scheduler {
         self.events
             .retain(|a| a.play_id.as_deref() != Some(play_id));
         self.events.len() < before
+    }
+
+    /// 全イベント（発音中 + 開始待機中）を即時削除する hard-stop-all。削除件数を返す。
+    /// varispeed の長尺 voice が respawn / stopAll を跨いで鳴り続けるのを断つ
+    /// （TS 側はスケジュールの権威を保持し、必要なら再 dispatch する）。
+    pub fn stop_all(&mut self) -> usize {
+        let n = self.events.len();
+        self.events.clear();
+        n
     }
 
     /// 出力バッファにアクティブなサンプル群を加算する。
@@ -239,10 +274,10 @@ impl Scheduler {
             let src_channels = active.sample.channels as usize;
             if src_channels == 0 {
                 // 0ch の不正なサンプルはスキップ（`src_channels - 1` のアンダーフロー回避）
-                active.read_pos = active.slice_len;
+                active.read_pos = active.slice_len as f64;
                 continue;
             }
-            if active.read_pos >= active.slice_len {
+            if active.read_pos >= active.slice_len as f64 {
                 continue; // 再生済み（slice 領域を読み終えた）
             }
 
@@ -253,39 +288,57 @@ impl Scheduler {
                 0
             };
 
-            let remaining_src_frames = active.slice_len - active.read_pos;
             let writable_frames = frames_to_render.saturating_sub(dst_offset_frames);
-            let frames_to_copy = writable_frames.min(remaining_src_frames);
 
             // 左右ゲインは schedule 時に precompute 済み（RT から trig と output_channels
             // 分岐を排除）。ステレオ以外では (1.0, 1.0)。SC の Pan2 に一致。
             let (pan_l, pan_r) = (active.pan_l, active.pan_r);
 
-            // 末尾フェードアウトの開始位置（slice 内相対）。fade_frames==0 ならフェードなし。
-            let fade_start = active.slice_len.saturating_sub(active.fade_frames);
+            let slice_len = active.slice_len;
+            let rate = active.rate;
+            // 補間の上端 clamp（slice 末尾フレーム）。floor+1 が slice をはみ出さないようにする。
+            let last_src = slice_len.saturating_sub(1);
 
-            for i in 0..frames_to_copy {
-                let slice_pos = active.read_pos + i; // slice 領域内の相対位置
-                let src_frame = active.slice_start + slice_pos; // サンプル内の絶対フレーム
+            // 出力フレームを 1 つずつ生成し、source を rate 倍の歩幅で分数走査する（varispeed）。
+            // rate=1.0 のときは read_pos が整数列を辿り frac=0 で補間が元サンプルに一致するため、
+            // 既存 rate=1.0 経路とビット同一になる（厳密な一般化）。出力尺 = slice_len/rate。
+            for i in 0..writable_frames {
+                let pos = active.read_pos; // slice 相対の分数読み位置
+                if pos >= slice_len as f64 {
+                    break; // source 読み切り（残り出力枠は無音にせず発音終了）
+                }
+                // 線形補間: floor と floor+1 を frac で混合。上端は slice 末尾で clamp。
+                let i0 = pos.floor();
+                let frac = (pos - i0) as f32;
+                let s0 = i0 as usize; // slice 相対の整数フレーム
+                let s1 = (s0 + 1).min(last_src);
+                let src_frame0 = active.slice_start + s0; // サンプル内の絶対フレーム
+                let src_frame1 = active.slice_start + s1;
                 let dst_frame = dst_offset_frames + i;
-                // 線形 release エンベロープ（SC `linen` の fadeOut 部）。slice 末尾で
-                // クリックが出ないよう 1.0 → 0.0 へ線形に減衰させる。env は frame のみに
-                // 依存するので channel ループの外で 1 回求め、gain と束ねて amp にする。
-                let env = if active.fade_frames > 0 && slice_pos >= fade_start {
-                    (active.slice_len - slice_pos) as f32 / active.fade_frames as f32
+
+                // 末尾フェードアウト（線形 release・SC `linen` の fadeOut 部）。**出力時間**で
+                // 数える: 残り出力フレーム数が fade_frames 以下で 1.0→0.0 へ線形減衰。
+                // rate=1.0 では remaining = slice_len-pos となり従来条件と一致する。
+                let out_frames_remaining = ((slice_len as f64 - pos) / rate).ceil() as usize;
+                let env = if active.fade_frames > 0 && out_frames_remaining <= active.fade_frames {
+                    out_frames_remaining as f32 / active.fade_frames as f32
                 } else {
                     1.0
                 };
                 let amp = active.gain * env;
                 for ch in 0..output_channels {
                     let src_ch = ch.min(src_channels - 1);
-                    let src_idx = src_frame * src_channels + src_ch;
+                    let s0_idx = src_frame0 * src_channels + src_ch;
+                    let s1_idx = src_frame1 * src_channels + src_ch;
+                    // 線形補間した source 値（rate=1.0 では frac=0 で data[s0_idx] と一致）。
+                    let sample_val = active.sample.data[s0_idx] * (1.0 - frac)
+                        + active.sample.data[s1_idx] * frac;
                     let dst_idx = dst_frame * output_channels + ch;
                     let pan_mul = if ch == 0 { pan_l } else { pan_r };
-                    out[dst_idx] += active.sample.data[src_idx] * amp * pan_mul;
+                    out[dst_idx] += sample_val * amp * pan_mul;
                 }
+                active.read_pos += rate;
             }
-            active.read_pos += frames_to_copy;
         }
 
         // 混合後の出力バッファにフレーム単位のマスターゲインを適用する。
@@ -309,8 +362,8 @@ impl Scheduler {
 
         self.cursor_frames += frames_to_render as u64;
         // 再生完了したもの（= slice 領域を読み終えたもの）をドロップ。
-        // まだ開始時刻に到達していないイベントは read_pos == 0 のため自然に保持される。
-        self.events.retain(|a| a.read_pos < a.slice_len);
+        // まだ開始時刻に到達していないイベントは read_pos == 0.0 のため自然に保持される。
+        self.events.retain(|a| a.read_pos < a.slice_len as f64);
     }
 
     /// 現在の出力ストリーム時刻（秒）
@@ -555,6 +608,88 @@ mod tests {
     }
 
     #[test]
+    fn varispeed_rate_one_is_sample_exact() {
+        // rate=1.0 を明示しても frac=0 の補間で元サンプルにビット一致する（厳密な一般化）。
+        // ramp[i]=i を hard-left（L=源値）で流し、L 出力 = 0,1,2,...,9 を確認。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_mono_ramp(10))
+                .with_pan(-1.0)
+                .with_region(0, 10)
+                .with_rate(1.0),
+        );
+        let mut buf = vec![0.0f32; 40]; // 20 frames
+        s.render(&mut buf);
+        for i in 0..10 {
+            assert!((buf[2 * i] - i as f32).abs() < 1e-4, "f{i} L={}", buf[2 * i]);
+        }
+        assert_eq!(s.active_count(), 0);
+    }
+
+    #[test]
+    fn varispeed_double_rate_halves_output_and_steps_by_two() {
+        // rate=2.0: source を 2 フレーム歩幅で読む → 出力尺が半分、L 出力 = 0,2,4,6
+        // （= source[0,2,4,6]）。pitch が 1 オクターブ上がる varispeed の直接検証。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_mono_ramp(8))
+                .with_pan(-1.0)
+                .with_region(0, 8)
+                .with_rate(2.0),
+        );
+        let mut buf = vec![0.0f32; 40]; // 20 frames
+        s.render(&mut buf);
+        assert!((buf[0] - 0.0).abs() < 1e-4, "f0 L={}", buf[0]);
+        assert!((buf[2] - 2.0).abs() < 1e-4, "f1 L={}", buf[2]);
+        assert!((buf[4] - 4.0).abs() < 1e-4, "f2 L={}", buf[4]);
+        assert!((buf[6] - 6.0).abs() < 1e-4, "f3 L={}", buf[6]);
+        // 出力 4 フレーム（ceil(8/2)）で source 読み切り → f4 以降は無音。
+        assert!(buf[8].abs() < 1e-6, "f4 L (読み切り後)={}", buf[8]);
+        assert_eq!(s.active_count(), 0);
+    }
+
+    #[test]
+    fn varispeed_half_rate_doubles_output_with_interpolation() {
+        // rate=0.5: source を 0.5 フレーム歩幅で読む → 出力尺が倍、L 出力 = 0,0.5,1,1.5,...
+        // （線形補間値）。pitch が 1 オクターブ下がる varispeed の直接検証。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_mono_ramp(4))
+                .with_pan(-1.0)
+                .with_region(0, 4)
+                .with_rate(0.5),
+        );
+        let mut buf = vec![0.0f32; 40]; // 20 frames
+        s.render(&mut buf);
+        assert!((buf[0] - 0.0).abs() < 1e-4, "f0 L={}", buf[0]);
+        assert!((buf[2] - 0.5).abs() < 1e-4, "f1 L={}", buf[2]); // 補間
+        assert!((buf[4] - 1.0).abs() < 1e-4, "f2 L={}", buf[4]);
+        assert!((buf[6] - 1.5).abs() < 1e-4, "f3 L={}", buf[6]); // 補間
+        assert!((buf[8] - 2.0).abs() < 1e-4, "f4 L={}", buf[8]);
+        // 出力 8 フレーム（4/0.5）で読み切り → f8 以降は無音。
+        assert!(buf[16].abs() < 1e-6, "f8 L (読み切り後)={}", buf[16]);
+        assert_eq!(s.active_count(), 0);
+    }
+
+    #[test]
+    fn varispeed_invalid_rate_falls_back_to_one() {
+        // rate<=0 / 非有限は with_rate が 1.0 に丸める（無音化や逆走を誤って起こさない）。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_mono_ramp(6))
+                .with_pan(-1.0)
+                .with_region(0, 6)
+                .with_rate(0.0),
+        );
+        let mut buf = vec![0.0f32; 40];
+        s.render(&mut buf);
+        // rate=1.0 として 0,1,2,3,4,5 が出る。
+        assert!((buf[0] - 0.0).abs() < 1e-4, "f0 L={}", buf[0]);
+        assert!((buf[2] - 1.0).abs() < 1e-4, "f1 L={}", buf[2]);
+        assert_eq!(s.active_count(), 0);
+    }
+
+    #[test]
     fn set_global_gain_ramps_linearly_to_target() {
         let mut s = Scheduler::new(48_000, 2);
         // 直流 1.0 のモノラルサンプルを想定して 1ch 出力にすると計算が容易。
@@ -615,6 +750,21 @@ mod tests {
         s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100)));
         assert!(!s.stop("does-not-exist"));
         assert_eq!(s.active_count(), 1);
+    }
+
+    #[test]
+    fn stop_all_clears_every_event() {
+        // play_id 有無に依らず、発音中も開始待機中も全消去する（hard-stop-all）。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100))); // play_id 無し
+        s.schedule(
+            ScheduledSample::new(5.0, mk_sample_stereo(100)).with_play_id("p-a".to_string()),
+        );
+        assert_eq!(s.active_count(), 2);
+        assert_eq!(s.stop_all(), 2);
+        assert_eq!(s.active_count(), 0);
+        // 空に対しては 0 を返す（冪等）。
+        assert_eq!(s.stop_all(), 0);
     }
 
     #[test]
