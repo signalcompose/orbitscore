@@ -65,7 +65,8 @@
   スナップショット: <strong>2026-06-22</strong>（PR #318 / #300 α recovery floor 実装完了・マージ待ち時点）。
   本書は前向きな計画の <em>たたき台</em>であり、確定済みの正本ではない（今後 drift する前提）。
   正本ロードマップ = <code>POST_2.0_MASTER_PLAN.html</code> / アーキ = <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2</code>（§2.1–2.4 のアーキ決定は不変）。
-  次の <code>/goal</code> はここで選択肢を提示し、owner が選んだ時点で起草する。
+  <strong>owner 決定（2026-06-22）: 次フェーズ順序 = A3 → A4（§4）。</strong>
+  なお §6 は長期ビジョン（計測基盤と「聴く」研究）にも触れるが、それらは <strong>forward-looking な方向記録であり、PR #318（recovery floor）のコード射程ではない</strong>。
 </p>
 
 <div class="callout c-inv">
@@ -73,8 +74,9 @@
   ① 第1増分（#304 + #300）までの到達点を元の計画と照合する。
   ② <strong>cutover #108 までに何が残っているか</strong>（= 現行 .orbs audio を SC parity で鳴らす gap）を一望する。
   ③ #300 / #304 で<strong>意図的に defer した小粒のフォローアップ</strong>を漏れなく追跡する。
-  ④ 次の <code>/goal</code> 候補を trade-off 付きで owner に提示する。
+  ④ 次フェーズ（A3 → A4 + フォローアップ織り込み）の決定を記録する。
   ⑤ 仕様ドリフト監査の結果と本 PR での修正範囲を記録する。
+  ⑥ <strong>計測 / 耳なし検証 基盤</strong>と、その先の「聴く」(score-following) ビジョン（別トラック）の依存関係を north-star として記録する。
 </div>
 
 <h2>1. 到達点（元の計画 vs 完了）</h2>
@@ -170,24 +172,53 @@
   <p><strong>目的</strong>: audio DSL を pitch DSL の上位集合に（#213 <code>fixpitch()</code>/<code>time()</code> 含む・in-process・S1 基盤）+ audio 機能（slice #239 / audio <code>[ ]</code> #238）。<strong>前提</strong>: <strong>C1 pitch モデルの spec 先行</strong>（pitch を audio の真部分集合として設計し、後で上位互換にできなくなるのを防ぐ）。<strong>規模</strong>: design 重め。今の <code>.orbs</code> DSL は表現力として充分なので急がない（やる時はそれに集中）。</p>
 </div>
 
-<h2>4. 次の <code>/goal</code> 候補（owner 判断材料）</h2>
+<h2>4. 決定: A3 → A4 + フォローアップ織り込み（owner 2026-06-22）</h2>
 
-<p>第1増分が済んだので、次は cutover に向けた parity gap を埋めるフェーズ。<strong>contained なもの（γ 非依存）を先に</strong>するのが素直で、γ（最大・最高リスク）は独立スコープで扱うのが安全。最終判断は owner。</p>
+<p>
+  contained な parity-filler（γ 非依存）を <strong>A3 → A4 の順</strong>で実施する。
+  各フェーズの<strong>自然な拾い所に #300/#304 のフォローアップ小粒を織り込み</strong>、
+  <strong>A3+A4 完了時点で defer backlog を一掃</strong>してから次（daemon CLAP 統合 → γ → δ → cutover #108）へ向かう。
+  γ（最大・最高リスク）は単一 /goal にせず「daemon CLAP 統合 → sandbox スパイク」と段階化する。
+</p>
 
-<table>
-  <thead><tr><th>候補</th><th>性質</th><th>pro</th><th>con / リスク</th></tr></thead>
-  <tbody>
-    <tr><td><strong>A3 time-stretch</strong></td><td>contained（in-process）</td><td>parity gap を1つ埋める・S2/#304 基盤の延長・隔離が要らない</td><td>Signalsmith Rust binding の成熟度が未知（先に短い spike が要る）</td></tr>
-    <tr><td><strong>A4 LinkAudio</strong></td><td>contained（隔離 module）</td><td>parity gap + Link tempo lead 復活・GPL 隔離は freemium 土台の実地検証</td><td>GPL 隔離境界 + lock-free 化の設計コスト</td></tr>
-    <tr><td>daemon CLAP 統合 → γ</td><td>大・最高リスク</td><td>effects parity の本丸・fault ② を作る</td><td>前例なし・spike 規模・cutover まで最長。<strong>単一 /goal にせず段階化</strong>推奨</td></tr>
-  </tbody>
-</table>
+<div class="track">
+  <h3>A3 — time-stretch（先）</h3>
+  <ul>
+    <li><strong>事前</strong>: Signalsmith Rust binding の feasibility spike（成熟度が未知）。permissive binding が無ければ <strong>stop &amp; report</strong>（C++ を FFI 隔離する経路も spike の答え次第）。</li>
+    <li><strong>core</strong>: stretch DSP（Signalsmith・permissive）/ slice rate≠1.0 / <code>fixpitch()</code>・<code>time()</code>（#213・現 stub）。<strong>検証は既存 offline ハーネス</strong>（<code>verify_schedule_pcm.rs</code>）で足りる ＝ <strong>capture は不要</strong>。</li>
+    <li><strong>織り込みフォローアップ</strong>:
+      <ul>
+        <li><strong>daemon hard-stop-all</strong> — stretch で長尺 voice が常態化し「in-flight 自然減衰」が顕在化する＝ここが trigger。着手時 <strong>TS 側 stop 意味論への波及</strong>に注意（daemon 内の StopAll + play_id 追跡は SC 非接触だが TS stop 経路は要確認）。</li>
+        <li><strong>Gap5（quit-during-respawn の CI テスト）</strong> — player（supervisor の在処）を触るので同梱が安い。</li>
+        <li><strong>bot Finding 2（connect 時二重ログ）</strong> — daemon-client を触る drive-by。</li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+<div class="track">
+  <h3>A4 — LinkAudio（後）</h3>
+  <ul>
+    <li><strong>core</strong>: Rust LinkAudio 隔離 GPL モジュール + lock-free / outputChannel parity / Link tempo lead（#283）。</li>
+    <li><strong>織り込みフォローアップ</strong>:
+      <ul>
+        <li><strong>active-loops の実 <code>loop()</code> across-respawn e2e</strong> — A4 完了時に pan/slice/stretch/LinkAudio 全部入りで full DSL を respawn 跨ぎ検証（recovery consolidation）。<strong>capture 非依存の state-level e2e</strong>（<code>createAudioEngine</code> 経由・onDispatch / daemon 状態クエリで検証）として軽く作る。</li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
+<div class="callout c-warn">
+  <span class="lbl">backlog 一掃後に残るのは2件だけ（意図的）</span>
+  <strong>① <code>play --capture</code> seam</strong> — A3/A4 とは独立（理由は §6）。<strong>② bot Finding 4（quit backoff latency）</strong> — trigger（即時 quit SLA）が無いので据え置き（無理に入れると YAGNI）。
+  この2件を除き、A4 完了で #300/#304 の defer backlog は解消する。
+</div>
 
 <div class="callout c-inv">
-  <span class="lbl">推奨（あくまで提案）</span>
-  次の <code>/goal</code> は <strong>A3（time-stretch）か A4（LinkAudio）</strong> の contained な parity-filler を1つ。
-  γ は「daemon CLAP 統合 → sandbox スパイク」と段階化して別途スコープ。
-  どれを先にするかは owner の優先度（time-stretch の表現欲しさ vs LinkAudio/Link lead の運用欲しさ）で決める。
+  <span class="lbl">A3+A4 の後</span>
+  recovery が完全に hardening され、parity gap は <strong>effects 以外</strong>解消する。次は
+  <strong>daemon CLAP 統合（γ の前提・A0 §13 carry-forward）→ γ out-of-process sandbox（effects + 3rd-party）→ δ VST3/AU → cutover #108</strong>。
+  <strong>耳なし実時間検証（capture）は cutover までに確実に load-bearing になる</strong>（§6）。
 </div>
 
 <h2>5. フォローアップ追跡（#300 / #304 で意図的に defer した小粒）</h2>
@@ -195,42 +226,42 @@
 <p>大フェーズと別に、第1増分で<strong>意図的に見送った細部</strong>。いずれも当時 advisor / レビューで「現スコープでは不要」と判断したもの。失わないよう記録する。</p>
 
 <table>
-  <thead><tr><th>項目</th><th>由来</th><th>なぜ defer したか</th><th>拾うトリガ</th><th>規模</th></tr></thead>
+  <thead><tr><th>項目</th><th>由来</th><th>なぜ defer したか</th><th>いつ拾うか（A3/A4 織り込み）</th><th>規模</th></tr></thead>
   <tbody>
     <tr>
-      <td><code>play --capture</code> seam（PCM 可聴ギャップ数値化）</td><td>#300 Optional / #307</td>
-      <td>state-level Core（invariant query）で #300 受け入れは満たせる。capture は real 出力 PCM の実時間取得が要る重い増分</td>
-      <td>可聴ギャップが実測で痛い時 / respawn を field test で PCM 数値化したい時（#307 のハーネス解析プリミティブを real stream に当てる）</td>
-      <td>中</td>
+      <td>daemon 側 hard-stop-all</td><td>S2 後续</td>
+      <td>短サンプル前提で respawn 時の in-flight voice は自然減衰を許容（recovery contract は可聴ギャップ許容）</td>
+      <td><strong>A3</strong> — stretch で長尺 voice が常態化し自然減衰が顕在化（daemon StopAll + play_id 追跡。<strong>TS stop 意味論への波及に注意</strong>）</td>
+      <td>小</td>
     </tr>
     <tr>
       <td>Gap5: <code>quit()</code> during respawn backoff の CI テスト</td><td>#300 pr-review round 2</td>
       <td>code-reviewer が <code>disposed</code> checkpoint + <code>await respawnPromise</code> で sound と確認。consequence は ~150ms window の cleanup race のみ（correctness 影響なし）</td>
-      <td>次に recovery / quit teardown を触る時</td>
-      <td>小</td>
-    </tr>
-    <tr>
-      <td>active loops の real <code>loop()</code> across-respawn e2e テスト</td><td>#300</td>
-      <td>player-level の continuous-stream プロキシ + 構造論（loop timer は <code>loop-sequence.ts</code> の setTimeout = 純 TS・daemon 非依存）で足りる。full interpreter 駆動は重い</td>
-      <td>cutover 前の総合 e2e 検証時（<code>createAudioEngine</code> 経由で実 <code>loop()</code> を kill 跨ぎ）</td>
-      <td>小〜中</td>
-    </tr>
-    <tr>
-      <td>daemon 側 hard-stop-all</td><td>S2 後续</td>
-      <td>短サンプル前提で respawn 時の in-flight voice は自然減衰を許容（recovery contract は可聴ギャップ許容）</td>
-      <td>長サンプル / 即時停止が要る時（daemon StopAll コマンド + play_id 追跡）</td>
+      <td><strong>A3</strong> — player（supervisor の在処）を触る際に同梱</td>
       <td>小</td>
     </tr>
     <tr>
       <td>bot Finding 2: connect 時 error の二重ログ</td><td>#300 @claude bot</td>
       <td>cosmetic（connect 失敗時のみ・永続 onError と once が二重に出る）。bot 自身が後回し合理的と判断</td>
-      <td><code>connectWebSocket</code> を触る時に once listener を open で detach</td>
+      <td><strong>A3</strong> — daemon-client を触る drive-by（once listener を open で detach）</td>
       <td>極小</td>
+    </tr>
+    <tr>
+      <td>active loops の real <code>loop()</code> across-respawn e2e テスト</td><td>#300</td>
+      <td>player-level の continuous-stream プロキシ + 構造論（loop timer は <code>loop-sequence.ts</code> の setTimeout = 純 TS・daemon 非依存）で足りる。full interpreter 駆動は重い</td>
+      <td><strong>A4 末</strong> — full DSL（pan/slice/stretch/LinkAudio）を respawn 跨ぎ。<strong>capture 非依存の state-level e2e</strong>（<code>createAudioEngine</code> 経由・onDispatch / daemon 状態クエリ）</td>
+      <td>小〜中</td>
+    </tr>
+    <tr>
+      <td><code>play --capture</code> seam（実時間 PCM tap）</td><td>#300 Optional / #307</td>
+      <td>A3 の stretch 検証には<strong>不要</strong>（offline 決定論 render で足りる）。capture が要るのは「実時間に本物の出力を録る」用途だけ。#300 Step0 で「含めない」と決定済</td>
+      <td><strong>A3/A4 とは独立</strong>（§6）。2 trigger 併記: <strong>(a)</strong> dog-food で可聴ギャップが痛く実測が要る時〔前倒しうる〕/ <strong>(b) cutover までに確実</strong>〔耳なし実時間検証の基盤〕</td>
+      <td>中</td>
     </tr>
     <tr>
       <td>bot Finding 4: <code>quit()</code> の backoff latency（最大 ~150ms）</td><td>#300 @claude bot</td>
       <td>live-coding 用途で許容範囲。現行要件で非問題</td>
-      <td>即時 quit の SLA が要る時（AbortController でキャンセル機構）</td>
+      <td><strong>据え置き</strong> — trigger（即時 quit SLA）が無い唯一の defer。出たら AbortController でキャンセル機構</td>
       <td>小</td>
     </tr>
   </tbody>
@@ -240,14 +271,48 @@
   なお #300 で <strong>解決済み</strong>のもの: S2 の partial-close window flood（<code>request()</code> が CLOSING で plain Error → <code>onPlaybackError</code> をすり抜ける = bot Finding 1）は本 PR で <code>DaemonConnectionError</code> 化して解消。
 </p>
 
-<h2>6. 明示 defer（このトラックで作らないもの・再掲）</h2>
+<h2>6. 計測 / 耳なし検証 基盤と、その先の「聴く」ビジョン（north-star）</h2>
+
+<p>
+  「人間の耳を介さずオーディオエンジンを検証する」ための<strong>計測レイヤ</strong>は、本リポジトリに既に半分存在する ──
+  verify ハーネス（#307 / #308 / #313）の解析プリミティブ（<code>region_rms</code> / onset 検出 / pan-from-LR / gap-RMS-floor、librosa で grounding 済）。
+  新トラックを発明せず、これを<strong>「計測 / 耳なし検証 基盤」として再ラベル</strong>し、その延長線上に capture と将来ビジョンを位置づける（owner の「資産再利用」志向に沿う）。
+</p>
+
+<h3>6.1 capture が load-bearing になる2つの独立 trigger</h3>
+<p>capture は単一の「cutover anchor」ではなく、性質も時期も違う2つの trigger を持つ（畳まない）:</p>
+<ul>
+  <li><strong>(a) recovery の可聴ギャップ実測</strong> — dog-food で「無音が痛い」と感じた時。<strong>早いかもしれないし来ないかもしれない</strong>（前倒しうる）。respawn を通る<strong>実時間</strong>出力が要るので offline では原理的に取れない。</li>
+  <li><strong>(b) 耳なし実時間検証の基盤</strong> — cutover で実エンジンに本気で乗る時、<strong>確実に必要</strong>。実時間の出力経路（scheduler→daemon→device→実サンプル）を耳でなく機械で回帰検証する。</li>
+</ul>
+<p class="small">
+  capture seam は S1 の <code>PostMixSink</code>（RT 安全な post-mix tap）パターンの延長で、<strong>パターンは実証済だが production daemon には未配線</strong>。
+  構成 = WAV を書く sink（音声スレッド外へ ring で逃がす）+ <code>--capture</code> CLI + off-thread writer。A3 には畳まない（stretch 検証は offline で足りる）。
+</p>
+
+<h3>6.2 north-star:「聴く」(score-following / アルゴリズム的聴取) ── 別トラックの研究ビジョン</h3>
+<div class="callout c-inv">
+  <span class="lbl">依存の向きと責務境界（2トラックの境界を溶かさないために）</span>
+  <strong>(C)</strong> = 演奏（入力音）から音響特徴を実時間抽出し、譜面（<code>.orbs</code>/pitch DSL 表現）+ テンポ感と照合して「今 譜面のどこか」を推定 → <strong>LLM がそれを頼りに演奏計画を立ててライブコーディング</strong>。
+  これは本来 <strong>WCTM（別トラック・締切 2026-08-07）側の野心</strong>で post-2.0 engine の<strong>スコープ外</strong>。
+  依存方向 = <strong>engine → 計測語彙 → (C)</strong>。post-2.0 engine track の責務は<strong>計測語彙をクリーンに保つことだけ</strong>で、(C) のアライメント層 / 入力経路 / streaming は抱え込まない。
+</div>
+<ul>
+  <li><strong>共有してよい = 特徴抽出の「語彙」</strong>: onset / level(RMS) / spectral / pan の<strong>定義</strong>。検証でも聴取でも同じ意味を持つ純粋な計測語彙 ＝ 再利用資産。</li>
+  <li><strong>用途別に保つ = 「配管」</strong>: 検証 = batch / 自出力(既知) / アライメント不要 / 出力 tap。(C) = streaming(因果・低遅延) / 他演奏(未知) / アライメント層(DTW 等) / <strong>入力</strong>経路。これらを見越した抽象を<strong>今 engine track で先回り実装しない</strong>（north-star は方向の記録であって先回り実装ではない＝投機的一般化の禁止）。</li>
+</ul>
+<p class="small">
+  正直な calibration: score-following 自体は確立した MIR 研究（Antescofo / Music Plus One 等）。<strong>新規性は「OrbitScore の譜面表現に対する整合 + LLM 計画駆動のライブコーディング」という統合部分</strong>に限る（「多分誰もやっていない」はこの統合に限定して言える）。チャレンジする価値はあるが、engine track はその<strong>土台（クリーンな計測語彙）を供給するだけ</strong>に留める。
+</p>
+
+<h2>7. 明示 defer（このトラックで作らないもの・再掲）</h2>
 <ul>
   <li>out-of-process per-plugin isolation = <strong>γ（fault ②）</strong> — daemon supervision が kill-test を通れば α では不要だった（→ §3 γ で扱う）。</li>
   <li>β audio DSL ⊇ pitch / time-stretch / LinkAudio(A4) / cutover #108 — §3 の各フェーズ。</li>
   <li><code>play --capture</code> seam（PCM 可聴ギャップ数値化）— §5 フォローアップ。</li>
 </ul>
 
-<h2>7. 仕様ドリフト監査（2026-06-22）</h2>
+<h2>8. 仕様ドリフト監査（2026-06-22）</h2>
 
 <p>第1増分（#304 + #300）完了に伴い、正本ドキュメントが「第1増分=未来形 / auto-respawn=未実装」と陳腐化していないか監査した。</p>
 
@@ -273,7 +338,7 @@
   <li>Epic #292（D-8）本文の「★最初の /goal」status: マージ後に <code>gh</code> で「✅ 完了（PR #305 + PR #318）」へ更新。</li>
 </ul>
 
-<h2>8. 運用規律（不変）</h2>
+<h2>9. 運用規律（不変）</h2>
 <ul>
   <li><strong>license</strong>: engine の依存を permissive に保つ・GPL は隔離（time-stretch=Signalsmith / Ableton Link=別 crate）。freemium の土台。</li>
   <li><strong>委譲（#298 profile）</strong>: 判断・seam・プロンプト設計・RT/CLAP correctness は <strong>Opus 直列</strong>。固定インターフェース内の隔離実装・純関数は <strong>Sonnet subagent 並列</strong>。delegated output は Opus が実機 / spec で実ゲート。</li>
