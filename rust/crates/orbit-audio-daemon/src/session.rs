@@ -358,6 +358,21 @@ async fn handle_command(
                 Err(e) => err(&id, wrap_err_to_protocol(&e)),
             }
         }
+        // gated な fault 注入（recovery floor / #300 の kill-test 専用・単一動作なので unit コマンド）。
+        // ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 のときだけ受理する（既定では出荷時に無効）。
+        // daemon を panic させ、main.rs の panic hook 経由で stderr に DaemonError を出し exit(1)
+        // する = TS supervisor が検出すべき clean-exit 経路。C-ABI segfault / SIGKILL（panic hook
+        // 素通りの hard-death）は外部 kill で別途試す（supervisor から見れば ws drop に収束するので
+        // daemon 内に segfault コマンドは不要）。将来 fault 種を増やすなら param を by-design で足す。
+        "InjectFault" => {
+            if std::env::var("ORBIT_DAEMON_ALLOW_FAULT_INJECTION").as_deref() != Ok("1") {
+                return err(
+                    &id,
+                    ProtocolError::new("MALFORMED_REQUEST", "fault injection not enabled"),
+                );
+            }
+            panic!("orbit-audio-daemon: injected panic for recovery-floor kill-test")
+        }
         other => err(
             &id,
             ProtocolError::new("MALFORMED_REQUEST", format!("unknown method: {other}")),

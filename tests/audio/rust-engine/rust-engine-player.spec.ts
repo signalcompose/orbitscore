@@ -376,24 +376,172 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
-  it('daemon 切断時は poll を停止し error を一度だけ出す（flood しない）', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // LoadSample を hang させ、複数イベントを in-flight のまま切断する。
-    const p = await boot(defaultHandlers({ LoadSample: () => new Promise(() => {}) }))
-    p.scheduleEvent('/audio/a.wav', 0, 0, 0, 'seqA')
-    p.scheduleEvent('/audio/b.wav', 0, 0, 0, 'seqA')
-    p.scheduleEvent('/audio/c.wav', 0, 0, 0, 'seqA')
+  // --- recovery floor（daemon supervision + auto-respawn / #300） ---
+
+  it('daemon 切断時は respawn → 再接続 → 再 establish し、poll を止めず再生を継続する', async () => {
+    // respawn は warn を多数出すので抑制（noise 排除）。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // 連続供給（active loops の代理）: 0..1500ms に 50ms 間隔でイベントを撒く。
+    for (let t = 0; t <= 1500; t += 50) p.scheduleEvent('/audio/loop.wav', t, 0, 0, 'seqA')
     p.start()
-    // 3 件の LoadSample が daemon に届き pending になるのを待つ。
-    await waitFor(() => server.received.filter((r) => r.method === 'LoadSample').length >= 3)
-    // WebSocket を閉じる → pending が全て DaemonConnectionError で reject。
+    // 初回 dispatch（PlayAt）が走るのを待ち、その時点を drop の基準点にする。
+    await waitFor(() => server.received.some((r) => r.method === 'PlayAt'))
+    const dropMark = server.received.length
+    // 接続だけ落とす（server は listen 継続 = 実 daemon の死 → 同一 URL へ再接続可能を模す）。
+    server.dropConnections()
+    // respawn → 再接続 → 再 establish（GetStatus が drop 後に届く）を待つ。
+    await waitFor(() => server.received.slice(dropMark).some((r) => r.method === 'GetStatus'), {
+      timeoutMs: 3000,
+    })
+    // 復帰後も dispatch が続く（active loops の構造的復帰）。
+    await waitFor(() => server.received.slice(dropMark).some((r) => r.method === 'PlayAt'), {
+      timeoutMs: 3000,
+    })
+    expect(p.isRunning).toBe(true) // poll は止まっていない
+    // 新 daemon は空 → sample が再ロードされる（sampleIds キャッシュ破棄の証左）。
+    expect(server.received.slice(dropMark).some((r) => r.method === 'LoadSample')).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  it('respawn が上限まで失敗したら poll を止め、fatal を一度だけ出す（プロセスは生存）', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    p.scheduleEvent('/audio/a.wav', 0, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => server.received.some((r) => r.method === 'PlayAt'))
+    // server ごと停止 → 再接続不可 → respawn は全試行失敗する。
     await server.stop()
-    await waitFor(() => !p.isRunning) // 切断検出で scheduler 停止
-    await new Promise((r) => setTimeout(r, 20))
-    const connLostLogs = errorSpy.mock.calls.filter((c) => String(c[0]).includes('connection lost'))
-    expect(connLostLogs.length).toBe(1) // 3 件失敗しても通知は 1 度だけ
+    // MAX_RESPAWN_ATTEMPTS 回失敗後に poll が止まる。
+    await waitFor(() => !p.isRunning, { timeoutMs: 5000 })
+    const fatal = errorSpy.mock.calls.filter((c) => String(c[0]).includes('respawn failed'))
+    expect(fatal.length).toBe(1) // 断念通知は一度だけ（flood しない）
     expect(p.isRunning).toBe(false)
+    // TS プロセスは生存している（このテストが続行できている事自体が証左）。
+    warnSpy.mockRestore()
     errorSpy.mockRestore()
+  })
+
+  it('respawn 後は stale anchor を捨て新 daemon の transport へ再 anchor する（desync 防止）', async () => {
+    // recovery の唯一 load-bearing 不変式の CI-safe カバレッジ（gated 実機テストの mock 版）。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot() // GetStatus uptime=10 → anchor≈10
+    // 古い daemon が長時間回っていた状況を作る: StreamStats で anchor を ~50 へ進める。
+    server.broadcastEvent('StreamStats', { now_sec: 50 })
+    for (let t = 0; t <= 4000; t += 100) p.scheduleEvent('/audio/loop.wav', t, 0, 0, 'seqA')
+    p.start()
+    // anchor が 50 に進んだことを dispatch の time_sec で確認（pre-drop は ~50）。
+    await waitFor(() => playAtRecords().some((r) => (r.time_sec as number) > 40))
+    const dropMark = server.received.length
+    // 接続だけ落として respawn。新 daemon の GetStatus は uptime=10（< 50）を返す。
+    server.dropConnections()
+    await waitFor(() => server.received.slice(dropMark).some((r) => r.method === 'PlayAt'), {
+      timeoutMs: 3000,
+    })
+    // 再 anchor されていれば post-respawn の time_sec は新 daemon の uptime(≈10)+lookahead 付近で、
+    // stale な 50 を引きずらない（= stale anchor で「数十秒先」を送る desync が起きない）。
+    const postTimes = server.received
+      .slice(dropMark)
+      .filter((r) => r.method === 'PlayAt')
+      .map((r) => r.params.time_sec as number)
+    expect(postTimes.length).toBeGreaterThan(0)
+    expect(Math.min(...postTimes)).toBeLessThan(20)
+    warnSpy.mockRestore()
+  })
+
+  it('respawn 中に in-flight だった one-shot は再発火しない（drop される）', async () => {
+    // #300 recovery contract「in-flight one-shot は drop（再発火しない）」の CI-safe カバレッジ。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot(
+      defaultHandlers({
+        // oneshot の PlayAt は in-flight のまま hang させ、その状態で接続を落とす。
+        PlayAt: (params) =>
+          String(params.sample_id).includes('oneshot')
+            ? new Promise<Record<string, unknown>>(() => {})
+            : Promise.resolve({ play_id: 'p-cont' }),
+      }),
+    )
+    const oneShotCount = (): number =>
+      server.received.filter(
+        (r) => r.method === 'PlayAt' && String(r.params.sample_id).includes('oneshot'),
+      ).length
+    // 一度だけ撒く one-shot（time 0）と、生存確認用の継続ストリーム。
+    p.scheduleEvent('/audio/oneshot.wav', 0, 0, 0, 'oneshotSeq')
+    for (let t = 0; t <= 4000; t += 100) p.scheduleEvent('/audio/cont.wav', t, 0, 0, 'contSeq')
+    p.start()
+    await waitFor(() => oneShotCount() >= 1) // one-shot PlayAt が in-flight になった
+    const oneShotBefore = oneShotCount()
+    const dropMark = server.received.length
+    server.dropConnections() // one-shot を in-flight のまま落とす
+    // respawn → 継続ストリームが新 daemon へ復帰（系が生きている）。
+    await waitFor(
+      () =>
+        server.received
+          .slice(dropMark)
+          .some((r) => r.method === 'PlayAt' && String(r.params.sample_id).includes('cont')),
+      { timeoutMs: 3000 },
+    )
+    // 遅れて再発火が来ても拾えるよう settle 猶予を置いてから確認（兄弟の不在 assert と同じ慣行）。
+    await new Promise((r) => setTimeout(r, 30))
+    // one-shot は再発火していない（drop 後に oneshot の PlayAt が増えていない）。
+    expect(oneShotCount()).toBe(oneShotBefore)
+    expect(p.isRunning).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  it('respawn の establishSession 中に新 daemon が即死しても retry して復帰する', async () => {
+    // Critical 回帰: 再死を getStatus が anchor=0 で吸収して誤って成功宣言する wedge を防ぐ。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let statusCalls = 0
+    const p = await boot(
+      defaultHandlers({
+        GetStatus: () => {
+          statusCalls++
+          // boot=1。最初の respawn の establishSession（=2）で再死させる。2回目以降の respawn で復帰。
+          if (statusCalls === 2) {
+            server.dropConnections()
+            return new Promise<Record<string, unknown>>(() => {}) // 応答前に socket が閉じる
+          }
+          return {
+            daemon_version: 'mock-0.0.0',
+            protocol_version: '0.1',
+            output_sample_rate: 48000,
+            output_channels: 2,
+            loaded_samples: 0,
+            active_plays: 0,
+            uptime_sec: 10,
+          }
+        },
+      }),
+    )
+    for (let t = 0; t <= 6000; t += 100) p.scheduleEvent('/audio/loop.wav', t, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => server.received.some((r) => r.method === 'PlayAt'))
+    server.dropConnections() // 1度目の死
+    // 再死（GetStatus call 2）を越えて 3 回目の GetStatus で復帰すること = retry が効いている証左。
+    await waitFor(() => statusCalls >= 3, { timeoutMs: 5000 })
+    const recoverMark = server.received.length
+    await waitFor(() => server.received.slice(recoverMark).some((r) => r.method === 'PlayAt'), {
+      timeoutMs: 3000,
+    })
+    expect(p.isRunning).toBe(true) // wedge せず復帰し dispatch 継続
+    warnSpy.mockRestore()
+  })
+
+  it('quit() は意図的 close なので respawn を起こさない', async () => {
+    const p = await boot()
+    p.scheduleEvent('/audio/a.wav', 0, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => server.received.some((r) => r.method === 'PlayAt'))
+    const statusBefore = server.received.filter((r) => r.method === 'GetStatus').length
+    await p.quit()
+    player = null // afterEach の二重 quit を避ける
+    // quit 後しばらく待っても respawn（新規 GetStatus = 再 establish）が起きない。
+    await new Promise((r) => setTimeout(r, 300))
+    const statusAfter = server.received.filter((r) => r.method === 'GetStatus').length
+    expect(statusAfter).toBe(statusBefore)
+    expect(p.isRunning).toBe(false)
   })
 })
 

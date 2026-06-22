@@ -17,6 +17,53 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.158 feat(engine): recovery floor — daemon supervision + auto-respawn + 最小 recovery contract (post-2.0 α / #300) (Jun 22, 2026)
+
+**Date**: 2026-06-22
+**Status**: ✅ 実装 + 全テスト緑（npm 1162 passed / 27 skipped・cargo daemon 全緑）+ **gated kill-test 2/2 PASS**（SIGKILL hard-death / InjectFault panic clean-exit）
+**Branch**: `300-recovery-floor-daemon-supervision`
+
+**背景**: post-2.0 engine track の最初の `/goal2`。owner 決定（2026-06-21・「機能より fundamental を先に」）= α recovery floor（fault ①）。**CLAP/Rust daemon が落ちても TS engine / アプリ全体が引きずられて落ちない**ことを保証する。後続 in-process 楽器（β〜）の安全網でもある（fault ③ = 1st-party in-process crash は①の respawn でのみ捕捉）。pan/slice/per-slice gain は goal1 #304 で実装済 = 再実装しない。正本: `POST_2.0_ENGINE_AND_DISTRIBUTION.md §2.2/§2.5/§7`・アーキ決定 #298（fault 3層 §4）。
+
+**接地した設計前提（コード調査で裏取り）**: 「active loops」を定義する状態は**全て TS 側に在る** — ループの再スケジュールは TS の `setTimeout`（`loop-sequence.ts`・daemon 非依存）、発火待ちキューは `RustEnginePlayer.scheduledPlays`+`liveSequences`。daemon が持つのは disposable な3つ（loaded samples / in-flight voices / transport clock）だけ。→ owner 前提（**権威保持者は TS・daemon は disposable**）が成立。よって supervisor は生存側 = `RustEnginePlayer` に置く（DaemonClient を所有し session 状態の権威を持つ唯一の自然な設置点）。
+
+**Step0 owner 決定（4問・全て推奨案で確定）**:
+1. recovery contract = #300 のまま確定（balloon させない）。replay すべき隠れ state は無く（global gain は rust 経路未使用・output device は default）、**active loops のみ replay + 再 anchor だけ**で満たす。
+2. fault 注入 = **kill -9（hard-death）+ gated panic コマンド（clean-exit/panic-hook 経路）**。「misbehave synth を segfault に拡張」は daemon が CLAP を非ホスト（daemon CLAP 統合は明示 defer の後続段）なので daemon を殺せない → owner と再設計。supervisor から見れば kill -9 と C-ABI segfault は ws drop に収束。
+3. kill-test = **ローカル実機 + 記録した手動 validation（gated・既定 skip）**。CI gate にしない（実プロセス kill は CI で flaky/危険・librosa cross-check と同パターン）。
+4. PCM 可聴ギャップ数値化（play --capture seam）は **含めない・state-level Core のみ**（#307 で明示 defer の重い増分）。
+
+**設計（advisor 承認）**:
+- **検出（両系統が単一経路に収束）**: `DaemonClient` が「quit() 由来でない ws close」を `daemon-died` event で emit。`intentionalClose` フラグで意図的 quit と crash を区別、`wasRunning` で起動成功後の close のみを死と判定。clean exit（panic hook→exit1）も hard death（segfault/SIGKILL・hook 素通り）も**どちらも ws close に収束**。kill -9 時の ws `error`（ECONNRESET）は永続 listener で吸収し unhandled throw による TS 巻き込みを防ぐ。
+- **supervisor（`RustEnginePlayer`）**: `daemon-died` → respawn（single-flight・backoff・上限5回）→ `establishSession`（getStatus 再 anchor + StreamStats off→on 再購読）。同一 DaemonClient を再利用し配線を安定化。
+- **唯一 load-bearing な不変式 = 再 anchor の「順序」**: 死後 `clockAnchor` は死んだ daemon の transport（例 2s）を指す。再 anchor 完了**前**に dispatch すると新 daemon（transport=0）へ「2 秒先」を送り 2 秒の desync。→ `respawning` フラグで再 anchor 完了まで `executePlayback` を guard（dispatch を drop = one-shot drop / gap・catch に頼らず順序保証）。`sampleIds` は破棄して lazy 再ロード、`durations` は file 由来で保持。
+- **active loops 復帰 = 構造的**: poll ループと TS の loop timer は死を跨いで生存 → respawn 後は自動的に新 daemon へ dispatch 再開。
+- **上限到達時**: TS プロセスは落とさず（recovery floor の最終保証）poll ループだけ止め fatal を一度だけ出す。
+
+**fault seam（gated）**: daemon に `InjectFault` コマンド（`ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1` のときだけ受理・既定無効）。panic→panic hook→exit(1)+stderr DaemonError = TS が検出すべき clean-exit 経路を実プロセスで通す。hard-death は外部 SIGKILL（daemon コード0行・panic hook 素通り = C-ABI segfault の忠実な代理）。
+
+**kill-test（#300 受け入れ gate・invariant ベース・実時間 kill は非決定的なので exact-match しない）**: `tests/audio/rust-engine/real-daemon-recovery.spec.ts`（PRODUCTION モード = player が daemon を spawn・所有し supervisor が実際に respawn する経路）。transport を ≥2s 進めてから kill（advisor: t≈0 だと stale anchor≈fresh anchor でバグが隠れる）。検証: (1) liveness=poll 生存・新 pid・loops 復帰、(2) **transport 再 anchor**=復帰後 daemonNowSec が kill 直前より大きく下がる（stale anchor を引きずらない・唯一 load-bearing）、(3) onset clip しない=lead≈lookahead、(4) daemon-side 状態クエリ=fresh uptime / sample 再ロード / active_plays 健全。CI-safe な supervisor 状態機械テスト（mock・respawn 成功/上限失敗の2本）も `rust-engine-player.spec.ts` に追加。
+
+**主な変更**: `DaemonClient`（`intentionalClose`/`daemon-died`/`socket-error` 吸収/`childPid`・`injectFault` seam/handshake orphan-reject 修正）、`RustEnginePlayer`（supervisor: `respawning`/`disposed`/`respawnPromise`・`establishSession`・`respawnLoop`・guard・`onPlaybackError` を respawn 任せに変更・`daemonPid`/`injectDaemonFault`/`getDaemonStatus` seam）、`session.rs`（gated `InjectFault`）、`protocol-types.ts`（`InjectFault` method）、`mock-daemon-server.ts`（`dropConnections`）。
+
+**/simplify（4観点並列）**: 適用 = ① respawnLoop を try/finally で `respawning=false` 単一リセット化 ② dead な `inflightLoads.clear()` 削除（rejected 時に `.finally` で自己削除済み）③ `delay()` inline 化 ④ `InjectFault` の kind 二重デフォルトを unit コマンドへ collapse（YAGNI）⑤ `socket-error` 診断 emit に house style 注記。altitude は構造（supervisor 配置 / detection seam / 同一 client 再利用 / 3フィールド / @internal seam / handshake catch）を affirm。skip = waitFor/定数抽出（gated 統合テストは兄弟 timing.spec と同じく self-contained が house style）・`delay`↔SC `sleep` 統合（SC 経路無改変）。
+
+**/code:pr-review-team（4専門・round 1）**: **Critical 1**（code-reviewer opus + silent-failure-hunter が独立に同一指摘）= respawn の `establishSession` 中に新 daemon が即死すると、getStatus の DaemonConnectionError を anchor=0 で吸収して誤って成功宣言 → 再死の daemon-died が single-flight に吸収され respawnPromise 解決 → 二度と respawn されず dispatch 永久 drop（recovery floor が黙って死ぬ）。修正 = respawnLoop で establishSession 後に `!isRunning()` を確認し retry（`continue`）。Important = `onPlaybackError` に DaemonQuitError 追加 / `socket-error` ghost event を console.warn 可視化 / test gap（再 anchor 不変式・in-flight one-shot 非再発火・quit が respawn 抑制）。Minor = `void ensureRespawn` の安全網 catch / quit の空 catch ログ化。CI-safe mock テスト4本追加（再 anchor desync・one-shot 非再発火・**re-death 回帰**・quit 抑制）。code-reviewer は残りの状態機械（respawning stuck / double-respawn / quit during respawn / intentionalClose race / 順序）を sound と確認。CI（build + code-review bot）pass。**round 2（独立再レビュー）**: code-reviewer(opus) は Critical 修正を実証検証（該当行を revert → re-death テストが wedge/timeout → 回帰テストに牙があると確認）し **CLEAN**。test-analyzer も 4 新テストを非 vacuous と検証し Critical/Important 0。silent-failure の Important 1（`ws-close-error` emit が無 consumer = 実質 silent。round-1 の onError console.warn 化と整合させ console.warn へ）+ Medium 1（re-death `continue` の warn 追加）+ polish（one-shot テストに settle 猶予）を follow-up で解消 → **Critical/Important = 0 に収束**。
+
+**`@claude` bot second-opinion（advisor 推奨・PR #294 前例で internal の blind spot を検出した実績）**: load-bearing seam に絞って起動。**Blocking issue なし**・load-bearing invariant 表は全 ✅（intentionalClose 判別 / wasRunning / handshake catch / respawning finally 順序 / re-death continue / sampleIds vs inflightLoads / single-flight / quit teardown / InjectFault gate）。Finding 1（actionable）= `request()` が CLOSING window で plain Error を投げ `onPlaybackError` の silent-drop を抜け misleading ログ1回（S2 既知 Finding F・correctness ではない）→ `DaemonConnectionError` 化で解消。Finding 3 = executePlayback ガードのコメントが post-guard TOCTOU は catch 任せである旨に触れていない → コメント精度化。Finding 2（connect 時 error の二重ログ・cosmetic）/ Finding 4（quit backoff latency・非問題）は bot 自身が後回し合理的と判断 → defer。
+
+**検証の境界（正直な明記）**: 「active loops 復帰」は **RustEnginePlayer レベルの continuous-stream プロキシ（gated kill-test + mock テスト）+ 構造論**で検証している。loop の再スケジュールは `loop-sequence.ts` の setTimeout（純 TS・daemon 非依存）なので daemon 死の影響を受けず、生存した poll ループへ scheduleEvent し続ける → respawn 後に新 daemon へ自動的に dispatch 再開、が構造的に成立する。ただし **実 `loop()` を `createAudioEngine` 経由 full interpreter で respawn 跨ぎさせる end-to-end は未実施**（S2 の timing parity が「直接駆動・end-to-end 未実施」と境界を明記したのと同型）。閉じる場合は gated e2e テスト1本で足りる（optional・owner 判断）。
+
+**follow-up note（非ブロック・code-reviewer round 2 で sound 確認済）**: Gap 5 = `quit()` が respawn の backoff 中（~150ms）に着地するケースの CI テストは未追加（`disposed` checkpoint + `await respawnPromise` で正しいと確認済・consequence は narrow window の cleanup race のみ）。
+
+**明示 defer**: out-of-process per-plugin isolation（γ・fault ②）/ β audio DSL⊇pitch / time-stretch / LinkAudio(A4) / cutover #108 / play --capture seam（PCM 可聴ギャップ数値化）。
+
+**post-#300 計画 doc + drift 監査（owner 依頼・本 PR 同梱）**: マージ前に「第1増分後の実装計画」を新規 `docs/development/POST_2.0_NEXT_STEPS.html`（snapshot 2026-06-22・MASTER_PLAN の前向きたたき台）に集約 = ①到達点（A0/S1/S1b/S2 + #304 + #300）②**cutover #108 までの parity gap**（#304 が warn/no-op に倒した time-stretch=A3 / LinkAudio=A4 / master effects=γ）③#300/#304 で意図的に defer した小粒の follow-up トラッカー（play --capture seam / Gap5 quit-during-respawn / active-loops e2e / daemon hard-stop-all / bot Finding 2・4）④次 /goal 候補（contained な A3/A4 を先に・γ は段階化、owner 判断）。仕様 drift 監査（agent）= **specs-v2 / core spec は engine/recovery 非言及で drift 無し**、recovery は DSL 意味論を変えないので core spec にセクション不要。事実 status の drift のみ本 PR で修正（done マーク）: ENGINE_AND_DISTRIBUTION §2.2「auto-respawn 未実装」→ 実装済 / §2.5・§7 第1増分=done / A0 §14 pan=done + Finding F 解消 / MASTER_PLAN.html §2・§3・§9 第1増分=done。既存正本の「次フェーズ=X」決定は書かず新 doc を参照（次の選択は owner にティーアップ）。Epic #292 本文 status はマージ後に gh で更新。
+
+**owner 決定（2026-06-22・advisor 反映）を NEXT_STEPS.html に追記**: ① **次フェーズ順序 = A3 time-stretch → A4 LinkAudio**、各フェーズの自然な拾い所にフォローアップを織り込み A3+A4 完了で backlog 一掃（A3: daemon hard-stop-all〔stretch で長尺 voice〕+ Gap5 + Finding2 / A4 末: active-loops e2e〔capture 非依存の state-level〕）。残るは capture と Finding4 のみ（意図的）。② **capture seam は A3 に畳まない**（stretch 検証は offline で足りる・#300 Step0 の「含めない」決定を覆さない）。capture は 2 独立 trigger=（a）dog-food の可聴ギャップ実測〔前倒しうる〕/（b）耳なし実時間検証基盤〔cutover までに確実〕。③ **計測/耳なし検証レイヤ（#307/#308/#313 verify ハーネス + librosa grounding）を再利用資産として再ラベル**（新トラック発明せず）。④ **north-star: (C) score-following / アルゴリズム的「聴く」/ LLM 演奏計画は WCTM 別トラックの研究ビジョン**（engine スコープ外）。依存方向 = engine→計測語彙→(C)、責務境界 = engine は計測語彙をクリーンに保つだけ・(C) の alignment/入力/streaming は抱えない。共有=特徴抽出の語彙 / 用途別=配管。新規性は「DSL 譜面整合 + LLM 計画駆動」の統合部分に限定（score-following 自体は確立 MIR）。先回り実装はしない（投機的一般化の禁止）。
+
+**Commit**: 7aabde7（実装 + /simplify cleanup）/ ff4259c（pr-review-team round 1）/ ff9bb72（round 2 → Critical/Important=0 収束）/ + bot follow-up + post-#300 計画 doc・drift 監査
+
 ### 6.157 verify(audio): retroactively self-verify #304 (examples/22 params) via harness — close #307 (#316) (Jun 21, 2026)
 
 **Date**: 2026-06-21

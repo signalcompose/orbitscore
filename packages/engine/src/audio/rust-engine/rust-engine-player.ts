@@ -41,7 +41,7 @@ import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
 
 import { DaemonClient } from './daemon-client'
-import { DaemonConnectionError } from './errors'
+import { DaemonConnectionError, DaemonQuitError } from './errors'
 
 /**
  * boundary で明示する制約の種別。
@@ -146,6 +146,10 @@ const POLL_INTERVAL_MS = 1
 const MAX_DRIFT_MS = 1000
 /** chop slice の rate が 1.0 からこの幅を超えて外れたら time-stretch 未対応として 1 回 warn する。 */
 const SLICE_RATE_TOLERANCE = 0.01
+/** daemon が死んだとき respawn を試みる最大回数。枯渇したら recovery を断念し poll を止める。 */
+const MAX_RESPAWN_ATTEMPTS = 5
+/** respawn 試行間の固定バックオフ（crash loop 緩和 + port 解放待ち）。 */
+const RESPAWN_BACKOFF_MS = 150
 
 /** feature gap warning の初期状態（フィールド初期化子で arm・stopAll で再 arm に使う）。 */
 const freshWarned = (): Record<GapKind, boolean> => ({
@@ -178,6 +182,18 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private readonly inflightLoads = new Map<string, Promise<string>>()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
 
+  // --- supervisor 状態（recovery floor / #300） ---
+  /**
+   * respawn 進行中は executePlayback の dispatch を止める。stale な clockAnchor のまま新 daemon
+   * （transport=0）へ「数秒先」を送って desync するのを防ぐ、recovery の唯一 load-bearing な不変式。
+   * 死検出で true、再 anchor（establishSession）完了後に false。
+   */
+  private respawning = false
+  /** quit() 済みフラグ。respawn ループと onDaemonDied がこれを見て中断する。 */
+  private disposed = false
+  /** respawn の single-flight ガード（death/close/reject が同時多発しても二重 spawn させない）。 */
+  private respawnPromise: Promise<void> | null = null
+
   /** feature gap の 1 回限り warning。stopAll で再 arm する。 */
   private warned: Record<GapKind, boolean> = freshWarned()
 
@@ -187,6 +203,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
     this.wsUrlOverride = options.wsUrlOverride
     this.lookaheadSec = options.lookaheadSec ?? DEFAULT_LOOKAHEAD_SEC
     this.onDispatch = options.onDispatch
+    // daemon の予期せぬ死を supervise する（recovery floor / #300）。意図的 quit は DaemonClient が
+    // intentionalClose で抑制するので、このリスナは crash（panic→exit / segfault / kill）のみ発火する。
+    this.daemon.on('daemon-died', this.onDaemonDied)
   }
 
   // --- AudioEngine surface ---
@@ -221,8 +240,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
 
     await this.daemon.start({ daemonPath: this.daemonPath, wsUrlOverride: this.wsUrlOverride })
+    await this.establishSession()
+  }
 
-    // 暫定 anchor: uptime_sec ≈ transport now_sec（共に stream 開始から実時間で進む）。
+  /**
+   * 接続確立後の session 確立: transport anchor の初期化 + StreamStats 購読。boot と respawn が共有。
+   *
+   * 順序が load-bearing: getStatus で初期 anchor を確定**してから** StreamStats を subscribe する
+   * （逆順だと getStatus の await 中に届いた精緻な now_sec を、後続の uptime_sec が後退上書きしうる）。
+   * off→on で二重購読も防ぐ（respawn は同一 DaemonClient を再利用するため必須）。
+   */
+  private async establishSession(): Promise<void> {
+    // 暫定 anchor: uptime_sec ≈ transport now_sec（共に stream 開始から実時間で進む）。respawn 後は
+    // 新 daemon の uptime（≈0）へ再 anchor され、死んだ daemon の古い transport との desync を断つ。
     try {
       const status = await this.daemon.getStatus()
       const uptime = Number(status.uptime_sec)
@@ -231,19 +261,125 @@ export class RustEnginePlayer implements AudioEngineBackend {
       // anchor=0 は初回 StreamStats（≤約1s）で自己修復するが、その間 onset clip しうるので
       // 無言にせず通知する（空 catch を避ける）。
       console.warn(
-        '⚠️  [rust-engine] getStatus() failed during boot — clock anchor defaults to 0 (self-heals on first StreamStats):',
+        '⚠️  [rust-engine] getStatus() failed — clock anchor defaults to 0 (self-heals on first StreamStats):',
         err,
       )
       this.clockAnchor = { tsMs: Date.now(), daemonSec: 0 }
     }
 
-    // 初期 anchor 確定後に subscribe。off→on で二重 boot 時の listener 累積も防ぐ。
+    // 初期 anchor 確定後に subscribe。off→on で二重購読（再 boot / respawn）を防ぐ。
     this.daemon.off('stream-stats', this.onStreamStats)
     this.daemon.on('stream-stats', this.onStreamStats)
   }
 
+  /**
+   * daemon の予期せぬ死（panic→exit / segfault / SIGKILL）を DaemonClient の 'daemon-died' から
+   * 受ける（recovery floor / #300）。session 状態の権威は生存側 TS にある（active loops は loop
+   * timer + poll ループ + scheduledPlays が TS 保持）ので、daemon を respawn して接続を再確立すれば
+   * loops は構造的に復帰する。daemon が持つのは disposable な状態（loaded samples / in-flight
+   * voices / transport clock）だけで、それぞれ lazy 再ロード / drop / 再 anchor で回復する。
+   */
+  private readonly onDaemonDied = (): void => {
+    if (this.disposed) return // quit() 進行中 — respawn しない
+    // 再 anchor 完了まで dispatch を止める（respawning の宣言コメント参照・唯一 load-bearing）。
+    this.respawning = true
+    console.warn('⚠️  [rust-engine] daemon died unexpectedly — respawning…')
+    // respawnLoop は try/finally で自己完結するが、想定外の throw（将来の改変等）が
+    // unhandled rejection になって TS プロセスを巻き込まないよう安全網を張る。
+    void this.ensureRespawn().catch((err) => {
+      console.error('❌ [rust-engine] unexpected error escaped respawn loop:', err)
+      this.respawning = false
+    })
+  }
+
+  /** respawn を single-flight 化する（同時多発する death/close/reject で二重 spawn しないため）。 */
+  private ensureRespawn(): Promise<void> {
+    if (this.respawnPromise) return this.respawnPromise
+    this.respawnPromise = this.respawnLoop().finally(() => {
+      this.respawnPromise = null
+    })
+    return this.respawnPromise
+  }
+
+  /**
+   * daemon を再起動し session を再確立する。再 anchor（establishSession）が完了するまで
+   * `respawning` を倒さない（executePlayback の guard が dispatch を止め続ける）= 順序が load-bearing。
+   * 上限到達時は TS プロセスを落とさず（recovery floor の最終保証）poll ループだけ止めて断念する。
+   */
+  private async respawnLoop(): Promise<void> {
+    try {
+      for (let attempt = 1; attempt <= MAX_RESPAWN_ATTEMPTS; attempt++) {
+        if (this.disposed) return
+        // crash loop 緩和 + port 解放待ち（disposed は delay 後に再チェックする）。
+        await new Promise<void>((resolve) => setTimeout(resolve, RESPAWN_BACKOFF_MS))
+        if (this.disposed) return
+        try {
+          await this.daemon.start({
+            daemonPath: this.daemonPath,
+            wsUrlOverride: this.wsUrlOverride,
+          })
+          // quit() が割り込んだら、立てたばかりの daemon は quit() の daemon.quit() が回収する。
+          if (this.disposed) return
+          await this.establishSession()
+          if (this.disposed) return
+          // establishSession 中に新 daemon が即死すると、getStatus は DaemonConnectionError を
+          // anchor=0 で吸収して正常 return しうる。ここで生存を確認せず成功宣言すると、再死の
+          // daemon-died は single-flight で本ループに吸収されたまま respawnPromise が解決し、二度と
+          // respawn されず dispatch が永久に drop される（recovery floor が黙って死ぬ最悪ケース）。
+          // benign な getStatus 失敗（daemon 生存・anchor は StreamStats で自己修復）は isRunning が
+          // true なので success へ進む。実際の再死のときだけ retry に回す（沈黙させず可視化する）。
+          if (!this.daemon.isRunning()) {
+            console.warn(
+              `⚠️  [rust-engine] daemon re-died during session re-establishment ` +
+                `(attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}) — retrying…`,
+            )
+            continue
+          }
+          // 新 daemon は空。古い sample_id は無効 → 破棄し ensureLoaded に lazy 再ロードさせる
+          // （durations は file 由来で不変なので保持し slice 領域解決に使う）。inflightLoads の旧
+          // エントリは ws close の reject で各自の .finally が既に delete 済み。
+          this.sampleIds.clear()
+          console.warn(
+            `✅ [rust-engine] daemon respawned and session re-established (attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}).`,
+          )
+          return
+        } catch (err) {
+          console.warn(
+            `⚠️  [rust-engine] respawn attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS} failed:`,
+            err,
+          )
+        }
+      }
+      // 上限到達 — recovery 断念。TS プロセスは落とさず poll ループだけ止める。
+      console.error(
+        `❌ [rust-engine] daemon respawn failed after ${MAX_RESPAWN_ATTEMPTS} attempts — ` +
+          `stopping playback (the TS process stays alive).`,
+      )
+      this.stop()
+    } finally {
+      // すべての退出経路（成功 = 再 anchor 後 / disposed / 上限到達）で dispatch ガードを解除する
+      // 単一の正準リセット。成功時は establishSession 完了後の return が finally を通るので、再 anchor
+      // 前に dispatch が再開される事はない（順序は load-bearing・guard 解除はここだけ）。
+      this.respawning = false
+    }
+  }
+
   async quit(): Promise<void> {
+    this.disposed = true
     this.stopAll()
+    this.daemon.off('daemon-died', this.onDaemonDied)
+    this.daemon.off('stream-stats', this.onStreamStats)
+    // respawn 進行中なら収束を待ってから daemon を落とす（立てたばかりの daemon も回収する）。
+    // disposed=true なので respawnLoop は次のチェックポイントで抜ける。
+    if (this.respawnPromise) {
+      try {
+        await this.respawnPromise
+      } catch (err) {
+        // respawnLoop は disposed=true で早期 return するので通常は throw しない。想定外の
+        // 失敗でも quit は続行するが、silent に握り潰さず記録する。
+        console.warn('[rust-engine] quit: respawn settled with an unexpected error:', err)
+      }
+    }
     await this.daemon.quit()
   }
 
@@ -419,6 +555,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   private async executePlayback(play: ScheduledPlay): Promise<void> {
+    // daemon 復旧中（respawn）/ 切断中は dispatch を drop する。stale clockAnchor のまま新 daemon
+    // （transport=0）へ「数秒先」を送って desync するのを防ぎ、in-flight one-shot を再発火させない
+    // （可聴ギャップは許容）。このガードは「ガード時点で復旧中と判っている」ケースを順序保証で止める。
+    // ガード通過後に await（ensureLoaded/playAt）で yield 中に死ぬ TOCTOU は onPlaybackError の
+    // silent-drop（DaemonConnectionError / respawning / !isRunning）が拾う＝二段構え。
+    if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
       if (!this.liveSequences.has(play.sequenceName)) return
@@ -461,16 +603,23 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * poll-loop の executePlayback 失敗ハンドラ。daemon 切断（WebSocket close）は fatal
-   * として scheduler を停止し**一度だけ**通知する（さもないと queue 全 note が個別に
-   * console.error を吐き flood する）。停止後の in-flight 失敗や teardown race は `isRunning`
-   * ガードで抑制する。それ以外（単発の不正サンプル等）は当該 note だけ error ログ。
+   * poll-loop の executePlayback 失敗ハンドラ。daemon 切断（WebSocket close）は **supervisor の
+   * respawn が処理する** ので、ここでは poll ループを止めず当該 dispatch を静かに drop する
+   * （recovery floor / #300）。死んだ瞬間の in-flight playAt/loadSample は close で reject されて
+   * ここへ流れ込むが、respawn 中の guard と合わせて flood も止む。停止後の teardown race は
+   * `isRunning` ガードで抑制。それ以外（単発の不正サンプル等）は当該 note だけ error ログを出す。
    */
   private onPlaybackError(play: ScheduledPlay, err: unknown): void {
     if (!this.isRunning) return // 既に stop/stopAll/quit 済み — teardown race を抑制
-    if (err instanceof DaemonConnectionError || !this.daemon.isRunning()) {
-      console.error('❌ [rust-engine] daemon connection lost — stopping playback:', err)
-      this.stop()
+    // 接続喪失（死の瞬間の in-flight 失敗 / respawn 中）は supervisor 任せ → 静かに drop。
+    // DaemonQuitError は quit() 中の in-flight reject（stopAll が isRunning を倒すので普通は上の
+    // guard が拾うが、ordering 変更に強くするため明示的にも drop する。injectFault と対称）。
+    if (
+      err instanceof DaemonConnectionError ||
+      err instanceof DaemonQuitError ||
+      this.respawning ||
+      !this.daemon.isRunning()
+    ) {
       return
     }
     console.error(
@@ -587,6 +736,31 @@ export class RustEnginePlayer implements AudioEngineBackend {
    */
   seedDuration(filepath: string, seconds: number): void {
     this.durations.set(filepath, seconds)
+  }
+
+  /**
+   * 現在の daemon 子プロセスの PID（recovery floor の kill-test が hard-death = SIGKILL を
+   * 外から注入するための read-only seam）。@internal — production code は使用しない。
+   */
+  get daemonPid(): number | undefined {
+    return this.daemon.childPid
+  }
+
+  /**
+   * gated な fault を daemon に注入する（kill-test 専用 / @internal）。clean-exit（panic hook）
+   * 経路を試すのに使う。daemon は ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 のときだけ受理する。
+   */
+  async injectDaemonFault(): Promise<void> {
+    return this.daemon.injectFault()
+  }
+
+  /**
+   * 現在 live な daemon の状態スナップショット（kill-test の daemon-side 状態クエリ用 / @internal）。
+   * respawn 後に uptime_sec（≈transport）/ loaded_samples / active_plays を読み、再 anchor と
+   * セッション再確立を daemon 側から検証する（#300 の orphaned play_id / active loops 復帰の接地）。
+   */
+  async getDaemonStatus(): Promise<Record<string, unknown>> {
+    return this.daemon.getStatus()
   }
 
   private warnOnce(kind: GapKind, message: string): void {

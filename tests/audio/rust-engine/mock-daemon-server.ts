@@ -100,6 +100,22 @@ export class MockDaemonServer {
     return url
   }
 
+  /**
+   * 接続中の socket だけを閉じ、server は listen させたままにする（recovery floor の
+   * respawn テスト用）。実 daemon のプロセス死 → client 側 ws close を模擬しつつ、
+   * 同一 URL への再接続を可能にする。`stop()` は server ごと閉じるので再接続不可。
+   */
+  dropConnections(): void {
+    for (const s of this.sockets) {
+      try {
+        s.close()
+      } catch {
+        /* swallow */
+      }
+    }
+    this.sockets.clear()
+  }
+
   /** テストから任意の event を流すための helper。 */
   broadcastEvent(event: string, data: Record<string, unknown>): void {
     const payload = JSON.stringify({ type: 'event', event, data })
