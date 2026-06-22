@@ -154,39 +154,48 @@ fn render_block(
 
     let bs = (hw.len() / output_channels) * output_channels;
 
-    // pass 1: ready な channel から render_multi 引数を per-callback stack ArrayVec で組む（heap alloc
-    // なし）。借用は render_multi 呼び出しまでに閉じる。not-ready / scratch 不足の channel は除外。
+    // egress に乗せる条件（pass 1/2 で同一）: ready かつ scratch が block 以上。両 pass で同じ判定を
+    // 使い divergence を防ぐ（pass 1 で render_multi に入れた channel と pass 2 で commit する channel を
+    // 一致させる）。`bs` を capture するだけで `le.channels` は借用しない。
+    let egress_active =
+        |ch: &LinkChannelActivate| ch.ready.load(Ordering::Relaxed) && ch.scratch.len() >= bs;
+
+    // pass 1: active な channel から render_multi 引数を per-callback stack ArrayVec で組む（heap alloc
+    // なし）。借用は render_multi 呼び出しまでに閉じる。
     let mut chans: ArrayVec<(&str, &mut [f32]), MAX_LINK_CHANNELS> = ArrayVec::new();
     for ch in le.channels.iter_mut() {
-        if !ch.ready.load(Ordering::Relaxed) {
+        if !egress_active(ch) {
+            // scratch は control が `MAX_BLOCK_FRAMES * channels`（device buffer より遥かに大）で事前
+            // 確保する不変。ready なのに不足したら channel audio が出ないので dev で loud に検出
+            // （not-ready は静かに skip・release は安全側で skip）。
+            debug_assert!(
+                !ch.ready.load(Ordering::Relaxed) || ch.scratch.len() >= bs,
+                "link channel '{}' scratch ({}) < block ({bs})",
+                ch.name,
+                ch.scratch.len()
+            );
             continue;
         }
-        // scratch は control が `MAX_BLOCK_FRAMES * channels`（device buffer より遥かに大）で事前確保。
-        // これが破れると channel audio が出ないので dev で loud に検出（release は skip = 安全側）。
-        debug_assert!(
-            ch.scratch.len() >= bs,
-            "link channel '{}' scratch ({}) < block ({bs})",
-            ch.name,
-            ch.scratch.len()
-        );
-        if ch.scratch.len() < bs {
-            continue;
-        }
-        // cap は control 強制なので溢れない。万一溢れたら defensive に break（silent cap だが
-        // 構造上到達不能・control 側が cap を error で surface する）。
         if chans
             .try_push((ch.name.as_str(), &mut ch.scratch[..bs]))
             .is_err()
         {
+            // cap は control（`register_channel`）が `MAX_LINK_CHANNELS` で強制するので構造上到達不能。
+            // ここに来たら control cap と callback ArrayVec 容量が drift した証拠 → dev で loud に
+            // （release は安全側で残り channel を skip・RT で panic させない）。
+            debug_assert!(
+                false,
+                "link channel pool exceeded ArrayVec cap {MAX_LINK_CHANNELS} (control cap drifted)"
+            );
             break;
         }
     }
     engine.render_multi(hw, &mut chans);
     drop(chans); // ArrayVec の借用を閉じてから sink commit（scratch を再借用するため）。
 
-    // pass 2: ready な channel の buffer を ring へ push（pass 1 と同一述語）。
+    // pass 2: pass 1 と同一述語の active channel の buffer を ring へ push。
     for ch in le.channels.iter_mut() {
-        if !ch.ready.load(Ordering::Relaxed) || ch.scratch.len() < bs {
+        if !egress_active(ch) {
             continue;
         }
         // 満杯なら RingTapSink が drop カウント（GPL consumer が produced-frames に算入し beat 維持）。

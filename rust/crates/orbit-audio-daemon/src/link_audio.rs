@@ -68,6 +68,14 @@ pub enum LinkRegisterError {
     ChannelLimit(usize),
 }
 
+/// consumer thread が回す 1 channel の状態（egress driver + per-channel な commit 失敗 streak）。
+/// streak を per-channel に持つことで、ある channel の成功が別 channel の失敗 streak を reset して
+/// health warn を masking するのを防ぐ（N-channel・A4-2b-2b）。
+struct ActiveChannel {
+    egress: LinkChannelEgress,
+    commit_fail_streak: u64,
+}
+
 /// GPL consumer thread の本体。`shutdown` が立つまでループし、registration を処理しつつ全 channel の
 /// egress を pump する。**teardown は drop 順ではなく明示 signal+join**（A0 §13 教訓）: 戻ると
 /// `channels` と `output` がこの thread 上で drop され `LinkAudioOutput::drop`→Link teardown が走る。
@@ -77,12 +85,9 @@ fn consumer_loop(
     shutdown: Arc<AtomicBool>,
 ) {
     // この thread が 1 つの LinkAudioOutput（Link session）を所有し、その上の複数 channel を
-    // それぞれ LinkChannelEgress で回す（N-channel・A4-2b-2b）。
-    let mut channels: Vec<LinkChannelEgress> = Vec::with_capacity(MAX_LINK_CHANNELS);
-    // commit 失敗（ChannelNotFound/CommitFailed）の連続回数。LinkAudio egress は hardware path の
-    // StreamStats のような observability surface を持たない（full な surface は follow-up・#329）ので、
-    // 最低限「音が Link peer に届いていない」を operator が log で気付けるよう throttle して warn する。
-    let mut commit_fail_streak: u64 = 0;
+    // それぞれ [`ActiveChannel`] で回す（N-channel・A4-2b-2b）。**commit 失敗 streak は per-channel**
+    // （channel-global にすると、ある channel の成功が別 channel の失敗 streak を reset して masking する）。
+    let mut channels: Vec<ActiveChannel> = Vec::with_capacity(MAX_LINK_CHANNELS);
     while !shutdown.load(Ordering::Relaxed) {
         // 1. registration を drain → 各 channel を Link 登録して egress を構築し、**ready flag を立てて
         //    callback の egress 開始を許可**する。登録失敗なら ready は false のまま（callback は push
@@ -91,15 +96,18 @@ fn consumer_loop(
             let max_num_samples = BLOCK_FRAMES * cmd.num_channels;
             match output.register_channel(&cmd.name, max_num_samples) {
                 Ok(id) => {
-                    channels.push(LinkChannelEgress::new(
-                        cmd.consumer,
-                        cmd.drops,
-                        id,
-                        cmd.num_channels,
-                        cmd.sample_rate,
-                        QUANTUM,
-                        BLOCK_FRAMES,
-                    ));
+                    channels.push(ActiveChannel {
+                        egress: LinkChannelEgress::new(
+                            cmd.consumer,
+                            cmd.drops,
+                            id,
+                            cmd.num_channels,
+                            cmd.sample_rate,
+                            QUANTUM,
+                            BLOCK_FRAMES,
+                        ),
+                        commit_fail_streak: 0,
+                    });
                     // ★ ここで初めて callback がこの channel を render_multi / commit 対象にする。
                     cmd.ready.store(true, Ordering::Relaxed);
                 }
@@ -116,19 +124,25 @@ fn consumer_loop(
 
         // 2. 全 channel を pump（共有 output を & で渡す）。1 つでも commit したら sleep しない。
         let mut pumped = false;
-        for egress in channels.iter_mut() {
-            while let Some(rc) = egress.pump_once(&output) {
+        for ch in channels.iter_mut() {
+            while let Some(rc) = ch.egress.pump_once(&output) {
                 pumped = true;
                 match rc {
                     // NoSubscriber は Live 未参加の通常状態（silent）。回復で streak をリセット。
-                    CommitResult::Committed | CommitResult::NoSubscriber => commit_fail_streak = 0,
+                    CommitResult::Committed | CommitResult::NoSubscriber => {
+                        ch.commit_fail_streak = 0
+                    }
                     // 購読者ありで commit 失敗 / channel 消失。音が Link に届かない health signal。
+                    // streak は **per-channel**（他 channel の成功で masking されない）。
                     CommitResult::CommitFailed | CommitResult::ChannelNotFound => {
-                        commit_fail_streak += 1;
-                        if commit_fail_streak == 1 || commit_fail_streak.is_multiple_of(1000) {
+                        ch.commit_fail_streak += 1;
+                        if ch.commit_fail_streak == 1 || ch.commit_fail_streak.is_multiple_of(1000)
+                        {
                             tracing::warn!(
-                                "LinkAudio commit failing ({rc:?}, streak={commit_fail_streak}): \
-                                 audio not reaching Link peer"
+                                "LinkAudio commit failing on channel {} ({rc:?}, streak={}): \
+                                 audio not reaching Link peer",
+                                ch.egress.channel_id(),
+                                ch.commit_fail_streak
                             );
                         }
                     }
