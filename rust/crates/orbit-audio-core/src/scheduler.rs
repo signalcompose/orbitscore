@@ -288,10 +288,10 @@ impl Scheduler {
     /// 消す per-channel 同時 render（multi-buffer・1 パスで N channel を埋め transport を 1 回進める）
     /// は後続 PR（A4-2）で実装する。
     ///
-    /// 本番 RT caller はまだ無い（A4-2 で追加）。`Scheduler::render_channel` を `pub(crate)` に
-    /// 絞り直接の外部アクセスは閉じるが、`Engine::render_channel`（pub + `#[doc(hidden)]`）経由では
-    /// crate 外からも呼べる（orbit-audio-daemon の `render_offline_channel` が使用）。よって上記
-    /// 「混在呼び出し禁止」は呼び出し元責任の prose 規約であり、アクセス制御では強制されない。
+    /// 本番 RT 経路はこの invariant を持たない [`Scheduler::render_multi`]（1 パスで N channel を
+    /// 埋め transport を 1 回進める）を使う。`render_channel` は test tap 専用に残す
+    /// （`pub(crate)`。`Engine::render_channel`（pub + `#[doc(hidden)]`）経由で daemon の
+    /// `render_offline_channel` が層A 検証に使用）。
     pub(crate) fn render_channel(&mut self, out: &mut [f32], channel: &str) {
         self.render_filtered(out, Some(channel));
     }
@@ -303,8 +303,9 @@ impl Scheduler {
             *s = 0.0;
         }
 
-        let frames_to_render = out.len() / self.output_channels as usize;
         let output_channels = self.output_channels as usize;
+        let frames_to_render = out.len() / output_channels;
+        let cursor = self.cursor_frames;
 
         for active in self.events.iter_mut() {
             // channel filter: Some の時は一致する channel の event のみ。None は全通過
@@ -314,114 +315,211 @@ impl Scheduler {
                     continue;
                 }
             }
-            // このバッファ区間にこのサンプルが重なるか？
-            let buf_start = self.cursor_frames;
-            let buf_end = self.cursor_frames + frames_to_render as u64;
-            if active.start_frame >= buf_end {
-                continue; // まだ開始時刻ではない
-            }
-
-            let src_channels = active.sample.channels as usize;
-            if src_channels == 0 {
-                // 0ch の不正なサンプルはスキップ（`src_channels - 1` のアンダーフロー回避）
-                active.read_pos = active.slice_len as f64;
-                continue;
-            }
-            if active.read_pos >= active.slice_len as f64 {
-                continue; // 再生済み（slice 領域を読み終えた）
-            }
-
-            // 出力バッファ内での書き込み開始位置（フレーム単位）
-            let dst_offset_frames = if active.start_frame > buf_start {
-                (active.start_frame - buf_start) as usize
-            } else {
-                0
-            };
-
-            let writable_frames = frames_to_render.saturating_sub(dst_offset_frames);
-
-            // 左右ゲインは schedule 時に precompute 済み（RT から trig と output_channels
-            // 分岐を排除）。ステレオ以外では (1.0, 1.0)。SC の Pan2 に一致。
-            let (pan_l, pan_r) = (active.pan_l, active.pan_r);
-
-            let slice_len = active.slice_len;
-            let slice_len_f = slice_len as f64;
-            let rate = active.rate;
-            // 補間の上端 clamp（slice 末尾フレーム）。floor+1 が slice をはみ出さないようにする。
-            let last_src = slice_len.saturating_sub(1);
-            // 末尾フェード（線形 release・SC `linen` の fadeOut 部）を **出力時間**で数える。
-            // 出力 fade_frames 分を source 空間の幅 `fade_span_src = fade_frames*rate` に写し、
-            // fade 開始 source 位置 `fade_start_src` を loop 前に 1 回求める（per-frame の
-            // division を no-fade の common path から排除する）。
-            let fading = active.fade_frames > 0;
-            let fade_span_src = active.fade_frames as f64 * rate;
-            let fade_start_src = slice_len_f - fade_span_src;
-
-            // 出力フレームを 1 つずつ生成し、source を rate 倍の歩幅で分数走査する（varispeed）。
-            // rate=1.0 のときは read_pos が整数列を辿り frac=0 で補間が元サンプルに一致するため、
-            // 既存 rate=1.0 経路とビット同一になる（厳密な一般化）。出力尺 = slice_len/rate。
-            for i in 0..writable_frames {
-                let pos = active.read_pos; // slice 相対の分数読み位置
-                if pos >= slice_len_f {
-                    break; // source 読み切り（残り出力枠は無音にせず発音終了）
-                }
-                // 線形補間: floor と floor+1 を frac で混合。pos>=0 なので `as usize` = floor。
-                let s0 = pos as usize; // slice 相対の整数フレーム
-                let frac = (pos - s0 as f64) as f32;
-                let s1 = (s0 + 1).min(last_src);
-                let src_frame0 = active.slice_start + s0; // サンプル内の絶対フレーム
-                let src_frame1 = active.slice_start + s1;
-                let dst_frame = dst_offset_frames + i;
-
-                // fade 開始 source 位置に達したら 1.0→0.0 へ線形減衰（残り出力幅 / fade 幅）。
-                // common path（fade 前 / fade 無し）は比較1つで division しない。rate=1.0 では
-                // env = (slice_len-pos)/fade_frames となり従来の fade と数値的に一致する（f64 中間
-                // 値経由のため fade tail は ≤1 ULP 差・PCM 許容内。sample 値の補間は frac=0 で厳密
-                // ビット同一）。fade*rate の正しさは varispeed_fade_width_scales_with_rate で pin。
-                let env = if fading && pos >= fade_start_src {
-                    (((slice_len_f - pos) / fade_span_src) as f32).clamp(0.0, 1.0)
-                } else {
-                    1.0
-                };
-                let amp = active.gain * env;
-                for ch in 0..output_channels {
-                    let src_ch = ch.min(src_channels - 1);
-                    let s0_idx = src_frame0 * src_channels + src_ch;
-                    let s1_idx = src_frame1 * src_channels + src_ch;
-                    // 線形補間した source 値（rate=1.0 では frac=0 で data[s0_idx] と一致）。
-                    let sample_val = active.sample.data[s0_idx] * (1.0 - frac)
-                        + active.sample.data[s1_idx] * frac;
-                    let dst_idx = dst_frame * output_channels + ch;
-                    let pan_mul = if ch == 0 { pan_l } else { pan_r };
-                    out[dst_idx] += sample_val * amp * pan_mul;
-                }
-                active.read_pos += rate;
-            }
+            Self::mix_event_into(out, active, cursor, frames_to_render, output_channels);
         }
 
-        // 混合後の出力バッファにフレーム単位のマスターゲインを適用する。
-        // ランプ中はフレームごとに線形補間で global_gain を更新する。
-        // 単調パスで追加 allocation なし。
-        for frame in 0..frames_to_render {
-            if self.ramp_frames_remaining > 0 {
-                self.global_gain += self.ramp_step;
-                self.ramp_frames_remaining -= 1;
-                if self.ramp_frames_remaining == 0 {
-                    // 浮動小数点誤差対策でターゲットにスナップ
-                    self.global_gain = self.target_gain;
-                    self.ramp_step = 0.0;
-                }
-            }
-            let base = frame * output_channels;
-            for ch in 0..output_channels {
-                out[base + ch] *= self.global_gain;
-            }
-        }
+        self.apply_master_gain(out, frames_to_render, output_channels);
 
         self.cursor_frames += frames_to_render as u64;
         // 再生完了したもの（= slice 領域を読み終えたもの）をドロップ。
         // まだ開始時刻に到達していないイベントは read_pos == 0.0 のため自然に保持される。
         self.events.retain(|a| a.read_pos < a.slice_len as f64);
+    }
+
+    /// 本番 RT 用の single-pass multi-buffer render（A4-2b-1）。1 パスで全 event を走査し、
+    /// `hardware_out`（channel=None）と各 named channel buffer（channel=Some(name)）を同時に
+    /// 埋め、transport（cursor / master gain ramp / 完了 event 掃除）を **1 回だけ**進める。
+    /// これにより `render` + `render_channel` の混在/複数呼びによる transport 二重進行
+    /// （`render_channel` doc 参照）を恒久解消する。
+    ///
+    /// `channels` = (channel 名, 出力バッファ) の列。各 buffer は `hardware_out` と同じ frame 数
+    /// （= 同じ長さ）でなければならない。未登録 channel（`channels` に名前が無い）の event は
+    /// どこにも出力されない（`render_channel` の unmatched skip と一致）。**channel タグを持つ
+    /// event が無い**場合に限り `hardware_out` は [`Scheduler::render`] とビット同一になる（A4-1 の
+    /// filter=None 不変条件を継承）。`channels` が空でも channel=Some の event は drop されるため、
+    /// その場合は render()（全 event 混合）とは一致しない。
+    pub fn render_multi(&mut self, hardware_out: &mut [f32], channels: &mut [(&str, &mut [f32])]) {
+        let output_channels = self.output_channels as usize;
+        let frames_to_render = hardware_out.len() / output_channels;
+        let cursor = self.cursor_frames;
+
+        for s in hardware_out.iter_mut() {
+            *s = 0.0;
+        }
+        for (_, buf) in channels.iter_mut() {
+            debug_assert_eq!(
+                buf.len(),
+                hardware_out.len(),
+                "render_multi: channel buffer length must match hardware_out"
+            );
+            for s in buf.iter_mut() {
+                *s = 0.0;
+            }
+        }
+
+        for ev_idx in 0..self.events.len() {
+            // 出力先を channel タグで決める（borrow を短く保つため先に index で解決する）。
+            // None=hardware / Some(name)=該当 channel / 未登録 Some(name)=skip。
+            let target_idx = match self.events[ev_idx].channel.as_deref() {
+                None => None,
+                Some(name) => match channels.iter().position(|(n, _)| *n == name) {
+                    Some(i) => Some(i),
+                    None => continue,
+                },
+            };
+            let active = &mut self.events[ev_idx];
+            let out: &mut [f32] = match target_idx {
+                None => &mut *hardware_out,
+                Some(i) => &mut *channels[i].1,
+            };
+            Self::mix_event_into(out, active, cursor, frames_to_render, output_channels);
+        }
+
+        // master gain ramp を **1 回だけ**進め（next_gain_frame）、全バッファに同じ per-frame
+        // gain を適用する（バッファごとに進めると ramp が多重に進み desync するため frame ループは 1 つ）。
+        for frame in 0..frames_to_render {
+            let g = self.next_gain_frame();
+            let base = frame * output_channels;
+            for ch in 0..output_channels {
+                hardware_out[base + ch] *= g;
+            }
+            for (_, buf) in channels.iter_mut() {
+                for ch in 0..output_channels {
+                    buf[base + ch] *= g;
+                }
+            }
+        }
+
+        self.cursor_frames += frames_to_render as u64;
+        self.events.retain(|a| a.read_pos < a.slice_len as f64);
+    }
+
+    /// master gain ramp を 1 フレーム進め、その時点の gain を返す。ramp 終了時は target に
+    /// スナップする（浮動小数点誤差対策）。`apply_master_gain`（単一バッファ）と `render_multi`
+    /// （multi-buffer）が共有する状態遷移で、二重実装による drift を防ぐ。
+    #[inline]
+    fn next_gain_frame(&mut self) -> f32 {
+        if self.ramp_frames_remaining > 0 {
+            self.global_gain += self.ramp_step;
+            self.ramp_frames_remaining -= 1;
+            if self.ramp_frames_remaining == 0 {
+                self.global_gain = self.target_gain;
+                self.ramp_step = 0.0;
+            }
+        }
+        self.global_gain
+    }
+
+    /// 混合済み出力バッファにフレーム単位のマスターゲインを適用する（`render_filtered` 用・
+    /// 単一バッファ）。ランプ中はフレームごとに線形補間で更新する。単調パスで追加 allocation なし。
+    fn apply_master_gain(
+        &mut self,
+        out: &mut [f32],
+        frames_to_render: usize,
+        output_channels: usize,
+    ) {
+        for frame in 0..frames_to_render {
+            let g = self.next_gain_frame();
+            let base = frame * output_channels;
+            for ch in 0..output_channels {
+                out[base + ch] *= g;
+            }
+        }
+    }
+
+    /// 1 つの event を 1 つの出力バッファに加算する（時間重なり判定・varispeed 補間・末尾 fade・
+    /// pan）。`active.read_pos` を進める。master gain / cursor 前進 / event 掃除は呼び出し側の
+    /// 責務。`render_filtered`（単一バッファ）と `render_multi`（multi-buffer）で共有する。
+    fn mix_event_into(
+        out: &mut [f32],
+        active: &mut ActiveSample,
+        cursor_frames: u64,
+        frames_to_render: usize,
+        output_channels: usize,
+    ) {
+        // このバッファ区間にこのサンプルが重なるか？
+        let buf_start = cursor_frames;
+        let buf_end = cursor_frames + frames_to_render as u64;
+        if active.start_frame >= buf_end {
+            return; // まだ開始時刻ではない
+        }
+
+        let src_channels = active.sample.channels as usize;
+        if src_channels == 0 {
+            // 0ch の不正なサンプルはスキップ（`src_channels - 1` のアンダーフロー回避）
+            active.read_pos = active.slice_len as f64;
+            return;
+        }
+        if active.read_pos >= active.slice_len as f64 {
+            return; // 再生済み（slice 領域を読み終えた）
+        }
+
+        // 出力バッファ内での書き込み開始位置（フレーム単位）
+        let dst_offset_frames = if active.start_frame > buf_start {
+            (active.start_frame - buf_start) as usize
+        } else {
+            0
+        };
+
+        let writable_frames = frames_to_render.saturating_sub(dst_offset_frames);
+
+        // 左右ゲインは schedule 時に precompute 済み（RT から trig と output_channels
+        // 分岐を排除）。ステレオ以外では (1.0, 1.0)。SC の Pan2 に一致。
+        let (pan_l, pan_r) = (active.pan_l, active.pan_r);
+
+        let slice_len = active.slice_len;
+        let slice_len_f = slice_len as f64;
+        let rate = active.rate;
+        // 補間の上端 clamp（slice 末尾フレーム）。floor+1 が slice をはみ出さないようにする。
+        let last_src = slice_len.saturating_sub(1);
+        // 末尾フェード（線形 release・SC `linen` の fadeOut 部）を **出力時間**で数える。
+        // 出力 fade_frames 分を source 空間の幅 `fade_span_src = fade_frames*rate` に写し、
+        // fade 開始 source 位置 `fade_start_src` を loop 前に 1 回求める（per-frame の
+        // division を no-fade の common path から排除する）。
+        let fading = active.fade_frames > 0;
+        let fade_span_src = active.fade_frames as f64 * rate;
+        let fade_start_src = slice_len_f - fade_span_src;
+
+        // 出力フレームを 1 つずつ生成し、source を rate 倍の歩幅で分数走査する（varispeed）。
+        // rate=1.0 のときは read_pos が整数列を辿り frac=0 で補間が元サンプルに一致するため、
+        // 既存 rate=1.0 経路とビット同一になる（厳密な一般化）。出力尺 = slice_len/rate。
+        for i in 0..writable_frames {
+            let pos = active.read_pos; // slice 相対の分数読み位置
+            if pos >= slice_len_f {
+                break; // source 読み切り（残り出力枠は無音にせず発音終了）
+            }
+            // 線形補間: floor と floor+1 を frac で混合。pos>=0 なので `as usize` = floor。
+            let s0 = pos as usize; // slice 相対の整数フレーム
+            let frac = (pos - s0 as f64) as f32;
+            let s1 = (s0 + 1).min(last_src);
+            let src_frame0 = active.slice_start + s0; // サンプル内の絶対フレーム
+            let src_frame1 = active.slice_start + s1;
+            let dst_frame = dst_offset_frames + i;
+
+            // fade 開始 source 位置に達したら 1.0→0.0 へ線形減衰（残り出力幅 / fade 幅）。
+            // common path（fade 前 / fade 無し）は比較1つで division しない。rate=1.0 では
+            // env = (slice_len-pos)/fade_frames となり従来の fade と数値的に一致する（f64 中間
+            // 値経由のため fade tail は ≤1 ULP 差・PCM 許容内。sample 値の補間は frac=0 で厳密
+            // ビット同一）。fade*rate の正しさは varispeed_fade_width_scales_with_rate で pin。
+            let env = if fading && pos >= fade_start_src {
+                (((slice_len_f - pos) / fade_span_src) as f32).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let amp = active.gain * env;
+            for ch in 0..output_channels {
+                let src_ch = ch.min(src_channels - 1);
+                let s0_idx = src_frame0 * src_channels + src_ch;
+                let s1_idx = src_frame1 * src_channels + src_ch;
+                // 線形補間した source 値（rate=1.0 では frac=0 で data[s0_idx] と一致）。
+                let sample_val =
+                    active.sample.data[s0_idx] * (1.0 - frac) + active.sample.data[s1_idx] * frac;
+                let dst_idx = dst_frame * output_channels + ch;
+                let pan_mul = if ch == 0 { pan_l } else { pan_r };
+                out[dst_idx] += sample_val * amp * pan_mul;
+            }
+            active.read_pos += rate;
+        }
     }
 
     /// 現在の出力ストリーム時刻（秒）
@@ -437,7 +535,6 @@ impl Scheduler {
     pub fn active_count(&self) -> usize {
         self.events.len()
     }
-
 }
 
 #[cfg(test)]
@@ -611,7 +708,11 @@ mod tests {
         // 定数 1.0 の素材を hard-left で流し、L 出力の末尾が body より小さいことを確認。
         let mut s = Scheduler::new(48_000, 2);
         let sample = Sample::new(vec![1.0f32; 100], 48_000, 1);
-        s.schedule(ScheduledSample::new(0.0, sample).with_pan(-1.0).with_region(0, 100));
+        s.schedule(
+            ScheduledSample::new(0.0, sample)
+                .with_pan(-1.0)
+                .with_region(0, 100),
+        );
         let mut buf = vec![0.0f32; 200]; // 100 frames
         s.render(&mut buf);
         // body（fade 開始 96 より前）は 1.0。
@@ -644,7 +745,9 @@ mod tests {
         // 中央パン（各 ch 1/√2 倍）で、L が L サンプル・R が R サンプルを読む
         // （channel stride = src_frame*channels + ch が正しい）ことを確認する。
         let frames = 20usize;
-        let data: Vec<f32> = (0..frames).flat_map(|i| [i as f32, i as f32 + 0.5]).collect();
+        let data: Vec<f32> = (0..frames)
+            .flat_map(|i| [i as f32, i as f32 + 0.5])
+            .collect();
         let sample = Sample::new(data, 48_000, 2);
         let mut s = Scheduler::new(48_000, 2);
         s.schedule(
@@ -679,7 +782,11 @@ mod tests {
         let mut buf = vec![0.0f32; 40]; // 20 frames
         s.render(&mut buf);
         for i in 0..10 {
-            assert!((buf[2 * i] - i as f32).abs() < 1e-4, "f{i} L={}", buf[2 * i]);
+            assert!(
+                (buf[2 * i] - i as f32).abs() < 1e-4,
+                "f{i} L={}",
+                buf[2 * i]
+            );
         }
         assert_eq!(s.active_count(), 0);
     }
@@ -749,7 +856,11 @@ mod tests {
         let mut buf = vec![0.0f32; 2600]; // 1300 frames stereo（出力 1200 を覆う）
         s.render(&mut buf);
         // body（k=1100・pos=2200 < fade 開始）は env=1.0。
-        assert!((buf[2 * 1100] - 1.0).abs() < 1e-4, "body L={}", buf[2 * 1100]);
+        assert!(
+            (buf[2 * 1100] - 1.0).abs() < 1e-4,
+            "body L={}",
+            buf[2 * 1100]
+        );
         // fade 領域 k=1160（pos=2320）: env=(2400-2320)/96 ≈ 0.8333。`* rate` を落とすと
         // fade_start=2352 となり pos=2320 はまだ fade 前で env=1.0 → ここで分岐を検出する。
         assert!(
@@ -819,12 +930,10 @@ mod tests {
     fn stop_removes_matching_play_id() {
         let mut s = Scheduler::new(48_000, 2);
         s.schedule(
-            ScheduledSample::new(1.0, mk_sample_stereo(100))
-                .with_play_id("p-a".to_string()),
+            ScheduledSample::new(1.0, mk_sample_stereo(100)).with_play_id("p-a".to_string()),
         );
         s.schedule(
-            ScheduledSample::new(2.0, mk_sample_stereo(100))
-                .with_play_id("p-b".to_string()),
+            ScheduledSample::new(2.0, mk_sample_stereo(100)).with_play_id("p-b".to_string()),
         );
         assert_eq!(s.active_count(), 2);
         assert!(s.stop("p-a"));
@@ -934,11 +1043,23 @@ mod tests {
         let mut buf = vec![0.0f32; 60]; // 30 frames stereo
         s.render_channel(&mut buf, "mix");
         // frame 0..4: ev0 のみ（hard-left → L = 値）= 1.0
-        assert!((buf[2 * 2] - 1.0).abs() < 1e-4, "f2 (ev0 only) L={}", buf[2 * 2]);
+        assert!(
+            (buf[2 * 2] - 1.0).abs() < 1e-4,
+            "f2 (ev0 only) L={}",
+            buf[2 * 2]
+        );
         // frame 5..9: ev0 + ev1 の重なり = 2.0（dst_offset_frames=5 の += を pin）
-        assert!((buf[2 * 7] - 2.0).abs() < 1e-4, "f7 (overlap) L={}", buf[2 * 7]);
+        assert!(
+            (buf[2 * 7] - 2.0).abs() < 1e-4,
+            "f7 (overlap) L={}",
+            buf[2 * 7]
+        );
         // frame 10..14: ev1 のみ = 1.0
-        assert!((buf[2 * 12] - 1.0).abs() < 1e-4, "f12 (ev1 only) L={}", buf[2 * 12]);
+        assert!(
+            (buf[2 * 12] - 1.0).abs() < 1e-4,
+            "f12 (ev1 only) L={}",
+            buf[2 * 12]
+        );
     }
 
     #[test]
@@ -968,8 +1089,7 @@ mod tests {
         // 未使用 channel 名を tap すると完全無音（どの event にもマッチしない）。
         let mut s = Scheduler::new(48_000, 2);
         s.schedule(
-            ScheduledSample::new(0.0, mk_sample_stereo(100))
-                .with_channel(Some("a".to_string())),
+            ScheduledSample::new(0.0, mk_sample_stereo(100)).with_channel(Some("a".to_string())),
         );
         let mut buf = vec![0.0f32; 200];
         s.render_channel(&mut buf, "nonexistent");
@@ -983,6 +1103,132 @@ mod tests {
         s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100))); // channel None
         let mut buf = vec![0.0f32; 200];
         s.render_channel(&mut buf, "a");
-        assert!(buf.iter().all(|&x| x == 0.0), "unrouted event は channel tap に出ない");
+        assert!(
+            buf.iter().all(|&x| x == 0.0),
+            "unrouted event は channel tap に出ない"
+        );
+    }
+
+    // ===== A4-2b-1: render_multi（single-pass multi-buffer）=====
+
+    #[test]
+    fn render_multi_empty_channels_matches_render() {
+        // channels が空なら hardware_out は render() とビット同一（filter=None 不変条件の継承）。
+        let mk = || {
+            let mut s = Scheduler::new(48_000, 2);
+            s.schedule(
+                ScheduledSample::new(0.0, mk_sample_mono_ramp(10))
+                    .with_pan(-1.0)
+                    .with_region(0, 10),
+            );
+            s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(50)));
+            s
+        };
+        let mut ref_buf = vec![0.0f32; 40];
+        mk().render(&mut ref_buf);
+
+        let mut hw = vec![0.0f32; 40];
+        let mut empty: [(&str, &mut [f32]); 0] = [];
+        mk().render_multi(&mut hw, &mut empty);
+
+        assert_eq!(
+            hw, ref_buf,
+            "render_multi(_, []) は render() とビット同一であるべき"
+        );
+    }
+
+    #[test]
+    fn render_multi_routes_and_sums_in_single_pass() {
+        // 1 パスで: unrouted→hardware / "a"×2→a-buf 加算（sum-by-name）/ "b"→b-buf。
+        let mut s = Scheduler::new(48_000, 2);
+        // unrouted（hardware）= 定数 3.0
+        s.schedule(
+            ScheduledSample::new(0.0, Sample::new(vec![3.0f32; 10], 48_000, 1))
+                .with_pan(-1.0)
+                .with_region(0, 10),
+        );
+        // "a" を 2 つ（sum-by-name → ramp 2 倍）
+        for _ in 0..2 {
+            s.schedule(
+                ScheduledSample::new(0.0, mk_sample_mono_ramp(10))
+                    .with_pan(-1.0)
+                    .with_region(0, 10)
+                    .with_channel(Some("a".to_string())),
+            );
+        }
+        // "b" = 定数 5.0
+        s.schedule(
+            ScheduledSample::new(0.0, Sample::new(vec![5.0f32; 10], 48_000, 1))
+                .with_pan(-1.0)
+                .with_region(0, 10)
+                .with_channel(Some("b".to_string())),
+        );
+
+        let mut hw = vec![0.0f32; 40];
+        let mut a_buf = vec![0.0f32; 40];
+        let mut b_buf = vec![0.0f32; 40];
+        {
+            let mut channels: [(&str, &mut [f32]); 2] = [("a", &mut a_buf), ("b", &mut b_buf)];
+            s.render_multi(&mut hw, &mut channels);
+        }
+        // hardware = unrouted 3.0 のみ（routed が漏れない）
+        assert!((hw[2] - 3.0).abs() < 1e-4, "hw f1 L={}", hw[2]);
+        assert!(
+            (hw[8] - 3.0).abs() < 1e-4,
+            "hw f4 L={} (routed leak?)",
+            hw[8]
+        );
+        // a = ramp×2 → f1=2.0
+        assert!((a_buf[2] - 2.0).abs() < 1e-4, "a f1 L={}", a_buf[2]);
+        // b = 定数 5.0
+        assert!((b_buf[2] - 5.0).abs() < 1e-4, "b f1 L={}", b_buf[2]);
+    }
+
+    #[test]
+    fn render_multi_advances_transport_once() {
+        // 最重要: hardware + N channel を 1 パスで埋めても transport は 1 回だけ進む。
+        // render + render_channel×N の二重進行（cursor が (N+1) ブロック進む）を恒久解消する。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_stereo(10_000)).with_channel(Some("a".to_string())),
+        );
+        let frames = 256usize;
+        let mut hw = vec![0.0f32; frames * 2];
+        let mut a_buf = vec![0.0f32; frames * 2];
+        {
+            let mut channels: [(&str, &mut [f32]); 1] = [("a", &mut a_buf)];
+            s.render_multi(&mut hw, &mut channels);
+        }
+        let expected = frames as f64 / 48_000.0;
+        assert!(
+            (s.now_sec() - expected).abs() < 1e-9,
+            "transport は 1 ブロック分だけ進むべき: now={} expected={}",
+            s.now_sec(),
+            expected
+        );
+    }
+
+    #[test]
+    fn render_multi_unknown_channel_event_is_dropped() {
+        // channels に無い名前の event はどこにも出ない（hardware にも他 channel にも漏れない）。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_stereo(100))
+                .with_channel(Some("ghost".to_string())),
+        );
+        let mut hw = vec![0.0f32; 200];
+        let mut a_buf = vec![0.0f32; 200];
+        {
+            let mut channels: [(&str, &mut [f32]); 1] = [("a", &mut a_buf)];
+            s.render_multi(&mut hw, &mut channels);
+        }
+        assert!(
+            hw.iter().all(|&x| x == 0.0),
+            "未登録 channel の event は hardware に漏れない"
+        );
+        assert!(
+            a_buf.iter().all(|&x| x == 0.0),
+            "未登録 channel の event は他 channel にも出ない"
+        );
     }
 }

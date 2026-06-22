@@ -76,6 +76,8 @@ export interface ScheduledPlay {
   sequenceName: string
   /** chop slice 情報。未指定なら全体再生。発火時に load 済み尺から領域を計算する。 */
   slice?: SliceSpec
+  /** LinkAudio ルーティング先チャンネル名。非空の時のみ daemon の PlayAt へ転送する。 */
+  outputChannel?: string
 }
 
 /**
@@ -452,7 +454,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
-    this.enqueue({ time, filepath, gainDb, pan, sequenceName })
+    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel })
   }
 
   /**
@@ -491,6 +493,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       pan,
       sequenceName,
       slice: { index: sliceIndex, total: totalSlices, eventDurationMs },
+      outputChannel,
     })
   }
 
@@ -609,6 +612,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       offsetSec,
       durationSec,
       rate,
+      play.outputChannel,
     )
     this.onDispatch?.({
       filepath: play.filepath,

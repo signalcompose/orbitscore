@@ -223,6 +223,7 @@ export class DaemonClient extends EventEmitter {
     offsetSec = 0,
     durationSec = 0,
     rate = 1,
+    channel?: string,
   ): Promise<{ playId: string }> {
     const result = await this.request('PlayAt', {
       sample_id: sampleId,
@@ -235,6 +236,8 @@ export class DaemonClient extends EventEmitter {
       duration_sec: durationSec,
       // rate は varispeed（1.0 = 自然尺）。<=0/非有限は daemon 側で 1.0 に丸め。
       rate,
+      // channel は LinkAudio ルーティング先（非空の時のみ送る。空/未指定は hardware）。
+      ...(channel ? { channel } : {}),
     })
     return { playId: String(result.play_id) }
   }

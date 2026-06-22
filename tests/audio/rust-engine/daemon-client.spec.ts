@@ -64,6 +64,36 @@ describe('DaemonClient with mock server', () => {
     expect(res.playId).toBe('p-mock-1')
   })
 
+  it('PlayAt channel あり: channel フィールドを params に含める', async () => {
+    const url = await server.start({
+      PlayAt: () => ({ play_id: 'p-ch-1' }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.playAt('s-mock-1', 0.0, 0.8, 0, 0, 0, 1, 'drums')
+    const rec = server.received.find((r) => r.method === 'PlayAt')
+    expect(rec?.params.channel).toBe('drums')
+  })
+
+  it('PlayAt channel なし（undefined）: channel フィールドを params から省く', async () => {
+    const url = await server.start({
+      PlayAt: () => ({ play_id: 'p-no-ch-1' }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.playAt('s-mock-1', 0.0, 0.8)
+    const rec = server.received.find((r) => r.method === 'PlayAt')
+    expect(rec?.params).not.toHaveProperty('channel')
+  })
+
+  it('PlayAt channel 空文字: channel フィールドを params から省く', async () => {
+    const url = await server.start({
+      PlayAt: () => ({ play_id: 'p-empty-ch-1' }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.playAt('s-mock-1', 0.0, 0.8, 0, 0, 0, 1, '')
+    const rec = server.received.find((r) => r.method === 'PlayAt')
+    expect(rec?.params).not.toHaveProperty('channel')
+  })
+
   it('Stop は status=stopped を true に変換する', async () => {
     const url = await server.start({
       Stop: (params) => {
