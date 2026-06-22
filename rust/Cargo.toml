@@ -8,6 +8,14 @@ members = [
   "crates/orbit-audio-verify",
   "crates/orbit-clap-spike",
 ]
+# 🔴 orbit-link-audio(GPL 隔離 crate)は **member にしない**。
+# member にすると default の `cargo build` / cargo-deny がこの GPL crate を root として
+# 常にビルド/評価し、「default 依存グラフは GPL-free」という不変条件が assert できなくなる。
+# daemon が feature `link-audio`(default off)経由で optional dep として取り込むときだけ
+# graph に入る。permissive crate が誤って依存すれば dep として graph に現れ cargo-deny が検出する。
+exclude = [
+  "crates/orbit-link-audio",
+]
 
 [workspace.package]
 version = "0.0.1"

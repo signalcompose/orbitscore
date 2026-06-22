@@ -1,3 +1,8 @@
 /target
+# 非 member の orbit-link-audio(exclude)を standalone build した際の crate-local
+# 成果物。本番は workspace 経由(daemon --features link-audio)で rust/target と
+# rust/Cargo.lock を使うため、crate-local の target/Cargo.lock は追跡しない。
+**/target/
+crates/orbit-link-audio/Cargo.lock
 **/*.rs.bk
 Cargo.lock.bak
