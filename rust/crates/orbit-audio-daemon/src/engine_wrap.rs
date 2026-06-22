@@ -155,6 +155,8 @@ impl EngineWrap {
     /// 「offset 以降すべて」。いずれもサンプル端で clamp。
     /// `rate` は varispeed（1.0 = 自然尺、>1 = 速く短く高ピッチ、<1 = 遅く長く低ピッチ。
     /// `<=0`/非有限は core で 1.0 に丸め）。
+    /// `channel` は出力先 channel 名（LinkAudio outputChannel・#209）。`None` = 既定
+    /// （unrouted / hardware sum）。同名 channel の event は per-channel render で加算合成される。
     /// 戻り値の `duration_sec` は **実際に再生される区間の出力尺**（slice 実尺 / rate）なので、
     /// 呼び出し側は PlayEnded を再生終端（varispeed 後の出力終端）に合わせて遅延送信できる。
     #[allow(clippy::too_many_arguments)]
@@ -167,6 +169,7 @@ impl EngineWrap {
         offset_sec: f64,
         duration_sec: f64,
         rate: f64,
+        channel: Option<String>,
     ) -> Result<PlayHandle, WrapError> {
         let sample = self
             .lock_samples()?
@@ -201,6 +204,7 @@ impl EngineWrap {
                 // PlayEnded 尺の一致が scheduler 内の再 clamp に依存してしまう（latent な desync）。
                 effective_len_frames,
                 rate,
+                channel,
                 play_id.clone(),
                 sample,
             )
@@ -279,18 +283,17 @@ impl EngineWrap {
         self.engine.now_sec().unwrap_or_else(|| self.uptime_sec())
     }
 
-    /// 検証ハーネス（#311 phase 2）用: スケジュール済みイベントを cpal を介さず
-    /// オフラインで `total_frames` 分 render し、interleaved f32 PCM を返す。
-    ///
-    /// 本番経路（cpal callback）とは独立した test-only API。`Engine::render` は内部で
-    /// `try_lock` するが、オフライン単スレッド駆動では競合がなく常に成功する。`block_frames`
-    /// 単位で回すことで、実 callback と同様にイベントが block 境界をまたぐ経路も通す。
-    /// `play_at` 由来の sec→frame 変換 / `resolve_slice_region` を経た出力を捕捉できる
-    /// （phase 1 の Scheduler 直接駆動が飛ばした層）。
+    /// `render_offline` / `render_offline_channel` の共通本体。`render_fn` で 1 block 分の
+    /// 描画（全 channel / channel filter）を切り替える。`block_frames` 単位で回すことで、
+    /// 実 callback と同様にイベントが block 境界をまたぐ経路も通す。
     ///
     /// `block_frames == 0` は panic（テストハーネス用途なので不正設定は早期に落とす）。
-    #[doc(hidden)]
-    pub fn render_offline(&self, total_frames: usize, block_frames: usize) -> Vec<f32> {
+    fn render_offline_inner(
+        &self,
+        total_frames: usize,
+        block_frames: usize,
+        mut render_fn: impl FnMut(&mut [f32]),
+    ) -> Vec<f32> {
         assert!(block_frames > 0, "render_offline: block_frames must be > 0");
         let channels = self.channels as usize;
         let mut data = Vec::with_capacity(total_frames * channels);
@@ -299,11 +302,40 @@ impl EngineWrap {
         while rendered < total_frames {
             let this_frames = block_frames.min(total_frames - rendered);
             let buf = &mut block[..this_frames * channels];
-            self.engine.render(buf);
+            render_fn(buf);
             data.extend_from_slice(buf);
             rendered += this_frames;
         }
         data
+    }
+
+    /// 検証ハーネス（#311 phase 2）用: スケジュール済みイベントを cpal を介さず
+    /// オフラインで `total_frames` 分 render し、interleaved f32 PCM を返す。
+    ///
+    /// 本番経路（cpal callback）とは独立した test-only API。`Engine::render` は内部で
+    /// `try_lock` するが、オフライン単スレッド駆動では競合がなく常に成功する。
+    /// `play_at` 由来の sec→frame 変換 / `resolve_slice_region` を経た出力を捕捉できる
+    /// （phase 1 の Scheduler 直接駆動が飛ばした層）。
+    #[doc(hidden)]
+    pub fn render_offline(&self, total_frames: usize, block_frames: usize) -> Vec<f32> {
+        self.render_offline_inner(total_frames, block_frames, |buf| self.engine.render(buf))
+    }
+
+    /// `render_offline` の channel filter 版（LinkAudio per-channel 受信側の決定論検証・層A）。
+    /// 指定 channel 名に属する event だけをオフラインで決定論レンダする。同名 channel は
+    /// 加算合成される（sum-by-name）。1 つの wrap で複数 channel を続けて tap すると transport が
+    /// 二重に進むため（[`orbit_audio_core::Scheduler::render_channel`] 参照）、検証は channel
+    /// ごとに fresh な wrap を使うこと。
+    #[doc(hidden)]
+    pub fn render_offline_channel(
+        &self,
+        channel: &str,
+        total_frames: usize,
+        block_frames: usize,
+    ) -> Vec<f32> {
+        self.render_offline_inner(total_frames, block_frames, |buf| {
+            self.engine.render_channel(buf, channel)
+        })
     }
 
     /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時。

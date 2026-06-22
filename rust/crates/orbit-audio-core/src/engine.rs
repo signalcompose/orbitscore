@@ -52,6 +52,8 @@ impl Engine {
     /// `slice_start_frame` / `slice_len_frames` は再生領域（`chop` の slice）。
     /// `slice_len_frames == 0` で「offset 以降すべて」。サンプル端で clamp される。
     /// `rate` は varispeed（1.0 = 自然尺・`<=0`/非有限は 1.0 に丸め）。
+    /// `channel` は出力先 channel 名（LinkAudio outputChannel・#209）。`None` = 既定
+    /// （unrouted / hardware sum）。同名 channel は `render_channel` で加算合成される。
     #[allow(clippy::too_many_arguments)]
     pub fn schedule_with_play_id(
         &self,
@@ -61,6 +63,7 @@ impl Engine {
         slice_start_frame: usize,
         slice_len_frames: usize,
         rate: f64,
+        channel: Option<String>,
         play_id: String,
         sample: Sample,
     ) -> Result<(), EngineError> {
@@ -71,6 +74,7 @@ impl Engine {
                 .with_pan(pan)
                 .with_region(slice_start_frame, slice_len_frames)
                 .with_rate(rate)
+                .with_channel(channel)
                 .with_play_id(play_id),
         );
         Ok(())
@@ -110,20 +114,32 @@ impl Engine {
         Ok(())
     }
 
-    /// オーディオコールバックから呼び出される。`out` は interleaved f32。
-    ///
-    /// リアルタイムスレッドで呼ばれるため `try_lock` を用い、ロック競合時は
-    /// 無音（silent drop）を返してコールバックを即時完了させる。将来的には
-    /// lock-free ringbuffer に置き換える余地あり（Phase 2）。
-    pub fn render(&self, out: &mut [f32]) {
+    /// `try_lock` で Scheduler を借りて `f` を実行する。RT スレッドから呼ばれるため、ロック
+    /// 競合時は無音（silent drop）で即時 return する（将来 lock-free ringbuffer 化の余地あり・
+    /// Phase 2）。`render` / `render_channel` がこの try-lock + silent-drop 規約を共有する。
+    fn with_scheduler(&self, out: &mut [f32], f: impl FnOnce(&mut Scheduler, &mut [f32])) {
         match self.inner.try_lock() {
-            Ok(mut s) => s.render(out),
+            // MutexGuard を DerefMut で &mut Scheduler に再借用して closure に渡す。
+            Ok(mut s) => f(&mut s, out),
             Err(_) => {
                 for x in out.iter_mut() {
                     *x = 0.0;
                 }
             }
         }
+    }
+
+    /// オーディオコールバックから呼び出される。`out` は interleaved f32。RT 競合時は無音。
+    pub fn render(&self, out: &mut [f32]) {
+        self.with_scheduler(out, |s, b| s.render(b));
+    }
+
+    /// `render` の channel filter 版。指定 channel 名に属する event だけを `out` に加算する
+    /// （LinkAudio per-channel tap・#209）。test/scaffolding 用（本番 RT caller は A4-2 で追加）。
+    /// 本番 hardware `render` と同一 tick で混在させないこと（[`Scheduler::render_channel`] 参照）。
+    #[doc(hidden)]
+    pub fn render_channel(&self, out: &mut [f32], channel: &str) {
+        self.with_scheduler(out, |s, b| s.render_channel(b, channel));
     }
 
     /// 現在の出力ストリーム時刻（秒）を返す。

@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.160 feat(engine): A4-1 named-channel routing + sum-by-name on rust mixer (post-2.0 A4 / #322) (Jun 22, 2026)
+
+**Date**: 2026-06-22
+**Status**: ✅ 実装 + cargo workspace 全緑（core 単体 5〔routing 分離 / sum 2x / unknown 無音 / unrouted skip / unfiltered 全混合〕+ verify harness 2〔routing 分離・sum-by-name +6dB を実 WAV + region_rms/db_difference で〕。TS 変更ゼロ = npm 影響なし）
+**Branch**: `322-linkaudio-routing-sum`
+**Parent**: #321（A4 meta）
+
+**背景**: post-2.0 engine-first の parity gap 充填 #2（A3 = PR #320 マージ済の次）。`.orbs` の `outputChannel`（LinkAudio・#209）を Rust 経路で鳴らす A4 の **permissive-first 第1増分**。正本: `POST_2.0_NEXT_STEPS.html §3/§4`。
+
+**Step0（3 偵察 + web spike + advisor + owner 決定）**:
+- **parity か net-new か = net-new 確定**: 動く SC 音参照なし（#209 OPEN・`orbitPlayBufLink` SynthDef 未定義）+ scsynth UGen 経路は Rust 非適用 + Rust に tempo 概念皆無・`LinkAudioSink` 無し。Done は「SC 一致」にできず、層A 決定論受信が correct の定義。
+- **GPL 面**: 既存 `packages/sc-link-audio` の `link_audio_facade.hpp` は型エイリアスのみ・`channel_registry.cpp` は SC ガード依存でそのまま FFI 不可。`rusty_link` は GPLv2+ かつ標準 Link（tempo）のみで LinkAudio(audio) を wrap しない。→ A4-2 で薄い SC-free C++ shim を新規し sum-by-name は permissive Rust 側に残す（advisor 指摘で GPL 面最小化）。
+- **lock-free**: `PostMixSink`/`RingTapSink`/`rtrb` は `orbit-clap-spike`（S1 スパイク）に実証済だが本番未配線。A4-2 で本番へ移植（lock-free 化 + permissive↔GPL 境界を兼ねる）。
+- **受信検証**: `LinkAudioSource`（in-process 受信 API）存在だが Link discovery は UDP multicast 依存で同一プロセス/CI 不安定（Ableton/link #50）・SC 側も headless 受信未検証。
+
+**owner 決定（2026-06-22）**: ①検証境界 = 層A headless + **層B も headless 試行**（discovery 不成立なら手動 fallback を報告・stop&report）②GPL 隔離 = feature-gated 薄 crate in-process（default off）③staging = permissive-first 4 分割（PR1 routing+sum → PR2 GPL crate+shim+cargo-deny → PR3 tempo leader → PR4 across-respawn e2e）。
+
+**本 PR（A4-1）の実装**:
+- `orbit-audio-core`: event に `channel: Option<String>` タグ追加（`ScheduledSample`/`ActiveSample` + `with_channel`）。`render` を `render_filtered(out, channel_filter)` に refactor（filter=None で従来の hardware sum とビット同一）+ `render_channel(out, name)`（同名 channel は自然加算 = sum-by-name・DSL §8.1.2）。`Engine::render_channel` / `schedule_with_play_id` に channel を thread。
+- `orbit-audio-daemon`: `EngineWrap::play_at` に `channel` 引数 + `render_offline_channel`（層A 決定論受信側・cpal 非依存）。wire（protocol channel_name 解析）は A4-2 へ（session.rs は `None` 固定）。
+- 「耳」活用: 既存 verify ハーネス（#307/#311 の `region_rms`/`db_difference`）に per-channel PCM を通し routing 分離 + sum-by-name +6dB を実 WAV で検証。
+
+**運用**: GPL/Ableton Link を一切導入しない permissive 増分。SC 既定経路 無改変・audio `play()` 意味論 無改変。Rust workspace は CI fmt/clippy 非 gate（追加コードは周囲スタイルに整合）。
+
+**/simplify 適用（4観点並列）**: ① `render_offline`/`render_offline_channel` を `render_offline_inner(closure)` に共通化 ② `Engine::render`/`render_channel` を `with_scheduler` ヘルパに集約 ③ altitude 指摘で `Scheduler::render_channel` を `pub(crate)` に絞り直接の外部アクセスを閉じる（`Engine::render_channel` は pub + `#[doc(hidden)]` で daemon の `render_offline_channel` から呼ぶため cross-crate 可能）。「混在呼び出し禁止」は呼び出し元責任の prose 規約でアクセス制御では強制されない（A4-2 で RT 配線後に再評価）④ テスト `body` クロージャを `rms_avg` ヘルパに hoist。efficiency = クリーン。test 構造重複（reuse minor）は test 閾値で skip。
+
+**/code:pr-review-team 適用（4専門レビュアー並列）**: code-reviewer = Critical/Important 0。silent-failure / comment-analyzer 指摘 = `Scheduler::render_channel` doc + 本 WORK_LOG ③ の「crate 外へ露出しない」が過大主張（Engine::render_channel は pub・daemon が使用）→ 修正済。pr-test-analyzer 指摘 = sum-by-name が同一 onset のみ → `render_channel_sums_same_name_at_staggered_onsets`（非ゼロ `dst_offset_frames` の `+=` を pin）を追加。latent: transport 二重進行 invariant は prose のみ（production caller 無し）→ A4-2 の single-pass multi-buffer で恒久解消。空文字列 channel `""` vs `None` の wire 意味論は A4-2 で確定。
+
 ### 6.159 feat(engine): slice varispeed parity — chop rate≠1.0 on rust engine (post-2.0 A3 / #319) (Jun 22, 2026)
 
 **Date**: 2026-06-22

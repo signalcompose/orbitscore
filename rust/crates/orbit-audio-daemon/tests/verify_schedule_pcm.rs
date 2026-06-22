@@ -105,6 +105,7 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
             ev.offset_sec,
             ev.duration_sec,
             ev.rate,
+            None,
         )
         .expect("play_at");
         // 出力尺の見積もり（whole=サンプル尺 / slice=duration_sec）。varispeed では出力尺が
@@ -351,7 +352,7 @@ fn render_varispeed_slice(rate: f64) -> Vec<f32> {
         info.frames
     );
     // slice [0, 0.5s]（offset=0, duration=0.5）を指定 rate で発音。
-    wrap.play_at(&info.sample_id, 0.0, 1.0, 0.0, 0.0, 0.5, rate)
+    wrap.play_at(&info.sample_id, 0.0, 1.0, 0.0, 0.0, 0.5, rate, None)
         .expect("play_at");
     // rate=1.0 の出力尺 0.5s + 0.25s 余白。rate=2.0 はこれより短く収まる。
     let total = (0.75 * VARISPEED_SR as f64) as usize;
@@ -392,5 +393,107 @@ fn varispeed_rate2_renders_half_duration_of_rate1() {
     assert!(
         (ratio - 2.0).abs() < 0.16,
         "rate=2.0 は rate=1.0 の約半尺のはず: rate1_end={rate1_end}, rate2_end={rate2_end}, ratio={ratio:.3}"
+    );
+}
+
+// === LinkAudio named-channel routing + sum-by-name（A4-1・#322・層A 決定論検証） ===
+//
+// 「耳」ハーネス（#307/#311 の region_rms / db_difference）で、Rust mixer の per-channel
+// routing（outputChannel が正しい channel に届く）と sum-by-name（同名 channel が加算）を
+// 実 WAV + 実 play_at + render_offline_channel で検証する。GPL / Ableton Link 非依存（層A）。
+
+const LINKAUDIO_SR: u32 = 48_000;
+
+/// kick.wav を `plays`（(onset_sec, channel_name)）でスケジュールし、`tap` channel を
+/// offline render して CapturedAudio を返す。1 wrap で複数 channel を tap すると transport が
+/// 二重進行するため、呼び出しごとに fresh な wrap を使う（multi-buffer 同時 render は後続 PR）。
+fn render_kick_channel(plays: &[(f64, &str)], tap: &str, total_sec: f64) -> CapturedAudio {
+    let (wrap, _guard) = EngineWrap::start_with(StubBackend {
+        sample_rate: LINKAUDIO_SR,
+        channels: 2,
+    })
+    .expect("EngineWrap start_with StubBackend");
+    let wav = repo_path("test-assets/audio/kick.wav");
+    let info = wrap
+        .load_sample(wav.clone())
+        .unwrap_or_else(|e| panic!("load_sample {}: {e}", wav.display()));
+    for (onset, ch) in plays {
+        wrap.play_at(
+            &info.sample_id,
+            *onset,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            Some((*ch).to_string()),
+        )
+        .expect("play_at");
+    }
+    let total = (total_sec * LINKAUDIO_SR as f64) as usize;
+    let data = wrap.render_offline_channel(tap, total, BLOCK_FRAMES);
+    CapturedAudio::new(data, 2, LINKAUDIO_SR)
+}
+
+/// 窓 [a, b) 秒の L/R 最大 RMS。
+fn rms_window(c: &CapturedAudio, a: f64, b: f64) -> f32 {
+    let sr = LINKAUDIO_SR as f64;
+    let (s, e) = ((a * sr) as usize, (b * sr) as usize);
+    region_rms(c, 0, s, e).max(region_rms(c, 1, s, e))
+}
+
+/// 窓 [a, b) 秒の L/R 平均 RMS（average power）。sum-by-name の dB 比較に使う。
+fn rms_avg(c: &CapturedAudio, a: f64, b: f64) -> f32 {
+    let sr = LINKAUDIO_SR as f64;
+    let (s, e) = ((a * sr) as usize, (b * sr) as usize);
+    (region_rms(c, 0, s, e) + region_rms(c, 1, s, e)) / 2.0
+}
+
+#[test]
+fn linkaudio_routing_separates_channels() {
+    //! A4-1 層A — outputChannel routing。kickA→"drums"(0.1s)、kickB→"bass"(2.1s)。
+    //! "drums" tap は 0.1s に信号・2.1s は無音（kickB は別 channel）。"bass" tap は逆。
+    //! filter が channel を取り違える / 全部通す regression を捕まえる。
+    let plays = [(0.1, "drums"), (2.1, "bass")];
+
+    let drums = render_kick_channel(&plays, "drums", 2.8);
+    assert!(rms_window(&drums, 0.12, 0.4) > 1e-3, "drums tap に kickA 信号が必要");
+    assert!(
+        rms_window(&drums, 2.12, 2.4) < 1e-5,
+        "drums tap に kickB(bass) が漏れてはいけない（RMS={}）",
+        rms_window(&drums, 2.12, 2.4)
+    );
+
+    let bass = render_kick_channel(&plays, "bass", 2.8);
+    assert!(
+        rms_window(&bass, 0.12, 0.4) < 1e-5,
+        "bass tap に kickA(drums) が漏れてはいけない（RMS={}）",
+        rms_window(&bass, 0.12, 0.4)
+    );
+    assert!(rms_window(&bass, 2.12, 2.4) > 1e-3, "bass tap に kickB 信号が必要");
+
+    // 未使用 channel は完全無音。
+    let ghost = render_kick_channel(&plays, "ghost", 2.8);
+    assert!(rms_window(&ghost, 0.0, 2.8) < 1e-6, "未使用 channel は無音のはず");
+}
+
+#[test]
+fn linkaudio_sum_by_name_accumulates() {
+    //! A4-1 層A — sum-by-name。同名 channel "drums" に kick を 2 つ同時 onset すると加算され、
+    //! 単一 kick より約 +6dB（2x 振幅）。last-writer-wins の regression なら 0dB。
+    let single = rms_avg(&render_kick_channel(&[(0.1, "drums")], "drums", 0.7), 0.12, 0.4);
+    let summed = rms_avg(
+        &render_kick_channel(&[(0.1, "drums"), (0.1, "drums")], "drums", 0.7),
+        0.12,
+        0.4,
+    );
+    assert!(
+        single > 1e-4 && summed > 1e-4,
+        "両方に信号が必要（single={single:.5}, summed={summed:.5}）"
+    );
+    let diff = db_difference(summed, single); // 20*log10(2) ≈ +6.02 dB
+    assert!(
+        (diff - 6.02).abs() <= GAIN_DB_TOLERANCE,
+        "sum-by-name は約 +6dB のはず: 計測 {diff:.2} dB (single={single:.5}, summed={summed:.5})"
     );
 }
