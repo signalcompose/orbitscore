@@ -143,6 +143,27 @@ impl Engine {
         self.with_scheduler(out, |s, b| s.render_channel(b, channel));
     }
 
+    /// 本番 RT 用の single-pass multi-buffer render（A4-2b-2）。`hardware_out`（channel=None）と
+    /// 各 named channel buffer を 1 パスで埋め transport を 1 回だけ進める
+    /// （[`Scheduler::render_multi`]）。RT 競合（try_lock 失敗）時は `render` の silent-drop 規約を
+    /// multi-buffer に拡張し、**hardware と全 channel buffer を無音**にする（ramp を多重に進めないため
+    /// 単一の try_lock で一括処理する）。
+    pub fn render_multi(&self, hardware_out: &mut [f32], channels: &mut [(&str, &mut [f32])]) {
+        match self.inner.try_lock() {
+            Ok(mut s) => s.render_multi(hardware_out, channels),
+            Err(_) => {
+                for x in hardware_out.iter_mut() {
+                    *x = 0.0;
+                }
+                for (_, buf) in channels.iter_mut() {
+                    for x in buf.iter_mut() {
+                        *x = 0.0;
+                    }
+                }
+            }
+        }
+    }
+
     /// 現在の出力ストリーム時刻（秒）を返す。
     /// ロック取得に失敗した場合は `None` を返し、呼び出し側がストリーム開始直後の
     /// `Some(0.0)` と区別できるようにする。

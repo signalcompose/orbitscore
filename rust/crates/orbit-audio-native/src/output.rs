@@ -9,6 +9,8 @@ use thiserror::Error;
 
 use orbit_audio_core::Engine;
 
+use crate::link_audio_ring::{PostMixSink, RingTapSink};
+
 /// cpal ストリームから得られる稼働統計。
 ///
 /// err_fn は audio スレッドから呼ばれるため atomic で更新する。
@@ -93,9 +95,93 @@ pub struct OutputStream {
     pub channels: u16,
 }
 
+/// LinkAudio channel を RT callback に届けるための activation メッセージ（A4-2b-2）。
+/// control thread が ring 生成・scratch 事前確保まで行い、本構造体を reg-ring 経由で callback へ
+/// 渡す（callback は受け取って格納するだけ＝RT alloc を避ける）。`sink` は対になる
+/// `rtrb::Consumer<f32>` を GPL consumer thread が drain する producer 側。
+pub struct LinkChannelActivate {
+    pub name: String,
+    pub sink: RingTapSink,
+    /// per-block scratch。control が `max_block_frames * channels` で事前確保する。
+    pub scratch: Vec<f32>,
+}
+
+/// cpal callback が保持する LinkAudio egress 状態（2b-2a は **単一 channel**）。
+/// pool + N-channel + readiness race は 2b-2b。
+struct LinkEgress {
+    reg_rx: rtrb::Consumer<LinkChannelActivate>,
+    channel: Option<LinkChannelActivate>,
+}
+
+/// 1 callback 分の render。`link` が無い（hardware-only）なら従来通り `engine.render`（ビット同一）。
+/// `link` 有りなら reg-ring を drain して channel を activate し、`render_multi` で hardware と
+/// channel buffer を 1 パスで埋め、channel buffer を ring へ push する（egress）。
+#[inline]
+fn render_block(
+    engine: &Engine,
+    link: &mut Option<LinkEgress>,
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    if let Some(le) = link {
+        // reg-ring を drain（2b-2a は last-wins で単一 channel を activate）。RT で alloc しない
+        // （scratch は control が事前確保済み）。
+        while let Ok(act) = le.reg_rx.pop() {
+            le.channel = Some(act);
+        }
+        if let Some(ch) = &mut le.channel {
+            let bs = (hw.len() / output_channels) * output_channels;
+            if ch.scratch.len() >= bs {
+                {
+                    // 1-element stack array（heap alloc なし）。render_multi が hw と ch.scratch を
+                    // 1 パスで埋め transport を 1 回進める。
+                    let mut chans = [(ch.name.as_str(), &mut ch.scratch[..bs])];
+                    engine.render_multi(hw, &mut chans);
+                }
+                // channel buffer を ring へ push（満杯なら RingTapSink が drop カウント）。
+                ch.sink.commit(&ch.scratch[..bs]);
+                return;
+            }
+            // scratch 不足（control の事前確保が想定外に小さい）→ 安全側で hardware のみ。
+        }
+    }
+    engine.render(hw);
+}
+
+/// 出力起動の戻り値（Engine・stream guard・stats）。
+type OutputStart = (Engine, OutputStream, Arc<StreamStats>);
+/// LinkAudio egress 経路付き起動の戻り値（上記 + channel activation の producer）。
+type LinkEgressStart = (
+    Engine,
+    OutputStream,
+    Arc<StreamStats>,
+    rtrb::Producer<LinkChannelActivate>,
+);
+
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
-/// 同時に初期化する。呼び出し側は config ミスマッチを意識しなくてよい。
-pub fn start_default_output() -> Result<(Engine, OutputStream, Arc<StreamStats>), OutputError> {
+/// 同時に初期化する（hardware-only）。呼び出し側は config ミスマッチを意識しなくてよい。
+pub fn start_default_output() -> Result<OutputStart, OutputError> {
+    start_output_inner(None)
+}
+
+/// LinkAudio egress 経路付きで出力を起動する（A4-2b-2・feature `link-audio` 経由でのみ daemon が
+/// 使う）。戻り値の `Producer<LinkChannelActivate>` に control thread が channel を push すると、
+/// RT callback が render_multi で channel buffer を埋めて ring へ送る。
+pub fn start_default_output_with_link_egress(
+    reg_capacity: usize,
+) -> Result<LinkEgressStart, OutputError> {
+    let (reg_tx, reg_rx) = rtrb::RingBuffer::new(reg_capacity);
+    let link = LinkEgress {
+        reg_rx,
+        channel: None,
+    };
+    let (engine, stream, stats) = start_output_inner(Some(link))?;
+    Ok((engine, stream, stats, reg_tx))
+}
+
+/// `start_default_output` / `start_default_output_with_link_egress` の共通実装。
+/// `link` を渡すと cpal callback に egress 経路を組み込む（None なら hardware-only でビット同一）。
+fn start_output_inner(link: Option<LinkEgress>) -> Result<OutputStart, OutputError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
     let supported = device
@@ -109,7 +195,14 @@ pub fn start_default_output() -> Result<(Engine, OutputStream, Arc<StreamStats>)
 
     let stats = Arc::new(StreamStats::default());
     let engine = Engine::new(sample_rate, channels);
-    let stream = build_stream(&device, &config, sample_format, engine.clone(), stats.clone())?;
+    let stream = build_stream(
+        &device,
+        &config,
+        sample_format,
+        engine.clone(),
+        stats.clone(),
+        link,
+    )?;
     stream
         .play()
         .map_err(|e| OutputError::PlayStream(e.to_string()))?;
@@ -131,6 +224,7 @@ fn build_stream(
     sample_format: SampleFormat,
     engine: Engine,
     stats: Arc<StreamStats>,
+    mut link: Option<LinkEgress>,
 ) -> Result<Stream, OutputError> {
     let make_err_fn = || {
         // 上位 (daemon session) が StreamStats / DaemonError 経由で可視化する責務を持つ。
@@ -145,17 +239,19 @@ fn build_stream(
         vec![0.0; (config.sample_rate.0 as usize) * (config.channels as usize)]
     }
 
+    let out_ch = config.channels as usize;
+
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
                 config,
-                move |data: &mut [f32], _| engine.render(data),
+                move |data: &mut [f32], _| render_block(&engine, &mut link, out_ch, data),
                 make_err_fn(),
                 None,
             )
             .map_err(|e| OutputError::BuildStream(e.to_string()))?,
         SampleFormat::I16 => {
-            // バッファのゼロクリアは engine.render() 内の Scheduler::render で行うため省略。
+            // バッファのゼロクリアは render_block 内の render で行うため省略。
             let mut scratch = scratch_with_capacity(config);
             device
                 .build_output_stream(
@@ -165,7 +261,7 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        engine.render(buf);
+                        render_block(&engine, &mut link, out_ch, buf);
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
@@ -186,7 +282,7 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        engine.render(buf);
+                        render_block(&engine, &mut link, out_ch, buf);
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
                         }
@@ -206,7 +302,7 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        engine.render(buf);
+                        render_block(&engine, &mut link, out_ch, buf);
                         for (i, s) in buf.iter().enumerate() {
                             let v = (s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32;
                             data[i] = v as u16;
@@ -252,6 +348,19 @@ mod tests {
         assert!(!snap.device_lost);
     }
 
+    // gated probe(A4-2b-2): daemon-level 層B テストは実 cpal stream(start_default_output →
+    // 実 output device)を要する(StubBackend は callback を起こさないため)。headless で開けるかを
+    // 確認する。CI/sandbox に device が無い場合があるので #[ignore]・local で `--ignored` 実行。
+    // 開けなければ daemon-level 層B は manual-dog-food のみ = owner へ stop&report。
+    #[test]
+    #[ignore = "needs a real audio output device; run with --ignored"]
+    fn start_default_output_opens_headless() {
+        match start_default_output() {
+            Ok((_engine, _stream, _stats)) => { /* 開けた。drop で teardown。 */ }
+            Err(e) => panic!("start_default_output が headless で開けなかった: {e}"),
+        }
+    }
+
     #[test]
     fn snapshot_is_monotonic() {
         let stats = StreamStats::default();
@@ -279,7 +388,10 @@ mod tests {
 
         stats.record_device_lost();
         let after_lost = stats.snapshot();
-        assert_eq!(after_lost.xruns, 1, "record_device_lost must not touch xruns");
+        assert_eq!(
+            after_lost.xruns, 1,
+            "record_device_lost must not touch xruns"
+        );
         assert!(after_lost.device_lost);
     }
 
