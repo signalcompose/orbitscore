@@ -501,11 +501,13 @@ export class DaemonClient extends EventEmitter {
     // floor の要は「daemon の死で app を落とさない」ことなので、永続 error listener で吸収する
     // （実際の cleanup / respawn 駆動は 'close' ハンドラが行う）。
     const onError = (err: Error): void => {
-      // listener が存在すること自体が目的（unhandled 'error' の throw を防ぐ）。詳細は
-      // 'socket-error' で通知する — 本ファイルの診断 event 規約（'ws-close-error' /
-      // 'parse-error' 等）に倣い、silent 握り潰しを避ける（消費は任意）。実際の cleanup /
-      // respawn 駆動は 'close' ハンドラが行う。
-      this.emit('socket-error', err)
+      // listener が存在すること自体が第一の目的（unhandled 'error' の throw を防ぐ）。さらに
+      // 詳細（ECONNRESET 等）を console.warn で必ず可視化する — 'close' ハンドラの daemon-died
+      // 通知だけでは socket レベルの死因が消えるため。実際の cleanup / respawn 駆動は 'close' が行う。
+      console.warn(
+        'DaemonClient websocket error (close handling / respawn follows if it died):',
+        err,
+      )
     }
     ws.on('error', onError)
     ws.on('close', () => {

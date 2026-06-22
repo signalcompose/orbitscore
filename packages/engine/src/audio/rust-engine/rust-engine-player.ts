@@ -41,7 +41,7 @@ import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
 
 import { DaemonClient } from './daemon-client'
-import { DaemonConnectionError } from './errors'
+import { DaemonConnectionError, DaemonQuitError } from './errors'
 
 /**
  * boundary で明示する制約の種別。
@@ -284,7 +284,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
     // 再 anchor 完了まで dispatch を止める（respawning の宣言コメント参照・唯一 load-bearing）。
     this.respawning = true
     console.warn('⚠️  [rust-engine] daemon died unexpectedly — respawning…')
-    void this.ensureRespawn()
+    // respawnLoop は try/finally で自己完結するが、想定外の throw（将来の改変等）が
+    // unhandled rejection になって TS プロセスを巻き込まないよう安全網を張る。
+    void this.ensureRespawn().catch((err) => {
+      console.error('❌ [rust-engine] unexpected error escaped respawn loop:', err)
+      this.respawning = false
+    })
   }
 
   /** respawn を single-flight 化する（同時多発する death/close/reject で二重 spawn しないため）。 */
@@ -316,6 +321,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
           // quit() が割り込んだら、立てたばかりの daemon は quit() の daemon.quit() が回収する。
           if (this.disposed) return
           await this.establishSession()
+          if (this.disposed) return
+          // establishSession 中に新 daemon が即死すると、getStatus は DaemonConnectionError を
+          // anchor=0 で吸収して正常 return しうる。ここで生存を確認せず成功宣言すると、再死の
+          // daemon-died は single-flight で本ループに吸収されたまま respawnPromise が解決し、二度と
+          // respawn されず dispatch が永久に drop される（recovery floor が黙って死ぬ最悪ケース）。
+          // benign な getStatus 失敗（daemon 生存・anchor は StreamStats で自己修復）は isRunning が
+          // true なので success へ進む。実際の再死のときだけ retry に回す。
+          if (!this.daemon.isRunning()) continue
           // 新 daemon は空。古い sample_id は無効 → 破棄し ensureLoaded に lazy 再ロードさせる
           // （durations は file 由来で不変なので保持し slice 領域解決に使う）。inflightLoads の旧
           // エントリは ws close の reject で各自の .finally が既に delete 済み。
@@ -355,8 +368,10 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (this.respawnPromise) {
       try {
         await this.respawnPromise
-      } catch {
-        // teardown 時の respawn 失敗は無視（quit を続行する）。
+      } catch (err) {
+        // respawnLoop は disposed=true で早期 return するので通常は throw しない。想定外の
+        // 失敗でも quit は続行するが、silent に握り潰さず記録する。
+        console.warn('[rust-engine] quit: respawn settled with an unexpected error:', err)
       }
     }
     await this.daemon.quit()
@@ -589,7 +604,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private onPlaybackError(play: ScheduledPlay, err: unknown): void {
     if (!this.isRunning) return // 既に stop/stopAll/quit 済み — teardown race を抑制
     // 接続喪失（死の瞬間の in-flight 失敗 / respawn 中）は supervisor 任せ → 静かに drop。
-    if (err instanceof DaemonConnectionError || this.respawning || !this.daemon.isRunning()) {
+    // DaemonQuitError は quit() 中の in-flight reject（stopAll が isRunning を倒すので普通は上の
+    // guard が拾うが、ordering 変更に強くするため明示的にも drop する。injectFault と対称）。
+    if (
+      err instanceof DaemonConnectionError ||
+      err instanceof DaemonQuitError ||
+      this.respawning ||
+      !this.daemon.isRunning()
+    ) {
       return
     }
     console.error(
