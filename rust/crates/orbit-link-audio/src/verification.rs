@@ -7,6 +7,7 @@
 //! 出荷ビルドにも receiver が含まれる）。本 Rust ラッパだけを feature で gate する。
 
 use std::ffi::CString;
+use std::marker::PhantomData;
 use std::os::raw::{c_char, c_int};
 
 use crate::{LinkAudioOutput, OrbitLinkRaw};
@@ -28,22 +29,30 @@ extern "C" {
 }
 
 /// 別 LinkAudio インスタンス（host）上に channel receiver を張る検証専用 RAII wrapper。
-pub struct VerificationReceiver {
+///
+/// C++ の `OrbitRecv` は host の raw ポインタを非所有で保持し `try_subscribe` 等で deref するため、
+/// **host が receiver より長生きする必要がある**。`PhantomData<&'a LinkAudioOutput>` で host の borrow
+/// を型に持たせ、host を receiver より先に drop すると **コンパイルエラー**になるよう強制する。
+pub struct VerificationReceiver<'a> {
     raw: *mut OrbitRecvRaw,
+    /// host の生存を receiver の lifetime に縛る（use-after-free をコンパイル時に排除）。
+    _host: PhantomData<&'a LinkAudioOutput>,
 }
 
-impl VerificationReceiver {
+impl<'a> VerificationReceiver<'a> {
     /// `host` 上に `channel` 名の receiver を作る。`host` は receiver 側の独立した LinkAudio。
-    pub fn new(host: &LinkAudioOutput, channel: &str) -> Self {
+    /// 返り値の lifetime `'a` が `host` の borrow に縛られるので、host を先に drop できない。
+    pub fn new(host: &'a LinkAudioOutput, channel: &str) -> Self {
         let c = CString::new(channel).expect("channel name has interior nul");
         // SAFETY: host.raw は valid（LinkAudioOutput のコンストラクタで non-null 保証）、c は
-        // 呼び出し中 valid な C 文字列。
-        // 注意: C++ の OrbitRecv は host の raw ポインタを保持し、try_subscribe 等で deref する。
-        // 呼び出し側は VerificationReceiver を drop するまで host を生存させる責任がある
-        // （Rust の型システムでは強制されない・検証専用コードなので呼び出し側が短命に保つ）。
+        // 呼び出し中 valid な C 文字列。C++ OrbitRecv が保持する host ポインタの生存は `'a`
+        // （PhantomData）でコンパイラが強制するので use-after-free しない。
         let raw = unsafe { orbit_link_recv_create(host.raw, c.as_ptr()) };
         assert!(!raw.is_null(), "orbit_link_recv_create returned null");
-        Self { raw }
+        Self {
+            raw,
+            _host: PhantomData,
+        }
     }
 
     /// host が channel を発見していれば購読を試みる。購読確立で true。
@@ -65,7 +74,7 @@ impl VerificationReceiver {
     }
 }
 
-impl Drop for VerificationReceiver {
+impl Drop for VerificationReceiver<'_> {
     fn drop(&mut self) {
         // SAFETY: raw は valid で本 struct が唯一の所有者。二重解放しない。
         unsafe { orbit_link_recv_destroy(self.raw) };
