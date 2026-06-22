@@ -23,6 +23,9 @@ export type CommandMethod =
   | 'SetGlobalGain'
   | 'GetStatus'
   | 'Ping'
+  // gated な fault 注入（recovery floor の kill-test 専用）。daemon 側で
+  // ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 のときだけ受理し、それ以外は MALFORMED_REQUEST。
+  | 'InjectFault'
 
 export interface CommandFrame {
   id: string

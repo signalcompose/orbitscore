@@ -376,23 +376,50 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
-  it('daemon 切断時は poll を停止し error を一度だけ出す（flood しない）', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    // LoadSample を hang させ、複数イベントを in-flight のまま切断する。
-    const p = await boot(defaultHandlers({ LoadSample: () => new Promise(() => {}) }))
-    p.scheduleEvent('/audio/a.wav', 0, 0, 0, 'seqA')
-    p.scheduleEvent('/audio/b.wav', 0, 0, 0, 'seqA')
-    p.scheduleEvent('/audio/c.wav', 0, 0, 0, 'seqA')
+  // --- recovery floor（daemon supervision + auto-respawn / #300） ---
+
+  it('daemon 切断時は respawn → 再接続 → 再 establish し、poll を止めず再生を継続する', async () => {
+    // respawn は warn を多数出すので抑制（noise 排除）。
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // 連続供給（active loops の代理）: 0..1500ms に 50ms 間隔でイベントを撒く。
+    for (let t = 0; t <= 1500; t += 50) p.scheduleEvent('/audio/loop.wav', t, 0, 0, 'seqA')
     p.start()
-    // 3 件の LoadSample が daemon に届き pending になるのを待つ。
-    await waitFor(() => server.received.filter((r) => r.method === 'LoadSample').length >= 3)
-    // WebSocket を閉じる → pending が全て DaemonConnectionError で reject。
+    // 初回 dispatch（PlayAt）が走るのを待ち、その時点を drop の基準点にする。
+    await waitFor(() => server.received.some((r) => r.method === 'PlayAt'))
+    const dropMark = server.received.length
+    // 接続だけ落とす（server は listen 継続 = 実 daemon の死 → 同一 URL へ再接続可能を模す）。
+    server.dropConnections()
+    // respawn → 再接続 → 再 establish（GetStatus が drop 後に届く）を待つ。
+    await waitFor(() => server.received.slice(dropMark).some((r) => r.method === 'GetStatus'), {
+      timeoutMs: 3000,
+    })
+    // 復帰後も dispatch が続く（active loops の構造的復帰）。
+    await waitFor(() => server.received.slice(dropMark).some((r) => r.method === 'PlayAt'), {
+      timeoutMs: 3000,
+    })
+    expect(p.isRunning).toBe(true) // poll は止まっていない
+    // 新 daemon は空 → sample が再ロードされる（sampleIds キャッシュ破棄の証左）。
+    expect(server.received.slice(dropMark).some((r) => r.method === 'LoadSample')).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  it('respawn が上限まで失敗したら poll を止め、fatal を一度だけ出す（プロセスは生存）', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    p.scheduleEvent('/audio/a.wav', 0, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => server.received.some((r) => r.method === 'PlayAt'))
+    // server ごと停止 → 再接続不可 → respawn は全試行失敗する。
     await server.stop()
-    await waitFor(() => !p.isRunning) // 切断検出で scheduler 停止
-    await new Promise((r) => setTimeout(r, 20))
-    const connLostLogs = errorSpy.mock.calls.filter((c) => String(c[0]).includes('connection lost'))
-    expect(connLostLogs.length).toBe(1) // 3 件失敗しても通知は 1 度だけ
+    // MAX_RESPAWN_ATTEMPTS 回失敗後に poll が止まる。
+    await waitFor(() => !p.isRunning, { timeoutMs: 5000 })
+    const fatal = errorSpy.mock.calls.filter((c) => String(c[0]).includes('respawn failed'))
+    expect(fatal.length).toBe(1) // 断念通知は一度だけ（flood しない）
     expect(p.isRunning).toBe(false)
+    // TS プロセスは生存している（このテストが続行できている事自体が証左）。
+    warnSpy.mockRestore()
     errorSpy.mockRestore()
   })
 })

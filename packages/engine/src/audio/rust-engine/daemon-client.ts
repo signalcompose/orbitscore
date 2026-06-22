@@ -73,11 +73,25 @@ export class DaemonClient extends EventEmitter {
   private ws: WebSocket | null = null
   private readonly pending = new Map<string, PendingRequest>()
   private running = false
+  /**
+   * quit() による意図的 close を crash と区別するフラグ。close ハンドラはこれが true の
+   * 間 `daemon-died` を emit しない（supervisor が意図的 quit を死と誤認し respawn するのを防ぐ）。
+   */
+  private intentionalClose = false
   /** 並列 start() を直列化し、daemon を二重に spawn しないためのシングルフライト。 */
   private startPromise: Promise<void> | null = null
 
   isRunning(): boolean {
     return this.running
+  }
+
+  /**
+   * 子プロセス（daemon）の PID。recovery floor の kill-test が hard-death（SIGKILL）を
+   * 注入するための read-only seam。production code は使用しない。
+   * @internal
+   */
+  get childPid(): number | undefined {
+    return this.child?.pid
   }
 
   async start(options: DaemonClientOptions = {}): Promise<void> {
@@ -90,6 +104,8 @@ export class DaemonClient extends EventEmitter {
   }
 
   private async doStart(options: DaemonClientOptions): Promise<void> {
+    // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
+    this.intentionalClose = false
     const startupTimeoutMs = options.startupTimeoutMs ?? DEFAULT_STARTUP_TIMEOUT_MS
     const connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
     const handshakeTimeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS
@@ -116,6 +132,11 @@ export class DaemonClient extends EventEmitter {
           else resolve()
         }
       })
+      // connectWebSocket の await 中に ws が close すると、close ハンドラが handshakePromise を
+      // reject しうる。その時点では誰も await しておらず unhandled rejection になる（recovery の
+      // 再接続が dead endpoint を踏むと顕在化）。制御は下の await が担うので、ここで no-op catch を
+      // 付けて「観測済み」にし、unhandled 警告だけを抑止する（reject は await が再観測して throw）。
+      handshakePromise.catch(() => {})
 
       await this.connectWebSocket(wsUrl, connectTimeoutMs)
       await handshakePromise
@@ -228,8 +249,26 @@ export class DaemonClient extends EventEmitter {
     return this.request('GetStatus', {})
   }
 
+  /**
+   * gated な fault 注入（recovery floor の kill-test 専用 / @internal）。daemon を
+   * ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 で起動した場合のみ受理される。daemon を
+   * panic→exit(1)（panic hook 経路）で殺す。daemon は応答前に死ぬので request は close で
+   * reject される想定 → connection 系のエラーは握り潰す（それ以外は呼び出し側へ throw）。
+   */
+  async injectFault(): Promise<void> {
+    try {
+      await this.request('InjectFault', {})
+    } catch (err) {
+      // daemon が応答前に死ぬ = 期待動作。接続喪失系は飲み込み、想定外のエラーだけ surface する。
+      if (err instanceof DaemonConnectionError || err instanceof DaemonQuitError) return
+      throw err
+    }
+  }
+
   async quit(): Promise<void> {
     if (!this.running) return
+    // crash と区別するため、ws を閉じる前に意図的 close を宣言する（daemon-died 抑制）。
+    this.intentionalClose = true
     this.running = false
     try {
       this.ws?.close()
@@ -456,10 +495,26 @@ export class DaemonClient extends EventEmitter {
     // 最初のメッセージで handshakeResolver を呼ぶ二段構え。)
     const onMessage = (data: WebSocket.RawData) => this.handleFrame(data.toString())
     ws.on('message', onMessage)
+    // daemon を kill -9 / segfault すると、socket は 'close' の前に 'error'（ECONNRESET 等）を
+    // emit しうる。connect 用の once('error') が消費済みだと 'error' に listener が無くなり、
+    // Node の EventEmitter が unhandled 'error' を throw して TS プロセスごと巻き込む。recovery
+    // floor の要は「daemon の死で app を落とさない」ことなので、永続 error listener で吸収する
+    // （実際の cleanup / respawn 駆動は 'close' ハンドラが行う）。
+    const onError = (err: Error): void => {
+      // listener が存在すること自体が目的（unhandled 'error' の throw を防ぐ）。詳細は
+      // 'socket-error' で通知する — 本ファイルの診断 event 規約（'ws-close-error' /
+      // 'parse-error' 等）に倣い、silent 握り潰しを避ける（消費は任意）。実際の cleanup /
+      // respawn 駆動は 'close' ハンドラが行う。
+      this.emit('socket-error', err)
+    }
+    ws.on('error', onError)
     ws.on('close', () => {
+      // running を倒す前に「起動成功後だったか」を捕まえる（死の判定に使う）。
+      const wasRunning = this.running
       this.running = false
       // close 後に listener を放置すると ws オブジェクトの GC が阻害されるので明示 detach。
       ws.off('message', onMessage)
+      ws.off('error', onError)
       // handshake 途中で close した場合、handshakePromise が永続 hang するのを防ぐ。
       if (this.handshakeResolver) {
         this.handshakeResolver(new DaemonConnectionError('websocket closed during handshake'))
@@ -470,6 +525,12 @@ export class DaemonClient extends EventEmitter {
         pend.reject(new DaemonConnectionError('websocket closed'))
       }
       this.pending.clear()
+      // 起動成功後（wasRunning）の予期せぬ close = daemon の死（panic→exit / segfault / kill）。
+      // 意図的 quit（intentionalClose）でなければ supervisor へ通知し respawn を駆動させる。
+      // clean exit（panic hook→exit1）も hard segfault/SIGKILL も、ここに収束する。
+      if (wasRunning && !this.intentionalClose) {
+        this.emit('daemon-died')
+      }
     })
     await new Promise<void>((resolve, reject) => {
       const to = setTimeout(() => reject(new Error(`ws connect timeout: ${url}`)), timeoutMs)
