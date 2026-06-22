@@ -36,14 +36,18 @@ size_t orbit_link_num_peers(OrbitLink* link);
 int32_t orbit_link_register_channel(OrbitLink* link, const char* name,
                                     size_t max_num_samples);
 
-// interleaved f32 の 1 ブロックを channel に commit する。
-// この呼び出しスレッドが LinkAudio の "audio thread" として扱われる
-// (内部で captureAudioSessionState + beatAtTime を行う)。
-// 戻り値: 1 = commit 済 / 0 = 購読者なしで no-op / -1 = 引数不正。
+// interleaved f32 の 1 ブロックを channel に commit する。`buf_len` は interleaved の
+// 要素数(= 呼び出し側 slice 長)で、shim は min(num_frames*num_channels, buf_len,
+// 宛先容量)までしか読まない(overread 防止)。
+// PR2b で配線後、この関数は LinkAudio の "audio thread"(GPL consumer thread)から
+// 呼ぶ必要がある(内部で captureAudioSessionState を呼ぶ。Thread-safe:no /
+// Realtime-safe:yes)。PR2a ではまだ threading contract は未配線。
+// 戻り値: 1 = commit 済 / 0 = 購読者なしで no-op / -1 = 引数不正・未登録 channel /
+//         -2 = 購読者ありだが commit 失敗(拒否 or 例外)。
 int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
-                              const float* interleaved, size_t num_frames,
-                              size_t num_channels, uint32_t sample_rate,
-                              double quantum);
+                              const float* interleaved, size_t buf_len,
+                              size_t num_frames, size_t num_channels,
+                              uint32_t sample_rate, double quantum);
 
 // Link テンポリーダーとして BPM を push する(app-thread 経路・PR3 で配線)。
 void orbit_link_set_tempo(OrbitLink* link, double bpm);

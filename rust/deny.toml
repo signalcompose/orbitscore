@@ -7,6 +7,11 @@
 #      (orbit-audio-core / -native / -wasm)が誤って依存すれば dep として graph に入り、
 #      GPL が allow に無いため本 gate が fail する。
 #
+# 注意: Ableton Link 本体は vendored C++(submodule)であり cargo crate ではない。
+# cargo-deny が評価するのは `orbit-link-audio` の Cargo.toml の license フィールド
+# (= "GPL-2.0-or-later")のみで、C++ ソースのライセンスはスコープ外。本 gate が機能するのは
+# orbit-link-audio 自体が GPL を self-declare しているからである(この宣言を外すと gate は無効化する)。
+#
 # 使い方:
 #   default(link-audio off)で `cargo deny --manifest-path rust/Cargo.toml check licenses`
 #   が pass する = default graph は GPL-free。`--features link-audio` では GPL が現れるのは

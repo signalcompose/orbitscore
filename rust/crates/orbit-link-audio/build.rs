@@ -34,6 +34,17 @@ fn main() {
             header.display()
         );
     }
+    // Link は asio-standalone(submodule の nested submodule)を include する。
+    // link だけ init して asio が未取得だと不親切なコンパイルエラーになるため明示チェック。
+    let asio = link.join("modules/asio-standalone/asio/include");
+    if !asio.exists() {
+        panic!(
+            "asio-standalone(Link の nested submodule)が見つかりません: {}\n\
+             `git submodule update --init --recursive packages/sc-link-audio/external_libraries/link` \
+             を実行してください。",
+            asio.display()
+        );
+    }
 
     cc::Build::new()
         .cpp(true)

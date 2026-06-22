@@ -34,6 +34,7 @@ extern "C" {
         link: *mut OrbitLinkRaw,
         channel_id: i32,
         interleaved: *const f32,
+        buf_len: usize,
         num_frames: usize,
         num_channels: usize,
         sample_rate: u32,
@@ -60,8 +61,10 @@ pub enum CommitResult {
     Committed,
     /// 購読者(Live peer)なしで no-op。
     NoSubscriber,
-    /// channel id が未登録(範囲外)。
+    /// channel id が未登録(範囲外)または引数不正。
     ChannelNotFound,
+    /// 購読者ありだが commit に失敗(Link が拒否 or egress 中に例外)。
+    CommitFailed,
 }
 
 /// 1 つの Ableton Link セッションと、その上の名前付き出力 channel 群。
@@ -126,13 +129,21 @@ impl LinkAudioOutput {
         sample_rate: u32,
         quantum: f64,
     ) -> CommitResult {
-        // SAFETY: interleaved.as_ptr() は len 分 valid。shim 側は num_frames *
-        // num_channels と bh.maxNumSamples の小さい方までしか読まない。
+        debug_assert!(
+            interleaved.len() >= num_frames.saturating_mul(num_channels),
+            "commit_channel: interleaved.len()={} < num_frames*num_channels={}",
+            interleaved.len(),
+            num_frames.saturating_mul(num_channels)
+        );
+        // SAFETY: interleaved.as_ptr() は interleaved.len() 分 valid。buf_len として
+        // len を渡し、shim は min(num_frames*num_channels, buf_len, 宛先容量)までしか
+        // 読まないので overread しない。
         let rc = unsafe {
             orbit_link_commit_channel(
                 self.raw,
                 channel_id,
                 interleaved.as_ptr(),
+                interleaved.len(),
                 num_frames,
                 num_channels,
                 sample_rate,
@@ -142,6 +153,7 @@ impl LinkAudioOutput {
         match rc {
             1 => CommitResult::Committed,
             0 => CommitResult::NoSubscriber,
+            -2 => CommitResult::CommitFailed,
             _ => CommitResult::ChannelNotFound,
         }
     }
@@ -199,5 +211,12 @@ mod tests {
         let out = LinkAudioOutput::new(120.0, "orbit-test").expect("create");
         let err = out.register_channel("bad\0name", 4096).unwrap_err();
         assert!(matches!(err, LinkAudioError::InvalidString(_)));
+    }
+
+    #[test]
+    fn new_rejects_interior_nul_in_peer_name() {
+        // LinkAudioOutput は Debug を持たないため unwrap_err ではなく matches! で判定。
+        let result = LinkAudioOutput::new(120.0, "bad\0peer");
+        assert!(matches!(result, Err(LinkAudioError::InvalidString(_))));
     }
 }
