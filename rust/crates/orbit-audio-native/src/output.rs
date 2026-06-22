@@ -113,7 +113,9 @@ pub struct LinkChannelActivate {
     /// **readiness flag**（A4-2b-2b）: GPL consumer thread が当該 channel の Link 登録 + egress 構築を
     /// 終えたら `true` にする。callback は `false` の間この channel を render_multi 対象から外し commit
     /// もしない。これにより「callback が push するが consumer が drain しない ring（partial-failure で
-    /// 溢れて silent）」が **構造的に発生しない**。control と consumer thread が同じ `Arc` を共有する。
+    /// 溢れて silent）」が **構造的に発生しない**。steady-state の共有者は RT callback（`le.channels`
+    /// 内の本構造体）と consumer thread（`ActiveChannel`）の 2 つ。control は `register_channel` 構築後に
+    /// 自分の clone を手放す。
     pub ready: Arc<AtomicBool>,
 }
 
@@ -162,9 +164,10 @@ fn render_block(
 
     let bs = (hw.len() / output_channels) * output_channels;
 
-    // egress に乗せる条件（pass 1/2 で同一）: ready かつ scratch が block 以上。両 pass で同じ判定を
-    // 使い divergence を防ぐ（pass 1 で render_multi に入れた channel と pass 2 で commit する channel を
-    // 一致させる）。`bs` を capture するだけで `le.channels` は借用しない。
+    // egress に乗せる条件（pass 1/2 で同一）: ready かつ scratch が block 以上。両 pass で同じ closure を
+    // 使い **論理的な** divergence を防ぐ。ただし `ready` は consumer thread が concurrent に false→true
+    // にするため、pass 1 の後に ready 化した channel は pass 2 のみに入りうる（その block は無音で commit・
+    // 次 callback から正常）= benign。`bs` を capture するだけで `le.channels` は借用しない。
     let egress_active = |ch: &LinkChannelActivate| {
         channel_egress_active(ch.ready.load(Ordering::Relaxed), ch.scratch.len(), bs)
     };
@@ -542,7 +545,8 @@ mod tests {
             // callback body: pool の各 entry から (name, &mut scratch) を stack ArrayVec へ。
             let mut chans: ArrayVec<(&str, &mut [f32]), MAX_N> = ArrayVec::new();
             for (name, scratch) in pool.iter_mut() {
-                // overflow（pool > MAX_N）は実コードでは log（silent cap しない）。
+                // overflow（pool > MAX_N）は実 render_block では debug_assert!(false) で panic（dev）/
+                // 残り channel を silent skip（release）。RT callback では log しない（cap は control 強制）。
                 if chans
                     .try_push((name.as_str(), scratch.as_mut_slice()))
                     .is_err()
