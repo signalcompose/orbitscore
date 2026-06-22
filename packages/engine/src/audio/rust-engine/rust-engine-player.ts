@@ -531,8 +531,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     // supervisor 任せで静かに drop する。teardown(quit)/respawn 中は対象が無い/置換されるので
     // skip する（quit は daemon.quit() が、respawn は新 daemon が空であることが各々始末する）。
     if (!this.disposed && !this.respawning && this.daemon.isRunning()) {
-      // 接続喪失（DaemonConnectionError 等）は想定内 — 死んだ daemon に stop は不要。
-      void this.daemon.stopAll().catch(() => {})
+      void this.daemon.stopAll().catch((err) => {
+        // 接続喪失（DaemonConnectionError / DaemonQuitError）は想定内 — 死んだ / 終了中の
+        // daemon に stop は不要なので静かに drop。それ以外（例: scheduler mutex poisoned 由来の
+        // DaemonProtocolError）は daemon の実不具合を示すので握り潰さず可視化する
+        // （onPlaybackError と同じ判別方針）。
+        if (err instanceof DaemonConnectionError || err instanceof DaemonQuitError) return
+        console.warn('⚠️  [rust-engine] stopAll() failed unexpectedly:', err)
+      })
     }
   }
 

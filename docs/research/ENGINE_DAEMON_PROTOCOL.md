@@ -247,7 +247,7 @@ JSON-RPC 2.0 の影響を受けた独自形式:
 - `pan`: `[-1.0, 1.0]`。範囲外は自動 clamp（UX 優先、reject しない）、省略時は 0.0
 - `offset_sec`: `[0.0, ∞)`。サンプル内の再生開始位置（秒）。省略時は 0.0（先頭）。`chop` の slice 開始位置に対応。負値は `PARAM_OUT_OF_RANGE` で reject
 - `duration_sec`: `[0.0, ∞)`。`offset_sec` から再生する**ソース**長（秒）。0 または省略で「offset 以降すべて」。`chop` の slice 長に対応。負値は `PARAM_OUT_OF_RANGE` で reject。サンプル端を超える指定は端で clamp
-- `rate`: varispeed 再生レート（#319）。省略時 1.0（自然尺）。`>1` で速く短く高ピッチ、`<1` で遅く長く低ピッチ（ピッチも動く varispeed = SC `PlayBuf.ar(rate:)` 一致）。`<=0` / 非有限は `pan` 同様 reject せず 1.0 に丸める（UX 優先）。出力尺 = `duration_sec / rate`（PlayEnded はこの出力終端で発火）
+- `rate`: varispeed 再生レート（#319）。省略時 1.0（自然尺）。`>1` で速く短く高ピッチ、`<1` で遅く長く低ピッチ（ピッチも動く varispeed = SC `PlayBuf.ar(rate:)` 一致）。`<=0` / 非有限は `pan` 同様 reject せず 1.0 に丸める（UX 優先）。出力尺 = `実ソース尺 / rate`（`duration_sec > 0` なら `duration_sec / rate`、`duration_sec = 0` なら `offset` 以降のサンプル実尺 / rate）。PlayEnded はこの出力終端で発火
 
 ### Stop
 

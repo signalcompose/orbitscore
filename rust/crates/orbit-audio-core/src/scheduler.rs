@@ -332,7 +332,9 @@ impl Scheduler {
 
                 // fade 開始 source 位置に達したら 1.0→0.0 へ線形減衰（残り出力幅 / fade 幅）。
                 // common path（fade 前 / fade 無し）は比較1つで division しない。rate=1.0 では
-                // env = (slice_len-pos)/fade_frames となり従来の fade とビット一致する。
+                // env = (slice_len-pos)/fade_frames となり従来の fade と数値的に一致する（f64 中間
+                // 値経由のため fade tail は ≤1 ULP 差・PCM 許容内。sample 値の補間は frac=0 で厳密
+                // ビット同一）。fade*rate の正しさは varispeed_fade_width_scales_with_rate で pin。
                 let env = if fading && pos >= fade_start_src {
                     (((slice_len_f - pos) / fade_span_src) as f32).clamp(0.0, 1.0)
                 } else {
@@ -682,6 +684,38 @@ mod tests {
         // 出力 8 フレーム（4/0.5）で読み切り → f8 以降は無音。
         assert!(buf[16].abs() < 1e-6, "f8 L (読み切り後)={}", buf[16]);
         assert_eq!(s.active_count(), 0);
+    }
+
+    #[test]
+    fn varispeed_fade_width_scales_with_rate() {
+        // fade を **出力時間**で数える `fade_span_src = fade_frames * rate` を pin する
+        // （`* rate` を落とす regression = fade 開始位置と幅がズレて click を生む）。
+        // 2400 フレーム定数 1.0 を rate=2.0・hard-left で流す → 出力 1200 フレーム。
+        //   out_dur = 2400/(48000*2) = 0.025s → fade_sec = min(0.001, 0.008) = 0.001s
+        //   → fade_frames = round(0.001*48000) = 48（出力フレーム）。
+        //   fade_span_src = 48*2 = 96、fade_start_src = 2400-96 = 2304。
+        //   出力フレーム k では source pos = 2k。env = (2400 - 2k)/96（pos>=2304＝k>=1152）。
+        let mut s = Scheduler::new(48_000, 2);
+        let sample = Sample::new(vec![1.0f32; 2400], 48_000, 1);
+        s.schedule(
+            ScheduledSample::new(0.0, sample)
+                .with_pan(-1.0)
+                .with_region(0, 2400)
+                .with_rate(2.0),
+        );
+        let mut buf = vec![0.0f32; 2600]; // 1300 frames stereo（出力 1200 を覆う）
+        s.render(&mut buf);
+        // body（k=1100・pos=2200 < fade 開始）は env=1.0。
+        assert!((buf[2 * 1100] - 1.0).abs() < 1e-4, "body L={}", buf[2 * 1100]);
+        // fade 領域 k=1160（pos=2320）: env=(2400-2320)/96 ≈ 0.8333。`* rate` を落とすと
+        // fade_start=2352 となり pos=2320 はまだ fade 前で env=1.0 → ここで分岐を検出する。
+        assert!(
+            (buf[2 * 1160] - 0.8333).abs() < 0.01,
+            "fade L={} (rate 欠落 regression なら 1.0)",
+            buf[2 * 1160]
+        );
+        // 末尾 k=1199（pos=2398）: env=(2400-2398)/96 ≈ 0.0208 → 十分小さい。
+        assert!(buf[2 * 1199] < 0.1, "末尾 fade L={}", buf[2 * 1199]);
     }
 
     #[test]
