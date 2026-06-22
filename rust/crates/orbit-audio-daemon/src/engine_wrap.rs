@@ -155,6 +155,8 @@ impl EngineWrap {
     /// 「offset 以降すべて」。いずれもサンプル端で clamp。
     /// `rate` は varispeed（1.0 = 自然尺、>1 = 速く短く高ピッチ、<1 = 遅く長く低ピッチ。
     /// `<=0`/非有限は core で 1.0 に丸め）。
+    /// `channel` は出力先 channel 名（LinkAudio outputChannel・#209）。`None` = 既定
+    /// （unrouted / hardware sum）。同名 channel の event は per-channel render で加算合成される。
     /// 戻り値の `duration_sec` は **実際に再生される区間の出力尺**（slice 実尺 / rate）なので、
     /// 呼び出し側は PlayEnded を再生終端（varispeed 後の出力終端）に合わせて遅延送信できる。
     #[allow(clippy::too_many_arguments)]
@@ -167,6 +169,7 @@ impl EngineWrap {
         offset_sec: f64,
         duration_sec: f64,
         rate: f64,
+        channel: Option<String>,
     ) -> Result<PlayHandle, WrapError> {
         let sample = self
             .lock_samples()?
@@ -201,6 +204,7 @@ impl EngineWrap {
                 // PlayEnded 尺の一致が scheduler 内の再 clamp に依存してしまう（latent な desync）。
                 effective_len_frames,
                 rate,
+                channel,
                 play_id.clone(),
                 sample,
             )
@@ -300,6 +304,38 @@ impl EngineWrap {
             let this_frames = block_frames.min(total_frames - rendered);
             let buf = &mut block[..this_frames * channels];
             self.engine.render(buf);
+            data.extend_from_slice(buf);
+            rendered += this_frames;
+        }
+        data
+    }
+
+    /// `render_offline` の channel filter 版（LinkAudio per-channel 受信側の決定論検証・層A）。
+    /// 指定 channel 名に属する event だけをオフラインで決定論レンダする。`render_offline` 同様
+    /// test-only（cpal 非依存・実時間非依存）。同名 channel は加算合成される（sum-by-name）。
+    /// 1 つの wrap で複数 channel を続けて tap すると transport が二重に進むため、検証は
+    /// channel ごとに fresh な wrap を使うこと。
+    ///
+    /// `block_frames == 0` は panic（テストハーネス用途なので不正設定は早期に落とす）。
+    #[doc(hidden)]
+    pub fn render_offline_channel(
+        &self,
+        channel: &str,
+        total_frames: usize,
+        block_frames: usize,
+    ) -> Vec<f32> {
+        assert!(
+            block_frames > 0,
+            "render_offline_channel: block_frames must be > 0"
+        );
+        let channels = self.channels as usize;
+        let mut data = Vec::with_capacity(total_frames * channels);
+        let mut block = vec![0.0f32; block_frames * channels];
+        let mut rendered = 0usize;
+        while rendered < total_frames {
+            let this_frames = block_frames.min(total_frames - rendered);
+            let buf = &mut block[..this_frames * channels];
+            self.engine.render_channel(buf, channel);
             data.extend_from_slice(buf);
             rendered += this_frames;
         }

@@ -23,6 +23,10 @@ pub struct ScheduledSample {
     pub sample: Sample,
     /// Stop 命令での個別停止用識別子。`None` なら停止不可（fire-and-forget）。
     pub play_id: Option<String>,
+    /// 出力先 channel 名（LinkAudio outputChannel・#209）。`None` = 既定（unrouted / hardware
+    /// sum）。同名 channel の event は `Scheduler::render_channel` で加算合成される
+    /// （sum-by-name・DSL §8.1.2）。
+    pub channel: Option<String>,
 }
 
 impl ScheduledSample {
@@ -36,6 +40,7 @@ impl ScheduledSample {
             rate: 1.0,
             sample,
             play_id: None,
+            channel: None,
         }
     }
 
@@ -68,6 +73,12 @@ impl ScheduledSample {
 
     pub fn with_play_id(mut self, play_id: String) -> Self {
         self.play_id = Some(play_id);
+        self
+    }
+
+    /// 出力先 channel 名（LinkAudio outputChannel・#209）を設定する。`None` で既定（unrouted）。
+    pub fn with_channel(mut self, channel: Option<String>) -> Self {
+        self.channel = channel;
         self
     }
 }
@@ -157,6 +168,8 @@ struct ActiveSample {
     read_pos: f64,
     /// 個別停止用識別子
     play_id: Option<String>,
+    /// 出力先 channel 名（LinkAudio・#209）。`render_channel` の filter キー。`None` = unrouted。
+    channel: Option<String>,
 }
 
 impl Scheduler {
@@ -239,6 +252,7 @@ impl Scheduler {
             sample: event.sample,
             read_pos: 0.0,
             play_id: event.play_id,
+            channel: event.channel,
         });
     }
 
@@ -259,10 +273,25 @@ impl Scheduler {
         n
     }
 
-    /// 出力バッファにアクティブなサンプル群を加算する。
+    /// 出力バッファにアクティブなサンプル群を加算する（全 channel = hardware sum 経路）。
     ///
     /// `out` は interleaved（`output_channels` フレーム単位）であることを想定。
     pub fn render(&mut self, out: &mut [f32]) {
+        self.render_filtered(out, None);
+    }
+
+    /// 指定 channel 名に属する event だけを `out` に加算する（LinkAudio per-channel tap・#209）。
+    /// 同名 channel の複数 event は自然に加算され sum-by-name（DSL §8.1.2）になる。
+    /// transport（cursor / master gain ramp / 完了 event の掃除）は filter 有無に依らず 1 回
+    /// 進むため、本番 hardware `render`（filter=None）と同一 tick での混在呼び出しはしない
+    /// こと（per-channel 同時 render の multi-buffer 化は後続 PR）。
+    pub fn render_channel(&mut self, out: &mut [f32], channel: &str) {
+        self.render_filtered(out, Some(channel));
+    }
+
+    /// `render` / `render_channel` の実体。`channel_filter == None` で全 event（従来の
+    /// hardware sum とビット同一）、`Some(name)` で当該 channel の event のみ加算する。
+    fn render_filtered(&mut self, out: &mut [f32], channel_filter: Option<&str>) {
         for s in out.iter_mut() {
             *s = 0.0;
         }
@@ -271,6 +300,13 @@ impl Scheduler {
         let output_channels = self.output_channels as usize;
 
         for active in self.events.iter_mut() {
+            // channel filter: Some の時は一致する channel の event のみ。None は全通過
+            // （従来の hardware sum とビット同一）。
+            if let Some(want) = channel_filter {
+                if active.channel.as_deref() != Some(want) {
+                    continue;
+                }
+            }
             // このバッファ区間にこのサンプルが重なるか？
             let buf_start = self.cursor_frames;
             let buf_end = self.cursor_frames + frames_to_render as u64;
@@ -819,5 +855,97 @@ mod tests {
         let mut s = Scheduler::new(48_000, 2);
         s.set_global_gain(-0.5, 0);
         assert_eq!(s.global_gain(), 0.0);
+    }
+
+    // === LinkAudio named-channel routing + sum-by-name（A4-1・#322） ===
+
+    #[test]
+    fn render_channel_routes_only_matching_events() {
+        // "a" に ramp（hard-left = L が源値）、"b" に定数 100 を同時刻に出力。
+        // render_channel("a") は "a" の値（0,1,2,...）のみで、"b" の 100 は混じらない。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_mono_ramp(10))
+                .with_pan(-1.0)
+                .with_region(0, 10)
+                .with_channel(Some("a".to_string())),
+        );
+        s.schedule(
+            ScheduledSample::new(0.0, Sample::new(vec![100.0f32; 10], 48_000, 1))
+                .with_pan(-1.0)
+                .with_region(0, 10)
+                .with_channel(Some("b".to_string())),
+        );
+        let mut buf = vec![0.0f32; 40]; // 20 frames stereo
+        s.render_channel(&mut buf, "a");
+        // フィルタが "b" を取り込む regression なら 100 が加算され落ちる。
+        assert!((buf[0] - 0.0).abs() < 1e-4, "f0 L={}", buf[0]);
+        assert!((buf[2] - 1.0).abs() < 1e-4, "f1 L={}", buf[2]);
+        assert!((buf[8] - 4.0).abs() < 1e-4, "f4 L={}", buf[8]);
+    }
+
+    #[test]
+    fn render_channel_sums_same_name() {
+        // 同名 channel "mix" に 2 つの同一 ramp → 加算合成（sum-by-name）で各フレーム 2 倍。
+        // last-writer-wins の regression なら 1 倍のまま。
+        let mut s = Scheduler::new(48_000, 2);
+        for _ in 0..2 {
+            s.schedule(
+                ScheduledSample::new(0.0, mk_sample_mono_ramp(10))
+                    .with_pan(-1.0)
+                    .with_region(0, 10)
+                    .with_channel(Some("mix".to_string())),
+            );
+        }
+        let mut buf = vec![0.0f32; 40];
+        s.render_channel(&mut buf, "mix");
+        assert!((buf[0] - 0.0).abs() < 1e-4, "f0 L={}", buf[0]);
+        assert!((buf[2] - 2.0).abs() < 1e-4, "f1 L={}", buf[2]);
+        assert!((buf[8] - 8.0).abs() < 1e-4, "f4 L={}", buf[8]);
+    }
+
+    #[test]
+    fn render_unfiltered_includes_all_channels() {
+        // render（filter なし = hardware sum）は channel に依らず全 event を混合する。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_mono_ramp(10))
+                .with_pan(-1.0)
+                .with_region(0, 10)
+                .with_channel(Some("a".to_string())),
+        );
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_mono_ramp(10))
+                .with_pan(-1.0)
+                .with_region(0, 10)
+                .with_channel(Some("b".to_string())),
+        );
+        let mut buf = vec![0.0f32; 40];
+        s.render(&mut buf);
+        // a + b 両方が混ざる → 0,2,4,...
+        assert!((buf[2] - 2.0).abs() < 1e-4, "f1 L={}", buf[2]);
+    }
+
+    #[test]
+    fn render_channel_unknown_is_silent() {
+        // 未使用 channel 名を tap すると完全無音（どの event にもマッチしない）。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_stereo(100))
+                .with_channel(Some("a".to_string())),
+        );
+        let mut buf = vec![0.0f32; 200];
+        s.render_channel(&mut buf, "nonexistent");
+        assert!(buf.iter().all(|&x| x == 0.0), "未使用 channel は無音のはず");
+    }
+
+    #[test]
+    fn unrouted_event_is_skipped_by_channel_render() {
+        // channel=None（unrouted）の event は render_channel では出ない（hardware 専用）。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(100))); // channel None
+        let mut buf = vec![0.0f32; 200];
+        s.render_channel(&mut buf, "a");
+        assert!(buf.iter().all(|&x| x == 0.0), "unrouted event は channel tap に出ない");
     }
 }

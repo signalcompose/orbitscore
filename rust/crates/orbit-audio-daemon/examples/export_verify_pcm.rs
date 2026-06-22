@@ -183,6 +183,7 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
             ev.offset_sec,
             ev.duration_sec,
             ev.rate,
+            None,
         )
         .expect("play_at");
         let end = frame_at(ev.onset_sec, sr) + play_span(ev, &sample_frames, sr);

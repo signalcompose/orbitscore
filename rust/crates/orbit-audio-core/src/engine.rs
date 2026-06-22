@@ -52,6 +52,8 @@ impl Engine {
     /// `slice_start_frame` / `slice_len_frames` は再生領域（`chop` の slice）。
     /// `slice_len_frames == 0` で「offset 以降すべて」。サンプル端で clamp される。
     /// `rate` は varispeed（1.0 = 自然尺・`<=0`/非有限は 1.0 に丸め）。
+    /// `channel` は出力先 channel 名（LinkAudio outputChannel・#209）。`None` = 既定
+    /// （unrouted / hardware sum）。同名 channel は `render_channel` で加算合成される。
     #[allow(clippy::too_many_arguments)]
     pub fn schedule_with_play_id(
         &self,
@@ -61,6 +63,7 @@ impl Engine {
         slice_start_frame: usize,
         slice_len_frames: usize,
         rate: f64,
+        channel: Option<String>,
         play_id: String,
         sample: Sample,
     ) -> Result<(), EngineError> {
@@ -71,6 +74,7 @@ impl Engine {
                 .with_pan(pan)
                 .with_region(slice_start_frame, slice_len_frames)
                 .with_rate(rate)
+                .with_channel(channel)
                 .with_play_id(play_id),
         );
         Ok(())
@@ -118,6 +122,20 @@ impl Engine {
     pub fn render(&self, out: &mut [f32]) {
         match self.inner.try_lock() {
             Ok(mut s) => s.render(out),
+            Err(_) => {
+                for x in out.iter_mut() {
+                    *x = 0.0;
+                }
+            }
+        }
+    }
+
+    /// `render` の channel filter 版。指定 channel 名に属する event だけを `out` に加算する
+    /// （LinkAudio per-channel tap・#209）。RT 競合時は無音（silent drop）。
+    /// 本番 hardware `render` と同一 tick で混在させないこと（[`Scheduler::render_channel`] 参照）。
+    pub fn render_channel(&self, out: &mut [f32], channel: &str) {
+        match self.inner.try_lock() {
+            Ok(mut s) => s.render_channel(out, channel),
             Err(_) => {
                 for x in out.iter_mut() {
                     *x = 0.0;
