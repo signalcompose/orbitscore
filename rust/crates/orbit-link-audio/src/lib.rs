@@ -153,8 +153,14 @@ impl LinkAudioOutput {
         match rc {
             1 => CommitResult::Committed,
             0 => CommitResult::NoSubscriber,
+            -1 => CommitResult::ChannelNotFound,
             -2 => CommitResult::CommitFailed,
-            _ => CommitResult::ChannelNotFound,
+            other => {
+                // ABI は本 crate 専有。未知の sentinel は契約違反 → debug で検出し、
+                // release では安全側(ChannelNotFound)に倒す(RT consumer thread で panic させない)。
+                debug_assert!(false, "orbit_link_commit_channel: unknown sentinel {other}");
+                CommitResult::ChannelNotFound
+            }
         }
     }
 

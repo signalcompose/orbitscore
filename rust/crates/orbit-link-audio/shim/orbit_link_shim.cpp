@@ -53,7 +53,8 @@ void orbit_link_destroy(OrbitLink* link) {
     link->link.enableLinkAudio(false);
     link->link.enable(false);
   } catch (...) {
-    // teardown 中の例外は握りつぶす(解放は必ず行う)。
+    // teardown 中の例外は握りつぶす(解放は必ず行う)が、観測可能にログは残す。
+    std::fprintf(stderr, "[orbit-link] destroy teardown exception (ignored)\n");
   }
   delete link;
 }
@@ -76,6 +77,7 @@ size_t orbit_link_num_peers(OrbitLink* link) {
   try {
     return link->link.numPeers();
   } catch (...) {
+    std::fprintf(stderr, "[orbit-link] num_peers exception, returning 0\n");
     return 0;
   }
 }
@@ -113,7 +115,8 @@ int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
     // は Thread-safe:no / Realtime-safe:yes なので呼び出しスレッドを守る必要がある。
     // ring latency の分だけ "now" は buffer-begin から遅れるが、OrbitScore は tempo
     // leader なので可聴上は無害(精度要件なし・PR2b/層B で精緻化)。PR2a では threading
-    // contract は未配線(本関数は購読者なしで no-op になる)。
+    // contract は未配線。PR2a では Link を enable しないため captureAudioSessionState /
+    // beatAtTime は走っても無害で、egress(sample 書き込み + commit)が購読者なしで no-op。
     auto state = link->link.captureAudioSessionState();
     const double beats_at_begin = state.beatAtTime(link->link.clock().micros(), quantum);
 
