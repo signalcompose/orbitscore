@@ -19,7 +19,7 @@
 //! drained ring」を構造的に排除する（consumer が登録完了で ready を立て、callback は ready の channel
 //! のみ egress する）。
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -80,12 +80,12 @@ enum RegistrationDecision {
 }
 
 /// 登録済み集合・登録名・cap から [`RegistrationDecision`] を返す pure 関数。
-fn registration_decision(
-    registered: &HashSet<String>,
+fn registration_decision<V>(
+    registered: &HashMap<String, V>,
     name: &str,
     max: usize,
 ) -> RegistrationDecision {
-    if registered.contains(name) {
+    if registered.contains_key(name) {
         RegistrationDecision::Idempotent
     } else if registered.len() >= max {
         RegistrationDecision::AtCapacity
@@ -214,16 +214,14 @@ pub struct LinkAudioControl {
     cmd_tx: mpsc::Sender<RegisterCmd>,
     sample_rate: u32,
     num_channels: usize,
-    /// 既に登録済みの channel 名の集合（A4-2b-2b・最大 [`MAX_LINK_CHANNELS`]）。再登録の冪等化に使う。
+    /// 登録済み channel（名前 → drop counter）。最大 [`MAX_LINK_CHANNELS`]・再登録の冪等化に使う。
     /// TS 層は `output()` 宣言時と dispatch で同名を複数回登録する設計なので、再 push を防がないと
     /// callback 側で古い `LinkChannelActivate`（ring producer）が **RT スレッド上で drop** され、
     /// かつ新 ring を誰も drain せず egress が無音化する。同名は no-op、新規は cap までで受理する。
-    registered: HashSet<String>,
-    /// 各 channel の RingTapSink が producer-side で drop した interleaved サンプル数（累積）の counter。
-    /// observability 用に control が clone を保持し（producer は callback・consumer thread が別 clone を
-    /// 持つ）、daemon の 1 Hz ticker が [`Self::total_ring_drops`] を polling して egress の drop を
-    /// 非 RT で surface する（A4-2b-2b・LinkEgressStats）。
-    drop_counters: Vec<Arc<AtomicU64>>,
+    /// 値は当該 channel の RingTapSink が producer-side で drop した interleaved サンプル数（累積）の
+    /// counter clone（producer=callback / consumer thread が別 clone を持つ・同一 Arc）。冪等判定と
+    /// observability（[`Self::total_ring_drops`]）を 1 map に集約し channel↔counter の対応を保つ。
+    registered: HashMap<String, Arc<AtomicU64>>,
 }
 
 impl LinkAudioControl {
@@ -259,8 +257,7 @@ impl LinkAudioControl {
                 cmd_tx,
                 sample_rate,
                 num_channels,
-                registered: HashSet::new(),
-                drop_counters: Vec::new(),
+                registered: HashMap::new(),
             },
             LinkAudioGuard {
                 shutdown,
@@ -272,8 +269,8 @@ impl LinkAudioControl {
     /// 全 channel の ring overflow drop（interleaved サンプル数）の合計。daemon の 1 Hz ticker が
     /// polling して増加を WARNING event として surface する（A4-2b-2b・LinkEgressStats）。
     pub fn total_ring_drops(&self) -> u64 {
-        self.drop_counters
-            .iter()
+        self.registered
+            .values()
             .map(|d| d.load(Ordering::Relaxed))
             .sum()
     }
@@ -330,10 +327,9 @@ impl LinkAudioControl {
             })
             .map_err(|_| LinkRegisterError::RegRingFull)?;
 
-        // 両経路への配線が成功 → 登録済みとして記録（以後の同名再登録は冪等 no-op）。
-        self.registered.insert(name);
-        // 配線成功した channel の drop counter を observability 用に保持。
-        self.drop_counters.push(drops_for_stats);
+        // 両経路への配線が成功 → 登録済みとして記録（同名再登録は冪等 no-op）。value に drop counter
+        // を保持して channel↔counter を 1 map で対応づける（observability・将来の per-channel breakdown）。
+        self.registered.insert(name, drops_for_stats);
         Ok(())
     }
 }
@@ -343,12 +339,16 @@ impl LinkAudioControl {
 #[cfg(test)]
 mod unit_tests {
     use super::{registration_decision, RegistrationDecision, MAX_LINK_CHANNELS};
-    use std::collections::HashSet;
+    use std::collections::HashMap;
+
+    // registered は `HashMap<name, drop counter>`。本テストは判定ロジックのみ見るので value は `()`。
+    fn reg_with(names: &[&str]) -> HashMap<String, ()> {
+        names.iter().map(|n| (n.to_string(), ())).collect()
+    }
 
     #[test]
     fn registration_decision_idempotent_on_same_name() {
-        let mut reg = HashSet::new();
-        reg.insert("drums".to_string());
+        let reg = reg_with(&["drums"]);
         assert_eq!(
             registration_decision(&reg, "drums", MAX_LINK_CHANNELS),
             RegistrationDecision::Idempotent
@@ -357,7 +357,7 @@ mod unit_tests {
 
     #[test]
     fn registration_decision_new_for_unseen_name_under_cap() {
-        let reg = HashSet::new();
+        let reg = reg_with(&[]);
         assert_eq!(
             registration_decision(&reg, "drums", MAX_LINK_CHANNELS),
             RegistrationDecision::New
@@ -367,7 +367,9 @@ mod unit_tests {
     #[test]
     fn registration_decision_at_capacity_rejects_new_name() {
         // cap ちょうどの登録済み集合 → 新規名は AtCapacity。
-        let reg: HashSet<String> = (0..MAX_LINK_CHANNELS).map(|i| format!("ch{i}")).collect();
+        let reg: HashMap<String, ()> = (0..MAX_LINK_CHANNELS)
+            .map(|i| (format!("ch{i}"), ()))
+            .collect();
         assert_eq!(reg.len(), MAX_LINK_CHANNELS);
         assert_eq!(
             registration_decision(&reg, "overflow", MAX_LINK_CHANNELS),
