@@ -297,7 +297,10 @@ export class DaemonClient extends EventEmitter {
     params: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error(`daemon client not connected (method=${method})`)
+      // ws が CLOSING の narrow window（close 発行済・close event 未着火で running はまだ true）でも
+      // DaemonConnectionError を投げ、onPlaybackError / injectFault の silent-drop フィルタに揃える
+      // （plain Error だと死へ向かう正常遷移で misleading な error ログが 1 回出る。bot Finding 1）。
+      throw new DaemonConnectionError(`daemon client not connected (method=${method})`)
     }
     const id = uuidv4()
     const cmd: CommandFrame = { id, method, params }

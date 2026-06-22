@@ -557,7 +557,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private async executePlayback(play: ScheduledPlay): Promise<void> {
     // daemon 復旧中（respawn）/ 切断中は dispatch を drop する。stale clockAnchor のまま新 daemon
     // （transport=0）へ「数秒先」を送って desync するのを防ぎ、in-flight one-shot を再発火させない
-    // （可聴ギャップは許容）。catch に頼らず順序を保証する唯一の load-bearing ガード。
+    // （可聴ギャップは許容）。このガードは「ガード時点で復旧中と判っている」ケースを順序保証で止める。
+    // ガード通過後に await（ensureLoaded/playAt）で yield 中に死ぬ TOCTOU は onPlaybackError の
+    // silent-drop（DaemonConnectionError / respawning / !isRunning）が拾う＝二段構え。
     if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
