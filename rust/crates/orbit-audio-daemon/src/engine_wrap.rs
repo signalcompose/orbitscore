@@ -47,8 +47,9 @@ pub struct EngineWrap {
     /// PlayEnded 発火時に take（remove）されるため、通常ケースでは事後掃除不要。
     stopped_play_ids: Mutex<HashSet<String>>,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
-    /// `register_link_audio_channel` が `&mut` を要する（reg-ring push）ため `Mutex` で内包する。
-    /// 本番 `start()` で `Some`、test backend 経路では `None`。
+    /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
+    /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
+    /// を `&self` のまま提供する。本番 `start()` で `Some`、test backend 経路では `None`。
     #[cfg(feature = "link-audio")]
     link: Mutex<Option<crate::link_audio::LinkAudioControl>>,
 }

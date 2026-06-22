@@ -38,6 +38,9 @@ impl VerificationReceiver {
         let c = CString::new(channel).expect("channel name has interior nul");
         // SAFETY: host.raw は valid（LinkAudioOutput のコンストラクタで non-null 保証）、c は
         // 呼び出し中 valid な C 文字列。
+        // 注意: C++ の OrbitRecv は host の raw ポインタを保持し、try_subscribe 等で deref する。
+        // 呼び出し側は VerificationReceiver を drop するまで host を生存させる責任がある
+        // （Rust の型システムでは強制されない・検証専用コードなので呼び出し側が短命に保つ）。
         let raw = unsafe { orbit_link_recv_create(host.raw, c.as_ptr()) };
         assert!(!raw.is_null(), "orbit_link_recv_create returned null");
         Self { raw }

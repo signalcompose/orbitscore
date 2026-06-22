@@ -55,6 +55,13 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
     }),
     PlayAt: () => ({ play_id: `p-${playSeq++}` }),
     StopAll: () => ({ stopped: 0 }),
+    // 既定の mock daemon は feature `link-audio` 無効ビルドを模す（LINK_AUDIO_ERROR）。player は
+    // これを warn-once gap として握り潰す。実 egress を持つ daemon の挙動は override で差し替える。
+    RegisterLinkAudioChannel: () => {
+      throw Object.assign(new Error('mock daemon built without link-audio feature'), {
+        code: 'LINK_AUDIO_ERROR',
+      })
+    },
     ...overrides,
   }
 }
@@ -257,6 +264,49 @@ describe('RustEnginePlayer with mock daemon', () => {
     p.start()
     await waitFor(() => playAtRecords().length >= 1)
     expect(playAtRecords()[0].channel).toBe('drums')
+    warn.mockRestore()
+  })
+
+  it('registerLinkAudioChannel: daemon が RegisterLinkAudioChannel を受理 → throw せず warn も出さない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 実 egress を持つ daemon（feature 有効）を模す: 受理して ok を返す。
+    const p = await boot(
+      defaultHandlers({ RegisterLinkAudioChannel: () => ({ status: 'registered' }) }),
+    )
+    await expect(p.registerLinkAudioChannel('drums')).resolves.toBeUndefined()
+    expect(server.received.some((r) => r.method === 'RegisterLinkAudioChannel')).toBe(true)
+    const ocWarns = warn.mock.calls.filter((c) => String(c[0]).includes('LinkAudio channel'))
+    expect(ocWarns.length).toBe(0)
+    warn.mockRestore()
+  })
+
+  it('registerLinkAudioChannel: LINK_AUDIO_ERROR（feature 無効ビルド）は warn-once で握り潰す', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot() // 既定 handler が LINK_AUDIO_ERROR を投げる
+    await expect(p.registerLinkAudioChannel('drums')).resolves.toBeUndefined()
+    await p.registerLinkAudioChannel('drums') // 2 回目も warn は増えない（warn-once）
+    const gapWarns = warn.mock.calls.filter((c) =>
+      String(c[0]).includes('without the link-audio feature'),
+    )
+    expect(gapWarns.length).toBe(1)
+    warn.mockRestore()
+  })
+
+  it('registerLinkAudioChannel: LINK_AUDIO_ERROR 以外（daemon 内部エラー等）は rethrow する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot(
+      defaultHandlers({
+        RegisterLinkAudioChannel: () => {
+          // feature-gap ではない本物の失敗 → feature-gap と誤認せず rethrow されるべき。
+          throw Object.assign(new Error('boom'), { code: 'INTERNAL_ERROR' })
+        },
+      }),
+    )
+    await expect(p.registerLinkAudioChannel('drums')).rejects.toThrow()
+    const gapWarns = warn.mock.calls.filter((c) =>
+      String(c[0]).includes('without the link-audio feature'),
+    )
+    expect(gapWarns.length).toBe(0)
     warn.mockRestore()
   })
 

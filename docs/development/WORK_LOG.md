@@ -51,7 +51,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **増分 7（TS 配線で .orbs から到達・本 commit）**: TS `protocol-types.ts` の `CommandMethod` に `RegisterLinkAudioChannel` 追加 / `daemon-client.ts` に `registerLinkAudioChannel(channel)` メソッド（`request('RegisterLinkAudioChannel', {channel})`）/ `rust-engine-player.ts` の `registerLinkAudioChannel` を **実 daemon call + try/catch** に（daemon が link-audio 無効ビルド〔既定 permissive daemon〕なら `LINK_AUDIO_ERROR` で reject されるので throw せず warn-once して継続＝channel tag は維持・出力は hardware のみ）。`setLinkTempo` は PR3。TS build 緑・rust-engine-player.spec 緑（MockDaemonServer が未知 method `RegisterLinkAudioChannel` を error 応答 → player catch → warn の経路で従来 assertion 維持）。
 
-**次 = 2b-2a を 1 PR に**: /simplify → pr-review-team を Critical/Important=0 まで → advisor → load-bearing な GPL egress なので @claude bot。**レビューで surface**: receiver は verification 専用（production egress は sender-only・spec §8.1）だが C++ shim には常にリンクされる点 / register_channel の部分失敗 seam は単一 channel scope で許容+log（advisor #3）/ beat anchor の constant offset（advisor #4・PR3 defer）。**dynamic registration の pool + readiness race は 2b-2b**。
+**PR #330 作成 → /simplify 適用済**（commit `07c442e`）。
+
+**pr-review-team round-1 修正（本 commit・PR #330）**: 4 専門レビュアー（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer）の Critical=0・Important=8 を解消。
+- **C1（RT-safety・最重要）**: 同名 channel の**再登録**で callback 側の旧 `LinkChannelActivate`（ring producer）が **RT スレッド上で drop** され ring 不整合で無音化。TS は `sequence.output()` の eager + dispatch で**冪等前提に複数回**登録する設計なので実バグ。`LinkAudioControl` に `registered_channel: Option<String>` を持ち `register_channel` を冪等化（同名再登録は no-op・別名は 2b-2a 単一 channel scope で log+no-op）。層B テストを 2 回登録に拡張して回帰 pin。
+- **S1**: `consumer_loop` が `pump_once` の `CommitResult` を全捨て → `CommitFailed`/`ChannelNotFound` を throttle warn（streak=1 と 1000 ごと）。`NoSubscriber` は通常状態で silent。
+- **S2**: consumer 側 `register_channel`（Link）失敗を `warn`→`error` に昇格（2b-2a は唯一の登録機会＝以後 dead）。
+- **S3**: TS `registerLinkAudioChannel` の catch を `DaemonProtocolError && code==='LINK_AUDIO_ERROR'` に限定し、それ以外（daemon 死亡・transport・reg-ring 満杯）は rethrow（feature-gap と誤ラベルしない）。
+- **T1/T2/T3**: `Engine::render_multi` の channel routing 非 gated unit test 2 件 / `DaemonClient.registerLinkAudioChannel` の request 送信 + LINK_AUDIO_ERROR 変換テスト / player の warn-once（LINK_AUDIO_ERROR）+ rethrow（その他）+ 受理時 no-warn テスト。MockDaemonHandlers に `RegisterLinkAudioChannel` 追加（既定 = feature 無し daemon を模し LINK_AUDIO_ERROR）。
+- **M5**: consumer thread spawn の `.expect` を `LinkAudioError::ThreadSpawn` で Result propagate。
+- **M7/M8/M9**: コメント正確性（verification.rs SAFETY に host-lifetime 注記 / link_audio.rs "tokio" ラベルを「daemon tokio task から呼ぶ」に / engine_wrap.rs `link` field doc を「Mutex で `&self` を可能にする」に訂正）。
+- **回帰**: full workspace 19 ok・cargo-deny default GPL-free 維持・clippy clean・TS 1179 passed/27 skipped・層B 実機 PASS（2 回登録の冪等性込み）。
+- **follow-up（diff 外・本 PR では触らず）**: scheduleEvent/scheduleSliceEvent の `outputChannel` warn は egress 配線前の placeholder（"egress is not wired yet"）で、egress 配線後は stale 化し得る。signal は `sequence.output()`（registerLinkAudioChannel の feature-gap warn or not-enabled warn）が authoritative なので機能影響は無いが、メッセージ整合は別 PR で。
+
+**次（残り）**: advisor → load-bearing な GPL egress なので @claude bot レビュー → 修正確認。**dynamic registration の pool + readiness race は 2b-2b**。**レビューで surface 済**: receiver は verification 専用（sender-only・spec §8.1）だが C++ shim に常時リンク / register_channel 部分失敗 seam（advisor #3）/ beat anchor constant offset（advisor #4・PR3 defer）。
 
 ### 6.162 feat(engine): A4-2b-1 single-pass multi-buffer render + channel_name wire (post-2.0 A4 / #327) (Jun 23, 2026)
 

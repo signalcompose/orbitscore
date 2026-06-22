@@ -63,6 +63,8 @@ pub enum LinkAudioError {
     RegisterFailed(String),
     #[error("文字列に内部 null が含まれる")]
     InvalidString(#[from] NulError),
+    #[error("egress consumer thread の起動に失敗した: {0}")]
+    ThreadSpawn(String),
 }
 
 /// commit_channel の結果。

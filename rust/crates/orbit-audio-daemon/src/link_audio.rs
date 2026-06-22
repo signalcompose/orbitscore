@@ -9,8 +9,9 @@
 //!   buffer を 1 パスで埋め、channel buffer を `RingTapSink`(rtrb producer)へ push。
 //! - **GPL consumer thread**（本 module の [`consumer_loop`]）= rtrb consumer を drain し
 //!   [`orbit_link_audio::LinkChannelEgress::pump_once`] で Link へ commit（= Link "audio thread"）。
-//! - **control**（tokio・[`LinkAudioControl::register_channel`]）= registration を 2 経路へ配る
-//!   （sink を reg-ring 経由で callback へ / consumer side を mpsc 経由で consumer thread へ）。
+//! - **control**（daemon tokio task から呼ぶ・[`LinkAudioControl::register_channel`]）= registration
+//!   を 2 経路へ配る（sink を reg-ring 経由で callback へ / consumer side を mpsc 経由で consumer
+//!   thread へ）。`LinkAudioControl` 自体は std mpsc + rtrb のみで tokio に依存しない。
 //!
 //! 2b-2a は **単一 channel** の実証に絞る（pool + N channel + readiness race は 2b-2b）。
 
@@ -21,7 +22,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use orbit_audio_native::{LinkChannelActivate, RingTapSink};
-use orbit_link_audio::{LinkAudioError, LinkAudioOutput, LinkChannelEgress};
+use orbit_link_audio::{CommitResult, LinkAudioError, LinkAudioOutput, LinkChannelEgress};
 
 /// ring 容量（秒）。callback の push と consumer の drain を decouple する緩衝。
 const RING_SECONDS: usize = 2;
@@ -73,8 +74,13 @@ fn consumer_loop(
     cmd_rx: mpsc::Receiver<RegisterCmd>,
     shutdown: Arc<AtomicBool>,
 ) {
+    // commit 失敗（ChannelNotFound/CommitFailed）の連続回数。LinkAudio egress は hardware path の
+    // StreamStats のような observability surface を持たない（full な surface は follow-up）ので、
+    // 最低限「音が Link peer に届いていない」を operator が log で気付けるよう throttle して warn する。
+    let mut commit_fail_streak: u64 = 0;
     while !shutdown.load(Ordering::Relaxed) {
-        // 1. registration を drain（2b-2a は最初の 1 件で Active 化、以降は無視）。
+        // 1. registration を drain（2b-2a は最初の 1 件で Active 化、以降は無視）。control 側の
+        //    冪等 guard で同名再登録は届かないが、defense として Active 中の追加 cmd も無害に捌く。
         while let Ok(cmd) = cmd_rx.try_recv() {
             state = match state {
                 ConsumerState::Waiting(output) => {
@@ -92,8 +98,12 @@ fn consumer_loop(
                             BLOCK_FRAMES,
                         )),
                         Err(e) => {
-                            // 登録失敗（稀）。output を握ったまま Waiting に留まり次の登録を待つ。
-                            tracing::warn!("LinkAudio channel '{}' register failed: {e}", cmd.name);
+                            // 登録失敗（稀）。2b-2a は単一 channel ＝ これが唯一の登録機会なので
+                            // 以後 pump は走らず egress は dead になる。silent でなく error で surface。
+                            tracing::error!(
+                                "LinkAudio channel '{}' register failed: {e} — egress will be silent",
+                                cmd.name
+                            );
                             ConsumerState::Waiting(output)
                         }
                     }
@@ -113,8 +123,24 @@ fn consumer_loop(
         match &mut state {
             ConsumerState::Active(egress) => {
                 let mut pumped = false;
-                while egress.pump_once().is_some() {
+                while let Some(rc) = egress.pump_once() {
                     pumped = true;
+                    match rc {
+                        // NoSubscriber は Live 未参加の通常状態（silent）。回復で streak をリセット。
+                        CommitResult::Committed | CommitResult::NoSubscriber => {
+                            commit_fail_streak = 0
+                        }
+                        // 購読者ありで commit 失敗 / channel 消失。音が Link に届かない health signal。
+                        CommitResult::CommitFailed | CommitResult::ChannelNotFound => {
+                            commit_fail_streak += 1;
+                            if commit_fail_streak == 1 || commit_fail_streak.is_multiple_of(1000) {
+                                tracing::warn!(
+                                    "LinkAudio commit failing ({rc:?}, streak={commit_fail_streak}): \
+                                     audio not reaching Link peer"
+                                );
+                            }
+                        }
+                    }
                 }
                 if !pumped {
                     std::thread::sleep(Duration::from_millis(2));
@@ -155,6 +181,11 @@ pub struct LinkAudioControl {
     cmd_tx: mpsc::Sender<RegisterCmd>,
     sample_rate: u32,
     num_channels: usize,
+    /// 既に登録済みの channel 名（2b-2a は単一 channel）。再登録の冪等化に使う。TS 層は
+    /// `output()` 宣言時と dispatch で同名を複数回登録する設計なので、再 push を防がないと
+    /// callback 側で古い `LinkChannelActivate`（ring producer）が **RT スレッド上で drop** され、
+    /// かつ新 ring を誰も drain せず egress が無音化する。pool 化（複数 channel）は 2b-2b。
+    registered_channel: Option<String>,
 }
 
 impl LinkAudioControl {
@@ -178,10 +209,11 @@ impl LinkAudioControl {
         let (cmd_tx, cmd_rx) = mpsc::channel::<RegisterCmd>();
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_thread = shutdown.clone();
+        // spawn 失敗（OS リソース枯渇・稀）は boot を panic させず Result で propagate する。
         let handle = std::thread::Builder::new()
             .name("orbit-link-egress".into())
             .spawn(move || consumer_loop(ConsumerState::Waiting(output), cmd_rx, shutdown_thread))
-            .expect("spawn orbit-link-egress thread");
+            .map_err(|e| LinkAudioError::ThreadSpawn(e.to_string()))?;
 
         Ok((
             Self {
@@ -189,6 +221,7 @@ impl LinkAudioControl {
                 cmd_tx,
                 sample_rate,
                 num_channels,
+                registered_channel: None,
             },
             LinkAudioGuard {
                 shutdown,
@@ -206,6 +239,20 @@ impl LinkAudioControl {
     /// 算入で beat に反映）。**部分失敗**（cmd 送信は成功・reg-ring push が満杯で失敗）は 2b-2a の
     /// 単一 channel scope では許容しエラーで surface する（pool 化と再試行は 2b-2b）。
     pub fn register_channel(&mut self, name: &str) -> Result<(), LinkRegisterError> {
+        // 冪等 guard（必須）: TS 層は `output()` 宣言時と dispatch で同名を複数回登録する設計。
+        // 再 push を許すと callback 側で旧 `LinkChannelActivate`（ring producer）が **RT スレッド上で
+        // drop** され、かつ新 ring を誰も drain せず egress が無音化する。同名は no-op で返す。
+        if let Some(existing) = &self.registered_channel {
+            if existing != name {
+                // 2b-2a は単一 channel。別名 channel は未対応 → log して no-op（pool 化は 2b-2b）。
+                tracing::warn!(
+                    "LinkAudio channel '{name}' ignored: '{existing}' already registered \
+                     (2b-2a supports a single channel)"
+                );
+            }
+            return Ok(());
+        }
+
         let ring_capacity = self.sample_rate as usize * self.num_channels * RING_SECONDS;
         let (sink, consumer, drops) = RingTapSink::new(ring_capacity);
         // consumer thread と callback の両方が所有する name を 1 回だけ確保する。
@@ -226,11 +273,15 @@ impl LinkAudioControl {
         let scratch = vec![0.0f32; MAX_BLOCK_FRAMES * self.num_channels];
         self.reg_tx
             .push(LinkChannelActivate {
-                name,
+                name: name.clone(),
                 sink,
                 scratch,
             })
-            .map_err(|_| LinkRegisterError::RegRingFull)
+            .map_err(|_| LinkRegisterError::RegRingFull)?;
+
+        // 両経路への配線が成功 → 登録済みとして記録（以後の同名再登録は冪等 no-op）。
+        self.registered_channel = Some(name);
+        Ok(())
     }
 }
 
@@ -263,9 +314,15 @@ mod layer_b_tests {
     #[ignore = "layer-B end-to-end: needs real output device + multicast loopback (local only)"]
     fn layer_b_real_callback_egress_received() {
         let (engine, _guard) = EngineWrap::start().expect("start engine with link egress");
+        // 同名を 2 回登録（TS の eager + dispatch を模す）。冪等 guard が無いと 2 回目で callback の
+        // 旧 activate が RT スレッド drop され ring 不整合で無音化する。2 回呼んでも egress が生きて
+        // いることを下流の受信で確認する（C1 回帰）。
         engine
             .register_link_audio_channel("loopD")
-            .expect("register channel");
+            .expect("register channel (1st)");
+        engine
+            .register_link_audio_channel("loopD")
+            .expect("register channel (2nd, idempotent)");
 
         // receiver: 独立した LinkAudio インスタンス。
         let recv_host = LinkAudioOutput::new(120.0, "orbit-recv").expect("recv host");

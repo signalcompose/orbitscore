@@ -42,7 +42,7 @@ import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
 
 import { DaemonClient } from './daemon-client'
-import { DaemonConnectionError, DaemonQuitError } from './errors'
+import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './errors'
 
 /**
  * boundary で明示する未対応 feature gap の種別（A4 era）。
@@ -413,10 +413,18 @@ export class RustEnginePlayer implements AudioEngineBackend {
     try {
       await this.daemon.registerLinkAudioChannel(channelName)
     } catch (err) {
-      this.warnOnce(
-        'outputChannel',
-        `⚠️  [rust-engine] LinkAudio channel "${channelName}": egress unavailable in this daemon build — channel is tagged but output is hardware only (${String(err)}).`,
-      )
+      // 想定する gap は「daemon が feature `link-audio` 無効ビルド」= LINK_AUDIO_ERROR のみ。
+      // これは scheduleEvent と同じ warn-once gap として握り潰す（出力は hardware のみで継続）。
+      // それ以外（daemon 死亡・transport エラー・reg-ring 満杯等）は本物の失敗なので、誤って
+      // 「build に feature が無い」と誤ラベルせず rethrow して呼び出し側に surface させる。
+      if (err instanceof DaemonProtocolError && err.code === 'LINK_AUDIO_ERROR') {
+        this.warnOnce(
+          'outputChannel',
+          `⚠️  [rust-engine] LinkAudio channel "${channelName}": daemon was built without the link-audio feature — channel is tagged but output is hardware only.`,
+        )
+        return
+      }
+      throw err
     }
   }
 

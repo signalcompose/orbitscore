@@ -114,6 +114,32 @@ describe('DaemonClient with mock server', () => {
     await expect(client.setGlobalGain(0.5)).resolves.toBeUndefined()
   })
 
+  it('RegisterLinkAudioChannel は channel を params に送って resolve する', async () => {
+    const url = await server.start({
+      RegisterLinkAudioChannel: () => ({ status: 'registered', channel: 'drums' }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await expect(client.registerLinkAudioChannel('drums')).resolves.toBeUndefined()
+    const rec = server.received.find((r) => r.method === 'RegisterLinkAudioChannel')
+    expect(rec?.params.channel).toBe('drums')
+  })
+
+  it('RegisterLinkAudioChannel の LINK_AUDIO_ERROR は DaemonProtocolError に変換される', async () => {
+    const url = await server.start({
+      RegisterLinkAudioChannel: () => {
+        const e = new Error('engine built without link-audio feature') as Error & {
+          code?: string
+        }
+        e.code = 'LINK_AUDIO_ERROR'
+        throw e
+      },
+    })
+    await client.start({ wsUrlOverride: url })
+    await expect(client.registerLinkAudioChannel('drums')).rejects.toMatchObject({
+      code: 'LINK_AUDIO_ERROR',
+    })
+  })
+
   it('error レスポンスは DaemonProtocolError に変換される', async () => {
     const url = await server.start({
       SetGlobalGain: () => {
