@@ -461,12 +461,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
     sequenceName = '',
     outputChannel?: string,
   ): void {
-    if (outputChannel) {
-      this.warnOnce(
-        'outputChannel',
-        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio): egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
-      )
-    }
+    // outputChannel の feature-gap signal は `registerLinkAudioChannel`（`sequence.output()` 経由）が
+    // authoritative に出す（A4-2b-2b で egress 配線済み）。scheduleEvent は channel を tag するだけで、
+    // 「egress is not wired」の旧 warn は stale なので出さない（egress 有効な daemon では誤誘導になる）。
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
     this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel })
@@ -495,12 +492,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     sequenceName = '',
     outputChannel?: string,
   ): void {
-    if (outputChannel) {
-      this.warnOnce(
-        'outputChannel',
-        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio): egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
-      )
-    }
+    // outputChannel の feature-gap signal は `registerLinkAudioChannel` が authoritative（上記
+    // scheduleEvent と同様・egress 配線済みなので stale な「not wired」warn は出さない）。
     this.enqueue({
       time,
       filepath,

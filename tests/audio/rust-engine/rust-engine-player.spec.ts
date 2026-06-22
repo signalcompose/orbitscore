@@ -226,14 +226,16 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
-  it('outputChannel は 1 回 warn して hardware で PlayAt を出す', async () => {
+  it('scheduleEvent outputChannel は stale な「not wired」warn を出さない（A4-2b-2b で egress 配線済み）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
     p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', 'drums')
     p.start()
     await waitFor(() => playAtRecords().length >= 1)
-    const chWarns = warn.mock.calls.filter((c) => String(c[0]).includes('outputChannel'))
-    expect(chWarns.length).toBe(1)
+    // feature-gap signal は registerLinkAudioChannel（sequence.output() 経由）が authoritative。
+    // scheduleEvent は channel を tag するだけで「not wired」warn は出さない（egress 有効 daemon で誤誘導）。
+    const staleWarns = warn.mock.calls.filter((c) => String(c[0]).includes('not wired'))
+    expect(staleWarns.length).toBe(0)
     // outputChannel は PlayAt の channel フィールドとして転送される（A4-2b-1）。
     expect(playAtRecords()[0].channel).toBe('drums')
     warn.mockRestore()
@@ -401,17 +403,13 @@ describe('RustEnginePlayer with mock daemon', () => {
   it('stopAll は warn-once を再 arm する（次セッションで再び warn）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
-    // outputChannel(LinkAudio) は未対応 gap（A4）として 1 回 warn する。pan は実装済みで
-    // gap ではないため、再 arm の検証には残存 gap である outputChannel を使う。
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', 'drums')
-    p.start()
-    await waitFor(() => playAtRecords().length >= 1)
+    // masterEffect は残存 gap（A4 era）として 1 回 warn する。outputChannel は A4-2b-2b で egress
+    // 配線済みになり scheduleEvent からは warn しなくなったため、再 arm の検証には masterEffect を使う。
+    await p.addEffect('master', 'compressor', {})
     p.stopAll()
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqB', 'drums') // 次セッション
-    p.start()
-    await waitFor(() => playAtRecords().length >= 2)
-    const ocWarns = warn.mock.calls.filter((c) => String(c[0]).includes('outputChannel'))
-    expect(ocWarns.length).toBe(2) // stopAll で再 arm
+    await p.addEffect('master', 'compressor', {}) // 次セッション = 再 arm 後
+    const meWarns = warn.mock.calls.filter((c) => String(c[0]).includes('master effect'))
+    expect(meWarns.length).toBe(2) // stopAll で再 arm
     warn.mockRestore()
   })
 
