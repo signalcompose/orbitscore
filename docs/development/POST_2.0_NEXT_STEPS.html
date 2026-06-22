@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OrbitScore Post-2.0 — 第1増分後の実装計画とフォローアップ</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --bg: #fdfdfd;
+    --muted: #5b6470;
+    --line: #e2e6ea;
+    --accent-a: #1f6feb;   /* engine track */
+    --accent-b: #8957e5;   /* app track */
+    --accent-c: #1a7f5a;   /* pitch/song track */
+    --warn-bg: #fff8e6;
+    --warn-bd: #e6c34a;
+    --stop-bg: #fdecef;
+    --stop-bd: #e5736f;
+    --inv-bg: #eef4ff;
+    --inv-bd: #1f6feb;
+    --code-bg: #f4f6f8;
+  }
+  html { color: var(--ink); background: var(--bg); }
+  body {
+    margin: 0 auto; max-width: 54em;
+    padding: 48px 28px 96px;
+    font: 16px/1.65 -apple-system, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+  h1 { font-size: 1.9em; margin: 0 0 .2em; letter-spacing: .01em; }
+  h2 { font-size: 1.35em; margin: 2.2em 0 .6em; padding-bottom: .25em; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.1em; margin: 1.6em 0 .4em; }
+  .sub { color: var(--muted); margin: 0 0 1.5em; font-size: .95em; }
+  p { margin: .8em 0; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font: 13.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; font: 13px/1.55 ui-monospace, Menlo, monospace; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: .3em 0; }
+  a { color: var(--accent-a); }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .9em; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .badge { display: inline-block; font-size: .72em; font-weight: 700; padding: .12em .6em; border-radius: 999px; vertical-align: middle; letter-spacing: .03em; white-space: nowrap; }
+  .b-done { background: #def7e6; color: #1a7f3c; }
+  .b-next { background: #e6efff; color: #1f5fc0; }
+  .b-defer{ background: #fff2cc; color: #8a6d12; }
+  .b-risk { background: #fde2e2; color: #b53a37; }
+  .callout { border-left: 4px solid; border-radius: 0 6px 6px 0; padding: 12px 16px; margin: 1.2em 0; }
+  .c-inv  { background: var(--inv-bg);  border-color: var(--inv-bd); }
+  .c-warn { background: var(--warn-bg); border-color: var(--warn-bd); }
+  .c-stop { background: var(--stop-bg); border-color: var(--stop-bd); }
+  .callout .lbl { font-weight: 700; display: block; margin-bottom: .2em; }
+  .track { border: 1px solid var(--line); border-radius: 8px; padding: 4px 20px 16px; margin: 1.2em 0; border-top: 4px solid var(--accent-a); }
+  .track h3 { margin-top: 1em; }
+  .small { color: var(--muted); font-size: .88em; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2.5em 0; }
+  .done td:first-child { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Post-2.0 エンジン — 第1増分後の実装計画とフォローアップ</h1>
+<p class="sub">
+  スナップショット: <strong>2026-06-22</strong>（PR #318 / #300 α recovery floor 実装完了・マージ待ち時点）。
+  本書は前向きな計画の <em>たたき台</em>であり、確定済みの正本ではない（今後 drift する前提）。
+  正本ロードマップ = <code>POST_2.0_MASTER_PLAN.html</code> / アーキ = <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2</code>（§2.1–2.4 のアーキ決定は不変）。
+  次の <code>/goal</code> はここで選択肢を提示し、owner が選んだ時点で起草する。
+</p>
+
+<div class="callout c-inv">
+  <span class="lbl">この文書の目的</span>
+  ① 第1増分（#304 + #300）までの到達点を元の計画と照合する。
+  ② <strong>cutover #108 までに何が残っているか</strong>（= 現行 .orbs audio を SC parity で鳴らす gap）を一望する。
+  ③ #300 / #304 で<strong>意図的に defer した小粒のフォローアップ</strong>を漏れなく追跡する。
+  ④ 次の <code>/goal</code> 候補を trade-off 付きで owner に提示する。
+  ⑤ 仕様ドリフト監査の結果と本 PR での修正範囲を記録する。
+</div>
+
+<h2>1. 到達点（元の計画 vs 完了）</h2>
+
+<p>
+  master plan の「engine-first」スパイン上で、<strong>feasibility 証明（A0/S1/S1b/S2）と第1増分（#304 + #300）まで完了</strong>した。
+  第1増分は当初「最初の <code>/goal</code>」として1つだったが、Done の性質が違う（実機 audio verdict vs kill-test）ため
+  <strong>#304（audio parity）と #300（α recovery floor）に split</strong> して実施した。
+</p>
+
+<table>
+  <thead><tr><th>フェーズ</th><th>内容</th><th>Issue / PR</th><th>状態</th></tr></thead>
+  <tbody class="done">
+    <tr><td>A0</td><td>RT 統合設計（CLAP を orbit-audio に RT 安全に載せる設計）</td><td>doc</td><td><span class="badge b-done">✅ 完了</span></td></tr>
+    <tr><td>S1 / S1b</td><td>CLAP hosting スパイク（in-process clack-host・低レイテンシ・dynamic hot-install）</td><td>#293 / #295・PR #294</td><td><span class="badge b-done">✅ MERGED</span></td></tr>
+    <tr><td>S2</td><td>daemon ↔ サンプル dispatch seam parity（<code>ORBITSCORE_ENGINE=rust</code> opt-in）</td><td>#296・PR #297</td><td><span class="badge b-done">✅ MERGED</span></td></tr>
+    <tr><td>第1増分 a（/goal1）</td><td>audio parity — pan / slice(chop 領域) / per-slice gain</td><td>#304・PR #305 (<code>711aec2</code>)</td><td><span class="badge b-done">✅ MERGED</span></td></tr>
+    <tr><td>第1増分 b（/goal2）</td><td>α recovery floor — daemon supervision + auto-respawn + 最小 recovery contract</td><td>#300・PR #318</td><td><span class="badge b-done">✅ 実装完了</span>（本ブランチ・マージ待ち）</td></tr>
+  </tbody>
+</table>
+
+<p class="small">
+  #300 の中身: 検出 = <code>DaemonClient</code> の <code>daemon-died</code>（<code>intentionalClose</code> で意図的 quit と crash を判別）/
+  supervisor = <code>RustEnginePlayer</code>（session 状態の権威は生存側 TS）/ 唯一 load-bearing な不変式 = 再 anchor の順序（<code>respawning</code> guard）/
+  fault 注入 = 外部 SIGKILL（C-ABI segfault の代理）+ gated <code>InjectFault</code>（panic hook 経路）/ gated kill-test（<code>ORBIT_REAL_DAEMON=1</code>）。
+</p>
+
+<h2>2. 背骨: cutover #108 までの parity gap</h2>
+
+<p>
+  engine-first の到達目標は <strong>cutover #108</strong>（Rust を default backend にし scsynth を退役）。
+  そのためには<strong>現行 <code>.orbs</code> audio DSL が opt-in で SuperCollider と同等に鳴る</strong>必要がある。
+  #304 が「見かけの parity を作らない」ために <strong>warn / no-op に倒した3点が、そのまま cutover の parity gap</strong> になる。
+</p>
+
+<table>
+  <thead><tr><th>#304 で倒した挙動</th><th>現状（opt-in 時）</th><th>埋めるフェーズ</th></tr></thead>
+  <tbody>
+    <tr><td>time-stretch（slice rate≠1.0 / <code>fixpitch()</code> / <code>time()</code>）</td><td>1回 warn して<strong>自然尺（rate=1.0）で発音</strong></td><td><strong>A3</strong>（Signalsmith・#213 / #239）</td></tr>
+    <tr><td>outputChannel（LinkAudio）</td><td>1回 warn して<strong>hardware バスで発音</strong></td><td><strong>A4</strong>（Rust 隔離 GPL + lock-free）</td></tr>
+    <tr><td>master effects（compressor / limiter / normalizer）</td><td>1回 warn して<strong>no-op</strong></td><td><strong>γ</strong>（effects = plugin = out-of-process sandbox）</td></tr>
+  </tbody>
+</table>
+
+<div class="callout c-warn">
+  <span class="lbl">含意</span>
+  cutover の前提は <strong>A3 + A4 + γ（effects）</strong>。このうち A3 / A4 は in-process / 隔離モジュールで完結し
+  <strong>γ（CLAP plugin host）に依存しない</strong>＝近接で着手可能。effects parity だけが γ（最大スコープ）を必要とする。
+  daemon 側 hard-stop-all（下記フォローアップ）も、長サンプルでの cutover 品質には効く。
+</div>
+
+<h2>3. この後の実装計画（engine-first 残フェーズ）</h2>
+
+<p>アーキ §2.1–2.4（楽器=in-process / effects+3rd-party=sandbox / audio DSL⊇pitch / egress は音だけ bridge）は不変。順序はおおむね master plan の通りだが、依存関係を接地し直して下に整理する。</p>
+
+<div class="track">
+  <h3>A3 — time-stretch <span class="badge b-next">contained</span></h3>
+  <p><strong>目的</strong>: slice rate≠1.0 と <code>fixpitch()</code>/<code>time()</code>（現 stub・#213）を実機で鳴らす。<strong>依存</strong>: in-process・γ 不要。S2/#304 の RustEnginePlayer 基盤の上。<strong>license</strong>: <strong>Signalsmith（permissive）</strong>必須・Rubber Band(GPL) 回避。<strong>Done</strong>: rate≠1.0 の slice が尺合わせで鳴る + 既存全緑。<strong>規模</strong>: 中。<strong>open</strong>: Signalsmith の Rust binding（<code>ssstretch</code>/<code>signalsmith-stretch</code>）の調達・成熟度は未確認（要 spike）。<strong>委譲</strong>: DSP crate は Sonnet 可、DSL seam は Opus。</p>
+</div>
+
+<div class="track">
+  <h3>A4 — LinkAudio（Rust 隔離 GPL）<span class="badge b-next">contained</span></h3>
+  <p><strong>目的</strong>: outputChannel（LinkAudio・#209）を Rust 経路で鳴らす + Link tempo lead（#283）。<strong>依存</strong>: 隔離モジュールで完結・γ 不要。<strong>license</strong>: <strong>Ableton Link は GPL → 別プロセス/別 crate の隔離モジュール</strong>（unique 不変条件・freemium の土台）。<strong>Done</strong>: LinkAudio channel が Rust 経路で鳴る + lock-free 化。<strong>規模</strong>: 中〜大（GPL 隔離境界 + lock-free が要点）。<strong>委譲</strong>: 隔離モジュールは Sonnet 可、境界設計は Opus。</p>
+</div>
+
+<div class="track">
+  <h3>daemon CLAP 統合 — γ の前提 <span class="badge b-risk">大</span></h3>
+  <p><strong>目的</strong>: S1/S1b の in-process clack-host を <strong>production daemon に統合</strong>する（現状 standalone spike・S2 はサンプル経路のみ）。<strong>依存</strong>: γ（effects/3rd-party）の<strong>前提フェーズ</strong>。<strong>carry-forward（A0 §13・bot 検出）</strong>をここで踏む: ① teardown は audio thread で <code>stop_processing()</code>（暗黙 Drop 依存は strict プラグインで UB）② <code>request_callback</code> を lock-free 通知に ③ <code>EventBuffer</code> を固定サイズ CLAP event ring に。<strong>規模</strong>: 大。<strong>委譲</strong>: Opus 直列（RT/CLAP correctness）。</p>
+</div>
+
+<div class="track">
+  <h3>γ — out-of-process sandbox（fault ②）<span class="badge b-risk">最大・最高リスク</span></h3>
+  <p><strong>目的</strong>: effects + 3rd-party plugin を<strong>プロセス境界で隔離</strong>し、daemon が 3rd-party crash を生存（C-ABI segfault はプロセス境界でのみ封じ込め）。これで master effects parity も埋まる。<strong>依存</strong>: 上の daemon CLAP 統合。<strong>新規</strong>: shared-mem audio / RT-safe event IPC / watchdog（<strong>本リポジトリに前例なし</strong>＝別スパイク）。<strong>fault 三層との関係</strong>: ② を作る。① recovery floor（#300）は前提として既に在る。<strong>規模</strong>: 最大・最高リスク。<strong>委譲</strong>: Opus 直列（spike）。</p>
+</div>
+
+<div class="track">
+  <h3>δ — 3rd-party VST3 / AU <span class="badge b-defer">最後</span></h3>
+  <p><strong>目的</strong>: 世の VST3/AU をホスト。成熟度順 <strong>CLAP &gt; AU &gt; VST3</strong>。<strong>依存</strong>: γ sandbox。<strong>規模</strong>: 最難・最後。VST3 は SDK 3.8 で MIT 単独化済（copyleft 障壁は消滅）。</p>
+</div>
+
+<div class="track">
+  <h3>cutover #108 — default backend 切替 <span class="badge b-next">里程標</span></h3>
+  <p><strong>目的</strong>: Rust を default backend にし scsynth を退役。<strong>前提</strong>: §2 の parity gap（A3 + A4 + γ effects）が埋まる。<strong>Done</strong>: 既定で現行 .orbs audio が Rust で SC 同等に鳴る。</p>
+</div>
+
+<div class="track" style="border-top-color: var(--accent-b);">
+  <h3>OrbitStudio（VSCodium）on native（#301）<span class="badge b-defer">cutover 後</span></h3>
+  <p><strong>目的</strong>: 専用アプリを native エンジンの上で。<strong>制約</strong>: scsynth は載せない・<strong>CLI + Claude 拡張が動く</strong>こと必須。<strong>並行可</strong>: engine 非依存の殻（VSCodium リブランド / node ランタイム + <code>@julusian/midi</code> ABI / 署名 CI）は engine 前でも着手可だが、audio が使えるのは engine 後。</p>
+</div>
+
+<div class="track" style="border-top-color: var(--accent-c);">
+  <h3>β — audio DSL ⊇ pitch DSL（改良層）<span class="badge b-defer">土台の後</span></h3>
+  <p><strong>目的</strong>: audio DSL を pitch DSL の上位集合に（#213 <code>fixpitch()</code>/<code>time()</code> 含む・in-process・S1 基盤）+ audio 機能（slice #239 / audio <code>[ ]</code> #238）。<strong>前提</strong>: <strong>C1 pitch モデルの spec 先行</strong>（pitch を audio の真部分集合として設計し、後で上位互換にできなくなるのを防ぐ）。<strong>規模</strong>: design 重め。今の <code>.orbs</code> DSL は表現力として充分なので急がない（やる時はそれに集中）。</p>
+</div>
+
+<h2>4. 次の <code>/goal</code> 候補（owner 判断材料）</h2>
+
+<p>第1増分が済んだので、次は cutover に向けた parity gap を埋めるフェーズ。<strong>contained なもの（γ 非依存）を先に</strong>するのが素直で、γ（最大・最高リスク）は独立スコープで扱うのが安全。最終判断は owner。</p>
+
+<table>
+  <thead><tr><th>候補</th><th>性質</th><th>pro</th><th>con / リスク</th></tr></thead>
+  <tbody>
+    <tr><td><strong>A3 time-stretch</strong></td><td>contained（in-process）</td><td>parity gap を1つ埋める・S2/#304 基盤の延長・隔離が要らない</td><td>Signalsmith Rust binding の成熟度が未知（先に短い spike が要る）</td></tr>
+    <tr><td><strong>A4 LinkAudio</strong></td><td>contained（隔離 module）</td><td>parity gap + Link tempo lead 復活・GPL 隔離は freemium 土台の実地検証</td><td>GPL 隔離境界 + lock-free 化の設計コスト</td></tr>
+    <tr><td>daemon CLAP 統合 → γ</td><td>大・最高リスク</td><td>effects parity の本丸・fault ② を作る</td><td>前例なし・spike 規模・cutover まで最長。<strong>単一 /goal にせず段階化</strong>推奨</td></tr>
+  </tbody>
+</table>
+
+<div class="callout c-inv">
+  <span class="lbl">推奨（あくまで提案）</span>
+  次の <code>/goal</code> は <strong>A3（time-stretch）か A4（LinkAudio）</strong> の contained な parity-filler を1つ。
+  γ は「daemon CLAP 統合 → sandbox スパイク」と段階化して別途スコープ。
+  どれを先にするかは owner の優先度（time-stretch の表現欲しさ vs LinkAudio/Link lead の運用欲しさ）で決める。
+</div>
+
+<h2>5. フォローアップ追跡（#300 / #304 で意図的に defer した小粒）</h2>
+
+<p>大フェーズと別に、第1増分で<strong>意図的に見送った細部</strong>。いずれも当時 advisor / レビューで「現スコープでは不要」と判断したもの。失わないよう記録する。</p>
+
+<table>
+  <thead><tr><th>項目</th><th>由来</th><th>なぜ defer したか</th><th>拾うトリガ</th><th>規模</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><code>play --capture</code> seam（PCM 可聴ギャップ数値化）</td><td>#300 Optional / #307</td>
+      <td>state-level Core（invariant query）で #300 受け入れは満たせる。capture は real 出力 PCM の実時間取得が要る重い増分</td>
+      <td>可聴ギャップが実測で痛い時 / respawn を field test で PCM 数値化したい時（#307 のハーネス解析プリミティブを real stream に当てる）</td>
+      <td>中</td>
+    </tr>
+    <tr>
+      <td>Gap5: <code>quit()</code> during respawn backoff の CI テスト</td><td>#300 pr-review round 2</td>
+      <td>code-reviewer が <code>disposed</code> checkpoint + <code>await respawnPromise</code> で sound と確認。consequence は ~150ms window の cleanup race のみ（correctness 影響なし）</td>
+      <td>次に recovery / quit teardown を触る時</td>
+      <td>小</td>
+    </tr>
+    <tr>
+      <td>active loops の real <code>loop()</code> across-respawn e2e テスト</td><td>#300</td>
+      <td>player-level の continuous-stream プロキシ + 構造論（loop timer は <code>loop-sequence.ts</code> の setTimeout = 純 TS・daemon 非依存）で足りる。full interpreter 駆動は重い</td>
+      <td>cutover 前の総合 e2e 検証時（<code>createAudioEngine</code> 経由で実 <code>loop()</code> を kill 跨ぎ）</td>
+      <td>小〜中</td>
+    </tr>
+    <tr>
+      <td>daemon 側 hard-stop-all</td><td>S2 後续</td>
+      <td>短サンプル前提で respawn 時の in-flight voice は自然減衰を許容（recovery contract は可聴ギャップ許容）</td>
+      <td>長サンプル / 即時停止が要る時（daemon StopAll コマンド + play_id 追跡）</td>
+      <td>小</td>
+    </tr>
+    <tr>
+      <td>bot Finding 2: connect 時 error の二重ログ</td><td>#300 @claude bot</td>
+      <td>cosmetic（connect 失敗時のみ・永続 onError と once が二重に出る）。bot 自身が後回し合理的と判断</td>
+      <td><code>connectWebSocket</code> を触る時に once listener を open で detach</td>
+      <td>極小</td>
+    </tr>
+    <tr>
+      <td>bot Finding 4: <code>quit()</code> の backoff latency（最大 ~150ms）</td><td>#300 @claude bot</td>
+      <td>live-coding 用途で許容範囲。現行要件で非問題</td>
+      <td>即時 quit の SLA が要る時（AbortController でキャンセル機構）</td>
+      <td>小</td>
+    </tr>
+  </tbody>
+</table>
+
+<p class="small">
+  なお #300 で <strong>解決済み</strong>のもの: S2 の partial-close window flood（<code>request()</code> が CLOSING で plain Error → <code>onPlaybackError</code> をすり抜ける = bot Finding 1）は本 PR で <code>DaemonConnectionError</code> 化して解消。
+</p>
+
+<h2>6. 明示 defer（このトラックで作らないもの・再掲）</h2>
+<ul>
+  <li>out-of-process per-plugin isolation = <strong>γ（fault ②）</strong> — daemon supervision が kill-test を通れば α では不要だった（→ §3 γ で扱う）。</li>
+  <li>β audio DSL ⊇ pitch / time-stretch / LinkAudio(A4) / cutover #108 — §3 の各フェーズ。</li>
+  <li><code>play --capture</code> seam（PCM 可聴ギャップ数値化）— §5 フォローアップ。</li>
+</ul>
+
+<h2>7. 仕様ドリフト監査（2026-06-22）</h2>
+
+<p>第1増分（#304 + #300）完了に伴い、正本ドキュメントが「第1増分=未来形 / auto-respawn=未実装」と陳腐化していないか監査した。</p>
+
+<h3>drift 無しと確認</h3>
+<ul>
+  <li><strong>specs-v2（WCTM / pitch / session-log / IMPLEMENTATION_INSTRUCTIONS / DESIGN_DISCUSSION_RECORD）</strong>: post-2.0 engine track と別トラックで、engine / recovery への言及なし → drift 無し。</li>
+  <li><strong>core spec <code>INSTRUCTION_ORBITSCORE_DSL.md</code></strong>: recovery floor は DSL 表面の意味論を変えない内部実装（auto-respawn・<code>ORBITSCORE_ENGINE</code> opt-in）→ <strong>recovery セクションは不要</strong>。pan/slice/per-slice gain は #304 で解消済で feature gap でもない。</li>
+  <li><code>POST_2.0_A0_RT_INTEGRATION_DESIGN.md §12–§13（S1/S1b）・§14（S2 verdict）</code>: 実測値・carry-forward が正確に記録済 → drift 無し。</li>
+</ul>
+
+<h3>本 PR で修正した drift（事実 status のみ）</h3>
+<p>advisor 方針に従い、<strong>「第1増分=done」「auto-respawn=done」「pan=done」の事実反映に限定</strong>し、既存正本に「次フェーズ=X」の決定は書き込まない（次の選択は本書 §4 が owner にティーアップする）。</p>
+<ul>
+  <li><code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2.2</code>（D-1）: fault ① を「auto-respawn 未実装」→「PR #318 で実装完了」。</li>
+  <li><code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2.5 / §7</code>（D-2/D-3）: 第1増分を「完了（#304 + #300）」に。次は本書参照。</li>
+  <li><code>POST_2.0_MASTER_PLAN.html §2 / §3 / §9</code>（D-4/D-5/D-6）: 第1増分を「完了」マークに。</li>
+  <li><code>POST_2.0_A0_RT_INTEGRATION_DESIGN.md §14</code>（D-7）: 「pan の daemon 実装」を #304 で実装済に。</li>
+</ul>
+
+<h3>マージ時 / 後に対応（GitHub・本 PR では触らない）</h3>
+<ul>
+  <li>Issue #300（D-9）: 本 PR の <code>Closes #300</code> でマージ時に自動クローズ（チェックボックス手編集は不要）。</li>
+  <li>Epic #292（D-8）本文の「★最初の /goal」status: マージ後に <code>gh</code> で「✅ 完了（PR #305 + PR #318）」へ更新。</li>
+</ul>
+
+<h2>8. 運用規律（不変）</h2>
+<ul>
+  <li><strong>license</strong>: engine の依存を permissive に保つ・GPL は隔離（time-stretch=Signalsmith / Ableton Link=別 crate）。freemium の土台。</li>
+  <li><strong>委譲（#298 profile）</strong>: 判断・seam・プロンプト設計・RT/CLAP correctness は <strong>Opus 直列</strong>。固定インターフェース内の隔離実装・純関数は <strong>Sonnet subagent 並列</strong>。delegated output は Opus が実機 / spec で実ゲート。</li>
+  <li><strong>不変</strong>: audio <code>play()</code> 意味論を変えない / SC 既定経路を無改変 / spec が正本（逸脱が要れば spec を先に更新）。</li>
+</ul>
+
+<hr />
+<p class="small">
+  関連: <code>POST_2.0_MASTER_PLAN.html</code>（正本ロードマップ）/ <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md</code>（アーキ・license・配布）/
+  <code>POST_2.0_A0_RT_INTEGRATION_DESIGN.md</code>（RT 統合・S1/S1b/S2 verdict）/ Epic #292 / #298（アーキ決定）/ #300（α recovery floor）/ #304（audio parity）。
+</p>
+
+</body>
+</html>

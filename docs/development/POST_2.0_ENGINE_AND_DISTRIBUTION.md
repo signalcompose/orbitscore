@@ -41,7 +41,7 @@
 - **OrbitScore CLAP 超集合（1st-party 用）**: 1st-party 楽器/FX は **standard CLAP + `com.orbitscore.*` ベンダ拡張**（`get_extension(id)` は文字列名前空間・未対応ホストは NULL で graceful degrade）。slice 番地 / sample-bank ロード / per-slice gain / time/fixpitch 等の「MIDI より豊か」な意味論を運ぶ。VST3 でも custom interface は可能だが重く、AUv3 は Apple の component モデルに縛られ難しい（**CLAP が一番素直**）。
 
 ### 2.2 fault は3層（α が floor）
-- **① app が daemon の死を生存** = recovery floor（全部の前提・**§7 で α**）。現状: daemon に Rust panic hook→exit(1)+DaemonError はあるが、auto-respawn / session 復旧は未実装。
+- **① app が daemon の死を生存** = recovery floor（全部の前提・**§7 で α**）。現状: ✅ **PR #318（#300）で実装完了**。panic hook→exit(1)+DaemonError に加え、SIGKILL/segfault も `DaemonClient` の ws-close → `daemon-died`（intentionalClose で意図的 quit と判別）→ auto-respawn で捕捉し、最小 recovery contract（接続再確立 / active loops 復帰 / one-shot drop / transport 再 anchor）を再確立する。
 - **② daemon が 3rd-party crash を生存** = out-of-process sandbox（新規・未構築スパイク・**§7 で γ**）。
 - **③ 1st-party in-process crash**（panic / `unsafe` / Signalsmith は C++）は **①の respawn でのみ捕捉** → in-process 楽器は①を*前提にする*（不要にはしない）。
 
@@ -62,7 +62,7 @@
 **土台は ① ネイティブ音声エンジン + ② VSCodium化（OrbitStudio）の2本だが、順序は engine-first**（OrbitStudio は native エンジンの上で動かし、**scsynth は載せない**）。DSL 拡張・audio 機能は土台の後（今の `.orbs` DSL は表現力として充分・急がない・やる時はそれに集中する）。
 
 - **① native エンジンを opt-in の裏で育てる**: `ORBITSCORE_ENGINE=rust` opt-in（S2 で配線済）の裏で育て、**今の .vsix で dog-food**（scsynth 同梱なし・OrbitStudio 非依存・**throwaway ゼロ**）。engine の Studio 向け範囲 = **サンプラー(in-process) + plugin host(effects)**・**scsynth 同等ではない**。
-  - **第1増分（最初の `/goal`・issue #300 系）**: S2-defer の **pan / slice / per-slice gain** を埋める + **α recovery floor（fault ①）**。
+  - ✅ **第1増分（#304 + #300）完了**: PR #305（pan / slice / per-slice gain・`711aec2`）+ PR #318（α recovery floor — daemon supervision + auto-respawn + kill-test 済）。**次フェーズの選択肢は [`POST_2.0_NEXT_STEPS.html`](POST_2.0_NEXT_STEPS.html) 参照**。
   - 後続増分: **time-stretch** / **LinkAudio（A4）** / **γ out-of-process sandbox（fault ②・effects + 3rd-party）** / **δ 3rd-party VST3/AU** → **cutover #108（default 切替・scsynth 退役）**。
 - **② OrbitStudio（VSCodium）を native エンジンの上で（cutover 後）**: scsynth は載せない・**CLI + Claude 拡張が動く**こと必須。engine 非依存な殻（VSCodium リブランド / node ランタイム / 署名 CI）は再利用可で並行着手も可だが、audio が使えるのは engine 後。
 - **改良層（土台の後・集中して）**: **β audio DSL ⊇ pitch DSL（+ #213 `fixpitch()`/`time()`・in-process・C1 pitch spec 先行が前提）** / audio 機能（slice #239 / audio `[ ]` #238）。
@@ -109,7 +109,7 @@
 **完了**: feasibility research（`docs/research/RUST_PLUGIN_HOSTING.md`）→ **A0+S1+S1b（PR #294）= CLAP hosting が RT 安全に成立**（in-process clack-host）→ **S2（PR #297）= daemon dispatch seam parity**。詳細 `POST_2.0_A0_RT_INTEGRATION_DESIGN.md`。
 
 **① native エンジンを `ORBITSCORE_ENGINE=rust` opt-in の裏で育てる（今の .vsix で dog-food・scsynth 同梱なし・throwaway ゼロ）**:
-- **第1増分（最初の `/goal`・issue #300 系）** — S2-defer の **pan（daemon 実装）/ slice / per-slice gain** を埋める + **α recovery floor（fault ①）**: daemon supervision + auto-respawn + 最小 recovery contract（接続再確立 + active loops 復帰 / 可聴ギャップ許容 / one-shot drop / transport 再 anchor）。Done = opt-in で現行 .orbs audio が SC 同等に鳴る + **α kill-test**（kill -9 + 故意 segfault プラグイン〔S1b misbehave synth 拡張・再利用〕で liveness + 復旧後 correctness〔transport desync・orphaned play_id 無し〕）+ 既存テスト全緑 / SC 既定無改変。
+- ✅ **第1増分（#304 + #300）完了**: PR #305（pan / slice / per-slice gain）+ PR #318（α recovery floor — daemon supervision + auto-respawn + 最小 recovery contract〔接続再確立 / active loops 復帰 / one-shot drop / transport 再 anchor / 可聴ギャップ許容〕）。**α kill-test** は外部 SIGKILL（C-ABI segfault の代理）+ gated `InjectFault`（panic hook 経路）で liveness + 復旧後 correctness（transport 再 anchor / orphaned play_id 無し / active loops 復帰）を実証（daemon は CLAP 非ホストのため当初の「S1b misbehave synth を segfault に拡張」案は daemon を殺せず、owner と再設計）。**次フェーズの選択肢は [`POST_2.0_NEXT_STEPS.html`](POST_2.0_NEXT_STEPS.html)**。
 - **後続増分**: **time-stretch（Signalsmith）** / **LinkAudio（A4・Rust 隔離 GPL）** / **γ out-of-process sandbox（fault ②・effects + 3rd-party・shared-mem audio / RT-safe event IPC / watchdog）** / **δ 3rd-party VST3/AU** → **cutover #108（Rust を default backend に・scsynth 退役）**。
 
 **② OrbitStudio（VSCodium）を native エンジンの上で（cutover 後・issue #301）**: scsynth は載せない・**CLI + Claude 拡張が動く**こと必須。engine 非依存な殻（VSCodium リブランド / node ランタイム + `@julusian/midi` ABI / 署名 CI）は再利用可で並行着手も可だが、audio が使えるのは engine 後。

@@ -336,7 +336,7 @@ poll-and-fire-now + 定数 lookahead で、SC の fire-now と daemon の schedu
 
 ### S2 後に残る後続
 
-pan の daemon 実装（ScheduledSample + PlayAt + engine mixing の小改修）/ slice・time-stretch（A3）/ LinkAudio・master effects の Rust 隔離（A4）/ 出荷 .vsix の cutover（engine 成熟後）/ daemon 側 hard-stop-all（現状 in-flight voice は自然減衰）/ **flood 抑制の partial-close window**（`@claude` bot Finding F・非 blocking）: `DaemonClient.request()` が `ws.readyState===CLOSING` かつ `running===true` の sub-10ms window で plain `Error`（≠`DaemonConnectionError`）を throw するため、その瞬間だけ `onPlaybackError` の flood 抑制をすり抜け数行の余分ログが出る。次の `close` event（≤10ms）で `running=false` → 抑制が効くため自己修復。ロバスト化は `request()` の throw を `DaemonConnectionError` でラップ（daemon-client は #108 scaffold の接続経路で daemon-client.spec を持つため別 PR）。
+~~pan の daemon 実装~~ ✅ **#304 / PR #305 で実装済** / slice・time-stretch（A3）/ LinkAudio・master effects の Rust 隔離（A4）/ 出荷 .vsix の cutover（engine 成熟後）/ daemon 側 hard-stop-all（現状 in-flight voice は自然減衰・[`POST_2.0_NEXT_STEPS.html`](POST_2.0_NEXT_STEPS.html) §5 で追跡）/ ~~**flood 抑制の partial-close window**~~（`@claude` bot Finding F）→ ✅ **#300 / PR #318 で解消**: `DaemonClient.request()` が `ws.readyState===CLOSING` かつ `running===true` の window で plain `Error`（≠`DaemonConnectionError`）を throw し `onPlaybackError` の flood 抑制をすり抜けていたのを、`request()` の throw を `DaemonConnectionError` 化して既存フィルタに揃えた。
 
 ## 15. 関連
 

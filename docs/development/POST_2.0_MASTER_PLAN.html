@@ -79,12 +79,12 @@
   <h2>▶ Start here（新規セッションの起点）</h2>
   <div class="callout c-warn">
     <span class="lbl">2026-06-21 UPDATE（Issue #298）— スパイク完了 + 次フェーズ・アーキ確定 + ロードマップ再優先順位化</span>
-    <strong>A0 + S1 + S1b（PR #294）+ S2（PR #297）は MERGED 済</strong>（CLAP hosting が in-process で RT 安全に成立 + daemon dispatch seam parity）。アーキ確定: <strong>楽器（サンプラー/audio DSL）= in-process（crown jewel）／ effects + 3rd-party = out-of-process sandboxed plugin ／ audio DSL ⊇ pitch DSL ／ egress は楽器でなく音を出す（薄い bridge プラグイン b1 主案）</strong>。<strong>ロードマップ = engine-first</strong>（#302・振り子収束）: ① **native エンジンを <code>ORBITSCORE_ENGINE=rust</code> opt-in の裏で育て .vsix で dog-food**（scsynth 同梱なし・throwaway ゼロ）→ **cutover #108** → ② **OrbitStudio(VSCodium) を native の上で**（scsynth 載せない・CLI+Claude 拡張必須）→ 改良層 = <strong>β audio DSL⊇pitch（+#213）/ audio 機能（slice/stretch）</strong>は後。**最初の /goal = engine 第1増分（pan/slice/per-slice gain + α・#300 系）**。詳細の正本 = <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2.5</code>。
+    <strong>A0 + S1 + S1b（PR #294）+ S2（PR #297）は MERGED 済</strong>（CLAP hosting が in-process で RT 安全に成立 + daemon dispatch seam parity）。アーキ確定: <strong>楽器（サンプラー/audio DSL）= in-process（crown jewel）／ effects + 3rd-party = out-of-process sandboxed plugin ／ audio DSL ⊇ pitch DSL ／ egress は楽器でなく音を出す（薄い bridge プラグイン b1 主案）</strong>。<strong>ロードマップ = engine-first</strong>（#302・振り子収束）: ① **native エンジンを <code>ORBITSCORE_ENGINE=rust</code> opt-in の裏で育て .vsix で dog-food**（scsynth 同梱なし・throwaway ゼロ）→ **cutover #108** → ② **OrbitStudio(VSCodium) を native の上で**（scsynth 載せない・CLI+Claude 拡張必須）→ 改良層 = <strong>β audio DSL⊇pitch（+#213）/ audio 機能（slice/stretch）</strong>は後。✅ <strong>第1増分（#304 + #300）完了</strong>（pan/slice/per-slice gain = PR #305 / α recovery floor = PR #318）。<strong>次フェーズの選択肢は <code>POST_2.0_NEXT_STEPS.html</code></strong>。詳細の正本 = <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2.5</code>。
   </div>
   <ol>
     <li><strong>必読を順に読む</strong>（下記「必読」）。本書は探索ノートを<em>実行可能な形</em>に変換した入口であり、決定の正本はノート側。</li>
     <li><strong>唯一の不変条件</strong>を頭に入れる → <em>permissive ライセンス規律</em>（§1）。これを破ると freemium 戦略が崩れる。</li>
-    <li><strong>最初の1手</strong>: A0/S1/S1b/S2 は<strong>完了済</strong>。次の `/goal` = <span class="spine">engine 第1増分（pan/slice/per-slice gain + α recovery・#300 系）</span>。native を opt-in 裏で育て .vsix で dog-food → cutover #108 → OrbitStudio on native（§3 / §2.5）。</li>
+    <li><strong>最初の1手</strong>: A0/S1/S1b/S2 は<strong>完了済</strong>。✅ <strong>第1増分（#304 + #300）完了</strong>（次フェーズの選択肢は <code>POST_2.0_NEXT_STEPS.html</code>）。native を opt-in 裏で育て .vsix で dog-food → cutover #108 → OrbitStudio on native（§3 / §2.5）。</li>
     <li>確定済み決定（§6）は<strong>再議論しない</strong>。より良い代替案は実装せず提案として報告に含める。</li>
   </ol>
   <p class="small" style="color:#9da7b3">本書は engine-first の土台トラック。締切なし。WCTM（Epic #224・締切 2026-08-07）は<strong>並行する別トラック</strong>で、post-2.0 はその時間を侵食しない。</p>
@@ -125,7 +125,7 @@
 ① engine (Rust) を opt-in 裏で育て .vsix で dog-food  ── scsynth 同梱なし・throwaway ゼロ
   A0/S1/S1b CLAP hosting ✅
   S2 daemon seam parity  ✅
-  ★最初の /goal = 第1増分: pan/slice/per-slice gain + α recovery floor (fault①) #300
+  ✅ 第1増分 完了（#304 PR #305 + #300 PR #318）: pan/slice/per-slice gain + α recovery floor (fault①)
   後続: time-stretch / LinkAudio(A4) / γ out-of-proc sandbox(fault②) / δ 3rd-party VST3/AU
   → cutover #108（Rust を既定 backend に・scsynth 退役）
 ② OrbitStudio (VSCodium) ──── cutover 後・native の上で（scsynth 載せない・CLI+Claude 拡張必須）
@@ -149,10 +149,10 @@ Track C（pitch / song）  ──── engine 非依存・先行可
 
 <h2 id="firststep">§3. 最初の1手（A0/S1/S2 完了済 → engine-first）</h2>
 <div class="callout c-warn">
-  <span class="lbl">▶ 最初の /goal = engine 第1増分（pan/slice/per-slice gain + α recovery・#300 系）</span>
+  <span class="lbl">✅ 第1増分（#304 + #300）完了 → 次フェーズは <code>POST_2.0_NEXT_STEPS.html</code></span>
   <strong>完了済</strong>: A0+S1+S1b（PR #294・in-process CLAP hosting が RT 安全に成立）/ S2（PR #297・daemon dispatch seam parity）。<br />
   <strong>2026-06-21 確定（#302・engine-first）</strong>: ① **native エンジンを <code>ORBITSCORE_ENGINE=rust</code> opt-in の裏で育て、今の .vsix で dog-food**（scsynth 同梱なし・OrbitStudio 非依存・throwaway ゼロ）→ **cutover #108**（現行 audio DSL を鳴らせたら default 切替・scsynth 退役）→ ② **OrbitStudio(VSCodium) を native の上で**（scsynth 載せない・CLI+Claude 拡張必須・殻は engine 非依存で並行可だが audio は engine 後）→ ③ **改良層（β audio DSL⊇pitch・slice/stretch）は後**。<br />
-  <strong>最初の <code>/goal</code></strong> = engine 第1増分: S2-defer の <strong>pan / slice / per-slice gain</strong> を埋める + <strong>α recovery floor（#300）</strong>。
+  ✅ <strong>第1増分完了</strong>: pan / slice / per-slice gain（#304・PR #305）+ <strong>α recovery floor（#300・PR #318）</strong>。次フェーズの選択肢は <code>POST_2.0_NEXT_STEPS.html</code>。
 </div>
 <p><strong>資産再利用</strong>: ゼロから DAW を書くのではなく、既にある orbit-audio スケジューラ/ミキサー + S1 の in-process hosting 基盤に「足す」。詳細の正本 = <code>POST_2.0_ENGINE_AND_DISTRIBUTION.md §2</code>（楽器配置・fault 3層・egress・§2.5 ロードマップ）。</p>
 
@@ -168,7 +168,7 @@ Track C（pitch / song）  ──── engine 非依存・先行可
     <tr><td><strong>A0</strong></td><td>RT 統合設計（cpal callback + daemon への RT 安全な統合方式）</td><td>✅ 完了（PR #294）</td></tr>
     <tr><td><strong>S1 / S1b</strong></td><td>CLAP ホスティング: <code>clack-host</code> を既存 cpal callback に統合 → 実プラグイン発音 → tap（in-process・RT 安全）。S1b = 低レイテンシ + dynamic hot-install</td><td>✅ 完了（PR #294 `813802f`）</td></tr>
     <tr><td><strong>S2</strong></td><td>音声ディスパッチ seam を SC OSC→Rust daemon に差し替え可能化（parity proof・SC 既定）</td><td>✅ 完了（PR #297 `06cf131`）</td></tr>
-    <tr><td><strong>α</strong> <span class="badge b-decided">★最初の /goal</span></td><td>engine 第1増分: S2-defer の <strong>pan / slice / per-slice gain</strong> を埋める + recovery floor（fault ①・issue #300）: daemon supervision + auto-respawn + 最小 recovery contract（接続再確立 / active loops 復帰 / 可聴ギャップ許容 / one-shot drop / transport 再 anchor）。opt-in 裏で dog-food</td><td>opt-in で SC 同等再生 + kill-test / SC 無改変</td></tr>
+    <tr><td><strong>α</strong> <span class="badge b-decided">✅ 完了</span></td><td>engine 第1増分: pan / slice / per-slice gain（#304）+ recovery floor（fault ①・#300）: daemon supervision + auto-respawn + 最小 recovery contract（接続再確立 / active loops 復帰 / 可聴ギャップ許容 / one-shot drop / transport 再 anchor）。opt-in 裏で dog-food</td><td>✅ PR #305（#304）+ PR #318（#300・kill-test 済）</td></tr>
     <tr><td>後続</td><td>time-stretch（Signalsmith）/ LinkAudio（A4・Rust 隔離 GPL）/ <strong>γ</strong> out-of-process sandbox（fault ②・effects + 3rd-party・shared-mem audio / RT-safe IPC / watchdog）/ <strong>δ</strong> 3rd-party VST3/AU（AU <code>objc2-avf-audio</code> → VST3 <code>vst3</code> MIT）</td><td>→ cutover #108</td></tr>
     <tr><td><strong>cutover</strong></td><td>#108: Rust を default audio backend に・scsynth 退役。以降 OrbitStudio が native を載せる</td><td>現行 audio DSL 全 parity 後</td></tr>
     <tr><td><strong>β</strong> <span class="badge b-tent">改良層</span></td><td>audio DSL ⊇ pitch DSL（+ #213 <code>fixpitch()</code>/<code>time()</code>・in-process）。<strong>土台の後・集中して</strong></td><td>C1 pitch spec 先行 + engine 土台後</td></tr>
@@ -275,7 +275,7 @@ Track C（pitch / song）  ──── engine 非依存・先行可
       <li>A0 / S1 / S1b CLAP hosting（PR #294）✅</li>
       <li>S2 daemon dispatch seam parity（PR #297）✅</li>
       <li>#298 アーキ決定記録 + spec 反映（PR #299・docs-only）✅作業中</li>
-      <li><strong>★最初の /goal = engine 第1増分（#300 系）</strong>: native を opt-in 裏で育て .vsix で dog-food — <strong>pan/slice/per-slice gain + α recovery floor</strong></li>
+      <li>✅ <strong>第1増分（#304 + #300）完了</strong>: pan/slice/per-slice gain（PR #305）+ α recovery floor（PR #318）。次は <code>POST_2.0_NEXT_STEPS.html</code></li>
       <li><strong>engine 後続</strong>: time-stretch / LinkAudio(A4) / <strong>γ</strong> out-of-process sandbox(fault②) / <strong>δ</strong> 3rd-party VST3/AU → <strong>cutover #108</strong>（scsynth 退役）</li>
       <li><strong>OrbitStudio（#301）</strong>: cutover 後・native の上で（scsynth 載せない・CLI+Claude 拡張必須）</li>
       <li><strong>改良層 β</strong> audio DSL ⊇ pitch DSL（+ #213 / #239 / #238）— C1 前提・<strong>土台の後</strong></li>
