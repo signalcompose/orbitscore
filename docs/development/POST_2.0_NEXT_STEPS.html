@@ -305,6 +305,21 @@
   正直な calibration: score-following 自体は確立した MIR 研究（Antescofo / Music Plus One 等）。<strong>新規性は「OrbitScore の譜面表現に対する整合 + LLM 計画駆動のライブコーディング」という統合部分</strong>に限る（「多分誰もやっていない」はこの統合に限定して言える）。チャレンジする価値はあるが、engine track はその<strong>土台（クリーンな計測語彙）を供給するだけ</strong>に留める。
 </p>
 
+<h3>6.3 今の engine 開発との接続（トレーサビリティ）+ 先行研究での位置づけ</h3>
+<p>この north-star は別トラックだが、<strong>今の engine 開発がその土台を供給する</strong>接続を記録しておく（engine scope は侵さない）:</p>
+<ul>
+  <li><strong>計測語彙を source-agnostic に</strong>（#307/#308/#313）→ 検証で鍛えた語彙がそのまま「耳」の front-end になる。</li>
+  <li><strong>#300 recovery floor + egress b1 bridge</strong> → 薄い Max external ↔ 共有メモリ IPC ↔ standalone daemon で <strong>Max 統合 AND crash 隔離</strong>（Max Summer School proposal 採択時の「Max 必須」を de-risk）。</li>
+  <li><strong>A4 LinkAudio（tempo）</strong> → 「時間の耳」に隣接 / <strong>capture seam</strong> → 解析プリミティブを real stream に当てる field test が「耳」にも効く。</li>
+  <li><strong>レイテンシ設計</strong>: LLM を note 反射に置けない（score-following ~60ms・人間同士 ~30–40ms）→ <strong>速い決定論 groove-lock + 遅い anticipatory LLM 計画の2層分離</strong>。</li>
+</ul>
+<div class="callout c-warn">
+  <span class="lbl">先行研究での位置づけ（deep-research 2026-06-22・引用付き別紙 = <code>docs/research/WCTM_LLM_ENSEMBLE_LISTENING_RESEARCH.md</code>）</span>
+  <strong>確立</strong> = 機械ジャズ即興（Voyager / IRCAM OMax→Somax2→OID 系）と anticipatory 即興（ImproteK / Music Plus One）。
+  <strong>precedent あるが限定</strong> = engineered 耳（Somax2）は<strong>生バンドで破綻</strong>（monophonic Yin / OID は自動 beat-tracking を撤去し手動タッピング / 複雑ジャズ ACE 未解決で和声は<strong>聴かず注釈</strong>）、認知層は全系列が <strong>formal-model（Factor Oracle / n-gram）= 非 ML</strong>。
+  <strong>未踏（要追加調査・本調査の coverage gap）</strong> = <strong>LLM を認知層に + live-coding を action space に + end-to-end 統合</strong>。「誰もやっていない」は<strong>この統合に限定</strong>して主張する（機械即興・耳・anticipation 単体は precedent あり）。score-following の ~60–91ms は<strong>ソロピアノ固定譜面の最易ケースの天井</strong>で生アンサンブルには転移しない。
+</div>
+
 <h2>7. 明示 defer（このトラックで作らないもの・再掲）</h2>
 <ul>
   <li>out-of-process per-plugin isolation = <strong>γ（fault ②）</strong> — daemon supervision が kill-test を通れば α では不要だった（→ §3 γ で扱う）。</li>
