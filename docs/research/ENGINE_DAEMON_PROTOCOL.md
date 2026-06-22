@@ -230,7 +230,8 @@ JSON-RPC 2.0 の影響を受けた独自形式:
     "gain": 1.0,
     "pan": 0.0,
     "offset_sec": 0.0,
-    "duration_sec": 0.0
+    "duration_sec": 0.0,
+    "rate": 1.0
   }
 }
 
@@ -245,7 +246,8 @@ JSON-RPC 2.0 の影響を受けた独自形式:
 - `gain`: `[0.0, ∞)`。範囲外（負値）は `PARAM_OUT_OF_RANGE` で reject。上限超過はクリッピング前提で accept
 - `pan`: `[-1.0, 1.0]`。範囲外は自動 clamp（UX 優先、reject しない）、省略時は 0.0
 - `offset_sec`: `[0.0, ∞)`。サンプル内の再生開始位置（秒）。省略時は 0.0（先頭）。`chop` の slice 開始位置に対応。負値は `PARAM_OUT_OF_RANGE` で reject
-- `duration_sec`: `[0.0, ∞)`。`offset_sec` から再生する長さ（秒）。0 または省略で「offset 以降すべて」。`chop` の slice 長に対応（natural rate=1.0 で再生）。負値は `PARAM_OUT_OF_RANGE` で reject。サンプル端を超える指定は端で clamp
+- `duration_sec`: `[0.0, ∞)`。`offset_sec` から再生する**ソース**長（秒）。0 または省略で「offset 以降すべて」。`chop` の slice 長に対応。負値は `PARAM_OUT_OF_RANGE` で reject。サンプル端を超える指定は端で clamp
+- `rate`: varispeed 再生レート（#319）。省略時 1.0（自然尺）。`>1` で速く短く高ピッチ、`<1` で遅く長く低ピッチ（ピッチも動く varispeed = SC `PlayBuf.ar(rate:)` 一致）。`<=0` / 非有限は `pan` 同様 reject せず 1.0 に丸める（UX 優先）。出力尺 = `duration_sec / rate`（PlayEnded はこの出力終端で発火）
 
 ### Stop
 
@@ -265,6 +267,27 @@ JSON-RPC 2.0 の影響を受けた独自形式:
   "result": { "play_id": "p-a9f2", "status": "stopped" | "already_stopped" | "not_found" }
 }
 ```
+
+### StopAll
+
+全アクティブ再生（発音中 + 開始待機中）を即時停止する hard-stop-all（#319・冪等）。respawn / `stopAll` で in-flight voice（varispeed の `rate<1.0` で長尺化した slice を含む）を断つのに使う。`play_id` を取らず、daemon が保持する全 voice を drop して停止件数を返す。
+
+```json
+// Request
+{
+  "id": "u5",
+  "method": "StopAll",
+  "params": {}
+}
+
+// Response
+{
+  "id": "u5",
+  "result": { "stopped": 3 }
+}
+```
+
+- `stopped`: 停止した voice 数（空でも 0 を返す冪等動作）
 
 ### SetGlobalGain
 
