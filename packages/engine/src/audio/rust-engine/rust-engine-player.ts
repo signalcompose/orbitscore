@@ -327,8 +327,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
           // daemon-died は single-flight で本ループに吸収されたまま respawnPromise が解決し、二度と
           // respawn されず dispatch が永久に drop される（recovery floor が黙って死ぬ最悪ケース）。
           // benign な getStatus 失敗（daemon 生存・anchor は StreamStats で自己修復）は isRunning が
-          // true なので success へ進む。実際の再死のときだけ retry に回す。
-          if (!this.daemon.isRunning()) continue
+          // true なので success へ進む。実際の再死のときだけ retry に回す（沈黙させず可視化する）。
+          if (!this.daemon.isRunning()) {
+            console.warn(
+              `⚠️  [rust-engine] daemon re-died during session re-establishment ` +
+                `(attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}) — retrying…`,
+            )
+            continue
+          }
           // 新 daemon は空。古い sample_id は無効 → 破棄し ensureLoaded に lazy 再ロードさせる
           // （durations は file 由来で不変なので保持し slice 領域解決に使う）。inflightLoads の旧
           // エントリは ws close の reject で各自の .finally が既に delete 済み。

@@ -482,6 +482,8 @@ describe('RustEnginePlayer with mock daemon', () => {
           .some((r) => r.method === 'PlayAt' && String(r.params.sample_id).includes('cont')),
       { timeoutMs: 3000 },
     )
+    // 遅れて再発火が来ても拾えるよう settle 猶予を置いてから確認（兄弟の不在 assert と同じ慣行）。
+    await new Promise((r) => setTimeout(r, 30))
     // one-shot は再発火していない（drop 後に oneshot の PlayAt が増えていない）。
     expect(oneShotCount()).toBe(oneShotBefore)
     expect(p.isRunning).toBe(true)

@@ -273,10 +273,11 @@ export class DaemonClient extends EventEmitter {
     try {
       this.ws?.close()
     } catch (e) {
-      // ws.close() は原則 throw しないが、ws ライブラリ内部の assertion 等で
-      // 例外が出ても quit は継続する。完全に silent にすると cleanup 失敗が
-      // 隠れるため 'ws-close-error' event に通知する。
-      this.emit('ws-close-error', e)
+      // ws.close() は原則 throw しないが、ws ライブラリ内部の assertion 等で例外が出ても quit は
+      // 継続する。完全に silent にすると cleanup 失敗が隠れるため console.warn で可視化する
+      // （onError と同じ方針。以前は 'ws-close-error' を emit していたが consumer が無く実質
+      // silent だった）。
+      console.warn('DaemonClient quit: ws.close() threw unexpectedly:', e)
     }
     this.ws = null
     if (this.child) {
