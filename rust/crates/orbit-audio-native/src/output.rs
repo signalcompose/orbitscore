@@ -126,6 +126,10 @@ fn render_block(
     if let Some(le) = link {
         // reg-ring を drain（2b-2a は last-wins で単一 channel を activate）。RT で alloc しない
         // （scratch は control が事前確保済み）。
+        // 🔴 RT-safety: `le.channel` が既に `Some(old)` だと `old`（String+Vec+Arc）の heap 解放が
+        // RT スレッド上で起きる。これを防ぐのは `LinkAudioControl::register_channel` の冪等 guard
+        // で、同名再登録時に `reg_tx.push` を抑止するため、ここでは `None → Some` の遷移しか起きない。
+        // 2b-2b で reg-ring を pool 化し複数 push を許す際は、この drop が RT で発生しうるので要再設計。
         while let Ok(act) = le.reg_rx.pop() {
             le.channel = Some(act);
         }
