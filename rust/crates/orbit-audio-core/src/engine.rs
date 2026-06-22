@@ -135,8 +135,9 @@ impl Engine {
     }
 
     /// `render` の channel filter 版。指定 channel 名に属する event だけを `out` に加算する
-    /// （LinkAudio per-channel tap・#209）。test/scaffolding 用（本番 RT caller は A4-2 で追加）。
-    /// 本番 hardware `render` と同一 tick で混在させないこと（[`Scheduler::render_channel`] 参照）。
+    /// （LinkAudio per-channel tap・#209）。test/scaffolding 用（本番 RT は A4-2b-2 で
+    /// [`Scheduler::render_multi`] に移行予定）。本番 hardware `render` と同一 tick で混在させない
+    /// こと（[`Scheduler::render_channel`] 参照）。
     #[doc(hidden)]
     pub fn render_channel(&self, out: &mut [f32], channel: &str) {
         self.with_scheduler(out, |s, b| s.render_channel(b, channel));

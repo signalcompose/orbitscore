@@ -17,6 +17,32 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.162 feat(engine): A4-2b-1 single-pass multi-buffer render + channel_name wire (post-2.0 A4 / #327) (Jun 23, 2026)
+
+**Date**: 2026-06-23
+**Status**: ✅ 実装 + 全テスト緑（core 39〔既存 35 + render_multi 4: 空channels=render ビット同一 / 1パス routing+sum / **transport 1回進行** / 未登録 channel drop〕・daemon 全緑〔protocol 17 に wire smoke 1 追加〕・full cargo workspace 全緑・npm 1174 passed〔TS wire テスト +7〕）
+**Branch**: `327-single-pass-multibuffer-render`
+**Parent**: #321（A4 meta）/ A4-2a（#324・PR #325）は **MERGED**（`f68a4d2`）
+
+**背景**: A4-2（GPL 隔離）を advisor 助言で permissive/GPL seam で 2分割。本 PR = **A4-2b-1（permissive・offline 可・単独 merge 可）**: single-pass multi-buffer render + per-event `channel_name` wire + 層A 決定論検証。GPL・rtrb・実 egress は **A4-2b-2** へ。**split 根拠**: offline 決定論検証できる render core を「headless 検証できないかもしれない GPL egress（層B・Ableton/link #50）」の後ろに gate しない。
+
+**mode 所有（scout 確定）**: `Sequence.resolveDispatchChannel()`（`sequence.ts:1136`）が hardware-vs-Link を **TS 側で完全解決**（MIDI/非linkAudio → undefined=hardware / linkAudio + `.output(name)` → channel 名 / linkAudio で `.output()` 欠如 → throw）。**daemon は mode-agnostic**: `channel_name = Some(name)` → Link routing tag / None/空 → hardware。daemon に mode flag 不要。
+
+**実装**:
+- **core `Scheduler::render_multi(hardware_out, channels: &mut [(&str, &mut [f32])])`**: 1パスで全 event を走査し hardware_out（channel=None）と各 named channel buffer を同時に埋め、**transport（cursor / master gain ramp / 完了 event 掃除）を1回だけ進める**。N× render_channel の transport 二重進行を恒久解消。既存の per-event 混合を `mix_event_into` に抽出し `render_filtered`/`render_multi` で共有（`render_filtered` は behavior-preserving refactor = 既存 35 テストで bit-identical 担保）。master gain ramp は全バッファに **1回だけ**進めて適用（バッファごとに進めると ramp 多重進行で desync）。未登録 channel の event はどこにも出ない（render_channel の unmatched skip と一致）。`channels` 空なら render() とビット同一。
+- **wire（per-event channel_name・mode-agnostic）**: `RustEnginePlayer.scheduleEvent/scheduleSliceEvent` が `outputChannel` を `ScheduledPlay` に格納 → `executePlayback` が `daemon.playAt(..., channel)` へ → `DaemonClient.playAt` が非空時のみ PlayAt JSON に `channel` 追加（空/欠如は省略）→ daemon `session.rs` が `params["channel"]` を解析（""/absent→None coerce）→ `engine.play_at(... channel)`（現状 None 固定を置換）。`engine_wrap.play_at`/core scheduler の channel 層は A4-1 で構築済。
+- **本番 render 無改変**（hardware fallback 維持）: render_multi は offline 検証のみで production cpal callback への配線は A4-2b-2。linkAudio mode の event は 2b-2 まで hardware に流れる（A4-1 と同挙動・regression なし）。`registerLinkAudioChannel`/`setLinkTempo` の warn/no-op も維持（egress 未配線で warn は accurate）。
+
+**層A 検証**: core の render_multi cursor-1回進行 determinism（double-advance 修正の実証）+ 1パス routing+sum + 空=render ビット同一 + 未登録 drop。daemon wire smoke（`play_at_with_channel_is_accepted`: PlayAt with channel が session parse を通り PlayStarted = wire が channel を運び parse がエラーにならないことを pin。routing 自体は core/harness が担保・rate と同型の wire 経路ガード）。TS は daemon-client/rust-engine-player の channel 転送を mock で assert（+7）。
+
+**委譲（#298 profile）**: core render_multi（load-bearing single-pass・Opus 直列）+ daemon seam（Opus）+ 検証ゲート（Opus）。TS wire（固定 IF 内の pattern clone + test 配線）= Sonnet 並列・Opus が契約（`channel` JSON field）所有 + 統合検証。
+
+**/simplify（4観点）**: `next_gain_frame` 抽出（ramp 状態遷移の verbatim 重複を `apply_master_gain` と `render_multi` で集約・drift 防止・behavior-preserving）/ render_multi doc 精緻化（「channels 空=render() ビット同一」は channel タグ event が無い場合のみ）。target_idx 二段は borrow-checker 必須で clean、TS spread は idiomatic と確認。**cargo fmt は `-p` でスコープせず workspace 全体を整形し無関係 churn を生むため、編集ファイルのみ revert + 対象 crate のみ fmt し直した**（教訓）。
+
+**/code:pr-review-team（4専門レビュアー・収束）**: Critical 0。Important 2 を反映 = ① **render_multi の ramp 経路 0% 未検証**（全テストが ramp_frames=0 開始）→ `render_multi_gain_ramp_advances_once_and_applies_to_all_buffers` 追加（ramp 1回進行 / hw・channel gain 一致 / channel に gain 適用 を pin・comment が警告する「per-buffer 多重進行 desync」を捕捉）② **`render_channel` doc が render_multi を現在形で『使う』と過剰主張**（実際は production caller 無し）→「A4-2b-2 で移行予定」に時制修正 + `Engine::render_channel` doc 整合。Minor 反映: テスト名 `_is_dropped`→`_is_silent`（実態=無音・event は retain）/ TS warn 文言 `(A4)`→`(A4-2b-2)`「tagged but hardware only」/ render_multi doc に buffer 長前提（release 未チェック・interleaved stride・呼び出し元責任）注記。**2b-2 へ defer**: unknown-channel の retain/drop/diagnostic policy（RT で sampled counter）/ debug_assert の release 安全化（hard-stop でなく RT 安全に）/ RT opts（channel→idx precompute・steady-state gain hoist・start_frame guard を lookup 前に）/ wire→parse→tag の強化検証。非文字列 channel の strict error は lenient optional-param 規約（rate/pan）と一貫で skip。
+
+**スコープ外（A4-2b-2）**: rtrb 本番化（RingTapSink/PostMixSink を permissive 側へ・Producer=native/Consumer=GPL consumer thread）+ GPL consumer が drain→commit_channel + beat anchoring（cumulative-frames から beatsAtBufferBegin 決定論再構成・shim を beats_at_begin 引数化）+ 実 Link commit + production render を render_multi に切替 + registerLinkAudioChannel 実装（dynamic registration: `.output()` は post-start に出現しうる→固定 max-channel pool + 登録 command ring を cpal callback 冒頭 drain）+ 層B headless 受信試行。**beat anchoring は層A 検証不可**（PCM は beat timestamp を持たない）→ 層B/dog-food。**drop policy**: ring 十分サイズ化・万一 drop は re-anchor + log（silent desync 禁止・hard-stop 禁止）。**lock-free 化 = rtrb egress 境界**（scheduler の Arc<Mutex>+try_lock 据え置き）。PR3 tempo / PR4 e2e。
+
 ### 6.161 feat(engine): A4-2a GPL isolation crate orbit-link-audio + SC-free C++ shim + cargo-deny gate (post-2.0 A4 / #324) (Jun 22, 2026)
 
 **Date**: 2026-06-22

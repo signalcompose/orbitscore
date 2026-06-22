@@ -43,7 +43,13 @@ async fn play_at_then_play_started_and_play_ended() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let wav_path = format!("{manifest_dir}/../../../test-assets/audio/kick.wav");
 
-    send_cmd(&mut ws, "cmd-load", "LoadSample", json!({ "path": wav_path })).await;
+    send_cmd(
+        &mut ws,
+        "cmd-load",
+        "LoadSample",
+        json!({ "path": wav_path }),
+    )
+    .await;
     let load_resp = recv_reply_for_id(&mut ws, "cmd-load").await;
     let sample_id = load_resp["result"]["sample_id"]
         .as_str()
@@ -84,6 +90,60 @@ async fn play_at_then_play_started_and_play_ended() {
     }
     assert!(saw_started, "PlayStarted event missing");
     assert!(saw_ended, "PlayEnded event missing");
+}
+
+/// PlayAt が `channel`（LinkAudio outputChannel・#209）フィールドを **wire 経由**で受理し、
+/// session.rs の解析（`params["channel"]` → `engine.play_at(... channel)`）がエラーにならず
+/// 再生が成立することを pin する（A4-2b-1）。channel 名のキー typo / 解析漏れは、core/harness
+/// テストが session 層を bypass するため silent に通る（rate と同型の wire 経路ガード）。実 routing
+/// は core の render_multi / render_offline_channel テストで検証する（A4-2b-1 では egress 未配線で
+/// hardware fallback のため、live ws 経路から routing は観測できない）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn play_at_with_channel_is_accepted() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let wav_path = format!("{manifest_dir}/../../../test-assets/audio/kick.wav");
+    send_cmd(&mut ws, "l", "LoadSample", json!({ "path": wav_path })).await;
+    let load_resp = recv_reply_for_id(&mut ws, "l").await;
+    let sample_id = load_resp["result"]["sample_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("LoadSample resp missing sample_id: {load_resp}"))
+        .to_string();
+
+    send_cmd(
+        &mut ws,
+        "p",
+        "PlayAt",
+        json!({
+            "sample_id": sample_id,
+            "time_sec": 0.0,
+            "gain": 1.0,
+            "channel": "ch1",
+        }),
+    )
+    .await;
+    let (play_resp, early_events) = recv_reply_with_events(&mut ws, "p").await;
+    assert!(
+        play_resp["result"]["play_id"].is_string(),
+        "PlayAt with channel should succeed: {play_resp}"
+    );
+
+    let mut saw_started = early_events.iter().any(|e| e["event"] == "PlayStarted");
+    advance_and_yield(Duration::from_secs(2)).await;
+    for _ in 0..20 {
+        if saw_started {
+            break;
+        }
+        match tokio::time::timeout(Duration::from_millis(100), next_json(&mut ws)).await {
+            Ok(msg) if msg["event"] == "PlayStarted" => saw_started = true,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    assert!(saw_started, "PlayStarted missing for channel-tagged PlayAt");
 }
 
 /// PlayAt の duration_sec が負値の場合は PARAM_OUT_OF_RANGE で拒否する。
@@ -278,7 +338,9 @@ async fn play_at_rate_halves_play_ended_time() {
         .to_string();
     // 自然尺 D = frames / sample_rate（出力 SR に変換済みのロード値）。
     let frames = load_resp["result"]["frames"].as_f64().expect("frames");
-    let sr = load_resp["result"]["sample_rate"].as_f64().expect("sample_rate");
+    let sr = load_resp["result"]["sample_rate"]
+        .as_f64()
+        .expect("sample_rate");
     let natural_sec = frames / sr;
 
     // rate=2.0 で発音 → 出力尺は natural_sec / 2、ended_at_sec = start(0) + natural_sec/2。
@@ -463,11 +525,17 @@ async fn unload_sample_happy_then_unknown() {
     let wav_path = format!("{manifest_dir}/../../../test-assets/audio/kick.wav");
     send_cmd(&mut ws, "l", "LoadSample", json!({ "path": wav_path })).await;
     let load_resp = recv_reply_for_id(&mut ws, "l").await;
-    let sid = load_resp["result"]["sample_id"].as_str().unwrap().to_string();
+    let sid = load_resp["result"]["sample_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     send_cmd(&mut ws, "u1", "UnloadSample", json!({ "sample_id": sid })).await;
     let resp1 = recv_reply_for_id(&mut ws, "u1").await;
-    assert!(resp1["result"].is_object(), "first unload should succeed: {resp1}");
+    assert!(
+        resp1["result"].is_object(),
+        "first unload should succeed: {resp1}"
+    );
 
     // 既に解放済みの sample_id を再度 unload するとエラー応答になる。
     send_cmd(&mut ws, "u2", "UnloadSample", json!({ "sample_id": sid })).await;

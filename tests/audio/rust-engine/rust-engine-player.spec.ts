@@ -227,6 +227,36 @@ describe('RustEnginePlayer with mock daemon', () => {
     await waitFor(() => playAtRecords().length >= 1)
     const chWarns = warn.mock.calls.filter((c) => String(c[0]).includes('outputChannel'))
     expect(chWarns.length).toBe(1)
+    // outputChannel は PlayAt の channel フィールドとして転送される（A4-2b-1）。
+    expect(playAtRecords()[0].channel).toBe('drums')
+    warn.mockRestore()
+  })
+
+  it('scheduleEvent outputChannel あり → daemon.playAt に channel を転送する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', 'reverb')
+    p.start()
+    await waitFor(() => playAtRecords().length >= 1)
+    expect(playAtRecords()[0].channel).toBe('reverb')
+    warn.mockRestore()
+  })
+
+  it('scheduleEvent outputChannel なし → daemon.playAt に channel フィールドを含めない', async () => {
+    const p = await boot()
+    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
+    p.start()
+    await waitFor(() => playAtRecords().length >= 1)
+    expect(playAtRecords()[0]).not.toHaveProperty('channel')
+  })
+
+  it('scheduleSliceEvent outputChannel あり → daemon.playAt に channel を転送する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    p.scheduleSliceEvent('/audio/loop.wav', 0, 1, 4, 250, 0, 0, 'seqA', 'drums')
+    p.start()
+    await waitFor(() => playAtRecords().length >= 1)
+    expect(playAtRecords()[0].channel).toBe('drums')
     warn.mockRestore()
   })
 

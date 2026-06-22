@@ -76,6 +76,8 @@ export interface ScheduledPlay {
   sequenceName: string
   /** chop slice 情報。未指定なら全体再生。発火時に load 済み尺から領域を計算する。 */
   slice?: SliceSpec
+  /** LinkAudio ルーティング先チャンネル名。非空の時のみ daemon の PlayAt へ転送する。 */
+  outputChannel?: string
 }
 
 /**
@@ -401,13 +403,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * LinkAudio チャンネル登録（#209）は A4（Rust LinkAudio 隔離モジュール）の担当。
-   * S2 では未対応を 1 回 warn する（throw せず boot/再生は継続）。
+   * LinkAudio チャンネル登録（#209）は A4-2b-2（Rust LinkAudio egress 配線）の担当。
+   * 現状は未対応を 1 回 warn する（throw せず boot/再生は継続）。`scheduleEvent` /
+   * `scheduleSliceEvent` と同じ `'outputChannel'` GapKind を共有し first-wins で 1 回だけ出す
+   * ため、文言は整合させる。
    */
   async registerLinkAudioChannel(channelName: string): Promise<void> {
     this.warnOnce(
       'outputChannel',
-      `⚠️  [rust-engine] LinkAudio channel "${channelName}" is not supported on the rust engine yet (A4). Sequences with outputChannel play on the hardware bus.`,
+      `⚠️  [rust-engine] LinkAudio channel "${channelName}": egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
     )
   }
 
@@ -447,12 +451,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (outputChannel) {
       this.warnOnce(
         'outputChannel',
-        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio) is not supported yet (A4) — playing on the hardware bus.`,
+        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio): egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
       )
     }
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
-    this.enqueue({ time, filepath, gainDb, pan, sequenceName })
+    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel })
   }
 
   /**
@@ -481,7 +485,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (outputChannel) {
       this.warnOnce(
         'outputChannel',
-        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio) is not supported yet (A4) — playing on the hardware bus.`,
+        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio): egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
       )
     }
     this.enqueue({
@@ -491,6 +495,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       pan,
       sequenceName,
       slice: { index: sliceIndex, total: totalSlices, eventDurationMs },
+      outputChannel,
     })
   }
 
@@ -609,6 +614,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       offsetSec,
       durationSec,
       rate,
+      play.outputChannel,
     )
     this.onDispatch?.({
       filepath: play.filepath,

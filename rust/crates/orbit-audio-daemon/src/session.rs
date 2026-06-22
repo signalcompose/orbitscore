@@ -290,10 +290,28 @@ async fn handle_command(
             // rate は varispeed（省略時 1.0 = 自然尺）。pan と同じく非致命的 param なので reject
             // せず core 側で 1.0 に丸める（<=0/非有限。誤った無音化や逆走を起こさない）。
             let rate = param_f64(&params, "rate", 1.0);
-            // channel（LinkAudio outputChannel・#209）の wire 解析は A4-2（GPL 隔離 + 実 commit）
-            // で追加する。A4-1 では None 固定で hardware sum 経路（既存挙動・regression なし）。
+            // channel（LinkAudio outputChannel・#209）。daemon は mode-agnostic:
+            // Some(name) = 当該 Link channel への routing tag / None or 空文字 = hardware sum。
+            // hardware-vs-Link の mode 判定は TS 側（Sequence.resolveDispatchChannel）が解決済で、
+            // wire に乗る channel 名はそのまま routing tag になる。空文字/欠如は None に coerce
+            // （channel 名は ASCII alnum+`-`+`_` 規則で空は不正）。A4-2b-1 では event に tag する
+            // のみで、実 LinkAudio egress（rtrb + GPL consumer）は A4-2b-2。
+            let channel = params
+                .get("channel")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
             match params.get("sample_id").and_then(|v| v.as_str()) {
-                Some(sid) => match engine.play_at(sid, time_sec, gain, pan, offset_sec, duration_sec, rate, None) {
+                Some(sid) => match engine.play_at(
+                    sid,
+                    time_sec,
+                    gain,
+                    pan,
+                    offset_sec,
+                    duration_sec,
+                    rate,
+                    channel,
+                ) {
                     Ok(handle) => {
                         // 遅延タスクを先に spawn して await コストを避ける
                         schedule_play_ended(
