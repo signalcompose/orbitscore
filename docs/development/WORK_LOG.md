@@ -39,7 +39,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **PR #332**（base=`329-linkaudio-egress-rtrb` にスタック）作成 → **/simplify 適用**（`b2c2736`: per-channel commit_fail_streak バグ修正〔channel-global は masking〕+ render_block 述語 hoist + overflow debug_assert）→ **pr-review-team 2 round で収束**: round-1 = code-reviewer 0 Crit/Imp（readiness flag Relaxed 順序・two-pass 整合・error-code split 全 clean）/ pr-test-analyzer 3 Important test gap → pure 関数抽出（`channel_egress_active`/`registration_decision`）+ 単体テスト + `wrap_err_to_protocol` テストで解消（`61c6c3c`）/ silent-failure Minor（warn を channel 名に・`channel_id()` 削除）/ comment-analyzer 2 Important + 1 Minor コメント修正（`1367a0e`）。round-2 = code-reviewer + pr-test-analyzer とも **収束確認・0 Crit/Imp**。CI green（`61c6c3c`）・full workspace 19 ok・cargo-deny GPL-free・TS 1179 passed・multi-channel 層B 維持。
 
-**次**: advisor（@claude bot 受諾 + scope）→ @claude bot。**defer（別 follow-up・#329/#331）**: VerificationReceiver PhantomData / scheduleEvent stale warn / **LinkEgressStats observability**（silent-failure round-1 が Important で挙げたが 2b-2a 先例で defer・drops は 2s ring 満杯時のみ＝実質到達不能・beat は produced-frames で維持）。
+**@claude bot（N-channel concurrency 限定・GPL 隔離は #330 から不変で skip）= 3 問すべて承認**: Q1 readiness flag Relaxed で never-drained-ring 排除（ready=true 観測時 consumer は push+pump 到達済・piggyback 依存ゼロ・rtrb acquire/release）/ Q2 mid-callback false→true は benign（commit される scratch は確定ゼロ＝silence 1 block・beat は produced-frames で永続 desync なし）/ Q3 N egress × 1 output は hazard なし（single consumer thread sequential・per-egress 分離・`&output` immutable）。**新規指摘なし**。CI SUCCESS on HEAD `844f846`。
+
+**PR2b 完了**（2b-1 #328 MERGED + 2b-2a #330 owner マージ待ち + 2b-2b #332 owner マージ待ち）。**owner handoff（merge 順）**: **#330 を先にマージ** → #332 は base を main に retarget（auto-update or 手動）。2 PR・順序あり・両 green。**マージは owner の明示指示待ち**。**defer（別 follow-up・#329/#331）**: VerificationReceiver PhantomData / scheduleEvent stale warn / **LinkEgressStats observability**（**daemon CLAP 統合/cutover #108 より前に着地**＝実負荷で drops が reachable になる前）。
 
 ### 6.163 feat(engine): A4-2b-2 LinkAudio egress — design + Q4 gate + shim beats_at_begin (WIP / #329) (Jun 23, 2026)
 
