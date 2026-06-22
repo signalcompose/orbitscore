@@ -35,7 +35,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - daemon `link_audio.rs`: `consumer_loop(output, ...)` が `Vec<LinkChannelEgress>` を保持、register cmd で Link 登録→egress push→**ready.store(true)**、全 egress を pump。`LinkAudioControl.registered: HashSet<String>`（冪等）+ cap（`ChannelLimit` error）。`RegisterCmd`/`LinkChannelActivate` に `ready` 共有。`ConsumerState` 状態機械を削除。
 - **検証**: full workspace 19 ok・cargo-deny default GPL-free 維持・clippy clean・**multi-channel 層B 実機 PASS**（`layer_b_multi_channel_egress_received`: 2 channel 登録→各 receiver が独立に kick.wav egress 受信・1.7s）+ 単一 channel 層B（2回登録冪等）も維持。
 
-**次（本 branch で継続）**: ① error-code 分割（`ChannelLimit`/`RegRingFull`/`ConsumerGone` を `LINK_AUDIO_RUNTIME`・feature-absent を `LINK_AUDIO_UNAVAILABLE` に・TS は UNAVAILABLE のみ握り潰し他は rethrow）= N-channel で ChannelLimit が reachable 化したので本 PR に含める ② WORK_LOG/PR + /simplify + pr-review-team + advisor + @claude bot。**defer（別 follow-up）**: VerificationReceiver PhantomData / scheduleEvent stale warn / LinkEgressStats observability（#329/#331）。
+**error-code 分割（本 commit・#329/#331 follow-up を解消）**: `WrapError` を `LinkAudioUnavailable`（feature `link-audio` 無効ビルド / test backend）と `LinkAudio`（runtime 失敗 = `ChannelLimit`/`RegRingFull`/`ConsumerGone`/mutex poison）に分割。`session.rs` が前者を `LINK_AUDIO_UNAVAILABLE`・後者を `LINK_AUDIO_RUNTIME` に map。TS `rust-engine-player.ts` は **`LINK_AUDIO_UNAVAILABLE` のみ** warn-once で握り潰し、`LINK_AUDIO_RUNTIME` 他は rethrow（N-channel で ChannelLimit が reachable 化＝runtime 失敗を feature-gap と誤認しない）。これで S3 が runtime まで含めて完成。test 更新（mock 既定 = UNAVAILABLE / player は UNAVAILABLE 握り潰し + RUNTIME rethrow / daemon-client）。stale な `LINK_AUDIO_ERROR` コメント 4 箇所も更新。TS build 緑・全 spec 緑（52 + 全 1179 passed）。
+
+**次**: WORK_LOG/PR 作成 + /simplify + pr-review-team（Critical/Important=0）+ advisor + @claude bot。**defer（別 follow-up・#329/#331）**: VerificationReceiver PhantomData / scheduleEvent stale warn / LinkEgressStats observability。
 
 ### 6.163 feat(engine): A4-2b-2 LinkAudio egress — design + Q4 gate + shim beats_at_begin (WIP / #329) (Jun 23, 2026)
 

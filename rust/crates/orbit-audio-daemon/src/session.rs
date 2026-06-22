@@ -260,7 +260,7 @@ async fn handle_command(
             ),
         },
         // LinkAudio outputChannel を登録する（A4-2b-2・#209）。feature `link-audio` 無効ビルドでは
-        // engine 側 stub が LINK_AUDIO_ERROR を返す（command 自体は feature 非依存に保つ）。
+        // engine 側 stub が LINK_AUDIO_UNAVAILABLE を返す（command 自体は feature 非依存に保つ）。
         "RegisterLinkAudioChannel" => match params.get("channel").and_then(|p| p.as_str()) {
             Some(name) if !name.is_empty() => match engine.register_link_audio_channel(name) {
                 Ok(()) => ok(&id, json!({"status": "registered", "channel": name})),
@@ -498,6 +498,10 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::Resample(r) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
         WrapError::Output(o) => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
         WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
-        WrapError::LinkAudio(msg) => ProtocolError::new("LINK_AUDIO_ERROR", msg.clone()),
+        // feature-gap（TS は warn-once で握り潰す）と runtime 失敗（TS は rethrow）を別コードにする。
+        WrapError::LinkAudioUnavailable(msg) => {
+            ProtocolError::new("LINK_AUDIO_UNAVAILABLE", msg.clone())
+        }
+        WrapError::LinkAudio(msg) => ProtocolError::new("LINK_AUDIO_RUNTIME", msg.clone()),
     }
 }

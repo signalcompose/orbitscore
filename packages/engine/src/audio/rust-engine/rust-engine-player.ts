@@ -405,7 +405,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /**
    * LinkAudio チャンネル登録（#209・A4-2b-2）。daemon に登録を要求し、成功すればその channel に
    * tag された再生が LinkAudio egress 経由で送出される。daemon が feature `link-audio` 無効
-   * ビルド（既定の permissive daemon）の場合は LINK_AUDIO_ERROR で reject されるので、**throw せず**
+   * ビルド（既定の permissive daemon）の場合は LINK_AUDIO_UNAVAILABLE で reject されるので、**throw せず**
    * 1 回 warn して継続する（channel は tag され続けるが出力は hardware のみ）。`scheduleEvent` /
    * `scheduleSliceEvent` と同じ `'outputChannel'` GapKind を共有し first-wins で 1 回だけ出す。
    */
@@ -413,14 +413,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     try {
       await this.daemon.registerLinkAudioChannel(channelName)
     } catch (err) {
-      // 想定する gap は「daemon が feature `link-audio` 無効ビルド」= LINK_AUDIO_ERROR のみ。
-      // これは scheduleEvent と同じ warn-once gap として握り潰す（出力は hardware のみで継続）。
-      // それ以外（daemon 死亡・transport エラー・reg-ring 満杯等）は本物の失敗なので、誤って
-      // 「build に feature が無い」と誤ラベルせず rethrow して呼び出し側に surface させる。
-      if (err instanceof DaemonProtocolError && err.code === 'LINK_AUDIO_ERROR') {
+      // 想定する gap は「egress がこの daemon で利用不可」= LINK_AUDIO_UNAVAILABLE のみ
+      // （feature `link-audio` 無効ビルド / test backend）。これは scheduleEvent と同じ warn-once gap
+      // として握り潰す（出力は hardware のみで継続）。それ以外（runtime 失敗の LINK_AUDIO_RUNTIME・
+      // daemon 死亡・transport エラー等）は本物の失敗なので、feature-gap と誤ラベルせず rethrow する。
+      if (err instanceof DaemonProtocolError && err.code === 'LINK_AUDIO_UNAVAILABLE') {
         this.warnOnce(
           'outputChannel',
-          `⚠️  [rust-engine] LinkAudio channel "${channelName}": daemon was built without the link-audio feature — channel is tagged but output is hardware only.`,
+          `⚠️  [rust-engine] LinkAudio channel "${channelName}": egress unavailable in this daemon (built without the link-audio feature) — channel is tagged but output is hardware only.`,
         )
         return
       }

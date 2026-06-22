@@ -28,7 +28,13 @@ pub enum WrapError {
     SampleNotFound(String),
     #[error("scheduler error: {0}")]
     Scheduler(String),
-    #[error("link audio error: {0}")]
+    /// LinkAudio egress がこの daemon ビルド/インスタンスで利用できない（feature `link-audio` 無効、
+    /// または test backend）。TS 層は feature-gap として warn-once で握り潰す（出力は hardware のみ）。
+    #[error("link audio unavailable: {0}")]
+    LinkAudioUnavailable(String),
+    /// LinkAudio egress は利用可能だが registration が runtime で失敗した（channel 上限・consumer thread
+    /// 不在・reg-ring 満杯・mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
+    #[error("link audio runtime error: {0}")]
     LinkAudio(String),
 }
 
@@ -152,15 +158,18 @@ impl EngineWrap {
     /// `RingTapSink` を生成し sink を cpal callback へ・consumer side を GPL consumer thread へ配る。
     #[cfg(feature = "link-audio")]
     pub fn register_link_audio_channel(&self, name: &str) -> Result<(), WrapError> {
+        // mutex poison は egress 利用可能だが runtime で壊れた状態 → runtime error。
         let mut guard = self
             .link
             .lock()
             .map_err(|_| WrapError::LinkAudio("link mutex poisoned".into()))?;
         match guard.as_mut() {
+            // registration の失敗（channel 上限・consumer 不在・reg-ring 満杯）は runtime error。
             Some(ctl) => ctl
                 .register_channel(name)
                 .map_err(|e| WrapError::LinkAudio(e.to_string())),
-            None => Err(WrapError::LinkAudio(
+            // egress 経路が無い（test backend）= unavailable（feature-gap と同じ扱い）。
+            None => Err(WrapError::LinkAudioUnavailable(
                 "link audio not initialized (test backend has no egress path)".into(),
             )),
         }
@@ -169,7 +178,7 @@ impl EngineWrap {
     /// feature `link-audio` 無効ビルド用の stub。daemon command handler を feature 非依存に保つ。
     #[cfg(not(feature = "link-audio"))]
     pub fn register_link_audio_channel(&self, _name: &str) -> Result<(), WrapError> {
-        Err(WrapError::LinkAudio(
+        Err(WrapError::LinkAudioUnavailable(
             "engine built without 'link-audio' feature".into(),
         ))
     }

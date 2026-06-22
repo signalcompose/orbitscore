@@ -24,7 +24,7 @@ export type CommandMethod =
   | 'StopAll'
   | 'SetGlobalGain'
   // LinkAudio outputChannel を daemon に登録する（#209・A4-2b-2）。daemon が
-  // feature `link-audio` 無効ビルドなら LINK_AUDIO_ERROR を返す。
+  // feature `link-audio` 無効なら LINK_AUDIO_UNAVAILABLE、runtime 失敗なら LINK_AUDIO_RUNTIME を返す。
   | 'RegisterLinkAudioChannel'
   | 'GetStatus'
   | 'Ping'

@@ -55,11 +55,11 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
     }),
     PlayAt: () => ({ play_id: `p-${playSeq++}` }),
     StopAll: () => ({ stopped: 0 }),
-    // 既定の mock daemon は feature `link-audio` 無効ビルドを模す（LINK_AUDIO_ERROR）。player は
+    // 既定の mock daemon は feature `link-audio` 無効ビルドを模す（LINK_AUDIO_UNAVAILABLE）。player は
     // これを warn-once gap として握り潰す。実 egress を持つ daemon の挙動は override で差し替える。
     RegisterLinkAudioChannel: () => {
       throw Object.assign(new Error('mock daemon built without link-audio feature'), {
-        code: 'LINK_AUDIO_ERROR',
+        code: 'LINK_AUDIO_UNAVAILABLE',
       })
     },
     ...overrides,
@@ -280,9 +280,9 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
-  it('registerLinkAudioChannel: LINK_AUDIO_ERROR（feature 無効ビルド）は warn-once で握り潰す', async () => {
+  it('registerLinkAudioChannel: LINK_AUDIO_UNAVAILABLE（feature 無効ビルド）は warn-once で握り潰す', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const p = await boot() // 既定 handler が LINK_AUDIO_ERROR を投げる
+    const p = await boot() // 既定 handler が LINK_AUDIO_UNAVAILABLE を投げる
     await expect(p.registerLinkAudioChannel('drums')).resolves.toBeUndefined()
     await p.registerLinkAudioChannel('drums') // 2 回目も warn は増えない（warn-once）
     const gapWarns = warn.mock.calls.filter((c) =>
@@ -292,13 +292,15 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
-  it('registerLinkAudioChannel: LINK_AUDIO_ERROR 以外（daemon 内部エラー等）は rethrow する', async () => {
+  it('registerLinkAudioChannel: LINK_AUDIO_RUNTIME（runtime 失敗）は feature-gap と区別して rethrow する', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot(
       defaultHandlers({
         RegisterLinkAudioChannel: () => {
-          // feature-gap ではない本物の失敗 → feature-gap と誤認せず rethrow されるべき。
-          throw Object.assign(new Error('boom'), { code: 'INTERNAL_ERROR' })
+          // runtime 失敗（channel 上限・consumer 不在等）→ feature-gap と誤認せず rethrow されるべき。
+          throw Object.assign(new Error('link channel limit reached'), {
+            code: 'LINK_AUDIO_RUNTIME',
+          })
         },
       }),
     )
