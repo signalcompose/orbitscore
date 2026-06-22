@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use orbit_audio_core::sanitize_rate;
 use orbit_audio_daemon::engine_wrap::EngineWrap;
 use orbit_audio_daemon::backend::StubBackend;
 use orbit_audio_verify::{
@@ -114,8 +115,7 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
         } else {
             sample_frames[&ev.sample]
         };
-        let rate = if ev.rate.is_finite() && ev.rate > 0.0 { ev.rate } else { 1.0 };
-        let play_frames = (source_frames as f64 / rate).ceil() as usize;
+        let play_frames = (source_frames as f64 / sanitize_rate(ev.rate)).ceil() as usize;
         let end = frame_at(ev.onset_sec, sr) + play_frames;
         last_end_frame = last_end_frame.max(end);
     }

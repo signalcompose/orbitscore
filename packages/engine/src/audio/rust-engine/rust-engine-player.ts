@@ -456,14 +456,16 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * chop の slice を領域再生（startPos/duration の切り出し・rate=1.0）でスケジュールする（#304）。
+   * chop の slice を領域再生（offset/duration の切り出し + varispeed rate）でスケジュールする
+   * （#304 領域・#319 varispeed）。
    *
    * slice 領域（offset/長さ）はサンプル尺に依存するが、daemon の load は lazy（初回発火時）
-   * のため、領域は `executePlayback` で load 完了後に計算する。ここでは slice 仕様だけ保持する。
+   * のため、領域と rate は `executePlayback`（`resolveSliceRegion`）で load 完了後に計算する。
+   * ここでは slice 仕様（index/total/eventDurationMs）だけ保持する。
    *
-   * rate≠1.0（slice 尺をイベントスロット尺へ詰める varispeed = time-stretch）は本増分の対象外。
-   * 発火時に rate≠1.0 を検出したら 1 回 warn し、slice は自然尺（rate=1.0）で鳴らす
-   * （time-stretch 増分 #213/#239 へ defer）。per-slice gain は各 slice の gainDb がそのまま効く。
+   * rate≠1.0（slice 尺をイベントスロット尺へ詰める）は `rate = sliceDuration / eventSlotDuration`
+   * で varispeed 発音（SC `PlayBuf.ar(rate:)` 一致・ピッチも動く）。per-slice gain は各 slice の
+   * gainDb がそのまま効く。pitch-preserving な time-stretch（fixpitch/time）は別物で #213 へ defer。
    */
   scheduleSliceEvent(
     filepath: string,

@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use orbit_audio_core::sanitize_rate;
 use orbit_audio_daemon::backend::StubBackend;
 use orbit_audio_daemon::engine_wrap::EngineWrap;
 use orbit_audio_verify::{
@@ -113,8 +114,7 @@ fn play_span(ev: &GoldenEvent, sample_frames: &HashMap<String, usize>, sr: f64) 
     } else {
         sample_frames[&ev.sample]
     };
-    let rate = if ev.rate.is_finite() && ev.rate > 0.0 { ev.rate } else { 1.0 };
-    (source_frames as f64 / rate).ceil() as usize
+    (source_frames as f64 / sanitize_rate(ev.rate)).ceil() as usize
 }
 
 /// body 窓 `[onset+BODY_HEAD_OFFSET, onset+span-tail_trim)`。

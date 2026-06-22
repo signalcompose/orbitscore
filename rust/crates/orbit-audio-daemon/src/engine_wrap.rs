@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use orbit_audio_core::{resolve_slice_region, Engine, Sample};
+use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
     StreamStatsSnapshot,
@@ -188,9 +188,8 @@ impl EngineWrap {
         let (slice_start_frame, effective_len_frames) =
             resolve_slice_region(total_frames, offset_frames, requested_len_frames);
         // PlayEnded 用の **出力**尺は varispeed で source 尺 / rate になる（render の出力尺と一致）。
-        // <=0/非有限な rate は core が 1.0 に丸めるので、ここも同じ規約で出力尺を計算する。
-        let effective_rate = if rate.is_finite() && rate > 0.0 { rate } else { 1.0 };
-        let out_duration_sec = effective_len_frames as f64 / sr / effective_rate;
+        // core と同じ sanitize_rate で正規化し、出力尺の規約を一致させる。
+        let out_duration_sec = effective_len_frames as f64 / sr / sanitize_rate(rate);
         let play_id = format!("p-{}", short_uuid());
         self.engine
             .schedule_with_play_id(

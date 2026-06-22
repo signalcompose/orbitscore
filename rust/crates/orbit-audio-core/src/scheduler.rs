@@ -44,10 +44,10 @@ impl ScheduledSample {
         self
     }
 
-    /// 再生レート（varispeed）を設定する。`<= 0` は無効なので 1.0 に丸める（無音化や逆再生を
+    /// 再生レート（varispeed）を設定する。`<= 0` / 非有限は 1.0 に丸める（無音化や逆再生を
     /// 誤って起こさない）。逆再生は別 modifier（`reverse()`・#213 系）の領分。
     pub fn with_rate(mut self, rate: f64) -> Self {
-        self.rate = if rate.is_finite() && rate > 0.0 { rate } else { 1.0 };
+        self.rate = sanitize_rate(rate);
         self
     }
 
@@ -79,6 +79,17 @@ fn equal_power_pan(pan: f32) -> (f32, f32) {
     let pan01 = (pan.clamp(-1.0, 1.0) + 1.0) * 0.5; // [-1,1] -> [0,1]
     let angle = pan01 * std::f32::consts::FRAC_PI_2;
     (angle.cos(), angle.sin())
+}
+
+/// varispeed レートを正規化する（`<=0` / 非有限は 1.0 = 自然尺へ丸める）。誤った無音化や
+/// 逆走を起こさない。`with_rate` / `schedule` / daemon の出力尺計算 / 検証ハーネスが、
+/// `pub` field 直書きや JSON 由来の生値を含む全経路で同一規約を共有するための単一定義。
+pub fn sanitize_rate(rate: f64) -> f64 {
+    if rate.is_finite() && rate > 0.0 {
+        rate
+    } else {
+        1.0
+    }
 }
 
 /// 再生領域（slice）をサンプル端で clamp し `(clamped_start, effective_len)` を返す。
@@ -195,13 +206,9 @@ impl Scheduler {
             event.slice_len_frames,
         );
 
-        // varispeed レート（<=0/非有限は 1.0 に丸め済み・with_rate 保証だが直接 schedule
-        // 経路でも安全側に倒す）。
-        let rate = if event.rate.is_finite() && event.rate > 0.0 {
-            event.rate
-        } else {
-            1.0
-        };
+        // varispeed レート。with_rate が正規化済みだが、`rate` は pub field なので直書き経路
+        // でも安全側に倒す（sanitize_rate で単一規約を共有）。
+        let rate = sanitize_rate(event.rate);
 
         // 末尾フェードアウト（線形 release）。SC `orbitPlayBuf` の
         // `fadeOut = min(0.008, actualDuration * 0.04)` に一致させクリックを防ぐ。
@@ -295,33 +302,39 @@ impl Scheduler {
             let (pan_l, pan_r) = (active.pan_l, active.pan_r);
 
             let slice_len = active.slice_len;
+            let slice_len_f = slice_len as f64;
             let rate = active.rate;
             // 補間の上端 clamp（slice 末尾フレーム）。floor+1 が slice をはみ出さないようにする。
             let last_src = slice_len.saturating_sub(1);
+            // 末尾フェード（線形 release・SC `linen` の fadeOut 部）を **出力時間**で数える。
+            // 出力 fade_frames 分を source 空間の幅 `fade_span_src = fade_frames*rate` に写し、
+            // fade 開始 source 位置 `fade_start_src` を loop 前に 1 回求める（per-frame の
+            // division を no-fade の common path から排除する）。
+            let fading = active.fade_frames > 0;
+            let fade_span_src = active.fade_frames as f64 * rate;
+            let fade_start_src = slice_len_f - fade_span_src;
 
             // 出力フレームを 1 つずつ生成し、source を rate 倍の歩幅で分数走査する（varispeed）。
             // rate=1.0 のときは read_pos が整数列を辿り frac=0 で補間が元サンプルに一致するため、
             // 既存 rate=1.0 経路とビット同一になる（厳密な一般化）。出力尺 = slice_len/rate。
             for i in 0..writable_frames {
                 let pos = active.read_pos; // slice 相対の分数読み位置
-                if pos >= slice_len as f64 {
+                if pos >= slice_len_f {
                     break; // source 読み切り（残り出力枠は無音にせず発音終了）
                 }
-                // 線形補間: floor と floor+1 を frac で混合。上端は slice 末尾で clamp。
-                let i0 = pos.floor();
-                let frac = (pos - i0) as f32;
-                let s0 = i0 as usize; // slice 相対の整数フレーム
+                // 線形補間: floor と floor+1 を frac で混合。pos>=0 なので `as usize` = floor。
+                let s0 = pos as usize; // slice 相対の整数フレーム
+                let frac = (pos - s0 as f64) as f32;
                 let s1 = (s0 + 1).min(last_src);
                 let src_frame0 = active.slice_start + s0; // サンプル内の絶対フレーム
                 let src_frame1 = active.slice_start + s1;
                 let dst_frame = dst_offset_frames + i;
 
-                // 末尾フェードアウト（線形 release・SC `linen` の fadeOut 部）。**出力時間**で
-                // 数える: 残り出力フレーム数が fade_frames 以下で 1.0→0.0 へ線形減衰。
-                // rate=1.0 では remaining = slice_len-pos となり従来条件と一致する。
-                let out_frames_remaining = ((slice_len as f64 - pos) / rate).ceil() as usize;
-                let env = if active.fade_frames > 0 && out_frames_remaining <= active.fade_frames {
-                    out_frames_remaining as f32 / active.fade_frames as f32
+                // fade 開始 source 位置に達したら 1.0→0.0 へ線形減衰（残り出力幅 / fade 幅）。
+                // common path（fade 前 / fade 無し）は比較1つで division しない。rate=1.0 では
+                // env = (slice_len-pos)/fade_frames となり従来の fade とビット一致する。
+                let env = if fading && pos >= fade_start_src {
+                    (((slice_len_f - pos) / fade_span_src) as f32).clamp(0.0, 1.0)
                 } else {
                     1.0
                 };
