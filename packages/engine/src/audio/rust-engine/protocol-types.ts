@@ -23,6 +23,9 @@ export type CommandMethod =
   // 全アクティブ再生の即時停止（hard-stop-all）。respawn / stopAll で in-flight voice を断つ。
   | 'StopAll'
   | 'SetGlobalGain'
+  // LinkAudio outputChannel を daemon に登録する（#209・A4-2b-2）。daemon が
+  // feature `link-audio` 無効ビルドなら LINK_AUDIO_ERROR を返す。
+  | 'RegisterLinkAudioChannel'
   | 'GetStatus'
   | 'Ping'
   // gated な fault 注入（recovery floor の kill-test 専用）。daemon 側で

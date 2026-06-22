@@ -49,7 +49,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **beat anchor の既知 constant offset（advisor #4・PR3 defer）**: `pump_once` は anchor を first-pump-with-data（T1）で capture するため ~1 ring-fill 分の latency が anchor に焼き込まれる。これは **drift ではなく一定オフセット**（全 block が同一 anchor を共有し produced_frames で整合）で Link の latency model 内。修正済みの drop-desync バグとは別物。tempo-change re-anchor と合わせ PR3。
 
-**次（増分 7 = TS 配線で .orbs から到達）→ PR**: ① TS `rust-engine-player.ts` の `registerLinkAudioChannel` を実 daemon call（`RegisterLinkAudioChannel`）に。`setLinkTempo` は PR3。② 2b-2a を 1 PR に（/simplify→pr-review-team を Critical/Important=0 まで→advisor→load-bearing な GPL egress なので @claude bot）。**レビューで surface**: receiver は verification 専用（production egress は sender-only・spec §8.1）だが C++ shim には常にリンクされる点 / register_channel の部分失敗 seam は単一 channel scope で許容+log（advisor #3）。**dynamic registration の pool + readiness race は 2b-2b**。
+**増分 7（TS 配線で .orbs から到達・本 commit）**: TS `protocol-types.ts` の `CommandMethod` に `RegisterLinkAudioChannel` 追加 / `daemon-client.ts` に `registerLinkAudioChannel(channel)` メソッド（`request('RegisterLinkAudioChannel', {channel})`）/ `rust-engine-player.ts` の `registerLinkAudioChannel` を **実 daemon call + try/catch** に（daemon が link-audio 無効ビルド〔既定 permissive daemon〕なら `LINK_AUDIO_ERROR` で reject されるので throw せず warn-once して継続＝channel tag は維持・出力は hardware のみ）。`setLinkTempo` は PR3。TS build 緑・rust-engine-player.spec 緑（MockDaemonServer が未知 method `RegisterLinkAudioChannel` を error 応答 → player catch → warn の経路で従来 assertion 維持）。
+
+**次 = 2b-2a を 1 PR に**: /simplify → pr-review-team を Critical/Important=0 まで → advisor → load-bearing な GPL egress なので @claude bot。**レビューで surface**: receiver は verification 専用（production egress は sender-only・spec §8.1）だが C++ shim には常にリンクされる点 / register_channel の部分失敗 seam は単一 channel scope で許容+log（advisor #3）/ beat anchor の constant offset（advisor #4・PR3 defer）。**dynamic registration の pool + readiness race は 2b-2b**。
 
 ### 6.162 feat(engine): A4-2b-1 single-pass multi-buffer render + channel_name wire (post-2.0 A4 / #327) (Jun 23, 2026)
 
