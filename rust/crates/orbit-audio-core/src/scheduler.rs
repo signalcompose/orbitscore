@@ -283,11 +283,15 @@ impl Scheduler {
     /// 指定 channel 名に属する event だけを `out` に加算する（LinkAudio per-channel tap・#209）。
     /// 同名 channel の複数 event は自然に加算され sum-by-name（DSL §8.1.2）になる。
     /// transport（cursor / master gain ramp / 完了 event の掃除）は filter 有無に依らず 1 回
-    /// 進むため、本番 hardware `render`（filter=None）と同一 tick での混在呼び出しはしない
-    /// こと（per-channel 同時 render の multi-buffer 化は後続 PR）。
+    /// 進む。したがって同一 tick で「`render`（filter=None）と混在」または「複数 channel を
+    /// 続けて `render_channel`」すると transport が二重に進む（どちらも禁止）。invariant 自体を
+    /// 消す per-channel 同時 render（multi-buffer・1 パスで N channel を埋め transport を 1 回進める）
+    /// は後続 PR（A4-2）で実装する。
     ///
-    /// 本番 RT caller はまだ無い（A4-2 で追加）ので `pub(crate)` に絞り、crate 境界の外へ
-    /// 「混在呼び出し禁止」の prose-only 不変条件を露出しない（Engine 経由でのみ到達可能）。
+    /// 本番 RT caller はまだ無い（A4-2 で追加）。`Scheduler::render_channel` を `pub(crate)` に
+    /// 絞り直接の外部アクセスは閉じるが、`Engine::render_channel`（pub + `#[doc(hidden)]`）経由では
+    /// crate 外からも呼べる（orbit-audio-daemon の `render_offline_channel` が使用）。よって上記
+    /// 「混在呼び出し禁止」は呼び出し元責任の prose 規約であり、アクセス制御では強制されない。
     pub(crate) fn render_channel(&mut self, out: &mut [f32], channel: &str) {
         self.render_filtered(out, Some(channel));
     }
@@ -905,6 +909,36 @@ mod tests {
         assert!((buf[0] - 0.0).abs() < 1e-4, "f0 L={}", buf[0]);
         assert!((buf[2] - 2.0).abs() < 1e-4, "f1 L={}", buf[2]);
         assert!((buf[8] - 8.0).abs() < 1e-4, "f4 L={}", buf[8]);
+    }
+
+    #[test]
+    fn render_channel_sums_same_name_at_staggered_onsets() {
+        // 同名 channel に onset をずらした 2 つの定数 event。重なり部 = 加算（2.0）、非重なり部 =
+        // 後発のみ（1.0）。同一 onset テスト（offset=0）が通らない `dst_offset_frames != 0` の
+        // `+=` 経路を pin する（`+=` を `=` に変える regression は重なり部が 1.0 になり落ちる）。
+        let sr = 48_000u32;
+        let mut s = Scheduler::new(sr, 2);
+        let onset1 = 5.0 / sr as f64; // 出力 frame 5 から
+        s.schedule(
+            ScheduledSample::new(0.0, Sample::new(vec![1.0f32; 10], sr, 1))
+                .with_pan(-1.0)
+                .with_region(0, 10)
+                .with_channel(Some("mix".to_string())),
+        );
+        s.schedule(
+            ScheduledSample::new(onset1, Sample::new(vec![1.0f32; 10], sr, 1))
+                .with_pan(-1.0)
+                .with_region(0, 10)
+                .with_channel(Some("mix".to_string())),
+        );
+        let mut buf = vec![0.0f32; 60]; // 30 frames stereo
+        s.render_channel(&mut buf, "mix");
+        // frame 0..4: ev0 のみ（hard-left → L = 値）= 1.0
+        assert!((buf[2 * 2] - 1.0).abs() < 1e-4, "f2 (ev0 only) L={}", buf[2 * 2]);
+        // frame 5..9: ev0 + ev1 の重なり = 2.0（dst_offset_frames=5 の += を pin）
+        assert!((buf[2 * 7] - 2.0).abs() < 1e-4, "f7 (overlap) L={}", buf[2 * 7]);
+        // frame 10..14: ev1 のみ = 1.0
+        assert!((buf[2 * 12] - 1.0).abs() < 1e-4, "f12 (ev1 only) L={}", buf[2 * 12]);
     }
 
     #[test]
