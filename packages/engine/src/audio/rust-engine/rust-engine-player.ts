@@ -403,13 +403,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * LinkAudio チャンネル登録（#209）は A4（Rust LinkAudio 隔離モジュール）の担当。
-   * S2 では未対応を 1 回 warn する（throw せず boot/再生は継続）。
+   * LinkAudio チャンネル登録（#209）は A4-2b-2（Rust LinkAudio egress 配線）の担当。
+   * 現状は未対応を 1 回 warn する（throw せず boot/再生は継続）。`scheduleEvent` /
+   * `scheduleSliceEvent` と同じ `'outputChannel'` GapKind を共有し first-wins で 1 回だけ出す
+   * ため、文言は整合させる。
    */
   async registerLinkAudioChannel(channelName: string): Promise<void> {
     this.warnOnce(
       'outputChannel',
-      `⚠️  [rust-engine] LinkAudio channel "${channelName}" is not supported on the rust engine yet (A4). Sequences with outputChannel play on the hardware bus.`,
+      `⚠️  [rust-engine] LinkAudio channel "${channelName}": egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
     )
   }
 

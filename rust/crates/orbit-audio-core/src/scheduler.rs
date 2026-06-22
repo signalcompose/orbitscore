@@ -337,10 +337,12 @@ impl Scheduler {
     /// （interleaved・len = frames × output_channels）でなければならない。この前提は debug build の
     /// `debug_assert_eq!` でのみ検査し、release build では未チェック＝呼び出し元責任。未登録 channel
     /// （`channels` に名前が無い）の event は
-    /// どこにも出力されない（`render_channel` の unmatched skip と一致）。**channel タグを持つ
-    /// event が無い**場合に限り `hardware_out` は [`Scheduler::render`] とビット同一になる（A4-1 の
-    /// filter=None 不変条件を継承）。`channels` が空でも channel=Some の event は drop されるため、
-    /// その場合は render()（全 event 混合）とは一致しない。
+    /// どこにも出力されない（`render_channel` の unmatched skip と一致）。この event は read_pos が
+    /// 進まないため `events` に retain され続ける（events から drop はしない。drop/diagnostic の
+    /// policy は production RT 配線時 = A4-2b-2 で決める）。**channel タグを持つ event が無い**場合に
+    /// 限り `hardware_out` は [`Scheduler::render`] とビット同一になる（A4-1 の filter=None 不変条件を
+    /// 継承）。`channels` が空でも channel=Some の event は（無音で）出力されないため、その場合は
+    /// render()（全 event 混合）とは一致しない。
     pub fn render_multi(&mut self, hardware_out: &mut [f32], channels: &mut [(&str, &mut [f32])]) {
         let output_channels = self.output_channels as usize;
         let frames_to_render = hardware_out.len() / output_channels;
@@ -1278,10 +1280,11 @@ mod tests {
             hw[2],
             a_buf[2]
         );
-        // channel buf にも gain 適用済（frame0 で gain>0）= bug③。
+        // channel buf が gain loop で丸ごとスキップされ全ゼロになる regression を捕捉（bug③）。
+        // gain 値のずれ（hw と異なる gain）は上の bug② が捕捉する。
         assert!(
             a_buf[2] > 0.0,
-            "channel buf に gain 未適用: a_buf[2]={}",
+            "channel buf が gain loop でスキップ（全ゼロ）: a_buf[2]={}",
             a_buf[2]
         );
     }
