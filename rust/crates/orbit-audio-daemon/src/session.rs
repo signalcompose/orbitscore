@@ -505,3 +505,21 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::LinkAudio(msg) => ProtocolError::new("LINK_AUDIO_RUNTIME", msg.clone()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // LinkAudio エラーの protocol code 分割を pin（TS は UNAVAILABLE のみ握り潰し RUNTIME は rethrow）。
+    #[test]
+    fn link_audio_unavailable_maps_to_unavailable_code() {
+        let e = WrapError::LinkAudioUnavailable("built without feature".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_UNAVAILABLE");
+    }
+
+    #[test]
+    fn link_audio_runtime_maps_to_runtime_code() {
+        let e = WrapError::LinkAudio("channel limit reached".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_RUNTIME");
+    }
+}

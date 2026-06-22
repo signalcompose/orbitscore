@@ -125,6 +125,14 @@ struct LinkEgress {
     channels: Vec<LinkChannelActivate>,
 }
 
+/// channel が egress 対象か = **ready** かつ **scratch が block 以上**（A4-2b-2b）。`render_block` の
+/// pass 1（render_multi 引数組み）と pass 2（sink commit）で同一判定を使い divergence を防ぐ。pure
+/// なので CI で単体検証する（not-ready / scratch 不足 / active を pin）。
+#[inline]
+fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
+    ready && scratch_len >= block
+}
+
 /// 1 callback 分の render。`link` が無い（hardware-only）なら従来通り `engine.render`（ビット同一）。
 /// `link` 有りなら reg-ring を drain して channel pool を更新し、**ready な channel のみ**を
 /// `render_multi` で hardware と一緒に 1 パスで埋め、各 channel buffer を ring へ push する（egress）。
@@ -157,8 +165,9 @@ fn render_block(
     // egress に乗せる条件（pass 1/2 で同一）: ready かつ scratch が block 以上。両 pass で同じ判定を
     // 使い divergence を防ぐ（pass 1 で render_multi に入れた channel と pass 2 で commit する channel を
     // 一致させる）。`bs` を capture するだけで `le.channels` は借用しない。
-    let egress_active =
-        |ch: &LinkChannelActivate| ch.ready.load(Ordering::Relaxed) && ch.scratch.len() >= bs;
+    let egress_active = |ch: &LinkChannelActivate| {
+        channel_egress_active(ch.ready.load(Ordering::Relaxed), ch.scratch.len(), bs)
+    };
 
     // pass 1: active な channel から render_multi 引数を per-callback stack ArrayVec で組む（heap alloc
     // なし）。借用は render_multi 呼び出しまでに閉じる。
@@ -490,6 +499,21 @@ mod tests {
         let snap = stats.snapshot();
         assert_eq!(snap.xruns, 1);
         assert!(!snap.device_lost);
+    }
+
+    // A4-2b-2b: egress 判定（ready かつ scratch 充足）の pure ロジックを CI で pin。render_block の
+    // not-ready / scratch 不足の skip 分岐がこの判定に集約される（実 callback 経路は gated 層B）。
+    #[test]
+    fn channel_egress_active_requires_ready_and_sized_scratch() {
+        // active: ready かつ scratch >= block。
+        assert!(channel_egress_active(true, 512, 512));
+        assert!(channel_egress_active(true, 1024, 512));
+        // not-ready: consumer が Link 登録前 → egress しない（never-drained-ring 回避）。
+        assert!(!channel_egress_active(false, 1024, 512));
+        // scratch 不足: hardware bleed/無音を避けるため除外。
+        assert!(!channel_egress_active(true, 256, 512));
+        // not-ready かつ scratch 不足。
+        assert!(!channel_egress_active(false, 0, 512));
     }
 
     // A4-2b-2b gating spike（advisor）: RT callback で N channel pool から render_multi 引数

@@ -68,10 +68,38 @@ pub enum LinkRegisterError {
     ChannelLimit(usize),
 }
 
+/// `register_channel` の判定結果（A4-2b-2b）。RT に触れない pure ロジックを分離して CI で検証する。
+#[derive(Debug, PartialEq, Eq)]
+enum RegistrationDecision {
+    /// 同名が既に登録済み → 冪等 no-op（再 push すると callback で旧 activate が RT スレッド drop）。
+    Idempotent,
+    /// 登録数が cap に到達 → runtime error で surface（callback で log しないための control 側 gate）。
+    AtCapacity,
+    /// 新規 channel → 配線する。
+    New,
+}
+
+/// 登録済み集合・登録名・cap から [`RegistrationDecision`] を返す pure 関数。
+fn registration_decision(
+    registered: &HashSet<String>,
+    name: &str,
+    max: usize,
+) -> RegistrationDecision {
+    if registered.contains(name) {
+        RegistrationDecision::Idempotent
+    } else if registered.len() >= max {
+        RegistrationDecision::AtCapacity
+    } else {
+        RegistrationDecision::New
+    }
+}
+
 /// consumer thread が回す 1 channel の状態（egress driver + per-channel な commit 失敗 streak）。
 /// streak を per-channel に持つことで、ある channel の成功が別 channel の失敗 streak を reset して
 /// health warn を masking するのを防ぐ（N-channel・A4-2b-2b）。
 struct ActiveChannel {
+    /// channel 名（health warn を operator 向けに名前で出すため。数値 id より読みやすい）。
+    name: String,
     egress: LinkChannelEgress,
     commit_fail_streak: u64,
 }
@@ -97,6 +125,7 @@ fn consumer_loop(
             match output.register_channel(&cmd.name, max_num_samples) {
                 Ok(id) => {
                     channels.push(ActiveChannel {
+                        name: cmd.name,
                         egress: LinkChannelEgress::new(
                             cmd.consumer,
                             cmd.drops,
@@ -139,9 +168,9 @@ fn consumer_loop(
                         if ch.commit_fail_streak == 1 || ch.commit_fail_streak.is_multiple_of(1000)
                         {
                             tracing::warn!(
-                                "LinkAudio commit failing on channel {} ({rc:?}, streak={}): \
+                                "LinkAudio commit failing on channel '{}' ({rc:?}, streak={}): \
                                  audio not reaching Link peer",
-                                ch.egress.channel_id(),
+                                ch.name,
                                 ch.commit_fail_streak
                             );
                         }
@@ -244,13 +273,13 @@ impl LinkAudioControl {
     /// を渡す。readiness flag により、callback push と consumer 登録の前後関係に関わらず never-drained
     /// ring が起きない（ready 前は callback が push しない）。
     pub fn register_channel(&mut self, name: &str) -> Result<(), LinkRegisterError> {
-        // 冪等: 同名再登録は no-op。
-        if self.registered.contains(name) {
-            return Ok(());
-        }
-        // cap: control 側で強制（callback の ArrayVec/pool 容量と一致・RT で log しないための gate）。
-        if self.registered.len() >= MAX_LINK_CHANNELS {
-            return Err(LinkRegisterError::ChannelLimit(MAX_LINK_CHANNELS));
+        // 冪等（同名 no-op）+ cap（control 側強制）の判定。RT に触れない pure ロジックで CI 検証する。
+        match registration_decision(&self.registered, name, MAX_LINK_CHANNELS) {
+            RegistrationDecision::Idempotent => return Ok(()),
+            RegistrationDecision::AtCapacity => {
+                return Err(LinkRegisterError::ChannelLimit(MAX_LINK_CHANNELS))
+            }
+            RegistrationDecision::New => {}
         }
 
         let ring_capacity = self.sample_rate as usize * self.num_channels * RING_SECONDS;
@@ -286,6 +315,49 @@ impl LinkAudioControl {
         // 両経路への配線が成功 → 登録済みとして記録（以後の同名再登録は冪等 no-op）。
         self.registered.insert(name);
         Ok(())
+    }
+}
+
+// register_channel の判定（冪等 / cap）の pure ロジック。device/multicast 不要なので gated でない
+// （`cargo test -p orbit-audio-daemon --features link-audio` で実行）。
+#[cfg(test)]
+mod unit_tests {
+    use super::{registration_decision, RegistrationDecision, MAX_LINK_CHANNELS};
+    use std::collections::HashSet;
+
+    #[test]
+    fn registration_decision_idempotent_on_same_name() {
+        let mut reg = HashSet::new();
+        reg.insert("drums".to_string());
+        assert_eq!(
+            registration_decision(&reg, "drums", MAX_LINK_CHANNELS),
+            RegistrationDecision::Idempotent
+        );
+    }
+
+    #[test]
+    fn registration_decision_new_for_unseen_name_under_cap() {
+        let reg = HashSet::new();
+        assert_eq!(
+            registration_decision(&reg, "drums", MAX_LINK_CHANNELS),
+            RegistrationDecision::New
+        );
+    }
+
+    #[test]
+    fn registration_decision_at_capacity_rejects_new_name() {
+        // cap ちょうどの登録済み集合 → 新規名は AtCapacity。
+        let reg: HashSet<String> = (0..MAX_LINK_CHANNELS).map(|i| format!("ch{i}")).collect();
+        assert_eq!(reg.len(), MAX_LINK_CHANNELS);
+        assert_eq!(
+            registration_decision(&reg, "overflow", MAX_LINK_CHANNELS),
+            RegistrationDecision::AtCapacity
+        );
+        // ただし cap 到達後でも **既存名は冪等**（cap で弾かない）。
+        assert_eq!(
+            registration_decision(&reg, "ch0", MAX_LINK_CHANNELS),
+            RegistrationDecision::Idempotent
+        );
     }
 }
 

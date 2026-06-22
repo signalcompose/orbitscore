@@ -83,10 +83,6 @@ impl LinkChannelEgress {
         }
     }
 
-    pub fn channel_id(&self) -> i32 {
-        self.channel_id
-    }
-
     /// ring に 1 block 分溜まっていれば drain して `output` の当該 channel へ commit する。commit したら
     /// `Some(result)`、データ不足なら `None`。consumer thread が共有 `output` を `&` で渡してループで
     /// 呼ぶ(None の間は短い sleep)。
