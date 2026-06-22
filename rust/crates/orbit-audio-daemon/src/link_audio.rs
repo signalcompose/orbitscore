@@ -381,6 +381,54 @@ mod unit_tests {
             RegistrationDecision::Idempotent
         );
     }
+
+    /// `total_ring_drops` が registered map の全 per-channel counter を合算すること、および
+    /// `register_channel` が control 側へ残す clone が consumer 側へ渡る counter と同一 Arc である
+    /// こと（= producer の drop が observability に反映される配線）を device 無しで検証する。
+    /// 実 consumer thread / `LinkAudioOutput`（device 必須）は spawn せず、reg-ring と mpsc の
+    /// receiver 側を保持して send/push を成功させる dummy 配線で `LinkAudioControl` を直接構築する。
+    #[test]
+    fn total_ring_drops_sums_registered_channel_counters() {
+        use super::{LinkAudioControl, RegisterCmd};
+        use orbit_audio_native::LinkChannelActivate;
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+
+        let (reg_tx, _reg_rx) = rtrb::RingBuffer::<LinkChannelActivate>::new(MAX_LINK_CHANNELS);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<RegisterCmd>();
+        let mut control = LinkAudioControl {
+            reg_tx,
+            cmd_tx,
+            sample_rate: 48_000,
+            num_channels: 2,
+            registered: HashMap::new(),
+        };
+
+        // 空集合は 0。
+        assert_eq!(control.total_ring_drops(), 0);
+
+        // 2 channel 登録（New ×2）+ 同名再登録（冪等・二重計上しない）。
+        control.register_channel("a").expect("register a");
+        control.register_channel("b").expect("register b");
+        control.register_channel("a").expect("idempotent a");
+
+        // consumer 側へ渡った drop counter を取り出し、producer の ring overflow を模して加算する。
+        // control 側 registered の clone は同一 Arc なので total_ring_drops に反映される。
+        let cmd_a = cmd_rx.recv().expect("cmd for a");
+        let cmd_b = cmd_rx.recv().expect("cmd for b");
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "idempotent re-register は新たな cmd を出さない"
+        );
+        cmd_a.drops.fetch_add(100, Ordering::Relaxed);
+        cmd_b.drops.fetch_add(50, Ordering::Relaxed);
+
+        assert_eq!(
+            control.total_ring_drops(),
+            150,
+            "registered の全 per-channel counter を合算する"
+        );
+    }
 }
 
 // 層B(2b-2a Done 基準・実 callback 駆動)。実 output device + multicast loopback を要するため

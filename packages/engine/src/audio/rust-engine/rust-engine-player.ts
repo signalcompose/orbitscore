@@ -242,11 +242,16 @@ export class RustEnginePlayer implements AudioEngineBackend {
       code?: string
       message?: string
     }
-    console.warn(
-      `⚠️  [rust-engine] daemon-error [${severity ?? 'unknown'}] ${code ?? 'UNKNOWN'}: ${
-        message ?? JSON.stringify(data)
-      }`,
-    )
+    const text = `[rust-engine] daemon-error [${severity ?? 'unknown'}] ${
+      code ?? 'UNKNOWN'
+    }: ${message ?? JSON.stringify(data)}`
+    // fatal（DEVICE_LOST 等）は severity を保って console.error に出す（daemon-died 経路も別途
+    // 扱うが、ticker 経由のこのレコードが warn に埋もれて見落とされないようにする）。
+    if (severity === 'fatal') {
+      console.error(`❌  ${text}`)
+    } else {
+      console.warn(`⚠️  ${text}`)
+    }
   }
 
   /**

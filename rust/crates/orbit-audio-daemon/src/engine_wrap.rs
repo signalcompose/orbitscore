@@ -195,15 +195,25 @@ impl EngineWrap {
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
     /// daemon の 1 Hz ticker が polling して増加を WARNING event で surface する（非 RT observability）。
-    /// ロック競合時 / link 未初期化 / feature 無効時は control 分が 0。test 注入分（本番 0）を必ず加える。
+    /// link 未初期化（test backend）時は control 分が 0。test 注入分（本番 0）を必ず加える。
     #[cfg(feature = "link-audio")]
     pub fn link_egress_ring_drops(&self) -> u64 {
-        let control_drops = self
-            .link
-            .try_lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(|ctl| ctl.total_ring_drops()))
-            .unwrap_or(0);
+        // try_lock で ticker をブロックしない。**WouldBlock**（callback / register との一時競合）は
+        // 次 tick に持ち越すだけ — counter は cumulative なので drop は失われず後続 tick が全累積を
+        // 報告する。**Poisoned** は以降ずっと control 分を 0 に固定し LINK_EGRESS_DROP を session 中
+        // 抑制してしまうため、他アクセサ（`loaded_sample_count` 等）と同様 `warn!` で post-mortem の
+        // 根拠を残す（contention と poison を `.ok()` で同一視しない）。
+        let control_drops = match self.link.try_lock() {
+            Ok(g) => g.as_ref().map(|ctl| ctl.total_ring_drops()).unwrap_or(0),
+            Err(std::sync::TryLockError::WouldBlock) => 0,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                tracing::warn!(
+                    "link mutex poisoned; link_egress_ring_drops reporting 0 for control drops \
+                     (LINK_EGRESS_DROP events suppressed until daemon restart)"
+                );
+                0
+            }
+        };
         control_drops + self.link_egress_drops.load(Ordering::Relaxed)
     }
 

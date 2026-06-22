@@ -168,6 +168,31 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
+  it('respawn 後も daemon-error を二重購読せず単発で surface する（off→on 再購読）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // daemon 死 → respawn → 再接続 → establishSession が daemon-error を off→on で再購読する。
+    const dropMark = server.received.length
+    server.dropConnections()
+    await waitFor(() => server.received.slice(dropMark).some((r) => r.method === 'GetStatus'), {
+      timeout: 2000,
+    })
+    // GetStatus 受信後、establishSession の off→on 購読が完了する猶予を置いてから 1 件だけ流す。
+    await new Promise((r) => setTimeout(r, 30))
+    warn.mockClear()
+    server.broadcastEvent('DaemonError', {
+      severity: 'warning',
+      code: 'LINK_EGRESS_DROP',
+      message: 'LinkAudio egress dropped samples (512 total interleaved)',
+    })
+    await waitFor(() => warn.mock.calls.some((c) => String(c[0]).includes('LINK_EGRESS_DROP')))
+    // off→on が効いていれば購読は 1 つ → 単発。off 欠落なら二重購読で 2 回 warn される（再購読回帰）。
+    const dropWarns = warn.mock.calls.filter((c) => String(c[0]).includes('LINK_EGRESS_DROP'))
+    expect(dropWarns.length).toBe(1)
+    void p
+    warn.mockRestore()
+  })
+
   it('同一 filepath は一度だけ LoadSample（キャッシュ + single-flight）', async () => {
     const p = await boot()
     p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
