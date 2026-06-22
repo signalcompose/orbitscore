@@ -38,6 +38,7 @@ extern "C" {
         num_frames: usize,
         num_channels: usize,
         sample_rate: u32,
+        beats_at_begin: f64,
         quantum: f64,
     ) -> c_int;
     fn orbit_link_set_tempo(link: *mut OrbitLinkRaw, bpm: f64);
@@ -119,7 +120,9 @@ impl LinkAudioOutput {
         Ok(id)
     }
 
-    /// interleaved f32 の 1 ブロックを channel に commit する。
+    /// interleaved f32 の 1 ブロックを channel に commit する。`beats_at_begin` は呼び出し側
+    /// (GPL consumer thread)が cumulative-frames から決定論再構成した buffer-begin の beat 位置
+    /// (ring latency 分の位相ずれを避けるため shim 内では "now" から計算しない・A4-2b-2)。
     pub fn commit_channel(
         &self,
         channel_id: i32,
@@ -127,6 +130,7 @@ impl LinkAudioOutput {
         num_frames: usize,
         num_channels: usize,
         sample_rate: u32,
+        beats_at_begin: f64,
         quantum: f64,
     ) -> CommitResult {
         debug_assert!(
@@ -147,6 +151,7 @@ impl LinkAudioOutput {
                 num_frames,
                 num_channels,
                 sample_rate,
+                beats_at_begin,
                 quantum,
             )
         };
@@ -200,12 +205,13 @@ mod tests {
         assert_eq!(id2, 1);
 
         // 購読者なしなので no-op を期待。symbol が呼べることの証明。
+        // 引数 = (channel_id, interleaved, num_frames, num_channels, sample_rate, beats_at_begin, quantum)。
         let silence = vec![0.0f32; 256 * 2];
-        let rc = out.commit_channel(id, &silence, 256, 2, 48_000, 4.0);
+        let rc = out.commit_channel(id, &silence, 256, 2, 48_000, 0.0, 4.0);
         assert_eq!(rc, CommitResult::NoSubscriber);
 
         // 未登録の channel id。
-        let rc_bad = out.commit_channel(99, &silence, 256, 2, 48_000, 4.0);
+        let rc_bad = out.commit_channel(99, &silence, 256, 2, 48_000, 0.0, 4.0);
         assert_eq!(rc_bad, CommitResult::ChannelNotFound);
 
         out.set_tempo(124.0);

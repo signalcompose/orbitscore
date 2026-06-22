@@ -108,7 +108,8 @@ int32_t orbit_link_register_channel(OrbitLink* link, const char* name,
 int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
                               const float* interleaved, size_t buf_len,
                               size_t num_frames, size_t num_channels,
-                              uint32_t sample_rate, double quantum) {
+                              uint32_t sample_rate, double beats_at_begin,
+                              double quantum) {
   if (!link || channel_id < 0 || !interleaved) return -1;
   const size_t idx = static_cast<size_t>(channel_id);
   if (idx >= link->channels.size() || !link->channels[idx]) return -1;
@@ -116,17 +117,13 @@ int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
   auto& sink = *link->channels[idx];
 
   try {
-    // PR2b 以降、この関数は GPL consumer thread(rtrb の drain 側)からのみ呼ぶ。
-    // その thread が LinkAudio の "audio thread" として振る舞う。captureAudioSessionState
-    // は Thread-safe:no / Realtime-safe:yes なので呼び出しスレッドを守る必要がある。
-    // ⚠ PR2b 注意: ここで "now"(clock().micros())を buffer-begin の beat として渡すと、
-    // ring latency 分の位相ずれ(receiver 側で δ だけ音がずれる)になる。tempo leader で
-    // あることは beat 配置とは直交で、これを無害化しない。PR2b では cumulative-frames-
-    // drained から beatsAtBufferBegin を決定論再構成する(efficiency review の指摘)。
-    // PR2a では threading contract 未配線・Link 未 enable のため capture/beatAtTime は
-    // 走っても無害で、egress(sample 書き込み + commit)が購読者なしで no-op。
+    // この関数は GPL consumer thread(rtrb の drain 側)からのみ呼ぶ。その thread が
+    // LinkAudio の "audio thread" として振る舞う。captureAudioSessionState は
+    // Thread-safe:no / Realtime-safe:yes なので呼び出しスレッドを守る必要がある。
+    // `beats_at_begin` は **呼び出し側が cumulative-frames から決定論再構成済み**。ここで
+    // "now"(clock().micros())から計算しないことで ring latency 分の位相ずれを避ける(A4-2b-2)。
+    // state は bh.commit の引数に必要なので capture する(beat 計算には使わない)。
     auto state = link->link.captureAudioSessionState();
-    const double beats_at_begin = state.beatAtTime(link->link.clock().micros(), quantum);
 
     ableton::LinkAudioSink::BufferHandle bh(sink);
     if (!bh) return 0;  // 購読者(Live peer)なし → no-op。

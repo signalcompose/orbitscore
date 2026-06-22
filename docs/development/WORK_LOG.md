@@ -17,6 +17,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.163 feat(engine): A4-2b-2 LinkAudio egress — design + Q4 gate + shim beats_at_begin (WIP / #329) (Jun 23, 2026)
+
+**Date**: 2026-06-23
+**Status**: 🚧 WIP（design-first 完了 + Q4 gate POSITIVE + 第1増分 = shim beats_at_begin 改修・standalone 3 緑）。本ブランチ `329-linkaudio-egress-rtrb` 継続中
+**Parent**: #321 / A4-2b-1（#327・PR #328）**MERGED**（`f8ab0de`）
+
+**背景**: A4-2b-2 = 実 LinkAudio egress（音が実際に Ableton/Link に届く半分）。GPL crate `orbit-link-audio`（#324・PR #325 MERGED）を実配線。
+
+**design-first（3 scout + advisor）**: 3 スレッド lock-free アーキ確定 — ① cpal callback(permissive・!Send): render_multi で hardware + N channel buf を埋め per-channel rtrb producer へ push ② GPL consumer thread(feature 裏・Send): rtrb consumer drain → commit_channel（= Link "audio thread"）③ control(EngineWrap): registration command を ring 経由で配る。rtrb は permissive↔GPL の物理境界（Producer=Send→callback / Consumer=Send→consumer thread・clap-spike scout で両 Send 確認）。
+
+**Q4 gate（層B headless 検証可否）= POSITIVE**: 同一プロセス内 **2 LinkAudio インスタンス** loopback spike を実機実行 = `maxPeersA=1 maxPeersB=1 / channel_seen=1 / received=318 callbacks / frames=39750`（discovery ~550ms）。A(sink) commit を B(source) が headless 受信成功。→ **層B は headless で gate 可能**（テストで 2 つ目の LinkAudio を receiver に）。単一インスタンス自己 loopback は不可（`channels()` は peer のみ・自 sink は self-list せず）。CI（Linux/network 制限）では multicast 不安定 → #300 kill-test と同じ **gated pattern**（local 実行・CI skip / discovery timeout）。
+
+**advisor の split（#329 コメントに記録）**: 2b-2 は racy 3-thread で最難部 offline 検証不可 → **2b-2a = 最小実証 egress**（shim beats_at_begin + GPL consumer + render_multi を callback に配線〔RT refactor は 2b-2a〕+ 1 channel end-to-end + gated 層B/manual・**drop = 永久 beat desync なので produced-frame anchor or drop で mandatory re-anchor**）/ **2b-2b = dynamic mid-stream registration**（2 cmd-ring + pool slot-activation + race を隔離）。channels は boot 時 stream 構築で静的になり得ない（mutable registry 必須）。
+
+**beat anchoring（advisor・empirically-validated）**: session tempo 1 回 capture（default 120）→ 線形再構成 `beats_at_begin = beat_anchor + (produced_frames - frames_anchor) × (bpm/60)/sr`（per-block "now" を使わず ring latency 位相ずれを避ける）。`sr` は render/device SR = commit の sampleRate。tempo-change re-anchor は PR3（premature）。**層A 検証不可**（PCM は beat timestamp を持たない）→ 層B（2 インスタンス受信の Info.beginBeats）/dog-food。
+
+**第1増分（本 commit）**: shim `orbit_link_commit_channel` に `beats_at_begin: f64` 引数追加（内部の `beatAtTime(clock().micros())` 削除・`captureAudioSessionState` は bh.commit の state 用に残す）。hpp/cpp/Rust FFI/wrapper/smoke test を更新。standalone 3 緑。**次**: GPL consumer thread（cumulative-frames から beats_at_begin 再構成・drop で re-anchor）+ render_multi を cpal callback に配線 + EngineWrap で ring 生成・consumer spawn（feature 裏）+ RegisterLinkAudioChannel command + gated 層B テスト + TS registerLinkAudioChannel 実配線。
+
 ### 6.162 feat(engine): A4-2b-1 single-pass multi-buffer render + channel_name wire (post-2.0 A4 / #327) (Jun 23, 2026)
 
 **Date**: 2026-06-23
