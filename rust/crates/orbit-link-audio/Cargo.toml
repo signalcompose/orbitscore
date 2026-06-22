@@ -21,6 +21,13 @@ publish = false
 name = "orbit_link_audio"
 path = "src/lib.rs"
 
+[features]
+# verification 専用 receiver(`verification::VerificationReceiver`)を公開する。default off。
+# production egress は sender-only(spec §8.1)なので receiver は出荷経路に出さない。層B 検証
+# (同一プロセスに 2 LinkAudio = sender/receiver を立てる headless テスト)を daemon crate からも
+# 駆動できるよう公開する。shim 側の receiver シンボルは常にリンクされる(C++ は feature 非依存)。
+verification-receiver = []
+
 [dependencies]
 thiserror = "2.0"
 # rtrb は permissive(MIT/Apache)。GPL consumer 側で audio ring の Consumer<f32> を drain する。

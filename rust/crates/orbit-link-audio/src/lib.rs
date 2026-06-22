@@ -18,6 +18,11 @@ use std::os::raw::{c_char, c_int};
 mod egress;
 pub use egress::LinkChannelEgress;
 
+/// 層B 検証専用の channel receiver。feature `verification-receiver`（default off）でのみ公開。
+/// production egress は sender-only なので出荷経路には出さない。
+#[cfg(feature = "verification-receiver")]
+pub mod verification;
+
 #[repr(C)]
 struct OrbitLinkRaw {
     _private: [u8; 0],
@@ -253,57 +258,18 @@ mod tests {
 
     // ===== 層B: headless egress 受信検証(verification 専用 receiver shim 経由)=====
 
-    #[repr(C)]
-    struct OrbitRecvRaw {
-        _private: [u8; 0],
-    }
-    extern "C" {
-        fn orbit_link_recv_create(
-            host: *mut OrbitLinkRaw,
-            channel_name: *const c_char,
-        ) -> *mut OrbitRecvRaw;
-        fn orbit_link_recv_try_subscribe(recv: *mut OrbitRecvRaw) -> c_int;
-        fn orbit_link_recv_count(recv: *mut OrbitRecvRaw) -> u64;
-        fn orbit_link_recv_last_sample(recv: *mut OrbitRecvRaw) -> c_int;
-        fn orbit_link_recv_destroy(recv: *mut OrbitRecvRaw);
-    }
-
-    /// verification 専用: 別 LinkAudio インスタンス(host)上に channel receiver を張る RAII wrapper。
-    struct TestReceiver {
-        raw: *mut OrbitRecvRaw,
-    }
-    impl TestReceiver {
-        fn new(host: &LinkAudioOutput, channel: &str) -> Self {
-            let c = CString::new(channel).unwrap();
-            // SAFETY: host.raw は valid、c は呼び出し中 valid。
-            let raw = unsafe { orbit_link_recv_create(host.raw, c.as_ptr()) };
-            assert!(!raw.is_null(), "recv_create returned null");
-            Self { raw }
-        }
-        fn try_subscribe(&self) -> bool {
-            unsafe { orbit_link_recv_try_subscribe(self.raw) == 1 }
-        }
-        fn count(&self) -> u64 {
-            unsafe { orbit_link_recv_count(self.raw) }
-        }
-        fn last_sample(&self) -> i32 {
-            unsafe { orbit_link_recv_last_sample(self.raw) }
-        }
-    }
-    impl Drop for TestReceiver {
-        fn drop(&mut self) {
-            unsafe { orbit_link_recv_destroy(self.raw) };
-        }
-    }
-
     // 層B(2b-2a Done 基準): 同一プロセスに A=sender egress / B=receiver の 2 LinkAudio インスタンス
     // を立て、`LinkChannelEgress` 経由の **実 commit** を B が headless 受信できることを検証する。
     // multicast loopback 依存(CI/sandbox では不安定・Ableton/link #50)なので #[ignore]。local で
-    // `cargo test -p orbit-link-audio -- --ignored` 実行。discovery 不成立(multicast off)なら
-    // assert で fail = その env では 層B 不可の signal(手動 fallback 報告へ)。
+    // `cargo test -p orbit-link-audio --features verification-receiver -- --ignored` 実行。discovery
+    // 不成立(multicast off)なら assert で fail = その env では 層B 不可の signal(手動 fallback 報告へ)。
+    // receiver は `verification` module(feature gate)に公開した単一ソースを使う(daemon の実 callback
+    // 駆動 層B テストと共有・lib.rs に private 複製を置かない)。
+    #[cfg(feature = "verification-receiver")]
     #[test]
-    #[ignore = "layer-B: needs multicast loopback (local only); run with --ignored"]
+    #[ignore = "layer-B: needs multicast loopback (local only); --features verification-receiver --ignored"]
     fn layer_b_egress_received_by_inprocess_receiver() {
+        use crate::verification::VerificationReceiver;
         use std::sync::atomic::AtomicU64;
         use std::sync::Arc;
         use std::time::Duration;
@@ -314,7 +280,7 @@ mod tests {
 
         let recv_host = LinkAudioOutput::new(120.0, "orbit-B-recv").expect("recv host");
         recv_host.set_enabled(true);
-        let recv = TestReceiver::new(&recv_host, "loopB");
+        let recv = VerificationReceiver::new(&recv_host, "loopB");
 
         // discovery: receiver が channel を発見するまで(~3s)。
         let mut subscribed = false;

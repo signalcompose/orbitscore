@@ -361,6 +361,25 @@ mod tests {
         }
     }
 
+    // daemon-level 層B の前提検証(advisor #1): stream が「開く」だけでなく callback が実際に
+    // 「tick する」(render が回り transport が進む)かを確認する。callback が回れば now_sec が
+    // 前進する(render は無音でも transport を進める)。前進しなければ headless で callback が
+    // 起きない env = daemon-level 層B は **実 callback 駆動にできない** → owner へ manual-dog-food
+    // で stop&report(合成 ring feed で偽装しない)。
+    #[test]
+    #[ignore = "needs a real audio output device that delivers callbacks; run with --ignored"]
+    fn start_default_output_callback_ticks_headless() {
+        let (engine, _stream, _stats) =
+            start_default_output().expect("start_default_output should open");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let now = engine.now_sec();
+        assert!(
+            matches!(now, Some(t) if t > 0.05),
+            "callback が tick していない(now_sec={now:?})。headless で callback が起きない env = \
+             daemon-level 層B は実 callback 駆動不可 → manual-dog-food 報告へ"
+        );
+    }
+
     #[test]
     fn snapshot_is_monotonic() {
         let stats = StreamStats::default();
