@@ -37,7 +37,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **error-code 分割（本 commit・#329/#331 follow-up を解消）**: `WrapError` を `LinkAudioUnavailable`（feature `link-audio` 無効ビルド / test backend）と `LinkAudio`（runtime 失敗 = `ChannelLimit`/`RegRingFull`/`ConsumerGone`/mutex poison）に分割。`session.rs` が前者を `LINK_AUDIO_UNAVAILABLE`・後者を `LINK_AUDIO_RUNTIME` に map。TS `rust-engine-player.ts` は **`LINK_AUDIO_UNAVAILABLE` のみ** warn-once で握り潰し、`LINK_AUDIO_RUNTIME` 他は rethrow（N-channel で ChannelLimit が reachable 化＝runtime 失敗を feature-gap と誤認しない）。これで S3 が runtime まで含めて完成。test 更新（mock 既定 = UNAVAILABLE / player は UNAVAILABLE 握り潰し + RUNTIME rethrow / daemon-client）。stale な `LINK_AUDIO_ERROR` コメント 4 箇所も更新。TS build 緑・全 spec 緑（52 + 全 1179 passed）。
 
-**次**: WORK_LOG/PR 作成 + /simplify + pr-review-team（Critical/Important=0）+ advisor + @claude bot。**defer（別 follow-up・#329/#331）**: VerificationReceiver PhantomData / scheduleEvent stale warn / LinkEgressStats observability。
+**PR #332**（base=`329-linkaudio-egress-rtrb` にスタック）作成 → **/simplify 適用**（`b2c2736`: per-channel commit_fail_streak バグ修正〔channel-global は masking〕+ render_block 述語 hoist + overflow debug_assert）→ **pr-review-team 2 round で収束**: round-1 = code-reviewer 0 Crit/Imp（readiness flag Relaxed 順序・two-pass 整合・error-code split 全 clean）/ pr-test-analyzer 3 Important test gap → pure 関数抽出（`channel_egress_active`/`registration_decision`）+ 単体テスト + `wrap_err_to_protocol` テストで解消（`61c6c3c`）/ silent-failure Minor（warn を channel 名に・`channel_id()` 削除）/ comment-analyzer 2 Important + 1 Minor コメント修正（`1367a0e`）。round-2 = code-reviewer + pr-test-analyzer とも **収束確認・0 Crit/Imp**。CI green（`61c6c3c`）・full workspace 19 ok・cargo-deny GPL-free・TS 1179 passed・multi-channel 層B 維持。
+
+**次**: advisor（@claude bot 受諾 + scope）→ @claude bot。**defer（別 follow-up・#329/#331）**: VerificationReceiver PhantomData / scheduleEvent stale warn / **LinkEgressStats observability**（silent-failure round-1 が Important で挙げたが 2b-2a 先例で defer・drops は 2s ring 満杯時のみ＝実質到達不能・beat は produced-frames で維持）。
 
 ### 6.163 feat(engine): A4-2b-2 LinkAudio egress — design + Q4 gate + shim beats_at_begin (WIP / #329) (Jun 23, 2026)
 
