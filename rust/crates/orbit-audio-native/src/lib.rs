@@ -15,6 +15,6 @@ pub use link_audio_ring::{PostMixSink, RingTapSink};
 pub use loader::{load_sample_from_file, load_sample_resampled, LoaderError};
 pub use output::{
     start_default_output, start_default_output_with_link_egress, LinkChannelActivate, OutputError,
-    OutputStream, StreamStats, StreamStatsSnapshot,
+    OutputStream, StreamStats, StreamStatsSnapshot, MAX_LINK_CHANNELS,
 };
 pub use resampler::ResampleError;

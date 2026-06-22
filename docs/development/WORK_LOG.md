@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.164 feat(engine): A4-2b-2b dynamic N-channel LinkAudio registration (pool + readiness race / #331) (Jun 23, 2026)
+
+**Date**: 2026-06-23
+**Status**: 🚧 WIP（core N-channel egress 実装完了・実機 multi-channel 層B PASS）。branch `331-linkaudio-dynamic-registration`（未マージの 2b-2a #330 にスタック）
+**Parent**: #331（design 決定は issue コメント）/ 2b-2a #330（owner マージ待ち）
+
+**スタック注意**: 本 branch は未マージ・owner 未承認の #330（`329-linkaudio-egress-rtrb`）上にスタック。owner が 2b-2a をレビューで変更したら rebase する。
+
+**design-first（advisor 2 round）の 2 決定**:
+- **Fork 1（RT-safe N-slice）= ArrayVec**: callback で render_multi 引数 `&mut [(&str,&mut[f32])]` を per-callback stack `ArrayVec<_, MAX_LINK_CHANNELS>` で組む（fresh local＝call-body lifetime で借用が通る・heap alloc なし）。「closure 所有・clear 再利用 Vec」は **コンパイル不可**（captured Vec は固定 lifetime・`&mut` invariant）。core API 追加も棄却（core が native 型 `LinkChannelActivate` を知ると permissive 境界を汚す）。**gating spike**（`arrayvec_n_channel_slice_builds_from_pool_without_heap`）で call-body `&mut` 借用を実証済。`arrayvec` は MIT/Apache。
+- **Fork 2（readiness race）= readiness flag**: load-bearing は benign window でなく **never-drained ring**（consumer が登録しない slot に callback が push・partial-failure で N では reachable）。per-slot `Arc<AtomicBool> ready` を consumer が **Link 登録完了後に set**、callback は ready の channel のみ render_multi/commit 対象にする → never-drained-ring が**構造的に不可能**（登録失敗→ready 立たず→push せず）。コスト = slot ごと relaxed load 1 回。
+
+**実装**:
+- native `output.rs`: `LinkChannelActivate` に `ready: Arc<AtomicBool>` / `LinkEgress { channel: Option } → { channels: Vec }`（cap `MAX_LINK_CHANNELS`=64 で control 強制・callback で log しない＝RT 安全）/ `render_block` を ArrayVec N-channel + skip-not-ready 2-pass（render_multi → 借用解除 → sink commit）。link 有り時は 0-ready でも `render_multi(hw, &[])`（`engine.render` に落とすと channel-tagged event が hardware に bleed）。`pub const MAX_LINK_CHANNELS`。
+- orbit-link-audio `egress.rs`: `LinkChannelEgress` の **`LinkAudioOutput` 所有を解消**（consumer thread が 1 output を持ち複数 egress を回す）・`pump_once(&mut self, output: &LinkAudioOutput)`・**per-channel anchor を維持**（各 channel が自分の first-pump で capture・session 単位に hoist しない＝advisor Point 2）。
+- daemon `link_audio.rs`: `consumer_loop(output, ...)` が `Vec<LinkChannelEgress>` を保持、register cmd で Link 登録→egress push→**ready.store(true)**、全 egress を pump。`LinkAudioControl.registered: HashSet<String>`（冪等）+ cap（`ChannelLimit` error）。`RegisterCmd`/`LinkChannelActivate` に `ready` 共有。`ConsumerState` 状態機械を削除。
+- **検証**: full workspace 19 ok・cargo-deny default GPL-free 維持・clippy clean・**multi-channel 層B 実機 PASS**（`layer_b_multi_channel_egress_received`: 2 channel 登録→各 receiver が独立に kick.wav egress 受信・1.7s）+ 単一 channel 層B（2回登録冪等）も維持。
+
+**次（本 branch で継続）**: ① error-code 分割（`ChannelLimit`/`RegRingFull`/`ConsumerGone` を `LINK_AUDIO_RUNTIME`・feature-absent を `LINK_AUDIO_UNAVAILABLE` に・TS は UNAVAILABLE のみ握り潰し他は rethrow）= N-channel で ChannelLimit が reachable 化したので本 PR に含める ② WORK_LOG/PR + /simplify + pr-review-team + advisor + @claude bot。**defer（別 follow-up）**: VerificationReceiver PhantomData / scheduleEvent stale warn / LinkEgressStats observability（#329/#331）。
+
 ### 6.163 feat(engine): A4-2b-2 LinkAudio egress — design + Q4 gate + shim beats_at_begin (WIP / #329) (Jun 23, 2026)
 
 **Date**: 2026-06-23
