@@ -41,7 +41,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **@claude bot（N-channel concurrency 限定・GPL 隔離は #330 から不変で skip）= 3 問すべて承認**: Q1 readiness flag Relaxed で never-drained-ring 排除（ready=true 観測時 consumer は push+pump 到達済・piggyback 依存ゼロ・rtrb acquire/release）/ Q2 mid-callback false→true は benign（commit される scratch は確定ゼロ＝silence 1 block・beat は produced-frames で永続 desync なし）/ Q3 N egress × 1 output は hazard なし（single consumer thread sequential・per-egress 分離・`&output` immutable）。**新規指摘なし**。CI SUCCESS on HEAD `844f846`。
 
-**PR2b 完了**（2b-1 #328 MERGED + 2b-2a #330 owner マージ待ち + 2b-2b #332 owner マージ待ち）。**owner handoff（merge 順）**: **#330 を先にマージ** → #332 は base を main に retarget（auto-update or 手動）。2 PR・順序あり・両 green。**マージは owner の明示指示待ち**。**defer（別 follow-up・#329/#331）**: VerificationReceiver PhantomData / scheduleEvent stale warn / **LinkEgressStats observability**（**daemon CLAP 統合/cutover #108 より前に着地**＝実負荷で drops が reachable になる前）。
+**follow-up 3 件を #332 に畳む（owner 判断「先にやる」）**: ① **#2 scheduleEvent/scheduleSliceEvent の stale「not wired」warn を削除**（egress 配線済みで誤誘導・feature-gap は registerLinkAudioChannel が authoritative・`a82d037`。stopAll 再 arm test は masterEffect vehicle に切替）② **#1 VerificationReceiver lifetime を PhantomData で型強制**（host-outlives-receiver を compile-error 化・2b-2b で receiver call site 増＝now-relevant・両 gated path 緑・`a5614f8`）③ **#3 LinkEgressStats: ring-drops を 1Hz ticker で surface**（silent-failure が 2a+2b で挙げた・control が drop counter clone 保持→`total_ring_drops`→EngineWrap→session ticker が増加で `LINK_EGRESS_DROP` WARNING DaemonError event・`4d9dd44`）。**追加分を /simplify + pr-review-team 1round + bot で再収束予定**。
+
+**PR2b 完了**（2b-1 #328 MERGED + 2b-2a #330 owner マージ待ち + 2b-2b #332 owner マージ待ち）。**owner handoff（merge 順）**: **#330 を先にマージ** → #332 は base を main に retarget。2 PR・順序あり・両 green。**マージは owner の明示指示待ち**。**残 follow-up**: 完全な LinkEgressStats（per-channel breakdown 等）は CLAP 統合/cutover #108 前の拡張余地。
 
 ### 6.163 feat(engine): A4-2b-2 LinkAudio egress — design + Q4 gate + shim beats_at_begin (WIP / #329) (Jun 23, 2026)
 
