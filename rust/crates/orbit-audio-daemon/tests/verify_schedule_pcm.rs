@@ -14,6 +14,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use orbit_audio_core::sanitize_rate;
 use orbit_audio_daemon::engine_wrap::EngineWrap;
 use orbit_audio_daemon::backend::StubBackend;
 use orbit_audio_verify::{
@@ -42,12 +43,19 @@ struct GoldenEvent {
     pan: f32,
     offset_sec: f64,
     duration_sec: f64,
+    /// varispeed レート（1.0 = 自然尺）。rate を持たない既存 golden は 1.0 として parse する。
+    #[serde(default = "default_rate")]
+    rate: f64,
     #[allow(dead_code)]
     gain_db: f64,
     #[allow(dead_code)]
     pan_raw: f64,
     #[allow(dead_code)]
     sequence_name: String,
+}
+
+fn default_rate() -> f64 {
+    1.0
 }
 
 fn repo_path(rel: &str) -> PathBuf {
@@ -96,15 +104,18 @@ fn render_golden(golden: &GoldenSchedule) -> (CapturedAudio, HashMap<String, usi
             ev.pan,
             ev.offset_sec,
             ev.duration_sec,
+            ev.rate,
         )
         .expect("play_at");
-        // 出力尺の見積もり（whole=サンプル尺 / slice=duration_sec）。
+        // 出力尺の見積もり（whole=サンプル尺 / slice=duration_sec）。varispeed では出力尺が
+        // source 尺 / rate になるので、render 余白の確保にも rate を反映する。
         let sr = golden.sample_rate as f64;
-        let play_frames = if ev.duration_sec > 0.0 {
+        let source_frames = if ev.duration_sec > 0.0 {
             frame_at(ev.duration_sec, sr)
         } else {
             sample_frames[&ev.sample]
         };
+        let play_frames = (source_frames as f64 / sanitize_rate(ev.rate)).ceil() as usize;
         let end = frame_at(ev.onset_sec, sr) + play_frames;
         last_end_frame = last_end_frame.max(end);
     }
@@ -317,4 +328,69 @@ fn examples22_parity_render_matches_schedule() {
             "examples22 イベント間 {gap_start}-{gap_end}s は無音のはず（RMS={gap:.6}）"
         );
     }
+}
+
+const VARISPEED_SR: u32 = 48_000;
+
+/// arpeggio_c.wav の `[0, 0.5s]` slice を指定 `rate` で offline render し PCM を返す。
+/// `engine_wrap` の出力尺 `effective_len_frames / sr / rate` と `play_at`→scheduler の
+/// varispeed seam を rate≠1.0 で実際に通す（#319 統合検証）。
+fn render_varispeed_slice(rate: f64) -> Vec<f32> {
+    let (wrap, _guard) = EngineWrap::start_with(StubBackend {
+        sample_rate: VARISPEED_SR,
+        channels: 2,
+    })
+    .expect("EngineWrap start_with StubBackend");
+    let wav = repo_path("test-assets/audio/arpeggio_c.wav");
+    let info = wrap
+        .load_sample(wav.clone())
+        .unwrap_or_else(|e| panic!("load_sample {}: {e}", wav.display()));
+    assert!(
+        info.frames as f64 / VARISPEED_SR as f64 >= 0.5,
+        "arpeggio_c.wav は >=0.5s 必要（frames={}）",
+        info.frames
+    );
+    // slice [0, 0.5s]（offset=0, duration=0.5）を指定 rate で発音。
+    wrap.play_at(&info.sample_id, 0.0, 1.0, 0.0, 0.0, 0.5, rate)
+        .expect("play_at");
+    // rate=1.0 の出力尺 0.5s + 0.25s 余白。rate=2.0 はこれより短く収まる。
+    let total = (0.75 * VARISPEED_SR as f64) as usize;
+    wrap.render_offline(total, BLOCK_FRAMES)
+}
+
+/// interleaved stereo PCM の、|sample| が閾値を超える最後のフレーム index（信号終端）。
+/// 無信号なら 0。GRM 独立: core の領域解決を import せず peak で直接測る。
+fn last_signal_frame(pcm: &[f32]) -> usize {
+    let channels = 2usize;
+    let frames = pcm.len() / channels;
+    let threshold = 0.01f32;
+    for f in (0..frames).rev() {
+        let l = pcm[f * channels].abs();
+        let r = pcm[f * channels + 1].abs();
+        if l.max(r) > threshold {
+            return f;
+        }
+    }
+    0
+}
+
+#[test]
+fn varispeed_rate2_renders_half_duration_of_rate1() {
+    //! #319 — varispeed の統合検証。同一 slice [0,0.5s] を rate=1.0 と rate=2.0 で実 `play_at`→
+    //! offline render し、rate=2.0 の信号終端が rate=1.0 の **約半分**の時刻に来ることを PCM 上で
+    //! 確認する（slice 尺をスロット尺へ詰める varispeed の「尺合わせ再生」の直接証拠）。
+    //! 信号終端比 ≈ rate 比なので source の中身に依らず成立する（端の沈黙にも頑健）。
+    let rate1_end = last_signal_frame(&render_varispeed_slice(1.0));
+    let rate2_end = last_signal_frame(&render_varispeed_slice(2.0));
+
+    assert!(
+        rate1_end > 0 && rate2_end > 0,
+        "両 rate とも信号が必要（無音回帰検出）: rate1_end={rate1_end}, rate2_end={rate2_end}"
+    );
+    // rate=2.0 は半分の尺で読み切る。比は理論上 2.0、fade tail / 閾値交差の余裕で ±8%。
+    let ratio = rate1_end as f64 / rate2_end as f64;
+    assert!(
+        (ratio - 2.0).abs() < 0.16,
+        "rate=2.0 は rate=1.0 の約半尺のはず: rate1_end={rate1_end}, rate2_end={rate2_end}, ratio={ratio:.3}"
+    );
 }

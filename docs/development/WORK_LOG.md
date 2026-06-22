@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.159 feat(engine): slice varispeed parity — chop rate≠1.0 on rust engine (post-2.0 A3 / #319) (Jun 22, 2026)
+
+**Date**: 2026-06-22
+**Status**: ✅ 実装 + 全テスト緑（npm 全緑・cargo workspace 全緑。core 単体6 = varispeed 5〔rate=1.0 ビット同一 / 倍 / 半 / invalid / fade*rate〕+ stop_all 1、統合 varispeed 1、StopAll protocol 1、TS rate/stopAll/Gap5。PR レビューで fade*rate テスト + stopAll エラー可視化を追加）
+**Branch**: `319-slice-varispeed`
+
+**背景**: post-2.0 engine-first の次フェーズ（cutover #108 までの parity gap 充填の1つ目 = A3）。#304（PR #305）が「見かけの parity を作らない」ために rate≠1.0 を 1回 warn + 自然尺に倒した箇所を、実機で尺合わせ再生する。正本: `POST_2.0_NEXT_STEPS.html §4 A3`。
+
+**Step0（2 spike + advisor + owner 決定）**: ① **Signalsmith Rust binding spike** = `signalsmith-stretch`(MIT) が存在し proceed 可（早期採用・production 実績は自前）。② **DSL 意味論 spike**（spec + SC 一次資料）で **核心の再構成**: slice rate≠1.0 の SC parity は SC `PlayBuf.ar(rate: sliceDur/slotDur)` = **純 varispeed（ピッチも動く）**で、pitch-preserving stretch は SC 経路に存在しない → **parity を埋めるのに Signalsmith は不要**。一方 `fixpitch()`/`time()` は SC 未実装の **net-new #213 機能**（Signalsmith FFI + license gate 新設 = 高リスク）。③ 前提誤り訂正: 「cargo deny / deny.toml 前例あり」は事実誤認（リポジトリに不在）。
+
+**owner 決定（2026-06-22・blast radius が決め手）**:
+- **Q1 = varispeed-only**。A3 = slice rate≠1.0 varispeed（Rust 内部完結・SC 経路/共有 DSL 表面に非接触・新依存ゼロ）+ 織り込み3件。**fixpitch()/time()/Signalsmith/cargo-deny は #213 follow-on へ分離**（手戻りゼロ: varispeed primitive を後で再利用）。
+- **Q2 = time()=varispeed + 将来 stretch() 予約**（spec 方向を記録）。「rate 変化=varispeed」一貫。pitch-preserving は fixpitch+time の合成で得られる。
+
+**varispeed 設計（advisor 承認）**: `ScheduledSample.rate` + 分数読み位置 `read_pos: f64` を導入し、core render を「source を `rate` 倍歩幅で分数走査 + 線形補間」に変更。**rate=1.0 で frac=0 → 元サンプルにビット同一**（既存 slice/pan/fade テスト無改変で通る厳密な一般化）。fade は出力時間（slice_len/rate）で数える。`rate = sliceDuration / eventSlotDuration`（SC `calculatePlaybackRate` と同形）を TS 側で計算し daemon へ送る。出力尺 = `effective_len_frames / sr / rate`（PlayEnded もこの出力終端）。
+
+**seam（TS→daemon→core を一貫）**: `rust-engine-player.ts`（`resolveSliceRegion` を warn から rate 算出へ・`toDaemonParams`/`executePlayback` が rate を渡す・GapKind から `slice` 除去）→ `daemon-client.ts`/`protocol-types.ts`（PlayAt に rate）→ `session.rs`（rate 解析・pan 同様 reject せず 1.0 丸め）→ `engine_wrap.rs`（出力尺 /rate）→ `engine.rs`/`scheduler.rs`（varispeed render）。spec-first で `INSTRUCTION_ORBITSCORE_DSL.md`（slice-fit varispeed §3 + time()/fixpitch()/stretch() §12）と `ENGINE_DAEMON_PROTOCOL.md`（PlayAt rate + StopAll）を先に更新。
+
+**織り込みフォローアップ3件**:
+- **daemon hard-stop-all（global）**: core `Scheduler::stop_all()` + daemon `StopAll` コマンド + TS `stopAll()` 配線（disposed/respawning/未接続では skip）。varispeed の rate<1.0 長尺 voice が global stop を跨いで鳴り続けるのを断つ。**per-sequence selective stop（`clearSequenceEvents` の play_id 追跡）は明示 defer**（balloon 厳禁・要 owner 判断＝#319 コメント記録）。
+- **Gap5**: quit-during-respawn の CI テスト（mock・respawn backoff 中の quit が clean に終わる）。
+- **bot Finding 2**: connect 時 error の二重ログ修正（永続 onError を open 後に attach・connect once を open で detach）。
+
+**検証（Done 基準＝offline 決定論 PCM）**: core 単体（rate=2.0 で倍勾配・rate=0.5 で補間・rate=1.0 ビット同一・invalid rate 丸め）+ **統合**（`verify_schedule_pcm.rs`: 同一 slice を rate=1.0/2.0 で実 `play_at`→render し rate=2.0 が半尺で終わることを PCM の信号終端比で確認）+ StopAll protocol + TS（rate 送信・stopAll・Gap5）。capture seam は含めない（offline で足りる・#300 Step0 の決定を維持）。
+
+**明示 defer**: fixpitch()/time()/Signalsmith/cargo-deny → #213 / capture seam / A4 LinkAudio / γ / cutover #108 / per-sequence hard-stop。
+
 ### 6.158 feat(engine): recovery floor — daemon supervision + auto-respawn + 最小 recovery contract (post-2.0 α / #300) (Jun 22, 2026)
 
 **Date**: 2026-06-22

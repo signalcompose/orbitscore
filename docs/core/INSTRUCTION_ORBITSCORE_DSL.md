@@ -233,6 +233,24 @@ seq1.play(1,1,1,1, 2,2,2,2)     // Repeat slices
 seq1.play(8,7,6,5, 4,3,2,1)     // Reverse order
 ```
 
+### Slice-to-Slot Fitting (varispeed)
+
+A chop slice has a **natural length** (`fileDuration / chopDivisions`), but `play()` nesting
+and `length()` decide the **event slot** the slice is scheduled into. When those two differ,
+the slice is **time-scaled to fill its slot by varispeed** (a playback-rate change), exactly
+like SuperCollider's `PlayBuf.ar(rate:)`:
+
+- `rate = sliceNaturalDuration / eventSlotDuration`.
+- `rate > 1` → the slice plays **faster** (shorter, **higher** pitch);
+  `rate < 1` → **slower** (longer, **lower** pitch).
+- **Pitch moves with the rate.** This is varispeed (like a turntable / sampler), *not*
+  pitch-preserving time-stretch. A `rate = 2.0` slice sounds one octave up; `rate = 0.5`
+  one octave down.
+
+This is the default slot-fitting behavior for **both** the SuperCollider engine and the Rust
+engine (`ORBITSCORE_ENGINE=rust`); the two stay in parity. A *pitch-preserving* fit would
+require time-stretch — see `fixpitch()` / `time()` / `stretch()` in §12.
+
 ---
 
 ## 4. Playback and Structure
@@ -1185,8 +1203,22 @@ Epic #224 phases 1/2/3/R/4:
 ### Not Yet Implemented 📋
 
 #### Audio Manipulation
-- **fixpitch()**: Pitch shift in semitones
-- **time()**: Time stretch/compression
+
+These per-slice modifiers (`seq.play(1.fixpitch(7), 2.time(0.5), ...)`) are recognized by the
+parser but currently throw "not yet implemented" (#213). Their **semantics are fixed** below so
+the two time/pitch axes stay orthogonal and consistent with the chop slice-fit varispeed (§3):
+
+- **fixpitch(semitones)**: shift pitch by N semitones, **duration preserved** (pitch-preserving
+  pitch-shift — the *pitch* axis moves, time held). Requires a pitch-preserving DSP
+  (permissive Signalsmith, not GPL Rubber Band).
+- **time(factor)**: change playback speed by `factor` — **varispeed, pitch moves with speed**
+  (`0.5` = half speed / one octave down, `2.0` = double speed / one octave up). The *time* axis
+  moves, pitch follows. Reuses the same rate primitive as chop slice-fit (§3); **not**
+  pitch-preserving. (#213)
+- **stretch(factor)** *(reserved name, unspecified for implementation)*: pitch-preserving
+  time-stretch (duration changes, **pitch held**) — the complement of `time()`. Pitch-preserving
+  time-stretch is also obtainable by composing `time()` (varispeed) with `fixpitch()` (inverse
+  shift), so a first-class `stretch()` is sugar, deferred until a concrete need.
 - **offset()**: Start position adjustment
 - **reverse()**: Reverse playback
 - **fade()**: Fade in/out

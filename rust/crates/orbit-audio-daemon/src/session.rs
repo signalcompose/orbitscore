@@ -287,8 +287,11 @@ async fn handle_command(
                     ProtocolError::new("PARAM_OUT_OF_RANGE", "duration_sec must be >= 0"),
                 );
             }
+            // rate は varispeed（省略時 1.0 = 自然尺）。pan と同じく非致命的 param なので reject
+            // せず core 側で 1.0 に丸める（<=0/非有限。誤った無音化や逆走を起こさない）。
+            let rate = param_f64(&params, "rate", 1.0);
             match params.get("sample_id").and_then(|v| v.as_str()) {
-                Some(sid) => match engine.play_at(sid, time_sec, gain, pan, offset_sec, duration_sec) {
+                Some(sid) => match engine.play_at(sid, time_sec, gain, pan, offset_sec, duration_sec, rate) {
                     Ok(handle) => {
                         // 遅延タスクを先に spawn して await コストを避ける
                         schedule_play_ended(
@@ -334,6 +337,12 @@ async fn handle_command(
                 &id,
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'play_id' param"),
             ),
+        },
+        // 全アクティブ再生の即時停止（hard-stop-all）。respawn / stopAll で in-flight voice
+        // （varispeed の長尺 slice 含む）を断つ。停止件数を返す（冪等・空でも ok）。
+        "StopAll" => match engine.stop_all() {
+            Ok(n) => ok(&id, json!({"stopped": n})),
+            Err(e) => err(&id, wrap_err_to_protocol(&e)),
         },
         "SetGlobalGain" => {
             let value = params.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);

@@ -9,6 +9,7 @@
       "pan": -0.6,
       "offsetSec": 0,
       "durationSec": 0,
+      "rate": 1,
       "gainDb": -3,
       "panRaw": -60,
       "sequenceName": "kick"
@@ -20,6 +21,7 @@
       "pan": 0.6,
       "offsetSec": 0,
       "durationSec": 0,
+      "rate": 1,
       "gainDb": -6,
       "panRaw": 60,
       "sequenceName": "snare"
@@ -31,6 +33,7 @@
       "pan": 0,
       "offsetSec": 0,
       "durationSec": 0,
+      "rate": 1,
       "gainDb": -9,
       "panRaw": 0,
       "sequenceName": "hat"
@@ -42,6 +45,7 @@
       "pan": 0.2,
       "offsetSec": 0,
       "durationSec": 0.5,
+      "rate": 1,
       "gainDb": -4,
       "panRaw": 20,
       "sequenceName": "chopd"
@@ -53,6 +57,7 @@
       "pan": 0.2,
       "offsetSec": 0.5,
       "durationSec": 0.5,
+      "rate": 1,
       "gainDb": -4,
       "panRaw": 20,
       "sequenceName": "chopd"

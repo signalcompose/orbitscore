@@ -209,6 +209,118 @@ async fn stop_unknown_id_returns_not_found() {
     );
 }
 
+/// StopAll は全アクティブ再生（発音中 + 開始待機中）を停止し件数を返す（hard-stop-all・#319）。
+/// 冪等: 空に対しては 0 を返す。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn stop_all_clears_scheduled_plays() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let wav_path = format!("{manifest_dir}/../../../test-assets/audio/kick.wav");
+    send_cmd(&mut ws, "l", "LoadSample", json!({ "path": wav_path })).await;
+    let load_resp = recv_reply_for_id(&mut ws, "l").await;
+    let sample_id = load_resp["result"]["sample_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("LoadSample resp missing sample_id: {load_resp}"))
+        .to_string();
+
+    // 未来時刻に 2 voice をスケジュール（transport 未到達でも scheduler に開始待機で居る）。
+    for (id, t) in [("p1", 10.0), ("p2", 11.0)] {
+        send_cmd(
+            &mut ws,
+            id,
+            "PlayAt",
+            json!({ "sample_id": sample_id, "time_sec": t, "gain": 1.0 }),
+        )
+        .await;
+        let _ = recv_reply_for_id(&mut ws, id).await;
+    }
+
+    send_cmd(&mut ws, "sa", "StopAll", json!({})).await;
+    let resp = recv_reply_for_id(&mut ws, "sa").await;
+    assert_eq!(
+        resp["result"]["stopped"].as_u64(),
+        Some(2),
+        "StopAll should clear both scheduled voices: {resp}"
+    );
+
+    // 冪等: 2 回目は 0。
+    send_cmd(&mut ws, "sa2", "StopAll", json!({})).await;
+    let resp2 = recv_reply_for_id(&mut ws, "sa2").await;
+    assert_eq!(
+        resp2["result"]["stopped"].as_u64(),
+        Some(0),
+        "second StopAll should be idempotent (0): {resp2}"
+    );
+}
+
+/// PlayAt の `rate` が **wire 経由**（`session.rs` の `param_f64("rate")` → `engine.play_at`）で
+/// 出力尺に効くことを、PlayEnded の `ended_at_sec`（= start_sec + 出力尺）で検証する（#319）。
+/// オフライン harness は `wrap.play_at` を直接呼んで session 層を bypass するため、`"rate"` キーの
+/// typo / forward 漏れは全 golden が rate=1.0（既定値）で silent に通る。本テストが唯一その経路を
+/// 通す。サンプルを rate=2.0 で発音し、出力尺が自然尺の半分（= LoadSample の frames/sample_rate / 2）
+/// になることを確認する（rate が wire を通らず default=1.0 に落ちると自然尺のままで fail）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn play_at_rate_halves_play_ended_time() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let wav_path = format!("{manifest_dir}/../../../test-assets/audio/kick.wav");
+    send_cmd(&mut ws, "l", "LoadSample", json!({ "path": wav_path })).await;
+    let load_resp = recv_reply_for_id(&mut ws, "l").await;
+    let sample_id = load_resp["result"]["sample_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("LoadSample resp missing sample_id: {load_resp}"))
+        .to_string();
+    // 自然尺 D = frames / sample_rate（出力 SR に変換済みのロード値）。
+    let frames = load_resp["result"]["frames"].as_f64().expect("frames");
+    let sr = load_resp["result"]["sample_rate"].as_f64().expect("sample_rate");
+    let natural_sec = frames / sr;
+
+    // rate=2.0 で発音 → 出力尺は natural_sec / 2、ended_at_sec = start(0) + natural_sec/2。
+    send_cmd(
+        &mut ws,
+        "p",
+        "PlayAt",
+        json!({ "sample_id": sample_id, "time_sec": 0.0, "gain": 1.0, "rate": 2.0 }),
+    )
+    .await;
+    let pid = recv_reply_for_id(&mut ws, "p").await["result"]["play_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("PlayAt resp missing play_id"))
+        .to_string();
+
+    // kick.wav は 1 秒未満。PlayEnded が発火するまで虚時間を進める（単一イベント収集は
+    // stop_suppresses_play_ended と同型で並列実行でも安定）。
+    advance_and_yield(Duration::from_secs(3)).await;
+
+    let mut ended_at = None;
+    for _ in 0..40 {
+        match tokio::time::timeout(Duration::from_millis(100), next_json(&mut ws)).await {
+            Ok(msg) if msg["event"] == "PlayEnded" && msg["data"]["play_id"] == pid.as_str() => {
+                ended_at = msg["data"]["ended_at_sec"].as_f64();
+                break;
+            }
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+
+    let ended_at = ended_at.unwrap_or_else(|| panic!("PlayEnded not received for rate=2.0 voice"));
+    let expected = natural_sec / 2.0;
+    // rate=2.0 の出力尺は自然尺の半分。rate が wire を通らず 1.0 に落ちると natural_sec のままで
+    // fail する（expected の 2 倍 = 明確に許容外）。
+    assert!(
+        (ended_at - expected).abs() < 0.02,
+        "rate=2.0 ended_at should be natural/2: ended_at={ended_at}, expected={expected} \
+         (natural={natural_sec}); rate が wire を通っていない可能性"
+    );
+}
+
 /// SetGlobalGain は正の値を受け入れる。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn set_global_gain_accepts() {

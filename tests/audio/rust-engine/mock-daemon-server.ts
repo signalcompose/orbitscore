@@ -26,6 +26,7 @@ export interface MockDaemonHandlers {
   LoadSample?: MockHandler
   PlayAt?: MockHandler
   Stop?: MockHandler
+  StopAll?: MockHandler
   SetGlobalGain?: MockHandler
   GetStatus?: MockHandler
 }

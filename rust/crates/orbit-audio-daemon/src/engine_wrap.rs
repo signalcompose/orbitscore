@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use orbit_audio_core::{resolve_slice_region, Engine, Sample};
+use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
     StreamStatsSnapshot,
@@ -153,9 +153,10 @@ impl EngineWrap {
     /// `pan` は [-1.0, 1.0]（0.0 = 中央、範囲外は core で clamp）。
     /// `offset_sec` / `duration_sec` は再生領域（`chop` の slice）。`duration_sec <= 0` で
     /// 「offset 以降すべて」。いずれもサンプル端で clamp。
-    /// 戻り値の `duration_sec` は **実際に再生される区間の尺**（slice 指定時は slice 長、
-    /// whole-file 時はサンプル全尺）なので、呼び出し側は PlayEnded を再生終端に合わせて
-    /// 遅延送信できる。
+    /// `rate` は varispeed（1.0 = 自然尺、>1 = 速く短く高ピッチ、<1 = 遅く長く低ピッチ。
+    /// `<=0`/非有限は core で 1.0 に丸め）。
+    /// 戻り値の `duration_sec` は **実際に再生される区間の出力尺**（slice 実尺 / rate）なので、
+    /// 呼び出し側は PlayEnded を再生終端（varispeed 後の出力終端）に合わせて遅延送信できる。
     #[allow(clippy::too_many_arguments)]
     pub fn play_at(
         &self,
@@ -165,6 +166,7 @@ impl EngineWrap {
         pan: f32,
         offset_sec: f64,
         duration_sec: f64,
+        rate: f64,
     ) -> Result<PlayHandle, WrapError> {
         let sample = self
             .lock_samples()?
@@ -181,11 +183,13 @@ impl EngineWrap {
         } else {
             0
         };
-        // 再生領域を clamp。PlayEnded 用の出力尺（slice 実尺・rate=1.0）と、scheduler が
-        // render に使う尺が必ず一致するよう、両者が同一式（resolve_slice_region）を共有する。
+        // 再生領域を clamp。render が読む source 尺（effective_len_frames）は rate に依らず
+        // 不変で、scheduler の render と同一式（resolve_slice_region）を共有する。
         let (slice_start_frame, effective_len_frames) =
             resolve_slice_region(total_frames, offset_frames, requested_len_frames);
-        let out_duration_sec = effective_len_frames as f64 / sr;
+        // PlayEnded 用の **出力**尺は varispeed で source 尺 / rate になる（render の出力尺と一致）。
+        // core と同じ sanitize_rate で正規化し、出力尺の規約を一致させる。
+        let out_duration_sec = effective_len_frames as f64 / sr / sanitize_rate(rate);
         let play_id = format!("p-{}", short_uuid());
         self.engine
             .schedule_with_play_id(
@@ -196,6 +200,7 @@ impl EngineWrap {
                 // clamp 済みの実尺を渡す。生の requested_len_frames を渡すと、render 尺と
                 // PlayEnded 尺の一致が scheduler 内の再 clamp に依存してしまう（latent な desync）。
                 effective_len_frames,
+                rate,
                 play_id.clone(),
                 sample,
             )
@@ -205,6 +210,16 @@ impl EngineWrap {
             start_sec: time_sec,
             duration_sec: out_duration_sec,
         })
+    }
+
+    /// 全アクティブ再生を即時停止する hard-stop-all。停止件数を返す。
+    /// daemon が保持する disposable な voice（in-flight one-shot / varispeed の長尺 slice）を
+    /// respawn / stopAll で一括 drop する。PlayEnded 抑制集合は触らない（停止された voice の
+    /// PlayEnded 遅延タスクはそのまま発火しうるが、consumer 側が play_id 不在で無害に無視する）。
+    pub fn stop_all(&self) -> Result<usize, WrapError> {
+        self.engine
+            .stop_all()
+            .map_err(|e| WrapError::Scheduler(e.to_string()))
     }
 
     /// `play_id` に一致するアクティブ再生を停止する。true = 停止、false = 見つからず。

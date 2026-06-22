@@ -16,4 +16,4 @@ mod scheduler;
 
 pub use engine::{Engine, EngineError};
 pub use sample::Sample;
-pub use scheduler::{resolve_slice_region, ScheduledSample, Scheduler};
+pub use scheduler::{resolve_slice_region, sanitize_rate, ScheduledSample, Scheduler};
