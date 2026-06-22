@@ -61,6 +61,25 @@ double orbit_link_capture_beat(OrbitLink* link, double quantum);
 // 現在の session tempo(BPM)を取得する(beat/frame 換算用・consumer thread から)。
 double orbit_link_session_tempo(OrbitLink* link);
 
+// ===== verification 専用 receiver(headless 層B)=====
+// production egress は sender-only(DSL spec §8.1)。以下は「2 LinkAudio インスタンス loopback で
+// 実 egress を耳なし検証する」テスト専用 API。`host` は sender とは別の LinkAudio インスタンス。
+typedef struct OrbitRecv OrbitRecv;
+
+// receiver を生成する(まだ subscribe しない)。失敗時 NULL。
+OrbitRecv* orbit_link_recv_create(OrbitLink* host, const char* channel_name);
+
+// channel を channels() で探し、見つかれば LinkAudioSource を張る(idempotent)。
+// 1 = subscribe 済 / 0 = 未発見(呼び出し側がリトライ)。
+int orbit_link_recv_try_subscribe(OrbitRecv* recv);
+
+// 受信した buffer 数 / frame 数 / 直近 buffer の先頭サンプル(int16)。
+uint64_t orbit_link_recv_count(OrbitRecv* recv);
+uint64_t orbit_link_recv_frames(OrbitRecv* recv);
+int orbit_link_recv_last_sample(OrbitRecv* recv);
+
+void orbit_link_recv_destroy(OrbitRecv* recv);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif

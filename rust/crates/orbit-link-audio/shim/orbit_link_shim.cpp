@@ -20,8 +20,10 @@
 
 #include "orbit_link_shim.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -30,6 +32,20 @@ struct OrbitLink {
   std::vector<std::unique_ptr<ableton::LinkAudioSink>> channels;
 
   OrbitLink(double bpm, std::string peer) : link(bpm, std::move(peer)) {}
+};
+
+// 【verification 専用】headless 層B 受信側。production egress は sender-only(DSL spec §8.1)で
+// receiver は出荷しない。本 struct は「2 LinkAudio インスタンス loopback で実 egress を耳なし
+// 検証する」テスト(Q4 gate で実機実証済)のためだけに存在する。`host` は sender とは別の
+// LinkAudio インスタンス。channel を channels() で発見したら LinkAudioSource を張り、callback
+// (Link thread)で受信を atomic 集計する。
+struct OrbitRecv {
+  OrbitLink* host;  // 所有しない(呼び出し側が別 LinkAudioOutput として保持)。
+  std::string channel_name;
+  std::optional<ableton::LinkAudioSource> source;
+  std::atomic<uint64_t> recv_count{0};
+  std::atomic<uint64_t> recv_frames{0};
+  std::atomic<int> last_sample{0};
 };
 
 extern "C" {
@@ -183,5 +199,59 @@ double orbit_link_session_tempo(OrbitLink* link) {
     return 0.0;
   }
 }
+
+// ===== verification 専用 receiver(headless 層B)=====
+// `host` は sender とは別の LinkAudio インスタンス。production には出荷しない。
+
+OrbitRecv* orbit_link_recv_create(OrbitLink* host, const char* channel_name) {
+  if (!host || !channel_name) return nullptr;
+  try {
+    auto* recv = new OrbitRecv();
+    recv->host = host;
+    recv->channel_name = channel_name;
+    return recv;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+// channel を channels() で探し、見つかれば LinkAudioSource を張る(idempotent)。
+// 戻り値: 1 = subscribe 済(今 or 既に) / 0 = channel 未発見(呼び出し側がリトライ)。
+int orbit_link_recv_try_subscribe(OrbitRecv* recv) {
+  if (!recv) return 0;
+  if (recv->source) return 1;
+  try {
+    for (const auto& c : recv->host->link.channels()) {
+      if (c.name == recv->channel_name) {
+        recv->source.emplace(
+            recv->host->link, c.id,
+            [recv](ableton::LinkAudioSource::BufferHandle bh) {
+              recv->recv_count.fetch_add(1, std::memory_order_relaxed);
+              recv->recv_frames.fetch_add(bh.info.numFrames, std::memory_order_relaxed);
+              if (bh.info.numFrames > 0) {
+                recv->last_sample.store(bh.samples[0], std::memory_order_relaxed);
+              }
+            });
+        return 1;
+      }
+    }
+  } catch (...) {
+  }
+  return 0;
+}
+
+uint64_t orbit_link_recv_count(OrbitRecv* recv) {
+  return recv ? recv->recv_count.load(std::memory_order_relaxed) : 0;
+}
+
+uint64_t orbit_link_recv_frames(OrbitRecv* recv) {
+  return recv ? recv->recv_frames.load(std::memory_order_relaxed) : 0;
+}
+
+int orbit_link_recv_last_sample(OrbitRecv* recv) {
+  return recv ? recv->last_sample.load(std::memory_order_relaxed) : 0;
+}
+
+void orbit_link_recv_destroy(OrbitRecv* recv) { delete recv; }
 
 }  // extern "C"
