@@ -86,7 +86,7 @@ impl EngineWrap {
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats, reg_tx) =
             orbit_audio_native::start_default_output_with_link_egress(
-                crate::link_audio::reg_ring_capacity(),
+                crate::link_audio::REG_RING_CAPACITY,
             )?;
         let (control, link_guard) = crate::link_audio::LinkAudioControl::spawn(
             reg_tx,

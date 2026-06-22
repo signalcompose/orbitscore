@@ -131,18 +131,24 @@ fn render_block(
         }
         if let Some(ch) = &mut le.channel {
             let bs = (hw.len() / output_channels) * output_channels;
+            // scratch は control が `MAX_BLOCK_FRAMES * channels`（device buffer より遥かに大）で
+            // 事前確保する不変。これが破れると channel-tagged event が下の hardware fallback に
+            // 漏れる（無音ではなく hardware へ bleed する）ので dev では loud に検出する。
+            debug_assert!(
+                ch.scratch.len() >= bs,
+                "link channel scratch ({}) < block ({bs}); channel audio would bleed to hardware",
+                ch.scratch.len()
+            );
             if ch.scratch.len() >= bs {
-                {
-                    // 1-element stack array（heap alloc なし）。render_multi が hw と ch.scratch を
-                    // 1 パスで埋め transport を 1 回進める。
-                    let mut chans = [(ch.name.as_str(), &mut ch.scratch[..bs])];
-                    engine.render_multi(hw, &mut chans);
-                }
+                // 1-element stack array（heap alloc なし）。render_multi が hw と ch.scratch を
+                // 1 パスで埋め transport を 1 回進める。借用は次行までに終わる。
+                let mut chans = [(ch.name.as_str(), &mut ch.scratch[..bs])];
+                engine.render_multi(hw, &mut chans);
                 // channel buffer を ring へ push（満杯なら RingTapSink が drop カウント）。
                 ch.sink.commit(&ch.scratch[..bs]);
                 return;
             }
-            // scratch 不足（control の事前確保が想定外に小さい）→ 安全側で hardware のみ。
+            // scratch 不足（想定外）→ release では安全側で hardware のみにフォールバック。
         }
     }
     engine.render(hw);

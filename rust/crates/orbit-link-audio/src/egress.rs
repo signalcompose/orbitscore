@@ -19,7 +19,7 @@ use crate::{CommitResult, LinkAudioOutput};
 /// drop(`dropped_samples` = interleaved サンプル単位)を frame に直して算入する。
 #[inline]
 fn produced_frames(drained_frames: u64, dropped_samples: u64, num_channels: usize) -> u64 {
-    drained_frames + dropped_samples / num_channels.max(1) as u64
+    drained_frames + dropped_samples / (num_channels as u64).max(1)
 }
 
 /// buffer-begin の beat を線形再構成する。per-block の "now" を使わず anchor + produced-frames で
@@ -97,14 +97,8 @@ impl LinkChannelEgress {
         // egress 開始時に anchor(beat + tempo)を 1 回だけ capture。以後は frame から再構成する。
         if !self.anchored {
             self.anchor_beat = self.output.capture_beat(self.quantum);
-            let bpm = {
-                let t = self.output.session_tempo();
-                if t > 0.0 {
-                    t
-                } else {
-                    120.0
-                }
-            };
+            let tempo = self.output.session_tempo();
+            let bpm = if tempo > 0.0 { tempo } else { 120.0 };
             self.beat_per_frame = (bpm / 60.0) / self.sample_rate as f64;
             self.anchored = true;
         }

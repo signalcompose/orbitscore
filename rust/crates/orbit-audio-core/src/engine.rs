@@ -152,13 +152,9 @@ impl Engine {
         match self.inner.try_lock() {
             Ok(mut s) => s.render_multi(hardware_out, channels),
             Err(_) => {
-                for x in hardware_out.iter_mut() {
-                    *x = 0.0;
-                }
+                hardware_out.fill(0.0);
                 for (_, buf) in channels.iter_mut() {
-                    for x in buf.iter_mut() {
-                        *x = 0.0;
-                    }
+                    buf.fill(0.0);
                 }
             }
         }

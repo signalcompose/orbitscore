@@ -34,7 +34,8 @@ const QUANTUM: f64 = 4.0;
 /// scratch を超えたら安全側で hardware のみに落とす。
 const MAX_BLOCK_FRAMES: usize = 8192;
 /// reg-ring 容量（callback への activation メッセージ）。2b-2a は単一 channel なので小で足りる。
-const REG_RING_CAPACITY: usize = 8;
+/// EngineWrap が `start_default_output_with_link_egress` に渡すため pub（const 文脈で使える）。
+pub const REG_RING_CAPACITY: usize = 8;
 
 /// control→consumer thread の registration コマンド（mpsc payload）。consumer thread が受け取って
 /// Link channel を登録し [`LinkChannelEgress`] を構築する。
@@ -207,11 +208,13 @@ impl LinkAudioControl {
     pub fn register_channel(&mut self, name: &str) -> Result<(), LinkRegisterError> {
         let ring_capacity = self.sample_rate as usize * self.num_channels * RING_SECONDS;
         let (sink, consumer, drops) = RingTapSink::new(ring_capacity);
+        // consumer thread と callback の両方が所有する name を 1 回だけ確保する。
+        let name = name.to_string();
 
         // 1) consumer thread へ（Link channel 登録 + egress 構築）。
         self.cmd_tx
             .send(RegisterCmd {
-                name: name.to_string(),
+                name: name.clone(),
                 consumer,
                 drops,
                 num_channels: self.num_channels,
@@ -223,17 +226,12 @@ impl LinkAudioControl {
         let scratch = vec![0.0f32; MAX_BLOCK_FRAMES * self.num_channels];
         self.reg_tx
             .push(LinkChannelActivate {
-                name: name.to_string(),
+                name,
                 sink,
                 scratch,
             })
             .map_err(|_| LinkRegisterError::RegRingFull)
     }
-}
-
-/// `start_default_output_with_link_egress` に渡す reg-ring 容量を公開する（EngineWrap から使う）。
-pub const fn reg_ring_capacity() -> usize {
-    REG_RING_CAPACITY
 }
 
 // 層B(2b-2a Done 基準・実 callback 駆動)。実 output device + multicast loopback を要するため
