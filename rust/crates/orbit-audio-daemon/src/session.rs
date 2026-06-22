@@ -30,6 +30,19 @@ const EVENT_CHANNEL_CAPACITY: usize = 128;
 /// StreamStats の送出間隔。protocol 仕様で 1 Hz 固定。
 const STREAM_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// `EVENT_DAEMON_ERROR` を共通形（severity / code / message の3フィールド）で構築する。
+/// 1 Hz ticker の fatal(device_lost) / warning(xrun) / warning(link egress drop) が共有する。
+fn daemon_error_event(severity: &str, code: &str, message: String) -> Event {
+    Event::new(
+        EVENT_DAEMON_ERROR,
+        json!({
+            "severity": severity,
+            "code": code,
+            "message": message,
+        }),
+    )
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -72,13 +85,10 @@ pub async fn run(
 
                 // fatal を warning より先に送り、client が最終イベントとして確実に観測できる順序にする。
                 if snapshot.device_lost && !device_lost_reported {
-                    let fatal_evt = Event::new(
-                        EVENT_DAEMON_ERROR,
-                        json!({
-                            "severity": ERROR_SEVERITY_FATAL,
-                            "code": ERROR_CODE_DEVICE_LOST,
-                            "message": "audio device disappeared",
-                        }),
+                    let fatal_evt = daemon_error_event(
+                        ERROR_SEVERITY_FATAL,
+                        ERROR_CODE_DEVICE_LOST,
+                        "audio device disappeared".to_string(),
                     );
                     if tx.send(to_json_or_fallback(&fatal_evt)).await.is_err() {
                         break;
@@ -87,16 +97,13 @@ pub async fn run(
                 }
 
                 if snapshot.xruns > last_xruns {
-                    let warn_evt = Event::new(
-                        EVENT_DAEMON_ERROR,
-                        json!({
-                            "severity": ERROR_SEVERITY_WARNING,
-                            "code": ERROR_CODE_STREAM_XRUN,
-                            "message": format!(
-                                "buffer underrun or stream error occurred ({} total)",
-                                snapshot.xruns
-                            ),
-                        }),
+                    let warn_evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_STREAM_XRUN,
+                        format!(
+                            "buffer underrun or stream error occurred ({} total)",
+                            snapshot.xruns
+                        ),
                     );
                     if tx.send(to_json_or_fallback(&warn_evt)).await.is_err() {
                         break;
@@ -110,16 +117,13 @@ pub async fn run(
                 // 発火しない）。
                 let link_drops = engine.link_egress_ring_drops();
                 if link_drops > last_link_drops {
-                    let drop_evt = Event::new(
-                        EVENT_DAEMON_ERROR,
-                        json!({
-                            "severity": ERROR_SEVERITY_WARNING,
-                            "code": ERROR_CODE_LINK_EGRESS_DROP,
-                            "message": format!(
-                                "LinkAudio egress dropped samples ({link_drops} total interleaved); \
-                                 consumer fell behind — audio gaps on Link",
-                            ),
-                        }),
+                    let drop_evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_LINK_EGRESS_DROP,
+                        format!(
+                            "LinkAudio egress dropped samples ({link_drops} total interleaved); \
+                             consumer fell behind — audio gaps on Link",
+                        ),
                     );
                     if tx.send(to_json_or_fallback(&drop_evt)).await.is_err() {
                         break;

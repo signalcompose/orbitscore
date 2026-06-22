@@ -53,9 +53,13 @@ pub struct EngineWrap {
     /// Stop 経由で停止済みの play_id。PlayEnded 遅延タスクが自然発火を抑制するために参照する。
     /// PlayEnded 発火時に take（remove）されるため、通常ケースでは事後掃除不要。
     stopped_play_ids: Mutex<HashSet<String>>,
-    /// LinkAudio egress drop の **test 注入用** 集計カウンタ（本番は常に 0）。`link_egress_ring_drops`
-    /// がこれを加算するので、`StubBackend`（link-audio 無効）でも 1 Hz ticker の LINK_EGRESS_DROP 発火を
-    /// integration test から駆動できる（`stream_stats` の `record_xrun` seam と同型・[`Self::link_egress_drops_arc`]）。
+    /// LinkAudio egress drop の **test 注入用** カウンタ（本番は常に 0）。`link_egress_ring_drops`
+    /// がこれを加算する。integration test は `StubBackend` を使い `LinkAudioControl` を持たない
+    /// （= 実 drop 源が無い）ため、この counter が link-audio feature の有無に依らず 1 Hz ticker の
+    /// LINK_EGRESS_DROP 発火を駆動する唯一の seam になる（[`Self::link_egress_drops_arc`]）。
+    /// 本番の drop は `LinkAudioControl::total_ring_drops`（GPL `link-audio` 側）が供給するので、
+    /// production read-path ではこの addend は常に 0。`stream_stats` の `record_xrun`（本番と同一
+    /// atomic を書く統合 seam）とは異なり、これは本番経路から分離した並行カウンタである点に注意。
     link_egress_drops: Arc<AtomicU64>,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
@@ -209,7 +213,8 @@ impl EngineWrap {
         self.link_egress_drops.load(Ordering::Relaxed)
     }
 
-    /// test harness 用: LinkAudio egress drop の注入カウンタを取得する（`stream_stats_arc` と同型）。
+    /// test harness 用: LinkAudio egress drop の注入カウンタを取得する。accessor の形（`Arc` clone を
+    /// 返す）は `stream_stats_arc` と同じだが、下層 counter は本番経路から分離した注入専用（本番 0）。
     /// integration test から `fetch_add` して 1 Hz ticker の LINK_EGRESS_DROP 発火を駆動する。
     /// `#[doc(hidden)]` で公開 API としては扱わない。
     #[doc(hidden)]
