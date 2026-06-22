@@ -15,9 +15,16 @@ path = "src/lib.rs"
 name = "orbit-audio-daemon"
 path = "src/main.rs"
 
+[features]
+# 🔴 GPL feature。**default off**。有効化すると Ableton Link(GPL-2.0-or-later)が
+# 依存グラフに入る。permissive な engine core はこの feature に依存しない。
+link-audio = ["dep:orbit-link-audio"]
+
 [dependencies]
 orbit-audio-core = { path = "../orbit-audio-core" }
 orbit-audio-native = { path = "../orbit-audio-native" }
+# GPL 隔離 crate。feature `link-audio` 経由でのみ取り込む optional dep。
+orbit-link-audio = { path = "../orbit-link-audio", optional = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

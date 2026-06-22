@@ -17,6 +17,49 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.161 feat(engine): A4-2a GPL isolation crate orbit-link-audio + SC-free C++ shim + cargo-deny gate (post-2.0 A4 / #324) (Jun 22, 2026)
+
+**Date**: 2026-06-22
+**Status**: ✅ 実装 + 全テスト緑（orbit-link-audio standalone 2〔FFI smoke: 構築/channel 登録/silence commit no-op/不正 id/tempo/teardown + 内部 null 拒否〕・default workspace `cargo test` 全緑〔回帰なし〕・daemon `--features link-audio` ビルド緑・npm 全緑〔TS 無改変〕）
+**Branch**: `324-link-audio-gpl-isolation`
+**Parent**: #321（A4 meta）/ 正本: `POST_2.0_NEXT_STEPS.html §3/§4`
+
+**背景**: post-2.0 engine-first / A4（LinkAudio）の permissive-first 第2増分。A4-2（GPL 隔離）は load-bearing かつ大きいため advisor 助言で **PR2a（license-critical gate）/ PR2b（render+rtrb+実 audio+wire）に内部 split**。本 PR は PR2a。
+
+**Step0 ゲート（stop&report・実機検証）= GREEN**:
+- **submodule**: `external_libraries/link` populated・tag `Link-4.0`（SHA e9a2e414）・`include/ableton/LinkAudio.hpp` に full audio+tempo API・header-only。
+- **SC-free compile**: `<ableton/LinkAudio.hpp>` を SuperCollider 非依存で単独コンパイル成功。
+- **link+run**（advisor 指摘で compile に留めず実行まで）: macOS frameworks（CoreFoundation/CoreServices/Security/SystemConfiguration）でリンク → `LinkAudio` 構築 → `enable`（discovery thread・numPeers=0）→ `LinkAudioSink` 登録 → `captureAudioSessionState`/`beatAtTime` → **`BufferHandle::commit()` 実呼び出し（egress FFI surface・no-peer no-op）** → `setTempo`/`commitAppSessionState`（PR3 surface）→ teardown clean・exit 0・hang/prompt なし。
+- **license**: Link = `GPL-2.0-or-later / commercial` dual（`external_libraries/link/LICENSE.md` + DSL spec §8.1）。
+
+**本 PR（A4-2a）の実装**:
+- 新 crate `rust/crates/orbit-link-audio`（`license = "GPL-2.0-or-later"` 明示・workspace の FairTrade を継承しない・`publish = false`・`[workspace] exclude` で **非 member**）:
+  - SC-free C++ shim（`shim/orbit_link_shim.{hpp,cpp}`）を `build.rs`（`cc` crate・`warnings(false)`）で static lib 化 + macOS frameworks link。include 順序の不変条件（LinkAudio.hpp を Link.hpp より先）を踏襲。`packages/sc-link-audio` の SC 結合実装を参照に SC-free 化。
+  - C-ABI: `orbit_link_create`/`destroy`/`enable`/`num_peers`/`register_channel`/`commit_channel`（egress 表面・呼び出しスレッドが LinkAudio "audio thread"）/`set_tempo`（PR3 用）。
+  - Rust FFI 宣言 + safe wrapper `LinkAudioOutput`（`unsafe impl Send`・`CommitResult` enum）。
+- `cargo-deny` + `rust/deny.toml` 新設: default feature グラフ（link-audio off）が GPL-free を assert。allow に permissive + FairTrade のみ・**GPL は意図的に非掲載**。検証: `cargo deny check licenses`（default）= pass / `--all-features`（link-audio on）= **GPL-2.0-or-later rejected で fail**（leak 検出が機能することを逆方向で確認）。
+- `orbit-audio-daemon`: `[features] link-audio = ["dep:orbit-link-audio"]`（default off）+ optional path-dep。**本番 render には未配線**（PR2b）。
+
+**設計の要点（advisor 反映）**:
+- **Ableton Link は vendored C++（build.rs/cc 経由）で cargo crate ではない** → cargo-deny は Link の GPL を直接は見えない。cargo-deny の役割は ① third-party crate の GPL/copyleft 混入防止 ② orbit-link-audio（GPL 明示）が default graph に現れないこと。**真の保証は構造的**（permissive core は依存行ゼロ・単独コンパイル可）で cargo-deny は backstop。
+- **exclude が唯一の正解構成**: GPL crate を member にすると cargo-deny が常時 fail。exclude で非 member 化すると default root から外れ（pass）、permissive crate が誤依存すれば dep として graph に入り検出される。非 member なので package fields はハードコード（FairTrade workspace から意図的に分離）。
+- **commit の audio-thread**: rtrb で cpal thread と分離した **GPL consumer thread** が LinkAudio "audio thread" になる（PR2b 配線）。ring latency は beat anchoring に乗るが tempo leader ゆえ可聴上無害（精度要件なし・PR2b/層B で精緻化）。
+
+**/simplify 適用（4観点並列）**: ① shim の単一フィールド `ChannelEntry` ラッパを削除し `vector<unique_ptr<LinkAudioSink>>` に直接化 ② `CommitResult::InvalidArgs` → `ChannelNotFound`（実態=未登録 channel id に即した名前。enum 自体は PR2b consumer drain で no-op/committed 区別が load-bearing なので維持）③ build.rs に Link ヘッダ(`include/ableton`)の `rerun-if-changed` + `ORBIT_LINK_DIR` 上書き（submodule bump 時の stale 回避 + checkout 非依存）。reuse=clean（`thiserror="2.0"` 直書きは exclude 構成の必然）。**PR2b へ defer**: per-block `captureAudioSessionState()` の cache 化（hot path・commit が no-op の PR2a では未顕在・advisor Q4 の決定論 beat 再構成と統合）/ `floatToInt16` の inline・vectorization 確認。**owner へ flag**: cargo-deny gate の CI 配線（現 CI は cargo 非実行 → gate は手動のみ。Rust CI job 追加は infra 判断）。
+
+**/code:pr-review-team 適用（4専門レビュアー並列・2 round で収束）**: round-1 = code-reviewer Critical 1（`commit_channel` の source-slice overread = `maxNumSamples` は宛先上限で src 境界でない → shim に `buf_len` 引数 + `min(num_frames*num_channels, buf_len, maxNumSamples)` clamp + Rust debug_assert）/ Important（① 4 つの extern "C" に例外ガード不在 = C++ 例外が境界越え UB → 全て try/catch ② `bh.commit()==false` が `NoSubscriber` に alias → `-2`=`CommitFailed` 分離 ③ `new()` null peer テスト追加）/ comment Critical（"audio-thread surface" が threading contract を満たすかのような過剰主張 → PR2b scope + Thread-safe:no に修正）。round-2 = 全 4 レビュアー **Critical/Important = 0**（fix が新 bug を生まないことを独立検証: buf_len 引数順序 hpp/cpp/Rust 一致・`-2` mapping end-to-end・隔離 3 leg 健全）。round-2 Minor 反映: destroy/num_peers の silent catch にログ / commit match に明示 `-1` + 未知 sentinel debug_assert / commit コメントの no-op スコープ正確化。**PR3 concern（defer）**: void `set_enabled`/`set_tempo` の `Result` 化（tempo-lead 配線時）。**CI 環境制約**: code-review CI = pass / MERGEABLE・BLOCKED（review 承認待ち）。
+
+**@claude bot レビュー（load-bearing なので起動・scope を GPL 隔離/FFI/SC-free に明示）**: 🔴 1件 = `orbit_link_destroy` の `delete link` が try/catch 外（ファイル冒頭の「Link 呼び出しは throw しうる」前提と矛盾・`~OrbitLink`→`~LinkAudio` が noexcept(false) なら extern "C" 越え UB）→ `delete` も例外ガードで修正。🟡 = ① C++ の `num_frames*num_channels` unsaturated（Rust は saturating）→ **buf_len clamp が吸収して memory-safe**（コメント明記・コード変更不要）② `deny.toml unknown-git="allow"`（clack git dep に現状必要・allow-git リスト化は別 PR・defer）③ `[advisories]` に vulnerability=deny 既定の注記追加。bot 確認済 = GPL 隔離 3層・FFI 例外ガード（delete 除く）・buf_len 三段 clamp・unsafe Send・SC-free 性。
+
+**Done（PR2a 受け入れ基準・達成）**: ✅ default `cargo build`/`test` 緑（orbit-link-audio 非ビルド）・✅ `cargo build -p orbit-audio-daemon --features link-audio` 緑・✅ cargo-deny default = GPL-free pass / leak で fail・✅ permissive crate に依存行ゼロ（構造的境界）・✅ 既存テスト全緑（npm + cargo）・SC 既定経路 無改変・audio `play()` 意味論 無改変。**audio egress 証明は PR2b・tempo lead は PR3**。
+
+**PR2b/PR3 設計 carry-forward（advisor 2026-06-22・本 PR では実装しない・失わないよう記録）**:
+- **① beat anchoring**: commit で "now"（`clock().micros()`）を buffer-begin の beat として渡すと、ring latency 分の位相ずれ（receiver 側で δ ずれる）になる。**tempo leader であることは beat 配置と直交で、これを無害化しない**（当初コメントの「tempo leader なので無害」は誤った根拠 → 本 PR でコメント訂正済）。PR2b で cumulative-frames-drained から `beatsAtBufferBegin` を決定論再構成する（efficiency review の指摘と一致）。
+- **② threading 分離**: 「GPL consumer thread = Link audio thread」は **未検証の仮定**（link+run gate は peer 無しで実時間 timing を検証できない）。さらに `set_tempo`（`captureAppSessionState` = app-thread・block しうる）は `commit`（audio-thread）と同一スレッドに置けない → **PR3 の tempo 経路は PR2b の egress と別スレッド**。shim が両方を露出していても共有スレッドは前提にしていない。
+- **③ PR2b は fresh design**（mechanical 継続ではない）: mode 所有 = `Sequence.resolveDispatchChannel` を読んで TS が hardware-vs-Link を解決し daemon を mode-agnostic に保てるか確認 / RingTapSink の synced 経路 drop は **hard-error 化**（silent drop は beat desync）/ 上記 anchoring・threading。design-first（scout + advisor）で着手する。
+
+**スコープ外（後続）**: PR2b（single-pass multi-buffer render + rtrb 本番化〔synced 経路の drop は hard-error 化〕+ 実 audio routing + wire〔session.rs channel_name + TS stubs〕+ `Sequence.resolveDispatchChannel` の mode 所有確認）/ PR3（tempo leader + 層B）/ PR4（across-respawn e2e）。
+
 ### 6.160 feat(engine): A4-1 named-channel routing + sum-by-name on rust mixer (post-2.0 A4 / #322) (Jun 22, 2026)
 
 **Date**: 2026-06-22

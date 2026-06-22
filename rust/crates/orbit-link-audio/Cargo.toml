@@ -1,0 +1,28 @@
+# 🔴 GPL 隔離 crate。
+# Ableton Link は GPL-2.0-or-later / commercial の dual license。この crate だけは
+# workspace の `LicenseRef-Signal-compose-FairTrade-1.0` を **継承せず** GPL を明示し、
+# permissive な engine core(orbit-audio-core / -native / -wasm)から決して依存させない。
+# daemon が feature `link-audio`(default off)経由でのみ optional に取り込む。
+#
+# 非 member(rust/Cargo.toml の [workspace] members に入れない)。default build/graph
+# から外し、cargo-deny の "default graph は GPL-free" 不変条件を assertable に保つため、
+# package fields は workspace 継承せずハードコードする。
+[package]
+name = "orbit-link-audio"
+version = "0.0.1"
+edition = "2021"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/signalcompose/orbitscore"
+authors = ["Signal compose Inc."]
+description = "GPL-isolated Ableton LinkAudio egress shim (feature-gated; permissive core never depends on it)"
+publish = false
+
+[lib]
+name = "orbit_link_audio"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "2.0"
+
+[build-dependencies]
+cc = "1"
