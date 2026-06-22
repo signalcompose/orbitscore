@@ -449,7 +449,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (outputChannel) {
       this.warnOnce(
         'outputChannel',
-        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio) is not supported yet (A4) — playing on the hardware bus.`,
+        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio): egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
       )
     }
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
@@ -483,7 +483,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (outputChannel) {
       this.warnOnce(
         'outputChannel',
-        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio) is not supported yet (A4) — playing on the hardware bus.`,
+        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio): egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
       )
     }
     this.enqueue({

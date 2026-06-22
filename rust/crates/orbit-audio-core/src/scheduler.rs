@@ -288,9 +288,10 @@ impl Scheduler {
     /// 消す per-channel 同時 render（multi-buffer・1 パスで N channel を埋め transport を 1 回進める）
     /// は後続 PR（A4-2）で実装する。
     ///
-    /// 本番 RT 経路はこの invariant を持たない [`Scheduler::render_multi`]（1 パスで N channel を
-    /// 埋め transport を 1 回進める）を使う。`render_channel` は test tap 専用に残す
-    /// （`pub(crate)`。`Engine::render_channel`（pub + `#[doc(hidden)]`）経由で daemon の
+    /// 本番 RT 経路は（A4-2b-2 で）この invariant を持たない [`Scheduler::render_multi`]（1 パスで
+    /// N channel を埋め transport を 1 回進める）に移行する予定（A4-2b-1 時点では render_multi に
+    /// production caller は無く、本番 RT は引き続き `render` を呼ぶ）。`render_channel` は test tap
+    /// 専用に残す（`pub(crate)`。`Engine::render_channel`（pub + `#[doc(hidden)]`）経由で daemon の
     /// `render_offline_channel` が層A 検証に使用）。
     pub(crate) fn render_channel(&mut self, out: &mut [f32], channel: &str) {
         self.render_filtered(out, Some(channel));
@@ -332,8 +333,10 @@ impl Scheduler {
     /// これにより `render` + `render_channel` の混在/複数呼びによる transport 二重進行
     /// （`render_channel` doc 参照）を恒久解消する。
     ///
-    /// `channels` = (channel 名, 出力バッファ) の列。各 buffer は `hardware_out` と同じ frame 数
-    /// （= 同じ長さ）でなければならない。未登録 channel（`channels` に名前が無い）の event は
+    /// `channels` = (channel 名, 出力バッファ) の列。各 buffer は `hardware_out` と同じ長さ
+    /// （interleaved・len = frames × output_channels）でなければならない。この前提は debug build の
+    /// `debug_assert_eq!` でのみ検査し、release build では未チェック＝呼び出し元責任。未登録 channel
+    /// （`channels` に名前が無い）の event は
     /// どこにも出力されない（`render_channel` の unmatched skip と一致）。**channel タグを持つ
     /// event が無い**場合に限り `hardware_out` は [`Scheduler::render`] とビット同一になる（A4-1 の
     /// filter=None 不変条件を継承）。`channels` が空でも channel=Some の event は drop されるため、
@@ -1209,8 +1212,10 @@ mod tests {
     }
 
     #[test]
-    fn render_multi_unknown_channel_event_is_dropped() {
+    fn render_multi_unknown_channel_event_is_silent() {
         // channels に無い名前の event はどこにも出ない（hardware にも他 channel にも漏れない）。
+        // ※ event は drop されず retain される（read_pos 不変）。drop/diagnostic の policy は
+        //   render_multi が production RT になる A4-2b-2 で決める（本テストは「無音」を pin）。
         let mut s = Scheduler::new(48_000, 2);
         s.schedule(
             ScheduledSample::new(0.0, mk_sample_stereo(100))
@@ -1229,6 +1234,55 @@ mod tests {
         assert!(
             a_buf.iter().all(|&x| x == 0.0),
             "未登録 channel の event は他 channel にも出ない"
+        );
+    }
+
+    #[test]
+    fn render_multi_gain_ramp_advances_once_and_applies_to_all_buffers() {
+        // ramp 中の render_multi: master gain ramp は全バッファに **1 回だけ**進む。
+        // バッファごとに next_gain_frame を呼ぶ regression なら ramp が (N+1)× 進んで早く 0 に
+        // 達する（bug①）/ hw と channel の gain が食い違う（bug②）/ channel に gain 未適用
+        // （bug③）を捕捉。既存 render_multi テストは全て ramp_frames_remaining==0 開始で ramp
+        // 経路を踏まないため、本テストが render_multi の ramp 経路を pin する。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, Sample::new(vec![1.0f32; 200], 48_000, 1))
+                .with_pan(-1.0)
+                .with_region(0, 200),
+        );
+        s.schedule(
+            ScheduledSample::new(0.0, Sample::new(vec![1.0f32; 200], 48_000, 1))
+                .with_pan(-1.0)
+                .with_region(0, 200)
+                .with_channel(Some("a".to_string())),
+        );
+        s.set_global_gain(0.0, 100); // 100 frame で 1.0→0.0 の線形 ramp
+
+        let frames = 50usize;
+        let mut hw = vec![0.0f32; frames * 2];
+        let mut a_buf = vec![0.0f32; frames * 2];
+        {
+            let mut channels: [(&str, &mut [f32]); 1] = [("a", &mut a_buf)];
+            s.render_multi(&mut hw, &mut channels);
+        }
+        // 50/100 frame 経過 → gain ≈ 0.5。per-buffer 進行 regression なら ramp 完了（0.0）= bug①。
+        assert!(
+            (s.global_gain() - 0.5).abs() < 0.02,
+            "ramp が進みすぎ（per-buffer 多重進行?）: global_gain={}",
+            s.global_gain()
+        );
+        // hw と a_buf の同フレームは同じ scaled 値（共に hard-left の定数 1.0 → L = gain）= bug②。
+        assert!(
+            (hw[2] - a_buf[2]).abs() < 1e-5,
+            "hw/a_buf gain desync: hw[2]={} a_buf[2]={}",
+            hw[2],
+            a_buf[2]
+        );
+        // channel buf にも gain 適用済（frame0 で gain>0）= bug③。
+        assert!(
+            a_buf[2] > 0.0,
+            "channel buf に gain 未適用: a_buf[2]={}",
+            a_buf[2]
         );
     }
 }
