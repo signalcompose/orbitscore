@@ -40,7 +40,8 @@ confidence-threshold = 0.9
 multiple-versions = "allow"
 
 [advisories]
-# RUSTSEC は警告に留める(セキュリティトリアージは別管理)。
+# vulnerability(RUSTSEC)は cargo-deny の既定で deny(エラー)。ここでは yanked のみ
+# warn に緩和する(セキュリティトリアージは別管理)。
 yanked = "warn"
 
 [sources]

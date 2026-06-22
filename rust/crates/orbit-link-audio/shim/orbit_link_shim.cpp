@@ -56,7 +56,13 @@ void orbit_link_destroy(OrbitLink* link) {
     // teardown 中の例外は握りつぶす(解放は必ず行う)が、観測可能にログは残す。
     std::fprintf(stderr, "[orbit-link] destroy teardown exception (ignored)\n");
   }
-  delete link;
+  // ~OrbitLink → ~LinkAudio / ~LinkAudioSink。Link の dtor は noexcept 宣言が無い
+  // (本ファイル冒頭の前提)ため、delete も例外ガードして extern "C" 越えの UB を防ぐ。
+  try {
+    delete link;
+  } catch (...) {
+    std::fprintf(stderr, "[orbit-link] destroy delete exception (ignored)\n");
+  }
 }
 
 void orbit_link_enable(OrbitLink* link, int enable) {
@@ -128,6 +134,8 @@ int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
     // src(interleaved)の読み出しは buf_len(=呼び出し側 slice 長)と宛先
     // bh.maxNumSamples の両方で上限を取る。maxNumSamples は宛先容量であって src 境界
     // ではないため、buf_len でも clamp しないと overread しうる。
+    // num_frames*num_channels が size_t を overflow しても(現実の音声値では起きない)、
+    // 下の buf_len clamp が吸収する(過小な n は under-read で memory-safe・overread にならない)。
     size_t n = num_frames * num_channels;
     if (n > buf_len) n = buf_len;
     if (n > bh.maxNumSamples) n = bh.maxNumSamples;
