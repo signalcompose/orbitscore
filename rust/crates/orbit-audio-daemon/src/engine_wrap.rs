@@ -193,6 +193,47 @@ impl EngineWrap {
         ))
     }
 
+    /// Link セッションに tempo(BPM)を push し OrbitScore を tempo leader にする（PR3・#333）。
+    /// `LinkAudioControl::set_tempo` は内部で `captureAppSessionState`（非RT・block しうる）を呼ぶので、
+    /// daemon WS handler は **spawn_blocking** で audio スレッド以外に隔離すること（session.rs）。
+    /// `&self` で足りる: `set_link_tempo` は Rust 可視の可変状態を持たない（`LinkTempoControl` は `Arc`
+    /// 共有で、tempo 反映は shim の interior mutability＝captureAppSessionState→commit）。
+    /// `register_link_audio_channel` が `registered` HashMap を変更し `as_mut` を要するのと違い、ここは
+    /// `guard.as_ref()` で足りる。
+    #[cfg(feature = "link-audio")]
+    pub fn set_link_tempo(&self, bpm: f64) -> Result<(), WrapError> {
+        // mutex poison は egress 利用可能だが runtime で壊れた状態 → runtime error。
+        let guard = self
+            .link
+            .lock()
+            .map_err(|_| WrapError::LinkAudio("link mutex poisoned".into()))?;
+        match guard.as_ref() {
+            // set_tempo は成功 true / 失敗 false。false（shim 内 Link 例外・実質起きない）は
+            // false-positive success を返さず runtime error に昇格する（silent-failure 対策）。
+            Some(ctl) => {
+                if ctl.set_tempo(bpm) {
+                    Ok(())
+                } else {
+                    Err(WrapError::LinkAudio(
+                        "link set_tempo failed (Link rejected commit)".into(),
+                    ))
+                }
+            }
+            // egress 経路が無い（test backend）= unavailable（TS は warn-once で握り潰す）。
+            None => Err(WrapError::LinkAudioUnavailable(
+                "link audio not initialized (test backend has no egress path)".into(),
+            )),
+        }
+    }
+
+    /// feature `link-audio` 無効ビルド用の stub。TS は UNAVAILABLE を warn-once で握り潰す。
+    #[cfg(not(feature = "link-audio"))]
+    pub fn set_link_tempo(&self, _bpm: f64) -> Result<(), WrapError> {
+        Err(WrapError::LinkAudioUnavailable(
+            "engine built without 'link-audio' feature".into(),
+        ))
+    }
+
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
     /// daemon の 1 Hz ticker が polling して増加を WARNING event で surface する（非 RT observability）。
     /// link 未初期化（test backend）時は control 分が 0。test 注入分（本番 0）を必ず加える。

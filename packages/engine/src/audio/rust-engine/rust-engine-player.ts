@@ -47,9 +47,10 @@ import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './e
 /**
  * boundary で明示する未対応 feature gap の種別（A4 era）。
  * - `outputChannel`(LinkAudio) / `masterEffect`: 未対応 feature gap。
+ * - `linkTempo`: Link テンポリード（#283・A4-PR3）。daemon が feature 無効ビルドなら warn-once。
  * pan / slice 領域 / slice varispeed（rate≠1.0）は実装済みのため gap ではない。
  */
-type GapKind = 'outputChannel' | 'masterEffect'
+type GapKind = 'outputChannel' | 'masterEffect' | 'linkTempo'
 
 /** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
 export interface SliceSpec {
@@ -163,6 +164,7 @@ const RESPAWN_BACKOFF_MS = 150
 const freshWarned = (): Record<GapKind, boolean> => ({
   outputChannel: false,
   masterEffect: false,
+  linkTempo: false,
 })
 
 export class RustEnginePlayer implements AudioEngineBackend {
@@ -455,8 +457,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
-  async setLinkTempo(_bpm: number): Promise<void> {
-    // Link テンポリード（#283）は LinkAudio 同様 A4 era。S2 では no-op。
+  async setLinkTempo(bpm: number): Promise<void> {
+    try {
+      await this.daemon.setLinkTempo(bpm)
+    } catch (err) {
+      if (err instanceof DaemonProtocolError && err.code === 'LINK_AUDIO_UNAVAILABLE') {
+        this.warnOnce(
+          'linkTempo',
+          `⚠️  [rust-engine] setLinkTempo(${bpm}): Link テンポリードは daemon がビルドされていないため無効（feature link-audio 未ビルド）— tempo push はスキップされます。`,
+        )
+        return
+      }
+      throw err
+    }
   }
 
   /**

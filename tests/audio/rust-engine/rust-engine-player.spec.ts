@@ -62,6 +62,11 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
         code: 'LINK_AUDIO_UNAVAILABLE',
       })
     },
+    SetLinkTempo: () => {
+      throw Object.assign(new Error('mock daemon built without link-audio feature'), {
+        code: 'LINK_AUDIO_UNAVAILABLE',
+      })
+    },
     ...overrides,
   }
 }
@@ -369,6 +374,45 @@ describe('RustEnginePlayer with mock daemon', () => {
     const gapWarns = warn.mock.calls.filter((c) =>
       String(c[0]).includes('without the link-audio feature'),
     )
+    expect(gapWarns.length).toBe(0)
+    warn.mockRestore()
+  })
+
+  it('setLinkTempo: daemon が SetLinkTempo を受理 → throw せず warn も出さない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // Link テンポリードを持つ daemon（feature 有効）を模す: 受理して ok を返す。
+    const p = await boot(defaultHandlers({ SetLinkTempo: () => ({ status: 'accepted' }) }))
+    await expect(p.setLinkTempo(120)).resolves.toBeUndefined()
+    expect(server.received.some((r) => r.method === 'SetLinkTempo')).toBe(true)
+    const tempoWarns = warn.mock.calls.filter((c) => String(c[0]).includes('setLinkTempo'))
+    expect(tempoWarns.length).toBe(0)
+    warn.mockRestore()
+  })
+
+  it('setLinkTempo: LINK_AUDIO_UNAVAILABLE（feature 無効ビルド）は warn-once で握り潰す', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot() // 既定 handler が LINK_AUDIO_UNAVAILABLE を投げる
+    await expect(p.setLinkTempo(120)).resolves.toBeUndefined()
+    await p.setLinkTempo(130) // 2 回目も warn は増えない（warn-once）
+    const gapWarns = warn.mock.calls.filter((c) => String(c[0]).includes('setLinkTempo'))
+    expect(gapWarns.length).toBe(1)
+    warn.mockRestore()
+  })
+
+  it('setLinkTempo: LINK_AUDIO_RUNTIME（runtime 失敗）は feature-gap と区別して rethrow する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot(
+      defaultHandlers({
+        SetLinkTempo: () => {
+          // runtime 失敗（Link peer 不在等）→ feature-gap と誤認せず rethrow されるべき。
+          throw Object.assign(new Error('link tempo push failed: no peers'), {
+            code: 'LINK_AUDIO_RUNTIME',
+          })
+        },
+      }),
+    )
+    await expect(p.setLinkTempo(120)).rejects.toThrow()
+    const gapWarns = warn.mock.calls.filter((c) => String(c[0]).includes('setLinkTempo'))
     expect(gapWarns.length).toBe(0)
     warn.mockRestore()
   })

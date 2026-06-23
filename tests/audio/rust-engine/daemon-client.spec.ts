@@ -140,6 +140,32 @@ describe('DaemonClient with mock server', () => {
     })
   })
 
+  it('SetLinkTempo は bpm を params に送って resolve する', async () => {
+    const url = await server.start({
+      SetLinkTempo: () => ({ status: 'accepted' }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await expect(client.setLinkTempo(120)).resolves.toBeUndefined()
+    const rec = server.received.find((r) => r.method === 'SetLinkTempo')
+    expect(rec?.params.bpm).toBe(120)
+  })
+
+  it('SetLinkTempo の LINK_AUDIO_UNAVAILABLE は DaemonProtocolError に変換される', async () => {
+    const url = await server.start({
+      SetLinkTempo: () => {
+        const e = new Error('engine built without link-audio feature') as Error & {
+          code?: string
+        }
+        e.code = 'LINK_AUDIO_UNAVAILABLE'
+        throw e
+      },
+    })
+    await client.start({ wsUrlOverride: url })
+    await expect(client.setLinkTempo(120)).rejects.toMatchObject({
+      code: 'LINK_AUDIO_UNAVAILABLE',
+    })
+  })
+
   it('error レスポンスは DaemonProtocolError に変換される', async () => {
     const url = await server.start({
       SetGlobalGain: () => {

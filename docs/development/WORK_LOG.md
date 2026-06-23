@@ -17,6 +17,109 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.165 feat(engine): A4-PR3 Link tempo leader — Rust daemon + TS wire (#333) (Jun 23, 2026)
+
+**Date**: 2026-06-23
+**Status**: ✅ 実装完了（レビュー前）
+**Branch**: `333-linkaudio-tempo-leader`
+**Issue**: #333（A4 PR3 Link tempo leader）
+**PR**: #334
+
+`global.tempo()` を Ableton Link セッションに push し OrbitScore を Rust 経路
+（`ORBITSCORE_ENGINE=rust`）の Link tempo leader にする。SC 経路は既に動作中（#283）で、
+本 PR は Rust 経路の no-op を実装して parity を埋める（net-new・新規 GPL 面ゼロ）。
+tempo FFI（`set_tempo`/`session_tempo`）は A4-2b で GPL 隔離 crate に既存だったため、
+残作業は wire + handle-ownership/threading + tempo-change re-anchor に絞られた。
+
+**Rust 実装（threading seam・Opus 直列・advisor 設計確認済）**:
+- **論点1 handle 共有 = 案A + newtype**: `orbit-link-audio/src/lib.rs` で `LinkAudioOutput` を
+  `Arc` 共有可能化（`unsafe impl Sync` 追加・SAFETY を「app-state path=control / audio-state
+  path=consumer の disjoint thread role を Link が内部同期」で根拠付け）。control 側は
+  `LinkTempoControl(Arc<LinkAudioOutput>)` newtype で `set_tempo` のみ公開し audio-state
+  メソッド（commit/capture_beat/session_tempo）を型レベルで隠蔽（`set_tempo` は `pub(crate)`）。
+- **論点3 re-anchor = poll-based**（advisor が当初の explicit 推奨を撤回）: `egress.rs` で consumer が
+  毎 pump `session_tempo()` を poll し、変化検出で segment baseline（`seg_anchor_beat`/
+  `seg_anchor_produced`/`beat_per_frame`）を切り替える。Link は last-setter-wins なので自分の push も
+  他ピア（Ableton 等）の変更も追従する（explicit を包含・control→consumer 同期配線不要）。**`capture_beat()`
+  を再呼びしない**連続 carry（ring latency 位相誤差の再導入を回避・advisor の load-bearing detail）。
+  境界での beat 連続 + slope 変化を単体テストで固定（`reanchor_is_beat_continuous_and_changes_slope`・
+  `reanchor_slowdown_reduces_slope_but_keeps_continuity`）。
+- **論点2 blocking = spawn_blocking**: `session.rs` の `SetLinkTempo` arm が `set_tempo`（内部
+  `captureAppSessionState`・非RT・block しうる）を LoadSample と同様 spawn_blocking で隔離する
+  （tokio worker を塞がない・app-state path を audio スレッド外で実行する Link 制約も満たす）。
+- daemon `link_audio.rs`: `LinkAudioControl` が `LinkTempoControl` を保持、`consumer_loop` は
+  `Arc<LinkAudioOutput>` を所有（teardown = `orbit_link_destroy` は app-side cleanup〔enable(false)+
+  delete〕で audio-thread 非依存＝shim 確認済のため、last-Arc-drop が consumer 外でも安全）。
+  `engine_wrap.rs`: `set_link_tempo(&self)`（feature 有 = `as_ref` で `set_tempo` / 無 =
+  `LINK_AUDIO_UNAVAILABLE` stub）。
+- **lifecycle 決定（MVP）**: tempo-lead は Link subsystem up（feature `link-audio` 起動・
+  `LinkAudioControl` spawn 済）を要する。active channel 0 でも可。channel 完全非依存の単独 leader への
+  decouple は defer。
+- **license**: tempo API は既に `orbit-link-audio` 内＝**新規 GPL 面ゼロ**。`cargo deny check licenses`
+  ok（default graph GPL-free 維持）。
+
+**Rust テスト**: `orbit-link-audio` 9 passed（re-anchor 連続性 2 件含む）/ daemon lib 6 passed +
+integration 18 passed / `cargo test --workspace` 緑。
+
+**TS 実装内容**:
+- `protocol-types.ts`: `CommandMethod` union に `'SetLinkTempo'` を追加（Rust daemon 名と一致）
+- `daemon-client.ts`: `setLinkTempo(bpm: number)` メソッドを追加 — `this.request('SetLinkTempo', { bpm })` パターン
+- `rust-engine-player.ts`: `GapKind` に `'linkTempo'` 追加・`freshWarned()` に `linkTempo: false` 追加・`setLinkTempo` no-op を実装に差し替え（`LINK_AUDIO_UNAVAILABLE` = warn-once 握り潰し、`LINK_AUDIO_RUNTIME` = rethrow）
+- `mock-daemon-server.ts`: `MockDaemonHandlers` に `SetLinkTempo?: MockHandler` 追加
+- `daemon-client.spec.ts`: 2 テスト追加（bpm params 送信・UNAVAILABLE 変換）
+- `rust-engine-player.spec.ts`: 3 テスト追加 + defaultHandlers に SetLinkTempo デフォルト追加（registerLinkAudioChannel と対称）
+
+**技術的決定**:
+- GapKind を `'linkTempo'` で分離（`outputChannel` と共用しない）— channel 登録と tempo push は独立した warn サイレンス単位
+- defaultHandlers() の SetLinkTempo デフォルトが LINK_AUDIO_UNAVAILABLE を投げる — boot() 単体で warn-once パスを自動カバー
+- Rust 側依存点: method 文字列 `'SetLinkTempo'`・params `{ bpm: number }` が確定済みインタフェース
+
+**テスト結果**: 全 1187 テスト green（27 skipped は既存）
+
+**レビュー（/simplify・4 観点並列）**: reuse / altitude = clean（altitude は poll-based re-anchor を
+「the strongest altitude win」と評価）。適用 2 件:
+- **simplification**: egress.rs の anchor / re-anchor が同じ 4 フィールド更新を重複 →
+  `start_segment(anchor_beat, produced, bpm)` ヘルパに集約（segment invariant を 1 箇所に）。
+- **efficiency**: `session_tempo()` を per-channel `pump_once` で N 回読んでいた → consumer_loop の
+  round ごと 1 回に hoist し `pump_once(&output, session_tempo)` へ snapshot を渡す（session-global な
+  値の N FFI reads/round → 1・correctness は各 channel が自分の `last_bpm` と比較で保持）。
+- skip: F-1（commit 内の二重 `captureAudioSessionState`・ABI 変更が要る design-level・informational）/
+  エラー文字列重複の const 化（never-parsed の cosmetic）/ `set_link_tempo` の mutex lock（tempo 変更は
+  稀で benign・audio-side disjoint は無傷）。
+- 適用後: orbit-link-audio 9 passed + daemon lib 6 passed + clippy clean（diff 内）。
+
+**レビュー（/code:pr-review-team・4 agent 並列 + CI）**: CI green（Build / code-review）。Critical 0。
+Important 6 件を fixer で解消（advisor 確認後）:
+- **SF-1（silent-failure）**: shim `orbit_link_set_tempo` が void で **false-positive success** → `int` 返り値化し
+  `LinkAudioOutput::set_tempo -> bool`・`false` を `WrapError::LinkAudio`(runtime) に昇格。push が silent fail
+  すると MIDI（`global.tempo()` free-run）と Link-audio egress（古い session tempo を poll）が別 tempo に乖離
+  するのを防ぐ。既存 `LINK_AUDIO_RUNTIME` taxonomy に乗る・**新規 GPL 面ゼロ**。
+- **CR-1（code-review）**: `commit_channel`/`capture_beat` を `pub(crate)`（egress.rs のみ）。`session_tempo`/
+  `register_channel`/`set_enabled` は cross-crate で daemon が呼ぶため `pub` 維持。SAFETY コメントを
+  「型で締まる分（pub(crate)）」と「呼び出し規律で守る分（pub・consumer/control thread）」に正直に書き分け。
+- **CR-2**: bpm に sanity 上限 `MAX_LINK_BPM=999`（`+Inf` 伝播 / `beat_per_frame` overflow 防止・下限なし）。
+- **CM-1（comment）**: /simplify の hoist で stale 化した struct doc（「tempo poll は pump_once」）を修正。
+- **PT-1（pr-test）**: re-anchor trigger を pure `reanchor_beat_on_change` に抽出し device-free に sequence
+  テスト（anchor→steady→change→epsilon→capture 例外。trait/mock は over-engineering として回避・advisor）。
+- **PT-2**: `validate_bpm` を pure 抽出 + 単体テスト。
+- comment 改善 3 件（SAFETY に `session_tempo` Thread-safe:no 追記 / teardown コメントを「最後の Arc」/
+  engine_wrap の `as_ref` を interior mutability 説明に）。
+- 検証: orbit-link-audio 10 + daemon lib 7 + integration 18 passed・clippy clean（diff 内）。
+- **再レビュー（silent-failure + pr-test 再実行・advisor 指示の one-time closure check）**: SF-1 / PT-1 / PT-2 すべて
+  **resolved** を再確認。新規 SF-2（global.ts:265 の `.catch` が opaque log）は **defer**: `DaemonProtocolError` が
+  `super(`[${code}] ${message}`)`（errors.ts:45）で code+message をレンダーするため既に有用＝opaque でない。warn-once
+  再設計は never-path（set_tempo は no-peer でも success・Link 例外でのみ false）への過剰設計 + global.ts は SC/Rust
+  共有のため **reject**（advisor）。SF-3（pre-existing・Minor）= shim `orbit_link_session_tempo` の catch に fprintf を
+  追加し set_tempo と observability を対称化（1行）。SF-4 benign（None は production unreachable）。**内部レビュー
+  closed**（毎修正後の再レビューは LLM が必ず新指摘を出す非終了ループ＝substance 収束で閉じる・advisor）→ 外部
+  closure は @claude bot（load-bearing seam: unsafe Sync の call-discipline / FFI bool contract / poll re-anchor）。
+- **外部レビュー（@claude bot・load-bearing seam スコープ・3m57s）**: 3 点すべて ✅ 問題なし — ① `unsafe impl Sync`
+  健全（型レベル + 抽象層で cross-thread 誤呼びが閉じている）② FFI bool contract end-to-end（false-positive success
+  なし・false は全段 rethrow・ピン留めテスト付き）③ poll re-anchor continuity（tempo 変化点で `new_anchor` が旧 slope の
+  beat と同値＝数学的に連続・`capture_beat()` 非再呼びで ring-latency 誤差を再導入しない）。実質的 blocking なし。唯一の
+  minor = SAFETY コメントに `num_peers`（test-only・Thread-safe:yes）が未言及 → 1 行追記で対応。**Critical/Important=0・
+  bot 承認**。owner マージ待ち（self-merge しない）。
+
 ### 6.164 feat(engine): A4-2b-2b dynamic N-channel LinkAudio registration (pool + readiness race / #331) (Jun 23, 2026)
 
 **Date**: 2026-06-23

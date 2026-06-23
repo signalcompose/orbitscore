@@ -165,16 +165,21 @@ int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
   }
 }
 
-void orbit_link_set_tempo(OrbitLink* link, double bpm) {
-  if (!link) return;
+// Link tempo を push する。戻り値 1=成功 / 0=失敗(link null or Link 例外を catch)。呼び出し側
+// (Rust)は false を runtime error に昇格し、false-positive success を返さない(silent-failure 対策)。
+int orbit_link_set_tempo(OrbitLink* link, double bpm) {
+  if (!link) return 0;
   try {
     auto state = link->link.captureAppSessionState();
     state.setTempo(bpm, link->link.clock().micros());
     link->link.commitAppSessionState(state);
+    return 1;
   } catch (const std::exception& e) {
     std::fprintf(stderr, "[orbit-link] set_tempo failed: %s\n", e.what());
+    return 0;
   } catch (...) {
     std::fprintf(stderr, "[orbit-link] set_tempo failed: unknown exception\n");
+    return 0;
   }
 }
 
@@ -196,6 +201,8 @@ double orbit_link_session_tempo(OrbitLink* link) {
   try {
     return link->link.captureAudioSessionState().tempo();
   } catch (...) {
+    // set_tempo と対称に observability を残す(0.0 は Rust 側で 120 fallback / re-anchor skip・SF-3)。
+    std::fprintf(stderr, "[orbit-link] session_tempo failed: unknown exception\n");
     return 0.0;
   }
 }
