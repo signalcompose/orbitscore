@@ -46,6 +46,47 @@ async function waitFor(
   throw new Error(`waitFor: condition not met within ${timeoutMs}ms`)
 }
 
+/**
+ * respawn 後の recovery 不変式（#300 と #335 が共有）。実時間 kill は非決定的なので invariant
+ * ベースで検証する（exact-match / toEqual はしない）。
+ * @param p respawn 済み player（新 daemon に再接続済み）。
+ * @param post kill mark 以降の dispatch（gap 中は guard が drop するので全て respawn 後）。
+ * @param preKillPid kill 前の daemon pid（respawn で必ず変わる）。
+ * @param preKillNowSec kill 直前の daemon transport now（再 anchor がこれを下回るべき基準）。
+ */
+async function assertRecoveryInvariants(
+  p: RustEnginePlayer,
+  post: DispatchInfo[],
+  preKillPid: number | undefined,
+  preKillNowSec: number,
+): Promise<void> {
+  // (1) liveness: poll は止まらず、daemon は respawn（新 pid）し、loops が復帰している。
+  expect(p.isRunning).toBe(true)
+  expect(post.length).toBeGreaterThan(0)
+  const postPid = p.daemonPid
+  expect(postPid).toBeGreaterThan(0)
+  expect(postPid).not.toBe(preKillPid)
+
+  // (2) transport 再 anchor（desync 無し）: 新 daemon は transport≈0 から始まるので、復帰後の
+  //     daemonNowSec は kill 直前より大きく下がる（stale anchor の ~Ns を引きずらない）。
+  //     これが唯一 load-bearing な不変式（再 anchor が壊れると新 daemon に「数秒先」を送り desync）。
+  expect(post[0].daemonNowSec).toBeLessThan(preKillNowSec - 0.5)
+  expect(post[0].daemonNowSec).toBeGreaterThan(0)
+
+  // (3) onset clip しない: 復帰後の全 dispatch で lead = timeSec − daemonNowSec ≈ lookahead（正値）。
+  for (const d of post) {
+    const lead = d.timeSec - d.daemonNowSec
+    expect(lead).toBeGreaterThan(0)
+    expect(lead).toBeLessThan(LOOKAHEAD_SEC + 0.1)
+  }
+
+  // (4) daemon-side 状態クエリ: 再 establish 済み（fresh transport / sample 再ロード / play_id 健全）。
+  const status = await p.getDaemonStatus()
+  expect(Number(status.uptime_sec)).toBeLessThan(preKillNowSec) // fresh daemon（transport リセット）
+  expect(Number(status.loaded_samples)).toBeGreaterThanOrEqual(1) // sample 再ロード済み
+  expect(Number(status.active_plays)).toBeGreaterThanOrEqual(0) // orphan なし（有限・健全）
+}
+
 describe.runIf(RUN)('RustEnginePlayer recovery floor against real daemon (#300)', () => {
   let player: RustEnginePlayer | null = null
 
@@ -97,31 +138,8 @@ describe.runIf(RUN)('RustEnginePlayer recovery floor against real daemon (#300)'
 
     const post = dispatches.slice(killMark)
 
-    // (1) liveness: poll は止まらず、daemon は respawn（新 pid）し、loops が復帰している。
-    expect(p.isRunning).toBe(true)
-    expect(post.length).toBeGreaterThan(0)
-    const postPid = p.daemonPid
-    expect(postPid).toBeGreaterThan(0)
-    expect(postPid).not.toBe(preKillPid)
-
-    // (2) transport 再 anchor（desync 無し）: 新 daemon は transport≈0 から始まるので、復帰後の
-    //     daemonNowSec は kill 直前（≥2s）より大きく下がる（stale anchor の ~Ns を引きずらない）。
-    //     これが唯一 load-bearing な不変式（再 anchor が壊れると新 daemon に「数秒先」を送り desync）。
-    expect(post[0].daemonNowSec).toBeLessThan(preKillNowSec - 0.5)
-    expect(post[0].daemonNowSec).toBeGreaterThan(0)
-
-    // (3) onset clip しない: 復帰後の全 dispatch で lead = timeSec − daemonNowSec ≈ lookahead（正値）。
-    for (const d of post) {
-      const lead = d.timeSec - d.daemonNowSec
-      expect(lead).toBeGreaterThan(0)
-      expect(lead).toBeLessThan(LOOKAHEAD_SEC + 0.1)
-    }
-
-    // (4) daemon-side 状態クエリ: 再 establish 済み（fresh transport / sample 再ロード / play_id 健全）。
-    const status = await p.getDaemonStatus()
-    expect(Number(status.uptime_sec)).toBeLessThan(preKillNowSec) // fresh daemon（transport リセット）
-    expect(Number(status.loaded_samples)).toBeGreaterThanOrEqual(1) // sample 再ロード済み
-    expect(Number(status.active_plays)).toBeGreaterThanOrEqual(0) // orphan なし（有限・健全）
+    // recovery 不変式（liveness/新 pid・transport 再 anchor・onset clip なし・daemon 状態）。
+    await assertRecoveryInvariants(p, post, preKillPid, preKillNowSec)
   }
 
   it('hard-death（SIGKILL・panic hook 素通り）から respawn しセッション生存', async () => {
@@ -232,26 +250,30 @@ describe('#335 fixture integrity — full DSL produces non-degenerate params (no
     const recorded = recording.getRecorded()
     expect(recorded.length).toBeGreaterThan(0)
 
-    // toDaemonParams（本番共有変換）で rate / pan / gain を解決する。
+    // toDaemonParams（本番共有変換）で rate / pan / gain を解決する（1 play 1 回だけ）。
     const resolver = new RustEnginePlayer()
     for (const [abs, sec] of Object.entries(DURATIONS)) resolver.seedDuration(abs, sec)
+    const params = recorded.map((play) => ({
+      filepath: play.filepath,
+      ...resolver.toDaemonParams(play),
+    }))
 
-    const arp = recorded.filter((p) => p.filepath.includes('arpeggio'))
-    const nonArp = recorded.filter((p) => !p.filepath.includes('arpeggio'))
+    const arp = params.filter((p) => p.filepath.includes('arpeggio'))
+    const nonArp = params.filter((p) => !p.filepath.includes('arpeggio'))
     expect(arp.length).toBeGreaterThan(0)
     expect(nonArp.length).toBeGreaterThan(0)
 
     // varispeed: chop(2) スロット詰めで rate=2.0（≠1.0 が genuine に起きる）。
-    for (const p of arp) expect(resolver.toDaemonParams(p).rate).toBeCloseTo(2.0, 2)
+    for (const p of arp) expect(p.rate).toBeCloseTo(2.0, 2)
     // chop(1) 全体再生は rate=1.0。
-    for (const p of nonArp) expect(resolver.toDaemonParams(p).rate).toBeCloseTo(1.0, 2)
+    for (const p of nonArp) expect(p.rate).toBeCloseTo(1.0, 2)
 
     // pan が複数値（kick=-60 / snare=+60 / chopd=+20 → 正規化 [-1,1]）。
-    const pans = new Set(recorded.map((p) => resolver.toDaemonParams(p).pan.toFixed(3)))
+    const pans = new Set(params.map((p) => p.pan.toFixed(3)))
     expect(pans.size).toBeGreaterThanOrEqual(3)
 
     // per-event gain が複数値（kick=-3 / snare=-6 / chopd=-4 dB → 線形 amp）。
-    const gains = new Set(recorded.map((p) => resolver.toDaemonParams(p).gain.toFixed(4)))
+    const gains = new Set(params.map((p) => p.gain.toFixed(4)))
     expect(gains.size).toBeGreaterThanOrEqual(3)
   })
 })
@@ -304,6 +326,7 @@ describe.runIf(RUN)('RustEnginePlayer active-loops across respawn — full DSL (
     expect(preKillNowSec).toBeGreaterThan(4.0)
 
     // --- SIGKILL（panic hook 素通り = C-ABI segfault 代理）---
+    // expect は型を narrow しないので、process.kill(number) のために number|undefined を絞る。
     if (!preKillPid) throw new Error('no daemon pid to kill')
     process.kill(preKillPid, 'SIGKILL')
 
@@ -313,38 +336,17 @@ describe.runIf(RUN)('RustEnginePlayer active-loops across respawn — full DSL (
 
     const post = dispatches.slice(killMark)
 
-    // (1) liveness + respawn（新 pid）。
-    expect(p.isRunning).toBe(true)
-    expect(post.length).toBeGreaterThan(0)
-    const postPid = p.daemonPid
-    expect(postPid).toBeGreaterThan(0)
-    expect(postPid).not.toBe(preKillPid)
+    // #300 と共有する recovery 不変式（liveness/新 pid・再 anchor・onset clip なし・daemon 状態）。
+    await assertRecoveryInvariants(p, post, preKillPid, preKillNowSec)
 
-    // (2) transport 再 anchor（唯一 load-bearing な不変式）: fresh daemon は transport≈0 から
-    //     始まるので post の daemonNowSec は preKill（≥4s）より大きく下がる。
-    expect(post[0].daemonNowSec).toBeLessThan(preKillNowSec - 0.5)
-    expect(post[0].daemonNowSec).toBeGreaterThan(0)
-
-    // (3) onset clip しない: 全 post dispatch で lead = timeSec − daemonNowSec ≈ lookahead（正）。
-    for (const d of post) {
-      const lead = d.timeSec - d.daemonNowSec
-      expect(lead).toBeGreaterThan(0)
-      expect(lead).toBeLessThan(LOOKAHEAD_SEC + 0.1)
-    }
-
-    // (4) active loops（複数）の復帰: post dispatch が複数サンプルにまたがる（1 つの loop だけ
+    // 以下は interpreter 駆動 full DSL 固有の追加検証（#300 proxy では出せない観測）:
+    // (A) active loops（複数）の復帰: post dispatch が複数サンプルにまたがる（1 つの loop だけ
     //     生き残ったのではなく、loop 群が再 establish された）。
     const postSamples = new Set(post.map((d) => path.basename(d.filepath)))
     expect(postSamples.size).toBeGreaterThanOrEqual(2)
 
-    // (5) per-event gain が respawn を跨いで保持（複数の異なる gain が流れ続ける）。
+    // (B) per-event gain が respawn を跨いで保持（複数の異なる gain が流れ続ける）。
     const postGains = new Set(post.map((d) => d.gain.toFixed(4)))
     expect(postGains.size).toBeGreaterThanOrEqual(2)
-
-    // (6) daemon-side 状態: fresh transport / sample 再ロード / play_id 健全。
-    const status = await p.getDaemonStatus()
-    expect(Number(status.uptime_sec)).toBeLessThan(preKillNowSec)
-    expect(Number(status.loaded_samples)).toBeGreaterThanOrEqual(1)
-    expect(Number(status.active_plays)).toBeGreaterThanOrEqual(0)
   }, 70_000)
 })

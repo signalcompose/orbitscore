@@ -68,6 +68,12 @@ A4 完了時点で full DSL 全部入りで consolidation する（recovery cons
 A4 完結（PR4 マージ）で #300/#304 の defer backlog は一掃（残るは capture seam と bot Finding 4
 = quit backoff の 2 件のみ・いずれも trigger 待ち）。
 
+**レビュー（/simplify）**: 4 cleanup agent（reuse/simplification/efficiency/altitude）適用 —
+recovery 不変式を `assertRecoveryInvariants` ヘルパに抽出（#300 runKillTest と #335 で共有・
+~25 行重複を解消）/ 非gated guard の `toDaemonParams` を play ごと 1 回にキャッシュ。
+skip: 公開 `dispose()` 追加（§6 scope fence = 観測 seam でなく lifecycle・cast は shutdown.ts 前例で
+許容）/ `if(!preKillPid)throw`（dead でなく TS narrowing・コメント追記）。適用後 gated 4 テスト全緑。
+
 ### 6.165 feat(engine): A4-PR3 Link tempo leader — Rust daemon + TS wire (#333) (Jun 23, 2026)
 
 **Date**: 2026-06-23
