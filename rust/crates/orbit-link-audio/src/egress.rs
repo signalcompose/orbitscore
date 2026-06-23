@@ -50,10 +50,36 @@ fn reconstruct_beat(
     seg_anchor_beat + produced.saturating_sub(seg_anchor_produced) as f64 * beat_per_frame
 }
 
+/// anchored 後の re-anchor 判定(pure)。`session_tempo` が `last_bpm` から有意(> [`TEMPO_EPSILON_BPM`])に
+/// 変化していれば、新 segment の起点 beat(= 今の再構成 beat・連続 carry)を `Some` で返す。変化なし /
+/// `session_tempo <= 0`(capture 例外 or 初期化前)は `None`。`capture_beat()` を呼ばず output 非依存なので、
+/// pump_once の trigger logic を device 不要で unit-test できる(PT-1)。
+#[inline]
+fn reanchor_beat_on_change(
+    seg_anchor_beat: f64,
+    seg_anchor_produced: u64,
+    beat_per_frame: f64,
+    last_bpm: f64,
+    session_tempo: f64,
+    produced: u64,
+) -> Option<f64> {
+    if session_tempo > 0.0 && (session_tempo - last_bpm).abs() > TEMPO_EPSILON_BPM {
+        Some(reconstruct_beat(
+            seg_anchor_beat,
+            seg_anchor_produced,
+            beat_per_frame,
+            produced,
+        ))
+    } else {
+        None
+    }
+}
+
 /// 1 つの channel への egress driver。**`LinkAudioOutput` は所有しない**（A4-2b-2b）: consumer
 /// thread が 1 つの `LinkAudioOutput`（Link session）を持ち、その上の複数 channel をそれぞれ本 driver
-/// で回す。`pump_once` に共有 output を `&` で渡す（commit / anchor capture / tempo poll はその output
-/// 経由）。**beat anchor は per-channel**（各 channel が自分の first-pump-with-data で capture・session
+/// で回す。`pump_once` に共有 output を `&` で渡す（commit / anchor capture はその output 経由。tempo
+/// snapshot は consumer_loop が round ごとに 1 回 `output.session_tempo()` で取得し引数で渡す）。
+/// **beat anchor は per-channel**（各 channel が自分の first-pump-with-data で capture・session
 /// 単位に hoist しない）。GPL consumer thread が所有する(`Send`)。
 pub struct LinkChannelEgress {
     consumer: rtrb::Consumer<f32>,
@@ -133,8 +159,9 @@ impl LinkChannelEgress {
     /// ring に 1 block 分溜まっていれば drain して `output` の当該 channel へ commit する。commit したら
     /// `Some(result)`、データ不足なら `None`。consumer thread が共有 `output` を `&` で渡してループで
     /// 呼ぶ(None の間は短い sleep)。`session_tempo` は consumer_loop が round ごとに 1 回読んだ snapshot
-    /// (session-global なので per-channel に読み直さない・efficiency)。<=0 は capture 失敗(shim catch)で、
-    /// 初回 anchor の fallback には使うが re-anchor の比較基準にはしない(過渡的な 0 で誤検出しない)。
+    /// (session-global なので per-channel に読み直さない・efficiency)。<=0 は capture 例外(shim が 0.0 を
+    /// 返す)または Link セッション初期化前の過渡状態で、初回 anchor の fallback には使うが re-anchor の
+    /// 比較基準にはしない(過渡的な 0 で誤検出しない)。
     pub fn pump_once(&mut self, output: &LinkAudioOutput, session_tempo: f64) -> Option<CommitResult> {
         let block_samples = self.block_frames * self.num_channels;
         if self.consumer.slots() < block_samples {
@@ -152,15 +179,16 @@ impl LinkChannelEgress {
             let bpm = if session_tempo > 0.0 { session_tempo } else { 120.0 };
             self.start_segment(output.capture_beat(self.quantum), produced, bpm);
             self.anchored = true;
-        } else if session_tempo > 0.0 && (session_tempo - self.last_bpm).abs() > TEMPO_EPSILON_BPM {
+        } else if let Some(new_anchor) = reanchor_beat_on_change(
+            self.seg_anchor_beat,
+            self.seg_anchor_produced,
+            self.beat_per_frame,
+            self.last_bpm,
+            session_tempo,
+            produced,
+        ) {
             // tempo 変更を検出 → segment を切り替える。新 segment の起点 beat は「今の再構成 beat」(連続)・
             // 起点 produced は今の produced・slope を新 tempo に。`capture_beat()` は呼ばない(連続 carry)。
-            let new_anchor = reconstruct_beat(
-                self.seg_anchor_beat,
-                self.seg_anchor_produced,
-                self.beat_per_frame,
-                produced,
-            );
             self.start_segment(new_anchor, produced, session_tempo);
         }
 
@@ -289,5 +317,39 @@ mod tests {
         // 境界後 produced=2000 → 2.0 + 1000*0.001 = 3.0(旧 slope なら 2.0+1000*0.002=4.0)。
         let after = reconstruct_beat(seg2_beat, seg2_prod, bpf2, 2000);
         assert!((after - 3.0).abs() < 1e-9, "after={after}");
+    }
+
+    #[test]
+    fn reanchor_decision_sequence_anchor_steady_change_drop() {
+        // pump_once の re-anchor trigger logic(else-if 分岐)を pure helper 経由で device 不要に検証(PT-1)。
+        // anchored 済み(seg=0, produced=0, last_bpm=120)を起点に steady → 変更 → 微小変化 → capture 例外。
+        let sr = 48_000u32;
+        let bpf120 = (120.0 / 60.0) / sr as f64;
+
+        // steady（同 tempo）→ re-anchor しない。
+        assert_eq!(
+            reanchor_beat_on_change(0.0, 0, bpf120, 120.0, 120.0, 4800),
+            None
+        );
+        // tempo 変更(120→140) → Some(今の再構成 beat = 連続点)。
+        let at_change = reconstruct_beat(0.0, 0, bpf120, 4800);
+        assert_eq!(
+            reanchor_beat_on_change(0.0, 0, bpf120, 120.0, 140.0, 4800),
+            Some(at_change)
+        );
+        // epsilon 未満の揺れ → None（浮動小数ノイズで誤検出しない）。
+        assert_eq!(
+            reanchor_beat_on_change(0.0, 0, bpf120, 120.0, 120.0 + 1e-9, 4800),
+            None
+        );
+        // session_tempo<=0（capture 例外 or 初期化前）→ None（誤検出しない）。
+        assert_eq!(
+            reanchor_beat_on_change(0.0, 0, bpf120, 120.0, 0.0, 4800),
+            None
+        );
+        assert_eq!(
+            reanchor_beat_on_change(0.0, 0, bpf120, 120.0, -1.0, 4800),
+            None
+        );
     }
 }

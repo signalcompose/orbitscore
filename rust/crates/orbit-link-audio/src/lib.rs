@@ -50,7 +50,7 @@ extern "C" {
         beats_at_begin: f64,
         quantum: f64,
     ) -> c_int;
-    fn orbit_link_set_tempo(link: *mut OrbitLinkRaw, bpm: f64);
+    fn orbit_link_set_tempo(link: *mut OrbitLinkRaw, bpm: f64) -> c_int;
     fn orbit_link_capture_beat(link: *mut OrbitLinkRaw, quantum: f64) -> f64;
     fn orbit_link_session_tempo(link: *mut OrbitLinkRaw) -> f64;
 }
@@ -91,15 +91,21 @@ pub struct LinkAudioOutput {
 }
 
 // SAFETY (Send): 構築スレッドから GPL consumer thread へ move して使う。
-// SAFETY (Sync): PR3 で `Arc<LinkAudioOutput>` を control スレッドと consumer=audio
-// スレッドで共有する。アクセスは Ableton Link の thread モデルに従い disjoint:
-//   - app-state path (`set_tempo` = captureAppSessionState・内部 mutex) は control
-//     スレッド(spawn_blocking)から・[`LinkTempoControl`] 経由のみ。
-//   - audio-state path (`commit_channel` / `capture_beat` / `session_tempo` =
-//     captureAudioSessionState・単一 audio スレッド専用) は consumer スレッドから。
-// 両 path は別スレッドから呼ばれ Link が内部で同期する。control 側は
-// [`LinkTempoControl`] newtype で audio-state メソッドに型レベルで到達できない
-// (`set_tempo` は `pub(crate)`・newtype のみが委譲呼び出しする)。
+// SAFETY (Sync): PR3 で `Arc<LinkAudioOutput>` を control スレッドと consumer=audio スレッドで
+// 共有する。同時アクセスが起きないことが不変条件で、Ableton Link の thread モデルに従い path を
+// disjoint なスレッドへ分離して担保する:
+//   - app-state path (`set_tempo` = captureAppSessionState・内部 mutex で Thread-safe:yes) は
+//     control スレッド(spawn_blocking)から。`set_tempo` は `pub(crate)` で [`LinkTempoControl`]
+//     経由のみ到達でき、これは **型レベルで保証**される。
+//   - audio-state path のうち `commit_channel` / `capture_beat` (= captureAudioSessionState・
+//     Thread-safe:no・単一 audio スレッド専用) は `pub(crate)` で本 crate(egress.rs)内からのみ
+//     呼べる(型レベルで cross-crate を締める)。
+//   - `session_tempo` (= captureAudioSessionState・Thread-safe:no) と `register_channel` /
+//     `set_enabled` は **cross-crate で daemon が呼ぶため `pub`**。これらは型では締められず、
+//     daemon 側の **呼び出し規律**で disjoint 性を守る: `session_tempo` は consumer(audio) thread の
+//     consumer_loop が round ごとに 1 回 / `register_channel` は consumer thread / `set_enabled` は
+//     consumer thread spawn 前の control から(いずれも audio session state と競合しない)。
+// よって app-state path と audio-state path は常に別スレッドから呼ばれ Link が内部で同期する。
 unsafe impl Send for LinkAudioOutput {}
 unsafe impl Sync for LinkAudioOutput {}
 
@@ -146,8 +152,9 @@ impl LinkAudioOutput {
     /// interleaved f32 の 1 ブロックを channel に commit する。`beats_at_begin` は呼び出し側
     /// (GPL consumer thread)が cumulative-frames から決定論再構成した buffer-begin の beat 位置
     /// (ring latency 分の位相ずれを避けるため shim 内では "now" から計算しない・A4-2b-2)。
+    /// audio-state path(captureAudioSessionState)なので `pub(crate)`＝egress.rs からのみ呼ぶ。
     #[allow(clippy::too_many_arguments)]
-    pub fn commit_channel(
+    pub(crate) fn commit_channel(
         &self,
         channel_id: i32,
         interleaved: &[f32],
@@ -193,17 +200,20 @@ impl LinkAudioOutput {
         }
     }
 
-    /// Link テンポリーダーとして BPM を push する。内部で `captureAppSessionState`
+    /// Link テンポリーダーとして BPM を push する。成功 `true` / 失敗 `false`(shim 内で link null or
+    /// Link 例外を catch・実質起きない)。呼び出し側は `false` を runtime error に昇格して
+    /// false-positive success を避ける(silent-failure 対策)。内部で `captureAppSessionState`
     /// (非RT・block しうる)を呼ぶので audio スレッド以外から呼ぶこと。control 側は
     /// [`LinkTempoControl`] 経由でのみ到達する(`pub(crate)`)。
-    pub(crate) fn set_tempo(&self, bpm: f64) {
-        // SAFETY: raw は valid。
-        unsafe { orbit_link_set_tempo(self.raw, bpm) };
+    pub(crate) fn set_tempo(&self, bpm: f64) -> bool {
+        // SAFETY: raw は valid。shim は 1=成功 / 0=失敗。
+        unsafe { orbit_link_set_tempo(self.raw, bpm) == 1 }
     }
 
     /// egress 開始時の beat anchor を取得する(quantum 指定)。GPL consumer thread
     /// (= Link "audio thread")から 1 回だけ呼ぶ。以後は cumulative-frames から線形再構成する。
-    pub fn capture_beat(&self, quantum: f64) -> f64 {
+    /// audio-state path(captureAudioSessionState)なので `pub(crate)`＝egress.rs からのみ呼ぶ。
+    pub(crate) fn capture_beat(&self, quantum: f64) -> f64 {
         // SAFETY: raw は valid。
         unsafe { orbit_link_capture_beat(self.raw, quantum) }
     }
@@ -242,11 +252,11 @@ impl LinkTempoControl {
         Self { output }
     }
 
-    /// Link セッションに BPM を push し OrbitScore を tempo leader にする。
-    /// `captureAppSessionState`(非RT・block しうる)を内部で呼ぶので、呼び出し側は
-    /// audio スレッド以外(spawn_blocking 等)で実行すること。
-    pub fn set_tempo(&self, bpm: f64) {
-        self.output.set_tempo(bpm);
+    /// Link セッションに BPM を push し OrbitScore を tempo leader にする。成功 `true` / 失敗 `false`
+    /// (shim 内で Link 例外を catch・実質起きない)。`captureAppSessionState`(非RT・block しうる)を
+    /// 内部で呼ぶので、呼び出し側は audio スレッド以外(spawn_blocking 等)で実行すること。
+    pub fn set_tempo(&self, bpm: f64) -> bool {
+        self.output.set_tempo(bpm)
     }
 }
 
@@ -281,7 +291,7 @@ mod tests {
         let rc_bad = out.commit_channel(99, &silence, 256, 2, 48_000, 0.0, 4.0);
         assert_eq!(rc_bad, CommitResult::ChannelNotFound);
 
-        out.set_tempo(124.0);
+        assert!(out.set_tempo(124.0), "set_tempo は no-peer でも commit 成功する");
         // drop で teardown。
     }
 

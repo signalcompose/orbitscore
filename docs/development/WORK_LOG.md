@@ -88,6 +88,25 @@ integration 18 passed / `cargo test --workspace` 緑。
   稀で benign・audio-side disjoint は無傷）。
 - 適用後: orbit-link-audio 9 passed + daemon lib 6 passed + clippy clean（diff 内）。
 
+**レビュー（/code:pr-review-team・4 agent 並列 + CI）**: CI green（Build / code-review）。Critical 0。
+Important 6 件を fixer で解消（advisor 確認後）:
+- **SF-1（silent-failure）**: shim `orbit_link_set_tempo` が void で **false-positive success** → `int` 返り値化し
+  `LinkAudioOutput::set_tempo -> bool`・`false` を `WrapError::LinkAudio`(runtime) に昇格。push が silent fail
+  すると MIDI（`global.tempo()` free-run）と Link-audio egress（古い session tempo を poll）が別 tempo に乖離
+  するのを防ぐ。既存 `LINK_AUDIO_RUNTIME` taxonomy に乗る・**新規 GPL 面ゼロ**。
+- **CR-1（code-review）**: `commit_channel`/`capture_beat` を `pub(crate)`（egress.rs のみ）。`session_tempo`/
+  `register_channel`/`set_enabled` は cross-crate で daemon が呼ぶため `pub` 維持。SAFETY コメントを
+  「型で締まる分（pub(crate)）」と「呼び出し規律で守る分（pub・consumer/control thread）」に正直に書き分け。
+- **CR-2**: bpm に sanity 上限 `MAX_LINK_BPM=999`（`+Inf` 伝播 / `beat_per_frame` overflow 防止・下限なし）。
+- **CM-1（comment）**: /simplify の hoist で stale 化した struct doc（「tempo poll は pump_once」）を修正。
+- **PT-1（pr-test）**: re-anchor trigger を pure `reanchor_beat_on_change` に抽出し device-free に sequence
+  テスト（anchor→steady→change→epsilon→capture 例外。trait/mock は over-engineering として回避・advisor）。
+- **PT-2**: `validate_bpm` を pure 抽出 + 単体テスト。
+- comment 改善 3 件（SAFETY に `session_tempo` Thread-safe:no 追記 / teardown コメントを「最後の Arc」/
+  engine_wrap の `as_ref` を interior mutability 説明に）。
+- 検証: orbit-link-audio 10 + daemon lib 7 + integration 18 passed・clippy clean（diff 内）。署名変更を含むため
+  **再レビュー（silent-failure + pr-test 再実行 + 全 suite）で closure を裏取り**（advisor 指示・自己宣言しない）。
+
 ### 6.164 feat(engine): A4-2b-2b dynamic N-channel LinkAudio registration (pool + readiness race / #331) (Jun 23, 2026)
 
 **Date**: 2026-06-23

@@ -226,6 +226,16 @@ fn to_json_or_fallback<T: serde::Serialize>(v: &T) -> String {
     }
 }
 
+/// SetLinkTempo の bpm 上限（sanity bound）。Ableton Link の実用上限近辺。musical な厳密ゲートではなく、
+/// `f64::MAX` 等が `beat_per_frame` を `+Inf` に飛ばして beat 計算を壊すのを防ぐ防御的キャップ。
+const MAX_LINK_BPM: f64 = 999.0;
+
+/// SetLinkTempo の bpm を検証する（pure）。NaN / ±Inf / 非正値を弾き、`MAX_LINK_BPM` で上限を課す。
+/// 下限は付けない（遅い tempo を弾かない）。
+fn validate_bpm(bpm: f64) -> bool {
+    bpm.is_finite() && bpm > 0.0 && bpm <= MAX_LINK_BPM
+}
+
 /// Command を dispatch し、Response JSON を組み立てる。
 ///
 /// `tx` は event 送信用チャンネル（PlayEnded 等の遅延通知に使う）。
@@ -306,7 +316,7 @@ async fn handle_command(
         // 実行する Link 制約も満たす）。feature 無効ビルドは engine stub が LINK_AUDIO_UNAVAILABLE を返し
         // TS は warn-once で握り潰す。
         "SetLinkTempo" => match params.get("bpm").and_then(|p| p.as_f64()) {
-            Some(bpm) if bpm.is_finite() && bpm > 0.0 => {
+            Some(bpm) if validate_bpm(bpm) => {
                 let engine = engine.clone();
                 let res = tokio::task::spawn_blocking(move || engine.set_link_tempo(bpm)).await;
                 match res {
@@ -320,7 +330,10 @@ async fn handle_command(
             }
             _ => err(
                 &id,
-                ProtocolError::new("MALFORMED_REQUEST", "missing or non-positive 'bpm' param"),
+                ProtocolError::new(
+                    "MALFORMED_REQUEST",
+                    "missing or out-of-range 'bpm' param (0 < bpm <= 999)",
+                ),
             ),
         },
         "PlayAt" => {
@@ -573,5 +586,22 @@ mod tests {
     fn link_audio_runtime_maps_to_runtime_code() {
         let e = WrapError::LinkAudio("channel limit reached".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_RUNTIME");
+    }
+
+    // SetLinkTempo の bpm 検証（PT-2 / CR-2）: musical な値は受理、garbage は弾く。
+    #[test]
+    fn validate_bpm_accepts_musical_range_rejects_garbage() {
+        // 受理: 一般的な範囲 + 遅い tempo（下限を付けないので 20 も valid）+ 上限ちょうど。
+        assert!(validate_bpm(120.0));
+        assert!(validate_bpm(20.0));
+        assert!(validate_bpm(MAX_LINK_BPM));
+        // 棄却: 非正値・NaN・±Inf・上限超過（Inf 伝播 / beat_per_frame overflow を防ぐ）。
+        assert!(!validate_bpm(0.0));
+        assert!(!validate_bpm(-1.0));
+        assert!(!validate_bpm(f64::NAN));
+        assert!(!validate_bpm(f64::INFINITY));
+        assert!(!validate_bpm(f64::NEG_INFINITY));
+        assert!(!validate_bpm(MAX_LINK_BPM + 1.0));
+        assert!(!validate_bpm(f64::MAX));
     }
 }

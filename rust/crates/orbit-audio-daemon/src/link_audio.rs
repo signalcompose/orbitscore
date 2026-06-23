@@ -195,8 +195,10 @@ fn consumer_loop(
         }
     }
     // ループ脱出 → channels + この thread の output Arc が drop。control 側(LinkTempoControl)も同一 Arc を
-    // 保持するため、Link teardown は最後の Arc が落ちる時(EngineWrap drop)に走る。LinkAudioGuard の join が
-    // この thread の終了を保証するので、teardown 時に audio スレッドは動いていない(destroy は app-side)。
+    // 保持するため、Link teardown(orbit_link_destroy)は **最後の Arc**(consumer thread 側 or
+    // EngineWrap.link 側のどちらか後の drop)が落ちた時に 1 回走る。LinkAudioGuard の join がこの thread の
+    // 終了を保証してから後段が drop されるので、teardown 時に audio スレッドは動いていない(destroy は
+    // app-side cleanup・PR3)。
 }
 
 /// GPL consumer thread を明示 teardown する RAII guard。**drop で shutdown フラグを立てて join**。
@@ -296,11 +298,13 @@ impl LinkAudioControl {
             .sum()
     }
 
-    /// Link セッションに tempo(BPM)を push し OrbitScore を tempo leader にする(PR3)。`set_tempo` は
-    /// 内部で `captureAppSessionState`(非RT・block しうる)を呼ぶので、呼び出し側(daemon WS handler)は
-    /// spawn_blocking で audio スレッド以外に隔離すること。`&self`(tempo は Arc・内部可変性不要)。
-    pub fn set_tempo(&self, bpm: f64) {
-        self.tempo.set_tempo(bpm);
+    /// Link セッションに tempo(BPM)を push し OrbitScore を tempo leader にする(PR3)。成功 `true` /
+    /// 失敗 `false`(shim 内で Link 例外を catch・実質起きない)。呼び出し側は `false` を runtime error に
+    /// 昇格する(false-positive success を返さない)。`set_tempo` は内部で `captureAppSessionState`
+    /// (非RT・block しうる)を呼ぶので、呼び出し側(daemon WS handler)は spawn_blocking で audio スレッド
+    /// 以外に隔離すること。`&self`(tempo は Arc・内部可変性不要)。
+    pub fn set_tempo(&self, bpm: f64) -> bool {
+        self.tempo.set_tempo(bpm)
     }
 
     /// 名前付き channel を登録する。`RingTapSink` と readiness flag を生成し、**sink+ready を callback

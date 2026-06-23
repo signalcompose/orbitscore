@@ -195,8 +195,11 @@ impl EngineWrap {
 
     /// Link セッションに tempo(BPM)を push し OrbitScore を tempo leader にする（PR3・#333）。
     /// `LinkAudioControl::set_tempo` は内部で `captureAppSessionState`（非RT・block しうる）を呼ぶので、
-    /// daemon WS handler は **spawn_blocking** で audio スレッド以外に隔離すること（session.rs）。tempo は
-    /// `LinkTempoControl`（`Arc<LinkAudioOutput>`）経由なので `&self` で足りる（register と違い `as_ref`）。
+    /// daemon WS handler は **spawn_blocking** で audio スレッド以外に隔離すること（session.rs）。
+    /// `&self` で足りる: `set_link_tempo` は Rust 可視の可変状態を持たない（`LinkTempoControl` は `Arc`
+    /// 共有で、tempo 反映は shim の interior mutability＝captureAppSessionState→commit）。
+    /// `register_link_audio_channel` が `registered` HashMap を変更し `as_mut` を要するのと違い、ここは
+    /// `guard.as_ref()` で足りる。
     #[cfg(feature = "link-audio")]
     pub fn set_link_tempo(&self, bpm: f64) -> Result<(), WrapError> {
         // mutex poison は egress 利用可能だが runtime で壊れた状態 → runtime error。
@@ -205,9 +208,16 @@ impl EngineWrap {
             .lock()
             .map_err(|_| WrapError::LinkAudio("link mutex poisoned".into()))?;
         match guard.as_ref() {
+            // set_tempo は成功 true / 失敗 false。false（shim 内 Link 例外・実質起きない）は
+            // false-positive success を返さず runtime error に昇格する（silent-failure 対策）。
             Some(ctl) => {
-                ctl.set_tempo(bpm);
-                Ok(())
+                if ctl.set_tempo(bpm) {
+                    Ok(())
+                } else {
+                    Err(WrapError::LinkAudio(
+                        "link set_tempo failed (Link rejected commit)".into(),
+                    ))
+                }
             }
             // egress 経路が無い（test backend）= unavailable（TS は warn-once で握り潰す）。
             None => Err(WrapError::LinkAudioUnavailable(
