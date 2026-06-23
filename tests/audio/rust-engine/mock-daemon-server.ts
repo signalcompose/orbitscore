@@ -29,6 +29,7 @@ export interface MockDaemonHandlers {
   StopAll?: MockHandler
   SetGlobalGain?: MockHandler
   RegisterLinkAudioChannel?: MockHandler
+  SetLinkTempo?: MockHandler
   GetStatus?: MockHandler
 }
 

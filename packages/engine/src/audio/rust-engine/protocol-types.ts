@@ -26,6 +26,9 @@ export type CommandMethod =
   // LinkAudio outputChannel を daemon に登録する（#209・A4-2b-2）。daemon が
   // feature `link-audio` 無効なら LINK_AUDIO_UNAVAILABLE、runtime 失敗なら LINK_AUDIO_RUNTIME を返す。
   | 'RegisterLinkAudioChannel'
+  // OrbitScore の global.tempo を Link に push してテンポリーダーになる（#283・A4-PR3）。
+  // daemon が feature `link-audio` 無効なら LINK_AUDIO_UNAVAILABLE、runtime 失敗なら LINK_AUDIO_RUNTIME を返す。
+  | 'SetLinkTempo'
   | 'GetStatus'
   | 'Ping'
   // gated な fault 注入（recovery floor の kill-test 専用）。daemon 側で

@@ -266,6 +266,14 @@ export class DaemonClient extends EventEmitter {
     await this.request('RegisterLinkAudioChannel', { channel })
   }
 
+  /**
+   * OrbitScore の global.tempo を Link に push してテンポリーダーになる（#283・A4-PR3）。
+   * daemon が feature `link-audio` 無効ビルドなら LINK_AUDIO_UNAVAILABLE、runtime 失敗なら LINK_AUDIO_RUNTIME で reject。
+   */
+  async setLinkTempo(bpm: number): Promise<void> {
+    await this.request('SetLinkTempo', { bpm })
+  }
+
   async getStatus(): Promise<Record<string, unknown>> {
     return this.request('GetStatus', {})
   }

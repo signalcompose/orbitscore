@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.165 feat(engine): A4-PR3 setLinkTempo TS-side wire (#333) (Jun 23, 2026)
+
+**Date**: 2026-06-23
+**Status**: ✅ 完了
+**Branch**: `333-linkaudio-tempo-leader`
+**Issue**: #333（A4 PR3 Link tempo leader の TS 側実装）
+
+**実装内容**:
+- `protocol-types.ts`: `CommandMethod` union に `'SetLinkTempo'` を追加（Rust daemon 名と一致）
+- `daemon-client.ts`: `setLinkTempo(bpm: number)` メソッドを追加 — `this.request('SetLinkTempo', { bpm })` パターン
+- `rust-engine-player.ts`: `GapKind` に `'linkTempo'` 追加・`freshWarned()` に `linkTempo: false` 追加・`setLinkTempo` no-op を実装に差し替え（`LINK_AUDIO_UNAVAILABLE` = warn-once 握り潰し、`LINK_AUDIO_RUNTIME` = rethrow）
+- `mock-daemon-server.ts`: `MockDaemonHandlers` に `SetLinkTempo?: MockHandler` 追加
+- `daemon-client.spec.ts`: 2 テスト追加（bpm params 送信・UNAVAILABLE 変換）
+- `rust-engine-player.spec.ts`: 3 テスト追加 + defaultHandlers に SetLinkTempo デフォルト追加（registerLinkAudioChannel と対称）
+
+**技術的決定**:
+- GapKind を `'linkTempo'` で分離（`outputChannel` と共用しない）— channel 登録と tempo push は独立した warn サイレンス単位
+- defaultHandlers() の SetLinkTempo デフォルトが LINK_AUDIO_UNAVAILABLE を投げる — boot() 単体で warn-once パスを自動カバー
+- Rust 側依存点: method 文字列 `'SetLinkTempo'`・params `{ bpm: number }` が確定済みインタフェース
+
+**テスト結果**: 全 1187 テスト green（27 skipped は既存）
+
 ### 6.164 feat(engine): A4-2b-2b dynamic N-channel LinkAudio registration (pool + readiness race / #331) (Jun 23, 2026)
 
 **Date**: 2026-06-23
