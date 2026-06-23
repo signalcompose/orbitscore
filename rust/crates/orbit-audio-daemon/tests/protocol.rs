@@ -484,6 +484,69 @@ async fn daemon_error_warning_on_xrun() {
     assert!(saw_warning, "STREAM_XRUN warning event not received");
 }
 
+/// LinkAudio egress drop が増えると DaemonError (severity=warning, code=LINK_EGRESS_DROP) が発火する。
+/// xrun と同じ 1 Hz ticker 経路。StubBackend は実 `LinkAudioControl` を持たないため、`link_egress_drops_arc`
+/// の **本番経路から分離した注入 seam**（本番常に 0）でこの event を driver する（`record_xrun` のように
+/// 本番と同一 counter を書く xrun seam とは異なる）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_link_egress_drop() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から egress drop を注入（1 Hz ticker が link_egress_ring_drops の増加を検知して発火）。
+    daemon
+        .engine
+        .link_egress_drops_arc()
+        .fetch_add(512, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "LINK_EGRESS_DROP"
+                {
+                    warning_message = Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("LINK_EGRESS_DROP warning event not received");
+    // message は累積 drop 数（512）を含む = daemon_error_event の format! が壊れていないこと。
+    assert!(
+        message.contains("512"),
+        "LINK_EGRESS_DROP message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**（last_link_drops が据え置かれること）。
+    // 再発火すると 1 Hz で warn が溢れる回帰になる。StreamStats は流れるが LINK_EGRESS_DROP は来ない。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError" && msg["data"]["code"] == "LINK_EGRESS_DROP" {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "LINK_EGRESS_DROP must not re-fire without additional drops (latch regression)"
+    );
+}
+
 /// device_lost が記録されると DaemonError (severity=fatal, code=DEVICE_LOST) が発火する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn daemon_error_fatal_on_device_lost() {

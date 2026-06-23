@@ -95,27 +95,51 @@ pub struct OutputStream {
     pub channels: u16,
 }
 
+/// callback が同時に egress できる LinkAudio channel の上限（A4-2b-2b）。RT callback の per-block
+/// stack `ArrayVec` 容量と一致させる。**cap は control 側（`register_channel`）で強制**するため
+/// callback はこれを超える channel を受け取らない（callback で log しない＝RT 安全）。実用上の
+/// channel 数を遥かに上回る値。
+pub const MAX_LINK_CHANNELS: usize = 64;
+
 /// LinkAudio channel を RT callback に届けるための activation メッセージ（A4-2b-2）。
 /// control thread が ring 生成・scratch 事前確保まで行い、本構造体を reg-ring 経由で callback へ
-/// 渡す（callback は受け取って格納するだけ＝RT alloc を避ける）。`sink` は対になる
+/// 渡す（callback は受け取って pool へ追加するだけ＝RT alloc を避ける）。`sink` は対になる
 /// `rtrb::Consumer<f32>` を GPL consumer thread が drain する producer 側。
 pub struct LinkChannelActivate {
     pub name: String,
     pub sink: RingTapSink,
     /// per-block scratch。control が `max_block_frames * channels` で事前確保する。
     pub scratch: Vec<f32>,
+    /// **readiness flag**（A4-2b-2b）: GPL consumer thread が当該 channel の Link 登録 + egress 構築を
+    /// 終えたら `true` にする。callback は `false` の間この channel を render_multi 対象から外し commit
+    /// もしない。これにより「callback が push するが consumer が drain しない ring（partial-failure で
+    /// 溢れて silent）」が **構造的に発生しない**。steady-state の共有者は RT callback（`le.channels`
+    /// 内の本構造体）と consumer thread（`ActiveChannel`）の 2 つ。control は `register_channel` 構築後に
+    /// 自分の clone を手放す。
+    pub ready: Arc<AtomicBool>,
 }
 
-/// cpal callback が保持する LinkAudio egress 状態（2b-2a は **単一 channel**）。
-/// pool + N-channel + readiness race は 2b-2b。
+/// cpal callback が保持する LinkAudio egress の channel pool（A4-2b-2b・最大 [`MAX_LINK_CHANNELS`]）。
+/// `reg_rx` から新 channel を受け取り `channels` に追加する。同名再登録は control 側の冪等 guard が
+/// 抑止するため、`channels` への push は常に新規 channel（既存 entry を drop しない＝RT 安全）。
 struct LinkEgress {
     reg_rx: rtrb::Consumer<LinkChannelActivate>,
-    channel: Option<LinkChannelActivate>,
+    channels: Vec<LinkChannelActivate>,
+}
+
+/// channel が egress 対象か = **ready** かつ **scratch が block 以上**（A4-2b-2b）。`render_block` の
+/// pass 1（render_multi 引数組み）と pass 2（sink commit）で同一判定を使い divergence を防ぐ。pure
+/// なので CI で単体検証する（not-ready / scratch 不足 / active を pin）。
+#[inline]
+fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool {
+    ready && scratch_len >= block
 }
 
 /// 1 callback 分の render。`link` が無い（hardware-only）なら従来通り `engine.render`（ビット同一）。
-/// `link` 有りなら reg-ring を drain して channel を activate し、`render_multi` で hardware と
-/// channel buffer を 1 パスで埋め、channel buffer を ring へ push する（egress）。
+/// `link` 有りなら reg-ring を drain して channel pool を更新し、**ready な channel のみ**を
+/// `render_multi` で hardware と一緒に 1 パスで埋め、各 channel buffer を ring へ push する（egress）。
+/// ready が 0 でも `render_multi(hw, &[])` を呼ぶ（`engine.render` に落とすと channel-tagged event が
+/// hardware に bleed するため）。
 #[inline]
 fn render_block(
     engine: &Engine,
@@ -123,39 +147,72 @@ fn render_block(
     output_channels: usize,
     hw: &mut [f32],
 ) {
-    if let Some(le) = link {
-        // reg-ring を drain（2b-2a は last-wins で単一 channel を activate）。RT で alloc しない
-        // （scratch は control が事前確保済み）。
-        // 🔴 RT-safety: `le.channel` が既に `Some(old)` だと `old`（String+Vec+Arc）の heap 解放が
-        // RT スレッド上で起きる。これを防ぐのは `LinkAudioControl::register_channel` の冪等 guard
-        // で、同名再登録時に `reg_tx.push` を抑止するため、ここでは `None → Some` の遷移しか起きない。
-        // 2b-2b で reg-ring を pool 化し複数 push を許す際は、この drop が RT で発生しうるので要再設計。
-        while let Ok(act) = le.reg_rx.pop() {
-            le.channel = Some(act);
-        }
-        if let Some(ch) = &mut le.channel {
-            let bs = (hw.len() / output_channels) * output_channels;
-            // scratch は control が `MAX_BLOCK_FRAMES * channels`（device buffer より遥かに大）で
-            // 事前確保する不変。これが破れると channel-tagged event が下の hardware fallback に
-            // 漏れる（無音ではなく hardware へ bleed する）ので dev では loud に検出する。
+    use arrayvec::ArrayVec;
+
+    let Some(le) = link else {
+        // hardware-only。従来 render とビット同一。
+        engine.render(hw);
+        return;
+    };
+
+    // reg-ring を drain → 新 channel を pool へ追加（RT で alloc しない・scratch は control が事前確保）。
+    // 同名は control の冪等 guard で来ないので既存 entry を drop しない（RT-safe）。cap は control が
+    // 強制するので pool は MAX_LINK_CHANNELS を超えない。
+    while let Ok(act) = le.reg_rx.pop() {
+        le.channels.push(act);
+    }
+
+    let bs = (hw.len() / output_channels) * output_channels;
+
+    // egress に乗せる条件（pass 1/2 で同一）: ready かつ scratch が block 以上。両 pass で同じ closure を
+    // 使い **論理的な** divergence を防ぐ。ただし `ready` は consumer thread が concurrent に false→true
+    // にするため、pass 1 の後に ready 化した channel は pass 2 のみに入りうる（その block は無音で commit・
+    // 次 callback から正常）= benign。`bs` を capture するだけで `le.channels` は借用しない。
+    let egress_active = |ch: &LinkChannelActivate| {
+        channel_egress_active(ch.ready.load(Ordering::Relaxed), ch.scratch.len(), bs)
+    };
+
+    // pass 1: active な channel から render_multi 引数を per-callback stack ArrayVec で組む（heap alloc
+    // なし）。借用は render_multi 呼び出しまでに閉じる。
+    let mut chans: ArrayVec<(&str, &mut [f32]), MAX_LINK_CHANNELS> = ArrayVec::new();
+    for ch in le.channels.iter_mut() {
+        if !egress_active(ch) {
+            // scratch は control が `MAX_BLOCK_FRAMES * channels`（device buffer より遥かに大）で事前
+            // 確保する不変。ready なのに不足したら channel audio が出ないので dev で loud に検出
+            // （not-ready は静かに skip・release は安全側で skip）。
             debug_assert!(
-                ch.scratch.len() >= bs,
-                "link channel scratch ({}) < block ({bs}); channel audio would bleed to hardware",
+                !ch.ready.load(Ordering::Relaxed) || ch.scratch.len() >= bs,
+                "link channel '{}' scratch ({}) < block ({bs})",
+                ch.name,
                 ch.scratch.len()
             );
-            if ch.scratch.len() >= bs {
-                // 1-element stack array（heap alloc なし）。render_multi が hw と ch.scratch を
-                // 1 パスで埋め transport を 1 回進める。借用は次行までに終わる。
-                let mut chans = [(ch.name.as_str(), &mut ch.scratch[..bs])];
-                engine.render_multi(hw, &mut chans);
-                // channel buffer を ring へ push（満杯なら RingTapSink が drop カウント）。
-                ch.sink.commit(&ch.scratch[..bs]);
-                return;
-            }
-            // scratch 不足（想定外）→ release では安全側で hardware のみにフォールバック。
+            continue;
+        }
+        if chans
+            .try_push((ch.name.as_str(), &mut ch.scratch[..bs]))
+            .is_err()
+        {
+            // cap は control（`register_channel`）が `MAX_LINK_CHANNELS` で強制するので構造上到達不能。
+            // ここに来たら control cap と callback ArrayVec 容量が drift した証拠 → dev で loud に
+            // （release は安全側で残り channel を skip・RT で panic させない）。
+            debug_assert!(
+                false,
+                "link channel pool exceeded ArrayVec cap {MAX_LINK_CHANNELS} (control cap drifted)"
+            );
+            break;
         }
     }
-    engine.render(hw);
+    engine.render_multi(hw, &mut chans);
+    drop(chans); // ArrayVec の借用を閉じてから sink commit（scratch を再借用するため）。
+
+    // pass 2: pass 1 と同一述語の active channel の buffer を ring へ push。
+    for ch in le.channels.iter_mut() {
+        if !egress_active(ch) {
+            continue;
+        }
+        // 満杯なら RingTapSink が drop カウント（GPL consumer が produced-frames に算入し beat 維持）。
+        ch.sink.commit(&ch.scratch[..bs]);
+    }
 }
 
 /// 出力起動の戻り値（Engine・stream guard・stats）。
@@ -183,7 +240,8 @@ pub fn start_default_output_with_link_egress(
     let (reg_tx, reg_rx) = rtrb::RingBuffer::new(reg_capacity);
     let link = LinkEgress {
         reg_rx,
-        channel: None,
+        // cap は control が強制するので最大 MAX_LINK_CHANNELS。callback で push のみ・realloc を避ける。
+        channels: Vec::with_capacity(MAX_LINK_CHANNELS),
     };
     let (engine, stream, stats) = start_output_inner(Some(link))?;
     Ok((engine, stream, stats, reg_tx))
@@ -444,5 +502,63 @@ mod tests {
         let snap = stats.snapshot();
         assert_eq!(snap.xruns, 1);
         assert!(!snap.device_lost);
+    }
+
+    // A4-2b-2b: egress 判定（ready かつ scratch 充足）の pure ロジックを CI で pin。render_block の
+    // not-ready / scratch 不足の skip 分岐がこの判定に集約される（実 callback 経路は gated 層B）。
+    #[test]
+    fn channel_egress_active_requires_ready_and_sized_scratch() {
+        // active: ready かつ scratch >= block。
+        assert!(channel_egress_active(true, 512, 512));
+        assert!(channel_egress_active(true, 1024, 512));
+        // not-ready: consumer が Link 登録前 → egress しない（never-drained-ring 回避）。
+        assert!(!channel_egress_active(false, 1024, 512));
+        // scratch 不足: hardware bleed/無音を避けるため除外。
+        assert!(!channel_egress_active(true, 256, 512));
+        // not-ready かつ scratch 不足。
+        assert!(!channel_egress_active(false, 0, 512));
+    }
+
+    // A4-2b-2b gating spike（advisor）: RT callback で N channel pool から render_multi 引数
+    // `&mut [(&str, &mut [f32])]` を **heap alloc なし**（per-callback stack ArrayVec）で組めるか、
+    // かつ call-body lifetime の `&mut` 借用を受けるかを確認する。これが通れば 2b-2b の N-channel
+    // 配線が成立する（通らなければ別アプローチ）。
+    #[test]
+    fn arrayvec_n_channel_slice_builds_from_pool_without_heap() {
+        use arrayvec::ArrayVec;
+        const MAX_N: usize = 8;
+
+        // pool を模す: (name, scratch) の Vec（実コードは LinkChannelActivate の Vec）。
+        let mut pool: Vec<(String, Vec<f32>)> = vec![
+            ("a".to_string(), vec![1.0; 4]),
+            ("b".to_string(), vec![2.0; 4]),
+        ];
+
+        // render_multi 風の単一パス fn（core の render_multi が取る形）。
+        fn fill_zero(chans: &mut [(&str, &mut [f32])]) {
+            for (_, buf) in chans.iter_mut() {
+                buf.fill(0.0);
+            }
+        }
+
+        {
+            // callback body: pool の各 entry から (name, &mut scratch) を stack ArrayVec へ。
+            let mut chans: ArrayVec<(&str, &mut [f32]), MAX_N> = ArrayVec::new();
+            for (name, scratch) in pool.iter_mut() {
+                // overflow（pool > MAX_N）は実 render_block では debug_assert!(false) で panic（dev）/
+                // 残り channel を silent skip（release）。RT callback では log しない（cap は control 強制）。
+                if chans
+                    .try_push((name.as_str(), scratch.as_mut_slice()))
+                    .is_err()
+                {
+                    panic!("pool exceeds MAX_N");
+                }
+            }
+            fill_zero(&mut chans);
+            // chans はここで drop され pool への借用が解ける。
+        }
+
+        // 借用解除後に pool を読める = 単一パスで全 channel buffer を埋められた。
+        assert!(pool.iter().all(|(_, s)| s.iter().all(|&x| x == 0.0)));
     }
 }

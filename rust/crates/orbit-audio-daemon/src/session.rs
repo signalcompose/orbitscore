@@ -19,8 +19,9 @@ use tracing::warn;
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError, ERROR_CODE_DEVICE_LOST,
-    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
-    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
+    ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
+    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
+    EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -28,6 +29,19 @@ const EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// StreamStats の送出間隔。protocol 仕様で 1 Hz 固定。
 const STREAM_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// `EVENT_DAEMON_ERROR` を共通形（severity / code / message の3フィールド）で構築する。
+/// 1 Hz ticker の fatal(device_lost) / warning(xrun) / warning(link egress drop) が共有する。
+fn daemon_error_event(severity: &str, code: &str, message: String) -> Event {
+    Event::new(
+        EVENT_DAEMON_ERROR,
+        json!({
+            "severity": severity,
+            "code": code,
+            "message": message,
+        }),
+    )
+}
 
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
@@ -62,6 +76,7 @@ pub async fn run(
             let mut ticker = tokio::time::interval_at(start, STREAM_STATS_INTERVAL);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_xruns: u64 = 0;
+            let mut last_link_drops: u64 = 0;
             let mut device_lost_reported = false;
             loop {
                 ticker.tick().await;
@@ -70,13 +85,10 @@ pub async fn run(
 
                 // fatal を warning より先に送り、client が最終イベントとして確実に観測できる順序にする。
                 if snapshot.device_lost && !device_lost_reported {
-                    let fatal_evt = Event::new(
-                        EVENT_DAEMON_ERROR,
-                        json!({
-                            "severity": ERROR_SEVERITY_FATAL,
-                            "code": ERROR_CODE_DEVICE_LOST,
-                            "message": "audio device disappeared",
-                        }),
+                    let fatal_evt = daemon_error_event(
+                        ERROR_SEVERITY_FATAL,
+                        ERROR_CODE_DEVICE_LOST,
+                        "audio device disappeared".to_string(),
                     );
                     if tx.send(to_json_or_fallback(&fatal_evt)).await.is_err() {
                         break;
@@ -85,21 +97,38 @@ pub async fn run(
                 }
 
                 if snapshot.xruns > last_xruns {
-                    let warn_evt = Event::new(
-                        EVENT_DAEMON_ERROR,
-                        json!({
-                            "severity": ERROR_SEVERITY_WARNING,
-                            "code": ERROR_CODE_STREAM_XRUN,
-                            "message": format!(
-                                "buffer underrun or stream error occurred ({} total)",
-                                snapshot.xruns
-                            ),
-                        }),
+                    let warn_evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_STREAM_XRUN,
+                        format!(
+                            "buffer underrun or stream error occurred ({} total)",
+                            snapshot.xruns
+                        ),
                     );
                     if tx.send(to_json_or_fallback(&warn_evt)).await.is_err() {
                         break;
                     }
                     last_xruns = snapshot.xruns;
+                }
+
+                // LinkAudio egress の ring overflow drop（音が落ちた）を非 RT で surface（A4-2b-2b）。
+                // RT callback が drop を atomic counter に積み、consumer を含め hot path は log しない
+                // ので、ここで増加を検知して WARNING event を出す（feature 無効時 / drop なしは 0 のまま
+                // 発火しない）。
+                let link_drops = engine.link_egress_ring_drops();
+                if link_drops > last_link_drops {
+                    let drop_evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_LINK_EGRESS_DROP,
+                        format!(
+                            "LinkAudio egress dropped samples ({link_drops} total interleaved); \
+                             consumer fell behind — audio gaps on Link",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&drop_evt)).await.is_err() {
+                        break;
+                    }
+                    last_link_drops = link_drops;
                 }
 
                 let stats_evt = Event::new(
@@ -260,7 +289,7 @@ async fn handle_command(
             ),
         },
         // LinkAudio outputChannel を登録する（A4-2b-2・#209）。feature `link-audio` 無効ビルドでは
-        // engine 側 stub が LINK_AUDIO_ERROR を返す（command 自体は feature 非依存に保つ）。
+        // engine 側 stub が LINK_AUDIO_UNAVAILABLE を返す（command 自体は feature 非依存に保つ）。
         "RegisterLinkAudioChannel" => match params.get("channel").and_then(|p| p.as_str()) {
             Some(name) if !name.is_empty() => match engine.register_link_audio_channel(name) {
                 Ok(()) => ok(&id, json!({"status": "registered", "channel": name})),
@@ -498,6 +527,28 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::Resample(r) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
         WrapError::Output(o) => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
         WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
-        WrapError::LinkAudio(msg) => ProtocolError::new("LINK_AUDIO_ERROR", msg.clone()),
+        // feature-gap（TS は warn-once で握り潰す）と runtime 失敗（TS は rethrow）を別コードにする。
+        WrapError::LinkAudioUnavailable(msg) => {
+            ProtocolError::new("LINK_AUDIO_UNAVAILABLE", msg.clone())
+        }
+        WrapError::LinkAudio(msg) => ProtocolError::new("LINK_AUDIO_RUNTIME", msg.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // LinkAudio エラーの protocol code 分割を pin（TS は UNAVAILABLE のみ握り潰し RUNTIME は rethrow）。
+    #[test]
+    fn link_audio_unavailable_maps_to_unavailable_code() {
+        let e = WrapError::LinkAudioUnavailable("built without feature".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_UNAVAILABLE");
+    }
+
+    #[test]
+    fn link_audio_runtime_maps_to_runtime_code() {
+        let e = WrapError::LinkAudio("channel limit reached".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_RUNTIME");
     }
 }

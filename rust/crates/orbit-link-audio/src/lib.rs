@@ -298,17 +298,17 @@ mod tests {
             "層B: receiver が channel を発見できなかった(この env では multicast loopback 不可)"
         );
 
-        // ring + egress on sender。
+        // ring + egress on sender（egress は output を所有せず・pump_once に &sender を渡す）。
         let (mut prod, cons) = rtrb::RingBuffer::<f32>::new(48_000 * 2);
         let drops = Arc::new(AtomicU64::new(0));
-        let mut egress = LinkChannelEgress::new(sender, cons, drops, ch, 2, 48_000, 4.0, 256);
+        let mut egress = LinkChannelEgress::new(cons, drops, ch, 2, 48_000, 4.0, 256);
 
         // 既知サンプル(0.2)を feed + pump、receiver が受け取るまで(~2s)。
         let mut got = 0u64;
         for _ in 0..400 {
             let block = vec![0.2f32; 256 * 2];
             let _ = prod.push_partial_slice(&block);
-            let _ = egress.pump_once();
+            let _ = egress.pump_once(&sender);
             got = recv.count();
             if got > 0 {
                 break;

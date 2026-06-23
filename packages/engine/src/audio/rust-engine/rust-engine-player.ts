@@ -232,6 +232,29 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
+   * daemon の非 fatal な WARNING（STREAM_XRUN / LINK_EGRESS_DROP 等）を operator に surface する。
+   * daemon は 1 Hz ticker でこれらを `DaemonError` event として送るが、購読者が無いと void に消える。
+   * fatal（DEVICE_LOST）は `daemon-died` 経路が別途扱う想定だが、ここでも message として残す。
+   */
+  private readonly onDaemonError = (data: unknown): void => {
+    const { severity, code, message } = data as {
+      severity?: string
+      code?: string
+      message?: string
+    }
+    const text = `[rust-engine] daemon-error [${severity ?? 'unknown'}] ${
+      code ?? 'UNKNOWN'
+    }: ${message ?? JSON.stringify(data)}`
+    // fatal（DEVICE_LOST 等）は severity を保って console.error に出す（daemon-died 経路も別途
+    // 扱うが、ticker 経由のこのレコードが warn に埋もれて見落とされないようにする）。
+    if (severity === 'fatal') {
+      console.error(`❌  ${text}`)
+    } else {
+      console.warn(`⚠️  ${text}`)
+    }
+  }
+
+  /**
    * daemon を起動し WebSocket 接続を確立する。`outputDevice` は S2 では未対応
    * （daemon は既定デバイスを選択）。**一度だけ呼ぶ前提**（InterpreterV2 は isBooted で guard）。
    *
@@ -277,6 +300,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
     // 初期 anchor 確定後に subscribe。off→on で二重購読（再 boot / respawn）を防ぐ。
     this.daemon.off('stream-stats', this.onStreamStats)
     this.daemon.on('stream-stats', this.onStreamStats)
+    // daemon の WARNING（xrun / LinkAudio egress drop 等）を operator に届ける（無いと void に消える）。
+    this.daemon.off('daemon-error', this.onDaemonError)
+    this.daemon.on('daemon-error', this.onDaemonError)
   }
 
   /**
@@ -376,6 +402,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     this.stopAll()
     this.daemon.off('daemon-died', this.onDaemonDied)
     this.daemon.off('stream-stats', this.onStreamStats)
+    this.daemon.off('daemon-error', this.onDaemonError)
     // respawn 進行中なら収束を待ってから daemon を落とす（立てたばかりの daemon も回収する）。
     // disposed=true なので respawnLoop は次のチェックポイントで抜ける。
     if (this.respawnPromise) {
@@ -405,7 +432,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /**
    * LinkAudio チャンネル登録（#209・A4-2b-2）。daemon に登録を要求し、成功すればその channel に
    * tag された再生が LinkAudio egress 経由で送出される。daemon が feature `link-audio` 無効
-   * ビルド（既定の permissive daemon）の場合は LINK_AUDIO_ERROR で reject されるので、**throw せず**
+   * ビルド（既定の permissive daemon）の場合は LINK_AUDIO_UNAVAILABLE で reject されるので、**throw せず**
    * 1 回 warn して継続する（channel は tag され続けるが出力は hardware のみ）。`scheduleEvent` /
    * `scheduleSliceEvent` と同じ `'outputChannel'` GapKind を共有し first-wins で 1 回だけ出す。
    */
@@ -413,14 +440,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     try {
       await this.daemon.registerLinkAudioChannel(channelName)
     } catch (err) {
-      // 想定する gap は「daemon が feature `link-audio` 無効ビルド」= LINK_AUDIO_ERROR のみ。
-      // これは scheduleEvent と同じ warn-once gap として握り潰す（出力は hardware のみで継続）。
-      // それ以外（daemon 死亡・transport エラー・reg-ring 満杯等）は本物の失敗なので、誤って
-      // 「build に feature が無い」と誤ラベルせず rethrow して呼び出し側に surface させる。
-      if (err instanceof DaemonProtocolError && err.code === 'LINK_AUDIO_ERROR') {
+      // 想定する gap は「egress がこの daemon で利用不可」= LINK_AUDIO_UNAVAILABLE のみ
+      // （feature `link-audio` 無効ビルド / test backend）。これは scheduleEvent と同じ warn-once gap
+      // として握り潰す（出力は hardware のみで継続）。それ以外（runtime 失敗の LINK_AUDIO_RUNTIME・
+      // daemon 死亡・transport エラー等）は本物の失敗なので、feature-gap と誤ラベルせず rethrow する。
+      if (err instanceof DaemonProtocolError && err.code === 'LINK_AUDIO_UNAVAILABLE') {
         this.warnOnce(
           'outputChannel',
-          `⚠️  [rust-engine] LinkAudio channel "${channelName}": daemon was built without the link-audio feature — channel is tagged but output is hardware only.`,
+          `⚠️  [rust-engine] LinkAudio channel "${channelName}": egress unavailable in this daemon (built without the link-audio feature) — channel is tagged but output is hardware only.`,
         )
         return
       }
@@ -461,12 +488,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
     sequenceName = '',
     outputChannel?: string,
   ): void {
-    if (outputChannel) {
-      this.warnOnce(
-        'outputChannel',
-        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio): egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
-      )
-    }
+    // outputChannel の feature-gap signal は `registerLinkAudioChannel`（`sequence.output()` 経由）が
+    // authoritative に出す（A4-2b-2b で egress 配線済み）。scheduleEvent は channel を tag するだけで、
+    // 「egress is not wired」の旧 warn は stale なので出さない（egress 有効な daemon では誤誘導になる）。
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
     this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel })
@@ -495,12 +519,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     sequenceName = '',
     outputChannel?: string,
   ): void {
-    if (outputChannel) {
-      this.warnOnce(
-        'outputChannel',
-        `⚠️  [rust-engine] outputChannel="${outputChannel}" (LinkAudio): egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
-      )
-    }
+    // outputChannel の feature-gap signal は `registerLinkAudioChannel` が authoritative（上記
+    // scheduleEvent と同様・egress 配線済みなので stale な「not wired」warn は出さない）。
     this.enqueue({
       time,
       filepath,

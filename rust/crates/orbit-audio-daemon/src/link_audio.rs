@@ -13,15 +13,20 @@
 //!   を 2 経路へ配る（sink を reg-ring 経由で callback へ / consumer side を mpsc 経由で consumer
 //!   thread へ）。`LinkAudioControl` 自体は std mpsc + rtrb のみで tokio に依存しない。
 //!
-//! 2b-2a は **単一 channel** の実証に絞る（pool + N channel + readiness race は 2b-2b）。
+//! A4-2b-2b で **N-channel** 化: callback は channel pool（`MAX_LINK_CHANNELS` 上限・control 強制）を
+//! 持ち、consumer thread は 1 つの `LinkAudioOutput` 上の複数 `LinkChannelEgress` を回す。**readiness
+//! flag**（per-channel `Arc<AtomicBool>`）で「consumer が Link 登録する前に callback が push する never-
+//! drained ring」を構造的に排除する（consumer が登録完了で ready を立て、callback は ready の channel
+//! のみ egress する）。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use orbit_audio_native::{LinkChannelActivate, RingTapSink};
+use orbit_audio_native::{LinkChannelActivate, RingTapSink, MAX_LINK_CHANNELS};
 use orbit_link_audio::{CommitResult, LinkAudioError, LinkAudioOutput, LinkChannelEgress};
 
 /// ring 容量（秒）。callback の push と consumer の drain を decouple する緩衝。
@@ -34,16 +39,20 @@ const QUANTUM: f64 = 4.0;
 /// 余裕を持たせる（RT 外の control thread で alloc・大きめでも害はない）。callback は実 block が
 /// scratch を超えたら安全側で hardware のみに落とす。
 const MAX_BLOCK_FRAMES: usize = 8192;
-/// reg-ring 容量（callback への activation メッセージ）。2b-2a は単一 channel なので小で足りる。
+/// reg-ring 容量（callback への activation メッセージ）。起動時に全 channel が callback の drain より
+/// 先にまとめて登録されうるので [`MAX_LINK_CHANNELS`] 分を確保する（cap も同値で control が強制）。
 /// EngineWrap が `start_default_output_with_link_egress` に渡すため pub（const 文脈で使える）。
-pub const REG_RING_CAPACITY: usize = 8;
+pub const REG_RING_CAPACITY: usize = MAX_LINK_CHANNELS;
 
 /// control→consumer thread の registration コマンド（mpsc payload）。consumer thread が受け取って
 /// Link channel を登録し [`LinkChannelEgress`] を構築する。
 struct RegisterCmd {
     name: String,
     consumer: rtrb::Consumer<f32>,
-    drops: Arc<std::sync::atomic::AtomicU64>,
+    drops: Arc<AtomicU64>,
+    /// callback と共有する readiness flag。consumer が Link 登録 + egress 構築を終えたら `true` にし、
+    /// callback がこの channel の egress を開始してよいことを伝える（never-drained-ring 回避）。
+    ready: Arc<AtomicBool>,
     num_channels: usize,
     sample_rate: u32,
 }
@@ -55,40 +64,69 @@ pub enum LinkRegisterError {
     ConsumerGone,
     #[error("reg-ring is full (callback not draining activations)")]
     RegRingFull,
+    #[error("link channel limit reached (max {0})")]
+    ChannelLimit(usize),
 }
 
-/// consumer thread の状態機械。2b-2a は単一 channel なので最初の登録で `Waiting`→`Active` へ遷移し、
-/// 以後の登録は無視する（pool 化は 2b-2b）。
-enum ConsumerState {
-    /// channel 未登録。`LinkAudioOutput`（Link session）を保持して登録を待つ。
-    Waiting(LinkAudioOutput),
-    /// channel 登録済。`LinkChannelEgress` が `LinkAudioOutput` を所有し ring を drain する。
-    Active(LinkChannelEgress),
+/// `register_channel` の判定結果（A4-2b-2b）。RT に触れない pure ロジックを分離して CI で検証する。
+#[derive(Debug, PartialEq, Eq)]
+enum RegistrationDecision {
+    /// 同名が既に登録済み → 冪等 no-op（再 push すると callback で旧 activate が RT スレッド drop）。
+    Idempotent,
+    /// 登録数が cap に到達 → runtime error で surface（callback で log しないための control 側 gate）。
+    AtCapacity,
+    /// 新規 channel → 配線する。
+    New,
 }
 
-/// GPL consumer thread の本体。`shutdown` が立つまでループし、registration を処理しつつ active な
+/// 登録済み集合・登録名・cap から [`RegistrationDecision`] を返す pure 関数。
+fn registration_decision<V>(
+    registered: &HashMap<String, V>,
+    name: &str,
+    max: usize,
+) -> RegistrationDecision {
+    if registered.contains_key(name) {
+        RegistrationDecision::Idempotent
+    } else if registered.len() >= max {
+        RegistrationDecision::AtCapacity
+    } else {
+        RegistrationDecision::New
+    }
+}
+
+/// consumer thread が回す 1 channel の状態（egress driver + per-channel な commit 失敗 streak）。
+/// streak を per-channel に持つことで、ある channel の成功が別 channel の失敗 streak を reset して
+/// health warn を masking するのを防ぐ（N-channel・A4-2b-2b）。
+struct ActiveChannel {
+    /// channel 名（health warn を operator 向けに名前で出すため。数値 id より読みやすい）。
+    name: String,
+    egress: LinkChannelEgress,
+    commit_fail_streak: u64,
+}
+
+/// GPL consumer thread の本体。`shutdown` が立つまでループし、registration を処理しつつ全 channel の
 /// egress を pump する。**teardown は drop 順ではなく明示 signal+join**（A0 §13 教訓）: 戻ると
-/// `state` がこの thread 上で drop され `LinkAudioOutput::drop`→Link teardown が走る。
+/// `channels` と `output` がこの thread 上で drop され `LinkAudioOutput::drop`→Link teardown が走る。
 fn consumer_loop(
-    mut state: ConsumerState,
+    output: LinkAudioOutput,
     cmd_rx: mpsc::Receiver<RegisterCmd>,
     shutdown: Arc<AtomicBool>,
 ) {
-    // commit 失敗（ChannelNotFound/CommitFailed）の連続回数。LinkAudio egress は hardware path の
-    // StreamStats のような observability surface を持たない（full な surface は follow-up）ので、
-    // 最低限「音が Link peer に届いていない」を operator が log で気付けるよう throttle して warn する。
-    let mut commit_fail_streak: u64 = 0;
+    // この thread が 1 つの LinkAudioOutput（Link session）を所有し、その上の複数 channel を
+    // それぞれ [`ActiveChannel`] で回す（N-channel・A4-2b-2b）。**commit 失敗 streak は per-channel**
+    // （channel-global にすると、ある channel の成功が別 channel の失敗 streak を reset して masking する）。
+    let mut channels: Vec<ActiveChannel> = Vec::with_capacity(MAX_LINK_CHANNELS);
     while !shutdown.load(Ordering::Relaxed) {
-        // 1. registration を drain（2b-2a は最初の 1 件で Active 化、以降は無視）。control 側の
-        //    冪等 guard で同名再登録は届かないが、defense として Active 中の追加 cmd も無害に捌く。
+        // 1. registration を drain → 各 channel を Link 登録して egress を構築し、**ready flag を立てて
+        //    callback の egress 開始を許可**する。登録失敗なら ready は false のまま（callback は push
+        //    しない＝never-drained-ring 回避）で error を surface する。
         while let Ok(cmd) = cmd_rx.try_recv() {
-            state = match state {
-                ConsumerState::Waiting(output) => {
-                    // ring 1 block 分が安全に収まる max_num_samples で Link channel を登録。
-                    let max_num_samples = BLOCK_FRAMES * cmd.num_channels;
-                    match output.register_channel(&cmd.name, max_num_samples) {
-                        Ok(id) => ConsumerState::Active(LinkChannelEgress::new(
-                            output,
+            let max_num_samples = BLOCK_FRAMES * cmd.num_channels;
+            match output.register_channel(&cmd.name, max_num_samples) {
+                Ok(id) => {
+                    channels.push(ActiveChannel {
+                        name: cmd.name,
+                        egress: LinkChannelEgress::new(
                             cmd.consumer,
                             cmd.drops,
                             id,
@@ -96,60 +134,55 @@ fn consumer_loop(
                             cmd.sample_rate,
                             QUANTUM,
                             BLOCK_FRAMES,
-                        )),
-                        Err(e) => {
-                            // 登録失敗（稀）。2b-2a は単一 channel ＝ これが唯一の登録機会なので
-                            // 以後 pump は走らず egress は dead になる。silent でなく error で surface。
-                            tracing::error!(
-                                "LinkAudio channel '{}' register failed: {e} — egress will be silent",
-                                cmd.name
-                            );
-                            ConsumerState::Waiting(output)
-                        }
-                    }
+                        ),
+                        commit_fail_streak: 0,
+                    });
+                    // ★ ここで初めて callback がこの channel を render_multi / commit 対象にする。
+                    cmd.ready.store(true, Ordering::Relaxed);
                 }
-                // 既に Active（2b-2a は単一 channel）。追加登録は drop（pool 化は 2b-2b）。
-                active @ ConsumerState::Active(_) => {
-                    tracing::warn!(
-                        "LinkAudio channel '{}' ignored: 2b-2a supports a single channel",
+                Err(e) => {
+                    // 登録失敗（稀）。ready は false のまま → callback は push しないので doomed ring に
+                    // ならない。silent でなく error で surface（この channel の egress は出ない）。
+                    tracing::error!(
+                        "LinkAudio channel '{}' register failed: {e} — egress will be silent",
                         cmd.name
                     );
-                    active
                 }
-            };
+            }
         }
 
-        // 2. active なら溜まっている分を全て pump、無ければ短く sleep（busy-wait を避ける）。
-        match &mut state {
-            ConsumerState::Active(egress) => {
-                let mut pumped = false;
-                while let Some(rc) = egress.pump_once() {
-                    pumped = true;
-                    match rc {
-                        // NoSubscriber は Live 未参加の通常状態（silent）。回復で streak をリセット。
-                        CommitResult::Committed | CommitResult::NoSubscriber => {
-                            commit_fail_streak = 0
-                        }
-                        // 購読者ありで commit 失敗 / channel 消失。音が Link に届かない health signal。
-                        CommitResult::CommitFailed | CommitResult::ChannelNotFound => {
-                            commit_fail_streak += 1;
-                            if commit_fail_streak == 1 || commit_fail_streak.is_multiple_of(1000) {
-                                tracing::warn!(
-                                    "LinkAudio commit failing ({rc:?}, streak={commit_fail_streak}): \
-                                     audio not reaching Link peer"
-                                );
-                            }
+        // 2. 全 channel を pump（共有 output を & で渡す）。1 つでも commit したら sleep しない。
+        let mut pumped = false;
+        for ch in channels.iter_mut() {
+            while let Some(rc) = ch.egress.pump_once(&output) {
+                pumped = true;
+                match rc {
+                    // NoSubscriber は Live 未参加の通常状態（silent）。回復で streak をリセット。
+                    CommitResult::Committed | CommitResult::NoSubscriber => {
+                        ch.commit_fail_streak = 0
+                    }
+                    // 購読者ありで commit 失敗 / channel 消失。音が Link に届かない health signal。
+                    // streak は **per-channel**（他 channel の成功で masking されない）。
+                    CommitResult::CommitFailed | CommitResult::ChannelNotFound => {
+                        ch.commit_fail_streak += 1;
+                        if ch.commit_fail_streak == 1 || ch.commit_fail_streak.is_multiple_of(1000)
+                        {
+                            tracing::warn!(
+                                "LinkAudio commit failing on channel '{}' ({rc:?}, streak={}): \
+                                 audio not reaching Link peer",
+                                ch.name,
+                                ch.commit_fail_streak
+                            );
                         }
                     }
                 }
-                if !pumped {
-                    std::thread::sleep(Duration::from_millis(2));
-                }
             }
-            ConsumerState::Waiting(_) => std::thread::sleep(Duration::from_millis(5)),
+        }
+        if !pumped {
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
-    // ループ脱出 → state(と内部の LinkAudioOutput)がこの thread 上で drop。
+    // ループ脱出 → channels + output がこの thread 上で drop → Link teardown。
 }
 
 /// GPL consumer thread を明示 teardown する RAII guard。**drop で shutdown フラグを立てて join**。
@@ -181,11 +214,14 @@ pub struct LinkAudioControl {
     cmd_tx: mpsc::Sender<RegisterCmd>,
     sample_rate: u32,
     num_channels: usize,
-    /// 既に登録済みの channel 名（2b-2a は単一 channel）。再登録の冪等化に使う。TS 層は
-    /// `output()` 宣言時と dispatch で同名を複数回登録する設計なので、再 push を防がないと
+    /// 登録済み channel（名前 → drop counter）。最大 [`MAX_LINK_CHANNELS`]・再登録の冪等化に使う。
+    /// TS 層は `output()` 宣言時と dispatch で同名を複数回登録する設計なので、再 push を防がないと
     /// callback 側で古い `LinkChannelActivate`（ring producer）が **RT スレッド上で drop** され、
-    /// かつ新 ring を誰も drain せず egress が無音化する。pool 化（複数 channel）は 2b-2b。
-    registered_channel: Option<String>,
+    /// かつ新 ring を誰も drain せず egress が無音化する。同名は no-op、新規は cap までで受理する。
+    /// 値は当該 channel の RingTapSink が producer-side で drop した interleaved サンプル数（累積）の
+    /// counter clone（producer=callback / consumer thread が別 clone を持つ・同一 Arc）。冪等判定と
+    /// observability（[`Self::total_ring_drops`]）を 1 map に集約し channel↔counter の対応を保つ。
+    registered: HashMap<String, Arc<AtomicU64>>,
 }
 
 impl LinkAudioControl {
@@ -193,8 +229,8 @@ impl LinkAudioControl {
     /// `reg_tx` は native `start_default_output_with_link_egress` が返す reg-ring producer。
     /// 返り値の [`LinkAudioGuard`] は `StreamGuard` に載せ、teardown まで保持する。
     ///
-    /// consumer thread は callback が push を始める前に spawn される（spawn → 以後に
-    /// `register_channel` で callback へ sink を渡す）ため、ready 順は callback push に先行する。
+    /// consumer thread は callback が push を始める前に spawn される。channel は readiness flag が
+    /// 立つまで callback が egress しないので、push の前後関係に依存せず安全（A4-2b-2b）。
     pub fn spawn(
         reg_tx: rtrb::Producer<LinkChannelActivate>,
         sample_rate: u32,
@@ -212,7 +248,7 @@ impl LinkAudioControl {
         // spawn 失敗（OS リソース枯渇・稀）は boot を panic させず Result で propagate する。
         let handle = std::thread::Builder::new()
             .name("orbit-link-egress".into())
-            .spawn(move || consumer_loop(ConsumerState::Waiting(output), cmd_rx, shutdown_thread))
+            .spawn(move || consumer_loop(output, cmd_rx, shutdown_thread))
             .map_err(|e| LinkAudioError::ThreadSpawn(e.to_string()))?;
 
         Ok((
@@ -221,7 +257,7 @@ impl LinkAudioControl {
                 cmd_tx,
                 sample_rate,
                 num_channels,
-                registered_channel: None,
+                registered: HashMap::new(),
             },
             LinkAudioGuard {
                 shutdown,
@@ -230,58 +266,168 @@ impl LinkAudioControl {
         ))
     }
 
-    /// 名前付き channel を登録する。`RingTapSink` を生成し、**sink を callback へ / consumer side を
-    /// consumer thread へ**配る。
+    /// 全 channel の ring overflow drop（interleaved サンプル数）の合計。daemon の 1 Hz ticker が
+    /// polling して増加を WARNING event として surface する（A4-2b-2b・LinkEgressStats）。
+    pub fn total_ring_drops(&self) -> u64 {
+        self.registered
+            .values()
+            .map(|d| d.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    /// 名前付き channel を登録する。`RingTapSink` と readiness flag を生成し、**sink+ready を callback
+    /// へ / consumer side+ready を consumer thread へ**配る（A4-2b-2b・N-channel）。
     ///
-    /// 順序（advisor #3）: consumer thread への登録を先に送り（Link channel 登録 + egress 構築 +
-    /// pump 開始）、その後 callback へ sink を渡す。これにより consumer が（多くの場合）先に ready に
-    /// なる。callback が consumer 登録より先に push しても ring が緩衝するだけ（drop は produced-frame
-    /// 算入で beat に反映）。**部分失敗**（cmd 送信は成功・reg-ring push が満杯で失敗）は 2b-2a の
-    /// 単一 channel scope では許容しエラーで surface する（pool 化と再試行は 2b-2b）。
+    /// 冪等 guard（必須）: TS 層は `output()` 宣言時と dispatch で同名を複数回登録する設計なので、同名は
+    /// no-op で返す（再 push すると callback 側で旧 activate が RT スレッド drop される）。新規 channel は
+    /// cap（[`MAX_LINK_CHANNELS`]）まで受理する（**cap は control 側で error として surface**＝RT callback
+    /// で log しない）。順序: consumer thread へ先に送り（Link 登録 + ready set）、その後 callback へ sink
+    /// を渡す。readiness flag により、callback push と consumer 登録の前後関係に関わらず never-drained
+    /// ring が起きない（ready 前は callback が push しない）。
     pub fn register_channel(&mut self, name: &str) -> Result<(), LinkRegisterError> {
-        // 冪等 guard（必須）: TS 層は `output()` 宣言時と dispatch で同名を複数回登録する設計。
-        // 再 push を許すと callback 側で旧 `LinkChannelActivate`（ring producer）が **RT スレッド上で
-        // drop** され、かつ新 ring を誰も drain せず egress が無音化する。同名は no-op で返す。
-        if let Some(existing) = &self.registered_channel {
-            if existing != name {
-                // 2b-2a は単一 channel。別名 channel は未対応 → log して no-op（pool 化は 2b-2b）。
-                tracing::warn!(
-                    "LinkAudio channel '{name}' ignored: '{existing}' already registered \
-                     (2b-2a supports a single channel)"
-                );
+        // 冪等（同名 no-op）+ cap（control 側強制）の判定。RT に触れない pure ロジックで CI 検証する。
+        match registration_decision(&self.registered, name, MAX_LINK_CHANNELS) {
+            RegistrationDecision::Idempotent => return Ok(()),
+            RegistrationDecision::AtCapacity => {
+                return Err(LinkRegisterError::ChannelLimit(MAX_LINK_CHANNELS))
             }
-            return Ok(());
+            RegistrationDecision::New => {}
         }
 
         let ring_capacity = self.sample_rate as usize * self.num_channels * RING_SECONDS;
         let (sink, consumer, drops) = RingTapSink::new(ring_capacity);
+        // observability 用に drop counter の clone を control 側に残す（producer/consumer とは別 clone・
+        // 配線成功後にのみ push する）。
+        let drops_for_stats = drops.clone();
+        // callback と consumer が共有する readiness flag（consumer が Link 登録後に true にする）。
+        let ready = Arc::new(AtomicBool::new(false));
         // consumer thread と callback の両方が所有する name を 1 回だけ確保する。
         let name = name.to_string();
 
-        // 1) consumer thread へ（Link channel 登録 + egress 構築）。
+        // 1) consumer thread へ（Link channel 登録 + egress 構築 + ready set）。
         self.cmd_tx
             .send(RegisterCmd {
                 name: name.clone(),
                 consumer,
                 drops,
+                ready: ready.clone(),
                 num_channels: self.num_channels,
                 sample_rate: self.sample_rate,
             })
             .map_err(|_| LinkRegisterError::ConsumerGone)?;
 
-        // 2) callback へ（sink + 事前確保 scratch）。
+        // 2) callback へ（sink + 事前確保 scratch + ready）。ready が立つまで callback は egress しない。
         let scratch = vec![0.0f32; MAX_BLOCK_FRAMES * self.num_channels];
         self.reg_tx
             .push(LinkChannelActivate {
                 name: name.clone(),
                 sink,
                 scratch,
+                ready,
             })
             .map_err(|_| LinkRegisterError::RegRingFull)?;
 
-        // 両経路への配線が成功 → 登録済みとして記録（以後の同名再登録は冪等 no-op）。
-        self.registered_channel = Some(name);
+        // 両経路への配線が成功 → 登録済みとして記録（同名再登録は冪等 no-op）。value に drop counter
+        // を保持して channel↔counter を 1 map で対応づける（observability・将来の per-channel breakdown）。
+        self.registered.insert(name, drops_for_stats);
         Ok(())
+    }
+}
+
+// register_channel の判定（冪等 / cap）の pure ロジック。device/multicast 不要なので gated でない
+// （`cargo test -p orbit-audio-daemon --features link-audio` で実行）。
+#[cfg(test)]
+mod unit_tests {
+    use super::{registration_decision, RegistrationDecision, MAX_LINK_CHANNELS};
+    use std::collections::HashMap;
+
+    // registered は `HashMap<name, drop counter>`。本テストは判定ロジックのみ見るので value は `()`。
+    fn reg_with(names: &[&str]) -> HashMap<String, ()> {
+        names.iter().map(|n| (n.to_string(), ())).collect()
+    }
+
+    #[test]
+    fn registration_decision_idempotent_on_same_name() {
+        let reg = reg_with(&["drums"]);
+        assert_eq!(
+            registration_decision(&reg, "drums", MAX_LINK_CHANNELS),
+            RegistrationDecision::Idempotent
+        );
+    }
+
+    #[test]
+    fn registration_decision_new_for_unseen_name_under_cap() {
+        let reg = reg_with(&[]);
+        assert_eq!(
+            registration_decision(&reg, "drums", MAX_LINK_CHANNELS),
+            RegistrationDecision::New
+        );
+    }
+
+    #[test]
+    fn registration_decision_at_capacity_rejects_new_name() {
+        // cap ちょうどの登録済み集合 → 新規名は AtCapacity。
+        let reg: HashMap<String, ()> = (0..MAX_LINK_CHANNELS)
+            .map(|i| (format!("ch{i}"), ()))
+            .collect();
+        assert_eq!(reg.len(), MAX_LINK_CHANNELS);
+        assert_eq!(
+            registration_decision(&reg, "overflow", MAX_LINK_CHANNELS),
+            RegistrationDecision::AtCapacity
+        );
+        // ただし cap 到達後でも **既存名は冪等**（cap で弾かない）。
+        assert_eq!(
+            registration_decision(&reg, "ch0", MAX_LINK_CHANNELS),
+            RegistrationDecision::Idempotent
+        );
+    }
+
+    /// `total_ring_drops` が registered map の全 per-channel counter を合算すること、および
+    /// `register_channel` が control 側へ残す clone が consumer 側へ渡る counter と同一 Arc である
+    /// こと（= producer の drop が observability に反映される配線）を device 無しで検証する。
+    /// 実 consumer thread / `LinkAudioOutput`（device 必須）は spawn せず、reg-ring と mpsc の
+    /// receiver 側を保持して send/push を成功させる dummy 配線で `LinkAudioControl` を直接構築する。
+    #[test]
+    fn total_ring_drops_sums_registered_channel_counters() {
+        use super::{LinkAudioControl, RegisterCmd};
+        use orbit_audio_native::LinkChannelActivate;
+        use std::sync::atomic::Ordering;
+        use std::sync::mpsc;
+
+        let (reg_tx, _reg_rx) = rtrb::RingBuffer::<LinkChannelActivate>::new(MAX_LINK_CHANNELS);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<RegisterCmd>();
+        let mut control = LinkAudioControl {
+            reg_tx,
+            cmd_tx,
+            sample_rate: 48_000,
+            num_channels: 2,
+            registered: HashMap::new(),
+        };
+
+        // 空集合は 0。
+        assert_eq!(control.total_ring_drops(), 0);
+
+        // 2 channel 登録（New ×2）+ 同名再登録（冪等・二重計上しない）。
+        control.register_channel("a").expect("register a");
+        control.register_channel("b").expect("register b");
+        control.register_channel("a").expect("idempotent a");
+
+        // consumer 側へ渡った drop counter を取り出し、producer の ring overflow を模して加算する。
+        // control 側 registered の clone は同一 Arc なので total_ring_drops に反映される。
+        let cmd_a = cmd_rx.recv().expect("cmd for a");
+        let cmd_b = cmd_rx.recv().expect("cmd for b");
+        assert!(
+            cmd_rx.try_recv().is_err(),
+            "idempotent re-register は新たな cmd を出さない"
+        );
+        cmd_a.drops.fetch_add(100, Ordering::Relaxed);
+        cmd_b.drops.fetch_add(50, Ordering::Relaxed);
+
+        assert_eq!(
+            control.total_ring_drops(),
+            150,
+            "registered の全 per-channel counter を合算する"
+        );
     }
 }
 
@@ -378,6 +524,91 @@ mod layer_b_tests {
         assert!(
             recv.last_sample() != 0,
             "層B: 受信サンプルが無音(channel routing が効いていない可能性)"
+        );
+    }
+
+    /// 層B multi-channel（A4-2b-2b Done 基準）: **2 channel を同時登録**し、それぞれに tag した再生を
+    /// **独立した 2 receiver** が両方受信することを検証する。N-channel pool（callback ArrayVec）+
+    /// readiness flag + 共有 LinkAudioOutput 上の複数 egress + per-channel routing を end-to-end で通す。
+    #[test]
+    #[ignore = "layer-B multi: needs real output device + multicast loopback (local only)"]
+    fn layer_b_multi_channel_egress_received() {
+        let (engine, _guard) = EngineWrap::start().expect("start engine with link egress");
+        engine
+            .register_link_audio_channel("loopX")
+            .expect("register loopX");
+        engine
+            .register_link_audio_channel("loopY")
+            .expect("register loopY");
+
+        let recv_host = LinkAudioOutput::new(120.0, "orbit-recv-multi").expect("recv host");
+        recv_host.set_enabled(true);
+        let recv_x = VerificationReceiver::new(&recv_host, "loopX");
+        let recv_y = VerificationReceiver::new(&recv_host, "loopY");
+
+        // 両 channel の discovery + subscribe(~5s)。
+        let (mut sub_x, mut sub_y) = (false, false);
+        for _ in 0..500 {
+            sub_x = sub_x || recv_x.try_subscribe();
+            sub_y = sub_y || recv_y.try_subscribe();
+            if sub_x && sub_y {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            sub_x && sub_y,
+            "層B multi: 両 receiver が channel を発見できなかった(sub_x={sub_x} sub_y={sub_y})"
+        );
+
+        // kick.wav を loopX / loopY 両方に tag して再生（同一 sample・別 channel へ独立 routing）。
+        let sid = engine
+            .load_sample(repo_path("test-assets/audio/kick.wav"))
+            .expect("load kick.wav")
+            .sample_id;
+        let start_at = engine.now_sec().unwrap_or(0.0) + 0.2;
+        engine
+            .play_at(
+                &sid,
+                start_at,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                Some("loopX".into()),
+            )
+            .expect("play_at loopX");
+        engine
+            .play_at(
+                &sid,
+                start_at,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                Some("loopY".into()),
+            )
+            .expect("play_at loopY");
+
+        // 両 channel の実 callback 駆動 egress を両 receiver が受信するまで(~3s)。
+        let (mut gx, mut gy) = (0u64, 0u64);
+        for _ in 0..600 {
+            gx = recv_x.count();
+            gy = recv_y.count();
+            if gx > 0 && gy > 0 && recv_x.last_sample() != 0 && recv_y.last_sample() != 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            gx > 0 && recv_x.last_sample() != 0,
+            "層B multi: loopX receiver が egress を受信しなかった(count={gx})"
+        );
+        assert!(
+            gy > 0 && recv_y.last_sample() != 0,
+            "層B multi: loopY receiver が egress を受信しなかった(count={gy})"
         );
     }
 }

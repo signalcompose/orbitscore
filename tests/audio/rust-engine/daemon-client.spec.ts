@@ -124,19 +124,19 @@ describe('DaemonClient with mock server', () => {
     expect(rec?.params.channel).toBe('drums')
   })
 
-  it('RegisterLinkAudioChannel の LINK_AUDIO_ERROR は DaemonProtocolError に変換される', async () => {
+  it('RegisterLinkAudioChannel の LINK_AUDIO_UNAVAILABLE は DaemonProtocolError に変換される', async () => {
     const url = await server.start({
       RegisterLinkAudioChannel: () => {
         const e = new Error('engine built without link-audio feature') as Error & {
           code?: string
         }
-        e.code = 'LINK_AUDIO_ERROR'
+        e.code = 'LINK_AUDIO_UNAVAILABLE'
         throw e
       },
     })
     await client.start({ wsUrlOverride: url })
     await expect(client.registerLinkAudioChannel('drums')).rejects.toMatchObject({
-      code: 'LINK_AUDIO_ERROR',
+      code: 'LINK_AUDIO_UNAVAILABLE',
     })
   })
 

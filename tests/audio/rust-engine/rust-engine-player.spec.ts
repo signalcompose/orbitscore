@@ -55,11 +55,11 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
     }),
     PlayAt: () => ({ play_id: `p-${playSeq++}` }),
     StopAll: () => ({ stopped: 0 }),
-    // 既定の mock daemon は feature `link-audio` 無効ビルドを模す（LINK_AUDIO_ERROR）。player は
+    // 既定の mock daemon は feature `link-audio` 無効ビルドを模す（LINK_AUDIO_UNAVAILABLE）。player は
     // これを warn-once gap として握り潰す。実 egress を持つ daemon の挙動は override で差し替える。
     RegisterLinkAudioChannel: () => {
       throw Object.assign(new Error('mock daemon built without link-audio feature'), {
-        code: 'LINK_AUDIO_ERROR',
+        code: 'LINK_AUDIO_UNAVAILABLE',
       })
     },
     ...overrides,
@@ -153,6 +153,65 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(timeSec).toBeLessThan(51)
   })
 
+  it('daemon の DaemonError WARNING（LINK_EGRESS_DROP 等）を operator に warn で surface する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // daemon が LinkAudio egress drop を 1 Hz ticker で通知する想定の event を流す。
+    server.broadcastEvent('DaemonError', {
+      severity: 'warning',
+      code: 'LINK_EGRESS_DROP',
+      message: 'LinkAudio egress dropped samples (512 total interleaved)',
+    })
+    // subscribe した onDaemonError が console.warn するまで待つ（void に消えないこと）。
+    await waitFor(() => warn.mock.calls.some((c) => String(c[0]).includes('LINK_EGRESS_DROP')))
+    void p
+    warn.mockRestore()
+  })
+
+  it('respawn 後も daemon-error を二重購読せず単発で surface する（off→on 再購読）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // daemon 死 → respawn → 再接続 → establishSession が daemon-error を off→on で再購読する。
+    const dropMark = server.received.length
+    server.dropConnections()
+    await waitFor(() => server.received.slice(dropMark).some((r) => r.method === 'GetStatus'), {
+      timeoutMs: 2000,
+    })
+    // GetStatus 受信後、establishSession の off→on 購読が完了する猶予を置いてから 1 件だけ流す。
+    await new Promise((r) => setTimeout(r, 30))
+    warn.mockClear()
+    server.broadcastEvent('DaemonError', {
+      severity: 'warning',
+      code: 'LINK_EGRESS_DROP',
+      message: 'LinkAudio egress dropped samples (512 total interleaved)',
+    })
+    await waitFor(() => warn.mock.calls.some((c) => String(c[0]).includes('LINK_EGRESS_DROP')))
+    // off→on が効いていれば購読は 1 つ → 単発。off 欠落なら二重購読で 2 回 warn される（再購読回帰）。
+    const dropWarns = warn.mock.calls.filter((c) => String(c[0]).includes('LINK_EGRESS_DROP'))
+    expect(dropWarns.length).toBe(1)
+    void p
+    warn.mockRestore()
+  })
+
+  it('fatal severity の daemon-error は console.error に出す（warn に埋もれさせない）', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = await boot()
+    // ticker 経由の fatal な DaemonError（DEVICE_LOST）を流す。daemon-died とは別経路。
+    server.broadcastEvent('DaemonError', {
+      severity: 'fatal',
+      code: 'DEVICE_LOST',
+      message: 'audio device disappeared',
+    })
+    await waitFor(() => error.mock.calls.some((c) => String(c[0]).includes('DEVICE_LOST')))
+    // fatal は console.error へ。severity を保ち、warning と同じ console.warn には出さない。
+    expect(error.mock.calls.some((c) => String(c[0]).includes('DEVICE_LOST'))).toBe(true)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('DEVICE_LOST'))).toBe(false)
+    void p
+    error.mockRestore()
+    warn.mockRestore()
+  })
+
   it('同一 filepath は一度だけ LoadSample（キャッシュ + single-flight）', async () => {
     const p = await boot()
     p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
@@ -226,14 +285,16 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
-  it('outputChannel は 1 回 warn して hardware で PlayAt を出す', async () => {
+  it('scheduleEvent outputChannel は stale な「not wired」warn を出さない（A4-2b-2b で egress 配線済み）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
     p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', 'drums')
     p.start()
     await waitFor(() => playAtRecords().length >= 1)
-    const chWarns = warn.mock.calls.filter((c) => String(c[0]).includes('outputChannel'))
-    expect(chWarns.length).toBe(1)
+    // feature-gap signal は registerLinkAudioChannel（sequence.output() 経由）が authoritative。
+    // scheduleEvent は channel を tag するだけで「not wired」warn は出さない（egress 有効 daemon で誤誘導）。
+    const staleWarns = warn.mock.calls.filter((c) => String(c[0]).includes('not wired'))
+    expect(staleWarns.length).toBe(0)
     // outputChannel は PlayAt の channel フィールドとして転送される（A4-2b-1）。
     expect(playAtRecords()[0].channel).toBe('drums')
     warn.mockRestore()
@@ -280,9 +341,9 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
-  it('registerLinkAudioChannel: LINK_AUDIO_ERROR（feature 無効ビルド）は warn-once で握り潰す', async () => {
+  it('registerLinkAudioChannel: LINK_AUDIO_UNAVAILABLE（feature 無効ビルド）は warn-once で握り潰す', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const p = await boot() // 既定 handler が LINK_AUDIO_ERROR を投げる
+    const p = await boot() // 既定 handler が LINK_AUDIO_UNAVAILABLE を投げる
     await expect(p.registerLinkAudioChannel('drums')).resolves.toBeUndefined()
     await p.registerLinkAudioChannel('drums') // 2 回目も warn は増えない（warn-once）
     const gapWarns = warn.mock.calls.filter((c) =>
@@ -292,13 +353,15 @@ describe('RustEnginePlayer with mock daemon', () => {
     warn.mockRestore()
   })
 
-  it('registerLinkAudioChannel: LINK_AUDIO_ERROR 以外（daemon 内部エラー等）は rethrow する', async () => {
+  it('registerLinkAudioChannel: LINK_AUDIO_RUNTIME（runtime 失敗）は feature-gap と区別して rethrow する', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot(
       defaultHandlers({
         RegisterLinkAudioChannel: () => {
-          // feature-gap ではない本物の失敗 → feature-gap と誤認せず rethrow されるべき。
-          throw Object.assign(new Error('boom'), { code: 'INTERNAL_ERROR' })
+          // runtime 失敗（channel 上限・consumer 不在等）→ feature-gap と誤認せず rethrow されるべき。
+          throw Object.assign(new Error('link channel limit reached'), {
+            code: 'LINK_AUDIO_RUNTIME',
+          })
         },
       }),
     )
@@ -399,17 +462,13 @@ describe('RustEnginePlayer with mock daemon', () => {
   it('stopAll は warn-once を再 arm する（次セッションで再び warn）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
-    // outputChannel(LinkAudio) は未対応 gap（A4）として 1 回 warn する。pan は実装済みで
-    // gap ではないため、再 arm の検証には残存 gap である outputChannel を使う。
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', 'drums')
-    p.start()
-    await waitFor(() => playAtRecords().length >= 1)
+    // masterEffect は残存 gap（A4 era）として 1 回 warn する。outputChannel は A4-2b-2b で egress
+    // 配線済みになり scheduleEvent からは warn しなくなったため、再 arm の検証には masterEffect を使う。
+    await p.addEffect('master', 'compressor', {})
     p.stopAll()
-    p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqB', 'drums') // 次セッション
-    p.start()
-    await waitFor(() => playAtRecords().length >= 2)
-    const ocWarns = warn.mock.calls.filter((c) => String(c[0]).includes('outputChannel'))
-    expect(ocWarns.length).toBe(2) // stopAll で再 arm
+    await p.addEffect('master', 'compressor', {}) // 次セッション = 再 arm 後
+    const meWarns = warn.mock.calls.filter((c) => String(c[0]).includes('master effect'))
+    expect(meWarns.length).toBe(2) // stopAll で再 arm
     warn.mockRestore()
   })
 

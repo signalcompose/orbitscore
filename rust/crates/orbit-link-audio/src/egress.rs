@@ -29,9 +29,12 @@ fn reconstruct_beat(anchor_beat: f64, beat_per_frame: f64, produced_frames: u64)
     anchor_beat + produced_frames as f64 * beat_per_frame
 }
 
-/// 1 つの channel への egress driver。GPL consumer thread が所有する(`Send`)。
+/// 1 つの channel への egress driver。**`LinkAudioOutput` は所有しない**（A4-2b-2b）: consumer
+/// thread が 1 つの `LinkAudioOutput`（Link session）を持ち、その上の複数 channel をそれぞれ本 driver
+/// で回す。`pump_once` に共有 output を `&` で渡す（commit / anchor capture はその output 経由）。
+/// **beat anchor は per-channel**（各 channel が自分の first-pump-with-data で capture・session 単位に
+/// hoist しない）。GPL consumer thread が所有する(`Send`)。
 pub struct LinkChannelEgress {
-    output: LinkAudioOutput,
     consumer: rtrb::Consumer<f32>,
     /// native の RingTapSink が producer-side で drop した **interleaved サンプル数**(累積)。
     drops: Arc<AtomicU64>,
@@ -43,7 +46,7 @@ pub struct LinkChannelEgress {
     block_frames: usize,
     /// pre-alloc した block バッファ(block_frames * num_channels)。RT 外だが alloc を毎回避ける。
     scratch: Vec<f32>,
-    // --- beat anchor(最初の pump で 1 回 capture)---
+    // --- beat anchor(この channel の最初の pump で 1 回 capture・per-channel)---
     anchored: bool,
     anchor_beat: f64,
     beat_per_frame: f64,
@@ -52,11 +55,10 @@ pub struct LinkChannelEgress {
 }
 
 impl LinkChannelEgress {
-    /// `output` は登録済み channel を持つ LinkAudio。`consumer`/`drops` は native の RingTapSink と
-    /// 対になる ring の受信側。
+    /// `channel_id` は共有 `LinkAudioOutput` 上で登録済みの channel id。`consumer`/`drops` は native の
+    /// RingTapSink と対になる ring の受信側。output は `pump_once` に渡す（所有しない）。
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        output: LinkAudioOutput,
         consumer: rtrb::Consumer<f32>,
         drops: Arc<AtomicU64>,
         channel_id: i32,
@@ -66,7 +68,6 @@ impl LinkChannelEgress {
         block_frames: usize,
     ) -> Self {
         Self {
-            output,
             consumer,
             drops,
             channel_id,
@@ -82,22 +83,20 @@ impl LinkChannelEgress {
         }
     }
 
-    pub fn channel_id(&self) -> i32 {
-        self.channel_id
-    }
-
-    /// ring に 1 block 分溜まっていれば drain して commit する。commit したら `Some(result)`、
-    /// データ不足なら `None`。consumer thread はこれをループで呼ぶ(None の間は短い sleep)。
-    pub fn pump_once(&mut self) -> Option<CommitResult> {
+    /// ring に 1 block 分溜まっていれば drain して `output` の当該 channel へ commit する。commit したら
+    /// `Some(result)`、データ不足なら `None`。consumer thread が共有 `output` を `&` で渡してループで
+    /// 呼ぶ(None の間は短い sleep)。
+    pub fn pump_once(&mut self, output: &LinkAudioOutput) -> Option<CommitResult> {
         let block_samples = self.block_frames * self.num_channels;
         if self.consumer.slots() < block_samples {
             return None;
         }
 
-        // egress 開始時に anchor(beat + tempo)を 1 回だけ capture。以後は frame から再構成する。
+        // この channel の egress 開始時に anchor(beat + tempo)を 1 回だけ capture。以後は frame から
+        // 再構成する(per-channel: channel ごとに登録時刻が違うので anchor も channel 固有)。
         if !self.anchored {
-            self.anchor_beat = self.output.capture_beat(self.quantum);
-            let tempo = self.output.session_tempo();
+            self.anchor_beat = output.capture_beat(self.quantum);
+            let tempo = output.session_tempo();
             let bpm = if tempo > 0.0 { tempo } else { 120.0 };
             self.beat_per_frame = (bpm / 60.0) / self.sample_rate as f64;
             self.anchored = true;
@@ -117,7 +116,7 @@ impl LinkChannelEgress {
             chunk.commit_all();
         }
 
-        let rc = self.output.commit_channel(
+        let rc = output.commit_channel(
             self.channel_id,
             &self.scratch[..block_samples],
             self.block_frames,

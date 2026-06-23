@@ -913,6 +913,7 @@ dependencies = [
 name = "orbit-audio-native"
 version = "0.0.1"
 dependencies = [
+ "arrayvec",
  "audioadapter-buffers",
  "cpal",
  "orbit-audio-core",
