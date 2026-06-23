@@ -201,6 +201,8 @@ double orbit_link_session_tempo(OrbitLink* link) {
   try {
     return link->link.captureAudioSessionState().tempo();
   } catch (...) {
+    // set_tempo と対称に observability を残す(0.0 は Rust 側で 120 fallback / re-anchor skip・SF-3)。
+    std::fprintf(stderr, "[orbit-link] session_tempo failed: unknown exception\n");
     return 0.0;
   }
 }

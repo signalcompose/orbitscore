@@ -104,8 +104,15 @@ Important 6 件を fixer で解消（advisor 確認後）:
 - **PT-2**: `validate_bpm` を pure 抽出 + 単体テスト。
 - comment 改善 3 件（SAFETY に `session_tempo` Thread-safe:no 追記 / teardown コメントを「最後の Arc」/
   engine_wrap の `as_ref` を interior mutability 説明に）。
-- 検証: orbit-link-audio 10 + daemon lib 7 + integration 18 passed・clippy clean（diff 内）。署名変更を含むため
-  **再レビュー（silent-failure + pr-test 再実行 + 全 suite）で closure を裏取り**（advisor 指示・自己宣言しない）。
+- 検証: orbit-link-audio 10 + daemon lib 7 + integration 18 passed・clippy clean（diff 内）。
+- **再レビュー（silent-failure + pr-test 再実行・advisor 指示の one-time closure check）**: SF-1 / PT-1 / PT-2 すべて
+  **resolved** を再確認。新規 SF-2（global.ts:265 の `.catch` が opaque log）は **defer**: `DaemonProtocolError` が
+  `super(`[${code}] ${message}`)`（errors.ts:45）で code+message をレンダーするため既に有用＝opaque でない。warn-once
+  再設計は never-path（set_tempo は no-peer でも success・Link 例外でのみ false）への過剰設計 + global.ts は SC/Rust
+  共有のため **reject**（advisor）。SF-3（pre-existing・Minor）= shim `orbit_link_session_tempo` の catch に fprintf を
+  追加し set_tempo と observability を対称化（1行）。SF-4 benign（None は production unreachable）。**内部レビュー
+  closed**（毎修正後の再レビューは LLM が必ず新指摘を出す非終了ループ＝substance 収束で閉じる・advisor）→ 外部
+  closure は @claude bot（load-bearing seam: unsafe Sync の call-discipline / FFI bool contract / poll re-anchor）。
 
 ### 6.164 feat(engine): A4-2b-2b dynamic N-channel LinkAudio registration (pool + readiness race / #331) (Jun 23, 2026)
 
