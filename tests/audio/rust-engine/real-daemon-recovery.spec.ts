@@ -53,12 +53,14 @@ async function waitFor(
  * @param post kill mark 以降の dispatch（gap 中は guard が drop するので全て respawn 後）。
  * @param preKillPid kill 前の daemon pid（respawn で必ず変わる）。
  * @param preKillNowSec kill 直前の daemon transport now（再 anchor がこれを下回るべき基準）。
+ * @param killWallMs kill した瞬間の `Date.now()`（新 daemon の uptime 上界を実時間で測るため）。
  */
 async function assertRecoveryInvariants(
   p: RustEnginePlayer,
   post: DispatchInfo[],
   preKillPid: number | undefined,
   preKillNowSec: number,
+  killWallMs: number,
 ): Promise<void> {
   // (1) liveness: poll は止まらず、daemon は respawn（新 pid）し、loops が復帰している。
   expect(p.isRunning).toBe(true)
@@ -82,7 +84,11 @@ async function assertRecoveryInvariants(
 
   // (4) daemon-side 状態クエリ: 再 establish 済み（fresh transport / sample 再ロード / play_id 健全）。
   const status = await p.getDaemonStatus()
-  expect(Number(status.uptime_sec)).toBeLessThan(preKillNowSec) // fresh daemon（transport リセット）
+  // fresh daemon: 新 daemon の uptime は kill からの経過実時間を超えない（古い daemon の累積
+  //   uptime ≥ preKillNowSec を引き継いでいない）。preKillNowSec 基準だと #335 の長い recovery
+  //   待ちで margin が薄れるため、wall-clock の経過を上界にする（+2s は status RTT 等の余裕）。
+  const elapsedSinceKillSec = (Date.now() - killWallMs) / 1000
+  expect(Number(status.uptime_sec)).toBeLessThan(elapsedSinceKillSec + 2)
   expect(Number(status.loaded_samples)).toBeGreaterThanOrEqual(1) // sample 再ロード済み
   expect(Number(status.active_plays)).toBeGreaterThanOrEqual(0) // orphan なし（有限・健全）
 }
@@ -131,6 +137,7 @@ describe.runIf(RUN)('RustEnginePlayer recovery floor against real daemon (#300)'
 
     // --- fault 注入（daemon を殺す） ---
     await inject(p)
+    const killWallMs = Date.now()
 
     // 復旧を待つ。gap 中は executePlayback の guard が dispatch を drop し onDispatch を呼ばないので、
     // killMark を超える dispatch は全て respawn 後（= active loops の構造的復帰の観測）。
@@ -139,7 +146,7 @@ describe.runIf(RUN)('RustEnginePlayer recovery floor against real daemon (#300)'
     const post = dispatches.slice(killMark)
 
     // recovery 不変式（liveness/新 pid・transport 再 anchor・onset clip なし・daemon 状態）。
-    await assertRecoveryInvariants(p, post, preKillPid, preKillNowSec)
+    await assertRecoveryInvariants(p, post, preKillPid, preKillNowSec, killWallMs)
   }
 
   it('hard-death（SIGKILL・panic hook 素通り）から respawn しセッション生存', async () => {
@@ -170,11 +177,11 @@ describe.runIf(RUN)('RustEnginePlayer recovery floor against real daemon (#300)'
 // なので、onDispatch を得るために booted player を直接構築して InterpreterV2 に注入する
 // （production 変更ゼロ・leg2 の RecordingScheduler 注入と同じ seam）。
 //
-// full DSL surface（pan / chop 領域 / per-event gain / varispeed rate≠1.0 / LinkAudio output
+// full DSL surface（pan / chop 領域 / per-sequence gain / varispeed rate≠1.0 / LinkAudio output
 // channel / tempo leader）はすべて fixture に載る。ただし DispatchInfo は timing + gain + sample
 // しか surface しない（pan / rate / output_channel は daemon.playAt へ渡るが onDispatch にも
 // GetStatus にも出ない）ため、state-assert できるのは dispatch 継続 / 再 anchor / lead /
-// per-event gain / sample 再ロード / active_plays まで。pan / rate / output_channel は payload
+// per-sequence gain / sample 再ロード / active_plays まで。pan / rate / output_channel は payload
 // として respawn 跨ぎで exercise されるが値は assert しない（per-param 正しさは PR1-3 の offline
 // テスト + 下の非gated rate guard が担保・capture ベース検証は §6 で OUT）。
 // daemon は default build（feature `link-audio` OFF）なので LinkAudio egress / tempo push は
@@ -197,7 +204,8 @@ const DURATIONS: Record<string, number> = {
  *
  * chopd: arpeggio(1.0s) を chop(2)→sliceDur 0.5s。tempo120/4-4/length1 → barDur 2.0s、play 8
  * 要素 → eventDur 0.25s。rate = sliceDur/eventDur = 0.5/0.25 = 2.0（genuine varispeed・rate≠1.0）。
- * kick/snare は chop(1)=全体・rate=1.0。3 seq で pan / per-event gain / output channel が分かれる。
+ * kick/snare は chop(1)=plain event（slice 経路を通らず自然尺 rate=1.0）。3 seq で pan /
+ * per-sequence gain / output channel が分かれる。
  */
 function buildFullDslSource(trigger: 'RUN' | 'LOOP'): string {
   return [
@@ -265,14 +273,16 @@ describe('#335 fixture integrity — full DSL produces non-degenerate params (no
 
     // varispeed: chop(2) スロット詰めで rate=2.0（≠1.0 が genuine に起きる）。
     for (const p of arp) expect(p.rate).toBeCloseTo(2.0, 2)
-    // chop(1) 全体再生は rate=1.0。
+    // kick/snare は chop(1) = slice 経路を通らない plain event（event-scheduler は chopDivisions>1
+    //   のときだけ scheduleSliceEvent）。slice なし → toDaemonParams は自然尺 rate=1.0 を返す。
     for (const p of nonArp) expect(p.rate).toBeCloseTo(1.0, 2)
 
-    // pan が複数値（kick=-60 / snare=+60 / chopd=+20 → 正規化 [-1,1]）。
+    // pan が 3 seq で別々の正規化値（kick -60→-0.6 / snare +60→+0.6 / chopd +20→+0.2）。
+    //   件数でなく値を固定し sign/scale 回帰も捕まえる。
     const pans = new Set(params.map((p) => p.pan.toFixed(3)))
-    expect(pans.size).toBeGreaterThanOrEqual(3)
+    expect(pans).toEqual(new Set(['-0.600', '0.600', '0.200']))
 
-    // per-event gain が複数値（kick=-3 / snare=-6 / chopd=-4 dB → 線形 amp）。
+    // per-sequence gain（各 seq の defaultGain -3/-6/-4 dB が dispatch ごとに乗る）が別々の線形 amp。
     const gains = new Set(params.map((p) => p.gain.toFixed(4)))
     expect(gains.size).toBeGreaterThanOrEqual(3)
   })
@@ -286,17 +296,24 @@ describe.runIf(RUN)('RustEnginePlayer active-loops across respawn — full DSL (
   afterEach(async () => {
     // loop timer（loop-sequence.ts の setTimeout・daemon 非依存）を確実に止める。
     // 各 Sequence.stop() = clearTimeout(loopTimer) + setLooping(false)（= 空 LOOP() と同じ経路）。
-    // player.quit() だけだと timer が leak して event loop を生かし続ける。
-    if (interp) {
-      const seqs = (
-        interp as unknown as { state?: { sequences?: Map<string, { stop?: () => void }> } }
-      ).state?.sequences
-      if (seqs) for (const seq of seqs.values()) seq.stop?.()
-      interp = null
-    }
-    if (player) {
-      await player.quit()
-      player = null
+    // player.quit() だけだと timer が leak して event loop を生かし続ける。stop が throw しても
+    // 実 daemon プロセスを確実に終了させるため player.quit() は finally に置く。
+    try {
+      if (interp) {
+        const seqs = (
+          interp as unknown as { state?: { sequences?: Map<string, { stop: () => void }> } }
+        ).state?.sequences
+        // 構造 drift（state/sequences の rename）で cleanup を silent skip しないよう不在なら throw。
+        if (!seqs)
+          throw new Error('afterEach: interp.state.sequences 不在 — loop timer が leak する恐れ')
+        for (const seq of seqs.values()) seq.stop() // Sequence.stop() は必ず存在（?. で握り潰さない）
+        interp = null
+      }
+    } finally {
+      if (player) {
+        await player.quit()
+        player = null
+      }
     }
   })
 
@@ -329,23 +346,30 @@ describe.runIf(RUN)('RustEnginePlayer active-loops across respawn — full DSL (
     // expect は型を narrow しないので、process.kill(number) のために number|undefined を絞る。
     if (!preKillPid) throw new Error('no daemon pid to kill')
     process.kill(preKillPid, 'SIGKILL')
+    const killWallMs = Date.now()
 
-    // respawn + 複数 loop の復帰を待つ（gap 中の dispatch は guard が drop するので killMark
-    // 超えは全て respawn 後）。boot+sample 再ロードに時間がかかるので timeout は広め。
-    await waitFor(() => dispatches.length > killMark + 6, { timeoutMs: 25_000 })
+    // respawn + 全 loop の復帰を待つ。復帰判定を sample 多様性に直結させる: chopd は 8 ev/bar と
+    // 密なので単純な件数 wait（killMark+N）だと kick/snare が復帰する前に満たされ得る → 3 seq
+    // （kick/snare/chopd）すべてが respawn 後に再 dispatch するまで待つ。gap 中の dispatch は guard
+    // が drop するので killMark 超えは全て respawn 後。boot+sample 再ロードに時間がかかるので広め。
+    const uniquePostSamples = () =>
+      new Set(dispatches.slice(killMark).map((d) => path.basename(d.filepath))).size
+    await waitFor(() => uniquePostSamples() >= 3, { timeoutMs: 25_000 })
 
     const post = dispatches.slice(killMark)
 
     // #300 と共有する recovery 不変式（liveness/新 pid・再 anchor・onset clip なし・daemon 状態）。
-    await assertRecoveryInvariants(p, post, preKillPid, preKillNowSec)
+    await assertRecoveryInvariants(p, post, preKillPid, preKillNowSec, killWallMs)
 
     // 以下は interpreter 駆動 full DSL 固有の追加検証（#300 proxy では出せない観測）:
-    // (A) active loops（複数）の復帰: post dispatch が複数サンプルにまたがる（1 つの loop だけ
-    //     生き残ったのではなく、loop 群が再 establish された）。
+    // (A) active loops（全 3 seq）の漏れない復帰: post dispatch が 3 サンプル全てにまたがる。
+    //     上の wait と同条件だが tautology ではない — どれか 1 seq でも復帰しなければ wait が
+    //     timeout してテストは fail する（= 「loop 群が漏れなく再 establish」を強制）。
     const postSamples = new Set(post.map((d) => path.basename(d.filepath)))
-    expect(postSamples.size).toBeGreaterThanOrEqual(2)
+    expect(postSamples.size).toBe(3)
 
-    // (B) per-event gain が respawn を跨いで保持（複数の異なる gain が流れ続ける）。
+    // (B) per-sequence gain（各 seq の defaultGain）が respawn を跨いで保持（複数の異なる gain が
+    //     流れ続ける）。
     const postGains = new Set(post.map((d) => d.gain.toFixed(4)))
     expect(postGains.size).toBeGreaterThanOrEqual(2)
   }, 70_000)

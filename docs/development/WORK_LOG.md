@@ -74,6 +74,17 @@ recovery 不変式を `assertRecoveryInvariants` ヘルパに抽出（#300 runKi
 skip: 公開 `dispose()` 追加（§6 scope fence = 観測 seam でなく lifecycle・cast は shutdown.ts 前例で
 許容）/ `if(!preKillPid)throw`（dead でなく TS narrowing・コメント追記）。適用後 gated 4 テスト全緑。
 
+**レビュー（/code:pr-review-team）**: 4 専門 reviewer（code-reviewer/silent-failure-hunter/
+pr-test-analyzer/comment-analyzer）。Critical 0。Important 3 を解消 →
+① afterEach を try/finally 化（seq.stop() throw 時も実 daemon を quit・leak 防止）/
+② recovery wait を件数（killMark+N）から **sample 多様性（3 seq 全復帰）** に直結し `postSamples===3`
+（chopd が 8 ev/bar と密で件数 wait だと kick/snare 復帰前に満たされる decoupling を解消・flake 除去 +
+全 loop 復帰を検証）/ ③ chop(1) は slice 経路を bypass する旨へコメント修正（comment-analyzer）。
+併せて Minor: uptime 判定を wall-clock 経過基準へ（長い recovery 待ちでの margin 痩せ対策）/ teardown
+cast を不在 throw + `?.` 除去で silent-skip 防止 / pan を厳密値 set で固定 / "per-event"→"per-sequence"
+gain ラベル統一。skip: post[0] stale（SIGKILL 即時で sub-ms 窓・post[0] discriminator 維持）。
+適用後 gated 4 テスト全緑（#335 stricter `===3` を複数回安定 PASS）。
+
 ### 6.165 feat(engine): A4-PR3 Link tempo leader — Rust daemon + TS wire (#333) (Jun 23, 2026)
 
 **Date**: 2026-06-23
