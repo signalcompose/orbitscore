@@ -27,7 +27,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use orbit_audio_native::{LinkChannelActivate, RingTapSink, MAX_LINK_CHANNELS};
-use orbit_link_audio::{CommitResult, LinkAudioError, LinkAudioOutput, LinkChannelEgress};
+use orbit_link_audio::{
+    CommitResult, LinkAudioError, LinkAudioOutput, LinkChannelEgress, LinkTempoControl,
+};
 
 /// ring 容量（秒）。callback の push と consumer の drain を decouple する緩衝。
 const RING_SECONDS: usize = 2;
@@ -106,9 +108,11 @@ struct ActiveChannel {
 
 /// GPL consumer thread の本体。`shutdown` が立つまでループし、registration を処理しつつ全 channel の
 /// egress を pump する。**teardown は drop 順ではなく明示 signal+join**（A0 §13 教訓）: 戻ると
-/// `channels` と `output` がこの thread 上で drop され `LinkAudioOutput::drop`→Link teardown が走る。
+/// `channels` とこの thread の `output` Arc が drop される。`output` は control 側(LinkTempoControl)と
+/// 共有する `Arc<LinkAudioOutput>` なので、Link teardown(`orbit_link_destroy`)は最後の Arc が落ちる時に
+/// 1 回走る(PR3・案A)。
 fn consumer_loop(
-    output: LinkAudioOutput,
+    output: Arc<LinkAudioOutput>,
     cmd_rx: mpsc::Receiver<RegisterCmd>,
     shutdown: Arc<AtomicBool>,
 ) {
@@ -182,7 +186,9 @@ fn consumer_loop(
             std::thread::sleep(Duration::from_millis(2));
         }
     }
-    // ループ脱出 → channels + output がこの thread 上で drop → Link teardown。
+    // ループ脱出 → channels + この thread の output Arc が drop。control 側(LinkTempoControl)も同一 Arc を
+    // 保持するため、Link teardown は最後の Arc が落ちる時(EngineWrap drop)に走る。LinkAudioGuard の join が
+    // この thread の終了を保証するので、teardown 時に audio スレッドは動いていない(destroy は app-side)。
 }
 
 /// GPL consumer thread を明示 teardown する RAII guard。**drop で shutdown フラグを立てて join**。
@@ -222,6 +228,9 @@ pub struct LinkAudioControl {
     /// counter clone（producer=callback / consumer thread が別 clone を持つ・同一 Arc）。冪等判定と
     /// observability（[`Self::total_ring_drops`]）を 1 map に集約し channel↔counter の対応を保つ。
     registered: HashMap<String, Arc<AtomicU64>>,
+    /// Link tempo leader の control ハンドル(set_tempo のみ・audio-state path には到達不能)。
+    /// consumer thread が持つ `Arc<LinkAudioOutput>` と同一 session を共有する(PR3)。
+    tempo: LinkTempoControl,
 }
 
 impl LinkAudioControl {
@@ -236,11 +245,14 @@ impl LinkAudioControl {
         sample_rate: u32,
         num_channels: usize,
     ) -> Result<(Self, LinkAudioGuard), LinkAudioError> {
-        let output = LinkAudioOutput::new(120.0, "orbit-engine")?;
+        let output = Arc::new(LinkAudioOutput::new(120.0, "orbit-engine")?);
         // discovery を有効化（Live/peer が channel を購読できるように）。enable は単なる FFI で
         // "audio thread" 制約の対象外なので control thread で呼んでよい（capture_beat のみ
         // consumer thread = audio thread から呼ぶ・egress.rs 参照）。
         output.set_enabled(true);
+        // control 側 tempo ハンドル。consumer thread が持つ Arc と同一 Link session を共有し、
+        // set_tempo(app-state path)だけを公開する(PR3・案A + newtype)。
+        let tempo = LinkTempoControl::new(output.clone());
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<RegisterCmd>();
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -258,6 +270,7 @@ impl LinkAudioControl {
                 sample_rate,
                 num_channels,
                 registered: HashMap::new(),
+                tempo,
             },
             LinkAudioGuard {
                 shutdown,
@@ -273,6 +286,13 @@ impl LinkAudioControl {
             .values()
             .map(|d| d.load(Ordering::Relaxed))
             .sum()
+    }
+
+    /// Link セッションに tempo(BPM)を push し OrbitScore を tempo leader にする(PR3)。`set_tempo` は
+    /// 内部で `captureAppSessionState`(非RT・block しうる)を呼ぶので、呼び出し側(daemon WS handler)は
+    /// spawn_blocking で audio スレッド以外に隔離すること。`&self`(tempo は Arc・内部可変性不要)。
+    pub fn set_tempo(&self, bpm: f64) {
+        self.tempo.set_tempo(bpm);
     }
 
     /// 名前付き channel を登録する。`RingTapSink` と readiness flag を生成し、**sink+ready を callback
@@ -391,17 +411,24 @@ mod unit_tests {
     fn total_ring_drops_sums_registered_channel_counters() {
         use super::{LinkAudioControl, RegisterCmd};
         use orbit_audio_native::LinkChannelActivate;
+        use orbit_link_audio::{LinkAudioOutput, LinkTempoControl};
         use std::sync::atomic::Ordering;
         use std::sync::mpsc;
+        use std::sync::Arc;
 
         let (reg_tx, _reg_rx) = rtrb::RingBuffer::<LinkChannelActivate>::new(MAX_LINK_CHANNELS);
         let (cmd_tx, cmd_rx) = mpsc::channel::<RegisterCmd>();
+        // tempo は device-free に構築できる(LinkAudioOutput::new は network discovery を起こさない)。
+        let tempo = LinkTempoControl::new(Arc::new(
+            LinkAudioOutput::new(120.0, "orbit-test").expect("create link session"),
+        ));
         let mut control = LinkAudioControl {
             reg_tx,
             cmd_tx,
             sample_rate: 48_000,
             num_channels: 2,
             registered: HashMap::new(),
+            tempo,
         };
 
         // 空集合は 0。

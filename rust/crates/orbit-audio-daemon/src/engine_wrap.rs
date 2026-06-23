@@ -193,6 +193,37 @@ impl EngineWrap {
         ))
     }
 
+    /// Link セッションに tempo(BPM)を push し OrbitScore を tempo leader にする（PR3・#333）。
+    /// `LinkAudioControl::set_tempo` は内部で `captureAppSessionState`（非RT・block しうる）を呼ぶので、
+    /// daemon WS handler は **spawn_blocking** で audio スレッド以外に隔離すること（session.rs）。tempo は
+    /// `LinkTempoControl`（`Arc<LinkAudioOutput>`）経由なので `&self` で足りる（register と違い `as_ref`）。
+    #[cfg(feature = "link-audio")]
+    pub fn set_link_tempo(&self, bpm: f64) -> Result<(), WrapError> {
+        // mutex poison は egress 利用可能だが runtime で壊れた状態 → runtime error。
+        let guard = self
+            .link
+            .lock()
+            .map_err(|_| WrapError::LinkAudio("link mutex poisoned".into()))?;
+        match guard.as_ref() {
+            Some(ctl) => {
+                ctl.set_tempo(bpm);
+                Ok(())
+            }
+            // egress 経路が無い（test backend）= unavailable（TS は warn-once で握り潰す）。
+            None => Err(WrapError::LinkAudioUnavailable(
+                "link audio not initialized (test backend has no egress path)".into(),
+            )),
+        }
+    }
+
+    /// feature `link-audio` 無効ビルド用の stub。TS は UNAVAILABLE を warn-once で握り潰す。
+    #[cfg(not(feature = "link-audio"))]
+    pub fn set_link_tempo(&self, _bpm: f64) -> Result<(), WrapError> {
+        Err(WrapError::LinkAudioUnavailable(
+            "engine built without 'link-audio' feature".into(),
+        ))
+    }
+
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
     /// daemon の 1 Hz ticker が polling して増加を WARNING event で surface する（非 RT observability）。
     /// link 未初期化（test backend）時は control 分が 0。test 注入分（本番 0）を必ず加える。

@@ -9,11 +9,24 @@
 //! とすることで、producer-side の ring drop が起きても後続 block の beat が producer の真の位置を追い、
 //! 永久 beat desync(drained-only だと drop 分だけ恒久的に遅れる)を防ぐ。drop は「音の gap」になるだけ。
 //! per-block の "now"(clock().micros())は使わない(ring latency 分の位相ずれを避ける)。
+//!
+//! 🔴 tempo-change re-anchor(PR3 / advisor): `beats_at_begin` は **共有 Link セッションの時間軸**に
+//! 乗るので、session tempo が変わると beat/frame 換算(`beat_per_frame`)が古くなり drift する。Link は
+//! last-setter-wins で **自分の tempo push も他ピア(Ableton 等)の変更も** session tempo に現れるため、
+//! consumer が毎 pump で `session_tempo()` を poll し、変化を検出したら segment を切り替える(poll-based:
+//! 自分の push 時のみ re-anchor する explicit を包含し、control→consumer の同期配線も要らない)。
+//! 切り替えでは **`capture_beat()` を再呼びしない**(再 sample すると ring latency 位相誤差を再導入する)。
+//! 代わりに segment baseline(`seg_anchor_beat` / `seg_anchor_produced` / `beat_per_frame`)を「今の
+//! 再構成 beat」へ連続 carry し、slope(`beat_per_frame`)だけを新 tempo に更新する(piecewise-linear)。
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::{CommitResult, LinkAudioOutput};
+
+/// tempo 変化検出の閾値(BPM)。Link の tempo は set 間で安定なので小さな epsilon で十分。
+/// 浮動小数の往復誤差で毎 block re-anchor しないための下限。
+const TEMPO_EPSILON_BPM: f64 = 1e-6;
 
 /// produced frame 数 = drain した frame + producer-side で drop された frame。
 /// drop(`dropped_samples` = interleaved サンプル単位)を frame に直して算入する。
@@ -22,18 +35,24 @@ fn produced_frames(drained_frames: u64, dropped_samples: u64, num_channels: usiz
     drained_frames + dropped_samples / (num_channels as u64).max(1)
 }
 
-/// buffer-begin の beat を線形再構成する。per-block の "now" を使わず anchor + produced-frames で
-/// 決定論的に求める(ring latency 非依存)。
+/// segment baseline から buffer-begin の beat を線形再構成する。per-block の "now" を使わず
+/// `seg_anchor_beat + (produced - seg_anchor_produced) * beat_per_frame` で決定論的に求める
+/// (ring latency 非依存)。tempo 変更時は segment を更新して境界で beat 連続・slope だけ変える。
 #[inline]
-fn reconstruct_beat(anchor_beat: f64, beat_per_frame: f64, produced_frames: u64) -> f64 {
-    anchor_beat + produced_frames as f64 * beat_per_frame
+fn reconstruct_beat(
+    seg_anchor_beat: f64,
+    seg_anchor_produced: u64,
+    beat_per_frame: f64,
+    produced: u64,
+) -> f64 {
+    seg_anchor_beat + produced.saturating_sub(seg_anchor_produced) as f64 * beat_per_frame
 }
 
 /// 1 つの channel への egress driver。**`LinkAudioOutput` は所有しない**（A4-2b-2b）: consumer
 /// thread が 1 つの `LinkAudioOutput`（Link session）を持ち、その上の複数 channel をそれぞれ本 driver
-/// で回す。`pump_once` に共有 output を `&` で渡す（commit / anchor capture はその output 経由）。
-/// **beat anchor は per-channel**（各 channel が自分の first-pump-with-data で capture・session 単位に
-/// hoist しない）。GPL consumer thread が所有する(`Send`)。
+/// で回す。`pump_once` に共有 output を `&` で渡す（commit / anchor capture / tempo poll はその output
+/// 経由）。**beat anchor は per-channel**（各 channel が自分の first-pump-with-data で capture・session
+/// 単位に hoist しない）。GPL consumer thread が所有する(`Send`)。
 pub struct LinkChannelEgress {
     consumer: rtrb::Consumer<f32>,
     /// native の RingTapSink が producer-side で drop した **interleaved サンプル数**(累積)。
@@ -46,10 +65,18 @@ pub struct LinkChannelEgress {
     block_frames: usize,
     /// pre-alloc した block バッファ(block_frames * num_channels)。RT 外だが alloc を毎回避ける。
     scratch: Vec<f32>,
-    // --- beat anchor(この channel の最初の pump で 1 回 capture・per-channel)---
+    // --- beat anchor(segment baseline・poll-based re-anchor・PR3)---
+    // 初回 pump で 1 回だけ `capture_beat()`。以降の tempo 変更(自分の push / 他ピア・last-setter-wins)は
+    // `session_tempo()` の poll で検出し、`capture_beat()` を再呼びせず segment を連続 carry する。
     anchored: bool,
-    anchor_beat: f64,
+    /// 現 segment の起点 beat。
+    seg_anchor_beat: f64,
+    /// 現 segment 起点での produced-frames。`beat = seg_anchor_beat + (produced -
+    /// seg_anchor_produced) * beat_per_frame`。
+    seg_anchor_produced: u64,
     beat_per_frame: f64,
+    /// 直近に観測した有効 session BPM(変化検出用)。
+    last_bpm: f64,
     /// この consumer が drain した frame 数(累積)。
     drained_frames: u64,
 }
@@ -77,10 +104,18 @@ impl LinkChannelEgress {
             block_frames,
             scratch: vec![0.0; block_frames * num_channels],
             anchored: false,
-            anchor_beat: 0.0,
+            seg_anchor_beat: 0.0,
+            seg_anchor_produced: 0,
             beat_per_frame: 0.0,
+            last_bpm: 0.0,
             drained_frames: 0,
         }
+    }
+
+    /// 指定 BPM から beat/frame 換算(beat_per_frame = (bpm/60)/sr)を求める。
+    #[inline]
+    fn beat_per_frame_for(&self, bpm: f64) -> f64 {
+        (bpm / 60.0) / self.sample_rate as f64
     }
 
     /// ring に 1 block 分溜まっていれば drain して `output` の当該 channel へ commit する。commit したら
@@ -92,20 +127,45 @@ impl LinkChannelEgress {
             return None;
         }
 
-        // この channel の egress 開始時に anchor(beat + tempo)を 1 回だけ capture。以後は frame から
-        // 再構成する(per-channel: channel ごとに登録時刻が違うので anchor も channel 固有)。
-        if !self.anchored {
-            self.anchor_beat = output.capture_beat(self.quantum);
-            let tempo = output.session_tempo();
-            let bpm = if tempo > 0.0 { tempo } else { 120.0 };
-            self.beat_per_frame = (bpm / 60.0) / self.sample_rate as f64;
-            self.anchored = true;
-        }
-
-        // この block の先頭時点の produced-frames から beat を決定論再構成(drop 算入)。
+        // この block 先頭時点の produced-frames(drop 算入)。anchor / re-anchor / commit すべてで同一値を
+        // 使う(between-call の drop 増加で beat がずれないように 1 回だけ load する)。
         let dropped = self.drops.load(Ordering::Relaxed);
         let produced = produced_frames(self.drained_frames, dropped, self.num_channels);
-        let beats_at_begin = reconstruct_beat(self.anchor_beat, self.beat_per_frame, produced);
+
+        // 現在の session tempo(captureAudioSessionState・lock-free・audio スレッド)。last-setter-wins
+        // なので自分の push も他ピアの変更もここに現れる。<=0 は capture 失敗(shim catch)で、初回 anchor の
+        // fallback には使うが re-anchor の比較基準にはしない(過渡的な 0 で誤検出しない)。
+        let tempo = output.session_tempo();
+
+        if !self.anchored {
+            // egress 開始時に anchor(beat)を 1 回だけ capture。以後 `capture_beat()` は二度と呼ばない
+            // (ring latency 位相誤差の再導入を避ける・advisor)。
+            let bpm = if tempo > 0.0 { tempo } else { 120.0 };
+            self.seg_anchor_beat = output.capture_beat(self.quantum);
+            self.seg_anchor_produced = produced;
+            self.beat_per_frame = self.beat_per_frame_for(bpm);
+            self.last_bpm = bpm;
+            self.anchored = true;
+        } else if tempo > 0.0 && (tempo - self.last_bpm).abs() > TEMPO_EPSILON_BPM {
+            // tempo 変更を検出 → segment を切り替える。新 segment の起点 beat は「今の再構成 beat」(連続)・
+            // 起点 produced は今の produced・slope を新 tempo に。`capture_beat()` は呼ばない(連続 carry)。
+            self.seg_anchor_beat = reconstruct_beat(
+                self.seg_anchor_beat,
+                self.seg_anchor_produced,
+                self.beat_per_frame,
+                produced,
+            );
+            self.seg_anchor_produced = produced;
+            self.beat_per_frame = self.beat_per_frame_for(tempo);
+            self.last_bpm = tempo;
+        }
+
+        let beats_at_begin = reconstruct_beat(
+            self.seg_anchor_beat,
+            self.seg_anchor_produced,
+            self.beat_per_frame,
+            produced,
+        );
 
         // ring から 1 block 分を scratch へコピー(chunk は self.consumer のみ借用・scratch は別 field)。
         {
@@ -149,12 +209,12 @@ mod tests {
 
     #[test]
     fn reconstruct_beat_is_linear_and_monotonic() {
-        // anchor=4.0, bpf=0.001 → produced=1000 で +1.0 = 5.0。
-        assert!((reconstruct_beat(4.0, 0.001, 1000) - 5.0).abs() < 1e-9);
-        // produced=0 で anchor そのもの。
-        assert!((reconstruct_beat(4.0, 0.001, 0) - 4.0).abs() < 1e-9);
+        // seg_anchor_beat=4.0, seg_anchor_produced=0, bpf=0.001 → produced=1000 で +1.0 = 5.0。
+        assert!((reconstruct_beat(4.0, 0, 0.001, 1000) - 5.0).abs() < 1e-9);
+        // produced=seg_anchor_produced で anchor そのもの。
+        assert!((reconstruct_beat(4.0, 0, 0.001, 0) - 4.0).abs() < 1e-9);
         // 単調増加。
-        assert!(reconstruct_beat(0.0, 0.001, 2000) > reconstruct_beat(0.0, 0.001, 1000));
+        assert!(reconstruct_beat(0.0, 0, 0.001, 2000) > reconstruct_beat(0.0, 0, 0.001, 1000));
     }
 
     #[test]
@@ -165,10 +225,10 @@ mod tests {
         let anchor = 0.0;
         let nch = 2;
         // block1: drained=512(256f), drop=0 → produced=256 → beat=0.256。
-        let b1 = reconstruct_beat(anchor, bpf, produced_frames(256, 0, nch));
+        let b1 = reconstruct_beat(anchor, 0, bpf, produced_frames(256, 0, nch));
         // この後 producer が 512 sample(256f)drop。block2: drained=512(256f), drop=512 →
         // produced=256+256=512 → beat=0.512。drained-only だと 0.256 のままで desync する。
-        let b2 = reconstruct_beat(anchor, bpf, produced_frames(256, 512, nch));
+        let b2 = reconstruct_beat(anchor, 0, bpf, produced_frames(256, 512, nch));
         assert!((b1 - 0.256).abs() < 1e-9, "b1={b1}");
         assert!(
             (b2 - 0.512).abs() < 1e-9,
@@ -176,5 +236,54 @@ mod tests {
         );
         // drop 分だけ beat が前進している(gap を埋めるのでなく真の位置を追う)。
         assert!((b2 - b1 - 0.256).abs() < 1e-9);
+    }
+
+    #[test]
+    fn reanchor_is_beat_continuous_and_changes_slope() {
+        // advisor の load-bearing detail: tempo 変更時の re-anchor は境界で beat 連続・slope だけ変える
+        // (capture_beat() を再呼びしない連続 carry)。
+        // segment1: anchor_beat=0, anchor_produced=0, bpf=0.001。produced=1000 → beat=1.0。
+        let bpf1 = 0.001;
+        let (seg1_beat, seg1_prod) = (0.0_f64, 0_u64);
+        let at_change = reconstruct_beat(seg1_beat, seg1_prod, bpf1, 1000);
+        assert!((at_change - 1.0).abs() < 1e-9);
+
+        // tempo 2x → bpf2 = 0.002。re-anchor: seg2_beat = at_change(連続), seg2_prod=1000。
+        let bpf2 = 0.002;
+        let (seg2_beat, seg2_prod) = (at_change, 1000_u64);
+
+        // 境界(produced=1000)で連続: 新 segment でも同じ beat。
+        let at_boundary_new = reconstruct_beat(seg2_beat, seg2_prod, bpf2, 1000);
+        assert!(
+            (at_boundary_new - at_change).abs() < 1e-9,
+            "境界で beat が不連続: {at_boundary_new} != {at_change}"
+        );
+
+        // 境界後 produced=1500 → beat = 1.0 + 500*0.002 = 2.0(新 slope)。
+        let after = reconstruct_beat(seg2_beat, seg2_prod, bpf2, 1500);
+        assert!((after - 2.0).abs() < 1e-9, "after={after}");
+
+        // 旧 slope のままなら 1.0 + 500*0.001 = 1.5 だったはず → slope が変わっている。
+        let old_slope_would_be = reconstruct_beat(seg1_beat, seg1_prod, bpf1, 1500);
+        assert!((old_slope_would_be - 1.5).abs() < 1e-9);
+        assert!(
+            after > old_slope_would_be,
+            "tempo 増で slope が増えていない: after={after} old={old_slope_would_be}"
+        );
+    }
+
+    #[test]
+    fn reanchor_slowdown_reduces_slope_but_keeps_continuity() {
+        // 減速側(tempo 半分)。境界連続 + slope 減少を確認。
+        let bpf1 = 0.002;
+        let (seg1_beat, seg1_prod) = (0.0_f64, 0_u64);
+        let at_change = reconstruct_beat(seg1_beat, seg1_prod, bpf1, 1000); // 2.0
+        let bpf2 = 0.001;
+        let (seg2_beat, seg2_prod) = (at_change, 1000_u64);
+        // 連続。
+        assert!((reconstruct_beat(seg2_beat, seg2_prod, bpf2, 1000) - at_change).abs() < 1e-9);
+        // 境界後 produced=2000 → 2.0 + 1000*0.001 = 3.0(旧 slope なら 2.0+1000*0.002=4.0)。
+        let after = reconstruct_beat(seg2_beat, seg2_prod, bpf2, 2000);
+        assert!((after - 3.0).abs() < 1e-9, "after={after}");
     }
 }

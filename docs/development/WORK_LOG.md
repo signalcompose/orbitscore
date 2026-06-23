@@ -17,14 +17,51 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.165 feat(engine): A4-PR3 setLinkTempo TS-side wire (#333) (Jun 23, 2026)
+### 6.165 feat(engine): A4-PR3 Link tempo leader — Rust daemon + TS wire (#333) (Jun 23, 2026)
 
 **Date**: 2026-06-23
-**Status**: ✅ 完了
+**Status**: ✅ 実装完了（レビュー前）
 **Branch**: `333-linkaudio-tempo-leader`
-**Issue**: #333（A4 PR3 Link tempo leader の TS 側実装）
+**Issue**: #333（A4 PR3 Link tempo leader）
+**PR**: #334
 
-**実装内容**:
+`global.tempo()` を Ableton Link セッションに push し OrbitScore を Rust 経路
+（`ORBITSCORE_ENGINE=rust`）の Link tempo leader にする。SC 経路は既に動作中（#283）で、
+本 PR は Rust 経路の no-op を実装して parity を埋める（net-new・新規 GPL 面ゼロ）。
+tempo FFI（`set_tempo`/`session_tempo`）は A4-2b で GPL 隔離 crate に既存だったため、
+残作業は wire + handle-ownership/threading + tempo-change re-anchor に絞られた。
+
+**Rust 実装（threading seam・Opus 直列・advisor 設計確認済）**:
+- **論点1 handle 共有 = 案A + newtype**: `orbit-link-audio/src/lib.rs` で `LinkAudioOutput` を
+  `Arc` 共有可能化（`unsafe impl Sync` 追加・SAFETY を「app-state path=control / audio-state
+  path=consumer の disjoint thread role を Link が内部同期」で根拠付け）。control 側は
+  `LinkTempoControl(Arc<LinkAudioOutput>)` newtype で `set_tempo` のみ公開し audio-state
+  メソッド（commit/capture_beat/session_tempo）を型レベルで隠蔽（`set_tempo` は `pub(crate)`）。
+- **論点3 re-anchor = poll-based**（advisor が当初の explicit 推奨を撤回）: `egress.rs` で consumer が
+  毎 pump `session_tempo()` を poll し、変化検出で segment baseline（`seg_anchor_beat`/
+  `seg_anchor_produced`/`beat_per_frame`）を切り替える。Link は last-setter-wins なので自分の push も
+  他ピア（Ableton 等）の変更も追従する（explicit を包含・control→consumer 同期配線不要）。**`capture_beat()`
+  を再呼びしない**連続 carry（ring latency 位相誤差の再導入を回避・advisor の load-bearing detail）。
+  境界での beat 連続 + slope 変化を単体テストで固定（`reanchor_is_beat_continuous_and_changes_slope`・
+  `reanchor_slowdown_reduces_slope_but_keeps_continuity`）。
+- **論点2 blocking = spawn_blocking**: `session.rs` の `SetLinkTempo` arm が `set_tempo`（内部
+  `captureAppSessionState`・非RT・block しうる）を LoadSample と同様 spawn_blocking で隔離する
+  （tokio worker を塞がない・app-state path を audio スレッド外で実行する Link 制約も満たす）。
+- daemon `link_audio.rs`: `LinkAudioControl` が `LinkTempoControl` を保持、`consumer_loop` は
+  `Arc<LinkAudioOutput>` を所有（teardown = `orbit_link_destroy` は app-side cleanup〔enable(false)+
+  delete〕で audio-thread 非依存＝shim 確認済のため、last-Arc-drop が consumer 外でも安全）。
+  `engine_wrap.rs`: `set_link_tempo(&self)`（feature 有 = `as_ref` で `set_tempo` / 無 =
+  `LINK_AUDIO_UNAVAILABLE` stub）。
+- **lifecycle 決定（MVP）**: tempo-lead は Link subsystem up（feature `link-audio` 起動・
+  `LinkAudioControl` spawn 済）を要する。active channel 0 でも可。channel 完全非依存の単独 leader への
+  decouple は defer。
+- **license**: tempo API は既に `orbit-link-audio` 内＝**新規 GPL 面ゼロ**。`cargo deny check licenses`
+  ok（default graph GPL-free 維持）。
+
+**Rust テスト**: `orbit-link-audio` 9 passed（re-anchor 連続性 2 件含む）/ daemon lib 6 passed +
+integration 18 passed / `cargo test --workspace` 緑。
+
+**TS 実装内容**:
 - `protocol-types.ts`: `CommandMethod` union に `'SetLinkTempo'` を追加（Rust daemon 名と一致）
 - `daemon-client.ts`: `setLinkTempo(bpm: number)` メソッドを追加 — `this.request('SetLinkTempo', { bpm })` パターン
 - `rust-engine-player.ts`: `GapKind` に `'linkTempo'` 追加・`freshWarned()` に `linkTempo: false` 追加・`setLinkTempo` no-op を実装に差し替え（`LINK_AUDIO_UNAVAILABLE` = warn-once 握り潰し、`LINK_AUDIO_RUNTIME` = rethrow）

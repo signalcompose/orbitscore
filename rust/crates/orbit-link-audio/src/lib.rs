@@ -14,6 +14,7 @@
 
 use std::ffi::{CString, NulError};
 use std::os::raw::{c_char, c_int};
+use std::sync::Arc;
 
 mod egress;
 pub use egress::LinkChannelEgress;
@@ -82,15 +83,25 @@ pub enum CommitResult {
 
 /// 1 つの Ableton Link セッションと、その上の名前付き出力 channel 群。
 ///
-/// `Send`: 構築スレッドから GPL consumer thread へ move して使う想定。`!Sync`
-/// (内部の Link 状態は単一スレッドからのみ触る)。
+/// `Send + Sync`: PR3 以降 `Arc<LinkAudioOutput>` を control スレッド(tempo push)と
+/// consumer=audio スレッド(egress)で共有する。Link の thread モデルに従い app-state
+/// path と audio-state path を disjoint なスレッドから呼ぶ(下の `unsafe impl` 参照)。
 pub struct LinkAudioOutput {
     raw: *mut OrbitLinkRaw,
 }
 
-// SAFETY: `raw` は単一の所有者(本 struct)を通じてのみアクセスされ、構築後に
-// consumer thread へ move される。複数スレッドからの同時アクセスは行わない。
+// SAFETY (Send): 構築スレッドから GPL consumer thread へ move して使う。
+// SAFETY (Sync): PR3 で `Arc<LinkAudioOutput>` を control スレッドと consumer=audio
+// スレッドで共有する。アクセスは Ableton Link の thread モデルに従い disjoint:
+//   - app-state path (`set_tempo` = captureAppSessionState・内部 mutex) は control
+//     スレッド(spawn_blocking)から・[`LinkTempoControl`] 経由のみ。
+//   - audio-state path (`commit_channel` / `capture_beat` / `session_tempo` =
+//     captureAudioSessionState・単一 audio スレッド専用) は consumer スレッドから。
+// 両 path は別スレッドから呼ばれ Link が内部で同期する。control 側は
+// [`LinkTempoControl`] newtype で audio-state メソッドに型レベルで到達できない
+// (`set_tempo` は `pub(crate)`・newtype のみが委譲呼び出しする)。
 unsafe impl Send for LinkAudioOutput {}
+unsafe impl Sync for LinkAudioOutput {}
 
 impl LinkAudioOutput {
     /// 指定 BPM と peer 名で Link セッションを生成する。
@@ -182,8 +193,10 @@ impl LinkAudioOutput {
         }
     }
 
-    /// Link テンポリーダーとして BPM を push する(PR3 で配線)。
-    pub fn set_tempo(&self, bpm: f64) {
+    /// Link テンポリーダーとして BPM を push する。内部で `captureAppSessionState`
+    /// (非RT・block しうる)を呼ぶので audio スレッド以外から呼ぶこと。control 側は
+    /// [`LinkTempoControl`] 経由でのみ到達する(`pub(crate)`)。
+    pub(crate) fn set_tempo(&self, bpm: f64) {
         // SAFETY: raw は valid。
         unsafe { orbit_link_set_tempo(self.raw, bpm) };
     }
@@ -204,8 +217,36 @@ impl LinkAudioOutput {
 
 impl Drop for LinkAudioOutput {
     fn drop(&mut self) {
-        // SAFETY: raw は valid で、本 struct が唯一の所有者。二重解放はしない。
+        // SAFETY: raw は valid で、本 struct が唯一の所有者。`Arc<LinkAudioOutput>` で
+        // 共有しても drop は最後の Arc が落ちた時に 1 回だけ走る(二重解放はしない)。
+        // `orbit_link_destroy` は app-side cleanup(enable(false)+delete)で audio スレッド
+        // 要件が無いため、最後の Arc が consumer 以外のスレッドで落ちても安全(PR3・advisor)。
         unsafe { orbit_link_destroy(self.raw) };
+    }
+}
+
+/// Link tempo leader の control-side ハンドル(PR3・論点1 案A + newtype)。
+///
+/// `set_tempo` だけを公開し、audio-state メソッド(commit / capture_beat / session_tempo)を
+/// 型レベルで隠蔽する。daemon の control スレッド(WS handler を spawn_blocking で隔離)が
+/// 保持し、consumer=audio スレッドが持つ `Arc<LinkAudioOutput>` と同一 Link セッションを
+/// 共有する。これにより control から audio-state path を誤って呼べない(thread role の
+/// disjoint 性を型で担保する)。
+pub struct LinkTempoControl {
+    output: Arc<LinkAudioOutput>,
+}
+
+impl LinkTempoControl {
+    /// consumer と同一 session を指す `Arc` から control ハンドルを作る。
+    pub fn new(output: Arc<LinkAudioOutput>) -> Self {
+        Self { output }
+    }
+
+    /// Link セッションに BPM を push し OrbitScore を tempo leader にする。
+    /// `captureAppSessionState`(非RT・block しうる)を内部で呼ぶので、呼び出し側は
+    /// audio スレッド以外(spawn_blocking 等)で実行すること。
+    pub fn set_tempo(&self, bpm: f64) {
+        self.output.set_tempo(bpm);
     }
 }
 

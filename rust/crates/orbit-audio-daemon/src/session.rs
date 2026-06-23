@@ -300,6 +300,29 @@ async fn handle_command(
                 ProtocolError::new("MALFORMED_REQUEST", "missing or empty 'channel' param"),
             ),
         },
+        // LinkAudio tempo leader: global.tempo() を Link セッションに push する（PR3・#333）。
+        // set_link_tempo は内部で captureAppSessionState（非RT・block しうる）を呼ぶので、LoadSample と
+        // 同様 spawn_blocking で tokio ワーカーを塞がない（set_tempo=app-state path は audio スレッド以外で
+        // 実行する Link 制約も満たす）。feature 無効ビルドは engine stub が LINK_AUDIO_UNAVAILABLE を返し
+        // TS は warn-once で握り潰す。
+        "SetLinkTempo" => match params.get("bpm").and_then(|p| p.as_f64()) {
+            Some(bpm) if bpm.is_finite() && bpm > 0.0 => {
+                let engine = engine.clone();
+                let res = tokio::task::spawn_blocking(move || engine.set_link_tempo(bpm)).await;
+                match res {
+                    Ok(Ok(())) => ok(&id, json!({"status": "tempo_set", "bpm": bpm})),
+                    Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
+                    Err(join_err) => err(
+                        &id,
+                        ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                    ),
+                }
+            }
+            _ => err(
+                &id,
+                ProtocolError::new("MALFORMED_REQUEST", "missing or non-positive 'bpm' param"),
+            ),
+        },
         "PlayAt" => {
             let time_sec = param_f64(&params, "time_sec", 0.0);
             let gain = param_f64(&params, "gain", 1.0) as f32;
