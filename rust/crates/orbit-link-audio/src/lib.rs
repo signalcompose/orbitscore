@@ -15,6 +15,14 @@
 use std::ffi::{CString, NulError};
 use std::os::raw::{c_char, c_int};
 
+mod egress;
+pub use egress::LinkChannelEgress;
+
+/// 層B 検証専用の channel receiver。feature `verification-receiver`（default off）でのみ公開。
+/// production egress は sender-only なので出荷経路には出さない。
+#[cfg(feature = "verification-receiver")]
+pub mod verification;
+
 #[repr(C)]
 struct OrbitLinkRaw {
     _private: [u8; 0],
@@ -38,9 +46,12 @@ extern "C" {
         num_frames: usize,
         num_channels: usize,
         sample_rate: u32,
+        beats_at_begin: f64,
         quantum: f64,
     ) -> c_int;
     fn orbit_link_set_tempo(link: *mut OrbitLinkRaw, bpm: f64);
+    fn orbit_link_capture_beat(link: *mut OrbitLinkRaw, quantum: f64) -> f64;
+    fn orbit_link_session_tempo(link: *mut OrbitLinkRaw) -> f64;
 }
 
 /// LinkAudio FFI のエラー。
@@ -52,6 +63,8 @@ pub enum LinkAudioError {
     RegisterFailed(String),
     #[error("文字列に内部 null が含まれる")]
     InvalidString(#[from] NulError),
+    #[error("egress consumer thread の起動に失敗した: {0}")]
+    ThreadSpawn(String),
 }
 
 /// commit_channel の結果。
@@ -119,7 +132,10 @@ impl LinkAudioOutput {
         Ok(id)
     }
 
-    /// interleaved f32 の 1 ブロックを channel に commit する。
+    /// interleaved f32 の 1 ブロックを channel に commit する。`beats_at_begin` は呼び出し側
+    /// (GPL consumer thread)が cumulative-frames から決定論再構成した buffer-begin の beat 位置
+    /// (ring latency 分の位相ずれを避けるため shim 内では "now" から計算しない・A4-2b-2)。
+    #[allow(clippy::too_many_arguments)]
     pub fn commit_channel(
         &self,
         channel_id: i32,
@@ -127,6 +143,7 @@ impl LinkAudioOutput {
         num_frames: usize,
         num_channels: usize,
         sample_rate: u32,
+        beats_at_begin: f64,
         quantum: f64,
     ) -> CommitResult {
         debug_assert!(
@@ -147,6 +164,7 @@ impl LinkAudioOutput {
                 num_frames,
                 num_channels,
                 sample_rate,
+                beats_at_begin,
                 quantum,
             )
         };
@@ -168,6 +186,19 @@ impl LinkAudioOutput {
     pub fn set_tempo(&self, bpm: f64) {
         // SAFETY: raw は valid。
         unsafe { orbit_link_set_tempo(self.raw, bpm) };
+    }
+
+    /// egress 開始時の beat anchor を取得する(quantum 指定)。GPL consumer thread
+    /// (= Link "audio thread")から 1 回だけ呼ぶ。以後は cumulative-frames から線形再構成する。
+    pub fn capture_beat(&self, quantum: f64) -> f64 {
+        // SAFETY: raw は valid。
+        unsafe { orbit_link_capture_beat(self.raw, quantum) }
+    }
+
+    /// 現在の session tempo(BPM)。beat/frame 換算(beat_per_frame = (bpm/60)/sr)用。
+    pub fn session_tempo(&self) -> f64 {
+        // SAFETY: raw は valid。
+        unsafe { orbit_link_session_tempo(self.raw) }
     }
 }
 
@@ -200,12 +231,13 @@ mod tests {
         assert_eq!(id2, 1);
 
         // 購読者なしなので no-op を期待。symbol が呼べることの証明。
+        // 引数 = (channel_id, interleaved, num_frames, num_channels, sample_rate, beats_at_begin, quantum)。
         let silence = vec![0.0f32; 256 * 2];
-        let rc = out.commit_channel(id, &silence, 256, 2, 48_000, 4.0);
+        let rc = out.commit_channel(id, &silence, 256, 2, 48_000, 0.0, 4.0);
         assert_eq!(rc, CommitResult::NoSubscriber);
 
         // 未登録の channel id。
-        let rc_bad = out.commit_channel(99, &silence, 256, 2, 48_000, 4.0);
+        let rc_bad = out.commit_channel(99, &silence, 256, 2, 48_000, 0.0, 4.0);
         assert_eq!(rc_bad, CommitResult::ChannelNotFound);
 
         out.set_tempo(124.0);
@@ -224,5 +256,70 @@ mod tests {
         // LinkAudioOutput は Debug を持たないため unwrap_err ではなく matches! で判定。
         let result = LinkAudioOutput::new(120.0, "bad\0peer");
         assert!(matches!(result, Err(LinkAudioError::InvalidString(_))));
+    }
+
+    // ===== 層B: headless egress 受信検証(verification 専用 receiver shim 経由)=====
+
+    // 層B(2b-2a Done 基準): 同一プロセスに A=sender egress / B=receiver の 2 LinkAudio インスタンス
+    // を立て、`LinkChannelEgress` 経由の **実 commit** を B が headless 受信できることを検証する。
+    // multicast loopback 依存(CI/sandbox では不安定・Ableton/link #50)なので #[ignore]。local で
+    // `cargo test -p orbit-link-audio --features verification-receiver -- --ignored` 実行。discovery
+    // 不成立(multicast off)なら assert で fail = その env では 層B 不可の signal(手動 fallback 報告へ)。
+    // receiver は `verification` module(feature gate)に公開した単一ソースを使う(daemon の実 callback
+    // 駆動 層B テストと共有・lib.rs に private 複製を置かない)。
+    #[cfg(feature = "verification-receiver")]
+    #[test]
+    #[ignore = "layer-B: needs multicast loopback (local only); --features verification-receiver --ignored"]
+    fn layer_b_egress_received_by_inprocess_receiver() {
+        use crate::verification::VerificationReceiver;
+        use std::sync::atomic::AtomicU64;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let sender = LinkAudioOutput::new(120.0, "orbit-A-egress").expect("sender");
+        sender.set_enabled(true);
+        let ch = sender.register_channel("loopB", 8192).expect("register");
+
+        let recv_host = LinkAudioOutput::new(120.0, "orbit-B-recv").expect("recv host");
+        recv_host.set_enabled(true);
+        let recv = VerificationReceiver::new(&recv_host, "loopB");
+
+        // discovery: receiver が channel を発見するまで(~3s)。
+        let mut subscribed = false;
+        for _ in 0..300 {
+            if recv.try_subscribe() {
+                subscribed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            subscribed,
+            "層B: receiver が channel を発見できなかった(この env では multicast loopback 不可)"
+        );
+
+        // ring + egress on sender。
+        let (mut prod, cons) = rtrb::RingBuffer::<f32>::new(48_000 * 2);
+        let drops = Arc::new(AtomicU64::new(0));
+        let mut egress = LinkChannelEgress::new(sender, cons, drops, ch, 2, 48_000, 4.0, 256);
+
+        // 既知サンプル(0.2)を feed + pump、receiver が受け取るまで(~2s)。
+        let mut got = 0u64;
+        for _ in 0..400 {
+            let block = vec![0.2f32; 256 * 2];
+            let _ = prod.push_partial_slice(&block);
+            let _ = egress.pump_once();
+            got = recv.count();
+            if got > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            got > 0,
+            "層B: receiver が実 egress から buffer を受信しなかった"
+        );
+        // 0.2 → int16 ≈ 6553。非ゼロ = 実音が届いた(無音でない)。
+        assert!(recv.last_sample() != 0, "層B: 受信サンプルが無音");
     }
 }

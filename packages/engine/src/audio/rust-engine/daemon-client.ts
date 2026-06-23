@@ -257,6 +257,15 @@ export class DaemonClient extends EventEmitter {
     await this.request('SetGlobalGain', { value, ramp_sec: rampSec })
   }
 
+  /**
+   * LinkAudio outputChannel を daemon に登録する（#209・A4-2b-2）。登録後、その channel に
+   * tag された `playAt` の出力が LinkAudio egress 経由で送出される。daemon が feature
+   * `link-audio` 無効ビルドなら LINK_AUDIO_ERROR で reject される。
+   */
+  async registerLinkAudioChannel(channel: string): Promise<void> {
+    await this.request('RegisterLinkAudioChannel', { channel })
+  }
+
   async getStatus(): Promise<Record<string, unknown>> {
     return this.request('GetStatus', {})
   }

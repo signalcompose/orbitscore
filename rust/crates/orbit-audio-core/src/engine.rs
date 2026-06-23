@@ -143,6 +143,23 @@ impl Engine {
         self.with_scheduler(out, |s, b| s.render_channel(b, channel));
     }
 
+    /// 本番 RT 用の single-pass multi-buffer render（A4-2b-2）。`hardware_out`（channel=None）と
+    /// 各 named channel buffer を 1 パスで埋め transport を 1 回だけ進める
+    /// （[`Scheduler::render_multi`]）。RT 競合（try_lock 失敗）時は `render` の silent-drop 規約を
+    /// multi-buffer に拡張し、**hardware と全 channel buffer を無音**にする（ramp を多重に進めないため
+    /// 単一の try_lock で一括処理する）。
+    pub fn render_multi(&self, hardware_out: &mut [f32], channels: &mut [(&str, &mut [f32])]) {
+        match self.inner.try_lock() {
+            Ok(mut s) => s.render_multi(hardware_out, channels),
+            Err(_) => {
+                hardware_out.fill(0.0);
+                for (_, buf) in channels.iter_mut() {
+                    buf.fill(0.0);
+                }
+            }
+        }
+    }
+
     /// 現在の出力ストリーム時刻（秒）を返す。
     /// ロック取得に失敗した場合は `None` を返し、呼び出し側がストリーム開始直後の
     /// `Some(0.0)` と区別できるようにする。
@@ -170,5 +187,90 @@ mod tests {
     fn now_sec_returns_some_zero_at_start() {
         let engine = Engine::new(48_000, 2);
         assert_eq!(engine.now_sec(), Some(0.0));
+    }
+
+    // render_multi の Engine ラッパが channel タグで出力先を分離することを CI で検証する
+    // （ルーティング本体の網羅は Scheduler::render_multi 側のテスト群・ここは Engine の委譲を pin）。
+    // try_lock 競合時の全バッファ zero-fill 経路は `render` と同一の with_scheduler 規約
+    // （inner Mutex は非公開で決定論的に競合を起こせない）。
+    #[test]
+    fn render_multi_routes_by_channel_tag() {
+        let engine = Engine::new(48_000, 2);
+        // tagged "fx" イベント。
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("fx".into()),
+                "p-fx".into(),
+                Sample::new(vec![0.5f32; 200], 48_000, 2),
+            )
+            .expect("schedule tagged");
+        // untagged（hardware）イベント。
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                None,
+                "p-hw".into(),
+                Sample::new(vec![0.3f32; 200], 48_000, 2),
+            )
+            .expect("schedule untagged");
+
+        let mut hw = vec![0.0f32; 400];
+        let mut chbuf = vec![0.0f32; 400];
+        let mut chans: [(&str, &mut [f32]); 1] = [("fx", &mut chbuf)];
+        engine.render_multi(&mut hw, &mut chans);
+
+        // tagged は channel buffer、untagged は hardware に分離して出力される。
+        assert!(
+            chbuf.iter().any(|&x| x != 0.0),
+            "tagged event must land in the channel buffer"
+        );
+        assert!(
+            hw.iter().any(|&x| x != 0.0),
+            "untagged event must land in hardware"
+        );
+    }
+
+    // tagged-only のとき hardware は無音（tagged event が hardware に漏れない＝routing 分離の確証）。
+    #[test]
+    fn render_multi_tagged_event_does_not_leak_to_hardware() {
+        let engine = Engine::new(48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("fx".into()),
+                "p-fx".into(),
+                Sample::new(vec![0.5f32; 200], 48_000, 2),
+            )
+            .expect("schedule tagged");
+
+        let mut hw = vec![0.0f32; 400];
+        let mut chbuf = vec![0.0f32; 400];
+        let mut chans: [(&str, &mut [f32]); 1] = [("fx", &mut chbuf)];
+        engine.render_multi(&mut hw, &mut chans);
+
+        assert!(
+            chbuf.iter().any(|&x| x != 0.0),
+            "tagged event must land in the channel buffer"
+        );
+        assert!(
+            hw.iter().all(|&x| x == 0.0),
+            "hardware must stay silent when the only event is channel-tagged"
+        );
     }
 }

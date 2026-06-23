@@ -18,13 +18,22 @@ path = "src/main.rs"
 [features]
 # 🔴 GPL feature。**default off**。有効化すると Ableton Link(GPL-2.0-or-later)が
 # 依存グラフに入る。permissive な engine core はこの feature に依存しない。
-link-audio = ["dep:orbit-link-audio"]
+# rtrb は permissive(MIT/Apache)だが、reg-ring producer 型を名指すのは link-audio 経路のみ
+# なので feature に括る（default ビルドの依存グラフを増やさない）。
+link-audio = ["dep:orbit-link-audio", "dep:rtrb"]
+# 層B テスト専用 feature（**default off**）。実 cpal callback 駆動の egress を別 LinkAudio
+# インスタンス(receiver)で headless 検証する unit test を有効化する。orbit-link-audio の
+# verification receiver を引き込む。production link-audio には verification を出さない。
+# default off なので cargo-deny の "default graph は GPL-free" 不変条件には影響しない。
+link-audio-verification = ["link-audio", "orbit-link-audio/verification-receiver"]
 
 [dependencies]
 orbit-audio-core = { path = "../orbit-audio-core" }
 orbit-audio-native = { path = "../orbit-audio-native" }
 # GPL 隔離 crate。feature `link-audio` 経由でのみ取り込む optional dep。
 orbit-link-audio = { path = "../orbit-link-audio", optional = true }
+# reg-ring producer(`rtrb::Producer<LinkChannelActivate>`)を名指すため。link-audio 経路専用。
+rtrb = { version = "0.3", optional = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

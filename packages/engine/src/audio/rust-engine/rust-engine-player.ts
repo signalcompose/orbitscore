@@ -42,7 +42,7 @@ import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
 
 import { DaemonClient } from './daemon-client'
-import { DaemonConnectionError, DaemonQuitError } from './errors'
+import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './errors'
 
 /**
  * boundary で明示する未対応 feature gap の種別（A4 era）。
@@ -403,16 +403,29 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * LinkAudio チャンネル登録（#209）は A4-2b-2（Rust LinkAudio egress 配線）の担当。
-   * 現状は未対応を 1 回 warn する（throw せず boot/再生は継続）。`scheduleEvent` /
-   * `scheduleSliceEvent` と同じ `'outputChannel'` GapKind を共有し first-wins で 1 回だけ出す
-   * ため、文言は整合させる。
+   * LinkAudio チャンネル登録（#209・A4-2b-2）。daemon に登録を要求し、成功すればその channel に
+   * tag された再生が LinkAudio egress 経由で送出される。daemon が feature `link-audio` 無効
+   * ビルド（既定の permissive daemon）の場合は LINK_AUDIO_ERROR で reject されるので、**throw せず**
+   * 1 回 warn して継続する（channel は tag され続けるが出力は hardware のみ）。`scheduleEvent` /
+   * `scheduleSliceEvent` と同じ `'outputChannel'` GapKind を共有し first-wins で 1 回だけ出す。
    */
   async registerLinkAudioChannel(channelName: string): Promise<void> {
-    this.warnOnce(
-      'outputChannel',
-      `⚠️  [rust-engine] LinkAudio channel "${channelName}": egress is not wired yet (A4-2b-2) — channel is tagged on the daemon but output is hardware only.`,
-    )
+    try {
+      await this.daemon.registerLinkAudioChannel(channelName)
+    } catch (err) {
+      // 想定する gap は「daemon が feature `link-audio` 無効ビルド」= LINK_AUDIO_ERROR のみ。
+      // これは scheduleEvent と同じ warn-once gap として握り潰す（出力は hardware のみで継続）。
+      // それ以外（daemon 死亡・transport エラー・reg-ring 満杯等）は本物の失敗なので、誤って
+      // 「build に feature が無い」と誤ラベルせず rethrow して呼び出し側に surface させる。
+      if (err instanceof DaemonProtocolError && err.code === 'LINK_AUDIO_ERROR') {
+        this.warnOnce(
+          'outputChannel',
+          `⚠️  [rust-engine] LinkAudio channel "${channelName}": daemon was built without the link-audio feature — channel is tagged but output is hardware only.`,
+        )
+        return
+      }
+      throw err
+    }
   }
 
   async setLinkTempo(_bpm: number): Promise<void> {

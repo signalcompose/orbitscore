@@ -28,6 +28,8 @@ pub enum WrapError {
     SampleNotFound(String),
     #[error("scheduler error: {0}")]
     Scheduler(String),
+    #[error("link audio error: {0}")]
+    LinkAudio(String),
 }
 
 /// 共有可能なエンジン wrapper。
@@ -44,10 +46,26 @@ pub struct EngineWrap {
     /// Stop 経由で停止済みの play_id。PlayEnded 遅延タスクが自然発火を抑制するために参照する。
     /// PlayEnded 発火時に take（remove）されるため、通常ケースでは事後掃除不要。
     stopped_play_ids: Mutex<HashSet<String>>,
+    /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
+    /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
+    /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
+    /// を `&self` のまま提供する。本番 `start()` で `Some`、test backend 経路では `None`。
+    #[cfg(feature = "link-audio")]
+    link: Mutex<Option<crate::link_audio::LinkAudioControl>>,
 }
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
-pub struct StreamGuard(#[allow(dead_code)] pub(crate) OutputStream);
+///
+/// feature `link-audio` 時は LinkAudio consumer thread の teardown guard も保持する。
+/// **field 順は load-bearing ではないが意図的**（advisor #2）: `_stream` を先に drop して cpal
+/// callback（ring の push 元）を止めてから `_link`（consumer thread を signal+join）を drop する。
+/// rtrb はどちらの順でも UB にならない（逆順なら callback が undrained ring に push して drop
+/// カウントするだけ）が、teardown 時の無駄な drop を避けるためこの順にしてある。reorder 禁止。
+pub struct StreamGuard {
+    _stream: OutputStream,
+    #[cfg(feature = "link-audio")]
+    _link: Option<crate::link_audio::LinkAudioGuard>,
+}
 
 impl EngineWrap {
     /// Engine とストリーム guard を起動する（本番用、cpal 既定出力）。
@@ -55,10 +73,40 @@ impl EngineWrap {
     ///
     /// 本番経路は `cpal::Stream` が `!Send` のため [`Self::start_with`] の
     /// `Box<dyn Any + Send>` guard 型に詰められない。そのため本番は専用パス。
+    #[cfg(not(feature = "link-audio"))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats) = orbit_audio_native::start_default_output()?;
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
-        Ok((wrap, StreamGuard(stream)))
+        Ok((wrap, StreamGuard { _stream: stream }))
+    }
+
+    /// feature `link-audio` 版: cpal 出力を LinkAudio egress 経路付きで起動し、GPL consumer thread を
+    /// spawn する（A4-2b-2）。reg-ring producer は callback に組み込まれ、`register_link_audio_channel`
+    /// 経由で channel を流す。返す `StreamGuard` が consumer thread の teardown guard を保持する。
+    #[cfg(feature = "link-audio")]
+    pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        let (engine, stream, stream_stats, reg_tx) =
+            orbit_audio_native::start_default_output_with_link_egress(
+                crate::link_audio::REG_RING_CAPACITY,
+            )?;
+        let (control, link_guard) = crate::link_audio::LinkAudioControl::spawn(
+            reg_tx,
+            stream.sample_rate,
+            stream.channels as usize,
+        )
+        .map_err(|e| WrapError::LinkAudio(e.to_string()))?;
+        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        *wrap
+            .link
+            .lock()
+            .map_err(|_| WrapError::LinkAudio("link mutex poisoned".into()))? = Some(control);
+        Ok((
+            wrap,
+            StreamGuard {
+                _stream: stream,
+                _link: Some(link_guard),
+            },
+        ))
     }
 
     /// [`AudioBackend`] 経由で起動する（integration test 用）。
@@ -94,7 +142,36 @@ impl EngineWrap {
             started_at: std::time::Instant::now(),
             stream_stats,
             stopped_play_ids: Mutex::new(HashSet::new()),
+            // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
+            #[cfg(feature = "link-audio")]
+            link: Mutex::new(None),
         })
+    }
+
+    /// 名前付き LinkAudio channel を登録する（A4-2b-2・feature `link-audio` 専用）。
+    /// `RingTapSink` を生成し sink を cpal callback へ・consumer side を GPL consumer thread へ配る。
+    #[cfg(feature = "link-audio")]
+    pub fn register_link_audio_channel(&self, name: &str) -> Result<(), WrapError> {
+        let mut guard = self
+            .link
+            .lock()
+            .map_err(|_| WrapError::LinkAudio("link mutex poisoned".into()))?;
+        match guard.as_mut() {
+            Some(ctl) => ctl
+                .register_channel(name)
+                .map_err(|e| WrapError::LinkAudio(e.to_string())),
+            None => Err(WrapError::LinkAudio(
+                "link audio not initialized (test backend has no egress path)".into(),
+            )),
+        }
+    }
+
+    /// feature `link-audio` 無効ビルド用の stub。daemon command handler を feature 非依存に保つ。
+    #[cfg(not(feature = "link-audio"))]
+    pub fn register_link_audio_channel(&self, _name: &str) -> Result<(), WrapError> {
+        Err(WrapError::LinkAudio(
+            "engine built without 'link-audio' feature".into(),
+        ))
     }
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から
@@ -119,6 +196,12 @@ impl EngineWrap {
 
     pub fn output_sample_rate(&self) -> u32 {
         self.sample_rate
+    }
+
+    /// 現在の出力ストリーム時刻（scheduler transport 秒）。`play_at` の `time_sec` と同一座標系。
+    /// ロック競合時は `None`（callback がロック保持中）。
+    pub fn now_sec(&self) -> Option<f64> {
+        self.engine.now_sec()
     }
 
     pub fn output_channels(&self) -> u16 {

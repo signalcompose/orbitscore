@@ -17,6 +17,55 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.163 feat(engine): A4-2b-2 LinkAudio egress — design + Q4 gate + shim beats_at_begin (WIP / #329) (Jun 23, 2026)
+
+**Date**: 2026-06-23
+**Status**: 🚧 WIP（design-first 完了 + Q4 gate POSITIVE + 第1増分 = shim beats_at_begin 改修・standalone 3 緑）。本ブランチ `329-linkaudio-egress-rtrb` 継続中
+**Parent**: #321 / A4-2b-1（#327・PR #328）**MERGED**（`f8ab0de`）
+
+**背景**: A4-2b-2 = 実 LinkAudio egress（音が実際に Ableton/Link に届く半分）。GPL crate `orbit-link-audio`（#324・PR #325 MERGED）を実配線。
+
+**design-first（3 scout + advisor）**: 3 スレッド lock-free アーキ確定 — ① cpal callback(permissive・!Send): render_multi で hardware + N channel buf を埋め per-channel rtrb producer へ push ② GPL consumer thread(feature 裏・Send): rtrb consumer drain → commit_channel（= Link "audio thread"）③ control(EngineWrap): registration command を ring 経由で配る。rtrb は permissive↔GPL の物理境界（Producer=Send→callback / Consumer=Send→consumer thread・clap-spike scout で両 Send 確認）。
+
+**Q4 gate（層B headless 検証可否）= POSITIVE**: 同一プロセス内 **2 LinkAudio インスタンス** loopback spike を実機実行 = `maxPeersA=1 maxPeersB=1 / channel_seen=1 / received=318 callbacks / frames=39750`（discovery ~550ms）。A(sink) commit を B(source) が headless 受信成功。→ **層B は headless で gate 可能**（テストで 2 つ目の LinkAudio を receiver に）。単一インスタンス自己 loopback は不可（`channels()` は peer のみ・自 sink は self-list せず）。CI（Linux/network 制限）では multicast 不安定 → #300 kill-test と同じ **gated pattern**（local 実行・CI skip / discovery timeout）。
+
+**advisor の split（#329 コメントに記録）**: 2b-2 は racy 3-thread で最難部 offline 検証不可 → **2b-2a = 最小実証 egress**（shim beats_at_begin + GPL consumer + render_multi を callback に配線〔RT refactor は 2b-2a〕+ 1 channel end-to-end + gated 層B/manual・**drop = 永久 beat desync なので produced-frame anchor or drop で mandatory re-anchor**）/ **2b-2b = dynamic mid-stream registration**（2 cmd-ring + pool slot-activation + race を隔離）。channels は boot 時 stream 構築で静的になり得ない（mutable registry 必須）。
+
+**beat anchoring（advisor・empirically-validated）**: session tempo 1 回 capture（default 120）→ 線形再構成 `beats_at_begin = beat_anchor + (produced_frames - frames_anchor) × (bpm/60)/sr`（per-block "now" を使わず ring latency 位相ずれを避ける）。`sr` は render/device SR = commit の sampleRate。tempo-change re-anchor は PR3（premature）。**層A 検証不可**（PCM は beat timestamp を持たない）→ 層B（2 インスタンス受信の Info.beginBeats）/dog-food。
+
+**増分 1**: shim `orbit_link_commit_channel` に `beats_at_begin: f64` 引数追加（内部の `beatAtTime(clock().micros())` 削除・`captureAudioSessionState` は bh.commit の state 用に残す）。hpp/cpp/Rust FFI/wrapper/smoke test 更新。
+
+**増分 2（GPL consumer + beat anchoring・本 commit）**: shim に anchor 用 getter `orbit_link_capture_beat`/`orbit_link_session_tempo`（consumer thread = audio thread から 1 回 capture）。`LinkChannelEgress`（egress.rs）= rtrb `Consumer<f32>` を drain → `beats_at_begin` を **produced-frames から線形再構成**して commit。**advisor の最大 catch（drop = 永久 beat desync）を解決**: `produced_frames = drained + dropped`（drop counter 算入）→ drop 後も beat が producer の真の位置を追う（drained-only だと恒久ずれ）。beat 再構成を **Link 非依存の純関数**（`produced_frames`/`reconstruct_beat`）に分離し unit-test（drop-desync 防止を pin・計 7 緑）。orbit-link-audio に rtrb 依存追加（permissive・consumer 側）。
+
+**増分 3（層B receiver shim + 実 egress 実機証明・本 commit）**: shim に **verification 専用** receiver（`LinkAudioSource` wrapper・`OrbitRecv`・`orbit_link_recv_*`。production egress は sender-only〔spec §8.1〕なので receiver は出荷せず headless 検証専用）。gated 層B テスト `layer_b_egress_received_by_inprocess_receiver`（`#[ignore]`・local で `--ignored` 実行・CI は multicast 不安定で skip）= 同一プロセスに A=sender egress / B=receiver の 2 LinkAudio を立て、`LinkChannelEgress` 経由の **実 commit** を B が headless 受信することを検証。**実機で PASS**（既知 0.2 サンプルが ring→drain→beat 再構成→Link commit→receiver まで到達）。**2b-2a egress core = 実音が Link receiver に届くことを proven**。通常 `cargo test` 7 passed + 1 ignored。
+
+**増分 4（RingTapSink を native へ port・本 commit）**: orbit-clap-spike の `RingTapSink`/`PostMixSink` を `orbit-audio-native/src/link_audio_ring.rs` へ port（rtrb 境界の **producer 側**・permissive）。`push_partial_slice` で wait-free push・満杯時は drop カウント（GPL consumer の produced-frames 算入と対）。native に rtrb 依存追加（permissive）。unit-test 2（push/consume・drop カウント）= native 18 緑・cargo-deny default GPL-free 維持。**これで rtrb 境界の producer(native)/ consumer(orbit-link-audio `LinkChannelEgress`)が両方揃った**。
+
+**増分 5（render_multi を cpal callback に配線・本 commit）**: `orbit-audio-core` に `Engine::render_multi`（try_lock 競合で hardware + 全 channel buffer をゼロ＝既存 silent-drop 規約を multi-buffer に拡張）。native `output.rs` を refactor — `LinkChannelActivate`（control が ring 生成・scratch 事前確保して reg-ring 経由で callback へ渡す activation メッセージ）/ 私有 `LinkEgress`（reg-ring consumer + 単一 channel〔2b-2a〕）/ `render_block`（reg-ring を drain→render_multi で hardware + channel scratch を 1 パスで埋め→`RingTapSink::commit` で ring push・`link` 無しなら従来 `engine.render` でビット同一）/ `start_default_output_with_link_egress(reg_capacity)`（`Producer<LinkChannelActivate>` を返す・feature 裏 daemon 用）。4 sample-format branch は全て `render_block` 経由に統一。native 18 緑・full workspace 19 ok group 回帰なし・clippy clean・daemon `--features link-audio` ビルド可・cargo-deny default GPL-free 維持。
+
+**増分 6（daemon 配線 + 実 callback 駆動 層B 実証・本 commit）**: daemon に `#[cfg(feature="link-audio")] mod link_audio` を新設。① `LinkAudioControl`（control-side）= `LinkAudioOutput` を生成・enable し **GPL consumer thread** を spawn（`consumer_loop`: `Waiting(LinkAudioOutput)→register_channel→id→Active(LinkChannelEgress)` の状態機械・pump ループ）。`register_channel` で `RingTapSink` 生成→ **consumer+drops を mpsc で consumer thread へ / sink+scratch を reg-ring で callback へ**。② `LinkAudioGuard`（drop で shutdown フラグ store(true)+join＝明示 teardown・drop 順非依存・A0 §13）。③ EngineWrap: feature 時 `start()` が `start_default_output_with_link_egress`+`LinkAudioControl::spawn`→`StreamGuard{_stream, _link}`（field 順は意図的: stream を先に止めてから consumer thread を join・rtrb はどちら順でも UB なしだが無駄な drop を避ける）。`register_link_audio_channel`（非 feature は stub で `LINK_AUDIO_ERROR`）。`now_sec` 委譲を追加。④ session.rs `RegisterLinkAudioChannel` command + `wrap_err_to_protocol` に `LinkAudio` arm。⑤ orbit-link-audio に feature `verification-receiver`（default off）= receiver を `pub mod verification`（`VerificationReceiver`）に単一ソース化（lib.rs の私有複製を除去・self-test も feature gate）。⑥ daemon feature `link-audio-verification`（default off）+ **実 callback 駆動の 層B unit test**（`EngineWrap::start()` 実 cpal+consumer thread→register→receiver 購読→kick.wav を channel=loopD に tag して `play_at`→**実 callback が render_multi で channel buffer を埋め ring へ**→consumer drain→Link commit→receiver 受信）。
+
+**層B Done 基準 = 実機 PASS（1.56s）**: 合成 ring feed（既証明）ではなく本 sub-PR の新規コード（`render_block`/`render_multi` in callback + EngineWrap consumer 配線）を end-to-end で通す。前提として callback が headless で **tick**することを native probe `start_default_output_callback_ticks_headless` で実機確認（stream が開くだけでなく now_sec が前進＝render が回る）。`cargo test -p orbit-audio-daemon --features link-audio-verification -- --ignored`。**回帰**: full workspace 19 ok・cargo-deny default GPL-free 維持（verification/link-audio-verification とも default off で default graph 不変）・clippy clean（default/feature 両方）・daemon default ビルド可（stub）。
+
+**beat anchor の既知 constant offset（advisor #4・PR3 defer）**: `pump_once` は anchor を first-pump-with-data（T1）で capture するため ~1 ring-fill 分の latency が anchor に焼き込まれる。これは **drift ではなく一定オフセット**（全 block が同一 anchor を共有し produced_frames で整合）で Link の latency model 内。修正済みの drop-desync バグとは別物。tempo-change re-anchor と合わせ PR3。
+
+**増分 7（TS 配線で .orbs から到達・本 commit）**: TS `protocol-types.ts` の `CommandMethod` に `RegisterLinkAudioChannel` 追加 / `daemon-client.ts` に `registerLinkAudioChannel(channel)` メソッド（`request('RegisterLinkAudioChannel', {channel})`）/ `rust-engine-player.ts` の `registerLinkAudioChannel` を **実 daemon call + try/catch** に（daemon が link-audio 無効ビルド〔既定 permissive daemon〕なら `LINK_AUDIO_ERROR` で reject されるので throw せず warn-once して継続＝channel tag は維持・出力は hardware のみ）。`setLinkTempo` は PR3。TS build 緑・rust-engine-player.spec 緑（MockDaemonServer が未知 method `RegisterLinkAudioChannel` を error 応答 → player catch → warn の経路で従来 assertion 維持）。
+
+**PR #330 作成 → /simplify 適用済**（commit `07c442e`）。
+
+**pr-review-team round-1 修正（本 commit・PR #330）**: 4 専門レビュアー（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer）の Critical=0・Important=8 を解消。
+- **C1（RT-safety・最重要）**: 同名 channel の**再登録**で callback 側の旧 `LinkChannelActivate`（ring producer）が **RT スレッド上で drop** され ring 不整合で無音化。TS は `sequence.output()` の eager + dispatch で**冪等前提に複数回**登録する設計なので実バグ。`LinkAudioControl` に `registered_channel: Option<String>` を持ち `register_channel` を冪等化（同名再登録は no-op・別名は 2b-2a 単一 channel scope で log+no-op）。層B テストを 2 回登録に拡張して回帰 pin。
+- **S1**: `consumer_loop` が `pump_once` の `CommitResult` を全捨て → `CommitFailed`/`ChannelNotFound` を throttle warn（streak=1 と 1000 ごと）。`NoSubscriber` は通常状態で silent。
+- **S2**: consumer 側 `register_channel`（Link）失敗を `warn`→`error` に昇格（2b-2a は唯一の登録機会＝以後 dead）。
+- **S3**: TS `registerLinkAudioChannel` の catch を `DaemonProtocolError && code==='LINK_AUDIO_ERROR'` に限定し、**別 error class**（daemon 死亡 `DaemonConnectionError` / transport / quit）は rethrow（feature-gap と誤ラベルしない）。**正確には**: `RegRingFull`/`ConsumerGone` も `session.rs` で `LINK_AUDIO_ERROR` に collapse されるため依然握り潰される — ただし 2b-2a は冪等 guard で単一登録＝`RegRingFull` 到達不能・`ConsumerGone` panic site なしで **latent**。error code 分割（`LINK_AUDIO_UNAVAILABLE` vs `LINK_AUDIO_RUNTIME`）は **2b-2b の must-fix**（#329 にコメント記録）。
+- **T1/T2/T3**: `Engine::render_multi` の channel routing 非 gated unit test 2 件 / `DaemonClient.registerLinkAudioChannel` の request 送信 + LINK_AUDIO_ERROR 変換テスト / player の warn-once（LINK_AUDIO_ERROR）+ rethrow（その他）+ 受理時 no-warn テスト。MockDaemonHandlers に `RegisterLinkAudioChannel` 追加（既定 = feature 無し daemon を模し LINK_AUDIO_ERROR）。
+- **M5**: consumer thread spawn の `.expect` を `LinkAudioError::ThreadSpawn` で Result propagate。
+- **M7/M8/M9**: コメント正確性（verification.rs SAFETY に host-lifetime 注記 / link_audio.rs "tokio" ラベルを「daemon tokio task から呼ぶ」に / engine_wrap.rs `link` field doc を「Mutex で `&self` を可能にする」に訂正）。
+- **回帰**: full workspace 19 ok・cargo-deny default GPL-free 維持・clippy clean・TS 1179 passed/27 skipped・層B 実機 PASS（2 回登録の冪等性込み）。
+- **follow-up（diff 外・本 PR では触らず）**: scheduleEvent/scheduleSliceEvent の `outputChannel` warn は egress 配線前の placeholder（"egress is not wired yet"）で、egress 配線後は stale 化し得る。signal は `sequence.output()`（registerLinkAudioChannel の feature-gap warn or not-enabled warn）が authoritative なので機能影響は無いが、メッセージ整合は別 PR で。
+
+**次（残り）**: advisor → load-bearing な GPL egress なので @claude bot レビュー → 修正確認。**dynamic registration の pool + readiness race は 2b-2b**。**レビューで surface 済**: receiver は verification 専用（sender-only・spec §8.1）だが C++ shim に常時リンク / register_channel 部分失敗 seam（advisor #3）/ beat anchor constant offset（advisor #4・PR3 defer）。
+
 ### 6.162 feat(engine): A4-2b-1 single-pass multi-buffer render + channel_name wire (post-2.0 A4 / #327) (Jun 23, 2026)
 
 **Date**: 2026-06-23

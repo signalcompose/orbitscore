@@ -898,6 +898,7 @@ dependencies = [
  "orbit-audio-native",
  "orbit-audio-verify",
  "orbit-link-audio",
+ "rtrb",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -915,6 +916,7 @@ dependencies = [
  "audioadapter-buffers",
  "cpal",
  "orbit-audio-core",
+ "rtrb",
  "rubato",
  "symphonia",
  "thiserror 2.0.18",
@@ -956,6 +958,7 @@ name = "orbit-link-audio"
 version = "0.0.1"
 dependencies = [
  "cc",
+ "rtrb",
  "thiserror 2.0.18",
 ]
 

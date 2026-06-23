@@ -39,18 +39,46 @@ int32_t orbit_link_register_channel(OrbitLink* link, const char* name,
 // interleaved f32 の 1 ブロックを channel に commit する。`buf_len` は interleaved の
 // 要素数(= 呼び出し側 slice 長)で、shim は min(num_frames*num_channels, buf_len,
 // 宛先容量)までしか読まない(overread 防止)。
-// PR2b で配線後、この関数は LinkAudio の "audio thread"(GPL consumer thread)から
-// 呼ぶ必要がある(内部で captureAudioSessionState を呼ぶ。Thread-safe:no /
-// Realtime-safe:yes)。PR2a ではまだ threading contract は未配線。
+// `beats_at_begin` は **呼び出し側(GPL consumer thread)が cumulative-frames から決定論
+// 再構成した** buffer-begin の beat 位置。shim はこれをそのまま BufferHandle::commit に渡す
+// (内部で "now"=clock().micros() から計算しない＝ring latency 分の位相ずれを避ける・A4-2b-2)。
+// この関数は LinkAudio の "audio thread"(GPL consumer thread)からのみ呼ぶ(内部で
+// captureAudioSessionState を呼ぶ。Thread-safe:no / Realtime-safe:yes)。
 // 戻り値: 1 = commit 済 / 0 = 購読者なしで no-op / -1 = 引数不正・未登録 channel /
 //         -2 = 購読者ありだが commit 失敗(拒否 or 例外)。
 int orbit_link_commit_channel(OrbitLink* link, int32_t channel_id,
                               const float* interleaved, size_t buf_len,
                               size_t num_frames, size_t num_channels,
-                              uint32_t sample_rate, double quantum);
+                              uint32_t sample_rate, double beats_at_begin,
+                              double quantum);
 
 // Link テンポリーダーとして BPM を push する(app-thread 経路・PR3 で配線)。
 void orbit_link_set_tempo(OrbitLink* link, double bpm);
+
+// egress 開始時の beat anchor を取得する(GPL consumer thread = "audio thread" から 1 回)。
+double orbit_link_capture_beat(OrbitLink* link, double quantum);
+
+// 現在の session tempo(BPM)を取得する(beat/frame 換算用・consumer thread から)。
+double orbit_link_session_tempo(OrbitLink* link);
+
+// ===== verification 専用 receiver(headless 層B)=====
+// production egress は sender-only(DSL spec §8.1)。以下は「2 LinkAudio インスタンス loopback で
+// 実 egress を耳なし検証する」テスト専用 API。`host` は sender とは別の LinkAudio インスタンス。
+typedef struct OrbitRecv OrbitRecv;
+
+// receiver を生成する(まだ subscribe しない)。失敗時 NULL。
+OrbitRecv* orbit_link_recv_create(OrbitLink* host, const char* channel_name);
+
+// channel を channels() で探し、見つかれば LinkAudioSource を張る(idempotent)。
+// 1 = subscribe 済 / 0 = 未発見(呼び出し側がリトライ)。
+int orbit_link_recv_try_subscribe(OrbitRecv* recv);
+
+// 受信した buffer 数 / frame 数 / 直近 buffer の先頭サンプル(int16)。
+uint64_t orbit_link_recv_count(OrbitRecv* recv);
+uint64_t orbit_link_recv_frames(OrbitRecv* recv);
+int orbit_link_recv_last_sample(OrbitRecv* recv);
+
+void orbit_link_recv_destroy(OrbitRecv* recv);
 
 #ifdef __cplusplus
 }  // extern "C"
