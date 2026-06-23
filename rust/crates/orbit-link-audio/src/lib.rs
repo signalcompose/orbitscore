@@ -349,7 +349,7 @@ mod tests {
         for _ in 0..400 {
             let block = vec![0.2f32; 256 * 2];
             let _ = prod.push_partial_slice(&block);
-            let _ = egress.pump_once(&sender);
+            let _ = egress.pump_once(&sender, sender.session_tempo());
             got = recv.count();
             if got > 0 {
                 break;

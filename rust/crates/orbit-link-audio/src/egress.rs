@@ -13,8 +13,10 @@
 //! 🔴 tempo-change re-anchor(PR3 / advisor): `beats_at_begin` は **共有 Link セッションの時間軸**に
 //! 乗るので、session tempo が変わると beat/frame 換算(`beat_per_frame`)が古くなり drift する。Link は
 //! last-setter-wins で **自分の tempo push も他ピア(Ableton 等)の変更も** session tempo に現れるため、
-//! consumer が毎 pump で `session_tempo()` を poll し、変化を検出したら segment を切り替える(poll-based:
-//! 自分の push 時のみ re-anchor する explicit を包含し、control→consumer の同期配線も要らない)。
+//! consumer_loop が round ごとに `session_tempo()` を 1 回読み(session-global な値を per-channel に N 回
+//! 読まない・efficiency)、各 channel の `pump_once` がそれを `last_bpm` と比較して変化を検出したら segment
+//! を切り替える(poll-based: 自分の push 時のみ re-anchor する explicit を包含し、control→consumer の同期
+//! 配線も要らない)。
 //! 切り替えでは **`capture_beat()` を再呼びしない**(再 sample すると ring latency 位相誤差を再導入する)。
 //! 代わりに segment baseline(`seg_anchor_beat` / `seg_anchor_produced` / `beat_per_frame`)を「今の
 //! 再構成 beat」へ連続 carry し、slope(`beat_per_frame`)だけを新 tempo に更新する(piecewise-linear)。
@@ -118,10 +120,22 @@ impl LinkChannelEgress {
         (bpm / 60.0) / self.sample_rate as f64
     }
 
+    /// segment baseline(起点 beat / 起点 produced / slope / last_bpm)を一括設定する。初回 anchor と
+    /// tempo 変更時の re-anchor で共有し、「segment とは何か」を 1 箇所に集約する(simplification)。
+    #[inline]
+    fn start_segment(&mut self, anchor_beat: f64, produced: u64, bpm: f64) {
+        self.seg_anchor_beat = anchor_beat;
+        self.seg_anchor_produced = produced;
+        self.beat_per_frame = self.beat_per_frame_for(bpm);
+        self.last_bpm = bpm;
+    }
+
     /// ring に 1 block 分溜まっていれば drain して `output` の当該 channel へ commit する。commit したら
     /// `Some(result)`、データ不足なら `None`。consumer thread が共有 `output` を `&` で渡してループで
-    /// 呼ぶ(None の間は短い sleep)。
-    pub fn pump_once(&mut self, output: &LinkAudioOutput) -> Option<CommitResult> {
+    /// 呼ぶ(None の間は短い sleep)。`session_tempo` は consumer_loop が round ごとに 1 回読んだ snapshot
+    /// (session-global なので per-channel に読み直さない・efficiency)。<=0 は capture 失敗(shim catch)で、
+    /// 初回 anchor の fallback には使うが re-anchor の比較基準にはしない(過渡的な 0 で誤検出しない)。
+    pub fn pump_once(&mut self, output: &LinkAudioOutput, session_tempo: f64) -> Option<CommitResult> {
         let block_samples = self.block_frames * self.num_channels;
         if self.consumer.slots() < block_samples {
             return None;
@@ -132,32 +146,22 @@ impl LinkChannelEgress {
         let dropped = self.drops.load(Ordering::Relaxed);
         let produced = produced_frames(self.drained_frames, dropped, self.num_channels);
 
-        // 現在の session tempo(captureAudioSessionState・lock-free・audio スレッド)。last-setter-wins
-        // なので自分の push も他ピアの変更もここに現れる。<=0 は capture 失敗(shim catch)で、初回 anchor の
-        // fallback には使うが re-anchor の比較基準にはしない(過渡的な 0 で誤検出しない)。
-        let tempo = output.session_tempo();
-
         if !self.anchored {
             // egress 開始時に anchor(beat)を 1 回だけ capture。以後 `capture_beat()` は二度と呼ばない
-            // (ring latency 位相誤差の再導入を避ける・advisor)。
-            let bpm = if tempo > 0.0 { tempo } else { 120.0 };
-            self.seg_anchor_beat = output.capture_beat(self.quantum);
-            self.seg_anchor_produced = produced;
-            self.beat_per_frame = self.beat_per_frame_for(bpm);
-            self.last_bpm = bpm;
+            // (ring latency 位相誤差の再導入を避ける・advisor)。session_tempo<=0 は fallback 120。
+            let bpm = if session_tempo > 0.0 { session_tempo } else { 120.0 };
+            self.start_segment(output.capture_beat(self.quantum), produced, bpm);
             self.anchored = true;
-        } else if tempo > 0.0 && (tempo - self.last_bpm).abs() > TEMPO_EPSILON_BPM {
+        } else if session_tempo > 0.0 && (session_tempo - self.last_bpm).abs() > TEMPO_EPSILON_BPM {
             // tempo 変更を検出 → segment を切り替える。新 segment の起点 beat は「今の再構成 beat」(連続)・
             // 起点 produced は今の produced・slope を新 tempo に。`capture_beat()` は呼ばない(連続 carry)。
-            self.seg_anchor_beat = reconstruct_beat(
+            let new_anchor = reconstruct_beat(
                 self.seg_anchor_beat,
                 self.seg_anchor_produced,
                 self.beat_per_frame,
                 produced,
             );
-            self.seg_anchor_produced = produced;
-            self.beat_per_frame = self.beat_per_frame_for(tempo);
-            self.last_bpm = tempo;
+            self.start_segment(new_anchor, produced, session_tempo);
         }
 
         let beats_at_begin = reconstruct_beat(

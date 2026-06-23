@@ -76,6 +76,18 @@ integration 18 passed / `cargo test --workspace` 緑。
 
 **テスト結果**: 全 1187 テスト green（27 skipped は既存）
 
+**レビュー（/simplify・4 観点並列）**: reuse / altitude = clean（altitude は poll-based re-anchor を
+「the strongest altitude win」と評価）。適用 2 件:
+- **simplification**: egress.rs の anchor / re-anchor が同じ 4 フィールド更新を重複 →
+  `start_segment(anchor_beat, produced, bpm)` ヘルパに集約（segment invariant を 1 箇所に）。
+- **efficiency**: `session_tempo()` を per-channel `pump_once` で N 回読んでいた → consumer_loop の
+  round ごと 1 回に hoist し `pump_once(&output, session_tempo)` へ snapshot を渡す（session-global な
+  値の N FFI reads/round → 1・correctness は各 channel が自分の `last_bpm` と比較で保持）。
+- skip: F-1（commit 内の二重 `captureAudioSessionState`・ABI 変更が要る design-level・informational）/
+  エラー文字列重複の const 化（never-parsed の cosmetic）/ `set_link_tempo` の mutex lock（tempo 変更は
+  稀で benign・audio-side disjoint は無傷）。
+- 適用後: orbit-link-audio 9 passed + daemon lib 6 passed + clippy clean（diff 内）。
+
 ### 6.164 feat(engine): A4-2b-2b dynamic N-channel LinkAudio registration (pool + readiness race / #331) (Jun 23, 2026)
 
 **Date**: 2026-06-23

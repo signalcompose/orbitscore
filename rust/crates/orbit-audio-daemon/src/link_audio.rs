@@ -156,9 +156,17 @@ fn consumer_loop(
         }
 
         // 2. 全 channel を pump（共有 output を & で渡す）。1 つでも commit したら sleep しない。
+        // session tempo は session-global なので per-channel に N 回読まず round ごとに 1 回 capture し、
+        // 各 channel の re-anchor 判定へ snapshot を渡す（efficiency: N FFI reads/round → 1）。channels 空
+        // （tempo lead のみ・egress 無し）の round では読まない。
+        let session_tempo = if channels.is_empty() {
+            0.0
+        } else {
+            output.session_tempo()
+        };
         let mut pumped = false;
         for ch in channels.iter_mut() {
-            while let Some(rc) = ch.egress.pump_once(&output) {
+            while let Some(rc) = ch.egress.pump_once(&output, session_tempo) {
                 pumped = true;
                 match rc {
                     // NoSubscriber は Live 未参加の通常状態（silent）。回復で streak をリセット。
