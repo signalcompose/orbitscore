@@ -105,6 +105,8 @@ pub struct LinkAudioOutput {
 //     daemon 側の **呼び出し規律**で disjoint 性を守る: `session_tempo` は consumer(audio) thread の
 //     consumer_loop が round ごとに 1 回 / `register_channel` は consumer thread / `set_enabled` は
 //     consumer thread spawn 前の control から(いずれも audio session state と競合しない)。
+//   - `num_peers` (= numPeers・Thread-safe:yes) は session state path に属さず任意スレッドから安全
+//     (state を触らない standard Link API・現状 test のみが呼ぶ)。
 // よって app-state path と audio-state path は常に別スレッドから呼ばれ Link が内部で同期する。
 unsafe impl Send for LinkAudioOutput {}
 unsafe impl Sync for LinkAudioOutput {}

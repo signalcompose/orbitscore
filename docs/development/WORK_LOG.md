@@ -113,6 +113,12 @@ Important 6 件を fixer で解消（advisor 確認後）:
   追加し set_tempo と observability を対称化（1行）。SF-4 benign（None は production unreachable）。**内部レビュー
   closed**（毎修正後の再レビューは LLM が必ず新指摘を出す非終了ループ＝substance 収束で閉じる・advisor）→ 外部
   closure は @claude bot（load-bearing seam: unsafe Sync の call-discipline / FFI bool contract / poll re-anchor）。
+- **外部レビュー（@claude bot・load-bearing seam スコープ・3m57s）**: 3 点すべて ✅ 問題なし — ① `unsafe impl Sync`
+  健全（型レベル + 抽象層で cross-thread 誤呼びが閉じている）② FFI bool contract end-to-end（false-positive success
+  なし・false は全段 rethrow・ピン留めテスト付き）③ poll re-anchor continuity（tempo 変化点で `new_anchor` が旧 slope の
+  beat と同値＝数学的に連続・`capture_beat()` 非再呼びで ring-latency 誤差を再導入しない）。実質的 blocking なし。唯一の
+  minor = SAFETY コメントに `num_peers`（test-only・Thread-safe:yes）が未言及 → 1 行追記で対応。**Critical/Important=0・
+  bot 承認**。owner マージ待ち（self-merge しない）。
 
 ### 6.164 feat(engine): A4-2b-2b dynamic N-channel LinkAudio registration (pool + readiness race / #331) (Jun 23, 2026)
 
