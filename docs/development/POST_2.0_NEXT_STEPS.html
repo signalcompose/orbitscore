@@ -202,7 +202,7 @@
     <li><strong>core</strong>: Rust LinkAudio 隔離 GPL モジュール + lock-free / outputChannel parity / Link tempo lead（#283）。</li>
     <li><strong>織り込みフォローアップ</strong>:
       <ul>
-        <li><strong>active-loops の実 <code>loop()</code> across-respawn e2e</strong> — A4 完了時に pan/slice/stretch/LinkAudio 全部入りで full DSL を respawn 跨ぎ検証（recovery consolidation）。<strong>capture 非依存の state-level e2e</strong>（<code>createAudioEngine</code> 経由・onDispatch / daemon 状態クエリで検証）として軽く作る。</li>
+        <li><strong>active-loops の実 <code>loop()</code> across-respawn e2e</strong>（#335）— A4 完了時に pan/slice/<strong>varispeed</strong>/LinkAudio 全部入りで full DSL を respawn 跨ぎ検証（recovery consolidation）。<strong>capture 非依存の state-level e2e</strong>＝「<code>createAudioEngine</code> 経由」は実 interpreter＋実 <code>RustEnginePlayer</code> 経路の意（booted player を <code>InterpreterV2</code> に注入して <code>onDispatch</code> を取得・<strong>production 変更ゼロ</strong>）。onDispatch / daemon 状態クエリで検証。pan/varispeed/output_channel は payload として <strong>exercise</strong>（DispatchInfo/GetStatus に出ないので state-assert 不可・per-param 正しさは PR1-3 offline + 非gated rate guard が担保）。</li>
       </ul>
     </li>
   </ul>
@@ -249,7 +249,7 @@
     <tr>
       <td>active loops の real <code>loop()</code> across-respawn e2e テスト</td><td>#300</td>
       <td>player-level の continuous-stream プロキシ + 構造論（loop timer は <code>loop-sequence.ts</code> の setTimeout = 純 TS・daemon 非依存）で足りる。full interpreter 駆動は重い</td>
-      <td><strong>A4 末</strong> — full DSL（pan/slice/stretch/LinkAudio）を respawn 跨ぎ。<strong>capture 非依存の state-level e2e</strong>（<code>createAudioEngine</code> 経由・onDispatch / daemon 状態クエリ）</td>
+      <td><strong>A4 末（#335）</strong> — full DSL（pan/slice/varispeed/LinkAudio）を respawn 跨ぎ。<strong>capture 非依存の state-level e2e</strong>（実 interpreter＋実 <code>RustEnginePlayer</code> を <code>InterpreterV2</code> に注入＝「createAudioEngine 経由」の意・production 変更ゼロ・onDispatch / daemon 状態クエリ）</td>
       <td>小〜中</td>
     </tr>
     <tr>
