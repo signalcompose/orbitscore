@@ -17,6 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.166 test(engine): A4-PR4 active-loops across-respawn e2e — full DSL / interpreter-driven (#335) (Jun 23, 2026)
+
+**Date**: 2026-06-23
+**Status**: ✅ 実装完了（レビュー前）
+**Branch**: `335-active-loops-across-respawn-e2e`
+**Issue**: #335（A4 PR4・#321 の 4-PR 計画の最終手）
+**正本**: `docs/development/POST_2.0_NEXT_STEPS.html` §4（A4 末）/ §5（active-loops follow-up 行）
+
+A4 の最後の1手。#300（recovery floor）が proxy + 構造論で足りるとして**意図的に defer** した
+「実 `loop()` を interpreter 駆動で動かし real daemon を respawn 跨いで継続する」検証を、
+A4 完了時点で full DSL 全部入りで consolidation する（recovery consolidation・defer backlog 一掃）。
+
+**スコープ（test-only・production 変更ゼロ）**:
+- 既存 `tests/audio/rust-engine/real-daemon-recovery.spec.ts`（#300 gated kill-test）を **scaffold に拡張**。
+- 実 `InterpreterV2` に、onDispatch を得るために直接構築した実 `RustEnginePlayer` を注入
+  （= `createAudioEngine(rust)` と同じ player・leg2 の RecordingScheduler 注入と同じ seam）。
+  spec の「createAudioEngine 経由」= 実 interpreter + 実 player 経路の意（§4/§5 を spec-first で明確化）。
+- fixture = full DSL（pan / chop 領域 / per-event gain / **varispeed rate≠1.0** / LinkAudio output
+  channel / tempo leader）の `LOOP()` を回す `.orbs`。
+
+**scout question の結論（observability seam）**:
+- `daemonPid` / `getDaemonStatus()` / `injectDaemonFault()` / `isRunning` は player に public 既存・
+  `onDispatch` も options に既存 → **観測 seam は既存**（§6 の production 追加例外は不成立）→ test-only。
+- 観測境界: `DispatchInfo` は timing + `gain` + sample のみ surface。**pan / rate / output_channel は
+  `daemon.playAt` へ渡り respawn 跨ぎで exercise されるが onDispatch/GetStatus に出ない**ため値は
+  state-assert しない（per-param 正しさは PR1-3 offline + 下記 rate guard が担保・capture は §6 で OUT）。
+
+**テスト構成（2 層）**:
+- 非gated（CI 常時・daemon 不要）= fixture-integrity guard: RecordingScheduler で interpreter の
+  スケジュールを取り、`toDaemonParams` で **chopd=varispeed rate 2.0 / kick・snare=rate 1.0 /
+  pan 3 値 / gain 3 値** を機械チェック（"full DSL" 主張が hollow にならない保証）。
+- gated（`ORBIT_REAL_DAEMON=1`・ローカル）= recovery e2e: LOOP() → 実 daemon SIGKILL（mid-loop）
+  → auto-respawn → **dispatch 継続を state-level に assert**（liveness/新 pid / transport 再 anchor /
+  onset clip なし / 複数 sample で loop 群復帰 / per-event gain 保持 / fresh daemon 状態）。
+- daemon は default build（feature `link-audio` OFF）。setLinkTempo / output channel は warn-once
+  no-op（hardware bus へ）で loop を stall させないことを実機で確認（LinkAudio 自体の recovery は
+  観測 seam 不在のため非検証）。
+
+**検証**:
+- gated kill-test を **ローカルで 3 回連続 PASS**（各 respawn attempt 1/5・~5.6s）。
+- 非gated guard PASS / npm 全緑（**1188 passed | 28 skipped**）/ cargo `--workspace` 全緑（rust 無変更）。
+- SC 既定経路 無改変 / audio `play()` 意味論 無改変 / production code 無変更。
+
+**主な変更ファイル**:
+- `tests/audio/rust-engine/real-daemon-recovery.spec.ts`（#335 拡張・非gated guard + gated e2e）
+- `docs/development/POST_2.0_NEXT_STEPS.html`（§4/§5 を「createAudioEngine 経由」= 実 player 注入と
+  spec-first で明確化・"stretch"→"varispeed"）
+
+A4 完結（PR4 マージ）で #300/#304 の defer backlog は一掃（残るは capture seam と bot Finding 4
+= quit backoff の 2 件のみ・いずれも trigger 待ち）。
+
+**レビュー（/simplify）**: 4 cleanup agent（reuse/simplification/efficiency/altitude）適用 —
+recovery 不変式を `assertRecoveryInvariants` ヘルパに抽出（#300 runKillTest と #335 で共有・
+~25 行重複を解消）/ 非gated guard の `toDaemonParams` を play ごと 1 回にキャッシュ。
+skip: 公開 `dispose()` 追加（§6 scope fence = 観測 seam でなく lifecycle・cast は shutdown.ts 前例で
+許容）/ `if(!preKillPid)throw`（dead でなく TS narrowing・コメント追記）。適用後 gated 4 テスト全緑。
+
+**レビュー（/code:pr-review-team）**: 4 専門 reviewer（code-reviewer/silent-failure-hunter/
+pr-test-analyzer/comment-analyzer）。Critical 0。Important 3 を解消 →
+① afterEach を try/finally 化（seq.stop() throw 時も実 daemon を quit・leak 防止）/
+② recovery wait を件数（killMark+N）から **sample 多様性（3 seq 全復帰）** に直結し `postSamples===3`
+（chopd が 8 ev/bar と密で件数 wait だと kick/snare 復帰前に満たされる decoupling を解消・flake 除去 +
+全 loop 復帰を検証）/ ③ chop(1) は slice 経路を bypass する旨へコメント修正（comment-analyzer）。
+併せて Minor: uptime 判定を wall-clock 経過基準へ（長い recovery 待ちでの margin 痩せ対策）/ teardown
+cast を不在 throw + `?.` 除去で silent-skip 防止 / pan を厳密値 set で固定 / "per-event"→"per-sequence"
+gain ラベル統一。skip: post[0] stale（SIGKILL 即時で sub-ms 窓・post[0] discriminator 維持）。
+適用後 gated 4 テスト全緑（#335 stricter `===3` を複数回安定 PASS）。
+
 ### 6.165 feat(engine): A4-PR3 Link tempo leader — Rust daemon + TS wire (#333) (Jun 23, 2026)
 
 **Date**: 2026-06-23
