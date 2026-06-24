@@ -162,17 +162,20 @@
   <li><strong>チェーン順 = 信号フロー</strong>。effect は順序で音が変わる（comp→eq ≠ eq→comp）ので、メソッドチェーンの並びを実行順にマップする（研究 §4「insert 順序が最重要」）。</li>
   <li><strong>source は先頭</strong>。<code>seq</code> は既に音源を持つ（<code>audio()</code> のサンプル）。<code>inst()</code> は<strong>音源の置換</strong>（サンプルの代わりに synth/sampler plugin）。<strong>再生でも録音でも source 先頭は不変</strong>（録音時は録る入力信号が source）。</li>
   <li><code>play()</code> は<strong>パターン（trigger/note）</strong>で、信号パスとは直交。</li>
-  <li><strong><code>send()</code> の位置 = tap 点</strong>。「effect2 の後に send を置く＝effect2 直後でタップ」と読む。DAW の固定 pre/post-fader より柔軟で、method-chain の強みを活かす。</li>
+  <li><strong><code>send()</code> の位置 = tap 点。<u>何個でも置ける</u></strong>（reverb と delay と cue へ同時に等、各位置が独立した tap）。<strong>pre/post フラグは不要</strong> ── 早く書けば生に近い信号、最後に書けば処理後で、<strong>位置が pre/post を兼ねる</strong>。「pre/post-<em>fader</em>」だけは fader（チャンネル gain）への前後を指すので、<strong>gain/fader もチェーン上の1ノード</strong>にしておけば send をその前/後に置くことで自然に決まる（フラグ廃止）。</li>
   <li><strong>mono / stereo / multi</strong>: 基本は source から伝播（推論）・必要時だけ明示。記号で everywhere に書かせると煩雑。</li>
+  <li><strong>sum/aux/master を終端に書く = そのノードへ流し込む</strong>。<code>seq….sum("drum")</code> は「この seq の主出力を drum sum へ」（seq が行き先を指す＝§2 の向き）。同じ名前 <code>sum("drum")</code> を主語に書けばバス自身の chain を定義する。<strong>名前 = identity が「流し込む側」と「定義する側」を結ぶ</strong>。terse な終端ノード参照は <code>output(sum("drum"))</code> の sugar。</li>
 </ul>
 <pre>// 叩き台（記法は未確定）
 seq.inst("synth").play(1, 0, 1, 0)   // 音源 + パターン
+   .send("cue")                      // ← 早い位置 = 生に近い tap（pre 相当）
    .effect("comp").effect("eq")      // insert chain（この順 = 実行順）
-   .send("revAux", pre)              // ← 置いた位置 = tap 点
-   .output("master")                 // 終端（書かなければ master）
+   .send("revAux")                   // ← effect 後の tap（post 相当）・send は複数可
+   .sum("drum")                      // 主出力を drum sum へ流し込む（= output の代わり）
 
 sum("drum").effect("glue").output("master")     // group bus 自身も chain を持つ
-aux("revAux").effect("reverb").output("master") // aux も chain + output を持つ</pre>
+aux("revAux").effect("reverb").output("master") // aux も chain + output を持つ
+master.effect("limiter").output("3,4")          // master = 一級ノード（§2.2）</pre>
 
 <h2>4. エフェクトとパラメータ</h2>
 <ul>
@@ -296,6 +299,8 @@ LOOP(lead)</pre>
   <li><strong>master = 一級ノード</strong>（既定の終端 + 自前の master chain = §10 マスタリング chain・#304 master effects の置き場）。〔2026-06-24 レビュー追加〕</li>
   <li><strong>LinkAudio = per-output destination</strong>（<code>link(...)</code>・現 <code>global.linkAudio()</code> グローバルモードから格下げ・native で hardware+Link 混在解禁）。<strong>Link セッション接続の on/off は別スイッチ</strong>（egress routing と独立）。master-only→Link（2ch）も per-channel も「どの node に <code>link()</code> を生やすか」の違いだけ。〔2026-06-24 レビュー追加〕</li>
   <li><strong>型付き destination コンストラクタ</strong>（<code>link()</code> / <code>cue()</code> / <code>sum()</code> / <code>out()</code>）で <code>output()</code> の名前解決（下記 open の有力解）。〔2026-06-24 レビュー〕</li>
+  <li><strong><code>send()</code> は複数可・pre/post フラグ廃止</strong>（位置が tap 点＝pre/post を兼ねる。pre/post-fader は gain/fader ノードに対する位置で決まる）。〔2026-06-24 レビュー追加〕</li>
+  <li><strong>sum/aux/master を終端に書く = そのノードへ流し込む</strong>（名前 = identity が「流し込み」と「定義」を結ぶ・<code>output(node)</code> の sugar）。〔2026-06-24 レビュー追加〕</li>
 </ul>
 
 <h3>未決（記法・意味論の詰め） <span class="badge b-next">open</span></h3>
