@@ -127,7 +127,7 @@
 <table>
   <thead><tr><th>ドメイン</th><th>行き先</th><th>備考</th></tr></thead>
   <tbody>
-    <tr><td><strong>audio</strong></td><td>master / hardware ch（<code>"3,4"</code>）/ cue / <strong>LinkAudio channel</strong></td><td>LinkAudio egress = A4（実装済）。sum-by-name の加算は LinkAudio mixer 内で起きる egress の話で、汎用 sum とは別物。</td></tr>
+    <tr><td><strong>audio</strong></td><td>master / hardware ch（<code>"3,4"</code>）/ cue / <strong>LinkAudio channel（<code>link("drum")</code>）</strong></td><td>LinkAudio egress = A4（実装済）。<strong>per-output の destination に格下げ</strong>（現状の <code>global.linkAudio()</code> グローバルモード＝「ファイル全体が Link・hardware 混在不可」を廃し、任意の node の <code>output()</code> に <code>link(...)</code> を生やす）。現状グローバルなのは SC 時代の plugin lifecycle 制約（scsynth boot 紐付き）で、<strong>native engine では per-channel で解禁</strong>。sum-by-name の加算は LinkAudio mixer 内 egress の話で汎用 sum とは別物。<strong>Link セッション接続（discovery / tempo sync）の on/off は別レイヤのセッションスイッチ</strong>（どの node を egress するかの routing とは独立）。</td></tr>
     <tr><td><strong>data（MIDI）</strong></td><td><strong>IAC bus</strong>（macOS 仮想 MIDI）</td><td>音でなくデータの送り出し。<code>seq.midi()</code> は audio bus でなく MIDI bus へ（<code>output()</code> 免除・#282）。LinkAudio(音) と IAC(データ) は対称な egress。core spec L606 に「routing 予定・別 issue」。</td></tr>
   </tbody>
 </table>
@@ -137,7 +137,24 @@
   「常に行き先を指す」を採ると <code>output()</code> の引数は {master / hardware ch / LinkAudio ch / cue / sum / aux} を取りうる
   ＝<strong>多態</strong>。<code>"drum"</code> が sum か LinkAudio channel か cue かの<strong>名前解決ルール</strong>を決める必要がある。
   案A: <code>output()</code> を「次のノード」として一本化（graph edge・要名前解決）/ 案B: 終端 <code>output()</code> と
-  bus 投入を別動詞にして多態を避ける。<strong>未決</strong>。
+  bus 投入を別動詞にして多態を避ける。<strong>有力な解決（2026-06-24 レビュー）= 型付き destination コンストラクタ</strong>:
+  <code>link("drum")</code> / <code>cue()</code> / <code>sum("drum")</code> / <code>out("3,4")</code> のように destination を型で明示すれば、
+  bare string（"drum" が sum か Link か cue か）の曖昧さが消える。残るは記法の細部。
+</div>
+
+<h3>2.2 master ノード（一級・既定の終端 + master chain）</h3>
+<p>
+  <strong>master を一級ノードにする</strong>（.vsix 期に作っていた master トラックの再定義）。master は
+  <strong>既定の終端</strong>（<code>output()</code> 省略時の行き先）であり、<strong>自前の master chain を持つ</strong>。
+  この master chain こそ §10 の<strong>マスタリング chain</strong>（EQ / comp / limiter / normalizer）で、
+  #304 の master effects もここに載る。概念的には「全 source/sum/aux が合流する root sum bus + master FX」。
+</p>
+<div class="callout c-inv">
+  <span class="lbl">master-only → LinkAudio（2-track）も同じ仕組み</span>
+  「master だけを LinkAudio に 2ch で送る」は特別モードではなく、<strong>master ノードの出力を <code>link()</code> に向けるだけ</strong>
+  （<code>master.output(link("main"))</code>）。<strong>per-channel egress</strong>（各 seq/sum を別 Link channel へ）と
+  <strong>master-only egress</strong>（master 1本を Link へ）は「<strong>どのノードに Link 出力を生やすか</strong>」の違いだけ。
+  egress 先・mastering・通常再生がすべて同一の routing 機構に乗る。
 </div>
 
 <h2>3. 信号パス / チェーン意味論</h2>
@@ -276,11 +293,14 @@ LOOP(lead)</pre>
   <li><strong>SOLO(a,b,c)</strong> = 集合ベース予約キーワード（RUN/LOOP/MUTE の group-diff 再利用・multi-solo がタダ）。</li>
   <li>capture/render seam の用途 = ①検証 ②recovery ギャップ ③<strong>render/mastering</strong>。</li>
   <li>VST は <strong>format-agnostic な DSL</strong> 設計で δ で差し込む（DSL 改修ゼロ）。</li>
+  <li><strong>master = 一級ノード</strong>（既定の終端 + 自前の master chain = §10 マスタリング chain・#304 master effects の置き場）。〔2026-06-24 レビュー追加〕</li>
+  <li><strong>LinkAudio = per-output destination</strong>（<code>link(...)</code>・現 <code>global.linkAudio()</code> グローバルモードから格下げ・native で hardware+Link 混在解禁）。<strong>Link セッション接続の on/off は別スイッチ</strong>（egress routing と独立）。master-only→Link（2ch）も per-channel も「どの node に <code>link()</code> を生やすか」の違いだけ。〔2026-06-24 レビュー追加〕</li>
+  <li><strong>型付き destination コンストラクタ</strong>（<code>link()</code> / <code>cue()</code> / <code>sum()</code> / <code>out()</code>）で <code>output()</code> の名前解決（下記 open の有力解）。〔2026-06-24 レビュー〕</li>
 </ul>
 
 <h3>未決（記法・意味論の詰め） <span class="badge b-next">open</span></h3>
 <ul>
-  <li><code>output()</code> の<strong>多態と名前解決</strong>（master/hw/Link/cue/sum/aux の判別）。</li>
+  <li><code>output()</code> の<strong>多態と名前解決</strong>（master/hw/Link/cue/sum/aux の判別）→ <strong>有力解=型付き destination コンストラクタ</strong>（§2 callout）。残るは記法細部。</li>
   <li><strong>effect インスタンス・ハンドル</strong>の構文（重複対応 + param アドレス）。</li>
   <li><strong>mono / stereo / multi</strong> の channel-count モデル（推論 vs 明示）。</li>
   <li><strong>solo × mute 相互作用</strong>・group/aux の solo。</li>
