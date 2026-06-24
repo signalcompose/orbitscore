@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OrbitScore Post-2.0 — Mixer / Routing / Effects / Automation / Module DSL 設計ノート</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --bg: #fdfdfd;
+    --muted: #5b6470;
+    --line: #e2e6ea;
+    --accent-a: #1f6feb;   /* engine track */
+    --accent-b: #8957e5;   /* app track (OrbitStudio-era) */
+    --accent-c: #1a7f5a;   /* DSL / pitch track */
+    --warn-bg: #fff8e6;
+    --warn-bd: #e6c34a;
+    --stop-bg: #fdecef;
+    --stop-bd: #e5736f;
+    --inv-bg: #eef4ff;
+    --inv-bd: #1f6feb;
+    --code-bg: #f4f6f8;
+  }
+  html { color: var(--ink); background: var(--bg); }
+  body {
+    margin: 0 auto; max-width: 54em;
+    padding: 48px 28px 96px;
+    font: 16px/1.65 -apple-system, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+  h1 { font-size: 1.9em; margin: 0 0 .2em; letter-spacing: .01em; }
+  h2 { font-size: 1.35em; margin: 2.2em 0 .6em; padding-bottom: .25em; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.1em; margin: 1.6em 0 .4em; }
+  .sub { color: var(--muted); margin: 0 0 1.5em; font-size: .95em; }
+  p { margin: .8em 0; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font: 13.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; font: 13px/1.55 ui-monospace, Menlo, monospace; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: .3em 0; }
+  a { color: var(--accent-a); }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .9em; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .badge { display: inline-block; font-size: .72em; font-weight: 700; padding: .12em .6em; border-radius: 999px; vertical-align: middle; letter-spacing: .03em; white-space: nowrap; }
+  .b-done { background: #def7e6; color: #1a7f3c; }
+  .b-next { background: #e6efff; color: #1f5fc0; }
+  .b-defer{ background: #fff2cc; color: #8a6d12; }
+  .b-risk { background: #fde2e2; color: #b53a37; }
+  .callout { border-left: 4px solid; border-radius: 0 6px 6px 0; padding: 12px 16px; margin: 1.2em 0; }
+  .c-inv  { background: var(--inv-bg);  border-color: var(--inv-bd); }
+  .c-warn { background: var(--warn-bg); border-color: var(--warn-bd); }
+  .c-stop { background: var(--stop-bg); border-color: var(--stop-bd); }
+  .callout .lbl { font-weight: 700; display: block; margin-bottom: .2em; }
+  .track { border: 1px solid var(--line); border-radius: 8px; padding: 4px 20px 16px; margin: 1.2em 0; border-top: 4px solid var(--accent-c); }
+  .track h3 { margin-top: 1em; }
+  .small { color: var(--muted); font-size: .88em; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2.5em 0; }
+</style>
+</head>
+<body>
+
+<h1>Mixer / Routing / Effects / Automation / Module — DSL 設計ノート</h1>
+<p class="sub">
+  Post-2.0 engine track の <strong>DSL 側未設計領域</strong>の設計ディスカッション記録 ·
+  2026-06-24 · Issue #337
+</p>
+
+<div class="callout c-warn">
+  <span class="lbl">この文書の位置づけ（重要）</span>
+  これは owner とのブレストを固定した <strong>設計ディスカッション記録</strong>であり、<strong>正規仕様（normative spec）ではない</strong>。
+  記載の DSL 記法は<strong>すべて叩き台（未確定）</strong>。<strong>実装は一切していない</strong>。
+  確定事項と未決事項は §11「決定台帳」で仕分ける。正規仕様化は別 issue で行う。
+</div>
+
+<h2>0. なぜこのノートが要るか</h2>
+<p>
+  engine 側のプラグインホスティング（<strong>γ out-of-process sandbox / δ VST3·AU</strong>）は
+  <a href="POST_2.0_NEXT_STEPS.html">POST_2.0_NEXT_STEPS.html</a> §2・§3 にロードマップ済。
+  だが <strong>それを <code>.orbs</code> DSL からどう叩くか</strong> ── plugin 呼び出し / effect chain /
+  send-return / aux / 出力ルーティング / automation / ファイル分割 ── は<strong>未設計</strong>。
+  ルーティング研究 <a href="../research/DAW_AUDIO_ARCHITECTURE.md">DAW_AUDIO_ARCHITECTURE.md</a> も
+  「③ DSL 表現面」を将来として留保している。本ノートはその DSL 表現面（と、それが要求する engine 要件）の設計をまとめる。
+</p>
+<p class="small">
+  VST について: DSL から見れば <strong>CLAP も VST3·AU も「plugin」で同一</strong>。フォーマット差は engine ホスティング
+  （γ→δ）に閉じ、<strong>DSL は format-agnostic</strong> に設計する。VST3 は SDK 3.8 で MIT 単独化済（license 障壁なし）。
+  δ が「最後」なのは engine 成熟度（CLAP &gt; AU &gt; VST3）の話で、DSL 設計上の遅延理由ではない。
+</p>
+
+<h2>1. 統合軸 ── reconciliation key = 名前</h2>
+<div class="callout c-inv">
+  <span class="lbl">全体を貫く1本の原理</span>
+  DSL は<strong>「あるべきグラフ（desired graph）」を宣言</strong>する。再評価のたびに engine は
+  <strong>走っている実グラフと desired を差分（diff）し、最小の delta だけ適用</strong>する
+  （node 追加 / edge 張り替え / 削除）。<strong>変わっていない node はそのまま鳴り続ける</strong>＝音切れなし。
+  この差分照合（reconciliation）の <strong>key が「名前」</strong>（React の key と同じ）。
+  名前一致 = 同一 node →<strong>その場で再束縛（param 更新）</strong>、新規名 = 追加、消えた名 = 削除。
+</div>
+<p>
+  「mixer/aux/inst が live で増える」問題の答えがこれ。<strong>グラフが変わること自体は問題ではない</strong> ──
+  問題は「丸ごと teardown→rebuild すると音が切れる」こと。宣言的グラフ + 名前キー差分なら、aux を1本足すのは
+  「+1 node の delta」で済み、既存は無停止。<strong>「再構築でなく再束縛」</strong>がこれで成立する。
+</p>
+<p>
+  そして <code>sum("drum")</code> / <code>aux("rev")</code> / effect ハンドル / module の export 名 ──
+  本ノートで「名前で実体を掴む」発想が繰り返し出るのは、すべて<strong>同じ reconciliation key</strong> だから。
+  この1点が <strong>routing・effect ハンドル・module identity・recovery（<a href="POST_2.0_NEXT_STEPS.html">#300</a>）</strong>
+  を束ねる。effect の並び替えは edge の張り替えだけで <strong>node の state（plugin 内部状態）は保持</strong>される。
+</p>
+
+<h2>2. ルーティング・グラフ</h2>
+<p>
+  グラフは <strong>4 種のノード</strong>と、それを繋ぐ<strong>エッジ</strong>で表す。エッジの向きは
+  <strong>「常に source が行き先を指す」</strong>（決定）。束ねる側が集めるより直感的で、変更時に認識がズレない。
+</p>
+<table>
+  <thead><tr><th>ノード</th><th>DSL（叩き台）</th><th>トポロジー</th><th>DAW 対応</th></tr></thead>
+  <tbody>
+    <tr><td><strong>source</strong></td><td><code>seq.inst("synth")</code> / <code>seq.audio("x.wav")</code> / 録音入力</td><td>信号の発生源（チェーン先頭）</td><td>音源 / クリップ / 入力</td></tr>
+    <tr><td><strong>sum（group）</strong></td><td><code>sum("drum")</code></td><td>直列サブミックス（メンバの主出力がここへ）</td><td>Group / Bus track</td></tr>
+    <tr><td><strong>aux（send-return）</strong></td><td><code>send("rev")</code> → <code>aux("rev")</code></td><td>並列タップ（コピーを送る・原音は継続）</td><td>Return / Aux track</td></tr>
+    <tr><td><strong>output（終端）</strong></td><td><code>output("master")</code> / <code>"3,4"</code> / cue / LinkAudio ch</td><td>信号の最終行き先</td><td>Master / hardware out / egress</td></tr>
+  </tbody>
+</table>
+
+<h3>2.1 output は 2 ドメイン</h3>
+<table>
+  <thead><tr><th>ドメイン</th><th>行き先</th><th>備考</th></tr></thead>
+  <tbody>
+    <tr><td><strong>audio</strong></td><td>master / hardware ch（<code>"3,4"</code>）/ cue / <strong>LinkAudio channel</strong></td><td>LinkAudio egress = A4（実装済）。sum-by-name の加算は LinkAudio mixer 内で起きる egress の話で、汎用 sum とは別物。</td></tr>
+    <tr><td><strong>data（MIDI）</strong></td><td><strong>IAC bus</strong>（macOS 仮想 MIDI）</td><td>音でなくデータの送り出し。<code>seq.midi()</code> は audio bus でなく MIDI bus へ（<code>output()</code> 免除・#282）。LinkAudio(音) と IAC(データ) は対称な egress。core spec L606 に「routing 予定・別 issue」。</td></tr>
+  </tbody>
+</table>
+
+<div class="callout c-warn">
+  <span class="lbl">open: output の多態と名前解決</span>
+  「常に行き先を指す」を採ると <code>output()</code> の引数は {master / hardware ch / LinkAudio ch / cue / sum / aux} を取りうる
+  ＝<strong>多態</strong>。<code>"drum"</code> が sum か LinkAudio channel か cue かの<strong>名前解決ルール</strong>を決める必要がある。
+  案A: <code>output()</code> を「次のノード」として一本化（graph edge・要名前解決）/ 案B: 終端 <code>output()</code> と
+  bus 投入を別動詞にして多態を避ける。<strong>未決</strong>。
+</div>
+
+<h2>3. 信号パス / チェーン意味論</h2>
+<ul>
+  <li><strong>チェーン順 = 信号フロー</strong>。effect は順序で音が変わる（comp→eq ≠ eq→comp）ので、メソッドチェーンの並びを実行順にマップする（研究 §4「insert 順序が最重要」）。</li>
+  <li><strong>source は先頭</strong>。<code>seq</code> は既に音源を持つ（<code>audio()</code> のサンプル）。<code>inst()</code> は<strong>音源の置換</strong>（サンプルの代わりに synth/sampler plugin）。<strong>再生でも録音でも source 先頭は不変</strong>（録音時は録る入力信号が source）。</li>
+  <li><code>play()</code> は<strong>パターン（trigger/note）</strong>で、信号パスとは直交。</li>
+  <li><strong><code>send()</code> の位置 = tap 点</strong>。「effect2 の後に send を置く＝effect2 直後でタップ」と読む。DAW の固定 pre/post-fader より柔軟で、method-chain の強みを活かす。</li>
+  <li><strong>mono / stereo / multi</strong>: 基本は source から伝播（推論）・必要時だけ明示。記号で everywhere に書かせると煩雑。</li>
+</ul>
+<pre>// 叩き台（記法は未確定）
+seq.inst("synth").play(1, 0, 1, 0)   // 音源 + パターン
+   .effect("comp").effect("eq")      // insert chain（この順 = 実行順）
+   .send("revAux", pre)              // ← 置いた位置 = tap 点
+   .output("master")                 // 終端（書かなければ master）
+
+sum("drum").effect("glue").output("master")     // group bus 自身も chain を持つ
+aux("revAux").effect("reverb").output("master") // aux も chain + output を持つ</pre>
+
+<h2>4. エフェクトとパラメータ</h2>
+<ul>
+  <li><strong>インスタンス・ハンドルが要る</strong>。同じ effect を2回挿すと <code>&lt;effect名&gt;.&lt;param&gt;</code> では曖昧。<strong>ハンドルを返す</strong>形にする（叩き台: <code>var eq1 = seq.effect("eq")</code> → <code>eq1.freq(...)</code>）。これも「名前で実体を掴む」= reconciliation key。</li>
+  <li>effect を挿すと<strong>外に見えるパラメータが予約</strong>され、ハンドル経由で <code>eq1.freq(800).q(1.2)</code> のように指定 or automation 対象にできる。</li>
+  <li>mono/stereo は §3 の channel-count モデルに従う。</li>
+</ul>
+
+<h2>5. Automation ── 3 層</h2>
+<p>「プログラム的に param 変化を書きたい」欲は満たしつつ <strong>RT 安全</strong>（audio スレッドは毎サンプル JS を呼べない）を守るため、3 層に分ける。<strong>OrbitScore は TS 上の DSL なので automation も TS で書け、便利関数を資産化できる</strong>。</p>
+<table>
+  <thead><tr><th>層</th><th>例</th><th>RT/評価</th><th>便利関数で巻き取れるか</th></tr></thead>
+  <tbody>
+    <tr><td><strong>① 時間決定論</strong></td><td><code>ramp(0,1,4bars)</code> / <code>(t)=&gt;…</code> / for·if で書いた時間関数</td><td><strong>事前レンダ</strong>して control-rate レーン / breakpoint に。RT 安全。</td><td>Yes</td></tr>
+    <tr><td><strong>② control-rate signal modulation</strong></td><td>LFO / envelope follower / sidechain / macro / <strong>live 入力レベル·onset</strong></td><td>engine が <strong>mod source を primitive で持つ</strong>。DSL/TS は <strong>「mod source → param」の配線（mod graph）を書くだけ</strong>。評価は engine が control-rate で回す。</td><td>Yes（「演奏音レベルに追従」「sidechain で揺らす」はここ）</td></tr>
+    <tr><td><strong>③ semantic / score-following</strong></td><td>「フレーズを聴いて」追従 / LLM 演奏計画</td><td>解析 + 計画が要る。<strong>north-star（別トラック）・本スコープ外</strong>。</td><td>No</td></tr>
+  </tbody>
+</table>
+<p class="small">
+  線引きは「決定論 vs 反応」ではなく <strong>「signal-rate の modulation（engine primitive・DSL は配線）」 vs 「cognitive な解析+計画」</strong>。
+  ①② は <a href="../research/">groove-from-structure</a>（揺れは構造から・RNG を時間グリッドに入れない）と整合 ＝ <strong>決定論的・構造由来</strong>に倒す。
+</p>
+<pre>// 叩き台（記法は未確定）
+var sweep = ramp(0, 1, 4bars)        // ① 決定論カーブ（pre-render）
+filter.cutoff.automate(sweep)
+
+var lfoMod = lfo(0.5)                 // ② mod source
+synth.cutoff.mod(lfoMod, 0.3)        // mod を param に配線（control-rate 評価）
+comp.thresh.sidechain("kick")        // ② 演奏音に反応（engine が follower 計算）</pre>
+
+<h2>6. Mixer 機能の完全性</h2>
+<p>挙がった未カバー項目は<strong>全部スコープ in</strong>。</p>
+<table>
+  <thead><tr><th>項目</th><th>扱い</th></tr></thead>
+  <tbody>
+    <tr><td><strong>mute / solo</strong></td><td>§7 の集合キーワードで。solo は <strong>multi-solo がタダ</strong>（Ableton の「実質1つ」問題を解消）。</td></tr>
+    <tr><td><strong>sidechain = aux「入力」</strong></td><td>node は<strong>非メイン入力ポート</strong>を持てる。エッジは「出力先」だけでなく「入力源」も張れる（研究: sidechain = 非メイン入力への routing）。</td></tr>
+    <tr><td><strong>PDC（plugin delay compensation）</strong> <span class="badge b-risk">engine 必須</span></td><td>plugin 遅延があると send/group の並列経路で位相がズレる → engine が<strong>自動で遅延補償</strong>。<strong>DSL 不可視だが正しさに不可分</strong>（研究「PDC 不可分」）。</td></tr>
+    <tr><td><strong>metering</strong></td><td>level/peak メータ = <strong>#307 capture/verify ハーネスの RMS/peak プリミティブの再利用</strong>（新規実装でない）。</td></tr>
+    <tr><td><strong>bus の入れ子</strong></td><td>sum を sum に入れる等は reconciliation グラフなら<strong>只のネスト</strong>で自動的に効く（特別扱い不要）。</td></tr>
+  </tbody>
+</table>
+
+<h2>7. 予約キーワード = 集合 + 差分（統一イディオム）</h2>
+<p>
+  既存の <code>RUN(...)</code> / <code>LOOP(...)</code> / <code>MUTE(...)</code> は
+  <strong>「シーケンス集合を取る予約キーワード + group-diff」</strong>（<code>loopGroup</code>/<code>muteGroup</code> を
+  <code>calculateLoopDiff</code> で差分処理）。<strong><code>SOLO(...)</code> はそこに <code>soloGroup</code> を1個足すだけ</strong>
+  ＝同じ機構の再利用で <strong>multi-solo がタダ</strong>。
+</p>
+<pre>SOLO(kick, snare, hat)   // 3つ同時 solo（集合）
+SOLO()                   // 全解除</pre>
+<p>
+  これは §1 の reconciliation（名前キー差分）と同じ思想 ── 集合も「desired な集合」を宣言し差分適用。
+  <code>RUN/LOOP/MUTE/SOLO</code> が一貫したセット演算になり、将来 <code>BYPASS(fx...)</code>（effect 一括バイパス）等も同型で足せる。
+</p>
+<div class="callout c-warn">
+  <span class="lbl">open: solo 意味論</span>
+  soloGroup 非空 = その集合だけ可聴（solo-in-place）・他は暗黙 mute。<strong>MUTE との相互作用</strong>（solo が mute を上書きするか）と、
+  <strong>group/aux を solo した時</strong>（配下も鳴る）の扱いは未決。
+</div>
+
+<h2>8. Module system（ファイル分割 / import）</h2>
+<p>単一ファイルの肥大化が痛いので、<strong>トラック毎・楽器毎・play 毎に分割し、自由に import</strong> したい。reconciliation と相性が良い: 各ファイルが<strong>名前キーで node を desired graph に寄与</strong>するだけ。import = グラフの合成（名前一致で merge）。</p>
+
+<h3>8.1 project vs performance の分離</h3>
+<div class="callout c-inv">
+  <span class="lbl">Global は丸ごと閉じ込めず「2 分割」</span>
+  <strong>project 所有（永続・preset/variant で差し替え）</strong>: mixer / aux / instrument graph / routing / output 設定 / SR
+  ── <strong>再構築が音切れの元 ＝ これだけ守る</strong>。<br>
+  <strong>performance 駆動（live・頻繁に書き換え・再評価が安い&歓迎）</strong>: <strong>tempo</strong> / transport start-stop /
+  key·transpose / どの pattern を live にするか。<br>
+  → tempo は迷わず後者。「tempo を live で多用」と「project が Global を持つ」は両立する。<strong>守るのは mixer graph であって tempo ではない</strong>。
+</div>
+<pre>// instruments.orbs（project 側・永続）
+export var lead = global.seq.inst("synth").effect("comp").output("master")
+
+// performance.orbs（live-coding 側）
+import { lead } from "./instruments"
+global.tempo(128)    // live param（再評価で再適用＝歓迎）
+LOOP(lead)</pre>
+<p>
+  <strong>hot-reload identity</strong>: performance を再評価しても import した project graph は<strong>作り直さず再束縛</strong>（§1 reconciliation）。
+  identity を project ランタイムに置くことで「再評価＝再束縛、再構築でない」が成立し、import 時の音切れが大半消える。
+  これは DAW の「プロジェクト vs クリップ」分離そのもの。
+</p>
+
+<h2>9. プロジェクト階層</h2>
+<p><strong>clip/pattern → track → song → album</strong>。既存の deferred「song 層」（<a href="POST_2.0_PITCH_MODEL_NOTES.md">pitch model notes</a>）の上に album（複数 song を束ねる）を載せる。これは OrbitStudio-era の project 構造。</p>
+
+<h2>10. Capture / render seam ── 用途は 3 つ</h2>
+<p>
+  これまで「耳なし検証」のために deferred だった capture seam は、<strong>mixer/effects グラフと組み合わさると用途が広がる</strong>。
+</p>
+<ol>
+  <li><strong>耳なし実時間検証</strong>（回帰テスト・#307 系）</li>
+  <li><strong>recovery の可聴ギャップ実測</strong>（#300 系）</li>
+  <li><strong>render / bounce / mastering 書き出し</strong> ← 新規価値</li>
+</ol>
+<div class="callout c-inv">
+  <span class="lbl">マスタリングも同じグラフで届く</span>
+  2-track ステレオを source に → <strong>master chain（EQ / comp / limiter / normalizer）</strong> → <strong>render（capture seam）</strong>
+  ＝ そのままマスタリング。OrbitScore が <strong>live-coding + production + mastering</strong> を1つのグラフで扱える絵になる。
+  capture seam が production 級（stem 書き出し / freeze / master export）の価値を持つ。
+</div>
+
+<h2>11. 決定台帳</h2>
+
+<h3>確定（このブレストで） <span class="badge b-done">決定</span></h3>
+<ul>
+  <li><strong>reconciliation key = 名前</strong>（宣言的グラフ + 差分適用が全体の統合軸）。</li>
+  <li>ルーティングの向き = <strong>常に source が行き先を指す</strong>。</li>
+  <li>routing 4 ノード: <strong>source / sum(group) / aux(send-return) / output(終端)</strong>。output は 2 ドメイン（audio / data=IAC）。</li>
+  <li>チェーン順 = 信号フロー（source 先頭・<code>inst()</code>=音源置換・<code>play()</code>=パターン直交・<code>send()</code> 位置=tap 点）。</li>
+  <li>automation = <strong>3 層</strong>（①時間決定論 pre-render / ②control-rate signal modulation / ③semantic=north-star 対象外）。便利関数は ①② を巻き取る。</li>
+  <li>Global = <strong>2 分割</strong>（project 所有の永続グラフ / performance 駆動の live param）。</li>
+  <li>mixer 未挙げ項目を<strong>全部スコープ in</strong>（solo / sidechain入力 / PDC / metering / nesting）。</li>
+  <li><strong>SOLO(a,b,c)</strong> = 集合ベース予約キーワード（RUN/LOOP/MUTE の group-diff 再利用・multi-solo がタダ）。</li>
+  <li>capture/render seam の用途 = ①検証 ②recovery ギャップ ③<strong>render/mastering</strong>。</li>
+  <li>VST は <strong>format-agnostic な DSL</strong> 設計で δ で差し込む（DSL 改修ゼロ）。</li>
+</ul>
+
+<h3>未決（記法・意味論の詰め） <span class="badge b-next">open</span></h3>
+<ul>
+  <li><code>output()</code> の<strong>多態と名前解決</strong>（master/hw/Link/cue/sum/aux の判別）。</li>
+  <li><strong>effect インスタンス・ハンドル</strong>の構文（重複対応 + param アドレス）。</li>
+  <li><strong>mono / stereo / multi</strong> の channel-count モデル（推論 vs 明示）。</li>
+  <li><strong>solo × mute 相互作用</strong>・group/aux の solo。</li>
+  <li><strong>automation API surface</strong>（便利関数の語彙・mod 配線の記法）。</li>
+  <li><strong>module eval semantics</strong>（project=宣言的フルグラフ〔削除含む diff〕 vs performance=加算的 live op〔暗黙削除しない〕）。</li>
+</ul>
+
+<h3>OrbitStudio-era（今は「塞がない」だけ） <span class="badge b-defer">cutover 後</span></h3>
+<ul>
+  <li>Global / project の永続所有（ランタイムが identity を持つ）。</li>
+  <li>hot-reload identity の実機構。</li>
+  <li>cue / A-B モニタリング UI（hardware out 選択・preview→promote ワークフロー）。</li>
+  <li>project config の variant / scene（同じ project を別設定で）。</li>
+  <li>song → album の階層構造。</li>
+</ul>
+
+<h3>engine 必須（DSL 不可視だが正しさに不可分） <span class="badge b-risk">engine</span></h3>
+<ul>
+  <li><strong>RT 安全な incremental graph mutation</strong>（走行中の原子的 add/remove/rewire・next-frame swap / double-buffer / lock-free）。</li>
+  <li><strong>PDC</strong>（plugin delay compensation）。</li>
+  <li><strong>非同期 plugin instantiation</strong>（audio thread 外でロード→準備後に atomic 挿入）。</li>
+  <li><strong>control-rate mod 評価</strong>（②automation の mod source / follower）。</li>
+</ul>
+
+<h2>12. シーケンシングと関連</h2>
+<div class="callout c-warn">
+  <span class="lbl">DSL spec 先行 → γ を de-risk</span>
+  γ の engine core routing graph（①）が「何を実行すべきか」は、<strong>DSL（③）が何を表現するか</strong>で決まる
+  （チェーン topology・send/return・順序変更の意味論）。先に DSL を決めずに γ を作ると手戻りが起きる。
+  → <strong>本ノートの routing-graph モデルを最初に詰める</strong>のが最も解きやすい順序。effect chain も automation もその上に乗る。
+</div>
+<ul>
+  <li><strong>A4 named channel</strong>（LinkAudio egress）= output の audio ドメイン1行目。汎用 sum とは別物（egress 固有）。</li>
+  <li><strong>β audio DSL ⊇ pitch DSL</strong>: plugin/effects は audio DSL の一部。β（<a href="POST_2.0_NEXT_STEPS.html">§3</a>）の表現力軸と噛み合う。</li>
+  <li><strong>#300 recovery</strong>: respawn 後の再 establish = 空からの full reconcile。土台は地続き。</li>
+  <li><strong>#307 capture</strong>: metering / render / mastering の共有プリミティブ。</li>
+  <li><strong>DAW_AUDIO_ARCHITECTURE.md</strong>: ①engine graph / ②plugin / ③DSL の3層・insert→send/return→group→master→out の層構造・PDC。</li>
+  <li><strong>groove-from-structure</strong>: automation の決定論方針の根拠。</li>
+</ul>
+
+<hr>
+<p class="small">
+  正本（engine 側）: <a href="POST_2.0_NEXT_STEPS.html">POST_2.0_NEXT_STEPS.html</a> §2・§3 ·
+  研究: <a href="../research/DAW_AUDIO_ARCHITECTURE.md">DAW_AUDIO_ARCHITECTURE.md</a> ·
+  本ノートは設計ディスカッション記録（Issue #337）。正規仕様化・実装は別 issue。
+</p>
+
+</body>
+</html>

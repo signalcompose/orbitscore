@@ -17,6 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.167 docs(engine): mixer / routing / effects / automation / module DSL design note (#337) (Jun 24, 2026)
+
+**Date**: 2026-06-24
+**Status**: ✅ 設計ノート作成（discussion record・実装なし）
+**Branch**: `337-mixer-dsl-design`
+**Issue**: #337
+**成果物**: `docs/development/POST_2.0_MIXER_DSL_DESIGN.html`（手書き HTML・既存 specs スタイル）
+
+post-2.0 engine track の **DSL 側未設計領域**（mixer / routing / effects / automation / module）を
+owner とブレストし、設計ディスカッション記録として HTML に固定した。engine 側ホスティング（γ/δ）は
+`POST_2.0_NEXT_STEPS.html` §3 にあるが、それを DSL からどう叩くか（plugin 呼び出し / effect chain /
+send-return / aux / automation / ファイル分割）は未設計だった。
+
+**統合軸**: **reconciliation key = 名前**（宣言的グラフ + 名前キー差分適用。routing / effect ハンドル /
+module identity / recovery を束ねる）。
+
+**確定**（このブレスト）: ルーティングの向き=常に source が行き先を指す / routing 4 ノード（source・
+sum(group)・aux(send-return)・output(終端)）+ output 2 ドメイン（audio / data=IAC）/ chain 順=信号フロー
+（source 先頭・inst=音源置換・play=パターン直交・send 位置=tap）/ automation 3 層（時間決定論 pre-render /
+control-rate signal modulation / semantic=north-star 対象外）/ Global 2 分割（project=永続グラフ /
+performance=live param tempo 等）/ SOLO(a,b,c)=集合キーワード（RUN/LOOP/MUTE の group-diff 再利用・
+multi-solo がタダ）/ mixer 未挙げ項目 全部 in（solo・sidechain入力・PDC・metering・nesting）/
+capture seam の用途 3 つ（検証・recovery ギャップ・render/mastering）/ VST は format-agnostic DSL で δ で差込。
+
+**未決 / OrbitStudio-era / engine 必須**は HTML §11 決定台帳に仕分け記録。
+
+**プロセス**: docs-only のため full PR レビュー（simplify + pr-review-team）はオーバーエンジニアリング
+（CLAUDE.md）→ スキップ。正規仕様化・実装は別 issue。HTML は well-formed 検証済。
+
 ### 6.166 test(engine): A4-PR4 active-loops across-respawn e2e — full DSL / interpreter-driven (#335) (Jun 23, 2026)
 
 **Date**: 2026-06-23
