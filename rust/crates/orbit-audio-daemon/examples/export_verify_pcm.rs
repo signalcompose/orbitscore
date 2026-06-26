@@ -121,7 +121,10 @@ fn play_span(ev: &GoldenEvent, sample_frames: &HashMap<String, usize>, sr: f64) 
 /// verify_schedule_pcm.rs の `body_window` と同値（あちらは test binary の private 関数で
 /// `orbit-audio-verify` には無く import 不可。共通化は follow-up）。
 fn body_window(onset: usize, span: usize, tail_trim: usize) -> (usize, usize) {
-    (onset + BODY_HEAD_OFFSET, onset + span.saturating_sub(tail_trim))
+    (
+        onset + BODY_HEAD_OFFSET,
+        onset + span.saturating_sub(tail_trim),
+    )
 }
 
 /// stereo interleaved `cap.data` から mono mix `(L+R)/2` の `CapturedAudio` を生成。
@@ -230,15 +233,10 @@ fn process_fixture(fixture_name: &str) {
 
     // ─── PCM ダンプ ────────────────────────────────────────────────────────
     let gen_dir = repo_path("test-assets/verify-fixtures/phase3/.gen");
-    std::fs::create_dir_all(&gen_dir)
-        .unwrap_or_else(|e| panic!(".gen/ ディレクトリ作成失敗: {e}"));
+    std::fs::create_dir_all(&gen_dir).unwrap_or_else(|e| panic!(".gen/ ディレクトリ作成失敗: {e}"));
     let pcm_path = gen_dir.join(format!("{fixture_name}.pcm"));
     // stereo interleaved data を little-endian f32 バイト列としてダンプ（ヘッダ無し）。
-    let bytes: Vec<u8> = cap
-        .data
-        .iter()
-        .flat_map(|&s| s.to_le_bytes())
-        .collect();
+    let bytes: Vec<u8> = cap.data.iter().flat_map(|&s| s.to_le_bytes()).collect();
     std::fs::write(&pcm_path, &bytes)
         .unwrap_or_else(|e| panic!("PCM 書き込み失敗 {}: {e}", pcm_path.display()));
     println!(
@@ -284,8 +282,8 @@ fn process_fixture(fixture_name: &str) {
         // body peak ≈ 探索区間 peak のため数値差は無視できる（README が校正の正本）。
         let body_peak = region_peak(&mono, 0, w_start, w_end);
         let threshold = ONSET_THRESHOLD_RATIO as f32 * body_peak;
-        let onset_frame_threshold = detect_onset_threshold(&sub, 0, threshold)
-            .map(|local_f| local_f + search_start);
+        let onset_frame_threshold =
+            detect_onset_threshold(&sub, 0, threshold).map(|local_f| local_f + search_start);
 
         // ─── onset 検出（matched filter 法）──────────────────────────
         // matched filter の demo は per_event_gain 第1イベントのみ（他 fixture は threshold で

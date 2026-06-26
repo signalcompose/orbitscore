@@ -1,23 +1,15 @@
 //! Event seam: control → audio thread via lock-free SPSC ring (A0 §4.2).
 
 use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent};
-use clack_host::events::{Event, EventFlags, Match};
 use clack_host::events::io::EventBuffer;
+use clack_host::events::{Event, EventFlags, Match};
 use clack_host::prelude::Pckn;
 
 /// Events that the control / driver thread can push into the audio thread.
 #[derive(Debug, Clone, Copy)]
 pub enum PluginEvent {
-    NoteOn {
-        key: u8,
-        channel: u8,
-        velocity: f64,
-    },
-    NoteOff {
-        key: u8,
-        channel: u8,
-        velocity: f64,
-    },
+    NoteOn { key: u8, channel: u8, velocity: f64 },
+    NoteOff { key: u8, channel: u8, velocity: f64 },
 }
 
 /// Type alias for the producer side (control thread).

@@ -164,8 +164,5 @@ fn region_offset_is_correctly_applied_with_ramp_sample() {
     // total_frames を縮めたとき範囲外 0.0 fallback で誤 pass しうるため、窓 RMS で確認する
     // （窓は total_frames まで取り、構造的に非空）。
     let after_rms = region_rms(&cap, 0, schedule_start + region_len, total_frames);
-    assert!(
-        after_rms < 1e-5,
-        "領域外は無音のはず。RMS={after_rms:.6}"
-    );
+    assert!(after_rms < 1e-5, "領域外は無音のはず。RMS={after_rms:.6}");
 }

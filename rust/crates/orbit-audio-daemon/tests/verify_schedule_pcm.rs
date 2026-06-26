@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use orbit_audio_core::sanitize_rate;
-use orbit_audio_daemon::engine_wrap::EngineWrap;
 use orbit_audio_daemon::backend::StubBackend;
+use orbit_audio_daemon::engine_wrap::EngineWrap;
 use orbit_audio_verify::{
     channel_rms, db_difference, pan_from_lr_rms, region_rms, CapturedAudio, GAIN_DB_TOLERANCE,
     PAN_TOLERANCE,
@@ -63,7 +63,9 @@ fn repo_path(rel: &str) -> PathBuf {
 }
 
 fn load_golden(fixture: &str) -> GoldenSchedule {
-    let path = repo_path(&format!("test-assets/verify-fixtures/{fixture}.schedule.json"));
+    let path = repo_path(&format!(
+        "test-assets/verify-fixtures/{fixture}.schedule.json"
+    ));
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("golden JSON {} を読めない: {e}", path.display()));
     serde_json::from_str(&raw).expect("golden JSON parse")
@@ -153,7 +155,10 @@ fn pan_three_voices_render_matches_schedule() {
         // （fade ≤384 + 余裕を除外）。
         let play_frames = sample_frames[&ev.sample];
         let (w_start, w_end) = body_window(onset, play_frames, 600);
-        assert!(w_start < w_end, "pan body 窓が狭すぎる: [{w_start}, {w_end})");
+        assert!(
+            w_start < w_end,
+            "pan body 窓が狭すぎる: [{w_start}, {w_end})"
+        );
         let l = region_rms(&cap, 0, w_start, w_end);
         let r = region_rms(&cap, 1, w_start, w_end);
         assert!(
@@ -210,7 +215,7 @@ fn chop_region_render_matches_schedule() {
 
     // イベント間（slice1 終端 0.6s 〜 slice2 開始 1.1s の中央 0.85s）は無音。
     let gap_start = (0.65 * sr) as usize;
-    let gap_end   = (0.95 * sr) as usize;
+    let gap_end = (0.95 * sr) as usize;
     let gap = region_rms(&cap, 0, gap_start, gap_end);
     assert!(gap < 1e-5, "chop イベント間は無音のはず（RMS={gap:.6}）");
 }
@@ -236,18 +241,26 @@ fn per_event_gain_render_matches_schedule() {
         // kick 0.5s も fade は最大 384 frames（min(0.5*0.04, 0.008)*48000）なので pan と同じ
         // 600 で除外する。dB 差は fade 不変だが、窓に fade を混ぜないよう揃える。
         let (w_start, w_end) = body_window(onset, play_frames, 600);
-        assert!(w_start < w_end, "onset={:.3}s の body 窓が狭すぎる", ev.onset_sec);
+        assert!(
+            w_start < w_end,
+            "onset={:.3}s の body 窓が狭すぎる",
+            ev.onset_sec
+        );
         let l = region_rms(&cap, 0, w_start, w_end);
         let r = region_rms(&cap, 1, w_start, w_end);
         // pan=0 → L/R ほぼ等しい。平均 RMS を使う。
         let rms = (l + r) / 2.0;
-        assert!(rms > 1e-4, "onset={:.3}s に信号が必要（RMS={rms:.5}）", ev.onset_sec);
+        assert!(
+            rms > 1e-4,
+            "onset={:.3}s に信号が必要（RMS={rms:.5}）",
+            ev.onset_sec
+        );
         rms_by_gain.push((ev.gain_db, rms));
     }
 
     // gainDb で並べて loud(-3) / quiet(-9) を識別する。
     rms_by_gain.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap()); // 降順 = loud first
-    let rms_loud  = rms_by_gain[0].1;
+    let rms_loud = rms_by_gain[0].1;
     let rms_quiet = rms_by_gain[1].1;
 
     // db_difference(quiet, loud) = 20*log10(quiet/loud) ≈ -6.0 dB。
@@ -262,7 +275,10 @@ fn per_event_gain_render_matches_schedule() {
     // イベント間（loud 終端 0.6s 〜 quiet 開始 3.1s の 1.0〜2.5s）は無音。両イベントが
     // 誤って onset=0 にレンダされる回帰（加算 RMS になり dB 差が崩れる）を捕まえる。
     let gap = region_rms(&cap, 0, (1.0 * sr) as usize, (2.5 * sr) as usize);
-    assert!(gap < 1e-5, "per_event_gain イベント間は無音のはず（RMS={gap:.6}）");
+    assert!(
+        gap < 1e-5,
+        "per_event_gain イベント間は無音のはず（RMS={gap:.6}）"
+    );
 }
 
 #[test]
@@ -311,7 +327,7 @@ fn examples22_parity_render_matches_schedule() {
         // 出力 pan を atan2 で独立逆算し schedule の pan と突き合わせる（GRM 独立）。
         let measured = pan_from_lr_rms(l, r);
         assert!(
-            (measured - ev.pan as f32).abs() <= PAN_TOLERANCE,
+            (measured - ev.pan).abs() <= PAN_TOLERANCE,
             "seq {}: schedule pan {} → measured {measured} (L={l:.5}, R={r:.5})",
             ev.sequence_name,
             ev.pan
@@ -457,7 +473,10 @@ fn linkaudio_routing_separates_channels() {
     let plays = [(0.1, "drums"), (2.1, "bass")];
 
     let drums = render_kick_channel(&plays, "drums", 2.8);
-    assert!(rms_window(&drums, 0.12, 0.4) > 1e-3, "drums tap に kickA 信号が必要");
+    assert!(
+        rms_window(&drums, 0.12, 0.4) > 1e-3,
+        "drums tap に kickA 信号が必要"
+    );
     assert!(
         rms_window(&drums, 2.12, 2.4) < 1e-5,
         "drums tap に kickB(bass) が漏れてはいけない（RMS={}）",
@@ -470,18 +489,28 @@ fn linkaudio_routing_separates_channels() {
         "bass tap に kickA(drums) が漏れてはいけない（RMS={}）",
         rms_window(&bass, 0.12, 0.4)
     );
-    assert!(rms_window(&bass, 2.12, 2.4) > 1e-3, "bass tap に kickB 信号が必要");
+    assert!(
+        rms_window(&bass, 2.12, 2.4) > 1e-3,
+        "bass tap に kickB 信号が必要"
+    );
 
     // 未使用 channel は完全無音。
     let ghost = render_kick_channel(&plays, "ghost", 2.8);
-    assert!(rms_window(&ghost, 0.0, 2.8) < 1e-6, "未使用 channel は無音のはず");
+    assert!(
+        rms_window(&ghost, 0.0, 2.8) < 1e-6,
+        "未使用 channel は無音のはず"
+    );
 }
 
 #[test]
 fn linkaudio_sum_by_name_accumulates() {
     //! A4-1 層A — sum-by-name。同名 channel "drums" に kick を 2 つ同時 onset すると加算され、
     //! 単一 kick より約 +6dB（2x 振幅）。last-writer-wins の regression なら 0dB。
-    let single = rms_avg(&render_kick_channel(&[(0.1, "drums")], "drums", 0.7), 0.12, 0.4);
+    let single = rms_avg(
+        &render_kick_channel(&[(0.1, "drums")], "drums", 0.7),
+        0.12,
+        0.4,
+    );
     let summed = rms_avg(
         &render_kick_channel(&[(0.1, "drums"), (0.1, "drums")], "drums", 0.7),
         0.12,

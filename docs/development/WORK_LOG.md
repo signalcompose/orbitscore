@@ -17,6 +17,70 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.170 ci(rust): wire Rust workspace into CI — fmt / clippy / test / cargo-deny (#326) (Jun 26, 2026)
+
+**Date**: 2026-06-26
+**Status**: ✅ 実装完了（PR レビュー前）
+**Branch**: `326-ci-rust-job`
+**Issue**: #326（post-2.0 engine track / γ・cutover #108 前の hardening + CI 負債解消）
+
+これまで CI は `code-review.yml`（npm/TS のみ）で **Rust を一切検証していなかった**。#340 で「CI green ≠ Rust 検証」が
+繰り返し問題になった（gated 実機 RUN とローカル cargo が唯一の根拠）。本 PR で Rust workspace を PR ごとに CI 検証する。
+
+**前提クリーンアップ（CI ゲートを green にするため必須）**:
+- **fmt drift 19 ファイル**を `cargo fmt --all` で解消（Rust CI 不在で fmt が変更ファイルにしか当たっていなかった。
+  `cargo fmt --all` は workspace-exclude の `orbit-link-audio` も整形＝CI の `--check` と一貫）。純整形コミットに分離。
+- **clippy 警告**を解消（auto-fix: redundant closure / div_ceil / collapsible if 等 + 手動 3 件: orbit-clap-spike の
+  `sort_by`→`sort_by_key(Reverse)` / `if x>0 {a/x}`→`checked_div().unwrap_or(0)` ×2）。挙動不変。
+
+**workflow（`.github/workflows/rust-ci.yml`・2 job）**:
+- `rust`（ubuntu）: libasound2-dev（cpal/ALSA）→ dtolnay/rust-toolchain@stable + Swatinem/rust-cache@v2 →
+  `cargo fmt --all --check` / `clippy`（default & clap-host）`--all-targets --locked -- -D warnings` /
+  `cargo test`（default & clap-host）`--locked`（gated は `#[ignore]` で自動 skip・CI に device 無し）。
+- `cargo-deny`（ubuntu）: taiki-e/install-action → `cargo deny check`。default グラフ(link-audio off)が GPL-free を assert。
+
+**スコープ判断**: GPL feature `link-audio`（build.rs が `target_os != "macos"` で error）は ubuntu でビルド不可かつ
+GPL 隔離方針のため **CI では有効化しない**（default グラフ = permissive + cross-platform に保つ）。実機 gated テストは
+CI で走らない（audio device 無し）。
+
+**ローカル全 green 確認**: fmt clean / clippy `-D warnings` clean（default + clap-host）/ cargo test 全通過
+（default + clap-host・非gated）/ cargo-deny `advisories+bans+licenses+sources ok` / `--locked` OK /
+verify テストの WAV fixture は git-tracked（CI で `cargo test` 可）。
+
+**CI が炙り出した harness bug の修正（#326 の価値そのもの）**: 初回 CI で `protocol.rs` の 7 テストが
+**ubuntu のみ** fail（macOS ローカルは green）。全て実 `LoadSample`(kick.wav) 後のコマンド reply 待ちで
+`common/mod.rs` の `recv_reply_with_events` が「64 messages 以内に reply 来ず」で panic。root cause は
+**scan budget の数え漏れ**: `for _ in 0..64` が全メッセージを数える一方、`StreamStats`（1 Hz ticker が
+`start_paused` の auto-advance で reply 前に積む noise）を budget から除外していなかった（コメントは
+「budget 圧迫回避」を主張していたが events vec から外すだけで loop counter には効いていなかった）。
+ubuntu の scheduling 差で reply 到達前に 64 を超過。修正 = **`StreamStats` を budget に数えない**
+（非 StreamStats を 64 で cap・anti-hang の絶対上限 backstop 併設・reply 未達時は何を見たかを panic に出力）。
+挙動は behavior-preserving（macOS 19/19・ubuntu は push で検証）。修正後 CI で `fmt / clippy / test` 1m43s green
+（7 テスト含む全 19 が ubuntu でも pass）= 仮説確定。
+
+**cargo-deny job の network 堅牢化**: 同 CI で `license / dependency gate`（cargo-deny）が 10s で fail。原因は
+依存・config ではなく **crates.io sparse-index 取得の transient flake**（`cargo metadata` の index 更新が
+HTTP2 framing / SSL unexpected eof）。`rust` job は rust-cache で registry が温まり network 依存が低い一方、
+**cargo-deny job は toolchain/cache 無しで毎回 cold fetch** していた。対策: cargo-deny job に
+`dtolnay/rust-toolchain@stable` + `Swatinem/rust-cache@v2` + `CARGO_NET_RETRY=10` を追加（registry を温め
+cold fetch への露出を減らす）。修正後 CI で両 rust job + code-review すべて green（cold cache でも cargo-deny 通過）。
+
+**レビュー（/simplify + /code:pr-review-team）**:
+- `/simplify`（reuse/simplification/efficiency/altitude 4 agent）: reuse 1件適用（harness の `"StreamStats"` リテラル →
+  既存 const `protocol::EVENT_STREAM_STATS`）。他は意図的な複雑さ（診断 state・二重 cap・YAML job 重複）として clean 判定。
+- `/code:pr-review-team`（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer）: **Critical=0**。
+  Important 3件を修正:
+  1. (silent-failure) harness 診断: 別 ID reply で budget 枯渇時、reply は `event` を持たず `"<reply-or-other>"` の
+     羅列になる → `event=<名>` / `reply(id=<id>)` を区別記録。budget/backstop も const 化（panic メッセージと同期）。
+  2. (comment) `analysis.rs` / 3. `pan_real_wav.rs`: rustfmt 整列で設計根拠コメントが直前 `let` 行の trailing comment
+     列に帰属して見える問題 → 空行挿入で独立コメント化（fmt 安定確認済）。
+  - Minor: `protocol.rs` の `"StreamStats"` も const 化 / `config.rs` の不正確なソートコメント訂正
+    （存在しない sample-rate ソートの記述を削除）/ workflow の retry コメントを具体値非依存に修正。
+  - 見送り（理由付き）: teardown timeout backstop（現 count backstop で十分）/ `deny.toml` の `unknown-git`
+    （#326 スコープ外・clack git dep に warning が出る恐れ）/ `workflow_dispatch`（GitHub UI の Re-run で代替可能・前提誤り）。
+
+---
+
 ### 6.169 feat(engine): daemon CLAP integration — in-process plugin hosting (#340) (Jun 26, 2026)
 
 **Date**: 2026-06-26

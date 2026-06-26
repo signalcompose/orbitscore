@@ -11,6 +11,7 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use orbit_audio_daemon::backend::StubBackend;
 use orbit_audio_daemon::engine_wrap::EngineWrap;
+use orbit_audio_daemon::protocol::EVENT_STREAM_STATS;
 use orbit_audio_daemon::server;
 use orbit_audio_native::StreamStats;
 use serde_json::Value;
@@ -117,21 +118,54 @@ pub async fn recv_reply_for_id(ws: &mut WsClient, id: &str) -> Value {
 /// PlayStarted が reply より先に来るケース（`PlayAt` の実装順序）で、
 /// event を discard せず保持したいテスト向け。
 ///
-/// `StreamStats` は 1 Hz ticker が連続で積むことがあるため、scan budget の
-/// 圧迫を避けて `events` には含めない（純 StreamStats を検証するテストは
-/// `recv_reply_for_id` を使わず直接 `next_json` でドレインする）。
+/// scan budget は **`StreamStats` 以外**のメッセージのみで数える。`StreamStats` は
+/// 1 Hz ticker が `start_paused` 下の auto-advance で reply 到達前に複数積む noise であり、
+/// budget に数えると runtime の scheduling 差で reply 到達前に枯渇する（ubuntu CI で
+/// 顕在化・macOS ローカルは運良く回避していた・Issue #326）。実 `LoadSample` 後の
+/// コマンドで特に flood しやすい。`StreamStats` だけが流れ続けて reply が来ない事態に
+/// 備え、絶対上限の backstop も置く。（純 `StreamStats` を検証するテストは本ヘルパーを
+/// 使わず直接 `next_json` でドレインする）。
 pub async fn recv_reply_with_events(ws: &mut WsClient, id: &str) -> (Value, Vec<Value>) {
+    // StreamStats 以外で許容するメッセージ数。panic メッセージとも同期させる。
+    const NON_STREAM_BUDGET: u32 = 64;
+    // StreamStats だけが流れ続けて reply が来ない場合の絶対 backstop。
+    const HARD_CAP: usize = 10_000;
+
     let mut events = Vec::new();
-    for _ in 0..64 {
+    let mut budget = NON_STREAM_BUDGET;
+    let mut stream_stats_drained: u32 = 0;
+    let mut non_stream_seen: Vec<String> = Vec::new();
+    for _ in 0..HARD_CAP {
         let msg = next_json(ws).await;
         if msg["id"] == id {
             return (msg, events);
         }
-        if msg["type"] == "event" && msg["event"] != "StreamStats" {
+        if msg["event"] == EVENT_STREAM_STATS {
+            stream_stats_drained += 1;
+            continue;
+        }
+        // StreamStats 以外（他コマンドの reply / 別 event 等）のみ budget を消費する。
+        assert!(
+            budget > 0,
+            "did not receive reply for id={id} within {NON_STREAM_BUDGET} non-StreamStats \
+             messages (StreamStats drained={stream_stats_drained}); saw: {non_stream_seen:?}"
+        );
+        budget -= 1;
+        // reply は event フィールドを持たないため、event 名と wrong-id reply を区別して記録する
+        // （budget が別コマンドの reply で枯渇したケースも診断できるようにする）。
+        non_stream_seen.push(match msg["event"].as_str() {
+            Some(ev) => format!("event={ev}"),
+            None => format!("reply(id={})", msg["id"].as_str().unwrap_or("?")),
+        });
+        if msg["type"] == "event" {
             events.push(msg);
         }
     }
-    panic!("did not receive reply for id={id} within 64 messages");
+    panic!(
+        "did not receive reply for id={id} within {HARD_CAP} total messages \
+         (StreamStats drained={stream_stats_drained}, non-StreamStats={})",
+        non_stream_seen.len()
+    );
 }
 
 /// Command を JSON 文字列で送る。

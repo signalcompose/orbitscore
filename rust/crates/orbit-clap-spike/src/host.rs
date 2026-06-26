@@ -27,9 +27,7 @@ impl HostHandlers for OrbitClapHost {
     type AudioProcessor<'a> = ();
 
     fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
-        builder
-            .register::<HostLog>()
-            .register::<HostParams>();
+        builder.register::<HostLog>().register::<HostParams>();
         // Note: audio-ports and note-ports extensions are queried from the plugin,
         // they don't need to be registered as host-provided extensions here.
     }

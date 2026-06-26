@@ -1,7 +1,7 @@
 //! Audio-thread integration: Engine + CLAP plugin + rtrb seam + PostMixSink (A0 §4.1).
 
 use crate::buffers::HostAudioBuffers;
-use crate::events::{PluginEventConsumer, drain_to_event_buffer};
+use crate::events::{drain_to_event_buffer, PluginEventConsumer};
 use crate::host::OrbitClapHost;
 use crate::sink::PostMixSink;
 
@@ -75,7 +75,7 @@ impl AudioThreadStats {
             return None;
         }
         // Smallest bucket b where cumulative count >= ceil(99% x total).
-        let target = (total * 99 + 99) / 100; // integer ceil
+        let target = (total * 99).div_ceil(100); // integer ceil
         let mut cumulative: u64 = 0;
         for (i, bucket) in self.hist_us.iter().enumerate() {
             cumulative += bucket.load(Ordering::Relaxed);
@@ -185,7 +185,9 @@ impl OrbitAudioProcessor {
             if let Ok(msg) = self.install_rx.pop() {
                 self.install(msg); // same move as static install (no lock/alloc)
                 let at = self.stats.callback_count.load(Ordering::Relaxed);
-                self.stats.installed_at_callback.store(at, Ordering::Relaxed);
+                self.stats
+                    .installed_at_callback
+                    .store(at, Ordering::Relaxed);
             }
         }
 

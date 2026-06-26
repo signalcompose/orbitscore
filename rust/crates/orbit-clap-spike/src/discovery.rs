@@ -97,8 +97,8 @@ impl std::error::Error for DiscoveryError {}
 /// (The `PluginFactory` borrows from the `PluginEntry`, so the entry must outlive the
 /// factory in the caller's stack frame; that's why this returns the entry, not the factory.)
 fn open_bundle(path: &Path) -> Result<PluginEntry, DiscoveryError> {
-    let bundle_path =
-        CString::new(path.to_string_lossy().as_bytes()).map_err(|_| DiscoveryError::NullBundlePath)?;
+    let bundle_path = CString::new(path.to_string_lossy().as_bytes())
+        .map_err(|_| DiscoveryError::NullBundlePath)?;
     // SAFETY: loading a native library is inherently unsafe.
     let library = unsafe { LibraryEntry::load_from_path(path) }?;
     Ok(unsafe { PluginEntry::load_from(library, &bundle_path) }?)
@@ -113,7 +113,7 @@ pub fn list_plugins_in_file(path: &Path) -> Result<Vec<FoundPlugin>, DiscoveryEr
 
     Ok(factory
         .plugin_descriptors()
-        .filter_map(|p| PluginDescriptor::try_from(p))
+        .filter_map(PluginDescriptor::try_from)
         .map(|plugin| FoundPlugin {
             entry: entry.clone(),
             path: path.to_path_buf(),
@@ -134,7 +134,7 @@ pub fn load_plugin_id_from_path(
 
     Ok(factory
         .plugin_descriptors()
-        .filter_map(|p| PluginDescriptor::try_from(p))
+        .filter_map(PluginDescriptor::try_from)
         .find(|p| p.id == id)
         .map(|plugin| FoundPlugin {
             entry,

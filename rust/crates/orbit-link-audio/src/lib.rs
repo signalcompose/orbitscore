@@ -293,7 +293,10 @@ mod tests {
         let rc_bad = out.commit_channel(99, &silence, 256, 2, 48_000, 0.0, 4.0);
         assert_eq!(rc_bad, CommitResult::ChannelNotFound);
 
-        assert!(out.set_tempo(124.0), "set_tempo は no-peer でも commit 成功する");
+        assert!(
+            out.set_tempo(124.0),
+            "set_tempo は no-peer でも commit 成功する"
+        );
         // drop で teardown。
     }
 
