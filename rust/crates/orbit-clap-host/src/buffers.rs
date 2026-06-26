@@ -148,17 +148,13 @@ impl HostAudioBuffers {
     /// engine の interleaved 出力 `source` を **メイン入力ポート**（planar）へ de-interleave コピーする
     /// （effect モード: serial insert の入力配線・A0 §4.1）。
     ///
-    /// メイン以外の入力ポート、および未充填領域はゼロにする。`prepare_plugin_buffers` の前に呼ぶこと。
+    /// メイン以外の入力ポートはゼロにする。`prepare_plugin_buffers` の前に呼ぶこと。
     /// `output_channel_count`（engine 側）とメイン入力ポートのチャンネル数が異なる場合は
     /// `add_to_cpal_buffer` と対称な mux/downmix で対応付ける。
     pub fn set_input_from_interleaved(&mut self, source: &[f32]) {
-        // まず全入力をゼロ（メイン以外のポート・残骸の除去）。
-        self.input_port_channels
-            .iter_mut()
-            .for_each(|b| b.fill(0.0));
-
+        // 入力ポート無し（instrument 経路ではここに来ない想定だが防御的に）。
         if self.config.plugin_input_port_config.ports.is_empty() {
-            return; // 入力ポート無し（instrument 経路ではここに来ない想定だが防御的に）。
+            return;
         }
 
         let frame_count = self.cpal_buf_len_to_frame_count(source.len());
@@ -171,6 +167,17 @@ impl HostAudioBuffers {
             .main_port()
             .port_layout
             .channel_count() as usize;
+
+        // メイン以外の入力ポート（sidechain 等・稀）に無音を入れる。メインポートは下の match が
+        // active 領域 [..frame_count] を全 ch 上書きするので事前ゼロ不要。tail [frame_count..afc] は
+        // `prepare_plugin_buffers` が [..sample_count] で切るため plugin に渡らず、ゼロも不要
+        // （RT スレッドの無駄な memset を避ける）。
+        for (i, b) in self.input_port_channels.iter_mut().enumerate() {
+            if i != main_idx {
+                b.fill(0.0);
+            }
+        }
+
         let buf = &mut self.input_port_channels[main_idx];
 
         match (out_ch, in_ch) {
@@ -217,10 +224,15 @@ impl HostAudioBuffers {
         let sample_count = self.cpal_buf_len_to_frame_count(cpal_buf_len);
         assert!(sample_count <= self.actual_frame_count);
 
-        // 出力バッファのみゼロクリア（入力は caller が充填済み）。
-        self.output_port_channels
-            .iter_mut()
-            .for_each(|b| b.fill(0.0));
+        // 出力バッファの active 領域のみゼロクリア（入力は caller が充填済み）。plugin が
+        // [..sample_count] を書き、`fill_muxed_from_main_output` が [..frame_count(=sample_count)] を
+        // 読むので、tail [sample_count..afc] は下流で読まれずゼロ不要（RT スレッドの無駄な memset を避ける）。
+        let afc = self.actual_frame_count;
+        for b in self.output_port_channels.iter_mut() {
+            for chunk in b.chunks_exact_mut(afc) {
+                chunk[..sample_count].fill(0.0);
+            }
+        }
 
         let input_is_constant = !self.has_audio_input;
 
@@ -296,14 +308,12 @@ impl HostAudioBuffers {
                 }
             }
             (_, 2) => {
-                // stereo (or more) -> stereo: 最初の2チャンネルを interleave
+                // plugin_ch >= 2（mono→stereo は上の (1, 2) で処理済み）→ ch1 は常に存在。
+                // 最初の 2 チャンネルを interleave。
                 for i in 0..frame_count {
                     muxed[i * 2] = main_output[i]; // ch0
-                    muxed[i * 2 + 1] = if main_output.len() > self.actual_frame_count {
-                        main_output[self.actual_frame_count + i] // ch1
-                    } else {
-                        main_output[i] // mono -> 複製
-                    };
+                    muxed[i * 2 + 1] = main_output[self.actual_frame_count + i];
+                    // ch1
                 }
             }
             _ => {
