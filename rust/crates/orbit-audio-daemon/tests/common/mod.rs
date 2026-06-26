@@ -126,11 +126,16 @@ pub async fn recv_reply_for_id(ws: &mut WsClient, id: &str) -> Value {
 /// 備え、絶対上限の backstop も置く。（純 `StreamStats` を検証するテストは本ヘルパーを
 /// 使わず直接 `next_json` でドレインする）。
 pub async fn recv_reply_with_events(ws: &mut WsClient, id: &str) -> (Value, Vec<Value>) {
+    // StreamStats 以外で許容するメッセージ数。panic メッセージとも同期させる。
+    const NON_STREAM_BUDGET: u32 = 64;
+    // StreamStats だけが流れ続けて reply が来ない場合の絶対 backstop。
+    const HARD_CAP: usize = 10_000;
+
     let mut events = Vec::new();
-    let mut budget: u32 = 64;
+    let mut budget = NON_STREAM_BUDGET;
     let mut stream_stats_drained: u32 = 0;
     let mut non_stream_seen: Vec<String> = Vec::new();
-    for _ in 0..10_000 {
+    for _ in 0..HARD_CAP {
         let msg = next_json(ws).await;
         if msg["id"] == id {
             return (msg, events);
@@ -142,22 +147,22 @@ pub async fn recv_reply_with_events(ws: &mut WsClient, id: &str) -> (Value, Vec<
         // StreamStats 以外（他コマンドの reply / 別 event 等）のみ budget を消費する。
         assert!(
             budget > 0,
-            "did not receive reply for id={id} within 64 non-StreamStats messages \
-             (StreamStats drained={stream_stats_drained}); saw: {non_stream_seen:?}"
+            "did not receive reply for id={id} within {NON_STREAM_BUDGET} non-StreamStats \
+             messages (StreamStats drained={stream_stats_drained}); saw: {non_stream_seen:?}"
         );
         budget -= 1;
-        non_stream_seen.push(
-            msg["event"]
-                .as_str()
-                .unwrap_or("<reply-or-other>")
-                .to_string(),
-        );
+        // reply は event フィールドを持たないため、event 名と wrong-id reply を区別して記録する
+        // （budget が別コマンドの reply で枯渇したケースも診断できるようにする）。
+        non_stream_seen.push(match msg["event"].as_str() {
+            Some(ev) => format!("event={ev}"),
+            None => format!("reply(id={})", msg["id"].as_str().unwrap_or("?")),
+        });
         if msg["type"] == "event" {
             events.push(msg);
         }
     }
     panic!(
-        "did not receive reply for id={id} within 10000 total messages \
+        "did not receive reply for id={id} within {HARD_CAP} total messages \
          (StreamStats drained={stream_stats_drained}, non-StreamStats={})",
         non_stream_seen.len()
     );

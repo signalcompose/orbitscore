@@ -63,7 +63,21 @@ ubuntu の scheduling 差で reply 到達前に 64 を超過。修正 = **`Strea
 HTTP2 framing / SSL unexpected eof）。`rust` job は rust-cache で registry が温まり network 依存が低い一方、
 **cargo-deny job は toolchain/cache 無しで毎回 cold fetch** していた。対策: cargo-deny job に
 `dtolnay/rust-toolchain@stable` + `Swatinem/rust-cache@v2` + `CARGO_NET_RETRY=10` を追加（registry を温め
-cold fetch への露出を減らす）。
+cold fetch への露出を減らす）。修正後 CI で両 rust job + code-review すべて green（cold cache でも cargo-deny 通過）。
+
+**レビュー（/simplify + /code:pr-review-team）**:
+- `/simplify`（reuse/simplification/efficiency/altitude 4 agent）: reuse 1件適用（harness の `"StreamStats"` リテラル →
+  既存 const `protocol::EVENT_STREAM_STATS`）。他は意図的な複雑さ（診断 state・二重 cap・YAML job 重複）として clean 判定。
+- `/code:pr-review-team`（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer）: **Critical=0**。
+  Important 3件を修正:
+  1. (silent-failure) harness 診断: 別 ID reply で budget 枯渇時、reply は `event` を持たず `"<reply-or-other>"` の
+     羅列になる → `event=<名>` / `reply(id=<id>)` を区別記録。budget/backstop も const 化（panic メッセージと同期）。
+  2. (comment) `analysis.rs` / 3. `pan_real_wav.rs`: rustfmt 整列で設計根拠コメントが直前 `let` 行の trailing comment
+     列に帰属して見える問題 → 空行挿入で独立コメント化（fmt 安定確認済）。
+  - Minor: `protocol.rs` の `"StreamStats"` も const 化 / `config.rs` の不正確なソートコメント訂正
+    （存在しない sample-rate ソートの記述を削除）/ workflow の retry コメントを具体値非依存に修正。
+  - 見送り（理由付き）: teardown timeout backstop（現 count backstop で十分）/ `deny.toml` の `unknown-git`
+    （#326 スコープ外・clack git dep に warning が出る恐れ）/ `workflow_dispatch`（GitHub UI の Re-run で代替可能・前提誤り）。
 
 ---
 

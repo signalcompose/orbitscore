@@ -52,7 +52,7 @@ impl FullAudioConfig {
             anyhow::bail!("No F32 output config available — A0 spike requires F32 (CoreAudio should always provide it)");
         }
 
-        // Prefer stereo; then sort by sample rate preference
+        // Prefer stereo (sort by channel count, descending).
         configs.sort_by_key(|cfg| std::cmp::Reverse(cfg.channels()));
         let chosen = configs.into_iter().next().unwrap();
 

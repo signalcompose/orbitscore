@@ -15,6 +15,7 @@ use std::time::Duration;
 use common::{
     advance_and_yield, next_json, recv_reply_for_id, recv_reply_with_events, send_cmd, TestDaemon,
 };
+use orbit_audio_daemon::protocol::EVENT_STREAM_STATS;
 use serde_json::json;
 
 /// 接続直後に daemon が送る handshake フレームの検証。
@@ -436,7 +437,7 @@ async fn stream_stats_ticks_at_1hz() {
             let res = tokio::time::timeout(Duration::from_millis(100), next_json(&mut ws)).await;
             match res {
                 Ok(msg) => {
-                    if msg["event"] == "StreamStats" {
+                    if msg["event"] == EVENT_STREAM_STATS {
                         stats_count += 1;
                     }
                 }

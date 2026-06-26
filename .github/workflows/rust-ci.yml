@@ -64,7 +64,7 @@ jobs:
       # cargo-deny は `cargo metadata` 経由で crates.io sparse-index を更新する。
       # runner では index 取得が HTTP2/SSL の transient blip で失敗することがある
       # （観測例: "Error in the HTTP2 framing layer" / "unexpected eof while reading"）。
-      # 既定 retry=3 では落ちたため引き上げる。registry は下の rust-cache でも温める。
+      # 既定の retry 回数では落ちたため引き上げる。registry は下の rust-cache でも温める。
       CARGO_NET_RETRY: "10"
     steps:
       - name: Checkout code
