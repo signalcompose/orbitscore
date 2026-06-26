@@ -20,7 +20,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.169 feat(engine): daemon CLAP integration — in-process plugin hosting (#340) (Jun 26, 2026)
 
 **Date**: 2026-06-26
-**Status**: ✅ 実装完了 + pr-review-team round 2 で Critical/Important=0 収束（gated 実機テスト 2 本 GREEN）
+**Status**: ✅ 実装完了 + pr-review-team round 2 + @claude bot で Critical/Important=0 収束（gated 実機テスト 2 本 GREEN・owner マージ待ち）
 **Branch**: `340-daemon-clap-integration`
 **Issue**: #340（post-2.0 engine track / Epic #292・Path A = γ の前提 + cutover #108 の背骨）
 
@@ -82,6 +82,18 @@ fallback のみ該当）。3 経路（effect-error-bypass / double-load / Drop-l
 確認・clack source で carry-forward #2/#3 を裏取り。**CI は Rust を実行しない**（npm のみ）ため検証はローカル
 cargo + gated 実機 RUN が根拠: clap-host 10 + daemon lib 8（新 teardown ×2 含む）+ 統合 18 + smoke/pcm green・
 clippy 新規警告0・fmt clean・gated effect ratio 0.50000（callback_max 481µs）/ synth peak 0.25（263µs）。
+
+**advisor checkpoint ②（Done 宣言前）**: round-2 で足した `CLAP_PROCESS_ERROR` ticker 配線が「全 ticker
+DaemonError は注入 seam + テストを持つ」というコードベースの慣習を破っていた（`LINK_EGRESS_DROP`/xrun/device_lost は
+全て seam 付き）→ 注入カウンタ `clap_process_errors`（本番常に 0）+ `clap_process_errors_arc()` seam +
+`daemon_error_warning_on_clap_process_error` 統合テスト（発火 + 累積数 + latch 非再発火・両 feature config pass）を
+追加（`40d0f6f`）。daemon lib 8 + protocol 19 green。
+
+**@claude bot second-opinion（load-bearing seam `8fa7c41..40d0f6f`）= Critical/Important 0**: 4 重点領域
+（main_port_index index 修正 / `CLAP_PROCESS_ERROR` 配線 / teardown seam / effect-instrument routing）と 3 proof-only
+経路（effect-error-bypass / double-load / Drop-log）を独立精読し、内部 pr-review-team の評価と一致を確認。CI(npm)
+`code-review pass`（40d0f6f）。**申し送り Minor 3 件 → 追跡 issue #342**（cutover #108 前の CLAP-hardening: ①install-ring
+teardown drain で wrong-thread stop_processing 残余ケース ②動的ポート rescan ③async teardown 時の busy-wait）。
 
 ---
 
