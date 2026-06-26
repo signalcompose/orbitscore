@@ -17,6 +17,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.170 ci(rust): wire Rust workspace into CI — fmt / clippy / test / cargo-deny (#326) (Jun 26, 2026)
+
+**Date**: 2026-06-26
+**Status**: ✅ 実装完了（PR レビュー前）
+**Branch**: `326-ci-rust-job`
+**Issue**: #326（post-2.0 engine track / γ・cutover #108 前の hardening + CI 負債解消）
+
+これまで CI は `code-review.yml`（npm/TS のみ）で **Rust を一切検証していなかった**。#340 で「CI green ≠ Rust 検証」が
+繰り返し問題になった（gated 実機 RUN とローカル cargo が唯一の根拠）。本 PR で Rust workspace を PR ごとに CI 検証する。
+
+**前提クリーンアップ（CI ゲートを green にするため必須）**:
+- **fmt drift 19 ファイル**を `cargo fmt --all` で解消（Rust CI 不在で fmt が変更ファイルにしか当たっていなかった。
+  `cargo fmt --all` は workspace-exclude の `orbit-link-audio` も整形＝CI の `--check` と一貫）。純整形コミットに分離。
+- **clippy 警告**を解消（auto-fix: redundant closure / div_ceil / collapsible if 等 + 手動 3 件: orbit-clap-spike の
+  `sort_by`→`sort_by_key(Reverse)` / `if x>0 {a/x}`→`checked_div().unwrap_or(0)` ×2）。挙動不変。
+
+**workflow（`.github/workflows/rust-ci.yml`・2 job）**:
+- `rust`（ubuntu）: libasound2-dev（cpal/ALSA）→ dtolnay/rust-toolchain@stable + Swatinem/rust-cache@v2 →
+  `cargo fmt --all --check` / `clippy`（default & clap-host）`--all-targets --locked -- -D warnings` /
+  `cargo test`（default & clap-host）`--locked`（gated は `#[ignore]` で自動 skip・CI に device 無し）。
+- `cargo-deny`（ubuntu）: taiki-e/install-action → `cargo deny check`。default グラフ(link-audio off)が GPL-free を assert。
+
+**スコープ判断**: GPL feature `link-audio`（build.rs が `target_os != "macos"` で error）は ubuntu でビルド不可かつ
+GPL 隔離方針のため **CI では有効化しない**（default グラフ = permissive + cross-platform に保つ）。実機 gated テストは
+CI で走らない（audio device 無し）。
+
+**ローカル全 green 確認**: fmt clean / clippy `-D warnings` clean（default + clap-host）/ cargo test 全通過
+（default + clap-host・非gated）/ cargo-deny `advisories+bans+licenses+sources ok` / `--locked` OK /
+verify テストの WAV fixture は git-tracked（CI で `cargo test` 可）。
+
+---
+
 ### 6.169 feat(engine): daemon CLAP integration — in-process plugin hosting (#340) (Jun 26, 2026)
 
 **Date**: 2026-06-26
