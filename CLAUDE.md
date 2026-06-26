@@ -244,6 +244,12 @@ See `.claude/settings.json` for Hook configuration.
 
 ### レビュー通過後（bot レビュー）
 
+> **GitHub Actions ワークフロー状態**
+> - `Claude Code Review`（`.github/workflows/claude-code-review.yml`、`pull_request` 自動起動）= **disabled_manually**（自動 PR レビューは無効化済み）
+> - `Claude Code`（`.github/workflows/claude.yml`）= **有効**（`@claude` メンションによるオンデマンドレビューのみ）
+>
+> 再有効化する場合: `gh workflow enable "Claude Code Review" -R signalcompose/orbitscore`
+
 3. 内部レビュー通過後、**advisor に相談**する: ① bot レビュー（`@claude` GitHub review）を受けるか ② 受ける場合のスコープ（load-bearing な箇所に絞る）。必要なら `@claude` を PR コメントで起動し、**bot のレビュー内容を watch して確認**する（bot は「作業中」placeholder を後から更新する方式なので、本文が確定するまでポーリングする）。
 4. bot レビューの**修正内容を advisor と確認**し、**再度 PR レビュー（1・2）が必要か**を判断する。
 

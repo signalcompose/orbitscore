@@ -417,7 +417,7 @@ git checkout -b <issue-number>-descriptive-name
 2. Implement changes
 3. Commit and push to origin
 4. Create PR to main
-5. Request review (Claude Code Review provides feedback)
+5. Request review via `@claude` mention in PR comment (`Claude Code Review` workflow is **disabled_manually** — automatic review on `pull_request` is off)
 6. Address review comments
 7. Merge to main after approval
 ```
