@@ -73,7 +73,7 @@ pub struct InstallMsg {
 /// install ring の consumer 側（audio thread が保持）。
 pub type InstallConsumer = rtrb::Consumer<InstallMsg>;
 
-/// install ring に残った全アイテムを pop して drop し、drain 件数を返す（#342-#1）。
+/// install ring に残った全アイテムを pop して drop する（#342-#1）。
 ///
 /// teardown 時に未ドレインの [`InstallMsg`]（= [`StartedPluginAudioProcessor`] を内包）が ring に
 /// 残ると、それが保持する `Arc<PluginInstanceInner>` のために host 側の `PluginInstance::Drop` が
@@ -85,12 +85,8 @@ pub type InstallConsumer = rtrb::Consumer<InstallMsg>;
 /// `InstallMsg` は `Drop` impl を持たない Arc + buffer なので、drop 自体は plugin code を呼ばない
 /// （Arc 減算のみ）。buffer の free が走るが、これは teardown 経路なので許容する（既存の
 /// `buffers = None` と同性質）。`Consumer<T>` で generic にして real plugin 無しで単体テストできる。
-fn drain_install_ring<T>(rx: &mut rtrb::Consumer<T>) -> u64 {
-    let mut drained = 0;
-    while rx.pop().is_ok() {
-        drained += 1;
-    }
-    drained
+fn drain_install_ring<T>(rx: &mut rtrb::Consumer<T>) {
+    while rx.pop().is_ok() {}
 }
 
 /// `orbit_audio_native::PostProcessor` を実装する CLAP audio-thread オーナー。
@@ -177,6 +173,15 @@ impl Drop for ClapPostProcessor {
             tracing::error!(
                 "ClapPostProcessor が plugin 保持のまま drop された — teardown 未完了で \
                  wrong-thread stop_processing の可能性（device 喪失で callback 停止 → teardown timeout か）"
+            );
+        }
+        // 同じ leak クラスの非対称な見落としを塞ぐ（#342-#1）。teardown 分岐が走れば install ring は
+        // drain 済みのはず。非空なら、device 喪失で teardown 分岐が走らず未 install の plugin instance が
+        // leak した可能性（drain せず検知のみ＝ここでの drain 可否は clack の Drop 挙動検証後に判断・defer）。
+        if !self.install_rx.is_empty() {
+            tracing::error!(
+                "ClapPostProcessor が非空の install ring を保持したまま drop された — \
+                 teardown 分岐が走らず未 install の plugin instance が leak した可能性（device 喪失か）"
             );
         }
     }
@@ -355,9 +360,9 @@ mod tests {
         tx.push(DropCounter).expect("push 1");
         tx.push(DropCounter).expect("push 2");
 
-        let drained = drain_install_ring(&mut rx);
+        drain_install_ring(&mut rx);
 
-        assert_eq!(drained, 2, "2 件 drain したはず");
+        // DROPS==2（2 件とも drop = Arc 解放）+ ring 空 で「2 件すべて drain した」を等価に保証する。
         assert_eq!(
             DROPS.load(Ordering::Relaxed),
             2,
