@@ -73,6 +73,26 @@ pub struct InstallMsg {
 /// install ring の consumer 側（audio thread が保持）。
 pub type InstallConsumer = rtrb::Consumer<InstallMsg>;
 
+/// install ring に残った全アイテムを pop して drop し、drain 件数を返す（#342-#1）。
+///
+/// teardown 時に未ドレインの [`InstallMsg`]（= [`StartedPluginAudioProcessor`] を内包）が ring に
+/// 残ると、それが保持する `Arc<PluginInstanceInner>` のために host 側の `PluginInstance::Drop` が
+/// sole owner になれず、clack が wrong-thread teardown を避けて instance を **leak** する
+/// （deactivate/destroy が永久に呼ばれない）。ここで drop して Arc を解放すれば、`host.shutdown()` 時に
+/// `PluginInstance::Drop` が sole owner となり stop_processing+deactivate+destroy を clap スレッド
+/// （= start_processing と同一スレッド）で正常実行できる。
+///
+/// `InstallMsg` は `Drop` impl を持たない Arc + buffer なので、drop 自体は plugin code を呼ばない
+/// （Arc 減算のみ）。buffer の free が走るが、これは teardown 経路なので許容する（既存の
+/// `buffers = None` と同性質）。`Consumer<T>` で generic にして real plugin 無しで単体テストできる。
+fn drain_install_ring<T>(rx: &mut rtrb::Consumer<T>) -> u64 {
+    let mut drained = 0;
+    while rx.pop().is_ok() {
+        drained += 1;
+    }
+    drained
+}
+
 /// `orbit_audio_native::PostProcessor` を実装する CLAP audio-thread オーナー。
 ///
 /// cpal closure（`move |data, _| proc.process(data)`）が所有し、audio thread 上で排他的に動く。
@@ -183,6 +203,11 @@ impl PostProcessor for ClapPostProcessor {
                 let _ = p.stop_processing();
             }
             self.buffers = None;
+            // #342-#1: install ring に未ドレインの InstallMsg が残っていると、その
+            // StartedPluginAudioProcessor の Arc が ring 越しに生き続け、host.shutdown() で
+            // PluginInstance::Drop が sole owner になれず instance を leak する。ここで drain して
+            // Arc を解放し、clap スレッドでの正常 teardown を可能にする（drain_install_ring の doc 参照）。
+            drain_install_ring(&mut self.install_rx);
             self.teardown_done.store(true, Ordering::Release);
             return;
         }
@@ -312,5 +337,32 @@ mod tests {
         record(0.2);
         let peak2 = f32::from_bits(stats.post_peak_bits.load(Ordering::Relaxed));
         assert!((peak2 - 0.2).abs() < 1e-6, "reset 後は 0.2, got {peak2}");
+    }
+
+    #[test]
+    fn drain_install_ring_drops_all_pending_and_empties() {
+        // #342-#1: drain は ring 内の全アイテムを pop して **drop** し（= Arc 解放）、ring を空にする。
+        // InstallMsg は real plugin 無しでは作れないので、Drop を数える generic な代用型で検証する。
+        static DROPS: AtomicU64 = AtomicU64::new(0);
+        struct DropCounter;
+        impl Drop for DropCounter {
+            fn drop(&mut self) {
+                DROPS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let (mut tx, mut rx) = rtrb::RingBuffer::<DropCounter>::new(4);
+        tx.push(DropCounter).expect("push 1");
+        tx.push(DropCounter).expect("push 2");
+
+        let drained = drain_install_ring(&mut rx);
+
+        assert_eq!(drained, 2, "2 件 drain したはず");
+        assert_eq!(
+            DROPS.load(Ordering::Relaxed),
+            2,
+            "drain したアイテムは drop されて Arc が解放されるはず"
+        );
+        assert!(rx.pop().is_err(), "drain 後の ring は空のはず");
     }
 }
