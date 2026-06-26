@@ -47,6 +47,16 @@ CI で走らない（audio device 無し）。
 （default + clap-host・非gated）/ cargo-deny `advisories+bans+licenses+sources ok` / `--locked` OK /
 verify テストの WAV fixture は git-tracked（CI で `cargo test` 可）。
 
+**CI が炙り出した harness bug の修正（#326 の価値そのもの）**: 初回 CI で `protocol.rs` の 7 テストが
+**ubuntu のみ** fail（macOS ローカルは green）。全て実 `LoadSample`(kick.wav) 後のコマンド reply 待ちで
+`common/mod.rs` の `recv_reply_with_events` が「64 messages 以内に reply 来ず」で panic。root cause は
+**scan budget の数え漏れ**: `for _ in 0..64` が全メッセージを数える一方、`StreamStats`（1 Hz ticker が
+`start_paused` の auto-advance で reply 前に積む noise）を budget から除外していなかった（コメントは
+「budget 圧迫回避」を主張していたが events vec から外すだけで loop counter には効いていなかった）。
+ubuntu の scheduling 差で reply 到達前に 64 を超過。修正 = **`StreamStats` を budget に数えない**
+（非 StreamStats を 64 で cap・anti-hang の絶対上限 backstop 併設・reply 未達時は何を見たかを panic に出力）。
+挙動は behavior-preserving（macOS 19/19・ubuntu は push で検証）。
+
 ---
 
 ### 6.169 feat(engine): daemon CLAP integration — in-process plugin hosting (#340) (Jun 26, 2026)
