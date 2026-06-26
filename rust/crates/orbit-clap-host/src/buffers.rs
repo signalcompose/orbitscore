@@ -3,7 +3,9 @@
 //! orbit-clap-spike の buffers.rs から移植。主な変更点:
 //! - `Arc<AudioThreadStats>` → `Arc<AtomicU64>` (resize_count のみ) に差し替え。
 //!   callback duration 統計は orbit-audio-native の CallbackTimeStats が担う（seam 分離）。
-//! - add_to_cpal_buffer は overwrite ではなく add-mix (+=)（A0 §4.1 step d）。
+//! - add_to_cpal_buffer は overwrite ではなく add-mix (+=)（A0 §4.1 step d・instrument 型）。
+//! - `replace_cpal_buffer` / `set_input_from_interleaved` を新設（effect / serial insert 経路の
+//!   入出力配線・PR2・Issue #340）。
 //!
 //! RT assumption: audio ポートのチャンネル数はホストのライフタイム中に変化しない
 //! (port rescan 非対応)。その前提のもと `prepare_plugin_buffers` はバッファを再利用し
@@ -30,7 +32,9 @@ pub struct HostAudioBuffers {
     /// 各出力ポートのプラナーバッファ（全チャンネル連結）。
     output_port_channels: Box<[Vec<f32>]>,
 
-    /// add-mix 前の mux / downmix 作業バッファ。
+    /// mux / downmix 作業バッファ。`fill_muxed_from_main_output` が plugin の planar 出力を
+    /// interleaved に変換して書き、`add_to_cpal_buffer`（instrument: add-mix）または
+    /// `replace_cpal_buffer`（effect: overwrite）が読む。
     muxed: Vec<f32>,
 
     /// 現在のフレーム数（cpal が max を超えた場合のみ拡張）。
@@ -470,6 +474,116 @@ mod tests {
 
         for &s in &dest {
             assert!((s - 0.5).abs() < 1e-6, "expected overwrite 0.5, got {s}");
+        }
+    }
+
+    /// 任意の engine 出力 ch 数 / plugin 入出力レイアウトの config を組む（非ステレオ mux 腕の検証用）。
+    fn mk_config(
+        out_ch: usize,
+        in_layout: Option<AudioPortLayout>,
+        out_layout: AudioPortLayout,
+        frames: u32,
+    ) -> FullAudioConfig {
+        let port = |l: AudioPortLayout, name: &str| PluginAudioPortsConfig {
+            main_port_index: 0,
+            ports: vec![PluginAudioPortInfo {
+                _id: None,
+                port_layout: l,
+                name: name.into(),
+            }],
+        };
+        FullAudioConfig {
+            plugin_output_port_config: port(out_layout, "out"),
+            plugin_input_port_config: match in_layout {
+                Some(l) => port(l, "in"),
+                None => PluginAudioPortsConfig {
+                    main_port_index: 0,
+                    ports: vec![],
+                },
+            },
+            output_channel_count: out_ch,
+            min_buffer_size: frames,
+            max_likely_buffer_size: frames,
+            sample_rate: 48_000,
+        }
+    }
+
+    #[test]
+    fn set_input_downmixes_stereo_engine_to_mono_plugin_input() {
+        // (out_ch=2, in_ch=1): stereo engine 出力 → mono plugin 入力はミックスダウン。
+        let rc = Arc::new(AtomicU64::new(0));
+        let mut b = HostAudioBuffers::from_config(
+            mk_config(2, Some(AudioPortLayout::Mono), AudioPortLayout::Stereo, 4),
+            rc,
+        );
+        // 2 frames stereo interleaved [L0,R0,L1,R1]。
+        b.set_input_from_interleaved(&[0.2f32, 0.4, 0.6, 0.8]);
+        let input = &b.input_port_channels[0];
+        assert!((input[0] - 0.3).abs() < 1e-6, "(0.2+0.4)/2");
+        assert!((input[1] - 0.7).abs() < 1e-6, "(0.6+0.8)/2");
+    }
+
+    #[test]
+    fn set_input_duplicates_mono_engine_to_stereo_plugin_input() {
+        // (out_ch=1, in_ch=2): mono engine 出力 → stereo plugin 入力は両 ch へ複製。
+        let rc = Arc::new(AtomicU64::new(0));
+        let mut b = HostAudioBuffers::from_config(
+            mk_config(1, Some(AudioPortLayout::Stereo), AudioPortLayout::Mono, 4),
+            rc,
+        );
+        let source = [0.1f32, 0.2, 0.3, 0.4]; // out_ch=1 → 4 frames mono
+        b.set_input_from_interleaved(&source);
+        let afc = b.actual_frame_count;
+        let input = &b.input_port_channels[0];
+        for i in 0..4 {
+            assert!((input[i] - source[i]).abs() < 1e-6, "ch0 frame {i}");
+            assert!((input[afc + i] - source[i]).abs() < 1e-6, "ch1 frame {i}");
+        }
+    }
+
+    #[test]
+    fn mux_duplicates_mono_plugin_output_to_stereo() {
+        // fill_muxed (1, 2): mono plugin 出力 → stereo hardware は両 ch へ複製。
+        let rc = Arc::new(AtomicU64::new(0));
+        let mut b = HostAudioBuffers::from_config(mk_config(2, None, AudioPortLayout::Mono, 4), rc);
+        b.output_port_channels[0][..4].copy_from_slice(&[0.1, 0.2, 0.3, 0.4]);
+        let mut dest = vec![0.0f32; 8]; // 4 frames stereo
+        b.add_to_cpal_buffer(&mut dest);
+        let expect = [0.1f32, 0.2, 0.3, 0.4];
+        for i in 0..4 {
+            assert!((dest[i * 2] - expect[i]).abs() < 1e-6, "L frame {i}");
+            assert!((dest[i * 2 + 1] - expect[i]).abs() < 1e-6, "R frame {i}");
+        }
+    }
+
+    #[test]
+    fn mux_downmixes_stereo_plugin_output_to_mono() {
+        // fill_muxed (n, 1): stereo plugin 出力 → mono hardware はミックスダウン。
+        let rc = Arc::new(AtomicU64::new(0));
+        let mut b =
+            HostAudioBuffers::from_config(mk_config(1, None, AudioPortLayout::Stereo, 4), rc);
+        // ch0=1.0, ch1=0.0 → downmix 0.5。
+        for i in 0..4 {
+            b.output_port_channels[0][i] = 1.0;
+        }
+        let mut dest = vec![0.0f32; 4]; // 4 frames mono
+        b.add_to_cpal_buffer(&mut dest);
+        for &s in &dest {
+            assert!((s - 0.5).abs() < 1e-6, "downmix (1+0)/2, got {s}");
+        }
+    }
+
+    #[test]
+    fn mux_mono_to_mono_passthrough() {
+        // fill_muxed (1, 1): mono plugin 出力 → mono hardware はそのまま。
+        let rc = Arc::new(AtomicU64::new(0));
+        let mut b = HostAudioBuffers::from_config(mk_config(1, None, AudioPortLayout::Mono, 4), rc);
+        let pcm = [0.1f32, 0.2, 0.3, 0.4];
+        b.output_port_channels[0][..4].copy_from_slice(&pcm);
+        let mut dest = vec![0.0f32; 4];
+        b.add_to_cpal_buffer(&mut dest);
+        for i in 0..4 {
+            assert!((dest[i] - pcm[i]).abs() < 1e-6, "frame {i}");
         }
     }
 }

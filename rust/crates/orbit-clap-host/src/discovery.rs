@@ -36,13 +36,13 @@ impl PluginDescriptor {
     pub fn try_from(p: &clack_host::plugin::PluginDescriptor) -> Option<Self> {
         // スキップログを出すことで「プラグインが見つからない」と誤報しない。
         let Some(id_cstr) = p.id() else {
-            eprintln!("[orbit-clap-host] id のないプラグインをスキップ");
+            tracing::warn!("[orbit-clap-host] id のないプラグインをスキップ");
             return None;
         };
         let id = match id_cstr.to_str() {
             Ok(s) => s.to_string(),
             Err(_) => {
-                eprintln!(
+                tracing::warn!(
                     "[orbit-clap-host] 非 UTF-8 id のプラグインをスキップ: {:?}",
                     id_cstr.to_bytes()
                 );

@@ -1,4 +1,6 @@
-//! Audio-thread RT プロセッサ: engine render 後のバッファに CLAP plugin を add-mix する。
+//! Audio-thread RT プロセッサ: engine render 後のバッファに CLAP plugin を適用する。
+//! instrument 型（parallel）は add-mix (+=)、effect 型（serial insert）は overwrite (=) で
+//! hardware sum を変換する。経路は `HostAudioBuffers::has_audio_input` で分岐（PR2・Issue #340）。
 //!
 //! orbit-clap-spike の audio.rs（OrbitAudioProcessor）から移植・再設計。主な変更点:
 //! - `Engine` と `PostMixSink` を削除: data は engine render 済みで渡される（PostProcessor seam）。
@@ -143,11 +145,34 @@ impl ClapPostProcessor {
     }
 }
 
+impl Drop for ClapPostProcessor {
+    /// carry-forward #1 の最終検知点（code-review #340 B）。正常な teardown では process() の
+    /// teardown 分岐が plugin を None にしてからこの Drop（stream drop = daemon thread・非 RT）が走る。
+    /// plugin を保持したまま drop された場合、`StartedPluginAudioProcessor` の暗黙 drop が wrong-thread で
+    /// stop_processing/deactivate を呼ぶ＝CLAP 仕様違反（strict plugin で UB）。device 喪失で audio thread が
+    /// 止まり `ClapTeardownGuard` が timeout した等で到達しうる。device 喪失時の防止は構造上不可能だが、
+    /// loud に error ログを出して検知可能にする。
+    fn drop(&mut self) {
+        if self.plugin.is_some() {
+            tracing::error!(
+                "ClapPostProcessor が plugin 保持のまま drop された — teardown 未完了で \
+                 wrong-thread stop_processing の可能性（device 喪失で callback 停止 → teardown timeout か）"
+            );
+        }
+    }
+}
+
 impl PostProcessor for ClapPostProcessor {
     /// `data` は engine が既に render 済みの interleaved f32。
     ///
-    /// engine.render は **呼ばない**（native callback が render 後にこの seam を呼ぶ）。
-    /// plugin output を add-mix (+= ) するのみ（A0 §4.1 step d）。
+    /// engine.render は **呼ばない**（native callback が render 後にこの seam を呼ぶ）。plugin 型で
+    /// 出力配線が分岐する（PR2・Issue #340）:
+    /// - effect（`has_audio_input`=true）: `data` を plugin 入力へ de-interleave し、plugin 出力で
+    ///   `data` を上書きする（serial insert = replace / `=`）。
+    /// - instrument（`has_audio_input`=false）: plugin 入力を無音にし、plugin 出力を `data` に
+    ///   add-mix する（parallel = `+=` / A0 §4.1 step d）。
+    ///
+    /// plugin.process() が失敗したブロックでは出力配線をスキップし `data` を dry のまま通す。
     fn process(&mut self, data: &mut [f32]) {
         // carry-forward #1: teardown 要求が来たら、**この audio thread で** plugin を stop_processing
         // してから drop する（暗黙 Drop は stream drop 時に別スレッドで走り CLAP 違反＝strict plugin で
@@ -207,7 +232,7 @@ impl PostProcessor for ClapPostProcessor {
 
             // エラーはサイレントに無視できない: 毎ブロックでエラーを返す plugin が
             // 見えなくなるため、process_error_count でカウントする（RT 安全: atomic のみ）。
-            if plugin
+            let process_ok = plugin
                 .process(
                     &ins,
                     &mut outs,
@@ -216,18 +241,24 @@ impl PostProcessor for ClapPostProcessor {
                     Some(self.steady_counter),
                     None,
                 )
-                .is_err()
-            {
+                .is_ok();
+            if !process_ok {
                 self.stats
                     .process_error_count
                     .fetch_add(1, Ordering::Relaxed);
             }
 
+            // 出力配線は **process 成功時のみ**。失敗時は `data`（engine render 済みの dry 信号）を
+            // そのまま通す。effect で失敗時に replace すると未確定の出力で dry 信号を上書きして 1 ブロック
+            // 無音化する（effect topology の落とし穴・code-review #340）。instrument も部分書き込みの
+            // garbage を add しないよう、同様に成功時のみ add-mix する。
             // effect は overwrite（serial insert）、instrument は add-mix（A0 §4.1 step d）。
-            if is_effect {
-                buffers.replace_cpal_buffer(data);
-            } else {
-                buffers.add_to_cpal_buffer(data);
+            if process_ok {
+                if is_effect {
+                    buffers.replace_cpal_buffer(data);
+                } else {
+                    buffers.add_to_cpal_buffer(data);
+                }
             }
 
             // steady counter を進める（A0 §4.1 step f、plugin ブランチ内のみ）。
@@ -246,5 +277,40 @@ impl PostProcessor for ClapPostProcessor {
         self.stats
             .post_peak_bits
             .fetch_max(peak_bits, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_peak_tracks_abs_max_and_resets() {
+        // post_peak_bits の不変条件: 非負 f32 の to_bits は u32 として単調なので fetch_max が
+        // abs ピークを正しく追える。reset_post_peak（two-phase 計測の位相分離）も検証する。
+        let stats = ClapProcessorStats::new();
+        let record = |v: f32| {
+            stats
+                .post_peak_bits
+                .fetch_max(v.abs().to_bits(), Ordering::Relaxed);
+        };
+
+        record(0.1);
+        record(0.5);
+        record(0.3); // 0.5 を超えない
+        let peak = f32::from_bits(stats.post_peak_bits.load(Ordering::Relaxed));
+        assert!(
+            (peak - 0.5).abs() < 1e-6,
+            "abs max は 0.5 のはず, got {peak}"
+        );
+
+        // reset で 0 に戻る。
+        stats.reset_post_peak();
+        assert_eq!(stats.post_peak_bits.load(Ordering::Relaxed), 0);
+
+        // reset 後は新しいピークを追い直す（baseline 汚染なし）。
+        record(0.2);
+        let peak2 = f32::from_bits(stats.post_peak_bits.load(Ordering::Relaxed));
+        assert!((peak2 - 0.2).abs() < 1e-6, "reset 後は 0.2, got {peak2}");
     }
 }

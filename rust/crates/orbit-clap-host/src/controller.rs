@@ -43,6 +43,8 @@ pub enum ClapHostError {
     Activate(String),
     #[error("start_processing に失敗: {0}")]
     StartProcessing(String),
+    #[error("plugin は既にロード済み（reload / 複数同時ロードは未サポート）")]
+    AlreadyLoaded,
 }
 
 /// load_plugin が返す plugin メタデータ（daemon が logging / UI に使う）。
@@ -98,6 +100,14 @@ impl ClapHost {
         channels: usize,
         max_frames: u32,
     ) -> Result<(InstallMsg, LoadedPluginInfo), ClapHostError> {
+        // 二重ロードは未サポート: 既存 instance を上書きすると audio thread の processor が孤立し、
+        // 旧 PluginInstance の drop が wrong-thread deactivate になる。さらに 2 個目の InstallMsg は
+        // audio thread が `plugin.is_none()` のときしか pop しないため install ring に滞留する。
+        // 明示的に弾く（code-review #340 B）。
+        if self.instance.is_some() {
+            return Err(ClapHostError::AlreadyLoaded);
+        }
+
         // プラグインを発見する。
         let found: FoundPlugin = match id {
             None => {

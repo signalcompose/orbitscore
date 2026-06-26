@@ -115,11 +115,21 @@ compile_error!(
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
 ///
-/// feature `link-audio` 時は LinkAudio consumer thread の teardown guard も保持する。
-/// **field 順は load-bearing ではないが意図的**（advisor #2）: `_stream` を先に drop して cpal
+/// ## `link-audio` ビルド時（`_stream` → `_link`）
+/// **この 2 フィールドの順は UB 安全だが意図的**（advisor #2）: `_stream` を先に drop して cpal
 /// callback（ring の push 元）を止めてから `_link`（consumer thread を signal+join）を drop する。
 /// rtrb はどちらの順でも UB にならない（逆順なら callback が undrained ring に push して drop
 /// カウントするだけ）が、teardown 時の無駄な drop を避けるためこの順にしてある。reorder 禁止。
+///
+/// ## `clap-host` ビルド時（`_clap_teardown` → `_stream` → `_clap_thread`・carry-forward #1）
+/// **この順は load-bearing**（UB 回避・上の link-audio とは性質が異なる）:
+/// - `_clap_teardown` が先 = audio thread の callback で `stop_processing()` を済ませてから stream を
+///   止める。逆順だと `StartedPluginAudioProcessor` が stream（callback）停止後に残り、wrong-thread
+///   での暗黙 stop_processing/drop = CLAP 仕様違反（strict plugin で UB）。
+/// - `_clap_thread` が後 = stream 停止後に専用スレッドを join し、instance の home thread で deactivate。
+///
+/// なお `link-audio` と `clap-host` は併用不可（`compile_error!`）なので両ブロックが同時に存在する
+/// ことはない。
 pub struct StreamGuard {
     /// carry-forward #1（clap-host）: stream 停止 **前** に drop され、audio thread で `stop_processing`
     /// を済ませる（`ClapTeardownGuard::drop` が teardown_requested を立て teardown_done を待つ）。
@@ -451,16 +461,27 @@ impl EngineWrap {
                 .as_ref()
                 .map(|c| f32::from_bits(c.stats.post_peak_bits.load(Ordering::Relaxed)))
                 .unwrap_or(0.0),
-            Err(_) => 0.0,
+            // poison を「plugin 未ロード」と同じ 0.0 で握り潰すと、gated テストが
+            // 「発音しなかった」と誤診断する。warn で root cause を残す（silent-failure 対策）。
+            Err(_) => {
+                tracing::warn!("clap mutex poisoned; clap_post_peak returning 0.0");
+                0.0
+            }
         }
     }
 
     /// test harness / RT 監視用: callback-duration スナップショット（A0 §6・budget 検証）。
-    /// `#[doc(hidden)]`。clap 無効時は None。
+    /// `#[doc(hidden)]`。clap 無効時は None。poison 時も None だが warn で区別する。
     #[cfg(feature = "clap-host")]
     #[doc(hidden)]
     pub fn clap_callback_stats(&self) -> Option<orbit_audio_native::CallbackTimeSnapshot> {
-        let guard = self.clap.lock().ok()?;
+        let guard = match self.clap.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                tracing::warn!("clap mutex poisoned; clap_callback_stats returning None");
+                return None;
+            }
+        };
         guard.as_ref().map(|c| c.cb_stats.snapshot())
     }
 
@@ -469,10 +490,14 @@ impl EngineWrap {
     #[cfg(feature = "clap-host")]
     #[doc(hidden)]
     pub fn clap_reset_post_peak(&self) {
-        if let Ok(g) = self.clap.lock() {
-            if let Some(c) = g.as_ref() {
-                c.stats.reset_post_peak();
+        match self.clap.lock() {
+            Ok(g) => {
+                if let Some(c) = g.as_ref() {
+                    c.stats.reset_post_peak();
+                }
             }
+            // reset が黙って no-op だと、後続の two-phase 計測が baseline 汚染で誤判定する。
+            Err(_) => tracing::warn!("clap mutex poisoned; clap_reset_post_peak skipped"),
         }
     }
 

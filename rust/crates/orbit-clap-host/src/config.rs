@@ -121,8 +121,12 @@ pub fn get_config_from_ports(
     is_input: bool,
 ) -> PluginAudioPortsConfig {
     let Some(ports) = handle.get_extension::<PluginAudioPorts>() else {
-        eprintln!(
-            "[orbit-clap-host] plugin に AudioPorts エクステンションなし; {} を仮定",
+        // 入力 fallback（empty）は has_audio_input=false を導き、effect でも instrument 経路
+        // （add-mix）に回す。effect plugin がこれに当たると素通し（dry）になるため warn で surface する。
+        tracing::warn!(
+            is_input,
+            "[orbit-clap-host] plugin に AudioPorts エクステンションなし; {} を仮定（input fallback は \
+             effect→instrument 誤ルートになりうる）",
             if is_input {
                 "入力なし"
             } else {
@@ -143,7 +147,9 @@ pub fn get_config_from_ports(
 
     for i in 0..ports.count(handle, is_input) {
         let Some(info) = ports.get(handle, i, is_input, &mut buf) else {
-            eprintln!("[orbit-clap-host] index {i} のポート情報が取得できなかったためスキップ");
+            tracing::warn!(
+                "[orbit-clap-host] index {i} のポート情報が取得できなかったためスキップ"
+            );
             continue;
         };
 
@@ -160,7 +166,7 @@ pub fn get_config_from_ports(
         };
 
         if info.flags.contains(AudioPortFlags::IS_MAIN) && main_port_index.replace(i).is_some() {
-            eprintln!("警告: プラグインが複数の main ポートを定義している");
+            tracing::warn!("[orbit-clap-host] プラグインが複数の main ポートを定義している");
         }
 
         discovered.push(PluginAudioPortInfo {
@@ -174,7 +180,9 @@ pub fn get_config_from_ports(
         return if is_input {
             PluginAudioPortsConfig::empty()
         } else {
-            eprintln!("警告: プラグインが出力ポートを報告しない; デフォルトステレオを使用");
+            tracing::warn!(
+                "[orbit-clap-host] プラグインが出力ポートを報告しない; デフォルトステレオを使用"
+            );
             PluginAudioPortsConfig::default_stereo()
         };
     }

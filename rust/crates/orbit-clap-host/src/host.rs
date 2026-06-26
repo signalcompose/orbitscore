@@ -93,9 +93,14 @@ impl HostLogImpl for OrbitHostShared {
         if severity <= LogSeverity::Debug {
             return;
         }
-        // 注意: eprintln は RT 安全でない。プラグインが任意スレッドから呼ぶホストログ
-        // パスであり、library crate では spike 同様に許容する。
-        eprintln!("[clap:{severity}] {message}");
+        // daemon の structured log（tracing）へ流す。注意: tracing も RT 安全ではないが、
+        // plugin が audio thread からログを呼ぶのは元々 misbehaving であり、eprintln と RT 上の
+        // 性質は変わらない。整形ログに乗せて aggregator で拾えるようにする（observability・#340）。
+        match severity {
+            LogSeverity::Info => tracing::info!("[clap] {message}"),
+            LogSeverity::Warning => tracing::warn!("[clap] {message}"),
+            _ => tracing::error!("[clap:{severity}] {message}"),
+        }
     }
 }
 

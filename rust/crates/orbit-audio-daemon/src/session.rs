@@ -372,14 +372,16 @@ async fn handle_command(
         },
         // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由・非ブロッキング）。
         "PluginNoteOn" => match params.get("key").and_then(|v| v.as_u64()) {
-            Some(k) if k <= 127 => {
-                let channel = params.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let velocity = param_f64(&params, "velocity", 0.8);
-                match engine.plugin_note_on(k as u8, channel, velocity) {
-                    Ok(()) => ok(&id, json!({"status": "note_on", "key": k})),
-                    Err(e) => err(&id, wrap_err_to_protocol(&e)),
+            Some(k) if k <= 127 => match parse_midi_channel(&params) {
+                Ok(channel) => {
+                    let velocity = param_f64(&params, "velocity", 0.8);
+                    match engine.plugin_note_on(k as u8, channel, velocity) {
+                        Ok(()) => ok(&id, json!({"status": "note_on", "key": k})),
+                        Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                    }
                 }
-            }
+                Err(e) => err(&id, e),
+            },
             _ => err(
                 &id,
                 ProtocolError::new(
@@ -389,14 +391,16 @@ async fn handle_command(
             ),
         },
         "PluginNoteOff" => match params.get("key").and_then(|v| v.as_u64()) {
-            Some(k) if k <= 127 => {
-                let channel = params.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
-                let velocity = param_f64(&params, "velocity", 0.0);
-                match engine.plugin_note_off(k as u8, channel, velocity) {
-                    Ok(()) => ok(&id, json!({"status": "note_off", "key": k})),
-                    Err(e) => err(&id, wrap_err_to_protocol(&e)),
+            Some(k) if k <= 127 => match parse_midi_channel(&params) {
+                Ok(channel) => {
+                    let velocity = param_f64(&params, "velocity", 0.0);
+                    match engine.plugin_note_off(k as u8, channel, velocity) {
+                        Ok(()) => ok(&id, json!({"status": "note_off", "key": k})),
+                        Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                    }
                 }
-            }
+                Err(e) => err(&id, e),
+            },
             _ => err(
                 &id,
                 ProtocolError::new(
@@ -595,6 +599,19 @@ fn param_f64(params: &Value, key: &str, default: f64) -> f64 {
     params.get(key).and_then(|v| v.as_f64()).unwrap_or(default)
 }
 
+/// `channel` param を MIDI channel（0..=15）として取り出す。欠如 / 非数値は 0。範囲外は
+/// `MALFORMED_REQUEST`（`key` の 0..=127 検証と対称・out-of-range を silent truncation しない）。
+fn parse_midi_channel(params: &Value) -> Result<u8, ProtocolError> {
+    match params.get("channel").and_then(|v| v.as_u64()) {
+        None => Ok(0),
+        Some(c) if c <= 15 => Ok(c as u8),
+        Some(_) => Err(ProtocolError::new(
+            "MALFORMED_REQUEST",
+            "'channel' must be 0..=15",
+        )),
+    }
+}
+
 fn ok(id: &str, result: Value) -> Value {
     // OkResponse は String/Value のみ含む固定スキーマ。
     // シリアライズ失敗はプログラマエラー (新フィールドの Serialize 実装不備) として
@@ -658,6 +675,42 @@ mod tests {
     fn link_audio_runtime_maps_to_runtime_code() {
         let e = WrapError::LinkAudio("channel limit reached".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_RUNTIME");
+    }
+
+    // CLAP エラーの protocol code 分割を pin（LinkAudio と同様: feature-gap=UNAVAILABLE /
+    // runtime 失敗=RUNTIME。TS 層が両者を区別して扱うので drift させない・#340）。
+    #[test]
+    fn clap_unavailable_maps_to_unavailable_code() {
+        let e = WrapError::ClapUnavailable("built without feature".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_UNAVAILABLE");
+    }
+
+    #[test]
+    fn clap_runtime_maps_to_runtime_code() {
+        let e = WrapError::Clap("plugin event ring full".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_RUNTIME");
+    }
+
+    // PluginNoteOn/Off の channel 検証: 欠如→0、0..=15 受理、範囲外は MALFORMED（key と対称）。
+    #[test]
+    fn parse_midi_channel_defaults_accepts_and_rejects() {
+        assert_eq!(parse_midi_channel(&json!({})).unwrap(), 0, "欠如→0");
+        assert_eq!(parse_midi_channel(&json!({"channel": 0})).unwrap(), 0);
+        assert_eq!(parse_midi_channel(&json!({"channel": 15})).unwrap(), 15);
+        assert_eq!(
+            parse_midi_channel(&json!({"channel": 16}))
+                .unwrap_err()
+                .code,
+            "MALFORMED_REQUEST",
+            "16 は範囲外"
+        );
+        assert_eq!(
+            parse_midi_channel(&json!({"channel": 256}))
+                .unwrap_err()
+                .code,
+            "MALFORMED_REQUEST",
+            "256 は as u8 で 0 に truncation せず弾く"
+        );
     }
 
     // SetLinkTempo の bpm 検証（PT-2 / CR-2）: musical な値は受理、garbage は弾く。
