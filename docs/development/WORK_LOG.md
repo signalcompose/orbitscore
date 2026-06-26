@@ -44,8 +44,10 @@ thread に渡す。
 
 **carry-forward 3（A0 §13・RT 正確性）= 解決**:
 1. teardown は StreamGuard の field drop 順で強制（`ClapTeardownGuard` が audio thread で
-   `stop_processing` → stream 停止 → 専用スレッドで instance deactivate）。暗黙 Drop の wrong-thread
-   stop_processing（strict plugin で UB）を回避。
+   `stop_processing` → stream 停止 → 専用スレッドで instance deactivate）。**通常 teardown 経路の**暗黙 Drop の
+   wrong-thread stop_processing（strict plugin で UB）を回避。⚠️ shutdown + device-loss + install-race が
+   同窓で重なる narrow 残余（install ring の未消費 `InstallMsg` が非 RT スレッドで drop）は本 PR では未解決・
+   追跡 issue #342 の focused follow-on PR で対応（両レビューが Minor 認定・実害極小）。
 2. `request_callback` は `Arc<AtomicBool>` で lock-free（mpsc の alloc+mutex を排除）。
 3. CLAP `EventBuffer` は ring capacity でサイズ固定し RT realloc を防止（debug_assert で検出）。
 
