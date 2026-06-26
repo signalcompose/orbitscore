@@ -511,7 +511,8 @@ async fn daemon_error_warning_on_link_egress_drop() {
                     && msg["data"]["severity"] == "warning"
                     && msg["data"]["code"] == "LINK_EGRESS_DROP"
                 {
-                    warning_message = Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
                     break;
                 }
             }

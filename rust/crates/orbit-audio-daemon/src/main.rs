@@ -10,8 +10,8 @@
 
 use orbit_audio_daemon::engine_wrap::EngineWrap;
 use orbit_audio_daemon::protocol::{
-    Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC,
-    ERROR_SEVERITY_FATAL, EVENT_DAEMON_ERROR, PROTOCOL_VERSION,
+    Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC, ERROR_SEVERITY_FATAL,
+    EVENT_DAEMON_ERROR, PROTOCOL_VERSION,
 };
 use orbit_audio_daemon::server;
 use serde_json::json;

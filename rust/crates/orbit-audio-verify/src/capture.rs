@@ -105,7 +105,10 @@ mod tests {
     #[test]
     fn capture_collects_full_timeline_across_blocks() {
         let mut s = Scheduler::new(48_000, 2);
-        s.schedule(ScheduledSample::new(0.0, Sample::new(vec![1.0f32; 1000], 48_000, 1)));
+        s.schedule(ScheduledSample::new(
+            0.0,
+            Sample::new(vec![1.0f32; 1000], 48_000, 1),
+        ));
 
         // total=1000 を 512 ブロックで割る（端数 488 が出る → block 端の処理を通す）。
         let cap = capture(&mut s, 2, 1000, 512);

@@ -1,7 +1,7 @@
 //! Audio-thread integration: Engine + CLAP plugin + rtrb seam + PostMixSink (A0 §4.1).
 
 use crate::buffers::HostAudioBuffers;
-use crate::events::{PluginEventConsumer, drain_to_event_buffer};
+use crate::events::{drain_to_event_buffer, PluginEventConsumer};
 use crate::host::OrbitClapHost;
 use crate::sink::PostMixSink;
 
@@ -185,7 +185,9 @@ impl OrbitAudioProcessor {
             if let Ok(msg) = self.install_rx.pop() {
                 self.install(msg); // same move as static install (no lock/alloc)
                 let at = self.stats.callback_count.load(Ordering::Relaxed);
-                self.stats.installed_at_callback.store(at, Ordering::Relaxed);
+                self.stats
+                    .installed_at_callback
+                    .store(at, Ordering::Relaxed);
             }
         }
 

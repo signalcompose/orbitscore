@@ -162,7 +162,11 @@ impl LinkChannelEgress {
     /// (session-global なので per-channel に読み直さない・efficiency)。<=0 は capture 例外(shim が 0.0 を
     /// 返す)または Link セッション初期化前の過渡状態で、初回 anchor の fallback には使うが re-anchor の
     /// 比較基準にはしない(過渡的な 0 で誤検出しない)。
-    pub fn pump_once(&mut self, output: &LinkAudioOutput, session_tempo: f64) -> Option<CommitResult> {
+    pub fn pump_once(
+        &mut self,
+        output: &LinkAudioOutput,
+        session_tempo: f64,
+    ) -> Option<CommitResult> {
         let block_samples = self.block_frames * self.num_channels;
         if self.consumer.slots() < block_samples {
             return None;
@@ -176,7 +180,11 @@ impl LinkChannelEgress {
         if !self.anchored {
             // egress 開始時に anchor(beat)を 1 回だけ capture。以後 `capture_beat()` は二度と呼ばない
             // (ring latency 位相誤差の再導入を避ける・advisor)。session_tempo<=0 は fallback 120。
-            let bpm = if session_tempo > 0.0 { session_tempo } else { 120.0 };
+            let bpm = if session_tempo > 0.0 {
+                session_tempo
+            } else {
+                120.0
+            };
             self.start_segment(output.capture_beat(self.quantum), produced, bpm);
             self.anchored = true;
         } else if let Some(new_anchor) = reanchor_beat_on_change(

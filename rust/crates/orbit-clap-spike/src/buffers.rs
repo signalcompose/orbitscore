@@ -63,8 +63,14 @@ impl HostAudioBuffers {
         let total_out = config.plugin_output_port_config.total_channel_count();
 
         Self {
-            input_ports: AudioPorts::with_capacity(total_in, config.plugin_input_port_config.ports.len()),
-            output_ports: AudioPorts::with_capacity(total_out, config.plugin_output_port_config.ports.len()),
+            input_ports: AudioPorts::with_capacity(
+                total_in,
+                config.plugin_input_port_config.ports.len(),
+            ),
+            output_ports: AudioPorts::with_capacity(
+                total_out,
+                config.plugin_output_port_config.ports.len(),
+            ),
             input_port_channels,
             output_port_channels,
             muxed: vec![0.0f32; frame_count * config.output_channel_count],
@@ -85,7 +91,9 @@ impl HostAudioBuffers {
             // resize/eprintln below are themselves RT violations and fire ONLY if cpal
             // breaks the fixed-size contract. The atomic counter (RT-safe) always records
             // it; the eprintln is debug-only to keep the syscall out of release builds.
-            self.stats.buffer_resize_count.fetch_add(1, Ordering::Relaxed);
+            self.stats
+                .buffer_resize_count
+                .fetch_add(1, Ordering::Relaxed);
             #[cfg(debug_assertions)]
             eprintln!(
                 "[orbit-clap-spike] WARN: buffer resize ({} -> {} frames) -- indicates BufferSize::Fixed did not hold",

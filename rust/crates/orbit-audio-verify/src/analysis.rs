@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn pan_inversion_hits_known_anchors() {
         let k = std::f32::consts::FRAC_1_SQRT_2; // 中央の左右ゲイン
-        // hard-left: R=0 → pan -1。
+                                                 // hard-left: R=0 → pan -1。
         assert!((pan_from_lr_rms(1.0, 0.0) - (-1.0)).abs() < 1e-5);
         // hard-right: L=0 → pan +1。
         assert!((pan_from_lr_rms(0.0, 1.0) - 1.0).abs() < 1e-5);

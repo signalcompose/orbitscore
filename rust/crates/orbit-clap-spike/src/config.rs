@@ -7,7 +7,9 @@ use crate::host::OrbitClapHost;
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfoBuffer, AudioPortType, PluginAudioPorts,
 };
-use clack_host::prelude::{ClapId, PluginAudioConfiguration, PluginInstance, PluginMainThreadHandle};
+use clack_host::prelude::{
+    ClapId, PluginAudioConfiguration, PluginInstance, PluginMainThreadHandle,
+};
 use cpal::traits::DeviceTrait;
 use cpal::{BufferSize, Device, SampleRate, StreamConfig, SupportedBufferSize};
 use std::fmt::{Display, Formatter};
@@ -63,10 +65,7 @@ impl FullAudioConfig {
             output_channel_count: chosen.channels() as usize,
             min_buffer_size: min_buf.max(1),
             max_likely_buffer_size: max_buf,
-            sample_rate: 44_100u32.clamp(
-                chosen.min_sample_rate().0,
-                chosen.max_sample_rate().0,
-            ),
+            sample_rate: 44_100u32.clamp(chosen.min_sample_rate().0, chosen.max_sample_rate().0),
             plugin_output_port_config: output_ports,
             plugin_input_port_config: input_ports,
         })
@@ -180,11 +179,18 @@ impl PluginAudioPortsConfig {
 }
 
 /// Query a plugin's audio ports via the AudioPorts extension.
-pub fn get_config_from_ports(handle: &mut PluginMainThreadHandle, is_input: bool) -> PluginAudioPortsConfig {
+pub fn get_config_from_ports(
+    handle: &mut PluginMainThreadHandle,
+    is_input: bool,
+) -> PluginAudioPortsConfig {
     let Some(ports) = handle.get_extension::<PluginAudioPorts>() else {
         eprintln!(
             "[orbit-clap-spike] plugin has no AudioPorts extension; assuming {}",
-            if is_input { "no input" } else { "default stereo output" }
+            if is_input {
+                "no input"
+            } else {
+                "default stereo output"
+            }
         );
         // empty() for input (a synth has none), default stereo for output.
         return if is_input {

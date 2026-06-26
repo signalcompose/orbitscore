@@ -97,11 +97,7 @@ fn fade_tail_captured_in_l_channel_is_linear() {
         .map(|f| cap.at(f, 0).abs())
         .collect();
 
-    assert_eq!(
-        envelope.len(),
-        fade_frames,
-        "fade 窓の長さが一致するはず"
-    );
+    assert_eq!(envelope.len(), fade_frames, "fade 窓の長さが一致するはず");
 
     // body（fade 前）は定常 1.0 であることを確認（body 窓の先頭を数点）。
     let body_check = cap.at(start_frame, 0).abs();

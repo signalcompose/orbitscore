@@ -93,14 +93,8 @@ fn per_slice_gain_ratio_is_reflected_in_rms_db_difference() {
     let rms_b = region_rms(&cap, 0, body_b_start, body_b_end);
 
     // 両イベントに信号がある（無音に db_difference を当てない）。
-    assert!(
-        rms_a > 1e-3,
-        "イベント A に信号が必要。rms_a={rms_a:.5}"
-    );
-    assert!(
-        rms_b > 1e-3,
-        "イベント B に信号が必要。rms_b={rms_b:.5}"
-    );
+    assert!(rms_a > 1e-3, "イベント A に信号が必要。rms_a={rms_a:.5}");
+    assert!(rms_b > 1e-3, "イベント B に信号が必要。rms_b={rms_b:.5}");
 
     // dB 差: db_difference(rms_b, rms_a) = 20·log10(rms_b / rms_a)
     // gain_b=0.5 なので rms_b < rms_a → 負の値になる（expected_db ≈ -6.02 dB）。
@@ -149,8 +143,18 @@ fn per_slice_gain_double_is_plus_6db() {
     let cap = capture(&mut s, CHANNELS, total_frames, BLOCK);
 
     let body_margin = 256usize;
-    let rms_a = region_rms(&cap, 0, start_a + body_margin, start_a + slice_len - body_margin);
-    let rms_b = region_rms(&cap, 0, start_b + body_margin, start_b + slice_len - body_margin);
+    let rms_a = region_rms(
+        &cap,
+        0,
+        start_a + body_margin,
+        start_a + slice_len - body_margin,
+    );
+    let rms_b = region_rms(
+        &cap,
+        0,
+        start_b + body_margin,
+        start_b + slice_len - body_margin,
+    );
 
     assert!(rms_a > 1e-3, "イベント A に信号が必要。rms_a={rms_a:.5}");
     assert!(rms_b > 1e-3, "イベント B に信号が必要。rms_b={rms_b:.5}");

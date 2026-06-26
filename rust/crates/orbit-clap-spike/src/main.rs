@@ -23,8 +23,8 @@ mod sink;
 use crate::audio::{AudioThreadStats, InstallMsg, OrbitAudioProcessor};
 use crate::buffers::HostAudioBuffers;
 use crate::config::FullAudioConfig;
-use crate::discovery::{FoundPlugin, list_plugins_in_file, load_plugin_id_from_path};
-use crate::events::{PluginEvent, make_event_ring};
+use crate::discovery::{list_plugins_in_file, load_plugin_id_from_path, FoundPlugin};
+use crate::events::{make_event_ring, PluginEvent};
 use crate::host::{MainThreadMessage, OrbitClapHost, OrbitHostMainThread, OrbitHostShared};
 use crate::sink::{CountingSink, PostMixSink, RingTapSink};
 
@@ -35,7 +35,7 @@ use orbit_audio_core::Engine;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 // ---- CLI ----------------------------------------------------------------
@@ -107,8 +107,7 @@ fn parse_args() -> anyhow::Result<Cli> {
     }
 
     Ok(Cli {
-        file_path: file_path
-            .ok_or_else(|| anyhow::anyhow!("--file-path is required"))?,
+        file_path: file_path.ok_or_else(|| anyhow::anyhow!("--file-path is required"))?,
         plugin_id,
         measure_secs,
         bpm,
@@ -145,9 +144,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     // --- Instantiate (main thread) ----------------------------------------
     let (sender, receiver) = mpsc::channel::<MainThreadMessage>();
 
-    let plugin_id =
-        std::ffi::CString::new(found.plugin.id.as_str())
-            .map_err(|_| anyhow::anyhow!("plugin id contains null byte"))?;
+    let plugin_id = std::ffi::CString::new(found.plugin.id.as_str())
+        .map_err(|_| anyhow::anyhow!("plugin id contains null byte"))?;
 
     let host_info = HostInfo::new(
         "OrbitScore CLAP spike",
@@ -216,13 +214,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let stats = AudioThreadStats::new();
 
     // --- Audio processor (engine-only; plugin installed below) -----------
-    let mut processor = OrbitAudioProcessor::new(
-        engine,
-        event_consumer,
-        sink,
-        stats.clone(),
-        install_rx,
-    );
+    let mut processor =
+        OrbitAudioProcessor::new(engine, event_consumer, sink, stats.clone(), install_rx);
 
     let hot_secs = cli.hot_install_after_secs;
     if hot_secs == 0 {
@@ -401,8 +394,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 fn select_plugin(path: &Path, id: Option<&str>) -> anyhow::Result<FoundPlugin> {
     match id {
         None => {
-            let plugins = list_plugins_in_file(path)
-                .map_err(|e| anyhow::anyhow!("Discovery error: {e}"))?;
+            let plugins =
+                list_plugins_in_file(path).map_err(|e| anyhow::anyhow!("Discovery error: {e}"))?;
             if plugins.is_empty() {
                 anyhow::bail!("No plugins found in {}", path.display());
             }
