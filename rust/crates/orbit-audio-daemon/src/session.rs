@@ -336,6 +336,75 @@ async fn handle_command(
                 ),
             ),
         },
+        // CLAP プラグインをロードして hot-install する（Issue #340・feature `clap-host`）。discovery +
+        // dlopen + activate は重いので LoadSample と同様 spawn_blocking で tokio ワーカーを塞がない。
+        // feature 無効ビルドは engine stub が CLAP_UNAVAILABLE を返す（command は feature 非依存）。
+        "LoadPlugin" => match params.get("path").and_then(|p| p.as_str()) {
+            Some(path_str) => {
+                let engine = engine.clone();
+                let path = std::path::PathBuf::from(path_str);
+                let plugin_id = params
+                    .get("plugin_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let res =
+                    tokio::task::spawn_blocking(move || engine.load_plugin(path, plugin_id)).await;
+                match res {
+                    Ok(Ok(info)) => ok(
+                        &id,
+                        json!({
+                            "plugin_id": info.plugin_id,
+                            "plugin_name": info.plugin_name,
+                            "note_port_index": info.note_port_index,
+                        }),
+                    ),
+                    Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
+                    Err(join_err) => err(
+                        &id,
+                        ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                    ),
+                }
+            }
+            None => err(
+                &id,
+                ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
+            ),
+        },
+        // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由・非ブロッキング）。
+        "PluginNoteOn" => match params.get("key").and_then(|v| v.as_u64()) {
+            Some(k) if k <= 127 => {
+                let channel = params.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let velocity = param_f64(&params, "velocity", 0.8);
+                match engine.plugin_note_on(k as u8, channel, velocity) {
+                    Ok(()) => ok(&id, json!({"status": "note_on", "key": k})),
+                    Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                }
+            }
+            _ => err(
+                &id,
+                ProtocolError::new(
+                    "MALFORMED_REQUEST",
+                    "missing or out-of-range 'key' (0..=127)",
+                ),
+            ),
+        },
+        "PluginNoteOff" => match params.get("key").and_then(|v| v.as_u64()) {
+            Some(k) if k <= 127 => {
+                let channel = params.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+                let velocity = param_f64(&params, "velocity", 0.0);
+                match engine.plugin_note_off(k as u8, channel, velocity) {
+                    Ok(()) => ok(&id, json!({"status": "note_off", "key": k})),
+                    Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                }
+            }
+            _ => err(
+                &id,
+                ProtocolError::new(
+                    "MALFORMED_REQUEST",
+                    "missing or out-of-range 'key' (0..=127)",
+                ),
+            ),
+        },
         "PlayAt" => {
             let time_sec = param_f64(&params, "time_sec", 0.0);
             let gain = param_f64(&params, "gain", 1.0) as f32;
@@ -568,6 +637,9 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("LINK_AUDIO_UNAVAILABLE", msg.clone())
         }
         WrapError::LinkAudio(msg) => ProtocolError::new("LINK_AUDIO_RUNTIME", msg.clone()),
+        // CLAP も LinkAudio と同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする。
+        WrapError::ClapUnavailable(msg) => ProtocolError::new("CLAP_UNAVAILABLE", msg.clone()),
+        WrapError::Clap(msg) => ProtocolError::new("CLAP_RUNTIME", msg.clone()),
     }
 }
 

@@ -26,13 +26,21 @@ link-audio = ["dep:orbit-link-audio", "dep:rtrb"]
 # verification receiver を引き込む。production link-audio には verification を出さない。
 # default off なので cargo-deny の "default graph は GPL-free" 不変条件には影響しない。
 link-audio-verification = ["link-audio", "orbit-link-audio/verification-receiver"]
+# CLAP plugin hosting（Issue #340・default off・permissive）。in-process で CLAP プラグインを
+# daemon の cpal callback（native の PostProcessor seam 経由）に統合する。orbit-clap-host は
+# permissive（clack=MIT/Apache）なので GPL 隔離は不要だが、clack/install-ring を default 依存
+# グラフに足さないよう feature に括る。**現状 link-audio とは併用不可**（combined callback の
+# render 順序は defer・engine_wrap.rs の compile_error 参照）。
+clap-host = ["dep:orbit-clap-host", "dep:rtrb"]
 
 [dependencies]
 orbit-audio-core = { path = "../orbit-audio-core" }
 orbit-audio-native = { path = "../orbit-audio-native" }
 # GPL 隔離 crate。feature `link-audio` 経由でのみ取り込む optional dep。
 orbit-link-audio = { path = "../orbit-link-audio", optional = true }
-# reg-ring producer(`rtrb::Producer<LinkChannelActivate>`)を名指すため。link-audio 経路専用。
+# in-process CLAP hosting library（permissive）。feature `clap-host` 経由でのみ取り込む。
+orbit-clap-host = { path = "../orbit-clap-host", optional = true }
+# reg-ring / install-ring / event-ring producer を名指すため。link-audio / clap-host 経路専用。
 rtrb = { version = "0.3", optional = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }

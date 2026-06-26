@@ -37,6 +37,14 @@ pub enum WrapError {
     /// 不在・reg-ring 満杯・mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("link audio runtime error: {0}")]
     LinkAudio(String),
+    /// CLAP plugin hosting がこの daemon ビルド/インスタンスで利用できない（feature `clap-host`
+    /// 無効、または test backend）。TS 層は feature-gap として warn-once で握り潰す。
+    #[error("clap host unavailable: {0}")]
+    ClapUnavailable(String),
+    /// CLAP plugin hosting は利用可能だが runtime で失敗した（load/activate 失敗・install ring 満杯・
+    /// 専用スレッド不在・mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
+    #[error("clap host runtime error: {0}")]
+    Clap(String),
 }
 
 /// 共有可能なエンジン wrapper。
@@ -67,7 +75,43 @@ pub struct EngineWrap {
     /// を `&self` のまま提供する。本番 `start()` で `Some`、test backend 経路では `None`。
     #[cfg(feature = "link-audio")]
     link: Mutex<Option<crate::link_audio::LinkAudioControl>>,
+    /// CLAP plugin hosting の control-side ハンドル（feature `clap-host` 専用・Issue #340）。
+    /// 専用スレッドへの `cmd_tx`（LoadPlugin）/ audio thread への `event_tx`（note）/ 統計を保持する。
+    /// `Sender`/`Producer` は `!Sync` なので `Mutex` 内包で `&self` のまま提供する。本番 `start()` で
+    /// `Some`、test backend 経路では `None`。
+    #[cfg(feature = "clap-host")]
+    clap: Mutex<Option<ClapControl>>,
 }
+
+/// CLAP host の control-side ハンドル一式（feature `clap-host` 専用）。
+#[cfg(feature = "clap-host")]
+struct ClapControl {
+    /// 専用スレッドへ `LoadPlugin` を送る Sender。
+    cmd_tx: std::sync::mpsc::Sender<crate::clap_host::ClapCommand>,
+    /// audio thread（cpal callback の `ClapPostProcessor`）へ note を渡す event ring producer。
+    event_tx: rtrb::Producer<orbit_clap_host::PluginEvent>,
+    /// CLAP processor 統計（post-mix peak / process error 等）。daemon が読む。
+    stats: Arc<orbit_clap_host::ClapProcessorStats>,
+    /// callback-duration 統計（A0 §6: CoreAudio+cpal は xrun 不発火 → RT 健全性は callback 実測時間で
+    /// 測る）。daemon の RT 監視 / gated test の budget 検証が読む。
+    cb_stats: Arc<orbit_audio_native::CallbackTimeStats>,
+}
+
+/// CLAP plugin の activate に渡す最大フレーム数。daemon の cpal stream は可変 buffer（`None`）なので
+/// device の実 buffer がこれを超えたら `HostAudioBuffers::ensure_buffer_size_matches` が resize する
+/// （resize_count に計上）。典型的な device buffer（256〜2048）を十分上回る値を選び resize を実質
+/// ゼロに保つ。
+#[cfg(feature = "clap-host")]
+const CLAP_MAX_FRAMES: u32 = 8192;
+
+// link-audio と clap-host の併用は現状未対応（1 つの cpal callback で LinkAudio per-channel egress と
+// CLAP master-bus post-processor の render 順序を統合する設計が defer・Issue #340）。両方有効なビルドは
+// 早期に弾く（`start()` の cfg 分岐も両者排他なので、これが無いと start() 未定義でわかりにくく落ちる）。
+#[cfg(all(feature = "link-audio", feature = "clap-host"))]
+compile_error!(
+    "features `link-audio` and `clap-host` are mutually exclusive for now \
+     (combined cpal-callback render ordering is deferred — Issue #340)"
+);
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
 ///
@@ -77,9 +121,19 @@ pub struct EngineWrap {
 /// rtrb はどちらの順でも UB にならない（逆順なら callback が undrained ring に push して drop
 /// カウントするだけ）が、teardown 時の無駄な drop を避けるためこの順にしてある。reorder 禁止。
 pub struct StreamGuard {
+    /// carry-forward #1（clap-host）: stream 停止 **前** に drop され、audio thread で `stop_processing`
+    /// を済ませる（`ClapTeardownGuard::drop` が teardown_requested を立て teardown_done を待つ）。
+    /// **field 順は load-bearing**: これは `_stream` より前に宣言する（Rust の field drop 順 = 宣言順）。
+    #[cfg(feature = "clap-host")]
+    _clap_teardown: crate::clap_host::ClapTeardownGuard,
     _stream: OutputStream,
     #[cfg(feature = "link-audio")]
     _link: Option<crate::link_audio::LinkAudioGuard>,
+    /// clap-host: stream 停止 **後** に drop され、専用スレッドを停止 → `ClapHost::shutdown()` で
+    /// instance を deactivate（instance の home thread）。**field 順は load-bearing**: `_stream` より
+    /// 後に宣言する。
+    #[cfg(feature = "clap-host")]
+    _clap_thread: crate::clap_host::ClapThreadGuard,
 }
 
 impl EngineWrap {
@@ -88,7 +142,7 @@ impl EngineWrap {
     ///
     /// 本番経路は `cpal::Stream` が `!Send` のため [`Self::start_with`] の
     /// `Box<dyn Any + Send>` guard 型に詰められない。そのため本番は専用パス。
-    #[cfg(not(feature = "link-audio"))]
+    #[cfg(all(not(feature = "link-audio"), not(feature = "clap-host")))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats) = orbit_audio_native::start_default_output()?;
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
@@ -98,7 +152,7 @@ impl EngineWrap {
     /// feature `link-audio` 版: cpal 出力を LinkAudio egress 経路付きで起動し、GPL consumer thread を
     /// spawn する（A4-2b-2）。reg-ring producer は callback に組み込まれ、`register_link_audio_channel`
     /// 経由で channel を流す。返す `StreamGuard` が consumer thread の teardown guard を保持する。
-    #[cfg(feature = "link-audio")]
+    #[cfg(all(feature = "link-audio", not(feature = "clap-host")))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats, reg_tx) =
             orbit_audio_native::start_default_output_with_link_egress(
@@ -120,6 +174,47 @@ impl EngineWrap {
             StreamGuard {
                 _stream: stream,
                 _link: Some(link_guard),
+            },
+        ))
+    }
+
+    /// feature `clap-host` 版（Issue #340）: cpal 出力を CLAP master-bus post-processor 経路付きで
+    /// 起動し、`orbit-clap-host` の `ClapHost`(!Send) を専用スレッドで動かす。`ClapPostProcessor`
+    /// （`PostProcessor` 実装）を native callback に注入し、plugin の hot-install は install ring 経由で
+    /// audio thread に渡す。返す `StreamGuard` が teardown guard（carry-forward #1）と専用スレッド
+    /// guard を保持する（drop 順で stop_processing → stream 停止 → deactivate を強制）。
+    #[cfg(all(feature = "clap-host", not(feature = "link-audio")))]
+    pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        // event ring 1024 / install ring 1（spike と同容量）。
+        let (processor, parts) = orbit_clap_host::new_clap_host(1024, 1);
+        let (engine, stream, stream_stats, cb_stats) =
+            orbit_audio_native::start_default_output_with_clap(processor)
+                .map_err(WrapError::Output)?;
+        // 専用スレッドを起動（!Send instance + pump をここで所有）。install ring producer を渡す。
+        let (cmd_tx, thread_guard) = crate::clap_host::spawn_clap_thread(
+            parts.callback_requested,
+            parts.resize_count,
+            parts.install_tx,
+        );
+        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        *wrap
+            .clap
+            .lock()
+            .map_err(|_| WrapError::Clap("clap mutex poisoned".into()))? = Some(ClapControl {
+            cmd_tx,
+            event_tx: parts.event_producer,
+            stats: parts.stats,
+            cb_stats,
+        });
+        Ok((
+            wrap,
+            StreamGuard {
+                _clap_teardown: crate::clap_host::ClapTeardownGuard::new(
+                    parts.teardown_requested,
+                    parts.teardown_done,
+                ),
+                _stream: stream,
+                _clap_thread: thread_guard,
             },
         ))
     }
@@ -161,6 +256,9 @@ impl EngineWrap {
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
+            // clap-host: 本番 `start()` が spawn 後に Some を注入する。test backend 経路は None。
+            #[cfg(feature = "clap-host")]
+            clap: Mutex::new(None),
         })
     }
 
@@ -232,6 +330,150 @@ impl EngineWrap {
         Err(WrapError::LinkAudioUnavailable(
             "engine built without 'link-audio' feature".into(),
         ))
+    }
+
+    // ── CLAP plugin hosting（feature `clap-host` 専用・Issue #340）─────────────────────
+
+    /// CLAP プラグインをロードして hot-install する（feature `clap-host` 専用）。
+    /// 専用スレッドへ `LoadPlugin` を送り、discovery + instantiate + activate + start_processing +
+    /// install ring push を実行させ、結果を待つ。**blocking**（`reply.recv()`）なので呼び出し側は
+    /// `spawn_blocking` で tokio ワーカーを塞がないこと（discovery + dlopen + activate は重い）。
+    #[cfg(feature = "clap-host")]
+    pub fn load_plugin(
+        &self,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> Result<LoadedPluginSummary, WrapError> {
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        {
+            // lock は send までで解放し、reply 待ちの blocking を mutex 外で行う。
+            let guard = self
+                .clap
+                .lock()
+                .map_err(|_| WrapError::Clap("clap mutex poisoned".into()))?;
+            let ctl = guard.as_ref().ok_or_else(|| {
+                WrapError::ClapUnavailable(
+                    "clap host not initialized (test backend has no clap path)".into(),
+                )
+            })?;
+            ctl.cmd_tx
+                .send(crate::clap_host::ClapCommand::LoadPlugin {
+                    path,
+                    plugin_id,
+                    sample_rate: self.sample_rate,
+                    channels: self.channels as usize,
+                    max_frames: CLAP_MAX_FRAMES,
+                    reply: reply_tx,
+                })
+                .map_err(|_| WrapError::Clap("clap host thread is gone".into()))?;
+        }
+        match reply_rx.recv() {
+            Ok(Ok(info)) => Ok(LoadedPluginSummary {
+                plugin_id: info.plugin_id,
+                plugin_name: info.plugin_name,
+                note_port_index: info.note_port_index,
+            }),
+            Ok(Err(e)) => Err(WrapError::Clap(e)),
+            Err(_) => Err(WrapError::Clap("clap host thread dropped reply".into())),
+        }
+    }
+
+    /// feature `clap-host` 無効ビルド用の stub。TS は UNAVAILABLE を warn-once で握り潰す。
+    #[cfg(not(feature = "clap-host"))]
+    pub fn load_plugin(
+        &self,
+        _path: PathBuf,
+        _plugin_id: Option<String>,
+    ) -> Result<LoadedPluginSummary, WrapError> {
+        Err(WrapError::ClapUnavailable(
+            "engine built without 'clap-host' feature".into(),
+        ))
+    }
+
+    /// ロード済み CLAP プラグインへ NoteOn を送る（event ring 経由・非ブロッキング・feature 専用）。
+    #[cfg(feature = "clap-host")]
+    pub fn plugin_note_on(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
+        self.push_plugin_event(orbit_clap_host::PluginEvent::NoteOn {
+            key,
+            channel,
+            velocity,
+        })
+    }
+
+    /// ロード済み CLAP プラグインへ NoteOff を送る（feature 専用）。
+    #[cfg(feature = "clap-host")]
+    pub fn plugin_note_off(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
+        self.push_plugin_event(orbit_clap_host::PluginEvent::NoteOff {
+            key,
+            channel,
+            velocity,
+        })
+    }
+
+    #[cfg(feature = "clap-host")]
+    fn push_plugin_event(&self, ev: orbit_clap_host::PluginEvent) -> Result<(), WrapError> {
+        let mut guard = self
+            .clap
+            .lock()
+            .map_err(|_| WrapError::Clap("clap mutex poisoned".into()))?;
+        let ctl = guard.as_mut().ok_or_else(|| {
+            WrapError::ClapUnavailable("clap host not initialized (test backend)".into())
+        })?;
+        // event ring（1024 slot）満杯は drop して error。note rate は低く通常満杯にならない。
+        ctl.event_tx
+            .push(ev)
+            .map_err(|_| WrapError::Clap("plugin event ring full".into()))
+    }
+
+    /// feature `clap-host` 無効ビルド用の stub。
+    #[cfg(not(feature = "clap-host"))]
+    pub fn plugin_note_on(&self, _key: u8, _channel: u8, _velocity: f64) -> Result<(), WrapError> {
+        Err(WrapError::ClapUnavailable(
+            "engine built without 'clap-host' feature".into(),
+        ))
+    }
+
+    /// feature `clap-host` 無効ビルド用の stub。
+    #[cfg(not(feature = "clap-host"))]
+    pub fn plugin_note_off(&self, _key: u8, _channel: u8, _velocity: f64) -> Result<(), WrapError> {
+        Err(WrapError::ClapUnavailable(
+            "engine built without 'clap-host' feature".into(),
+        ))
+    }
+
+    /// test harness 用: CLAP post-mix peak（plugin add-mix 後の絶対値ピーク）。発音検証に使う。
+    /// `#[doc(hidden)]`。plugin 未ロード / clap 無効時は 0.0。
+    #[cfg(feature = "clap-host")]
+    #[doc(hidden)]
+    pub fn clap_post_peak(&self) -> f32 {
+        match self.clap.lock() {
+            Ok(g) => g
+                .as_ref()
+                .map(|c| f32::from_bits(c.stats.post_peak_bits.load(Ordering::Relaxed)))
+                .unwrap_or(0.0),
+            Err(_) => 0.0,
+        }
+    }
+
+    /// test harness / RT 監視用: callback-duration スナップショット（A0 §6・budget 検証）。
+    /// `#[doc(hidden)]`。clap 無効時は None。
+    #[cfg(feature = "clap-host")]
+    #[doc(hidden)]
+    pub fn clap_callback_stats(&self) -> Option<orbit_audio_native::CallbackTimeSnapshot> {
+        let guard = self.clap.lock().ok()?;
+        guard.as_ref().map(|c| c.cb_stats.snapshot())
+    }
+
+    /// test harness 用: CLAP post-mix peak をリセットする。effect 検証の two-phase 計測で
+    /// baseline（plugin 無し）と effect（plugin 有り）の位相を分けるために使う。`#[doc(hidden)]`。
+    #[cfg(feature = "clap-host")]
+    #[doc(hidden)]
+    pub fn clap_reset_post_peak(&self) {
+        if let Ok(g) = self.clap.lock() {
+            if let Some(c) = g.as_ref() {
+                c.stats.reset_post_peak();
+            }
+        }
     }
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
@@ -548,6 +790,14 @@ pub struct LoadedSample {
     pub frames: usize,
     pub channels: u16,
     pub sample_rate: u32,
+}
+
+/// `load_plugin` の結果サマリ（feature 非依存型・session.rs を feature 非依存に保つ）。
+/// feature 有効時は `orbit_clap_host::LoadedPluginInfo` から変換、無効時は stub が Err を返す。
+pub struct LoadedPluginSummary {
+    pub plugin_id: String,
+    pub plugin_name: Option<String>,
+    pub note_port_index: u16,
 }
 
 pub struct PlayHandle {
