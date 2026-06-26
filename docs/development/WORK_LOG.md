@@ -17,6 +17,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.168 docs(notation): MLTS real-time score-display design note (#339) (Jun 26, 2026)
+
+**Date**: 2026-06-26
+**Status**: ✅ 設計記録（discussion record・実装なし）
+**Branch**: `337-mixer-dsl-design`（docs のみのため同ブランチに同梱・owner 指示）
+**Issue**: #339
+**成果物**: `docs/development/POST_2.0_NOTATION_DSL_DESIGN.html`
+
+post-2.0 のリアルタイム/静的 譜面表示（MLTS notation）の設計をブレストし記録。三輪氏（音楽家）の
+「譜面表示できる？」が発端 → 本物の五線譜が要る・Pitch DSL のみ対象。
+
+**核心 = MLTS（Multi-Layered Temporal Structure）**: 層ごと beat/tempo 独立で小節線が非整列にずれ込む
+（polymeter）。現代西洋記譜は共有小節線前提で、VexFlow 素・OSMD・Verovio・MusicXML・LilyPond でも
+native に書けない → レンダラ自作必須。
+
+**ライブラリ判断 = VexFlow**（MIT・programmatic で小節線を自前配置＝MLTS に必須・active v5・SVG+CSS アニメ）。
+OSMD 不採用（MusicXML/整列小節前提・VexFlow の上）/ Verovio 不採用（LGPL+整列前提+WASM 重）/ publication=
+LilyPond だが MLTS は LilyPond でも frontier → MLTS は拡張 VexFlow が正攻法（live+publish 統一）。
+
+**real-time = 自前**（engine が timing 駆動・VexFlow は描画+カーソル overlay・cursor は transport から駆動）。
+**データブリッジ = engine 非依存**（interpreter getState の timedEvents+pitch / resolveDegree / per-seq
+beat/tempo/length / transport / midi-run / isMidi・最小は polling+WS で core 改変ゼロ）。
+
+**home（後決め・優先は engine cutover）**: 2.0.0 .vsix には載せない / engine 完成後 2.1.0 .vsix で engine
+切替 → OrbitStudio を待たず可能性 or OrbitStudio パネル。notation は engine 非依存で home 柔軟。
+**当面の優先 = engine cutover（Path A→γ→#108）**。notation build は cutover 後。
+
+**研究新規性**: MLTS 記譜に標準なし → 視覚言語の設計自体が貢献（論文の芽）。
+
+**スコープ**: 本エントリ = 設計記録のみ・実装なし。明日 demo の最小スクリプト（pitch DSL→VexFlow 静的描画）は
+gauge-by-progress の脇 spike（engine 開発を邪魔しない範囲・scratchpad）。
+
 ### 6.167 docs(engine): mixer / routing / effects / automation / module DSL design note (#337) (Jun 24, 2026)
 
 **Date**: 2026-06-24

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OrbitScore Post-2.0 — MLTS Notation（リアルタイム譜面表示）設計ノート</title>
+<style>
+  :root {
+    --ink: #1a1a1a; --bg: #fdfdfd; --muted: #5b6470; --line: #e2e6ea;
+    --accent-a: #1f6feb; --accent-b: #8957e5; --accent-c: #1a7f5a;
+    --warn-bg: #fff8e6; --warn-bd: #e6c34a; --stop-bg: #fdecef; --stop-bd: #e5736f;
+    --inv-bg: #eef4ff; --inv-bd: #1f6feb; --code-bg: #f4f6f8;
+  }
+  html { color: var(--ink); background: var(--bg); }
+  body { margin: 0 auto; max-width: 54em; padding: 48px 28px 96px;
+    font: 16px/1.65 -apple-system, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif; text-rendering: optimizeLegibility; }
+  h1 { font-size: 1.9em; margin: 0 0 .2em; letter-spacing: .01em; }
+  h2 { font-size: 1.35em; margin: 2.2em 0 .6em; padding-bottom: .25em; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.1em; margin: 1.6em 0 .4em; }
+  .sub { color: var(--muted); margin: 0 0 1.5em; font-size: .95em; }
+  p { margin: .8em 0; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font: 13.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; font: 13px/1.55 ui-monospace, Menlo, monospace; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: .3em 0; }
+  a { color: var(--accent-a); }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .9em; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .badge { display: inline-block; font-size: .72em; font-weight: 700; padding: .12em .6em; border-radius: 999px; vertical-align: middle; letter-spacing: .03em; white-space: nowrap; }
+  .b-done { background: #def7e6; color: #1a7f3c; } .b-next { background: #e6efff; color: #1f5fc0; }
+  .b-defer{ background: #fff2cc; color: #8a6d12; } .b-risk { background: #fde2e2; color: #b53a37; }
+  .callout { border-left: 4px solid; border-radius: 0 6px 6px 0; padding: 12px 16px; margin: 1.2em 0; }
+  .c-inv  { background: var(--inv-bg);  border-color: var(--inv-bd); }
+  .c-warn { background: var(--warn-bg); border-color: var(--warn-bd); }
+  .c-stop { background: var(--stop-bg); border-color: var(--stop-bd); }
+  .callout .lbl { font-weight: 700; display: block; margin-bottom: .2em; }
+  .small { color: var(--muted); font-size: .88em; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2.5em 0; }
+</style>
+</head>
+<body>
+
+<h1>MLTS Notation — リアルタイム譜面表示 設計ノート</h1>
+<p class="sub">post-2.0 · 設計ディスカッション記録（owner ブレスト 2026-06-26）· Issue #339</p>
+
+<div class="callout c-warn">
+  <span class="lbl">この文書の位置づけ</span>
+  <strong>設計ディスカッション記録</strong>であり正規仕様ではない。<strong>実装は未着手</strong>（build は engine cutover 後・home 確定後）。
+  記載の記法・API は叩き台。明日の demo 用の最小スクリプトは <strong>gauge-by-progress の脇 spike</strong>（本来の engine 開発を邪魔しない範囲）。
+</div>
+
+<h2>0. 背景</h2>
+<p>
+  三輪氏（音楽家）の「<strong>譜面表示できる？</strong>」が発端。相手が音楽家なので <strong>本物の五線譜</strong>が要る（grid/piano-roll では不可）。
+  対象は <strong>Pitch DSL のみ</strong>（audio sequence は対象外）。
+</p>
+
+<h2>1. 核心課題 = MLTS（Multi-Layered Temporal Structure）</h2>
+<div class="callout c-inv">
+  <span class="lbl">なぜ既製ツールで書けないか</span>
+  MLTS = 層（sequence）ごとに <code>beat</code>/<code>tempo</code> が独立し、<strong>小節線が非整列にずれ込む</strong>（polymeter／polytempo）。
+  現代西洋記譜は<strong>共有小節線</strong>（全段が同じ barline グリッド）を大前提とするため、<strong>VexFlow 素・Verovio・MusicXML・OSMD・さらに LilyPond でも native に書けない</strong>領域。
+  ＝ <strong>レンダラは自作が必須</strong>。問いは「何の上に作るか」だけ。
+</div>
+<p class="small">
+  正本: Pitch DSL Spec v1.1 §9.4「ポリメーター/ハーモニックリズムの干渉（MLTS 拡張）」/ <a href="BEAT_METER_SPECIFICATION.md">BEAT_METER_SPECIFICATION.md</a>
+  （1小節 = (60000/tempo)×(numerator/denominator×4) ms・per-seq 独立 → 小節線がドリフトし LCM で再同期）。
+</p>
+
+<h2>2. ライブラリ判断 — VexFlow</h2>
+<table>
+  <thead><tr><th></th><th>VexFlow <span class="badge b-done">採用</span></th><th>OSMD</th><th>Verovio</th><th>abcjs</th><th>LilyPond</th></tr></thead>
+  <tbody>
+    <tr><td>レベル/入力</td><td>低レベル・programmatic（コードで音符）</td><td>高レベル・MusicXML</td><td>MEI/MusicXML (WASM)</td><td>ABC テキスト</td><td>テキスト→PDF/SVG（offline）</td></tr>
+    <tr><td>基盤</td><td>—</td><td><strong>VexFlow の上</strong></td><td>独自</td><td>独自</td><td>独自</td></tr>
+    <tr><td>小節線の自前配置（MLTS）</td><td><strong>✅ 可</strong></td><td>❌ 整列小節前提</td><td>❌ 整列前提</td><td>❌ 整列前提</td><td>△ frontier（native 不可）</td></tr>
+    <tr><td>License</td><td><strong>MIT</strong></td><td>BSD-3</td><td>LGPLv3</td><td>MIT</td><td>GPL</td></tr>
+    <tr><td>engraving</td><td>標準・clean</td><td>標準（自動）</td><td><strong>最高</strong></td><td>良</td><td><strong>出版級</strong></td></tr>
+  </tbody>
+</table>
+
+<h3>2.1 なぜ VexFlow か（MLTS が決め手）</h3>
+<ul>
+  <li><strong>VexFlow は低レベル programmatic</strong> ＝ <strong>層ごとの小節線を自前 x 座標で置ける</strong>。これが MLTS（ずれる小節線）に必須。小節内の難所（音符グリフ・臨時記号・連桁・spacing）は VexFlow に任せ、自作するのは <strong>「MLTS レイアウト層（層ごと bar grid + 時間軸での層間整列）」だけ</strong>。MIT・active(v5)・SVG+CSS でアニメ可。</li>
+  <li><strong>OSMD は不採用</strong>: 価値 = MusicXML から標準記譜を自動レイアウト。だがその自動化は<strong>整列小節線を前提</strong>＝MLTS が破る部分そのもの。MusicXML は MLTS を表現できず、生成も冗長。<strong>OSMD は VexFlow の上</strong>なので MLTS には VexFlow の低レベル制御が結局必要で、OSMD 層はむしろ邪魔。</li>
+  <li><strong>Verovio 不採用</strong>: engraving は最高だが LGPLv3 + MEI/MusicXML（整列前提）+ WASM 重 → MLTS では優位消失。</li>
+  <li><strong>publication = LilyPond だが MLTS は LilyPond でも frontier</strong>（ずれる小節線は native 不可）。→ MLTS の出版答えは「<strong>拡張 VexFlow / 自作レンダラ</strong>」。LilyPond は標準還元できる部分の補助。</li>
+</ul>
+<div class="callout c-inv">
+  <span class="lbl">長期: 拡張 VexFlow が MLTS 記譜システムの正攻法</span>
+  MLTS はどの既製ツールも native に書けない ＝ どの道レンダラは自作する。<strong>VexFlow を MLTS-aware に拡張</strong>すれば <strong>live と publication を1レンダラに統一</strong>できる（live は今・出版品質へ後で磨く）。
+  notation-model（中間表現）→ 複数レンダラ（VexFlow / 将来 LilyPond）も将来余地。
+</div>
+
+<h2>3. real-time = 自前（live-coding 整合）</h2>
+<p>
+  <strong>engine が timing を駆動し、VexFlow は「描画 + カーソル overlay」だけ</strong>。カーソルは VexFlow/lib 自身の synth でなく
+  <strong>OrbitScore の transport（<code>getTransportPosition()</code> / now_sec）から x 座標を出して駆動</strong>する。
+  組込 playback/cursor の価値は下がり、lib は engraving + programmatic 動的描画 + license + メンテで選ぶ ＝ VexFlow が最クリーン。
+  VexFlow は SVG + CSS アニメ・要素グループ化・音符の動的追加に対応（参考: mrk21.hatenablog.com/entry/2018/06/04/103857）。
+</p>
+
+<h2>4. データブリッジ（engine 非依存・interpreter 層）</h2>
+<p>scout（#339 関連調査）で確認。<strong>すべて interpreter レベル ＝ engine 非依存（今の SC エンジンでも動く）</strong>:</p>
+<ul>
+  <li><strong>音符 + timing + pitch</strong>: <code>interpreter.getState()</code> の per-seq <code>timedEvents</code>（<code>TimedEvent.pitch</code> = degree/alteration/oct/detune・public）。</li>
+  <li><strong>staff 位置</strong>: <code>resolveDegree</code>（<code>packages/engine/src/midi/index.ts</code> public）で degree→MIDI note。</li>
+  <li><strong>per-layer MLTS grid</strong>: per-seq <code>beat / tempo / length</code>（<code>Sequence.getState()</code>）→ 1小節長。</li>
+  <li><strong>playhead / 次 swap</strong>: <code>global.getTransportPosition()</code> / <code>getQuantizedEffectPosition()</code>。</li>
+  <li><strong>pitched 判別</strong>: <code>isMidi()</code>。</li>
+  <li><strong>既存 headless 実行</strong>: <code>npm run midi-run -- &lt;file.orbs&gt;</code>（degree→MIDI 解決の既存パス・抽出に再利用可）。</li>
+  <li><strong>最小 tap</strong>: <code>getState()</code> polling + 小さな WS（core 改変ゼロ）。clean 版は <code>InterpreterV2.addObserver()</code> 追加（~10行）。WS サーバは net-new（~50行）。</li>
+</ul>
+<p class="small">→ <strong>譜面 view は engine 非依存の read-only consumer</strong>として成立。audio path / engine core / .vsix を触らない。</p>
+
+<h2>5. home（後決め・優先は engine cutover）</h2>
+<ul>
+  <li><strong>2.0.0 .vsix には載せない</strong>（owner 判断・筋が悪い）。</li>
+  <li>engine 完成 → <strong>2.1.0 .vsix で engine 切替（cutover）→ そこで OrbitStudio を待たず譜面をやれる可能性</strong> / または <strong>OrbitStudio（VSCodium）パネル</strong>。VSCodium は engine ほど重くないので <strong>その時に decide</strong>。</li>
+  <li>notation は engine 非依存なので home は柔軟。<strong>当面の優先 = engine cutover（Path A → γ → cutover #108）まで行くこと</strong>。</li>
+</ul>
+
+<h2>6. 研究新規性</h2>
+<p>MLTS 記譜には標準が無い → <strong>その視覚言語を設計すること自体が貢献</strong>（論文の芽。owner の研究志向と噛む）。</p>
+
+<h2>7. 明日の demo（最小・gauge-by-progress）</h2>
+<p>
+  締切は外した（間に合わなくて良い）。最小 = <strong>pitch DSL を VexFlow で描画するスクリプトを用意するだけ</strong>（static でも可・「なんらか見せれれば良い」）。
+  <strong>scratchpad で・本来の engine 開発を一切邪魔しない範囲で</strong>進め、進捗で判断。良ければ後で正規 spike へ昇格、ダメなら捨てる。
+  実装案: <code>midi-run</code> 経路 or <code>getState()</code> + <code>resolveDegree</code> で pitch .orbs → 音符抽出 → VexFlow で per-layer offset barline 付き静的描画（MLTS の見せ場）。
+</p>
+
+<h2>8. シーケンシング</h2>
+<div class="callout c-warn">
+  <span class="lbl">優先順</span>
+  <strong>(1) engine = Path A（daemon CLAP 統合）</strong> → γ → <strong>cutover #108</strong>（= 本来の開発・最優先）。
+  <strong>(2) notation build は cutover 後</strong>（home = 2.1.0 .vsix or OrbitStudio・後決め）。表示する pitch コンテンツは Pitch DSL v1.1（Epic #224）が供給。
+  今やるのは<strong>本ノート（設計記録）のみ</strong> + demo 用最小 spike（任意・脇）。
+</div>
+
+<hr>
+<p class="small">
+  関連: <a href="POST_2.0_NEXT_STEPS.html">POST_2.0_NEXT_STEPS.html</a>（engine roadmap）·
+  <a href="POST_2.0_MIXER_DSL_DESIGN.html">POST_2.0_MIXER_DSL_DESIGN.html</a>（mixer/routing 設計）·
+  Pitch DSL Spec v1.1（specs-v2）· 本ノートは設計ディスカッション記録（Issue #339）。実装・正規仕様化は別 issue。
+</p>
+
+</body>
+</html>
