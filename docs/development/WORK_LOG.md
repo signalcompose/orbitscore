@@ -17,6 +17,67 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.168 docs(notation): MLTS real-time score-display design note (#339) (Jun 26, 2026)
+
+**Date**: 2026-06-26
+**Status**: ✅ 設計記録（discussion record・実装なし）
+**Branch**: `337-mixer-dsl-design`（docs のみのため同ブランチに同梱・owner 指示）
+**Issue**: #339
+**成果物**: `docs/development/POST_2.0_NOTATION_DSL_DESIGN.html`
+
+post-2.0 のリアルタイム/静的 譜面表示（MLTS notation）の設計をブレストし記録。三輪氏（音楽家）の
+「譜面表示できる？」が発端 → 本物の五線譜が要る・Pitch DSL のみ対象。
+
+**核心 = MLTS（Multi-Layered Temporal Structure）**: 層ごと beat/tempo 独立で小節線が非整列にずれ込む
+（polymeter）。現代西洋記譜は共有小節線前提で、VexFlow 素・OSMD・Verovio・MusicXML・LilyPond でも
+native に書けない → レンダラ自作必須。
+
+**ライブラリ判断 = VexFlow**（MIT・programmatic で小節線を自前配置＝MLTS に必須・active v5・SVG+CSS アニメ）。
+OSMD 不採用（MusicXML/整列小節前提・VexFlow の上）/ Verovio 不採用（LGPL+整列前提+WASM 重）/ publication=
+LilyPond だが MLTS は LilyPond でも frontier → MLTS は拡張 VexFlow が正攻法（live+publish 統一）。
+
+**real-time = 自前**（engine が timing 駆動・VexFlow は描画+カーソル overlay・cursor は transport から駆動）。
+**データブリッジ = engine 非依存**（interpreter getState の timedEvents+pitch / resolveDegree / per-seq
+beat/tempo/length / transport / midi-run / isMidi・最小は polling+WS で core 改変ゼロ）。
+
+**home（後決め・優先は engine cutover）**: 2.0.0 .vsix には載せない / engine 完成後 2.1.0 .vsix で engine
+切替 → OrbitStudio を待たず可能性 or OrbitStudio パネル。notation は engine 非依存で home 柔軟。
+**当面の優先 = engine cutover（Path A→γ→#108）**。notation build は cutover 後。
+
+**研究新規性**: MLTS 記譜に標準なし → 視覚言語の設計自体が貢献（論文の芽）。
+
+**スコープ**: 本エントリ = 設計記録のみ・実装なし。明日 demo の最小スクリプト（pitch DSL→VexFlow 静的描画）は
+gauge-by-progress の脇 spike（engine 開発を邪魔しない範囲・scratchpad）。
+
+### 6.167 docs(engine): mixer / routing / effects / automation / module DSL design note (#337) (Jun 24, 2026)
+
+**Date**: 2026-06-24
+**Status**: ✅ 設計ノート作成（discussion record・実装なし）
+**Branch**: `337-mixer-dsl-design`
+**Issue**: #337
+**成果物**: `docs/development/POST_2.0_MIXER_DSL_DESIGN.html`（手書き HTML・既存 specs スタイル）
+
+post-2.0 engine track の **DSL 側未設計領域**（mixer / routing / effects / automation / module）を
+owner とブレストし、設計ディスカッション記録として HTML に固定した。engine 側ホスティング（γ/δ）は
+`POST_2.0_NEXT_STEPS.html` §3 にあるが、それを DSL からどう叩くか（plugin 呼び出し / effect chain /
+send-return / aux / automation / ファイル分割）は未設計だった。
+
+**統合軸**: **reconciliation key = 名前**（宣言的グラフ + 名前キー差分適用。routing / effect ハンドル /
+module identity / recovery を束ねる）。
+
+**確定**（このブレスト）: ルーティングの向き=常に source が行き先を指す / routing 4 ノード（source・
+sum(group)・aux(send-return)・output(終端)）+ output 2 ドメイン（audio / data=IAC）/ chain 順=信号フロー
+（source 先頭・inst=音源置換・play=パターン直交・send 位置=tap）/ automation 3 層（時間決定論 pre-render /
+control-rate signal modulation / semantic=north-star 対象外）/ Global 2 分割（project=永続グラフ /
+performance=live param tempo 等）/ SOLO(a,b,c)=集合キーワード（RUN/LOOP/MUTE の group-diff 再利用・
+multi-solo がタダ）/ mixer 未挙げ項目 全部 in（solo・sidechain入力・PDC・metering・nesting）/
+capture seam の用途 3 つ（検証・recovery ギャップ・render/mastering）/ VST は format-agnostic DSL で δ で差込。
+
+**未決 / OrbitStudio-era / engine 必須**は HTML §11 決定台帳に仕分け記録。
+
+**プロセス**: docs-only のため full PR レビュー（simplify + pr-review-team）はオーバーエンジニアリング
+（CLAUDE.md）→ スキップ。正規仕様化・実装は別 issue。HTML は well-formed 検証済。
+
 ### 6.166 test(engine): A4-PR4 active-loops across-respawn e2e — full DSL / interpreter-driven (#335) (Jun 23, 2026)
 
 **Date**: 2026-06-23
