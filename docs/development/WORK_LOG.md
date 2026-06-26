@@ -17,6 +17,51 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.169 feat(engine): daemon CLAP integration — in-process plugin hosting (#340) (Jun 26, 2026)
+
+**Date**: 2026-06-26
+**Status**: ✅ 実装完了（gated 実機テスト 2 本 GREEN・review 前）
+**Branch**: `340-daemon-clap-integration`
+**Issue**: #340（post-2.0 engine track / Epic #292・Path A = γ の前提 + cutover #108 の背骨）
+
+spike で実証した in-process clack-host を本番 daemon `orbit-audio-daemon` に統合し、effect plugin が
+daemon 経由で RT-safe に audio を加工できるようにした。**Step0 検証 = COMMIT 判定**（fork せず）:
+spike の「Mutex vs lock-free」前提は古く、両経路とも `engine.render` の同一 `try_lock` を通り plugin は
+構造上 Mutex-free。clack は pre-1.0 だが git pin で clean build。effect 型 CLAP plugin も最小実装で成立。
+
+**アーキ（clack 境界）**: native は permissive な mixing core を保ち clack に依存しない。`PostProcessor`
+trait（`&mut [f32]` を in-place 変換）を native に置き（既存 `PostMixSink`/`AudioBackend` inversion を
+踏襲）、clack 実体は permissive crate `orbit-clap-host` に隔離。daemon が `clap-host` feature 配下で
+`ClapHost`(!Send) を**専用 OS スレッド**で所有し、plugin の hot-install は wait-free ring 経由で audio
+thread に渡す。
+
+**effect topology（serial insert）**: instrument（parallel add-mix）と区別。
+- `HostAudioBuffers::has_audio_input`（audio 入力ポートの有無）で経路分岐。
+- effect: engine の interleaved 出力を plugin の planar 入力へ de-interleave コピー
+  （`set_input_from_interleaved`）→ process → 出力で hardware sum を**上書き**（`replace_cpal_buffer`）。
+- instrument: 入力を無音化（`set_input_silent`）→ process → 出力を add-mix（`add_to_cpal_buffer`）。
+- mux/downmix は `fill_muxed_from_main_output` に集約し add/replace で共有。
+
+**carry-forward 3（A0 §13・RT 正確性）= 解決**:
+1. teardown は StreamGuard の field drop 順で強制（`ClapTeardownGuard` が audio thread で
+   `stop_processing` → stream 停止 → 専用スレッドで instance deactivate）。暗黙 Drop の wrong-thread
+   stop_processing（strict plugin で UB）を回避。
+2. `request_callback` は `Arc<AtomicBool>` で lock-free（mpsc の alloc+mutex を排除）。
+3. CLAP `EventBuffer` は ring capacity でサイズ固定し RT realloc を防止（debug_assert で検出）。
+
+**Done 証拠（実機 gated・A0 §6: CoreAudio+cpal は xrun 不発火 → RT 健全性は callback 実測時間）**:
+- effect gated（`clap_effect_gated.rs`・two-phase ratio）: baseline 0.70711 → effected 0.35355 =
+  **ratio 0.50000**（EFFECT_GAIN=0.5 ちょうど）。入力配線死=~0 / replace 欠落=~1.5 を判別する設計で、
+  de-interleave 入力 + replace 出力の両方が機能している証拠。callback max 859µs（budget ~10.8ms の ~8%）。
+- synth gated（`clap_host_gated.rs`・PR1 回帰）: post_mix_peak 0.25・callback max 449µs。
+- cargo workspace 全 green / clippy・fmt clean / npm 1188 passed（SC default path 不変）。
+
+**スコープ外（fence）**: γ の out-of-process sandbox は対象外（次フェーズ）。`link-audio` と `clap-host`
+は当面排他（1 callback での render 順序統合は defer・`compile_error!` で弾く）。audio `play()` 意味論・
+SC default path は不変。
+
+---
+
 ### 6.168 docs(notation): MLTS real-time score-display design note (#339) (Jun 26, 2026)
 
 **Date**: 2026-06-26
