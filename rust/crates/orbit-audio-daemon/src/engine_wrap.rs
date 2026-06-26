@@ -69,6 +69,13 @@ pub struct EngineWrap {
     /// production read-path ではこの addend は常に 0。`stream_stats` の `record_xrun`（本番と同一
     /// atomic を書く統合 seam）とは異なり、これは本番経路から分離した並行カウンタである点に注意。
     link_egress_drops: Arc<AtomicU64>,
+    /// CLAP plugin `process()` エラーの **test 注入用** カウンタ（本番は常に 0）。
+    /// `clap_process_error_count` がこれを加算する。integration test は plugin をロードしない
+    /// （= 実 error 源が無い）ため、この counter が clap-host feature の有無に依らず 1 Hz ticker の
+    /// CLAP_PROCESS_ERROR 発火を駆動する唯一の seam になる（[`Self::clap_process_errors_arc`]）。
+    /// 本番の error は clap mutex 内の `ClapProcessorStats::process_error_count` が供給するので、
+    /// production read-path ではこの addend は常に 0（`link_egress_drops` と同設計）。
+    clap_process_errors: Arc<AtomicU64>,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
     /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
@@ -263,6 +270,7 @@ impl EngineWrap {
             stream_stats,
             stopped_play_ids: Mutex::new(HashSet::new()),
             link_egress_drops: Arc::new(AtomicU64::new(0)),
+            clap_process_errors: Arc::new(AtomicU64::new(0)),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
@@ -509,7 +517,7 @@ impl EngineWrap {
     /// 残し、以降の発火を抑制する（contention と poison を同一視しない）。
     #[cfg(feature = "clap-host")]
     pub fn clap_process_error_count(&self) -> u64 {
-        match self.clap.try_lock() {
+        let control_errors = match self.clap.try_lock() {
             Ok(g) => g
                 .as_ref()
                 .map(|c| c.stats.process_error_count.load(Ordering::Relaxed))
@@ -517,18 +525,19 @@ impl EngineWrap {
             Err(std::sync::TryLockError::WouldBlock) => 0,
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 tracing::warn!(
-                    "clap mutex poisoned; clap_process_error_count reporting 0 \
+                    "clap mutex poisoned; clap_process_error_count reporting 0 for control errors \
                      (CLAP_PROCESS_ERROR suppressed until daemon restart)"
                 );
                 0
             }
-        }
+        };
+        control_errors + self.clap_process_errors.load(Ordering::Relaxed)
     }
 
-    /// feature `clap-host` 無効ビルド用の stub。CLAP が無いので常に 0。
+    /// feature `clap-host` 無効ビルド用の stub。本番は常に 0（control が無い）。test 注入分のみ反映。
     #[cfg(not(feature = "clap-host"))]
     pub fn clap_process_error_count(&self) -> u64 {
-        0
+        self.clap_process_errors.load(Ordering::Relaxed)
     }
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
@@ -568,6 +577,14 @@ impl EngineWrap {
     #[doc(hidden)]
     pub fn link_egress_drops_arc(&self) -> Arc<AtomicU64> {
         self.link_egress_drops.clone()
+    }
+
+    /// test harness 用: CLAP process error の注入カウンタを取得する。`link_egress_drops_arc` と同形で、
+    /// 下層 counter は本番経路から分離した注入専用（本番 0）。integration test から `fetch_add` して
+    /// 1 Hz ticker の CLAP_PROCESS_ERROR 発火を駆動する（plugin ロード不要）。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn clap_process_errors_arc(&self) -> Arc<AtomicU64> {
+        self.clap_process_errors.clone()
     }
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から
