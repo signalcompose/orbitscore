@@ -11,6 +11,7 @@ use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use orbit_audio_daemon::backend::StubBackend;
 use orbit_audio_daemon::engine_wrap::EngineWrap;
+use orbit_audio_daemon::protocol::EVENT_STREAM_STATS;
 use orbit_audio_daemon::server;
 use orbit_audio_native::StreamStats;
 use serde_json::Value;
@@ -134,7 +135,7 @@ pub async fn recv_reply_with_events(ws: &mut WsClient, id: &str) -> (Value, Vec<
         if msg["id"] == id {
             return (msg, events);
         }
-        if msg["event"] == "StreamStats" {
+        if msg["event"] == EVENT_STREAM_STATS {
             stream_stats_drained += 1;
             continue;
         }
