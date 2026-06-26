@@ -897,6 +897,7 @@ dependencies = [
  "orbit-audio-core",
  "orbit-audio-native",
  "orbit-audio-verify",
+ "orbit-clap-host",
  "orbit-link-audio",
  "rtrb",
  "serde",
@@ -939,6 +940,18 @@ dependencies = [
  "orbit-audio-core",
  "wasm-bindgen",
  "web-sys",
+]
+
+[[package]]
+name = "orbit-clap-host"
+version = "0.0.1"
+dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "orbit-audio-native",
+ "rtrb",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

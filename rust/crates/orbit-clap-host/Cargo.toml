@@ -1,0 +1,32 @@
+# orbit-clap-host — in-process CLAP plugin hosting library for OrbitScore daemon.
+#
+# orbit-clap-spike で実証済みの CLAP hosting を production library crate に移植。
+# Issue #340 (daemon CLAP integration)。
+#
+# clack は pre-1.0（breaking 変更の可能性）のため、A0 で実証済みのコミットに git pin する。
+[package]
+name = "orbit-clap-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "In-process CLAP plugin hosting library for OrbitScore daemon (Issue #340)"
+
+[lib]
+name = "orbit_clap_host"
+path = "src/lib.rs"
+
+[dependencies]
+orbit-audio-native = { path = "../orbit-audio-native" }
+clack-host = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744", features = [
+  "clack-host",
+  "audio-ports",
+  "note-ports",
+  "log",
+  "params",
+] }
+rtrb = "0.3"
+thiserror = { workspace = true }
+tracing = { workspace = true }

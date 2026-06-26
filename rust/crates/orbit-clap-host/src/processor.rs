@@ -1,0 +1,250 @@
+//! Audio-thread RT プロセッサ: engine render 後のバッファに CLAP plugin を add-mix する。
+//!
+//! orbit-clap-spike の audio.rs（OrbitAudioProcessor）から移植・再設計。主な変更点:
+//! - `Engine` と `PostMixSink` を削除: data は engine render 済みで渡される（PostProcessor seam）。
+//! - `Arc<AudioThreadStats>` を `Arc<ClapProcessorStats>` に置換（callback timing は
+//!   native の CallbackTimeStats が担う）。
+//! - `impl orbit_audio_native::PostProcessor for ClapPostProcessor` を実装。
+//! - carry-forward #2: `callback_requested` は Arc<AtomicBool> で lock-free（host.rs 参照）。
+//! - carry-forward #3: `event_scratch` は ring capacity でサイズを固定し RT realloc を防ぐ。
+
+use crate::buffers::HostAudioBuffers;
+use crate::events::{drain_to_event_buffer, PluginEventConsumer};
+use crate::host::OrbitClapHost;
+
+use clack_host::events::io::EventBuffer;
+use clack_host::prelude::{OutputEvents, StartedPluginAudioProcessor};
+use orbit_audio_native::PostProcessor;
+
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
+
+/// audio thread から更新し、制御スレッド（daemon ticker）が読む統計。
+///
+/// callback timing の計測は `orbit_audio_native::CallbackTimeStats` が担う。
+/// ここは CLAP plugin 固有の統計のみを保持する。
+pub struct ClapProcessorStats {
+    /// plugin.process() がエラーを返した回数。
+    /// plugin が毎ブロックでエラーを返してもサイレントにならないようカウントする。
+    pub process_error_count: AtomicU64,
+    /// hot-install が着地した callback 番号（u64::MAX = 未 install）。
+    pub installed_at_callback: AtomicU64,
+    /// post-mix ピーク振幅のビット表現（f32::to_bits）。
+    /// 非負 f32 のビットパターンは符号なし整数として単調なので atomic fetch_max が使える。
+    pub post_peak_bits: AtomicU32,
+    /// この processor が process() された回数。
+    pub callback_count: AtomicU64,
+}
+
+impl ClapProcessorStats {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            process_error_count: AtomicU64::new(0),
+            installed_at_callback: AtomicU64::new(u64::MAX), // u64::MAX = 未インストール
+            post_peak_bits: AtomicU32::new(0),
+            callback_count: AtomicU64::new(0),
+        })
+    }
+
+    /// post-mix peak を 0 にリセットする。`post_peak_bits` は `fetch_max` で累積するため、
+    /// effect 検証の two-phase 計測（plugin 無し baseline → plugin 有り）で位相を分けるのに使う。
+    /// audio thread の `fetch_max` と並行しても安全（store 後に audio thread が halved peak を
+    /// 積み直す）。test harness 専用 seam。
+    pub fn reset_post_peak(&self) {
+        self.post_peak_bits.store(0, Ordering::Relaxed);
+    }
+}
+
+/// 制御スレッド → audio thread への hot-install ペイロード。
+///
+/// 全フィールドは `Send` かつ制御スレッドで事前確保済み。callback 内でのインストールは
+/// plain move のみ（alloc / lock なし）。
+pub struct InstallMsg {
+    /// 起動済みプラグイン audio processor（`Send`; audio thread へ引き渡す）。
+    pub plugin: StartedPluginAudioProcessor<OrbitClapHost>,
+    /// プラグイン用オーディオバッファ（制御スレッドで事前確保）。
+    pub buffers: HostAudioBuffers,
+    /// note 入力ポートインデックス。
+    pub note_port_index: u16,
+}
+
+/// install ring の consumer 側（audio thread が保持）。
+pub type InstallConsumer = rtrb::Consumer<InstallMsg>;
+
+/// `orbit_audio_native::PostProcessor` を実装する CLAP audio-thread オーナー。
+///
+/// cpal closure（`move |data, _| proc.process(data)`）が所有し、audio thread 上で排他的に動く。
+/// `plugin` / `buffers` は `Option` で、stream がエンジンのみで動いてから plugin が
+/// install される（static: stream 前に install / hot-install: install ring 経由）。
+pub struct ClapPostProcessor {
+    /// CLAP plugin audio processor（install されるまでは None）。
+    plugin: Option<StartedPluginAudioProcessor<OrbitClapHost>>,
+    /// lock-free event ring consumer（A0 §4.2）。
+    event_consumer: PluginEventConsumer,
+    /// CLAP event バッファ（毎 callback クリア・再利用）。carry-forward #3: ring capacity で
+    /// 事前サイズ確保し、1回のフルドレインで realloc しないことを保証する。
+    event_scratch: EventBuffer,
+    /// plugin 用オーディオバッファ（install と同時に着地）。None = 未インストール。
+    buffers: Option<HostAudioBuffers>,
+    /// steady sample counter（A0 §4.1 step f）。
+    steady_counter: u64,
+    /// note ポートインデックス（install 時に設定）。
+    note_port_index: u16,
+    /// 統計（制御スレッドが読む）。
+    stats: Arc<ClapProcessorStats>,
+    /// hot-install ring（制御スレッド → audio thread）。plugin が None のときのみ pop する。
+    install_rx: InstallConsumer,
+    /// event ring の capacity（carry-forward #3: debug_assert 用）。
+    event_ring_cap: usize,
+    /// carry-forward #1: teardown 要求フラグ（daemon → audio thread）。stream を止める前に
+    /// daemon がこれを立てると、**audio thread の callback 内で** `stop_processing()` を呼んで
+    /// plugin を停止・drop する（CLAP 仕様: stop_processing は audio thread で呼ぶ。暗黙 Drop は
+    /// stream drop 時に別スレッドで走り strict plugin で UB＝A0 §13 #1）。
+    teardown_requested: Arc<AtomicBool>,
+    /// carry-forward #1: teardown 完了フラグ（audio thread → daemon）。callback が stop_processing を
+    /// 終えたら立てる。daemon はこれを待ってから stream を drop する（plugin は既に None なので
+    /// closure drop で wrong-thread stop_processing が走らない）。
+    teardown_done: Arc<AtomicBool>,
+}
+
+impl ClapPostProcessor {
+    /// 新規作成。`event_ring_capacity` は EventBuffer の初期確保サイズと debug_assert に使う。
+    /// `teardown_requested` / `teardown_done` は carry-forward #1 用の協調フラグ（`new_clap_host`
+    /// が生成し、daemon 側にも clone を渡す）。
+    pub fn new(
+        event_consumer: PluginEventConsumer,
+        install_rx: InstallConsumer,
+        stats: Arc<ClapProcessorStats>,
+        event_ring_capacity: usize,
+        teardown_requested: Arc<AtomicBool>,
+        teardown_done: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            plugin: None,
+            event_consumer,
+            // carry-forward #3: ring capacity でサイズを固定し、フルドレインでも realloc しない。
+            event_scratch: EventBuffer::with_capacity(event_ring_capacity),
+            buffers: None,
+            steady_counter: 0,
+            note_port_index: 0,
+            stats,
+            install_rx,
+            event_ring_cap: event_ring_capacity,
+            teardown_requested,
+            teardown_done,
+        }
+    }
+
+    /// plugin を install する（static モード: stream 構築前に制御スレッドから呼ぶ）。
+    pub fn install(&mut self, msg: InstallMsg) {
+        self.plugin = Some(msg.plugin);
+        self.buffers = Some(msg.buffers);
+        self.note_port_index = msg.note_port_index;
+    }
+}
+
+impl PostProcessor for ClapPostProcessor {
+    /// `data` は engine が既に render 済みの interleaved f32。
+    ///
+    /// engine.render は **呼ばない**（native callback が render 後にこの seam を呼ぶ）。
+    /// plugin output を add-mix (+= ) するのみ（A0 §4.1 step d）。
+    fn process(&mut self, data: &mut [f32]) {
+        // carry-forward #1: teardown 要求が来たら、**この audio thread で** plugin を stop_processing
+        // してから drop する（暗黙 Drop は stream drop 時に別スレッドで走り CLAP 違反＝strict plugin で
+        // UB）。stop_processing は Started → Stopped に消費し、Stopped の drop は benign。以降の callback
+        // は plugin=None で早期 return（data は engine render 済みのまま素通し）。冪等。
+        if self.teardown_requested.load(Ordering::Acquire) {
+            if let Some(p) = self.plugin.take() {
+                let _ = p.stop_processing();
+            }
+            self.buffers = None;
+            self.teardown_done.store(true, Ordering::Release);
+            return;
+        }
+
+        // hot-install: plugin が未インストールなら install ring を確認する（pop は wait-free）。
+        if self.plugin.is_none() {
+            if let Ok(msg) = self.install_rx.pop() {
+                self.install(msg);
+                // installed_at_callback: hot-install が着地した callback 番号を記録。
+                let at = self.stats.callback_count.load(Ordering::Relaxed);
+                self.stats
+                    .installed_at_callback
+                    .store(at, Ordering::Relaxed);
+            }
+        }
+
+        // plugin パス（インストール済みの場合のみ）。
+        if let (Some(plugin), Some(buffers)) = (self.plugin.as_mut(), self.buffers.as_mut()) {
+            // rtrb ring → CLAP InputEvents（block-start offset, A0 §4.2）。
+            drain_to_event_buffer(
+                &mut self.event_consumer,
+                &mut self.event_scratch,
+                self.note_port_index,
+            );
+            // carry-forward #3: event_scratch は ring capacity でサイズ固定。future の変更で
+            // ring が大きくなるか PluginEvent が複数の CLAP event を生む場合、debug build で検出。
+            debug_assert!(
+                self.event_scratch.len() as usize <= self.event_ring_cap,
+                "event_scratch が ring capacity を超えた — audio thread で realloc が発生する"
+            );
+            let input_events = self.event_scratch.as_input();
+
+            // plugin バッファサイズを確認する（BufferSize::Fixed なら zero-cost）。
+            buffers.ensure_buffer_size_matches(data.len());
+            let frame_count = buffers.cpal_buf_len_to_frame_count(data.len());
+
+            // effect（serial insert）/ instrument（parallel add-mix）の経路分岐（PR2・Issue #340）。
+            // effect: engine 出力を plugin 入力へ流し、出力で data を上書きする。
+            // instrument: 入力を無音にし、出力を data に add-mix する。
+            let is_effect = buffers.has_audio_input();
+            if is_effect {
+                buffers.set_input_from_interleaved(data);
+            } else {
+                buffers.set_input_silent();
+            }
+            let (ins, mut outs) = buffers.prepare_plugin_buffers(data.len());
+
+            // エラーはサイレントに無視できない: 毎ブロックでエラーを返す plugin が
+            // 見えなくなるため、process_error_count でカウントする（RT 安全: atomic のみ）。
+            if plugin
+                .process(
+                    &ins,
+                    &mut outs,
+                    &input_events,
+                    &mut OutputEvents::void(),
+                    Some(self.steady_counter),
+                    None,
+                )
+                .is_err()
+            {
+                self.stats
+                    .process_error_count
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+
+            // effect は overwrite（serial insert）、instrument は add-mix（A0 §4.1 step d）。
+            if is_effect {
+                buffers.replace_cpal_buffer(data);
+            } else {
+                buffers.add_to_cpal_buffer(data);
+            }
+
+            // steady counter を進める（A0 §4.1 step f、plugin ブランチ内のみ）。
+            self.steady_counter += frame_count as u64;
+        } else {
+            // plugin 未インストール: ring の note をドレイン&破棄（ring が詰まらないように）。
+            while self.event_consumer.pop().is_ok() {}
+        }
+
+        // callback_count を更新する（hot-install の着地タイミング記録に使う）。
+        self.stats.callback_count.fetch_add(1, Ordering::Relaxed);
+
+        // post-mix ピーク更新: abs max を atomic fetch_max で記録。
+        // 非負 f32 のビットパターンは符号なし整数として単調なので fetch_max が正しく機能する。
+        let peak_bits = data.iter().map(|s| s.abs().to_bits()).max().unwrap_or(0);
+        self.stats
+            .post_peak_bits
+            .fetch_max(peak_bits, Ordering::Relaxed);
+    }
+}
