@@ -55,7 +55,15 @@ verify テストの WAV fixture は git-tracked（CI で `cargo test` 可）。
 「budget 圧迫回避」を主張していたが events vec から外すだけで loop counter には効いていなかった）。
 ubuntu の scheduling 差で reply 到達前に 64 を超過。修正 = **`StreamStats` を budget に数えない**
 （非 StreamStats を 64 で cap・anti-hang の絶対上限 backstop 併設・reply 未達時は何を見たかを panic に出力）。
-挙動は behavior-preserving（macOS 19/19・ubuntu は push で検証）。
+挙動は behavior-preserving（macOS 19/19・ubuntu は push で検証）。修正後 CI で `fmt / clippy / test` 1m43s green
+（7 テスト含む全 19 が ubuntu でも pass）= 仮説確定。
+
+**cargo-deny job の network 堅牢化**: 同 CI で `license / dependency gate`（cargo-deny）が 10s で fail。原因は
+依存・config ではなく **crates.io sparse-index 取得の transient flake**（`cargo metadata` の index 更新が
+HTTP2 framing / SSL unexpected eof）。`rust` job は rust-cache で registry が温まり network 依存が低い一方、
+**cargo-deny job は toolchain/cache 無しで毎回 cold fetch** していた。対策: cargo-deny job に
+`dtolnay/rust-toolchain@stable` + `Swatinem/rust-cache@v2` + `CARGO_NET_RETRY=10` を追加（registry を温め
+cold fetch への露出を減らす）。
 
 ---
 

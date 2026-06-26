@@ -60,9 +60,26 @@ jobs:
     defaults:
       run:
         working-directory: rust
+    env:
+      # cargo-deny は `cargo metadata` 経由で crates.io sparse-index を更新する。
+      # runner では index 取得が HTTP2/SSL の transient blip で失敗することがある
+      # （観測例: "Error in the HTTP2 framing layer" / "unexpected eof while reading"）。
+      # 既定 retry=3 では落ちたため引き上げる。registry は下の rust-cache でも温める。
+      CARGO_NET_RETRY: "10"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      # cargo-deny 自体は cargo を要するが、この job は build しないため registry が
+      # 毎回 cold になり network に依存する。toolchain + cache で registry index を
+      # 温め、cold fetch（= flake 源）への露出を減らす。
+      - name: Setup Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
