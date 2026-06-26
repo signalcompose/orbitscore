@@ -170,3 +170,53 @@ impl Drop for ClapTeardownGuard {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // carry-forward #1: teardown_done が事前に立っていれば即座に抜ける（happy path で deadlock しない）。
+    #[test]
+    fn teardown_guard_exits_immediately_when_done_preset() {
+        let requested = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(true)); // audio thread が既に ack 済み
+        let t0 = Instant::now();
+        drop(ClapTeardownGuard::new(requested.clone(), done));
+        let elapsed = t0.elapsed();
+        assert!(
+            requested.load(Ordering::Acquire),
+            "teardown_requested を必ず立てる"
+        );
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "done 事前 set 時は即抜け（実測 {}ms）",
+            elapsed.as_millis()
+        );
+    }
+
+    // carry-forward #1 安全弁: audio thread が ack を返さない（device が callback を配送しない）異常系でも
+    // deadlock せず TEARDOWN_TIMEOUT 付近で抜ける。早すぎる exit は while 条件の反転を、抜けない場合は
+    // deadline 比較の誤りを捕捉する。
+    #[test]
+    fn teardown_guard_times_out_without_deadlock_when_done_never_set() {
+        let requested = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false)); // 永遠に立たない
+        let t0 = Instant::now();
+        drop(ClapTeardownGuard::new(requested.clone(), done));
+        let elapsed = t0.elapsed();
+        assert!(
+            requested.load(Ordering::Acquire),
+            "teardown_requested を必ず立てる"
+        );
+        assert!(
+            elapsed >= Duration::from_millis(400),
+            "deadline まで待つ（実測 {}ms — 早すぎる exit は while 条件反転を疑う）",
+            elapsed.as_millis()
+        );
+        assert!(
+            elapsed < Duration::from_millis(1500),
+            "deadlock せず timeout で抜ける（実測 {}ms）",
+            elapsed.as_millis()
+        );
+    }
+}

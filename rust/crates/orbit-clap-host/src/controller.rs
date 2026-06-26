@@ -214,9 +214,11 @@ impl ClapHost {
 
     /// プラグインをシャットダウンする（teardown）。
     ///
-    /// carry-forward #1: stop_processing は audio thread で行う必要がある。
-    /// daemon は stream drop（audio processor drop）後にこの関数を呼ぶこと。
-    /// TODO（carry-forward #1）: 明示的な stop_processing API を将来追加する。
+    /// carry-forward #1: stop_processing は audio thread で行う必要がある。teardown 本体は daemon 側の
+    /// `ClapTeardownGuard`（stream 停止前に audio thread で stop_processing を済ませ ack を待つ）で本 PR に
+    /// て解決済み。この関数は stream drop（audio processor drop）後に呼ばれ、instance drop による
+    /// deactivate を home thread で実行する役割を担う。
+    /// 将来の改善（必須ではない）: 専用の明示的 stop_processing API を controller に持たせる。
     pub fn shutdown(&mut self) {
         // instance drop 時に CLAP の deactivate が実行される。
         // 前提: audio processor（StartedPluginAudioProcessor）は既に drop 済み（stream drop 後）。

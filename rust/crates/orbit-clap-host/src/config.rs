@@ -123,14 +123,20 @@ pub fn get_config_from_ports(
     let Some(ports) = handle.get_extension::<PluginAudioPorts>() else {
         // 入力 fallback（empty）は has_audio_input=false を導き、effect でも instrument 経路
         // （add-mix）に回す。effect plugin がこれに当たると素通し（dry）になるため warn で surface する。
+        // 誤ルート注記は input fallback のみに該当する（output fallback は default stereo を
+        // 仮定するだけでルーティングには影響しない）。
         tracing::warn!(
             is_input,
-            "[orbit-clap-host] plugin に AudioPorts エクステンションなし; {} を仮定（input fallback は \
-             effect→instrument 誤ルートになりうる）",
+            "[orbit-clap-host] plugin に AudioPorts エクステンションなし; {} を仮定{}",
             if is_input {
                 "入力なし"
             } else {
                 "デフォルトステレオ出力"
+            },
+            if is_input {
+                "（input fallback は effect→instrument 誤ルートになりうる）"
+            } else {
+                ""
             }
         );
         // シンセは入力ポートなし → empty。出力はデフォルトステレオ。
@@ -165,7 +171,14 @@ pub fn get_config_from_ports(
             },
         };
 
-        if info.flags.contains(AudioPortFlags::IS_MAIN) && main_port_index.replace(i).is_some() {
+        // main port index は CLAP のループ index `i` ではなく `discovered` 内の格納位置で持つ。
+        // `get()` が None を返したポートは push されずスキップされる（filtered list）ので、`i` を
+        // 保存すると後段で `output_port_channels[main_port_index]` 等が境界外を参照し audio thread
+        // （cpal C callback）で panic = プロセス abort になりうる。push 直前の `discovered.len()` が
+        // このポートの格納位置に一致する。
+        if info.flags.contains(AudioPortFlags::IS_MAIN)
+            && main_port_index.replace(discovered.len() as u32).is_some()
+        {
             tracing::warn!("[orbit-clap-host] プラグインが複数の main ポートを定義している");
         }
 

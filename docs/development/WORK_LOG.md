@@ -20,7 +20,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.169 feat(engine): daemon CLAP integration — in-process plugin hosting (#340) (Jun 26, 2026)
 
 **Date**: 2026-06-26
-**Status**: ✅ 実装完了（gated 実機テスト 2 本 GREEN・review 前）
+**Status**: ✅ 実装完了 + pr-review-team round 2 で Critical/Important=0 収束（gated 実機テスト 2 本 GREEN）
 **Branch**: `340-daemon-clap-integration`
 **Issue**: #340（post-2.0 engine track / Epic #292・Path A = γ の前提 + cutover #108 の背骨）
 
@@ -59,6 +59,29 @@ thread に渡す。
 **スコープ外（fence）**: γ の out-of-process sandbox は対象外（次フェーズ）。`link-audio` と `clap-host`
 は当面排他（1 callback での render 順序統合は defer・`compile_error!` で弾く）。audio `play()` 意味論・
 SC default path は不変。
+
+**/code:pr-review-team（4専門・round 1）**: code-reviewer/silent-failure-hunter/pr-test/comment を並行起動。
+Important 修正 = effect process 失敗時の 1-block 無音化（`process_ok` で出力配線を gate し失敗時は dry 素通し）/
+`ClapPostProcessor` Drop で plugin 残留を error log（carry-forward #1 検知点）/ double-load guard
+（`AlreadyLoaded`）/ `parse_midi_channel` レンジ検証 / eprintln→tracing / mutex-poison を warn で区別。
+test 追加（非ステレオ mux ×5・post_peak 不変式・CLAP error code/channel）。**Commit 8fa7c41**。
+
+**/code:pr-review-team（4専門・round 2）**: round-1 で足した新規コードを再レビュー。**Critical 0 / Important 3**:
+1. (code-reviewer opus) `config.rs` `main_port_index` が CLAP ループ index を保存するが `discovered` は
+   `get()==None` をスキップした filtered list → 早いポート欠落 + 後のポート IS_MAIN で境界外参照 → audio
+   thread（cpal C callback）で panic = プロセス abort。push 直前の `discovered.len()` を保存して修正。
+2. (silent-failure-hunter opus) `process_error_count` が production で write-only（誰も読まない）→ effect=dry /
+   instrument=無音 の失敗が不可視。既存 1Hz ticker に `CLAP_PROCESS_ERROR` WARNING を配線
+   （`LINK_EGRESS_DROP` パターン踏襲・defer せず実配線）。
+3. (pr-test-analyzer) `ClapTeardownGuard` timeout 経路に unit test 欠如 → 実 plugin 不要の timeout/early-exit
+   test 2 本追加（deadlock 防止保証・while 条件反転検知）。
+Minor 採用: velocity を 0.0..=1.0 に clamp / pre-load note が黙って drop される旨の doc note / gated に
+double-load `AlreadyLoaded` assertion / コメント正確性 3 件（`Sender` は Send+Sync で Mutex 理由は rtrb
+`Producer` の `&mut`+`!Sync` / carry-forward #1 は本 PR で解決済み・TODO 文言修正 / config warn 括弧は input
+fallback のみ該当）。3 経路（effect-error-bypass / double-load / Drop-log）は全レビュアーがコード精読で正しいと
+確認・clack source で carry-forward #2/#3 を裏取り。**CI は Rust を実行しない**（npm のみ）ため検証はローカル
+cargo + gated 実機 RUN が根拠: clap-host 10 + daemon lib 8（新 teardown ×2 含む）+ 統合 18 + smoke/pcm green・
+clippy 新規警告0・fmt clean・gated effect ratio 0.50000（callback_max 481µs）/ synth peak 0.25（263µs）。
 
 ---
 

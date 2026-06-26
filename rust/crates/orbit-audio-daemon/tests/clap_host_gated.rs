@@ -53,6 +53,13 @@ fn synth_processes_audio_via_daemon() {
         "ロードされた plugin id が一致する"
     );
 
+    // 二重ロードは AlreadyLoaded で弾く（controller の double-load guard を駆動し、サイレント除去を検知）。
+    let second = engine.load_plugin(synth.clone(), None);
+    assert!(
+        second.is_err(),
+        "二重ロードは AlreadyLoaded エラーを返すべきだが Ok が返った"
+    );
+
     // hot-install が audio thread に着地するまで待つ（callback が install ring を pop する）。
     std::thread::sleep(Duration::from_millis(200));
 

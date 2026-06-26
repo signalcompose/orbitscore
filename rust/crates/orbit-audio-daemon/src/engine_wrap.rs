@@ -77,8 +77,8 @@ pub struct EngineWrap {
     link: Mutex<Option<crate::link_audio::LinkAudioControl>>,
     /// CLAP plugin hosting の control-side ハンドル（feature `clap-host` 専用・Issue #340）。
     /// 専用スレッドへの `cmd_tx`（LoadPlugin）/ audio thread への `event_tx`（note）/ 統計を保持する。
-    /// `Sender`/`Producer` は `!Sync` なので `Mutex` 内包で `&self` のまま提供する。本番 `start()` で
-    /// `Some`、test backend 経路では `None`。
+    /// rtrb `Producer` は `push` に `&mut self` が要り `!Sync`。`Sender`（Send+Sync）ともども 1 つの
+    /// `Mutex` に内包し `&self` のまま提供する。本番 `start()` で `Some`、test backend 経路では `None`。
     #[cfg(feature = "clap-host")]
     clap: Mutex<Option<ClapControl>>,
 }
@@ -499,6 +499,36 @@ impl EngineWrap {
             // reset が黙って no-op だと、後続の two-phase 計測が baseline 汚染で誤判定する。
             Err(_) => tracing::warn!("clap mutex poisoned; clap_reset_post_peak skipped"),
         }
+    }
+
+    /// ロード済み plugin の `process()` エラー累積回数（#340）。daemon の 1 Hz ticker が polling して
+    /// 増加を `CLAP_PROCESS_ERROR` WARNING で surface する（非 RT observability）。effect は dry 素通し /
+    /// instrument は無音になるため、この counter だけが失敗の可視化手段になる。
+    /// `try_lock` で ticker をブロックしない: **WouldBlock** は cumulative counter なので次 tick が
+    /// 全累積を報告する。**Poisoned** は `link_egress_ring_drops` と同様 warn で post-mortem の根拠を
+    /// 残し、以降の発火を抑制する（contention と poison を同一視しない）。
+    #[cfg(feature = "clap-host")]
+    pub fn clap_process_error_count(&self) -> u64 {
+        match self.clap.try_lock() {
+            Ok(g) => g
+                .as_ref()
+                .map(|c| c.stats.process_error_count.load(Ordering::Relaxed))
+                .unwrap_or(0),
+            Err(std::sync::TryLockError::WouldBlock) => 0,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                tracing::warn!(
+                    "clap mutex poisoned; clap_process_error_count reporting 0 \
+                     (CLAP_PROCESS_ERROR suppressed until daemon restart)"
+                );
+                0
+            }
+        }
+    }
+
+    /// feature `clap-host` 無効ビルド用の stub。CLAP が無いので常に 0。
+    #[cfg(not(feature = "clap-host"))]
+    pub fn clap_process_error_count(&self) -> u64 {
+        0
     }
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
