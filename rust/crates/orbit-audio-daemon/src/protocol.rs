@@ -86,6 +86,10 @@ pub const ERROR_CODE_FATAL_PANIC: &str = "FATAL_PANIC";
 /// LinkAudio egress の ring overflow drop（消費が追いつかず音が落ちた）。WARNING severity。
 /// daemon が 1 Hz ticker で aggregate drop 数の増加を検知して発火する（A4-2b-2b）。
 pub const ERROR_CODE_LINK_EGRESS_DROP: &str = "LINK_EGRESS_DROP";
+/// ロード済み CLAP plugin の `process()` がエラーを返した（出力をスキップし dry 通過した）。
+/// WARNING severity。audio thread が cumulative counter に積み、daemon が 1 Hz ticker で増加を
+/// 検知して発火する（#340）。effect は dry 素通し / instrument は無音になるため observability で surface。
+pub const ERROR_CODE_CLAP_PROCESS_ERROR: &str = "CLAP_PROCESS_ERROR";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]

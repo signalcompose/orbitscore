@@ -547,6 +547,69 @@ async fn daemon_error_warning_on_link_egress_drop() {
     );
 }
 
+/// CLAP plugin の process() エラーが増えると DaemonError (severity=warning, code=CLAP_PROCESS_ERROR) が
+/// 発火する（#340）。LINK_EGRESS_DROP と同じ 1 Hz ticker 経路。integration test は plugin をロードしない
+/// ため、`clap_process_errors_arc` の **本番経路から分離した注入 seam**（本番常に 0）でこの event を
+/// driver する。clap-host feature の有無に依らず駆動できる（stub 経路も注入分を反映するため）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_clap_process_error() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から process error を注入（1 Hz ticker が clap_process_error_count の増加を検知して発火）。
+    daemon
+        .engine
+        .clap_process_errors_arc()
+        .fetch_add(3, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "CLAP_PROCESS_ERROR"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("CLAP_PROCESS_ERROR warning event not received");
+    // message は累積 error 数（3）を含む = daemon_error_event の format! が壊れていないこと。
+    assert!(
+        message.contains('3'),
+        "CLAP_PROCESS_ERROR message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**（last_clap_errors が据え置かれること）。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError" && msg["data"]["code"] == "CLAP_PROCESS_ERROR" {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "CLAP_PROCESS_ERROR must not re-fire without additional drops (latch regression)"
+    );
+}
+
 /// device_lost が記録されると DaemonError (severity=fatal, code=DEVICE_LOST) が発火する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn daemon_error_fatal_on_device_lost() {

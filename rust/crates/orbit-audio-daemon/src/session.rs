@@ -18,10 +18,10 @@ use tracing::warn;
 
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
-    Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError, ERROR_CODE_DEVICE_LOST,
-    ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
-    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
-    EVENT_STREAM_STATS,
+    Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
+    ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_LINK_EGRESS_DROP,
+    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
+    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -77,6 +77,7 @@ pub async fn run(
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut last_xruns: u64 = 0;
             let mut last_link_drops: u64 = 0;
+            let mut last_clap_errors: u64 = 0;
             let mut device_lost_reported = false;
             loop {
                 ticker.tick().await;
@@ -129,6 +130,25 @@ pub async fn run(
                         break;
                     }
                     last_link_drops = link_drops;
+                }
+
+                // ロード済み CLAP plugin の process() エラー（#340）を非 RT で surface。RT callback が
+                // 失敗時に出力配線をスキップ（effect=dry 素通し / instrument=無音）して atomic counter に
+                // 積むので、ここで増加を検知して WARNING を出す（clap 無効 / エラーなしは 0 のまま発火しない）。
+                let clap_errors = engine.clap_process_error_count();
+                if clap_errors > last_clap_errors {
+                    let clap_evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_CLAP_PROCESS_ERROR,
+                        format!(
+                            "CLAP plugin process() failed ({clap_errors} total); output skipped \
+                             — effect passes dry, instrument is silent",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&clap_evt)).await.is_err() {
+                        break;
+                    }
+                    last_clap_errors = clap_errors;
                 }
 
                 let stats_evt = Event::new(
@@ -336,6 +356,83 @@ async fn handle_command(
                 ),
             ),
         },
+        // CLAP プラグインをロードして hot-install する（Issue #340・feature `clap-host`）。discovery +
+        // dlopen + activate は重いので LoadSample と同様 spawn_blocking で tokio ワーカーを塞がない。
+        // feature 無効ビルドは engine stub が CLAP_UNAVAILABLE を返す（command は feature 非依存）。
+        "LoadPlugin" => match params.get("path").and_then(|p| p.as_str()) {
+            Some(path_str) => {
+                let engine = engine.clone();
+                let path = std::path::PathBuf::from(path_str);
+                let plugin_id = params
+                    .get("plugin_id")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let res =
+                    tokio::task::spawn_blocking(move || engine.load_plugin(path, plugin_id)).await;
+                match res {
+                    Ok(Ok(info)) => ok(
+                        &id,
+                        json!({
+                            "plugin_id": info.plugin_id,
+                            "plugin_name": info.plugin_name,
+                            "note_port_index": info.note_port_index,
+                        }),
+                    ),
+                    Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
+                    Err(join_err) => err(
+                        &id,
+                        ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                    ),
+                }
+            }
+            None => err(
+                &id,
+                ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
+            ),
+        },
+        // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由・非ブロッキング）。
+        // 注意: plugin 未ロード時（LoadPlugin 前 / load 失敗後）も protocol 層では成功応答を返すが、
+        // audio thread は plugin が無ければ event を drain して捨てる（fire-and-forget ring の設計上、
+        // ロード状態の同期確認は cross-thread round-trip が要るため行わない）。pre-load note は黙って落ちる。
+        // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が未定義になるため）。
+        "PluginNoteOn" => match params.get("key").and_then(|v| v.as_u64()) {
+            Some(k) if k <= 127 => match parse_midi_channel(&params) {
+                Ok(channel) => {
+                    let velocity = param_f64(&params, "velocity", 0.8).clamp(0.0, 1.0);
+                    match engine.plugin_note_on(k as u8, channel, velocity) {
+                        Ok(()) => ok(&id, json!({"status": "note_on", "key": k})),
+                        Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                    }
+                }
+                Err(e) => err(&id, e),
+            },
+            _ => err(
+                &id,
+                ProtocolError::new(
+                    "MALFORMED_REQUEST",
+                    "missing or out-of-range 'key' (0..=127)",
+                ),
+            ),
+        },
+        "PluginNoteOff" => match params.get("key").and_then(|v| v.as_u64()) {
+            Some(k) if k <= 127 => match parse_midi_channel(&params) {
+                Ok(channel) => {
+                    let velocity = param_f64(&params, "velocity", 0.0).clamp(0.0, 1.0);
+                    match engine.plugin_note_off(k as u8, channel, velocity) {
+                        Ok(()) => ok(&id, json!({"status": "note_off", "key": k})),
+                        Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                    }
+                }
+                Err(e) => err(&id, e),
+            },
+            _ => err(
+                &id,
+                ProtocolError::new(
+                    "MALFORMED_REQUEST",
+                    "missing or out-of-range 'key' (0..=127)",
+                ),
+            ),
+        },
         "PlayAt" => {
             let time_sec = param_f64(&params, "time_sec", 0.0);
             let gain = param_f64(&params, "gain", 1.0) as f32;
@@ -526,6 +623,19 @@ fn param_f64(params: &Value, key: &str, default: f64) -> f64 {
     params.get(key).and_then(|v| v.as_f64()).unwrap_or(default)
 }
 
+/// `channel` param を MIDI channel（0..=15）として取り出す。欠如 / 非数値は 0。範囲外は
+/// `MALFORMED_REQUEST`（`key` の 0..=127 検証と対称・out-of-range を silent truncation しない）。
+fn parse_midi_channel(params: &Value) -> Result<u8, ProtocolError> {
+    match params.get("channel").and_then(|v| v.as_u64()) {
+        None => Ok(0),
+        Some(c) if c <= 15 => Ok(c as u8),
+        Some(_) => Err(ProtocolError::new(
+            "MALFORMED_REQUEST",
+            "'channel' must be 0..=15",
+        )),
+    }
+}
+
 fn ok(id: &str, result: Value) -> Value {
     // OkResponse は String/Value のみ含む固定スキーマ。
     // シリアライズ失敗はプログラマエラー (新フィールドの Serialize 実装不備) として
@@ -568,6 +678,9 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("LINK_AUDIO_UNAVAILABLE", msg.clone())
         }
         WrapError::LinkAudio(msg) => ProtocolError::new("LINK_AUDIO_RUNTIME", msg.clone()),
+        // CLAP も LinkAudio と同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする。
+        WrapError::ClapUnavailable(msg) => ProtocolError::new("CLAP_UNAVAILABLE", msg.clone()),
+        WrapError::Clap(msg) => ProtocolError::new("CLAP_RUNTIME", msg.clone()),
     }
 }
 
@@ -586,6 +699,42 @@ mod tests {
     fn link_audio_runtime_maps_to_runtime_code() {
         let e = WrapError::LinkAudio("channel limit reached".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_RUNTIME");
+    }
+
+    // CLAP エラーの protocol code 分割を pin（LinkAudio と同様: feature-gap=UNAVAILABLE /
+    // runtime 失敗=RUNTIME。TS 層が両者を区別して扱うので drift させない・#340）。
+    #[test]
+    fn clap_unavailable_maps_to_unavailable_code() {
+        let e = WrapError::ClapUnavailable("built without feature".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_UNAVAILABLE");
+    }
+
+    #[test]
+    fn clap_runtime_maps_to_runtime_code() {
+        let e = WrapError::Clap("plugin event ring full".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_RUNTIME");
+    }
+
+    // PluginNoteOn/Off の channel 検証: 欠如→0、0..=15 受理、範囲外は MALFORMED（key と対称）。
+    #[test]
+    fn parse_midi_channel_defaults_accepts_and_rejects() {
+        assert_eq!(parse_midi_channel(&json!({})).unwrap(), 0, "欠如→0");
+        assert_eq!(parse_midi_channel(&json!({"channel": 0})).unwrap(), 0);
+        assert_eq!(parse_midi_channel(&json!({"channel": 15})).unwrap(), 15);
+        assert_eq!(
+            parse_midi_channel(&json!({"channel": 16}))
+                .unwrap_err()
+                .code,
+            "MALFORMED_REQUEST",
+            "16 は範囲外"
+        );
+        assert_eq!(
+            parse_midi_channel(&json!({"channel": 256}))
+                .unwrap_err()
+                .code,
+            "MALFORMED_REQUEST",
+            "256 は as u8 で 0 に truncation せず弾く"
+        );
     }
 
     // SetLinkTempo の bpm 検証（PT-2 / CR-2）: musical な値は受理、garbage は弾く。

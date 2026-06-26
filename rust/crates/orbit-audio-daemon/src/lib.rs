@@ -7,6 +7,10 @@
 //! 経由して `EngineWrap` を audio device なしで起動する。
 
 pub mod backend;
+/// in-process CLAP plugin hosting の daemon 配線。feature `clap-host`（default off）でのみ
+/// コンパイルされ、`orbit-clap-host` の `ClapHost`(!Send) を専用スレッドで所有する（Issue #340）。
+#[cfg(feature = "clap-host")]
+pub mod clap_host;
 pub mod engine_wrap;
 /// 🔴 GPL 境界: LinkAudio egress の control-side 配線。feature `link-audio`（default off）でのみ
 /// コンパイルされ、GPL crate `orbit-link-audio` を保持する consumer thread を起動する。

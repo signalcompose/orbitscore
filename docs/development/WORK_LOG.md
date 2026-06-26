@@ -17,6 +17,88 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.169 feat(engine): daemon CLAP integration — in-process plugin hosting (#340) (Jun 26, 2026)
+
+**Date**: 2026-06-26
+**Status**: ✅ 実装完了 + pr-review-team round 2 + @claude bot で Critical/Important=0 収束（gated 実機テスト 2 本 GREEN・owner マージ待ち）
+**Branch**: `340-daemon-clap-integration`
+**Issue**: #340（post-2.0 engine track / Epic #292・Path A = γ の前提 + cutover #108 の背骨）
+
+spike で実証した in-process clack-host を本番 daemon `orbit-audio-daemon` に統合し、effect plugin が
+daemon 経由で RT-safe に audio を加工できるようにした。**Step0 検証 = COMMIT 判定**（fork せず）:
+spike の「Mutex vs lock-free」前提は古く、両経路とも `engine.render` の同一 `try_lock` を通り plugin は
+構造上 Mutex-free。clack は pre-1.0 だが git pin で clean build。effect 型 CLAP plugin も最小実装で成立。
+
+**アーキ（clack 境界）**: native は permissive な mixing core を保ち clack に依存しない。`PostProcessor`
+trait（`&mut [f32]` を in-place 変換）を native に置き（既存 `PostMixSink`/`AudioBackend` inversion を
+踏襲）、clack 実体は permissive crate `orbit-clap-host` に隔離。daemon が `clap-host` feature 配下で
+`ClapHost`(!Send) を**専用 OS スレッド**で所有し、plugin の hot-install は wait-free ring 経由で audio
+thread に渡す。
+
+**effect topology（serial insert）**: instrument（parallel add-mix）と区別。
+- `HostAudioBuffers::has_audio_input`（audio 入力ポートの有無）で経路分岐。
+- effect: engine の interleaved 出力を plugin の planar 入力へ de-interleave コピー
+  （`set_input_from_interleaved`）→ process → 出力で hardware sum を**上書き**（`replace_cpal_buffer`）。
+- instrument: 入力を無音化（`set_input_silent`）→ process → 出力を add-mix（`add_to_cpal_buffer`）。
+- mux/downmix は `fill_muxed_from_main_output` に集約し add/replace で共有。
+
+**carry-forward 3（A0 §13・RT 正確性）= 解決**:
+1. teardown は StreamGuard の field drop 順で強制（`ClapTeardownGuard` が audio thread で
+   `stop_processing` → stream 停止 → 専用スレッドで instance deactivate）。**通常 teardown 経路の**暗黙 Drop の
+   wrong-thread stop_processing（strict plugin で UB）を回避。⚠️ shutdown + device-loss + install-race が
+   同窓で重なる narrow 残余（install ring の未消費 `InstallMsg` が非 RT スレッドで drop）は本 PR では未解決・
+   追跡 issue #342 の focused follow-on PR で対応（両レビューが Minor 認定・実害極小）。
+2. `request_callback` は `Arc<AtomicBool>` で lock-free（mpsc の alloc+mutex を排除）。
+3. CLAP `EventBuffer` は ring capacity でサイズ固定し RT realloc を防止（debug_assert で検出）。
+
+**Done 証拠（実機 gated・A0 §6: CoreAudio+cpal は xrun 不発火 → RT 健全性は callback 実測時間）**:
+- effect gated（`clap_effect_gated.rs`・two-phase ratio）: baseline 0.70711 → effected 0.35355 =
+  **ratio 0.50000**（EFFECT_GAIN=0.5 ちょうど）。入力配線死=~0 / replace 欠落=~1.5 を判別する設計で、
+  de-interleave 入力 + replace 出力の両方が機能している証拠。callback max 859µs（budget ~10.8ms の ~8%）。
+- synth gated（`clap_host_gated.rs`・PR1 回帰）: post_mix_peak 0.25・callback max 449µs。
+- cargo workspace 全 green / clippy・fmt clean / npm 1188 passed（SC default path 不変）。
+
+**スコープ外（fence）**: γ の out-of-process sandbox は対象外（次フェーズ）。`link-audio` と `clap-host`
+は当面排他（1 callback での render 順序統合は defer・`compile_error!` で弾く）。audio `play()` 意味論・
+SC default path は不変。
+
+**/code:pr-review-team（4専門・round 1）**: code-reviewer/silent-failure-hunter/pr-test/comment を並行起動。
+Important 修正 = effect process 失敗時の 1-block 無音化（`process_ok` で出力配線を gate し失敗時は dry 素通し）/
+`ClapPostProcessor` Drop で plugin 残留を error log（carry-forward #1 検知点）/ double-load guard
+（`AlreadyLoaded`）/ `parse_midi_channel` レンジ検証 / eprintln→tracing / mutex-poison を warn で区別。
+test 追加（非ステレオ mux ×5・post_peak 不変式・CLAP error code/channel）。**Commit 8fa7c41**。
+
+**/code:pr-review-team（4専門・round 2）**: round-1 で足した新規コードを再レビュー。**Critical 0 / Important 3**:
+1. (code-reviewer opus) `config.rs` `main_port_index` が CLAP ループ index を保存するが `discovered` は
+   `get()==None` をスキップした filtered list → 早いポート欠落 + 後のポート IS_MAIN で境界外参照 → audio
+   thread（cpal C callback）で panic = プロセス abort。push 直前の `discovered.len()` を保存して修正。
+2. (silent-failure-hunter opus) `process_error_count` が production で write-only（誰も読まない）→ effect=dry /
+   instrument=無音 の失敗が不可視。既存 1Hz ticker に `CLAP_PROCESS_ERROR` WARNING を配線
+   （`LINK_EGRESS_DROP` パターン踏襲・defer せず実配線）。
+3. (pr-test-analyzer) `ClapTeardownGuard` timeout 経路に unit test 欠如 → 実 plugin 不要の timeout/early-exit
+   test 2 本追加（deadlock 防止保証・while 条件反転検知）。
+Minor 採用: velocity を 0.0..=1.0 に clamp / pre-load note が黙って drop される旨の doc note / gated に
+double-load `AlreadyLoaded` assertion / コメント正確性 3 件（`Sender` は Send+Sync で Mutex 理由は rtrb
+`Producer` の `&mut`+`!Sync` / carry-forward #1 は本 PR で解決済み・TODO 文言修正 / config warn 括弧は input
+fallback のみ該当）。3 経路（effect-error-bypass / double-load / Drop-log）は全レビュアーがコード精読で正しいと
+確認・clack source で carry-forward #2/#3 を裏取り。**CI は Rust を実行しない**（npm のみ）ため検証はローカル
+cargo + gated 実機 RUN が根拠: clap-host 10 + daemon lib 8（新 teardown ×2 含む）+ 統合 18 + smoke/pcm green・
+clippy 新規警告0・fmt clean・gated effect ratio 0.50000（callback_max 481µs）/ synth peak 0.25（263µs）。
+
+**advisor checkpoint ②（Done 宣言前）**: round-2 で足した `CLAP_PROCESS_ERROR` ticker 配線が「全 ticker
+DaemonError は注入 seam + テストを持つ」というコードベースの慣習を破っていた（`LINK_EGRESS_DROP`/xrun/device_lost は
+全て seam 付き）→ 注入カウンタ `clap_process_errors`（本番常に 0）+ `clap_process_errors_arc()` seam +
+`daemon_error_warning_on_clap_process_error` 統合テスト（発火 + 累積数 + latch 非再発火・両 feature config pass）を
+追加（`40d0f6f`）。daemon lib 8 + protocol 19 green。
+
+**@claude bot second-opinion（load-bearing seam `8fa7c41..40d0f6f`）= Critical/Important 0**: 4 重点領域
+（main_port_index index 修正 / `CLAP_PROCESS_ERROR` 配線 / teardown seam / effect-instrument routing）と 3 proof-only
+経路（effect-error-bypass / double-load / Drop-log）を独立精読し、内部 pr-review-team の評価と一致を確認。CI(npm)
+`code-review pass`（40d0f6f）。**申し送り Minor 3 件 → 追跡 issue #342**（cutover #108 前の CLAP-hardening: ①install-ring
+teardown drain で wrong-thread stop_processing 残余ケース ②動的ポート rescan ③async teardown 時の busy-wait）。
+
+---
+
 ### 6.168 docs(notation): MLTS real-time score-display design note (#339) (Jun 26, 2026)
 
 **Date**: 2026-06-26

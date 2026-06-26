@@ -1,0 +1,26 @@
+# clap-test-effect — γ-effects 検証 spike (Issue #340): 最小 CLAP effect plugin
+#
+# standalone crate（ancestor Cargo.toml に吸われないよう空の [workspace] table を置く）。
+# clap-test-synth の Cargo.toml をミラーし、note-ports feature を除いたもの。
+[workspace]
+
+[package]
+name = "clap-test-effect"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Minimal CLAP audio effect for γ-effects daemon CLAP hosting verification"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clack-plugin = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744", features = [
+  "clack-plugin",
+  "audio-ports",
+] }
+
+[dev-dependencies]
+# load_test.rs が cdylib を dlopen して PluginFactory を検証するために使用する
+clack-host = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744" }

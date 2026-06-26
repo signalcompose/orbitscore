@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -10,6 +11,7 @@ use thiserror::Error;
 use orbit_audio_core::Engine;
 
 use crate::link_audio_ring::{PostMixSink, RingTapSink};
+use crate::post_processor::{CallbackTimeStats, PostProcessor};
 
 /// cpal ストリームから得られる稼働統計。
 ///
@@ -135,13 +137,44 @@ fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool 
     ready && scratch_len >= block
 }
 
-/// 1 callback 分の render。`link` が無い（hardware-only）なら従来通り `engine.render`（ビット同一）。
-/// `link` 有りなら reg-ring を drain して channel pool を更新し、**ready な channel のみ**を
-/// `render_multi` で hardware と一緒に 1 パスで埋め、各 channel buffer を ring へ push する（egress）。
-/// ready が 0 でも `render_multi(hw, &[])` を呼ぶ（`engine.render` に落とすと channel-tagged event が
-/// hardware に bleed するため）。
+/// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
+///
+/// 手順: (1) callback 開始時刻を取る（`cb_stats` 有り時のみ）→ (2) [`render_engine`] で engine
+/// （+ LinkAudio egress）を render → (3) `post` 有りなら hardware sum を in-place 変換（CLAP
+/// effect/instrument・Issue #340）→ (4) callback 所要時間を記録。`post`/`cb_stats` が共に None
+/// なら従来経路とビット同一（分岐 1 つのみのオーバーヘッド）。
 #[inline]
 fn render_block(
+    engine: &Engine,
+    link: &mut Option<LinkEgress>,
+    post: &mut Option<Box<dyn PostProcessor>>,
+    cb_stats: &Option<Arc<CallbackTimeStats>>,
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    // Instant::now() は macOS では mach_absolute_time（lock/alloc なし）= RT 許容。A0 §6 に基づき
+    // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
+    let t0 = cb_stats.as_ref().map(|_| Instant::now());
+
+    render_engine(engine, link, output_channels, hw);
+
+    // master-bus post-processor（CLAP）。engine render 済みの hardware sum を in-place 変換。
+    if let Some(p) = post.as_mut() {
+        p.process(hw);
+    }
+
+    if let (Some(stats), Some(t0)) = (cb_stats, t0) {
+        stats.record(t0.elapsed().as_nanos() as u64);
+    }
+}
+
+/// engine（+ LinkAudio egress）の render 本体。`link` が無い（hardware-only）なら従来通り
+/// `engine.render`（ビット同一）。`link` 有りなら reg-ring を drain して channel pool を更新し、
+/// **ready な channel のみ**を `render_multi` で hardware と一緒に 1 パスで埋め、各 channel buffer
+/// を ring へ push する（egress）。ready が 0 でも `render_multi(hw, &[])` を呼ぶ（`engine.render`
+/// に落とすと channel-tagged event が hardware に bleed するため）。
+#[inline]
+fn render_engine(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     output_channels: usize,
@@ -224,11 +257,26 @@ type LinkEgressStart = (
     Arc<StreamStats>,
     rtrb::Producer<LinkChannelActivate>,
 );
+/// CLAP master-bus post-processor 経路付き起動の戻り値（上記 + callback-duration 監視 stats）。
+type ClapHostStart = (
+    Engine,
+    OutputStream,
+    Arc<StreamStats>,
+    Arc<CallbackTimeStats>,
+);
+/// `start_output_inner` の戻り値（共通部 + post 有り時のみ作る callback-duration stats）。
+type OutputInnerStart = (
+    Engine,
+    OutputStream,
+    Arc<StreamStats>,
+    Option<Arc<CallbackTimeStats>>,
+);
 
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
 /// 同時に初期化する（hardware-only）。呼び出し側は config ミスマッチを意識しなくてよい。
 pub fn start_default_output() -> Result<OutputStart, OutputError> {
-    start_output_inner(None)
+    let (engine, stream, stats, _cb) = start_output_inner(None, None)?;
+    Ok((engine, stream, stats))
 }
 
 /// LinkAudio egress 経路付きで出力を起動する（A4-2b-2・feature `link-audio` 経由でのみ daemon が
@@ -243,13 +291,32 @@ pub fn start_default_output_with_link_egress(
         // cap は control が強制するので最大 MAX_LINK_CHANNELS。callback で push のみ・realloc を避ける。
         channels: Vec::with_capacity(MAX_LINK_CHANNELS),
     };
-    let (engine, stream, stats) = start_output_inner(Some(link))?;
+    let (engine, stream, stats, _cb) = start_output_inner(Some(link), None)?;
     Ok((engine, stream, stats, reg_tx))
 }
 
-/// `start_default_output` / `start_default_output_with_link_egress` の共通実装。
-/// `link` を渡すと cpal callback に egress 経路を組み込む（None なら hardware-only でビット同一）。
-fn start_output_inner(link: Option<LinkEgress>) -> Result<OutputStart, OutputError> {
+/// CLAP master-bus post-processor 経路付きで出力を起動する（feature `clap-host` 経由でのみ daemon
+/// が使う・Issue #340）。`post` は engine render 後の hardware sum を RT callback 内で in-place 変換
+/// する（CLAP effect=serial insert / instrument=add-mix。実体は `orbit-clap-host` の実装が所有し、
+/// plugin の hot-install は実装内の ring 経由）。戻り値の `CallbackTimeStats` は callback-duration
+/// ベースの RT 監視用（A0 §6: CoreAudio+cpal は xrun 不発火 → duration が唯一の RT signal）。
+pub fn start_default_output_with_clap(
+    post: Box<dyn PostProcessor>,
+) -> Result<ClapHostStart, OutputError> {
+    let (engine, stream, stats, cb) = start_output_inner(None, Some(post))?;
+    // post=Some の経路では inner が必ず CallbackTimeStats を作る。
+    let cb = cb.expect("clap path always creates CallbackTimeStats");
+    Ok((engine, stream, stats, cb))
+}
+
+/// `start_default_output` / `_with_link_egress` / `_with_clap` の共通実装。
+/// `link` を渡すと cpal callback に egress 経路を、`post` を渡すと master-bus post-processor を
+/// 組み込む（両方 None なら hardware-only でビット同一）。`post` 有り時のみ callback-duration
+/// 計測 stats を作って返す。
+fn start_output_inner(
+    link: Option<LinkEgress>,
+    post: Option<Box<dyn PostProcessor>>,
+) -> Result<OutputInnerStart, OutputError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
     let supported = device
@@ -262,6 +329,9 @@ fn start_output_inner(link: Option<LinkEgress>) -> Result<OutputStart, OutputErr
     let channels = config.channels;
 
     let stats = Arc::new(StreamStats::default());
+    // callback-duration 計測は post（CLAP）経路でのみ有効化する。hardware-only / link 経路は
+    // 従来通り無計測（None → render_block は計測分岐を踏まずビット同一）。
+    let cb_stats = post.as_ref().map(|_| CallbackTimeStats::new());
     let engine = Engine::new(sample_rate, channels);
     let stream = build_stream(
         &device,
@@ -270,6 +340,8 @@ fn start_output_inner(link: Option<LinkEgress>) -> Result<OutputStart, OutputErr
         engine.clone(),
         stats.clone(),
         link,
+        post,
+        cb_stats.clone(),
     )?;
     stream
         .play()
@@ -283,9 +355,11 @@ fn start_output_inner(link: Option<LinkEgress>) -> Result<OutputStart, OutputErr
             channels,
         },
         stats,
+        cb_stats,
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_stream(
     device: &Device,
     config: &StreamConfig,
@@ -293,6 +367,8 @@ fn build_stream(
     engine: Engine,
     stats: Arc<StreamStats>,
     mut link: Option<LinkEgress>,
+    mut post: Option<Box<dyn PostProcessor>>,
+    cb_stats: Option<Arc<CallbackTimeStats>>,
 ) -> Result<Stream, OutputError> {
     let make_err_fn = || {
         // 上位 (daemon session) が StreamStats / DaemonError 経由で可視化する責務を持つ。
@@ -313,7 +389,9 @@ fn build_stream(
         SampleFormat::F32 => device
             .build_output_stream(
                 config,
-                move |data: &mut [f32], _| render_block(&engine, &mut link, out_ch, data),
+                move |data: &mut [f32], _| {
+                    render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, data)
+                },
                 make_err_fn(),
                 None,
             )
@@ -329,7 +407,7 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, out_ch, buf);
+                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
@@ -350,7 +428,7 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, out_ch, buf);
+                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
                         }
@@ -370,7 +448,7 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, out_ch, buf);
+                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
                         for (i, s) in buf.iter().enumerate() {
                             let v = (s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32;
                             data[i] = v as u16;
