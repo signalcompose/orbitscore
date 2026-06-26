@@ -327,7 +327,7 @@ fn examples22_parity_render_matches_schedule() {
         // 出力 pan を atan2 で独立逆算し schedule の pan と突き合わせる（GRM 独立）。
         let measured = pan_from_lr_rms(l, r);
         assert!(
-            (measured - ev.pan as f32).abs() <= PAN_TOLERANCE,
+            (measured - ev.pan).abs() <= PAN_TOLERANCE,
             "seq {}: schedule pan {} → measured {measured} (L={l:.5}, R={r:.5})",
             ev.sequence_name,
             ev.pan

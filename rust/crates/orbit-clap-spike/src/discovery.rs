@@ -113,7 +113,7 @@ pub fn list_plugins_in_file(path: &Path) -> Result<Vec<FoundPlugin>, DiscoveryEr
 
     Ok(factory
         .plugin_descriptors()
-        .filter_map(|p| PluginDescriptor::try_from(p))
+        .filter_map(PluginDescriptor::try_from)
         .map(|plugin| FoundPlugin {
             entry: entry.clone(),
             path: path.to_path_buf(),
@@ -134,7 +134,7 @@ pub fn load_plugin_id_from_path(
 
     Ok(factory
         .plugin_descriptors()
-        .filter_map(|p| PluginDescriptor::try_from(p))
+        .filter_map(PluginDescriptor::try_from)
         .find(|p| p.id == id)
         .map(|plugin| FoundPlugin {
             entry,

@@ -53,7 +53,7 @@ impl FullAudioConfig {
         }
 
         // Prefer stereo; then sort by sample rate preference
-        configs.sort_by(|a, b| b.channels().cmp(&a.channels()));
+        configs.sort_by_key(|cfg| std::cmp::Reverse(cfg.channels()));
         let chosen = configs.into_iter().next().unwrap();
 
         let (min_buf, max_buf) = match chosen.buffer_size() {
@@ -222,10 +222,8 @@ pub fn get_config_from_ports(
             },
         };
 
-        if info.flags.contains(AudioPortFlags::IS_MAIN) {
-            if main_port_index.replace(i).is_some() {
-                eprintln!("Warning: plugin defines multiple main ports");
-            }
+        if info.flags.contains(AudioPortFlags::IS_MAIN) && main_port_index.replace(i).is_some() {
+            eprintln!("Warning: plugin defines multiple main ports");
         }
 
         discovered.push(PluginAudioPortInfo {

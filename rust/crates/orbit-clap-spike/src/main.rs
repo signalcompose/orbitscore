@@ -352,15 +352,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     // (callbacks running != audible output).
     let post_mix_peak = f32::from_bits(counting_peak.load(Ordering::Relaxed));
 
-    let mean_ns = if callbacks > 0 { sum_ns / callbacks } else { 0 };
+    let mean_ns = sum_ns.checked_div(callbacks).unwrap_or(0);
     let p99_ns = stats.p99_ns().unwrap_or(0);
 
     // Approximate block budget from actual sink frames.
-    let avg_frames_per_cb = if callbacks > 0 {
-        sink_frames / callbacks / output_channel_count as u64
-    } else {
-        0
-    };
+    let avg_frames_per_cb = sink_frames
+        .checked_div(callbacks)
+        .map(|f| f / output_channel_count as u64)
+        .unwrap_or(0);
     let block_budget_ns = avg_frames_per_cb * 1_000_000_000 / sample_rate as u64;
 
     println!();

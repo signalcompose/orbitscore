@@ -75,7 +75,7 @@ impl AudioThreadStats {
             return None;
         }
         // Smallest bucket b where cumulative count >= ceil(99% x total).
-        let target = (total * 99 + 99) / 100; // integer ceil
+        let target = (total * 99).div_ceil(100); // integer ceil
         let mut cumulative: u64 = 0;
         for (i, bucket) in self.hist_us.iter().enumerate() {
             cumulative += bucket.load(Ordering::Relaxed);
