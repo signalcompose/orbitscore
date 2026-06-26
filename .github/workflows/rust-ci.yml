@@ -1,0 +1,76 @@
+name: Rust CI
+
+# Rust workspace (rust/) の検証。既存 code-review.yml は npm/TS のみを回しており
+# Rust は CI で一切検証されていなかった（Issue #326）。本 job が fmt / clippy /
+# test / license-gate を PR ごとに回す。
+#
+# スコープ（Issue #326）:
+# - ubuntu-latest で permissive + cross-platform な default グラフを検証する。
+# - `link-audio` feature(GPL・Ableton Link・build.rs が macOS 専用)は ubuntu で
+#   ビルド不可かつ GPL 隔離方針のため CI では有効化しない。`clap-host`(permissive)は検証する。
+# - 実機 output device / multicast を要する gated テストは全て `#[ignore]` なので
+#   `cargo test` で自動的に skip される（CI に audio device は無い）。
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  rust:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ALSA dev headers (cpal backend)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Setup Rust toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy (default features)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Clippy (clap-host feature)
+        run: cargo clippy -p orbit-audio-daemon --features clap-host --all-targets --locked -- -D warnings
+
+      - name: Test (default features, gated tests auto-skipped)
+        run: cargo test --workspace --locked
+
+      - name: Test (clap-host feature, gated tests auto-skipped)
+        run: cargo test -p orbit-audio-daemon --features clap-host --locked
+
+  cargo-deny:
+    name: license / dependency gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      # default グラフ(link-audio off)が GPL-free であることを assert する。
+      # GPL 隔離 crate orbit-link-audio は [workspace] exclude かつ default-off feature
+      # 経由でしか graph に入らないため、ここに GPL が現れたら隔離が壊れている。
+      - name: cargo-deny check
+        run: cargo deny check
