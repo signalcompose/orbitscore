@@ -46,6 +46,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **ローカル全 green**: fmt clean / clippy `-D warnings`（clap-host + daemon clap-host）/ cargo test workspace 0 failed（新規 drain test 含む）/ gated synth+effect GREEN。
 
+**CI（#326 で入れた Rust CI が #342-#1 を検証）**: `fmt / clippy / test`・`license / dependency gate`・`code-review` 3 チェックすべて SUCCESS。
+
+**レビュー（/simplify + /code:pr-review-team）**:
+- `/simplify`（4 agent）: drain_install_ring の戻り値 `u64`→`()` 簡素化（production で破棄・テストは DROPS+空で等価）/ Drop に install ring 非空検知ログ追加（altitude: 既存 plugin 検知と対称化）。reuse/efficiency は clean。
+- `/code:pr-review-team`（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer）: **Critical=0 / コード Important=0**。code-reviewer は 4 観点（drain ordering・RT 安全・Drop スレッド・doc 正確性）すべて clack/rtrb ソースで検証。
+  - 「Important」ラベル 2 件はいずれも doc/test-comment レベル: ① doc「Arc 減算のみ」が ordering-contingent（silent-failure I-1 + comment-analyzer）→ StreamGuard field 順 + host が Arc 保持の不変条件を doc に明記。② 実 leak シナリオは real plugin + 非決定 race で自動テスト不可（pr-test-analyzer・accepted structural gap）→ 単体テスト + gated テストに非カバー注記。
+  - Minor 対応: Drop ログの因果文言是正 + `slots()` 占有数追加（code-reviewer + silent-failure M-2）/ 単体テストに empty-ring ケース追加。
+  - 見送り: 正常経路 drain の silent 性への RT-path tracing（agent 自身の atomic 推奨と矛盾・benign event・Drop backstop で異常系は可視化済み）。
+
 ---
 
 ### 6.170 ci(rust): wire Rust workspace into CI — fmt / clippy / test / cargo-deny (#326) (Jun 26, 2026)

@@ -82,8 +82,13 @@ pub type InstallConsumer = rtrb::Consumer<InstallMsg>;
 /// `PluginInstance::Drop` が sole owner となり stop_processing+deactivate+destroy を clap スレッド
 /// （= start_processing と同一スレッド）で正常実行できる。
 ///
-/// `InstallMsg` は `Drop` impl を持たない Arc + buffer なので、drop 自体は plugin code を呼ばない
-/// （Arc 減算のみ）。buffer の free が走るが、これは teardown 経路なので許容する（既存の
+/// `InstallMsg`（内包する `StartedPluginAudioProcessor` も）は custom `Drop` を持たないため、drop は
+/// `Arc<PluginInstanceInner>` の refcount 減算と `HostAudioBuffers` の free だけで plugin code を呼ばない。
+/// この「Arc 減算のみ」は **ordering 依存の不変条件**である: StreamGuard の field drop 順
+/// （`_clap_teardown` → `_stream` → `_clap_thread`）と teardown_requested/teardown_done フラグにより本 drain は
+/// 必ず `host.shutdown()` より前に走り、その時点で host 側 `PluginInstance` が同じ Arc を保持し続けている。
+/// よって audio スレッドの drop で refcount が 0 に達することはなく、`PluginInstanceInner::Drop`
+/// （= 実 deactivate/destroy）はここでは走らない。buffer free は teardown 経路なので許容する（既存の
 /// `buffers = None` と同性質）。`Consumer<T>` で generic にして real plugin 無しで単体テストできる。
 fn drain_install_ring<T>(rx: &mut rtrb::Consumer<T>) {
     while rx.pop().is_ok() {}
@@ -175,13 +180,15 @@ impl Drop for ClapPostProcessor {
                  wrong-thread stop_processing の可能性（device 喪失で callback 停止 → teardown timeout か）"
             );
         }
-        // 同じ leak クラスの非対称な見落としを塞ぐ（#342-#1）。teardown 分岐が走れば install ring は
-        // drain 済みのはず。非空なら、device 喪失で teardown 分岐が走らず未 install の plugin instance が
-        // leak した可能性（drain せず検知のみ＝ここでの drain 可否は clack の Drop 挙動検証後に判断・defer）。
-        if !self.install_rx.is_empty() {
+        // 同じ leak クラスの非対称な見落としを塞ぐ（#342-#1）。正常 teardown では install ring は
+        // drain 済みのはず。非空で drop される = teardown 分岐後に install が届いたか、device 喪失で
+        // 分岐自体が走らなかった可能性（drain せず検知のみ＝ここでの drain 可否は clack の Drop 挙動
+        // 検証後に判断・defer）。slots() で残数を出して transient な 1 件か飽和かを見分けられるようにする。
+        let pending = self.install_rx.slots();
+        if pending > 0 {
             tracing::error!(
-                "ClapPostProcessor が非空の install ring を保持したまま drop された — \
-                 teardown 分岐が走らず未 install の plugin instance が leak した可能性（device 喪失か）"
+                "ClapPostProcessor が非空 (slots={pending}) の install ring を保持したまま drop された — \
+                 teardown 分岐後の install 到着か device 喪失で、未 install の plugin instance が leak した可能性"
             );
         }
     }
@@ -348,6 +355,9 @@ mod tests {
     fn drain_install_ring_drops_all_pending_and_empties() {
         // #342-#1: drain は ring 内の全アイテムを pop して **drop** し（= Arc 解放）、ring を空にする。
         // InstallMsg は real plugin 無しでは作れないので、Drop を数える generic な代用型で検証する。
+        // 注意: これは drain 関数の契約（drop-all + empty）の検証であって、実 leak シナリオ
+        // （teardown-before-install で real plugin の deactivate が正しいスレッドに乗る）は real plugin +
+        // 非決定的 race を要するため自動テスト不可。後者は gated 実機テスト（正常経路）とソース根拠でカバーする。
         static DROPS: AtomicU64 = AtomicU64::new(0);
         struct DropCounter;
         impl Drop for DropCounter {
@@ -369,5 +379,10 @@ mod tests {
             "drain したアイテムは drop されて Arc が解放されるはず"
         );
         assert!(rx.pop().is_err(), "drain 後の ring は空のはず");
+
+        // empty-ring（最頻パス: install 済みで teardown 時に ring は既に空）も no-op で空のまま。
+        let (_tx2, mut empty_rx) = rtrb::RingBuffer::<DropCounter>::new(4);
+        drain_install_ring(&mut empty_rx);
+        assert!(empty_rx.pop().is_err(), "空 ring を drain しても空のまま");
     }
 }

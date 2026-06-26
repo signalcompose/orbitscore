@@ -11,6 +11,11 @@
 //! - teardown（carry-forward #1）: guard drop で audio thread の stop_processing → stream 停止 →
 //!   instance deactivate の順を通す（panic / UB なく完了する）。
 //!
+//! 注意（#342-#1）: 本テストは plugin が hot-install 済みの **正常 teardown 経路** のみを通す
+//! （teardown 時に install ring は空 → drain は no-op）。#342-#1 が直す leak シナリオ
+//! （load → install 着地前に teardown する race）は real plugin + 非決定的 race を要するため
+//! ここでは再現・検証しない。drain 関数の契約は orbit-clap-host の単体テストで検証する。
+//!
 //! 実 output device を要するため `#[ignore]`。事前に test-synth dylib をビルドすること:
 //!   cargo build --manifest-path ../../../rust-spike/clap-test-synth/Cargo.toml
 //! 実行:
