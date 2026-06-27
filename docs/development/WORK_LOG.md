@@ -38,6 +38,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **ローカル検証**: fmt（`--all --check`）clean / clippy（clap-host + daemon clap-host・`-D warnings`）clean / test（clap-host 11 + daemon protocol 19 ほか・0 failed。protocol の loopback bind は sandbox 制限で要 sandbox-off 実行）。
 
+**レビュー（/simplify）**: 4 agent（reuse/simplification/efficiency/altitude）。reuse+efficiency+altitude が一致して **warn-once latch** を指摘（unthrottled warn は misbehaving plugin の繰り返し rescan でログ flood）。`OrbitHostMainThread` に `bool` フィールド `warned_rescan_unsupported` を追加し warn-once 化（main-thread 専用なので atomic 不要・`session.rs` の `device_lost_reported` 慣習を再利用）。host.rs コメントは warn メッセージとの重複を削り latch の根拠に絞った。clap_host.rs の #342-#3 verdict コメントは altitude が「load-bearing な anti-footgun・clean」と判定し維持（simplification の「1行圧縮」より altitude を採用）。
+
 ### 6.171 fix(engine): drain install ring on teardown to prevent plugin-instance leak (#342-#1) (Jun 26, 2026)
 
 **Date**: 2026-06-26

@@ -69,6 +69,9 @@ impl<'a> SharedHandler<'a> for OrbitHostShared {
 pub struct OrbitHostMainThread<'a> {
     _shared: &'a OrbitHostShared,
     plugin: Option<InitializedPluginHandle<'a>>,
+    /// audio-port rescan 非対応 warn の warn-once latch（#342-#2）。main thread 専用呼び出しなので
+    /// `bool` で足りる（`AtomicBool` 不要）。`device_lost_reported` 慣習と同型。
+    warned_rescan_unsupported: bool,
 }
 
 impl<'a> OrbitHostMainThread<'a> {
@@ -76,6 +79,7 @@ impl<'a> OrbitHostMainThread<'a> {
         Self {
             _shared: shared,
             plugin: None,
+            warned_rescan_unsupported: false,
         }
     }
 }
@@ -110,14 +114,17 @@ impl HostAudioPortsImpl for OrbitHostMainThread<'_> {
     }
 
     fn rescan(&mut self, flags: AudioPortRescanFlags) {
-        // S1: 動的ポート変更非対応。is_rescan_flag_supported=false を広告済みだが、plugin が
-        // それでも rescan を要求した場合は no-op になる。構築時に固定した is_effect
-        // （has_audio_input）／ポート構成が陳腐化しうるため、サイレントにせず warn で可視化する
-        // （#342-#2。動的ポート対応そのものは #342 項目2 の将来作業）。
-        tracing::warn!(
-            "[clap] plugin が audio-port rescan を要求したが S1 は動的ポート非対応のため no-op — \
-             構築時の is_effect/ポート構成が陳腐化している可能性 (flags={flags:?})"
-        );
+        // S1: is_rescan_flag_supported=false を広告済みだが plugin が rescan を要求した場合は no-op。
+        // 構築時固定の is_effect（has_audio_input）/ポート構成が陳腐化しうるので可視化する（#342-#2。
+        // 動的ポート対応そのものは #342 項目2 の将来作業）。同一 plugin の繰り返し要求でログを flood
+        // させないため warn-once（2 回目以降は新情報ゼロ）。
+        if !self.warned_rescan_unsupported {
+            tracing::warn!(
+                "[clap] plugin が audio-port rescan を要求したが S1 は動的ポート非対応のため no-op — \
+                 構築時の is_effect/ポート構成が陳腐化している可能性 (flags={flags:?})"
+            );
+            self.warned_rescan_unsupported = true;
+        }
     }
 }
 
