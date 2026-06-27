@@ -317,54 +317,25 @@ impl PostProcessor for ClapPostProcessor {
             );
             let input_events = self.event_scratch.as_input();
 
-            // plugin バッファサイズを確認する（BufferSize::Fixed なら zero-cost）。
-            buffers.ensure_buffer_size_matches(data.len());
-            let frame_count = buffers.cpal_buf_len_to_frame_count(data.len());
+            // effect（serial insert = overwrite）/ instrument（parallel = add-mix）の経路分岐と 1-block
+            // process は共有カーネルに委譲する（γ child / parity の ClapEffectProcessor と同一の音響処理・
+            // 設計 §4.4）。process_block_core が入出力配線（成功時のみ）と steady 更新まで行い、
+            // process 成功可否を返す。
+            let process_ok = process_block_core(
+                plugin,
+                buffers,
+                &mut self.steady_counter,
+                &input_events,
+                data,
+            );
 
-            // effect（serial insert）/ instrument（parallel add-mix）の経路分岐（PR2・Issue #340）。
-            // effect: engine 出力を plugin 入力へ流し、出力で data を上書きする。
-            // instrument: 入力を無音にし、出力を data に add-mix する。
-            let is_effect = buffers.has_audio_input();
-            if is_effect {
-                buffers.set_input_from_interleaved(data);
-            } else {
-                buffers.set_input_silent();
-            }
-            let (ins, mut outs) = buffers.prepare_plugin_buffers(data.len());
-
-            // エラーはサイレントに無視できない: 毎ブロックでエラーを返す plugin が
-            // 見えなくなるため、process_error_count でカウントする（RT 安全: atomic のみ）。
-            let process_ok = plugin
-                .process(
-                    &ins,
-                    &mut outs,
-                    &input_events,
-                    &mut OutputEvents::void(),
-                    Some(self.steady_counter),
-                    None,
-                )
-                .is_ok();
+            // エラーはサイレントに無視できない: 毎ブロックでエラーを返す plugin が見えなくなるため、
+            // process_error_count でカウントする（RT 安全: atomic のみ）。
             if !process_ok {
                 self.stats
                     .process_error_count
                     .fetch_add(1, Ordering::Relaxed);
             }
-
-            // 出力配線は **process 成功時のみ**。失敗時は `data`（engine render 済みの dry 信号）を
-            // そのまま通す。effect で失敗時に replace すると未確定の出力で dry 信号を上書きして 1 ブロック
-            // 無音化する（effect topology の落とし穴・code-review #340）。instrument も部分書き込みの
-            // garbage を add しないよう、同様に成功時のみ add-mix する。
-            // effect は overwrite（serial insert）、instrument は add-mix（A0 §4.1 step d）。
-            if process_ok {
-                if is_effect {
-                    buffers.replace_cpal_buffer(data);
-                } else {
-                    buffers.add_to_cpal_buffer(data);
-                }
-            }
-
-            // steady counter を進める（A0 §4.1 step f、plugin ブランチ内のみ）。
-            self.steady_counter += frame_count as u64;
         } else {
             // plugin 未インストール: ring の note をドレイン&破棄（ring が詰まらないように）。
             while self.event_consumer.pop().is_ok() {}
