@@ -12,7 +12,9 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use orbit_sandbox_spike::{open_shared, region_ptr, set_realtime_thread, CHANNELS, MAX_FRAMES};
+use orbit_sandbox_spike::{
+    open_shared, region_ptr, set_realtime_thread, slot_offset, CHANNELS, MAX_FRAMES,
+};
 
 struct Cli {
     shm: PathBuf,
@@ -104,12 +106,14 @@ fn main() -> anyhow::Result<()> {
         if cur > last {
             let n = unsafe { (*r).n_frames.load(Ordering::Relaxed) as usize }.min(MAX_FRAMES);
             let count = n * CHANNELS;
-            // SAFETY: host の 1-outstanding 不変条件により、host は前 req 完了後のみ次の input を
-            // 上書きする = この req を処理している間 host は input/output に触れない。よって input を
-            // 読み gain を掛けて output に書くこの window で host との競合は無い。
+            // ping-pong: この seq の slot を read/write する（host も同じ seq&1 で index する）。
+            let off = slot_offset(cur);
+            // SAFETY: slot 不変条件（モジュール doc）により、host はこの seq の slot を処理中に触れない
+            // （sync は 1-outstanding、pipelined は 2-outstanding guard）。よって input[off..] を読み
+            // gain を掛けて output[off..] に書くこの window で host との競合は無い。
             unsafe {
-                let inp = (*r).input.as_ptr();
-                let out = (*r).output.as_mut_ptr();
+                let inp = (*r).input.as_ptr().add(off);
+                let out = (*r).output.as_mut_ptr().add(off);
                 for i in 0..count {
                     *out.add(i) = *inp.add(i) * gain;
                 }

@@ -6,13 +6,16 @@
 //!
 //! 使い方:
 //!   sandbox-host [--measure-secs N] [--buffer-frames F] [--round-trip-timeout-us US]
-//!                [--child-crash-after-blocks N] [--gain G] [--child-rt-priority]
+//!                [--child-crash-after-blocks N] [--gain G]
+//!                [--child-rt-priority] [--in-process] [--pipelined]
 //!
 //! Gate1（RT round-trip が block budget に収まるか）: crash 無しで実行しレイテンシ分布を見る。
 //! Gate2（子の crash 封じ込め + watchdog 復帰）: --child-crash-after-blocks N で実行し、
 //!   respawn 後に round-trip が再開し audio が復帰することを確認する。
 //! candidate A（#350）: --child-rt-priority で子を RT(time-constraint)優先度にし、worst-case
 //!   tail が同期ベースライン（Step0）より縮むかを比較する。
+//! candidate B（#350）: --pipelined で host が spin せず block N を渡して N-1 を読む。判定軸は stale 率。
+//! in-process 対照（#350）: --in-process で child を使わず callback 内で直接合成し floor を測る。
 
 #![allow(unsafe_code)]
 
@@ -23,7 +26,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use orbit_sandbox_spike::{create_shared, region_ptr, SharedRegion, CHANNELS, MAX_FRAMES};
+use orbit_sandbox_spike::{
+    create_shared, region_ptr, slot_offset, SharedRegion, CHANNELS, MAX_FRAMES,
+};
 
 // ---- CLI ----------------------------------------------------------------
 
@@ -42,6 +47,9 @@ struct Cli {
     /// sandbox round-trip を通さない経路（= ネイティブ楽器が走る経路）の callback_max floor を測り、
     /// 「この機材/CoreAudio が 64f を in-process でクリーンに出せるか」を独立に検証する。
     in_process: bool,
+    /// true なら candidate B（one-block-pipelined）: host は spin せず block N を渡して N-1 を読む。
+    /// tail を構造的に消す代わり 1 block の遅延 + child 遅延時の stale。判定軸は stale 率（#350）。
+    pipelined: bool,
 }
 
 fn parse_args() -> anyhow::Result<Cli> {
@@ -54,6 +62,7 @@ fn parse_args() -> anyhow::Result<Cli> {
         gain: 0.5,
         child_rt_priority: false,
         in_process: false,
+        pipelined: false,
     };
     while let Some(arg) = args.next() {
         let mut next = || {
@@ -68,6 +77,7 @@ fn parse_args() -> anyhow::Result<Cli> {
             "--gain" => cli.gain = next()?.parse()?,
             "--child-rt-priority" => cli.child_rt_priority = true,
             "--in-process" => cli.in_process = true,
+            "--pipelined" => cli.pipelined = true,
             other => anyhow::bail!("Unknown argument: {other}"),
         }
     }
@@ -103,6 +113,10 @@ struct RtStats {
     post_peak_bits: AtomicU32,
     /// 最後に round-trip が成功した時刻（t_start からの ns）。recovery 判定用。
     last_success_ns: AtomicU64,
+    /// pipelined（候補 B）: 出力時に child がその block を未完了で stale 出力した回数。B の判定軸。
+    stale_count: AtomicU64,
+    /// pipelined（候補 B）: slot 再利用不可（child が 2 block 以上遅延）で submit を見送った回数。
+    stall_count: AtomicU64,
 }
 
 impl RtStats {
@@ -119,6 +133,8 @@ impl RtStats {
             callback_max_ns: AtomicU64::new(0),
             post_peak_bits: AtomicU32::new(0),
             last_success_ns: AtomicU64::new(0),
+            stale_count: AtomicU64::new(0),
+            stall_count: AtomicU64::new(0),
         })
     }
 
@@ -460,127 +476,235 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         (*region).child_processed.store(0, Ordering::Relaxed);
     }
 
-    let region_ptr_send = RegionPtr(region);
-    let cb_stats = stats.clone();
-    let mut req: u64 = warm_req;
-    let mut phase: f64 = 0.0;
     // cpal の fatal error（device 切断 / HAL 障害）でストリームが callback 配送を止めると、残りの
     // 計測窓は無音のまま teardown され `measurement_valid: true` の誤データになりうる。error callback
     // でも同じ sentinel を立て、go/no-go を誤導しないようにする。
-    let stream_err_invalid = measurement_invalid.clone();
+    let stream = if cli.pipelined {
+        // ===== candidate B: one-block-pipelined（host は spin しない）=====
+        let region_ptr_send = RegionPtr(region);
+        let cb_stats = stats.clone();
+        let stream_err_invalid = measurement_invalid.clone();
+        // req = 直近に submit 成功した seq。primed=false の初回は読むべき前回 submit が無い。
+        let mut req: u64 = warm_req;
+        let mut phase: f64 = 0.0;
+        let mut primed = false;
+        device.build_output_stream(
+            &cpal_config,
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let cb_start = Instant::now();
+                let r = region_ptr_send.get();
+                let frames = data.len() / CHANNELS;
+                let n = frames.min(MAX_FRAMES);
+                let count = n * CHANNELS;
+                if frames > MAX_FRAMES {
+                    cb_stats.frames_clamped.fetch_add(1, Ordering::Relaxed);
+                }
 
-    let stream = device.build_output_stream(
-        &cpal_config,
-        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            let cb_start = Instant::now();
-            let r = region_ptr_send.get();
-            let frames = data.len() / CHANNELS;
-            let n = frames.min(MAX_FRAMES);
-            let count = n * CHANNELS;
-            if frames > MAX_FRAMES {
-                // 全幅を round-trip できていない（部分ブロックのみ）。結果で警告するため記録。
-                cb_stats.frames_clamped.fetch_add(1, Ordering::Relaxed);
-            }
+                let mut peak: f32 = 0.0;
 
-            // --- 1-outstanding request モデル ---
-            // 前の request が完了（seq_done が req に追いついている）したときのみ新規 request を発行する。
-            // こうすると、child が（生きていて遅延中でも・crash 後 respawn 待ちでも）前 req の input を
-            // 読んでいる最中に host が input を上書きすることが無く、クロスプロセスのデータ競合を
-            // 構造的に排除する（high-load で live child が timeout を超過した場合の UB を防ぐ）。
-            let prev_done = unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req;
-
-            let mut peak: f32 = 0.0;
-            if prev_done {
-                // input にテストトーンを書く。
-                // SAFETY: 前 req は完了済（seq_done >= req）= child は前 req の input 読み出しを終え
-                // seq_done を Release 済。よってここでは host が input の唯一の writer（child は次の
-                // seq_request を観測するまで input/output に触れない）。
-                unsafe {
-                    let inp = (*r).input.as_mut_ptr();
-                    for f in 0..n {
-                        phase += phase_inc;
-                        if phase >= std::f64::consts::TAU {
-                            phase -= std::f64::consts::TAU;
+                // --- 出力: 前回 submit した seq `req` の結果を読む（child は ~1 block 分の時間があった）---
+                if primed {
+                    let done = unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req;
+                    if done {
+                        // fresh: この seq の slot の output を出力にコピー。
+                        // SAFETY: seq_done >= req を Acquire 観測 → child の output 書き込みが可視。
+                        // 2-outstanding guard により host はこの slot を上書きしていない。
+                        unsafe {
+                            let out = (*r).output.as_ptr().add(slot_offset(req));
+                            for (i, slot) in data.iter_mut().enumerate().take(count) {
+                                let v = *out.add(i);
+                                *slot = v;
+                                peak = peak.max(v.abs());
+                            }
                         }
-                        let s = (phase.sin() as f32) * 0.5;
-                        *inp.add(f * CHANNELS) = s;
-                        *inp.add(f * CHANNELS + 1) = s;
-                    }
-                    (*r).n_frames.store(n as u32, Ordering::Relaxed);
-                }
-                // publish: Release で seq_request を進める（n_frames/input 書き込みが child から可視に）。
-                req += 1;
-                unsafe {
-                    (*r).seq_request.store(req, Ordering::Release);
-                }
-
-                // --- bounded spin で child の done を待つ（RT は無制限ブロックしない）---
-                let t0 = Instant::now();
-                let mut got = false;
-                loop {
-                    if unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req {
-                        got = true;
-                        break;
-                    }
-                    if t0.elapsed() >= timeout {
-                        break;
-                    }
-                    std::hint::spin_loop();
-                }
-                // spin 直後の時刻を一度だけ読み、round-trip と last_success の両方に使う
-                // （hot-path の clock 読みを 1 回に減らす）。
-                let now = Instant::now();
-                let rt_ns = (now - t0).as_nanos() as u64;
-
-                if got {
-                    // SAFETY: done を Acquire で観測済 → child の output 書き込みが可視。
-                    unsafe {
-                        let out = (*r).output.as_ptr();
-                        for (i, slot) in data.iter_mut().enumerate().take(count) {
-                            let v = *out.add(i);
-                            *slot = v;
-                            peak = peak.max(v.abs());
+                        for s in data.iter_mut().skip(count) {
+                            *s = 0.0;
                         }
+                        cb_stats.success_count.fetch_add(1, Ordering::Relaxed);
+                        cb_stats.last_success_ns.store(
+                            (Instant::now() - t_start).as_nanos() as u64,
+                            Ordering::Relaxed,
+                        );
+                    } else {
+                        // stale: child がこの block を未完了 → silence（stale policy）。B の判定軸。
+                        // production は直前 block の repeat が選択肢だが spike は silence で stale 率を測る。
+                        for s in data.iter_mut() {
+                            *s = 0.0;
+                        }
+                        cb_stats.stale_count.fetch_add(1, Ordering::Relaxed);
                     }
-                    // フレーム超過分（n < frames）は無音で埋める。
-                    for s in data.iter_mut().skip(count) {
+                } else {
+                    // priming: 読むべき前回 submit がまだ無い → 無音。
+                    for s in data.iter_mut() {
                         *s = 0.0;
                     }
-                    cb_stats.record_roundtrip(rt_ns);
-                    cb_stats
-                        .last_success_ns
-                        .store((now - t_start).as_nanos() as u64, Ordering::Relaxed);
+                }
+
+                // --- submit: 新 seq を child に渡す（spin しない）---
+                // slot 再利用安全: 新 seq の slot の前 occupant = new_seq-2。seq_done >= new_seq-2 を要求。
+                let new_seq = req + 1;
+                let slot_free =
+                    unsafe { (*r).seq_done.load(Ordering::Acquire) } >= new_seq.saturating_sub(2);
+                if slot_free {
+                    let off = slot_offset(new_seq);
+                    // SAFETY: 上の guard で new_seq の slot の前 occupant は完了済 = child は触れない。
+                    // n_frames は固定 buffer で常に同値（可変 block 化するなら slot 毎に持つ必要あり）。
+                    unsafe {
+                        let inp = (*r).input.as_mut_ptr().add(off);
+                        for f in 0..n {
+                            phase += phase_inc;
+                            if phase >= std::f64::consts::TAU {
+                                phase -= std::f64::consts::TAU;
+                            }
+                            let s = (phase.sin() as f32) * 0.5;
+                            *inp.add(f * CHANNELS) = s;
+                            *inp.add(f * CHANNELS + 1) = s;
+                        }
+                        (*r).n_frames.store(n as u32, Ordering::Relaxed);
+                        (*r).seq_request.store(new_seq, Ordering::Release);
+                    }
+                    req = new_seq;
+                    primed = true;
                 } else {
-                    // この req は timeout = glitch-to-silence。req は outstanding のまま残り、次の
-                    // callback は prev_done=false となって child が追いつくまで input を上書きしない。
+                    // stall: child が 2 block 以上遅延し slot 再利用不可 → submit 見送り（req 据え置き）。
+                    cb_stats.stall_count.fetch_add(1, Ordering::Relaxed);
+                }
+
+                cb_stats
+                    .post_peak_bits
+                    .fetch_max(peak.to_bits(), Ordering::Relaxed);
+                cb_stats
+                    .callback_max_ns
+                    .fetch_max(cb_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                cb_stats.frames_total.fetch_add(n as u64, Ordering::Relaxed);
+            },
+            move |err| {
+                eprintln!("[cpal err] {err}");
+                stream_err_invalid.store(true, Ordering::Relaxed);
+            },
+            None,
+        )?
+    } else {
+        // ===== sync / candidate A（host が bounded spin で待つ）=====
+        let region_ptr_send = RegionPtr(region);
+        let cb_stats = stats.clone();
+        let stream_err_invalid = measurement_invalid.clone();
+        let mut req: u64 = warm_req;
+        let mut phase: f64 = 0.0;
+        device.build_output_stream(
+            &cpal_config,
+            move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                let cb_start = Instant::now();
+                let r = region_ptr_send.get();
+                let frames = data.len() / CHANNELS;
+                let n = frames.min(MAX_FRAMES);
+                let count = n * CHANNELS;
+                if frames > MAX_FRAMES {
+                    // 全幅を round-trip できていない（部分ブロックのみ）。結果で警告するため記録。
+                    cb_stats.frames_clamped.fetch_add(1, Ordering::Relaxed);
+                }
+
+                // --- 1-outstanding request モデル ---
+                // 前の request が完了（seq_done が req に追いついている）したときのみ新規 request を発行する。
+                // こうすると、child が（生きていて遅延中でも・crash 後 respawn 待ちでも）前 req の input を
+                // 読んでいる最中に host が input を上書きすることが無く、クロスプロセスのデータ競合を
+                // 構造的に排除する（high-load で live child が timeout を超過した場合の UB を防ぐ）。
+                let prev_done = unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req;
+
+                let mut peak: f32 = 0.0;
+                if prev_done {
+                    // 新 seq へ進めてから、その seq の slot に input を書く（child も slot_offset(req) で読む）。
+                    req += 1;
+                    let off = slot_offset(req);
+                    // SAFETY: 前 req は完了済（seq_done >= req-1）= 新 seq の slot の前 occupant（req-2）も
+                    // 完了している（1-outstanding）。よって host がこの slot の唯一の writer（child は次の
+                    // seq_request を観測するまで input/output に触れない）。
+                    unsafe {
+                        let inp = (*r).input.as_mut_ptr().add(off);
+                        for f in 0..n {
+                            phase += phase_inc;
+                            if phase >= std::f64::consts::TAU {
+                                phase -= std::f64::consts::TAU;
+                            }
+                            let s = (phase.sin() as f32) * 0.5;
+                            *inp.add(f * CHANNELS) = s;
+                            *inp.add(f * CHANNELS + 1) = s;
+                        }
+                        (*r).n_frames.store(n as u32, Ordering::Relaxed);
+                    }
+                    // publish: Release で seq_request を進める（n_frames/input 書き込みが child から可視に）。
+                    unsafe {
+                        (*r).seq_request.store(req, Ordering::Release);
+                    }
+
+                    // --- bounded spin で child の done を待つ（RT は無制限ブロックしない）---
+                    let t0 = Instant::now();
+                    let mut got = false;
+                    loop {
+                        if unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req {
+                            got = true;
+                            break;
+                        }
+                        if t0.elapsed() >= timeout {
+                            break;
+                        }
+                        std::hint::spin_loop();
+                    }
+                    // spin 直後の時刻を一度だけ読み、round-trip と last_success の両方に使う
+                    // （hot-path の clock 読みを 1 回に減らす）。
+                    let now = Instant::now();
+                    let rt_ns = (now - t0).as_nanos() as u64;
+
+                    if got {
+                        // SAFETY: done を Acquire で観測済 → child の output 書き込みが可視。slot は req と一致。
+                        unsafe {
+                            let out = (*r).output.as_ptr().add(slot_offset(req));
+                            for (i, slot) in data.iter_mut().enumerate().take(count) {
+                                let v = *out.add(i);
+                                *slot = v;
+                                peak = peak.max(v.abs());
+                            }
+                        }
+                        // フレーム超過分（n < frames）は無音で埋める。
+                        for s in data.iter_mut().skip(count) {
+                            *s = 0.0;
+                        }
+                        cb_stats.record_roundtrip(rt_ns);
+                        cb_stats
+                            .last_success_ns
+                            .store((now - t_start).as_nanos() as u64, Ordering::Relaxed);
+                    } else {
+                        // この req は timeout = glitch-to-silence。req は outstanding のまま残り、次の
+                        // callback は prev_done=false となって child が追いつくまで input を上書きしない。
+                        for s in data.iter_mut() {
+                            *s = 0.0;
+                        }
+                        cb_stats.overrun_count.fetch_add(1, Ordering::Relaxed);
+                    }
+                } else {
+                    // 前 req がまだ outstanding（child が遅延 or crash 後 respawn 待ち）。input を上書きせず
+                    // glitch-to-silence する。child が前 req を完了（or respawn 子が処理）すれば次から再開。
                     for s in data.iter_mut() {
                         *s = 0.0;
                     }
                     cb_stats.overrun_count.fetch_add(1, Ordering::Relaxed);
                 }
-            } else {
-                // 前 req がまだ outstanding（child が遅延 or crash 後 respawn 待ち）。input を上書きせず
-                // glitch-to-silence する。child が前 req を完了（or respawn 子が処理）すれば次から再開。
-                for s in data.iter_mut() {
-                    *s = 0.0;
-                }
-                cb_stats.overrun_count.fetch_add(1, Ordering::Relaxed);
-            }
 
-            cb_stats
-                .post_peak_bits
-                .fetch_max(peak.to_bits(), Ordering::Relaxed);
-            cb_stats
-                .callback_max_ns
-                .fetch_max(cb_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            cb_stats.frames_total.fetch_add(n as u64, Ordering::Relaxed);
-        },
-        move |err| {
-            eprintln!("[cpal err] {err}");
-            stream_err_invalid.store(true, Ordering::Relaxed);
-        },
-        None,
-    )?;
+                cb_stats
+                    .post_peak_bits
+                    .fetch_max(peak.to_bits(), Ordering::Relaxed);
+                cb_stats
+                    .callback_max_ns
+                    .fetch_max(cb_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                cb_stats.frames_total.fetch_add(n as u64, Ordering::Relaxed);
+            },
+            move |err| {
+                eprintln!("[cpal err] {err}");
+                stream_err_invalid.store(true, Ordering::Relaxed);
+            },
+            None,
+        )?
+    };
     stream.play()?;
 
     // --- 計測（main スレッドは待つだけ）------------------------------------
@@ -603,7 +727,51 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     }
     let invalid = measurement_invalid.load(Ordering::Relaxed);
 
-    // --- 結果出力 -----------------------------------------------------------
+    // --- 結果出力（pipelined / 候補 B は判定軸が stale 率なので専用ブロック）-------------------
+    if cli.pipelined {
+        let frames_total = stats.frames_total.load(Ordering::Relaxed);
+        let fresh = stats.success_count.load(Ordering::Relaxed);
+        let stale = stats.stale_count.load(Ordering::Relaxed);
+        let stall = stats.stall_count.load(Ordering::Relaxed);
+        let cb_max = stats.callback_max_ns.load(Ordering::Relaxed);
+        let post_peak = f32::from_bits(stats.post_peak_bits.load(Ordering::Relaxed));
+        let frames_clamped = stats.frames_clamped.load(Ordering::Relaxed);
+        // 出力 callback 総数 = fresh + stale（priming の無音 callback 〜1 は除外）。
+        let output_cbs = fresh + stale;
+        let avg_frames = frames_total.checked_div(output_cbs.max(1)).unwrap_or(0);
+        let block_budget_ns = avg_frames * 1_000_000_000 / sample_rate as u64;
+        let stale_pct = if output_cbs > 0 {
+            stale as f64 * 100.0 / output_cbs as f64
+        } else {
+            0.0
+        };
+
+        println!();
+        println!("=== orbit-sandbox-spike (pipelined / candidate B) ===");
+        if invalid {
+            println!(
+                "MEASUREMENT INVALID — cpal/watchdog failure (see stderr); 数値は信頼できない。"
+            );
+        }
+        println!("measurement_valid:     {}", !invalid);
+        println!("sample_rate:           {sample_rate}");
+        println!("output_callbacks:      {output_cbs}");
+        println!("avg_frames_per_cb:     {avg_frames}");
+        println!("block_budget_ns:       ~{block_budget_ns}");
+        println!("pipelined_fresh:       {fresh}");
+        println!("pipelined_stale:       {stale}");
+        println!("pipelined_stall:       {stall}");
+        println!("stale_pct:             {stale_pct:.4}");
+        println!("callback_max_ns:       {cb_max}");
+        println!("post_mix_peak:         {post_peak:.5}");
+        if frames_clamped > 0 {
+            println!("WARNING: {frames_clamped} callbacks exceeded MAX_FRAMES ({MAX_FRAMES})");
+        }
+        println!("=====================================================");
+        return Ok(());
+    }
+
+    // --- 結果出力（sync / 候補 A）-------------------------------------------
     let frames_total = stats.frames_total.load(Ordering::Relaxed);
     let frames_clamped = stats.frames_clamped.load(Ordering::Relaxed);
     let success = stats.success_count.load(Ordering::Relaxed);
