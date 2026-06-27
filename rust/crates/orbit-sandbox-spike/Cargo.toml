@@ -1,0 +1,29 @@
+# orbit-sandbox-spike — γ (Issue #348) out-of-process sandbox feasibility spike.
+#
+# 本 crate は post-2.0 engine の γ フェーズ（effects + 3rd-party plugin を
+# プロセス境界で隔離し、daemon が 3rd-party の crash を生存させる）の Step0。
+# 「RT audio thread がプロセス越しに block を round-trip しても block budget に収まるか
+# (Gate1)」「child の segfault を親が封じ込めて watchdog 復帰できるか (Gate2)」を実証する
+# feasibility spike。production crate ではない（publish = false）。
+# 設計の親ドキュメント: docs/development/POST_2.0_NEXT_STEPS.html（γ セクション）。
+#
+# 2 binary 構成:
+#   sandbox-host  — 親プロセス。cpal 出力 + RT round-trip 計測 + child watchdog。
+#   sandbox-child — 隔離されたエフェクトプロセス。shared mem から block を読み gain を掛けて返す。
+#                   --crash-after-blocks で自発 segfault し Gate2 を駆動する。
+[package]
+name = "orbit-sandbox-spike"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+cpal.workspace = true
+# file-backed mmap(MAP_SHARED)。親子で同一ファイルを map して共有メモリにする。
+# MIT/Apache-2.0（cargo-deny allow）。新規 sync crate は不要 — 同期は MAP_SHARED 上の
+# atomic + bounded spin（macOS に futex は無いが atomic + spin で足りる）。
+memmap2 = "0.9"
+anyhow = "1"

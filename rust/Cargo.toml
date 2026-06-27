@@ -8,6 +8,7 @@ members = [
   "crates/orbit-audio-verify",
   "crates/orbit-clap-spike",
   "crates/orbit-clap-host",
+  "crates/orbit-sandbox-spike",
 ]
 # 🔴 orbit-link-audio(GPL 隔離 crate)は **member にしない**。
 # member にすると default の `cargo build` / cargo-deny がこの GPL crate を root として
