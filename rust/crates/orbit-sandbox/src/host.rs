@@ -164,7 +164,7 @@ impl SandboxHostTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::{create_shared, region_ptr, SLOTS};
+    use crate::shared::{create_shared, region_ptr, CHANNELS, SLOTS};
     use std::sync::atomic::Ordering;
 
     const N: usize = 64; // テスト用フレーム数
