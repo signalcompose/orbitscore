@@ -40,6 +40,13 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **レビュー（/simplify）**: 4 agent（reuse/simplification/efficiency/altitude）。reuse+efficiency+altitude が一致して **warn-once latch** を指摘（unthrottled warn は misbehaving plugin の繰り返し rescan でログ flood）。`OrbitHostMainThread` に `bool` フィールド `warned_rescan_unsupported` を追加し warn-once 化（main-thread 専用なので atomic 不要・`session.rs` の `device_lost_reported` 慣習を再利用）。host.rs コメントは warn メッセージとの重複を削り latch の根拠に絞った。clap_host.rs の #342-#3 verdict コメントは altitude が「load-bearing な anti-footgun・clean」と判定し維持（simplification の「1行圧縮」より altitude を採用）。
 
+**レビュー（/code:pr-review-team）**: code-reviewer / silent-failure-hunter / pr-test-analyzer = **Critical/Important=0**。comment-analyzer のみ **Critical 1 + Important 2**（#342-#3 verdict コメントの事実誤り）を指摘し、一次情報で裏取りして全て採用・修正:
+- **C-1**: 「`main()` の非 async スコープで drop」は誤り。`_stream_guard` は `async fn run()`（`#[tokio::main]` multi_thread・worker 2）末尾・`server::serve().await` 返却後に drop = **tokio worker の async context**。teardown 中 worker を最大 TEARDOWN_TIMEOUT(500ms) ブロックしうるが、通常は RT thread が即 `done` を立て数 ms で抜け・shutdown フェーズなので許容（`done` を立てる cpal callback は worker と独立で deadlock しない）→ コメント訂正。
+- **I-1**: 「RT thread は `done` を atomic store するだけ」は過小。実際は stop_processing(CLAP 仕様=RT 必須)+buffers 解放+install ring drain も行う（processor.rs で確認）→ コメント訂正。
+- **I-2**: 「Condvar は notify 時に RT thread へ mutex を強いる」は技術的に誤り（`Condvar::notify_one` は `&self`・mutex 保持不要）。真の RT 不適理由は notify の syscall(futex/psynch_cvsignal) レイテンシ → コメント訂正（code-reviewer は mutex 説を是としたが comment-analyzer が正しい・一次情報で裁定）。
+- Minor 対応: pr-test-analyzer の「real plugin 不要で latch を単体テスト可」を採用し `rescan_warn_latches_after_first_request`（`AudioPortRescanFlags` を trivially 構築・UFCS 呼び）追加。silent-failure の「再要求 flags の観測性」を `else { tracing::debug!(...) }` で対応（warn flood 回避・debug は既定抑制）。
+- 再検証: fmt/clippy clean・clap-host 12 + daemon protocol 19 ほか 0 failed。
+
 ### 6.171 fix(engine): drain install ring on teardown to prevent plugin-instance leak (#342-#1) (Jun 26, 2026)
 
 **Date**: 2026-06-26
