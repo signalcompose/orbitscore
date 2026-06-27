@@ -144,8 +144,8 @@ fn is_recovered(respawns: u64, last_success_ns: u64, last_respawn_ns: u64) -> bo
 
 /// 生ポインタを cpal callback（Send 要求）に渡すためのラッパ。
 /// SAFETY: ポインタは run() が保持する mmap を指す。stream は mmap より先に drop されるので
-/// callback 実行中は常に有効。host callback が input/output の唯一の writer/reader（ハンドシェイクで
-/// child と時間的排他）なので別スレッド送付も健全。
+/// callback 実行中は常に有効。バッファ競合は 1-outstanding 不変条件（host は前 req 完了後のみ input を
+/// 上書きする）+ seq_done の Release/Acquire で排除されるので、別スレッドへの送付も健全。
 struct RegionPtr(*mut SharedRegion);
 unsafe impl Send for RegionPtr {}
 
@@ -208,12 +208,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let respawn_count = Arc::new(AtomicU64::new(0));
     let last_respawn_ns = Arc::new(AtomicU64::new(0));
+    // 計測が信頼できない事象（respawn 失敗 / 子の終了検知エラー / watchdog panic）が起きたら立てる。
+    // 結果は「全 overrun」など authoritative に見える誤データになりうるので、結果前にバナーを出し
+    // recovered を gate して go/no-go を誤導しないようにする。
+    let measurement_invalid = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     let wd = {
         let child = child.clone();
         let shutdown = shutdown.clone();
         let respawn_count = respawn_count.clone();
         let last_respawn_ns = last_respawn_ns.clone();
+        let measurement_invalid = measurement_invalid.clone();
         let child_exe = child_exe.clone();
         let shm_path = shm_path.clone();
         std::thread::spawn(move || loop {
@@ -223,8 +228,16 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 let _ = g.wait();
                 break;
             }
-            // try_wait は終了済みなら status を返し zombie を reap する。
-            let exited = child.lock().unwrap().try_wait().ok().flatten();
+            // try_wait は終了済みなら status を返し zombie を reap する。検知自体が Err なら子の死を
+            // 取りこぼし全 callback が overrun 化しうるので、握り潰さず計測無効を立てる。
+            let exited = match child.lock().unwrap().try_wait() {
+                Ok(status) => status,
+                Err(e) => {
+                    eprintln!("[watchdog] try_wait error: {e} — treating child as alive");
+                    measurement_invalid.store(true, Ordering::Relaxed);
+                    None
+                }
+            };
             if let Some(status) = exited {
                 eprintln!("[watchdog] child exited ({status:?}); respawning clean child");
                 // respawn は crash arg 無し → clean な子 → audio 復帰。
@@ -235,7 +248,11 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                         last_respawn_ns
                             .store(t_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                     }
-                    Err(e) => eprintln!("[watchdog] respawn failed: {e}"),
+                    Err(e) => {
+                        // 以後 child 不在のまま全 callback が overrun = 「アーキ不成立」に見える誤データ。
+                        eprintln!("[watchdog] FATAL: respawn failed: {e}");
+                        measurement_invalid.store(true, Ordering::Relaxed);
+                    }
                 }
             }
             std::thread::sleep(Duration::from_millis(2));
@@ -292,6 +309,13 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         println!("child warm-up complete ({warm_req} round-trips)");
     }
+    // warm-up 分（64 block）を child_processed から除く。リセット後は計測中の実ブロック数のみを数え、
+    // child の crash 判定（--child-crash-after-blocks N = 実ブロック N 個目で crash）と
+    // child_processed_blocks 出力が warm-up に汚染されない。ここでは stream 未開始かつ child は
+    // seq_request > warm_req を待っているので child_processed への並行書き込みは無い。
+    unsafe {
+        (*region).child_processed.store(0, Ordering::Relaxed);
+    }
 
     let region_ptr_send = RegionPtr(region);
     let cb_stats = stats.clone();
@@ -311,66 +335,85 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 cb_stats.frames_clamped.fetch_add(1, Ordering::Relaxed);
             }
 
-            // --- input にテストトーンを書く ---
-            // SAFETY: r は共有領域。ハンドシェイク前なので host が input の唯一の writer。
-            unsafe {
-                let inp = (*r).input.as_mut_ptr();
-                for f in 0..n {
-                    phase += phase_inc;
-                    if phase >= std::f64::consts::TAU {
-                        phase -= std::f64::consts::TAU;
-                    }
-                    let s = (phase.sin() as f32) * 0.5;
-                    *inp.add(f * CHANNELS) = s;
-                    *inp.add(f * CHANNELS + 1) = s;
-                }
-                (*r).n_frames.store(n as u32, Ordering::Relaxed);
-            }
-            // publish: Release で seq_request を進める（input 書き込みが child から可視に）。
-            req += 1;
-            unsafe {
-                (*r).seq_request.store(req, Ordering::Release);
-            }
-
-            // --- bounded spin で child の done を待つ（RT は無制限ブロックしない）---
-            let t0 = Instant::now();
-            let mut got = false;
-            loop {
-                if unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req {
-                    got = true;
-                    break;
-                }
-                if t0.elapsed() >= timeout {
-                    break;
-                }
-                std::hint::spin_loop();
-            }
-            // spin 直後の時刻を一度だけ読み、round-trip と last_success の両方に使う
-            // （hot-path の clock 読みを 1 回に減らす）。
-            let now = Instant::now();
-            let rt_ns = (now - t0).as_nanos() as u64;
+            // --- 1-outstanding request モデル ---
+            // 前の request が完了（seq_done が req に追いついている）したときのみ新規 request を発行する。
+            // こうすると、child が（生きていて遅延中でも・crash 後 respawn 待ちでも）前 req の input を
+            // 読んでいる最中に host が input を上書きすることが無く、クロスプロセスのデータ競合を
+            // 構造的に排除する（high-load で live child が timeout を超過した場合の UB を防ぐ）。
+            let prev_done = unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req;
 
             let mut peak: f32 = 0.0;
-            if got {
-                // SAFETY: done を Acquire で観測済 → child の output 書き込みが可視。
+            if prev_done {
+                // input にテストトーンを書く。
+                // SAFETY: 前 req は完了済（seq_done >= req）= child は前 req の input 読み出しを終え
+                // seq_done を Release 済。よってここでは host が input の唯一の writer（child は次の
+                // seq_request を観測するまで input/output に触れない）。
                 unsafe {
-                    let out = (*r).output.as_ptr();
-                    for (i, slot) in data.iter_mut().enumerate().take(count) {
-                        let v = *out.add(i);
-                        *slot = v;
-                        peak = peak.max(v.abs());
+                    let inp = (*r).input.as_mut_ptr();
+                    for f in 0..n {
+                        phase += phase_inc;
+                        if phase >= std::f64::consts::TAU {
+                            phase -= std::f64::consts::TAU;
+                        }
+                        let s = (phase.sin() as f32) * 0.5;
+                        *inp.add(f * CHANNELS) = s;
+                        *inp.add(f * CHANNELS + 1) = s;
                     }
+                    (*r).n_frames.store(n as u32, Ordering::Relaxed);
                 }
-                // フレーム超過分（n < frames）は無音で埋める。
-                for s in data.iter_mut().skip(count) {
-                    *s = 0.0;
+                // publish: Release で seq_request を進める（n_frames/input 書き込みが child から可視に）。
+                req += 1;
+                unsafe {
+                    (*r).seq_request.store(req, Ordering::Release);
                 }
-                cb_stats.record_roundtrip(rt_ns);
-                cb_stats
-                    .last_success_ns
-                    .store((now - t_start).as_nanos() as u64, Ordering::Relaxed);
+
+                // --- bounded spin で child の done を待つ（RT は無制限ブロックしない）---
+                let t0 = Instant::now();
+                let mut got = false;
+                loop {
+                    if unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req {
+                        got = true;
+                        break;
+                    }
+                    if t0.elapsed() >= timeout {
+                        break;
+                    }
+                    std::hint::spin_loop();
+                }
+                // spin 直後の時刻を一度だけ読み、round-trip と last_success の両方に使う
+                // （hot-path の clock 読みを 1 回に減らす）。
+                let now = Instant::now();
+                let rt_ns = (now - t0).as_nanos() as u64;
+
+                if got {
+                    // SAFETY: done を Acquire で観測済 → child の output 書き込みが可視。
+                    unsafe {
+                        let out = (*r).output.as_ptr();
+                        for (i, slot) in data.iter_mut().enumerate().take(count) {
+                            let v = *out.add(i);
+                            *slot = v;
+                            peak = peak.max(v.abs());
+                        }
+                    }
+                    // フレーム超過分（n < frames）は無音で埋める。
+                    for s in data.iter_mut().skip(count) {
+                        *s = 0.0;
+                    }
+                    cb_stats.record_roundtrip(rt_ns);
+                    cb_stats
+                        .last_success_ns
+                        .store((now - t_start).as_nanos() as u64, Ordering::Relaxed);
+                } else {
+                    // この req は timeout = glitch-to-silence。req は outstanding のまま残り、次の
+                    // callback は prev_done=false となって child が追いつくまで input を上書きしない。
+                    for s in data.iter_mut() {
+                        *s = 0.0;
+                    }
+                    cb_stats.overrun_count.fetch_add(1, Ordering::Relaxed);
+                }
             } else {
-                // glitch-to-silence（deadlock しない）。
+                // 前 req がまだ outstanding（child が遅延 or crash 後 respawn 待ち）。input を上書きせず
+                // glitch-to-silence する。child が前 req を完了（or respawn 子が処理）すれば次から再開。
                 for s in data.iter_mut() {
                     *s = 0.0;
                 }
@@ -396,8 +439,19 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     // --- teardown -----------------------------------------------------------
     shutdown.store(true, Ordering::Relaxed);
     drop(stream); // cpal 停止（callback が止まり region への RT アクセスが終わる）
-    let _ = wd.join();
-    let _ = std::fs::remove_file(&shm_path);
+    if let Err(e) = wd.join() {
+        // watchdog の panic は「respawn が走らなかった」= Gate2 が成立していないことを意味する。
+        // 握り潰すと recovered=false を「復帰失敗」と誤読させるので計測無効を立てる。
+        eprintln!("[watchdog] thread panicked: {e:?}");
+        measurement_invalid.store(true, Ordering::Relaxed);
+    }
+    if let Err(e) = std::fs::remove_file(&shm_path) {
+        eprintln!(
+            "[host] failed to remove shm file {}: {e}",
+            shm_path.display()
+        );
+    }
+    let invalid = measurement_invalid.load(Ordering::Relaxed);
 
     // --- 結果出力 -----------------------------------------------------------
     let frames_total = stats.frames_total.load(Ordering::Relaxed);
@@ -420,14 +474,22 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 
     let avg_frames = frames_total.checked_div(callbacks).unwrap_or(0);
     let block_budget_ns = avg_frames * 1_000_000_000 / sample_rate as u64;
-    // recovery: respawn があり、最後の成功 round-trip が最後の respawn より後なら復帰している。
-    let recovered = is_recovered(respawns, last_success, last_respawn);
+    // recovery: respawn があり、最後の成功 round-trip が最後の respawn より後で、かつ計測が有効
+    // （respawn 失敗等が無い）なら復帰している。invalid のときは偽 recovered を出さない。
+    let recovered = !invalid && is_recovered(respawns, last_success, last_respawn);
     // Gate2 の無音窓は `roundtrip_overruns`（glitch-to-silence した callback 数 × block 周期）で読む。
     // last_success は毎成功で上書きされる「最後の成功時刻」なので last_success − last_respawn は
     // 「respawn から実行終了まで」になり無音窓ではない（誤った派生メトリックは持たない・#348 review）。
 
     println!();
     println!("=== orbit-sandbox-spike (host) results ===");
+    if invalid {
+        println!(
+            "MEASUREMENT INVALID — respawn/watchdog/child-detect failure; results below are NOT"
+        );
+        println!("  usable for go/no-go (see stderr). 数値は信頼できない。");
+    }
+    println!("measurement_valid:     {}", !invalid);
     println!("sample_rate:           {sample_rate}");
     println!("total_callbacks:       {callbacks}");
     println!("avg_frames_per_cb:     {avg_frames}");
@@ -463,21 +525,38 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    // p99: 1000 サンプル中 990 が bucket0(<1µs)、10 が 50µs なら p99 は tail bucket(50µs)に入る。
+    // 990/1000 が bucket0、10/1000（ちょうど 1%）が 50µs: p99 の閾値 = ceil(1000*0.99) = 990 で、
+    // これは bucket0 の累積（990）でちょうど満たされる → p99 は tail に入らず 0。境界（cum == threshold）
+    // のオフバイワン回帰を捕捉する。max は tail を捉えることも確認。
     #[test]
-    fn p99_crosses_into_tail() {
+    fn p99_stays_in_fast_bucket_at_exactly_one_percent() {
         let s = RtStats::new();
         for _ in 0..990 {
-            s.record_roundtrip(500); // bucket 0 (<1µs)
+            s.record_roundtrip(500); // bucket 0 (<2µs)
         }
         for _ in 0..10 {
-            s.record_roundtrip(50_000); // bucket 50 (50µs)
+            s.record_roundtrip(50_000); // bucket 25 (50µs)
         }
-        // 99% 閾値 = 990 番目。990 個が bucket0 なので 990 到達は bucket0… ではなく ceil(1000*0.99)=990。
-        // bucket0 の累積は 990 で threshold 990 に達する → p99 = bucket0 下限 = 0。
         assert_eq!(s.p99_ns(), 0);
-        // max は tail を捉える。
         assert_eq!(s.rt_max_ns.load(Ordering::Relaxed), 50_000);
+    }
+
+    // histogram 範囲（(HIST_BUCKETS-1)*BUCKET_NS = 8.19ms）を超える round-trip は overflow bucket に
+    // 飽和する。timeout を 8.19ms 超に設定して走らせた場合、8.19ms 超の成功 round-trip は p99 を
+    // 過小評価する（= histogram は round_trip_timeout <= 8.19ms のときのみ正確）という限界を明文化する。
+    #[test]
+    fn p99_saturates_at_overflow_bucket_beyond_histogram_range() {
+        let s = RtStats::new();
+        for _ in 0..100 {
+            s.record_roundtrip(10_000_000); // 10ms > 8.192ms histogram max → bucket 4095 に飽和
+        }
+        assert_eq!(
+            s.p99_ns(),
+            (HIST_BUCKETS - 1) as u64 * BUCKET_NS,
+            "overflow bucket は下限を返す（真のレイテンシではない）"
+        );
+        // 真の最大は飽和しない（rt_max は実値を保持）。
+        assert_eq!(s.rt_max_ns.load(Ordering::Relaxed), 10_000_000);
     }
 
     // tail がより太いと p99 が tail bucket に乗る。

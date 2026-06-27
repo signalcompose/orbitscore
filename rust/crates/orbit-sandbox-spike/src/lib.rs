@@ -3,13 +3,17 @@
 //! file-backed mmap(MAP_SHARED) を親子双方が map し、同一物理ページを共有する。
 //! 同期は [`SharedRegion`] 内の atomic（`seq_request` / `seq_done`）による SPSC ハンドシェイク:
 //!
-//! 1. host: `input` を書く → `seq_request` を **Release** で +1 して publish。
-//! 2. child: `seq_request` を **Acquire** で読む（> 前回なら）→ input が可視 → `output` を書く →
-//!    `seq_done = seq_request` を **Release** で store。
+//! 1. host: `n_frames` と `input` を書く → `seq_request` を **Release** で +1 して publish
+//!    （`n_frames` は Relaxed だが Release 前に書かれるので child の Acquire で可視）。
+//! 2. child: `seq_request` を **Acquire** で読む（> 前回なら）→ n_frames/input が可視 → `output`
+//!    を書く → `seq_done = seq_request` を **Release** で store。
 //! 3. host: `seq_done` を **Acquire** で読む（>= 自分の req なら）→ output が可視 → 出力にコピー。
 //!
-//! このハンドシェイクが input/output バッファへのアクセスを時間的に排他化する（同一バッファに
-//! host と child が同時に触れる瞬間が無い）ので、生ポインタ経由の `&mut [f32]` 形成も健全。
+//! **1-outstanding request 不変条件**: host は前 req が完了（`seq_done >= req`）したことを確認して
+//! からのみ次の `input` を上書きする（host 側の callback でこれを enforce）。よって child が前 req の
+//! `input` を読んでいる間に host が `input` を上書きすることは無く、`output` は seq_done の Release/
+//! Acquire で覆われる。この不変条件のもとでバッファアクセスは時間的に排他化され、生ポインタ経由の
+//! `&mut [f32]` 形成も健全（この不変条件が破れると live-but-slow child との間でデータ競合 = UB になる）。
 //! macOS に futex は無いが、RT 側は **bounded spin**（timeout 付き）で待つため別プロセスを
 //! 無制限にブロックしない（`ClapTeardownGuard` の busy-wait-with-deadline と同型）。
 

@@ -28,13 +28,13 @@ post-2.0 native engine の **γ（out-of-process sandbox）** フェーズ Step0
 
 **Gate1（warmed・synchronous・各 buffer 3 回・MacBook Pro arm64・44100Hz）**: 判定軸は worst-case `callback_max ÷ budget`（`overruns` は CoreAudio が xrun を発火しないため不可・#295 fence）。
 - 512f（budget 11.6ms）: worst callback_max 2.15ms = 18.5% → **PASS**。
-- 128f（2.9ms）: 2.79ms = 96% → 余裕ゼロ（reliably safe とは言えない）。
+- 128f（2.9ms）: 2.83ms = 98% → 余裕ゼロ（reliably safe とは言えない）。
 - 64f（1.45ms）: 4.15ms = 286% → **違反**。
 - mean/p99 は µs（mean 6〜21µs / p99 大半 <0.5ms）。**worst-case tail（~2〜4ms）は buffer サイズ非依存の定数**（scheduling jitter＝child/host のプリエンプト由来）→ budget がこれを上回る必要があり、同期設計は実質 **≥256 frame の buffer 下限**を強制。tail はプロセス隔離ではなく**同期 round-trip 設計の代償**。
 
-**Gate2（crash 封じ込め + watchdog 復帰）= PASS**: child SIGSEGV → **host プロセス生存**（C-ABI segfault をプロセス境界で封じ込め）→ watchdog respawn → audio-flow 復帰（`recovered=true`・peak 0.25）。512f は recovery 2.6ms で無音落ちすら無し。64f は bounded spin が callback を timeout で頭打ち（deadlock 無し）・gap 中 38 callbacks が glitch-to-silence（≈55ms respawn 窓）。**未証明**: plugin 内部状態（preset/automation）の復帰（child は stateless gain）。
+**Gate2（crash 封じ込め + watchdog 復帰）= PASS**: child SIGSEGV → **host プロセス生存**（C-ABI segfault をプロセス境界で封じ込め）→ watchdog respawn → audio-flow 復帰（`recovered=true`・peak 0.25）。512f は budget 内 recovery（overrun 0）で無音落ちすら無し。64f は bounded spin が callback を timeout で頭打ち（deadlock 無し）・gap 中 数十 callbacks が glitch-to-silence（respawn 窓 ≈ 数十 ms）。**未証明**: plugin 内部状態（preset/automation）の復帰（child は stateless gain）。
 
-**Verdict = FEASIBLE**（両ゲート PASS）。低 buffer の tail は既知・対処可能な設計制約で blocker ではない。**latency policy の fork（spike の output・事前に決めない方針どおり）= 「synchronous + child RT 優先度」 vs 「one-block-pipelined」**（どちらも本 spike では未計測の candidate・γ 実装で計測して決める）。verdict は `docs/development/POST_2.0_GAMMA_SANDBOX_SPIKE.md` に記録。advisor が verdict 解釈を確認（4 点の scoping 修正を反映）。defer: event/param IPC・複数 plugin・境界越え automation・本番 daemon 統合（cutover #108）。
+**Verdict = FEASIBLE**（両ゲート PASS）。低 buffer の tail は既知・対処可能な設計制約で blocker ではない。**latency policy の fork（spike の output・事前に決めない方針どおり）= 「synchronous + child RT 優先度」 vs 「one-block-pipelined」**（どちらも本 spike では未計測の candidate・γ 実装で計測して決める）。verdict は `docs/development/POST_2.0_GAMMA_SANDBOX_SPIKE.md` に記録。advisor が verdict 解釈を確認（4 点の scoping 修正を反映）。`/simplify` + `/code:pr-review-team`（4 レビュアー）で全 Critical/Important を解消: input data race（live child が timeout 超過時の UB）を **1-outstanding request モデル**で構造的に排除・`measurement_invalid` sentinel で respawn 失敗/検知エラー/watchdog panic の誤データを可視化（authoritative に見える誤 go/no-go を防止）・`child_processed` の warm-up 汚染除去・p99 overflow saturation テスト追加。defer: event/param IPC・複数 plugin・境界越え automation・本番 daemon 統合（cutover #108）。
 
 ### 6.173 docs(engine): S1b-1 low-latency strict floor 32/64 frame verdict (#295) (Jun 27, 2026)
 

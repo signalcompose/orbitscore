@@ -71,8 +71,9 @@ fn main() -> anyhow::Result<()> {
         if cur > last {
             let n = unsafe { (*r).n_frames.load(Ordering::Relaxed) as usize }.min(MAX_FRAMES);
             let count = n * CHANNELS;
-            // SAFETY: ハンドシェイクが host との時間的排他を保証する（host はこの window 中
-            // input/output に触れない）。input を読み gain を掛けて output に書く。
+            // SAFETY: host の 1-outstanding 不変条件により、host は前 req 完了後のみ次の input を
+            // 上書きする = この req を処理している間 host は input/output に触れない。よって input を
+            // 読み gain を掛けて output に書くこの window で host との競合は無い。
             unsafe {
                 let inp = (*r).input.as_ptr();
                 let out = (*r).output.as_mut_ptr();
@@ -81,7 +82,8 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             // 観測用カウンタを進め、その新値を crash 判定にも使う（別ローカルを持たない）。
-            // 共有 counter なので warm-up 分も含む = この child のライフタイム処理数。
+            // host が warm-up 後に 0 リセットするので計測中の実ブロック数を数える。なお全子プロセス
+            // 累積で respawn 子はリセットされない（respawn 子は crash_after=0 なので実害なし）。
             let processed = unsafe { (*r).child_processed.fetch_add(1, Ordering::Relaxed) } + 1;
 
             // Gate2: 規定ブロック数を処理したら自発 segfault（misbehaving plugin の模擬）。
