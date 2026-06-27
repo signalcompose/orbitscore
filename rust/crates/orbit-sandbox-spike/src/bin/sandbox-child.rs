@@ -5,25 +5,33 @@
 //! 自発 segfault し、Gate2（親が子の crash を封じ込めて watchdog 復帰できるか）を駆動する。
 //!
 //! 使い方:
-//!   sandbox-child --shm <path> [--crash-after-blocks <N>]
+//!   sandbox-child --shm <path> [--crash-after-blocks <N>] [--rt-priority] [--rt-period-us <US>]
 
 #![allow(unsafe_code)]
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use orbit_sandbox_spike::{open_shared, region_ptr, CHANNELS, MAX_FRAMES};
+use orbit_sandbox_spike::{
+    open_shared, region_ptr, set_realtime_thread, slot_offset, CHANNELS, MAX_FRAMES,
+};
 
 struct Cli {
     shm: PathBuf,
     /// > 0 なら N ブロック処理後に自発 segfault（Gate2 用）。0 = crash しない。
     crash_after_blocks: u64,
+    /// true なら spin スレッドを RT(time-constraint)優先度に上げる（candidate A・#350）。
+    rt_priority: bool,
+    /// RT の period（µs）= block period。computation/constraint をここから導く。0 = host 未指定。
+    rt_period_us: u64,
 }
 
 fn parse_args() -> anyhow::Result<Cli> {
     let mut args = std::env::args().skip(1);
     let mut shm: Option<PathBuf> = None;
     let mut crash_after_blocks: u64 = 0;
+    let mut rt_priority = false;
+    let mut rt_period_us: u64 = 0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--shm" => {
@@ -39,12 +47,21 @@ fn parse_args() -> anyhow::Result<Cli> {
                     .ok_or_else(|| anyhow::anyhow!("--crash-after-blocks requires a value"))?
                     .parse()?
             }
+            "--rt-priority" => rt_priority = true,
+            "--rt-period-us" => {
+                rt_period_us = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--rt-period-us requires a value"))?
+                    .parse()?
+            }
             other => anyhow::bail!("Unknown argument: {other}"),
         }
     }
     Ok(Cli {
         shm: shm.ok_or_else(|| anyhow::anyhow!("--shm is required"))?,
         crash_after_blocks,
+        rt_priority,
+        rt_period_us,
     })
 }
 
@@ -59,6 +76,35 @@ fn main() -> anyhow::Result<()> {
         cli.crash_after_blocks
     );
 
+    // candidate A: spin スレッド（このスレッド = 唯一の処理スレッド）を RT に上げる。
+    // computation = period/2・constraint = period*3/4（>= computation）。失敗しても通常優先度で
+    // 継続するが、適用可否を共有メモリ `rt_active` に書き、host が `child_rt_applied` として stdout に
+    // 出力する（stderr だけだと redirect で失われ「効果なし」と誤読されるため・silent-failure review）。
+    if cli.rt_priority {
+        let period_ns = cli.rt_period_us.saturating_mul(1_000);
+        let applied = match set_realtime_thread(period_ns, period_ns / 2, period_ns * 3 / 4) {
+            Ok(()) => {
+                eprintln!(
+                    "[sandbox-child pid={}] RT thread enabled (period={}us)",
+                    std::process::id(),
+                    cli.rt_period_us
+                );
+                true
+            }
+            Err(e) => {
+                eprintln!(
+                    "[sandbox-child pid={}] WARNING: RT thread NOT enabled: {e} (running at normal priority)",
+                    std::process::id()
+                );
+                false
+            }
+        };
+        // SAFETY: r は host が確保した共有領域。rt_active は cross-process 可視（MAP_SHARED）。
+        unsafe {
+            (*r).rt_active.store(applied, Ordering::Relaxed);
+        }
+    }
+
     // gain は host 起動時に一度だけ設定され計測中は不変 → ループ外で 1 回だけ読む
     // （毎ブロックの shared control-line への atomic load + bit-cast を省く）。
     let gain = f32::from_bits(unsafe { (*r).gain_bits.load(Ordering::Relaxed) });
@@ -71,12 +117,14 @@ fn main() -> anyhow::Result<()> {
         if cur > last {
             let n = unsafe { (*r).n_frames.load(Ordering::Relaxed) as usize }.min(MAX_FRAMES);
             let count = n * CHANNELS;
-            // SAFETY: host の 1-outstanding 不変条件により、host は前 req 完了後のみ次の input を
-            // 上書きする = この req を処理している間 host は input/output に触れない。よって input を
-            // 読み gain を掛けて output に書くこの window で host との競合は無い。
+            // ping-pong: この seq の slot を read/write する（host も同じ seq&1 で index する）。
+            let off = slot_offset(cur);
+            // SAFETY: slot 不変条件（モジュール doc）により、host はこの seq の slot を処理中に触れない
+            // （sync は 1-outstanding、pipelined は 2-outstanding guard）。よって input[off..] を読み
+            // gain を掛けて output[off..] に書くこの window で host との競合は無い。
             unsafe {
-                let inp = (*r).input.as_ptr();
-                let out = (*r).output.as_mut_ptr();
+                let inp = (*r).input.as_ptr().add(off);
+                let out = (*r).output.as_mut_ptr().add(off);
                 for i in 0..count {
                     *out.add(i) = *inp.add(i) * gain;
                 }

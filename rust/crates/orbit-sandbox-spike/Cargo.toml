@@ -27,3 +27,10 @@ cpal.workspace = true
 # atomic + bounded spin（macOS に futex は無いが atomic + spin で足りる）。
 memmap2 = "0.9"
 anyhow = "1"
+
+# candidate A (sync + child RT 優先度) の計測用。child の spin スレッドを mach
+# THREAD_TIME_CONSTRAINT_POLICY に上げ、プリエンプト由来の tail が縮むか測る（#350）。
+# macOS 専用 API なので target-gated。CI(ubuntu) の default グラフには現れない。
+# MIT/Apache-2.0（cargo-deny allow）。
+[target.'cfg(target_os = "macos")'.dependencies]
+mach2 = "0.4"

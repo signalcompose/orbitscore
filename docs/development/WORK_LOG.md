@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.175 spike(engine): γ latency policy fork — pipelined solves 64f (#350) (Jun 27, 2026)
+
+γ staging の次段（Step0 #348 の後）。Step0 verdict §6 の **latency policy fork を計測して決める**（"run before you plan"）feasibility spike。owner 方針（DAW 並み小バッファ性能が目標）により 64f/32f を edge case ではなく性能ゴールとして扱う。
+
+`orbit-sandbox-spike` の `sandbox-host` に 3 モードを追加して計測:
+- **候補 A**（`--child-rt-priority`）: child の spin スレッドを mach `THREAD_TIME_CONSTRAINT_POLICY`（RT）へ（mach2・macOS 限定 target 依存）。
+- **in-process 対照**（`--in-process`）: child を使わず callback 内で直接合成し floor を測る。
+- **候補 B**（`--pipelined`）: host は spin せず block N を渡し N-1 を読む。ping-pong バッファ（input/output 各 2 slot・`seq&1` で uniform index・child も変更）+ 2-outstanding guard（`seq_done >= new_seq-2`）。判定軸 = **stale 率**（callback_max ではない・advisor 指摘）。
+
+**計測（MacBook Pro arm64・44100Hz・release・同一機材）**:
+- **候補 A は棄却**: 64f で worst callback_max ~2〜2.75ms（縮まず）、ある run で 154 overruns（≈223ms 無音）に不安定化。連続 spin スレッドへの time-constraint は macOS demote を招く。→ tail は child プリエンプト由来ではない。
+- **in-process 対照**: 64f worst callback_max = **6µs（0.41%）**。→ ~2ms tail は OS/driver floor ではなく **sandbox round-trip 待ち固有**。owner 主張「ネイティブ楽器=in-process は小バッファ OK」を実機で裏付け。
+- **候補 B が解く**: callback_max は 32〜256f すべてで ~3.5〜8µs（**<0.5% budget**）= tail 消滅。stale 率 = 256/128f 0% / 64f ≈0.11%（15s・11/10330）/ 32f ≈0.45%（31/6861）。stall は 64f+ で 0・32f で数件。
+
+**Verdict = 候補 B（one-block-pipelined）採用**。out-of-process sandbox を 32f まで小バッファで feasible にする。代償 = 1 block 遅延 + stale <0.5%（@32-64f・production は repeat-previous）+ 32f で slot 再利用圧（slot 3 化を検討）。同期設計の「≥256f 下限」制約は pipelined では外れる。verdict = `docs/development/POST_2.0_GAMMA_LATENCY_FORK_SPIKE.md`。次 = γ 本実装で pipelined 採用 → event/param IPC → daemon 統合 → cutover #108。
+
 ### 6.174 spike(engine): γ out-of-process sandbox feasibility — Gate1/Gate2 verdict (#348) (Jun 27, 2026)
 
 post-2.0 native engine の **γ（out-of-process sandbox）** フェーズ Step0。正本 `POST_2.0_NEXT_STEPS.html` の staging 指示「γ は単一 /goal にせず『daemon CLAP 統合（#340/#341 完了）→ sandbox スパイク』と段階化」に従い、feasibility spike（実装ではなく stop&report ゲート付き）を実施。

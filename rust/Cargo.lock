@@ -991,6 +991,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "cpal",
+ "mach2",
  "memmap2",
 ]
 
