@@ -38,6 +38,10 @@ struct Cli {
     /// true なら spawn する子に --rt-priority を渡し RT(time-constraint)スケジュールにする
     /// （candidate A・#350）。period は buffer_frames + sample_rate から導く。
     child_rt_priority: bool,
+    /// true なら child を使わず callback 内で直接トーンを合成する in-process 対照（#350）。
+    /// sandbox round-trip を通さない経路（= ネイティブ楽器が走る経路）の callback_max floor を測り、
+    /// 「この機材/CoreAudio が 64f を in-process でクリーンに出せるか」を独立に検証する。
+    in_process: bool,
 }
 
 fn parse_args() -> anyhow::Result<Cli> {
@@ -49,6 +53,7 @@ fn parse_args() -> anyhow::Result<Cli> {
         child_crash_after_blocks: 0,
         gain: 0.5,
         child_rt_priority: false,
+        in_process: false,
     };
     while let Some(arg) = args.next() {
         let mut next = || {
@@ -62,6 +67,7 @@ fn parse_args() -> anyhow::Result<Cli> {
             "--child-crash-after-blocks" => cli.child_crash_after_blocks = next()?.parse()?,
             "--gain" => cli.gain = next()?.parse()?,
             "--child-rt-priority" => cli.child_rt_priority = true,
+            "--in-process" => cli.in_process = true,
             other => anyhow::bail!("Unknown argument: {other}"),
         }
     }
@@ -200,7 +206,105 @@ fn spawn_child(
 
 fn main() -> anyhow::Result<()> {
     let cli = parse_args()?;
-    run(&cli)
+    if cli.in_process {
+        run_in_process(&cli)
+    } else {
+        run(&cli)
+    }
+}
+
+/// in-process 対照（#350）: child を使わず callback 内で直接トーンを合成する。sandbox round-trip を
+/// 通さない経路（= ネイティブ楽器が走る経路）の callback_max floor を測り、candidate B の
+/// callback_max の「tiny」基準を較正する。また「この機材/CoreAudio が 64f を in-process でクリーンに
+/// 出せるか」を独立に検証する（host 側 tail が CoreAudio/OS 由来なら in-process でも spike する）。
+fn run_in_process(cli: &Cli) -> anyhow::Result<()> {
+    let cpal_host = cpal::default_host();
+    let device = cpal_host
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("no default output device"))?;
+    let default_cfg = device.default_output_config()?;
+    let sample_rate = default_cfg.sample_rate().0;
+    let cpal_config = cpal::StreamConfig {
+        channels: CHANNELS as u16,
+        sample_rate: cpal::SampleRate(sample_rate),
+        buffer_size: match cli.buffer_frames {
+            Some(f) => cpal::BufferSize::Fixed(f),
+            None => cpal::BufferSize::Default,
+        },
+    };
+    println!(
+        "audio: {} Hz, {} ch, buffer={:?} (IN-PROCESS control)",
+        sample_rate, CHANNELS, cpal_config.buffer_size
+    );
+
+    let stats = RtStats::new();
+    let cb_stats = stats.clone();
+    let phase_inc = 2.0 * std::f64::consts::PI * 220.0 / sample_rate as f64;
+    let mut phase: f64 = 0.0;
+    // cpal の fatal error（device 切断等）で callback 配送が止まると無音のまま teardown され
+    // measurement_valid:true の誤データになりうる。error callback でも sentinel を立てる。
+    let measurement_invalid = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let err_flag = measurement_invalid.clone();
+
+    let stream = device.build_output_stream(
+        &cpal_config,
+        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            let cb_start = Instant::now();
+            let frames = data.len() / CHANNELS;
+            let mut peak: f32 = 0.0;
+            for f in 0..frames {
+                phase += phase_inc;
+                if phase >= std::f64::consts::TAU {
+                    phase -= std::f64::consts::TAU;
+                }
+                let s = (phase.sin() as f32) * 0.5;
+                data[f * CHANNELS] = s;
+                data[f * CHANNELS + 1] = s;
+                peak = peak.max(s.abs());
+            }
+            cb_stats
+                .post_peak_bits
+                .fetch_max(peak.to_bits(), Ordering::Relaxed);
+            cb_stats
+                .callback_max_ns
+                .fetch_max(cb_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            cb_stats
+                .frames_total
+                .fetch_add(frames as u64, Ordering::Relaxed);
+            cb_stats.success_count.fetch_add(1, Ordering::Relaxed);
+        },
+        move |err| {
+            eprintln!("[cpal err] {err}");
+            err_flag.store(true, Ordering::Relaxed);
+        },
+        None,
+    )?;
+    stream.play()?;
+    std::thread::sleep(Duration::from_secs(cli.measure_secs));
+    drop(stream);
+
+    let invalid = measurement_invalid.load(Ordering::Relaxed);
+    let callbacks = stats.success_count.load(Ordering::Relaxed);
+    let frames_total = stats.frames_total.load(Ordering::Relaxed);
+    let cb_max = stats.callback_max_ns.load(Ordering::Relaxed);
+    let post_peak = f32::from_bits(stats.post_peak_bits.load(Ordering::Relaxed));
+    let avg_frames = frames_total.checked_div(callbacks).unwrap_or(0);
+    let block_budget_ns = avg_frames * 1_000_000_000 / sample_rate as u64;
+
+    println!();
+    println!("=== orbit-sandbox-spike (in-process control) ===");
+    if invalid {
+        println!("MEASUREMENT INVALID — cpal error during run (see stderr); 数値は信頼できない。");
+    }
+    println!("measurement_valid:     {}", !invalid);
+    println!("sample_rate:           {sample_rate}");
+    println!("total_callbacks:       {callbacks}");
+    println!("avg_frames_per_cb:     {avg_frames}");
+    println!("block_budget_ns:       ~{block_budget_ns}");
+    println!("callback_max_ns:       {cb_max}");
+    println!("post_mix_peak:         {post_peak:.5}");
+    println!("================================================");
+    Ok(())
 }
 
 fn run(cli: &Cli) -> anyhow::Result<()> {
