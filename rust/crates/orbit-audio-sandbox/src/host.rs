@@ -448,8 +448,8 @@ mod tests {
             }
         }
 
-        // cb2: frames=128(count=256)→ submit seq2(slot_index(0)=0・slot1 と非衝突)。READ target=1:
-        // target_count=n_frames[slot1]=64 → copy=min(128,256)=128。data[0..128]=0.5・data[128..256]=無音。
+        // cb2: frames=128(count=256)→ submit seq2(slot_index(2)=0・slot1 と非衝突)。READ target=1:
+        // target_count=n_frames[slot1]=64frames×2ch=128 → copy=min(128,256)=128。data[0..128]=0.5・data[128..256]=無音。
         let mut d = block(2.0, 128);
         host.process_block(&mut d);
         assert!(
