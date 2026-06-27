@@ -23,6 +23,6 @@ pub use child::SandboxChildGuard;
 pub use host::PipelinedEffectHost;
 pub use offline::{max_abs_diff, render_in_process_gain, render_through_child_sync};
 pub use transport::{
-    create_shared, open_shared, region_ptr, slot_offset, SharedRegion, BUF_LEN, CHANNELS,
-    CONTROL_QUIT, CONTROL_RUN, MAX_FRAMES, REGION_BYTES, SLOTS,
+    create_shared, open_shared, region_ptr, slot_index, slot_offset, SharedRegion, BUF_LEN,
+    CHANNELS, CONTROL_QUIT, CONTROL_RUN, MAX_FRAMES, REGION_BYTES, SLOTS,
 };

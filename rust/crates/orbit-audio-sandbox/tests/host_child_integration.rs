@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::atomic::Ordering::Acquire;
+use std::sync::atomic::{AtomicU64, Ordering::Acquire, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 use orbit_audio_sandbox::{
@@ -30,7 +30,11 @@ fn pipelined_host_with_real_child_is_gain_delayed_one_block() {
     let frames = 64usize;
     let num_blocks = 8usize;
 
-    let path = std::env::temp_dir().join(format!("orbit-sbx-int-{}.shm", std::process::id()));
+    // PID + 連番で shm ファイル名を一意化(同一プロセスで複数テストが回っても衝突しない)。
+    static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
+    let uniq = SHM_SEQ.fetch_add(1, Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("orbit-sbx-int-{}-{}.shm", std::process::id(), uniq));
     let mmap_host = create_shared(&path).expect("create_shared");
     let child = Command::new(child_exe())
         .arg("--shm")

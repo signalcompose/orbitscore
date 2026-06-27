@@ -66,9 +66,11 @@ OOP effect host は `ClapPostProcessor` と**並列の新 impl**（`OutProcEffec
 
 spike の pipelined host loop（block N を submit し N-1 を読む・spin なし）を post-processor 意味論へ写す。`process(data)` の各呼び出し（RT callback）:
 
-1. **submit**: `data`（block N・engine の dry 出力）を shm input slot `slot_offset(N)` へ copy → `n_frames` store → `seq_request.store(N, Release)`
-2. **read**: `seq_done >= N-1`（Acquire）なら shm output slot(N-1) を `data` へ **overwrite**（= serial insert）し **last-good として保存**。未達なら **last-good を `data` へ copy（repeat-previous）**。最初の block は dry passthrough or silence で prime
+1. **submit**: `data`（block N・engine の dry 出力）を shm input slot `slot_offset(N)` へ copy → `n_frames[slot(N)]` store（per-slot）→ `seq_request.store(N, Release)`
+2. **read**: per-slot `seq_tag[slot(N-1)] == N-1`（Acquire）なら shm output slot(N-1) を `data` へ **overwrite**（= serial insert）し **last-good として保存**（copy 長は `n_frames[slot(N-1)]` で clamp し、現 callback が長ければ末尾を無音化）。未達なら **last-good を `data` へ copy（repeat-previous）**。最初の block は silence で prime
 3. **slot guard**: N-outstanding（`seq_done >= new_seq - SLOTS`）で slot 再利用衝突を防ぐ
+
+**read 判定が `seq_done` でなく per-slot `seq_tag` な理由**（PR-A round-1 review・load-bearing）: child は「latest 処理」（spike #351 が検証した挙動・最新 `seq_request` を処理）なので中間 seq を skip しうる。global monotone な `seq_done` で `>= N-1` を見ると、child が N-1 を skip して N を処理した時に `seq_done >= N-1` が成立し、**書かれていない slot(N-1) を false-fresh** で読んで観測 counter（PR-C の slot 数決定指標）を汚染する。child が output 書き込み後に `seq_tag[slot] = seq`(Release) を publish し、host が `seq_tag[slot(N-1)] == N-1`(Acquire) を確認することで skip を検知し repeat-previous に落とす。`seq_done` は submit guard 専用に残す。`n_frames` も per-slot 化（pipelined で host が次 block の n_frames を submit 済みでも、各 slot が正しい長さを持つ）。
 
 - **1-block 遅延**は最終 hw sum **全体**に均一にかかる純レイテンシ（effect は serial insert で dry を置換するため、上流の transport/scheduling には影響しない）。owner 受容済み（candidate B の代償）。
 - **RT-safe**: alloc/lock/block なし。last-good buffer は construction 時に事前確保。
@@ -84,7 +86,7 @@ pub fn slot_offset(seq: u64) -> usize { (seq as usize % SLOTS) * BUF_LEN }
 // input/output 配列は BUF_LEN * SLOTS で確保
 ```
 
-`SharedRegion`（`#[repr(C, align(64))]`）は `seq_request`/`seq_done`(AtomicU64)・`n_frames`(AtomicU32)・`input`/`output`(各 `[f32; BUF_LEN*SLOTS]`)・lifecycle 用 atomics。Acquire/Release で input/output の可視性を同期（spike から踏襲）。
+`SharedRegion`（`#[repr(C, align(64))]`）は `seq_request`/`seq_done`/`child_processed`(AtomicU64)・`control`(AtomicU32)・**per-slot** `seq_tag`(`[AtomicU64; SLOTS]`)・**per-slot** `n_frames`(`[AtomicU32; SLOTS]`)・`input`/`output`(各 `[f32; BUF_LEN*SLOTS]`)。Acquire/Release で input/output の可視性を同期（spike から踏襲）。per-slot `seq_tag`/`n_frames` は PR-A round-1 review で追加（§4.2 read 判定の根拠参照）。slot 数を焼き付けない構造方針上、PR-C の 2 vs 3 決定は同一 build で両プロセスが再コンパイルされる前提（cross-process ABI を published せず・same-build determinism）。
 
 ### 4.4 child process
 

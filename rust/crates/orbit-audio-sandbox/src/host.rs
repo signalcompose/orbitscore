@@ -17,7 +17,9 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use memmap2::MmapMut;
 
-use crate::transport::{region_ptr, slot_offset, SharedRegion, BUF_LEN, CHANNELS, SLOTS};
+use crate::transport::{
+    region_ptr, slot_index, slot_offset, SharedRegion, BUF_LEN, CHANNELS, MAX_FRAMES, SLOTS,
+};
 
 /// pipelined effect host の RT 状態。`process_block` を audio callback から呼ぶ。
 ///
@@ -114,7 +116,7 @@ impl PipelinedEffectHost {
                     in_base.add(slot_offset(new_seq)),
                     count,
                 );
-                (*region).n_frames.store(n_frames, Relaxed);
+                (*region).n_frames[slot_index(new_seq)].store(n_frames, Relaxed);
                 (*region).seq_request.store(new_seq, Release);
             }
             self.submitted = new_seq;
@@ -125,16 +127,31 @@ impl PipelinedEffectHost {
 
         // --- READ: 前 callback で submit したブロックの出力を data へ ---
         // 1-block pipeline: 今 play すべきは submitted-1(submit 後に約 1 period の処理時間を得た block)。
-        // `target >= 1` を先に評価し、初回(target=0)では atomic load を短絡する。`primed` は
-        // `done` 成立(= target>=1)でしか立たないため、別途 `primed` を見る必要はない(submitted は
-        // 減らないので一度 primed なら target>=1 が恒真)。
+        // fresh 判定は per-slot `seq_tag[slot(target)] == target`: global monotone な seq_done では、child が
+        // 「latest 処理」で中間 seq を skip しても seq_done が target を追い越してしまい false-fresh する
+        // (skip された slot は別 generation のまま)。`seq_tag` の Acquire が当該 slot の output を可視化する。
+        // `target >= 1` を先に評価し初回(target=0)で atomic load を短絡する。`primed` は ready 成立
+        // (target>=1)でしか立たないので、submitted が減らない以上 primed なら target>=1 は恒真。
         let target = self.submitted.saturating_sub(1);
-        let done = target >= 1 && unsafe { (*region).seq_done.load(Acquire) } >= target;
-        if done {
+        let ready =
+            target >= 1 && unsafe { (*region).seq_tag[slot_index(target)].load(Acquire) } == target;
+        if ready {
+            // child が slot(target)へ書いた実フレーム数で copy 長を clamp(可変 buffer の stale tail を防ぐ)。
+            // n_frames[slot(target)] は host 自身が target の submit 時に書いた値(同一プロセス・program
+            // order で可視)。slot 不変条件で target の slot は submitted+SLOTS まで再利用されない。
+            let target_count = (unsafe { (*region).n_frames[slot_index(target)].load(Relaxed) }
+                as usize)
+                .min(MAX_FRAMES)
+                * CHANNELS;
+            let copy = target_count.min(count);
             unsafe {
                 let out_base = std::ptr::addr_of!((*region).output) as *const f32;
                 let src = out_base.add(slot_offset(target));
-                std::ptr::copy_nonoverlapping(src, data.as_mut_ptr(), count);
+                std::ptr::copy_nonoverlapping(src, data.as_mut_ptr(), copy);
+            }
+            // 現 callback が target より大きい buffer を要求した端は無音で埋める(dry leak 防止・通常 0)。
+            if copy < count {
+                data[copy..count].fill(0.0);
             }
             // last_good は cache-hot な data から複製(shared page の 2 度読みを避ける)。
             self.last_good[..count].copy_from_slice(&data[..count]);
@@ -147,6 +164,11 @@ impl PipelinedEffectHost {
         } else {
             // まだ一度も good を読めていない(prime 中 / submit 不足)→ 無音。
             data[..count].fill(0.0);
+        }
+
+        // clamp(BUF_LEN 超)や端数 sample で触れなかった末尾は無音化(dry leak 防止・通常 count==raw で no-op)。
+        if count < raw {
+            data[count..].fill(0.0);
         }
     }
 }
@@ -167,22 +189,32 @@ mod tests {
         ptr
     }
 
-    /// テストが「child」を演じる: 直近 request を gain 適用して output へ書き、seq_done を進める。
+    /// テストが「child」を演じて **指定 seq** を処理する(skip シナリオ構築のため任意 seq を選べる)。
+    /// 実 child(bin/sandbox-effect-child)と同じ per-slot プロトコル: n_frames[slot] を読み output を
+    /// 書き、seq_tag[slot]=seq(Release)→ seq_done=seq(Release)。mock と実 child を同一手順に保つ。
+    fn child_process_seq(region: *mut SharedRegion, seq: u64, gain: f32) {
+        unsafe {
+            let n = (*region).n_frames[slot_index(seq)].load(Relaxed) as usize;
+            let count = n * CHANNELS;
+            let off = slot_offset(seq);
+            let in_base = std::ptr::addr_of!((*region).input) as *const f32;
+            let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
+            for i in 0..count {
+                *out_base.add(off + i) = *in_base.add(off + i) * gain;
+            }
+            (*region).child_processed.fetch_add(1, Relaxed);
+            (*region).seq_tag[slot_index(seq)].store(seq, Release);
+            (*region).seq_done.store(seq, Release);
+        }
+    }
+
+    /// テストが「child」を演じて直近 request(latest)を処理する(実 child の通常動作)。
     fn child_process_latest(region: *mut SharedRegion, gain: f32) {
         unsafe {
             let req = (*region).seq_request.load(Acquire);
             let done = (*region).seq_done.load(Relaxed);
             if req > done {
-                let n = (*region).n_frames.load(Relaxed) as usize;
-                let count = n * CHANNELS;
-                let off = slot_offset(req);
-                let in_base = std::ptr::addr_of!((*region).input) as *const f32;
-                let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
-                for i in 0..count {
-                    *out_base.add(off + i) = *in_base.add(off + i) * gain;
-                }
-                (*region).child_processed.fetch_add(1, Relaxed);
-                (*region).seq_done.store(req, Release);
+                child_process_seq(region, req, gain);
             }
         }
     }
@@ -271,5 +303,119 @@ mod tests {
         assert!(host.stall >= 1, "child 停止で stall が発生する");
         // 一度も fresh は読めていない(child 停止)。
         assert_eq!(host.fresh, 0);
+    }
+
+    // skip(latest 処理): child が中間 seq を skip して新しい seq を処理し global seq_done が target を
+    // 追い越しても、host は per-slot seq_tag で skip を検知し false-fresh しない(PR-C の counter を保護)。
+    // 旧判定(seq_done >= target)なら、書かれていない slot を fresh と誤読していたケース。
+    #[test]
+    fn pipelined_skip_is_not_false_fresh() {
+        let region = alloc_region();
+        let mut host = unsafe { PipelinedEffectHost::from_raw(region) };
+        let frames = 64;
+        let gain = 0.5;
+
+        // prime: cb1 submit seq1 → child seq1 → cb2 で seq1(0.5)を fresh 読み last_good を確立。
+        let mut d = block(1.0, frames);
+        host.process_block(&mut d);
+        child_process_seq(region, 1, gain);
+        let mut d = block(2.0, frames);
+        host.process_block(&mut d);
+        assert!(d.iter().all(|&x| (x - 0.5).abs() < 1e-9));
+        assert_eq!(host.fresh, 1);
+
+        // trap: child が seq2(slot0)を skip して seq3(slot1)へ jump したと模す。global seq_done を 3 に
+        // 進める(target=2 を追い越す)が slot0 の output/seq_tag は seq2 用に書かない(seq_tag[slot(2)]
+        // は初期 0 のまま)。旧判定 seq_done>=target なら未書込み slot を false-fresh する状況。
+        unsafe {
+            (*region).seq_done.store(3, Release);
+            (*region).seq_tag[slot_index(3)].store(3, Release); // seq3 は slot1 に正しく在る
+        }
+
+        // cb3: submit seq3(slot1)、read target=2(slot0)。seq_tag[slot0]=0 != 2 → repeat-previous。
+        let mut d = block(3.0, frames);
+        host.process_block(&mut d);
+        assert!(
+            d.iter().all(|&x| (x - 0.5).abs() < 1e-9),
+            "skip された seq2 を false-fresh せず直前 good(0.5)を再出力"
+        );
+        assert_eq!(host.stale, 1, "skip は stale 扱い");
+        assert_eq!(
+            host.fresh, 1,
+            "fresh counter は汚染されない(slot 数決定指標を保護)"
+        );
+    }
+
+    // recovery: stall でドロップした後でも、child が追いつけば host は再び fresh を読む(恒久 stall しない)。
+    #[test]
+    fn pipelined_recovers_after_stall() {
+        let region = alloc_region();
+        let mut host = unsafe { PipelinedEffectHost::from_raw(region) };
+        let frames = 64;
+        let gain = 0.5;
+
+        // child を止めたまま SLOTS+1 callback 回して stall を作る。
+        for i in 0..(SLOTS as u64 + 1) {
+            let mut d = block(i as f32 + 1.0, frames);
+            host.process_block(&mut d);
+        }
+        assert!(host.stall >= 1, "child 停止で stall");
+        let stalled = host.submitted;
+
+        // child を追いつかせる(latest 処理で seq_done が submitted に到達 → slot 解放)。
+        child_process_latest(region, gain);
+        let mut d = block(99.0, frames);
+        host.process_block(&mut d);
+        assert!(host.submitted > stalled, "slot 解放で submit 再開");
+
+        // 再開ぶんを child が処理 → 続く callback で fresh を読めることを確認。
+        child_process_latest(region, gain);
+        let prev_fresh = host.fresh;
+        let mut d = block(123.0, frames);
+        host.process_block(&mut d);
+        assert!(host.fresh > prev_fresh, "stall から復帰して fresh を読む");
+    }
+
+    // 境界: submit guard は `seq_done == new_seq - SLOTS` ちょうどで free(オフバイワン回帰検出)。
+    #[test]
+    fn pipelined_submit_guard_exact_boundary() {
+        let region = alloc_region();
+        let mut host = unsafe { PipelinedEffectHost::from_raw(region) };
+        let frames = 64;
+        let gain = 0.5;
+
+        // 最初の SLOTS 本は無条件 free(slot 未使用)。child は処理しない。
+        for i in 0..SLOTS as u64 {
+            let mut d = block(i as f32 + 1.0, frames);
+            host.process_block(&mut d);
+        }
+        assert_eq!(host.submitted, SLOTS as u64);
+        assert_eq!(host.stall, 0, "最初の SLOTS 本は無条件 free");
+
+        // child に seq1 だけ処理させる → seq_done=1。次 submit new_seq=SLOTS+1 の guard は
+        // seq_done >= (SLOTS+1)-SLOTS = 1。ちょうど 1 なので free(境界が < でなく >= である回帰を検出)。
+        child_process_seq(region, 1, gain);
+        let mut d = block(100.0, frames);
+        host.process_block(&mut d);
+        assert_eq!(
+            host.submitted,
+            SLOTS as u64 + 1,
+            "seq_done==new_seq-SLOTS ちょうどで submit 成功"
+        );
+        assert_eq!(host.stall, 0, "境界で stall しない");
+    }
+
+    // clamp: data.len() が BUF_LEN を超えても panic せず frames_clamped を数え、末尾は無音化する。
+    #[test]
+    fn pipelined_clamps_over_buf_len() {
+        let region = alloc_region();
+        let mut host = unsafe { PipelinedEffectHost::from_raw(region) };
+        // BUF_LEN を 1 frame ぶん超える buffer。
+        let over = BUF_LEN + CHANNELS;
+        let mut d = vec![0.7f32; over];
+        host.process_block(&mut d);
+        assert_eq!(host.frames_clamped, 1, "BUF_LEN 超で frames_clamped");
+        // 初回 prime 無音 + clamp 末尾無音なので全要素 0(panic しないことが主眼)。
+        assert!(d.iter().all(|&x| x == 0.0), "prime 無音 + 末尾無音");
     }
 }

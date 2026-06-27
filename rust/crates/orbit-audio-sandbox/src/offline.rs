@@ -16,7 +16,9 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::time::{Duration, Instant};
 
 use crate::child::SandboxChildGuard;
-use crate::transport::{create_shared, region_ptr, slot_offset, BUF_LEN, CHANNELS, CONTROL_RUN};
+use crate::transport::{
+    create_shared, region_ptr, slot_index, slot_offset, BUF_LEN, CHANNELS, CONTROL_RUN,
+};
 
 /// 1 block の child 完了を待つ上限(これを超えたら child 死亡とみなしエラー)。
 const BLOCK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -47,7 +49,8 @@ pub fn render_through_child_sync(
     let shm_path = unique_shm_path();
     let mmap = create_shared(&shm_path)?;
     let region = region_ptr(&mmap);
-    // SAFETY: create_shared 直後で全 atomic は 0(CONTROL_RUN = 0)。明示しておく。
+    // SAFETY: region の backing は本関数 scope の `mmap`(create_shared が返す生存 mapping)が生かす。
+    // truncate 直後で全 atomic は 0 だが、RUN 状態を明示するため CONTROL_RUN を store する。
     unsafe {
         (*region).control.store(CONTROL_RUN, Release);
     }
@@ -67,29 +70,33 @@ pub fn render_through_child_sync(
         let n_frames = chunk.len() / CHANNELS;
         let count = n_frames * CHANNELS;
         let off = slot_offset(seq);
-        // SAFETY: guard が mmap を生かす。同期 1-outstanding なので slot は排他。
+        // SAFETY: region の backing は本関数 scope の `mmap`(create_shared が返す)が生かす(guard は
+        // 制御専用で mapping を生かす責務は負わない)。同期 1-outstanding なので各 seq の slot は時間的に排他。
         unsafe {
             let in_base = std::ptr::addr_of_mut!((*region).input) as *mut f32;
             std::ptr::copy_nonoverlapping(chunk.as_ptr(), in_base.add(off), count);
-            (*region).n_frames.store(n_frames as u32, Relaxed);
+            (*region).n_frames[slot_index(seq)].store(n_frames as u32, Relaxed);
             (*region).seq_request.store(seq, Release);
         }
-        // child 完了を待つ(bounded)。
+        // child 完了を待つ(bounded・offline は非 RT なので spin でなく yield で CPU を譲る)。
         let deadline = Instant::now() + BLOCK_TIMEOUT;
         loop {
             if unsafe { (*region).seq_done.load(Acquire) } >= seq {
                 break;
             }
             if Instant::now() >= deadline {
+                // TODO(PR-C): child の crash(死亡)と単なる処理遅延の区別(ExitStatus 診断)は
+                // supervisor 層で行う。offline は timeout を一様に Err として扱う。
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "sandbox child が block を時間内に処理しなかった(死亡の可能性)",
                 ));
             }
-            std::hint::spin_loop();
+            std::thread::yield_now();
         }
         // 出力を回収。
-        // SAFETY: seq_done の Acquire が child の output 書き込みを可視化する。
+        // SAFETY: region の backing は本関数 scope の `mmap` が生かす。seq_done の Acquire が child の
+        // output 書き込みを可視化する(同期 1-outstanding なので seq_done==seq は slot(seq) を意味する)。
         unsafe {
             let out_base = std::ptr::addr_of!((*region).output) as *const f32;
             let src = out_base.add(off);

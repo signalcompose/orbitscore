@@ -1,13 +1,13 @@
 //! 親(host=daemon)/子(child=effect process) が共有する shared-memory レイアウトと map ヘルパ。
 //!
 //! file-backed mmap(MAP_SHARED) を親子双方が map し、同一物理ページを共有する。同期は
-//! [`SharedRegion`] 内の atomic(`seq_request` / `seq_done`)による SPSC ハンドシェイク:
+//! [`SharedRegion`] 内の atomic(`seq_request` / `seq_done` / per-slot `seq_tag`)による SPSC
+//! ハンドシェイク(各ステップは 1 行で記述):
 //!
-//! 1. host: `n_frames` と `input` を書く → `seq_request` を **Release** で進めて publish
-//!    (`n_frames` は Relaxed だが Release 前に書かれるので child の Acquire で可視)。
-//! 2. child: `seq_request` を **Acquire** で読む(前回より進んだら)→ n_frames/input が可視 →
-//!    `output` を書く → `seq_done = seq_request` を **Release** で store。
-//! 3. host: `seq_done` を **Acquire** で読む(>= 自分の req なら)→ output が可視 → 出力にコピー。
+//! - **host PUBLISH**: 該当 slot の `n_frames[slot]` と `input[slot]` を書く → `seq_request` を Release で進めて publish(`n_frames` は Relaxed だが Release 前に書かれ child の Acquire で可視)。
+//! - **child**: `seq_request` を Acquire で読む(前回より進んだら)→ n_frames/input が可視 → `output[slot]` を書く → `seq_tag[slot] = seq` を Release(その slot の出力 publish)→ `seq_done = seq` を Release(submit guard 用の最新処理 seq)で store。
+//! - **host READ**: `seq_tag[slot(target)]` を Acquire で読み `== target` なら output が可視 → 出力にコピー。global monotone な `seq_done` でなく per-slot `seq_tag` で判定するのは、child が「latest 処理」で中間 seq を skip しても、その slot の tag が target に一致せず false-fresh を防げるから(seq_done では skip を検知できない)。
+//! - **host SUBMIT guard**: `seq_done` を Acquire で読み slot 再利用可否(下記不変条件)を判定する。
 //!
 //! **ping-pong バッファ**: `input` / `output` は各 [`SLOTS`] 個の slot を持ち、seq を [`slot_offset`]
 //! で割り当てて交替する。slot を分けることで「host が seq s の slot を書く」のと「child が seq s-k の
@@ -51,11 +51,18 @@ pub const SLOTS: usize = 2;
 // 前提。outstanding guard も seq-SLOTS を見る)。PR-C で 2→3 にする際の床を compile-time に固定。
 const _: () = assert!(SLOTS >= 2);
 
+/// seq に対応する slot のインデックス(`0..SLOTS`)。per-slot メタデータ配列(`seq_tag` /
+/// `n_frames`)の添字に使う。`slot_offset` はこれを [`BUF_LEN`] 倍したバッファ要素オフセット。
+#[inline]
+pub fn slot_index(seq: u64) -> usize {
+    seq as usize % SLOTS
+}
+
 /// seq に対応する slot の開始要素オフセット(ping-pong: `seq % SLOTS` で [`SLOTS`] 個を循環)。
 /// host / child の双方がこれで `input` / `output` を index する(モード非依存)。
 #[inline]
 pub fn slot_offset(seq: u64) -> usize {
-    (seq as usize % SLOTS) * BUF_LEN
+    slot_index(seq) * BUF_LEN
 }
 
 /// `control` の値: child は spin を続ける。
@@ -75,17 +82,26 @@ pub const CONTROL_QUIT: u32 = 1;
 /// 渡す(M1 は per-block automation 無し。SharedRegion は audio + handshake に限定して clean に保つ)。
 #[repr(C, align(64))]
 pub struct SharedRegion {
-    /// host が input 書き込み後に進める。child はこれが前回値より進むのを待つ。
+    /// host が input/n_frames 書き込み後に進める。child はこれが前回値より進むのを待つ。
     pub seq_request: AtomicU64,
-    /// child が処理し終えた request seq を store する。host は `seq_done >= req` を待つ。
+    /// child が処理し終えた **最新** request seq(monotone)。host の **submit guard** が slot 再利用
+    /// 可否(`seq_done >= new_seq - SLOTS`)に使う。READ の fresh 判定には使わない(それは per-slot
+    /// [`SharedRegion::seq_tag`]。global monotone な seq_done では「latest 処理」の skip を検知できない)。
     pub seq_done: AtomicU64,
-    /// 現ブロックのフレーム数(<= MAX_FRAMES)。
-    pub n_frames: AtomicU32,
+    /// child が処理したブロック総数(観測用。respawn 後の処理再開を可視化する)。
+    pub child_processed: AtomicU64,
     /// host -> child の制御フラグ([`CONTROL_RUN`] / [`CONTROL_QUIT`])。host が teardown 時に
     /// QUIT を store し、child は spin loop の各周回で確認して正常終了する(kill より clean)。
     pub control: AtomicU32,
-    /// child が処理したブロック総数(観測用。respawn 後の処理再開を可視化する)。
-    pub child_processed: AtomicU64,
+    /// **per-slot**: child が各 slot に書いた output の seq。child は output 書き込み後 Release で store し、
+    /// host は READ 時に `seq_tag[slot(target)] == target` を Acquire で確認してから読む(その Acquire が
+    /// 当該 slot の output 書き込みを可視化する)。child が「latest 処理」で中間 seq を skip しても、その
+    /// slot の tag は target に一致しないので host は false-fresh せず repeat-previous に落ちる。
+    pub seq_tag: [AtomicU64; SLOTS],
+    /// **per-slot**: 各 slot の有効フレーム数(<= MAX_FRAMES)。host が submit 時に該当 slot へ書き、child
+    /// はその slot の値で処理長を決め、host は READ 時に copy 長の clamp に使う。pipelined で host が次 block
+    /// (別フレーム数)を submit 済みでも、各 slot は自分の正しい長さを持つ(単一 n_frames だと取り違える)。
+    pub n_frames: [AtomicU32; SLOTS],
     /// host -> child のインターリーブ入力(ping-pong: SLOTS 個の block。`slot_offset` で index)。
     pub input: [f32; BUF_LEN * SLOTS],
     /// child -> host のインターリーブ出力(ping-pong: SLOTS 個の block。`slot_offset` で index)。
@@ -168,5 +184,28 @@ mod tests {
         for s in 0..(SLOTS as u64 * 3) {
             assert_eq!(slot_offset(s), slot_offset(s + SLOTS as u64));
         }
+    }
+
+    // 存在しないファイルは map せず Err(open は read-only open なので作成しない)。
+    #[test]
+    fn open_shared_rejects_missing_file() {
+        let p = std::env::temp_dir().join(format!("orbit-sbx-missing-{}.shm", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        assert!(open_shared(&p).is_err(), "存在しないファイルは Err");
+    }
+
+    // REGION_BYTES 未満の stale/破損ファイルは生ポインタ deref 前に弾く(silently map しない)。
+    #[test]
+    fn open_shared_rejects_too_small_file() {
+        use std::io::Write;
+        let p = std::env::temp_dir().join(format!("orbit-sbx-small-{}.shm", std::process::id()));
+        {
+            let mut f = std::fs::File::create(&p).expect("create");
+            f.write_all(&[0u8; 16]).expect("write"); // REGION_BYTES より遥かに小さい
+        }
+        let r = open_shared(&p);
+        let _ = std::fs::remove_file(&p);
+        let err = r.expect_err("REGION_BYTES 未満は弾く");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }

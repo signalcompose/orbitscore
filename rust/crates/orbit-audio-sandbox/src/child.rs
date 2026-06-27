@@ -48,12 +48,18 @@ impl Drop for SandboxChildGuard {
         unsafe {
             (*self.region).control.store(CONTROL_QUIT, Release);
         }
+        // TODO(PR-C): respawn 判断のため child の ExitStatus を捕捉して supervisor へ渡す
+        // (本ガードは teardown 専用で終了 status を破棄する)。親プロセス死亡時の孤児化対策
+        // (PR_SET_PDEATHSIG 等)も supervisor 層で扱う。
         let deadline = Instant::now() + REAP_TIMEOUT;
         loop {
             match self.child.try_wait() {
                 Ok(Some(_)) => break,
                 Ok(None) if Instant::now() < deadline => std::hint::spin_loop(),
                 _ => {
+                    eprintln!(
+                        "orbit-audio-sandbox: child が {REAP_TIMEOUT:?} 以内に終了せず kill にフォールバック"
+                    );
                     let _ = self.child.kill();
                     let _ = self.child.wait();
                     break;
