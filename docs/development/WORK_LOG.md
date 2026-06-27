@@ -55,6 +55,12 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   - Minor 対応: Drop ログの因果文言是正 + `slots()` 占有数追加（code-reviewer + silent-failure M-2）/ 単体テストに empty-ring ケース追加。
   - 見送り: 正常経路 drain の silent 性への RT-path tracing（agent 自身の atomic 推奨と矛盾・benign event・Drop backstop で異常系は可視化済み）。
 
+**advisor 収束相談（2026-06-26）**: 収束**確立**（第2フル ラウンド不要・provenance は transcript の skill 起動 + CI green on ccaa240・#326 と同論理）。**@claude bot = ordering 不変条件 + clack Drop/Arc 相互作用に絞った scoped review が妥当**との助言。
+
+**@claude bot scoped review（2026-06-27・owner GO 後に起動）**: load-bearing な正当性（正常 teardown 経路）を一次情報まで降りて検証し **Critical/Important=0 で確認**。リーク解析（wrong-thread UB → leak 再フレーム）正しい / drain が `host.shutdown()` 前に走る（field drop 順 + `teardown_done` 後書きスピン）/ drain 時点で `PluginInstance` Arc 生存（refcount 0 非到達）/ drain は RT benign、すべて ✅。
+- **bot の non-blocking 観察を post-bot advisor consult で精査 → bot の framing は誤りと判定**: bot は「panic-during-load corner はいずれの経路でも deactivate 未呼出 / 本 PR が新規導入したものでない」としたが、これは false。正しくは（advisor + 当方分析）**clap スレッドが load 中に panic した場合に wrong-thread deactivate の質が main（drain なし版 = `install_rx` drop）→ RT（drain 版 = audio thread）に変わる新挙動**。極稀（load 中 panic 要）+ 既存 panic-時 leak 病理に乗る + 正常経路では非発生 → #342-#1 スコープ外。**#342 項目4 として追跡**（コードで guard する場合は code change で再レビュー要）+ `drain_install_ring` doc に corner note 追記。
+- **再レビュー不要（advisor）**: コード変更は doc コメント追記のみで load-bearing logic 不変。8-agent ループの再走は不均衡。マージは owner の明示指示待ち（self-merge 禁止）。
+
 ---
 
 ### 6.170 ci(rust): wire Rust workspace into CI — fmt / clippy / test / cargo-deny (#326) (Jun 26, 2026)

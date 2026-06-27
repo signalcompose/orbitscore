@@ -90,6 +90,14 @@ pub type InstallConsumer = rtrb::Consumer<InstallMsg>;
 /// よって audio スレッドの drop で refcount が 0 に達することはなく、`PluginInstanceInner::Drop`
 /// （= 実 deactivate/destroy）はここでは走らない。buffer free は teardown 経路なので許容する（既存の
 /// `buffers = None` と同性質）。`Consumer<T>` で generic にして real plugin 無しで単体テストできる。
+///
+/// **スコープ外の corner（#342 項目4 で追跡）**: clap スレッドが plugin load 中に panic した場合は
+/// 上の不変条件が崩れる。host.instance が unwind で drop された後（refcount は ring 残存分で 0 非到達）に
+/// 本 drain が Arc を 0 まで減算すると、`PluginInstanceInner::Drop`（実 deactivate/destroy）が audio(RT)
+/// スレッドで走りうる。drain なし版でも同 corner で deactivate は wrong-thread（install_rx drop = 非 RT の
+/// daemon スレッド）で走るので「deactivate が呼ばれない」のではなく、**drain 導入で wrong-thread の質が
+/// main→RT に変わる**新挙動である。正常 teardown 経路では発生せず、既存の panic-時 leak 病理に乗る極稀
+/// ケースのため #342-#1 のスコープ外とし、#342 項目4 として追跡する。
 fn drain_install_ring<T>(rx: &mut rtrb::Consumer<T>) {
     while rx.pop().is_ok() {}
 }
