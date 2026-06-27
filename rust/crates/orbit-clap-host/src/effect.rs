@@ -7,11 +7,24 @@
 //!
 //! ## drop 順による teardown の正当性（carry-forward #1 の sidestep）
 //!
-//! CLAP では `stop_processing` は audio thread、`deactivate`（instance drop）は home(main) thread が
-//! 要件。daemon は両者が別スレッドのため `ClapTeardownGuard` で跨ぐが、本型は home == audio == 唯一の
-//! スレッドなので、フィールド宣言順（`plugin` を `_instance` より**前**に置く）で drop 順 =
-//! stop_processing → deactivate を保証すれば、両 CLAP 呼び出しが同一スレッドに収まり wrong-thread 問題が
-//! 構造的に消える。
+//! CLAP では `stop_processing` は audio thread、`deactivate` は home(main) thread が要件。clack
+//! （pinned rev `f874e858`）の実機構: `plugin`（`StartedPluginAudioProcessor`）と `_instance`
+//! （`PluginInstance`）は**同一の `Arc<PluginInstanceInner>` を共有**し、実 teardown
+//! （stop_processing → deactivate → destroy をまとめて）は **最後の Arc が落ちた時に
+//! `PluginInstanceInner::Drop` が実行する**（`host/src/plugin/instance.rs:232`）。`StartedPluginAudioProcessor`
+//! 自体は Drop を持たず（Arc refcount を減らすだけ）、teardown は呼ばないことに注意。
+//!
+//! ここで `PluginInstance::Drop`（`host/src/plugin.rs:399`）は **自分が唯一の Arc 所有者のときだけ**
+//! inner を drop し、そうでなければ「audio processor handle が生存中に teardown を別スレッドへ移さない」
+//! ため**意図的に leak する**。したがってフィールド宣言順で `plugin` を `_instance` より**前**に置くことが
+//! load-bearing: `plugin` の Arc が先に落ちて `_instance` が唯一所有者になり、`_instance` drop で teardown が
+//! 実際に走る。**逆順にすると** `_instance` drop 時に refcount>1 で leak し、`plugin` drop でも teardown が
+//! 走らず**未 deactivate のままリーク**する（クラッシュでなく silent leak = smoke/parity では順序が逆でも
+//! 緑なので、この宣言順を守る唯一のガードが本コメント）。本型は home == audio == 唯一スレッドなので teardown
+//! は単一スレッドで完結し、daemon の split-thread（`ClapTeardownGuard` で跨ぐ）wrong-thread 問題を sidestep する。
+//!
+//! ⚠️ clack を bump する際は上記2つの Drop site（`plugin.rs:399` の sole-owner guard /
+//! `plugin/instance.rs:232` の teardown）の契約を再確認すること（この宣言順の正当性は library 内部実装に依存する）。
 //!
 //! 用途: γ M1 PR-B の OOP effect child（`orbit-clap-effect-child`）と、その offline A/B parity の
 //! in-process 参照（side A）。共有カーネルは [`process_block_core`](crate::processor::process_block_core)。
@@ -39,13 +52,16 @@ use crate::processor::process_block_core;
 ///
 /// `!Send`（[`PluginInstance`] を含む）。生成したスレッド上でのみ使うこと。
 pub struct ClapEffectProcessor {
-    /// 起動済み audio processor。drop で stop_processing（`_instance` より前に drop されるよう先に宣言）。
+    /// 起動済み audio processor（`Arc<PluginInstanceInner>` を保持）。`_instance` より**前**に宣言して
+    /// 先に drop = `_instance` を唯一の Arc 所有者にし、実 teardown を `_instance` drop に確定させる
+    /// （詳細は module doc）。
     plugin: StartedPluginAudioProcessor<OrbitClapHost>,
     /// 事前確保済みオーディオバッファ。
     buffers: HostAudioBuffers,
     /// steady sample counter（A0 §4.1 step f）。
     steady: u64,
-    /// プラグインインスタンス。drop で deactivate（`plugin` の後に drop = home thread teardown 順）。
+    /// プラグインインスタンス（同じ `Arc<PluginInstanceInner>` を保持）。`plugin` の後に drop され、
+    /// 唯一所有者として `PluginInstanceInner::Drop`（stop_processing→deactivate→destroy）を単一スレッドで走らせる。
     _instance: PluginInstance<OrbitClapHost>,
 }
 
