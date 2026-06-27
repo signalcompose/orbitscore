@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.173 docs(engine): S1b-1 low-latency strict floor 32/64 frame verdict (#295) (Jun 27, 2026)
+
+pre-γ hardening スプリント PR B（#295 = S1b low-latency strict test + dynamic hot-install follow-up）。owner 再パッケージで risky な #295 を #342 系から分離した独立 PR。
+
+**重要な発見**: 計測ハーネス `orbit-clap-spike` は S1b-1（`--buffer-frames` で `BufferSize::Fixed` 強制）も S1b-2（`--hot-install-after-secs`）も**実装済**で、§13 が既に 128/256 frame を実証済。owner 拡張（2026-06-26）の **32/64 frame 実用下限**が未カバーだったため、それを埋める **計測 + verdict（docs-mostly・本番コード変更なし）**。
+
+**計測**（MacBook Pro 内蔵 Output・arm64・macOS 26.5.1・44100Hz・`CLAPTestSynth` release dylib・8s）:
+- release static: 256=8.8µs(0.15%) / 128=9.2µs(0.32%) / **64=9.2µs(0.63%)** / **32=6.3µs(0.87%)** — 全 `resize=0`・`xrun=0`・`peak=0.25`。
+- debug worst-case: 64=27.4µs(1.89%) / 32=52.7µs(7.26%)。
+- hot-install(release・+3s): 128=#1034/6.4µs / 64=#2069/13.5µs(0.93%) / 32=#4136/5.9µs — install 後発音・`resize=0`。
+
+**verdict = PASS（強い余裕・リスク柵 不発火）**: device は 32 frame まで `BufferSize::Fixed` を honor（realloc 経路に到達せず）。release 32 frame で budget の 0.87%、worst-case でも 7.26%。hot-install ハンドオフは 32/64 でも成立。#295 のリスク柵「device が 32/64 を honor しない / 持続 xrun」は発火せず。
+
+**精度フェンス**（過大主張回避・advisor 指摘）: ①低レイテンシは spike 経由のみ計測可（daemon は `BufferSize::Default` で buffer 非強制・spike-at-32 は同一 process 経路の proxy）②hot-install の daemon 実モデルは `clap_host_gated` が本筋、spike `--hot-install` は機構の二次 proof ③spike は `orbit-clap-host` でなく自前旧 host コピー（統一リファクタは本 PR スコープ外）。
+
+**レビュー**: docs-mostly のため advisor 指針で軽量経路（comment-analyzer + advisor・/simplify + /code:pr-review-team は skip）。`clap_lowlatency_gated.rs` 等の新規 gated test は追加しない（spike が反復可能ハーネス・gold-plating 回避）。`docs/development/POST_2.0_A0_RT_INTEGRATION_DESIGN.md` §13「S1b-1 拡張」+ ヘッダ status + retired-assumptions 注記を更新。
+
 ### 6.172 chore(engine): rescan warn-only + teardown busy-wait verdict (#342-#2 / #342-#3) (Jun 27, 2026)
 
 **Date**: 2026-06-27
