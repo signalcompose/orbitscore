@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.176 feat(engine): γ M1 PR-A — out-of-process sandbox transport crate (#355) (Jun 27, 2026)
+
+γ 本実装（#354）を owner 2026-06-27 決定で **M1（effect 隔離）/ M2（instrument+automation・spike-first）に段階化**したうちの **M1 の PR-A**。advisor 相談（設計 checkpoint）+ 3 サブシステムの並列探索（spike transport / clap-host seam / verify harness）を経て設計。設計正本 = `docs/development/POST_2.0_GAMMA_M1_DESIGN.md`。
+
+**新規 production crate** `rust/crates/orbit-audio-sandbox`（spike `orbit-sandbox-spike` から **transport だけ**昇格・計測 scaffolding は持ち込まない）:
+- `transport`: 親子共有 `SharedRegion`（file-backed mmap MAP_SHARED + SPSC ping-pong）。**N-slot-generic**（`slot_offset = seq % SLOTS` / outstanding guard `seq_done >= new_seq - SLOTS` / 配列 `BUF_LEN*SLOTS`）= advisor #1: cross-process `repr(C)` 構造に slot 数を焼き付けず、PR-C の 2 vs 3 決定を **`SLOTS` const 1 つの変更**で済ませる（`seq & 1` は 2 のべき乗専用だった）。`control` flag で child を clean 終了。**memmap2 のみ依存**（native/cpal/clack 非依存 = 依存隔離が fault 隔離の鏡）。
+- `host::PipelinedEffectHost`: 候補B 状態機械（submit `data`→ 前ブロック read で in-place 上書き・spin なし）。stale = **repeat-previous**（owner 決定・直前 good block 再出力でクリック回避）。RT-safe（alloc/lock/syscall なし・last-good 事前確保・生ポインタは atomic field 参照と slot 単位 copy のみ）。
+- `bin/sandbox-effect-child`: gain child（clack 非依存・実 CLAP child は PR-B）。A/B parity の OOP 側相手。
+- `offline`: cpal 非依存の同期ドライバ（submit→spin 待ち→read）+ A/B parity primitive（`max_abs_diff` / `render_in_process_gain`）。
+
+**検証 3 分割**（advisor #2: offline は同期で repeat-previous を構造的に exercise できない → 別建て）:
+- **(a) audio 正しさ**: 2 層。① tests/host_child_integration.rs = **production path の CI root-of-trust**: 実 `PipelinedEffectHost`（候補B 状態機械）+ 実 spawn child + 実 mmap を cpal 無しで統合し、各 callback 間で `seq_done` を追いつかせて毎回 fresh path に当て、入力を gain 倍し **ちょうど 1 block 遅延**させた結果に **sample-exact 一致**（決定論）。本番で実際に走る両プロセス半分を一緒に動かす唯一の CI テスト。② tests/parity.rs = transport + **同期ドライバ**の sample-exact A/B（diff=0.0・64/256/300/512f）。①が pipelined host を、②が transport（mmap+SPSC+slot index）を検証する別役割（parity.rs の同期ドライバは本番では使わない経路なので、これ単独を production カバレッジと誤読しない）。両方 audio device 不要で **CI 実行可**。
+- **(b) pipeline 状態機械**: host.rs の **mock-child**（seq_done を制御）unit test で steady-state +1block 遅延 / repeat-previous（seq_done 保留→last-good 再出力）/ stall（child 停止→slot 再利用待ち）を決定論検証。
+- **(c) RT stale-rate 32-64f**: gated 実機（PR-C）。
+
+advisor #3（gain child を PR-A に昇格＝parity 相手）/ #4（M1 = master-effect 単独 post-processor・chaining は M2+・spec 明記）/ #5（sample-exact parity 採用）も反映。daemon adapter（`impl PostProcessor`）+ spawn/supervision は PR-C へ（PR-A は daemon 無改変・自己完結）。
+
+**検証**: 新 crate の `cargo test`（unit 7 + offline 2 + parity 2 + host_child_integration 1 = 全緑）/ **workspace 全体 `cargo test --workspace` 全緑**（新 member 追加後の回帰確認・advisor 指摘）/ `cargo clippy --workspace --all-targets -D warnings` clean（const assertion 化で `assertions_on_constants` 解消）/ `cargo fmt --check` clean / `cargo deny check licenses bans` ok（memmap2/anyhow は permissive・spike で vetted 済）。CI は Rust gated 非実行のため (a)(b) の offline/integration が CI 根拠・RT 実機 stale-rate は PR-C gated。
+
 ### 6.175 spike(engine): γ latency policy fork — pipelined solves 64f (#350) (Jun 27, 2026)
 
 γ staging の次段（Step0 #348 の後）。Step0 verdict §6 の **latency policy fork を計測して決める**（"run before you plan"）feasibility spike。owner 方針（DAW 並み小バッファ性能が目標）により 64f/32f を edge case ではなく性能ゴールとして扱う。
