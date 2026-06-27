@@ -17,6 +17,52 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.171 fix(engine): drain install ring on teardown to prevent plugin-instance leak (#342-#1) (Jun 26, 2026)
+
+**Date**: 2026-06-26
+**Status**: ✅ 実装完了（PR レビュー前）
+**Branch**: `342-install-ring-drain`
+**Issue**: #342（#340 follow-on hardening・①install-ring teardown drain）
+
+#340 review が「install-ring teardown drain / wrong-thread stop_processing 残余」を #342 に分離していた。
+本 PR で一次情報（clack `f874e858` + rtrb 0.3.4）を精読し、**リスクの実体を確定**したうえで最小修正した。
+
+**確定した実体 = wrong-thread UB ではなく「リーク」**:
+- `StartedPluginAudioProcessor` は `Arc<PluginInstanceInner>` で `Drop` impl を持たない（process.rs:401）。drop は Arc 減算のみで plugin code を呼ばない。
+- `PluginInstance::Drop`（plugin.rs:399-410）は **sole Arc owner のときだけ** teardown し、processor handle が残存すれば意図的に **leak** する（wrong-thread teardown を避ける clack の設計）。
+- `PluginInstanceInner::Drop`（instance.rs:232-254）→ active なら `deactivate_with`（is_started なら stop_processing → deactivate → destroy）を **その drop が走るスレッド**で実行。
+- rtrb `RingBuffer::Drop`（lib.rs:233-242）は未消費スロットを drop するが、Producer/Consumer 共有 Arc の **最後の drop 時のみ**発火。
+- 帰結: Consumer（cpal `_stream`）が先に drop（refcount 2→1・未 drop）、Producer（clap・`host.shutdown()` の**後**）drop で初めて InstallMsg が drop される。よって `host.shutdown()`（= PluginInstance drop）時点で processor Arc が ring 越しに残存 → sole owner でない → **instance leak（deactivate/destroy 永久未呼出）**。
+- 発生条件: plugin load → install 着地前に teardown（teardown 分岐が hot-install pop より前で early-return する窓）。狭いエッジだが実在のリーク。
+
+**採用 A: drain-and-drop（owner 承認）**:
+- cpal teardown 分岐で `drain_install_ring`（install ring を pop 全消費 → InstallMsg を cpal スレッドで drop = Arc 解放・benign）。
+- これで `host.shutdown()` より前に processor Arc が解放され、`PluginInstance::Drop` が sole owner となって stop_processing+deactivate+destroy を **clap スレッド（= start_processing と同一）**で正常実行する。
+- spec 記述「専用スレッドへ handoff」は Arc 解放による暗黙 handoff で達成（実 teardown は clap スレッド）。新規 channel 不要・最小差分。spec deviation は §1 rule に従い owner 承認 + 本ログで記録。
+
+**テスト**:
+- drain を generic 関数 `drain_install_ring<T>(&mut Consumer<T>)` に切り出し、`DropCounter` で「全 pop + 全 drop + ring 空」を決定論検証（real plugin 不要）。
+- gated 実機 RUN（CoreAudio + test-synth/effect dylib）で正常 teardown 経路の非回帰を裏取り: synth peak 0.25 / effect ratio 0.50000・teardown panic/UB なし完了。
+
+**ローカル全 green**: fmt clean / clippy `-D warnings`（clap-host + daemon clap-host）/ cargo test workspace 0 failed（新規 drain test 含む）/ gated synth+effect GREEN。
+
+**CI（#326 で入れた Rust CI が #342-#1 を検証）**: `fmt / clippy / test`・`license / dependency gate`・`code-review` 3 チェックすべて SUCCESS。
+
+**レビュー（/simplify + /code:pr-review-team）**:
+- `/simplify`（4 agent）: drain_install_ring の戻り値 `u64`→`()` 簡素化（production で破棄・テストは DROPS+空で等価）/ Drop に install ring 非空検知ログ追加（altitude: 既存 plugin 検知と対称化）。reuse/efficiency は clean。
+- `/code:pr-review-team`（code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer）: **Critical=0 / コード Important=0**。code-reviewer は 4 観点（drain ordering・RT 安全・Drop スレッド・doc 正確性）すべて clack/rtrb ソースで検証。
+  - 「Important」ラベル 2 件はいずれも doc/test-comment レベル: ① doc「Arc 減算のみ」が ordering-contingent（silent-failure I-1 + comment-analyzer）→ StreamGuard field 順 + host が Arc 保持の不変条件を doc に明記。② 実 leak シナリオは real plugin + 非決定 race で自動テスト不可（pr-test-analyzer・accepted structural gap）→ 単体テスト + gated テストに非カバー注記。
+  - Minor 対応: Drop ログの因果文言是正 + `slots()` 占有数追加（code-reviewer + silent-failure M-2）/ 単体テストに empty-ring ケース追加。
+  - 見送り: 正常経路 drain の silent 性への RT-path tracing（agent 自身の atomic 推奨と矛盾・benign event・Drop backstop で異常系は可視化済み）。
+
+**advisor 収束相談（2026-06-26）**: 収束**確立**（第2フル ラウンド不要・provenance は transcript の skill 起動 + CI green on ccaa240・#326 と同論理）。**@claude bot = ordering 不変条件 + clack Drop/Arc 相互作用に絞った scoped review が妥当**との助言。
+
+**@claude bot scoped review（2026-06-27・owner GO 後に起動）**: load-bearing な正当性（正常 teardown 経路）を一次情報まで降りて検証し **Critical/Important=0 で確認**。リーク解析（wrong-thread UB → leak 再フレーム）正しい / drain が `host.shutdown()` 前に走る（field drop 順 + `teardown_done` 後書きスピン）/ drain 時点で `PluginInstance` Arc 生存（refcount 0 非到達）/ drain は RT benign、すべて ✅。
+- **bot の non-blocking 観察を post-bot advisor consult で精査 → bot の framing は誤りと判定**: bot は「panic-during-load corner はいずれの経路でも deactivate 未呼出 / 本 PR が新規導入したものでない」としたが、これは false。正しくは（advisor + 当方分析）**clap スレッドが load 中に panic した場合に wrong-thread deactivate の質が main（drain なし版 = `install_rx` drop）→ RT（drain 版 = audio thread）に変わる新挙動**。極稀（load 中 panic 要）+ 既存 panic-時 leak 病理に乗る + 正常経路では非発生 → #342-#1 スコープ外。**#342 項目4 として追跡**（コードで guard する場合は code change で再レビュー要）+ `drain_install_ring` doc に corner note 追記。
+- **再レビュー不要（advisor）**: コード変更は doc コメント追記のみで load-bearing logic 不変。8-agent ループの再走は不均衡。マージは owner の明示指示待ち（self-merge 禁止）。
+
+---
+
 ### 6.170 ci(rust): wire Rust workspace into CI — fmt / clippy / test / cargo-deny (#326) (Jun 26, 2026)
 
 **Date**: 2026-06-26
