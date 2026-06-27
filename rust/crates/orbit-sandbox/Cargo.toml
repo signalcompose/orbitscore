@@ -1,0 +1,25 @@
+# orbit-sandbox — γ out-of-process sandbox 本番 transport crate (Issue #354)
+#
+# orbit-sandbox-spike (#348/#350) の知見を基にした本番実装:
+#   - SharedRegion: SLOTS=3（3-outstanding で 32f の stall を排除）
+#   - SandboxHostTransport: pipelined (candidate B) + repeat-previous stale policy
+#   - SandboxChildTransport: child 側 spin-loop transport
+#
+# 依存上の原則: audio engine (orbit-audio-native) の trait には依存しない。
+# PostProcessor との接続は orbit-audio-daemon 側で行う（daemon integration = 決定点3）。
+[package]
+name = "orbit-sandbox"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+# file-backed mmap(MAP_SHARED)。spike と同じバージョンを踏襲。
+memmap2 = "0.9"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
