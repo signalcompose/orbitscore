@@ -92,13 +92,14 @@ fn main() -> Result<()> {
         }
         let cur = unsafe { (*region).seq_request.load(Acquire) };
         if cur > last {
+            // slot index / offset は当該 seq で不変なのでループ本体先頭で 1 回だけ算出する。
+            let idx = slot_index(cur);
+            let off = slot_offset(cur);
             // SAFETY: seq_request の Acquire が host の input/n_frames[slot] 書き込みを可視化する。
             // slot 不変条件（host が seq-SLOTS 完了を待って submit）で当該 slot は時間的に排他。
             let count = unsafe {
-                let n =
-                    ((*region).n_frames[slot_index(cur)].load(Relaxed) as usize).min(MAX_FRAMES);
+                let n = ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES);
                 let count = n * CHANNELS;
-                let off = slot_offset(cur);
                 let in_base = std::ptr::addr_of!((*region).input) as *const f32;
                 std::ptr::copy_nonoverlapping(in_base.add(off), scratch.as_mut_ptr(), count);
                 count
@@ -109,12 +110,11 @@ fn main() -> Result<()> {
 
             // SAFETY: 上と同じ slot 排他。scratch（加工済み出力）を output slot へ書き戻す。
             unsafe {
-                let off = slot_offset(cur);
                 let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
                 std::ptr::copy_nonoverlapping(scratch.as_ptr(), out_base.add(off), count);
                 (*region).child_processed.fetch_add(1, Relaxed);
                 // この slot の出力を publish（host READ の seq_tag[slot]==target Acquire と synchronize-with）。
-                (*region).seq_tag[slot_index(cur)].store(cur, Release);
+                (*region).seq_tag[idx].store(cur, Release);
                 // submit guard 用の最新処理 seq（host SUBMIT の Acquire と synchronize-with）。
                 (*region).seq_done.store(cur, Release);
             }

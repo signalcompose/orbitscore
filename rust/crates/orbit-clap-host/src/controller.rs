@@ -71,9 +71,7 @@ pub(crate) struct InstantiatedPlugin {
     pub plugin: StartedPluginAudioProcessor<OrbitClapHost>,
     /// 事前確保済みオーディオバッファ。
     pub buffers: HostAudioBuffers,
-    /// note 入力ポートインデックス。
-    pub note_port_index: u16,
-    /// logging / UI 用メタデータ。
+    /// logging / UI 用メタデータ（note 入力ポートインデックスも `info.note_port_index` に含む）。
     pub info: LoadedPluginInfo,
 }
 
@@ -123,9 +121,8 @@ pub(crate) fn instantiate_activate(
 
     // PluginInstance を生成する（main thread 要件: 呼び出し元スレッドで実行）。
     // carry-forward #2: callback_requested Arc を closure にキャプチャして clone で共有。
-    let cb = callback_requested;
     let mut instance = PluginInstance::<OrbitClapHost>::new(
-        move |_| OrbitHostShared::new(cb.clone()),
+        move |_| OrbitHostShared::new(callback_requested.clone()),
         |shared| OrbitHostMainThread::new(shared),
         &found.entry,
         &plugin_id,
@@ -169,7 +166,6 @@ pub(crate) fn instantiate_activate(
         instance,
         plugin,
         buffers,
-        note_port_index,
         info: LoadedPluginInfo {
             plugin_id: plugin_id_str,
             plugin_name,
@@ -247,7 +243,8 @@ impl ClapHost {
         let msg = InstallMsg {
             plugin: loaded.plugin,
             buffers: loaded.buffers,
-            note_port_index: loaded.note_port_index,
+            // u16 は Copy なので info を move せずに読める（直後の Ok で info を返す）。
+            note_port_index: loaded.info.note_port_index,
         };
 
         Ok((msg, loaded.info))
