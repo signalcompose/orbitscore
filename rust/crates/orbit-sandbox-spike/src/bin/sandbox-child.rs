@@ -12,18 +12,24 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use orbit_sandbox_spike::{open_shared, region_ptr, CHANNELS, MAX_FRAMES};
+use orbit_sandbox_spike::{open_shared, region_ptr, set_realtime_thread, CHANNELS, MAX_FRAMES};
 
 struct Cli {
     shm: PathBuf,
     /// > 0 なら N ブロック処理後に自発 segfault（Gate2 用）。0 = crash しない。
     crash_after_blocks: u64,
+    /// true なら spin スレッドを RT(time-constraint)優先度に上げる（candidate A・#350）。
+    rt_priority: bool,
+    /// RT の period（µs）= block period。computation/constraint をここから導く。0 = host 未指定。
+    rt_period_us: u64,
 }
 
 fn parse_args() -> anyhow::Result<Cli> {
     let mut args = std::env::args().skip(1);
     let mut shm: Option<PathBuf> = None;
     let mut crash_after_blocks: u64 = 0;
+    let mut rt_priority = false;
+    let mut rt_period_us: u64 = 0;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--shm" => {
@@ -39,12 +45,21 @@ fn parse_args() -> anyhow::Result<Cli> {
                     .ok_or_else(|| anyhow::anyhow!("--crash-after-blocks requires a value"))?
                     .parse()?
             }
+            "--rt-priority" => rt_priority = true,
+            "--rt-period-us" => {
+                rt_period_us = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--rt-period-us requires a value"))?
+                    .parse()?
+            }
             other => anyhow::bail!("Unknown argument: {other}"),
         }
     }
     Ok(Cli {
         shm: shm.ok_or_else(|| anyhow::anyhow!("--shm is required"))?,
         crash_after_blocks,
+        rt_priority,
+        rt_period_us,
     })
 }
 
@@ -58,6 +73,24 @@ fn main() -> anyhow::Result<()> {
         cli.shm.display(),
         cli.crash_after_blocks
     );
+
+    // candidate A: spin スレッド（このスレッド = 唯一の処理スレッド）を RT に上げる。
+    // computation = period/2・constraint = period*3/4（>= computation）。失敗しても通常優先度で
+    // 継続し、計測は RT 無効として読める（host は child_rt_priority を結果に出すので区別可能）。
+    if cli.rt_priority {
+        let period_ns = cli.rt_period_us.saturating_mul(1_000);
+        match set_realtime_thread(period_ns, period_ns / 2, period_ns * 3 / 4) {
+            Ok(()) => eprintln!(
+                "[sandbox-child pid={}] RT thread enabled (period={}us)",
+                std::process::id(),
+                cli.rt_period_us
+            ),
+            Err(e) => eprintln!(
+                "[sandbox-child pid={}] WARNING: RT thread NOT enabled: {e} (running at normal priority)",
+                std::process::id()
+            ),
+        }
+    }
 
     // gain は host 起動時に一度だけ設定され計測中は不変 → ループ外で 1 回だけ読む
     // （毎ブロックの shared control-line への atomic load + bit-cast を省く）。

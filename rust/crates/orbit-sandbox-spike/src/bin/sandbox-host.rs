@@ -6,11 +6,13 @@
 //!
 //! 使い方:
 //!   sandbox-host [--measure-secs N] [--buffer-frames F] [--round-trip-timeout-us US]
-//!                [--child-crash-after-blocks N] [--gain G]
+//!                [--child-crash-after-blocks N] [--gain G] [--child-rt-priority]
 //!
 //! Gate1（RT round-trip が block budget に収まるか）: crash 無しで実行しレイテンシ分布を見る。
 //! Gate2（子の crash 封じ込め + watchdog 復帰）: --child-crash-after-blocks N で実行し、
 //!   respawn 後に round-trip が再開し audio が復帰することを確認する。
+//! candidate A（#350）: --child-rt-priority で子を RT(time-constraint)優先度にし、worst-case
+//!   tail が同期ベースライン（Step0）より縮むかを比較する。
 
 #![allow(unsafe_code)]
 
@@ -33,6 +35,9 @@ struct Cli {
     /// > 0 なら最初の子を「N ブロック後 segfault」で起動し Gate2 を駆動する。respawn 後は clean。
     child_crash_after_blocks: u64,
     gain: f32,
+    /// true なら spawn する子に --rt-priority を渡し RT(time-constraint)スケジュールにする
+    /// （candidate A・#350）。period は buffer_frames + sample_rate から導く。
+    child_rt_priority: bool,
 }
 
 fn parse_args() -> anyhow::Result<Cli> {
@@ -43,6 +48,7 @@ fn parse_args() -> anyhow::Result<Cli> {
         round_trip_timeout_us: 5000,
         child_crash_after_blocks: 0,
         gain: 0.5,
+        child_rt_priority: false,
     };
     while let Some(arg) = args.next() {
         let mut next = || {
@@ -55,6 +61,7 @@ fn parse_args() -> anyhow::Result<Cli> {
             "--round-trip-timeout-us" => cli.round_trip_timeout_us = next()?.parse()?,
             "--child-crash-after-blocks" => cli.child_crash_after_blocks = next()?.parse()?,
             "--gain" => cli.gain = next()?.parse()?,
+            "--child-rt-priority" => cli.child_rt_priority = true,
             other => anyhow::bail!("Unknown argument: {other}"),
         }
     }
@@ -168,11 +175,23 @@ fn child_exe_path() -> anyhow::Result<PathBuf> {
     Ok(dir.join("sandbox-child"))
 }
 
-fn spawn_child(child_exe: &Path, shm: &Path, crash_after: u64) -> anyhow::Result<Child> {
+/// child を起動する。`rt_period_us` が Some なら子を RT(time-constraint)優先度で起動する
+/// （candidate A）。初回・watchdog respawn の双方が同じ rt 設定で子を立てる。
+fn spawn_child(
+    child_exe: &Path,
+    shm: &Path,
+    crash_after: u64,
+    rt_period_us: Option<u64>,
+) -> anyhow::Result<Child> {
     let mut cmd = Command::new(child_exe);
     cmd.arg("--shm").arg(shm);
     if crash_after > 0 {
         cmd.arg("--crash-after-blocks").arg(crash_after.to_string());
+    }
+    if let Some(period_us) = rt_period_us {
+        cmd.arg("--rt-priority")
+            .arg("--rt-period-us")
+            .arg(period_us.to_string());
     }
     Ok(cmd.spawn()?)
 }
@@ -198,9 +217,31 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     }
     println!("shm: {}", shm_path.display());
 
+    // --- 出力デバイスを先に開く（RT period 算出に sample_rate が要る）-------------------------
+    let cpal_host = cpal::default_host();
+    let device = cpal_host
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("no default output device"))?;
+    let default_cfg = device.default_output_config()?;
+    let sample_rate = default_cfg.sample_rate().0;
+
+    // candidate A: child を RT に上げる場合の period(µs) = block period = buffer_frames / sample_rate。
+    // buffer_frames 未指定（Default）時は 512 を仮定（A 計測時は常に --buffer-frames を渡す運用）。
+    let rt_period_us = if cli.child_rt_priority {
+        let frames = cli.buffer_frames.unwrap_or(512) as u64;
+        Some(frames * 1_000_000 / sample_rate as u64)
+    } else {
+        None
+    };
+
     // --- child を起動（最初の子は crash arg を載せる場合がある）-----------------------------
     let child_exe = child_exe_path()?;
-    let first_child = spawn_child(&child_exe, &shm_path, cli.child_crash_after_blocks)?;
+    let first_child = spawn_child(
+        &child_exe,
+        &shm_path,
+        cli.child_crash_after_blocks,
+        rt_period_us,
+    )?;
     let child = Arc::new(Mutex::new(first_child));
 
     // --- watchdog -----------------------------------------------------------
@@ -240,8 +281,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
             };
             if let Some(status) = exited {
                 eprintln!("[watchdog] child exited ({status:?}); respawning clean child");
-                // respawn は crash arg 無し → clean な子 → audio 復帰。
-                match spawn_child(&child_exe, &shm_path, 0) {
+                // respawn は crash arg 無し → clean な子 → audio 復帰。RT 設定は初回と揃える。
+                match spawn_child(&child_exe, &shm_path, 0, rt_period_us) {
                     Ok(newc) => {
                         *child.lock().unwrap() = newc;
                         respawn_count.fetch_add(1, Ordering::Relaxed);
@@ -259,13 +300,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         })
     };
 
-    // --- cpal 出力ストリーム -------------------------------------------------
-    let cpal_host = cpal::default_host();
-    let device = cpal_host
-        .default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("no default output device"))?;
-    let default_cfg = device.default_output_config()?;
-    let sample_rate = default_cfg.sample_rate().0;
+    // --- cpal 出力ストリーム（device は run() 冒頭で開済み）----------------------------------
     let cpal_config = cpal::StreamConfig {
         channels: CHANNELS as u16,
         sample_rate: cpal::SampleRate(sample_rate),
@@ -275,8 +310,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         },
     };
     println!(
-        "audio: {} Hz, {} ch, buffer={:?}, round_trip_timeout={}us",
-        sample_rate, CHANNELS, cpal_config.buffer_size, cli.round_trip_timeout_us
+        "audio: {} Hz, {} ch, buffer={:?}, round_trip_timeout={}us, child_rt_priority={}",
+        sample_rate,
+        CHANNELS,
+        cpal_config.buffer_size,
+        cli.round_trip_timeout_us,
+        cli.child_rt_priority
     );
 
     let stats = RtStats::new();
@@ -498,6 +537,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     }
     println!("measurement_valid:     {}", !invalid);
     println!("sample_rate:           {sample_rate}");
+    println!("child_rt_priority:     {}", cli.child_rt_priority);
     println!("total_callbacks:       {callbacks}");
     println!("avg_frames_per_cb:     {avg_frames}");
     println!("block_budget_ns:       ~{block_budget_ns}");
