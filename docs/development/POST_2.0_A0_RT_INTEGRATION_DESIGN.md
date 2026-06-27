@@ -1,6 +1,6 @@
 # A0 — RT 統合設計（CLAP プラグインを orbit-audio に RT 安全に載せる）
 
-> **ステータス: S1 + S1b 実行完了 — verdict = PASS（feasibility→proof 達成）。S1=§12 / S1b（低レイテンシ・release・dynamic hot-install）=§13。post-2.0 / Epic #292 / Issue #293・#295。** 2026-06-20 作成・同日 S1/S1b 実行。
+> **ステータス: S1 + S1b 実行完了 — verdict = PASS（feasibility→proof 達成）。S1=§12 / S1b（低レイテンシ・release・dynamic hot-install）=§13。S1b-1 は 32/64 frame strict 下限まで拡張済（2026-06-27・§13「S1b-1 拡張」）。post-2.0 / Epic #292 / Issue #293・#295。** 2026-06-20 作成・同日 S1/S1b 実行 / 2026-06-27 に 32/64 frame 拡張。
 > 正本ロードマップ: `docs/development/POST_2.0_MASTER_PLAN.html`（§3 最初の1手 = A0+S1）。
 > hosting feasibility 一次情報: `docs/research/RUST_PLUGIN_HOSTING.md`。daemon 契約: `docs/research/ENGINE_DAEMON_PROTOCOL.md`。
 
@@ -245,7 +245,7 @@ A0 §4 のアーキ（同一 callback / プラグイン Mutex 外 / rtrb event s
 
 > **更新（2026-06-20）**: 下記のうち ①高レイテンシ限定 ②debug 限定 ③static-load のみ は **S1b で retire 済（§13）**。
 
-- ~~**1024 フレーム（高レイテンシ）限定**~~ → S1b-1 で 128/256 frame を実証（§13）。
+- ~~**1024 フレーム（高レイテンシ）限定**~~ → S1b-1 で 128/256 frame、さらに 32/64 frame strict 下限まで実証（§13・2026-06-27 拡張）。
 - ~~**debug build**~~ → S1b-1 で release を実証（§13）。
 - ~~**static-load のみ**~~ → S1b-2 で dynamic hot-install を実証（§13）。
 - プラグイン 1 個・ノードグラフ無し。`OutputEvents::void()`（plugin→host イベント未処理）。event は block 先頭一括（sample-accurate オフセット無し）。hot-uninstall（deactivate ハンドオフ）は未実証。
@@ -263,7 +263,41 @@ S1 の未 retire 3 項目（高レイテンシ限定 / debug / static-load）を
 | 256 frame・debug | 5.8ms | 91µs（1.57%） | 0 | 0 | peak 0.25 |
 | **128 frame・release** | 2.9ms | **10.8µs（0.37%）** | 0 | 0 | peak 0.25 |
 
-→ 低レイテンシ（128 frame = 2.9ms）でも debug/release とも RT 安全。小バッファほど 1 callback の仕事が小さく相対余裕はむしろ大きい。（p99=0 は callback が全て <50µs でヒスト最小バケットに入るため。worst-case は `max_ns` が示す。）
+→ 低レイテンシ（128 frame = 2.9ms）でも debug/release とも RT 安全。小バッファほど 1 callback の仕事が小さく相対余裕はむしろ大きい。（p99=0 は 99th percentile がヒスト最小バケット〔上限 50µs〕に収まるため。256 frame debug の max=91µs 等の外れ値は <1% で p99 に影響しない。worst-case は `max_ns` が示す。）
+
+#### S1b-1 拡張 — 32/64 frame strict 下限（2026-06-27・Issue #295 owner 拡張）
+
+当初は 128/256 frame で実証したが、owner 指摘（2026-06-26）で**実用下限 32/64 frame**へ拡張（プロのトラッキングは 64–128 samples・**32 が実用下限**・RT-safety の真価は callback budget が最も厳しい最小バッファで問われる）。
+
+**計測環境**: MacBook Pro 内蔵スピーカー（Apple Built-in Output・2ch・arm64・macOS 26.5.1 / 25F80）/ 44100Hz / `CLAPTestSynth`（リポジトリ内 test synth）/ measure 8s / `BufferSize::Fixed(N)` 強制 / spike `orbit-clap-spike`。
+
+| 構成 | budget | callback max | xrun | resize | 発音 |
+|---|---|---|---|---|---|
+| 256 frame・release・static | 5.80ms | 8.8µs（0.15%） | 0 | 0 | peak 0.25 |
+| 128 frame・release・static | 2.90ms | 9.2µs（0.32%） | 0 | 0 | peak 0.25 |
+| **64 frame・release・static** | 1.45ms | **9.2µs（0.63%）** | 0 | 0 | peak 0.25 |
+| **32 frame・release・static** | 0.726ms | **6.3µs（0.87%）** | 0 | 0 | peak 0.25 |
+| 64 frame・debug（worst-case 境界） | 1.45ms | 27.4µs（1.89%） | 0 | 0 | peak 0.25 |
+| 32 frame・debug（worst-case 境界） | 0.726ms | 52.7µs（7.26%） | 0 | 0 | peak 0.25 |
+
+**hot-install（release・`--hot-install-after-secs 3`）**:
+
+| 構成 | install callback | callback max | xrun | resize | 発音 |
+|---|---|---|---|---|---|
+| 128 frame・+3s | #1034 | 6.4µs（0.22%） | 0 | 0 | peak 0.25（install 後） |
+| 64 frame・+3s | #2069 | 13.5µs（0.93%） | 0 | 0 | peak 0.25（install 後） |
+| 32 frame・+3s | #4136 | 5.9µs（0.82%） | 0 | 0 | peak 0.25（install 後） |
+
+**verdict = PASS（強い余裕・リスク柵 不発火）**:
+- device は **32 frame まで `BufferSize::Fixed` を honor**（全構成 `resize_count=0` → callback 内 realloc 経路〔`ensure_buffer_size_matches` の RT 違反パス〕に到達しない）。#295 のリスク柵「device が 32/64 を honor しない」は発火せず。
+- release は最小バッファ 32 frame でも budget の **0.87%**、worst-case（最適化なし debug 32 frame）でも **7.26%** に留まる。小バッファほど 1 callback の仕事が小さく相対余裕は大きいという 128 の傾向が 32 まで継続。
+- hot-install の所有権ハンドオフは 32/64 frame でも成立（install callback で着地・install 後に発音・`resize=0`・回帰なし）。64 frame の install callback が 13.5µs とやや上振れするのは pop+install が当該 callback で走るためだが budget の 0.93%。
+- `p99=0` は 99th percentile が histogram bucket 0（上限 50µs・`BUCKET_NS=50_000`）内に収まる harness artifact（worst-case は `max_ns` が示す。debug 32 frame の max=52.7µs は bucket 1 に入る <1% の外れ値で p99 には影響しない）。`ring_tap_drops>0` は consumer 不在の RingTap が埋まる benign 値で verdict に無関係。
+
+**精度フェンス（過大主張の回避）**:
+- S1b-1 の低レイテンシは **spike 経由のみ**計測可能。production daemon は `BufferSize::Default`（device 既定に追従）を使う設計で buffer を強制しない → 「daemon を 32 frame で」は直接計測対象にならない。spike-at-32 は**同一 process 経路（同じ `process()`/install ring/buffers）の proxy**（transitivity）であって daemon 直接計測ではない。
+- hot-install の **daemon 実モデルの実証は `clap_host_gated`（`synth_processes_audio_via_daemon`）が本筋**。spike の `--hot-install` は所有権ハンドオフ**機構**の二次的 proof であり、daemon 統合経路そのものの証明ではない。
+- spike は `orbit-clap-host` crate ではなく**自前の旧 host コピー（mpsc/MainThreadMessage・§13「S2/A4 carry-forward」）**を持つ。本計測ではこれを統一リファクタしない（スコープ外）。
 
 ### S1b-2 — dynamic hot-install（`--hot-install-after-secs`）
 
