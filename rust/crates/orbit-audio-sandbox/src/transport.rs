@@ -114,8 +114,8 @@ pub const REGION_BYTES: usize = std::mem::size_of::<SharedRegion>();
 /// 共有メモリファイルを作成して map する(host 側)。ファイルを `REGION_BYTES` に truncate
 /// するので全 atomic / バッファは 0 初期化される(`seq_request = seq_done = 0` は有効な初期状態)。
 ///
-/// # Safety
-/// 返した `MmapMut` が生存する限りのみ [`region_ptr`] のポインタは有効。
+/// # Note
+/// 返した `MmapMut` が生存する限りのみ [`region_ptr`] のポインタは有効(本関数自体は safe)。
 pub fn create_shared(path: &Path) -> io::Result<MmapMut> {
     let file = OpenOptions::new()
         .read(true)
@@ -130,8 +130,8 @@ pub fn create_shared(path: &Path) -> io::Result<MmapMut> {
 
 /// 既存の共有メモリファイルを map する(child 側)。
 ///
-/// # Safety
-/// 返した `MmapMut` が生存する限りのみ [`region_ptr`] のポインタは有効。
+/// # Note
+/// 返した `MmapMut` が生存する限りのみ [`region_ptr`] のポインタは有効(本関数自体は safe)。
 pub fn open_shared(path: &Path) -> io::Result<MmapMut> {
     let file = OpenOptions::new().read(true).write(true).open(path)?;
     // 不変条件(map 後の生ポインタ deref が UB にならない最低サイズ)をコード側で enforce する。
@@ -147,9 +147,9 @@ pub fn open_shared(path: &Path) -> io::Result<MmapMut> {
     unsafe { MmapMut::map_mut(&file) }
 }
 
-/// mmap のベースを [`SharedRegion`] ポインタにキャストする。
+/// mmap のベースを [`SharedRegion`] ポインタにキャストする(本関数自体は safe)。
 ///
-/// # Safety
+/// # Note
 /// `mmap` は [`create_shared`] / [`open_shared`] が返したもの(サイズ >= `REGION_BYTES`・
 /// ページ境界整列)でなければならない。返したポインタは `mmap` の生存期間を超えて使ってはならない。
 pub fn region_ptr(mmap: &MmapMut) -> *mut SharedRegion {

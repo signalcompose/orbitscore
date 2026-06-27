@@ -55,8 +55,9 @@ impl Drop for SandboxChildGuard {
         loop {
             match self.child.try_wait() {
                 Ok(Some(_)) => break,
-                Ok(None) if Instant::now() < deadline => std::hint::spin_loop(),
-                _ => {
+                // 非 RT の teardown 待ち。spin より yield で CPU を譲る(offline.rs の wait と一貫)。
+                Ok(None) if Instant::now() < deadline => std::thread::yield_now(),
+                Ok(None) => {
                     eprintln!(
                         "orbit-audio-sandbox: child が {REAP_TIMEOUT:?} 以内に終了せず kill にフォールバック"
                     );
@@ -64,8 +65,20 @@ impl Drop for SandboxChildGuard {
                     let _ = self.child.wait();
                     break;
                 }
+                // try_wait 自体の失敗(ECHILD 等)は timeout と区別して実エラーを出す。
+                Err(e) => {
+                    eprintln!("orbit-audio-sandbox: try_wait 失敗(kill にフォールバック): {e}");
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    break;
+                }
             }
         }
-        let _ = std::fs::remove_file(&self.path);
+        if let Err(e) = std::fs::remove_file(&self.path) {
+            eprintln!(
+                "orbit-audio-sandbox: shm ファイル削除失敗 {:?}: {e}",
+                self.path
+            );
+        }
     }
 }

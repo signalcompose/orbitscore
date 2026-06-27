@@ -299,6 +299,11 @@ mod tests {
         for i in 0..(SLOTS as u64 + 2) {
             let mut d = block(i as f32 + 1.0, frames);
             host.process_block(&mut d);
+            // 一度も fresh を読めていない間は prime 無音(dry 入力を漏らさない)。
+            assert!(
+                d.iter().all(|&x| x == 0.0),
+                "prime/stall 中は無音(dry leak しない)"
+            );
         }
         assert!(host.stall >= 1, "child 停止で stall が発生する");
         // 一度も fresh は読めていない(child 停止)。
@@ -417,5 +422,43 @@ mod tests {
         assert_eq!(host.frames_clamped, 1, "BUF_LEN 超で frames_clamped");
         // 初回 prime 無音 + clamp 末尾無音なので全要素 0(panic しないことが主眼)。
         assert!(d.iter().all(|&x| x == 0.0), "prime 無音 + 末尾無音");
+    }
+
+    // READ clamp(可変 buffer): fresh 読み出しは target slot の実フレーム数で copy 長を clamp し、
+    // 現 callback がより大きい buffer を要求しても target slot の stale tail を漏らさない。
+    // poison-tail 構成: slot の末尾に sentinel を仕込み、漏れたら検出できる差分テスト
+    //(clamp を `copy=count` に退行させると sentinel が出力に混入して失敗する)。
+    #[test]
+    fn pipelined_read_clamps_to_target_slot_frames() {
+        let region = alloc_region();
+        let mut host = unsafe { PipelinedEffectHost::from_raw(region) };
+        let gain = 0.5;
+
+        // cb1: frames=64 → submit seq1(slot_index(1)=1)。child が seq1 を処理(out[slot1][0..128]=0.5)。
+        let mut d = block(1.0, 64);
+        host.process_block(&mut d);
+        child_process_seq(region, 1, gain);
+
+        // poison: slot1 の tail(128..BUF_LEN)に sentinel を書く(前 occupant の残骸を模す)。
+        unsafe {
+            let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
+            let off = slot_offset(1);
+            for i in 128..BUF_LEN {
+                *out_base.add(off + i) = 9.0;
+            }
+        }
+
+        // cb2: frames=128(count=256)→ submit seq2(slot_index(0)=0・slot1 と非衝突)。READ target=1:
+        // target_count=n_frames[slot1]=64 → copy=min(128,256)=128。data[0..128]=0.5・data[128..256]=無音。
+        let mut d = block(2.0, 128);
+        host.process_block(&mut d);
+        assert!(
+            d[0..128].iter().all(|&x| (x - 0.5).abs() < 1e-9),
+            "target slot の実フレーム分のみ gain 出力"
+        );
+        assert!(
+            d[128..256].iter().all(|&x| x == 0.0),
+            "target より大きい buffer の端は無音化(slot tail の sentinel を漏らさない)"
+        );
     }
 }
