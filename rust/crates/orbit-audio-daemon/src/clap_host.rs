@@ -166,6 +166,11 @@ impl Drop for ClapTeardownGuard {
                 );
                 break;
             }
+            // #342-#3 verdict: この poll-sleep は意図的で変更推奨なし。guard は非 RT スレッド
+            // （`main()` の非 async スコープ）で走り、RT audio thread は `done` を atomic store する
+            // だけ。Condvar 置換は notify 時に RT thread へ mutex を強いて RT を悪化させるため不可。
+            // 将来 async context から `StreamGuard` を drop する場合のみ、Condvar でなく async yield /
+            // atomic-wait に変えること。
             std::thread::sleep(Duration::from_millis(2));
         }
     }

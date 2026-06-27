@@ -17,6 +17,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.172 chore(engine): rescan warn-only + teardown busy-wait verdict (#342-#2 / #342-#3) (Jun 27, 2026)
+
+**Date**: 2026-06-27
+**Status**: ✅ 実装完了（PR レビュー前）
+**Branch**: `342-rescan-warn-teardown-verdict`
+**Issue**: #342（項目2・項目3）
+**スプリント**: Pre-γ hardening スプリント PR A（#342-2 + #342-3 を1 PR に束ね・owner 承認）。B = #295 は独立。
+
+軽量 2 項目を1 PR に束ねた（owner 判断・§2 の「#342 を1 PR に束ねる」override）。リスクのある #295 とは切り離す。
+
+**#342-#2: audio-port rescan warn-only（`orbit-clap-host/src/host.rs`）**
+- `HostAudioPortsImpl::rescan`（AudioPortRescanFlags）は S1 で no-op（`is_rescan_flag_supported=false` 広告済）。
+- plugin が動的にポートを変えると構築時固定の `is_effect`（`has_audio_input`）が陳腐化しうる。サイレントを避け **warn ログ1文**を追加して可視化（`flags` を Debug 出力）。
+- **動的ポート対応そのものは作らない**（#342 項目2 の将来作業）。note/param rescan は対象外（is_effect 陳腐化は audio ports 固有）。
+
+**#342-#3: teardown busy-wait は据え置き（verdict・`orbit-audio-daemon/src/clap_host.rs`）**
+- `ClapTeardownGuard::drop` の `sleep(2ms)` poll は **変更推奨なし**（現結論）。guard は非 RT スレッド（`main()` 非 async）で走り、RT audio thread は `done` を atomic store するだけ。Condvar 置換は notify 時に RT thread へ mutex を強いて **RT を悪化**させる。
+- 将来 async context から `StreamGuard` を drop する場合のみ async yield / atomic-wait に変える旨を**コードコメントで明記**（将来の誤った "fix" を防ぐ）。コード logic 変更なし。
+
+**ローカル検証**: fmt（`--all --check`）clean / clippy（clap-host + daemon clap-host・`-D warnings`）clean / test（clap-host 11 + daemon protocol 19 ほか・0 failed。protocol の loopback bind は sandbox 制限で要 sandbox-off 実行）。
+
 ### 6.171 fix(engine): drain install ring on teardown to prevent plugin-instance leak (#342-#1) (Jun 26, 2026)
 
 **Date**: 2026-06-26

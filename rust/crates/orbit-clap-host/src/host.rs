@@ -109,8 +109,15 @@ impl HostAudioPortsImpl for OrbitHostMainThread<'_> {
         false
     }
 
-    fn rescan(&mut self, _flags: AudioPortRescanFlags) {
-        // S1: 動的ポート変更非対応
+    fn rescan(&mut self, flags: AudioPortRescanFlags) {
+        // S1: 動的ポート変更非対応。is_rescan_flag_supported=false を広告済みだが、plugin が
+        // それでも rescan を要求した場合は no-op になる。構築時に固定した is_effect
+        // （has_audio_input）／ポート構成が陳腐化しうるため、サイレントにせず warn で可視化する
+        // （#342-#2。動的ポート対応そのものは #342 項目2 の将来作業）。
+        tracing::warn!(
+            "[clap] plugin が audio-port rescan を要求したが S1 は動的ポート非対応のため no-op — \
+             構築時の is_effect/ポート構成が陳腐化している可能性 (flags={flags:?})"
+        );
     }
 }
 
