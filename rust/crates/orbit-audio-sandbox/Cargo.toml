@@ -1,0 +1,39 @@
+# orbit-audio-sandbox — γ M1 (Issue #355) out-of-process effects の本番 transport。
+#
+# γ Step0/latency spike (#349/#351) が実証した pipelined (候補B) sandbox を本番化した crate。
+# spike (orbit-sandbox-spike, publish=false) から **transport だけ**を昇格し、計測 scaffolding
+# (CLI/histogram/test-tone/crash-injection/candidate-A RT thread) は持ち込まない。
+#
+# 依存隔離 = fault 隔離の鏡:
+#   - lib の **コードは memmap2 のみ使用**(native/cpal/clack 非依存)。
+#     pipelined host loop は `&mut [f32]` と `*mut SharedRegion` の上で完結する。
+#     (manifest の `[dependencies]` は lib/bin 共有なので anyhow も載るが lib は use しない。
+#      gain child を独立 crate に分ける PR-B で lib 依存は memmap2 単独になる。)
+#   - `PostProcessor` trait の adapter は daemon 側 (orbit-audio-native がある所) に置く。
+#   - clack を使う実 effect child は別 crate (PR-B)。本 crate の gain child (PR-A) は clack 非依存。
+#
+# 設計の正本: docs/development/POST_2.0_GAMMA_M1_DESIGN.md
+[package]
+name = "orbit-audio-sandbox"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Out-of-process audio effect sandbox transport (file-backed mmap SPSC ping-pong) for the OrbitScore native engine"
+
+[lib]
+name = "orbit_audio_sandbox"
+
+[dependencies]
+# file-backed mmap(MAP_SHARED)。親子で同一ファイルを map して共有メモリにする。
+# MIT/Apache-2.0(cargo-deny allow)。同期は MAP_SHARED 上の atomic(別 sync crate 不要)。
+memmap2 = "0.9"
+# gain child binary の引数 parse / エラー伝播用(lib 本体は使わない)。MIT/Apache-2.0。
+anyhow = "1"
+
+# 親子で同一 SharedRegion レイアウトを共有する gain child(PR-A の parity 相手)。
+# clack 非依存(実 CLAP effect child は PR-B の別 crate)。
+[[bin]]
+name = "sandbox-effect-child"
+path = "src/bin/sandbox-effect-child.rs"
