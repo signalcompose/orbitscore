@@ -83,13 +83,21 @@ fn main() -> Result<()> {
     // in-place process_block 用の作業バッファ（ループ前に確保 = RT 安全）。
     let mut scratch = vec![0.0f32; BUF_LEN];
 
+    // plugin.process() が失敗したブロック数（ループ外で報告するため累積する単純カウント）。
+    // PR-B では child→host の health signal は SharedRegion に持たせない（PR-A の frozen transport を
+    // 触らない）。child の health 可観測性は PR-C で §4.5 の supervision signal 群と一緒に設計する。
+    // それまでは終了時に stderr へ集計を出すことで silent-failure を回避する（loop 内では出力しない）。
+    let mut process_errors: u64 = 0;
+
     let mut last: u64 = 0;
     loop {
         // host からの正常終了要求。一回限りの flag なので Relaxed で十分（PR-A gain child と同様）。
-        // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。
+        // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す（map 後不変）。
         if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
             break;
         }
+        // SAFETY: 同上（region は有効）。seq_request の Acquire は host SUBMIT の Release と
+        // synchronize-with し、続く input/n_frames[slot] 読み出しの可視性を確立する。
         let cur = unsafe { (*region).seq_request.load(Acquire) };
         if cur > last {
             // slot index / offset は当該 seq で不変なのでループ本体先頭で 1 回だけ算出する。
@@ -106,7 +114,10 @@ fn main() -> Result<()> {
             };
 
             // 実 CLAP effect で 1 block を in-place 加工（共有メモリ外の scratch 上で）。
-            effect.process_block(&mut scratch[..count]);
+            // 失敗時 process_block は scratch を dry のまま素通しする。ここでは集計のみ（終了時に報告）。
+            if !effect.process_block(&mut scratch[..count]) {
+                process_errors += 1;
+            }
 
             // SAFETY: 上と同じ slot 排他。scratch（加工済み出力）を output slot へ書き戻す。
             unsafe {
@@ -122,6 +133,12 @@ fn main() -> Result<()> {
         } else {
             std::hint::spin_loop();
         }
+    }
+    if process_errors > 0 {
+        eprintln!(
+            "[orbit-clap-effect-child] plugin.process() が {process_errors} ブロックで失敗 \
+             （該当ブロックは dry 素通し）"
+        );
     }
     Ok(())
 }

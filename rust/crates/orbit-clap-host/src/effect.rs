@@ -92,6 +92,8 @@ impl ClapEffectProcessor {
     ///
     /// 戻り値は `plugin.process()` が成功したか。失敗時は `data` を素通しする（[`process_block_core`] 準拠）。
     /// effect は note event を要さないので空の [`InputEvents`] を渡す。
+    /// `#[must_use]`: 握り潰すと plugin の毎ブロック失敗が child / parity 側で不可視になる。
+    #[must_use]
     pub fn process_block(&mut self, data: &mut [f32]) -> bool {
         process_block_core(
             &mut self.plugin,

@@ -110,10 +110,14 @@ fn drain_install_ring<T>(rx: &mut rtrb::Consumer<T>) {
 /// instrument（parallel = add-mix）を分岐する。
 ///
 /// 戻り値は `plugin.process()` が成功したか（`process_error_count` 等の統計更新は呼び出し側の責務）。
+/// `#[must_use]`: 戻り値を握り潰すと plugin の毎ブロックエラーが不可視になる（silent-failure 防止）。
 /// 出力配線は **成功時のみ**: 失敗時は `data`（engine render 済み dry 信号）を素通しする
 /// （effect で失敗時に上書きすると 1 ブロック無音化する・code-review #340）。
 ///
-/// RT 安全: alloc / lock / syscall なし（`buffers` は事前確保済み・`input_events` は呼び出し側が用意）。
+/// RT 安全: alloc / lock / syscall なし（`buffers` は事前確保済み・`input_events` は呼び出し側が用意）—
+/// ただし `BufferSize::Fixed` 契約が守られている場合のみ。契約違反時の resize / eprintln path は
+/// `buffers::ensure_buffer_size_matches` 参照（本来 RT 違反だが Fixed 経路では到達しない）。
+#[must_use]
 pub(crate) fn process_block_core(
     plugin: &mut StartedPluginAudioProcessor<OrbitClapHost>,
     buffers: &mut HostAudioBuffers,

@@ -309,3 +309,27 @@ fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
 
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 存在しない .clap パスは panic せず `Err` を返す（discovery 失敗が型で伝播する保証）。
+    /// 実 dylib も audio device も不要なので CI（`cargo test`）でそのまま実行できる。
+    #[test]
+    fn instantiate_activate_nonexistent_path_is_err() {
+        let result = instantiate_activate(
+            Path::new("/nonexistent/orbit-does-not-exist.clap"),
+            None,
+            48_000,
+            2,
+            512,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU64::new(0)),
+        );
+        assert!(
+            result.is_err(),
+            "存在しないパスは Err を返すべき（panic 不可）"
+        );
+    }
+}

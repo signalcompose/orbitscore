@@ -58,26 +58,25 @@ fn render_in_process_effect(dylib: &Path, input: &[f32], block_frames: usize) ->
     out
 }
 
-#[test]
-#[ignore = "γ M1 PR-B: needs a built test-effect dylib (local only)"]
-fn real_clap_effect_oop_parity() {
-    let dylib = repo_path("rust-spike/clap-test-effect/target/debug/libclap_test_effect.dylib");
-    assert!(
-        dylib.exists(),
-        "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml` を実行",
-        dylib.display()
-    );
-    let dylib_str = dylib.to_str().expect("dylib パスは UTF-8");
-
-    // 既知の入力: 4 ブロック分（block_frames の倍数 = 部分ブロックなし）。ランプで配線ミスを検知。
-    let block_frames = 128usize;
-    let total = block_frames * CHANNELS * 4;
-    let input: Vec<f32> = (0..total).map(|i| (i as f32) * 0.0005 - 0.1).collect();
+/// oracle + A/B parity を `total_frames` / `block_frames` の組で検証する。
+/// `total_frames` が `block_frames` の倍数でない場合は最終ブロックが部分長になり
+///（最終 `n_frames < block_frames` = 端数ブロック）、child が CLAP に渡すサンプル数が
+/// `block_frames` 未満になるケースを実 CLAP で検証する。
+fn assert_oop_parity(
+    dylib: &Path,
+    dylib_str: &str,
+    child_exe: &Path,
+    total_frames: usize,
+    block_frames: usize,
+) {
+    // ランプ入力で配線ミス（チャンネル入れ替え・オフセットずれ）を検知。
+    let input: Vec<f32> = (0..total_frames * CHANNELS)
+        .map(|i| (i as f32) * 0.0005 - 0.1)
+        .collect();
 
     // side B: OOP child（隔離プロセス + 共有メモリ transport）。
-    let child_exe = env!("CARGO_BIN_EXE_orbit-clap-effect-child");
     let oop = render_through_child_sync(
-        Path::new(child_exe),
+        child_exe,
         &input,
         block_frames,
         &["--plugin", dylib_str, "--sample-rate", "48000"],
@@ -90,14 +89,33 @@ fn real_clap_effect_oop_parity() {
     assert_eq!(
         max_abs_diff(&oop, &oracle),
         0.0,
-        "OOP child 出力 == input*{EFFECT_GAIN}（transport + CLAP が sample-exact）"
+        "OOP 出力 == input*{EFFECT_GAIN}（transport + CLAP が sample-exact, {total_frames}f/{block_frames}f）"
     );
 
     // A/B parity（設計 §6）: in-process side A と OOP side B が一致 = transport は音響的に透明。
-    let side_a = render_in_process_effect(&dylib, &input, block_frames);
+    let side_a = render_in_process_effect(dylib, &input, block_frames);
     assert_eq!(
         max_abs_diff(&side_a, &oop),
         0.0,
-        "in-process side A == OOP side B（transport 透明）"
+        "in-process side A == OOP side B（transport 透明, {total_frames}f/{block_frames}f）"
     );
+}
+
+#[test]
+#[ignore = "γ M1 PR-B: needs a built test-effect dylib (local only)"]
+fn real_clap_effect_oop_parity() {
+    let dylib = repo_path("rust-spike/clap-test-effect/target/debug/libclap_test_effect.dylib");
+    assert!(
+        dylib.exists(),
+        "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml` を実行",
+        dylib.display()
+    );
+    let dylib_str = dylib.to_str().expect("dylib パスは UTF-8");
+    let child_exe = Path::new(env!("CARGO_BIN_EXE_orbit-clap-effect-child"));
+
+    let block_frames = 128usize;
+    // (1) block 倍数: 4 ブロックちょうど（部分ブロックなし）。
+    assert_oop_parity(&dylib, dylib_str, child_exe, block_frames * 4, block_frames);
+    // (2) 非倍数: 300 = 128 + 128 + 44 → 最終ブロックが部分長。child の partial-block 経路を実 CLAP で検証。
+    assert_oop_parity(&dylib, dylib_str, child_exe, 300, block_frames);
 }

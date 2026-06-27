@@ -6,9 +6,9 @@
 #
 # 依存隔離 = fault 隔離の鏡（設計 doc §4.4/§4.6）:
 #   - clack は本 child binary（と orbit-clap-host）にのみリンクされる。
-#   - transport crate（orbit-audio-sandbox）は本 crate に依存され**ない**（向きは child → transport）。
-#     よって transport は memmap2 のみで clack-free を保ち、daemon の OOP 経路（PR-C）が clack を
-#     リンクせず、clack は spawn された child プロセス内だけに閉じる。
+#   - 依存の向きは child → transport の一方向のみ（本 crate が transport を使うが、transport は
+#     本 crate（child）に依存しない）。よって transport は memmap2 のみで clack-free を保ち、daemon の
+#     OOP 経路（PR-C）が clack をリンクせず、clack は spawn された child プロセス内だけに閉じる。
 #
 # 設計の正本: docs/development/POST_2.0_GAMMA_M1_DESIGN.md
 [package]
