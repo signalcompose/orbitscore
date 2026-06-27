@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.177 feat(engine): γ M1 PR-B — real CLAP effect child + shared 1-block core (#357) (Jun 27, 2026)
+
+γ M1 の **PR-B**。PR-A の transport の上に、**実 CLAP effect plugin を隔離 child プロセスで host** し、offline A/B parity を実 effect で確認する。設計正本 = `docs/development/POST_2.0_GAMMA_M1_DESIGN.md` §4.4/§4.6/§5(a)/§6。実装前に advisor 相談（① clack single-thread lifecycle を最初に証明 ② merged-RT 委譲を独立 commit 化 ③ closed-form oracle 採用）。
+
+**抽出した共有資産（`orbit-clap-host`）**:
+- `process_block_core(plugin, buffers, steady, input_events, data) -> bool` = 1-block CLAP 適用カーネル（effect=serial overwrite / instrument=add-mix 分岐・入出力配線は成功時のみ・steady 更新）。`ClapPostProcessor::process()` の effect/instrument 本体をこれに**委譲**（byte-identical）し、新規 `ClapEffectProcessor` も同じカーネルを使う = 二重実装を排除（設計 §4.4）。
+- `instantiate_activate(...)` = discover→instantiate→activate→start_processing の load 経路を `ClapHost::load_plugin`（daemon）と `ClapEffectProcessor::load`（child/parity）で共有抽出。
+- `ClapEffectProcessor` = **single-thread** effect-only ラッパ（`load → process_block → drop`）。daemon は activate=main / process=audio の別スレッド構成だが child は 1 スレッド直列。フィールド宣言順（`plugin`→`_instance`）で drop 順 = stop_processing→deactivate を同一スレッドに収め、carry-forward #1 の wrong-thread teardown を構造的に sidestep。
+
+**新規 child crate** `rust/crates/orbit-clap-effect-child`（`orbit-clap-host`+`orbit-audio-sandbox` 両依存）= PR-A gain child の gain 乗算を `ClapEffectProcessor::process_block` に差し替え。transport protocol（per-slot `seq_tag`/`seq_done`）は gain child と同一。input slot→scratch（ループ前確保=RT安全）→in-place effect→output slot。**依存の向きは child→transport のみ**で `orbit-audio-sandbox` は child crate に依存せず clack-free を維持（`cargo tree -p orbit-audio-sandbox` に clack 不在 = fault 隔離の不変条件・設計 §4.6）。
+
+**検証（advisor sequencing）**:
+- **基礎証明（最初に実行）**: `effect_processor_smoke_gated`（`orbit-clap-host`）で single-thread の load→process_block→drop が実 test-effect で成立・出力 = 0.5×入力。child crate を建てる前にこの foundation を確証。
+- **PR-B Done（gated・offline・device 不要）**: `effect_parity_gated`（`orbit-clap-effect-child`）= **closed-form oracle**（OOP child 出力 == `input*0.5` を `max_abs_diff==0.0` で sample-exact・transport+CLAP 同時検証）+ **A/B parity**（in-process side A == OOP side B）。oracle は両側同一コードでなく独立な数学的解と突き合わせる点で in-proc-vs-OOP より強い（advisor ③）。
+- **merged-RT 委譲の非回帰（独立 commit・前後計測）**: gated daemon test を委譲の**前後で実行**し byte-identical を確認 — effect `ratio 0.50000` / synth `post_mix_peak 0.25000` が一致（callback_count の ±1 は固定 sleep 窓内の cpal callback 回数のゆらぎ）。
+- **workspace 全体**: `cargo test --workspace --features clap-host` 全緑（device あり: core 42 / daemon 8+protocol 19 / native 24 / sandbox 14 / verify 23 / clap-host 12 / spike 7+3 等）/ `cargo clippy --workspace --all-targets --locked -D warnings` + `-p orbit-audio-daemon --features clap-host` clean / `cargo fmt --check` clean。実 CLAP の gated 検証は test-effect dylib（workspace 非 member）ビルド要のため `#[ignore]`・CI backstop は PR-A gain parity（clack 非依存）。daemon spawn/watchdog/respawn 統合は **PR-C**（PR-A 同様 daemon の実 stream 統合は無改変）。
+
+**PR-B round-1/2 review 収束（`/simplify` + `/code:pr-review-team`）**: `/simplify` の cleanup（`InstantiatedPlugin.note_port_index` 重複除去 / no-op rename 除去 / child loop の slot index/offset hoist）適用後、`/code:pr-review-team` を回し round-1 指摘を fixer pass で解消、round-2 で 4 reviewer 全員が **Critical=0 / Important=0** を独立確認（自己申告でなく独立再レビューで裏取り）。
+- **silent-failure Critical（child が `process_block` の bool 戻り値を破棄＝CLAP 失敗が child で不可視）→ MINOR 格下げ + 解消**: `process_errors` カウンタで集計しループ終了時に `eprintln` 報告（RT loop に IO を入れない）。child→host の health signal を `SharedRegion` に乗せるのは **PR-A の frozen transport を触る**ため見送り、**PR-C で §4.5 supervision signal 群と一緒に設計**（child は PR-C まで本番 consumer 無し = severity 妥当・advisor 判断）。残存（異常終了時の未報告 / host stderr 可視性）も PR-C 前提として tracking。
+- **`#[must_use]`（Important）→ 完全解消**: `process_block` / `process_block_core` 両方に付与。daemon `process_ok` 束縛 / child `if !...` / parity・smoke の `assert!` の全 call site が戻り値を消費。
+- **test gap → CLOSED**: ① partial-block を実 CLAP で検証（parity を `assert_oop_parity` 化し 512f 倍数 + 300f 端数=128+128+44 の 2 ケース・最終 `n_frames < block_frames`）② 新コードの初の**非 gated CI 被覆**（`tests/cli.rs` の child 引数バリデーション 4 ケース[--shm/--plugin/未知/値なし] + `controller.rs::instantiate_activate_nonexistent_path_is_err`＝discovery 失敗が panic でなく Err 伝播・dylib/device 不要で CI 実行可）。「CI で test-effect dylib をビルドして gated parity を回す」は norm（gated=実機 RUN）に合致し PR-C の CI 配線と一体設計が適切なため follow-on。instrument 分岐の offline 検証も PR-C。
+- **comment 精度**: BufferSize::Fixed 契約の RT-safe caveat cross-ref（processor.rs）/ Cargo.toml の依存方向を能動形に / main.rs:93 SAFETY 追記 / parity doc の partial 条件を `n_frames < block_frames` に訂正（`< MAX_FRAMES` は両ケースで真＝区別しない）。
+- **@claude bot レビュー（scoped）+ clack teardown 機構の source 検証**: 内部収束後、advisor 判断で重点2点（single-thread teardown drop 順 / `process_block_core` byte-identical 委譲）に絞り bot レビュー → 両点 no-blocker。ただし advisor 指示「API 契約 claim は pinned source で裏取りしてから cite」に従い `effect.rs` の drop-順 rationale を clack（pinned rev `f874e858`）で検証したところ、**当初コメント（及び bot が是認した rationale）が機構的に不正確**と判明: `StartedPluginAudioProcessor` は Drop を持たず stop_processing は呼ばない。実 teardown は `plugin`/`_instance` が共有する `Arc<PluginInstanceInner>` の**最後の Arc drop 時に `PluginInstanceInner::Drop`** が stop_processing→deactivate→destroy をまとめて実行（`host/src/plugin/instance.rs:232`）。`PluginInstance::Drop`（`host/src/plugin.rs:399`）は**唯一所有者のときだけ** inner を drop し、さもなくば wrong-thread teardown 回避のため**意図的に leak**する。よって field 宣言順 `plugin`→`_instance` は load-bearing で**正しい**が、逆順の failure mode は crash でなく **silent leak**（smoke/parity は順序が逆でも緑）→ コメントが順序を守る唯一のガード。コメントを Arc-sole-owner 機構に**訂正**し、clack bump 時に再確認すべき2 Drop site を anchor（コード挙動は単一スレッド teardown で検証済＝不変・doc-only 訂正）。
+- 再検証: fmt / clippy（workspace + daemon clap-host・-D warnings）clean・非 gated 全緑（cli 4 + controller unit + lib 13）・gated 全緑（parity[partial 込み] + smoke）・daemon byte-identical 維持（effect ratio 0.50000 / synth peak 0.25000 = `#[must_use]`/doc 変更は codegen 不変）。
+
 ### 6.176 feat(engine): γ M1 PR-A — out-of-process sandbox transport crate (#355) (Jun 27, 2026)
 
 γ 本実装（#354）を owner 2026-06-27 決定で **M1（effect 隔離）/ M2（instrument+automation・spike-first）に段階化**したうちの **M1 の PR-A**。advisor 相談（設計 checkpoint）+ 3 サブシステムの並列探索（spike transport / clap-host seam / verify harness）を経て設計。設計正本 = `docs/development/POST_2.0_GAMMA_M1_DESIGN.md`。

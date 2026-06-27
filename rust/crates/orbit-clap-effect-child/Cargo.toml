@@ -1,0 +1,33 @@
+# orbit-clap-effect-child — γ M1 (PR-B, Issue #357) の実 CLAP effect child。
+#
+# daemon が起動する隔離プロセス。orbit-audio-sandbox の共有メモリ transport を map し、
+# input block を読んで **実 CLAP effect plugin**（orbit-clap-host の ClapEffectProcessor）で加工し、
+# output へ書いて seq を進める。
+#
+# 依存隔離 = fault 隔離の鏡（設計 doc §4.4/§4.6）:
+#   - clack は本 child binary（と orbit-clap-host）にのみリンクされる。
+#   - 依存の向きは child → transport の一方向のみ（本 crate が transport を使うが、transport は
+#     本 crate（child）に依存しない）。よって transport は memmap2 のみで clack-free を保ち、daemon の
+#     OOP 経路（PR-C）が clack をリンクせず、clack は spawn された child プロセス内だけに閉じる。
+#
+# 設計の正本: docs/development/POST_2.0_GAMMA_M1_DESIGN.md
+[package]
+name = "orbit-clap-effect-child"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Out-of-process CLAP effect child hosting a real CLAP plugin over the orbit-audio-sandbox transport (γ M1 PR-B)"
+
+[[bin]]
+name = "orbit-clap-effect-child"
+path = "src/main.rs"
+
+[dependencies]
+# 実 CLAP effect を 1 スレッドで host する ClapEffectProcessor（clack 経由）。
+orbit-clap-host = { path = "../orbit-clap-host" }
+# 親子で共有する SharedRegion transport（memmap2・clack 非依存）。
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
+# 引数 parse / エラー伝播。
+anyhow = "1"

@@ -8,6 +8,7 @@ members = [
   "crates/orbit-audio-verify",
   "crates/orbit-clap-spike",
   "crates/orbit-clap-host",
+  "crates/orbit-clap-effect-child",
   "crates/orbit-sandbox-spike",
   "crates/orbit-audio-sandbox",
 ]

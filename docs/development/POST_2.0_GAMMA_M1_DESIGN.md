@@ -95,18 +95,27 @@ pub fn slot_offset(seq: u64) -> usize { (seq as usize % SLOTS) * BUF_LEN }
 - **child は `orbit-clap-host` の subset**（`load_plugin` + 1-block process）を使う。ring 包みの `ClapPostProcessor.process()` から core を抽出する小リファクタを **PR-B で**行う。
 - **PR-A は gain child を昇格**（spike の gain child を crash-injection 抜きで・gain 設定可能に）。A/B parity の OOP 側に走らせる相手として end-to-end にテスト可能にし、PR-B で実 CLAP child へ差し替える。
 
+**PR-B での具体化（実装済み）**:
+- 抽出した 1-block core = `orbit-clap-host` の `process_block_core(plugin, buffers, steady, input_events, data) -> bool`（effect/instrument 分岐 + 入出力配線 + steady 更新）。`ClapPostProcessor::process()` の effect/instrument 本体はこれに委譲し（byte-identical・gated daemon test で ratio 0.50000 / peak 0.25000 を前後一致確認）、新規の `ClapEffectProcessor` も同じ core を使う。
+- `ClapEffectProcessor`（`orbit-clap-host`）= **single-thread** で `load → process_block → drop` を完結する effect-only ラッパ。daemon は activate=main / process=audio の別スレッドだが、child は 1 スレッドで直列実行する。フィールド宣言順（`plugin` を `_instance` より前）で drop 順 = stop_processing → deactivate を同一スレッドに収め、carry-forward #1 の wrong-thread teardown を構造的に sidestep する。load 経路は `instantiate_activate`（`load_plugin` と共有抽出）。
+- child binary = 新 crate **`orbit-clap-effect-child`**（`orbit-clap-host` + `orbit-audio-sandbox` の両方に依存）。PR-A の gain child（`sandbox-effect-child`）の gain 乗算を `ClapEffectProcessor::process_block` に差し替えたもの。transport protocol（per-slot `seq_tag`/`seq_done`）は gain child と同一。
+- **既知ギャップ（M1 スコープ外・real plugin 向け）**: child は `call_on_main_thread_callback` を pump しない（load-time param のみの effect には不要）。main-thread callback を要求する 3rd-party plugin は M1 スコープ外。
+
 ### 4.5 daemon supervision
 
 - **spawn**: `std::process::Command` で child を起動。child binary path は設定可能に（spike は sibling-of-exe ハードコード）
 - **watchdog**: 別 thread が `child.try_wait()` を poll → `Ok(Some(status))`（crash/exit）で clean respawn・`respawn_count`/`last_respawn_ns` 更新・respawn 失敗で `measurement_invalid`
 - **StreamGuard mirror**（drop 順は load-bearing）: `_outproc_teardown`（audio thread に IPC 送信停止を signal → drain → ack）→ `_stream`（cpal callback 停止）→ `_child_guard`（child に shutdown signal → exit 待ち）
 - **teardown handshake**: `teardown_requested`/`teardown_done`(AtomicBool)。in-process 版（processor.rs:221-233）の handshake を踏襲。「stop processing」= 「child への audio 送信停止 + IPC flush」
+- **child health 可観測性（PR-B review carry-forward）**: PR-B の child は `process_block` 失敗を local counter + 終了時 `eprintln` のみで報告（PR-A の frozen `SharedRegion` を触らないため）。PR-C で health signal を **本 §4.5 の signal 群（`respawn_count`/`last_respawn_ns`/`measurement_invalid`）と一緒に `SharedRegion` に設計する**: ① per-block process 失敗数（例 `child_process_error_count`）② 異常終了（panic/signal）時もカウントが host から読めるよう exit-code or shared field に encode ③ host が child の stderr を確実に拾える spawn 設定（`Stdio` 継承 / log pipe）。PR-B では child に本番 consumer が無いため deferral 可。
 
 ### 4.6 crate 構造・clack 隔離
 
 - 新 **transport crate**（`SharedRegion` 等 + daemon 側 `OutProcEffectPostProcessor`）は **clack 非依存**（純 transport IPC）。依存隔離が fault 隔離の鏡になる。
 - **clack は child binary のみ**がリンク（child だけが `orbit-clap-host` を使う）。
 - spike-only scaffolding（CLI/histogram/test-tone/`--crash-after-blocks` null-write/warm-up）は昇格しない。
+
+**PR-B での具体化（依存の向き）**: child crate `orbit-clap-effect-child` が `orbit-clap-host`（clack）と `orbit-audio-sandbox`（memmap2）の**両方に依存する**。向きは常に child → transport であり、**transport crate（`orbit-audio-sandbox`）は child crate に依存しない**ため memmap2 単独（clack-free）を保つ。よって daemon の OOP 経路（PR-C で `orbit-audio-sandbox` を使う）は clack をリンクせず、clack は spawn された child プロセス内だけに閉じる。`cargo tree -p orbit-audio-sandbox` に clack が現れないことが不変条件。
 
 ---
 
@@ -122,6 +131,7 @@ CI は Rust gated 非実行（device なし・`#[ignore]` 自動 skip）。offli
 
 - **A/B parity の判定**: 可能なら **sample-exact**（同一 plugin・決定論・両側同一 block size なら 1-block 整列後の body は bit 一致）。plugin が両ホスト文脈で決定論的でない / block-size 依存 buffering を持つ場合は RMS-within-`GAIN_DB_TOLERANCE`(0.5dB) に fallback。primed first / drained last block は差を許容。
 - **再利用資産**: `orbit-audio-verify`（`capture`/`CapturedAudio`/`region_rms`/`db_difference`）・`verify_schedule_pcm.rs` の `render_golden()` パターン（in-process 側）・spike の `RtStats` histogram/`p99_ns`（gated 計測）・`is_recovered()` 論理（crash-survival assert）。
+- **PR-B の実 CLAP parity は gated（CI backstop は gain parity）**: 実 CLAP effect での A/B parity（`orbit-clap-effect-child` の `effect_parity_gated.rs`・`orbit-clap-host` の `effect_processor_smoke_gated.rs`）は実 plugin dylib（`rust-spike/clap-test-effect`・workspace 非 member）のビルドを要するため `#[ignore]`（local 実行）。test-effect は決定論 *0.5 なので **closed-form oracle**（OOP 出力 == `input*0.5` を sample-exact）で transport + CLAP を同時検証し、加えて in-process side A == OOP side B（A/B parity）も確認する（いずれも audio device 不要の offline）。CI で常時走る parity は PR-A の **gain child**（clack 非依存）が担う backstop。
 - **ギャップ（M1 で作る）**: A/B parity primitive（2 つの render を比較）/ OOP の offline render 経路 / programmatic crash-survival `#[test]`（gated）/ 32-64f stale-rate のアサート化。
 - **⚠️ spike の stale 数は provisional（PR-C で再計測必須）**: spike #351 の `pipelined_stale` / 「32f feasible」verdict は **`seq_done`-only プロトコル**（`seq_tag` 不在）下の計測。child の「latest 処理」で中間 seq が skip された block を `seq_done >= N-1` が **false-fresh** として fresh に算入していたため、real glitch を **undercount**（skip が最も起きる 32f に集中）している。PR-A で per-slot `seq_tag` に修正したが、**この correct path は実並列下で未計測**（単一スレッド mock は skip を手動シミュレート・同期統合テストは callback 間で `seq_done` を追いつかせるので race 無し → どちらも true-concurrency を検証しない）。よって **(c) gated 実機の stale-rate を corrected `seq_tag` プロトコル下で計測し直してから 2 vs 3 slot を決める**。spike の stale 数を slot 決定の根拠にしない。
 
@@ -132,8 +142,8 @@ CI は Rust gated 非実行（device なし・`#[ignore]` 自動 skip）。offli
 | PR | スコープ | Done |
 |---|---|---|
 | **PR-A** ✅ | **transport crate `orbit-audio-sandbox`**（N-slot-generic・memmap2 のみ依存）+ gain child binary（clack 非依存）+ `PipelinedEffectHost`（候補B 状態機械・repeat-previous/stall）+ **offline 決定論サンドボックスモード** + A/B parity primitive + **mock-child の pipeline state-machine unit test** + **production-path 統合テスト**（実 host+実 child+実 mmap） | in-proc gain vs out-of-proc gain の A/B parity が **CI（offline）で sample-exact 通過** + **実 host+実 child 統合テストが 1 block 遅延を sample-exact 検証** + repeat-previous/stall の unit test 緑 + workspace 全体緑（daemon 無改変） |
-| **PR-B** | OOP effect の **実 CLAP child**（`orbit-clap-host` の load_plugin+1-block core を抽出）+ effect plugin を child で host + parity を実 effect で再確認 | 実 CLAP effect が child で動き offline A/B parity 緑 |
-| **PR-C** | daemon 側 `OutProcEffectPostProcessor`（`PipelinedEffectHost` を `impl PostProcessor` で薄く包む・clack 非依存）+ child spawn/watchdog/respawn + daemon 統合（StreamGuard mirror・teardown handshake）+ **gated 実機 RUN**（parity/kill-test/32-64f stale・**corrected `seq_tag` プロトコル下で再計測**）→ **slot 数 2 vs 3 決定** | gated 実機で parity + kill-test 生存 + 32-64f viability・slot 数確定（spike 数でなく corrected-protocol 計測が根拠） |
+| **PR-B** ✅ | OOP effect の **実 CLAP child**（`orbit-clap-host` の `instantiate_activate`+`process_block_core` を抽出・`ClapEffectProcessor` single-thread ラッパ・`ClapPostProcessor` も同 core に委譲）+ child crate `orbit-clap-effect-child`（clack+transport 両依存・transport は clack-free 維持）で effect plugin を host + parity を実 effect で再確認 | 実 CLAP effect が child で動き offline A/B parity 緑（closed-form oracle = OOP 出力 == input*0.5 sample-exact + side A==B）。daemon 委譲は byte-identical（gated ratio 0.50000/peak 0.25000 前後一致）・workspace 全体緑 |
+| **PR-C** | daemon 側 `OutProcEffectPostProcessor`（`PipelinedEffectHost` を `impl PostProcessor` で薄く包む・clack 非依存）+ child spawn/watchdog/respawn + daemon 統合（StreamGuard mirror・teardown handshake）+ **gated 実機 RUN**（parity/kill-test/32-64f stale・**corrected `seq_tag` プロトコル下で再計測**）→ **slot 数 2 vs 3 決定**。**PR-B review carry-forward**: ① child health signal を §4.5 に統合（process-error count / 異常終了の host 可読化 / stderr 可視性）② `process_block_core` の **instrument(add-mix) 分岐の offline 検証**（effect-only の PR-B では未踏・共有 core の回帰を CI で捕捉）③ **CI で test-effect dylib をビルドして gated parity を CI 化**（PR-C の OOP daemon 経路の CI 配線と同一 test-effect を共有） | gated 実機で parity + kill-test 生存 + 32-64f viability・slot 数確定（spike 数でなく corrected-protocol 計測が根拠）+ carry-forward 3 件 処理 |
 
 各 PR は `/simplify` + `/code:pr-review-team`（ハンドロール禁止・収束は独立再レビューで裏取り）→ advisor → 必要なら @claude bot（owner-gated）→ owner 明示マージ。
 

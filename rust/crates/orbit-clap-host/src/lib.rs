@@ -16,12 +16,14 @@ mod buffers;
 mod config;
 mod controller;
 mod discovery;
+mod effect;
 mod events;
 mod host;
 mod processor;
 
 pub use controller::{ClapHost, ClapHostError, LoadedPluginInfo};
 pub use discovery::DiscoveryError;
+pub use effect::ClapEffectProcessor;
 pub use events::{make_event_ring, PluginEvent, PluginEventConsumer, PluginEventProducer};
 pub use orbit_audio_native::PostProcessor;
 pub use processor::{ClapPostProcessor, ClapProcessorStats, InstallMsg};

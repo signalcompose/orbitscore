@@ -15,7 +15,9 @@ use crate::host::{OrbitClapHost, OrbitHostMainThread, OrbitHostShared};
 use crate::processor::InstallMsg;
 
 use clack_extensions::note_ports::{NoteDialects, NotePortInfoBuffer, PluginNotePorts};
-use clack_host::prelude::{HostInfo, PluginAudioConfiguration, PluginInstance};
+use clack_host::prelude::{
+    HostInfo, PluginAudioConfiguration, PluginInstance, StartedPluginAudioProcessor,
+};
 
 use std::ffi::CString;
 use std::path::Path;
@@ -55,6 +57,121 @@ pub struct LoadedPluginInfo {
     pub plugin_name: Option<String>,
     /// note 入力ポートインデックス（InstallMsg にも含まれる・確認用）。
     pub note_port_index: u16,
+}
+
+/// `instantiate_activate` の成果物: 活性化済みプラグインの全部品（instance + processor + buffers）。
+///
+/// [`ClapHost::load_plugin`]（daemon: instance を self に保持し processor を install ring へ送る）と
+/// [`crate::effect::ClapEffectProcessor`]（γ child / parity: instance と processor を 1 スレッドで束ねて保持）
+/// の両方がこの 1 関数を共有する。`!Send` な [`PluginInstance`] を含むため本体も `!Send`。
+pub(crate) struct InstantiatedPlugin {
+    /// プラグインインスタンス（drop で deactivate; home thread で drop すること）。
+    pub instance: PluginInstance<OrbitClapHost>,
+    /// 起動済み audio processor（`Send`; process / start / stop は audio thread 上）。
+    pub plugin: StartedPluginAudioProcessor<OrbitClapHost>,
+    /// 事前確保済みオーディオバッファ。
+    pub buffers: HostAudioBuffers,
+    /// logging / UI 用メタデータ（note 入力ポートインデックスも `info.note_port_index` に含む）。
+    pub info: LoadedPluginInfo,
+}
+
+/// .clap バンドルを discover → instantiate → activate → start_processing し、全部品を返す。
+///
+/// CLAP 仕様: `PluginInstance::new` / `activate` / `start_processing` は同一スレッド（呼び出し元）で
+/// 実行する。`callback_requested` / `resize_count` は host shared / buffers が共有する Arc で、daemon は
+/// 自身の監視用フィールドを、standalone（γ child）は freshly-created な Arc を渡す。
+pub(crate) fn instantiate_activate(
+    path: &Path,
+    id: Option<&str>,
+    sample_rate: u32,
+    channels: usize,
+    max_frames: u32,
+    callback_requested: Arc<AtomicBool>,
+    resize_count: Arc<AtomicU64>,
+) -> Result<InstantiatedPlugin, ClapHostError> {
+    // プラグインを発見する。
+    let found: FoundPlugin = match id {
+        None => {
+            let mut plugins = list_plugins_in_file(path)?;
+            if plugins.is_empty() {
+                return Err(ClapHostError::NoPlugins);
+            }
+            if plugins.len() > 1 {
+                return Err(ClapHostError::MultiplePlugins);
+            }
+            plugins.remove(0)
+        }
+        Some(id) => load_plugin_id_from_path(path, id)?
+            .ok_or_else(|| ClapHostError::PluginIdNotFound(id.to_string()))?,
+    };
+
+    let plugin_id_str = found.plugin.id.clone();
+    let plugin_name = found.plugin.name.clone();
+
+    let plugin_id =
+        CString::new(found.plugin.id.as_str()).map_err(|_| ClapHostError::NullPluginId)?;
+
+    let host_info = HostInfo::new(
+        "OrbitScore daemon CLAP host",
+        "Signal compose",
+        "https://github.com/signalcompose/orbitscore",
+        env!("CARGO_PKG_VERSION"),
+    )
+    .expect("HostInfo 文字列は有効なはず");
+
+    // PluginInstance を生成する（main thread 要件: 呼び出し元スレッドで実行）。
+    // carry-forward #2: callback_requested Arc を closure にキャプチャして clone で共有。
+    let mut instance = PluginInstance::<OrbitClapHost>::new(
+        move |_| OrbitHostShared::new(callback_requested.clone()),
+        |shared| OrbitHostMainThread::new(shared),
+        &found.entry,
+        &plugin_id,
+        &host_info,
+    )
+    .map_err(|e| ClapHostError::Instantiate(e.to_string()))?;
+
+    // note ポートインデックスを取得する（activate 前に実行）。
+    let note_port_index = query_note_port_index(&mut instance);
+
+    // ポート設定を取得して FullAudioConfig を組み立てる（cpal 依存なし・呼び出し元が値を提供）。
+    let plugin_input_port_config = get_config_from_ports(&mut instance.plugin_handle(), true);
+    let plugin_output_port_config = get_config_from_ports(&mut instance.plugin_handle(), false);
+
+    let audio_config = FullAudioConfig {
+        plugin_output_port_config,
+        plugin_input_port_config,
+        output_channel_count: channels,
+        min_buffer_size: 1,
+        max_likely_buffer_size: max_frames,
+        sample_rate,
+    };
+
+    let clap_config = PluginAudioConfiguration {
+        sample_rate: sample_rate as f64,
+        min_frames_count: audio_config.min_buffer_size,
+        max_frames_count: max_frames,
+    };
+
+    // activate + start_processing（CLAP 仕様: 呼び出し元スレッド上で実行）。
+    let plugin = instance
+        .activate(|_, _| (), clap_config)
+        .map_err(|e| ClapHostError::Activate(e.to_string()))?
+        .start_processing()
+        .map_err(|e| ClapHostError::StartProcessing(e.to_string()))?;
+
+    // HostAudioBuffers を事前確保する（audio thread での alloc を避けるため）。
+    let buffers = HostAudioBuffers::from_config(audio_config, resize_count);
+
+    Ok(InstantiatedPlugin {
+        instance,
+        plugin,
+        buffers,
+        info: LoadedPluginInfo {
+            plugin_id: plugin_id_str,
+            plugin_name,
+            note_port_index,
+        },
+    })
 }
 
 /// daemon の専用スレッドが所有する CLAP host controller。
@@ -108,94 +225,29 @@ impl ClapHost {
             return Err(ClapHostError::AlreadyLoaded);
         }
 
-        // プラグインを発見する。
-        let found: FoundPlugin = match id {
-            None => {
-                let mut plugins = list_plugins_in_file(path)?;
-                if plugins.is_empty() {
-                    return Err(ClapHostError::NoPlugins);
-                }
-                if plugins.len() > 1 {
-                    return Err(ClapHostError::MultiplePlugins);
-                }
-                plugins.remove(0)
-            }
-            Some(id) => load_plugin_id_from_path(path, id)?
-                .ok_or_else(|| ClapHostError::PluginIdNotFound(id.to_string()))?,
-        };
-
-        let plugin_id_str = found.plugin.id.clone();
-        let plugin_name = found.plugin.name.clone();
-
-        let plugin_id =
-            CString::new(found.plugin.id.as_str()).map_err(|_| ClapHostError::NullPluginId)?;
-
-        let host_info = HostInfo::new(
-            "OrbitScore daemon CLAP host",
-            "Signal compose",
-            "https://github.com/signalcompose/orbitscore",
-            env!("CARGO_PKG_VERSION"),
-        )
-        .expect("HostInfo 文字列は有効なはず");
-
-        // PluginInstance を生成する（main thread 要件: ここで実行）。
-        // carry-forward #2: callback_requested Arc を closure にキャプチャして clone で共有。
-        let cb = self.callback_requested.clone();
-        let mut instance = PluginInstance::<OrbitClapHost>::new(
-            move |_| OrbitHostShared::new(cb.clone()),
-            |shared| OrbitHostMainThread::new(shared),
-            &found.entry,
-            &plugin_id,
-            &host_info,
-        )
-        .map_err(|e| ClapHostError::Instantiate(e.to_string()))?;
-
-        // note ポートインデックスを取得する（activate 前に実行）。
-        let note_port_index = query_note_port_index(&mut instance);
-
-        // ポート設定を取得して FullAudioConfig を組み立てる（cpal 依存なし・daemon が値を提供）。
-        let plugin_input_port_config = get_config_from_ports(&mut instance.plugin_handle(), true);
-        let plugin_output_port_config = get_config_from_ports(&mut instance.plugin_handle(), false);
-
-        let audio_config = FullAudioConfig {
-            plugin_output_port_config,
-            plugin_input_port_config,
-            output_channel_count: channels,
-            min_buffer_size: 1,
-            max_likely_buffer_size: max_frames,
+        // discover → instantiate → activate → start_processing は instantiate_activate が担う
+        // （γ child / parity の ClapEffectProcessor と共有）。daemon は instance を self に保持し、
+        // processor + buffers を InstallMsg として install ring に渡す。
+        let loaded = instantiate_activate(
+            path,
+            id,
             sample_rate,
-        };
+            channels,
+            max_frames,
+            self.callback_requested.clone(),
+            self.resize_count.clone(),
+        )?;
 
-        let clap_config = PluginAudioConfiguration {
-            sample_rate: sample_rate as f64,
-            min_frames_count: audio_config.min_buffer_size,
-            max_frames_count: max_frames,
-        };
-
-        // activate + start_processing（CLAP 仕様: main thread 上で実行）。
-        let plugin = instance
-            .activate(|_, _| (), clap_config)
-            .map_err(|e| ClapHostError::Activate(e.to_string()))?
-            .start_processing()
-            .map_err(|e| ClapHostError::StartProcessing(e.to_string()))?;
-
-        // HostAudioBuffers を事前確保する（audio thread での alloc を避けるため）。
-        let buffers = HostAudioBuffers::from_config(audio_config, self.resize_count.clone());
-
-        self.instance = Some(instance);
+        self.instance = Some(loaded.instance);
 
         let msg = InstallMsg {
-            plugin,
-            buffers,
-            note_port_index,
-        };
-        let info = LoadedPluginInfo {
-            plugin_id: plugin_id_str,
-            plugin_name,
-            note_port_index,
+            plugin: loaded.plugin,
+            buffers: loaded.buffers,
+            // u16 は Copy なので info を move せずに読める（直後の Ok で info を返す）。
+            note_port_index: loaded.info.note_port_index,
         };
 
-        Ok((msg, info))
+        Ok((msg, loaded.info))
     }
 
     /// CLAP main-thread callback を pump する。
@@ -256,4 +308,28 @@ fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
     }
 
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 存在しない .clap パスは panic せず `Err` を返す（discovery 失敗が型で伝播する保証）。
+    /// 実 dylib も audio device も不要なので CI（`cargo test`）でそのまま実行できる。
+    #[test]
+    fn instantiate_activate_nonexistent_path_is_err() {
+        let result = instantiate_activate(
+            Path::new("/nonexistent/orbit-does-not-exist.clap"),
+            None,
+            48_000,
+            2,
+            512,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU64::new(0)),
+        );
+        assert!(
+            result.is_err(),
+            "存在しないパスは Err を返すべき（panic 不可）"
+        );
+    }
 }
