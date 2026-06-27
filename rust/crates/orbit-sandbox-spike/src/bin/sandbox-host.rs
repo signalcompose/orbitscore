@@ -1,0 +1,513 @@
+//! γ sandbox spike — 親プロセス（host）。
+//!
+//! cpal 出力ストリームの RT callback で、1 ブロックを共有メモリ経由で子プロセスに渡して
+//! gain を掛け戻させる round-trip を行い、そのレイテンシ分布と overrun 挙動を計測する。
+//! 別スレッドの watchdog が子の死（segfault）を検知して clean な子を respawn する。
+//!
+//! 使い方:
+//!   sandbox-host [--measure-secs N] [--buffer-frames F] [--round-trip-timeout-us US]
+//!                [--child-crash-after-blocks N] [--gain G]
+//!
+//! Gate1（RT round-trip が block budget に収まるか）: crash 無しで実行しレイテンシ分布を見る。
+//! Gate2（子の crash 封じ込め + watchdog 復帰）: --child-crash-after-blocks N で実行し、
+//!   respawn 後に round-trip が再開し audio が復帰することを確認する。
+
+#![allow(unsafe_code)]
+
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use orbit_sandbox_spike::{create_shared, region_ptr, SharedRegion, CHANNELS, MAX_FRAMES};
+
+// ---- CLI ----------------------------------------------------------------
+
+struct Cli {
+    measure_secs: u64,
+    buffer_frames: Option<u32>,
+    /// round-trip 待ちの上限（µs）。これを超えたら glitch-to-silence（RT は無制限ブロックしない）。
+    round_trip_timeout_us: u64,
+    /// > 0 なら最初の子を「N ブロック後 segfault」で起動し Gate2 を駆動する。respawn 後は clean。
+    child_crash_after_blocks: u64,
+    gain: f32,
+}
+
+fn parse_args() -> anyhow::Result<Cli> {
+    let mut args = std::env::args().skip(1);
+    let mut cli = Cli {
+        measure_secs: 10,
+        buffer_frames: None,
+        round_trip_timeout_us: 5000,
+        child_crash_after_blocks: 0,
+        gain: 0.5,
+    };
+    while let Some(arg) = args.next() {
+        let mut next = || {
+            args.next()
+                .ok_or_else(|| anyhow::anyhow!("{arg} requires a value"))
+        };
+        match arg.as_str() {
+            "--measure-secs" => cli.measure_secs = next()?.parse()?,
+            "--buffer-frames" => cli.buffer_frames = Some(next()?.parse()?),
+            "--round-trip-timeout-us" => cli.round_trip_timeout_us = next()?.parse()?,
+            "--child-crash-after-blocks" => cli.child_crash_after_blocks = next()?.parse()?,
+            "--gain" => cli.gain = next()?.parse()?,
+            other => anyhow::bail!("Unknown argument: {other}"),
+        }
+    }
+    Ok(cli)
+}
+
+// ---- RT stats -----------------------------------------------------------
+
+const HIST_BUCKETS: usize = 4096;
+// 2 µs / bucket -> 0..8.192 ms。default round-trip timeout(5ms)を範囲内に収め、5ms 近傍の
+// 成功 round-trip が overflow bucket に飽和して p99 を過小評価するのを防ぐ（#348 altitude review）。
+const BUCKET_NS: u64 = 2_000;
+
+/// RT callback が更新する計測。全 atomic（callback スレッドが唯一の writer、終了後に読む）。
+/// `callback_count` は持たない（= success_count + overrun_count で導出でき、hot-path の atomic を 1 個減らす）。
+struct RtStats {
+    frames_total: AtomicU64,
+    /// callback が届けたフレーム数が MAX_FRAMES を超えクランプされた回数。> 0 なら計測が
+    /// 部分ブロックしか round-trip していない（block budget は全幅で計算）ので結果で警告する。
+    frames_clamped: AtomicU64,
+    /// round-trip 成功回数（timeout でない）。
+    success_count: AtomicU64,
+    /// round-trip timeout = glitch-to-silence した回数。
+    overrun_count: AtomicU64,
+    /// 成功 round-trip のレイテンシ（ns）。
+    rt_min_ns: AtomicU64,
+    rt_max_ns: AtomicU64,
+    rt_sum_ns: AtomicU64,
+    rt_hist: Vec<AtomicU64>,
+    /// audio callback 全体の所要（ns）の最大（spin 待ち込み）。RT 安全性の判定軸。
+    callback_max_ns: AtomicU64,
+    /// post-mix の絶対値ピーク（f32 bits）。> 0 で音が流れている証拠。
+    post_peak_bits: AtomicU32,
+    /// 最後に round-trip が成功した時刻（t_start からの ns）。recovery 判定用。
+    last_success_ns: AtomicU64,
+}
+
+impl RtStats {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            frames_total: AtomicU64::new(0),
+            frames_clamped: AtomicU64::new(0),
+            success_count: AtomicU64::new(0),
+            overrun_count: AtomicU64::new(0),
+            rt_min_ns: AtomicU64::new(u64::MAX),
+            rt_max_ns: AtomicU64::new(0),
+            rt_sum_ns: AtomicU64::new(0),
+            rt_hist: (0..HIST_BUCKETS).map(|_| AtomicU64::new(0)).collect(),
+            callback_max_ns: AtomicU64::new(0),
+            post_peak_bits: AtomicU32::new(0),
+            last_success_ns: AtomicU64::new(0),
+        })
+    }
+
+    fn record_roundtrip(&self, ns: u64) {
+        self.success_count.fetch_add(1, Ordering::Relaxed);
+        self.rt_min_ns.fetch_min(ns, Ordering::Relaxed);
+        self.rt_max_ns.fetch_max(ns, Ordering::Relaxed);
+        self.rt_sum_ns.fetch_add(ns, Ordering::Relaxed);
+        let bucket = ((ns / BUCKET_NS) as usize).min(HIST_BUCKETS - 1);
+        self.rt_hist[bucket].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// p99 を histogram から復元（stream 停止後に読む）。
+    fn p99_ns(&self) -> u64 {
+        let total: u64 = self.rt_hist.iter().map(|b| b.load(Ordering::Relaxed)).sum();
+        if total == 0 {
+            return 0;
+        }
+        let threshold = (total as f64 * 0.99).ceil() as u64;
+        let mut cum = 0u64;
+        for (i, b) in self.rt_hist.iter().enumerate() {
+            cum += b.load(Ordering::Relaxed);
+            if cum >= threshold {
+                return i as u64 * BUCKET_NS;
+            }
+        }
+        (HIST_BUCKETS - 1) as u64 * BUCKET_NS
+    }
+}
+
+/// crash からの復帰判定: respawn が起きており、最後の成功 round-trip が最後の respawn より後なら、
+/// audio-flow が復帰している（= daemon 生存 + 音再開。plugin 内部状態の復帰は意味しない）。
+fn is_recovered(respawns: u64, last_success_ns: u64, last_respawn_ns: u64) -> bool {
+    respawns > 0 && last_success_ns > last_respawn_ns
+}
+
+/// 生ポインタを cpal callback（Send 要求）に渡すためのラッパ。
+/// SAFETY: ポインタは run() が保持する mmap を指す。stream は mmap より先に drop されるので
+/// callback 実行中は常に有効。host callback が input/output の唯一の writer/reader（ハンドシェイクで
+/// child と時間的排他）なので別スレッド送付も健全。
+struct RegionPtr(*mut SharedRegion);
+unsafe impl Send for RegionPtr {}
+
+impl RegionPtr {
+    /// ポインタを取り出す。メソッド呼び出しにすることでクロージャが（生ポインタフィールドだけでなく）
+    /// `RegionPtr` 全体を捕捉する（edition 2021 disjoint capture で `.0` 直参照だと
+    /// `*mut` 単体が捕捉され Send にならないため）。
+    fn get(&self) -> *mut SharedRegion {
+        self.0
+    }
+}
+
+// ---- child / watchdog ---------------------------------------------------
+
+fn child_exe_path() -> anyhow::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("current_exe has no parent dir"))?;
+    Ok(dir.join("sandbox-child"))
+}
+
+fn spawn_child(child_exe: &Path, shm: &Path, crash_after: u64) -> anyhow::Result<Child> {
+    let mut cmd = Command::new(child_exe);
+    cmd.arg("--shm").arg(shm);
+    if crash_after > 0 {
+        cmd.arg("--crash-after-blocks").arg(crash_after.to_string());
+    }
+    Ok(cmd.spawn()?)
+}
+
+// ---- entry --------------------------------------------------------------
+
+fn main() -> anyhow::Result<()> {
+    let cli = parse_args()?;
+    run(&cli)
+}
+
+fn run(cli: &Cli) -> anyhow::Result<()> {
+    // --- shared memory（mmap は run() が保持。stream より先に宣言し後で drop させる）---------
+    let shm_path =
+        std::env::temp_dir().join(format!("orbit-sandbox-spike-{}.shm", std::process::id()));
+    let mmap = create_shared(&shm_path)?;
+    let region = region_ptr(&mmap);
+    // SAFETY: region は確保済み共有領域。gain を初期化。
+    unsafe {
+        (*region)
+            .gain_bits
+            .store(cli.gain.to_bits(), Ordering::Relaxed);
+    }
+    println!("shm: {}", shm_path.display());
+
+    // --- child を起動（最初の子は crash arg を載せる場合がある）-----------------------------
+    let child_exe = child_exe_path()?;
+    let first_child = spawn_child(&child_exe, &shm_path, cli.child_crash_after_blocks)?;
+    let child = Arc::new(Mutex::new(first_child));
+
+    // --- watchdog -----------------------------------------------------------
+    let t_start = Instant::now();
+    let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let respawn_count = Arc::new(AtomicU64::new(0));
+    let last_respawn_ns = Arc::new(AtomicU64::new(0));
+
+    let wd = {
+        let child = child.clone();
+        let shutdown = shutdown.clone();
+        let respawn_count = respawn_count.clone();
+        let last_respawn_ns = last_respawn_ns.clone();
+        let child_exe = child_exe.clone();
+        let shm_path = shm_path.clone();
+        std::thread::spawn(move || loop {
+            if shutdown.load(Ordering::Relaxed) {
+                let mut g = child.lock().unwrap();
+                let _ = g.kill();
+                let _ = g.wait();
+                break;
+            }
+            // try_wait は終了済みなら status を返し zombie を reap する。
+            let exited = child.lock().unwrap().try_wait().ok().flatten();
+            if let Some(status) = exited {
+                eprintln!("[watchdog] child exited ({status:?}); respawning clean child");
+                // respawn は crash arg 無し → clean な子 → audio 復帰。
+                match spawn_child(&child_exe, &shm_path, 0) {
+                    Ok(newc) => {
+                        *child.lock().unwrap() = newc;
+                        respawn_count.fetch_add(1, Ordering::Relaxed);
+                        last_respawn_ns
+                            .store(t_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    }
+                    Err(e) => eprintln!("[watchdog] respawn failed: {e}"),
+                }
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        })
+    };
+
+    // --- cpal 出力ストリーム -------------------------------------------------
+    let cpal_host = cpal::default_host();
+    let device = cpal_host
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("no default output device"))?;
+    let default_cfg = device.default_output_config()?;
+    let sample_rate = default_cfg.sample_rate().0;
+    let cpal_config = cpal::StreamConfig {
+        channels: CHANNELS as u16,
+        sample_rate: cpal::SampleRate(sample_rate),
+        buffer_size: match cli.buffer_frames {
+            Some(f) => cpal::BufferSize::Fixed(f),
+            None => cpal::BufferSize::Default,
+        },
+    };
+    println!(
+        "audio: {} Hz, {} ch, buffer={:?}, round_trip_timeout={}us",
+        sample_rate, CHANNELS, cpal_config.buffer_size, cli.round_trip_timeout_us
+    );
+
+    let stats = RtStats::new();
+    let timeout = Duration::from_micros(cli.round_trip_timeout_us);
+    let phase_inc = 2.0 * std::f64::consts::PI * 220.0 / sample_rate as f64;
+
+    // --- warm-up: child の attach + ページフォルトを RT 計測の前に済ませる ------------------
+    // これをしないと最初の数 callback が child の dlopen/mmap/初回 spin を待ち込みで吸い込み、
+    // cold-start のレイテンシが steady-state の tail に混ざる。warm-up 後の req を RT の起点にする。
+    let mut warm_req: u64 = 0;
+    {
+        let warm_deadline = Instant::now() + Duration::from_secs(2);
+        for _ in 0..64 {
+            unsafe {
+                (*region).n_frames.store(64, Ordering::Relaxed);
+            }
+            warm_req += 1;
+            unsafe {
+                (*region).seq_request.store(warm_req, Ordering::Release);
+            }
+            loop {
+                if unsafe { (*region).seq_done.load(Ordering::Acquire) } >= warm_req {
+                    break;
+                }
+                if Instant::now() >= warm_deadline {
+                    anyhow::bail!("child did not attach within warm-up window (2s)");
+                }
+                std::hint::spin_loop();
+            }
+        }
+        println!("child warm-up complete ({warm_req} round-trips)");
+    }
+
+    let region_ptr_send = RegionPtr(region);
+    let cb_stats = stats.clone();
+    let mut req: u64 = warm_req;
+    let mut phase: f64 = 0.0;
+
+    let stream = device.build_output_stream(
+        &cpal_config,
+        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            let cb_start = Instant::now();
+            let r = region_ptr_send.get();
+            let frames = data.len() / CHANNELS;
+            let n = frames.min(MAX_FRAMES);
+            let count = n * CHANNELS;
+            if frames > MAX_FRAMES {
+                // 全幅を round-trip できていない（部分ブロックのみ）。結果で警告するため記録。
+                cb_stats.frames_clamped.fetch_add(1, Ordering::Relaxed);
+            }
+
+            // --- input にテストトーンを書く ---
+            // SAFETY: r は共有領域。ハンドシェイク前なので host が input の唯一の writer。
+            unsafe {
+                let inp = (*r).input.as_mut_ptr();
+                for f in 0..n {
+                    phase += phase_inc;
+                    if phase >= std::f64::consts::TAU {
+                        phase -= std::f64::consts::TAU;
+                    }
+                    let s = (phase.sin() as f32) * 0.5;
+                    *inp.add(f * CHANNELS) = s;
+                    *inp.add(f * CHANNELS + 1) = s;
+                }
+                (*r).n_frames.store(n as u32, Ordering::Relaxed);
+            }
+            // publish: Release で seq_request を進める（input 書き込みが child から可視に）。
+            req += 1;
+            unsafe {
+                (*r).seq_request.store(req, Ordering::Release);
+            }
+
+            // --- bounded spin で child の done を待つ（RT は無制限ブロックしない）---
+            let t0 = Instant::now();
+            let mut got = false;
+            loop {
+                if unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req {
+                    got = true;
+                    break;
+                }
+                if t0.elapsed() >= timeout {
+                    break;
+                }
+                std::hint::spin_loop();
+            }
+            // spin 直後の時刻を一度だけ読み、round-trip と last_success の両方に使う
+            // （hot-path の clock 読みを 1 回に減らす）。
+            let now = Instant::now();
+            let rt_ns = (now - t0).as_nanos() as u64;
+
+            let mut peak: f32 = 0.0;
+            if got {
+                // SAFETY: done を Acquire で観測済 → child の output 書き込みが可視。
+                unsafe {
+                    let out = (*r).output.as_ptr();
+                    for (i, slot) in data.iter_mut().enumerate().take(count) {
+                        let v = *out.add(i);
+                        *slot = v;
+                        peak = peak.max(v.abs());
+                    }
+                }
+                // フレーム超過分（n < frames）は無音で埋める。
+                for s in data.iter_mut().skip(count) {
+                    *s = 0.0;
+                }
+                cb_stats.record_roundtrip(rt_ns);
+                cb_stats
+                    .last_success_ns
+                    .store((now - t_start).as_nanos() as u64, Ordering::Relaxed);
+            } else {
+                // glitch-to-silence（deadlock しない）。
+                for s in data.iter_mut() {
+                    *s = 0.0;
+                }
+                cb_stats.overrun_count.fetch_add(1, Ordering::Relaxed);
+            }
+
+            cb_stats
+                .post_peak_bits
+                .fetch_max(peak.to_bits(), Ordering::Relaxed);
+            cb_stats
+                .callback_max_ns
+                .fetch_max(cb_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
+            cb_stats.frames_total.fetch_add(n as u64, Ordering::Relaxed);
+        },
+        move |err| eprintln!("[cpal err] {err}"),
+        None,
+    )?;
+    stream.play()?;
+
+    // --- 計測（main スレッドは待つだけ）------------------------------------
+    std::thread::sleep(Duration::from_secs(cli.measure_secs));
+
+    // --- teardown -----------------------------------------------------------
+    shutdown.store(true, Ordering::Relaxed);
+    drop(stream); // cpal 停止（callback が止まり region への RT アクセスが終わる）
+    let _ = wd.join();
+    let _ = std::fs::remove_file(&shm_path);
+
+    // --- 結果出力 -----------------------------------------------------------
+    let frames_total = stats.frames_total.load(Ordering::Relaxed);
+    let frames_clamped = stats.frames_clamped.load(Ordering::Relaxed);
+    let success = stats.success_count.load(Ordering::Relaxed);
+    let overruns = stats.overrun_count.load(Ordering::Relaxed);
+    // 各 callback は成功か overrun のどちらか 1 つ → total はその和（hot-path の atomic を省ける）。
+    let callbacks = success + overruns;
+    let rt_min = stats.rt_min_ns.load(Ordering::Relaxed);
+    let rt_max = stats.rt_max_ns.load(Ordering::Relaxed);
+    let rt_sum = stats.rt_sum_ns.load(Ordering::Relaxed);
+    let rt_mean = rt_sum.checked_div(success).unwrap_or(0);
+    let rt_p99 = stats.p99_ns();
+    let cb_max = stats.callback_max_ns.load(Ordering::Relaxed);
+    let post_peak = f32::from_bits(stats.post_peak_bits.load(Ordering::Relaxed));
+    let respawns = respawn_count.load(Ordering::Relaxed);
+    let last_respawn = last_respawn_ns.load(Ordering::Relaxed);
+    let last_success = stats.last_success_ns.load(Ordering::Relaxed);
+    let child_processed = unsafe { (*region).child_processed.load(Ordering::Relaxed) };
+
+    let avg_frames = frames_total.checked_div(callbacks).unwrap_or(0);
+    let block_budget_ns = avg_frames * 1_000_000_000 / sample_rate as u64;
+    // recovery: respawn があり、最後の成功 round-trip が最後の respawn より後なら復帰している。
+    let recovered = is_recovered(respawns, last_success, last_respawn);
+    // Gate2 の無音窓は `roundtrip_overruns`（glitch-to-silence した callback 数 × block 周期）で読む。
+    // last_success は毎成功で上書きされる「最後の成功時刻」なので last_success − last_respawn は
+    // 「respawn から実行終了まで」になり無音窓ではない（誤った派生メトリックは持たない・#348 review）。
+
+    println!();
+    println!("=== orbit-sandbox-spike (host) results ===");
+    println!("sample_rate:           {sample_rate}");
+    println!("total_callbacks:       {callbacks}");
+    println!("avg_frames_per_cb:     {avg_frames}");
+    println!("block_budget_ns:       ~{block_budget_ns}");
+    println!("roundtrip_success:     {success}");
+    println!("roundtrip_overruns:    {overruns}");
+    println!(
+        "roundtrip_min_ns:      {}",
+        if rt_min == u64::MAX { 0 } else { rt_min }
+    );
+    println!("roundtrip_mean_ns:     {rt_mean}");
+    println!("roundtrip_p99_ns:      {rt_p99}");
+    println!("roundtrip_max_ns:      {rt_max}");
+    println!("callback_max_ns:       {cb_max}");
+    println!("post_mix_peak:         {post_peak:.5}");
+    println!("child_processed_blocks:{child_processed}");
+    println!("child_respawns:        {respawns}");
+    println!("last_respawn_ns:       {last_respawn}");
+    println!("last_success_ns:       {last_success}");
+    println!("recovered_after_crash: {recovered}");
+    if frames_clamped > 0 {
+        println!(
+            "WARNING: {frames_clamped} callbacks exceeded MAX_FRAMES ({MAX_FRAMES}); \
+             measurement covered only a partial block — raise MAX_FRAMES"
+        );
+    }
+    println!("==========================================");
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // p99: 1000 サンプル中 990 が bucket0(<1µs)、10 が 50µs なら p99 は tail bucket(50µs)に入る。
+    #[test]
+    fn p99_crosses_into_tail() {
+        let s = RtStats::new();
+        for _ in 0..990 {
+            s.record_roundtrip(500); // bucket 0 (<1µs)
+        }
+        for _ in 0..10 {
+            s.record_roundtrip(50_000); // bucket 50 (50µs)
+        }
+        // 99% 閾値 = 990 番目。990 個が bucket0 なので 990 到達は bucket0… ではなく ceil(1000*0.99)=990。
+        // bucket0 の累積は 990 で threshold 990 に達する → p99 = bucket0 下限 = 0。
+        assert_eq!(s.p99_ns(), 0);
+        // max は tail を捉える。
+        assert_eq!(s.rt_max_ns.load(Ordering::Relaxed), 50_000);
+    }
+
+    // tail がより太いと p99 が tail bucket に乗る。
+    #[test]
+    fn p99_lands_in_tail_when_tail_exceeds_one_percent() {
+        let s = RtStats::new();
+        for _ in 0..950 {
+            s.record_roundtrip(500); // bucket 0
+        }
+        for _ in 0..50 {
+            s.record_roundtrip(2_000_000); // 2 ms -> bucket 2000
+        }
+        // ceil(1000*0.99)=990。bucket0 累積 950 < 990 → tail bucket 2000(=2ms 下限)で到達。
+        assert_eq!(s.p99_ns(), 2_000_000);
+    }
+
+    #[test]
+    fn p99_zero_when_no_samples() {
+        let s = RtStats::new();
+        assert_eq!(s.p99_ns(), 0);
+    }
+
+    // recovery: respawn が無ければ false。respawn 後に成功があれば true。respawn 後に成功が無ければ false。
+    #[test]
+    fn recovered_requires_respawn_and_later_success() {
+        assert!(!is_recovered(0, 100, 0), "respawn 無しは false");
+        assert!(is_recovered(1, 200, 100), "respawn 後に成功 → true");
+        assert!(
+            !is_recovered(1, 50, 100),
+            "最後の成功が respawn より前 → 未復帰"
+        );
+    }
+}

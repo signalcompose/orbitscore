@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.174 spike(engine): γ out-of-process sandbox feasibility — Gate1/Gate2 verdict (#348) (Jun 27, 2026)
+
+post-2.0 native engine の **γ（out-of-process sandbox）** フェーズ Step0。正本 `POST_2.0_NEXT_STEPS.html` の staging 指示「γ は単一 /goal にせず『daemon CLAP 統合（#340/#341 完了）→ sandbox スパイク』と段階化」に従い、feasibility spike（実装ではなく stop&report ゲート付き）を実施。
+
+**新規 crate** `rust/crates/orbit-sandbox-spike`（publish=false・2 binary）:
+- `sandbox-host`: cpal 出力 RT callback で 1 ブロックを共有メモリ越しに child に渡し gain を掛け戻させる round-trip を **bounded spin**（timeout 付き）で待つ。別スレッド watchdog が child の死を検知し clean child を respawn。
+- `sandbox-child`: 隔離エフェクトプロセス。`--crash-after-blocks` で自発 segfault し Gate2 を駆動。
+- 同期は file-backed mmap(MAP_SHARED) 内の `seq_request`/`seq_done` atomic の SPSC Acquire/Release ハンドシェイク（新規 sync crate 不要・futex 非依存）。計測ハーネスは `orbit-clap-spike`（#295 baseline）の bucket histogram p99 / callback_max を流用。
+
+**Gate1（warmed・synchronous・各 buffer 3 回・MacBook Pro arm64・44100Hz）**: 判定軸は worst-case `callback_max ÷ budget`（`overruns` は CoreAudio が xrun を発火しないため不可・#295 fence）。
+- 512f（budget 11.6ms）: worst callback_max 2.15ms = 18.5% → **PASS**。
+- 128f（2.9ms）: 2.79ms = 96% → 余裕ゼロ（reliably safe とは言えない）。
+- 64f（1.45ms）: 4.15ms = 286% → **違反**。
+- mean/p99 は µs（mean 6〜21µs / p99 大半 <0.5ms）。**worst-case tail（~2〜4ms）は buffer サイズ非依存の定数**（scheduling jitter＝child/host のプリエンプト由来）→ budget がこれを上回る必要があり、同期設計は実質 **≥256 frame の buffer 下限**を強制。tail はプロセス隔離ではなく**同期 round-trip 設計の代償**。
+
+**Gate2（crash 封じ込め + watchdog 復帰）= PASS**: child SIGSEGV → **host プロセス生存**（C-ABI segfault をプロセス境界で封じ込め）→ watchdog respawn → audio-flow 復帰（`recovered=true`・peak 0.25）。512f は recovery 2.6ms で無音落ちすら無し。64f は bounded spin が callback を timeout で頭打ち（deadlock 無し）・gap 中 38 callbacks が glitch-to-silence（≈55ms respawn 窓）。**未証明**: plugin 内部状態（preset/automation）の復帰（child は stateless gain）。
+
+**Verdict = FEASIBLE**（両ゲート PASS）。低 buffer の tail は既知・対処可能な設計制約で blocker ではない。**latency policy の fork（spike の output・事前に決めない方針どおり）= 「synchronous + child RT 優先度」 vs 「one-block-pipelined」**（どちらも本 spike では未計測の candidate・γ 実装で計測して決める）。verdict は `docs/development/POST_2.0_GAMMA_SANDBOX_SPIKE.md` に記録。advisor が verdict 解釈を確認（4 点の scoping 修正を反映）。defer: event/param IPC・複数 plugin・境界越え automation・本番 daemon 統合（cutover #108）。
+
 ### 6.173 docs(engine): S1b-1 low-latency strict floor 32/64 frame verdict (#295) (Jun 27, 2026)
 
 pre-γ hardening スプリント PR B（#295 = S1b low-latency strict test + dynamic hot-install follow-up）。owner 再パッケージで risky な #295 を #342 系から分離した独立 PR。
