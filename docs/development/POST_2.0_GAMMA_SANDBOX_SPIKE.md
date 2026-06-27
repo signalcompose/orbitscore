@@ -131,10 +131,56 @@ post_mix_peak:         0.25000
   128=96% で余白ゼロ、64=286% で違反。低レイテンシは latency policy の決定（§6）が要る。
 - **Gate 2 PASS**: C-ABI segfault をプロセス境界で封じ込め（host 生存）、watchdog respawn で
   audio-flow 復帰。degradation は bounded glitch-to-silence（512 は budget 内 recovery で無音落ち無し・
-  64 は ≈51ms 無音窓）。
+  64 は ≈67ms 無音窓）。
 
 γ の前提（「3rd-party をプロセス境界で隔離し daemon を crash から守る」）は**実現可能**。
 低 buffer の latency tail は既知・対処可能な設計制約であり、blocker ではない。
+
+## 5.1 「64f 286% 違反」の読み解き — 実エンジンとユースケース
+
+> **要約**: この違反は「今のエンジンが壊れている」という意味では**ない**。本番 daemon が
+> **使っていない**極端に小さい buffer（64 frame）で、しかも**同期設計という未確定の選択肢**を
+> 採ったときに限って起きる、よく理解された境界条件である。
+
+### 数値の意味（まず用語を正確に）
+
+- **64 frame** = 1 回の audio callback が扱うフレーム数。`1.45ms` はその **block period**
+  （= 64 frame ÷ 44.1kHz）であり、callback がこの時間内に処理を返さないと音が途切れる予算。
+  ⚠️ これは **block period（処理予算）**であって、耳に届くまでの**総出力レイテンシではない**。
+  総レイテンシは出力バッファ段数で block period の概ね 1〜3 倍になる。
+- **worst 4.15ms = 286%** = 最悪ケースの callback が 4.15ms かかり、1.45ms 予算を 2.86 倍
+  超過した、の意。この tail（~2〜4ms）は **buffer サイズに非依存な scheduling 由来の定数**で、
+  プロセス境界 round-trip 自体（mean/p99 は µs）が遅いのではない。
+
+### これは実エンジンの動作に影響しない
+
+本番 daemon は cpal の `BufferSize::Default` で動く（低レイテンシ buffer を**強制しない** —
+#295 precision fence の確定事項）。この機材で Default は概ね 512 frame ≈ 11.6ms 予算 = **18.5% で
+余裕の PASS**。64 frame は本 spike が限界探索のため**意図的に強制した値**であり、現行エンジンの
+経路には現れない。よって 286% 違反は「将来サンドボックス経由で**超低レイテンシ同期処理**を試みた
+場合」の上限を示すものに留まる。
+
+### buffer ↔ block period ↔ ユースケース（同期 spike の判定を重ねる）
+
+| buffer | block period | 代表ユースケース | 同期 sandbox spike の判定 |
+|-------:|-------------:|------------------|--------------------------|
+| 64 f   | ~1.45ms | 超低レイテンシのライブモニタリング（サンドボックス化した 3rd-party エフェクトを**通して**楽器を弾く） | ❌ 違反（286%）— 同期設計では唯一賄えない |
+| 128 f  | ~2.9ms  | タイトなライブ演奏 | △ marginal（~96%・余白ほぼ無し） |
+| 256 f  | ~5.8ms  | ライブコーディング / シーケンス | ✅ PASS（~46%） |
+| 512 f  | ~11.6ms | 再生・ミキシング（daemon Default） | ✅ PASS（~18.5%） |
+
+### tail は「同期設計」の代償であって「プロセス隔離」の代償ではない
+
+この遅延 tail は host が child の応答を**同期的に待つ**から出る。`§6` の latency policy fork に
+ある **pipeline 化** / **child の RT 優先度引き上げ**（どちらも本 spike では未計測の候補）で構造的に
+消せる見込みがある。つまり 64 frame の超低レイテンシ用途も **dead end ではなく、既知の将来オプション**。
+
+### 結論（OrbitScore の実ワークロードに照らして）
+
+OrbitScore はライブコーディング DSL であり、実際の作業は **256〜512 frame 帯**に収まる。
+そこでは out-of-process effects は**今の同期設計のままで問題なく成立**する。
+サブ 3ms のモニタリング（サンドボックス化した 3rd-party を通して楽器を弾く）だけが pipelined 設計を
+必要とする**唯一の将来ユースケース**であり、γ 全体の blocker ではない。
 
 ## 6. latency policy の fork（spike の output — 事前に決めない方針どおり計測してから決める）
 
