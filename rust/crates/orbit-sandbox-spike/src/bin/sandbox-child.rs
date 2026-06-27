@@ -5,7 +5,7 @@
 //! 自発 segfault し、Gate2（親が子の crash を封じ込めて watchdog 復帰できるか）を駆動する。
 //!
 //! 使い方:
-//!   sandbox-child --shm <path> [--crash-after-blocks <N>]
+//!   sandbox-child --shm <path> [--crash-after-blocks <N>] [--rt-priority] [--rt-period-us <US>]
 
 #![allow(unsafe_code)]
 
@@ -78,19 +78,30 @@ fn main() -> anyhow::Result<()> {
 
     // candidate A: spin スレッド（このスレッド = 唯一の処理スレッド）を RT に上げる。
     // computation = period/2・constraint = period*3/4（>= computation）。失敗しても通常優先度で
-    // 継続し、計測は RT 無効として読める（host は child_rt_priority を結果に出すので区別可能）。
+    // 継続するが、適用可否を共有メモリ `rt_active` に書き、host が `child_rt_applied` として stdout に
+    // 出力する（stderr だけだと redirect で失われ「効果なし」と誤読されるため・silent-failure review）。
     if cli.rt_priority {
         let period_ns = cli.rt_period_us.saturating_mul(1_000);
-        match set_realtime_thread(period_ns, period_ns / 2, period_ns * 3 / 4) {
-            Ok(()) => eprintln!(
-                "[sandbox-child pid={}] RT thread enabled (period={}us)",
-                std::process::id(),
-                cli.rt_period_us
-            ),
-            Err(e) => eprintln!(
-                "[sandbox-child pid={}] WARNING: RT thread NOT enabled: {e} (running at normal priority)",
-                std::process::id()
-            ),
+        let applied = match set_realtime_thread(period_ns, period_ns / 2, period_ns * 3 / 4) {
+            Ok(()) => {
+                eprintln!(
+                    "[sandbox-child pid={}] RT thread enabled (period={}us)",
+                    std::process::id(),
+                    cli.rt_period_us
+                );
+                true
+            }
+            Err(e) => {
+                eprintln!(
+                    "[sandbox-child pid={}] WARNING: RT thread NOT enabled: {e} (running at normal priority)",
+                    std::process::id()
+                );
+                false
+            }
+        };
+        // SAFETY: r は host が確保した共有領域。rt_active は cross-process 可視（MAP_SHARED）。
+        unsafe {
+            (*r).rt_active.store(applied, Ordering::Relaxed);
         }
     }
 

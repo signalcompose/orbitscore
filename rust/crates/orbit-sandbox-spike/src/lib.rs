@@ -32,7 +32,7 @@
 use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
 use memmap2::MmapMut;
 
@@ -72,6 +72,10 @@ pub struct SharedRegion {
     pub gain_bits: AtomicU32,
     /// child が処理したブロック総数（観測用。recovery の進行を可視化）。
     pub child_processed: AtomicU64,
+    /// child が RT(time-constraint)優先度の適用に成功したか（candidate A・#350）。child が
+    /// 起動時に書き、host が結果に出力する。`--child-rt-priority` 要求が実際に効いたかを stdout で
+    /// 可視化し、RT 設定の silent fail（stderr のみ）を「効果なし」と誤読するのを防ぐ。
+    pub rt_active: AtomicBool,
     /// host -> child のインターリーブ入力（ping-pong: SLOTS 個の block。seq&1 で index）。
     pub input: [f32; BUF_LEN * SLOTS],
     /// child -> host のインターリーブ出力（ping-pong: SLOTS 個の block。seq&1 で index）。

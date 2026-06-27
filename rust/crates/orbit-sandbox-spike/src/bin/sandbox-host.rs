@@ -86,8 +86,8 @@ fn parse_args() -> anyhow::Result<Cli> {
     if cli.in_process && (cli.pipelined || cli.child_rt_priority) {
         anyhow::bail!("--in-process cannot be combined with --pipelined / --child-rt-priority");
     }
-    // --child-rt-priority は RT period 算出に buffer_frames が要る。未指定だと黙って 512 を仮定し
-    // 誤った period で child を RT 設定してしまう（altitude review）。明示を要求する。
+    // --child-rt-priority は RT period 算出に buffer_frames が要る。未指定でも run() の .expect() で
+    // panic はするが、parse_args 段階で明示エラーにする方が分かりやすい（altitude review）。
     if cli.child_rt_priority && cli.buffer_frames.is_none() {
         anyhow::bail!("--child-rt-priority requires --buffer-frames (RT period を確定するため)");
     }
@@ -183,8 +183,9 @@ fn is_recovered(respawns: u64, last_success_ns: u64, last_respawn_ns: u64) -> bo
 
 /// 生ポインタを cpal callback（Send 要求）に渡すためのラッパ。
 /// SAFETY: ポインタは run() が保持する mmap を指す。stream は mmap より先に drop されるので
-/// callback 実行中は常に有効。バッファ競合は 1-outstanding 不変条件（host は前 req 完了後のみ input を
-/// 上書きする）+ seq_done の Release/Acquire で排除されるので、別スレッドへの送付も健全。
+/// callback 実行中は常に有効。バッファ競合は slot 再利用不変条件 — sync は 1-outstanding（host は前 req
+/// 完了後のみ submit）、pipelined は 2-outstanding guard（host は slot の前 occupant 完了を確認してから
+/// submit）— と seq_done の Release/Acquire で排除されるので、別スレッドへの送付も健全。
 struct RegionPtr(*mut SharedRegion);
 unsafe impl Send for RegionPtr {}
 
@@ -534,8 +535,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     let done = unsafe { (*r).seq_done.load(Ordering::Acquire) } >= req;
                     if done {
                         // fresh: この seq の slot の output を出力にコピー。
-                        // SAFETY: seq_done >= req を Acquire 観測 → child の output 書き込みが可視。
-                        // 2-outstanding guard により host はこの slot を上書きしていない。
+                        // SAFETY: seq_done >= req を Acquire 観測 → child は seq req を処理し終え output
+                        // 書き込みが可視。child が次にこの slot を触るのは seq req+2 の処理時だが、それは
+                        // host が未だ submit していない（req+1 が直近の submit 上限）ので競合は無い。
                         unsafe {
                             let out = (*r).output.as_ptr().add(slot_offset(req));
                             for (i, slot) in data.iter_mut().enumerate().take(count) {
@@ -730,6 +732,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         } else {
             0.0
         };
+        // pipelined + --child-rt-priority の併用は許可（host 軸 vs child 軸）。RT 条件を記録しないと
+        // 後で baseline と比較したとき条件差が見えなくなるので必ず出力する（silent-failure review）。
+        let rt_applied = unsafe { (*region).rt_active.load(Ordering::Relaxed) };
 
         println!();
         println!("=== orbit-sandbox-spike (pipelined / candidate B) ===");
@@ -740,6 +745,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         }
         println!("measurement_valid:     {}", !invalid);
         println!("sample_rate:           {sample_rate}");
+        println!("child_rt_priority:     {}", cli.child_rt_priority);
+        println!("child_rt_applied:      {rt_applied}");
         println!("output_callbacks:      {output_cbs}");
         println!("avg_frames_per_cb:     {avg_frames}");
         println!("block_budget_ns:       ~{block_budget_ns}");
@@ -774,6 +781,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let last_respawn = last_respawn_ns.load(Ordering::Relaxed);
     let last_success = stats.last_success_ns.load(Ordering::Relaxed);
     let child_processed = unsafe { (*region).child_processed.load(Ordering::Relaxed) };
+    // 要求された RT 優先度が child で実際に適用されたか（stderr のみだと redirect で失われ「効果なし」と
+    // 誤読されるため stdout に出す・silent-failure review）。--child-rt-priority 無しなら false のまま。
+    let rt_applied = unsafe { (*region).rt_active.load(Ordering::Relaxed) };
 
     let avg_frames = frames_total.checked_div(callbacks).unwrap_or(0);
     let block_budget_ns = avg_frames * 1_000_000_000 / sample_rate as u64;
@@ -795,6 +805,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     println!("measurement_valid:     {}", !invalid);
     println!("sample_rate:           {sample_rate}");
     println!("child_rt_priority:     {}", cli.child_rt_priority);
+    println!("child_rt_applied:      {rt_applied}");
     println!("total_callbacks:       {callbacks}");
     println!("avg_frames_per_cb:     {avg_frames}");
     println!("block_budget_ns:       ~{block_budget_ns}");
