@@ -166,6 +166,18 @@ impl Drop for ClapTeardownGuard {
                 );
                 break;
             }
+            // #342-#3 verdict: この poll-sleep は意図的で変更推奨なし。guard は tokio worker 上の
+            // async フレーム（`run()` 末尾・`server::serve().await` 返却後）で drop され、teardown 中
+            // その worker を最大 TEARDOWN_TIMEOUT(500ms) ブロックしうる。ただし通常は RT thread が即
+            // `done` を立てるため数 ms 以内に抜け、500ms は audio thread 不在(device lost)時の安全弁。
+            // drop は serve 返却後の shutdown フェーズで起こるので worker ブロックは許容範囲（`done` を
+            // 立てる cpal callback は tokio worker と独立なので deadlock しない）。
+            // RT audio thread 側は teardown_requested 検知後 stop_processing(CLAP 仕様=RT 必須)・
+            // buffers 解放・install ring drain を行い、最後に `done` を atomic store する。
+            // Condvar 置換は不可: notify が syscall(futex / macOS psynch_cvsignal)を伴いカーネル遷移
+            // レイテンシが非決定論的で RT を損なう(notify_one は mutex 保持を要さないので mutex の有無
+            // とは無関係)。将来 serve 中の hot-reload 等で async teardown が要るなら spawn_blocking /
+            // tokio::sync::Notify / atomic-wait に移行すること。
             std::thread::sleep(Duration::from_millis(2));
         }
     }

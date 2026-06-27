@@ -17,6 +17,36 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.172 chore(engine): rescan warn-only + teardown busy-wait verdict (#342-#2 / #342-#3) (Jun 27, 2026)
+
+**Date**: 2026-06-27
+**Status**: ✅ 実装完了（PR レビュー前）
+**Branch**: `342-rescan-warn-teardown-verdict`
+**Issue**: #342（項目2・項目3）
+**スプリント**: Pre-γ hardening スプリント PR A（#342-2 + #342-3 を1 PR に束ね・owner 承認）。B = #295 は独立。
+
+軽量 2 項目を1 PR に束ねた（owner 判断・§2 の「#342 を1 PR に束ねる」override）。リスクのある #295 とは切り離す。
+
+**#342-#2: audio-port rescan warn-only（`orbit-clap-host/src/host.rs`）**
+- `HostAudioPortsImpl::rescan`（AudioPortRescanFlags）は S1 で no-op（`is_rescan_flag_supported=false` 広告済）。
+- plugin が動的にポートを変えると構築時固定の `is_effect`（`has_audio_input`）が陳腐化しうる。サイレントを避け **warn ログ1文**を追加して可視化（`flags` を Debug 出力）。
+- **動的ポート対応そのものは作らない**（#342 項目2 の将来作業）。note/param rescan は対象外（is_effect 陳腐化は audio ports 固有）。
+
+**#342-#3: teardown busy-wait は据え置き（verdict・`orbit-audio-daemon/src/clap_host.rs`）**
+- `ClapTeardownGuard::drop` の `sleep(2ms)` poll は **変更推奨なし**（現結論）。guard は非 RT スレッド（`main()` 非 async）で走り、RT audio thread は `done` を atomic store するだけ。Condvar 置換は notify 時に RT thread へ mutex を強いて **RT を悪化**させる。
+- 将来 async context から `StreamGuard` を drop する場合のみ async yield / atomic-wait に変える旨を**コードコメントで明記**（将来の誤った "fix" を防ぐ）。コード logic 変更なし。
+
+**ローカル検証**: fmt（`--all --check`）clean / clippy（clap-host + daemon clap-host・`-D warnings`）clean / test（clap-host 11 + daemon protocol 19 ほか・0 failed。protocol の loopback bind は sandbox 制限で要 sandbox-off 実行）。
+
+**レビュー（/simplify）**: 4 agent（reuse/simplification/efficiency/altitude）。reuse+efficiency+altitude が一致して **warn-once latch** を指摘（unthrottled warn は misbehaving plugin の繰り返し rescan でログ flood）。`OrbitHostMainThread` に `bool` フィールド `warned_rescan_unsupported` を追加し warn-once 化（main-thread 専用なので atomic 不要・`session.rs` の `device_lost_reported` 慣習を再利用）。host.rs コメントは warn メッセージとの重複を削り latch の根拠に絞った。clap_host.rs の #342-#3 verdict コメントは altitude が「load-bearing な anti-footgun・clean」と判定し維持（simplification の「1行圧縮」より altitude を採用）。
+
+**レビュー（/code:pr-review-team）**: code-reviewer / silent-failure-hunter / pr-test-analyzer = **Critical/Important=0**。comment-analyzer のみ **Critical 1 + Important 2**（#342-#3 verdict コメントの事実誤り）を指摘し、一次情報で裏取りして全て採用・修正:
+- **C-1**: 「`main()` の非 async スコープで drop」は誤り。`_stream_guard` は `async fn run()`（`#[tokio::main]` multi_thread・worker 2）末尾・`server::serve().await` 返却後に drop = **tokio worker の async context**。teardown 中 worker を最大 TEARDOWN_TIMEOUT(500ms) ブロックしうるが、通常は RT thread が即 `done` を立て数 ms で抜け・shutdown フェーズなので許容（`done` を立てる cpal callback は worker と独立で deadlock しない）→ コメント訂正。
+- **I-1**: 「RT thread は `done` を atomic store するだけ」は過小。実際は stop_processing(CLAP 仕様=RT 必須)+buffers 解放+install ring drain も行う（processor.rs で確認）→ コメント訂正。
+- **I-2**: 「Condvar は notify 時に RT thread へ mutex を強いる」は技術的に誤り（`Condvar::notify_one` は `&self`・mutex 保持不要）。真の RT 不適理由は notify の syscall(futex/psynch_cvsignal) レイテンシ → コメント訂正（code-reviewer は mutex 説を是としたが comment-analyzer が正しい・一次情報で裁定）。
+- Minor 対応: pr-test-analyzer の「real plugin 不要で latch を単体テスト可」を採用し `rescan_warn_latches_after_first_request`（`AudioPortRescanFlags` を trivially 構築・UFCS 呼び）追加。silent-failure の「再要求 flags の観測性」を `else { tracing::debug!(...) }` で対応（warn flood 回避・debug は既定抑制）。
+- 再検証: fmt/clippy clean・clap-host 12 + daemon protocol 19 ほか 0 failed。
+
 ### 6.171 fix(engine): drain install ring on teardown to prevent plugin-instance leak (#342-#1) (Jun 26, 2026)
 
 **Date**: 2026-06-26

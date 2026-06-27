@@ -69,6 +69,9 @@ impl<'a> SharedHandler<'a> for OrbitHostShared {
 pub struct OrbitHostMainThread<'a> {
     _shared: &'a OrbitHostShared,
     plugin: Option<InitializedPluginHandle<'a>>,
+    /// audio-port rescan 非対応 warn の warn-once latch（#342-#2）。main thread 専用呼び出しなので
+    /// `bool` で足りる（`AtomicBool` 不要）。`device_lost_reported` 慣習と同型。
+    warned_rescan_unsupported: bool,
 }
 
 impl<'a> OrbitHostMainThread<'a> {
@@ -76,6 +79,7 @@ impl<'a> OrbitHostMainThread<'a> {
         Self {
             _shared: shared,
             plugin: None,
+            warned_rescan_unsupported: false,
         }
     }
 }
@@ -109,8 +113,22 @@ impl HostAudioPortsImpl for OrbitHostMainThread<'_> {
         false
     }
 
-    fn rescan(&mut self, _flags: AudioPortRescanFlags) {
-        // S1: 動的ポート変更非対応
+    fn rescan(&mut self, flags: AudioPortRescanFlags) {
+        // S1: is_rescan_flag_supported=false を広告済みだが plugin が rescan を要求した場合は no-op。
+        // 構築時固定の is_effect（has_audio_input）/ポート構成が陳腐化しうるので可視化する（#342-#2。
+        // 動的ポート対応そのものは #342 項目2 の将来作業）。同一 plugin の繰り返し要求でログを flood
+        // させないため warn-once（2 回目以降は新情報ゼロ）。
+        if !self.warned_rescan_unsupported {
+            tracing::warn!(
+                "[clap] plugin が audio-port rescan を要求したが S1 は動的ポート非対応のため no-op — \
+                 構築時の is_effect/ポート構成が陳腐化している可能性 (flags={flags:?})"
+            );
+            self.warned_rescan_unsupported = true;
+        } else {
+            // 初回 warn 済み。再要求の flags は warn を flood させず debug で残す（後続要求が別 flag を
+            // 立てても診断できるように・debug は既定で抑制される）。
+            tracing::debug!("[clap] audio-port rescan 再要求 (flags={flags:?}) — no-op 継続");
+        }
     }
 }
 
@@ -139,3 +157,31 @@ impl HostParamsImplShared for OrbitHostShared {
 // pump は ClapHost::pump() として main thread で実行する — PluginInstance<OrbitClapHost>
 // は !Send なのでそのスレッド以外に移動できない。carry-forward #2: callback_requested
 // flag を AcqRel swap で読み出し、true なら call_on_main_thread_callback() を呼ぶ。
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #342-#2: audio-port rescan 非対応 warn の warn-once latch が、初回で立ち、再要求では
+    // リセットされない（= 2 回目以降は warn を flood しない）ことを検証する。real plugin 不要 —
+    // rescan は `&mut OrbitHostMainThread` のメソッドで `AudioPortRescanFlags` は trivially 構築できる。
+    // regression 対象: 誰かが `if !self.warned_rescan_unsupported` ガードを外すと毎回 warn する。
+    #[test]
+    fn rescan_warn_latches_after_first_request() {
+        let shared = OrbitHostShared::new(Arc::new(AtomicBool::new(false)));
+        let mut mt = OrbitHostMainThread::new(&shared);
+        assert!(!mt.warned_rescan_unsupported, "初期状態は未 warn");
+
+        // UFCS で呼ぶ: OrbitHostMainThread は audio/note/params の 3 トレイトで rescan を実装するため
+        // メソッド構文は曖昧（E0034）。
+        HostAudioPortsImpl::rescan(&mut mt, AudioPortRescanFlags::CHANNEL_COUNT);
+        assert!(mt.warned_rescan_unsupported, "初回 rescan で latch が立つ");
+
+        // 別 flag で再要求しても latch は true のまま（warn flood せず panic もしない）。
+        HostAudioPortsImpl::rescan(&mut mt, AudioPortRescanFlags::LIST);
+        assert!(
+            mt.warned_rescan_unsupported,
+            "再要求でも latch は true のまま"
+        );
+    }
+}
