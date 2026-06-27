@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.177 feat(engine): γ M1 PR-B — real CLAP effect child + shared 1-block core (#357) (Jun 27, 2026)
+
+γ M1 の **PR-B**。PR-A の transport の上に、**実 CLAP effect plugin を隔離 child プロセスで host** し、offline A/B parity を実 effect で確認する。設計正本 = `docs/development/POST_2.0_GAMMA_M1_DESIGN.md` §4.4/§4.6/§5(a)/§6。実装前に advisor 相談（① clack single-thread lifecycle を最初に証明 ② merged-RT 委譲を独立 commit 化 ③ closed-form oracle 採用）。
+
+**抽出した共有資産（`orbit-clap-host`）**:
+- `process_block_core(plugin, buffers, steady, input_events, data) -> bool` = 1-block CLAP 適用カーネル（effect=serial overwrite / instrument=add-mix 分岐・入出力配線は成功時のみ・steady 更新）。`ClapPostProcessor::process()` の effect/instrument 本体をこれに**委譲**（byte-identical）し、新規 `ClapEffectProcessor` も同じカーネルを使う = 二重実装を排除（設計 §4.4）。
+- `instantiate_activate(...)` = discover→instantiate→activate→start_processing の load 経路を `ClapHost::load_plugin`（daemon）と `ClapEffectProcessor::load`（child/parity）で共有抽出。
+- `ClapEffectProcessor` = **single-thread** effect-only ラッパ（`load → process_block → drop`）。daemon は activate=main / process=audio の別スレッド構成だが child は 1 スレッド直列。フィールド宣言順（`plugin`→`_instance`）で drop 順 = stop_processing→deactivate を同一スレッドに収め、carry-forward #1 の wrong-thread teardown を構造的に sidestep。
+
+**新規 child crate** `rust/crates/orbit-clap-effect-child`（`orbit-clap-host`+`orbit-audio-sandbox` 両依存）= PR-A gain child の gain 乗算を `ClapEffectProcessor::process_block` に差し替え。transport protocol（per-slot `seq_tag`/`seq_done`）は gain child と同一。input slot→scratch（ループ前確保=RT安全）→in-place effect→output slot。**依存の向きは child→transport のみ**で `orbit-audio-sandbox` は child crate に依存せず clack-free を維持（`cargo tree -p orbit-audio-sandbox` に clack 不在 = fault 隔離の不変条件・設計 §4.6）。
+
+**検証（advisor sequencing）**:
+- **基礎証明（最初に実行）**: `effect_processor_smoke_gated`（`orbit-clap-host`）で single-thread の load→process_block→drop が実 test-effect で成立・出力 = 0.5×入力。child crate を建てる前にこの foundation を確証。
+- **PR-B Done（gated・offline・device 不要）**: `effect_parity_gated`（`orbit-clap-effect-child`）= **closed-form oracle**（OOP child 出力 == `input*0.5` を `max_abs_diff==0.0` で sample-exact・transport+CLAP 同時検証）+ **A/B parity**（in-process side A == OOP side B）。oracle は両側同一コードでなく独立な数学的解と突き合わせる点で in-proc-vs-OOP より強い（advisor ③）。
+- **merged-RT 委譲の非回帰（独立 commit・前後計測）**: gated daemon test を委譲の**前後で実行**し byte-identical を確認 — effect `ratio 0.50000` / synth `post_mix_peak 0.25000` が一致（callback_count の ±1 は固定 sleep 窓内の cpal callback 回数のゆらぎ）。
+- **workspace 全体**: `cargo test --workspace --features clap-host` 全緑（device あり: core 42 / daemon 8+protocol 19 / native 24 / sandbox 14 / verify 23 / clap-host 12 / spike 7+3 等）/ `cargo clippy --workspace --all-targets --locked -D warnings` + `-p orbit-audio-daemon --features clap-host` clean / `cargo fmt --check` clean。実 CLAP の gated 検証は test-effect dylib（workspace 非 member）ビルド要のため `#[ignore]`・CI backstop は PR-A gain parity（clack 非依存）。daemon spawn/watchdog/respawn 統合は **PR-C**（PR-A 同様 daemon の実 stream 統合は無改変）。
+
 ### 6.176 feat(engine): γ M1 PR-A — out-of-process sandbox transport crate (#355) (Jun 27, 2026)
 
 γ 本実装（#354）を owner 2026-06-27 決定で **M1（effect 隔離）/ M2（instrument+automation・spike-first）に段階化**したうちの **M1 の PR-A**。advisor 相談（設計 checkpoint）+ 3 サブシステムの並列探索（spike transport / clap-host seam / verify harness）を経て設計。設計正本 = `docs/development/POST_2.0_GAMMA_M1_DESIGN.md`。
