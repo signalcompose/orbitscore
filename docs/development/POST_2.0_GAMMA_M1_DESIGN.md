@@ -118,11 +118,12 @@ CI は Rust gated 非実行（device なし・`#[ignore]` 自動 skip）。offli
 |---|---|---|---|
 | **(a) audio 正しさ** | in-process と out-of-process の **A/B parity** + **production path（実 host+実 child+実 mmap）** | **CI**（offline・同期 + 統合） | ① `host_child_integration.rs`（root-of-trust）= 実 `PipelinedEffectHost`+実 spawn child+実 mmap を cpal 無しで統合し、callback 間で `seq_done` を追いつかせ毎回 fresh path に当て、入力 gain 倍を **1 block 遅延**させた結果に sample-exact 一致。② `parity.rs` = transport + 同期ドライバの A/B parity（OOP gain == in-process gain）。①が pipelined host を、②が transport を別役割で検証 |
 | **(b) pipeline state machine** | **repeat-previous + stall** の論理 | **CI**（決定論 unit test） | **seq_done を制御する mock child**（withhold → last-good が再出力されることを assert・stall 経路も） |
-| **(c) RT stale-rate** | 32–64f の小バッファ viability | **gated 実機** | live cpal で `--buffer-frames 32/64`・stale_pct/callback_max を threshold assert → **slot 数 2 vs 3 を決定** |
+| **(c) RT stale-rate** | 32–64f の小バッファ viability | **gated 実機** | live cpal で `--buffer-frames 32/64`・stale_pct/callback_max を threshold assert → **slot 数 2 vs 3 を決定**（corrected `seq_tag` プロトコル下で再計測・spike 数は provisional・下記注参照） |
 
 - **A/B parity の判定**: 可能なら **sample-exact**（同一 plugin・決定論・両側同一 block size なら 1-block 整列後の body は bit 一致）。plugin が両ホスト文脈で決定論的でない / block-size 依存 buffering を持つ場合は RMS-within-`GAIN_DB_TOLERANCE`(0.5dB) に fallback。primed first / drained last block は差を許容。
 - **再利用資産**: `orbit-audio-verify`（`capture`/`CapturedAudio`/`region_rms`/`db_difference`）・`verify_schedule_pcm.rs` の `render_golden()` パターン（in-process 側）・spike の `RtStats` histogram/`p99_ns`（gated 計測）・`is_recovered()` 論理（crash-survival assert）。
 - **ギャップ（M1 で作る）**: A/B parity primitive（2 つの render を比較）/ OOP の offline render 経路 / programmatic crash-survival `#[test]`（gated）/ 32-64f stale-rate のアサート化。
+- **⚠️ spike の stale 数は provisional（PR-C で再計測必須）**: spike #351 の `pipelined_stale` / 「32f feasible」verdict は **`seq_done`-only プロトコル**（`seq_tag` 不在）下の計測。child の「latest 処理」で中間 seq が skip された block を `seq_done >= N-1` が **false-fresh** として fresh に算入していたため、real glitch を **undercount**（skip が最も起きる 32f に集中）している。PR-A で per-slot `seq_tag` に修正したが、**この correct path は実並列下で未計測**（単一スレッド mock は skip を手動シミュレート・同期統合テストは callback 間で `seq_done` を追いつかせるので race 無し → どちらも true-concurrency を検証しない）。よって **(c) gated 実機の stale-rate を corrected `seq_tag` プロトコル下で計測し直してから 2 vs 3 slot を決める**。spike の stale 数を slot 決定の根拠にしない。
 
 ---
 
@@ -132,7 +133,7 @@ CI は Rust gated 非実行（device なし・`#[ignore]` 自動 skip）。offli
 |---|---|---|
 | **PR-A** ✅ | **transport crate `orbit-audio-sandbox`**（N-slot-generic・memmap2 のみ依存）+ gain child binary（clack 非依存）+ `PipelinedEffectHost`（候補B 状態機械・repeat-previous/stall）+ **offline 決定論サンドボックスモード** + A/B parity primitive + **mock-child の pipeline state-machine unit test** + **production-path 統合テスト**（実 host+実 child+実 mmap） | in-proc gain vs out-of-proc gain の A/B parity が **CI（offline）で sample-exact 通過** + **実 host+実 child 統合テストが 1 block 遅延を sample-exact 検証** + repeat-previous/stall の unit test 緑 + workspace 全体緑（daemon 無改変） |
 | **PR-B** | OOP effect の **実 CLAP child**（`orbit-clap-host` の load_plugin+1-block core を抽出）+ effect plugin を child で host + parity を実 effect で再確認 | 実 CLAP effect が child で動き offline A/B parity 緑 |
-| **PR-C** | daemon 側 `OutProcEffectPostProcessor`（`PipelinedEffectHost` を `impl PostProcessor` で薄く包む・clack 非依存）+ child spawn/watchdog/respawn + daemon 統合（StreamGuard mirror・teardown handshake）+ **gated 実機 RUN**（parity/kill-test/32-64f stale）→ **slot 数 2 vs 3 決定** | gated 実機で parity + kill-test 生存 + 32-64f viability・slot 数確定 |
+| **PR-C** | daemon 側 `OutProcEffectPostProcessor`（`PipelinedEffectHost` を `impl PostProcessor` で薄く包む・clack 非依存）+ child spawn/watchdog/respawn + daemon 統合（StreamGuard mirror・teardown handshake）+ **gated 実機 RUN**（parity/kill-test/32-64f stale・**corrected `seq_tag` プロトコル下で再計測**）→ **slot 数 2 vs 3 決定** | gated 実機で parity + kill-test 生存 + 32-64f viability・slot 数確定（spike 数でなく corrected-protocol 計測が根拠） |
 
 各 PR は `/simplify` + `/code:pr-review-team`（ハンドロール禁止・収束は独立再レビューで裏取り）→ advisor → 必要なら @claude bot（owner-gated）→ owner 明示マージ。
 
