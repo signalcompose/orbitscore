@@ -321,6 +321,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let cb_stats = stats.clone();
     let mut req: u64 = warm_req;
     let mut phase: f64 = 0.0;
+    // cpal の fatal error（device 切断 / HAL 障害）でストリームが callback 配送を止めると、残りの
+    // 計測窓は無音のまま teardown され `measurement_valid: true` の誤データになりうる。error callback
+    // でも同じ sentinel を立て、go/no-go を誤導しないようにする。
+    let stream_err_invalid = measurement_invalid.clone();
 
     let stream = device.build_output_stream(
         &cpal_config,
@@ -428,7 +432,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                 .fetch_max(cb_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
             cb_stats.frames_total.fetch_add(n as u64, Ordering::Relaxed);
         },
-        move |err| eprintln!("[cpal err] {err}"),
+        move |err| {
+            eprintln!("[cpal err] {err}");
+            stream_err_invalid.store(true, Ordering::Relaxed);
+        },
         None,
     )?;
     stream.play()?;
