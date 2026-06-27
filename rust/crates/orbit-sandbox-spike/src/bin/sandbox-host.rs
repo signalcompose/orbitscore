@@ -81,6 +81,16 @@ fn parse_args() -> anyhow::Result<Cli> {
             other => anyhow::bail!("Unknown argument: {other}"),
         }
     }
+    // --in-process は child を使わない対照なので、child 系フラグと併用すると黙って無視され
+    // 「3 実験のどれでもない」誤計測になる（altitude review）。明示的に弾く。
+    if cli.in_process && (cli.pipelined || cli.child_rt_priority) {
+        anyhow::bail!("--in-process cannot be combined with --pipelined / --child-rt-priority");
+    }
+    // --child-rt-priority は RT period 算出に buffer_frames が要る。未指定だと黙って 512 を仮定し
+    // 誤った period で child を RT 設定してしまう（altitude review）。明示を要求する。
+    if cli.child_rt_priority && cli.buffer_frames.is_none() {
+        anyhow::bail!("--child-rt-priority requires --buffer-frames (RT period を確定するため)");
+    }
     Ok(cli)
 }
 
@@ -218,6 +228,53 @@ fn spawn_child(
     Ok(cmd.spawn()?)
 }
 
+// ---- shared helpers -----------------------------------------------------
+
+/// 出力デバイスを開き `(device, StreamConfig, sample_rate)` を返す（`run` / `run_in_process` 共用）。
+fn open_device(
+    buffer_frames: Option<u32>,
+) -> anyhow::Result<(cpal::Device, cpal::StreamConfig, u32)> {
+    let cpal_host = cpal::default_host();
+    let device = cpal_host
+        .default_output_device()
+        .ok_or_else(|| anyhow::anyhow!("no default output device"))?;
+    let sample_rate = device.default_output_config()?.sample_rate().0;
+    let cpal_config = cpal::StreamConfig {
+        channels: CHANNELS as u16,
+        sample_rate: cpal::SampleRate(sample_rate),
+        buffer_size: match buffer_frames {
+            Some(f) => cpal::BufferSize::Fixed(f),
+            None => cpal::BufferSize::Default,
+        },
+    };
+    Ok((device, cpal_config, sample_rate))
+}
+
+/// 全ストリーム共通の cpal error callback を作る: ログ出力 + `measurement_invalid` を立てる。
+/// device 切断等で callback 配送が止まると無音のまま teardown され誤データになるのを sentinel で可視化。
+fn err_callback(mi: Arc<std::sync::atomic::AtomicBool>) -> impl FnMut(cpal::StreamError) {
+    move |err| {
+        eprintln!("[cpal err] {err}");
+        mi.store(true, Ordering::Relaxed);
+    }
+}
+
+/// shared input slot にテストトーン（220Hz サイン・振幅 0.5）を `n` フレーム書く（sync / pipelined 共用）。
+///
+/// # Safety
+/// `inp` は確保済み input slot の先頭で、`n * CHANNELS` 要素ぶん書き込み可能であること。
+unsafe fn fill_tone_block(inp: *mut f32, n: usize, phase: &mut f64, phase_inc: f64) {
+    for f in 0..n {
+        *phase += phase_inc;
+        if *phase >= std::f64::consts::TAU {
+            *phase -= std::f64::consts::TAU;
+        }
+        let s = ((*phase).sin() as f32) * 0.5;
+        *inp.add(f * CHANNELS) = s;
+        *inp.add(f * CHANNELS + 1) = s;
+    }
+}
+
 // ---- entry --------------------------------------------------------------
 
 fn main() -> anyhow::Result<()> {
@@ -234,20 +291,7 @@ fn main() -> anyhow::Result<()> {
 /// callback_max の「tiny」基準を較正する。また「この機材/CoreAudio が 64f を in-process でクリーンに
 /// 出せるか」を独立に検証する（host 側 tail が CoreAudio/OS 由来なら in-process でも spike する）。
 fn run_in_process(cli: &Cli) -> anyhow::Result<()> {
-    let cpal_host = cpal::default_host();
-    let device = cpal_host
-        .default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("no default output device"))?;
-    let default_cfg = device.default_output_config()?;
-    let sample_rate = default_cfg.sample_rate().0;
-    let cpal_config = cpal::StreamConfig {
-        channels: CHANNELS as u16,
-        sample_rate: cpal::SampleRate(sample_rate),
-        buffer_size: match cli.buffer_frames {
-            Some(f) => cpal::BufferSize::Fixed(f),
-            None => cpal::BufferSize::Default,
-        },
-    };
+    let (device, cpal_config, sample_rate) = open_device(cli.buffer_frames)?;
     println!(
         "audio: {} Hz, {} ch, buffer={:?} (IN-PROCESS control)",
         sample_rate, CHANNELS, cpal_config.buffer_size
@@ -257,10 +301,7 @@ fn run_in_process(cli: &Cli) -> anyhow::Result<()> {
     let cb_stats = stats.clone();
     let phase_inc = 2.0 * std::f64::consts::PI * 220.0 / sample_rate as f64;
     let mut phase: f64 = 0.0;
-    // cpal の fatal error（device 切断等）で callback 配送が止まると無音のまま teardown され
-    // measurement_valid:true の誤データになりうる。error callback でも sentinel を立てる。
     let measurement_invalid = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let err_flag = measurement_invalid.clone();
 
     let stream = device.build_output_stream(
         &cpal_config,
@@ -289,10 +330,7 @@ fn run_in_process(cli: &Cli) -> anyhow::Result<()> {
                 .fetch_add(frames as u64, Ordering::Relaxed);
             cb_stats.success_count.fetch_add(1, Ordering::Relaxed);
         },
-        move |err| {
-            eprintln!("[cpal err] {err}");
-            err_flag.store(true, Ordering::Relaxed);
-        },
+        err_callback(measurement_invalid.clone()),
         None,
     )?;
     stream.play()?;
@@ -338,17 +376,14 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     println!("shm: {}", shm_path.display());
 
     // --- 出力デバイスを先に開く（RT period 算出に sample_rate が要る）-------------------------
-    let cpal_host = cpal::default_host();
-    let device = cpal_host
-        .default_output_device()
-        .ok_or_else(|| anyhow::anyhow!("no default output device"))?;
-    let default_cfg = device.default_output_config()?;
-    let sample_rate = default_cfg.sample_rate().0;
+    let (device, cpal_config, sample_rate) = open_device(cli.buffer_frames)?;
 
     // candidate A: child を RT に上げる場合の period(µs) = block period = buffer_frames / sample_rate。
-    // buffer_frames 未指定（Default）時は 512 を仮定（A 計測時は常に --buffer-frames を渡す運用）。
+    // --child-rt-priority は --buffer-frames 必須（parse_args で検証済）なので unwrap で良い。
     let rt_period_us = if cli.child_rt_priority {
-        let frames = cli.buffer_frames.unwrap_or(512) as u64;
+        let frames =
+            cli.buffer_frames
+                .expect("--buffer-frames required with --child-rt-priority") as u64;
         Some(frames * 1_000_000 / sample_rate as u64)
     } else {
         None
@@ -420,15 +455,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         })
     };
 
-    // --- cpal 出力ストリーム（device は run() 冒頭で開済み）----------------------------------
-    let cpal_config = cpal::StreamConfig {
-        channels: CHANNELS as u16,
-        sample_rate: cpal::SampleRate(sample_rate),
-        buffer_size: match cli.buffer_frames {
-            Some(f) => cpal::BufferSize::Fixed(f),
-            None => cpal::BufferSize::Default,
-        },
-    };
+    // --- cpal 出力ストリーム（device/config は run() 冒頭で open_device 済み）-----------------
     println!(
         "audio: {} Hz, {} ch, buffer={:?}, round_trip_timeout={}us, child_rt_priority={}",
         sample_rate,
@@ -517,27 +544,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                                 peak = peak.max(v.abs());
                             }
                         }
-                        for s in data.iter_mut().skip(count) {
-                            *s = 0.0;
-                        }
+                        data[count..].fill(0.0); // フレーム超過分は無音
                         cb_stats.success_count.fetch_add(1, Ordering::Relaxed);
-                        cb_stats.last_success_ns.store(
-                            (Instant::now() - t_start).as_nanos() as u64,
-                            Ordering::Relaxed,
-                        );
                     } else {
                         // stale: child がこの block を未完了 → silence（stale policy）。B の判定軸。
                         // production は直前 block の repeat が選択肢だが spike は silence で stale 率を測る。
-                        for s in data.iter_mut() {
-                            *s = 0.0;
-                        }
+                        data.fill(0.0);
                         cb_stats.stale_count.fetch_add(1, Ordering::Relaxed);
                     }
                 } else {
                     // priming: 読むべき前回 submit がまだ無い → 無音。
-                    for s in data.iter_mut() {
-                        *s = 0.0;
-                    }
+                    data.fill(0.0);
                 }
 
                 // --- submit: 新 seq を child に渡す（spin しない）---
@@ -550,16 +567,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     // SAFETY: 上の guard で new_seq の slot の前 occupant は完了済 = child は触れない。
                     // n_frames は固定 buffer で常に同値（可変 block 化するなら slot 毎に持つ必要あり）。
                     unsafe {
-                        let inp = (*r).input.as_mut_ptr().add(off);
-                        for f in 0..n {
-                            phase += phase_inc;
-                            if phase >= std::f64::consts::TAU {
-                                phase -= std::f64::consts::TAU;
-                            }
-                            let s = (phase.sin() as f32) * 0.5;
-                            *inp.add(f * CHANNELS) = s;
-                            *inp.add(f * CHANNELS + 1) = s;
-                        }
+                        fill_tone_block((*r).input.as_mut_ptr().add(off), n, &mut phase, phase_inc);
                         (*r).n_frames.store(n as u32, Ordering::Relaxed);
                         (*r).seq_request.store(new_seq, Ordering::Release);
                     }
@@ -578,10 +586,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     .fetch_max(cb_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 cb_stats.frames_total.fetch_add(n as u64, Ordering::Relaxed);
             },
-            move |err| {
-                eprintln!("[cpal err] {err}");
-                stream_err_invalid.store(true, Ordering::Relaxed);
-            },
+            err_callback(stream_err_invalid),
             None,
         )?
     } else {
@@ -620,20 +625,9 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     // 完了している（1-outstanding）。よって host がこの slot の唯一の writer（child は次の
                     // seq_request を観測するまで input/output に触れない）。
                     unsafe {
-                        let inp = (*r).input.as_mut_ptr().add(off);
-                        for f in 0..n {
-                            phase += phase_inc;
-                            if phase >= std::f64::consts::TAU {
-                                phase -= std::f64::consts::TAU;
-                            }
-                            let s = (phase.sin() as f32) * 0.5;
-                            *inp.add(f * CHANNELS) = s;
-                            *inp.add(f * CHANNELS + 1) = s;
-                        }
+                        fill_tone_block((*r).input.as_mut_ptr().add(off), n, &mut phase, phase_inc);
                         (*r).n_frames.store(n as u32, Ordering::Relaxed);
-                    }
-                    // publish: Release で seq_request を進める（n_frames/input 書き込みが child から可視に）。
-                    unsafe {
+                        // publish: Release で seq_request を進める（n_frames/input が child から可視に）。
                         (*r).seq_request.store(req, Ordering::Release);
                     }
 
@@ -656,19 +650,17 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     let rt_ns = (now - t0).as_nanos() as u64;
 
                     if got {
-                        // SAFETY: done を Acquire で観測済 → child の output 書き込みが可視。slot は req と一致。
+                        // SAFETY: done を Acquire で観測済 → child の output 書き込みが可視。slot は req と一致
+                        // （input 書き込みで使った off と同じ）。
                         unsafe {
-                            let out = (*r).output.as_ptr().add(slot_offset(req));
+                            let out = (*r).output.as_ptr().add(off);
                             for (i, slot) in data.iter_mut().enumerate().take(count) {
                                 let v = *out.add(i);
                                 *slot = v;
                                 peak = peak.max(v.abs());
                             }
                         }
-                        // フレーム超過分（n < frames）は無音で埋める。
-                        for s in data.iter_mut().skip(count) {
-                            *s = 0.0;
-                        }
+                        data[count..].fill(0.0); // フレーム超過分（n < frames）は無音
                         cb_stats.record_roundtrip(rt_ns);
                         cb_stats
                             .last_success_ns
@@ -676,17 +668,13 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     } else {
                         // この req は timeout = glitch-to-silence。req は outstanding のまま残り、次の
                         // callback は prev_done=false となって child が追いつくまで input を上書きしない。
-                        for s in data.iter_mut() {
-                            *s = 0.0;
-                        }
+                        data.fill(0.0);
                         cb_stats.overrun_count.fetch_add(1, Ordering::Relaxed);
                     }
                 } else {
                     // 前 req がまだ outstanding（child が遅延 or crash 後 respawn 待ち）。input を上書きせず
                     // glitch-to-silence する。child が前 req を完了（or respawn 子が処理）すれば次から再開。
-                    for s in data.iter_mut() {
-                        *s = 0.0;
-                    }
+                    data.fill(0.0);
                     cb_stats.overrun_count.fetch_add(1, Ordering::Relaxed);
                 }
 
@@ -698,10 +686,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
                     .fetch_max(cb_start.elapsed().as_nanos() as u64, Ordering::Relaxed);
                 cb_stats.frames_total.fetch_add(n as u64, Ordering::Relaxed);
             },
-            move |err| {
-                eprintln!("[cpal err] {err}");
-                stream_err_invalid.store(true, Ordering::Relaxed);
-            },
+            err_callback(stream_err_invalid),
             None,
         )?
     };
