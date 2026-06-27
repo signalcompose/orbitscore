@@ -1,0 +1,68 @@
+#!/usr/bin/env sh
+# pre-push hook for OrbitScore — Rust CI checks をローカルで先回り（#352）。
+#
+# 目的: Rust の fmt/clippy/cargo-deny 違反が GitHub の `Rust CI` で初めて落ち、失敗メールが
+# 飛ぶのを防ぐ。push に rust/ の変更が含まれるときだけローカルでチェックを回す
+# （rust/ を触らない push は素通り＝待ち時間ゼロ）。
+#
+# ⚠️ 下記コマンドは .github/workflows/rust-ci.yml と手動同期（drift 注意・CI 側を変えたら要追従）:
+#   - Format check       : cargo fmt --all --check
+#   - Clippy (default)   : cargo clippy --workspace --all-targets --locked -- -D warnings
+#   - Clippy (clap-host) : cargo clippy -p orbit-audio-daemon --features clap-host --all-targets --locked -- -D warnings
+#   - license/dep gate   : cargo deny check（cargo-deny 未インストール時は skip = fail-open）
+# cargo test は実行時間が長いため対象外（CI で非ゲートテストを検証・MVP・必要なら follow-on）。
+#
+# 一時的にスキップしたい場合（非推奨）: git push --no-verify
+
+# 全 0（空含む）の OID 判定。新規ブランチ push / ブランチ削除 push の検出に使う。
+is_zero() { case "$1" in *[!0]*) return 1 ;; *) return 0 ;; esac; }
+
+die() { echo "[pre-push] ✗ $1"; exit 1; }
+
+# push 対象に rust/ の変更が含まれるか stdin で判定。
+# git は pre-push の stdin に各 ref 1 行ずつ「<local_ref> <local_oid> <remote_ref> <remote_oid>」を渡す
+# （ref 名は使わないので _ で読み捨てる）。
+rust_in_push() {
+  while read -r _ local_oid _ remote_oid; do
+    is_zero "$local_oid" && continue   # ブランチ削除 push はスキップ
+    if is_zero "$remote_oid"; then
+      # 新規ブランチ: origin/main からの差分で判定。base が解決できない（fresh/shallow clone・
+      # default branch 名違い等）場合は skip せず fail-closed でチェックを走らせる
+      # ── ここで skip すると rust 失敗が CI に出てメール源になるため（silent-failure review）。
+      base=$(git rev-parse --verify --quiet origin/main) || {
+        echo "[pre-push] origin/main を解決できません — 新規ブランチを安全側でチェック対象にします。"
+        return 0
+      }
+      range="$base..$local_oid"
+    else
+      range="$remote_oid..$local_oid"  # 既存ブランチ: remote 先端からの差分
+    fi
+    # git diff 失敗時は空出力 → fail-open（hook のバグで正規 push をブロックしない・CI が backstop）。
+    # 新規ブランチの base 不在は上で fail-closed 済。ここは git diff が稀に失敗する場合向け。
+    git diff --name-only "$range" 2>/dev/null | grep -q '^rust/' && return 0
+  done
+  return 1
+}
+
+rust_in_push || exit 0
+
+echo "[pre-push] rust/ changed — running Rust CI checks…"
+cd rust || die "cannot cd into rust/"
+
+cargo fmt --all --check ||
+  die "cargo fmt --check failed — run 'cargo fmt --all' in rust/ and re-commit."
+cargo clippy --workspace --all-targets --locked -- -D warnings ||
+  die "clippy (default features) failed."
+cargo clippy -p orbit-audio-daemon --features clap-host --all-targets --locked -- -D warnings ||
+  die "clippy (clap-host feature) failed."
+
+# cargo-deny は別 CI ジョブ（license/dependency gate）。未インストール時は skip して push を通す
+# （fail-open＝hook が全 rust push をブロックしない・CI が backstop）。成功バナーは実際に
+# 走ったチェックだけを表記する（deny skip 時に「全部通った」と誤認させない・silent-failure review）。
+if command -v cargo-deny >/dev/null 2>&1; then
+  cargo deny check || die "cargo deny check failed."
+  echo "[pre-push] ✓ Rust checks passed (fmt + clippy + cargo-deny)."
+else
+  echo "[pre-push] cargo-deny not installed — skipping (CI の license/dependency gate で検査される)"
+  echo "[pre-push] ✓ fmt + clippy passed (cargo-deny は未実行 — CI が backstop)."
+fi
