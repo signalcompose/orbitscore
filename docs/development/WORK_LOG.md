@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.178 docs(wctm): change production runtime to a pi-based dedicated harness (Jun 28, 2026)
+
+**Branch**: `claude/agent-external-data-harness-yob87g`
+**変更ファイル**: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html` §4 全面改訂 + §3.2 / §10 / ヘッダ改訂注 / 構成図凡例、`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`（W-Runtime / ロードマップ図 / known-decisions 表）、`docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` §14 新規（決定 #60–#63）。
+
+**経緯**: laiso「Pi Coding Agent」記事を起点に大和が「このハーネスで外部データの受け取りをエージェント側で可能にできるのでは」と提起。設計対話の結論として **WCTM 本番ランタイムを Claude Code 二段構え（旧 decision #29）から pi（@mariozechner/pi-coding-agent）ベースの OrbitScore 専用ハーネスに確定**。
+
+**なぜ変えたか（詳細は DESIGN_DISCUSSION_RECORD §14）**:
+- **Claude Code は push を実行に持ち込めない**: MCP プロトコルは server→client push を持つが、Claude Code は `resources/updated` 未実装（#7252）・push 受信しても agent 不達（#33679/#36665）。WCTM の「小節到着が特徴量を駆動する」push 型本質要件と非両立。
+- **自前イベントループ（pi）なら** 「小節到着→コンテキスト組立→Messages API 発火」を書け、外部データがターンを駆動できる（変わるのはターンを誰が発火するか）。
+- **開発コスト**: 開発ツール（Claude Code）と本番ランタイム（pi）を分離すれば、A で測った数字は本番経路に移植不能（測定妥当性）+ 二重実装回避 + リハ中の柔軟性 → pi-first が有利。「即日動く」は薄いスケルトンで確保。
+- **専用ハーネスの価値**: customTools で OrbitScore 語彙＝エージェントの道具（§6 橋）、SDK で orbitstudio 埋め込み、.orbslog をネイティブ作業記憶に。演奏ハーネス＝作曲ハーネスを共有コアに（本番後一般化）。
+
+**核心の未解決問題（§14.5、要 大和確認）**: 「今どこを演奏しているか」= 形式内位置（bar:beat + セクション/コード）の検出。特徴量はテクスチャを与えるが形式位置を与えない。推奨初期案 = オペレーター舵取り + エンジン小節カウントのハイブリッド位置ラベル。本番の自律度は大和判断。
+
+**据え置き**: Agent Bridge（脳なし MCP）・統一評価経路は不変。**コード変更なし（docs のみ）**。
+
 ### 6.177 feat(engine): γ M1 PR-B — real CLAP effect child + shared 1-block core (#357) (Jun 27, 2026)
 
 γ M1 の **PR-B**。PR-A の transport の上に、**実 CLAP effect plugin を隔離 child プロセスで host** し、offline A/B parity を実 effect で確認する。設計正本 = `docs/development/POST_2.0_GAMMA_M1_DESIGN.md` §4.4/§4.6/§5(a)/§6。実装前に advisor 相談（① clack single-thread lifecycle を最初に証明 ② merged-RT 委譲を独立 commit 化 ③ closed-form oracle 採用）。
