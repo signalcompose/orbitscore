@@ -16,10 +16,13 @@
 //! 以下を強制する:
 //! 1. [`OutProcTeardownGuard`]（stream 前）= `teardown_requested` を立て `teardown_done` を待つ →
 //!    audio thread の adapter が transport（shm）への submit を止めて dry 素通しに入る。
-//! 2. `OutputStream` = cpal callback 停止 → adapter（host + host の mmap）が drop され mmap が unmap。
-//! 3. [`EffectChildSupervisor`]（stream 後）= **先に watchdog を止め**（respawn 停止）、その後 child へ
-//!    QUIT を送って reap し、最後に shm を unlink する（watchdog 停止を QUIT/reap より先にやらないと、
-//!    teardown 中の child を watchdog が respawn してしまう）。
+//! 2. `OutputStream` = cpal callback 停止 → adapter を所有する callback closure が drop され host mmap も
+//!    unmap される（unmap タイミングは cpal backend 依存。ただし「audio thread が shm を触らない」安全性
+//!    自体は step 1 の teardown handshake が既に保証しており、unmap タイミングには依存しない）。
+//! 3. [`EffectChildSupervisor`]（stream 後）= **先に watchdog を止め**（drop で `shutdown` を立て respawn を
+//!    停止）、その後 **watchdog 自身が** child へ QUIT を送って reap する（`EffectChildSupervisor::drop` は
+//!    `shutdown` 設定 + join のみ・QUIT は watchdog の終了経路が行う）。最後に supervisor が join 後に shm を
+//!    unlink する。watchdog 停止を QUIT/reap より先にやらないと、teardown 中の child を watchdog が respawn してしまう。
 
 // 共有メモリは生ポインタ経由でクロスプロセス参照するため unsafe FFI 同等。
 #![allow(unsafe_code)]
@@ -42,6 +45,9 @@ const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 /// teardown handshake 待ち上限（audio thread が `teardown_done` を立てるのを待つ）。device が callback を
 /// 配送しない異常系の安全弁（`ClapTeardownGuard` と同値・設計 §4.5）。
 const TEARDOWN_TIMEOUT: Duration = Duration::from_millis(500);
+/// `try_wait` が連続失敗した場合に supervise 不能とみなして escalate する閾値。`WATCHDOG_POLL`(20ms) と
+/// 合わせ ~1s 連続失敗で計測無効化 + 終了し、log flood を防ぐ（child handle が壊れた異常系の安全弁）。
+const TRY_WAIT_ERROR_LIMIT: u32 = 50;
 
 /// 同一プロセス内で複数の OOP effect を起動した時に shm ファイル名が衝突しないための連番。
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -85,11 +91,20 @@ impl OutProcEffectConfig {
                     .to_string()
             })?;
         let plugin_id = std::env::var("ORBIT_EFFECT_PLUGIN_ID").ok();
-        // production は通常 device 既定。`ORBIT_EFFECT_BUFFER_FRAMES` で明示できる（無効値は無視 = None）。
-        let buffer_frames = std::env::var("ORBIT_EFFECT_BUFFER_FRAMES")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .filter(|&n| n > 0);
+        // production は通常 device 既定。`ORBIT_EFFECT_BUFFER_FRAMES` で明示できる。**設定済みなのに無効**
+        // （非正・parse 不能）な場合は黙って無視せず warn を出す（silent fallback 回避）。未設定は device 既定。
+        let buffer_frames = match std::env::var("ORBIT_EFFECT_BUFFER_FRAMES") {
+            Ok(s) => match s.parse::<u32>() {
+                Ok(n) if n > 0 => Some(n),
+                _ => {
+                    tracing::warn!(
+                        "ORBIT_EFFECT_BUFFER_FRAMES='{s}' は無効（正の整数が必要）— device 既定を使う"
+                    );
+                    None
+                }
+            },
+            Err(_) => None, // 未設定 = device 既定
+        };
         Ok(Self {
             child_exe,
             plugin,
@@ -360,12 +375,13 @@ impl EffectChildSupervisor {
     ) -> io::Result<Self> {
         // watchdog 専用の control mapping（host は from_mmap で 1st mapping を消費するので 2nd を開く）。
         // この MmapMut は closure に move され watchdog thread 終了まで生存する（region ポインタの前提）。
-        // 失敗時は first_child を orphan 化させず reap する（呼び出し側は first_child を spawn 済み）。
+        // open_shared 失敗時は first_child を orphan 化させず reap し、作成済み shm を unlink する。
         let ctl_mmap = match open_shared(&shm_path) {
             Ok(m) => m,
             Err(e) => {
                 let _ = first_child.kill();
                 let _ = first_child.wait();
+                let _ = std::fs::remove_file(&shm_path);
                 return Err(e);
             }
         };
@@ -374,13 +390,23 @@ impl EffectChildSupervisor {
         let base = Instant::now();
         // respawn 用に closure へ move する shm_path（struct 側は unlink 用に原本を保持する）。
         let shm_path_wd = shm_path.clone();
+        // first_child は **closure に直接 move しない**: thread spawn が失敗すると closure ごと drop され
+        // first_child が orphan 化して shm を spin し続ける（`Child::drop` は kill しない）。thread spawn
+        // 成功を確認してから channel で渡し、spawn 失敗時は first_child を本 scope に残して reap できるようにする。
+        let (child_tx, child_rx) = std::sync::mpsc::channel::<Child>();
 
-        let watchdog = std::thread::Builder::new()
+        let watchdog = match std::thread::Builder::new()
             .name("orbit-outproc-effect-watchdog".into())
             .spawn(move || {
                 // region は thread 内で導出（生ポインタを thread 境界で渡さない）。ctl_mmap が生かす。
                 let region = region_ptr(&ctl_mmap);
-                let mut child = first_child;
+                // first_child を channel で受け取る（送信側が無い = spawn 直後の異常時のみ → 即終了）。
+                let mut child = match child_rx.recv() {
+                    Ok(c) => c,
+                    Err(_) => return,
+                };
+                // try_wait の連続失敗回数（Ok で reset）。閾値超過で supervise 不能とみなし escalate する。
+                let mut try_wait_errors: u32 = 0;
                 loop {
                     if shutdown_thread.load(Ordering::Acquire) {
                         break;
@@ -398,6 +424,7 @@ impl EffectChildSupervisor {
                         // （guard で先に弾く・advisor）。
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
+                            try_wait_errors = 0;
                             tracing::warn!(
                                 "orbit-clap-effect-child が異常終了（{status}）→ respawn する"
                             );
@@ -419,16 +446,29 @@ impl EffectChildSupervisor {
                                 }
                                 Err(e) => {
                                     tracing::error!(
-                                        "effect child respawn 失敗（計測無効・以降 dry/stale）: {e}"
+                                        "effect child respawn 失敗（計測無効・以降 stale = 直前 good block の \
+                                         repeat-previous が出続ける）: {e}"
                                     );
                                     stats.measurement_invalid.store(true, Ordering::Release);
                                     break;
                                 }
                             }
                         }
-                        Ok(None) => std::thread::sleep(WATCHDOG_POLL),
+                        Ok(None) => {
+                            try_wait_errors = 0;
+                            std::thread::sleep(WATCHDOG_POLL);
+                        }
                         Err(e) => {
-                            tracing::error!("effect child try_wait 失敗: {e}");
+                            // try_wait が連続失敗 = child handle が壊れて supervise 不能。log を flood せず
+                            // 閾値で escalate（計測無効 + 終了）。次の child crash を検知できないため打ち切る。
+                            try_wait_errors += 1;
+                            if try_wait_errors >= TRY_WAIT_ERROR_LIMIT {
+                                tracing::error!(
+                                    "effect child try_wait が {try_wait_errors} 回連続失敗（計測無効・supervise 終了）: {e}"
+                                );
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
+                            }
                             std::thread::sleep(WATCHDOG_POLL);
                         }
                     }
@@ -440,7 +480,24 @@ impl EffectChildSupervisor {
                 }
                 reap(&mut child);
                 // ここで ctl_mmap が drop（thread 終了）。shm unlink は supervisor drop が join 後に行う。
-            })?;
+            }) {
+            Ok(handle) => handle,
+            Err(e) => {
+                // thread spawn 失敗: closure（ctl_mmap 等）は未実行で drop 済み。first_child は本 scope に
+                // 残るので orphan 化させず reap し、shm を unlink する。
+                let _ = first_child.kill();
+                let _ = first_child.wait();
+                let _ = std::fs::remove_file(&shm_path);
+                return Err(e);
+            }
+        };
+
+        // thread spawn 成功 → first_child を watchdog へ渡す（recv 側が待っている）。送信失敗（thread が
+        // 即異常終了した場合のみ・通常は到達しない）は first_child を reap する。
+        if let Err(std::sync::mpsc::SendError(mut orphan)) = child_tx.send(first_child) {
+            let _ = orphan.kill();
+            let _ = orphan.wait();
+        }
 
         Ok(Self {
             shutdown,
@@ -639,5 +696,164 @@ mod tests {
             "deadlock せず timeout で抜ける（実測 {}ms）",
             elapsed.as_millis()
         );
+    }
+
+    /// `cond` が真になるまで（または timeout まで）20ms 間隔で poll する（supervisor の非同期挙動待ち）。
+    fn poll_until(timeout_secs: u64, mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        while Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        cond()
+    }
+
+    /// supervisor の 2nd `open_shared` 用に共有メモリ **ファイル**を作成して path を返す。mapping は即 drop
+    /// するがファイルはディスクに残る（unmap と unlink は別操作）ので supervisor が open できる。後始末は
+    /// 呼び出し側が `remove_file` する。
+    fn make_shm() -> PathBuf {
+        let p = unique_shm_path();
+        let _ = std::fs::remove_file(&p);
+        // create_shared でファイル作成 + REGION_BYTES に truncate。返る mapping は即 drop（ファイルは残る）。
+        let _ = orbit_audio_sandbox::create_shared(&p).expect("create_shared");
+        p
+    }
+
+    // Critical 1（test-coverage review）: respawn が恒久失敗すると watchdog は measurement_invalid を立てて
+    // 終了する（graceful degradation の保証）。短命 stub child + 不正 child_exe で respawn を必ず失敗させ、
+    // device 無しで CI 検証する（gated kill-test は respawn 成功側しか踏まない）。
+    #[test]
+    fn supervisor_marks_measurement_invalid_when_respawn_fails() {
+        let shm = make_shm();
+        let stats = OutProcEffectStats::new();
+        // すぐ exit する stub（watchdog が respawn を試みる契機）。
+        let first = Command::new("sleep")
+            .arg("0.2")
+            .spawn()
+            .expect("spawn stub child");
+        // 存在しない child_exe → respawn は必ず失敗する。
+        let bad_exe = std::env::temp_dir().join("orbit-nonexistent-effect-child-xyz");
+        let sup = EffectChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats.clone(),
+            bad_exe,
+            PathBuf::from("/nonexistent.clap"),
+            None,
+            48_000,
+        )
+        .expect("supervisor spawn");
+
+        let invalid = poll_until(5, || stats.measurement_invalid.load(Ordering::Acquire));
+        assert!(invalid, "respawn 恒久失敗で measurement_invalid が立つ");
+        drop(sup); // join がハングしないこと（watchdog は break 済み）。
+        let _ = std::fs::remove_file(&shm);
+    }
+
+    // Important 2（test-coverage review）: 異常終了した child を watchdog が respawn し respawn_count を進める
+    // （成功側の状態機械 = PID publish / count / last_respawn_ns）。CI で device 無し検証。respawn 先は
+    // `sleep`（transport 引数を理解しないので即 exit → fast respawn loop だが respawn_count>=1 で十分）。
+    #[test]
+    fn supervisor_respawns_child_on_unexpected_exit() {
+        let shm = make_shm();
+        let stats = OutProcEffectStats::new();
+        let first = Command::new("sleep")
+            .arg("0.2")
+            .spawn()
+            .expect("spawn stub child");
+        // PATH 解決の `sleep` を respawn 先にする（binary は存在し spawn は成功 = respawn_count++）。
+        let sup = EffectChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats.clone(),
+            PathBuf::from("sleep"),
+            PathBuf::from("/ignored.clap"),
+            None,
+            48_000,
+        )
+        .expect("supervisor spawn");
+
+        let respawned = poll_until(5, || stats.respawn_count.load(Ordering::Relaxed) >= 1);
+        assert!(respawned, "child の異常終了で respawn_count が進む");
+        assert!(
+            !stats.measurement_invalid.load(Ordering::Acquire),
+            "respawn が成功している間は計測有効"
+        );
+        drop(sup);
+        let _ = std::fs::remove_file(&shm);
+    }
+
+    // Critical 2（test-coverage / code review）: open_shared 失敗時に first_child を orphan 化させず reap する。
+    // shm ファイルを消してから spawn を呼び open_shared を失敗させ、Err 返却 + child が reap される
+    // （kill -0 が ESRCH）ことを検証する。
+    #[test]
+    fn supervisor_spawn_reaps_first_child_on_open_shared_failure() {
+        let shm = unique_shm_path();
+        let _ = std::fs::remove_file(&shm); // ファイル不在 → open_shared が失敗する
+        let stats = OutProcEffectStats::new();
+        let first = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn stub child");
+        let pid = first.id();
+        let r = EffectChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats,
+            PathBuf::from("/nonexistent"),
+            PathBuf::from("/nonexistent.clap"),
+            None,
+            48_000,
+        );
+        assert!(r.is_err(), "open_shared 失敗で Err を返す");
+        // first_child が reap された（orphan でない）= kill -0 が失敗（ESRCH）する。
+        let reaped = poll_until(3, || {
+            !Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        });
+        assert!(
+            reaped,
+            "open_shared 失敗時に first_child が reap される（orphan 化しない）"
+        );
+    }
+
+    // Important 3（test-coverage review）: teardown handshake を **真の並行**下で検証する。background thread が
+    // process() をループ（audio thread を模す）する一方で OutProcTeardownGuard を drop し、ack（teardown_done）
+    // が立って guard が速やかに抜ける（timeout しない）ことを確認する（Acquire/Release ペアの回帰ガード）。
+    #[test]
+    fn teardown_handshake_acked_under_concurrent_process() {
+        let (tr, td) = flags();
+        let stats = OutProcEffectStats::new();
+        let mut pp = OutProcEffectPostProcessor::new(temp_host(), tr.clone(), td.clone(), stats);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_t = stop.clone();
+        let handle = std::thread::spawn(move || {
+            let mut data = vec![0.5f32; 64 * 2];
+            while !stop_t.load(Ordering::Relaxed) {
+                pp.process(&mut data);
+            }
+        });
+        // 少し回してから guard を drop（requested 立て → done を待つ）。
+        std::thread::sleep(Duration::from_millis(50));
+        let t0 = Instant::now();
+        drop(OutProcTeardownGuard::new(tr.clone(), td.clone()));
+        let elapsed = t0.elapsed();
+        assert!(
+            td.load(Ordering::Acquire),
+            "concurrent process() が teardown_done を ack する"
+        );
+        assert!(
+            elapsed < Duration::from_millis(450),
+            "concurrent でも ack で速やかに抜ける（timeout しない・実測 {}ms）",
+            elapsed.as_millis()
+        );
+        stop.store(true, Ordering::Relaxed);
+        handle.join().expect("process loop thread joins");
     }
 }

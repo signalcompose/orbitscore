@@ -20,8 +20,10 @@ use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
     ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_LINK_EGRESS_DROP,
-    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
-    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
+    ERROR_CODE_OUTPROC_EFFECT_ERROR, ERROR_CODE_OUTPROC_EFFECT_INVALID,
+    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
+    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
+    EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -78,6 +80,9 @@ pub async fn run(
             let mut last_xruns: u64 = 0;
             let mut last_link_drops: u64 = 0;
             let mut last_clap_errors: u64 = 0;
+            let mut last_outproc_errors: u64 = 0;
+            let mut last_outproc_respawns: u64 = 0;
+            let mut outproc_invalid_reported = false;
             let mut device_lost_reported = false;
             loop {
                 ticker.tick().await;
@@ -149,6 +154,53 @@ pub async fn run(
                         break;
                     }
                     last_clap_errors = clap_errors;
+                }
+
+                // out-of-process effect の health（γ M1 PR-C）を非 RT で surface。child の process() エラー
+                // / crash→respawn / supervise 不能（計測無効）を 1 Hz ticker で検知して event を出す（CLAP
+                // 経路と同設計。outproc 無効 / 異常なしは (0,0,false) のまま発火しない）。
+                let (outproc_errors, outproc_respawns, outproc_invalid) = engine.outproc_health();
+                if outproc_errors > last_outproc_errors {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_EFFECT_ERROR,
+                        format!(
+                            "out-of-process effect child process() failed ({outproc_errors} total); \
+                             effect passes dry",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_errors = outproc_errors;
+                }
+                if outproc_respawns > last_outproc_respawns {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_EFFECT_RESPAWN,
+                        format!(
+                            "out-of-process effect child crashed and was respawned \
+                             ({outproc_respawns} total); 3rd-party crash isolated",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_respawns = outproc_respawns;
+                }
+                // 計測無効は恒久状態なので fire-once（daemon は生存・effect 経路のみ frozen）。
+                if outproc_invalid && !outproc_invalid_reported {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_EFFECT_INVALID,
+                        "out-of-process effect supervisor gave up (respawn/try_wait failed); \
+                         effect frozen at last block (repeat-previous) — restart daemon or fix plugin"
+                            .to_string(),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    outproc_invalid_reported = true;
                 }
 
                 let stats_evt = Event::new(

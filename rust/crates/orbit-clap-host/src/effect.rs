@@ -34,7 +34,10 @@
 //! - `call_on_main_thread_callback` を pump しない（dummy な `callback_requested` を渡す）。test-effect の
 //!   ような load-time param のみの effect には不要だが、main-thread callback を要求する 3rd-party plugin
 //!   は M1（load-time param のみ）スコープ外。
-//! - effect のみ対応（`process_block` は note event を送らない）。instrument 経路は対象外。
+//! - effect のみ対応（`process_block` は note event を送らない）。note event を伴う instrument 経路
+//!   （発音）は対象外。ただし `process_block_core` の add-mix 分岐自体（`has_audio_input()=false` の
+//!   plugin で発火）は audio-input を持たない synth を load して検証済み（γ M1 PR-C・gated test
+//!   `effect_processor_smoke_gated.rs::instrument_branch_add_mixes_dry_signal`）。
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};

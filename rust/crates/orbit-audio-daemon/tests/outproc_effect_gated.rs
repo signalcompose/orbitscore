@@ -155,6 +155,16 @@ fn outproc_effect_processes_audio_via_daemon() {
         s.fresh > 0,
         "child から fresh 出力を読めていない（OOP 経路が動いていない）"
     );
+    // **持続的**に fresh を読めている（過半数の callback が fresh）= effect が run 全体で生きていた。
+    // dry/post peak は fetch_max なので「最初の 1 callback で gain 比を確定 → 直後に child が死んで残りは
+    // stale/silence」でも ratio assert は通ってしまう。fresh が callback の過半を占めることを要求して、
+    // 一発 fresh→恒久 stale の偽 pass を弾く（test-coverage review Important 1）。
+    assert!(
+        s.fresh > s.callback_count / 2 && s.fresh > 10,
+        "fresh が持続していない（fresh={} / callback_count={}）— effect が run 途中で停止した疑い",
+        s.fresh,
+        s.callback_count
+    );
     // serial insert の gain 比。余白は resampling / peak 整列のずれを吸収（理論値 EFFECT_GAIN）。
     assert!(
         (0.4..=0.6).contains(&ratio),

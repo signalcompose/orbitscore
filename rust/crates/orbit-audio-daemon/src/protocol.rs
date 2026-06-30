@@ -90,6 +90,17 @@ pub const ERROR_CODE_LINK_EGRESS_DROP: &str = "LINK_EGRESS_DROP";
 /// WARNING severity。audio thread が cumulative counter に積み、daemon が 1 Hz ticker で増加を
 /// 検知して発火する（#340）。effect は dry 素通し / instrument は無音になるため observability で surface。
 pub const ERROR_CODE_CLAP_PROCESS_ERROR: &str = "CLAP_PROCESS_ERROR";
+/// out-of-process effect child の `process()` がエラーを返した（effect は dry 素通し）。WARNING severity。
+/// child が shm の cumulative counter に積み、daemon が 1 Hz ticker で増加を検知して発火する（γ M1 PR-C）。
+pub const ERROR_CODE_OUTPROC_EFFECT_ERROR: &str = "OUTPROC_EFFECT_ERROR";
+/// out-of-process effect child が crash し watchdog が respawn した。WARNING severity。daemon が 1 Hz
+/// ticker で respawn 数の増加を検知して発火する（3rd-party crash は隔離されるが頻発は要調査・γ M1 PR-C）。
+pub const ERROR_CODE_OUTPROC_EFFECT_RESPAWN: &str = "OUTPROC_EFFECT_RESPAWN";
+/// out-of-process effect の supervise が不能になった（respawn 失敗 / try_wait 連続失敗）= 計測無効。
+/// **WARNING** severity（daemon/engine は生存し他の audio は流れるが effect は直前 good block の
+/// repeat-previous が出続ける = effect 経路のみ恒久停止）。daemon が 1 Hz ticker で `measurement_invalid`
+/// を検知して一度だけ発火する（fire-once・γ M1 PR-C）。
+pub const ERROR_CODE_OUTPROC_EFFECT_INVALID: &str = "OUTPROC_EFFECT_INVALID";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]

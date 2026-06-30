@@ -752,6 +752,42 @@ impl EngineWrap {
         }
     }
 
+    /// OOP effect の health signal を `(child_process_error_count, respawn_count, measurement_invalid)` で
+    /// 返す（daemon の 1 Hz ticker が polling して WARNING/FATAL event で surface する非 RT observability）。
+    /// `clap_process_error_count` と同様 `try_lock` で ticker をブロックしない（**WouldBlock** は cumulative
+    /// なので次 tick が全累積を報告・**Poisoned** は warn して 0 を返し post-mortem の根拠を残す）。
+    /// plugin 未起動 / outproc 無効時は `(0, 0, false)`。
+    #[cfg(feature = "outproc-effect")]
+    pub fn outproc_health(&self) -> (u64, u64, bool) {
+        match self.outproc.try_lock() {
+            Ok(g) => g
+                .as_ref()
+                .map(|c| {
+                    let s = c.stats.snapshot();
+                    (
+                        s.child_process_error_count,
+                        s.respawn_count,
+                        s.measurement_invalid,
+                    )
+                })
+                .unwrap_or((0, 0, false)),
+            Err(std::sync::TryLockError::WouldBlock) => (0, 0, false),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                tracing::warn!(
+                    "outproc mutex poisoned; outproc_health reporting zeros \
+                     (OUTPROC_EFFECT events suppressed until daemon restart)"
+                );
+                (0, 0, false)
+            }
+        }
+    }
+
+    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false)`（control が無い）。
+    #[cfg(not(feature = "outproc-effect"))]
+    pub fn outproc_health(&self) -> (u64, u64, bool) {
+        (0, 0, false)
+    }
+
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
     /// daemon の 1 Hz ticker が polling して増加を WARNING event で surface する（非 RT observability）。
     /// link 未初期化（test backend）時は control 分が 0。test 注入分（本番 0）を必ず加える。
