@@ -147,6 +147,22 @@ CI は Rust gated 非実行（device なし・`#[ignore]` 自動 skip）。offli
 
 各 PR は `/simplify` + `/code:pr-review-team`（ハンドロール禁止・収束は独立再レビューで裏取り）→ advisor → 必要なら @claude bot（owner-gated）→ owner 明示マージ。
 
+### PR-C 実装状況（2026-06-30・Issue #359 / branch `359-gamma-m1-pr-c-outproc-effect-daemon`）
+
+実装はコード/テストとも完了（CI-able 部分は全緑）。**gated 実機 RUN + slot 数決定は owner action 待ち**。
+
+- **commit 1**: `SharedRegion::child_process_error_count`（child→host health・carry-forward ①）。
+- **commit 2**: `OutProcEffectPostProcessor`（clack-free adapter）+ feature `outproc-effect`（3-way 排他）。
+- **commit 3**: `EffectChildSupervisor`（spawn/watchdog/respawn・watchdog 停止→QUIT→reap→unlink 順）+ `OutProcTeardownGuard` + `start()`/`start_outproc_effect` + StreamGuard mirror + accessor。
+- **commit 4**: native の小バッファ plumbing（`start_default_output_with_clap_buffered`・`BufferSize::Fixed`）+ dry/post peak + `current_child_pid` 観測 + gated harness（parity / kill-test / 32-64f stale）。
+- **commit 5**: carry-forward ② = `process_block_core` の instrument(add-mix) 分岐の offline 検証（test-synth）。
+
+**CI 配線の状況（訂正）**: Rust CI は存在する（`.github/workflows/rust-ci.yml`・PR ごとに fmt / clippy[default + clap-host] / `cargo test --workspace`[default] / `cargo test --features clap-host` / cargo-deny）。本 PR で **`outproc-effect` feature を CI matrix に追加した**（clippy + test）。これで OOP の adapter / supervisor / 観測 seam の non-gated lib test（11 本）と clippy が CI で回る。**OOP transport correctness は PR-A の clack-free gain child parity（`orbit-audio-sandbox` の非 gated テスト = `cargo test --workspace` で既に CI 実行）が担保**する。
+
+**carry-forward ③（実 CLAP dylib parity の CI 化）= defer（follow-on）**: 残るのは実 CLAP plugin（test-effect/test-synth dylib）を要する parity（`effect_parity_gated` / `effect_processor_smoke_gated`）と、device を要する OOP daemon parity（`outproc_effect_gated`）の CI 化。後者は CI に audio device が無く本質的に不可。前者（device-free・dylib のみ）の CI 化は、workspace 非 member の `rust-spike/` plugin を CI でビルド + cross-platform な dylib 拡張子解決（`.dylib`/`.so`）+ 当該テストの un-ignore を要する。**実 CLAP 処理の検証は本プロジェクトの既存方針どおり local-gated**（in-process clap-host の `clap_*_gated` も `#[ignore]`）であり、transport は PR-A gain parity が CI 担保済みなので、dylib-build-in-CI は別 hardening として follow-on に切り出す（advisor 判断: fiddly / 相対的に低価値）。owner に follow-on の要否を確認する。
+
+**owner action（M1 ゲート）**: gated harness を実機で RUN（`--features outproc-effect -- --ignored`）し、printed stale_pct/callback_max を見て `orbit_audio_sandbox::SLOTS`（現 2）を確定する（許容外なら 3 にして再ビルド + 再 RUN）。harness は flip-ready な const + 計測を納品済み。
+
 ---
 
 ## 7. Done / フェーズゲート（M1 全体）
