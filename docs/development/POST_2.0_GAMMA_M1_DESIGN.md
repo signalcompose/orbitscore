@@ -163,6 +163,20 @@ CI は Rust gated 非実行（device なし・`#[ignore]` 自動 skip）。offli
 
 **owner action（M1 ゲート）**: gated harness を実機で RUN（`--features outproc-effect -- --ignored`）し、printed stale_pct/callback_max を見て `orbit_audio_sandbox::SLOTS`（現 2）を確定する（許容外なら 3 にして再ビルド + 再 RUN）。harness は flip-ready な const + 計測を納品済み。
 
+### SLOTS のデジタル根拠（offline round-trip probe・2026-06-30・owner 要望で記録）
+
+`orbit-clap-effect-child` の `roundtrip_latency_gated.rs`（device 不要・dylib のみ・`#[ignore]`）で、実 CLAP child + 共有メモリ transport の **1 ブロック round-trip を offline 実測**し、buffer period と比較した（owner 要望: 物理依存の前に詰められる範囲をデジタルで詰める）。dev machine 実測:
+
+| buffer | round-trip（best-case） | period | margin |
+|---|---|---|---|
+| 32f | ≈ 3.8–4.0 µs | 666.7 µs | **~170×** |
+| 64f | ≈ 5.8 µs | 1333.3 µs | **~229×** |
+| 128f | ≈ 9.5 µs | 2666.7 µs | ~282× |
+
+候補B pipelined では child は 1 period 丸ごとの処理時間を持つのに、実処理 + IPC は締切の **~1/170**。よって **steady-state は `SLOTS=2` で stale ≈ 0** が期待できる（デジタル根拠）。**この probe が捕捉しないのは実 RT audio callback 下の OS スケジューラ preemption（tail）のみ** — offline busy-loop は競合が無く tail を再現しないため出る数値は下限。実 RT の occasional stale tail（spike #351 で 32f ≈ 0.45%）は gated 実機 RUN が担当する。
+
+→ **デジタル推奨 = `SLOTS=2`**（現状維持）。owner の実機 RUN は preemption tail の確認であって SLOTS の発見ではない。音声データ正しさ（closed-form oracle sample-exact）・supervision（非 gated CI）・steady-state stale 余裕（本 probe）はすべて device/耳なしで検証済み。
+
 ---
 
 ## 7. Done / フェーズゲート（M1 全体）
