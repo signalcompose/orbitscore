@@ -120,6 +120,21 @@ compile_error!(
      (combined cpal-callback render ordering is deferred — Issue #340)"
 );
 
+// γ M1 PR-C: out-of-process effect も master-bus post-processor 経路（cpal callback への単一注入）
+// なので、in-process CLAP（clap-host）/ LinkAudio egress（link-audio）とは併用不可。3-way 排他を
+// compile-time に固定する（start() の cfg 分岐も 3 者排他前提なので、これが無いと未定義 start() で
+// わかりにくく落ちる）。
+#[cfg(all(feature = "outproc-effect", feature = "clap-host"))]
+compile_error!(
+    "features `outproc-effect` and `clap-host` are mutually exclusive \
+     (both own the single master-bus post-processor seam)"
+);
+#[cfg(all(feature = "outproc-effect", feature = "link-audio"))]
+compile_error!(
+    "features `outproc-effect` and `link-audio` are mutually exclusive \
+     (both integrate the single cpal callback)"
+);
+
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
 ///
 /// ## `link-audio` ビルド時（`_stream` → `_link`）
