@@ -263,7 +263,7 @@ impl EngineWrap {
         // event ring 1024 / install ring 1（spike と同容量）。
         let (processor, parts) = orbit_clap_host::new_clap_host(1024, 1);
         let (engine, stream, stream_stats, cb_stats) =
-            orbit_audio_native::start_default_output_with_clap(processor)
+            orbit_audio_native::start_default_output_with_clap(processor, None)
                 .map_err(WrapError::Output)?;
         // 専用スレッドを起動（!Send instance + pump をここで所有）。install ring producer を渡す。
         let (cmd_tx, thread_guard) = crate::clap_host::spawn_clap_thread(
@@ -342,11 +342,8 @@ impl EngineWrap {
         // 3. cpal stream 起動（ここで device の sample_rate が確定する）。adapter を注入する。
         //    gated stale-rate harness は cfg.buffer_frames に 32/64 を渡し小バッファを要求する。
         let (engine, stream, stream_stats, cb_stats) =
-            orbit_audio_native::start_default_output_with_clap_buffered(
-                processor,
-                cfg.buffer_frames,
-            )
-            .map_err(WrapError::Output)?;
+            orbit_audio_native::start_default_output_with_clap(processor, cfg.buffer_frames)
+                .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
 
         // 4. 初回 child を同期 spawn（spawn 失敗を呼び出し側に返すため supervisor 外で起動）。

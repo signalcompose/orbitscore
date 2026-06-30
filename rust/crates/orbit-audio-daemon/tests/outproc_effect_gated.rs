@@ -58,28 +58,28 @@ fn test_effect_dylib() -> PathBuf {
     repo_path("rust-spike/clap-test-effect/target/debug/libclap_test_effect.dylib")
 }
 
-/// gated 前提（dylib / child binary / 音源）の存在を確認し、揃わなければ panic で loud に止める。
-fn assert_prereqs(dylib: &Path, child: &Path, wav: &Path) {
-    assert!(
-        dylib.exists(),
-        "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml`",
-        dylib.display()
-    );
-    assert!(
-        child.exists(),
-        "effect child binary が無い: {} — 先に `cargo build -p orbit-clap-effect-child`",
-        child.display()
-    );
-    assert!(wav.exists(), "音源 WAV が無い: {}", wav.display());
-}
-
-fn make_cfg(buffer_frames: Option<u32>) -> OutProcEffectConfig {
-    OutProcEffectConfig {
+/// gated 前提（dylib / child binary / 音源）を確認して config と音源 path を返す。揃わなければ panic で
+/// loud に止める。各 test の共通セットアップ（dylib/child の二重解決と prereq 重複を 1 箇所に集約）。
+fn setup_test(buffer_frames: Option<u32>) -> (OutProcEffectConfig, PathBuf) {
+    let cfg = OutProcEffectConfig {
         child_exe: child_exe(),
         plugin: test_effect_dylib(),
         plugin_id: None, // 単一プラグイン bundle なので id 省略可
         buffer_frames,
-    }
+    };
+    let wav = repo_path("test-assets/audio/sine_440.wav");
+    assert!(
+        cfg.plugin.exists(),
+        "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml`",
+        cfg.plugin.display()
+    );
+    assert!(
+        cfg.child_exe.exists(),
+        "effect child binary が無い: {} — 先に `cargo build -p orbit-clap-effect-child`",
+        cfg.child_exe.display()
+    );
+    assert!(wav.exists(), "音源 WAV が無い: {}", wav.display());
+    (cfg, wav)
 }
 
 /// sine を 1 つ再生する（一定振幅 → dry/post peak 比が安定する）。
@@ -109,13 +109,8 @@ fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
 #[test]
 #[ignore = "γ M1 PR-C: needs a real output device + built child binary + test-effect dylib (local only)"]
 fn outproc_effect_processes_audio_via_daemon() {
-    let dylib = test_effect_dylib();
-    let child = child_exe();
-    let wav = repo_path("test-assets/audio/sine_440.wav");
-    assert_prereqs(&dylib, &child, &wav);
-
-    let (engine, _guard) =
-        EngineWrap::start_outproc_effect(make_cfg(None)).expect("start OOP effect daemon");
+    let (cfg, wav) = setup_test(None);
+    let (engine, _guard) = EngineWrap::start_outproc_effect(cfg).expect("start OOP effect daemon");
     play_sine(&engine, &wav);
     // child spawn + hot path 安定 + 多数の callback を待つ。
     std::thread::sleep(Duration::from_millis(800));
@@ -180,13 +175,8 @@ fn outproc_effect_processes_audio_via_daemon() {
 #[test]
 #[ignore = "γ M1 PR-C: needs a real output device + built child binary + test-effect dylib (local only)"]
 fn outproc_effect_survives_child_kill_and_respawns() {
-    let dylib = test_effect_dylib();
-    let child = child_exe();
-    let wav = repo_path("test-assets/audio/sine_440.wav");
-    assert_prereqs(&dylib, &child, &wav);
-
-    let (engine, _guard) =
-        EngineWrap::start_outproc_effect(make_cfg(None)).expect("start OOP effect daemon");
+    let (cfg, wav) = setup_test(None);
+    let (engine, _guard) = EngineWrap::start_outproc_effect(cfg).expect("start OOP effect daemon");
     play_sine(&engine, &wav);
     std::thread::sleep(Duration::from_millis(600));
 
@@ -260,17 +250,13 @@ fn outproc_effect_survives_child_kill_and_respawns() {
 #[test]
 #[ignore = "γ M1 PR-C: needs a real output device that supports small buffers (local only)"]
 fn outproc_effect_small_buffer_stale_rate() {
-    let dylib = test_effect_dylib();
-    let child = child_exe();
-    let wav = repo_path("test-assets/audio/sine_440.wav");
-    assert_prereqs(&dylib, &child, &wav);
-
     println!(
         "=== γ M1 PR-C OOP effect stale-rate verdict (SLOTS={}) ===",
         orbit_audio_sandbox::SLOTS
     );
     for &frames in &[64u32, 32u32] {
-        let (engine, _guard) = match EngineWrap::start_outproc_effect(make_cfg(Some(frames))) {
+        let (cfg, wav) = setup_test(Some(frames));
+        let (engine, _guard) = match EngineWrap::start_outproc_effect(cfg) {
             Ok(x) => x,
             Err(e) => {
                 // device が当該バッファをサポートしない場合は skip（loud に記録）。

@@ -271,10 +271,14 @@ impl PostProcessor for OutProcEffectPostProcessor {
 }
 
 /// interleaved f32 の abs ピークを f32 bits で返す（非負 f32 bits は u32 として単調 = `fetch_max` 可）。
-/// `ClapPostProcessor` の post-peak と同手法。空 slice は 0。
+/// `ClapPostProcessor` の post-peak と同趣旨だが、`abs()`（f32 往復）でなく符号ビットを直接マスクする
+/// （`s.to_bits() & 0x7FFF_FFFF`・非負化として等価で vectorize しやすい）。空 slice は 0。
 #[inline]
 fn peak_bits(data: &[f32]) -> u32 {
-    data.iter().map(|s| s.abs().to_bits()).max().unwrap_or(0)
+    data.iter()
+        .map(|s| s.to_bits() & 0x7FFF_FFFF)
+        .max()
+        .unwrap_or(0)
 }
 
 /// `--shm`/`--plugin`/`--sample-rate`(/`--plugin-id`) を渡して effect child を 1 つ起動する。
@@ -346,7 +350,7 @@ impl EffectChildSupervisor {
     /// 返すため supervisor 外で起動する）。watchdog はこれを引き継ぎ、以降の crash で respawn する。
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
-        first_child: Child,
+        mut first_child: Child,
         shm_path: PathBuf,
         stats: Arc<OutProcEffectStats>,
         child_exe: PathBuf,
@@ -357,7 +361,6 @@ impl EffectChildSupervisor {
         // watchdog 専用の control mapping（host は from_mmap で 1st mapping を消費するので 2nd を開く）。
         // この MmapMut は closure に move され watchdog thread 終了まで生存する（region ポインタの前提）。
         // 失敗時は first_child を orphan 化させず reap する（呼び出し側は first_child を spawn 済み）。
-        let mut first_child = first_child;
         let ctl_mmap = match open_shared(&shm_path) {
             Ok(m) => m,
             Err(e) => {
@@ -391,12 +394,10 @@ impl EffectChildSupervisor {
                         .store(errs, Ordering::Relaxed);
 
                     match child.try_wait() {
+                        // teardown と crash の race: shutdown 中の終了は正常 teardown なので respawn しない
+                        // （guard で先に弾く・advisor）。
+                        Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
-                            // teardown と crash の race: shutdown を再確認してから respawn 判断
-                            // （shutdown 中の終了は正常 teardown なので respawn しない・advisor）。
-                            if shutdown_thread.load(Ordering::Acquire) {
-                                break;
-                            }
                             tracing::warn!(
                                 "orbit-clap-effect-child が異常終了（{status}）→ respawn する"
                             );

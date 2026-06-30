@@ -295,22 +295,16 @@ pub fn start_default_output_with_link_egress(
     Ok((engine, stream, stats, reg_tx))
 }
 
-/// CLAP master-bus post-processor 経路付きで出力を起動する（feature `clap-host` 経由でのみ daemon
-/// が使う・Issue #340）。`post` は engine render 後の hardware sum を RT callback 内で in-place 変換
-/// する（CLAP effect=serial insert / instrument=add-mix。実体は `orbit-clap-host` の実装が所有し、
-/// plugin の hot-install は実装内の ring 経由）。戻り値の `CallbackTimeStats` は callback-duration
-/// ベースの RT 監視用（A0 §6: CoreAudio+cpal は xrun 不発火 → duration が唯一の RT signal）。
-pub fn start_default_output_with_clap(
-    post: Box<dyn PostProcessor>,
-) -> Result<ClapHostStart, OutputError> {
-    start_default_output_with_clap_buffered(post, None)
-}
-
-/// [`start_default_output_with_clap`] の buffer-size 指定版（γ M1 PR-C・gated stale-rate harness 用）。
+/// CLAP master-bus post-processor 経路付きで出力を起動する（feature `clap-host` / `outproc-effect`
+/// 経由でのみ daemon が使う・Issue #340 / #359）。`post` は engine render 後の hardware sum を RT
+/// callback 内で in-place 変換する（CLAP effect=serial insert / instrument=add-mix。実体は実装が所有）。
+/// 戻り値の `CallbackTimeStats` は callback-duration ベースの RT 監視用（A0 §6: CoreAudio+cpal は xrun
+/// 不発火 → duration が唯一の RT signal）。
+///
 /// `buffer_frames` が `Some(n)` なら cpal に `BufferSize::Fixed(n)` を要求する（device が 32/64f 等の
-/// 小バッファをサポートする前提・非対応 device では build/play がエラーになり gated test が loud に失敗）。
-/// `None` は `BufferSize::Default`（既存経路とビット同一）。clap-host 経路は従来どおり `None` を使う。
-pub fn start_default_output_with_clap_buffered(
+/// 小バッファをサポートする前提・非対応 device では build/play がエラー = gated test が loud に失敗。γ M1
+/// PR-C の stale-rate harness が使う）。`None` は `BufferSize::Default`（既存経路とビット同一・clap-host）。
+pub fn start_default_output_with_clap(
     post: Box<dyn PostProcessor>,
     buffer_frames: Option<u32>,
 ) -> Result<ClapHostStart, OutputError> {
