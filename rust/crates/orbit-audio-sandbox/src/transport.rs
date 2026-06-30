@@ -90,6 +90,15 @@ pub struct SharedRegion {
     pub seq_done: AtomicU64,
     /// child が処理したブロック総数(観測用。respawn 後の処理再開を可視化する)。
     pub child_processed: AtomicU64,
+    /// **child -> host health signal**(γ M1 PR-C・carry-forward ①): child の per-block 処理
+    /// (`plugin.process()`)が失敗したブロックの累積数。child が `fetch_add` で書き、host(supervisor /
+    /// accessor)が読む。effect は失敗時 dry 素通し・instrument は無音になるため、この counter だけが
+    /// 失敗の可視化手段になる(silent-failure 防止)。**child が crash しても host は mmap を保持し続けるので
+    /// 値は読める**(supervisor の respawn で同一 shm を再利用するため child を跨いで累積する)。supervisor
+    /// 側の `respawn_count` / `last_respawn_ns` / `measurement_invalid`(child の異常終了を host が
+    /// 観測する signal)は host-side atomic で別に持つ(SharedRegion ではない)。gain child(PR-A)は
+    /// 失敗経路を持たないので増分せず 0 のまま。
+    pub child_process_error_count: AtomicU64,
     /// host -> child の制御フラグ([`CONTROL_RUN`] / [`CONTROL_QUIT`])。host が teardown 時に
     /// QUIT を store し、child は spin loop の各周回で確認して正常終了する(kill より clean)。
     pub control: AtomicU32,
@@ -184,6 +193,26 @@ mod tests {
         for s in 0..(SLOTS as u64 * 3) {
             assert_eq!(slot_offset(s), slot_offset(s + SLOTS as u64));
         }
+    }
+
+    // carry-forward ①(PR-C): child_process_error_count は truncate 直後 0 で、生ポインタ経由で
+    // read/write できる(child が fetch_add・host が load する health signal)。レイアウトに field が
+    // 載っていることと zero-init を locking する。
+    #[test]
+    fn child_process_error_count_defaults_zero_and_is_writable() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let p = std::env::temp_dir().join(format!("orbit-sbx-health-{}.shm", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        let mmap = create_shared(&p).expect("create");
+        let region = region_ptr(&mmap);
+        // SAFETY: create_shared が返した生存 mapping を指す。truncate 直後で 0 初期化。
+        unsafe {
+            assert_eq!((*region).child_process_error_count.load(Relaxed), 0);
+            (*region).child_process_error_count.fetch_add(3, Relaxed);
+            assert_eq!((*region).child_process_error_count.load(Relaxed), 3);
+        }
+        drop(mmap);
+        let _ = std::fs::remove_file(&p);
     }
 
     // 存在しないファイルは map せず Err(open は read-only open なので作成しない)。

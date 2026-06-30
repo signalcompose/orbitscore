@@ -16,6 +16,10 @@ pub mod engine_wrap;
 /// コンパイルされ、GPL crate `orbit-link-audio` を保持する consumer thread を起動する。
 #[cfg(feature = "link-audio")]
 pub mod link_audio;
+/// γ M1 PR-C: out-of-process effect の daemon 配線。feature `outproc-effect`（default off・clack-free）
+/// でのみコンパイルされ、別プロセスの実 CLAP effect child へ共有メモリ transport 越しに audio を流す。
+#[cfg(feature = "outproc-effect")]
+pub mod outproc_effect;
 pub mod protocol;
 pub mod server;
 pub mod session;

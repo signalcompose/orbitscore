@@ -147,6 +147,46 @@ CI は Rust gated 非実行（device なし・`#[ignore]` 自動 skip）。offli
 
 各 PR は `/simplify` + `/code:pr-review-team`（ハンドロール禁止・収束は独立再レビューで裏取り）→ advisor → 必要なら @claude bot（owner-gated）→ owner 明示マージ。
 
+### PR-C 実装状況（2026-06-30・Issue #359 / branch `359-gamma-m1-pr-c-outproc-effect-daemon`）
+
+実装はコード/テストとも完了（CI-able 部分は全緑）。**gated 実機 RUN + slot 数決定は owner action 待ち**。
+
+- **commit 1**: `SharedRegion::child_process_error_count`（child→host health・carry-forward ①）。
+- **commit 2**: `OutProcEffectPostProcessor`（clack-free adapter）+ feature `outproc-effect`（3-way 排他）。
+- **commit 3**: `EffectChildSupervisor`（spawn/watchdog/respawn・watchdog 停止→QUIT→reap→unlink 順）+ `OutProcTeardownGuard` + `start()`/`start_outproc_effect` + StreamGuard mirror + accessor。
+- **commit 4**: native の小バッファ plumbing（`start_default_output_with_clap_buffered`・`BufferSize::Fixed`）+ dry/post peak + `current_child_pid` 観測 + gated harness（parity / kill-test / 32-64f stale）。
+- **commit 5**: carry-forward ② = `process_block_core` の instrument(add-mix) 分岐の offline 検証（test-synth）。
+
+**CI 配線の状況（訂正）**: Rust CI は存在する（`.github/workflows/rust-ci.yml`・PR ごとに fmt / clippy[default + clap-host] / `cargo test --workspace`[default] / `cargo test --features clap-host` / cargo-deny）。本 PR で **`outproc-effect` feature を CI matrix に追加した**（clippy + test）。これで OOP の adapter / supervisor / 観測 seam の non-gated lib test（11 本）と clippy が CI で回る。**OOP transport correctness は PR-A の clack-free gain child parity（`orbit-audio-sandbox` の非 gated テスト = `cargo test --workspace` で既に CI 実行）が担保**する。
+
+**carry-forward ③（実 CLAP dylib parity の CI 化）= defer（follow-on）**: 残るのは実 CLAP plugin（test-effect/test-synth dylib）を要する parity（`effect_parity_gated` / `effect_processor_smoke_gated`）と、device を要する OOP daemon parity（`outproc_effect_gated`）の CI 化。後者は CI に audio device が無く本質的に不可。前者（device-free・dylib のみ）の CI 化は、workspace 非 member の `rust-spike/` plugin を CI でビルド + cross-platform な dylib 拡張子解決（`.dylib`/`.so`）+ 当該テストの un-ignore を要する。**実 CLAP 処理の検証は本プロジェクトの既存方針どおり local-gated**（in-process clap-host の `clap_*_gated` も `#[ignore]`）であり、transport は PR-A gain parity が CI 担保済みなので、dylib-build-in-CI は別 hardening として follow-on に切り出す（advisor 判断: fiddly / 相対的に低価値）。**owner 承認済み（2026-06-30）・follow-on = #361**（OUTPROC_EFFECT_* の TS 層配線 + TeardownGuard 共通化も同 Issue にまとめた）。
+
+**owner action（M1 ゲート）**: gated harness を実機で RUN（`--features outproc-effect -- --ignored`）し、printed stale_pct/callback_max を見て `orbit_audio_sandbox::SLOTS`（現 2）を確定する（許容外なら 3 にして再ビルド + 再 RUN）。harness は flip-ready な const + 計測を納品済み。
+
+### SLOTS のデジタル根拠（offline round-trip probe・2026-06-30・owner 要望で記録）
+
+`orbit-clap-effect-child` の `roundtrip_latency_gated.rs`（device 不要・dylib のみ・`#[ignore]`）で、実 CLAP child + 共有メモリ transport の **1 ブロック round-trip を offline 実測**し、buffer period と比較した（owner 要望: 物理依存の前に詰められる範囲をデジタルで詰める）。dev machine 実測:
+
+| buffer | round-trip（best-case） | period | margin |
+|---|---|---|---|
+| 32f | ≈ 3.8–4.0 µs | 666.7 µs | **~170×** |
+| 64f | ≈ 5.8 µs | 1333.3 µs | **~229×** |
+| 128f | ≈ 9.5 µs | 2666.7 µs | ~282× |
+
+候補B pipelined では child は 1 period 丸ごとの処理時間を持つのに、実処理 + IPC は締切の **~1/170**。よって **steady-state は `SLOTS=2` で stale ≈ 0** が期待できる（デジタル根拠）。**この probe が捕捉しないのは実 RT audio callback 下の OS スケジューラ preemption（tail）のみ** — offline busy-loop は競合が無く tail を再現しないため出る数値は下限。実 RT の occasional stale tail（spike #351 で 32f ≈ 0.45%）は gated 実機 RUN が担当する。
+
+→ **デジタル推奨 = `SLOTS=2`**（現状維持）。owner の実機 RUN は preemption tail の確認であって SLOTS の発見ではない。音声データ正しさ（closed-form oracle sample-exact）・supervision（非 gated CI）・steady-state stale 余裕（本 probe）はすべて device/耳なしで検証済み。
+
+### 実機 gated RUN 結果（owner・2026-06-30・M1 フェーズゲート達成）
+
+owner が `outproc_effect_gated.rs` 3 本を実機（実 RT audio callback）で RUN（`!` セッション実行）。**3 本すべて PASS**:
+
+- **parity**: ratio = **0.50000**（exact・test-effect gain が実デバイス出力経路で sample 通り適用）・fresh/stale/stall = 586/**0**/0・callback_max 16.9µs（budget 20ms 内）。
+- **kill-test**: child を `kill -9` → daemon 生存 → **respawn_count 1**・fresh 451→**903**（新 child が repeat-previous でなく実処理を復帰）・ratio 0.50000・measurement_invalid=false。**3rd-party crash 隔離 + respawn 復帰を実証**。
+- **stale-rate（preemption tail の実測）**: **[64f] stale_pct=0.000%**（fresh 1488 / stale 0 / stall 0）・**[32f] stale_pct=0.000%**（fresh 3000 / stale 0 / stall 1）・callback_max ~15µs。
+
+→ **offline で捕捉できなかった preemption tail は実測 0.000%**。デジタル予測（SLOTS=2 で stale≈0）が実 RT で確証され、**`SLOTS=2` 確定**（bump 不要）。M1 フェーズゲート（既存テスト全緑 + 実機 RUN / effects parity sample-exact / 3rd-party crash 生存 / 32–64f viability）**達成**。
+
 ---
 
 ## 7. Done / フェーズゲート（M1 全体）

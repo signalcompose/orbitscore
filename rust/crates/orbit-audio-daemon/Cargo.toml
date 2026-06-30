@@ -32,6 +32,12 @@ link-audio-verification = ["link-audio", "orbit-link-audio/verification-receiver
 # グラフに足さないよう feature に括る。**現状 link-audio とは併用不可**（combined callback の
 # render 順序は defer・engine_wrap.rs の compile_error 参照）。
 clap-host = ["dep:orbit-clap-host", "dep:rtrb"]
+# γ M1 PR-C: out-of-process effect（別プロセスで実 CLAP effect を host・default off・**clack-free**）。
+# daemon は orbit-audio-sandbox の transport（file-backed mmap MAP_SHARED・memmap2 のみ）を使い、
+# effect child binary（orbit-clap-effect-child）を **subprocess として spawn** する（cargo-depend
+# しない＝daemon の依存グラフは clack-free のまま。clack は spawn された child プロセス内だけに閉じる）。
+# master-bus post-processor 経路なので clap-host / link-audio と併用不可（engine_wrap.rs の compile_error）。
+outproc-effect = ["dep:orbit-audio-sandbox"]
 
 [dependencies]
 orbit-audio-core = { path = "../orbit-audio-core" }
@@ -40,6 +46,10 @@ orbit-audio-native = { path = "../orbit-audio-native" }
 orbit-link-audio = { path = "../orbit-link-audio", optional = true }
 # in-process CLAP hosting library（permissive）。feature `clap-host` 経由でのみ取り込む。
 orbit-clap-host = { path = "../orbit-clap-host", optional = true }
+# out-of-process effect transport（**clack-free**・memmap2 のみ）。feature `outproc-effect` 経由で
+# のみ取り込む。実 CLAP は spawn する child（orbit-clap-effect-child）が host し、daemon は clack を
+# リンクしない（`cargo tree -p orbit-audio-daemon --features outproc-effect` に clack が現れないこと）。
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox", optional = true }
 # reg-ring / install-ring / event-ring producer を名指すため。link-audio / clap-host 経路専用。
 rtrb = { version = "0.3", optional = true }
 tokio = { workspace = true }
@@ -57,3 +67,7 @@ tokio = { workspace = true, features = ["test-util"] }
 # #311 phase 2 Leg 1: golden schedule を play_at でオフラインレンダし PCM を解析する検証に
 # phase-1 の assertion lib を再利用する（test-only）。
 orbit-audio-verify = { path = "../orbit-audio-verify" }
+# γ M1 PR-C gated harness が `orbit_audio_sandbox::SLOTS`（slot 数の verdict 表示）を参照するため。
+# clack-free（memmap2 のみ）なので dev-dep として graph に入っても cargo-deny の GPL-free 不変条件に
+# 影響しない（GPL 隔離対象は orbit-link-audio のみ）。
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }

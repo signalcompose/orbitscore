@@ -9,6 +9,7 @@
 #   - Format check       : cargo fmt --all --check
 #   - Clippy (default)   : cargo clippy --workspace --all-targets --locked -- -D warnings
 #   - Clippy (clap-host) : cargo clippy -p orbit-audio-daemon --features clap-host --all-targets --locked -- -D warnings
+#   - Clippy (outproc)   : cargo clippy -p orbit-audio-daemon --features outproc-effect --all-targets --locked -- -D warnings
 #   - license/dep gate   : cargo deny check（cargo-deny 未インストール時は skip = fail-open）
 # cargo test は実行時間が長いため対象外（CI で非ゲートテストを検証・MVP・必要なら follow-on）。
 #
@@ -55,6 +56,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings ||
   die "clippy (default features) failed."
 cargo clippy -p orbit-audio-daemon --features clap-host --all-targets --locked -- -D warnings ||
   die "clippy (clap-host feature) failed."
+cargo clippy -p orbit-audio-daemon --features outproc-effect --all-targets --locked -- -D warnings ||
+  die "clippy (outproc-effect feature) failed."
 
 # cargo-deny は別 CI ジョブ（license/dependency gate）。未インストール時は skip して push を通す
 # （fail-open＝hook が全 rust push をブロックしない・CI が backstop）。成功バナーは実際に

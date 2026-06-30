@@ -83,10 +83,11 @@ fn main() -> Result<()> {
     // in-place process_block 用の作業バッファ（ループ前に確保 = RT 安全）。
     let mut scratch = vec![0.0f32; BUF_LEN];
 
-    // plugin.process() が失敗したブロック数（ループ外で報告するため累積する単純カウント）。
-    // PR-B では child→host の health signal は SharedRegion に持たせない（PR-A の frozen transport を
-    // 触らない）。child の health 可観測性は PR-C で §4.5 の supervision signal 群と一緒に設計する。
-    // それまでは終了時に stderr へ集計を出すことで silent-failure を回避する（loop 内では出力しない）。
+    // plugin.process() が失敗したブロック数。PR-C（carry-forward ①）で health signal を
+    // `SharedRegion::child_process_error_count` に載せ、失敗ブロックごとに host が live に読める
+    // shared counter へ `fetch_add` する（effect は失敗時 dry 素通しで silent になるための可視化）。
+    // local の `process_errors` は **このプロセス**の集計で、終了時 stderr 報告に使う（respawn を跨ぐと
+    // shared counter は累積するが、stderr はこの child の寄与だけを出す方が診断的）。
     let mut process_errors: u64 = 0;
 
     let mut last: u64 = 0;
@@ -114,9 +115,15 @@ fn main() -> Result<()> {
             };
 
             // 実 CLAP effect で 1 block を in-place 加工（共有メモリ外の scratch 上で）。
-            // 失敗時 process_block は scratch を dry のまま素通しする。ここでは集計のみ（終了時に報告）。
+            // 失敗時 process_block は scratch を dry のまま素通しする。
             if !effect.process_block(&mut scratch[..count]) {
                 process_errors += 1;
+                // carry-forward ①: host(supervisor / accessor)が live に読める shared counter へ反映。
+                // SAFETY: region は map 済みで有効。fetch_add は MAP_SHARED でクロスプロセス可視。
+                // Relaxed で十分（audio data の順序づけに関与しない観測用 counter）。
+                unsafe {
+                    (*region).child_process_error_count.fetch_add(1, Relaxed);
+                }
             }
 
             // SAFETY: 上と同じ slot 排他。scratch（加工済み出力）を output slot へ書き戻す。

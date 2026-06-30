@@ -8,6 +8,8 @@ name: Rust CI
 # - ubuntu-latest で permissive + cross-platform な default グラフを検証する。
 # - `link-audio` feature(GPL・Ableton Link・build.rs が macOS 専用)は ubuntu で
 #   ビルド不可かつ GPL 隔離方針のため CI では有効化しない。`clap-host`(permissive)は検証する。
+# - `outproc-effect` feature(γ M1 PR-C・clack-free・default off)も検証する(clack を child に隔離した
+#   OOP effect 経路。非 gated lib test を CI で回す)。
 # - 実機 output device / multicast を要する gated テストは全て `#[ignore]` なので
 #   `cargo test` で自動的に skip される（CI に audio device は無い）。
 
@@ -48,11 +50,19 @@ jobs:
       - name: Clippy (clap-host feature)
         run: cargo clippy -p orbit-audio-daemon --features clap-host --all-targets --locked -- -D warnings
 
+      # γ M1 PR-C: out-of-process effect (clack-free・default off)。adapter / supervisor / 観測 seam の
+      # non-gated lib test と clippy を CI 対象にする。clap-host とは feature 排他。
+      - name: Clippy (outproc-effect feature)
+        run: cargo clippy -p orbit-audio-daemon --features outproc-effect --all-targets --locked -- -D warnings
+
       - name: Test (default features, gated tests auto-skipped)
         run: cargo test --workspace --locked
 
       - name: Test (clap-host feature, gated tests auto-skipped)
         run: cargo test -p orbit-audio-daemon --features clap-host --locked
+
+      - name: Test (outproc-effect feature, gated tests auto-skipped)
+        run: cargo test -p orbit-audio-daemon --features outproc-effect --locked
 
   cargo-deny:
     name: license / dependency gate
