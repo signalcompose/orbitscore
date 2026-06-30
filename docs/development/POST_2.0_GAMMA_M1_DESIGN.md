@@ -177,6 +177,16 @@ CI は Rust gated 非実行（device なし・`#[ignore]` 自動 skip）。offli
 
 → **デジタル推奨 = `SLOTS=2`**（現状維持）。owner の実機 RUN は preemption tail の確認であって SLOTS の発見ではない。音声データ正しさ（closed-form oracle sample-exact）・supervision（非 gated CI）・steady-state stale 余裕（本 probe）はすべて device/耳なしで検証済み。
 
+### 実機 gated RUN 結果（owner・2026-06-30・M1 フェーズゲート達成）
+
+owner が `outproc_effect_gated.rs` 3 本を実機（実 RT audio callback）で RUN（`!` セッション実行）。**3 本すべて PASS**:
+
+- **parity**: ratio = **0.50000**（exact・test-effect gain が実デバイス出力経路で sample 通り適用）・fresh/stale/stall = 586/**0**/0・callback_max 16.9µs（budget 20ms 内）。
+- **kill-test**: child を `kill -9` → daemon 生存 → **respawn_count 1**・fresh 451→**903**（新 child が repeat-previous でなく実処理を復帰）・ratio 0.50000・measurement_invalid=false。**3rd-party crash 隔離 + respawn 復帰を実証**。
+- **stale-rate（preemption tail の実測）**: **[64f] stale_pct=0.000%**（fresh 1488 / stale 0 / stall 0）・**[32f] stale_pct=0.000%**（fresh 3000 / stale 0 / stall 1）・callback_max ~15µs。
+
+→ **offline で捕捉できなかった preemption tail は実測 0.000%**。デジタル予測（SLOTS=2 で stale≈0）が実 RT で確証され、**`SLOTS=2` 確定**（bump 不要）。M1 フェーズゲート（既存テスト全緑 + 実機 RUN / effects parity sample-exact / 3rd-party crash 生存 / 32–64f viability）**達成**。
+
 ---
 
 ## 7. Done / フェーズゲート（M1 全体）
