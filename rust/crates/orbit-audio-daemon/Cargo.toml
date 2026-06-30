@@ -67,3 +67,7 @@ tokio = { workspace = true, features = ["test-util"] }
 # #311 phase 2 Leg 1: golden schedule を play_at でオフラインレンダし PCM を解析する検証に
 # phase-1 の assertion lib を再利用する（test-only）。
 orbit-audio-verify = { path = "../orbit-audio-verify" }
+# γ M1 PR-C gated harness が `orbit_audio_sandbox::SLOTS`（slot 数の verdict 表示）を参照するため。
+# clack-free（memmap2 のみ）なので dev-dep として graph に入っても cargo-deny の GPL-free 不変条件に
+# 影響しない（GPL 隔離対象は orbit-link-audio のみ）。
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }

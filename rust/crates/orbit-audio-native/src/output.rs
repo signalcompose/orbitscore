@@ -275,7 +275,7 @@ type OutputInnerStart = (
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
 /// 同時に初期化する（hardware-only）。呼び出し側は config ミスマッチを意識しなくてよい。
 pub fn start_default_output() -> Result<OutputStart, OutputError> {
-    let (engine, stream, stats, _cb) = start_output_inner(None, None)?;
+    let (engine, stream, stats, _cb) = start_output_inner(None, None, None)?;
     Ok((engine, stream, stats))
 }
 
@@ -291,7 +291,7 @@ pub fn start_default_output_with_link_egress(
         // cap は control が強制するので最大 MAX_LINK_CHANNELS。callback で push のみ・realloc を避ける。
         channels: Vec::with_capacity(MAX_LINK_CHANNELS),
     };
-    let (engine, stream, stats, _cb) = start_output_inner(Some(link), None)?;
+    let (engine, stream, stats, _cb) = start_output_inner(Some(link), None, None)?;
     Ok((engine, stream, stats, reg_tx))
 }
 
@@ -303,7 +303,18 @@ pub fn start_default_output_with_link_egress(
 pub fn start_default_output_with_clap(
     post: Box<dyn PostProcessor>,
 ) -> Result<ClapHostStart, OutputError> {
-    let (engine, stream, stats, cb) = start_output_inner(None, Some(post))?;
+    start_default_output_with_clap_buffered(post, None)
+}
+
+/// [`start_default_output_with_clap`] の buffer-size 指定版（γ M1 PR-C・gated stale-rate harness 用）。
+/// `buffer_frames` が `Some(n)` なら cpal に `BufferSize::Fixed(n)` を要求する（device が 32/64f 等の
+/// 小バッファをサポートする前提・非対応 device では build/play がエラーになり gated test が loud に失敗）。
+/// `None` は `BufferSize::Default`（既存経路とビット同一）。clap-host 経路は従来どおり `None` を使う。
+pub fn start_default_output_with_clap_buffered(
+    post: Box<dyn PostProcessor>,
+    buffer_frames: Option<u32>,
+) -> Result<ClapHostStart, OutputError> {
+    let (engine, stream, stats, cb) = start_output_inner(None, Some(post), buffer_frames)?;
     // post=Some の経路では inner が必ず CallbackTimeStats を作る。
     let cb = cb.expect("clap path always creates CallbackTimeStats");
     Ok((engine, stream, stats, cb))
@@ -312,10 +323,12 @@ pub fn start_default_output_with_clap(
 /// `start_default_output` / `_with_link_egress` / `_with_clap` の共通実装。
 /// `link` を渡すと cpal callback に egress 経路を、`post` を渡すと master-bus post-processor を
 /// 組み込む（両方 None なら hardware-only でビット同一）。`post` 有り時のみ callback-duration
-/// 計測 stats を作って返す。
+/// 計測 stats を作って返す。`buffer_frames` が `Some` なら `BufferSize::Fixed` を要求する（小バッファ
+/// 計測・通常 None で device 既定）。
 fn start_output_inner(
     link: Option<LinkEgress>,
     post: Option<Box<dyn PostProcessor>>,
+    buffer_frames: Option<u32>,
 ) -> Result<OutputInnerStart, OutputError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
@@ -324,7 +337,12 @@ fn start_output_inner(
         .map_err(|e| OutputError::NoConfig(e.to_string()))?;
 
     let sample_format = supported.sample_format();
-    let config: StreamConfig = supported.config();
+    let mut config: StreamConfig = supported.config();
+    // 小バッファ計測（gated stale-rate harness）では Fixed を要求する。None は device 既定（Default）で
+    // 既存経路とビット同一。spike(orbit-sandbox-spike) が実証した cpal の Fixed 指定と同じ idiom。
+    if let Some(frames) = buffer_frames {
+        config.buffer_size = cpal::BufferSize::Fixed(frames);
+    }
     let sample_rate = config.sample_rate.0;
     let channels = config.channels;
 

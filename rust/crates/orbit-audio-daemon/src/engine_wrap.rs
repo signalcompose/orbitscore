@@ -340,9 +340,13 @@ impl EngineWrap {
         ));
 
         // 3. cpal stream 起動（ここで device の sample_rate が確定する）。adapter を注入する。
+        //    gated stale-rate harness は cfg.buffer_frames に 32/64 を渡し小バッファを要求する。
         let (engine, stream, stream_stats, cb_stats) =
-            orbit_audio_native::start_default_output_with_clap(processor)
-                .map_err(WrapError::Output)?;
+            orbit_audio_native::start_default_output_with_clap_buffered(
+                processor,
+                cfg.buffer_frames,
+            )
+            .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
 
         // 4. 初回 child を同期 spawn（spawn 失敗を呼び出し側に返すため supervisor 外で起動）。
@@ -363,6 +367,11 @@ impl EngineWrap {
                 )));
             }
         };
+        // current_child_pid を watchdog 起動前に publish（startup race 回避・advisor）: test が
+        // watchdog の初回 store を待たずに PID を読めるようにする。
+        stats
+            .current_child_pid
+            .store(first_child.id(), Ordering::Relaxed);
 
         // 5. supervisor（watchdog spawn・2nd control mapping を内部で open）。
         let supervisor = EffectChildSupervisor::spawn(
@@ -728,6 +737,21 @@ impl EngineWrap {
                 tracing::warn!("outproc mutex poisoned; outproc_callback_stats returning None");
                 None
             }
+        }
+    }
+
+    /// test harness 用: OOP effect の dry / post ピークをリセットする。kill-test / parity の two-phase
+    /// 計測で位相を分けるのに使う（`clap_reset_post_peak` と同設計）。`#[doc(hidden)]`。
+    #[cfg(feature = "outproc-effect")]
+    #[doc(hidden)]
+    pub fn outproc_reset_peaks(&self) {
+        match self.outproc.lock() {
+            Ok(g) => {
+                if let Some(c) = g.as_ref() {
+                    c.stats.reset_peaks();
+                }
+            }
+            Err(_) => tracing::warn!("outproc mutex poisoned; outproc_reset_peaks skipped"),
         }
     }
 

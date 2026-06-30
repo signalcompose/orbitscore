@@ -27,7 +27,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -62,6 +62,9 @@ pub struct OutProcEffectConfig {
     pub plugin: PathBuf,
     /// CLAP plugin id（None なら単一プラグインの場合のみ OK）。
     pub plugin_id: Option<String>,
+    /// cpal に要求する固定バッファフレーム数（gated stale-rate harness が 32/64 を渡す）。`None` は
+    /// device 既定（`BufferSize::Default`）。production の env 経路は通常 `None`。
+    pub buffer_frames: Option<u32>,
 }
 
 impl OutProcEffectConfig {
@@ -82,10 +85,16 @@ impl OutProcEffectConfig {
                     .to_string()
             })?;
         let plugin_id = std::env::var("ORBIT_EFFECT_PLUGIN_ID").ok();
+        // production は通常 device 既定。`ORBIT_EFFECT_BUFFER_FRAMES` で明示できる（無効値は無視 = None）。
+        let buffer_frames = std::env::var("ORBIT_EFFECT_BUFFER_FRAMES")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .filter(|&n| n > 0);
         Ok(Self {
             child_exe,
             plugin,
             plugin_id,
+            buffer_frames,
         })
     }
 }
@@ -130,11 +139,28 @@ pub struct OutProcEffectStats {
     pub measurement_invalid: AtomicBool,
     /// shm の `child_process_error_count`（child の per-block 処理失敗累積）を watchdog がミラーした値。
     pub child_process_error_count: AtomicU64,
+    /// dry（effect 適用前）の abs ピーク振幅の f32 bits（adapter が毎 callback `fetch_max`）。非負 f32 の
+    /// bits は u32 として単調なので fetch_max が正しく機能する（`ClapProcessorStats` と同手法）。
+    pub dry_peak_bits: AtomicU32,
+    /// post（effect 適用後）の abs ピーク振幅の f32 bits（adapter が毎 callback `fetch_max`）。gated
+    /// parity が `post/dry ≈ 0.5`（test-effect の固定 gain）を検証する。
+    pub post_peak_bits: AtomicU32,
+    /// 現在稼働中の child の PID（start / respawn 時に store）。gated kill-test がこの PID を kill して
+    /// daemon の生存 + respawn 復帰を検証する。0 = 未起動。
+    pub current_child_pid: AtomicU32,
 }
 
 impl OutProcEffectStats {
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
+    }
+
+    /// dry / post ピークを 0 にリセットする。`fetch_max` で累積するため、kill-test の「kill 前の effected
+    /// peak」が「kill 後の復帰 peak」に混ざらないよう位相を分けるのに使う（`ClapProcessorStats::reset_post_peak`
+    /// と同じ two-phase 計測の seam）。
+    pub fn reset_peaks(&self) {
+        self.dry_peak_bits.store(0, Ordering::Relaxed);
+        self.post_peak_bits.store(0, Ordering::Relaxed);
     }
 
     /// 非 RT 側（accessor / gated harness）が読むスナップショット。
@@ -149,6 +175,9 @@ impl OutProcEffectStats {
             last_respawn_ns: self.last_respawn_ns.load(Ordering::Relaxed),
             measurement_invalid: self.measurement_invalid.load(Ordering::Relaxed),
             child_process_error_count: self.child_process_error_count.load(Ordering::Relaxed),
+            dry_peak: f32::from_bits(self.dry_peak_bits.load(Ordering::Relaxed)),
+            post_peak: f32::from_bits(self.post_peak_bits.load(Ordering::Relaxed)),
+            current_child_pid: self.current_child_pid.load(Ordering::Relaxed),
         }
     }
 }
@@ -165,6 +194,9 @@ pub struct OutProcEffectSnapshot {
     pub last_respawn_ns: u64,
     pub measurement_invalid: bool,
     pub child_process_error_count: u64,
+    pub dry_peak: f32,
+    pub post_peak: f32,
+    pub current_child_pid: u32,
 }
 
 /// `PipelinedEffectHost`（候補B 状態機械・clack-free）を `impl PostProcessor` で包む OOP effect adapter。
@@ -216,7 +248,17 @@ impl PostProcessor for OutProcEffectPostProcessor {
             self.teardown_done.store(true, Ordering::Release);
             return;
         }
+        // dry（effect 適用前）の abs ピークを記録（gated parity の baseline）。
+        self.stats
+            .dry_peak_bits
+            .fetch_max(peak_bits(data), Ordering::Relaxed);
+
         self.host.process_block(data);
+
+        // post（effect 適用後）の abs ピークを記録（gated parity: post/dry ≈ test-effect gain）。
+        self.stats
+            .post_peak_bits
+            .fetch_max(peak_bits(data), Ordering::Relaxed);
         // host の plain counter を control thread が読めるよう atomic ミラー（RT 安全: store のみ）。
         self.stats.fresh.store(self.host.fresh, Ordering::Relaxed);
         self.stats.stale.store(self.host.stale, Ordering::Relaxed);
@@ -226,6 +268,13 @@ impl PostProcessor for OutProcEffectPostProcessor {
             .store(self.host.frames_clamped, Ordering::Relaxed);
         self.stats.callback_count.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// interleaved f32 の abs ピークを f32 bits で返す（非負 f32 bits は u32 として単調 = `fetch_max` 可）。
+/// `ClapPostProcessor` の post-peak と同手法。空 slice は 0。
+#[inline]
+fn peak_bits(data: &[f32]) -> u32 {
+    data.iter().map(|s| s.abs().to_bits()).max().unwrap_or(0)
 }
 
 /// `--shm`/`--plugin`/`--sample-rate`(/`--plugin-id`) を渡して effect child を 1 つ起動する。
@@ -359,6 +408,8 @@ impl EffectChildSupervisor {
                                 sample_rate,
                             ) {
                                 Ok(c) => {
+                                    // PID を先に publish（kill-test が新 child を kill できるよう）。
+                                    stats.current_child_pid.store(c.id(), Ordering::Relaxed);
                                     child = c;
                                     stats.respawn_count.fetch_add(1, Ordering::Relaxed);
                                     stats
