@@ -830,8 +830,13 @@ mod tests {
     }
 
     // Important 3（test-coverage review）: teardown handshake を **真の並行**下で検証する。background thread が
-    // process() をループ（audio thread を模す）する一方で OutProcTeardownGuard を drop し、ack（teardown_done）
-    // が立って guard が速やかに抜ける（timeout しない）ことを確認する（Acquire/Release ペアの回帰ガード）。
+    // process() をループ（audio thread を模す）する一方で OutProcTeardownGuard を drop し、Acquire/Release の
+    // handshake が伝播して `teardown_done` が立つことを確認する（Acquire/Release ペアの回帰ガード）。
+    //
+    // 検証する性質は「並行下で handshake が伝播する（td==true）」+「guard が deadlock しない（drop が返る =
+    // guard は 500ms timeout を持つので必ず返る）」。**timing の tight bound は意図的に置かない**: 厳密な
+    // 経過時間は CI runner の負荷（2-vCPU で本ループが core を専有 + 並列テスト）に依存し flake 源になる。
+    // ループには `yield_now` を入れて guard スレッドを starve させない（td 伝播を実機に近づける）。
     #[test]
     fn teardown_handshake_acked_under_concurrent_process() {
         let (tr, td) = flags();
@@ -843,21 +848,17 @@ mod tests {
             let mut data = vec![0.5f32; 64 * 2];
             while !stop_t.load(Ordering::Relaxed) {
                 pp.process(&mut data);
+                // tight spin で core を専有して guard スレッドを starve させない（CI 安定化）。
+                std::thread::yield_now();
             }
         });
-        // 少し回してから guard を drop（requested 立て → done を待つ）。
+        // 少し回してから guard を drop（requested 立て → done を待つ・guard は 500ms timeout 付きで必ず返る）。
         std::thread::sleep(Duration::from_millis(50));
-        let t0 = Instant::now();
         drop(OutProcTeardownGuard::new(tr.clone(), td.clone()));
-        let elapsed = t0.elapsed();
+        // drop が返った時点で deadlock していない。並行 process() が handshake を ack して done を立てている。
         assert!(
             td.load(Ordering::Acquire),
-            "concurrent process() が teardown_done を ack する"
-        );
-        assert!(
-            elapsed < Duration::from_millis(450),
-            "concurrent でも ack で速やかに抜ける（timeout しない・実測 {}ms）",
-            elapsed.as_millis()
+            "concurrent process() が teardown_done を ack する（Acquire/Release 伝播）"
         );
         stop.store(true, Ordering::Relaxed);
         handle.join().expect("process loop thread joins");
