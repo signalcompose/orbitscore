@@ -422,6 +422,13 @@ impl EffectChildSupervisor {
                     match child.try_wait() {
                         // teardown と crash の race: shutdown 中の終了は正常 teardown なので respawn しない
                         // （guard で先に弾く・advisor）。
+                        //
+                        // 弱順序 HW（ARM 等）の注記（@claude bot review）: supervisor の `shutdown` store(Release)
+                        // が、ループ先頭(line ~411)の load と本 guard の load の **両方**にまだ伝播していない瞬間に
+                        // child crash を検知すると、下の `Ok(Some(status))` 側へ進んで **1 回だけ spurious respawn**
+                        // しうる。だがその直後の次 iteration 先頭の load が `shutdown=true` を観測して break し、
+                        // 終了経路が QUIT/reap で当該 spurious child も確実に始末するため **次 iteration で安全に
+                        // 収束**する（orphan にならない）。x86-64 では事実上発生しない。意図的に許容するトレードオフ。
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
                             try_wait_errors = 0;
