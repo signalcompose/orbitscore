@@ -492,11 +492,17 @@ impl EffectChildSupervisor {
             }
         };
 
-        // thread spawn 成功 → first_child を watchdog へ渡す（recv 側が待っている）。送信失敗（thread が
-        // 即異常終了した場合のみ・通常は到達しない）は first_child を reap する。
+        // thread spawn 成功 → first_child を watchdog へ渡す（recv 側が待っている）。送信失敗は watchdog が
+        // recv 前に消えた場合のみで実質到達不能（thread の最初の動作が recv・その前に消えるのは region_ptr が
+        // panic する等＝起きない）。万一起きたら orphan を reap・shm を unlink し、**supervise 不能を false-Ok
+        // にせず Err で伝える**（dead watchdog を抱えた Self を返さない）。
         if let Err(std::sync::mpsc::SendError(mut orphan)) = child_tx.send(first_child) {
             let _ = orphan.kill();
             let _ = orphan.wait();
+            let _ = std::fs::remove_file(&shm_path);
+            return Err(io::Error::other(
+                "outproc effect watchdog thread exited before receiving the first child",
+            ));
         }
 
         Ok(Self {
