@@ -45,6 +45,14 @@ pub enum WrapError {
     /// 専用スレッド不在・mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("clap host runtime error: {0}")]
     Clap(String),
+    /// out-of-process effect がこの daemon ビルド/インスタンスで利用できない（feature `outproc-effect`
+    /// 無効、または設定不足）。TS 層は feature-gap として warn-once で握り潰す（γ M1 PR-C）。
+    #[error("out-of-process effect unavailable: {0}")]
+    OutProcEffectUnavailable(String),
+    /// out-of-process effect は利用可能だが runtime で失敗した（shm 作成失敗・child spawn 失敗・
+    /// mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
+    #[error("out-of-process effect runtime error: {0}")]
+    OutProcEffect(String),
 }
 
 /// 共有可能なエンジン wrapper。
@@ -88,6 +96,23 @@ pub struct EngineWrap {
     /// `Mutex` に内包し `&self` のまま提供する。本番 `start()` で `Some`、test backend 経路では `None`。
     #[cfg(feature = "clap-host")]
     clap: Mutex<Option<ClapControl>>,
+    /// out-of-process effect の control-side ハンドル（feature `outproc-effect` 専用・γ M1 PR-C）。
+    /// 観測 stats（fresh/stale/stall/respawn/child error）と callback-duration stats を保持する。
+    /// 本番 `start()` で `Some`、test backend 経路では `None`（`clap` / `link` と同設計）。
+    #[cfg(feature = "outproc-effect")]
+    outproc: Mutex<Option<OutProcControl>>,
+}
+
+/// out-of-process effect の control-side ハンドル一式（feature `outproc-effect` 専用）。
+/// supervisor 本体（watchdog / child）は `StreamGuard::_child_guard` が保持する。ここは accessor が
+/// 読む観測 stats だけを持つ（`ClapControl` と同様 read-path のハンドル）。
+#[cfg(feature = "outproc-effect")]
+struct OutProcControl {
+    /// 観測 stats（fresh/stale/stall/frames_clamped/callback_count/respawn/child error）。
+    /// adapter（audio thread）と watchdog（control thread）が書き、accessor / gated harness が読む。
+    stats: Arc<crate::outproc_effect::OutProcEffectStats>,
+    /// callback-duration 統計（A0 §6: CoreAudio+cpal は xrun 不発火 → RT 健全性は callback 実測時間で測る）。
+    cb_stats: Arc<orbit_audio_native::CallbackTimeStats>,
 }
 
 /// CLAP host の control-side ハンドル一式（feature `clap-host` 専用）。
@@ -150,14 +175,24 @@ compile_error!(
 ///   での暗黙 stop_processing/drop = CLAP 仕様違反（strict plugin で UB）。
 /// - `_clap_thread` が後 = stream 停止後に専用スレッドを join し、instance の home thread で deactivate。
 ///
-/// なお `link-audio` と `clap-host` は併用不可（`compile_error!`）なので両ブロックが同時に存在する
-/// ことはない。
+/// ## `outproc-effect` ビルド時（`_outproc_teardown` → `_stream` → `_child_guard`・γ M1 PR-C）
+/// clap-host と同型の load-bearing 順:
+/// - `_outproc_teardown` が先 = audio thread の adapter を quiesce（transport submit 停止）してから stream を止める。
+/// - `_child_guard` が後 = stream 停止後に watchdog を止め child を QUIT/reap し shm を unlink する。
+///
+/// なお `link-audio` / `clap-host` / `outproc-effect` は 3 者すべて併用不可（`compile_error!`）なので
+/// 複数ブロックが同時に存在することはない。
 pub struct StreamGuard {
     /// carry-forward #1（clap-host）: stream 停止 **前** に drop され、audio thread で `stop_processing`
     /// を済ませる（`ClapTeardownGuard::drop` が teardown_requested を立て teardown_done を待つ）。
     /// **field 順は load-bearing**: これは `_stream` より前に宣言する（Rust の field drop 順 = 宣言順）。
     #[cfg(feature = "clap-host")]
     _clap_teardown: crate::clap_host::ClapTeardownGuard,
+    /// γ M1 PR-C（outproc-effect）: stream 停止 **前** に drop され、audio thread の adapter を quiesce
+    /// させる（transport への submit を止めて dry 素通しに入る）。**field 順は load-bearing**: `_stream`
+    /// より前に宣言する（clap-host とは feature 排他なので同時には存在しない）。
+    #[cfg(feature = "outproc-effect")]
+    _outproc_teardown: crate::outproc_effect::OutProcTeardownGuard,
     _stream: OutputStream,
     #[cfg(feature = "link-audio")]
     _link: Option<crate::link_audio::LinkAudioGuard>,
@@ -166,6 +201,10 @@ pub struct StreamGuard {
     /// 後に宣言する。
     #[cfg(feature = "clap-host")]
     _clap_thread: crate::clap_host::ClapThreadGuard,
+    /// γ M1 PR-C（outproc-effect）: stream 停止 **後** に drop され、watchdog を止めて（respawn 停止）
+    /// child へ QUIT → reap → shm unlink する。**field 順は load-bearing**: `_stream` より後に宣言する。
+    #[cfg(feature = "outproc-effect")]
+    _child_guard: crate::outproc_effect::EffectChildSupervisor,
 }
 
 impl EngineWrap {
@@ -174,7 +213,11 @@ impl EngineWrap {
     ///
     /// 本番経路は `cpal::Stream` が `!Send` のため [`Self::start_with`] の
     /// `Box<dyn Any + Send>` guard 型に詰められない。そのため本番は専用パス。
-    #[cfg(all(not(feature = "link-audio"), not(feature = "clap-host")))]
+    #[cfg(all(
+        not(feature = "link-audio"),
+        not(feature = "clap-host"),
+        not(feature = "outproc-effect")
+    ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats) = orbit_audio_native::start_default_output()?;
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
@@ -251,6 +294,107 @@ impl EngineWrap {
         ))
     }
 
+    /// feature `outproc-effect` 版（γ M1 PR-C・Issue #359）: cpal 出力を OOP effect master-bus
+    /// post-processor 経路付きで起動する。production は環境変数（`ORBIT_EFFECT_PLUGIN` 等）から設定を
+    /// 組む。設定不足は `OutProcEffectUnavailable`（feature-gap と同じ握り潰し対象）。
+    #[cfg(all(
+        feature = "outproc-effect",
+        not(feature = "clap-host"),
+        not(feature = "link-audio")
+    ))]
+    pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        let cfg = crate::outproc_effect::OutProcEffectConfig::from_env()
+            .map_err(WrapError::OutProcEffectUnavailable)?;
+        Self::start_outproc_effect(cfg)
+    }
+
+    /// OOP effect 経路の本体（`start()`（env 由来）と gated harness（明示 path）が共有する）。
+    /// shm 作成 → host mmap → adapter → cpal stream（sample_rate 確定）→ 初回 child spawn → watchdog
+    /// supervisor の順で組み、`StreamGuard` の field 順で teardown を強制する（drop 順は本ファイル冒頭の
+    /// `StreamGuard` doc 参照）。初回 child spawn 失敗は shm を掃除して `OutProcEffect` を返す。
+    #[cfg(feature = "outproc-effect")]
+    pub fn start_outproc_effect(
+        cfg: crate::outproc_effect::OutProcEffectConfig,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        use crate::outproc_effect::{
+            spawn_effect_child, EffectChildSupervisor, OutProcEffectPostProcessor,
+            OutProcEffectStats, OutProcTeardownGuard,
+        };
+        use std::sync::atomic::AtomicBool;
+
+        // 1. shm 作成 → host mmap（adapter が所有・audio thread）。
+        let shm_path = crate::outproc_effect::unique_shm_path();
+        let host_mmap = orbit_audio_sandbox::create_shared(&shm_path)
+            .map_err(|e| WrapError::OutProcEffect(format!("create shm {shm_path:?}: {e}")))?;
+        let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(host_mmap);
+
+        // 2. teardown flags + 観測 stats + adapter。
+        let teardown_requested = Arc::new(AtomicBool::new(false));
+        let teardown_done = Arc::new(AtomicBool::new(false));
+        let stats = OutProcEffectStats::new();
+        let processor = Box::new(OutProcEffectPostProcessor::new(
+            host,
+            teardown_requested.clone(),
+            teardown_done.clone(),
+            stats.clone(),
+        ));
+
+        // 3. cpal stream 起動（ここで device の sample_rate が確定する）。adapter を注入する。
+        let (engine, stream, stream_stats, cb_stats) =
+            orbit_audio_native::start_default_output_with_clap(processor)
+                .map_err(WrapError::Output)?;
+        let sample_rate = stream.sample_rate;
+
+        // 4. 初回 child を同期 spawn（spawn 失敗を呼び出し側に返すため supervisor 外で起動）。
+        //    失敗時は作成済み shm を掃除する（stream はこの関数の早期 return で drop される）。
+        let first_child = match spawn_effect_child(
+            &cfg.child_exe,
+            &shm_path,
+            &cfg.plugin,
+            cfg.plugin_id.as_deref(),
+            sample_rate,
+        ) {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = std::fs::remove_file(&shm_path);
+                return Err(WrapError::OutProcEffect(format!(
+                    "spawn effect child {:?}: {e}",
+                    cfg.child_exe
+                )));
+            }
+        };
+
+        // 5. supervisor（watchdog spawn・2nd control mapping を内部で open）。
+        let supervisor = EffectChildSupervisor::spawn(
+            first_child,
+            shm_path,
+            stats.clone(),
+            cfg.child_exe,
+            cfg.plugin,
+            cfg.plugin_id,
+            sample_rate,
+        )
+        .map_err(|e| WrapError::OutProcEffect(format!("spawn watchdog: {e}")))?;
+
+        // 6. wrap 構築 + control 注入。
+        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        *wrap
+            .outproc
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))? =
+            Some(OutProcControl { stats, cb_stats });
+
+        // 7. StreamGuard（field 順 = teardown 順）。
+        Ok((
+            wrap,
+            StreamGuard {
+                _outproc_teardown: OutProcTeardownGuard::new(teardown_requested, teardown_done),
+                _stream: stream,
+                _child_guard: supervisor,
+            },
+        ))
+    }
+
     /// [`AudioBackend`] 経由で起動する（integration test 用）。
     ///
     /// guard は `Box<dyn Any + Send>` の不透明ハンドル。scope 終了まで
@@ -292,6 +436,9 @@ impl EngineWrap {
             // clap-host: 本番 `start()` が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "clap-host")]
             clap: Mutex::new(None),
+            // outproc-effect: 本番 `start()` / `start_outproc_effect` が spawn 後に Some を注入する。
+            #[cfg(feature = "outproc-effect")]
+            outproc: Mutex::new(None),
         })
     }
 
@@ -553,6 +700,35 @@ impl EngineWrap {
     #[cfg(not(feature = "clap-host"))]
     pub fn clap_process_error_count(&self) -> u64 {
         self.clap_process_errors.load(Ordering::Relaxed)
+    }
+
+    /// test harness / gated 計測用: OOP effect の観測スナップショット（fresh/stale/stall/respawn/
+    /// child error 等）。slot 数決定（stale 率）と child crash 生存（respawn）の検証に使う。`#[doc(hidden)]`。
+    /// plugin 未起動 / outproc 無効 / poison 時は None（poison は warn で区別）。
+    #[cfg(feature = "outproc-effect")]
+    #[doc(hidden)]
+    pub fn outproc_effect_stats(&self) -> Option<crate::outproc_effect::OutProcEffectSnapshot> {
+        match self.outproc.lock() {
+            Ok(g) => g.as_ref().map(|c| c.stats.snapshot()),
+            Err(_) => {
+                tracing::warn!("outproc mutex poisoned; outproc_effect_stats returning None");
+                None
+            }
+        }
+    }
+
+    /// test harness / RT 監視用: OOP effect の callback-duration スナップショット（A0 §6・budget 検証）。
+    /// `#[doc(hidden)]`。outproc 無効時は None。poison 時も None だが warn で区別する。
+    #[cfg(feature = "outproc-effect")]
+    #[doc(hidden)]
+    pub fn outproc_callback_stats(&self) -> Option<orbit_audio_native::CallbackTimeSnapshot> {
+        match self.outproc.lock() {
+            Ok(g) => g.as_ref().map(|c| c.cb_stats.snapshot()),
+            Err(_) => {
+                tracing::warn!("outproc mutex poisoned; outproc_callback_stats returning None");
+                None
+            }
+        }
     }
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。

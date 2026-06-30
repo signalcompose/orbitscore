@@ -681,6 +681,11 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         // CLAP も LinkAudio と同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする。
         WrapError::ClapUnavailable(msg) => ProtocolError::new("CLAP_UNAVAILABLE", msg.clone()),
         WrapError::Clap(msg) => ProtocolError::new("CLAP_RUNTIME", msg.clone()),
+        // OOP effect も同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする（γ M1 PR-C）。
+        WrapError::OutProcEffectUnavailable(msg) => {
+            ProtocolError::new("OUTPROC_EFFECT_UNAVAILABLE", msg.clone())
+        }
+        WrapError::OutProcEffect(msg) => ProtocolError::new("OUTPROC_EFFECT_RUNTIME", msg.clone()),
     }
 }
 
