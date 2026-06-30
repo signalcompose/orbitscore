@@ -905,6 +905,7 @@ dependencies = [
  "futures-util",
  "orbit-audio-core",
  "orbit-audio-native",
+ "orbit-audio-sandbox",
  "orbit-audio-verify",
  "orbit-clap-host",
  "orbit-link-audio",
