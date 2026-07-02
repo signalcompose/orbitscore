@@ -15,11 +15,22 @@ import { SuperColliderPlayer } from './supercollider-player'
  * `process.env`）。
  */
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
-  const kind = resolveEngineKind(env[ENGINE_ENV_VAR])
-  if (kind === 'supercollider') {
-    console.log('🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=sc)')
+  const raw = env[ENGINE_ENV_VAR]
+  if (resolveEngineKind(raw) === 'supercollider') {
+    console.log(`🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=${raw})`)
     return new SuperColliderPlayer()
   }
-  console.log('🦀 [engine] using rust orbit-audio-daemon backend (default since cutover #108)')
+  // 既定は Rust。ただし raw が「未設定/空」でも 'rust' でもない未認識値のときは、
+  // SC のつもりの typo（例: ORBITSCORE_ENGINE=scc）が黙って Rust 起動に落ちるのを
+  // warn で observable にする（未設定と誤入力を区別する）。
+  const normalized = raw?.trim().toLowerCase() ?? ''
+  if (normalized !== '' && normalized !== 'rust') {
+    console.warn(
+      `⚠️  [engine] ORBITSCORE_ENGINE=${JSON.stringify(raw)} は未認識 — ` +
+        `'rust' / 'sc' / 'supercollider' を想定。既定の Rust にフォールバック`,
+    )
+  }
+  const source = normalized === '' ? 'default since cutover #108' : `ORBITSCORE_ENGINE=${raw}`
+  console.log(`🦀 [engine] using rust orbit-audio-daemon backend (${source})`)
   return new RustEnginePlayer()
 }

@@ -3,7 +3,8 @@
  *
  * `DaemonClient`（orbit-audio-daemon / WebSocket）を `AudioEngineBackend` 契約へ
  * ラップし、`SuperColliderPlayer` の sibling として interpreter に差し込めるようにする。
- * SC 経路は無改変のまま、`ORBITSCORE_ENGINE=rust` で opt-in する parity proof。
+ * cutover #108 で `createAudioEngine()` の既定バックエンド。SC 経路は温存し
+ * `ORBITSCORE_ENGINE=sc` で opt-out できる（SC parity 到達済み）。
  *
  * 設計（docs/development/POST_2.0_A0_RT_INTEGRATION_DESIGN.md §13 / master plan §4-A）:
  *

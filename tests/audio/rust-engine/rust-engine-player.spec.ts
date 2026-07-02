@@ -807,4 +807,37 @@ describe('createAudioEngine() / resolveEngineKind()', () => {
     expect(resolveEngineKind(undefined)).toBe('rust')
     expect(resolveEngineKind('anything-else')).toBe('rust')
   })
+
+  it('未設定 / 空 env では RustEnginePlayer を返し、警告は出さない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(createAudioEngine({} as NodeJS.ProcessEnv)).toBeInstanceOf(RustEnginePlayer)
+    expect(createAudioEngine({ ORBITSCORE_ENGINE: '' } as NodeJS.ProcessEnv)).toBeInstanceOf(
+      RustEnginePlayer,
+    )
+    expect(createAudioEngine({ ORBITSCORE_ENGINE: '   ' } as NodeJS.ProcessEnv)).toBeInstanceOf(
+      RustEnginePlayer,
+    )
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('未認識値（sc の typo 等）は Rust にフォールバックしつつ警告する（silent fallback を observable に）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'scc' } as NodeJS.ProcessEnv)).toBeInstanceOf(
+      RustEnginePlayer,
+    )
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('scc')
+    expect(warn.mock.calls[0][0]).toContain('未認識')
+    warn.mockRestore()
+  })
+
+  it('明示 rust では警告を出さない', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'rust' } as NodeJS.ProcessEnv)).toBeInstanceOf(
+      RustEnginePlayer,
+    )
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
 })

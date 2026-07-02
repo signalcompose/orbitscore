@@ -3,8 +3,8 @@
  *
  * `DaemonClient` は orbit-audio-daemon (WebSocket protocol v0.1) との通信を担う。
  * `RustEnginePlayer` はそれを `AudioEngineBackend`（Scheduler + AudioEngine 面）へ
- * ラップした音声バックエンド adapter（S2 / Issue #296）。`ORBITSCORE_ENGINE=rust` で
- * `createAudioEngine()` 経由で選択される。
+ * ラップした音声バックエンド adapter（S2 / Issue #296）。cutover #108 以降は
+ * `createAudioEngine()` が既定で選ぶ（`ORBITSCORE_ENGINE=sc` で SC に opt-out）。
  */
 
 export { DaemonClient } from './daemon-client'

@@ -41,9 +41,9 @@ export type EngineKind = 'supercollider' | 'rust'
  * env 値をバックエンド種別へ正規化する。
  *
  * cutover #108: 既定を **Rust** に切替（native daemon が現行 `.orbs` DSL の audio 機能で
- * SC parity 到達を確認済み・offline 22テスト + gated RT default/64f/32f PASS）。SC 経路は
- * 温存し、`ORBITSCORE_ENGINE=sc`（または `supercollider`）で明示 opt-out できる。未設定 /
- * 未知値は既定の Rust。
+ * SC parity 到達を確認済み — offline oracle テスト + gated real-daemon timing の内訳は
+ * WORK_LOG 6.181 参照）。SC 経路は温存し、`ORBITSCORE_ENGINE=sc`（または `supercollider`）
+ * で明示 opt-out できる。未設定 / 未知値は既定の Rust。
  */
 export function resolveEngineKind(raw: string | undefined): EngineKind {
   const v = raw?.trim().toLowerCase()
