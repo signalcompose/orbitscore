@@ -7,8 +7,8 @@
  *
  * 設計（master plan §4-A S2・docs/development/POST_2.0_A0_RT_INTEGRATION_DESIGN.md）:
  *   - seam = バックエンドレベル。`Scheduler`（musical timing は TS 側）+ AudioEngine 面。
- *   - 既存 SC 経路は無改変。Rust は `ORBITSCORE_ENGINE=rust` で opt-in（既定は SC）。
- *   - .vsix は 2.0.0 feature-freeze のため、出荷既定は SuperCollider のまま。
+ *   - cutover #108: 既定は **Rust**（native daemon）。SC 経路は温存し `ORBITSCORE_ENGINE=sc`
+ *     で opt-out。engine-level default のみ切替（VS Code UI 既定・.vsix は #366 post-cutover 仕上げ）。
  */
 
 import type { Scheduler } from '../core/global/types'
@@ -32,12 +32,20 @@ export interface AudioEngineBackend extends Scheduler {
   setLinkTempo?(bpm: number): Promise<void>
 }
 
-/** バックエンド選択 env。`rust` で daemon 経路、それ以外（未設定含む）で SC。 */
+/** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 
 export type EngineKind = 'supercollider' | 'rust'
 
-/** env 値をバックエンド種別へ正規化する（未知 / 未設定は既定の SuperCollider）。 */
+/**
+ * env 値をバックエンド種別へ正規化する。
+ *
+ * cutover #108: 既定を **Rust** に切替（native daemon が現行 `.orbs` DSL の audio 機能で
+ * SC parity 到達を確認済み・offline 22テスト + gated RT default/64f/32f PASS）。SC 経路は
+ * 温存し、`ORBITSCORE_ENGINE=sc`（または `supercollider`）で明示 opt-out できる。未設定 /
+ * 未知値は既定の Rust。
+ */
 export function resolveEngineKind(raw: string | undefined): EngineKind {
-  return raw?.trim().toLowerCase() === 'rust' ? 'rust' : 'supercollider'
+  const v = raw?.trim().toLowerCase()
+  return v === 'sc' || v === 'supercollider' ? 'supercollider' : 'rust'
 }

@@ -779,23 +779,32 @@ describe('RustEnginePlayer with mock daemon', () => {
 })
 
 describe('createAudioEngine() / resolveEngineKind()', () => {
-  it('ORBITSCORE_ENGINE=rust で RustEnginePlayer を返す', () => {
-    const engine = createAudioEngine({ ORBITSCORE_ENGINE: 'rust' } as NodeJS.ProcessEnv)
-    expect(engine).toBeInstanceOf(RustEnginePlayer)
+  it('既定（未設定）で RustEnginePlayer を返す（cutover #108）', () => {
+    expect(createAudioEngine({} as NodeJS.ProcessEnv)).toBeInstanceOf(RustEnginePlayer)
   })
 
-  it('未設定 / 他値では SuperColliderPlayer を返す', () => {
-    expect(createAudioEngine({} as NodeJS.ProcessEnv)).toBeInstanceOf(SuperColliderPlayer)
-    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'sc' } as NodeJS.ProcessEnv)).toBeInstanceOf(
-      SuperColliderPlayer,
+  it('ORBITSCORE_ENGINE=rust でも RustEnginePlayer を返す', () => {
+    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'rust' } as NodeJS.ProcessEnv)).toBeInstanceOf(
+      RustEnginePlayer,
     )
   })
 
-  it('resolveEngineKind は rust / それ以外を正規化する', () => {
-    expect(resolveEngineKind('rust')).toBe('rust')
-    expect(resolveEngineKind('RUST')).toBe('rust')
-    expect(resolveEngineKind(' rust ')).toBe('rust')
-    expect(resolveEngineKind(undefined)).toBe('supercollider')
+  it('ORBITSCORE_ENGINE=sc / supercollider で SuperColliderPlayer に opt-out する', () => {
+    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'sc' } as NodeJS.ProcessEnv)).toBeInstanceOf(
+      SuperColliderPlayer,
+    )
+    expect(
+      createAudioEngine({ ORBITSCORE_ENGINE: 'supercollider' } as NodeJS.ProcessEnv),
+    ).toBeInstanceOf(SuperColliderPlayer)
+  })
+
+  it('resolveEngineKind は sc/supercollider を opt-out・それ以外（未設定含む）を既定 rust に正規化する', () => {
+    expect(resolveEngineKind('sc')).toBe('supercollider')
+    expect(resolveEngineKind('SC')).toBe('supercollider')
+    expect(resolveEngineKind(' sc ')).toBe('supercollider')
     expect(resolveEngineKind('supercollider')).toBe('supercollider')
+    expect(resolveEngineKind('rust')).toBe('rust')
+    expect(resolveEngineKind(undefined)).toBe('rust')
+    expect(resolveEngineKind('anything-else')).toBe('rust')
   })
 })

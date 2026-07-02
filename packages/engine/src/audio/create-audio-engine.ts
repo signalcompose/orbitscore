@@ -1,9 +1,9 @@
 /**
- * 音声バックエンドのファクトリ（post-2.0 S2 / Issue #296）。
+ * 音声バックエンドのファクトリ（post-2.0 S2 / Issue #296・cutover #108）。
  *
- * `ORBITSCORE_ENGINE=rust` のときのみ `RustEnginePlayer`（orbit-audio-daemon）を返し、
- * それ以外（未設定含む）は既定の `SuperColliderPlayer` を返す。.vsix の出荷既定は
- * SuperCollider のまま（master plan §6 feature-freeze）。
+ * cutover #108 で既定を **Rust**（`RustEnginePlayer` / orbit-audio-daemon）に切替。
+ * `ORBITSCORE_ENGINE=sc`（または `supercollider`）で既存 `SuperColliderPlayer` に opt-out
+ * できる。未設定 / 未知値は既定の Rust。
  */
 
 import { AudioEngineBackend, ENGINE_ENV_VAR, resolveEngineKind } from './engine-backend'
@@ -16,9 +16,10 @@ import { SuperColliderPlayer } from './supercollider-player'
  */
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const kind = resolveEngineKind(env[ENGINE_ENV_VAR])
-  if (kind === 'rust') {
-    console.log('🦀 [engine] using rust orbit-audio-daemon backend (ORBITSCORE_ENGINE=rust)')
-    return new RustEnginePlayer()
+  if (kind === 'supercollider') {
+    console.log('🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=sc)')
+    return new SuperColliderPlayer()
   }
-  return new SuperColliderPlayer()
+  console.log('🦀 [engine] using rust orbit-audio-daemon backend (default since cutover #108)')
+  return new RustEnginePlayer()
 }
