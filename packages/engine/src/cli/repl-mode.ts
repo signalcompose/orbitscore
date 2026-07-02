@@ -13,7 +13,8 @@ import { shouldEnableSessionLog } from './session-log-gate'
 /**
  * Start REPL mode for live coding
  *
- * This function creates a new interpreter, boots SuperCollider,
+ * This function creates a new interpreter, boots the audio engine backend
+ * (default Rust daemon since cutover #108; SC via ORBITSCORE_ENGINE=sc),
  * and starts an interactive REPL where users can enter OrbitScore
  * commands line by line.
  *
@@ -40,7 +41,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
     globalInterpreter.enableSessionLog({ cwd: process.cwd() })
   }
 
-  // Boot SuperCollider once at startup with optional audio device
+  // Boot the audio engine backend once at startup with optional audio device
   await globalInterpreter.boot(options.audioDevice)
 
   console.log('🎵 Live coding mode')
@@ -161,7 +162,7 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
   // listening for user input on stdin until the user terminates with Ctrl+C.
   // The readline interface will continue to emit 'line' events as long as
   // the process is alive. The shutdown handlers in shutdown.ts will handle
-  // graceful termination of SuperCollider when the user exits.
+  // graceful termination of the audio engine backend when the user exits.
   // Note: This promise never resolves, which is the expected behavior.
   await new Promise(() => {})
 }

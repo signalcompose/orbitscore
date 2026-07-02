@@ -334,6 +334,8 @@ S1/S1b の CLAP hosting とは**別軸**の S2 = **サンプル経路の音声�
 
 ### スコープ姿勢（advisor×2 + ユーザー確認で確定）
 
+> **superseded by #108（2026-07-03）**: 下記は S2 当時（2026-06-20）の記録。既定は #108 で **Rust へ cutover 済**（`ORBITSCORE_ENGINE=sc`/`supercollider` で SC に opt-out）。以下は当時のスコープ姿勢の履歴として保持する。
+
 - **parity proof**: SuperCollider を**出荷既定に維持**、Rust は `ORBITSCORE_ENGINE=rust` で opt-in（master plan §6 .vsix feature-freeze）。#108「デフォルトを Rust に（cutover）」は後続フェーズへ defer。
 - **pan は S2 から defer**（ファンダメンタル＝seam+timing と機能詰め込みの分離）。
 

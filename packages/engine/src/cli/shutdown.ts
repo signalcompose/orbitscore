@@ -7,7 +7,8 @@ import { InterpreterV2 } from '../interpreter/interpreter-v2'
 /**
  * Gracefully shutdown the audio engine
  *
- * This function attempts to quit the SuperCollider server cleanly
+ * This function attempts to quit the audio engine backend cleanly
+ * (Rust daemon by default since cutover #108, or SuperCollider when opted out)
  * before exiting the process. It's called on SIGINT (Ctrl+C) and SIGTERM.
  *
  * @param interpreter - Interpreter instance (may be null)
@@ -21,7 +22,7 @@ import { InterpreterV2 } from '../interpreter/interpreter-v2'
 export async function shutdown(interpreter: InterpreterV2 | null): Promise<void> {
   if (interpreter) {
     try {
-      // Quit SuperCollider server
+      // Quit the audio engine backend (default Rust daemon; SC when opted out)
       const audioEngine = (interpreter as any).audioEngine
       if (audioEngine && typeof audioEngine.quit === 'function') {
         await audioEngine.quit()
