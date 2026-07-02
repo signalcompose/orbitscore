@@ -34,5 +34,8 @@ engine/package.json
 !engine/node_modules/**
 # Keep bundled scsynth (binary + plugins + libsndfile + LICENSE/NOTICE)
 !engine/scsynth/**
+# Keep bundled native audio daemon binary (Issue #306, darwin-arm64 only —
+# opt-in rust engine, SC remains the shipped default)
+!engine/bin/**
 # Keep legal templates (used by extract-scsynth-bundle.sh)
 !legal/**

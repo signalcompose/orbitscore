@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.185 feat(vscode-extension): bundle native audio daemon into .vsix, zero-config resolve (#306) (Jul 3, 2026)
+
+Issue #306（限定スコープ第一版）。installed .vsix から `orbit-audio-daemon`（rust engine, opt-in）を**ゼロ設定で解決**できるようにする。**SC は default のまま据え置き**（rust は opt-in・default を倒さない）。
+
+- **daemon バイナリ同梱**: 新規 `scripts/copy-daemon-bin.sh`（darwin-arm64 のみ・自己位置解決で CWD 非依存）を root `build:copy-engine` と `packages/vscode-extension` の `build:engine`/`build:engine:clean` に配線。`rust/target/release/orbit-audio-daemon` が無い場合は **warning + exit 0**（best-effort・大半の `npm run build`/CI は cargo を持たないため既存 SC-only ビルドを壊さない）。配置先 `packages/vscode-extension/engine/bin/darwin-arm64/orbit-audio-daemon`。`.vscodeignore` に `!engine/bin/**` を追加。
+- **path 自動解決**: `DaemonClient.resolveDaemonBinary`（`packages/engine/src/audio/rust-engine/daemon-client.ts`）の候補リスト末尾に、compiled JS 自身からの相対パス（`__dirname` から 3 階層上 `<extension>/engine/` + `bin/${process.platform}-${process.arch}/orbit-audio-daemon`）を追加。既存 4 候補（explicit path / `ORBIT_AUDIO_DAEMON_PATH` / monorepo release / monorepo debug）は無改変・順序も変えず最後に足す。packaged 状態で `resolveDaemonBinary(undefined)` を実行し、バイナリ在での解決・不在での正しい fail を実測確認済み（monorepo 4 候補は `packages/vscode-extension/engine/` 配下からは元々マッチしないことも実測で確認）。
+- **engine 選択 UI（dog-food 用）**: `contributes.configuration` に `orbitscore.engine`（enum `sc`|`rust`, default `sc`）追加。`extension.ts` の `startEngine()` で読み取り、`rust` なら `env.ORBITSCORE_ENGINE='rust'`、それ以外は**明示的に `delete env.ORBITSCORE_ENGINE`**（拡張ホストが元々持っていた env を上書きし、SC default を確実に守る）。
+- **version**: `packages/vscode-extension/package.json` を 2.0.0 → 2.1.0。README に `orbitscore.engine` 設定行 + darwin-arm64 限定の注記を追加。
+- **検証**: `npm run build`（root）+ `npm test`（1188 passed/28 skipped, 変化なし）緑。`packages/vscode-extension` 側の実 CI パス（`npm run build` → `build:engine`→`install-engine-deps.sh`→daemon copy）を再現して `.vsix` を packaging、`unzip -l` で `engine/bin/darwin-arm64/orbit-audio-daemon` 同梱と実行属性保持を確認。ローカルビルドの daemon はスタンドアロン実行で起動 JSON プロトコル応答まで確認（音声デバイス不在は sandbox 環境の制約でこの検証の対象外）。
+- **未解決/フォローアップ**: ①`.github/workflows/release.yml` は現状 `cargo build` を実行しないため、**CI が生成する .vsix は daemon 未同梱のまま**（今回はローカルでビルドしたバイナリでのみ検証）。② daemon バイナリは Apple Developer ID 署名・notarize 未実施（scsynth は SuperCollider 本家の既存署名を保持しているのに対し daemon は新規ビルド）。ローカルビルドは quarantine xattr が無く実行できるが、**ダウンロードされた .vsix では Gatekeeper に阻まれる可能性がある**（未検証）。両者とも本 Issue のバウンデッドスコープ外として次フェーズに持ち越し。
+
 ### 6.184 feat(engine): capture seam — realtime WAV tap on production daemon master output (#364) (Jul 3, 2026)
 
 cutover #108 の load-bearing = **耳なし実時間検証の基盤**。#307（CLOSED）で offline capture（`orbit-audio-verify`）は完成済で、本 PR は残りの **realtime 経路**（production cpal callback の master 出力を WAV にタップ）を配線する。正本 = `POST_2.0_PLUGIN_STRATEGY.html` §4 / `POST_2.0_NEXT_STEPS.html` §6・設計記録 = serena `capture_seam_307_design_2026-06-30`（owner 2 決定 + advisor 是認）。
@@ -111,7 +122,6 @@ out-of-scope（cutover blocker でない）: `.time()` pitch保存stretch/`.fixp
 **核心の未解決問題（§14.5、要 大和確認）**: 「今どこを演奏しているか」= 形式内位置（bar:beat + セクション/コード）の検出。特徴量はテクスチャを与えるが形式位置を与えない。推奨初期案 = オペレーター舵取り + エンジン小節カウントのハイブリッド位置ラベル。本番の自律度は大和判断。
 
 **据え置き**: Agent Bridge（脳なし MCP）・統一評価経路は不変。**コード変更なし（docs のみ）**。
-
 ### 6.177 feat(engine): γ M1 PR-B — real CLAP effect child + shared 1-block core (#357) (Jun 27, 2026)
 
 γ M1 の **PR-B**。PR-A の transport の上に、**実 CLAP effect plugin を隔離 child プロセスで host** し、offline A/B parity を実 effect で確認する。設計正本 = `docs/development/POST_2.0_GAMMA_M1_DESIGN.md` §4.4/§4.6/§5(a)/§6。実装前に advisor 相談（① clack single-thread lifecycle を最初に証明 ② merged-RT 委譲を独立 commit 化 ③ closed-form oracle 採用）。

@@ -741,6 +741,20 @@ function startEngine(debugMode: boolean = false) {
     env.ORBITSCORE_DEBUG = '1'
   }
 
+  // Audio backend selection (Issue #306, dog-food only). "sc" is the shipped
+  // default and MUST remain authoritative even if the extension host process
+  // itself inherited an ORBITSCORE_ENGINE env var from its own launch
+  // environment — so we explicitly unset it rather than merely not setting it.
+  const engineSetting = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'sc')
+  if (engineSetting === 'rust') {
+    env.ORBITSCORE_ENGINE = 'rust'
+    outputChannel?.appendLine(
+      '🦀 Audio backend: rust (orbit-audio-daemon, opt-in, darwin-arm64 only)',
+    )
+  } else {
+    delete env.ORBITSCORE_ENGINE
+  }
+
   // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
   // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
   // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。

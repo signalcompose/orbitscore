@@ -508,6 +508,17 @@ export class DaemonClient extends EventEmitter {
     const monorepoRoot = path.resolve(__dirname, '../../../../../')
     candidates.push(path.join(monorepoRoot, 'rust/target/release/orbit-audio-daemon'))
     candidates.push(path.join(monorepoRoot, 'rust/target/debug/orbit-audio-daemon'))
+    // .vsix に同梱された daemon（Issue #306）。インストール済み拡張には
+    // `rust/target` が存在しない（monorepoRoot 探索は 4 候補とも失敗する）ため、
+    // 最後の候補として compiled JS 自身からの相対パスで探す。この compiled
+    // daemon-client.js は常に `<extension>/engine/dist/audio/rust-engine/` に
+    // 配置される（build:copy-engine / build:engine が packages/engine/dist を
+    // まるごと `<extension>/engine/dist/` へコピーするため）ので、3 階層上が
+    // `<extension>/engine/` になる。bin/<platform>/ の platform 名は Node の
+    // `${process.platform}-${process.arch}` 慣習（例: darwin-arm64）。
+    // 現状 darwin-arm64 のみバンドルされる（scripts/copy-daemon-bin.sh 参照）。
+    const platform = `${process.platform}-${process.arch}`
+    candidates.push(path.join(__dirname, '../../../bin', platform, 'orbit-audio-daemon'))
 
     for (const c of candidates) {
       searched.push(c)

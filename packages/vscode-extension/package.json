@@ -3,7 +3,7 @@
   "displayName": "OrbitScore",
   "description": "Live coding music DSL with bundled SuperCollider audio engine. macOS (Apple Silicon) only.",
   "publisher": "local",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": "Signal compose Inc.",
   "license": "SEE LICENSE IN ../../LICENSE",
   "repository": {
@@ -157,6 +157,17 @@
           "default": "",
           "description": "Override path to the scsynth binary. Leave empty to use the bundled scsynth (recommended). Advanced users can point this at a custom SuperCollider install.",
           "scope": "machine-overridable"
+        },
+        "orbitscore.engine": {
+          "type": "string",
+          "enum": ["sc", "rust"],
+          "enumDescriptions": [
+            "SuperCollider (scsynth) — default, fully supported audio backend.",
+            "Experimental native Rust audio daemon (orbit-audio-daemon). Only bundled for macOS Apple Silicon (darwin-arm64); on any other platform the engine will fail to start until you build one yourself and set ORBIT_AUDIO_DAEMON_PATH."
+          ],
+          "default": "sc",
+          "description": "Audio backend to use. \"sc\" (default) is the supported SuperCollider engine. \"rust\" opts into the experimental native engine (dog-food only, darwin-arm64 only).",
+          "scope": "machine-overridable"
         }
       }
     }
@@ -164,8 +175,8 @@
   "scripts": {
     "build": "npm run build:engine && tsc -p tsconfig.json",
     "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json",
-    "build:engine": "cd ../engine && npm run build && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh",
-    "build:engine:clean": "cd ../engine && npm run build:clean && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh",
+    "build:engine": "cd ../engine && npm run build && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
+    "build:engine:clean": "cd ../engine && npm run build:clean && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
     "build:bundle": "bash ../../scripts/extract-scsynth-bundle.sh",
     "verify:bundle": "bash ../../scripts/verify-bundle.sh",
     "dev": "tsc -w"

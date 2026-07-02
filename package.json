@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc --build && npm run build:copy-engine",
     "build:clean": "tsc --build --clean && tsc --build && npm run build:copy-engine",
-    "build:copy-engine": "cp -r packages/engine/dist packages/vscode-extension/engine/ && cp -r packages/engine/supercollider packages/vscode-extension/engine/",
+    "build:copy-engine": "cp -r packages/engine/dist packages/vscode-extension/engine/ && cp -r packages/engine/supercollider packages/vscode-extension/engine/ && bash scripts/copy-daemon-bin.sh",
     "dev:engine": "npm -w @orbitscore/engine run dev",
     "docs:dev": "npm -w @orbitscore/dev-site run docs:dev",
     "docs:build": "npm -w @orbitscore/dev-site run docs:build",
