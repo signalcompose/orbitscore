@@ -34,9 +34,10 @@ export class InterpreterV2 {
 
   /**
    * @param opts.audioEngine テスト/検証用に音声バックエンドを注入する（既定は env 由来の
-   *   `createAudioEngine()`）。未指定時の挙動は不変で SC 既定経路は無改変。#311 の schedule
-   *   抽出ハーネスが recording scheduler を差し込み、SC/daemon を立てずに `.orbs` を実行して
-   *   interpreter の計算スケジュールを取り出すために使う。
+   *   `createAudioEngine()`）。未指定時は env 由来の既定バックエンドを使う（cutover #108 以降は
+   *   Rust daemon・`ORBITSCORE_ENGINE=sc` で SC に opt-out）。#311 の schedule 抽出ハーネスが
+   *   recording scheduler を差し込み、SC/daemon を立てずに `.orbs` を実行して interpreter の
+   *   計算スケジュールを取り出すために使う。
    */
   constructor(opts?: { audioEngine?: AudioEngineBackend }) {
     this.state = {

@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.179 feat(engine): cutover #108 — default audio backend を Rust に切替 (SC 温存) (Jul 3, 2026)
+
+post-2.0 の到達点。native Rust daemon を**既定の音声バックエンド**にする engine-level cutover。owner GO（2026-07-03）を受けて実行。
+
+**parity 根拠（実測・推論でなく RUN）**:
+- offline 3層 22テスト PASS: interpreter schedule（leg2）/ core render（数学オラクル）/ daemon render（verify_schedule_pcm・例22/varispeed/LinkAudio 含む）。
+- coverage matrix（22 examples 横断）: 例が使う audio 機能に **genuine gap なし**。timing は interpreter が絶対時刻に焼き込むため backend 非依存。
+- **runtime dispatch fitness**（SC fire-now 対 daemon schedule-ahead・advisor 指摘の本当の門）: gated `real-daemon-timing` を default/64f/32f で実測 → 全て ahead-of-cursor・**xruns=0**・polymeter parity。anchor drift は buffer 縮小で単調に締まる（6.7→2.4→0.7ms）。
+
+**変更**:
+- `engine-backend.ts` `resolveEngineKind`: `sc`/`supercollider` → SC（opt-out）、それ以外（未設定含む）→ **rust**（既定反転）。
+- `create-audio-engine.ts`: 既定 rust・SC は opt-out のメッセージ/doc に更新。
+- `rust-engine-player.spec.ts`: 反転後の契約（未設定=rust・sc/supercollider=opt-out）に spec 更新。
+- full suite 1189 pass（SC 既定に暗黙依存するテストは無し）。
+
+**scope 境界**: engine-level default のみ。VS Code UI 既定（`orbitscore.engine`）+ .vsix 再ビルドは #366 の post-cutover 仕上げ。scsynth の**完全退役は別後段**（#108 も「parity 確認後に deprecate」と分離）。flip は**リバーシブル**（`ORBITSCORE_ENGINE=sc`）。
+
+out-of-scope（cutover blocker でない）: `.time()` pitch保存stretch/`.fixpitch()` → #213・master fx → 未使用。
+
 ### 6.178 docs(wctm): change production runtime to a pi-based dedicated harness (Jun 28, 2026)
 
 **Branch**: `claude/agent-external-data-harness-yob87g`
