@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.180 docs(research): WCTM machine-listening deep research + 10 implementation proposals (#371) (Jul 3, 2026)
+
+WCTM の最大ポイント「AI がいかに楽曲の音を聞いて理解するか」（機械の耳）を deep research（**Sonnet 5 × 24 agents**・7角度並列スイープ → load-bearing claim 93 件 → **敵対的検証 16 件: CONFIRMED 8 / REFUTED 7 / UNCLEAR 1** → 完全性クリティーク）で調査し、`docs/research/WCTM_MACHINE_LISTENING_RESEARCH.md` に**サーヴェイ + 実装案 10 + 比較マトリクス + owner 決定事項 4 点**を記録。owner 指示（2026-07-03・Fable セッション）= サーヴェイと実装計画案の立案のみ・実装しない。
+
+**主要な結論**: ①完全自動の耳で本番運用された頑健な先行例は不在 — 数十年の実戦は全て human-in-the-loop（IRCAM 自身がジャズで自動ビートトラッキングを撤退・手動タップ採用 = AIMC 2021 一次確認）②形式把握は特徴量から創発しない（ReaLJam 実証）→ 位置明示ラベル注入が正解 ③MIDI 側路は Voyager 40 年の前例 = guitar-to-MIDI が最有力の耳アップグレード ④和声一致度位置検証は構成要素は枯れているが統合は前例ゼロ = kill-criteria 付き挑戦枠 ⑤ピアノ bleed には「加害源 MIDI 既知」という文献にない好条件 → MIDI 連動解析窓マスクが費用対効果最良。
+
+**spec 衝突を発見**: WCTM spec §2「Max が Link 駆動・エンジン追従」vs 実装済み #283「エンジンが Link テンポリーダー」= 主従逆転。テンポ権限の向きは owner 決定事項 D2 として記録（推奨 = タップ/トラッカー → Bridge/エンジン経由で Link set・実証済み経路再利用。Max からの直接 push は Link プロトコル特性により不安定と検証済み）。
+
+**検証の成果**: AI 検索要約の誤生成 1 件を README 直接取得で特定（「BTrack ジャズ実戦」は捏造）・vb.aubio~ が onset のみでなく **tempo/beat 推定も実装済み**とソース直接確認で判明（案2 の第一候補に昇格）・zsa.descriptors の AS 対応は公式ページに記載ありと反証。二次情報の鵜呑みは 16 件中 7 件の誤りを生んでいた。
+
+**推奨 = 案10 段階的統合**: 床（案1 operator-first + 案5 bleed マスク + 案6 LLM 文脈設計）を確実に敷き、挑戦枠（案2 confidence-gated auto beat / 案3 MIDI ears / 案4 位置検証）は kill-criteria 付きで積む — kill はレイヤーごと落とすだけで床は無傷 = 手戻り構造ゼロ。W3 に owner 決定 D1-D4 + クロス被り実測、W6 リハ#1 は「検証済み構成の確認の場」にする（初見の場にしない）。
+
 ### 6.179 feat(engine): cutover #108 — default audio backend を Rust に切替 (SC 温存) (Jul 3, 2026)
 
 post-2.0 の到達点。native Rust daemon を**既定の音声バックエンド**にする engine-level cutover。owner GO（2026-07-03）を受けて実行。
