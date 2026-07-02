@@ -97,6 +97,18 @@ fn load_wav(path: &PathBuf) -> CapturedAudio {
     assert!(channels >= 1 && sample_rate > 0, "format が不正");
 
     let body = &buf[44..];
+    // data チャンク size（bytes 40..44）を物理サイズと突き合わせる（silent-failure ガード）:
+    // finalize の header patch が失敗（teardown 時の disk full 等）すると placeholder(0)のまま
+    // 残るが、PCM 本体は物理的に存在するので、これを検証しないと壊れた WAV でも PCM assert が
+    // 通り偽 parity になる。header と物理長の不一致を loud に落とす。
+    let data_bytes = u32::from_le_bytes(buf[40..44].try_into().unwrap()) as usize;
+    assert_eq!(
+        data_bytes,
+        body.len(),
+        "WAV data chunk size ({data_bytes}) が物理 body 長 ({}) と不一致 = finalize 失敗による \
+         header 破損（録音 invalid）",
+        body.len()
+    );
     let data: Vec<f32> = body
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes(c.try_into().unwrap()))

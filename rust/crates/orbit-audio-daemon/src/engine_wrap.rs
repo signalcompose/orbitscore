@@ -216,16 +216,32 @@ impl StreamGuard {
     }
 }
 
+/// 生の env 値（`Some(raw)`）を capture 出力先 [`PathBuf`] へ解決する純関数（`capture_path_from_env`
+/// の testable コア）。未設定 / 空 / 空白のみは `None`（capture 無効）。trim した値から `PathBuf` を
+/// 組む（`"  /tmp/x.wav  "` のような前後空白を含む env でも正しいパスになる）。
+fn resolve_capture_path(raw: Option<String>) -> Option<PathBuf> {
+    let raw = raw?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
 /// capture seam（#307）: 環境変数 `ORBIT_CAPTURE_WAV` を解決して whole-stream WAV 録音の出力先を
 /// 返す（未設定 / 空文字列なら `None` = capture 無効）。**env 読取りは daemon 層に集約**し、解決済み
 /// パスを `orbit-audio-native` の `start_default_output*` へ typed で渡す（`OutProcEffectConfig` /
 /// `buffer_frames` と同じ層分け＝native の公開 API に隠れた ambient env 依存を作らない）。
-fn capture_path_from_env() -> Option<std::path::PathBuf> {
-    let raw = std::env::var("ORBIT_CAPTURE_WAV").ok()?;
-    if raw.trim().is_empty() {
-        None
-    } else {
-        Some(std::path::PathBuf::from(raw))
+fn capture_path_from_env() -> Option<PathBuf> {
+    match std::env::var("ORBIT_CAPTURE_WAV") {
+        Ok(raw) => resolve_capture_path(Some(raw)),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            // 非 UTF-8 の値を握り潰すと「capture したつもりが無効」になるので operator に報告する。
+            eprintln!("[capture] ORBIT_CAPTURE_WAV が非 UTF-8 のため無視した（capture 無効）");
+            None
+        }
     }
 }
 
@@ -1160,4 +1176,43 @@ pub struct PlayHandle {
 
 fn short_uuid() -> String {
     Uuid::new_v4().simple().to_string()[..8].to_string()
+}
+
+#[cfg(test)]
+mod capture_path_tests {
+    use super::resolve_capture_path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn none_when_unset() {
+        assert_eq!(resolve_capture_path(None), None);
+    }
+
+    #[test]
+    fn none_when_empty() {
+        assert_eq!(resolve_capture_path(Some(String::new())), None);
+    }
+
+    #[test]
+    fn none_when_whitespace_only() {
+        assert_eq!(resolve_capture_path(Some("   ".to_string())), None);
+    }
+
+    #[test]
+    fn resolves_plain_path() {
+        assert_eq!(
+            resolve_capture_path(Some("/tmp/out.wav".to_string())),
+            Some(PathBuf::from("/tmp/out.wav"))
+        );
+    }
+
+    #[test]
+    fn trims_surrounding_whitespace() {
+        // 前後の空白は落として実パスにする（untrimmed だと存在しないパス名になり capture が
+        // silent に失敗する）。
+        assert_eq!(
+            resolve_capture_path(Some("  /tmp/out.wav  ".to_string())),
+            Some(PathBuf::from("/tmp/out.wav"))
+        );
+    }
 }

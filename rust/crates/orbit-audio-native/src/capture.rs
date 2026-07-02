@@ -160,11 +160,14 @@ impl CaptureWriter {
 
         let handle = thread::spawn(move || -> io::Result<u64> {
             let mut samples_written: u64 = 0;
-            loop {
+            // drain ループ。write error は `break Err(e)` で抜け、下の finalize を必ず通す
+            // (`?` で即 return すると finalize が走らず header が placeholder〈data=0〉のまま
+            // 残り、壊れた WAV になる。best-effort finalize で「書けた分」を header に反映する)。
+            let drain: io::Result<()> = loop {
                 let avail = consumer.slots();
                 if avail == 0 {
                     if stop_for_thread.load(Ordering::Acquire) {
-                        break;
+                        break Ok(());
                     }
                     thread::sleep(DRAIN_POLL_INTERVAL);
                     continue;
@@ -177,13 +180,23 @@ impl CaptureWriter {
                     "read_chunk(avail) with avail == slots() cannot fail (single consumer)",
                 );
                 let (a, b) = chunk.as_slices();
-                wav.write(a)?;
-                wav.write(b)?;
+                if let Err(e) = wav.write(a) {
+                    break Err(e);
+                }
+                if let Err(e) = wav.write(b) {
+                    break Err(e);
+                }
                 samples_written += (a.len() + b.len()) as u64;
                 chunk.commit_all();
+            };
+            // drain の成否に関わらず header を実サイズへ patch する(best-effort)。write error が
+            // あればそれを優先して返し、無ければ finalize 自体の失敗を返す。
+            let finalized = wav.finalize();
+            match (drain, finalized) {
+                (Ok(()), Ok(())) => Ok(samples_written),
+                (Err(e), _) => Err(e),
+                (Ok(()), Err(e)) => Err(e),
             }
-            wav.finalize()?;
-            Ok(samples_written)
         });
 
         Ok((
@@ -381,6 +394,23 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn create_fails_fast_on_bad_path() {
+        // 存在しないディレクトリ配下のパスは `File::create` が失敗する。writer thread や ring を
+        // 確保する前に、`create` が Err を返して fail fast することを確認する(WAV を開けないのに
+        // background thread だけ起きて空回りする、という silent-failure を防ぐ)。
+        let mut bad = std::env::temp_dir();
+        bad.push(format!(
+            "orbit-capture-nonexistent-{}/never/out.wav",
+            std::process::id()
+        ));
+        let result = CaptureWriter::create(bad, 48_000, 2, 4096);
+        assert!(
+            result.is_err(),
+            "存在しないディレクトリ配下の path では create は Err を返すはず"
+        );
     }
 
     #[test]

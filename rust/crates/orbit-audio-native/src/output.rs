@@ -162,8 +162,10 @@ fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool 
 ///
 /// 手順: (1) callback 開始時刻を取る（`cb_stats` 有り時のみ）→ (2) [`render_engine`] で engine
 /// （+ LinkAudio egress）を render → (3) `post` 有りなら hardware sum を in-place 変換（CLAP
-/// effect/instrument・Issue #340）→ (4) callback 所要時間を記録。`post`/`cb_stats` が共に None
-/// なら従来経路とビット同一（分岐 1 つのみのオーバーヘッド）。
+/// effect/instrument・Issue #340）→ (4) `capture` 有りなら **post 適用後の最終 `hw`** を WAV 用
+/// ring へ読み取り専用 tap（#307）→ (5) callback 所要時間を記録。`post`/`capture`/`cb_stats` は
+/// 各々独立の opt-in 分岐で、すべて None なら従来経路とビット同一。`capture` は `hw` を読むだけ
+/// なので有効でも出力サンプルは不変（tap であって mutation ではない）。
 #[inline]
 fn render_block(
     engine: &Engine,
@@ -678,6 +680,60 @@ mod tests {
         let snap = stats.snapshot();
         assert_eq!(snap.xruns, 1);
         assert!(!snap.device_lost);
+    }
+
+    // #307 capture seam: render_block が capture へ渡すのは **post 適用後**の hw であることを
+    // 実 device 抜きで pin する。post が hw を 0.75 に上書きするスタブを挿し、capture ring に
+    // commit された値が 0.75（post 後）であって 0.0（engine render 直後の無音・post 前）でない
+    // ことを確認する。順序が逆（capture が post より前）だと無音を録ってしまい、gated harness が
+    // 落ちるまで気付けないので、ここで CI 常時カバーする。
+    #[test]
+    fn render_block_captures_post_processed_hw() {
+        use crate::link_audio_ring::RingTapSink;
+
+        // hw を一律 0.75 に上書きする post-processor スタブ（engine render の無音を潰す）。
+        struct FillPost(f32);
+        impl PostProcessor for FillPost {
+            fn process(&mut self, data: &mut [f32]) {
+                data.fill(self.0);
+            }
+        }
+
+        let engine = Engine::new(48_000, 2); // schedule 空 → render は無音（0.0）。
+        let mut link: Option<LinkEgress> = None;
+        let mut post: Option<Box<dyn PostProcessor>> = Some(Box::new(FillPost(0.75)));
+        let (sink, mut consumer, _drops) = RingTapSink::new(64);
+        let mut capture: Option<RingTapSink> = Some(sink);
+        let cb_stats: Option<Arc<CallbackTimeStats>> = None;
+
+        let mut hw = vec![0.0f32; 8]; // 4 frames × 2ch。
+        render_block(
+            &engine,
+            &mut link,
+            &mut post,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut hw,
+        );
+
+        // hw 自体も post 後（0.75）。
+        assert!(hw.iter().all(|&s| s == 0.75), "hw must be post-processed");
+
+        // capture ring に commit された値も post 後（0.75）であること。
+        let avail = consumer.slots();
+        assert_eq!(
+            avail,
+            hw.len(),
+            "capture は 1 block 全サンプルを commit するはず"
+        );
+        let chunk = consumer.read_chunk(avail).expect("read committed");
+        let (a, b) = chunk.as_slices();
+        let captured: Vec<f32> = a.iter().chain(b.iter()).copied().collect();
+        assert!(
+            captured.iter().all(|&s| s == 0.75),
+            "capture は post 適用後の hw を録るはず（0.0 なら post 前に tap している）: {captured:?}"
+        );
     }
 
     // A4-2b-2b: egress 判定（ready かつ scratch 充足）の pure ロジックを CI で pin。render_block の
