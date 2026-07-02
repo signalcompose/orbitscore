@@ -17,7 +17,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.181 feat(engine): cutover #108 — default audio backend を Rust に切替 (SC 温存) (Jul 3, 2026)
+### 6.179 feat(engine): cutover #108 — default audio backend を Rust に切替 (SC 温存) (Jul 3, 2026)
 
 post-2.0 の到達点。native Rust daemon を**既定の音声バックエンド**にする engine-level cutover。owner GO（2026-07-03）を受けて実行。
 
@@ -35,6 +35,23 @@ post-2.0 の到達点。native Rust daemon を**既定の音声バックエン�
 **scope 境界**: engine-level default のみ。VS Code UI 既定（`orbitscore.engine`）+ .vsix 再ビルドは #366 の post-cutover 仕上げ。scsynth の**完全退役は別後段**（#108 も「parity 確認後に deprecate」と分離）。flip は**リバーシブル**（`ORBITSCORE_ENGINE=sc`）。
 
 out-of-scope（cutover blocker でない）: `.time()` pitch保存stretch/`.fixpitch()` → #213・master fx → 未使用。
+
+### 6.178 docs(wctm): change production runtime to a pi-based dedicated harness (Jun 28, 2026)
+
+**Branch**: `claude/agent-external-data-harness-yob87g`
+**変更ファイル**: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html` §4 全面改訂 + §3.2 / §10 / ヘッダ改訂注 / 構成図凡例、`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`（W-Runtime / ロードマップ図 / known-decisions 表）、`docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` §14 新規（決定 #60–#63）。
+
+**経緯**: laiso「Pi Coding Agent」記事を起点に大和が「このハーネスで外部データの受け取りをエージェント側で可能にできるのでは」と提起。設計対話の結論として **WCTM 本番ランタイムを Claude Code 二段構え（旧 decision #29）から pi（@mariozechner/pi-coding-agent）ベースの OrbitScore 専用ハーネスに確定**。
+
+**なぜ変えたか（詳細は DESIGN_DISCUSSION_RECORD §14）**:
+- **Claude Code は push を実行に持ち込めない**: MCP プロトコルは server→client push を持つが、Claude Code は `resources/updated` 未実装（#7252）・push 受信しても agent 不達（#33679/#36665）。WCTM の「小節到着が特徴量を駆動する」push 型本質要件と非両立。
+- **自前イベントループ（pi）なら** 「小節到着→コンテキスト組立→Messages API 発火」を書け、外部データがターンを駆動できる（変わるのはターンを誰が発火するか）。
+- **開発コスト**: 開発ツール（Claude Code）と本番ランタイム（pi）を分離すれば、A で測った数字は本番経路に移植不能（測定妥当性）+ 二重実装回避 + リハ中の柔軟性 → pi-first が有利。「即日動く」は薄いスケルトンで確保。
+- **専用ハーネスの価値**: customTools で OrbitScore 語彙＝エージェントの道具（§6 橋）、SDK で orbitstudio 埋め込み、.orbslog をネイティブ作業記憶に。演奏ハーネス＝作曲ハーネスを共有コアに（本番後一般化）。
+
+**核心の未解決問題（§14.5、要 大和確認）**: 「今どこを演奏しているか」= 形式内位置（bar:beat + セクション/コード）の検出。特徴量はテクスチャを与えるが形式位置を与えない。推奨初期案 = オペレーター舵取り + エンジン小節カウントのハイブリッド位置ラベル。本番の自律度は大和判断。
+
+**据え置き**: Agent Bridge（脳なし MCP）・統一評価経路は不変。**コード変更なし（docs のみ）**。
 
 ### 6.177 feat(engine): γ M1 PR-B — real CLAP effect child + shared 1-block core (#357) (Jun 27, 2026)
 
