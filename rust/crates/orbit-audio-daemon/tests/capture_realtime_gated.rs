@@ -26,7 +26,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use orbit_audio_daemon::engine_wrap::EngineWrap;
-use orbit_audio_verify::{pan_from_lr_rms, region_rms, CapturedAudio, PAN_TOLERANCE};
+use orbit_audio_verify::{
+    detect_onset_threshold, pan_from_lr_rms, region_rms, CapturedAudio, PAN_TOLERANCE,
+};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -104,17 +106,6 @@ fn load_wav(path: &PathBuf) -> CapturedAudio {
 
 fn frame_at(sec: f64, sr: f64) -> usize {
     (sec * sr).round() as usize
-}
-
-/// 最初に |L|+|R| が閾値を超えるフレーム（= 最初の発音位置）。device 起動 latency で WAV 先頭が
-/// transport 0 とずれるので、これを基準に各イベントの相対位置を取る。
-fn detect_first_onset(cap: &CapturedAudio, threshold: f32) -> usize {
-    for f in 0..cap.frames() {
-        if cap.at(f, 0).abs() + cap.at(f, 1).abs() > threshold {
-            return f;
-        }
-    }
-    panic!("capture が無音（実出力が録れていない）");
 }
 
 /// body 窓 `[center+256, center+span-tail_trim)`（offline harness と同じ・onset 直後の block
@@ -224,8 +215,10 @@ fn examples22_realtime_capture_matches_schedule() {
         last_end
     );
 
-    // 最初の onset（kick @ base+0.1）を検出してアンカーにする。
-    let anchor = detect_first_onset(&cap, 1e-3);
+    // 最初の onset（kick @ base+0.1・pan -0.6 で L 優勢）を検出してアンカーにする。device 起動
+    // latency で WAV 先頭が transport 0 とずれるので、これを基準に各イベントの相対位置を取る。
+    let anchor =
+        detect_onset_threshold(&cap, 0, 1e-3).expect("capture が無音（実出力が録れていない）");
     let first_onset_sec = golden.events[0].onset_sec;
 
     // 各イベントの pan を独立逆算し schedule と突き合わせる（offline harness と同じ判定）。slice

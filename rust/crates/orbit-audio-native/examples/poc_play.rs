@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // デバイス config に一致する Engine を自動構築
-    let (engine, stream, _stats) = start_default_output()?;
+    let (engine, stream, _stats) = start_default_output(None)?;
     println!(
         "output stream: sr={}, ch={}",
         stream.sample_rate, stream.channels

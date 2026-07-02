@@ -2,7 +2,8 @@
 //!
 //! producer 側(RT cpal callback が post-mix を push する [`crate::link_audio_ring::RingTapSink`])は
 //! 既存資産をそのまま再利用する。本モジュールが持つのは **consumer 側**(ring を drain して WAV に
-//! 書く off-thread writer)と、量子化なし 32-bit float WAV encoder、env config の 3 点。
+//! 書く off-thread writer)と、量子化なし 32-bit float WAV encoder の 2 点(出力先パスの env 解決は
+//! daemon 層 `engine_wrap::capture_path_from_env` が行い、解決済みパスがここへ渡る)。
 //!
 //! この writer は audio thread の外(専用の background thread)で動くので、RT 契約(no-alloc /
 //! no-lock / no-block)は一切かからない。alloc・`std::fs::File` I/O・`thread::sleep` を自由に使う。
@@ -35,6 +36,8 @@ pub struct RiffWavWriter {
     sample_rate: u32,
     channels: u16,
     samples_written: u64,
+    /// `write` が per-call の alloc を避けるため再利用する little-endian バイトバッファ。
+    scratch: Vec<u8>,
 }
 
 impl RiffWavWriter {
@@ -48,15 +51,21 @@ impl RiffWavWriter {
             sample_rate,
             channels,
             samples_written: 0,
+            scratch: Vec::new(),
         })
     }
 
     /// interleaved f32 サンプル列を little-endian で `data` チャンクの末尾に追記する。
     /// header の size はここでは書かない([`Self::finalize`] でまとめて patch する)。
+    /// off-thread なので、per-sample の `write_all` を避けて 1 ブロックを 1 回で書く
+    /// (`scratch` を再利用し per-call の alloc も避ける)。
     pub fn write(&mut self, interleaved: &[f32]) -> io::Result<()> {
+        self.scratch.clear();
+        self.scratch.reserve(interleaved.len() * 4);
         for &sample in interleaved {
-            self.writer.write_all(&sample.to_le_bytes())?;
+            self.scratch.extend_from_slice(&sample.to_le_bytes());
         }
+        self.writer.write_all(&self.scratch)?;
         self.samples_written += interleaved.len() as u64;
         Ok(())
     }
@@ -102,22 +111,6 @@ fn build_header(sample_rate: u32, channels: u16, data_bytes: u32) -> [u8; WAV_HE
     header[36..40].copy_from_slice(b"data");
     header[40..44].copy_from_slice(&data_bytes.to_le_bytes());
     header
-}
-
-/// production daemon 向けの capture 起動設定。今は「出力先パス」のみ(A = daemon-start config /
-/// whole-stream・owner 確定)。per-play 起動(B)は follow-on。
-pub struct CaptureConfig;
-
-impl CaptureConfig {
-    /// 環境変数 `ORBIT_CAPTURE_WAV` を読む。未設定または空文字列なら `None`(capture 無効)。
-    pub fn from_env() -> Option<PathBuf> {
-        let raw = std::env::var("ORBIT_CAPTURE_WAV").ok()?;
-        if raw.trim().is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(raw))
-        }
-    }
 }
 
 /// capture 完了レポート。`dropped_samples > 0` は「録音破損 = 検証 invalid」を意味する
@@ -177,13 +170,12 @@ impl CaptureWriter {
                     continue;
                 }
 
-                // SPSC(consumer はここでしか読まない)なので `avail` は単調増加のみ。
-                // read_chunk(avail) が TooFewSlots を返すことは理論上ないが、防御的に
-                // retry する(break で capture を打ち切らない)。
-                let chunk = match consumer.read_chunk(avail) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
+                // SPSC(consumer はここでしか読まない)なので、直前に読んだ `avail` を
+                // 超える読み取りを要求しない限り `read_chunk` は失敗しない(TooFewSlots は
+                // n > slots のときのみ)。invariant を expect で表明する(不可能分岐を握り潰さない)。
+                let chunk = consumer.read_chunk(avail).expect(
+                    "read_chunk(avail) with avail == slots() cannot fail (single consumer)",
+                );
                 let (a, b) = chunk.as_slices();
                 wav.write(a)?;
                 wav.write(b)?;
@@ -210,38 +202,59 @@ impl CaptureWriter {
         self.drops.load(Ordering::Relaxed)
     }
 
-    /// stop signal を立てて background thread の残り drain + finalize の完了を待ち、
-    /// [`CaptureReport`] を返す。
-    pub fn finish(mut self) -> io::Result<CaptureReport> {
+    /// stop signal を立てて background thread を join し、書けた総サンプル数を返す。二度目以降は
+    /// `None`(handle 取得済み = 型/take による二重 join・二重 finalize 防止)。`finish()` と `Drop`
+    /// が共有する。
+    fn stop_and_join(&mut self) -> Option<io::Result<u64>> {
+        let handle = self.handle.take()?;
         self.stop.store(true, Ordering::Release);
-        // `self` は値で渡されておりここでしか `finish`/`Drop` は起こり得ないので、
-        // handle は必ず `Some`(型による二重実行防止)。
-        let handle = self
-            .handle
-            .take()
-            .expect("CaptureWriter::finish: handle already taken");
-        let samples_written = match handle.join() {
-            Ok(result) => result?,
-            Err(_) => {
-                return Err(io::Error::other("capture writer thread panicked"));
-            }
-        };
+        Some(match handle.join() {
+            Ok(result) => result,
+            Err(_) => Err(io::Error::other("capture writer thread panicked")),
+        })
+    }
+
+    /// join 後の総サンプル数から [`CaptureReport`] を組む(frames = samples / channels)。
+    fn report(&self, samples_written: u64) -> CaptureReport {
         let channels = self.channels.max(1) as u64;
-        Ok(CaptureReport {
+        CaptureReport {
             frames_written: samples_written / channels,
             dropped_samples: self.drops.load(Ordering::Relaxed),
-        })
+        }
+    }
+
+    /// stop signal を立てて background thread の残り drain + finalize の完了を待ち、[`CaptureReport`]
+    /// を返す。production teardown は `Drop` 経由なので本メソッドは主に test / 明示停止(capture
+    /// mode B = per-play・follow-on)用の API。
+    #[allow(dead_code)]
+    pub fn finish(mut self) -> io::Result<CaptureReport> {
+        // `self` は値で渡されておりここでしか停止は起こり得ないので handle は必ず `Some`。
+        let samples_written = self
+            .stop_and_join()
+            .expect("CaptureWriter::finish: handle already taken")?;
+        Ok(self.report(samples_written))
     }
 }
 
 impl Drop for CaptureWriter {
-    /// `finish()` を呼ばずに drop された場合の best-effort 後始末。stop → join のみ行い、
-    /// 結果(Result)は握りつぶす(Drop は panic できないため)。writer thread 内で
-    /// `wav.finalize()` まで完了してから thread が終わるので、ここでも WAV は valid になる。
+    /// production teardown。`finish()` を呼ばずに drop された場合の後始末: stop → join を行い
+    /// (writer thread 内で `wav.finalize()` まで完了するので WAV は valid)、**drop が起きていたら
+    /// operator へ 1 行報告**する(録音破損 = 検証 invalid の silent-failure ガード。off-thread の
+    /// teardown なので eprintln は RT 契約に触れない)。
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            self.stop.store(true, Ordering::Release);
-            let _ = handle.join();
+        match self.stop_and_join() {
+            Some(Ok(samples_written)) => {
+                let report = self.report(samples_written);
+                if report.dropped_samples > 0 {
+                    eprintln!(
+                        "[capture] WAV finalized with {} dropped samples \
+                         (recording corrupted): frames_written={}",
+                        report.dropped_samples, report.frames_written
+                    );
+                }
+            }
+            Some(Err(e)) => eprintln!("[capture] writer thread error on teardown: {e}"),
+            None => {} // 既に finish() 済み。
         }
     }
 }

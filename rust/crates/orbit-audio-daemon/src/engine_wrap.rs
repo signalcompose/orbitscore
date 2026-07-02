@@ -216,6 +216,19 @@ impl StreamGuard {
     }
 }
 
+/// capture seam（#307）: 環境変数 `ORBIT_CAPTURE_WAV` を解決して whole-stream WAV 録音の出力先を
+/// 返す（未設定 / 空文字列なら `None` = capture 無効）。**env 読取りは daemon 層に集約**し、解決済み
+/// パスを `orbit-audio-native` の `start_default_output*` へ typed で渡す（`OutProcEffectConfig` /
+/// `buffer_frames` と同じ層分け＝native の公開 API に隠れた ambient env 依存を作らない）。
+fn capture_path_from_env() -> Option<std::path::PathBuf> {
+    let raw = std::env::var("ORBIT_CAPTURE_WAV").ok()?;
+    if raw.trim().is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(raw))
+    }
+}
+
 impl EngineWrap {
     /// Engine とストリーム guard を起動する（本番用、cpal 既定出力）。
     /// guard は caller（通常は main）が drop されるまで保持すること。
@@ -228,7 +241,8 @@ impl EngineWrap {
         not(feature = "outproc-effect")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
-        let (engine, stream, stream_stats) = orbit_audio_native::start_default_output()?;
+        let (engine, stream, stream_stats) =
+            orbit_audio_native::start_default_output(capture_path_from_env())?;
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         Ok((wrap, StreamGuard { _stream: stream }))
     }
@@ -241,6 +255,7 @@ impl EngineWrap {
         let (engine, stream, stream_stats, reg_tx) =
             orbit_audio_native::start_default_output_with_link_egress(
                 crate::link_audio::REG_RING_CAPACITY,
+                capture_path_from_env(),
             )?;
         let (control, link_guard) = crate::link_audio::LinkAudioControl::spawn(
             reg_tx,
@@ -272,8 +287,12 @@ impl EngineWrap {
         // event ring 1024 / install ring 1（spike と同容量）。
         let (processor, parts) = orbit_clap_host::new_clap_host(1024, 1);
         let (engine, stream, stream_stats, cb_stats) =
-            orbit_audio_native::start_default_output_with_clap(processor, None)
-                .map_err(WrapError::Output)?;
+            orbit_audio_native::start_default_output_with_clap(
+                processor,
+                None,
+                capture_path_from_env(),
+            )
+            .map_err(WrapError::Output)?;
         // 専用スレッドを起動（!Send instance + pump をここで所有）。install ring producer を渡す。
         let (cmd_tx, thread_guard) = crate::clap_host::spawn_clap_thread(
             parts.callback_requested,
@@ -351,8 +370,12 @@ impl EngineWrap {
         // 3. cpal stream 起動（ここで device の sample_rate が確定する）。adapter を注入する。
         //    gated stale-rate harness は cfg.buffer_frames に 32/64 を渡し小バッファを要求する。
         let (engine, stream, stream_stats, cb_stats) =
-            orbit_audio_native::start_default_output_with_clap(processor, cfg.buffer_frames)
-                .map_err(WrapError::Output)?;
+            orbit_audio_native::start_default_output_with_clap(
+                processor,
+                cfg.buffer_frames,
+                capture_path_from_env(),
+            )
+            .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
 
         // 4. 初回 child を同期 spawn（spawn 失敗を呼び出し側に返すため supervisor 外で起動）。

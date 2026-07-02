@@ -1,5 +1,6 @@
 //! cpal を使った既定出力デバイスへのストリーム設定。
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -303,8 +304,8 @@ type OutputInnerStart = (
 
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
 /// 同時に初期化する（hardware-only）。呼び出し側は config ミスマッチを意識しなくてよい。
-pub fn start_default_output() -> Result<OutputStart, OutputError> {
-    let (engine, stream, stats, _cb) = start_output_inner(None, None, None)?;
+pub fn start_default_output(capture_path: Option<PathBuf>) -> Result<OutputStart, OutputError> {
+    let (engine, stream, stats, _cb) = start_output_inner(None, None, None, capture_path)?;
     Ok((engine, stream, stats))
 }
 
@@ -313,6 +314,7 @@ pub fn start_default_output() -> Result<OutputStart, OutputError> {
 /// RT callback が render_multi で channel buffer を埋めて ring へ送る。
 pub fn start_default_output_with_link_egress(
     reg_capacity: usize,
+    capture_path: Option<PathBuf>,
 ) -> Result<LinkEgressStart, OutputError> {
     let (reg_tx, reg_rx) = rtrb::RingBuffer::new(reg_capacity);
     let link = LinkEgress {
@@ -320,7 +322,7 @@ pub fn start_default_output_with_link_egress(
         // cap は control が強制するので最大 MAX_LINK_CHANNELS。callback で push のみ・realloc を避ける。
         channels: Vec::with_capacity(MAX_LINK_CHANNELS),
     };
-    let (engine, stream, stats, _cb) = start_output_inner(Some(link), None, None)?;
+    let (engine, stream, stats, _cb) = start_output_inner(Some(link), None, None, capture_path)?;
     Ok((engine, stream, stats, reg_tx))
 }
 
@@ -336,8 +338,10 @@ pub fn start_default_output_with_link_egress(
 pub fn start_default_output_with_clap(
     post: Box<dyn PostProcessor>,
     buffer_frames: Option<u32>,
+    capture_path: Option<PathBuf>,
 ) -> Result<ClapHostStart, OutputError> {
-    let (engine, stream, stats, cb) = start_output_inner(None, Some(post), buffer_frames)?;
+    let (engine, stream, stats, cb) =
+        start_output_inner(None, Some(post), buffer_frames, capture_path)?;
     // post=Some の経路では inner が必ず CallbackTimeStats を作る。
     let cb = cb.expect("clap path always creates CallbackTimeStats");
     Ok((engine, stream, stats, cb))
@@ -352,6 +356,7 @@ fn start_output_inner(
     link: Option<LinkEgress>,
     post: Option<Box<dyn PostProcessor>>,
     buffer_frames: Option<u32>,
+    capture_path: Option<PathBuf>,
 ) -> Result<OutputInnerStart, OutputError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
@@ -369,11 +374,13 @@ fn start_output_inner(
     let sample_rate = config.sample_rate.0;
     let channels = config.channels;
 
-    // capture seam（#307 realtime・A = daemon-start config / whole-stream）: `ORBIT_CAPTURE_WAV`
-    // 設定時のみ master 出力（post 適用後の hw）を WAV へ録る tap を差し込む。排他 feature 群
-    // （link / clap / outproc）と直交で、どの経路でも最終 hw をタップする。sink（producer）は
-    // callback へ、writer（consumer + off-thread thread）は OutputStream が保持する。
-    let (capture_sink, capture_writer) = match crate::capture::CaptureConfig::from_env() {
+    // capture seam（#307 realtime・A = daemon-start config / whole-stream）: `capture_path` が
+    // 与えられたときのみ master 出力（post 適用後の hw）を WAV へ録る tap を差し込む。env 読取りは
+    // daemon 層（`engine_wrap::start`）が行い、解決済みパスをここへ渡す（`buffer_frames` /
+    // `OutProcEffectConfig` と同じ層分け）。排他 feature 群（link / clap / outproc）と直交で、どの
+    // 経路でも最終 hw をタップする。sink（producer）は callback へ、writer（consumer + off-thread
+    // thread）は OutputStream が保持する。
+    let (capture_sink, capture_writer) = match capture_path {
         Some(path) => {
             let ring_capacity = sample_rate as usize * channels as usize * CAPTURE_RING_SECONDS;
             let (sink, writer) =
@@ -592,7 +599,7 @@ mod tests {
     #[test]
     #[ignore = "needs a real audio output device; run with --ignored"]
     fn start_default_output_opens_headless() {
-        match start_default_output() {
+        match start_default_output(None) {
             Ok((_engine, _stream, _stats)) => { /* 開けた。drop で teardown。 */ }
             Err(e) => panic!("start_default_output が headless で開けなかった: {e}"),
         }
@@ -607,7 +614,7 @@ mod tests {
     #[ignore = "needs a real audio output device that delivers callbacks; run with --ignored"]
     fn start_default_output_callback_ticks_headless() {
         let (engine, _stream, _stats) =
-            start_default_output().expect("start_default_output should open");
+            start_default_output(None).expect("start_default_output should open");
         std::thread::sleep(std::time::Duration::from_millis(200));
         let now = engine.now_sec();
         assert!(
