@@ -1,0 +1,403 @@
+//! master 出力を WAV へ録るための off-thread capture writer(#307 realtime)。
+//!
+//! producer 側(RT cpal callback が post-mix を push する [`crate::link_audio_ring::RingTapSink`])は
+//! 既存資産をそのまま再利用する。本モジュールが持つのは **consumer 側**(ring を drain して WAV に
+//! 書く off-thread writer)と、量子化なし 32-bit float WAV encoder、env config の 3 点。
+//!
+//! この writer は audio thread の外(専用の background thread)で動くので、RT 契約(no-alloc /
+//! no-lock / no-block)は一切かからない。alloc・`std::fs::File` I/O・`thread::sleep` を自由に使う。
+
+use std::fs::File;
+use std::io::{self, BufWriter, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+
+use crate::link_audio_ring::RingTapSink;
+
+/// WAV header の固定長(RIFF + fmt(16byte, extension なし) + data チャンク先頭)。
+const WAV_HEADER_LEN: usize = 44;
+/// `wFormatTag` = 3 = `WAVE_FORMAT_IEEE_FLOAT`(量子化なし・録った f32 がそのまま round-trip する)。
+const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
+const BITS_PER_SAMPLE: u16 = 32;
+/// ring が空のときの poll 間隔。busy-wait しない程度に短く、capture 遅延を体感させない程度に長く。
+const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
+
+/// 32-bit float(量子化なし)streaming WAV writer。`std::io` のみで実装する(外部 WAV encoder crate
+/// を増やさない方針 = owner 確定・hound 不採用)。
+///
+/// ファイルサイズは書き込み終了時まで確定しないので、[`Self::new`] で size を 0 の placeholder
+/// にした header をまず書き、サンプルを逐次追記した後、[`Self::finalize`] で実サイズに patch する。
+pub struct RiffWavWriter {
+    writer: BufWriter<File>,
+    sample_rate: u32,
+    channels: u16,
+    samples_written: u64,
+}
+
+impl RiffWavWriter {
+    /// `path` に新規ファイルを作り、size placeholder 込みの 44-byte header を書く。
+    pub fn new(path: &Path, sample_rate: u32, channels: u16) -> io::Result<Self> {
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(&build_header(sample_rate, channels, 0))?;
+        Ok(Self {
+            writer,
+            sample_rate,
+            channels,
+            samples_written: 0,
+        })
+    }
+
+    /// interleaved f32 サンプル列を little-endian で `data` チャンクの末尾に追記する。
+    /// header の size はここでは書かない([`Self::finalize`] でまとめて patch する)。
+    pub fn write(&mut self, interleaved: &[f32]) -> io::Result<()> {
+        for &sample in interleaved {
+            self.writer.write_all(&sample.to_le_bytes())?;
+        }
+        self.samples_written += interleaved.len() as u64;
+        Ok(())
+    }
+
+    /// 先頭に seek して RIFF / data チャンクの size を実値に patch し、flush する。
+    /// `self` を値で消費するので二重 finalize は型で防止される。
+    ///
+    /// # 既知の制限
+    /// 古典 WAV(RIFF)の size フィールドは u32 なので、`samples_written * 4` バイトが
+    /// 4GiB を超える capture は正しく表現できない(RF64 拡張が必要・未対応)。ここでは
+    /// saturating して壊れた header にはしない。
+    pub fn finalize(mut self) -> io::Result<()> {
+        self.writer.flush()?;
+        let data_bytes = u32::try_from(self.samples_written.saturating_mul(4)).unwrap_or(u32::MAX);
+        // BufWriter<File>::seek は seek 前に内部バッファを flush してから inner を seek する
+        // (std documented behavior)ので、直前の flush と合わせて安全に先頭へ戻れる。
+        self.writer.seek(SeekFrom::Start(0))?;
+        self.writer
+            .write_all(&build_header(self.sample_rate, self.channels, data_bytes))?;
+        self.writer.flush()?;
+        Ok(())
+    }
+}
+
+/// WAVE_FORMAT_IEEE_FLOAT・16-byte fmt chunk(extension なし)の 44-byte header を組み立てる。
+fn build_header(sample_rate: u32, channels: u16, data_bytes: u32) -> [u8; WAV_HEADER_LEN] {
+    let channels = channels.max(1);
+    let byte_rate = sample_rate * channels as u32 * (BITS_PER_SAMPLE as u32 / 8);
+    let block_align = channels * (BITS_PER_SAMPLE / 8);
+
+    let mut header = [0u8; WAV_HEADER_LEN];
+    header[0..4].copy_from_slice(b"RIFF");
+    header[4..8].copy_from_slice(&data_bytes.saturating_add(36).to_le_bytes());
+    header[8..12].copy_from_slice(b"WAVE");
+    header[12..16].copy_from_slice(b"fmt ");
+    header[16..20].copy_from_slice(&16u32.to_le_bytes()); // fmt chunk size(extension なし)
+    header[20..22].copy_from_slice(&WAVE_FORMAT_IEEE_FLOAT.to_le_bytes());
+    header[22..24].copy_from_slice(&channels.to_le_bytes());
+    header[24..28].copy_from_slice(&sample_rate.to_le_bytes());
+    header[28..32].copy_from_slice(&byte_rate.to_le_bytes());
+    header[32..34].copy_from_slice(&block_align.to_le_bytes());
+    header[34..36].copy_from_slice(&BITS_PER_SAMPLE.to_le_bytes());
+    header[36..40].copy_from_slice(b"data");
+    header[40..44].copy_from_slice(&data_bytes.to_le_bytes());
+    header
+}
+
+/// production daemon 向けの capture 起動設定。今は「出力先パス」のみ(A = daemon-start config /
+/// whole-stream・owner 確定)。per-play 起動(B)は follow-on。
+pub struct CaptureConfig;
+
+impl CaptureConfig {
+    /// 環境変数 `ORBIT_CAPTURE_WAV` を読む。未設定または空文字列なら `None`(capture 無効)。
+    pub fn from_env() -> Option<PathBuf> {
+        let raw = std::env::var("ORBIT_CAPTURE_WAV").ok()?;
+        if raw.trim().is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(raw))
+        }
+    }
+}
+
+/// capture 完了レポート。`dropped_samples > 0` は「録音破損 = 検証 invalid」を意味する
+/// (呼び出し側が assert する。本モジュールはカウントを正確に運ぶだけで判定はしない)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureReport {
+    pub frames_written: u64,
+    pub dropped_samples: u64,
+}
+
+/// off-thread WAV writer を所有する RAII guard。[`CaptureWriter::create`] が返す
+/// [`RingTapSink`] を RT callback 側の `PostMixSink` として登録し、本体は background thread で
+/// ring を drain して [`RiffWavWriter`] に書く。
+///
+/// # 呼び出し側が守るべき前提
+/// `finish()`(または drop)を呼ぶ時点で、対応する `RingTapSink` への `commit()` がもう発生しない
+/// こと(= RT audio stream が既に停止済み)を呼び出し側が保証する必要がある。stop 後も ring に
+/// 残っているものは最後まで drain してから finalize するが、stop 後に新たに push される分は
+/// 対象外(取りこぼしになり得る)。output.rs 側で `OutputStream`(cpal `Stream` を保持する
+/// フィールド)と本体を同じ struct に同居させる場合は、**`CaptureWriter` を stream フィールドより
+/// 後に宣言する**こと(Rust は struct field を宣言順に drop するので、stream を先に drop して
+/// callback を止めてから、この writer の drop 処理〈stop→join→drain 残り→finalize〉が走る)。
+pub struct CaptureWriter {
+    stop: Arc<AtomicBool>,
+    drops: Arc<AtomicU64>,
+    channels: u16,
+    /// background thread の join handle。`finish()`/`Drop` のどちらかで一度だけ `take()` される
+    /// (二重 join・二重 finalize を防ぐガード)。
+    handle: Option<thread::JoinHandle<io::Result<u64>>>,
+}
+
+impl CaptureWriter {
+    /// `path` に WAV writer を開き、`ring_capacity` サンプル分の [`RingTapSink`] を生成する。
+    /// 戻り値の `RingTapSink` を RT callback 側(`PostMixSink`)に登録し、`CaptureWriter` は
+    /// 呼び出し側が保持して `finish()` するか、drop に任せる。
+    pub fn create(
+        path: PathBuf,
+        sample_rate: u32,
+        channels: u16,
+        ring_capacity: usize,
+    ) -> io::Result<(RingTapSink, CaptureWriter)> {
+        // 先に WAV ファイルを開く(path 不正等で失敗するなら ring を確保する前に fail fast)。
+        let mut wav = RiffWavWriter::new(&path, sample_rate, channels)?;
+        let (sink, mut consumer, drops) = RingTapSink::new(ring_capacity);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_thread = Arc::clone(&stop);
+
+        let handle = thread::spawn(move || -> io::Result<u64> {
+            let mut samples_written: u64 = 0;
+            loop {
+                let avail = consumer.slots();
+                if avail == 0 {
+                    if stop_for_thread.load(Ordering::Acquire) {
+                        break;
+                    }
+                    thread::sleep(DRAIN_POLL_INTERVAL);
+                    continue;
+                }
+
+                // SPSC(consumer はここでしか読まない)なので `avail` は単調増加のみ。
+                // read_chunk(avail) が TooFewSlots を返すことは理論上ないが、防御的に
+                // retry する(break で capture を打ち切らない)。
+                let chunk = match consumer.read_chunk(avail) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let (a, b) = chunk.as_slices();
+                wav.write(a)?;
+                wav.write(b)?;
+                samples_written += (a.len() + b.len()) as u64;
+                chunk.commit_all();
+            }
+            wav.finalize()?;
+            Ok(samples_written)
+        });
+
+        Ok((
+            sink,
+            CaptureWriter {
+                stop,
+                drops,
+                channels,
+                handle: Some(handle),
+            },
+        ))
+    }
+
+    /// これまでに(producer 側で)drop した interleaved サンプル数の累積(監視用)。
+    pub fn dropped_samples(&self) -> u64 {
+        self.drops.load(Ordering::Relaxed)
+    }
+
+    /// stop signal を立てて background thread の残り drain + finalize の完了を待ち、
+    /// [`CaptureReport`] を返す。
+    pub fn finish(mut self) -> io::Result<CaptureReport> {
+        self.stop.store(true, Ordering::Release);
+        // `self` は値で渡されておりここでしか `finish`/`Drop` は起こり得ないので、
+        // handle は必ず `Some`(型による二重実行防止)。
+        let handle = self
+            .handle
+            .take()
+            .expect("CaptureWriter::finish: handle already taken");
+        let samples_written = match handle.join() {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(io::Error::other("capture writer thread panicked"));
+            }
+        };
+        let channels = self.channels.max(1) as u64;
+        Ok(CaptureReport {
+            frames_written: samples_written / channels,
+            dropped_samples: self.drops.load(Ordering::Relaxed),
+        })
+    }
+}
+
+impl Drop for CaptureWriter {
+    /// `finish()` を呼ばずに drop された場合の best-effort 後始末。stop → join のみ行い、
+    /// 結果(Result)は握りつぶす(Drop は panic できないため)。writer thread 内で
+    /// `wav.finalize()` まで完了してから thread が終わるので、ここでも WAV は valid になる。
+    fn drop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            self.stop.store(true, Ordering::Release);
+            let _ = handle.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    fn read_le_u32(buf: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap())
+    }
+
+    fn read_le_u16(buf: &[u8], offset: usize) -> u16 {
+        u16::from_le_bytes(buf[offset..offset + 2].try_into().unwrap())
+    }
+
+    fn temp_wav_path(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!(
+            "orbit-capture-test-{}-{}-{}.wav",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        p
+    }
+
+    #[test]
+    fn riff_header_roundtrip() {
+        let path = temp_wav_path("header");
+        let samples: Vec<f32> = vec![0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -3.25, 123.456];
+
+        let mut w = RiffWavWriter::new(&path, 48_000, 2).expect("create wav");
+        w.write(&samples).expect("write samples");
+        w.finalize().expect("finalize");
+
+        let mut buf = Vec::new();
+        File::open(&path)
+            .expect("reopen")
+            .read_to_end(&mut buf)
+            .expect("read");
+
+        assert_eq!(&buf[0..4], b"RIFF");
+        assert_eq!(&buf[8..12], b"WAVE");
+        assert_eq!(&buf[12..16], b"fmt ");
+        assert_eq!(&buf[36..40], b"data");
+
+        let data_bytes = (samples.len() * 4) as u32;
+        assert_eq!(read_le_u32(&buf, 4), 36 + data_bytes, "RIFF chunk size");
+        assert_eq!(read_le_u32(&buf, 16), 16, "fmt chunk size");
+        assert_eq!(read_le_u16(&buf, 20), 3, "audioFormat == IEEE_FLOAT");
+        assert_eq!(read_le_u16(&buf, 22), 2, "numChannels");
+        assert_eq!(read_le_u32(&buf, 24), 48_000, "sampleRate");
+        assert_eq!(read_le_u16(&buf, 34), 32, "bitsPerSample");
+        assert_eq!(read_le_u32(&buf, 40), data_bytes, "data chunk size");
+
+        let body = &buf[44..];
+        assert_eq!(body.len(), samples.len() * 4);
+        for (i, &expected) in samples.iter().enumerate() {
+            let bytes: [u8; 4] = body[i * 4..i * 4 + 4].try_into().unwrap();
+            assert_eq!(f32::from_le_bytes(bytes), expected, "sample {i} bit-exact");
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn capture_writer_lossless_roundtrip() {
+        let path = temp_wav_path("lossless");
+        let (mut sink, writer) =
+            CaptureWriter::create(path.clone(), 44_100, 2, 4096).expect("create capture writer");
+
+        use crate::link_audio_ring::PostMixSink;
+        let block_a = vec![0.1f32, -0.1, 0.2, -0.2];
+        let block_b = vec![0.3f32, -0.3, 0.4, -0.4, 0.5, -0.5];
+        sink.commit(&block_a);
+        sink.commit(&block_b);
+
+        let report = writer.finish().expect("finish");
+        assert_eq!(report.dropped_samples, 0);
+        assert_eq!(
+            report.frames_written,
+            (block_a.len() + block_b.len()) as u64 / 2
+        );
+
+        let mut buf = Vec::new();
+        File::open(&path)
+            .expect("reopen")
+            .read_to_end(&mut buf)
+            .expect("read");
+        let body = &buf[44..];
+        let mut expected = block_a.clone();
+        expected.extend_from_slice(&block_b);
+        assert_eq!(body.len(), expected.len() * 4);
+        for (i, &e) in expected.iter().enumerate() {
+            let bytes: [u8; 4] = body[i * 4..i * 4 + 4].try_into().unwrap();
+            assert_eq!(f32::from_le_bytes(bytes), e, "sample {i} bit-exact");
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn capture_writer_counts_drops_when_ring_too_small() {
+        let path = temp_wav_path("drops");
+        // capacity=4 の極小 ring に対し、writer thread が drain するより速く大量に push して
+        // あふれ(drop)を発生させる。
+        let (mut sink, writer) =
+            CaptureWriter::create(path.clone(), 44_100, 1, 4).expect("create capture writer");
+
+        use crate::link_audio_ring::PostMixSink;
+        for _ in 0..2000 {
+            sink.commit(&[1.0f32; 64]);
+        }
+
+        let report = writer.finish().expect("finish");
+        assert!(
+            report.dropped_samples > 0,
+            "極小 ring への大量 push は drop をカウントするはず: {report:?}"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn drop_without_finish_finalizes() {
+        let path = temp_wav_path("drop-finalize");
+        let (mut sink, writer) =
+            CaptureWriter::create(path.clone(), 48_000, 1, 4096).expect("create capture writer");
+
+        use crate::link_audio_ring::PostMixSink;
+        sink.commit(&[1.0f32, -1.0, 0.5]);
+
+        drop(writer);
+        // background thread の join(Drop 内)が終わるまで待つ = drop() が値を返さず join
+        // 済みであることは Drop 実装が保証する(呼び出しが戻った時点で thread は join 済み)。
+
+        let mut buf = Vec::new();
+        File::open(&path)
+            .expect("reopen after drop")
+            .read_to_end(&mut buf)
+            .expect("read");
+        assert!(buf.len() >= WAV_HEADER_LEN, "header must be present");
+        assert_eq!(&buf[0..4], b"RIFF");
+        let data_bytes = read_le_u32(&buf, 40);
+        assert_eq!(
+            data_bytes as usize,
+            buf.len() - WAV_HEADER_LEN,
+            "data chunk size must be patched (not left at 0 placeholder)"
+        );
+        assert!(data_bytes > 0, "committed samples must have been flushed");
+
+        let _ = std::fs::remove_file(&path);
+    }
+}

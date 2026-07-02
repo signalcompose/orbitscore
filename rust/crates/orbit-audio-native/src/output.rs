@@ -88,13 +88,33 @@ pub enum OutputError {
     BuildStream(String),
     #[error("cpal play stream error: {0}")]
     PlayStream(String),
+    #[error("capture writer error: {0}")]
+    Capture(String),
 }
+
+/// capture ring の秒数（`sample_rate * channels * 秒`）。off-thread writer が瞬間的な disk
+/// 遅延を吸収できるよう generous に確保する。恒常的に writer が追いつかなければ drop が
+/// カウントされ、検証側が invalid として loud に落とす（silent-failure ガード）。
+const CAPTURE_RING_SECONDS: usize = 8;
 
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,
+    /// capture seam（#307 realtime）: `ORBIT_CAPTURE_WAV` 有効時のみ `Some`。**`_stream` より後に
+    /// 宣言する**ことで drop 順を「stream 停止（callback 停止＝以後 commit なし）→ writer が ring の
+    /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
+    _capture: Option<crate::capture::CaptureWriter>,
     pub sample_rate: u32,
     pub channels: u16,
+}
+
+impl OutputStream {
+    /// capture 有効時のみ、producer 側で drop した interleaved サンプル累積を返す。capture 無効は
+    /// `None`。**`> 0` は「off-thread writer が追いつかず録音が破損した = 検証 invalid」を意味する**
+    /// （検証ハーネス/オペレータが assert・監視する silent-failure ガード）。
+    pub fn capture_drops(&self) -> Option<u64> {
+        self._capture.as_ref().map(|w| w.dropped_samples())
+    }
 }
 
 /// callback が同時に egress できる LinkAudio channel の上限（A4-2b-2b）。RT callback の per-block
@@ -148,6 +168,7 @@ fn render_block(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     post: &mut Option<Box<dyn PostProcessor>>,
+    capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,
     hw: &mut [f32],
@@ -161,6 +182,14 @@ fn render_block(
     // master-bus post-processor（CLAP）。engine render 済みの hardware sum を in-place 変換。
     if let Some(p) = post.as_mut() {
         p.process(hw);
+    }
+
+    // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
+    // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
+    // ＝ RT 契約を満たす。off-thread writer が ring を drain する。post の後・計測の内側に置くことで
+    // capture コストも callback-duration に含めて監視する。
+    if let Some(sink) = capture.as_mut() {
+        sink.commit(hw);
     }
 
     if let (Some(stats), Some(t0)) = (cb_stats, t0) {
@@ -340,6 +369,21 @@ fn start_output_inner(
     let sample_rate = config.sample_rate.0;
     let channels = config.channels;
 
+    // capture seam（#307 realtime・A = daemon-start config / whole-stream）: `ORBIT_CAPTURE_WAV`
+    // 設定時のみ master 出力（post 適用後の hw）を WAV へ録る tap を差し込む。排他 feature 群
+    // （link / clap / outproc）と直交で、どの経路でも最終 hw をタップする。sink（producer）は
+    // callback へ、writer（consumer + off-thread thread）は OutputStream が保持する。
+    let (capture_sink, capture_writer) = match crate::capture::CaptureConfig::from_env() {
+        Some(path) => {
+            let ring_capacity = sample_rate as usize * channels as usize * CAPTURE_RING_SECONDS;
+            let (sink, writer) =
+                crate::capture::CaptureWriter::create(path, sample_rate, channels, ring_capacity)
+                    .map_err(|e| OutputError::Capture(e.to_string()))?;
+            (Some(sink), Some(writer))
+        }
+        None => (None, None),
+    };
+
     let stats = Arc::new(StreamStats::default());
     // callback-duration 計測は post（CLAP）経路でのみ有効化する。hardware-only / link 経路は
     // 従来通り無計測（None → render_block は計測分岐を踏まずビット同一）。
@@ -353,6 +397,7 @@ fn start_output_inner(
         stats.clone(),
         link,
         post,
+        capture_sink,
         cb_stats.clone(),
     )?;
     stream
@@ -363,6 +408,7 @@ fn start_output_inner(
         engine,
         OutputStream {
             _stream: stream,
+            _capture: capture_writer,
             sample_rate,
             channels,
         },
@@ -380,6 +426,7 @@ fn build_stream(
     stats: Arc<StreamStats>,
     mut link: Option<LinkEgress>,
     mut post: Option<Box<dyn PostProcessor>>,
+    mut capture: Option<RingTapSink>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
 ) -> Result<Stream, OutputError> {
     let make_err_fn = || {
@@ -402,7 +449,15 @@ fn build_stream(
             .build_output_stream(
                 config,
                 move |data: &mut [f32], _| {
-                    render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, data)
+                    render_block(
+                        &engine,
+                        &mut link,
+                        &mut post,
+                        &mut capture,
+                        &cb_stats,
+                        out_ch,
+                        data,
+                    )
                 },
                 make_err_fn(),
                 None,
@@ -419,7 +474,15 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
+                        render_block(
+                            &engine,
+                            &mut link,
+                            &mut post,
+                            &mut capture,
+                            &cb_stats,
+                            out_ch,
+                            buf,
+                        );
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
@@ -440,7 +503,15 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
+                        render_block(
+                            &engine,
+                            &mut link,
+                            &mut post,
+                            &mut capture,
+                            &cb_stats,
+                            out_ch,
+                            buf,
+                        );
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
                         }
@@ -460,7 +531,15 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
+                        render_block(
+                            &engine,
+                            &mut link,
+                            &mut post,
+                            &mut capture,
+                            &cb_stats,
+                            out_ch,
+                            buf,
+                        );
                         for (i, s) in buf.iter().enumerate() {
                             let v = (s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32;
                             data[i] = v as u16;

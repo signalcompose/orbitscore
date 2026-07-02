@@ -6,12 +6,14 @@
 //!
 //! platform-agnostic なコアは [`orbit_audio_core`] を参照。
 
+mod capture;
 mod link_audio_ring;
 mod loader;
 mod output;
 mod post_processor;
 mod resampler;
 
+pub use capture::{CaptureConfig, CaptureReport, CaptureWriter, RiffWavWriter};
 pub use link_audio_ring::{PostMixSink, RingTapSink};
 pub use loader::{load_sample_from_file, load_sample_resampled, LoaderError};
 pub use output::{

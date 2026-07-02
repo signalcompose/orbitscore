@@ -207,6 +207,15 @@ pub struct StreamGuard {
     _child_guard: crate::outproc_effect::EffectChildSupervisor,
 }
 
+impl StreamGuard {
+    /// capture seam（#307 realtime）: capture 有効時のみ producer-side drop 累積を返す（無効は `None`）。
+    /// `Some(0)` は録音健全・`> 0` は録音破損（検証 invalid）。gated 検証ハーネスが teardown 前に
+    /// assert する（`_stream: OutputStream` へ委譲）。全 feature variant が `_stream` を持つので共通。
+    pub fn capture_drops(&self) -> Option<u64> {
+        self._stream.capture_drops()
+    }
+}
+
 impl EngineWrap {
     /// Engine とストリーム guard を起動する（本番用、cpal 既定出力）。
     /// guard は caller（通常は main）が drop されるまで保持すること。
