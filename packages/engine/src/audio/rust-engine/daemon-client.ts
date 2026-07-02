@@ -401,6 +401,19 @@ export class DaemonClient extends EventEmitter {
     const child = spawn(binary, [], { stdio: ['ignore', 'pipe', 'pipe'] })
     this.child = child
 
+    // spawn 失敗 (EACCES / ENOEXEC 等) は 'exit' ではなく 'error' event で通知される。
+    // これは特に .vsix で配布された bundled daemon binary で顕在化しうる (実行権限
+    // 欠落・アーキ不一致・Gatekeeper quarantine)。unhandled 'error' は EventEmitter が
+    // throw し engine プロセスごと巻き込むため、spawn 直後に同期で捕捉しておく。
+    // 実際の reject は下の Promise executor が settle 機構経由で行う (settled flag で
+    // 'exit' / timeout との二重解決を防ぐ)。executor が起動するまでに 'error' が
+    // 発火した場合は spawnError に退避し、executor 側で即 reject に載せ替える。
+    let spawnError: Error | null = null
+    let onSpawnError: (err: Error) => void = (err) => {
+      spawnError = err
+    }
+    child.once('error', (err) => onSpawnError(err))
+
     const stderrChunks: string[] = []
     // startup 診断用の stderr 収集。ready-line が settle したら detach して
     // daemon の長期稼働中に stderr を無限に蓄積しないようにする。
@@ -424,6 +437,13 @@ export class DaemonClient extends EventEmitter {
         clearTimeout(to)
         reader.close()
         detachStderr()
+        // startup が settle した後も child.once('error') は張り付いたままなので、
+        // 以降の 'error' (Node docs: "the process could not be killed" 等・quit() の
+        // child.kill() で発火しうる) を silent に握り潰さないよう log 版へ張り替える。
+        // 同ファイルの ws 'error' 規約 (cleanup 失敗を隠さない) に揃える。
+        onSpawnError = (err) => {
+          console.warn('DaemonClient: child process error after startup settled:', err)
+        }
         fn()
       }
       const to = setTimeout(() => {
@@ -493,6 +513,26 @@ export class DaemonClient extends EventEmitter {
           ),
         )
       })
+
+      // spawn 'error' を settle 機構に接続する。executor 起動前に既に発火済みなら
+      // 即 reject、まだなら onSpawnError を差し替えて後続の発火を拾う (child.once の
+      // listener は生存しており、差し替えた関数を呼ぶ)。
+      const rejectSpawnError = (err: Error): void => {
+        finish(() =>
+          reject(
+            new DaemonStartupError(
+              `daemon spawn failed: ${err.message}`,
+              stderrChunks.join(''),
+              null,
+            ),
+          ),
+        )
+      }
+      if (spawnError) {
+        rejectSpawnError(spawnError)
+      } else {
+        onSpawnError = rejectSpawnError
+      }
     })
 
     return `ws://127.0.0.1:${port}`
