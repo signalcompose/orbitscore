@@ -19,7 +19,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### 6.180 docs(research): WCTM machine-listening deep research + 10 implementation proposals (#371) (Jul 3, 2026)
 
-WCTM の最大ポイント「AI がいかに楽曲の音を聞いて理解するか」（機械の耳）を deep research（**Sonnet 5 × 24 agents**・7角度並列スイープ → load-bearing claim 93 件 → **敵対的検証 16 件: CONFIRMED 8 / REFUTED 7 / UNCLEAR 1** → 完全性クリティーク）で調査し、`docs/research/WCTM_MACHINE_LISTENING_RESEARCH.md` に**サーヴェイ + 実装案 10 + 比較マトリクス + owner 決定事項 4 点**を記録。owner 指示（2026-07-03・Fable セッション）= サーヴェイと実装計画案の立案のみ・実装しない。
+WCTM の最大ポイント「AI がいかに楽曲の音を聞いて理解するか」（機械の耳）を deep research（**Sonnet 5 × 24 agents**・7角度並列スイープ → load-bearing claim 93 件 → **敵対的検証 16 件: CONFIRMED 8 / REFUTED 7 / UNCLEAR 1** → 完全性クリティーク）で調査し、`docs/research/WCTM_MACHINE_LISTENING_RESEARCH.md`（サーヴェイ）と `docs/research/WCTM_LISTENING_IMPLEMENTATION_PROPOSALS.md`（**実装案 10 + 比較マトリクス + owner 決定事項 4 点**・owner 要望で別ファイルに分離）に記録。owner 指示（2026-07-03・Fable セッション）= サーヴェイと実装計画案の立案のみ・実装しない。
 
 **主要な結論**: ①完全自動の耳で本番運用された頑健な先行例は不在 — 数十年の実戦は全て human-in-the-loop（IRCAM 自身がジャズで自動ビートトラッキングを撤退・手動タップ採用 = AIMC 2021 一次確認）②形式把握は特徴量から創発しない（ReaLJam 実証）→ 位置明示ラベル注入が正解 ③MIDI 側路は Voyager 40 年の前例 = guitar-to-MIDI が最有力の耳アップグレード ④和声一致度位置検証は構成要素は枯れているが統合は前例ゼロ = kill-criteria 付き挑戦枠 ⑤ピアノ bleed には「加害源 MIDI 既知」という文献にない好条件 → MIDI 連動解析窓マスクが費用対効果最良。
 
