@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.182 docs(plan): OrbitStudio implementation plan — cutover to VSCodium build (#373) (Jul 4, 2026)
+
+※採番注: 6.180-6.181 は未マージ PR #372（WCTM 耳 research 系列）が保持。後着マージ側で整合。
+
+cutover 済み main を起点に OrbitStudio（VSCodium 版）完成までの実装計画を `docs/development/POST_2.0_ORBITSTUDIO_PLAN.md` に固定（owner 指示 2026-07-04・**後続の Opus セッションがコールドスタートで実行できる粒度**）。Sonnet 5 workflow（4並列読込 [設計docs/extension コード実態/GitHub 状態/WCTM 土台要件] → 起草 → **批評 9 観点 → 改訂**）で作成。
+
+**構成**: Phase 0 spike（stock VSCodium への .vsix side-load + Claude 拡張動作の 2 STOP gate・issue #301 の stale body を即修正）→ Phase 1（#366 landmine + #306 daemon bundle + **`resolveScsynthForUI()` 全 4 箇所**の engine-kind 分岐 — 批評が原案の 2 箇所見落としを捕捉 L149-174/L184-201/L699-708/L836-862・(A) Studio 向け scsynth 非同梱 / (B) 通常 .vsix の 2 系統を同一コードベースの分岐で両立）→ Phase 2（B1 リブランド rebuild・ツールチェーン spike 先行・**gate = 2.0.0 QA Epic #278 チェックリスト転用**で B2/B3 エスカレーションを客観化・Gatekeeper 偽陰性注意）→ Phase 3（署名/notarize — CODESIGN_PIPELINE から転用可能なのは codesign 構文のみで .app バンドル署名は別カテゴリと明記・Apple Developer Program は owner 専管）→ Phase 4（WCTM 非依存ガード 4 点・CLI 実行テストで裏付け）。
+
+**機能組み込みレジストリ**（17 項目・status = prerequisite/owner-decision/post-beta/out-of-scope）と **owner 決定事項 9 点**を分離 — 実際の組み込み可否は owner 判断（計画は確定しない）。**WCTM 誤結合防止を明記**: OrbitStudio は本番（08-07）のいかなる経路にも登場しない・pi SDK 埋め込みは本番後。provenance 注意: PLUGIN_STRATEGY.html は PR #363 未マージ・#301 body は engine-first pivot 前の stale。
+
 ### 6.179 feat(engine): cutover #108 — default audio backend を Rust に切替 (SC 温存) (Jul 3, 2026)
 
 post-2.0 の到達点。native Rust daemon を**既定の音声バックエンド**にする engine-level cutover。owner GO（2026-07-03）を受けて実行。
