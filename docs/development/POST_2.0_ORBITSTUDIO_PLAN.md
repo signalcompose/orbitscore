@@ -107,7 +107,7 @@ B2（patch 付き rebuild）/B3（hard fork）へのエスカレーションは 
 2. **軽量 STOP ゲート（spike）**: VSCodium/Code-OSS 公式パイプラインの署名スクリプト有無を先に調査。有ればそれに従う（工数大幅圧縮）。無ければ Electron 公式 code signing guide ベースの独自スクリプトが要る旨を owner に報告し見積り更新してから進む
 3. **owner action（代行不可・ブロッキング）**: Apple Developer Program 加入・Developer ID Application 証明書取得・CI への secret 提供
 4. 証明書取得後: .app バンドル全体 + 同梱 daemon に内→外の順で `codesign --options runtime --timestamp --entitlements <plist>`
-5. entitlements plist: 現時点（3rd-party プラグイン未ホスト）は最小限で開始。将来の δ VST3/AU 時に hardened runtime 例外（allow-jit / disable-library-validation 等）を追加する前提を明記
+5. entitlements plist: **engine 自体は CLAP プラグイン拡張が完成済み**（in-process #341 + out-of-process sandboxed effect γ M1 #360・scsynth に無かった能力）だが、**Studio 出荷範囲では DSL/UI からのプラグイン利用が未公開**（TS 配線 = follow-up #361・EQ-from-DSL 等は post-cutover）のため entitlements は最小限で開始できる。ただし **CLAP 公開時点（δ VST3/AU を待たず）**で hardened runtime 例外（disable-library-validation / allow-jit 等 — daemon が 3rd-party dylib を dlopen するため）が必要になる前提を明記
 6. `xcrun notarytool submit <dmg> --wait` + staple
 7. Steam 配布は骨組み（manifest 等）のみ・SDK 統合は配布が現実的になるまで scope 外
 
