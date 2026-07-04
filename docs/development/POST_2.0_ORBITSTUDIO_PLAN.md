@@ -169,10 +169,10 @@ B2（patch 付き rebuild）/B3（hard fork）へのエスカレーションは 
 7. #342 残 2 項目のタイミング
 8. **「OrbitStudio」名称は依然候補**（MASTER_PLAN §6）— 確定名称ではない
 9. Phase 2 の Gatekeeper 一時回避（xattr 除去 / ad-hoc 署名）をローカル開発ループ限定で許容するか
-10. **scsynth の同梱退役タイミング**（owner 指摘 2026-07-04「退役手前まではきてるはず」→ 正確な現在地: cutover で opt-out に降格済み・完全退役は別後段と分離済み。SC コード経路・.vsix 同梱・extension ハードゲートは残存）:
-    - **(a) 現計画のまま**: (B) 通常 .vsix は scsynth 同梱継続（可逆性最大・追加変更ゼロ）
-    - **(b) 同梱退役**: .vsix からも scsynth bundle を落とす。`resolveScsynthPath` は explicit→env→bundle の strict 解決なので、**SC opt-out は `ORBIT_SCSYNTH_PATH`（ユーザー自前 scsynth）で引き続き動く** = SC 経路を殺さず配布だけ軽くなる（bundle コピー・署名対象・build:copy-engine 重複が消える）。Phase 1 と同時実施可
-    - **(c) 完全退役**: SC コード経路ごと削除 — 影響大（テスト群・LinkAudio SynthDef 等 SC 資産の扱い）のため **OrbitStudio 計画から分離した別 issue** とし、Phase 2 で Rust 経路が実地証明された後に判断するのを推奨
+10. **scsynth 退役の実行タイミング**（方向は owner 確定 2026-07-04: **「新エンジンに載せ替えて退役させて消す」— 消すこと自体は決定事項であり選択肢ではない**。#108 の「default 切替 → scsynth 退役」どおり。cutover での opt-out 温存は恒久方針でなく移行期の安全網。owner 判断は以下 2 段のタイミングのみ）:
+    - **(b) 同梱退役**（先行・軽い）: .vsix から scsynth bundle を落とす。`resolveScsynthPath` は explicit→env→bundle の strict 解決なので、移行期の SC 起動は `ORBIT_SCSYNTH_PATH`（自前 scsynth）で可能なまま配布だけ軽くなる（bundle コピー・署名対象・build:copy-engine 重複が消える）。**Phase 1 と同時実施可** — 実施すれば Phase 1 の (B) 系統は「scsynth 非同梱・env 指定でのみ SC」に簡素化される
+    - **(c) コード削除 = 完全退役**（後段・重い）: SuperColliderPlayer/OSC 経路・SC 依存テスト・LinkAudio SynthDef 等の SC 資産を削除する**別 issue**。推奨タイミング = Phase 2 ゲート（#278 チェックリストで Rust 経路の実地証明）通過後。これをもって scsynth 退役完了
+    - 本計画の (A)/(B) 2 系統は (c) 完了までの**移行期の姿**であり、終着は「(A) のみ = scsynth を知らないコードベース」
 
 ## 委譲プロファイル（Opus/Sonnet）
 
