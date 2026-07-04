@@ -19,13 +19,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### 6.183 docs(research): LLM composition skill research — small-epoch plan (#374) (Jul 4, 2026)
 
-※採番注: 6.182 は未マージ PR #375（OrbitStudio 計画）が保持。後着マージ側で整合。
-
 LLM に OrbitScore DSL でリフ（クルディッシュ・ダンス型）を作曲させる「作曲スキル」の実装方法を deep research（**Sonnet 5 × 13 agents**・Orient + 3角度 + 敵対的検証 6 件 [C4/R1/U1] + 批評→改訂）で調査し、`docs/research/WCTM_COMPOSITION_SKILL_RESEARCH.md` に**エポック計画 E0-E6 + owner 決定 8 点**を記録。
 
 **最重要訂正（Orient）**: 「Pitch DSL v1.1 は Phase 1 開発中」という session 前提は**古い** — 実際は **Phases 1/2/3/R/4 実装・テスト済み**（2.0.0 同梱・WORK_LOG 6.131）。**リフを書く機能ブロッカーは無く E0（新規コードゼロ・`midi-run` で今日試聴可能）が即動く**。Epic #224 の子 issue チェックリストは stale（要 owner 確認）。
 
 **設計の柱（一次検証済み）**: Libretto（12%→39%/62%→94% の bounded revise ループ）と AI TrackMate が独立に収斂した「**フィードバックは生数値でなく音楽的自然言語で返す**」/ Grammar Prompting（部分 BNF の in-context 提示）/ 様式忠実度は LLM 単体で届かない（隣接証拠 40%）→ **人間キュレーションが実質品質ゲート** / **E4 動機検出器のスコアを生成ループのゲートに使わない固定制約**（検出器にしか聴こえない曲への循環防止・論文候補 = Schuller vs Givan の記号データ検証）。E0→E3 が床・どの kill でも床は残る構造。
+
+### 6.182 docs(plan): OrbitStudio implementation plan — cutover to VSCodium build (#373) (Jul 4, 2026)
+
+cutover 済み main を起点に OrbitStudio（VSCodium 版）完成までの実装計画を `docs/development/POST_2.0_ORBITSTUDIO_PLAN.md` に固定（owner 指示 2026-07-04・**後続の Opus セッションがコールドスタートで実行できる粒度**）。Sonnet 5 workflow（4並列読込 [設計docs/extension コード実態/GitHub 状態/WCTM 土台要件] → 起草 → **批評 9 観点 → 改訂**）で作成。
+
+**構成**: Phase 0 spike（stock VSCodium への .vsix side-load + Claude 拡張動作の 2 STOP gate・issue #301 の stale body を即修正）→ Phase 1（#366 landmine + #306 daemon bundle + **`resolveScsynthForUI()` 全 4 箇所**の engine-kind 分岐 — 批評が原案の 2 箇所見落としを捕捉 L149-174/L184-201/L699-708/L836-862・(A) Studio 向け scsynth 非同梱 / (B) 通常 .vsix の 2 系統を同一コードベースの分岐で両立）→ Phase 2（B1 リブランド rebuild・ツールチェーン spike 先行・**gate = 2.0.0 QA Epic #278 チェックリスト転用**で B2/B3 エスカレーションを客観化・Gatekeeper 偽陰性注意）→ Phase 3（署名/notarize — CODESIGN_PIPELINE から転用可能なのは codesign 構文のみで .app バンドル署名は別カテゴリと明記・Apple Developer Program は owner 専管）→ Phase 4（WCTM 非依存ガード 4 点・CLI 実行テストで裏付け）。
+
+**機能組み込みレジストリ**（17 項目・status = prerequisite/owner-decision/post-beta/out-of-scope）と **owner 決定事項 9 点**を分離 — 実際の組み込み可否は owner 判断（計画は確定しない）。**WCTM 誤結合防止を明記**: OrbitStudio は本番（08-07）のいかなる経路にも登場しない・pi SDK 埋め込みは本番後。provenance 注意（マージ順の記録）: PLUGIN_STRATEGY.html は本計画作成時点で PR #363 未マージ（2026-07-04 マージ済み）・#301 body は engine-first pivot 前の stale（更新済み）。
 
 ### 6.181 docs(research): WCTM ear-PDCA research — sideman as synthetic ground truth (#371) (Jul 4, 2026)
 
