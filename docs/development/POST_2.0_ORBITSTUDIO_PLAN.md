@@ -169,6 +169,10 @@ B2（patch 付き rebuild）/B3（hard fork）へのエスカレーションは 
 7. #342 残 2 項目のタイミング
 8. **「OrbitStudio」名称は依然候補**（MASTER_PLAN §6）— 確定名称ではない
 9. Phase 2 の Gatekeeper 一時回避（xattr 除去 / ad-hoc 署名）をローカル開発ループ限定で許容するか
+10. **scsynth の同梱退役タイミング**（owner 指摘 2026-07-04「退役手前まではきてるはず」→ 正確な現在地: cutover で opt-out に降格済み・完全退役は別後段と分離済み。SC コード経路・.vsix 同梱・extension ハードゲートは残存）:
+    - **(a) 現計画のまま**: (B) 通常 .vsix は scsynth 同梱継続（可逆性最大・追加変更ゼロ）
+    - **(b) 同梱退役**: .vsix からも scsynth bundle を落とす。`resolveScsynthPath` は explicit→env→bundle の strict 解決なので、**SC opt-out は `ORBIT_SCSYNTH_PATH`（ユーザー自前 scsynth）で引き続き動く** = SC 経路を殺さず配布だけ軽くなる（bundle コピー・署名対象・build:copy-engine 重複が消える）。Phase 1 と同時実施可
+    - **(c) 完全退役**: SC コード経路ごと削除 — 影響大（テスト群・LinkAudio SynthDef 等 SC 資産の扱い）のため **OrbitStudio 計画から分離した別 issue** とし、Phase 2 で Rust 経路が実地証明された後に判断するのを推奨
 
 ## 委譲プロファイル（Opus/Sonnet）
 
