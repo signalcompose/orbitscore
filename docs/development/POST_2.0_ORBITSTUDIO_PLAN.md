@@ -17,6 +17,18 @@
 - **`POST_2.0_PLUGIN_STRATEGY.html` は main 未マージ**（PR #363 OPEN・branch `362-post2-plugin-strategy-doc` の commit `3e6e876` にのみ存在）。決定自体は owner 確定済みで WORK_LOG/MASTER_PLAN で裏付け可能。#363 マージ後はこの注記は不要。
 - **issue #301 の body は engine-first pivot（#302）前の古い内容**（SC 既定・engine 非依存の框）。**Phase 0 の最初のタスクで body を現行決定に更新する**（正 = MASTER_PLAN §4 Track B: native の上・cutover 後・CLI+Claude 拡張必須・**scsynth は載せない**）。
 
+## Issue マップ（2026-07-04 起票・追跡は #301）
+
+| issue | 内容 | 依存 |
+|---|---|---|
+| **#301** | tracking epic（body を現行決定に更新済み） | — |
+| #376 | Phase 0 spike | なし（#377 と並行可） |
+| #377 | Phase 1（**#306 を包含**・PR #366 を rebase 拡張） | なし |
+| #378 | Phase 2 B1 rebuild | #376 + #377 |
+| #379 | Phase 3 署名/配布 | #378 |
+| #380 | Phase 4 WCTM ガード | #377（以後並行可） |
+| #381 | **VST3 Step0 spike**（Track A・並行・独立） | なし |
+
 ## 全体構成（5 フェーズ）
 
 ```
@@ -152,13 +164,16 @@ B2（patch 付き rebuild）/B3（hard fork）へのエスカレーションは 
 | capture seam 経由 render/bounce | MIXER_DSL_DESIGN §10 | β 後（master chain 前提） | post-beta |
 | buffer knob #368 | ローカル branch（PR 未作成・要 rebase） | 独立 PR・依存なし | post-beta |
 | LinkAudio の Studio UI 露出 | PLUGIN_STRATEGY §5 | β/改良層（engine 側実装済み） | post-beta |
-| mixer/routing の Studio-era 項目 | MIXER_DSL_DESIGN §11 | β 後（routing model 確定が先） | post-beta |
+| mixer/routing DSL — **2 層で後段**（owner 確認 2026-07-04） | MIXER_DSL_DESIGN §11 | ①DSL routing model（言語側）= engine track・Studio 不要で先行可 ②**Studio-era UI 項目 = VSCodium 化（Phase 2）の後** | post-beta |
 | EQ-from-DSL | PLUGIN_STRATEGY §8 | post-cutover・M2 param path | post-beta |
-| VST3/AU（δ）/ M2 instrument IPC | PLUGIN_STRATEGY §7/§3 | Track A engine プラン | out-of-scope |
+| **VST3 hosting** | PLUGIN_STRATEGY §7 | **#381 Step0 spike（並行・独立）→ δ 本実装**。owner 確定 2026-07-04（CLAP だと実プラグイン資産が使えない） | **committed**（Track A） |
+| AU（δ 後段）/ M2 instrument IPC | PLUGIN_STRATEGY §7/§3 | Track A engine プラン（AU は急がない） | out-of-scope |
 | #342 残 2 項目 / .orbslog v2 再設計 / pi SDK 埋め込み | 各 issue/doc | 別トラック（pi SDK = 本番後） | out-of-scope |
 | VST GUI Electron 共存スパイク（B8） | VSCODIUM research §5 Q2 | **B2 エスカレーション直前のみ**（前倒ししない） | 条件付き |
 
 ## owner 決定事項（この計画が確定しない点）
+
+> 確定済みに移動（2026-07-04）: **VST3 対応 = 実施する**（理由 = CLAP だと実プラグイン資産が使えない → #381 Step0 spike へ）/ **scsynth = 退役・削除方向**（決定 10 はタイミングのみ）/ **mixer Studio-era 項目 = VSCodium 化の後**。
 
 1. **B2/B3 エスカレーション判断** — Phase 2 ゲートの #278 チェックリスト FAIL 項目が出た場合のみ判断（前倒しスパイクしない）
 2. **device-enum API を Phase 1 で実装するか documented gap として先送りか**（いずれでも代替メッセージは必須実施）
