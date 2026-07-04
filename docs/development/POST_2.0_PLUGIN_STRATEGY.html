@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OrbitScore Post-2.0 — Plugin 戦略 と Engine スコープ原則</title>
+<style>
+  :root {
+    --ink: #1a1a1a;
+    --bg: #fdfdfd;
+    --muted: #5b6470;
+    --line: #e2e6ea;
+    --accent-a: #1f6feb;   /* engine track */
+    --accent-b: #8957e5;   /* app track */
+    --accent-c: #1a7f5a;   /* pitch/song track */
+    --warn-bg: #fff8e6;
+    --warn-bd: #e6c34a;
+    --stop-bg: #fdecef;
+    --stop-bd: #e5736f;
+    --inv-bg: #eef4ff;
+    --inv-bd: #1f6feb;
+    --code-bg: #f4f6f8;
+  }
+  html { color: var(--ink); background: var(--bg); }
+  body {
+    margin: 0 auto; max-width: 54em;
+    padding: 48px 28px 96px;
+    font: 16px/1.65 -apple-system, "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+  h1 { font-size: 1.9em; margin: 0 0 .2em; letter-spacing: .01em; }
+  h2 { font-size: 1.35em; margin: 2.2em 0 .6em; padding-bottom: .25em; border-bottom: 2px solid var(--line); }
+  h3 { font-size: 1.1em; margin: 1.6em 0 .4em; }
+  .sub { color: var(--muted); margin: 0 0 1.5em; font-size: .95em; }
+  p { margin: .8em 0; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; font: 13.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+  pre { background: var(--code-bg); padding: 12px 14px; border-radius: 6px; overflow-x: auto; font: 13px/1.55 ui-monospace, Menlo, monospace; }
+  ul, ol { padding-left: 1.5em; }
+  li { margin: .3em 0; }
+  a { color: var(--accent-a); }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .9em; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; }
+  .badge { display: inline-block; font-size: .72em; font-weight: 700; padding: .12em .6em; border-radius: 999px; vertical-align: middle; letter-spacing: .03em; white-space: nowrap; }
+  .b-done { background: #def7e6; color: #1a7f3c; }
+  .b-next { background: #e6efff; color: #1f5fc0; }
+  .b-defer{ background: #fff2cc; color: #8a6d12; }
+  .b-risk { background: #fde2e2; color: #b53a37; }
+  .callout { border-left: 4px solid; border-radius: 0 6px 6px 0; padding: 12px 16px; margin: 1.2em 0; }
+  .c-inv  { background: var(--inv-bg);  border-color: var(--inv-bd); }
+  .c-warn { background: var(--warn-bg); border-color: var(--warn-bd); }
+  .c-stop { background: var(--stop-bg); border-color: var(--stop-bd); }
+  .callout .lbl { font-weight: 700; display: block; margin-bottom: .2em; }
+  .track { border: 1px solid var(--line); border-radius: 8px; padding: 4px 20px 16px; margin: 1.2em 0; border-top: 4px solid var(--accent-a); }
+  .track h3 { margin-top: 1em; }
+  .small { color: var(--muted); font-size: .88em; }
+  hr { border: none; border-top: 1px solid var(--line); margin: 2.5em 0; }
+  .done td:first-child { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Post-2.0 — Plugin 戦略 と Engine スコープ原則</h1>
+<p class="sub">
+  記録日: 2026-06-30（γ M1 PR-C <a href="https://github.com/signalcompose/orbitscore/pull/360">#360</a> マージ後のロードマップ協議）/
+  Issue <a href="https://github.com/signalcompose/orbitscore/issues/362">#362</a> / Epic #292 /
+  関連: <code>POST_2.0_NEXT_STEPS.html</code> · <code>POST_2.0_MASTER_PLAN.html</code> · <code>POST_2.0_GAMMA_M1_DESIGN.md</code>
+</p>
+
+<div class="callout c-inv">
+  <span class="lbl">この文書の位置づけ</span>
+  既存ロードマップ（engine-first: native を opt-in で育て → cutover #108 → OrbitStudio on native → β）は<strong>不変</strong>。
+  本文書はそこに<strong>plugin（VST3/CLAP/AU）戦略と engine のスコープ境界の上位原則</strong>を与え、
+  effects/instruments・LinkAudio・cutover parity・M2・OrbitStudio の各判断を一貫させる。
+</div>
+
+<h2>0. 開発ステップ（engine-first ロードマップ）</h2>
+<p>
+  現状見えている残ステップを順に示す。順序は engine-first（native を <code>ORBITSCORE_ENGINE=rust</code> opt-in で育て →
+  cutover #108 → OrbitStudio on native → β）。本文書の原則（§1–§9）が各ステップの判断根拠。
+</p>
+
+<div class="track" style="border-top-color: var(--accent-c);">
+  <h3>✅ 完了（native engine 基盤）</h3>
+  <ul class="small">
+    <li>A0 / S1 / S2 基盤 → 第1増分（audio parity #305 ・ α recovery floor #318）</li>
+    <li>A3 slice varispeed #320 ・ A4 LinkAudio #323–#336</li>
+    <li>daemon CLAP 統合 #341 ・ γ Step0 / latency spike #349 / #351</li>
+    <li><strong>γ M1 effect OOP #360</strong>（2026-06-30 merged・format 非依存 substrate の effect 側 + 実機 stale 0.000% / SLOTS=2 確定）</li>
+  </ul>
+</div>
+
+<div class="track">
+  <h3>▶ current version → cutover（次の道筋）</h3>
+  <ol>
+    <li>
+      <strong>capture seam</strong> <span class="badge b-next">次の一手</span> —
+      耳なし実時間検証の基盤（#307・S1 <code>PostMixSink</code> パターンの延長・production daemon に<strong>未配線</strong>）。
+      cutover で実エンジン（scheduler→daemon→device→実サンプル）を耳でなく機械で回帰検証するのに load-bearing（§4 / spec §6）。
+      <span class="small">= 本セッションで実演した「耳を介さないデジタル検証」（offline parity / round-trip probe）の<strong>実時間版</strong>。</span>
+    </li>
+    <li>
+      <strong>cutover #108</strong> <span class="badge b-next">里程標</span> —
+      現行 .orbs DSL を Rust で SC parity に end-to-end 検証 → <code>ORBITSCORE_ENGINE=rust</code> を default 化 → scsynth 退役。
+      <div class="small">
+        gate = A3 ✓ + A4 ✓ + master effects（<strong>deferred</strong> §4）+ followup（hard-stop-all / Gap5 / Finding2 = A3/A4 織り込み・closure は cutover checklist で確認）+ capture seam。
+        <strong>M2 / instruments は current の sample ベース DSL には不要</strong> → post-cutover。
+      </div>
+    </li>
+  </ol>
+</div>
+
+<div class="track" style="border-top-color: var(--accent-b);">
+  <h3>⏭ cutover 後（plugin breadth + app + 改良）— §1 メタ原則に従い<strong>優先度順</strong></h3>
+  <ul>
+    <li><strong>M2</strong> instrument IPC（<strong>format-neutral</strong> note + param/CC・§3）— 全 instrument（CLAP / VST3 / AU）の共通基盤</li>
+    <li><strong>δ VST3 / AU</strong>（additive・§7）<span class="badge b-defer">Step0 spike + SDK license gate</span> — VST3 effects は M1 / instruments は M2 に乗る。AU 急がない</li>
+    <li><strong>OrbitStudio</strong>（VSCodium）on native（#301）— 差別化は self-contained・録音/effects は interop 可（§6）</li>
+    <li><strong>β</strong> audio DSL ⊇ pitch DSL / <strong>EQ-from-DSL</strong>（§8）/ slice #239</li>
+  </ul>
+</div>
+
+<div class="track" style="border-top-color: var(--accent-c);">
+  <h3>∥ 並行トラック（engine スコープ外）</h3>
+  <ul class="small">
+    <li><strong>WCTM / Pitch DSL v1.1</strong>（Epic #224・締切 2026-08-07）— pitch DSL + MIDI 出力 + session log + WCTM。
+      pitch→instrument は近期 MIDI 経由（外部 DAW）。native engine が VST3 instrument を host する convergence は post-cutover。</li>
+  </ul>
+</div>
+
+<h2>1. メタ原則 — 業界規格採用は leverage</h2>
+<p>
+  OrbitScore が業界規格（<strong>VST3 / CLAP / AU</strong> プラグイン形式・<strong>LinkAudio</strong>・<strong>MIDI</strong>・他 DAW へのオーディオ）を取り入れるのは、
+  単なる互換性ではなく <strong>leverage（てこ）</strong> として。理由は 2 つ:
+</p>
+<ol>
+  <li><strong>手段の組み合わせを柔軟にできる</strong> — ユーザーも私たちもツールを混在させられる（interop &gt; 囲い込み）。</li>
+  <li><strong>私たちが先に実装しなければならないものにリソースを集中する</strong> — 規格に乗れる所は乗り、
+    <em>自分たちにしか作れない fundamental</em>（audio DSL / scheduling / engine の差別化要素）に希少な開発リソースを寄せる。</li>
+</ol>
+<p class="small">以降の §2–§7 はすべてこのメタ原則の<strong>インスタンス</strong>である。</p>
+
+<h2>2. Engine は fundamental に保つ — effects/instruments は plugin</h2>
+<div class="callout c-inv">
+  <span class="lbl">North star（plugin 作業全体の指針）</span>
+  <strong>fundamental engine</strong>（audio DSL + scheduling + plugin host substrate + DSL→plugin 制御）に
+  <strong>effects/instruments の DSP を抱え込まない</strong>。1st-party を作るときも
+  <strong>engine 内ではなく別の CLAP/VST plugin として</strong>作る（または 3rd-party で代用）。
+  <strong>VST3/CLAP/AU 対応は、その「engine 外 plugin で effects/instruments を成立させる」delivery 機構</strong>であり、
+  format breadth が目的ではない。
+</div>
+<p><strong>なぜこれが正しい資源配分か</strong>:</p>
+<ul>
+  <li>1st-party effect を別 plugin にすれば <strong>OrbitScore 以外の CLAP/VST host でも再利用</strong>できる。</li>
+  <li><strong>engine と独立に開発</strong>でき、engine repo / cutover scope を汚さない。</li>
+  <li>3rd-party plugin は <strong>無償のレバレッジ</strong>。</li>
+  <li>結果、engine の開発リソースは <strong>fundamental（host + DSL）に集中</strong>できる。</li>
+</ul>
+<p class="small">帰結: engine に compressor/limiter/normalizer/EQ 等の DSP を実装する提案はしない。必要なら「別 CLAP/VST plugin」か「hosted 3rd-party」で解く。</p>
+
+<h2>3. Format 非依存 substrate（γ の OOP plugin host）</h2>
+<p>γ の out-of-process plugin host は <strong>format 非依存の substrate</strong>。plugin format = <strong>どの child binary を spawn するか</strong>だけで、各 SDK は child プロセス内に隔離される（fault 隔離の鏡）。</p>
+<table>
+  <tr><th>substrate</th><th>consumers（child binary・SDK は child 内隔離）</th></tr>
+  <tr><td><strong>M1</strong> effect transport（file-backed mmap・<span class="badge b-done">DONE #360</span>）</td><td>CLAP effect child ✓ ／ VST3 effect child（追加）／ AU effect child（追加）</td></tr>
+  <tr><td><strong>M2</strong> instrument IPC（per-block event/param・<span class="badge b-next">次</span>）</td><td>CLAP instrument child ／ VST3 instrument child（追加）／ AU instrument child（追加）</td></tr>
+</table>
+<div class="callout c-inv">
+  <span class="lbl">唯一の plan-affecting 決定 — M2 IPC を format-neutral に</span>
+  <strong>M2 の event/param IPC は format-neutral（note + param/CC の意味論）で仕様化する。CLAP イベント形に寄せない。</strong>
+  <code>PluginEvent::NoteOn{key,channel,velocity}</code> は既に neutral。この規律だけが
+  「VST3/AU = 後から additive」と「後から作り直し」を分ける。さらに <strong>param/CC change を neutral に運ぶ</strong>ことが、
+  「DSL から plugin を CC 制御」（§7 EQ-from-DSL）の基盤になる。
+</div>
+
+<h2>4. Cutover parity bar の精緻化</h2>
+<p>
+  cutover #108 の gate は <strong>現行 .orbs DSL が SuperCollider と同等に鳴ること</strong>（A3 + A4 + γ effects 機構）であり、
+  plugin format の広さとは<strong>直交</strong>する。<code>NEXT_STEPS §2</code> が挙げた parity gap のうち <strong>master effects</strong> を実情に合わせて緩める:
+</p>
+<div class="callout c-warn">
+  <span class="lbl">master compressor / limiter / normalizer は cutover bar から外す <span class="badge b-defer">defer</span></span>
+  これらの DSL verb（<code>global.compressor()/limiter()/normalizer()</code>）は <strong>scsynth 時代も実際には未使用</strong>だった
+  （effects は外部 = Ableton 等に委譲）。よって SC parity は<strong>実質的な gap ではない</strong> →
+  現状の warn + no-op を据え置き、cutover を更に lean にする。
+  <br /><span class="small">根拠は「未使用 + effects は engine の外（plugin / 外部 DAW）に置く」原則であって、「LinkAudio が effects を担うから」ではない（§5）。将来 effects が要れば hosted plugin で。</span>
+</div>
+<p><strong>refined cutover gate</strong> = A3 ✓（slice varispeed）+ A4 ✓（LinkAudio）+ parity-gap followup（hard-stop-all / Gap5 / Finding2）+ capture seam（耳なし実時間検証）。<strong>master 自前 effects は load-bearing ではない</strong>。</p>
+
+<h2>5. LinkAudio は出力の 1 つ（銀の弾丸ではない）</h2>
+<div class="callout c-stop">
+  <span class="lbl">framing 訂正</span>
+  LinkAudio を「effects の経路」と中心に据えるのは誤り。<strong>OrbitStudio / OrbitEngine から見て LinkAudio は多数ある出力オプションの 1 つ</strong>にすぎない。
+  必要なら使う・不要なら使わない。
+</div>
+<ul>
+  <li>OrbitStudio に per-track recording があれば LinkAudio を使わない構成もあり得る。</li>
+  <li>他 DAW へオーディオを流し込んで録音、でもよい。</li>
+  <li>MIDI 出力（pitch DSL v1.1）も並ぶ出力経路の 1 つ。</li>
+</ul>
+<p class="small">出力/ルーティングは fundamental engine の外側の<strong>柔軟な層</strong>（メタ原則 §1）。どれを使うかはユーザー/構成次第。</p>
+
+<h2>6. OrbitStudio のスコープ</h2>
+<ul>
+  <li><strong>差別化に効く所は self-contained を目指す</strong>（「なるべく OrbitStudio で完結」）。</li>
+  <li>ただし <strong>完結 ≠ 全部 1st-party</strong>。録音・effects 等は <strong>interop で解いてよい</strong>（他 DAW へ録る・plugin を host する）。</li>
+  <li><strong>per-track recording</strong> は <span class="badge b-defer">nice-to-have</span>（あると扱いやすい・録り忘れ防止）だが <strong>1st-party 必須ではない</strong>（余裕があれば実装）。</li>
+</ul>
+
+<h2>7. δ — VST3 / AU（additive・優先度順）</h2>
+<div class="track">
+  <h3>「VST3 は cutover の前か後か」= 問いの軸が違う</h3>
+  <p>
+    cutover の gate は現行 DSL の SC parity（§4）で、plugin breadth と直交。よって
+    <strong>VST3 は cutover を塞がず・待たず</strong>、§3 の format 非依存 substrate に乗る
+    <strong>additive トラック</strong>として <strong>優先度（依存ではない）</strong>で並べる。
+    実際の次の関門は M2（CLAP instrument にも必要 = 既にプラン内）。VST3 は乗るだけで<strong>ロードマップは並び替わらない</strong>。
+  </p>
+  <ul>
+    <li>VST3 <strong>effects</strong> = M1 substrate に VST3 effect child を追加（低コスト・実 plugin 資産でアーキを検証できる test 価値が高い）。</li>
+    <li>VST3 <strong>instruments</strong> = M2 substrate に VST3 instrument child を追加（pitch DSL と結節するため重要）。</li>
+    <li><strong>AU は急がない</strong>（owner）。</li>
+  </ul>
+  <div class="callout c-warn">
+    <span class="lbl">gate — Step0 spike + ライセンス一次確認</span>
+    VST3 を child 内で host する部分は <strong>net-new・未実証の Rust 作業</strong>（自社 doc 評価「最難」）。
+    γ が spike（#349/#351）で確信を得たのと同様、<strong>δ scope 確定の前に VST3 Step0 spike</strong>
+    （実 VST3 を 1 つ load → <code>vst3</code> crate で sample-exact な 1 block を出す）を通す。
+    併せて <strong>VST3 SDK の現行ライセンスを一次確認</strong>（「SDK 3.8 = MIT」は自記述で primary 未確認。
+    permissive graph に置けるか否かを左右する。OOP child のプロセス境界は license に関係なく fault 隔離は効く）。
+  </div>
+</div>
+
+<h2>8. EQ-from-DSL <span class="badge b-defer">post-cutover want</span></h2>
+<p>
+  owner の本命は <strong>DSL から操作できる EQ</strong>（comp/limiter と違い音響表現に直結する creative effect）。
+  ただし<strong>急がない</strong> — VST/CLAP を <strong>CC で制御</strong>すれば済むため。
+  これは §3 の <strong>M2 format-neutral param/CC path の直接の消費者</strong>であり、
+  <strong>新機構なしに「hosted CLAP/VST3 EQ + M2 param CC」で成る</strong>（post-cutover）。
+</p>
+
+<hr />
+
+<h2>9. まとめ — 残りロードマップへの効き方</h2>
+<table>
+  <tr><th>項目</th><th>位置づけ</th></tr>
+  <tr><td>cutover #108</td><td>更に lean（master 自前 effects 不要・gate = 現行 DSL parity + capture + 小 followup）<span class="badge b-next">里程標</span></td></tr>
+  <tr><td>M2 instrument IPC</td><td>次の関門。<strong>format-neutral（note + param/CC）で仕様化</strong>するのが唯一の plan-affecting 決定</td></tr>
+  <tr><td>δ VST3/AU</td><td>substrate に child を足す additive・優先度順。<strong>Step0 spike + SDK ライセンス確認</strong>が gate。AU 急がない</td></tr>
+  <tr><td>EQ-from-DSL</td><td>post-cutover want（M2 param path に乗る・急がない）</td></tr>
+  <tr><td>OrbitStudio</td><td>差別化は self-contained・録音/effects は interop 可・per-track recording は任意</td></tr>
+  <tr><td>LinkAudio</td><td>出力の 1 つ（中心ではない）</td></tr>
+</table>
+<p class="small">
+  本文書は決定の記録であり、既存の <code>POST_2.0_NEXT_STEPS.html</code> / <code>POST_2.0_MASTER_PLAN.html</code> のロードマップ順序を変更しない。
+  §4 の cutover bar 精緻化と §3 の M2 format-neutral 決定は、次に各 SoT へ反映する候補。
+</p>
+
+</body>
+</html>
