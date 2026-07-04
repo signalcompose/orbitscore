@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.183 docs(research): LLM composition skill research — small-epoch plan (#374) (Jul 4, 2026)
+
+※採番注: 6.182 は未マージ PR #375（OrbitStudio 計画）が保持。後着マージ側で整合。
+
+LLM に OrbitScore DSL でリフ（クルディッシュ・ダンス型）を作曲させる「作曲スキル」の実装方法を deep research（**Sonnet 5 × 13 agents**・Orient + 3角度 + 敵対的検証 6 件 [C4/R1/U1] + 批評→改訂）で調査し、`docs/research/WCTM_COMPOSITION_SKILL_RESEARCH.md` に**エポック計画 E0-E6 + owner 決定 8 点**を記録。
+
+**最重要訂正（Orient）**: 「Pitch DSL v1.1 は Phase 1 開発中」という session 前提は**古い** — 実際は **Phases 1/2/3/R/4 実装・テスト済み**（2.0.0 同梱・WORK_LOG 6.131）。**リフを書く機能ブロッカーは無く E0（新規コードゼロ・`midi-run` で今日試聴可能）が即動く**。Epic #224 の子 issue チェックリストは stale（要 owner 確認）。
+
+**設計の柱（一次検証済み）**: Libretto（12%→39%/62%→94% の bounded revise ループ）と AI TrackMate が独立に収斂した「**フィードバックは生数値でなく音楽的自然言語で返す**」/ Grammar Prompting（部分 BNF の in-context 提示）/ 様式忠実度は LLM 単体で届かない（隣接証拠 40%）→ **人間キュレーションが実質品質ゲート** / **E4 動機検出器のスコアを生成ループのゲートに使わない固定制約**（検出器にしか聴こえない曲への循環防止・論文候補 = Schuller vs Givan の記号データ検証）。E0→E3 が床・どの kill でも床は残る構造。
+
 ### 6.181 docs(research): WCTM ear-PDCA research — sideman as synthetic ground truth (#371) (Jul 4, 2026)
 
 owner 提起の 4 仮説（①sideman を合成 ground-truth 生成器に耳の PDCA ②一曲特化 ③OrbitScore DSL を理解基盤に ④音空間の捕捉）を deep research（**Sonnet 5 × 16 agents**・sideman リポジトリ直接調査 + 4角度スイープ + 敵対的検証 8 件 [C3/R5] + **批評 22 攻撃 → 改訂**の 2 周）で検証し、`docs/research/WCTM_EAR_PDCA_RESEARCH.md` に提案 A-G + 推奨シーケンス + owner 確認事項 4 点を記録。
