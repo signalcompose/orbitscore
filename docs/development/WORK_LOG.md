@@ -17,6 +17,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.181 docs(research): WCTM ear-PDCA research — sideman as synthetic ground truth (#371) (Jul 4, 2026)
+
+owner 提起の 4 仮説（①sideman を合成 ground-truth 生成器に耳の PDCA ②一曲特化 ③OrbitScore DSL を理解基盤に ④音空間の捕捉）を deep research（**Sonnet 5 × 16 agents**・sideman リポジトリ直接調査 + 4角度スイープ + 敵対的検証 8 件 [C3/R5] + **批評 22 攻撃 → 改訂**の 2 周）で検証し、`docs/research/WCTM_EAR_PDCA_RESEARCH.md` に提案 A-G + 推奨シーケンス + owner 確認事項 4 点を記録。
+
+**主要判定**: 仮説 1 は**記号/ラベル層に限定して成立**（生音特徴量の較正は合成では埋まらない — AAM 合成コード認識 97%→実転移ジャンル依存劣化・ピアノ転写 -16.55 F1 の音響過適合等が一次裏付け）。一曲特化は Music Plus One（per-piece HMM 較正）の数十年前例あり・ただしリハーモナイズ耐性の前例は不在。**循環の罠**（sideman で校正し sideman で評価）は実在の測定現象 → 独立ホールドアウト（owner 実演奏録音）+ 「較正セット単体精度で内部判断しない」規律を案E として必須化。検証の成果 = sideman に**バッチドライバ 2 種が実装済み**と判明（「未実装」claim を REFUTED・工数が下がる訂正）・`NoteEvent.source` が OrbitScore evalSource 概念を既に参照。
+
+**master switch**: 全 pre-0807 判定は「ATTYA が本番曲」という未確認前提 → owner 確認が Day 0。既存 W3-W8 ロードマップ（6.180）のゲートは置換せず追加の検証ケースとして積む。sideman は UNLICENSED/private → 静的スナップショット凍結・本番ランタイム非バンドルのガバナンス境界を全案共通で宣言。
+
 ### 6.180 docs(research): WCTM machine-listening deep research + 10 implementation proposals (#371) (Jul 3, 2026)
 
 WCTM の最大ポイント「AI がいかに楽曲の音を聞いて理解するか」（機械の耳）を deep research（**Sonnet 5 × 24 agents**・7角度並列スイープ → load-bearing claim 93 件 → **敵対的検証 16 件: CONFIRMED 8 / REFUTED 7 / UNCLEAR 1** → 完全性クリティーク）で調査し、`docs/research/WCTM_MACHINE_LISTENING_RESEARCH.md`（サーヴェイ）と `docs/research/WCTM_LISTENING_IMPLEMENTATION_PROPOSALS.md`（**実装案 10 + 比較マトリクス + owner 決定事項 4 点**・owner 要望で別ファイルに分離）に記録。owner 指示（2026-07-03・Fable セッション）= サーヴェイと実装計画案の立案のみ・実装しない。
