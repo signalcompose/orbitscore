@@ -70,7 +70,7 @@ LOOP(kick)
 | Setting | Default | Description |
 |---|---|---|
 | `orbitscore.scsynthPath` | `""` | Override path to a custom `scsynth` binary. Leave empty to use the bundled scsynth (recommended). |
-| `orbitscore.engine` | `sc` | Audio backend: `sc` (default, supported) or `rust` (experimental native `orbit-audio-daemon`, dog-food only — only bundled for macOS Apple Silicon; unavailable on any other platform until you build one yourself and set `ORBIT_AUDIO_DAEMON_PATH`). |
+| `orbitscore.engine` | `rust` | Audio backend: `rust` (default, native `orbit-audio-daemon` — only bundled for macOS Apple Silicon; unavailable on any other platform until you build one yourself and set `ORBIT_AUDIO_DAEMON_PATH`) or `sc` (SuperCollider, requires bundled scsynth or `orbitscore.scsynthPath`). |
 | `orbitscore.flashCount` | `3` | Number of times to flash executed lines (1–5) |
 | `orbitscore.flashDuration` | `150` | Duration of each flash in milliseconds (50–500) |
 | `orbitscore.flashColor` | `selection` | Color theme for flash (`selection` / `error` / `warning` / `info` / `custom`) |

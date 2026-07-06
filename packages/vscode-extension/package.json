@@ -160,13 +160,13 @@
         },
         "orbitscore.engine": {
           "type": "string",
-          "enum": ["sc", "rust"],
+          "enum": ["rust", "sc"],
           "enumDescriptions": [
-            "SuperCollider (scsynth) — default, fully supported audio backend.",
-            "Experimental native Rust audio daemon (orbit-audio-daemon). Only bundled for macOS Apple Silicon (darwin-arm64); on any other platform the engine will fail to start until you build one yourself and set ORBIT_AUDIO_DAEMON_PATH."
+            "Native Rust audio daemon (orbit-audio-daemon) — default. Only bundled for macOS Apple Silicon (darwin-arm64); on any other platform the engine will fail to start until you build one yourself and set ORBIT_AUDIO_DAEMON_PATH.",
+            "SuperCollider (scsynth). Requires the bundled scsynth or a custom binary via orbitscore.scsynthPath."
           ],
-          "default": "sc",
-          "description": "Audio backend to use. \"sc\" (default) is the supported SuperCollider engine. \"rust\" opts into the experimental native engine (dog-food only, darwin-arm64 only).",
+          "default": "rust",
+          "description": "Audio backend to use. \"rust\" (default) is the native audio daemon (orbit-audio-daemon). \"sc\" opts into SuperCollider (requires bundled scsynth or orbitscore.scsynthPath).",
           "scope": "machine-overridable"
         }
       }

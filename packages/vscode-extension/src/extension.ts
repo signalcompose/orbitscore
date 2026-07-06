@@ -66,10 +66,14 @@ export async function activate(context: vscode.ExtensionContext) {
   updateBundleStatus()
   bundleStatusItem.show()
 
-  // Re-evaluate bundle status when user changes the override setting
+  // Re-evaluate bundle status when user changes the override setting or
+  // switches engine kind (#377: kind gates whether scsynth is even resolved).
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('orbitscore.scsynthPath')) {
+      if (
+        e.affectsConfiguration('orbitscore.scsynthPath') ||
+        e.affectsConfiguration('orbitscore.engine')
+      ) {
         updateBundleStatus()
       }
     }),
@@ -117,6 +121,19 @@ export function deactivate() {
 }
 
 /**
+ * Read `orbitscore.engine` and normalize it to 'rust' | 'sc'.
+ *
+ * Mirrors the engine-side normalization in `resolveEngineKind`
+ * (packages/engine/src/audio/engine-backend.ts): only the literal value
+ * `"sc"` opts into SuperCollider; any other value (including unset/unknown)
+ * resolves to `rust` — matching cutover #369's Rust-default behavior.
+ */
+function getConfiguredEngineKind(): 'rust' | 'sc' {
+  const raw = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'rust')
+  return raw?.trim().toLowerCase() === 'sc' ? 'sc' : 'rust'
+}
+
+/**
  * Resolve scsynth via shared resolver (engine の compiled JS を runtime require).
  * Returns null on failure. 失敗時は outputChannel に reason を log するため
  * View Logs から原因を追える (engine/dist/ 不在 vs. bundle 不在 vs. その他)。
@@ -142,12 +159,24 @@ function resolveScsynthForUI(): { path: string; source: string } | null {
 /**
  * Refresh the bundle status bar item to reflect the current resolution.
  *
+ * engine kind (#377): when `orbitscore.engine` resolves to \`rust\`, scsynth is
+ * not part of the picture at all — the status bar shows a non-error "native"
+ * indicator instead of resolving/checking for scsynth. Only \`sc\` kind runs
+ * the scsynth resolution below.
+ *
  * Strict mode (Issue #136): resolver は SC.app / Spotlight 暗黙 fallback を
  * 持たないため、source は \`bundle\` / \`env\` / \`explicit\` のいずれか。
  * 解決失敗時は error 状態を強調表示する。
  */
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
+  if (getConfiguredEngineKind() === 'rust') {
+    bundleStatusItem.text = '$(check) engine: rust (native)'
+    bundleStatusItem.tooltip =
+      'Native Rust audio daemon (orbit-audio-daemon). scsynth is not required.'
+    bundleStatusItem.backgroundColor = undefined
+    return
+  }
   const resolution = resolveScsynthForUI()
   if (!resolution) {
     bundleStatusItem.text = '$(error) scsynth: not found'
@@ -176,6 +205,10 @@ function updateBundleStatus(): void {
 /**
  * Show error notification when scsynth resolution fails.
  *
+ * engine kind (#377): under \`rust\` kind, scsynth resolution is not part of
+ * the startup path at all, so this notice must not fire — early return before
+ * calling \`resolveScsynthForUI()\`.
+ *
  * Strict mode (Issue #136): bundle / env / explicit が解決できれば silent。
  * いずれも見つからない場合は毎回エラー表示 (修復必須)。
  * \`globalState\` の dismiss 機構は持たない (silent fallback がないため
@@ -183,6 +216,7 @@ function updateBundleStatus(): void {
  */
 async function maybeShowBundleNotice(): Promise<void> {
   if (!outputChannel) return
+  if (getConfiguredEngineKind() === 'rust') return
   const resolution = resolveScsynthForUI()
   if (resolution) {
     // bundle / env / explicit いずれも resolved → 通知不要
@@ -696,15 +730,23 @@ function startEngine(debugMode: boolean = false) {
     return
   }
 
+  // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
+  // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
+  // the native daemon doesn't need scsynth to be resolvable.
+  const engineKind = getConfiguredEngineKind()
+
   // Pre-check: scsynth が解決できない場合は engine spawn を行わず、エラー
   // Notification のみ表示する。spawn してから boot 失敗するとユーザーに
   // 二重通知 (resolver エラー + engine 終了ログ) が出てしまうのを防ぐ
   // (claude-review on PR #155 の Significant 指摘 #2)。
   // 解決できた場合はその path を engine spawn に再利用 (Minor #1: 二重 fs.statSync 回避)。
-  const scResolution = resolveScsynthForUI()
-  if (!scResolution) {
-    void maybeShowBundleNotice()
-    return
+  let scResolution: { path: string; source: string } | null = null
+  if (engineKind === 'sc') {
+    scResolution = resolveScsynthForUI()
+    if (!scResolution) {
+      void maybeShowBundleNotice()
+      return
+    }
   }
 
   const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
@@ -741,25 +783,26 @@ function startEngine(debugMode: boolean = false) {
     env.ORBITSCORE_DEBUG = '1'
   }
 
-  // Audio backend selection (Issue #306, dog-food only). "sc" is the shipped
-  // default and MUST remain authoritative even if the extension host process
-  // itself inherited an ORBITSCORE_ENGINE env var from its own launch
-  // environment — so we explicitly unset it rather than merely not setting it.
-  const engineSetting = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'sc')
-  if (engineSetting === 'rust') {
+  // Audio backend selection (#377, post-cutover #369). Engine kind MUST be set
+  // explicitly on env — cutover flipped the *unset* default to `rust`, so a
+  // bare `delete env.ORBITSCORE_ENGINE` no longer means "use SC" if the
+  // extension host process itself inherited an ORBITSCORE_ENGINE env var from
+  // its own launch environment. Both branches set the var explicitly so the
+  // configured kind is authoritative regardless of inherited env state.
+  if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
-    outputChannel?.appendLine(
-      '🦀 Audio backend: rust (orbit-audio-daemon, opt-in, darwin-arm64 only)',
-    )
+    outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
   } else {
-    delete env.ORBITSCORE_ENGINE
-  }
+    env.ORBITSCORE_ENGINE = 'sc'
 
-  // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
-  // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
-  // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。
-  env.ORBIT_SCSYNTH_PATH = scResolution.path
-  outputChannel?.appendLine(`🔧 scsynth (${scResolution.source}): ${scResolution.path}`)
+    // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
+    // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
+    // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。
+    // scResolution is guaranteed non-null here: the 'sc' branch above returns
+    // early when resolution fails.
+    env.ORBIT_SCSYNTH_PATH = scResolution!.path
+    outputChannel?.appendLine(`🔧 scsynth (${scResolution!.source}): ${scResolution!.path}`)
+  }
 
   // Spawn engine process
   engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -848,6 +891,20 @@ function forceKillScsynth() {
 }
 
 async function selectAudioDevice() {
+  // engine kind (#377): device selection is implemented against scsynth's
+  // boot-log device listing and has no Rust-engine equivalent yet. Surface
+  // this explicitly rather than silently probing for (and failing to find)
+  // scsynth under the 'rust' kind.
+  if (getConfiguredEngineKind() === 'rust') {
+    outputChannel?.appendLine(
+      '⚠️ Audio device selection is not supported with the Rust engine (orbitscore.engine: "rust"); using system default output.',
+    )
+    vscode.window.showWarningMessage(
+      '⚠️ Audio device selection is not yet supported with the Rust engine (orbitscore.engine: "rust"). The system default output device is used. Set orbitscore.engine to "sc" to use SuperCollider device selection.',
+    )
+    return
+  }
+
   outputChannel?.appendLine('🔊 Detecting audio devices...')
 
   // Get workspace root

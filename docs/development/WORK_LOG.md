@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.186 feat(vscode-extension): engine-kind branching — rust-default UI, scsynth sites gated (#377) (Jul 7, 2026)
+
+cutover #369 で native Rust daemon が既定音声エンジンになった後も、`extension.ts` には scsynth 前提のコードが 4 箇所残っていた（scsynth 非同梱の OrbitStudio 成果物では毎回エラーになる landmine）。「scsynth の物理的有無」でなく「**engine kind**」で分岐させ、silent fallback は作らない（Issue #136 strict mode 踏襲）。
+
+- **helper 新設**: `getConfiguredEngineKind()`（`extension.ts`）。`orbitscore.engine` を読み、`'sc'`（trim + lowercase）のみ SC、それ以外（未設定・未知値含む）は `rust` に正規化。engine 側 `resolveEngineKind`（`packages/engine/src/audio/engine-backend.ts`）の正規化と一致させ、UI/engine 間で挙動がズレないようにした。
+- **4 サイトを engine kind で分岐**:
+  - `updateBundleStatus()`: `rust` kind では `resolveScsynthForUI()` を呼ばず non-error 表示（`$(check) engine: rust (native)`）。
+  - `maybeShowBundleNotice()`: `rust` kind では `resolveScsynthForUI()` を呼ぶ前に early return（scsynth 不在通知を抑制）。
+  - `startEngine()`: `rust` kind では scsynth pre-check をスキップし `env.ORBITSCORE_ENGINE='rust'` を明示 set。`sc` kind では既存 pre-check を維持しつつ **`env.ORBITSCORE_ENGINE='sc'` を明示 set**（従来の `delete env.ORBITSCORE_ENGINE` は cutover 後は landmine — 拡張ホストが起動時に継承した env 次第で SC にならない場合があった）。
+  - `selectAudioDevice()`: `rust` kind では `resolveScsynthForUI()` を呼ぶ前に明示的な warning message + outputChannel log を出して return（サイレントに壊れたコマンドを残さない。device 選択の Rust 版実装は今回スコープ外）。
+  - config listener（`onDidChangeConfiguration`）: `orbitscore.scsynthPath` に加え `orbitscore.engine` の変更でも `updateBundleStatus()` を再実行するよう配線。
+- **default flip**: `package.json` の `contributes.configuration.orbitscore.engine` を enum `["sc","rust"]`/default `"sc"` → enum `["rust","sc"]`/default `"rust"` に変更（rust-default UI が cutover 後の実態と一致）。README の設定表も同期。
+- **release.yml**: `.github/workflows/release.yml`（runner=`macos-14`、Apple Silicon）に Rust toolchain セットアップ（`dtolnay/rust-toolchain@stable` + `Swatinem/rust-cache@v2`）+ `cargo build --release -p orbit-audio-daemon --manifest-path rust/Cargo.toml` を「Build engine + extension TypeScript」ステップの**前**に追加。既存 `scripts/copy-daemon-bin.sh`（`npm run build` → `build:engine` 経由で呼ばれる・daemon バイナリ不在時は warning+exit 0 の best-effort）はこの順序保証で daemon を拾えるようになる。post-package 検証ステップに `engine/bin/darwin-arm64/orbit-audio-daemon` の同梱 + 実行属性チェックを追加（fail-loud）。**scsynth 関連ステップ（brew install / build:bundle / verify:bundle）は無改変で維持**（owner 暫定判断: scsynth 同梱は Phase 1 据え置き）。
+- **孤立ファイル削除**: `packages/vscode-extension/syntaxes/orbitscore.tmLanguage.json`（旧 MIDI DSL grammar・`contributes.grammars` は `orbitscore-audio.tmLanguage.json` のみ参照・repo 全体 grep で他参照なしを確認）を `git rm`。`docs/development/POST_2.0_ORBITSTUDIO_PLAN.md` の cleanup チェックリスト項目に対応。
+- **暫定判断（owner 確認待ち）**: ① `selectAudioDevice()` の Rust エンジン向け実装（device enum）は未着手 — 現状は warning message で明示的に「未サポート」を返すのみ（documented gap として先送り）。② scsynth 同梱（release.yml の brew install/bundle/verify ステップ）は本 Phase では据え置き — Studio 集中方針([[orbitscore-post2-0-native-engine-direction]]参照)次第で今後見直し。
+- **検証**: `npm run build`（root）緑（daemon バイナリ同梱の copy も再確認）。`npm test` 1192 passed / 28 skipped（変化なし）。`npm run lint` は既存 baseline と同一の 10 errors（vendored SuperCollider SDK `packages/sc-link-audio/external_libraries/` 配下の tsconfig 未包含ファイルへの parsing error・本変更と無関係）+ 1 warning（`tests/audio/audio-slicer.spec.ts` の import/order・pre-existing）のみ — 変更前 stash 比較で同一件数を確認済み。
+
 ### 6.185 feat(vscode-extension): bundle native audio daemon into .vsix, zero-config resolve (#306) (Jul 3, 2026)
 
 Issue #306（限定スコープ第一版）。installed .vsix から `orbit-audio-daemon`（rust engine, opt-in）を**ゼロ設定で解決**できるようにする。**SC は default のまま据え置き**（rust は opt-in・default を倒さない）。
