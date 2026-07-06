@@ -123,14 +123,27 @@ export function deactivate() {
 /**
  * Read `orbitscore.engine` and normalize it to 'rust' | 'sc'.
  *
- * Mirrors the engine-side normalization in `resolveEngineKind`
- * (packages/engine/src/audio/engine-backend.ts): only the literal value
- * `"sc"` opts into SuperCollider; any other value (including unset/unknown)
- * resolves to `rust` — matching cutover #369's Rust-default behavior.
+ * 正規化の決定は engine 側の `resolveEngineKind` (engine-backend の compiled JS を
+ * runtime require — `resolveScsynthForUI` と同じパターン) に委ね、一箇所に保つ。
+ * UI 側は戻り値 ('supercollider' | 'rust') を設定 enum のラベル ('sc' | 'rust') に
+ * 写すだけ。resolver が読めない場合は engine 側の既定 (unknown → rust) と同じ側に
+ * 倒し、reason を log する。
  */
 function getConfiguredEngineKind(): 'rust' | 'sc' {
   const raw = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'rust')
-  return raw?.trim().toLowerCase() === 'sc' ? 'sc' : 'rust'
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const backendModule = require('../engine/dist/audio/engine-backend') as {
+      resolveEngineKind: (raw: string | undefined) => 'supercollider' | 'rust'
+    }
+    return backendModule.resolveEngineKind(raw) === 'supercollider' ? 'sc' : 'rust'
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(
+      `⚠️ engine-backend resolver unavailable (defaulting to rust): ${reason}`,
+    )
+    return 'rust'
+  }
 }
 
 /**
