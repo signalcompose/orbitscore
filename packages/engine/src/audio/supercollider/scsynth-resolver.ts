@@ -12,6 +12,10 @@
  * SC.app を使いたい場合は `ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/...`
  * を env で渡すこと。
  *
+ * explicit / env は「ユーザー明示の意図」なので、存在するが実行不可の場合は後続候補
+ * (bundle) へ silent に fall-through せず `ScsynthNotExecutableError` を投げる
+ * (Issue #383)。bundle は自動探索候補なので miss しても通常どおり次に進む。
+ *
  * パターンは `packages/engine/src/audio/rust-engine/daemon-client.ts` の
  * `resolveDaemonBinary()` を流用。各候補は `fs.statSync` + 実行権限を検査。
  */
@@ -44,6 +48,29 @@ export class ScsynthNotFoundError extends Error {
   }
 }
 
+/**
+ * explicit / env override が「存在するが実行不可」の場合に投げる (Issue #383)。
+ *
+ * 自動探索候補 (bundle) 同士の fall-through は設計どおり許容するが、ユーザー明示の
+ * override だけは silent substitution (無関係のバイナリへ無警告ですり替わる) を防ぐため
+ * 後続候補へ fall-through せず即座に fail loud する。
+ */
+export class ScsynthNotExecutableError extends Error {
+  public readonly path: string
+  public readonly source: 'explicit' | 'env'
+
+  constructor(path: string, source: 'explicit' | 'env') {
+    const originDesc = source === 'env' ? `env var ${ENV_VAR}` : 'explicit option'
+    super(
+      `scsynth override via ${originDesc} points to a file that exists but is not executable: ${path}\n\n` +
+        `Fix the permissions (chmod +x) or unset the override; it will not silently fall back to another scsynth.`,
+    )
+    this.name = 'ScsynthNotExecutableError'
+    this.path = path
+    this.source = source
+  }
+}
+
 const ENV_VAR = 'ORBIT_SCSYNTH_PATH'
 
 /**
@@ -58,19 +85,27 @@ function bundleCandidatePath(): string {
   return path.resolve(__dirname, '../../../scsynth/Contents/Resources/scsynth')
 }
 
-function isExecutableFile(p: string): boolean {
+type CandidateProbe = 'executable' | 'not-executable' | 'absent'
+
+function probeCandidate(p: string): CandidateProbe {
+  let stat: fs.Stats
   try {
-    const stat = fs.statSync(p)
-    if (!stat.isFile()) return false
-    return (stat.mode & 0o111) !== 0
+    stat = fs.statSync(p)
   } catch {
-    return false
+    return 'absent'
   }
+  if (!stat.isFile()) return 'absent'
+  return (stat.mode & 0o111) !== 0 ? 'executable' : 'not-executable'
 }
 
 /**
  * scsynth binary を解決する。
  *
+ * explicit / env は「ユーザー明示の意図」のため、存在するが実行不可な場合は後続候補へ
+ * fall-through せず `ScsynthNotExecutableError` を投げる (silent substitution 防止・Issue #383)。
+ * bundle は自動探索候補のため、miss 時は通常どおり `ScsynthNotFoundError` に落ちる。
+ *
+ * @throws {ScsynthNotExecutableError} explicit/env が存在するが実行不可な場合
  * @throws {ScsynthNotFoundError} 全候補 miss 時
  */
 export function resolveScsynthPath(opts: ResolveOptions = {}): ScsynthResolution {
@@ -82,8 +117,12 @@ export function resolveScsynthPath(opts: ResolveOptions = {}): ScsynthResolution
   ): ScsynthResolution | null => {
     if (!candidate) return null
     searched.push(candidate)
-    if (isExecutableFile(candidate)) {
+    const probe = probeCandidate(candidate)
+    if (probe === 'executable') {
       return { path: candidate, source, searched: [...searched] }
+    }
+    if (probe === 'not-executable' && (source === 'explicit' || source === 'env')) {
+      throw new ScsynthNotExecutableError(candidate, source)
     }
     return null
   }

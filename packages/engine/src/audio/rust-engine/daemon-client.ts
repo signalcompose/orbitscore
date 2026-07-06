@@ -23,6 +23,7 @@ import WebSocket from 'ws'
 
 import {
   DaemonConnectionError,
+  DaemonNotExecutableError,
   DaemonNotFoundError,
   DaemonProtocolError,
   DaemonQuitError,
@@ -61,6 +62,20 @@ const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const DEFAULT_CONNECT_TIMEOUT_MS = 3_000
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000
 const DEFAULT_KILL_TIMEOUT_MS = 500
+
+type ExecutableProbe = 'executable' | 'not-executable' | 'absent'
+
+/** `scsynth-resolver.ts` の `probeCandidate` と対称の実行可能性チェック。 */
+function probeExecutable(p: string): ExecutableProbe {
+  let stat: fs.Stats
+  try {
+    stat = fs.statSync(p)
+  } catch {
+    return 'absent'
+  }
+  if (!stat.isFile()) return 'absent'
+  return (stat.mode & 0o111) !== 0 ? 'executable' : 'not-executable'
+}
 
 interface PendingRequest {
   resolve: (value: Record<string, unknown>) => void
@@ -498,22 +513,44 @@ export class DaemonClient extends EventEmitter {
     return `ws://127.0.0.1:${port}`
   }
 
+  /**
+   * daemon binary を解決する。優先順位: explicit → env (ORBIT_AUDIO_DAEMON_PATH) →
+   * monorepo release → monorepo debug。
+   *
+   * explicit / env は「ユーザー明示の意図」なので、存在するが実行不可の場合は後続候補
+   * (monorepo release/debug) へ silent に fall-through せず `DaemonNotExecutableError` を
+   * 投げる (`scsynth-resolver.ts` の `resolveScsynthPath` と対称・Issue #383)。monorepo
+   * 候補同士の fall-through (release miss → debug) は自動探索のため許容する。
+   */
   private resolveDaemonBinary(explicitPath: string | undefined): string {
     const searched: string[] = []
-    const candidates: string[] = []
-    if (explicitPath) candidates.push(explicitPath)
-    const envPath = process.env.ORBIT_AUDIO_DAEMON_PATH
-    if (envPath) candidates.push(envPath)
+
+    const tryCandidate = (
+      candidate: string | undefined,
+      source: 'explicit' | 'env' | 'monorepo',
+    ): string | null => {
+      if (!candidate) return null
+      searched.push(candidate)
+      const probe = probeExecutable(candidate)
+      if (probe === 'executable') return candidate
+      if (probe === 'not-executable' && (source === 'explicit' || source === 'env')) {
+        throw new DaemonNotExecutableError(candidate, source)
+      }
+      return null
+    }
+
     // monorepo root (this file は packages/engine/src/audio/rust-engine/) から 4 階層
     const monorepoRoot = path.resolve(__dirname, '../../../../../')
-    candidates.push(path.join(monorepoRoot, 'rust/target/release/orbit-audio-daemon'))
-    candidates.push(path.join(monorepoRoot, 'rust/target/debug/orbit-audio-daemon'))
 
-    for (const c of candidates) {
-      searched.push(c)
-      if (fs.existsSync(c)) return c
-    }
-    throw new DaemonNotFoundError(searched)
+    return (
+      tryCandidate(explicitPath, 'explicit') ??
+      tryCandidate(process.env.ORBIT_AUDIO_DAEMON_PATH, 'env') ??
+      tryCandidate(path.join(monorepoRoot, 'rust/target/release/orbit-audio-daemon'), 'monorepo') ??
+      tryCandidate(path.join(monorepoRoot, 'rust/target/debug/orbit-audio-daemon'), 'monorepo') ??
+      (() => {
+        throw new DaemonNotFoundError(searched)
+      })()
+    )
   }
 
   /** handshake 受信待ちの間、最初のメッセージだけ受け取るための state。 */

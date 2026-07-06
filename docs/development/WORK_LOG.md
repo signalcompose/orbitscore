@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.185 fix(engine): warn/fail loud on unexecutable explicit/env resolver override (#383) (Jul 6, 2026)
+
+発生元: PR #366 の `@claude` bot second-opinion（point 3）。`resolveScsynthPath`（scsynth-resolver.ts）と `resolveDaemonBinary`（daemon-client.ts）はともに、explicit / env override（ユーザー明示意図）が「存在するが実行不可」の場合、警告なしに後続の自動探索候補（bundle / monorepo release・debug）へ fall-through していた。後続候補が偶然 viable だと、ユーザーが指定したのとは別バイナリが無警告で選ばれる silent substitution。
+
+**修正（両 resolver 対称）**: explicit / env 候補が「存在するが実行不可」の場合は専用エラー（`ScsynthNotExecutableError` / `DaemonNotExecutableError`）を投げ、後続候補へ fall-through せず fail loud にした。自動探索候補同士（scsynth 側の bundle・daemon 側の monorepo release→debug）の fall-through は設計どおり維持。daemon 側の `resolveDaemonBinary` は元々 `fs.existsSync` のみで実行権限チェック自体が無かったため、`scsynth-resolver.ts` の `probeCandidate` と対称の `probeExecutable` を新設して viability filter を揃えた。
+
+**テスト**: `tests/audio/scsynth-resolver.spec.ts` に silent substitution 防止（bundle が viable でも explicit/env 破損なら `ScsynthNotExecutableError`）と override 同士の non-fallthrough（explicit 破損 → env viable でも fall-through しない）を追加。daemon 側は private method のため新規 `tests/audio/rust-engine/resolve-daemon-binary.spec.ts` を追加し、`fs` mock 経由で explicit/env/monorepo の優先順位・非実行可能ケース・`DaemonNotFoundError`/`DaemonNotExecutableError` の使い分けを検証。
+
+**制約**: このセッションのサンドボックスに `node_modules` が無く、`npm install` / `npm run build` / `npm test` の実行がいずれも承認待ちでブロックされたため、`npm test` での green 確認は未実施。コードは手動レビューのみ（型・null 分岐・既存テストとの整合性）で検証済み。**マージ前に CI で `npm test` の green を確認すること。**
+
 ### 6.184 feat(engine): capture seam — realtime WAV tap on production daemon master output (#364) (Jul 3, 2026)
 
 cutover #108 の load-bearing = **耳なし実時間検証の基盤**。#307（CLOSED）で offline capture（`orbit-audio-verify`）は完成済で、本 PR は残りの **realtime 経路**（production cpal callback の master 出力を WAV にタップ）を配線する。正本 = `POST_2.0_PLUGIN_STRATEGY.html` §4 / `POST_2.0_NEXT_STEPS.html` §6・設計記録 = serena `capture_seam_307_design_2026-06-30`（owner 2 決定 + advisor 是認）。

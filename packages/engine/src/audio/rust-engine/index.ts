@@ -13,6 +13,7 @@ export { RustEnginePlayer } from './rust-engine-player'
 export type { RustEnginePlayerOptions, DispatchInfo } from './rust-engine-player'
 export {
   DaemonConnectionError,
+  DaemonNotExecutableError,
   DaemonNotFoundError,
   DaemonProtocolError,
   DaemonQuitError,

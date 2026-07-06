@@ -7,6 +7,9 @@
  * Strict mode (Issue #136): SC.app / Spotlight への暗黙 fallback は持たないため、
  * bundle が無ければ explicit / env で明示する以外に解決手段はない。
  *
+ * Issue #383: explicit / env が「存在するが実行不可」の場合の `ScsynthNotExecutableError`
+ * (silent substitution 防止) も検証する。
+ *
  * SC.app の有無に依存しないため CI でも実行可能。
  */
 
@@ -16,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   resolveScsynthPath,
+  ScsynthNotExecutableError,
   ScsynthNotFoundError,
 } from '../../packages/engine/src/audio/supercollider/scsynth-resolver'
 
@@ -151,7 +155,7 @@ describe('resolveScsynthPath', () => {
     expect(caught?.message).toContain('ORBIT_SCSYNTH_PATH')
   })
 
-  it('treats existing-but-not-executable file as miss', () => {
+  it('throws ScsynthNotExecutableError when explicit path exists but is not executable', () => {
     mockedStatSync.mockImplementation((p) => {
       if (p === '/explicit/scsynth') {
         return { isFile: () => true, mode: 0o644 } as unknown as fs.Stats
@@ -160,8 +164,91 @@ describe('resolveScsynthPath', () => {
     })
 
     expect(() => resolveScsynthPath({ explicit: '/explicit/scsynth' })).toThrow(
-      ScsynthNotFoundError,
+      ScsynthNotExecutableError,
     )
+  })
+
+  it('does not silently fall through to bundle when explicit exists but is not executable', () => {
+    // bundle は viable だが、explicit override が壊れている場合は silent substitution せず
+    // fail loud する (Issue #383)。
+    mockedStatSync.mockImplementation((p) => {
+      const s = String(p)
+      if (s === '/explicit/broken-scsynth') {
+        return { isFile: () => true, mode: 0o644 } as unknown as fs.Stats
+      }
+      if (s.endsWith('/scsynth/Contents/Resources/scsynth')) return execFileStat()
+      return notFoundStat()
+    })
+
+    let caught: ScsynthNotExecutableError | null = null
+    try {
+      resolveScsynthPath({ explicit: '/explicit/broken-scsynth' })
+    } catch (e) {
+      caught = e as ScsynthNotExecutableError
+    }
+
+    expect(caught).toBeInstanceOf(ScsynthNotExecutableError)
+    expect(caught?.path).toBe('/explicit/broken-scsynth')
+    expect(caught?.source).toBe('explicit')
+  })
+
+  it('does not silently fall through to bundle when env exists but is not executable', () => {
+    process.env.ORBIT_SCSYNTH_PATH = '/env/broken-scsynth'
+    mockedStatSync.mockImplementation((p) => {
+      const s = String(p)
+      if (s === '/env/broken-scsynth') {
+        return { isFile: () => true, mode: 0o644 } as unknown as fs.Stats
+      }
+      if (s.endsWith('/scsynth/Contents/Resources/scsynth')) return execFileStat()
+      return notFoundStat()
+    })
+
+    let caught: ScsynthNotExecutableError | null = null
+    try {
+      resolveScsynthPath()
+    } catch (e) {
+      caught = e as ScsynthNotExecutableError
+    }
+
+    expect(caught).toBeInstanceOf(ScsynthNotExecutableError)
+    expect(caught?.path).toBe('/env/broken-scsynth')
+    expect(caught?.source).toBe('env')
+  })
+
+  it('does not fall through from broken explicit to a viable env candidate', () => {
+    // override 同士 (explicit → env) でも silent substitution は起きない。
+    process.env.ORBIT_SCSYNTH_PATH = '/env/scsynth'
+    mockedStatSync.mockImplementation((p) => {
+      const s = String(p)
+      if (s === '/explicit/broken-scsynth') {
+        return { isFile: () => true, mode: 0o644 } as unknown as fs.Stats
+      }
+      if (s === '/env/scsynth') return execFileStat()
+      return notFoundStat()
+    })
+
+    expect(() => resolveScsynthPath({ explicit: '/explicit/broken-scsynth' })).toThrow(
+      ScsynthNotExecutableError,
+    )
+  })
+
+  it('ScsynthNotExecutableError message mentions chmod guidance', () => {
+    mockedStatSync.mockImplementation((p) => {
+      if (p === '/explicit/scsynth') {
+        return { isFile: () => true, mode: 0o644 } as unknown as fs.Stats
+      }
+      return notFoundStat()
+    })
+
+    let caught: ScsynthNotExecutableError | null = null
+    try {
+      resolveScsynthPath({ explicit: '/explicit/scsynth' })
+    } catch (e) {
+      caught = e as ScsynthNotExecutableError
+    }
+
+    expect(caught?.message).toContain('chmod')
+    expect(caught?.message).toContain('/explicit/scsynth')
   })
 
   it('treats directory as miss (not a regular file)', () => {
