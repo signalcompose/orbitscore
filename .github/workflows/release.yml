@@ -65,6 +65,25 @@ jobs:
       - name: Install npm dependencies
         run: npm ci # CI-mode install: lockfile validated, faster than npm install
 
+      - name: Setup Rust toolchain (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      # Builds the native orbit-audio-daemon binary so scripts/copy-daemon-bin.sh
+      # (invoked by `npm run build` -> build:engine, see packages/vscode-extension/
+      # package.json) can bundle it into engine/bin/darwin-arm64/ before packaging
+      # the .vsix (#377). Must run before "Build engine + extension TypeScript" --
+      # that script is best-effort (warns + exit 0 if the binary is missing), so
+      # ordering here determines whether the release .vsix ships with the daemon.
+      # runner is macos-14 (Apple Silicon) -- matches the daemon's only bundled
+      # target (darwin-arm64).
+      - name: Build orbit-audio-daemon (native Rust engine, default backend since #369)
+        run: cargo build --release -p orbit-audio-daemon --manifest-path rust/Cargo.toml
+
       - name: Build engine + extension TypeScript
         working-directory: packages/vscode-extension
         run: npm run build
@@ -98,6 +117,21 @@ jobs:
           fi
           unzip -o "${VSIX_FILES[0]}" -d "$VSIX_CHECK"
           bash scripts/verify-bundle.sh "$VSIX_CHECK/extension/engine/scsynth"
+
+          # Native Rust daemon (#377): the cargo build step above should have
+          # produced a binary for copy-daemon-bin.sh to bundle. Fail loudly if
+          # it's missing from the packaged .vsix rather than silently shipping
+          # a build where the (now-default) rust engine kind can't start.
+          DAEMON_BIN="$VSIX_CHECK/extension/engine/bin/darwin-arm64/orbit-audio-daemon"
+          if [ ! -f "$DAEMON_BIN" ]; then
+            echo "::error::orbit-audio-daemon missing from packaged .vsix at engine/bin/darwin-arm64/ — the rust engine (default since #369) would fail to start" >&2
+            exit 1
+          fi
+          if [ ! -x "$DAEMON_BIN" ]; then
+            echo "::error::orbit-audio-daemon in packaged .vsix is not executable (lost +x bit?)" >&2
+            exit 1
+          fi
+          echo "orbit-audio-daemon present and executable in packaged .vsix"
 
       # ─────────────────────────────────────────────────────────────────────
       # Steps below this point only run for tag pushes (not pull_request).
