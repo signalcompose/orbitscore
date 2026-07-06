@@ -1,8 +1,8 @@
 # OrbitScore
 
-Live coding music DSL for VS Code with a bundled SuperCollider audio engine.
+Live coding music DSL for VS Code with a bundled native audio engine (Rust `orbit-audio-daemon`, default since 2.1.0; SuperCollider remains available as an opt-out backend).
 
-Write `.orbs` patches and run them line by line with `Cmd+Enter`. No separate SuperCollider install required.
+Write `.orbs` patches and run them line by line with `Cmd+Enter`. No separate audio-engine install required.
 
 ## Supported Platforms
 
@@ -22,7 +22,7 @@ Cross-platform support is tracked as a future effort.
 2. Run **OrbitScore: Start Engine** (status bar shows `OrbitScore: Ready`)
 3. Select code (or place the cursor on a line) and press `Cmd+Enter`
 
-The status bar item `✅ scsynth (bundled)` confirms the audio engine is using the bundled SuperCollider binary.
+The status bar item `✅ engine: rust (native)` confirms the native audio daemon is in use (with `orbitscore.engine: "sc"` it shows `✅ scsynth (bundled)` instead).
 
 Minimal example:
 
@@ -43,7 +43,7 @@ LOOP(kick)
 - IntelliSense / hover for DSL keywords
 - Real-time syntax diagnostics
 - Status bar indicators for engine state and audio backend
-- Bundled `scsynth` (~11.5 MB, no manual SuperCollider install)
+- Bundled native audio daemon (`orbit-audio-daemon`, default) + bundled `scsynth` (~11.5 MB) for the SuperCollider opt-out backend
 
 ### New in 2.0.0
 
@@ -70,6 +70,7 @@ LOOP(kick)
 | Setting | Default | Description |
 |---|---|---|
 | `orbitscore.scsynthPath` | `""` | Override path to a custom `scsynth` binary. Leave empty to use the bundled scsynth (recommended). |
+| `orbitscore.engine` | `rust` | Audio backend: `rust` (default, native `orbit-audio-daemon` — only bundled for macOS Apple Silicon; unavailable on any other platform until you build one yourself and set `ORBIT_AUDIO_DAEMON_PATH`) or `sc` (SuperCollider, requires bundled scsynth or `orbitscore.scsynthPath`). |
 | `orbitscore.flashCount` | `3` | Number of times to flash executed lines (1–5) |
 | `orbitscore.flashDuration` | `150` | Duration of each flash in milliseconds (50–500) |
 | `orbitscore.flashColor` | `selection` | Color theme for flash (`selection` / `error` / `warning` / `info` / `custom`) |

@@ -68,6 +68,78 @@ interface PendingRequest {
   method: string
 }
 
+export interface DaemonBinaryResolution {
+  path: string
+  source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
+}
+
+/**
+ * scsynth-resolver の isExecutableFile と同一規則（executable regular file）。
+ * 候補の viability 判定に使う — 存在するだけで exec bit の無いファイル
+ * （.vsix 展開でパーミッションが落ちた bundle 等）を pre-check 段階で弾き、
+ * 「緑チェック → spawn EACCES で後追い失敗」を防ぐ。
+ */
+function isExecutableFile(p: string): boolean {
+  try {
+    const stat = fs.statSync(p)
+    if (!stat.isFile()) return false
+    return (stat.mode & 0o111) !== 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolve the `orbit-audio-daemon` binary path via the candidate order used at
+ * spawn time: explicit override → `ORBIT_AUDIO_DAEMON_PATH` env → monorepo
+ * release build → monorepo debug build → .vsix-bundled binary (Issue #306).
+ * Exported (C2) so UI code can pre-check daemon availability the same way
+ * `resolveScsynthForUI` pre-checks scsynth, without duplicating the candidate
+ * list. `DaemonClient.resolveDaemonBinary` delegates to this — candidate
+ * order/content is unchanged, only the per-candidate `source` label is new.
+ *
+ * 各候補は「executable regular file」であることを要求する（scsynth 側の
+ * resolveScsynthPath と同じ検査水準）。非 viable な候補は次候補へ落ちる —
+ * これは従来の existsSync が「不在なら次へ」としていた意味論の自然な拡張。
+ */
+export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
+  const searched: string[] = []
+  const candidates: DaemonBinaryResolution[] = []
+  if (explicitPath) candidates.push({ path: explicitPath, source: 'explicit' })
+  const envPath = process.env.ORBIT_AUDIO_DAEMON_PATH
+  if (envPath) candidates.push({ path: envPath, source: 'env' })
+  // monorepo root (this file は packages/engine/src/audio/rust-engine/) から 4 階層
+  const monorepoRoot = path.resolve(__dirname, '../../../../../')
+  candidates.push({
+    path: path.join(monorepoRoot, 'rust/target/release/orbit-audio-daemon'),
+    source: 'monorepo-release',
+  })
+  candidates.push({
+    path: path.join(monorepoRoot, 'rust/target/debug/orbit-audio-daemon'),
+    source: 'monorepo-debug',
+  })
+  // .vsix に同梱された daemon（Issue #306）。インストール済み拡張には
+  // `rust/target` が存在しない（monorepoRoot 探索は 4 候補とも失敗する）ため、
+  // 最後の候補として compiled JS 自身からの相対パスで探す。この compiled
+  // daemon-client.js は常に `<extension>/engine/dist/audio/rust-engine/` に
+  // 配置される（build:copy-engine / build:engine が packages/engine/dist を
+  // まるごと `<extension>/engine/dist/` へコピーするため）ので、3 階層上が
+  // `<extension>/engine/` になる。bin/<platform>/ の platform 名は Node の
+  // `${process.platform}-${process.arch}` 慣習（例: darwin-arm64）。
+  // 現状 darwin-arm64 のみバンドルされる（scripts/copy-daemon-bin.sh 参照）。
+  const platform = `${process.platform}-${process.arch}`
+  candidates.push({
+    path: path.join(__dirname, '../../../bin', platform, 'orbit-audio-daemon'),
+    source: 'extension-bundle',
+  })
+
+  for (const c of candidates) {
+    searched.push(c.path)
+    if (isExecutableFile(c.path)) return c
+  }
+  throw new DaemonNotFoundError(searched)
+}
+
 export class DaemonClient extends EventEmitter {
   private child: ChildProcess | null = null
   private ws: WebSocket | null = null
@@ -493,27 +565,42 @@ export class DaemonClient extends EventEmitter {
           ),
         )
       })
+
+      // spawn 失敗のうち EACCES / EAGAIN / EMFILE / ENFILE / ENOENT の 5 種のみが
+      // (Node v22 internal/child_process.js 実装確認済み・C4) nextTick 経由で
+      // 'error' event として通知される。.vsix 配布の bundled daemon binary で
+      // 顕在化しうる (実行権限欠落・Gatekeeper quarantine 等)。それ以外
+      // (ENOEXEC = アーキ不一致等) は spawn() が同期 throw し、async
+      // spawnDaemon の暗黙ラップ経由で doStart() 外側の try/catch が拾う
+      // (DaemonStartupError に変換されない生の ErrnoException のまま伝播する)。
+      // unhandled 'error' は EventEmitter が throw し engine プロセスごと
+      // 巻き込むため、上記 5 種向けに必ず listener を張る。spawn 'error' は
+      // 常に非同期 (次 tick 以降) に発火するため、spawn() と同一同期区間で
+      // 走るこの executor 内での登録で取りこぼしはない。settle 後の 'error'
+      // (quit() の child.kill() 失敗等) も silent に握り潰さないよう永続
+      // リスナーで log する (ws 'error' 規約に揃える)。
+      child.on('error', (err) => {
+        if (settled) {
+          console.warn('DaemonClient: child process error after startup settled:', err)
+          return
+        }
+        finish(() =>
+          reject(
+            new DaemonStartupError(
+              `daemon spawn failed: ${err.message}`,
+              stderrChunks.join(''),
+              null,
+            ),
+          ),
+        )
+      })
     })
 
     return `ws://127.0.0.1:${port}`
   }
 
   private resolveDaemonBinary(explicitPath: string | undefined): string {
-    const searched: string[] = []
-    const candidates: string[] = []
-    if (explicitPath) candidates.push(explicitPath)
-    const envPath = process.env.ORBIT_AUDIO_DAEMON_PATH
-    if (envPath) candidates.push(envPath)
-    // monorepo root (this file は packages/engine/src/audio/rust-engine/) から 4 階層
-    const monorepoRoot = path.resolve(__dirname, '../../../../../')
-    candidates.push(path.join(monorepoRoot, 'rust/target/release/orbit-audio-daemon'))
-    candidates.push(path.join(monorepoRoot, 'rust/target/debug/orbit-audio-daemon'))
-
-    for (const c of candidates) {
-      searched.push(c)
-      if (fs.existsSync(c)) return c
-    }
-    throw new DaemonNotFoundError(searched)
+    return resolveDaemonBinaryPath(explicitPath).path
   }
 
   /** handshake 受信待ちの間、最初のメッセージだけ受け取るための state。 */
