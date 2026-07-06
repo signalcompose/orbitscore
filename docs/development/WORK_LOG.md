@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.184 feat(engine): capture seam — realtime WAV tap on production daemon master output (#364) (Jul 3, 2026)
+
+cutover #108 の load-bearing = **耳なし実時間検証の基盤**。#307（CLOSED）で offline capture（`orbit-audio-verify`）は完成済で、本 PR は残りの **realtime 経路**（production cpal callback の master 出力を WAV にタップ）を配線する。正本 = `POST_2.0_PLUGIN_STRATEGY.html` §4 / `POST_2.0_NEXT_STEPS.html` §6・設計記録 = serena `capture_seam_307_design_2026-06-30`（owner 2 決定 + advisor 是認）。
+
+**設計（S1 `PostMixSink` パターンの延長）**:
+- **tap 点** = `orbit-audio-native/src/output.rs::render_block` の末尾、`post.process(hw)` の **後** の最終 `hw`（= device に出る clean な f32・OS ボリューム/ハード前なので録音**レベル**はシステム音量非依存で offline render と一致。ただし WAV 全体は device 起動 latency 分だけ**位相がずれる**ので、gated harness は検出 onset にアンカーして相対比較する〔sample 単位の完全一致ではない〕）。既存 `RingTapSink`（RT 安全・wait-free・満杯時 drop カウント）を producer に再利用。
+- **配線** = `start_output_inner` に第4の optional 経路として追加。**排他 feature 群（link-audio / clap-host / outproc-effect）と直交**で、どの経路でも最終 `hw` をタップする（全 4 変種で build 確認）。
+- **注入方式 = A（owner 確定）**: `ORBIT_CAPTURE_WAV=out.wav` の env（daemon-start config / whole-stream）。B（runtime per-play）は follow-on。
+- **WAV writer = 自前 minimal RIFF（owner 確定・新規 dep ゼロ）**: 32-bit IEEE float（format tag 3・量子化なしで exact round-trip）。off-thread writer thread が ring を drain（RT 契約なし）。
+- **drop 順**: `OutputStream` に `_capture` を `_stream` の **後** に宣言 → stream 停止（callback 停止）→ writer が ring 残りを drain → WAV finalize。
+
+**新規モジュール** `orbit-audio-native/src/capture.rs`: `RiffWavWriter`（streaming・placeholder header → finalize で size patch・write error 時も best-effort finalize で header を実サイズへ patch）/ `CaptureWriter`（`create` が `(RingTapSink, CaptureWriter)` を返す・`finish()`→`CaptureReport{frames_written, dropped_samples}`・`Drop` で stop→join→finalize）。env 解決（`ORBIT_CAPTURE_WAV`）は native ではなく **daemon 層**の純関数 `engine_wrap::resolve_capture_path`（testable・trim 済み・非 UTF-8 は operator へ報告して無効化）→ `capture_path_from_env` が担い、解決済み `Option<PathBuf>` を native へ typed で渡す（`OutProcEffectConfig` / `buffer_frames` と同じ層分け）。
+
+**検証（`drops==0` を検証前提に = silent-failure ガード）**:
+- capture unit（native・非 gated CI 被覆）: header round-trip / lossless round-trip / drop カウント検出 / finish なし drop の finalize / **不正 path での create fail-fast**（ring/thread を確保する前に Err）/ **`render_block` の post-ordering pin**（post 適用後の hw を capture することを post スタブ 0.75 で検証＝実 device 抜きで「順序が逆なら無音を録る」を CI で回帰防止）。
+- capture path 解決（daemon・非 gated）: `resolve_capture_path` の unset/空/空白のみ/実 path/前後空白 trim を pin。
+- **realtime gated**（`tests/capture_realtime_gated.rs`・`#[ignore]`・実 device 要）: 実 cpal stream を実時間で回し `ORBIT_CAPTURE_WAV` で examples/22（`examples22_parity` golden）を録音 → 検出 onset にアンカーして pan（5 イベント〔slice×2 含む〕を `pan_from_lr_rms` で独立逆算）+ gap 無音 + IEEE-float stereo format を assert。**teardown 前に `guard.capture_drops()==Some(0)` を assert** し、さらに `load_wav` が **WAV data チャンク size（bytes 40..44）と物理 body 長の一致を検証**する（finalize 失敗による header 破損を loud に落とす silent-failure ガード＝壊れた WAV で PCM assert が偽通過するのを防ぐ）。**実機 RUN PASS（9.92s / 10.06s・drops=0）**。厳密 gain dB 差は同一サンプルを使う offline `per_event_gain` fixture が担保（examples22 は voice ごとにサンプルが違い RMS 直接比較不可）。
+- 既存全緑: `cargo build --workspace` + daemon 3 feature variants / `cargo test --workspace`（native 28 / daemon protocol 19 + verify 7 / verify 23 等）/ clippy `-D warnings` clean / fmt clean。
+
+**委譲**: 自前 RIFF writer + off-thread writer（隔離モジュール・純）は Sonnet subagent に並列委譲、output.rs の RT callback 配線・StreamGuard teardown 順は Opus 保持（CLAUDE.md §5 委譲規律）。
+
+**follow-on（seam→hardening の段階分け・outproc の #341→#342 と同型）**: ① capture drop の **live operator 監視**（session.rs の 1Hz ticker に `capture_drops>0` を配線し `ERROR_CODE_CAPTURE_DROPPED_SAMPLES` を出す）は EngineWrap への drops accessor 追加が要るので別 PR。本 PR は teardown 時 `eprintln` + gated `drops==0` assert で surface 済。② producer（`RingTapSink::commit`）の `is_abandoned()` による writer 死検出は LinkAudio と共有する RT プリミティブに触れるため別 PR で扱う（本 PR は harness の長さ検証 + drops で実証済ケースをカバー）。③ writer thread の **terminal I/O error の machine-assert**: mid-stream write error が finalize 前に回復し truncation が tail slack 内に収まると、header と body は self-consistent なので data-chunk 長検証では捕まらない（現状 `Drop` の `eprintln` で observable・silent ではないが gated test は未 assert）。`drops` と同型に `capture_write_error()` accessor を足して gated harness が `drop(guard)` 前に assert する形が follow-on（disk-full 実機再現が要るので別 PR）。`/simplify` + `/code:pr-review-team`（iteration 2・独立 4 レビュアー再確認）の指摘（silent-failure CRITICAL＝data-chunk 長検証 / post-ordering 未テスト / untrimmed path）は本 PR 内で解消し、**Critical/Important=0 に収束**。
+
 ### 6.183 docs(research): LLM composition skill research — small-epoch plan (#374) (Jul 4, 2026)
 
 LLM に OrbitScore DSL でリフ（クルディッシュ・ダンス型）を作曲させる「作曲スキル」の実装方法を deep research（**Sonnet 5 × 13 agents**・Orient + 3角度 + 敵対的検証 6 件 [C4/R1/U1] + 批評→改訂）で調査し、`docs/research/WCTM_COMPOSITION_SKILL_RESEARCH.md` に**エポック計画 E0-E6 + owner 決定 8 点**を記録。

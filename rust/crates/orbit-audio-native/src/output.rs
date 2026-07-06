@@ -1,5 +1,6 @@
 //! cpal を使った既定出力デバイスへのストリーム設定。
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -88,13 +89,33 @@ pub enum OutputError {
     BuildStream(String),
     #[error("cpal play stream error: {0}")]
     PlayStream(String),
+    #[error("capture writer error: {0}")]
+    Capture(String),
 }
+
+/// capture ring の秒数（`sample_rate * channels * 秒`）。off-thread writer が瞬間的な disk
+/// 遅延を吸収できるよう generous に確保する。恒常的に writer が追いつかなければ drop が
+/// カウントされ、検証側が invalid として loud に落とす（silent-failure ガード）。
+const CAPTURE_RING_SECONDS: usize = 8;
 
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,
+    /// capture seam（#307 realtime）: `ORBIT_CAPTURE_WAV` 有効時のみ `Some`。**`_stream` より後に
+    /// 宣言する**ことで drop 順を「stream 停止（callback 停止＝以後 commit なし）→ writer が ring の
+    /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
+    _capture: Option<crate::capture::CaptureWriter>,
     pub sample_rate: u32,
     pub channels: u16,
+}
+
+impl OutputStream {
+    /// capture 有効時のみ、producer 側で drop した interleaved サンプル累積を返す。capture 無効は
+    /// `None`。**`> 0` は「off-thread writer が追いつかず録音が破損した = 検証 invalid」を意味する**
+    /// （検証ハーネス/オペレータが assert・監視する silent-failure ガード）。
+    pub fn capture_drops(&self) -> Option<u64> {
+        self._capture.as_ref().map(|w| w.dropped_samples())
+    }
 }
 
 /// callback が同時に egress できる LinkAudio channel の上限（A4-2b-2b）。RT callback の per-block
@@ -141,13 +162,16 @@ fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool 
 ///
 /// 手順: (1) callback 開始時刻を取る（`cb_stats` 有り時のみ）→ (2) [`render_engine`] で engine
 /// （+ LinkAudio egress）を render → (3) `post` 有りなら hardware sum を in-place 変換（CLAP
-/// effect/instrument・Issue #340）→ (4) callback 所要時間を記録。`post`/`cb_stats` が共に None
-/// なら従来経路とビット同一（分岐 1 つのみのオーバーヘッド）。
+/// effect/instrument・Issue #340）→ (4) `capture` 有りなら **post 適用後の最終 `hw`** を WAV 用
+/// ring へ読み取り専用 tap（#307）→ (5) callback 所要時間を記録。`post`/`capture`/`cb_stats` は
+/// 各々独立の opt-in 分岐で、すべて None なら従来経路とビット同一。`capture` は `hw` を読むだけ
+/// なので有効でも出力サンプルは不変（tap であって mutation ではない）。
 #[inline]
 fn render_block(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     post: &mut Option<Box<dyn PostProcessor>>,
+    capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,
     hw: &mut [f32],
@@ -161,6 +185,14 @@ fn render_block(
     // master-bus post-processor（CLAP）。engine render 済みの hardware sum を in-place 変換。
     if let Some(p) = post.as_mut() {
         p.process(hw);
+    }
+
+    // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
+    // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
+    // ＝ RT 契約を満たす。off-thread writer が ring を drain する。post の後・計測の内側に置くことで
+    // capture コストも callback-duration に含めて監視する。
+    if let Some(sink) = capture.as_mut() {
+        sink.commit(hw);
     }
 
     if let (Some(stats), Some(t0)) = (cb_stats, t0) {
@@ -274,8 +306,8 @@ type OutputInnerStart = (
 
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
 /// 同時に初期化する（hardware-only）。呼び出し側は config ミスマッチを意識しなくてよい。
-pub fn start_default_output() -> Result<OutputStart, OutputError> {
-    let (engine, stream, stats, _cb) = start_output_inner(None, None, None)?;
+pub fn start_default_output(capture_path: Option<PathBuf>) -> Result<OutputStart, OutputError> {
+    let (engine, stream, stats, _cb) = start_output_inner(None, None, None, capture_path)?;
     Ok((engine, stream, stats))
 }
 
@@ -284,6 +316,7 @@ pub fn start_default_output() -> Result<OutputStart, OutputError> {
 /// RT callback が render_multi で channel buffer を埋めて ring へ送る。
 pub fn start_default_output_with_link_egress(
     reg_capacity: usize,
+    capture_path: Option<PathBuf>,
 ) -> Result<LinkEgressStart, OutputError> {
     let (reg_tx, reg_rx) = rtrb::RingBuffer::new(reg_capacity);
     let link = LinkEgress {
@@ -291,7 +324,7 @@ pub fn start_default_output_with_link_egress(
         // cap は control が強制するので最大 MAX_LINK_CHANNELS。callback で push のみ・realloc を避ける。
         channels: Vec::with_capacity(MAX_LINK_CHANNELS),
     };
-    let (engine, stream, stats, _cb) = start_output_inner(Some(link), None, None)?;
+    let (engine, stream, stats, _cb) = start_output_inner(Some(link), None, None, capture_path)?;
     Ok((engine, stream, stats, reg_tx))
 }
 
@@ -307,8 +340,10 @@ pub fn start_default_output_with_link_egress(
 pub fn start_default_output_with_clap(
     post: Box<dyn PostProcessor>,
     buffer_frames: Option<u32>,
+    capture_path: Option<PathBuf>,
 ) -> Result<ClapHostStart, OutputError> {
-    let (engine, stream, stats, cb) = start_output_inner(None, Some(post), buffer_frames)?;
+    let (engine, stream, stats, cb) =
+        start_output_inner(None, Some(post), buffer_frames, capture_path)?;
     // post=Some の経路では inner が必ず CallbackTimeStats を作る。
     let cb = cb.expect("clap path always creates CallbackTimeStats");
     Ok((engine, stream, stats, cb))
@@ -323,6 +358,7 @@ fn start_output_inner(
     link: Option<LinkEgress>,
     post: Option<Box<dyn PostProcessor>>,
     buffer_frames: Option<u32>,
+    capture_path: Option<PathBuf>,
 ) -> Result<OutputInnerStart, OutputError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
@@ -340,6 +376,23 @@ fn start_output_inner(
     let sample_rate = config.sample_rate.0;
     let channels = config.channels;
 
+    // capture seam（#307 realtime・A = daemon-start config / whole-stream）: `capture_path` が
+    // 与えられたときのみ master 出力（post 適用後の hw）を WAV へ録る tap を差し込む。env 読取りは
+    // daemon 層（`engine_wrap::start`）が行い、解決済みパスをここへ渡す（`buffer_frames` /
+    // `OutProcEffectConfig` と同じ層分け）。排他 feature 群（link / clap / outproc）と直交で、どの
+    // 経路でも最終 hw をタップする。sink（producer）は callback へ、writer（consumer + off-thread
+    // thread）は OutputStream が保持する。
+    let (capture_sink, capture_writer) = match capture_path {
+        Some(path) => {
+            let ring_capacity = sample_rate as usize * channels as usize * CAPTURE_RING_SECONDS;
+            let (sink, writer) =
+                crate::capture::CaptureWriter::create(path, sample_rate, channels, ring_capacity)
+                    .map_err(|e| OutputError::Capture(e.to_string()))?;
+            (Some(sink), Some(writer))
+        }
+        None => (None, None),
+    };
+
     let stats = Arc::new(StreamStats::default());
     // callback-duration 計測は post（CLAP）経路でのみ有効化する。hardware-only / link 経路は
     // 従来通り無計測（None → render_block は計測分岐を踏まずビット同一）。
@@ -353,6 +406,7 @@ fn start_output_inner(
         stats.clone(),
         link,
         post,
+        capture_sink,
         cb_stats.clone(),
     )?;
     stream
@@ -363,6 +417,7 @@ fn start_output_inner(
         engine,
         OutputStream {
             _stream: stream,
+            _capture: capture_writer,
             sample_rate,
             channels,
         },
@@ -380,6 +435,7 @@ fn build_stream(
     stats: Arc<StreamStats>,
     mut link: Option<LinkEgress>,
     mut post: Option<Box<dyn PostProcessor>>,
+    mut capture: Option<RingTapSink>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
 ) -> Result<Stream, OutputError> {
     let make_err_fn = || {
@@ -402,7 +458,15 @@ fn build_stream(
             .build_output_stream(
                 config,
                 move |data: &mut [f32], _| {
-                    render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, data)
+                    render_block(
+                        &engine,
+                        &mut link,
+                        &mut post,
+                        &mut capture,
+                        &cb_stats,
+                        out_ch,
+                        data,
+                    )
                 },
                 make_err_fn(),
                 None,
@@ -419,7 +483,15 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
+                        render_block(
+                            &engine,
+                            &mut link,
+                            &mut post,
+                            &mut capture,
+                            &cb_stats,
+                            out_ch,
+                            buf,
+                        );
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
@@ -440,7 +512,15 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
+                        render_block(
+                            &engine,
+                            &mut link,
+                            &mut post,
+                            &mut capture,
+                            &cb_stats,
+                            out_ch,
+                            buf,
+                        );
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
                         }
@@ -460,7 +540,15 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(&engine, &mut link, &mut post, &cb_stats, out_ch, buf);
+                        render_block(
+                            &engine,
+                            &mut link,
+                            &mut post,
+                            &mut capture,
+                            &cb_stats,
+                            out_ch,
+                            buf,
+                        );
                         for (i, s) in buf.iter().enumerate() {
                             let v = (s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32;
                             data[i] = v as u16;
@@ -513,7 +601,7 @@ mod tests {
     #[test]
     #[ignore = "needs a real audio output device; run with --ignored"]
     fn start_default_output_opens_headless() {
-        match start_default_output() {
+        match start_default_output(None) {
             Ok((_engine, _stream, _stats)) => { /* 開けた。drop で teardown。 */ }
             Err(e) => panic!("start_default_output が headless で開けなかった: {e}"),
         }
@@ -528,7 +616,7 @@ mod tests {
     #[ignore = "needs a real audio output device that delivers callbacks; run with --ignored"]
     fn start_default_output_callback_ticks_headless() {
         let (engine, _stream, _stats) =
-            start_default_output().expect("start_default_output should open");
+            start_default_output(None).expect("start_default_output should open");
         std::thread::sleep(std::time::Duration::from_millis(200));
         let now = engine.now_sec();
         assert!(
@@ -592,6 +680,60 @@ mod tests {
         let snap = stats.snapshot();
         assert_eq!(snap.xruns, 1);
         assert!(!snap.device_lost);
+    }
+
+    // #307 capture seam: render_block が capture へ渡すのは **post 適用後**の hw であることを
+    // 実 device 抜きで pin する。post が hw を 0.75 に上書きするスタブを挿し、capture ring に
+    // commit された値が 0.75（post 後）であって 0.0（engine render 直後の無音・post 前）でない
+    // ことを確認する。順序が逆（capture が post より前）だと無音を録ってしまい、gated harness が
+    // 落ちるまで気付けないので、ここで CI 常時カバーする。
+    #[test]
+    fn render_block_captures_post_processed_hw() {
+        use crate::link_audio_ring::RingTapSink;
+
+        // hw を一律 0.75 に上書きする post-processor スタブ（engine render の無音を潰す）。
+        struct FillPost(f32);
+        impl PostProcessor for FillPost {
+            fn process(&mut self, data: &mut [f32]) {
+                data.fill(self.0);
+            }
+        }
+
+        let engine = Engine::new(48_000, 2); // schedule 空 → render は無音（0.0）。
+        let mut link: Option<LinkEgress> = None;
+        let mut post: Option<Box<dyn PostProcessor>> = Some(Box::new(FillPost(0.75)));
+        let (sink, mut consumer, _drops) = RingTapSink::new(64);
+        let mut capture: Option<RingTapSink> = Some(sink);
+        let cb_stats: Option<Arc<CallbackTimeStats>> = None;
+
+        let mut hw = vec![0.0f32; 8]; // 4 frames × 2ch。
+        render_block(
+            &engine,
+            &mut link,
+            &mut post,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut hw,
+        );
+
+        // hw 自体も post 後（0.75）。
+        assert!(hw.iter().all(|&s| s == 0.75), "hw must be post-processed");
+
+        // capture ring に commit された値も post 後（0.75）であること。
+        let avail = consumer.slots();
+        assert_eq!(
+            avail,
+            hw.len(),
+            "capture は 1 block 全サンプルを commit するはず"
+        );
+        let chunk = consumer.read_chunk(avail).expect("read committed");
+        let (a, b) = chunk.as_slices();
+        let captured: Vec<f32> = a.iter().chain(b.iter()).copied().collect();
+        assert!(
+            captured.iter().all(|&s| s == 0.75),
+            "capture は post 適用後の hw を録るはず（0.0 なら post 前に tap している）: {captured:?}"
+        );
     }
 
     // A4-2b-2b: egress 判定（ready かつ scratch 充足）の pure ロジックを CI で pin。render_block の
