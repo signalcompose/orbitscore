@@ -1,13 +1,21 @@
 /**
  * DaemonClient の protocol 挙動検証。
  *
- * 実 daemon バイナリを spawn せず、`MockDaemonServer` で WebSocket 経路のみを検証する。
- * 子プロセス spawn の健全性は integration test（別途）で扱う。
+ * 大半のテストは実 daemon バイナリを spawn せず、`MockDaemonServer` で WebSocket
+ * 経路のみを検証する。spawn 失敗時のエラー変換はここで検証し（'error' event →
+ * DaemonStartupError）、spawn 成功後の統合的健全性は gated real-daemon 系の対象。
  */
+
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
+import {
+  DaemonClient,
+  resolveDaemonBinaryPath,
+} from '../../../packages/engine/src/audio/rust-engine/daemon-client'
 import {
   DaemonConnectionError,
   DaemonProtocolError,
@@ -226,5 +234,69 @@ describe('DaemonClient with mock server', () => {
     const url = await server.start({}, true)
     const p = client.start({ wsUrlOverride: url, handshakeTimeoutMs: 200 })
     await expect(p).rejects.toBeInstanceOf(DaemonConnectionError)
+  })
+})
+
+describe('DaemonClient real spawn error handling (C3)', () => {
+  // 実 daemon バイナリを spawn する（mock 不使用）。'error' event 経路
+  // （spawn 失敗 → DaemonStartupError 変換）を実際の子プロセス spawn で検証する。
+  let client: DaemonClient
+  let tmpDir: string
+  let unexecutableBin: string
+
+  beforeEach(() => {
+    client = new DaemonClient()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-spawn-error-'))
+    unexecutableBin = path.join(tmpDir, 'orbit-audio-daemon')
+    // ファイルは存在するが実行権限を付けない（EACCES 狙い）。ENOENT は
+    // resolveDaemonBinary の existsSync でフォールスルーしてしまい、この
+    // 経路には到達しないため使えない。
+    fs.writeFileSync(unexecutableBin, '#!/bin/sh\necho unreachable\n', { mode: 0o644 })
+  })
+
+  afterEach(async () => {
+    await client.quit()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('実行権限のないバイナリへの spawn は "daemon spawn failed" で reject する', async () => {
+    // exit/timeout 経路との判別のため文言まで固定して assert する。
+    await expect(client.start({ daemonPath: unexecutableBin })).rejects.toThrow(
+      /daemon spawn failed/,
+    )
+    expect(client.isRunning()).toBe(false)
+  })
+})
+
+describe('resolveDaemonBinaryPath (C2)', () => {
+  let tmpDir: string
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-resolve-'))
+  })
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('explicit path が existsSync で解決される場合 source は explicit', () => {
+    const explicitPath = path.join(tmpDir, 'orbit-audio-daemon')
+    fs.writeFileSync(explicitPath, '')
+    const resolution = resolveDaemonBinaryPath(explicitPath)
+    expect(resolution).toEqual({ path: explicitPath, source: 'explicit' })
+  })
+
+  it('explicit 未指定・ORBIT_AUDIO_DAEMON_PATH 解決時は source は env', () => {
+    const envPath = path.join(tmpDir, 'orbit-audio-daemon')
+    fs.writeFileSync(envPath, '')
+    const prev = process.env.ORBIT_AUDIO_DAEMON_PATH
+    process.env.ORBIT_AUDIO_DAEMON_PATH = envPath
+    try {
+      const resolution = resolveDaemonBinaryPath()
+      expect(resolution).toEqual({ path: envPath, source: 'env' })
+    } finally {
+      if (prev === undefined) delete process.env.ORBIT_AUDIO_DAEMON_PATH
+      else process.env.ORBIT_AUDIO_DAEMON_PATH = prev
+    }
   })
 })
