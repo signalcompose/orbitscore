@@ -849,10 +849,12 @@ function startEngine(debugMode: boolean = false) {
 
   // Audio backend selection (#377, post-cutover #369). Engine kind MUST be set
   // explicitly on env — cutover flipped the *unset* default to `rust`, so a
-  // bare `delete env.ORBITSCORE_ENGINE` no longer means "use SC" if the
-  // extension host process itself inherited an ORBITSCORE_ENGINE env var from
-  // its own launch environment. Both branches set the var explicitly so the
-  // configured kind is authoritative regardless of inherited env state.
+  // bare `delete env.ORBITSCORE_ENGINE` (unset) always resolves to `rust` now
+  // — unconditionally (I1). Whether the extension host process happened to
+  // inherit an ORBITSCORE_ENGINE env var from its own launch environment is
+  // irrelevant to this: `delete` removes it either way, and unset ==> rust
+  // regardless. Both branches set the var explicitly so the configured kind
+  // is authoritative regardless of inherited env state.
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')

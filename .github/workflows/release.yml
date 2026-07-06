@@ -34,6 +34,7 @@ on:
       - 'packages/engine/**'
       - 'scripts/extract-scsynth-bundle.sh'
       - 'scripts/verify-bundle.sh'
+      - 'scripts/copy-daemon-bin.sh'
 
 permissions:
   contents: write # required for gh release create

@@ -1,7 +1,7 @@
 {
   "name": "orbitscore",
   "displayName": "OrbitScore",
-  "description": "Live coding music DSL with bundled SuperCollider audio engine. macOS (Apple Silicon) only.",
+  "description": "Live coding music DSL with bundled native audio engine (Rust daemon, default) — SuperCollider available as opt-out. macOS (Apple Silicon) only.",
   "publisher": "local",
   "version": "2.1.0",
   "author": "Signal compose Inc.",

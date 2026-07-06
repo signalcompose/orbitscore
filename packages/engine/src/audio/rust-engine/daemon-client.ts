@@ -546,13 +546,19 @@ export class DaemonClient extends EventEmitter {
         )
       })
 
-      // spawn 失敗 (EACCES / ENOEXEC 等) は 'exit' ではなく 'error' event で通知される。
-      // .vsix 配布の bundled daemon binary で顕在化しうる (実行権限欠落・アーキ不一致・
-      // Gatekeeper quarantine)。unhandled 'error' は EventEmitter が throw し engine
-      // プロセスごと巻き込むため必ず listener を張る。spawn 'error' は常に非同期
-      // (次 tick 以降) に発火するため、spawn() と同一同期区間で走るこの executor 内での
-      // 登録で取りこぼしはない。settle 後の 'error' (quit() の child.kill() 失敗等) も
-      // silent に握り潰さないよう永続リスナーで log する (ws 'error' 規約に揃える)。
+      // spawn 失敗のうち EACCES / EAGAIN / EMFILE / ENFILE / ENOENT の 5 種のみが
+      // (Node v22 internal/child_process.js 実装確認済み・C4) nextTick 経由で
+      // 'error' event として通知される。.vsix 配布の bundled daemon binary で
+      // 顕在化しうる (実行権限欠落・Gatekeeper quarantine 等)。それ以外
+      // (ENOEXEC = アーキ不一致等) は spawn() が同期 throw し、async
+      // spawnDaemon の暗黙ラップ経由で doStart() 外側の try/catch が拾う
+      // (DaemonStartupError に変換されない生の ErrnoException のまま伝播する)。
+      // unhandled 'error' は EventEmitter が throw し engine プロセスごと
+      // 巻き込むため、上記 5 種向けに必ず listener を張る。spawn 'error' は
+      // 常に非同期 (次 tick 以降) に発火するため、spawn() と同一同期区間で
+      // 走るこの executor 内での登録で取りこぼしはない。settle 後の 'error'
+      // (quit() の child.kill() 失敗等) も silent に握り潰さないよう永続
+      // リスナーで log する (ws 'error' 規約に揃える)。
       child.on('error', (err) => {
         if (settled) {
           console.warn('DaemonClient: child process error after startup settled:', err)
