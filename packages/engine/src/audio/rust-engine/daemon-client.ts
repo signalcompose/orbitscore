@@ -68,6 +68,58 @@ interface PendingRequest {
   method: string
 }
 
+export interface DaemonBinaryResolution {
+  path: string
+  source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
+}
+
+/**
+ * Resolve the `orbit-audio-daemon` binary path via the candidate order used at
+ * spawn time: explicit override → `ORBIT_AUDIO_DAEMON_PATH` env → monorepo
+ * release build → monorepo debug build → .vsix-bundled binary (Issue #306).
+ * Exported (C2) so UI code can pre-check daemon availability the same way
+ * `resolveScsynthForUI` pre-checks scsynth, without duplicating the candidate
+ * list. `DaemonClient.resolveDaemonBinary` delegates to this — candidate
+ * order/content is unchanged, only the per-candidate `source` label is new.
+ */
+export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
+  const searched: string[] = []
+  const candidates: DaemonBinaryResolution[] = []
+  if (explicitPath) candidates.push({ path: explicitPath, source: 'explicit' })
+  const envPath = process.env.ORBIT_AUDIO_DAEMON_PATH
+  if (envPath) candidates.push({ path: envPath, source: 'env' })
+  // monorepo root (this file は packages/engine/src/audio/rust-engine/) から 4 階層
+  const monorepoRoot = path.resolve(__dirname, '../../../../../')
+  candidates.push({
+    path: path.join(monorepoRoot, 'rust/target/release/orbit-audio-daemon'),
+    source: 'monorepo-release',
+  })
+  candidates.push({
+    path: path.join(monorepoRoot, 'rust/target/debug/orbit-audio-daemon'),
+    source: 'monorepo-debug',
+  })
+  // .vsix に同梱された daemon（Issue #306）。インストール済み拡張には
+  // `rust/target` が存在しない（monorepoRoot 探索は 4 候補とも失敗する）ため、
+  // 最後の候補として compiled JS 自身からの相対パスで探す。この compiled
+  // daemon-client.js は常に `<extension>/engine/dist/audio/rust-engine/` に
+  // 配置される（build:copy-engine / build:engine が packages/engine/dist を
+  // まるごと `<extension>/engine/dist/` へコピーするため）ので、3 階層上が
+  // `<extension>/engine/` になる。bin/<platform>/ の platform 名は Node の
+  // `${process.platform}-${process.arch}` 慣習（例: darwin-arm64）。
+  // 現状 darwin-arm64 のみバンドルされる（scripts/copy-daemon-bin.sh 参照）。
+  const platform = `${process.platform}-${process.arch}`
+  candidates.push({
+    path: path.join(__dirname, '../../../bin', platform, 'orbit-audio-daemon'),
+    source: 'extension-bundle',
+  })
+
+  for (const c of candidates) {
+    searched.push(c.path)
+    if (fs.existsSync(c.path)) return c
+  }
+  throw new DaemonNotFoundError(searched)
+}
+
 export class DaemonClient extends EventEmitter {
   private child: ChildProcess | null = null
   private ws: WebSocket | null = null
@@ -522,32 +574,7 @@ export class DaemonClient extends EventEmitter {
   }
 
   private resolveDaemonBinary(explicitPath: string | undefined): string {
-    const searched: string[] = []
-    const candidates: string[] = []
-    if (explicitPath) candidates.push(explicitPath)
-    const envPath = process.env.ORBIT_AUDIO_DAEMON_PATH
-    if (envPath) candidates.push(envPath)
-    // monorepo root (this file は packages/engine/src/audio/rust-engine/) から 4 階層
-    const monorepoRoot = path.resolve(__dirname, '../../../../../')
-    candidates.push(path.join(monorepoRoot, 'rust/target/release/orbit-audio-daemon'))
-    candidates.push(path.join(monorepoRoot, 'rust/target/debug/orbit-audio-daemon'))
-    // .vsix に同梱された daemon（Issue #306）。インストール済み拡張には
-    // `rust/target` が存在しない（monorepoRoot 探索は 4 候補とも失敗する）ため、
-    // 最後の候補として compiled JS 自身からの相対パスで探す。この compiled
-    // daemon-client.js は常に `<extension>/engine/dist/audio/rust-engine/` に
-    // 配置される（build:copy-engine / build:engine が packages/engine/dist を
-    // まるごと `<extension>/engine/dist/` へコピーするため）ので、3 階層上が
-    // `<extension>/engine/` になる。bin/<platform>/ の platform 名は Node の
-    // `${process.platform}-${process.arch}` 慣習（例: darwin-arm64）。
-    // 現状 darwin-arm64 のみバンドルされる（scripts/copy-daemon-bin.sh 参照）。
-    const platform = `${process.platform}-${process.arch}`
-    candidates.push(path.join(__dirname, '../../../bin', platform, 'orbit-audio-daemon'))
-
-    for (const c of candidates) {
-      searched.push(c)
-      if (fs.existsSync(c)) return c
-    }
-    throw new DaemonNotFoundError(searched)
+    return resolveDaemonBinaryPath(explicitPath).path
   }
 
   /** handshake 受信待ちの間、最初のメッセージだけ受け取るための state。 */

@@ -126,8 +126,10 @@ export function deactivate() {
  * 正規化の決定は engine 側の `resolveEngineKind` (engine-backend の compiled JS を
  * runtime require — `resolveScsynthForUI` と同じパターン) に委ね、一箇所に保つ。
  * UI 側は戻り値 ('supercollider' | 'rust') を設定 enum のラベル ('sc' | 'rust') に
- * 写すだけ。resolver が読めない場合は engine 側の既定 (unknown → rust) と同じ側に
- * 倒し、reason を log する。
+ * 写すだけ。resolver が読めない (require 失敗) 場合はローカル正規化（engine 側と同一規則
+ * — 'sc'/'supercollider' のみ SC、それ以外は rust）に倒す。ここで raw を無視して
+ * 無条件 rust に倒すと、明示的に `orbitscore.engine: "sc"` を設定したユーザーの意図が
+ * resolver 不読という無関係な理由で握り潰される（C1）。
  */
 function getConfiguredEngineKind(): 'rust' | 'sc' {
   const raw = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'rust')
@@ -140,9 +142,10 @@ function getConfiguredEngineKind(): 'rust' | 'sc' {
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
     outputChannel?.appendLine(
-      `⚠️ engine-backend resolver unavailable (defaulting to rust): ${reason}`,
+      `⚠️ engine-backend resolver unavailable — falling back to local normalization: ${reason}`,
     )
-    return 'rust'
+    const v = raw?.trim().toLowerCase()
+    return v === 'sc' || v === 'supercollider' ? 'sc' : 'rust'
   }
 }
 
@@ -170,12 +173,35 @@ function resolveScsynthForUI(): { path: string; source: string } | null {
 }
 
 /**
+ * Resolve the native Rust daemon binary via shared resolver (engine の
+ * compiled JS を runtime require). Returns null on failure. Symmetric to
+ * `resolveScsynthForUI()` — same runtime-require pattern, same
+ * log-reason-to-outputChannel-on-failure behavior (C2). Used to pre-check
+ * daemon availability under the `rust` engine kind, mirroring how
+ * `resolveScsynthForUI()` pre-checks scsynth under the `sc` kind.
+ */
+function resolveDaemonForUI(): { path: string; source: string } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const daemonModule = require('../engine/dist/audio/rust-engine/daemon-client') as {
+      resolveDaemonBinaryPath: (explicitPath?: string) => { path: string; source: string }
+    }
+    return daemonModule.resolveDaemonBinaryPath()
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`❌ daemon resolver failed: ${reason}`)
+    return null
+  }
+}
+
+/**
  * Refresh the bundle status bar item to reflect the current resolution.
  *
- * engine kind (#377): when `orbitscore.engine` resolves to \`rust\`, scsynth is
- * not part of the picture at all — the status bar shows a non-error "native"
- * indicator instead of resolving/checking for scsynth. Only \`sc\` kind runs
- * the scsynth resolution below.
+ * engine kind (#377, #366 C2): when `orbitscore.engine` resolves to \`rust\`,
+ * scsynth is not part of the picture at all, but the native daemon binary
+ * still needs to be resolvable — pre-check it via `resolveDaemonForUI()` and
+ * surface an error state (rather than a blind "native" success indicator) if
+ * it's missing. Only \`sc\` kind runs the scsynth resolution below.
  *
  * Strict mode (Issue #136): resolver は SC.app / Spotlight 暗黙 fallback を
  * 持たないため、source は \`bundle\` / \`env\` / \`explicit\` のいずれか。
@@ -184,9 +210,16 @@ function resolveScsynthForUI(): { path: string; source: string } | null {
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   if (getConfiguredEngineKind() === 'rust') {
+    const daemonResolution = resolveDaemonForUI()
+    if (!daemonResolution) {
+      bundleStatusItem.text = '$(error) daemon: not found'
+      bundleStatusItem.tooltip =
+        'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
+      bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
+      return
+    }
     bundleStatusItem.text = '$(check) engine: rust (native)'
-    bundleStatusItem.tooltip =
-      'Native Rust audio daemon (orbit-audio-daemon). scsynth is not required.'
+    bundleStatusItem.tooltip = `Native Rust audio daemon (orbit-audio-daemon, ${daemonResolution.source})\n${daemonResolution.path}\nscsynth is not required.`
     bundleStatusItem.backgroundColor = undefined
     return
   }
@@ -748,7 +781,7 @@ function startEngine(debugMode: boolean = false) {
   // the native daemon doesn't need scsynth to be resolvable.
   const engineKind = getConfiguredEngineKind()
 
-  // Pre-check: scsynth が解決できない場合は engine spawn を行わず、エラー
+  // Pre-check: scsynth / daemon が解決できない場合は engine spawn を行わず、エラー
   // Notification のみ表示する。spawn してから boot 失敗するとユーザーに
   // 二重通知 (resolver エラー + engine 終了ログ) が出てしまうのを防ぐ
   // (claude-review on PR #155 の Significant 指摘 #2)。
@@ -758,6 +791,24 @@ function startEngine(debugMode: boolean = false) {
     scResolution = resolveScsynthForUI()
     if (!scResolution) {
       void maybeShowBundleNotice()
+      return
+    }
+  } else {
+    // rust kind (C2): daemon 解決可否を spawn 前に pre-check する。従来は
+    // これが無く、daemon 未解決のまま engine CLI を spawn していた —
+    // 「Engine started」の成功トーストが先に出て、後から engine CLI 内部の
+    // daemon spawn 失敗ログが追いかけてくるだけの偽成功 UX になっていた。
+    // env への daemon path 注入はしない: spawn される engine CLI 自身が同一の
+    // compiled `resolveDaemonBinaryPath()` を実行するため、ここでの解決結果と
+    // 決定的に同一になる（再注入する理由が無い）。
+    const daemonResolution = resolveDaemonForUI()
+    if (!daemonResolution) {
+      outputChannel?.appendLine(
+        '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
+      )
+      vscode.window.showErrorMessage(
+        '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
+      )
       return
     }
   }
