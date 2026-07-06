@@ -17,7 +17,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.178 feat(engine): capture seam — realtime WAV tap on production daemon master output (#364) (Jul 3, 2026)
+### 6.184 feat(engine): capture seam — realtime WAV tap on production daemon master output (#364) (Jul 3, 2026)
 
 cutover #108 の load-bearing = **耳なし実時間検証の基盤**。#307（CLOSED）で offline capture（`orbit-audio-verify`）は完成済で、本 PR は残りの **realtime 経路**（production cpal callback の master 出力を WAV にタップ）を配線する。正本 = `POST_2.0_PLUGIN_STRATEGY.html` §4 / `POST_2.0_NEXT_STEPS.html` §6・設計記録 = serena `capture_seam_307_design_2026-06-30`（owner 2 決定 + advisor 是認）。
 
@@ -39,6 +39,78 @@ cutover #108 の load-bearing = **耳なし実時間検証の基盤**。#307（C
 **委譲**: 自前 RIFF writer + off-thread writer（隔離モジュール・純）は Sonnet subagent に並列委譲、output.rs の RT callback 配線・StreamGuard teardown 順は Opus 保持（CLAUDE.md §5 委譲規律）。
 
 **follow-on（seam→hardening の段階分け・outproc の #341→#342 と同型）**: ① capture drop の **live operator 監視**（session.rs の 1Hz ticker に `capture_drops>0` を配線し `ERROR_CODE_CAPTURE_DROPPED_SAMPLES` を出す）は EngineWrap への drops accessor 追加が要るので別 PR。本 PR は teardown 時 `eprintln` + gated `drops==0` assert で surface 済。② producer（`RingTapSink::commit`）の `is_abandoned()` による writer 死検出は LinkAudio と共有する RT プリミティブに触れるため別 PR で扱う（本 PR は harness の長さ検証 + drops で実証済ケースをカバー）。③ writer thread の **terminal I/O error の machine-assert**: mid-stream write error が finalize 前に回復し truncation が tail slack 内に収まると、header と body は self-consistent なので data-chunk 長検証では捕まらない（現状 `Drop` の `eprintln` で observable・silent ではないが gated test は未 assert）。`drops` と同型に `capture_write_error()` accessor を足して gated harness が `drop(guard)` 前に assert する形が follow-on（disk-full 実機再現が要るので別 PR）。`/simplify` + `/code:pr-review-team`（iteration 2・独立 4 レビュアー再確認）の指摘（silent-failure CRITICAL＝data-chunk 長検証 / post-ordering 未テスト / untrimmed path）は本 PR 内で解消し、**Critical/Important=0 に収束**。
+
+### 6.183 docs(research): LLM composition skill research — small-epoch plan (#374) (Jul 4, 2026)
+
+LLM に OrbitScore DSL でリフ（クルディッシュ・ダンス型）を作曲させる「作曲スキル」の実装方法を deep research（**Sonnet 5 × 13 agents**・Orient + 3角度 + 敵対的検証 6 件 [C4/R1/U1] + 批評→改訂）で調査し、`docs/research/WCTM_COMPOSITION_SKILL_RESEARCH.md` に**エポック計画 E0-E6 + owner 決定 8 点**を記録。
+
+**最重要訂正（Orient）**: 「Pitch DSL v1.1 は Phase 1 開発中」という session 前提は**古い** — 実際は **Phases 1/2/3/R/4 実装・テスト済み**（2.0.0 同梱・WORK_LOG 6.131）。**リフを書く機能ブロッカーは無く E0（新規コードゼロ・`midi-run` で今日試聴可能）が即動く**。Epic #224 の子 issue チェックリストは stale（要 owner 確認）。
+
+**設計の柱（一次検証済み）**: Libretto（12%→39%/62%→94% の bounded revise ループ）と AI TrackMate が独立に収斂した「**フィードバックは生数値でなく音楽的自然言語で返す**」/ Grammar Prompting（部分 BNF の in-context 提示）/ 様式忠実度は LLM 単体で届かない（隣接証拠 40%）→ **人間キュレーションが実質品質ゲート** / **E4 動機検出器のスコアを生成ループのゲートに使わない固定制約**（検出器にしか聴こえない曲への循環防止・論文候補 = Schuller vs Givan の記号データ検証）。E0→E3 が床・どの kill でも床は残る構造。
+
+### 6.182 docs(plan): OrbitStudio implementation plan — cutover to VSCodium build (#373) (Jul 4, 2026)
+
+cutover 済み main を起点に OrbitStudio（VSCodium 版）完成までの実装計画を `docs/development/POST_2.0_ORBITSTUDIO_PLAN.md` に固定（owner 指示 2026-07-04・**後続の Opus セッションがコールドスタートで実行できる粒度**）。Sonnet 5 workflow（4並列読込 [設計docs/extension コード実態/GitHub 状態/WCTM 土台要件] → 起草 → **批評 9 観点 → 改訂**）で作成。
+
+**構成**: Phase 0 spike（stock VSCodium への .vsix side-load + Claude 拡張動作の 2 STOP gate・issue #301 の stale body を即修正）→ Phase 1（#366 landmine + #306 daemon bundle + **`resolveScsynthForUI()` 全 4 箇所**の engine-kind 分岐 — 批評が原案の 2 箇所見落としを捕捉 L149-174/L184-201/L699-708/L836-862・(A) Studio 向け scsynth 非同梱 / (B) 通常 .vsix の 2 系統を同一コードベースの分岐で両立）→ Phase 2（B1 リブランド rebuild・ツールチェーン spike 先行・**gate = 2.0.0 QA Epic #278 チェックリスト転用**で B2/B3 エスカレーションを客観化・Gatekeeper 偽陰性注意）→ Phase 3（署名/notarize — CODESIGN_PIPELINE から転用可能なのは codesign 構文のみで .app バンドル署名は別カテゴリと明記・Apple Developer Program は owner 専管）→ Phase 4（WCTM 非依存ガード 4 点・CLI 実行テストで裏付け）。
+
+**機能組み込みレジストリ**（17 項目・status = prerequisite/owner-decision/post-beta/out-of-scope）と **owner 決定事項 9 点**を分離 — 実際の組み込み可否は owner 判断（計画は確定しない）。**WCTM 誤結合防止を明記**: OrbitStudio は本番（08-07）のいかなる経路にも登場しない・pi SDK 埋め込みは本番後。provenance 注意（マージ順の記録）: PLUGIN_STRATEGY.html は本計画作成時点で PR #363 未マージ（2026-07-04 マージ済み）・#301 body は engine-first pivot 前の stale（更新済み）。
+
+### 6.181 docs(research): WCTM ear-PDCA research — sideman as synthetic ground truth (#371) (Jul 4, 2026)
+
+owner 提起の 4 仮説（①sideman を合成 ground-truth 生成器に耳の PDCA ②一曲特化 ③OrbitScore DSL を理解基盤に ④音空間の捕捉）を deep research（**Sonnet 5 × 16 agents**・sideman リポジトリ直接調査 + 4角度スイープ + 敵対的検証 8 件 [C3/R5] + **批評 22 攻撃 → 改訂**の 2 周）で検証し、`docs/research/WCTM_EAR_PDCA_RESEARCH.md` に提案 A-G + 推奨シーケンス + owner 確認事項 4 点を記録。
+
+**主要判定**: 仮説 1 は**記号/ラベル層に限定して成立**（生音特徴量の較正は合成では埋まらない — AAM 合成コード認識 97%→実転移ジャンル依存劣化・ピアノ転写 -16.55 F1 の音響過適合等が一次裏付け）。一曲特化は Music Plus One（per-piece HMM 較正）の数十年前例あり・ただしリハーモナイズ耐性の前例は不在。**循環の罠**（sideman で校正し sideman で評価）は実在の測定現象 → 独立ホールドアウト（owner 実演奏録音）+ 「較正セット単体精度で内部判断しない」規律を案E として必須化。検証の成果 = sideman に**バッチドライバ 2 種が実装済み**と判明（「未実装」claim を REFUTED・工数が下がる訂正）・`NoteEvent.source` が OrbitScore evalSource 概念を既に参照。
+
+**master switch**: 全 pre-0807 判定は「ATTYA が本番曲」という未確認前提 → owner 確認が Day 0。既存 W3-W8 ロードマップ（6.180）のゲートは置換せず追加の検証ケースとして積む。sideman は UNLICENSED/private → 静的スナップショット凍結・本番ランタイム非バンドルのガバナンス境界を全案共通で宣言。
+
+### 6.180 docs(research): WCTM machine-listening deep research + 10 implementation proposals (#371) (Jul 3, 2026)
+
+WCTM の最大ポイント「AI がいかに楽曲の音を聞いて理解するか」（機械の耳）を deep research（**Sonnet 5 × 24 agents**・7角度並列スイープ → load-bearing claim 93 件 → **敵対的検証 16 件: CONFIRMED 8 / REFUTED 7 / UNCLEAR 1** → 完全性クリティーク）で調査し、`docs/research/WCTM_MACHINE_LISTENING_RESEARCH.md`（サーヴェイ）と `docs/research/WCTM_LISTENING_IMPLEMENTATION_PROPOSALS.md`（**実装案 10 + 比較マトリクス + owner 決定事項 4 点**・owner 要望で別ファイルに分離）に記録。owner 指示（2026-07-03・Fable セッション）= サーヴェイと実装計画案の立案のみ・実装しない。
+
+**主要な結論**: ①完全自動の耳で本番運用された頑健な先行例は不在 — 数十年の実戦は全て human-in-the-loop（IRCAM 自身がジャズで自動ビートトラッキングを撤退・手動タップ採用 = AIMC 2021 一次確認）②形式把握は特徴量から創発しない（ReaLJam 実証）→ 位置明示ラベル注入が正解 ③MIDI 側路は Voyager 40 年の前例 = guitar-to-MIDI が最有力の耳アップグレード ④和声一致度位置検証は構成要素は枯れているが統合は前例ゼロ = kill-criteria 付き挑戦枠 ⑤ピアノ bleed には「加害源 MIDI 既知」という文献にない好条件 → MIDI 連動解析窓マスクが費用対効果最良。
+
+**spec 衝突を発見**: WCTM spec §2「Max が Link 駆動・エンジン追従」vs 実装済み #283「エンジンが Link テンポリーダー」= 主従逆転。テンポ権限の向きは owner 決定事項 D2 として記録（推奨 = タップ/トラッカー → Bridge/エンジン経由で Link set・実証済み経路再利用。Max からの直接 push は Link プロトコル特性により不安定と検証済み）。
+
+**検証の成果**: AI 検索要約の誤生成 1 件を README 直接取得で特定（「BTrack ジャズ実戦」は捏造）・vb.aubio~ が onset のみでなく **tempo/beat 推定も実装済み**とソース直接確認で判明（案2 の第一候補に昇格）・zsa.descriptors の AS 対応は公式ページに記載ありと反証。二次情報の鵜呑みは 16 件中 7 件の誤りを生んでいた。
+
+**推奨 = 案10 段階的統合**: 床（案1 operator-first + 案5 bleed マスク + 案6 LLM 文脈設計）を確実に敷き、挑戦枠（案2 confidence-gated auto beat / 案3 MIDI ears / 案4 位置検証）は kill-criteria 付きで積む — kill はレイヤーごと落とすだけで床は無傷 = 手戻り構造ゼロ。W3 に owner 決定 D1-D4 + クロス被り実測、W6 リハ#1 は「検証済み構成の確認の場」にする（初見の場にしない）。
+
+### 6.179 feat(engine): cutover #108 — default audio backend を Rust に切替 (SC 温存) (Jul 3, 2026)
+
+post-2.0 の到達点。native Rust daemon を**既定の音声バックエンド**にする engine-level cutover。owner GO（2026-07-03）を受けて実行。
+
+**parity 根拠（実測・推論でなく RUN）**:
+- offline 3層 22テスト PASS: interpreter schedule（leg2）/ core render（数学オラクル）/ daemon render（verify_schedule_pcm・例22/varispeed/LinkAudio 含む）。
+- coverage matrix（22 examples 横断）: 例が使う audio 機能に **genuine gap なし**。timing は interpreter が絶対時刻に焼き込むため backend 非依存。
+- **runtime dispatch fitness**（SC fire-now 対 daemon schedule-ahead・advisor 指摘の本当の門）: gated `real-daemon-timing` を default/64f/32f で実測 → 全て ahead-of-cursor・**xruns=0**・polymeter parity。anchor drift は buffer 縮小で単調に締まる（6.7→2.4→0.7ms）。
+
+**変更**:
+- `engine-backend.ts` `resolveEngineKind`: `sc`/`supercollider` → SC（opt-out）、それ以外（未設定含む）→ **rust**（既定反転）。
+- `create-audio-engine.ts`: 既定 rust・SC は opt-out のメッセージ/doc に更新。
+- `rust-engine-player.spec.ts`: 反転後の契約（未設定=rust・sc/supercollider=opt-out）に spec 更新。
+- full suite 1189 pass（SC 既定に暗黙依存するテストは無し）。
+
+**scope 境界**: engine-level default のみ。VS Code UI 既定（`orbitscore.engine`）+ .vsix 再ビルドは #366 の post-cutover 仕上げ。scsynth の**完全退役は別後段**（#108 も「parity 確認後に deprecate」と分離）。flip は**リバーシブル**（`ORBITSCORE_ENGINE=sc`）。
+
+out-of-scope（cutover blocker でない）: `.time()` pitch保存stretch/`.fixpitch()` → #213・master fx → 未使用。
+
+### 6.178 docs(wctm): change production runtime to a pi-based dedicated harness (Jun 28, 2026)
+
+**Branch**: `claude/agent-external-data-harness-yob87g`
+**変更ファイル**: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html` §4 全面改訂 + §3.2 / §10 / ヘッダ改訂注 / 構成図凡例、`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`（W-Runtime / ロードマップ図 / known-decisions 表）、`docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` §14 新規（決定 #60–#63）。
+
+**経緯**: laiso「Pi Coding Agent」記事を起点に大和が「このハーネスで外部データの受け取りをエージェント側で可能にできるのでは」と提起。設計対話の結論として **WCTM 本番ランタイムを Claude Code 二段構え（旧 decision #29）から pi（@mariozechner/pi-coding-agent）ベースの OrbitScore 専用ハーネスに確定**。
+
+**なぜ変えたか（詳細は DESIGN_DISCUSSION_RECORD §14）**:
+- **Claude Code は push を実行に持ち込めない**: MCP プロトコルは server→client push を持つが、Claude Code は `resources/updated` 未実装（#7252）・push 受信しても agent 不達（#33679/#36665）。WCTM の「小節到着が特徴量を駆動する」push 型本質要件と非両立。
+- **自前イベントループ（pi）なら** 「小節到着→コンテキスト組立→Messages API 発火」を書け、外部データがターンを駆動できる（変わるのはターンを誰が発火するか）。
+- **開発コスト**: 開発ツール（Claude Code）と本番ランタイム（pi）を分離すれば、A で測った数字は本番経路に移植不能（測定妥当性）+ 二重実装回避 + リハ中の柔軟性 → pi-first が有利。「即日動く」は薄いスケルトンで確保。
+- **専用ハーネスの価値**: customTools で OrbitScore 語彙＝エージェントの道具（§6 橋）、SDK で orbitstudio 埋め込み、.orbslog をネイティブ作業記憶に。演奏ハーネス＝作曲ハーネスを共有コアに（本番後一般化）。
+
+**核心の未解決問題（§14.5、要 大和確認）**: 「今どこを演奏しているか」= 形式内位置（bar:beat + セクション/コード）の検出。特徴量はテクスチャを与えるが形式位置を与えない。推奨初期案 = オペレーター舵取り + エンジン小節カウントのハイブリッド位置ラベル。本番の自律度は大和判断。
+
+**据え置き**: Agent Bridge（脳なし MCP）・統一評価経路は不変。**コード変更なし（docs のみ）**。
 
 ### 6.177 feat(engine): γ M1 PR-B — real CLAP effect child + shared 1-block core (#357) (Jun 27, 2026)
 

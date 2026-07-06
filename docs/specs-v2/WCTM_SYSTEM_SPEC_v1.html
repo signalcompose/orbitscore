@@ -240,7 +240,7 @@ v1</h1>
 <h1 id="who-conducts-the-machine-system-specification-v1">Who Conducts
 the Machine? — System Specification v1</h1>
 <p><strong>Status</strong>: Draft for implementation
-<strong>Date</strong>: 2026-06-12 <strong>Concert</strong>:
+<strong>Date</strong>: 2026-06-12 <strong>改訂</strong>: 2026-06-28(§4 本番ランタイムを pi ベース専用ハーネスに変更 — §4 / §10 / DESIGN_DISCUSSION_RECORD §14・決定 #60–#63) <strong>Concert</strong>:
 Maxサマースクール・イン・藝大 2026 / 2026-08-07 / 東京藝術大学
 千住キャンパス 第7ホール / 上演10分 <strong>Authors</strong>: Hiroshi
 Yamato (design decisions) / Claude (drafting)
@@ -323,8 +323,8 @@ LLM 専用経路を作らない。帰結として、LLM の演奏は人間と同
   <!-- LLM runtime -->
   <rect x="740" y="108" width="160" height="110" class="boxNew"/>
   <text x="756" y="134" class="lbl">LLM ランタイム</text>
-  <text x="756" y="154" class="sub">A: Claude Code(試作)</text>
-  <text x="756" y="170" class="sub">B: 専用ループ(候補)</text>
+  <text x="756" y="154" class="sub">pi ベース専用ハーネス</text>
+  <text x="756" y="170" class="sub">customTools=OrbitScore語彙</text>
   <text x="756" y="190" class="sub">スキル = リードシート.orbs</text>
   <text x="756" y="206" class="sub">+ 演奏指示書</text>
 
@@ -448,7 +448,7 @@ get_session_tail(n: int) → OrbsLogEntry[]
 <code>/wctm/pitch &lt;instr&gt; &lt;midi&gt; &lt;conf&gt;</code> を
 Bridge
 が受け、エンジンのトランスポートを参照して小節窓に集約する。<strong>特徴量はすべて音楽時間(bar:beat)でラベル付けする</strong>——LLM
-が小節で思考できることが本質要件。</p>
+が小節で思考できることが本質要件。ただし bar:beat(クロック位置)と<strong>形式内位置(いま曲のどのセクション/コードか)</strong>は別物で、後者の供給方法は未確定(§10「位置検出問題」)——これが「今どこを演奏しているか」の核心問題。</p>
 <h3 id="検証規則ガードレール">3.3 検証規則(ガードレール)</h3>
 <ul>
 <li>パース成功が必須。</li>
@@ -460,7 +460,19 @@ Bridge
 により悪いパターンの被害は「次の修正までの数小節」に量子化されるため、静的検証+介助ゲートで足りる(原則
 2 と合わせて)。</li>
 </ul>
-<h2 id="llm-runtime-二段構え">4. LLM Runtime — 二段構え</h2>
+<h2 id="llm-runtime-piベース専用ハーネス">4. LLM Runtime — pi ベース専用ハーネス(2026-06-28 改訂)</h2>
+<blockquote>
+<p><strong>改訂サマリ</strong>: 本節は当初「<em>A: Claude Code / B: 専用ループ</em> の二段構え、W5 にリハ実測で確定」だった(旧 decision #29)。2026-06-28 の設計対話で<strong>本番ランタイムを pi(@mariozechner/pi-coding-agent)ベースの OrbitScore 専用ハーネスに確定</strong>し、Claude Code は<strong>開発ツール</strong>として使う(本番ランタイムにはしない)方針に変更した。変更理由・棄却した代替(A 試作先行)は DESIGN_DISCUSSION_RECORD §14 / 決定 #60–#63 に詳述。</p>
+</blockquote>
+<h3 id="why-pi">4.1 なぜ二段構えから pi 専用ハーネスに変えたか</h3>
+<ol type="1">
+<li><strong>Claude Code は push を実行に持ち込めない(実機制約)</strong>。WCTM は「小節の到着が特徴量を駆動する」push 型が本質要件(§3.2)。MCP プロトコル自体は server→client push(resources の subscribe→<code>notifications/resources/updated</code>、<code>claude/channel</code>)を持つが、Claude Code は ①<code>resources/updated</code> 未実装(anthropics/claude-code #7252)、②サーバ push を受信しても agent に届かず UI にも出ない(#33679 / #36665)。ゆえに A をランタイムにすると外部データは pull / long-poll に固定され、周期・レイテンシが読めない(旧 A の弱点「ターン所要時間が読みにくい」が構造化)。<strong>自前イベントループ</strong>なら「小節到着 → コンテキスト組立 → Messages API 1ターン発火」を自分で書け、外部データがターンを駆動できる(LLM 推論自体は1回の forward で変わらない。変わるのは<strong>ターンを誰が発火するか</strong>)。</li>
+<li><strong>A で測った数字は本番経路にならない</strong>。旧方針は「W5 にリハ実測で確定」。だが本番が pi なら、A(Claude Code のターン機構・compaction 込み)で測ったレイテンシは pi 経路に移植不能。pi を最初から走らせれば測るのが本番そのものになり、W5 判断が妥当になる。</li>
+<li><strong>二重実装の回避</strong>。A 足場(slash command / Claude Code 用 MCP 配線)→ 後で B(pi)移行は統合を2回行う。pi-first は1回。8週間で効く。</li>
+<li><strong>専用ハーネスの柔軟性と長期価値</strong>。pi は customTools + SDK 埋め込み + マルチプロバイダ(pi-ai)を備え、<strong>エージェントが触る道具を OrbitScore のドメイン語彙そのもの</strong>(<code>evaluate_orbitscore</code> / <code>get_performance_features</code> / <code>get_session_tail</code> …)にできる ＝ §6「人間リードシートと LLM スキルを同じ度数語彙で書く＝橋」の実装。さらに同一コアの上に<strong>演奏ハーネス</strong>(push 駆動・低機能・止まらない)と<strong>作曲ハーネス</strong>(offline・探索的、本番後)を載せられ、orbitstudio への SDK 埋め込みの種になる。リハ中もループ周期・文脈方針・ツール・モデルを Claude Code の固定ターンと戦わずに変えられる。</li>
+</ol>
+<h3 id="ab-history">4.2 検討時の A/B 比較(歴史・参考)</h3>
+<p>確定に至る比較を歴史として残す(下表)。pi-first は B の利点を SDK で安価に実現し、A の利点「即日動く」は §4.4 のガードレール(薄いスケルトンの早期起動)で代替する。</p>
 <table>
 <colgroup>
 <col style="width: 33%" />
@@ -492,10 +504,19 @@ Bridge
 </tr>
 </tbody>
 </table>
-<p><strong>方針</strong>: W3–4 は A
-で試作し、リハ実測(レイテンシ分布・応答品質)に基づき <strong>W5
-に本番ランタイムを確定</strong>する。MCP
-という形により、どちらに転んでも配管は無駄にならない。モデル・周期はオペレーター可変とする。</p>
+<h3 id="kakutei-houshin">4.3 確定方針</h3>
+<p>本番ランタイム = <strong>pi ベース OrbitScore 専用ハーネス</strong>。最初から pi で組む。</p>
+<ul>
+<li><strong>据え置き(無駄にしない)</strong>: Agent Bridge(脳なし MCP、§3)は変更なし。旧 §4 の「MCP という形でどちらに転んでも配管は無駄にならない」がそのまま効く——pi も MCP を consume でき、Bridge の3ツール・検証・ログ末尾はそのまま使う。統一評価経路(原則3)も不変。</li>
+<li><strong>Claude Code の役割</strong>: 本番ランタイムではなく<strong>開発ツール</strong>(pi ハーネスのコードを書く)として継続。「開発ツールがバンドメンバー」の作品的含意は投影演出として別途検討(§10)。</li>
+<li>モデル・周期はオペレーター可変。</li>
+</ul>
+<h3 id="cost-guardrail">4.4 コスト・ガードレール</h3>
+<ul>
+<li><strong>再実装するもの(A がタダでくれていた分)</strong>: 自己修復ループ(§3.3 の diagnostic→1回リトライ)、コンテキスト窓ポリシー(.orbslog 末尾の件数・トリミング)、API リトライ等の耐性(pi-ai が一部供給)。いずれも薄く、自分のコードゆえ監査可能(一発本番ではむしろ利点)。</li>
+<li><strong>失う演出</strong>: 旧 A 固有の「Claude Code 画面をそのまま投影＝開発ツールがバンドメンバー」は pi-first では消える。要るなら pi の TUI を作るか Claude Code を並走する観測画面として別途投影。<strong>演出判断として保留(§10)</strong>。</li>
+<li><strong>ガードレール(即日性の確保)</strong>: 最初の pi ループは「小節到着→モデル呼ぶ→eval」の<strong>極薄スケルトンを早期に動かし</strong>、旧 A の利点「即日動く＝端から端まで鳴らしチェーンを de-risk」を pi でも確保する。ループ実装に没頭して Phase 0 の未知(Max ビートトラッキング / Disklavier レイテンシ / Link 追従)の検証を後回しにしない——<strong>チェーンの薄い串刺しを最優先</strong>。</li>
+</ul>
 <h2 id="operator-介助の三段機構なしで成立">5. Operator —
 介助の三段(機構なしで成立)</h2>
 <ol type="1">
@@ -627,10 +648,12 @@ CC123/CC120。Disklavier
 <ol type="1">
 <li>エンジンの Link 追従スケジューリングの現状(§2、Phase 0 検証)。</li>
 <li>特徴量スキーマの確定(Max オペレーターとの協議。最小から開始)。</li>
-<li>ランタイム確定(W5、リハ実測)。</li>
+<li><strong>ランタイム確定済(2026-06-28)= pi ベース専用ハーネス</strong>(§4)。残る可変点はモデル・周期(オペレーター可変)と、pi 上の自己修復・文脈窓ポリシーの実装詳細。W3–4 で薄いスケルトンを実測し W5 にパラメータを締める。</li>
 <li>テンポ変更の権限設計: スキル内で LLM に <code>tempo()</code>
 を許可する範囲(§3.3 の範囲制限の具体値)。</li>
 <li>10分の形式設計(セクション構成、結合度の演出プラン)——スキル設計と同時に。</li>
+<li><strong>位置検出問題(いま曲のどこを演奏しているかをどう確定するか)</strong>: §3.1 の特徴量(onset/energy/register/密度)はテクスチャを与えるが<strong>形式内位置(bar:beat + セクション/コード)</strong>を与えない。リードシート曲(ATTYA、AABA・転調多)では LLM の最重要入力はこの形式内位置で、無いと正しいチェンジでコンプできない。供給源候補: (a) オペレーター舵取り/セクション送りゲート(§5、確実だが機械が追従者寄り)、(b) エンジンの小節カウント + Link beat/phase(クロック位置は出るが形式位置はリピート/ヴァンプでドリフト)、(c) 音響特徴からのセクション境界推定(8週間では不確実)。<strong>推奨初期案 = (a)+(b) ハイブリッド</strong>: エンジンの小節カウントで bar:beat を、オペレーター/エンジンが保持するセクション・コード index を特徴量窓に<strong>位置ラベル</strong>として付す。音響ベースの自動セクション検出は本番では非目標(§7)。<strong>要 大和確認(本番の自律度をどこに置くか)</strong>。</li>
+<li><strong>投影演出の存続</strong>: pi-first により旧 A の「Claude Code 画面投影＝開発ツールがバンドメンバー」が消える(§4.4)。投影を残すか(pi TUI / 並走観測画面の新規開発)否か——演出判断。</li>
 </ol>
 </body>
 </html>

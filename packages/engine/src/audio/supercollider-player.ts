@@ -15,8 +15,10 @@ import type { AudioEngineBackend } from './engine-backend'
  * SuperCollider audio player with low-latency scheduling.
  *
  * `AudioEngineBackend`（Scheduler + AudioEngine 面）を満たす音声バックエンド。
- * `RustEnginePlayer` の sibling で、`createAudioEngine()` が既定で選ぶ。`implements`
- * 宣言は契約を型でロックする（interface 変更時に差分をコンパイラが報告する）。
+ * `RustEnginePlayer` の sibling。cutover #108 以降、`createAudioEngine()` は
+ * `ORBITSCORE_ENGINE=sc`（または `supercollider`）で opt-out したときのみこれを選ぶ
+ * （既定は Rust）。`implements` 宣言は契約を型でロックする（interface 変更時に差分を
+ * コンパイラが報告する）。
  */
 export class SuperColliderPlayer implements AudioEngineBackend {
   private oscClient: OSCClient
