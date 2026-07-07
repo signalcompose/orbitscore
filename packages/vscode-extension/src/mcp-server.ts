@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import * as http from 'http'
 
+import type { WavAnalysis } from './wav-analysis'
+
 /**
  * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
  *
@@ -57,12 +59,12 @@ const { StreamableHTTPServerTransport } =
       onsessionclosed?: (sessionId: string) => void | Promise<void>
     }) => TransportLike
   }
-interface ZodStringLike {
-  describe(description: string): ZodStringLike
+interface ZodTypeLike {
+  describe(description: string): ZodTypeLike
   optional(): unknown
 }
 const { z } = require('zod') as {
-  z: { string: () => ZodStringLike }
+  z: { string: () => ZodTypeLike; number: () => ZodTypeLike; boolean: () => ZodTypeLike }
 }
 /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
 
@@ -78,6 +80,76 @@ export interface EngineState {
   liveCoding: boolean
 }
 
+/** One SuperCollider-reported audio device (list_audio_devices / select_audio_device). */
+export interface AudioDeviceInfo {
+  label: string
+  id: number
+  description: string
+}
+export type AudioDevicesResult =
+  | { ok: true; devices: AudioDeviceInfo[] }
+  | { ok: false; error: string }
+
+/** Fields accepted by configure_flash; omitted fields keep their current value. */
+export interface FlashConfigInput {
+  count?: number
+  duration?: number
+  color?: string
+  customColor?: string
+}
+/** Effective flash configuration, returned after applying a configure_flash call. */
+export interface FlashConfig {
+  count: number
+  duration: number
+  color: string
+  customColor: string
+}
+export type FlashConfigResult = { ok: true; config: FlashConfig } | { ok: false; error: string }
+
+/** 1-based selection range for set_selection (matches the editor gutter). */
+export interface SelectionInput {
+  startLine: number
+  startChar?: number
+  endLine?: number
+  endChar?: number
+}
+
+/** Literal find/replace arguments for edit_replace. */
+export interface EditReplaceInput {
+  find: string
+  replace: string
+  all?: boolean
+}
+
+/** Snapshot of the active editor for get_editor_state. Fields are null when no editor is active. */
+export interface EditorState {
+  path: string | null
+  languageId: string | null
+  cursor: { line: number; character: number } | null
+  selection: {
+    start: { line: number; character: number }
+    end: { line: number; character: number }
+  } | null
+  lineCount: number | null
+  isDirty: boolean | null
+}
+
+/** Diagnostic severities as reported by get_diagnostics, spelled out (not numeric) for agent readability. */
+export type DiagnosticSeverityLabel = 'error' | 'warning' | 'info' | 'hint'
+export interface DiagnosticEntry {
+  line: number
+  character: number
+  severity: DiagnosticSeverityLabel
+  message: string
+}
+export interface FileDiagnostics {
+  path: string
+  diagnostics: DiagnosticEntry[]
+}
+
+/** Result of analyze_audio (wav-analysis.ts is the vscode-free WAV parser). */
+export type AnalyzeAudioResult = { ok: true; analysis: WavAnalysis } | { ok: false; error: string }
+
 /**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
@@ -85,9 +157,24 @@ export interface EngineState {
  */
 export interface OrbitScoreToolHandlers {
   evaluate(code: string): Promise<EvaluateResult> | EvaluateResult
-  startEngine(options?: { captureWav?: string }): Promise<CommandResult> | CommandResult
+  startEngine(options?: {
+    captureWav?: string
+    debug?: boolean
+  }): Promise<CommandResult> | CommandResult
   stopEngine(): Promise<CommandResult> | CommandResult
   getEngineState(): EngineState
+  forceKillScsynth(): Promise<CommandResult> | CommandResult
+  listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
+  selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
+  configureFlash(options: FlashConfigInput): Promise<FlashConfigResult> | FlashConfigResult
+  openFile(path: string): Promise<CommandResult> | CommandResult
+  setSelection(range: SelectionInput): CommandResult
+  runSelection(): Promise<CommandResult> | CommandResult
+  editReplace(args: EditReplaceInput): Promise<CommandResult> | CommandResult
+  getEditorState(): EditorState
+  getDiagnostics(path?: string): FileDiagnostics[]
+  getLog(lines?: number): string[]
+  analyzeAudio(wavPath: string): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
 }
 
 function toToolResult(result: CommandResult): ToolResult {
@@ -138,17 +225,24 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
         'Start the OrbitScore audio engine (the native Rust daemon). Equivalent to ' +
         'the "Start Engine" command. Must be called before evaluate_orbitscore. ' +
         'Pass capture_wav to record the master output to a WAV file (capture seam) ' +
-        'so the produced audio can be verified without listening.',
+        'so the produced audio can be verified without listening. Pass debug: true ' +
+        'for the "Start Engine (Debug)" command variant (verbose engine logging).',
       inputSchema: {
         capture_wav: z
           .string()
           .describe('Absolute path to write a whole-stream WAV capture of the master output')
           .optional(),
+        debug: z
+          .boolean()
+          .describe('Start in debug mode, equivalent to "Start Engine (Debug)"')
+          .optional(),
       },
     },
     async (args) => {
       const captureWav = typeof args.capture_wav === 'string' ? args.capture_wav : undefined
-      return toToolResult(await handlers.startEngine(captureWav ? { captureWav } : undefined))
+      const debug = args.debug === true
+      const options = captureWav || debug ? { captureWav, debug } : undefined
+      return toToolResult(await handlers.startEngine(options))
     },
   )
 
@@ -168,6 +262,263 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
       description: 'Report whether the OrbitScore engine process is currently running.',
     },
     async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getEngineState()) }] }),
+  )
+
+  server.registerTool(
+    'force_kill_scsynth',
+    {
+      title: 'Force Kill scsynth',
+      description:
+        'Force-kill any stray scsynth processes (killall scsynth). Equivalent to the ' +
+        '"Force Kill scsynth" command — an escape hatch for orphaned processes, not ' +
+        'part of normal start/stop.',
+    },
+    async () => toToolResult(await handlers.forceKillScsynth()),
+  )
+
+  server.registerTool(
+    'list_audio_devices',
+    {
+      title: 'List Audio Devices',
+      description:
+        'List audio output devices detected via SuperCollider — the same device list ' +
+        'shown by "Select Audio Device". Not implemented for the Rust engine ' +
+        '(orbitscore.engine: "rust"); returns an error explaining that the system ' +
+        'default output is used instead.',
+    },
+    async () => {
+      const result = await handlers.listAudioDevices()
+      if (!result.ok) {
+        return { content: [{ type: 'text', text: `error: ${result.error}` }], isError: true }
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.devices) }] }
+    },
+  )
+
+  server.registerTool(
+    'select_audio_device',
+    {
+      title: 'Select Audio Device',
+      description:
+        'Write the selected audio output device to .orbitscore.json — equivalent to ' +
+        'choosing a device via "Select Audio Device". Restart the engine to apply. ' +
+        'Not implemented for the Rust engine.',
+      inputSchema: {
+        device: z.string().describe('Device name as reported by list_audio_devices'),
+      },
+    },
+    async (args) => {
+      const device = typeof args.device === 'string' ? args.device : ''
+      return toToolResult(await handlers.selectAudioDevice(device))
+    },
+  )
+
+  server.registerTool(
+    'configure_flash',
+    {
+      title: 'Configure Flash',
+      description:
+        'Set the "Run Selection" flash feedback settings (count, duration, color, ' +
+        'custom_color) — equivalent to "Configure Flash" in the command palette. ' +
+        'Only provided fields are changed; omitted fields keep their current value. ' +
+        'Returns the resulting effective configuration.',
+      inputSchema: {
+        count: z.number().describe('Number of flashes (1-5)').optional(),
+        duration: z.number().describe('Duration of each flash in milliseconds (50-500)').optional(),
+        color: z
+          .string()
+          .describe('Flash color theme: selection | error | warning | info | custom')
+          .optional(),
+        custom_color: z
+          .string()
+          .describe('Custom flash color in hex format, e.g. #ff6b6b (used when color: "custom")')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const result = await handlers.configureFlash({
+        count: typeof args.count === 'number' ? args.count : undefined,
+        duration: typeof args.duration === 'number' ? args.duration : undefined,
+        color: typeof args.color === 'string' ? args.color : undefined,
+        customColor: typeof args.custom_color === 'string' ? args.custom_color : undefined,
+      })
+      if (!result.ok) {
+        return { content: [{ type: 'text', text: `error: ${result.error}` }], isError: true }
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.config) }] }
+    },
+  )
+
+  server.registerTool(
+    'open_file',
+    {
+      title: 'Open File',
+      description:
+        'Open a file in the editor (vscode.workspace.openTextDocument + ' +
+        'showTextDocument). Required before set_selection, run_selection, ' +
+        'edit_replace, or get_editor_state can target it.',
+      inputSchema: {
+        path: z.string().describe('Absolute or workspace-relative path to the file to open'),
+      },
+    },
+    async (args) => {
+      const filePath = typeof args.path === 'string' ? args.path : ''
+      return toToolResult(await handlers.openFile(filePath))
+    },
+  )
+
+  server.registerTool(
+    'set_selection',
+    {
+      title: 'Set Selection',
+      description:
+        "Set the active editor's selection/cursor by line and character (1-based, " +
+        'matching the editor gutter). Reveals the range. Omit end_line and end_char ' +
+        'to collapse the selection to a cursor at the start position.',
+      inputSchema: {
+        start_line: z.number().describe('1-based start line'),
+        start_char: z.number().describe('1-based start character (column). Default: 1').optional(),
+        end_line: z
+          .number()
+          .describe(
+            '1-based end line. Omit together with end_char to collapse to a cursor at start',
+          )
+          .optional(),
+        end_char: z
+          .number()
+          .describe('1-based end character (column). Default: 1 when end_line is given')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const startLine = typeof args.start_line === 'number' ? args.start_line : NaN
+      if (!Number.isFinite(startLine)) {
+        return { content: [{ type: 'text', text: 'error: start_line is required' }], isError: true }
+      }
+      return toToolResult(
+        handlers.setSelection({
+          startLine,
+          startChar: typeof args.start_char === 'number' ? args.start_char : undefined,
+          endLine: typeof args.end_line === 'number' ? args.end_line : undefined,
+          endChar: typeof args.end_char === 'number' ? args.end_char : undefined,
+        }),
+      )
+    },
+  )
+
+  server.registerTool(
+    'run_selection',
+    {
+      title: 'Run Selection',
+      description:
+        "Execute the active editor's current selection (or the subject-block under " +
+        'the cursor) against the running engine — the real "Run Selection" command ' +
+        '(Cmd+Enter), including subject-block collection, setDocumentDirectory ' +
+        'injection, and the flash animation. The engine must already be running ' +
+        '(start_engine) and the active editor must be an OrbitScore (.orbs) file.',
+    },
+    async () => toToolResult(await handlers.runSelection()),
+  )
+
+  server.registerTool(
+    'edit_replace',
+    {
+      title: 'Edit Replace',
+      description:
+        'Literal (non-regex) find/replace in the active document. Replaces the ' +
+        'first occurrence by default; pass all: true to replace every occurrence. ' +
+        'Returns the number of occurrences replaced.',
+      inputSchema: {
+        find: z.string().describe('Literal text to search for'),
+        replace: z.string().describe('Replacement text'),
+        all: z
+          .boolean()
+          .describe('Replace every occurrence instead of only the first. Default: false')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const find = typeof args.find === 'string' ? args.find : ''
+      const replace = typeof args.replace === 'string' ? args.replace : ''
+      const all = args.all === true
+      return toToolResult(await handlers.editReplace({ find, replace, all }))
+    },
+  )
+
+  server.registerTool(
+    'get_editor_state',
+    {
+      title: 'Get Editor State',
+      description:
+        'Report the active editor: file path, language, cursor position, selection ' +
+        'range (all 1-based), line count, and dirty state. Fields are null when no ' +
+        'editor is active.',
+    },
+    async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getEditorState()) }] }),
+  )
+
+  server.registerTool(
+    'get_diagnostics',
+    {
+      title: 'Get Diagnostics',
+      description:
+        'Report OrbitScore diagnostics (errors/warnings) currently shown by the ' +
+        'editor (vscode.languages.getDiagnostics) — computed by the same analyzers ' +
+        'that run on open/edit, so no need to trigger an edit first. Pass path to ' +
+        'scope to one file; omit to list every file that currently has diagnostics.',
+      inputSchema: {
+        path: z.string().describe('Absolute path to scope diagnostics to a single file').optional(),
+      },
+    },
+    async (args) => {
+      const filePath = typeof args.path === 'string' ? args.path : undefined
+      return {
+        content: [{ type: 'text', text: JSON.stringify(handlers.getDiagnostics(filePath)) }],
+      }
+    },
+  )
+
+  server.registerTool(
+    'get_log',
+    {
+      title: 'Get Log',
+      description:
+        'Return the last N lines of the OrbitScore output channel (engine ' +
+        'stdout/stderr, MCP session log, etc.) — the same content as "OrbitScore" ' +
+        'in the Output panel. Default 50 lines, capped at 500.',
+      inputSchema: {
+        lines: z
+          .number()
+          .describe('Number of trailing lines to return (default 50, max 500)')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const lines = typeof args.lines === 'number' ? args.lines : undefined
+      return { content: [{ type: 'text', text: handlers.getLog(lines).join('\n') }] }
+    },
+  )
+
+  server.registerTool(
+    'analyze_audio',
+    {
+      title: 'Analyze Audio',
+      description:
+        'Parse a WAV file (e.g. a capture_wav produced by start_engine) and report ' +
+        'peak, RMS, and onset timing so audio can be verified objectively without ' +
+        'listening.',
+      inputSchema: {
+        wav_path: z.string().describe('Absolute path to the WAV file to analyze'),
+      },
+    },
+    async (args) => {
+      const wavPath = typeof args.wav_path === 'string' ? args.wav_path : ''
+      const result = await handlers.analyzeAudio(wavPath)
+      if (!result.ok) {
+        return { content: [{ type: 'text', text: `error: ${result.error}` }], isError: true }
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.analysis) }] }
+    },
   )
 
   return server

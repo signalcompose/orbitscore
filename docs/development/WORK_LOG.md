@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.191 test(vscode-extension): MCP server test suite + gated OrbitStudio E2E (#388) (Jul 7, 2026)
+
+Agent Bridge の機能保証をテスト資産として永続化（owner 方針: 「テストがあることで機能の保証をするのが筋」・examples はテスト題材にしない）。Sonnet 委譲で作成、gated E2E は main session が実機実行。
+
+- **`tests/vscode-extension/mcp-server.spec.ts`（8 tests）**: stub handlers 全 16 member + 実 HTTP JSON-RPC。initialize/tools-list（16 ツール名 + スキーマ）/round-trip/isError 変換/**multi-session regression（3 クライアント連続・live で踏んだバグの再発防止）**/no-session 404/非 `/mcp` 404/dispose 後 ECONNREFUSED。
+- **`tests/vscode-extension/wav-analysis.spec.ts`（6 tests）**: 合成 float32 WAV builder（無音/0.5s 間隔クリック/未 finalize ヘッダ/int16 拒否/mono）。
+- **`tests/e2e/orbitstudio-mcp-gated.spec.ts`（opt-in gated: `ORBIT_GATED_ORBITSTUDIO=1`）+ `tests/e2e/helpers/mcp-client.ts` + fixtures `tests/fixtures/mcp-e2e/`**: 実利用の形の E2E — OrbitStudio.app 起動 → `open_file`(diagnostic fixture) + `get_diagnostics`（**#384 の behavioral 検証: 編集なしで診断が返る**）→ `open_file`(kick_loop) → 全選択 `run_selection`（実 palette 経路）→ `edit_replace` tempo 120→180 → 行選択再実行 → `get_log` → `stop_engine` → capture 解析で **0.5s 帯と 0.333s 帯の onset が両方存在 = テキスト編集が音を変えたことを機械検証**。
+- **実行結果**: 非 gated 14 pass / gated 1 skip（CI 安全）。**gated 実機 RUN = PASS（16.2s・2026-07-07）** — tempo 再評価が LOOP 中の seq を in-place で retune する仮定も実機で成立。
+- **エラー経路 probe（実ホスト・11 本）**: engine 未起動 run_selection / 不在ファイル open_file / no-match・空 find の edit_replace / 不在 WAV analyze_audio / 範囲外 configure_flash / rust kind の select_audio_device（正直なエラー）→ 全て clean な isError。**get_log の monkey-patch が実ホストで populate されることを確認**（実装時の未検証事項を解消）。`set_selection` の範囲外行は vscode `validatePosition` により silent clamp（エラーにならない・観察事項）。
+
+### 6.190 feat(vscode-extension): 12 remaining MCP tools — editor ops, palette parity, observability (#388) (Jul 7, 2026)
+
+ツール総数 16。Sonnet 委譲で実装（tsc/eslint/stub smoke 全 green）。
+
+- **Editor 系（実利用経路）**: `open_file` / `set_selection`（1-based・`validatePosition` 変換・end 省略で cursor collapse）/ `run_selection`（実 `orbitscore.runSelection` command 呼び出し = ブロック収集・setDir 注入・flash 込み）/ `edit_replace`（literal find/replace・`all` オプション）/ `get_editor_state`。
+- **Palette 残り**: `start_engine` に `debug?` 追加（Start Engine (Debug) を吸収）/ `force_kill_scsynth` / `list_audio_devices` + `select_audio_device`（`selectAudioDevice()` を `detectAudioDevices`+`writeAudioDeviceConfig` に分解共有・probe scsynth の cleanup を list のみの呼び出しでも実行するよう改善・rust kind では正直に未サポートエラー）/ `configure_flash`（package.json と同じ range 検証・**workspace-scoped**: agent 由来の設定変更を Global に漏らさない意図的選択）。
+- **観測系**: `get_diagnostics`（`vscode.languages.getDiagnostics` ラップ・1-based・severity 文字列化）/ `get_log`（`outputChannel.appendLine`/`append` を activate 時に一度だけ monkey-patch → 1000 行 ring buffer・default 50 / cap 500）/ `analyze_audio`（`wav-analysis.ts` の `analyzeWavBuffer`）。
+- **`wav-analysis.ts`（新規・純関数）**: daemon capture 形式（RIFF float32）の解析 — peak/RMS/onset 検出（20ms 窓・200ms min gap）・未 finalize ヘッダ耐性。MCP ツールとテストの共有 seam。
+
 ### 6.189 fix(vscode-extension): per-session MCP transports + start_engine capture_wav (#388) (Jul 7, 2026)
 
 live 検証（実 OrbitStudio 駆動）で踏んだ実バグの修正と、観測面の第一歩。
