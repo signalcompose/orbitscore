@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.189 fix(vscode-extension): per-session MCP transports + start_engine capture_wav (#388) (Jul 7, 2026)
+
+live 検証（実 OrbitStudio 駆動）で踏んだ実バグの修正と、観測面の第一歩。
+
+- **per-session transport**: 単一共有 transport は最初のクライアントが唯一の session 枠を恒久消費し、以後のクライアント（Claude Code の再接続を含む）は `Bad Request: Mcp-Session-Id header is required` で全滅する（live で観測・2026-07-07）。initialize リクエストごとに transport+McpServer を生成し `mcp-session-id` header で routing する方式に変更。`onsessioninitialized`/`onsessionclosed`/`transport.onclose` で session map を管理。multi-session regression probe（3 クライアント連続）で PASS。
+- **`start_engine({capture_wav?})`**: capture seam（#307/#365）を MCP から使えるように。engine spawn env に `ORBIT_CAPTURE_WAV` を注入し、daemon が master 出力を whole-stream WAV 録音 → agent が聴覚なしで音声を客観検証できる（EDH 起動時 env の小細工が不要になり、OrbitStudio でもそのまま機能する）。
+- **E2E 実績（実 OrbitStudio）**: Phase 2 B1 の `OrbitStudio.app` を `orbs` CLI + `--extensionDevelopmentPath` + 隔離 data/ext dir で agent が起動 → MCP up → `start_engine → evaluate → stop_engine` フルループを agent 単独で駆動。**capture 解析（48kHz stereo float32・6.43s）が全サンプル 0 = 無音を検出** → 「evaluate ok ≠ 発音」を機械的に証明（耳の代替の初仕事）。無音の根本原因は診断中（daemon が capture seam 以前のビルドだった問題は cargo rebuild + copy-daemon-bin.sh で解消済み）。
+- 学び: bundled daemon バイナリの鮮度は capture 等の新機能の前提。`strings <bin> | grep ORBIT_CAPTURE_WAV` で機能存在を確認できる。
+
 ### 6.188 feat(vscode-extension): MCP control server — evaluate_orbitscore tool (first slice) (#388) (Jul 7, 2026)
 
 Claude Code から OrbitScore を MCP 経由で駆動する制御面（WCTM_SYSTEM_SPEC §3「Agent Bridge」）の第一スライス。owner の狙い = examples を含む全機能を Claude 自身が E2E で叩いて検証し「耳を1つ不要にする」+「test = eval」基盤。§4.2 の通り harness-neutral（後で pi が同じ MCP を consume）。

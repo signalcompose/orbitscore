@@ -14,7 +14,13 @@ import {
   analyzeOutputWithoutLinkAudio,
   isOrbitscoreDocument,
 } from './diagnostics-analysis'
-import { startOrbitScoreMcpServer, type EvaluateResult, type McpServerHandle } from './mcp-server'
+import {
+  startOrbitScoreMcpServer,
+  type CommandResult,
+  type EngineState,
+  type EvaluateResult,
+  type McpServerHandle,
+} from './mcp-server'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -137,15 +143,27 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
-  // only, gated behind a nonzero `orbitscore.mcpServer.port`. Lets an external
-  // agent (e.g. Claude Code) drive OrbitScore operations for E2E testing.
-  const mcpPort = vscode.workspace.getConfiguration('orbitscore').get<number>('mcpServer.port', 0)
+  // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
+  // precedence over the `orbitscore.mcpServer.port` setting so the extension can
+  // be launched from the CLI (e.g. Extension Development Host) with the port set
+  // without editing settings. Lets an external agent (e.g. Claude Code) drive
+  // OrbitScore operations for E2E testing.
+  const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
+  const mcpPort =
+    Number.isInteger(envMcpPort) && envMcpPort > 0
+      ? envMcpPort
+      : vscode.workspace.getConfiguration('orbitscore').get<number>('mcpServer.port', 0)
   if (mcpPort && mcpPort > 0) {
     try {
       mcpServerHandle = await startOrbitScoreMcpServer({
         port: mcpPort,
         version: packageJson.version,
-        handlers: { evaluate: (code) => evaluateForAgent(code) },
+        handlers: {
+          evaluate: (code) => evaluateForAgent(code),
+          startEngine: (options) => startEngineForAgent(options),
+          stopEngine: () => stopEngineForAgent(),
+          getEngineState: () => getEngineStateForAgent(),
+        },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
       })
     } catch (err) {
@@ -817,7 +835,7 @@ function setupExitHandler(process: child_process.ChildProcess): void {
   })
 }
 
-function startEngine(debugMode: boolean = false) {
+function startEngine(debugMode: boolean = false, agentOpts?: { captureWav?: string }) {
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return
@@ -892,6 +910,14 @@ function startEngine(debugMode: boolean = false) {
   const env = { ...process.env }
   if (debugMode) {
     env.ORBITSCORE_DEBUG = '1'
+  }
+
+  // Capture seam (#307): the daemon records the master output to this WAV while
+  // the stream runs. Only set when explicitly requested (MCP start_engine tool)
+  // — inherited env stays authoritative otherwise.
+  if (agentOpts?.captureWav) {
+    env.ORBIT_CAPTURE_WAV = agentOpts.captureWav
+    outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
   }
 
   // Audio backend selection (#377, post-cutover #369). Engine kind MUST be set
@@ -1339,6 +1365,43 @@ function evaluateForAgent(code: string): EvaluateResult {
   const documentDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
   writeCodeToEngine(code, documentDir)
   return { ok: true }
+}
+
+/** Start the engine for the MCP `start_engine` tool (mirrors the palette command). */
+function startEngineForAgent(options?: { captureWav?: string }): CommandResult {
+  if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
+    return { ok: true, message: 'engine already running' }
+  }
+  startEngine(false, options)
+  // startEngine() may abort (missing daemon, build issue) without throwing — it
+  // reports via a VS Code notification. Reflect the actual spawn outcome so the
+  // agent doesn't assume success.
+  if (!engineProcess || engineProcess.killed) {
+    return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
+  }
+  return {
+    ok: true,
+    message: options?.captureWav
+      ? `engine starting (capturing to ${options.captureWav})`
+      : 'engine starting',
+  }
+}
+
+/** Stop the engine for the MCP `stop_engine` tool (mirrors the palette command). */
+function stopEngineForAgent(): CommandResult {
+  if (!engineProcess || engineProcess.killed) {
+    return { ok: true, message: 'engine already stopped' }
+  }
+  stopEngine()
+  return { ok: true, message: 'engine stopping' }
+}
+
+/** Report engine state for the MCP `get_engine_state` tool. */
+function getEngineStateForAgent(): EngineState {
+  return {
+    running: Boolean(engineProcess && !engineProcess.killed),
+    liveCoding: isLiveCodingMode,
+  }
 }
 
 // Removed unused executeCode function
