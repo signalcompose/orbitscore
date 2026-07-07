@@ -1,6 +1,19 @@
 import type { Scheduler } from '../../global/types'
 
 /**
+ * How far BEFORE a bar boundary the loop timer fires (#389 mechanism A).
+ *
+ * setTimeout never fires early, so a timer aimed exactly AT the boundary
+ * fires late by the event-loop's current lag — and the bar-head event it
+ * enqueues (time = boundary) is already in the past, dispatching immediately
+ * and audibly late. Firing with this lead keeps every enqueued event in the
+ * future, so the scheduler's 1ms poll releases it ON the grid. The lead also
+ * absorbs ordinary callback jitter; it only needs to cover event-loop lag,
+ * not the audio path (the daemon has its own lookahead).
+ */
+export const LOOP_TIMER_LEAD_MS = 100
+
+/**
  * Options for loop sequence playback
  */
 export interface LoopSequenceOptions {
@@ -162,16 +175,35 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
       // Update previous mute state for next iteration
       wasMuted = isMuted
 
-      // Schedule next iteration with current pattern duration
-      scheduleNextIteration(patternDuration)
+      // Re-arm anchored to the absolute grid (#389 mechanism A): the delay is
+      // recomputed from the NEXT boundary minus now, so a late callback does
+      // not push every subsequent one later (the old fixed-patternDuration
+      // re-arm accumulated ~+0.2ms/bar forever). While muted there is nothing
+      // scheduled and nextScheduleTime is deliberately stale (the unmute
+      // branch re-baselines it), so a plain idle wait avoids a negative-delay
+      // hot loop.
+      if (isMuted) {
+        scheduleNextIteration(patternDuration)
+      } else {
+        const nowMs = Date.now() - scheduler.startTime
+        scheduleNextIteration(
+          Math.max(0, nextScheduleTime + patternDuration - LOOP_TIMER_LEAD_MS - nowMs),
+        )
+      }
     }, delayMs)
     // Update stateManager with current timer ID so stop() can cancel it
     setLoopTimerFn?.(loopTimer)
   }
 
-  // First wait absorbs the lead-in to the quantize boundary plus one pattern,
-  // so iteration 1 events land at effectiveStart + patternDuration.
-  scheduleNextIteration(leadInMs + patternDuration)
+  // First arm, anchored like the re-arms above: fire LOOP_TIMER_LEAD_MS before
+  // the first boundary (effectiveStart + patternDuration) so iteration 1's
+  // bar-head event is enqueued ahead of its audible time.
+  scheduleNextIteration(
+    Math.max(
+      0,
+      effectiveStart + patternDuration - LOOP_TIMER_LEAD_MS - (Date.now() - scheduler.startTime),
+    ),
+  )
 
   return {
     isPlaying: true,

@@ -17,6 +17,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.198 fix(engine): sawtooth timing jitter — grid-anchored loop timer + anchor regression (#389) (Jul 7, 2026)
+
+#389 の 2 機構（issue コメントの調査で確定済み）を両方修正。**受け入れ基準（120bpm kick 四分 LOOP を 2 分以上・サンプル精度解析で mean|dev| < 1ms・のこぎり波消失）を達成**: 150 秒 capture 実測で **mean|dev| = 0.52ms / max|dev| = 2.0ms / std 0.80ms**（fix 前は同一測定で稼働 126-156s 帯 mean 8.35ms / max 18ms・外挿で無限成長）。beat0 の単調成長・2 小節周期 ±5.3ms 段差ともに消失（全 298 onset が ±2ms 帯・トレンドなし）。
+
+- **機構 A: LOOP タイマーのグリッドアンカー化 + lead 発火**（`loop-sequence.ts`）: 非アンカー型 `setTimeout(patternDuration)` 再アームは発火遅れが単調蓄積（実測 +0.19ms/小節・約 90 分で崩壊水準）し、小節頭イベントが「enqueue 時点で過去」→ 即時 dispatch で小節頭だけ遅れる構造だった。修正: 再アーム delay を絶対 grid からの逆算（`nextScheduleTime + patternDuration − LOOP_TIMER_LEAD_MS − now`）にし、境界の **100ms 前**に発火して次小節を future に enqueue（1ms poll が grid どおり dispatch）。mute 中は nextScheduleTime が意図的に stale なので素の patternDuration 待ち（負 delay ホットループ回避）。tempo/beat/length 変更・quantize・unmute 再baseline の意味論は不変。
+- **機構 B: anchor の最小二乗回帰**（`rust-engine-player.ts`）: StreamStats の `now_sec` は `cursor_frames/sample_rate` でブロック長（512f ≈ 10.67ms）に下方向量子化されており、単一 last-wins anchor だと 1Hz tick とブロック位相のうなり（4 tick = 2 小節周期）がそのまま発音時刻に転写されていた。修正: 直近 30 サンプル（≈30 秒窓）の `(tsMs, daemonSec)` に LSQ フィット（`daemonNowSec()` が傾き+切片で推定・量子化ノイズは平均化で ~0.6ms 級・wall↔device のレート差も傾きで吸収）。窓 <2 / 傾き異常（[0.95, 1.05] 外）は従来推定へフォールバック。respawn 時は establishSession が窓を破棄（新旧 daemon の transport を混ぜない）。フィット直線の定数バイアス（~半ブロック）は grid 安定性に無害（lookahead 50ms 内）。
+- **テスト**: `loop-sequence-resilience.spec.ts` に fake-timer 2 本（lead 発火 + baseTime grid 維持 / 30ms コールバック lag が翌 delay 970ms で吸収され境界位相不変）。全 suite 1268 passed。実測系（capture + onset 解析）は session scratchpad の `jitter_repro_driver.js` / `deviation_series.js` / `analyze_wav_fine.js` で再現可能。
+
 ### 6.197 feat(vscode-extension): nested playhead resolution + drop playheadSeqColors setting (#390) (Jul 7, 2026)
 
 6.196 の nested argPath を extension 側で解決し、`(1, 1)` 内部の各要素を個別点灯させる。owner 目視確認済み（2026-07-07・drum.play(1, (1, 1), 1, 1) でネスト内半拍点灯 + hat 従来どおり・「めちゃくちゃループがわかりやすくなった」）。

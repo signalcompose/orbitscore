@@ -124,6 +124,21 @@ interface ClockAnchor {
   daemonSec: number
 }
 
+/**
+ * anchor 回帰窓のサンプル数上限（StreamStats は 1Hz なので ≈30 秒窓）。
+ *
+ * StreamStats の now_sec は `cursor_frames / sample_rate` で、cursor はデバイス
+ * コールバックごとに一括前進する — 非同期に読む 1Hz ticker が得る値は
+ * ブロック長（512f@48kHz ≈ 10.67ms）だけ下方向に量子化されており、tick ごとの
+ * ブロック位相ずれが 2 小節周期 ±5.3ms の可聴ヨレとして発音時刻に転写されていた
+ * （#389 機構 B）。単一 last-wins anchor をやめ、直近サンプル列への最小二乗
+ * フィットで推定すると、量子化ノイズは平均化で ~0.6ms 級に落ち、wall↔device の
+ * 実効レート差（ppm 級）も傾きとして吸収される。フィット直線は真値より
+ * ~半ブロック下に座るが、それは「一定オフセット」であり grid の安定性には
+ * 影響しない（定位相のレイテンシは lookahead 50ms の内側で無害）。
+ */
+const ANCHOR_WINDOW = 30
+
 /** 1 発音 dispatch の観測情報（telemetry / timing 計測フック）。 */
 export interface DispatchInfo {
   filepath: string
@@ -202,6 +217,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
+  /**
+   * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
+   * daemonNowSec() が 2 点以上あれば最小二乗フィットで推定する。respawn 時は
+   * establishSession が空にする（新旧 daemon の transport を混ぜない）。
+   */
+  private anchorSamples: ClockAnchor[] = []
 
   // --- supervisor 状態（recovery floor / #300） ---
   /**
@@ -235,7 +256,13 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private readonly onStreamStats = (data: unknown): void => {
     const nowSec = Number((data as { now_sec?: unknown }).now_sec)
     if (Number.isFinite(nowSec)) {
-      this.clockAnchor = { tsMs: Date.now(), daemonSec: nowSec }
+      const sample = { tsMs: Date.now(), daemonSec: nowSec }
+      this.clockAnchor = sample
+      // #389 機構 B: 回帰窓にも積む（daemonNowSec がフィットで量子化ノイズを均す）。
+      this.anchorSamples.push(sample)
+      if (this.anchorSamples.length > ANCHOR_WINDOW) {
+        this.anchorSamples.shift()
+      }
     } else {
       // 不正な now_sec で anchor を凍結させると drift しうるので、無言にせず通知する。
       console.warn(
@@ -295,6 +322,10 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * off→on で二重購読も防ぐ（respawn は同一 DaemonClient を再利用するため必須）。
    */
   private async establishSession(): Promise<void> {
+    // 回帰窓を破棄（#389 機構 B）: respawn 後の新 daemon の transport は 0 付近から
+    // 再出発するので、旧 daemon のサンプルを混ぜるとフィットが壊れる。初期 anchor
+    // （uptime_sec）は精度が別物なので窓には入れず、StreamStats のみを積む。
+    this.anchorSamples = []
     // 暫定 anchor: uptime_sec ≈ transport now_sec（共に stream 開始から実時間で進む）。respawn 後は
     // 新 daemon の uptime（≈0）へ再 anchor され、死んだ daemon の古い transport との desync を断つ。
     try {
@@ -792,8 +823,45 @@ export class RustEnginePlayer implements AudioEngineBackend {
     return load
   }
 
-  /** TS wall clock から daemon transport now_sec を推定する（anchor + 経過時間）。 */
+  /**
+   * TS wall clock から daemon transport now_sec を推定する。
+   *
+   * 回帰窓（anchorSamples）に 2 点以上あれば最小二乗フィット `daemonSec ≈ a + b·t`
+   * で推定する（#389 機構 B — 単一 anchor では StreamStats のブロック量子化
+   * ±10.7ms がそのまま発音時刻に転写されていた。詳細は ANCHOR_WINDOW のコメント）。
+   * 窓が薄い間（boot 直後 / respawn 直後）と、フィットの傾きが正気でない場合
+   * （サンプル異常時の防波堤）は従来の「最新 anchor + 経過時間」に落ちる。
+   */
   private daemonNowSec(): number {
+    const samples = this.anchorSamples
+    if (samples.length >= 2) {
+      const t0 = samples[0].tsMs
+      const n = samples.length
+      let sumX = 0
+      let sumY = 0
+      for (const s of samples) {
+        sumX += (s.tsMs - t0) / 1000
+        sumY += s.daemonSec
+      }
+      const meanX = sumX / n
+      const meanY = sumY / n
+      let sxx = 0
+      let sxy = 0
+      for (const s of samples) {
+        const dx = (s.tsMs - t0) / 1000 - meanX
+        sxx += dx * dx
+        sxy += dx * (s.daemonSec - meanY)
+      }
+      if (sxx > 0) {
+        const slope = sxy / sxx
+        // wall と device の実効レート差は ppm 級のはず。それを大きく外れた傾きは
+        // 窓の汚染（デバイス切替や stream 停止を跨いだサンプル等）を示すので使わない。
+        if (slope > 0.95 && slope < 1.05) {
+          const intercept = meanY - slope * meanX
+          return intercept + slope * ((Date.now() - t0) / 1000)
+        }
+      }
+    }
     return this.clockAnchor.daemonSec + (Date.now() - this.clockAnchor.tsMs) / 1000
   }
 
