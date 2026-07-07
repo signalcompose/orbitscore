@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.187 fix(vscode-extension): run diagnostics on open/close/activation, not only on change (#384) (Jul 7, 2026)
+
+OrbitStudio Phase 2 (#378) の IDE チャネル probe（`getDiagnostics`）中に発見したバグ。診断が `onDidChangeTextDocument` にのみ配線され、**ファイルを開いただけでは診断が計算されない**（CLI から `.orbs` を開く・タブ復元・activation 時の初期文書はいずれも 1 度編集するまでエラー/警告が出ない）。
+
+- **判定源の単一化**: `isOrbitscoreDocument(document: { languageId })` を `diagnostics-analysis.ts` に切り出し（純関数・vscode 非依存で単体テスト可能）。inline の `languageId === 'orbitscore'` を置換。
+- **4 サイト配線**（`extension.ts` activation）:
+  - `onDidOpenTextDocument` → `updateDiagnostics`（開いた瞬間に診断）
+  - `onDidChangeTextDocument` → 既存（`isOrbitscoreDocument` に統一）
+  - `onDidCloseTextDocument` → `diagnosticCollection.delete(uri)`（閉じたら診断クリア＝stale 診断を残さない）
+  - activation 時の初期パス: `vscode.workspace.textDocuments` を走査。拡張は `onLanguage:orbitscore` で activate するため、起動のトリガーとなった文書は既に開いており `onDidOpenTextDocument` が発火しない → 初期パスで拾う。
+- **検証**: `tsc --noEmit` PASS。behavioral 検証（開いた直後に `getDiagnostics` が返る）は IDE チャネル probe で行う予定（次の OrbitStudio 起動時にまとめて実施）。
+- ブランチ: owner 指示により Phase 2 ブランチ `378-phase2-b1-rebuild` 上で修正。
+
 ### 6.186 feat(vscode-extension): engine-kind branching — rust-default UI, scsynth sites gated (#377) (Jul 7, 2026)
 
 cutover #369 で native Rust daemon が既定音声エンジンになった後も、`extension.ts` には scsynth 前提のコードが 4 箇所残っていた（scsynth 非同梱の OrbitStudio 成果物では毎回エラーになる landmine）。「scsynth の物理的有無」でなく「**engine kind**」で分岐させ、silent fallback は作らない（Issue #136 strict mode 踏襲）。

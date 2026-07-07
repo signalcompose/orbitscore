@@ -12,6 +12,7 @@ import {
   analyzeGlobalOncePerFile,
   analyzeLinkAudioMissingOutput,
   analyzeOutputWithoutLinkAudio,
+  isOrbitscoreDocument,
 } from './diagnostics-analysis'
 
 // Engine process management
@@ -101,14 +102,36 @@ export async function activate(context: vscode.ExtensionContext) {
   const diagnosticCollection = vscode.languages.createDiagnosticCollection('orbitscore')
   context.subscriptions.push(diagnosticCollection)
 
-  // Update diagnostics on document change
+  // Compute diagnostics on open and change; clear them on close (#384).
+  // Diagnostics must not wait for the first edit — files opened from the CLI,
+  // restored tabs, or the activation-time initial pass below all need
+  // errors/warnings surfaced immediately.
   context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((document) => {
+      if (isOrbitscoreDocument(document)) {
+        updateDiagnostics(document, diagnosticCollection)
+      }
+    }),
     vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.languageId === 'orbitscore') {
+      if (isOrbitscoreDocument(event.document)) {
         updateDiagnostics(event.document, diagnosticCollection)
       }
     }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      if (isOrbitscoreDocument(document)) {
+        diagnosticCollection.delete(document.uri)
+      }
+    }),
   )
+
+  // Initial pass over documents already open at activation (#384): the
+  // extension activates on `onLanguage:orbitscore`, so the triggering document
+  // is already open and would otherwise never fire onDidOpenTextDocument.
+  for (const document of vscode.workspace.textDocuments) {
+    if (isOrbitscoreDocument(document)) {
+      updateDiagnostics(document, diagnosticCollection)
+    }
+  }
 }
 
 export function deactivate() {
