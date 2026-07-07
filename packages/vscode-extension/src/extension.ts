@@ -14,6 +14,7 @@ import {
   analyzeOutputWithoutLinkAudio,
   isOrbitscoreDocument,
 } from './diagnostics-analysis'
+import { startOrbitScoreMcpServer, type EvaluateResult, type McpServerHandle } from './mcp-server'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -24,6 +25,8 @@ let isLiveCodingMode: boolean = false
 // Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
 // Used to decide if `global.setDocumentDirectory(...)` can be prepended safely.
 let globalInitialized: boolean = false
+// Optional MCP control server (Agent Bridge). Non-null only while running.
+let mcpServerHandle: McpServerHandle | null = null
 
 // let isDebugMode: boolean = false // Debug mode flag
 
@@ -132,12 +135,33 @@ export async function activate(context: vscode.ExtensionContext) {
       updateDiagnostics(document, diagnosticCollection)
     }
   }
+
+  // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
+  // only, gated behind a nonzero `orbitscore.mcpServer.port`. Lets an external
+  // agent (e.g. Claude Code) drive OrbitScore operations for E2E testing.
+  const mcpPort = vscode.workspace.getConfiguration('orbitscore').get<number>('mcpServer.port', 0)
+  if (mcpPort && mcpPort > 0) {
+    try {
+      mcpServerHandle = await startOrbitScoreMcpServer({
+        port: mcpPort,
+        version: packageJson.version,
+        handlers: { evaluate: (code) => evaluateForAgent(code) },
+        log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
+      })
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      outputChannel?.appendLine(`❌ MCP server failed to start on port ${mcpPort}: ${reason}`)
+      vscode.window.showWarningMessage(`OrbitScore MCP server failed to start: ${reason}`)
+    }
+  }
 }
 
 export function deactivate() {
   if (engineProcess && !engineProcess.killed) {
     engineProcess.kill()
   }
+  void mcpServerHandle?.dispose()
+  mcpServerHandle = null
   outputChannel?.dispose()
   statusBarItem?.dispose()
   bundleStatusItem?.dispose()
@@ -1256,36 +1280,65 @@ async function runSelection() {
     createFlash(0)
   }
 
-  // Inject setDocumentDirectory so audioPath() / audio() resolve relative paths
-  // against the .orbs file's directory, not the engine process's cwd.
-  //
-  // Strategy:
-  // - If this eval contains `var global = init GLOBAL`, insert setDocumentDirectory
-  //   right after it (and remember that global is now initialized).
-  // - Otherwise, if global has already been initialized in this engine session,
-  //   prepend setDocumentDirectory before the user code (refreshes the directory
-  //   in case the user switched .orbs files).
-  // - If global has not yet been initialized, do not inject (would fail with
-  //   "global is not defined").
-  let codeToSend = trimmedText
-  const documentDir = path.dirname(editor.document.uri.fsPath)
-  const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-  const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-  if (globalInitMatch) {
-    const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-    codeToSend = codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-    globalInitialized = true
-  } else if (globalInitialized) {
-    codeToSend = setDirCommand + '\n' + codeToSend
+  writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))
+  flashLines()
+}
+
+/**
+ * Inject `global.setDocumentDirectory(...)` and write OrbitScore source to the
+ * engine's live-coding stdin. Shared by the editor "Run Selection" command and
+ * the MCP `evaluate_orbitscore` tool so both go through the exact same path.
+ *
+ * setDir injection lets audioPath() / audio() resolve relative paths against the
+ * `.orbs` file's directory (or, for the agent, the workspace root) rather than
+ * the engine process's cwd:
+ * - If this eval contains `var global = init GLOBAL`, insert setDocumentDirectory
+ *   right after it (and remember that global is now initialized).
+ * - Otherwise, if global has already been initialized in this engine session,
+ *   prepend setDocumentDirectory before the user code (refreshes the directory
+ *   in case the user switched .orbs files).
+ * - If global has not yet been initialized, do not inject (would fail with
+ *   "global is not defined").
+ * When `documentDir` is undefined, no directory is injected.
+ */
+function writeCodeToEngine(rawCode: string, documentDir: string | undefined): void {
+  if (!engineProcess) {
+    return
+  }
+  let codeToSend = rawCode
+  if (documentDir) {
+    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
+    if (globalInitMatch) {
+      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+      codeToSend =
+        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
+      globalInitialized = true
+    } else if (globalInitialized) {
+      codeToSend = setDirCommand + '\n' + codeToSend
+    }
   }
 
-  // Execute the selected command (both single line and multiline)
   // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
   if (statusBarItem?.text.includes('🐛')) {
     outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
   }
   engineProcess.stdin?.write(codeToSend + '\n')
-  flashLines()
+}
+
+/**
+ * Evaluate agent-supplied OrbitScore source (MCP `evaluate_orbitscore` tool).
+ * Mirrors the engine-running guard in `runSelection` and reuses
+ * `writeCodeToEngine`. Relative audio paths resolve against the first workspace
+ * folder, since the agent has no "active editor".
+ */
+function evaluateForAgent(code: string): EvaluateResult {
+  if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
+    return { ok: false, error: 'engine is not running — start the engine first' }
+  }
+  const documentDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  writeCodeToEngine(code, documentDir)
+  return { ok: true }
 }
 
 // Removed unused executeCode function

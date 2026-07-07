@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.188 feat(vscode-extension): MCP control server — evaluate_orbitscore tool (first slice) (#388) (Jul 7, 2026)
+
+Claude Code から OrbitScore を MCP 経由で駆動する制御面（WCTM_SYSTEM_SPEC §3「Agent Bridge」）の第一スライス。owner の狙い = examples を含む全機能を Claude 自身が E2E で叩いて検証し「耳を1つ不要にする」+「test = eval」基盤。§4.2 の通り harness-neutral（後で pi が同じ MCP を consume）。
+
+- **`packages/vscode-extension/src/mcp-server.ts`（新規）**: 拡張ホスト内に MCP サーバー（Streamable HTTP・SDK `@modelcontextprotocol/sdk@1.29.0`）を立て、`127.0.0.1:<port>/mcp` で待受。第一ツール `evaluate_orbitscore(code)` を登録。handler は vscode 非依存の `OrbitScoreToolHandlers` seam に分離（pi 再利用のため）。
+- **stateful セッション**: MCP ライフサイクル（initialize→tools/list→tools/call）は複数 POST に跨るため、`sessionIdGenerator: () => randomUUID()` で initialized 状態を保持。stateless（当初案）だと 2 発目以降が未初期化で 500 になることを standalone probe で実証 → stateful に修正。
+- **SDK は runtime require で読み込む**: SDK は exports-only ESM/CJS dual、拡張は `moduleResolution: node`（node10）で static import の subpath 型解決不可 → 既存の engine module と同じ runtime-require イディオムで CJS 解決。小さな typed shim を当て tsconfig は無変更。
+- **`extension.ts`**: `runSelection` の stdin 送出（setDir 注入 + `engineProcess.stdin.write`）を `writeCodeToEngine(rawCode, documentDir?)` に抽出し、editor コマンドと MCP ツールで**同一経路**を共有。MCP handler `evaluateForAgent(code)` は engine-running ガード（runSelection と同一）+ workspace root を documentDir に。activate で `orbitscore.mcpServer.port`（config・default 0=無効）が有効時のみ起動、deactivate で停止。
+- **config `orbitscore.mcpServer.port`** 追加（dev/agent-integration 用・0=無効・machine-overridable）。
+- **検証**: standalone probe（`scratchpad/mcp_server_probe.js`）で compiled `dist/mcp-server.js` を stub handler で起動し HTTP JSON-RPC で initialize/tools/list/tools/call を実行 → **PASS**（tools/list に正しい JSON Schema `code:string` required、tools/call で handler が正確にコード受信）。tsc `--noEmit` PASS・eslint clean。**editor→engine→音の E2E は次段（実 OrbitStudio + owner 同席）**。
+- 残（follow-on）: 残り 6 コマンドパレットツール + 観測系（get_diagnostics / get_state / capture 系）/ .vsix bundling（拡張初の runtime 依存 = SDK+zod、packaged .vsix 化時は esbuild bundle が要る）/ DNS-rebinding 保護。
+
 ### 6.187 fix(vscode-extension): run diagnostics on open/close/activation, not only on change (#384) (Jul 7, 2026)
 
 OrbitStudio Phase 2 (#378) の IDE チャネル probe（`getDiagnostics`）中に発見したバグ。診断が `onDidChangeTextDocument` にのみ配線され、**ファイルを開いただけでは診断が計算されない**（CLI から `.orbs` を開く・タブ復元・activation 時の初期文書はいずれも 1 度編集するまでエラー/警告が出ない）。

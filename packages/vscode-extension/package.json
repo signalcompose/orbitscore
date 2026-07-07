@@ -160,13 +160,24 @@
         },
         "orbitscore.engine": {
           "type": "string",
-          "enum": ["rust", "sc"],
+          "enum": [
+            "rust",
+            "sc"
+          ],
           "enumDescriptions": [
             "Native Rust audio daemon (orbit-audio-daemon) — default. Only bundled for macOS Apple Silicon (darwin-arm64); on any other platform the engine will fail to start until you build one yourself and set ORBIT_AUDIO_DAEMON_PATH.",
             "SuperCollider (scsynth). Requires the bundled scsynth or a custom binary via orbitscore.scsynthPath."
           ],
           "default": "rust",
           "description": "Audio backend to use. \"rust\" (default) is the native audio daemon (orbit-audio-daemon). \"sc\" opts into SuperCollider (requires bundled scsynth or orbitscore.scsynthPath).",
+          "scope": "machine-overridable"
+        },
+        "orbitscore.mcpServer.port": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port for the OrbitScore MCP control server (Agent Bridge). 0 = disabled. When set to a nonzero port, the extension hosts an MCP server on http://127.0.0.1:<port>/mcp so an external agent (e.g. Claude Code via .mcp.json) can drive OrbitScore operations for E2E testing. Development/agent-integration use only.",
           "scope": "machine-overridable"
         }
       }
@@ -186,5 +197,9 @@
     "@types/vscode": "1.99.0",
     "@vscode/vsce": "^2.22.0",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
   }
 }
