@@ -129,6 +129,16 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // (setInterval can't change its interval after creation)
   let loopTimer: NodeJS.Timeout = undefined as unknown as NodeJS.Timeout
 
+  // #389 mechanism A: the grid-anchored timer delay, shared by the initial arm
+  // and every re-arm. `boundary` = base time of the bar just scheduled; the
+  // timer fires LOOP_TIMER_LEAD_MS before the NEXT boundary. Reads the live
+  // patternDuration so tempo/beat/length changes take effect per cycle.
+  const armDelay = (boundary: number): number =>
+    Math.max(
+      0,
+      boundary + patternDuration - LOOP_TIMER_LEAD_MS - (Date.now() - scheduler.startTime),
+    )
+
   const scheduleNextIteration = (delayMs: number) => {
     loopTimer = setTimeout(() => {
       const isMuted = getIsMutedFn()
@@ -185,10 +195,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
       if (isMuted) {
         scheduleNextIteration(patternDuration)
       } else {
-        const nowMs = Date.now() - scheduler.startTime
-        scheduleNextIteration(
-          Math.max(0, nextScheduleTime + patternDuration - LOOP_TIMER_LEAD_MS - nowMs),
-        )
+        scheduleNextIteration(armDelay(nextScheduleTime))
       }
     }, delayMs)
     // Update stateManager with current timer ID so stop() can cancel it
@@ -198,12 +205,7 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // First arm, anchored like the re-arms above: fire LOOP_TIMER_LEAD_MS before
   // the first boundary (effectiveStart + patternDuration) so iteration 1's
   // bar-head event is enqueued ahead of its audible time.
-  scheduleNextIteration(
-    Math.max(
-      0,
-      effectiveStart + patternDuration - LOOP_TIMER_LEAD_MS - (Date.now() - scheduler.startTime),
-    ),
-  )
+  scheduleNextIteration(armDelay(effectiveStart))
 
   return {
     isPlaying: true,

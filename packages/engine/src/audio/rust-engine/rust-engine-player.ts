@@ -139,6 +139,46 @@ interface ClockAnchor {
  */
 const ANCHOR_WINDOW = 30
 
+/** anchor 窓の最小二乗フィット。`daemonSec ≈ intercept + slope · (tsMs − t0Ms)/1000`。 */
+interface AnchorFit {
+  t0Ms: number
+  slope: number
+  intercept: number
+}
+
+/**
+ * anchor サンプル列の最小二乗フィットを計算する（#389 機構 B）。
+ * サンプルが 2 点未満、分散ゼロ、または傾きが正気でない（wall↔device の
+ * レート差は ppm 級のはずで、[0.95, 1.05] を外れる値は窓の汚染 — デバイス
+ * 切替や stream 停止跨ぎ — を示す）場合は null（呼び出し側が単一 anchor に
+ * フォールバック）。StreamStats 到着時（1Hz）にのみ呼ぶこと — dispatch の
+ * ホットパスで毎回再計算する仕事ではない（窓はその間変わらない）。
+ */
+function fitAnchorSamples(samples: readonly ClockAnchor[]): AnchorFit | null {
+  const n = samples.length
+  if (n < 2) return null
+  const t0Ms = samples[0].tsMs
+  let sumX = 0
+  let sumY = 0
+  for (const s of samples) {
+    sumX += (s.tsMs - t0Ms) / 1000
+    sumY += s.daemonSec
+  }
+  const meanX = sumX / n
+  const meanY = sumY / n
+  let sxx = 0
+  let sxy = 0
+  for (const s of samples) {
+    const dx = (s.tsMs - t0Ms) / 1000 - meanX
+    sxx += dx * dx
+    sxy += dx * (s.daemonSec - meanY)
+  }
+  if (sxx <= 0) return null
+  const slope = sxy / sxx
+  if (slope <= 0.95 || slope >= 1.05) return null
+  return { t0Ms, slope, intercept: meanY - slope * meanX }
+}
+
 /** 1 発音 dispatch の観測情報（telemetry / timing 計測フック）。 */
 export interface DispatchInfo {
   filepath: string
@@ -223,6 +263,13 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * establishSession が空にする（新旧 daemon の transport を混ぜない）。
    */
   private anchorSamples: ClockAnchor[] = []
+  /**
+   * anchorSamples の最小二乗フィットのキャッシュ。窓が変わるのは onStreamStats
+   * （1Hz）だけなので、そこで一度だけ再計算する — daemonNowSec()（dispatch
+   * ホットパス・毎発音）は O(1) 読み出しで済む。null = 窓が薄い/汚染 →
+   * 単一 anchor フォールバック。
+   */
+  private anchorFit: AnchorFit | null = null
 
   // --- supervisor 状態（recovery floor / #300） ---
   /**
@@ -258,11 +305,13 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (Number.isFinite(nowSec)) {
       const sample = { tsMs: Date.now(), daemonSec: nowSec }
       this.clockAnchor = sample
-      // #389 機構 B: 回帰窓にも積む（daemonNowSec がフィットで量子化ノイズを均す）。
+      // #389 機構 B: 回帰窓に積み、フィットをここで一度だけ再計算してキャッシュ
+      // する（daemonNowSec は毎発音呼ばれるが、窓は 1Hz でしか変わらない）。
       this.anchorSamples.push(sample)
       if (this.anchorSamples.length > ANCHOR_WINDOW) {
         this.anchorSamples.shift()
       }
+      this.anchorFit = fitAnchorSamples(this.anchorSamples)
     } else {
       // 不正な now_sec で anchor を凍結させると drift しうるので、無言にせず通知する。
       console.warn(
@@ -326,6 +375,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     // 再出発するので、旧 daemon のサンプルを混ぜるとフィットが壊れる。初期 anchor
     // （uptime_sec）は精度が別物なので窓には入れず、StreamStats のみを積む。
     this.anchorSamples = []
+    this.anchorFit = null
     // 暫定 anchor: uptime_sec ≈ transport now_sec（共に stream 開始から実時間で進む）。respawn 後は
     // 新 daemon の uptime（≈0）へ再 anchor され、死んだ daemon の古い transport との desync を断つ。
     try {
@@ -824,43 +874,17 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * TS wall clock から daemon transport now_sec を推定する。
+   * TS wall clock から daemon transport now_sec を推定する（dispatch ホットパス）。
    *
-   * 回帰窓（anchorSamples）に 2 点以上あれば最小二乗フィット `daemonSec ≈ a + b·t`
-   * で推定する（#389 機構 B — 単一 anchor では StreamStats のブロック量子化
-   * ±10.7ms がそのまま発音時刻に転写されていた。詳細は ANCHOR_WINDOW のコメント）。
-   * 窓が薄い間（boot 直後 / respawn 直後）と、フィットの傾きが正気でない場合
-   * （サンプル異常時の防波堤）は従来の「最新 anchor + 経過時間」に落ちる。
+   * onStreamStats がキャッシュした最小二乗フィット（#389 機構 B — 単一 anchor では
+   * StreamStats のブロック量子化 ±10.7ms がそのまま発音時刻に転写されていた。詳細は
+   * ANCHOR_WINDOW / fitAnchorSamples のコメント）を O(1) で評価する。フィットが無い間
+   * （boot 直後 / respawn 直後 / 窓の汚染）は従来の「最新 anchor + 経過時間」に落ちる。
    */
   private daemonNowSec(): number {
-    const samples = this.anchorSamples
-    if (samples.length >= 2) {
-      const t0 = samples[0].tsMs
-      const n = samples.length
-      let sumX = 0
-      let sumY = 0
-      for (const s of samples) {
-        sumX += (s.tsMs - t0) / 1000
-        sumY += s.daemonSec
-      }
-      const meanX = sumX / n
-      const meanY = sumY / n
-      let sxx = 0
-      let sxy = 0
-      for (const s of samples) {
-        const dx = (s.tsMs - t0) / 1000 - meanX
-        sxx += dx * dx
-        sxy += dx * (s.daemonSec - meanY)
-      }
-      if (sxx > 0) {
-        const slope = sxy / sxx
-        // wall と device の実効レート差は ppm 級のはず。それを大きく外れた傾きは
-        // 窓の汚染（デバイス切替や stream 停止を跨いだサンプル等）を示すので使わない。
-        if (slope > 0.95 && slope < 1.05) {
-          const intercept = meanY - slope * meanX
-          return intercept + slope * ((Date.now() - t0) / 1000)
-        }
-      }
+    const fit = this.anchorFit
+    if (fit) {
+      return fit.intercept + fit.slope * ((Date.now() - fit.t0Ms) / 1000)
     }
     return this.clockAnchor.daemonSec + (Date.now() - this.clockAnchor.tsMs) / 1000
   }

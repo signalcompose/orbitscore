@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.201 refactor: /simplify cleanups for PR #393 (Jul 8, 2026)
+
+PR #393 の /simplify（4 観点並列レビュー: reuse/simplification/efficiency/altitude）の指摘 6 件を適用。全 suite 1268 passed 維持。
+
+- **efficiency（最重要）**: `daemonNowSec()` が dispatch 毎に O(30) の最小二乗フィットを再計算していた → フィットは窓が変わる `onStreamStats`（1Hz）で一度だけ計算し `anchorFit` にキャッシュ、`daemonNowSec()` は O(1) 評価に（`fitAnchorSamples` 純関数へ抽出・respawn 時は fit も破棄）
+- **efficiency**: stdout チャンクの `split('\n')` 二重実行を 1 回に統合（`filterStdout` は唯一の caller に畳んで削除）
+- **reuse/simplification**: mcp-server.ts の error 封筒を `errorResult()` に一本化（evaluate_orbitscore は `toToolResult` 直呼び・inline 重複 5 箇所を解消）
+- **simplification**: flashLines の死んだ中間変数（`isWholeLine`/`range`）をインライン化 / loop-sequence の arm delay 式を `armDelay(boundary)` closure に集約（2 箇所の式が乖離しない）
+- **altitude**: `[STEP]` marker の**クロスパッケージ契約テスト**追加 — 実 emit 行を extension 側 `parseStepLine` に往復させ、emitter 書式のドリフトをテストで検出（rust-engine-player.spec）
+- skip（レビュー agent 自身が defer 妥当と判定）: playhead の文法スキャナの parser 統合（degrade 設計で被害有界・MVP 妥当）/ STEP イベントの MCP 公開（#392 系 follow-on の設計ノート）
+
 ### 6.200 docs(sessions): record first Claude live-coding jam — MLTS 5-minute set (#388) (Jul 7, 2026)
 
 `sessions/claude/20260707-mlts-live-jam/` を新設し、Claude が Agent Bridge MCP 経由で OrbitStudio を駆動した初のライブコーディングセッション（owner 同席・実況付き）を保存。`live_jam.orbs`（演奏された最終バッファ・6 メーター 3/4〜11/8・8 時間スケール・4 階層ネスト・tempo 132）+ `playhead_check.orbs` + README（セット構成表・MLTS の道具立て・運用の学び）。

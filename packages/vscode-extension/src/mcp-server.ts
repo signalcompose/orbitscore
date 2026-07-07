@@ -195,11 +195,16 @@ export interface OrbitScoreToolHandlers {
   registerMcpServer?(args: RegisterMcpServerInput): Promise<CommandResult> | CommandResult
 }
 
+/** The single error-envelope shape for every tool (change here, not per tool). */
+function errorResult(error: string): ToolResult {
+  return { content: [{ type: 'text', text: `error: ${error}` }], isError: true }
+}
+
 function toToolResult(result: CommandResult): ToolResult {
   if (result.ok) {
     return { content: [{ type: 'text', text: result.message ?? 'ok' }] }
   }
-  return { content: [{ type: 'text', text: `error: ${result.error}` }], isError: true }
+  return errorResult(result.error)
 }
 
 export interface McpServerHandle {
@@ -227,11 +232,7 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
     },
     async (args) => {
       const code = typeof args.code === 'string' ? args.code : ''
-      const result = await handlers.evaluate(code)
-      if (result.ok) {
-        return { content: [{ type: 'text', text: 'ok' }] }
-      }
-      return { content: [{ type: 'text', text: `error: ${result.error}` }], isError: true }
+      return toToolResult(await handlers.evaluate(code))
     },
   )
 
@@ -307,7 +308,7 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
     async () => {
       const result = await handlers.listAudioDevices()
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `error: ${result.error}` }], isError: true }
+        return errorResult(result.error)
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.devices) }] }
     },
@@ -361,7 +362,7 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
         customColor: typeof args.custom_color === 'string' ? args.custom_color : undefined,
       })
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `error: ${result.error}` }], isError: true }
+        return errorResult(result.error)
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.config) }] }
     },
@@ -411,7 +412,7 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
     async (args) => {
       const startLine = typeof args.start_line === 'number' ? args.start_line : NaN
       if (!Number.isFinite(startLine)) {
-        return { content: [{ type: 'text', text: 'error: start_line is required' }], isError: true }
+        return errorResult('start_line is required')
       }
       return toToolResult(
         handlers.setSelection({
@@ -533,7 +534,7 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
       const wavPath = typeof args.wav_path === 'string' ? args.wav_path : ''
       const result = await handlers.analyzeAudio(wavPath)
       if (!result.ok) {
-        return { content: [{ type: 'text', text: `error: ${result.error}` }], isError: true }
+        return errorResult(result.error)
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis) }] }
     },

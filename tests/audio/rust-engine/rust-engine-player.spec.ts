@@ -18,6 +18,10 @@ import { createAudioEngine } from '../../../packages/engine/src/audio/create-aud
 import { resolveEngineKind } from '../../../packages/engine/src/audio/engine-backend'
 import { RustEnginePlayer } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
 import { SuperColliderPlayer } from '../../../packages/engine/src/audio/supercollider-player'
+// クロスパッケージ契約 (#390): [STEP] marker は engine（emitter）と拡張（parser）が
+// 文字列書式だけで結合している。実 emit 行を parser に往復させ、書式ドリフトを
+// このテストで検出する（tests/ ルートは両パッケージを import できる）。
+import { parseStepLine } from '../../../packages/vscode-extension/src/playhead'
 
 import { MockDaemonServer, MockDaemonHandlers } from './mock-daemon-server'
 
@@ -437,6 +441,13 @@ describe('RustEnginePlayer with mock daemon', () => {
       p.start()
       await waitFor(() => log.mock.calls.some((c) => String(c[0]).startsWith('[STEP] seqA 2 ')))
       expect(playAtRecords().length).toBe(1) // marker は音の dispatch に随伴する
+
+      // 契約の往復: 実際に emit された行が extension 側の parseStepLine で
+      // そのまま復元できること（emitter の書式変更はここで落ちる）。
+      const stepLine = log.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('[STEP] '))
+      const parsed = parseStepLine(stepLine!)
+      expect(parsed).toMatchObject({ seqName: 'seqA', argPath: '2' })
+      expect(Number.isSafeInteger(parsed?.atEpochMs)).toBe(true)
     } finally {
       log.mockRestore()
     }

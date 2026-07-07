@@ -995,26 +995,18 @@ function shouldFilterLine(line: string): boolean {
 }
 
 /**
- * Filter stdout output for non-debug mode.
- */
-function filterStdout(output: string): string {
-  const lines = output.split('\n')
-  const filtered = lines.filter((line: string) => !shouldFilterLine(line))
-  return filtered.join('\n')
-}
-
-/**
  * Setup stdout handler for engine process.
  */
 function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   process.stdout?.on('data', (data) => {
     const output = data.toString()
+    const lines: string[] = output.split('\n')
 
     // Live playhead (#390): parse `[STEP]` markers and stop lines from the RAW
-    // output — the markers are filtered out of the Output channel below.
+    // lines — the markers are filtered out of the Output channel below.
     // (Lines split across chunk boundaries are rare and self-heal on the next
     // step ~one beat later, so no carry buffer.)
-    for (const rawLine of output.split('\n')) {
+    for (const rawLine of lines) {
       const step = parseStepLine(rawLine)
       if (step) {
         handleStepLine(step)
@@ -1030,9 +1022,9 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
       }
     }
 
-    // Filter output in non-debug mode
+    // Filter output in non-debug mode (reuses the split above — one pass per chunk).
     if (!debugMode) {
-      const filteredOutput = filterStdout(output)
+      const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
       if (filteredOutput.trim()) {
         outputChannel?.append(filteredOutput + '\n')
       }
@@ -1723,16 +1715,14 @@ async function runSelection() {
     // it on/off is visually imperceptible: the "off" state still shows the native
     // selection underneath. Whole-line painting extends past the selected text and
     // stays visible regardless of selection state, color config, or trigger source.
-    const isWholeLine = true
-    const range = executionRange
 
     // Create flash function
     const createFlash = (flashIndex: number) => {
       const decoration = vscode.window.createTextEditorDecorationType({
         backgroundColor: backgroundColor,
-        isWholeLine: isWholeLine,
+        isWholeLine: true,
       })
-      editor.setDecorations(decoration, [range])
+      editor.setDecorations(decoration, [executionRange])
 
       setTimeout(() => {
         decoration.dispose()
