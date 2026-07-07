@@ -17,6 +17,10 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.199 chore: commit .mcp.json — Claude Code ↔ OrbitStudio MCP wiring (#388) (Jul 7, 2026)
+
+`register_mcp_server`（#388）が生成する `.mcp.json`（`http://127.0.0.1:39123/mcp` への HTTP ポインタのみ・秘密情報なし）を owner 判断でリポジトリにコミット。新しい Claude Code セッションが `mcp__orbitscore__*` ツールを最初から掴めるようになる。前提 = OrbitStudio が `ORBITSCORE_MCP_PORT=39123` で起動していること（未起動時は接続失敗するだけで無害）。
+
 ### 6.198 fix(engine): sawtooth timing jitter — grid-anchored loop timer + anchor regression (#389) (Jul 7, 2026)
 
 #389 の 2 機構（issue コメントの調査で確定済み）を両方修正。**受け入れ基準（120bpm kick 四分 LOOP を 2 分以上・サンプル精度解析で mean|dev| < 1ms・のこぎり波消失）を達成**: 150 秒 capture 実測で **mean|dev| = 0.52ms / max|dev| = 2.0ms / std 0.80ms**（fix 前は同一測定で稼働 126-156s 帯 mean 8.35ms / max 18ms・外挿で無限成長）。beat0 の単調成長・2 小節周期 ±5.3ms 段差ともに消失（全 298 onset が ±2ms 帯・トレンドなし）。
