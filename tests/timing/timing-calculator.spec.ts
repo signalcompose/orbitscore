@@ -15,24 +15,28 @@ describe('TimingCalculator', () => {
         startTime: 0,
         duration: 250,
         depth: 0,
+        argPath: '0',
       })
       expect(events[1]).toEqual({
         sliceNumber: 2,
         startTime: 250,
         duration: 250,
         depth: 0,
+        argPath: '1',
       })
       expect(events[2]).toEqual({
         sliceNumber: 3,
         startTime: 500,
         duration: 250,
         depth: 0,
+        argPath: '2',
       })
       expect(events[3]).toEqual({
         sliceNumber: 4,
         startTime: 750,
         duration: 250,
         depth: 0,
+        argPath: '3',
       })
     })
 
@@ -47,6 +51,7 @@ describe('TimingCalculator', () => {
         startTime: 300,
         duration: 300,
         depth: 0,
+        argPath: '1',
       })
     })
 
@@ -69,6 +74,7 @@ describe('TimingCalculator', () => {
         startTime: 0,
         duration: 500,
         depth: 0,
+        argPath: '0',
       })
 
       // Slice 2 gets 500-750ms (first quarter of second half)
@@ -77,6 +83,7 @@ describe('TimingCalculator', () => {
         startTime: 500,
         duration: 250,
         depth: 1,
+        argPath: '1.0',
       })
 
       // Slice 3 gets 750-1000ms (second quarter of second half)
@@ -85,6 +92,7 @@ describe('TimingCalculator', () => {
         startTime: 750,
         duration: 250,
         depth: 1,
+        argPath: '1.1',
       })
     })
 
@@ -153,6 +161,7 @@ describe('TimingCalculator', () => {
         startTime: 0,
         duration: 1000,
         depth: 0,
+        argPath: '0',
       })
 
       // 5-tuplet in second half (each gets 200ms)
@@ -192,6 +201,7 @@ describe('TimingCalculator', () => {
         startTime: 0,
         duration: 500,
         depth: 0,
+        argPath: '0',
       })
 
       // 2 gets 500-750ms
@@ -200,6 +210,7 @@ describe('TimingCalculator', () => {
         startTime: 500,
         duration: 250,
         depth: 1,
+        argPath: '1.0',
       })
 
       // 3 gets 750-875ms
@@ -208,6 +219,7 @@ describe('TimingCalculator', () => {
         startTime: 750,
         duration: 125,
         depth: 2,
+        argPath: '1.1.0',
       })
 
       // 4 gets 875-1000ms
@@ -216,6 +228,7 @@ describe('TimingCalculator', () => {
         startTime: 875,
         duration: 125,
         depth: 2,
+        argPath: '1.1.1',
       })
     })
   })

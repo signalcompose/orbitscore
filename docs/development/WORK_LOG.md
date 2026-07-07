@@ -17,6 +17,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.196 feat(engine): nested argPath — dot paths tagged inside the timing walk (#390) (Jul 7, 2026)
+
+`[STEP]` marker の argPath をトップレベル index からフルパス（"1.0" = 第2引数グループ内の第1要素）に拡張。owner 要望「ネストが気になる」対応。
+
+- **タグ付けを walk 内へ移動**: 6.194 の後付け `floor(startTime/slotDuration)` 方式を廃止し、`calculateEventTiming` に `argPathPrefix` を追加 — 各再帰が自要素 index を積む（timing 計算は無変更・observational のまま）。nested / legato / scoped / modified-nested は降下、number / pitch / tie / 休符 leaf はフルパス付与。
+- **stack `[...]` は 1 視覚単位**: 全 voice（subdivide する voice subtree 含む）に stack 自身の slot パスを付与 — singleton 再帰が作る ".0" は voice のテキスト位置と対応しないため。
+- テスト: `tests/timing/arg-path.spec.ts` 新規 7 本（flat/nested/二重 nested/休符/stack/legato/tie）+ timing-calculator.spec の toEqual 期待値に argPath を追記。
+
 ### 6.195 feat(vscode-extension): live playhead highlight — per-seq vivid colors, rest steps, agent selection collapse (#390) (Jul 7, 2026)
 
 engine の `[STEP]` marker（6.194）を消費して、再生中の `<seq>.play(...)` の**発音中引数をリアルタイムにハイライト**する live playhead の MVP。owner 目視確認 3 ラウンド（初版→ビビッド化→休符対応）を MCP 駆動（`playhead_visual_drive.js`・node driver）+ AskUserQuestion で回して収束。

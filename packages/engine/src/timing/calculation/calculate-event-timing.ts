@@ -80,6 +80,10 @@ function applyStackOctaveShift(ev: TimedEvent, shift: number): void {
  * @param startTime - Start time offset (default 0)
  * @param depth - Current nesting depth (for debugging)
  * @param scopeStack - Enclosing `.root()`/`.mode()`/`.oct()` frames (§3), innermost last
+ * @param argPathPrefix - #390 live playhead: dot-joined element indices of the
+ *   enclosing groups ("" at the root). Each level appends its element index, so
+ *   leaves carry the full path into the play() argument tree (e.g. "1.0").
+ *   Purely observational — never read by timing logic.
  * @returns Array of timed events
  */
 export function calculateEventTiming(
@@ -88,6 +92,7 @@ export function calculateEventTiming(
   startTime: number = 0,
   depth: number = 0,
   scopeStack: ScopeFrame[] = [],
+  argPathPrefix: string = '',
 ): TimedEvent[] {
   const events: TimedEvent[] = []
 
@@ -100,6 +105,8 @@ export function calculateEventTiming(
   const elementDuration = barDuration / elements.length
   // The lexical scope for leaf events at this level (undefined = seq default).
   const scope = resolveScope(scopeStack)
+  // #390: the argPath for this level's element i.
+  const pathFor = (i: number): string => (argPathPrefix ? `${argPathPrefix}.${i}` : String(i))
 
   // Process each element
   for (let i = 0; i < elements.length; i++) {
@@ -113,6 +120,7 @@ export function calculateEventTiming(
         startTime: elementStartTime,
         duration: elementDuration,
         depth,
+        argPath: pathFor(i),
         ...(scope && { scope }),
       })
     } else if (Array.isArray(element)) {
@@ -123,6 +131,7 @@ export function calculateEventTiming(
         elementStartTime, // Start at parent's position
         depth + 1,
         scopeStack,
+        pathFor(i),
       )
       events.push(...nestedEvents)
     } else if (element && typeof element === 'object') {
@@ -134,6 +143,7 @@ export function calculateEventTiming(
           elementStartTime, // Start at parent's position
           depth + 1,
           scopeStack,
+          pathFor(i),
         )
         events.push(...nestedEvents)
       } else if (element.type === 'scoped') {
@@ -154,6 +164,7 @@ export function calculateEventTiming(
           elementStartTime,
           depth + 1,
           [...scopeStack, frame],
+          pathFor(i),
         )
         events.push(...nestedEvents)
       } else if (element.type === 'stack') {
@@ -184,7 +195,14 @@ export function calculateEventTiming(
             elementStartTime,
             depth + 1,
             scopeStack,
+            pathFor(i),
           )
+          // #390: a stack is ONE visual unit for the playhead — every voice
+          // (and any subdividing voice subtree) reports the stack's own slot
+          // path, so the highlight lights the whole `[...]` group. The
+          // singleton recursion above would otherwise mint ".0" for every
+          // voice, which does not correspond to the voice's text position.
+          for (const ev of voiceEvents) ev.argPath = pathFor(i)
           if (element.octaveShift) {
             for (const ev of voiceEvents) applyStackOctaveShift(ev, element.octaveShift)
           }
@@ -209,6 +227,7 @@ export function calculateEventTiming(
           startTime: elementStartTime,
           duration: elementDuration,
           depth,
+          argPath: pathFor(i),
           pitch: {
             degree: element.degree,
             alteration: element.alteration,
@@ -233,6 +252,7 @@ export function calculateEventTiming(
             startTime: elementStartTime,
             duration: elementDuration,
             depth,
+            argPath: pathFor(i),
           })
         } else if (element.value && element.value.type === 'nested') {
           // Modified nested structure
@@ -242,6 +262,7 @@ export function calculateEventTiming(
             elementStartTime,
             depth + 1,
             scopeStack,
+            pathFor(i),
           )
           events.push(...nestedEvents)
         }
@@ -255,6 +276,7 @@ export function calculateEventTiming(
           duration: elementDuration,
           depth,
           tie: true,
+          argPath: pathFor(i),
           ...(scope && { scope }),
         })
       } else if (element.type === 'legato') {
@@ -267,6 +289,7 @@ export function calculateEventTiming(
           elementStartTime,
           depth + 1,
           scopeStack,
+          pathFor(i),
         )
         if (nestedEvents.length > 0) {
           let tailStart = nestedEvents[0].startTime
