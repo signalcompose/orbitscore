@@ -23,8 +23,9 @@ live 検証（実 OrbitStudio 駆動）で踏んだ実バグの修正と、観�
 
 - **per-session transport**: 単一共有 transport は最初のクライアントが唯一の session 枠を恒久消費し、以後のクライアント（Claude Code の再接続を含む）は `Bad Request: Mcp-Session-Id header is required` で全滅する（live で観測・2026-07-07）。initialize リクエストごとに transport+McpServer を生成し `mcp-session-id` header で routing する方式に変更。`onsessioninitialized`/`onsessionclosed`/`transport.onclose` で session map を管理。multi-session regression probe（3 クライアント連続）で PASS。
 - **`start_engine({capture_wav?})`**: capture seam（#307/#365）を MCP から使えるように。engine spawn env に `ORBIT_CAPTURE_WAV` を注入し、daemon が master 出力を whole-stream WAV 録音 → agent が聴覚なしで音声を客観検証できる（EDH 起動時 env の小細工が不要になり、OrbitStudio でもそのまま機能する）。
-- **E2E 実績（実 OrbitStudio）**: Phase 2 B1 の `OrbitStudio.app` を `orbs` CLI + `--extensionDevelopmentPath` + 隔離 data/ext dir で agent が起動 → MCP up → `start_engine → evaluate → stop_engine` フルループを agent 単独で駆動。**capture 解析（48kHz stereo float32・6.43s）が全サンプル 0 = 無音を検出** → 「evaluate ok ≠ 発音」を機械的に証明（耳の代替の初仕事）。無音の根本原因は診断中（daemon が capture seam 以前のビルドだった問題は cargo rebuild + copy-daemon-bin.sh で解消済み）。
-- 学び: bundled daemon バイナリの鮮度は capture 等の新機能の前提。`strings <bin> | grep ORBIT_CAPTURE_WAV` で機能存在を確認できる。
+- **E2E 実績（実 OrbitStudio）**: Phase 2 B1 の `OrbitStudio.app` を `orbs` CLI + `--extensionDevelopmentPath` + 隔離 data/ext dir で agent が起動 → MCP up → `start_engine → evaluate → stop_engine` フルループを agent 単独で駆動。**capture 解析（48kHz stereo float32・6.43s）が全サンプル 0 = 無音を検出** → 「evaluate ok ≠ 発音」を機械的に証明（耳の代替の初仕事）。
+- **無音の根本原因（Sonnet 診断・A/B 検証済み）**: engine バグではなく snippet の誤り。`play()` は**パターン設定のみ**（spec §7 Setting vs. Application・`INSTRUCTION_ORBITSCORE_DSL.md:497`）で、発音には `RUN(seq)`/`LOOP(seq)` が必要。`LOOP(drum)` 追加後の再駆動で **SOUND CONFIRMED**: peak 0.9989・onset 6 発・間隔 [0.500, 0.500, 0.500, 0.500, 0.480]s = 120bpm 四分音符と完全一致（譜面との客観照合まで耳なしで完了）。
+- 学び: ① bundled daemon バイナリの鮮度は capture 等の新機能の前提（daemon が #365 以前の 7/3 ビルドだった → cargo rebuild + copy-daemon-bin.sh で解消。`strings <bin> | grep ORBIT_CAPTURE_WAV` で機能存在を確認できる）。② REPL の `✓` は「パターン buffering」と「実発音」を区別しない（agent 駆動では RUN/LOOP 忘れが silent に再現しやすい・UX 改善候補）。
 
 ### 6.188 feat(vscode-extension): MCP control server — evaluate_orbitscore tool (first slice) (#388) (Jul 7, 2026)
 
