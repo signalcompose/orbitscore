@@ -227,15 +227,6 @@
             "#607D8B"
           ],
           "description": "Playhead highlight palette (hex colors, #RGB or #RRGGBB). Sequences are assigned colors first-come in this order, wrapping around when more sequences than colors are live. Defaults follow Tokyo subway route-map line colors (wayfinding-grade recognition) extended to 32 entries; kept in sync with PLAYHEAD_PALETTE in src/playhead.ts (asserted by tests)."
-        },
-        "orbitscore.playheadSeqColors": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string",
-            "format": "color-hex"
-          },
-          "default": {},
-          "description": "Pin a playhead highlight color to a sequence name, e.g. {\"drum\": \"#FF0000\"}. Takes precedence over orbitscore.playheadPalette; other sequences keep their palette assignment."
         }
       }
     }

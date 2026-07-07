@@ -59,10 +59,10 @@ export function parseStepLine(line: string): StepEvent | null {
  * The order interleaves hue families so consecutively-assigned seqs stay far
  * apart in hue; rendered as a semi-transparent fill plus a solid border, so
  * every entry must remain readable on top of an editor selection. Users can
- * replace the palette (`orbitscore.playheadPalette`) or pin a color per seq
- * (`orbitscore.playheadSeqColors`) — the default in
+ * replace the palette via `orbitscore.playheadPalette` — the default in
  * packages/vscode-extension/package.json is asserted in-sync by
- * tests/vscode-extension/playhead.spec.ts.
+ * tests/vscode-extension/playhead.spec.ts. Per-seq pinning is planned as a
+ * DSL feature (#391), not a setting.
  */
 export const PLAYHEAD_PALETTE = [
   '#F62E36', // red (Marunouchi Line)
@@ -103,7 +103,12 @@ export const PLAYHEAD_PALETTE = [
 export interface PlayheadColorConfig {
   /** Ordered palette for first-come assignment; invalid entries are skipped. */
   palette?: readonly string[]
-  /** Explicit per-seq color overrides ({"drum": "#FF0000"}); win over the palette. */
+  /**
+   * Explicit per-seq color overrides ({"drum": "#FF0000"}); win over the
+   * palette. No settings surface today (owner dropped `playheadSeqColors`,
+   * 2026-07-07) — kept as the seam the planned DSL-level `seq.color()` (#391)
+   * will feed.
+   */
   seqColors?: Readonly<Record<string, string>>
 }
 
@@ -161,14 +166,54 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+const CLOSER: Record<string, string> = { '(': ')', '[': ']', '{': '}' }
+
+/**
+ * Split the bracketed group opening at `documentText[openIndex]` into the
+ * trimmed character ranges of its top-level elements. Commas inside nested
+ * `()` / `[]` / `{}` do NOT split, so an inner group such as `(1, 2)` or a
+ * stack `[1, 3, 5]` counts as ONE element. Returns null when `openIndex` is
+ * not an opening bracket or the group never closes; `closeIndex` is the
+ * position of the matching closing bracket.
+ */
+function splitGroupElements(
+  documentText: string,
+  openIndex: number,
+): { elements: ArgRange[]; closeIndex: number } | null {
+  const closeCh = CLOSER[documentText[openIndex]]
+  if (!closeCh) return null
+
+  const elements: ArgRange[] = []
+  const pushTrimmed = (start: number, end: number): void => {
+    while (start < end && /\s/.test(documentText[start])) start++
+    while (end > start && /\s/.test(documentText[end - 1])) end--
+    if (start < end) elements.push({ start, end })
+  }
+
+  let depth = 0
+  let segStart = openIndex + 1
+  let i = openIndex + 1
+  for (; i < documentText.length; i++) {
+    const ch = documentText[i]
+    if (ch === '(' || ch === '[' || ch === '{') {
+      depth++
+    } else if (ch === ')' || ch === ']' || ch === '}') {
+      if (ch === closeCh && depth === 0) break // matching close of the group
+      depth--
+    } else if (ch === ',' && depth === 0) {
+      pushTrimmed(segStart, i)
+      segStart = i + 1
+    }
+  }
+  if (i >= documentText.length) return null // unbalanced — never closed
+  pushTrimmed(segStart, i)
+  return { elements, closeIndex: i }
+}
+
 /**
  * Locate the TOP-LEVEL argument ranges of the FIRST `<seqName>.play(...)` call
  * in the document (MVP scope per #390 — multiple play() calls for the same
- * seq resolve to the first match).
- *
- * Commas inside nested `()` / `[]` / `{}` do NOT split, so an inner group such
- * as `(1, 2)` or a stack `[1, 3, 5]` counts as ONE top-level arg. Each range is
- * trimmed of surrounding whitespace. Returns [] when the call is absent, has
+ * seq resolve to the first match). Returns [] when the call is absent, has
  * no arguments, or its parentheses never close.
  */
 export function findPlayArgRanges(documentText: string, seqName: string): ArgRange[] {
@@ -179,30 +224,46 @@ export function findPlayArgRanges(documentText: string, seqName: string): ArgRan
   const match = documentText.match(callRe)
   if (!match || match.index === undefined) return []
   const openParen = match.index + match[0].length - 1
+  return splitGroupElements(documentText, openParen)?.elements ?? []
+}
 
-  const ranges: ArgRange[] = []
-  const pushTrimmed = (start: number, end: number): void => {
-    while (start < end && /\s/.test(documentText[start])) start++
-    while (end > start && /\s/.test(documentText[end - 1])) end--
-    if (start < end) ranges.push({ start, end })
+/**
+ * Resolve a dot-joined argPath (e.g. "1.0") to the character range of that
+ * element in the FIRST `<seqName>.play(...)` call. Segment 0 indexes the
+ * top-level args; each further segment descends into the element's
+ * time-dividing group — `( ... )` nested or `{ ... }` legato.
+ *
+ * Degrades gracefully: when a deeper segment cannot be resolved, the deepest
+ * resolvable ANCESTOR range is returned — a stack `[ ... ]` is one visual
+ * unit (the engine tags all its voices with the stack's own slot path), a
+ * group run like `(A)(B).root(X)` is not descended (the group's close bracket
+ * is not the element's last char), and a user may have edited the text away
+ * from the sounding pattern. Returns null only when the top-level index is
+ * already out of range (lighting a wrong arg would mislead).
+ */
+export function findPlayArgRangeForPath(
+  documentText: string,
+  seqName: string,
+  argPath: string,
+): ArgRange | null {
+  const segments = argPath.split('.').map((s) => Number.parseInt(s, 10))
+  if (segments.length === 0 || segments.some((n) => !Number.isInteger(n) || n < 0)) {
+    return null
   }
+  const topRanges = findPlayArgRanges(documentText, seqName)
+  if (segments[0] >= topRanges.length) return null
 
-  let depth = 0
-  let segStart = openParen + 1
-  let i = openParen + 1
-  for (; i < documentText.length; i++) {
-    const ch = documentText[i]
-    if (ch === '(' || ch === '[' || ch === '{') {
-      depth++
-    } else if (ch === ')' || ch === ']' || ch === '}') {
-      if (ch === ')' && depth === 0) break // closing paren of play(...)
-      depth--
-    } else if (ch === ',' && depth === 0) {
-      pushTrimmed(segStart, i)
-      segStart = i + 1
+  let range = topRanges[segments[0]]
+  for (let k = 1; k < segments.length; k++) {
+    const ch = documentText[range.start]
+    if (ch !== '(' && ch !== '{') return range // leaf or stack — stop here
+    const group = splitGroupElements(documentText, range.start)
+    // Descend only when the group spans the WHOLE element (excludes group
+    // runs / chained modifiers) and the segment exists.
+    if (!group || group.closeIndex !== range.end - 1 || segments[k] >= group.elements.length) {
+      return range
     }
+    range = group.elements[segments[k]]
   }
-  if (i >= documentText.length) return [] // unbalanced — never closed
-  pushTrimmed(segStart, i)
-  return ranges
+  return range
 }

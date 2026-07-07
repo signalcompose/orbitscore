@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.197 feat(vscode-extension): nested playhead resolution + drop playheadSeqColors setting (#390) (Jul 7, 2026)
+
+6.196 の nested argPath を extension 側で解決し、`(1, 1)` 内部の各要素を個別点灯させる。owner 目視確認済み（2026-07-07・drum.play(1, (1, 1), 1, 1) でネスト内半拍点灯 + hat 従来どおり・「めちゃくちゃループがわかりやすくなった」）。
+
+- **`findPlayArgRangeForPath(text, seq, "1.0")`（playhead.ts 新規）**: dot パスを段階的に降りて該当要素の文字範囲を返す。降下は「要素全体を占める時分割グループ `( )` / `{ }`」のみ（stack `[ ]` は 1 視覚単位・`(A)(B).oct(1)` のようなグループ連なり/チェーンは close 位置チェックで降りない）。**graceful degradation**: 深い segment が解決できなければ解決できた最深の祖先範囲を返し、トップレベル index 切れのみ null（誤った引数を光らせない）。既存 `findPlayArgRanges` と分割コアを `splitGroupElements`（閉じ括弧 index 付き）に共有化。
+- **extension.ts**: `showPlayheadStep` を topIndex 方式からパス解決に置換。
+- **`orbitscore.playheadSeqColors` 設定を削除（owner 判断）**: per-seq 色の固定は DSL 機能 `seq.color()`（#391）として実現予定で、settings 面は不要になるため。当面は palette の first-come 使い回し。`colorForSeq` の seqColors override seam は #391 が食わせる口として温存（純関数・テスト維持）。
+- テスト: playhead.spec.ts に findPlayArgRangeForPath 7 本追加。全 suite 1266 passed。
+
 ### 6.196 feat(engine): nested argPath — dot paths tagged inside the timing walk (#390) (Jul 7, 2026)
 
 `[STEP]` marker の argPath をトップレベル index からフルパス（"1.0" = 第2引数グループ内の第1要素）に拡張。owner 要望「ネストが気になる」対応。

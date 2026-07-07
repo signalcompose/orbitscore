@@ -34,7 +34,7 @@ import {
 } from './mcp-server'
 import {
   colorForSeq,
-  findPlayArgRanges,
+  findPlayArgRangeForPath,
   parseStepLine,
   type PlayheadColorConfig,
   type StepEvent,
@@ -73,13 +73,14 @@ function pushLogRing(line: string): void {
 // dispatched play event (see playhead.ts for the grammar). setupStdoutHandler
 // parses these from the RAW stream (shouldFilterLine keeps them out of the
 // Output channel), delays until the event is audible, then highlights the
-// corresponding top-level `<seqName>.play(...)` argument. ONE decoration type
-// PER RESOLVED COLOR (lazily created, keyed by "#RRGGBB"); each seq gets a
-// vivid color from `orbitscore.playheadSeqColors` (explicit override) or
-// first-come from `orbitscore.playheadPalette` (see playhead.ts colorForSeq).
-// ONE active range per seq (replaced on each step, so the highlight "moves"
-// per beat and wraps at loop start). Cleared on seq stop (`⏹ <seq>` line),
-// global stop, engine stop / exit, and deactivate.
+// corresponding `<seqName>.play(...)` argument (argPath descends into nested
+// groups — "1.0" lights the first element inside the second arg). ONE
+// decoration type PER RESOLVED COLOR (lazily created, keyed by "#RRGGBB");
+// each seq gets a vivid color first-come from `orbitscore.playheadPalette`
+// (see playhead.ts colorForSeq; per-seq pinning is the planned DSL feature
+// #391). ONE active range per seq (replaced on each step, so the highlight
+// "moves" per beat and wraps at loop start). Cleared on seq stop (`⏹ <seq>`
+// line), global stop, engine stop / exit, and deactivate.
 const playheadDecorationTypes = new Map<string, vscode.TextEditorDecorationType>()
 const playheadPaletteAssignments = new Map<string, number>()
 const playheadActiveRanges = new Map<string, { docUriString: string; range: vscode.Range }>()
@@ -87,9 +88,10 @@ const playheadTimeouts = new Set<NodeJS.Timeout>()
 
 function playheadColorConfig(): PlayheadColorConfig {
   const config = vscode.workspace.getConfiguration('orbitscore')
+  // seqColors intentionally absent: per-seq pinning arrives as a DSL feature
+  // (#391), not a setting (owner 2026-07-07).
   return {
     palette: config.get<string[]>('playheadPalette'),
-    seqColors: config.get<Record<string, string>>('playheadSeqColors'),
   }
 }
 
@@ -164,17 +166,14 @@ function handleStepLine(step: StepEvent): void {
 }
 
 function showPlayheadStep(step: StepEvent): void {
-  // MVP: highlight the TOP-LEVEL arg — the first path segment. Nested paths
-  // ("1.0") will refine to subdivision ranges in a later phase (#390).
-  const topIndex = Number.parseInt(step.argPath, 10)
-  if (!Number.isInteger(topIndex) || topIndex < 0) return
   for (const editor of vscode.window.visibleTextEditors) {
-    const argRanges = findPlayArgRanges(editor.document.getText(), step.seqName)
-    // Skip when the buffer no longer matches the sounding pattern (user edited
-    // away the arg) — leaving the previous highlight is less misleading than
-    // lighting a wrong arg.
-    if (topIndex >= argRanges.length) continue
-    const argRange = argRanges[topIndex]
+    // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
+    // degrading to the deepest resolvable ancestor (stacks are one visual
+    // unit). Null = even the top-level arg is gone (user edited away the
+    // pattern) — skip; leaving the previous highlight is less misleading
+    // than lighting a wrong arg.
+    const argRange = findPlayArgRangeForPath(editor.document.getText(), step.seqName, step.argPath)
+    if (!argRange) continue
     playheadActiveRanges.set(step.seqName, {
       docUriString: editor.document.uri.toString(),
       range: new vscode.Range(
@@ -273,14 +272,11 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
   )
 
-  // Rebuild playhead decoration types when the color config changes (#390) so
-  // a running loop picks up new colors on the next repaint without a reload.
+  // Rebuild playhead decoration types when the palette changes (#390) so a
+  // running loop picks up new colors on the next repaint without a reload.
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (
-        e.affectsConfiguration('orbitscore.playheadPalette') ||
-        e.affectsConfiguration('orbitscore.playheadSeqColors')
-      ) {
+      if (e.affectsConfiguration('orbitscore.playheadPalette')) {
         resetPlayheadDecorationTypes()
       }
     }),

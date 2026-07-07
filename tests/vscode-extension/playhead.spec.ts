@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 
 import {
   colorForSeq,
+  findPlayArgRangeForPath,
   findPlayArgRanges,
   normalizeHexColor,
   paletteIndexForSeq,
@@ -111,6 +112,47 @@ describe('findPlayArgRanges', () => {
 
   it('stops at the matching close paren of a chained call', () => {
     expect(sliceAll('drum.play(1, 2).beat(4 by 4)', 'drum')).toEqual(['1', '2'])
+  })
+})
+
+describe('findPlayArgRangeForPath', () => {
+  const TEXT = 'drum.play(1, (2, 3), [4, 5], {6, 7}, (8, (9, 10)))'
+  const resolve = (argPath: string, text = TEXT, seq = 'drum'): string | null => {
+    const range = findPlayArgRangeForPath(text, seq, argPath)
+    return range ? text.slice(range.start, range.end) : null
+  }
+
+  it('resolves single-segment paths to top-level args', () => {
+    expect(resolve('0')).toBe('1')
+    expect(resolve('2')).toBe('[4, 5]')
+  })
+
+  it('descends into nested and legato groups, recursively', () => {
+    expect(resolve('1.0')).toBe('2')
+    expect(resolve('1.1')).toBe('3')
+    expect(resolve('3.1')).toBe('7')
+    expect(resolve('4.0')).toBe('8')
+    expect(resolve('4.1.0')).toBe('9')
+  })
+
+  it('treats a stack as one visual unit (no descent)', () => {
+    expect(resolve('2.0')).toBe('[4, 5]')
+  })
+
+  it('falls back to the deepest resolvable ancestor', () => {
+    expect(resolve('1.9')).toBe('(2, 3)') // deep segment out of range
+    expect(resolve('0.0')).toBe('1') // leaf cannot descend
+  })
+
+  it('does not descend an element whose group is not the whole text (group runs / chains)', () => {
+    expect(resolve('0.0', 'm.play((1)(2).oct(1), 3)', 'm')).toBe('(1)(2).oct(1)')
+  })
+
+  it('returns null for an out-of-range top index or malformed path', () => {
+    expect(resolve('9')).toBeNull()
+    expect(resolve('')).toBeNull()
+    expect(resolve('x.0')).toBeNull()
+    expect(resolve('-1')).toBeNull()
   })
 })
 
