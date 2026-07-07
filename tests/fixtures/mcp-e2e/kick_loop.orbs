@@ -1,0 +1,24 @@
+// mcp-e2e fixture: kick_loop.orbs
+//
+// Relative audioPath is DELIBERATE: it proves that run_selection's
+// setDocumentDirectory injection resolves relative paths against THIS
+// file's own directory (tests/fixtures/mcp-e2e/), not the workspace root
+// or the process cwd. ../../../test-assets/audio is the correct depth from
+// tests/fixtures/mcp-e2e/ up to the repo root, then down into test-assets/audio.
+//
+// play() alone only sets a pattern — it does not produce sound (spec §7,
+// Setting vs. Application). LOOP(drum) is required to actually trigger
+// playback (WORK_LOG 6.189).
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var drum = init global.seq
+drum.beat(4 by 4).length(1)
+drum.audio("kick.wav").chop(1)
+drum.play(1, 1, 1, 1)
+
+LOOP(drum)
