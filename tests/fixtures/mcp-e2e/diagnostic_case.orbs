@@ -1,0 +1,15 @@
+// mcp-e2e fixture: diagnostic_case.orbs
+//
+// Purpose: trigger at least one static diagnostic WITHOUT the file ever
+// being evaluated. Diagnostics (packages/vscode-extension/src/diagnostics-analysis.ts)
+// are computed on open/change via analyzeGlobalOncePerFile() etc. — they do
+// not require run_selection/evaluate_orbitscore. This file is opened via
+// open_file() but never run, proving get_diagnostics reflects static
+// analysis alone (#384: diagnostics must fire on open, not only on change).
+//
+// Trigger used: analyzeGlobalOncePerFile flags the 2nd+ occurrence of a
+// once-per-file global.<method>() call — here, a duplicate global.tempo().
+
+var global = init GLOBAL
+global.tempo(120)
+global.tempo(140)

@@ -16,6 +16,18 @@ export type DiagnosticIssue = {
 }
 
 /**
+ * `updateDiagnostics()` の対象となる文書かどうかの判定。
+ *
+ * `extension.ts` 側で onDidOpenTextDocument / onDidChangeTextDocument /
+ * onDidCloseTextDocument / activation 時の初期パスの 4 箇所すべてから参照される
+ * 単一の判定源 (#384)。vscode.TextDocument に依存させないため引数型は最小限の
+ * shape のみ要求し、vscode モックなしで単体テスト可能にする。
+ */
+export function isOrbitscoreDocument(document: { languageId: string }): boolean {
+  return document.languageId === 'orbitscore'
+}
+
+/**
  * `global` の state-setting メソッド一覧。
  *
  * Live coding の正攻法は「行を書き換えて再評価」なので、ファイル中で 1 回のみとする。

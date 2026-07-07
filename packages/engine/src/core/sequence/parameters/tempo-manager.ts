@@ -98,6 +98,9 @@ export class TempoManager {
     // Apply length multiplier to bar duration (stretches each event)
     const effectiveBarDuration = barDuration * (this._length || 1)
 
+    // #390 live playhead: each event carries its full argPath ("1.0" for
+    // nested slots) — tagged inside the timing walk itself (see
+    // calculateEventTiming's argPathPrefix). Observational only.
     return calculateEventTiming(elements, effectiveBarDuration)
   }
 }

@@ -17,6 +17,167 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.203 docs: pr-review-team round 2 convergence record (#393) (Jul 8, 2026)
+
+round 2 = 独立検証 2 体（fix 検証 + regression sweep）で **Critical=0 / Important=0 を裏取り**し収束。両者が round 1 の全 5 修正を RESOLVED 判定（Host 検証は正規クライアント通過をテストで確認・anchorFit 遷移ログはエッジのみ発火・armDelay の代数を手計算とテスト双方で検証・tempo 変更テストの 1500 境界も再導出で一致）。唯一の Minor（palette 経路が write 失敗時も flash する）を `cd08d5d` で修正（不達時は警告ログのみで早期 return）。最終 CI 4 チェック全 pass・全 suite 1280 passed。マージは owner 指示待ち。
+
+### 6.202 fix: pr-review-team round 1 — DNS-rebinding guard, observability, contract tests (#393) (Jul 8, 2026)
+
+/code:pr-review-team round 1（4 専門レビュアー並列: code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer・計 Critical 3 / Important 9）への対応。全 suite 1280 passed（+12 テスト）。
+
+- **DNS rebinding 保護**（code-reviewer Important）: MCP サーバーは 127.0.0.1 bind だが Host 検証が無く、rebind したドメインからの same-origin fetch で全ツール面が到達可能だった → `handleHttp` 冒頭に loopback Host 許可リスト（`127.0.0.1/localhost/[::1]:<port>` 完全一致）+ 403 + テスト。SDK の `allowedHosts` は deprecated（外部層推奨）のため自前実装
+- **anchorFit 劣化の可視化**（silent-failure Critical）: 回帰フィット棄却で `daemonNowSec` が #389 修正前の単一 anchor 推定へ静かに落ちる → 遷移端（劣化/復帰）で warn/log（boot 直後の初回 fit 成立は抑制）
+- **evaluate の盲目 ok**（silent-failure Critical）: `writeCodeToEngine` が boolean を返すようになり、engine 死後の stdin 不達で `evaluate_orbitscore` が `ok:false` を返す + no-op 時は Output に警告。「ok = stdin 到達まで（パース/発音は別）」の契約をコメントで明文化。engine 側 ack は既録の follow-on（WORK_LOG 6.189）のまま
+- **MCP teardown の握り潰し**（silent-failure Important）: dispose 時の transport/server close 失敗を log へ
+- **lag キャッチアップの可視化**（silent-failure Important）: OS sleep/GC stall 後の zero-delay 連射（+ 下流 drift guard による bar 落ち）が無痕跡だった → `armDelay` が大幅遅延（> patternDuration）を 1 episode 1 回 warn。**lead は `min(LOOP_TIMER_LEAD_MS, patternDuration/2)` に短縮**（sub-lead パターンの恒常 zero-delay 連射を防止・code-reviewer Minor）
+- **テスト増強**（pr-test-analyzer Critical/Important）: `fitAnchorSamples` を export し直接単体 5 本（2点補間/量子化ノイズ平均化/汚染窓 slope 棄却/退化分散/n<2）— 本番ホットパスの数値ロジックがテストのダークパスだった問題の解消。+ tempo 変更時の grid 再アンカー / sub-lead floor / `register_mcp_server` の条件付き登録 + args round-trip / argPath の scoped・pitch・modified
+- **コメント是正**（comment-analyzer Important ×3）: ①「AUDIBLE time」→「grid time（実音は一様に ~50ms lookahead 後・シーケンス間で整合）」に 3 ファイル修正 ② stateless 500 の帰属を分離（SDK の 400 と自前 catch-all の 500）③ `findPlayArgRangeForPath` の null 契約に malformed パスを明記
+
+### 6.201 refactor: /simplify cleanups for PR #393 (Jul 8, 2026)
+
+PR #393 の /simplify（4 観点並列レビュー: reuse/simplification/efficiency/altitude）の指摘 6 件を適用。全 suite 1268 passed 維持。
+
+- **efficiency（最重要）**: `daemonNowSec()` が dispatch 毎に O(30) の最小二乗フィットを再計算していた → フィットは窓が変わる `onStreamStats`（1Hz）で一度だけ計算し `anchorFit` にキャッシュ、`daemonNowSec()` は O(1) 評価に（`fitAnchorSamples` 純関数へ抽出・respawn 時は fit も破棄）
+- **efficiency**: stdout チャンクの `split('\n')` 二重実行を 1 回に統合（`filterStdout` は唯一の caller に畳んで削除）
+- **reuse/simplification**: mcp-server.ts の error 封筒を `errorResult()` に一本化（evaluate_orbitscore は `toToolResult` 直呼び・inline 重複 5 箇所を解消）
+- **simplification**: flashLines の死んだ中間変数（`isWholeLine`/`range`）をインライン化 / loop-sequence の arm delay 式を `armDelay(boundary)` closure に集約（2 箇所の式が乖離しない）
+- **altitude**: `[STEP]` marker の**クロスパッケージ契約テスト**追加 — 実 emit 行を extension 側 `parseStepLine` に往復させ、emitter 書式のドリフトをテストで検出（rust-engine-player.spec）
+- skip（レビュー agent 自身が defer 妥当と判定）: playhead の文法スキャナの parser 統合（degrade 設計で被害有界・MVP 妥当）/ STEP イベントの MCP 公開（#392 系 follow-on の設計ノート）
+
+### 6.200 docs(sessions): record first Claude live-coding jam — MLTS 5-minute set (#388) (Jul 7, 2026)
+
+`sessions/claude/20260707-mlts-live-jam/` を新設し、Claude が Agent Bridge MCP 経由で OrbitStudio を駆動した初のライブコーディングセッション（owner 同席・実況付き）を保存。`live_jam.orbs`（演奏された最終バッファ・6 メーター 3/4〜11/8・8 時間スケール・4 階層ネスト・tempo 132）+ `playhead_check.orbs` + README（セット構成表・MLTS の道具立て・運用の学び）。
+
+- 学び①: `LOOP(a, b)` は**グループ宣言**（列挙外 seq は自動停止）— 単発 LOOP(x) の積み重ねはレイヤー追加にならない（序盤に誤用・owner 指摘で修正）
+- 学び②: MCP `edit_replace` は**バッファ編集のみでディスク保存しない** — 記録は osascript Cmd+S で救出。`save_file`/`get_document_text` ツールを #388 follow-on として issue 化
+- 同日完成の playhead #390（per-seq 色・ネスト点灯）と #389 ヨレ修正の実地デモを兼ねた
+
+### 6.199 chore: commit .mcp.json — Claude Code ↔ OrbitStudio MCP wiring (#388) (Jul 7, 2026)
+
+`register_mcp_server`（#388）が生成する `.mcp.json`（`http://127.0.0.1:39123/mcp` への HTTP ポインタのみ・秘密情報なし）を owner 判断でリポジトリにコミット。新しい Claude Code セッションが `mcp__orbitscore__*` ツールを最初から掴めるようになる。前提 = OrbitStudio が `ORBITSCORE_MCP_PORT=39123` で起動していること（未起動時は接続失敗するだけで無害）。
+
+### 6.198 fix(engine): sawtooth timing jitter — grid-anchored loop timer + anchor regression (#389) (Jul 7, 2026)
+
+#389 の 2 機構（issue コメントの調査で確定済み）を両方修正。**受け入れ基準（120bpm kick 四分 LOOP を 2 分以上・サンプル精度解析で mean|dev| < 1ms・のこぎり波消失）を達成**: 150 秒 capture 実測で **mean|dev| = 0.52ms / max|dev| = 2.0ms / std 0.80ms**（fix 前は同一測定で稼働 126-156s 帯 mean 8.35ms / max 18ms・外挿で無限成長）。beat0 の単調成長・2 小節周期 ±5.3ms 段差ともに消失（全 298 onset が ±2ms 帯・トレンドなし）。
+
+- **機構 A: LOOP タイマーのグリッドアンカー化 + lead 発火**（`loop-sequence.ts`）: 非アンカー型 `setTimeout(patternDuration)` 再アームは発火遅れが単調蓄積（実測 +0.19ms/小節・約 90 分で崩壊水準）し、小節頭イベントが「enqueue 時点で過去」→ 即時 dispatch で小節頭だけ遅れる構造だった。修正: 再アーム delay を絶対 grid からの逆算（`nextScheduleTime + patternDuration − LOOP_TIMER_LEAD_MS − now`）にし、境界の **100ms 前**に発火して次小節を future に enqueue（1ms poll が grid どおり dispatch）。mute 中は nextScheduleTime が意図的に stale なので素の patternDuration 待ち（負 delay ホットループ回避）。tempo/beat/length 変更・quantize・unmute 再baseline の意味論は不変。
+- **機構 B: anchor の最小二乗回帰**（`rust-engine-player.ts`）: StreamStats の `now_sec` は `cursor_frames/sample_rate` でブロック長（512f ≈ 10.67ms）に下方向量子化されており、単一 last-wins anchor だと 1Hz tick とブロック位相のうなり（4 tick = 2 小節周期）がそのまま発音時刻に転写されていた。修正: 直近 30 サンプル（≈30 秒窓）の `(tsMs, daemonSec)` に LSQ フィット（`daemonNowSec()` が傾き+切片で推定・量子化ノイズは平均化で ~0.6ms 級・wall↔device のレート差も傾きで吸収）。窓 <2 / 傾き異常（[0.95, 1.05] 外）は従来推定へフォールバック。respawn 時は establishSession が窓を破棄（新旧 daemon の transport を混ぜない）。フィット直線の定数バイアス（~半ブロック）は grid 安定性に無害（lookahead 50ms 内）。
+- **テスト**: `loop-sequence-resilience.spec.ts` に fake-timer 2 本（lead 発火 + baseTime grid 維持 / 30ms コールバック lag が翌 delay 970ms で吸収され境界位相不変）。全 suite 1268 passed。実測系（capture + onset 解析）は session scratchpad の `jitter_repro_driver.js` / `deviation_series.js` / `analyze_wav_fine.js` で再現可能。
+
+### 6.197 feat(vscode-extension): nested playhead resolution + drop playheadSeqColors setting (#390) (Jul 7, 2026)
+
+6.196 の nested argPath を extension 側で解決し、`(1, 1)` 内部の各要素を個別点灯させる。owner 目視確認済み（2026-07-07・drum.play(1, (1, 1), 1, 1) でネスト内半拍点灯 + hat 従来どおり・「めちゃくちゃループがわかりやすくなった」）。
+
+- **`findPlayArgRangeForPath(text, seq, "1.0")`（playhead.ts 新規）**: dot パスを段階的に降りて該当要素の文字範囲を返す。降下は「要素全体を占める時分割グループ `( )` / `{ }`」のみ（stack `[ ]` は 1 視覚単位・`(A)(B).oct(1)` のようなグループ連なり/チェーンは close 位置チェックで降りない）。**graceful degradation**: 深い segment が解決できなければ解決できた最深の祖先範囲を返し、トップレベル index 切れのみ null（誤った引数を光らせない）。既存 `findPlayArgRanges` と分割コアを `splitGroupElements`（閉じ括弧 index 付き）に共有化。
+- **extension.ts**: `showPlayheadStep` を topIndex 方式からパス解決に置換。
+- **`orbitscore.playheadSeqColors` 設定を削除（owner 判断）**: per-seq 色の固定は DSL 機能 `seq.color()`（#391）として実現予定で、settings 面は不要になるため。当面は palette の first-come 使い回し。`colorForSeq` の seqColors override seam は #391 が食わせる口として温存（純関数・テスト維持）。
+- テスト: playhead.spec.ts に findPlayArgRangeForPath 7 本追加。全 suite 1266 passed。
+
+### 6.196 feat(engine): nested argPath — dot paths tagged inside the timing walk (#390) (Jul 7, 2026)
+
+`[STEP]` marker の argPath をトップレベル index からフルパス（"1.0" = 第2引数グループ内の第1要素）に拡張。owner 要望「ネストが気になる」対応。
+
+- **タグ付けを walk 内へ移動**: 6.194 の後付け `floor(startTime/slotDuration)` 方式を廃止し、`calculateEventTiming` に `argPathPrefix` を追加 — 各再帰が自要素 index を積む（timing 計算は無変更・observational のまま）。nested / legato / scoped / modified-nested は降下、number / pitch / tie / 休符 leaf はフルパス付与。
+- **stack `[...]` は 1 視覚単位**: 全 voice（subdivide する voice subtree 含む）に stack 自身の slot パスを付与 — singleton 再帰が作る ".0" は voice のテキスト位置と対応しないため。
+- テスト: `tests/timing/arg-path.spec.ts` 新規 7 本（flat/nested/二重 nested/休符/stack/legato/tie）+ timing-calculator.spec の toEqual 期待値に argPath を追記。
+
+### 6.195 feat(vscode-extension): live playhead highlight — per-seq vivid colors, rest steps, agent selection collapse (#390) (Jul 7, 2026)
+
+engine の `[STEP]` marker（6.194）を消費して、再生中の `<seq>.play(...)` の**発音中引数をリアルタイムにハイライト**する live playhead の MVP。owner 目視確認 3 ラウンド（初版→ビビッド化→休符対応）を MCP 駆動（`playhead_visual_drive.js`・node driver）+ AskUserQuestion で回して収束。
+
+- **`src/playhead.ts`（新規・vscode 非依存の純ヘルパー）**: ① `parseStepLine` — `[STEP] <seq> <argPath> <atEpochMs>` の厳密パース ② `findPlayArgRanges` — 文書テキストから最初の `<seq>.play(...)` のトップレベル引数の文字オフセット範囲を抽出（ネスト `()[]{}` 内のカンマは分割しない・境界ガードで `mydrum.play`/`foo.drum.play` を誤マッチしない）③ `PLAYHEAD_PALETTE`（32色）+ `colorForSeq`/`normalizeHexColor`/`paletteIndexForSeq` — 色解決。
+- **`extension.ts` 配線**: `setupStdoutHandler` が RAW stream から `[STEP]` をパース（Output channel へは `shouldFilterLine` で非表示）→ `atEpochMs` まで delay（dispatch は lookahead 先行のため）→ 対象引数を decoration。`⏹ <seq>`（seq 停止）/`✅ Global stopped`/engine 停止・exit/deactivate でクリア。
+- **per-seq ビビッドカラー（owner 要望）**: 初版の theme find-match 色は「薄すぎ・選択に埋もれる」→ 50% alpha 塗り + 実線ボーダーの高彩度色に変更。色は「解決済み色文字列ごとに 1 decoration type」を lazy 生成し、seq には first-come 序数 `% palette.length` で割り当て（palette 長変更に耐性）。
+- **32色パレット（owner 要望）**: 東京メトロ・都営の路線色 13 + JR 東日本線区色 + Kelly/Green-Armytage 系の高識別色で 32 色。隣接割り当てが色相で離れるよう並べ替え済み。
+- **ユーザー設定**: `orbitscore.playheadPalette`（配列・color-hex → 設定 UI/settings.json でスウォッチ+ピッカー）と `orbitscore.playheadSeqColors`（seq名→色の固定マップ・palette より優先・スロット消費なし）。`onDidChangeConfiguration` で decoration type を破棄→再生成（リロード不要で反映）。package.json の default と `PLAYHEAD_PALETTE` の同期はテストで強制。
+- **agent 選択の畳み込み（owner 要望）**: MCP `run_selection` 実行後に selection を active 端へ collapse — set_selection の残存選択が playhead を覆い隠す問題の解消。人間のパレット/キーバインド実行は従来挙動のまま。
+- **テスト**: `tests/vscode-extension/playhead.spec.ts` 27 本（パース/範囲抽出/色解決/palette 同期）。全 suite 1253 passed。
+- **owner 目視確認済み（2026-07-07）**: 2 seq 同時（drum=丸ノ内線レッド・hat=東西線スカイブルー）で独立巡回・休符 0 も点灯・選択自動解除。
+- 残（follow-on 候補）: ネスト subdivision のハイライト（argPath "1.0" は文法予約済み）/ DSL 内カラー指定（`seq.color("#…")` + DocumentColorProvider で .orbs 内カラーピッカー — owner 発案・DSL 仕様側の設計が必要）/ 同名 seq の複数 play() 呼び出し（現状 first-match）。
+
+### 6.194 feat(engine): [STEP] playhead markers — argPath threading + rest marker events (#390) (Jul 7, 2026)
+
+live playhead（6.195）の engine 側。dispatch 済み play イベントを `[STEP] <seqName> <argPath> <atEpochMs>` として stdout へ発行する（emission-only — timing/音響への影響ゼロ）。
+
+- **argPath threading**: `TempoManager.calculateEventTiming` の後段で各 TimedEvent に由来 play() 引数のトップレベル index を付与（bar 等分の `floor(startTime/slotDuration)` で復元・timing walk 本体は無変更）。`Scheduler.scheduleEvent/scheduleSliceEvent` に optional 引数として貫通。
+- **RustEnginePlayer**: dispatch（daemon `PlayAt`）成功後に `emitStepMarker` — epoch は「発音予定時刻」（`startTime + play.time`・dispatch は lookahead 先行のため extension 側が遅延表示）。
+- **休符 (0) も巡回（owner 要望「0も選択していいのでは？無音を処理してるわけだし」）**: event-scheduler は従来 `sliceNumber > 0` のみ schedule（"0 is silence"）→ 休符スロットは optional の `scheduler.scheduleStepMarker?.(time, seq, argPath, gainDb)` で **marker-only イベント**として enqueue。daemon への dispatch なし・`[STEP]` のみ発火。gainDb には同スロットの mute/master 合成値を渡し、**mute 中は音イベントと同様に marker も skip**（amplitude ガード共有・一貫性）。SC backend は未実装のまま（optional 面・`?.` 呼び出し）。
+- **テスト**: `tests/core/event-scheduler-step-marker.spec.ts`（新規 4 本 — rest marker 配線/mute -Infinity/argPath なし旧イベント互換/optional 面欠如の耐性 + fromTime 過去ガード）+ `rust-engine-player.spec.ts` に 3 本（音 STEP 随伴/marker-only は LoadSample/PlayAt なし/mute skip）。
+
+### 6.193 fix(vscode-extension): whole-line flash + revealRange — MCP run_selection flash was invisible (#388) (Jul 7, 2026)
+
+owner 観察「MCP 経由の選択実行だとフラッシュが見えず、いつ実行されたのか分かりづらい」の修正。
+
+- **根本原因はルーティングではなく色の衝突**: MCP 経路は必ず `set_selection`（非空選択）→ `flashLines()` の `isWholeLine = selection.isEmpty` が false → decoration が**選択文字範囲だけ**に、既定 `flashColor: 'selection'` = `editor.selectionBackground` で塗られる。native の選択ハイライトと同色同範囲のため**点滅が視覚的に無変化**。キーボード派はカーソルのみ（空選択）で whole-line 塗りだったので見えていた。手動で範囲選択して Cmd+Enter した場合も同じく見えなかったはず（既存の未報告エッジケース・同時修正）。
+- **修正**: ① `flashLines()` の `isWholeLine` を常に true（選択の上でも行全体が確実に光る）② flash 前に `editor.revealRange(..., InCenterIfOutsideViewport)` — subject-block 自動検出（選択なし）で実行範囲が画面外のとき flash が見えない副次ギャップも解消。
+- **検証**: tsc/eslint green・mcp-server.spec 8/8。実機（OrbitStudio 再起動 → MCP 駆動）で **owner 目視確認: 複数行（1-10行）と単一行の whole-line フラッシュ両方 visible**（2026-07-07）。
+- 意義: agent がいつ実行したかが人間に見える = human-in-the-loop の観測性（WCTM の共演場面でも必須の UX）。
+
+### 6.192 feat(vscode-extension): register Claude Code MCP server from OrbitStudio (#388) (Jul 7, 2026)
+
+owner 提案「OrbitStudio の CLI 登録（Install 'orbs' command in PATH）と同じように、MCP 登録も OrbitStudio から」を実装。scope は User / Project を選択可能。
+
+- **`mcp-registration.ts`（新規・純関数）**: `buildMcpServerUrl(port)` / `mergeMcpJson(existing, port)` — 既存 `.mcp.json` を保全マージ（他サーバー・他キー維持・**corrupt JSON は throw して絶対に上書きしない**・2-space indent + 末尾改行）。
+- **palette コマンド `orbitscore.registerMcpServer`**（🔌 Register Claude Code MCP Server）: port 未設定（0）なら InputBox（既定 39123・1-65535 検証）→ `ConfigurationTarget.Global` に保存して継続。scope QuickPick → **Project** = workspace root の `.mcp.json` へマージ書き込み / **User** = `claude mcp add --transport http --scope user orbitscore <url>`（CLI 不在は案内エラー・cwd=workspace root・30s timeout）。optional args `{scope, port}` で prompt skip（agent/E2E 用）。
+- **MCP ツール `register_mcp_server({scope, port?})`**（parity 原則・計 17 ツール）: コマンドと同一実装 `performMcpRegistration` に委譲。port 省略時は稼働中サーバーの実 port（env 起動でも真値）。handler は `OrbitScoreToolHandlers` の optional member（既存テスト stub の型互換のため・実ホストでは常に供給）。
+- **`claude mcp add` は CLI 2.1.202 で実検証**: `-t/--transport (stdio|sse|http)`・`-s/--scope (local|user|project)`。同名エントリは silent overwrite（重複検出ガードは他バージョン向け保険）。
+- **テスト**: `tests/vscode-extension/mcp-registration.spec.ts` 9/9 pass（fresh/保全マージ/URL 更新/corrupt throw/出力形状）+ 既存 mcp-server.spec.ts 回帰 8/8。tsc/eslint green・headless smoke で tool 出現 + args round-trip PASS。
+- **実ホスト検証（実 OrbitStudio・2026-07-07）**: MCP 経由 `register_mcp_server({scope:'project'})` → workspace root に正しい `.mcp.json` 生成を確認。生成物のコミット可否は owner 判断（untracked のまま）。Claude Code 本体クライアントの接続確認は次の新規セッションで（`.mcp.json` は session 起動時読み込み）。
+
+### 6.191 test(vscode-extension): MCP server test suite + gated OrbitStudio E2E (#388) (Jul 7, 2026)
+
+Agent Bridge の機能保証をテスト資産として永続化（owner 方針: 「テストがあることで機能の保証をするのが筋」・examples はテスト題材にしない）。Sonnet 委譲で作成、gated E2E は main session が実機実行。
+
+- **`tests/vscode-extension/mcp-server.spec.ts`（8 tests）**: stub handlers 全 16 member + 実 HTTP JSON-RPC。initialize/tools-list（16 ツール名 + スキーマ）/round-trip/isError 変換/**multi-session regression（3 クライアント連続・live で踏んだバグの再発防止）**/no-session 404/非 `/mcp` 404/dispose 後 ECONNREFUSED。
+- **`tests/vscode-extension/wav-analysis.spec.ts`（6 tests）**: 合成 float32 WAV builder（無音/0.5s 間隔クリック/未 finalize ヘッダ/int16 拒否/mono）。
+- **`tests/e2e/orbitstudio-mcp-gated.spec.ts`（opt-in gated: `ORBIT_GATED_ORBITSTUDIO=1`）+ `tests/e2e/helpers/mcp-client.ts` + fixtures `tests/fixtures/mcp-e2e/`**: 実利用の形の E2E — OrbitStudio.app 起動 → `open_file`(diagnostic fixture) + `get_diagnostics`（**#384 の behavioral 検証: 編集なしで診断が返る**）→ `open_file`(kick_loop) → 全選択 `run_selection`（実 palette 経路）→ `edit_replace` tempo 120→180 → 行選択再実行 → `get_log` → `stop_engine` → capture 解析で **0.5s 帯と 0.333s 帯の onset が両方存在 = テキスト編集が音を変えたことを機械検証**。
+- **実行結果**: 非 gated 14 pass / gated 1 skip（CI 安全）。**gated 実機 RUN = PASS（16.2s・2026-07-07）** — tempo 再評価が LOOP 中の seq を in-place で retune する仮定も実機で成立。
+- **エラー経路 probe（実ホスト・11 本）**: engine 未起動 run_selection / 不在ファイル open_file / no-match・空 find の edit_replace / 不在 WAV analyze_audio / 範囲外 configure_flash / rust kind の select_audio_device（正直なエラー）→ 全て clean な isError。**get_log の monkey-patch が実ホストで populate されることを確認**（実装時の未検証事項を解消）。`set_selection` の範囲外行は vscode `validatePosition` により silent clamp（エラーにならない・観察事項）。
+
+### 6.190 feat(vscode-extension): 12 remaining MCP tools — editor ops, palette parity, observability (#388) (Jul 7, 2026)
+
+ツール総数 16。Sonnet 委譲で実装（tsc/eslint/stub smoke 全 green）。
+
+- **Editor 系（実利用経路）**: `open_file` / `set_selection`（1-based・`validatePosition` 変換・end 省略で cursor collapse）/ `run_selection`（実 `orbitscore.runSelection` command 呼び出し = ブロック収集・setDir 注入・flash 込み）/ `edit_replace`（literal find/replace・`all` オプション）/ `get_editor_state`。
+- **Palette 残り**: `start_engine` に `debug?` 追加（Start Engine (Debug) を吸収）/ `force_kill_scsynth` / `list_audio_devices` + `select_audio_device`（`selectAudioDevice()` を `detectAudioDevices`+`writeAudioDeviceConfig` に分解共有・probe scsynth の cleanup を list のみの呼び出しでも実行するよう改善・rust kind では正直に未サポートエラー）/ `configure_flash`（package.json と同じ range 検証・**workspace-scoped**: agent 由来の設定変更を Global に漏らさない意図的選択）。
+- **観測系**: `get_diagnostics`（`vscode.languages.getDiagnostics` ラップ・1-based・severity 文字列化）/ `get_log`（`outputChannel.appendLine`/`append` を activate 時に一度だけ monkey-patch → 1000 行 ring buffer・default 50 / cap 500）/ `analyze_audio`（`wav-analysis.ts` の `analyzeWavBuffer`）。
+- **`wav-analysis.ts`（新規・純関数）**: daemon capture 形式（RIFF float32）の解析 — peak/RMS/onset 検出（20ms 窓・200ms min gap）・未 finalize ヘッダ耐性。MCP ツールとテストの共有 seam。
+
+### 6.189 fix(vscode-extension): per-session MCP transports + start_engine capture_wav (#388) (Jul 7, 2026)
+
+live 検証（実 OrbitStudio 駆動）で踏んだ実バグの修正と、観測面の第一歩。
+
+- **per-session transport**: 単一共有 transport は最初のクライアントが唯一の session 枠を恒久消費し、以後のクライアント（Claude Code の再接続を含む）は `Bad Request: Mcp-Session-Id header is required` で全滅する（live で観測・2026-07-07）。initialize リクエストごとに transport+McpServer を生成し `mcp-session-id` header で routing する方式に変更。`onsessioninitialized`/`onsessionclosed`/`transport.onclose` で session map を管理。multi-session regression probe（3 クライアント連続）で PASS。
+- **`start_engine({capture_wav?})`**: capture seam（#307/#365）を MCP から使えるように。engine spawn env に `ORBIT_CAPTURE_WAV` を注入し、daemon が master 出力を whole-stream WAV 録音 → agent が聴覚なしで音声を客観検証できる（EDH 起動時 env の小細工が不要になり、OrbitStudio でもそのまま機能する）。
+- **E2E 実績（実 OrbitStudio）**: Phase 2 B1 の `OrbitStudio.app` を `orbs` CLI + `--extensionDevelopmentPath` + 隔離 data/ext dir で agent が起動 → MCP up → `start_engine → evaluate → stop_engine` フルループを agent 単独で駆動。**capture 解析（48kHz stereo float32・6.43s）が全サンプル 0 = 無音を検出** → 「evaluate ok ≠ 発音」を機械的に証明（耳の代替の初仕事）。
+- **無音の根本原因（Sonnet 診断・A/B 検証済み）**: engine バグではなく snippet の誤り。`play()` は**パターン設定のみ**（spec §7 Setting vs. Application・`INSTRUCTION_ORBITSCORE_DSL.md:497`）で、発音には `RUN(seq)`/`LOOP(seq)` が必要。`LOOP(drum)` 追加後の再駆動で **SOUND CONFIRMED**: peak 0.9989・onset 6 発・間隔 [0.500, 0.500, 0.500, 0.500, 0.480]s = 120bpm 四分音符と完全一致（譜面との客観照合まで耳なしで完了）。
+- 学び: ① bundled daemon バイナリの鮮度は capture 等の新機能の前提（daemon が #365 以前の 7/3 ビルドだった → cargo rebuild + copy-daemon-bin.sh で解消。`strings <bin> | grep ORBIT_CAPTURE_WAV` で機能存在を確認できる）。② REPL の `✓` は「パターン buffering」と「実発音」を区別しない（agent 駆動では RUN/LOOP 忘れが silent に再現しやすい・UX 改善候補）。
+
+### 6.188 feat(vscode-extension): MCP control server — evaluate_orbitscore tool (first slice) (#388) (Jul 7, 2026)
+
+Claude Code から OrbitScore を MCP 経由で駆動する制御面（WCTM_SYSTEM_SPEC §3「Agent Bridge」）の第一スライス。owner の狙い = examples を含む全機能を Claude 自身が E2E で叩いて検証し「耳を1つ不要にする」+「test = eval」基盤。§4.2 の通り harness-neutral（後で pi が同じ MCP を consume）。
+
+- **`packages/vscode-extension/src/mcp-server.ts`（新規）**: 拡張ホスト内に MCP サーバー（Streamable HTTP・SDK `@modelcontextprotocol/sdk@1.29.0`）を立て、`127.0.0.1:<port>/mcp` で待受。第一ツール `evaluate_orbitscore(code)` を登録。handler は vscode 非依存の `OrbitScoreToolHandlers` seam に分離（pi 再利用のため）。
+- **stateful セッション**: MCP ライフサイクル（initialize→tools/list→tools/call）は複数 POST に跨るため、`sessionIdGenerator: () => randomUUID()` で initialized 状態を保持。stateless（当初案）だと 2 発目以降が未初期化で 500 になることを standalone probe で実証 → stateful に修正。
+- **SDK は runtime require で読み込む**: SDK は exports-only ESM/CJS dual、拡張は `moduleResolution: node`（node10）で static import の subpath 型解決不可 → 既存の engine module と同じ runtime-require イディオムで CJS 解決。小さな typed shim を当て tsconfig は無変更。
+- **`extension.ts`**: `runSelection` の stdin 送出（setDir 注入 + `engineProcess.stdin.write`）を `writeCodeToEngine(rawCode, documentDir?)` に抽出し、editor コマンドと MCP ツールで**同一経路**を共有。MCP handler `evaluateForAgent(code)` は engine-running ガード（runSelection と同一）+ workspace root を documentDir に。activate で `orbitscore.mcpServer.port`（config・default 0=無効）が有効時のみ起動、deactivate で停止。
+- **config `orbitscore.mcpServer.port`** 追加（dev/agent-integration 用・0=無効・machine-overridable）。
+- **検証**: standalone probe（`scratchpad/mcp_server_probe.js`）で compiled `dist/mcp-server.js` を stub handler で起動し HTTP JSON-RPC で initialize/tools/list/tools/call を実行 → **PASS**（tools/list に正しい JSON Schema `code:string` required、tools/call で handler が正確にコード受信）。tsc `--noEmit` PASS・eslint clean。**editor→engine→音の E2E は次段（実 OrbitStudio + owner 同席）**。
+- 残（follow-on）: 残り 6 コマンドパレットツール + 観測系（get_diagnostics / get_state / capture 系）/ .vsix bundling（拡張初の runtime 依存 = SDK+zod、packaged .vsix 化時は esbuild bundle が要る）/ DNS-rebinding 保護。
+
+### 6.187 fix(vscode-extension): run diagnostics on open/close/activation, not only on change (#384) (Jul 7, 2026)
+
+OrbitStudio Phase 2 (#378) の IDE チャネル probe（`getDiagnostics`）中に発見したバグ。診断が `onDidChangeTextDocument` にのみ配線され、**ファイルを開いただけでは診断が計算されない**（CLI から `.orbs` を開く・タブ復元・activation 時の初期文書はいずれも 1 度編集するまでエラー/警告が出ない）。
+
+- **判定源の単一化**: `isOrbitscoreDocument(document: { languageId })` を `diagnostics-analysis.ts` に切り出し（純関数・vscode 非依存で単体テスト可能）。inline の `languageId === 'orbitscore'` を置換。
+- **4 サイト配線**（`extension.ts` activation）:
+  - `onDidOpenTextDocument` → `updateDiagnostics`（開いた瞬間に診断）
+  - `onDidChangeTextDocument` → 既存（`isOrbitscoreDocument` に統一）
+  - `onDidCloseTextDocument` → `diagnosticCollection.delete(uri)`（閉じたら診断クリア＝stale 診断を残さない）
+  - activation 時の初期パス: `vscode.workspace.textDocuments` を走査。拡張は `onLanguage:orbitscore` で activate するため、起動のトリガーとなった文書は既に開いており `onDidOpenTextDocument` が発火しない → 初期パスで拾う。
+- **検証**: `tsc --noEmit` PASS。behavioral 検証（開いた直後に `getDiagnostics` が返る）は IDE チャネル probe で行う予定（次の OrbitStudio 起動時にまとめて実施）。
+- ブランチ: owner 指示により Phase 2 ブランチ `378-phase2-b1-rebuild` 上で修正。
+
 ### 6.186 feat(vscode-extension): engine-kind branching — rust-default UI, scsynth sites gated (#377) (Jul 7, 2026)
 
 cutover #369 で native Rust daemon が既定音声エンジンになった後も、`extension.ts` には scsynth 前提のコードが 4 箇所残っていた（scsynth 非同梱の OrbitStudio 成果物では毎回エラーになる landmine）。「scsynth の物理的有無」でなく「**engine kind**」で分岐させ、silent fallback は作らない（Issue #136 strict mode 踏襲）。

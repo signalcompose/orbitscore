@@ -1,0 +1,17 @@
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("/Users/yamato/Src/proj_orbitscore/orbitscore/test-assets/audio")
+global.start()
+var drum = init global.seq
+drum.beat(4 by 4).length(1)
+drum.audio("kick.wav").chop(1)
+drum.play(1, (1, 1), 1, 1)
+var hat = init global.seq
+hat.beat(4 by 4).length(1)
+hat.audio("hihat_closed.wav").chop(1)
+hat.play(1, 0, 1, 1)
+LOOP(drum)
+LOOP(hat)
+
+// === LIVE ===

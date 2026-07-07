@@ -1,0 +1,756 @@
+import { randomUUID } from 'crypto'
+import * as http from 'http'
+
+import type { WavAnalysis } from './wav-analysis'
+
+/**
+ * OrbitScore MCP control server — the "Agent Bridge" of WCTM_SYSTEM_SPEC §3.
+ *
+ * Hosts an MCP server (Streamable HTTP) inside the extension host so an external
+ * agent (e.g. Claude Code via `.mcp.json`) can drive OrbitScore operations for
+ * E2E testing. The same tool surface is intended for reuse by the WCTM
+ * performance runtime (pi harness — spec §4.2 "Bridge は harness-neutral").
+ *
+ * Only started when `orbitscore.mcpServer.port` is a nonzero port (see
+ * extension.ts activate()). Binds 127.0.0.1 only.
+ *
+ * ── SDK loading ──
+ * `@modelcontextprotocol/sdk` is an exports-only dual (ESM/CJS) package. This
+ * extension compiles with `moduleResolution: "node"` (node10), which cannot
+ * resolve the SDK's subpath exports for a static `import`. We therefore load it
+ * via runtime `require` — the same idiom this extension already uses for engine
+ * modules — which resolves to the CJS build through the package "exports" map.
+ * The local interfaces below mirror `@modelcontextprotocol/sdk@1.29.0`
+ * (verified against dist/esm/server/*.d.ts, 2026-07-07).
+ */
+
+interface ToolResult {
+  content: Array<{ type: 'text'; text: string }>
+  isError?: boolean
+}
+
+interface McpServerLike {
+  registerTool(
+    name: string,
+    config: { title?: string; description?: string; inputSchema?: Record<string, unknown> },
+    cb: (args: Record<string, unknown>) => Promise<ToolResult>,
+  ): unknown
+  connect(transport: unknown): Promise<void>
+  close(): Promise<void>
+}
+
+interface TransportLike {
+  handleRequest(req: http.IncomingMessage, res: http.ServerResponse, body?: unknown): Promise<void>
+  close(): Promise<void>
+  sessionId?: string
+  onclose?: () => void
+}
+
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js') as {
+  McpServer: new (info: { name: string; version: string }) => McpServerLike
+}
+const { StreamableHTTPServerTransport } =
+  require('@modelcontextprotocol/sdk/server/streamableHttp.js') as {
+    StreamableHTTPServerTransport: new (opts: {
+      sessionIdGenerator?: (() => string) | undefined
+      enableJsonResponse?: boolean
+      onsessioninitialized?: (sessionId: string) => void | Promise<void>
+      onsessionclosed?: (sessionId: string) => void | Promise<void>
+    }) => TransportLike
+  }
+interface ZodTypeLike {
+  describe(description: string): ZodTypeLike
+  optional(): unknown
+}
+const { z } = require('zod') as {
+  z: { string: () => ZodTypeLike; number: () => ZodTypeLike; boolean: () => ZodTypeLike }
+}
+/* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
+
+/** Result of evaluating agent-supplied OrbitScore source. */
+export type EvaluateResult = { ok: true } | { ok: false; error: string }
+
+/** Result of a lifecycle command (start/stop engine). */
+export type CommandResult = { ok: true; message?: string } | { ok: false; error: string }
+
+/** Snapshot of the engine process state. */
+export interface EngineState {
+  running: boolean
+  liveCoding: boolean
+}
+
+/** One SuperCollider-reported audio device (list_audio_devices / select_audio_device). */
+export interface AudioDeviceInfo {
+  label: string
+  id: number
+  description: string
+}
+export type AudioDevicesResult =
+  | { ok: true; devices: AudioDeviceInfo[] }
+  | { ok: false; error: string }
+
+/** Fields accepted by configure_flash; omitted fields keep their current value. */
+export interface FlashConfigInput {
+  count?: number
+  duration?: number
+  color?: string
+  customColor?: string
+}
+/** Effective flash configuration, returned after applying a configure_flash call. */
+export interface FlashConfig {
+  count: number
+  duration: number
+  color: string
+  customColor: string
+}
+export type FlashConfigResult = { ok: true; config: FlashConfig } | { ok: false; error: string }
+
+/** 1-based selection range for set_selection (matches the editor gutter). */
+export interface SelectionInput {
+  startLine: number
+  startChar?: number
+  endLine?: number
+  endChar?: number
+}
+
+/** Literal find/replace arguments for edit_replace. */
+export interface EditReplaceInput {
+  find: string
+  replace: string
+  all?: boolean
+}
+
+/** Snapshot of the active editor for get_editor_state. Fields are null when no editor is active. */
+export interface EditorState {
+  path: string | null
+  languageId: string | null
+  cursor: { line: number; character: number } | null
+  selection: {
+    start: { line: number; character: number }
+    end: { line: number; character: number }
+  } | null
+  lineCount: number | null
+  isDirty: boolean | null
+}
+
+/** Diagnostic severities as reported by get_diagnostics, spelled out (not numeric) for agent readability. */
+export type DiagnosticSeverityLabel = 'error' | 'warning' | 'info' | 'hint'
+export interface DiagnosticEntry {
+  line: number
+  character: number
+  severity: DiagnosticSeverityLabel
+  message: string
+}
+export interface FileDiagnostics {
+  path: string
+  diagnostics: DiagnosticEntry[]
+}
+
+/** Result of analyze_audio (wav-analysis.ts is the vscode-free WAV parser). */
+export type AnalyzeAudioResult = { ok: true; analysis: WavAnalysis } | { ok: false; error: string }
+
+/**
+ * Arguments for register_mcp_server. `scope` is a raw string here (rather than
+ * the 'project' | 'user' union) so validation lives in one place — the
+ * extension-side handler — instead of being split between schema coercion and
+ * handler checks.
+ */
+export interface RegisterMcpServerInput {
+  scope: string
+  port?: number
+}
+
+/**
+ * VSCode-agnostic handler seam. Keeping the tool implementations behind this
+ * interface (rather than reaching into the extension directly) means the same
+ * handlers can be re-hosted later by the WCTM pi harness (spec §3/§4.2).
+ */
+export interface OrbitScoreToolHandlers {
+  evaluate(code: string): Promise<EvaluateResult> | EvaluateResult
+  startEngine(options?: {
+    captureWav?: string
+    debug?: boolean
+  }): Promise<CommandResult> | CommandResult
+  stopEngine(): Promise<CommandResult> | CommandResult
+  getEngineState(): EngineState
+  forceKillScsynth(): Promise<CommandResult> | CommandResult
+  listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
+  selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
+  configureFlash(options: FlashConfigInput): Promise<FlashConfigResult> | FlashConfigResult
+  openFile(path: string): Promise<CommandResult> | CommandResult
+  setSelection(range: SelectionInput): CommandResult
+  runSelection(): Promise<CommandResult> | CommandResult
+  editReplace(args: EditReplaceInput): Promise<CommandResult> | CommandResult
+  getEditorState(): EditorState
+  getDiagnostics(path?: string): FileDiagnostics[]
+  getLog(lines?: number): string[]
+  analyzeAudio(wavPath: string): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
+  /**
+   * Optional (unlike the members above): only hosts that can register
+   * themselves into Claude Code expose the register_mcp_server tool — the
+   * tool is skipped when this handler is absent, so existing stub suites and
+   * alternative hosts (WCTM pi harness) stay valid without changes.
+   */
+  registerMcpServer?(args: RegisterMcpServerInput): Promise<CommandResult> | CommandResult
+}
+
+/** The single error-envelope shape for every tool (change here, not per tool). */
+function errorResult(error: string): ToolResult {
+  return { content: [{ type: 'text', text: `error: ${error}` }], isError: true }
+}
+
+function toToolResult(result: CommandResult): ToolResult {
+  if (result.ok) {
+    return { content: [{ type: 'text', text: result.message ?? 'ok' }] }
+  }
+  return errorResult(result.error)
+}
+
+export interface McpServerHandle {
+  readonly port: number
+  dispose(): Promise<void>
+}
+
+/**
+ * Build a per-session McpServer with the OrbitScore tool surface registered.
+ * One instance per MCP session (see `startOrbitScoreMcpServer` for routing).
+ */
+function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServerLike {
+  const server = new McpServer({ name: 'orbitscore', version })
+
+  server.registerTool(
+    'evaluate_orbitscore',
+    {
+      title: 'Evaluate OrbitScore',
+      description:
+        'Send OrbitScore (.orbs) source to the running engine live-coding session — ' +
+        'the equivalent of "Run Selection" in the editor. The engine must be started ' +
+        'first (via the Start Engine command). Returns ok once the code was accepted ' +
+        'and written to the engine.',
+      inputSchema: { code: z.string().describe('OrbitScore source to evaluate') },
+    },
+    async (args) => {
+      const code = typeof args.code === 'string' ? args.code : ''
+      return toToolResult(await handlers.evaluate(code))
+    },
+  )
+
+  server.registerTool(
+    'start_engine',
+    {
+      title: 'Start Engine',
+      description:
+        'Start the OrbitScore audio engine (the native Rust daemon). Equivalent to ' +
+        'the "Start Engine" command. Must be called before evaluate_orbitscore. ' +
+        'Pass capture_wav to record the master output to a WAV file (capture seam) ' +
+        'so the produced audio can be verified without listening. Pass debug: true ' +
+        'for the "Start Engine (Debug)" command variant (verbose engine logging).',
+      inputSchema: {
+        capture_wav: z
+          .string()
+          .describe('Absolute path to write a whole-stream WAV capture of the master output')
+          .optional(),
+        debug: z
+          .boolean()
+          .describe('Start in debug mode, equivalent to "Start Engine (Debug)"')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const captureWav = typeof args.capture_wav === 'string' ? args.capture_wav : undefined
+      const debug = args.debug === true
+      const options = captureWav || debug ? { captureWav, debug } : undefined
+      return toToolResult(await handlers.startEngine(options))
+    },
+  )
+
+  server.registerTool(
+    'stop_engine',
+    {
+      title: 'Stop Engine',
+      description: 'Stop the OrbitScore audio engine. Equivalent to the "Stop Engine" command.',
+    },
+    async () => toToolResult(await handlers.stopEngine()),
+  )
+
+  server.registerTool(
+    'get_engine_state',
+    {
+      title: 'Get Engine State',
+      description: 'Report whether the OrbitScore engine process is currently running.',
+    },
+    async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getEngineState()) }] }),
+  )
+
+  server.registerTool(
+    'force_kill_scsynth',
+    {
+      title: 'Force Kill scsynth',
+      description:
+        'Force-kill any stray scsynth processes (killall scsynth). Equivalent to the ' +
+        '"Force Kill scsynth" command — an escape hatch for orphaned processes, not ' +
+        'part of normal start/stop.',
+    },
+    async () => toToolResult(await handlers.forceKillScsynth()),
+  )
+
+  server.registerTool(
+    'list_audio_devices',
+    {
+      title: 'List Audio Devices',
+      description:
+        'List audio output devices detected via SuperCollider — the same device list ' +
+        'shown by "Select Audio Device". Not implemented for the Rust engine ' +
+        '(orbitscore.engine: "rust"); returns an error explaining that the system ' +
+        'default output is used instead.',
+    },
+    async () => {
+      const result = await handlers.listAudioDevices()
+      if (!result.ok) {
+        return errorResult(result.error)
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.devices) }] }
+    },
+  )
+
+  server.registerTool(
+    'select_audio_device',
+    {
+      title: 'Select Audio Device',
+      description:
+        'Write the selected audio output device to .orbitscore.json — equivalent to ' +
+        'choosing a device via "Select Audio Device". Restart the engine to apply. ' +
+        'Not implemented for the Rust engine.',
+      inputSchema: {
+        device: z.string().describe('Device name as reported by list_audio_devices'),
+      },
+    },
+    async (args) => {
+      const device = typeof args.device === 'string' ? args.device : ''
+      return toToolResult(await handlers.selectAudioDevice(device))
+    },
+  )
+
+  server.registerTool(
+    'configure_flash',
+    {
+      title: 'Configure Flash',
+      description:
+        'Set the "Run Selection" flash feedback settings (count, duration, color, ' +
+        'custom_color) — equivalent to "Configure Flash" in the command palette. ' +
+        'Only provided fields are changed; omitted fields keep their current value. ' +
+        'Returns the resulting effective configuration.',
+      inputSchema: {
+        count: z.number().describe('Number of flashes (1-5)').optional(),
+        duration: z.number().describe('Duration of each flash in milliseconds (50-500)').optional(),
+        color: z
+          .string()
+          .describe('Flash color theme: selection | error | warning | info | custom')
+          .optional(),
+        custom_color: z
+          .string()
+          .describe('Custom flash color in hex format, e.g. #ff6b6b (used when color: "custom")')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const result = await handlers.configureFlash({
+        count: typeof args.count === 'number' ? args.count : undefined,
+        duration: typeof args.duration === 'number' ? args.duration : undefined,
+        color: typeof args.color === 'string' ? args.color : undefined,
+        customColor: typeof args.custom_color === 'string' ? args.custom_color : undefined,
+      })
+      if (!result.ok) {
+        return errorResult(result.error)
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.config) }] }
+    },
+  )
+
+  server.registerTool(
+    'open_file',
+    {
+      title: 'Open File',
+      description:
+        'Open a file in the editor (vscode.workspace.openTextDocument + ' +
+        'showTextDocument). Required before set_selection, run_selection, ' +
+        'edit_replace, or get_editor_state can target it.',
+      inputSchema: {
+        path: z.string().describe('Absolute or workspace-relative path to the file to open'),
+      },
+    },
+    async (args) => {
+      const filePath = typeof args.path === 'string' ? args.path : ''
+      return toToolResult(await handlers.openFile(filePath))
+    },
+  )
+
+  server.registerTool(
+    'set_selection',
+    {
+      title: 'Set Selection',
+      description:
+        "Set the active editor's selection/cursor by line and character (1-based, " +
+        'matching the editor gutter). Reveals the range. Omit end_line and end_char ' +
+        'to collapse the selection to a cursor at the start position.',
+      inputSchema: {
+        start_line: z.number().describe('1-based start line'),
+        start_char: z.number().describe('1-based start character (column). Default: 1').optional(),
+        end_line: z
+          .number()
+          .describe(
+            '1-based end line. Omit together with end_char to collapse to a cursor at start',
+          )
+          .optional(),
+        end_char: z
+          .number()
+          .describe('1-based end character (column). Default: 1 when end_line is given')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const startLine = typeof args.start_line === 'number' ? args.start_line : NaN
+      if (!Number.isFinite(startLine)) {
+        return errorResult('start_line is required')
+      }
+      return toToolResult(
+        handlers.setSelection({
+          startLine,
+          startChar: typeof args.start_char === 'number' ? args.start_char : undefined,
+          endLine: typeof args.end_line === 'number' ? args.end_line : undefined,
+          endChar: typeof args.end_char === 'number' ? args.end_char : undefined,
+        }),
+      )
+    },
+  )
+
+  server.registerTool(
+    'run_selection',
+    {
+      title: 'Run Selection',
+      description:
+        "Execute the active editor's current selection (or the subject-block under " +
+        'the cursor) against the running engine — the real "Run Selection" command ' +
+        '(Cmd+Enter), including subject-block collection, setDocumentDirectory ' +
+        'injection, and the flash animation. The engine must already be running ' +
+        '(start_engine) and the active editor must be an OrbitScore (.orbs) file.',
+    },
+    async () => toToolResult(await handlers.runSelection()),
+  )
+
+  server.registerTool(
+    'edit_replace',
+    {
+      title: 'Edit Replace',
+      description:
+        'Literal (non-regex) find/replace in the active document. Replaces the ' +
+        'first occurrence by default; pass all: true to replace every occurrence. ' +
+        'Returns the number of occurrences replaced.',
+      inputSchema: {
+        find: z.string().describe('Literal text to search for'),
+        replace: z.string().describe('Replacement text'),
+        all: z
+          .boolean()
+          .describe('Replace every occurrence instead of only the first. Default: false')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const find = typeof args.find === 'string' ? args.find : ''
+      const replace = typeof args.replace === 'string' ? args.replace : ''
+      const all = args.all === true
+      return toToolResult(await handlers.editReplace({ find, replace, all }))
+    },
+  )
+
+  server.registerTool(
+    'get_editor_state',
+    {
+      title: 'Get Editor State',
+      description:
+        'Report the active editor: file path, language, cursor position, selection ' +
+        'range (all 1-based), line count, and dirty state. Fields are null when no ' +
+        'editor is active.',
+    },
+    async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getEditorState()) }] }),
+  )
+
+  server.registerTool(
+    'get_diagnostics',
+    {
+      title: 'Get Diagnostics',
+      description:
+        'Report OrbitScore diagnostics (errors/warnings) currently shown by the ' +
+        'editor (vscode.languages.getDiagnostics) — computed by the same analyzers ' +
+        'that run on open/edit, so no need to trigger an edit first. Pass path to ' +
+        'scope to one file; omit to list every file that currently has diagnostics.',
+      inputSchema: {
+        path: z.string().describe('Absolute path to scope diagnostics to a single file').optional(),
+      },
+    },
+    async (args) => {
+      const filePath = typeof args.path === 'string' ? args.path : undefined
+      return {
+        content: [{ type: 'text', text: JSON.stringify(handlers.getDiagnostics(filePath)) }],
+      }
+    },
+  )
+
+  server.registerTool(
+    'get_log',
+    {
+      title: 'Get Log',
+      description:
+        'Return the last N lines of the OrbitScore output channel (engine ' +
+        'stdout/stderr, MCP session log, etc.) — the same content as "OrbitScore" ' +
+        'in the Output panel. Default 50 lines, capped at 500.',
+      inputSchema: {
+        lines: z
+          .number()
+          .describe('Number of trailing lines to return (default 50, max 500)')
+          .optional(),
+      },
+    },
+    async (args) => {
+      const lines = typeof args.lines === 'number' ? args.lines : undefined
+      return { content: [{ type: 'text', text: handlers.getLog(lines).join('\n') }] }
+    },
+  )
+
+  server.registerTool(
+    'analyze_audio',
+    {
+      title: 'Analyze Audio',
+      description:
+        'Parse a WAV file (e.g. a capture_wav produced by start_engine) and report ' +
+        'peak, RMS, and onset timing so audio can be verified objectively without ' +
+        'listening.',
+      inputSchema: {
+        wav_path: z.string().describe('Absolute path to the WAV file to analyze'),
+      },
+    },
+    async (args) => {
+      const wavPath = typeof args.wav_path === 'string' ? args.wav_path : ''
+      const result = await handlers.analyzeAudio(wavPath)
+      if (!result.ok) {
+        return errorResult(result.error)
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.analysis) }] }
+    },
+  )
+
+  // Optional handler (see OrbitScoreToolHandlers.registerMcpServer): the tool
+  // only exists on hosts that can register themselves into Claude Code.
+  const registerMcpServer = handlers.registerMcpServer?.bind(handlers)
+  if (registerMcpServer) {
+    server.registerTool(
+      'register_mcp_server',
+      {
+        title: 'Register Claude Code MCP Server',
+        description:
+          'Register this OrbitScore MCP server into Claude Code — equivalent to the ' +
+          '"Register Claude Code MCP Server" command. scope "project" merges an ' +
+          'orbitscore entry into .mcp.json at the workspace root (shareable, ' +
+          'per-repo); scope "user" registers for all projects by running ' +
+          '`claude mcp add --transport http --scope user`. Omit port to register ' +
+          'the port this server is currently running on.',
+        inputSchema: {
+          scope: z
+            .string()
+            .describe(
+              'Registration scope: "project" (write .mcp.json in the workspace) or ' +
+                '"user" (register for all projects via the claude CLI)',
+            ),
+          port: z
+            .number()
+            .describe("MCP server port to register. Default: this server's running port")
+            .optional(),
+        },
+      },
+      async (args) => {
+        const scope = typeof args.scope === 'string' ? args.scope : ''
+        const port = typeof args.port === 'number' ? args.port : undefined
+        return toToolResult(await registerMcpServer({ scope, port }))
+      },
+    )
+  }
+
+  return server
+}
+
+/** One live MCP session: its transport plus the server instance bound to it. */
+interface SessionEntry {
+  transport: TransportLike
+  server: McpServerLike
+}
+
+/**
+ * Start the OrbitScore MCP server on `127.0.0.1:<port>/mcp`.
+ *
+ * Stateful Streamable HTTP with JSON responses: the MCP lifecycle
+ * (initialize → tools/list → tools/call) spans multiple POSTs, so a session id
+ * is issued on `initialize` and echoed by the client on later requests.
+ * Stateless mode is not viable here (verified against SDK 1.29.0): reusing one
+ * stateless transport across requests throws ("Stateless transport cannot be
+ * reused across requests"), which our catch-all surfaces as a 500; and a
+ * stale/missing session on a stateful transport gets the SDK's own
+ * 400 "Bad Request: Server not initialized".
+ *
+ * Sessions are created **per initialize request** and routed by the
+ * `mcp-session-id` header. A single shared transport would permanently consume
+ * its one session slot on the first client — any later client (or a Claude Code
+ * reconnect) would get "Bad Request: Mcp-Session-Id header is required"
+ * (observed live, 2026-07-07). Tool handlers stay shared — they close over the
+ * same extension state regardless of which session invokes them.
+ */
+export async function startOrbitScoreMcpServer(opts: {
+  port: number
+  version: string
+  handlers: OrbitScoreToolHandlers
+  log: (message: string) => void
+}): Promise<McpServerHandle> {
+  const { port, version, handlers, log } = opts
+
+  const sessions = new Map<string, SessionEntry>()
+
+  // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
+  // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
+  // same-origin — reaching this port from a browser with full response access.
+  // The Host header still carries the attacker's domain in that case, so an
+  // exact-match allowlist of loopback hosts closes the hole. (SDK 1.29.0 has
+  // allowedHosts/enableDnsRebindingProtection but marks them deprecated in
+  // favor of doing exactly this in the HTTP layer we already own.)
+  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`])
+
+  const createSession = async (): Promise<SessionEntry> => {
+    const entry: Partial<SessionEntry> = {}
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: true, // respond to each POST with a single JSON body
+      onsessioninitialized: (sessionId) => {
+        sessions.set(sessionId, entry as SessionEntry)
+        log(`MCP session opened: ${sessionId.slice(0, 8)}… (${sessions.size} active)`)
+      },
+      onsessionclosed: (sessionId) => {
+        sessions.delete(sessionId)
+        log(`MCP session closed: ${sessionId.slice(0, 8)}… (${sessions.size} active)`)
+      },
+    })
+    // Also reap on transport-level close (covers non-DELETE teardown paths).
+    transport.onclose = () => {
+      if (transport.sessionId) {
+        sessions.delete(transport.sessionId)
+      }
+    }
+    const server = buildServer(version, handlers)
+    entry.transport = transport
+    entry.server = server
+    await server.connect(transport)
+    return entry as SessionEntry
+  }
+
+  const handleHttp = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+    try {
+      const host = req.headers.host
+      if (!host || !allowedHosts.has(host)) {
+        log(`MCP request rejected — invalid Host header: ${host ?? '(none)'}`)
+        res.writeHead(403, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'forbidden: invalid Host header' }))
+        return
+      }
+      const pathname = (req.url ?? '').split('?')[0]
+      if (pathname !== '/mcp') {
+        res.writeHead(404, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'not found' }))
+        return
+      }
+      const body = req.method === 'POST' ? await readJsonBody(req) : undefined
+      const sessionId = req.headers['mcp-session-id']
+      const existing = typeof sessionId === 'string' ? sessions.get(sessionId) : undefined
+      if (existing) {
+        await existing.transport.handleRequest(req, res, body)
+        return
+      }
+      if (isInitializeRequest(body)) {
+        // New session: the transport issues the session id while handling
+        // this request and onsessioninitialized registers it in the map.
+        const session = await createSession()
+        await session.transport.handleRequest(req, res, body)
+        return
+      }
+      res.writeHead(404, { 'content-type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Session not found — send initialize first' },
+          id: null,
+        }),
+      )
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      log(`MCP request error: ${reason}`)
+      if (!res.headersSent) {
+        res.writeHead(500, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: reason }))
+      }
+    }
+  }
+
+  const httpServer = http.createServer((req, res) => {
+    void handleHttp(req, res)
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject)
+    httpServer.listen(port, '127.0.0.1', () => resolve())
+  })
+  log(`OrbitScore MCP server listening on http://127.0.0.1:${port}/mcp`)
+
+  return {
+    port,
+    dispose: async () => {
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+      for (const [sessionId, session] of sessions) {
+        // teardown 失敗は握り潰さずログに残す（EDH reload を繰り返す agent 駆動
+        // 開発で close が系統的に失敗し始めた場合、ここが唯一の手掛かりになる）。
+        await session.transport
+          .close()
+          .catch((err) =>
+            log(`MCP session ${sessionId.slice(0, 8)}… transport close failed: ${err}`),
+          )
+        await session.server
+          .close()
+          .catch((err) => log(`MCP session ${sessionId.slice(0, 8)}… server close failed: ${err}`))
+      }
+      sessions.clear()
+    },
+  }
+}
+
+/** JSON-RPC initialize detection (single message or batch). */
+function isInitializeRequest(body: unknown): boolean {
+  const isInit = (m: unknown): boolean =>
+    typeof m === 'object' && m !== null && (m as { method?: unknown }).method === 'initialize'
+  return Array.isArray(body) ? body.some(isInit) : isInit(body)
+}
+
+function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8')
+      if (!raw) {
+        resolve(undefined)
+        return
+      }
+      try {
+        resolve(JSON.parse(raw))
+      } catch (e) {
+        reject(e instanceof Error ? e : new Error(String(e)))
+      }
+    })
+    req.on('error', reject)
+  })
+}

@@ -80,6 +80,17 @@ export interface ScheduledPlay {
   slice?: SliceSpec
   /** LinkAudio ルーティング先チャンネル名。非空の時のみ daemon の PlayAt へ転送する。 */
   outputChannel?: string
+  /**
+   * #390 live playhead: 由来する play() 引数のドット結合インデックス（"2"、ネストは
+   * 後段で "1.0"）。dispatch 成功時に `[STEP]` marker を stdout へ出すためだけの
+   * observational フィールド。timing / 音響には一切影響しない。
+   */
+  argPath?: string
+  /**
+   * #390: 休符 (0) スロットの marker-only イベント。daemon への dispatch は行わず、
+   * 発火タイミングで `[STEP]` だけを出す（filepath は空文字）。
+   */
+  markerOnly?: boolean
 }
 
 /**
@@ -111,6 +122,62 @@ interface ClockAnchor {
   tsMs: number
   /** 同時点の daemon transport now_sec（秒）。 */
   daemonSec: number
+}
+
+/**
+ * anchor 回帰窓のサンプル数上限（StreamStats は 1Hz なので ≈30 秒窓）。
+ *
+ * StreamStats の now_sec は `cursor_frames / sample_rate` で、cursor はデバイス
+ * コールバックごとに一括前進する — 非同期に読む 1Hz ticker が得る値は
+ * ブロック長（512f@48kHz ≈ 10.67ms）だけ下方向に量子化されており、tick ごとの
+ * ブロック位相ずれが 2 小節周期 ±5.3ms の可聴ヨレとして発音時刻に転写されていた
+ * （#389 機構 B）。単一 last-wins anchor をやめ、直近サンプル列への最小二乗
+ * フィットで推定すると、量子化ノイズは平均化で ~0.6ms 級に落ち、wall↔device の
+ * 実効レート差（ppm 級）も傾きとして吸収される。フィット直線は真値より
+ * ~半ブロック下に座るが、それは「一定オフセット」であり grid の安定性には
+ * 影響しない（定位相のレイテンシは lookahead 50ms の内側で無害）。
+ */
+const ANCHOR_WINDOW = 30
+
+/** anchor 窓の最小二乗フィット。`daemonSec ≈ intercept + slope · (tsMs − t0Ms)/1000`。 */
+interface AnchorFit {
+  t0Ms: number
+  slope: number
+  intercept: number
+}
+
+/**
+ * anchor サンプル列の最小二乗フィットを計算する（#389 機構 B）。
+ * サンプルが 2 点未満、分散ゼロ、または傾きが正気でない（wall↔device の
+ * レート差は ppm 級のはずで、[0.95, 1.05] を外れる値は窓の汚染 — デバイス
+ * 切替や stream 停止跨ぎ — を示す）場合は null（呼び出し側が単一 anchor に
+ * フォールバック）。StreamStats 到着時（1Hz）にのみ呼ぶこと — dispatch の
+ * ホットパスで毎回再計算する仕事ではない（窓はその間変わらない）。
+ * export はテストのため（#389 機構 B の数値ロジックを直接検証する）。
+ */
+export function fitAnchorSamples(samples: readonly ClockAnchor[]): AnchorFit | null {
+  const n = samples.length
+  if (n < 2) return null
+  const t0Ms = samples[0].tsMs
+  let sumX = 0
+  let sumY = 0
+  for (const s of samples) {
+    sumX += (s.tsMs - t0Ms) / 1000
+    sumY += s.daemonSec
+  }
+  const meanX = sumX / n
+  const meanY = sumY / n
+  let sxx = 0
+  let sxy = 0
+  for (const s of samples) {
+    const dx = (s.tsMs - t0Ms) / 1000 - meanX
+    sxx += dx * dx
+    sxy += dx * (s.daemonSec - meanY)
+  }
+  if (sxx <= 0) return null
+  const slope = sxy / sxx
+  if (slope <= 0.95 || slope >= 1.05) return null
+  return { t0Ms, slope, intercept: meanY - slope * meanX }
 }
 
 /** 1 発音 dispatch の観測情報（telemetry / timing 計測フック）。 */
@@ -191,6 +258,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
+  /**
+   * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
+   * daemonNowSec() が 2 点以上あれば最小二乗フィットで推定する。respawn 時は
+   * establishSession が空にする（新旧 daemon の transport を混ぜない）。
+   */
+  private anchorSamples: ClockAnchor[] = []
+  /**
+   * anchorSamples の最小二乗フィットのキャッシュ。窓が変わるのは onStreamStats
+   * （1Hz）だけなので、そこで一度だけ再計算する — daemonNowSec()（dispatch
+   * ホットパス・毎発音）は O(1) 読み出しで済む。null = 窓が薄い/汚染 →
+   * 単一 anchor フォールバック。
+   */
+  private anchorFit: AnchorFit | null = null
 
   // --- supervisor 状態（recovery floor / #300） ---
   /**
@@ -224,7 +304,28 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private readonly onStreamStats = (data: unknown): void => {
     const nowSec = Number((data as { now_sec?: unknown }).now_sec)
     if (Number.isFinite(nowSec)) {
-      this.clockAnchor = { tsMs: Date.now(), daemonSec: nowSec }
+      const sample = { tsMs: Date.now(), daemonSec: nowSec }
+      this.clockAnchor = sample
+      // #389 機構 B: 回帰窓に積み、フィットをここで一度だけ再計算してキャッシュ
+      // する（daemonNowSec は毎発音呼ばれるが、窓は 1Hz でしか変わらない）。
+      this.anchorSamples.push(sample)
+      if (this.anchorSamples.length > ANCHOR_WINDOW) {
+        this.anchorSamples.shift()
+      }
+      const previousFit = this.anchorFit
+      this.anchorFit = fitAnchorSamples(this.anchorSamples)
+      // フォールバックの可視化: fit が棄却されると daemonNowSec は #389 修正前の
+      // 単一 anchor 推定（量子化ヨレあり）に静かに落ちる。演奏中にヨレが戻った
+      // とき、ログに手掛かりが無いと原因追跡が不可能になるので遷移端で必ず出す。
+      if (previousFit && !this.anchorFit) {
+        console.warn(
+          '⚠️  [rust-engine] clock-anchor regression degraded — falling back to single-anchor estimate (window contaminated?); timing jitter may increase until it recovers',
+        )
+      } else if (!previousFit && this.anchorFit && this.anchorSamples.length > 2) {
+        // length > 2 guard: boot/respawn 直後に 2 サンプル目で fit が初めて立つ
+        // 通常経路では出さない（劣化からの復帰のみ知らせる）。
+        console.log('✅ [rust-engine] clock-anchor regression recovered')
+      }
     } else {
       // 不正な now_sec で anchor を凍結させると drift しうるので、無言にせず通知する。
       console.warn(
@@ -284,6 +385,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * off→on で二重購読も防ぐ（respawn は同一 DaemonClient を再利用するため必須）。
    */
   private async establishSession(): Promise<void> {
+    // 回帰窓を破棄（#389 機構 B）: respawn 後の新 daemon の transport は 0 付近から
+    // 再出発するので、旧 daemon のサンプルを混ぜるとフィットが壊れる。初期 anchor
+    // （uptime_sec）は精度が別物なので窓には入れず、StreamStats のみを積む。
+    this.anchorSamples = []
+    this.anchorFit = null
     // 暫定 anchor: uptime_sec ≈ transport now_sec（共に stream 開始から実時間で進む）。respawn 後は
     // 新 daemon の uptime（≈0）へ再 anchor され、死んだ daemon の古い transport との desync を断つ。
     try {
@@ -501,13 +607,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     pan = 0,
     sequenceName = '',
     outputChannel?: string,
+    argPath?: string,
   ): void {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel`（`sequence.output()` 経由）が
     // authoritative に出す（A4-2b-2b で egress 配線済み）。scheduleEvent は channel を tag するだけで、
     // 「egress is not wired」の旧 warn は stale なので出さない（egress 有効な daemon では誤誘導になる）。
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
-    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel })
+    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel, argPath })
   }
 
   /**
@@ -532,6 +639,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     pan = 0,
     sequenceName = '',
     outputChannel?: string,
+    argPath?: string,
   ): void {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel` が authoritative（上記
     // scheduleEvent と同様・egress 配線済みなので stale な「not wired」warn は出さない）。
@@ -543,7 +651,18 @@ export class RustEnginePlayer implements AudioEngineBackend {
       sequenceName,
       slice: { index: sliceIndex, total: totalSlices, eventDurationMs },
       outputChannel,
+      argPath,
     })
+  }
+
+  /**
+   * #390 live playhead: 休符 (0) スロットの marker-only イベント（Scheduler optional 面）。
+   * 音は出さず、発火タイミングで `[STEP]` だけ stdout へ出す。gainDb は同スロットの
+   * 音イベントと同じ mute/master 合成値 — mute 中のシーケンスは音と同様に marker も
+   * skip される（executePlayback の amplitude ガードを共有）。
+   */
+  scheduleStepMarker(time: number, sequenceName: string, argPath: string, gainDb: number): void {
+    this.enqueue({ time, filepath: '', gainDb, pan: 0, sequenceName, argPath, markerOnly: true })
   }
 
   start(): void {
@@ -625,6 +744,24 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  /**
+   * #390 live playhead: machine-readable step marker for the editor extension.
+   * The epoch ms is the event's GRID time (startTime + play.time — the same
+   * base the drift check uses), NOT "now": dispatch runs lookahead-early, so
+   * the extension delays the decoration until this timestamp. Actual audio
+   * lands ~lookaheadSec (50ms) after the grid time — a uniform constant shift
+   * across all sequences, so the playhead stays mutually consistent. Rounded
+   * because play.time can be fractional (bar subdivision) and the marker
+   * grammar keeps integers.
+   */
+  private emitStepMarker(play: ScheduledPlay): void {
+    if (play.sequenceName && play.argPath !== undefined) {
+      console.log(
+        `[STEP] ${play.sequenceName} ${play.argPath} ${Math.round(this.startTime + play.time)}`,
+      )
+    }
+  }
+
   private async executePlayback(play: ScheduledPlay): Promise<void> {
     // daemon 復旧中（respawn）/ 切断中は dispatch を drop する。stale clockAnchor のまま新 daemon
     // （transport=0）へ「数秒先」を送って desync するのを防ぎ、in-flight one-shot を再発火させない
@@ -641,6 +778,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
     const amplitude = gainDbToAmplitude(play.gainDb)
     if (amplitude <= 0) return // 無音はロード前にスキップ（音響的に同一）。
+
+    // #390: 休符 (0) スロットの marker-only イベント。daemon dispatch は行わず
+    // marker だけ出して終わる（上の amplitude ガードを通過している = mute されて
+    // いないシーケンスのみ。音イベントとの一貫性）。filepath は空なので
+    // ensureLoaded より前に抜けること。
+    if (play.markerOnly) {
+      this.emitStepMarker(play)
+      return
+    }
 
     const sampleId = await this.ensureLoaded(play.filepath)
     // ロード（async round-trip）中に clear された場合の再チェック（mute/stop への応答性）。
@@ -663,6 +809,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
       rate,
       play.outputChannel,
     )
+    // #390 live playhead: emitted only after a successful dispatch (emission-only
+    // — no timing / semantics change).
+    this.emitStepMarker(play)
     this.onDispatch?.({
       filepath: play.filepath,
       sampleId,
@@ -740,8 +889,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
     return load
   }
 
-  /** TS wall clock から daemon transport now_sec を推定する（anchor + 経過時間）。 */
+  /**
+   * TS wall clock から daemon transport now_sec を推定する（dispatch ホットパス）。
+   *
+   * onStreamStats がキャッシュした最小二乗フィット（#389 機構 B — 単一 anchor では
+   * StreamStats のブロック量子化 ±10.7ms がそのまま発音時刻に転写されていた。詳細は
+   * ANCHOR_WINDOW / fitAnchorSamples のコメント）を O(1) で評価する。フィットが無い間
+   * （boot 直後 / respawn 直後 / 窓の汚染）は従来の「最新 anchor + 経過時間」に落ちる。
+   */
   private daemonNowSec(): number {
+    const fit = this.anchorFit
+    if (fit) {
+      return fit.intercept + fit.slope * ((Date.now() - fit.t0Ms) / 1000)
+    }
     return this.clockAnchor.daemonSec + (Date.now() - this.clockAnchor.tsMs) / 1000
   }
 

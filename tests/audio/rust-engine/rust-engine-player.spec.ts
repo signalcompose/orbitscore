@@ -16,8 +16,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { gainDbToAmplitude } from '../../../packages/engine/src/audio/audio-gain-utils'
 import { createAudioEngine } from '../../../packages/engine/src/audio/create-audio-engine'
 import { resolveEngineKind } from '../../../packages/engine/src/audio/engine-backend'
-import { RustEnginePlayer } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
+import {
+  fitAnchorSamples,
+  RustEnginePlayer,
+} from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
 import { SuperColliderPlayer } from '../../../packages/engine/src/audio/supercollider-player'
+// クロスパッケージ契約 (#390): [STEP] marker は engine（emitter）と拡張（parser）が
+// 文字列書式だけで結合している。実 emit 行を parser に往復させ、書式ドリフトを
+// このテストで検出する（tests/ ルートは両パッケージを import できる）。
+import { parseStepLine } from '../../../packages/vscode-extension/src/playhead'
 
 import { MockDaemonServer, MockDaemonHandlers } from './mock-daemon-server'
 
@@ -427,6 +434,54 @@ describe('RustEnginePlayer with mock daemon', () => {
     await new Promise((r) => setTimeout(r, 30))
     expect(playAtRecords().length).toBe(1)
     expect(playAtRecords()[0].sample_id).toBe('s-/audio/snare.wav')
+  })
+
+  it('argPath 付き scheduleEvent は dispatch 成功後に [STEP] marker を stdout へ出す (#390)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const p = await boot()
+      p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', undefined, '2')
+      p.start()
+      await waitFor(() => log.mock.calls.some((c) => String(c[0]).startsWith('[STEP] seqA 2 ')))
+      expect(playAtRecords().length).toBe(1) // marker は音の dispatch に随伴する
+
+      // 契約の往復: 実際に emit された行が extension 側の parseStepLine で
+      // そのまま復元できること（emitter の書式変更はここで落ちる）。
+      const stepLine = log.mock.calls.map((c) => String(c[0])).find((l) => l.startsWith('[STEP] '))
+      const parsed = parseStepLine(stepLine!)
+      expect(parsed).toMatchObject({ seqName: 'seqA', argPath: '2' })
+      expect(Number.isSafeInteger(parsed?.atEpochMs)).toBe(true)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('scheduleStepMarker（休符 0）は PlayAt/LoadSample なしで [STEP] だけ出す (#390)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const p = await boot()
+      p.scheduleStepMarker(0, 'seqA', '1', 0)
+      p.start()
+      await waitFor(() => log.mock.calls.some((c) => String(c[0]).startsWith('[STEP] seqA 1 ')))
+      await new Promise((r) => setTimeout(r, 30))
+      expect(server.received.some((r) => r.method === 'LoadSample')).toBe(false)
+      expect(playAtRecords().length).toBe(0)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('mute（-Infinity）中は休符 marker も出さない — 音イベントと同じ扱い (#390)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const p = await boot()
+      p.scheduleStepMarker(0, 'seqA', '1', -Infinity)
+      p.start()
+      await new Promise((r) => setTimeout(r, 60))
+      expect(log.mock.calls.some((c) => String(c[0]).includes('[STEP]'))).toBe(false)
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('clearSequenceEvents したシーケンスのイベントは発火しない', async () => {
@@ -839,5 +894,64 @@ describe('createAudioEngine() / resolveEngineKind()', () => {
     )
     expect(warn).not.toHaveBeenCalled()
     warn.mockRestore()
+  })
+})
+
+/**
+ * #389 機構 B の数値ロジック（最小二乗フィット）の直接検証。本番では
+ * onStreamStats(1Hz) がこれを呼んで anchorFit にキャッシュし、daemonNowSec が
+ * O(1) で評価する — つまり実セッションのホットパスが依存する関数。
+ */
+describe('fitAnchorSamples (#389 mechanism B)', () => {
+  it('returns null for fewer than 2 samples', () => {
+    expect(fitAnchorSamples([])).toBeNull()
+    expect(fitAnchorSamples([{ tsMs: 1000, daemonSec: 10 }])).toBeNull()
+  })
+
+  it('interpolates a 2-point window exactly (slope within bounds)', () => {
+    const fit = fitAnchorSamples([
+      { tsMs: 0, daemonSec: 10 },
+      { tsMs: 1000, daemonSec: 11 },
+    ])
+    expect(fit).not.toBeNull()
+    expect(fit!.slope).toBeCloseTo(1, 9)
+    // 外挿: t=2000ms → 12s（直線の連続性）
+    expect(fit!.intercept + fit!.slope * ((2000 - fit!.t0Ms) / 1000)).toBeCloseTo(12, 9)
+  })
+
+  it('averages block-quantization noise instead of tracking the last sample', () => {
+    // 真のクロック: daemonSec = t/1000 + 10。サンプルは 0 / −8ms を交互に
+    // 下方向量子化（issue の 512f ブロック位相うなりを模す）。
+    const samples = Array.from({ length: 30 }, (_, i) => ({
+      tsMs: i * 1000,
+      daemonSec: i + 10 - (i % 2 === 0 ? 0 : 0.008),
+    }))
+    const fit = fitAnchorSamples(samples)
+    expect(fit).not.toBeNull()
+    // 外挿点での誤差が平均バイアス（−4ms）±2ms 以内 = 単一 last-wins anchor の
+    // ±8ms 振動が平均化で消えていること。
+    const predicted = fit!.intercept + fit!.slope * ((30_000 - fit!.t0Ms) / 1000)
+    expect(Math.abs(predicted - (30 + 10 - 0.004))).toBeLessThan(0.002)
+  })
+
+  it('rejects a contaminated window (slope outside [0.95, 1.05])', () => {
+    // respawn 型の不連続: 窓の途中で transport が 0 から再出発。
+    expect(
+      fitAnchorSamples([
+        { tsMs: 0, daemonSec: 100 },
+        { tsMs: 1000, daemonSec: 101 },
+        { tsMs: 2000, daemonSec: 0 },
+        { tsMs: 3000, daemonSec: 1 },
+      ]),
+    ).toBeNull()
+  })
+
+  it('rejects a degenerate window (zero time variance)', () => {
+    expect(
+      fitAnchorSamples([
+        { tsMs: 5000, daemonSec: 10 },
+        { tsMs: 5000, daemonSec: 10.001 },
+      ]),
+    ).toBeNull()
   })
 })

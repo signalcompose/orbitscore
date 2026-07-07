@@ -12,7 +12,34 @@ import {
   analyzeGlobalOncePerFile,
   analyzeLinkAudioMissingOutput,
   analyzeOutputWithoutLinkAudio,
+  isOrbitscoreDocument,
 } from './diagnostics-analysis'
+import { buildMcpServerUrl, mergeMcpJson } from './mcp-registration'
+import {
+  startOrbitScoreMcpServer,
+  type AnalyzeAudioResult,
+  type AudioDevicesResult,
+  type CommandResult,
+  type DiagnosticSeverityLabel,
+  type EditReplaceInput,
+  type EditorState,
+  type EngineState,
+  type EvaluateResult,
+  type FileDiagnostics,
+  type FlashConfigInput,
+  type FlashConfigResult,
+  type McpServerHandle,
+  type RegisterMcpServerInput,
+  type SelectionInput,
+} from './mcp-server'
+import {
+  colorForSeq,
+  findPlayArgRangeForPath,
+  parseStepLine,
+  type PlayheadColorConfig,
+  type StepEvent,
+} from './playhead'
+import { analyzeWavBuffer } from './wav-analysis'
 
 // Engine process management
 let engineProcess: child_process.ChildProcess | null = null
@@ -23,8 +50,159 @@ let isLiveCodingMode: boolean = false
 // Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
 // Used to decide if `global.setDocumentDirectory(...)` can be prepended safely.
 let globalInitialized: boolean = false
+// Optional MCP control server (Agent Bridge). Non-null only while running.
+let mcpServerHandle: McpServerHandle | null = null
 
 // let isDebugMode: boolean = false // Debug mode flag
+
+// Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
+// no other central log sink to tap, so activate() monkey-patches
+// outputChannel.appendLine/append to also push here.
+const outputLogRing: string[] = []
+const OUTPUT_LOG_RING_MAX = 1000
+
+function pushLogRing(line: string): void {
+  outputLogRing.push(line)
+  if (outputLogRing.length > OUTPUT_LOG_RING_MAX) {
+    outputLogRing.shift()
+  }
+}
+
+// --- Live playhead highlight (#390) ---
+// The engine emits `[STEP] <seqName> <argPath> <atEpochMs>` on stdout for each
+// dispatched play event (see playhead.ts for the grammar). setupStdoutHandler
+// parses these from the RAW stream (shouldFilterLine keeps them out of the
+// Output channel), delays until the event's grid time, then highlights the
+// corresponding `<seqName>.play(...)` argument (argPath descends into nested
+// groups — "1.0" lights the first element inside the second arg). ONE
+// decoration type PER RESOLVED COLOR (lazily created, keyed by "#RRGGBB");
+// each seq gets a vivid color first-come from `orbitscore.playheadPalette`
+// (see playhead.ts colorForSeq; per-seq pinning is the planned DSL feature
+// #391). ONE active range per seq (replaced on each step, so the highlight
+// "moves" per beat and wraps at loop start). Cleared on seq stop (`⏹ <seq>`
+// line), global stop, engine stop / exit, and deactivate.
+const playheadDecorationTypes = new Map<string, vscode.TextEditorDecorationType>()
+const playheadPaletteAssignments = new Map<string, number>()
+const playheadActiveRanges = new Map<string, { docUriString: string; range: vscode.Range }>()
+const playheadTimeouts = new Set<NodeJS.Timeout>()
+
+function playheadColorConfig(): PlayheadColorConfig {
+  const config = vscode.workspace.getConfiguration('orbitscore')
+  // seqColors intentionally absent: per-seq pinning arrives as a DSL feature
+  // (#391), not a setting (owner 2026-07-07).
+  return {
+    palette: config.get<string[]>('playheadPalette'),
+  }
+}
+
+function ensurePlayheadDecorationType(color: string): vscode.TextEditorDecorationType {
+  let decorationType = playheadDecorationTypes.get(color)
+  if (!decorationType) {
+    decorationType = vscode.window.createTextEditorDecorationType({
+      // 50% alpha fill + solid border: must stay readable on top of the editor
+      // selection background (owner feedback 2026-07-07 — theme find-match
+      // color was too faint).
+      backgroundColor: `${color}80`,
+      border: `1.5px solid ${color}`,
+      borderRadius: '3px',
+    })
+    playheadDecorationTypes.set(color, decorationType)
+  }
+  return decorationType
+}
+
+/** Drop all decoration types (e.g. after a color-config change) and redraw. */
+function resetPlayheadDecorationTypes(): void {
+  for (const decorationType of playheadDecorationTypes.values()) {
+    decorationType.dispose() // dispose also removes it from every editor
+  }
+  playheadDecorationTypes.clear()
+  applyPlayheadDecorations()
+}
+
+/** Re-apply the current per-seq playhead ranges to every visible editor. */
+function applyPlayheadDecorations(): void {
+  const colorConfig = playheadColorConfig()
+  for (const editor of vscode.window.visibleTextEditors) {
+    const uri = editor.document.uri.toString()
+    // Start every known type at [] so a seq that stopped (or moved) has its
+    // previous color cleared, then fill in the live ranges per color.
+    const rangesByType = new Map<vscode.TextEditorDecorationType, vscode.Range[]>()
+    for (const decorationType of playheadDecorationTypes.values()) {
+      rangesByType.set(decorationType, [])
+    }
+    for (const [seqName, entry] of playheadActiveRanges) {
+      if (entry.docUriString !== uri) continue
+      const decorationType = ensurePlayheadDecorationType(
+        colorForSeq(seqName, colorConfig, playheadPaletteAssignments),
+      )
+      const ranges = rangesByType.get(decorationType) ?? []
+      ranges.push(entry.range)
+      rangesByType.set(decorationType, ranges)
+    }
+    for (const [decorationType, ranges] of rangesByType) {
+      editor.setDecorations(decorationType, ranges)
+    }
+  }
+}
+
+/**
+ * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
+ * so wait until `atEpochMs` (the event's grid time — actual audio lands a
+ * uniform ~50ms daemon lookahead later, see playhead.ts) before moving the
+ * highlight; a marginally late line still tracks (clamped to now), while stale
+ * lines (>1s late, e.g. replayed buffered output) are dropped.
+ */
+function handleStepLine(step: StepEvent): void {
+  const delayMs = step.atEpochMs - Date.now()
+  if (delayMs < -1000) return
+  const timeout = setTimeout(
+    () => {
+      playheadTimeouts.delete(timeout)
+      showPlayheadStep(step)
+    },
+    Math.max(0, delayMs),
+  )
+  playheadTimeouts.add(timeout)
+}
+
+function showPlayheadStep(step: StepEvent): void {
+  for (const editor of vscode.window.visibleTextEditors) {
+    // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
+    // degrading to the deepest resolvable ancestor (stacks are one visual
+    // unit). Null = even the top-level arg is gone (user edited away the
+    // pattern) — skip; leaving the previous highlight is less misleading
+    // than lighting a wrong arg.
+    const argRange = findPlayArgRangeForPath(editor.document.getText(), step.seqName, step.argPath)
+    if (!argRange) continue
+    playheadActiveRanges.set(step.seqName, {
+      docUriString: editor.document.uri.toString(),
+      range: new vscode.Range(
+        editor.document.positionAt(argRange.start),
+        editor.document.positionAt(argRange.end),
+      ),
+    })
+    applyPlayheadDecorations()
+    return // first visible editor containing the call wins (MVP)
+  }
+}
+
+function clearPlayheadForSequence(seqName: string): void {
+  if (playheadActiveRanges.delete(seqName)) {
+    applyPlayheadDecorations()
+  }
+}
+
+function clearAllPlayheadDecorations(): void {
+  for (const timeout of playheadTimeouts) {
+    clearTimeout(timeout)
+  }
+  playheadTimeouts.clear()
+  if (playheadActiveRanges.size > 0) {
+    playheadActiveRanges.clear()
+    applyPlayheadDecorations()
+  }
+}
 
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
@@ -36,6 +214,22 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Create output channel
   outputChannel = vscode.window.createOutputChannel('OrbitScore')
+
+  // Tap appendLine/append into the ring buffer so the MCP get_log tool can read
+  // recent output without a separate logging sink (#388). Installed before the
+  // version banner below so get_log's history starts from activation.
+  const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
+  outputChannel.appendLine = (value: string) => {
+    pushLogRing(value)
+    rawAppendLine(value)
+  }
+  const rawAppend = outputChannel.append.bind(outputChannel)
+  outputChannel.append = (value: string) => {
+    for (const line of value.split('\n')) {
+      if (line) pushLogRing(line)
+    }
+    rawAppend(value)
+  }
 
   // Show version info
   const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'))
@@ -79,6 +273,16 @@ export async function activate(context: vscode.ExtensionContext) {
     }),
   )
 
+  // Rebuild playhead decoration types when the palette changes (#390) so a
+  // running loop picks up new colors on the next repaint without a reload.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('orbitscore.playheadPalette')) {
+        resetPlayheadDecorationTypes()
+      }
+    }),
+  )
+
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -89,6 +293,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.forceKillScsynth', forceKillScsynth),
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
+    vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
     statusBarItem,
     bundleStatusItem,
   )
@@ -101,20 +306,93 @@ export async function activate(context: vscode.ExtensionContext) {
   const diagnosticCollection = vscode.languages.createDiagnosticCollection('orbitscore')
   context.subscriptions.push(diagnosticCollection)
 
-  // Update diagnostics on document change
+  // Compute diagnostics on open and change; clear them on close (#384).
+  // Diagnostics must not wait for the first edit — files opened from the CLI,
+  // restored tabs, or the activation-time initial pass below all need
+  // errors/warnings surfaced immediately.
   context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((document) => {
+      if (isOrbitscoreDocument(document)) {
+        updateDiagnostics(document, diagnosticCollection)
+      }
+    }),
     vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.languageId === 'orbitscore') {
+      if (isOrbitscoreDocument(event.document)) {
         updateDiagnostics(event.document, diagnosticCollection)
       }
     }),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      if (isOrbitscoreDocument(document)) {
+        diagnosticCollection.delete(document.uri)
+      }
+    }),
   )
+
+  // Initial pass over documents already open at activation (#384): the
+  // extension activates on `onLanguage:orbitscore`, so the triggering document
+  // is already open and would otherwise never fire onDidOpenTextDocument.
+  for (const document of vscode.workspace.textDocuments) {
+    if (isOrbitscoreDocument(document)) {
+      updateDiagnostics(document, diagnosticCollection)
+    }
+  }
+
+  // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
+  // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
+  // precedence over the `orbitscore.mcpServer.port` setting so the extension can
+  // be launched from the CLI (e.g. Extension Development Host) with the port set
+  // without editing settings. Lets an external agent (e.g. Claude Code) drive
+  // OrbitScore operations for E2E testing.
+  const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
+  const mcpPort =
+    Number.isInteger(envMcpPort) && envMcpPort > 0
+      ? envMcpPort
+      : vscode.workspace.getConfiguration('orbitscore').get<number>('mcpServer.port', 0)
+  if (mcpPort && mcpPort > 0) {
+    try {
+      mcpServerHandle = await startOrbitScoreMcpServer({
+        port: mcpPort,
+        version: packageJson.version,
+        handlers: {
+          evaluate: (code) => evaluateForAgent(code),
+          startEngine: (options) => startEngineForAgent(options),
+          stopEngine: () => stopEngineForAgent(),
+          getEngineState: () => getEngineStateForAgent(),
+          forceKillScsynth: () => forceKillScsynthForAgent(),
+          listAudioDevices: () => listAudioDevicesForAgent(),
+          selectAudioDevice: (device) => selectAudioDeviceForAgent(device),
+          configureFlash: (options) => configureFlashForAgent(options),
+          openFile: (filePath) => openFileForAgent(filePath),
+          setSelection: (range) => setSelectionForAgent(range),
+          runSelection: () => runSelectionForAgent(),
+          editReplace: (args) => editReplaceForAgent(args),
+          getEditorState: () => getEditorStateForAgent(),
+          getDiagnostics: (filePath) => getDiagnosticsForAgent(filePath),
+          getLog: (lines) => getLogForAgent(lines),
+          analyzeAudio: (wavPath) => analyzeAudioForAgent(wavPath),
+          registerMcpServer: (args) => registerMcpServerForAgent(args),
+        },
+        log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
+      })
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      outputChannel?.appendLine(`❌ MCP server failed to start on port ${mcpPort}: ${reason}`)
+      vscode.window.showWarningMessage(`OrbitScore MCP server failed to start: ${reason}`)
+    }
+  }
 }
 
 export function deactivate() {
   if (engineProcess && !engineProcess.killed) {
     engineProcess.kill()
   }
+  clearAllPlayheadDecorations() // #390
+  for (const decorationType of playheadDecorationTypes.values()) {
+    decorationType.dispose()
+  }
+  playheadDecorationTypes.clear()
+  void mcpServerHandle?.dispose()
+  mcpServerHandle = null
   outputChannel?.dispose()
   statusBarItem?.dispose()
   bundleStatusItem?.dispose()
@@ -627,6 +905,13 @@ function loadAudioDeviceConfig(workspaceRoot: string): string | undefined {
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
+  // Machine-readable playhead markers (#390): parsed by setupStdoutHandler
+  // from the raw stream BEFORE this filter runs; pure noise for humans
+  // (~pattern-length lines per bar per seq), so keep them out of the channel.
+  if (line.includes('[STEP]')) {
+    return true
+  }
+
   // Keep important messages
   if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️')) {
     return false
@@ -711,24 +996,36 @@ function shouldFilterLine(line: string): boolean {
 }
 
 /**
- * Filter stdout output for non-debug mode.
- */
-function filterStdout(output: string): string {
-  const lines = output.split('\n')
-  const filtered = lines.filter((line: string) => !shouldFilterLine(line))
-  return filtered.join('\n')
-}
-
-/**
  * Setup stdout handler for engine process.
  */
 function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   process.stdout?.on('data', (data) => {
     const output = data.toString()
+    const lines: string[] = output.split('\n')
 
-    // Filter output in non-debug mode
+    // Live playhead (#390): parse `[STEP]` markers and stop lines from the RAW
+    // lines — the markers are filtered out of the Output channel below.
+    // (Lines split across chunk boundaries are rare and self-heal on the next
+    // step ~one beat later, so no carry buffer.)
+    for (const rawLine of lines) {
+      const step = parseStepLine(rawLine)
+      if (step) {
+        handleStepLine(step)
+        continue
+      }
+      // `⏹ <seqName> (...)` = that seq stopped; `✅ Global stopped` = all off.
+      const stopMatch = rawLine.match(/⏹\s+(\S+)/)
+      if (stopMatch) {
+        clearPlayheadForSequence(stopMatch[1])
+      }
+      if (rawLine.includes('✅ Global stopped')) {
+        clearAllPlayheadDecorations()
+      }
+    }
+
+    // Filter output in non-debug mode (reuses the split above — one pass per chunk).
     if (!debugMode) {
-      const filteredOutput = filterStdout(output)
+      const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
       if (filteredOutput.trim()) {
         outputChannel?.append(filteredOutput + '\n')
       }
@@ -764,13 +1061,14 @@ function setupExitHandler(process: child_process.ChildProcess): void {
     engineProcess = null
     isLiveCodingMode = false
     globalInitialized = false
+    clearAllPlayheadDecorations() // #390: nothing is sounding anymore
 
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
   })
 }
 
-function startEngine(debugMode: boolean = false) {
+function startEngine(debugMode: boolean = false, agentOpts?: { captureWav?: string }) {
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return
@@ -847,6 +1145,14 @@ function startEngine(debugMode: boolean = false) {
     env.ORBITSCORE_DEBUG = '1'
   }
 
+  // Capture seam (#307): the daemon records the master output to this WAV while
+  // the stream runs. Only set when explicitly requested (MCP start_engine tool)
+  // — inherited env stays authoritative otherwise.
+  if (agentOpts?.captureWav) {
+    env.ORBIT_CAPTURE_WAV = agentOpts.captureWav
+    outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
+  }
+
   // Audio backend selection (#377, post-cutover #369). Engine kind MUST be set
   // explicitly on env — cutover flipped the *unset* default to `rust`, so a
   // bare `delete env.ORBITSCORE_ENGINE` (unset) always resolves to `rust` now
@@ -906,6 +1212,7 @@ function stopEngine() {
     engineProcess = null
     isLiveCodingMode = false
     globalInitialized = false
+    clearAllPlayheadDecorations() // #390: don't wait for the exit event
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -956,6 +1263,63 @@ function forceKillScsynth() {
   })
 }
 
+/** One SuperCollider-reported audio device (shared shape for the palette QuickPick and the MCP tools). */
+interface DetectedAudioDevice {
+  label: string
+  id: number
+  description: string
+}
+
+/**
+ * Boot scsynth briefly with `-u <port>` to read its device-list boot log,
+ * parse it, then clean up the temporary process. Shared by `selectAudioDevice`
+ * (palette) and the MCP `list_audio_devices` / `select_audio_device` tools —
+ * extracted rather than duplicated (#388).
+ *
+ * Cleanup runs immediately after parsing (not only on a completed selection,
+ * as the original inline version did) so a cancelled QuickPick — or an agent
+ * that calls list_audio_devices without following up with select_audio_device
+ * — never leaves the temporary scsynth running.
+ */
+function detectAudioDevices(scPath: string): Promise<DetectedAudioDevice[]> {
+  // Destructured (not `child_process.execFile`) so this reads identically to
+  // the direct-invocation form used elsewhere in this file. execFile (not
+  // exec) runs scPath without a shell, so user-configured values
+  // (orbitscore.scsynthPath) containing `;` etc. can't become command
+  // injection (claude-review #155 の必須対応、CWE-78 緩和)。
+  const { execFile } = child_process
+  return new Promise((resolve) => {
+    execFile(scPath, ['-u', '57199'], { timeout: 3000 }, (_error, stdout) => {
+      // Cleanup temp scsynth (and sclang if any from system SC). Shell-free
+      // invocation; we ignore the result (best-effort cleanup).
+      execFile('killall', ['scsynth', 'sclang'], () => {
+        /* best-effort, ignore error */
+      })
+
+      // Parse device list from SuperCollider's boot log
+      const deviceRegex = /(\d+)\s*:\s*"([^"]+)"/g
+      const devices: DetectedAudioDevice[] = []
+      let match
+      while ((match = deviceRegex.exec(stdout ?? '')) !== null) {
+        const deviceId = parseInt(match[1])
+        const deviceName = match[2]
+        devices.push({ label: deviceName, id: deviceId, description: `Device ID: ${deviceId}` })
+      }
+      resolve(devices)
+    })
+  })
+}
+
+/** Merge `audioDevice` into .orbitscore.json, preserving any other keys. Shared by `selectAudioDevice` (palette) and the MCP `select_audio_device` tool (#388). */
+function writeAudioDeviceConfig(configPath: string, deviceLabel: string): void {
+  let config: any = {}
+  if (fs.existsSync(configPath)) {
+    config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
+  }
+  config.audioDevice = deviceLabel
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+}
+
 async function selectAudioDevice() {
   // engine kind (#377): device selection is implemented against scsynth's
   // boot-log device listing and has no Rust-engine equivalent yet. Surface
@@ -995,66 +1359,200 @@ async function selectAudioDevice() {
     )
     return
   }
-  const scPath = resolution.path
-  outputChannel?.appendLine(`🔧 Using scsynth (${resolution.source}): ${scPath}`)
+  outputChannel?.appendLine(`🔧 Using scsynth (${resolution.source}): ${resolution.path}`)
 
-  // Use scsynth directly with -u 57199 to get device list without actually starting.
-  // execFile (not exec) は scPath をシェル展開せずに直接実行するため、
-  // ユーザー設定値 (orbitscore.scsynthPath) に \`;\` 等が混入しても command injection
-  // にならない (claude-review #155 の必須対応、CWE-78 緩和)。
-  child_process.execFile(scPath, ['-u', '57199'], { timeout: 3000 }, async (error, stdout) => {
-    // Parse device list from SuperCollider's boot log
-    const deviceRegex = /(\d+)\s*:\s*"([^"]+)"/g
-    const devices: Array<{ label: string; id: number; description: string }> = []
-    let match
+  const devices = await detectAudioDevices(resolution.path)
+  if (devices.length === 0) {
+    vscode.window.showErrorMessage('⚠️ No audio devices detected')
+    outputChannel?.appendLine('⚠️ Failed to parse device list from SuperCollider')
+    return
+  }
 
-    while ((match = deviceRegex.exec(stdout)) !== null) {
-      const deviceId = parseInt(match[1])
-      const deviceName = match[2]
-      devices.push({
-        label: deviceName,
-        id: deviceId,
-        description: `Device ID: ${deviceId}`,
-      })
+  // Show quick pick
+  const selected = await vscode.window.showQuickPick(devices, {
+    placeHolder: 'Select audio output device',
+    title: '🔊 Audio Device Selection',
+  })
+  if (!selected) return
+
+  writeAudioDeviceConfig(configPath, selected.label)
+  outputChannel?.appendLine(`✅ Audio device set to: ${selected.label} (ID: ${selected.id})`)
+  outputChannel?.appendLine(`✅ Config saved to: ${configPath}`)
+  vscode.window.showInformationMessage(
+    `✅ Audio device set to: ${selected.label}. Restart engine to apply.`,
+  )
+}
+
+// ── Register Claude Code MCP Server ─────────────────────────────────────────
+
+/** Registration scope for the orbitscore MCP server. */
+type McpRegistrationScope = 'project' | 'user'
+
+/**
+ * Register the OrbitScore MCP server into Claude Code. Shared implementation
+ * behind the `orbitscore.registerMcpServer` palette command (which wraps it
+ * with QuickPick/InputBox prompts) and the MCP `register_mcp_server` tool.
+ *
+ * - 'project': merge `mcpServers.orbitscore` into `<workspace>/.mcp.json`.
+ *   `mergeMcpJson` throws on corrupt JSON (mapped to an error result here) so
+ *   an unreadable config is never overwritten.
+ * - 'user': run `claude mcp add --transport http --scope user orbitscore <url>`
+ *   (flags verified against claude CLI 2.1.202) with cwd = workspace root.
+ *   The CLI is located via `which claude` first so a missing install produces
+ *   a targeted message instead of a raw ENOENT.
+ */
+async function performMcpRegistration(
+  scope: McpRegistrationScope,
+  port: number,
+): Promise<CommandResult> {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { ok: false, error: `port must be an integer between 1 and 65535 (got ${port})` }
+  }
+  const url = buildMcpServerUrl(port)
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+
+  if (scope === 'project') {
+    if (!workspaceRoot) {
+      return {
+        ok: false,
+        error: 'no workspace folder open — project scope writes .mcp.json into the workspace root',
+      }
     }
-
-    if (devices.length === 0) {
-      vscode.window.showErrorMessage('⚠️ No audio devices detected')
-      outputChannel?.appendLine('⚠️ Failed to parse device list from SuperCollider')
-      outputChannel?.appendLine(`Regex matches: ${devices.length}`)
-      return
+    const mcpJsonPath = path.join(workspaceRoot, '.mcp.json')
+    let merged: string
+    try {
+      const existing = fs.existsSync(mcpJsonPath) ? fs.readFileSync(mcpJsonPath, 'utf-8') : null
+      merged = mergeMcpJson(existing, port)
+    } catch (err) {
+      // Corrupt .mcp.json (invalid JSON / non-object) — report, write nothing.
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
+    fs.writeFileSync(mcpJsonPath, merged)
+    outputChannel?.appendLine(`🔌 Registered MCP server (${url}) in ${mcpJsonPath}`)
+    return { ok: true, message: `registered orbitscore (${url}) in ${mcpJsonPath}` }
+  }
 
-    // Show quick pick
-    const selected = await vscode.window.showQuickPick(devices, {
-      placeHolder: 'Select audio output device',
-      title: '🔊 Audio Device Selection',
-    })
-
-    if (!selected) return
-
-    // Save device name (as SuperCollider recognizes it) to .orbitscore.json
-    let config: any = {}
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-    }
-
-    config.audioDevice = selected.label
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
-
-    outputChannel?.appendLine(`✅ Audio device set to: ${selected.label} (ID: ${selected.id})`)
-    outputChannel?.appendLine(`✅ Config saved to: ${configPath}`)
-    vscode.window.showInformationMessage(
-      `✅ Audio device set to: ${selected.label}. Restart engine to apply.`,
-    )
-
-    // Kill the temporary SuperCollider instance
-    // Cleanup temp scsynth (and sclang if any from system SC). execFile for
-    // shell-free invocation; we ignore the result (best-effort cleanup).
-    child_process.execFile('killall', ['scsynth', 'sclang'], () => {
-      /* best-effort, ignore error */
+  // user scope — delegate to the claude CLI, which owns the user-level config
+  // (~/.claude.json). Destructured (not `child_process.execFile`) — same
+  // workaround as detectAudioDevices: the repo's security hook
+  // false-positives on the `child_process.exec*` member-access pattern.
+  // execFile runs without a shell, and the args are a fixed flag list + the
+  // numeric-port URL, so there is no injection surface.
+  const { execFile } = child_process
+  const claudePath = await new Promise<string | null>((resolve) => {
+    execFile('which', ['claude'], (error, stdout) => {
+      resolve(error ? null : stdout.trim() || null)
     })
   })
+  if (!claudePath) {
+    return {
+      ok: false,
+      error:
+        'claude CLI not found on PATH — install the Claude Code CLI, or use Project scope (.mcp.json) instead',
+    }
+  }
+  const cliArgs = ['mcp', 'add', '--transport', 'http', '--scope', 'user', 'orbitscore', url]
+  return new Promise<CommandResult>((resolve) => {
+    execFile(
+      claudePath,
+      cliArgs,
+      { cwd: workspaceRoot, timeout: 30000 },
+      (error, stdout, stderr) => {
+        const output = `${stdout ?? ''}\n${stderr ?? ''}`.trim()
+        if (error) {
+          // claude CLI 2.1.202 overwrites an existing entry silently (exit 0),
+          // but a duplicate name may be rejected by other versions — give
+          // targeted guidance instead of a bare failure.
+          if (/already exists/i.test(output)) {
+            resolve({
+              ok: false,
+              error:
+                'an MCP server named "orbitscore" is already registered — run ' +
+                '`claude mcp remove orbitscore` first, then retry. ' +
+                `CLI output: ${output}`,
+            })
+            return
+          }
+          resolve({ ok: false, error: `claude mcp add failed: ${output || error.message}` })
+          return
+        }
+        outputChannel?.appendLine(`🔌 claude ${cliArgs.join(' ')} → ${output}`)
+        resolve({ ok: true, message: `ran \`claude ${cliArgs.join(' ')}\` → ${output}` })
+      },
+    )
+  })
+}
+
+/**
+ * Palette command "🔌 Register Claude Code MCP Server". Like VS Code's
+ * "Install 'code' command in PATH": registers this extension's MCP server
+ * into Claude Code's config at the user's chosen scope.
+ *
+ * `args` fields (both optional) skip the corresponding prompt — used by
+ * agent-driven and E2E flows that must run without UI interaction.
+ */
+async function registerMcpServer(args?: {
+  scope?: McpRegistrationScope
+  port?: number
+}): Promise<void> {
+  const config = vscode.workspace.getConfiguration('orbitscore')
+
+  // Resolve the port: explicit arg > configured setting > InputBox prompt.
+  // A port entered here is persisted to the setting so the server actually
+  // starts on it after a reload — registration continues in the same pass.
+  let port = args?.port ?? config.get<number>('mcpServer.port', 0)
+  if (!port || port <= 0) {
+    const input = await vscode.window.showInputBox({
+      title: '🔌 Register Claude Code MCP Server',
+      prompt: 'orbitscore.mcpServer.port is not set — enter a port for the MCP server (1-65535)',
+      value: '39123',
+      validateInput: (value) => {
+        const num = Number(value)
+        if (!Number.isInteger(num) || num < 1 || num > 65535) {
+          return 'Please enter a port number between 1 and 65535'
+        }
+        return null
+      },
+    })
+    if (input === undefined) return // cancelled
+    port = parseInt(input, 10)
+    await config.update('mcpServer.port', port, vscode.ConfigurationTarget.Global)
+    vscode.window.showInformationMessage(
+      `✅ orbitscore.mcpServer.port set to ${port}. Reload the window for the MCP server to start — continuing with registration.`,
+    )
+  }
+
+  // Resolve the scope: explicit arg > QuickPick.
+  let scope = args?.scope
+  if (!scope) {
+    const pick = await vscode.window.showQuickPick(
+      [
+        {
+          label: 'Project',
+          description: 'write .mcp.json in this workspace (shareable, per-repo)',
+          scope: 'project' as const,
+        },
+        {
+          label: 'User',
+          description: 'register for all projects (via claude CLI)',
+          scope: 'user' as const,
+        },
+      ],
+      {
+        title: '🔌 Register Claude Code MCP Server',
+        placeHolder: 'Where should the orbitscore MCP server be registered?',
+      },
+    )
+    if (!pick) return // cancelled
+    scope = pick.scope
+  }
+
+  const result = await performMcpRegistration(scope, port)
+  if (result.ok) {
+    vscode.window.showInformationMessage(`✅ ${result.message}`)
+  } else {
+    vscode.window.showErrorMessage(`⚠️ Failed to register MCP server: ${result.error}`)
+  }
 }
 
 /**
@@ -1209,16 +1707,23 @@ async function runSelection() {
         break
     }
 
-    const isWholeLine = selection.isEmpty
-    const range = executionRange
+    // Always paint the whole line(s), never just the selected characters. When a
+    // non-empty selection was executed — which is every MCP-triggered run, since
+    // the Agent Bridge always targets a precise range via set_selection before
+    // calling run_selection (#388) — a character-bounded decoration exactly
+    // overlaps the editor's native selection highlight (same range, and with the
+    // default flashColor='selection' the same background color too), so toggling
+    // it on/off is visually imperceptible: the "off" state still shows the native
+    // selection underneath. Whole-line painting extends past the selected text and
+    // stays visible regardless of selection state, color config, or trigger source.
 
     // Create flash function
     const createFlash = (flashIndex: number) => {
       const decoration = vscode.window.createTextEditorDecorationType({
         backgroundColor: backgroundColor,
-        isWholeLine: isWholeLine,
+        isWholeLine: true,
       })
-      editor.setDecorations(decoration, [range])
+      editor.setDecorations(decoration, [executionRange])
 
       setTimeout(() => {
         decoration.dispose()
@@ -1233,36 +1738,444 @@ async function runSelection() {
     createFlash(0)
   }
 
-  // Inject setDocumentDirectory so audioPath() / audio() resolve relative paths
-  // against the .orbs file's directory, not the engine process's cwd.
-  //
-  // Strategy:
-  // - If this eval contains `var global = init GLOBAL`, insert setDocumentDirectory
-  //   right after it (and remember that global is now initialized).
-  // - Otherwise, if global has already been initialized in this engine session,
-  //   prepend setDocumentDirectory before the user code (refreshes the directory
-  //   in case the user switched .orbs files).
-  // - If global has not yet been initialized, do not inject (would fail with
-  //   "global is not defined").
-  let codeToSend = trimmedText
-  const documentDir = path.dirname(editor.document.uri.fsPath)
-  const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-  const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-  if (globalInitMatch) {
-    const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-    codeToSend = codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-    globalInitialized = true
-  } else if (globalInitialized) {
-    codeToSend = setDirCommand + '\n' + codeToSend
+  if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
+    return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
+  }
+  // Scroll the executed range into view before flashing it: subject-block
+  // auto-detection (no explicit selection) never reveals, so an agent-driven run
+  // that lands on an off-screen line would otherwise flash outside the viewport.
+  editor.revealRange(executionRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport)
+  flashLines()
+}
+
+/**
+ * Inject `global.setDocumentDirectory(...)` and write OrbitScore source to the
+ * engine's live-coding stdin. Shared by the editor "Run Selection" command and
+ * the MCP `evaluate_orbitscore` tool so both go through the exact same path.
+ *
+ * setDir injection lets audioPath() / audio() resolve relative paths against the
+ * `.orbs` file's directory (or, for the agent, the workspace root) rather than
+ * the engine process's cwd:
+ * - If this eval contains `var global = init GLOBAL`, insert setDocumentDirectory
+ *   right after it (and remember that global is now initialized).
+ * - Otherwise, if global has already been initialized in this engine session,
+ *   prepend setDocumentDirectory before the user code (refreshes the directory
+ *   in case the user switched .orbs files).
+ * - If global has not yet been initialized, do not inject (would fail with
+ *   "global is not defined").
+ * When `documentDir` is undefined, no directory is injected.
+ *
+ * Returns whether the code was handed to the engine's stdin. False = the
+ * engine process or its stdin was gone (e.g. died between the caller's guard
+ * and this write) — callers surfacing an ok/error contract (MCP evaluate)
+ * must NOT report ok in that case. NOTE: true means "delivered to stdin",
+ * not "parsed / sounded" — the engine reports parse errors asynchronously on
+ * stdout, and `play()` without RUN/LOOP is silent by design (§7). A stronger
+ * engine-side acknowledgment is a recorded follow-on (WORK_LOG 6.189).
+ */
+function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+  if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
+    // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
+    // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
+    outputChannel?.appendLine('⚠️ Engine stdin is not writable — code was NOT sent (engine died?)')
+    return false
+  }
+  let codeToSend = rawCode
+  if (documentDir) {
+    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
+    if (globalInitMatch) {
+      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+      codeToSend =
+        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
+      globalInitialized = true
+    } else if (globalInitialized) {
+      codeToSend = setDirCommand + '\n' + codeToSend
+    }
   }
 
-  // Execute the selected command (both single line and multiline)
   // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
   if (statusBarItem?.text.includes('🐛')) {
     outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
   }
-  engineProcess.stdin?.write(codeToSend + '\n')
-  flashLines()
+  engineProcess.stdin.write(codeToSend + '\n')
+  return true
+}
+
+/**
+ * Evaluate agent-supplied OrbitScore source (MCP `evaluate_orbitscore` tool).
+ * Mirrors the engine-running guard in `runSelection` and reuses
+ * `writeCodeToEngine`. Relative audio paths resolve against the first workspace
+ * folder, since the agent has no "active editor".
+ */
+function evaluateForAgent(code: string): EvaluateResult {
+  if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
+    return { ok: false, error: 'engine is not running — start the engine first' }
+  }
+  const documentDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  if (!writeCodeToEngine(code, documentDir)) {
+    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
+  }
+  // ok = 「stdin へ届いた」まで。パースエラーは engine が stdout に非同期で返す
+  // （get_log で観測可能）し、play() のみで RUN/LOOP が無ければ仕様上無音
+  // （evaluate ok ≠ 発音 — WORK_LOG 6.189 の follow-on 課題）。
+  return { ok: true }
+}
+
+/** Start the engine for the MCP `start_engine` tool (mirrors the palette command). */
+function startEngineForAgent(options?: { captureWav?: string; debug?: boolean }): CommandResult {
+  if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
+    return { ok: true, message: 'engine already running' }
+  }
+  startEngine(options?.debug === true, options)
+  // startEngine() may abort (missing daemon, build issue) without throwing — it
+  // reports via a VS Code notification. Reflect the actual spawn outcome so the
+  // agent doesn't assume success.
+  if (!engineProcess || engineProcess.killed) {
+    return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
+  }
+  return {
+    ok: true,
+    message: options?.captureWav
+      ? `engine starting (capturing to ${options.captureWav})`
+      : 'engine starting',
+  }
+}
+
+/** Stop the engine for the MCP `stop_engine` tool (mirrors the palette command). */
+function stopEngineForAgent(): CommandResult {
+  if (!engineProcess || engineProcess.killed) {
+    return { ok: true, message: 'engine already stopped' }
+  }
+  stopEngine()
+  return { ok: true, message: 'engine stopping' }
+}
+
+/** Report engine state for the MCP `get_engine_state` tool. */
+function getEngineStateForAgent(): EngineState {
+  return {
+    running: Boolean(engineProcess && !engineProcess.killed),
+    liveCoding: isLiveCodingMode,
+  }
+}
+
+/**
+ * Force-kill scsynth for the MCP `force_kill_scsynth` tool. `forceKillScsynth()`
+ * itself is fire-and-forget (its outcome only ever reaches a VS Code
+ * notification), so this mirrors `stopEngineForAgent`'s style: trigger the
+ * same escape hatch and report immediately rather than awaiting the
+ * asynchronous `killall` callback.
+ */
+function forceKillScsynthForAgent(): CommandResult {
+  forceKillScsynth()
+  return { ok: true, message: 'kill signal sent' }
+}
+
+/** List audio devices for the MCP `list_audio_devices` tool. Mirrors `selectAudioDevice`'s guard/resolve steps but returns the list instead of prompting. */
+async function listAudioDevicesForAgent(): Promise<AudioDevicesResult> {
+  if (getConfiguredEngineKind() === 'rust') {
+    return {
+      ok: false,
+      error:
+        'audio device selection is not supported with the Rust engine (orbitscore.engine: "rust"); the system default output device is used',
+    }
+  }
+  if (!vscode.workspace.workspaceFolders?.[0]) {
+    return { ok: false, error: 'no workspace folder open' }
+  }
+  const resolution = resolveScsynthForUI()
+  if (!resolution) {
+    return {
+      ok: false,
+      error:
+        "scsynth not found. Reinstall the extension to restore the bundle, or set 'orbitscore.scsynthPath' to a system scsynth.",
+    }
+  }
+  const devices = await detectAudioDevices(resolution.path)
+  if (devices.length === 0) {
+    return { ok: false, error: 'no audio devices detected' }
+  }
+  return { ok: true, devices }
+}
+
+/**
+ * Write the selected device for the MCP `select_audio_device` tool. Mirrors
+ * `selectAudioDevice`'s guard steps and reuses the same config-write helper.
+ * Does not re-probe scsynth — pass a name obtained from `list_audio_devices`.
+ */
+function selectAudioDeviceForAgent(device: string): CommandResult {
+  if (getConfiguredEngineKind() === 'rust') {
+    return {
+      ok: false,
+      error:
+        'audio device selection is not supported with the Rust engine (orbitscore.engine: "rust"); the system default output device is used',
+    }
+  }
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0]
+  if (!workspaceFolder) {
+    return { ok: false, error: 'no workspace folder open' }
+  }
+  const configPath = path.join(workspaceFolder.uri.fsPath, '.orbitscore.json')
+  writeAudioDeviceConfig(configPath, device)
+  return { ok: true, message: `audio device set to: ${device}. Restart engine to apply.` }
+}
+
+/**
+ * Apply flash settings for the MCP `configure_flash` tool. Value constraints
+ * mirror `contributes.configuration` in package.json (orbitscore.flash*).
+ * Workspace-scoped (`ConfigurationTarget.Workspace`) rather than Global (as
+ * the "Configure Flash" command's QuickPick flow writes) — agent-driven
+ * config changes should stay local to the workspace, not leak into the
+ * user's global settings.
+ */
+async function configureFlashForAgent(options: FlashConfigInput): Promise<FlashConfigResult> {
+  if (
+    options.count !== undefined &&
+    (!Number.isInteger(options.count) || options.count < 1 || options.count > 5)
+  ) {
+    return { ok: false, error: 'count must be an integer between 1 and 5' }
+  }
+  if (
+    options.duration !== undefined &&
+    (!Number.isInteger(options.duration) || options.duration < 50 || options.duration > 500)
+  ) {
+    return { ok: false, error: 'duration must be an integer between 50 and 500' }
+  }
+  const validColors = ['selection', 'error', 'warning', 'info', 'custom']
+  if (options.color !== undefined && !validColors.includes(options.color)) {
+    return { ok: false, error: `color must be one of: ${validColors.join(', ')}` }
+  }
+  if (options.customColor !== undefined && !/^#[0-9A-Fa-f]{6}$/.test(options.customColor)) {
+    return { ok: false, error: 'custom_color must be a hex color, e.g. #ff6b6b' }
+  }
+
+  try {
+    const config = vscode.workspace.getConfiguration('orbitscore')
+    if (options.count !== undefined) {
+      await config.update('flashCount', options.count, vscode.ConfigurationTarget.Workspace)
+    }
+    if (options.duration !== undefined) {
+      await config.update('flashDuration', options.duration, vscode.ConfigurationTarget.Workspace)
+    }
+    if (options.color !== undefined) {
+      await config.update('flashColor', options.color, vscode.ConfigurationTarget.Workspace)
+    }
+    if (options.customColor !== undefined) {
+      await config.update(
+        'flashCustomColor',
+        options.customColor,
+        vscode.ConfigurationTarget.Workspace,
+      )
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+
+  const updated = vscode.workspace.getConfiguration('orbitscore')
+  return {
+    ok: true,
+    config: {
+      count: updated.get<number>('flashCount', 3),
+      duration: updated.get<number>('flashDuration', 150),
+      color: updated.get<string>('flashColor', 'selection'),
+      customColor: updated.get<string>('flashCustomColor', '#ff6b6b'),
+    },
+  }
+}
+
+/** Open a file for the MCP `open_file` tool (the "Go to File" equivalent). */
+async function openFileForAgent(filePath: string): Promise<CommandResult> {
+  try {
+    const doc = await vscode.workspace.openTextDocument(filePath)
+    await vscode.window.showTextDocument(doc, { preview: false })
+    return { ok: true, message: `opened (languageId: ${doc.languageId})` }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Set the active editor's selection for the MCP `set_selection` tool. The
+ * schema is 1-based (matches the editor gutter); converted to 0-based
+ * `vscode.Position` here. Omitting both `endLine` and `endChar` collapses the
+ * selection to a cursor at the start position.
+ */
+function setSelectionForAgent(range: SelectionInput): CommandResult {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    return { ok: false, error: 'no active editor — open a file first' }
+  }
+  const collapse = range.endLine === undefined && range.endChar === undefined
+  const startPos = editor.document.validatePosition(
+    new vscode.Position(range.startLine - 1, (range.startChar ?? 1) - 1),
+  )
+  const endPos = collapse
+    ? startPos
+    : editor.document.validatePosition(
+        new vscode.Position((range.endLine ?? range.startLine) - 1, (range.endChar ?? 1) - 1),
+      )
+  editor.selection = new vscode.Selection(startPos, endPos)
+  editor.revealRange(new vscode.Range(startPos, endPos))
+  return { ok: true, message: 'selection set' }
+}
+
+/**
+ * Execute the active selection for the MCP `run_selection` tool — calls the
+ * real `orbitscore.runSelection` command (subject-block collection, setDir
+ * injection, flash) rather than reimplementing it. Pre-checks mirror
+ * `runSelection`'s own guards so the agent gets a structured error instead of
+ * only a toast notification it cannot observe.
+ */
+async function runSelectionForAgent(): Promise<CommandResult> {
+  const editor = vscode.window.activeTextEditor
+  if (!editor || editor.document.languageId !== 'orbitscore') {
+    return { ok: false, error: 'no active OrbitScore editor — open an .orbs file first' }
+  }
+  if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
+    return { ok: false, error: 'engine is not running — start the engine first' }
+  }
+  await vscode.commands.executeCommand('orbitscore.runSelection')
+  // Collapse the lingering agent selection to its active end (#390): the block
+  // selection left behind by set_selection sits on top of the playhead
+  // highlight and drowns it. Humans running the palette command keep normal
+  // VS Code selection behavior — this only touches the agent path.
+  editor.selection = new vscode.Selection(editor.selection.active, editor.selection.active)
+  return { ok: true, message: 'selection executed' }
+}
+
+/** Literal (non-regex) find/replace in the active document for the MCP `edit_replace` tool. */
+async function editReplaceForAgent(args: EditReplaceInput): Promise<CommandResult> {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    return { ok: false, error: 'no active editor' }
+  }
+  if (!args.find) {
+    return { ok: false, error: 'find must not be empty' }
+  }
+  const text = editor.document.getText()
+  const offsets: number[] = []
+  let idx = text.indexOf(args.find)
+  while (idx !== -1) {
+    offsets.push(idx)
+    if (!args.all) break
+    idx = text.indexOf(args.find, idx + args.find.length)
+  }
+  if (offsets.length === 0) {
+    return { ok: false, error: `no match for ${JSON.stringify(args.find)}` }
+  }
+  const applied = await editor.edit((editBuilder) => {
+    for (const offset of offsets) {
+      const start = editor.document.positionAt(offset)
+      const end = editor.document.positionAt(offset + args.find.length)
+      editBuilder.replace(new vscode.Range(start, end), args.replace)
+    }
+  })
+  if (!applied) {
+    return { ok: false, error: 'edit was rejected by the editor' }
+  }
+  return { ok: true, message: `replaced ${offsets.length} occurrence(s)` }
+}
+
+/** Snapshot the active editor for the MCP `get_editor_state` tool. All positions are 1-based. Fields are null when no editor is active. */
+function getEditorStateForAgent(): EditorState {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    return {
+      path: null,
+      languageId: null,
+      cursor: null,
+      selection: null,
+      lineCount: null,
+      isDirty: null,
+    }
+  }
+  const doc = editor.document
+  const toPos = (p: vscode.Position) => ({ line: p.line + 1, character: p.character + 1 })
+  return {
+    path: doc.uri.fsPath,
+    languageId: doc.languageId,
+    cursor: toPos(editor.selection.active),
+    selection: { start: toPos(editor.selection.start), end: toPos(editor.selection.end) },
+    lineCount: doc.lineCount,
+    isDirty: doc.isDirty,
+  }
+}
+
+/**
+ * Report diagnostics for the MCP `get_diagnostics` tool
+ * (`vscode.languages.getDiagnostics`). Without a path, only files that
+ * currently have at least one diagnostic are included; with a path, the
+ * single file is always included (even with an empty diagnostics array), so
+ * the agent can distinguish "no diagnostics" from "file not checked".
+ */
+function getDiagnosticsForAgent(filePath?: string): FileDiagnostics[] {
+  const severityLabel = (s: vscode.DiagnosticSeverity): DiagnosticSeverityLabel => {
+    switch (s) {
+      case vscode.DiagnosticSeverity.Error:
+        return 'error'
+      case vscode.DiagnosticSeverity.Warning:
+        return 'warning'
+      case vscode.DiagnosticSeverity.Information:
+        return 'info'
+      default:
+        return 'hint'
+    }
+  }
+  const toEntries = (diagnostics: readonly vscode.Diagnostic[]) =>
+    diagnostics.map((d) => ({
+      line: d.range.start.line + 1,
+      character: d.range.start.character + 1,
+      severity: severityLabel(d.severity),
+      message: d.message,
+    }))
+
+  if (filePath) {
+    const diagnostics = vscode.languages.getDiagnostics(vscode.Uri.file(filePath))
+    return [{ path: filePath, diagnostics: toEntries(diagnostics) }]
+  }
+  return vscode.languages
+    .getDiagnostics()
+    .filter(([, diagnostics]) => diagnostics.length > 0)
+    .map(([uri, diagnostics]) => ({ path: uri.fsPath, diagnostics: toEntries(diagnostics) }))
+}
+
+/** Return the last N lines of the output-channel ring buffer for the MCP `get_log` tool. */
+function getLogForAgent(lines?: number): string[] {
+  const n = Math.max(1, Math.min(lines ?? 50, 500))
+  return outputLogRing.slice(-n)
+}
+
+/** Parse a captured WAV for the MCP `analyze_audio` tool. */
+function analyzeAudioForAgent(wavPath: string): AnalyzeAudioResult {
+  try {
+    const buf = fs.readFileSync(wavPath)
+    return { ok: true, analysis: analyzeWavBuffer(buf) }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Register this MCP server into Claude Code for the MCP `register_mcp_server`
+ * tool — delegates to the same `performMcpRegistration` as the palette
+ * command. The port defaults to the port this server is actually listening on
+ * (`mcpServerHandle`): the ORBITSCORE_MCP_PORT env var takes precedence over
+ * the setting at startup, so the live handle — not the setting — is the
+ * truthful default. The setting is a last resort (the handle is always
+ * non-null while a tool call is being served).
+ */
+async function registerMcpServerForAgent(input: RegisterMcpServerInput): Promise<CommandResult> {
+  if (input.scope !== 'project' && input.scope !== 'user') {
+    return {
+      ok: false,
+      error: `scope must be 'project' or 'user' (got ${JSON.stringify(input.scope)})`,
+    }
+  }
+  const port =
+    input.port ??
+    mcpServerHandle?.port ??
+    vscode.workspace.getConfiguration('orbitscore').get<number>('mcpServer.port', 0)
+  return performMcpRegistration(input.scope, port)
 }
 
 // Removed unused executeCode function

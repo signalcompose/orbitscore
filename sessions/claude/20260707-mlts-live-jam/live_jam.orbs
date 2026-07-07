@@ -1,0 +1,42 @@
+var global = init GLOBAL
+global.tempo(132)
+global.beat(4 by 4)
+global.audioPath("/Users/yamato/Src/proj_orbitscore/orbitscore/test-assets/audio")
+global.start()
+var drum = init global.seq
+drum.beat(4 by 4).length(1)
+drum.audio("kick.wav").chop(1)
+drum.play((1, (1, 1)), 1, (1, (1, (1, 1))), (1, 1))
+var hat = init global.seq
+hat.beat(5 by 4).length(1)
+hat.audio("hihat_closed.wav").chop(1)
+hat.play(1, (1, (1, 1)), 1, ((1, 1), 1), 1)
+var sn = init global.seq
+sn.beat(7 by 8).length(1)
+sn.audio("snare.wav").chop(1)
+sn.play(0, 1, (1, 1), 0, 1, 0, (1, 1, 1))
+var bass = init global.seq
+bass.beat(3 by 4).length(1)
+bass.audio("bass_c1.wav").chop(1)
+bass.play((1, (0, 1)), ((0, 1), 1), ((1, 1), (0, 1)))
+
+LOOP(drum, hat, sn, bass, oh, arp, pad)
+var oh = init global.seq
+oh.beat(9 by 8).length(1)
+oh.audio("hihat_open.wav").chop(1)
+oh.play((1, 0, 1), (0, 1, 0), (1, 0, (1, 1)))
+LOOP(drum, hat, sn, bass, oh)
+var arp = init global.seq
+arp.beat(3 by 4).length(0.5)
+arp.audio("arpeggio_c.wav").chop(8)
+arp.play((8, 2), (5, (1, 3)), (7, 4))
+var pad = init global.seq
+pad.beat(4 by 4).length(4)
+pad.audio("chord_a_minor.wav").chop(1)
+pad.play(1, 0, (0, 1), 0)
+LOOP()
+var blip = init global.seq
+blip.beat(11 by 8).length(1)
+blip.audio("sine_880.wav").chop(1)
+blip.play(1, 0, 0, (0, 1), 0)
+// === LIVE ===
