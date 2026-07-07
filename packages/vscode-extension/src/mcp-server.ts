@@ -591,8 +591,11 @@ interface SessionEntry {
  * Stateful Streamable HTTP with JSON responses: the MCP lifecycle
  * (initialize → tools/list → tools/call) spans multiple POSTs, so a session id
  * is issued on `initialize` and echoed by the client on later requests.
- * Stateless mode drops the "initialized" state between requests and rejects
- * everything after initialize with a 500 (verified against SDK 1.29.0).
+ * Stateless mode is not viable here (verified against SDK 1.29.0): reusing one
+ * stateless transport across requests throws ("Stateless transport cannot be
+ * reused across requests"), which our catch-all surfaces as a 500; and a
+ * stale/missing session on a stateful transport gets the SDK's own
+ * 400 "Bad Request: Server not initialized".
  *
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
@@ -610,6 +613,15 @@ export async function startOrbitScoreMcpServer(opts: {
   const { port, version, handlers, log } = opts
 
   const sessions = new Map<string, SessionEntry>()
+
+  // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
+  // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
+  // same-origin — reaching this port from a browser with full response access.
+  // The Host header still carries the attacker's domain in that case, so an
+  // exact-match allowlist of loopback hosts closes the hole. (SDK 1.29.0 has
+  // allowedHosts/enableDnsRebindingProtection but marks them deprecated in
+  // favor of doing exactly this in the HTTP layer we already own.)
+  const allowedHosts = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`])
 
   const createSession = async (): Promise<SessionEntry> => {
     const entry: Partial<SessionEntry> = {}
@@ -640,6 +652,13 @@ export async function startOrbitScoreMcpServer(opts: {
 
   const handleHttp = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     try {
+      const host = req.headers.host
+      if (!host || !allowedHosts.has(host)) {
+        log(`MCP request rejected — invalid Host header: ${host ?? '(none)'}`)
+        res.writeHead(403, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ error: 'forbidden: invalid Host header' }))
+        return
+      }
       const pathname = (req.url ?? '').split('?')[0]
       if (pathname !== '/mcp') {
         res.writeHead(404, { 'content-type': 'application/json' })
@@ -692,9 +711,17 @@ export async function startOrbitScoreMcpServer(opts: {
     port,
     dispose: async () => {
       await new Promise<void>((resolve) => httpServer.close(() => resolve()))
-      for (const [, session] of sessions) {
-        await session.transport.close().catch(() => undefined)
-        await session.server.close().catch(() => undefined)
+      for (const [sessionId, session] of sessions) {
+        // teardown 失敗は握り潰さずログに残す（EDH reload を繰り返す agent 駆動
+        // 開発で close が系統的に失敗し始めた場合、ここが唯一の手掛かりになる）。
+        await session.transport
+          .close()
+          .catch((err) =>
+            log(`MCP session ${sessionId.slice(0, 8)}… transport close failed: ${err}`),
+          )
+        await session.server
+          .close()
+          .catch((err) => log(`MCP session ${sessionId.slice(0, 8)}… server close failed: ${err}`))
       }
       sessions.clear()
     },

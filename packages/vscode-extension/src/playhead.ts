@@ -9,9 +9,12 @@
  * - `argPath`: dot-joined indices into the `play()` argument tree. The MVP
  *   emits the top-level index only ("0", "1", ...); nested subdivision paths
  *   ("1.0") are reserved for a later phase.
- * - `atEpochMs`: absolute epoch ms when the event becomes AUDIBLE. Play events
- *   are lookahead-scheduled, so the line arrives EARLIER than this time — the
- *   extension must delay the decoration until `atEpochMs`.
+ * - `atEpochMs`: absolute epoch ms of the event's GRID time (the scheduler's
+ *   intended onset). Play events are dispatched lookahead-early, so the line
+ *   arrives EARLIER than this time — the extension must delay the decoration
+ *   until `atEpochMs`. Actual audio lands ~one daemon lookahead (~50ms) after
+ *   the grid time; that shift is a uniform constant across all sequences, so
+ *   the playhead stays mutually consistent (merely uniformly early).
  *
  * This module has NO vscode imports so it is unit-testable with vitest
  * (tests/vscode-extension/playhead.spec.ts). extension.ts converts the
@@ -238,8 +241,9 @@ export function findPlayArgRanges(documentText: string, seqName: string): ArgRan
  * unit (the engine tags all its voices with the stack's own slot path), a
  * group run like `(A)(B).root(X)` is not descended (the group's close bracket
  * is not the element's last char), and a user may have edited the text away
- * from the sounding pattern. Returns null only when the top-level index is
- * already out of range (lighting a wrong arg would mislead).
+ * from the sounding pattern. Returns null when the top-level index is out of
+ * range OR the argPath is malformed (non-integer / negative segment) —
+ * lighting a wrong arg would mislead.
  */
 export function findPlayArgRangeForPath(
   documentText: string,

@@ -72,7 +72,7 @@ function pushLogRing(line: string): void {
 // The engine emits `[STEP] <seqName> <argPath> <atEpochMs>` on stdout for each
 // dispatched play event (see playhead.ts for the grammar). setupStdoutHandler
 // parses these from the RAW stream (shouldFilterLine keeps them out of the
-// Output channel), delays until the event is audible, then highlights the
+// Output channel), delays until the event's grid time, then highlights the
 // corresponding `<seqName>.play(...)` argument (argPath descends into nested
 // groups — "1.0" lights the first element inside the second arg). ONE
 // decoration type PER RESOLVED COLOR (lazily created, keyed by "#RRGGBB");
@@ -148,7 +148,8 @@ function applyPlayheadDecorations(): void {
 
 /**
  * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
- * so wait until `atEpochMs` (the intended audible time) before moving the
+ * so wait until `atEpochMs` (the event's grid time — actual audio lands a
+ * uniform ~50ms daemon lookahead later, see playhead.ts) before moving the
  * highlight; a marginally late line still tracks (clamped to now), while stale
  * lines (>1s late, e.g. replayed buffered output) are dropped.
  */
@@ -1761,10 +1762,21 @@ async function runSelection() {
  * - If global has not yet been initialized, do not inject (would fail with
  *   "global is not defined").
  * When `documentDir` is undefined, no directory is injected.
+ *
+ * Returns whether the code was handed to the engine's stdin. False = the
+ * engine process or its stdin was gone (e.g. died between the caller's guard
+ * and this write) — callers surfacing an ok/error contract (MCP evaluate)
+ * must NOT report ok in that case. NOTE: true means "delivered to stdin",
+ * not "parsed / sounded" — the engine reports parse errors asynchronously on
+ * stdout, and `play()` without RUN/LOOP is silent by design (§7). A stronger
+ * engine-side acknowledgment is a recorded follow-on (WORK_LOG 6.189).
  */
-function writeCodeToEngine(rawCode: string, documentDir: string | undefined): void {
-  if (!engineProcess) {
-    return
+function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+  if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
+    // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
+    // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
+    outputChannel?.appendLine('⚠️ Engine stdin is not writable — code was NOT sent (engine died?)')
+    return false
   }
   let codeToSend = rawCode
   if (documentDir) {
@@ -1784,7 +1796,8 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): vo
   if (statusBarItem?.text.includes('🐛')) {
     outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
   }
-  engineProcess.stdin?.write(codeToSend + '\n')
+  engineProcess.stdin.write(codeToSend + '\n')
+  return true
 }
 
 /**
@@ -1798,7 +1811,12 @@ function evaluateForAgent(code: string): EvaluateResult {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
   const documentDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-  writeCodeToEngine(code, documentDir)
+  if (!writeCodeToEngine(code, documentDir)) {
+    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
+  }
+  // ok = 「stdin へ届いた」まで。パースエラーは engine が stdout に非同期で返す
+  // （get_log で観測可能）し、play() のみで RUN/LOOP が無ければ仕様上無音
+  // （evaluate ok ≠ 発音 — WORK_LOG 6.189 の follow-on 課題）。
   return { ok: true }
 }
 

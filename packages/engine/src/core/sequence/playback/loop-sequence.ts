@@ -131,13 +131,28 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
 
   // #389 mechanism A: the grid-anchored timer delay, shared by the initial arm
   // and every re-arm. `boundary` = base time of the bar just scheduled; the
-  // timer fires LOOP_TIMER_LEAD_MS before the NEXT boundary. Reads the live
+  // timer fires LOOP_TIMER_LEAD_MS before the NEXT boundary (shrunk to half a
+  // bar for very short patterns, so a sub-lead patternDuration cannot
+  // degenerate into permanent zero-delay re-fires). Reads the live
   // patternDuration so tempo/beat/length changes take effect per cycle.
-  const armDelay = (boundary: number): number =>
-    Math.max(
-      0,
-      boundary + patternDuration - LOOP_TIMER_LEAD_MS - (Date.now() - scheduler.startTime),
-    )
+  //
+  // The clamp to 0 is the catch-up path after a real-time stall (OS sleep, GC
+  // pause): the loop re-fires immediately, bar by bar, until the grid catches
+  // back up — stale bars inside that window are dropped downstream by the
+  // dispatcher's drift guard. That burst would otherwise be invisible, so a
+  // large lag is logged once per episode.
+  let lastLagLogMs = 0
+  const armDelay = (boundary: number): number => {
+    const leadMs = Math.min(LOOP_TIMER_LEAD_MS, patternDuration / 2)
+    const raw = boundary + patternDuration - leadMs - (Date.now() - scheduler.startTime)
+    if (raw < -patternDuration && Date.now() - lastLagLogMs > 5000) {
+      lastLagLogMs = Date.now()
+      console.warn(
+        `⚠️ ${sequenceName}: loop timer lagged ${Math.round(-raw)}ms behind the grid (system stall?) — catching up; stale bars may be skipped`,
+      )
+    }
+    return Math.max(0, raw)
+  }
 
   const scheduleNextIteration = (delayMs: number) => {
     loopTimer = setTimeout(() => {

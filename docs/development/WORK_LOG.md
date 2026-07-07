@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.202 fix: pr-review-team round 1 — DNS-rebinding guard, observability, contract tests (#393) (Jul 8, 2026)
+
+/code:pr-review-team round 1（4 専門レビュアー並列: code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer・計 Critical 3 / Important 9）への対応。全 suite 1280 passed（+12 テスト）。
+
+- **DNS rebinding 保護**（code-reviewer Important）: MCP サーバーは 127.0.0.1 bind だが Host 検証が無く、rebind したドメインからの same-origin fetch で全ツール面が到達可能だった → `handleHttp` 冒頭に loopback Host 許可リスト（`127.0.0.1/localhost/[::1]:<port>` 完全一致）+ 403 + テスト。SDK の `allowedHosts` は deprecated（外部層推奨）のため自前実装
+- **anchorFit 劣化の可視化**（silent-failure Critical）: 回帰フィット棄却で `daemonNowSec` が #389 修正前の単一 anchor 推定へ静かに落ちる → 遷移端（劣化/復帰）で warn/log（boot 直後の初回 fit 成立は抑制）
+- **evaluate の盲目 ok**（silent-failure Critical）: `writeCodeToEngine` が boolean を返すようになり、engine 死後の stdin 不達で `evaluate_orbitscore` が `ok:false` を返す + no-op 時は Output に警告。「ok = stdin 到達まで（パース/発音は別）」の契約をコメントで明文化。engine 側 ack は既録の follow-on（WORK_LOG 6.189）のまま
+- **MCP teardown の握り潰し**（silent-failure Important）: dispose 時の transport/server close 失敗を log へ
+- **lag キャッチアップの可視化**（silent-failure Important）: OS sleep/GC stall 後の zero-delay 連射（+ 下流 drift guard による bar 落ち）が無痕跡だった → `armDelay` が大幅遅延（> patternDuration）を 1 episode 1 回 warn。**lead は `min(LOOP_TIMER_LEAD_MS, patternDuration/2)` に短縮**（sub-lead パターンの恒常 zero-delay 連射を防止・code-reviewer Minor）
+- **テスト増強**（pr-test-analyzer Critical/Important）: `fitAnchorSamples` を export し直接単体 5 本（2点補間/量子化ノイズ平均化/汚染窓 slope 棄却/退化分散/n<2）— 本番ホットパスの数値ロジックがテストのダークパスだった問題の解消。+ tempo 変更時の grid 再アンカー / sub-lead floor / `register_mcp_server` の条件付き登録 + args round-trip / argPath の scoped・pitch・modified
+- **コメント是正**（comment-analyzer Important ×3）: ①「AUDIBLE time」→「grid time（実音は一様に ~50ms lookahead 後・シーケンス間で整合）」に 3 ファイル修正 ② stateless 500 の帰属を分離（SDK の 400 と自前 catch-all の 500）③ `findPlayArgRangeForPath` の null 契約に malformed パスを明記
+
 ### 6.201 refactor: /simplify cleanups for PR #393 (Jul 8, 2026)
 
 PR #393 の /simplify（4 観点並列レビュー: reuse/simplification/efficiency/altitude）の指摘 6 件を適用。全 suite 1268 passed 維持。

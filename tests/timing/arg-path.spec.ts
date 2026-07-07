@@ -60,4 +60,41 @@ describe('argPath tagging (#390)', () => {
     expect(events[1].tie).toBe(true)
     expect(events[1].argPath).toBe('1')
   })
+
+  it('descends scoped groups (timing-transparent) with the slot path as prefix', () => {
+    const events = calculateEventTiming(
+      [1, { type: 'scoped', groups: [{ type: 'nested', elements: [2, 3] }], root: 'C' }],
+      2000,
+    )
+    // The scoped element occupies slot 1; its single group subdivides it.
+    expect(events.map((e) => e.argPath)).toEqual(['0', '1.0.0', '1.0.1'])
+  })
+
+  it('tags pitch (MIDI degree) leaves with their slot path', () => {
+    const events = calculateEventTiming(
+      [
+        { type: 'pitch', degree: 1, alteration: 0, octaveShift: 0, rangeSet: false, detune: 0 },
+        {
+          type: 'nested',
+          elements: [
+            { type: 'pitch', degree: 5, alteration: 0, octaveShift: 0, rangeSet: false, detune: 0 },
+            0,
+          ],
+        },
+      ],
+      2000,
+    )
+    expect(events.map((e) => e.argPath)).toEqual(['0', '1.0', '1.1'])
+  })
+
+  it('tags modified elements (number and nested value) with their slot path', () => {
+    const events = calculateEventTiming(
+      [
+        { type: 'modified', value: 2 },
+        { type: 'modified', value: { type: 'nested', elements: [3, 4] } },
+      ],
+      2000,
+    )
+    expect(events.map((e) => e.argPath)).toEqual(['0', '1.0', '1.1'])
+  })
 })

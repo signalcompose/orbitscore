@@ -148,4 +148,60 @@ describe('loopSequence — grid-anchored timer with lead (#389)', () => {
     expect(baseTimes).toEqual([0, 1000, 2000])
     stop()
   })
+
+  it('a mid-loop patternDuration change re-anchors the grid from the next bar', () => {
+    const baseTimes: number[] = []
+    let duration = 1000
+    let looping = true
+    loopSequence({
+      sequenceName: 'drum',
+      scheduler: { startTime: 0 } as never,
+      currentTime: 0,
+      startTime: 0,
+      scheduleEventsFn: vi.fn((_s, _o, baseTime: number) => baseTimes.push(baseTime)),
+      scheduleEventsFromTimeFn: vi.fn(),
+      getPatternDurationFn: () => duration,
+      clearSequenceEventsFn: vi.fn(),
+      getIsLoopingFn: () => looping,
+      getIsMutedFn: () => false,
+    })
+    expect(baseTimes).toEqual([0])
+
+    // Tempo change lands before the bar-1 callback: the NEXT cycle uses 500ms.
+    duration = 500
+    vi.advanceTimersByTime(900) // bar 1 fires at 1000−lead
+    expect(baseTimes).toEqual([0, 1000]) // boundary still = old grid (prev duration 1000)
+
+    // Re-arm used the NEW duration: next boundary 1000+500, fired at 1400 (lead 100).
+    vi.advanceTimersByTime(499)
+    expect(baseTimes).toEqual([0, 1000])
+    vi.advanceTimersByTime(1)
+    expect(baseTimes).toEqual([0, 1000, 1500])
+    looping = false
+  })
+
+  it('shrinks the lead for sub-lead patterns instead of zero-delay spinning', () => {
+    const baseTimes: number[] = []
+    let looping = true
+    loopSequence({
+      sequenceName: 'drum',
+      scheduler: { startTime: 0 } as never,
+      currentTime: 0,
+      startTime: 0,
+      scheduleEventsFn: vi.fn((_s, _o, baseTime: number) => baseTimes.push(baseTime)),
+      scheduleEventsFromTimeFn: vi.fn(),
+      getPatternDurationFn: () => 60, // patternDuration < LOOP_TIMER_LEAD_MS
+      clearSequenceEventsFn: vi.fn(),
+      getIsLoopingFn: () => looping,
+      getIsMutedFn: () => false,
+    })
+    expect(baseTimes).toEqual([0])
+
+    // Effective lead = min(100, 60/2) = 30 → first re-fire at 30ms, not 0ms.
+    vi.advanceTimersByTime(29)
+    expect(baseTimes).toEqual([0])
+    vi.advanceTimersByTime(1)
+    expect(baseTimes).toEqual([0, 60])
+    looping = false
+  })
 })

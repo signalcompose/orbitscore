@@ -153,8 +153,9 @@ interface AnchorFit {
  * 切替や stream 停止跨ぎ — を示す）場合は null（呼び出し側が単一 anchor に
  * フォールバック）。StreamStats 到着時（1Hz）にのみ呼ぶこと — dispatch の
  * ホットパスで毎回再計算する仕事ではない（窓はその間変わらない）。
+ * export はテストのため（#389 機構 B の数値ロジックを直接検証する）。
  */
-function fitAnchorSamples(samples: readonly ClockAnchor[]): AnchorFit | null {
+export function fitAnchorSamples(samples: readonly ClockAnchor[]): AnchorFit | null {
   const n = samples.length
   if (n < 2) return null
   const t0Ms = samples[0].tsMs
@@ -311,7 +312,20 @@ export class RustEnginePlayer implements AudioEngineBackend {
       if (this.anchorSamples.length > ANCHOR_WINDOW) {
         this.anchorSamples.shift()
       }
+      const previousFit = this.anchorFit
       this.anchorFit = fitAnchorSamples(this.anchorSamples)
+      // フォールバックの可視化: fit が棄却されると daemonNowSec は #389 修正前の
+      // 単一 anchor 推定（量子化ヨレあり）に静かに落ちる。演奏中にヨレが戻った
+      // とき、ログに手掛かりが無いと原因追跡が不可能になるので遷移端で必ず出す。
+      if (previousFit && !this.anchorFit) {
+        console.warn(
+          '⚠️  [rust-engine] clock-anchor regression degraded — falling back to single-anchor estimate (window contaminated?); timing jitter may increase until it recovers',
+        )
+      } else if (!previousFit && this.anchorFit && this.anchorSamples.length > 2) {
+        // length > 2 guard: boot/respawn 直後に 2 サンプル目で fit が初めて立つ
+        // 通常経路では出さない（劣化からの復帰のみ知らせる）。
+        console.log('✅ [rust-engine] clock-anchor regression recovered')
+      }
     } else {
       // 不正な now_sec で anchor を凍結させると drift しうるので、無言にせず通知する。
       console.warn(
@@ -732,9 +746,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   /**
    * #390 live playhead: machine-readable step marker for the editor extension.
-   * The epoch ms is the intended AUDIBLE time (startTime + play.time — the
-   * same base the drift check uses), NOT "now": dispatch runs lookahead-early,
-   * so the extension delays the decoration until this timestamp. Rounded
+   * The epoch ms is the event's GRID time (startTime + play.time — the same
+   * base the drift check uses), NOT "now": dispatch runs lookahead-early, so
+   * the extension delays the decoration until this timestamp. Actual audio
+   * lands ~lookaheadSec (50ms) after the grid time — a uniform constant shift
+   * across all sequences, so the playhead stays mutually consistent. Rounded
    * because play.time can be fractional (bar subdivision) and the marker
    * grammar keeps integers.
    */

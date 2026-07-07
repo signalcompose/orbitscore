@@ -175,7 +175,7 @@ interface RawResponse {
 function postJson(
   port: number,
   body: unknown,
-  opts: { sessionId?: string; path?: string } = {},
+  opts: { sessionId?: string; path?: string; hostHeader?: string } = {},
 ): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
     const payload = Buffer.from(JSON.stringify(body))
@@ -185,6 +185,7 @@ function postJson(
       'content-length': String(payload.length),
     }
     if (opts.sessionId) headers['mcp-session-id'] = opts.sessionId
+    if (opts.hostHeader) headers.host = opts.hostHeader
 
     const req = http.request(
       {
@@ -459,5 +460,55 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     handle = undefined // already disposed — nothing left for afterEach to do
 
     await expect(getPath(port, '/mcp')).rejects.toMatchObject({ code: 'ECONNREFUSED' })
+  })
+
+  it('rejects a non-loopback Host header with 403 (DNS-rebinding protection)', async () => {
+    const { handlers } = createStubHandlers()
+    handle = await startTestServer(handlers)
+
+    // Simulates a DNS-rebound page: the socket reaches 127.0.0.1 but the
+    // browser sends the attacker's domain in Host.
+    const res = await postJson(
+      handle.port,
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { hostHeader: 'evil.example:39123' },
+    )
+    expect(res.status).toBe(403)
+    expect((res.json as { error?: string }).error).toContain('Host')
+  })
+
+  it('register_mcp_server is listed ONLY when the optional handler is provided, and round-trips args', async () => {
+    // Without the handler (the stub default): tool absent.
+    const { handlers: bare } = createStubHandlers()
+    const bareServer = await startTestServer(bare)
+    const bareClient = new McpTestClient(bareServer.port)
+    await bareClient.connect()
+    const bareList = (await bareClient.toolsList()).json as JsonRpcOk<{
+      tools: Array<{ name: string }>
+    }>
+    expect(bareList.result.tools.map((t) => t.name)).not.toContain('register_mcp_server')
+    await bareServer.dispose()
+
+    // With the handler: tool present, scope/port marshalled through JSON args.
+    const registerCalls: unknown[] = []
+    const { handlers } = createStubHandlers({
+      registerMcpServer: (args) => {
+        registerCalls.push(args)
+        return { ok: true, message: 'registered (project)' }
+      },
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const list = (await client.toolsList()).json as JsonRpcOk<{ tools: Array<{ name: string }> }>
+    expect(list.result.tools.map((t) => t.name)).toContain('register_mcp_server')
+
+    const res = await client.toolsCall('register_mcp_server', { scope: 'project', port: 39123 })
+    expect(res.status).toBe(200)
+    const body = res.json as JsonRpcOk<{ content: Array<{ text: string }>; isError?: boolean }>
+    expect(body.result.isError).toBeUndefined()
+    expect(body.result.content[0].text).toBe('registered (project)')
+    expect(registerCalls).toEqual([{ scope: 'project', port: 39123 }])
   })
 })
