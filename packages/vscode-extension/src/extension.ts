@@ -1528,7 +1528,16 @@ async function runSelection() {
         break
     }
 
-    const isWholeLine = selection.isEmpty
+    // Always paint the whole line(s), never just the selected characters. When a
+    // non-empty selection was executed — which is every MCP-triggered run, since
+    // the Agent Bridge always targets a precise range via set_selection before
+    // calling run_selection (#388) — a character-bounded decoration exactly
+    // overlaps the editor's native selection highlight (same range, and with the
+    // default flashColor='selection' the same background color too), so toggling
+    // it on/off is visually imperceptible: the "off" state still shows the native
+    // selection underneath. Whole-line painting extends past the selected text and
+    // stays visible regardless of selection state, color config, or trigger source.
+    const isWholeLine = true
     const range = executionRange
 
     // Create flash function
@@ -1553,6 +1562,10 @@ async function runSelection() {
   }
 
   writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))
+  // Scroll the executed range into view before flashing it: subject-block
+  // auto-detection (no explicit selection) never reveals, so an agent-driven run
+  // that lands on an off-screen line would otherwise flash outside the viewport.
+  editor.revealRange(executionRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport)
   flashLines()
 }
 

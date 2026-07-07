@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.193 fix(vscode-extension): whole-line flash + revealRange — MCP run_selection flash was invisible (#388) (Jul 7, 2026)
+
+owner 観察「MCP 経由の選択実行だとフラッシュが見えず、いつ実行されたのか分かりづらい」の修正。
+
+- **根本原因はルーティングではなく色の衝突**: MCP 経路は必ず `set_selection`（非空選択）→ `flashLines()` の `isWholeLine = selection.isEmpty` が false → decoration が**選択文字範囲だけ**に、既定 `flashColor: 'selection'` = `editor.selectionBackground` で塗られる。native の選択ハイライトと同色同範囲のため**点滅が視覚的に無変化**。キーボード派はカーソルのみ（空選択）で whole-line 塗りだったので見えていた。手動で範囲選択して Cmd+Enter した場合も同じく見えなかったはず（既存の未報告エッジケース・同時修正）。
+- **修正**: ① `flashLines()` の `isWholeLine` を常に true（選択の上でも行全体が確実に光る）② flash 前に `editor.revealRange(..., InCenterIfOutsideViewport)` — subject-block 自動検出（選択なし）で実行範囲が画面外のとき flash が見えない副次ギャップも解消。
+- **検証**: tsc/eslint green・mcp-server.spec 8/8。実機（OrbitStudio 再起動 → MCP 駆動）で **owner 目視確認: 複数行（1-10行）と単一行の whole-line フラッシュ両方 visible**（2026-07-07）。
+- 意義: agent がいつ実行したかが人間に見える = human-in-the-loop の観測性（WCTM の共演場面でも必須の UX）。
+
 ### 6.192 feat(vscode-extension): register Claude Code MCP server from OrbitStudio (#388) (Jul 7, 2026)
 
 owner 提案「OrbitStudio の CLI 登録（Install 'orbs' command in PATH）と同じように、MCP 登録も OrbitStudio から」を実装。scope は User / Project を選択可能。
