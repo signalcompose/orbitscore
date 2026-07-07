@@ -17,6 +17,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.200 docs(sessions): record first Claude live-coding jam — MLTS 5-minute set (#388) (Jul 7, 2026)
+
+`sessions/claude/20260707-mlts-live-jam/` を新設し、Claude が Agent Bridge MCP 経由で OrbitStudio を駆動した初のライブコーディングセッション（owner 同席・実況付き）を保存。`live_jam.orbs`（演奏された最終バッファ・6 メーター 3/4〜11/8・8 時間スケール・4 階層ネスト・tempo 132）+ `playhead_check.orbs` + README（セット構成表・MLTS の道具立て・運用の学び）。
+
+- 学び①: `LOOP(a, b)` は**グループ宣言**（列挙外 seq は自動停止）— 単発 LOOP(x) の積み重ねはレイヤー追加にならない（序盤に誤用・owner 指摘で修正）
+- 学び②: MCP `edit_replace` は**バッファ編集のみでディスク保存しない** — 記録は osascript Cmd+S で救出。`save_file`/`get_document_text` ツールを #388 follow-on として issue 化
+- 同日完成の playhead #390（per-seq 色・ネスト点灯）と #389 ヨレ修正の実地デモを兼ねた
+
 ### 6.199 chore: commit .mcp.json — Claude Code ↔ OrbitStudio MCP wiring (#388) (Jul 7, 2026)
 
 `register_mcp_server`（#388）が生成する `.mcp.json`（`http://127.0.0.1:39123/mcp` への HTTP ポインタのみ・秘密情報なし）を owner 判断でリポジトリにコミット。新しい Claude Code セッションが `mcp__orbitscore__*` ツールを最初から掴めるようになる。前提 = OrbitStudio が `ORBITSCORE_MCP_PORT=39123` で起動していること（未起動時は接続失敗するだけで無害）。
