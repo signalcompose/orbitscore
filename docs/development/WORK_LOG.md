@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.195 feat(vscode-extension): live playhead highlight — per-seq vivid colors, rest steps, agent selection collapse (#390) (Jul 7, 2026)
+
+engine の `[STEP]` marker（6.194）を消費して、再生中の `<seq>.play(...)` の**発音中引数をリアルタイムにハイライト**する live playhead の MVP。owner 目視確認 3 ラウンド（初版→ビビッド化→休符対応）を MCP 駆動（`playhead_visual_drive.js`・node driver）+ AskUserQuestion で回して収束。
+
+- **`src/playhead.ts`（新規・vscode 非依存の純ヘルパー）**: ① `parseStepLine` — `[STEP] <seq> <argPath> <atEpochMs>` の厳密パース ② `findPlayArgRanges` — 文書テキストから最初の `<seq>.play(...)` のトップレベル引数の文字オフセット範囲を抽出（ネスト `()[]{}` 内のカンマは分割しない・境界ガードで `mydrum.play`/`foo.drum.play` を誤マッチしない）③ `PLAYHEAD_PALETTE`（32色）+ `colorForSeq`/`normalizeHexColor`/`paletteIndexForSeq` — 色解決。
+- **`extension.ts` 配線**: `setupStdoutHandler` が RAW stream から `[STEP]` をパース（Output channel へは `shouldFilterLine` で非表示）→ `atEpochMs` まで delay（dispatch は lookahead 先行のため）→ 対象引数を decoration。`⏹ <seq>`（seq 停止）/`✅ Global stopped`/engine 停止・exit/deactivate でクリア。
+- **per-seq ビビッドカラー（owner 要望）**: 初版の theme find-match 色は「薄すぎ・選択に埋もれる」→ 50% alpha 塗り + 実線ボーダーの高彩度色に変更。色は「解決済み色文字列ごとに 1 decoration type」を lazy 生成し、seq には first-come 序数 `% palette.length` で割り当て（palette 長変更に耐性）。
+- **32色パレット（owner 要望）**: 東京メトロ・都営の路線色 13 + JR 東日本線区色 + Kelly/Green-Armytage 系の高識別色で 32 色。隣接割り当てが色相で離れるよう並べ替え済み。
+- **ユーザー設定**: `orbitscore.playheadPalette`（配列・color-hex → 設定 UI/settings.json でスウォッチ+ピッカー）と `orbitscore.playheadSeqColors`（seq名→色の固定マップ・palette より優先・スロット消費なし）。`onDidChangeConfiguration` で decoration type を破棄→再生成（リロード不要で反映）。package.json の default と `PLAYHEAD_PALETTE` の同期はテストで強制。
+- **agent 選択の畳み込み（owner 要望）**: MCP `run_selection` 実行後に selection を active 端へ collapse — set_selection の残存選択が playhead を覆い隠す問題の解消。人間のパレット/キーバインド実行は従来挙動のまま。
+- **テスト**: `tests/vscode-extension/playhead.spec.ts` 27 本（パース/範囲抽出/色解決/palette 同期）。全 suite 1253 passed。
+- **owner 目視確認済み（2026-07-07）**: 2 seq 同時（drum=丸ノ内線レッド・hat=東西線スカイブルー）で独立巡回・休符 0 も点灯・選択自動解除。
+- 残（follow-on 候補）: ネスト subdivision のハイライト（argPath "1.0" は文法予約済み）/ DSL 内カラー指定（`seq.color("#…")` + DocumentColorProvider で .orbs 内カラーピッカー — owner 発案・DSL 仕様側の設計が必要）/ 同名 seq の複数 play() 呼び出し（現状 first-match）。
+
 ### 6.194 feat(engine): [STEP] playhead markers — argPath threading + rest marker events (#390) (Jul 7, 2026)
 
 live playhead（6.195）の engine 側。dispatch 済み play イベントを `[STEP] <seqName> <argPath> <atEpochMs>` として stdout へ発行する（emission-only — timing/音響への影響ゼロ）。

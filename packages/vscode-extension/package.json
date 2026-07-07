@@ -185,6 +185,57 @@
           "maximum": 65535,
           "description": "Port for the OrbitScore MCP control server (Agent Bridge). 0 = disabled. When set to a nonzero port, the extension hosts an MCP server on http://127.0.0.1:<port>/mcp so an external agent (e.g. Claude Code via .mcp.json) can drive OrbitScore operations for E2E testing. Development/agent-integration use only.",
           "scope": "machine-overridable"
+        },
+        "orbitscore.playheadPalette": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "format": "color-hex"
+          },
+          "default": [
+            "#F62E36",
+            "#009BBF",
+            "#FFD400",
+            "#00BB85",
+            "#8F76D6",
+            "#FF9500",
+            "#0079C2",
+            "#E85298",
+            "#6CBB5A",
+            "#B6007A",
+            "#00E5FF",
+            "#F15A22",
+            "#00AC9B",
+            "#B388FF",
+            "#C1A470",
+            "#FF2D75",
+            "#80C241",
+            "#3F51B5",
+            "#FF6E40",
+            "#1DE9B6",
+            "#D500F9",
+            "#9C5E31",
+            "#40C4FF",
+            "#76FF03",
+            "#FF8A80",
+            "#82B1FF",
+            "#FFAB40",
+            "#69F0AE",
+            "#EA80FC",
+            "#B5B5AC",
+            "#FFF176",
+            "#607D8B"
+          ],
+          "description": "Playhead highlight palette (hex colors, #RGB or #RRGGBB). Sequences are assigned colors first-come in this order, wrapping around when more sequences than colors are live. Defaults follow Tokyo subway route-map line colors (wayfinding-grade recognition) extended to 32 entries; kept in sync with PLAYHEAD_PALETTE in src/playhead.ts (asserted by tests)."
+        },
+        "orbitscore.playheadSeqColors": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "format": "color-hex"
+          },
+          "default": {},
+          "description": "Pin a playhead highlight color to a sequence name, e.g. {\"drum\": \"#FF0000\"}. Takes precedence over orbitscore.playheadPalette; other sequences keep their palette assignment."
         }
       }
     }

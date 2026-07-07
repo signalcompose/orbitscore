@@ -32,6 +32,13 @@ import {
   type RegisterMcpServerInput,
   type SelectionInput,
 } from './mcp-server'
+import {
+  colorForSeq,
+  findPlayArgRanges,
+  parseStepLine,
+  type PlayheadColorConfig,
+  type StepEvent,
+} from './playhead'
 import { analyzeWavBuffer } from './wav-analysis'
 
 // Engine process management
@@ -58,6 +65,142 @@ function pushLogRing(line: string): void {
   outputLogRing.push(line)
   if (outputLogRing.length > OUTPUT_LOG_RING_MAX) {
     outputLogRing.shift()
+  }
+}
+
+// --- Live playhead highlight (#390) ---
+// The engine emits `[STEP] <seqName> <argPath> <atEpochMs>` on stdout for each
+// dispatched play event (see playhead.ts for the grammar). setupStdoutHandler
+// parses these from the RAW stream (shouldFilterLine keeps them out of the
+// Output channel), delays until the event is audible, then highlights the
+// corresponding top-level `<seqName>.play(...)` argument. ONE decoration type
+// PER RESOLVED COLOR (lazily created, keyed by "#RRGGBB"); each seq gets a
+// vivid color from `orbitscore.playheadSeqColors` (explicit override) or
+// first-come from `orbitscore.playheadPalette` (see playhead.ts colorForSeq).
+// ONE active range per seq (replaced on each step, so the highlight "moves"
+// per beat and wraps at loop start). Cleared on seq stop (`⏹ <seq>` line),
+// global stop, engine stop / exit, and deactivate.
+const playheadDecorationTypes = new Map<string, vscode.TextEditorDecorationType>()
+const playheadPaletteAssignments = new Map<string, number>()
+const playheadActiveRanges = new Map<string, { docUriString: string; range: vscode.Range }>()
+const playheadTimeouts = new Set<NodeJS.Timeout>()
+
+function playheadColorConfig(): PlayheadColorConfig {
+  const config = vscode.workspace.getConfiguration('orbitscore')
+  return {
+    palette: config.get<string[]>('playheadPalette'),
+    seqColors: config.get<Record<string, string>>('playheadSeqColors'),
+  }
+}
+
+function ensurePlayheadDecorationType(color: string): vscode.TextEditorDecorationType {
+  let decorationType = playheadDecorationTypes.get(color)
+  if (!decorationType) {
+    decorationType = vscode.window.createTextEditorDecorationType({
+      // 50% alpha fill + solid border: must stay readable on top of the editor
+      // selection background (owner feedback 2026-07-07 — theme find-match
+      // color was too faint).
+      backgroundColor: `${color}80`,
+      border: `1.5px solid ${color}`,
+      borderRadius: '3px',
+    })
+    playheadDecorationTypes.set(color, decorationType)
+  }
+  return decorationType
+}
+
+/** Drop all decoration types (e.g. after a color-config change) and redraw. */
+function resetPlayheadDecorationTypes(): void {
+  for (const decorationType of playheadDecorationTypes.values()) {
+    decorationType.dispose() // dispose also removes it from every editor
+  }
+  playheadDecorationTypes.clear()
+  applyPlayheadDecorations()
+}
+
+/** Re-apply the current per-seq playhead ranges to every visible editor. */
+function applyPlayheadDecorations(): void {
+  const colorConfig = playheadColorConfig()
+  for (const editor of vscode.window.visibleTextEditors) {
+    const uri = editor.document.uri.toString()
+    // Start every known type at [] so a seq that stopped (or moved) has its
+    // previous color cleared, then fill in the live ranges per color.
+    const rangesByType = new Map<vscode.TextEditorDecorationType, vscode.Range[]>()
+    for (const decorationType of playheadDecorationTypes.values()) {
+      rangesByType.set(decorationType, [])
+    }
+    for (const [seqName, entry] of playheadActiveRanges) {
+      if (entry.docUriString !== uri) continue
+      const decorationType = ensurePlayheadDecorationType(
+        colorForSeq(seqName, colorConfig, playheadPaletteAssignments),
+      )
+      const ranges = rangesByType.get(decorationType) ?? []
+      ranges.push(entry.range)
+      rangesByType.set(decorationType, ranges)
+    }
+    for (const [decorationType, ranges] of rangesByType) {
+      editor.setDecorations(decorationType, ranges)
+    }
+  }
+}
+
+/**
+ * Schedule the decoration for one parsed `[STEP]`. Dispatch is lookahead-early,
+ * so wait until `atEpochMs` (the intended audible time) before moving the
+ * highlight; a marginally late line still tracks (clamped to now), while stale
+ * lines (>1s late, e.g. replayed buffered output) are dropped.
+ */
+function handleStepLine(step: StepEvent): void {
+  const delayMs = step.atEpochMs - Date.now()
+  if (delayMs < -1000) return
+  const timeout = setTimeout(
+    () => {
+      playheadTimeouts.delete(timeout)
+      showPlayheadStep(step)
+    },
+    Math.max(0, delayMs),
+  )
+  playheadTimeouts.add(timeout)
+}
+
+function showPlayheadStep(step: StepEvent): void {
+  // MVP: highlight the TOP-LEVEL arg — the first path segment. Nested paths
+  // ("1.0") will refine to subdivision ranges in a later phase (#390).
+  const topIndex = Number.parseInt(step.argPath, 10)
+  if (!Number.isInteger(topIndex) || topIndex < 0) return
+  for (const editor of vscode.window.visibleTextEditors) {
+    const argRanges = findPlayArgRanges(editor.document.getText(), step.seqName)
+    // Skip when the buffer no longer matches the sounding pattern (user edited
+    // away the arg) — leaving the previous highlight is less misleading than
+    // lighting a wrong arg.
+    if (topIndex >= argRanges.length) continue
+    const argRange = argRanges[topIndex]
+    playheadActiveRanges.set(step.seqName, {
+      docUriString: editor.document.uri.toString(),
+      range: new vscode.Range(
+        editor.document.positionAt(argRange.start),
+        editor.document.positionAt(argRange.end),
+      ),
+    })
+    applyPlayheadDecorations()
+    return // first visible editor containing the call wins (MVP)
+  }
+}
+
+function clearPlayheadForSequence(seqName: string): void {
+  if (playheadActiveRanges.delete(seqName)) {
+    applyPlayheadDecorations()
+  }
+}
+
+function clearAllPlayheadDecorations(): void {
+  for (const timeout of playheadTimeouts) {
+    clearTimeout(timeout)
+  }
+  playheadTimeouts.clear()
+  if (playheadActiveRanges.size > 0) {
+    playheadActiveRanges.clear()
+    applyPlayheadDecorations()
   }
 }
 
@@ -126,6 +269,19 @@ export async function activate(context: vscode.ExtensionContext) {
         e.affectsConfiguration('orbitscore.engine')
       ) {
         updateBundleStatus()
+      }
+    }),
+  )
+
+  // Rebuild playhead decoration types when the color config changes (#390) so
+  // a running loop picks up new colors on the next repaint without a reload.
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration('orbitscore.playheadPalette') ||
+        e.affectsConfiguration('orbitscore.playheadSeqColors')
+      ) {
+        resetPlayheadDecorationTypes()
       }
     }),
   )
@@ -233,6 +389,11 @@ export function deactivate() {
   if (engineProcess && !engineProcess.killed) {
     engineProcess.kill()
   }
+  clearAllPlayheadDecorations() // #390
+  for (const decorationType of playheadDecorationTypes.values()) {
+    decorationType.dispose()
+  }
+  playheadDecorationTypes.clear()
   void mcpServerHandle?.dispose()
   mcpServerHandle = null
   outputChannel?.dispose()
@@ -747,6 +908,13 @@ function loadAudioDeviceConfig(workspaceRoot: string): string | undefined {
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
+  // Machine-readable playhead markers (#390): parsed by setupStdoutHandler
+  // from the raw stream BEFORE this filter runs; pure noise for humans
+  // (~pattern-length lines per bar per seq), so keep them out of the channel.
+  if (line.includes('[STEP]')) {
+    return true
+  }
+
   // Keep important messages
   if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️')) {
     return false
@@ -846,6 +1014,26 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
   process.stdout?.on('data', (data) => {
     const output = data.toString()
 
+    // Live playhead (#390): parse `[STEP]` markers and stop lines from the RAW
+    // output — the markers are filtered out of the Output channel below.
+    // (Lines split across chunk boundaries are rare and self-heal on the next
+    // step ~one beat later, so no carry buffer.)
+    for (const rawLine of output.split('\n')) {
+      const step = parseStepLine(rawLine)
+      if (step) {
+        handleStepLine(step)
+        continue
+      }
+      // `⏹ <seqName> (...)` = that seq stopped; `✅ Global stopped` = all off.
+      const stopMatch = rawLine.match(/⏹\s+(\S+)/)
+      if (stopMatch) {
+        clearPlayheadForSequence(stopMatch[1])
+      }
+      if (rawLine.includes('✅ Global stopped')) {
+        clearAllPlayheadDecorations()
+      }
+    }
+
     // Filter output in non-debug mode
     if (!debugMode) {
       const filteredOutput = filterStdout(output)
@@ -884,6 +1072,7 @@ function setupExitHandler(process: child_process.ChildProcess): void {
     engineProcess = null
     isLiveCodingMode = false
     globalInitialized = false
+    clearAllPlayheadDecorations() // #390: nothing is sounding anymore
 
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
@@ -1034,6 +1223,7 @@ function stopEngine() {
     engineProcess = null
     isLiveCodingMode = false
     globalInitialized = false
+    clearAllPlayheadDecorations() // #390: don't wait for the exit event
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -1839,6 +2029,11 @@ async function runSelectionForAgent(): Promise<CommandResult> {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
   await vscode.commands.executeCommand('orbitscore.runSelection')
+  // Collapse the lingering agent selection to its active end (#390): the block
+  // selection left behind by set_selection sits on top of the playhead
+  // highlight and drowns it. Humans running the palette command keep normal
+  // VS Code selection behavior — this only touches the agent path.
+  editor.selection = new vscode.Selection(editor.selection.active, editor.selection.active)
   return { ok: true, message: 'selection executed' }
 }
 
