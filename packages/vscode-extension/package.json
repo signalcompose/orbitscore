@@ -79,6 +79,12 @@
         "title": "⚡ Configure Flash Settings",
         "category": "OrbitScore",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "orbitscore.registerMcpServer",
+        "title": "🔌 Register Claude Code MCP Server",
+        "category": "OrbitScore",
+        "icon": "$(plug)"
       }
     ],
     "languages": [

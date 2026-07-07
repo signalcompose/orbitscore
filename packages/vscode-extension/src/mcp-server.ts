@@ -151,6 +151,17 @@ export interface FileDiagnostics {
 export type AnalyzeAudioResult = { ok: true; analysis: WavAnalysis } | { ok: false; error: string }
 
 /**
+ * Arguments for register_mcp_server. `scope` is a raw string here (rather than
+ * the 'project' | 'user' union) so validation lives in one place — the
+ * extension-side handler — instead of being split between schema coercion and
+ * handler checks.
+ */
+export interface RegisterMcpServerInput {
+  scope: string
+  port?: number
+}
+
+/**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
  * handlers can be re-hosted later by the WCTM pi harness (spec §3/§4.2).
@@ -175,6 +186,13 @@ export interface OrbitScoreToolHandlers {
   getDiagnostics(path?: string): FileDiagnostics[]
   getLog(lines?: number): string[]
   analyzeAudio(wavPath: string): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
+  /**
+   * Optional (unlike the members above): only hosts that can register
+   * themselves into Claude Code expose the register_mcp_server tool — the
+   * tool is skipped when this handler is absent, so existing stub suites and
+   * alternative hosts (WCTM pi harness) stay valid without changes.
+   */
+  registerMcpServer?(args: RegisterMcpServerInput): Promise<CommandResult> | CommandResult
 }
 
 function toToolResult(result: CommandResult): ToolResult {
@@ -520,6 +538,42 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis) }] }
     },
   )
+
+  // Optional handler (see OrbitScoreToolHandlers.registerMcpServer): the tool
+  // only exists on hosts that can register themselves into Claude Code.
+  const registerMcpServer = handlers.registerMcpServer?.bind(handlers)
+  if (registerMcpServer) {
+    server.registerTool(
+      'register_mcp_server',
+      {
+        title: 'Register Claude Code MCP Server',
+        description:
+          'Register this OrbitScore MCP server into Claude Code — equivalent to the ' +
+          '"Register Claude Code MCP Server" command. scope "project" merges an ' +
+          'orbitscore entry into .mcp.json at the workspace root (shareable, ' +
+          'per-repo); scope "user" registers for all projects by running ' +
+          '`claude mcp add --transport http --scope user`. Omit port to register ' +
+          'the port this server is currently running on.',
+        inputSchema: {
+          scope: z
+            .string()
+            .describe(
+              'Registration scope: "project" (write .mcp.json in the workspace) or ' +
+                '"user" (register for all projects via the claude CLI)',
+            ),
+          port: z
+            .number()
+            .describe("MCP server port to register. Default: this server's running port")
+            .optional(),
+        },
+      },
+      async (args) => {
+        const scope = typeof args.scope === 'string' ? args.scope : ''
+        const port = typeof args.port === 'number' ? args.port : undefined
+        return toToolResult(await registerMcpServer({ scope, port }))
+      },
+    )
+  }
 
   return server
 }

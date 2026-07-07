@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.192 feat(vscode-extension): register Claude Code MCP server from OrbitStudio (#388) (Jul 7, 2026)
+
+owner 提案「OrbitStudio の CLI 登録（Install 'orbs' command in PATH）と同じように、MCP 登録も OrbitStudio から」を実装。scope は User / Project を選択可能。
+
+- **`mcp-registration.ts`（新規・純関数）**: `buildMcpServerUrl(port)` / `mergeMcpJson(existing, port)` — 既存 `.mcp.json` を保全マージ（他サーバー・他キー維持・**corrupt JSON は throw して絶対に上書きしない**・2-space indent + 末尾改行）。
+- **palette コマンド `orbitscore.registerMcpServer`**（🔌 Register Claude Code MCP Server）: port 未設定（0）なら InputBox（既定 39123・1-65535 検証）→ `ConfigurationTarget.Global` に保存して継続。scope QuickPick → **Project** = workspace root の `.mcp.json` へマージ書き込み / **User** = `claude mcp add --transport http --scope user orbitscore <url>`（CLI 不在は案内エラー・cwd=workspace root・30s timeout）。optional args `{scope, port}` で prompt skip（agent/E2E 用）。
+- **MCP ツール `register_mcp_server({scope, port?})`**（parity 原則・計 17 ツール）: コマンドと同一実装 `performMcpRegistration` に委譲。port 省略時は稼働中サーバーの実 port（env 起動でも真値）。handler は `OrbitScoreToolHandlers` の optional member（既存テスト stub の型互換のため・実ホストでは常に供給）。
+- **`claude mcp add` は CLI 2.1.202 で実検証**: `-t/--transport (stdio|sse|http)`・`-s/--scope (local|user|project)`。同名エントリは silent overwrite（重複検出ガードは他バージョン向け保険）。
+- **テスト**: `tests/vscode-extension/mcp-registration.spec.ts` 9/9 pass（fresh/保全マージ/URL 更新/corrupt throw/出力形状）+ 既存 mcp-server.spec.ts 回帰 8/8。tsc/eslint green・headless smoke で tool 出現 + args round-trip PASS。
+- **実ホスト検証（実 OrbitStudio・2026-07-07）**: MCP 経由 `register_mcp_server({scope:'project'})` → workspace root に正しい `.mcp.json` 生成を確認。生成物のコミット可否は owner 判断（untracked のまま）。Claude Code 本体クライアントの接続確認は次の新規セッションで（`.mcp.json` は session 起動時読み込み）。
+
 ### 6.191 test(vscode-extension): MCP server test suite + gated OrbitStudio E2E (#388) (Jul 7, 2026)
 
 Agent Bridge の機能保証をテスト資産として永続化（owner 方針: 「テストがあることで機能の保証をするのが筋」・examples はテスト題材にしない）。Sonnet 委譲で作成、gated E2E は main session が実機実行。
