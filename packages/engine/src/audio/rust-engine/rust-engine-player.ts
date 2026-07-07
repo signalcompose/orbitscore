@@ -80,6 +80,17 @@ export interface ScheduledPlay {
   slice?: SliceSpec
   /** LinkAudio ルーティング先チャンネル名。非空の時のみ daemon の PlayAt へ転送する。 */
   outputChannel?: string
+  /**
+   * #390 live playhead: 由来する play() 引数のドット結合インデックス（"2"、ネストは
+   * 後段で "1.0"）。dispatch 成功時に `[STEP]` marker を stdout へ出すためだけの
+   * observational フィールド。timing / 音響には一切影響しない。
+   */
+  argPath?: string
+  /**
+   * #390: 休符 (0) スロットの marker-only イベント。daemon への dispatch は行わず、
+   * 発火タイミングで `[STEP]` だけを出す（filepath は空文字）。
+   */
+  markerOnly?: boolean
 }
 
 /**
@@ -501,13 +512,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     pan = 0,
     sequenceName = '',
     outputChannel?: string,
+    argPath?: string,
   ): void {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel`（`sequence.output()` 経由）が
     // authoritative に出す（A4-2b-2b で egress 配線済み）。scheduleEvent は channel を tag するだけで、
     // 「egress is not wired」の旧 warn は stale なので出さない（egress 有効な daemon では誤誘導になる）。
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
-    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel })
+    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel, argPath })
   }
 
   /**
@@ -532,6 +544,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     pan = 0,
     sequenceName = '',
     outputChannel?: string,
+    argPath?: string,
   ): void {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel` が authoritative（上記
     // scheduleEvent と同様・egress 配線済みなので stale な「not wired」warn は出さない）。
@@ -543,7 +556,18 @@ export class RustEnginePlayer implements AudioEngineBackend {
       sequenceName,
       slice: { index: sliceIndex, total: totalSlices, eventDurationMs },
       outputChannel,
+      argPath,
     })
+  }
+
+  /**
+   * #390 live playhead: 休符 (0) スロットの marker-only イベント（Scheduler optional 面）。
+   * 音は出さず、発火タイミングで `[STEP]` だけ stdout へ出す。gainDb は同スロットの
+   * 音イベントと同じ mute/master 合成値 — mute 中のシーケンスは音と同様に marker も
+   * skip される（executePlayback の amplitude ガードを共有）。
+   */
+  scheduleStepMarker(time: number, sequenceName: string, argPath: string, gainDb: number): void {
+    this.enqueue({ time, filepath: '', gainDb, pan: 0, sequenceName, argPath, markerOnly: true })
   }
 
   start(): void {
@@ -625,6 +649,22 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  /**
+   * #390 live playhead: machine-readable step marker for the editor extension.
+   * The epoch ms is the intended AUDIBLE time (startTime + play.time — the
+   * same base the drift check uses), NOT "now": dispatch runs lookahead-early,
+   * so the extension delays the decoration until this timestamp. Rounded
+   * because play.time can be fractional (bar subdivision) and the marker
+   * grammar keeps integers.
+   */
+  private emitStepMarker(play: ScheduledPlay): void {
+    if (play.sequenceName && play.argPath !== undefined) {
+      console.log(
+        `[STEP] ${play.sequenceName} ${play.argPath} ${Math.round(this.startTime + play.time)}`,
+      )
+    }
+  }
+
   private async executePlayback(play: ScheduledPlay): Promise<void> {
     // daemon 復旧中（respawn）/ 切断中は dispatch を drop する。stale clockAnchor のまま新 daemon
     // （transport=0）へ「数秒先」を送って desync するのを防ぎ、in-flight one-shot を再発火させない
@@ -641,6 +681,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
     const amplitude = gainDbToAmplitude(play.gainDb)
     if (amplitude <= 0) return // 無音はロード前にスキップ（音響的に同一）。
+
+    // #390: 休符 (0) スロットの marker-only イベント。daemon dispatch は行わず
+    // marker だけ出して終わる（上の amplitude ガードを通過している = mute されて
+    // いないシーケンスのみ。音イベントとの一貫性）。filepath は空なので
+    // ensureLoaded より前に抜けること。
+    if (play.markerOnly) {
+      this.emitStepMarker(play)
+      return
+    }
 
     const sampleId = await this.ensureLoaded(play.filepath)
     // ロード（async round-trip）中に clear された場合の再チェック（mute/stop への応答性）。
@@ -663,6 +712,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
       rate,
       play.outputChannel,
     )
+    // #390 live playhead: emitted only after a successful dispatch (emission-only
+    // — no timing / semantics change).
+    this.emitStepMarker(play)
     this.onDispatch?.({
       filepath: play.filepath,
       sampleId,

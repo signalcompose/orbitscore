@@ -76,4 +76,13 @@ export interface TimedEvent {
   velocity?: number
   velocityDelta?: number
   articulation?: number
+  /**
+   * #390 live playhead: dot-joined indices into the `play()` argument tree
+   * this event derives from (e.g. `"2"` = 3rd top-level arg; `"1.0"` reserved
+   * for nested subdivisions in a later phase). Purely observational — set by
+   * `TempoManager.calculateEventTiming` AFTER the timing walk and threaded
+   * through the scheduler so the audio backend can emit `[STEP]` markers on
+   * dispatch. Never read by timing / scheduling logic.
+   */
+  argPath?: string
 }

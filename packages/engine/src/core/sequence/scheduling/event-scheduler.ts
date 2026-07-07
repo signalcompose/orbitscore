@@ -92,7 +92,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
       // Generate random pan if specified
       const eventPan = panRandom ? generateRandomValue(panRandom, -100, 100) : pan
 
-      // Schedule event
+      // Schedule event (argPath = #390 live playhead marker, observational only)
       if (chopDivisions && chopDivisions > 1) {
         const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
         scheduler.scheduleSliceEvent(
@@ -105,6 +105,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
           eventPan,
           sequenceName,
           outputChannel,
+          event.argPath,
         )
       } else {
         scheduler.scheduleEvent(
@@ -114,8 +115,21 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
           eventPan,
           sequenceName,
           outputChannel,
+          event.argPath,
         )
       }
+    } else if (event.sliceNumber === 0 && event.argPath !== undefined) {
+      // 0 is silence — no audio dispatch, but the live playhead still steps
+      // through the rest slot (#390 owner request 2026-07-07): the sequence is
+      // processing the silence, so the highlight should land on it. gainDb
+      // carries the slot's mute/master gain so muted sequences skip markers
+      // exactly like they skip notes.
+      scheduler.scheduleStepMarker?.(
+        baseTime + event.startTime + loopOffset,
+        sequenceName,
+        event.argPath,
+        calculateEventGain(gainDb, gainRandom, masterGainDb, isMuted),
+      )
     }
   }
 }
@@ -184,7 +198,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
         // Generate random pan if specified
         const eventPan = panRandom ? generateRandomValue(panRandom, -100, 100) : pan
 
-        // Schedule event
+        // Schedule event (argPath = #390 live playhead marker, observational only)
         if (chopDivisions && chopDivisions > 1) {
           const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
           scheduler.scheduleSliceEvent(
@@ -197,6 +211,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
             eventPan,
             sequenceName,
             outputChannel,
+            event.argPath,
           )
         } else {
           scheduler.scheduleEvent(
@@ -206,8 +221,19 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
             eventPan,
             sequenceName,
             outputChannel,
+            event.argPath,
           )
         }
+      } else if (event.sliceNumber === 0 && event.argPath !== undefined) {
+        // Rest slot (#390): marker-only, same past-event guard as notes.
+        const startTimeMs = baseTime + event.startTime
+        if (startTimeMs <= fromTime) continue
+        scheduler.scheduleStepMarker?.(
+          startTimeMs,
+          sequenceName,
+          event.argPath,
+          calculateEventGain(gainDb, gainRandom, masterGainDb, isMuted),
+        )
       }
     }
   }

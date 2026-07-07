@@ -429,6 +429,47 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(playAtRecords()[0].sample_id).toBe('s-/audio/snare.wav')
   })
 
+  it('argPath 付き scheduleEvent は dispatch 成功後に [STEP] marker を stdout へ出す (#390)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const p = await boot()
+      p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA', undefined, '2')
+      p.start()
+      await waitFor(() => log.mock.calls.some((c) => String(c[0]).startsWith('[STEP] seqA 2 ')))
+      expect(playAtRecords().length).toBe(1) // marker は音の dispatch に随伴する
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('scheduleStepMarker（休符 0）は PlayAt/LoadSample なしで [STEP] だけ出す (#390)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const p = await boot()
+      p.scheduleStepMarker(0, 'seqA', '1', 0)
+      p.start()
+      await waitFor(() => log.mock.calls.some((c) => String(c[0]).startsWith('[STEP] seqA 1 ')))
+      await new Promise((r) => setTimeout(r, 30))
+      expect(server.received.some((r) => r.method === 'LoadSample')).toBe(false)
+      expect(playAtRecords().length).toBe(0)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  it('mute（-Infinity）中は休符 marker も出さない — 音イベントと同じ扱い (#390)', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const p = await boot()
+      p.scheduleStepMarker(0, 'seqA', '1', -Infinity)
+      p.start()
+      await new Promise((r) => setTimeout(r, 60))
+      expect(log.mock.calls.some((c) => String(c[0]).includes('[STEP]'))).toBe(false)
+    } finally {
+      log.mockRestore()
+    }
+  })
+
   it('clearSequenceEvents したシーケンスのイベントは発火しない', async () => {
     const p = await boot()
     p.scheduleEvent('/audio/kick.wav', 100, 0, 0, 'seqA')

@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.194 feat(engine): [STEP] playhead markers — argPath threading + rest marker events (#390) (Jul 7, 2026)
+
+live playhead（6.195）の engine 側。dispatch 済み play イベントを `[STEP] <seqName> <argPath> <atEpochMs>` として stdout へ発行する（emission-only — timing/音響への影響ゼロ）。
+
+- **argPath threading**: `TempoManager.calculateEventTiming` の後段で各 TimedEvent に由来 play() 引数のトップレベル index を付与（bar 等分の `floor(startTime/slotDuration)` で復元・timing walk 本体は無変更）。`Scheduler.scheduleEvent/scheduleSliceEvent` に optional 引数として貫通。
+- **RustEnginePlayer**: dispatch（daemon `PlayAt`）成功後に `emitStepMarker` — epoch は「発音予定時刻」（`startTime + play.time`・dispatch は lookahead 先行のため extension 側が遅延表示）。
+- **休符 (0) も巡回（owner 要望「0も選択していいのでは？無音を処理してるわけだし」）**: event-scheduler は従来 `sliceNumber > 0` のみ schedule（"0 is silence"）→ 休符スロットは optional の `scheduler.scheduleStepMarker?.(time, seq, argPath, gainDb)` で **marker-only イベント**として enqueue。daemon への dispatch なし・`[STEP]` のみ発火。gainDb には同スロットの mute/master 合成値を渡し、**mute 中は音イベントと同様に marker も skip**（amplitude ガード共有・一貫性）。SC backend は未実装のまま（optional 面・`?.` 呼び出し）。
+- **テスト**: `tests/core/event-scheduler-step-marker.spec.ts`（新規 4 本 — rest marker 配線/mute -Infinity/argPath なし旧イベント互換/optional 面欠如の耐性 + fromTime 過去ガード）+ `rust-engine-player.spec.ts` に 3 本（音 STEP 随伴/marker-only は LoadSample/PlayAt なし/mute skip）。
+
 ### 6.193 fix(vscode-extension): whole-line flash + revealRange — MCP run_selection flash was invisible (#388) (Jul 7, 2026)
 
 owner 観察「MCP 経由の選択実行だとフラッシュが見えず、いつ実行されたのか分かりづらい」の修正。
