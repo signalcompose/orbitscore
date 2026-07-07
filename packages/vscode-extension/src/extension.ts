@@ -1738,7 +1738,9 @@ async function runSelection() {
     createFlash(0)
   }
 
-  writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))
+  if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
+    return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
+  }
   // Scroll the executed range into view before flashing it: subject-block
   // auto-detection (no explicit selection) never reveals, so an agent-driven run
   // that lands on an off-screen line would otherwise flash outside the viewport.
