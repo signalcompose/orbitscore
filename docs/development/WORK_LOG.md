@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.206 docs(engine): VST3 hosting implementation plan — effect + instrument, symmetric to CLAP (#395) (Jul 8, 2026)
+
+VST3 プラグインホスティングの実装計画 doc（`docs/development/POST_2.0_VST3_HOSTING_PLAN.md`）を起こした。owner 意図の核心 =「**音源系プラグインとエフェクト系プラグインの両カテゴリをホスト**」（VST3/CLAP 併用ではない）・VST3 主眼・既存 CLAP 資産と対称。実装は `/codex:rescue` 委譲前提で、codex が会話文脈なしで迷わない粒度（各 Phase を実在ファイルの path:line → 手順 → offline 優先の受け入れ基準 → STOP gate で記述）。
+
+- **一次確認**: VST3 SDK = MIT 単独（3.8 以降）/ `vst3` crate = MIT OR Apache-2.0（v0.3.0 で binding source 同梱・libclang 依存消滅）→ permissive 規律（deny.toml allow list）と整合。#381 Step0 の STOP 条件には非該当
+- **既存 CLAP 資産の実ファイルアンカー確認**: `PostProcessor` trait（共通 seam）/ effect・instrument 分岐 = `processor.rs:133 has_audio_input()` / OOP transport `orbit-audio-sandbox`（CLAP 非依存・**VST3 で無改変流用可**）/ `orbit-clap-effect-child`（child 対称元）/ daemon supervisor `OutProcEffectConfig::from_env`
+- **段階化（advisor 検証済み・effect と instrument の準備状態を平坦化しない）**: Phase 0 = in-proc offline spike（#381・🛑 dep-tree license 監査 + sample-exact 1 block）→ Phase 1 = production OOP effect（M1 substrate 流用・codex-ready）→ **Phase 2 = M2 instrument IPC 設計（🔴 Opus+owner の spec 作業・codex 委譲禁止・format-neutral 決定を保持）**→ Phase 3 = VST3 instrument（M2 landing 後）
+- **技術チェック 2 点を明記**: (1) `vst3` の全 transitive 依存を `cargo tree` で実監査（推測禁止）(2) effect/instrument 判定は CLAP の `has_audio_input` でなく **VST3 bus count**（取り違えると silent-but-wrong）
+- **DSL は non-blocking**: engine は CLI/env 駆動で完結（既存 CLAP も env のみ）。構文 3 案提示 + 推奨（Option C 当面据え置き → effect 動作後に Option A verb スタイルを owner 確定）
+
 ### 6.205 fix(vscode-extension): pr-review-team round 1 — save_file headless-hang guard (#394) (Jul 8, 2026)
 
 PR #394 の `/code:pr-review-team` round 1（4 専門レビュアー並列: code-reviewer ×2 / silent-failure-hunter / pr-test-analyzer / comment-analyzer）。**Critical=0**。**Important=1** + Minor 数件を対応。全 suite グリーン維持。
