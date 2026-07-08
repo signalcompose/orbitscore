@@ -147,9 +147,15 @@ de-risk 失敗後、`/ask-codex:research` で一次調査 → **NI SIGSEGV の�
 | instrument load | 51 | 57 |
 | **load 成功計** | 239 | **328 / 333（98%）** |
 
-残 未 load 5 = Intel-only 3（MODO BASS/Philharmonik 2/Super 8・arch 除外）+ arm64 端 2（ARIA Player=Garritan 音源・Komplete Kontrol=NI host-in-host ラッパー）。
-**arm64 対応での load 成功率 = 328/330 = 99%**。crash 0・hang 1。
-⇒ **最小 spike の feasibility 実証にとどまらず、3 つのホスト側修正（CFBundleRef / setProcessing kNotImplemented 許容 / host context+controller）で NI・iZotope 含む arm64 商用コレクションの 99% をロード可能に到達。**
+**全ホスト側修正後の最終 sweep（全 333）**: crash **0**・load 成功 **329/333（98%）**・**arm64 対応 329/330 = 99.7%**。残 arm64 = Komplete Kontrol 1（NI host-in-host ラッパー・重い／単独 probe では instrument load 成功＝sweep 内変動）。真の除外 = Intel-only 3（MODO BASS/Philharmonik 2/Super 8・arch 除外）。
+
+⇒ **feasibility 実証にとどまらず、4 つのホスト側修正で arm64 商用 VST3 を実質全カバー（99.7%・crash 0）**:
+1. **CFBundleRef ロード**（NI crash 36→0・`BundleEntry(null)` が主因）
+2. **`setProcessing` kNotImplemented(3) 許容**（iZotope 54 回復）
+3. **`setBusArrangements` kResultFalse advisory 化**（ARIA Player 等）
+4. host context(IHostApplication)+component-controller ハンドシェイク
+
+**共通教訓（ノウハウ）: 商用 VST3 ホストは optional/advisory メソッド（setProcessing/setBusArrangements 等）の非 OK 戻り（kNotImplemented/kResultFalse）を致命扱いにしてはいけない。VST3 SDK / JUCE VST3PluginFormat がこれを許容する。**
 
 ---
 
