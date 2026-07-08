@@ -5,17 +5,22 @@
 //! instantiate the first "Audio Module Class", run one f32 stereo block, and tear down on the
 //! same home thread.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::error::Error;
-use std::ffi::c_void;
+use std::ffi::{c_void, CString};
 use std::fmt::{Display, Formatter};
-use std::fs;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::rc::Rc;
 
-use libloading::{Library, Symbol};
+use core_foundation_sys::base::{kCFAllocatorDefault, CFRelease};
+use core_foundation_sys::bundle::{
+    CFBundleCreate, CFBundleGetFunctionPointerForName, CFBundleLoadExecutable, CFBundleRef,
+    CFBundleUnloadExecutable,
+};
+use core_foundation_sys::string::{kCFStringEncodingUTF8, CFStringCreateWithCString, CFStringRef};
+use core_foundation_sys::url::{kCFURLPOSIXPathStyle, CFURLCreateWithFileSystemPath, CFURLRef};
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{Class, ComPtr, ComWrapper};
@@ -31,14 +36,16 @@ type BundleExit = unsafe extern "system" fn() -> bool;
 pub enum Vst3HostError {
     Io { path: PathBuf, message: String },
     InvalidBundle(PathBuf),
-    Dlopen(String),
+    BundleLoad(String),
     MissingSymbol(&'static str),
     NullFactory,
     NoAudioModuleClass,
     CreateInstance(tresult),
     QueryAudioProcessor,
+    Controller(tresult),
     Initialize(tresult),
     BusArrangement(tresult),
+    SampleSize(tresult),
     SetupProcessing(tresult),
     SetActive(tresult),
     SetProcessing(tresult),
@@ -51,7 +58,7 @@ impl Display for Vst3HostError {
         match self {
             Self::Io { path, message } => write!(f, "{}: {message}", path.display()),
             Self::InvalidBundle(path) => write!(f, "invalid VST3 bundle: {}", path.display()),
-            Self::Dlopen(message) => write!(f, "dlopen failed: {message}"),
+            Self::BundleLoad(message) => write!(f, "CFBundle load failed: {message}"),
             Self::MissingSymbol(symbol) => write!(f, "missing symbol: {symbol}"),
             Self::NullFactory => write!(f, "GetPluginFactory returned null"),
             Self::NoAudioModuleClass => write!(f, "no Audio Module Class in VST3 factory"),
@@ -59,6 +66,7 @@ impl Display for Vst3HostError {
                 write!(f, "IPluginFactory::createInstance failed: {result}")
             }
             Self::QueryAudioProcessor => write!(f, "queryInterface(IAudioProcessor) failed"),
+            Self::Controller(result) => write!(f, "controller handshake failed: {result}"),
             Self::Initialize(result) => write!(f, "IComponent::initialize failed: {result}"),
             Self::BusArrangement(result) => {
                 write!(f, "IAudioProcessor::setBusArrangements failed: {result}")
@@ -66,6 +74,10 @@ impl Display for Vst3HostError {
             Self::SetupProcessing(result) => {
                 write!(f, "IAudioProcessor::setupProcessing failed: {result}")
             }
+            Self::SampleSize(result) => write!(
+                f,
+                "IAudioProcessor::canProcessSampleSize(kSample32) failed: {result}"
+            ),
             Self::SetActive(result) => write!(f, "IComponent::setActive failed: {result}"),
             Self::SetProcessing(result) => {
                 write!(f, "IAudioProcessor::setProcessing failed: {result}")
@@ -97,38 +109,84 @@ pub struct ProcessReport {
 }
 
 struct LoadedLibrary {
-    library: Library,
+    bundle: CFBundleRef,
     bundle_exit_called: bool,
 }
 
 impl LoadedLibrary {
     fn open(bundle_path: &Path) -> Result<Self, Vst3HostError> {
-        let dylib_path = resolve_vst3_executable(bundle_path)?;
-        let library = unsafe { Library::new(&dylib_path) }
-            .map_err(|error| Vst3HostError::Dlopen(format!("{}: {error}", dylib_path.display())))?;
+        if bundle_path.extension().and_then(|ext| ext.to_str()) != Some("vst3") {
+            return Err(Vst3HostError::InvalidBundle(bundle_path.to_path_buf()));
+        }
+        let bundle_path = bundle_path.canonicalize().map_err(|error| {
+            Vst3HostError::BundleLoad(format!("{}: {error}", bundle_path.display()))
+        })?;
+        let path_string = bundle_path.to_str().ok_or_else(|| {
+            Vst3HostError::BundleLoad(format!("non-UTF8 bundle path: {}", bundle_path.display()))
+        })?;
+        let cf_path = CfString::new(path_string)?;
+        let url = unsafe {
+            CFURLCreateWithFileSystemPath(
+                kCFAllocatorDefault,
+                cf_path.as_ref(),
+                kCFURLPOSIXPathStyle,
+                1,
+            )
+        };
+        let url = CfUrl::from_raw(url).ok_or_else(|| {
+            Vst3HostError::BundleLoad(format!(
+                "CFURLCreateWithFileSystemPath failed: {}",
+                bundle_path.display()
+            ))
+        })?;
+        let bundle = unsafe { CFBundleCreate(kCFAllocatorDefault, url.as_ref()) };
+        if bundle.is_null() {
+            return Err(Vst3HostError::BundleLoad(format!(
+                "CFBundleCreate failed: {}",
+                bundle_path.display()
+            )));
+        }
+        let mut loaded = Self {
+            bundle,
+            bundle_exit_called: false,
+        };
+        if unsafe { CFBundleLoadExecutable(loaded.bundle) } == 0 {
+            return Err(Vst3HostError::BundleLoad(format!(
+                "CFBundleLoadExecutable failed: {}",
+                bundle_path.display()
+            )));
+        }
 
-        let mut bundle_exit_called = false;
-        unsafe {
-            if let Ok(entry) = library.get::<BundleEntry>(b"BundleEntry\0") {
-                if entry(ptr::null_mut()) {
-                    bundle_exit_called = true;
-                }
+        if let Some(entry) = unsafe { loaded.function::<BundleEntry>("bundleEntry") }
+            .or_else(|| unsafe { loaded.function::<BundleEntry>("BundleEntry") })
+        {
+            if unsafe { entry(loaded.bundle.cast::<c_void>()) } {
+                loaded.bundle_exit_called = true;
             }
         }
 
-        Ok(Self {
-            library,
-            bundle_exit_called,
-        })
+        Ok(loaded)
     }
 
     unsafe fn get_factory(&self) -> Result<ComPtr<IPluginFactory>, Vst3HostError> {
-        let get_factory: Symbol<'_, GetPluginFactory> = self
-            .library
-            .get(b"GetPluginFactory\0")
-            .map_err(|_| Vst3HostError::MissingSymbol("GetPluginFactory"))?;
+        let get_factory = self
+            .function::<GetPluginFactory>("GetPluginFactory")
+            .ok_or(Vst3HostError::MissingSymbol("GetPluginFactory"))?;
         let raw = get_factory();
         ComPtr::from_raw(raw).ok_or(Vst3HostError::NullFactory)
+    }
+
+    unsafe fn function<T>(&self, name: &str) -> Option<T>
+    where
+        T: Copy,
+    {
+        let cf_name = CfString::new(name).ok()?;
+        let ptr = CFBundleGetFunctionPointerForName(self.bundle, cf_name.as_ref());
+        if ptr.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute_copy(&ptr))
+        }
     }
 }
 
@@ -136,10 +194,76 @@ impl Drop for LoadedLibrary {
     fn drop(&mut self) {
         if self.bundle_exit_called {
             unsafe {
-                if let Ok(exit) = self.library.get::<BundleExit>(b"BundleExit\0") {
+                let exit = self
+                    .function::<BundleExit>("bundleExit")
+                    .or_else(|| self.function::<BundleExit>("BundleExit"));
+                if let Some(exit) = exit {
                     let _ = exit();
                 }
             }
+        }
+        unsafe {
+            CFBundleUnloadExecutable(self.bundle);
+            CFRelease(self.bundle.cast());
+        }
+    }
+}
+
+struct CfString(CFStringRef);
+
+impl CfString {
+    fn new(value: &str) -> Result<Self, Vst3HostError> {
+        let c_string = CString::new(value)
+            .map_err(|_| Vst3HostError::BundleLoad(format!("string contains NUL: {value}")))?;
+        let raw = unsafe {
+            CFStringCreateWithCString(
+                kCFAllocatorDefault,
+                c_string.as_ptr(),
+                kCFStringEncodingUTF8,
+            )
+        };
+        if raw.is_null() {
+            Err(Vst3HostError::BundleLoad(format!(
+                "CFStringCreateWithCString failed: {value}"
+            )))
+        } else {
+            Ok(Self(raw))
+        }
+    }
+
+    fn as_ref(&self) -> CFStringRef {
+        self.0
+    }
+}
+
+impl Drop for CfString {
+    fn drop(&mut self) {
+        unsafe {
+            CFRelease(self.0.cast());
+        }
+    }
+}
+
+struct CfUrl(CFURLRef);
+
+impl CfUrl {
+    fn from_raw(raw: CFURLRef) -> Option<Self> {
+        if raw.is_null() {
+            None
+        } else {
+            Some(Self(raw))
+        }
+    }
+
+    fn as_ref(&self) -> CFURLRef {
+        self.0
+    }
+}
+
+impl Drop for CfUrl {
+    fn drop(&mut self) {
+        unsafe {
+            CFRelease(self.0.cast());
         }
     }
 }
@@ -151,7 +275,11 @@ impl Drop for LoadedLibrary {
 /// before `component`, then `factory`, and finally the dynamic library is unloaded.
 pub struct Vst3EffectProcessor {
     processor: Option<ComPtr<IAudioProcessor>>,
+    controller: Option<ComPtr<IEditController>>,
+    component_connection: Option<ComPtr<IConnectionPoint>>,
+    controller_connection: Option<ComPtr<IConnectionPoint>>,
     component: Option<ComPtr<IComponent>>,
+    _component_handler: Option<ComWrapper<HostComponentHandler>>,
     _host_context: ComWrapper<HostApplication>,
     factory: Option<ComPtr<IPluginFactory>>,
     _home_thread: PhantomData<Rc<()>>,
@@ -200,6 +328,13 @@ impl Vst3EffectProcessor {
             .as_com_ref()
             .cast::<IAudioProcessor>()
             .ok_or(Vst3HostError::QueryAudioProcessor)?;
+        let sample_size_result =
+            unsafe { processor.canProcessSampleSize(SymbolicSampleSizes_::kSample32 as i32) };
+        if !is_ok(sample_size_result) {
+            return Err(Vst3HostError::SampleSize(sample_size_result));
+        }
+        let controller_handshake =
+            connect_controller(&factory, &component, &host_context, host_context_ptr)?;
 
         let input_buses = unsafe {
             component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kInput as i32)
@@ -244,7 +379,11 @@ impl Vst3EffectProcessor {
 
         let processor = Self {
             processor: Some(processor),
+            controller: controller_handshake.controller,
+            component_connection: controller_handshake.component_connection,
+            controller_connection: controller_handshake.controller_connection,
             component: Some(component),
+            _component_handler: controller_handshake.component_handler,
             _host_context: host_context,
             factory: Some(factory),
             _home_thread: PhantomData,
@@ -301,11 +440,13 @@ impl Vst3EffectProcessor {
             },
         }];
 
-        let parameter_changes = gain.map(ParameterChanges::single_gain);
-        let input_parameter_changes = parameter_changes
-            .as_ref()
-            .map(|changes| changes.as_ptr())
-            .unwrap_or(ptr::null_mut());
+        let parameter_changes = gain
+            .map(ParameterChanges::single_gain)
+            .unwrap_or_else(ParameterChanges::empty);
+        let output_parameter_changes = ParameterChanges::empty();
+        let input_events = EventList::empty();
+        let output_events = EventList::empty();
+        let mut process_context = self.process_context();
 
         let mut process_data = ProcessData {
             processMode: ProcessModes_::kRealtime as i32,
@@ -319,11 +460,11 @@ impl Vst3EffectProcessor {
                 ptr::null_mut()
             },
             outputs: outputs.as_mut_ptr(),
-            inputParameterChanges: input_parameter_changes,
-            outputParameterChanges: ptr::null_mut(),
-            inputEvents: ptr::null_mut(),
-            outputEvents: ptr::null_mut(),
-            processContext: ptr::null_mut(),
+            inputParameterChanges: parameter_changes.as_ptr(),
+            outputParameterChanges: output_parameter_changes.as_ptr(),
+            inputEvents: input_events.as_ptr(),
+            outputEvents: output_events.as_ptr(),
+            processContext: &mut process_context,
         };
 
         let result = unsafe { processor.process(&mut process_data) };
@@ -335,6 +476,54 @@ impl Vst3EffectProcessor {
             is_effect: self.info.is_effect,
         })
     }
+
+    fn process_context(&self) -> ProcessContext {
+        let mut state = ProcessContext_::StatesAndFlags_::kTempoValid
+            | ProcessContext_::StatesAndFlags_::kTimeSigValid;
+        if let Some(processor) = self.processor.as_ref() {
+            if let Some(requirements) = processor.as_com_ref().cast::<IProcessContextRequirements>()
+            {
+                let required = unsafe { requirements.getProcessContextRequirements() };
+                if required & IProcessContextRequirements_::Flags_::kNeedTransportState != 0 {
+                    state |= ProcessContext_::StatesAndFlags_::kPlaying;
+                }
+                if required & IProcessContextRequirements_::Flags_::kNeedProjectTimeMusic != 0 {
+                    state |= ProcessContext_::StatesAndFlags_::kProjectTimeMusicValid;
+                }
+                if required & IProcessContextRequirements_::Flags_::kNeedTempo != 0 {
+                    state |= ProcessContext_::StatesAndFlags_::kTempoValid;
+                }
+                if required & IProcessContextRequirements_::Flags_::kNeedTimeSignature != 0 {
+                    state |= ProcessContext_::StatesAndFlags_::kTimeSigValid;
+                }
+            }
+        }
+        ProcessContext {
+            state,
+            sampleRate: self.sample_rate,
+            projectTimeSamples: 0,
+            systemTime: 0,
+            continousTimeSamples: 0,
+            projectTimeMusic: 0.0,
+            barPositionMusic: 0.0,
+            cycleStartMusic: 0.0,
+            cycleEndMusic: 0.0,
+            tempo: 120.0,
+            timeSigNumerator: 4,
+            timeSigDenominator: 4,
+            chord: Chord {
+                keyNote: 0,
+                rootNote: 0,
+                chordMask: 0,
+            },
+            smpteOffsetSubframes: 0,
+            frameRate: FrameRate {
+                framesPerSecond: 0,
+                flags: 0,
+            },
+            samplesToNextClock: 0,
+        }
+    }
 }
 
 impl Drop for Vst3EffectProcessor {
@@ -342,6 +531,22 @@ impl Drop for Vst3EffectProcessor {
         if let Some(processor) = self.processor.take() {
             unsafe {
                 let _ = processor.setProcessing(0);
+            }
+        }
+        if let (Some(component_connection), Some(controller_connection)) = (
+            self.component_connection.as_ref(),
+            self.controller_connection.as_ref(),
+        ) {
+            unsafe {
+                let _ = component_connection.disconnect(controller_connection.as_ptr());
+                let _ = controller_connection.disconnect(component_connection.as_ptr());
+            }
+        }
+        let _ = self.component_connection.take();
+        let _ = self.controller_connection.take();
+        if let Some(controller) = self.controller.take() {
+            unsafe {
+                let _ = controller.terminate();
             }
         }
         if let Some(component) = self.component.take() {
@@ -358,6 +563,95 @@ impl Drop for Vst3EffectProcessor {
 struct AudioModuleClass {
     cid: TUID,
     name: String,
+}
+
+struct ControllerHandshake {
+    controller: Option<ComPtr<IEditController>>,
+    component_connection: Option<ComPtr<IConnectionPoint>>,
+    controller_connection: Option<ComPtr<IConnectionPoint>>,
+    component_handler: Option<ComWrapper<HostComponentHandler>>,
+}
+
+fn connect_controller(
+    factory: &ComPtr<IPluginFactory>,
+    component: &ComPtr<IComponent>,
+    _host_context: &ComWrapper<HostApplication>,
+    host_context_ptr: *mut FUnknown,
+) -> Result<ControllerHandshake, Vst3HostError> {
+    let mut controller_cid = [0; 16];
+    let cid_result = unsafe { component.getControllerClassId(&mut controller_cid) };
+    if !is_ok(cid_result) {
+        return Ok(ControllerHandshake {
+            controller: None,
+            component_connection: None,
+            controller_connection: None,
+            component_handler: None,
+        });
+    }
+
+    let mut controller_raw = ptr::null_mut();
+    let create_result = unsafe {
+        factory.createInstance(
+            controller_cid.as_ptr() as FIDString,
+            IEditController_iid.as_ptr() as FIDString,
+            &mut controller_raw,
+        )
+    };
+    if !is_ok(create_result) {
+        return Err(Vst3HostError::Controller(create_result));
+    }
+    let controller = unsafe { ComPtr::from_raw(controller_raw as *mut IEditController) }
+        .ok_or(Vst3HostError::Controller(create_result))?;
+
+    let init_result = unsafe { controller.initialize(host_context_ptr) };
+    if !is_ok(init_result) {
+        return Err(Vst3HostError::Controller(init_result));
+    }
+
+    let component_handler = ComWrapper::new(HostComponentHandler);
+    let handler_ptr = component_handler
+        .as_com_ref::<IComponentHandler>()
+        .expect("HostComponentHandler exposes IComponentHandler")
+        .as_ptr();
+    let handler_result = unsafe { controller.setComponentHandler(handler_ptr) };
+    if !is_ok(handler_result) {
+        return Err(Vst3HostError::Controller(handler_result));
+    }
+
+    let component_connection = component.as_com_ref().cast::<IConnectionPoint>();
+    let controller_connection = controller.as_com_ref().cast::<IConnectionPoint>();
+    if let (Some(component_connection), Some(controller_connection)) =
+        (&component_connection, &controller_connection)
+    {
+        unsafe {
+            let _ = component_connection.connect(controller_connection.as_ptr());
+            let _ = controller_connection.connect(component_connection.as_ptr());
+        }
+    }
+
+    sync_component_state(component, &controller);
+
+    Ok(ControllerHandshake {
+        controller: Some(controller),
+        component_connection,
+        controller_connection,
+        component_handler: Some(component_handler),
+    })
+}
+
+fn sync_component_state(component: &ComPtr<IComponent>, controller: &ComPtr<IEditController>) {
+    let stream_wrapper = ComWrapper::new(MemoryStream::new());
+    let stream = stream_wrapper
+        .to_com_ptr::<IBStream>()
+        .expect("MemoryStream exposes IBStream");
+    let get_result = unsafe { component.getState(stream.as_ptr()) };
+    if is_ok(get_result) {
+        unsafe {
+            let mut pos = 0;
+            let _ = stream.seek(0, IBStream_::IStreamSeekMode_::kIBSeekSet as i32, &mut pos);
+            let _ = controller.setComponentState(stream.as_ptr());
+        }
+    }
 }
 
 fn configure_audio_buses(
@@ -379,14 +673,23 @@ fn configure_audio_buses(
         output_buses,
     );
 
-    let result = unsafe {
-        processor.setBusArrangements(
-            ptr_or_null_mut(&mut input_arrangements),
-            input_arrangements.len() as i32,
-            ptr_or_null_mut(&mut output_arrangements),
-            output_arrangements.len() as i32,
-        )
-    };
+    let mut result =
+        set_bus_arrangements(processor, &mut input_arrangements, &mut output_arrangements);
+    if !is_ok(result) {
+        input_arrangements = plugin_reported_arrangements(
+            processor,
+            BusDirections_::kInput as i32,
+            input_buses,
+            &input_arrangements,
+        );
+        output_arrangements = plugin_reported_arrangements(
+            processor,
+            BusDirections_::kOutput as i32,
+            output_buses,
+            &output_arrangements,
+        );
+        result = set_bus_arrangements(processor, &mut input_arrangements, &mut output_arrangements);
+    }
     if !is_ok(result) {
         return Err(Vst3HostError::BusArrangement(result));
     }
@@ -394,6 +697,43 @@ fn configure_audio_buses(
     activate_audio_buses(component, BusDirections_::kInput as i32, input_buses);
     activate_audio_buses(component, BusDirections_::kOutput as i32, output_buses);
     Ok(())
+}
+
+fn set_bus_arrangements(
+    processor: &ComPtr<IAudioProcessor>,
+    input_arrangements: &mut [SpeakerArrangement],
+    output_arrangements: &mut [SpeakerArrangement],
+) -> tresult {
+    unsafe {
+        processor.setBusArrangements(
+            ptr_or_null_mut(input_arrangements),
+            input_arrangements.len() as i32,
+            ptr_or_null_mut(output_arrangements),
+            output_arrangements.len() as i32,
+        )
+    }
+}
+
+fn plugin_reported_arrangements(
+    processor: &ComPtr<IAudioProcessor>,
+    direction: BusDirection,
+    bus_count: i32,
+    fallback: &[SpeakerArrangement],
+) -> Vec<SpeakerArrangement> {
+    (0..bus_count)
+        .map(|index| {
+            let mut arrangement = 0;
+            let result = unsafe { processor.getBusArrangement(direction, index, &mut arrangement) };
+            if is_ok(result) && arrangement != 0 {
+                arrangement
+            } else {
+                fallback
+                    .get(index as usize)
+                    .copied()
+                    .unwrap_or(SpeakerArr::kStereo)
+            }
+        })
+        .collect()
 }
 
 fn arrangements_for_direction(
@@ -485,34 +825,6 @@ fn find_audio_module_class(
         }
     }
     Err(Vst3HostError::NoAudioModuleClass)
-}
-
-fn resolve_vst3_executable(bundle_path: &Path) -> Result<PathBuf, Vst3HostError> {
-    if bundle_path.extension().and_then(|ext| ext.to_str()) != Some("vst3") {
-        return Err(Vst3HostError::InvalidBundle(bundle_path.to_path_buf()));
-    }
-    let executable = read_cf_bundle_executable(bundle_path).or_else(|| {
-        bundle_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(ToOwned::to_owned)
-    });
-    let executable = executable.ok_or_else(|| Vst3HostError::InvalidBundle(bundle_path.into()))?;
-    Ok(bundle_path.join("Contents").join("MacOS").join(executable))
-}
-
-fn read_cf_bundle_executable(bundle_path: &Path) -> Option<String> {
-    let plist_path = bundle_path.join("Contents").join("Info.plist");
-    let plist = fs::read_to_string(&plist_path).ok()?;
-    let key_pos = plist.find("<key>CFBundleExecutable</key>")?;
-    let after_key = &plist[key_pos..];
-    let string_start = after_key.find("<string>")? + "<string>".len();
-    let string_end = after_key[string_start..].find("</string>")?;
-    Some(
-        after_key[string_start..string_start + string_end]
-            .trim()
-            .to_owned(),
-    )
 }
 
 fn char8_array_to_string(data: &[i8]) -> String {
@@ -735,14 +1047,179 @@ fn copy_wstring(src: &str, dst: &mut [TChar]) {
     }
 }
 
+struct HostComponentHandler;
+
+impl Class for HostComponentHandler {
+    type Interfaces = (IComponentHandler,);
+}
+
+impl IComponentHandlerTrait for HostComponentHandler {
+    unsafe fn beginEdit(&self, _id: ParamID) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn performEdit(&self, _id: ParamID, _value_normalized: ParamValue) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn endEdit(&self, _id: ParamID) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn restartComponent(&self, _flags: i32) -> tresult {
+        kResultOk
+    }
+}
+
+struct MemoryStream {
+    data: RefCell<Vec<u8>>,
+    pos: Cell<usize>,
+}
+
+impl MemoryStream {
+    fn new() -> Self {
+        Self {
+            data: RefCell::new(Vec::new()),
+            pos: Cell::new(0),
+        }
+    }
+}
+
+impl Class for MemoryStream {
+    type Interfaces = (IBStream,);
+}
+
+impl IBStreamTrait for MemoryStream {
+    unsafe fn read(
+        &self,
+        buffer: *mut c_void,
+        num_bytes: i32,
+        num_bytes_read: *mut i32,
+    ) -> tresult {
+        if buffer.is_null() || num_bytes < 0 {
+            return kInvalidArgument;
+        }
+        let data = self.data.borrow();
+        let pos = self.pos.get().min(data.len());
+        let available = data.len().saturating_sub(pos);
+        let to_read = available.min(num_bytes as usize);
+        ptr::copy_nonoverlapping(data[pos..].as_ptr(), buffer.cast::<u8>(), to_read);
+        self.pos.set(pos + to_read);
+        if !num_bytes_read.is_null() {
+            *num_bytes_read = to_read as i32;
+        }
+        kResultOk
+    }
+
+    unsafe fn write(
+        &self,
+        buffer: *mut c_void,
+        num_bytes: i32,
+        num_bytes_written: *mut i32,
+    ) -> tresult {
+        if buffer.is_null() || num_bytes < 0 {
+            return kInvalidArgument;
+        }
+        let bytes = std::slice::from_raw_parts(buffer.cast::<u8>(), num_bytes as usize);
+        let mut data = self.data.borrow_mut();
+        let pos = self.pos.get();
+        let end = pos.saturating_add(bytes.len());
+        if end > data.len() {
+            data.resize(end, 0);
+        }
+        data[pos..end].copy_from_slice(bytes);
+        self.pos.set(end);
+        if !num_bytes_written.is_null() {
+            *num_bytes_written = bytes.len() as i32;
+        }
+        kResultOk
+    }
+
+    unsafe fn seek(&self, pos: i64, mode: i32, result: *mut i64) -> tresult {
+        let len = self.data.borrow().len() as i64;
+        let base = match mode as u32 {
+            IBStream_::IStreamSeekMode_::kIBSeekSet => 0,
+            IBStream_::IStreamSeekMode_::kIBSeekCur => self.pos.get() as i64,
+            IBStream_::IStreamSeekMode_::kIBSeekEnd => len,
+            _ => return kInvalidArgument,
+        };
+        let new_pos = base.saturating_add(pos).max(0) as usize;
+        self.pos.set(new_pos);
+        if !result.is_null() {
+            *result = new_pos as i64;
+        }
+        kResultOk
+    }
+
+    unsafe fn tell(&self, pos: *mut i64) -> tresult {
+        if !pos.is_null() {
+            *pos = self.pos.get() as i64;
+        }
+        kResultOk
+    }
+}
+
+struct EventList {
+    _wrapper: ComWrapper<HostEventList>,
+    ptr: ComPtr<IEventList>,
+}
+
+impl EventList {
+    fn empty() -> Self {
+        let wrapper = ComWrapper::new(HostEventList);
+        let ptr = wrapper
+            .to_com_ptr::<IEventList>()
+            .expect("HostEventList exposes IEventList");
+        Self {
+            _wrapper: wrapper,
+            ptr,
+        }
+    }
+
+    fn as_ptr(&self) -> *mut IEventList {
+        self.ptr.as_ptr()
+    }
+}
+
+struct HostEventList;
+
+impl Class for HostEventList {
+    type Interfaces = (IEventList,);
+}
+
+impl IEventListTrait for HostEventList {
+    unsafe fn getEventCount(&self) -> i32 {
+        0
+    }
+
+    unsafe fn getEvent(&self, _index: i32, _event: *mut Event) -> tresult {
+        kInvalidArgument
+    }
+
+    unsafe fn addEvent(&self, _event: *mut Event) -> tresult {
+        kResultFalse
+    }
+}
+
 struct ParameterChanges {
     _wrapper: ComWrapper<HostParameterChanges>,
     ptr: ComPtr<IParameterChanges>,
 }
 
 impl ParameterChanges {
+    fn empty() -> Self {
+        let wrapper = ComWrapper::new(HostParameterChanges::empty());
+        let ptr = wrapper
+            .to_com_ptr::<IParameterChanges>()
+            .expect("HostParameterChanges exposes IParameterChanges");
+        Self {
+            _wrapper: wrapper,
+            ptr,
+        }
+    }
+
     fn single_gain(value: f64) -> Self {
-        let wrapper = ComWrapper::new(HostParameterChanges::new(0, value));
+        let wrapper = ComWrapper::new(HostParameterChanges::single(0, value));
         let ptr = wrapper
             .to_com_ptr::<IParameterChanges>()
             .expect("HostParameterChanges exposes IParameterChanges");
@@ -758,14 +1235,21 @@ impl ParameterChanges {
 }
 
 struct HostParameterChanges {
-    queue: ComWrapper<HostParamValueQueue>,
+    queue: Option<ComWrapper<HostParamValueQueue>>,
     queue_ptr: Cell<*mut IParamValueQueue>,
 }
 
 impl HostParameterChanges {
-    fn new(param_id: ParamID, value: ParamValue) -> Self {
+    fn empty() -> Self {
         Self {
-            queue: ComWrapper::new(HostParamValueQueue::new(param_id, value)),
+            queue: None,
+            queue_ptr: Cell::new(ptr::null_mut()),
+        }
+    }
+
+    fn single(param_id: ParamID, value: ParamValue) -> Self {
+        Self {
+            queue: Some(ComWrapper::new(HostParamValueQueue::new(param_id, value))),
             queue_ptr: Cell::new(ptr::null_mut()),
         }
     }
@@ -775,8 +1259,10 @@ impl HostParameterChanges {
         if !existing.is_null() {
             return existing;
         }
-        let ptr = self
-            .queue
+        let Some(queue) = self.queue.as_ref() else {
+            return ptr::null_mut();
+        };
+        let ptr = queue
             .to_com_ptr::<IParamValueQueue>()
             .expect("HostParamValueQueue exposes IParamValueQueue")
             .into_raw();
@@ -804,7 +1290,11 @@ impl Class for HostParameterChanges {
 
 impl IParameterChangesTrait for HostParameterChanges {
     unsafe fn getParameterCount(&self) -> i32 {
-        1
+        if self.queue.is_some() {
+            1
+        } else {
+            0
+        }
     }
 
     unsafe fn getParameterData(&self, index: i32) -> *mut IParamValueQueue {

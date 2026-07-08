@@ -104,6 +104,19 @@ owner の最重要ベンダー = NI/iZotope のため、上記 1・2 を spike �
 
 **GO 判定への含意（owner 判断材料）**: 汎用 VST3 effect のホストは実証済み（UA 全カタログ・IK AmpliTube/ARC 等 188 個）だが、**最重要 2 ベンダー（NI/iZotope）は簡単には動かず、深い調査（成功保証なし）が要る**。この事実を踏まえて owner が GO/NO-GO/保留を決める。
 
+### 🟢 続報（2026-07-08・research → CFBundle 実装で NI 回復）
+
+de-risk 失敗後、`/ask-codex:research` で一次調査 → **NI SIGSEGV の主因 = `BundleEntry(ptr::null_mut())`**（NI ランタイムが `CFBundleRef` から resources/frameworks/license path を引くため null deref）と判明。codex:rescue で実装:
+- **macOS bundle ロードを CFBundle 正規経路に**（`CFBundleCreate`→`CFBundleLoadExecutable`→`CFBundleGetFunctionPointerForName`・**実 CFBundleRef を BundleEntry に渡す**）。`core-foundation-sys 0.8`（MIT/Apache・allow list 内）採用・`libloading` 除去。
+- component-controller ハンドシェイク（controller 生成→initialize→setComponentHandler→IConnectionPoint connect→state 同期）。
+- process データ完全化（非 null 空 IEventList/IParameterChanges + ProcessContext + `canProcessSampleSize`）。
+
+**実測（非サンドボックス・代表）**:
+- **NI = 回復**: Battery 4/FM8/Massive/Kontakt 8 = **load 成功**（instrument＝audio_in 0・Phase 0 は正常に未 process）/ Reaktor 6/Guitar Rig 7/Bite = **load+process 成功**（effect）。7/7 が crash→load。**owner 最重要の Kontakt/Massive/FM8 が動く**。
+- **iZotope = 未解決**: Vinyl/Ozone 11/RX 11/Neutron 5 = **`setProcessing: 3` fail のまま**。CFBundle+controller では救えず、別要因（bus 再調停の詳細 or objc class 重複）が残存 → 追加調査要。
+
+⇒ 「NI/iZotope は解けない」は**早計だった**。NI は CFBundle 修正で回復。iZotope は残課題。oracle は全変更後も sample-exact 維持（機構非退行）。全 sweep の回復数は本 doc 更新予定。
+
 ---
 
 ## 7. 工数見積り（Phase 1 — production OOP effect）

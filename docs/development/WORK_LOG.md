@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.210 feat(engine): VST3 CFBundle load path — NI 全回復・iZotope は残課題（#381） (Jul 8, 2026)
+
+`/ask-codex:research`（一次調査）→ codex:rescue 実装で NI クラッシュを解消。
+
+- **research 発見**: NI SIGSEGV の主因 = `BundleEntry(ptr::null_mut())`（NI ランタイムが CFBundleRef から resources/frameworks/license path を解決するため null deref）。前回 de-risk が効かなかった真因
+- **実装（codex）**: macOS bundle ロードを CFBundle 正規経路に（CFBundleCreate→LoadExecutable→GetFunctionPointerForName・**実 CFBundleRef を BundleEntry に渡す**）+ component-controller ハンドシェイク（controller 生成/initialize/setComponentHandler/IConnectionPoint connect/state 同期）+ process データ完全化（空 IEventList/IParameterChanges/ProcessContext/canProcessSampleSize）。`core-foundation-sys 0.8`（MIT/Apache・allow list 内）採用・`libloading` 除去。oracle sample-exact 維持・fmt/clippy/deny green（codex 報告）
+- **実測（Opus・非サンドボックス・代表）**: **NI 7/7 が crash→load 成功**（Battery 4/FM8/Massive/Kontakt 8=instrument load・Reaktor 6/Guitar Rig 7/Bite=effect load+process）。owner 最重要 Kontakt/Massive/FM8 が動く。**iZotope は setProcessing:3 のまま未解決**（Vinyl/Ozone/RX/Neutron・別要因＝bus 再調停詳細 or objc 衝突）
+- 全 sweep の回復数は継続実測中。次 = iZotope root-cause + full sweep 数値
+
 ### 6.209 feat(engine): VST3 de-risk — host context + bus 調停は NI/iZotope を救わず（#381） (Jul 8, 2026)
 
 owner 最重要ベンダー NI/iZotope 救済の de-risk（Phase 1 前倒し）を codex に委譲実装し Opus が非サンドボックス実測 → **効果なし**。
