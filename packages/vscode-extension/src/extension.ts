@@ -2118,6 +2118,13 @@ function getEditorStateForAgent(): EditorState {
  * exact live-jam recovery scenario this tool exists for. Fail loudly instead of
  * hanging silently. Save failures (false return or a thrown error) are logged
  * to the output channel so `get_log` surfaces why a persist did not happen.
+ *
+ * Known limitation: the scheme guard does not cover every dialog path — a
+ * file-scheme document can still block on an interactive prompt when
+ * `save()` detects a disk conflict (the file changed on disk since load) or
+ * an overwrite confirmation. No timeout is implemented; this path is
+ * unreachable through the current MCP tool surface (all edits flow through
+ * `open_file` → `edit_replace`), so re-evaluate if the tool surface widens.
  */
 async function saveFileForAgent(): Promise<CommandResult> {
   const editor = vscode.window.activeTextEditor

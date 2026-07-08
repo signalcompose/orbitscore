@@ -25,6 +25,7 @@ PR #394 の `/code:pr-review-team` round 1（4 専門レビュアー並列: code
 - **comment（Minor）**: `get_document_text` の description が `get_editor_state` のフィールド列挙で `language` を落としていた → 追加
 - **test（Minor）**: gated E2E に **isDirty no-op 分岐**の検証を追加（clean な状態で2回目の `save_file` → `'no changes to save'` を確認）— このガードが存在する唯一の理由の novel logic を固定
 - 据え置き（既知/pre-existing）: active-editor スコープの取り違えリスク（path 版は #392 で follow-on と明記済み）
+- **既知の限界（durable 記録）**: scheme ガードは全ダイアログ経路を塞がない — file-scheme のドキュメントでも `save()` が **disk-conflict（ロード後にディスク側が変更）や上書き確認**で対話ダイアログにブロックし得る。timeout 未実装。現状の MCP tool 面（全編集が `open_file` → `edit_replace` 経由）では unreachable のため defer。tool 面拡張時に再評価（docstring にも明記）
 - レビュアーは既存スラッシュコマンドの内蔵指定どおり Sonnet（comment-analyzer は Haiku）で起動・オーケストレーション/検品は Opus main。code-reviewer 2 体とも「16→18 ツール整合・Host allowlist 不変・sibling パターン準拠」を実機ビルド + 全 suite 実行で裏取り
 
 ### 6.204 feat(vscode-extension): MCP save_file / get_document_text — persist live-jam edits to disk (#392) (Jul 8, 2026)
