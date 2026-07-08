@@ -115,7 +115,20 @@ de-risk 失敗後、`/ask-codex:research` で一次調査 → **NI SIGSEGV の�
 - **NI = 回復**: Battery 4/FM8/Massive/Kontakt 8 = **load 成功**（instrument＝audio_in 0・Phase 0 は正常に未 process）/ Reaktor 6/Guitar Rig 7/Bite = **load+process 成功**（effect）。7/7 が crash→load。**owner 最重要の Kontakt/Massive/FM8 が動く**。
 - **iZotope = 未解決**: Vinyl/Ozone 11/RX 11/Neutron 5 = **`setProcessing: 3` fail のまま**。CFBundle+controller では救えず、別要因（bus 再調停の詳細 or objc class 重複）が残存 → 追加調査要。
 
-⇒ 「NI/iZotope は解けない」は**早計だった**。NI は CFBundle 修正で回復。iZotope は残課題。oracle は全変更後も sample-exact 維持（機構非退行）。全 sweep の回復数は本 doc 更新予定。
+⇒ 「NI/iZotope は解けない」は**早計だった**。NI は CFBundle 修正で回復。iZotope は残課題。oracle は全変更後も sample-exact 維持（機構非退行）。
+
+**full sweep（非サンドボックス・全 333・CFBundle 後）**:
+
+| 指標 | 0b spike | CFBundle 後 | 差 |
+|---|---|---|---|
+| genuine crash | 36 | **0** | 全滅解消 |
+| effect 処理OK | 188 | 216 | +28 |
+| instrument load | 51 | 57 | +6 |
+| **load 成功計** | 239 | **273 / 333（82%）** | +34 |
+
+ベンダー別 load 成功: **NI 2→37/39（実質全回復）** / iZotope 0→0/54（未解決）/ OTHER ほぼ全 load。
+残 crash/fail 60 件 = Intel-only 3（MODO BASS/Philharmonik 2/Super 8・arch 除外）+ **iZotope 54** + OTHER 2 + NI 1。
+⇒ **crash ゼロ・NI 回復済み。arm64 対応 100% に残る主課題は iZotope 54 の `setProcessing:3` 一点にほぼ集約。**
 
 ---
 
