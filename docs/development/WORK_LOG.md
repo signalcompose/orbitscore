@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.214 feat(engine): VST3 Phase 1 — production OOP effect（daemon 統合）（#381） (Jul 8, 2026)
+
+in-process 実証済み VST3 host を daemon の out-of-process サブストレート（crash 隔離・respawn）に載せた。CLAP effect child と対称。codex 実装・Opus 非サンドボックス検証。
+
+- **`orbit-vst3-effect-child`（新）**: `orbit-clap-effect-child` の transport loop 対称コピー・処理部のみ `Vst3EffectProcessor::process_block` に差し替え・clack 非リンク。CLI（--shm/--plugin/--plugin-id/--sample-rate）と protocol は同一
+- **`Vst3EffectProcessor::process_block`（追加）**: interleaved stereo を planar scratch 経由で VST3 process()・bus 判定で overwrite(effect)/add-mix(instrument)。setProcessing kNotImplemented 許容・setBusArrangements advisory は維持
+- **daemon supervisor 汎化**: `OutProcEffectConfig` に `PluginFormat{Clap,Vst3}`・`from_env` が `ORBIT_EFFECT_FORMAT`（既定 clap で後方互換）で child_exe 選択。spawn/watchdog/respawn は無改変
+- **検証（Opus・非サンドボックス）**: offline oracle parity `vst3_gain_oracle_oop_child_is_sample_exact_passthrough` PASS（共有メモリ経由 OOP child で sample-exact）+ in-process closed-form PASS。CLAP 非退行（child 4 + supervisor 9 tests）。fmt/clippy/deny clean
+- gated 実機 harness（`real_plugin_gated.rs`・#[ignore]）は owner 同席・トークン回復後に Opus が非サンドボックス実行
+- レビュー（/simplify + pr-review-team）はトークン都合でマージ前に延期実施
+
 ### 6.213 docs(engine): プラグインホスト実装ノウハウ（VST3/AU/CLAP 共通責務）（#381） (Jul 8, 2026)
 
 owner 要望（AU/CLAP 混在の将来価値）で、VST3 Phase 0 の実証知見を format 共通のホスト責務として一般化。`docs/development/POST_2.0_PLUGIN_HOST_KNOWHOW.md`。

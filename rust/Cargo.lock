@@ -1020,6 +1020,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-vst3-effect-child"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "orbit-audio-sandbox",
+ "orbit-vst3-host",
+]
+
+[[package]]
 name = "orbit-vst3-gain-oracle"
 version = "0.0.1"
 dependencies = [

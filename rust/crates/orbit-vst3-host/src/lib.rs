@@ -287,6 +287,10 @@ pub struct Vst3EffectProcessor {
     info: LoadedVst3Info,
     sample_rate: f64,
     max_samples_per_block: i32,
+    process_input_l: Vec<f32>,
+    process_input_r: Vec<f32>,
+    process_output_l: Vec<f32>,
+    process_output_r: Vec<f32>,
 }
 
 impl Vst3EffectProcessor {
@@ -394,6 +398,10 @@ impl Vst3EffectProcessor {
             info: info.clone(),
             sample_rate,
             max_samples_per_block,
+            process_input_l: vec![0.0; max_samples_per_block.max(0) as usize],
+            process_input_r: vec![0.0; max_samples_per_block.max(0) as usize],
+            process_output_l: vec![0.0; max_samples_per_block.max(0) as usize],
+            process_output_r: vec![0.0; max_samples_per_block.max(0) as usize],
         };
         Ok((processor, info))
     }
@@ -478,6 +486,96 @@ impl Vst3EffectProcessor {
             processed: true,
             is_effect: self.info.is_effect,
         })
+    }
+
+    /// Interleaved stereo f32 blockを in-place で処理する child / offline parity 用 API。
+    ///
+    /// effect（audio input busあり）は overwrite、instrument（audio input busなし）は add-mix。
+    /// 失敗時は `data` を dry のまま残して `false` を返す。
+    #[must_use]
+    pub fn process_block(&mut self, data: &mut [f32]) -> bool {
+        if !data.len().is_multiple_of(DEFAULT_CHANNELS) {
+            return false;
+        }
+        let frames = data.len() / DEFAULT_CHANNELS;
+        if frames > self.process_input_l.len() {
+            return false;
+        }
+
+        for frame in 0..frames {
+            let base = frame * DEFAULT_CHANNELS;
+            self.process_input_l[frame] = data[base];
+            self.process_input_r[frame] = data[base + 1];
+            self.process_output_l[frame] = 0.0;
+            self.process_output_r[frame] = 0.0;
+        }
+
+        let processor = self
+            .processor
+            .as_ref()
+            .expect("processor remains alive until drop");
+        let mut input_ptrs = [
+            self.process_input_l.as_mut_ptr(),
+            self.process_input_r.as_mut_ptr(),
+        ];
+        let mut output_ptrs = [
+            self.process_output_l.as_mut_ptr(),
+            self.process_output_r.as_mut_ptr(),
+        ];
+        let mut inputs = [AudioBusBuffers {
+            numChannels: DEFAULT_CHANNELS as i32,
+            silenceFlags: 0,
+            __field0: AudioBusBuffers__type0 {
+                channelBuffers32: input_ptrs.as_mut_ptr(),
+            },
+        }];
+        let mut outputs = [AudioBusBuffers {
+            numChannels: DEFAULT_CHANNELS as i32,
+            silenceFlags: 0,
+            __field0: AudioBusBuffers__type0 {
+                channelBuffers32: output_ptrs.as_mut_ptr(),
+            },
+        }];
+        let parameter_changes = ParameterChanges::empty();
+        let output_parameter_changes = ParameterChanges::empty();
+        let input_events = EventList::empty();
+        let output_events = EventList::empty();
+        let mut process_context = self.process_context();
+        let mut process_data = ProcessData {
+            processMode: ProcessModes_::kRealtime as i32,
+            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+            numSamples: frames as i32,
+            numInputs: if self.info.is_effect { 1 } else { 0 },
+            numOutputs: 1,
+            inputs: if self.info.is_effect {
+                inputs.as_mut_ptr()
+            } else {
+                ptr::null_mut()
+            },
+            outputs: outputs.as_mut_ptr(),
+            inputParameterChanges: parameter_changes.as_ptr(),
+            outputParameterChanges: output_parameter_changes.as_ptr(),
+            inputEvents: input_events.as_ptr(),
+            outputEvents: output_events.as_ptr(),
+            processContext: &mut process_context,
+        };
+
+        let result = unsafe { processor.process(&mut process_data) };
+        if !is_ok(result) {
+            return false;
+        }
+
+        for frame in 0..frames {
+            let base = frame * DEFAULT_CHANNELS;
+            if self.info.is_effect {
+                data[base] = self.process_output_l[frame];
+                data[base + 1] = self.process_output_r[frame];
+            } else {
+                data[base] += self.process_output_l[frame];
+                data[base + 1] += self.process_output_r[frame];
+            }
+        }
+        true
     }
 
     fn process_context(&self) -> ProcessContext {

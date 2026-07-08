@@ -27,7 +27,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use orbit_audio_daemon::engine_wrap::EngineWrap;
-use orbit_audio_daemon::outproc_effect::OutProcEffectConfig;
+use orbit_audio_daemon::outproc_effect::{OutProcEffectConfig, PluginFormat};
 
 /// test-effect が乗算する固定 gain（plugin 側 `EFFECT_GAIN` と一致させること）。
 const EFFECT_GAIN: f32 = 0.5;
@@ -62,6 +62,7 @@ fn test_effect_dylib() -> PathBuf {
 /// loud に止める。各 test の共通セットアップ（dylib/child の二重解決と prereq 重複を 1 箇所に集約）。
 fn setup_test(buffer_frames: Option<u32>) -> (OutProcEffectConfig, PathBuf) {
     let cfg = OutProcEffectConfig {
+        format: PluginFormat::Clap,
         child_exe: child_exe(),
         plugin: test_effect_dylib(),
         plugin_id: None, // 単一プラグイン bundle なので id 省略可
