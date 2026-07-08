@@ -19,10 +19,18 @@
 
 ## 1. スコープと owner 意図
 
+> 🎛️ **パイプラインの north star**: 1 つの再生パイプラインで **CLAP / VST3 / AU を併用**する。instrument は per-format 単体、effect は**混在フォーマットの直列チェーン**。正本 §3 の format 非依存 substrate（「plugin format = どの child を spawn するか」だけ）がこれを可能にする。
+
 ### owner が求めているもの
-- **インストゥルメント系プラグインとエフェクト系プラグインの「両方」をホストしたい。** これは「VST3 と CLAP を併用」ではなく「**音源（instrument）とエフェクト（effect）の両カテゴリのプラグインを鳴らせるようにする**」という意味。
-- **フォーマットは VST3 を主眼**。既存の CLAP ホスティング資産と**対称**に実装する。
-- 実プラグイン資産（ユーザーが持つ市販プラグイン）は VST3/AU に集中しており、出荷価値は VST3 カバレッジに依存する（owner 確定 2026-07-04）。
+- **最終ゴール = CLAP / VST3 / AU を同じパイプラインで併用できる engine。** どれか 1 つに絞るのではなく、3 フォーマットが 1 つの再生パイプラインに共存する。
+- **「両方」= instrument 系と effect 系の両カテゴリをホストする**、という意味。プラグインエフェクトの性質を踏まえると:
+  - **instrument（音源）**: 1 プラグイン = 1 フォーマット（音源はそれぞれ単体で鳴る・チェーンにはならない）。
+  - **effect（エフェクト）= 直列チェーン（insert）**。プラグインエフェクトは信号を直列に通す挿入で、**複数を連結でき、各ノードのフォーマットが混在し得る**（例: `AU → CLAP → VST3` と異なるプラグインを順に刺す）。パイプラインはチェーン段でフォーマットに依存しない。
+- **VST3 の位置づけ = 次に追加するフォーマット。** 市販プラグイン資産が VST3/AU に集中し出荷価値が高いため VST3 を最優先で足す。実装は**既存 CLAP host の構造を対称にコピーした兄弟実装**（`orbit-clap-host` → `orbit-vst3-host` 等）。共有の format 非依存 substrate に両方が乗るので **CLAP は動いたまま**・**AU も後から同 substrate に乗る**。「主眼」は「VST3 を最優先で追加」の意味で、他フォーマットを捨てる意味ではない。
+- **CLAP は legacy ではなく first-class。** 市販資産は VST3/AU 中心だが、**良質なオープンソース CLAP は積極的に集めてバンドルしたい**（owner）。
+- 実プラグイン資産（市販）は VST3/AU に集中 → 出荷価値は VST3/AU カバレッジに依存（owner 確定 2026-07-04）。
+
+> ⚠️ **effect chain の現状と design item**: 現 substrate は**単一 effect insert**（`PostProcessor` 1 つ）。混在フォーマットの**多段チェーン**が最終形。format 非依存 substrate では各ノードのフォーマットは独立（各ノードが自分のフォーマットの child を spawn・serial insert = overwrite が自然に合成される）。**多段チェーン化は design item** — 現コードが単一 effect 前提なので、Phase 1 で「format 選択を chain-ready にしておく」（`PluginFormat` を per-node で持てる形）に留め、実際の N 段チェーン + 混在フォーマットの合成は現コードと突き合わせて別途設計する（Phase 1 の VST3 effect 自体は現 CLAP と同じ単一 insert で足りる）。
 
 ### 🔴 最重要 — effect と instrument は準備状態が非対称（平坦化禁止）
 | カテゴリ | 乗る substrate | 現状 | この doc での扱い |

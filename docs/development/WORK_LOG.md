@@ -26,6 +26,7 @@ VST3 プラグインホスティングの実装計画 doc（`docs/development/PO
 - **段階化（advisor 検証済み・effect と instrument の準備状態を平坦化しない）**: Phase 0 = in-proc offline spike（#381・🛑 dep-tree license 監査 + sample-exact 1 block）→ Phase 1 = production OOP effect（M1 substrate 流用・codex-ready）→ **Phase 2 = M2 instrument IPC 設計（🔴 Opus+owner の spec 作業・codex 委譲禁止・format-neutral 決定を保持）**→ Phase 3 = VST3 instrument（M2 landing 後）
 - **技術チェック 2 点を明記**: (1) `vst3` の全 transitive 依存を `cargo tree` で実監査（推測禁止）(2) effect/instrument 判定は CLAP の `has_audio_input` でなく **VST3 bus count**（取り違えると silent-but-wrong）
 - **DSL は non-blocking**: engine は CLI/env 駆動で完結（既存 CLAP も env のみ）。構文 3 案提示 + 推奨（Option C 当面据え置き → effect 動作後に Option A verb スタイルを owner 確定）
+- **owner レビュー反映（framing 訂正）**: §1 を「CLAP/VST3/AU を**同じパイプラインで併用**する engine」へ書き直し。effect は insert = **混在フォーマットの直列チェーン**（例 `AU → CLAP → VST3`）、instrument は per-format 単体。「VST3 主眼・CLAP と対称」= VST3 を最優先で追加する兄弟実装の意味（他 format を捨てない）と明記。CLAP は first-class（良質 OSS CLAP をバンドルしたい）。effect 多段チェーン化を design item として追記（現 substrate は単一 insert・Phase 1 は chain-ready に留める）
 
 ### 6.205 fix(vscode-extension): pr-review-team round 1 — save_file headless-hang guard (#394) (Jul 8, 2026)
 
