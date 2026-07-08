@@ -3,7 +3,8 @@
 **Issue**: #381 / Epic #292
 **正本 plan**: [`POST_2.0_VST3_HOSTING_PLAN.md`](POST_2.0_VST3_HOSTING_PLAN.md) §Phase 0
 **日付**: 2026-07-08
-**判定**: 🟢 **GO** — 手書き COM で実市販 VST3 をホストできることを実証。Phase 1（production OOP effect）へ進む。
+**推奨**: 🟢 **GO 推奨（最終判定は owner）** — 手書き COM で実市販 VST3 をホストできることを実証。GO なら Phase 1（production OOP effect）へ。
+**判定**: ⬜ owner 判定待ち（この spike は STOP 条件に非該当・下記エビデンスに基づき owner が GO / NO-GO / 保留を決定する）。
 
 ---
 
