@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.209 feat(engine): VST3 de-risk — host context + bus 調停は NI/iZotope を救わず（#381） (Jul 8, 2026)
+
+owner 最重要ベンダー NI/iZotope 救済の de-risk（Phase 1 前倒し）を codex に委譲実装し Opus が非サンドボックス実測 → **効果なし**。
+
+- **実装（codex・oracle 非退行）**: 最小 IHostApplication（getName + IMessage/IAttributeList createInstance）を `initialize` に渡す（null 廃止）+ bus arrangement 調停（getBusArrangement→setBusArrangements→activateBus・mono/stereo 既定）。oracle sample-exact 維持・fmt/clippy/deny green
+- **実測（Opus・非サンドボックス）**: sweep BEFORE=AFTER 完全同一（188/109/36）。直接 probe でも NI（Battery 4/FM8/Massive）= SIG11 crash のまま・iZotope（Vinyl/Ozone 11）= `setProcessing:3` fail のまま
+- **結論**: 「host context で NI・bus 調停で iZotope が直る」推定は**実証で否定**。両者は深い要因（NI=Native Access/ランタイム依存・iZotope=objc class 重複/特殊調停）を要し軽い拡張では解けない
+- **arch 分類追加**: Intel-only（arm64 なし）= MODO BASS/Philharmonik 2/Super 8 は「アーキ非対応＝除外」（ホスト fail でない・Rosetta 終息前提で arm64-native 対象）
+- de-risk コードは branch 保持（host context/bus 調停自体は Phase 1 で必要な正しい方向・非退行）。ノウハウ doc は「成功後」の owner 指示によりペンディング（task #4）
+
 ### 6.208 feat(engine): VST3 Phase 0-0b host spike — GO verdict (188/333 effects host) (#381) (Jul 8, 2026)
 
 VST3 hosting Phase 0（#381）の 0b（手書き COM host spike）を codex に委譲し実装完了 → **GO 判定**。verdict doc = `docs/development/POST_2.0_VST3_STEP0_SPIKE.md`。

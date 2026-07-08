@@ -38,6 +38,7 @@ pub enum Vst3HostError {
     CreateInstance(tresult),
     QueryAudioProcessor,
     Initialize(tresult),
+    BusArrangement(tresult),
     SetupProcessing(tresult),
     SetActive(tresult),
     SetProcessing(tresult),
@@ -59,6 +60,9 @@ impl Display for Vst3HostError {
             }
             Self::QueryAudioProcessor => write!(f, "queryInterface(IAudioProcessor) failed"),
             Self::Initialize(result) => write!(f, "IComponent::initialize failed: {result}"),
+            Self::BusArrangement(result) => {
+                write!(f, "IAudioProcessor::setBusArrangements failed: {result}")
+            }
             Self::SetupProcessing(result) => {
                 write!(f, "IAudioProcessor::setupProcessing failed: {result}")
             }
@@ -148,6 +152,7 @@ impl Drop for LoadedLibrary {
 pub struct Vst3EffectProcessor {
     processor: Option<ComPtr<IAudioProcessor>>,
     component: Option<ComPtr<IComponent>>,
+    _host_context: ComWrapper<HostApplication>,
     factory: Option<ComPtr<IPluginFactory>>,
     _home_thread: PhantomData<Rc<()>>,
     _library: LoadedLibrary,
@@ -180,7 +185,13 @@ impl Vst3EffectProcessor {
         let component = unsafe { ComPtr::from_raw(component_raw as *mut IComponent) }
             .ok_or(Vst3HostError::CreateInstance(create_result))?;
 
-        let init_result = unsafe { component.initialize(ptr::null_mut()) };
+        let host_context = ComWrapper::new(HostApplication);
+        let host_context_ptr = host_context
+            .as_com_ref::<IHostApplication>()
+            .expect("HostApplication exposes IHostApplication")
+            .as_ptr()
+            .cast::<FUnknown>();
+        let init_result = unsafe { component.initialize(host_context_ptr) };
         if !is_ok(init_result) {
             return Err(Vst3HostError::Initialize(init_result));
         }
@@ -189,6 +200,16 @@ impl Vst3EffectProcessor {
             .as_com_ref()
             .cast::<IAudioProcessor>()
             .ok_or(Vst3HostError::QueryAudioProcessor)?;
+
+        let input_buses = unsafe {
+            component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kInput as i32)
+        };
+        let output_buses = unsafe {
+            component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kOutput as i32)
+        };
+        let is_effect = input_buses > 0;
+
+        configure_audio_buses(&component, &processor, input_buses, output_buses)?;
 
         let mut setup = ProcessSetup {
             processMode: ProcessModes_::kRealtime as i32,
@@ -200,14 +221,6 @@ impl Vst3EffectProcessor {
         if !is_ok(setup_result) {
             return Err(Vst3HostError::SetupProcessing(setup_result));
         }
-
-        let input_buses = unsafe {
-            component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kInput as i32)
-        };
-        let output_buses = unsafe {
-            component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kOutput as i32)
-        };
-        let is_effect = input_buses > 0;
 
         // Phase 0 only verifies the effect overwrite path. This detection is separate from CLAP's
         // `has_audio_input`; treating an instrument as an effect would be silent-but-wrong because
@@ -232,6 +245,7 @@ impl Vst3EffectProcessor {
         let processor = Self {
             processor: Some(processor),
             component: Some(component),
+            _host_context: host_context,
             factory: Some(factory),
             _home_thread: PhantomData,
             _library: library,
@@ -346,6 +360,108 @@ struct AudioModuleClass {
     name: String,
 }
 
+fn configure_audio_buses(
+    component: &ComPtr<IComponent>,
+    processor: &ComPtr<IAudioProcessor>,
+    input_buses: i32,
+    output_buses: i32,
+) -> Result<(), Vst3HostError> {
+    let mut input_arrangements = arrangements_for_direction(
+        component,
+        processor,
+        BusDirections_::kInput as i32,
+        input_buses,
+    );
+    let mut output_arrangements = arrangements_for_direction(
+        component,
+        processor,
+        BusDirections_::kOutput as i32,
+        output_buses,
+    );
+
+    let result = unsafe {
+        processor.setBusArrangements(
+            ptr_or_null_mut(&mut input_arrangements),
+            input_arrangements.len() as i32,
+            ptr_or_null_mut(&mut output_arrangements),
+            output_arrangements.len() as i32,
+        )
+    };
+    if !is_ok(result) {
+        return Err(Vst3HostError::BusArrangement(result));
+    }
+
+    activate_audio_buses(component, BusDirections_::kInput as i32, input_buses);
+    activate_audio_buses(component, BusDirections_::kOutput as i32, output_buses);
+    Ok(())
+}
+
+fn arrangements_for_direction(
+    component: &ComPtr<IComponent>,
+    processor: &ComPtr<IAudioProcessor>,
+    direction: BusDirection,
+    bus_count: i32,
+) -> Vec<SpeakerArrangement> {
+    (0..bus_count)
+        .map(|index| {
+            let channel_count = audio_bus_channel_count(component, direction, index);
+            let mut arrangement = 0;
+            let result = unsafe { processor.getBusArrangement(direction, index, &mut arrangement) };
+            if is_ok(result) && arrangement != 0 {
+                arrangement
+            } else {
+                arrangement_for_channels(channel_count)
+            }
+        })
+        .collect()
+}
+
+fn audio_bus_channel_count(
+    component: &ComPtr<IComponent>,
+    direction: BusDirection,
+    index: i32,
+) -> i32 {
+    let mut bus = BusInfo {
+        mediaType: MediaTypes_::kAudio as i32,
+        direction,
+        channelCount: DEFAULT_CHANNELS as i32,
+        name: [0; 128],
+        busType: 0,
+        flags: 0,
+    };
+    let result =
+        unsafe { component.getBusInfo(MediaTypes_::kAudio as i32, direction, index, &mut bus) };
+    if is_ok(result) && bus.channelCount > 0 {
+        bus.channelCount
+    } else {
+        DEFAULT_CHANNELS as i32
+    }
+}
+
+fn arrangement_for_channels(channel_count: i32) -> SpeakerArrangement {
+    match channel_count {
+        1 => SpeakerArr::kMono,
+        2 => SpeakerArr::kStereo,
+        _ => SpeakerArr::kStereo,
+    }
+}
+
+fn activate_audio_buses(component: &ComPtr<IComponent>, direction: BusDirection, bus_count: i32) {
+    for index in 0..bus_count {
+        unsafe {
+            let _ = component.activateBus(MediaTypes_::kAudio as i32, direction, index, 1);
+        }
+    }
+}
+
+fn ptr_or_null_mut<T>(values: &mut [T]) -> *mut T {
+    if values.is_empty() {
+        ptr::null_mut()
+    } else {
+        values.as_mut_ptr()
+    }
+}
+
 fn find_audio_module_class(
     factory: &ComPtr<IPluginFactory>,
 ) -> Result<AudioModuleClass, Vst3HostError> {
@@ -422,6 +538,200 @@ trait TuidPtr {
 impl TuidPtr for TUID {
     fn as_ptr(&self) -> *const i8 {
         self.as_slice().as_ptr()
+    }
+}
+
+struct HostApplication;
+
+impl Class for HostApplication {
+    type Interfaces = (IHostApplication,);
+}
+
+impl IHostApplicationTrait for HostApplication {
+    unsafe fn getName(&self, name: *mut String128) -> tresult {
+        if name.is_null() {
+            return kInvalidArgument;
+        }
+        copy_wstring("OrbitScore VST3 Host Spike", &mut *name);
+        kResultOk
+    }
+
+    unsafe fn createInstance(
+        &self,
+        _cid: *mut TUID,
+        iid: *mut TUID,
+        obj: *mut *mut c_void,
+    ) -> tresult {
+        if obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = ptr::null_mut();
+        if iid.is_null() {
+            return kInvalidArgument;
+        }
+
+        if *iid == IMessage_iid {
+            let ptr = ComWrapper::new(HostMessage::new())
+                .to_com_ptr::<IMessage>()
+                .expect("HostMessage exposes IMessage")
+                .into_raw();
+            *obj = ptr.cast::<c_void>();
+            kResultOk
+        } else if *iid == IAttributeList_iid {
+            let ptr = ComWrapper::new(HostAttributeList)
+                .to_com_ptr::<IAttributeList>()
+                .expect("HostAttributeList exposes IAttributeList")
+                .into_raw();
+            *obj = ptr.cast::<c_void>();
+            kResultOk
+        } else {
+            kNotImplemented
+        }
+    }
+}
+
+struct HostMessage {
+    message_id: Cell<*const i8>,
+    attributes: ComWrapper<HostAttributeList>,
+    attributes_ptr: Cell<*mut IAttributeList>,
+}
+
+impl HostMessage {
+    fn new() -> Self {
+        Self {
+            message_id: Cell::new(ptr::null()),
+            attributes: ComWrapper::new(HostAttributeList),
+            attributes_ptr: Cell::new(ptr::null_mut()),
+        }
+    }
+
+    fn attributes_ptr(&self) -> *mut IAttributeList {
+        let existing = self.attributes_ptr.get();
+        if !existing.is_null() {
+            return existing;
+        }
+        let ptr = self
+            .attributes
+            .to_com_ptr::<IAttributeList>()
+            .expect("HostAttributeList exposes IAttributeList")
+            .into_raw();
+        self.attributes_ptr.set(ptr);
+        ptr
+    }
+}
+
+impl Drop for HostMessage {
+    fn drop(&mut self) {
+        let ptr = self.attributes_ptr.get();
+        if !ptr.is_null() {
+            unsafe {
+                if let Some(attributes) = ComPtr::from_raw(ptr) {
+                    drop(attributes);
+                }
+            }
+        }
+    }
+}
+
+impl Class for HostMessage {
+    type Interfaces = (IMessage,);
+}
+
+impl IMessageTrait for HostMessage {
+    unsafe fn getMessageID(&self) -> FIDString {
+        self.message_id.get()
+    }
+
+    unsafe fn setMessageID(&self, id: FIDString) {
+        self.message_id.set(id);
+    }
+
+    unsafe fn getAttributes(&self) -> *mut IAttributeList {
+        self.attributes_ptr()
+    }
+}
+
+struct HostAttributeList;
+
+impl Class for HostAttributeList {
+    type Interfaces = (IAttributeList,);
+}
+
+impl IAttributeListTrait for HostAttributeList {
+    unsafe fn setInt(&self, _id: IAttributeList_::AttrID, _value: i64) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn getInt(&self, _id: IAttributeList_::AttrID, value: *mut i64) -> tresult {
+        if !value.is_null() {
+            *value = 0;
+        }
+        kResultFalse
+    }
+
+    unsafe fn setFloat(&self, _id: IAttributeList_::AttrID, _value: f64) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn getFloat(&self, _id: IAttributeList_::AttrID, value: *mut f64) -> tresult {
+        if !value.is_null() {
+            *value = 0.0;
+        }
+        kResultFalse
+    }
+
+    unsafe fn setString(&self, _id: IAttributeList_::AttrID, _string: *const TChar) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn getString(
+        &self,
+        _id: IAttributeList_::AttrID,
+        string: *mut TChar,
+        size_in_bytes: u32,
+    ) -> tresult {
+        if !string.is_null() && size_in_bytes >= std::mem::size_of::<TChar>() as u32 {
+            *string = 0;
+        }
+        kResultFalse
+    }
+
+    unsafe fn setBinary(
+        &self,
+        _id: IAttributeList_::AttrID,
+        _data: *const c_void,
+        _size_in_bytes: u32,
+    ) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn getBinary(
+        &self,
+        _id: IAttributeList_::AttrID,
+        data: *mut *const c_void,
+        size_in_bytes: *mut u32,
+    ) -> tresult {
+        if !data.is_null() {
+            *data = ptr::null();
+        }
+        if !size_in_bytes.is_null() {
+            *size_in_bytes = 0;
+        }
+        kResultFalse
+    }
+}
+
+fn copy_wstring(src: &str, dst: &mut [TChar]) {
+    let mut len = 0;
+    for (src, dst) in src.encode_utf16().zip(dst.iter_mut()) {
+        *dst = src;
+        len += 1;
+    }
+
+    if len < dst.len() {
+        dst[len] = 0;
+    } else if let Some(last) = dst.last_mut() {
+        *last = 0;
     }
 }
 

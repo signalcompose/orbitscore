@@ -90,6 +90,20 @@ feasibility は十分に立証された。カバレッジを上げる道（host 
 
 これらは正本 plan の Phase 1（1a-1d）で対称実装する。**Phase 0 gate（① + ② + sweep）には非該当**（gate は代表実プラグインで通過済み）。
 
+### 🔴 de-risk 検証（2026-07-08・仮説は否定された）
+
+owner の最重要ベンダー = NI/iZotope のため、上記 1・2 を spike ホストに前倒し実装して回復するか実測した（codex 実装・Opus が非サンドボックス実測）:
+- **最小 IHostApplication**（getName + IMessage/IAttributeList createInstance）を `initialize` に渡す。
+- **bus arrangement 調停**（getBusArrangement→setBusArrangements→activateBus・mono/stereo 既定）。
+
+**結果 = 効果なし**。sweep は BEFORE=AFTER で完全同一（188/109/36）。直接 probe（新バイナリ・非サンドボックス）でも:
+- NI（Battery 4 / FM8 / Massive）= **SIG11 crash のまま**
+- iZotope（Vinyl / Ozone 11）= **`setProcessing: 3` fail のまま**
+
+⇒ 「host context で NI が、bus 調停で iZotope が直る」という §6①②の推定は**実証で否定**。両ベンダーはより深い要因（NI: Native Access/ランタイム依存 or 完全な host 実装・iZotope: objc class 重複 or 特殊調停）を要し、**Phase 1 の軽い host 拡張では解けない**。oracle は de-risk 後も sample-exact 維持（機構は非退行）。de-risk コードは branch に保持（host context/bus 調停自体は Phase 1 で必要な正しい方向）。
+
+**GO 判定への含意（owner 判断材料）**: 汎用 VST3 effect のホストは実証済み（UA 全カタログ・IK AmpliTube/ARC 等 188 個）だが、**最重要 2 ベンダー（NI/iZotope）は簡単には動かず、深い調査（成功保証なし）が要る**。この事実を踏まえて owner が GO/NO-GO/保留を決める。
+
 ---
 
 ## 7. 工数見積り（Phase 1 — production OOP effect）
