@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.212 fix(engine): VST3 setBusArrangements advisory 化 — arm64 端 2 も解決（#381） (Jul 8, 2026)
+
+arm64 の残 2 エッジケースを解消し、arm64 商用 VST3 を実質全カバー。
+
+- **Komplete Kontrol = 実は既に loaded**（instrument・audio_in 0/out 16）。「fail」は sweep 分類の綾（Phase 0 が instrument を process しないだけ）＝真の失敗でない
+- **ARIA Player = `setBusArrangements failed: 1`(kResultFalse) で hard-fail**。research どおり setBusArrangements は advisory（JUCE も致命扱いしない・プラグイン既定 arrangement で動作）→ **最終失敗を非致命化**（1 行相当・plugin 既定 arrangement で続行・厳密 buffer 整合は Phase 1）
+- **実測（Opus・非サンドボックス）**: ARIA Player = loaded:true（instrument）。回帰なし（Ozone/Reaktor 継続）。clippy/deny clean
+- kNotImplemented(6.211)・setBusArrangements(本件) いずれも「商用 host は optional/advisory メソッドの非 OK 戻りを致命にしない」という同一教訓
+
 ### 6.211 fix(engine): VST3 setProcessing kNotImplemented 許容 — iZotope 全回復（#381） (Jul 8, 2026)
 
 `/ask-codex:research` → 1 行修正で iZotope クラッシュ… ではなく fail を解消。

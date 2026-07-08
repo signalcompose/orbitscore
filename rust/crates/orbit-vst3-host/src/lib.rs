@@ -693,9 +693,11 @@ fn configure_audio_buses(
         );
         result = set_bus_arrangements(processor, &mut input_arrangements, &mut output_arrangements);
     }
-    if !is_ok(result) {
-        return Err(Vst3HostError::BusArrangement(result));
-    }
+    // setBusArrangements は advisory。kResultFalse を返すプラグイン（ARIA Player 等・特に
+    // instrument）はプラグイン既定の arrangement で動作する。JUCE も致命扱いしない。ここで
+    // hard-fail すると「host 提案 arrangement を拒否するだけ」のプラグインが全滅するので続行する。
+    // （厳密な buffer 整合は Phase 1 で getBusArrangement の実値に合わせる。）
+    let _ = result;
 
     activate_audio_buses(component, BusDirections_::kInput as i32, input_buses);
     activate_audio_buses(component, BusDirections_::kOutput as i32, output_buses);
