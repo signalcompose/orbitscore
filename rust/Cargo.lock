@@ -1030,6 +1030,7 @@ dependencies = [
 name = "orbit-vst3-host"
 version = "0.0.1"
 dependencies = [
+ "libloading",
  "vst3",
 ]
 

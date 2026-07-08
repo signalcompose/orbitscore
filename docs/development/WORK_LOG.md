@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.208 feat(engine): VST3 Phase 0-0b host spike — GO verdict (188/333 effects host) (#381) (Jul 8, 2026)
+
+VST3 hosting Phase 0（#381）の 0b（手書き COM host spike）を codex に委譲し実装完了 → **GO 判定**。verdict doc = `docs/development/POST_2.0_VST3_STEP0_SPIKE.md`。
+
+- **0b 実装（codex 委譲・独立検証済み）**: `orbit-vst3-host` に手書き COM host（dlopen→GetPluginFactory→IComponent→IAudioProcessor→setupProcessing→setActive→setProcessing→process→逆順 teardown・field 宣言順で drop 順確定・`getBusCount(kAudio,kInput)` で effect/instrument 判定）。追加 dep `libloading=0.8`（ISC・allow list 内）
+- **① sample-exact PASS（独立再検証）**: gain oracle を param なし→恒等・param 0.5→`to_bits()` 厳密 bit-exact。skip なしで実 dylib ロード比較
+- **② 実市販プラグイン ABI 適合 PASS（独立再検証・非サンドボックス）**: V-Pan / ARC 4 / AmpliTube 5 が load→process→drop 成功（processed:true・NaN/Inf/発散なし）。実 Steinberg-SDK 製プラグインで process() 実走 ⇒ binding ABI が実 SDK と適合（owner の「相互一貫的に間違い」懸念クリア）
+- **compatibility sweep（実コレクション 333 個）**: 最小ホストで **effect 処理OK 188/333(56%)・load 成功 237/333(71%)**・instrument 49・host-limit fail 59・**genuine crash 36(11%)**・hang 0
+- **🔴 サンドボックス汚染を発見・是正**: codex 初回 sweep はコマンドサンドボックス下で crash=220(66%) と誤出力（`/bin/ps` ブロック等でプラグイン init が SIGKILL → 偽 crash）。**非サンドボックスで再走 → 真の crash は 36（6倍水増しが解消）**。V-Pan/ARC 4/AmpliTube 5 は sandbox=crash → 非sandbox=PASS に反転。教訓: VST3 sweep はサンドボックス外で計測
+- **genuine crash 36 = ほぼ全て Native Instruments**（Kontakt/Massive/FM8/Reaktor/Guitar Rig/Maschine/NI Solid・VC 系）→ 均一 ABI バグでなく NI ランタイムが host context 前提を要求と推定
+- **Phase 1 作業項目を特定**: (1) null host context → 最小 IHostApplication 実装（crash 36 の主因・NI 回復の鍵）(2) bus arrangement 未調停（setBusArrangements/activateBus）→ host-limit 59 の主因（iZotope setProcessing:3）(3) 単一 stereo 固定の解消。いずれも Phase 0 gate 非該当（gate は代表実プラグインで通過）
+- **独立検証**: fmt/clippy(`-D warnings`)/deny(licenses ok)/`cargo test -p orbit-vst3-host`（①② skip なし PASS）を Opus が再実行し全 green
+
 ### 6.207 feat(engine): VST3 Phase 0-0a license audit PASS + gain oracle scaffold (#381) (Jul 8, 2026)
 
 VST3 hosting Phase 0（#381）の 0a（license 監査）を実行し PASS。0b（host spike）の sample-exact oracle をスキャフォールドした。
