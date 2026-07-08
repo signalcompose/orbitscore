@@ -130,6 +130,14 @@ de-risk 失敗後、`/ask-codex:research` で一次調査 → **NI SIGSEGV の�
 残 crash/fail 60 件 = Intel-only 3（MODO BASS/Philharmonik 2/Super 8・arch 除外）+ **iZotope 54** + OTHER 2 + NI 1。
 ⇒ **crash ゼロ・NI 回復済み。arm64 対応 100% に残る主課題は iZotope 54 の `setProcessing:3` 一点にほぼ集約。**
 
+### 🟢 iZotope も回復（2026-07-08・1 行修正）
+
+`/ask-codex:research` で判明: **`setProcessing` の戻り `3` = `kNotImplemented`**（vst3-rs tresult: OK=0/False=1/InvalidArg=2/**NotImplemented=3**）。iZotope は setProcessing を実装せず kNotImplemented を返すだけで **VST3 的に合法**。JUCE も非致命として続行する（`warnOnFailureIfImplemented`）。**ホストの `is_ok()` が `kResultOk` しか通さず 3 を hard error にしていたのが唯一のバグ** — iZotope は壊れていなかった。
+
+修正（1 行）: `setProcessing` の結果が `kNotImplemented` の場合はロード失敗にしない。**実測（非サンドボックス）: Vinyl/Ozone 11/RX 11/Neutron 5/Vocal Doubler/Relay = 全て load+process 成功**。NI 回帰なし。
+
+⇒ **crash 0・NI 回復・iZotope 回復。arm64 対応はほぼ全カバー**（残は Intel-only 3 個のみ = arch 除外）。教訓: 商用 host は optional メソッドの `kNotImplemented` を成功扱いにする（VST3 SDK / JUCE 準拠）。
+
 ---
 
 ## 7. 工数見積り（Phase 1 — production OOP effect）

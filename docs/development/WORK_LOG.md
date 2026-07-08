@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.211 fix(engine): VST3 setProcessing kNotImplemented 許容 — iZotope 全回復（#381） (Jul 8, 2026)
+
+`/ask-codex:research` → 1 行修正で iZotope クラッシュ… ではなく fail を解消。
+
+- **research 発見**: `setProcessing` の戻り `3` = **`kNotImplemented`**（vst3-rs tresult: OK=0/False=1/InvalidArg=2/NotImplemented=3）。iZotope は setProcessing 未実装で kNotImplemented を返すだけ＝**VST3 的に合法**。JUCE も非致命扱い。ホストの `is_ok()` が 3 を hard error にしていたのが唯一のバグ（iZotope は壊れていない）
+- **修正（Opus・1 行）**: `setProcessing` 結果が `kNotImplemented` ならロード失敗にしない
+- **実測（Opus・非サンドボックス）**: Vinyl/Ozone 11/RX 11/Neutron 5/Vocal Doubler/Relay = **全て load+process 成功**。NI 回帰なし（Bite/Reaktor 6 継続）
+- **到達点**: crash 0・NI 回復・iZotope 回復 → arm64 ほぼ全カバー（残=Intel-only 3個のみ）。教訓=商用 host は optional メソッドの kNotImplemented を成功扱いに（SDK/JUCE 準拠）
+- 全 sweep 最終数値は継続実測
+
 ### 6.210 feat(engine): VST3 CFBundle load path — NI 全回復・iZotope は残課題（#381） (Jul 8, 2026)
 
 `/ask-codex:research`（一次調査）→ codex:rescue 実装で NI クラッシュを解消。

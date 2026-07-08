@@ -372,8 +372,11 @@ impl Vst3EffectProcessor {
             return Err(Vst3HostError::SetActive(active_result));
         }
 
+        // setProcessing は optional。kNotImplemented(=3) を返すプラグイン（例: iZotope
+        // Ozone/RX/Neutron 系）は多く、VST3 的に合法。JUCE も kNotImplemented を非致命として
+        // 続行する（warnOnFailureIfImplemented）。ここで hard error にすると iZotope 全滅する。
         let processing_result = unsafe { processor.setProcessing(1) };
-        if !is_ok(processing_result) {
+        if !is_ok(processing_result) && processing_result != kNotImplemented {
             return Err(Vst3HostError::SetProcessing(processing_result));
         }
 
