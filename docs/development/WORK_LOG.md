@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.213 docs(engine): プラグインホスト実装ノウハウ（VST3/AU/CLAP 共通責務）（#381） (Jul 8, 2026)
+
+owner 要望（AU/CLAP 混在の将来価値）で、VST3 Phase 0 の実証知見を format 共通のホスト責務として一般化。`docs/development/POST_2.0_PLUGIN_HOST_KNOWHOW.md`。
+
+- **中核原則**: 商用ホストは optional/advisory メソッドの非 OK 戻り（kNotImplemented/kResultFalse）を致命扱いにしない（VST3 SDK/JUCE 準拠）
+- **責務対応表**: モジュールロード / host context / component-controller 接続 / I/O バス調停 / 非OK戻り許容 / process データ完全性 / teardown を **VST3（実証）↔ AU（推論）↔ CLAP（orbit-clap-host 一部裏取り）** で対応づけ
+- VST3 の 4 修正を一次事実として記録 + 計測ノウハウ（サンドボックス水増し・1 plugin 1 process・arch 除外）+ Phase 1+ 申し送り（厳密 buffer 整合・instrument 経路）
+- エビデンス強度を明記（VST3=実測 / AU=推論 / CLAP=一部裏取り）
+
 ### 6.212 fix(engine): VST3 setBusArrangements advisory 化 — arm64 端 2 も解決（#381） (Jul 8, 2026)
 
 arm64 の残 2 エッジケースを解消し、arm64 商用 VST3 を実質全カバー。
