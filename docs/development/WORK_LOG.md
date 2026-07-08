@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.204 feat(vscode-extension): MCP save_file / get_document_text — persist live-jam edits to disk (#392) (Jul 8, 2026)
+
+#388 Agent Bridge の follow-on（#392）。MCP `edit_replace` はエディタバッファのみを書き換えディスク保存しない（auto-save もオフ）ため、ライブセッション終了後に演奏された最終状態のファイルを agent が回収できなかった（2026-07-07 の live jam では osascript Cmd+S で救出＝Accessibility 権限依存で headless 不可）。エディタ配管ツール2本を追加:
+
+- **`save_file`**: アクティブドキュメントを `document.save()` で保存。`isDirty` ガードで分岐（未変更なら no-op で ok・保存 fsPath を message に）— `document.save()` が clean 時に false を返すか true を返すかの曖昧さを無害化。dirty で save が false のときだけ error
+- **`get_document_text`**: アクティブドキュメントの全文を構造化して返す（`{ path, text }`・no-editor 時は両 null）。既存 `get_editor_state` は path/cursor/selection/lineCount/isDirty のみで本文が取れず、`edit_replace` 適用確認・diff 検証に使えなかった問題を解消
+- 両ツールとも **active-editor 限定**（既存 `edit_replace`/`get_editor_state` と一貫）。issue の「(or path 指定)」版は今回作らず follow-on 扱い
+- 配線: `mcp-server.ts`（`DocumentText` 型 + `OrbitScoreToolHandlers` + `buildServer` 登録）、`extension.ts`（`saveFileForAgent`/`getDocumentTextForAgent` + handlers）。error 封筒は `toToolResult`、snapshot は `get_editor_state` と同型の inline JSON を再利用（新規ヘルパー無し）
+- テスト: stub suite を 16→18 ツールに更新 + `get_document_text` round-trip 1本追加。gated E2E に「`edit_replace` 後の buffer を `get_document_text` で確認 → `save_file` → ディスク上の内容に置換が反映されていることを検証」ステップを追加
+- **spec**: WCTM_SYSTEM_SPEC §3.1 は WCTM 演奏ランタイムの概念的ツール例（`get_performance_features`/`evaluate_orbitscore`/`get_session_tail`）で拡張ホスト側の現行ツールを網羅列挙していないため、エディタ配管ツール追加に spec-first 更新は不要と判断
+- 実装は Sonnet 委譲、計画・検品は main（Opus）。ビルド + 全 suite 1281 passed / 29 skipped（回帰なし）+ lint clean + gated E2E クリーンにスキップ確認
+- **/simplify**（4 観点並列）: reuse/simplification/efficiency = 変更なし。**altitude 1件を適用** — gated E2E が tracked fixture（`kick_loop.orbs`）を直接開いて `save_file` で上書きし `afterAll` の `writeFileSync` で restore する band-aid だった → 既存 `tmpRoot` scratch dir にコピーして開く方式へ（basename 保持で path 断定 assertion は維持）。capture + restore ブロックを削除し「プロセスクラッシュ / restore 失敗で tracked file が dirty のまま残る」リスククラスを構造的に解消（net LOC 減）
+
 ### 6.203 docs: pr-review-team round 2 convergence record (#393) (Jul 8, 2026)
 
 round 2 = 独立検証 2 体（fix 検証 + regression sweep）で **Critical=0 / Important=0 を裏取り**し収束。両者が round 1 の全 5 修正を RESOLVED 判定（Host 検証は正規クライアント通過をテストで確認・anchorFit 遷移ログはエッジのみ発火・armDelay の代数を手計算とテスト双方で検証・tempo 変更テストの 1500 境界も再導出で一致）。唯一の Minor（palette 経路が write 失敗時も flash する）を `cd08d5d` で修正（不達時は警告ログのみで早期 return）。最終 CI 4 チェック全 pass・全 suite 1280 passed。マージは owner 指示待ち。

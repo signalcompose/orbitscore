@@ -134,6 +134,12 @@ export interface EditorState {
   isDirty: boolean | null
 }
 
+/** Full text of the active document for get_document_text. Fields are null when no editor is active. */
+export interface DocumentText {
+  path: string | null
+  text: string | null
+}
+
 /** Diagnostic severities as reported by get_diagnostics, spelled out (not numeric) for agent readability. */
 export type DiagnosticSeverityLabel = 'error' | 'warning' | 'info' | 'hint'
 export interface DiagnosticEntry {
@@ -183,6 +189,8 @@ export interface OrbitScoreToolHandlers {
   runSelection(): Promise<CommandResult> | CommandResult
   editReplace(args: EditReplaceInput): Promise<CommandResult> | CommandResult
   getEditorState(): EditorState
+  saveFile(): Promise<CommandResult> | CommandResult
+  getDocumentText(): DocumentText
   getDiagnostics(path?: string): FileDiagnostics[]
   getLog(lines?: number): string[]
   analyzeAudio(wavPath: string): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
@@ -474,6 +482,34 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
         'editor is active.',
     },
     async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getEditorState()) }] }),
+  )
+
+  server.registerTool(
+    'save_file',
+    {
+      title: 'Save File',
+      description:
+        'Save the active document to disk (document.save()). edit_replace only ' +
+        'rewrites the in-memory editor buffer — it does not persist to disk (auto-save ' +
+        'is off) — so use save_file to persist the state played during a live session ' +
+        'or the result of an edit. A no-op (returns ok) when the document has no ' +
+        'unsaved changes.',
+    },
+    async () => toToolResult(await handlers.saveFile()),
+  )
+
+  server.registerTool(
+    'get_document_text',
+    {
+      title: 'Get Document Text',
+      description:
+        'Return the full text of the active document. get_editor_state only reports ' +
+        'metadata (path, cursor, selection, line count, dirty state) — use ' +
+        'get_document_text to confirm an edit_replace was applied or to diff the ' +
+        'buffer against the file on disk. path and text are both null when no editor ' +
+        'is active.',
+    },
+    async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getDocumentText()) }] }),
   )
 
   server.registerTool(

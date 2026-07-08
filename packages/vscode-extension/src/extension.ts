@@ -21,6 +21,7 @@ import {
   type AudioDevicesResult,
   type CommandResult,
   type DiagnosticSeverityLabel,
+  type DocumentText,
   type EditReplaceInput,
   type EditorState,
   type EngineState,
@@ -367,6 +368,8 @@ export async function activate(context: vscode.ExtensionContext) {
           runSelection: () => runSelectionForAgent(),
           editReplace: (args) => editReplaceForAgent(args),
           getEditorState: () => getEditorStateForAgent(),
+          saveFile: () => saveFileForAgent(),
+          getDocumentText: () => getDocumentTextForAgent(),
           getDiagnostics: (filePath) => getDiagnosticsForAgent(filePath),
           getLog: (lines) => getLogForAgent(lines),
           analyzeAudio: (wavPath) => analyzeAudioForAgent(wavPath),
@@ -2099,6 +2102,40 @@ function getEditorStateForAgent(): EditorState {
     lineCount: doc.lineCount,
     isDirty: doc.isDirty,
   }
+}
+
+/**
+ * Save the active document to disk for the MCP `save_file` tool. edit_replace
+ * only mutates the in-memory buffer, so this is the only way an agent can
+ * persist a live-edited or live-played file (#392). A no-op when the document
+ * has no unsaved changes, since `document.save()` resolving `false` is
+ * ambiguous between "nothing to save" and "save failed" — checking `isDirty`
+ * first sidesteps that ambiguity.
+ */
+async function saveFileForAgent(): Promise<CommandResult> {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    return { ok: false, error: 'no active editor' }
+  }
+  const doc = editor.document
+  if (!doc.isDirty) {
+    return { ok: true, message: `no changes to save (already saved): ${doc.uri.fsPath}` }
+  }
+  const saved = await doc.save()
+  if (!saved) {
+    return { ok: false, error: `save failed: ${doc.uri.fsPath}` }
+  }
+  return { ok: true, message: `saved: ${doc.uri.fsPath}` }
+}
+
+/** Full text of the active document for the MCP `get_document_text` tool. Fields are null when no editor is active. */
+function getDocumentTextForAgent(): DocumentText {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    return { path: null, text: null }
+  }
+  const doc = editor.document
+  return { path: doc.uri.fsPath, text: doc.getText() }
 }
 
 /**
