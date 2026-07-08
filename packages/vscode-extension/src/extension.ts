@@ -21,6 +21,7 @@ import {
   type AudioDevicesResult,
   type CommandResult,
   type DiagnosticSeverityLabel,
+  type DocumentText,
   type EditReplaceInput,
   type EditorState,
   type EngineState,
@@ -367,6 +368,8 @@ export async function activate(context: vscode.ExtensionContext) {
           runSelection: () => runSelectionForAgent(),
           editReplace: (args) => editReplaceForAgent(args),
           getEditorState: () => getEditorStateForAgent(),
+          saveFile: () => saveFileForAgent(),
+          getDocumentText: () => getDocumentTextForAgent(),
           getDiagnostics: (filePath) => getDiagnosticsForAgent(filePath),
           getLog: (lines) => getLogForAgent(lines),
           analyzeAudio: (wavPath) => analyzeAudioForAgent(wavPath),
@@ -2099,6 +2102,69 @@ function getEditorStateForAgent(): EditorState {
     lineCount: doc.lineCount,
     isDirty: doc.isDirty,
   }
+}
+
+/**
+ * Save the active document to disk for the MCP `save_file` tool. edit_replace
+ * only mutates the in-memory buffer, so this is the only way an agent can
+ * persist a live-edited or live-played file (#392). A no-op when the document
+ * has no unsaved changes, since `document.save()` resolving `false` is
+ * ambiguous between "nothing to save" and "save failed" — checking `isDirty`
+ * first sidesteps that ambiguity.
+ *
+ * Rejects a document with no on-disk path (uri.scheme !== 'file', e.g. an
+ * untitled buffer): `document.save()` on such a document pops an interactive
+ * "Save As" dialog and never resolves in a headless/agent-driven session — the
+ * exact live-jam recovery scenario this tool exists for. Fail loudly instead of
+ * hanging silently. Save failures (false return or a thrown error) are logged
+ * to the output channel so `get_log` surfaces why a persist did not happen.
+ *
+ * Known limitation: the scheme guard does not cover every dialog path — a
+ * file-scheme document can still block on an interactive prompt when
+ * `save()` detects a disk conflict (the file changed on disk since load) or
+ * an overwrite confirmation. No timeout is implemented; this path is
+ * unreachable through the current MCP tool surface (all edits flow through
+ * `open_file` → `edit_replace`), so re-evaluate if the tool surface widens.
+ */
+async function saveFileForAgent(): Promise<CommandResult> {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    return { ok: false, error: 'no active editor' }
+  }
+  const doc = editor.document
+  if (doc.uri.scheme !== 'file') {
+    return {
+      ok: false,
+      error: `cannot save — document has no file path (scheme: ${doc.uri.scheme})`,
+    }
+  }
+  if (!doc.isDirty) {
+    return { ok: true, message: `no changes to save (already saved): ${doc.uri.fsPath}` }
+  }
+  try {
+    const saved = await doc.save()
+    if (!saved) {
+      outputChannel?.appendLine(
+        `❌ save_file: document.save() returned false for ${doc.uri.fsPath}`,
+      )
+      return { ok: false, error: `save failed: ${doc.uri.fsPath}` }
+    }
+    return { ok: true, message: `saved: ${doc.uri.fsPath}` }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`❌ save_file: ${reason} (${doc.uri.fsPath})`)
+    return { ok: false, error: `save failed: ${reason}` }
+  }
+}
+
+/** Full text of the active document for the MCP `get_document_text` tool. Fields are null when no editor is active. */
+function getDocumentTextForAgent(): DocumentText {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    return { path: null, text: null }
+  }
+  const doc = editor.document
+  return { path: doc.uri.fsPath, text: doc.getText() }
 }
 
 /**

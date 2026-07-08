@@ -89,6 +89,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   let child: ChildProcess | undefined
   let client: McpClient | undefined
   let tmpRoot: string | undefined
+  // #392: save_file persists to disk (unlike edit_replace, which only touched
+  // the in-memory buffer). We open a scratch copy inside tmpRoot — not the
+  // tracked repo fixture — so the write lands in the temp dir that afterAll
+  // already removes, and never dirties a committed file.
+  let kickLoopWorkPath: string | undefined
 
   afterAll(async () => {
     // Teardown: best-effort, always runs, never throws past this hook.
@@ -127,6 +132,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       fs.mkdirSync(userDataDir, { recursive: true })
       fs.mkdirSync(extensionsDir, { recursive: true })
       const captureWavPath = path.join(tmpRoot, 'capture.wav')
+      // Scratch copy of the kick-loop fixture (basename preserved so the
+      // languageId/path assertions below still hold): save_file writes here,
+      // inside the tmpRoot that afterAll removes, instead of the tracked fixture.
+      kickLoopWorkPath = path.join(tmpRoot, 'kick_loop.orbs')
+      fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
       const port = 39400 + Math.floor(Math.random() * 200)
 
       // ── 2. Launch: `orbs` CLI with the extension in dev mode ──
@@ -184,7 +194,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       ).toBeGreaterThanOrEqual(1)
 
       // ── 5. Open kick_loop.orbs, sanity-check editor state, run the whole file ──
-      const openKickRes = await client.call('open_file', { path: KICK_LOOP_FIXTURE })
+      const openKickRes = await client.call('open_file', { path: kickLoopWorkPath })
       expect(openKickRes.isError, openKickRes.text).toBe(false)
       await sleep(500)
 
@@ -199,7 +209,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // (not diagnostic_case.orbs, opened just before it) is the active document.
       expect(editorState.path?.endsWith('kick_loop.orbs')).toBe(true)
 
-      const kickLoopContent = fs.readFileSync(KICK_LOOP_FIXTURE, 'utf8')
+      const kickLoopContent = fs.readFileSync(kickLoopWorkPath, 'utf8')
       const kickLoopLines = kickLoopContent.split('\n')
       const totalLines = kickLoopLines.length
 
@@ -221,6 +231,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         replace: 'global.tempo(180)',
       })
       expect(editRes.isError, editRes.text).toBe(false)
+
+      // ── 6a. #392: get_document_text sees the buffer edit; save_file persists it ──
+      const docTextRes = await client.call('get_document_text')
+      const docTextAfterEdit = JSON.parse(docTextRes.text) as {
+        path: string | null
+        text: string | null
+      }
+      expect(docTextAfterEdit.text?.includes('global.tempo(180)')).toBe(true)
+      expect(docTextAfterEdit.text?.includes('global.tempo(120)')).toBe(false)
+
+      const saveRes = await client.call('save_file')
+      expect(saveRes.isError, saveRes.text).toBe(false)
+
+      const savedFixtureContent = fs.readFileSync(kickLoopWorkPath, 'utf8')
+      expect(
+        savedFixtureContent.includes('global.tempo(180)'),
+        'save_file did not persist the edit_replace change to disk',
+      ).toBe(true)
+
+      // Save again with nothing pending: the document is now clean, so this
+      // exercises the isDirty no-op branch — the guard's whole reason to exist.
+      // It must read as "clean" (ok, no write), NOT as a save failure.
+      const saveNoopRes = await client.call('save_file')
+      expect(saveNoopRes.isError, saveNoopRes.text).toBe(false)
+      expect(saveNoopRes.text).toContain('no changes to save')
 
       const tempoLineIndex = kickLoopLines.findIndex((line) => line.includes('global.tempo(120)'))
       expect(tempoLineIndex, 'global.tempo(120) line not found in kick_loop.orbs fixture').not.toBe(

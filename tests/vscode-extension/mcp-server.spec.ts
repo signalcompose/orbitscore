@@ -11,6 +11,7 @@ import {
   type AudioDevicesResult,
   type FlashConfigResult,
   type EditorState,
+  type DocumentText,
   type AnalyzeAudioResult,
 } from '../../packages/vscode-extension/src/mcp-server'
 
@@ -111,6 +112,16 @@ function createStubHandlers(overrides: Partial<OrbitScoreToolHandlers> = {}): {
         isDirty: null,
       }
       return state
+    },
+    saveFile: () => {
+      record('saveFile', [])
+      const result: CommandResult = { ok: true, message: 'saved: /tmp/stub.orbs' }
+      return result
+    },
+    getDocumentText: () => {
+      record('getDocumentText', [])
+      const result: DocumentText = { path: null, text: null }
+      return result
     },
     getDiagnostics: (path) => {
       record('getDiagnostics', [path])
@@ -322,7 +333,7 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect((res.headers['mcp-session-id'] as string).length).toBeGreaterThan(0)
   })
 
-  it('tools/list contains all 16 tools; evaluate_orbitscore requires code:string', async () => {
+  it('tools/list contains all 18 tools; evaluate_orbitscore requires code:string', async () => {
     const { handlers } = createStubHandlers()
     handle = await startTestServer(handlers)
     const client = new McpTestClient(handle.port)
@@ -345,6 +356,8 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       'run_selection',
       'edit_replace',
       'get_editor_state',
+      'save_file',
+      'get_document_text',
       'force_kill_scsynth',
       'list_audio_devices',
       'select_audio_device',
@@ -383,6 +396,28 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
 
     const call = calls.find((c) => c.name === 'evaluate')
     expect(call?.args[0]).toBe(code)
+  })
+
+  it('tools/call get_document_text round-trips path/text and records the call', async () => {
+    const docText: DocumentText = { path: '/tmp/session.orbs', text: 'global.tempo(140)\n' }
+    let getDocumentTextCalled = false
+    const { handlers } = createStubHandlers({
+      getDocumentText: () => {
+        getDocumentTextCalled = true
+        return docText
+      },
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await client.toolsCall('get_document_text')
+
+    expect(res.status).toBe(200)
+    const body = res.json as JsonRpcOk<ToolCallResult>
+    expect(body.result.isError).toBeFalsy()
+    expect(JSON.parse(body.result.content[0]!.text)).toEqual(docText)
+    expect(getDocumentTextCalled).toBe(true)
   })
 
   it('handler error surfaces as isError:true with text starting with "error:"', async () => {
