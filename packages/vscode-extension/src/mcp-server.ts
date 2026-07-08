@@ -504,7 +504,7 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
       title: 'Get Document Text',
       description:
         'Return the full text of the active document. get_editor_state only reports ' +
-        'metadata (path, cursor, selection, line count, dirty state) — use ' +
+        'metadata (path, language, cursor, selection, line count, dirty state) — use ' +
         'get_document_text to confirm an edit_replace was applied or to diff the ' +
         'buffer against the file on disk. path and text are both null when no editor ' +
         'is active.',

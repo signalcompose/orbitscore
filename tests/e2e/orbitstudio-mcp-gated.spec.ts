@@ -250,6 +250,13 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         'save_file did not persist the edit_replace change to disk',
       ).toBe(true)
 
+      // Save again with nothing pending: the document is now clean, so this
+      // exercises the isDirty no-op branch — the guard's whole reason to exist.
+      // It must read as "clean" (ok, no write), NOT as a save failure.
+      const saveNoopRes = await client.call('save_file')
+      expect(saveNoopRes.isError, saveNoopRes.text).toBe(false)
+      expect(saveNoopRes.text).toContain('no changes to save')
+
       const tempoLineIndex = kickLoopLines.findIndex((line) => line.includes('global.tempo(120)'))
       expect(tempoLineIndex, 'global.tempo(120) line not found in kick_loop.orbs fixture').not.toBe(
         -1,

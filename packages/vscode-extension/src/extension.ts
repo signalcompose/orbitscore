@@ -2111,6 +2111,13 @@ function getEditorStateForAgent(): EditorState {
  * has no unsaved changes, since `document.save()` resolving `false` is
  * ambiguous between "nothing to save" and "save failed" — checking `isDirty`
  * first sidesteps that ambiguity.
+ *
+ * Rejects a document with no on-disk path (uri.scheme !== 'file', e.g. an
+ * untitled buffer): `document.save()` on such a document pops an interactive
+ * "Save As" dialog and never resolves in a headless/agent-driven session — the
+ * exact live-jam recovery scenario this tool exists for. Fail loudly instead of
+ * hanging silently. Save failures (false return or a thrown error) are logged
+ * to the output channel so `get_log` surfaces why a persist did not happen.
  */
 async function saveFileForAgent(): Promise<CommandResult> {
   const editor = vscode.window.activeTextEditor
@@ -2118,14 +2125,29 @@ async function saveFileForAgent(): Promise<CommandResult> {
     return { ok: false, error: 'no active editor' }
   }
   const doc = editor.document
+  if (doc.uri.scheme !== 'file') {
+    return {
+      ok: false,
+      error: `cannot save — document has no file path (scheme: ${doc.uri.scheme})`,
+    }
+  }
   if (!doc.isDirty) {
     return { ok: true, message: `no changes to save (already saved): ${doc.uri.fsPath}` }
   }
-  const saved = await doc.save()
-  if (!saved) {
-    return { ok: false, error: `save failed: ${doc.uri.fsPath}` }
+  try {
+    const saved = await doc.save()
+    if (!saved) {
+      outputChannel?.appendLine(
+        `❌ save_file: document.save() returned false for ${doc.uri.fsPath}`,
+      )
+      return { ok: false, error: `save failed: ${doc.uri.fsPath}` }
+    }
+    return { ok: true, message: `saved: ${doc.uri.fsPath}` }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`❌ save_file: ${reason} (${doc.uri.fsPath})`)
+    return { ok: false, error: `save failed: ${reason}` }
   }
-  return { ok: true, message: `saved: ${doc.uri.fsPath}` }
 }
 
 /** Full text of the active document for the MCP `get_document_text` tool. Fields are null when no editor is active. */

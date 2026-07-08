@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.205 fix(vscode-extension): pr-review-team round 1 — save_file headless-hang guard (#394) (Jul 8, 2026)
+
+PR #394 の `/code:pr-review-team` round 1（4 専門レビュアー並列: code-reviewer ×2 / silent-failure-hunter / pr-test-analyzer / comment-analyzer）。**Critical=0**。**Important=1** + Minor 数件を対応。全 suite グリーン維持。
+
+- **silent-failure（Important）**: `save_file` の `document.save()` が **untitled/no-path バッファでヘッドレス時に無限ハング**（"Save As" ダイアログ待ち）— ログも残らずエージェントには沈黙に見える（#392 の動機＝ヘッドレス live-jam 回収がまさにこの穴）。`doc.uri.scheme !== 'file'` ガードで早期に loud fail。加えて save 失敗（false 返却 / throw）を output channel にログ（`get_log` で可視化）+ `openFileForAgent` に倣い try/catch を追加
+- **comment（Minor）**: `get_document_text` の description が `get_editor_state` のフィールド列挙で `language` を落としていた → 追加
+- **test（Minor）**: gated E2E に **isDirty no-op 分岐**の検証を追加（clean な状態で2回目の `save_file` → `'no changes to save'` を確認）— このガードが存在する唯一の理由の novel logic を固定
+- 据え置き（既知/pre-existing）: active-editor スコープの取り違えリスク（path 版は #392 で follow-on と明記済み）
+- レビュアーは既存スラッシュコマンドの内蔵指定どおり Sonnet（comment-analyzer は Haiku）で起動・オーケストレーション/検品は Opus main。code-reviewer 2 体とも「16→18 ツール整合・Host allowlist 不変・sibling パターン準拠」を実機ビルド + 全 suite 実行で裏取り
+
 ### 6.204 feat(vscode-extension): MCP save_file / get_document_text — persist live-jam edits to disk (#392) (Jul 8, 2026)
 
 #388 Agent Bridge の follow-on（#392）。MCP `edit_replace` はエディタバッファのみを書き換えディスク保存しない（auto-save もオフ）ため、ライブセッション終了後に演奏された最終状態のファイルを agent が回収できなかった（2026-07-07 の live jam では osascript Cmd+S で救出＝Accessibility 権限依存で headless 不可）。エディタ配管ツール2本を追加:
