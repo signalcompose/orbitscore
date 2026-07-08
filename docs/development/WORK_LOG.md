@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.207 feat(engine): VST3 Phase 0-0a license audit PASS + gain oracle scaffold (#381) (Jul 8, 2026)
+
+VST3 hosting Phase 0（#381）の 0a（license 監査）を実行し PASS。0b（host spike）の sample-exact oracle をスキャフォールドした。
+
+- **0a license 監査 PASS（STOP gate クリア）**: 新 crate `orbit-vst3-host` に `vst3 = "0.3"` を追加し `cargo tree` を実測 → 全 transitive 依存 = `vst3 v0.3.0` → `com-scrape-types v0.1.1` の 2 crate のみ（bindgen/clang-sys 系なし・plan の予測どおり）。両者とも `MIT OR Apache-2.0`（展開済み Cargo.toml source で一次裏取り・vst3 は LICENSE-APACHE/MIT 同梱）で deny.toml allow list 内。`cargo deny check licenses` = **licenses ok**。**deny.toml 書き換え不要**（STOP 条件の allow list 改変は発生せず）
+- **oracle 発見 → SDK ビルド不要化**: 市販 VST3 は gain smoothing で block 1 が sample-exact にならず・マシンに VST3 SDK 無し、という制約だったが、`vst3` crate が**純 Rust の `examples/gain.rs`（`out = gain × in`・smoothing なし）を同梱**。これを vendored した crate `orbit-vst3-gain-oracle`（cdylib）を作成 → `package-oracle.sh` で macOS `.vst3` バンドル（`target/vst3-fixtures/GainOracle.vst3`・gitignore 下）に生成。`GetPluginFactory`/`BundleEntry` エクスポート確認済み。**既知挙動を我々が持つ oracle**（binary は commit しない・script で再現）
+- **spec 強化（owner レビュー反映・spec-first）**: Phase 0 受け入れ基準を **2 系統**に書き換え。① sample-exact oracle（自作 gain・data-path 意味論）+ ② **実市販プラグイン load-bearing**（ABI 適合）。🔴 理由 = Rust プラグイン ↔ Rust ホストは同じ `vst3` crate の ABI 解釈を共有 → **相互に一貫して間違っていても ① は PASS しうる**。② が実 Steinberg SDK 製プラグインとの適合を担保。さらに **compatibility sweep**（`/Library/Audio/Plug-Ins/VST3/` 全 VST3 を best-effort で load→process→drop し pass/fail/crash/hang マトリクスを診断出力・gate ではない）を追加。★北極星 = 市販 VST3 コレクション全体の互換性（owner「最終的には全部試す」）
+- **残**: 0b host spike（手書き COM で load→process→drop・`orbit-clap-host` 対称）= codex 委譲予定。① sample-exact + ② 実プラグイン + sweep + verdict doc（`POST_2.0_VST3_STEP0_SPIKE.md`）で Phase 0 完了条件
+
 ### 6.206 docs(engine): VST3 hosting implementation plan — effect + instrument, symmetric to CLAP (#395) (Jul 8, 2026)
 
 VST3 プラグインホスティングの実装計画 doc（`docs/development/POST_2.0_VST3_HOSTING_PLAN.md`）を起こした。owner 意図の核心 =「**音源系プラグインとエフェクト系プラグインの両カテゴリをホスト**」（VST3/CLAP 併用ではない）・VST3 主眼・既存 CLAP 資産と対称。実装は `/codex:rescue` 委譲前提で、codex が会話文脈なしで迷わない粒度（各 Phase を実在ファイルの path:line → 手順 → offline 優先の受け入れ基準 → STOP gate で記述）。

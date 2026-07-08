@@ -1,0 +1,25 @@
+# orbit-vst3-gain-oracle — Phase 0 (#381) sample-exact test oracle plugin.
+#
+# `vst3` crate 同梱 examples/gain.rs を vendored した VST3 gain プラグイン
+# （out = gain × in・smoothing なし・純 Rust・C++ SDK 不要）。
+# cdylib → macOS `.vst3` バンドルに package して orbit-vst3-host の
+# sample-exact 検証（0b ①）の既知挙動 oracle に使う。
+#
+# 正本: docs/development/POST_2.0_VST3_HOSTING_PLAN.md §Phase 0
+[package]
+name = "orbit-vst3-gain-oracle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "VST3 gain test-oracle plugin for orbit-vst3-host Phase 0 spike (Issue #381)"
+publish = false
+
+[lib]
+name = "orbit_vst3_gain_oracle"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+vst3 = "0.3"
