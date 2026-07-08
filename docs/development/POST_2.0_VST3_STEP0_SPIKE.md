@@ -138,6 +138,19 @@ de-risk 失敗後、`/ask-codex:research` で一次調査 → **NI SIGSEGV の�
 
 ⇒ **crash 0・NI 回復・iZotope 回復。arm64 対応はほぼ全カバー**（残は Intel-only 3 個のみ = arch 除外）。教訓: 商用 host は optional メソッドの `kNotImplemented` を成功扱いにする（VST3 SDK / JUCE 準拠）。
 
+### 最終 sweep（非サンドボックス・全 333・全修正後）
+
+| 指標 | 最小 spike | 最終 |
+|---|---|---|
+| genuine crash | 36 | **0** |
+| effect 処理OK | 188 | **271** |
+| instrument load | 51 | 57 |
+| **load 成功計** | 239 | **328 / 333（98%）** |
+
+残 未 load 5 = Intel-only 3（MODO BASS/Philharmonik 2/Super 8・arch 除外）+ arm64 端 2（ARIA Player=Garritan 音源・Komplete Kontrol=NI host-in-host ラッパー）。
+**arm64 対応での load 成功率 = 328/330 = 99%**。crash 0・hang 1。
+⇒ **最小 spike の feasibility 実証にとどまらず、3 つのホスト側修正（CFBundleRef / setProcessing kNotImplemented 許容 / host context+controller）で NI・iZotope 含む arm64 商用コレクションの 99% をロード可能に到達。**
+
 ---
 
 ## 7. 工数見積り（Phase 1 — production OOP effect）
