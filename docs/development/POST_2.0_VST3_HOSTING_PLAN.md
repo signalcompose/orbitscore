@@ -23,14 +23,16 @@
 
 ### owner が求めているもの
 - **最終ゴール = CLAP / VST3 / AU を同じパイプラインで併用できる engine。** どれか 1 つに絞るのではなく、3 フォーマットが 1 つの再生パイプラインに共存する。
-- **「両方」= instrument 系と effect 系の両カテゴリをホストする**、という意味。プラグインエフェクトの性質を踏まえると:
-  - **instrument（音源）**: 1 プラグイン = 1 フォーマット（音源はそれぞれ単体で鳴る・チェーンにはならない）。
-  - **effect（エフェクト）= 直列チェーン（insert）**。プラグインエフェクトは信号を直列に通す挿入で、**複数を連結でき、各ノードのフォーマットが混在し得る**（例: `AU → CLAP → VST3` と異なるプラグインを順に刺す）。パイプラインはチェーン段でフォーマットに依存しない。
+- **「両方」= instrument 系と effect 系の両カテゴリをホストする**、という意味（DAW/SDK で裏取り済み・§8 evidence）:
+  - **effect（エフェクト）= 直列 insert チェーンのノード**。信号を直列に通す挿入で、**複数連結でき各ノードのフォーマットが混在し得る**（例: `AU → CLAP → VST3`）。Ableton「chain of devices（左→右に流れる）」/ Bitwig device chain / JUCE `AudioProcessorGraph` が標準モデル。format 混在は REAPER（VST3/CLAP/AU をホスト）+ JUCE `AudioPluginInstance`（format 別 wrapper 上の format 非依存ノード）で architecturally 確認。**caveat**: 「AU→CLAP→VST3」順の verbatim なマニュアル例は無く format 列挙 + host 抽象からの推論。**Bitwig は AU 非対応**（VST/CLAP のみ）。
+  - **instrument（音源）= note/MIDI 入力 → audio 出力の source ノード**（通常 audio 入力なし）。effect のように「audio を直列に通す」挿入ではない。※「1 track = 1 instrument」は host 不変条件ではない — DAW は instrument rack/layer で重ねられ前段に note/MIDI FX も置ける（REAPER/Ableton/Bitwig）。OrbitScore 近期は 1 音源 = 1 プラグインで足りるが、内部モデルは format 非依存ノードグラフの **source ノード**として扱う（effect = insert ノード / instrument = source ノード）。
 - **VST3 の位置づけ = 次に追加するフォーマット。** 市販プラグイン資産が VST3/AU に集中し出荷価値が高いため VST3 を最優先で足す。実装は**既存 CLAP host の構造を対称にコピーした兄弟実装**（`orbit-clap-host` → `orbit-vst3-host` 等）。共有の format 非依存 substrate に両方が乗るので **CLAP は動いたまま**・**AU も後から同 substrate に乗る**。「主眼」は「VST3 を最優先で追加」の意味で、他フォーマットを捨てる意味ではない。
 - **CLAP は legacy ではなく first-class。** 市販資産は VST3/AU 中心だが、**良質なオープンソース CLAP は積極的に集めてバンドルしたい**（owner）。
 - 実プラグイン資産（市販）は VST3/AU に集中 → 出荷価値は VST3/AU カバレッジに依存（owner 確定 2026-07-04）。
 
 > ⚠️ **effect chain の現状と design item**: 現 substrate は**単一 effect insert**（`PostProcessor` 1 つ）。混在フォーマットの**多段チェーン**が最終形。format 非依存 substrate では各ノードのフォーマットは独立（各ノードが自分のフォーマットの child を spawn・serial insert = overwrite が自然に合成される）。**多段チェーン化は design item** — 現コードが単一 effect 前提なので、Phase 1 で「format 選択を chain-ready にしておく」（`PluginFormat` を per-node で持てる形）に留め、実際の N 段チェーン + 混在フォーマットの合成は現コードと突き合わせて別途設計する（Phase 1 の VST3 effect 自体は現 CLAP と同じ単一 insert で足りる）。
+
+> 🔌 **プラグイン I/O サーフェスの完全カバー（correctness 要件・evidence 済み §8）**: プラグインは名前どおり "plug-in" であり、**各プラグインが宣言した I/O + event surface を host が query して honor** しないと正しくホストできない。カバーすべき面: audio 入出力バス（**multi-out / sidechain(aux) 含む**）・**note/MIDI の入力と出力**（effect が MIDI を取る / instrument が MIDI を出すこともある）・param automation・**MIDI CC**・**note expression / MPE / MIDI2 dialect**。「stereo audio-in → audio-out + note-on/off だけ」の固定形は serious host には不足。裏取り: CLAP `audio-ports`/`note-ports`(dialect 宣言)/`params`・VST3 `getBusCount`/`setBusArrangements`/`IEventList`/`IParameterChanges`(note expr 含む)・AU `AUAudioUnit`(inputBusses/outputBusses/MIDI in+out)。→ この要件が **Phase 2 の M2 IPC 設計を規定**（format-neutral event/param IPC は full surface を運べること）+ **audio transport は宣言された bus arrangement を honor**（現 M1 transport は単一 stereo sum なので multi-out/sidechain は既知の coverage gap）。
 
 ### 🔴 最重要 — effect と instrument は準備状態が非対称（平坦化禁止）
 | カテゴリ | 乗る substrate | 現状 | この doc での扱い |
@@ -190,7 +192,9 @@ Phase 3  VST3 instrument (production, OOP)            ← M2 landing 後に code
 
 > 🔴 **これは codex に委譲しない。** format-neutral IPC の設計は「決定を含む spec 作業」であり、正本 §3/§9 の「M2 IPC を format-neutral（note + param/CC）で仕様化する」という**唯一の plan-affecting 決定**を保持する責務がある（Opus main + owner）。codex に投げると ad-hoc IPC を発明してこの決定を破壊する。
 
-**目的**: per-block で note（NoteOn/NoteOff）と param/CC change を child へ運ぶ format-neutral な IPC を設計する。effect の M1 transport（audio buffer の往復）に、**event/param チャネル**を足す拡張。
+**目的**: per-block で **full event/param surface** を child へ運ぶ format-neutral な IPC を設計する。§1 の I/O カバレッジ要件（§8 evidence）どおり、note-on/off だけでなく **MIDI/note の in+out・CC・param automation・note expression / MPE / MIDI2 dialect** を neutral に表現する（3 format に写せる superset にする: CLAP `note-ports` の dialect・VST3 `Event`〔note expression 含む〕・AU MIDI in/out）。effect の M1 transport（audio buffer 往復）に **event/param チャネル**を足す拡張 + **宣言された audio bus arrangement**（multi-out / sidechain）の honor を含める。
+
+> 🔴 **format-neutral の意味を取り違えない**: 「note-on/off + 1 param」に痩せさせるのは NG。neutral = 3 format の宣言 surface を**包含する superset**であること（痩せた IPC は正本 §3 の決定を実質破壊する）。ここが Phase 2 を Opus + owner が持つ理由。
 
 **設計の起点（既存資産）**:
 - `orbit-clap-host/src/events.rs` の `PluginEvent`（`make_event_ring` / `PluginEventProducer/Consumer`）は既に `PluginEvent::NoteOn{key,channel,velocity}` 形で **neutral**。これを IPC 境界（`orbit-audio-sandbox` transport）に載せる形へ拡張する。
@@ -282,3 +286,19 @@ engine は §2.3 のとおり **CLI/env 駆動で完結**でき、DSL なしで 
 - M1 設計: `docs/development/POST_2.0_GAMMA_M1_DESIGN.md`（effect OOP の設計正本・#360）
 - γ spike verdicts: `POST_2.0_GAMMA_SANDBOX_SPIKE.md` / `POST_2.0_GAMMA_LATENCY_FORK_SPIKE.md`
 - Issue: #395（本 doc）/ #381（Phase 0）/ Epic #292 / #360（M1）
+
+---
+
+## 8. プラグインホスト設計の evidence（codex research・2026-07-08）
+
+§1 の framing（effect chain / instrument / 混在 format / I/O カバレッジ）の裏取り。一次ソース = SDK ヘッダ・DAW マニュアル・JUCE docs。
+
+| 主張 | 判定 | 一次ソース |
+|---|---|---|
+| effect = 直列 insert チェーン（左→右） | ✅ 確認 | Ableton Live 12 manual "chain of devices"（§3.11/3.14）・Bitwig "Introduction to Devices"（signal は device 間を左→右）・JUCE `AudioProcessorGraph`（node + `addConnection`） |
+| チェーンで format 混在可（AU/CLAP/VST3） | ✅ architecturally（**caveat**） | REAPER "About"（VST/VST3/CLAP/AU on macOS 等をホスト）・JUCE `AudioPluginInstance`（`AudioProcessor` 派生・format 別 extension は境界のみ）。**caveat**: 「AU→CLAP→VST3」順の verbatim 例は未取得（推論）。**Bitwig は AU 非対応**（manual は "VST or CLAP"） |
+| instrument = source ノード（1 track=1 instrument は非不変） | ✅ 訂正済 | Ableton（MIDI→audio を instrument が変換・instrument rack）・Bitwig（instrument = note 受け audio 出力）。rack/layer・前段 note FX で複数化可能 → 「1 track=1 instrument」は host 不変条件ではない |
+| host の process 界面は format-neutral | ✅ 確認 | VST3 `IAudioProcessor::process(ProcessData&)`（audio bus + `IParameterChanges` + `IEventList`）・CLAP `clap_process_t`（frames + audio in/out + event lists）・JUCE `processBlock(AudioBuffer&, MidiBuffer&)` |
+| **I/O + event surface の完全カバーが必須** | ✅ 確認・critical | **CLAP**: `audio-ports`(channel/main/in-place)・`note-ports`(dialect: CLAP/MIDI/MPE/MIDI2)・`params`(automation event・MIDI CC 衝突を明記)。**VST3**: `getBusCount`/`getBusInfo`/`activateBus`・`setBusArrangements`・`Event`(note on/off・poly pressure・note expression・chord/scale・legacy MIDI CC)。**AU**: `AUAudioUnit` inputBusses/outputBusses/renderBlock/parameterTree/MIDI in scheduling + MIDI out block・`AudioUnitParameters.h`(mod wheel/pitch bend/pressure/expression 等 CC mapping) |
+
+**結論（research bottom line）**: modern host は effects を serial/graph の signal path のノードとしてモデル化し、plugin format は loading/adapter の関心事であって audio chain が単一 format である必要はない。ただし ①「1 track = 1 instrument」は強すぎ（rack/layer/multi-out/前段 note FX がある）②「stereo audio-in → audio-out + note-on/off」の固定抽象は serious host には不足 — 宣言された bus（multi-out/sidechain）・note/MIDI in+out・param/CC・note expression/MPE/MIDI2 を honor する必要。
