@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.216 test(engine): VST3 Phase 1 daemon 経路 gated + フル arm64 sweep PASS（#381） (Jul 10, 2026)
+
+Phase 1 の VST3 を **① production daemon 経路（supervisor/pipelined/respawn/RT）** と **② 全 arm64 プラグイン machinery** の 2 面で実機検証。offline smoke（6.215）が「child+transport が実プラグインを生き延びるか」を、本項が「production driver 層」と「全体カバレッジ」を担う（advisor が B/C は役割分担と判定・step-back 無し）。
+
+- **順序判断（advisor/Fable）**: 「daemon で全 sweep 1 回」案は `outproc_effect_gated.rs` が device 束縛＋実時間＋parity assert 非汎用の三重で非現実的 → **B（offline 全 sweep・純計算）→ C（daemon を代表数個）** が最適・手戻り無しと確定
+- **C = daemon 経路 gated（`orbit-audio-daemon/tests/outproc_effect_vst3_gated.rs`・新規・feature `outproc-effect`・全 #[ignore]）**: CLAP 版 `outproc_effect_gated.rs` を VST3 にミラー。production コード無改変（`PluginFormat::Vst3`/`ORBIT_EFFECT_FORMAT` は Phase 1 実装済み）
+  - **C1 parity**（VST3 gain oracle gain=1.0）: ratio **1.00000**・fresh_delta 1117/1128・errors 0 → PASS
+  - **C2 kill→respawn**: respawn 0→1・fresh after respawn 18→259・ratio 1.0 → PASS
+  - **C3 stale-rate**: [64f] 0.162% / [32f] 0.000%・cb_max ~31µs（20ms 予算内）→ PASS
+  - **C4 commercial smoke**（env `ORBIT_EFFECT_PLUGIN` 駆動）代表 4 effect: Guitar Rig 7 / Reaktor 6 / Ozone 11 / Vinyl すべて crash-free・respawn 0・errors 0 → PASS（Vinyl は ratio 1.033 で実 DSP 着色が可視・Reaktor は patch 未ロードで無音=想定内）
+  - **warm-up fix**: C1/C2 の固定 sleep（CLAP から verbatim の 800/600ms）は VST3 の CFBundle load latency に不足し fresh=0 で false-fail → **wait-until-productive ポーリング + delta 測定**に修正（post-respawn の同根欠陥も修正・test-only・production 無改変）
+- **B = フル arm64 sweep（offline・非サンドボックス・914.5s・333プラグイン）**: **Effect PASS 271 + Instrument PASS 49 = 320 PASS・genuine crash 0**
+  - Crash 分類 10 = すべて **probe 20s timeout hang**（実 crash でない）: UJAM Beatmaker `BM-*` 7 + USYNTH + Virtual Pianist（サンプル大量ロード）+ Komplete Kontrol（NI host-wrapper・Phase 0 でも変動既知）。slow-load であり deadlock でない見込み（long-timeout 再 probe で確認予定）
+  - Skip 3 = Intel-only（MODO BASS / Philharmonik 2 / Super 8）を arm64 フィルタが正しく除外
+- **役割**: 計画/順序判断=Opus（advisor 経由）/ C 実装+warm-up fix=sonnet5 委譲 / 実機計測（C1-C4 + フル sweep）=Opus 非サンドボックス
+- **残**: 10 slow-loader の long-timeout 再 probe（owner 判断）・PR 化（/simplify + pr-review-team・トークン都合で延期中）
+
 ### 6.215 test(engine): VST3 Phase 1 gated 実機検証ハーネス + curated smoke PASS（#381） (Jul 10, 2026)
 
 Phase 1 の OOP effect 経路を **実市販プラグイン（NI/iZotope arm64）** に通す gated 検証ハーネスを実装し、curated 代表セットで非サンドボックス実測 PASS。合成 oracle（sample-exact 済）に対し、実プラグインは closed-form が無いため **machinery smoke**（load/process/isolation が crash 0 で生き延びるか）に限定。musical DSP correctness は owner listening の follow-on として分離（誠実な wording をコメント/サマリに明記）。
