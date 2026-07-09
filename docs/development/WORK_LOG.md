@@ -29,8 +29,9 @@ Phase 1 の VST3 を **① production daemon 経路（supervisor/pipelined/respa
   - **C4 commercial smoke**（env `ORBIT_EFFECT_PLUGIN` 駆動）代表 4 effect: Guitar Rig 7 / Reaktor 6 / Ozone 11 / Vinyl すべて crash-free・respawn 0・errors 0 → PASS（Vinyl は ratio 1.033 で実 DSP 着色が可視・Reaktor は patch 未ロードで無音=想定内）
   - **warm-up fix**: C1/C2 の固定 sleep（CLAP から verbatim の 800/600ms）は VST3 の CFBundle load latency に不足し fresh=0 で false-fail → **wait-until-productive ポーリング + delta 測定**に修正（post-respawn の同根欠陥も修正・test-only・production 無改変）
 - **B = フル arm64 sweep（offline・非サンドボックス・914.5s・333プラグイン）**: **Effect PASS 271 + Instrument PASS 49 = 320 PASS・genuine crash 0**
-  - Crash 分類 10 = すべて **probe 20s timeout hang**（実 crash でない）: UJAM Beatmaker `BM-*` 7 + USYNTH + Virtual Pianist（サンプル大量ロード）+ Komplete Kontrol（NI host-wrapper・Phase 0 でも変動既知）。slow-load であり deadlock でない見込み（long-timeout 再 probe で確認予定）
+  - Crash 分類 10 = すべて **probe 20s timeout hang**（実 crash でない）。**120s 再 probe で決着**: UJAM Beatmaker `BM-*` 7 は `loaded:true/audio_in:0/audio_out:16` で**正常ロード（16-out instrument・sample content で 20s 超過しただけ）= 回復**。残 3（Komplete Kontrol=NI 全ライブラリ scan / USYNTH / Virtual Pianist=UJAM 大量 content）は >120s の激重 load で、**いずれも instrument（Phase 1 effect スコープ外・Phase 3 の async load 課題）**
   - Skip 3 = Intel-only（MODO BASS / Philharmonik 2 / Super 8）を arm64 フィルタが正しく除外
+  - **確定カバレッジ**: arm64 **Effect 271 全 PASS・genuine crash 0**（Phase 1 スコープ実質 100%）/ Instrument 49+回復7=56 ロード可・3 は分単位 load の host-wrapper/巨大音源
 - **役割**: 計画/順序判断=Opus（advisor 経由）/ C 実装+warm-up fix=sonnet5 委譲 / 実機計測（C1-C4 + フル sweep）=Opus 非サンドボックス
 - **残**: 10 slow-loader の long-timeout 再 probe（owner 判断）・PR 化（/simplify + pr-review-team・トークン都合で延期中）
 
