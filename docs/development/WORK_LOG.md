@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.215 test(engine): VST3 Phase 1 gated 実機検証ハーネス + curated smoke PASS（#381） (Jul 10, 2026)
+
+Phase 1 の OOP effect 経路を **実市販プラグイン（NI/iZotope arm64）** に通す gated 検証ハーネスを実装し、curated 代表セットで非サンドボックス実測 PASS。合成 oracle（sample-exact 済）に対し、実プラグインは closed-form が無いため **machinery smoke**（load/process/isolation が crash 0 で生き延びるか）に限定。musical DSP correctness は owner listening の follow-on として分離（誠実な wording をコメント/サマリに明記）。
+
+- **設計ゲート = advisor(Fable) + adversarial-review(codex) の 2 レビュー**を実装前に通した。主要指摘を反映:
+  - **dry-passthrough 誤 PASS の穴**（process() 失敗時に child が入力を素通し→出力=入力で有限値になり従来の出力検査を誤 PASS）→ child 統計を露出して `process_errors==0` と `processed==期待ブロック数` を assert
+  - **timeout に plugin load 時間が食い込む**（初回ブロックは load を含む）→ 初回だけ長い deadline
+  - **分類は out-of-process**（instrument crash が effect ゲートに混入しない）→ 既存 `vst3_probe` の JSON `audio_in` で分類
+- **A（`orbit-audio-sandbox/offline.rs`・既存非破壊で追加）**: `render_through_child_sync_with_options(..., RenderOptions{first_block_timeout, block_timeout}) -> (Vec<f32>, ChildStats{processed, process_errors})`。既存 4 引数 `render_through_child_sync` は既定 opts の薄いラッパ（6 caller 非破壊）。stats は最終 `seq_done` Acquire 後・QUIT 前に読む（happens-before: child は fetch_add を seq_done Release より前に実行）
+- **B（`orbit-vst3-effect-child/tests/real_plugin_gated.rs`・#[ignore]）**: `vst3_probe`（別プロセス・20s timeout・std のみ）で分類 → **effect(audio_in>0)=ゲート / instrument(audio_in=0)=informational / probe crash・load-fail=surfaced 非 gating**。effect は sine を block[64,128]で駆動し crash 無し・process_errors 0・processed 一致・有限・abs≤8 を要求。loaded effect がゲートを破った時のみ panic。plugin 選択は env（`ORBIT_GATED_VST3_PLUGINS` / `_DIR` / `_ALL` / `_MAX`）+ curated 既定
+- **実測（Opus・非サンドボックス・curated 11個・34.5s）**: effect 8（Reaktor 6/Guitar Rig 7/Ozone 11/Neutron 5/RX 11 Voice De-noise/Nectar 4/Vinyl/Relay）全 PASS・**process_errors 0**、instrument 3（Kontakt 8/Massive X/FM8）informational PASS・crash 0。objc duplicate-class / qt.qml ログはプラグイン自身の良性警告で実 crash 0
+- **役割**: 計画確定=Opus（orchestrator）/ A レビュー+B 実装+全ゲート検証=sonnet5 委譲 / 実機計測=Opus 非サンドボックス。fmt/clippy/build/非gatedテスト/deny すべて clean
+- **残**: daemon 経路（`ORBIT_EFFECT_FORMAT=vst3` の supervisor/pipelined/respawn/stale）の gated は別途（C・adversarial-review が「手離れ」に必須と判定）。フル sweep（`ORBIT_GATED_VST3_ALL=1`）は owner 判断
+
 ### 6.214 feat(engine): VST3 Phase 1 — production OOP effect（daemon 統合）（#381） (Jul 8, 2026)
 
 in-process 実証済み VST3 host を daemon の out-of-process サブストレート（crash 隔離・respawn）に載せた。CLAP effect child と対称。codex 実装・Opus 非サンドボックス検証。

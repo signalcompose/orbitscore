@@ -20,8 +20,43 @@ use crate::transport::{
     create_shared, region_ptr, slot_index, slot_offset, BUF_LEN, CHANNELS, CONTROL_RUN,
 };
 
-/// 1 block の child 完了を待つ上限(これを超えたら child 死亡とみなしエラー)。
+/// 1 block の child 完了を待つ既定上限(これを超えたら child 死亡とみなしエラー)。
 const BLOCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// [`render_through_child_sync_with_options`] のタイムアウト設定。
+///
+/// **初回ブロックは plugin の load を含む**(child は shm を map 後・spin loop 前に plugin を
+/// load する)。重い商用プラグイン(サンプラ・認証チェックする effect)は load が数秒かかりうるので、
+/// 初回だけ長い deadline を許して「crash でないのに TimedOut で false-fail」を避ける。
+#[derive(Clone, Copy, Debug)]
+pub struct RenderOptions {
+    /// 最初のブロック(= plugin load を含む)の完了待ち上限。
+    pub first_block_timeout: Duration,
+    /// 2 ブロック目以降の完了待ち上限。
+    pub block_timeout: Duration,
+}
+
+impl Default for RenderOptions {
+    fn default() -> Self {
+        Self {
+            first_block_timeout: BLOCK_TIMEOUT,
+            block_timeout: BLOCK_TIMEOUT,
+        }
+    }
+}
+
+/// child が回収した処理統計([`render_through_child_sync_with_options`] が返す)。
+///
+/// `process_errors == 0` かつ `processed == 期待ブロック数` を突き合わせることで、child が
+/// `process()` 失敗時に dry 素通しするだけ(出力=入力で有限値になり従来の出力検査を誤 PASS させる)
+/// のを検出できる。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ChildStats {
+    /// child が `process()` を通したブロック総数(成功・失敗いずれもカウント)。
+    pub processed: u64,
+    /// うち `process()` が非 OK を返し dry 素通しになったブロック数。
+    pub process_errors: u64,
+}
 
 /// 同一プロセス内で複数 driver を回した時に共有メモリファイル名が衝突しないための連番。
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -45,6 +80,27 @@ pub fn render_through_child_sync(
     block_frames: usize,
     child_args: &[&str],
 ) -> io::Result<Vec<f32>> {
+    let (out, _stats) = render_through_child_sync_with_options(
+        child_exe,
+        input,
+        block_frames,
+        child_args,
+        RenderOptions::default(),
+    )?;
+    Ok(out)
+}
+
+/// [`render_through_child_sync`] の変種で、per-block timeout を可変にし child の処理統計
+/// ([`ChildStats`])も返す。gated 実機検証で「重い商用プラグインの load が既定 5s を超えて false-fail」
+/// と「`process()` 失敗の dry 素通しによる誤 PASS」の両方を扱うために使う。既定 `opts` では
+/// [`render_through_child_sync`] と挙動が一致する(初回・以降とも 5s)。
+pub fn render_through_child_sync_with_options(
+    child_exe: &Path,
+    input: &[f32],
+    block_frames: usize,
+    child_args: &[&str],
+    opts: RenderOptions,
+) -> io::Result<(Vec<f32>, ChildStats)> {
     assert!(block_frames >= 1 && block_frames * CHANNELS <= BUF_LEN);
     let shm_path = unique_shm_path();
     let mmap = create_shared(&shm_path)?;
@@ -79,7 +135,13 @@ pub fn render_through_child_sync(
             (*region).seq_request.store(seq, Release);
         }
         // child 完了を待つ(bounded・offline は非 RT なので spin でなく yield で CPU を譲る)。
-        let deadline = Instant::now() + BLOCK_TIMEOUT;
+        // 初回ブロックは plugin load を含むため first_block_timeout を使う。
+        let timeout = if seq == 1 {
+            opts.first_block_timeout
+        } else {
+            opts.block_timeout
+        };
+        let deadline = Instant::now() + timeout;
         loop {
             if unsafe { (*region).seq_done.load(Acquire) } >= seq {
                 break;
@@ -103,8 +165,20 @@ pub fn render_through_child_sync(
             out.extend_from_slice(std::slice::from_raw_parts(src, count));
         }
     }
+    // 統計を回収してから teardown する。
+    // happens-before: child は `child_processed` / `child_process_error_count` の fetch_add を
+    // `seq_done.store(Release)` より前に行う(main.rs)。上のループは最終ブロックの
+    // `seq_done.load(Acquire)` を観測して抜けるので、その Acquire がこれら counter の全 increment を
+    // 可視化する。ゆえにここでの Relaxed load は最終ブロックまでの確定値を読む。CONTROL_QUIT を送る
+    // `drop(guard)` の **前** に読むこと(QUIT 後は child が終了へ向かい観測が競合しうる)。
+    let stats = unsafe {
+        ChildStats {
+            processed: (*region).child_processed.load(Relaxed),
+            process_errors: (*region).child_process_error_count.load(Relaxed),
+        }
+    };
     drop(guard);
-    Ok(out)
+    Ok((out, stats))
 }
 
 /// 2 つのバッファの要素ごと最大絶対差。長さが違えば `f32::INFINITY`。
