@@ -286,7 +286,20 @@ pub struct Vst3EffectProcessor {
     _library: LoadedLibrary,
     info: LoadedVst3Info,
     sample_rate: f64,
-    max_samples_per_block: i32,
+    /// `IProcessContextRequirements` flags queried once at load time (`load()`). The plugin's
+    /// requirements do not change over its lifetime, so re-querying per block would be a wasted
+    /// COM `queryInterface` + call on the RT hot path.
+    process_context_requirements: u32,
+    /// Stateless stub `IParameterChanges`/`IEventList` instances shared by `process_stereo` and
+    /// `process_block`. `HostParameterChanges::empty()`/`HostEventList` always answer the same way
+    /// regardless of call count, so a single instance can be reused instead of allocating
+    /// (`ComWrapper::new` = `Arc`) on every block.
+    output_parameter_changes: ParameterChanges,
+    input_events: EventList,
+    output_events: EventList,
+    /// Empty input `IParameterChanges` for `process_block`, which never carries parameter
+    /// automation (unlike `process_stereo`'s optional per-call gain).
+    block_parameter_changes: ParameterChanges,
     process_input_l: Vec<f32>,
     process_input_r: Vec<f32>,
     process_output_l: Vec<f32>,
@@ -384,6 +397,18 @@ impl Vst3EffectProcessor {
             return Err(Vst3HostError::SetProcessing(processing_result));
         }
 
+        // Queried once: the plugin's process-context requirements are fixed for its lifetime, so
+        // `process_context()` reads this cache instead of re-querying `IProcessContextRequirements`
+        // on every block.
+        let process_context_requirements = unsafe {
+            processor
+                .as_com_ref()
+                .cast::<IProcessContextRequirements>()
+                .map(|requirements| requirements.getProcessContextRequirements())
+                .unwrap_or(0)
+        };
+
+        let scratch_len = max_samples_per_block.max(0) as usize;
         let processor = Self {
             processor: Some(processor),
             controller: controller_handshake.controller,
@@ -397,11 +422,15 @@ impl Vst3EffectProcessor {
             _library: library,
             info: info.clone(),
             sample_rate,
-            max_samples_per_block,
-            process_input_l: vec![0.0; max_samples_per_block.max(0) as usize],
-            process_input_r: vec![0.0; max_samples_per_block.max(0) as usize],
-            process_output_l: vec![0.0; max_samples_per_block.max(0) as usize],
-            process_output_r: vec![0.0; max_samples_per_block.max(0) as usize],
+            process_context_requirements,
+            output_parameter_changes: ParameterChanges::empty(),
+            input_events: EventList::empty(),
+            output_events: EventList::empty(),
+            block_parameter_changes: ParameterChanges::empty(),
+            process_input_l: vec![0.0; scratch_len],
+            process_input_r: vec![0.0; scratch_len],
+            process_output_l: vec![0.0; scratch_len],
+            process_output_r: vec![0.0; scratch_len],
         };
         Ok((processor, info))
     }
@@ -429,56 +458,16 @@ impl Vst3EffectProcessor {
         }
 
         let frames = input_l.len();
-        let processor = self
-            .processor
-            .as_ref()
-            .expect("processor remains alive until drop");
+        let input_ptrs = [input_l.as_ptr() as *mut f32, input_r.as_ptr() as *mut f32];
+        let output_ptrs = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
 
-        let mut input_ptrs = [input_l.as_ptr() as *mut f32, input_r.as_ptr() as *mut f32];
-        let mut output_ptrs = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
-        let mut inputs = [AudioBusBuffers {
-            numChannels: DEFAULT_CHANNELS as i32,
-            silenceFlags: 0,
-            __field0: AudioBusBuffers__type0 {
-                channelBuffers32: input_ptrs.as_mut_ptr(),
-            },
-        }];
-        let mut outputs = [AudioBusBuffers {
-            numChannels: DEFAULT_CHANNELS as i32,
-            silenceFlags: 0,
-            __field0: AudioBusBuffers__type0 {
-                channelBuffers32: output_ptrs.as_mut_ptr(),
-            },
-        }];
-
+        // process_stereo is the non-RT probe/offline-parity path; gain varies per call, so unlike
+        // process_block's `block_parameter_changes` this cannot be cached on `self`.
         let parameter_changes = gain
             .map(ParameterChanges::single_gain)
             .unwrap_or_else(ParameterChanges::empty);
-        let output_parameter_changes = ParameterChanges::empty();
-        let input_events = EventList::empty();
-        let output_events = EventList::empty();
-        let mut process_context = self.process_context();
 
-        let mut process_data = ProcessData {
-            processMode: ProcessModes_::kRealtime as i32,
-            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
-            numSamples: frames as i32,
-            numInputs: if self.info.is_effect { 1 } else { 0 },
-            numOutputs: 1,
-            inputs: if self.info.is_effect {
-                inputs.as_mut_ptr()
-            } else {
-                ptr::null_mut()
-            },
-            outputs: outputs.as_mut_ptr(),
-            inputParameterChanges: parameter_changes.as_ptr(),
-            outputParameterChanges: output_parameter_changes.as_ptr(),
-            inputEvents: input_events.as_ptr(),
-            outputEvents: output_events.as_ptr(),
-            processContext: &mut process_context,
-        };
-
-        let result = unsafe { processor.process(&mut process_data) };
+        let result = self.run_process(input_ptrs, output_ptrs, frames, &parameter_changes);
         if !is_ok(result) {
             return Err(Vst3HostError::Process(result));
         }
@@ -510,57 +499,21 @@ impl Vst3EffectProcessor {
             self.process_output_r[frame] = 0.0;
         }
 
-        let processor = self
-            .processor
-            .as_ref()
-            .expect("processor remains alive until drop");
-        let mut input_ptrs = [
+        let input_ptrs = [
             self.process_input_l.as_mut_ptr(),
             self.process_input_r.as_mut_ptr(),
         ];
-        let mut output_ptrs = [
+        let output_ptrs = [
             self.process_output_l.as_mut_ptr(),
             self.process_output_r.as_mut_ptr(),
         ];
-        let mut inputs = [AudioBusBuffers {
-            numChannels: DEFAULT_CHANNELS as i32,
-            silenceFlags: 0,
-            __field0: AudioBusBuffers__type0 {
-                channelBuffers32: input_ptrs.as_mut_ptr(),
-            },
-        }];
-        let mut outputs = [AudioBusBuffers {
-            numChannels: DEFAULT_CHANNELS as i32,
-            silenceFlags: 0,
-            __field0: AudioBusBuffers__type0 {
-                channelBuffers32: output_ptrs.as_mut_ptr(),
-            },
-        }];
-        let parameter_changes = ParameterChanges::empty();
-        let output_parameter_changes = ParameterChanges::empty();
-        let input_events = EventList::empty();
-        let output_events = EventList::empty();
-        let mut process_context = self.process_context();
-        let mut process_data = ProcessData {
-            processMode: ProcessModes_::kRealtime as i32,
-            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
-            numSamples: frames as i32,
-            numInputs: if self.info.is_effect { 1 } else { 0 },
-            numOutputs: 1,
-            inputs: if self.info.is_effect {
-                inputs.as_mut_ptr()
-            } else {
-                ptr::null_mut()
-            },
-            outputs: outputs.as_mut_ptr(),
-            inputParameterChanges: parameter_changes.as_ptr(),
-            outputParameterChanges: output_parameter_changes.as_ptr(),
-            inputEvents: input_events.as_ptr(),
-            outputEvents: output_events.as_ptr(),
-            processContext: &mut process_context,
-        };
 
-        let result = unsafe { processor.process(&mut process_data) };
+        let result = self.run_process(
+            input_ptrs,
+            output_ptrs,
+            frames,
+            &self.block_parameter_changes,
+        );
         if !is_ok(result) {
             return false;
         }
@@ -578,26 +531,78 @@ impl Vst3EffectProcessor {
         true
     }
 
+    /// Shared `AudioBusBuffers`/`ProcessData` assembly + `IAudioProcessor::process` call for
+    /// `process_stereo` and `process_block`. `input_ptrs`/`output_ptrs` must each point at
+    /// `frames` valid, writable (for output) `f32` samples for the lifetime of this call; both
+    /// callers guarantee this via their scratch buffers / caller-provided slices.
+    ///
+    /// `is_effect` bus wiring (numInputs/inputs null-vs-populated) lives here so both callers stay
+    /// in sync with the same effect/instrument branch.
+    fn run_process(
+        &self,
+        mut input_ptrs: [*mut f32; 2],
+        mut output_ptrs: [*mut f32; 2],
+        frames: usize,
+        parameter_changes: &ParameterChanges,
+    ) -> tresult {
+        let processor = self
+            .processor
+            .as_ref()
+            .expect("processor remains alive until drop");
+
+        let mut inputs = [AudioBusBuffers {
+            numChannels: DEFAULT_CHANNELS as i32,
+            silenceFlags: 0,
+            __field0: AudioBusBuffers__type0 {
+                channelBuffers32: input_ptrs.as_mut_ptr(),
+            },
+        }];
+        let mut outputs = [AudioBusBuffers {
+            numChannels: DEFAULT_CHANNELS as i32,
+            silenceFlags: 0,
+            __field0: AudioBusBuffers__type0 {
+                channelBuffers32: output_ptrs.as_mut_ptr(),
+            },
+        }];
+
+        let mut process_context = self.process_context();
+        let mut process_data = ProcessData {
+            processMode: ProcessModes_::kRealtime as i32,
+            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+            numSamples: frames as i32,
+            numInputs: if self.info.is_effect { 1 } else { 0 },
+            numOutputs: 1,
+            inputs: if self.info.is_effect {
+                inputs.as_mut_ptr()
+            } else {
+                ptr::null_mut()
+            },
+            outputs: outputs.as_mut_ptr(),
+            inputParameterChanges: parameter_changes.as_ptr(),
+            outputParameterChanges: self.output_parameter_changes.as_ptr(),
+            inputEvents: self.input_events.as_ptr(),
+            outputEvents: self.output_events.as_ptr(),
+            processContext: &mut process_context,
+        };
+
+        unsafe { processor.process(&mut process_data) }
+    }
+
     fn process_context(&self) -> ProcessContext {
         let mut state = ProcessContext_::StatesAndFlags_::kTempoValid
             | ProcessContext_::StatesAndFlags_::kTimeSigValid;
-        if let Some(processor) = self.processor.as_ref() {
-            if let Some(requirements) = processor.as_com_ref().cast::<IProcessContextRequirements>()
-            {
-                let required = unsafe { requirements.getProcessContextRequirements() };
-                if required & IProcessContextRequirements_::Flags_::kNeedTransportState != 0 {
-                    state |= ProcessContext_::StatesAndFlags_::kPlaying;
-                }
-                if required & IProcessContextRequirements_::Flags_::kNeedProjectTimeMusic != 0 {
-                    state |= ProcessContext_::StatesAndFlags_::kProjectTimeMusicValid;
-                }
-                if required & IProcessContextRequirements_::Flags_::kNeedTempo != 0 {
-                    state |= ProcessContext_::StatesAndFlags_::kTempoValid;
-                }
-                if required & IProcessContextRequirements_::Flags_::kNeedTimeSignature != 0 {
-                    state |= ProcessContext_::StatesAndFlags_::kTimeSigValid;
-                }
-            }
+        let required = self.process_context_requirements;
+        if required & IProcessContextRequirements_::Flags_::kNeedTransportState != 0 {
+            state |= ProcessContext_::StatesAndFlags_::kPlaying;
+        }
+        if required & IProcessContextRequirements_::Flags_::kNeedProjectTimeMusic != 0 {
+            state |= ProcessContext_::StatesAndFlags_::kProjectTimeMusicValid;
+        }
+        if required & IProcessContextRequirements_::Flags_::kNeedTempo != 0 {
+            state |= ProcessContext_::StatesAndFlags_::kTempoValid;
+        }
+        if required & IProcessContextRequirements_::Flags_::kNeedTimeSignature != 0 {
+            state |= ProcessContext_::StatesAndFlags_::kTimeSigValid;
         }
         ProcessContext {
             state,
@@ -657,7 +662,6 @@ impl Drop for Vst3EffectProcessor {
             }
         }
         let _ = self.factory.take();
-        let _ = (self.sample_rate, self.max_samples_per_block);
     }
 }
 
@@ -1473,63 +1477,9 @@ impl IParamValueQueueTrait for HostParamValueQueue {
 pub fn probe_plugin(path: &Path) -> ProbeResult {
     match Vst3EffectProcessor::load(path, 48_000.0, 512) {
         Ok((mut processor, info)) => {
-            let input_l = vec![0.0; 512];
-            let input_r = vec![0.0; 512];
-            let mut output_l = vec![0.0; 512];
-            let mut output_r = vec![0.0; 512];
-            let mut error = None;
-            let processed = if info.is_effect {
-                match processor.process_stereo(
-                    &input_l,
-                    &input_r,
-                    &mut output_l,
-                    &mut output_r,
-                    None,
-                ) {
-                    Ok(_) => {
-                        if let Err(message) = validate_silent_block(&output_l, &output_r) {
-                            error = Some(message);
-                            false
-                        } else {
-                            let known_l = (0..512)
-                                .map(|i| (i as f32 - 128.0) / 512.0)
-                                .collect::<Vec<_>>();
-                            let known_r = (0..512)
-                                .map(|i| ((i as f32 * 3.0) - 256.0) / 1024.0)
-                                .collect::<Vec<_>>();
-                            output_l.fill(0.0);
-                            output_r.fill(0.0);
-                            match processor.process_stereo(
-                                &known_l,
-                                &known_r,
-                                &mut output_l,
-                                &mut output_r,
-                                None,
-                            ) {
-                                Ok(_) => match validate_known_block(&output_l, &output_r) {
-                                    Ok(()) => true,
-                                    Err(message) => {
-                                        error = Some(message);
-                                        false
-                                    }
-                                },
-                                Err(err) => {
-                                    error = Some(err.to_string());
-                                    false
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        error = Some(err.to_string());
-                        false
-                    }
-                }
-            } else {
-                error = Some(
-                    "instrument/add-mix path detected; Phase 0 probe did not process".to_owned(),
-                );
-                false
+            let (processed, error) = match probe_effect_signal(&mut processor) {
+                Ok(()) => (true, None),
+                Err(message) => (false, Some(message)),
             };
             ProbeResult {
                 name: info.name,
@@ -1553,6 +1503,39 @@ pub fn probe_plugin(path: &Path) -> ProbeResult {
             error: Some(error.to_string()),
         },
     }
+}
+
+/// Runs the Phase 0 probe's two-pass signal check (silent-block then known-signal) against an
+/// already-loaded effect processor. Instruments (no audio input bus) are not processed — Phase 0
+/// only verifies the effect overwrite path (see `Vst3EffectProcessor::load`'s `is_effect` note).
+fn probe_effect_signal(processor: &mut Vst3EffectProcessor) -> Result<(), String> {
+    if !processor.info().is_effect {
+        return Err("instrument/add-mix path detected; Phase 0 probe did not process".to_owned());
+    }
+
+    let input_l = vec![0.0; 512];
+    let input_r = vec![0.0; 512];
+    let mut output_l = vec![0.0; 512];
+    let mut output_r = vec![0.0; 512];
+
+    processor
+        .process_stereo(&input_l, &input_r, &mut output_l, &mut output_r, None)
+        .map_err(|error| error.to_string())?;
+    validate_silent_block(&output_l, &output_r)?;
+
+    let known_l = (0..512)
+        .map(|i| (i as f32 - 128.0) / 512.0)
+        .collect::<Vec<_>>();
+    let known_r = (0..512)
+        .map(|i| ((i as f32 * 3.0) - 256.0) / 1024.0)
+        .collect::<Vec<_>>();
+    output_l.fill(0.0);
+    output_r.fill(0.0);
+
+    processor
+        .process_stereo(&known_l, &known_r, &mut output_l, &mut output_r, None)
+        .map_err(|error| error.to_string())?;
+    validate_known_block(&output_l, &output_r)
 }
 
 fn validate_silent_block(left: &[f32], right: &[f32]) -> Result<(), String> {
@@ -1612,15 +1595,16 @@ impl ProbeResult {
 }
 
 fn json_escape(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(|ch| match ch {
-            '"' => "\\\"".chars().collect::<Vec<_>>(),
-            '\\' => "\\\\".chars().collect::<Vec<_>>(),
-            '\n' => "\\n".chars().collect::<Vec<_>>(),
-            '\r' => "\\r".chars().collect::<Vec<_>>(),
-            '\t' => "\\t".chars().collect::<Vec<_>>(),
-            _ => vec![ch],
-        })
-        .collect()
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
 }

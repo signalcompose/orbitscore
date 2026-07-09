@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.217 perf(engine): VST3 host /simplify — RT hot-path alloc 除去で stale 0%（#397） (Jul 10, 2026)
+
+PR #397 の `/simplify`（4 cleanup agent 並列: reuse/simplification/efficiency/altitude）で確定した cleanup を `orbit-vst3-host/src/lib.rs` に適用（sonnet5 委譲・単一ファイル 150+/166-）。
+
+- **① RT alloc 除去（efficiency・最重要）**: `process_block` が毎ブロック `ParameterChanges::empty()`×2 + `EventList::empty()`×2（`ComWrapper::new`=Arc heap 確保）していた → `load()` で field 構築し再利用
+- **② process context cache**: `IProcessContextRequirements` の毎ブロック COM query → `load()` で 1 回 query して flags を field cache
+- **③ `run_process` helper 抽出**: `process_stereo`/`process_block` の `ProcessData` 組立重複を集約（3 agent 一致指摘）
+- **④-⑥**: dead field `max_samples_per_block` + no-op Drop 除去 / `json_escape` per-char Vec 除去 / `probe_plugin` 4段ネスト平坦化
+- **skip（follow-up/低価値）**: effect-child transport loop 共有化（merged clap crate に触れる）・CfString/CfUrl generic 化・test 信号式/extract_* prologue
+- **検証（Opus 非サンドボックス）**: oracle sample-exact 両テスト PASS（挙動不変）+ **daemon gated 再実行で stale rate 改善**: C1 fresh 1129/1129(100%)・C3 [64f]&[32f] とも **stale_pct 0.000%（前 0.162%/0.105%）**。RT alloc 除去が実測で timing を締めた。fmt/clippy/deny clean
+
 ### 6.216 test(engine): VST3 Phase 1 daemon 経路 gated + フル arm64 sweep PASS（#381） (Jul 10, 2026)
 
 Phase 1 の VST3 を **① production daemon 経路（supervisor/pipelined/respawn/RT）** と **② 全 arm64 プラグイン machinery** の 2 面で実機検証。offline smoke（6.215）が「child+transport が実プラグインを生き延びるか」を、本項が「production driver 層」と「全体カバレッジ」を担う（advisor が B/C は役割分担と判定・step-back 無し）。
