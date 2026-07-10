@@ -1,9 +1,13 @@
-//! orbit-vst3-host — Phase 0 (#381) in-process VST3 host spike.
+//! orbit-vst3-host — Phase 1 (#381) in-process VST3 hosting library, used in-process by
+//! `orbit-vst3-effect-child`.
 //!
-//! This crate intentionally implements only the offline feasibility surface needed by
-//! `docs/development/POST_2.0_VST3_HOSTING_PLAN.md` Phase 0: load a macOS `.vst3` bundle,
-//! instantiate the first "Audio Module Class", run one f32 stereo block, and tear down on the
-//! same home thread.
+//! Load a macOS `.vst3` bundle, instantiate the first "Audio Module Class", negotiate the host
+//! context / edit-controller handshake and audio bus arrangement, and process f32 stereo blocks
+//! on the same home thread the plugin was loaded on. Grew out of the Phase 0 (#381) offline
+//! feasibility spike documented in `docs/development/POST_2.0_VST3_HOSTING_PLAN.md`; the
+//! production surface (host application/component-handler callbacks, bus negotiation,
+//! `process_block`) is exercised by `orbit-vst3-effect-child`, which is spawned/supervised by
+//! the daemon.
 
 use std::cell::{Cell, RefCell};
 use std::error::Error;
@@ -34,7 +38,10 @@ type BundleExit = unsafe extern "system" fn() -> bool;
 
 #[derive(Debug)]
 pub enum Vst3HostError {
-    Io { path: PathBuf, message: String },
+    Io {
+        path: PathBuf,
+        message: String,
+    },
     InvalidBundle(PathBuf),
     BundleLoad(String),
     MissingSymbol(&'static str),
@@ -50,7 +57,14 @@ pub enum Vst3HostError {
     SetActive(tresult),
     SetProcessing(tresult),
     Process(tresult),
-    UnsupportedChannels { input: i32, output: i32 },
+    UnsupportedChannels {
+        input: i32,
+        output: i32,
+    },
+    UnsupportedPrimaryBusLayout {
+        direction: &'static str,
+        channels: i32,
+    },
 }
 
 impl Display for Vst3HostError {
@@ -89,6 +103,13 @@ impl Display for Vst3HostError {
                     "unsupported channel layout: input={input}, output={output}"
                 )
             }
+            Self::UnsupportedPrimaryBusLayout {
+                direction,
+                channels,
+            } => write!(
+                f,
+                "primary {direction} bus is not stereo (expected {DEFAULT_CHANNELS} channels, got {channels})"
+            ),
         }
     }
 }
@@ -160,8 +181,16 @@ impl LoadedLibrary {
         if let Some(entry) = unsafe { loaded.function::<BundleEntry>("bundleEntry") }
             .or_else(|| unsafe { loaded.function::<BundleEntry>("BundleEntry") })
         {
+            // VST3/CFBundle convention: `bundleEntry` returning `false` means module init failed
+            // (JUCE treats this as a hard load failure too). Abort before `get_factory()` instead
+            // of silently continuing against an uninitialized module.
             if unsafe { entry(loaded.bundle.cast::<c_void>()) } {
                 loaded.bundle_exit_called = true;
+            } else {
+                return Err(Vst3HostError::BundleLoad(format!(
+                    "bundleEntry returned false: {}",
+                    bundle_path.display()
+                )));
             }
         }
 
@@ -271,8 +300,13 @@ impl Drop for CfUrl {
 /// Single-threaded VST3 effect processor.
 ///
 /// `Rc` makes this type `!Send` and `!Sync`. Construct, process, and drop it on the same home
-/// thread. Field order is load-bearing: Rust drops fields top-to-bottom, so `processor` is released
-/// before `component`, then `factory`, and finally the dynamic library is unloaded.
+/// thread. Shutdown call order (`setProcessing` → disconnect → `controller.terminate` →
+/// `component.setActive(0)`/`terminate`) is enforced by the hand-written `Drop::drop` body below
+/// via explicit `.take()` calls, not by field declaration order. Field order is load-bearing only
+/// for the *implicit* drop of the fields `Drop::drop` does not `.take()`: `_component_handler`
+/// and `_host_context` must be declared (and therefore dropped) before `_library`, so any COM
+/// callback objects backed by the plugin's vtables are released before the dynamic library is
+/// unloaded.
 pub struct Vst3EffectProcessor {
     processor: Option<ComPtr<IAudioProcessor>>,
     controller: Option<ComPtr<IEditController>>,
@@ -374,9 +408,11 @@ impl Vst3EffectProcessor {
             return Err(Vst3HostError::SetupProcessing(setup_result));
         }
 
-        // Phase 0 only verifies the effect overwrite path. This detection is separate from CLAP's
-        // `has_audio_input`; treating an instrument as an effect would be silent-but-wrong because
-        // the dry signal would be overwritten instead of add-mixed.
+        // `is_effect` drives both `process_block`'s overwrite-vs-add-mix branch (used in
+        // production by `orbit-vst3-effect-child`) and the probe / two-pass signal check below
+        // (`probe_effect_signal`), which only verifies the effect overwrite path. This detection
+        // is separate from CLAP's `has_audio_input`; treating an instrument as an effect would be
+        // silent-but-wrong because the dry signal would be overwritten instead of add-mixed.
         let info = LoadedVst3Info {
             name: class.name,
             audio_inputs: input_buses,
@@ -538,6 +574,14 @@ impl Vst3EffectProcessor {
     ///
     /// `is_effect` bus wiring (numInputs/inputs null-vs-populated) lives here so both callers stay
     /// in sync with the same effect/instrument branch.
+    ///
+    /// OOB note: only the primary (index 0) bus per direction is ever described here
+    /// (`numInputs`/`numOutputs` are always 0-or-1), always as a fixed `DEFAULT_CHANNELS`-wide
+    /// buffer. `verify_primary_bus_is_stereo` (called from `configure_audio_buses` at load time)
+    /// rejects plugins whose primary bus isn't stereo, so this fixed-width assembly cannot read
+    /// or write out of bounds for a plugin that passed load. Extra buses beyond index 0 on a
+    /// multi-bus plugin are simply never wired (known limitation, not a crash risk — see
+    /// `real_plugin_gated.rs`'s instrument commentary).
     fn run_process(
         &self,
         mut input_ptrs: [*mut f32; 2],
@@ -795,14 +839,26 @@ fn configure_audio_buses(
         );
         result = set_bus_arrangements(processor, &mut input_arrangements, &mut output_arrangements);
     }
-    // setBusArrangements は advisory。kResultFalse を返すプラグイン（ARIA Player 等・特に
-    // instrument）はプラグイン既定の arrangement で動作する。JUCE も致命扱いしない。ここで
-    // hard-fail すると「host 提案 arrangement を拒否するだけ」のプラグインが全滅するので続行する。
-    // （厳密な buffer 整合は Phase 1 で getBusArrangement の実値に合わせる。）
+    // setBusArrangements は advisory（any non-OK, not just kResultFalse）。この tresult を返す
+    // プラグイン（ARIA Player 等・特に instrument）はプラグイン既定の arrangement で動作する。
+    // JUCE も致命扱いしない。ここで hard-fail すると「host 提案 arrangement を拒否するだけ」の
+    // プラグインが全滅するので続行する。（厳密な buffer 整合は Phase 1 で getBusArrangement の
+    // 実値に合わせる。）
     let _ = result;
 
-    activate_audio_buses(component, BusDirections_::kInput as i32, input_buses);
-    activate_audio_buses(component, BusDirections_::kOutput as i32, output_buses);
+    // `run_process`（lib.rs 内 `Vst3EffectProcessor::run_process`）は index 0 の 1 bus しか
+    // process() に渡さない（`numInputs`/`numOutputs` は常に 0-or-1）。activate は process() が
+    // 実際に触るバスだけに絞り、plugin 側の active-bus bookkeeping を host の実際の呼び出しと
+    // 一致させる（多バス plugin で使わない bus を active のまま残す OOB リスクを避ける）。
+    activate_primary_bus_only(component, BusDirections_::kInput as i32, input_buses);
+    activate_primary_bus_only(component, BusDirections_::kOutput as i32, output_buses);
+
+    // `run_process` は index 0 の primary バスの channel buffer を常に `DEFAULT_CHANNELS`(2) 幅の
+    // `[*mut f32; 2]` として組み立てる。primary バスが stereo でないプラグイン（mono effect 等）を
+    // 通すと OOB / 未初期化読み取りになるため、silent corruption ではなく load 失敗として reject する。
+    // multi-bus プラグインで bus 0 が stereo なら extra バスは単に使わないだけで許容する。
+    verify_primary_bus_is_stereo(component, input_buses, output_buses)?;
+
     Ok(())
 }
 
@@ -893,12 +949,54 @@ fn arrangement_for_channels(channel_count: i32) -> SpeakerArrangement {
     }
 }
 
-fn activate_audio_buses(component: &ComPtr<IComponent>, direction: BusDirection, bus_count: i32) {
-    for index in 0..bus_count {
-        unsafe {
-            let _ = component.activateBus(MediaTypes_::kAudio as i32, direction, index, 1);
+/// Activates only bus index 0 for `direction` (if `bus_count > 0`). `run_process` describes a
+/// single bus per direction to `process()`, so only that bus needs to be active; extra buses on
+/// a multi-bus plugin are intentionally left inactive.
+fn activate_primary_bus_only(
+    component: &ComPtr<IComponent>,
+    direction: BusDirection,
+    bus_count: i32,
+) {
+    if bus_count <= 0 {
+        return;
+    }
+    // activateBus は advisory: 一部プラグインは常に非 OK を返すが、bus 未 activate でも process()
+    // が動くケースが多く（JUCE ホストも致命扱いしない）、失敗を診断 log に残すだけで続行する。
+    let result = unsafe { component.activateBus(MediaTypes_::kAudio as i32, direction, 0, 1) };
+    if !is_ok(result) {
+        eprintln!(
+            "[orbit-vst3-host] activateBus(direction={direction}, index=0) advisory failure: {result}"
+        );
+    }
+}
+
+/// `run_process` always wires the primary (index 0) bus as a `DEFAULT_CHANNELS`-wide (stereo)
+/// buffer. Reject load if either primary bus that will actually be processed reports a different
+/// channel count, instead of letting `run_process` read/write out of bounds.
+fn verify_primary_bus_is_stereo(
+    component: &ComPtr<IComponent>,
+    input_buses: i32,
+    output_buses: i32,
+) -> Result<(), Vst3HostError> {
+    if input_buses > 0 {
+        let channels = audio_bus_channel_count(component, BusDirections_::kInput as i32, 0);
+        if channels != DEFAULT_CHANNELS as i32 {
+            return Err(Vst3HostError::UnsupportedPrimaryBusLayout {
+                direction: "input",
+                channels,
+            });
         }
     }
+    if output_buses > 0 {
+        let channels = audio_bus_channel_count(component, BusDirections_::kOutput as i32, 0);
+        if channels != DEFAULT_CHANNELS as i32 {
+            return Err(Vst3HostError::UnsupportedPrimaryBusLayout {
+                direction: "output",
+                channels,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn ptr_or_null_mut<T>(values: &mut [T]) -> *mut T {
@@ -1607,4 +1705,24 @@ fn json_escape(value: &str) -> String {
         }
     }
     escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // I6(pr-review-team): `is_ok` gates every tresult check in this crate (setup/activate/process
+    // ...) but had no direct unit test — pin the kResultOk/kResultTrue/kResultFalse/kNotImplemented
+    // truth table.
+    #[test]
+    fn is_ok_treats_result_ok_and_result_true_as_success() {
+        assert!(is_ok(kResultOk));
+        assert!(is_ok(kResultTrue));
+    }
+
+    #[test]
+    fn is_ok_treats_result_false_and_not_implemented_as_failure() {
+        assert!(!is_ok(kResultFalse));
+        assert!(!is_ok(kNotImplemented));
+    }
 }

@@ -57,6 +57,46 @@ fn gain_oracle_is_sample_exact() {
     }
 }
 
+// I5(pr-review-team): `process_block`'s guard clauses (non-multiple-of-channels length, scratch
+// overflow) return `false` before ever touching COM — untested until now.
+#[test]
+fn process_block_rejects_non_stereo_length() {
+    let Some(bundle) = package_oracle() else {
+        eprintln!("VST3 oracle build failed; loud skip for this machine");
+        return;
+    };
+    let (mut processor, _info) = Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
+        .unwrap_or_else(|error| {
+            panic!("failed to load oracle bundle {}: {error}", bundle.display())
+        });
+
+    // Odd length: not a multiple of DEFAULT_CHANNELS(2).
+    let mut data = vec![0.25f32; 3];
+    assert!(
+        !processor.process_block(&mut data),
+        "non-multiple-of-channels length must be rejected"
+    );
+}
+
+#[test]
+fn process_block_rejects_frames_exceeding_scratch() {
+    let Some(bundle) = package_oracle() else {
+        eprintln!("VST3 oracle build failed; loud skip for this machine");
+        return;
+    };
+    let (mut processor, _info) = Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
+        .unwrap_or_else(|error| {
+            panic!("failed to load oracle bundle {}: {error}", bundle.display())
+        });
+
+    // FRAMES(512) is the scratch length (max_samples_per_block); one frame beyond that must fail.
+    let mut data = vec![0.25f32; (FRAMES + 1) * 2];
+    assert!(
+        !processor.process_block(&mut data),
+        "frame count exceeding scratch length must be rejected"
+    );
+}
+
 #[test]
 fn real_vst3_abi_loads_processes_and_drops() {
     let candidates = real_plugin_candidates();

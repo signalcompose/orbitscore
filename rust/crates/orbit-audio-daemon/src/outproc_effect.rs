@@ -910,4 +910,40 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         handle.join().expect("process loop thread joins");
     }
+
+    // C2（pr-review-team）: format 選択の純関数は device/child プロセス不要で CI 常時実行できるのに
+    // gated テストからしか経由されていなかった。env value 解決 + child binary 名の対応表を直接固定する。
+    #[test]
+    fn plugin_format_from_env_value_defaults_to_clap() {
+        assert_eq!(PluginFormat::from_env_value(None), Ok(PluginFormat::Clap));
+    }
+
+    #[test]
+    fn plugin_format_from_env_value_accepts_known_values() {
+        assert_eq!(
+            PluginFormat::from_env_value(Some("vst3".to_owned())),
+            Ok(PluginFormat::Vst3)
+        );
+        assert_eq!(
+            PluginFormat::from_env_value(Some("clap".to_owned())),
+            Ok(PluginFormat::Clap)
+        );
+    }
+
+    #[test]
+    fn plugin_format_from_env_value_rejects_unknown_values() {
+        assert!(PluginFormat::from_env_value(Some("au".to_owned())).is_err());
+    }
+
+    #[test]
+    fn plugin_format_default_child_name_matches_format() {
+        assert_eq!(
+            PluginFormat::Clap.default_child_name(),
+            "orbit-clap-effect-child"
+        );
+        assert_eq!(
+            PluginFormat::Vst3.default_child_name(),
+            "orbit-vst3-effect-child"
+        );
+    }
 }

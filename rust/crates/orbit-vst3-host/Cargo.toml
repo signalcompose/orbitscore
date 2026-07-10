@@ -1,9 +1,10 @@
 # orbit-vst3-host — in-process VST3 plugin hosting library for OrbitScore daemon.
 #
-# Phase 0 (#381) spike: VST3 の最大リスク = 「Rust で COM を unsafe に手書きしてホストする」を
-# 最小・offline で retire する。orbit-clap-host の構造対称コピー（将来 Phase 1 で production 化）。
+# Phase 1 (#381) production library: grew out of the Phase 0 offline feasibility spike (最大リスク
+# =「Rust で COM を unsafe に手書きしてホストする」の retire) into the production hosting surface
+# used in-process by orbit-vst3-effect-child (spawned/supervised by the daemon).
 #
-# 正本: docs/development/POST_2.0_VST3_HOSTING_PLAN.md §Phase 0
+# 正本: docs/development/POST_2.0_VST3_HOSTING_PLAN.md §Phase 0 / §Phase 1
 [package]
 name = "orbit-vst3-host"
 version.workspace = true
@@ -11,7 +12,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "In-process VST3 plugin hosting library for OrbitScore daemon (Issue #381, Phase 0 spike)"
+description = "In-process VST3 plugin hosting library for OrbitScore daemon (Issue #381, Phase 1 production)"
 publish = false
 
 [lib]

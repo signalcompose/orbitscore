@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.218 fix(engine): VST3 host PR #397 レビュー収束 — bus honest 化・CI 緑・テスト補完（#397） (Jul 10, 2026)
+
+PR #397 の `/code:pr-review-team`（4 レビュアー並列: code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer + CI）で挙がった Critical/Important を 0 に収束。独立 round-2 再レビューで裏取り（自己判断で宣言しない）。
+
+- **CI 緑化**: `orbit-clap-host/discovery.rs:63-66` の冗長 `&`（clippy 1.97 `useless_borrows_in_formatting`・この PR の diff 外の既存問題が CI を塞いでいた）を除去
+- **Critical**: crate doc（`orbit-vst3-host` lib.rs/Cargo.toml）を「Phase 0 spike/offline」→ Phase 1 production に更新 / `PluginFormat::from_env_value`・`default_child_name` の unit test 追加 / `ChildStats` の非 gated テスト追加（synthetic child で `processed`/`process_errors` を assert・dry-passthrough 誤 PASS 穴の CI 側ガード）
+- **Important（挙動変更・bus honest 化）**:
+  - `verify_primary_bus_is_stereo`（I1）: load 時に primary(index0) バスが stereo でなければ reject。silent audio corruption を explicit load-fail に。instrument は input 検査を skip・multi-bus の stereo bus0 は通す
+  - `activate_primary_bus_only`（I2）: activate を index0 バスのみに（`run_process` が 1 バスしか記述しない契約と一致・多バス OOB 回避）+ activateBus 失敗を eprintln
+  - `bundleEntry` false → `Err(BundleLoad)`（I3）: get_factory 前に abort（JUCE 準拠・success 側は `bundle_exit_called` 正しく設定）
+  - `process_block` guard・`is_ok` の unit test 追加 / field-order コメント正確化 / `real_plugin_gated.rs` の壊れた cross-ref 修正
+- **検証（Opus 非サンドボックス）**: oracle sample-exact PASS（挙動不変）+ daemon gated C1-C3 PASS（stale [64f]&[32f] 0.000%）+ **フル sweep v2（733s・333個）**: Effect 268 PASS + Instrument 58 PASS・**genuine crash 0**・test ok。**I1 の唯一の影響 = MIDI Guitar 3（8ch input bus）を honest に load-reject**（silent 誤処理の解消）。UJAM Beatmaker 7 が Crash→Instrument に回復。fmt/clippy/deny clean
+- **役割**: レビュー起動/統合/収束判定=Opus（pr-review-team skill）/ fix 適用=sonnet5 委譲（session 上限で途中終了も実質完了・Opus が検証）/ 実機再測定=Opus 非サンドボックス
+- **残**: advisor 相談 → bot（@claude）second-opinion → owner マージ判断
+
 ### 6.217 perf(engine): VST3 host /simplify — RT hot-path alloc 除去で stale 0%（#397） (Jul 10, 2026)
 
 PR #397 の `/simplify`（4 cleanup agent 並列: reuse/simplification/efficiency/altitude）で確定した cleanup を `orbit-vst3-host/src/lib.rs` に適用（sonnet5 委譲・単一ファイル 150+/166-）。

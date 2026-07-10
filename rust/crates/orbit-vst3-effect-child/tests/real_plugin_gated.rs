@@ -18,7 +18,9 @@
 //! ## 二層判定
 //! - **effect（`audio_in > 0`）= ゲート対象**: FAIL したらこのテスト全体を `panic!` させる。
 //! - **instrument（`audio_in == 0`）= informational**: 結果は記録するが gate しない
-//!   （多バス instrument は host 契約上 OOB read の可能性が既知 ── §lib.rs L800 台のコメント参照）。
+//!   （primary bus 以外の extra bus を持つ多バス instrument は host が単に配線しない ── OOB read
+//!   ではなく bus 0 が host の固定 stereo 幅と食い違う場合は load 時点で reject される。
+//!   `orbit-vst3-host/src/lib.rs` の `Vst3EffectProcessor::run_process` 直上コメント参照）。
 //! - probe 自体の load 失敗/crash/hang（kind 判定前）は **non-gating**（surfaced のみ）。
 //!
 //! ## 既知の limitation
