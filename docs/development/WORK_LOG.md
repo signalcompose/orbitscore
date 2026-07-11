@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.221 docs(engine): Phase 2 — M2 instrument IPC substrate 設計 DRAFT（#398） (Jul 12, 2026)
+
+VST3 hosting Phase 0+1（PR #397 MERGED・main `e6476e2`）の次の関門 = **Phase 2 = M2 instrument IPC substrate の SPEC 作業**（`POST_2.0_PLUGIN_STRATEGY.html` §3 の唯一の plan-affecting 決定 = M2 IPC を CLAP イベント形に寄せず format-neutral に仕様化）。Issue #398 / branch `398-vst3-phase2-m2-ipc-design` で DRAFT doc `docs/development/POST_2.0_GAMMA_M2_DESIGN.md` を執筆。owner は就寝中のため、決定を先取りせず open question として明示した状態で停止（[[consult-layering-by-error-type]] の層分け運用）。
+
+- **grounding（fresh agent・opus・一次ソース直読）**: CLAP `free-audio/clap` `events.h`/`note-ports.h`・VST3 `steinbergmedia/vst3_pluginterfaces` `ivstevents.h`/`ivstnoteexpression.h`/`ivstparameterchanges.h`・AU/CoreMIDI macOS SDK ヘッダを直接読み、3 format の event/param/note-expression surface（note_id・per-event sample offset・note-expression 7種・per-voice param modulation・MIDI1/MIDI2/UMP・sysex・NoteChoke/NoteEnd 等）を横断列挙。IR 設計はさせず事実列挙のみに限定（grounding ≠ deciding）。
+- **advisor 2 往復**: ①アプローチ承認 + 4点補強（Q1 を「wire意味論=今superset」「child適用=段階的」に分離する軸・note_id 等の具体欠落例・neutral wire は `orbit-audio-sandbox`（clack-free）の POD にすべき制約・固定長 event slot が要求する capacity/overflow policy）。②draft 後の superset 完全性検査で **grounding にあり §3 案から脱落していた2点（VST3 `ChordEvent`/`ScaleEvent`・transport/musical context の tempo/beat/tsig 同期）+ param automation の canonical 表現未記載 + 受け入れ基準の「CLAP instrument child は現存しない」未明示**を検出 → 全て doc に反映（Chord/Scale は意図的除外を明記して defer、transport/musical context は新設 Q6 として owner 判断に諮る〔サイレント除外にしない〕、param automation は discrete point 列が 3 format の superset である旨を明記、受け入れ基準に「新規 deliverable」「closed-form oracle 必須」を追記）。
+- **doc 構成**: neutral event wire 型の具体案（`#[repr(C)]` tagged union `NeutralEvent`・`VoiceAddr` によるwildcard対応アドレス指定）+ `SharedRegion` への event slot 拡張案（M1 の per-slot `seq_tag`/`n_frames` パターンを踏襲）+ 未決の owner 判断 6問（Q1 分離原則の確定・Q2 neutral IR 戦略・Q3 per-event sample-offset 必須化・Q4 transport layout 具体値/overflow policy・Q5 bus arrangement honor スコープ・Q6 transport/musical context の wire 包含可否）+ Phase 3 受け入れ基準 draft。
+- **役割**: grounding=fresh agent(opus) / 枠組み・superset 完全性検査=advisor / 設計所有・decision drafting=Opus main。**codex 委譲なし**（正本の禁止どおり）。
+- **状態**: DRAFT のまま commit・push・draft PR 作成のみ実施。`/simplify`・`/code:pr-review-team`・merge は回さない（決定 pending の docs-only 変更のため）。owner サインオフ後に Phase 2 実装（`orbit-audio-sandbox` 型定義・SharedRegion 拡張）着手・Phase 3（VST3 instrument）は M2 landing まで引き続き禁止。
+
 ### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
 
 中核の手書き unsafe COM FFI（`orbit-vst3-host/src/lib.rs`・80 unsafe blocks）に対し、`/code:pr-review-team`（汎用 correctness）が構造的に狙わない **memory-safety/UB 次元**の外部第二意見を実施。@claude bot は pr-review-team と同一モデルファミリで盲点が相関するため除外し、**codex（cross-family）+ fresh Opus（非著者）を並列 adversarial 監査 → advisor で tie-break**（[[consult-layering-by-error-type]] の分担）。
