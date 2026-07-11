@@ -1,7 +1,8 @@
 # γ M2 設計 — instrument IPC substrate（format-neutral event/param）
 
-> 🚧 **status: DRAFT — owner サインオフ待ち。** wire の設計方針（§2/§3・旧 Q1/Q2）は **owner 確定済み**。
-> 残り §6 Q3-Q6（容量・スコープの具体値）が未決。owner が全項目を確定するまで、本 doc を正本として
+> 🚧 **status: DRAFT — owner サインオフ待ち。** wire の設計方針（§2/§3・旧 Q1/Q2）・per-event sample
+> offset（Q3）・transport 容量設計（Q4・§4）は **owner 確定済み**。残り §6 Q5-Q6（bus arrangement /
+> transport-musical-context のスコープ判断）のみ未決。owner が全項目を確定するまで、本 doc を正本として
 > 実装に着手しない（Phase 3 = VST3 instrument は本 doc の landing 後）。
 
 - **Issue**: #398（本 doc）/ 親 #395（VST3 hosting plan）/ Epic #292
@@ -24,6 +25,10 @@
 7. **owner 確定（2026-07-12）**: Fable 判断どおり **候補A（named tagged union）採用**。MIDI2 は明示的に含める。§2/§3 を旧 Q1/Q2 として決着させ、DECIDED として記録。
 
 **教訓**: 「format-neutral」は3つの独立した軸（①意味論カバレッジ ②wire 型構造＝named か opaque か ③コード構造＝共有か per-format か）を持つ。正本の文言は①②の一部だけを縛り、③（pluggable の置き場所）は縛っていない。次に類似の疑問が出たらこの3軸分解から始めること。
+
+8. **Q3（sample offset）は owner 即決**（「含める」）。**Q4（transport 容量）で第2の紆余曲折**: 当初「64個/ブロック・drop-oldest」を提案 → owner が「実験的な用途で見えない天井になりかねない」と懸念 → grounding agent が JUCE(容量制限なし)・JACK MIDI(2048B/cycle・drop+count)・VST3(~2048 events/block 相当)を調査し、64 が業界水準より小さいことを裏付け → Fable が「drop-oldest は捨てられるイベントに NoteOff が含まれうるため stuck note を生む」構造的欠陥を指摘し、「上限を大きくする」でなく「溢れても失わない」設計(4096窓+backing ring lossless spillover)へ転換 → owner がさらに「本当に上限を作る形でよいか・既存 CLAP ホストの同種欠陥を今直すべきでは・アーキ全体の監査は要らないか」と3点を再度問う → 2回目の Fable 判断で「time-budget 方式は転送コピーが軽すぎて意味がなく決定論も壊すため不採用・4096+spillover のまま」「既存 in-process CLAP ring は producer が非RTスレッドなので bounded retry だけで安価に直せる→今すぐ別 issue で」「exhaustive 監査は不要・見つかった2件(既存ring+`Engine::with_scheduler`のsilent zero-fill)を issue化し再発防止は宣言原則の成文化で足りる」と確定。owner はこの「監査不要」判断についても「Fable は高コストなので、もっと安いやり方で本当に不要か検討し直せ」と再度指摘 → fresh agent(opus・低コスト)による TS層+grepパターン非依存の拡張調査を別途実施（結果は #400/#401 と合わせて記録）。
+
+**教訓2**: 数値の妥当性（「64は十分か」）を検討する前に、**「溢れた時に何を失うか」の質**（drop-oldest が stuck note を生む等）を先に検討すべきだった。また「決定的な一発判断」が必要な論点（wire構造・容量アーキテクチャ）と「網羅的な接地確認」が必要な論点（既存コードに同種欠陥が他にないか）は異なる mechanism を使うべきで、後者を high-cost な Fable で行うのはコスト対効果が悪い（fresh general-purpose agent で足りる）。
 
 ---
 
@@ -208,27 +213,65 @@ impl EventRecord {
 
 ---
 
-## 4. Transport 拡張（draft）
+## 4. Transport 拡張（DECIDED・容量設計は Fable 判断で確定）
 
 M1 の `SharedRegion`（`orbit-audio-sandbox::transport`）は現状 audio input/output slot のみ。M2 は per-slot の **event 配列**を追加する形が M1 のパターン（`n_frames`/`seq_tag` の per-slot 化）と整合する。
 
+### 4.1 容量設計の原則（owner + Fable 確定・2026-07-12）
+
+当初「1ブロックあたり64個・溢れたら古いイベントを捨てる」という仮案を検討したが、owner から「実験的な用途で見えない天井になりかねない」という懸念が出され、Fable のレビューで**仮案は2つの点で不適格**と判明した:
+
+1. **64 は既存の設計エンベロープ内でも不足しうる**（`MAX_FRAMES=4096` の大バッファ時は1ブロック約93msに達し、64 events/block は持続 ~690 events/sec 相当 — 中規模なアルゴリズミックパターンで普通に到達する）。
+2. **drop-oldest は音楽的に最悪**: 捨てられる最古イベントに `NoteOff` が含まれうるため、stuck note（音が鳴りっぱなしで止まらない）という最悪の故障を生む。
+
+**確定した設計思想 = 「上限を大きくする」のではなく「溢れても失わない」**。「時間予算で区切る(天井を無くす)」案も検討したが、Fable が却下した（transport が固定レイアウトの `#[repr(C)]` mmap である以上どこかに必ず bound は残る／転送コピー自体は極めて軽い(数µs)ためRT予算では時間は希少資源にならない／時計で区切ると同一演奏が run ごとに異なるブロックへ event を配ることになり、このプロジェクトの検証文化(sample-exact closed-form oracle parity・`.orbslog` 決定論的再現)と衝突する）。真に物理的な制約(共有メモリのレイアウト・メモリ容量)にのみ従う設計として、count-bound + lossless spillover を採用する。
+
+### 4.2 二段構造（per-block 転送窓 + 背後のバッキングring）
+
+既存の in-process 経路（制御スレッド → rtrb SPSC ring → RT callback が最大 N 個だけ pop して EventBuffer へ drain）を OOP 版に鏡映しする:
+
 ```rust
-pub const MAX_EVENTS_PER_BLOCK: usize = /* §6 Q4 — owner 確定（推奨 64） */;
+/// 1ブロックあたりの転送窓（= shm 上の EventRecord 配列サイズ）。
+/// 根拠 = 統計的典型性でなく「アーキテクチャ飽和点」: MAX_FRAMES と揃え、
+/// 「1 sample あたり1 event」を持続転送できる水準にする。これを超える密度は
+/// 個別イベントでなく audio-rate 変調が正しい表現媒体であり、"天井" ではなく
+/// 表現媒体の境界になる。
+pub const MAX_EVENTS_PER_BLOCK: usize = 4096; // = MAX_FRAMES
 
 // SharedRegion に追加するフィールド（イラストレーティブ）
-pub input_events:        [[EventRecord; MAX_EVENTS_PER_BLOCK]; SLOTS],  // host -> child
+pub input_events:        [[EventRecord; MAX_EVENTS_PER_BLOCK]; SLOTS],  // host -> child（per-block 転送窓）
 pub input_event_count:   [AtomicU32; SLOTS],
 pub output_events:       [[EventRecord; MAX_EVENTS_PER_BLOCK]; SLOTS],  // child -> host（NoteEnd/LegacyMidiCcOut 等）
 pub output_event_count:  [AtomicU32; SLOTS],
-pub event_overflow_count: AtomicU64,      // §6 Q4 の overflow policy 用 health signal（M1 の child_process_error_count に倣う）
-pub event_decode_error_count: AtomicU64,  // decode() が未知 kind を skip した回数（validated decode の可視化・新規）
+pub event_dropped_count:  AtomicU64,  // 真の喪失（backing ring 自体が尽きた場合のみ・health signal）
+pub event_spilled_count:  AtomicU64,  // 無損失の1ブロック超遅延（情報用・health signal）
+pub event_decode_error_count: AtomicU64,  // decode() が未知 kind を skip した回数（validated decode の可視化）
 ```
 
-- **既存の audio slot 同期（`seq_request`/`seq_done`/per-slot `seq_tag`）をそのまま event slot にも適用**（同一 slot・同一 seq で audio と event が対になる）。M1 の +1-block pipelined discipline とは整合する（event も audio と同じ 1-block 遅延を受け入れる）。`input_event_count`/`output_event_count` は `n_frames` と同じ「Relaxed store → Release publish で可視」規律に従う。
-- **overflow policy**: block 内の event 数が `MAX_EVENTS_PER_BLOCK` を超えた場合の挙動（drop-oldest / drop-newest / stall）は未決（§6 Q4）。`event_overflow_count` で可視化する。
+- **backing ring**（host 側・control スレッドが producer）は shm 外の通常メモリで確保する大きめの ring（目安 65,536 slot ≈ 4MB・起動時確保）。RT callback は毎ブロック、この ring から**最大 `MAX_EVENTS_PER_BLOCK` 個だけ pop**して `input_events` へ書く。**窓に載りきらない残りは ring に残し、次ブロック以降で配送する**（＝ overflow の帰結が「データ喪失」ではなく「最大 1 ブロック(64f で約1.45ms)の遅延」になる）。pop 数を減らすだけなので alloc/lock なし・RT-safe。
+- **真の drop が起きるのは backing ring 自体が尽きた場合のみ**（drain レート ≈ 4096 events/block @64f ≈ 秒間280万イベント相当なので、実質 producer 側のバグ以外では発生しない）。その場合は **drop-newest**（drop-oldest は §4.1 の理由により不採用）。**`NoteOff` 等の note 状態変更イベントはサイレント drop 禁止**: 捨てざるを得ない場合は sticky flag を立て、次ブロックで note-choke/all-notes-off を側路から注入し、stuck note を構造的に排除する。
+- **spill された event の `sample_offset` 再タイミング規約（実装時に曖昧にしないこと）**: 配送が後続ブロックにずれた event の `sample_offset` は、配送先ブロックの先頭（0）にクランプする。元ブロック内での相対位置は保持しない。これは既存 in-process 経路が A0 §4.2 で採用済みの簡略化（全イベントを block 先頭オフセットに置く）と同じ粒度であり、新たな精度劣化ではない。
+- **可視化は音を変えない**: `event_dropped_count`（真の喪失）と `event_spilled_count`（無損失遅延・情報）を分離し、`child_process_error_count` と同型の health signal パターンで 1Hz ticker（`OUTPROC_EFFECT_*` 相当）→ TS 層 → OrbitStudio のステータス表示へ配線する。**演奏・録音の音そのものを変える通知（警告音等）は禁止**（報せる対象の故障より害が大きいため）。
+- **既存の audio slot 同期（`seq_request`/`seq_done`/per-slot `seq_tag`）をそのまま event slot にも適用**（同一 slot・同一 seq で audio と event が対になる）。M1 の +1-block pipelined discipline とは整合する。`input_event_count`/`output_event_count` は `n_frames` と同じ「Relaxed store → Release publish で可視」規律に従う。
 - **bidirectionality**: `NoteEnd`（plugin→host の voice 解放通知）・`LegacyMidiCcOut`（plugin→host の MIDI CC 出力）は child 起点のイベント。M1 の audio transport は host→child(input)/child→host(output) が対称に存在するので、event も同様に input/output を分離する（上記）。
-- **サイズ見積り**: `EventRecord` ≈ 32 bytes（kind 4B + sample_offset 4B + payload 24B）。`MAX_EVENTS_PER_BLOCK=64` なら 32B × 64 × `SLOTS`(2) × 2方向 ≈ 16 KB 追加（現行 audio 領域 ~128 KB に対し +12%程度）。RT-safety・キャッシュ footprint 上、問題ない規模。
+- **サイズ見積り**: `EventRecord` ≈ 32 bytes。`MAX_EVENTS_PER_BLOCK=4096` なら 32B × 4096 × `SLOTS`(2) × 2方向 ≈ 512 KB 追加（現行 audio 領域 ~128 KB に対し増分は無視できる規模。count-prefix 配列なので未使用容量のコピーコストはゼロ）。
 - **crate 配置**: `EventRecord`/`EventPayload`/`NeutralEvent`/`decode`/`encode` はすべて `orbit-audio-sandbox` に置き、clack-free 回帰テストの対象に含める（`cargo tree -p orbit-audio-sandbox` に clack・vst3 系 crate が一切出現しないことを維持）。各 child は `orbit-audio-sandbox` + 自 SDK crate に依存し、`NeutralEvent → SDK 型` の翻訳を child 内に完全隔離する。
+- **受け入れ信号**（§7 に統合）: gated stress test — @32f で 10K ノート同時バースト + 持続 100K events/sec を流し、`event_dropped_count == 0` を assert。
+
+### 4.3 新規 bounded queue 宣言原則（再発防止・M2 が初適用）
+
+Fable の拡張調査で、同種の欠陥（固定容量 + 統計的典型性の前提 + silent 劣化）が2箇所（既存 in-process CLAP ring・`Engine::with_scheduler` の lock 競合時 silent zero-fill）で見つかった（詳細は #400・#401）。exhaustive な監査を毎回行うのは高コストなので、再発防止は**新しい bounded 構造を導入する際の宣言原則**として成文化する:
+
+> 固定容量の queue/buffer/ring を新規導入する変更は、doc comment で次の3点を明記しなければならない: **(a)** producer のスレッド種別（RT か非RTか） **(b)** overflow policy（lossless か、drop するなら note-off 級の状態依存 event を保護する方法） **(c)** 可視化 counter の有無。
+
+M2 の `input_events`/`output_events`/backing ring がこの原則の初適用例（上記 §4.2 が (a)(b)(c) を明記済み）。
+
+### 4.4 既存コードの同種欠陥（M2 とは別スコープ・issue 化済み）
+
+M2 の容量設計を検討する過程で、同じ欠陥パターンが**既存の出荷済みコード**にも存在することが判明した。M2 の設計・実装はブロックしないが、独立した修正として着手する:
+
+- **#400**: in-process CLAP event ring（`orbit-audio-daemon/src/engine_wrap.rs` の `push_plugin_event`）— 満杯時 drop-newest だが可視化カウンタなし・producer が RT スレッドでないため bounded retry だけで lossless 化できる。
+- **#401**: `Engine::with_scheduler` の try_lock 経路（`orbit-audio-core/src/engine.rs`）— lock 競合時に1ブロック無音化するが可視化なし。lock-free 化は別途 defer 済みの判断を維持し、contention counter のみ追加。
 
 ---
 
@@ -239,24 +282,21 @@ pub event_decode_error_count: AtomicU64,  // decode() が未知 kind を skip �
 - **`orbit-clap-host::PluginEvent`（in-process 経路）を neutral wire に収斂させるか**: 収斂の要否・時期は follow-on 判断（M2 の OOP substrate 自体には影響しない）。
 - **VST3/AU instrument child の実装**（Phase 3）。
 - **transport/musical context（tempo/beat/tsig 同期）は明示的に defer するか wire に含めるかを §6 Q6 で決める**（サイレント除外にしない — 理由は §6 Q6 参照）。
-- **sysex / 可変長 note-expression text / Chord-Scale の text 部の低頻度 side-channel 設計**: 原則C で存在は確定したが、具体設計は §6 Q4 で owner に諮る。
+- **sysex / 可変長 note-expression text / Chord-Scale の text 部の低頻度 side-channel 設計**: 原則C で存在の必要性は確定したが、具体設計（メッセージ形式等）は実装時に詰める。
 
 ---
 
 ## 6. 残りの owner 判断（open questions — 先取りしない）
 
-旧 Q1/Q2（wire の設計方針）は §2/§3 で **DECIDED** 済み。以下は**推奨を添えるが、決定ではない**残り4問。owner サインオフを得るまで本 doc は DRAFT のまま。
+旧 Q1/Q2（wire の設計方針）は §2/§3 で **DECIDED** 済み。**Q3・Q4 も本節下記のとおり DECIDED**（owner 確定 2026-07-12）。残る open question は **Q5・Q6 の2問のみ**。owner サインオフを得るまで本 doc は DRAFT のまま。
 
 **判定軸（何を今決め、何を defer してよいか）**: neutral wire は同一 build 前提（cross-process だが published ABI ではなく host/child は同一ビルド）なので、named variant の追加自体は後から再コンパイルで足せる。真の論点は **wire ABI 互換性ではなく、その event が DSL timing・session log・translate 契約・daemon push API など周辺層とどれだけ結合するか**: 結合が薄い自己完結 event（例: Chord/Scale の数値部）はサイレントでない「意図的除外」の明記だけで defer 可、結合が強い次元（例: sample_offset・transport/musical-context）は defer すると周辺層の作り直しを招くため今決める必要がある。
 
-### Q3 — per-event sample-offset-within-block を v1 で必須にするか
-**推奨**: はい、必須（§3 は既にこれを前提）。3 format とも持つ共通ディメンションであり、かつ **DSL timing・スケジューリングと高度に結合する**（上記「判定軸」）— defer すると offset=0 前提で周辺層（event-scheduler 側の変換・session log 等）が組まれ、後から sample-accurate 化する際にそれら全てを作り直す羽目になる。
+### Q3 — per-event sample-offset-within-block を v1 で必須にするか【DECIDED（owner 確定）】
+**確定: はい、必須**（§3 は既にこれを前提）。3 format とも持つ共通ディメンションであり、かつ **DSL timing・スケジューリングと高度に結合する**（上記「判定軸」）— defer すると offset=0 前提で周辺層（event-scheduler 側の変換・session log 等）が組まれ、後から sample-accurate 化する際にそれら全てを作り直す羽目になる。
 
-### Q4 — transport layout の具体値・overflow policy・side-channel 設計
-- `MAX_EVENTS_PER_BLOCK` の値（推奨候補: 64 — 典型 block size 32-128 frames に対し MPE 演奏等の high density でも十分な余裕、`SharedRegion` サイズ増加も ~16KB と許容範囲）。
-- overflow policy（drop-oldest / drop-newest / stall）。**推奨: drop-oldest + `event_overflow_count` 可視化**（M1 の `child_process_error_count` パターンと一貫。stall は audio callback の RT 予算を脅かすため非推奨）。
-- sysex・可変長 note-expression text・Chord/Scale text 部を運ぶ低頻度 side-channel の具体設計（原則C 参照。「低頻度 message queue」が要る — 本 doc は存在の必要性のみ確定・詳細未設計）。
-- input/output event slot の bidirectional 構成（§4 案）でよいか。
+### Q4 — transport layout の具体値・overflow policy・side-channel 設計【DECIDED（owner + Fable 確定）】
+**確定内容は §4 参照**（`MAX_EVENTS_PER_BLOCK=4096` + backing ring による lossless spillover + drop-newest は backing ring 枯渇時のみ + note-off サイレント drop 禁止 + `event_dropped_count`/`event_spilled_count` の非音響可視化）。当初案「64個・drop-oldest」は owner の「実験的用途で見えない天井になる」懸念 → Fable レビューで不適格と判明 → 「上限を大きくする」でなく「溢れても失わない」設計へ転換した経緯は §4.1 参照。sysex・可変長 note-expression text・Chord/Scale text 部の低頻度 side-channel は**存在の必要性のみ確定・具体設計は実装時に詰める**（原則C）。input/output event slot の bidirectional 構成は §4.2 のとおり確定。
 
 ### Q5 — bus arrangement honor（multi-out/sidechain）を M2 スコープに含めるか、明示 defer か
 **推奨**: defer。M1 は単一 stereo sum（既知 coverage gap として記録済み・`POST_2.0_VST3_HOSTING_PLAN.md` §1）。event/param IPC と audio bus 拡張は直交する関心事であり、M2 の主眼（instrument の note/param 駆動）を先に landing させ、multi-out/sidechain は別 issue に切り出せる。
@@ -272,7 +312,7 @@ grounding が指摘した欠落（CLAP `clap_event_transport` / VST3 `ProcessCon
 
 ## 7. Phase 3 受け入れ基準（draft — M2 landing の定義）
 
-Q3-Q6 が owner サインオフ済みであることに加え、以下を M2 substrate の landing 条件とする案（advisor 検査対象）:
+Q5-Q6 が owner サインオフ済みであることに加え、以下を M2 substrate の landing 条件とする案（advisor 検査対象）:
 
 1. `orbit-audio-sandbox::EventRecord`/`EventPayload`（§3）が `#[repr(C)]` POD として定義され、`cargo tree -p orbit-audio-sandbox` に clack・vst3 系 crate が出現しないこと（原則B の回帰テスト）。
 2. `EventRecord::decode()` が **未検証の enum transmute を行わず**、未知 `kind` を `None` + `event_decode_error_count` 増分で処理すること（原則D の安全性要件・unit test で不正 kind を注入して確認）。
@@ -282,7 +322,8 @@ Q3-Q6 が owner サインオフ済みであることに加え、以下を M2 sub
    - **これは新規 deliverable**: M1 が作った `orbit-clap-effect-child` は effect 専用であり、instrument child（CLAP 版が最有力・既存 `orbit-clap-host` の対称拡張）は現存しない。M2 landing の一部としてゼロから作る。
    - **oracle は closed-form・決定論的でなければならない**: 例）`NoteOn(key)` 受信 → smoothing 無し・既知位相で `key` の周波数の正弦波（or 矩形波）を固定振幅で出力する test-synth。
 6. `cargo fmt`/`cargo clippy`/`cargo deny check`/`cargo test --workspace` 全緑。
-7. 本 doc §6 の Q3-Q6 が「owner サインオフ済み」として記録されていること。
+7. 本 doc §6 の Q5-Q6 が「owner サインオフ済み」として記録されていること。
+8. gated stress test（§4.2）: @32f で 10K ノート同時バースト + 持続 100K events/sec を流し `event_dropped_count == 0`。
 
 ---
 
@@ -293,4 +334,4 @@ Q3-Q6 が owner サインオフ済みであることに加え、以下を M2 sub
 - M1 設計: `POST_2.0_GAMMA_M1_DESIGN.md`（M1/M2 境界・transport パターンの前例）
 - 既存資産: `rust/crates/orbit-clap-host/src/events.rs`（`PluginEvent`）・`rust/crates/orbit-audio-sandbox/src/transport.rs`（`SharedRegion`）・`rust/crates/orbit-audio-daemon/src/outproc_effect.rs`（`EffectChildSupervisor`・format 分岐の前例）
 - 設計決定の経緯: 本 doc冒頭「設計経緯」節・grounding agent 成果物（正本の文言成立時期の裏取り・JUCE/UAPMD 業界実例調査）・Fable 一発判断（候補A/B/C の比較）
-- Issue: #398（本 doc）/ #395（親 plan）/ Epic #292
+- Issue: #398（本 doc）/ #395（親 plan）/ Epic #292 / #400（既存 in-process CLAP ring lossless 化・M2 と独立）/ #401（`Engine::with_scheduler` contention 可視化・M2 と独立）

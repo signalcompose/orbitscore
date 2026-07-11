@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.223 docs(engine): M2 transport 容量設計を「溢れても失わない」方式に確定（#398） (Jul 12, 2026)
+
+6.222 に続き、M2 の残り open question のうち Q3(sample offset)を owner が即決、Q4(transport 容量・overflow policy)を大幅な設計転換を経て確定した。残る open question は Q5・Q6 の2問のみ。
+
+- **当初案「64個/ブロック・drop-oldest」への owner 懸念**: 「実験的な用途で見えない天井になりかねない」。grounding agent（opus）が JUCE(MidiBuffer=容量無制限で動的成長)・Apple AUv3(MIDIEventList=可変長・旧MIDIPacketListは最大65536byte)・JACK MIDI(固定2048byte/cycle・drop+count・`jack_midi_get_lost_event_count`)・VST3(validator上限~2048events/block相当)を調査し、64が業界水準を大きく下回ることを裏付けた。
+- **Fable 判断①（容量アーキテクチャ）**: drop-oldest は捨てられるイベントに `NoteOff` が含まれうるため stuck note（音が鳴りっぱなしで止まらない）を生む構造的欠陥と指摘。「上限を大きくする」でなく「**溢れても失わない**」設計へ転換 — per-block 転送窓(`MAX_EVENTS_PER_BLOCK=4096`・根拠=統計的典型性でなく`MAX_FRAMES`と揃えた「1 sample/event」のアーキテクチャ飽和点)+ backing ring(65,536 slot・lossless spillover・超過分は次ブロックへ)。真の drop は backing ring 枯渇時のみ・drop-newest・NoteOff等はサイレント drop 禁止(sticky flagでnote-choke注入)。可視化は`event_dropped_count`/`event_spilled_count`を非音響channelで(音は変えない)。
+- **owner の再度の問い直し**: 「本当に上限を作る形でよいか」「既存CLAPホストの同種欠陥を今直すべきでは」「アーキ全体の監査は要らないか」。
+- **Fable 判断②（実コード確認込み）**: ①time-budget(天井なし)方式は不採用— 転送コピーが軽すぎて時間は希少資源にならず、決定論的検証文化(sample-exact oracle parity)と衝突するため4096+spilloverを維持。②既存in-process CLAP ring(`engine_wrap.rs`)は producer が非RTスレッドと判明、bounded retryだけで安価にlossless化できるため**今すぐ独立issueで着手**(#400)。③`Engine::with_scheduler`のlock競合時silent zero-fill(`engine.rs`)を新規発見、contention counter追加のみで可視化(#401)。④exhaustive監査は不要・見つかった2件をissue化+再発防止は「新規bounded構造導入時の宣言原則」(producer thread種別/overflow policy/可視化counterの3点を明記)の成文化で足りると判断。
+- **owner がFableのコスト意識を指摘**: 「監査不要」判断についても「Fableは高コストなので、もっと安いやり方で本当に不要か検討し直せ」→ fresh general-purpose agent(opus・低コスト)にTS層(未走査だった領域)+grepパターン非依存の手書きqueue探索を委譲（詳細は別entryで記録）。
+- **doc反映**: §4を全面改訂（容量設計原則・二段構造・spill時のsample_offset再タイミング規約・新規bounded queue宣言原則・既存コード欠陥2件への参照）。§6 Q3/Q4をDECIDEDに更新。§7受け入れ基準にgated stress test(@32f・10Kノート同時バースト・event_dropped_count==0)を追加。冒頭の設計経緯節に今回の経緯を追記(次セッションのwhiplash防止)。
+- **役割**: grounding(JUCE/JACK/VST3業界調査)=fresh agent(opus) / 容量アーキ決定=Fable(2回・owner指名) / 決定所有=owner+Opus main。
+- **状態**: Issue #400(既存CLAP ring lossless化)・#401(engine.rs contention可視化)を作成済み・M2(#398)とは独立スコープとして即実装着手。M2の残open questionはQ5(bus arrangement defer)・Q6(tempo同期defer)の2問のみ。
+
 ### 6.222 docs(engine): M2 wire 設計を named superset union で確定（owner+Fable判断）（#398） (Jul 12, 2026)
 
 6.221 の DRAFT に対し owner が「DSL→IAC Bus MIDI のように、規格ごとに pluggable に翻訳する薄い共通層の方がいいのでは」と疑問提起。この議論を通じて `POST_2.0_GAMMA_M2_DESIGN.md` の wire 設計方針（旧 Q1/Q2）を確定させた。
