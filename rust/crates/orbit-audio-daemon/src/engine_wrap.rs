@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "clap-host")]
+use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 use orbit_audio_native::{
@@ -84,6 +86,11 @@ pub struct EngineWrap {
     /// 本番の error は clap mutex 内の `ClapProcessorStats::process_error_count` が供給するので、
     /// production read-path ではこの addend は常に 0（`link_egress_drops` と同設計）。
     clap_process_errors: Arc<AtomicU64>,
+    /// `push_plugin_event` が bounded retry（[`push_with_bounded_retry`]）の末に諦めた回数（本番は
+    /// 常に 0 に近い想定・health signal）。event ring は audio callback が毎 block 全量 drain する
+    /// ため満杯は一時的であり、真の drop はこの回数だけ発生する（M2 doc の「溢れても失わない」方針を
+    /// in-process ring に retrofit・issue #400）。`clap_process_errors` と同様 unconditional フィールド。
+    plugin_event_ring_overflow_count: Arc<AtomicU64>,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
     /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
@@ -135,6 +142,49 @@ struct ClapControl {
 /// ゼロに保つ。
 #[cfg(feature = "clap-host")]
 const CLAP_MAX_FRAMES: u32 = 8192;
+
+/// event ring への bounded retry の再試行間隔。
+#[cfg(feature = "clap-host")]
+const PLUGIN_EVENT_RETRY_INTERVAL: Duration = Duration::from_millis(1);
+/// 最大再試行回数（≈200ms 上限）。event ring の consumer（audio callback）は毎 block ごとに
+/// ring を全量 drain するため、通常は最初の数回で空きが生まれる。この上限は大きめの buffer
+/// 構成（cpal callback 周期が長いケース）でも安全にカバーする余裕を持たせた値であり、
+/// 「ここまで待っても空かない」を真の overflow とみなす閾値。
+#[cfg(feature = "clap-host")]
+const PLUGIN_EVENT_RETRY_MAX_ATTEMPTS: u32 = 200;
+
+/// `producer` へ bounded retry で push する。producer は audio callback（RT スレッド）ではなく
+/// 制御スレッド（WS handler 等）からのみ呼ばれる前提 — consumer 側が毎 callback で ring を
+/// 全量 drain するので、最大 1 callback 周期待てば空きが保証される。この性質を利用し、
+/// 満杯を「データ喪失」でなく「一時的なリトライ待ち」として扱う（M2 doc
+/// `docs/development/POST_2.0_GAMMA_M2_DESIGN.md` §4.4 の「溢れても失わない」方針を
+/// in-process ring に retrofit したもの・issue #400）。
+///
+/// 真に `max_attempts` 尽きた場合のみ `overflow_count` を進めて item を返す（呼び出し元が
+/// エラーとして扱う）。
+#[cfg(feature = "clap-host")]
+fn push_with_bounded_retry<T>(
+    producer: &mut rtrb::Producer<T>,
+    mut item: T,
+    max_attempts: u32,
+    retry_interval: Duration,
+    overflow_count: &AtomicU64,
+) -> Result<(), T> {
+    let attempts = max_attempts.max(1);
+    for attempt in 0..attempts {
+        match producer.push(item) {
+            Ok(()) => return Ok(()),
+            Err(rtrb::PushError::Full(returned)) => {
+                item = returned;
+                if attempt + 1 < attempts {
+                    std::thread::sleep(retry_interval);
+                }
+            }
+        }
+    }
+    overflow_count.fetch_add(1, Ordering::Relaxed);
+    Err(item)
+}
 
 // link-audio と clap-host の併用は現状未対応（1 つの cpal callback で LinkAudio per-channel egress と
 // CLAP master-bus post-processor の render 順序を統合する設計が defer・Issue #340）。両方有効なビルドは
@@ -484,6 +534,7 @@ impl EngineWrap {
             stopped_play_ids: Mutex::new(HashSet::new()),
             link_egress_drops: Arc::new(AtomicU64::new(0)),
             clap_process_errors: Arc::new(AtomicU64::new(0)),
+            plugin_event_ring_overflow_count: Arc::new(AtomicU64::new(0)),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
@@ -653,10 +704,16 @@ impl EngineWrap {
         let ctl = guard.as_mut().ok_or_else(|| {
             WrapError::ClapUnavailable("clap host not initialized (test backend)".into())
         })?;
-        // event ring（1024 slot）満杯は drop して error。note rate は低く通常満杯にならない。
-        ctl.event_tx
-            .push(ev)
-            .map_err(|_| WrapError::Clap("plugin event ring full".into()))
+        // event ring（1024 slot）が満杯でも、audio callback が毎 block 全量 drain するので
+        // bounded retry で lossless 化する（#400）。真にタイムアウトした場合のみ error。
+        push_with_bounded_retry(
+            &mut ctl.event_tx,
+            ev,
+            PLUGIN_EVENT_RETRY_MAX_ATTEMPTS,
+            PLUGIN_EVENT_RETRY_INTERVAL,
+            &self.plugin_event_ring_overflow_count,
+        )
+        .map_err(|_| WrapError::Clap("plugin event ring full after bounded retry".into()))
     }
 
     /// feature `clap-host` 無効ビルド用の stub。
@@ -754,6 +811,15 @@ impl EngineWrap {
     #[cfg(not(feature = "clap-host"))]
     pub fn clap_process_error_count(&self) -> u64 {
         self.clap_process_errors.load(Ordering::Relaxed)
+    }
+
+    /// `push_plugin_event` の bounded retry が力尽きた回数（#400）。event ring は audio callback
+    /// が毎 block 全量 drain するため、通常は 0 のまま推移する health signal。1 Hz ticker が polling
+    /// して増加を `PLUGIN_EVENT_RING_OVERFLOW` WARNING で surface する。feature `clap-host` 無効
+    /// ビルドでも安全に呼べる（`clap_process_error_count` と同様 unconditional フィールド）。
+    pub fn plugin_event_ring_overflow_count(&self) -> u64 {
+        self.plugin_event_ring_overflow_count
+            .load(Ordering::Relaxed)
     }
 
     /// test harness / gated 計測用: OOP effect の観測スナップショット（fresh/stale/stall/respawn/
@@ -1176,6 +1242,63 @@ pub struct PlayHandle {
 
 fn short_uuid() -> String {
     Uuid::new_v4().simple().to_string()[..8].to_string()
+}
+
+#[cfg(feature = "clap-host")]
+#[cfg(test)]
+mod plugin_event_ring_retry_tests {
+    use super::{push_with_bounded_retry, Ordering};
+    use std::sync::atomic::AtomicU64;
+    use std::time::Duration;
+
+    #[test]
+    fn succeeds_immediately_when_space_available() {
+        let (mut tx, _rx) = rtrb::RingBuffer::<u32>::new(4);
+        let overflow = AtomicU64::new(0);
+        let result = push_with_bounded_retry(&mut tx, 42, 5, Duration::from_millis(1), &overflow);
+        assert!(result.is_ok());
+        assert_eq!(overflow.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn retries_then_succeeds_once_consumer_drains() {
+        let (mut tx, mut rx) = rtrb::RingBuffer::<u32>::new(1);
+        tx.push(1).expect("fill capacity 1");
+        let overflow = AtomicU64::new(0);
+
+        // audio callback が数 ms 後に ring を drain する状況を模擬する。
+        let drain_handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(5));
+            let _ = rx.pop();
+        });
+
+        let result = push_with_bounded_retry(&mut tx, 2, 50, Duration::from_millis(1), &overflow);
+        drain_handle.join().expect("drain thread should not panic");
+
+        assert!(result.is_ok(), "should succeed once consumer drains space");
+        assert_eq!(
+            overflow.load(Ordering::Relaxed),
+            0,
+            "successful retry must not count as overflow"
+        );
+    }
+
+    #[test]
+    fn gives_up_and_counts_overflow_when_ring_stays_full() {
+        let (mut tx, _rx) = rtrb::RingBuffer::<u32>::new(1);
+        tx.push(1).expect("fill capacity 1");
+        let overflow = AtomicU64::new(0);
+
+        // _rx を drain せずに保持したまま(＝満杯が解消しない)、少ない retry 回数で確実に諦めさせる。
+        let result = push_with_bounded_retry(&mut tx, 2, 3, Duration::from_millis(1), &overflow);
+
+        assert!(result.is_err(), "should give up after max_attempts");
+        assert_eq!(
+            overflow.load(Ordering::Relaxed),
+            1,
+            "overflow counter must increment exactly once on give-up"
+        );
+    }
 }
 
 #[cfg(test)]

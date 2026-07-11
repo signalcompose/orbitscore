@@ -21,9 +21,9 @@ use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
     ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_LINK_EGRESS_DROP,
     ERROR_CODE_OUTPROC_EFFECT_ERROR, ERROR_CODE_OUTPROC_EFFECT_INVALID,
-    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
-    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
-    EVENT_STREAM_STATS,
+    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW,
+    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
+    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -82,6 +82,7 @@ pub async fn run(
             let mut last_clap_errors: u64 = 0;
             let mut last_outproc_errors: u64 = 0;
             let mut last_outproc_respawns: u64 = 0;
+            let mut last_plugin_event_ring_overflow: u64 = 0;
             let mut outproc_invalid_reported = false;
             let mut device_lost_reported = false;
             loop {
@@ -154,6 +155,24 @@ pub async fn run(
                         break;
                     }
                     last_clap_errors = clap_errors;
+                }
+
+                // in-process CLAP event ring への push が bounded retry の末に力尽きた（真の event
+                // 喪失）を非 RT で surface（#400）。通常は 0 のまま推移する health signal。
+                let plugin_event_overflow = engine.plugin_event_ring_overflow_count();
+                if plugin_event_overflow > last_plugin_event_ring_overflow {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW,
+                        format!(
+                            "plugin event ring overflowed after bounded retry ({plugin_event_overflow} \
+                             total); a NoteOn/NoteOff was lost",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_plugin_event_ring_overflow = plugin_event_overflow;
                 }
 
                 // out-of-process effect の health（γ M1 PR-C）を非 RT で surface。child の process() エラー
@@ -442,7 +461,9 @@ async fn handle_command(
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
             ),
         },
-        // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由・非ブロッキング）。
+        // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由）。event ring が
+        // 満杯の場合は bounded retry（最大 ~200ms・#400）で lossless 化するため、tokio ワーカーを
+        // 塞がないよう LoadPlugin と同様 spawn_blocking に包む。
         // 注意: plugin 未ロード時（LoadPlugin 前 / load 失敗後）も protocol 層では成功応答を返すが、
         // audio thread は plugin が無ければ event を drain して捨てる（fire-and-forget ring の設計上、
         // ロード状態の同期確認は cross-thread round-trip が要るため行わない）。pre-load note は黙って落ちる。
@@ -451,9 +472,18 @@ async fn handle_command(
             Some(k) if k <= 127 => match parse_midi_channel(&params) {
                 Ok(channel) => {
                     let velocity = param_f64(&params, "velocity", 0.8).clamp(0.0, 1.0);
-                    match engine.plugin_note_on(k as u8, channel, velocity) {
-                        Ok(()) => ok(&id, json!({"status": "note_on", "key": k})),
-                        Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                    let engine = engine.clone();
+                    let res = tokio::task::spawn_blocking(move || {
+                        engine.plugin_note_on(k as u8, channel, velocity)
+                    })
+                    .await;
+                    match res {
+                        Ok(Ok(())) => ok(&id, json!({"status": "note_on", "key": k})),
+                        Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
+                        Err(join_err) => err(
+                            &id,
+                            ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                        ),
                     }
                 }
                 Err(e) => err(&id, e),
@@ -470,9 +500,18 @@ async fn handle_command(
             Some(k) if k <= 127 => match parse_midi_channel(&params) {
                 Ok(channel) => {
                     let velocity = param_f64(&params, "velocity", 0.0).clamp(0.0, 1.0);
-                    match engine.plugin_note_off(k as u8, channel, velocity) {
-                        Ok(()) => ok(&id, json!({"status": "note_off", "key": k})),
-                        Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                    let engine = engine.clone();
+                    let res = tokio::task::spawn_blocking(move || {
+                        engine.plugin_note_off(k as u8, channel, velocity)
+                    })
+                    .await;
+                    match res {
+                        Ok(Ok(())) => ok(&id, json!({"status": "note_off", "key": k})),
+                        Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
+                        Err(join_err) => err(
+                            &id,
+                            ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                        ),
                     }
                 }
                 Err(e) => err(&id, e),
