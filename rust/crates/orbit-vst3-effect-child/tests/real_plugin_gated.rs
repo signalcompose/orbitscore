@@ -37,6 +37,8 @@
 //! `ORBIT_GATED_VST3_ALL=1`（`ORBIT_GATED_VST3_MAX` で上限）。個別指定は
 //! `ORBIT_GATED_VST3_PLUGINS`（`:` 区切りのフルパス）。
 
+#![cfg(target_os = "macos")]
+
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};

@@ -9,6 +9,8 @@
 //! `process_block`) is exercised by `orbit-vst3-effect-child`, which is spawned/supervised by
 //! the daemon.
 
+#![cfg(target_os = "macos")]
+
 use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::ffi::{c_void, CString};

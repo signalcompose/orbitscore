@@ -17,6 +17,23 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.219 fix(engine): VST3 host 系を macOS 限定に cfg-gate — Linux CI リンク失敗を解消（#397） (Jul 11, 2026)
+
+PR #397 の Rust CI `fmt / clippy / test`（`ubuntu-latest` = Linux）が **Test ステップでリンク失敗**していた（head `2df6fc4`）。真因: `orbit-vst3-host` が `core-foundation-sys` 経由で CoreFoundation（macOS framework）シンボル（`CFBundleCreate`/`kCFAllocatorDefault`/`CFBundleGetFunctionPointerForName` 等）を参照 → Linux に該当シンボル無し → 実行ファイル最終リンクで undefined symbol。clippy が通っていたのは最終リンクしないため。VST3+CoreFoundation は原理的に macOS 専用なので、Linux では該当コードを不在にする（in-place cfg gate）。
+
+- **gate 対象（`cargo metadata` で機械的に列挙・全 host リンクターゲット）**:
+  - `orbit-vst3-host/src/lib.rs`: crate-root `#![cfg(target_os = "macos")]`（Linux は空 lib・CF 参照消滅）
+  - `orbit-vst3-host/src/bin/vst3_probe.rs`（bin）: 全 item に per-item `#[cfg(macos)]` + 非 macOS stub `fn main() -> ExitCode`（空 main 不可のため）
+  - `orbit-vst3-host/tests/offline.rs`: `#![cfg(macos)]`（非 `#[ignore]` の 4 テスト = Linux リンク失敗の主因）
+  - `orbit-vst3-host/Cargo.toml`: `core-foundation-sys` を `[target.'cfg(target_os = "macos")'.dependencies]` へ（Linux 依存グラフから脱落）・`vst3` は unconditional 据置（純 Rust・gain-oracle も引く）
+  - `orbit-vst3-effect-child/src/main.rs`（bin）: per-item `#[cfg(macos)]` + 非 macOS stub main
+  - `orbit-vst3-effect-child/tests/cli.rs`・`real_plugin_gated.rs`: `#![cfg(macos)]`
+- **据置（正当性を一次情報で確認）**: `oracle_parity.rs` は host 非参照（`orbit_audio_sandbox` のみ）で **gate しない** — Test1 は Linux で `package-oracle.sh`（`set -euo pipefail` + `.dylib` ハードコード → `.so` 環境で `exit 1`）により loud-skip、Test2 は純 sandbox で **Linux 実行される貴重な cross-platform カバレッジ**。gain-oracle（CF 非依存 cdylib）・daemon（vst3 非依存・child は名前 spawn）も無変更
+- **検証（Opus 非サンドボックス・macOS-local）**: `fmt --all --check`=0 / `clippy --workspace --all-targets --locked -D warnings`（+ clap-host/outproc-effect feature）clean / `test --workspace --locked` 全 test result **0 failed**（daemon `protocol` 19 passed = サンドボックスの loopback 偽 fail を回避）/ `oracle_parity` 2 テスト PASS（sample-exact 維持 = per-item cfg が macOS item を落としていない証拠）/ `deny check licenses` ok
+- **レビュー（三層収束・[[consult-layering-by-error-type]]）**: fable（fresh file-reading agent）が完全性で 2 ターゲット漏れ（vst3_probe bin・offline.rs）を捕捉 → advisor（Opus 4.8）が枠組みで「macOS-green ≠ Linux-links / 受け入れは新 SHA の Linux CI green」を指摘 → Opus fresh general-purpose 監査が 5 観点すべて合格を一次情報で裏取り
+- **役割**: 計画=Opus / 実装=codex 委譲（fresh・差分は仕様通り）/ 検証・監査=Opus 非サンドボックス + fresh agent
+- **受け入れ**: macOS-local 無退行は実測済。**完了は「新 SHA の Linux `rust-ci.yml` green」を確認するまで保留**（この gate が修正の本来目的を検証する唯一の経路）
+
 ### 6.218 fix(engine): VST3 host PR #397 レビュー収束 — bus honest 化・CI 緑・テスト補完（#397） (Jul 10, 2026)
 
 PR #397 の `/code:pr-review-team`（4 レビュアー並列: code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer + CI）で挙がった Critical/Important を 0 に収束。独立 round-2 再レビューで裏取り（自己判断で宣言しない）。

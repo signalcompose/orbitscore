@@ -20,5 +20,7 @@ name = "orbit_vst3_host"
 path = "src/lib.rs"
 
 [dependencies]
-core-foundation-sys = "0.8"
 vst3 = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys = "0.8"
