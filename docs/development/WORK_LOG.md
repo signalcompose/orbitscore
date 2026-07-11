@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.221 fix(engine): out-of-process effect の frames_clamped カウンターを可視化（#404） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の容量設計を検討する過程で、fresh agent（opus）による拡張監査（#400/#401 の Fable 発見を受けた TS層+grepパターン非依存の追加調査）が発見した箇所。
+
+- **問題**: `orbit-audio-sandbox`（out-of-process effect transport・`MAX_FRAMES=4096`）で、1ブロックがこれを超えると末尾を無音化し `frames_clamped` カウンターに記録する仕組みは既に実装済み（`OutProcEffectStats::frames_clamped`・`snapshot()` にも含まれる）だったが、`EngineWrap::outproc_health()` が返すタプルに含まれておらず、他の兄弟カウンター（`CLAP_PROCESS_ERROR`・`OUTPROC_EFFECT_ERROR`等）と違って daemon の 1Hz ticker に一度も配線されていなかった。
+- **修正**: 既存タプルを変更せず、新規 `EngineWrap::outproc_frames_clamped()` accessor（`outproc_health` と同じ try_lock 規約）を追加し、`ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED`（新設）で 1Hz ticker に配線。カウント自体のロジックは `orbit-audio-sandbox` 側で既にテスト済みのため、今回は plumbing のみ（新規 unit test は追加せず、既存の `outproc_health()` と同型の untested accessor パターンに合わせた）。
+- **検証**: `cargo build`(default/outproc-effect/clap-host)・`cargo clippy --all-targets -D warnings`(同3構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。
+- **役割**: 発見=fresh agent(opus) / 実装・検証=Opus main(直接実装)。
+- **状態**: M2(#398)とは独立スコープ。PR 作成 → owner マージ待ち。
+
 ### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
 
 中核の手書き unsafe COM FFI（`orbit-vst3-host/src/lib.rs`・80 unsafe blocks）に対し、`/code:pr-review-team`（汎用 correctness）が構造的に狙わない **memory-safety/UB 次元**の外部第二意見を実施。@claude bot は pr-review-team と同一モデルファミリで盲点が相関するため除外し、**codex（cross-family）+ fresh Opus（非著者）を並列 adversarial 監査 → advisor で tie-break**（[[consult-layering-by-error-type]] の分担）。

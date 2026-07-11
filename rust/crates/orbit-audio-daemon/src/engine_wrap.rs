@@ -836,6 +836,35 @@ impl EngineWrap {
         (0, 0, false)
     }
 
+    /// OOP effect の block が `MAX_FRAMES`（`orbit-audio-sandbox`）を超えて clamp された累積回数
+    /// （#404）。既に `OutProcEffectStats::frames_clamped` として計測されていたが、`outproc_health`
+    /// が返すタプルに含まれておらず daemon の 1 Hz ticker に一度も配線されていなかった。通常は 0 の
+    /// まま推移する health signal（32/64f 小バッファ運用では実質到達不能・大バッファ/変則デバイス
+    /// 構成でのみ意味を持つ）。`outproc_health` と同じ `try_lock` 規約に従う。
+    #[cfg(feature = "outproc-effect")]
+    pub fn outproc_frames_clamped(&self) -> u64 {
+        match self.outproc.try_lock() {
+            Ok(g) => g
+                .as_ref()
+                .map(|c| c.stats.snapshot().frames_clamped)
+                .unwrap_or(0),
+            Err(std::sync::TryLockError::WouldBlock) => 0,
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                tracing::warn!(
+                    "outproc mutex poisoned; outproc_frames_clamped reporting 0 \
+                     (OUTPROC_EFFECT_FRAMES_CLAMPED suppressed until daemon restart)"
+                );
+                0
+            }
+        }
+    }
+
+    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に 0（control が無い）。
+    #[cfg(not(feature = "outproc-effect"))]
+    pub fn outproc_frames_clamped(&self) -> u64 {
+        0
+    }
+
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
     /// daemon の 1 Hz ticker が polling して増加を WARNING event で surface する（非 RT observability）。
     /// link 未初期化（test backend）時は control 分が 0。test 注入分（本番 0）を必ず加える。

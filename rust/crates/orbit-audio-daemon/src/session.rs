@@ -20,10 +20,10 @@ use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
     ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_LINK_EGRESS_DROP,
-    ERROR_CODE_OUTPROC_EFFECT_ERROR, ERROR_CODE_OUTPROC_EFFECT_INVALID,
-    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
-    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
-    EVENT_STREAM_STATS,
+    ERROR_CODE_OUTPROC_EFFECT_ERROR, ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED,
+    ERROR_CODE_OUTPROC_EFFECT_INVALID, ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_STREAM_XRUN,
+    ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED,
+    EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -82,6 +82,7 @@ pub async fn run(
             let mut last_clap_errors: u64 = 0;
             let mut last_outproc_errors: u64 = 0;
             let mut last_outproc_respawns: u64 = 0;
+            let mut last_outproc_frames_clamped: u64 = 0;
             let mut outproc_invalid_reported = false;
             let mut device_lost_reported = false;
             loop {
@@ -201,6 +202,25 @@ pub async fn run(
                         break;
                     }
                     outproc_invalid_reported = true;
+                }
+
+                // OOP effect の block が MAX_FRAMES を超えて clamp された累積回数を非 RT で
+                // surface（#404）。カウンタ自体は既存だったが ticker 未配線だったため追加。
+                let outproc_frames_clamped = engine.outproc_frames_clamped();
+                if outproc_frames_clamped > last_outproc_frames_clamped {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED,
+                        format!(
+                            "out-of-process effect block exceeded MAX_FRAMES and was clamped \
+                             ({outproc_frames_clamped} total); tail of an oversized block was \
+                             silenced",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_frames_clamped = outproc_frames_clamped;
                 }
 
                 let stats_evt = Event::new(
