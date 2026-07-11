@@ -101,6 +101,11 @@ pub const ERROR_CODE_OUTPROC_EFFECT_RESPAWN: &str = "OUTPROC_EFFECT_RESPAWN";
 /// repeat-previous が出続ける = effect 経路のみ恒久停止）。daemon が 1 Hz ticker で `measurement_invalid`
 /// を検知して一度だけ発火する（fire-once・γ M1 PR-C）。
 pub const ERROR_CODE_OUTPROC_EFFECT_INVALID: &str = "OUTPROC_EFFECT_INVALID";
+/// `Engine` の内部 Mutex が RT 競合（`try_lock` 失敗）で silent zero-fill にフォールバックした。
+/// WARNING severity。この経路自体は既存の設計判断（lock-free 化は別 Issue で defer 済み・自己修復
+/// する障害で次のブロックで復帰する）だが、発生を可視化する仕組みが無かったため追加した（#401）。
+/// daemon が 1 Hz ticker で累積カウンタの増加を検知して発火する。
+pub const ERROR_CODE_ENGINE_LOCK_CONTENTION: &str = "ENGINE_LOCK_CONTENTION";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]

@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.221 fix(engine): Engine lock 競合の silent zero-fill を可視化（#401） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の容量設計を検討する過程で、Fable の拡張レビューが新たに発見した箇所。`orbit-audio-core::Engine::with_scheduler`/`render_multi` は RT 競合（`try_lock` 失敗）時に出力バッファを silent zero-fill する既存設計（lock-free 化は別 Issue で defer 済み・自己修復する障害）だったが、発生を可視化する仕組みが一切なかった。
+
+- **実装**: `Engine` に `contention_count: Arc<AtomicU64>` を追加し、`with_scheduler`/`render_multi` 両方の `Err(_)`（try_lock 失敗）分岐で増分。`lock_contention_count()` accessor を追加。
+- **daemon 配線**: `EngineWrap::engine_lock_contention_count()` → `ERROR_CODE_ENGINE_LOCK_CONTENTION`（新設）→ 既存の 1Hz ticker パターンに配線。
+- **検証**: 新規 unit test 2本（`inner` は同一モジュール内テストから直接 lock 可能な private field のため、同一スレッドで guard を保持したまま `render`/`render_multi` を呼び、try_lock 失敗を人工的に発生させて検証。std::sync::Mutex は非再入なので別スレッド spawn 不要）。`cargo build`(default/clap-host/outproc-effect)・`cargo clippy --all-targets -D warnings`(orbit-audio-core含む4構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。
+- **付随調査**: 同セッションで fresh agent(opus)による拡張監査（TS層+grepパターン非依存のRust手書きqueue探索）を実施し、TS層には同種欠陥なし・新たに2件発見（`orbit-audio-sandbox`の`frames_clamped`カウンター未配線／プラグイン未ロード時のNoteOn/NoteOffが嘘の成功応答を返す）→ 別途 issue化予定。LinkAudio側の`MAX_LINK_CHANNELS`(64)の debug_assert は、control側(`register_channel`)が同じ上限を既に error として強制しているため構造上到達不能と判断し見送り。
+- **役割**: 発見=Fable(実コード確認込みレビュー) / 実装・検証=Opus main(直接実装)。
+- **状態**: M2(#398)とは独立スコープ。PR 作成 → owner マージ待ち。
+
 ### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
 
 中核の手書き unsafe COM FFI（`orbit-vst3-host/src/lib.rs`・80 unsafe blocks）に対し、`/code:pr-review-team`（汎用 correctness）が構造的に狙わない **memory-safety/UB 次元**の外部第二意見を実施。@claude bot は pr-review-team と同一モデルファミリで盲点が相関するため除外し、**codex（cross-family）+ fresh Opus（非著者）を並列 adversarial 監査 → advisor で tie-break**（[[consult-layering-by-error-type]] の分担）。

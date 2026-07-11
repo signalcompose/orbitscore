@@ -913,6 +913,12 @@ impl EngineWrap {
         self.engine.now_sec()
     }
 
+    /// `Engine::with_scheduler`/`render_multi` が RT 競合で silent zero-fill にフォールバック
+    /// した累積回数（#401）。daemon の 1 Hz ticker が polling して増加を surface する health signal。
+    pub fn engine_lock_contention_count(&self) -> u64 {
+        self.engine.lock_contention_count()
+    }
+
     pub fn output_channels(&self) -> u16 {
         self.channels
     }

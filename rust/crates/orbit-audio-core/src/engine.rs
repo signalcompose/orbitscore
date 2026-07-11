@@ -3,6 +3,7 @@
 //! Phase 2 以降で DSL interpreter と接続する想定。PoC では
 //! 「サンプルをロードして、時刻指定でスケジュールする」だけを提供する。
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
@@ -27,12 +28,19 @@ pub enum EngineError {
 #[derive(Clone)]
 pub struct Engine {
     inner: Arc<Mutex<Scheduler>>,
+    /// `with_scheduler` / `render_multi` が RT 競合（`try_lock` 失敗）で silent zero-fill に
+    /// フォールバックした回数（health signal）。この経路自体は既存の設計判断（lock-free 化は
+    /// 別 Issue で defer 済み）だが、発生を可視化する仕組みが無かったため追加した（#401）。
+    /// 自己修復する障害（次のブロックで復帰）なので stuck しないが、32/64f 小バッファ性能ゴール下
+    /// ではライブコマンド頻度に比例して発生確率が上がるため、operator が気づける形にする。
+    contention_count: Arc<AtomicU64>,
 }
 
 impl Engine {
     pub fn new(sample_rate: u32, channels: u16) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Scheduler::new(sample_rate, channels))),
+            contention_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -122,6 +130,7 @@ impl Engine {
             // MutexGuard を DerefMut で &mut Scheduler に再借用して closure に渡す。
             Ok(mut s) => f(&mut s, out),
             Err(_) => {
+                self.contention_count.fetch_add(1, Ordering::Relaxed);
                 for x in out.iter_mut() {
                     *x = 0.0;
                 }
@@ -152,12 +161,20 @@ impl Engine {
         match self.inner.try_lock() {
             Ok(mut s) => s.render_multi(hardware_out, channels),
             Err(_) => {
+                self.contention_count.fetch_add(1, Ordering::Relaxed);
                 hardware_out.fill(0.0);
                 for (_, buf) in channels.iter_mut() {
                     buf.fill(0.0);
                 }
             }
         }
+    }
+
+    /// `with_scheduler` / `render_multi` が RT 競合で silent zero-fill にフォールバックした
+    /// 累積回数（#401）。daemon の 1 Hz ticker が polling して増加を surface する
+    /// health signal。通常は 0 のまま推移する想定。
+    pub fn lock_contention_count(&self) -> u64 {
+        self.contention_count.load(Ordering::Relaxed)
     }
 
     /// 現在の出力ストリーム時刻（秒）を返す。
@@ -187,6 +204,48 @@ mod tests {
     fn now_sec_returns_some_zero_at_start() {
         let engine = Engine::new(48_000, 2);
         assert_eq!(engine.now_sec(), Some(0.0));
+    }
+
+    // try_lock 競合時の silent zero-fill フォールバック（#401）を、同一スレッドで `inner` を
+    // 直接 lock して人工的に競合させ検証する（std::sync::Mutex は非再入なので、同一スレッド内で
+    // guard を保持したまま try_lock しても Err になる — 別スレッドを spawn する必要がない）。
+    #[test]
+    fn contention_count_increments_on_render_lock_conflict() {
+        let engine = Engine::new(48_000, 2);
+        assert_eq!(engine.lock_contention_count(), 0);
+
+        let mut buf = vec![1.0f32; 8]; // 非ゼロで初期化し zero-fill を検証できるようにする
+        {
+            let _guard = engine.inner.lock().expect("lock for contention setup");
+            engine.render(&mut buf);
+        }
+
+        assert!(
+            buf.iter().all(|&x| x == 0.0),
+            "lock 競合時は silent zero-fill されるべき"
+        );
+        assert_eq!(
+            engine.lock_contention_count(),
+            1,
+            "render の try_lock 失敗で contention_count が増分されるべき"
+        );
+    }
+
+    #[test]
+    fn contention_count_increments_on_render_multi_lock_conflict() {
+        let engine = Engine::new(48_000, 2);
+
+        let mut hw = vec![1.0f32; 4];
+        let mut ch_buf = vec![1.0f32; 4];
+        {
+            let _guard = engine.inner.lock().expect("lock for contention setup");
+            let mut chans: [(&str, &mut [f32]); 1] = [("fx", &mut ch_buf)];
+            engine.render_multi(&mut hw, &mut chans);
+        }
+
+        assert!(hw.iter().all(|&x| x == 0.0));
+        assert!(ch_buf.iter().all(|&x| x == 0.0));
+        assert_eq!(engine.lock_contention_count(), 1);
     }
 
     // render_multi の Engine ラッパが channel タグで出力先を分離することを CI で検証する
