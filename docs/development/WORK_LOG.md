@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.222 docs(engine): M2 wire 設計を named superset union で確定（owner+Fable判断）（#398） (Jul 12, 2026)
+
+6.221 の DRAFT に対し owner が「DSL→IAC Bus MIDI のように、規格ごとに pluggable に翻訳する薄い共通層の方がいいのでは」と疑問提起。この議論を通じて `POST_2.0_GAMMA_M2_DESIGN.md` の wire 設計方針（旧 Q1/Q2）を確定させた。
+
+- **owner の疑問が突いた3軸分解**: 「format-neutral」は①意味論カバレッジ ②wire型構造(named か opaque か) ③コード構造(共有か per-format か)の独立した3軸だった。正本 §3(STYLE=CLAP型に寄せるな)と `VST3_HOSTING_PLAN.md` §1(SCOPE=機能を除外するな)は①②の一部だけを縛る別軸の制約で、対立していなかった（advisor が一旦「薄い core」に振れたのは①②③を混同した overcorrection・自己訂正で撤回）。
+- **grounding agent（opus）の追加事実**: 「superset にする」の文言は正本 §3 の原文には無く、8日後の派生 doc `VST3_HOSTING_PLAN.md`（PR #395）で追加された gloss だった。JUCE・UAPMD 等の実在する複数規格ホストは「名前のついた薄い共通層(MIDI/UMP)＋各規格側で翻訳」を採用しており、「規格ごとに不透明な byte payload」の実例は見つからず。
+- **Fable 一発判断（owner 指名で `Agent(subagent_type: "general-purpose", model: "fable")` 起動）**: 候補A(意味論に named tagged union)採用・候補B(規格ごとの opaque payload)不採用。理由: host/child は同一ビルド前提のため B の「host が型を知らない」利点は成立せず、実装すると A の再発明に堕ちる。**M1 類推の訂正**: M1 host は完成済み音声を運ぶだけの dumb pipe だったが、M2 host(DSLスケジューラ)は note/param イベントの生成者であり意味論から逃げられない。「pluggable」の正しい置き場所は wire ではなく child 側の honor 段階(既存 Q1 原則)と child バイナリの追加。
+- **owner 確定（2026-07-12・「いいと思うよ」）**: 候補A採用・MIDI2 明示的に必須。§2/§3(旧Q1/Q2)を DECIDED として記録し、以後蒸し返さない。
+- **型設計の安全性修正（Fable 指摘）**: `#[repr(C, u8)]` enum を共有メモリから直接 transmute しない（crash した child の不正 discriminant が UB になる・M1 unsafe 監査文化と整合）。`EventRecord{kind: u32, sample_offset, payload: EventPayload}` + POD union + 検証付き `decode()`/`encode()` に変更。ergonomic な `NeutralEvent` enum はロジック層専用（shm には直接置かない）。
+- **doc 冒頭に「設計経緯」節を新設**（advisor の provenance 記録要請どおり・[[verify-review-convergence-provenance]]・次セッションの whiplash 防止）。
+- **役割**: grounding=fresh agent(opus・2並列起動) / 枠組み検査=advisor(3往復) / 難所の一発判断=Fable(owner 指名) / 決定所有=owner+Opus main。**codex 委譲なし**。
+- **状態**: 残る open question は Q3(sample offset必須=推奨済)・Q4(transport容量・overflow policy・side-channel設計)・Q5(bus arrangement=defer推奨)・Q6(tempo同期=defer推奨)の4問のみ。owner サインオフ後に実装着手。
+
 ### 6.221 docs(engine): Phase 2 — M2 instrument IPC substrate 設計 DRAFT（#398） (Jul 12, 2026)
 
 VST3 hosting Phase 0+1（PR #397 MERGED・main `e6476e2`）の次の関門 = **Phase 2 = M2 instrument IPC substrate の SPEC 作業**（`POST_2.0_PLUGIN_STRATEGY.html` §3 の唯一の plan-affecting 決定 = M2 IPC を CLAP イベント形に寄せず format-neutral に仕様化）。Issue #398 / branch `398-vst3-phase2-m2-ipc-design` で DRAFT doc `docs/development/POST_2.0_GAMMA_M2_DESIGN.md` を執筆。owner は就寝中のため、決定を先取りせず open question として明示した状態で停止（[[consult-layering-by-error-type]] の層分け運用）。
