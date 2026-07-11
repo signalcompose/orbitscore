@@ -242,6 +242,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a76abbdb2907f6fd97fb6bc0b7be96b77d328f2dd9669d1075cc03369ed22154"
 
 [[package]]
+name = "com-scrape-types"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ce183b975b8fc736a20919c4002717255fbd867df575c792aeefa9a56a73ad0"
+
+[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1014,6 +1020,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-vst3-effect-child"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "orbit-audio-sandbox",
+ "orbit-vst3-host",
+]
+
+[[package]]
+name = "orbit-vst3-gain-oracle"
+version = "0.0.1"
+dependencies = [
+ "vst3",
+]
+
+[[package]]
+name = "orbit-vst3-host"
+version = "0.0.1"
+dependencies = [
+ "core-foundation-sys",
+ "vst3",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1765,6 +1795,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "vst3"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31e3fe7a6f028ded8c5a9984cf283319e6dc63572c9b71da1d4ee9d71d3b6bf"
+dependencies = [
+ "com-scrape-types",
 ]
 
 [[package]]

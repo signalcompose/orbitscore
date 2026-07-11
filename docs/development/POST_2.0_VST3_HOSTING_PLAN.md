@@ -142,11 +142,17 @@ Phase 3  VST3 instrument (production, OOP)            ← M2 landing 後に code
   3. `setupProcessing`（`ProcessSetup`: sample rate / max block size / realtime）→ `setActive(true)` → `setProcessing(true)`。
   4. `process(ProcessData)` を 1 block 分呼ぶ（既知の入力サンプル）。
   5. 逆順で teardown（`setProcessing(false)`→`setActive(false)`→`terminate`→factory drop）。**drop 順は `orbit-clap-host/src/effect.rs:58-68` の field-order 規律を VST3 用に踏襲。**
-- **テスト対象プラグイン**: ライセンスがクリーンで振る舞いが closed-form に予測できる単純な VST3 effect（例: gain のみのプラグイン。無ければ最小 gain VST3 を自作するか、SDK 同梱の `again` サンプルを VST3 でビルド）。
-- **受け入れ基準（offline・device 不要）**: 既知入力に対する 1 block 出力が **closed-form oracle と sample-exact**（gain plugin なら入力 × gain と bit 一致、許容誤差は f32 丸めのみ）。`#[ignore]` gated test でなく通常 `cargo test` で回せる offline test にする（プラグイン dylib の存在は test 内で skip 判定してよい）。
-- 🛑 **STOP gate**: 手書き COM で sample-exact な 1 block が出せない／`vst3` crate の API surface が hosting に不足している場合、**Phase 1 以降は全て moot**。verdict doc（`docs/development/POST_2.0_VST3_STEP0_SPIKE.md`）に事実を記録し owner に報告。GO 判定なら工数見積りを添える。
+- **テスト対象プラグイン（2 系統・両方必須）**:
+  - **① sample-exact oracle**: 振る舞いが closed-form に予測できる自作 gain VST3。`vst3` crate 同梱の `examples/gain.rs`（`out = gain × in`・smoothing なし・純 Rust）を cdylib 化し macOS `.vst3` バンドルに package する（**C++ SDK 不要**）。**我々が挙動を完全に把握している既知プラグイン**であることが要点。
+  - **② 実市販プラグイン（ABI 検証・load-bearing）**: インストール済みの**本物の VST3**（実 Steinberg C++ SDK でコンパイル・`/Library/Audio/Plug-Ins/VST3/`）を最低 1 つ load→process→drop する。
+- **受け入れ基準（offline・device 不要）**:
+  - **① sample-exact**: 既知入力に対する 1 block 出力が **oracle と sample-exact**（`in × gain` と bit 一致・許容誤差 f32 丸めのみ）。`process()` の音声データパス意味論を証明する。
+  - **② 実プラグイン ABI 適合**: ②の本物プラグインが**クラッシュせず** factory 取得 → IComponent instantiate → IAudioProcessor query → setupProcessing → process 1 block を通し、**妥当な出力**（無音入力→無音・既知入力→非発散）を返す。🔴 **①だけでは binding ABI の正しさは証明されない**（Rust プラグイン ↔ Rust ホストは同じ `vst3` crate の ABI 解釈を共有するため、**相互に一貫して間違っていても PASS しうる**）。②が実 SDK 製プラグインとの適合を担保する load-bearing な判定。
+  - どちらも `#[ignore]` gated でなく通常 `cargo test` で回せる offline test（dylib 不在時は test 内 skip 判定可・ただし ② は「skip=未検証」を verdict に明記）。
+- **compatibility sweep（Phase 0 の診断出力・gate ではない）**: ②のホストが動いたら、`/Library/Audio/Plug-Ins/VST3/` の全 VST3 に対し best-effort で load→query→（可能なら process）→drop を回し、**pass / fail / crash / hang の互換マトリクス**を verdict doc に記録する。crash/hang するプラグインは Phase 1+ の triage 対象としてマークするだけ（Phase 0 gate は ②の代表 1 つで足りる）。★ **北極星 = 市販 VST3 コレクション全体の互換性**（owner 意図「最終的には全部試す」）。exhaustive な per-plugin correctness（各プラグインの I/O サーフェス・MPE 等の honor）は Phase 1+ の継続作業。
+- 🛑 **STOP gate**: ①で手書き COM が sample-exact な 1 block を出せない／②で実市販プラグインが 1 つも load→process を通せない／`vst3` crate の API surface が hosting に不足している場合、**Phase 1 以降は全て moot**。verdict doc（`docs/development/POST_2.0_VST3_STEP0_SPIKE.md`）に事実を記録し owner に報告。GO 判定なら工数見積りを添える。
 
-**Phase 0 完了条件**: 0a pass + 0b sample-exact + verdict doc。**この gate を越えるまで Phase 1 に着手しない。**
+**Phase 0 完了条件**: 0a pass + 0b ① sample-exact + 0b ② 実市販プラグイン load-bearing PASS + compatibility sweep 記録 + verdict doc。**この gate を越えるまで Phase 1 に着手しない。**
 
 ---
 

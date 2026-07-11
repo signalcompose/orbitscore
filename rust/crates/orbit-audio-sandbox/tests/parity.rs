@@ -8,7 +8,8 @@
 use std::path::PathBuf;
 
 use orbit_audio_sandbox::{
-    max_abs_diff, render_in_process_gain, render_through_child_sync, CHANNELS,
+    max_abs_diff, render_in_process_gain, render_through_child_sync,
+    render_through_child_sync_with_options, RenderOptions, CHANNELS,
 };
 
 /// cargo がビルドした gain child binary の path。
@@ -59,4 +60,32 @@ fn out_of_process_unity_gain_is_passthrough() {
         .expect("child round-trip 成功");
     let diff = max_abs_diff(&through_child, &input);
     assert_eq!(diff, 0.0, "gain=1.0 は入力をそのまま返す(diff={diff})");
+}
+
+// C3(pr-review-team): `ChildStats`(processed/process_errors)が gated harness 経由でしか一切
+// assert されていなかった。実 synthetic child(gain child)で非 gated(CI 実行可)に固定する。
+#[test]
+fn child_stats_counts_processed_blocks_without_errors() {
+    let total_frames = 256;
+    let block_frames = 64;
+    let input = make_signal(total_frames);
+    let (out, stats) = render_through_child_sync_with_options(
+        &child_exe(),
+        &input,
+        block_frames,
+        &["--gain", "0.5"],
+        RenderOptions::default(),
+    )
+    .expect("child round-trip 成功");
+
+    assert_eq!(out.len(), input.len(), "出力長は入力長と一致");
+    assert_eq!(
+        stats.processed,
+        (total_frames / block_frames) as u64,
+        "256 frames / 64 block = 4 ブロック処理"
+    );
+    assert_eq!(
+        stats.process_errors, 0,
+        "gain child は process() に失敗しない"
+    );
 }

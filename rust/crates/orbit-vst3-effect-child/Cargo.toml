@@ -1,0 +1,21 @@
+# orbit-vst3-effect-child — Phase 1 VST3 OOP effect child.
+#
+# CLAP child と同じ SharedRegion transport を使い、処理部だけ orbit-vst3-host の
+# Vst3EffectProcessor に差し替える。clack はリンクしない。
+[package]
+name = "orbit-vst3-effect-child"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Out-of-process VST3 effect child hosting a real VST3 plugin over the orbit-audio-sandbox transport"
+
+[[bin]]
+name = "orbit-vst3-effect-child"
+path = "src/main.rs"
+
+[dependencies]
+orbit-vst3-host = { path = "../orbit-vst3-host" }
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
+anyhow = "1"

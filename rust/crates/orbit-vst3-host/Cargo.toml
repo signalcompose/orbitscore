@@ -1,0 +1,26 @@
+# orbit-vst3-host — in-process VST3 plugin hosting library for OrbitScore daemon.
+#
+# Phase 1 (#381) production library: grew out of the Phase 0 offline feasibility spike (最大リスク
+# =「Rust で COM を unsafe に手書きしてホストする」の retire) into the production hosting surface
+# used in-process by orbit-vst3-effect-child (spawned/supervised by the daemon).
+#
+# 正本: docs/development/POST_2.0_VST3_HOSTING_PLAN.md §Phase 0 / §Phase 1
+[package]
+name = "orbit-vst3-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "In-process VST3 plugin hosting library for OrbitScore daemon (Issue #381, Phase 1 production)"
+publish = false
+
+[lib]
+name = "orbit_vst3_host"
+path = "src/lib.rs"
+
+[dependencies]
+vst3 = "0.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation-sys = "0.8"

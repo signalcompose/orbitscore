@@ -59,14 +59,49 @@ pub fn unique_shm_path() -> PathBuf {
     std::env::temp_dir().join(format!("orbit-outproc-effect-{pid}-{seq}.shm"))
 }
 
+/// OOP effect child が host する plugin format。transport/watchdog/respawn は format 非依存。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginFormat {
+    Clap,
+    Vst3,
+}
+
+impl PluginFormat {
+    fn from_env_value(value: Option<String>) -> Result<Self, String> {
+        match value.as_deref().unwrap_or("clap") {
+            "clap" => Ok(Self::Clap),
+            "vst3" => Ok(Self::Vst3),
+            other => Err(format!(
+                "ORBIT_EFFECT_FORMAT='{other}' is invalid (expected 'clap' or 'vst3')"
+            )),
+        }
+    }
+
+    fn default_child_name(self) -> &'static str {
+        match self {
+            Self::Clap => "orbit-clap-effect-child",
+            Self::Vst3 => "orbit-vst3-effect-child",
+        }
+    }
+
+    fn plugin_kind(self) -> &'static str {
+        match self {
+            Self::Clap => ".clap",
+            Self::Vst3 => ".vst3",
+        }
+    }
+}
+
 /// OOP effect の起動設定（child binary path + plugin）。`start_outproc_effect` と gated test が使う。
 /// sample_rate は device 確定後に渡すので含めない。
 pub struct OutProcEffectConfig {
-    /// effect child binary（`orbit-clap-effect-child`）のパス。
+    /// plugin format（既定 env は `clap`）。
+    pub format: PluginFormat,
+    /// effect child binary（format に応じた child）のパス。
     pub child_exe: PathBuf,
-    /// host する .clap バンドルのパス（load-time param のみ・M1 は per-block automation なし）。
+    /// host する plugin bundle のパス（load-time param のみ・M1 は per-block automation なし）。
     pub plugin: PathBuf,
-    /// CLAP plugin id（None なら単一プラグインの場合のみ OK）。
+    /// plugin id（CLAP は id、VST3 Phase 1 は CLI symmetry のため渡すだけ）。
     pub plugin_id: Option<String>,
     /// cpal に要求する固定バッファフレーム数（gated stale-rate harness が 32/64 を渡す）。`None` は
     /// device 既定（`BufferSize::Default`）。production の env 経路は通常 `None`。
@@ -75,20 +110,24 @@ pub struct OutProcEffectConfig {
 
 impl OutProcEffectConfig {
     /// 環境変数から設定を組む（production `start()` 用）:
+    /// - `ORBIT_EFFECT_FORMAT`: `clap` | `vst3`（省略時 `clap`）。
     /// - `ORBIT_EFFECT_CHILD_BIN`: child binary path（省略時は daemon exe と同一ディレクトリの
-    ///   `orbit-clap-effect-child`）。
-    /// - `ORBIT_EFFECT_PLUGIN`: .clap path（**必須**）。
+    ///   format 対応 child）。
+    /// - `ORBIT_EFFECT_PLUGIN`: plugin bundle path（**必須**）。
     /// - `ORBIT_EFFECT_PLUGIN_ID`: plugin id（任意）。
     pub fn from_env() -> Result<Self, String> {
+        let format = PluginFormat::from_env_value(std::env::var("ORBIT_EFFECT_FORMAT").ok())?;
         let child_exe = match std::env::var_os("ORBIT_EFFECT_CHILD_BIN") {
             Some(v) => PathBuf::from(v),
-            None => default_child_exe()?,
+            None => default_child_exe(format)?,
         };
         let plugin = std::env::var_os("ORBIT_EFFECT_PLUGIN")
             .map(PathBuf::from)
             .ok_or_else(|| {
-                "ORBIT_EFFECT_PLUGIN not set (out-of-process effect needs a .clap bundle path)"
-                    .to_string()
+                format!(
+                    "ORBIT_EFFECT_PLUGIN not set (out-of-process effect needs a {} bundle path)",
+                    format.plugin_kind()
+                )
             })?;
         let plugin_id = std::env::var("ORBIT_EFFECT_PLUGIN_ID").ok();
         // production は通常 device 既定。`ORBIT_EFFECT_BUFFER_FRAMES` で明示できる。**設定済みなのに無効**
@@ -106,6 +145,7 @@ impl OutProcEffectConfig {
             Err(_) => None, // 未設定 = device 既定
         };
         Ok(Self {
+            format,
             child_exe,
             plugin,
             plugin_id,
@@ -114,14 +154,14 @@ impl OutProcEffectConfig {
     }
 }
 
-/// daemon 実行ファイルと同一ディレクトリの `orbit-clap-effect-child` を child binary 既定パスとする
+/// daemon 実行ファイルと同一ディレクトリの format 対応 child を既定パスとする
 /// （spike の sibling-of-exe を踏襲・設計 §4.5）。インストール時は daemon と child が並んで置かれる前提。
-fn default_child_exe() -> Result<PathBuf, String> {
+fn default_child_exe(format: PluginFormat) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let dir = exe
         .parent()
         .ok_or_else(|| "current_exe has no parent directory".to_string())?;
-    Ok(dir.join("orbit-clap-effect-child"))
+    Ok(dir.join(format.default_child_name()))
 }
 
 /// OOP effect の観測 signal（全 atomic・lock-free）。
@@ -869,5 +909,41 @@ mod tests {
         );
         stop.store(true, Ordering::Relaxed);
         handle.join().expect("process loop thread joins");
+    }
+
+    // C2（pr-review-team）: format 選択の純関数は device/child プロセス不要で CI 常時実行できるのに
+    // gated テストからしか経由されていなかった。env value 解決 + child binary 名の対応表を直接固定する。
+    #[test]
+    fn plugin_format_from_env_value_defaults_to_clap() {
+        assert_eq!(PluginFormat::from_env_value(None), Ok(PluginFormat::Clap));
+    }
+
+    #[test]
+    fn plugin_format_from_env_value_accepts_known_values() {
+        assert_eq!(
+            PluginFormat::from_env_value(Some("vst3".to_owned())),
+            Ok(PluginFormat::Vst3)
+        );
+        assert_eq!(
+            PluginFormat::from_env_value(Some("clap".to_owned())),
+            Ok(PluginFormat::Clap)
+        );
+    }
+
+    #[test]
+    fn plugin_format_from_env_value_rejects_unknown_values() {
+        assert!(PluginFormat::from_env_value(Some("au".to_owned())).is_err());
+    }
+
+    #[test]
+    fn plugin_format_default_child_name_matches_format() {
+        assert_eq!(
+            PluginFormat::Clap.default_child_name(),
+            "orbit-clap-effect-child"
+        );
+        assert_eq!(
+            PluginFormat::Vst3.default_child_name(),
+            "orbit-vst3-effect-child"
+        );
     }
 }

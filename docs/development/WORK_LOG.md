@@ -17,6 +17,174 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
+
+中核の手書き unsafe COM FFI（`orbit-vst3-host/src/lib.rs`・80 unsafe blocks）に対し、`/code:pr-review-team`（汎用 correctness）が構造的に狙わない **memory-safety/UB 次元**の外部第二意見を実施。@claude bot は pr-review-team と同一モデルファミリで盲点が相関するため除外し、**codex（cross-family）+ fresh Opus（非著者）を並列 adversarial 監査 → advisor で tie-break**（[[consult-layering-by-error-type]] の分担）。
+
+- **判定: memory-safety blocker なし**。codex の唯一の blocker 主張「F1 = `process_block` の `&self` + self バッファへの raw `*mut` = aliasing UB」は **false positive**。advisor が rule-dispositive に判定: `&self`（run_process の receiver）は構造体バイト（Vec の ptr/len/cap ヘッダ）を freeze するが、**別割り当てのヒープ要素は freeze しない**（retag は Vec 内部 `NonNull` 越しにヒープを追わない）+ run_process は当該 buffer を `&[f32]` として再借用しない → raw 書き込みは健全。/simplify で alloc 除去したばかりの RT hot path を**非バグで churn しない**（codex の restructure 案は将来 slice 再借用が入った時への任意 future-proofing に留める）。
+- **hardening 3件（非 blocking・owner scope 判断で in-PR 修正）**:
+  - **4a**（fresh Opus が捕捉・著者 codex は「バス一致」の思い込みで見逃し = authorship-decorrelation の payoff）: `verify_primary_bus_is_stereo` に **negotiated `getBusArrangement` popcount 検証**を追加。`getBusInfo().channelCount==2` は満たすが実際の arrangement popcount>2 の非適合プラグインが固定 2-wide `channelBuffers32` を OOB index するのを防ぐ。`getBusArrangement` 非 ok 時は getBusInfo にフォールバック（`Option<i32>`）し over-reject を回避（回帰なし）。
+  - **3a/3b**（両監査一致・`process_stereo` = offline/probe 経路）: 入力を self scratch に copy して **writable provenance** 化 + `frames > load-max` guard（`ProcessBlockTooLarge`）+ `run_process` の `numSamples` を `i32::try_from`→`kInvalidArgument` で checked cast 化。
+  - **F4 却下**: `ComPtr::from_raw`=owning・`createInstance`=+1 で balanced（Opus が com-scrape-types source で裏取り）。
+- **検証（Opus 非サンドボックス）**: fmt=0 / clippy --workspace（+clap-host/outproc-effect）clean / test --workspace 全 0 failed（daemon `protocol` 19・`oracle_parity` sample-exact 2 PASS = per-fix で挙動不変）/ deny ok。F1 の RT hot path aliasing 構造は無改変（run_process が buffer を slice 再借用しない不変条件を維持）。
+- **役割**: 監査=codex + fresh Opus 並列 / tie-break=advisor / 実装=codex 委譲（main が差分レビューで 4a の `getBusArrangement` 非 ok→reject の over-reject 回帰リスクを捕捉し softening 指示）/ 検証=Opus 非サンドボックス。
+- **受け入れ**: 新 SHA の Linux CI green を確認してから完了。
+
+### 6.219 fix(engine): VST3 host 系を macOS 限定に cfg-gate — Linux CI リンク失敗を解消（#397） (Jul 11, 2026)
+
+PR #397 の Rust CI `fmt / clippy / test`（`ubuntu-latest` = Linux）が **Test ステップでリンク失敗**していた（head `2df6fc4`）。真因: `orbit-vst3-host` が `core-foundation-sys` 経由で CoreFoundation（macOS framework）シンボル（`CFBundleCreate`/`kCFAllocatorDefault`/`CFBundleGetFunctionPointerForName` 等）を参照 → Linux に該当シンボル無し → 実行ファイル最終リンクで undefined symbol。clippy が通っていたのは最終リンクしないため。VST3+CoreFoundation は原理的に macOS 専用なので、Linux では該当コードを不在にする（in-place cfg gate）。
+
+- **gate 対象（`cargo metadata` で機械的に列挙・全 host リンクターゲット）**:
+  - `orbit-vst3-host/src/lib.rs`: crate-root `#![cfg(target_os = "macos")]`（Linux は空 lib・CF 参照消滅）
+  - `orbit-vst3-host/src/bin/vst3_probe.rs`（bin）: 全 item に per-item `#[cfg(macos)]` + 非 macOS stub `fn main() -> ExitCode`（空 main 不可のため）
+  - `orbit-vst3-host/tests/offline.rs`: `#![cfg(macos)]`（非 `#[ignore]` の 4 テスト = Linux リンク失敗の主因）
+  - `orbit-vst3-host/Cargo.toml`: `core-foundation-sys` を `[target.'cfg(target_os = "macos")'.dependencies]` へ（Linux 依存グラフから脱落）・`vst3` は unconditional 据置（純 Rust・gain-oracle も引く）
+  - `orbit-vst3-effect-child/src/main.rs`（bin）: per-item `#[cfg(macos)]` + 非 macOS stub main
+  - `orbit-vst3-effect-child/tests/cli.rs`・`real_plugin_gated.rs`: `#![cfg(macos)]`
+- **据置（正当性を一次情報で確認）**: `oracle_parity.rs` は host 非参照（`orbit_audio_sandbox` のみ）で **gate しない** — Test1 は Linux で `package-oracle.sh`（`set -euo pipefail` + `.dylib` ハードコード → `.so` 環境で `exit 1`）により loud-skip、Test2 は純 sandbox で **Linux 実行される貴重な cross-platform カバレッジ**。gain-oracle（CF 非依存 cdylib）・daemon（vst3 非依存・child は名前 spawn）も無変更
+- **検証（Opus 非サンドボックス・macOS-local）**: `fmt --all --check`=0 / `clippy --workspace --all-targets --locked -D warnings`（+ clap-host/outproc-effect feature）clean / `test --workspace --locked` 全 test result **0 failed**（daemon `protocol` 19 passed = サンドボックスの loopback 偽 fail を回避）/ `oracle_parity` 2 テスト PASS（sample-exact 維持 = per-item cfg が macOS item を落としていない証拠）/ `deny check licenses` ok
+- **レビュー（三層収束・[[consult-layering-by-error-type]]）**: fable（fresh file-reading agent）が完全性で 2 ターゲット漏れ（vst3_probe bin・offline.rs）を捕捉 → advisor（Opus 4.8）が枠組みで「macOS-green ≠ Linux-links / 受け入れは新 SHA の Linux CI green」を指摘 → Opus fresh general-purpose 監査が 5 観点すべて合格を一次情報で裏取り
+- **役割**: 計画=Opus / 実装=codex 委譲（fresh・差分は仕様通り）/ 検証・監査=Opus 非サンドボックス + fresh agent
+- **受け入れ**: macOS-local 無退行は実測済。**完了は「新 SHA の Linux `rust-ci.yml` green」を確認するまで保留**（この gate が修正の本来目的を検証する唯一の経路）
+
+### 6.218 fix(engine): VST3 host PR #397 レビュー収束 — bus honest 化・CI 緑・テスト補完（#397） (Jul 10, 2026)
+
+PR #397 の `/code:pr-review-team`（4 レビュアー並列: code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer + CI）で挙がった Critical/Important を 0 に収束。独立 round-2 再レビューで裏取り（自己判断で宣言しない）。
+
+- **CI 緑化**: `orbit-clap-host/discovery.rs:63-66` の冗長 `&`（clippy 1.97 `useless_borrows_in_formatting`・この PR の diff 外の既存問題が CI を塞いでいた）を除去
+- **Critical**: crate doc（`orbit-vst3-host` lib.rs/Cargo.toml）を「Phase 0 spike/offline」→ Phase 1 production に更新 / `PluginFormat::from_env_value`・`default_child_name` の unit test 追加 / `ChildStats` の非 gated テスト追加（synthetic child で `processed`/`process_errors` を assert・dry-passthrough 誤 PASS 穴の CI 側ガード）
+- **Important（挙動変更・bus honest 化）**:
+  - `verify_primary_bus_is_stereo`（I1）: load 時に primary(index0) バスが stereo でなければ reject。silent audio corruption を explicit load-fail に。instrument は input 検査を skip・multi-bus の stereo bus0 は通す
+  - `activate_primary_bus_only`（I2）: activate を index0 バスのみに（`run_process` が 1 バスしか記述しない契約と一致・多バス OOB 回避）+ activateBus 失敗を eprintln
+  - `bundleEntry` false → `Err(BundleLoad)`（I3）: get_factory 前に abort（JUCE 準拠・success 側は `bundle_exit_called` 正しく設定）
+  - `process_block` guard・`is_ok` の unit test 追加 / field-order コメント正確化 / `real_plugin_gated.rs` の壊れた cross-ref 修正
+- **検証（Opus 非サンドボックス）**: oracle sample-exact PASS（挙動不変）+ daemon gated C1-C3 PASS（stale [64f]&[32f] 0.000%）+ **フル sweep v2（733s・333個）**: Effect 268 PASS + Instrument 58 PASS・**genuine crash 0**・test ok。**I1 の唯一の影響 = MIDI Guitar 3（8ch input bus）を honest に load-reject**（silent 誤処理の解消）。UJAM Beatmaker 7 が Crash→Instrument に回復。fmt/clippy/deny clean
+- **役割**: レビュー起動/統合/収束判定=Opus（pr-review-team skill）/ fix 適用=sonnet5 委譲（session 上限で途中終了も実質完了・Opus が検証）/ 実機再測定=Opus 非サンドボックス
+- **残**: advisor 相談 → bot（@claude）second-opinion → owner マージ判断
+
+### 6.217 perf(engine): VST3 host /simplify — RT hot-path alloc 除去で stale 0%（#397） (Jul 10, 2026)
+
+PR #397 の `/simplify`（4 cleanup agent 並列: reuse/simplification/efficiency/altitude）で確定した cleanup を `orbit-vst3-host/src/lib.rs` に適用（sonnet5 委譲・単一ファイル 150+/166-）。
+
+- **① RT alloc 除去（efficiency・最重要）**: `process_block` が毎ブロック `ParameterChanges::empty()`×2 + `EventList::empty()`×2（`ComWrapper::new`=Arc heap 確保）していた → `load()` で field 構築し再利用
+- **② process context cache**: `IProcessContextRequirements` の毎ブロック COM query → `load()` で 1 回 query して flags を field cache
+- **③ `run_process` helper 抽出**: `process_stereo`/`process_block` の `ProcessData` 組立重複を集約（3 agent 一致指摘）
+- **④-⑥**: dead field `max_samples_per_block` + no-op Drop 除去 / `json_escape` per-char Vec 除去 / `probe_plugin` 4段ネスト平坦化
+- **skip（follow-up/低価値）**: effect-child transport loop 共有化（merged clap crate に触れる）・CfString/CfUrl generic 化・test 信号式/extract_* prologue
+- **検証（Opus 非サンドボックス）**: oracle sample-exact 両テスト PASS（挙動不変）+ **daemon gated 再実行で stale rate 改善**: C1 fresh 1129/1129(100%)・C3 [64f]&[32f] とも **stale_pct 0.000%（前 0.162%/0.105%）**。RT alloc 除去が実測で timing を締めた。fmt/clippy/deny clean
+
+### 6.216 test(engine): VST3 Phase 1 daemon 経路 gated + フル arm64 sweep PASS（#381） (Jul 10, 2026)
+
+Phase 1 の VST3 を **① production daemon 経路（supervisor/pipelined/respawn/RT）** と **② 全 arm64 プラグイン machinery** の 2 面で実機検証。offline smoke（6.215）が「child+transport が実プラグインを生き延びるか」を、本項が「production driver 層」と「全体カバレッジ」を担う（advisor が B/C は役割分担と判定・step-back 無し）。
+
+- **順序判断（advisor/Fable）**: 「daemon で全 sweep 1 回」案は `outproc_effect_gated.rs` が device 束縛＋実時間＋parity assert 非汎用の三重で非現実的 → **B（offline 全 sweep・純計算）→ C（daemon を代表数個）** が最適・手戻り無しと確定
+- **C = daemon 経路 gated（`orbit-audio-daemon/tests/outproc_effect_vst3_gated.rs`・新規・feature `outproc-effect`・全 #[ignore]）**: CLAP 版 `outproc_effect_gated.rs` を VST3 にミラー。production コード無改変（`PluginFormat::Vst3`/`ORBIT_EFFECT_FORMAT` は Phase 1 実装済み）
+  - **C1 parity**（VST3 gain oracle gain=1.0）: ratio **1.00000**・fresh_delta 1117/1128・errors 0 → PASS
+  - **C2 kill→respawn**: respawn 0→1・fresh after respawn 18→259・ratio 1.0 → PASS
+  - **C3 stale-rate**: [64f] 0.162% / [32f] 0.000%・cb_max ~31µs（20ms 予算内）→ PASS
+  - **C4 commercial smoke**（env `ORBIT_EFFECT_PLUGIN` 駆動）代表 4 effect: Guitar Rig 7 / Reaktor 6 / Ozone 11 / Vinyl すべて crash-free・respawn 0・errors 0 → PASS（Vinyl は ratio 1.033 で実 DSP 着色が可視・Reaktor は patch 未ロードで無音=想定内）
+  - **warm-up fix**: C1/C2 の固定 sleep（CLAP から verbatim の 800/600ms）は VST3 の CFBundle load latency に不足し fresh=0 で false-fail → **wait-until-productive ポーリング + delta 測定**に修正（post-respawn の同根欠陥も修正・test-only・production 無改変）
+- **B = フル arm64 sweep（offline・非サンドボックス・914.5s・333プラグイン）**: **Effect PASS 271 + Instrument PASS 49 = 320 PASS・genuine crash 0**
+  - Crash 分類 10 = すべて **probe 20s timeout hang**（実 crash でない）。**120s 再 probe で決着**: UJAM Beatmaker `BM-*` 7 は `loaded:true/audio_in:0/audio_out:16` で**正常ロード（16-out instrument・sample content で 20s 超過しただけ）= 回復**。残 3（Komplete Kontrol=NI 全ライブラリ scan / USYNTH / Virtual Pianist=UJAM 大量 content）は >120s の激重 load で、**いずれも instrument（Phase 1 effect スコープ外・Phase 3 の async load 課題）**
+  - Skip 3 = Intel-only（MODO BASS / Philharmonik 2 / Super 8）を arm64 フィルタが正しく除外
+  - **確定カバレッジ**: arm64 **Effect 271 全 PASS・genuine crash 0**（Phase 1 スコープ実質 100%）/ Instrument 49+回復7=56 ロード可・3 は分単位 load の host-wrapper/巨大音源
+- **役割**: 計画/順序判断=Opus（advisor 経由）/ C 実装+warm-up fix=sonnet5 委譲 / 実機計測（C1-C4 + フル sweep）=Opus 非サンドボックス
+- **残**: 10 slow-loader の long-timeout 再 probe（owner 判断）・PR 化（/simplify + pr-review-team・トークン都合で延期中）
+
+### 6.215 test(engine): VST3 Phase 1 gated 実機検証ハーネス + curated smoke PASS（#381） (Jul 10, 2026)
+
+Phase 1 の OOP effect 経路を **実市販プラグイン（NI/iZotope arm64）** に通す gated 検証ハーネスを実装し、curated 代表セットで非サンドボックス実測 PASS。合成 oracle（sample-exact 済）に対し、実プラグインは closed-form が無いため **machinery smoke**（load/process/isolation が crash 0 で生き延びるか）に限定。musical DSP correctness は owner listening の follow-on として分離（誠実な wording をコメント/サマリに明記）。
+
+- **設計ゲート = advisor(Fable) + adversarial-review(codex) の 2 レビュー**を実装前に通した。主要指摘を反映:
+  - **dry-passthrough 誤 PASS の穴**（process() 失敗時に child が入力を素通し→出力=入力で有限値になり従来の出力検査を誤 PASS）→ child 統計を露出して `process_errors==0` と `processed==期待ブロック数` を assert
+  - **timeout に plugin load 時間が食い込む**（初回ブロックは load を含む）→ 初回だけ長い deadline
+  - **分類は out-of-process**（instrument crash が effect ゲートに混入しない）→ 既存 `vst3_probe` の JSON `audio_in` で分類
+- **A（`orbit-audio-sandbox/offline.rs`・既存非破壊で追加）**: `render_through_child_sync_with_options(..., RenderOptions{first_block_timeout, block_timeout}) -> (Vec<f32>, ChildStats{processed, process_errors})`。既存 4 引数 `render_through_child_sync` は既定 opts の薄いラッパ（6 caller 非破壊）。stats は最終 `seq_done` Acquire 後・QUIT 前に読む（happens-before: child は fetch_add を seq_done Release より前に実行）
+- **B（`orbit-vst3-effect-child/tests/real_plugin_gated.rs`・#[ignore]）**: `vst3_probe`（別プロセス・20s timeout・std のみ）で分類 → **effect(audio_in>0)=ゲート / instrument(audio_in=0)=informational / probe crash・load-fail=surfaced 非 gating**。effect は sine を block[64,128]で駆動し crash 無し・process_errors 0・processed 一致・有限・abs≤8 を要求。loaded effect がゲートを破った時のみ panic。plugin 選択は env（`ORBIT_GATED_VST3_PLUGINS` / `_DIR` / `_ALL` / `_MAX`）+ curated 既定
+- **実測（Opus・非サンドボックス・curated 11個・34.5s）**: effect 8（Reaktor 6/Guitar Rig 7/Ozone 11/Neutron 5/RX 11 Voice De-noise/Nectar 4/Vinyl/Relay）全 PASS・**process_errors 0**、instrument 3（Kontakt 8/Massive X/FM8）informational PASS・crash 0。objc duplicate-class / qt.qml ログはプラグイン自身の良性警告で実 crash 0
+- **役割**: 計画確定=Opus（orchestrator）/ A レビュー+B 実装+全ゲート検証=sonnet5 委譲 / 実機計測=Opus 非サンドボックス。fmt/clippy/build/非gatedテスト/deny すべて clean
+- **残**: daemon 経路（`ORBIT_EFFECT_FORMAT=vst3` の supervisor/pipelined/respawn/stale）の gated は別途（C・adversarial-review が「手離れ」に必須と判定）。フル sweep（`ORBIT_GATED_VST3_ALL=1`）は owner 判断
+
+### 6.214 feat(engine): VST3 Phase 1 — production OOP effect（daemon 統合）（#381） (Jul 8, 2026)
+
+in-process 実証済み VST3 host を daemon の out-of-process サブストレート（crash 隔離・respawn）に載せた。CLAP effect child と対称。codex 実装・Opus 非サンドボックス検証。
+
+- **`orbit-vst3-effect-child`（新）**: `orbit-clap-effect-child` の transport loop 対称コピー・処理部のみ `Vst3EffectProcessor::process_block` に差し替え・clack 非リンク。CLI（--shm/--plugin/--plugin-id/--sample-rate）と protocol は同一
+- **`Vst3EffectProcessor::process_block`（追加）**: interleaved stereo を planar scratch 経由で VST3 process()・bus 判定で overwrite(effect)/add-mix(instrument)。setProcessing kNotImplemented 許容・setBusArrangements advisory は維持
+- **daemon supervisor 汎化**: `OutProcEffectConfig` に `PluginFormat{Clap,Vst3}`・`from_env` が `ORBIT_EFFECT_FORMAT`（既定 clap で後方互換）で child_exe 選択。spawn/watchdog/respawn は無改変
+- **検証（Opus・非サンドボックス）**: offline oracle parity `vst3_gain_oracle_oop_child_is_sample_exact_passthrough` PASS（共有メモリ経由 OOP child で sample-exact）+ in-process closed-form PASS。CLAP 非退行（child 4 + supervisor 9 tests）。fmt/clippy/deny clean
+- gated 実機 harness（`real_plugin_gated.rs`・#[ignore]）は owner 同席・トークン回復後に Opus が非サンドボックス実行
+- レビュー（/simplify + pr-review-team）はトークン都合でマージ前に延期実施
+
+### 6.213 docs(engine): プラグインホスト実装ノウハウ（VST3/AU/CLAP 共通責務）（#381） (Jul 8, 2026)
+
+owner 要望（AU/CLAP 混在の将来価値）で、VST3 Phase 0 の実証知見を format 共通のホスト責務として一般化。`docs/development/POST_2.0_PLUGIN_HOST_KNOWHOW.md`。
+
+- **中核原則**: 商用ホストは optional/advisory メソッドの非 OK 戻り（kNotImplemented/kResultFalse）を致命扱いにしない（VST3 SDK/JUCE 準拠）
+- **責務対応表**: モジュールロード / host context / component-controller 接続 / I/O バス調停 / 非OK戻り許容 / process データ完全性 / teardown を **VST3（実証）↔ AU（推論）↔ CLAP（orbit-clap-host 一部裏取り）** で対応づけ
+- VST3 の 4 修正を一次事実として記録 + 計測ノウハウ（サンドボックス水増し・1 plugin 1 process・arch 除外）+ Phase 1+ 申し送り（厳密 buffer 整合・instrument 経路）
+- エビデンス強度を明記（VST3=実測 / AU=推論 / CLAP=一部裏取り）
+
+### 6.212 fix(engine): VST3 setBusArrangements advisory 化 — arm64 端 2 も解決（#381） (Jul 8, 2026)
+
+arm64 の残 2 エッジケースを解消し、arm64 商用 VST3 を実質全カバー。
+
+- **Komplete Kontrol = 実は既に loaded**（instrument・audio_in 0/out 16）。「fail」は sweep 分類の綾（Phase 0 が instrument を process しないだけ）＝真の失敗でない
+- **ARIA Player = `setBusArrangements failed: 1`(kResultFalse) で hard-fail**。research どおり setBusArrangements は advisory（JUCE も致命扱いしない・プラグイン既定 arrangement で動作）→ **最終失敗を非致命化**（1 行相当・plugin 既定 arrangement で続行・厳密 buffer 整合は Phase 1）
+- **実測（Opus・非サンドボックス）**: ARIA Player = loaded:true（instrument）。回帰なし（Ozone/Reaktor 継続）。clippy/deny clean
+- kNotImplemented(6.211)・setBusArrangements(本件) いずれも「商用 host は optional/advisory メソッドの非 OK 戻りを致命にしない」という同一教訓
+
+### 6.211 fix(engine): VST3 setProcessing kNotImplemented 許容 — iZotope 全回復（#381） (Jul 8, 2026)
+
+`/ask-codex:research` → 1 行修正で iZotope クラッシュ… ではなく fail を解消。
+
+- **research 発見**: `setProcessing` の戻り `3` = **`kNotImplemented`**（vst3-rs tresult: OK=0/False=1/InvalidArg=2/NotImplemented=3）。iZotope は setProcessing 未実装で kNotImplemented を返すだけ＝**VST3 的に合法**。JUCE も非致命扱い。ホストの `is_ok()` が 3 を hard error にしていたのが唯一のバグ（iZotope は壊れていない）
+- **修正（Opus・1 行）**: `setProcessing` 結果が `kNotImplemented` ならロード失敗にしない
+- **実測（Opus・非サンドボックス）**: Vinyl/Ozone 11/RX 11/Neutron 5/Vocal Doubler/Relay = **全て load+process 成功**。NI 回帰なし（Bite/Reaktor 6 継続）
+- **到達点**: crash 0・NI 回復・iZotope 回復 → arm64 ほぼ全カバー（残=Intel-only 3個のみ）。教訓=商用 host は optional メソッドの kNotImplemented を成功扱いに（SDK/JUCE 準拠）
+- 全 sweep 最終数値は継続実測
+
+### 6.210 feat(engine): VST3 CFBundle load path — NI 全回復・iZotope は残課題（#381） (Jul 8, 2026)
+
+`/ask-codex:research`（一次調査）→ codex:rescue 実装で NI クラッシュを解消。
+
+- **research 発見**: NI SIGSEGV の主因 = `BundleEntry(ptr::null_mut())`（NI ランタイムが CFBundleRef から resources/frameworks/license path を解決するため null deref）。前回 de-risk が効かなかった真因
+- **実装（codex）**: macOS bundle ロードを CFBundle 正規経路に（CFBundleCreate→LoadExecutable→GetFunctionPointerForName・**実 CFBundleRef を BundleEntry に渡す**）+ component-controller ハンドシェイク（controller 生成/initialize/setComponentHandler/IConnectionPoint connect/state 同期）+ process データ完全化（空 IEventList/IParameterChanges/ProcessContext/canProcessSampleSize）。`core-foundation-sys 0.8`（MIT/Apache・allow list 内）採用・`libloading` 除去。oracle sample-exact 維持・fmt/clippy/deny green（codex 報告）
+- **実測（Opus・非サンドボックス・代表）**: **NI 7/7 が crash→load 成功**（Battery 4/FM8/Massive/Kontakt 8=instrument load・Reaktor 6/Guitar Rig 7/Bite=effect load+process）。owner 最重要 Kontakt/Massive/FM8 が動く。**iZotope は setProcessing:3 のまま未解決**（Vinyl/Ozone/RX/Neutron・別要因＝bus 再調停詳細 or objc 衝突）
+- 全 sweep の回復数は継続実測中。次 = iZotope root-cause + full sweep 数値
+
+### 6.209 feat(engine): VST3 de-risk — host context + bus 調停は NI/iZotope を救わず（#381） (Jul 8, 2026)
+
+owner 最重要ベンダー NI/iZotope 救済の de-risk（Phase 1 前倒し）を codex に委譲実装し Opus が非サンドボックス実測 → **効果なし**。
+
+- **実装（codex・oracle 非退行）**: 最小 IHostApplication（getName + IMessage/IAttributeList createInstance）を `initialize` に渡す（null 廃止）+ bus arrangement 調停（getBusArrangement→setBusArrangements→activateBus・mono/stereo 既定）。oracle sample-exact 維持・fmt/clippy/deny green
+- **実測（Opus・非サンドボックス）**: sweep BEFORE=AFTER 完全同一（188/109/36）。直接 probe でも NI（Battery 4/FM8/Massive）= SIG11 crash のまま・iZotope（Vinyl/Ozone 11）= `setProcessing:3` fail のまま
+- **結論**: 「host context で NI・bus 調停で iZotope が直る」推定は**実証で否定**。両者は深い要因（NI=Native Access/ランタイム依存・iZotope=objc class 重複/特殊調停）を要し軽い拡張では解けない
+- **arch 分類追加**: Intel-only（arm64 なし）= MODO BASS/Philharmonik 2/Super 8 は「アーキ非対応＝除外」（ホスト fail でない・Rosetta 終息前提で arm64-native 対象）
+- de-risk コードは branch 保持（host context/bus 調停自体は Phase 1 で必要な正しい方向・非退行）。ノウハウ doc は「成功後」の owner 指示によりペンディング（task #4）
+
+### 6.208 feat(engine): VST3 Phase 0-0b host spike — GO verdict (188/333 effects host) (#381) (Jul 8, 2026)
+
+VST3 hosting Phase 0（#381）の 0b（手書き COM host spike）を codex に委譲し実装完了 → **GO 判定**。verdict doc = `docs/development/POST_2.0_VST3_STEP0_SPIKE.md`。
+
+- **0b 実装（codex 委譲・独立検証済み）**: `orbit-vst3-host` に手書き COM host（dlopen→GetPluginFactory→IComponent→IAudioProcessor→setupProcessing→setActive→setProcessing→process→逆順 teardown・field 宣言順で drop 順確定・`getBusCount(kAudio,kInput)` で effect/instrument 判定）。追加 dep `libloading=0.8`（ISC・allow list 内）
+- **① sample-exact PASS（独立再検証）**: gain oracle を param なし→恒等・param 0.5→`to_bits()` 厳密 bit-exact。skip なしで実 dylib ロード比較
+- **② 実市販プラグイン ABI 適合 PASS（独立再検証・非サンドボックス）**: V-Pan / ARC 4 / AmpliTube 5 が load→process→drop 成功（processed:true・NaN/Inf/発散なし）。実 Steinberg-SDK 製プラグインで process() 実走 ⇒ binding ABI が実 SDK と適合（owner の「相互一貫的に間違い」懸念クリア）
+- **compatibility sweep（実コレクション 333 個）**: 最小ホストで **effect 処理OK 188/333(56%)・load 成功 237/333(71%)**・instrument 49・host-limit fail 59・**genuine crash 36(11%)**・hang 0
+- **🔴 サンドボックス汚染を発見・是正**: codex 初回 sweep はコマンドサンドボックス下で crash=220(66%) と誤出力（`/bin/ps` ブロック等でプラグイン init が SIGKILL → 偽 crash）。**非サンドボックスで再走 → 真の crash は 36（6倍水増しが解消）**。V-Pan/ARC 4/AmpliTube 5 は sandbox=crash → 非sandbox=PASS に反転。教訓: VST3 sweep はサンドボックス外で計測
+- **genuine crash 36 = ほぼ全て Native Instruments**（Kontakt/Massive/FM8/Reaktor/Guitar Rig/Maschine/NI Solid・VC 系）→ 均一 ABI バグでなく NI ランタイムが host context 前提を要求と推定
+- **Phase 1 作業項目を特定**: (1) null host context → 最小 IHostApplication 実装（crash 36 の主因・NI 回復の鍵）(2) bus arrangement 未調停（setBusArrangements/activateBus）→ host-limit 59 の主因（iZotope setProcessing:3）(3) 単一 stereo 固定の解消。いずれも Phase 0 gate 非該当（gate は代表実プラグインで通過）
+- **独立検証**: fmt/clippy(`-D warnings`)/deny(licenses ok)/`cargo test -p orbit-vst3-host`（①② skip なし PASS）を Opus が再実行し全 green
+
+### 6.207 feat(engine): VST3 Phase 0-0a license audit PASS + gain oracle scaffold (#381) (Jul 8, 2026)
+
+VST3 hosting Phase 0（#381）の 0a（license 監査）を実行し PASS。0b（host spike）の sample-exact oracle をスキャフォールドした。
+
+- **0a license 監査 PASS（STOP gate クリア）**: 新 crate `orbit-vst3-host` に `vst3 = "0.3"` を追加し `cargo tree` を実測 → 全 transitive 依存 = `vst3 v0.3.0` → `com-scrape-types v0.1.1` の 2 crate のみ（bindgen/clang-sys 系なし・plan の予測どおり）。両者とも `MIT OR Apache-2.0`（展開済み Cargo.toml source で一次裏取り・vst3 は LICENSE-APACHE/MIT 同梱）で deny.toml allow list 内。`cargo deny check licenses` = **licenses ok**。**deny.toml 書き換え不要**（STOP 条件の allow list 改変は発生せず）
+- **oracle 発見 → SDK ビルド不要化**: 市販 VST3 は gain smoothing で block 1 が sample-exact にならず・マシンに VST3 SDK 無し、という制約だったが、`vst3` crate が**純 Rust の `examples/gain.rs`（`out = gain × in`・smoothing なし）を同梱**。これを vendored した crate `orbit-vst3-gain-oracle`（cdylib）を作成 → `package-oracle.sh` で macOS `.vst3` バンドル（`target/vst3-fixtures/GainOracle.vst3`・gitignore 下）に生成。`GetPluginFactory`/`BundleEntry` エクスポート確認済み。**既知挙動を我々が持つ oracle**（binary は commit しない・script で再現）
+- **spec 強化（owner レビュー反映・spec-first）**: Phase 0 受け入れ基準を **2 系統**に書き換え。① sample-exact oracle（自作 gain・data-path 意味論）+ ② **実市販プラグイン load-bearing**（ABI 適合）。🔴 理由 = Rust プラグイン ↔ Rust ホストは同じ `vst3` crate の ABI 解釈を共有 → **相互に一貫して間違っていても ① は PASS しうる**。② が実 Steinberg SDK 製プラグインとの適合を担保。さらに **compatibility sweep**（`/Library/Audio/Plug-Ins/VST3/` 全 VST3 を best-effort で load→process→drop し pass/fail/crash/hang マトリクスを診断出力・gate ではない）を追加。★北極星 = 市販 VST3 コレクション全体の互換性（owner「最終的には全部試す」）
+- **残**: 0b host spike（手書き COM で load→process→drop・`orbit-clap-host` 対称）= codex 委譲予定。① sample-exact + ② 実プラグイン + sweep + verdict doc（`POST_2.0_VST3_STEP0_SPIKE.md`）で Phase 0 完了条件
+
 ### 6.206 docs(engine): VST3 hosting implementation plan — effect + instrument, symmetric to CLAP (#395) (Jul 8, 2026)
 
 VST3 プラグインホスティングの実装計画 doc（`docs/development/POST_2.0_VST3_HOSTING_PLAN.md`）を起こした。owner 意図の核心 =「**音源系プラグインとエフェクト系プラグインの両カテゴリをホスト**」（VST3/CLAP 併用ではない）・VST3 主眼・既存 CLAP 資産と対称。実装は `/codex:rescue` 委譲前提で、codex が会話文脈なしで迷わない粒度（各 Phase を実在ファイルの path:line → 手順 → offline 優先の受け入れ基準 → STOP gate で記述）。
