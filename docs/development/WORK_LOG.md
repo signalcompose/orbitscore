@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
+
+中核の手書き unsafe COM FFI（`orbit-vst3-host/src/lib.rs`・80 unsafe blocks）に対し、`/code:pr-review-team`（汎用 correctness）が構造的に狙わない **memory-safety/UB 次元**の外部第二意見を実施。@claude bot は pr-review-team と同一モデルファミリで盲点が相関するため除外し、**codex（cross-family）+ fresh Opus（非著者）を並列 adversarial 監査 → advisor で tie-break**（[[consult-layering-by-error-type]] の分担）。
+
+- **判定: memory-safety blocker なし**。codex の唯一の blocker 主張「F1 = `process_block` の `&self` + self バッファへの raw `*mut` = aliasing UB」は **false positive**。advisor が rule-dispositive に判定: `&self`（run_process の receiver）は構造体バイト（Vec の ptr/len/cap ヘッダ）を freeze するが、**別割り当てのヒープ要素は freeze しない**（retag は Vec 内部 `NonNull` 越しにヒープを追わない）+ run_process は当該 buffer を `&[f32]` として再借用しない → raw 書き込みは健全。/simplify で alloc 除去したばかりの RT hot path を**非バグで churn しない**（codex の restructure 案は将来 slice 再借用が入った時への任意 future-proofing に留める）。
+- **hardening 3件（非 blocking・owner scope 判断で in-PR 修正）**:
+  - **4a**（fresh Opus が捕捉・著者 codex は「バス一致」の思い込みで見逃し = authorship-decorrelation の payoff）: `verify_primary_bus_is_stereo` に **negotiated `getBusArrangement` popcount 検証**を追加。`getBusInfo().channelCount==2` は満たすが実際の arrangement popcount>2 の非適合プラグインが固定 2-wide `channelBuffers32` を OOB index するのを防ぐ。`getBusArrangement` 非 ok 時は getBusInfo にフォールバック（`Option<i32>`）し over-reject を回避（回帰なし）。
+  - **3a/3b**（両監査一致・`process_stereo` = offline/probe 経路）: 入力を self scratch に copy して **writable provenance** 化 + `frames > load-max` guard（`ProcessBlockTooLarge`）+ `run_process` の `numSamples` を `i32::try_from`→`kInvalidArgument` で checked cast 化。
+  - **F4 却下**: `ComPtr::from_raw`=owning・`createInstance`=+1 で balanced（Opus が com-scrape-types source で裏取り）。
+- **検証（Opus 非サンドボックス）**: fmt=0 / clippy --workspace（+clap-host/outproc-effect）clean / test --workspace 全 0 failed（daemon `protocol` 19・`oracle_parity` sample-exact 2 PASS = per-fix で挙動不変）/ deny ok。F1 の RT hot path aliasing 構造は無改変（run_process が buffer を slice 再借用しない不変条件を維持）。
+- **役割**: 監査=codex + fresh Opus 並列 / tie-break=advisor / 実装=codex 委譲（main が差分レビューで 4a の `getBusArrangement` 非 ok→reject の over-reject 回帰リスクを捕捉し softening 指示）/ 検証=Opus 非サンドボックス。
+- **受け入れ**: 新 SHA の Linux CI green を確認してから完了。
+
 ### 6.219 fix(engine): VST3 host 系を macOS 限定に cfg-gate — Linux CI リンク失敗を解消（#397） (Jul 11, 2026)
 
 PR #397 の Rust CI `fmt / clippy / test`（`ubuntu-latest` = Linux）が **Test ステップでリンク失敗**していた（head `2df6fc4`）。真因: `orbit-vst3-host` が `core-foundation-sys` 経由で CoreFoundation（macOS framework）シンボル（`CFBundleCreate`/`kCFAllocatorDefault`/`CFBundleGetFunctionPointerForName` 等）を参照 → Linux に該当シンボル無し → 実行ファイル最終リンクで undefined symbol。clippy が通っていたのは最終リンクしないため。VST3+CoreFoundation は原理的に macOS 専用なので、Linux では該当コードを不在にする（in-place cfg gate）。

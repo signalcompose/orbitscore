@@ -63,6 +63,10 @@ pub enum Vst3HostError {
         input: i32,
         output: i32,
     },
+    ProcessBlockTooLarge {
+        requested: usize,
+        max: usize,
+    },
     UnsupportedPrimaryBusLayout {
         direction: &'static str,
         channels: i32,
@@ -103,6 +107,12 @@ impl Display for Vst3HostError {
                 write!(
                     f,
                     "unsupported channel layout: input={input}, output={output}"
+                )
+            }
+            Self::ProcessBlockTooLarge { requested, max } => {
+                write!(
+                    f,
+                    "process block too large: requested={requested}, max={max}"
                 )
             }
             Self::UnsupportedPrimaryBusLayout {
@@ -496,7 +506,20 @@ impl Vst3EffectProcessor {
         }
 
         let frames = input_l.len();
-        let input_ptrs = [input_l.as_ptr() as *mut f32, input_r.as_ptr() as *mut f32];
+        if frames > self.process_input_l.len() {
+            return Err(Vst3HostError::ProcessBlockTooLarge {
+                requested: frames,
+                max: self.process_input_l.len(),
+            });
+        }
+
+        self.process_input_l[..frames].copy_from_slice(input_l);
+        self.process_input_r[..frames].copy_from_slice(input_r);
+
+        let input_ptrs = [
+            self.process_input_l.as_mut_ptr(),
+            self.process_input_r.as_mut_ptr(),
+        ];
         let output_ptrs = [output_l.as_mut_ptr(), output_r.as_mut_ptr()];
 
         // process_stereo is the non-RT probe/offline-parity path; gain varies per call, so unlike
@@ -591,6 +614,9 @@ impl Vst3EffectProcessor {
         frames: usize,
         parameter_changes: &ParameterChanges,
     ) -> tresult {
+        let Ok(num_samples) = i32::try_from(frames) else {
+            return kInvalidArgument;
+        };
         let processor = self
             .processor
             .as_ref()
@@ -615,7 +641,7 @@ impl Vst3EffectProcessor {
         let mut process_data = ProcessData {
             processMode: ProcessModes_::kRealtime as i32,
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
-            numSamples: frames as i32,
+            numSamples: num_samples,
             numInputs: if self.info.is_effect { 1 } else { 0 },
             numOutputs: 1,
             inputs: if self.info.is_effect {
@@ -856,10 +882,10 @@ fn configure_audio_buses(
     activate_primary_bus_only(component, BusDirections_::kOutput as i32, output_buses);
 
     // `run_process` は index 0 の primary バスの channel buffer を常に `DEFAULT_CHANNELS`(2) 幅の
-    // `[*mut f32; 2]` として組み立てる。primary バスが stereo でないプラグイン（mono effect 等）を
-    // 通すと OOB / 未初期化読み取りになるため、silent corruption ではなく load 失敗として reject する。
-    // multi-bus プラグインで bus 0 が stereo なら extra バスは単に使わないだけで許容する。
-    verify_primary_bus_is_stereo(component, input_buses, output_buses)?;
+    // `[*mut f32; 2]` として組み立てる。getBusInfo と、process() 時に plugin が実際に使う
+    // negotiated arrangement の両方で primary bus が stereo であることを確認できない場合は、
+    // silent corruption ではなく load 失敗として reject する。
+    verify_primary_bus_is_stereo(component, processor, input_buses, output_buses)?;
 
     Ok(())
 }
@@ -977,6 +1003,7 @@ fn activate_primary_bus_only(
 /// channel count, instead of letting `run_process` read/write out of bounds.
 fn verify_primary_bus_is_stereo(
     component: &ComPtr<IComponent>,
+    processor: &ComPtr<IAudioProcessor>,
     input_buses: i32,
     output_buses: i32,
 ) -> Result<(), Vst3HostError> {
@@ -988,6 +1015,16 @@ fn verify_primary_bus_is_stereo(
                 channels,
             });
         }
+        if let Some(channels) =
+            primary_bus_arrangement_channel_count(processor, BusDirections_::kInput as i32)
+        {
+            if channels != DEFAULT_CHANNELS as i32 {
+                return Err(Vst3HostError::UnsupportedPrimaryBusLayout {
+                    direction: "input",
+                    channels,
+                });
+            }
+        }
     }
     if output_buses > 0 {
         let channels = audio_bus_channel_count(component, BusDirections_::kOutput as i32, 0);
@@ -997,8 +1034,31 @@ fn verify_primary_bus_is_stereo(
                 channels,
             });
         }
+        if let Some(channels) =
+            primary_bus_arrangement_channel_count(processor, BusDirections_::kOutput as i32)
+        {
+            if channels != DEFAULT_CHANNELS as i32 {
+                return Err(Vst3HostError::UnsupportedPrimaryBusLayout {
+                    direction: "output",
+                    channels,
+                });
+            }
+        }
     }
     Ok(())
+}
+
+fn primary_bus_arrangement_channel_count(
+    processor: &ComPtr<IAudioProcessor>,
+    direction: BusDirection,
+) -> Option<i32> {
+    let mut arrangement = 0;
+    let result = unsafe { processor.getBusArrangement(direction, 0, &mut arrangement) };
+    if is_ok(result) {
+        Some(arrangement.count_ones() as i32)
+    } else {
+        None
+    }
 }
 
 fn ptr_or_null_mut<T>(values: &mut [T]) -> *mut T {
