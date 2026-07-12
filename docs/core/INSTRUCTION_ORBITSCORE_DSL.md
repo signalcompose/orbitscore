@@ -13,7 +13,8 @@ All implementation, testing, and planning must strictly follow this specificatio
 **Last Updated**: 2026-06-14
 **Implementation Status**: ✅ OrbitScore 2.0.0 — v3.0 audio engine + v1.1 Pitch DSL (MIDI) Phases 1/2/3/R/4 implemented and tested
 
-> 🎯 **進行中の v1.1 拡張（Pitch DSL / MIDI・Session Log・WCTM）の仕様は [`docs/specs-v2/`](../specs-v2/) が正本**（締切 2026-08-07、進捗は GitHub Epic #224）。
+> 🎯 **進行中の v1.1 拡張（Pitch DSL / MIDI・Session Log・WCTM）の仕様は [`docs/specs-v2/`](../specs-v2/) が正本**（進捗は GitHub Epic #224）。
+> ⚠️ 本番トラック retarget（2026-07-12・統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）: 藝大コンサート（2026-08-07）は不採択。旧「締切 2026-08-07」は失効し ICLC 提出方向へ retarget（年次・提出日・形態は要確認）。Max 必須の縛りも消滅。
 > 各フェーズのゲート時に、当該機能のセクションを本ドキュメント（SoT）へ反映し、specs-v2 との乖離を作らないこと（指示書 §8.1-1）。
 > 読み順: [IMPLEMENTATION_INSTRUCTIONS](../specs-v2/IMPLEMENTATION_INSTRUCTIONS.html) → [PITCH_DSL_SPEC_v1.1](../specs-v2/PITCH_DSL_SPEC_v1.1.html) → [SESSION_LOG_SPEC_v1](../specs-v2/SESSION_LOG_SPEC_v1.html) → [WCTM_SYSTEM_SPEC_v1](../specs-v2/WCTM_SYSTEM_SPEC_v1.html) → [DESIGN_DISCUSSION_RECORD](../specs-v2/DESIGN_DISCUSSION_RECORD.md)。
 

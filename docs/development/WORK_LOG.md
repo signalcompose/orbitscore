@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.230 docs(wctm): retarget deadline + relax Max-mandatory premise (#414) (Jul 12, 2026)
+
+藝大コンサート（Max サマースクール・イン・藝大 2026 / 2026-08-07）不採択に伴い、WCTM 関連ドキュメントから「ハード締切 2026-08-07」と「Max 必須（参加条件）」の前提を除去（Issue #414、統括 #413）。**内容の再設計はせず**、藝大版の設計本文はスナップショットとして保持。
+
+- **確定事実は「藝大不採択」のみ**。ICLC への proposal 提出（≈8/15）は年次・提出日・提出形態（work / work+paper、paper は ICMC 別提出も検討）いずれも要確認扱いで、硬い日付に置換しない（advisor 指摘: 硬い前提を別の硬い前提で置換すると同型のバグを再生産する）。
+- **ナビ = 本文修正**: `CLAUDE.md` §現在進行中 / `docs/core/INDEX.md`（+ research 凍結ポインタ）/ `INSTRUCTION_ORBITSCORE_DSL.md` / `POST_2.0_*` 6箇所（MASTER_PLAN ×2 / PLUGIN_STRATEGY / NEXT_STEPS / ROADMAP_NOTES / ORBITSTUDIO_PLAN）の締切参照を retarget ポインタ（#413）へ更新。
+- **正本 = 入口ノート + 本文凍結**: `WCTM_SYSTEM_SPEC_v1.html` / `IMPLEMENTATION_INSTRUCTIONS.html` の冒頭に前提変更ノートを追加し meta の concert/deadline を訂正。§0 分業原理・週次計画（W1–W6 / SPReAD / リハ#1）等の本文は藝大版スナップショットとして保持。§7 Known Decisions は再議論しない（締切・Max 必須は外部与件であって決定ログ #1-32 ではない）。
+- **凍結（本文無変更）**: `docs/research/WCTM_*` 7本 + `DESIGN_DISCUSSION_RECORD.md`。旧前提のスナップショットとして意図的に保存（記録改変は文脈破壊）。
+- `docs/WCTM/ARCHITECTURE.html` は `.gitignore` 済・別ブランチ `wctm-architecture-docs` 管理のため本 PR の対象外。
+- **統括 Issue #413 新設**（WCTM/ICLC トラックの受け皿・stub）。Epic #224 本文更新 + #240 相互参照。将来方向（private レポ接続・論文・orbitstudio 集約）は #413 で追跡。
+- 着手前に advisor に方針を諮問し、POST_2.0_* 6箇所の欠落補足・硬い日付の再置換回避・§7 非抵触・入口ノート方式の健全性を確認済み。
+
 ### 6.229 refactor(engine): dedupe ClapControl test wiring + flatten match (#412 /simplify) (Jul 12, 2026)
 
 6.228（#411 実装）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）で3本が独立に収束した指摘を修正（PR #412）。
