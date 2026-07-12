@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.245 fix(engine): M2 event_cursor 永久スタックの実バグを発見・修正（#416） (Jul 13, 2026)
+
+PR #417 の `/code:pr-review-team` 再レビュー（round1修正後）で、code-reviewer が `event_cursor` drain ループの並行性懸念を指摘。**当初 Opus main + advisor は「到達不能・false positive」と結論したが、これは誤りだった**。fixer が実際に検証コマンドを実行した過程で、**既存の正当な回帰テスト `backlog_catch_up_consumes_every_sequence_exactly_once_in_order` が実際に問題の分岐（`Ordering::Greater`）を3/3回踏むことを発見**し、advisor 経由でエスカレーション。
+
+- **誤った証明の原因**: 「`seq_done <= submitted` は常に成立し、危険な閾値（`seq_done >= next + SLOTS`）に届くには lag が `SLOTS+1` 以上必要」と推論したが、`self.submitted` は drain ループの**直前**（同一 `process_block` 呼び出し内）で `new_seq` に更新される。この更新後は `seq_done <= submitted` が `seq_done <= new_seq` を意味し、lag=SLOTS ちょうどで危険な閾値と一致してしまう — 「submitted は呼び出し中固定」という誤った前提が証明の穴だった。
+- **なぜテストが green のまま埋もれていたか**: `backlog_catch_up_consumes_every_sequence_exactly_once_in_order` は child が shm に直接書いた raw event を確認するのみで、host 自身の `event_cursor`/`VoiceTable` 状態を一切 assert していなかった。
+- **実際の障害**: lag が SLOTS に達した状態で、child が host の作業（同一呼び出し内の `seq_request` 更新）を追い越して該当 slot を再周回し終えると、`seq_tag[slot]` が `next` より大きい値を示す。`seq_tag` はその slot について以後増加する一方なので、単純に break するだけでは `event_cursor` がその値に**恒久的に**スタックし、以後のセッション全体で NoteEnd/NoteChoke 簿記更新が silent に失われる — §7-11 が保証するはずの「簿記がリークしない」が実際には崩れる本物のバグだった。
+- **修正方針（advisor 確認済み・submit/play 意味論は変更しない）**: 案（submit guard を event_cursor にも連動させる）は play/timing 意味論変更になり spec 更新が必要なため不採用。代わりに、既存の `output_note_end_dropped_count` → `reset_all()` という回復パターンをそのまま `Greater` 分岐に適用: 新規 host側カウンタ `event_cursor_recycled` を増分・`voices.reset_all()`（保守的に全簿記ゼロ化）・`event_cursor = submitted`（回復不能な gap を諦めて追いつく）。wire/SharedRegion は無変更（`PipelinedInstrumentHost` 自身の `pub` フィールドとして追加、既存の `fresh`/`stale`/`stall`/`frames_clamped` と同型）。
+- 決定論的回帰テスト `recycled_slot_resyncs_event_cursor_and_resets_voices` を追加（`backlog_catch_up` は実 child 相手の非決定的観測だったため、これが初めての決定的repro）。修正前 fail・修正後 pass を確認済み。
+- 全34 orbit-audio-sandbox unit test + gated stress + gated parity（`instrument_parity_gated.rs` の2テスト、dylib を自らビルドして実行）を Opus main が独立に再実行して確認。
+- **教訓**: 「推論による安全性証明」は lock-free コードでは信用しきらず、実行結果（既存テストの green/red）で裏取りする。今回は fixer が愚直に検証コマンドを流したことで誤った証明が露呈した。advisor 自身も「自分の証明が誤りだった」と訂正している — 一発の advisor 相談を鵜呑みにせず、後続の実証結果と矛盾したら再度エスカレーションする運用が機能した。
+- **役割**: 懸念の発見＝ code-reviewer（re-review）。当初の誤った棄却＝ Opus main + advisor（訂正済み）。**実際の検証コマンド実行によるバグ発覚＝ fixer**。エスカレーション判断・修正方針確定＝ advisor 相談の上 Opus main。**実装（構造体拡張・回復ロジック・回帰テスト）＝ pr-review-team の fixer subagent**。検証の裏取り＝ Opus main。
+- **状態**: 修正・裏取り完了。次: WORK_LOG コミット→push→`select-reviewers.sh` 再実行→4エージェント再々レビュー→Critical/Important=0確認。
+
 ### 6.244 fix(engine): M2 `/code:pr-review-team` 指摘対応 + 先送り3件の追跡強化（#416） (Jul 12, 2026)
 
 PR #417 の必須レビュー手順 `/code:pr-review-team`（code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer の4並列レビュー）で見つかった指摘に対応。owner から「先送りが多いと未追跡の負債になる」と懸念が出たため、修正可否の判断すべてを advisor と再確認した。

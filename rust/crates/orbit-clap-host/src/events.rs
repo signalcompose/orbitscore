@@ -233,6 +233,12 @@ pub fn drain_to_event_buffer(
         let neutral = ev.to_neutral_event(0, note_port_index);
         if !push_neutral_event(buf, &neutral) {
             debug_assert!(false, "PluginEvent::NoteOn/NoteOff は常に翻訳可能なはず");
+            // debug_assert! is compiled out in release builds — this function has no
+            // shm region to bump an error counter in, so an eprintln! is the only way
+            // a release build gets any visibility into a dropped event.
+            eprintln!(
+                "[orbit-clap-host] WARN: drain_to_event_buffer で CLAP 変換に失敗（PluginEvent::NoteOn/NoteOff は常に翻訳可能なはず）"
+            );
         }
     }
 }

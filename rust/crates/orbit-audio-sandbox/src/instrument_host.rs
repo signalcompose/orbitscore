@@ -2,6 +2,7 @@
 
 #![allow(unsafe_code)]
 
+use std::cmp::Ordering;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use memmap2::MmapMut;
@@ -138,6 +139,11 @@ pub struct PipelinedInstrumentHost {
     pub stale: u64,
     pub stall: u64,
     pub frames_clamped: u64,
+    /// Count of times the drain loop observed a physical slot already recycled past the
+    /// sequence it was trying to read (`seq_tag[slot] > next`): a lag-induced, unrecoverable
+    /// bookkeeping gap distinct from `output_note_end_dropped_count`, which is a child-side
+    /// spill-FIFO exhaustion. See the `Ordering::Greater` arm in `process_block`'s drain loop.
+    pub event_cursor_recycled: u64,
 }
 
 // SAFETY: as for PipelinedEffectHost, one audio thread exclusively owns this state and shared
@@ -173,6 +179,7 @@ impl PipelinedInstrumentHost {
             stale: 0,
             stall: 0,
             frames_clamped: 0,
+            event_cursor_recycled: 0,
         }
     }
 
@@ -289,28 +296,65 @@ impl PipelinedInstrumentHost {
         while self.event_cursor < self.submitted {
             let next = self.event_cursor + 1;
             let slot = slot_index(next);
-            if unsafe { (*region).seq_tag[slot].load(Acquire) } != next {
-                break;
-            }
-            unsafe {
-                let event_count = ((*region).output_event_count[slot].load(Relaxed) as usize)
-                    .min(MAX_EVENTS_PER_BLOCK);
-                let output_events = std::slice::from_raw_parts(
-                    std::ptr::addr_of!((*region).output_events[slot]) as *const EventRecord,
-                    event_count,
-                );
-                for record in output_events {
-                    match record.decode() {
-                        Some(NeutralEvent::NoteEnd { addr, .. }) => self.voices.note_end(addr),
-                        Some(NeutralEvent::NoteChoke { addr, .. }) => self.voices.choke(addr),
-                        Some(_) => {}
-                        None => {
-                            (*region).event_decode_error_count.fetch_add(1, Relaxed);
+            let seq_tag = unsafe { (*region).seq_tag[slot].load(Acquire) };
+            match seq_tag.cmp(&next) {
+                Ordering::Less => break,
+                Ordering::Greater => {
+                    // `seq_tag[slot] > next` means the child has already recycled this slot
+                    // for a later sequence before the host's own `event_cursor` caught up to
+                    // `next`. The submit guard only bounds `submitted - seq_done` (the
+                    // child's completion cursor) by SLOTS — it says nothing about
+                    // `submitted - event_cursor` (the host's own drain progress), so this is
+                    // reachable under legitimate bursty draining: e.g. several blocks get
+                    // submitted before the child starts (or before the host next calls
+                    // `process_block`), then the child catches up in a burst and recycles a
+                    // slot the host hadn't drained yet. This is not limited to a broken or
+                    // uncooperative child. `backlog_catch_up_consumes_every_sequence_exactly_
+                    // once_in_order` (orbit-audio-sandbox/tests/instrument_host_integration.rs)
+                    // observes this race non-deterministically against a real child (it does not
+                    // assert on `event_cursor`, so it doesn't check this arm's recovery). See
+                    // `recycled_slot_resyncs_event_cursor_and_resets_voices` in this module's
+                    // `tests` for a deterministic repro of this arm and its recovery.
+                    //
+                    // The output events for `next` (and every sequence between `next` and
+                    // `submitted`) are gone — this physical slot's tag only grows from here, so
+                    // it will never again equal `next`, and simply breaking would leave
+                    // `event_cursor` stuck forever. This mirrors the `output_note_end_dropped_count`
+                    // recovery below: an unknown number of NoteEnd/NoteChoke events in the gap are
+                    // unrecoverable, so reset all counts rather than risk under-counting or
+                    // leaking, then resync `event_cursor` forward past the gap.
+                    self.event_cursor_recycled += 1;
+                    self.voices.reset_all();
+                    self.event_cursor = self.submitted;
+                    break;
+                }
+                Ordering::Equal => {
+                    unsafe {
+                        let event_count = ((*region).output_event_count[slot].load(Relaxed)
+                            as usize)
+                            .min(MAX_EVENTS_PER_BLOCK);
+                        let output_events = std::slice::from_raw_parts(
+                            std::ptr::addr_of!((*region).output_events[slot]) as *const EventRecord,
+                            event_count,
+                        );
+                        for record in output_events {
+                            match record.decode() {
+                                Some(NeutralEvent::NoteEnd { addr, .. }) => {
+                                    self.voices.note_end(addr)
+                                }
+                                Some(NeutralEvent::NoteChoke { addr, .. }) => {
+                                    self.voices.choke(addr)
+                                }
+                                Some(_) => {}
+                                None => {
+                                    (*region).event_decode_error_count.fetch_add(1, Relaxed);
+                                }
+                            }
                         }
                     }
+                    self.event_cursor = next;
                 }
             }
-            self.event_cursor = next;
         }
 
         let dropped = unsafe { (*region).output_note_end_dropped_count.load(Relaxed) };
@@ -564,6 +608,48 @@ mod tests {
         );
         host.process_block(&mut out, &[], transport(120.0, 0.0));
 
+        assert_eq!(host.live_count(key), 0);
+    }
+
+    #[test]
+    fn recycled_slot_resyncs_event_cursor_and_resets_voices() {
+        let region = alloc_region();
+        let mut host = unsafe { PipelinedInstrumentHost::from_raw(region) };
+        let mut out = vec![0.0; CHANNELS];
+        let key = VoiceKey {
+            port_index: 0,
+            channel: 1,
+            key: 60,
+        };
+
+        // Seq 1: increment a voice count so we can observe `reset_all()` firing. The child
+        // never writes `seq_tag`, so the drain loop hits `Ordering::Less` and `event_cursor`
+        // stays at 0 (mirrors `stall_does_not_pop_event_ring`'s setup).
+        host.process_block(&mut out, &[note_on(60)], transport(120.0, 0.0));
+        assert_eq!(host.live_count(key), 1);
+        assert_eq!(host.event_cursor_recycled, 0);
+
+        // Simulate the child having already recycled slot 1's physical storage for a much
+        // later sequence (`next + SLOTS` or beyond) before the host's own `event_cursor`
+        // caught up to `next == 1`. This is the race `backlog_catch_up_consumes_every_
+        // sequence_exactly_once_in_order` demonstrates non-deterministically against a real
+        // child; here we force it directly for a deterministic repro.
+        let next = 1u64;
+        let recycled_seq = next + SLOTS as u64;
+        unsafe {
+            (*region).seq_tag[slot_index(next)].store(recycled_seq, Release);
+        }
+
+        // Seq 2 submits freely (new_seq == 2 <= SLOTS), so `submitted` advances to 2 and the
+        // drain loop below runs against the poked `seq_tag`.
+        let outcome = host.process_block(&mut out, &[], transport(120.0, 0.0));
+        assert!(outcome.submitted);
+
+        // `event_cursor` must resync forward past the unrecoverable gap (to `submitted`)
+        // rather than stay stuck at its old value of 0.
+        assert_eq!(host.event_cursor, host.submitted);
+        assert_eq!(host.event_cursor, 2);
+        assert_eq!(host.event_cursor_recycled, 1);
         assert_eq!(host.live_count(key), 0);
     }
 

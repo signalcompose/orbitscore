@@ -58,6 +58,9 @@ pub struct ChildStats {
     pub processed: u64,
     /// うち `process()` が非 OK を返し dry 素通しになったブロック数。
     pub process_errors: u64,
+    /// [`SharedRegion::event_decode_error_count`](crate::transport::SharedRegion) のスナップショット
+    /// (未知 kind の decode 失敗 + CLAP 変換不可な `NeutralEvent`(例: PolyPressure)の両方を含む)。
+    pub event_decode_error_count: u64,
 }
 
 /// 同一プロセス内で複数 driver を回した時に共有メモリファイル名が衝突しないための連番。
@@ -177,6 +180,7 @@ pub fn render_through_child_sync_with_options(
         ChildStats {
             processed: (*region).child_processed.load(Relaxed),
             process_errors: (*region).child_process_error_count.load(Relaxed),
+            event_decode_error_count: (*region).event_decode_error_count.load(Relaxed),
         }
     };
     drop(guard);
@@ -251,6 +255,7 @@ pub fn render_instrument_through_child_sync_with_options(
         ChildStats {
             processed: (*region).child_processed.load(Relaxed),
             process_errors: (*region).child_process_error_count.load(Relaxed),
+            event_decode_error_count: (*region).event_decode_error_count.load(Relaxed),
         }
     };
     drop(guard);

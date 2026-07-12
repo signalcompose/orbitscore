@@ -110,3 +110,48 @@ fn real_clap_instrument_oop_event_parity() {
     assert!(side_b.iter().any(|&sample| sample != 0.0));
     assert_eq!(max_abs_diff(&side_a, &side_b), 0.0);
 }
+
+/// `NeutralEvent::PolyPressure` has no CLAP translation (see `orbit-clap-host/src/events.rs`'s
+/// `push_neutral_event`, which returns `false` for it). This exercises the OOP child's
+/// `push_neutral_event(..) == false` branch (`orbit-clap-instrument-child/src/main.rs`), which
+/// bumps `event_decode_error_count` rather than silently discarding the event. In practice this
+/// branch is currently unreachable via the real host (`PipelinedInstrumentHost` only ever emits
+/// NoteOn/NoteOff/NoteChoke), so this test injects the event directly through the offline driver.
+#[test]
+#[ignore = "γ M2 Stage 5: needs a built clap-test-synth dylib (local only)"]
+fn real_clap_instrument_untranslatable_event_increments_error_count() {
+    let dylib = repo_path("rust-spike/clap-test-synth/target/debug/libclap_test_synth.dylib");
+    assert!(
+        dylib.exists(),
+        "test synth dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-synth/Cargo.toml` を実行",
+        dylib.display()
+    );
+    let dylib_str = dylib.to_str().expect("dylib path is UTF-8");
+    let child_exe = Path::new(env!("CARGO_BIN_EXE_orbit-clap-instrument-child"));
+    let block_frames = 128;
+    let events_by_block = vec![vec![NeutralEvent::PolyPressure {
+        sample_offset: 0,
+        addr: voice(60),
+        pressure: 0.5,
+    }]];
+
+    let (_out, stats) = render_instrument_through_child_sync_with_options(
+        child_exe,
+        &[
+            "--plugin",
+            dylib_str,
+            "--plugin-id",
+            PLUGIN_ID,
+            "--sample-rate",
+            "48000",
+        ],
+        block_frames,
+        &events_by_block,
+        RenderOptions::default(),
+    )
+    .expect("render through OOP instrument child");
+
+    assert_eq!(stats.processed, 1);
+    assert_eq!(stats.process_errors, 0);
+    assert_eq!(stats.event_decode_error_count, 1);
+}
