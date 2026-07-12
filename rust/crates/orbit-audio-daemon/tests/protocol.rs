@@ -679,6 +679,38 @@ async fn daemon_error_warning_on_outproc_frames_clamped() {
         !refired,
         "OUTPROC_EFFECT_FRAMES_CLAMPED must not re-fire without additional clamps (latch regression)"
     );
+
+    // re-arm: 追加注入されると latch が再度開き、更新済みの累積値（7+5=12）で再発火すること
+    // （#406 pr-test-analyzer finding 4: 「fire-once + no-refire」だけでなく「2 回目の注入で
+    // 再発火し累積が更新されること」も検証する）。
+    daemon
+        .engine
+        .outproc_frames_clamped_arc()
+        .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut rearmed_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_EFFECT_FRAMES_CLAMPED"
+                {
+                    rearmed_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let rearmed_message = rearmed_message
+        .expect("OUTPROC_EFFECT_FRAMES_CLAMPED did not re-fire after second injection");
+    assert!(
+        rearmed_message.contains("12"),
+        "re-armed OUTPROC_EFFECT_FRAMES_CLAMPED message should carry the updated cumulative total (12), got: {rearmed_message}"
+    );
 }
 
 /// device_lost が記録されると DaemonError (severity=fatal, code=DEVICE_LOST) が発火する。

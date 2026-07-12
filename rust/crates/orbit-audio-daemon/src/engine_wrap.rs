@@ -1249,3 +1249,118 @@ mod capture_path_tests {
         );
     }
 }
+
+/// `outproc_health()` の real body（`#[cfg(feature = "outproc-effect")]`）を直接叩く unit test。
+///
+/// `tests/protocol.rs` の統合テストは default feature build（`outproc-effect` 無効）で走るため、
+/// stub（`(0, 0, false, injected)`）しか exercise できず、この real body の match arm は
+/// どのテストからも一度も compile even されていなかった（#406 pr-test-analyzer 指摘）。
+/// ここは同一 crate 内の `#[cfg(test)]` submodule なので `EngineWrap::outproc`（private field）
+/// と `OutProcControl`（private struct）へ直接アクセスできる（親モジュールの private item は子
+/// module から可視）。`OutProcEffectStats::new()` / `CallbackTimeStats::new()` はどちらも
+/// child process 不要の cheap constructor（plain atomic のみ）なので、`StubBackend` で起動した
+/// `EngineWrap` に対して real child を spawn せず `Some(OutProcControl)` を注入できる。
+#[cfg(all(test, feature = "outproc-effect"))]
+mod outproc_health_tests {
+    use super::{EngineWrap, OutProcControl};
+    use crate::backend::StubBackend;
+    use crate::outproc_effect::OutProcEffectStats;
+    use orbit_audio_native::CallbackTimeStats;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcControl` を
+    /// `self.outproc` に注入する。返す `Arc<OutProcEffectStats>` はテスト側から直接
+    /// `store`/`load` して `Ok(Some(c))` real-value summing 経路を駆動するのに使う。
+    fn wrap_with_outproc_stats() -> (Arc<EngineWrap>, Arc<OutProcEffectStats>) {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let stats = OutProcEffectStats::new();
+        *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
+            stats: stats.clone(),
+            cb_stats: CallbackTimeStats::new(),
+        });
+        (wrap, stats)
+    }
+
+    #[test]
+    fn ok_none_reports_only_injected_frames_clamped() {
+        // outproc 未注入（build() 直後の初期値）= Ok(None) 分岐。
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(7, Ordering::Relaxed);
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 7));
+    }
+
+    #[test]
+    fn ok_some_sums_real_stats_with_injected_counter() {
+        // Ok(Some(c)) 分岐: 実 OutProcEffectStats スナップショットと injected カウンタを両方
+        // 合算して返すこと（finding 3: 実 stats の summing が一度も exercise されていなかった）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.child_process_error_count.store(3, Ordering::Relaxed);
+        stats.respawn_count.store(2, Ordering::Relaxed);
+        stats.measurement_invalid.store(true, Ordering::Relaxed);
+        stats.frames_clamped.store(5, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(9, Ordering::Relaxed);
+
+        assert_eq!(wrap.outproc_health(), (3, 2, true, 14));
+    }
+
+    #[test]
+    fn would_block_ignores_real_stats_and_reports_only_injected() {
+        // WouldBlock 分岐: 別スレッドが outproc mutex を保持している間は real stats を読まず
+        // injected カウンタのみ返すこと（cumulative なので次 tick で real 分も取り戻せる設計）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.frames_clamped.store(100, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(1, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let (holding_tx, holding_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc
+                .lock()
+                .expect("lock outproc for contention setup");
+            holding_tx.send(()).expect("signal lock held");
+            release_rx.recv().expect("wait for release signal");
+        });
+        holding_rx.recv().expect("holder thread signaled lock held");
+
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 1));
+
+        release_tx.send(()).expect("signal release");
+        holder.join().expect("holder thread should not panic");
+    }
+
+    #[test]
+    fn poisoned_still_reports_injected_frames_clamped_not_lost() {
+        // Poisoned 分岐: real stats は 0 に丸めるが、injected の frames_clamped は黙って
+        // 失わず返すこと（finding 2: silent-failure-hunter が指摘した「値が消えないこと」の
+        // 直接検証。手法は PR #403 の genuine-poison パターン（別スレッドで panic → join）を流用）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.frames_clamped.store(42, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(3, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc
+                .lock()
+                .expect("lock outproc for poison setup");
+            panic!("intentional poison for outproc_health poisoned test");
+        })
+        .join()
+        .is_err();
+        assert!(
+            panicked,
+            "spawned thread should have panicked while holding the lock"
+        );
+
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 3));
+    }
+}
