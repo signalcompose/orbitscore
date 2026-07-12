@@ -443,9 +443,9 @@ async fn handle_command(
             ),
         },
         // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由・非ブロッキング）。
-        // 注意: plugin 未ロード時（LoadPlugin 前 / load 失敗後）も protocol 層では成功応答を返すが、
-        // audio thread は plugin が無ければ event を drain して捨てる（fire-and-forget ring の設計上、
-        // ロード状態の同期確認は cross-thread round-trip が要るため行わない）。pre-load note は黙って落ちる。
+        // plugin 未ロード時（LoadPlugin 前 / load 失敗後）は `push_plugin_event` が事前に
+        // `CLAP_RUNTIME`("no plugin loaded") エラーを返す（#405・嘘の成功応答を防ぐ。ロード成功後の
+        // 精密な非同期状態〔hot-unload 等〕までは追わない — 現状そのような機構が無いため）。
         // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が未定義になるため）。
         "PluginNoteOn" => match params.get("key").and_then(|v| v.as_u64()) {
             Some(k) if k <= 127 => match parse_midi_channel(&params) {

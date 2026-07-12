@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.221 fix(engine): プラグイン未ロード時の PluginNoteOn/PluginNoteOff 嘘成功応答を修正（#405） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の容量設計を検討する過程で、fresh agent（opus）による拡張監査が発見した、容量とは無関係の別種の欠陥。
+
+- **問題**: `PluginNoteOn`/`PluginNoteOff` をプラグインロード前に送ると、audio thread は plugin が無ければ event を drain して捨てる（既存の意図的設計・fire-and-forget ring）一方、**protocol 層は `{"status": "note_on", "key": k}` という成功応答を返してしまう**。単なるデータ欠落より悪い「嘘の成功応答」で、呼び出し側は「鳴った」と誤信する。
+- **修正**: `EngineWrap` に `plugin_loaded: Arc<AtomicBool>`（feature `clap-host` 専用・他の `clap`/`link`/`outproc` フィールドと同パターン）を追加。`load_plugin` 成功時に `true` を立て、`push_plugin_event` の冒頭でこれを確認し、未ロードなら ring に触れる前に即座に `WrapError::Clap("no plugin loaded...")`（protocol code `CLAP_RUNTIME`）を返す。hot-unload 機構が存在しないため「一度成功したら true のまま」というシンプルなモデルで足りる（精密な非同期状態追跡はしない）。
+- **検証**: 新規 unit test 3本（`EngineWrap::build`〔private・同一モジュール内テストからアクセス可〕を使い実 device/実 ClapControl 無しでガードだけを検証: 未ロード時の NoteOn/NoteOff がエラーを返すこと2本 + フラグの初期値が false であること1本）。`cargo build`(default/clap-host/outproc-effect)・`cargo clippy --all-targets -D warnings`(同3構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。既存の gated test（`clap_host_gated.rs`）は load 成功後に note を送るため無影響。
+- **役割**: 発見=fresh agent(opus) / 実装・検証=Opus main(直接実装)。
+- **状態**: M2(#398)とは独立スコープ。PR 作成 → owner マージ待ち。これで今回の M2 検討過程で見つかった副産物（#400/#401/#404/#405）すべて実装・PR化完了。
+
 ### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
 
 中核の手書き unsafe COM FFI（`orbit-vst3-host/src/lib.rs`・80 unsafe blocks）に対し、`/code:pr-review-team`（汎用 correctness）が構造的に狙わない **memory-safety/UB 次元**の外部第二意見を実施。@claude bot は pr-review-team と同一モデルファミリで盲点が相関するため除外し、**codex（cross-family）+ fresh Opus（非著者）を並列 adversarial 監査 → advisor で tie-break**（[[consult-layering-by-error-type]] の分担）。

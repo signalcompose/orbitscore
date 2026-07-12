@@ -5,6 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+#[cfg(feature = "clap-host")]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -84,6 +86,13 @@ pub struct EngineWrap {
     /// 本番の error は clap mutex 内の `ClapProcessorStats::process_error_count` が供給するので、
     /// production read-path ではこの addend は常に 0（`link_egress_drops` と同設計）。
     clap_process_errors: Arc<AtomicU64>,
+    /// `load_plugin` が成功したことがあるかどうか（#405）。`push_plugin_event` がこれを見て、
+    /// 未ロード時は「fire-and-forget ring に投げてから黙って捨てられる」のでなく、明示的な
+    /// error を即座に返すようにする。一度 true になったら false に戻ることはない（hot-unload
+    /// 機構が存在しないため・厳密な非同期状態追跡はしない）。`clap`/`link`/`outproc` と同様
+    /// feature `clap-host` 専用（読み書きとも clap-host 経路にしかない）。
+    #[cfg(feature = "clap-host")]
+    plugin_loaded: Arc<AtomicBool>,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
     /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
@@ -484,6 +493,8 @@ impl EngineWrap {
             stopped_play_ids: Mutex::new(HashSet::new()),
             link_egress_drops: Arc::new(AtomicU64::new(0)),
             clap_process_errors: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "clap-host")]
+            plugin_loaded: Arc::new(AtomicBool::new(false)),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
@@ -602,11 +613,15 @@ impl EngineWrap {
                 .map_err(|_| WrapError::Clap("clap host thread is gone".into()))?;
         }
         match reply_rx.recv() {
-            Ok(Ok(info)) => Ok(LoadedPluginSummary {
-                plugin_id: info.plugin_id,
-                plugin_name: info.plugin_name,
-                note_port_index: info.note_port_index,
-            }),
+            Ok(Ok(info)) => {
+                // #405: 以後 push_plugin_event が「未ロード」を検知して事前に弾けるようにする。
+                self.plugin_loaded.store(true, Ordering::Relaxed);
+                Ok(LoadedPluginSummary {
+                    plugin_id: info.plugin_id,
+                    plugin_name: info.plugin_name,
+                    note_port_index: info.note_port_index,
+                })
+            }
             Ok(Err(e)) => Err(WrapError::Clap(e)),
             Err(_) => Err(WrapError::Clap("clap host thread dropped reply".into())),
         }
@@ -646,6 +661,15 @@ impl EngineWrap {
 
     #[cfg(feature = "clap-host")]
     fn push_plugin_event(&self, ev: orbit_clap_host::PluginEvent) -> Result<(), WrapError> {
+        // #405: プラグイン未ロード時は event ring に投げても audio thread が黙って drain して
+        // 捨てるだけ（fire-and-forget ring の設計上ロード状態の同期確認は本来 cross-thread
+        // round-trip が要る）。少なくとも「一度もロードに成功していない」ことは control スレッド
+        // 側でここまで同期的に判定できるので、その場合は明示的なエラーを返す（嘘の成功応答を防ぐ）。
+        if !self.plugin_loaded.load(Ordering::Relaxed) {
+            return Err(WrapError::Clap(
+                "no plugin loaded (send LoadPlugin first)".into(),
+            ));
+        }
         let mut guard = self
             .clap
             .lock()
@@ -1176,6 +1200,46 @@ pub struct PlayHandle {
 
 fn short_uuid() -> String {
     Uuid::new_v4().simple().to_string()[..8].to_string()
+}
+
+#[cfg(feature = "clap-host")]
+#[cfg(test)]
+mod plugin_load_gate_tests {
+    use super::*;
+    use orbit_audio_native::StreamStats;
+
+    // `Self::build` は clap: Mutex::new(None)（test backend 相当）で構築するため、実 device・実
+    // ClapControl 無しで plugin_loaded ガードだけを検証できる（#405）。
+    fn unstarted_engine() -> Arc<EngineWrap> {
+        let engine = orbit_audio_core::Engine::new(48_000, 2);
+        EngineWrap::build(engine, 48_000, 2, Arc::new(StreamStats::default()))
+    }
+
+    #[test]
+    fn note_on_before_load_returns_explicit_error_not_success() {
+        let wrap = unstarted_engine();
+        let result = wrap.plugin_note_on(60, 0, 0.8);
+        assert!(
+            result.is_err(),
+            "plugin 未ロード時は成功を返してはいけない（#405）"
+        );
+    }
+
+    #[test]
+    fn note_off_before_load_returns_explicit_error_not_success() {
+        let wrap = unstarted_engine();
+        let result = wrap.plugin_note_off(60, 0, 0.0);
+        assert!(
+            result.is_err(),
+            "plugin 未ロード時は成功を返してはいけない（#405）"
+        );
+    }
+
+    #[test]
+    fn plugin_loaded_flag_defaults_false() {
+        let wrap = unstarted_engine();
+        assert!(!wrap.plugin_loaded.load(Ordering::Relaxed));
+    }
 }
 
 #[cfg(test)]
