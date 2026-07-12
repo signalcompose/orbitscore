@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.241 feat(engine): M2 Stage6 Part B2 — 枯渇時note保護 + gated stress（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage6 Part B2（最終パート）。§7-11(a)(b)(c)（枯渇時note保護）・§7-8（gated stress@32f）を実プロセスで実測し、**§7 の12項目すべてを充足**した。
+
+- `sandbox-instrument-child` に `--crash-after <N>` を追加（N seq 処理直後に非ゼロ終了コードで異常終了）。
+- テスト専用の `RespawnHarness`（`instrument_host_integration.rs` 内・M1 `EffectChildSupervisor` の考え方を参考にした薄い汎用実装。daemon crate には依存しない）: 別スレッドで `Child::try_wait()` を2ms間隔でポーリングし、異常終了を検知したら同一引数で再spawnして `respawn_count` を進める。teardown は watcher停止→QUIT送信→2秒猶予でreap→強制killの順（`EffectChildSupervisor` と同じ「watchdogを先に止める」規律）。
+- §7-11(a): `EVENT_BACKING_CAPACITY` 超のバーストで真の drop を発生させ、sticky-flag による `NoteChoke{WILDCARD}` 注入が実 child まで届き正常に処理されることを確認。
+- §7-11(b): `--synthetic-output-burst` に `EVENT_SPILL_CAPACITY` 超の値を指定し、output側の真のdropを発生。`output_event_dropped_count`/`output_note_end_dropped_count` の増分→host側一括リセット→以後19ブロックにわたり遅延NoteEndが `live_count` を負値化させず0に飽和し続けることを確認。
+- §7-11(c): `RespawnHarness` でchildを crash→respawn させ、`host.on_child_respawned()` 呼び出しで簿記が0にリセットされること・respawn後の新規NoteOnが正しく1から計数されることを確認。
+- §7-8: 32frameブロックで10,000ノート同時バースト＋2,000ブロックにわたる持続高頻度event（67 events/block・約100,500 events/sec相当）を流し、`input_event_dropped_count`/`output_event_dropped_count` が終始0であることを確認（gated・実行時間0.15秒）。
+- **レビューで respawn の設計限界を発見・スコープ外と判断**: respawn後の in-order child は常に `last=0` から再開するため、`seq_request` までの historical seq を逐次再処理する（M1 effect child の skip-jump とは異なる）。長時間セッションでは無制限の再処理コストを招きうるが、resume point の受け渡し機構は本番 supervisor が実装される段階（#416 スコープ外・#408 と同様に defer）の課題であり、§7-11(c) が要求する「簿記がリークしないこと」自体は充足している（テストはNoteOff前にcrashさせる構成のため二重処理の影響を受けない設計になっており、advisorとの確認でこの限界がテストの見せかけの green ではないことを検証済み）。設計doc §4.2 (b) にスコープ外注記として追記。
+- 全31 unit + 7 (非gated統合) + 1 (gated stress) test が green（Opus main が独立に `cargo fmt`/`clippy`/`test` を再実行、gated stress test も自ら実行して確認。加えてコード自体（respawn harness・`--crash-after`・sticky注入の呼び出しタイミング）を読んで裏取り）。
+- **役割**: grounding（既存 `EffectChildSupervisor`/Part A/B1 のパターン調査）＝ Opus main。**実装本体（`--crash-after`・respawn harness・4テスト）＝ codex 委譲**。委譲後、Opus main が独立検証に加え respawn replay の設計限界を発見し、advisor で「§7-11(c) の要求範囲外・#416 スコープ外」であることを確認した上で doc に明記。
+- **状態**: **Stage6 完了。§7 受け入れ基準12項目すべて充足。** 残 landing: `cargo deny check` を含む workspace 全体ゲート（本セッションで一度も実行していない）→ WORK_LOG → PR → /simplify → /code:pr-review-team → owner GO でマージ。
+
 ### 6.240 feat(engine): M2 Stage6 Part B1 — 合成instrument child + 実プロセス統合テスト（#416） (Jul 12, 2026)
 
 M2 instrument IPC substrate（Issue #416）の Stage6 Part B1。実プロセスを使った production-path 統合テストを追加し、§7-4（round trip・TransportContext含む）・§7-10（input/output双方向 spillover決定論）・§7-12（in-order回帰）を実測した。

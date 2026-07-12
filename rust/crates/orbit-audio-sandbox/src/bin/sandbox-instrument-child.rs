@@ -18,11 +18,13 @@ use orbit_audio_sandbox::{
 struct Args {
     shm: PathBuf,
     synthetic_output_burst: usize,
+    crash_after: Option<u64>,
 }
 
 fn parse_args() -> Result<Args> {
     let mut shm = None;
     let mut synthetic_output_burst = 0;
+    let mut crash_after = None;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -34,12 +36,21 @@ fn parse_args() -> Result<Args> {
                     .parse()
                     .context("--synthetic-output-burst の parse")?;
             }
+            "--crash-after" => {
+                crash_after = Some(
+                    it.next()
+                        .context("--crash-after に値が必要")?
+                        .parse()
+                        .context("--crash-after の parse")?,
+                );
+            }
             other => bail!("未知の引数: {other}"),
         }
     }
     Ok(Args {
         shm: shm.context("--shm は必須")?,
         synthetic_output_burst,
+        crash_after,
     })
 }
 
@@ -65,6 +76,7 @@ fn main() -> Result<()> {
     let mut spill = EventSpillFifo::new();
     let mut burst_pending = args.synthetic_output_burst;
     let mut last = 0u64;
+    let mut processed = 0u64;
 
     loop {
         if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
@@ -129,6 +141,10 @@ fn main() -> Result<()> {
                 (*region).child_processed.fetch_add(1, Relaxed);
                 (*region).seq_tag[slot].store(seq, Release);
                 (*region).seq_done.store(seq, Release);
+            }
+            processed += 1;
+            if args.crash_after == Some(processed) {
+                std::process::exit(1);
             }
         }
         last = cur.max(last);
