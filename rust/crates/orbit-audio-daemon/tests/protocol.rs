@@ -750,6 +750,62 @@ async fn daemon_error_fatal_on_engine_lock_poisoned() {
     );
 }
 
+/// contention（WouldBlock）と poisoned が同一 tick で両方成立した場合、
+/// ENGINE_LOCK_CONTENTION (warning) と ENGINE_LOCK_POISONED (fatal) の両方が配信され、
+/// かつ `session.rs` のティッカーループが poisoned/FATAL チェックを contention/WARNING
+/// チェックより先に実行する実装順序（#401）どおり、FATAL が先に届くことを検証する
+/// （WS client がイベントを順番に処理する前提のため、存在確認だけでなく到着順も pin する）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_both_contention_and_poisoned_fire_same_tick_fatal_first() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 同一 tick 内で両方の条件を成立させる。
+    daemon
+        .engine
+        .engine_lock_contention_arc()
+        .fetch_add(3, std::sync::atomic::Ordering::Relaxed);
+    daemon
+        .engine
+        .engine_lock_poisoned_arc()
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    // StreamStats 等の他イベントを読み飛ばしつつ、ENGINE_LOCK_POISONED と
+    // ENGINE_LOCK_CONTENTION の DaemonError が届いた順序を記録する。
+    let mut order: Vec<String> = Vec::new();
+    for _ in 0..12 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError" {
+                    if let Some(code) = msg["data"]["code"].as_str() {
+                        if code == "ENGINE_LOCK_POISONED" || code == "ENGINE_LOCK_CONTENTION" {
+                            order.push(code.to_string());
+                        }
+                    }
+                }
+                if order.len() == 2 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    assert_eq!(
+        order,
+        vec![
+            "ENGINE_LOCK_POISONED".to_string(),
+            "ENGINE_LOCK_CONTENTION".to_string(),
+        ],
+        "both events must be delivered, with FATAL (poisoned) arriving before WARNING \
+         (contention) — session.rs's ticker checks poisoned before contention, got: {order:?}"
+    );
+}
+
 /// device_lost が記録されると DaemonError (severity=fatal, code=DEVICE_LOST) が発火する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn daemon_error_fatal_on_device_lost() {

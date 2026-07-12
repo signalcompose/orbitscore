@@ -281,6 +281,10 @@ mod tests {
             1,
             "render の try_lock 失敗で contention_count が増分されるべき"
         );
+        assert!(
+            !engine.is_lock_poisoned(),
+            "WouldBlock contention must not also set the poisoned flag"
+        );
     }
 
     #[test]
@@ -298,6 +302,10 @@ mod tests {
         assert!(hw.iter().all(|&x| x == 0.0));
         assert!(ch_buf.iter().all(|&x| x == 0.0));
         assert_eq!(engine.lock_contention_count(), 1);
+        assert!(
+            !engine.is_lock_poisoned(),
+            "WouldBlock contention must not also set the poisoned flag"
+        );
     }
 
     // `WouldBlock`（上の2テスト・同一スレッドで guard を保持したまま try_lock）とは別に、
@@ -337,6 +345,84 @@ mod tests {
             engine.lock_contention_count(),
             0,
             "poison は WouldBlock 専用の contention_count に混ぜてはいけない"
+        );
+    }
+
+    // render_multi は with_scheduler を経由せず try_lock を直接ハンドリングする別実装
+    // （#401 で Poisoned 分岐を手動で複製した）ため、render() 側の genuine-poison テストとは
+    // 独立して render_multi() 側も同じ経路を検証する。
+    #[test]
+    fn poisoned_flag_sets_on_render_multi_lock_poison_distinct_from_contention_count() {
+        let engine = Engine::new(48_000, 2);
+        assert!(!engine.is_lock_poisoned());
+        assert_eq!(engine.lock_contention_count(), 0);
+
+        let engine_clone = engine.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = engine_clone.inner.lock().expect("lock for poison setup");
+            panic!("intentional poison for poisoned_flag_sets_on_render_multi_lock_poison test");
+        })
+        .join()
+        .is_err();
+        assert!(
+            panicked,
+            "spawned thread should have panicked while holding the lock"
+        );
+
+        let mut hw = vec![1.0f32; 8];
+        let mut ch_buf = vec![1.0f32; 4];
+        let mut chans: [(&str, &mut [f32]); 1] = [("fx", &mut ch_buf)];
+        engine.render_multi(&mut hw, &mut chans);
+
+        assert!(
+            hw.iter().all(|&x| x == 0.0),
+            "poisoned lock 時も hardware_out は silent zero-fill されるべき"
+        );
+        assert!(
+            ch_buf.iter().all(|&x| x == 0.0),
+            "poisoned lock 時も channel buffer は silent zero-fill されるべき"
+        );
+        assert!(
+            engine.is_lock_poisoned(),
+            "render_multi の try_lock Poisoned 失敗で poisoned フラグが立つべき"
+        );
+        assert_eq!(
+            engine.lock_contention_count(),
+            0,
+            "poison は WouldBlock 専用の contention_count に混ぜてはいけない"
+        );
+    }
+
+    // 制御系 API（schedule/stop/stop_all/set_global_gain）は既に `self.inner.lock().map_err(|_|
+    // EngineError::Poisoned)?` を実装しているが（#401 以前からの既存コード）、実際に mutex を
+    // panic-poison させて `Err(EngineError::Poisoned)` を返すことを検証するテストが無かった。
+    // render 系と同じ poison 手法（別スレッドで panic させて join）を流用する。
+    #[test]
+    fn control_plane_methods_return_poisoned_error_after_genuine_poison() {
+        let engine = Engine::new(48_000, 2);
+
+        let engine_clone = engine.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = engine_clone.inner.lock().expect("lock for poison setup");
+            panic!("intentional poison for control_plane_methods_return_poisoned_error test");
+        })
+        .join()
+        .is_err();
+        assert!(
+            panicked,
+            "spawned thread should have panicked while holding the lock"
+        );
+
+        assert!(
+            matches!(engine.stop_all(), Err(EngineError::Poisoned)),
+            "stop_all() should surface EngineError::Poisoned instead of panicking after genuine poison"
+        );
+        assert!(
+            matches!(
+                engine.schedule(0.0, Sample::new(vec![0.5f32; 8], 48_000, 2)),
+                Err(EngineError::Poisoned)
+            ),
+            "schedule() should surface EngineError::Poisoned instead of panicking after genuine poison"
         );
     }
 
