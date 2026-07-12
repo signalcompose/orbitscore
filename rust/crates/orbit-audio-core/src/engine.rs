@@ -145,19 +145,16 @@ impl Engine {
     fn with_scheduler(&self, out: &mut [f32], f: impl FnOnce(&mut Scheduler, &mut [f32])) {
         match self.inner.try_lock() {
             // MutexGuard を DerefMut で &mut Scheduler に再借用して closure に渡す。
-            Ok(mut s) => f(&mut s, out),
+            Ok(mut s) => return f(&mut s, out),
             Err(std::sync::TryLockError::WouldBlock) => {
                 self.contention_count.fetch_add(1, Ordering::Relaxed);
-                for x in out.iter_mut() {
-                    *x = 0.0;
-                }
             }
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 self.poisoned.store(true, Ordering::Relaxed);
-                for x in out.iter_mut() {
-                    *x = 0.0;
-                }
             }
+        }
+        for x in out.iter_mut() {
+            *x = 0.0;
         }
     }
 
@@ -183,21 +180,17 @@ impl Engine {
     /// 制約は `with_scheduler` と同じ（#401）。
     pub fn render_multi(&self, hardware_out: &mut [f32], channels: &mut [(&str, &mut [f32])]) {
         match self.inner.try_lock() {
-            Ok(mut s) => s.render_multi(hardware_out, channels),
+            Ok(mut s) => return s.render_multi(hardware_out, channels),
             Err(std::sync::TryLockError::WouldBlock) => {
                 self.contention_count.fetch_add(1, Ordering::Relaxed);
-                hardware_out.fill(0.0);
-                for (_, buf) in channels.iter_mut() {
-                    buf.fill(0.0);
-                }
             }
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 self.poisoned.store(true, Ordering::Relaxed);
-                hardware_out.fill(0.0);
-                for (_, buf) in channels.iter_mut() {
-                    buf.fill(0.0);
-                }
             }
+        }
+        hardware_out.fill(0.0);
+        for (_, buf) in channels.iter_mut() {
+            buf.fill(0.0);
         }
     }
 
