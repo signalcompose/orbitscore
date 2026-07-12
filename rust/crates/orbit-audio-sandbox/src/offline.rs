@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 use crate::child::SandboxChildGuard;
 use crate::transport::{
     create_shared, region_ptr, slot_index, slot_offset, BUF_LEN, CHANNELS, CONTROL_RUN,
+    MAX_EVENTS_PER_BLOCK,
 };
+use crate::{EventRecord, NeutralEvent};
 
 /// 1 block の child 完了を待つ既定上限(これを超えたら child 死亡とみなしエラー)。
 const BLOCK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -171,6 +173,80 @@ pub fn render_through_child_sync_with_options(
     // `seq_done.load(Acquire)` を観測して抜けるので、その Acquire がこれら counter の全 increment を
     // 可視化する。ゆえにここでの Relaxed load は最終ブロックまでの確定値を読む。CONTROL_QUIT を送る
     // `drop(guard)` の **前** に読むこと(QUIT 後は child が終了へ向かい観測が競合しうる)。
+    let stats = unsafe {
+        ChildStats {
+            processed: (*region).child_processed.load(Relaxed),
+            process_errors: (*region).child_process_error_count.load(Relaxed),
+        }
+    };
+    drop(guard);
+    Ok((out, stats))
+}
+
+/// Format-neutral event 列を block ごとに共有 event slot へ直接 publish し、instrument child の
+/// 出力を同期回収する。小規模な offline parity 専用で、backing ring / spill FIFO は介さない。
+pub fn render_instrument_through_child_sync_with_options(
+    child_exe: &Path,
+    child_args: &[&str],
+    block_frames: usize,
+    events_by_block: &[Vec<NeutralEvent>],
+    opts: RenderOptions,
+) -> io::Result<(Vec<f32>, ChildStats)> {
+    assert!(block_frames >= 1 && block_frames * CHANNELS <= BUF_LEN);
+    let shm_path = unique_shm_path();
+    let mmap = create_shared(&shm_path)?;
+    let region = region_ptr(&mmap);
+    unsafe {
+        (*region).control.store(CONTROL_RUN, Release);
+    }
+
+    let child = Command::new(child_exe)
+        .arg("--shm")
+        .arg(&shm_path)
+        .args(child_args)
+        .spawn()?;
+    let guard = SandboxChildGuard::new(child, region, shm_path);
+
+    let block_len = block_frames * CHANNELS;
+    let mut out = Vec::with_capacity(events_by_block.len() * block_len);
+    for (block, events) in events_by_block.iter().enumerate() {
+        assert!(events.len() <= MAX_EVENTS_PER_BLOCK);
+        let seq = block as u64 + 1;
+        let idx = slot_index(seq);
+        let off = slot_offset(seq);
+        unsafe {
+            for (i, event) in events.iter().enumerate() {
+                (*region).input_events[idx][i] = EventRecord::encode(event);
+            }
+            (*region).n_frames[idx].store(block_frames as u32, Relaxed);
+            (*region).input_event_count[idx].store(events.len() as u32, Relaxed);
+            (*region).seq_request.store(seq, Release);
+        }
+
+        let timeout = if seq == 1 {
+            opts.first_block_timeout
+        } else {
+            opts.block_timeout
+        };
+        let deadline = Instant::now() + timeout;
+        loop {
+            if unsafe { (*region).seq_done.load(Acquire) } >= seq {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "instrument child が block を時間内に処理しなかった(死亡の可能性)",
+                ));
+            }
+            std::thread::yield_now();
+        }
+        unsafe {
+            let out_base = std::ptr::addr_of!((*region).output) as *const f32;
+            out.extend_from_slice(std::slice::from_raw_parts(out_base.add(off), block_len));
+        }
+    }
+
     let stats = unsafe {
         ChildStats {
             processed: (*region).child_processed.load(Relaxed),

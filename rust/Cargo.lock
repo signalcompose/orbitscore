@@ -989,6 +989,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-clap-instrument-child"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "orbit-audio-sandbox",
+ "orbit-clap-host",
+]
+
+[[package]]
 name = "orbit-clap-spike"
 version = "0.0.1"
 dependencies = [

@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.237 feat(engine): M2 Stage5 Part B — instrument child + A/B parity（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage 5 Part B。Part A（`ClapInstrumentProcessor`）を使い、新規 OOP instrument child + offline event driver + 実 dylib（`rust-spike/clap-test-synth`）での A/B parity gated test を実装し、**§7 受け入れ基準5を実測で充足**した。
+
+- 新規 crate `orbit-clap-instrument-child`（`rust/crates/orbit-clap-instrument-child/`）: `orbit-clap-effect-child` と異なり、`SharedRegion` の event slot を **in-order**（§4.6）に消費する — `last+1..=cur` を昇順処理し、中間 seq を skip しない（effect child の「`cur` へ latest-jump」ポリシーとは根本的に異なる）。純関数 `in_order_seqs`/`decode_slot_events` に分離し、実 dylib 不要な CI 実行可能な unit test でカバー（境界値・4096件 clamp・不正 kind のスキップと `event_decode_error_count` 増分）。
+- `orbit-audio-sandbox::offline` に新規関数 `render_instrument_through_child_sync_with_options` を追加（既存 `render_through_child_sync_with_options` は無変更）。block ごとの `NeutralEvent` 列を `input_events[slot]`/`input_event_count[slot]` へ直接 publish する 1-outstanding 同期ドライバ（`EventBackingRing`/`EventSpillFifo` は使わない・小規模 event 列の offline parity 専用・容量超過の扱いは Stage 6 の範囲）。
+- **A/B parity（オラクル方式の判断）**: `clap-test-synth` は f32 位相累積で正弦波を生成するため、独立計算の `sin()` recomputation では丸め誤差が乗り bit-exact 一致しない（advisor 指摘）。in-process 側（`ClapInstrumentProcessor` に同一 event 列を直接注入）と OOP child 側（本 driver 経由）を突き合わせる A/B parity 方式を採用し、`max_abs_diff == 0.0` を実測（gated test `instrument_parity_gated.rs::real_clap_instrument_oop_event_parity`・128 frames×4 block・NoteOn(key=60)→NoteOff・両側とも非無音を確認済み）。
+- output 方向（`NoteEnd` 等の child→host 逆翻訳）・`EventBackingRing`/`EventSpillFifo` の配線には触れていない（`clap-test-synth` は output event を一切生成しないため不要・Stage 6 に切り出し済み）。
+- **役割**: grounding（`clap-test-synth` 発見・in-order 規律の設計根拠確認）・advisor 相談（Stage5/6 のスコープ境界・オラクル方式）＝ Opus main。**実装本体（新規 crate・offline driver・gated test）＝ codex 委譲**。委譲後は Opus main が `cargo build --workspace`/`fmt`/`clippy`/`test`（`orbit-audio-sandbox`/`orbit-clap-instrument-child`）に加え、**実 dylib（`rust-spike/clap-test-synth`）をビルドして gated A/B parity test を自ら実行**し green を再確認（他の Stage と同様、報告を鵜呑みにせず一次証拠で裏取り）。
+- **状態**: Stage 5 完了（§7 受け入れ基準5 充足）。残 Stage 6（round trip・spillover決定論・枯渇時note保護・in-order回帰・gated stress @32f・§7-4,8,10,11,12）・landing。
+
 ### 6.236 feat(engine): M2 Stage5 Part A — ClapInstrumentProcessor（#416） (Jul 12, 2026)
 
 M2 instrument IPC substrate（Issue #416）の Stage 5 は、実装前に advisor へスコープ確認した（§7-5 は「単一 child + closed-form oracle test-synth の event 列→波形」であり、`EventBackingRing`/`EventSpillFifo` の配線・output 方向 translate は Stage 6（§7-4,8,10,11,12）の範囲で Stage 5 には含めない、と整理）。Stage 5 は Part A（`orbit-clap-host` 側 API）と Part B（新規 child + offline event driver + gated A/B parity test）に分割し、本エントリは Part A。
