@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.221 fix(engine): in-process CLAP event ring を bounded retry で lossless 化（#400） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の transport 容量設計を検討する過程で、既存の in-process CLAP event ring（`orbit-audio-daemon/src/engine_wrap.rs` の `push_plugin_event`・1024 slot）に同種の欠陥（満杯時 drop-newest だが可視化カウンタなし・NoteOff drop で stuck note の可能性）が見つかり、Fable のレビューで「producer が RT スレッドでないため bounded retry だけで安価に lossless 化できる」と判明したため、M2 とは独立した issue として即着手した。
+
+- **実コード確認**: `push_plugin_event` の呼び出し元は `session.rs` の WS command handler（tokio async task・control スレッド）であり RT audio スレッドではない。consumer（`processor.rs` の `drain_to_event_buffer`）は毎 audio callback で ring を全量 drain するため、最大 1 callback 周期（buffer 設定によって ~1.3〜93ms）待てば空きが保証される。
+- **実装**: `push_with_bounded_retry<T>`（`rtrb::Producer<T>` 汎用・純粋関数・mutex 非依存）を新設し、最大200回・1ms間隔（≈200ms上限）で retry。真にタイムアウトした場合のみ `plugin_event_ring_overflow_count`（新規 `Arc<AtomicU64>`・`clap_process_errors` と同型の unconditional health-signal フィールド）を進めてエラーを返す。`push_plugin_event` はこのヘルパーを呼ぶだけに簡素化。
+- **可視化**: `ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW`（`protocol.rs`）を新設し、既存の 1Hz ticker（`CLAP_PROCESS_ERROR` 等と同型パターン）に配線。
+- **tokio ワーカー保護**: bounded retry で `plugin_note_on`/`plugin_note_off` が最大 ~200ms ブロックしうるようになったため、`session.rs` の `PluginNoteOn`/`PluginNoteOff` handler を `LoadPlugin` と同じ `tokio::task::spawn_blocking` パターンで包み、tokio ワーカースレッドを塞がないようにした。
+- **検証**: 初回コミットで新規 unit test 3本（`plugin_event_ring_retry_tests`・即座に成功／consumer drain 後に成功／真の overflow で counter 増分）を追加。以降 PR #402 の pr-review-team 反復（/simplify・カバレッジギャップ是正・`handle_command` dispatch 一本化）で `plugin_event_ring_retry_tests` に fatal outcome 早期リターン 1本を追加し、さらに `push_plugin_event_tests`（clap 未初期化時の `ClapUnavailable` 2本）・`plugin_note_spec_*`（配線 pin 2本）・`handle_plugin_note_*`（fn-pointer dispatch・spawn_blocking join-error 2本）・`tests/protocol.rs` の統合テスト（ring overflow warning 1本）を追加し、累計で新規 unit/integration test 11本。clap-host feature 下で全て PASS。`cargo build`(default/clap-host/outproc-effect)・`cargo clippy --all-targets -D warnings`(同3構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。
+- **役割**: 発見=Fable(実コード確認込みレビュー) / 実装・検証=Opus main(直接実装・小規模のためサブエージェント委譲なし)。
+- **状態**: M2(#398)とは独立スコープ。PR #402 iteration 3 レビュー収束（silent-failure-hunter/pr-test-analyzer/code-reviewer）を反映して cleanup 済み → owner マージ待ち。
+
 ### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
 
 中核の手書き unsafe COM FFI（`orbit-vst3-host/src/lib.rs`・80 unsafe blocks）に対し、`/code:pr-review-team`（汎用 correctness）が構造的に狙わない **memory-safety/UB 次元**の外部第二意見を実施。@claude bot は pr-review-team と同一モデルファミリで盲点が相関するため除外し、**codex（cross-family）+ fresh Opus（非著者）を並列 adversarial 監査 → advisor で tie-break**（[[consult-layering-by-error-type]] の分担）。

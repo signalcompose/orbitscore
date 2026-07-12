@@ -101,6 +101,10 @@ pub const ERROR_CODE_OUTPROC_EFFECT_RESPAWN: &str = "OUTPROC_EFFECT_RESPAWN";
 /// repeat-previous が出続ける = effect 経路のみ恒久停止）。daemon が 1 Hz ticker で `measurement_invalid`
 /// を検知して一度だけ発火する（fire-once・γ M1 PR-C）。
 pub const ERROR_CODE_OUTPROC_EFFECT_INVALID: &str = "OUTPROC_EFFECT_INVALID";
+/// in-process CLAP event ring への push が bounded retry の末に力尽きた（真の event 喪失）。
+/// WARNING severity。control スレッドが cumulative counter に積み、daemon が 1 Hz ticker で
+/// 増加を検知して発火する（#400・M2 doc の「溢れても失わない」方針の in-process retrofit）。
+pub const ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW: &str = "PLUGIN_EVENT_RING_OVERFLOW";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]
