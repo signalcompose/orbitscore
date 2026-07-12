@@ -20,7 +20,7 @@ use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
     ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_ENGINE_LOCK_CONTENTION,
-    ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_OUTPROC_EFFECT_ERROR,
+    ERROR_CODE_ENGINE_LOCK_POISONED, ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_OUTPROC_EFFECT_ERROR,
     ERROR_CODE_OUTPROC_EFFECT_INVALID, ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_STREAM_XRUN,
     ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED,
     EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
@@ -85,6 +85,7 @@ pub async fn run(
             let mut last_engine_lock_contention: u64 = 0;
             let mut outproc_invalid_reported = false;
             let mut device_lost_reported = false;
+            let mut engine_lock_poisoned_reported = false;
             loop {
                 ticker.tick().await;
                 let snapshot = engine.stream_stats_snapshot();
@@ -101,6 +102,25 @@ pub async fn run(
                         break;
                     }
                     device_lost_reported = true;
+                }
+
+                // Engine 内部 Mutex が RT 競合で poisoned と判定された（#401）。`device_lost` と同じ
+                // 恒久障害クラス（`clear_poison()` を呼ぶ箇所が無く同一プロセス生存中は回復しない —
+                // render は恒久 zero-fill、schedule/stop 等の制御系 API も以降ずっとエラーを返す）
+                // なので FATAL・fire-once。"self-heals" と言い切る `ENGINE_LOCK_CONTENTION` の
+                // WARNING メッセージとは異なり、poisoned は自己修復しないことを明示する。
+                if engine.engine_lock_poisoned() && !engine_lock_poisoned_reported {
+                    let fatal_evt = daemon_error_event(
+                        ERROR_SEVERITY_FATAL,
+                        ERROR_CODE_ENGINE_LOCK_POISONED,
+                        "engine scheduler mutex poisoned by a panicking thread; audio output is \
+                         permanently down until daemon restart"
+                            .to_string(),
+                    );
+                    if tx.send(to_json_or_fallback(&fatal_evt)).await.is_err() {
+                        break;
+                    }
+                    engine_lock_poisoned_reported = true;
                 }
 
                 if snapshot.xruns > last_xruns {
@@ -157,10 +177,11 @@ pub async fn run(
                     last_clap_errors = clap_errors;
                 }
 
-                // Engine 内部 Mutex の RT 競合（try_lock 失敗 → silent zero-fill）を非 RT で
+                // Engine 内部 Mutex の RT 競合（try_lock が WouldBlock → silent zero-fill）を非 RT で
                 // surface（#401）。lock-free 化は別 Issue で defer 済みの既存判断のまま、発生の
-                // 可視化のみ追加。自己修復する障害（次のブロックで復帰）だが 32/64f 小バッファ
-                // 性能ゴール下ではライブコマンド頻度に比例して発生確率が上がる。
+                // 可視化のみ追加。WouldBlock は自己修復する障害（次のブロックで復帰）だが 32/64f
+                // 小バッファ性能ゴール下ではライブコマンド頻度に比例して発生確率が上がる。
+                // 恒久障害（Poisoned）はこのカウンタに含めない — 上の ENGINE_LOCK_POISONED FATAL 参照。
                 let engine_lock_contention = engine.engine_lock_contention_count();
                 if engine_lock_contention > last_engine_lock_contention {
                     let evt = daemon_error_event(

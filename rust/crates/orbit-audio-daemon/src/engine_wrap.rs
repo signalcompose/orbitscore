@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
@@ -913,10 +913,32 @@ impl EngineWrap {
         self.engine.now_sec()
     }
 
-    /// `Engine::with_scheduler`/`render_multi` が RT 競合で silent zero-fill にフォールバック
-    /// した累積回数（#401）。daemon の 1 Hz ticker が polling して増加を surface する health signal。
+    /// `Engine::lock_contention_count` の delegate（詳細はそちら参照）。daemon の 1 Hz ticker が
+    /// polling する（#401）。
     pub fn engine_lock_contention_count(&self) -> u64 {
         self.engine.lock_contention_count()
+    }
+
+    /// `Engine::is_lock_poisoned` の delegate（詳細はそちら参照）。daemon の 1 Hz ticker が
+    /// polling して fire-once の FATAL event を出す（#401）。
+    pub fn engine_lock_poisoned(&self) -> bool {
+        self.engine.is_lock_poisoned()
+    }
+
+    /// test harness 用: `Engine::contention_count_arc` の delegate。integration test から
+    /// `fetch_add` して 1 Hz ticker の `ENGINE_LOCK_CONTENTION` WARNING 発火を駆動する
+    /// （`link_egress_drops_arc` と同様の注入 seam・`#[doc(hidden)]`）。
+    #[doc(hidden)]
+    pub fn engine_lock_contention_arc(&self) -> Arc<AtomicU64> {
+        self.engine.contention_count_arc()
+    }
+
+    /// test harness 用: `Engine::poisoned_arc` の delegate。integration test から `store(true, ..)`
+    /// して 1 Hz ticker の `ENGINE_LOCK_POISONED` FATAL 発火を、実際に Mutex を panic-poison させずに
+    /// 駆動する（`#[doc(hidden)]`）。
+    #[doc(hidden)]
+    pub fn engine_lock_poisoned_arc(&self) -> Arc<AtomicBool> {
+        self.engine.poisoned_arc()
     }
 
     pub fn output_channels(&self) -> u16 {

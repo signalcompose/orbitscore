@@ -101,11 +101,18 @@ pub const ERROR_CODE_OUTPROC_EFFECT_RESPAWN: &str = "OUTPROC_EFFECT_RESPAWN";
 /// repeat-previous が出続ける = effect 経路のみ恒久停止）。daemon が 1 Hz ticker で `measurement_invalid`
 /// を検知して一度だけ発火する（fire-once・γ M1 PR-C）。
 pub const ERROR_CODE_OUTPROC_EFFECT_INVALID: &str = "OUTPROC_EFFECT_INVALID";
-/// `Engine` の内部 Mutex が RT 競合（`try_lock` 失敗）で silent zero-fill にフォールバックした。
-/// WARNING severity。この経路自体は既存の設計判断（lock-free 化は別 Issue で defer 済み・自己修復
-/// する障害で次のブロックで復帰する）だが、発生を可視化する仕組みが無かったため追加した（#401）。
-/// daemon が 1 Hz ticker で累積カウンタの増加を検知して発火する。
+/// `Engine` の内部 Mutex が RT `try_lock` で `WouldBlock`（一時競合）を返し silent zero-fill に
+/// フォールバックした。WARNING severity。この経路自体は既存の設計判断（lock-free 化は別 Issue で
+/// defer 済み）だが、発生を可視化する仕組みが無かったため追加した（#401）。`WouldBlock` は自己修復
+/// する障害（次のブロックで復帰）。daemon が 1 Hz ticker で累積カウンタの増加を検知して発火する。
 pub const ERROR_CODE_ENGINE_LOCK_CONTENTION: &str = "ENGINE_LOCK_CONTENTION";
+/// `Engine` の内部 Mutex が RT `try_lock` で `Poisoned`（別スレッドの panic による永続破損）と
+/// 判定された。**FATAL** severity — `DEVICE_LOST` と同様、`clear_poison()` を呼ぶ箇所が無いため
+/// 同一プロセス生存中は回復せず、以降の render は恒久的に zero-fill・制御系 API
+/// （schedule/stop/stop_all/set_global_gain）も `EngineError::Poisoned` を返し続ける（#401）。
+/// `ENGINE_LOCK_CONTENTION`（自己修復する `WouldBlock`）とは意味論が異なるため別コードにする。
+/// daemon が 1 Hz ticker でフラグを検知し、`device_lost` と同様 fire-once で発火する。
+pub const ERROR_CODE_ENGINE_LOCK_POISONED: &str = "ENGINE_LOCK_POISONED";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]

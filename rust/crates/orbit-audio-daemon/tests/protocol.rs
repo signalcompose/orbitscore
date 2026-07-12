@@ -612,6 +612,144 @@ async fn daemon_error_warning_on_clap_process_error() {
     );
 }
 
+/// engine lock contention（try_lock の WouldBlock）が増えると
+/// DaemonError (severity=warning, code=ENGINE_LOCK_CONTENTION) が発火する（#401）。
+/// LINK_EGRESS_DROP/CLAP_PROCESS_ERROR と同じ 1 Hz ticker 経路。`engine_lock_contention_arc` の
+/// **本番と同一 counter に直接書く注入 seam**（`Engine::contention_count_arc` の delegate）で
+/// この event を driver する。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_engine_lock_contention() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から lock contention を注入（1 Hz ticker が engine_lock_contention_count の増加を検知）。
+    daemon
+        .engine
+        .engine_lock_contention_arc()
+        .fetch_add(7, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "ENGINE_LOCK_CONTENTION"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("ENGINE_LOCK_CONTENTION warning event not received");
+    // message は累積カウント（7）と self-heals の説明を含む = WouldBlock（一時競合）専用の
+    // メッセージであり、恒久障害（poisoned）のメッセージと混同していないこと。
+    assert!(
+        message.contains('7'),
+        "ENGINE_LOCK_CONTENTION message should carry the running total, got: {message}"
+    );
+    assert!(
+        message.contains("self-heals"),
+        "WouldBlock contention message should claim self-healing, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても再発火しない。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError" && msg["data"]["code"] == "ENGINE_LOCK_CONTENTION"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "ENGINE_LOCK_CONTENTION must not re-fire without additional contention (latch regression)"
+    );
+}
+
+/// engine の scheduler mutex が poisoned と判定されると
+/// DaemonError (severity=fatal, code=ENGINE_LOCK_POISONED) が発火する（#401）。DEVICE_LOST と同じ
+/// fire-once の恒久障害クラス。実際に Mutex を panic で poison させる代わりに、
+/// `engine_lock_poisoned_arc`（`Engine::poisoned_arc` の delegate）で直接フラグを注入する
+/// （`Engine` 側の genuine-poison 検証は `orbit-audio-core::engine::tests` の
+/// `poisoned_flag_sets_on_render_lock_poison_distinct_from_contention_count` が担う）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_fatal_on_engine_lock_poisoned() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    daemon
+        .engine
+        .engine_lock_poisoned_arc()
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut fatal_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "fatal"
+                    && msg["data"]["code"] == "ENGINE_LOCK_POISONED"
+                {
+                    fatal_message = Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = fatal_message.expect("ENGINE_LOCK_POISONED fatal event not received");
+    // poisoned は恒久障害なので "self-heals" を名乗ってはいけない
+    // （ENGINE_LOCK_CONTENTION の WARNING メッセージと取り違えていないこと）。
+    assert!(
+        !message.contains("self-heals"),
+        "poisoned message must not claim self-healing, got: {message}"
+    );
+    assert!(
+        message.contains("restart"),
+        "poisoned message should say audio is down until restart, got: {message}"
+    );
+
+    // fire-once: フラグを立てたまま次 tick へ進めても再発火しない（device_lost_reported と同じ latch）。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError" && msg["data"]["code"] == "ENGINE_LOCK_POISONED" {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "ENGINE_LOCK_POISONED must not re-fire once latched (fire-once regression)"
+    );
+}
+
 /// device_lost が記録されると DaemonError (severity=fatal, code=DEVICE_LOST) が発火する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn daemon_error_fatal_on_device_lost() {

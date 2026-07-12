@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.222 fix(engine): ENGINE_LOCK_CONTENTION の WouldBlock/Poisoned 混同を修正（PR #403） (Jul 12, 2026)
+
+PR #403（#401 の実装）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）で altitude レビュアーが発見し、コード直接確認で確定した実バグ。`orbit-audio-core::Engine::with_scheduler`/`render_multi` の `Err(_)` ワイルドカードが `std::sync::Mutex::try_lock()` の `WouldBlock`（一時競合・次ブロックで自己修復）と `Poisoned`（別スレッド panic による永続破損・`clear_poison()` 呼び出し箇所なしで恒久化）を同一カウンタ・同一 fallback に混ぜていた。poison すると `contention_count` が以後ずっと増え続け、daemon の WARNING メッセージ「this self-heals next block」が実際には二度と真にならない状態のまま無限に再発火する欠陥だった。
+
+- **実装**: `Engine` に `poisoned: Arc<AtomicBool>` を追加し `with_scheduler`/`render_multi` の match 節を `Err(TryLockError::WouldBlock)`（`contention_count` 増分のみ）と `Err(TryLockError::Poisoned(_))`（`poisoned.store(true, Relaxed)` のみ）に分離。両分岐とも RT スレッドのため `tracing::warn!` 等のブロッキング処理は行わない（非ブロッキング atomic write のみ）。`is_lock_poisoned()` accessor を追加。
+- **daemon 配線**: `ERROR_CODE_ENGINE_LOCK_POISONED`（新設・**FATAL** severity）を追加し、`EngineWrap::engine_lock_poisoned()` → 1Hz ticker で `device_lost` と同じ fire-once latch パターンで発火。FATAL 選定根拠: このコードベースの FATAL は session を終了しない（`device_lost_reported=true` 後も ticker は StreamStats を出し続ける）ため「恒久障害だが daemon 生存」を表す severity として一貫する。poison は render 全体 + `schedule`/`stop`/`stop_all`/`set_global_gain` の制御系 API も道連れにする点で `OUTPROC_EFFECT_INVALID`（effect 経路のみ凍結・WARNING）より重く、`device_lost` に近いため FATAL とした。
+- **テスト seam**: `Engine::contention_count_arc()`/`poisoned_arc()`（`#[doc(hidden)]`、`StreamStats::record_xrun` と同形の直接注入 — 生の atomic なので link/clap のような additive 分離 counter は不要）を追加し `EngineWrap` に delegate。`tests/protocol.rs` に `daemon_error_warning_on_engine_lock_contention`/`daemon_error_fatal_on_engine_lock_poisoned` を追加（latch 検証込み）。加えて `orbit-audio-core::engine::tests` に、別スレッドで実際に panic させ Mutex を genuine-poison する unit test を追加し、`poisoned` フラグが `contention_count` を汚染しないことを実際の poison で確認。
+- **ドキュメント cleanup**: field doc とアクセサ doc の重複を解消（simplification レビュー指摘）、`render_multi_routes_by_channel_tag` テストの「決定論的に競合を起こせない」という古いコメントを削除（後続テストで実際に決定論的検証済みのため矛盾していた）。
+- **検証**: `cargo build`(core / daemon default / daemon clap-host)・`cargo test`(core --lib 45件・daemon --lib 13件・daemon --test protocol 21件、全緑)・`cargo clippy --workspace --all-targets -D warnings`・`cargo fmt --check` を確認。
+- **役割**: 発見=`/simplify` 4並列レビュー（altitude が主犯、reuse/simplification が付随指摘）/ 実装・検証=Opus subagent（advisor で設計レビュー後に commit）。
+- **状態**: PR #403 に追加コミットとして push 済み。
+
 ### 6.221 fix(engine): Engine lock 競合の silent zero-fill を可視化（#401） (Jul 12, 2026)
 
 M2 instrument IPC substrate（#398）の容量設計を検討する過程で、Fable の拡張レビューが新たに発見した箇所。`orbit-audio-core::Engine::with_scheduler`/`render_multi` は RT 競合（`try_lock` 失敗）時に出力バッファを silent zero-fill する既存設計（lock-free 化は別 Issue で defer 済み・自己修復する障害）だったが、発生を可視化する仕組みが一切なかった。

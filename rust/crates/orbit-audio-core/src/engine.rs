@@ -3,7 +3,7 @@
 //! Phase 2 以降で DSL interpreter と接続する想定。PoC では
 //! 「サンプルをロードして、時刻指定でスケジュールする」だけを提供する。
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
@@ -28,12 +28,22 @@ pub enum EngineError {
 #[derive(Clone)]
 pub struct Engine {
     inner: Arc<Mutex<Scheduler>>,
-    /// `with_scheduler` / `render_multi` が RT 競合（`try_lock` 失敗）で silent zero-fill に
-    /// フォールバックした回数（health signal）。この経路自体は既存の設計判断（lock-free 化は
-    /// 別 Issue で defer 済み）だが、発生を可視化する仕組みが無かったため追加した（#401）。
-    /// 自己修復する障害（次のブロックで復帰）なので stuck しないが、32/64f 小バッファ性能ゴール下
-    /// ではライブコマンド頻度に比例して発生確率が上がるため、operator が気づける形にする。
+    /// `with_scheduler` / `render_multi` が RT 競合で `try_lock` が **`WouldBlock`** を返し
+    /// silent zero-fill にフォールバックした回数（health signal）。この経路自体は既存の設計判断
+    /// （lock-free 化は別 Issue で defer 済み）だが、発生を可視化する仕組みが無かったため追加した
+    /// （#401）。`WouldBlock` は自己修復する障害（次のブロックでロックが空けば復帰）なので stuck
+    /// しないが、32/64f 小バッファ性能ゴール下ではライブコマンド頻度に比例して発生確率が上がるため、
+    /// operator が気づける形にする。**`Poisoned`（恒久障害）はこのカウンタに含めない** — 別スレッドの
+    /// panic で一度 poison すると `clear_poison()` を呼ぶ箇所が無く同一プロセス内で永続するため、
+    /// 一時的な競合と同列に数えると「次のブロックで自己修復する」という意味が壊れる。poison は
+    /// `poisoned` フラグで区別する。
     contention_count: Arc<AtomicU64>,
+    /// scheduler Mutex が RT `try_lock` で **`Poisoned`** と判定されたかどうか（#401）。
+    /// 一度 `true` になると `clear_poison()` が呼ばれないため、同一プロセス生存中は戻らない
+    /// （render 系は恒久的に zero-fill、`schedule`/`stop`/`stop_all`/`set_global_gain` などの
+    /// 制御系 API も以降ずっと `EngineError::Poisoned` を返す）。`contention_count` の
+    /// `WouldBlock` とは異なり自己修復しない。
+    poisoned: Arc<AtomicBool>,
 }
 
 impl Engine {
@@ -41,6 +51,7 @@ impl Engine {
         Self {
             inner: Arc::new(Mutex::new(Scheduler::new(sample_rate, channels))),
             contention_count: Arc::new(AtomicU64::new(0)),
+            poisoned: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -125,12 +136,24 @@ impl Engine {
     /// `try_lock` で Scheduler を借りて `f` を実行する。RT スレッドから呼ばれるため、ロック
     /// 競合時は無音（silent drop）で即時 return する（将来 lock-free ringbuffer 化の余地あり・
     /// Phase 2）。`render` / `render_channel` がこの try-lock + silent-drop 規約を共有する。
+    ///
+    /// `try_lock` の失敗理由を区別する（#401）: **`WouldBlock`**（一時的競合）は
+    /// `contention_count` に積むだけ — 次のブロックで自己修復する。**`Poisoned`**（別スレッドの
+    /// panic で永続破損）は `poisoned` フラグを立てるだけに留める。RT コールバック内なので
+    /// どちらの分岐も `tracing::warn!` 等のブロッキング/アロケーションを伴う処理は行わない
+    /// （非ブロッキングな atomic write のみ）。
     fn with_scheduler(&self, out: &mut [f32], f: impl FnOnce(&mut Scheduler, &mut [f32])) {
         match self.inner.try_lock() {
             // MutexGuard を DerefMut で &mut Scheduler に再借用して closure に渡す。
             Ok(mut s) => f(&mut s, out),
-            Err(_) => {
+            Err(std::sync::TryLockError::WouldBlock) => {
                 self.contention_count.fetch_add(1, Ordering::Relaxed);
+                for x in out.iter_mut() {
+                    *x = 0.0;
+                }
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                self.poisoned.store(true, Ordering::Relaxed);
                 for x in out.iter_mut() {
                     *x = 0.0;
                 }
@@ -154,14 +177,22 @@ impl Engine {
 
     /// 本番 RT 用の single-pass multi-buffer render（A4-2b-2）。`hardware_out`（channel=None）と
     /// 各 named channel buffer を 1 パスで埋め transport を 1 回だけ進める
-    /// （[`Scheduler::render_multi`]）。RT 競合（try_lock 失敗）時は `render` の silent-drop 規約を
-    /// multi-buffer に拡張し、**hardware と全 channel buffer を無音**にする（ramp を多重に進めないため
-    /// 単一の try_lock で一括処理する）。
+    /// （[`Scheduler::render_multi`]）。RT 競合時は `render` の silent-drop 規約を multi-buffer に
+    /// 拡張し、**hardware と全 channel buffer を無音**にする（ramp を多重に進めないため単一の
+    /// try_lock で一括処理する）。`try_lock` 失敗理由（`WouldBlock` / `Poisoned`）の区別と RT-safety
+    /// 制約は `with_scheduler` と同じ（#401）。
     pub fn render_multi(&self, hardware_out: &mut [f32], channels: &mut [(&str, &mut [f32])]) {
         match self.inner.try_lock() {
             Ok(mut s) => s.render_multi(hardware_out, channels),
-            Err(_) => {
+            Err(std::sync::TryLockError::WouldBlock) => {
                 self.contention_count.fetch_add(1, Ordering::Relaxed);
+                hardware_out.fill(0.0);
+                for (_, buf) in channels.iter_mut() {
+                    buf.fill(0.0);
+                }
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                self.poisoned.store(true, Ordering::Relaxed);
                 hardware_out.fill(0.0);
                 for (_, buf) in channels.iter_mut() {
                     buf.fill(0.0);
@@ -170,11 +201,32 @@ impl Engine {
         }
     }
 
-    /// `with_scheduler` / `render_multi` が RT 競合で silent zero-fill にフォールバックした
-    /// 累積回数（#401）。daemon の 1 Hz ticker が polling して増加を surface する
-    /// health signal。通常は 0 のまま推移する想定。
+    /// `contention_count`（`WouldBlock` 由来の累積 zero-fill 回数）を返す。詳細な意味論は
+    /// field doc 参照。daemon の 1 Hz ticker が polling して増加を surface する。
     pub fn lock_contention_count(&self) -> u64 {
         self.contention_count.load(Ordering::Relaxed)
+    }
+
+    /// scheduler Mutex が RT `try_lock` で poisoned と判定されたか。詳細な意味論は `poisoned`
+    /// field doc 参照。daemon の 1 Hz ticker が polling して fire-once の FATAL event を出す。
+    pub fn is_lock_poisoned(&self) -> bool {
+        self.poisoned.load(Ordering::Relaxed)
+    }
+
+    /// test harness 用: `contention_count` の `Arc` を取得し、外部から `WouldBlock` 競合を
+    /// 決定論的に注入できるようにする（`StreamStats::record_xrun` と同形 — 本番と同一 counter に
+    /// 直接書く injection seam）。`#[doc(hidden)]` で公開 API としては扱わない。
+    #[doc(hidden)]
+    pub fn contention_count_arc(&self) -> Arc<AtomicU64> {
+        self.contention_count.clone()
+    }
+
+    /// test harness 用: `poisoned` の `Arc` を取得し、外部から poison 状態を決定論的に注入できる
+    /// ようにする（`contention_count_arc` と同形）。実際に Mutex を panic-poison させずに
+    /// daemon 側の FATAL event 経路を検証するための seam。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn poisoned_arc(&self) -> Arc<AtomicBool> {
+        self.poisoned.clone()
     }
 
     /// 現在の出力ストリーム時刻（秒）を返す。
@@ -248,10 +300,50 @@ mod tests {
         assert_eq!(engine.lock_contention_count(), 1);
     }
 
+    // `WouldBlock`（上の2テスト・同一スレッドで guard を保持したまま try_lock）とは別に、
+    // 別スレッドで実際に panic させて Mutex を poison し、`Poisoned` 分岐が `contention_count`
+    // ではなく専用の `poisoned` フラグを立てることを検証する（#401 の主眼: 一時競合と恒久障害を
+    // 同一カウンタに混ぜない）。
+    #[test]
+    fn poisoned_flag_sets_on_render_lock_poison_distinct_from_contention_count() {
+        let engine = Engine::new(48_000, 2);
+        assert!(!engine.is_lock_poisoned());
+        assert_eq!(engine.lock_contention_count(), 0);
+
+        let engine_clone = engine.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = engine_clone.inner.lock().expect("lock for poison setup");
+            panic!("intentional poison for poisoned_flag_sets_on_render_lock_poison test");
+        })
+        .join()
+        .is_err();
+        assert!(
+            panicked,
+            "spawned thread should have panicked while holding the lock"
+        );
+
+        let mut buf = vec![1.0f32; 8];
+        engine.render(&mut buf);
+
+        assert!(
+            buf.iter().all(|&x| x == 0.0),
+            "poisoned lock 時も silent zero-fill されるべき"
+        );
+        assert!(
+            engine.is_lock_poisoned(),
+            "render の try_lock Poisoned 失敗で poisoned フラグが立つべき"
+        );
+        assert_eq!(
+            engine.lock_contention_count(),
+            0,
+            "poison は WouldBlock 専用の contention_count に混ぜてはいけない"
+        );
+    }
+
     // render_multi の Engine ラッパが channel タグで出力先を分離することを CI で検証する
     // （ルーティング本体の網羅は Scheduler::render_multi 側のテスト群・ここは Engine の委譲を pin）。
-    // try_lock 競合時の全バッファ zero-fill 経路は `render` と同一の with_scheduler 規約
-    // （inner Mutex は非公開で決定論的に競合を起こせない）。
+    // try_lock 競合時（WouldBlock）の全バッファ zero-fill 経路は `render` と同一の with_scheduler
+    // 規約（決定論的な再現は `contention_count_increments_on_render_multi_lock_conflict` 参照）。
     #[test]
     fn render_multi_routes_by_channel_tag() {
         let engine = Engine::new(48_000, 2);
