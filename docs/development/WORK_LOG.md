@@ -17,6 +17,54 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.234 docs(engine): M2 landing-review fixes — Fable overflow/param_id decisions + advisor verify（#398） (Jul 12, 2026)
+
+M2 設計 doc（PR #399）に対する landing 前レビューを Fable fresh agent に依頼し、判定 LAND-WITH-FIXES（5 blocker + 準blocker）を得て全て反映した。owner 確認後、blocker のうち2件（新しい設計判断）は owner 指名で Fable に一発判断を委ね、確定後 advisor で内部整合性を verify した。
+
+- **クラスX（既存決定の安全側の明記・Q1-Q6 再決定なし）**: `decode()` の検証範囲を `kind` タグだけでなく payload 内の nested enum（`NeutralExpressionId` 等）まで拡張明記（§3 + §7 item2）。host の `output_event_count` 読み取りに `MAX_EVENTS_PER_BLOCK` clamp を明記（M1 の `n_frames` clamp 規律と同型）。§7 受け入れ基準に3テスト追加（全variant round-trip・spillover決定論・枯渇時note保護）。親plan `POST_2.0_VST3_HOSTING_PLAN.md` の Q5矛盾（bus arrangement「含める」記述）を解消。#400/#401 を CLOSED に更新。
+- **クラスY（owner-owned micro-decision・Fable 一発判断 2026-07-12）**:
+  - **output方向（child→host）の overflow policy**: 3 format とも output event が render 呼び出し内の同期出力である（producer=consumer が child の同一スレッド）という事実の発見により、input 側の host backing ring と対称にする案・単純 drop-newest 案のいずれでもなく、**child プロセスの通常メモリに置く固定容量 spill FIFO**（shm 不要・lock-free SPSC 不要）を採用。host 側の防衛はタイムアウト強制解放（voice id 衝突リスク）ではなく、**note_id monotone 採番 + supervisor respawn=implicit all-voices-end** の2規約で NoteEnd 喪失を「不可聴の簿記リーク」に格下げして無害化する設計に転換。
+  - **`param_id` の意味論**: `ParamBody.param_id`/`GestureBody.param_id` を u32→u64 に拡張し、child native format id（CLAP `clap_id`=u32・VST3 `ParamID`=u32・AU `AUParameterAddress`=u64、いずれも一次 SDK ヘッダで接地確認）の zero-extend として運ぶ方式を採用。host 発行の論理 index 案は、CLAP `rescan()`/VST3 restructure 時に host/child 両側の対応表を in-flight event と競合しながら差し替える新たな契約面を生むため不採用。wire サイズコストは rustc 実測で厳密にゼロと機械検証済み（`_pad: u32` が既に u64化に必要な4バイトを予約していたため）。副産物として `EventPayload`/`EventRecord` のサイズ見積り（`raw:[u8;24]`・≈32B/≈512KB）が現行定義でも既に stale だったことが判明し、正しい値（32B/40B/≈640KB）に訂正。
+- **advisor による doc 内部整合性 verify**: grep では拾えない3件の不整合（host backing ring と child spill FIFO のサイズ記載矛盾・output方向 lock-free の前提〔3 format render 同期〕が本文に未記載・`VoiceAddr.note_id` 定義に monotone 採番 invariant の相互参照がない）を検出し、いずれも設計変更を伴わない1行修正で解消。
+- **役割**: landing前レビュー=Fable fresh agent（zero-context・doc+正本のみで判定） / owner-owned micro-decision の判断材料整理=Opus main / 決定=Fable（owner 指名の一発判断）+ owner確認 / 内部整合性 verify=advisor。**codex 委譲なし**。
+- **状態**: PR #399 の body を Q1-Q6 + 新2決定の DECIDED 反映に最新化し ready for review 化（`gh pr ready`）。マージは owner の明示 GO 待ち（`gh pr merge` は未実行）。
+
+### 6.233 docs(engine): M2 transport 容量設計を「溢れても失わない」方式に確定（#398） (Jul 12, 2026)
+
+6.222 に続き、M2 の残り open question のうち Q3(sample offset)を owner が即決、Q4(transport 容量・overflow policy)を大幅な設計転換を経て確定した。残る open question は Q5・Q6 の2問のみ。
+
+- **当初案「64個/ブロック・drop-oldest」への owner 懸念**: 「実験的な用途で見えない天井になりかねない」。grounding agent（opus）が JUCE(MidiBuffer=容量無制限で動的成長)・Apple AUv3(MIDIEventList=可変長・旧MIDIPacketListは最大65536byte)・JACK MIDI(固定2048byte/cycle・drop+count・`jack_midi_get_lost_event_count`)・VST3(validator上限~2048events/block相当)を調査し、64が業界水準を大きく下回ることを裏付けた。
+- **Fable 判断①（容量アーキテクチャ）**: drop-oldest は捨てられるイベントに `NoteOff` が含まれうるため stuck note（音が鳴りっぱなしで止まらない）を生む構造的欠陥と指摘。「上限を大きくする」でなく「**溢れても失わない**」設計へ転換 — per-block 転送窓(`MAX_EVENTS_PER_BLOCK=4096`・根拠=統計的典型性でなく`MAX_FRAMES`と揃えた「1 sample/event」のアーキテクチャ飽和点)+ backing ring(65,536 slot・lossless spillover・超過分は次ブロックへ)。真の drop は backing ring 枯渇時のみ・drop-newest・NoteOff等はサイレント drop 禁止(sticky flagでnote-choke注入)。可視化は`event_dropped_count`/`event_spilled_count`を非音響channelで(音は変えない)。
+- **owner の再度の問い直し**: 「本当に上限を作る形でよいか」「既存CLAPホストの同種欠陥を今直すべきでは」「アーキ全体の監査は要らないか」。
+- **Fable 判断②（実コード確認込み）**: ①time-budget(天井なし)方式は不採用— 転送コピーが軽すぎて時間は希少資源にならず、決定論的検証文化(sample-exact oracle parity)と衝突するため4096+spilloverを維持。②既存in-process CLAP ring(`engine_wrap.rs`)は producer が非RTスレッドと判明、bounded retryだけで安価にlossless化できるため**今すぐ独立issueで着手**(#400)。③`Engine::with_scheduler`のlock競合時silent zero-fill(`engine.rs`)を新規発見、contention counter追加のみで可視化(#401)。④exhaustive監査は不要・見つかった2件をissue化+再発防止は「新規bounded構造導入時の宣言原則」(producer thread種別/overflow policy/可視化counterの3点を明記)の成文化で足りると判断。
+- **owner がFableのコスト意識を指摘**: 「監査不要」判断についても「Fableは高コストなので、もっと安いやり方で本当に不要か検討し直せ」→ fresh general-purpose agent(opus・低コスト)にTS層(未走査だった領域)+grepパターン非依存の手書きqueue探索を委譲（詳細は別entryで記録）。
+- **doc反映**: §4を全面改訂（容量設計原則・二段構造・spill時のsample_offset再タイミング規約・新規bounded queue宣言原則・既存コード欠陥2件への参照）。§6 Q3/Q4をDECIDEDに更新。§7受け入れ基準にgated stress test(@32f・10Kノート同時バースト・event_dropped_count==0)を追加。冒頭の設計経緯節に今回の経緯を追記(次セッションのwhiplash防止)。
+- **役割**: grounding(JUCE/JACK/VST3業界調査)=fresh agent(opus) / 容量アーキ決定=Fable(2回・owner指名) / 決定所有=owner+Opus main。
+- **状態**: Issue #400(既存CLAP ring lossless化)・#401(engine.rs contention可視化)を作成済み・M2(#398)とは独立スコープとして即実装着手。M2の残open questionはQ5(bus arrangement defer)・Q6(tempo同期defer)の2問のみ。
+
+### 6.232 docs(engine): M2 wire 設計を named superset union で確定（owner+Fable判断）（#398） (Jul 12, 2026)
+
+6.221 の DRAFT に対し owner が「DSL→IAC Bus MIDI のように、規格ごとに pluggable に翻訳する薄い共通層の方がいいのでは」と疑問提起。この議論を通じて `POST_2.0_GAMMA_M2_DESIGN.md` の wire 設計方針（旧 Q1/Q2）を確定させた。
+
+- **owner の疑問が突いた3軸分解**: 「format-neutral」は①意味論カバレッジ ②wire型構造(named か opaque か) ③コード構造(共有か per-format か)の独立した3軸だった。正本 §3(STYLE=CLAP型に寄せるな)と `VST3_HOSTING_PLAN.md` §1(SCOPE=機能を除外するな)は①②の一部だけを縛る別軸の制約で、対立していなかった（advisor が一旦「薄い core」に振れたのは①②③を混同した overcorrection・自己訂正で撤回）。
+- **grounding agent（opus）の追加事実**: 「superset にする」の文言は正本 §3 の原文には無く、8日後の派生 doc `VST3_HOSTING_PLAN.md`（PR #395）で追加された gloss だった。JUCE・UAPMD 等の実在する複数規格ホストは「名前のついた薄い共通層(MIDI/UMP)＋各規格側で翻訳」を採用しており、「規格ごとに不透明な byte payload」の実例は見つからず。
+- **Fable 一発判断（owner 指名で `Agent(subagent_type: "general-purpose", model: "fable")` 起動）**: 候補A(意味論に named tagged union)採用・候補B(規格ごとの opaque payload)不採用。理由: host/child は同一ビルド前提のため B の「host が型を知らない」利点は成立せず、実装すると A の再発明に堕ちる。**M1 類推の訂正**: M1 host は完成済み音声を運ぶだけの dumb pipe だったが、M2 host(DSLスケジューラ)は note/param イベントの生成者であり意味論から逃げられない。「pluggable」の正しい置き場所は wire ではなく child 側の honor 段階(既存 Q1 原則)と child バイナリの追加。
+- **owner 確定（2026-07-12・「いいと思うよ」）**: 候補A採用・MIDI2 明示的に必須。§2/§3(旧Q1/Q2)を DECIDED として記録し、以後蒸し返さない。
+- **型設計の安全性修正（Fable 指摘）**: `#[repr(C, u8)]` enum を共有メモリから直接 transmute しない（crash した child の不正 discriminant が UB になる・M1 unsafe 監査文化と整合）。`EventRecord{kind: u32, sample_offset, payload: EventPayload}` + POD union + 検証付き `decode()`/`encode()` に変更。ergonomic な `NeutralEvent` enum はロジック層専用（shm には直接置かない）。
+- **doc 冒頭に「設計経緯」節を新設**（advisor の provenance 記録要請どおり・[[verify-review-convergence-provenance]]・次セッションの whiplash 防止）。
+- **役割**: grounding=fresh agent(opus・2並列起動) / 枠組み検査=advisor(3往復) / 難所の一発判断=Fable(owner 指名) / 決定所有=owner+Opus main。**codex 委譲なし**。
+- **状態**: 残る open question は Q3(sample offset必須=推奨済)・Q4(transport容量・overflow policy・side-channel設計)・Q5(bus arrangement=defer推奨)・Q6(tempo同期=defer推奨)の4問のみ。owner サインオフ後に実装着手。
+
+### 6.231 docs(engine): Phase 2 — M2 instrument IPC substrate 設計 DRAFT（#398） (Jul 12, 2026)
+
+VST3 hosting Phase 0+1（PR #397 MERGED・main `e6476e2`）の次の関門 = **Phase 2 = M2 instrument IPC substrate の SPEC 作業**（`POST_2.0_PLUGIN_STRATEGY.html` §3 の唯一の plan-affecting 決定 = M2 IPC を CLAP イベント形に寄せず format-neutral に仕様化）。Issue #398 / branch `398-vst3-phase2-m2-ipc-design` で DRAFT doc `docs/development/POST_2.0_GAMMA_M2_DESIGN.md` を執筆。owner は就寝中のため、決定を先取りせず open question として明示した状態で停止（[[consult-layering-by-error-type]] の層分け運用）。
+
+- **grounding（fresh agent・opus・一次ソース直読）**: CLAP `free-audio/clap` `events.h`/`note-ports.h`・VST3 `steinbergmedia/vst3_pluginterfaces` `ivstevents.h`/`ivstnoteexpression.h`/`ivstparameterchanges.h`・AU/CoreMIDI macOS SDK ヘッダを直接読み、3 format の event/param/note-expression surface（note_id・per-event sample offset・note-expression 7種・per-voice param modulation・MIDI1/MIDI2/UMP・sysex・NoteChoke/NoteEnd 等）を横断列挙。IR 設計はさせず事実列挙のみに限定（grounding ≠ deciding）。
+- **advisor 2 往復**: ①アプローチ承認 + 4点補強（Q1 を「wire意味論=今superset」「child適用=段階的」に分離する軸・note_id 等の具体欠落例・neutral wire は `orbit-audio-sandbox`（clack-free）の POD にすべき制約・固定長 event slot が要求する capacity/overflow policy）。②draft 後の superset 完全性検査で **grounding にあり §3 案から脱落していた2点（VST3 `ChordEvent`/`ScaleEvent`・transport/musical context の tempo/beat/tsig 同期）+ param automation の canonical 表現未記載 + 受け入れ基準の「CLAP instrument child は現存しない」未明示**を検出 → 全て doc に反映（Chord/Scale は意図的除外を明記して defer、transport/musical context は新設 Q6 として owner 判断に諮る〔サイレント除外にしない〕、param automation は discrete point 列が 3 format の superset である旨を明記、受け入れ基準に「新規 deliverable」「closed-form oracle 必須」を追記）。
+- **doc 構成**: neutral event wire 型の具体案（`#[repr(C)]` tagged union `NeutralEvent`・`VoiceAddr` によるwildcard対応アドレス指定）+ `SharedRegion` への event slot 拡張案（M1 の per-slot `seq_tag`/`n_frames` パターンを踏襲）+ 未決の owner 判断 6問（Q1 分離原則の確定・Q2 neutral IR 戦略・Q3 per-event sample-offset 必須化・Q4 transport layout 具体値/overflow policy・Q5 bus arrangement honor スコープ・Q6 transport/musical context の wire 包含可否）+ Phase 3 受け入れ基準 draft。
+- **役割**: grounding=fresh agent(opus) / 枠組み・superset 完全性検査=advisor / 設計所有・decision drafting=Opus main。**codex 委譲なし**（正本の禁止どおり）。
+- **状態**: DRAFT のまま commit・push・draft PR 作成のみ実施。`/simplify`・`/code:pr-review-team`・merge は回さない（決定 pending の docs-only 変更のため）。owner サインオフ後に Phase 2 実装（`orbit-audio-sandbox` 型定義・SharedRegion 拡張）着手・Phase 3（VST3 instrument）は M2 landing まで引き続き禁止。
+
 ### 6.230 docs(wctm): retarget deadline + relax Max-mandatory premise (#414) (Jul 12, 2026)
 
 藝大コンサート（Max サマースクール・イン・藝大 2026 / 2026-08-07）不採択に伴い、WCTM 関連ドキュメントから「ハード締切 2026-08-07」と「Max 必須（参加条件）」の前提を除去（Issue #414、統括 #413）。**内容の再設計はせず**、藝大版の設計本文はスナップショットとして保持。
