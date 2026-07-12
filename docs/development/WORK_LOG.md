@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.238 docs(engine): M2 §4.7 — host 側 voice 簿記キーを (port,channel,key) に確定（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）Stage6 着手前のレビューで、設計doc §4.2(a)「note_id は monotone 採番・再利用しない」という前提が現行実装のどこにも存在しないことが判明した。Stage4 の `PluginEvent::to_neutral_event`（`orbit-clap-host/src/events.rs`・regression test でロック済み）は既存 `Pckn` 挙動を保持するため常に `note_id: -1`（wildcard）のみを発行する。
+
+- owner に案A（`(port,channel,key)` 参照カウント方式・Stage4 無変更）と案B（Stage4 を修正し host が実 note_id を採番）の2択を提示 → owner が Fable への一発判断を選択。
+- Fable 判断: **案A採用**。理由は (1) 簿記の目的（leak 検出・respawn/枯渇時リセット）に per-instance identity は不要で計数で足りる、(2) CLAP 自身も note_id なしの `Pckn`（port/channel/key specific・note_id wildcard）が第一級動作モード、(3) 案Bは Stage4/Stage5 で確定済みの sample-exact 回帰なし・A/Bパリティを re-open するコストに見合わない、(4) 一括リセット後の遅延 NoteEnd は saturating decrement で無害に吸収される（簿記は観測専用・音響経路を制御しない）。
+- §3 `VoiceAddr.note_id`／§4.2(a) の「monotone 採番」規約は「host が実 note_id を発行し始めた時点から拘束力を持つ条件付き invariant」に再スコープ。§7 受け入れ基準11(b) の文言も参照カウント方式に合わせて修正。
+- **format 横断性の確認（owner からの追加質問）**: この判断が CLAP 固有でなく VST3/AU にも成立するかを owner に問われ、既存の §1.1 grounding table（fresh agent が CLAP/VST3/AU 一次ソースから列挙済み）を再確認。AU の voice identity は「MPE ch / MIDI2 per-note（scalar id なし）」と既に記録されており、§3 の `VoiceAddr` コメントも VST3=`noteId+channel+pitch`（CLAP と同型）・AU=cable+MPE channel 近似（scalar id 自体が無い）と整理済みだった。→ host 側簿記キーの決定は VST3/AU child 実装時にも変更不要であることを §4.7 に追記して明記。
+- Stage6 実装方針として `VoiceKey{port_index,channel,key}` の Rust 定義・increment/decrement/一括リセットの振る舞いを doc に明記（Codex 委譲ブリーフの直接の入力となる）。
+- **役割**: owner が案A/B の選択を Fable に委任 → Fable が一発判断 → Opus main が判断内容を design doc §4.7 に転記・§1.1/§3 との整合を確認して format 横断性を裏取り。実装（Rust コード）はまだ着手していない（次の Codex 委譲の対象）。
+
 ### 6.237 feat(engine): M2 Stage5 Part B — instrument child + A/B parity（#416） (Jul 12, 2026)
 
 M2 instrument IPC substrate（Issue #416）の Stage 5 Part B。Part A（`ClapInstrumentProcessor`）を使い、新規 OOP instrument child + offline event driver + 実 dylib（`rust-spike/clap-test-synth`）での A/B parity gated test を実装し、**§7 受け入れ基準5を実測で充足**した。

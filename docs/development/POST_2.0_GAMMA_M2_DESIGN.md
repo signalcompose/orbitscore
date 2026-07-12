@@ -358,6 +358,50 @@ pub transport_context: [TransportContext; SLOTS],  // host -> child のみ（chi
 - **`SLOTS` 単位で持つ理由は §4.2 の `n_frames`/`seq_tag` と同じ**: 各 child が自分のペースでスロットを消費するため、消費時点で有効だった transport 値を保証するには per-slot 保持が必要（単一グローバル値だと、遅れて消費した child が「未来」の値を読んでしまう可能性がある）。
 - child 側の honor は原則Aどおり段階的でよい: CLAP child は `clap_event_transport` へ、VST3 child は `ProcessContext` へ、AU child は musical-context callback の戻り値へ翻訳する。翻訳できないフィールド（例: VST3 の `continousTimeSamples` 等 host 固有拡張）は child 内で妥当なデフォルトを補う。
 
+### 4.7 host 側 per-voice 簿記のキー — `(port, channel, key)` 参照カウント方式（DECIDED・Fable 一発判断 2026-07-12）
+
+Stage6（#416 統合テスト + host 側 voice 簿記）着手前のレビューで、§4.2 (a) が前提とする「monotone 採番された note_id」が現行実装のどこにも存在しないことが判明した。Stage4 の `PluginEvent::to_neutral_event`（`orbit-clap-host/src/events.rs`）は既存 `drain_to_event_buffer` の CLAP `Pckn` 構成（`note_id = Match::All`）を sample-exact に保持するため、意図的に `VoiceAddr.note_id = -1`（wildcard）のみを発行しており、この挙動は regression test でロックされている（Stage4 受け入れ基準3「既存 NoteOn/NoteOff 経路の sample-exact 回帰なし」の核心）。owner 判断を経て Fable に一発判断を依頼し、以下で確定した。
+
+**確定: host 側 per-voice 簿記のキーは `(port_index, channel, key)` とし、同一キーの多重発音は参照カウントで計数する（案A）。Stage4 の wildcard note_id 発行・regression test は一切変更しない。** あわせて §3 `VoiceAddr.note_id` と §4.2 (a) の「monotone 採番・再利用しない」規約は、「**host が実 note_id（`>= 0`）を発行し始めた時点から拘束力を持つ条件付き invariant**」に再スコープする（wildcard のみを発行する M2 v1 の host は、note_id を1つも採番しないためこの規約を自明に満たす）。案B（Stage4 を修正し host が実 note_id を採番する）は不採用。
+
+**format 横断性（CLAP 固有の判断ではない）**: この決定は host が `VoiceAddr`（neutral wire）だけを見て動く原則B/原則Aの直接の帰結であり、CLAP に限らず VST3・AU にもそのまま成立する。§1.1 の grounding table は AU の voice identity を「MPE ch / MIDI2 per-note（**scalar id なし**）」と記録しており、§3 の `VoiceAddr` 設計コメントも「VST3 は `noteId`+`channel`+`pitch` のみ（`port_index` は `busIndex` に読み替え）、AU は cable+MPE channel で近似」としている。VST3 は CLAP と同型（optional scalar id + pitch/channel フォールバック）、AU に至っては scalar note_id 自体が存在せず (port/cable, channel, key) が最初からネイティブな addressing である。したがって VST3/AU child が実装される時点でも host 側簿記（`VoiceKey`）の変更は不要 — SDK 固有の相関処理は各 child 内部に完全隔離される（§4.2 crate 配置規約）。
+
+**理由（Fable 判断の要旨）**:
+
+- **原則Aの対称適用**: 原則Aは「wire がフィールドを運んでいれば、child の実装能力向上だけで機能が increment し、wire の作り直しは不要」と定めた。同じ論理は host 側の**発行**にも対称に適用できる — wire は `note_id` を今すでに運んでおり（§3）、host がそこに実値を入れ始めるのは「既存フィールドへの値の供給開始」であって wire 変更ではない。per-voice targeting（note-expression / per-voice param mod の per-instance 指定）を DSL/host 機能として公開する時点で実 note_id 採番を有効化すればよく、M2 substrate の landing にそれを先取りする必要はない。
+- **簿記の目的に per-instance identity は不要**: §4.2 の host 側簿記の目的は (i) voice leak の検出・可視化と (ii) `output_note_end_dropped_count` 増分・respawn 時の保守的一括リセットであり、いずれも「どの (port,channel,key) に何本の voice が生きているか」という計数で足りる。per-instance の識別が必要になるのは per-voice targeting を wire に流し始めてからであり、それは M2 v1 には存在しない（host は wildcard しか発行しないので、per-voice ターゲット衝突という §4.2 が防ごうとした故障モード自体が現行 wire 上で構成不能）。
+- **CLAP 自身のアドレッシングモデルと一致**: note_id なしの `Pckn`（port/channel/key specific・note_id wildcard）は CLAP の第一級の動作モードであり、plugin は NOTE_END を含む note 系イベントで host が与えた note_id（= -1）をエコーする。したがって child→host の NoteEnd も現行 wire 上で実際に相関可能な軸は `(port, channel, key)` の3つだけである。同一キー再トリガ時に NoteEnd の帰属が曖昧になるのは wire の表現力の既知の限界（CLAP without note_id と同一）であって新たな劣化ではない — §4.2 の offset クランプが「A0 既採用の簡略化と同じ粒度・新たな精度劣化ではない」と整理したのと同型。
+- **既存契約の保持**: 案Bは Stage4 受け入れ基準3（sample-exact 回帰なし）を re-open する。`Pckn.note_id` を `Specific` にすると in-process 経路の全 plugin に届くバイト列が変わり、plugin 側の note-id ベース voice matching・NOTE_END 発行挙動への影響範囲は未調査。Stage5 で実証済みの A/B パリティ（実 CLAP instrument の M2 経由発音）も再検証が必要になる。簿記のためだけにこのコストを払う便益はゼロ（前項のとおり計数で足りる）。§4.6 が「既存 submit guard が既に保証している — 追加のプロトコル変更なしに成立する」設計を選んだのと同じ判断基準。
+- **リセットの安全性は monotone id なしでも成立**: 一括リセット後に遅延到着した NoteEnd は参照カウントの saturating decrement（下限0）で吸収され、underflow も誤ターゲットも起きない。リセットで新 voice のカウントを誤って減らす可能性は残るが、簿記は観測・health signal であって音響経路を制御しないため（§4.2「可視化は音を変えない」）、帰結は「leak 検出の一時的な過小計数」= 劣化に留まり破損にならない — §4.2 (a) が monotone id で達成しようとした性質そのものが、計数方式では id なしで成立する。
+
+**検討して不採用（案B: Stage4 を修正し host が実 note_id を採番する）**: doc の現行文言には忠実だが、(i) Stage4 の確定済み受け入れ基準を re-open し、(ii) plugin 側挙動への未調査の影響面を開き、(iii) その対価で得られる per-instance identity を M2 v1 の簿記は必要としない。実 note_id 採番は per-voice targeting 機能の landing 時に、その機能の受け入れ基準の一部として導入する（その時点で §3/§4.2 の monotone 規約が拘束力を持つ）。
+
+**Stage6 実装方針（host 側 voice 簿記）**:
+
+```rust
+/// host 側 per-voice 簿記のキー（M2 v1）。wire 上で実際に識別可能な3軸。
+/// host が実 note_id を発行し始めた時点で per-instance キーへ拡張する（§4.7）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VoiceKey {
+    pub port_index: i16,
+    pub channel: i16,
+    pub key: i16,
+}
+```
+
+- **データ構造**: per-child の `VoiceKey → live_count`（`u16` saturating カウンタ）。RT 経路（RT callback 内で input 転送窓へ pop するタイミング）から触る場合は alloc 禁止のため、note port ごとの固定密配列 `[[u16; 128]; 16]`（channel × key・起動時確保）を推奨。簿記更新を非RT側（output reader / health ticker）に置くならプリアロケート済み map でもよいが、いずれも**音響経路を制御しない観測専用構造**とする。
+- **increment**: NoteOn が input 転送窓へ実際に載った時点（backing ring からの pop 成立時）で `live_count` を saturating increment。NoteOff では減算しない（release tail 中の voice は生きている。解放通知は NoteEnd）。
+- **decrement**: output 方向の NoteEnd 受信時に一致キーを saturating decrement（下限0・underflow なし）。NoteEnd/NoteChoke の addr に wildcard（-1）フィールドが含まれる場合は match-all 意味論で該当範囲を一括ゼロ化する（`Pckn` の wildcard 規約と整合）。
+- **`output_note_end_dropped_count` 増分検知時**: 当該 child の全カウンタを一括ゼロ化（保守的リセット）。以後の遅延 NoteEnd は saturating decrement で無害に吸収される。
+- **respawn 検知時（§4.2 (b) 無変更）**: implicit all-voices-end として当該 child の全カウンタを一括ゼロ化。crash による spill FIFO 喪失も leak にならない。
+- **§7 基準 11(b) の文言修正**: 「host が monotone note_id 前提で per-voice 簿記を安全にリセットできること」→「host が `(port, channel, key)` 参照カウント簿記を一括リセットし、リセット後の遅延 NoteEnd が underflow・誤帰属なく吸収されること」。11(c) は変更なし。
+
+**反証可能性 / 留保**:
+
+1. **同一キー高速再トリガ下の計数ドリフト**: §4.6 の in-order 消費と spill FIFO の全順序保存により、drop が無い限り参照カウントは正確に均衡するはずである。§7 の gated stress test（10K ノートバースト）で drop 無しにもかかわらずカウントが恒常的にドリフトする場合、plugin の NOTE_END 発行が仮定（送った NoteOn と1対1）から外れている証拠であり、簿記の意味論を再検討する。
+2. **per-voice targeting の landing = 案B の予約発動**: DSL/host が per-note expression・per-voice param mod を公開する時点で、host の実 note_id 採番（monotone・再利用なし）と `VoiceKey` の per-instance 拡張が**必須**になる。これは本判断の失敗ではなく計画された移行であり、その時点で Stage4 の regression test は「新機能の受け入れ基準の一部」として正式に書き換える（silent な re-open ではなく、per-voice targeting 機能の spec 更新 → 実装の順で行う）。
+3. **NOTE_END を発行しない・(port,channel,key) を specific にエコーしない plugin**: 簿記が減算機会を失い leak 計数が単調増加しうるが、これはキー選択と独立の問題であり、(a) のリセット経路と health signal 可視化が backstop になる（キーを note_id にしても同じ plugin は同じ問題を起こす）。
+
 ---
 
 ## 5. スコープ外（本 doc では扱わない）
