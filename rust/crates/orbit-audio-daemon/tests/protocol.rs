@@ -612,6 +612,71 @@ async fn daemon_error_warning_on_clap_process_error() {
     );
 }
 
+/// in-process CLAP event ring への bounded retry が力尽きた（真の event 喪失）回数が増えると
+/// DaemonError (severity=warning, code=PLUGIN_EVENT_RING_OVERFLOW) が発火する（#400/#402）。
+/// LINK_EGRESS_DROP / CLAP_PROCESS_ERROR と同じ 1 Hz ticker + dedup latch 経路。この counter は
+/// producer 側を別スレッドへ outsource しないので `_arc()` 型の注入 seam ではなく
+/// `plugin_event_ring_overflow_inject` で直接加算する（`EngineWrap` 側の doc 参照）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_plugin_event_ring_overflow() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から ring overflow を注入（1 Hz ticker が plugin_event_ring_overflow_count の増加を検知
+    // して発火）。
+    daemon.engine.plugin_event_ring_overflow_inject(7);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "PLUGIN_EVENT_RING_OVERFLOW"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("PLUGIN_EVENT_RING_OVERFLOW warning event not received");
+    // message は累積 overflow 数（7）を含む = daemon_error_event の format! が壊れていないこと。
+    assert!(
+        message.contains('7'),
+        "PLUGIN_EVENT_RING_OVERFLOW message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**（last_plugin_event_ring_overflow が
+    // 据え置かれること）。再発火すると 1 Hz で warn が溢れる回帰になる。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["code"] == "PLUGIN_EVENT_RING_OVERFLOW"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "PLUGIN_EVENT_RING_OVERFLOW must not re-fire without additional overflow (latch regression)"
+    );
+}
+
 /// device_lost が記録されると DaemonError (severity=fatal, code=DEVICE_LOST) が発火する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn daemon_error_fatal_on_device_lost() {

@@ -859,4 +859,84 @@ mod tests {
         assert!(!validate_bpm(MAX_LINK_BPM + 1.0));
         assert!(!validate_bpm(f64::MAX));
     }
+
+    // #402 pr-test-analyzer: handle_plugin_note の fn-pointer dispatch（call fn / default_velocity /
+    // status 文字列の組み合わせ）が PluginNoteOn/PluginNoteOff の match arm 間で入れ替わっていない
+    // ことを pin する。実 `EngineWrap::plugin_note_on`/`plugin_note_off` を使うと（test backend では
+    // `clap: None` のため）常に ClapUnavailable で早期リターンし velocity が観測できないので、
+    // `call` fn だけを capture 用に差し替える（velocity の解決 = `param_f64(..., default_velocity)`
+    // は `call` を呼ぶ前に handle_plugin_note 内部で完結するため、この capture が唯一の観測手段）。
+    #[tokio::test]
+    async fn handle_plugin_note_forwards_correct_default_velocity_and_status() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static CAPTURED_VELOCITY_BITS: AtomicU64 = AtomicU64::new(0);
+
+        fn capture_velocity(
+            _engine: &EngineWrap,
+            _key: u8,
+            _channel: u8,
+            velocity: f64,
+        ) -> Result<(), WrapError> {
+            CAPTURED_VELOCITY_BITS.store(velocity.to_bits(), Ordering::SeqCst);
+            Ok(())
+        }
+
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let params = json!({"key": 60});
+
+        // "PluginNoteOn" 配線: default_velocity=0.8 / status="note_on"（handle_command 参照）。
+        let resp_on =
+            handle_plugin_note("id-on", &params, &engine, 0.8, "note_on", capture_velocity).await;
+        assert_eq!(
+            f64::from_bits(CAPTURED_VELOCITY_BITS.load(Ordering::SeqCst)),
+            0.8,
+            "PluginNoteOn: velocity 省略時は NoteOn 自身の既定 0.8 に解決されること（NoteOff の \
+             既定と入れ替わっていないこと）"
+        );
+        assert_eq!(resp_on["result"]["status"], "note_on");
+
+        // "PluginNoteOff" 配線: default_velocity=0.0 / status="note_off"。
+        let resp_off = handle_plugin_note(
+            "id-off",
+            &params,
+            &engine,
+            0.0,
+            "note_off",
+            capture_velocity,
+        )
+        .await;
+        assert_eq!(
+            f64::from_bits(CAPTURED_VELOCITY_BITS.load(Ordering::SeqCst)),
+            0.0,
+            "PluginNoteOff: velocity 省略時は NoteOff 自身の既定 0.0 に解決されること"
+        );
+        assert_eq!(resp_off["result"]["status"], "note_off");
+    }
+
+    // #402 pr-test-analyzer: handle_plugin_note の spawn_blocking join-error 分岐
+    // (`Err(join_err) => ProtocolError::new("INTERNAL_ERROR", ...)`) は、このPR以前は
+    // PluginNoteOn/Off が同期実行だったため存在しなかった失敗経路。call fn 内 panic → JoinError →
+    // INTERNAL_ERROR mapping を pin する。
+    #[tokio::test]
+    async fn handle_plugin_note_maps_spawn_blocking_join_error_to_internal_error() {
+        fn panicking_call(
+            _engine: &EngineWrap,
+            _key: u8,
+            _channel: u8,
+            _velocity: f64,
+        ) -> Result<(), WrapError> {
+            panic!("orbit-audio-daemon test: simulated panic inside spawn_blocking call fn");
+        }
+
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let params = json!({"key": 60});
+
+        let resp =
+            handle_plugin_note("id-panic", &params, &engine, 0.8, "note_on", panicking_call).await;
+
+        assert_eq!(resp["error"]["code"], "INTERNAL_ERROR");
+    }
 }

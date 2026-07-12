@@ -856,6 +856,19 @@ impl EngineWrap {
             .load(Ordering::Relaxed)
     }
 
+    /// test harness 用: `plugin_event_ring_overflow_count` を直接加算する注入 seam（#402
+    /// pr-test-analyzer 指摘: sibling counter `link_egress_drops_arc`/`clap_process_errors_arc` に
+    /// ある「1 Hz ticker の dedup latch（増加時のみ発火・据え置きでは再発火しない）」の integration
+    /// test パターンが、この counter にはまだ無かった）。他の2つと違い `Arc` を返さないのは、この
+    /// counter が別スレッドへ producer 側を outsource しない（`EngineWrap` 自身が bounded retry の
+    /// 末に直接書く）フィールドだから（struct 定義側の doc 参照）— `&self` 越しの直接 `fetch_add` で
+    /// 足りる。`#[doc(hidden)]` で公開 API としては扱わない。
+    #[doc(hidden)]
+    pub fn plugin_event_ring_overflow_inject(&self, n: u64) {
+        self.plugin_event_ring_overflow_count
+            .fetch_add(n, Ordering::Relaxed);
+    }
+
     /// test harness / gated 計測用: OOP effect の観測スナップショット（fresh/stale/stall/respawn/
     /// child error 等）。slot 数決定（stale 率）と child crash 生存（respawn）の検証に使う。`#[doc(hidden)]`。
     /// plugin 未起動 / outproc 無効 / poison 時は None（poison は warn で区別）。
@@ -1382,6 +1395,65 @@ mod plugin_event_ring_retry_tests {
             overflow.load(Ordering::Relaxed),
             0,
             "fatal outcome is not an overflow (retrying would not have helped)"
+        );
+    }
+}
+
+/// `push_plugin_event`（`plugin_note_on`/`plugin_note_off` の共通経路）を、test backend
+/// （`clap: Mutex<Option<ClapControl>>` が `None`）越しに直接叩く（#402 pr-test-analyzer 指摘: 上の
+/// `plugin_event_ring_retry_tests` は `push_with_bounded_retry` を bare `rtrb::Producer` クロージャで
+/// 検証するのみで、本番の `push_plugin_event` クロージャ（mutex lock/poison 分岐・
+/// `guard.as_mut() == None` → `ClapUnavailable` の Fatal 分岐）を一度も経由していなかった）。
+///
+/// `Sent` 分岐（実際に event ring へ push が成功する）と mutex-poisoned 分岐は、実 clap-host
+/// 初期化済み `EngineWrap`（`EngineWrap::start()` が spawn する専用スレッド + 実 audio stream）が
+/// 要るため practical でない。ここでは `start_with(StubBackend)` で到達可能な None/ClapUnavailable
+/// 分岐にスコープする。
+#[cfg(feature = "clap-host")]
+#[cfg(test)]
+mod push_plugin_event_tests {
+    use super::{EngineWrap, WrapError};
+    use crate::backend::StubBackend;
+
+    #[test]
+    fn plugin_note_on_returns_clap_unavailable_when_clap_not_initialized() {
+        let (engine, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend starts");
+        let before = engine.plugin_event_ring_overflow_count();
+
+        let err = engine
+            .plugin_note_on(60, 0, 0.8)
+            .expect_err("test backend has no clap control (clap field is None)");
+
+        assert!(
+            matches!(err, WrapError::ClapUnavailable(_)),
+            "expected ClapUnavailable (Fatal short-circuit), got {err:?}"
+        );
+        assert_eq!(
+            engine.plugin_event_ring_overflow_count(),
+            before,
+            "Fatal short-circuit must not be counted as a bounded-retry overflow"
+        );
+    }
+
+    #[test]
+    fn plugin_note_off_returns_clap_unavailable_when_clap_not_initialized() {
+        let (engine, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend starts");
+        let before = engine.plugin_event_ring_overflow_count();
+
+        let err = engine
+            .plugin_note_off(60, 0, 0.0)
+            .expect_err("test backend has no clap control (clap field is None)");
+
+        assert!(
+            matches!(err, WrapError::ClapUnavailable(_)),
+            "expected ClapUnavailable (Fatal short-circuit), got {err:?}"
+        );
+        assert_eq!(
+            engine.plugin_event_ring_overflow_count(),
+            before,
+            "Fatal short-circuit must not be counted as a bounded-retry overflow"
         );
     }
 }
