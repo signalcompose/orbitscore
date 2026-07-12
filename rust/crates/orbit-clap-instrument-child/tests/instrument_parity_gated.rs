@@ -11,7 +11,7 @@ use orbit_audio_sandbox::offline::render_instrument_through_child_sync_with_opti
 use orbit_audio_sandbox::{
     max_abs_diff, NeutralEvent, RenderOptions, VoiceAddr, CHANNELS, MAX_FRAMES,
 };
-use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor};
+use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
 const PLUGIN_ID: &str = "com.signalcompose.clap-test-synth";
 const SAMPLE_RATE: u32 = 48_000;
@@ -44,15 +44,7 @@ fn render_in_process(
     )
     .expect("load test synth (side A)");
     let mut out = Vec::with_capacity(events_by_block.len() * block_frames * CHANNELS);
-    let mut event_buf = Default::default();
-    let _ = push_neutral_event(
-        &mut event_buf,
-        &NeutralEvent::NoteChoke {
-            sample_offset: 0,
-            addr: VoiceAddr::WILDCARD,
-        },
-    );
-    event_buf.clear();
+    let mut event_buf: EventBuffer = Default::default();
     for events in events_by_block {
         event_buf.clear();
         for event in events {

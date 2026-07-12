@@ -22,6 +22,7 @@ mod host;
 mod instrument;
 mod processor;
 
+pub use clack_host::events::io::EventBuffer;
 pub use controller::{ClapHost, ClapHostError, LoadedPluginInfo};
 pub use discovery::DiscoveryError;
 pub use effect::ClapEffectProcessor;

@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.243 refactor(engine): M2 `/simplify` 指摘対応（#416） (Jul 12, 2026)
+
+PR #417（M2 instrument IPC substrate）の必須レビュー手順 `/simplify`（4並列クリーンアップagent: reuse/simplification/efficiency/altitude）の指摘に対応。
+
+**修正した3件**（RT安全性・効率性の実欠陥。in-scope の新規コードのため修正が妥当と判断）:
+- `orbit-clap-instrument-child/src/main.rs`: `decode_slot_events` が毎ブロック `Vec::with_capacity` でヒープ確保していた RT-safety 違反を解消。呼び出し側提供の sink（`&mut Vec<NeutralEvent>`）に書き込む方式に変更し、既存の clamp/invalid-skip ロジックを純関数として保ったまま production hot loop でバッファを再利用（ループ外で1回 `Vec::with_capacity(MAX_EVENTS_PER_BLOCK)` するのみ）。あわせて `event_buf`（CLAP `EventBuffer`）の事前確保も、ダミー event を4096回 push する手動ループから `EventBuffer::with_capacity()`（`orbit-clap-host` から新規 re-export）に置き換え。
+- `orbit-audio-sandbox/src/instrument_host.rs`: `VoiceTable::choke()` に `note_end()` と同じ fast-path（addr が完全 specific なら単一セル直接アクセス、wildcard を含むなら `for_matching` 全走査）を追加。specific choke が他キーに影響しないことを確認する回帰テストを追加。
+- `orbit-clap-instrument-child/tests/instrument_parity_gated.rs`: 何の効果もない pre-warm 残骸（push 直後に clear、ループ1周目でも再度 clear されるため無意味）を削除。
+
+**スキップした4件**（理由を分けて記録）:
+- `PipelinedInstrumentHost`/`PipelinedEffectHost`（`host.rs`）の slot-protocol 重複、`offline.rs` の sync driver 重複、`ClapInstrumentProcessor`/`ClapEffectProcessor`（`effect.rs`）の重複 — **いずれも修正には既存 M1 コード（`host.rs`/`offline.rs` の既存関数/`effect.rs`）への変更を要する**。全 Stage の委譲ブリーフで一貫して「M1 は無変更」と明記してきたスコープ規律（design doc §4.6）に従い、#416 の diff 範囲外として見送り。
+- `EventBackingRing`/`EventSpillFifo`（Stage3・本PRで新規追加）の構造的重複 — reuse/altitude/simplification の3agentが独立に収斂した指摘。**この2つは両方とも本PRの新規コードであり、M1スコープ外という理由は使えない**。テスト済みのRT-safe型を landing 間際に再構成するコストが、スタイル上のDRY化の利益に見合わないと判断し、意図的な先送り（premature-abstraction回避）として見送った。将来のfollow-up候補として記録するのみで、今回は issue化しない（軽微な将来リファクタ候補のため）。
+- 全32 orbit-audio-sandbox unit test + workspace全体 fmt/clippy/test を Opus main が独立に再実行して確認（Codexの自己申告のgreenを鵜呑みにせず、4ファイルの diff を全て読んでロジックを確認済み）。
+- **役割**: 4クリーンアップagentの実行・所見統合・修正要否の判断（M1スコープ外 vs 新規コードでの意図的先送りの区別）＝ advisor 確認の上で Opus main。**実装（3ファイル4箇所）＝ codex 委譲**。
+- **状態**: `/simplify` 完了。次 `/code:pr-review-team`。
+
 ### 6.242 docs(engine): M2 respawn resume-semantics ギャップを専用issueに切り出し（#416） (Jul 12, 2026)
 
 6.241 で発見した「respawn 後の in-order child が historical seq を再処理する」設計限界について、design doc §4.2(b) のスコープ外注記が「#408 と同様に defer」と記していたが、**#408 の実際のスコープは tempo/transport-context live state の供給側**（Engine/Scheduler への tempo 読み出し可能 state 実装）であり、respawn resume-semantics とは無関係だったことが owner からの確認で判明。#409（multi-bus audio）・#410（load-confirm race）も同様に無関係。

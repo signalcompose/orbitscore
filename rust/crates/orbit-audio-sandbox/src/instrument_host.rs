@@ -86,7 +86,15 @@ impl VoiceTable {
     }
 
     fn choke(&mut self, addr: VoiceAddr) {
-        self.for_matching(addr, |count| *count = 0);
+        if addr.port_index == -1 || addr.channel == -1 || addr.key == -1 {
+            self.for_matching(addr, |count| *count = 0);
+        } else if let Some((port, channel, note)) = Self::indices(VoiceKey {
+            port_index: addr.port_index,
+            channel: addr.channel,
+            key: addr.key,
+        }) {
+            self.counts[port][channel][note] = 0;
+        }
     }
 
     fn reset_all(&mut self) {
@@ -495,6 +503,24 @@ mod tests {
         host.process_block(&mut out, &[], transport(120.0, 0.0));
         assert_eq!(host.live_count(key60), 0);
         assert_eq!(host.live_count(key61), 0);
+    }
+
+    #[test]
+    fn specific_choke_clears_only_matching_voice() {
+        let mut voices = VoiceTable::new();
+        let key60 = VoiceKey {
+            port_index: 0,
+            channel: 1,
+            key: 60,
+        };
+        let key61 = VoiceKey { key: 61, ..key60 };
+        voices.increment(key60);
+        voices.increment(key61);
+
+        voices.choke(addr(0, 1, 60));
+
+        assert_eq!(voices.live_count(key60), 0);
+        assert_eq!(voices.live_count(key61), 1);
     }
 
     #[test]

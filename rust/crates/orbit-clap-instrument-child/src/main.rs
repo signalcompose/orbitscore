@@ -10,7 +10,7 @@ use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, NeutralEvent, BUF_LEN, CHANNELS,
     CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
-use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor};
+use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
 struct Args {
     shm: PathBuf,
@@ -52,20 +52,20 @@ fn in_order_seqs(last: u64, cur: u64) -> impl Iterator<Item = u64> {
     last.saturating_add(1)..=cur
 }
 
-fn decode_slot_events(records: &[EventRecord], count: u32) -> (Vec<NeutralEvent>, u32) {
+fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<NeutralEvent>) -> u32 {
+    sink.clear();
     let count = (count as usize)
         .min(MAX_EVENTS_PER_BLOCK)
         .min(records.len());
-    let mut decoded = Vec::with_capacity(count);
     let mut failures = 0;
     for record in &records[..count] {
         if let Some(event) = record.decode() {
-            decoded.push(event);
+            sink.push(event);
         } else {
             failures += 1;
         }
     }
-    (decoded, failures)
+    failures
 }
 
 fn main() -> Result<()> {
@@ -81,21 +81,9 @@ fn main() -> Result<()> {
     )
     .with_context(|| format!("load CLAP instrument {:?}", args.plugin))?;
     let mut scratch = vec![0.0f32; BUF_LEN];
-    let mut event_buf = Default::default();
-    // EventBuffer 型は orbit-clap-host の公開 API から推論し、最大窓ぶんをループ前に確保する。
-    // ParamValue は本経路が翻訳する標準 event のうち大きい部類なので、以後の push は既存容量を再利用する。
-    for _ in 0..MAX_EVENTS_PER_BLOCK {
-        let _ = push_neutral_event(
-            &mut event_buf,
-            &NeutralEvent::ParamValue {
-                sample_offset: 0,
-                param_id: 1,
-                addr: orbit_audio_sandbox::VoiceAddr::WILDCARD,
-                value: 0.0,
-            },
-        );
-    }
-    event_buf.clear();
+    // Event window 分を事前確保し、hot loop での buffer 再確保を避ける。
+    let mut event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);
+    let mut event_scratch: Vec<NeutralEvent> = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
     let mut process_errors = 0u64;
     let mut last = 0u64;
 
@@ -119,8 +107,13 @@ fn main() -> Result<()> {
                     .load(Relaxed)
                     .min(MAX_EVENTS_PER_BLOCK as u32)
             };
-            let (events, decode_errors) =
-                unsafe { decode_slot_events(&(*region).input_events[idx], event_count) };
+            let decode_errors = unsafe {
+                decode_slot_events(
+                    &(*region).input_events[idx],
+                    event_count,
+                    &mut event_scratch,
+                )
+            };
             if decode_errors != 0 {
                 unsafe {
                     (*region)
@@ -129,7 +122,7 @@ fn main() -> Result<()> {
                 }
             }
             event_buf.clear();
-            for event in &events {
+            for event in &event_scratch {
                 let _ = push_neutral_event(&mut event_buf, event);
             }
             scratch[..sample_count].fill(0.0);
@@ -192,7 +185,8 @@ mod tests {
         invalid.kind = u32::MAX;
         let mut records = vec![valid, invalid];
         records.resize(MAX_EVENTS_PER_BLOCK + 1, valid);
-        let (decoded, failures) = decode_slot_events(&records, u32::MAX);
+        let mut decoded = Vec::new();
+        let failures = decode_slot_events(&records, u32::MAX, &mut decoded);
         assert_eq!(decoded.len(), MAX_EVENTS_PER_BLOCK - 1);
         assert_eq!(failures, 1);
         assert_eq!(decoded[0], note_on(60));
