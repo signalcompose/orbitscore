@@ -1,9 +1,11 @@
 # γ M2 設計 — instrument IPC substrate（format-neutral event/param）
 
-> 🚧 **status: DRAFT — owner サインオフ待ち。** wire の設計方針（§2/§3・旧 Q1/Q2）・per-event sample
-> offset（Q3）・transport 容量設計（Q4・§4）は **owner 確定済み**。残り §6 Q5-Q6（bus arrangement /
-> transport-musical-context のスコープ判断）のみ未決。owner が全項目を確定するまで、本 doc を正本として
-> 実装に着手しない（Phase 3 = VST3 instrument は本 doc の landing 後）。
+> 🚧 **status: DRAFT — §7 受け入れ基準・PR レビュー未消化。** wire の設計方針（§2/§3・旧 Q1/Q2）・
+> per-event sample offset（Q3）・transport 容量設計（Q4・§4）・bus arrangement アドレッシング（Q5）・
+> transport/musical context（Q6・§4.5）は **すべて owner 確定済み（2026-07-12）**。実装の一部
+> （tempo plumbing = #408・multi-bus audio transport = #409）は意図的に別 issue へ切り出し済み
+> （サイレント除外ではない・追跡可能）。次は本 doc の `/simplify` → `/code:pr-review-team` 通過
+> （本 doc は docs-only のため advisor 相談で軽量パスも判断対象）と、§7 の Phase 3 landing 準備。
 
 - **Issue**: #398（本 doc）/ 親 #395（VST3 hosting plan）/ Epic #292
 - **正本（決定の根拠）**: [`POST_2.0_PLUGIN_STRATEGY.html`](POST_2.0_PLUGIN_STRATEGY.html) §3（唯一の plan-affecting 決定）・[`POST_2.0_VST3_HOSTING_PLAN.md`](POST_2.0_VST3_HOSTING_PLAN.md) §Phase 2・[`POST_2.0_GAMMA_M1_DESIGN.md`](POST_2.0_GAMMA_M1_DESIGN.md)（M1/M2 境界）
@@ -29,6 +31,11 @@
 8. **Q3（sample offset）は owner 即決**（「含める」）。**Q4（transport 容量）で第2の紆余曲折**: 当初「64個/ブロック・drop-oldest」を提案 → owner が「実験的な用途で見えない天井になりかねない」と懸念 → grounding agent が JUCE(容量制限なし)・JACK MIDI(2048B/cycle・drop+count)・VST3(~2048 events/block 相当)を調査し、64 が業界水準より小さいことを裏付け → Fable が「drop-oldest は捨てられるイベントに NoteOff が含まれうるため stuck note を生む」構造的欠陥を指摘し、「上限を大きくする」でなく「溢れても失わない」設計(4096窓+backing ring lossless spillover)へ転換 → owner がさらに「本当に上限を作る形でよいか・既存 CLAP ホストの同種欠陥を今直すべきでは・アーキ全体の監査は要らないか」と3点を再度問う → 2回目の Fable 判断で「time-budget 方式は転送コピーが軽すぎて意味がなく決定論も壊すため不採用・4096+spillover のまま」「既存 in-process CLAP ring は producer が非RTスレッドなので bounded retry だけで安価に直せる→今すぐ別 issue で」「exhaustive 監査は不要・見つかった2件(既存ring+`Engine::with_scheduler`のsilent zero-fill)を issue化し再発防止は宣言原則の成文化で足りる」と確定。owner はこの「監査不要」判断についても「Fable は高コストなので、もっと安いやり方で本当に不要か検討し直せ」と再度指摘 → fresh agent(opus・低コスト)による TS層+grepパターン非依存の拡張調査を別途実施（結果は #400/#401 と合わせて記録）。
 
 **教訓2**: 数値の妥当性（「64は十分か」）を検討する前に、**「溢れた時に何を失うか」の質**（drop-oldest が stuck note を生む等）を先に検討すべきだった。また「決定的な一発判断」が必要な論点（wire構造・容量アーキテクチャ）と「網羅的な接地確認」が必要な論点（既存コードに同種欠陥が他にないか）は異なる mechanism を使うべきで、後者を high-cost な Fable で行うのはコスト対効果が悪い（fresh general-purpose agent で足りる）。
+
+9. **Q5/Q6 で owner が「今見送るとあとで負債になる」と明確に反論**（2026-07-12）:
+   - **Q6（transport/musical context）**: owner 「エンジン自体がテンポ情報を持っており、seq ごとにも送れる。活用ケースは必ずあるので見送る意味が全くわからない」。grounding で確認したところ、実際には `orbit-audio-core::Engine`/`Scheduler` に読み出し可能な live tempo state は無く（`engine_wrap::set_link_tempo` は Ableton Link セッションへの一方通行 push のみで、TS 側 `DaemonPlayParams` にも per-seq tempo フィールドは無い）。事実前提には訂正が要ったが、advisor は「事実の訂正は owner の priority 判断（『必ず使う』）そのものを覆さない」と整理し、**選択肢(a)（wire に含める）を採用**。「wire に transport-context header を今置く」ことと「tempo 値を Engine に実際に供給する仕組み（DSL→engine plumbing）」を2段階に分離し、後者は **#408 で追跡**（owner: 「追跡可能にしておいて」）。
+   - **Q5（bus arrangement）**: owner 「後からミキサー実装を変更する時にどのみち払うコストなら、プラグイン側インターフェースの定義は今決めておいた方が後の修正が楽になるのでは」。grounding で `POST_2.0_MIXER_DSL_DESIGN.html`（Issue #337 のディスカッション記録）を発見し、**DSL 層では sidechain 入力が既に「スコープ in」と決定済み**であることを確認（§6/§11 決定台帳）。ただし advisor は「audio 実装コストが実装時点で同じという前提は、同一ビルド前提（published ABI 無し）では誇張。実装 defer は実際に安い」と指摘し、**実装の前倒しではなく「アドレッシング・インターフェースは doc に明記・audio 実装は引き続き defer」の分離**を提案。owner はこの分離（「インターフェース層と分けて考えるの大事」）に同意。実装は **#409 で追跡**。
+   - **教訓3**: 「見送ると負債になるか」という owner の懸念の核は「実装を今やること」ではなく「defer が サイレントな忘却になること」だった。doc に明記し issue 化して追跡可能にすれば、実装の即時前倒しをせずに解消できる場合がある。M2 と同じ「wire/インターフェースは今・実装の一部は段階的」という原則Aの型が、event の意味論だけでなく block-level context（Q6）・audio bus（Q5）にも一貫して適用できた。
 
 ---
 
@@ -273,22 +280,50 @@ M2 の容量設計を検討する過程で、同じ欠陥パターンが**既存
 - **#400**: in-process CLAP event ring（`orbit-audio-daemon/src/engine_wrap.rs` の `push_plugin_event`）— 満杯時 drop-newest だが可視化カウンタなし・producer が RT スレッドでないため bounded retry だけで lossless 化できる。
 - **#401**: `Engine::with_scheduler` の try_lock 経路（`orbit-audio-core/src/engine.rs`）— lock 競合時に1ブロック無音化するが可視化なし。lock-free 化は別途 defer 済みの判断を維持し、contention counter のみ追加。
 
+### 4.5 Transport/musical context（tempo/beat/tsig）— DECIDED（§6 Q6・owner 確定 2026-07-12）
+
+grounding で確認した欠落（CLAP `clap_event_transport` / VST3 `ProcessContext` / AU `AUHostMusicalContextBlock`）を wire に含める。**event ではなく per-slot・per-block の header**として持たせる（3 format とも process 呼び出し単位で消費する block-level metadata であり、event ストリームに混ぜると submit protocol の形自体を汚すため）。原則Aと同じ「今 superset・child の honor は段階的でよい」だが、**単位が event でなく block である点**が §3 の `EventRecord` と異なる。
+
+```rust
+/// per-block の演奏文脈（event ではなく block header）。CLAP/VST3/AU が
+/// process 呼び出しのたびに共通して消費する transport metadata の superset。
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct TransportContext {
+    pub tempo_bpm: f64,            // 0.0 = 未供給（#408 の plumbing 完了までは 0.0 になりうる）
+    pub time_sig_numerator: u16,
+    pub time_sig_denominator: u16,
+    pub is_playing: u8,            // POD union の安全性規約（§3）に合わせ bool でなく u8
+    pub is_looping: u8,
+    pub song_position_beats: f64,  // 直近 block 先頭の楽曲内位置（拍単位・四分音符=1.0・CLAP song_pos_beats/VST3 projectTimeMusic 相当）
+}
+
+// SharedRegion に追加するフィールド（イラストレーティブ）
+pub transport_context: [TransportContext; SLOTS],  // host -> child のみ（child からの逆方向は無い）
+```
+
+**設計判断メモ**:
+- **`tempo_bpm=0.0` は「未供給」の sentinel**（0 BPM は演奏上意味を持たないため衝突しない）。tempo-sync 機能を持つ child は 0.0 を「host からテンポ供給なし」と解釈し、自走（free-run）してよい — 原則Aの「honor できない/データが無ければ drop/フォールバックしてよい」規約と同型。**#408（plumbing）が完了するまでは常に 0.0 になりうる**ことを正直に記録する（サイレントに「動いているように見える」ことを避ける）。
+- **loop cycle 点（VST3 `cycleStartMusic`/`cycleEndMusic`・CLAP `loop_start_beats`/`loop_end_beats`）は v1 スコープ外**（Custom note-expression variant・ChordEvent と同様の理由：稀な用途・同一ビルド前提で後から named field 追加可能）。
+- **`SLOTS` 単位で持つ理由は §4.2 の `n_frames`/`seq_tag` と同じ**: 各 child が自分のペースでスロットを消費するため、消費時点で有効だった transport 値を保証するには per-slot 保持が必要（単一グローバル値だと、遅れて消費した child が「未来」の値を読んでしまう可能性がある）。
+- child 側の honor は原則Aどおり段階的でよい: CLAP child は `clap_event_transport` へ、VST3 child は `ProcessContext` へ、AU child は musical-context callback の戻り値へ翻訳する。翻訳できないフィールド（例: VST3 の `continousTimeSamples` 等 host 固有拡張）は child 内で妥当なデフォルトを補う。
+
 ---
 
 ## 5. スコープ外（本 doc では扱わない）
 
 - **DSL 構文**: VST3 hosting plan §6 のとおり non-blocking な後続判断。
-- **bus arrangement honor（multi-out/sidechain）**: audio transport 側の拡張であり本 doc の event/param IPC とは直交。§6 Q5 でスコープ判断のみ諮る。
+- **bus arrangement honor（multi-out/sidechain）の実装**: audio transport 側（`SharedRegion` の audio 配列）の拡張であり本 doc の event/param IPC とは直交。アドレッシング・インターフェースの決定は §6 Q5 で確定済みだが、実装自体は **#409** に切り出し（DECIDED・スコープ外のまま）。
 - **`orbit-clap-host::PluginEvent`（in-process 経路）を neutral wire に収斂させるか**: 収斂の要否・時期は follow-on 判断（M2 の OOP substrate 自体には影響しない）。
 - **VST3/AU instrument child の実装**（Phase 3）。
-- **transport/musical context（tempo/beat/tsig 同期）は明示的に defer するか wire に含めるかを §6 Q6 で決める**（サイレント除外にしない — 理由は §6 Q6 参照）。
+- **transport/musical context（tempo/beat/tsig）の実データ供給**: wire への header 追加は §6 Q6・§4.5 で DECIDED（M2 スコープ内）。Engine への live tempo state plumbing（DSL→engine）は **#408** に切り出し（M2 本体をブロックしない）。
 - **sysex / 可変長 note-expression text / Chord-Scale の text 部の低頻度 side-channel 設計**: 原則C で存在の必要性は確定したが、具体設計（メッセージ形式等）は実装時に詰める。
 
 ---
 
-## 6. 残りの owner 判断（open questions — 先取りしない）
+## 6. owner 判断（Q1-Q6 すべて DECIDED・2026-07-12）
 
-旧 Q1/Q2（wire の設計方針）は §2/§3 で **DECIDED** 済み。**Q3・Q4 も本節下記のとおり DECIDED**（owner 確定 2026-07-12）。残る open question は **Q5・Q6 の2問のみ**。owner サインオフを得るまで本 doc は DRAFT のまま。
+旧 Q1/Q2（wire の設計方針）は §2/§3 で **DECIDED** 済み。**Q3-Q6 も本節下記のとおり全て DECIDED**（owner 確定 2026-07-12）。open question は残っていない。次は §7 の Phase 3 landing 準備と、本 doc 自体の `/simplify` → `/code:pr-review-team` 通過。
 
 **判定軸（何を今決め、何を defer してよいか）**: neutral wire は同一 build 前提（cross-process だが published ABI ではなく host/child は同一ビルド）なので、named variant の追加自体は後から再コンパイルで足せる。真の論点は **wire ABI 互換性ではなく、その event が DSL timing・session log・translate 契約・daemon push API など周辺層とどれだけ結合するか**: 結合が薄い自己完結 event（例: Chord/Scale の数値部）はサイレントでない「意図的除外」の明記だけで defer 可、結合が強い次元（例: sample_offset・transport/musical-context）は defer すると周辺層の作り直しを招くため今決める必要がある。
 
@@ -298,31 +333,39 @@ M2 の容量設計を検討する過程で、同じ欠陥パターンが**既存
 ### Q4 — transport layout の具体値・overflow policy・side-channel 設計【DECIDED（owner + Fable 確定）】
 **確定内容は §4 参照**（`MAX_EVENTS_PER_BLOCK=4096` + backing ring による lossless spillover + drop-newest は backing ring 枯渇時のみ + note-off サイレント drop 禁止 + `event_dropped_count`/`event_spilled_count` の非音響可視化）。当初案「64個・drop-oldest」は owner の「実験的用途で見えない天井になる」懸念 → Fable レビューで不適格と判明 → 「上限を大きくする」でなく「溢れても失わない」設計へ転換した経緯は §4.1 参照。sysex・可変長 note-expression text・Chord/Scale text 部の低頻度 side-channel は**存在の必要性のみ確定・具体設計は実装時に詰める**（原則C）。input/output event slot の bidirectional 構成は §4.2 のとおり確定。
 
-### Q5 — bus arrangement honor（multi-out/sidechain）を M2 スコープに含めるか、明示 defer か
-**推奨**: defer。M1 は単一 stereo sum（既知 coverage gap として記録済み・`POST_2.0_VST3_HOSTING_PLAN.md` §1）。event/param IPC と audio bus 拡張は直交する関心事であり、M2 の主眼（instrument の note/param 駆動）を先に landing させ、multi-out/sidechain は別 issue に切り出せる。
+### Q5 — bus arrangement honor（multi-out/sidechain）を M2 スコープに含めるか【DECIDED（owner + advisor 確定）】
+**確定: インターフェース（アドレッシングの考え方）は今決める・audio transport の実装は defer**（実装先送り自体は #409 で追跡・サイレント除外にしない）。
 
-### Q6 — transport/musical context（tempo/beat/tsig 同期）を M2 の wire に含めるか、明示 defer するか
-grounding が指摘した欠落（CLAP `clap_event_transport` / VST3 `ProcessContext` / AU `AUHostMusicalContextBlock`）。**サイレント除外は不可**（DSL timing・session log 等の周辺層と結合するため — 上記「判定軸」）。内蔵 arp/LFO/tempo-sync effect を持つ 3rd-party instrument はこれが無いと host tempo に追従せず free-run する。選択肢:
-- **(a) wire に含める** — per-block の transport context を event とは別の構造（block header 的な固定フィールド、SharedRegion に tempo/beat/tsig を per-slot で持たせる）として今設計する。
-- **(b) 明示 defer** — v1 は「内蔵テンポ同期 instrument は非対応」と明記して外す。現状 TS 側の absolute-time scheduling（`event-scheduler.ts`）が個々の note の絶対時刻を計算し尽くしているため、note/param IPC さえあれば当面の instrument 演奏は成立する（tempo-sync arp/LFO 等の特殊機能を持つ instrument だけが対象外になる）。
+owner の懸念（「後からミキサー実装を変更する時にどのみち払うコストなら、プラグイン側インターフェースは今決めておいた方が後の修正が楽」）を受け、grounding で `POST_2.0_MIXER_DSL_DESIGN.html`（Issue #337）を確認したところ、**DSL 層では sidechain 入力（aux 入力ポート）が既に「スコープ in」と決定済み**（§6/§11 決定台帳）。ただし advisor 検査により「audio 実装コストが今も後も同じ」という前提は同一ビルド前提（published ABI 無し）では誇張と判明し、**実装の前倒しではなく次の分離が妥当**と確定した:
 
-**推奨**: (b)（defer・doc に明記した上で）。理由: 現行 DSL は絶対時刻ベースでスケジューリングしており、tempo-sync 系機能を要する instrument は当面のユースケースに乏しい（M1 でも同種の「未使用機能は cutover bar から外す」判断〔正本 §4〕と整合）。ただし (a)/(b) いずれも owner 確定が必要。
+- **今決める（M2 スコープ内）**: M2 の event/param wire（§3 `VoiceAddr.port_index`）は、将来 instrument が multi-port/multi-bus 構成を持つ場合でも、per-port/per-bus 宛のイベントアドレッシングを妨げない。追加のアドレッシング設計は不要（既存 `port_index` フィールドが hook として機能する）。
+- **defer する（M2 スコープ外・#409 で追跡）**: `SharedRegion` の audio input/output 配列を単一 stereo sum から複数バス（sidechain input・multi-out）へ拡張する**実装**。M1 effect・M2 instrument が共有する audio transport の拡張であり、DSL 側でミキサー/ルーティング構文（`POST_2.0_MIXER_DSL_DESIGN.html` の具体化）に着手するタイミング、または Phase 3 で multi-bus/sidechain を要する具体プラグインが出たタイミングで着手する。
+- **インターフェース層（アドレッシングの考え方）と実装層（audio 配列の物理拡張）を分けて考える**のが owner・advisor 共通の結論。前者は今回の grounding で「既存設計が既に満たしている」ことを確認できたため、追加の doc 化以上の作業は不要だった。
+
+### Q6 — transport/musical context（tempo/beat/tsig 同期）を M2 の wire に含めるか【DECIDED（owner + advisor 確定）】
+**確定: (a) wire に含める。ただし「wire に header を置く」ことと「tempo 値を実際に Engine から供給する」ことは2段階に分離し、後者は #408 で追跡する。**
+
+grounding が指摘した欠落（CLAP `clap_event_transport` / VST3 `ProcessContext` / AU `AUHostMusicalContextBlock`）は、内蔵 arp/LFO/tempo-sync effect を持つ 3rd-party instrument が host tempo に追従できず free-run してしまう問題を生む。owner（「エンジン自体がテンポ情報を持っており、seq ごとにも送れる。活用ケースは必ずあるので見送る意味が全くわからない」）の指摘どおり、**サイレント除外は不可**と判断し (a) を採用。
+
+- **今決める・M2 スコープ内（§4.5）**: `TransportContext`（tempo/time-sig/is_playing/is_looping/song_position_beats）を per-block header として `SharedRegion` に追加する。設計詳細は §4.5 参照。
+- **defer する・#408 で追跡**: `orbit-audio-core::Engine`/`Scheduler` は現状「今のテンポ」を読み出し可能な live state として持たない（`engine_wrap::set_link_tempo` は Ableton Link への一方通行 push のみ・TS 側 `DaemonPlayParams` にも per-seq tempo フィールドは無い）。DSL からのテンポ指定（`global.tempo`・seq 単位）をこの live state に反映し、M2 の per-block submit 経路が `TransportContext` へ書き込めるようにする仕組みは、別 issue（#408）の作業とする。**v1 の M2 landing 時点では `tempo_bpm=0.0`（未供給）が有効値として観測されうる**ことを明記する（§4.5 参照）。
+- 事実確認: grounding での Engine 調査は「テンポ情報を持っている」という owner の前提の一部（グローバルな Link tempo push の存在）は正しいが、「seq ごとに送れる」を裏付ける per-seq tempo 経路は現状のコードには見当たらなかった。advisor はこの事実訂正について「owner の priority 判断（活用ケースが必ずある）そのものは覆らない」と整理しており、(a) 採用の結論はこの訂正後も変わらない。
 
 ---
 
 ## 7. Phase 3 受け入れ基準（draft — M2 landing の定義）
 
-Q5-Q6 が owner サインオフ済みであることに加え、以下を M2 substrate の landing 条件とする案（advisor 検査対象）:
+Q1-Q6 は全て owner サインオフ済み（§6）。以下を M2 substrate の landing 条件とする案（advisor 検査対象）:
 
 1. `orbit-audio-sandbox::EventRecord`/`EventPayload`（§3）が `#[repr(C)]` POD として定義され、`cargo tree -p orbit-audio-sandbox` に clack・vst3 系 crate が出現しないこと（原則B の回帰テスト）。
 2. `EventRecord::decode()` が **未検証の enum transmute を行わず**、未知 `kind` を `None` + `event_decode_error_count` 増分で処理すること（原則D の安全性要件・unit test で不正 kind を注入して確認）。
 3. `orbit-clap-host` 側に `PluginEvent → NeutralEvent` / `NeutralEvent → clack EventBuffer` の双方向 translate が実装され、既存の NoteOn/NoteOff 経路が sample-exact に回帰しないこと（offline test）。
-4. `SharedRegion` の event slot 拡張（§4）が M1 の `host_child_integration.rs` に相当する offline 統合テストで「host submit → child consume → host read（+ NoteEnd 等の output 方向）」の round trip を証明すること（device 不要）。
+4. `SharedRegion` の event slot 拡張（§4）が M1 の `host_child_integration.rs` に相当する offline 統合テストで「host submit → child consume → host read（+ NoteEnd 等の output 方向）」の round trip を証明すること（device 不要）。`transport_context`（§4.5）も同じ統合テストで round trip を確認する（`tempo_bpm=0.0` の未供給ケースを含む）。
 5. 少なくとも1つの child が新 event 経路で **offline note-render oracle parity**（既知 event 列 → 既知波形、sample-exact）を通すこと（M1 の closed-form oracle パターンを踏襲）。
    - **これは新規 deliverable**: M1 が作った `orbit-clap-effect-child` は effect 専用であり、instrument child（CLAP 版が最有力・既存 `orbit-clap-host` の対称拡張）は現存しない。M2 landing の一部としてゼロから作る。
    - **oracle は closed-form・決定論的でなければならない**: 例）`NoteOn(key)` 受信 → smoothing 無し・既知位相で `key` の周波数の正弦波（or 矩形波）を固定振幅で出力する test-synth。
 6. `cargo fmt`/`cargo clippy`/`cargo deny check`/`cargo test --workspace` 全緑。
-7. 本 doc §6 の Q5-Q6 が「owner サインオフ済み」として記録されていること。
+7. ✅ 本 doc §6 の Q1-Q6 が「owner サインオフ済み」として記録されていること（2026-07-12 達成）。
 8. gated stress test（§4.2）: @32f で 10K ノート同時バースト + 持続 100K events/sec を流し `event_dropped_count == 0`。
 
 ---
@@ -334,4 +377,4 @@ Q5-Q6 が owner サインオフ済みであることに加え、以下を M2 sub
 - M1 設計: `POST_2.0_GAMMA_M1_DESIGN.md`（M1/M2 境界・transport パターンの前例）
 - 既存資産: `rust/crates/orbit-clap-host/src/events.rs`（`PluginEvent`）・`rust/crates/orbit-audio-sandbox/src/transport.rs`（`SharedRegion`）・`rust/crates/orbit-audio-daemon/src/outproc_effect.rs`（`EffectChildSupervisor`・format 分岐の前例）
 - 設計決定の経緯: 本 doc冒頭「設計経緯」節・grounding agent 成果物（正本の文言成立時期の裏取り・JUCE/UAPMD 業界実例調査）・Fable 一発判断（候補A/B/C の比較）
-- Issue: #398（本 doc）/ #395（親 plan）/ Epic #292 / #400（既存 in-process CLAP ring lossless 化・M2 と独立）/ #401（`Engine::with_scheduler` contention 可視化・M2 と独立）
+- Issue: #398（本 doc）/ #395（親 plan）/ Epic #292 / #400（既存 in-process CLAP ring lossless 化・M2 と独立）/ #401（`Engine::with_scheduler` contention 可視化・M2 と独立）/ #408（Q6 follow-on・tempo source plumbing）/ #409（Q5 follow-on・multi-bus audio transport）/ `POST_2.0_MIXER_DSL_DESIGN.html`（Issue #337・Q5 の DSL 層先行決定）
