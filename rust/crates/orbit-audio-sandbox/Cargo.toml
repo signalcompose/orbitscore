@@ -37,3 +37,7 @@ anyhow = "1"
 [[bin]]
 name = "sandbox-effect-child"
 path = "src/bin/sandbox-effect-child.rs"
+
+[[bin]]
+name = "sandbox-instrument-child"
+path = "src/bin/sandbox-instrument-child.rs"

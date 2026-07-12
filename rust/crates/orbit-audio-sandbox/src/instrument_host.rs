@@ -190,6 +190,7 @@ impl PipelinedInstrumentHost {
         let count = n_frames as usize * CHANNELS;
         let region = self.region;
 
+        let backlog_before = self.event_ring.len();
         for event in events {
             if !self.event_ring.push(EventRecord::encode(event)) {
                 unsafe {
@@ -217,7 +218,18 @@ impl PipelinedInstrumentHost {
                         addr: VoiceAddr::WILDCARD,
                     });
                 }
-                written += self.event_ring.drain_into(&mut window[written..]);
+                let drain_start = written;
+                let drained = self.event_ring.drain_into(&mut window[drain_start..]);
+                for record in &mut window[drain_start..drain_start + backlog_before.min(drained)] {
+                    record.sample_offset = 0;
+                }
+                written += drained;
+                let spilled = self.event_ring.len();
+                if spilled != 0 {
+                    (*region)
+                        .input_event_spilled_count
+                        .fetch_add(spilled as u64, Relaxed);
+                }
                 for record in &window[usize::from(inject)..written] {
                     if let Some(NeutralEvent::NoteOn { addr, .. }) = record.decode() {
                         self.voices.increment(VoiceKey {
@@ -439,7 +451,7 @@ mod tests {
         unsafe {
             let slot = slot_index(SLOTS as u64 + 1);
             assert_eq!((*region).input_event_count[slot].load(Relaxed), 1);
-            assert_eq!((*region).input_events[slot][0].decode(), Some(midi(77)));
+            assert_eq!((*region).input_events[slot][0].decode(), Some(midi(0)));
         }
     }
 

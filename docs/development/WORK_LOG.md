@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.240 feat(engine): M2 Stage6 Part B1 — 合成instrument child + 実プロセス統合テスト（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage6 Part B1。実プロセスを使った production-path 統合テストを追加し、§7-4（round trip・TransportContext含む）・§7-10（input/output双方向 spillover決定論）・§7-12（in-order回帰）を実測した。
+
+- 新規合成 child `sandbox-instrument-child`（`orbit-audio-sandbox/src/bin/`・`sandbox-effect-child.rs` と同パターン）: 実 CLAP プラグイン不要。in-order 消費（§4.6）・NoteOff→NoteEnd の1:1応答・`EventSpillFifo` 経由の output 転送窓詰め込み。テスト専用の `--synthetic-output-burst <N>` 診断経路も持つ（下記参照）。
+- **委譲中に Codex が2件の設計矛盾を自ら検出し実装を停止・報告した**（いずれも「不明点は実装せず質問する」規律が正しく機能した例）:
+  1. 「1 NoteOff→1 NoteEnd」の1:1契約と、input側 window（`MAX_EVENTS_PER_BLOCK`）による上限がある限り、output側 spill FIFO（§7-10 output方向）が構造的に発火し得ないという矛盾。→ **診断専用の `--synthetic-output-burst`**（起動後最初の1件の NoteOff だけ追加で N 件の NoteEnd を生成する・通常起動では完全無効）を承認して解消。
+  2. `EventBackingRing::drain_into()` が spill event の `sample_offset` をクランプせず、既存 Stage3 unit test（`spillover_is_lossless_and_deterministic`）がその「保持」動作を明示的にロックしている一方、§4.2 は spill event の offset=0 クランプを要求する矛盾。→ **`EventBackingRing` 自体は変更せず、`PipelinedInstrumentHost::process_block` の呼び出し側で `backlog_before = event_ring.len()`（push前のring長）を記録し、drain 結果の先頭 `backlog_before` 件（＝過去ブロックからの真の持ち越し分）だけを offset=0 にクランプ、それ以降（同一呼び出し内で新規push→即drainされた新鮮な event）は元の offset を保持する**方式を承認。Part A で既にコミット済みのテスト（`midi(3)` の offset 保持を期待）を壊さないことを確認した上での判断（ring を一律クランプする代案は Part A の正当な既存テストと矛盾するため不採用）。
+  3. `input_event_spilled_count`/`output_event_spilled_count`（§7-10 が要求する健全性カウンタ）が Part A では未配線だった点も本タスクで解消（host側=drain後のring残数、child側=詰め込み後のFIFO残数を、それぞれ block ごとに累積加算）。
+- §7-12（in-order回帰）のテストは、child未起動のまま host 側で2ブロック submit → 3ブロック目で意図的に stall（submit guard不成立）させ、その後 child を起動して catch-up させる構成。stall 中に ring へ積まれた event が失われず、child 起動後に正しい順序で配送されることを実プロセスで確認。「途中の seq を skip したら fail する」oracle は `output_note_ends` ヘルパの `seq_tag[slot]==seq` assert が暗黙に兼ねる（skip されていれば该当 slot の `seq_tag` が未設定のまま assert が落ちる）。
+- 全31 unit test + 4 (M1既存) + 4 (M2新規) integration test が green（Opus main が独立に `cargo fmt`/`clippy`/`test` を再実行し、加えてコード自体（backlog clamp のロジック・synthetic burst の1回限り発火・spilled counter の意味論）を読んで確認）。
+- **役割**: grounding（`sandbox-effect-child.rs`/`host_child_integration.rs` の既存パターン調査）＝ Opus main。**実装本体（synthetic child・統合テスト4本・カウンタ配線）＝ codex 委譲**。委譲中に Codex 自身が発見した2件の設計矛盾は、Opus main が一次ソース（既存テスト・design doc）を確認した上で解決方針を判断し、同一 Codex スレッドを `--resume` で継続させて反映。差分は Opus main が独立に再実行・精読して裏取り済み。
+- **状態**: Stage6 Part B1 完了。残 Part B2（枯渇時 note 保護 §7-11 a/b/c・gated stress @32f §7-8・respawn harness）・landing。
+
 ### 6.239 feat(engine): M2 Stage6 Part A — PipelinedInstrumentHost（#416） (Jul 12, 2026)
 
 M2 instrument IPC substrate（Issue #416）の Stage6 Part A。host 側で初めて event 機構を本番コードに組み込む新規構造体 `PipelinedInstrumentHost`（`orbit-audio-sandbox/src/instrument_host.rs`）を実装した。
