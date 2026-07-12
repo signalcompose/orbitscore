@@ -1490,7 +1490,15 @@ mod plugin_load_gate_tests {
     fn load_plugin_success_sets_plugin_loaded_flag() {
         let (wrap, cmd_rx) = loadable_engine();
         let responder = std::thread::spawn(move || {
-            let cmd = cmd_rx.recv().expect("load_plugin should send LoadPlugin");
+            // `recv_timeout` で fail-fast にする（`clap_host.rs` の専用スレッド pump loop と同じ
+            // パターン）。現状 `load_plugin()` は必ず send 後に待つため無期限 `recv()` でも通るが、
+            // 将来の regression（lock 順序ミス等で send 前に return する等）が入ると無期限ブロックし、
+            // `rust-ci.yml` に `timeout-minutes` 未設定のため CI job が GitHub Actions のデフォルト
+            // 上限（最大6時間）までハングしてから失敗する fail-slow リスクがある
+            // （pr-test-analyzer / silent-failure-hunter 独立指摘・PR #412）。
+            let cmd = cmd_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("load_plugin should send LoadPlugin within 5s");
             // `ClapCommand` は現状 `LoadPlugin` の1バリアントのみなので irrefutable pattern
             // で受けられる（/simplify レビュー #412: match 1本腕は不要なネスト）。
             let crate::clap_host::ClapCommand::LoadPlugin {

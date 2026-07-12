@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.229 refactor(engine): dedupe ClapControl test wiring + flatten match (#412 /simplify) (Jul 12, 2026)
+
+6.228（#411 実装）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）で3本が独立に収束した指摘を修正（PR #412）。
+
+- **reuse/simplification/altitude 独立一致**: `loaded_engine()`/`loadable_engine()` が `ClapControl` 構築（event ring・cmd channel・stats 2種）を個別に重複実装していた。共通セットアップを `wire_clap_control()` に抽出し両ヘルパーから呼ぶよう変更（ヘルパー自体は altitude レビュー指摘の通りマージせず、両者の目的の違い〔`plugin_loaded` 事前セットの有無〕は維持）。
+- **simplification 指摘**: `ClapCommand` は現状 `LoadPlugin` 1バリアントのみなので、`match cmd { ClapCommand::LoadPlugin { .. } => {...} }` を irrefutable `let` pattern に平坦化しネストを1段削除。
+- **simplification 指摘（一部見送り）**: `if let Err(err) = result { panic!(...) }` を `assert!(result.is_ok(), "{result:?}")` に統一する提案は、実際にビルドして確認したところ `LoadedPluginSummary` が `Debug` 未実装のためコンパイルエラーになることが判明。本番コードへの `#[derive(Debug)]` 追加は本 PR のスコープ外（本番コード非変更の制約）のため、元の `if let Err` パターンを維持し、Debug 未実装ゆえの意図的な差異であることをコメントで明記した。
+- **検証**: `cargo build -p orbit-audio-daemon --features clap-host`・`cargo test -p orbit-audio-daemon --features clap-host --lib`（31 passed）・`cargo clippy --features clap-host --all-targets -D warnings`・`cargo fmt --check` すべて green。
+
 ### 6.228 test(engine): cover load_plugin success flag update (#411) (Jul 12, 2026)
 
 `EngineWrap::load_plugin()` の成功分岐が `plugin_loaded` を true にすることを、実際の `LoadPlugin` コマンド送信と reply channel の往復で検証する unit test を追加。従来の `loaded_engine()` はテスト内でフラグを直接注入していたため、成功分岐の `store(true, ...)` が削除・反転されても検出できなかった穴を埋めた。
