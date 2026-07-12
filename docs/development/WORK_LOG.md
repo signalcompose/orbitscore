@@ -17,6 +17,16 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.222 refactor(engine): outproc_health アクセサ統合 + frames_clamped の test seam 追加（#406） (Jul 12, 2026)
+
+PR #406（6.221 の frames_clamped 可視化）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）が独立に収束した2件を修正。
+
+- **Finding 1（simplification + efficiency の独立一致）**: `EngineWrap::outproc_health()` と新設 `outproc_frames_clamped()` が同一 tick 内で同一 `self.outproc` mutex に対し個別に `try_lock()` + `.snapshot()` していた（冗長ロック・かつ2呼び出しが同一スナップショットを観測する保証が無い＝片方 `WouldBlock` で 0 を返す間にもう片方が非ゼロを観測しうる）。`outproc_health()` の戻り値を `(u64, u64, bool)` → `(u64, u64, bool, u64)` に拡張し、単一の `try_lock` + `snapshot` で4 signal（`child_process_error_count`/`respawn_count`/`measurement_invalid`/`frames_clamped`）を返すよう統合。独立 `outproc_frames_clamped()`（有効/無効ビルド両方の実装）を削除し、`session.rs` のticker loop を4要素destructureに更新（呼び出し箇所は `rg` で `session.rs:163` の1箇所のみと確認済み）。
+- **Finding 2（reuse + altitude の独立一致・履歴根拠あり）**: `link_egress_drops`+`link_egress_drops_arc()`（PR #331）・`clap_process_errors`+`clap_process_errors_arc()`（PR #340）に既に確立していた「counter field + `#[doc(hidden)] *_arc()` injection accessor + `tests/protocol.rs` latch test」パターンが `frames_clamped` には無く（非 outproc-effect ビルドの stub が固定 `return 0`）、default feature build でこの signal を exercise するテストが存在しなかった。altitude レビューが指摘した通り `frames_clamped` は gated 実機テストの現実的な駆動経路も無い（outproc_health の他3 signal は kill-test で強制可能）ため、test seam は「あれば尚良い」ではなく必須。`outproc_frames_clamped: Arc<AtomicU64>` フィールド（unconditional）+ `outproc_frames_clamped_arc()`（`#[doc(hidden)]`・unconditional）を追加し、consolidated `outproc_health()` の frames_clamped を `s.frames_clamped + injected` で合算。`tests/protocol.rs` に `daemon_error_warning_on_outproc_frames_clamped`（`daemon_error_warning_on_link_egress_drop`/`_clap_process_error` と同型・発火 + latch 非再発火を検証）を追加。**scope外**: 既存3 signal（`OUTPROC_EFFECT_ERROR`/`RESPAWN`/`INVALID`）への同種seam retrofit はこのPRの対象外（frames_clamped固有の穴のみ埋める）。
+- **検証**: `cargo build`(default/outproc-effect/clap-host 3構成) / `cargo test --lib`(outproc-effect) / `cargo test --test protocol`(default・20 passed、うち新規1件) / `cargo clippy --workspace --all-targets -D warnings`(default) + 同(outproc-effect) + 同(clap-host) / `cargo fmt --all` すべて green。
+- **役割**: 発見=`/simplify` 4並列レビュー(独立収束) / 実装・検証=Opus main(直接実装)。
+- **状態**: PR #406 への追加コミット。
+
 ### 6.221 fix(engine): out-of-process effect の frames_clamped カウンターを可視化（#404） (Jul 12, 2026)
 
 M2 instrument IPC substrate（#398）の容量設計を検討する過程で、fresh agent（opus）による拡張監査（#400/#401 の Fable 発見を受けた TS層+grepパターン非依存の追加調査）が発見した箇所。

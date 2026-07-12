@@ -84,6 +84,13 @@ pub struct EngineWrap {
     /// 本番の error は clap mutex 内の `ClapProcessorStats::process_error_count` が供給するので、
     /// production read-path ではこの addend は常に 0（`link_egress_drops` と同設計）。
     clap_process_errors: Arc<AtomicU64>,
+    /// OOP effect `frames_clamped` の **test 注入用** カウンタ（本番は常に 0）。`outproc_health` が
+    /// これを加算する。integration test は child process を spawn しない（= 実 clamp 源が無い）ため、
+    /// この counter が outproc-effect feature の有無に依らず 1 Hz ticker の
+    /// OUTPROC_EFFECT_FRAMES_CLAMPED 発火を駆動する唯一の seam になる（[`Self::outproc_frames_clamped_arc`]）。
+    /// `link_egress_drops` / `clap_process_errors` と同設計（#406 /simplify: 専用 seam が無いと
+    /// この signal はどのテストからも exercise できなかった）。
+    outproc_frames_clamped: Arc<AtomicU64>,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
     /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
@@ -484,6 +491,7 @@ impl EngineWrap {
             stopped_play_ids: Mutex::new(HashSet::new()),
             link_egress_drops: Arc::new(AtomicU64::new(0)),
             clap_process_errors: Arc::new(AtomicU64::new(0)),
+            outproc_frames_clamped: Arc::new(AtomicU64::new(0)),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
@@ -800,13 +808,21 @@ impl EngineWrap {
         }
     }
 
-    /// OOP effect の health signal を `(child_process_error_count, respawn_count, measurement_invalid)` で
-    /// 返す（daemon の 1 Hz ticker が polling して WARNING/FATAL event で surface する非 RT observability）。
-    /// `clap_process_error_count` と同様 `try_lock` で ticker をブロックしない（**WouldBlock** は cumulative
-    /// なので次 tick が全累積を報告・**Poisoned** は warn して 0 を返し post-mortem の根拠を残す）。
-    /// plugin 未起動 / outproc 無効時は `(0, 0, false)`。
+    /// OOP effect の health signal を `(child_process_error_count, respawn_count, measurement_invalid,
+    /// frames_clamped)` で返す（daemon の 1 Hz ticker が polling して WARNING/FATAL event で surface する
+    /// 非 RT observability）。`clap_process_error_count` と同様 `try_lock` で ticker をブロックしない
+    /// （**WouldBlock** は cumulative なので次 tick が全累積を報告・**Poisoned** は warn して 0 を返し
+    /// post-mortem の根拠を残す）。plugin 未起動 / outproc 無効時は `(0, 0, false, <injected>)`。
+    ///
+    /// `frames_clamped` は #404 で `OutProcEffectStats` から追加した 4 つ目の signal（block が
+    /// `MAX_FRAMES` を超えて clamp された累積回数）。当初は独立した `outproc_frames_clamped()`
+    /// accessor だったが、同一 tick 内で同一 `self.outproc` mutex を 2 回 `try_lock` + `snapshot` する
+    /// ことになり（(a) 無駄な二重ロック (b) 4 signal が同一スナップショットである保証が消える —
+    /// 片方が `WouldBlock` で 0 を返す間にもう片方が非ゼロを観測しうる）、#406 /simplify レビューで
+    /// この 1 accessor に統合した。
     #[cfg(feature = "outproc-effect")]
-    pub fn outproc_health(&self) -> (u64, u64, bool) {
+    pub fn outproc_health(&self) -> (u64, u64, bool, u64) {
+        let injected = self.outproc_frames_clamped.load(Ordering::Relaxed);
         match self.outproc.try_lock() {
             Ok(g) => g
                 .as_ref()
@@ -816,53 +832,32 @@ impl EngineWrap {
                         s.child_process_error_count,
                         s.respawn_count,
                         s.measurement_invalid,
+                        s.frames_clamped + injected,
                     )
                 })
-                .unwrap_or((0, 0, false)),
-            Err(std::sync::TryLockError::WouldBlock) => (0, 0, false),
+                .unwrap_or((0, 0, false, injected)),
+            Err(std::sync::TryLockError::WouldBlock) => (0, 0, false, injected),
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 tracing::warn!(
                     "outproc mutex poisoned; outproc_health reporting zeros \
                      (OUTPROC_EFFECT events suppressed until daemon restart)"
                 );
-                (0, 0, false)
+                (0, 0, false, injected)
             }
         }
     }
 
-    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false)`（control が無い）。
+    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false, ...)`（control が無い）。
+    /// `frames_clamped` は test 注入分のみ反映（`link_egress_ring_drops` / `clap_process_error_count`
+    /// の無効ビルド stub と同設計）。
     #[cfg(not(feature = "outproc-effect"))]
-    pub fn outproc_health(&self) -> (u64, u64, bool) {
-        (0, 0, false)
-    }
-
-    /// OOP effect の block が `MAX_FRAMES`（`orbit-audio-sandbox`）を超えて clamp された累積回数
-    /// （#404）。既に `OutProcEffectStats::frames_clamped` として計測されていたが、`outproc_health`
-    /// が返すタプルに含まれておらず daemon の 1 Hz ticker に一度も配線されていなかった。通常は 0 の
-    /// まま推移する health signal（32/64f 小バッファ運用では実質到達不能・大バッファ/変則デバイス
-    /// 構成でのみ意味を持つ）。`outproc_health` と同じ `try_lock` 規約に従う。
-    #[cfg(feature = "outproc-effect")]
-    pub fn outproc_frames_clamped(&self) -> u64 {
-        match self.outproc.try_lock() {
-            Ok(g) => g
-                .as_ref()
-                .map(|c| c.stats.snapshot().frames_clamped)
-                .unwrap_or(0),
-            Err(std::sync::TryLockError::WouldBlock) => 0,
-            Err(std::sync::TryLockError::Poisoned(_)) => {
-                tracing::warn!(
-                    "outproc mutex poisoned; outproc_frames_clamped reporting 0 \
-                     (OUTPROC_EFFECT_FRAMES_CLAMPED suppressed until daemon restart)"
-                );
-                0
-            }
-        }
-    }
-
-    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に 0（control が無い）。
-    #[cfg(not(feature = "outproc-effect"))]
-    pub fn outproc_frames_clamped(&self) -> u64 {
-        0
+    pub fn outproc_health(&self) -> (u64, u64, bool, u64) {
+        (
+            0,
+            0,
+            false,
+            self.outproc_frames_clamped.load(Ordering::Relaxed),
+        )
     }
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
@@ -910,6 +905,15 @@ impl EngineWrap {
     #[doc(hidden)]
     pub fn clap_process_errors_arc(&self) -> Arc<AtomicU64> {
         self.clap_process_errors.clone()
+    }
+
+    /// test harness 用: OOP effect `frames_clamped` の注入カウンタを取得する。`link_egress_drops_arc` /
+    /// `clap_process_errors_arc` と同形で、下層 counter は本番経路から分離した注入専用（本番 0）。
+    /// integration test から `fetch_add` して 1 Hz ticker の OUTPROC_EFFECT_FRAMES_CLAMPED 発火を
+    /// 駆動する（child process 不要・#406）。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn outproc_frames_clamped_arc(&self) -> Arc<AtomicU64> {
+        self.outproc_frames_clamped.clone()
     }
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から
