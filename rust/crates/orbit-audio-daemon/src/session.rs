@@ -444,8 +444,12 @@ async fn handle_command(
         },
         // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由・非ブロッキング）。
         // plugin 未ロード時（LoadPlugin 前 / load 失敗後）は `push_plugin_event` が事前に
-        // `CLAP_RUNTIME`("no plugin loaded") エラーを返す（#405・嘘の成功応答を防ぐ。ロード成功後の
+        // `CLAP_NOT_LOADED`("no plugin loaded") エラーを返す（#405・嘘の成功応答を防ぐ。ロード成功後の
         // 精密な非同期状態〔hot-unload 等〕までは追わない — 現状そのような機構が無いため）。
+        // 残存課題（Issue #410）: このガードは「LoadPlugin の応答成功」しか検知できない。応答成功〜
+        // audio thread への実インストールの間の狭い window では、ガードは通過するが note が無音のまま
+        // ドレインされる同種の false-success が残りうる（cross-thread ack の実装は #405/#407 では
+        // 意図的に scope 外とした）。
         // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が未定義になるため）。
         "PluginNoteOn" => match params.get("key").and_then(|v| v.as_u64()) {
             Some(k) if k <= 127 => match parse_midi_channel(&params) {
@@ -733,6 +737,9 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         // CLAP も LinkAudio と同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする。
         WrapError::ClapUnavailable(msg) => ProtocolError::new("CLAP_UNAVAILABLE", msg.clone()),
         WrapError::Clap(msg) => ProtocolError::new("CLAP_RUNTIME", msg.clone()),
+        // 未ロード（LoadPlugin 未送信 / 失敗後）は feature-gap でも汎用 runtime エラーでもない専用
+        // コード（#405）。TS 層が「まだロードしていない」ことを actionable に判定できるようにする。
+        WrapError::ClapNotLoaded(msg) => ProtocolError::new("CLAP_NOT_LOADED", msg.clone()),
         // OOP effect も同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする（γ M1 PR-C）。
         WrapError::OutProcEffectUnavailable(msg) => {
             ProtocolError::new("OUTPROC_EFFECT_UNAVAILABLE", msg.clone())
@@ -770,6 +777,13 @@ mod tests {
     fn clap_runtime_maps_to_runtime_code() {
         let e = WrapError::Clap("plugin event ring full".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_RUNTIME");
+    }
+
+    // 未ロードは feature-gap / 汎用 runtime エラーのどちらとも別コードにする（#405）。
+    #[test]
+    fn clap_not_loaded_maps_to_not_loaded_code() {
+        let e = WrapError::ClapNotLoaded("no plugin loaded (send LoadPlugin first)".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_NOT_LOADED");
     }
 
     // PluginNoteOn/Off の channel 検証: 欠如→0、0..=15 受理、範囲外は MALFORMED（key と対称）。

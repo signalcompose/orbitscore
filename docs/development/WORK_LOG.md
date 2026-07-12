@@ -17,6 +17,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.222 test(engine): PluginNote load-gate 回帰テストの空洞化を修正 + CLAP_NOT_LOADED error code（#405） (Jul 12, 2026)
+
+6.221（#405 の実装）に対する `/code:pr-review-team` 4並列レビュー（code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer）で、回帰テストが実は #405 のガードを検証できていないこと等が判明（PR #407）。
+
+- **問題（Critical・pr-test-analyzer + code-reviewer 独立指摘）**: `assert_rejected_before_load` は `f(&wrap).is_err()` の弱い assertion のみで、`plugin_loaded` ガード（#405 本体）を丸ごと削除しても `clap: Mutex::new(None)`（test backend）経由で `WrapError::ClapUnavailable` が返るため `is_err()` は変わらず成立してしまう。ガードを検証していない空洞化テストだった。
+- **修正**:
+  - 汎用 `WrapError::Clap` の代わりに専用 variant `WrapError::ClapNotLoaded(String)` を追加し、`push_plugin_event` の未ロードガードがこれを返すよう変更。`session.rs` の `wrap_err_to_protocol` に `CLAP_NOT_LOADED` を追加（既存の `CLAP_UNAVAILABLE`/`CLAP_RUNTIME` と同パターン）。
+  - `assert_rejected_before_load` を `matches!(result, Err(WrapError::ClapNotLoaded(_)))` に変更（`ClapUnavailable` と区別可能になり、ガード削除で確実に fail する）。**自己検証**: ガードを一時的にコメントアウトし `cargo test --features clap-host plugin_load_gate_tests` で `note_on/note_off_before_load...` の2テストが実際に `Err(ClapUnavailable(...))` で fail することを確認 → 復元 → 再度緑を確認。
+  - positive-path テスト追加（PR #406 の private フィールド直接注入手法を踏襲）: `loaded_engine()` ヘルパーで `make_event_ring`/`ClapProcessorStats::new`/`CallbackTimeStats::new`/`mpsc::channel` から実 `ClapControl` を構築し `wrap.clap`/`wrap.plugin_loaded` に直接注入。`note_on_after_load_reaches_ring`/`note_off_after_load_reaches_ring` が `Ok(())` に加え consumer 側で実イベント到達まで検証。
+  - monotonic invariant（finding 4・`plugin_loaded.store` は全ファイル中1箇所のみ）は軽量テスト `plugin_loaded_flag_stays_true_across_multiple_events` を追加（複数回 push 後もフラグが true のまま）。reset 経路が無いため runtime test でこれ以上の検証余地はない。
+  - 残存レース開示（MEDIUM・silent-failure-hunter）: `push_plugin_event` 直前と `session.rs` の PluginNoteOn/Off 直前のコメントに、LoadPlugin 応答成功〜audio thread への実インストールの間の狭い window で同種の false-success が残りうることを明記（Issue #410 で追跡・修正は scope 外）。
+- **検証**: `cargo build --features clap-host -p orbit-audio-daemon` OK / `cargo test --features clap-host -p orbit-audio-daemon --lib` 20 passed / `cargo test -p orbit-audio-daemon`（default features、sandbox 外実行）12 lib + 19 protocol + 1 smoke + 7 verify_schedule_pcm 全 green（sandbox 内は loopback bind が `PermissionDenied` で偽 fail — 既知パターン）/ `cargo clippy --features clap-host -p orbit-audio-daemon -- -D warnings` clean / `cargo clippy -p orbit-audio-daemon -- -D warnings`（default）clean。
+- **役割**: レビュー=`/code:pr-review-team` 4並列 / 実装=Opus main（直接実装・自己検証込み）。
+
 ### 6.221 fix(engine): プラグイン未ロード時の PluginNoteOn/PluginNoteOff 嘘成功応答を修正（#405） (Jul 12, 2026)
 
 M2 instrument IPC substrate（#398）の容量設計を検討する過程で、fresh agent（opus）による拡張監査が発見した、容量とは無関係の別種の欠陥。

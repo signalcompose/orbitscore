@@ -47,6 +47,12 @@ pub enum WrapError {
     /// 専用スレッド不在・mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("clap host runtime error: {0}")]
     Clap(String),
+    /// CLAP plugin hosting は利用可能だが、まだ一度も `load_plugin` に成功していない（#405）。
+    /// feature-gap（`ClapUnavailable`）でも汎用 runtime エラー（`Clap`）でもなく、専用コードにすることで
+    /// クライアントが「LoadPlugin をまだ呼んでいない／失敗した」ことを actionable に判定できるようにする
+    /// （`push_plugin_event` の未ロードガードが返す）。
+    #[error("clap plugin not loaded: {0}")]
+    ClapNotLoaded(String),
     /// out-of-process effect がこの daemon ビルド/インスタンスで利用できない（feature `outproc-effect`
     /// 無効、または設定不足）。TS 層は feature-gap として warn-once で握り潰す（γ M1 PR-C）。
     #[error("out-of-process effect unavailable: {0}")]
@@ -665,8 +671,14 @@ impl EngineWrap {
         // 捨てるだけ（fire-and-forget ring の設計上ロード状態の同期確認は本来 cross-thread
         // round-trip が要る）。少なくとも「一度もロードに成功していない」ことは control スレッド
         // 側でここまで同期的に判定できるので、その場合は明示的なエラーを返す（嘘の成功応答を防ぐ）。
+        // 残存課題（Issue #410）: このガードは「LoadPlugin の応答が成功した」ことしか検知できない。
+        // 応答成功後 audio thread が install ring から実際に pop してインストールするまでの狭い
+        // window では `plugin_loaded == true` かつ install 未完了になりうる。その window で送った
+        // note はガードを通過して `Ok(())` を返すが audio thread 側は無音のままドレインする（同種の
+        // false-success が window 限定で残る・追跡は Issue #410）。cross-thread ack の追加は
+        // #405/#407 では scope 外（owner 判断待ち）。
         if !self.plugin_loaded.load(Ordering::Relaxed) {
-            return Err(WrapError::Clap(
+            return Err(WrapError::ClapNotLoaded(
                 "no plugin loaded (send LoadPlugin first)".into(),
             ));
         }
@@ -1215,14 +1227,23 @@ mod plugin_load_gate_tests {
         EngineWrap::build(engine, 48_000, 2, Arc::new(StreamStats::default()))
     }
 
-    /// plugin 未ロード時に `f` が明示的な error を返すことを検証する共通アサーション。
-    /// note_on/note_off の2テストは setup・assertion が同一で呼び出しメソッドのみ異なるため、
-    /// ここに集約する（/simplify レビュー #407）。
+    /// plugin 未ロード時に `f` が **専用の** `WrapError::ClapNotLoaded` を返すことを検証する共通
+    /// アサーション（note_on/note_off の2テストは setup・assertion が同一で呼び出しメソッドのみ
+    /// 異なるため、ここに集約・/simplify レビュー #407）。
+    ///
+    /// `is_err()` だけの弱いアサーションだと、`push_plugin_event` 冒頭の `plugin_loaded` ガード
+    /// （#405 の本体）を丸ごと削除しても、後段の `guard.as_mut().ok_or_else(...)` が
+    /// `clap: Mutex::new(None)`（test backend）により `WrapError::ClapUnavailable` を返すため
+    /// テストが通ってしまい、回帰保護にならない（PR #407 レビュー finding）。variant を pin する
+    /// ことで、ガード削除時は `ClapUnavailable`（≠ `ClapNotLoaded`）が返り `matches!` が偽になって
+    /// 確実に fail する（このテストの自己検証: ガードを一時的にコメントアウトして fail することを
+    /// `cargo test --features clap-host plugin_load_gate_tests` で確認済み）。
     fn assert_rejected_before_load(f: impl FnOnce(&EngineWrap) -> Result<(), WrapError>) {
         let wrap = unstarted_engine();
+        let result = f(&wrap);
         assert!(
-            f(&wrap).is_err(),
-            "plugin 未ロード時は成功を返してはいけない（#405）"
+            matches!(result, Err(WrapError::ClapNotLoaded(_))),
+            "plugin 未ロード時は WrapError::ClapNotLoaded を返すべき（#405）。got: {result:?}"
         );
     }
 
@@ -1240,6 +1261,85 @@ mod plugin_load_gate_tests {
     fn plugin_loaded_flag_defaults_false() {
         let wrap = unstarted_engine();
         assert!(!wrap.plugin_loaded.load(Ordering::Relaxed));
+    }
+
+    /// `unstarted_engine` に PR #406 の手法（private フィールドへの直接注入）で実 `ClapControl` を
+    /// 構築注入し、`plugin_loaded = true` かつ `clap = Some(...)` な wrap を返す。呼び出し側は
+    /// 返る consumer で event ring への実配送を検証できる（positive-path・#405 finding 3）。
+    /// `cmd_tx` の receiver 側は保持しない（LoadPlugin コマンドは実際には送らないため不要）。
+    fn loaded_engine() -> (Arc<EngineWrap>, orbit_clap_host::PluginEventConsumer) {
+        let wrap = unstarted_engine();
+        let (event_tx, event_rx) = orbit_clap_host::make_event_ring(16);
+        let (cmd_tx, _cmd_rx) = std::sync::mpsc::channel();
+        let stats = orbit_clap_host::ClapProcessorStats::new();
+        let cb_stats = orbit_audio_native::CallbackTimeStats::new();
+        wrap.plugin_loaded.store(true, Ordering::Relaxed);
+        *wrap.clap.lock().expect("clap mutex") = Some(ClapControl {
+            cmd_tx,
+            event_tx,
+            stats,
+            cb_stats,
+        });
+        (wrap, event_rx)
+    }
+
+    #[test]
+    fn note_on_after_load_reaches_ring() {
+        let (wrap, mut consumer) = loaded_engine();
+        let result = wrap.plugin_note_on(60, 0, 0.8);
+        assert!(result.is_ok(), "load 後は成功するはず: {result:?}");
+        match consumer.pop() {
+            Ok(orbit_clap_host::PluginEvent::NoteOn {
+                key,
+                channel,
+                velocity,
+            }) => {
+                assert_eq!(key, 60);
+                assert_eq!(channel, 0);
+                assert_eq!(velocity, 0.8);
+            }
+            other => panic!("event ring に NoteOn が届いているべき。got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn note_off_after_load_reaches_ring() {
+        let (wrap, mut consumer) = loaded_engine();
+        let result = wrap.plugin_note_off(60, 0, 0.0);
+        assert!(result.is_ok(), "load 後は成功するはず: {result:?}");
+        match consumer.pop() {
+            Ok(orbit_clap_host::PluginEvent::NoteOff {
+                key,
+                channel,
+                velocity,
+            }) => {
+                assert_eq!(key, 60);
+                assert_eq!(channel, 0);
+                assert_eq!(velocity, 0.0);
+            }
+            other => panic!("event ring に NoteOff が届いているべき。got: {other:?}"),
+        }
+    }
+
+    /// monotonic invariant（finding 4）: `plugin_loaded` への書き込みは全ファイル中
+    /// `load_plugin` 成功時の1箇所のみ（`grep -n "plugin_loaded.store"` で構造的に確認済み・
+    /// false に戻す経路が存在しない）。runtime test で reset を再現する手段が無いため、ここでは
+    /// 複数回 push が成功し続けフラグが true のままであることだけを軽量に確認する。
+    #[test]
+    fn plugin_loaded_flag_stays_true_across_multiple_events() {
+        let (wrap, mut consumer) = loaded_engine();
+        assert!(wrap.plugin_note_on(60, 0, 0.5).is_ok());
+        assert!(
+            wrap.plugin_loaded.load(Ordering::Relaxed),
+            "1回目 push 後も true のまま"
+        );
+        assert!(wrap.plugin_note_off(60, 0, 0.0).is_ok());
+        assert!(
+            wrap.plugin_loaded.load(Ordering::Relaxed),
+            "2回目 push 後も true のまま（reset 経路が無いことの確認）"
+        );
+        assert!(consumer.pop().is_ok());
+        assert!(consumer.pop().is_ok());
     }
 }
 
