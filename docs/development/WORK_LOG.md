@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.239 feat(engine): M2 Stage6 Part A — PipelinedInstrumentHost（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage6 Part A。host 側で初めて event 機構を本番コードに組み込む新規構造体 `PipelinedInstrumentHost`（`orbit-audio-sandbox/src/instrument_host.rs`）を実装した。
+
+- アーキテクチャは既存 `PipelinedEffectHost`（`host.rs`）の submit/read/slot-guard/repeat-previous パターンをそのまま踏襲（§4.6 の指示「host: SUBMIT/READ は無変更」通り）。新規なのは: event backing ring（Stage3実装済み `EventBackingRing`）から `input_events` 転送窓への drain、sticky-flag 枯渇時の `NoteChoke{WILDCARD}` 窓先頭注入、`TransportContext` 転送（`tempo_bpm=0.0` 含む）、`output_events` からの NoteEnd/NoteChoke 読み取りによる `VoiceTable`（§4.7 で確定した `(port,channel,key)` 参照カウント方式）の増減・一括リセット。
+- **委譲後の独立検証で voice 簿記の silent leak バグを発見**: 初版実装は NoteEnd/NoteChoke の読み取りを audio 出力の `ready` 判定（`target = submitted-1` の単発チェック）と同じ分岐内に置いていたため、ある block の output が「ready と判定される、その一度きりのタイミング」に間に合わなければ、その block の NoteEnd は二度と読まれず voice カウントが永久に漏れ続ける構造だった。audio は repeat-previous で代替可能だが、event の減算は機会が一度きりで非対称だった。現行 `SLOTS=2` では偶然 stall 経由で顕在化しないが、`transport.rs` 自身のコメントが「実機計測で 3 になりうる」としており、`SLOTS>=3` では実際に起こりうる。
+- advisor に検証を依頼し、独立した `event_cursor`（audio の `target` から切り離し、`seq_tag` が visible になるまで同じ seq を再チェックし続ける単調カーソル）への分離を確認・修正委譲。安全性の根拠: instrument child は §4.6 で in-order 消費必須のため全 seq の `seq_tag` を必ず publish する。submit guard（`seq_done >= new_seq - SLOTS`）により、ある slot が次に再利用される前に必ず `seq_done` がその slot の旧 occupant の seq に到達し、child が `seq_tag`/`seq_done` を同時に store する規律により、その時点で `seq_tag` も既に visible になっている（M1 effect child の latest-jump ポリシーには適用不可・instrument の in-order だからこそ成立する分離）。修正前は fail し修正後は pass する回帰テスト（`delayed_note_end_is_drained_after_its_audio_target_has_moved_on`）を追加。
+- 全 31 unit test + 4 integration test が green（Opus main が独立に `cargo fmt`/`clippy`/`test` を再実行して確認）。
+- **役割**: grounding（`PipelinedEffectHost`/`EventBackingRing`/`EventSpillFifo` の既存 API 調査・§4.6/§4.7 との整合確認）＝ Opus main。**実装本体（`instrument_host.rs` 新規・`VoiceTable`・sticky 注入・簿記更新）＝ codex 委譲**。委譲後、Opus main が読解でバグを発見 → advisor で妥当性検証 → 修正内容を再度 codex に委譲（安全性根拠・修正前 fail の確認を要求）→ 差分・検証コマンドを自ら再実行して裏取り、の2段委譲となった。
+- **状態**: Stage6 Part A 完了。残 Part B（合成 instrument child + §7-4,8,10,11,12 統合テスト群）・landing。
+
 ### 6.238 docs(engine): M2 §4.7 — host 側 voice 簿記キーを (port,channel,key) に確定（#416） (Jul 12, 2026)
 
 M2 instrument IPC substrate（Issue #416）Stage6 着手前のレビューで、設計doc §4.2(a)「note_id は monotone 採番・再利用しない」という前提が現行実装のどこにも存在しないことが判明した。Stage4 の `PluginEvent::to_neutral_event`（`orbit-clap-host/src/events.rs`・regression test でロック済み）は既存 `Pckn` 挙動を保持するため常に `note_id: -1`（wildcard）のみを発行する。

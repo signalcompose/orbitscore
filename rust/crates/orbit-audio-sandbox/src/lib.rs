@@ -19,6 +19,7 @@ pub mod event_backing_ring;
 pub mod event_spill_fifo;
 pub mod events;
 pub mod host;
+mod instrument_host;
 pub mod offline;
 pub mod transport;
 
@@ -32,6 +33,9 @@ pub use events::{
     KIND_PARAM_GESTURE_END, KIND_PARAM_MOD, KIND_PARAM_VALUE, KIND_POLY_PRESSURE,
 };
 pub use host::PipelinedEffectHost;
+pub use instrument_host::{
+    InstrumentBlockOutcome, PipelinedInstrumentHost, VoiceKey, VoiceTable, MAX_TRACKED_PORTS,
+};
 pub use offline::{
     max_abs_diff, render_in_process_gain, render_through_child_sync,
     render_through_child_sync_with_options, ChildStats, RenderOptions,
