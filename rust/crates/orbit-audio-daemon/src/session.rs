@@ -550,6 +550,8 @@ async fn handle_command(
         // NoteOn / NoteOff（"PluginNoteOn" / "PluginNoteOff"）は関数先頭の `plugin_note_spec`
         // ディスパッチで処理済みなので、ここには到達しない。event ring 経由の送出（bounded retry・
         // #400）、key/channel 検証・spawn_blocking・応答整形の実体は `handle_plugin_note` を参照。
+        // plugin 未ロード時のエラー応答（`CLAP_NOT_LOADED`・#405）と残存レース（Issue #410）の
+        // 開示は `handle_plugin_note` の doc comment を参照。
         "PlayAt" => {
             let time_sec = param_f64(&params, "time_sec", 0.0);
             let gain = param_f64(&params, "gain", 1.0) as f32;
@@ -783,6 +785,14 @@ fn plugin_note_spec(method: &str) -> Option<PluginNoteSpec> {
 /// `PluginNoteOn`/`PluginNoteOff` の共通本体（key/channel 検証・spawn_blocking・応答整形が
 /// 完全に同型なので集約する・#402 レビュー指摘）。`call` は `EngineWrap::plugin_note_on`/
 /// `plugin_note_off` を渡す。
+///
+/// plugin 未ロード時（LoadPlugin 前 / load 失敗後）は `call`（`push_plugin_event` 経由）が事前に
+/// `CLAP_NOT_LOADED`("no plugin loaded") エラーを返す（#405・嘘の成功応答を防ぐ。ロード成功後の
+/// 精密な非同期状態〔hot-unload 等〕までは追わない — 現状そのような機構が無いため）。
+/// 残存課題（Issue #410）: このガードは「LoadPlugin の応答成功」しか検知できない。応答成功〜
+/// audio thread への実インストールの間の狭い window では、ガードは通過するが note が無音のまま
+/// ドレインされる同種の false-success が残りうる（cross-thread ack の実装は #405/#407 では
+/// 意図的に scope 外とした）。
 async fn handle_plugin_note(
     id: &str,
     params: &Value,
@@ -867,6 +877,9 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         // CLAP も LinkAudio と同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする。
         WrapError::ClapUnavailable(msg) => ProtocolError::new("CLAP_UNAVAILABLE", msg.clone()),
         WrapError::Clap(msg) => ProtocolError::new("CLAP_RUNTIME", msg.clone()),
+        // 未ロード（LoadPlugin 未送信 / 失敗後）は feature-gap でも汎用 runtime エラーでもない専用
+        // コード（#405）。TS 層が「まだロードしていない」ことを actionable に判定できるようにする。
+        WrapError::ClapNotLoaded(msg) => ProtocolError::new("CLAP_NOT_LOADED", msg.clone()),
         // OOP effect も同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする（γ M1 PR-C）。
         WrapError::OutProcEffectUnavailable(msg) => {
             ProtocolError::new("OUTPROC_EFFECT_UNAVAILABLE", msg.clone())
@@ -904,6 +917,13 @@ mod tests {
     fn clap_runtime_maps_to_runtime_code() {
         let e = WrapError::Clap("plugin event ring full".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_RUNTIME");
+    }
+
+    // 未ロードは feature-gap / 汎用 runtime エラーのどちらとも別コードにする（#405）。
+    #[test]
+    fn clap_not_loaded_maps_to_not_loaded_code() {
+        let e = WrapError::ClapNotLoaded("no plugin loaded (send LoadPlugin first)".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_NOT_LOADED");
     }
 
     // PluginNoteOn/Off の channel 検証: 欠如→0、0..=15 受理、範囲外は MALFORMED（key と対称）。

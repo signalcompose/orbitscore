@@ -47,6 +47,12 @@ pub enum WrapError {
     /// 専用スレッド不在・mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("clap host runtime error: {0}")]
     Clap(String),
+    /// CLAP plugin hosting は利用可能だが、まだ一度も `load_plugin` に成功していない（#405）。
+    /// feature-gap（`ClapUnavailable`）でも汎用 runtime エラー（`Clap`）でもなく、専用コードにすることで
+    /// クライアントが「LoadPlugin をまだ呼んでいない／失敗した」ことを actionable に判定できるようにする
+    /// （`push_plugin_event` の未ロードガードが返す）。
+    #[error("clap plugin not loaded: {0}")]
+    ClapNotLoaded(String),
     /// out-of-process effect がこの daemon ビルド/インスタンスで利用できない（feature `outproc-effect`
     /// 無効、または設定不足）。TS 層は feature-gap として warn-once で握り潰す（γ M1 PR-C）。
     #[error("out-of-process effect unavailable: {0}")]
@@ -86,6 +92,13 @@ pub struct EngineWrap {
     /// 本番の error は clap mutex 内の `ClapProcessorStats::process_error_count` が供給するので、
     /// production read-path ではこの addend は常に 0（`link_egress_drops` と同設計）。
     clap_process_errors: Arc<AtomicU64>,
+    /// `load_plugin` が成功したことがあるかどうか（#405）。`push_plugin_event` がこれを見て、
+    /// 未ロード時は「fire-and-forget ring に投げてから黙って捨てられる」のでなく、明示的な
+    /// error を即座に返すようにする。一度 true になったら false に戻ることはない（hot-unload
+    /// 機構が存在しないため・厳密な非同期状態追跡はしない）。`clap`/`link`/`outproc` と同様
+    /// feature `clap-host` 専用（読み書きとも clap-host 経路にしかない）。
+    #[cfg(feature = "clap-host")]
+    plugin_loaded: AtomicBool,
     /// OOP effect `frames_clamped` の **test 注入用** カウンタ（本番は常に 0）。`outproc_health` が
     /// これを加算する。integration test は child process を spawn しない（= 実 clamp 源が無い）ため、
     /// この counter が outproc-effect feature の有無に依らず 1 Hz ticker の
@@ -562,6 +575,8 @@ impl EngineWrap {
             stopped_play_ids: Mutex::new(HashSet::new()),
             link_egress_drops: Arc::new(AtomicU64::new(0)),
             clap_process_errors: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "clap-host")]
+            plugin_loaded: AtomicBool::new(false),
             outproc_frames_clamped: Arc::new(AtomicU64::new(0)),
             plugin_event_ring_overflow_count: AtomicU64::new(0),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
@@ -682,11 +697,15 @@ impl EngineWrap {
                 .map_err(|_| WrapError::Clap("clap host thread is gone".into()))?;
         }
         match reply_rx.recv() {
-            Ok(Ok(info)) => Ok(LoadedPluginSummary {
-                plugin_id: info.plugin_id,
-                plugin_name: info.plugin_name,
-                note_port_index: info.note_port_index,
-            }),
+            Ok(Ok(info)) => {
+                // #405: 以後 push_plugin_event が「未ロード」を検知して事前に弾けるようにする。
+                self.plugin_loaded.store(true, Ordering::Relaxed);
+                Ok(LoadedPluginSummary {
+                    plugin_id: info.plugin_id,
+                    plugin_name: info.plugin_name,
+                    note_port_index: info.note_port_index,
+                })
+            }
             Ok(Err(e)) => Err(WrapError::Clap(e)),
             Err(_) => Err(WrapError::Clap("clap host thread dropped reply".into())),
         }
@@ -726,6 +745,21 @@ impl EngineWrap {
 
     #[cfg(feature = "clap-host")]
     fn push_plugin_event(&self, ev: orbit_clap_host::PluginEvent) -> Result<(), WrapError> {
+        // #405: プラグイン未ロード時は event ring に投げても audio thread が黙って drain して
+        // 捨てるだけ（fire-and-forget ring の設計上ロード状態の同期確認は本来 cross-thread
+        // round-trip が要る）。少なくとも「一度もロードに成功していない」ことは control スレッド
+        // 側でここまで同期的に判定できるので、その場合は明示的なエラーを返す（嘘の成功応答を防ぐ）。
+        // 残存課題（Issue #410）: このガードは「LoadPlugin の応答が成功した」ことしか検知できない。
+        // 応答成功後 audio thread が install ring から実際に pop してインストールするまでの狭い
+        // window では `plugin_loaded == true` かつ install 未完了になりうる。その window で送った
+        // note はガードを通過して `Ok(())` を返すが audio thread 側は無音のままドレインする（同種の
+        // false-success が window 限定で残る・追跡は Issue #410）。cross-thread ack の追加は
+        // #405/#407 では scope 外（owner 判断待ち）。
+        if !self.plugin_loaded.load(Ordering::Relaxed) {
+            return Err(WrapError::ClapNotLoaded(
+                "no plugin loaded (send LoadPlugin first)".into(),
+            ));
+        }
         // event ring（1024 slot）が満杯でも、audio callback が毎 block 全量 drain するので
         // bounded retry で lossless 化する（#400）。真にタイムアウトした場合のみ error。
         // mutex は各試行ごとに取得・解放し、sleep 中は保持しない（load_plugin と同じ「lock は
@@ -1357,6 +1391,137 @@ fn short_uuid() -> String {
 
 #[cfg(feature = "clap-host")]
 #[cfg(test)]
+mod plugin_load_gate_tests {
+    use super::*;
+    use orbit_audio_native::StreamStats;
+
+    // `Self::build` は clap: Mutex::new(None)（test backend 相当）で構築するため、実 device・実
+    // ClapControl 無しで plugin_loaded ガードだけを検証できる（#405）。
+    fn unstarted_engine() -> Arc<EngineWrap> {
+        let engine = orbit_audio_core::Engine::new(48_000, 2);
+        EngineWrap::build(engine, 48_000, 2, Arc::new(StreamStats::default()))
+    }
+
+    /// plugin 未ロード時に `f` が **専用の** `WrapError::ClapNotLoaded` を返すことを検証する共通
+    /// アサーション（note_on/note_off の2テストは setup・assertion が同一で呼び出しメソッドのみ
+    /// 異なるため、ここに集約・/simplify レビュー #407）。
+    ///
+    /// `is_err()` だけの弱いアサーションだと、`push_plugin_event` 冒頭の `plugin_loaded` ガード
+    /// （#405 の本体）を丸ごと削除しても、後段の `guard.as_mut().ok_or_else(...)` が
+    /// `clap: Mutex::new(None)`（test backend）により `WrapError::ClapUnavailable` を返すため
+    /// テストが通ってしまい、回帰保護にならない（PR #407 レビュー finding）。variant を pin する
+    /// ことで、ガード削除時は `ClapUnavailable`（≠ `ClapNotLoaded`）が返り `matches!` が偽になって
+    /// 確実に fail する（このテストの自己検証: ガードを一時的にコメントアウトして fail することを
+    /// `cargo test --features clap-host plugin_load_gate_tests` で確認済み）。
+    fn assert_rejected_before_load(f: impl FnOnce(&EngineWrap) -> Result<(), WrapError>) {
+        let wrap = unstarted_engine();
+        let result = f(&wrap);
+        assert!(
+            matches!(result, Err(WrapError::ClapNotLoaded(_))),
+            "plugin 未ロード時は WrapError::ClapNotLoaded を返すべき（#405）。got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn note_on_before_load_returns_explicit_error_not_success() {
+        assert_rejected_before_load(|wrap| wrap.plugin_note_on(60, 0, 0.8));
+    }
+
+    #[test]
+    fn note_off_before_load_returns_explicit_error_not_success() {
+        assert_rejected_before_load(|wrap| wrap.plugin_note_off(60, 0, 0.0));
+    }
+
+    #[test]
+    fn plugin_loaded_flag_defaults_false() {
+        let wrap = unstarted_engine();
+        assert!(!wrap.plugin_loaded.load(Ordering::Relaxed));
+    }
+
+    /// `unstarted_engine` に PR #406 の手法（private フィールドへの直接注入）で実 `ClapControl` を
+    /// 構築注入し、`plugin_loaded = true` かつ `clap = Some(...)` な wrap を返す。呼び出し側は
+    /// 返る consumer で event ring への実配送を検証できる（positive-path・#405 finding 3）。
+    /// `cmd_tx` の receiver 側は保持しない（LoadPlugin コマンドは実際には送らないため不要）。
+    fn loaded_engine() -> (Arc<EngineWrap>, orbit_clap_host::PluginEventConsumer) {
+        let wrap = unstarted_engine();
+        let (event_tx, event_rx) = orbit_clap_host::make_event_ring(16);
+        let (cmd_tx, _cmd_rx) = std::sync::mpsc::channel();
+        let stats = orbit_clap_host::ClapProcessorStats::new();
+        let cb_stats = orbit_audio_native::CallbackTimeStats::new();
+        wrap.plugin_loaded.store(true, Ordering::Relaxed);
+        *wrap.clap.lock().expect("clap mutex") = Some(ClapControl {
+            cmd_tx,
+            event_tx,
+            stats,
+            cb_stats,
+        });
+        (wrap, event_rx)
+    }
+
+    #[test]
+    fn note_on_after_load_reaches_ring() {
+        let (wrap, mut consumer) = loaded_engine();
+        let result = wrap.plugin_note_on(60, 0, 0.8);
+        assert!(result.is_ok(), "load 後は成功するはず: {result:?}");
+        match consumer.pop() {
+            Ok(orbit_clap_host::PluginEvent::NoteOn {
+                key,
+                channel,
+                velocity,
+            }) => {
+                assert_eq!(key, 60);
+                assert_eq!(channel, 0);
+                assert_eq!(velocity, 0.8);
+            }
+            other => panic!("event ring に NoteOn が届いているべき。got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn note_off_after_load_reaches_ring() {
+        let (wrap, mut consumer) = loaded_engine();
+        let result = wrap.plugin_note_off(60, 0, 0.0);
+        assert!(result.is_ok(), "load 後は成功するはず: {result:?}");
+        match consumer.pop() {
+            Ok(orbit_clap_host::PluginEvent::NoteOff {
+                key,
+                channel,
+                velocity,
+            }) => {
+                assert_eq!(key, 60);
+                assert_eq!(channel, 0);
+                assert_eq!(velocity, 0.0);
+            }
+            other => panic!("event ring に NoteOff が届いているべき。got: {other:?}"),
+        }
+    }
+
+    /// monotonic invariant（finding 4）: `plugin_loaded` への書き込みは**本番コード**中
+    /// `load_plugin` 成功時の1箇所のみ（`grep -n "plugin_loaded.store" engine_wrap.rs` で確認可能。
+    /// このテストモジュール内の `loaded_engine()` ヘルパーによる直接注入は別途1箇所ヒットするが、
+    /// それは test-only の注入であり本番の書き込み経路ではない）。false に戻す経路は本番コードに
+    /// 存在しない。runtime test で reset を再現する手段が無いため、ここでは複数回 push が成功し
+    /// 続けフラグが true のままであることだけを軽量に確認する。
+    #[test]
+    fn plugin_loaded_flag_stays_true_across_multiple_events() {
+        let (wrap, mut consumer) = loaded_engine();
+        assert!(wrap.plugin_note_on(60, 0, 0.5).is_ok());
+        assert!(
+            wrap.plugin_loaded.load(Ordering::Relaxed),
+            "1回目 push 後も true のまま"
+        );
+        assert!(wrap.plugin_note_off(60, 0, 0.0).is_ok());
+        assert!(
+            wrap.plugin_loaded.load(Ordering::Relaxed),
+            "2回目 push 後も true のまま（reset 経路が無いことの確認）"
+        );
+        assert!(consumer.pop().is_ok());
+        assert!(consumer.pop().is_ok());
+    }
+}
+
+#[cfg(feature = "clap-host")]
+#[cfg(test)]
 mod plugin_event_ring_retry_tests {
     use super::{push_with_bounded_retry, Ordering, PushAttemptOutcome};
     use std::sync::atomic::AtomicU64;
@@ -1472,7 +1637,10 @@ mod plugin_event_ring_retry_tests {
 /// `Sent` 分岐（実際に event ring へ push が成功する）と mutex-poisoned 分岐は、実 clap-host
 /// 初期化済み `EngineWrap`（`EngineWrap::start()` が spawn する専用スレッド + 実 audio stream）が
 /// 要るため practical でない。ここでは `start_with(StubBackend)` で到達可能な None/ClapUnavailable
-/// 分岐にスコープする。
+/// 分岐にスコープする。`plugin_loaded` は #405 のガードが先に短絡してしまわないよう明示的に true を
+/// セットしてから叩く（このモジュールの狙いは「ロード済みなのに clap ハンドルが無い」分岐であり
+/// 「未ロード」分岐ではない・#407 との merge で `push_plugin_event` にガードが追加されたことへの
+/// 追従）。
 #[cfg(feature = "clap-host")]
 #[cfg(test)]
 mod push_plugin_event_tests {
@@ -1483,6 +1651,9 @@ mod push_plugin_event_tests {
     fn plugin_note_on_returns_clap_unavailable_when_clap_not_initialized() {
         let (engine, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend starts");
+        engine
+            .plugin_loaded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         let before = engine.plugin_event_ring_overflow_count();
 
         let err = engine
@@ -1504,6 +1675,9 @@ mod push_plugin_event_tests {
     fn plugin_note_off_returns_clap_unavailable_when_clap_not_initialized() {
         let (engine, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend starts");
+        engine
+            .plugin_loaded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         let before = engine.plugin_event_ring_overflow_count();
 
         let err = engine

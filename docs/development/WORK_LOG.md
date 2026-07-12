@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.227 test(engine): PluginNote load-gate 回帰テストの空洞化を修正 + CLAP_NOT_LOADED error code（#405） (Jul 12, 2026)
+
+6.226（#405 の実装）に対する `/code:pr-review-team` 4並列レビュー（code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer）で、回帰テストが実は #405 のガードを検証できていないこと等が判明（PR #407）。
+
+- **問題（Critical・pr-test-analyzer + code-reviewer 独立指摘）**: `assert_rejected_before_load` は `f(&wrap).is_err()` の弱い assertion のみで、`plugin_loaded` ガード（#405 本体）を丸ごと削除しても `clap: Mutex::new(None)`（test backend）経由で `WrapError::ClapUnavailable` が返るため `is_err()` は変わらず成立してしまう。ガードを検証していない空洞化テストだった。
+- **修正**:
+  - 汎用 `WrapError::Clap` の代わりに専用 variant `WrapError::ClapNotLoaded(String)` を追加し、`push_plugin_event` の未ロードガードがこれを返すよう変更。`session.rs` の `wrap_err_to_protocol` に `CLAP_NOT_LOADED` を追加（既存の `CLAP_UNAVAILABLE`/`CLAP_RUNTIME` と同パターン）。
+  - `assert_rejected_before_load` を `matches!(result, Err(WrapError::ClapNotLoaded(_)))` に変更（`ClapUnavailable` と区別可能になり、ガード削除で確実に fail する）。**自己検証**: ガードを一時的にコメントアウトし `cargo test --features clap-host plugin_load_gate_tests` で `note_on/note_off_before_load...` の2テストが実際に `Err(ClapUnavailable(...))` で fail することを確認 → 復元 → 再度緑を確認。
+  - positive-path テスト追加（PR #406 の private フィールド直接注入手法を踏襲）: `loaded_engine()` ヘルパーで `make_event_ring`/`ClapProcessorStats::new`/`CallbackTimeStats::new`/`mpsc::channel` から実 `ClapControl` を構築し `wrap.clap`/`wrap.plugin_loaded` に直接注入。`note_on_after_load_reaches_ring`/`note_off_after_load_reaches_ring` が `Ok(())` に加え consumer 側で実イベント到達まで検証。
+  - monotonic invariant（finding 4・`plugin_loaded.store` は**本番コード**中1箇所のみ。テストヘルパー `loaded_engine()` の直接注入分を除く）は軽量テスト `plugin_loaded_flag_stays_true_across_multiple_events` を追加（複数回 push 後もフラグが true のまま）。reset 経路が無いため runtime test でこれ以上の検証余地はない。
+  - **再レビューで判明した2件の軽微指摘**: (a) comment-analyzer 指摘 — 上記コメントが「全ファイル中1箇所」と書いていたが実際は grep で2箇所ヒット（本番+テストヘルパー）するため文言を訂正（本コミットで対応・ロジック変更なし）。(b) pr-test-analyzer 指摘（5/10・非blocking） — `load_plugin()` 実際の成功分岐（`plugin_loaded.store(true, ...)`, L624）を通るユニットテストが無い（`loaded_engine()` は直接注入でこの分岐を迂回）。既存コードの穴で本フェーズの新規劣化ではないため、Issue #411 で追跡（advisor 判断: 両者とも Critical/Important の閾値未満・収束をブロックしない）。
+  - 残存レース開示（MEDIUM・silent-failure-hunter）: `push_plugin_event` 直前と `session.rs` の `handle_plugin_note` 直前のコメントに、LoadPlugin 応答成功〜audio thread への実インストールの間の狭い window で同種の false-success が残りうることを明記（Issue #410 で追跡・修正は scope 外）。
+- **検証**: `cargo build --features clap-host -p orbit-audio-daemon` OK / `cargo test --features clap-host -p orbit-audio-daemon --lib` 20 passed / `cargo test -p orbit-audio-daemon`（default features、sandbox 外実行）12 lib + 19 protocol + 1 smoke + 7 verify_schedule_pcm 全 green（sandbox 内は loopback bind が `PermissionDenied` で偽 fail — 既知パターン）/ `cargo clippy --features clap-host -p orbit-audio-daemon -- -D warnings` clean / `cargo clippy -p orbit-audio-daemon -- -D warnings`（default）clean。
+- **役割**: レビュー=`/code:pr-review-team` 4並列（code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer） / 実装=Sonnet 5 subagent（model: sonnet 明示指定・自己検証込み）/ 委譲判断・検証方針策定=main（advisor 相談込み）。コミット trailer（`Co-Authored-By: Claude Sonnet 5`）が実装 agent の身元と一致。
+
+### 6.226 fix(engine): プラグイン未ロード時の PluginNoteOn/PluginNoteOff 嘘成功応答を修正（#405） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の容量設計を検討する過程で、fresh agent（opus）による拡張監査が発見した、容量とは無関係の別種の欠陥。
+
+- **問題**: `PluginNoteOn`/`PluginNoteOff` をプラグインロード前に送ると、audio thread は plugin が無ければ event を drain して捨てる（既存の意図的設計・fire-and-forget ring）一方、**protocol 層は `{"status": "note_on", "key": k}` という成功応答を返してしまう**。単なるデータ欠落より悪い「嘘の成功応答」で、呼び出し側は「鳴った」と誤信する。
+- **修正**: `EngineWrap` に `plugin_loaded: Arc<AtomicBool>`（feature `clap-host` 専用・他の `clap`/`link`/`outproc` フィールドと同パターン）を追加。`load_plugin` 成功時に `true` を立て、`push_plugin_event` の冒頭でこれを確認し、未ロードなら ring に触れる前に即座に `WrapError::Clap("no plugin loaded...")`（protocol code `CLAP_RUNTIME`）を返す。hot-unload 機構が存在しないため「一度成功したら true のまま」というシンプルなモデルで足りる（精密な非同期状態追跡はしない）。
+- **検証**: 新規 unit test 3本（`EngineWrap::build`〔private・同一モジュール内テストからアクセス可〕を使い実 device/実 ClapControl 無しでガードだけを検証: 未ロード時の NoteOn/NoteOff がエラーを返すこと2本 + フラグの初期値が false であること1本）。`cargo build`(default/clap-host/outproc-effect)・`cargo clippy --all-targets -D warnings`(同3構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。既存の gated test（`clap_host_gated.rs`）は load 成功後に note を送るため無影響。
+- **役割**: 発見=fresh agent(opus) / 実装・検証=Opus main(直接実装)。
+- **状態**: M2(#398)とは独立スコープ。PR 作成 → owner マージ待ち。これで今回の M2 検討過程で見つかった副産物（#400/#401/#404/#405）すべて実装・PR化完了。
+
 ### 6.225 refactor(engine): outproc_health アクセサ統合 + frames_clamped の test seam 追加（#406） (Jul 12, 2026)
 
 PR #406（6.224 の frames_clamped 可視化）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）が独立に収束した2件を修正。
