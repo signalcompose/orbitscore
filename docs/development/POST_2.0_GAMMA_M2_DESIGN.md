@@ -338,7 +338,7 @@ pub transport_context: [TransportContext; SLOTS],  // host -> child のみ（chi
 
 owner の懸念（「後からミキサー実装を変更する時にどのみち払うコストなら、プラグイン側インターフェースは今決めておいた方が後の修正が楽」）を受け、grounding で `POST_2.0_MIXER_DSL_DESIGN.html`（Issue #337）を確認したところ、**DSL 層では sidechain 入力（aux 入力ポート）が既に「スコープ in」と決定済み**（§6/§11 決定台帳）。ただし advisor 検査により「audio 実装コストが今も後も同じ」という前提は同一ビルド前提（published ABI 無し）では誇張と判明し、**実装の前倒しではなく次の分離が妥当**と確定した:
 
-- **今決める（M2 スコープ内）**: M2 の event/param wire（§3 `VoiceAddr.port_index`）は、将来 instrument が multi-port/multi-bus 構成を持つ場合でも、per-port/per-bus 宛のイベントアドレッシングを妨げない。追加のアドレッシング設計は不要（既存 `port_index` フィールドが hook として機能する）。
+- **今決める（M2 スコープ内）**: M2 の event/param wire（§3）と、将来の audio bus 拡張（#409）は別々の addressing 空間を持つ。`VoiceAddr.port_index` は **event/note port**（instrument がどの MIDI/note ポートでイベントを受けるか）の addressing であり、sidechain/multi-out のような **audio 信号経路**の addressing（#409 側で独自に設計する bus index）とは別物 — 混同しない。両者は直交する設計であるため、event wire 側に追加のアドレッシング設計は不要（#409 の実装が来ても event wire の再設計を要求しない）。
 - **defer する（M2 スコープ外・#409 で追跡）**: `SharedRegion` の audio input/output 配列を単一 stereo sum から複数バス（sidechain input・multi-out）へ拡張する**実装**。M1 effect・M2 instrument が共有する audio transport の拡張であり、DSL 側でミキサー/ルーティング構文（`POST_2.0_MIXER_DSL_DESIGN.html` の具体化）に着手するタイミング、または Phase 3 で multi-bus/sidechain を要する具体プラグインが出たタイミングで着手する。
 - **インターフェース層（アドレッシングの考え方）と実装層（audio 配列の物理拡張）を分けて考える**のが owner・advisor 共通の結論。前者は今回の grounding で「既存設計が既に満たしている」ことを確認できたため、追加の doc 化以上の作業は不要だった。
 
