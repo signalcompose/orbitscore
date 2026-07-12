@@ -17,6 +17,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.242 docs(engine): M2 respawn resume-semantics ギャップを専用issueに切り出し（#416） (Jul 12, 2026)
+
+6.241 で発見した「respawn 後の in-order child が historical seq を再処理する」設計限界について、design doc §4.2(b) のスコープ外注記が「#408 と同様に defer」と記していたが、**#408 の実際のスコープは tempo/transport-context live state の供給側**（Engine/Scheduler への tempo 読み出し可能 state 実装）であり、respawn resume-semantics とは無関係だったことが owner からの確認で判明。#409（multi-bus audio）・#410（load-confirm race）も同様に無関係。
+
+- このギャップを追跡する issue がどこにも存在しない状態だったため、専用 issue **#418**（`feat(engine): M2 instrument child respawn resume-point handshake (#416 follow-on)`）を新規作成。背景・スコープ（resume point の受け渡し機構の設計候補2案・respawn直後の簿記整合の扱い）・着手条件（本番 supervisor 実装段階）を記載。
+- design doc §4.2(b) の誤参照（「#408 と同様の扱い」）を「追跡: #418」に訂正。
+- **状態**: 記録漏れの是正のみ。実装は着手せず、引き続き #416 スコープ外（#418 で追跡）。
+
 ### 6.241 feat(engine): M2 Stage6 Part B2 — 枯渇時note保護 + gated stress（#416） (Jul 12, 2026)
 
 M2 instrument IPC substrate（Issue #416）の Stage6 Part B2（最終パート）。§7-11(a)(b)(c)（枯渇時note保護）・§7-8（gated stress@32f）を実プロセスで実測し、**§7 の12項目すべてを充足**した。
