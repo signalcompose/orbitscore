@@ -15,12 +15,16 @@
 //! 設計の正本: `docs/development/POST_2.0_GAMMA_M1_DESIGN.md`。
 
 pub mod child;
+pub mod event_backing_ring;
+pub mod event_spill_fifo;
 pub mod events;
 pub mod host;
 pub mod offline;
 pub mod transport;
 
 pub use child::SandboxChildGuard;
+pub use event_backing_ring::{EventBackingRing, EVENT_BACKING_CAPACITY};
+pub use event_spill_fifo::{EventSpillFifo, EVENT_SPILL_CAPACITY};
 pub use events::{
     EventPayload, EventRecord, NeutralEvent, NeutralExpressionId, VoiceAddr,
     KIND_LEGACY_MIDI_CC_OUT, KIND_MIDI2, KIND_MIDI_RAW, KIND_NOTE_CHOKE, KIND_NOTE_END,
