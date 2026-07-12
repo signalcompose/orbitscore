@@ -141,6 +141,13 @@ pub struct PipelinedInstrumentHost {
     /// in `process_block`'s drain loop, which detects exactly this recycled-slot race and resyncs
     /// `event_cursor` forward past the unrecoverable gap; it is live recovery logic, not a guard
     /// against an unreachable case.
+    ///
+    /// A finer-grained version of the same race can occur entirely within a single
+    /// `Ordering::Equal` iteration: the initial `seq_tag[slot] == next` check only confirms
+    /// freshness at read-start, not across the several unsynchronized reads of
+    /// `output_event_count`/`output_events` that follow it. The `Ordering::Equal` arm re-loads
+    /// `seq_tag` after applying those reads and falls back to the same recovery if it no longer
+    /// matches `next`.
     event_cursor: u64,
     primed: bool,
     pub fresh: u64,
@@ -197,6 +204,17 @@ impl PipelinedInstrumentHost {
 
     pub fn on_child_respawned(&mut self) {
         self.voices.reset_all();
+    }
+
+    /// Shared recovery for a physical event slot found recycled out from under the drain loop
+    /// (`Ordering::Greater` at loop entry, or the `Ordering::Equal` arm's post-read
+    /// revalidation). An unknown number of NoteEnd/NoteChoke events in the gap are
+    /// unrecoverable, so reset all voice counts rather than risk under-counting or leaking, then
+    /// resync `event_cursor` forward past the gap to `submitted`.
+    fn recover_from_recycled_slot(&mut self) {
+        self.event_cursor_recycled += 1;
+        self.voices.reset_all();
+        self.event_cursor = self.submitted;
     }
 
     pub fn process_block(
@@ -334,9 +352,7 @@ impl PipelinedInstrumentHost {
                     // recovery below: an unknown number of NoteEnd/NoteChoke events in the gap are
                     // unrecoverable, so reset all counts rather than risk under-counting or
                     // leaking, then resync `event_cursor` forward past the gap.
-                    self.event_cursor_recycled += 1;
-                    self.voices.reset_all();
-                    self.event_cursor = self.submitted;
+                    self.recover_from_recycled_slot();
                     break;
                 }
                 Ordering::Equal => {
@@ -363,7 +379,37 @@ impl PipelinedInstrumentHost {
                             }
                         }
                     }
-                    self.event_cursor = next;
+                    // Seqlock-style read-then-revalidate. The `seq_tag[slot] == next` check at
+                    // the top of this loop iteration only confirms the slot held `next`'s data
+                    // *before* the reads above started -- it does not protect the multi-step
+                    // read of `output_event_count`/`output_events` that followed, which is
+                    // itself unsynchronized. `event_cursor` can lag `submitted` by up to `SLOTS`
+                    // (see the field doc above and the `Ordering::Greater` arm), so nothing rules
+                    // out the child recycling this same physical slot again inside that narrow
+                    // window. Re-load `seq_tag` now: if it no longer reads `next`, the child
+                    // *finished* recycling this slot for a later sequence during the read, so the
+                    // events decoded above may be torn or belong to a later sequence entirely --
+                    // this is the same race as the `Ordering::Greater` arm above, just caught one
+                    // iteration later instead of at the next loop entry, so discard any
+                    // bookkeeping the read may have applied via the same `reset_all()` recovery
+                    // and resync past the gap.
+                    //
+                    // If it still reads `next`, this only means no *completed* recycle was
+                    // observed -- it does not prove the read was torn-free. The wire has no
+                    // in-progress marker, so a recycle that started mid-read (overwriting
+                    // `output_events`/`output_event_count`) but had not yet reached its own
+                    // `seq_tag` store by this point is invisible to this check. That residual gap
+                    // is accepted for the same reason the rest of this bookkeeping is
+                    // observational-only, never audio-path: `decode()` already validates record
+                    // structure, so a torn read either decodes to a valid-looking but wrong event
+                    // or fails decode and increments `event_decode_error_count`. This re-check is
+                    // a strict narrowing of the race window versus not re-checking at all, not a
+                    // full closure of it.
+                    if unsafe { (*region).seq_tag[slot].load(Acquire) } == next {
+                        self.event_cursor = next;
+                    } else {
+                        self.recover_from_recycled_slot();
+                    }
                 }
             }
         }

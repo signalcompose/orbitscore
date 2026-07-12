@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.247 fix(engine): M2 Equal分岐の seqlock 型再検証を追加（Fable指摘対応・#416） (Jul 13, 2026)
+
+6.246 で Fable が指摘した「`Ordering::Equal` 分岐のレースを M1 前例でスコープ外にした判断は事実誤認」への対応。`event_cursor` drain ループの `Equal` 分岐に、record 適用後の `seq_tag` 再 Acquire load を追加し、変化していれば `Ordering::Greater` と同じ回復（`event_cursor_recycled` 増分・`voices.reset_all()`・`event_cursor = submitted`）を適用する seqlock 型再検証を実装。共有ロジックは `recover_from_recycled_slot()` ヘルパに抽出し、両分岐が同一の回復パスを呼ぶ。
+
+- **fixer が自ら advisor に相談し、コメントの過大主張を訂正**: 初稿は「再検証が一致すれば読み取り中の recycle は無かったことが保証される」と書いていたが、実際に `sandbox-instrument-child.rs` の書き込み順序（`output_events`/`output_event_count` を先に書き、`seq_tag` を Release store するのは最後）を確認した結果、「read の途中で始まったが、まだ自身の `seq_tag` store に到達していない recycle」はこの再検証でも検出できないことが判明。コメントを「レースウィンドウを狭めるものであり、完全に閉じるものではない」という正確な記述に修正した。
+- **残存ギャップの許容根拠**: この簿記は observational のみ（音声経路には影響しない）。`decode()` が record 構造を検証するため、torn read は「妥当に見えるが誤った event」にデコードされるか、`event_decode_error_count` の増分で検出されるかのいずれかに帰着する。
+- **決定論的テストは断念（正当な理由あり・advisorで確認）**: 単一スレッド・同期的な `process_block` 呼び出し内で、2回の `seq_tag` Acquire load の間には純粋な計算しか無く、その間に別スレッドが実際にメモリを書き換えない限り不一致は起こり得ない。これを強制するテストは本質的にタイミング依存でflakyになるため、既存の `backlog_catch_up_consumes_every_sequence_exactly_once_in_order`（`Greater`分岐の類似ケースで同じ立場を取っている）と同じ判断で見送った。`Equal` 分岐を通る既存テスト群が happy path を確認済み。
+- 全35 orbit-audio-sandbox unit test + gated stress + gated parity（2テスト）を Opus main が独立に再実行して確認。
+- **役割**: 発見・修正方針の提示＝ Fable（owner 指名の独立レビュー）。**実装＝ pr-review-team の fixer subagent**（実装中に自らadvisorへ相談しコメント精度を検証）。検証の裏取り＝ Opus main。
+- **状態**: この修正でレビューループを終了。次: 最終確認の再々レビュー1回→CI/bot feedback確認→ユーザーへの完了報告（マージはユーザーの明示指示待ち）。
+
 ### 6.246 fix(engine): M2 レビュー追加指摘対応 + Fable独立検証（#416） (Jul 13, 2026)
 
 6.245 の修正後、`/code:pr-review-team` の再々レビューで5件の追加指摘（stale field doc comment・RT-unsafeなeprintln!・新規テストの前提realism・backlog_catch_upの状態未assert・voices.increment順序）が出た。**advisor は「反復ループが `/code:pr-review-team` の MAX_ITERATIONS=3 を超えて発散している」と判断し、最終1ラウンドで確実な項目のみ対応し残りは追跡issue化する方針**を確認。同時に owner の要請で **Fable（`claude-fable-5`）に独立レビューを依頼**し、この方針・特に「Equal分岐のレースはM1と同型だからスコープ外」という判断が正しいかを一次情報ベースで検証させた。
