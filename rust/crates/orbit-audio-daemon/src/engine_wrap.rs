@@ -86,6 +86,13 @@ pub struct EngineWrap {
     /// 本番の error は clap mutex 内の `ClapProcessorStats::process_error_count` が供給するので、
     /// production read-path ではこの addend は常に 0（`link_egress_drops` と同設計）。
     clap_process_errors: Arc<AtomicU64>,
+    /// OOP effect `frames_clamped` の **test 注入用** カウンタ（本番は常に 0）。`outproc_health` が
+    /// これを加算する。integration test は child process を spawn しない（= 実 clamp 源が無い）ため、
+    /// この counter が outproc-effect feature の有無に依らず 1 Hz ticker の
+    /// OUTPROC_EFFECT_FRAMES_CLAMPED 発火を駆動する唯一の seam になる（[`Self::outproc_frames_clamped_arc`]）。
+    /// `link_egress_drops` / `clap_process_errors` と同設計（#406 /simplify: 専用 seam が無いと
+    /// この signal はどのテストからも exercise できなかった）。
+    outproc_frames_clamped: Arc<AtomicU64>,
     /// `push_plugin_event` が bounded retry（[`push_with_bounded_retry`]）の末に諦めた回数（本番は
     /// 常に 0 に近い想定・health signal）。event ring は audio callback が毎 block 全量 drain する
     /// ため満杯は一時的であり、真の drop はこの回数だけ発生する（M2 doc の「溢れても失わない」方針を
@@ -555,6 +562,7 @@ impl EngineWrap {
             stopped_play_ids: Mutex::new(HashSet::new()),
             link_egress_drops: Arc::new(AtomicU64::new(0)),
             clap_process_errors: Arc::new(AtomicU64::new(0)),
+            outproc_frames_clamped: Arc::new(AtomicU64::new(0)),
             plugin_event_ring_overflow_count: AtomicU64::new(0),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
@@ -916,13 +924,21 @@ impl EngineWrap {
         }
     }
 
-    /// OOP effect の health signal を `(child_process_error_count, respawn_count, measurement_invalid)` で
-    /// 返す（daemon の 1 Hz ticker が polling して WARNING/FATAL event で surface する非 RT observability）。
-    /// `clap_process_error_count` と同様 `try_lock` で ticker をブロックしない（**WouldBlock** は cumulative
-    /// なので次 tick が全累積を報告・**Poisoned** は warn して 0 を返し post-mortem の根拠を残す）。
-    /// plugin 未起動 / outproc 無効時は `(0, 0, false)`。
+    /// OOP effect の health signal を `(child_process_error_count, respawn_count, measurement_invalid,
+    /// frames_clamped)` で返す（daemon の 1 Hz ticker が polling して WARNING/FATAL event で surface する
+    /// 非 RT observability）。`clap_process_error_count` と同様 `try_lock` で ticker をブロックしない
+    /// （**WouldBlock** は cumulative なので次 tick が全累積を報告・**Poisoned** は warn して 0 を返し
+    /// post-mortem の根拠を残す）。plugin 未起動 / outproc 無効時は `(0, 0, false, <injected>)`。
+    ///
+    /// `frames_clamped` は #404 で `OutProcEffectStats` から追加した 4 つ目の signal（block が
+    /// `MAX_FRAMES` を超えて clamp された累積回数）。当初は独立した `outproc_frames_clamped()`
+    /// accessor だったが、同一 tick 内で同一 `self.outproc` mutex を 2 回 `try_lock` + `snapshot` する
+    /// ことになり（(a) 無駄な二重ロック (b) 4 signal が同一スナップショットである保証が消える —
+    /// 片方が `WouldBlock` で 0 を返す間にもう片方が非ゼロを観測しうる）、#406 /simplify レビューで
+    /// この 1 accessor に統合した。
     #[cfg(feature = "outproc-effect")]
-    pub fn outproc_health(&self) -> (u64, u64, bool) {
+    pub fn outproc_health(&self) -> (u64, u64, bool, u64) {
+        let injected = self.outproc_frames_clamped.load(Ordering::Relaxed);
         match self.outproc.try_lock() {
             Ok(g) => g
                 .as_ref()
@@ -932,24 +948,32 @@ impl EngineWrap {
                         s.child_process_error_count,
                         s.respawn_count,
                         s.measurement_invalid,
+                        s.frames_clamped + injected,
                     )
                 })
-                .unwrap_or((0, 0, false)),
-            Err(std::sync::TryLockError::WouldBlock) => (0, 0, false),
+                .unwrap_or((0, 0, false, injected)),
+            Err(std::sync::TryLockError::WouldBlock) => (0, 0, false, injected),
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 tracing::warn!(
                     "outproc mutex poisoned; outproc_health reporting zeros \
                      (OUTPROC_EFFECT events suppressed until daemon restart)"
                 );
-                (0, 0, false)
+                (0, 0, false, injected)
             }
         }
     }
 
-    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false)`（control が無い）。
+    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false, ...)`（control が無い）。
+    /// `frames_clamped` は test 注入分のみ反映（`link_egress_ring_drops` / `clap_process_error_count`
+    /// の無効ビルド stub と同設計）。
     #[cfg(not(feature = "outproc-effect"))]
-    pub fn outproc_health(&self) -> (u64, u64, bool) {
-        (0, 0, false)
+    pub fn outproc_health(&self) -> (u64, u64, bool, u64) {
+        (
+            0,
+            0,
+            false,
+            self.outproc_frames_clamped.load(Ordering::Relaxed),
+        )
     }
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
@@ -997,6 +1021,15 @@ impl EngineWrap {
     #[doc(hidden)]
     pub fn clap_process_errors_arc(&self) -> Arc<AtomicU64> {
         self.clap_process_errors.clone()
+    }
+
+    /// test harness 用: OOP effect `frames_clamped` の注入カウンタを取得する。`link_egress_drops_arc` /
+    /// `clap_process_errors_arc` と同形で、下層 counter は本番経路から分離した注入専用（本番 0）。
+    /// integration test から `fetch_add` して 1 Hz ticker の OUTPROC_EFFECT_FRAMES_CLAMPED 発火を
+    /// 駆動する（child process 不要・#406）。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn outproc_frames_clamped_arc(&self) -> Arc<AtomicU64> {
+        self.outproc_frames_clamped.clone()
     }
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から
@@ -1525,5 +1558,120 @@ mod capture_path_tests {
             resolve_capture_path(Some("  /tmp/out.wav  ".to_string())),
             Some(PathBuf::from("/tmp/out.wav"))
         );
+    }
+}
+
+/// `outproc_health()` の real body（`#[cfg(feature = "outproc-effect")]`）を直接叩く unit test。
+///
+/// `tests/protocol.rs` の統合テストは default feature build（`outproc-effect` 無効）で走るため、
+/// stub（`(0, 0, false, injected)`）しか exercise できず、この real body の match arm は
+/// どのテストからも一度も compile even されていなかった（#406 pr-test-analyzer 指摘）。
+/// ここは同一 crate 内の `#[cfg(test)]` submodule なので `EngineWrap::outproc`（private field）
+/// と `OutProcControl`（private struct）へ直接アクセスできる（親モジュールの private item は子
+/// module から可視）。`OutProcEffectStats::new()` / `CallbackTimeStats::new()` はどちらも
+/// child process 不要の cheap constructor（plain atomic のみ）なので、`StubBackend` で起動した
+/// `EngineWrap` に対して real child を spawn せず `Some(OutProcControl)` を注入できる。
+#[cfg(all(test, feature = "outproc-effect"))]
+mod outproc_health_tests {
+    use super::{EngineWrap, OutProcControl};
+    use crate::backend::StubBackend;
+    use crate::outproc_effect::OutProcEffectStats;
+    use orbit_audio_native::CallbackTimeStats;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcControl` を
+    /// `self.outproc` に注入する。返す `Arc<OutProcEffectStats>` はテスト側から直接
+    /// `store`/`load` して `Ok(Some(c))` real-value summing 経路を駆動するのに使う。
+    fn wrap_with_outproc_stats() -> (Arc<EngineWrap>, Arc<OutProcEffectStats>) {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let stats = OutProcEffectStats::new();
+        *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
+            stats: stats.clone(),
+            cb_stats: CallbackTimeStats::new(),
+        });
+        (wrap, stats)
+    }
+
+    #[test]
+    fn ok_none_reports_only_injected_frames_clamped() {
+        // outproc 未注入（build() 直後の初期値）= Ok(None) 分岐。
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(7, Ordering::Relaxed);
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 7));
+    }
+
+    #[test]
+    fn ok_some_sums_real_stats_with_injected_counter() {
+        // Ok(Some(c)) 分岐: 実 OutProcEffectStats スナップショットと injected カウンタを両方
+        // 合算して返すこと（finding 3: 実 stats の summing が一度も exercise されていなかった）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.child_process_error_count.store(3, Ordering::Relaxed);
+        stats.respawn_count.store(2, Ordering::Relaxed);
+        stats.measurement_invalid.store(true, Ordering::Relaxed);
+        stats.frames_clamped.store(5, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(9, Ordering::Relaxed);
+
+        assert_eq!(wrap.outproc_health(), (3, 2, true, 14));
+    }
+
+    #[test]
+    fn would_block_ignores_real_stats_and_reports_only_injected() {
+        // WouldBlock 分岐: 別スレッドが outproc mutex を保持している間は real stats を読まず
+        // injected カウンタのみ返すこと（cumulative なので次 tick で real 分も取り戻せる設計）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.frames_clamped.store(100, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(1, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let (holding_tx, holding_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc
+                .lock()
+                .expect("lock outproc for contention setup");
+            holding_tx.send(()).expect("signal lock held");
+            release_rx.recv().expect("wait for release signal");
+        });
+        holding_rx.recv().expect("holder thread signaled lock held");
+
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 1));
+
+        release_tx.send(()).expect("signal release");
+        holder.join().expect("holder thread should not panic");
+    }
+
+    #[test]
+    fn poisoned_still_reports_injected_frames_clamped_not_lost() {
+        // Poisoned 分岐: real stats は 0 に丸めるが、injected の frames_clamped は黙って
+        // 失わず返すこと（finding 2: silent-failure-hunter が指摘した「値が消えないこと」の
+        // 直接検証。手法は PR #403 の genuine-poison パターン（別スレッドで panic → join）を流用）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.frames_clamped.store(42, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(3, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc
+                .lock()
+                .expect("lock outproc for poison setup");
+            panic!("intentional poison for outproc_health poisoned test");
+        })
+        .join()
+        .is_err();
+        assert!(
+            panicked,
+            "spawned thread should have panicked while holding the lock"
+        );
+
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 3));
     }
 }

@@ -101,6 +101,11 @@ pub const ERROR_CODE_OUTPROC_EFFECT_RESPAWN: &str = "OUTPROC_EFFECT_RESPAWN";
 /// repeat-previous が出続ける = effect 経路のみ恒久停止）。daemon が 1 Hz ticker で `measurement_invalid`
 /// を検知して一度だけ発火する（fire-once・γ M1 PR-C）。
 pub const ERROR_CODE_OUTPROC_EFFECT_INVALID: &str = "OUTPROC_EFFECT_INVALID";
+/// OOP effect の block が `MAX_FRAMES`（`orbit-audio-sandbox`）を超えて clamp され、末尾が
+/// 無音化された。WARNING severity。カウンタ自体は既に計測されていたが、1 Hz ticker への配線が
+/// 欠けていたため追加した（#404）。通常は 0 のまま推移する想定（32/64f 小バッファ運用では
+/// 実質到達不能）。
+pub const ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED: &str = "OUTPROC_EFFECT_FRAMES_CLAMPED";
 /// `Engine` の内部 Mutex が RT `try_lock` で `WouldBlock`（一時競合）を返し silent zero-fill に
 /// フォールバックした。WARNING severity。この経路自体は既存の設計判断（lock-free 化は別 Issue で
 /// defer 済み）だが、発生を可視化する仕組みが無かったため追加した（#401）。`WouldBlock` は自己修復

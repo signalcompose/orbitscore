@@ -612,6 +612,107 @@ async fn daemon_error_warning_on_clap_process_error() {
     );
 }
 
+/// OOP effect の frames_clamped が増えると DaemonError (severity=warning,
+/// code=OUTPROC_EFFECT_FRAMES_CLAMPED) が発火する（#404 / #406）。LINK_EGRESS_DROP・
+/// CLAP_PROCESS_ERROR と同じ 1 Hz ticker 経路。integration test は outproc child process を spawn
+/// しない（default feature build には `outproc-effect` が無い）ため、`outproc_frames_clamped_arc`
+/// の **本番経路から分離した注入 seam**（本番常に 0）でこの event を driver する（`outproc_health`
+/// が consolidated accessor としてこの注入分を frames_clamped に合算する・#406 /simplify）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_outproc_frames_clamped() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から frames_clamped を注入（1 Hz ticker が outproc_health() の増加を検知して発火）。
+    daemon
+        .engine
+        .outproc_frames_clamped_arc()
+        .fetch_add(7, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_EFFECT_FRAMES_CLAMPED"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message =
+        warning_message.expect("OUTPROC_EFFECT_FRAMES_CLAMPED warning event not received");
+    // message は累積 clamp 数（7）を含む = daemon_error_event の format! が壊れていないこと。
+    assert!(
+        message.contains('7'),
+        "OUTPROC_EFFECT_FRAMES_CLAMPED message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**
+    // （last_outproc_frames_clamped が据え置かれること）。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["code"] == "OUTPROC_EFFECT_FRAMES_CLAMPED"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "OUTPROC_EFFECT_FRAMES_CLAMPED must not re-fire without additional clamps (latch regression)"
+    );
+
+    // re-arm: 追加注入されると latch が再度開き、更新済みの累積値（7+5=12）で再発火すること
+    // （#406 pr-test-analyzer finding 4: 「fire-once + no-refire」だけでなく「2 回目の注入で
+    // 再発火し累積が更新されること」も検証する）。
+    daemon
+        .engine
+        .outproc_frames_clamped_arc()
+        .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut rearmed_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_EFFECT_FRAMES_CLAMPED"
+                {
+                    rearmed_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let rearmed_message = rearmed_message
+        .expect("OUTPROC_EFFECT_FRAMES_CLAMPED did not re-fire after second injection");
+    assert!(
+        rearmed_message.contains("12"),
+        "re-armed OUTPROC_EFFECT_FRAMES_CLAMPED message should carry the updated cumulative total (12), got: {rearmed_message}"
+    );
+}
+
 /// engine lock contention（try_lock の WouldBlock）が増えると
 /// DaemonError (severity=warning, code=ENGINE_LOCK_CONTENTION) が発火する（#401）。
 /// LINK_EGRESS_DROP/CLAP_PROCESS_ERROR と同じ 1 Hz ticker 経路。`engine_lock_contention_arc` の

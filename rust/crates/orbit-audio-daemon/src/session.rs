@@ -21,10 +21,10 @@ use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
     ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_ENGINE_LOCK_CONTENTION,
     ERROR_CODE_ENGINE_LOCK_POISONED, ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_OUTPROC_EFFECT_ERROR,
-    ERROR_CODE_OUTPROC_EFFECT_INVALID, ERROR_CODE_OUTPROC_EFFECT_RESPAWN,
-    ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
-    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
-    EVENT_STREAM_STATS,
+    ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED, ERROR_CODE_OUTPROC_EFFECT_INVALID,
+    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW,
+    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
+    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -83,6 +83,7 @@ pub async fn run(
             let mut last_clap_errors: u64 = 0;
             let mut last_outproc_errors: u64 = 0;
             let mut last_outproc_respawns: u64 = 0;
+            let mut last_outproc_frames_clamped: u64 = 0;
             let mut last_engine_lock_contention: u64 = 0;
             let mut last_plugin_event_ring_overflow: u64 = 0;
             let mut outproc_invalid_reported = false;
@@ -219,9 +220,13 @@ pub async fn run(
                 }
 
                 // out-of-process effect の health（γ M1 PR-C）を非 RT で surface。child の process() エラー
-                // / crash→respawn / supervise 不能（計測無効）を 1 Hz ticker で検知して event を出す（CLAP
-                // 経路と同設計。outproc 無効 / 異常なしは (0,0,false) のまま発火しない）。
-                let (outproc_errors, outproc_respawns, outproc_invalid) = engine.outproc_health();
+                // / crash→respawn / supervise 不能（計測無効）/ frames_clamped（#404）を 1 Hz ticker で
+                // 検知して event を出す（CLAP 経路と同設計。outproc 無効 / 異常なしは (0,0,false,0) のまま
+                // 発火しない）。4 signal を 1 回の try_lock + snapshot にまとめて読む（#406 /simplify:
+                // 個別 accessor だと同一 mutex を同一 tick 内で複数回 lock し、かつ同一スナップショットを
+                // 観測する保証がなくなる）。
+                let (outproc_errors, outproc_respawns, outproc_invalid, outproc_frames_clamped) =
+                    engine.outproc_health();
                 if outproc_errors > last_outproc_errors {
                     let evt = daemon_error_event(
                         ERROR_SEVERITY_WARNING,
@@ -263,6 +268,25 @@ pub async fn run(
                         break;
                     }
                     outproc_invalid_reported = true;
+                }
+
+                // OOP effect の block が MAX_FRAMES を超えて clamp された累積回数を非 RT で
+                // surface（#404）。カウンタ自体は既存だったが ticker 未配線だったため追加。#406 で
+                // outproc_health() に統合済み（上で destructure 済みの値をそのまま使う）。
+                if outproc_frames_clamped > last_outproc_frames_clamped {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED,
+                        format!(
+                            "out-of-process effect block exceeded MAX_FRAMES and was clamped \
+                             ({outproc_frames_clamped} total); tail of an oversized block was \
+                             silenced",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_frames_clamped = outproc_frames_clamped;
                 }
 
                 let stats_evt = Event::new(
