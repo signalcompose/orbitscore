@@ -336,6 +336,25 @@ async fn handle_command(
     tx: &mpsc::Sender<String>,
 ) -> Value {
     let Command { id, method, params } = cmd;
+
+    // PluginNoteOn/PluginNoteOff dispatch は `plugin_note_spec` を single source of truth として
+    // その外側でチェックする（method match の中に "PluginNoteOn" | "PluginNoteOff" literal を
+    // 別途置くと、同じ文字列集合が2箇所で独立に保守されてしまい、どちらか一方だけ更新された場合に
+    // 検出できない・#402 pr-review-team iteration 3 収束指摘: silent-failure-hunter/
+    // pr-test-analyzer/code-reviewer）。`plugin_note_spec` が `None` を返す method はここを
+    // 素通りして下の match に落ちる。
+    if let Some(spec) = plugin_note_spec(&method) {
+        return handle_plugin_note(
+            &id,
+            &params,
+            engine,
+            spec.default_velocity,
+            spec.status,
+            spec.call,
+        )
+        .await;
+    }
+
     match method.as_str() {
         "Ping" => ok(&id, Value::String("pong".to_string())),
         "GetStatus" => {
@@ -461,33 +480,9 @@ async fn handle_command(
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
             ),
         },
-        // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由）。event ring が
-        // 満杯の場合は bounded retry（最大 ~200ms・#400）で lossless 化するため、tokio ワーカーを
-        // 塞がないよう LoadPlugin と同様 spawn_blocking に包む。
-        // 注意: plugin 未ロード時（LoadPlugin 前 / load 失敗後）も protocol 層では成功応答を返すが、
-        // audio thread は plugin が無ければ event を drain して捨てる（fire-and-forget ring の設計上、
-        // ロード状態の同期確認は cross-thread round-trip が要るため行わない）。pre-load note は黙って落ちる。
-        // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が未定義になるため）。
-        // NoteOn/NoteOff は key/channel 検証・spawn_blocking・応答整形が同型なので共通ヘルパーに
-        // まとめる（velocity 既定値・呼ぶ engine メソッド・status 文字列だけが異なる・#402 レビュー指摘）。
-        // 配線（default_velocity/status/call）は `plugin_note_spec` に集約する single source of truth
-        // で、ここでは matched method から引くだけにする（#402 pr-test-analyzer 指摘・iteration 2:
-        // StubBackend では `call` が clap 未初期化で即 `ClapUnavailable` に落ち velocity/status が
-        // response に現れないため、match arm へ literal を直書きするとコピペ取り違えを response 差分
-        // では検出できない。`plugin_note_spec` を直接 pin するテストで防ぐ）。
-        "PluginNoteOn" | "PluginNoteOff" => {
-            let spec = plugin_note_spec(&method)
-                .expect("matched arm implies PluginNoteOn/PluginNoteOff spec exists");
-            handle_plugin_note(
-                &id,
-                &params,
-                engine,
-                spec.default_velocity,
-                spec.status,
-                spec.call,
-            )
-            .await
-        }
+        // NoteOn / NoteOff（"PluginNoteOn" / "PluginNoteOff"）は関数先頭の `plugin_note_spec`
+        // ディスパッチで処理済みなので、ここには到達しない。event ring 経由の送出（bounded retry・
+        // #400）、key/channel 検証・spawn_blocking・応答整形の実体は `handle_plugin_note` を参照。
         "PlayAt" => {
             let time_sec = param_f64(&params, "time_sec", 0.0);
             let gain = param_f64(&params, "gain", 1.0) as f32;
@@ -698,10 +693,10 @@ struct PluginNoteSpec {
     call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
 }
 
-/// `method` 文字列から [`PluginNoteSpec`] を解決する single source of truth。`handle_command` の
-/// `"PluginNoteOn"`/`"PluginNoteOff"` match arm と、下のテスト `plugin_note_spec_*` の両方がここを
-/// 参照する（#402 pr-test-analyzer 指摘・iteration 2）。`"PluginNoteOn"`/`"PluginNoteOff"` 以外は
-/// `None`。
+/// `method` 文字列から [`PluginNoteSpec`] を解決する single source of truth。`handle_command` 冒頭の
+/// dispatch（`"PluginNoteOn"`/`"PluginNoteOff"` を判定する唯一の箇所）と、下のテスト
+/// `plugin_note_spec_*` の両方がここを参照する（#402 pr-test-analyzer 指摘・iteration 2〜3）。
+/// `"PluginNoteOn"`/`"PluginNoteOff"` 以外は `None`。
 fn plugin_note_spec(method: &str) -> Option<PluginNoteSpec> {
     match method {
         "PluginNoteOn" => Some(PluginNoteSpec {
@@ -883,10 +878,11 @@ mod tests {
         assert!(!validate_bpm(f64::MAX));
     }
 
-    // #402 pr-test-analyzer 指摘（iteration 2）: `handle_command` の `"PluginNoteOn"`/`"PluginNoteOff"`
-    // match arm 自体（このテストではなく `plugin_note_spec` 経由の literal/fn-pointer 配線）が
-    // コピペで入れ替わっていないことを pin する。`handle_command` を実際に呼んで response を比較する
-    // 手は使えない: StubBackend では `call`（実 `EngineWrap::plugin_note_on`/`plugin_note_off`）が
+    // #402 pr-test-analyzer 指摘（iteration 2）: `handle_command` 冒頭の `"PluginNoteOn"`/
+    // `"PluginNoteOff"` dispatch 自体（このテストではなく `plugin_note_spec` 経由の literal/
+    // fn-pointer 配線）がコピペで入れ替わっていないことを pin する。`handle_command` を実際に
+    // 呼んで response を比較する手は使えない: StubBackend では `call`（実
+    // `EngineWrap::plugin_note_on`/`plugin_note_off`）が
     // clap 未初期化で即 `ClapUnavailable` に落ちるため、velocity/status は response に一切現れず、
     // PluginNoteOn/PluginNoteOff の応答が常に同一になってしまう（response 差分では検出不能）。
     // そのため `handle_command` が単一の真実源として参照する `plugin_note_spec` を直接 pin する。
@@ -936,9 +932,10 @@ mod tests {
     }
 
     // #402 pr-test-analyzer: handle_plugin_note の fn-pointer dispatch（call fn / default_velocity /
-    // status 文字列の組み合わせ）が PluginNoteOn/PluginNoteOff の match arm 間で入れ替わっていない
-    // ことを pin する。実 `EngineWrap::plugin_note_on`/`plugin_note_off` を使うと（test backend では
-    // `clap: None` のため）常に ClapUnavailable で早期リターンし velocity が観測できないので、
+    // status 文字列の組み合わせ）が PluginNoteOn/PluginNoteOff の `plugin_note_spec` 間で
+    // 入れ替わっていないことを pin する。実 `EngineWrap::plugin_note_on`/`plugin_note_off` を
+    // 使うと（test backend では `clap: None` のため）常に ClapUnavailable で早期リターンし
+    // velocity が観測できないので、
     // `call` fn だけを capture 用に差し替える（velocity の解決 = `param_f64(..., default_velocity)`
     // は `call` を呼ぶ前に handle_plugin_note 内部で完結するため、この capture が唯一の観測手段）。
     #[tokio::test]
