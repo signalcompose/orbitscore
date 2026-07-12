@@ -433,6 +433,21 @@ fn backlog_catch_up_consumes_every_sequence_exactly_once_in_order() {
     assert_eq!(output_note_ends(ctl, 3), vec![(301, 0)]);
     assert_eq!(unsafe { (*ctl).child_processed.load(Relaxed) }, 3);
     assert_eq!(unsafe { (*ctl).event_decode_error_count.load(Relaxed) }, 0);
+
+    // This test is the one that (non-deterministically, depending on real child process
+    // timing) originally surfaced the `event_cursor` recycled-slot stall bug. Pinning an
+    // exact expected count here would be flaky since it depends on real process timing, so
+    // this only asserts a loose upper bound: given this test's specific structure (at most
+    // one submit races ahead of the drain loop), the recovery arm can fire at most once. The
+    // deterministic regression guard for this exact recovery path lives in
+    // `instrument_host::tests::recycled_slot_resyncs_event_cursor_and_resets_voices`; this
+    // integration test's role is to confirm the race is empirically reachable against a real
+    // child process, not to pin its exact frequency.
+    assert!(
+        host.event_cursor_recycled <= 1,
+        "event_cursor_recycled should never exceed 1 in this test's structure, got {}",
+        host.event_cursor_recycled
+    );
 }
 
 #[test]

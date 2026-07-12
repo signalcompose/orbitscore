@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.246 fix(engine): M2 レビュー追加指摘対応 + Fable独立検証（#416） (Jul 13, 2026)
+
+6.245 の修正後、`/code:pr-review-team` の再々レビューで5件の追加指摘（stale field doc comment・RT-unsafeなeprintln!・新規テストの前提realism・backlog_catch_upの状態未assert・voices.increment順序）が出た。**advisor は「反復ループが `/code:pr-review-team` の MAX_ITERATIONS=3 を超えて発散している」と判断し、最終1ラウンドで確実な項目のみ対応し残りは追跡issue化する方針**を確認。同時に owner の要請で **Fable（`claude-fable-5`）に独立レビューを依頼**し、この方針・特に「Equal分岐のレースはM1と同型だからスコープ外」という判断が正しいかを一次情報ベースで検証させた。
+
+- **最終ラウンドで対応**: (1) `event_cursor` フィールドの doc comment を、否定された安全性主張から実際の回復ロジック（Greater分岐）の説明に書き換え。(2) round3で追加した `eprintln!`（RT-unsafe・audio callback から呼ばれる `drain_to_event_buffer` 内）を差し戻し、`debug_assert!` のみに戻した。(3) 新規テスト `recycled_slot_resyncs_event_cursor_and_resets_voices` の前提を、`submitted` を実際の `process_block` 呼び出しで正当に `next+SLOTS` まで進めてから `seq_tag` を poke する構成に修正（従来は到達不可能な前提だった）。(4) `backlog_catch_up_consumes_every_sequence_exactly_once_in_order` に非flakyな `event_cursor_recycled <= 1` assertion を追加。(5) `voices.increment()` の呼び出し順序問題（同一呼び出し内で今 submit した NoteOn が古い gap 用の reset に巻き込まれて消える）を、想定より小さな変更で修正可能と判明したため即修正（NoteOn の簿記反映を drain ループ全体の後に遅延）。
+- **Fable の検証結果（重要な訂正）**: 「Equal分岐のレースは M1 の既存パターンと同型だからスコープ外」という判断は**事実誤認**と判明。M1（`host.rs`）の audio 読み取りは `target = submitted-1` に密結合しており、`SLOTS>=2` の compile-time assert と `seq_request` の唯一の書き手が host 自身であることから、recycle が構造的に不可能（証明可能な時間的排他）。一方 drain ループの `next` は `submitted` から分離しており、Greater分岐が実証したのと同種のレースにさらされている。ただし修正は安価（Equal分岐で record 適用後に `seq_tag` を再 Acquire load し、変化していれば Greater分岐と同じ回復ロジックを適用する ~6行の seqlock 型再検証）と判定、被害範囲は簿記のみで音声出力には影響しないことも確認。`voices.increment()` 順序問題は許容できるトレードオフ（修正不要）と判定したが、fixer側の判断で既に対応済みだった。
+- Fable の指摘（Equal分岐の seqlock 型再検証）を追加ラウンドとして委譲・適用（詳細は本エントリに続くコミットで記録）。
+- 全34+ orbit-audio-sandbox unit test + gated stress + gated parity を Opus main が独立に再実行して確認。
+- **教訓**: レビューループが反復上限を超えて発散し始めたら、advisor の「収束させて報告」という判断に従いつつ、技術的に確信度の低い判断（特に「前例があるからスコープ外」という類の判断）は独立した第三者（Fable）でもう一段検証する価値がある。今回、advisor 自身も一度誤り、その誤った waiver の根拠を Fable が正しく指摘した — 単一の相談先を鵜呑みにせず、根拠が薄い判断は複数経路で裏取りする運用が機能した。
+- **役割**: 5件の追加指摘の発見＝ 4並列レビュアー。ループ発散の判断・最終ラウンドのスコープ確定＝ advisor 相談の上 Opus main。**実装（5項目）＝ pr-review-team の fixer subagent**（item5 の実装過程で fixer 自身が advisor に相談し `Ordering::Equal` 分岐との相互作用も含めて正確に処理）。**独立検証＝ Fable**（owner の指名）。検証の裏取り＝ Opus main。
+- **状態**: 最終ラウンド完了・裏取り済み。Fable 指摘の追加ラウンドへ。
+
 ### 6.245 fix(engine): M2 event_cursor 永久スタックの実バグを発見・修正（#416） (Jul 13, 2026)
 
 PR #417 の `/code:pr-review-team` 再レビュー（round1修正後）で、code-reviewer が `event_cursor` drain ループの並行性懸念を指摘。**当初 Opus main + advisor は「到達不能・false positive」と結論したが、これは誤りだった**。fixer が実際に検証コマンドを実行した過程で、**既存の正当な回帰テスト `backlog_catch_up_consumes_every_sequence_exactly_once_in_order` が実際に問題の分岐（`Ordering::Greater`）を3/3回踏むことを発見**し、advisor 経由でエスカレーション。

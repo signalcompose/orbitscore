@@ -127,12 +127,20 @@ pub struct PipelinedInstrumentHost {
     submitted: u64,
     /// Next completed instrument-event sequence is drained independently from audio freshness.
     ///
-    /// This is safe because instrument children must consume every sequence in order (design
-    /// document §4.6), so they publish `seq_tag` for every slot without skipping. The submit guard
-    /// prevents `slot(event_cursor + 1)` from being reused for sequence
-    /// `event_cursor + 1 + SLOTS` until `seq_done >= event_cursor + 1`. Since the child publishes
-    /// `seq_tag` and `seq_done` together, the cursor can observe that tag before reuse. This does not
-    /// apply to the M1 effect child, whose latest-jump policy permits skipped sequences.
+    /// Instrument children must consume every sequence in order (design document §4.6), so they
+    /// publish `seq_tag` for every slot without skipping -- unlike the M1 effect child, whose
+    /// latest-jump policy permits skipped sequences. It might seem like this in-order guarantee,
+    /// combined with the submit guard (`slot(s)` isn't reused for `s + SLOTS` until
+    /// `seq_done >= s`), is enough to guarantee `event_cursor` always observes `seq_tag == next`
+    /// before its physical slot gets recycled for a later sequence. **It does not**: the submit
+    /// guard only bounds `submitted - seq_done` (the child's completion cursor), not
+    /// `submitted - event_cursor` (this host's own drain progress). A host that falls behind on
+    /// draining by more than `SLOTS` sequences -- while the child races ahead and legitimately
+    /// recycles the slot -- can observe `seq_tag[slot] > next`. The physical slot can genuinely be
+    /// recycled before this host drains it. The actual safety net is the `Ordering::Greater` arm
+    /// in `process_block`'s drain loop, which detects exactly this recycled-slot race and resyncs
+    /// `event_cursor` forward past the unrecoverable gap; it is live recovery logic, not a guard
+    /// against an unreachable case.
     event_cursor: u64,
     primed: bool,
     pub fresh: u64,
@@ -218,6 +226,17 @@ impl PipelinedInstrumentHost {
         let slot_free = new_seq <= SLOTS as u64
             || unsafe { (*region).seq_done.load(Acquire) } >= new_seq - SLOTS as u64;
         let mut outcome = InstrumentBlockOutcome::default();
+        // (slot, note_on_scan_start, written): deferred until after the drain loop below, so
+        // that a NoteOn submitted THIS call is bookkept after -- not before -- the drain loop's
+        // own voice bookkeeping: both `reset_all()` recovery sites (the `Ordering::Greater` arm
+        // and the `output_note_end_dropped_count` check) and the `Ordering::Equal` arm's
+        // `note_end`/`choke` handling for older, already-completed sequences. Applying the
+        // increment first would let bookkeeping meant only for older sequences affect a voice
+        // this same call just submitted (e.g. a stale `note_end` for a note that no longer
+        // exists silently swallowing the increment via `saturating_sub` instead of leaving the
+        // freshly submitted note live). See the `voices.increment` deferred-application site
+        // below the drain loop for the corresponding read.
+        let mut pending_note_on_scan: Option<(usize, usize, usize)> = None;
         if slot_free {
             let slot = slot_index(new_seq);
             let inject = self.event_ring.take_note_flush_pending();
@@ -245,20 +264,12 @@ impl PipelinedInstrumentHost {
                         .input_event_spilled_count
                         .fetch_add(spilled as u64, Relaxed);
                 }
-                for record in &window[usize::from(inject)..written] {
-                    if let Some(NeutralEvent::NoteOn { addr, .. }) = record.decode() {
-                        self.voices.increment(VoiceKey {
-                            port_index: addr.port_index,
-                            channel: addr.channel,
-                            key: addr.key,
-                        });
-                    }
-                }
                 (*region).input_event_count[slot].store(written as u32, Relaxed);
                 std::ptr::addr_of_mut!((*region).transport_context[slot]).write(transport);
                 (*region).n_frames[slot].store(n_frames, Relaxed);
                 (*region).seq_request.store(new_seq, Release);
             }
+            pending_note_on_scan = Some((slot, usize::from(inject), written));
             self.submitted = new_seq;
             outcome.submitted = true;
             outcome.sticky_note_choke_injected = inject;
@@ -362,6 +373,30 @@ impl PipelinedInstrumentHost {
             self.voices.reset_all();
         }
         self.last_output_note_end_dropped = dropped;
+
+        // Apply this call's NoteOn increments now, after every `reset_all()` above AND the
+        // drain loop's `Ordering::Equal` note_end/choke handling have already run, so
+        // bookkeeping meant only for older, already-completed sequences cannot affect a voice
+        // this same call just submitted. The events are read back from the shm window written
+        // earlier in this call (untouched since nothing else in this function writes
+        // `input_events`).
+        if let Some((slot, scan_start, written)) = pending_note_on_scan {
+            unsafe {
+                let window = std::slice::from_raw_parts(
+                    std::ptr::addr_of!((*region).input_events[slot]) as *const EventRecord,
+                    MAX_EVENTS_PER_BLOCK,
+                );
+                for record in &window[scan_start..written] {
+                    if let Some(NeutralEvent::NoteOn { addr, .. }) = record.decode() {
+                        self.voices.increment(VoiceKey {
+                            port_index: addr.port_index,
+                            channel: addr.channel,
+                            key: addr.key,
+                        });
+                    }
+                }
+            }
+        }
 
         if count < raw {
             out[count..].fill(0.0);
@@ -629,26 +664,59 @@ mod tests {
         assert_eq!(host.live_count(key), 1);
         assert_eq!(host.event_cursor_recycled, 0);
 
-        // Simulate the child having already recycled slot 1's physical storage for a much
-        // later sequence (`next + SLOTS` or beyond) before the host's own `event_cursor`
-        // caught up to `next == 1`. This is the race `backlog_catch_up_consumes_every_
-        // sequence_exactly_once_in_order` demonstrates non-deterministically against a real
-        // child; here we force it directly for a deterministic repro.
+        // A real child can never publish a `seq_tag` value beyond what the host has
+        // authorized via `seq_request` (always `<= submitted`), so poking `seq_tag` straight
+        // to `next + SLOTS` while `submitted` is still 1 would be an impossible precondition.
+        // Instead, legitimately advance `submitted` to `next + SLOTS` first through real
+        // `process_block` submissions, using direct `seq_done` pokes to satisfy the submit
+        // guard along the way -- the same technique `delayed_note_end_is_drained_after_its_
+        // audio_target_has_moved_on` and `stall_does_not_pop_event_ring` use.
         let next = 1u64;
         let recycled_seq = next + SLOTS as u64;
+
+        // Seq 2 submits freely (new_seq == 2 <= SLOTS).
+        assert!(
+            host.process_block(&mut out, &[], transport(120.0, 0.0))
+                .submitted
+        );
+        assert_eq!(host.submitted, 2);
+
+        // Seq 3 (== recycled_seq) needs `seq_done >= 3 - SLOTS == 1`; poke it directly to
+        // simulate real child completion, matching the pattern already used elsewhere in
+        // this file.
+        unsafe {
+            (*region).seq_done.store(1, Release);
+        }
+        assert!(
+            host.process_block(&mut out, &[], transport(120.0, 0.0))
+                .submitted
+        );
+        assert_eq!(host.submitted, recycled_seq);
+
+        // Seq 4 needs `seq_done >= 4 - SLOTS == 2`; poke it directly for the same reason.
+        unsafe {
+            (*region).seq_done.store(2, Release);
+        }
+
+        // Now that `submitted` has legitimately reached `recycled_seq`, simulate the child
+        // having published `seq_tag` for that (fully authorized) sequence into slot
+        // `slot_index(next)` -- the same physical slot as `next`, since `slot_index` wraps
+        // `% SLOTS`. This models the child having recycled slot 1's physical storage before
+        // the host's own `event_cursor` caught up to `next == 1`, which is the race
+        // `backlog_catch_up_consumes_every_sequence_exactly_once_in_order` demonstrates
+        // non-deterministically against a real child; here we force it directly for a
+        // deterministic repro, but from a state a real child could actually reach.
         unsafe {
             (*region).seq_tag[slot_index(next)].store(recycled_seq, Release);
         }
 
-        // Seq 2 submits freely (new_seq == 2 <= SLOTS), so `submitted` advances to 2 and the
-        // drain loop below runs against the poked `seq_tag`.
         let outcome = host.process_block(&mut out, &[], transport(120.0, 0.0));
         assert!(outcome.submitted);
+        assert_eq!(host.submitted, recycled_seq + 1);
 
         // `event_cursor` must resync forward past the unrecoverable gap (to `submitted`)
         // rather than stay stuck at its old value of 0.
         assert_eq!(host.event_cursor, host.submitted);
-        assert_eq!(host.event_cursor, 2);
         assert_eq!(host.event_cursor_recycled, 1);
         assert_eq!(host.live_count(key), 0);
     }
