@@ -468,62 +468,30 @@ async fn handle_command(
         // audio thread は plugin が無ければ event を drain して捨てる（fire-and-forget ring の設計上、
         // ロード状態の同期確認は cross-thread round-trip が要るため行わない）。pre-load note は黙って落ちる。
         // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が未定義になるため）。
-        "PluginNoteOn" => match params.get("key").and_then(|v| v.as_u64()) {
-            Some(k) if k <= 127 => match parse_midi_channel(&params) {
-                Ok(channel) => {
-                    let velocity = param_f64(&params, "velocity", 0.8).clamp(0.0, 1.0);
-                    let engine = engine.clone();
-                    let res = tokio::task::spawn_blocking(move || {
-                        engine.plugin_note_on(k as u8, channel, velocity)
-                    })
-                    .await;
-                    match res {
-                        Ok(Ok(())) => ok(&id, json!({"status": "note_on", "key": k})),
-                        Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
-                        Err(join_err) => err(
-                            &id,
-                            ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
-                        ),
-                    }
-                }
-                Err(e) => err(&id, e),
-            },
-            _ => err(
+        // NoteOn/NoteOff は key/channel 検証・spawn_blocking・応答整形が同型なので共通ヘルパーに
+        // まとめる（velocity 既定値・呼ぶ engine メソッド・status 文字列だけが異なる・#402 レビュー指摘）。
+        "PluginNoteOn" => {
+            handle_plugin_note(
                 &id,
-                ProtocolError::new(
-                    "MALFORMED_REQUEST",
-                    "missing or out-of-range 'key' (0..=127)",
-                ),
-            ),
-        },
-        "PluginNoteOff" => match params.get("key").and_then(|v| v.as_u64()) {
-            Some(k) if k <= 127 => match parse_midi_channel(&params) {
-                Ok(channel) => {
-                    let velocity = param_f64(&params, "velocity", 0.0).clamp(0.0, 1.0);
-                    let engine = engine.clone();
-                    let res = tokio::task::spawn_blocking(move || {
-                        engine.plugin_note_off(k as u8, channel, velocity)
-                    })
-                    .await;
-                    match res {
-                        Ok(Ok(())) => ok(&id, json!({"status": "note_off", "key": k})),
-                        Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
-                        Err(join_err) => err(
-                            &id,
-                            ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
-                        ),
-                    }
-                }
-                Err(e) => err(&id, e),
-            },
-            _ => err(
+                &params,
+                engine,
+                0.8,
+                "note_on",
+                EngineWrap::plugin_note_on,
+            )
+            .await
+        }
+        "PluginNoteOff" => {
+            handle_plugin_note(
                 &id,
-                ProtocolError::new(
-                    "MALFORMED_REQUEST",
-                    "missing or out-of-range 'key' (0..=127)",
-                ),
-            ),
-        },
+                &params,
+                engine,
+                0.0,
+                "note_off",
+                EngineWrap::plugin_note_off,
+            )
+            .await
+        }
         "PlayAt" => {
             let time_sec = param_f64(&params, "time_sec", 0.0);
             let gain = param_f64(&params, "gain", 1.0) as f32;
@@ -724,6 +692,48 @@ fn parse_midi_channel(params: &Value) -> Result<u8, ProtocolError> {
             "MALFORMED_REQUEST",
             "'channel' must be 0..=15",
         )),
+    }
+}
+
+/// `PluginNoteOn`/`PluginNoteOff` の共通本体（key/channel 検証・spawn_blocking・応答整形が
+/// 完全に同型なので集約する・#402 レビュー指摘）。`call` は `EngineWrap::plugin_note_on`/
+/// `plugin_note_off` を渡す。
+async fn handle_plugin_note(
+    id: &str,
+    params: &Value,
+    engine: &Arc<EngineWrap>,
+    default_velocity: f64,
+    status: &'static str,
+    call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
+) -> Value {
+    match params.get("key").and_then(|v| v.as_u64()) {
+        Some(k) if k <= 127 => match parse_midi_channel(params) {
+            Ok(channel) => {
+                // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が
+                // 未定義になるため）。
+                let velocity = param_f64(params, "velocity", default_velocity).clamp(0.0, 1.0);
+                let engine = engine.clone();
+                let res =
+                    tokio::task::spawn_blocking(move || call(&engine, k as u8, channel, velocity))
+                        .await;
+                match res {
+                    Ok(Ok(())) => ok(id, json!({"status": status, "key": k})),
+                    Ok(Err(e)) => err(id, wrap_err_to_protocol(&e)),
+                    Err(join_err) => err(
+                        id,
+                        ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                    ),
+                }
+            }
+            Err(e) => err(id, e),
+        },
+        _ => err(
+            id,
+            ProtocolError::new(
+                "MALFORMED_REQUEST",
+                "missing or out-of-range 'key' (0..=127)",
+            ),
+        ),
     }
 }
 
