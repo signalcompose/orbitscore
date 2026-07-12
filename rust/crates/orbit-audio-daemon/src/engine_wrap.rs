@@ -92,7 +92,7 @@ pub struct EngineWrap {
     /// 機構が存在しないため・厳密な非同期状態追跡はしない）。`clap`/`link`/`outproc` と同様
     /// feature `clap-host` 専用（読み書きとも clap-host 経路にしかない）。
     #[cfg(feature = "clap-host")]
-    plugin_loaded: Arc<AtomicBool>,
+    plugin_loaded: AtomicBool,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
     /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
@@ -494,7 +494,7 @@ impl EngineWrap {
             link_egress_drops: Arc::new(AtomicU64::new(0)),
             clap_process_errors: Arc::new(AtomicU64::new(0)),
             #[cfg(feature = "clap-host")]
-            plugin_loaded: Arc::new(AtomicBool::new(false)),
+            plugin_loaded: AtomicBool::new(false),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
@@ -1215,24 +1215,25 @@ mod plugin_load_gate_tests {
         EngineWrap::build(engine, 48_000, 2, Arc::new(StreamStats::default()))
     }
 
-    #[test]
-    fn note_on_before_load_returns_explicit_error_not_success() {
+    /// plugin 未ロード時に `f` が明示的な error を返すことを検証する共通アサーション。
+    /// note_on/note_off の2テストは setup・assertion が同一で呼び出しメソッドのみ異なるため、
+    /// ここに集約する（/simplify レビュー #407）。
+    fn assert_rejected_before_load(f: impl FnOnce(&EngineWrap) -> Result<(), WrapError>) {
         let wrap = unstarted_engine();
-        let result = wrap.plugin_note_on(60, 0, 0.8);
         assert!(
-            result.is_err(),
+            f(&wrap).is_err(),
             "plugin 未ロード時は成功を返してはいけない（#405）"
         );
     }
 
     #[test]
+    fn note_on_before_load_returns_explicit_error_not_success() {
+        assert_rejected_before_load(|wrap| wrap.plugin_note_on(60, 0, 0.8));
+    }
+
+    #[test]
     fn note_off_before_load_returns_explicit_error_not_success() {
-        let wrap = unstarted_engine();
-        let result = wrap.plugin_note_off(60, 0, 0.0);
-        assert!(
-            result.is_err(),
-            "plugin 未ロード時は成功を返してはいけない（#405）"
-        );
+        assert_rejected_before_load(|wrap| wrap.plugin_note_off(60, 0, 0.0));
     }
 
     #[test]
