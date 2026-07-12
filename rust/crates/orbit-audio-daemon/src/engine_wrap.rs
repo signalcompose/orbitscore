@@ -91,7 +91,10 @@ pub struct EngineWrap {
     /// ため満杯は一時的であり、真の drop はこの回数だけ発生する（M2 doc の「溢れても失わない」方針を
     /// in-process ring に retrofit・issue #400）。`EngineWrap` は常に `Arc<EngineWrap>` として共有
     /// されるため、`link_egress_drops`/`clap_process_errors` と異なり test 注入用の `_arc()` getter
-    /// が不要（この counter は本番書き込みのみ）で、プレーンな `AtomicU64` で足りる。
+    /// が不要。本番の bounded retry 書き込みも test 注入用の
+    /// [`plugin_event_ring_overflow_inject`](Self::plugin_event_ring_overflow_inject)（#402）も、
+    /// producer 側を別スレッドへ outsource せず常に `&self` 経由で `EngineWrap` 自身が直接書くため、
+    /// `Arc` clone による cross-thread 共有が不要で、プレーンな `AtomicU64` で足りる。
     plugin_event_ring_overflow_count: AtomicU64,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`

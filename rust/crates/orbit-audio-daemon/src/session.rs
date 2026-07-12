@@ -470,25 +470,21 @@ async fn handle_command(
         // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が未定義になるため）。
         // NoteOn/NoteOff は key/channel 検証・spawn_blocking・応答整形が同型なので共通ヘルパーに
         // まとめる（velocity 既定値・呼ぶ engine メソッド・status 文字列だけが異なる・#402 レビュー指摘）。
-        "PluginNoteOn" => {
+        // 配線（default_velocity/status/call）は `plugin_note_spec` に集約する single source of truth
+        // で、ここでは matched method から引くだけにする（#402 pr-test-analyzer 指摘・iteration 2:
+        // StubBackend では `call` が clap 未初期化で即 `ClapUnavailable` に落ち velocity/status が
+        // response に現れないため、match arm へ literal を直書きするとコピペ取り違えを response 差分
+        // では検出できない。`plugin_note_spec` を直接 pin するテストで防ぐ）。
+        "PluginNoteOn" | "PluginNoteOff" => {
+            let spec = plugin_note_spec(&method)
+                .expect("matched arm implies PluginNoteOn/PluginNoteOff spec exists");
             handle_plugin_note(
                 &id,
                 &params,
                 engine,
-                0.8,
-                "note_on",
-                EngineWrap::plugin_note_on,
-            )
-            .await
-        }
-        "PluginNoteOff" => {
-            handle_plugin_note(
-                &id,
-                &params,
-                engine,
-                0.0,
-                "note_off",
-                EngineWrap::plugin_note_off,
+                spec.default_velocity,
+                spec.status,
+                spec.call,
             )
             .await
         }
@@ -695,6 +691,33 @@ fn parse_midi_channel(params: &Value) -> Result<u8, ProtocolError> {
     }
 }
 
+/// `PluginNoteOn`/`PluginNoteOff` の配線（`default_velocity`/`status`/`call`）。
+struct PluginNoteSpec {
+    default_velocity: f64,
+    status: &'static str,
+    call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
+}
+
+/// `method` 文字列から [`PluginNoteSpec`] を解決する single source of truth。`handle_command` の
+/// `"PluginNoteOn"`/`"PluginNoteOff"` match arm と、下のテスト `plugin_note_spec_*` の両方がここを
+/// 参照する（#402 pr-test-analyzer 指摘・iteration 2）。`"PluginNoteOn"`/`"PluginNoteOff"` 以外は
+/// `None`。
+fn plugin_note_spec(method: &str) -> Option<PluginNoteSpec> {
+    match method {
+        "PluginNoteOn" => Some(PluginNoteSpec {
+            default_velocity: 0.8,
+            status: "note_on",
+            call: EngineWrap::plugin_note_on,
+        }),
+        "PluginNoteOff" => Some(PluginNoteSpec {
+            default_velocity: 0.0,
+            status: "note_off",
+            call: EngineWrap::plugin_note_off,
+        }),
+        _ => None,
+    }
+}
+
 /// `PluginNoteOn`/`PluginNoteOff` の共通本体（key/channel 検証・spawn_blocking・応答整形が
 /// 完全に同型なので集約する・#402 レビュー指摘）。`call` は `EngineWrap::plugin_note_on`/
 /// `plugin_note_off` を渡す。
@@ -858,6 +881,58 @@ mod tests {
         assert!(!validate_bpm(f64::NEG_INFINITY));
         assert!(!validate_bpm(MAX_LINK_BPM + 1.0));
         assert!(!validate_bpm(f64::MAX));
+    }
+
+    // #402 pr-test-analyzer 指摘（iteration 2）: `handle_command` の `"PluginNoteOn"`/`"PluginNoteOff"`
+    // match arm 自体（このテストではなく `plugin_note_spec` 経由の literal/fn-pointer 配線）が
+    // コピペで入れ替わっていないことを pin する。`handle_command` を実際に呼んで response を比較する
+    // 手は使えない: StubBackend では `call`（実 `EngineWrap::plugin_note_on`/`plugin_note_off`）が
+    // clap 未初期化で即 `ClapUnavailable` に落ちるため、velocity/status は response に一切現れず、
+    // PluginNoteOn/PluginNoteOff の応答が常に同一になってしまう（response 差分では検出不能）。
+    // そのため `handle_command` が単一の真実源として参照する `plugin_note_spec` を直接 pin する。
+    #[test]
+    fn plugin_note_spec_maps_default_velocity_and_status() {
+        let on = plugin_note_spec("PluginNoteOn").expect("PluginNoteOn has a spec");
+        assert_eq!(on.default_velocity, 0.8, "NoteOn の既定 velocity");
+        assert_eq!(on.status, "note_on");
+
+        let off = plugin_note_spec("PluginNoteOff").expect("PluginNoteOff has a spec");
+        assert_eq!(off.default_velocity, 0.0, "NoteOff の既定 velocity");
+        assert_eq!(off.status, "note_off");
+
+        assert!(
+            plugin_note_spec("Ping").is_none(),
+            "PluginNoteOn/Off 以外は None"
+        );
+    }
+
+    // fn-pointer の取り違え（`call` フィールドが逆の `EngineWrap` メソッドを指す）を pin する。
+    // `#[cfg(not(feature = "clap-host"))]` ビルドでは `plugin_note_on`/`plugin_note_off` の stub 本体が
+    // バイト同一（同じ `ClapUnavailable` を返すだけ）なため、コンパイラの identical code folding で
+    // 同一アドレスに畳まれ得るため、fn-pointer 比較が意味を持たない。よってこのテストは `clap-host` 有効
+    // ビルド限定（本体が `push_plugin_event` に異なる `PluginEvent` variant を渡すため区別できる）。
+    #[cfg(feature = "clap-host")]
+    #[test]
+    fn plugin_note_spec_dispatches_to_correct_engine_method() {
+        let on = plugin_note_spec("PluginNoteOn").expect("PluginNoteOn has a spec");
+        assert!(
+            std::ptr::fn_addr_eq(
+                on.call,
+                EngineWrap::plugin_note_on
+                    as fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>
+            ),
+            "PluginNoteOn は EngineWrap::plugin_note_on を呼ぶこと（NoteOff と入れ替わっていないこと）"
+        );
+
+        let off = plugin_note_spec("PluginNoteOff").expect("PluginNoteOff has a spec");
+        assert!(
+            std::ptr::fn_addr_eq(
+                off.call,
+                EngineWrap::plugin_note_off
+                    as fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>
+            ),
+            "PluginNoteOff は EngineWrap::plugin_note_off を呼ぶこと"
+        );
     }
 
     // #402 pr-test-analyzer: handle_plugin_note の fn-pointer dispatch（call fn / default_velocity /
