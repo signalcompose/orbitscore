@@ -1458,6 +1458,66 @@ mod plugin_load_gate_tests {
         (wrap, event_rx)
     }
 
+    fn loadable_engine() -> (
+        Arc<EngineWrap>,
+        std::sync::mpsc::Receiver<crate::clap_host::ClapCommand>,
+    ) {
+        let wrap = unstarted_engine();
+        let (event_tx, _event_rx) = orbit_clap_host::make_event_ring(16);
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        let stats = orbit_clap_host::ClapProcessorStats::new();
+        let cb_stats = orbit_audio_native::CallbackTimeStats::new();
+        *wrap.clap.lock().expect("clap mutex") = Some(ClapControl {
+            cmd_tx,
+            event_tx,
+            stats,
+            cb_stats,
+        });
+        (wrap, cmd_rx)
+    }
+
+    #[test]
+    fn load_plugin_success_sets_plugin_loaded_flag() {
+        let (wrap, cmd_rx) = loadable_engine();
+        let responder = std::thread::spawn(move || {
+            let cmd = cmd_rx.recv().expect("load_plugin should send LoadPlugin");
+            match cmd {
+                crate::clap_host::ClapCommand::LoadPlugin {
+                    path,
+                    plugin_id,
+                    sample_rate,
+                    channels,
+                    max_frames,
+                    reply,
+                } => {
+                    assert_eq!(path, PathBuf::from("dummy.clap"));
+                    assert_eq!(plugin_id, None);
+                    assert_eq!(sample_rate, 48_000);
+                    assert_eq!(channels, 2);
+                    assert_eq!(max_frames, CLAP_MAX_FRAMES);
+                    reply
+                        .send(Ok(orbit_clap_host::LoadedPluginInfo {
+                            plugin_id: "com.example.dummy".to_string(),
+                            plugin_name: Some("Dummy".to_string()),
+                            note_port_index: 0,
+                        }))
+                        .expect("load_plugin should still be waiting for reply");
+                }
+            }
+        });
+
+        let result = wrap.load_plugin(PathBuf::from("dummy.clap"), None);
+        responder.join().expect("responder thread should not panic");
+
+        if let Err(err) = result {
+            panic!("load_plugin should succeed: {err:?}");
+        }
+        assert!(
+            wrap.plugin_loaded.load(Ordering::Relaxed),
+            "load_plugin success branch must set plugin_loaded"
+        );
+    }
+
     #[test]
     fn note_on_after_load_reaches_ring() {
         let (wrap, mut consumer) = loaded_engine();

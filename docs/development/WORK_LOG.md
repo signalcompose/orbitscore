@@ -17,6 +17,10 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.228 test(engine): cover load_plugin success flag update (#411) (Jul 12, 2026)
+
+`EngineWrap::load_plugin()` の成功分岐が `plugin_loaded` を true にすることを、実際の `LoadPlugin` コマンド送信と reply channel の往復で検証する unit test を追加。従来の `loaded_engine()` はテスト内でフラグを直接注入していたため、成功分岐の `store(true, ...)` が削除・反転されても検出できなかった穴を埋めた。
+
 ### 6.227 test(engine): PluginNote load-gate 回帰テストの空洞化を修正 + CLAP_NOT_LOADED error code（#405） (Jul 12, 2026)
 
 6.226（#405 の実装）に対する `/code:pr-review-team` 4並列レビュー（code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer）で、回帰テストが実は #405 のガードを検証できていないこと等が判明（PR #407）。
