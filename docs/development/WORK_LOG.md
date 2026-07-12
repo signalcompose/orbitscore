@@ -17,7 +17,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.222 fix(engine): ENGINE_LOCK_CONTENTION の WouldBlock/Poisoned 混同を修正（PR #403） (Jul 12, 2026)
+### 6.223 fix(engine): ENGINE_LOCK_CONTENTION の WouldBlock/Poisoned 混同を修正（PR #403） (Jul 12, 2026)
 
 PR #403（#401 の実装）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）で altitude レビュアーが発見し、コード直接確認で確定した実バグ。`orbit-audio-core::Engine::with_scheduler`/`render_multi` の `Err(_)` ワイルドカードが `std::sync::Mutex::try_lock()` の `WouldBlock`（一時競合・次ブロックで自己修復）と `Poisoned`（別スレッド panic による永続破損・`clear_poison()` 呼び出し箇所なしで恒久化）を同一カウンタ・同一 fallback に混ぜていた。poison すると `contention_count` が以後ずっと増え続け、daemon の WARNING メッセージ「this self-heals next block」が実際には二度と真にならない状態のまま無限に再発火する欠陥だった。
 
@@ -29,7 +29,7 @@ PR #403（#401 の実装）に対する `/simplify` 4並列レビュー（reuse/
 - **役割**: 発見=`/simplify` 4並列レビュー（altitude が主犯、reuse/simplification が付随指摘）/ 実装・検証=Opus subagent（advisor で設計レビュー後に commit）。
 - **状態**: PR #403 に追加コミットとして push 済み。
 
-### 6.221 fix(engine): Engine lock 競合の silent zero-fill を可視化（#401） (Jul 12, 2026)
+### 6.222 fix(engine): Engine lock 競合の silent zero-fill を可視化（#401） (Jul 12, 2026)
 
 M2 instrument IPC substrate（#398）の容量設計を検討する過程で、Fable の拡張レビューが新たに発見した箇所。`orbit-audio-core::Engine::with_scheduler`/`render_multi` は RT 競合（`try_lock` 失敗）時に出力バッファを silent zero-fill する既存設計（lock-free 化は別 Issue で defer 済み・自己修復する障害）だったが、発生を可視化する仕組みが一切なかった。
 
@@ -39,6 +39,18 @@ M2 instrument IPC substrate（#398）の容量設計を検討する過程で、F
 - **付随調査**: 同セッションで fresh agent(opus)による拡張監査（TS層+grepパターン非依存のRust手書きqueue探索）を実施し、TS層には同種欠陥なし・新たに2件発見（`orbit-audio-sandbox`の`frames_clamped`カウンター未配線／プラグイン未ロード時のNoteOn/NoteOffが嘘の成功応答を返す）→ 別途 issue化予定。LinkAudio側の`MAX_LINK_CHANNELS`(64)の debug_assert は、control側(`register_channel`)が同じ上限を既に error として強制しているため構造上到達不能と判断し見送り。
 - **役割**: 発見=Fable(実コード確認込みレビュー) / 実装・検証=Opus main(直接実装)。
 - **状態**: M2(#398)とは独立スコープ。PR 作成 → owner マージ待ち。
+
+### 6.221 fix(engine): in-process CLAP event ring を bounded retry で lossless 化（#400） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の transport 容量設計を検討する過程で、既存の in-process CLAP event ring（`orbit-audio-daemon/src/engine_wrap.rs` の `push_plugin_event`・1024 slot）に同種の欠陥（満杯時 drop-newest だが可視化カウンタなし・NoteOff drop で stuck note の可能性）が見つかり、Fable のレビューで「producer が RT スレッドでないため bounded retry だけで安価に lossless 化できる」と判明したため、M2 とは独立した issue として即着手した。
+
+- **実コード確認**: `push_plugin_event` の呼び出し元は `session.rs` の WS command handler（tokio async task・control スレッド）であり RT audio スレッドではない。consumer（`processor.rs` の `drain_to_event_buffer`）は毎 audio callback で ring を全量 drain するため、最大 1 callback 周期（buffer 設定によって ~1.3〜93ms）待てば空きが保証される。
+- **実装**: `push_with_bounded_retry<T>`（`rtrb::Producer<T>` 汎用・純粋関数・mutex 非依存）を新設し、最大200回・1ms間隔（≈200ms上限）で retry。真にタイムアウトした場合のみ `plugin_event_ring_overflow_count`（新規 `Arc<AtomicU64>`・`clap_process_errors` と同型の unconditional health-signal フィールド）を進めてエラーを返す。`push_plugin_event` はこのヘルパーを呼ぶだけに簡素化。
+- **可視化**: `ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW`（`protocol.rs`）を新設し、既存の 1Hz ticker（`CLAP_PROCESS_ERROR` 等と同型パターン）に配線。
+- **tokio ワーカー保護**: bounded retry で `plugin_note_on`/`plugin_note_off` が最大 ~200ms ブロックしうるようになったため、`session.rs` の `PluginNoteOn`/`PluginNoteOff` handler を `LoadPlugin` と同じ `tokio::task::spawn_blocking` パターンで包み、tokio ワーカースレッドを塞がないようにした。
+- **検証**: 初回コミットで新規 unit test 3本（`plugin_event_ring_retry_tests`・即座に成功／consumer drain 後に成功／真の overflow で counter 増分）を追加。以降 PR #402 の pr-review-team 反復（/simplify・カバレッジギャップ是正・`handle_command` dispatch 一本化）で `plugin_event_ring_retry_tests` に fatal outcome 早期リターン 1本を追加し、さらに `push_plugin_event_tests`（clap 未初期化時の `ClapUnavailable` 2本）・`plugin_note_spec_*`（配線 pin 2本）・`handle_plugin_note_*`（fn-pointer dispatch・spawn_blocking join-error 2本）・`tests/protocol.rs` の統合テスト（ring overflow warning 1本）を追加し、累計で新規 unit/integration test 11本。clap-host feature 下で全て PASS。`cargo build`(default/clap-host/outproc-effect)・`cargo clippy --all-targets -D warnings`(同3構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。
+- **役割**: 発見=Fable(実コード確認込みレビュー) / 実装・検証=Opus main(直接実装・小規模のためサブエージェント委譲なし)。
+- **状態**: M2(#398)とは独立スコープ。PR #402 iteration 3 レビュー収束（silent-failure-hunter/pr-test-analyzer/code-reviewer）を反映して cleanup 済み → owner マージ待ち。
 
 ### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
 

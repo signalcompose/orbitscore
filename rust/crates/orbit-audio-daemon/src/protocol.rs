@@ -113,6 +113,10 @@ pub const ERROR_CODE_ENGINE_LOCK_CONTENTION: &str = "ENGINE_LOCK_CONTENTION";
 /// `ENGINE_LOCK_CONTENTION`（自己修復する `WouldBlock`）とは意味論が異なるため別コードにする。
 /// daemon が 1 Hz ticker でフラグを検知し、`device_lost` と同様 fire-once で発火する。
 pub const ERROR_CODE_ENGINE_LOCK_POISONED: &str = "ENGINE_LOCK_POISONED";
+/// in-process CLAP event ring への push が bounded retry の末に力尽きた（真の event 喪失）。
+/// WARNING severity。control スレッドが cumulative counter に積み、daemon が 1 Hz ticker で
+/// 増加を検知して発火する（#400・M2 doc の「溢れても失わない」方針の in-process retrofit）。
+pub const ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW: &str = "PLUGIN_EVENT_RING_OVERFLOW";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]
