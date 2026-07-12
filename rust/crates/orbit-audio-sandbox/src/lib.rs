@@ -33,6 +33,7 @@ pub use offline::{
     render_through_child_sync_with_options, ChildStats, RenderOptions,
 };
 pub use transport::{
-    create_shared, open_shared, region_ptr, slot_index, slot_offset, SharedRegion, BUF_LEN,
-    CHANNELS, CONTROL_QUIT, CONTROL_RUN, MAX_FRAMES, REGION_BYTES, SLOTS,
+    create_shared, open_shared, region_ptr, slot_index, slot_offset, SharedRegion,
+    TransportContext, BUF_LEN, CHANNELS, CONTROL_QUIT, CONTROL_RUN, MAX_EVENTS_PER_BLOCK,
+    MAX_FRAMES, REGION_BYTES, SLOTS,
 };

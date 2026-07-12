@@ -34,12 +34,21 @@ use std::sync::atomic::{AtomicU32, AtomicU64};
 
 use memmap2::MmapMut;
 
+use crate::events::EventRecord;
+
 /// 1 ブロックの最大フレーム数(cpal buffer の上限。これを超える callback は clamp する)。
 pub const MAX_FRAMES: usize = 4096;
 /// チャンネル数(stereo 固定)。
 pub const CHANNELS: usize = 2;
 /// 1 slot(= 1 ブロック)のインターリーブ済みバッファ長(フレーム × チャンネル)。
 pub const BUF_LEN: usize = MAX_FRAMES * CHANNELS;
+/// 1 ブロックあたりの event 転送窓(= shm 上の [`EventRecord`] 配列サイズ)。
+///
+/// 根拠 = 統計的典型性でなく「アーキテクチャ飽和点」: [`MAX_FRAMES`] と揃え、「1 sample あたり
+/// 1 event」を持続転送できる水準にする(設計 doc §4.2)。これを超える密度は個別イベントでなく
+/// audio-rate 変調が正しい表現媒体であり、"天井" ではなく表現媒体の境界になる。窓に載りきらない
+/// 分は host 側 backing ring / child 側 spill FIFO が lossless に遅延配送する(§4.2)。
+pub const MAX_EVENTS_PER_BLOCK: usize = 4096; // = MAX_FRAMES
 /// ping-pong の slot 数(= pipeline 深さ)。
 ///
 /// PR-C の gated 実機計測(32f stall/latency)で 2 or 3 に確定する。`% SLOTS` 方式なので
@@ -69,6 +78,24 @@ pub fn slot_offset(seq: u64) -> usize {
 pub const CONTROL_RUN: u32 = 0;
 /// `control` の値: host が child に spin loop を抜けて正常終了するよう要求する。
 pub const CONTROL_QUIT: u32 = 1;
+
+/// per-block の演奏文脈(event ではなく block header・設計 doc §4.5)。CLAP/VST3/AU が process
+/// 呼び出しのたびに共通して消費する transport metadata の superset。host -> child のみ(child から
+/// の逆方向は無い)。`SLOTS` 単位で持つ理由は `n_frames`/`seq_tag` と同じ: 各 child が自分の
+/// ペースでスロットを消費するため、消費時点で有効だった値を保証するには per-slot 保持が要る。
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TransportContext {
+    /// 0.0 = 未供給(#408 の plumbing 完了までは 0.0 になりうる、という sentinel)。
+    pub tempo_bpm: f64,
+    pub time_sig_numerator: u16,
+    pub time_sig_denominator: u16,
+    /// POD union の安全性規約(events モジュール参照)に合わせ bool でなく u8。
+    pub is_playing: u8,
+    pub is_looping: u8,
+    /// 直近 block 先頭の楽曲内位置(拍単位・四分音符=1.0)。
+    pub song_position_beats: f64,
+}
 
 /// 親子で共有する制御ブロック + audio バッファ。
 ///
@@ -115,6 +142,37 @@ pub struct SharedRegion {
     pub input: [f32; BUF_LEN * SLOTS],
     /// child -> host のインターリーブ出力(ping-pong: SLOTS 個の block。`slot_offset` で index)。
     pub output: [f32; BUF_LEN * SLOTS],
+
+    // ── M2 instrument IPC substrate(設計 doc §4.2/§4.5・Issue #416)。event を消費しない
+    // effect child(M1)は以下を一切参照しない(値は 0 のまま残る)。
+    /// **per-slot**: host -> child の event 転送窓([`MAX_EVENTS_PER_BLOCK`] 個)。host 側 backing
+    /// ring から該当 seq ぶんだけ transcribe する。child は自分の消費ポリシー(§4.6: event を
+    /// 消費する child は in-order 必須)に従い、対応する slot の `input_event_count` 個ぶんだけ読む。
+    pub input_events: [[EventRecord; MAX_EVENTS_PER_BLOCK]; SLOTS],
+    /// **per-slot**: 該当 slot の `input_events` に有効な件数(<= MAX_EVENTS_PER_BLOCK)。`n_frames`
+    /// と同じ「Relaxed store → Release publish(`seq_request`)で可視」規律に従う。
+    pub input_event_count: [AtomicU32; SLOTS],
+    /// **per-slot**: child -> host の event 転送窓(NoteEnd/LegacyMidiCcOut 等)。child 側の
+    /// spill FIFO(§4.2 output 方向)から drain して詰める。
+    pub output_events: [[EventRecord; MAX_EVENTS_PER_BLOCK]; SLOTS],
+    /// **per-slot**: 該当 slot の `output_events` に有効な件数。host は読み取り時にこれを
+    /// [`MAX_EVENTS_PER_BLOCK`] で clamp してから走査する(child は別プロセスで汚染されうる値)。
+    pub output_event_count: [AtomicU32; SLOTS],
+    /// host 側 backing ring 自体が尽きた場合のみ増分(真の drop・health signal)。
+    pub input_event_dropped_count: AtomicU64,
+    /// host 側 backing ring 経由の無損失な1ブロック超遅延(情報用・health signal)。
+    pub input_event_spilled_count: AtomicU64,
+    /// child-local spill FIFO(§4.2 output 方向)自体が尽きた場合のみ増分(真の drop)。
+    pub output_event_dropped_count: AtomicU64,
+    /// child-local spill FIFO 経由の無損失な1ブロック超遅延(情報用)。
+    pub output_event_spilled_count: AtomicU64,
+    /// 上記 output 方向 drop に `NoteEnd` が含まれた回数(host の簿記リセット判断トリガ)。
+    pub output_note_end_dropped_count: AtomicU64,
+    /// [`EventRecord::decode`] が未知 kind / nested enum 範囲外値を skip した回数(validated
+    /// decode の可視化。呼び出し側が増分する)。
+    pub event_decode_error_count: AtomicU64,
+    /// **per-slot**: host -> child の per-block 演奏文脈(§4.5)。child からの逆方向は無い。
+    pub transport_context: [TransportContext; SLOTS],
 }
 
 /// 共有領域のバイトサイズ(mmap ファイルサイズ)。
@@ -174,6 +232,10 @@ mod tests {
     fn region_size_and_align() {
         // mmap ファイルサイズは input/output 各 SLOTS 本ぶん(計 2*SLOTS ブロック)を下回らない。
         assert!(REGION_BYTES >= 2 * SLOTS * BUF_LEN * std::mem::size_of::<f32>());
+        // event 転送窓(input/output 各 SLOTS 本ぶん)も下回らない(M2・Issue #416)。
+        assert!(
+            REGION_BYTES >= 2 * SLOTS * MAX_EVENTS_PER_BLOCK * std::mem::size_of::<EventRecord>()
+        );
         // align(64) 指定どおり。mmap のページ整列で満たされる前提の値。
         assert_eq!(std::mem::align_of::<SharedRegion>(), 64);
         // BUF_LEN = フレーム × チャンネル。
