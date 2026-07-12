@@ -1321,10 +1321,12 @@ mod plugin_load_gate_tests {
         }
     }
 
-    /// monotonic invariant（finding 4）: `plugin_loaded` への書き込みは全ファイル中
-    /// `load_plugin` 成功時の1箇所のみ（`grep -n "plugin_loaded.store"` で構造的に確認済み・
-    /// false に戻す経路が存在しない）。runtime test で reset を再現する手段が無いため、ここでは
-    /// 複数回 push が成功し続けフラグが true のままであることだけを軽量に確認する。
+    /// monotonic invariant（finding 4）: `plugin_loaded` への書き込みは**本番コード**中
+    /// `load_plugin` 成功時の1箇所のみ（`grep -n "plugin_loaded.store" engine_wrap.rs` で確認可能。
+    /// このテストモジュール内の `loaded_engine()` ヘルパーによる直接注入は別途1箇所ヒットするが、
+    /// それは test-only の注入であり本番の書き込み経路ではない）。false に戻す経路は本番コードに
+    /// 存在しない。runtime test で reset を再現する手段が無いため、ここでは複数回 push が成功し
+    /// 続けフラグが true のままであることだけを軽量に確認する。
     #[test]
     fn plugin_loaded_flag_stays_true_across_multiple_events() {
         let (wrap, mut consumer) = loaded_engine();
