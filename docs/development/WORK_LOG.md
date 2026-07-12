@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.235 feat(engine): M2 Stage4 — orbit-clap-host neutral event translate（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（設計 #398・実装 Issue #416）の Stage 4。Stage 1-3（wire 型・`SharedRegion` event slot・host backing ring/child spill FIFO）に続き、`orbit-clap-host` 側に `NeutralEvent` ⇔ CLAP event の双方向 translate を実装した（設計正本 §7 受け入れ基準3）。
+
+- `PluginEvent::to_neutral_event` で既存 in-process の `NoteOn`/`NoteOff` を `NeutralEvent` へ変換。`push_neutral_event` で `NeutralEvent`（NoteOn/NoteOff/NoteChoke/NoteExpression/ParamValue/ParamMod/ParamGestureBegin/ParamGestureEnd/MidiRaw/Midi2）を clack `EventBuffer` へ翻訳する host→child 方向の共通関数を追加。`drain_to_event_buffer` の内部実装を新関数経由にリファクタ（シグネチャ・既存の sample-offset=0・`EventFlags::IS_LIVE`・Pckn 構成〔`port_index` は wildcard でなく Specific〕は不変・regression test でロック）。
+- **v1 で意図的に drop する2ケース**: `PolyPressure`（CLAP に対応する独立 event も note-expression type も無い）、`NoteEnd`/`LegacyMidiCcOut`（child→host 専用の output-only variant・host→child 方向への混入は呼び出し側のロジックエラー）。いずれも `push_neutral_event` は panic せず `false` を返す（`EventRecord::decode()` の `None` パターンと統一）。
+- `param_id: u64 → ClapId` は `u32` 幅超過・`u32::MAX` sentinel を `None` として drop。`NeutralExpressionId → NoteExpressionType` は7 variant を exhaustive match（数値 cast に頼らない）。
+- vendored clack（rev `f874e858`）の `CoreEventSpace::from_unknown` が `ParamGestureBegin`/`ParamGestureEnd` の `TYPE_ID` を欠落させている実装ギャップを一次ソースで確認（テストは `as_event_for_space` による直接 downcast で回避・production コードには影響なし）。Stage5 以降で output 方向の読み取りを実装する際の留意点として記録。
+- **役割**: grounding（clack API 調査・§7 受け入れ基準の解釈）・advisor 相談（実装計画確定前・regression の要点＝既存 Pckn `port_index` が Specific である点の保持）＝ Opus main。**実装本体（`events.rs` 全体・テスト）＝ codex 委譲**（`/codex:rescue`）。委譲後の差分・claims（clack gap 含む）は Opus main が一次ソースで裏取り。
+- **検証**: `cargo fmt -p orbit-clap-host --check` / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` / `cargo test -p orbit-clap-host`（18 passed）/ `cargo test -p orbit-audio-daemon --lib --features clap-host engine_wrap`（18 passed・既存 `PluginEvent` 消費側の regression なし）全て green。
+- **状態**: Stage4 完了。残 Stage5（CLAP instrument child・closed-form oracle test-synth）・Stage6（統合テスト群）・landing。
+
 ### 6.234 docs(engine): M2 landing-review fixes — Fable overflow/param_id decisions + advisor verify（#398） (Jul 12, 2026)
 
 M2 設計 doc（PR #399）に対する landing 前レビューを Fable fresh agent に依頼し、判定 LAND-WITH-FIXES（5 blocker + 準blocker）を得て全て反映した。owner 確認後、blocker のうち2件（新しい設計判断）は owner 指名で Fable に一発判断を委ね、確定後 advisor で内部整合性を verify した。
