@@ -612,6 +612,366 @@ async fn daemon_error_warning_on_clap_process_error() {
     );
 }
 
+/// OOP effect の frames_clamped が増えると DaemonError (severity=warning,
+/// code=OUTPROC_EFFECT_FRAMES_CLAMPED) が発火する（#404 / #406）。LINK_EGRESS_DROP・
+/// CLAP_PROCESS_ERROR と同じ 1 Hz ticker 経路。integration test は outproc child process を spawn
+/// しない（default feature build には `outproc-effect` が無い）ため、`outproc_frames_clamped_arc`
+/// の **本番経路から分離した注入 seam**（本番常に 0）でこの event を driver する（`outproc_health`
+/// が consolidated accessor としてこの注入分を frames_clamped に合算する・#406 /simplify）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_outproc_frames_clamped() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から frames_clamped を注入（1 Hz ticker が outproc_health() の増加を検知して発火）。
+    daemon
+        .engine
+        .outproc_frames_clamped_arc()
+        .fetch_add(7, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_EFFECT_FRAMES_CLAMPED"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message =
+        warning_message.expect("OUTPROC_EFFECT_FRAMES_CLAMPED warning event not received");
+    // message は累積 clamp 数（7）を含む = daemon_error_event の format! が壊れていないこと。
+    assert!(
+        message.contains('7'),
+        "OUTPROC_EFFECT_FRAMES_CLAMPED message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**
+    // （last_outproc_frames_clamped が据え置かれること）。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["code"] == "OUTPROC_EFFECT_FRAMES_CLAMPED"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "OUTPROC_EFFECT_FRAMES_CLAMPED must not re-fire without additional clamps (latch regression)"
+    );
+
+    // re-arm: 追加注入されると latch が再度開き、更新済みの累積値（7+5=12）で再発火すること
+    // （#406 pr-test-analyzer finding 4: 「fire-once + no-refire」だけでなく「2 回目の注入で
+    // 再発火し累積が更新されること」も検証する）。
+    daemon
+        .engine
+        .outproc_frames_clamped_arc()
+        .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut rearmed_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_EFFECT_FRAMES_CLAMPED"
+                {
+                    rearmed_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let rearmed_message = rearmed_message
+        .expect("OUTPROC_EFFECT_FRAMES_CLAMPED did not re-fire after second injection");
+    assert!(
+        rearmed_message.contains("12"),
+        "re-armed OUTPROC_EFFECT_FRAMES_CLAMPED message should carry the updated cumulative total (12), got: {rearmed_message}"
+    );
+}
+
+/// engine lock contention（try_lock の WouldBlock）が増えると
+/// DaemonError (severity=warning, code=ENGINE_LOCK_CONTENTION) が発火する（#401）。
+/// LINK_EGRESS_DROP/CLAP_PROCESS_ERROR と同じ 1 Hz ticker 経路。`engine_lock_contention_arc` の
+/// **本番と同一 counter に直接書く注入 seam**（`Engine::contention_count_arc` の delegate）で
+/// この event を driver する。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_engine_lock_contention() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から lock contention を注入（1 Hz ticker が engine_lock_contention_count の増加を検知）。
+    daemon
+        .engine
+        .engine_lock_contention_arc()
+        .fetch_add(7, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "ENGINE_LOCK_CONTENTION"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("ENGINE_LOCK_CONTENTION warning event not received");
+    // message は累積カウント（7）と self-heals の説明を含む = WouldBlock（一時競合）専用の
+    // メッセージであり、恒久障害（poisoned）のメッセージと混同していないこと。
+    assert!(
+        message.contains('7'),
+        "ENGINE_LOCK_CONTENTION message should carry the running total, got: {message}"
+    );
+    assert!(
+        message.contains("self-heals"),
+        "WouldBlock contention message should claim self-healing, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても再発火しない。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError" && msg["data"]["code"] == "ENGINE_LOCK_CONTENTION"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "ENGINE_LOCK_CONTENTION must not re-fire without additional contention (latch regression)"
+    );
+}
+
+/// engine の scheduler mutex が poisoned と判定されると
+/// DaemonError (severity=fatal, code=ENGINE_LOCK_POISONED) が発火する（#401）。DEVICE_LOST と同じ
+/// fire-once の恒久障害クラス。実際に Mutex を panic で poison させる代わりに、
+/// `engine_lock_poisoned_arc`（`Engine::poisoned_arc` の delegate）で直接フラグを注入する
+/// （`Engine` 側の genuine-poison 検証は `orbit-audio-core::engine::tests` の
+/// `poisoned_flag_sets_on_render_lock_poison_distinct_from_contention_count` が担う）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_fatal_on_engine_lock_poisoned() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    daemon
+        .engine
+        .engine_lock_poisoned_arc()
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut fatal_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "fatal"
+                    && msg["data"]["code"] == "ENGINE_LOCK_POISONED"
+                {
+                    fatal_message = Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = fatal_message.expect("ENGINE_LOCK_POISONED fatal event not received");
+    // poisoned は恒久障害なので "self-heals" を名乗ってはいけない
+    // （ENGINE_LOCK_CONTENTION の WARNING メッセージと取り違えていないこと）。
+    assert!(
+        !message.contains("self-heals"),
+        "poisoned message must not claim self-healing, got: {message}"
+    );
+    assert!(
+        message.contains("restart"),
+        "poisoned message should say audio is down until restart, got: {message}"
+    );
+
+    // fire-once: フラグを立てたまま次 tick へ進めても再発火しない（device_lost_reported と同じ latch）。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError" && msg["data"]["code"] == "ENGINE_LOCK_POISONED" {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "ENGINE_LOCK_POISONED must not re-fire once latched (fire-once regression)"
+    );
+}
+
+/// contention（WouldBlock）と poisoned が同一 tick で両方成立した場合、
+/// ENGINE_LOCK_CONTENTION (warning) と ENGINE_LOCK_POISONED (fatal) の両方が配信され、
+/// かつ `session.rs` のティッカーループが poisoned/FATAL チェックを contention/WARNING
+/// チェックより先に実行する実装順序（#401）どおり、FATAL が先に届くことを検証する
+/// （WS client がイベントを順番に処理する前提のため、存在確認だけでなく到着順も pin する）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_both_contention_and_poisoned_fire_same_tick_fatal_first() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 同一 tick 内で両方の条件を成立させる。
+    daemon
+        .engine
+        .engine_lock_contention_arc()
+        .fetch_add(3, std::sync::atomic::Ordering::Relaxed);
+    daemon
+        .engine
+        .engine_lock_poisoned_arc()
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    // StreamStats 等の他イベントを読み飛ばしつつ、ENGINE_LOCK_POISONED と
+    // ENGINE_LOCK_CONTENTION の DaemonError が届いた順序を記録する。
+    let mut order: Vec<String> = Vec::new();
+    for _ in 0..12 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError" {
+                    if let Some(code) = msg["data"]["code"].as_str() {
+                        if code == "ENGINE_LOCK_POISONED" || code == "ENGINE_LOCK_CONTENTION" {
+                            order.push(code.to_string());
+                        }
+                    }
+                }
+                if order.len() == 2 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    assert_eq!(
+        order,
+        vec![
+            "ENGINE_LOCK_POISONED".to_string(),
+            "ENGINE_LOCK_CONTENTION".to_string(),
+        ],
+        "both events must be delivered, with FATAL (poisoned) arriving before WARNING \
+         (contention) — session.rs's ticker checks poisoned before contention, got: {order:?}"
+    );
+}
+
+/// in-process CLAP event ring への bounded retry が力尽きた（真の event 喪失）回数が増えると
+/// DaemonError (severity=warning, code=PLUGIN_EVENT_RING_OVERFLOW) が発火する（#400/#402）。
+/// LINK_EGRESS_DROP / CLAP_PROCESS_ERROR と同じ 1 Hz ticker + dedup latch 経路。この counter は
+/// producer 側を別スレッドへ outsource しないので `_arc()` 型の注入 seam ではなく
+/// `plugin_event_ring_overflow_inject` で直接加算する（`EngineWrap` 側の doc 参照）。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_plugin_event_ring_overflow() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から ring overflow を注入（1 Hz ticker が plugin_event_ring_overflow_count の増加を検知
+    // して発火）。
+    daemon.engine.plugin_event_ring_overflow_inject(7);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "PLUGIN_EVENT_RING_OVERFLOW"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("PLUGIN_EVENT_RING_OVERFLOW warning event not received");
+    // message は累積 overflow 数（7）を含む = daemon_error_event の format! が壊れていないこと。
+    assert!(
+        message.contains('7'),
+        "PLUGIN_EVENT_RING_OVERFLOW message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**（last_plugin_event_ring_overflow が
+    // 据え置かれること）。再発火すると 1 Hz で warn が溢れる回帰になる。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["code"] == "PLUGIN_EVENT_RING_OVERFLOW"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "PLUGIN_EVENT_RING_OVERFLOW must not re-fire without additional overflow (latch regression)"
+    );
+}
+
 /// device_lost が記録されると DaemonError (severity=fatal, code=DEVICE_LOST) が発火する。
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn daemon_error_fatal_on_device_lost() {
