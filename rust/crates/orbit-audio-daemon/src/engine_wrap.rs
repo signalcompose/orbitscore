@@ -1438,32 +1438,18 @@ mod plugin_load_gate_tests {
         assert!(!wrap.plugin_loaded.load(Ordering::Relaxed));
     }
 
-    /// `unstarted_engine` に PR #406 の手法（private フィールドへの直接注入）で実 `ClapControl` を
-    /// 構築注入し、`plugin_loaded = true` かつ `clap = Some(...)` な wrap を返す。呼び出し側は
-    /// 返る consumer で event ring への実配送を検証できる（positive-path・#405 finding 3）。
-    /// `cmd_tx` の receiver 側は保持しない（LoadPlugin コマンドは実際には送らないため不要）。
-    fn loaded_engine() -> (Arc<EngineWrap>, orbit_clap_host::PluginEventConsumer) {
-        let wrap = unstarted_engine();
-        let (event_tx, event_rx) = orbit_clap_host::make_event_ring(16);
-        let (cmd_tx, _cmd_rx) = std::sync::mpsc::channel();
-        let stats = orbit_clap_host::ClapProcessorStats::new();
-        let cb_stats = orbit_audio_native::CallbackTimeStats::new();
-        wrap.plugin_loaded.store(true, Ordering::Relaxed);
-        *wrap.clap.lock().expect("clap mutex") = Some(ClapControl {
-            cmd_tx,
-            event_tx,
-            stats,
-            cb_stats,
-        });
-        (wrap, event_rx)
-    }
-
-    fn loadable_engine() -> (
-        Arc<EngineWrap>,
+    /// `wrap.clap` へ実 `ClapControl` を直接注入する共通セットアップ（PR #406 の private
+    /// フィールド直接注入手法）。呼び出し側は event ring の consumer と LoadPlugin コマンドの
+    /// receiver の両方を受け取り、不要な方は `_` で捨てる（`loaded_engine`/`loadable_engine`
+    /// が共有・/simplify レビュー #412: 個別に組み立てると `ClapControl` のフィールド変更が
+    /// 2箇所同時保守になる）。
+    fn wire_clap_control(
+        wrap: &Arc<EngineWrap>,
+    ) -> (
+        orbit_clap_host::PluginEventConsumer,
         std::sync::mpsc::Receiver<crate::clap_host::ClapCommand>,
     ) {
-        let wrap = unstarted_engine();
-        let (event_tx, _event_rx) = orbit_clap_host::make_event_ring(16);
+        let (event_tx, event_rx) = orbit_clap_host::make_event_ring(16);
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
         let stats = orbit_clap_host::ClapProcessorStats::new();
         let cb_stats = orbit_audio_native::CallbackTimeStats::new();
@@ -1473,6 +1459,30 @@ mod plugin_load_gate_tests {
             stats,
             cb_stats,
         });
+        (event_rx, cmd_rx)
+    }
+
+    /// `unstarted_engine` に `wire_clap_control` で実 `ClapControl` を構築注入し、
+    /// `plugin_loaded = true` かつ `clap = Some(...)` な wrap を返す。呼び出し側は
+    /// 返る consumer で event ring への実配送を検証できる（positive-path・#405 finding 3）。
+    /// `cmd_rx` は保持しない（LoadPlugin コマンドは実際には送らないため不要）。
+    fn loaded_engine() -> (Arc<EngineWrap>, orbit_clap_host::PluginEventConsumer) {
+        let wrap = unstarted_engine();
+        let (event_rx, _cmd_rx) = wire_clap_control(&wrap);
+        wrap.plugin_loaded.store(true, Ordering::Relaxed);
+        (wrap, event_rx)
+    }
+
+    /// `unstarted_engine` に `wire_clap_control` で実 `ClapControl` を構築注入するが、
+    /// `loaded_engine` と異なり `plugin_loaded` は事前に store しない。呼び出し側は
+    /// `load_plugin()` を実際に呼び、その成功分岐が `plugin_loaded` を true にすることを
+    /// `cmd_rx` 経由の LoadPlugin コマンド応答で検証できる（#411）。
+    fn loadable_engine() -> (
+        Arc<EngineWrap>,
+        std::sync::mpsc::Receiver<crate::clap_host::ClapCommand>,
+    ) {
+        let wrap = unstarted_engine();
+        let (_event_rx, cmd_rx) = wire_clap_control(&wrap);
         (wrap, cmd_rx)
     }
 
@@ -1481,34 +1491,36 @@ mod plugin_load_gate_tests {
         let (wrap, cmd_rx) = loadable_engine();
         let responder = std::thread::spawn(move || {
             let cmd = cmd_rx.recv().expect("load_plugin should send LoadPlugin");
-            match cmd {
-                crate::clap_host::ClapCommand::LoadPlugin {
-                    path,
-                    plugin_id,
-                    sample_rate,
-                    channels,
-                    max_frames,
-                    reply,
-                } => {
-                    assert_eq!(path, PathBuf::from("dummy.clap"));
-                    assert_eq!(plugin_id, None);
-                    assert_eq!(sample_rate, 48_000);
-                    assert_eq!(channels, 2);
-                    assert_eq!(max_frames, CLAP_MAX_FRAMES);
-                    reply
-                        .send(Ok(orbit_clap_host::LoadedPluginInfo {
-                            plugin_id: "com.example.dummy".to_string(),
-                            plugin_name: Some("Dummy".to_string()),
-                            note_port_index: 0,
-                        }))
-                        .expect("load_plugin should still be waiting for reply");
-                }
-            }
+            // `ClapCommand` は現状 `LoadPlugin` の1バリアントのみなので irrefutable pattern
+            // で受けられる（/simplify レビュー #412: match 1本腕は不要なネスト）。
+            let crate::clap_host::ClapCommand::LoadPlugin {
+                path,
+                plugin_id,
+                sample_rate,
+                channels,
+                max_frames,
+                reply,
+            } = cmd;
+            assert_eq!(path, PathBuf::from("dummy.clap"));
+            assert_eq!(plugin_id, None);
+            assert_eq!(sample_rate, 48_000);
+            assert_eq!(channels, 2);
+            assert_eq!(max_frames, CLAP_MAX_FRAMES);
+            reply
+                .send(Ok(orbit_clap_host::LoadedPluginInfo {
+                    plugin_id: "com.example.dummy".to_string(),
+                    plugin_name: Some("Dummy".to_string()),
+                    note_port_index: 0,
+                }))
+                .expect("load_plugin should still be waiting for reply");
         });
 
         let result = wrap.load_plugin(PathBuf::from("dummy.clap"), None);
         responder.join().expect("responder thread should not panic");
 
+        // `LoadedPluginSummary` は Debug 未実装のため `assert!(result.is_ok(), "{result:?}")`
+        // が使えない（sibling の `note_on_after_load_reaches_ring` は `Result<(), WrapError>` で
+        // `()` が Debug のため同型の assert! が効くが、ここは Err 側だけ表示する）。
         if let Err(err) = result {
             panic!("load_plugin should succeed: {err:?}");
         }
