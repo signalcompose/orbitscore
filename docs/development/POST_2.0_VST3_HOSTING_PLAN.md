@@ -202,6 +202,8 @@ Phase 3  VST3 instrument (production, OOP)            ← M2 landing 後に code
 
 **目的**: per-block で **full event/param surface** を child へ運ぶ format-neutral な IPC を設計する。§1 の I/O カバレッジ要件（§8 evidence）どおり、note-on/off だけでなく **MIDI/note の in+out・CC・param automation・note expression / MPE / MIDI2 dialect** を neutral に表現する（3 format に写せる superset にする: CLAP `note-ports` の dialect・VST3 `Event`〔note expression 含む〕・AU MIDI in/out）。effect の M1 transport（audio buffer 往復）に **event/param チャネル**を足す拡張 + **宣言された audio bus arrangement**（multi-out / sidechain）の honor を含める。
 
+> ⚠️ **Q5 decision note（2026-07-12・`POST_2.0_GAMMA_M2_DESIGN.md` §6 Q5）**: 上記「honor を含める」は **アドレッシングのインターフェース層**を指す（M2 の event/param wire の `VoiceAddr.port_index` は event/note port の addressing であり、audio 信号経路の bus addressing とは別の直交する設計）。**audio bus arrangement の実装**（`SharedRegion` の audio 配列を単一 stereo sum から multi-out/sidechain へ拡張すること）は M2 スコープ外・#409 で追跡する defer 決定（owner + advisor 確定）。サイレント除外ではない。
+
 > 🔴 **format-neutral の意味を取り違えない**: 「note-on/off + 1 param」に痩せさせるのは NG。neutral = 3 format の宣言 surface を**包含する superset**であること（痩せた IPC は正本 §3 の決定を実質破壊する）。ここが Phase 2 を Opus + owner が持つ理由。
 
 **設計の起点（既存資産）**:

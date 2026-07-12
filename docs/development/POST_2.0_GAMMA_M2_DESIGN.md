@@ -119,7 +119,7 @@ advisor + Fable のレビューを経て確定した3原則。§3/§4 の設計�
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct VoiceAddr {
-    pub note_id: i32,     // -1 = wildcard（voice 一意識別・per-voice mod のターゲット）
+    pub note_id: i32,     // -1 = wildcard（voice 一意識別・per-voice mod のターゲット）。host 側実装規約: monotone 採番・再利用しない（§4.2 output 方向の overflow policy が前提とする invariant。pool/recycle すると NoteEnd drop 時の簿記リセットが voice id 衝突を起こす）
     pub port_index: i16,  // -1 = wildcard（VST3 は busIndex に読み替え）
     pub channel: i16,     // -1 = wildcard（0..15 = MIDI1 channel）
     pub key: i16,          // -1 = wildcard（0..127 = MIDI1 key）
@@ -138,9 +138,9 @@ pub struct AddrBody  { pub addr: VoiceAddr } // NoteChoke/NoteEnd（addr だけ�
 #[repr(C)] #[derive(Clone, Copy)]
 pub struct ExprBody  { pub addr: VoiceAddr, pub value: f64, pub expression_id: u32, pub _pad: u32 } // NoteExpression/PolyPressure 共用（expression_id で区別）
 #[repr(C)] #[derive(Clone, Copy)]
-pub struct ParamBody { pub addr: VoiceAddr, pub value: f64, pub param_id: u32, pub _pad: u32 } // ParamValue/ParamMod 共用（addr.note_id!=-1 なら per-voice ターゲット・原則A）
+pub struct ParamBody { pub addr: VoiceAddr, pub value: f64, pub param_id: u64 } // ParamValue/ParamMod 共用（addr.note_id!=-1 なら per-voice ターゲット・原則A）。u64 化は _pad 置換で size=32B 据え置き（offset 24 は 8-align 済み・実装時 static assert で封じる・下記「設計判断メモ」参照）
 #[repr(C)] #[derive(Clone, Copy)]
-pub struct GestureBody { pub param_id: u32 } // ParamGestureBegin/End
+pub struct GestureBody { pub param_id: u64 } // ParamGestureBegin/End
 #[repr(C)] #[derive(Clone, Copy)]
 pub struct MidiBody  { pub data: [u8; 3], pub _pad: u8, pub port_index: u16, pub _pad2: u16 } // MidiRaw
 #[repr(C)] #[derive(Clone, Copy)]
@@ -161,7 +161,7 @@ pub union EventPayload {
     pub midi: MidiBody,
     pub midi2: Midi2Body,
     pub cc_out: CcOutBody,
-    raw: [u8; 24], // 最大 variant に合わせて調整（実装時に確定）
+    raw: [u8; 32], // 最大 variant = NoteBody/ExprBody/ParamBody の 32B（rustc 実測で機械検証済み・実装時 static assert で封じる）
 }
 
 /// 共有メモリ上の1 event record（固定長 POD）。
@@ -182,10 +182,10 @@ pub enum NeutralEvent {
     NoteEnd { sample_offset: u32, addr: VoiceAddr },       // ⚠ child→host 方向
     PolyPressure { sample_offset: u32, addr: VoiceAddr, pressure: f64 },
     NoteExpression { sample_offset: u32, addr: VoiceAddr, expression_id: NeutralExpressionId, value: f64 },
-    ParamValue { sample_offset: u32, param_id: u32, addr: VoiceAddr, value: f64 },
-    ParamMod { sample_offset: u32, param_id: u32, addr: VoiceAddr, amount: f64 },
-    ParamGestureBegin { sample_offset: u32, param_id: u32 },
-    ParamGestureEnd { sample_offset: u32, param_id: u32 },
+    ParamValue { sample_offset: u32, param_id: u64, addr: VoiceAddr, value: f64 },
+    ParamMod { sample_offset: u32, param_id: u64, addr: VoiceAddr, amount: f64 },
+    ParamGestureBegin { sample_offset: u32, param_id: u64 },
+    ParamGestureEnd { sample_offset: u32, param_id: u64 },
     MidiRaw { sample_offset: u32, port_index: u16, data: [u8; 3] },
     Midi2 { sample_offset: u32, port_index: u16, words: [u32; 4] },      // owner 明示で必須
     LegacyMidiCcOut { sample_offset: u32, control_number: u8, channel: i8, value: i8, value2: i8 }, // ⚠ child→host 方向
@@ -203,6 +203,12 @@ pub enum NeutralExpressionId {
 impl EventRecord {
     /// kind を検証して union の該当 body だけを読む。未知 kind は None
     /// （呼び出し側が `event_decode_error_count` を進める — `child_process_error_count` と同パターン）。
+    /// **検証は `kind` タグだけでなく payload 内の nested enum フィールドにも及ぶ**（例:
+    /// `ExprBody.expression_id: u32` → `NeutralExpressionId`〔0..=6〕への変換。範囲外の値は
+    /// `kind` 不明と同じ扱いで None を返し `event_decode_error_count` を進める。未検証の
+    /// u32→enum 変換は本節冒頭の transmute 禁止と同じ UB クラスであり、`kind` だけを検証して
+    /// nested enum を素通しするのは不十分）。将来 payload に enum フィールドを追加する際も
+    /// 同じ規律に従うこと。
     pub fn decode(&self) -> Option<NeutralEvent> { /* match self.kind { ... } */ todo!() }
     /// 逆変換（host 側の DSL イベント生成 / child 側の応答生成で使用）。
     pub fn encode(ev: &NeutralEvent) -> EventRecord { todo!() }
@@ -217,6 +223,10 @@ impl EventRecord {
 - **VST3 `ChordEvent`/`ScaleEvent`（harmonic context hint）は v1 スコープ外**（VST3 固有・稀な用途）。数値部（root/bassNote/mask）は将来 named variant で追加でき、可変長 text 部は sysex 同様 side-channel 行き。
 - **param automation の canonical 表現 = discrete な `(sample_offset, value)` 点列**（`ParamValue`/`ParamMod` の並び）。VST3 `IParamValueQueue`（点間線形補間）・AU `rampDurationSampleFrames`（隣接点からのランプ導出）は、child 側が点列から再構成する前提。CLAP `clap_event_param_value` も同型の discrete event なので、この点列表現は 3 format の superset として capable。
 - per-voice ターゲット（`addr.note_id != -1`）を honor できない child（VST3/AU の `ParamMod`）は、**global fallback ではなく drop + `event_decode_error_count`（または専用 counter）で可視化**することを推奨（原則A・M1 の silent-failure 防止文化）。
+- **`param_id` の意味論 = child native format id の zero-extend（host は採番も解釈もしない opaque u64・DECIDED・Fable 一発判断 2026-07-12。landing 前レビューで判明した doc 未記載の穴を埋める owner-owned micro-decision であり、Q1-Q6 本体〔§6〕の再決定ではない）**: CLAP `clap_id`（u32）・VST3 `ParamID`（u32）は上位32bit=0で載せ、AU `AUParameterAddress`（u64）はそのまま載せる。原則A「wire は今 superset」の直接適用（u64 = 3 format の id 型の superset）で、`param_id: u32 + _pad: u32` → `param_id: u64` の置換により wire サイズコストは**厳密にゼロ**（`ParamBody`/`EventPayload`/`EventRecord` いずれもサイズ不変・rustc 実測で機械検証済み）。host 発行の論理 index 案は不採用: (i) index↔native id 対応表を host/child 両側で同期する契約面が増え、CLAP `rescan()` / VST3 restructure による実行中のパラメータ集合変化で全 index が一斉無効化され、in-flight RT event と競合しながら両側の表を差し替える羽目になる（native id なら消えた id が child SDK 層で自然に不発になるだけで済む）。(ii) wire/`.orbslog` 上の id がベンダ文書の id と一致しなくなり、enumeration 順依存の index はプラグイン更新（パラメータ追加）で壊れる。(iii) crate 配置規約（翻訳は child 内に完全隔離）を host 側採番が破る。
+- **永続化の注意（AU）**: `AUParameterAddress` は SDK ヘッダ上「個々の Audio Unit が明示的に維持を約束しない限り persistent とは限らない」と明記されている（hosts should bind to key paths）。wire が運ぶのは**当該 child インスタンス生存中の id**（AU 自身の `AURecordedParameterEvent` と同スコープ）であり、run を跨ぐ束縛はセッション層が name/key path → native id を load-time param discovery で run ごとに解決し直す規約とする。この注意は論理 index 案でも同じ enumeration に依存する以上消えない。
+- `param_id` は全 u64 が POD として valid なので `decode()` は値域検証しない。存在しない id は child SDK 層で不発になる（原則A の drop 可視化文化に合わせ、child 側 `param_unknown_id_count` で可視化してよい・任意）。
+- **サイズ見積りの訂正**: `EventPayload` union は最大 variant（`NoteBody`/`ExprBody`/`ParamBody`）が **32 bytes**（`raw: [u8;24]` は現行定義でも既に stale だった・rustc 実測で確認）。`EventRecord`（kind 4B + sample_offset 4B + payload 32B）= **40 bytes**。§4.2 のサイズ見積りもこれに合わせて訂正する（増分が無視できる規模という結論自体は不変）。
 
 ---
 
@@ -250,20 +260,34 @@ pub input_events:        [[EventRecord; MAX_EVENTS_PER_BLOCK]; SLOTS],  // host 
 pub input_event_count:   [AtomicU32; SLOTS],
 pub output_events:       [[EventRecord; MAX_EVENTS_PER_BLOCK]; SLOTS],  // child -> host（NoteEnd/LegacyMidiCcOut 等）
 pub output_event_count:  [AtomicU32; SLOTS],
-pub event_dropped_count:  AtomicU64,  // 真の喪失（backing ring 自体が尽きた場合のみ・health signal）
-pub event_spilled_count:  AtomicU64,  // 無損失の1ブロック超遅延（情報用・health signal）
+pub input_event_dropped_count:  AtomicU64,  // host 側 backing ring 自体が尽きた場合のみ・health signal
+pub input_event_spilled_count:  AtomicU64,  // host 側の無損失な1ブロック超遅延（情報用・health signal）
+pub output_event_dropped_count: AtomicU64,  // child-local spill FIFO 自体が尽きた場合のみ・health signal（§4.2 output 方向）
+pub output_event_spilled_count: AtomicU64,  // child-local spill FIFO 経由の無損失な1ブロック超遅延（情報用）
+pub output_note_end_dropped_count: AtomicU64, // 上記 drop に NoteEnd が含まれた回数（host の簿記リセット判断トリガ）
 pub event_decode_error_count: AtomicU64,  // decode() が未知 kind を skip した回数（validated decode の可視化）
 ```
 
-- **backing ring**（host 側・control スレッドが producer）は shm 外の通常メモリで確保する大きめの ring（目安 65,536 slot ≈ 4MB・起動時確保）。RT callback は毎ブロック、この ring から**最大 `MAX_EVENTS_PER_BLOCK` 個だけ pop**して `input_events` へ書く。**窓に載りきらない残りは ring に残し、次ブロック以降で配送する**（＝ overflow の帰結が「データ喪失」ではなく「最大 1 ブロック(64f で約1.45ms)の遅延」になる）。pop 数を減らすだけなので alloc/lock なし・RT-safe。
+**input 方向（host→child）**:
+- **backing ring**（host 側・control スレッドが producer）は shm 外の通常メモリで確保する大きめの ring（目安 65,536 slot × `EventRecord`(40B) ≈ 2.6MB・起動時確保。output 方向の child-local spill FIFO と同オーダー）。RT callback は毎ブロック、この ring から**最大 `MAX_EVENTS_PER_BLOCK` 個だけ pop**して `input_events` へ書く。**窓に載りきらない残りは ring に残し、次ブロック以降で配送する**（＝ overflow の帰結が「データ喪失」ではなく「最大 1 ブロック(64f で約1.45ms)の遅延」になる）。pop 数を減らすだけなので alloc/lock なし・RT-safe。
 - **真の drop が起きるのは backing ring 自体が尽きた場合のみ**（drain レート ≈ 4096 events/block @64f ≈ 秒間280万イベント相当なので、実質 producer 側のバグ以外では発生しない）。その場合は **drop-newest**（drop-oldest は §4.1 の理由により不採用）。**`NoteOff` 等の note 状態変更イベントはサイレント drop 禁止**: 捨てざるを得ない場合は sticky flag を立て、次ブロックで note-choke/all-notes-off を側路から注入し、stuck note を構造的に排除する。
+
+**output 方向（child→host）— DECIDED（Fable 一発判断 2026-07-12。§6 Q4「overflow policy」の一部として整理。landing 前レビューで判明した doc 未記載の穴を埋める owner-owned micro-decision）**:
+- **spill の発生点は shm ではなく child プロセス内**: output event（`NoteEnd`/`LegacyMidiCcOut` 等）は CLAP `out_events`/VST3 output `IEventList`/AU `MIDIOutputEventBlock` いずれも **render 呼び出し内の同期出力**で、child が render を自分の block 処理スレッド1本から呼ぶ。したがって「plugin out-event queue → shm 転送窓」間の spill は producer=consumer が同一スレッド内で完結する。**input のような shm 外 backing ring を host 側に置く必然はなく、spill buffer は child プロセスの通常メモリに置く**（起動時 pre-allocate・65,536 slot 目安・固定容量ローカル FIFO。producer=consumer が同一スレッドなので lock-free SPSC も不要・alloc/lock なし・RT-safe）。**この単一スレッド前提は 3 format の標準 render 経路（CLAP `process()`・VST3 `process()`・AU render callback）が output event を render 呼び出し内で同期発生させることに依拠する — もし将来 SDK が render 呼び出し外の別スレッドから output event を渡す構成を要求すると判明した場合は、この FIFO を lock-free SPSC 化する必要がある（「child-local に置く」という結論自体は変わらない）。**
+- **child 側の per-block 手順**: ① spill FIFO 先頭から `output_events` 転送窓へ詰める → ② 当ブロックの plugin out-event を続けて詰める → ③ 窓（4096）に載らない残りを FIFO 末尾へ push（FIFO 全順序保存）。spill された event の `sample_offset` は配送先ブロック先頭 0 に clamp（input と同一規約・下記参照）。
+- **真の drop は child-local spill FIFO が尽きた場合のみ・drop-newest**。`output_event_dropped_count` を child が fetch_add（`child_process_error_count` と同パターン）。**drop 対象に `NoteEnd` が含まれる場合は `output_note_end_dropped_count` を別に進める**（input 側 sticky flag の output 版・host の反応トリガ）。
+- **host 側防衛（タイムアウト強制解放は不採用）**: タイムアウト解放は child 内の実発音状態を知らない推測処置であり、誤解放 → note_id 再利用 → per-voice ターゲット衝突という input 側より悪い故障を生むため採らない。代わりに次の2規約で「NoteEnd 喪失＝不可聴の簿記リーク」に格下げし、リーク自体を無害化する: **(a) `note_id` は monotone 採番・再利用しない**（host 側実装規約・wire 影響なし。`output_note_end_dropped_count` の増分検知時に host は当該 child の per-voice 簿記を保守的に一括リセットしてよい。monotone id により生きている voice を誤って忘れても新 voice との id 衝突は起きず、劣化に留まり破損にならない）。**(b) supervisor respawn = 当該 child の implicit all-voices-end**（respawn 検知で voice 簿記をクリア。crash による spill FIFO 喪失も leak にならない）。
+- **検討して不採用**: (i) shm 内 child backing ring — spill 発生点が child プロセス内である以上 shm に置く必然が無く、host 事前確保 + child 側 SPSC という契約面だけ増える。(ii) NoteEnd 専用高信頼レーン（voice admission cap と同サイズで構造的 lossless）— cap↔lane の cross-component 不変条件が増え、misbehaving plugin には結局 backstop が要り、lane 分割は FIFO 全順序を崩す。(iii) 転送窓拡大 — §4.1 確定の「窓=飽和点 4096」を崩すだけで bound は消えない。
+
+**共通**:
 - **spill された event の `sample_offset` 再タイミング規約（実装時に曖昧にしないこと）**: 配送が後続ブロックにずれた event の `sample_offset` は、配送先ブロックの先頭（0）にクランプする。元ブロック内での相対位置は保持しない。これは既存 in-process 経路が A0 §4.2 で採用済みの簡略化（全イベントを block 先頭オフセットに置く）と同じ粒度であり、新たな精度劣化ではない。
-- **可視化は音を変えない**: `event_dropped_count`（真の喪失）と `event_spilled_count`（無損失遅延・情報）を分離し、`child_process_error_count` と同型の health signal パターンで 1Hz ticker（`OUTPROC_EFFECT_*` 相当）→ TS 層 → OrbitStudio のステータス表示へ配線する。**演奏・録音の音そのものを変える通知（警告音等）は禁止**（報せる対象の故障より害が大きいため）。
+- **可視化は音を変えない**: `input_event_dropped_count`/`output_event_dropped_count`（真の喪失）と `input_event_spilled_count`/`output_event_spilled_count`（無損失遅延・情報）を方向別に分離し、`child_process_error_count` と同型の health signal パターンで 1Hz ticker（`OUTPROC_EFFECT_*` 相当）→ TS 層 → OrbitStudio のステータス表示へ配線する。**演奏・録音の音そのものを変える通知（警告音等）は禁止**（報せる対象の故障より害が大きいため）。
 - **既存の audio slot 同期（`seq_request`/`seq_done`/per-slot `seq_tag`）をそのまま event slot にも適用**（同一 slot・同一 seq で audio と event が対になる）。M1 の +1-block pipelined discipline とは整合する。`input_event_count`/`output_event_count` は `n_frames` と同じ「Relaxed store → Release publish で可視」規律に従う。
+- **host 側の防御的読み取り（`output_event_count`）**: `output_event_count` は child（クラッシュしうる別プロセス）が書き込む値のため、host はこれを信用せず読み取り時に `.min(MAX_EVENTS_PER_BLOCK)` で clamp してから `output_events` を走査する（M1 の `host.rs` が `n_frames` を `.min(MAX_FRAMES)` で clamp してから読む規律と同型。汚染された count による境界外走査を防ぐ）。
 - **bidirectionality**: `NoteEnd`（plugin→host の voice 解放通知）・`LegacyMidiCcOut`（plugin→host の MIDI CC 出力）は child 起点のイベント。M1 の audio transport は host→child(input)/child→host(output) が対称に存在するので、event も同様に input/output を分離する（上記）。
-- **サイズ見積り**: `EventRecord` ≈ 32 bytes。`MAX_EVENTS_PER_BLOCK=4096` なら 32B × 4096 × `SLOTS`(2) × 2方向 ≈ 512 KB 追加（現行 audio 領域 ~128 KB に対し増分は無視できる規模。count-prefix 配列なので未使用容量のコピーコストはゼロ）。
+- **サイズ見積り**: `EventRecord` = 40 bytes（kind 4B + sample_offset 4B + payload 32B・§3 参照）。`MAX_EVENTS_PER_BLOCK=4096` なら 40B × 4096 × `SLOTS`(2) × 2方向 ≈ 640 KB（shm 上・現行 audio 領域 ~128 KB に対し増分は無視できる規模。count-prefix 配列なので未使用容量のコピーコストはゼロ）。加えて output 方向の child-local spill FIFO は **child プロセス側**の通常メモリで 65,536 slot × 40B ≈ 2.6MB（shm 外・host の backing ring と同オーダー）。
 - **crate 配置**: `EventRecord`/`EventPayload`/`NeutralEvent`/`decode`/`encode` はすべて `orbit-audio-sandbox` に置き、clack-free 回帰テストの対象に含める（`cargo tree -p orbit-audio-sandbox` に clack・vst3 系 crate が一切出現しないことを維持）。各 child は `orbit-audio-sandbox` + 自 SDK crate に依存し、`NeutralEvent → SDK 型` の翻訳を child 内に完全隔離する。
-- **受け入れ信号**（§7 に統合）: gated stress test — @32f で 10K ノート同時バースト + 持続 100K events/sec を流し、`event_dropped_count == 0` を assert。
+- **受け入れ信号**（§7 に統合）: gated stress test — @32f で 10K ノート同時バースト + 持続 100K events/sec を流し、`input_event_dropped_count == 0` かつ `output_event_dropped_count == 0` を assert。
 
 ### 4.3 新規 bounded queue 宣言原則（再発防止・M2 が初適用）
 
@@ -277,8 +301,8 @@ M2 の `input_events`/`output_events`/backing ring がこの原則の初適用�
 
 M2 の容量設計を検討する過程で、同じ欠陥パターンが**既存の出荷済みコード**にも存在することが判明した。M2 の設計・実装はブロックしないが、独立した修正として着手する:
 
-- **#400**: in-process CLAP event ring（`orbit-audio-daemon/src/engine_wrap.rs` の `push_plugin_event`）— 満杯時 drop-newest だが可視化カウンタなし・producer が RT スレッドでないため bounded retry だけで lossless 化できる。
-- **#401**: `Engine::with_scheduler` の try_lock 経路（`orbit-audio-core/src/engine.rs`）— lock 競合時に1ブロック無音化するが可視化なし。lock-free 化は別途 defer 済みの判断を維持し、contention counter のみ追加。
+- **#400**: in-process CLAP event ring（`orbit-audio-daemon/src/engine_wrap.rs` の `push_plugin_event`）— 満杯時 drop-newest だが可視化カウンタなし・producer が RT スレッドでないため bounded retry だけで lossless 化できる。**✅ 修正済み・CLOSED（2026-07-12）**。
+- **#401**: `Engine::with_scheduler` の try_lock 経路（`orbit-audio-core/src/engine.rs`）— lock 競合時に1ブロック無音化するが可視化なし。lock-free 化は別途 defer 済みの判断を維持し、contention counter のみ追加。**✅ 修正済み・CLOSED（2026-07-12）**。
 
 ### 4.5 Transport/musical context（tempo/beat/tsig）— DECIDED（§6 Q6・owner 確定 2026-07-12）
 
@@ -331,7 +355,7 @@ pub transport_context: [TransportContext; SLOTS],  // host -> child のみ（chi
 **確定: はい、必須**（§3 は既にこれを前提）。3 format とも持つ共通ディメンションであり、かつ **DSL timing・スケジューリングと高度に結合する**（上記「判定軸」）— defer すると offset=0 前提で周辺層（event-scheduler 側の変換・session log 等）が組まれ、後から sample-accurate 化する際にそれら全てを作り直す羽目になる。
 
 ### Q4 — transport layout の具体値・overflow policy・side-channel 設計【DECIDED（owner + Fable 確定）】
-**確定内容は §4 参照**（`MAX_EVENTS_PER_BLOCK=4096` + backing ring による lossless spillover + drop-newest は backing ring 枯渇時のみ + note-off サイレント drop 禁止 + `event_dropped_count`/`event_spilled_count` の非音響可視化）。当初案「64個・drop-oldest」は owner の「実験的用途で見えない天井になる」懸念 → Fable レビューで不適格と判明 → 「上限を大きくする」でなく「溢れても失わない」設計へ転換した経緯は §4.1 参照。sysex・可変長 note-expression text・Chord/Scale text 部の低頻度 side-channel は**存在の必要性のみ確定・具体設計は実装時に詰める**（原則C）。input/output event slot の bidirectional 構成は §4.2 のとおり確定。
+**確定内容は §4 参照**（`MAX_EVENTS_PER_BLOCK=4096` + input方向 backing ring / output方向 child-local spill FIFO による lossless spillover + drop-newest は各々の枯渇時のみ + note-off/NoteEnd サイレント drop 禁止 + `input_event_dropped_count`/`input_event_spilled_count`/`output_event_dropped_count`/`output_event_spilled_count`/`output_note_end_dropped_count` の非音響可視化）。当初案「64個・drop-oldest」は owner の「実験的用途で見えない天井になる」懸念 → Fable レビューで不適格と判明 → 「上限を大きくする」でなく「溢れても失わない」設計へ転換した経緯は §4.1 参照。output 方向の overflow policy（child-local spill FIFO・monotone note_id・respawn=all-voices-end）は §4.2 参照（Fable 一発判断 2026-07-12）。sysex・可変長 note-expression text・Chord/Scale text 部の低頻度 side-channel は**存在の必要性のみ確定・具体設計は実装時に詰める**（原則C）。input/output event slot の bidirectional 構成は §4.2 のとおり確定。
 
 ### Q5 — bus arrangement honor（multi-out/sidechain）を M2 スコープに含めるか【DECIDED（owner + advisor 確定）】
 **確定: インターフェース（アドレッシングの考え方）は今決める・audio transport の実装は defer**（実装先送り自体は #409 で追跡・サイレント除外にしない）。
@@ -358,7 +382,7 @@ grounding が指摘した欠落（CLAP `clap_event_transport` / VST3 `ProcessCon
 Q1-Q6 は全て owner サインオフ済み（§6）。以下を M2 substrate の landing 条件とする案（advisor 検査対象）:
 
 1. `orbit-audio-sandbox::EventRecord`/`EventPayload`（§3）が `#[repr(C)]` POD として定義され、`cargo tree -p orbit-audio-sandbox` に clack・vst3 系 crate が出現しないこと（原則B の回帰テスト）。
-2. `EventRecord::decode()` が **未検証の enum transmute を行わず**、未知 `kind` を `None` + `event_decode_error_count` 増分で処理すること（原則D の安全性要件・unit test で不正 kind を注入して確認）。
+2. `EventRecord::decode()` が **未検証の enum transmute を行わず**、未知 `kind` を `None` + `event_decode_error_count` 増分で処理すること（原則D の安全性要件・unit test で不正 kind を注入して確認）。**`kind` タグだけでなく payload 内の nested enum フィールドも同様に検証すること**（`ExprBody.expression_id` に `NeutralExpressionId`〔0..=6〕の範囲外値を注入し、`None` + `event_decode_error_count` 増分で処理されることを unit test で確認）。
 3. `orbit-clap-host` 側に `PluginEvent → NeutralEvent` / `NeutralEvent → clack EventBuffer` の双方向 translate が実装され、既存の NoteOn/NoteOff 経路が sample-exact に回帰しないこと（offline test）。
 4. `SharedRegion` の event slot 拡張（§4）が M1 の `host_child_integration.rs` に相当する offline 統合テストで「host submit → child consume → host read（+ NoteEnd 等の output 方向）」の round trip を証明すること（device 不要）。`transport_context`（§4.5）も同じ統合テストで round trip を確認する（`tempo_bpm=0.0` の未供給ケースを含む）。
 5. 少なくとも1つの child が新 event 経路で **offline note-render oracle parity**（既知 event 列 → 既知波形、sample-exact）を通すこと（M1 の closed-form oracle パターンを踏襲）。
@@ -366,7 +390,10 @@ Q1-Q6 は全て owner サインオフ済み（§6）。以下を M2 substrate �
    - **oracle は closed-form・決定論的でなければならない**: 例）`NoteOn(key)` 受信 → smoothing 無し・既知位相で `key` の周波数の正弦波（or 矩形波）を固定振幅で出力する test-synth。
 6. `cargo fmt`/`cargo clippy`/`cargo deny check`/`cargo test --workspace` 全緑。
 7. ✅ 本 doc §6 の Q1-Q6 が「owner サインオフ済み」として記録されていること（2026-07-12 達成）。
-8. gated stress test（§4.2）: @32f で 10K ノート同時バースト + 持続 100K events/sec を流し `event_dropped_count == 0`。
+8. gated stress test（§4.2）: @32f で 10K ノート同時バースト + 持続 100K events/sec を流し `input_event_dropped_count == 0` かつ `output_event_dropped_count == 0`。
+9. **全 variant の encode/decode round-trip test**: `NeutralEvent` の全バリアント（NoteOn/NoteOff/NoteChoke/NoteEnd/PolyPressure/NoteExpression/ParamValue/ParamMod/ParamGestureBegin/ParamGestureEnd/MidiRaw/Midi2/LegacyMidiCcOut）について `encode() → decode()` が元の値と一致することを unit test で確認する（未使用 variant の符号化バグが Phase 3 の child 実装まで潜伏するのを防ぐ）。
+10. **offline spillover 決定論テスト**: input・output 双方向で 1ブロックあたり `MAX_EVENTS_PER_BLOCK` を超えるバーストを注入し、超過分が次ブロック以降で無損失配送される（対応する `*_event_spilled_count` が増分し `*_event_dropped_count` は増えない）ことを offline test で確認する。spill された event の `sample_offset` が配送先ブロック先頭にクランプされること（§4.2 記載の規約）も併せて確認する。
+11. **枯渇時 note 保護テスト**: (a) host 側 backing ring を意図的に枯渇させ（真の drop 条件を再現し）、`input_event_dropped_count` が増分すること・sticky flag による note-choke/all-notes-off 側路注入が発火し stuck note が構造的に排除されることを確認する。(b) child 側 spill FIFO を意図的に枯渇させ、`output_event_dropped_count`（NoteEnd 込みなら `output_note_end_dropped_count` も）が増分すること・host が monotone note_id 前提で per-voice 簿記を安全にリセットできることを確認する（§4.2 output 方向）。(c) supervisor が child を respawn した際、implicit all-voices-end により voice 簿記がリークしないことを確認する。
 
 ---
 
