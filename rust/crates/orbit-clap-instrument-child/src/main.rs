@@ -85,6 +85,9 @@ fn main() -> Result<()> {
     let mut event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);
     let mut event_scratch: Vec<NeutralEvent> = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
     let mut process_errors = 0u64;
+    // After a supervisor respawn this always restarts from 0, so the child re-processes every
+    // historical seq up to the current `seq_request` (no resume-point handshake exists yet).
+    // Tracked in #418.
     let mut last = 0u64;
 
     loop {
@@ -123,7 +126,17 @@ fn main() -> Result<()> {
             }
             event_buf.clear();
             for event in &event_scratch {
-                let _ = push_neutral_event(&mut event_buf, event);
+                // `false` means this NeutralEvent has no CLAP translation (e.g. PolyPressure,
+                // an intentional v1 drop — see orbit-clap-host/src/events.rs). Currently
+                // unreachable: the host only ever emits NoteOn/NoteOff/NoteChoke, which always
+                // translate. Reuse event_decode_error_count rather than add a new counter, per
+                // docs/development/POST_2.0_GAMMA_M2_DESIGN.md §4 ("child can't honor this
+                // event" visibility).
+                if !push_neutral_event(&mut event_buf, event) {
+                    unsafe {
+                        (*region).event_decode_error_count.fetch_add(1, Relaxed);
+                    }
+                }
             }
             scratch[..sample_count].fill(0.0);
             if !instrument.process_block(&mut scratch[..sample_count], &event_buf) {

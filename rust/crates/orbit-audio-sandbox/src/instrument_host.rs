@@ -303,7 +303,10 @@ impl PipelinedInstrumentHost {
                     match record.decode() {
                         Some(NeutralEvent::NoteEnd { addr, .. }) => self.voices.note_end(addr),
                         Some(NeutralEvent::NoteChoke { addr, .. }) => self.voices.choke(addr),
-                        _ => {}
+                        Some(_) => {}
+                        None => {
+                            (*region).event_decode_error_count.fetch_add(1, Relaxed);
+                        }
                     }
                 }
             }
@@ -589,5 +592,35 @@ mod tests {
         assert_eq!(host.live_count(key), 1);
         host.on_child_respawned();
         assert_eq!(host.live_count(key), 0);
+    }
+
+    #[test]
+    fn corrupted_output_record_increments_event_decode_error_count() {
+        let region = alloc_region();
+        let mut host = unsafe { PipelinedInstrumentHost::from_raw(region) };
+        let mut out = vec![0.0; CHANNELS];
+
+        host.process_block(&mut out, &[], transport(120.0, 0.0));
+
+        let mut corrupted = EventRecord::encode(&NeutralEvent::NoteEnd {
+            sample_offset: 0,
+            addr: addr(0, 1, 60),
+        });
+        corrupted.kind = u32::MAX;
+        unsafe {
+            let slot = slot_index(1);
+            (*region).output_events[slot][0] = corrupted;
+            (*region).output_event_count[slot].store(1, Relaxed);
+            (*region).seq_tag[slot].store(1, Release);
+            (*region).seq_done.store(1, Release);
+        }
+
+        let before = unsafe { (*region).event_decode_error_count.load(Relaxed) };
+        // The drain loop only visits slot 1's output events once `event_cursor` catches up to a
+        // seq whose `seq_tag` is published, so a second block is required (mirrors
+        // `delayed_note_end_is_drained_after_its_audio_target_has_moved_on`).
+        host.process_block(&mut out, &[], transport(120.0, 0.0));
+        let after = unsafe { (*region).event_decode_error_count.load(Relaxed) };
+        assert_eq!(after - before, 1);
     }
 }

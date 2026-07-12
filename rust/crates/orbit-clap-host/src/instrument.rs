@@ -98,6 +98,10 @@ impl ClapInstrumentProcessor {
     ///
     /// 戻り値は `plugin.process()` が成功したか。失敗時は `data` を変更しない（[`process_block_core`] 準拠）。
     /// `#[must_use]`: 握り潰すと plugin の毎ブロック失敗が child / parity 側で不可視になる。
+    ///
+    /// [`process_block_core`] は `OutputEvents::void()` を渡すため、plugin が発行する実出力 event
+    /// （NOTE_END 等）は現状すべて破棄され、M2 の `output_events` wire には届かない。配線は #419
+    /// （Phase 3 スコープ）で追跡する。
     #[must_use]
     pub fn process_block(&mut self, data: &mut [f32], events: &EventBuffer) -> bool {
         process_block_core(

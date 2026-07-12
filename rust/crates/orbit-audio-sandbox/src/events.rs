@@ -16,7 +16,11 @@ use std::mem::size_of;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VoiceAddr {
     /// -1 = wildcard（voice 一意識別・per-voice mod のターゲット）。host 側実装規約: monotone
-    /// 採番・再利用しない（§4.2 output 方向の overflow policy が前提とする invariant）。
+    /// 採番・再利用しないという規約は、host が実 note_id（`>= 0`）を発行し始めた時点から拘束力を
+    /// 持つ条件付き invariant（§4.7）。M2 v1 の host は wildcard（-1）のみを発行するためこの規約を
+    /// 自明に満たし、host 側 voice 簿記は `(port_index, channel, key)` 参照カウント方式（§4.7）を
+    /// 用いる — monotone note_id には依存しない。output 方向の overflow policy（§4.2）も同様に
+    /// monotone note_id 前提ではない。
     pub note_id: i32,
     /// -1 = wildcard（VST3 は busIndex に読み替え）。
     pub port_index: i16,

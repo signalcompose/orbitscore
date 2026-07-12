@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.244 fix(engine): M2 `/code:pr-review-team` 指摘対応 + 先送り3件の追跡強化（#416） (Jul 12, 2026)
+
+PR #417 の必須レビュー手順 `/code:pr-review-team`（code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer の4並列レビュー）で見つかった指摘に対応。owner から「先送りが多いと未追跡の負債になる」と懸念が出たため、修正可否の判断すべてを advisor と再確認した。
+
+**3レビュアー間で判定が割れた争点**: 実 `orbit-clap-instrument-child`（Stage5）が実 CLAP plugin の output event（NOTE_END 等）を `output_events` wire に一切配線していない問題を pr-test-analyzer が発見・silent-failure-hunter も近接箇所を独立指摘したが、code-reviewer は「Stage6 で defer 済みと doc に明記されている」として却下していた。**advisor で検証した結果、この根拠は誤り**（Stage5 の WORK_LOG は「output方向はStage6で着手」と記録していたが、実際にStage6で配線されたのは合成 child のみで、実 CLAP child は今日まで未着手のまま）。code-reviewer の内部 advisor 呼び出しがこの誤った前提を引き継いでいたため、却下は採用しなかった。
+
+**最終トリアージ（advisor 2回・owner 懸念を受けた再確認込み）**:
+- **即時修正（3件）**: (b) `instrument_host.rs` の output-drain ループで `decode()` の `None`（真の decode 失敗）が `event_decode_error_count` を計上していなかった catch-all を分離 — CRITICAL・回帰テスト追加（修正を戻すと fail することを fixer が自ら確認）。(c) `orbit-clap-instrument-child/main.rs` で `push_neutral_event` の戻り値（翻訳不能 event の可視化）を握り潰していた箇所を、design doc §4 が明示的に許容する「既存 `event_decode_error_count` の再利用」で解消（新規 wire counter は追加せず）。(d) `events.rs` の `VoiceAddr.note_id` doc comment が §4.7 の条件付き再スコープと矛盾したまま unconditional な規約を主張していた stale comment を修正。
+- **先送り（1件・3重にアンカー）**: 実 CLAP instrument child の output event 配線（上記争点）。正しい修正は M1 effect と共有する `process_block_core`（本 PR 無変更）のシグネチャ変更を要し、`orbit-clap-instrument-child` はまだ production 経路として spawn されない（Phase 3 で初めて使われる）ため #416 スコープ外と判断。owner の「未追跡の負債」懸念に対応するため、**単なる doc 注記では不十分**と advisor に指摘され、(1) 専用 issue **#419** 新規作成 (2) design doc §4.2 output方向にスコープ外注記追加 (3) `ClapInstrumentProcessor::process_block` にコード内コメントでアンカー (4) PR #417 の本文に既知の制約として明記、の4点セットで対応。
+- **同じ観点で #418（respawn resume-semantics・前回セッションで doc 注記のみだった）も retrofit**: `orbit-clap-instrument-child/main.rs` の `let mut last = 0u64;` 初期化箇所にコード内コメントで #418 をアンカーし、doc 注記だけに留まっていた状態を是正。
+- **見送り（判断のみ・issue化せず）**: `VoiceTable::indices()` の範囲外 addr 無視（increment/note_end/choke で対称・既存の観測専用テーブル設計の一部）、`drain_to_event_buffer` の `debug_assert!(false)`（Stage4 で意図的に導入した、現状到達不能な回帰ガード）。
+- workspace 全体 fmt/clippy/test を Opus main が独立に再実行して確認（fixer の自己申告に加え、4ファイルの diff を全て読んでロジック一致を確認）。
+- **役割**: 4レビュアーの起動・所見の対立解消・トリアージ（何を直し何を先送りするか、先送りの追跡強化方法）＝ advisor 2回相談の上で Opus main。issue作成・doc注記・PR本文更新 = leader action として Opus main が直接実施。**コード修正3件+コメントアンカー2件 = pr-review-team の fixer subagent（Agent tool・Codex ではない）に委譲**（`/code:pr-review-team` skill 規約どおり）。
+- **状態**: fixer 適用完了・裏取り済み。次: `select-reviewers.sh` 再実行→再レビュー（Critical/Important=0 の確認は再レビューで裏付ける・自己宣言しない）。
+
 ### 6.243 refactor(engine): M2 `/simplify` 指摘対応（#416） (Jul 12, 2026)
 
 PR #417（M2 instrument IPC substrate）の必須レビュー手順 `/simplify`（4並列クリーンアップagent: reuse/simplification/efficiency/altitude）の指摘に対応。
