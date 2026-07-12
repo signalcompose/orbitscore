@@ -235,10 +235,15 @@
 <header id="title-block-header">
 <h1 class="title">Who Conducts the Machine? — System Specification
 v1</h1>
-<div class="docmeta">{"type":"meta"<span class="dot">,</span>"doc":"WCTM_SYSTEM_SPEC","version":"1","concert":"2026-08-07 Geidai Senju Hall 7","ensemble":"dr/tp/gt + player-piano + LLM + ops"}</div>
+<div class="docmeta">{"type":"meta"<span class="dot">,</span>"doc":"WCTM_SYSTEM_SPEC","version":"1","concert":"CANCELLED Geidai 2026-08-07 — retargeting ICLC (see #413)","ensemble":"dr/tp/gt + player-piano + LLM + ops"}</div>
 </header>
 <h1 id="who-conducts-the-machine-system-specification-v1">Who Conducts
 the Machine? — System Specification v1</h1>
+<div style="border:2px solid #B4231F;background:#FFF3F2;color:#16181D;padding:12px 16px;margin:16px 0;border-radius:4px;">
+<strong>⚠️ 前提変更（2026-07-12・統括 <a href="https://github.com/signalcompose/orbitscore/issues/413">#413</a>）</strong><br />
+藝大コンサート（Max サマースクール・イン・藝大 2026 / 2026-08-07）は<strong>不採択</strong>。旧「ハード締切 2026-08-07・逆算で全工程が決まる」の前提は失効。本番トラックは <strong>ICLC への proposal 提出方向へ retarget</strong>（年次・提出日 ≈8/15・提出形態 work / work+paper はいずれも<strong>要確認</strong>）。藝大の参加条件だった <strong>Max 縛りも消滅</strong>（Max は選択肢の一つで必須ではない。使わないという意味ではない）。<br />
+以下の本文は<strong>藝大版の設計スナップショット</strong>であり、ICLC 向けの再考は統括 #413 に deferred する（どの決定が影響を受けるかは #413 で扱い、本書では再議論しない）。
+</div>
 <p><strong>Status</strong>: Draft for implementation
 <strong>Date</strong>: 2026-06-12 <strong>改訂</strong>: 2026-06-28(§4 本番ランタイムを pi ベース専用ハーネスに変更 — §4 / §10 / DESIGN_DISCUSSION_RECORD §14・決定 #60–#63) <strong>Concert</strong>:
 Maxサマースクール・イン・藝大 2026 / 2026-08-07 / 東京藝術大学
@@ -253,7 +258,7 @@ IMPLEMENTATION_INSTRUCTIONS
 (normative)</h2>
 <ol type="1">
 <li><strong>三つの時間スケールへの分業</strong>: ms =
-Max(センシング・MIDI ルーティング・音響処理)、拍〜小節 = OrbitScore
+Max(センシング・MIDI ルーティング・音響処理)<em>（※ Max は藝大前提。retarget 後は必須ではない — 冒頭の前提変更ノート参照）</em>、拍〜小節 = OrbitScore
 エンジン(決定論的タイミング)、フレーズ = LLM(意図の書き換え)。LLM
 の往復レイテンシ(数秒)は欠陥ではなく、quantize
 により「次の小節から効く」遅延に量子化される設計原理である。</li>
