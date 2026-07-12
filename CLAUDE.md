@@ -25,10 +25,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ---
 
-## 🎯 現在進行中: v1.1 Pitch DSL + Session Log + WCTM（締切 2026-08-07）
+## 🎯 現在進行中: v1.1 Pitch DSL + Session Log + WCTM
 
 **CRITICAL**: ピッチ DSL / MIDI 出力 (v1.1)・セッションログ (.orbslog)・コンサートシステム WCTM の開発が進行中。
-ハード締切は **2026-08-07 の WCTM 本番**（逆算で全工程が決まる）。**最優先は Pitch DSL (Phase 1→2→3)**。
+
+> **⚠️ 本番トラック retarget（2026-07-12・統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）**:
+> 藝大コンサート（Max サマースクール・イン・藝大 2026 / 2026-08-07）は **不採択**。旧「ハード締切 2026-08-07・逆算で全工程が決まる」の前提は失効。
+> 本番トラックは **ICLC への proposal 提出方向へ retarget**（年次・提出日 ≈8/15・提出形態 work / work+paper はいずれも **要確認**）。
+> 藝大の参加条件だった **Max 縛りも消滅**（Max は選択肢の一つで必須ではない。使わないという意味ではない）。
+> WCTM 関連作業の切り出し・ICLC/ICMC 提出物・private レポ接続・orbitstudio 集約は **[#413](https://github.com/signalcompose/orbitscore/issues/413)** で追跡。
+> Pitch DSL (Phase 1→2→3) は締切と独立に実装済み。
 
 ### 正本仕様（`docs/specs-v2/`）を必ずこの順で読む
 

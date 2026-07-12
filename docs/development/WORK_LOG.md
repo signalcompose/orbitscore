@@ -17,7 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.223 docs(engine): M2 transport 容量設計を「溢れても失わない」方式に確定（#398） (Jul 12, 2026)
+### 6.234 docs(engine): M2 landing-review fixes — Fable overflow/param_id decisions + advisor verify（#398） (Jul 12, 2026)
+
+M2 設計 doc（PR #399）に対する landing 前レビューを Fable fresh agent に依頼し、判定 LAND-WITH-FIXES（5 blocker + 準blocker）を得て全て反映した。owner 確認後、blocker のうち2件（新しい設計判断）は owner 指名で Fable に一発判断を委ね、確定後 advisor で内部整合性を verify した。
+
+- **クラスX（既存決定の安全側の明記・Q1-Q6 再決定なし）**: `decode()` の検証範囲を `kind` タグだけでなく payload 内の nested enum（`NeutralExpressionId` 等）まで拡張明記（§3 + §7 item2）。host の `output_event_count` 読み取りに `MAX_EVENTS_PER_BLOCK` clamp を明記（M1 の `n_frames` clamp 規律と同型）。§7 受け入れ基準に3テスト追加（全variant round-trip・spillover決定論・枯渇時note保護）。親plan `POST_2.0_VST3_HOSTING_PLAN.md` の Q5矛盾（bus arrangement「含める」記述）を解消。#400/#401 を CLOSED に更新。
+- **クラスY（owner-owned micro-decision・Fable 一発判断 2026-07-12）**:
+  - **output方向（child→host）の overflow policy**: 3 format とも output event が render 呼び出し内の同期出力である（producer=consumer が child の同一スレッド）という事実の発見により、input 側の host backing ring と対称にする案・単純 drop-newest 案のいずれでもなく、**child プロセスの通常メモリに置く固定容量 spill FIFO**（shm 不要・lock-free SPSC 不要）を採用。host 側の防衛はタイムアウト強制解放（voice id 衝突リスク）ではなく、**note_id monotone 採番 + supervisor respawn=implicit all-voices-end** の2規約で NoteEnd 喪失を「不可聴の簿記リーク」に格下げして無害化する設計に転換。
+  - **`param_id` の意味論**: `ParamBody.param_id`/`GestureBody.param_id` を u32→u64 に拡張し、child native format id（CLAP `clap_id`=u32・VST3 `ParamID`=u32・AU `AUParameterAddress`=u64、いずれも一次 SDK ヘッダで接地確認）の zero-extend として運ぶ方式を採用。host 発行の論理 index 案は、CLAP `rescan()`/VST3 restructure 時に host/child 両側の対応表を in-flight event と競合しながら差し替える新たな契約面を生むため不採用。wire サイズコストは rustc 実測で厳密にゼロと機械検証済み（`_pad: u32` が既に u64化に必要な4バイトを予約していたため）。副産物として `EventPayload`/`EventRecord` のサイズ見積り（`raw:[u8;24]`・≈32B/≈512KB）が現行定義でも既に stale だったことが判明し、正しい値（32B/40B/≈640KB）に訂正。
+- **advisor による doc 内部整合性 verify**: grep では拾えない3件の不整合（host backing ring と child spill FIFO のサイズ記載矛盾・output方向 lock-free の前提〔3 format render 同期〕が本文に未記載・`VoiceAddr.note_id` 定義に monotone 採番 invariant の相互参照がない）を検出し、いずれも設計変更を伴わない1行修正で解消。
+- **役割**: landing前レビュー=Fable fresh agent（zero-context・doc+正本のみで判定） / owner-owned micro-decision の判断材料整理=Opus main / 決定=Fable（owner 指名の一発判断）+ owner確認 / 内部整合性 verify=advisor。**codex 委譲なし**。
+- **状態**: PR #399 の body を Q1-Q6 + 新2決定の DECIDED 反映に最新化し ready for review 化（`gh pr ready`）。マージは owner の明示 GO 待ち（`gh pr merge` は未実行）。
+
+### 6.233 docs(engine): M2 transport 容量設計を「溢れても失わない」方式に確定（#398） (Jul 12, 2026)
 
 6.222 に続き、M2 の残り open question のうち Q3(sample offset)を owner が即決、Q4(transport 容量・overflow policy)を大幅な設計転換を経て確定した。残る open question は Q5・Q6 の2問のみ。
 
@@ -30,7 +42,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **役割**: grounding(JUCE/JACK/VST3業界調査)=fresh agent(opus) / 容量アーキ決定=Fable(2回・owner指名) / 決定所有=owner+Opus main。
 - **状態**: Issue #400(既存CLAP ring lossless化)・#401(engine.rs contention可視化)を作成済み・M2(#398)とは独立スコープとして即実装着手。M2の残open questionはQ5(bus arrangement defer)・Q6(tempo同期defer)の2問のみ。
 
-### 6.222 docs(engine): M2 wire 設計を named superset union で確定（owner+Fable判断）（#398） (Jul 12, 2026)
+### 6.232 docs(engine): M2 wire 設計を named superset union で確定（owner+Fable判断）（#398） (Jul 12, 2026)
 
 6.221 の DRAFT に対し owner が「DSL→IAC Bus MIDI のように、規格ごとに pluggable に翻訳する薄い共通層の方がいいのでは」と疑問提起。この議論を通じて `POST_2.0_GAMMA_M2_DESIGN.md` の wire 設計方針（旧 Q1/Q2）を確定させた。
 
@@ -43,7 +55,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **役割**: grounding=fresh agent(opus・2並列起動) / 枠組み検査=advisor(3往復) / 難所の一発判断=Fable(owner 指名) / 決定所有=owner+Opus main。**codex 委譲なし**。
 - **状態**: 残る open question は Q3(sample offset必須=推奨済)・Q4(transport容量・overflow policy・side-channel設計)・Q5(bus arrangement=defer推奨)・Q6(tempo同期=defer推奨)の4問のみ。owner サインオフ後に実装着手。
 
-### 6.221 docs(engine): Phase 2 — M2 instrument IPC substrate 設計 DRAFT（#398） (Jul 12, 2026)
+### 6.231 docs(engine): Phase 2 — M2 instrument IPC substrate 設計 DRAFT（#398） (Jul 12, 2026)
 
 VST3 hosting Phase 0+1（PR #397 MERGED・main `e6476e2`）の次の関門 = **Phase 2 = M2 instrument IPC substrate の SPEC 作業**（`POST_2.0_PLUGIN_STRATEGY.html` §3 の唯一の plan-affecting 決定 = M2 IPC を CLAP イベント形に寄せず format-neutral に仕様化）。Issue #398 / branch `398-vst3-phase2-m2-ipc-design` で DRAFT doc `docs/development/POST_2.0_GAMMA_M2_DESIGN.md` を執筆。owner は就寝中のため、決定を先取りせず open question として明示した状態で停止（[[consult-layering-by-error-type]] の層分け運用）。
 
@@ -52,6 +64,111 @@ VST3 hosting Phase 0+1（PR #397 MERGED・main `e6476e2`）の次の関門 = **P
 - **doc 構成**: neutral event wire 型の具体案（`#[repr(C)]` tagged union `NeutralEvent`・`VoiceAddr` によるwildcard対応アドレス指定）+ `SharedRegion` への event slot 拡張案（M1 の per-slot `seq_tag`/`n_frames` パターンを踏襲）+ 未決の owner 判断 6問（Q1 分離原則の確定・Q2 neutral IR 戦略・Q3 per-event sample-offset 必須化・Q4 transport layout 具体値/overflow policy・Q5 bus arrangement honor スコープ・Q6 transport/musical context の wire 包含可否）+ Phase 3 受け入れ基準 draft。
 - **役割**: grounding=fresh agent(opus) / 枠組み・superset 完全性検査=advisor / 設計所有・decision drafting=Opus main。**codex 委譲なし**（正本の禁止どおり）。
 - **状態**: DRAFT のまま commit・push・draft PR 作成のみ実施。`/simplify`・`/code:pr-review-team`・merge は回さない（決定 pending の docs-only 変更のため）。owner サインオフ後に Phase 2 実装（`orbit-audio-sandbox` 型定義・SharedRegion 拡張）着手・Phase 3（VST3 instrument）は M2 landing まで引き続き禁止。
+
+### 6.230 docs(wctm): retarget deadline + relax Max-mandatory premise (#414) (Jul 12, 2026)
+
+藝大コンサート（Max サマースクール・イン・藝大 2026 / 2026-08-07）不採択に伴い、WCTM 関連ドキュメントから「ハード締切 2026-08-07」と「Max 必須（参加条件）」の前提を除去（Issue #414、統括 #413）。**内容の再設計はせず**、藝大版の設計本文はスナップショットとして保持。
+
+- **確定事実は「藝大不採択」のみ**。ICLC への proposal 提出（≈8/15）は年次・提出日・提出形態（work / work+paper、paper は ICMC 別提出も検討）いずれも要確認扱いで、硬い日付に置換しない（advisor 指摘: 硬い前提を別の硬い前提で置換すると同型のバグを再生産する）。
+- **ナビ = 本文修正**: `CLAUDE.md` §現在進行中 / `docs/core/INDEX.md`（+ research 凍結ポインタ）/ `INSTRUCTION_ORBITSCORE_DSL.md` / `POST_2.0_*` 6箇所（MASTER_PLAN ×2 / PLUGIN_STRATEGY / NEXT_STEPS / ROADMAP_NOTES / ORBITSTUDIO_PLAN）の締切参照を retarget ポインタ（#413）へ更新。
+- **正本 = 入口ノート + 本文凍結**: `WCTM_SYSTEM_SPEC_v1.html` / `IMPLEMENTATION_INSTRUCTIONS.html` の冒頭に前提変更ノートを追加し meta の concert/deadline を訂正。§0 分業原理・週次計画（W1–W6 / SPReAD / リハ#1）等の本文は藝大版スナップショットとして保持。§7 Known Decisions は再議論しない（締切・Max 必須は外部与件であって決定ログ #1-32 ではない）。
+- **凍結（本文無変更）**: `docs/research/WCTM_*` 7本 + `DESIGN_DISCUSSION_RECORD.md`。旧前提のスナップショットとして意図的に保存（記録改変は文脈破壊）。
+- `docs/WCTM/ARCHITECTURE.html` は `.gitignore` 済・別ブランチ `wctm-architecture-docs` 管理のため本 PR の対象外。
+- **統括 Issue #413 新設**（WCTM/ICLC トラックの受け皿・stub）。Epic #224 本文更新 + #240 相互参照。将来方向（private レポ接続・論文・orbitstudio 集約）は #413 で追跡。
+- 着手前に advisor に方針を諮問し、POST_2.0_* 6箇所の欠落補足・硬い日付の再置換回避・§7 非抵触・入口ノート方式の健全性を確認済み。
+
+### 6.229 refactor(engine): dedupe ClapControl test wiring + flatten match (#412 /simplify) (Jul 12, 2026)
+
+6.228（#411 実装）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）で3本が独立に収束した指摘を修正（PR #412）。
+
+- **reuse/simplification/altitude 独立一致**: `loaded_engine()`/`loadable_engine()` が `ClapControl` 構築（event ring・cmd channel・stats 2種）を個別に重複実装していた。共通セットアップを `wire_clap_control()` に抽出し両ヘルパーから呼ぶよう変更（ヘルパー自体は altitude レビュー指摘の通りマージせず、両者の目的の違い〔`plugin_loaded` 事前セットの有無〕は維持）。
+- **simplification 指摘**: `ClapCommand` は現状 `LoadPlugin` 1バリアントのみなので、`match cmd { ClapCommand::LoadPlugin { .. } => {...} }` を irrefutable `let` pattern に平坦化しネストを1段削除。
+- **simplification 指摘（一部見送り）**: `if let Err(err) = result { panic!(...) }` を `assert!(result.is_ok(), "{result:?}")` に統一する提案は、実際にビルドして確認したところ `LoadedPluginSummary` が `Debug` 未実装のためコンパイルエラーになることが判明。本番コードへの `#[derive(Debug)]` 追加は本 PR のスコープ外（本番コード非変更の制約）のため、元の `if let Err` パターンを維持し、Debug 未実装ゆえの意図的な差異であることをコメントで明記した。
+- **検証**: `cargo build -p orbit-audio-daemon --features clap-host`・`cargo test -p orbit-audio-daemon --features clap-host --lib`（31 passed）・`cargo clippy --features clap-host --all-targets -D warnings`・`cargo fmt --check` すべて green。
+
+### 6.228 test(engine): cover load_plugin success flag update (#411) (Jul 12, 2026)
+
+`EngineWrap::load_plugin()` の成功分岐が `plugin_loaded` を true にすることを、実際の `LoadPlugin` コマンド送信と reply channel の往復で検証する unit test を追加。従来の `loaded_engine()` はテスト内でフラグを直接注入していたため、成功分岐の `store(true, ...)` が削除・反転されても検出できなかった穴を埋めた。
+
+### 6.227 test(engine): PluginNote load-gate 回帰テストの空洞化を修正 + CLAP_NOT_LOADED error code（#405） (Jul 12, 2026)
+
+6.226（#405 の実装）に対する `/code:pr-review-team` 4並列レビュー（code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer）で、回帰テストが実は #405 のガードを検証できていないこと等が判明（PR #407）。
+
+- **問題（Critical・pr-test-analyzer + code-reviewer 独立指摘）**: `assert_rejected_before_load` は `f(&wrap).is_err()` の弱い assertion のみで、`plugin_loaded` ガード（#405 本体）を丸ごと削除しても `clap: Mutex::new(None)`（test backend）経由で `WrapError::ClapUnavailable` が返るため `is_err()` は変わらず成立してしまう。ガードを検証していない空洞化テストだった。
+- **修正**:
+  - 汎用 `WrapError::Clap` の代わりに専用 variant `WrapError::ClapNotLoaded(String)` を追加し、`push_plugin_event` の未ロードガードがこれを返すよう変更。`session.rs` の `wrap_err_to_protocol` に `CLAP_NOT_LOADED` を追加（既存の `CLAP_UNAVAILABLE`/`CLAP_RUNTIME` と同パターン）。
+  - `assert_rejected_before_load` を `matches!(result, Err(WrapError::ClapNotLoaded(_)))` に変更（`ClapUnavailable` と区別可能になり、ガード削除で確実に fail する）。**自己検証**: ガードを一時的にコメントアウトし `cargo test --features clap-host plugin_load_gate_tests` で `note_on/note_off_before_load...` の2テストが実際に `Err(ClapUnavailable(...))` で fail することを確認 → 復元 → 再度緑を確認。
+  - positive-path テスト追加（PR #406 の private フィールド直接注入手法を踏襲）: `loaded_engine()` ヘルパーで `make_event_ring`/`ClapProcessorStats::new`/`CallbackTimeStats::new`/`mpsc::channel` から実 `ClapControl` を構築し `wrap.clap`/`wrap.plugin_loaded` に直接注入。`note_on_after_load_reaches_ring`/`note_off_after_load_reaches_ring` が `Ok(())` に加え consumer 側で実イベント到達まで検証。
+  - monotonic invariant（finding 4・`plugin_loaded.store` は**本番コード**中1箇所のみ。テストヘルパー `loaded_engine()` の直接注入分を除く）は軽量テスト `plugin_loaded_flag_stays_true_across_multiple_events` を追加（複数回 push 後もフラグが true のまま）。reset 経路が無いため runtime test でこれ以上の検証余地はない。
+  - **再レビューで判明した2件の軽微指摘**: (a) comment-analyzer 指摘 — 上記コメントが「全ファイル中1箇所」と書いていたが実際は grep で2箇所ヒット（本番+テストヘルパー）するため文言を訂正（本コミットで対応・ロジック変更なし）。(b) pr-test-analyzer 指摘（5/10・非blocking） — `load_plugin()` 実際の成功分岐（`plugin_loaded.store(true, ...)`, L624）を通るユニットテストが無い（`loaded_engine()` は直接注入でこの分岐を迂回）。既存コードの穴で本フェーズの新規劣化ではないため、Issue #411 で追跡（advisor 判断: 両者とも Critical/Important の閾値未満・収束をブロックしない）。
+  - 残存レース開示（MEDIUM・silent-failure-hunter）: `push_plugin_event` 直前と `session.rs` の `handle_plugin_note` 直前のコメントに、LoadPlugin 応答成功〜audio thread への実インストールの間の狭い window で同種の false-success が残りうることを明記（Issue #410 で追跡・修正は scope 外）。
+- **検証**: `cargo build --features clap-host -p orbit-audio-daemon` OK / `cargo test --features clap-host -p orbit-audio-daemon --lib` 20 passed / `cargo test -p orbit-audio-daemon`（default features、sandbox 外実行）12 lib + 19 protocol + 1 smoke + 7 verify_schedule_pcm 全 green（sandbox 内は loopback bind が `PermissionDenied` で偽 fail — 既知パターン）/ `cargo clippy --features clap-host -p orbit-audio-daemon -- -D warnings` clean / `cargo clippy -p orbit-audio-daemon -- -D warnings`（default）clean。
+- **役割**: レビュー=`/code:pr-review-team` 4並列（code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer） / 実装=Sonnet 5 subagent（model: sonnet 明示指定・自己検証込み）/ 委譲判断・検証方針策定=main（advisor 相談込み）。コミット trailer（`Co-Authored-By: Claude Sonnet 5`）が実装 agent の身元と一致。
+
+### 6.226 fix(engine): プラグイン未ロード時の PluginNoteOn/PluginNoteOff 嘘成功応答を修正（#405） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の容量設計を検討する過程で、fresh agent（opus）による拡張監査が発見した、容量とは無関係の別種の欠陥。
+
+- **問題**: `PluginNoteOn`/`PluginNoteOff` をプラグインロード前に送ると、audio thread は plugin が無ければ event を drain して捨てる（既存の意図的設計・fire-and-forget ring）一方、**protocol 層は `{"status": "note_on", "key": k}` という成功応答を返してしまう**。単なるデータ欠落より悪い「嘘の成功応答」で、呼び出し側は「鳴った」と誤信する。
+- **修正**: `EngineWrap` に `plugin_loaded: Arc<AtomicBool>`（feature `clap-host` 専用・他の `clap`/`link`/`outproc` フィールドと同パターン）を追加。`load_plugin` 成功時に `true` を立て、`push_plugin_event` の冒頭でこれを確認し、未ロードなら ring に触れる前に即座に `WrapError::Clap("no plugin loaded...")`（protocol code `CLAP_RUNTIME`）を返す。hot-unload 機構が存在しないため「一度成功したら true のまま」というシンプルなモデルで足りる（精密な非同期状態追跡はしない）。
+- **検証**: 新規 unit test 3本（`EngineWrap::build`〔private・同一モジュール内テストからアクセス可〕を使い実 device/実 ClapControl 無しでガードだけを検証: 未ロード時の NoteOn/NoteOff がエラーを返すこと2本 + フラグの初期値が false であること1本）。`cargo build`(default/clap-host/outproc-effect)・`cargo clippy --all-targets -D warnings`(同3構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。既存の gated test（`clap_host_gated.rs`）は load 成功後に note を送るため無影響。
+- **役割**: 発見=fresh agent(opus) / 実装・検証=Opus main(直接実装)。
+- **状態**: M2(#398)とは独立スコープ。PR 作成 → owner マージ待ち。これで今回の M2 検討過程で見つかった副産物（#400/#401/#404/#405）すべて実装・PR化完了。
+
+### 6.225 refactor(engine): outproc_health アクセサ統合 + frames_clamped の test seam 追加（#406） (Jul 12, 2026)
+
+PR #406（6.224 の frames_clamped 可視化）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）が独立に収束した2件を修正。
+
+- **Finding 1（simplification + efficiency の独立一致）**: `EngineWrap::outproc_health()` と新設 `outproc_frames_clamped()` が同一 tick 内で同一 `self.outproc` mutex に対し個別に `try_lock()` + `.snapshot()` していた（冗長ロック・かつ2呼び出しが同一スナップショットを観測する保証が無い＝片方 `WouldBlock` で 0 を返す間にもう片方が非ゼロを観測しうる）。`outproc_health()` の戻り値を `(u64, u64, bool)` → `(u64, u64, bool, u64)` に拡張し、単一の `try_lock` + `snapshot` で4 signal（`child_process_error_count`/`respawn_count`/`measurement_invalid`/`frames_clamped`）を返すよう統合。独立 `outproc_frames_clamped()`（有効/無効ビルド両方の実装）を削除し、`session.rs` のticker loop を4要素destructureに更新（呼び出し箇所は `rg` で `session.rs:163` の1箇所のみと確認済み）。
+- **Finding 2（reuse + altitude の独立一致・履歴根拠あり）**: `link_egress_drops`+`link_egress_drops_arc()`（PR #331）・`clap_process_errors`+`clap_process_errors_arc()`（PR #340）に既に確立していた「counter field + `#[doc(hidden)] *_arc()` injection accessor + `tests/protocol.rs` latch test」パターンが `frames_clamped` には無く（非 outproc-effect ビルドの stub が固定 `return 0`）、default feature build でこの signal を exercise するテストが存在しなかった。altitude レビューが指摘した通り `frames_clamped` は gated 実機テストの現実的な駆動経路も無い（outproc_health の他3 signal は kill-test で強制可能）ため、test seam は「あれば尚良い」ではなく必須。`outproc_frames_clamped: Arc<AtomicU64>` フィールド（unconditional）+ `outproc_frames_clamped_arc()`（`#[doc(hidden)]`・unconditional）を追加し、consolidated `outproc_health()` の frames_clamped を `s.frames_clamped + injected` で合算。`tests/protocol.rs` に `daemon_error_warning_on_outproc_frames_clamped`（`daemon_error_warning_on_link_egress_drop`/`_clap_process_error` と同型・発火 + latch 非再発火を検証）を追加。**scope外**: 既存3 signal（`OUTPROC_EFFECT_ERROR`/`RESPAWN`/`INVALID`）への同種seam retrofit はこのPRの対象外（frames_clamped固有の穴のみ埋める）。
+- **検証**: `cargo build`(default/outproc-effect/clap-host 3構成) / `cargo test --lib`(outproc-effect) / `cargo test --test protocol`(default・20 passed、うち新規1件) / `cargo clippy --workspace --all-targets -D warnings`(default) + 同(outproc-effect) + 同(clap-host) / `cargo fmt --all` すべて green。
+- **役割**: 発見=`/simplify` 4並列レビュー(独立収束) / 実装・検証=Opus main(直接実装)。
+- **状態**: PR #406 への追加コミット。
+
+### 6.224 fix(engine): out-of-process effect の frames_clamped カウンターを可視化（#404） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の容量設計を検討する過程で、fresh agent（opus）による拡張監査（#400/#401 の Fable 発見を受けた TS層+grepパターン非依存の追加調査）が発見した箇所。
+
+- **問題**: `orbit-audio-sandbox`（out-of-process effect transport・`MAX_FRAMES=4096`）で、1ブロックがこれを超えると末尾を無音化し `frames_clamped` カウンターに記録する仕組みは既に実装済み（`OutProcEffectStats::frames_clamped`・`snapshot()` にも含まれる）だったが、`EngineWrap::outproc_health()` が返すタプルに含まれておらず、他の兄弟カウンター（`CLAP_PROCESS_ERROR`・`OUTPROC_EFFECT_ERROR`等）と違って daemon の 1Hz ticker に一度も配線されていなかった。
+- **修正**: 既存タプルを変更せず、新規 `EngineWrap::outproc_frames_clamped()` accessor（`outproc_health` と同じ try_lock 規約）を追加し、`ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED`（新設）で 1Hz ticker に配線。カウント自体のロジックは `orbit-audio-sandbox` 側で既にテスト済みのため、今回は plumbing のみ（新規 unit test は追加せず、既存の `outproc_health()` と同型の untested accessor パターンに合わせた）。
+- **検証**: `cargo build`(default/outproc-effect/clap-host)・`cargo clippy --all-targets -D warnings`(同3構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。
+- **役割**: 発見=fresh agent(opus) / 実装・検証=Opus main(直接実装)。
+- **状態**: M2(#398)とは独立スコープ。PR 作成 → owner マージ待ち。
+
+### 6.223 fix(engine): ENGINE_LOCK_CONTENTION の WouldBlock/Poisoned 混同を修正（PR #403） (Jul 12, 2026)
+
+PR #403（#401 の実装）に対する `/simplify` 4並列レビュー（reuse/simplification/efficiency/altitude）で altitude レビュアーが発見し、コード直接確認で確定した実バグ。`orbit-audio-core::Engine::with_scheduler`/`render_multi` の `Err(_)` ワイルドカードが `std::sync::Mutex::try_lock()` の `WouldBlock`（一時競合・次ブロックで自己修復）と `Poisoned`（別スレッド panic による永続破損・`clear_poison()` 呼び出し箇所なしで恒久化）を同一カウンタ・同一 fallback に混ぜていた。poison すると `contention_count` が以後ずっと増え続け、daemon の WARNING メッセージ「this self-heals next block」が実際には二度と真にならない状態のまま無限に再発火する欠陥だった。
+
+- **実装**: `Engine` に `poisoned: Arc<AtomicBool>` を追加し `with_scheduler`/`render_multi` の match 節を `Err(TryLockError::WouldBlock)`（`contention_count` 増分のみ）と `Err(TryLockError::Poisoned(_))`（`poisoned.store(true, Relaxed)` のみ）に分離。両分岐とも RT スレッドのため `tracing::warn!` 等のブロッキング処理は行わない（非ブロッキング atomic write のみ）。`is_lock_poisoned()` accessor を追加。
+- **daemon 配線**: `ERROR_CODE_ENGINE_LOCK_POISONED`（新設・**FATAL** severity）を追加し、`EngineWrap::engine_lock_poisoned()` → 1Hz ticker で `device_lost` と同じ fire-once latch パターンで発火。FATAL 選定根拠: このコードベースの FATAL は session を終了しない（`device_lost_reported=true` 後も ticker は StreamStats を出し続ける）ため「恒久障害だが daemon 生存」を表す severity として一貫する。poison は render 全体 + `schedule`/`stop`/`stop_all`/`set_global_gain` の制御系 API も道連れにする点で `OUTPROC_EFFECT_INVALID`（effect 経路のみ凍結・WARNING）より重く、`device_lost` に近いため FATAL とした。
+- **テスト seam**: `Engine::contention_count_arc()`/`poisoned_arc()`（`#[doc(hidden)]`、`StreamStats::record_xrun` と同形の直接注入 — 生の atomic なので link/clap のような additive 分離 counter は不要）を追加し `EngineWrap` に delegate。`tests/protocol.rs` に `daemon_error_warning_on_engine_lock_contention`/`daemon_error_fatal_on_engine_lock_poisoned` を追加（latch 検証込み）。加えて `orbit-audio-core::engine::tests` に、別スレッドで実際に panic させ Mutex を genuine-poison する unit test を追加し、`poisoned` フラグが `contention_count` を汚染しないことを実際の poison で確認。
+- **ドキュメント cleanup**: field doc とアクセサ doc の重複を解消（simplification レビュー指摘）、`render_multi_routes_by_channel_tag` テストの「決定論的に競合を起こせない」という古いコメントを削除（後続テストで実際に決定論的検証済みのため矛盾していた）。
+- **検証**: `cargo build`(core / daemon default / daemon clap-host)・`cargo test`(core --lib 45件・daemon --lib 13件・daemon --test protocol 21件、全緑)・`cargo clippy --workspace --all-targets -D warnings`・`cargo fmt --check` を確認。
+- **役割**: 発見=`/simplify` 4並列レビュー（altitude が主犯、reuse/simplification が付随指摘）/ 実装・検証=Opus subagent（advisor で設計レビュー後に commit）。
+- **状態**: PR #403 に追加コミットとして push 済み。
+
+### 6.222 fix(engine): Engine lock 競合の silent zero-fill を可視化（#401） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の容量設計を検討する過程で、Fable の拡張レビューが新たに発見した箇所。`orbit-audio-core::Engine::with_scheduler`/`render_multi` は RT 競合（`try_lock` 失敗）時に出力バッファを silent zero-fill する既存設計（lock-free 化は別 Issue で defer 済み・自己修復する障害）だったが、発生を可視化する仕組みが一切なかった。
+
+- **実装**: `Engine` に `contention_count: Arc<AtomicU64>` を追加し、`with_scheduler`/`render_multi` 両方の `Err(_)`（try_lock 失敗）分岐で増分。`lock_contention_count()` accessor を追加。
+- **daemon 配線**: `EngineWrap::engine_lock_contention_count()` → `ERROR_CODE_ENGINE_LOCK_CONTENTION`（新設）→ 既存の 1Hz ticker パターンに配線。
+- **検証**: 新規 unit test 2本（`inner` は同一モジュール内テストから直接 lock 可能な private field のため、同一スレッドで guard を保持したまま `render`/`render_multi` を呼び、try_lock 失敗を人工的に発生させて検証。std::sync::Mutex は非再入なので別スレッド spawn 不要）。`cargo build`(default/clap-host/outproc-effect)・`cargo clippy --all-targets -D warnings`(orbit-audio-core含む4構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。
+- **付随調査**: 同セッションで fresh agent(opus)による拡張監査（TS層+grepパターン非依存のRust手書きqueue探索）を実施し、TS層には同種欠陥なし・新たに2件発見（`orbit-audio-sandbox`の`frames_clamped`カウンター未配線／プラグイン未ロード時のNoteOn/NoteOffが嘘の成功応答を返す）→ 別途 issue化予定。LinkAudio側の`MAX_LINK_CHANNELS`(64)の debug_assert は、control側(`register_channel`)が同じ上限を既に error として強制しているため構造上到達不能と判断し見送り。
+- **役割**: 発見=Fable(実コード確認込みレビュー) / 実装・検証=Opus main(直接実装)。
+- **状態**: M2(#398)とは独立スコープ。PR 作成 → owner マージ待ち。
+
+### 6.221 fix(engine): in-process CLAP event ring を bounded retry で lossless 化（#400） (Jul 12, 2026)
+
+M2 instrument IPC substrate（#398）の transport 容量設計を検討する過程で、既存の in-process CLAP event ring（`orbit-audio-daemon/src/engine_wrap.rs` の `push_plugin_event`・1024 slot）に同種の欠陥（満杯時 drop-newest だが可視化カウンタなし・NoteOff drop で stuck note の可能性）が見つかり、Fable のレビューで「producer が RT スレッドでないため bounded retry だけで安価に lossless 化できる」と判明したため、M2 とは独立した issue として即着手した。
+
+- **実コード確認**: `push_plugin_event` の呼び出し元は `session.rs` の WS command handler（tokio async task・control スレッド）であり RT audio スレッドではない。consumer（`processor.rs` の `drain_to_event_buffer`）は毎 audio callback で ring を全量 drain するため、最大 1 callback 周期（buffer 設定によって ~1.3〜93ms）待てば空きが保証される。
+- **実装**: `push_with_bounded_retry<T>`（`rtrb::Producer<T>` 汎用・純粋関数・mutex 非依存）を新設し、最大200回・1ms間隔（≈200ms上限）で retry。真にタイムアウトした場合のみ `plugin_event_ring_overflow_count`（新規 `Arc<AtomicU64>`・`clap_process_errors` と同型の unconditional health-signal フィールド）を進めてエラーを返す。`push_plugin_event` はこのヘルパーを呼ぶだけに簡素化。
+- **可視化**: `ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW`（`protocol.rs`）を新設し、既存の 1Hz ticker（`CLAP_PROCESS_ERROR` 等と同型パターン）に配線。
+- **tokio ワーカー保護**: bounded retry で `plugin_note_on`/`plugin_note_off` が最大 ~200ms ブロックしうるようになったため、`session.rs` の `PluginNoteOn`/`PluginNoteOff` handler を `LoadPlugin` と同じ `tokio::task::spawn_blocking` パターンで包み、tokio ワーカースレッドを塞がないようにした。
+- **検証**: 初回コミットで新規 unit test 3本（`plugin_event_ring_retry_tests`・即座に成功／consumer drain 後に成功／真の overflow で counter 増分）を追加。以降 PR #402 の pr-review-team 反復（/simplify・カバレッジギャップ是正・`handle_command` dispatch 一本化）で `plugin_event_ring_retry_tests` に fatal outcome 早期リターン 1本を追加し、さらに `push_plugin_event_tests`（clap 未初期化時の `ClapUnavailable` 2本）・`plugin_note_spec_*`（配線 pin 2本）・`handle_plugin_note_*`（fn-pointer dispatch・spawn_blocking join-error 2本）・`tests/protocol.rs` の統合テスト（ring overflow warning 1本）を追加し、累計で新規 unit/integration test 11本。clap-host feature 下で全て PASS。`cargo build`(default/clap-host/outproc-effect)・`cargo clippy --all-targets -D warnings`(同3構成)・`cargo fmt --check`・`cargo test --workspace`(全緑)・`cargo deny check licenses`(ok)を確認。
+- **役割**: 発見=Fable(実コード確認込みレビュー) / 実装・検証=Opus main(直接実装・小規模のためサブエージェント委譲なし)。
+- **状態**: M2(#398)とは独立スコープ。PR #402 iteration 3 レビュー収束（silent-failure-hunter/pr-test-analyzer/code-reviewer）を反映して cleanup 済み → owner マージ待ち。
 
 ### 6.220 fix(engine): VST3 host unsafe memory-safety 監査 + hardening 3件（#397） (Jul 11, 2026)
 

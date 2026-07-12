@@ -19,11 +19,12 @@ use tracing::warn;
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
-    ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_LINK_EGRESS_DROP,
-    ERROR_CODE_OUTPROC_EFFECT_ERROR, ERROR_CODE_OUTPROC_EFFECT_INVALID,
-    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
-    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
-    EVENT_STREAM_STATS,
+    ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_ENGINE_LOCK_CONTENTION,
+    ERROR_CODE_ENGINE_LOCK_POISONED, ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_OUTPROC_EFFECT_ERROR,
+    ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED, ERROR_CODE_OUTPROC_EFFECT_INVALID,
+    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW,
+    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
+    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -82,8 +83,12 @@ pub async fn run(
             let mut last_clap_errors: u64 = 0;
             let mut last_outproc_errors: u64 = 0;
             let mut last_outproc_respawns: u64 = 0;
+            let mut last_outproc_frames_clamped: u64 = 0;
+            let mut last_engine_lock_contention: u64 = 0;
+            let mut last_plugin_event_ring_overflow: u64 = 0;
             let mut outproc_invalid_reported = false;
             let mut device_lost_reported = false;
+            let mut engine_lock_poisoned_reported = false;
             loop {
                 ticker.tick().await;
                 let snapshot = engine.stream_stats_snapshot();
@@ -100,6 +105,25 @@ pub async fn run(
                         break;
                     }
                     device_lost_reported = true;
+                }
+
+                // Engine 内部 Mutex が RT 競合で poisoned と判定された（#401）。`device_lost` と同じ
+                // 恒久障害クラス（`clear_poison()` を呼ぶ箇所が無く同一プロセス生存中は回復しない —
+                // render は恒久 zero-fill、schedule/stop 等の制御系 API も以降ずっとエラーを返す）
+                // なので FATAL・fire-once。"self-heals" と言い切る `ENGINE_LOCK_CONTENTION` の
+                // WARNING メッセージとは異なり、poisoned は自己修復しないことを明示する。
+                if engine.engine_lock_poisoned() && !engine_lock_poisoned_reported {
+                    let fatal_evt = daemon_error_event(
+                        ERROR_SEVERITY_FATAL,
+                        ERROR_CODE_ENGINE_LOCK_POISONED,
+                        "engine scheduler mutex poisoned by a panicking thread; audio output is \
+                         permanently down until daemon restart"
+                            .to_string(),
+                    );
+                    if tx.send(to_json_or_fallback(&fatal_evt)).await.is_err() {
+                        break;
+                    }
+                    engine_lock_poisoned_reported = true;
                 }
 
                 if snapshot.xruns > last_xruns {
@@ -156,10 +180,53 @@ pub async fn run(
                     last_clap_errors = clap_errors;
                 }
 
+                // Engine 内部 Mutex の RT 競合（try_lock が WouldBlock → silent zero-fill）を非 RT で
+                // surface（#401）。lock-free 化は別 Issue で defer 済みの既存判断のまま、発生の
+                // 可視化のみ追加。WouldBlock は自己修復する障害（次のブロックで復帰）だが 32/64f
+                // 小バッファ性能ゴール下ではライブコマンド頻度に比例して発生確率が上がる。
+                // 恒久障害（Poisoned）はこのカウンタに含めない — 上の ENGINE_LOCK_POISONED FATAL 参照。
+                let engine_lock_contention = engine.engine_lock_contention_count();
+                if engine_lock_contention > last_engine_lock_contention {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_ENGINE_LOCK_CONTENTION,
+                        format!(
+                            "engine lock contention ({engine_lock_contention} total); a block \
+                             was silently zero-filled — this self-heals next block",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_engine_lock_contention = engine_lock_contention;
+                }
+
+                // in-process CLAP event ring への push が bounded retry の末に力尽きた（真の event
+                // 喪失）を非 RT で surface（#400）。通常は 0 のまま推移する health signal。
+                let plugin_event_overflow = engine.plugin_event_ring_overflow_count();
+                if plugin_event_overflow > last_plugin_event_ring_overflow {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW,
+                        format!(
+                            "plugin event ring overflowed after bounded retry ({plugin_event_overflow} \
+                             total); a NoteOn/NoteOff was lost",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_plugin_event_ring_overflow = plugin_event_overflow;
+                }
+
                 // out-of-process effect の health（γ M1 PR-C）を非 RT で surface。child の process() エラー
-                // / crash→respawn / supervise 不能（計測無効）を 1 Hz ticker で検知して event を出す（CLAP
-                // 経路と同設計。outproc 無効 / 異常なしは (0,0,false) のまま発火しない）。
-                let (outproc_errors, outproc_respawns, outproc_invalid) = engine.outproc_health();
+                // / crash→respawn / supervise 不能（計測無効）/ frames_clamped（#404）を 1 Hz ticker で
+                // 検知して event を出す（CLAP 経路と同設計。outproc 無効 / 異常なしは (0,0,false,0) のまま
+                // 発火しない）。4 signal を 1 回の try_lock + snapshot にまとめて読む（#406 /simplify:
+                // 個別 accessor だと同一 mutex を同一 tick 内で複数回 lock し、かつ同一スナップショットを
+                // 観測する保証がなくなる）。
+                let (outproc_errors, outproc_respawns, outproc_invalid, outproc_frames_clamped) =
+                    engine.outproc_health();
                 if outproc_errors > last_outproc_errors {
                     let evt = daemon_error_event(
                         ERROR_SEVERITY_WARNING,
@@ -201,6 +268,25 @@ pub async fn run(
                         break;
                     }
                     outproc_invalid_reported = true;
+                }
+
+                // OOP effect の block が MAX_FRAMES を超えて clamp された累積回数を非 RT で
+                // surface（#404）。カウンタ自体は既存だったが ticker 未配線だったため追加。#406 で
+                // outproc_health() に統合済み（上で destructure 済みの値をそのまま使う）。
+                if outproc_frames_clamped > last_outproc_frames_clamped {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED,
+                        format!(
+                            "out-of-process effect block exceeded MAX_FRAMES and was clamped \
+                             ({outproc_frames_clamped} total); tail of an oversized block was \
+                             silenced",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_frames_clamped = outproc_frames_clamped;
                 }
 
                 let stats_evt = Event::new(
@@ -317,6 +403,25 @@ async fn handle_command(
     tx: &mpsc::Sender<String>,
 ) -> Value {
     let Command { id, method, params } = cmd;
+
+    // PluginNoteOn/PluginNoteOff dispatch は `plugin_note_spec` を single source of truth として
+    // その外側でチェックする（method match の中に "PluginNoteOn" | "PluginNoteOff" literal を
+    // 別途置くと、同じ文字列集合が2箇所で独立に保守されてしまい、どちらか一方だけ更新された場合に
+    // 検出できない・#402 pr-review-team iteration 3 収束指摘: silent-failure-hunter/
+    // pr-test-analyzer/code-reviewer）。`plugin_note_spec` が `None` を返す method はここを
+    // 素通りして下の match に落ちる。
+    if let Some(spec) = plugin_note_spec(&method) {
+        return handle_plugin_note(
+            &id,
+            &params,
+            engine,
+            spec.default_velocity,
+            spec.status,
+            spec.call,
+        )
+        .await;
+    }
+
     match method.as_str() {
         "Ping" => ok(&id, Value::String("pong".to_string())),
         "GetStatus" => {
@@ -442,49 +547,11 @@ async fn handle_command(
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
             ),
         },
-        // ロード済み CLAP プラグインへ NoteOn / NoteOff を送る（event ring 経由・非ブロッキング）。
-        // 注意: plugin 未ロード時（LoadPlugin 前 / load 失敗後）も protocol 層では成功応答を返すが、
-        // audio thread は plugin が無ければ event を drain して捨てる（fire-and-forget ring の設計上、
-        // ロード状態の同期確認は cross-thread round-trip が要るため行わない）。pre-load note は黙って落ちる。
-        // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が未定義になるため）。
-        "PluginNoteOn" => match params.get("key").and_then(|v| v.as_u64()) {
-            Some(k) if k <= 127 => match parse_midi_channel(&params) {
-                Ok(channel) => {
-                    let velocity = param_f64(&params, "velocity", 0.8).clamp(0.0, 1.0);
-                    match engine.plugin_note_on(k as u8, channel, velocity) {
-                        Ok(()) => ok(&id, json!({"status": "note_on", "key": k})),
-                        Err(e) => err(&id, wrap_err_to_protocol(&e)),
-                    }
-                }
-                Err(e) => err(&id, e),
-            },
-            _ => err(
-                &id,
-                ProtocolError::new(
-                    "MALFORMED_REQUEST",
-                    "missing or out-of-range 'key' (0..=127)",
-                ),
-            ),
-        },
-        "PluginNoteOff" => match params.get("key").and_then(|v| v.as_u64()) {
-            Some(k) if k <= 127 => match parse_midi_channel(&params) {
-                Ok(channel) => {
-                    let velocity = param_f64(&params, "velocity", 0.0).clamp(0.0, 1.0);
-                    match engine.plugin_note_off(k as u8, channel, velocity) {
-                        Ok(()) => ok(&id, json!({"status": "note_off", "key": k})),
-                        Err(e) => err(&id, wrap_err_to_protocol(&e)),
-                    }
-                }
-                Err(e) => err(&id, e),
-            },
-            _ => err(
-                &id,
-                ProtocolError::new(
-                    "MALFORMED_REQUEST",
-                    "missing or out-of-range 'key' (0..=127)",
-                ),
-            ),
-        },
+        // NoteOn / NoteOff（"PluginNoteOn" / "PluginNoteOff"）は関数先頭の `plugin_note_spec`
+        // ディスパッチで処理済みなので、ここには到達しない。event ring 経由の送出（bounded retry・
+        // #400）、key/channel 検証・spawn_blocking・応答整形の実体は `handle_plugin_note` を参照。
+        // plugin 未ロード時のエラー応答（`CLAP_NOT_LOADED`・#405）と残存レース（Issue #410）の
+        // 開示は `handle_plugin_note` の doc comment を参照。
         "PlayAt" => {
             let time_sec = param_f64(&params, "time_sec", 0.0);
             let gain = param_f64(&params, "gain", 1.0) as f32;
@@ -688,6 +755,83 @@ fn parse_midi_channel(params: &Value) -> Result<u8, ProtocolError> {
     }
 }
 
+/// `PluginNoteOn`/`PluginNoteOff` の配線（`default_velocity`/`status`/`call`）。
+struct PluginNoteSpec {
+    default_velocity: f64,
+    status: &'static str,
+    call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
+}
+
+/// `method` 文字列から [`PluginNoteSpec`] を解決する single source of truth。`handle_command` 冒頭の
+/// dispatch（`"PluginNoteOn"`/`"PluginNoteOff"` を判定する唯一の箇所）と、下のテスト
+/// `plugin_note_spec_*` の両方がここを参照する（#402 pr-test-analyzer 指摘・iteration 2〜3）。
+/// `"PluginNoteOn"`/`"PluginNoteOff"` 以外は `None`。
+fn plugin_note_spec(method: &str) -> Option<PluginNoteSpec> {
+    match method {
+        "PluginNoteOn" => Some(PluginNoteSpec {
+            default_velocity: 0.8,
+            status: "note_on",
+            call: EngineWrap::plugin_note_on,
+        }),
+        "PluginNoteOff" => Some(PluginNoteSpec {
+            default_velocity: 0.0,
+            status: "note_off",
+            call: EngineWrap::plugin_note_off,
+        }),
+        _ => None,
+    }
+}
+
+/// `PluginNoteOn`/`PluginNoteOff` の共通本体（key/channel 検証・spawn_blocking・応答整形が
+/// 完全に同型なので集約する・#402 レビュー指摘）。`call` は `EngineWrap::plugin_note_on`/
+/// `plugin_note_off` を渡す。
+///
+/// plugin 未ロード時（LoadPlugin 前 / load 失敗後）は `call`（`push_plugin_event` 経由）が事前に
+/// `CLAP_NOT_LOADED`("no plugin loaded") エラーを返す（#405・嘘の成功応答を防ぐ。ロード成功後の
+/// 精密な非同期状態〔hot-unload 等〕までは追わない — 現状そのような機構が無いため）。
+/// 残存課題（Issue #410）: このガードは「LoadPlugin の応答成功」しか検知できない。応答成功〜
+/// audio thread への実インストールの間の狭い window では、ガードは通過するが note が無音のまま
+/// ドレインされる同種の false-success が残りうる（cross-thread ack の実装は #405/#407 では
+/// 意図的に scope 外とした）。
+async fn handle_plugin_note(
+    id: &str,
+    params: &Value,
+    engine: &Arc<EngineWrap>,
+    default_velocity: f64,
+    status: &'static str,
+    call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
+) -> Value {
+    match params.get("key").and_then(|v| v.as_u64()) {
+        Some(k) if k <= 127 => match parse_midi_channel(params) {
+            Ok(channel) => {
+                // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が
+                // 未定義になるため）。
+                let velocity = param_f64(params, "velocity", default_velocity).clamp(0.0, 1.0);
+                let engine = engine.clone();
+                let res =
+                    tokio::task::spawn_blocking(move || call(&engine, k as u8, channel, velocity))
+                        .await;
+                match res {
+                    Ok(Ok(())) => ok(id, json!({"status": status, "key": k})),
+                    Ok(Err(e)) => err(id, wrap_err_to_protocol(&e)),
+                    Err(join_err) => err(
+                        id,
+                        ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                    ),
+                }
+            }
+            Err(e) => err(id, e),
+        },
+        _ => err(
+            id,
+            ProtocolError::new(
+                "MALFORMED_REQUEST",
+                "missing or out-of-range 'key' (0..=127)",
+            ),
+        ),
+    }
+}
+
 fn ok(id: &str, result: Value) -> Value {
     // OkResponse は String/Value のみ含む固定スキーマ。
     // シリアライズ失敗はプログラマエラー (新フィールドの Serialize 実装不備) として
@@ -733,6 +877,9 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         // CLAP も LinkAudio と同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする。
         WrapError::ClapUnavailable(msg) => ProtocolError::new("CLAP_UNAVAILABLE", msg.clone()),
         WrapError::Clap(msg) => ProtocolError::new("CLAP_RUNTIME", msg.clone()),
+        // 未ロード（LoadPlugin 未送信 / 失敗後）は feature-gap でも汎用 runtime エラーでもない専用
+        // コード（#405）。TS 層が「まだロードしていない」ことを actionable に判定できるようにする。
+        WrapError::ClapNotLoaded(msg) => ProtocolError::new("CLAP_NOT_LOADED", msg.clone()),
         // OOP effect も同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする（γ M1 PR-C）。
         WrapError::OutProcEffectUnavailable(msg) => {
             ProtocolError::new("OUTPROC_EFFECT_UNAVAILABLE", msg.clone())
@@ -772,6 +919,13 @@ mod tests {
         assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_RUNTIME");
     }
 
+    // 未ロードは feature-gap / 汎用 runtime エラーのどちらとも別コードにする（#405）。
+    #[test]
+    fn clap_not_loaded_maps_to_not_loaded_code() {
+        let e = WrapError::ClapNotLoaded("no plugin loaded (send LoadPlugin first)".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_NOT_LOADED");
+    }
+
     // PluginNoteOn/Off の channel 検証: 欠如→0、0..=15 受理、範囲外は MALFORMED（key と対称）。
     #[test]
     fn parse_midi_channel_defaults_accepts_and_rejects() {
@@ -809,5 +963,139 @@ mod tests {
         assert!(!validate_bpm(f64::NEG_INFINITY));
         assert!(!validate_bpm(MAX_LINK_BPM + 1.0));
         assert!(!validate_bpm(f64::MAX));
+    }
+
+    // #402 pr-test-analyzer 指摘（iteration 2）: `handle_command` 冒頭の `"PluginNoteOn"`/
+    // `"PluginNoteOff"` dispatch 自体（このテストではなく `plugin_note_spec` 経由の literal/
+    // fn-pointer 配線）がコピペで入れ替わっていないことを pin する。`handle_command` を実際に
+    // 呼んで response を比較する手は使えない: StubBackend では `call`（実
+    // `EngineWrap::plugin_note_on`/`plugin_note_off`）が
+    // clap 未初期化で即 `ClapUnavailable` に落ちるため、velocity/status は response に一切現れず、
+    // PluginNoteOn/PluginNoteOff の応答が常に同一になってしまう（response 差分では検出不能）。
+    // そのため `handle_command` が単一の真実源として参照する `plugin_note_spec` を直接 pin する。
+    #[test]
+    fn plugin_note_spec_maps_default_velocity_and_status() {
+        let on = plugin_note_spec("PluginNoteOn").expect("PluginNoteOn has a spec");
+        assert_eq!(on.default_velocity, 0.8, "NoteOn の既定 velocity");
+        assert_eq!(on.status, "note_on");
+
+        let off = plugin_note_spec("PluginNoteOff").expect("PluginNoteOff has a spec");
+        assert_eq!(off.default_velocity, 0.0, "NoteOff の既定 velocity");
+        assert_eq!(off.status, "note_off");
+
+        assert!(
+            plugin_note_spec("Ping").is_none(),
+            "PluginNoteOn/Off 以外は None"
+        );
+    }
+
+    // fn-pointer の取り違え（`call` フィールドが逆の `EngineWrap` メソッドを指す）を pin する。
+    // `#[cfg(not(feature = "clap-host"))]` ビルドでは `plugin_note_on`/`plugin_note_off` の stub 本体が
+    // バイト同一（同じ `ClapUnavailable` を返すだけ）なため、コンパイラの identical code folding で
+    // 同一アドレスに畳まれ得るため、fn-pointer 比較が意味を持たない。よってこのテストは `clap-host` 有効
+    // ビルド限定（本体が `push_plugin_event` に異なる `PluginEvent` variant を渡すため区別できる）。
+    #[cfg(feature = "clap-host")]
+    #[test]
+    fn plugin_note_spec_dispatches_to_correct_engine_method() {
+        let on = plugin_note_spec("PluginNoteOn").expect("PluginNoteOn has a spec");
+        assert!(
+            std::ptr::fn_addr_eq(
+                on.call,
+                EngineWrap::plugin_note_on
+                    as fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>
+            ),
+            "PluginNoteOn は EngineWrap::plugin_note_on を呼ぶこと（NoteOff と入れ替わっていないこと）"
+        );
+
+        let off = plugin_note_spec("PluginNoteOff").expect("PluginNoteOff has a spec");
+        assert!(
+            std::ptr::fn_addr_eq(
+                off.call,
+                EngineWrap::plugin_note_off
+                    as fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>
+            ),
+            "PluginNoteOff は EngineWrap::plugin_note_off を呼ぶこと"
+        );
+    }
+
+    // #402 pr-test-analyzer: handle_plugin_note の fn-pointer dispatch（call fn / default_velocity /
+    // status 文字列の組み合わせ）が PluginNoteOn/PluginNoteOff の `plugin_note_spec` 間で
+    // 入れ替わっていないことを pin する。実 `EngineWrap::plugin_note_on`/`plugin_note_off` を
+    // 使うと（test backend では `clap: None` のため）常に ClapUnavailable で早期リターンし
+    // velocity が観測できないので、
+    // `call` fn だけを capture 用に差し替える（velocity の解決 = `param_f64(..., default_velocity)`
+    // は `call` を呼ぶ前に handle_plugin_note 内部で完結するため、この capture が唯一の観測手段）。
+    #[tokio::test]
+    async fn handle_plugin_note_forwards_correct_default_velocity_and_status() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static CAPTURED_VELOCITY_BITS: AtomicU64 = AtomicU64::new(0);
+
+        fn capture_velocity(
+            _engine: &EngineWrap,
+            _key: u8,
+            _channel: u8,
+            velocity: f64,
+        ) -> Result<(), WrapError> {
+            CAPTURED_VELOCITY_BITS.store(velocity.to_bits(), Ordering::SeqCst);
+            Ok(())
+        }
+
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let params = json!({"key": 60});
+
+        // "PluginNoteOn" 配線: default_velocity=0.8 / status="note_on"（handle_command 参照）。
+        let resp_on =
+            handle_plugin_note("id-on", &params, &engine, 0.8, "note_on", capture_velocity).await;
+        assert_eq!(
+            f64::from_bits(CAPTURED_VELOCITY_BITS.load(Ordering::SeqCst)),
+            0.8,
+            "PluginNoteOn: velocity 省略時は NoteOn 自身の既定 0.8 に解決されること（NoteOff の \
+             既定と入れ替わっていないこと）"
+        );
+        assert_eq!(resp_on["result"]["status"], "note_on");
+
+        // "PluginNoteOff" 配線: default_velocity=0.0 / status="note_off"。
+        let resp_off = handle_plugin_note(
+            "id-off",
+            &params,
+            &engine,
+            0.0,
+            "note_off",
+            capture_velocity,
+        )
+        .await;
+        assert_eq!(
+            f64::from_bits(CAPTURED_VELOCITY_BITS.load(Ordering::SeqCst)),
+            0.0,
+            "PluginNoteOff: velocity 省略時は NoteOff 自身の既定 0.0 に解決されること"
+        );
+        assert_eq!(resp_off["result"]["status"], "note_off");
+    }
+
+    // #402 pr-test-analyzer: handle_plugin_note の spawn_blocking join-error 分岐
+    // (`Err(join_err) => ProtocolError::new("INTERNAL_ERROR", ...)`) は、このPR以前は
+    // PluginNoteOn/Off が同期実行だったため存在しなかった失敗経路。call fn 内 panic → JoinError →
+    // INTERNAL_ERROR mapping を pin する。
+    #[tokio::test]
+    async fn handle_plugin_note_maps_spawn_blocking_join_error_to_internal_error() {
+        fn panicking_call(
+            _engine: &EngineWrap,
+            _key: u8,
+            _channel: u8,
+            _velocity: f64,
+        ) -> Result<(), WrapError> {
+            panic!("orbit-audio-daemon test: simulated panic inside spawn_blocking call fn");
+        }
+
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let params = json!({"key": 60});
+
+        let resp =
+            handle_plugin_note("id-panic", &params, &engine, 0.8, "note_on", panicking_call).await;
+
+        assert_eq!(resp["error"]["code"], "INTERNAL_ERROR");
     }
 }

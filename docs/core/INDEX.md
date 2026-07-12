@@ -30,8 +30,10 @@ OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider a
 ## 🎯 Active spec set — v1.1 Pitch DSL + Session Log + WCTM (`docs/specs-v2/`)
 
 進行中の v1.1（Pitch DSL / MIDI 出力）・Session Log・WCTM コンサートシステムの正本仕様。
-**HTML が正本**（SVG アーキテクチャ図を含むため）。締切 2026-08-07（WCTM 本番）。進捗管理は **GitHub Epic #224**。
+**HTML が正本**（SVG アーキテクチャ図を含むため）。進捗管理は **GitHub Epic #224**。
 読み順は下表の番号通り（指示書 → Pitch DSL → Session Log → WCTM → 議論記録）:
+
+> **⚠️ 本番トラック retarget（2026-07-12・統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）**: 藝大コンサート（2026-08-07）は不採択。旧「締切 2026-08-07」の前提は失効し、本番トラックは ICLC への proposal 提出方向へ retarget（年次・提出日・提出形態はいずれも要確認）。Max 必須の縛りも消滅。WCTM 各仕様（下表 #4）・議論記録（#5）は**藝大版のスナップショットとして凍結**（入口ノート参照）。
 
 | # | File | Purpose |
 |---|---|---|
@@ -106,6 +108,10 @@ ICMC v1.x の bundle / signing / standalone 検証 (PR #155 で結論を実装�
 | [CODESIGN_PIPELINE.md](../research/CODESIGN_PIPELINE.md) | ✅ Implemented (#135) | macOS signing / notarize 戦略 (Apple Dev ID 不要) |
 | [ENGINE_DAEMON_PROTOCOL.md](../research/ENGINE_DAEMON_PROTOCOL.md) | 📝 Draft | Rust daemon IPC v0.1 (post-ICMC) |
 | [RUST_POC_FINDINGS.md](../research/RUST_POC_FINDINGS.md) | 📝 PoC | Rust audio engine 検証 (post-ICMC) |
+
+### WCTM 調査群（旧前提のスナップショット・凍結）
+
+`docs/research/WCTM_*`（機械の耳・作曲スキル・エージェントハーネス等 7 本）と `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` は、**旧前提（藝大 2026-08-07・Max 必須）下の調査・議論記録として意図的に凍結**する（記録改変は文脈破壊のため。抜けではない）。本番トラックの retarget（藝大不採択 → ICLC 方向・Max 脱必須。年次・提出日・形態は要確認）は統括 [#413](https://github.com/signalcompose/orbitscore/issues/413) を参照。
 
 ---
 

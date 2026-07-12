@@ -5,8 +5,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "clap-host")]
+use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 use orbit_audio_native::{
@@ -45,6 +47,12 @@ pub enum WrapError {
     /// 専用スレッド不在・mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("clap host runtime error: {0}")]
     Clap(String),
+    /// CLAP plugin hosting は利用可能だが、まだ一度も `load_plugin` に成功していない（#405）。
+    /// feature-gap（`ClapUnavailable`）でも汎用 runtime エラー（`Clap`）でもなく、専用コードにすることで
+    /// クライアントが「LoadPlugin をまだ呼んでいない／失敗した」ことを actionable に判定できるようにする
+    /// （`push_plugin_event` の未ロードガードが返す）。
+    #[error("clap plugin not loaded: {0}")]
+    ClapNotLoaded(String),
     /// out-of-process effect がこの daemon ビルド/インスタンスで利用できない（feature `outproc-effect`
     /// 無効、または設定不足）。TS 層は feature-gap として warn-once で握り潰す（γ M1 PR-C）。
     #[error("out-of-process effect unavailable: {0}")]
@@ -84,6 +92,30 @@ pub struct EngineWrap {
     /// 本番の error は clap mutex 内の `ClapProcessorStats::process_error_count` が供給するので、
     /// production read-path ではこの addend は常に 0（`link_egress_drops` と同設計）。
     clap_process_errors: Arc<AtomicU64>,
+    /// `load_plugin` が成功したことがあるかどうか（#405）。`push_plugin_event` がこれを見て、
+    /// 未ロード時は「fire-and-forget ring に投げてから黙って捨てられる」のでなく、明示的な
+    /// error を即座に返すようにする。一度 true になったら false に戻ることはない（hot-unload
+    /// 機構が存在しないため・厳密な非同期状態追跡はしない）。`clap`/`link`/`outproc` と同様
+    /// feature `clap-host` 専用（読み書きとも clap-host 経路にしかない）。
+    #[cfg(feature = "clap-host")]
+    plugin_loaded: AtomicBool,
+    /// OOP effect `frames_clamped` の **test 注入用** カウンタ（本番は常に 0）。`outproc_health` が
+    /// これを加算する。integration test は child process を spawn しない（= 実 clamp 源が無い）ため、
+    /// この counter が outproc-effect feature の有無に依らず 1 Hz ticker の
+    /// OUTPROC_EFFECT_FRAMES_CLAMPED 発火を駆動する唯一の seam になる（[`Self::outproc_frames_clamped_arc`]）。
+    /// `link_egress_drops` / `clap_process_errors` と同設計（#406 /simplify: 専用 seam が無いと
+    /// この signal はどのテストからも exercise できなかった）。
+    outproc_frames_clamped: Arc<AtomicU64>,
+    /// `push_plugin_event` が bounded retry（[`push_with_bounded_retry`]）の末に諦めた回数（本番は
+    /// 常に 0 に近い想定・health signal）。event ring は audio callback が毎 block 全量 drain する
+    /// ため満杯は一時的であり、真の drop はこの回数だけ発生する（M2 doc の「溢れても失わない」方針を
+    /// in-process ring に retrofit・issue #400）。`EngineWrap` は常に `Arc<EngineWrap>` として共有
+    /// されるため、`link_egress_drops`/`clap_process_errors` と異なり test 注入用の `_arc()` getter
+    /// が不要。本番の bounded retry 書き込みも test 注入用の
+    /// [`plugin_event_ring_overflow_inject`](Self::plugin_event_ring_overflow_inject)（#402）も、
+    /// producer 側を別スレッドへ outsource せず常に `&self` 経由で `EngineWrap` 自身が直接書くため、
+    /// `Arc` clone による cross-thread 共有が不要で、プレーンな `AtomicU64` で足りる。
+    plugin_event_ring_overflow_count: AtomicU64,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
     /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
@@ -135,6 +167,65 @@ struct ClapControl {
 /// ゼロに保つ。
 #[cfg(feature = "clap-host")]
 const CLAP_MAX_FRAMES: u32 = 8192;
+
+/// event ring への bounded retry の再試行間隔。
+#[cfg(feature = "clap-host")]
+const PLUGIN_EVENT_RETRY_INTERVAL: Duration = Duration::from_millis(1);
+/// 最大再試行回数（≈200ms 上限）。event ring の consumer（audio callback）は毎 block ごとに
+/// ring を全量 drain するため、通常は最初の数回で空きが生まれる。この上限は大きめの buffer
+/// 構成（cpal callback 周期が長いケース）でも安全にカバーする余裕を持たせた値であり、
+/// 「ここまで待っても空かない」を真の overflow とみなす閾値。
+#[cfg(feature = "clap-host")]
+const PLUGIN_EVENT_RETRY_MAX_ATTEMPTS: u32 = 200;
+
+/// 1回の push 試行の結果。`Fatal` はリトライしても解決しない状態（mutex poisoned / clap 未初期化）
+/// を表し、bounded retry ループを即座に打ち切る。
+#[cfg(feature = "clap-host")]
+enum PushAttemptOutcome<T> {
+    Sent,
+    Full(T),
+    Fatal(WrapError),
+}
+
+/// `attempt` を bounded retry で呼び出す。producer は audio callback（RT スレッド）ではなく制御
+/// スレッド（WS handler 等）からのみ呼ばれる前提 — consumer 側が毎 callback で ring を全量 drain
+/// するので、最大 1 callback 周期待てば空きが保証される。この性質を利用し、満杯を「データ喪失」
+/// でなく「一時的なリトライ待ち」として扱う（M2 doc `docs/development/POST_2.0_GAMMA_M2_DESIGN.md`
+/// §4.4 の「溢れても失わない」方針を in-process ring に retrofit したもの・issue #400）。
+///
+/// **`attempt` は1回の試行につき1回だけ呼ばれ、mutex 等の lock 取得はその中で行い、`sleep` の
+/// 前に解放されていること**（呼び出し側の責務）。retry の待機中に共有 lock を握り続けると、
+/// 他の control-thread 操作（別セッションの LoadPlugin/PluginNoteOn 等）を最大
+/// `max_attempts × retry_interval` だけ足止めしてしまう（`load_plugin` の「lock は send までで
+/// 解放」規約と同じ理由・#402 レビュー指摘）。
+///
+/// 真に `max_attempts` 尽きた場合のみ `overflow_count` を進めてエラーを返す。
+#[cfg(feature = "clap-host")]
+fn push_with_bounded_retry<T>(
+    mut attempt: impl FnMut(T) -> PushAttemptOutcome<T>,
+    mut item: T,
+    max_attempts: u32,
+    retry_interval: Duration,
+    overflow_count: &AtomicU64,
+) -> Result<(), WrapError> {
+    let attempts = max_attempts.max(1);
+    for i in 0..attempts {
+        match attempt(item) {
+            PushAttemptOutcome::Sent => return Ok(()),
+            PushAttemptOutcome::Fatal(e) => return Err(e),
+            PushAttemptOutcome::Full(returned) => {
+                item = returned;
+                if i + 1 < attempts {
+                    std::thread::sleep(retry_interval);
+                }
+            }
+        }
+    }
+    overflow_count.fetch_add(1, Ordering::Relaxed);
+    Err(WrapError::Clap(
+        "plugin event ring full after bounded retry".into(),
+    ))
+}
 
 // link-audio と clap-host の併用は現状未対応（1 つの cpal callback で LinkAudio per-channel egress と
 // CLAP master-bus post-processor の render 順序を統合する設計が defer・Issue #340）。両方有効なビルドは
@@ -484,6 +575,10 @@ impl EngineWrap {
             stopped_play_ids: Mutex::new(HashSet::new()),
             link_egress_drops: Arc::new(AtomicU64::new(0)),
             clap_process_errors: Arc::new(AtomicU64::new(0)),
+            #[cfg(feature = "clap-host")]
+            plugin_loaded: AtomicBool::new(false),
+            outproc_frames_clamped: Arc::new(AtomicU64::new(0)),
+            plugin_event_ring_overflow_count: AtomicU64::new(0),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
@@ -602,11 +697,15 @@ impl EngineWrap {
                 .map_err(|_| WrapError::Clap("clap host thread is gone".into()))?;
         }
         match reply_rx.recv() {
-            Ok(Ok(info)) => Ok(LoadedPluginSummary {
-                plugin_id: info.plugin_id,
-                plugin_name: info.plugin_name,
-                note_port_index: info.note_port_index,
-            }),
+            Ok(Ok(info)) => {
+                // #405: 以後 push_plugin_event が「未ロード」を検知して事前に弾けるようにする。
+                self.plugin_loaded.store(true, Ordering::Relaxed);
+                Ok(LoadedPluginSummary {
+                    plugin_id: info.plugin_id,
+                    plugin_name: info.plugin_name,
+                    note_port_index: info.note_port_index,
+                })
+            }
             Ok(Err(e)) => Err(WrapError::Clap(e)),
             Err(_) => Err(WrapError::Clap("clap host thread dropped reply".into())),
         }
@@ -646,17 +745,54 @@ impl EngineWrap {
 
     #[cfg(feature = "clap-host")]
     fn push_plugin_event(&self, ev: orbit_clap_host::PluginEvent) -> Result<(), WrapError> {
-        let mut guard = self
-            .clap
-            .lock()
-            .map_err(|_| WrapError::Clap("clap mutex poisoned".into()))?;
-        let ctl = guard.as_mut().ok_or_else(|| {
-            WrapError::ClapUnavailable("clap host not initialized (test backend)".into())
-        })?;
-        // event ring（1024 slot）満杯は drop して error。note rate は低く通常満杯にならない。
-        ctl.event_tx
-            .push(ev)
-            .map_err(|_| WrapError::Clap("plugin event ring full".into()))
+        // #405: プラグイン未ロード時は event ring に投げても audio thread が黙って drain して
+        // 捨てるだけ（fire-and-forget ring の設計上ロード状態の同期確認は本来 cross-thread
+        // round-trip が要る）。少なくとも「一度もロードに成功していない」ことは control スレッド
+        // 側でここまで同期的に判定できるので、その場合は明示的なエラーを返す（嘘の成功応答を防ぐ）。
+        // 残存課題（Issue #410）: このガードは「LoadPlugin の応答が成功した」ことしか検知できない。
+        // 応答成功後 audio thread が install ring から実際に pop してインストールするまでの狭い
+        // window では `plugin_loaded == true` かつ install 未完了になりうる。その window で送った
+        // note はガードを通過して `Ok(())` を返すが audio thread 側は無音のままドレインする（同種の
+        // false-success が window 限定で残る・追跡は Issue #410）。cross-thread ack の追加は
+        // #405/#407 では scope 外（owner 判断待ち）。
+        if !self.plugin_loaded.load(Ordering::Relaxed) {
+            return Err(WrapError::ClapNotLoaded(
+                "no plugin loaded (send LoadPlugin first)".into(),
+            ));
+        }
+        // event ring（1024 slot）が満杯でも、audio callback が毎 block 全量 drain するので
+        // bounded retry で lossless 化する（#400）。真にタイムアウトした場合のみ error。
+        // mutex は各試行ごとに取得・解放し、sleep 中は保持しない（load_plugin と同じ「lock は
+        // send までで解放」規約・#402 レビュー指摘: sleep 中も保持すると他セッションの
+        // LoadPlugin/PluginNoteOn 等を最大リトライ時間だけ足止めしてしまう）。
+        push_with_bounded_retry(
+            |item| {
+                let mut guard = match self.clap.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        return PushAttemptOutcome::Fatal(WrapError::Clap(
+                            "clap mutex poisoned".into(),
+                        ))
+                    }
+                };
+                let ctl = match guard.as_mut() {
+                    Some(ctl) => ctl,
+                    None => {
+                        return PushAttemptOutcome::Fatal(WrapError::ClapUnavailable(
+                            "clap host not initialized (test backend)".into(),
+                        ))
+                    }
+                };
+                match ctl.event_tx.push(item) {
+                    Ok(()) => PushAttemptOutcome::Sent,
+                    Err(rtrb::PushError::Full(returned)) => PushAttemptOutcome::Full(returned),
+                }
+            },
+            ev,
+            PLUGIN_EVENT_RETRY_MAX_ATTEMPTS,
+            PLUGIN_EVENT_RETRY_INTERVAL,
+            &self.plugin_event_ring_overflow_count,
+        )
     }
 
     /// feature `clap-host` 無効ビルド用の stub。
@@ -756,6 +892,28 @@ impl EngineWrap {
         self.clap_process_errors.load(Ordering::Relaxed)
     }
 
+    /// `push_plugin_event` の bounded retry が力尽きた回数（#400）。event ring は audio callback
+    /// が毎 block 全量 drain するため、通常は 0 のまま推移する health signal。1 Hz ticker が polling
+    /// して増加を `PLUGIN_EVENT_RING_OVERFLOW` WARNING で surface する。feature `clap-host` 無効
+    /// ビルドでも安全に呼べる（`clap_process_error_count` と同様 unconditional フィールド）。
+    pub fn plugin_event_ring_overflow_count(&self) -> u64 {
+        self.plugin_event_ring_overflow_count
+            .load(Ordering::Relaxed)
+    }
+
+    /// test harness 用: `plugin_event_ring_overflow_count` を直接加算する注入 seam（#402
+    /// pr-test-analyzer 指摘: sibling counter `link_egress_drops_arc`/`clap_process_errors_arc` に
+    /// ある「1 Hz ticker の dedup latch（増加時のみ発火・据え置きでは再発火しない）」の integration
+    /// test パターンが、この counter にはまだ無かった）。他の2つと違い `Arc` を返さないのは、この
+    /// counter が別スレッドへ producer 側を outsource しない（`EngineWrap` 自身が bounded retry の
+    /// 末に直接書く）フィールドだから（struct 定義側の doc 参照）— `&self` 越しの直接 `fetch_add` で
+    /// 足りる。`#[doc(hidden)]` で公開 API としては扱わない。
+    #[doc(hidden)]
+    pub fn plugin_event_ring_overflow_inject(&self, n: u64) {
+        self.plugin_event_ring_overflow_count
+            .fetch_add(n, Ordering::Relaxed);
+    }
+
     /// test harness / gated 計測用: OOP effect の観測スナップショット（fresh/stale/stall/respawn/
     /// child error 等）。slot 数決定（stale 率）と child crash 生存（respawn）の検証に使う。`#[doc(hidden)]`。
     /// plugin 未起動 / outproc 無効 / poison 時は None（poison は warn で区別）。
@@ -800,13 +958,21 @@ impl EngineWrap {
         }
     }
 
-    /// OOP effect の health signal を `(child_process_error_count, respawn_count, measurement_invalid)` で
-    /// 返す（daemon の 1 Hz ticker が polling して WARNING/FATAL event で surface する非 RT observability）。
-    /// `clap_process_error_count` と同様 `try_lock` で ticker をブロックしない（**WouldBlock** は cumulative
-    /// なので次 tick が全累積を報告・**Poisoned** は warn して 0 を返し post-mortem の根拠を残す）。
-    /// plugin 未起動 / outproc 無効時は `(0, 0, false)`。
+    /// OOP effect の health signal を `(child_process_error_count, respawn_count, measurement_invalid,
+    /// frames_clamped)` で返す（daemon の 1 Hz ticker が polling して WARNING/FATAL event で surface する
+    /// 非 RT observability）。`clap_process_error_count` と同様 `try_lock` で ticker をブロックしない
+    /// （**WouldBlock** は cumulative なので次 tick が全累積を報告・**Poisoned** は warn して 0 を返し
+    /// post-mortem の根拠を残す）。plugin 未起動 / outproc 無効時は `(0, 0, false, <injected>)`。
+    ///
+    /// `frames_clamped` は #404 で `OutProcEffectStats` から追加した 4 つ目の signal（block が
+    /// `MAX_FRAMES` を超えて clamp された累積回数）。当初は独立した `outproc_frames_clamped()`
+    /// accessor だったが、同一 tick 内で同一 `self.outproc` mutex を 2 回 `try_lock` + `snapshot` する
+    /// ことになり（(a) 無駄な二重ロック (b) 4 signal が同一スナップショットである保証が消える —
+    /// 片方が `WouldBlock` で 0 を返す間にもう片方が非ゼロを観測しうる）、#406 /simplify レビューで
+    /// この 1 accessor に統合した。
     #[cfg(feature = "outproc-effect")]
-    pub fn outproc_health(&self) -> (u64, u64, bool) {
+    pub fn outproc_health(&self) -> (u64, u64, bool, u64) {
+        let injected = self.outproc_frames_clamped.load(Ordering::Relaxed);
         match self.outproc.try_lock() {
             Ok(g) => g
                 .as_ref()
@@ -816,24 +982,32 @@ impl EngineWrap {
                         s.child_process_error_count,
                         s.respawn_count,
                         s.measurement_invalid,
+                        s.frames_clamped + injected,
                     )
                 })
-                .unwrap_or((0, 0, false)),
-            Err(std::sync::TryLockError::WouldBlock) => (0, 0, false),
+                .unwrap_or((0, 0, false, injected)),
+            Err(std::sync::TryLockError::WouldBlock) => (0, 0, false, injected),
             Err(std::sync::TryLockError::Poisoned(_)) => {
                 tracing::warn!(
                     "outproc mutex poisoned; outproc_health reporting zeros \
                      (OUTPROC_EFFECT events suppressed until daemon restart)"
                 );
-                (0, 0, false)
+                (0, 0, false, injected)
             }
         }
     }
 
-    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false)`（control が無い）。
+    /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false, ...)`（control が無い）。
+    /// `frames_clamped` は test 注入分のみ反映（`link_egress_ring_drops` / `clap_process_error_count`
+    /// の無効ビルド stub と同設計）。
     #[cfg(not(feature = "outproc-effect"))]
-    pub fn outproc_health(&self) -> (u64, u64, bool) {
-        (0, 0, false)
+    pub fn outproc_health(&self) -> (u64, u64, bool, u64) {
+        (
+            0,
+            0,
+            false,
+            self.outproc_frames_clamped.load(Ordering::Relaxed),
+        )
     }
 
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
@@ -883,6 +1057,15 @@ impl EngineWrap {
         self.clap_process_errors.clone()
     }
 
+    /// test harness 用: OOP effect `frames_clamped` の注入カウンタを取得する。`link_egress_drops_arc` /
+    /// `clap_process_errors_arc` と同形で、下層 counter は本番経路から分離した注入専用（本番 0）。
+    /// integration test から `fetch_add` して 1 Hz ticker の OUTPROC_EFFECT_FRAMES_CLAMPED 発火を
+    /// 駆動する（child process 不要・#406）。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn outproc_frames_clamped_arc(&self) -> Arc<AtomicU64> {
+        self.outproc_frames_clamped.clone()
+    }
+
     /// test harness 用: `StreamStats` への参照を取得し、外部から
     /// xrun / device_lost を駆動できるようにする。
     ///
@@ -911,6 +1094,34 @@ impl EngineWrap {
     /// ロック競合時は `None`（callback がロック保持中）。
     pub fn now_sec(&self) -> Option<f64> {
         self.engine.now_sec()
+    }
+
+    /// `Engine::lock_contention_count` の delegate（詳細はそちら参照）。daemon の 1 Hz ticker が
+    /// polling する（#401）。
+    pub fn engine_lock_contention_count(&self) -> u64 {
+        self.engine.lock_contention_count()
+    }
+
+    /// `Engine::is_lock_poisoned` の delegate（詳細はそちら参照）。daemon の 1 Hz ticker が
+    /// polling して fire-once の FATAL event を出す（#401）。
+    pub fn engine_lock_poisoned(&self) -> bool {
+        self.engine.is_lock_poisoned()
+    }
+
+    /// test harness 用: `Engine::contention_count_arc` の delegate。integration test から
+    /// `fetch_add` して 1 Hz ticker の `ENGINE_LOCK_CONTENTION` WARNING 発火を駆動する
+    /// （`link_egress_drops_arc` と同様の注入 seam・`#[doc(hidden)]`）。
+    #[doc(hidden)]
+    pub fn engine_lock_contention_arc(&self) -> Arc<AtomicU64> {
+        self.engine.contention_count_arc()
+    }
+
+    /// test harness 用: `Engine::poisoned_arc` の delegate。integration test から `store(true, ..)`
+    /// して 1 Hz ticker の `ENGINE_LOCK_POISONED` FATAL 発火を、実際に Mutex を panic-poison させずに
+    /// 駆動する（`#[doc(hidden)]`）。
+    #[doc(hidden)]
+    pub fn engine_lock_poisoned_arc(&self) -> Arc<AtomicBool> {
+        self.engine.poisoned_arc()
     }
 
     pub fn output_channels(&self) -> u16 {
@@ -1178,6 +1389,393 @@ fn short_uuid() -> String {
     Uuid::new_v4().simple().to_string()[..8].to_string()
 }
 
+#[cfg(feature = "clap-host")]
+#[cfg(test)]
+mod plugin_load_gate_tests {
+    use super::*;
+    use orbit_audio_native::StreamStats;
+
+    // `Self::build` は clap: Mutex::new(None)（test backend 相当）で構築するため、実 device・実
+    // ClapControl 無しで plugin_loaded ガードだけを検証できる（#405）。
+    fn unstarted_engine() -> Arc<EngineWrap> {
+        let engine = orbit_audio_core::Engine::new(48_000, 2);
+        EngineWrap::build(engine, 48_000, 2, Arc::new(StreamStats::default()))
+    }
+
+    /// plugin 未ロード時に `f` が **専用の** `WrapError::ClapNotLoaded` を返すことを検証する共通
+    /// アサーション（note_on/note_off の2テストは setup・assertion が同一で呼び出しメソッドのみ
+    /// 異なるため、ここに集約・/simplify レビュー #407）。
+    ///
+    /// `is_err()` だけの弱いアサーションだと、`push_plugin_event` 冒頭の `plugin_loaded` ガード
+    /// （#405 の本体）を丸ごと削除しても、後段の `guard.as_mut().ok_or_else(...)` が
+    /// `clap: Mutex::new(None)`（test backend）により `WrapError::ClapUnavailable` を返すため
+    /// テストが通ってしまい、回帰保護にならない（PR #407 レビュー finding）。variant を pin する
+    /// ことで、ガード削除時は `ClapUnavailable`（≠ `ClapNotLoaded`）が返り `matches!` が偽になって
+    /// 確実に fail する（このテストの自己検証: ガードを一時的にコメントアウトして fail することを
+    /// `cargo test --features clap-host plugin_load_gate_tests` で確認済み）。
+    fn assert_rejected_before_load(f: impl FnOnce(&EngineWrap) -> Result<(), WrapError>) {
+        let wrap = unstarted_engine();
+        let result = f(&wrap);
+        assert!(
+            matches!(result, Err(WrapError::ClapNotLoaded(_))),
+            "plugin 未ロード時は WrapError::ClapNotLoaded を返すべき（#405）。got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn note_on_before_load_returns_explicit_error_not_success() {
+        assert_rejected_before_load(|wrap| wrap.plugin_note_on(60, 0, 0.8));
+    }
+
+    #[test]
+    fn note_off_before_load_returns_explicit_error_not_success() {
+        assert_rejected_before_load(|wrap| wrap.plugin_note_off(60, 0, 0.0));
+    }
+
+    #[test]
+    fn plugin_loaded_flag_defaults_false() {
+        let wrap = unstarted_engine();
+        assert!(!wrap.plugin_loaded.load(Ordering::Relaxed));
+    }
+
+    /// `wrap.clap` へ実 `ClapControl` を直接注入する共通セットアップ（PR #406 の private
+    /// フィールド直接注入手法）。呼び出し側は event ring の consumer と LoadPlugin コマンドの
+    /// receiver の両方を受け取り、不要な方は `_` で捨てる（`loaded_engine`/`loadable_engine`
+    /// が共有・/simplify レビュー #412: 個別に組み立てると `ClapControl` のフィールド変更が
+    /// 2箇所同時保守になる）。
+    fn wire_clap_control(
+        wrap: &Arc<EngineWrap>,
+    ) -> (
+        orbit_clap_host::PluginEventConsumer,
+        std::sync::mpsc::Receiver<crate::clap_host::ClapCommand>,
+    ) {
+        let (event_tx, event_rx) = orbit_clap_host::make_event_ring(16);
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+        let stats = orbit_clap_host::ClapProcessorStats::new();
+        let cb_stats = orbit_audio_native::CallbackTimeStats::new();
+        *wrap.clap.lock().expect("clap mutex") = Some(ClapControl {
+            cmd_tx,
+            event_tx,
+            stats,
+            cb_stats,
+        });
+        (event_rx, cmd_rx)
+    }
+
+    /// `unstarted_engine` に `wire_clap_control` で実 `ClapControl` を構築注入し、
+    /// `plugin_loaded = true` かつ `clap = Some(...)` な wrap を返す。呼び出し側は
+    /// 返る consumer で event ring への実配送を検証できる（positive-path・#405 finding 3）。
+    /// `cmd_rx` は保持しない（LoadPlugin コマンドは実際には送らないため不要）。
+    fn loaded_engine() -> (Arc<EngineWrap>, orbit_clap_host::PluginEventConsumer) {
+        let wrap = unstarted_engine();
+        let (event_rx, _cmd_rx) = wire_clap_control(&wrap);
+        wrap.plugin_loaded.store(true, Ordering::Relaxed);
+        (wrap, event_rx)
+    }
+
+    /// `unstarted_engine` に `wire_clap_control` で実 `ClapControl` を構築注入するが、
+    /// `loaded_engine` と異なり `plugin_loaded` は事前に store しない。呼び出し側は
+    /// `load_plugin()` を実際に呼び、その成功分岐が `plugin_loaded` を true にすることを
+    /// `cmd_rx` 経由の LoadPlugin コマンド応答で検証できる（#411）。
+    fn loadable_engine() -> (
+        Arc<EngineWrap>,
+        std::sync::mpsc::Receiver<crate::clap_host::ClapCommand>,
+    ) {
+        let wrap = unstarted_engine();
+        let (_event_rx, cmd_rx) = wire_clap_control(&wrap);
+        (wrap, cmd_rx)
+    }
+
+    #[test]
+    fn load_plugin_success_sets_plugin_loaded_flag() {
+        let (wrap, cmd_rx) = loadable_engine();
+        let responder = std::thread::spawn(move || {
+            // `recv_timeout` で fail-fast にする（`clap_host.rs` の専用スレッド pump loop と同じ
+            // パターン）。現状 `load_plugin()` は必ず send 後に待つため無期限 `recv()` でも通るが、
+            // 将来の regression（lock 順序ミス等で send 前に return する等）が入ると無期限ブロックし、
+            // `rust-ci.yml` に `timeout-minutes` 未設定のため CI job が GitHub Actions のデフォルト
+            // 上限（最大6時間）までハングしてから失敗する fail-slow リスクがある
+            // （pr-test-analyzer / silent-failure-hunter 独立指摘・PR #412）。
+            let cmd = cmd_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("load_plugin should send LoadPlugin within 5s");
+            // `ClapCommand` は現状 `LoadPlugin` の1バリアントのみなので irrefutable pattern
+            // で受けられる（/simplify レビュー #412: match 1本腕は不要なネスト）。
+            let crate::clap_host::ClapCommand::LoadPlugin {
+                path,
+                plugin_id,
+                sample_rate,
+                channels,
+                max_frames,
+                reply,
+            } = cmd;
+            assert_eq!(path, PathBuf::from("dummy.clap"));
+            assert_eq!(plugin_id, None);
+            assert_eq!(sample_rate, 48_000);
+            assert_eq!(channels, 2);
+            assert_eq!(max_frames, CLAP_MAX_FRAMES);
+            reply
+                .send(Ok(orbit_clap_host::LoadedPluginInfo {
+                    plugin_id: "com.example.dummy".to_string(),
+                    plugin_name: Some("Dummy".to_string()),
+                    note_port_index: 0,
+                }))
+                .expect("load_plugin should still be waiting for reply");
+        });
+
+        let result = wrap.load_plugin(PathBuf::from("dummy.clap"), None);
+        responder.join().expect("responder thread should not panic");
+
+        // `LoadedPluginSummary` は Debug 未実装のため `assert!(result.is_ok(), "{result:?}")`
+        // が使えない（sibling の `note_on_after_load_reaches_ring` は `Result<(), WrapError>` で
+        // `()` が Debug のため同型の assert! が効くが、ここは Err 側だけ表示する）。
+        if let Err(err) = result {
+            panic!("load_plugin should succeed: {err:?}");
+        }
+        assert!(
+            wrap.plugin_loaded.load(Ordering::Relaxed),
+            "load_plugin success branch must set plugin_loaded"
+        );
+    }
+
+    #[test]
+    fn note_on_after_load_reaches_ring() {
+        let (wrap, mut consumer) = loaded_engine();
+        let result = wrap.plugin_note_on(60, 0, 0.8);
+        assert!(result.is_ok(), "load 後は成功するはず: {result:?}");
+        match consumer.pop() {
+            Ok(orbit_clap_host::PluginEvent::NoteOn {
+                key,
+                channel,
+                velocity,
+            }) => {
+                assert_eq!(key, 60);
+                assert_eq!(channel, 0);
+                assert_eq!(velocity, 0.8);
+            }
+            other => panic!("event ring に NoteOn が届いているべき。got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn note_off_after_load_reaches_ring() {
+        let (wrap, mut consumer) = loaded_engine();
+        let result = wrap.plugin_note_off(60, 0, 0.0);
+        assert!(result.is_ok(), "load 後は成功するはず: {result:?}");
+        match consumer.pop() {
+            Ok(orbit_clap_host::PluginEvent::NoteOff {
+                key,
+                channel,
+                velocity,
+            }) => {
+                assert_eq!(key, 60);
+                assert_eq!(channel, 0);
+                assert_eq!(velocity, 0.0);
+            }
+            other => panic!("event ring に NoteOff が届いているべき。got: {other:?}"),
+        }
+    }
+
+    /// monotonic invariant（finding 4）: `plugin_loaded` への書き込みは**本番コード**中
+    /// `load_plugin` 成功時の1箇所のみ（`grep -n "plugin_loaded.store" engine_wrap.rs` で確認可能。
+    /// このテストモジュール内の `loaded_engine()` ヘルパーによる直接注入は別途1箇所ヒットするが、
+    /// それは test-only の注入であり本番の書き込み経路ではない）。false に戻す経路は本番コードに
+    /// 存在しない。runtime test で reset を再現する手段が無いため、ここでは複数回 push が成功し
+    /// 続けフラグが true のままであることだけを軽量に確認する。
+    #[test]
+    fn plugin_loaded_flag_stays_true_across_multiple_events() {
+        let (wrap, mut consumer) = loaded_engine();
+        assert!(wrap.plugin_note_on(60, 0, 0.5).is_ok());
+        assert!(
+            wrap.plugin_loaded.load(Ordering::Relaxed),
+            "1回目 push 後も true のまま"
+        );
+        assert!(wrap.plugin_note_off(60, 0, 0.0).is_ok());
+        assert!(
+            wrap.plugin_loaded.load(Ordering::Relaxed),
+            "2回目 push 後も true のまま（reset 経路が無いことの確認）"
+        );
+        assert!(consumer.pop().is_ok());
+        assert!(consumer.pop().is_ok());
+    }
+}
+
+#[cfg(feature = "clap-host")]
+#[cfg(test)]
+mod plugin_event_ring_retry_tests {
+    use super::{push_with_bounded_retry, Ordering, PushAttemptOutcome};
+    use std::sync::atomic::AtomicU64;
+    use std::time::Duration;
+
+    /// test 用の1回試行クロージャ。本番の `push_plugin_event` と異なり mutex 越しではなく
+    /// `rtrb::Producer` を直接 push するだけ（lock scope の検証は責務外・retry ロジックのみ検証）。
+    fn attempt_push(producer: &mut rtrb::Producer<u32>, item: u32) -> PushAttemptOutcome<u32> {
+        match producer.push(item) {
+            Ok(()) => PushAttemptOutcome::Sent,
+            Err(rtrb::PushError::Full(returned)) => PushAttemptOutcome::Full(returned),
+        }
+    }
+
+    #[test]
+    fn succeeds_immediately_when_space_available() {
+        let (mut tx, _rx) = rtrb::RingBuffer::<u32>::new(4);
+        let overflow = AtomicU64::new(0);
+        let result = push_with_bounded_retry(
+            |item| attempt_push(&mut tx, item),
+            42,
+            5,
+            Duration::from_millis(1),
+            &overflow,
+        );
+        assert!(result.is_ok());
+        assert_eq!(overflow.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn retries_then_succeeds_once_consumer_drains() {
+        let (mut tx, mut rx) = rtrb::RingBuffer::<u32>::new(1);
+        tx.push(1).expect("fill capacity 1");
+        let overflow = AtomicU64::new(0);
+
+        // audio callback が数 ms 後に ring を drain する状況を模擬する。
+        let drain_handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(5));
+            let _ = rx.pop();
+        });
+
+        let result = push_with_bounded_retry(
+            |item| attempt_push(&mut tx, item),
+            2,
+            50,
+            Duration::from_millis(1),
+            &overflow,
+        );
+        drain_handle.join().expect("drain thread should not panic");
+
+        assert!(result.is_ok(), "should succeed once consumer drains space");
+        assert_eq!(
+            overflow.load(Ordering::Relaxed),
+            0,
+            "successful retry must not count as overflow"
+        );
+    }
+
+    #[test]
+    fn gives_up_and_counts_overflow_when_ring_stays_full() {
+        let (mut tx, _rx) = rtrb::RingBuffer::<u32>::new(1);
+        tx.push(1).expect("fill capacity 1");
+        let overflow = AtomicU64::new(0);
+
+        // _rx を drain せずに保持したまま(＝満杯が解消しない)、少ない retry 回数で確実に諦めさせる。
+        let result = push_with_bounded_retry(
+            |item| attempt_push(&mut tx, item),
+            2,
+            3,
+            Duration::from_millis(1),
+            &overflow,
+        );
+
+        assert!(result.is_err(), "should give up after max_attempts");
+        assert_eq!(
+            overflow.load(Ordering::Relaxed),
+            1,
+            "overflow counter must increment exactly once on give-up"
+        );
+    }
+
+    #[test]
+    fn fatal_outcome_short_circuits_without_retry_or_overflow_count() {
+        let overflow = AtomicU64::new(0);
+        let mut calls = 0u32;
+        let result: Result<(), super::WrapError> = push_with_bounded_retry(
+            |_item| {
+                calls += 1;
+                PushAttemptOutcome::Fatal(super::WrapError::Clap("clap mutex poisoned".into()))
+            },
+            42u32,
+            5,
+            Duration::from_millis(1),
+            &overflow,
+        );
+
+        assert!(result.is_err(), "fatal outcome must propagate as an error");
+        assert_eq!(calls, 1, "fatal outcome must not retry");
+        assert_eq!(
+            overflow.load(Ordering::Relaxed),
+            0,
+            "fatal outcome is not an overflow (retrying would not have helped)"
+        );
+    }
+}
+
+/// `push_plugin_event`（`plugin_note_on`/`plugin_note_off` の共通経路）を、test backend
+/// （`clap: Mutex<Option<ClapControl>>` が `None`）越しに直接叩く（#402 pr-test-analyzer 指摘: 上の
+/// `plugin_event_ring_retry_tests` は `push_with_bounded_retry` を bare `rtrb::Producer` クロージャで
+/// 検証するのみで、本番の `push_plugin_event` クロージャ（mutex lock/poison 分岐・
+/// `guard.as_mut() == None` → `ClapUnavailable` の Fatal 分岐）を一度も経由していなかった）。
+///
+/// `Sent` 分岐（実際に event ring へ push が成功する）と mutex-poisoned 分岐は、実 clap-host
+/// 初期化済み `EngineWrap`（`EngineWrap::start()` が spawn する専用スレッド + 実 audio stream）が
+/// 要るため practical でない。ここでは `start_with(StubBackend)` で到達可能な None/ClapUnavailable
+/// 分岐にスコープする。`plugin_loaded` は #405 のガードが先に短絡してしまわないよう明示的に true を
+/// セットしてから叩く（このモジュールの狙いは「ロード済みなのに clap ハンドルが無い」分岐であり
+/// 「未ロード」分岐ではない・#407 との merge で `push_plugin_event` にガードが追加されたことへの
+/// 追従）。
+#[cfg(feature = "clap-host")]
+#[cfg(test)]
+mod push_plugin_event_tests {
+    use super::{EngineWrap, WrapError};
+    use crate::backend::StubBackend;
+
+    #[test]
+    fn plugin_note_on_returns_clap_unavailable_when_clap_not_initialized() {
+        let (engine, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend starts");
+        engine
+            .plugin_loaded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let before = engine.plugin_event_ring_overflow_count();
+
+        let err = engine
+            .plugin_note_on(60, 0, 0.8)
+            .expect_err("test backend has no clap control (clap field is None)");
+
+        assert!(
+            matches!(err, WrapError::ClapUnavailable(_)),
+            "expected ClapUnavailable (Fatal short-circuit), got {err:?}"
+        );
+        assert_eq!(
+            engine.plugin_event_ring_overflow_count(),
+            before,
+            "Fatal short-circuit must not be counted as a bounded-retry overflow"
+        );
+    }
+
+    #[test]
+    fn plugin_note_off_returns_clap_unavailable_when_clap_not_initialized() {
+        let (engine, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend starts");
+        engine
+            .plugin_loaded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let before = engine.plugin_event_ring_overflow_count();
+
+        let err = engine
+            .plugin_note_off(60, 0, 0.0)
+            .expect_err("test backend has no clap control (clap field is None)");
+
+        assert!(
+            matches!(err, WrapError::ClapUnavailable(_)),
+            "expected ClapUnavailable (Fatal short-circuit), got {err:?}"
+        );
+        assert_eq!(
+            engine.plugin_event_ring_overflow_count(),
+            before,
+            "Fatal short-circuit must not be counted as a bounded-retry overflow"
+        );
+    }
+}
+
 #[cfg(test)]
 mod capture_path_tests {
     use super::resolve_capture_path;
@@ -1214,5 +1812,120 @@ mod capture_path_tests {
             resolve_capture_path(Some("  /tmp/out.wav  ".to_string())),
             Some(PathBuf::from("/tmp/out.wav"))
         );
+    }
+}
+
+/// `outproc_health()` の real body（`#[cfg(feature = "outproc-effect")]`）を直接叩く unit test。
+///
+/// `tests/protocol.rs` の統合テストは default feature build（`outproc-effect` 無効）で走るため、
+/// stub（`(0, 0, false, injected)`）しか exercise できず、この real body の match arm は
+/// どのテストからも一度も compile even されていなかった（#406 pr-test-analyzer 指摘）。
+/// ここは同一 crate 内の `#[cfg(test)]` submodule なので `EngineWrap::outproc`（private field）
+/// と `OutProcControl`（private struct）へ直接アクセスできる（親モジュールの private item は子
+/// module から可視）。`OutProcEffectStats::new()` / `CallbackTimeStats::new()` はどちらも
+/// child process 不要の cheap constructor（plain atomic のみ）なので、`StubBackend` で起動した
+/// `EngineWrap` に対して real child を spawn せず `Some(OutProcControl)` を注入できる。
+#[cfg(all(test, feature = "outproc-effect"))]
+mod outproc_health_tests {
+    use super::{EngineWrap, OutProcControl};
+    use crate::backend::StubBackend;
+    use crate::outproc_effect::OutProcEffectStats;
+    use orbit_audio_native::CallbackTimeStats;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcControl` を
+    /// `self.outproc` に注入する。返す `Arc<OutProcEffectStats>` はテスト側から直接
+    /// `store`/`load` して `Ok(Some(c))` real-value summing 経路を駆動するのに使う。
+    fn wrap_with_outproc_stats() -> (Arc<EngineWrap>, Arc<OutProcEffectStats>) {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let stats = OutProcEffectStats::new();
+        *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
+            stats: stats.clone(),
+            cb_stats: CallbackTimeStats::new(),
+        });
+        (wrap, stats)
+    }
+
+    #[test]
+    fn ok_none_reports_only_injected_frames_clamped() {
+        // outproc 未注入（build() 直後の初期値）= Ok(None) 分岐。
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(7, Ordering::Relaxed);
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 7));
+    }
+
+    #[test]
+    fn ok_some_sums_real_stats_with_injected_counter() {
+        // Ok(Some(c)) 分岐: 実 OutProcEffectStats スナップショットと injected カウンタを両方
+        // 合算して返すこと（finding 3: 実 stats の summing が一度も exercise されていなかった）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.child_process_error_count.store(3, Ordering::Relaxed);
+        stats.respawn_count.store(2, Ordering::Relaxed);
+        stats.measurement_invalid.store(true, Ordering::Relaxed);
+        stats.frames_clamped.store(5, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(9, Ordering::Relaxed);
+
+        assert_eq!(wrap.outproc_health(), (3, 2, true, 14));
+    }
+
+    #[test]
+    fn would_block_ignores_real_stats_and_reports_only_injected() {
+        // WouldBlock 分岐: 別スレッドが outproc mutex を保持している間は real stats を読まず
+        // injected カウンタのみ返すこと（cumulative なので次 tick で real 分も取り戻せる設計）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.frames_clamped.store(100, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(1, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let (holding_tx, holding_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc
+                .lock()
+                .expect("lock outproc for contention setup");
+            holding_tx.send(()).expect("signal lock held");
+            release_rx.recv().expect("wait for release signal");
+        });
+        holding_rx.recv().expect("holder thread signaled lock held");
+
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 1));
+
+        release_tx.send(()).expect("signal release");
+        holder.join().expect("holder thread should not panic");
+    }
+
+    #[test]
+    fn poisoned_still_reports_injected_frames_clamped_not_lost() {
+        // Poisoned 分岐: real stats は 0 に丸めるが、injected の frames_clamped は黙って
+        // 失わず返すこと（finding 2: silent-failure-hunter が指摘した「値が消えないこと」の
+        // 直接検証。手法は PR #403 の genuine-poison パターン（別スレッドで panic → join）を流用）。
+        let (wrap, stats) = wrap_with_outproc_stats();
+        stats.frames_clamped.store(42, Ordering::Relaxed);
+        wrap.outproc_frames_clamped_arc()
+            .fetch_add(3, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc
+                .lock()
+                .expect("lock outproc for poison setup");
+            panic!("intentional poison for outproc_health poisoned test");
+        })
+        .join()
+        .is_err();
+        assert!(
+            panicked,
+            "spawned thread should have panicked while holding the lock"
+        );
+
+        assert_eq!(wrap.outproc_health(), (0, 0, false, 3));
     }
 }

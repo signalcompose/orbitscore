@@ -235,18 +235,22 @@
 <header id="title-block-header">
 <h1 class="title">Implementation Instructions — v1.1 + Session Log +
 WCTM</h1>
-<div class="docmeta">{"type":"meta"<span class="dot">,</span>"doc":"IMPLEMENTATION_INSTRUCTIONS","for":"Claude Code (Opus 4.8)","deadline":"2026-08-07","stages":"note-DSL → record → WCTM"}</div>
+<div class="docmeta">{"type":"meta"<span class="dot">,</span>"doc":"IMPLEMENTATION_INSTRUCTIONS","for":"Claude Code (Opus 4.8)","deadline":"RETARGET — Geidai cancelled; ICLC TBD (see #413)","stages":"note-DSL → record → WCTM"}</div>
 </header>
 <h1
 id="implementation-instructions-orbitscore-v1.1-session-log-wctm">Implementation
 Instructions — OrbitScore v1.1 + Session Log + WCTM</h1>
+<div style="border:2px solid #B4231F;background:#FFF3F2;color:#16181D;padding:12px 16px;margin:16px 0;border-radius:4px;">
+<strong>⚠️ 前提変更（2026-07-12・統括 <a href="https://github.com/signalcompose/orbitscore/issues/413">#413</a>）</strong><br />
+藝大コンサート（2026-08-07）は<strong>不採択</strong>。旧「Hard deadline 2026-08-07・逆算で全工程が決まる」の前提は失効。本番トラックは <strong>ICLC への proposal 提出方向へ retarget</strong>（年次・提出日 ≈8/15・提出形態 work / work+paper はいずれも<strong>要確認</strong>）。<strong>Max 縛りも消滅</strong>（必須ではない。使わないという意味ではない）。<br />
+以下の週次計画（W1–W6 / SPReAD 7/3 / リハ#1）と工程は<strong>藝大版のスナップショット</strong>。ICLC 向けの再計画は統括 #413 に deferred（本書では再議論しない）。Stage 1（Pitch DSL）は締切と独立に実装済み。
+</div>
 <p><strong>For</strong>: Claude Code (Opus 4.8) working in
 <code>signalcompose/orbitscore</code> <strong>Companion
 specs</strong>(正本。本書は作業手順・委譲方針・既知文脈):
 PITCH_DSL_SPEC_v1.1 / SESSION_LOG_SPEC_v1 / WCTM_SYSTEM_SPEC_v1 /
 DESIGN_DISCUSSION_RECORD <strong>Date</strong>: 2026-06-12 <strong>Hard
-deadline</strong>: 2026-08-07
-コンサート本番(WCTM)。逆算で全工程が決まる。</p>
+deadline</strong>: <del>2026-08-07 コンサート本番(WCTM)。逆算で全工程が決まる。</del>（藝大不採択で失効 — 冒頭の前提変更ノート / #413 参照）</p>
 <hr />
 <h2 id="scope-and-stage-order">1. Scope and Stage Order</h2>
 <p>スコープは3段: <strong>Stage 1 = note DSL(ピッチ/MIDI)→ Stage 2 =

@@ -145,7 +145,7 @@ B2（patch 付き rebuild）/B3（hard fork）へのエスカレーションは 
 
 ## WCTM との関係（誤結合防止）
 
-**この計画は WCTM 本番（2026-08-07）の依存グラフに入らない。** 本番ランタイム = pi 専用ハーネス + 脳なし Bridge + CLI/engine 評価経路であり、OrbitStudio（IDE 本体）は本番のいかなる経路にも登場しない（WCTM_SYSTEM_SPEC §4.3/§7）。どのフェーズも本番締切をブロックせず、本番も OrbitStudio の完成を待たない。土台として保全するのは Phase 4 の 4 ガードレールのみ。
+**この計画は WCTM 本番トラック（retarget #413）の依存グラフに入らない。** 本番ランタイム = pi 専用ハーネス + 脳なし Bridge + CLI/engine 評価経路であり、OrbitStudio（IDE 本体）は本番のいかなる経路にも登場しない（WCTM_SYSTEM_SPEC §4.3/§7）。どのフェーズも本番締切をブロックせず、本番も OrbitStudio の完成を待たない。土台として保全するのは Phase 4 の 4 ガードレールのみ。
 
 ## 機能組み込みレジストリ
 
