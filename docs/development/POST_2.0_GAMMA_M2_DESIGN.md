@@ -282,7 +282,7 @@ pub event_decode_error_count: AtomicU64,  // decode() が未知 kind を skip �
 **共通**:
 - **spill された event の `sample_offset` 再タイミング規約（実装時に曖昧にしないこと）**: 配送が後続ブロックにずれた event の `sample_offset` は、配送先ブロックの先頭（0）にクランプする。元ブロック内での相対位置は保持しない。これは既存 in-process 経路が A0 §4.2 で採用済みの簡略化（全イベントを block 先頭オフセットに置く）と同じ粒度であり、新たな精度劣化ではない。
 - **可視化は音を変えない**: `input_event_dropped_count`/`output_event_dropped_count`（真の喪失）と `input_event_spilled_count`/`output_event_spilled_count`（無損失遅延・情報）を方向別に分離し、`child_process_error_count` と同型の health signal パターンで 1Hz ticker（`OUTPROC_EFFECT_*` 相当）→ TS 層 → OrbitStudio のステータス表示へ配線する。**演奏・録音の音そのものを変える通知（警告音等）は禁止**（報せる対象の故障より害が大きいため）。
-- **既存の audio slot 同期（`seq_request`/`seq_done`/per-slot `seq_tag`）をそのまま event slot にも適用**（同一 slot・同一 seq で audio と event が対になる）。M1 の +1-block pipelined discipline とは整合する。`input_event_count`/`output_event_count` は `n_frames` と同じ「Relaxed store → Release publish で可視」規律に従う。
+- **既存の audio slot 同期プロトコル（`seq_request`/`seq_done`/per-slot `seq_tag`）をそのまま event slot にも適用**（同一 slot・同一 seq で audio と event が対になる）。`input_event_count`/`output_event_count` は `n_frames` と同じ「Relaxed store → Release publish で可視」規律に従う。**ただし child の消費ポリシー（M1 の「latest 処理・skip 可」を踏襲するか）は event を消費するかどうかで分岐する — §4.6 で DECIDED。**
 - **host 側の防御的読み取り（`output_event_count`）**: `output_event_count` は child（クラッシュしうる別プロセス）が書き込む値のため、host はこれを信用せず読み取り時に `.min(MAX_EVENTS_PER_BLOCK)` で clamp してから `output_events` を走査する（M1 の `host.rs` が `n_frames` を `.min(MAX_FRAMES)` で clamp してから読む規律と同型。汚染された count による境界外走査を防ぐ）。
 - **bidirectionality**: `NoteEnd`（plugin→host の voice 解放通知）・`LegacyMidiCcOut`（plugin→host の MIDI CC 出力）は child 起点のイベント。M1 の audio transport は host→child(input)/child→host(output) が対称に存在するので、event も同様に input/output を分離する（上記）。
 - **サイズ見積り**: `EventRecord` = 40 bytes（kind 4B + sample_offset 4B + payload 32B・§3 参照）。`MAX_EVENTS_PER_BLOCK=4096` なら 40B × 4096 × `SLOTS`(2) × 2方向 ≈ 640 KB（shm 上・現行 audio 領域 ~128 KB に対し増分は無視できる規模。count-prefix 配列なので未使用容量のコピーコストはゼロ）。加えて output 方向の child-local spill FIFO は **child プロセス側**の通常メモリで 65,536 slot × 40B ≈ 2.6MB（shm 外・host の backing ring と同オーダー）。
@@ -295,7 +295,33 @@ Fable の拡張調査で、同種の欠陥（固定容量 + 統計的典型性�
 
 > 固定容量の queue/buffer/ring を新規導入する変更は、doc comment で次の3点を明記しなければならない: **(a)** producer のスレッド種別（RT か非RTか） **(b)** overflow policy（lossless か、drop するなら note-off 級の状態依存 event を保護する方法） **(c)** 可視化 counter の有無。
 
-M2 の `input_events`/`output_events`/backing ring がこの原則の初適用例（上記 §4.2 が (a)(b)(c) を明記済み）。
+M2 の `input_events`/`output_events`/backing ring がこの原則の初適用例（上記 §4.2 が (a)(b)(c) を明記済み）。**(b) overflow policy は「queue 自体が溢れないか」だけでなく「消費側が window を必ず訪れるか（skip しないか）」も契約の一部**（§4.6 参照。lossless な queue でも、消費側が window を丸ごと skip すれば同じ喪失が別の場所で再発する）。
+
+### 4.6 Event 消費ポリシー — event を消費する child は in-order 必須（DECIDED・Fable 一発判断 2026-07-12）
+
+M1 effect child（`orbit-audio-sandbox::host::PipelinedEffectHost` 対向の child）は「latest 処理」で中間 seq を skip しうる設計を意図的に採用している（spike #351 実証・`host.rs` の `pipelined_skip_is_not_false_fresh` テストが正式挙動として検証）。**M2 実装着手前のレビューで、この skip ポリシーを instrument child にそのまま流用すると、skip されたブロックの `input_events`（NoteOn/NoteOff 含みうる）が child に一度も読まれず、stuck note / ノート消失を構造的に生むことが判明した**。§4.2 の sticky-flag/drop-counter 機構は「host 側 backing ring 自体が尽きた」場合の drop のみを対象とし、この「window は正常に書かれたが child が一度も読まなかった」経路をカバーしない。owner 判断を経て Fable に一発判断を依頼し、以下で確定した。
+
+**確定: event を消費する child（instrument child）は in-order 消費を必須とする（skip 禁止）。** M1 effect child（event を消費しない）は現行の latest-skip ポリシーを変更なく維持する。境界は「event を消費するか否か」であり、将来 effect に per-block automation event を配る時点で同じ規則が自動適用される。
+
+**理由（Fable 判断の要旨）**:
+- skip=latest が effect で正当だったのは「audio 入力は次ブロックで上書きされる使い捨てデータ」だからで、この前提は累積する状態変化（note/param）を運ぶ instrument には成立しない。
+- M1 実測（本 doc の親 `POST_2.0_GAMMA_M1_DESIGN.md` §6 SLOTS デジタル根拠）で 1 ブロックの実処理+IPC は buffer period の ~1/170〜1/229。かつ `host.rs` の submit guard（`seq_done >= new_seq - SLOTS`）により backlog は構造的に最大 `SLOTS` ブロックへ閉じ込められる。よって in-order 消費で追加される catch-up コストは高々 `SLOTS`−1 ブロック（µs オーダー）で、skip が買う便益は instrument では実質ゼロ。
+- **既存 submit guard が「skip された slot は上書きされない（無傷）」ことを既に保証している** — 追加のプロトコル変更なしに in-order 消費が成立する根拠。
+- skip 許容+drop 可視化拡張（検討した代替案）は §4.1 で確定した「溢れても失わない」思想と正面から矛盾し（choke による正当な voice の巻き添え切断を伴う）、かつ (i) の便益ゼロと合わせて筋が悪い。
+- skip は「どの event が honor されるか」を OS スケジューラの preemption タイミング依存にし、§4.1 が time-budget 方式を棄却した根拠（sample-exact closed-form oracle parity との衝突）と同型の決定論破壊を招く。
+- instrument plugin 内部時間（envelope/LFO 等）も process 呼び出しで進むため、render 自体の skip は event 以前に state 破損を生む副次的リスクがある。
+
+**実装方針**:
+- **child（instrument）**: 消費ループを「`seq_request`(Acquire) を読み、`last+1..=seq_request` を昇順に1 seq ずつ処理」に変更する（M1 effect child の「latest だけを読む」ループとは異なる）。各 seq で input slot（audio + `input_events`/`n_frames`）を読み render し、`seq_tag[slot]=seq`(Release)→`seq_done=seq`(Release)→`last=seq`。event の `sample_offset` は各 seq 自身の slot から読まれるため、元ブロック内の相対位置がそのまま保持される（backing ring の spill 時 offset-0 クランプより高精度。追加規約不要）。
+- **host**: wire・`SharedRegion` レイアウト・SUBMIT/READ・repeat-previous は無変更。実装規律として明記: **backing ring からの pop は submit が成立したブロックのみ行う**（host が stall したブロックでは pop せず ring に残す。slot に書いたのに `seq_request` を進めない状態を作らない）。
+- **effect child（M1）**: 無変更（event を消費しないため）。
+
+**反証可能性 / 留保**（Fable 判断が明示した不確実性）:
+1. **重い synth での catch-up コスト**: 上記の µs 実測は gain/CLAP test-effect のもの。実 instrument が period 予算の大半を使う場合、backlog `SLOTS` ブロックの in-order 消化が stale を悪化させうる。**予約された fallback**: §7 の gated stress test で in-order child の stale_pct が有意に劣化した場合、「event は in-order で全 slot から drain・render は latest のみ」というハイブリッド（losslessness を保ったまま latest-render を回復）に切り替える。これは skip 許容案への回帰ではない（event の loss なしは維持される）。
+2. **無傷保証の前提**: submit guard の現行形（`seq_done >= new_seq - SLOTS`）に依存する不変条件。将来 guard や `SLOTS` の意味論を変える変更では再検証が必要。
+3. **stall 時の event 滞留**: host が stall したブロックの event は backing ring に留まり、配送が最大 `SLOTS` ブロック（64f で ~3ms）遅延しうる。音楽的には無害だが NoteOff の最悪遅延として記録する。
+
+**§7 受け入れ基準への追加**: 上記「実装方針」の in-order 消費・「予約された fallback」の判断根拠は §7 に統合する（後述）。
 
 ### 4.4 既存コードの同種欠陥（M2 とは別スコープ・issue 化済み）
 
@@ -394,6 +420,7 @@ Q1-Q6 は全て owner サインオフ済み（§6）。以下を M2 substrate �
 9. **全 variant の encode/decode round-trip test**: `NeutralEvent` の全バリアント（NoteOn/NoteOff/NoteChoke/NoteEnd/PolyPressure/NoteExpression/ParamValue/ParamMod/ParamGestureBegin/ParamGestureEnd/MidiRaw/Midi2/LegacyMidiCcOut）について `encode() → decode()` が元の値と一致することを unit test で確認する（未使用 variant の符号化バグが Phase 3 の child 実装まで潜伏するのを防ぐ）。
 10. **offline spillover 決定論テスト**: input・output 双方向で 1ブロックあたり `MAX_EVENTS_PER_BLOCK` を超えるバーストを注入し、超過分が次ブロック以降で無損失配送される（対応する `*_event_spilled_count` が増分し `*_event_dropped_count` は増えない）ことを offline test で確認する。spill された event の `sample_offset` が配送先ブロック先頭にクランプされること（§4.2 記載の規約）も併せて確認する。
 11. **枯渇時 note 保護テスト**: (a) host 側 backing ring を意図的に枯渇させ（真の drop 条件を再現し）、`input_event_dropped_count` が増分すること・sticky flag による note-choke/all-notes-off 側路注入が発火し stuck note が構造的に排除されることを確認する。(b) child 側 spill FIFO を意図的に枯渇させ、`output_event_dropped_count`（NoteEnd 込みなら `output_note_end_dropped_count` も）が増分すること・host が monotone note_id 前提で per-voice 簿記を安全にリセットできることを確認する（§4.2 output 方向）。(c) supervisor が child を respawn した際、implicit all-voices-end により voice 簿記がリークしないことを確認する。
+12. **in-order 消費の回帰テスト**（§4.6・Fable 一発判断 2026-07-12）: instrument child が host を意図的に backlog させた後（一部ブロックを stall させた後）追いつく offline 統合テストで、**全ブロックの全 event が正確に1回ずつ・元の submit 順序・元の（配送先ブロックにクランプされない）`sample_offset` で消費される**ことを assert する。加えて「child が `last+1` を skip したら fail する」oracle（skip 検出）を用意し、in-order 規律自体の回帰を防ぐ。
 
 ---
 
