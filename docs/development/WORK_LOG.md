@@ -17,6 +17,15 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.236 feat(engine): M2 Stage5 Part A — ClapInstrumentProcessor（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage 5 は、実装前に advisor へスコープ確認した（§7-5 は「単一 child + closed-form oracle test-synth の event 列→波形」であり、`EventBackingRing`/`EventSpillFifo` の配線・output 方向 translate は Stage 6（§7-4,8,10,11,12）の範囲で Stage 5 には含めない、と整理）。Stage 5 は Part A（`orbit-clap-host` 側 API）と Part B（新規 child + offline event driver + gated A/B parity test）に分割し、本エントリは Part A。
+
+- `orbit-clap-host` の `process_block_core`（`processor.rs`）は instrument の add-mix 分岐（`has_audio_input()==false`）を既に実装済みだったが、既存 `ClapEffectProcessor::process_block` は常に `InputEvents::empty()` を渡すため note event が一切プラグインに届いていなかった（`rust-spike/clap-test-synth` という closed-form oracle 用の最小 CLAP instrument dylib は #293 で既に存在していたが、この欠落のため接続されていなかった）。
+- 新規 `ClapInstrumentProcessor`（`instrument.rs`）を追加。`ClapEffectProcessor` と同一の Drop 順（`plugin` を `_instance` より前に宣言・teardown 正当性）を踏襲しつつ、`process_block(&mut self, data, events: &EventBuffer)` が `events.as_input()` を `process_block_core` に渡す点のみ差分。`push_neutral_event`（Stage4）を `orbit-clap-host` の公開 API として re-export。
+- **役割**: grounding（既存 instrument 分岐・`clap-test-synth` 発見）・advisor 相談（スコープ確定・オラクル方式の判断）＝ Opus main。**実装本体 = codex 委譲**。委譲後の差分は Opus main が `cargo build --workspace`/`fmt`/`clippy`/`test -p orbit-clap-host` で再検証。
+- **状態**: Part A 完了。次 Part B（新規 `orbit-clap-instrument-child` crate・in-order event 消費ループ・`orbit-audio-sandbox::offline` の event 対応 driver・A/B parity gated test）。
+
 ### 6.235 feat(engine): M2 Stage4 — orbit-clap-host neutral event translate（#416） (Jul 12, 2026)
 
 M2 instrument IPC substrate（設計 #398・実装 Issue #416）の Stage 4。Stage 1-3（wire 型・`SharedRegion` event slot・host backing ring/child spill FIFO）に続き、`orbit-clap-host` 側に `NeutralEvent` ⇔ CLAP event の双方向 translate を実装した（設計正本 §7 受け入れ基準3）。
