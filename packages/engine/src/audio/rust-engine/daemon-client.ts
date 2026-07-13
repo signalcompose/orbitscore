@@ -21,6 +21,8 @@ import * as path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import WebSocket from 'ws'
 
+import type { PluginLoadResult } from '../types'
+
 import {
   DaemonConnectionError,
   DaemonNotFoundError,
@@ -346,10 +348,7 @@ export class DaemonClient extends EventEmitter {
     await this.request('SetLinkTempo', { bpm })
   }
 
-  async loadPlugin(
-    filePath: string,
-    pluginId?: string,
-  ): Promise<{ pluginId: string; pluginName: string; notePortIndex: number }> {
+  async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
     const result = await this.request('LoadPlugin', {
       path: filePath,
       ...(pluginId === undefined ? {} : { plugin_id: pluginId }),

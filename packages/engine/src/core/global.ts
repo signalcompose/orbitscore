@@ -60,7 +60,7 @@ export class Global {
     // Initialize managers
     this.tempoManager = new TempoManager()
     this.audioManager = new AudioManager(audioEngine)
-    this.linkAudioManager = new LinkAudioManager(() => this.pluginEffectManager.hasDeclaration())
+    this.linkAudioManager = new LinkAudioManager()
     this.pluginEffectManager = new PluginEffectManager(
       audioEngine,
       this.audioManager,
@@ -232,6 +232,11 @@ export class Global {
    *                         omitted.
    */
   linkAudio(targetSampleRate?: number): this {
+    if (this.pluginEffectManager.hasDeclaration()) {
+      throw new Error(
+        'global.linkAudio() cannot be used after plugin hosting has been declared in v1.',
+      )
+    }
     this.linkAudioManager.linkAudio(targetSampleRate)
     // #283: assert leadership for a tempo set before this call (usual order is
     // global.tempo() then global.linkAudio()).

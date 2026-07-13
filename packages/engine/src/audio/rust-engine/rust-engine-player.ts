@@ -258,8 +258,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private readonly durations = new Map<string, number>()
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
-  /** daemon crash 後に master insert を復元する、成功済み plugin 宣言のキャッシュ。 */
-  private readonly loadedPlugins = new Map<string, { filePath: string; pluginId?: string }>()
+  /**
+   * v1 は単一 master insert（PluginEffectManager が上流で保証）。daemon crash 後に
+   * replay する宣言 intent。
+   */
+  private loadedPlugin?: { filePath: string; pluginId?: string }
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
    * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
@@ -586,7 +589,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
     try {
       const result = await this.daemon.loadPlugin(filePath, pluginId)
-      this.loadedPlugins.set(JSON.stringify([filePath, pluginId ?? null]), { filePath, pluginId })
+      this.loadedPlugin = { filePath, pluginId }
       return result
     } catch (err) {
       if (err instanceof DaemonProtocolError) {
@@ -602,16 +605,16 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   private async reloadPluginsAfterRespawn(): Promise<void> {
-    for (const { filePath, pluginId } of this.loadedPlugins.values()) {
-      try {
-        await this.daemon.loadPlugin(filePath, pluginId)
-      } catch (err) {
-        // Cache entry intentionally remains: a later daemon respawn retries restoration.
-        console.error(
-          `❌ ERROR [rust-engine] failed to reload plugin after daemon respawn: ${filePath}`,
-          err,
-        )
-      }
+    if (!this.loadedPlugin) return
+    const { filePath, pluginId } = this.loadedPlugin
+    try {
+      await this.daemon.loadPlugin(filePath, pluginId)
+    } catch (err) {
+      // Cache entry intentionally remains: a later daemon respawn retries restoration.
+      console.error(
+        `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}`,
+        err,
+      )
     }
   }
 

@@ -74,6 +74,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 73 failures は loopback listen EPERM の偽陰性と確認）・`npm run lint` の 10 errors は
 未変更の SC SDK submodule 翻訳 .ts（既存）のみ。
 
+**/simplify（4観点並行・適用6件/スキップ3件）**:
+- 適用: ①`daemon-client.loadPlugin` 戻り値型を `PluginLoadResult` に統一 ②console.error を
+  ファイル慣行 `❌ [rust-engine]` に統一 ③`loadedPlugins` Map → 単一 `loadedPlugin?` フィールド
+  （v1 単一 insert 保証により Map は常に 0/1 エントリ・JSON.stringify キー削除）
+  ④linkAudio 排他 guard を `Global.linkAudio()` に移動し `LinkAudioManager` を zero-arg に復元
+  （callback 注入の前方参照の脆さを解消）⑤テスト fixture 定数化 ⑥拡張子検証+path 解決を
+  `plugin-resolver.ts`（`resolvePluginPath`）に切り出し — **#427 の `seq.instrument()` が再利用**
+- スキップ（理由つき）: respawn テストの MockDaemonServer 経由書き直し（fail-before/pass-after の
+  実証由来を保全・#427 で再訪）／backend replay seam の全面再設計（#431 が daemon 層を作り直す
+  ため過剰投資）／effect 側 linkAudio チェックの Global 移動（エラー順序の挙動変更になるため）
+- 適用後検証: `npm test` 1296 passed / 0 failed・lint 変更ファイル新規指摘ゼロ
+
 **残作業**: 実機 gated DoD（可聴変化の確認・要 clap-host build + 実 CLAP effect）→
 PR レビューフロー後に実施。#427（instrument + Pitch DSL 接続）が次。
 

@@ -17,8 +17,6 @@ export class LinkAudioManager {
   // undefined = auto-detect (fallback 48000), 数値指定で明示 override
   private _targetSampleRate?: number
 
-  constructor(private readonly isPluginHostingDeclared: () => boolean = () => false) {}
-
   /**
    * Enable LinkAudio mode and optionally specify the target sample rate
    * for plugin-side resampling.
@@ -35,11 +33,6 @@ export class LinkAudioManager {
    *                         48000 as the documented fallback.
    */
   linkAudio(targetSampleRate?: number): void {
-    if (this.isPluginHostingDeclared()) {
-      throw new Error(
-        'global.linkAudio() cannot be used after plugin hosting has been declared in v1.',
-      )
-    }
     this._enabled = true
     if (targetSampleRate === undefined) {
       this._targetSampleRate = undefined

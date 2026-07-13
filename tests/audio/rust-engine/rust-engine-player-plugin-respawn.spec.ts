@@ -12,6 +12,12 @@ interface FakeDaemon {
   quit: ReturnType<typeof vi.fn>
 }
 
+const ECHO_LOAD_RESULT = {
+  pluginId: 'echo-id',
+  pluginName: 'Echo',
+  notePortIndex: 0,
+}
+
 function createHarness() {
   const player = new RustEnginePlayer()
   const daemon: FakeDaemon = {
@@ -20,11 +26,7 @@ function createHarness() {
     isRunning: vi.fn().mockReturnValue(true),
     off: vi.fn(),
     on: vi.fn(),
-    loadPlugin: vi.fn().mockResolvedValue({
-      pluginId: 'echo-id',
-      pluginName: 'Echo',
-      notePortIndex: 0,
-    }),
+    loadPlugin: vi.fn().mockResolvedValue(ECHO_LOAD_RESULT),
     quit: vi.fn().mockResolvedValue(undefined),
   }
   Object.defineProperty(player, 'daemon', { value: daemon })
@@ -56,16 +58,17 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
     players.push(player)
     await player.loadPlugin('/plugins/echo.clap', 'echo-id')
     daemon.loadPlugin.mockClear()
-    daemon.loadPlugin.mockRejectedValueOnce(new Error('reload failed')).mockResolvedValueOnce({
-      pluginId: 'echo-id',
-      pluginName: 'Echo',
-      notePortIndex: 0,
-    })
+    daemon.loadPlugin
+      .mockRejectedValueOnce(new Error('reload failed'))
+      .mockResolvedValueOnce(ECHO_LOAD_RESULT)
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await (player as any).respawnLoop()
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('ERROR'), expect.any(Error))
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('❌ [rust-engine] failed to reload plugin'),
+      expect.any(Error),
+    )
 
     await (player as any).respawnLoop()
     expect(daemon.loadPlugin).toHaveBeenCalledTimes(2)
