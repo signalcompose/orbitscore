@@ -110,9 +110,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - セキュリティ面: 新規依存なし・secrets なし・network surface 変更なし・
   license/dependency gate CI pass
 
-**残作業**: 実機 gated DoD（可聴変化の確認・要 clap-host build + 実 CLAP effect）→
-レビュー通過済みのため owner 判断でマージ前後いずれでも実施可。#427（instrument +
-Pitch DSL 接続）が次。
+**実機 gated E2E（DoD 達成・2026-07-14・self-run は owner 常時許可の範囲）**:
+- advisor 判断: bot レビュー不要（独立視点 5 系統済み・残余リスクは静的レビューで
+  捕捉不能な実機 E2E ギャップ）+ **effect 経路の E2E は #426 クローズのゲート**
+  （#427 は PluginNoteOn/Off の別経路のため束ねられない）→ マージ前に self-run 実施
+- 手順: `cargo build --release -p orbit-audio-daemon --features clap-host` +
+  `clap-test-effect`（固定 gain 0.5・挙動既知の oracle プラグイン）を flat-file
+  `.clap` 化 → `ORBIT_AUDIO_DAEMON_PATH` + `ORBIT_CAPTURE_WAV` で
+  `cli-audio.js play` を baseline / `global.effect()` あり の 2 回実行し capture 比較
+- **結果: peak ratio = 0.5000（厳密一致・gain 0.5 の closed-form signature）**。
+  RMS 比 0.566（−4.94dB・前後無音の希釈込み）。DSL → daemon LoadPlugin →
+  in-process CLAP host → master insert の全経路が実機で音を処理したことを客観実証。
+  スピーカー実再生も両 run で確認。**Issue #426 の DoD 達成**
+- **副産物の発見 → #433 起票**: daemon discovery は path をそのまま dlopen するため
+  macOS 標準の `.clap` バンドル**ディレクトリ**を解決できない（市販プラグインは
+  全てバンドル形式）。E2E は flat-file 形式で回避。mock では捕捉不能な
+  統合ギャップの実物（advisor の予測どおり）。実プラグイン運用前に要対応
+- 注記: `rust/target/release/orbit-audio-daemon` は E2E 用に clap-host feature 付きで
+  上書きビルドした状態（plain 構成が要る場合は再ビルド）
+
+**残作業**: なし（#426 スコープ完了・マージはユーザー指示待ち）。次 = #427（instrument +
+Pitch DSL 接続。`daemon-client.loadPlugin` の role 引数化・#433 の bundle 解決を含む）。
 
 ### 6.249 docs(dsl): plugin effect/instrument DSL 構文確定 — #425 Option A 決定 + spec 反映 (Jul 13, 2026)
 
