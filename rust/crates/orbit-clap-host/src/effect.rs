@@ -119,6 +119,7 @@ impl ClapEffectProcessor {
             &mut self.buffers,
             &mut self.steady,
             &InputEvents::empty(),
+            None,
             data,
         )
     }

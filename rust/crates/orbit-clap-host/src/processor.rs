@@ -123,6 +123,7 @@ pub(crate) fn process_block_core(
     buffers: &mut HostAudioBuffers,
     steady: &mut u64,
     input_events: &InputEvents,
+    output_events: Option<&mut EventBuffer>,
     data: &mut [f32],
 ) -> bool {
     // plugin バッファサイズを確認する（BufferSize::Fixed なら zero-cost）。
@@ -138,16 +139,35 @@ pub(crate) fn process_block_core(
     }
     let (ins, mut outs) = buffers.prepare_plugin_buffers(data.len());
 
-    let process_ok = plugin
-        .process(
-            &ins,
-            &mut outs,
-            input_events,
-            &mut OutputEvents::void(),
-            Some(*steady),
-            None,
-        )
-        .is_ok();
+    let process_ok = match output_events {
+        Some(output_events) => {
+            output_events.clear();
+            let process_ok = plugin
+                .process(
+                    &ins,
+                    &mut outs,
+                    input_events,
+                    &mut OutputEvents::from_buffer(output_events),
+                    Some(*steady),
+                    None,
+                )
+                .is_ok();
+            if !process_ok {
+                output_events.clear();
+            }
+            process_ok
+        }
+        None => plugin
+            .process(
+                &ins,
+                &mut outs,
+                input_events,
+                &mut OutputEvents::void(),
+                Some(*steady),
+                None,
+            )
+            .is_ok(),
+    };
 
     // 出力配線は process 成功時のみ。effect は overwrite（serial insert）、instrument は add-mix。
     if process_ok {
@@ -330,6 +350,7 @@ impl PostProcessor for ClapPostProcessor {
                 buffers,
                 &mut self.steady_counter,
                 &input_events,
+                None,
                 data,
             );
 

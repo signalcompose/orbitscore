@@ -7,8 +7,8 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, slot_index, slot_offset, EventRecord, NeutralEvent, BUF_LEN, CHANNELS,
-    CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
+    open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
+    SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
 use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
@@ -68,6 +68,41 @@ fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<Neutra
     failures
 }
 
+fn push_output(
+    spill: &mut EventSpillFifo,
+    window: &mut [EventRecord],
+    written: &mut usize,
+    record: EventRecord,
+) -> bool {
+    if *written < window.len() {
+        window[*written] = record;
+        *written += 1;
+        true
+    } else {
+        spill.push(record)
+    }
+}
+
+/// Writes one completed slot, then publishes its sequence with Release ordering.
+///
+/// `write_slot` must write audio, `output_events`, and `output_event_count`. Their writes must stay
+/// before both sequence stores: the host uses `seq_tag`'s Acquire load as the publication edge for
+/// all slot payload and then revalidates the tag after reading it.
+unsafe fn publish_completed_slot(
+    region: *mut SharedRegion,
+    seq: u64,
+    write_slot: impl FnOnce(*mut SharedRegion),
+    after_sequence_publish: impl FnOnce(),
+) {
+    write_slot(region);
+    let idx = slot_index(seq);
+    unsafe {
+        (*region).seq_tag[idx].store(seq, Release);
+        (*region).seq_done.store(seq, Release);
+    }
+    after_sequence_publish();
+}
+
 fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
@@ -83,7 +118,9 @@ fn main() -> Result<()> {
     let mut scratch = vec![0.0f32; BUF_LEN];
     // Event window 分を事前確保し、hot loop での buffer 再確保を避ける。
     let mut event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);
+    let mut output_event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);
     let mut event_scratch: Vec<NeutralEvent> = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
+    let mut output_spill = EventSpillFifo::new();
     let mut process_errors = 0u64;
     // After a supervisor respawn this always restarts from 0, so the child re-processes every
     // historical seq up to the current `seq_request` (no resume-point handshake exists yet).
@@ -139,18 +176,58 @@ fn main() -> Result<()> {
                 }
             }
             scratch[..sample_count].fill(0.0);
-            if !instrument.process_block(&mut scratch[..sample_count], &event_buf) {
+            if !instrument.process_block(
+                &mut scratch[..sample_count],
+                &event_buf,
+                &mut output_event_buf,
+            ) {
                 process_errors += 1;
                 unsafe {
                     (*region).child_process_error_count.fetch_add(1, Relaxed);
                 }
             }
             unsafe {
-                let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
-                std::ptr::copy_nonoverlapping(scratch.as_ptr(), out_base.add(off), sample_count);
-                (*region).seq_tag[idx].store(seq, Release);
-                (*region).seq_done.store(seq, Release);
-                (*region).child_processed.fetch_add(1, Relaxed);
+                publish_completed_slot(
+                    region,
+                    seq,
+                    |region| {
+                        let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
+                        std::ptr::copy_nonoverlapping(
+                            scratch.as_ptr(),
+                            out_base.add(off),
+                            sample_count,
+                        );
+                        let window = std::slice::from_raw_parts_mut(
+                            std::ptr::addr_of_mut!((*region).output_events[idx])
+                                as *mut EventRecord,
+                            MAX_EVENTS_PER_BLOCK,
+                        );
+                        let mut written = output_spill.drain_into_window(window);
+                        for event in &output_event_buf {
+                            let Some(event) = ClapInstrumentProcessor::neutral_output_event(event)
+                            else {
+                                continue;
+                            };
+                            let record = EventRecord::encode(&event);
+                            let spilled = written >= window.len();
+                            if push_output(&mut output_spill, window, &mut written, record) {
+                                if spilled {
+                                    (*region).output_event_spilled_count.fetch_add(1, Relaxed);
+                                }
+                            } else {
+                                (*region).output_event_dropped_count.fetch_add(1, Relaxed);
+                                if output_spill.take_note_end_dropped() {
+                                    (*region)
+                                        .output_note_end_dropped_count
+                                        .fetch_add(1, Relaxed);
+                                }
+                            }
+                        }
+                        (*region).output_event_count[idx].store(written as u32, Relaxed);
+                        (*region).child_processed.fetch_add(1, Relaxed);
+                    },
+                    || {},
+                );
             }
         }
         last = cur.max(last);
@@ -166,7 +243,7 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbit_audio_sandbox::VoiceAddr;
+    use orbit_audio_sandbox::{PipelinedInstrumentHost, TransportContext, VoiceAddr, VoiceKey};
 
     fn note_on(key: i16) -> NeutralEvent {
         NeutralEvent::NoteOn {
@@ -203,5 +280,91 @@ mod tests {
         assert_eq!(decoded.len(), MAX_EVENTS_PER_BLOCK - 1);
         assert_eq!(failures, 1);
         assert_eq!(decoded[0], note_on(60));
+    }
+
+    #[test]
+    fn recycled_child_slot_publishes_note_end_before_sequence_tag() {
+        let layout = std::alloc::Layout::new::<SharedRegion>();
+        let region = unsafe { std::alloc::alloc_zeroed(layout) as *mut SharedRegion };
+        assert!(!region.is_null());
+        let mut host = unsafe { PipelinedInstrumentHost::from_raw(region) };
+        let mut audio = vec![0.0; CHANNELS];
+        let transport = TransportContext {
+            tempo_bpm: 120.0,
+            time_sig_numerator: 4,
+            time_sig_denominator: 4,
+            is_playing: 1,
+            is_looping: 0,
+            song_position_beats: 0.0,
+        };
+        let key = VoiceKey {
+            port_index: 0,
+            channel: 0,
+            key: 60,
+        };
+
+        assert!(
+            host.process_block(&mut audio, &[note_on(60)], transport)
+                .submitted
+        );
+        assert_eq!(host.live_count(key), 1);
+
+        unsafe {
+            publish_completed_slot(
+                region,
+                1,
+                |region| {
+                    (*region).output_event_count[slot_index(1)].store(0, Relaxed);
+                },
+                || {},
+            );
+        }
+        assert!(host.process_block(&mut audio, &[], transport).submitted);
+
+        unsafe {
+            publish_completed_slot(
+                region,
+                2,
+                |region| {
+                    (*region).output_event_count[slot_index(2)].store(0, Relaxed);
+                },
+                || {},
+            );
+        }
+        assert!(host.process_block(&mut audio, &[], transport).submitted);
+
+        // seq 3 recycles seq 1's physical slot. Drain exactly after publication so moving the
+        // Release stores ahead of `write_slot` makes the host consume the stale zero count and
+        // permanently miss this NoteEnd.
+        unsafe {
+            publish_completed_slot(
+                region,
+                3,
+                |region| {
+                    let slot = slot_index(3);
+                    (*region).output_events[slot][0] =
+                        EventRecord::encode(&NeutralEvent::NoteEnd {
+                            sample_offset: 0,
+                            addr: VoiceAddr {
+                                note_id: -1,
+                                port_index: 0,
+                                channel: 0,
+                                key: 60,
+                                _pad: 0,
+                            },
+                        });
+                    (*region).output_event_count[slot].store(1, Relaxed);
+                },
+                || {
+                    assert!(host.process_block(&mut audio, &[], transport).submitted);
+                },
+            );
+        }
+
+        assert_eq!(host.live_count(key), 0);
+        drop(host);
+        unsafe {
+            std::alloc::dealloc(region.cast(), layout);
+        }
     }
 }
