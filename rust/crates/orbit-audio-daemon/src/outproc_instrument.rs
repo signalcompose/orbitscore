@@ -827,6 +827,46 @@ mod tests {
         let _ = std::fs::remove_file(&shm);
     }
 
+    // pr-test-analyzer (round 4, PR #422 review): open_shared 失敗時の cleanup（first_child を
+    // kill+wait して shm を remove_file する分岐）に、その分岐を実際に踏ませるテストが無かった。
+    // Mirrors `outproc_effect::tests::supervisor_spawn_reaps_first_child_on_open_shared_failure`
+    // exactly: shm ファイルを消してから spawn を呼び open_shared を失敗させ、Err 返却 + child が
+    // reap される（kill -0 が ESRCH）ことを検証する。
+    #[test]
+    fn supervisor_spawn_reaps_first_child_on_open_shared_failure() {
+        let shm = unique_shm_path();
+        let _ = std::fs::remove_file(&shm); // ファイル不在 → open_shared が失敗する
+        let stats = OutProcInstrumentStats::new();
+        let first = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn stub child");
+        let pid = first.id();
+        let r = InstrumentChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats,
+            PathBuf::from("/nonexistent"),
+            PathBuf::from("/nonexistent.clap"),
+            None,
+            48_000,
+        );
+        assert!(r.is_err(), "open_shared 失敗で Err を返す");
+        // first_child が reap された（orphan でない）= kill -0 が失敗（ESRCH）する。
+        let reaped = poll_until(3, || {
+            !Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        });
+        assert!(
+            reaped,
+            "open_shared 失敗時に first_child が reap される（orphan 化しない）"
+        );
+    }
+
     // pr-test-analyzer (item 4, PR #422 review): success-side counterpart. Mirrors
     // `outproc_effect::tests::supervisor_respawns_child_on_unexpected_exit`: an unexpectedly
     // exited child triggers a real respawn (PID publish + `respawn_count` incrementing) without

@@ -64,6 +64,13 @@ child_proc_errors:   0
 
 **Commits**: `3e67fd1`（#419）, `7278f38`（#420）
 
+**PR #422 レビュー（`/code:pr-review-team`・round 1-4）+ #420 成功条件の明示回答**:
+
+- round 1-3（fixer 3 round・MAX_ITERATIONS=3 上限）: critical 1件（event_cursor 永久スタック類似の output-event overflow 未配線）+ important 数件を修正・全て Opus main が差分精読 + 検証コマンド再実行で受け入れ。
+- round 4（最終再レビュー）: comment-analyzer がstale comment 1件（`tests/protocol.rs:728` が round3で統合済みの `outproc_instrument_health()` ではなく旧名 `outproc_instrument_output_health()` を参照）、pr-test-analyzer が important 1件（`InstrumentChildSupervisor::spawn` の `open_shared` 失敗時cleanupパスにその分岐を踏むテストが無い）+ minor 2件（`_respawn` 警告テストの re-arm 非対称・`current_child_pid` 更新のCI実行可能な assertion 不在）を指摘。code-reviewer/silent-failure-hunter は指摘0。
+- **advisor 相談の結果**: 反復上限到達で4巡目のfixer roundは回さず、(a) round2で導入され round3の統合後は本番から一切呼ばれなくなっていた `outproc_instrument_output_health()`（自身の4ユニットテストのためだけに存在するdead code）を削除、(b) 上記stale commentを修正、(c) `open_shared` 失敗時cleanupの専用テスト（`outproc_effect.rs` の同型テスト `supervisor_spawn_reaps_first_child_on_open_shared_failure` を1:1で移植）を追加——を Opus main が単発クリーンアップとして実施（fail-before/pass-after を自ら再現して検証: cleanup分岐を一時的に無効化してテストが実際にFAILすることを確認後、復元してPASSを確認）。`_respawn` re-arm非対称と `current_child_pid` CI assertion の2 minor項目は advisor の推奨通り修正せずフォローアップ issue へ回す（既知の重複コード・respawn無限loop等の既存フォローアップと合わせて #420 クローズ後に1本化する）。
+- **#420 成功条件「Pitch DSL v1.1 が note 供給源としてそのまま使えるか」への回答**: **そのままでは使えない**。調査の結果、Pitch DSL v1.1 の note 出力は `packages/engine/src/midi/rtmidi-output.ts`（`@julusian/midi` 経由の実MIDIハードウェア出力）のみを通り、今回追加した `orbit-audio-daemon` の `PluginNoteOn`/`PluginNoteOff` WebSocket経路とは完全に別系統（TypeScript側に該当メソッドの呼び出し箇所は0件）。`daemon-client.ts` の transport 自体は method-agnostic なので運べるが、DSL側の配線が存在しないだけで「新経路を丸ごと作る」規模ではない。接続に必要な差分: (a) DSLへのプラグイン割当構文の追加、(b) `MidiOutput` 相当の新バックエンド（daemon-client への `PluginNoteOn`/`Off` 変換）、(c) 値域変換（velocity 1-127→0.0-1.0・channel 1-16→0-15）、(d) 出力先選択ロジック、(e) daemon呼び出しの非同期性と既存スケジューリングのレイテンシ整合。本PRのスコープには含めず、別issueで対応する（Issue本文の「DSL構文自体の確定は別・後回しで良い、Option C判断どおり」という既存の運用と整合）。
+
 ### 6.247 fix(engine): M2 Equal分岐の seqlock 型再検証を追加（Fable指摘対応・#416） (Jul 13, 2026)
 
 6.246 で Fable が指摘した「`Ordering::Equal` 分岐のレースを M1 前例でスコープ外にした判断は事実誤認」への対応。`event_cursor` drain ループの `Equal` 分岐に、record 適用後の `seq_tag` 再 Acquire load を追加し、変化していれば `Ordering::Greater` と同じ回復（`event_cursor_recycled` 増分・`voices.reset_all()`・`event_cursor = submitted`）を適用する seqlock 型再検証を実装。共有ロジックは `recover_from_recycled_slot()` ヘルパに抽出し、両分岐が同一の回復パスを呼ぶ。

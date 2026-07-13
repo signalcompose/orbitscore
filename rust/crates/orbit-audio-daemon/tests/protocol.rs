@@ -725,7 +725,7 @@ async fn daemon_error_warning_on_outproc_instrument_output_dropped() {
     let mut ws = daemon.connect().await;
     let _hs = TestDaemon::recv_handshake(&mut ws).await;
 
-    // 外部から dropped を注入（1 Hz ticker が outproc_instrument_output_health() の増加を検知して
+    // 外部から dropped を注入（1 Hz ticker が outproc_instrument_health() の増加を検知して
     // 発火）。
     daemon
         .engine
