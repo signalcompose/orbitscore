@@ -41,6 +41,7 @@
 import { gainDbToAmplitude } from '../audio-gain-utils'
 import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
+import type { PluginLoadResult } from '../types'
 
 import { DaemonClient } from './daemon-client'
 import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './errors'
@@ -257,6 +258,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private readonly durations = new Map<string, number>()
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
+  /** daemon crash 後に master insert を復元する、成功済み plugin 宣言のキャッシュ。 */
+  private readonly loadedPlugins = new Map<string, { filePath: string; pluginId?: string }>()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
    * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
@@ -481,6 +484,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           // （durations は file 由来で不変なので保持し slice 領域解決に使う）。inflightLoads の旧
           // エントリは ws close の reject で各自の .finally が既に delete 済み。
           this.sampleIds.clear()
+          await this.reloadPluginsAfterRespawn()
           console.warn(
             `✅ [rust-engine] daemon respawned and session re-established (attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}).`,
           )
@@ -576,6 +580,38 @@ export class RustEnginePlayer implements AudioEngineBackend {
         return
       }
       throw err
+    }
+  }
+
+  async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
+    try {
+      const result = await this.daemon.loadPlugin(filePath, pluginId)
+      this.loadedPlugins.set(JSON.stringify([filePath, pluginId ?? null]), { filePath, pluginId })
+      return result
+    } catch (err) {
+      if (err instanceof DaemonProtocolError) {
+        if (err.code === 'CLAP_UNAVAILABLE') {
+          throw new Error(
+            `Plugin hosting is unavailable in this daemon build; a --features clap-host build is required: ${err.message}`,
+          )
+        }
+        throw new Error(`Failed to load plugin: ${err.message}`)
+      }
+      throw err
+    }
+  }
+
+  private async reloadPluginsAfterRespawn(): Promise<void> {
+    for (const { filePath, pluginId } of this.loadedPlugins.values()) {
+      try {
+        await this.daemon.loadPlugin(filePath, pluginId)
+      } catch (err) {
+        // Cache entry intentionally remains: a later daemon respawn retries restoration.
+        console.error(
+          `❌ ERROR [rust-engine] failed to reload plugin after daemon respawn: ${filePath}`,
+          err,
+        )
+      }
     }
   }
 

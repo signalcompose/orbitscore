@@ -64,6 +64,43 @@ describe('DaemonClient with mock server', () => {
     expect(record?.params.path).toBe('/tmp/kick.wav')
   })
 
+  it('LoadPlugin は response を camelCase に変換し effect role と plugin_id を送る', async () => {
+    const url = await server.start({
+      LoadPlugin: () => ({
+        plugin_id: 'com.example.echo',
+        plugin_name: 'Example Echo',
+        note_port_index: 2,
+      }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await expect(client.loadPlugin('/tmp/echo.clap', 'com.example.echo')).resolves.toEqual({
+      pluginId: 'com.example.echo',
+      pluginName: 'Example Echo',
+      notePortIndex: 2,
+    })
+    const record = server.received.find((r) => r.method === 'LoadPlugin')
+    expect(record?.params).toEqual({
+      path: '/tmp/echo.clap',
+      plugin_id: 'com.example.echo',
+      role: 'effect',
+    })
+  })
+
+  it('LoadPlugin error は code を保持した DaemonProtocolError に変換する', async () => {
+    const url = await server.start({
+      LoadPlugin: () => {
+        const error = new Error('clap host is unavailable') as Error & { code?: string }
+        error.code = 'CLAP_UNAVAILABLE'
+        throw error
+      },
+    })
+    await client.start({ wsUrlOverride: url })
+    await expect(client.loadPlugin('/tmp/echo.clap')).rejects.toBeInstanceOf(DaemonProtocolError)
+    await expect(client.loadPlugin('/tmp/echo.clap')).rejects.toMatchObject({
+      code: 'CLAP_UNAVAILABLE',
+    })
+  })
+
   it('PlayAt は playId を返す', async () => {
     const url = await server.start({
       PlayAt: () => ({ play_id: 'p-mock-1' }),

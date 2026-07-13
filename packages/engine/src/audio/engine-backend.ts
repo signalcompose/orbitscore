@@ -14,6 +14,7 @@
 import type { Scheduler } from '../core/global/types'
 
 import type { AudioDevice } from './supercollider/types'
+import type { PluginLoadResult } from './types'
 
 /**
  * interpreter（`InterpreterState.audioEngine`）/ Global が依存する音声バックエンド契約。
@@ -30,6 +31,7 @@ export interface AudioEngineBackend extends Scheduler {
   setAvailableDevices?(devices: AudioDevice[]): void
   registerLinkAudioChannel?(channelName: string): Promise<void>
   setLinkTempo?(bpm: number): Promise<void>
+  loadPlugin?(filePath: string, pluginId?: string): Promise<PluginLoadResult>
 }
 
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */

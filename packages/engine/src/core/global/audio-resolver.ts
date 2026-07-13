@@ -64,7 +64,7 @@ export function resolveAudio(options: ResolveAudioOptions): string {
   return result
 }
 
-function resolvePathDirect(
+export function resolvePathDirect(
   spec: string,
   audioPaths: readonly string[],
   documentDirectory: string,

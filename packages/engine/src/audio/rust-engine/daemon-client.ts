@@ -346,6 +346,22 @@ export class DaemonClient extends EventEmitter {
     await this.request('SetLinkTempo', { bpm })
   }
 
+  async loadPlugin(
+    filePath: string,
+    pluginId?: string,
+  ): Promise<{ pluginId: string; pluginName: string; notePortIndex: number }> {
+    const result = await this.request('LoadPlugin', {
+      path: filePath,
+      ...(pluginId === undefined ? {} : { plugin_id: pluginId }),
+      role: 'effect',
+    })
+    return {
+      pluginId: String(result.plugin_id),
+      pluginName: String(result.plugin_name),
+      notePortIndex: Number(result.note_port_index),
+    }
+  }
+
   async getStatus(): Promise<Record<string, unknown>> {
     return this.request('GetStatus', {})
   }

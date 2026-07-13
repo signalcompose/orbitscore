@@ -21,6 +21,7 @@ import { QuantizeManager, QuantizeValue, nextQuantizedTime } from './global/quan
 import { MidiManager } from './global/midi-manager'
 import { TransportClock } from './global/transport-clock'
 import { MidiTransportScheduler } from './global/midi-transport-scheduler'
+import { PluginEffectManager } from './global/plugin-effect-manager'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -32,6 +33,7 @@ export class Global {
   private linkAudioManager: LinkAudioManager
   private quantizeManager: QuantizeManager
   private midiManager: MidiManager
+  private pluginEffectManager: PluginEffectManager
 
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
@@ -58,7 +60,12 @@ export class Global {
     // Initialize managers
     this.tempoManager = new TempoManager()
     this.audioManager = new AudioManager(audioEngine)
-    this.linkAudioManager = new LinkAudioManager()
+    this.linkAudioManager = new LinkAudioManager(() => this.pluginEffectManager.hasDeclaration())
+    this.pluginEffectManager = new PluginEffectManager(
+      audioEngine,
+      this.audioManager,
+      this.linkAudioManager,
+    )
     this.quantizeManager = new QuantizeManager()
     this.midiManager = midiManager ?? new MidiManager()
     this.sequenceRegistry = new SequenceRegistry(audioEngine, this)
@@ -234,6 +241,12 @@ export class Global {
 
   isLinkAudioEnabled(): boolean {
     return this.linkAudioManager.isEnabled()
+  }
+
+  /** Eagerly load the v1 single master-insert plugin. */
+  async effect(path: string, pluginId?: string): Promise<this> {
+    await this.pluginEffectManager.effect(path, pluginId)
+    return this
   }
 
   /**

@@ -17,6 +17,66 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.250 feat(dsl): global.effect() — CLAP effect の DSL 疎通 #426 Stage 1 (Jul 14, 2026)
+
+**Date**: 2026-07-14
+**Status**: ✅ 実装・受け入れ監査済み（実機 gated DoD = 可聴確認は後続。#431 起票・Epic #424 段階化）
+**Branch**: `426-clap-effect-dsl-wiring`
+**Commit**: `86a9574`
+
+#425 で確定した `global.effect(path[, pluginId])` を TS 側に実装し、daemon の実行時
+`LoadPlugin`（in-process clap-host 経路）へ配線した。Epic #424 Stage 1 の前半。
+
+**グラウンディングで判明した構造ギャップ（plan-affecting）**:
+- daemon に OOP effect/instrument の実行時ロードコマンドが無い（`outproc-*` は起動時 env のみ・
+  `main.rs` が WS サーバー開始前に `EngineWrap::start()` を同期実行）。実行時 `LoadPlugin` は
+  in-process `clap-host` feature 専用
+- 4-way pairwise `compile_error!` により effect+instrument の同時使用不可 → **Epic #424 DoD は
+  daemon 側作業なしに達成不能**
+- release build は plugin feature 全て無効（`--features` なし）
+
+**Fable 一発判断（2026-07-14・確信度 高・案A/B/C 比較）**:
+- **案C ハイブリッド採用**: #426/#427 は in-process `clap-host` 経路で単体 DoD を通す
+  （今日の daemon で唯一の DSL 駆動実行時ロード経路・PH.4 の AlreadyLoaded 意味論は
+  この経路の実装そのもの）。wire 契約（`LoadPlugin`/`PluginNoteOn/Off`）は backend 中立で、
+  OOP 化後も TS/DSL 層は不変（`plugin_note_on/off` が既に両 backend に配線済みの実績）
+- 案B（env 注入）棄却: REPL 再宣言不能・「宣言時 eager ロード」が boot 時 config に退化
+- **`role: "effect"` param を初回から送る**（将来の OOP attach での child 選択に必須の wire を
+  先行確定。daemon は `params.get` 方式で未知 field を無視 = コスト 0）
+- **#431 起票**（OOP post-boot attach + 排他解消 + 配布 feature 方針 = Epic #424 Stage 2。
+  **Epic DoD「effect+instrument 同時演奏」は #431 で達成**）・Epic #424 body に段階化注記を追記
+
+**spec 追従（spec-first・同ブランチ）**:
+- PH.2 に「同一 path+pluginId の再宣言は冪等」を明確化（ライブコーディングのファイル全体
+  再評価を壊さないため。PH.4 instrument 冪等と同じ原理。owner 承認済みの「2回目エラー」は
+  チェーン防止の意図であり、異なる path/pluginId のみエラーとする精緻化）
+- PH.6 の排他解消ポインタを #426/#427 → #431 に更新
+
+**実装（Codex 委譲・2 ラウンド）**:
+- Round 1: `PluginEffectManager`（拡張子検証→linkAudio 排他→resolvePathDirect 解決→
+  冪等/エラー→eager load・失敗ロールバック・並行呼び出しは load Promise 共有）、
+  `Global.effect()` chainable、`DaemonClient.loadPlugin()`（camelCase 変換・role: "effect"）、
+  `RustEnginePlayer.loadPlugin()`（CLAP_UNAVAILABLE → 「--features clap-host build が必要」
+  マッピング）、LinkAudioManager 逆方向排他（callback 注入）、`resolvePathDirect` export、
+  テスト 13 件（global 11 + daemon-client 2 + mock server ハンドラ）
+- Round 2（受け入れ監査 Important 指摘 B-1 の fix）: **daemon crash→respawn 後に plugin
+  master insert が黙って消える silent failure** を修正 — `loadedPlugins` キャッシュ +
+  `respawnLoop` の `sampleIds.clear()` 直後に再発行・失敗は ❌ ERROR で observable・
+  キャッシュ保持で次回 respawn 再試行。**fail-before/pass-after 実証**（修正 revert で
+  2 テスト red「Number of calls: 0」→ 復元で green）
+
+**受け入れ監査（Fable・条件付き GO → fix 反映で解消）**:
+- spec 適合全項目 ✅・wire 正しさ（session.rs 突合・role 無害）✅・並行/ロールバック/
+  コンストラクション順 by construction 安全 ✅・スコープ外変更なし ✅
+- 逸脱メモ: `daemon-client.loadPlugin` の role 固定は #427 で引数化が必要（既知・許容）
+
+**検証（main 環境・非サンドボックス）**: `npm test` 1294+ passed / 0 failed（Codex sandbox の
+73 failures は loopback listen EPERM の偽陰性と確認）・`npm run lint` の 10 errors は
+未変更の SC SDK submodule 翻訳 .ts（既存）のみ。
+
+**残作業**: 実機 gated DoD（可聴変化の確認・要 clap-host build + 実 CLAP effect）→
+PR レビューフロー後に実施。#427（instrument + Pitch DSL 接続）が次。
+
 ### 6.249 docs(dsl): plugin effect/instrument DSL 構文確定 — #425 Option A 決定 + spec 反映 (Jul 13, 2026)
 
 **Date**: 2026-07-13
