@@ -8,6 +8,7 @@ import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
 import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
+import { PluginNoteOutput } from '../midi/plugin-note-output'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -22,6 +23,7 @@ import { MidiManager } from './global/midi-manager'
 import { TransportClock } from './global/transport-clock'
 import { MidiTransportScheduler } from './global/midi-transport-scheduler'
 import { PluginEffectManager } from './global/plugin-effect-manager'
+import { PluginInstrumentManager } from './global/plugin-instrument-manager'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -34,6 +36,7 @@ export class Global {
   private quantizeManager: QuantizeManager
   private midiManager: MidiManager
   private pluginEffectManager: PluginEffectManager
+  private pluginInstrumentManager: PluginInstrumentManager
 
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
@@ -68,6 +71,12 @@ export class Global {
     )
     this.quantizeManager = new QuantizeManager()
     this.midiManager = midiManager ?? new MidiManager()
+    this.midiManager.setPluginOutputFactory(() => new PluginNoteOutput(audioEngine))
+    this.pluginInstrumentManager = new PluginInstrumentManager(
+      audioEngine,
+      this.audioManager,
+      this.linkAudioManager,
+    )
     this.sequenceRegistry = new SequenceRegistry(audioEngine, this)
     this.effectsManager = new EffectsManager(
       this.globalScheduler,
@@ -227,15 +236,18 @@ export class Global {
    * Ableton Link Audio instead of the hardware bus. Hardware output and
    * LinkAudio cannot coexist within the same .orbs file.
    *
-   * Rejected once plugin hosting (`global.effect()`) has already been
-   * declared — v1 mutual exclusion (PH.5).
+   * Rejected once plugin hosting (`global.effect()` or `seq.instrument()`) has
+   * already been declared — v1 mutual exclusion (PH.5).
    *
    * @param targetSampleRate Optional explicit target SR for plugin-side
    *                         resampling. Auto-detect with 48000 fallback when
    *                         omitted.
    */
   linkAudio(targetSampleRate?: number): this {
-    if (this.pluginEffectManager.hasDeclaration()) {
+    if (
+      this.pluginEffectManager.hasDeclaration() ||
+      this.pluginInstrumentManager.hasDeclaration()
+    ) {
       throw new Error(
         'global.linkAudio() cannot be used after plugin hosting has been declared in v1.',
       )
@@ -251,9 +263,36 @@ export class Global {
     return this.linkAudioManager.isEnabled()
   }
 
+  /**
+   * v1 mutual exclusion between `global.effect()` and `seq.instrument()`
+   * (daemon single-plugin slot limitation; planned for #431). Checked here —
+   * rather than inside each manager — so neither manager needs a closure over
+   * the other (mirrors the `linkAudio()` cross-manager check above). Each
+   * caller passes the *other* manager, so a repeat call declaring the same
+   * plugin again (idempotent path, handled inside the manager itself) is
+   * unaffected.
+   */
+  private assertNoCrossPluginDeclaration(
+    other: PluginEffectManager | PluginInstrumentManager,
+  ): void {
+    if (other.hasDeclaration()) {
+      throw new Error(
+        'v1 does not support simultaneous effect and instrument use (daemon single-plugin slot limitation; planned for #431).',
+      )
+    }
+  }
+
   /** Eagerly load the v1 single master-insert plugin. */
   async effect(path: string, pluginId?: string): Promise<this> {
+    this.assertNoCrossPluginDeclaration(this.pluginInstrumentManager)
     await this.pluginEffectManager.effect(path, pluginId)
+    return this
+  }
+
+  /** Eagerly load the v1 single hosted instrument plugin (shared by note sequences). */
+  async instrument(path: string, pluginId?: string): Promise<this> {
+    this.assertNoCrossPluginDeclaration(this.pluginEffectManager)
+    await this.pluginInstrumentManager.instrument(path, pluginId)
     return this
   }
 

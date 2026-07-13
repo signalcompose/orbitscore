@@ -18,6 +18,8 @@ export interface HandshakeFrame {
 export type CommandMethod =
   | 'LoadSample'
   | 'LoadPlugin'
+  | 'PluginNoteOn'
+  | 'PluginNoteOff'
   | 'UnloadSample'
   | 'PlayAt'
   | 'Stop'

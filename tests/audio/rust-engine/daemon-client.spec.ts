@@ -73,7 +73,9 @@ describe('DaemonClient with mock server', () => {
       }),
     })
     await client.start({ wsUrlOverride: url })
-    await expect(client.loadPlugin('/tmp/echo.clap', 'com.example.echo')).resolves.toEqual({
+    await expect(
+      client.loadPlugin('/tmp/echo.clap', 'com.example.echo', 'effect'),
+    ).resolves.toEqual({
       pluginId: 'com.example.echo',
       pluginName: 'Example Echo',
       notePortIndex: 2,
@@ -95,9 +97,35 @@ describe('DaemonClient with mock server', () => {
       },
     })
     await client.start({ wsUrlOverride: url })
-    await expect(client.loadPlugin('/tmp/echo.clap')).rejects.toBeInstanceOf(DaemonProtocolError)
-    await expect(client.loadPlugin('/tmp/echo.clap')).rejects.toMatchObject({
+    await expect(client.loadPlugin('/tmp/echo.clap', undefined, 'effect')).rejects.toBeInstanceOf(
+      DaemonProtocolError,
+    )
+    await expect(client.loadPlugin('/tmp/echo.clap', undefined, 'effect')).rejects.toMatchObject({
       code: 'CLAP_UNAVAILABLE',
+    })
+  })
+
+  it('LoadPlugin sends instrument role and PluginNoteOn/Off wire params', async () => {
+    const url = await server.start({
+      LoadPlugin: () => ({ plugin_id: 'synth', plugin_name: 'Synth', note_port_index: 0 }),
+      PluginNoteOn: () => ({}),
+      PluginNoteOff: () => ({}),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.loadPlugin('/tmp/synth.clap', undefined, 'instrument')
+    await client.pluginNoteOn(60, 0, 0.75)
+    await client.pluginNoteOff(60, 0, 0.25)
+
+    expect(server.received.find((r) => r.method === 'LoadPlugin')?.params.role).toBe('instrument')
+    expect(server.received.find((r) => r.method === 'PluginNoteOn')?.params).toEqual({
+      key: 60,
+      channel: 0,
+      velocity: 0.75,
+    })
+    expect(server.received.find((r) => r.method === 'PluginNoteOff')?.params).toEqual({
+      key: 60,
+      channel: 0,
+      velocity: 0.25,
     })
   })
 

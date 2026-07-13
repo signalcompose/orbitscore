@@ -327,13 +327,16 @@ export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
   // runtime exemption をミラー、#282) を、ドキュメント1パスで同時に分類する。
   const outputPatterns = new Map<string, RegExp>()
   const midiPatterns = new Map<string, RegExp>()
+  const instrumentPatterns = new Map<string, RegExp>()
   for (const name of sequenceNames) {
     outputPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.output\\s*\\(`))
     midiPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.midi\\s*\\(`))
+    instrumentPatterns.set(name, new RegExp(`\\b${name}\\b[^\\n]*\\.instrument\\s*\\(`))
   }
 
   const namesWithOutput = new Set<string>()
   const namesWithMidi = new Set<string>()
+  const namesWithInstrument = new Set<string>()
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
     if (!raw || raw.trim().startsWith('//')) continue
@@ -344,11 +347,16 @@ export function analyzeLinkAudioMissingOutput(text: string): DiagnosticIssue[] {
     for (const [name, pattern] of midiPatterns) {
       if (pattern.test(line)) namesWithMidi.add(name)
     }
+    for (const [name, pattern] of instrumentPatterns) {
+      if (pattern.test(line)) namesWithInstrument.add(name)
+    }
   }
 
   const orphans = new Set<string>()
   for (const name of sequenceNames) {
-    if (!namesWithOutput.has(name) && !namesWithMidi.has(name)) orphans.add(name)
+    if (!namesWithOutput.has(name) && !namesWithMidi.has(name) && !namesWithInstrument.has(name)) {
+      orphans.add(name)
+    }
   }
   if (orphans.size === 0) return issues
 

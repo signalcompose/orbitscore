@@ -62,7 +62,14 @@ export interface AudioEngine {
   setLinkTempo?(bpm: number): Promise<void>
 
   /** Eagerly load a plugin into the engine's master effect insert. */
-  loadPlugin?(filePath: string, pluginId?: string): Promise<PluginLoadResult>
+  loadPlugin?(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+  ): Promise<PluginLoadResult>
+
+  pluginNoteOn?(key: number, channel: number, velocity: number): Promise<void>
+  pluginNoteOff?(key: number, channel: number, velocity?: number): Promise<void>
 
   /**
    * Whether a previously-declared plugin is currently active in the engine

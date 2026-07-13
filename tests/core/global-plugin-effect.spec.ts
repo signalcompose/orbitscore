@@ -44,7 +44,11 @@ describe('Global.effect()', () => {
     await expect(global.effect('./echo.clap', 'echo-id')).resolves.toBe(global)
     await global.effect('./echo.clap', 'echo-id')
     expect(loadPlugin).toHaveBeenCalledTimes(1)
-    expect(loadPlugin).toHaveBeenCalledWith(path.resolve('/songs/session', 'echo.clap'), 'echo-id')
+    expect(loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'echo.clap'),
+      'echo-id',
+      'effect',
+    )
   })
 
   it('treats different spec spellings that resolve to the same path as idempotent', async () => {
@@ -133,6 +137,7 @@ describe('Global.effect()', () => {
         2,
         path.resolve('/songs/session', 'echo.clap'),
         'echo-id',
+        'effect',
       )
     })
 

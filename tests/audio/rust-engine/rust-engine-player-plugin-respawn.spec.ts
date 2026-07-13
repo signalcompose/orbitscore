@@ -10,6 +10,8 @@ interface FakeDaemon {
   off: ReturnType<typeof vi.fn>
   on: ReturnType<typeof vi.fn>
   loadPlugin: ReturnType<typeof vi.fn>
+  pluginNoteOn: ReturnType<typeof vi.fn>
+  pluginNoteOff: ReturnType<typeof vi.fn>
   quit: ReturnType<typeof vi.fn>
 }
 
@@ -28,11 +30,53 @@ function createHarness() {
     off: vi.fn(),
     on: vi.fn(),
     loadPlugin: vi.fn().mockResolvedValue(ECHO_LOAD_RESULT),
+    pluginNoteOn: vi.fn().mockResolvedValue(undefined),
+    pluginNoteOff: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
   }
   Object.defineProperty(player, 'daemon', { value: daemon })
   return { player, daemon }
 }
+
+describe('RustEnginePlayer plugin note ordering', () => {
+  it('issues note sends synchronously with no await boundary before the daemon call', async () => {
+    const { player, daemon } = createHarness()
+    // pluginActive only flips true after a successful loadPlugin() — mirrors
+    // the real seq.instrument() -> daemon.loadPlugin() -> note dispatch order.
+    await player.loadPlugin('/plugins/echo.clap', 'echo-id', 'instrument')
+    const on = player.pluginNoteOn(60, 0, 0.75)
+    const off = player.pluginNoteOff(60, 0)
+    expect(daemon.pluginNoteOn).toHaveBeenCalledWith(60, 0, 0.75)
+    expect(daemon.pluginNoteOff).toHaveBeenCalledWith(60, 0, undefined)
+    return Promise.all([on, off])
+  })
+
+  it('warns once and drops the note when the daemon is disconnected (C1)', async () => {
+    const { player, daemon } = createHarness()
+    daemon.isRunning.mockReturnValue(false)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await player.pluginNoteOn(60, 0, 1)
+    await player.pluginNoteOff(60, 0)
+    expect(daemon.pluginNoteOn).not.toHaveBeenCalled()
+    expect(daemon.pluginNoteOff).not.toHaveBeenCalled()
+    // warn-once: two drops, one warning.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('daemon is not connected'))
+  })
+
+  it('warns once and drops the note when pluginActive is false (C2 — respawn restore failed)', async () => {
+    const { player, daemon } = createHarness()
+    // Daemon is connected, but no successful loadPlugin() has happened, so
+    // pluginActive is still false (e.g. after a failed post-respawn reload).
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await player.pluginNoteOn(60, 0, 1)
+    await player.pluginNoteOff(60, 0)
+    expect(daemon.pluginNoteOn).not.toHaveBeenCalled()
+    expect(daemon.pluginNoteOff).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('was not restored'))
+  })
+})
 
 describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
   const players: RustEnginePlayer[] = []
@@ -45,13 +89,13 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
   it('reissues every successfully loaded plugin after respawn', async () => {
     const { player, daemon } = createHarness()
     players.push(player)
-    await player.loadPlugin('/plugins/echo.clap', 'echo-id')
+    await player.loadPlugin('/plugins/echo.clap', 'echo-id', 'effect')
     daemon.loadPlugin.mockClear()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     await (player as any).respawnLoop()
 
-    expect(daemon.loadPlugin).toHaveBeenCalledWith('/plugins/echo.clap', 'echo-id')
+    expect(daemon.loadPlugin).toHaveBeenCalledWith('/plugins/echo.clap', 'echo-id', 'effect')
     // C1: a successful reload must flip pluginActive back to true, so
     // PluginEffectManager's self-heal check doesn't mistake this recovery
     // for a still-stale cache.
@@ -61,7 +105,7 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
   it('logs a reload failure and retains the plugin for the next respawn retry', async () => {
     const { player, daemon } = createHarness()
     players.push(player)
-    await player.loadPlugin('/plugins/echo.clap', 'echo-id')
+    await player.loadPlugin('/plugins/echo.clap', 'echo-id', 'instrument')
     daemon.loadPlugin.mockClear()
     daemon.loadPlugin
       .mockRejectedValueOnce(new Error('reload failed'))
@@ -80,7 +124,11 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
 
     await (player as any).respawnLoop()
     expect(daemon.loadPlugin).toHaveBeenCalledTimes(2)
-    expect(daemon.loadPlugin).toHaveBeenLastCalledWith('/plugins/echo.clap', 'echo-id')
+    expect(daemon.loadPlugin).toHaveBeenLastCalledWith(
+      '/plugins/echo.clap',
+      'echo-id',
+      'instrument',
+    )
     expect(player.isPluginActive()).toBe(true)
   })
 })
@@ -100,7 +148,7 @@ describe('RustEnginePlayer.loadPlugin() error conversion', () => {
       new DaemonProtocolError('CLAP_UNAVAILABLE', 'clap host is unavailable'),
     )
 
-    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id')).rejects.toThrow(
+    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id', 'effect')).rejects.toThrow(
       '--features clap-host',
     )
   })
@@ -112,7 +160,7 @@ describe('RustEnginePlayer.loadPlugin() error conversion', () => {
       new DaemonProtocolError('PLUGIN_LOAD_FAILED', 'the plugin crashed on init'),
     )
 
-    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id')).rejects.toThrow(
+    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id', 'effect')).rejects.toThrow(
       /^Failed to load plugin:/,
     )
   })
@@ -123,18 +171,20 @@ describe('RustEnginePlayer.loadPlugin() error conversion', () => {
     const original = new Error('unexpected transport failure')
     daemon.loadPlugin.mockRejectedValueOnce(original)
 
-    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id')).rejects.toBe(original)
+    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id', 'effect')).rejects.toBe(
+      original,
+    )
   })
 
   it('flips pluginActive to false when a subsequent loadPlugin call fails', async () => {
     const { player, daemon } = createHarness()
     players.push(player)
-    await player.loadPlugin('/plugins/echo.clap', 'echo-id')
+    await player.loadPlugin('/plugins/echo.clap', 'echo-id', 'effect')
     expect(player.isPluginActive()).toBe(true)
 
     daemon.loadPlugin.mockRejectedValueOnce(new Error('daemon transport failure'))
 
-    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id')).rejects.toThrow(
+    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id', 'effect')).rejects.toThrow(
       'daemon transport failure',
     )
     // The catch block must not rely on callers guaranteeing false-on-entry —

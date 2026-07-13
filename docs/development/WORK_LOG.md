@@ -17,6 +17,89 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.252 feat(dsl): seq.instrument() — Pitch DSL note の daemon 配線 #427 (Jul 14, 2026)
+
+**Date**: 2026-07-14
+**Status**: ✅ 実装・受け入れ監査 GO・実機 E2E で DoD 達成（PR 作成・レビューフローへ）
+**Branch**: `427-clap-instrument-dsl-wiring`
+**Commit**: `3d5aa7e`
+
+#425 確定構文の instrument 側を実装。Pitch DSL v1.1 の note 出力を daemon の
+`PluginNoteOn`/`PluginNoteOff` へ振り向け、「DSL の度数から CLAP instrument が鳴る」を
+初めて成立させた。Epic #424 Stage 1 の後半。
+
+**設計（Fable 実装前相談 GO・統合点7つを事前特定）**:
+- **`MidiOutput` interface が seam**: `PluginNoteOutput implements MidiOutput` により
+  度数解決・gate/tie/legato・voicelead・スケジューラを既存 MIDI 経路と完全共有
+  （新規実装は出力アダプタのみ）
+- `isNoteSequence()` 新設（= isMidi ∨ isInstrument）: 意味論6箇所を置換・出力先4箇所は
+  明示分岐。`isMidi()` の意味（RtMidi 出力）は不変
+- `scheduleMidiEvents` は fork せず `resolveNoteTarget()` でパラメータ化
+  （instrument = plugin scheduler・channel 1→wire 0・**sendDelay 0 = midiLatency 非適用**）
+- 第2 `MidiScheduler`（plugin 用）を MidiManager が保持し **start/stop/panic の既存連鎖に
+  組み込み**（global.stop() で instrument も止まる = PH.4）
+- detune warn+skip は Stage A の per-sequence once-flag + ゼロ潰し（pitchBend 非 enqueue）
+- 順序保証: `pluginNoteOn/Off` は **ws.send 前に await を置かない契約**（daemon read loop の
+  逐次性と合わせ「同期 send 順 = 演奏順」・コメントで明文化）・未接続 drop は ❌ log
+- effect⇔instrument の双方向早期エラー（同一 path 含む・#431 で撤去のチェック項目を
+  #431 本文に追記済み）・linkAudio 双方向・`loadedPlugin` キャッシュに role 保存
+  （respawn 後に effect として復元される事故の芽を排除）
+
+**実装（Codex 委譲・罠7点 🔴 明示）**: 21 files changed, 784 insertions(+), 45 deletions(-)・新規3モジュール
+（plugin-note-output / plugin-instrument-manager / 各テスト）+ VS Code 診断免除。
+逸脱なしと報告され、監査で全遵守を確認。
+
+**受け入れ監査（Fable・GO）**: PH.1-PH.6 全項目適合・罠7点全遵守・
+**既存 MIDI 経路は bit-equivalent 判定**（instrument 未宣言時 isNoteSequence は恒等・
+effect wire は同一バイト列・751 テスト再実行 green）・await-before-send 契約を独立再検証。
+Minor 4 件（detune の直接スパイ検証等）は非ブロッカーとして PR レビューへ。
+
+**検証**: `npm test` **1327 passed / 0 failed / 29 skipped**（+22 新規・main 環境）。
+
+**実機 gated E2E（DoD 達成・self-run 許可の範囲）**:
+`global.key("C")` + `seq.instrument("CLAPTestSynth.clap")`（**バンドルディレクトリ・
+#433 修正入り daemon**）+ `play(1, 3, 5, 8)` → 実発音。capture 計測
+**peak = 0.2500（厳密一致）** = clap-test-synth の既知振幅で PR #422 実機検証と同一
+シグネチャ。DSL → LoadPlugin(role=instrument) → PluginNoteOn/Off → CLAP synth →
+master bus の全経路を客観実証。eager 検証も実地確認（key 未宣言で宣言時ハードエラー）。
+
+**/simplify（4観点並行・2エージェントが API stall で1回失敗し再実行・適用4件/スキップ多数）**:
+- 適用: ①**effect⇔instrument 排他 guard を Global に集約**（altitude 指摘・
+  `Global.linkAudio()` と同型のパターンに揃え、相互コンストラクタクロージャの
+  前方参照脆弱性を解消。fixer 自身が実装中に「自分の宣言も誤検査する」バグを
+  発見し「相手 manager のみ検査」に修正）②`isNoteSequence()` の使い漏らし3箇所
+  （activeScheduler/scheduleEventsFromTime/scheduleEvents）を統合（reuse+simplification
+  一致）③`PluginNoteOutput.noteOff` の送信ロジック重複を `sendTrackedNoteOff` に統合
+  （reuse+simplification 一致）④`daemon-client.ts` の余剰 `.then(() => undefined)` 除去
+- スキップ（理由つき）: PluginEffectManager/PluginInstrumentManager の共通基底化
+  （#431/#434 で作り直される層への過剰投資 — altitude 自身が「正しい抑制」と評価）／
+  MidiManager・ActiveNoteTracker の共通化（同理由）／テストヘルパー共通化（既存慣習・別課題）
+- 適用後検証: `npm test` 1327 passed / 0 failed・lint 変更ファイル新規指摘ゼロ
+
+**/code:pr-review-team round 1（4レビュアー並行 + CI）**:
+- code-reviewer PASS（レース窓・7分岐すべて独立追跡）
+- silent-failure-hunter: HIGH 2件（drop ログのレート制限なし・respawn 失敗後も
+  pluginActive 未確認で送信継続）+ MEDIUM 3件（interface メソッド欠如時の完全サイレント
+  経路・guard バイパス可能な public getter・detune once-flag のリセット契約未文書化）
+- pr-test-analyzer: Important 1件（`clearEvents` の instrument 分岐 = PH.4 の note 解放
+  義務そのものが未テスト）+ Minor 5件
+- comment-analyzer: doc 更新漏れ4件（`linkAudio()`/`midi()` JSDoc・spec バナーの
+  「未実装」放置・WORK_LOG diffstat 誤り）
+- fixer 適用: 既存 `warnOnce`/`GapKind` 機構に乗せてレート制限（HIGH×2 解消）・
+  `getPluginInstrumentManager()` 削除しテストを Global 経由に統一（guard バイパス解消）・
+  `clearEvents` instrument 分岐のテスト追加・interface メソッド欠如時の console.error 追加・
+  doc 更新4件（spec バナー = #426/#427 実装済みに更新・#428 のみ残と明記）
+- 検証: `npm test` **1330 passed / 0 failed / 29 skipped**（+3）・lint 変更ファイル新規指摘ゼロ
+
+**round 2（silent-failure-hunter 再検証）**: HIGH 2件・MEDIUM 2件とも解消を確認
+（機能面まで検証・guard バイパス経路が repo 全体で 0 件であることを grep で確認）。
+新規は LOW 1件のみ（`warned` ラッチのリセットが `stopAll()` のみで respawn 時に
+再アームしない — ただし他の unconditional ログが episode レベルの可観測性を
+既に担保しており non-blocking と評価・**#437 起票**）。**Critical/Important = 0・
+CI 4/4 pass**。silent-failure-hunter round1 の MEDIUM Finding5（detune once-flag の
+リセット契約未文書化）は **#438 起票**（複数レビュアーが独立指摘・実害なしの
+ドキュメント/テスト債務として follow-up 化）
+
 ### 6.251 fix(daemon): discovery の macOS .clap バンドルディレクトリ解決 #433 (Jul 14, 2026)
 
 **Date**: 2026-07-14

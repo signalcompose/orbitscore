@@ -460,6 +460,17 @@ describe('analyzeLinkAudioMissingOutput', () => {
     expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
   })
 
+  it('does not flag an instrument sequence with no .output() under linkAudio mode', () => {
+    const text = [
+      'global.linkAudio()',
+      'var synth = init global.seq',
+      'synth.instrument("synth.clap").octave(4)',
+      'synth.play(1, 3, 5)',
+    ].join('\n')
+
+    expect(analyzeLinkAudioMissingOutput(text)).toEqual([])
+  })
+
   it('flags only the orphan AUDIO sequence in a mixed MIDI + LinkAudio file (#282 coexistence)', () => {
     // Mirrors examples/19_iac_linkaudio_coexist.orbs: MIDI voices (no .output(),
     // exempt) coexisting with audio channels. Only the audio sequence missing

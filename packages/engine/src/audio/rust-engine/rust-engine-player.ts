@@ -50,9 +50,12 @@ import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './e
  * boundary で明示する未対応 feature gap の種別（A4 era）。
  * - `outputChannel`(LinkAudio) / `masterEffect`: 未対応 feature gap。
  * - `linkTempo`: Link テンポリード（#283・A4-PR3）。daemon が feature 無効ビルドなら warn-once。
+ * - `pluginNoteDrop`: daemon 未接続時に plugin note-on/off が silent drop される gap（#427 レビュー C1）。
+ * - `pluginInactive`: respawn 後の instrument 復元失敗（`pluginActive===false`）で note が
+ *   silent drop される gap（#427 レビュー C2）。
  * pan / slice 領域 / slice varispeed（rate≠1.0）は実装済みのため gap ではない。
  */
-type GapKind = 'outputChannel' | 'masterEffect' | 'linkTempo'
+type GapKind = 'outputChannel' | 'masterEffect' | 'linkTempo' | 'pluginNoteDrop' | 'pluginInactive'
 
 /** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
 export interface SliceSpec {
@@ -234,6 +237,8 @@ const freshWarned = (): Record<GapKind, boolean> => ({
   outputChannel: false,
   masterEffect: false,
   linkTempo: false,
+  pluginNoteDrop: false,
+  pluginInactive: false,
 })
 
 export class RustEnginePlayer implements AudioEngineBackend {
@@ -259,10 +264,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
   /**
-   * v1 は単一 master insert（PluginEffectManager が上流で保証）。daemon crash 後に
-   * replay する宣言 intent。
+   * v1 は effect / instrument 共通の単一 plugin slot（各 manager が上流で保証）。
+   * daemon crash 後に同じ role で replay する宣言 intent。
    */
-  private loadedPlugin?: { filePath: string; pluginId?: string }
+  private loadedPlugin?: {
+    filePath: string
+    pluginId?: string
+    role: 'effect' | 'instrument'
+  }
   /**
    * Whether `loadedPlugin` is actually loaded in the daemon right now (silent-failure
    * guard). Set true on a successful `loadPlugin()`/reload, false when a post-respawn
@@ -600,10 +609,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * build hint, other codes → generic wrap); non-protocol errors pass through
    * unchanged.
    */
-  async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
+  async loadPlugin(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+  ): Promise<PluginLoadResult> {
     try {
-      const result = await this.daemon.loadPlugin(filePath, pluginId)
-      this.loadedPlugin = { filePath, pluginId }
+      const result = await this.daemon.loadPlugin(filePath, pluginId, role)
+      this.loadedPlugin = { filePath, pluginId, role }
       this.pluginActive = true
       return result
     } catch (err) {
@@ -621,6 +634,45 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  pluginNoteOn(key: number, channel: number, velocity: number): Promise<void> {
+    if (!this.daemon.isRunning()) {
+      this.warnOnce(
+        'pluginNoteDrop',
+        '⚠️  [rust-engine] plugin note-on/off dropped: daemon is not connected (notes will be silently dropped until reconnect)',
+      )
+      return Promise.resolve()
+    }
+    if (!this.pluginActive) {
+      this.warnOnce(
+        'pluginInactive',
+        '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
+      )
+      return Promise.resolve()
+    }
+    // Ordering contract: do not insert an await before this call. Daemon requests are
+    // processed sequentially, so synchronous WebSocket send order is musical note order.
+    return this.daemon.pluginNoteOn(key, channel, velocity)
+  }
+
+  pluginNoteOff(key: number, channel: number, velocity?: number): Promise<void> {
+    if (!this.daemon.isRunning()) {
+      this.warnOnce(
+        'pluginNoteDrop',
+        '⚠️  [rust-engine] plugin note-on/off dropped: daemon is not connected (notes will be silently dropped until reconnect)',
+      )
+      return Promise.resolve()
+    }
+    if (!this.pluginActive) {
+      this.warnOnce(
+        'pluginInactive',
+        '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
+      )
+      return Promise.resolve()
+    }
+    // Keep the synchronous send ordering contract documented above: no await here.
+    return this.daemon.pluginNoteOff(key, channel, velocity)
+  }
+
   /**
    * Re-issues the last successful plugin declaration after a daemon respawn (the
    * new daemon process starts with no plugins loaded). Broad catch is intentional:
@@ -632,9 +684,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
    */
   private async reloadPluginsAfterRespawn(): Promise<void> {
     if (!this.loadedPlugin) return
-    const { filePath, pluginId } = this.loadedPlugin
+    const { filePath, pluginId, role } = this.loadedPlugin
     try {
-      await this.daemon.loadPlugin(filePath, pluginId)
+      await this.daemon.loadPlugin(filePath, pluginId, role)
       this.pluginActive = true
     } catch (err) {
       this.pluginActive = false
