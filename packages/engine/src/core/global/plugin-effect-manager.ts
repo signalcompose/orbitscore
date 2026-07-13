@@ -18,7 +18,6 @@ export class PluginEffectManager {
     private readonly audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
-    private readonly hasInstrumentDeclaration: () => boolean = () => false,
   ) {}
 
   hasDeclaration(): boolean {
@@ -35,12 +34,6 @@ export class PluginEffectManager {
 
     if (this.linkAudioManager.isEnabled()) {
       throw new Error('global.effect() cannot be used while LinkAudio is enabled in v1.')
-    }
-
-    if (this.hasInstrumentDeclaration()) {
-      throw new Error(
-        'v1 does not support simultaneous effect and instrument use (daemon single-plugin slot limitation; planned for #431).',
-      )
     }
 
     const resolvedPath = resolvePluginPath(

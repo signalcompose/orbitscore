@@ -390,7 +390,7 @@ export class Sequence {
         `Sequence '${name}': instrument() cannot be combined with audio()/chop()/midi().`,
       )
     }
-    await this.global.getPluginInstrumentManager().instrument(pluginPath, pluginId)
+    await this.global.instrument(pluginPath, pluginId)
     this._instrumentDeclared = true
     return this
   }
@@ -632,9 +632,7 @@ export class Sequence {
    * MIDI stay in sync (§1).
    */
   private activeScheduler(): Scheduler {
-    return this.isMidi() || this.isInstrument()
-      ? this.global.getMidiTransport()
-      : this.global.getScheduler()
+    return this.isNoteSequence() ? this.global.getMidiTransport() : this.global.getScheduler()
   }
 
   /**
@@ -1145,11 +1143,7 @@ export class Sequence {
 
   // Schedule events from a specific time onwards (for seamless parameter changes)
   private scheduleEventsFromTime(scheduler: Scheduler, fromTime: number): void {
-    if (this.isMidi()) {
-      this.scheduleMidiEvents(scheduler.startTime, fromTime)
-      return
-    }
-    if (this.isInstrument()) {
+    if (this.isNoteSequence()) {
       this.scheduleMidiEvents(scheduler.startTime, fromTime)
       return
     }
@@ -1230,11 +1224,7 @@ export class Sequence {
     loopIteration: number = 0,
     baseTime: number = 0,
   ): Promise<void> {
-    if (this.isMidi()) {
-      this.scheduleMidiEvents(scheduler.startTime, baseTime)
-      return
-    }
-    if (this.isInstrument()) {
+    if (this.isNoteSequence()) {
       this.scheduleMidiEvents(scheduler.startTime, baseTime)
       return
     }

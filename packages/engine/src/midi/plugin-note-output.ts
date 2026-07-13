@@ -23,9 +23,7 @@ export class PluginNoteOutput implements MidiOutput {
 
   noteOff(port: string, channel: number, note: number, owner: string): void {
     const key = Math.max(0, Math.min(127, Math.round(note)))
-    void this.engine
-      .pluginNoteOff?.(key, channel - 1)
-      ?.catch((err) => console.error('❌ PluginNoteOff failed', { key, err }))
+    this.sendTrackedNoteOff({ port, channel, note: key, owner })
     const index = this.activeNotes.findIndex(
       (active) =>
         active.port === port &&

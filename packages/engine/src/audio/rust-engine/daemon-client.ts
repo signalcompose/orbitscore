@@ -373,7 +373,7 @@ export class DaemonClient extends EventEmitter {
   }
 
   pluginNoteOn(key: number, channel: number, velocity: number): Promise<void> {
-    return this.request('PluginNoteOn', { key, channel, velocity }).then(() => undefined)
+    return this.request('PluginNoteOn', { key, channel, velocity }) as unknown as Promise<void>
   }
 
   pluginNoteOff(key: number, channel: number, velocity?: number): Promise<void> {
@@ -381,7 +381,7 @@ export class DaemonClient extends EventEmitter {
       key,
       channel,
       ...(velocity === undefined ? {} : { velocity }),
-    }).then(() => undefined)
+    }) as unknown as Promise<void>
   }
 
   async getStatus(): Promise<Record<string, unknown>> {

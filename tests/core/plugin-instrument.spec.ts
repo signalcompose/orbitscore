@@ -68,12 +68,10 @@ describe('PluginInstrumentManager', () => {
   it('rejects effect and instrument in both declaration orders, including the same path', async () => {
     const first = makeGlobal().global
     await first.effect('shared.clap')
-    await expect(first.getPluginInstrumentManager().instrument('shared.clap')).rejects.toThrow(
-      '#431',
-    )
+    await expect(first.instrument('shared.clap')).rejects.toThrow('#431')
 
     const second = makeGlobal().global
-    await second.getPluginInstrumentManager().instrument('shared.clap')
+    await second.instrument('shared.clap')
     await expect(second.effect('shared.clap')).rejects.toThrow('#431')
   })
 
