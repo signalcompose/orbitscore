@@ -16,9 +16,14 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use orbit_audio_daemon::engine_wrap::EngineWrap;
-use orbit_audio_daemon::outproc_instrument::OutProcInstrumentConfig;
+use orbit_audio_daemon::outproc_instrument::{OutProcInstrumentConfig, PROBE_KEY};
 
 const PLUGIN_ID: &str = "com.signalcompose.clap-test-synth";
+/// `plugin_note_on`/`plugin_note_off` take `(key, channel, velocity)`; derive both from the
+/// single `PROBE_KEY` the daemon publishes `probe_live_count` for, so this test can't drift out
+/// of sync with the probe voice it asserts against.
+const PROBE_NOTE_KEY: u8 = PROBE_KEY.key as u8;
+const PROBE_NOTE_CHANNEL: u8 = PROBE_KEY.channel as u8;
 
 fn repo_path(rel: &str) -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../..")).join(rel)
@@ -77,7 +82,9 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
     let (engine, _guard) =
         EngineWrap::start_outproc_instrument(setup_test()).expect("start OOP instrument daemon");
 
-    engine.plugin_note_on(69, 0, 0.8).expect("send A4 note on");
+    engine
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .expect("send A4 note on");
     let sounded = wait_until(Duration::from_secs(3), || {
         engine
             .outproc_instrument_stats()
@@ -85,7 +92,7 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
             .unwrap_or(false)
     });
     engine
-        .plugin_note_off(69, 0, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
         .expect("send A4 note off");
     let note_end_received = wait_until(Duration::from_secs(3), || {
         engine
@@ -136,7 +143,7 @@ fn outproc_instrument_survives_child_kill_and_sounds_again() {
         EngineWrap::start_outproc_instrument(setup_test()).expect("start OOP instrument daemon");
 
     engine
-        .plugin_note_on(69, 0, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
         .expect("send pre-kill A4 note on");
     let sounded_before = wait_until(Duration::from_secs(3), || {
         engine
@@ -145,7 +152,7 @@ fn outproc_instrument_survives_child_kill_and_sounds_again() {
             .unwrap_or(false)
     });
     engine
-        .plugin_note_off(69, 0, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
         .expect("send pre-kill A4 note off");
     let before = engine
         .outproc_instrument_stats()
@@ -185,7 +192,7 @@ fn outproc_instrument_survives_child_kill_and_sounds_again() {
         .fresh;
 
     engine
-        .plugin_note_on(69, 0, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
         .expect("send post-respawn A4 note on");
     let sounded_after = wait_until(Duration::from_secs(3), || {
         engine
@@ -194,7 +201,7 @@ fn outproc_instrument_survives_child_kill_and_sounds_again() {
             .unwrap_or(false)
     });
     engine
-        .plugin_note_off(69, 0, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
         .expect("send post-respawn A4 note off");
 
     let after = engine

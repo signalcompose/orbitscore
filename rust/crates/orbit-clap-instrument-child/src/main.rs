@@ -68,21 +68,6 @@ fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<Neutra
     failures
 }
 
-fn push_output(
-    spill: &mut EventSpillFifo,
-    window: &mut [EventRecord],
-    written: &mut usize,
-    record: EventRecord,
-) -> bool {
-    if *written < window.len() {
-        window[*written] = record;
-        *written += 1;
-        true
-    } else {
-        spill.push(record)
-    }
-}
-
 /// Writes one completed slot, then publishes its sequence with Release ordering.
 ///
 /// `write_slot` must write audio, `output_events`, and `output_event_count`. Their writes must stay
@@ -209,11 +194,11 @@ fn main() -> Result<()> {
                                 continue;
                             };
                             let record = EventRecord::encode(&event);
-                            let spilled = written >= window.len();
-                            if push_output(&mut output_spill, window, &mut written, record) {
-                                if spilled {
-                                    (*region).output_event_spilled_count.fetch_add(1, Relaxed);
-                                }
+                            if written < window.len() {
+                                window[written] = record;
+                                written += 1;
+                            } else if output_spill.push(record) {
+                                (*region).output_event_spilled_count.fetch_add(1, Relaxed);
                             } else {
                                 (*region).output_event_dropped_count.fetch_add(1, Relaxed);
                                 if output_spill.take_note_end_dropped() {

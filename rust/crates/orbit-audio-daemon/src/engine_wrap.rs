@@ -910,13 +910,7 @@ impl EngineWrap {
     pub fn plugin_note_on(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
         self.push_outproc_instrument_event(orbit_audio_sandbox::NeutralEvent::NoteOn {
             sample_offset: 0,
-            addr: orbit_audio_sandbox::VoiceAddr {
-                note_id: -1,
-                port_index: 0,
-                channel: channel as i16,
-                key: key as i16,
-                _pad: 0,
-            },
+            addr: Self::outproc_instrument_voice_addr(channel, key),
             velocity,
             tuning_cents: 0.0,
             length_frames: 0,
@@ -928,15 +922,22 @@ impl EngineWrap {
     pub fn plugin_note_off(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
         self.push_outproc_instrument_event(orbit_audio_sandbox::NeutralEvent::NoteOff {
             sample_offset: 0,
-            addr: orbit_audio_sandbox::VoiceAddr {
-                note_id: -1,
-                port_index: 0,
-                channel: channel as i16,
-                key: key as i16,
-                _pad: 0,
-            },
+            addr: Self::outproc_instrument_voice_addr(channel, key),
             velocity,
         })
+    }
+
+    /// Builds the `VoiceAddr` shared by `plugin_note_on`/`plugin_note_off` for the
+    /// out-of-process instrument path (single-port, note-id-less MIDI addressing).
+    #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
+    fn outproc_instrument_voice_addr(channel: u8, key: u8) -> orbit_audio_sandbox::VoiceAddr {
+        orbit_audio_sandbox::VoiceAddr {
+            note_id: -1,
+            port_index: 0,
+            channel: channel as i16,
+            key: key as i16,
+            _pad: 0,
+        }
     }
 
     #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]

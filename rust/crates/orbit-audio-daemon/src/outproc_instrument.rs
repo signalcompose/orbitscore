@@ -25,10 +25,23 @@ const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 const TEARDOWN_TIMEOUT: Duration = Duration::from_millis(500);
 const TRY_WAIT_ERROR_LIMIT: u32 = 50;
 pub const NOTE_RING_CAPACITY: usize = 1024;
-const PROBE_KEY: VoiceKey = VoiceKey {
+/// Fixed probe voice (A4 / port 0 / channel 0 / key 69) used by the gated cross-process
+/// NOTE_END test. `pub` so the gated test references this instead of re-hardcoding the triple.
+pub const PROBE_KEY: VoiceKey = VoiceKey {
     port_index: 0,
     channel: 0,
     key: 69,
+};
+/// Placeholder transport passed to every audio block: issue #420 wires DSL/CLI note-on/off
+/// through to a real instrument, but does not yet plumb live tempo/transport state (tracked in
+/// #408). Fixed at 120 BPM / 4-4 / playing until #408 lands.
+const STUB_TRANSPORT: TransportContext = TransportContext {
+    tempo_bpm: 120.0,
+    time_sig_numerator: 4,
+    time_sig_denominator: 4,
+    is_playing: 1,
+    is_looping: 0,
+    song_position_beats: 0.0,
 };
 
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -93,12 +106,8 @@ fn default_child_exe() -> Result<PathBuf, String> {
 #[derive(Default)]
 pub struct OutProcInstrumentStats {
     pub fresh: AtomicU64,
-    pub stale: AtomicU64,
-    pub stall: AtomicU64,
-    pub frames_clamped: AtomicU64,
     pub callback_count: AtomicU64,
     pub respawn_count: AtomicU64,
-    pub last_respawn_ns: AtomicU64,
     pub measurement_invalid: AtomicBool,
     pub child_process_error_count: AtomicU64,
     /// Gated cross-process probe: A4 (port 0 / channel 0 / key 69) の host-side live voice 数。
@@ -199,17 +208,11 @@ impl PostProcessor for OutProcInstrumentPostProcessor {
 
         let process_len = data.len().min(self.audio_scratch.len());
         let scratch = &mut self.audio_scratch[..process_len];
-        scratch.fill(0.0);
-        let transport = TransportContext {
-            tempo_bpm: 120.0,
-            time_sig_numerator: 4,
-            time_sig_denominator: 4,
-            is_playing: 1,
-            is_looping: 0,
-            song_position_beats: 0.0,
-        };
+        // No zero-fill needed here: `process_block` unconditionally overwrites every sample of
+        // `scratch` (fresh copy, stale repeat, or silence), so any prior content is fully
+        // clobbered regardless of branch taken.
         self.host
-            .process_block(scratch, &self.event_scratch, transport);
+            .process_block(scratch, &self.event_scratch, STUB_TRANSPORT);
         // `process_block` drains child output events before returning. Publish the resulting
         // host bookkeeping state for the fixed gated-test probe voice.
         self.stats
@@ -217,33 +220,20 @@ impl PostProcessor for OutProcInstrumentPostProcessor {
             .store(self.host.live_count(PROBE_KEY), Ordering::Relaxed);
 
         // `data` already contains the engine-rendered master. The instrument is parallel audio,
-        // so preserve that master and add the child output from scratch.
+        // so preserve that master and add the child output from scratch, tracking the abs peak
+        // of the summed result in the same pass instead of re-scanning `data` afterward.
+        let mut peak_bits_value = 0u32;
         for (master, instrument) in data[..process_len].iter_mut().zip(scratch.iter()) {
             *master += *instrument;
+            peak_bits_value = peak_bits_value.max(master.to_bits() & 0x7FFF_FFFF);
         }
-
-        // Measure the final master bus after the instrument has been summed into it.
         self.stats
             .post_peak_bits
-            .fetch_max(peak_bits(data), Ordering::Relaxed);
+            .fetch_max(peak_bits_value, Ordering::Relaxed);
 
         self.stats.fresh.store(self.host.fresh, Ordering::Relaxed);
-        self.stats.stale.store(self.host.stale, Ordering::Relaxed);
-        self.stats.stall.store(self.host.stall, Ordering::Relaxed);
-        self.stats
-            .frames_clamped
-            .store(self.host.frames_clamped, Ordering::Relaxed);
         self.stats.callback_count.fetch_add(1, Ordering::Relaxed);
     }
-}
-
-/// Returns the absolute peak as non-negative f32 bits, suitable for atomic `fetch_max`.
-#[inline]
-fn peak_bits(data: &[f32]) -> u32 {
-    data.iter()
-        .map(|sample| sample.to_bits() & 0x7FFF_FFFF)
-        .max()
-        .unwrap_or(0)
 }
 
 pub fn spawn_instrument_child(
@@ -320,7 +310,6 @@ impl InstrumentChildSupervisor {
         };
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_thread = shutdown.clone();
-        let base = Instant::now();
         let watchdog_shm_path = shm_path.clone();
         let (child_tx, child_rx) = std::sync::mpsc::channel::<Child>();
 
@@ -363,10 +352,6 @@ impl InstrumentChildSupervisor {
                                         .store(replacement.id(), Ordering::Relaxed);
                                     child = replacement;
                                     stats.respawn_count.fetch_add(1, Ordering::Relaxed);
-                                    stats.last_respawn_ns.store(
-                                        base.elapsed().as_nanos() as u64,
-                                        Ordering::Relaxed,
-                                    );
                                     // The audio-thread adapter observes this generation counter
                                     // and resets its host-side voice bookkeeping on its next block.
                                 }
