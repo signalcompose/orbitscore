@@ -13,6 +13,7 @@ import { resolveChords, cloneElement } from '../midi/chord/resolve-chords'
 import { voiceLeadOctaves } from '../midi/voice-leading'
 import { cellToGrid } from '../midi/comp-rhythm'
 import { RootContext, SymbolicPitch } from '../midi/types'
+import { MidiScheduler } from '../midi/midi-scheduler'
 import { TimedEvent, TimedEventScope } from '../timing/calculation/types'
 
 import { Global } from './global'
@@ -97,6 +98,8 @@ export class Sequence {
   // A MIDI sequence interprets play() values as degrees, not slice numbers.
   private _midiPort?: string // resolved actual port name
   private _midiChannel?: number // 1..16
+  private _instrumentDeclared = false
+  private _instrumentDetuneWarned = false
   private _gate = 0.8 // default gate length (fraction of slot). spec §1
   private _vel = 96 // default velocity 1..127. spec §1
   private _hold = false // §5.3: auto common-tone tie between consecutive stacks
@@ -358,6 +361,9 @@ export class Sequence {
    */
   midi(portName: string, channel: number): this {
     const name = this.stateManager.getName() || 'sequence'
+    if (this.isInstrument()) {
+      throw new Error(`Sequence '${name}': midi() cannot be combined with instrument().`)
+    }
     if (this._audioFilePath !== undefined) {
       throw new Error(`Sequence '${name}': midi() cannot be combined with audio()/chop().`)
     }
@@ -375,6 +381,26 @@ export class Sequence {
   /** True when this sequence outputs MIDI (declared via `seq.midi()`). */
   isMidi(): boolean {
     return this._midiPort !== undefined
+  }
+
+  async instrument(pluginPath: string, pluginId?: string): Promise<this> {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this._audioFilePath !== undefined || this._chopDivisions !== undefined || this.isMidi()) {
+      throw new Error(
+        `Sequence '${name}': instrument() cannot be combined with audio()/chop()/midi().`,
+      )
+    }
+    await this.global.getPluginInstrumentManager().instrument(pluginPath, pluginId)
+    this._instrumentDeclared = true
+    return this
+  }
+
+  isInstrument(): boolean {
+    return this._instrumentDeclared
+  }
+
+  isNoteSequence(): boolean {
+    return this.isMidi() || this.isInstrument()
   }
 
   /**
@@ -522,8 +548,8 @@ export class Sequence {
 
   audio(filepath: string): this {
     const name = this.stateManager.getName() || 'sequence'
-    if (this.isMidi()) {
-      throw new Error(`Sequence '${name}': audio() cannot be combined with midi().`)
+    if (this.isNoteSequence()) {
+      throw new Error(`Sequence '${name}': audio() cannot be combined with midi()/instrument().`)
     }
     // Resolve to absolute path. Supports path-direct forms (./, ../, ~/, /,
     // contains '/') and bare bank names like "bd" or "bd:2" via the global
@@ -544,9 +570,9 @@ export class Sequence {
   }
 
   chop(divisions: number): this {
-    if (this.isMidi()) {
+    if (this.isNoteSequence()) {
       throw new Error(
-        `Sequence '${this.stateManager.getName() || 'sequence'}': chop() cannot be combined with midi().`,
+        `Sequence '${this.stateManager.getName() || 'sequence'}': chop() cannot be combined with midi()/instrument().`,
       )
     }
     this._chopDivisions = divisions
@@ -606,7 +632,9 @@ export class Sequence {
    * MIDI stay in sync (§1).
    */
   private activeScheduler(): Scheduler {
-    return this.isMidi() ? this.global.getMidiTransport() : this.global.getScheduler()
+    return this.isMidi() || this.isInstrument()
+      ? this.global.getMidiTransport()
+      : this.global.getScheduler()
   }
 
   /**
@@ -617,6 +645,8 @@ export class Sequence {
   private clearEvents(name: string): void {
     if (this.isMidi()) {
       this.global.getMidiManager().getScheduler().clearOwner(name)
+    } else if (this.isInstrument()) {
+      this.global.getMidiManager().getPluginScheduler().clearOwner(name)
     } else {
       this.global.getScheduler().clearSequenceEvents(name)
     }
@@ -737,7 +767,7 @@ export class Sequence {
    * recomputes them with the running pitch range (§2.4).
    */
   private validateMidiDispatch(): void {
-    if (!this.isMidi()) return
+    if (!this.isNoteSequence()) return
     const timedEvents = this.stateManager.getTimedEvents()
     if (!timedEvents) return
     let seqDefault: RootContext | undefined
@@ -769,7 +799,7 @@ export class Sequence {
    * VL sees the full chord regardless.
    */
   private applyVoiceLeading(): void {
-    if (!this.isMidi()) return
+    if (!this.isNoteSequence()) return
     const timedEvents = this.stateManager.getTimedEvents()
     if (!timedEvents) return
     const seqVl = this._voicelead
@@ -840,7 +870,7 @@ export class Sequence {
    * the throw reaches the caller rather than becoming an unhandled rejection.
    */
   private validateNonMidiDispatch(): void {
-    if (this.isMidi()) return
+    if (this.isNoteSequence()) return
     const pattern = this.stateManager.getPlayPattern()
     if (pattern && this.containsStack(pattern)) {
       throw new Error(
@@ -887,18 +917,14 @@ export class Sequence {
       return
     }
 
-    const midi = this.global.getMidiManager()
-    const scheduler = midi.getScheduler()
+    const { scheduler, port, channel, sendDelay } = this.resolveNoteTarget()
     scheduler.start() // idempotent — ensure the lookahead loop is running
 
     const owner = this.stateManager.getName()
-    const port = this._midiPort!
-    const channel = this._midiChannel!
     // Sequence-default context, computed lazily (only if some event falls back
     // to it — a note-name-rooted-only sequence needs no key, §2.3).
     let seqDefault: RootContext | undefined
     const getSeqDefault = (): RootContext => (seqDefault ??= this.resolveRootContext())
-    const sendDelay = midi.sendDelayFor(port)
 
     // ── Stage A: resolve each event to a PlannedNote (§7-0 output stage) ──
     // §2.4 sticky pitch range: a note/rest with an explicit `^N` (rangeSet) sets
@@ -940,7 +966,7 @@ export class Sequence {
         onTime,
         slotDur: ev.duration,
         note, // null = rest (degree 0) or a random-suppressed voice this cycle
-        detune: resolved ? resolved.detune : 0,
+        detune: this.resolveOutputDetune(resolved?.detune ?? 0),
         tie: false,
         legato: !!ev.legato,
         voiceTie: !!ev.voiceTie,
@@ -983,6 +1009,41 @@ export class Sequence {
     }
 
     this.stateManager.setPlaying(true)
+  }
+
+  private resolveNoteTarget(): {
+    scheduler: MidiScheduler
+    port: string
+    channel: number
+    sendDelay: number
+  } {
+    const midi = this.global.getMidiManager()
+    if (this.isInstrument()) {
+      return {
+        scheduler: midi.getPluginScheduler(),
+        port: `plugin:${this.stateManager.getName() || 'sequence'}`,
+        channel: 1,
+        sendDelay: 0,
+      }
+    }
+    const port = this._midiPort!
+    return {
+      scheduler: midi.getScheduler(),
+      port,
+      channel: this._midiChannel!,
+      sendDelay: midi.sendDelayFor(port),
+    }
+  }
+
+  private resolveOutputDetune(detune: number): number {
+    if (!this.isInstrument() || detune === 0) return detune
+    if (!this._instrumentDetuneWarned) {
+      console.warn(
+        `⚠️  Sequence '${this.stateManager.getName() || 'sequence'}': detune is not supported for plugin instruments in v1; skipping detune.`,
+      )
+      this._instrumentDetuneWarned = true
+    }
+    return 0
   }
 
   /** A `_` event-tie PlannedNote: no pitch, never emits — absorbed in Stage B1. */
@@ -1088,6 +1149,10 @@ export class Sequence {
       this.scheduleMidiEvents(scheduler.startTime, fromTime)
       return
     }
+    if (this.isInstrument()) {
+      this.scheduleMidiEvents(scheduler.startTime, fromTime)
+      return
+    }
 
     const timedEvents = this.stateManager.getTimedEvents()
     if (!timedEvents || !this._audioFilePath) {
@@ -1142,7 +1207,7 @@ export class Sequence {
     // "発音 (sounding) sequences". Without this, run()/loop() (which call this
     // eagerly, unlike the schedule paths that early-return for MIDI) wrongly
     // throw for a `.midi()` sequence in a `global.linkAudio()` file (#282).
-    if (this.isMidi()) {
+    if (this.isNoteSequence()) {
       return undefined
     }
     if (!this.global.isLinkAudioEnabled()) {
@@ -1166,6 +1231,10 @@ export class Sequence {
     baseTime: number = 0,
   ): Promise<void> {
     if (this.isMidi()) {
+      this.scheduleMidiEvents(scheduler.startTime, baseTime)
+      return
+    }
+    if (this.isInstrument()) {
       this.scheduleMidiEvents(scheduler.startTime, baseTime)
       return
     }

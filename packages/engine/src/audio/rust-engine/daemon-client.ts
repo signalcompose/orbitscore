@@ -352,20 +352,36 @@ export class DaemonClient extends EventEmitter {
    * Loads a `.clap` plugin into the daemon. Rejects with `DaemonProtocolError` —
    * notably `CLAP_UNAVAILABLE` when the daemon was built without `--features
    * clap-host` — which `RustEnginePlayer.loadPlugin()` converts into an
-   * operator-actionable message. `role` is hardcoded to `'effect'` until #427
-   * threads it through as an argument (e.g. for `seq.instrument()`).
+   * operator-actionable message. The role is forwarded for effect/instrument
+   * restoration compatibility even while older daemons ignore it.
    */
-  async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
+  async loadPlugin(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+  ): Promise<PluginLoadResult> {
     const result = await this.request('LoadPlugin', {
       path: filePath,
       ...(pluginId === undefined ? {} : { plugin_id: pluginId }),
-      role: 'effect',
+      role,
     })
     return {
       pluginId: String(result.plugin_id),
       pluginName: String(result.plugin_name),
       notePortIndex: Number(result.note_port_index),
     }
+  }
+
+  pluginNoteOn(key: number, channel: number, velocity: number): Promise<void> {
+    return this.request('PluginNoteOn', { key, channel, velocity }).then(() => undefined)
+  }
+
+  pluginNoteOff(key: number, channel: number, velocity?: number): Promise<void> {
+    return this.request('PluginNoteOff', {
+      key,
+      channel,
+      ...(velocity === undefined ? {} : { velocity }),
+    }).then(() => undefined)
   }
 
   async getStatus(): Promise<Record<string, unknown>> {

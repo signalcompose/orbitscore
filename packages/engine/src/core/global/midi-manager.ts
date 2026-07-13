@@ -18,8 +18,11 @@ import { RtMidiOutput } from '../../midi/rtmidi-output'
 
 export class MidiManager {
   private readonly outputFactory: () => MidiOutput
+  private pluginOutputFactory?: () => MidiOutput
   private output?: MidiOutput
   private scheduler?: MidiScheduler
+  private pluginOutput?: MidiOutput
+  private pluginScheduler?: MidiScheduler
 
   /** Global key pitch class (0..11), undefined until `global.key()` is called. */
   private keyPitchClass?: number
@@ -48,6 +51,21 @@ export class MidiManager {
       this.scheduler = new MidiScheduler(this.getOutput())
     }
     return this.scheduler
+  }
+
+  setPluginOutputFactory(factory: () => MidiOutput): void {
+    this.pluginOutputFactory = factory
+  }
+
+  getPluginScheduler(): MidiScheduler {
+    if (!this.pluginScheduler) {
+      if (!this.pluginOutputFactory) {
+        throw new Error('Plugin note output has not been configured.')
+      }
+      this.pluginOutput = this.pluginOutputFactory()
+      this.pluginScheduler = new MidiScheduler(this.pluginOutput)
+    }
+    return this.pluginScheduler
   }
 
   /** True once any MIDI scheduler has been created (a MIDI sequence ran). */
@@ -111,15 +129,18 @@ export class MidiManager {
   /** Start the scheduler loop if MIDI is active. */
   start(): void {
     this.scheduler?.start()
+    this.pluginScheduler?.start()
   }
 
   /** Stop the scheduler (panics the output) if MIDI is active. */
   stop(): void {
     this.scheduler?.stop()
+    this.pluginScheduler?.stop()
   }
 
   /** Panic the output directly (CC123/CC120 all channels) if it exists. */
   panic(): void {
     this.output?.panic()
+    this.pluginOutput?.panic()
   }
 }

@@ -259,10 +259,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
   /**
-   * v1 は単一 master insert（PluginEffectManager が上流で保証）。daemon crash 後に
-   * replay する宣言 intent。
+   * v1 は effect / instrument 共通の単一 plugin slot（各 manager が上流で保証）。
+   * daemon crash 後に同じ role で replay する宣言 intent。
    */
-  private loadedPlugin?: { filePath: string; pluginId?: string }
+  private loadedPlugin?: {
+    filePath: string
+    pluginId?: string
+    role: 'effect' | 'instrument'
+  }
   /**
    * Whether `loadedPlugin` is actually loaded in the daemon right now (silent-failure
    * guard). Set true on a successful `loadPlugin()`/reload, false when a post-respawn
@@ -600,10 +604,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * build hint, other codes → generic wrap); non-protocol errors pass through
    * unchanged.
    */
-  async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
+  async loadPlugin(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+  ): Promise<PluginLoadResult> {
     try {
-      const result = await this.daemon.loadPlugin(filePath, pluginId)
-      this.loadedPlugin = { filePath, pluginId }
+      const result = await this.daemon.loadPlugin(filePath, pluginId, role)
+      this.loadedPlugin = { filePath, pluginId, role }
       this.pluginActive = true
       return result
     } catch (err) {
@@ -621,6 +629,25 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  pluginNoteOn(key: number, channel: number, velocity: number): Promise<void> {
+    if (!this.daemon.isRunning()) {
+      console.error('❌ [rust-engine] plugin note-on dropped: daemon is not connected', { key })
+      return Promise.resolve()
+    }
+    // Ordering contract: do not insert an await before this call. Daemon requests are
+    // processed sequentially, so synchronous WebSocket send order is musical note order.
+    return this.daemon.pluginNoteOn(key, channel, velocity)
+  }
+
+  pluginNoteOff(key: number, channel: number, velocity?: number): Promise<void> {
+    if (!this.daemon.isRunning()) {
+      console.error('❌ [rust-engine] plugin note-off dropped: daemon is not connected', { key })
+      return Promise.resolve()
+    }
+    // Keep the synchronous send ordering contract documented above: no await here.
+    return this.daemon.pluginNoteOff(key, channel, velocity)
+  }
+
   /**
    * Re-issues the last successful plugin declaration after a daemon respawn (the
    * new daemon process starts with no plugins loaded). Broad catch is intentional:
@@ -632,9 +659,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
    */
   private async reloadPluginsAfterRespawn(): Promise<void> {
     if (!this.loadedPlugin) return
-    const { filePath, pluginId } = this.loadedPlugin
+    const { filePath, pluginId, role } = this.loadedPlugin
     try {
-      await this.daemon.loadPlugin(filePath, pluginId)
+      await this.daemon.loadPlugin(filePath, pluginId, role)
       this.pluginActive = true
     } catch (err) {
       this.pluginActive = false

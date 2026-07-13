@@ -8,6 +8,7 @@ import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
 import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
+import { PluginNoteOutput } from '../midi/plugin-note-output'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -22,6 +23,7 @@ import { MidiManager } from './global/midi-manager'
 import { TransportClock } from './global/transport-clock'
 import { MidiTransportScheduler } from './global/midi-transport-scheduler'
 import { PluginEffectManager } from './global/plugin-effect-manager'
+import { PluginInstrumentManager } from './global/plugin-instrument-manager'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -34,6 +36,7 @@ export class Global {
   private quantizeManager: QuantizeManager
   private midiManager: MidiManager
   private pluginEffectManager: PluginEffectManager
+  private pluginInstrumentManager: PluginInstrumentManager
 
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
@@ -65,9 +68,17 @@ export class Global {
       audioEngine,
       this.audioManager,
       this.linkAudioManager,
+      () => this.pluginInstrumentManager.hasDeclaration(),
     )
     this.quantizeManager = new QuantizeManager()
     this.midiManager = midiManager ?? new MidiManager()
+    this.midiManager.setPluginOutputFactory(() => new PluginNoteOutput(audioEngine))
+    this.pluginInstrumentManager = new PluginInstrumentManager(
+      audioEngine,
+      this.audioManager,
+      this.linkAudioManager,
+      () => this.pluginEffectManager.hasDeclaration(),
+    )
     this.sequenceRegistry = new SequenceRegistry(audioEngine, this)
     this.effectsManager = new EffectsManager(
       this.globalScheduler,
@@ -136,6 +147,10 @@ export class Global {
   /** Accessor for the shared MIDI manager (used by Sequence MIDI dispatch). */
   getMidiManager(): MidiManager {
     return this.midiManager
+  }
+
+  getPluginInstrumentManager(): PluginInstrumentManager {
+    return this.pluginInstrumentManager
   }
 
   // ─── Chord namespace (§6) ──────────────────────────────────────────────────
@@ -235,7 +250,10 @@ export class Global {
    *                         omitted.
    */
   linkAudio(targetSampleRate?: number): this {
-    if (this.pluginEffectManager.hasDeclaration()) {
+    if (
+      this.pluginEffectManager.hasDeclaration() ||
+      this.pluginInstrumentManager.hasDeclaration()
+    ) {
       throw new Error(
         'global.linkAudio() cannot be used after plugin hosting has been declared in v1.',
       )
