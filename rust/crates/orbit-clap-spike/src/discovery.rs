@@ -96,6 +96,8 @@ impl std::error::Error for DiscoveryError {}
 /// Load a .clap bundle's entry — the unsafe FFI shared by both lookups below.
 /// (The `PluginFactory` borrows from the `PluginEntry`, so the entry must outlive the
 /// factory in the caller's stack frame; that's why this returns the entry, not the factory.)
+// 注: この手組み実装は .clap バンドルディレクトリを解決できない既知の制限がある。production 側
+// （orbit-clap-host）は #433 で上流 `PluginEntry::load` に置換済み。この spike は凍結されたまま修正しない。
 fn open_bundle(path: &Path) -> Result<PluginEntry, DiscoveryError> {
     let bundle_path = CString::new(path.to_string_lossy().as_bytes())
         .map_err(|_| DiscoveryError::NullBundlePath)?;

@@ -17,6 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.251 fix(daemon): discovery の macOS .clap バンドルディレクトリ解決 #433 (Jul 14, 2026)
+
+**Date**: 2026-07-14
+**Status**: ✅ 実装・実機 E2E 済み（PR 作成・レビューフローへ）
+**Branch**: `433-clap-bundle-dir-discovery`
+**Commit**: `610bef4`
+
+#426 実機 E2E で発見した統合ギャップ（discovery が `.clap` バンドルディレクトリを
+そのまま dlopen して失敗）の修正。市販 CLAP プラグイン（Surge XT / FabFilter 等）は
+全てバンドル形式のため、実プラグイン対応の前提。
+
+**実装の経緯（2ラウンド・監査が上流資産を発見）**:
+- Round 1（Codex）: 手組みの `resolve_dylib_path`（stem 候補 → 単一ファイル fallback →
+  0/複数エラー）+ `BundleExecutableNotFound` variant。テスト4件・全検証 green
+- **Fable 受け入れ監査（GO + Important 発見）**: pinned clack-host（rev `f874e858`）に
+  **`PluginEntry::load(path)` が既存**で、NSBundle（Info.plist の CFBundleExecutable）に
+  よる正規の macOS 解決を上流実装済みと一次ソースで確認（`host/src/entry/library.rs:120-148`）。
+  CLAP 契約（dlopen = 実行体・entry init = 元バンドルパス。本家 entry.h L93 で確認）も
+  手組み実装は正しかったが、手組みには CFBundleExecutable ≠ stem + `.DS_Store` 混入で
+  誤エラーになる実運用上の穴。監査は follow-up 化も可としたが、
+  **#433 の目的そのもの（実プラグインが完全に動く）+ 資産再利用の観点で即リワークを選択**
+- Round 2（Codex resume）: `open_bundle` を `PluginEntry::load(path)` に置換（実質1行 +
+  契約コメント）。手組み解決・`BundleExecutableNotFound`・`NullBundlePath`・CString 処理を
+  削除（約40行減）。テストを plist つき4系統に再構成: stem 一致 /
+  **CFBundleExecutable ≠ stem（NSBundle 正規解決の検証・手組み版より強い保証）** /
+  実行体不在エラー / flat-file 後方互換。plist 無しバンドルも NSBundle が stem から
+  推定してロード成功することを手動確認（自動テスト対象外）
+
+**検証（main 環境・非サンドボックス）**:
+- `cargo test --workspace` 全 green（failed 0・orbit-clap-host 24 件・daemon protocol 28 件含む）
+- fmt / clippy / deny 全 green
+- **実機 E2E（fail-before/pass-after）**: fail-before = #426 E2E での
+  `dlopen(<bundle dir>): not a file` エラー（WORK_LOG 6.250 記録済み）→ pass-after =
+  同じバンドルディレクトリ path で `global.effect()` → LoadPlugin 成功・
+  **peak ratio = 0.5000（厳密一致・gain 0.5 の closed-form signature）**
+- 監査も fail-before を独立実測（旧挙動へ一時復元で新テスト 2 件が #426 と同一症状で red）
+
+**owner 対応（同日）**:
+- **#434 起票**: `seq.effect()`（per-track insert）— owner 要望「正直 seq でのエフェクトは
+  入れて欲しかった」を受け、Epic #424 DoD 達成後の最初の CLAP 深掘り項目として明文化
+  （前提 = #431 の部品・新規部分 = per-sequence バスのタップ）
+- ゴール再確認: 「CLAP effect + instrument が完全に動く」まで横展開に入らない
+  （#433 → #427 → #431 → Epic #424 DoD 実機実証）
+
+**/simplify（4観点・適用2件/スキップ2件）**:
+- 適用: ①**ubuntu CI fail の実修復** — テスト fixture（TempDir 等）が Linux で dead code
+  になり clippy --all-targets -D warnings が fail していた → `mod tests` 全体への単一
+  `#[cfg(target_os = "macos")]` で cfg 重複7箇所の解消と CI 修復を同時に達成
+  ②orbit-clap-spike（移植元・凍結）の `open_bundle` に「#433 で上流 API に置換済み」の
+  パンくずコメント（将来のコピペによるバグ再導入防止）
+- スキップ: TempDir 手組み（workspace 慣行4例目・tempfile 依存なし・rule-of-five 待ち）／
+  bundle-macos.sh のテンプレート化（spike 2例のみ・rule-of-three 前）
+- reuse / efficiency は clean（上流 API 置換で entry cache 経路は不変・追加コストは
+  control plane の stat 1回のみ）
+
+**/code:pr-review-team round 1（4レビュアー + CI）**:
+- CI 4/4 pass（cfg ゲート修正で ubuntu clippy 回復）。comment-analyzer ≈ PASS
+  （全 claim を pinned ソース + 本家 entry.h で裏取り）。エラー経路も PASS
+  （NullBundlePath 削除で失われた failure mode なし・DSL への observability 不変）
+- **3レビュアーが同一 Important に収束**: fixture 依存の3テストがサイレント skip で
+  偽 PASS になる（dylib 未ビルド時に assertion ゼロで green・CI は macOS ゲートで
+  未実行のため回帰検知が実質ゼロ）
+- fixer 適用: リポジトリ既存の gated 慣行に準拠 — `#[ignore = "needs a built test CLAP
+  dylib..."]` + 未ビルド時は build 手順つき panic（loud fail を fixture 退避で実測）。
+  `cargo test -p orbit-clap-host --lib` = 21 passed / 3 ignored（正直な表示）・
+  `-- --ignored` = 3 passed。WORK_LOG の hash/文言補正・TESTING_GUIDE に
+  fixture 事前ビルド手順を追加
+
 ### 6.250 feat(dsl): global.effect() — CLAP effect の DSL 疎通 #426 Stage 1 (Jul 14, 2026)
 
 **Date**: 2026-07-14
