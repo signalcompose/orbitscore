@@ -6,9 +6,8 @@
 // プラグインバンドルのロードには unsafe FFI が必要。
 #![allow(unsafe_code)]
 
-use clack_host::entry::{LibraryEntry, PluginEntryError};
+use clack_host::entry::PluginEntryError;
 use clack_host::prelude::PluginEntry;
-use std::ffi::CString;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -75,8 +74,6 @@ pub enum DiscoveryError {
     LoadError(PluginEntryError),
     #[error("ファイルにプラグインファクトリがない")]
     MissingPluginFactory,
-    #[error("バンドルパスに null バイトが含まれる")]
-    NullBundlePath,
 }
 
 impl From<PluginEntryError> for DiscoveryError {
@@ -89,11 +86,10 @@ impl From<PluginEntryError> for DiscoveryError {
 /// `PluginFactory` は `PluginEntry` を借用するため、エントリの方を返す（factory は caller
 /// のスタックフレームで使う）。
 fn open_bundle(path: &Path) -> Result<PluginEntry, DiscoveryError> {
-    let bundle_path = CString::new(path.to_string_lossy().as_bytes())
-        .map_err(|_| DiscoveryError::NullBundlePath)?;
+    // clack-host が macOS の NSBundle / CFBundleExecutable 解決と、CLAP entry init に
+    // 渡す元の .clap バンドルパスの保持を一括して行う。flat-file にも対応する。
     // SAFETY: ネイティブライブラリのロードは本質的に unsafe。
-    let library = unsafe { LibraryEntry::load_from_path(path) }?;
-    Ok(unsafe { PluginEntry::load_from(library, &bundle_path) }?)
+    Ok(unsafe { PluginEntry::load(path) }?)
 }
 
 /// `path` の .clap バンドルに含まれる全プラグインをロードする。
@@ -133,4 +129,125 @@ pub fn load_plugin_id_from_path(
             path: path.to_path_buf(),
             plugin,
         }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "orbit-clap-discovery-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create temporary test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn make_bundle(executable_name: &str) -> (TempDir, PathBuf) {
+        let temp = TempDir::new();
+        let bundle = temp.0.join("TestBundle.clap");
+        let executable_dir = bundle.join("Contents/MacOS");
+        fs::create_dir_all(&executable_dir).expect("create bundle executable directory");
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>{executable_name}</string>
+</dict>
+</plist>
+"#
+        );
+        fs::write(bundle.join("Contents/Info.plist"), plist).expect("write bundle Info.plist");
+        (temp, bundle)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn built_test_plugin() -> Option<PathBuf> {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        [
+            "rust-spike/clap-test-effect/target/release/libclap_test_effect.dylib",
+            "rust-spike/clap-test-effect/target/debug/libclap_test_effect.dylib",
+            "rust-spike/clap-test-synth/target/release/libclap_test_synth.dylib",
+            "rust-spike/clap-test-synth/target/debug/libclap_test_synth.dylib",
+        ]
+        .into_iter()
+        .map(|relative| repo.join(relative))
+        .find(|candidate| candidate.is_file())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn copy_test_plugin(destination: &Path) -> bool {
+        let Some(plugin) = built_test_plugin() else {
+            eprintln!(
+                "skip: test CLAP dylib が無い — rust-spike/clap-test-effect または clap-test-synth を build してください"
+            );
+            return false;
+        };
+        fs::copy(&plugin, destination).expect("copy test plugin");
+        true
+    }
+
+    #[cfg(target_os = "macos")]
+    fn assert_bundle_loads(executable_name: &str) {
+        let (_temp, bundle) = make_bundle(executable_name);
+        if !copy_test_plugin(&bundle.join("Contents/MacOS").join(executable_name)) {
+            return;
+        }
+
+        let plugins = list_plugins_in_file(&bundle).expect("load plugin from .clap bundle");
+        assert!(!plugins.is_empty(), "bundle must expose a plugin");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn loads_stem_named_executable_from_bundle_directory() {
+        assert_bundle_loads("TestBundle");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn loads_cf_bundle_executable_with_different_name() {
+        assert_bundle_loads("DifferentExecutableName");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_with_missing_executable_is_an_error() {
+        let (_temp, bundle) = make_bundle("MissingExecutable");
+        assert!(matches!(
+            list_plugins_in_file(&bundle),
+            Err(DiscoveryError::LoadError(_))
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn loads_flat_file_clap() {
+        let temp = TempDir::new();
+        let flat_file = temp.0.join("FlatFile.clap");
+        if !copy_test_plugin(&flat_file) {
+            return;
+        }
+
+        let plugins = list_plugins_in_file(&flat_file).expect("load flat-file .clap plugin");
+        assert!(!plugins.is_empty(), "flat-file must expose a plugin");
+    }
 }

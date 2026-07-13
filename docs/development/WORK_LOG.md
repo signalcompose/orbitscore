@@ -17,6 +17,50 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.251 fix(daemon): discovery の macOS .clap バンドルディレクトリ解決 #433 (Jul 14, 2026)
+
+**Date**: 2026-07-14
+**Status**: ✅ 実装・実機 E2E 済み（PR 作成・レビューフローへ）
+**Branch**: `433-clap-bundle-dir-discovery`
+**Commit**: `0575e98`
+
+#426 実機 E2E で発見した統合ギャップ（discovery が `.clap` バンドルディレクトリを
+そのまま dlopen して失敗）の修正。市販 CLAP プラグイン（Surge XT / FabFilter 等）は
+全てバンドル形式のため、実プラグイン対応の前提。
+
+**実装の経緯（2ラウンド・監査が上流資産を発見）**:
+- Round 1（Codex）: 手組みの `resolve_dylib_path`（stem 候補 → 単一ファイル fallback →
+  0/複数エラー）+ `BundleExecutableNotFound` variant。テスト4件・全検証 green
+- **Fable 受け入れ監査（GO + Important 発見）**: pinned clack-host（rev `f874e858`）に
+  **`PluginEntry::load(path)` が既存**で、NSBundle（Info.plist の CFBundleExecutable）に
+  よる正規の macOS 解決を上流実装済みと一次ソースで確認（`host/src/entry/library.rs:120-148`）。
+  CLAP 契約（dlopen = 実行体・entry init = 元バンドルパス。本家 entry.h L93 で確認）も
+  手組み実装は正しかったが、手組みには CFBundleExecutable ≠ stem + `.DS_Store` 混入で
+  誤エラーになる実運用上の穴。監査は follow-up 化も可としたが、
+  **#433 の目的そのもの（実プラグインが完全に動く）+ 資産再利用の観点で即リワークを選択**
+- Round 2（Codex resume）: `open_bundle` を `PluginEntry::load(path)` に置換（実質1行 +
+  契約コメント）。手組み解決・`BundleExecutableNotFound`・`NullBundlePath`・CString 処理を
+  削除（約40行減）。テストを plist つき4系統に再構成: stem 一致 /
+  **CFBundleExecutable ≠ stem（NSBundle 正規解決の検証・手組み版より強い保証）** /
+  実行体不在エラー / flat-file 後方互換。plist 無しバンドルも NSBundle が stem から
+  推定してロード成功することを実測
+
+**検証（main 環境・非サンドボックス）**:
+- `cargo test --workspace` 全 green（failed 0・orbit-clap-host 24 件・daemon protocol 28 件含む）
+- fmt / clippy / deny 全 green
+- **実機 E2E（fail-before/pass-after）**: fail-before = #426 E2E での
+  `dlopen(<bundle dir>): not a file` エラー（WORK_LOG 6.250 記録済み）→ pass-after =
+  同じバンドルディレクトリ path で `global.effect()` → LoadPlugin 成功・
+  **peak ratio = 0.5000（厳密一致・gain 0.5 の closed-form signature）**
+- 監査も fail-before を独立実測（旧挙動へ一時復元で新テスト 2 件が #426 と同一症状で red）
+
+**owner 対応（同日）**:
+- **#434 起票**: `seq.effect()`（per-track insert）— owner 要望「正直 seq でのエフェクトは
+  入れて欲しかった」を受け、Epic #424 DoD 達成後の最初の CLAP 深掘り項目として明文化
+  （前提 = #431 の部品・新規部分 = per-sequence バスのタップ）
+- ゴール再確認: 「CLAP effect + instrument が完全に動く」まで横展開に入らない
+  （#433 → #427 → #431 → Epic #424 DoD 実機実証）
+
 ### 6.250 feat(dsl): global.effect() — CLAP effect の DSL 疎通 #426 Stage 1 (Jul 14, 2026)
 
 **Date**: 2026-07-14
