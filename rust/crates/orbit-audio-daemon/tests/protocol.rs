@@ -969,6 +969,36 @@ async fn daemon_error_warning_on_outproc_instrument_respawn() {
         !refired,
         "OUTPROC_INSTRUMENT_RESPAWN must not re-fire without additional respawns (latch regression)"
     );
+
+    // re-arm: 追加注入されると latch が再度開き、更新済みの累積値（2+5=7）で再発火すること。
+    daemon
+        .engine
+        .outproc_instrument_respawns_arc()
+        .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut rearmed_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_RESPAWN"
+                {
+                    rearmed_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let rearmed_message =
+        rearmed_message.expect("OUTPROC_INSTRUMENT_RESPAWN did not re-fire after second injection");
+    assert!(
+        rearmed_message.contains('7'),
+        "re-armed OUTPROC_INSTRUMENT_RESPAWN message should carry the updated cumulative total (7), got: {rearmed_message}"
+    );
 }
 
 /// OOP instrument の watchdog が計測を諦める（`measurement_invalid`）と DaemonError

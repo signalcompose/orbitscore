@@ -879,6 +879,7 @@ mod tests {
             .arg("0.2")
             .spawn()
             .expect("spawn stub child");
+        let first_pid = first.id();
         let sup = InstrumentChildSupervisor::spawn(
             first,
             shm.clone(),
@@ -895,6 +896,15 @@ mod tests {
         assert!(
             !stats.measurement_invalid.load(Ordering::Acquire),
             "respawn が成功している間は計測有効"
+        );
+        let pid_published = poll_until(5, || {
+            let pid = stats.current_child_pid.load(Ordering::Relaxed);
+            pid != 0 && pid != first_pid
+        });
+        assert!(
+            pid_published,
+            "respawn 後に current_child_pid が replacement の PID に更新される (first={first_pid}, current={})",
+            stats.current_child_pid.load(Ordering::Relaxed)
         );
         drop(sup);
         let _ = std::fs::remove_file(&shm);
