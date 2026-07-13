@@ -61,6 +61,12 @@ pub enum WrapError {
     /// mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("out-of-process effect runtime error: {0}")]
     OutProcEffect(String),
+    /// out-of-process instrument がこの daemon ビルド/インスタンスで利用できない。
+    #[error("out-of-process instrument unavailable: {0}")]
+    OutProcInstrumentUnavailable(String),
+    /// out-of-process instrument の runtime failure。
+    #[error("out-of-process instrument runtime error: {0}")]
+    OutProcInstrument(String),
 }
 
 /// 共有可能なエンジン wrapper。
@@ -133,6 +139,9 @@ pub struct EngineWrap {
     /// 本番 `start()` で `Some`、test backend 経路では `None`（`clap` / `link` と同設計）。
     #[cfg(feature = "outproc-effect")]
     outproc: Mutex<Option<OutProcControl>>,
+    /// out-of-process instrument の note-ring producer（control side）。
+    #[cfg(feature = "outproc-instrument")]
+    outproc_instrument: Mutex<Option<OutProcInstrumentControl>>,
 }
 
 /// out-of-process effect の control-side ハンドル一式（feature `outproc-effect` 専用）。
@@ -145,6 +154,14 @@ struct OutProcControl {
     stats: Arc<crate::outproc_effect::OutProcEffectStats>,
     /// callback-duration 統計（A0 §6: CoreAudio+cpal は xrun 不発火 → RT 健全性は callback 実測時間で測る）。
     cb_stats: Arc<orbit_audio_native::CallbackTimeStats>,
+}
+
+#[cfg(feature = "outproc-instrument")]
+struct OutProcInstrumentControl {
+    /// Control threadで構築済みの NeutralEvent を audio thread へ渡す producer。
+    event_tx: rtrb::Producer<orbit_audio_sandbox::NeutralEvent>,
+    /// Audio adapter と watchdog が更新し、gated harness が読む観測 stats。
+    stats: Arc<crate::outproc_instrument::OutProcInstrumentStats>,
 }
 
 /// CLAP host の control-side ハンドル一式（feature `clap-host` 専用）。
@@ -250,6 +267,21 @@ compile_error!(
     "features `outproc-effect` and `link-audio` are mutually exclusive \
      (both integrate the single cpal callback)"
 );
+#[cfg(all(feature = "outproc-instrument", feature = "clap-host"))]
+compile_error!(
+    "features `outproc-instrument` and `clap-host` are mutually exclusive \
+     (both own the single master-bus post-processor seam)"
+);
+#[cfg(all(feature = "outproc-instrument", feature = "link-audio"))]
+compile_error!(
+    "features `outproc-instrument` and `link-audio` are mutually exclusive \
+     (both integrate the single cpal callback)"
+);
+#[cfg(all(feature = "outproc-instrument", feature = "outproc-effect"))]
+compile_error!(
+    "features `outproc-instrument` and `outproc-effect` are mutually exclusive \
+     (both own the single master-bus post-processor seam)"
+);
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
 ///
@@ -271,7 +303,10 @@ compile_error!(
 /// - `_outproc_teardown` が先 = audio thread の adapter を quiesce（transport submit 停止）してから stream を止める。
 /// - `_child_guard` が後 = stream 停止後に watchdog を止め child を QUIT/reap し shm を unlink する。
 ///
-/// なお `link-audio` / `clap-host` / `outproc-effect` は 3 者すべて併用不可（`compile_error!`）なので
+/// `outproc-instrument` も同じ teardown ordering を専用 guard/supervisor で維持する。
+///
+/// なお `link-audio` / `clap-host` / `outproc-effect` / `outproc-instrument` は4者すべて併用不可
+/// （`compile_error!`）なので
 /// 複数ブロックが同時に存在することはない。
 pub struct StreamGuard {
     /// carry-forward #1（clap-host）: stream 停止 **前** に drop され、audio thread で `stop_processing`
@@ -284,6 +319,9 @@ pub struct StreamGuard {
     /// より前に宣言する（clap-host とは feature 排他なので同時には存在しない）。
     #[cfg(feature = "outproc-effect")]
     _outproc_teardown: crate::outproc_effect::OutProcTeardownGuard,
+    /// outproc-instrument: stream 前に audio-thread adapter を quiesce する。
+    #[cfg(feature = "outproc-instrument")]
+    _outproc_instrument_teardown: crate::outproc_instrument::OutProcInstrumentTeardownGuard,
     _stream: OutputStream,
     #[cfg(feature = "link-audio")]
     _link: Option<crate::link_audio::LinkAudioGuard>,
@@ -296,6 +334,9 @@ pub struct StreamGuard {
     /// child へ QUIT → reap → shm unlink する。**field 順は load-bearing**: `_stream` より後に宣言する。
     #[cfg(feature = "outproc-effect")]
     _child_guard: crate::outproc_effect::EffectChildSupervisor,
+    /// outproc-instrument: stream 停止後に watchdog/child/shm を teardown する。
+    #[cfg(feature = "outproc-instrument")]
+    _instrument_child_guard: crate::outproc_instrument::InstrumentChildSupervisor,
 }
 
 impl StreamGuard {
@@ -345,7 +386,8 @@ impl EngineWrap {
     #[cfg(all(
         not(feature = "link-audio"),
         not(feature = "clap-host"),
-        not(feature = "outproc-effect")
+        not(feature = "outproc-effect"),
+        not(feature = "outproc-instrument")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats) =
@@ -357,7 +399,12 @@ impl EngineWrap {
     /// feature `link-audio` 版: cpal 出力を LinkAudio egress 経路付きで起動し、GPL consumer thread を
     /// spawn する（A4-2b-2）。reg-ring producer は callback に組み込まれ、`register_link_audio_channel`
     /// 経由で channel を流す。返す `StreamGuard` が consumer thread の teardown guard を保持する。
-    #[cfg(all(feature = "link-audio", not(feature = "clap-host")))]
+    #[cfg(all(
+        feature = "link-audio",
+        not(feature = "clap-host"),
+        not(feature = "outproc-effect"),
+        not(feature = "outproc-instrument")
+    ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats, reg_tx) =
             orbit_audio_native::start_default_output_with_link_egress(
@@ -389,7 +436,12 @@ impl EngineWrap {
     /// （`PostProcessor` 実装）を native callback に注入し、plugin の hot-install は install ring 経由で
     /// audio thread に渡す。返す `StreamGuard` が teardown guard（carry-forward #1）と専用スレッド
     /// guard を保持する（drop 順で stop_processing → stream 停止 → deactivate を強制）。
-    #[cfg(all(feature = "clap-host", not(feature = "link-audio")))]
+    #[cfg(all(
+        feature = "clap-host",
+        not(feature = "link-audio"),
+        not(feature = "outproc-effect"),
+        not(feature = "outproc-instrument")
+    ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         // event ring 1024 / install ring 1（spike と同容量）。
         let (processor, parts) = orbit_clap_host::new_clap_host(1024, 1);
@@ -435,7 +487,8 @@ impl EngineWrap {
     #[cfg(all(
         feature = "outproc-effect",
         not(feature = "clap-host"),
-        not(feature = "link-audio")
+        not(feature = "link-audio"),
+        not(feature = "outproc-instrument")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let cfg = crate::outproc_effect::OutProcEffectConfig::from_env()
@@ -447,7 +500,7 @@ impl EngineWrap {
     /// shm 作成 → host mmap → adapter → cpal stream（sample_rate 確定）→ 初回 child spawn → watchdog
     /// supervisor の順で組み、`StreamGuard` の field 順で teardown を強制する（drop 順は本ファイル冒頭の
     /// `StreamGuard` doc 参照）。初回 child spawn 失敗は shm を掃除して `OutProcEffect` を返す。
-    #[cfg(feature = "outproc-effect")]
+    #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
     pub fn start_outproc_effect(
         cfg: crate::outproc_effect::OutProcEffectConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
@@ -540,6 +593,111 @@ impl EngineWrap {
         ))
     }
 
+    /// feature `outproc-instrument` production entry point. Configuration is fixed at daemon
+    /// startup; live note events continue to use the existing PluginNoteOn/PluginNoteOff methods.
+    #[cfg(all(
+        feature = "outproc-instrument",
+        not(feature = "clap-host"),
+        not(feature = "link-audio"),
+        not(feature = "outproc-effect")
+    ))]
+    pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        let cfg = crate::outproc_instrument::OutProcInstrumentConfig::from_env()
+            .map_err(WrapError::OutProcInstrumentUnavailable)?;
+        Self::start_outproc_instrument(cfg)
+    }
+
+    /// Constructs the out-of-process instrument transport, post-processor, stream, child, and
+    /// supervisor in teardown-safe ownership order.
+    #[cfg(all(
+        feature = "outproc-instrument",
+        not(feature = "clap-host"),
+        not(feature = "link-audio"),
+        not(feature = "outproc-effect")
+    ))]
+    pub fn start_outproc_instrument(
+        cfg: crate::outproc_instrument::OutProcInstrumentConfig,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        use crate::outproc_instrument::{
+            spawn_instrument_child, InstrumentChildSupervisor, OutProcInstrumentPostProcessor,
+            OutProcInstrumentStats, OutProcInstrumentTeardownGuard, NOTE_RING_CAPACITY,
+        };
+
+        let shm_path = crate::outproc_instrument::unique_shm_path();
+        let host_mmap = orbit_audio_sandbox::create_shared(&shm_path).map_err(|error| {
+            WrapError::OutProcInstrument(format!("create shm {shm_path:?}: {error}"))
+        })?;
+        let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(host_mmap);
+        let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+        let teardown_requested = Arc::new(AtomicBool::new(false));
+        let teardown_done = Arc::new(AtomicBool::new(false));
+        let stats = OutProcInstrumentStats::new();
+        let processor = Box::new(OutProcInstrumentPostProcessor::new(
+            host,
+            event_rx,
+            NOTE_RING_CAPACITY,
+            teardown_requested.clone(),
+            teardown_done.clone(),
+            stats.clone(),
+        ));
+
+        let (engine, stream, stream_stats, _cb_stats) =
+            orbit_audio_native::start_default_output_with_clap(
+                processor,
+                cfg.buffer_frames,
+                capture_path_from_env(),
+            )
+            .map_err(WrapError::Output)?;
+        let sample_rate = stream.sample_rate;
+
+        let first_child = match spawn_instrument_child(
+            &cfg.child_exe,
+            &shm_path,
+            &cfg.plugin,
+            cfg.plugin_id.as_deref(),
+            sample_rate,
+        ) {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = std::fs::remove_file(&shm_path);
+                return Err(WrapError::OutProcInstrument(format!(
+                    "spawn instrument child {:?}: {error}",
+                    cfg.child_exe
+                )));
+            }
+        };
+        stats
+            .current_child_pid
+            .store(first_child.id(), Ordering::Relaxed);
+        let supervisor = InstrumentChildSupervisor::spawn(
+            first_child,
+            shm_path,
+            stats.clone(),
+            cfg.child_exe,
+            cfg.plugin,
+            cfg.plugin_id,
+            sample_rate,
+        )
+        .map_err(|error| WrapError::OutProcInstrument(format!("spawn watchdog: {error}")))?;
+
+        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        *wrap.outproc_instrument.lock().map_err(|_| {
+            WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
+        })? = Some(OutProcInstrumentControl { event_tx, stats });
+
+        Ok((
+            wrap,
+            StreamGuard {
+                _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
+                    teardown_requested,
+                    teardown_done,
+                ),
+                _stream: stream,
+                _instrument_child_guard: supervisor,
+            },
+        ))
+    }
+
     /// [`AudioBackend`] 経由で起動する（integration test 用）。
     ///
     /// guard は `Box<dyn Any + Send>` の不透明ハンドル。scope 終了まで
@@ -588,6 +746,9 @@ impl EngineWrap {
             // outproc-effect: 本番 `start()` / `start_outproc_effect` が spawn 後に Some を注入する。
             #[cfg(feature = "outproc-effect")]
             outproc: Mutex::new(None),
+            // outproc-instrument: production start injects the NeutralEvent ring producer.
+            #[cfg(feature = "outproc-instrument")]
+            outproc_instrument: Mutex::new(None),
         })
     }
 
@@ -743,6 +904,61 @@ impl EngineWrap {
         })
     }
 
+    /// Out-of-process instrument NoteOn. Conversion to the format-neutral wire event happens on
+    /// this control-side method; the audio thread only pops already-converted events.
+    #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
+    pub fn plugin_note_on(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
+        self.push_outproc_instrument_event(orbit_audio_sandbox::NeutralEvent::NoteOn {
+            sample_offset: 0,
+            addr: orbit_audio_sandbox::VoiceAddr {
+                note_id: -1,
+                port_index: 0,
+                channel: channel as i16,
+                key: key as i16,
+                _pad: 0,
+            },
+            velocity,
+            tuning_cents: 0.0,
+            length_frames: 0,
+        })
+    }
+
+    /// Out-of-process instrument NoteOff, converted on the control side.
+    #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
+    pub fn plugin_note_off(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
+        self.push_outproc_instrument_event(orbit_audio_sandbox::NeutralEvent::NoteOff {
+            sample_offset: 0,
+            addr: orbit_audio_sandbox::VoiceAddr {
+                note_id: -1,
+                port_index: 0,
+                channel: channel as i16,
+                key: key as i16,
+                _pad: 0,
+            },
+            velocity,
+        })
+    }
+
+    #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
+    fn push_outproc_instrument_event(
+        &self,
+        event: orbit_audio_sandbox::NeutralEvent,
+    ) -> Result<(), WrapError> {
+        let mut guard = self.outproc_instrument.lock().map_err(|_| {
+            WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
+        })?;
+        let control = guard.as_mut().ok_or_else(|| {
+            WrapError::OutProcInstrumentUnavailable(
+                "outproc instrument not initialized (test backend)".into(),
+            )
+        })?;
+        control.event_tx.push(event).map_err(|_| {
+            self.plugin_event_ring_overflow_count
+                .fetch_add(1, Ordering::Relaxed);
+            WrapError::OutProcInstrument("instrument note ring full".into())
+        })
+    }
+
     #[cfg(feature = "clap-host")]
     fn push_plugin_event(&self, ev: orbit_clap_host::PluginEvent) -> Result<(), WrapError> {
         // #405: プラグイン未ロード時は event ring に投げても audio thread が黙って drain して
@@ -796,7 +1012,7 @@ impl EngineWrap {
     }
 
     /// feature `clap-host` 無効ビルド用の stub。
-    #[cfg(not(feature = "clap-host"))]
+    #[cfg(not(any(feature = "clap-host", feature = "outproc-instrument")))]
     pub fn plugin_note_on(&self, _key: u8, _channel: u8, _velocity: f64) -> Result<(), WrapError> {
         Err(WrapError::ClapUnavailable(
             "engine built without 'clap-host' feature".into(),
@@ -804,7 +1020,7 @@ impl EngineWrap {
     }
 
     /// feature `clap-host` 無効ビルド用の stub。
-    #[cfg(not(feature = "clap-host"))]
+    #[cfg(not(any(feature = "clap-host", feature = "outproc-instrument")))]
     pub fn plugin_note_off(&self, _key: u8, _channel: u8, _velocity: f64) -> Result<(), WrapError> {
         Err(WrapError::ClapUnavailable(
             "engine built without 'clap-host' feature".into(),
@@ -955,6 +1171,39 @@ impl EngineWrap {
                 }
             }
             Err(_) => tracing::warn!("outproc mutex poisoned; outproc_reset_peaks skipped"),
+        }
+    }
+
+    /// Gated instrument harness 用: OOP instrument の発音・child・respawn 観測値を返す。
+    #[cfg(feature = "outproc-instrument")]
+    #[doc(hidden)]
+    pub fn outproc_instrument_stats(
+        &self,
+    ) -> Option<crate::outproc_instrument::OutProcInstrumentSnapshot> {
+        match self.outproc_instrument.lock() {
+            Ok(guard) => guard.as_ref().map(|control| control.stats.snapshot()),
+            Err(_) => {
+                tracing::warn!(
+                    "outproc instrument mutex poisoned; outproc_instrument_stats returning None"
+                );
+                None
+            }
+        }
+    }
+
+    /// Gated kill-test の計測位相を分けるため、instrument の累積 post peak をリセットする。
+    #[cfg(feature = "outproc-instrument")]
+    #[doc(hidden)]
+    pub fn outproc_instrument_reset_post_peak(&self) {
+        match self.outproc_instrument.lock() {
+            Ok(guard) => {
+                if let Some(control) = guard.as_ref() {
+                    control.stats.reset_post_peak();
+                }
+            }
+            Err(_) => tracing::warn!(
+                "outproc instrument mutex poisoned; outproc_instrument_reset_post_peak skipped"
+            ),
         }
     }
 
@@ -1927,5 +2176,57 @@ mod outproc_health_tests {
         );
 
         assert_eq!(wrap.outproc_health(), (0, 0, false, 3));
+    }
+}
+
+#[cfg(all(test, feature = "outproc-instrument"))]
+mod outproc_instrument_note_tests {
+    use super::{EngineWrap, OutProcInstrumentControl};
+    use crate::backend::StubBackend;
+    use orbit_audio_sandbox::{NeutralEvent, VoiceAddr};
+
+    fn wrap_with_note_consumer() -> (std::sync::Arc<EngineWrap>, rtrb::Consumer<NeutralEvent>) {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let (event_tx, event_rx) = rtrb::RingBuffer::new(4);
+        let stats = crate::outproc_instrument::OutProcInstrumentStats::new();
+        *wrap
+            .outproc_instrument
+            .lock()
+            .expect("lock instrument control") = Some(OutProcInstrumentControl { event_tx, stats });
+        (wrap, event_rx)
+    }
+
+    #[test]
+    fn plugin_notes_are_converted_to_neutral_events_on_control_side() {
+        let (wrap, mut event_rx) = wrap_with_note_consumer();
+        wrap.plugin_note_on(60, 3, 0.75).expect("send note on");
+        wrap.plugin_note_off(61, 4, 0.25).expect("send note off");
+
+        let expected_addr = |channel, key| VoiceAddr {
+            note_id: -1,
+            port_index: 0,
+            channel,
+            key,
+            _pad: 0,
+        };
+        assert_eq!(
+            event_rx.pop(),
+            Ok(NeutralEvent::NoteOn {
+                sample_offset: 0,
+                addr: expected_addr(3, 60),
+                velocity: 0.75,
+                tuning_cents: 0.0,
+                length_frames: 0,
+            })
+        );
+        assert_eq!(
+            event_rx.pop(),
+            Ok(NeutralEvent::NoteOff {
+                sample_offset: 0,
+                addr: expected_addr(4, 61),
+                velocity: 0.25,
+            })
+        );
     }
 }

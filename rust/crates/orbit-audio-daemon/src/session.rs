@@ -885,6 +885,12 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("OUTPROC_EFFECT_UNAVAILABLE", msg.clone())
         }
         WrapError::OutProcEffect(msg) => ProtocolError::new("OUTPROC_EFFECT_RUNTIME", msg.clone()),
+        WrapError::OutProcInstrumentUnavailable(msg) => {
+            ProtocolError::new("OUTPROC_INSTRUMENT_UNAVAILABLE", msg.clone())
+        }
+        WrapError::OutProcInstrument(msg) => {
+            ProtocolError::new("OUTPROC_INSTRUMENT_RUNTIME", msg.clone())
+        }
     }
 }
 
@@ -924,6 +930,20 @@ mod tests {
     fn clap_not_loaded_maps_to_not_loaded_code() {
         let e = WrapError::ClapNotLoaded("no plugin loaded (send LoadPlugin first)".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_NOT_LOADED");
+    }
+
+    #[test]
+    fn outproc_instrument_errors_map_to_distinct_protocol_codes() {
+        let unavailable = WrapError::OutProcInstrumentUnavailable("not configured".into());
+        assert_eq!(
+            wrap_err_to_protocol(&unavailable).code,
+            "OUTPROC_INSTRUMENT_UNAVAILABLE"
+        );
+        let runtime = WrapError::OutProcInstrument("note ring full".into());
+        assert_eq!(
+            wrap_err_to_protocol(&runtime).code,
+            "OUTPROC_INSTRUMENT_RUNTIME"
+        );
     }
 
     // PluginNoteOn/Off の channel 検証: 欠如→0、0..=15 受理、範囲外は MALFORMED（key と対称）。

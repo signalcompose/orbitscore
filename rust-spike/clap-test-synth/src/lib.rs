@@ -27,6 +27,7 @@ use clack_extensions::note_ports::{
     NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
     PluginNotePortsImpl,
 };
+use clack_plugin::events::event_types::NoteEndEvent;
 use clack_plugin::events::spaces::CoreEventSpace;
 use clack_plugin::prelude::*;
 
@@ -293,6 +294,12 @@ impl<'a> PluginAudioProcessor<'a, TestSynthShared, TestSynthMainThread>
                         CoreEventSpace::NoteOff(e) => {
                             if let clack_plugin::events::Match::Specific(key) = e.key() {
                                 self.voice.note_off(key as u8);
+                                // Report the voice lifetime end back to the host. Preserve the
+                                // host-provided PCKN so its bookkeeping can match this NoteEnd to
+                                // the corresponding NoteOn across the OOP transport.
+                                let _ = events
+                                    .output
+                                    .try_push(NoteEndEvent::new(e.time(), e.pckn()));
                             }
                         }
                         _ => {}

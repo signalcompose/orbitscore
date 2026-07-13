@@ -20,6 +20,9 @@ pub mod link_audio;
 /// でのみコンパイルされ、別プロセスの実 CLAP effect child へ共有メモリ transport 越しに audio を流す。
 #[cfg(feature = "outproc-effect")]
 pub mod outproc_effect;
+/// Out-of-process CLAP instrument production integration（Issue #420・default off・clack-free）。
+#[cfg(feature = "outproc-instrument")]
+pub mod outproc_instrument;
 pub mod protocol;
 pub mod server;
 pub mod session;
