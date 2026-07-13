@@ -68,6 +68,50 @@ fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<Neutra
     failures
 }
 
+/// Outcome of [`write_output_events`]: how many records landed in `window`, plus the health
+/// counter deltas the caller adds to `SharedRegion` after the closure returns.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct OutputWriteOutcome {
+    written: usize,
+    spilled: u64,
+    dropped: u64,
+    note_end_dropped: u64,
+}
+
+/// Drains previously spilled events into `window`, then appends this block's freshly produced
+/// output `events` (already translated to the M2 neutral wire): overflow beyond `window`'s
+/// capacity spills into `output_spill`, and only drops (counted in the returned outcome) once
+/// both `window` and `output_spill` are exhausted.
+///
+/// Pure and CLAP-independent (operates on `NeutralEvent`/`EventRecord` only), so it is directly
+/// unit-testable without a live plugin -- extracted from `main()`'s per-slot `write_slot` closure
+/// for exactly that reason (see `tests::output_window_and_spill_overflow_drops_and_tracks_note_end`).
+fn write_output_events(
+    window: &mut [EventRecord],
+    output_spill: &mut EventSpillFifo,
+    events: impl Iterator<Item = NeutralEvent>,
+) -> OutputWriteOutcome {
+    let mut outcome = OutputWriteOutcome {
+        written: output_spill.drain_into_window(window),
+        ..Default::default()
+    };
+    for event in events {
+        let record = EventRecord::encode(&event);
+        if outcome.written < window.len() {
+            window[outcome.written] = record;
+            outcome.written += 1;
+        } else if output_spill.push(record) {
+            outcome.spilled += 1;
+        } else {
+            outcome.dropped += 1;
+            if output_spill.take_note_end_dropped() {
+                outcome.note_end_dropped += 1;
+            }
+        }
+    }
+    outcome
+}
+
 /// Writes one completed slot, then publishes its sequence with Release ordering.
 ///
 /// `write_slot` must write audio, `output_events`, and `output_event_count`. Their writes must stay
@@ -187,28 +231,26 @@ fn main() -> Result<()> {
                                 as *mut EventRecord,
                             MAX_EVENTS_PER_BLOCK,
                         );
-                        let mut written = output_spill.drain_into_window(window);
-                        for event in &output_event_buf {
-                            let Some(event) = ClapInstrumentProcessor::neutral_output_event(event)
-                            else {
-                                continue;
-                            };
-                            let record = EventRecord::encode(&event);
-                            if written < window.len() {
-                                window[written] = record;
-                                written += 1;
-                            } else if output_spill.push(record) {
-                                (*region).output_event_spilled_count.fetch_add(1, Relaxed);
-                            } else {
-                                (*region).output_event_dropped_count.fetch_add(1, Relaxed);
-                                if output_spill.take_note_end_dropped() {
-                                    (*region)
-                                        .output_note_end_dropped_count
-                                        .fetch_add(1, Relaxed);
-                                }
-                            }
+                        let translated = (&output_event_buf)
+                            .into_iter()
+                            .filter_map(ClapInstrumentProcessor::neutral_output_event);
+                        let outcome = write_output_events(window, &mut output_spill, translated);
+                        if outcome.spilled != 0 {
+                            (*region)
+                                .output_event_spilled_count
+                                .fetch_add(outcome.spilled, Relaxed);
                         }
-                        (*region).output_event_count[idx].store(written as u32, Relaxed);
+                        if outcome.dropped != 0 {
+                            (*region)
+                                .output_event_dropped_count
+                                .fetch_add(outcome.dropped, Relaxed);
+                        }
+                        if outcome.note_end_dropped != 0 {
+                            (*region)
+                                .output_note_end_dropped_count
+                                .fetch_add(outcome.note_end_dropped, Relaxed);
+                        }
+                        (*region).output_event_count[idx].store(outcome.written as u32, Relaxed);
                         (*region).child_processed.fetch_add(1, Relaxed);
                     },
                     || {},
@@ -228,7 +270,9 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbit_audio_sandbox::{PipelinedInstrumentHost, TransportContext, VoiceAddr, VoiceKey};
+    use orbit_audio_sandbox::{
+        PipelinedInstrumentHost, TransportContext, VoiceAddr, VoiceKey, EVENT_SPILL_CAPACITY,
+    };
 
     fn note_on(key: i16) -> NeutralEvent {
         NeutralEvent::NoteOn {
@@ -244,6 +288,93 @@ mod tests {
             tuning_cents: 0.0,
             length_frames: 0,
         }
+    }
+
+    #[test]
+    fn write_output_events_fills_window_before_spilling() {
+        let mut window = vec![EventRecord::encode(&note_on(0)); 4];
+        let mut spill = EventSpillFifo::new();
+        let events = (0..4u32).map(|i| NeutralEvent::NoteChoke {
+            sample_offset: i,
+            addr: VoiceAddr::WILDCARD,
+        });
+
+        let outcome = write_output_events(&mut window, &mut spill, events);
+
+        assert_eq!(
+            outcome,
+            OutputWriteOutcome {
+                written: 4,
+                ..Default::default()
+            }
+        );
+        assert!(spill.is_empty());
+        for (i, record) in window.iter().enumerate() {
+            assert_eq!(
+                record.decode(),
+                Some(NeutralEvent::NoteChoke {
+                    sample_offset: i as u32,
+                    addr: VoiceAddr::WILDCARD,
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn write_output_events_overflow_spills_into_fifo() {
+        let mut window = vec![EventRecord::encode(&note_on(0)); 2];
+        let mut spill = EventSpillFifo::new();
+        let events = (0..5u32).map(|i| NeutralEvent::NoteChoke {
+            sample_offset: i,
+            addr: VoiceAddr::WILDCARD,
+        });
+
+        let outcome = write_output_events(&mut window, &mut spill, events);
+
+        assert_eq!(
+            outcome,
+            OutputWriteOutcome {
+                written: 2,
+                spilled: 3,
+                ..Default::default()
+            }
+        );
+        assert_eq!(spill.len(), 3);
+    }
+
+    /// Drives the actual window-full -> spill-FIFO-full -> drop path in one call, verifying both
+    /// the generic drop counter and the NoteEnd-specific drop tracking
+    /// (`EventSpillFifo::take_note_end_dropped`) that the host's voice-bookkeeping recovery
+    /// depends on (see `output_note_end_dropped_count` in `orbit-audio-sandbox/src/instrument_host.rs`).
+    #[test]
+    fn window_and_spill_overflow_drops_and_tracks_note_end() {
+        let mut window = vec![EventRecord::encode(&note_on(0)); MAX_EVENTS_PER_BLOCK];
+        let mut spill = EventSpillFifo::new();
+
+        let fillers = (0..(MAX_EVENTS_PER_BLOCK + EVENT_SPILL_CAPACITY) as u32).map(|i| {
+            NeutralEvent::NoteChoke {
+                sample_offset: i,
+                addr: VoiceAddr::WILDCARD,
+            }
+        });
+        let overflow_note_end = std::iter::once(NeutralEvent::NoteEnd {
+            sample_offset: 0,
+            addr: VoiceAddr::WILDCARD,
+        });
+
+        let outcome =
+            write_output_events(&mut window, &mut spill, fillers.chain(overflow_note_end));
+
+        assert_eq!(outcome.written, MAX_EVENTS_PER_BLOCK);
+        assert_eq!(outcome.spilled, EVENT_SPILL_CAPACITY as u64);
+        assert_eq!(
+            outcome.dropped, 1,
+            "the final NoteEnd must be dropped, not silently lost"
+        );
+        assert_eq!(
+            outcome.note_end_dropped, 1,
+            "a dropped NoteEnd must be tracked separately (host reset_all() trigger)"
+        );
     }
 
     #[test]

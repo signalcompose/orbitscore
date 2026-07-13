@@ -74,24 +74,35 @@ impl OutProcInstrumentConfig {
                     .to_string()
             })?;
         let plugin_id = std::env::var("ORBIT_INSTRUMENT_PLUGIN_ID").ok();
-        let buffer_frames = match std::env::var("ORBIT_INSTRUMENT_BUFFER_FRAMES") {
-            Ok(value) => match value.parse::<u32>() {
-                Ok(frames) if frames > 0 => Some(frames),
-                _ => {
-                    tracing::warn!(
-                        "ORBIT_INSTRUMENT_BUFFER_FRAMES='{value}' is invalid; using device default"
-                    );
-                    None
-                }
-            },
-            Err(_) => None,
-        };
+        let buffer_frames = parse_buffer_frames(
+            std::env::var("ORBIT_INSTRUMENT_BUFFER_FRAMES")
+                .ok()
+                .as_deref(),
+        );
         Ok(Self {
             child_exe,
             plugin,
             plugin_id,
             buffer_frames,
         })
+    }
+}
+
+/// Parses `ORBIT_INSTRUMENT_BUFFER_FRAMES`'s raw string value (`None` if the env var was unset)
+/// into the buffer-frame override: `None` means "use the device default" (unset, malformed, or
+/// non-positive), `Some(frames)` is a valid positive override. Extracted from `from_env` so the
+/// parsing boundaries (missing / malformed / zero / positive) are unit-testable without mutating
+/// process-global env state (mirrors `outproc_effect::PluginFormat::from_env_value`).
+fn parse_buffer_frames(value: Option<&str>) -> Option<u32> {
+    let value = value?;
+    match value.parse::<u32>() {
+        Ok(frames) if frames > 0 => Some(frames),
+        _ => {
+            tracing::warn!(
+                "ORBIT_INSTRUMENT_BUFFER_FRAMES='{value}' is invalid; using device default"
+            );
+            None
+        }
     }
 }
 
@@ -110,6 +121,16 @@ pub struct OutProcInstrumentStats {
     pub respawn_count: AtomicU64,
     pub measurement_invalid: AtomicBool,
     pub child_process_error_count: AtomicU64,
+    /// child-local spill FIFO(§4.2 output 方向)自体が尽きた場合のみ増分(真の drop)。child の
+    /// `SharedRegion::output_event_dropped_count` を watchdog がミラーした値（`child_process_error_count`
+    /// と同じ mirror パターン）。
+    pub output_event_dropped_count: AtomicU64,
+    /// child-local spill FIFO 経由の無損失な1ブロック超遅延(情報用)。`SharedRegion::output_event_spilled_count`
+    /// のミラー。
+    pub output_event_spilled_count: AtomicU64,
+    /// 上記 output 方向 drop に `NoteEnd` が含まれた回数。`SharedRegion::output_note_end_dropped_count`
+    /// のミラー(host の簿記リセット判断トリガと同じ counter だが、こちらは daemon health 可視化用)。
+    pub output_note_end_dropped_count: AtomicU64,
     /// Gated cross-process probe: A4 (port 0 / channel 0 / key 69) の host-side live voice 数。
     pub probe_live_count: AtomicU16,
     /// Instrument 加算後の master bus の abs peak を f32 bits で累積する。非負 f32 の bits は
@@ -134,6 +155,11 @@ impl OutProcInstrumentStats {
             respawn_count: self.respawn_count.load(Ordering::Relaxed),
             measurement_invalid: self.measurement_invalid.load(Ordering::Relaxed),
             child_process_error_count: self.child_process_error_count.load(Ordering::Relaxed),
+            output_event_dropped_count: self.output_event_dropped_count.load(Ordering::Relaxed),
+            output_event_spilled_count: self.output_event_spilled_count.load(Ordering::Relaxed),
+            output_note_end_dropped_count: self
+                .output_note_end_dropped_count
+                .load(Ordering::Relaxed),
             probe_live_count: self.probe_live_count.load(Ordering::Relaxed),
             post_peak: f32::from_bits(self.post_peak_bits.load(Ordering::Relaxed)),
             current_child_pid: self.current_child_pid.load(Ordering::Relaxed),
@@ -148,6 +174,9 @@ pub struct OutProcInstrumentSnapshot {
     pub respawn_count: u64,
     pub measurement_invalid: bool,
     pub child_process_error_count: u64,
+    pub output_event_dropped_count: u64,
+    pub output_event_spilled_count: u64,
+    pub output_note_end_dropped_count: u64,
     pub probe_live_count: u16,
     pub post_peak: f32,
     pub current_child_pid: u32,
@@ -331,6 +360,28 @@ impl InstrumentChildSupervisor {
                     stats
                         .child_process_error_count
                         .store(errors, Ordering::Relaxed);
+                    // Mirror the child's output-event overflow/spill/drop health counters (M2
+                    // wire, §4.2 output direction) the same way as `child_process_error_count`
+                    // above, so daemon health reporting can observe output-event overflow instead
+                    // of only voice-bookkeeping symptoms downstream of it.
+                    let output_dropped =
+                        unsafe { (*region).output_event_dropped_count.load(Ordering::Relaxed) };
+                    stats
+                        .output_event_dropped_count
+                        .store(output_dropped, Ordering::Relaxed);
+                    let output_spilled =
+                        unsafe { (*region).output_event_spilled_count.load(Ordering::Relaxed) };
+                    stats
+                        .output_event_spilled_count
+                        .store(output_spilled, Ordering::Relaxed);
+                    let note_end_dropped = unsafe {
+                        (*region)
+                            .output_note_end_dropped_count
+                            .load(Ordering::Relaxed)
+                    };
+                    stats
+                        .output_note_end_dropped_count
+                        .store(note_end_dropped, Ordering::Relaxed);
 
                     match child.try_wait() {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
@@ -461,6 +512,54 @@ impl Drop for OutProcInstrumentTeardownGuard {
 mod tests {
     use super::*;
     use orbit_audio_sandbox::{slot_index, VoiceAddr, VoiceKey, CHANNELS};
+
+    // pr-test-analyzer (item 7, PR #422 review): `OutProcInstrumentConfig::from_env`'s
+    // `ORBIT_INSTRUMENT_BUFFER_FRAMES` parsing boundaries had no coverage. Test the extracted pure
+    // helper directly rather than `std::env::set_var` (parallel-test flakiness trap; mirrors
+    // `outproc_effect::tests::plugin_format_from_env_value_*`, which tests the same kind of
+    // extracted pure helper instead of touching process-global env).
+    #[test]
+    fn parse_buffer_frames_boundaries() {
+        assert_eq!(
+            parse_buffer_frames(None),
+            None,
+            "unset must use device default"
+        );
+        assert_eq!(parse_buffer_frames(Some("64")), Some(64));
+        assert_eq!(
+            parse_buffer_frames(Some("0")),
+            None,
+            "zero must fall back to device default, not underflow/panic"
+        );
+        assert_eq!(
+            parse_buffer_frames(Some("not-a-number")),
+            None,
+            "malformed value must fall back to device default"
+        );
+    }
+
+    // CI-runnable regression guard for the output-event overflow health counters: no real child
+    // or shared memory is needed to verify `snapshot()` surfaces every field (mirrors
+    // `outproc_effect::tests::stats_snapshot_reflects_all_fields`). The gated hardware tests only
+    // assert these are 0 on the happy path; this test is what actually guards the field-exposure
+    // deliverable in CI (a future overflow regression would otherwise pass both silently).
+    #[test]
+    fn stats_snapshot_reflects_output_event_health_counters() {
+        let stats = OutProcInstrumentStats::new();
+        stats.output_event_dropped_count.store(3, Ordering::Relaxed);
+        stats
+            .output_event_spilled_count
+            .store(11, Ordering::Relaxed);
+        stats
+            .output_note_end_dropped_count
+            .store(2, Ordering::Relaxed);
+
+        let snapshot = stats.snapshot();
+
+        assert_eq!(snapshot.output_event_dropped_count, 3);
+        assert_eq!(snapshot.output_event_spilled_count, 11);
+        assert_eq!(snapshot.output_note_end_dropped_count, 2);
+    }
 
     #[test]
     fn note_round_trip_adds_instrument_without_overwriting_master() {
@@ -596,5 +695,92 @@ mod tests {
         drop(processor);
         drop(ctl_mmap);
         std::fs::remove_file(path).expect("remove shared memory");
+    }
+
+    /// `InstrumentChildSupervisor`'s 2nd `open_shared` needs a shared-memory **file** to already
+    /// exist; mapping is dropped immediately so the file survives for the supervisor to open.
+    fn make_shm() -> PathBuf {
+        let p = unique_shm_path();
+        let _ = std::fs::remove_file(&p);
+        let _ = orbit_audio_sandbox::create_shared(&p).expect("create_shared");
+        p
+    }
+
+    /// Polls `cond` every 20ms until it's true or `timeout_secs` elapses (supervisor watchdog
+    /// behavior is asynchronous).
+    fn poll_until(timeout_secs: u64, mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+        while Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        cond()
+    }
+
+    // pr-test-analyzer (item 4, PR #422 review): the watchdog state machine (child-exit ->
+    // respawn, respawn-failure -> measurement_invalid) had zero CI-runnable coverage -- only
+    // reachable via the `#[ignore]`d gated hardware tests. Mirrors
+    // `outproc_effect::tests::supervisor_marks_measurement_invalid_when_respawn_fails` exactly:
+    // a short-lived stub child + a nonexistent respawn binary forces the failure branch, no real
+    // audio device or CLAP plugin needed.
+    #[test]
+    fn supervisor_marks_measurement_invalid_when_respawn_fails() {
+        let shm = make_shm();
+        let stats = OutProcInstrumentStats::new();
+        let first = Command::new("sleep")
+            .arg("0.2")
+            .spawn()
+            .expect("spawn stub child");
+        let bad_exe = std::env::temp_dir().join("orbit-nonexistent-instrument-child-xyz");
+        let sup = InstrumentChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats.clone(),
+            bad_exe,
+            PathBuf::from("/nonexistent.clap"),
+            None,
+            48_000,
+        )
+        .expect("supervisor spawn");
+
+        let invalid = poll_until(5, || stats.measurement_invalid.load(Ordering::Acquire));
+        assert!(invalid, "respawn 恒久失敗で measurement_invalid が立つ");
+        drop(sup); // join がハングしないこと（watchdog は break 済み）。
+        let _ = std::fs::remove_file(&shm);
+    }
+
+    // pr-test-analyzer (item 4, PR #422 review): success-side counterpart. Mirrors
+    // `outproc_effect::tests::supervisor_respawns_child_on_unexpected_exit`: an unexpectedly
+    // exited child triggers a real respawn (PID publish + `respawn_count` incrementing) without
+    // `measurement_invalid` being set.
+    #[test]
+    fn supervisor_respawns_child_on_unexpected_exit() {
+        let shm = make_shm();
+        let stats = OutProcInstrumentStats::new();
+        let first = Command::new("sleep")
+            .arg("0.2")
+            .spawn()
+            .expect("spawn stub child");
+        let sup = InstrumentChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats.clone(),
+            PathBuf::from("sleep"),
+            PathBuf::from("/ignored.clap"),
+            None,
+            48_000,
+        )
+        .expect("supervisor spawn");
+
+        let respawned = poll_until(5, || stats.respawn_count.load(Ordering::Relaxed) >= 1);
+        assert!(respawned, "child の異常終了で respawn_count が進む");
+        assert!(
+            !stats.measurement_invalid.load(Ordering::Acquire),
+            "respawn が成功している間は計測有効"
+        );
+        drop(sup);
+        let _ = std::fs::remove_file(&shm);
     }
 }

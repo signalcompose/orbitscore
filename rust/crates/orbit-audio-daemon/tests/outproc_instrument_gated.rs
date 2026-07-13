@@ -112,6 +112,18 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
     println!("respawn_count:       {}", stats.respawn_count);
     println!("child_proc_errors:   {}", stats.child_process_error_count);
     println!("measurement_invalid: {}", stats.measurement_invalid);
+    println!(
+        "output_event_dropped:    {}",
+        stats.output_event_dropped_count
+    );
+    println!(
+        "output_event_spilled:    {}",
+        stats.output_event_spilled_count
+    );
+    println!(
+        "output_note_end_dropped: {}",
+        stats.output_note_end_dropped_count
+    );
     println!("======================================================");
 
     assert!(
@@ -133,6 +145,21 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
     assert_eq!(
         stats.child_process_error_count, 0,
         "instrument child で process error が発生"
+    );
+    // 単発 NoteOn/NoteOff の happy path では output event window (MAX_EVENTS_PER_BLOCK) を溢れさせ
+    // ないはず -- 溢れれば #420 review Important 2 の stuck-note-class バグ経路に入る。CI では動かない
+    // (実機 gated のみ) が、将来ここが非 0 になれば少なくともローカル実行時に検知できる。
+    assert_eq!(
+        stats.output_event_dropped_count, 0,
+        "happy path で output event が drop された(window+spill 両方枯渇)"
+    );
+    assert_eq!(
+        stats.output_event_spilled_count, 0,
+        "happy path で output event が spill FIFO へ溢れた"
+    );
+    assert_eq!(
+        stats.output_note_end_dropped_count, 0,
+        "happy path で NoteEnd が drop された(host の voice bookkeeping 永久リーク経路)"
     );
 }
 

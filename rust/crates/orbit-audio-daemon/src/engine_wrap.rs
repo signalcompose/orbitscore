@@ -2182,14 +2182,16 @@ mod outproc_health_tests {
 
 #[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_note_tests {
-    use super::{EngineWrap, OutProcInstrumentControl};
+    use super::{EngineWrap, OutProcInstrumentControl, WrapError};
     use crate::backend::StubBackend;
     use orbit_audio_sandbox::{NeutralEvent, VoiceAddr};
 
-    fn wrap_with_note_consumer() -> (std::sync::Arc<EngineWrap>, rtrb::Consumer<NeutralEvent>) {
+    fn wrap_with_note_consumer(
+        capacity: usize,
+    ) -> (std::sync::Arc<EngineWrap>, rtrb::Consumer<NeutralEvent>) {
         let (wrap, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
-        let (event_tx, event_rx) = rtrb::RingBuffer::new(4);
+        let (event_tx, event_rx) = rtrb::RingBuffer::new(capacity);
         let stats = crate::outproc_instrument::OutProcInstrumentStats::new();
         *wrap
             .outproc_instrument
@@ -2200,7 +2202,7 @@ mod outproc_instrument_note_tests {
 
     #[test]
     fn plugin_notes_are_converted_to_neutral_events_on_control_side() {
-        let (wrap, mut event_rx) = wrap_with_note_consumer();
+        let (wrap, mut event_rx) = wrap_with_note_consumer(4);
         wrap.plugin_note_on(60, 3, 0.75).expect("send note on");
         wrap.plugin_note_off(61, 4, 0.25).expect("send note off");
 
@@ -2228,6 +2230,65 @@ mod outproc_instrument_note_tests {
                 addr: expected_addr(4, 61),
                 velocity: 0.25,
             })
+        );
+    }
+
+    // pr-test-analyzer (item 6, PR #422 review): `push_outproc_instrument_event`'s ring-full error
+    // path (increments `plugin_event_ring_overflow_count`, returns `WrapError::OutProcInstrument`)
+    // had no coverage. A capacity-1 ring plus a consumer that never drains guarantees the ring
+    // fills; loop until `plugin_note_on` errors rather than assuming rtrb's exact fill count.
+    #[test]
+    fn push_outproc_instrument_event_reports_ring_full_and_increments_overflow_counter() {
+        let (wrap, _event_rx) = wrap_with_note_consumer(1);
+        let before = wrap.plugin_event_ring_overflow_count();
+
+        let mut result = Ok(());
+        for _ in 0..8 {
+            result = wrap.plugin_note_on(60, 0, 0.8);
+            if result.is_err() {
+                break;
+            }
+        }
+
+        let err = result.expect_err("ring must eventually report full (never drained)");
+        assert!(
+            matches!(err, WrapError::OutProcInstrument(_)),
+            "expected OutProcInstrument(ring full), got {err:?}"
+        );
+        assert_eq!(
+            wrap.plugin_event_ring_overflow_count(),
+            before + 1,
+            "ring-full push must increment the overflow counter exactly once"
+        );
+    }
+
+    // pr-test-analyzer (item 8, PR #422 review): `push_outproc_instrument_event`'s `None` branch
+    // (outproc_instrument not initialized, e.g. test backend) had no direct test, unlike the
+    // analogous and already-tested `clap-host` `ClapUnavailable` branch
+    // (`push_plugin_event_tests`) in this same file.
+    #[test]
+    fn plugin_note_on_returns_unavailable_when_not_initialized() {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let err = wrap
+            .plugin_note_on(60, 0, 0.8)
+            .expect_err("outproc_instrument mutex holds None by default (no injection)");
+        assert!(
+            matches!(err, WrapError::OutProcInstrumentUnavailable(_)),
+            "expected OutProcInstrumentUnavailable, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn plugin_note_off_returns_unavailable_when_not_initialized() {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let err = wrap
+            .plugin_note_off(60, 0, 0.0)
+            .expect_err("outproc_instrument mutex holds None by default (no injection)");
+        assert!(
+            matches!(err, WrapError::OutProcInstrumentUnavailable(_)),
+            "expected OutProcInstrumentUnavailable, got {err:?}"
         );
     }
 }
