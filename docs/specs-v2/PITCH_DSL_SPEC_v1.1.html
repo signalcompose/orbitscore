@@ -356,6 +356,11 @@ diagnostic。不一致時はエラー(利用可能ポート一覧を提示)。</
 との併用はエラー。</li>
 <li><strong>SC オーディオ経路との併走は可</strong>(LinkAudio
 のような排他制約は設けない)。</li>
+<li><strong>Plugin instrument 出力(#425)</strong>: note 出力宣言には
+<code>seq.midi()</code> のほか、ホストされたプラグインを出口にする
+<code>seq.instrument(path)</code> がある(構文の正本: core spec
+<code>INSTRUCTION_ORBITSCORE_DSL.md</code> の Plugin Hosting
+節)。いずれの出口でも <code>play()</code> の値は度数として解釈される。</li>
 </ul>
 <h3 id="sequence-level-parameters">Sequence-level parameters</h3>
 <div class="sourceCode" id="cb2"><pre class="sourceCode js"><code class="sourceCode javascript"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>seq<span class="op">.</span><span class="fu">gate</span>(<span class="fl">0.8</span>)      <span class="co">// デフォルトゲート長(スロット長に対する比)。default: 0.8</span></span>
@@ -835,6 +840,13 @@ quantize)に従う。<code>play()</code> 差し替えが quantize
 ピッチベンドで実現。同チャンネル同時発音中の異デチューンは不可(warning)。本格対応は
 MPE(スコープ外)。</li>
 </ol>
+<p><strong>出力アダプタへの適用(#425)</strong>: 本節の realization rules は
+MIDI 出力に限らず、任意の note 出力アダプタ(plugin instrument
+経路を含む)に適用される。plugin 経路の置換規則: CC123/CC120
+は使えないため All Notes Off = active note の列挙 → note-off
+の逐次送出。detune <code>~</code>(rule 5)は pitch bend 経路がないため v1
+では実現不能(warn + skip)。rule 0 のシンボリックピッチ保持は plugin
+出力アダプタにもそのまま適用される。</p>
 <hr />
 <h2 id="out-of-scope-v1.1">8. Out of Scope (v1.1)</h2>
 <ul>
@@ -845,7 +857,10 @@ MPE(スコープ外)。</li>
 <li>CC / Program Change 出力(ROADMAP には記載あり。v1.1.x で追加)</li>
 <li>8音以上のコレクションでの mode テンション規則(当面 root スコープ +
 b/# で書く)</li>
-<li>VST/AU ホスティング(v3.0+ #95)</li>
+<li>VST/AU ホスティング(v3.0+ #95) — <strong>scope 移管(#425)</strong>:
+plugin hosting の DSL 構文(CLAP effect/instrument)は core spec
+<code>INSTRUCTION_ORBITSCORE_DSL.md</code> の Plugin Hosting
+節が正本(本仕様のスコープ外のまま)</li>
 <li>MIDI 入力</li>
 </ul>
 <hr />

@@ -648,7 +648,7 @@ s.audio("snare.wav").output("drums")               // kick と snare が同 chan
 
 **Strict mode (v1.2.0+)**: `global.linkAudio()` を宣言したファイル内では、 全ての発音 sequence が `.output(name)` で channel を宣言する必要がある。 `.output()` を持たない sequence が `.play()` した時点で **runtime error** を投げる (`Sequence.resolveDispatchChannel`)。 これは「LinkAudio mode 中は全 sequence が LinkAudio 経由」 という §8.1.1 の宣言と整合させるための strict 制約で、 hardware 出力との silent fallback は行わない (hardware/LinkAudio 混在は不可、 §8.1.1 参照)。 編集時には VS Code 拡張が `analyzeLinkAudioMissingOutput` で同等の error 診断を出す (§11)。
 
-**MIDI 例外**: `seq.midi()` で宣言した MIDI sequence は strict mode の `.output()` 要件から**免除**される。MIDI sequence は SC audio bus ではなく MIDI bus にルーティングされるため、LinkAudio channel binding は不要 (#282)。
+**MIDI 例外**: `seq.midi()` で宣言した MIDI sequence は strict mode の `.output()` 要件から**免除**される。MIDI sequence は SC audio bus ではなく MIDI bus にルーティングされるため、LinkAudio channel binding は不要 (#282)。`seq.instrument()` で宣言した instrument sequence も同様に免除される（plugin 経路にルーティングされるため。ただし v1 では `global.linkAudio()` と plugin hosting の同時使用自体が不可 — Plugin Hosting PH.5 参照）。
 
 `global.linkAudio()` 未宣言で `seq.output()` を呼んだ場合は別経路: channel name は記録されるが hardware path に流れ、 `.output()` 呼び出しのたびに console に警告が出る (LinkAudio mode を有効化し忘れたケースのフェイルセーフ。警告は dedup されず毎回発火する)。 編集時の order-violation 検出は §11 参照。
 
@@ -1123,6 +1123,109 @@ piano.comp([1,3,5], [5,7,2]).voicelead()  // composes with §6.3
   DSL scope (comp C3)**: it belongs to an LLM bandmate skill that live-codes the DSL, keeping the DSL
   a controllable primitive set rather than an auto-composer (philosophy: user/AI control, not autogen).
 
+---
+
+## Plugin Hosting (CLAP effect / instrument)
+
+> ⚠️ **構文確定・未実装 / syntax finalized, not yet implemented**
+>
+> 本節は Issue #425（2026-07-13・owner 設計セッション + Fable 検証）で確定した構文仕様。
+> 実装は #426（effect 疎通）/ #427（instrument 疎通 + Pitch DSL 接続）/ #428（note timing）の
+> スコープであり、本節の記述が実装に先行する（spec-first）。
+> Option A/B/C の比較経緯は `docs/development/POST_2.0_VST3_HOSTING_PLAN.md` §6、
+> 決定の記録は Issue #425 / WORK_LOG を参照。
+
+OrbitScore engine（Rust daemon）は CLAP プラグインをホストする配管を持つ
+（effect = PR #397 / instrument = PR #422）。本節はそれを DSL から消費する構文の正本。
+
+### PH.1 instrument — `seq.instrument(path[, pluginId])`
+
+```js
+var synth = init global.seq
+synth.instrument("~/plugins/Surge XT.clap")   // 種別宣言＝出口宣言
+synth.octave(4).vel(100)
+synth.play(1, 3, 5, 0)                        // 値は度数（Pitch DSL と同じ）
+```
+
+- `.midi(port, ch)` と同型の**シーケンス種別宣言 verb**。宣言したシーケンスは
+  **note シーケンス**となり、`play()` の値は度数として解釈される。
+- `.audio()` / `.midi()` と**相互排他**（同じ throw パターン。1 シーケンス 1 出口）。
+  audio シーケンスの `play()` 意味論には一切影響しない。
+- 度数解釈・リズム木・Pitch DSL §7 realization rules を MIDI シーケンスと共有する
+  （`octave` / `vel` / `gate` / `root`、mode / chord / `[ ]` / tie / voicing 適用可）。
+- **v1 実現マトリクスの例外**: detune `~` は不可（plugin 経路に pitch bend / CC がない
+  ため warn + skip）。`global.midiLatency()` は MIDI 送出専用のため非適用。
+- 出力はエンジン master bus に add-mix され、global gain / master effect insert /
+  capture の対象になる。
+- RUN / LOOP / MUTE / quantize の意味論は MIDI シーケンスと同一。
+
+### PH.2 effect — `global.effect(path[, pluginId])`
+
+```js
+global.effect("~/plugins/TAL-Reverb-4.clap")   // master bus insert
+```
+
+- **master bus への単一 insert**（全シーケンスに掛かる）。global master effects
+  （compressor / limiter / normalizer）と同じ「master バス処理は global スコープ」の
+  役割分担に従う。
+- v1 は 1 基のみ。2 回目の呼び出しはエラー（「v1 は master insert 1 基。チェーンは将来対応」）。
+- 将来拡張（非規範）: 複数回呼び出し = 呼び出し順の直列チェーン（左→右）。
+  per-sequence insert（`seq.effect()`）も将来拡張として予約する — verb 名を共有するため、
+  追加しても構文の非互換は生じない。
+
+### PH.3 プラグイン識別と format 判定
+
+- 第1引数 = path 文字列。相対 path の基準は `.audio()` の path-direct 形
+  （`./` `../` `~/` `/`）と同じ規則。bank 名検索（`global.audioPath()` 相当）はなし。
+- format は**拡張子で判定**: `.clap` → CLAP、`.vst3` → VST3、`.component` → AU。
+  verb は format 非依存（format 別 verb は作らない）。
+  **v1 の受理は `.clap` のみ** — `.vst3` / `.component` は構文上予約し
+  「not yet supported」エラーを返す。未知拡張子はエラー。
+- 第2引数 `pluginId`（optional）: 1 バンドルに複数プラグインが入る場合の指定
+  （daemon `LoadPlugin.plugin_id` に対応）。省略時はバンドル先頭のプラグイン。
+
+### PH.4 ロード・エラー・多重宣言の意味論
+
+- **宣言時 eager ロード**: `.midi()` のポート eager 解決と同型。ロード失敗
+  （ファイル不在・非対応 format・plugin 非対応ビルド）は**宣言時のハードエラー**とし、
+  warn + no-op にしない（instrument の silent failure = 無音を防ぐ。daemon の
+  `CLAP_NOT_LOADED` 正直エラー方針 #405 と整合）。
+- **instrument はエンジン全体で 1 インスタンス**（v1）:
+  - 複数の note シーケンスが**同じ path** を宣言 → 同一インスタンスを共有（note はマージ。
+    v1 は全 note が channel 0 固定。per-sequence channel は将来の非規範拡張）。
+    実装注記: daemon は同 path でも 2 回目の `LoadPlugin` を `AlreadyLoaded` エラーに
+    するため、**共有は TS ブリッジ側の dedup で実現する**（置換ベースで設計しないこと）。
+  - **異なる path** の 2 つ目の宣言 → エラー（daemon が置換非サポート。加えてライブ中の
+    暗黙置換は他シーケンスの音が突然変わる事故になる）。
+  - 同一シーケンスの再宣言: 同一 path は冪等（no-op）。異 path への差し替えはエラー
+    （`.audio()` の置換挙動とは異なることに注意）。
+- **All Notes Off**: plugin 経路に CC はないため、active note を列挙して note-off を
+  逐次送出する。`global.stop()` / LOOP 除外 / MUTE / `play()` 差し替え時の保留 note
+  解放義務は Pitch DSL §7-2 と同一。
+- **underscore 規約**: plugin verb は宣言専用であり `_effect` / `_instrument` 形はない。
+- `.orbslog`: 宣言は他 verb 同様に因果評価ログとして自動記録される（特別扱いなし）。
+
+### PH.5 LinkAudio との関係（v1 制限）
+
+- instrument シーケンスは MIDI シーケンス同様、strict mode の `.output()` 要件から
+  **免除**される（SC audio bus ではなく plugin 経路にルーティングされるため。§8.1.2 参照）。
+- **v1 制限**: `global.linkAudio()` と plugin hosting（effect / instrument）は
+  同時使用不可 — 宣言時エラー（現 engine の compile-time 排他 feature の実態を開示）。
+
+### PH.6 v1 制限（実装事実の開示）
+
+- effect と instrument の同一プロセス同時使用は現配管では不可（compile-time 排他 feature）。
+  解消は #426 / #427 の配線課題であり、**構文はこの制限に依存しない**
+  （制限が解消されても構文は不変）。
+- note 発火は block-head 精度（sample-accurate 化は #428）。
+- ロード確認から audio 反映までの短い race window が残存する（#410）。
+- **param / CC 制御**（EQ-from-DSL 等）は本節のスコープ外 — M2 param path の成熟後に
+  別途構文を確定する（構文未確定。ここで先取りしない）。
+
+---
+
+## Implementation Status
+
 ### Completed Features ✅
 
 #### Core DSL (v3.0)
@@ -1228,12 +1331,17 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 - **delay()**: Per-sequence delay effect
 - **reverb()**: Per-sequence reverb effect
 - **filter()**: Per-sequence filter effects
+- **seq.effect()** (per-sequence plugin insert): reserved as a future extension of the
+  Plugin Hosting section — v1 hosts plugin effects on the master bus only (`global.effect()`)
 
 #### Advanced Features
 - **Composite Meters**: `((3 by 4)(2 by 4))`
 - **Force Modifier**: `.force` for transport commands
 - **Effect Presets**: Named preset system for effect chains
 - **DAW Plugin**: VST/AU plugin development
+- **Plugin Hosting implementation**: the CLAP effect/instrument hosting *syntax* is finalized
+  (#425 — see the Plugin Hosting section above); engine wiring is tracked in #426/#427/#428.
+  `.vst3` / `.component` formats are reserved (not yet supported)
 - **`slice()`**: per-event start/end point selection within a chopped file (#239)
 - **Audio `[ ]` stack / slice layering**: simultaneous audio-layer stacking in the play tree (#238)
 
