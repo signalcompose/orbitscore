@@ -17,6 +17,69 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.249 docs(dsl): plugin effect/instrument DSL 構文確定 — #425 Option A 決定 + spec 反映 (Jul 13, 2026)
+
+**Date**: 2026-07-13
+**Status**: ✅ 構文確定・spec 反映済み（実装は #426/#427/#428 のスコープ・本 Issue ではコードを書かない）
+**Branch**: `425-plugin-dsl-syntax`
+**Commit**: `81d65e6`
+
+`POST_2.0_VST3_HOSTING_PLAN.md` §6 で「effect が実機で動いてから owner と確定」と据え置かれていた
+plugin DSL 構文（Option A）を確定した。Epic #424（CLAP plugin DSL wiring）の最初の1手。
+
+**確定した構文（骨子）**:
+- **instrument**: `seq.instrument(path[, pluginId])` — `.midi(port, ch)` と同型の
+  「種別宣言＝出口宣言」verb。`.audio()`/`.midi()` と相互排他。instrument シーケンスは
+  note シーケンス（度数解釈・リズム木・realization rules を MIDI と共有）。
+- **effect**: `global.effect(path[, pluginId])` — master bus 単一 insert（v1）。
+  **§6 素描の `seq.effect()` から意図的に逸れる非対称**を採用: 現配管の seam が
+  master bus 単一 insert のため、per-seq 構文は「全シーケンスに掛かるのに 1 つに
+  紐づいて見える」意味論の乖離になる。`seq.effect()` は将来拡張として予約（verb 名共有・非互換なし）。
+- **format**: 拡張子判定（`.clap`/`.vst3`/`.component`）・verb は format 非依存。
+  v1 受理は `.clap` のみ（`.vst3`/`.component` は予約エラー — #426 が VST3 配線を背負わないため）。
+- **エラー方針**: 宣言時 eager ロード + ハードエラー（warn+no-op にしない。
+  instrument の silent failure 防止・#405 の正直エラー方針と整合）。
+- **多重宣言**: instrument はエンジン全体 1 インスタンス（v1）。同 path 共有は
+  TS ブリッジ側 dedup（daemon は `AlreadyLoaded` エラー）・異 path 2 つ目はエラー。
+- **v1 スコープ外**: param/CC 制御（EQ-from-DSL は M2 param path 成熟後に別途確定）、
+  detune `~`（pitch bend 経路なし・warn+skip）。
+
+**プロセス（役割分担フローどおり）**:
+1. **エビデンス収集**（Sonnet subagent ×2 並行）: ①既存 DSL 構文の慣習
+   （リフレクション dispatch・パーサー変更不要・`.audio()`/`.midi()` の排他パターン、
+   §7 Known Decisions に既決なし = greenfield 確認）②daemon 配管の実 API
+   （`LoadPlugin`/`PluginNoteOn/Off` スキーマ・単一スロット・4-way compile-time 排他・
+   WORK_LOG 6.248 の接続ギャップ 5 点）。
+2. **Fable 検証**: 条件付き GO。修正 5 点 — (1) 「再呼び出しは置換」は事実誤認
+   （実際は `AlreadyLoaded` エラー・`controller.rs:219-225`）(2) 異 path エラーと
+   再宣言の文言矛盾の解消 (3) 「Pitch DSL 全 verb 適用」の過大主張を実現マトリクスに緩和
+   (4) 追加決定点 D7-D10（linkAudio 排他・note-off 意味論・eager ロード・ハードエラー）
+   (5) PITCH_DSL_SPEC への最小 3 変更が必要（core spec :814-817 の権威順位
+   「specs-v2 が勝つ」— 放置すると正本階層が新機能を形式的に否定する）。
+   全て反映済み。確信度: D1/D3/D5/D6 高・D2 中〜高（各判定に反証条件つき）。
+3. **owner 設計セッション**: 3 論点を確認 — instrument = `seq.instrument(path)`（推奨どおり）、
+   effect = `global.effect(path)`（推奨どおり）、エラー方針 = ハードエラー（推奨どおり）。
+   D3-D9 は推奨提示に異論なしで確定。
+
+**spec 反映（spec-first・実装より先）**:
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`: 新セクション「Plugin Hosting
+  (CLAP effect / instrument)」（PH.1-PH.6・構文確定/未実装マーカーつき）+
+  「Not Yet Implemented」2 箇所更新 + `## Implementation Status` 見出しを補い構造明確化。
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.html`: §1 に plugin instrument 出力の相互参照、
+  §7 に出力アダプタ適用注記（CC123/120 → note-off 列挙・detune v1 不能・rule 0 適合）、
+  §8 に scope 移管注記（構文の正本 = core spec）。
+
+**反証可能性（この決定が覆りうる条件・Fable 検証より）**:
+- daemon に multi-instance / unload-reload / per-play insert が近期に入る → D4 のエラー意味論は緩められる
+- C1（pitch モデル再設計）が note 発行層を書き換える → D1 の接続点は再検討（Epic #424 反証条件 1）
+- M2 param wire が #426/#427 より先に実装される → D5（param 据え置き）は前倒し可
+
+**レビュー（docs-only 規約に従い advisor 代替 = opus 独立監査で方法を決定）**:
+full pr-review-team / @claude bot は不要（コード 0 行・空振りリスクのみ）と判定し、
+fresh agent 差分監査 + owner 最終確認を採用。監査結果 = ブロッカーなし
+（D1-D10 + 吸収項目の反映漏れなし・相互参照全件正確・§7 rule 番号一致）。
+Low 指摘 1 件（§8.1.2 の MIDI 例外に instrument の鏡写しがない）を反映済み。
+
 ### 6.248 feat(engine): CLAP instrument daemon 縦貫通 — #419 output event 配線 + #420 production 統合 (Jul 13, 2026)
 
 **Date**: 2026-07-13
