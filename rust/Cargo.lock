@@ -982,9 +982,19 @@ dependencies = [
  "clack-extensions",
  "clack-host",
  "orbit-audio-native",
+ "orbit-audio-sandbox",
  "rtrb",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "orbit-clap-instrument-child"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "orbit-audio-sandbox",
+ "orbit-clap-host",
 ]
 
 [[package]]

@@ -15,17 +15,33 @@
 //! 設計の正本: `docs/development/POST_2.0_GAMMA_M1_DESIGN.md`。
 
 pub mod child;
+pub mod event_backing_ring;
+pub mod event_spill_fifo;
+pub mod events;
 pub mod host;
+mod instrument_host;
 pub mod offline;
 pub mod transport;
 
 pub use child::SandboxChildGuard;
+pub use event_backing_ring::{EventBackingRing, EVENT_BACKING_CAPACITY};
+pub use event_spill_fifo::{EventSpillFifo, EVENT_SPILL_CAPACITY};
+pub use events::{
+    EventPayload, EventRecord, NeutralEvent, NeutralExpressionId, VoiceAddr,
+    KIND_LEGACY_MIDI_CC_OUT, KIND_MIDI2, KIND_MIDI_RAW, KIND_NOTE_CHOKE, KIND_NOTE_END,
+    KIND_NOTE_EXPRESSION, KIND_NOTE_OFF, KIND_NOTE_ON, KIND_PARAM_GESTURE_BEGIN,
+    KIND_PARAM_GESTURE_END, KIND_PARAM_MOD, KIND_PARAM_VALUE, KIND_POLY_PRESSURE,
+};
 pub use host::PipelinedEffectHost;
+pub use instrument_host::{
+    InstrumentBlockOutcome, PipelinedInstrumentHost, VoiceKey, VoiceTable, MAX_TRACKED_PORTS,
+};
 pub use offline::{
     max_abs_diff, render_in_process_gain, render_through_child_sync,
     render_through_child_sync_with_options, ChildStats, RenderOptions,
 };
 pub use transport::{
-    create_shared, open_shared, region_ptr, slot_index, slot_offset, SharedRegion, BUF_LEN,
-    CHANNELS, CONTROL_QUIT, CONTROL_RUN, MAX_FRAMES, REGION_BYTES, SLOTS,
+    create_shared, open_shared, region_ptr, slot_index, slot_offset, SharedRegion,
+    TransportContext, BUF_LEN, CHANNELS, CONTROL_QUIT, CONTROL_RUN, MAX_EVENTS_PER_BLOCK,
+    MAX_FRAMES, REGION_BYTES, SLOTS,
 };

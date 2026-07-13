@@ -17,6 +17,165 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.247 fix(engine): M2 Equal分岐の seqlock 型再検証を追加（Fable指摘対応・#416） (Jul 13, 2026)
+
+6.246 で Fable が指摘した「`Ordering::Equal` 分岐のレースを M1 前例でスコープ外にした判断は事実誤認」への対応。`event_cursor` drain ループの `Equal` 分岐に、record 適用後の `seq_tag` 再 Acquire load を追加し、変化していれば `Ordering::Greater` と同じ回復（`event_cursor_recycled` 増分・`voices.reset_all()`・`event_cursor = submitted`）を適用する seqlock 型再検証を実装。共有ロジックは `recover_from_recycled_slot()` ヘルパに抽出し、両分岐が同一の回復パスを呼ぶ。
+
+- **fixer が自ら advisor に相談し、コメントの過大主張を訂正**: 初稿は「再検証が一致すれば読み取り中の recycle は無かったことが保証される」と書いていたが、実際に `sandbox-instrument-child.rs` の書き込み順序（`output_events`/`output_event_count` を先に書き、`seq_tag` を Release store するのは最後）を確認した結果、「read の途中で始まったが、まだ自身の `seq_tag` store に到達していない recycle」はこの再検証でも検出できないことが判明。コメントを「レースウィンドウを狭めるものであり、完全に閉じるものではない」という正確な記述に修正した。
+- **残存ギャップの許容根拠**: この簿記は observational のみ（音声経路には影響しない）。`decode()` が record 構造を検証するため、torn read は「妥当に見えるが誤った event」にデコードされるか、`event_decode_error_count` の増分で検出されるかのいずれかに帰着する。
+- **決定論的テストは断念（正当な理由あり・advisorで確認）**: 単一スレッド・同期的な `process_block` 呼び出し内で、2回の `seq_tag` Acquire load の間には純粋な計算しか無く、その間に別スレッドが実際にメモリを書き換えない限り不一致は起こり得ない。これを強制するテストは本質的にタイミング依存でflakyになるため、既存の `backlog_catch_up_consumes_every_sequence_exactly_once_in_order`（`Greater`分岐の類似ケースで同じ立場を取っている）と同じ判断で見送った。`Equal` 分岐を通る既存テスト群が happy path を確認済み。
+- 全35 orbit-audio-sandbox unit test + gated stress + gated parity（2テスト）を Opus main が独立に再実行して確認。
+- **役割**: 発見・修正方針の提示＝ Fable（owner 指名の独立レビュー）。**実装＝ pr-review-team の fixer subagent**（実装中に自らadvisorへ相談しコメント精度を検証）。検証の裏取り＝ Opus main。
+- **状態**: この修正でレビューループを終了。次: 最終確認の再々レビュー1回→CI/bot feedback確認→ユーザーへの完了報告（マージはユーザーの明示指示待ち）。
+
+### 6.246 fix(engine): M2 レビュー追加指摘対応 + Fable独立検証（#416） (Jul 13, 2026)
+
+6.245 の修正後、`/code:pr-review-team` の再々レビューで5件の追加指摘（stale field doc comment・RT-unsafeなeprintln!・新規テストの前提realism・backlog_catch_upの状態未assert・voices.increment順序）が出た。**advisor は「反復ループが `/code:pr-review-team` の MAX_ITERATIONS=3 を超えて発散している」と判断し、最終1ラウンドで確実な項目のみ対応し残りは追跡issue化する方針**を確認。同時に owner の要請で **Fable（`claude-fable-5`）に独立レビューを依頼**し、この方針・特に「Equal分岐のレースはM1と同型だからスコープ外」という判断が正しいかを一次情報ベースで検証させた。
+
+- **最終ラウンドで対応**: (1) `event_cursor` フィールドの doc comment を、否定された安全性主張から実際の回復ロジック（Greater分岐）の説明に書き換え。(2) round3で追加した `eprintln!`（RT-unsafe・audio callback から呼ばれる `drain_to_event_buffer` 内）を差し戻し、`debug_assert!` のみに戻した。(3) 新規テスト `recycled_slot_resyncs_event_cursor_and_resets_voices` の前提を、`submitted` を実際の `process_block` 呼び出しで正当に `next+SLOTS` まで進めてから `seq_tag` を poke する構成に修正（従来は到達不可能な前提だった）。(4) `backlog_catch_up_consumes_every_sequence_exactly_once_in_order` に非flakyな `event_cursor_recycled <= 1` assertion を追加。(5) `voices.increment()` の呼び出し順序問題（同一呼び出し内で今 submit した NoteOn が古い gap 用の reset に巻き込まれて消える）を、想定より小さな変更で修正可能と判明したため即修正（NoteOn の簿記反映を drain ループ全体の後に遅延）。
+- **Fable の検証結果（重要な訂正）**: 「Equal分岐のレースは M1 の既存パターンと同型だからスコープ外」という判断は**事実誤認**と判明。M1（`host.rs`）の audio 読み取りは `target = submitted-1` に密結合しており、`SLOTS>=2` の compile-time assert と `seq_request` の唯一の書き手が host 自身であることから、recycle が構造的に不可能（証明可能な時間的排他）。一方 drain ループの `next` は `submitted` から分離しており、Greater分岐が実証したのと同種のレースにさらされている。ただし修正は安価（Equal分岐で record 適用後に `seq_tag` を再 Acquire load し、変化していれば Greater分岐と同じ回復ロジックを適用する ~6行の seqlock 型再検証）と判定、被害範囲は簿記のみで音声出力には影響しないことも確認。`voices.increment()` 順序問題は許容できるトレードオフ（修正不要）と判定したが、fixer側の判断で既に対応済みだった。
+- Fable の指摘（Equal分岐の seqlock 型再検証）を追加ラウンドとして委譲・適用（詳細は本エントリに続くコミットで記録）。
+- 全34+ orbit-audio-sandbox unit test + gated stress + gated parity を Opus main が独立に再実行して確認。
+- **教訓**: レビューループが反復上限を超えて発散し始めたら、advisor の「収束させて報告」という判断に従いつつ、技術的に確信度の低い判断（特に「前例があるからスコープ外」という類の判断）は独立した第三者（Fable）でもう一段検証する価値がある。今回、advisor 自身も一度誤り、その誤った waiver の根拠を Fable が正しく指摘した — 単一の相談先を鵜呑みにせず、根拠が薄い判断は複数経路で裏取りする運用が機能した。
+- **役割**: 5件の追加指摘の発見＝ 4並列レビュアー。ループ発散の判断・最終ラウンドのスコープ確定＝ advisor 相談の上 Opus main。**実装（5項目）＝ pr-review-team の fixer subagent**（item5 の実装過程で fixer 自身が advisor に相談し `Ordering::Equal` 分岐との相互作用も含めて正確に処理）。**独立検証＝ Fable**（owner の指名）。検証の裏取り＝ Opus main。
+- **状態**: 最終ラウンド完了・裏取り済み。Fable 指摘の追加ラウンドへ。
+
+### 6.245 fix(engine): M2 event_cursor 永久スタックの実バグを発見・修正（#416） (Jul 13, 2026)
+
+PR #417 の `/code:pr-review-team` 再レビュー（round1修正後）で、code-reviewer が `event_cursor` drain ループの並行性懸念を指摘。**当初 Opus main + advisor は「到達不能・false positive」と結論したが、これは誤りだった**。fixer が実際に検証コマンドを実行した過程で、**既存の正当な回帰テスト `backlog_catch_up_consumes_every_sequence_exactly_once_in_order` が実際に問題の分岐（`Ordering::Greater`）を3/3回踏むことを発見**し、advisor 経由でエスカレーション。
+
+- **誤った証明の原因**: 「`seq_done <= submitted` は常に成立し、危険な閾値（`seq_done >= next + SLOTS`）に届くには lag が `SLOTS+1` 以上必要」と推論したが、`self.submitted` は drain ループの**直前**（同一 `process_block` 呼び出し内）で `new_seq` に更新される。この更新後は `seq_done <= submitted` が `seq_done <= new_seq` を意味し、lag=SLOTS ちょうどで危険な閾値と一致してしまう — 「submitted は呼び出し中固定」という誤った前提が証明の穴だった。
+- **なぜテストが green のまま埋もれていたか**: `backlog_catch_up_consumes_every_sequence_exactly_once_in_order` は child が shm に直接書いた raw event を確認するのみで、host 自身の `event_cursor`/`VoiceTable` 状態を一切 assert していなかった。
+- **実際の障害**: lag が SLOTS に達した状態で、child が host の作業（同一呼び出し内の `seq_request` 更新）を追い越して該当 slot を再周回し終えると、`seq_tag[slot]` が `next` より大きい値を示す。`seq_tag` はその slot について以後増加する一方なので、単純に break するだけでは `event_cursor` がその値に**恒久的に**スタックし、以後のセッション全体で NoteEnd/NoteChoke 簿記更新が silent に失われる — §7-11 が保証するはずの「簿記がリークしない」が実際には崩れる本物のバグだった。
+- **修正方針（advisor 確認済み・submit/play 意味論は変更しない）**: 案（submit guard を event_cursor にも連動させる）は play/timing 意味論変更になり spec 更新が必要なため不採用。代わりに、既存の `output_note_end_dropped_count` → `reset_all()` という回復パターンをそのまま `Greater` 分岐に適用: 新規 host側カウンタ `event_cursor_recycled` を増分・`voices.reset_all()`（保守的に全簿記ゼロ化）・`event_cursor = submitted`（回復不能な gap を諦めて追いつく）。wire/SharedRegion は無変更（`PipelinedInstrumentHost` 自身の `pub` フィールドとして追加、既存の `fresh`/`stale`/`stall`/`frames_clamped` と同型）。
+- 決定論的回帰テスト `recycled_slot_resyncs_event_cursor_and_resets_voices` を追加（`backlog_catch_up` は実 child 相手の非決定的観測だったため、これが初めての決定的repro）。修正前 fail・修正後 pass を確認済み。
+- 全34 orbit-audio-sandbox unit test + gated stress + gated parity（`instrument_parity_gated.rs` の2テスト、dylib を自らビルドして実行）を Opus main が独立に再実行して確認。
+- **教訓**: 「推論による安全性証明」は lock-free コードでは信用しきらず、実行結果（既存テストの green/red）で裏取りする。今回は fixer が愚直に検証コマンドを流したことで誤った証明が露呈した。advisor 自身も「自分の証明が誤りだった」と訂正している — 一発の advisor 相談を鵜呑みにせず、後続の実証結果と矛盾したら再度エスカレーションする運用が機能した。
+- **役割**: 懸念の発見＝ code-reviewer（re-review）。当初の誤った棄却＝ Opus main + advisor（訂正済み）。**実際の検証コマンド実行によるバグ発覚＝ fixer**。エスカレーション判断・修正方針確定＝ advisor 相談の上 Opus main。**実装（構造体拡張・回復ロジック・回帰テスト）＝ pr-review-team の fixer subagent**。検証の裏取り＝ Opus main。
+- **状態**: 修正・裏取り完了。次: WORK_LOG コミット→push→`select-reviewers.sh` 再実行→4エージェント再々レビュー→Critical/Important=0確認。
+
+### 6.244 fix(engine): M2 `/code:pr-review-team` 指摘対応 + 先送り3件の追跡強化（#416） (Jul 12, 2026)
+
+PR #417 の必須レビュー手順 `/code:pr-review-team`（code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer の4並列レビュー）で見つかった指摘に対応。owner から「先送りが多いと未追跡の負債になる」と懸念が出たため、修正可否の判断すべてを advisor と再確認した。
+
+**3レビュアー間で判定が割れた争点**: 実 `orbit-clap-instrument-child`（Stage5）が実 CLAP plugin の output event（NOTE_END 等）を `output_events` wire に一切配線していない問題を pr-test-analyzer が発見・silent-failure-hunter も近接箇所を独立指摘したが、code-reviewer は「Stage6 で defer 済みと doc に明記されている」として却下していた。**advisor で検証した結果、この根拠は誤り**（Stage5 の WORK_LOG は「output方向はStage6で着手」と記録していたが、実際にStage6で配線されたのは合成 child のみで、実 CLAP child は今日まで未着手のまま）。code-reviewer の内部 advisor 呼び出しがこの誤った前提を引き継いでいたため、却下は採用しなかった。
+
+**最終トリアージ（advisor 2回・owner 懸念を受けた再確認込み）**:
+- **即時修正（3件）**: (b) `instrument_host.rs` の output-drain ループで `decode()` の `None`（真の decode 失敗）が `event_decode_error_count` を計上していなかった catch-all を分離 — CRITICAL・回帰テスト追加（修正を戻すと fail することを fixer が自ら確認）。(c) `orbit-clap-instrument-child/main.rs` で `push_neutral_event` の戻り値（翻訳不能 event の可視化）を握り潰していた箇所を、design doc §4 が明示的に許容する「既存 `event_decode_error_count` の再利用」で解消（新規 wire counter は追加せず）。(d) `events.rs` の `VoiceAddr.note_id` doc comment が §4.7 の条件付き再スコープと矛盾したまま unconditional な規約を主張していた stale comment を修正。
+- **先送り（1件・3重にアンカー）**: 実 CLAP instrument child の output event 配線（上記争点）。正しい修正は M1 effect と共有する `process_block_core`（本 PR 無変更）のシグネチャ変更を要し、`orbit-clap-instrument-child` はまだ production 経路として spawn されない（Phase 3 で初めて使われる）ため #416 スコープ外と判断。owner の「未追跡の負債」懸念に対応するため、**単なる doc 注記では不十分**と advisor に指摘され、(1) 専用 issue **#419** 新規作成 (2) design doc §4.2 output方向にスコープ外注記追加 (3) `ClapInstrumentProcessor::process_block` にコード内コメントでアンカー (4) PR #417 の本文に既知の制約として明記、の4点セットで対応。
+- **同じ観点で #418（respawn resume-semantics・前回セッションで doc 注記のみだった）も retrofit**: `orbit-clap-instrument-child/main.rs` の `let mut last = 0u64;` 初期化箇所にコード内コメントで #418 をアンカーし、doc 注記だけに留まっていた状態を是正。
+- **見送り（判断のみ・issue化せず）**: `VoiceTable::indices()` の範囲外 addr 無視（increment/note_end/choke で対称・既存の観測専用テーブル設計の一部）、`drain_to_event_buffer` の `debug_assert!(false)`（Stage4 で意図的に導入した、現状到達不能な回帰ガード）。
+- workspace 全体 fmt/clippy/test を Opus main が独立に再実行して確認（fixer の自己申告に加え、4ファイルの diff を全て読んでロジック一致を確認）。
+- **役割**: 4レビュアーの起動・所見の対立解消・トリアージ（何を直し何を先送りするか、先送りの追跡強化方法）＝ advisor 2回相談の上で Opus main。issue作成・doc注記・PR本文更新 = leader action として Opus main が直接実施。**コード修正3件+コメントアンカー2件 = pr-review-team の fixer subagent（Agent tool・Codex ではない）に委譲**（`/code:pr-review-team` skill 規約どおり）。
+- **状態**: fixer 適用完了・裏取り済み。次: `select-reviewers.sh` 再実行→再レビュー（Critical/Important=0 の確認は再レビューで裏付ける・自己宣言しない）。
+
+### 6.243 refactor(engine): M2 `/simplify` 指摘対応（#416） (Jul 12, 2026)
+
+PR #417（M2 instrument IPC substrate）の必須レビュー手順 `/simplify`（4並列クリーンアップagent: reuse/simplification/efficiency/altitude）の指摘に対応。
+
+**修正した3件**（RT安全性・効率性の実欠陥。in-scope の新規コードのため修正が妥当と判断）:
+- `orbit-clap-instrument-child/src/main.rs`: `decode_slot_events` が毎ブロック `Vec::with_capacity` でヒープ確保していた RT-safety 違反を解消。呼び出し側提供の sink（`&mut Vec<NeutralEvent>`）に書き込む方式に変更し、既存の clamp/invalid-skip ロジックを純関数として保ったまま production hot loop でバッファを再利用（ループ外で1回 `Vec::with_capacity(MAX_EVENTS_PER_BLOCK)` するのみ）。あわせて `event_buf`（CLAP `EventBuffer`）の事前確保も、ダミー event を4096回 push する手動ループから `EventBuffer::with_capacity()`（`orbit-clap-host` から新規 re-export）に置き換え。
+- `orbit-audio-sandbox/src/instrument_host.rs`: `VoiceTable::choke()` に `note_end()` と同じ fast-path（addr が完全 specific なら単一セル直接アクセス、wildcard を含むなら `for_matching` 全走査）を追加。specific choke が他キーに影響しないことを確認する回帰テストを追加。
+- `orbit-clap-instrument-child/tests/instrument_parity_gated.rs`: 何の効果もない pre-warm 残骸（push 直後に clear、ループ1周目でも再度 clear されるため無意味）を削除。
+
+**スキップした4件**（理由を分けて記録）:
+- `PipelinedInstrumentHost`/`PipelinedEffectHost`（`host.rs`）の slot-protocol 重複、`offline.rs` の sync driver 重複、`ClapInstrumentProcessor`/`ClapEffectProcessor`（`effect.rs`）の重複 — **いずれも修正には既存 M1 コード（`host.rs`/`offline.rs` の既存関数/`effect.rs`）への変更を要する**。全 Stage の委譲ブリーフで一貫して「M1 は無変更」と明記してきたスコープ規律（design doc §4.6）に従い、#416 の diff 範囲外として見送り。
+- `EventBackingRing`/`EventSpillFifo`（Stage3・本PRで新規追加）の構造的重複 — reuse/altitude/simplification の3agentが独立に収斂した指摘。**この2つは両方とも本PRの新規コードであり、M1スコープ外という理由は使えない**。テスト済みのRT-safe型を landing 間際に再構成するコストが、スタイル上のDRY化の利益に見合わないと判断し、意図的な先送り（premature-abstraction回避）として見送った。将来のfollow-up候補として記録するのみで、今回は issue化しない（軽微な将来リファクタ候補のため）。
+- 全32 orbit-audio-sandbox unit test + workspace全体 fmt/clippy/test を Opus main が独立に再実行して確認（Codexの自己申告のgreenを鵜呑みにせず、4ファイルの diff を全て読んでロジックを確認済み）。
+- **役割**: 4クリーンアップagentの実行・所見統合・修正要否の判断（M1スコープ外 vs 新規コードでの意図的先送りの区別）＝ advisor 確認の上で Opus main。**実装（3ファイル4箇所）＝ codex 委譲**。
+- **状態**: `/simplify` 完了。次 `/code:pr-review-team`。
+
+### 6.242 docs(engine): M2 respawn resume-semantics ギャップを専用issueに切り出し（#416） (Jul 12, 2026)
+
+6.241 で発見した「respawn 後の in-order child が historical seq を再処理する」設計限界について、design doc §4.2(b) のスコープ外注記が「#408 と同様に defer」と記していたが、**#408 の実際のスコープは tempo/transport-context live state の供給側**（Engine/Scheduler への tempo 読み出し可能 state 実装）であり、respawn resume-semantics とは無関係だったことが owner からの確認で判明。#409（multi-bus audio）・#410（load-confirm race）も同様に無関係。
+
+- このギャップを追跡する issue がどこにも存在しない状態だったため、専用 issue **#418**（`feat(engine): M2 instrument child respawn resume-point handshake (#416 follow-on)`）を新規作成。背景・スコープ（resume point の受け渡し機構の設計候補2案・respawn直後の簿記整合の扱い）・着手条件（本番 supervisor 実装段階）を記載。
+- design doc §4.2(b) の誤参照（「#408 と同様の扱い」）を「追跡: #418」に訂正。
+- **状態**: 記録漏れの是正のみ。実装は着手せず、引き続き #416 スコープ外（#418 で追跡）。
+
+### 6.241 feat(engine): M2 Stage6 Part B2 — 枯渇時note保護 + gated stress（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage6 Part B2（最終パート）。§7-11(a)(b)(c)（枯渇時note保護）・§7-8（gated stress@32f）を実プロセスで実測し、**§7 の12項目すべてを充足**した。
+
+- `sandbox-instrument-child` に `--crash-after <N>` を追加（N seq 処理直後に非ゼロ終了コードで異常終了）。
+- テスト専用の `RespawnHarness`（`instrument_host_integration.rs` 内・M1 `EffectChildSupervisor` の考え方を参考にした薄い汎用実装。daemon crate には依存しない）: 別スレッドで `Child::try_wait()` を2ms間隔でポーリングし、異常終了を検知したら同一引数で再spawnして `respawn_count` を進める。teardown は watcher停止→QUIT送信→2秒猶予でreap→強制killの順（`EffectChildSupervisor` と同じ「watchdogを先に止める」規律）。
+- §7-11(a): `EVENT_BACKING_CAPACITY` 超のバーストで真の drop を発生させ、sticky-flag による `NoteChoke{WILDCARD}` 注入が実 child まで届き正常に処理されることを確認。
+- §7-11(b): `--synthetic-output-burst` に `EVENT_SPILL_CAPACITY` 超の値を指定し、output側の真のdropを発生。`output_event_dropped_count`/`output_note_end_dropped_count` の増分→host側一括リセット→以後19ブロックにわたり遅延NoteEndが `live_count` を負値化させず0に飽和し続けることを確認。
+- §7-11(c): `RespawnHarness` でchildを crash→respawn させ、`host.on_child_respawned()` 呼び出しで簿記が0にリセットされること・respawn後の新規NoteOnが正しく1から計数されることを確認。
+- §7-8: 32frameブロックで10,000ノート同時バースト＋2,000ブロックにわたる持続高頻度event（67 events/block・約100,500 events/sec相当）を流し、`input_event_dropped_count`/`output_event_dropped_count` が終始0であることを確認（gated・実行時間0.15秒）。
+- **レビューで respawn の設計限界を発見・スコープ外と判断**: respawn後の in-order child は常に `last=0` から再開するため、`seq_request` までの historical seq を逐次再処理する（M1 effect child の skip-jump とは異なる）。長時間セッションでは無制限の再処理コストを招きうるが、resume point の受け渡し機構は本番 supervisor が実装される段階（#416 スコープ外・#408 と同様に defer）の課題であり、§7-11(c) が要求する「簿記がリークしないこと」自体は充足している（テストはNoteOff前にcrashさせる構成のため二重処理の影響を受けない設計になっており、advisorとの確認でこの限界がテストの見せかけの green ではないことを検証済み）。設計doc §4.2 (b) にスコープ外注記として追記。
+- 全31 unit + 7 (非gated統合) + 1 (gated stress) test が green（Opus main が独立に `cargo fmt`/`clippy`/`test` を再実行、gated stress test も自ら実行して確認。加えてコード自体（respawn harness・`--crash-after`・sticky注入の呼び出しタイミング）を読んで裏取り）。
+- **役割**: grounding（既存 `EffectChildSupervisor`/Part A/B1 のパターン調査）＝ Opus main。**実装本体（`--crash-after`・respawn harness・4テスト）＝ codex 委譲**。委譲後、Opus main が独立検証に加え respawn replay の設計限界を発見し、advisor で「§7-11(c) の要求範囲外・#416 スコープ外」であることを確認した上で doc に明記。
+- **状態**: **Stage6 完了。§7 受け入れ基準12項目すべて充足。** 残 landing: `cargo deny check` を含む workspace 全体ゲート（本セッションで一度も実行していない）→ WORK_LOG → PR → /simplify → /code:pr-review-team → owner GO でマージ。
+
+### 6.240 feat(engine): M2 Stage6 Part B1 — 合成instrument child + 実プロセス統合テスト（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage6 Part B1。実プロセスを使った production-path 統合テストを追加し、§7-4（round trip・TransportContext含む）・§7-10（input/output双方向 spillover決定論）・§7-12（in-order回帰）を実測した。
+
+- 新規合成 child `sandbox-instrument-child`（`orbit-audio-sandbox/src/bin/`・`sandbox-effect-child.rs` と同パターン）: 実 CLAP プラグイン不要。in-order 消費（§4.6）・NoteOff→NoteEnd の1:1応答・`EventSpillFifo` 経由の output 転送窓詰め込み。テスト専用の `--synthetic-output-burst <N>` 診断経路も持つ（下記参照）。
+- **委譲中に Codex が2件の設計矛盾を自ら検出し実装を停止・報告した**（いずれも「不明点は実装せず質問する」規律が正しく機能した例）:
+  1. 「1 NoteOff→1 NoteEnd」の1:1契約と、input側 window（`MAX_EVENTS_PER_BLOCK`）による上限がある限り、output側 spill FIFO（§7-10 output方向）が構造的に発火し得ないという矛盾。→ **診断専用の `--synthetic-output-burst`**（起動後最初の1件の NoteOff だけ追加で N 件の NoteEnd を生成する・通常起動では完全無効）を承認して解消。
+  2. `EventBackingRing::drain_into()` が spill event の `sample_offset` をクランプせず、既存 Stage3 unit test（`spillover_is_lossless_and_deterministic`）がその「保持」動作を明示的にロックしている一方、§4.2 は spill event の offset=0 クランプを要求する矛盾。→ **`EventBackingRing` 自体は変更せず、`PipelinedInstrumentHost::process_block` の呼び出し側で `backlog_before = event_ring.len()`（push前のring長）を記録し、drain 結果の先頭 `backlog_before` 件（＝過去ブロックからの真の持ち越し分）だけを offset=0 にクランプ、それ以降（同一呼び出し内で新規push→即drainされた新鮮な event）は元の offset を保持する**方式を承認。Part A で既にコミット済みのテスト（`midi(3)` の offset 保持を期待）を壊さないことを確認した上での判断（ring を一律クランプする代案は Part A の正当な既存テストと矛盾するため不採用）。
+  3. `input_event_spilled_count`/`output_event_spilled_count`（§7-10 が要求する健全性カウンタ）が Part A では未配線だった点も本タスクで解消（host側=drain後のring残数、child側=詰め込み後のFIFO残数を、それぞれ block ごとに累積加算）。
+- §7-12（in-order回帰）のテストは、child未起動のまま host 側で2ブロック submit → 3ブロック目で意図的に stall（submit guard不成立）させ、その後 child を起動して catch-up させる構成。stall 中に ring へ積まれた event が失われず、child 起動後に正しい順序で配送されることを実プロセスで確認。「途中の seq を skip したら fail する」oracle は `output_note_ends` ヘルパの `seq_tag[slot]==seq` assert が暗黙に兼ねる（skip されていれば该当 slot の `seq_tag` が未設定のまま assert が落ちる）。
+- 全31 unit test + 4 (M1既存) + 4 (M2新規) integration test が green（Opus main が独立に `cargo fmt`/`clippy`/`test` を再実行し、加えてコード自体（backlog clamp のロジック・synthetic burst の1回限り発火・spilled counter の意味論）を読んで確認）。
+- **役割**: grounding（`sandbox-effect-child.rs`/`host_child_integration.rs` の既存パターン調査）＝ Opus main。**実装本体（synthetic child・統合テスト4本・カウンタ配線）＝ codex 委譲**。委譲中に Codex 自身が発見した2件の設計矛盾は、Opus main が一次ソース（既存テスト・design doc）を確認した上で解決方針を判断し、同一 Codex スレッドを `--resume` で継続させて反映。差分は Opus main が独立に再実行・精読して裏取り済み。
+- **状態**: Stage6 Part B1 完了。残 Part B2（枯渇時 note 保護 §7-11 a/b/c・gated stress @32f §7-8・respawn harness）・landing。
+
+### 6.239 feat(engine): M2 Stage6 Part A — PipelinedInstrumentHost（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage6 Part A。host 側で初めて event 機構を本番コードに組み込む新規構造体 `PipelinedInstrumentHost`（`orbit-audio-sandbox/src/instrument_host.rs`）を実装した。
+
+- アーキテクチャは既存 `PipelinedEffectHost`（`host.rs`）の submit/read/slot-guard/repeat-previous パターンをそのまま踏襲（§4.6 の指示「host: SUBMIT/READ は無変更」通り）。新規なのは: event backing ring（Stage3実装済み `EventBackingRing`）から `input_events` 転送窓への drain、sticky-flag 枯渇時の `NoteChoke{WILDCARD}` 窓先頭注入、`TransportContext` 転送（`tempo_bpm=0.0` 含む）、`output_events` からの NoteEnd/NoteChoke 読み取りによる `VoiceTable`（§4.7 で確定した `(port,channel,key)` 参照カウント方式）の増減・一括リセット。
+- **委譲後の独立検証で voice 簿記の silent leak バグを発見**: 初版実装は NoteEnd/NoteChoke の読み取りを audio 出力の `ready` 判定（`target = submitted-1` の単発チェック）と同じ分岐内に置いていたため、ある block の output が「ready と判定される、その一度きりのタイミング」に間に合わなければ、その block の NoteEnd は二度と読まれず voice カウントが永久に漏れ続ける構造だった。audio は repeat-previous で代替可能だが、event の減算は機会が一度きりで非対称だった。現行 `SLOTS=2` では偶然 stall 経由で顕在化しないが、`transport.rs` 自身のコメントが「実機計測で 3 になりうる」としており、`SLOTS>=3` では実際に起こりうる。
+- advisor に検証を依頼し、独立した `event_cursor`（audio の `target` から切り離し、`seq_tag` が visible になるまで同じ seq を再チェックし続ける単調カーソル）への分離を確認・修正委譲。安全性の根拠: instrument child は §4.6 で in-order 消費必須のため全 seq の `seq_tag` を必ず publish する。submit guard（`seq_done >= new_seq - SLOTS`）により、ある slot が次に再利用される前に必ず `seq_done` がその slot の旧 occupant の seq に到達し、child が `seq_tag`/`seq_done` を同時に store する規律により、その時点で `seq_tag` も既に visible になっている（M1 effect child の latest-jump ポリシーには適用不可・instrument の in-order だからこそ成立する分離）。修正前は fail し修正後は pass する回帰テスト（`delayed_note_end_is_drained_after_its_audio_target_has_moved_on`）を追加。
+- 全 31 unit test + 4 integration test が green（Opus main が独立に `cargo fmt`/`clippy`/`test` を再実行して確認）。
+- **役割**: grounding（`PipelinedEffectHost`/`EventBackingRing`/`EventSpillFifo` の既存 API 調査・§4.6/§4.7 との整合確認）＝ Opus main。**実装本体（`instrument_host.rs` 新規・`VoiceTable`・sticky 注入・簿記更新）＝ codex 委譲**。委譲後、Opus main が読解でバグを発見 → advisor で妥当性検証 → 修正内容を再度 codex に委譲（安全性根拠・修正前 fail の確認を要求）→ 差分・検証コマンドを自ら再実行して裏取り、の2段委譲となった。
+- **状態**: Stage6 Part A 完了。残 Part B（合成 instrument child + §7-4,8,10,11,12 統合テスト群）・landing。
+
+### 6.238 docs(engine): M2 §4.7 — host 側 voice 簿記キーを (port,channel,key) に確定（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）Stage6 着手前のレビューで、設計doc §4.2(a)「note_id は monotone 採番・再利用しない」という前提が現行実装のどこにも存在しないことが判明した。Stage4 の `PluginEvent::to_neutral_event`（`orbit-clap-host/src/events.rs`・regression test でロック済み）は既存 `Pckn` 挙動を保持するため常に `note_id: -1`（wildcard）のみを発行する。
+
+- owner に案A（`(port,channel,key)` 参照カウント方式・Stage4 無変更）と案B（Stage4 を修正し host が実 note_id を採番）の2択を提示 → owner が Fable への一発判断を選択。
+- Fable 判断: **案A採用**。理由は (1) 簿記の目的（leak 検出・respawn/枯渇時リセット）に per-instance identity は不要で計数で足りる、(2) CLAP 自身も note_id なしの `Pckn`（port/channel/key specific・note_id wildcard）が第一級動作モード、(3) 案Bは Stage4/Stage5 で確定済みの sample-exact 回帰なし・A/Bパリティを re-open するコストに見合わない、(4) 一括リセット後の遅延 NoteEnd は saturating decrement で無害に吸収される（簿記は観測専用・音響経路を制御しない）。
+- §3 `VoiceAddr.note_id`／§4.2(a) の「monotone 採番」規約は「host が実 note_id を発行し始めた時点から拘束力を持つ条件付き invariant」に再スコープ。§7 受け入れ基準11(b) の文言も参照カウント方式に合わせて修正。
+- **format 横断性の確認（owner からの追加質問）**: この判断が CLAP 固有でなく VST3/AU にも成立するかを owner に問われ、既存の §1.1 grounding table（fresh agent が CLAP/VST3/AU 一次ソースから列挙済み）を再確認。AU の voice identity は「MPE ch / MIDI2 per-note（scalar id なし）」と既に記録されており、§3 の `VoiceAddr` コメントも VST3=`noteId+channel+pitch`（CLAP と同型）・AU=cable+MPE channel 近似（scalar id 自体が無い）と整理済みだった。→ host 側簿記キーの決定は VST3/AU child 実装時にも変更不要であることを §4.7 に追記して明記。
+- Stage6 実装方針として `VoiceKey{port_index,channel,key}` の Rust 定義・increment/decrement/一括リセットの振る舞いを doc に明記（Codex 委譲ブリーフの直接の入力となる）。
+- **役割**: owner が案A/B の選択を Fable に委任 → Fable が一発判断 → Opus main が判断内容を design doc §4.7 に転記・§1.1/§3 との整合を確認して format 横断性を裏取り。実装（Rust コード）はまだ着手していない（次の Codex 委譲の対象）。
+
+### 6.237 feat(engine): M2 Stage5 Part B — instrument child + A/B parity（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage 5 Part B。Part A（`ClapInstrumentProcessor`）を使い、新規 OOP instrument child + offline event driver + 実 dylib（`rust-spike/clap-test-synth`）での A/B parity gated test を実装し、**§7 受け入れ基準5を実測で充足**した。
+
+- 新規 crate `orbit-clap-instrument-child`（`rust/crates/orbit-clap-instrument-child/`）: `orbit-clap-effect-child` と異なり、`SharedRegion` の event slot を **in-order**（§4.6）に消費する — `last+1..=cur` を昇順処理し、中間 seq を skip しない（effect child の「`cur` へ latest-jump」ポリシーとは根本的に異なる）。純関数 `in_order_seqs`/`decode_slot_events` に分離し、実 dylib 不要な CI 実行可能な unit test でカバー（境界値・4096件 clamp・不正 kind のスキップと `event_decode_error_count` 増分）。
+- `orbit-audio-sandbox::offline` に新規関数 `render_instrument_through_child_sync_with_options` を追加（既存 `render_through_child_sync_with_options` は無変更）。block ごとの `NeutralEvent` 列を `input_events[slot]`/`input_event_count[slot]` へ直接 publish する 1-outstanding 同期ドライバ（`EventBackingRing`/`EventSpillFifo` は使わない・小規模 event 列の offline parity 専用・容量超過の扱いは Stage 6 の範囲）。
+- **A/B parity（オラクル方式の判断）**: `clap-test-synth` は f32 位相累積で正弦波を生成するため、独立計算の `sin()` recomputation では丸め誤差が乗り bit-exact 一致しない（advisor 指摘）。in-process 側（`ClapInstrumentProcessor` に同一 event 列を直接注入）と OOP child 側（本 driver 経由）を突き合わせる A/B parity 方式を採用し、`max_abs_diff == 0.0` を実測（gated test `instrument_parity_gated.rs::real_clap_instrument_oop_event_parity`・128 frames×4 block・NoteOn(key=60)→NoteOff・両側とも非無音を確認済み）。
+- output 方向（`NoteEnd` 等の child→host 逆翻訳）・`EventBackingRing`/`EventSpillFifo` の配線には触れていない（`clap-test-synth` は output event を一切生成しないため不要・Stage 6 に切り出し済み）。
+- **役割**: grounding（`clap-test-synth` 発見・in-order 規律の設計根拠確認）・advisor 相談（Stage5/6 のスコープ境界・オラクル方式）＝ Opus main。**実装本体（新規 crate・offline driver・gated test）＝ codex 委譲**。委譲後は Opus main が `cargo build --workspace`/`fmt`/`clippy`/`test`（`orbit-audio-sandbox`/`orbit-clap-instrument-child`）に加え、**実 dylib（`rust-spike/clap-test-synth`）をビルドして gated A/B parity test を自ら実行**し green を再確認（他の Stage と同様、報告を鵜呑みにせず一次証拠で裏取り）。
+- **状態**: Stage 5 完了（§7 受け入れ基準5 充足）。残 Stage 6（round trip・spillover決定論・枯渇時note保護・in-order回帰・gated stress @32f・§7-4,8,10,11,12）・landing。
+
+### 6.236 feat(engine): M2 Stage5 Part A — ClapInstrumentProcessor（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（Issue #416）の Stage 5 は、実装前に advisor へスコープ確認した（§7-5 は「単一 child + closed-form oracle test-synth の event 列→波形」であり、`EventBackingRing`/`EventSpillFifo` の配線・output 方向 translate は Stage 6（§7-4,8,10,11,12）の範囲で Stage 5 には含めない、と整理）。Stage 5 は Part A（`orbit-clap-host` 側 API）と Part B（新規 child + offline event driver + gated A/B parity test）に分割し、本エントリは Part A。
+
+- `orbit-clap-host` の `process_block_core`（`processor.rs`）は instrument の add-mix 分岐（`has_audio_input()==false`）を既に実装済みだったが、既存 `ClapEffectProcessor::process_block` は常に `InputEvents::empty()` を渡すため note event が一切プラグインに届いていなかった（`rust-spike/clap-test-synth` という closed-form oracle 用の最小 CLAP instrument dylib は #293 で既に存在していたが、この欠落のため接続されていなかった）。
+- 新規 `ClapInstrumentProcessor`（`instrument.rs`）を追加。`ClapEffectProcessor` と同一の Drop 順（`plugin` を `_instance` より前に宣言・teardown 正当性）を踏襲しつつ、`process_block(&mut self, data, events: &EventBuffer)` が `events.as_input()` を `process_block_core` に渡す点のみ差分。`push_neutral_event`（Stage4）を `orbit-clap-host` の公開 API として re-export。
+- **役割**: grounding（既存 instrument 分岐・`clap-test-synth` 発見）・advisor 相談（スコープ確定・オラクル方式の判断）＝ Opus main。**実装本体 = codex 委譲**。委譲後の差分は Opus main が `cargo build --workspace`/`fmt`/`clippy`/`test -p orbit-clap-host` で再検証。
+- **状態**: Part A 完了。次 Part B（新規 `orbit-clap-instrument-child` crate・in-order event 消費ループ・`orbit-audio-sandbox::offline` の event 対応 driver・A/B parity gated test）。
+
+### 6.235 feat(engine): M2 Stage4 — orbit-clap-host neutral event translate（#416） (Jul 12, 2026)
+
+M2 instrument IPC substrate（設計 #398・実装 Issue #416）の Stage 4。Stage 1-3（wire 型・`SharedRegion` event slot・host backing ring/child spill FIFO）に続き、`orbit-clap-host` 側に `NeutralEvent` ⇔ CLAP event の双方向 translate を実装した（設計正本 §7 受け入れ基準3）。
+
+- `PluginEvent::to_neutral_event` で既存 in-process の `NoteOn`/`NoteOff` を `NeutralEvent` へ変換。`push_neutral_event` で `NeutralEvent`（NoteOn/NoteOff/NoteChoke/NoteExpression/ParamValue/ParamMod/ParamGestureBegin/ParamGestureEnd/MidiRaw/Midi2）を clack `EventBuffer` へ翻訳する host→child 方向の共通関数を追加。`drain_to_event_buffer` の内部実装を新関数経由にリファクタ（シグネチャ・既存の sample-offset=0・`EventFlags::IS_LIVE`・Pckn 構成〔`port_index` は wildcard でなく Specific〕は不変・regression test でロック）。
+- **v1 で意図的に drop する2ケース**: `PolyPressure`（CLAP に対応する独立 event も note-expression type も無い）、`NoteEnd`/`LegacyMidiCcOut`（child→host 専用の output-only variant・host→child 方向への混入は呼び出し側のロジックエラー）。いずれも `push_neutral_event` は panic せず `false` を返す（`EventRecord::decode()` の `None` パターンと統一）。
+- `param_id: u64 → ClapId` は `u32` 幅超過・`u32::MAX` sentinel を `None` として drop。`NeutralExpressionId → NoteExpressionType` は7 variant を exhaustive match（数値 cast に頼らない）。
+- vendored clack（rev `f874e858`）の `CoreEventSpace::from_unknown` が `ParamGestureBegin`/`ParamGestureEnd` の `TYPE_ID` を欠落させている実装ギャップを一次ソースで確認（テストは `as_event_for_space` による直接 downcast で回避・production コードには影響なし）。Stage5 以降で output 方向の読み取りを実装する際の留意点として記録。
+- **役割**: grounding（clack API 調査・§7 受け入れ基準の解釈）・advisor 相談（実装計画確定前・regression の要点＝既存 Pckn `port_index` が Specific である点の保持）＝ Opus main。**実装本体（`events.rs` 全体・テスト）＝ codex 委譲**（`/codex:rescue`）。委譲後の差分・claims（clack gap 含む）は Opus main が一次ソースで裏取り。
+- **検証**: `cargo fmt -p orbit-clap-host --check` / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` / `cargo test -p orbit-clap-host`（18 passed）/ `cargo test -p orbit-audio-daemon --lib --features clap-host engine_wrap`（18 passed・既存 `PluginEvent` 消費側の regression なし）全て green。
+- **状態**: Stage4 完了。残 Stage5（CLAP instrument child・closed-form oracle test-synth）・Stage6（統合テスト群）・landing。
+
 ### 6.234 docs(engine): M2 landing-review fixes — Fable overflow/param_id decisions + advisor verify（#398） (Jul 12, 2026)
 
 M2 設計 doc（PR #399）に対する landing 前レビューを Fable fresh agent に依頼し、判定 LAND-WITH-FIXES（5 blocker + 準blocker）を得て全て反映した。owner 確認後、blocker のうち2件（新しい設計判断）は owner 指名で Fable に一発判断を委ね、確定後 advisor で内部整合性を verify した。

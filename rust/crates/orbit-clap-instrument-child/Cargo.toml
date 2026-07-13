@@ -1,0 +1,18 @@
+# orbit-clap-instrument-child — γ M2 (Issue #416) の実 CLAP instrument child。
+[package]
+name = "orbit-clap-instrument-child"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Out-of-process CLAP instrument child hosting a real CLAP plugin over the orbit-audio-sandbox event transport (γ M2)"
+
+[[bin]]
+name = "orbit-clap-instrument-child"
+path = "src/main.rs"
+
+[dependencies]
+orbit-clap-host = { path = "../orbit-clap-host" }
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
+anyhow = "1"

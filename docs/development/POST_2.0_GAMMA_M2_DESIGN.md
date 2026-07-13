@@ -276,13 +276,13 @@ pub event_decode_error_count: AtomicU64,  // decode() が未知 kind を skip �
 - **spill の発生点は shm ではなく child プロセス内**: output event（`NoteEnd`/`LegacyMidiCcOut` 等）は CLAP `out_events`/VST3 output `IEventList`/AU `MIDIOutputEventBlock` いずれも **render 呼び出し内の同期出力**で、child が render を自分の block 処理スレッド1本から呼ぶ。したがって「plugin out-event queue → shm 転送窓」間の spill は producer=consumer が同一スレッド内で完結する。**input のような shm 外 backing ring を host 側に置く必然はなく、spill buffer は child プロセスの通常メモリに置く**（起動時 pre-allocate・65,536 slot 目安・固定容量ローカル FIFO。producer=consumer が同一スレッドなので lock-free SPSC も不要・alloc/lock なし・RT-safe）。**この単一スレッド前提は 3 format の標準 render 経路（CLAP `process()`・VST3 `process()`・AU render callback）が output event を render 呼び出し内で同期発生させることに依拠する — もし将来 SDK が render 呼び出し外の別スレッドから output event を渡す構成を要求すると判明した場合は、この FIFO を lock-free SPSC 化する必要がある（「child-local に置く」という結論自体は変わらない）。**
 - **child 側の per-block 手順**: ① spill FIFO 先頭から `output_events` 転送窓へ詰める → ② 当ブロックの plugin out-event を続けて詰める → ③ 窓（4096）に載らない残りを FIFO 末尾へ push（FIFO 全順序保存）。spill された event の `sample_offset` は配送先ブロック先頭 0 に clamp（input と同一規約・下記参照）。
 - **真の drop は child-local spill FIFO が尽きた場合のみ・drop-newest**。`output_event_dropped_count` を child が fetch_add（`child_process_error_count` と同パターン）。**drop 対象に `NoteEnd` が含まれる場合は `output_note_end_dropped_count` を別に進める**（input 側 sticky flag の output 版・host の反応トリガ）。
-- **host 側防衛（タイムアウト強制解放は不採用）**: タイムアウト解放は child 内の実発音状態を知らない推測処置であり、誤解放 → note_id 再利用 → per-voice ターゲット衝突という input 側より悪い故障を生むため採らない。代わりに次の2規約で「NoteEnd 喪失＝不可聴の簿記リーク」に格下げし、リーク自体を無害化する: **(a) `note_id` は monotone 採番・再利用しない**（host 側実装規約・wire 影響なし。`output_note_end_dropped_count` の増分検知時に host は当該 child の per-voice 簿記を保守的に一括リセットしてよい。monotone id により生きている voice を誤って忘れても新 voice との id 衝突は起きず、劣化に留まり破損にならない）。**(b) supervisor respawn = 当該 child の implicit all-voices-end**（respawn 検知で voice 簿記をクリア。crash による spill FIFO 喪失も leak にならない）。
+- **host 側防衛（タイムアウト強制解放は不採用）**: タイムアウト解放は child 内の実発音状態を知らない推測処置であり、誤解放 → note_id 再利用 → per-voice ターゲット衝突という input 側より悪い故障を生むため採らない。代わりに次の2規約で「NoteEnd 喪失＝不可聴の簿記リーク」に格下げし、リーク自体を無害化する: **(a) `note_id` は monotone 採番・再利用しない**（host 側実装規約・wire 影響なし。`output_note_end_dropped_count` の増分検知時に host は当該 child の per-voice 簿記を保守的に一括リセットしてよい。monotone id により生きている voice を誤って忘れても新 voice との id 衝突は起きず、劣化に留まり破損にならない）。**(b) supervisor respawn = 当該 child の implicit all-voices-end**（respawn 検知で voice 簿記をクリア。crash による spill FIFO 喪失も leak にならない）。**スコープ外注記（Stage6 landing レビューで判明・2026-07-12）**: 本規約が保証するのは「簿記がリークしないこと」のみで、「respawn 後の in-order child が historical seq を再処理しないこと」は保証しない。現行 child 実装は respawn 後も常に `last=0` から再開するため（M1 effect child の「skip 許容で最新へ直行」とは異なり、instrument child は §4.6 の in-order 制約により `seq_request` まで逐次再処理する）、長時間セッションでの respawn は無制限の再処理コストを招きうる。resume point の受け渡し（child に「どこから再開すべきか」を伝える機構）は現状存在せず、実際に respawn を発行する本番 supervisor が未実装の段階（M2 substrate #416 のスコープ外）では設計不要と判断し、defer する。追跡: #418（`orbit-clap-instrument-child/src/main.rs` の `last` 初期化箇所にもコード内コメントでアンカー済み）。**スコープ外注記2（`/code:pr-review-team` レビューで判明・2026-07-12）**: 実 CLAP instrument child（`orbit-clap-instrument-child`）は `ClapInstrumentProcessor::process_block` 経由で plugin を駆動するが、共有カーネル `process_block_core`（M1 effect と共有・本 PR 無変更）が `OutputEvents::void()` を渡すため、実 plugin が発行する NOTE_END 等の出力 event は破棄され、`output_events`/`output_event_count` への配線がそもそも存在しない。Stage6 の §7 受け入れ基準はすべて合成 child（`sandbox-instrument-child`）経由で満たされており、実 child の event 出力方向は未検証。正しい修正は M1 と共有する `process_block_core` のシグネチャ変更を要し、かつ `orbit-clap-instrument-child` はまだ production 経路として spawn されていない（Phase 3 = 実 instrument hosting で初めて使われる）ため、#416 のスコープ外として defer する。追跡: #419（`ClapInstrumentProcessor::process_block` にもコード内コメントでアンカー済み）。
 - **検討して不採用**: (i) shm 内 child backing ring — spill 発生点が child プロセス内である以上 shm に置く必然が無く、host 事前確保 + child 側 SPSC という契約面だけ増える。(ii) NoteEnd 専用高信頼レーン（voice admission cap と同サイズで構造的 lossless）— cap↔lane の cross-component 不変条件が増え、misbehaving plugin には結局 backstop が要り、lane 分割は FIFO 全順序を崩す。(iii) 転送窓拡大 — §4.1 確定の「窓=飽和点 4096」を崩すだけで bound は消えない。
 
 **共通**:
 - **spill された event の `sample_offset` 再タイミング規約（実装時に曖昧にしないこと）**: 配送が後続ブロックにずれた event の `sample_offset` は、配送先ブロックの先頭（0）にクランプする。元ブロック内での相対位置は保持しない。これは既存 in-process 経路が A0 §4.2 で採用済みの簡略化（全イベントを block 先頭オフセットに置く）と同じ粒度であり、新たな精度劣化ではない。
 - **可視化は音を変えない**: `input_event_dropped_count`/`output_event_dropped_count`（真の喪失）と `input_event_spilled_count`/`output_event_spilled_count`（無損失遅延・情報）を方向別に分離し、`child_process_error_count` と同型の health signal パターンで 1Hz ticker（`OUTPROC_EFFECT_*` 相当）→ TS 層 → OrbitStudio のステータス表示へ配線する。**演奏・録音の音そのものを変える通知（警告音等）は禁止**（報せる対象の故障より害が大きいため）。
-- **既存の audio slot 同期（`seq_request`/`seq_done`/per-slot `seq_tag`）をそのまま event slot にも適用**（同一 slot・同一 seq で audio と event が対になる）。M1 の +1-block pipelined discipline とは整合する。`input_event_count`/`output_event_count` は `n_frames` と同じ「Relaxed store → Release publish で可視」規律に従う。
+- **既存の audio slot 同期プロトコル（`seq_request`/`seq_done`/per-slot `seq_tag`）をそのまま event slot にも適用**（同一 slot・同一 seq で audio と event が対になる）。`input_event_count`/`output_event_count` は `n_frames` と同じ「Relaxed store → Release publish で可視」規律に従う。**ただし child の消費ポリシー（M1 の「latest 処理・skip 可」を踏襲するか）は event を消費するかどうかで分岐する — §4.6 で DECIDED。**
 - **host 側の防御的読み取り（`output_event_count`）**: `output_event_count` は child（クラッシュしうる別プロセス）が書き込む値のため、host はこれを信用せず読み取り時に `.min(MAX_EVENTS_PER_BLOCK)` で clamp してから `output_events` を走査する（M1 の `host.rs` が `n_frames` を `.min(MAX_FRAMES)` で clamp してから読む規律と同型。汚染された count による境界外走査を防ぐ）。
 - **bidirectionality**: `NoteEnd`（plugin→host の voice 解放通知）・`LegacyMidiCcOut`（plugin→host の MIDI CC 出力）は child 起点のイベント。M1 の audio transport は host→child(input)/child→host(output) が対称に存在するので、event も同様に input/output を分離する（上記）。
 - **サイズ見積り**: `EventRecord` = 40 bytes（kind 4B + sample_offset 4B + payload 32B・§3 参照）。`MAX_EVENTS_PER_BLOCK=4096` なら 40B × 4096 × `SLOTS`(2) × 2方向 ≈ 640 KB（shm 上・現行 audio 領域 ~128 KB に対し増分は無視できる規模。count-prefix 配列なので未使用容量のコピーコストはゼロ）。加えて output 方向の child-local spill FIFO は **child プロセス側**の通常メモリで 65,536 slot × 40B ≈ 2.6MB（shm 外・host の backing ring と同オーダー）。
@@ -295,7 +295,33 @@ Fable の拡張調査で、同種の欠陥（固定容量 + 統計的典型性�
 
 > 固定容量の queue/buffer/ring を新規導入する変更は、doc comment で次の3点を明記しなければならない: **(a)** producer のスレッド種別（RT か非RTか） **(b)** overflow policy（lossless か、drop するなら note-off 級の状態依存 event を保護する方法） **(c)** 可視化 counter の有無。
 
-M2 の `input_events`/`output_events`/backing ring がこの原則の初適用例（上記 §4.2 が (a)(b)(c) を明記済み）。
+M2 の `input_events`/`output_events`/backing ring がこの原則の初適用例（上記 §4.2 が (a)(b)(c) を明記済み）。**(b) overflow policy は「queue 自体が溢れないか」だけでなく「消費側が window を必ず訪れるか（skip しないか）」も契約の一部**（§4.6 参照。lossless な queue でも、消費側が window を丸ごと skip すれば同じ喪失が別の場所で再発する）。
+
+### 4.6 Event 消費ポリシー — event を消費する child は in-order 必須（DECIDED・Fable 一発判断 2026-07-12）
+
+M1 effect child（`orbit-audio-sandbox::host::PipelinedEffectHost` 対向の child）は「latest 処理」で中間 seq を skip しうる設計を意図的に採用している（spike #351 実証・`host.rs` の `pipelined_skip_is_not_false_fresh` テストが正式挙動として検証）。**M2 実装着手前のレビューで、この skip ポリシーを instrument child にそのまま流用すると、skip されたブロックの `input_events`（NoteOn/NoteOff 含みうる）が child に一度も読まれず、stuck note / ノート消失を構造的に生むことが判明した**。§4.2 の sticky-flag/drop-counter 機構は「host 側 backing ring 自体が尽きた」場合の drop のみを対象とし、この「window は正常に書かれたが child が一度も読まなかった」経路をカバーしない。owner 判断を経て Fable に一発判断を依頼し、以下で確定した。
+
+**確定: event を消費する child（instrument child）は in-order 消費を必須とする（skip 禁止）。** M1 effect child（event を消費しない）は現行の latest-skip ポリシーを変更なく維持する。境界は「event を消費するか否か」であり、将来 effect に per-block automation event を配る時点で同じ規則が自動適用される。
+
+**理由（Fable 判断の要旨）**:
+- skip=latest が effect で正当だったのは「audio 入力は次ブロックで上書きされる使い捨てデータ」だからで、この前提は累積する状態変化（note/param）を運ぶ instrument には成立しない。
+- M1 実測（本 doc の親 `POST_2.0_GAMMA_M1_DESIGN.md` §6 SLOTS デジタル根拠）で 1 ブロックの実処理+IPC は buffer period の ~1/170〜1/229。かつ `host.rs` の submit guard（`seq_done >= new_seq - SLOTS`）により backlog は構造的に最大 `SLOTS` ブロックへ閉じ込められる。よって in-order 消費で追加される catch-up コストは高々 `SLOTS`−1 ブロック（µs オーダー）で、skip が買う便益は instrument では実質ゼロ。
+- **既存 submit guard が「skip された slot は上書きされない（無傷）」ことを既に保証している** — 追加のプロトコル変更なしに in-order 消費が成立する根拠。
+- skip 許容+drop 可視化拡張（検討した代替案）は §4.1 で確定した「溢れても失わない」思想と正面から矛盾し（choke による正当な voice の巻き添え切断を伴う）、かつ (i) の便益ゼロと合わせて筋が悪い。
+- skip は「どの event が honor されるか」を OS スケジューラの preemption タイミング依存にし、§4.1 が time-budget 方式を棄却した根拠（sample-exact closed-form oracle parity との衝突）と同型の決定論破壊を招く。
+- instrument plugin 内部時間（envelope/LFO 等）も process 呼び出しで進むため、render 自体の skip は event 以前に state 破損を生む副次的リスクがある。
+
+**実装方針**:
+- **child（instrument）**: 消費ループを「`seq_request`(Acquire) を読み、`last+1..=seq_request` を昇順に1 seq ずつ処理」に変更する（M1 effect child の「latest だけを読む」ループとは異なる）。各 seq で input slot（audio + `input_events`/`n_frames`）を読み render し、`seq_tag[slot]=seq`(Release)→`seq_done=seq`(Release)→`last=seq`。event の `sample_offset` は各 seq 自身の slot から読まれるため、元ブロック内の相対位置がそのまま保持される（backing ring の spill 時 offset-0 クランプより高精度。追加規約不要）。
+- **host**: wire・`SharedRegion` レイアウト・SUBMIT/READ・repeat-previous は無変更。実装規律として明記: **backing ring からの pop は submit が成立したブロックのみ行う**（host が stall したブロックでは pop せず ring に残す。slot に書いたのに `seq_request` を進めない状態を作らない）。
+- **effect child（M1）**: 無変更（event を消費しないため）。
+
+**反証可能性 / 留保**（Fable 判断が明示した不確実性）:
+1. **重い synth での catch-up コスト**: 上記の µs 実測は gain/CLAP test-effect のもの。実 instrument が period 予算の大半を使う場合、backlog `SLOTS` ブロックの in-order 消化が stale を悪化させうる。**予約された fallback**: §7 の gated stress test で in-order child の stale_pct が有意に劣化した場合、「event は in-order で全 slot から drain・render は latest のみ」というハイブリッド（losslessness を保ったまま latest-render を回復）に切り替える。これは skip 許容案への回帰ではない（event の loss なしは維持される）。
+2. **無傷保証の前提**: submit guard の現行形（`seq_done >= new_seq - SLOTS`）に依存する不変条件。将来 guard や `SLOTS` の意味論を変える変更では再検証が必要。
+3. **stall 時の event 滞留**: host が stall したブロックの event は backing ring に留まり、配送が最大 `SLOTS` ブロック（64f で ~3ms）遅延しうる。音楽的には無害だが NoteOff の最悪遅延として記録する。
+
+**§7 受け入れ基準への追加**: 上記「実装方針」の in-order 消費・「予約された fallback」の判断根拠は §7 に統合する（後述）。
 
 ### 4.4 既存コードの同種欠陥（M2 とは別スコープ・issue 化済み）
 
@@ -331,6 +357,50 @@ pub transport_context: [TransportContext; SLOTS],  // host -> child のみ（chi
 - **loop cycle 点（VST3 `cycleStartMusic`/`cycleEndMusic`・CLAP `loop_start_beats`/`loop_end_beats`）は v1 スコープ外**（Custom note-expression variant・ChordEvent と同様の理由：稀な用途・同一ビルド前提で後から named field 追加可能）。
 - **`SLOTS` 単位で持つ理由は §4.2 の `n_frames`/`seq_tag` と同じ**: 各 child が自分のペースでスロットを消費するため、消費時点で有効だった transport 値を保証するには per-slot 保持が必要（単一グローバル値だと、遅れて消費した child が「未来」の値を読んでしまう可能性がある）。
 - child 側の honor は原則Aどおり段階的でよい: CLAP child は `clap_event_transport` へ、VST3 child は `ProcessContext` へ、AU child は musical-context callback の戻り値へ翻訳する。翻訳できないフィールド（例: VST3 の `continousTimeSamples` 等 host 固有拡張）は child 内で妥当なデフォルトを補う。
+
+### 4.7 host 側 per-voice 簿記のキー — `(port, channel, key)` 参照カウント方式（DECIDED・Fable 一発判断 2026-07-12）
+
+Stage6（#416 統合テスト + host 側 voice 簿記）着手前のレビューで、§4.2 (a) が前提とする「monotone 採番された note_id」が現行実装のどこにも存在しないことが判明した。Stage4 の `PluginEvent::to_neutral_event`（`orbit-clap-host/src/events.rs`）は既存 `drain_to_event_buffer` の CLAP `Pckn` 構成（`note_id = Match::All`）を sample-exact に保持するため、意図的に `VoiceAddr.note_id = -1`（wildcard）のみを発行しており、この挙動は regression test でロックされている（Stage4 受け入れ基準3「既存 NoteOn/NoteOff 経路の sample-exact 回帰なし」の核心）。owner 判断を経て Fable に一発判断を依頼し、以下で確定した。
+
+**確定: host 側 per-voice 簿記のキーは `(port_index, channel, key)` とし、同一キーの多重発音は参照カウントで計数する（案A）。Stage4 の wildcard note_id 発行・regression test は一切変更しない。** あわせて §3 `VoiceAddr.note_id` と §4.2 (a) の「monotone 採番・再利用しない」規約は、「**host が実 note_id（`>= 0`）を発行し始めた時点から拘束力を持つ条件付き invariant**」に再スコープする（wildcard のみを発行する M2 v1 の host は、note_id を1つも採番しないためこの規約を自明に満たす）。案B（Stage4 を修正し host が実 note_id を採番する）は不採用。
+
+**format 横断性（CLAP 固有の判断ではない）**: この決定は host が `VoiceAddr`（neutral wire）だけを見て動く原則B/原則Aの直接の帰結であり、CLAP に限らず VST3・AU にもそのまま成立する。§1.1 の grounding table は AU の voice identity を「MPE ch / MIDI2 per-note（**scalar id なし**）」と記録しており、§3 の `VoiceAddr` 設計コメントも「VST3 は `noteId`+`channel`+`pitch` のみ（`port_index` は `busIndex` に読み替え）、AU は cable+MPE channel で近似」としている。VST3 は CLAP と同型（optional scalar id + pitch/channel フォールバック）、AU に至っては scalar note_id 自体が存在せず (port/cable, channel, key) が最初からネイティブな addressing である。したがって VST3/AU child が実装される時点でも host 側簿記（`VoiceKey`）の変更は不要 — SDK 固有の相関処理は各 child 内部に完全隔離される（§4.2 crate 配置規約）。
+
+**理由（Fable 判断の要旨）**:
+
+- **原則Aの対称適用**: 原則Aは「wire がフィールドを運んでいれば、child の実装能力向上だけで機能が increment し、wire の作り直しは不要」と定めた。同じ論理は host 側の**発行**にも対称に適用できる — wire は `note_id` を今すでに運んでおり（§3）、host がそこに実値を入れ始めるのは「既存フィールドへの値の供給開始」であって wire 変更ではない。per-voice targeting（note-expression / per-voice param mod の per-instance 指定）を DSL/host 機能として公開する時点で実 note_id 採番を有効化すればよく、M2 substrate の landing にそれを先取りする必要はない。
+- **簿記の目的に per-instance identity は不要**: §4.2 の host 側簿記の目的は (i) voice leak の検出・可視化と (ii) `output_note_end_dropped_count` 増分・respawn 時の保守的一括リセットであり、いずれも「どの (port,channel,key) に何本の voice が生きているか」という計数で足りる。per-instance の識別が必要になるのは per-voice targeting を wire に流し始めてからであり、それは M2 v1 には存在しない（host は wildcard しか発行しないので、per-voice ターゲット衝突という §4.2 が防ごうとした故障モード自体が現行 wire 上で構成不能）。
+- **CLAP 自身のアドレッシングモデルと一致**: note_id なしの `Pckn`（port/channel/key specific・note_id wildcard）は CLAP の第一級の動作モードであり、plugin は NOTE_END を含む note 系イベントで host が与えた note_id（= -1）をエコーする。したがって child→host の NoteEnd も現行 wire 上で実際に相関可能な軸は `(port, channel, key)` の3つだけである。同一キー再トリガ時に NoteEnd の帰属が曖昧になるのは wire の表現力の既知の限界（CLAP without note_id と同一）であって新たな劣化ではない — §4.2 の offset クランプが「A0 既採用の簡略化と同じ粒度・新たな精度劣化ではない」と整理したのと同型。
+- **既存契約の保持**: 案Bは Stage4 受け入れ基準3（sample-exact 回帰なし）を re-open する。`Pckn.note_id` を `Specific` にすると in-process 経路の全 plugin に届くバイト列が変わり、plugin 側の note-id ベース voice matching・NOTE_END 発行挙動への影響範囲は未調査。Stage5 で実証済みの A/B パリティ（実 CLAP instrument の M2 経由発音）も再検証が必要になる。簿記のためだけにこのコストを払う便益はゼロ（前項のとおり計数で足りる）。§4.6 が「既存 submit guard が既に保証している — 追加のプロトコル変更なしに成立する」設計を選んだのと同じ判断基準。
+- **リセットの安全性は monotone id なしでも成立**: 一括リセット後に遅延到着した NoteEnd は参照カウントの saturating decrement（下限0）で吸収され、underflow も誤ターゲットも起きない。リセットで新 voice のカウントを誤って減らす可能性は残るが、簿記は観測・health signal であって音響経路を制御しないため（§4.2「可視化は音を変えない」）、帰結は「leak 検出の一時的な過小計数」= 劣化に留まり破損にならない — §4.2 (a) が monotone id で達成しようとした性質そのものが、計数方式では id なしで成立する。
+
+**検討して不採用（案B: Stage4 を修正し host が実 note_id を採番する）**: doc の現行文言には忠実だが、(i) Stage4 の確定済み受け入れ基準を re-open し、(ii) plugin 側挙動への未調査の影響面を開き、(iii) その対価で得られる per-instance identity を M2 v1 の簿記は必要としない。実 note_id 採番は per-voice targeting 機能の landing 時に、その機能の受け入れ基準の一部として導入する（その時点で §3/§4.2 の monotone 規約が拘束力を持つ）。
+
+**Stage6 実装方針（host 側 voice 簿記）**:
+
+```rust
+/// host 側 per-voice 簿記のキー（M2 v1）。wire 上で実際に識別可能な3軸。
+/// host が実 note_id を発行し始めた時点で per-instance キーへ拡張する（§4.7）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct VoiceKey {
+    pub port_index: i16,
+    pub channel: i16,
+    pub key: i16,
+}
+```
+
+- **データ構造**: per-child の `VoiceKey → live_count`（`u16` saturating カウンタ）。RT 経路（RT callback 内で input 転送窓へ pop するタイミング）から触る場合は alloc 禁止のため、note port ごとの固定密配列 `[[u16; 128]; 16]`（channel × key・起動時確保）を推奨。簿記更新を非RT側（output reader / health ticker）に置くならプリアロケート済み map でもよいが、いずれも**音響経路を制御しない観測専用構造**とする。
+- **increment**: NoteOn が input 転送窓へ実際に載った時点（backing ring からの pop 成立時）で `live_count` を saturating increment。NoteOff では減算しない（release tail 中の voice は生きている。解放通知は NoteEnd）。
+- **decrement**: output 方向の NoteEnd 受信時に一致キーを saturating decrement（下限0・underflow なし）。NoteEnd/NoteChoke の addr に wildcard（-1）フィールドが含まれる場合は match-all 意味論で該当範囲を一括ゼロ化する（`Pckn` の wildcard 規約と整合）。
+- **`output_note_end_dropped_count` 増分検知時**: 当該 child の全カウンタを一括ゼロ化（保守的リセット）。以後の遅延 NoteEnd は saturating decrement で無害に吸収される。
+- **respawn 検知時（§4.2 (b) 無変更）**: implicit all-voices-end として当該 child の全カウンタを一括ゼロ化。crash による spill FIFO 喪失も leak にならない。
+- **§7 基準 11(b) の文言修正**: 「host が monotone note_id 前提で per-voice 簿記を安全にリセットできること」→「host が `(port, channel, key)` 参照カウント簿記を一括リセットし、リセット後の遅延 NoteEnd が underflow・誤帰属なく吸収されること」。11(c) は変更なし。
+
+**反証可能性 / 留保**:
+
+1. **同一キー高速再トリガ下の計数ドリフト**: §4.6 の in-order 消費と spill FIFO の全順序保存により、drop が無い限り参照カウントは正確に均衡するはずである。§7 の gated stress test（10K ノートバースト）で drop 無しにもかかわらずカウントが恒常的にドリフトする場合、plugin の NOTE_END 発行が仮定（送った NoteOn と1対1）から外れている証拠であり、簿記の意味論を再検討する。
+2. **per-voice targeting の landing = 案B の予約発動**: DSL/host が per-note expression・per-voice param mod を公開する時点で、host の実 note_id 採番（monotone・再利用なし）と `VoiceKey` の per-instance 拡張が**必須**になる。これは本判断の失敗ではなく計画された移行であり、その時点で Stage4 の regression test は「新機能の受け入れ基準の一部」として正式に書き換える（silent な re-open ではなく、per-voice targeting 機能の spec 更新 → 実装の順で行う）。
+3. **NOTE_END を発行しない・(port,channel,key) を specific にエコーしない plugin**: 簿記が減算機会を失い leak 計数が単調増加しうるが、これはキー選択と独立の問題であり、(a) のリセット経路と health signal 可視化が backstop になる（キーを note_id にしても同じ plugin は同じ問題を起こす）。
 
 ---
 
@@ -394,6 +464,7 @@ Q1-Q6 は全て owner サインオフ済み（§6）。以下を M2 substrate �
 9. **全 variant の encode/decode round-trip test**: `NeutralEvent` の全バリアント（NoteOn/NoteOff/NoteChoke/NoteEnd/PolyPressure/NoteExpression/ParamValue/ParamMod/ParamGestureBegin/ParamGestureEnd/MidiRaw/Midi2/LegacyMidiCcOut）について `encode() → decode()` が元の値と一致することを unit test で確認する（未使用 variant の符号化バグが Phase 3 の child 実装まで潜伏するのを防ぐ）。
 10. **offline spillover 決定論テスト**: input・output 双方向で 1ブロックあたり `MAX_EVENTS_PER_BLOCK` を超えるバーストを注入し、超過分が次ブロック以降で無損失配送される（対応する `*_event_spilled_count` が増分し `*_event_dropped_count` は増えない）ことを offline test で確認する。spill された event の `sample_offset` が配送先ブロック先頭にクランプされること（§4.2 記載の規約）も併せて確認する。
 11. **枯渇時 note 保護テスト**: (a) host 側 backing ring を意図的に枯渇させ（真の drop 条件を再現し）、`input_event_dropped_count` が増分すること・sticky flag による note-choke/all-notes-off 側路注入が発火し stuck note が構造的に排除されることを確認する。(b) child 側 spill FIFO を意図的に枯渇させ、`output_event_dropped_count`（NoteEnd 込みなら `output_note_end_dropped_count` も）が増分すること・host が monotone note_id 前提で per-voice 簿記を安全にリセットできることを確認する（§4.2 output 方向）。(c) supervisor が child を respawn した際、implicit all-voices-end により voice 簿記がリークしないことを確認する。
+12. **in-order 消費の回帰テスト**（§4.6・Fable 一発判断 2026-07-12）: instrument child が host を意図的に backlog させた後（一部ブロックを stall させた後）追いつく offline 統合テストで、**全ブロックの全 event が正確に1回ずつ・元の submit 順序・元の（配送先ブロックにクランプされない）`sample_offset` で消費される**ことを assert する。加えて「child が `last+1` を skip したら fail する」oracle（skip 検出）を用意し、in-order 規律自体の回帰を防ぐ。
 
 ---
 
