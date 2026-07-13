@@ -22,9 +22,10 @@ use crate::protocol::{
     ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_ENGINE_LOCK_CONTENTION,
     ERROR_CODE_ENGINE_LOCK_POISONED, ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_OUTPROC_EFFECT_ERROR,
     ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED, ERROR_CODE_OUTPROC_EFFECT_INVALID,
-    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW,
-    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
-    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
+    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED,
+    ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
+    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
+    EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -84,6 +85,7 @@ pub async fn run(
             let mut last_outproc_errors: u64 = 0;
             let mut last_outproc_respawns: u64 = 0;
             let mut last_outproc_frames_clamped: u64 = 0;
+            let mut last_outproc_instrument_output_dropped: u64 = 0;
             let mut last_engine_lock_contention: u64 = 0;
             let mut last_plugin_event_ring_overflow: u64 = 0;
             let mut outproc_invalid_reported = false;
@@ -287,6 +289,36 @@ pub async fn run(
                         break;
                     }
                     last_outproc_frames_clamped = outproc_frames_clamped;
+                }
+
+                // out-of-process instrument の出力方向（M2 §4.2）event overflow health を非 RT で
+                // surface（#420 PR #422 round 2）。round 1 で追加済みの output-event overflow counter
+                // 群（dropped/spilled/note_end_dropped）が watchdog にはミラーされていたが、daemon
+                // health 経路への配線が欠けており、stuck-note class の regression が無音のまま埋もれ
+                // ていた（silent-failure-hunter 指摘）。真の loss signal（dropped の増加）のみを
+                // WARNING トリガにし、無損失な spilled と NoteEnd 喪失（stuck-note リスク）を示す
+                // note_end_dropped は message の文脈情報として含める（spilled 単独の WARNING はノイズ
+                // になるため見送り・advisor 判断）。
+                let (
+                    outproc_instrument_dropped,
+                    outproc_instrument_spilled,
+                    outproc_instrument_note_end_dropped,
+                ) = engine.outproc_instrument_output_health();
+                if outproc_instrument_dropped > last_outproc_instrument_output_dropped {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED,
+                        format!(
+                            "out-of-process instrument output event overflow: \
+                             {outproc_instrument_dropped} dropped total \
+                             ({outproc_instrument_note_end_dropped} were NoteEnd -- stuck-note \
+                             risk), {outproc_instrument_spilled} spilled (no loss, 1-block delay)",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_instrument_output_dropped = outproc_instrument_dropped;
                 }
 
                 let stats_evt = Event::new(

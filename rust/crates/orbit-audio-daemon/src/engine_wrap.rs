@@ -112,6 +112,14 @@ pub struct EngineWrap {
     /// `link_egress_drops` / `clap_process_errors` と同設計（#406 /simplify: 専用 seam が無いと
     /// この signal はどのテストからも exercise できなかった）。
     outproc_frames_clamped: Arc<AtomicU64>,
+    /// OOP instrument `output_event_dropped_count`（M2 §4.2 output 方向の真の loss）の **test 注入用**
+    /// カウンタ（本番は常に 0）。`outproc_instrument_output_health` が real stats（feature
+    /// `outproc-instrument` 時のみ存在）にこれを加算する。integration test は instrument child
+    /// process を spawn しない（= 実 drop 源が無い）ため、この counter が outproc-instrument feature
+    /// の有無に依らず 1 Hz ticker の OUTPROC_INSTRUMENT_OUTPUT_DROPPED 発火を駆動する唯一の seam に
+    /// なる（[`Self::outproc_instrument_output_dropped_arc`]）。`outproc_frames_clamped` と同設計
+    /// （PR #422 round 2 review: 追加済みの counter が daemon health 経路に配線されていなかった）。
+    outproc_instrument_output_dropped: Arc<AtomicU64>,
     /// `push_plugin_event` が bounded retry（[`push_with_bounded_retry`]）の末に諦めた回数（本番は
     /// 常に 0 に近い想定・health signal）。event ring は audio callback が毎 block 全量 drain する
     /// ため満杯は一時的であり、真の drop はこの回数だけ発生する（M2 doc の「溢れても失わない」方針を
@@ -736,6 +744,7 @@ impl EngineWrap {
             #[cfg(feature = "clap-host")]
             plugin_loaded: AtomicBool::new(false),
             outproc_frames_clamped: Arc::new(AtomicU64::new(0)),
+            outproc_instrument_output_dropped: Arc::new(AtomicU64::new(0)),
             plugin_event_ring_overflow_count: AtomicU64::new(0),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
@@ -1260,6 +1269,62 @@ impl EngineWrap {
         )
     }
 
+    /// OOP instrument の出力方向（M2 §4.2）event overflow health signal を
+    /// `(output_event_dropped_count, output_event_spilled_count, output_note_end_dropped_count)` で
+    /// 返す（daemon の 1 Hz ticker が polling して `output_event_dropped_count` の増加を WARNING event
+    /// で surface する非 RT observability）。`outproc_health()`（effect 側）と同じ try_lock 方針:
+    /// **WouldBlock** は次 tick に持ち越すだけ（cumulative なので drop しない）、**Poisoned** は warn
+    /// して real 分を 0 に丸める（injected 分は失わない）。instrument 未起動 / outproc-instrument
+    /// 無効時は injected 分のみ返す。
+    ///
+    /// `spilled` は無損失（child-local spill FIFO 経由の 1 ブロック遅延のみ）なので、単独の WARNING
+    /// トリガにはしない — 発火時の message に文脈として含めるだけ。真の loss トリガは `dropped` の
+    /// 増加であり、`note_end_dropped` はその部分集合（`dropped` が増える契機は必ず同時に
+    /// `note_end_dropped` も増えうる）として stuck-note リスクを message 内で個別に強調する
+    /// （round 2 review・silent-failure-hunter: 追加済みの 3 counter を watchdog がミラーしていたが
+    /// daemon health 経路への配線が欠けていた。advisor 判断: 3 counter を独立 WARNING code にすると
+    /// 各 code に専用の CI 注入 seam + firing test が要り test 負債が線形に増えるため、真の loss
+    /// signal 1 本に絞る）。
+    #[cfg(feature = "outproc-instrument")]
+    pub fn outproc_instrument_output_health(&self) -> (u64, u64, u64) {
+        let injected_dropped = self
+            .outproc_instrument_output_dropped
+            .load(Ordering::Relaxed);
+        match self.outproc_instrument.try_lock() {
+            Ok(g) => g
+                .as_ref()
+                .map(|c| {
+                    let s = c.stats.snapshot();
+                    (
+                        s.output_event_dropped_count + injected_dropped,
+                        s.output_event_spilled_count,
+                        s.output_note_end_dropped_count,
+                    )
+                })
+                .unwrap_or((injected_dropped, 0, 0)),
+            Err(std::sync::TryLockError::WouldBlock) => (injected_dropped, 0, 0),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                tracing::warn!(
+                    "outproc instrument mutex poisoned; outproc_instrument_output_health \
+                     reporting zeros (OUTPROC_INSTRUMENT_OUTPUT_DROPPED events suppressed until \
+                     daemon restart)"
+                );
+                (injected_dropped, 0, 0)
+            }
+        }
+    }
+
+    /// feature `outproc-instrument` 無効ビルド用の stub。本番は常に injected 分のみ（control が無い）。
+    #[cfg(not(feature = "outproc-instrument"))]
+    pub fn outproc_instrument_output_health(&self) -> (u64, u64, u64) {
+        (
+            self.outproc_instrument_output_dropped
+                .load(Ordering::Relaxed),
+            0,
+            0,
+        )
+    }
+
     /// 全 LinkAudio channel の ring overflow drop（interleaved サンプル数）の累積合計（A4-2b-2b）。
     /// daemon の 1 Hz ticker が polling して増加を WARNING event で surface する（非 RT observability）。
     /// link 未初期化（test backend）時は control 分が 0。test 注入分（本番 0）を必ず加える。
@@ -1314,6 +1379,15 @@ impl EngineWrap {
     #[doc(hidden)]
     pub fn outproc_frames_clamped_arc(&self) -> Arc<AtomicU64> {
         self.outproc_frames_clamped.clone()
+    }
+
+    /// test harness 用: OOP instrument `output_event_dropped_count` の注入カウンタを取得する。
+    /// `outproc_frames_clamped_arc` と同形で、下層 counter は本番経路から分離した注入専用（本番 0）。
+    /// integration test から `fetch_add` して 1 Hz ticker の OUTPROC_INSTRUMENT_OUTPUT_DROPPED 発火を
+    /// 駆動する（instrument child process 不要・PR #422 round 2）。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn outproc_instrument_output_dropped_arc(&self) -> Arc<AtomicU64> {
+        self.outproc_instrument_output_dropped.clone()
     }
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から
@@ -2177,6 +2251,129 @@ mod outproc_health_tests {
         );
 
         assert_eq!(wrap.outproc_health(), (0, 0, false, 3));
+    }
+}
+
+/// `outproc_instrument_output_health()` の real body（`#[cfg(feature = "outproc-instrument")]`）を
+/// 直接叩く unit test。`outproc_health_tests` と同じ理由（`tests/protocol.rs` の統合テストは default
+/// feature build で走るため real body の match arm がどのテストからも一度も compile even されない）
+/// で、この `#[cfg(test)]` submodule から `EngineWrap::outproc_instrument`（private field）と
+/// `OutProcInstrumentControl`（private struct）へ直接アクセスして注入する（PR #422 round 2・
+/// critical issue 1: output-event overflow counter が daemon health 経路に配線されていなかった）。
+#[cfg(all(test, feature = "outproc-instrument"))]
+mod outproc_instrument_health_tests {
+    use super::{EngineWrap, OutProcInstrumentControl};
+    use crate::backend::StubBackend;
+    use crate::outproc_instrument::OutProcInstrumentStats;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcInstrumentControl`
+    /// を `self.outproc_instrument` に注入する。event_tx の consumer 側は即 drop するが、この
+    /// テストは health accessor だけを exercise するので note の push は行わない。
+    fn wrap_with_instrument_stats() -> (Arc<EngineWrap>, Arc<OutProcInstrumentStats>) {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let stats = OutProcInstrumentStats::new();
+        let (event_tx, _event_rx) = rtrb::RingBuffer::new(4);
+        *wrap
+            .outproc_instrument
+            .lock()
+            .expect("lock instrument control for injection") = Some(OutProcInstrumentControl {
+            event_tx,
+            stats: stats.clone(),
+        });
+        (wrap, stats)
+    }
+
+    #[test]
+    fn ok_none_reports_only_injected_dropped() {
+        // instrument 未注入（build() 直後の初期値）= Ok(None) 分岐。
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        wrap.outproc_instrument_output_dropped_arc()
+            .fetch_add(4, Ordering::Relaxed);
+        assert_eq!(wrap.outproc_instrument_output_health(), (4, 0, 0));
+    }
+
+    #[test]
+    fn ok_some_sums_real_dropped_with_injected_and_surfaces_spilled_and_note_end() {
+        // Ok(Some(c)) 分岐: 実 OutProcInstrumentStats スナップショットの dropped と injected
+        // カウンタを両方合算して返し、spilled / note_end_dropped は real 値をそのまま返すこと
+        // （field-to-field mapping が正しいこと -- 3 値とも異なる数にして swap を検知できるように
+        // する）。
+        let (wrap, stats) = wrap_with_instrument_stats();
+        stats.output_event_dropped_count.store(3, Ordering::Relaxed);
+        stats
+            .output_event_spilled_count
+            .store(11, Ordering::Relaxed);
+        stats
+            .output_note_end_dropped_count
+            .store(2, Ordering::Relaxed);
+        wrap.outproc_instrument_output_dropped_arc()
+            .fetch_add(9, Ordering::Relaxed);
+
+        assert_eq!(wrap.outproc_instrument_output_health(), (12, 11, 2));
+    }
+
+    #[test]
+    fn would_block_ignores_real_stats_and_reports_only_injected() {
+        // WouldBlock 分岐: 別スレッドが outproc_instrument mutex を保持している間は real stats を
+        // 読まず injected カウンタのみ返すこと（cumulative なので次 tick で real 分も取り戻せる設計）。
+        let (wrap, stats) = wrap_with_instrument_stats();
+        stats
+            .output_event_dropped_count
+            .store(100, Ordering::Relaxed);
+        wrap.outproc_instrument_output_dropped_arc()
+            .fetch_add(1, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let (holding_tx, holding_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc_instrument
+                .lock()
+                .expect("lock outproc_instrument for contention setup");
+            holding_tx.send(()).expect("signal lock held");
+            release_rx.recv().expect("wait for release signal");
+        });
+        holding_rx.recv().expect("holder thread signaled lock held");
+
+        assert_eq!(wrap.outproc_instrument_output_health(), (1, 0, 0));
+
+        release_tx.send(()).expect("signal release");
+        holder.join().expect("holder thread should not panic");
+    }
+
+    #[test]
+    fn poisoned_still_reports_injected_dropped_not_lost() {
+        // Poisoned 分岐: real stats は 0 に丸めるが、injected の dropped カウンタは黙って失わず
+        // 返すこと（`outproc_health_tests::poisoned_still_reports_injected_frames_clamped_not_lost`
+        // と同じ genuine-poison パターン: 別スレッドで panic → join）。
+        let (wrap, stats) = wrap_with_instrument_stats();
+        stats
+            .output_event_dropped_count
+            .store(42, Ordering::Relaxed);
+        wrap.outproc_instrument_output_dropped_arc()
+            .fetch_add(3, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc_instrument
+                .lock()
+                .expect("lock outproc_instrument for poison setup");
+            panic!("intentional poison for outproc_instrument_output_health poisoned test");
+        })
+        .join()
+        .is_err();
+        assert!(
+            panicked,
+            "spawned thread should have panicked while holding the lock"
+        );
+
+        assert_eq!(wrap.outproc_instrument_output_health(), (3, 0, 0));
     }
 }
 

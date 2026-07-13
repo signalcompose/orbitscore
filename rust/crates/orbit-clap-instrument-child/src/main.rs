@@ -112,6 +112,41 @@ fn write_output_events(
     outcome
 }
 
+/// Mirrors an [`OutputWriteOutcome`] into `region`'s per-slot output-event health counters
+/// (`output_event_spilled_count` / `output_event_dropped_count` / `output_note_end_dropped_count`)
+/// and the slot's `output_event_count`.
+///
+/// Extracted from `main()`'s per-slot `write_slot` closure so the outcome-to-counter mapping is
+/// directly unit-testable without a live plugin or child process: a copy-paste field swap at this
+/// call site (e.g. `dropped` accidentally added into `output_event_spilled_count`) would otherwise
+/// pass every CI-runnable test, since the only prior coverage exercised `write_output_events`'s
+/// returned struct in isolation, never the region counters it gets mirrored into (pr-test-analyzer,
+/// PR #422 round 2 item 2). Caller must ensure `region` is valid and `idx` is in range.
+unsafe fn apply_output_write_outcome(
+    region: *mut SharedRegion,
+    idx: usize,
+    outcome: OutputWriteOutcome,
+) {
+    unsafe {
+        if outcome.spilled != 0 {
+            (*region)
+                .output_event_spilled_count
+                .fetch_add(outcome.spilled, Relaxed);
+        }
+        if outcome.dropped != 0 {
+            (*region)
+                .output_event_dropped_count
+                .fetch_add(outcome.dropped, Relaxed);
+        }
+        if outcome.note_end_dropped != 0 {
+            (*region)
+                .output_note_end_dropped_count
+                .fetch_add(outcome.note_end_dropped, Relaxed);
+        }
+        (*region).output_event_count[idx].store(outcome.written as u32, Relaxed);
+    }
+}
+
 /// Writes one completed slot, then publishes its sequence with Release ordering.
 ///
 /// `write_slot` must write audio, `output_events`, and `output_event_count`. Their writes must stay
@@ -235,22 +270,7 @@ fn main() -> Result<()> {
                             .into_iter()
                             .filter_map(ClapInstrumentProcessor::neutral_output_event);
                         let outcome = write_output_events(window, &mut output_spill, translated);
-                        if outcome.spilled != 0 {
-                            (*region)
-                                .output_event_spilled_count
-                                .fetch_add(outcome.spilled, Relaxed);
-                        }
-                        if outcome.dropped != 0 {
-                            (*region)
-                                .output_event_dropped_count
-                                .fetch_add(outcome.dropped, Relaxed);
-                        }
-                        if outcome.note_end_dropped != 0 {
-                            (*region)
-                                .output_note_end_dropped_count
-                                .fetch_add(outcome.note_end_dropped, Relaxed);
-                        }
-                        (*region).output_event_count[idx].store(outcome.written as u32, Relaxed);
+                        apply_output_write_outcome(region, idx, outcome);
                         (*region).child_processed.fetch_add(1, Relaxed);
                     },
                     || {},
@@ -375,6 +395,56 @@ mod tests {
             outcome.note_end_dropped, 1,
             "a dropped NoteEnd must be tracked separately (host reset_all() trigger)"
         );
+    }
+
+    /// CI-runnable regression guard for `apply_output_write_outcome` (main()'s
+    /// `write_output_events` outcome -> `SharedRegion` counter mirror, extracted for exactly this
+    /// reason -- pr-test-analyzer, PR #422 round 2 item 2). Uses three *distinct* values for
+    /// spilled/dropped/note_end_dropped so a copy-paste field swap (e.g. `dropped` accidentally
+    /// added into `output_event_spilled_count`) is caught by field identity, not just "some
+    /// counter went up". No live plugin or child process needed -- same `alloc_zeroed` raw-region
+    /// pattern as `recycled_child_slot_publishes_note_end_before_sequence_tag` below.
+    #[test]
+    fn apply_output_write_outcome_maps_each_field_to_its_own_region_counter() {
+        let layout = std::alloc::Layout::new::<SharedRegion>();
+        let region = unsafe { std::alloc::alloc_zeroed(layout) as *mut SharedRegion };
+        assert!(!region.is_null());
+
+        let idx = slot_index(1);
+        let outcome = OutputWriteOutcome {
+            written: 3,
+            spilled: 11,
+            dropped: 5,
+            note_end_dropped: 2,
+        };
+
+        unsafe {
+            apply_output_write_outcome(region, idx, outcome);
+        }
+
+        unsafe {
+            assert_eq!(
+                (*region).output_event_spilled_count.load(Relaxed),
+                11,
+                "spilled must land in output_event_spilled_count, not another counter"
+            );
+            assert_eq!(
+                (*region).output_event_dropped_count.load(Relaxed),
+                5,
+                "dropped must land in output_event_dropped_count, not another counter"
+            );
+            assert_eq!(
+                (*region).output_note_end_dropped_count.load(Relaxed),
+                2,
+                "note_end_dropped must land in output_note_end_dropped_count, not another counter"
+            );
+            assert_eq!(
+                (*region).output_event_count[idx].load(Relaxed),
+                3,
+                "written must land in output_event_count for the slot"
+            );
+            std::alloc::dealloc(region.cast(), layout);
+        }
     }
 
     #[test]

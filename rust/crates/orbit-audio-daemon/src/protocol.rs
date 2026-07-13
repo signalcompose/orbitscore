@@ -122,6 +122,13 @@ pub const ERROR_CODE_ENGINE_LOCK_POISONED: &str = "ENGINE_LOCK_POISONED";
 /// WARNING severity。control スレッドが cumulative counter に積み、daemon が 1 Hz ticker で
 /// 増加を検知して発火する（#400・M2 doc の「溢れても失わない」方針の in-process retrofit）。
 pub const ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW: &str = "PLUGIN_EVENT_RING_OVERFLOW";
+/// out-of-process instrument child の output-event overflow（M2 §4.2 output 方向）で真の drop が
+/// 発生した（window + child-local spill FIFO の両方が尽きた）。WARNING severity。child が shm の
+/// cumulative counter に積み、daemon が 1 Hz ticker で増加を検知して発火する（#420 PR #422 round 2:
+/// counter 自体は round 1 で追加済みだったが daemon health 経路への配線が欠けていた）。message には
+/// 無損失な `spilled`（1 ブロック遅延のみ）と `note_end_dropped`（NoteEnd 喪失 = stuck-note リスク）も
+/// 文脈として含める。
+pub const ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED: &str = "OUTPROC_INSTRUMENT_OUTPUT_DROPPED";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]

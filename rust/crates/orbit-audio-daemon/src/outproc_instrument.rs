@@ -331,9 +331,21 @@ impl InstrumentChildSupervisor {
         let ctl_mmap = match open_shared(&shm_path) {
             Ok(mmap) => mmap,
             Err(error) => {
-                let _ = first_child.kill();
-                let _ = first_child.wait();
-                let _ = std::fs::remove_file(&shm_path);
+                if let Err(kill_error) = first_child.kill() {
+                    tracing::warn!(
+                        "instrument child kill during startup-failure cleanup failed: {kill_error}"
+                    );
+                }
+                if let Err(wait_error) = first_child.wait() {
+                    tracing::warn!(
+                        "instrument child reap (wait) during startup-failure cleanup failed: {wait_error}"
+                    );
+                }
+                if let Err(remove_error) = std::fs::remove_file(&shm_path) {
+                    tracing::warn!(
+                        "OOP instrument shm removal failed {shm_path:?}: {remove_error}"
+                    );
+                }
                 return Err(error);
             }
         };
@@ -439,17 +451,37 @@ impl InstrumentChildSupervisor {
             }) {
             Ok(handle) => handle,
             Err(error) => {
-                let _ = first_child.kill();
-                let _ = first_child.wait();
-                let _ = std::fs::remove_file(&shm_path);
+                if let Err(kill_error) = first_child.kill() {
+                    tracing::warn!(
+                        "instrument child kill during startup-failure cleanup failed: {kill_error}"
+                    );
+                }
+                if let Err(wait_error) = first_child.wait() {
+                    tracing::warn!(
+                        "instrument child reap (wait) during startup-failure cleanup failed: {wait_error}"
+                    );
+                }
+                if let Err(remove_error) = std::fs::remove_file(&shm_path) {
+                    tracing::warn!("OOP instrument shm removal failed {shm_path:?}: {remove_error}");
+                }
                 return Err(error);
             }
         };
 
         if let Err(std::sync::mpsc::SendError(mut orphan)) = child_tx.send(first_child) {
-            let _ = orphan.kill();
-            let _ = orphan.wait();
-            let _ = std::fs::remove_file(&shm_path);
+            if let Err(kill_error) = orphan.kill() {
+                tracing::warn!(
+                    "orphaned instrument child kill during startup-failure cleanup failed: {kill_error}"
+                );
+            }
+            if let Err(wait_error) = orphan.wait() {
+                tracing::warn!(
+                    "orphaned instrument child reap (wait) during startup-failure cleanup failed: {wait_error}"
+                );
+            }
+            if let Err(remove_error) = std::fs::remove_file(&shm_path) {
+                tracing::warn!("OOP instrument shm removal failed {shm_path:?}: {remove_error}");
+            }
             return Err(io::Error::other(
                 "instrument watchdog exited before receiving first child",
             ));
@@ -697,6 +729,50 @@ mod tests {
         std::fs::remove_file(path).expect("remove shared memory");
     }
 
+    // pr-test-analyzer (item 4, PR #422 review): `OutProcInstrumentPostProcessor::process()`'s
+    // `teardown_requested` early-return branch (sets `teardown_done`, skips all stats/audio
+    // updates) had no unit test.
+    #[test]
+    fn teardown_requested_returns_early_and_sets_teardown_done_without_touching_stats_or_audio() {
+        let path = unique_shm_path();
+        let host_mmap = orbit_audio_sandbox::create_shared(&path).expect("create shared memory");
+        let ctl_mmap = open_shared(&path).expect("open control mapping");
+        let host = PipelinedInstrumentHost::from_mmap(host_mmap);
+        let (_event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+        let requested = Arc::new(AtomicBool::new(true));
+        let done = Arc::new(AtomicBool::new(false));
+        let stats = OutProcInstrumentStats::new();
+        let mut processor = OutProcInstrumentPostProcessor::new(
+            host,
+            event_rx,
+            NOTE_RING_CAPACITY,
+            requested,
+            done.clone(),
+            stats.clone(),
+        );
+
+        let mut data = vec![0.42; 8 * CHANNELS];
+        processor.process(&mut data);
+
+        assert!(
+            done.load(Ordering::Acquire),
+            "teardown_requested early return must set teardown_done"
+        );
+        assert!(
+            data.iter().all(|sample| *sample == 0.42),
+            "teardown early return must not touch the audio buffer"
+        );
+        assert_eq!(
+            stats.callback_count.load(Ordering::Relaxed),
+            0,
+            "teardown early return must skip the normal per-block stats update"
+        );
+
+        drop(processor);
+        drop(ctl_mmap);
+        std::fs::remove_file(path).expect("remove shared memory");
+    }
+
     /// `InstrumentChildSupervisor`'s 2nd `open_shared` needs a shared-memory **file** to already
     /// exist; mapping is dropped immediately so the file survives for the supervisor to open.
     fn make_shm() -> PathBuf {
@@ -781,6 +857,70 @@ mod tests {
             "respawn が成功している間は計測有効"
         );
         drop(sup);
+        let _ = std::fs::remove_file(&shm);
+    }
+
+    // pr-test-analyzer (item 3, PR #422 review): the watchdog's per-tick mirror of `SharedRegion`'s
+    // output-event health counters (output_event_dropped_count / output_event_spilled_count /
+    // output_note_end_dropped_count) into `OutProcInstrumentStats` had zero coverage -- every
+    // existing supervisor test uses a stub `sleep` child that never touches these region fields.
+    // Writes three *distinct* values directly into the region (same raw shared-memory pattern as
+    // `note_round_trip_adds_instrument_without_overwriting_master`, via a second `open_shared`
+    // mapping of the same shm file) then polls the stats Arc for the watchdog to mirror them --
+    // verifying field identity (not just "some value moved"), which would catch a copy-paste swap
+    // at the mirror site (this file's watchdog loop, around `output_event_dropped_count` /
+    // `output_event_spilled_count` / `output_note_end_dropped_count`).
+    #[test]
+    fn watchdog_mirrors_region_output_event_counters_with_correct_field_mapping() {
+        let shm = make_shm();
+        let stats = OutProcInstrumentStats::new();
+        let first = Command::new("sleep")
+            .arg("2")
+            .spawn()
+            .expect("spawn stub child");
+        let sup = InstrumentChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats.clone(),
+            PathBuf::from("sleep"),
+            PathBuf::from("/ignored.clap"),
+            None,
+            48_000,
+        )
+        .expect("supervisor spawn");
+
+        // Second mapping of the same shm file (shared memory, not a private copy): writes here
+        // are visible to the watchdog thread's own mapping opened inside `spawn`.
+        let ctl_mmap = open_shared(&shm).expect("open control mapping for injection");
+        let region = region_ptr(&ctl_mmap);
+        unsafe {
+            (*region)
+                .output_event_dropped_count
+                .store(5, Ordering::Relaxed);
+            (*region)
+                .output_event_spilled_count
+                .store(11, Ordering::Relaxed);
+            (*region)
+                .output_note_end_dropped_count
+                .store(2, Ordering::Relaxed);
+        }
+
+        let mirrored = poll_until(5, || {
+            stats.output_event_dropped_count.load(Ordering::Relaxed) == 5
+                && stats.output_event_spilled_count.load(Ordering::Relaxed) == 11
+                && stats.output_note_end_dropped_count.load(Ordering::Relaxed) == 2
+        });
+        assert!(
+            mirrored,
+            "watchdog must mirror each region counter into its matching stats field: \
+             dropped={}, spilled={}, note_end_dropped={}",
+            stats.output_event_dropped_count.load(Ordering::Relaxed),
+            stats.output_event_spilled_count.load(Ordering::Relaxed),
+            stats.output_note_end_dropped_count.load(Ordering::Relaxed),
+        );
+
+        drop(sup);
+        drop(ctl_mmap);
         let _ = std::fs::remove_file(&shm);
     }
 }
