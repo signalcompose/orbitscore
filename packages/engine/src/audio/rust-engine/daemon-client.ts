@@ -348,6 +348,13 @@ export class DaemonClient extends EventEmitter {
     await this.request('SetLinkTempo', { bpm })
   }
 
+  /**
+   * Loads a `.clap` plugin into the daemon. Rejects with `DaemonProtocolError` —
+   * notably `CLAP_UNAVAILABLE` when the daemon was built without `--features
+   * clap-host` — which `RustEnginePlayer.loadPlugin()` converts into an
+   * operator-actionable message. `role` is hardcoded to `'effect'` until #427
+   * threads it through as an argument (e.g. for `seq.instrument()`).
+   */
   async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
     const result = await this.request('LoadPlugin', {
       path: filePath,

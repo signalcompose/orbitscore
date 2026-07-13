@@ -32,6 +32,7 @@ export interface AudioEngineBackend extends Scheduler {
   registerLinkAudioChannel?(channelName: string): Promise<void>
   setLinkTempo?(bpm: number): Promise<void>
   loadPlugin?(filePath: string, pluginId?: string): Promise<PluginLoadResult>
+  isPluginActive?(): boolean
 }
 
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */

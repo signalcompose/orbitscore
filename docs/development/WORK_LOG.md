@@ -22,7 +22,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **Date**: 2026-07-14
 **Status**: ✅ 実装・受け入れ監査済み（実機 gated DoD = 可聴確認は後続。#431 起票・Epic #424 段階化）
 **Branch**: `426-clap-effect-dsl-wiring`
-**Commit**: `86a9574`
+**Commit**: `5d8e1ba`（feat 本体）+ `0bdb35b`（/simplify 適用）
 
 #425 で確定した `global.effect(path[, pluginId])` を TS 側に実装し、daemon の実行時
 `LoadPlugin`（in-process clap-host 経路）へ配線した。Epic #424 Stage 1 の前半。
@@ -85,6 +85,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   実証由来を保全・#427 で再訪）／backend replay seam の全面再設計（#431 が daemon 層を作り直す
   ため過剰投資）／effect 側 linkAudio チェックの Global 移動（エラー順序の挙動変更になるため）
 - 適用後検証: `npm test` 1296 passed / 0 failed・lint 変更ファイル新規指摘ゼロ
+
+**/code:pr-review-team round 1（4レビュアー並行 + CI）**:
+- CI 4/4 pass。code-reviewer = PASS。指摘: Critical 2（silent-failure-hunter:
+  respawn 再ロード失敗後に冪等キャッシュが幻の成功を返す残存経路 / comment-analyzer:
+  /simplify で resolve が linkAudio チェックより前に移動しエラー順序が変化 —
+  両 commit の実挙動差を実証しての検出）・Important 3（エラー変換 catch 3分岐未テスト×2
+  レビュアー一致・WORK_LOG の dangling hash・linkAudio JSDoc 記載漏れ）・Minor 5
+- fixer round 1 適用: C1 = `pluginActive` フラグ + optional `isPluginActive?()` +
+  冪等キャッシュヒット時の self-healing 再発行（`issueLoad` 共通化・エンジン未対応時は
+  従来 no-op で後方互換）/ C2 = validate → linkAudio gate → resolve の順序復元
+  （load-bearing コメント + `validatePluginExtension` export + 回帰テスト）/
+  I1 = catch 3分岐のテスト追加 / I3 + Minor 群 = JSDoc・コメント整備
+- 適用後: `npm test` **1304 passed / 0 failed**（テスト 16+5 件に増強）・lint 新規指摘ゼロ
 
 **残作業**: 実機 gated DoD（可聴変化の確認・要 clap-host build + 実 CLAP effect）→
 PR レビューフロー後に実施。#427（instrument + Pitch DSL 接続）が次。

@@ -6,8 +6,14 @@
  * `seq.instrument()` can reuse the same validation + resolution without
  * duplicating it.
  *
- * Order (unchanged from the previous inline implementation): extension
- * validation first, then `resolvePathDirect`. Error messages are identical.
+ * `resolvePluginPath` validates the extension first, then resolves the path
+ * (`resolvePathDirect`) — this single entry point always does both, in that
+ * order, so callers can't accidentally skip validation. Callers that also
+ * need to gate on other state (e.g. `PluginEffectManager.effect()` rejecting
+ * while LinkAudio is enabled) should run that check *between* validation and
+ * resolution — call `validatePluginExtension(spec)` directly first, do the
+ * gating check, then call `resolvePluginPath` (which re-validates; the
+ * function is pure so the repeat call is harmless).
  */
 
 import path from 'node:path'
@@ -19,11 +25,11 @@ export function resolvePluginPath(
   audioPaths: readonly string[],
   documentDirectory: string,
 ): string {
-  validateExtension(spec)
+  validatePluginExtension(spec)
   return resolvePathDirect(spec, audioPaths, documentDirectory)
 }
 
-function validateExtension(spec: string): void {
+export function validatePluginExtension(spec: string): void {
   const extension = path.extname(spec).toLowerCase()
   if (extension === '.clap') return
   if (extension === '.vst3' || extension === '.component') {

@@ -263,6 +263,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * replay する宣言 intent。
    */
   private loadedPlugin?: { filePath: string; pluginId?: string }
+  /**
+   * Whether `loadedPlugin` is actually loaded in the daemon right now (silent-failure
+   * guard). Set true on a successful `loadPlugin()`/reload, false when a post-respawn
+   * reload fails — surfaced via `isPluginActive()` so `PluginEffectManager`'s idempotent
+   * cache-hit path can detect a stale "success" and re-issue the load instead of
+   * silently returning as if the plugin were still active.
+   */
+  private pluginActive = false
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
    * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
@@ -586,10 +594,17 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  /**
+   * Loads a plugin into the daemon's master effect insert. Converts daemon-side
+   * `DaemonProtocolError`s into operator-actionable messages (CLAP_UNAVAILABLE →
+   * build hint, other codes → generic wrap); non-protocol errors pass through
+   * unchanged.
+   */
   async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
     try {
       const result = await this.daemon.loadPlugin(filePath, pluginId)
       this.loadedPlugin = { filePath, pluginId }
+      this.pluginActive = true
       return result
     } catch (err) {
       if (err instanceof DaemonProtocolError) {
@@ -604,18 +619,34 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  /**
+   * Re-issues the last successful plugin declaration after a daemon respawn (the
+   * new daemon process starts with no plugins loaded). Broad catch is intentional:
+   * a reload failure is this plugin's own concern, not the respawn's — it must not
+   * make `respawnLoop` treat an otherwise-successful respawn as failed. Cache entry
+   * intentionally remains on failure so a later respawn retries restoration, and
+   * `pluginActive` flips false so `PluginEffectManager` can detect the stale cache
+   * (see `pluginActive` field doc) and self-heal on the next `effect()` call.
+   */
   private async reloadPluginsAfterRespawn(): Promise<void> {
     if (!this.loadedPlugin) return
     const { filePath, pluginId } = this.loadedPlugin
     try {
       await this.daemon.loadPlugin(filePath, pluginId)
+      this.pluginActive = true
     } catch (err) {
+      this.pluginActive = false
       // Cache entry intentionally remains: a later daemon respawn retries restoration.
       console.error(
         `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}`,
         err,
       )
     }
+  }
+
+  /** Whether `loadedPlugin` is actually active in the daemon right now (see field doc). */
+  isPluginActive(): boolean {
+    return this.pluginActive
   }
 
   /**

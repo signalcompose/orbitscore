@@ -227,6 +227,9 @@ export class Global {
    * Ableton Link Audio instead of the hardware bus. Hardware output and
    * LinkAudio cannot coexist within the same .orbs file.
    *
+   * Rejected once plugin hosting (`global.effect()`) has already been
+   * declared — v1 mutual exclusion (PH.5).
+   *
    * @param targetSampleRate Optional explicit target SR for plugin-side
    *                         resampling. Auto-detect with 48000 fallback when
    *                         omitted.
