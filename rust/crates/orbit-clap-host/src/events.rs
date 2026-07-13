@@ -5,7 +5,8 @@ use clack_host::events::event_types::{
     NoteOnEvent, ParamGestureBeginEvent, ParamGestureEndEvent, ParamModEvent, ParamValueEvent,
 };
 use clack_host::events::io::EventBuffer;
-use clack_host::events::{Event, EventFlags, Match};
+use clack_host::events::spaces::CoreEventSpace;
+use clack_host::events::{Event, EventFlags, Match, UnknownEvent};
 use clack_host::prelude::Pckn;
 use clack_host::utils::{ClapId, Cookie};
 use orbit_audio_sandbox::events::{NeutralEvent, NeutralExpressionId, VoiceAddr};
@@ -85,6 +86,33 @@ fn voice_addr_to_pckn(addr: VoiceAddr) -> Pckn {
             Match::Specific(addr.note_id as u32)
         },
     )
+}
+
+fn pckn_to_voice_addr(pckn: Pckn) -> VoiceAddr {
+    VoiceAddr {
+        note_id: pckn.raw_note_id(),
+        port_index: pckn.raw_port_index(),
+        channel: pckn.raw_channel(),
+        key: pckn.raw_key(),
+        _pad: 0,
+    }
+}
+
+/// Translates a CLAP plugin output event into the M2 format-neutral representation.
+///
+/// M2 v1 only consumes voice-lifetime events. Other CLAP output events are intentionally dropped.
+pub fn neutral_event_from_clap_output(event: &UnknownEvent) -> Option<NeutralEvent> {
+    match event.as_core_event()? {
+        CoreEventSpace::NoteEnd(event) => Some(NeutralEvent::NoteEnd {
+            sample_offset: event.time(),
+            addr: pckn_to_voice_addr(event.pckn()),
+        }),
+        CoreEventSpace::NoteChoke(event) => Some(NeutralEvent::NoteChoke {
+            sample_offset: event.time(),
+            addr: pckn_to_voice_addr(event.pckn()),
+        }),
+        _ => None,
+    }
 }
 
 fn clap_param_id(param_id: u64) -> Option<ClapId> {
@@ -240,6 +268,7 @@ pub fn drain_to_event_buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clack_host::events::event_types::NoteEndEvent;
     use clack_host::events::spaces::{CoreEventSpace, EventSpaceId};
 
     fn addr() -> VoiceAddr {
@@ -303,6 +332,35 @@ mod tests {
         assert_eq!(off.pckn().note_id, Match::All);
         assert_eq!(off.velocity(), 0.25);
         assert_common(off, 0);
+    }
+
+    #[test]
+    fn maps_note_end_and_choke_outputs_with_specific_and_wildcard_addresses() {
+        let mut buf = EventBuffer::new();
+        buf.push(&NoteEndEvent::new(17, voice_addr_to_pckn(addr())));
+        buf.push(&NoteChokeEvent::new(23, Pckn::match_all()));
+
+        assert_eq!(
+            neutral_event_from_clap_output(buf.get(0).unwrap()),
+            Some(NeutralEvent::NoteEnd {
+                sample_offset: 17,
+                addr: addr(),
+            })
+        );
+        assert_eq!(
+            neutral_event_from_clap_output(buf.get(1).unwrap()),
+            Some(NeutralEvent::NoteChoke {
+                sample_offset: 23,
+                addr: VoiceAddr::WILDCARD,
+            })
+        );
+    }
+
+    #[test]
+    fn drops_unhandled_clap_output_events() {
+        let mut buf = EventBuffer::new();
+        buf.push(&NoteOnEvent::new(0, voice_addr_to_pckn(addr()), 1.0));
+        assert_eq!(neutral_event_from_clap_output(buf.get(0).unwrap()), None);
     }
 
     #[test]

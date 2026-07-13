@@ -38,6 +38,9 @@ clap-host = ["dep:orbit-clap-host", "dep:rtrb"]
 # しない＝daemon の依存グラフは clack-free のまま。clack は spawn された child プロセス内だけに閉じる）。
 # master-bus post-processor 経路なので clap-host / link-audio と併用不可（engine_wrap.rs の compile_error）。
 outproc-effect = ["dep:orbit-audio-sandbox"]
+# Issue #420: out-of-process CLAP instrument（default off・clack-free）。daemon は neutral note
+# ring + shared-memory transport のみを持ち、CLAP は spawned child 内に閉じる。
+outproc-instrument = ["dep:orbit-audio-sandbox", "dep:rtrb"]
 
 [dependencies]
 orbit-audio-core = { path = "../orbit-audio-core" }
@@ -46,11 +49,12 @@ orbit-audio-native = { path = "../orbit-audio-native" }
 orbit-link-audio = { path = "../orbit-link-audio", optional = true }
 # in-process CLAP hosting library（permissive）。feature `clap-host` 経由でのみ取り込む。
 orbit-clap-host = { path = "../orbit-clap-host", optional = true }
-# out-of-process effect transport（**clack-free**・memmap2 のみ）。feature `outproc-effect` 経由で
-# のみ取り込む。実 CLAP は spawn する child（orbit-clap-effect-child）が host し、daemon は clack を
-# リンクしない（`cargo tree -p orbit-audio-daemon --features outproc-effect` に clack が現れないこと）。
+# out-of-process effect/instrument transport（**clack-free**・memmap2 のみ）。feature
+# `outproc-effect` / `outproc-instrument` 経由で取り込む。実 CLAP は spawned child が host し、daemon
+# は clack をリンクしない。
 orbit-audio-sandbox = { path = "../orbit-audio-sandbox", optional = true }
-# reg-ring / install-ring / event-ring producer を名指すため。link-audio / clap-host 経路専用。
+# reg-ring / install-ring / event-ring producer を名指すため。link-audio / clap-host /
+# outproc-instrument 経路専用。
 rtrb = { version = "0.3", optional = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }

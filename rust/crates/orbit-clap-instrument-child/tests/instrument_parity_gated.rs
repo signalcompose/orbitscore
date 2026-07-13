@@ -45,13 +45,14 @@ fn render_in_process(
     .expect("load test synth (side A)");
     let mut out = Vec::with_capacity(events_by_block.len() * block_frames * CHANNELS);
     let mut event_buf: EventBuffer = Default::default();
+    let mut output_event_buf: EventBuffer = Default::default();
     for events in events_by_block {
         event_buf.clear();
         for event in events {
             assert!(push_neutral_event(&mut event_buf, event));
         }
         let mut block = vec![0.0; block_frames * CHANNELS];
-        assert!(instrument.process_block(&mut block, &event_buf));
+        assert!(instrument.process_block(&mut block, &event_buf, &mut output_event_buf));
         out.extend_from_slice(&block);
     }
     out

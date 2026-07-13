@@ -713,6 +713,359 @@ async fn daemon_error_warning_on_outproc_frames_clamped() {
     );
 }
 
+/// OOP instrument の output-event overflow（M2 §4.2 output 方向・dropped counter）が増えると
+/// DaemonError (severity=warning, code=OUTPROC_INSTRUMENT_OUTPUT_DROPPED) が発火する（#420 PR #422
+/// round 2）。OUTPROC_EFFECT_FRAMES_CLAMPED と同じ 1 Hz ticker 経路・同じ注入 seam 設計: integration
+/// test は instrument child process を spawn しない（default feature build には `outproc-instrument`
+/// が無い）ため、`outproc_instrument_output_dropped_arc` の **本番経路から分離した注入 seam**
+/// （本番常に 0）でこの event を driver する。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_outproc_instrument_output_dropped() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から dropped を注入（1 Hz ticker が outproc_instrument_health() の増加を検知して
+    // 発火）。
+    daemon
+        .engine
+        .outproc_instrument_output_dropped_arc()
+        .fetch_add(7, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_OUTPUT_DROPPED"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message =
+        warning_message.expect("OUTPROC_INSTRUMENT_OUTPUT_DROPPED warning event not received");
+    // message は累積 dropped 数（7）を含む = daemon_error_event の format! が壊れていないこと。
+    assert!(
+        message.contains('7'),
+        "OUTPROC_INSTRUMENT_OUTPUT_DROPPED message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**
+    // （last_outproc_instrument_output_dropped が据え置かれること）。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_OUTPUT_DROPPED"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "OUTPROC_INSTRUMENT_OUTPUT_DROPPED must not re-fire without additional drops (latch regression)"
+    );
+
+    // re-arm: 追加注入されると latch が再度開き、更新済みの累積値（7+5=12）で再発火すること。
+    daemon
+        .engine
+        .outproc_instrument_output_dropped_arc()
+        .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut rearmed_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_OUTPUT_DROPPED"
+                {
+                    rearmed_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let rearmed_message = rearmed_message
+        .expect("OUTPROC_INSTRUMENT_OUTPUT_DROPPED did not re-fire after second injection");
+    assert!(
+        rearmed_message.contains("12"),
+        "re-armed OUTPROC_INSTRUMENT_OUTPUT_DROPPED message should carry the updated cumulative total (12), got: {rearmed_message}"
+    );
+}
+
+/// OOP instrument child の `process()` エラーが増えると DaemonError (severity=warning,
+/// code=OUTPROC_INSTRUMENT_ERROR) が発火する（#420 PR #422 round 3）。CLAP_PROCESS_ERROR /
+/// OUTPROC_EFFECT_ERROR と同じ 1 Hz ticker 経路・同じ注入 seam 設計: integration test は instrument
+/// child process を spawn しないため、`outproc_instrument_child_errors_arc` の **本番経路から分離
+/// した注入 seam**（本番常に 0）でこの event を driver する。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_outproc_instrument_child_error() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    // 外部から child process() error を注入（1 Hz ticker が outproc_instrument_health() の増加を
+    // 検知して発火）。
+    daemon
+        .engine
+        .outproc_instrument_child_errors_arc()
+        .fetch_add(7, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_ERROR"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("OUTPROC_INSTRUMENT_ERROR warning event not received");
+    assert!(
+        message.contains('7'),
+        "OUTPROC_INSTRUMENT_ERROR message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_ERROR"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "OUTPROC_INSTRUMENT_ERROR must not re-fire without additional errors (latch regression)"
+    );
+
+    // re-arm: 追加注入されると latch が再度開き、更新済みの累積値（7+5=12）で再発火すること。
+    daemon
+        .engine
+        .outproc_instrument_child_errors_arc()
+        .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut rearmed_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_ERROR"
+                {
+                    rearmed_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let rearmed_message =
+        rearmed_message.expect("OUTPROC_INSTRUMENT_ERROR did not re-fire after second injection");
+    assert!(
+        rearmed_message.contains("12"),
+        "re-armed OUTPROC_INSTRUMENT_ERROR message should carry the updated cumulative total (12), got: {rearmed_message}"
+    );
+}
+
+/// OOP instrument child の crash → respawn が増えると DaemonError (severity=warning,
+/// code=OUTPROC_INSTRUMENT_RESPAWN) が発火する（#420 PR #422 round 3）。
+/// OUTPROC_INSTRUMENT_ERROR と同じ 1 Hz ticker 経路・同じ注入 seam 設計。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_outproc_instrument_respawn() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    daemon
+        .engine
+        .outproc_instrument_respawns_arc()
+        .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_RESPAWN"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("OUTPROC_INSTRUMENT_RESPAWN warning event not received");
+    assert!(
+        message.contains('2'),
+        "OUTPROC_INSTRUMENT_RESPAWN message should carry the running total, got: {message}"
+    );
+
+    // latch: 追加注入なしで次 tick へ進めても **再発火しない**。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_RESPAWN"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "OUTPROC_INSTRUMENT_RESPAWN must not re-fire without additional respawns (latch regression)"
+    );
+
+    // re-arm: 追加注入されると latch が再度開き、更新済みの累積値（2+5=7）で再発火すること。
+    daemon
+        .engine
+        .outproc_instrument_respawns_arc()
+        .fetch_add(5, std::sync::atomic::Ordering::Relaxed);
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut rearmed_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_RESPAWN"
+                {
+                    rearmed_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let rearmed_message =
+        rearmed_message.expect("OUTPROC_INSTRUMENT_RESPAWN did not re-fire after second injection");
+    assert!(
+        rearmed_message.contains('7'),
+        "re-armed OUTPROC_INSTRUMENT_RESPAWN message should carry the updated cumulative total (7), got: {rearmed_message}"
+    );
+}
+
+/// OOP instrument の watchdog が計測を諦める（`measurement_invalid`）と DaemonError
+/// (severity=warning, code=OUTPROC_INSTRUMENT_INVALID) が **fire-once** で発火する（#420 PR #422
+/// round 3）。恒久 bool フラグなので LATCH/RE-ARM ではなく「一度だけ発火し、以後は true のままでも
+/// 再発火しない」ことを検証する（OUTPROC_EFFECT_INVALID と同じ意味論）。integration test は
+/// instrument child process を spawn しないため、`outproc_instrument_measurement_invalid_arc`
+/// の **本番経路から分離した注入 seam**（本番常に false）でこの event を driver する。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn daemon_error_warning_on_outproc_instrument_invalid() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    daemon
+        .engine
+        .outproc_instrument_measurement_invalid_arc()
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+
+    advance_and_yield(Duration::from_millis(1_100)).await;
+
+    let mut warning_message: Option<String> = None;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["severity"] == "warning"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_INVALID"
+                {
+                    warning_message =
+                        Some(msg["data"]["message"].as_str().unwrap_or("").to_string());
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let message = warning_message.expect("OUTPROC_INSTRUMENT_INVALID warning event not received");
+    assert!(
+        message.contains("frozen"),
+        "OUTPROC_INSTRUMENT_INVALID message should describe the frozen instrument state, got: {message}"
+    );
+
+    // fire-once: flag は true のまま据え置かれるが、次 tick 以降は再発火しない。
+    advance_and_yield(Duration::from_millis(1_100)).await;
+    let mut refired = false;
+    for _ in 0..6 {
+        let res = tokio::time::timeout(Duration::from_millis(50), next_json(&mut ws)).await;
+        match res {
+            Ok(msg) => {
+                if msg["event"] == "DaemonError"
+                    && msg["data"]["code"] == "OUTPROC_INSTRUMENT_INVALID"
+                {
+                    refired = true;
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    assert!(
+        !refired,
+        "OUTPROC_INSTRUMENT_INVALID must not re-fire once already reported (fire-once regression)"
+    );
+}
+
 /// engine lock contention（try_lock の WouldBlock）が増えると
 /// DaemonError (severity=warning, code=ENGINE_LOCK_CONTENTION) が発火する（#401）。
 /// LINK_EGRESS_DROP/CLAP_PROCESS_ERROR と同じ 1 Hz ticker 経路。`engine_lock_contention_arc` の

@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.248 feat(engine): CLAP instrument daemon 縦貫通 — #419 output event 配線 + #420 production 統合 (Jul 13, 2026)
+
+**Date**: 2026-07-13
+**Status**: ✅ 実装・実機検証済み（owner 許可済み gated audio を Opus main が自ら実行）
+**Branch**: `420-clap-instrument-daemon-integration`
+
+PR #417（M2 instrument IPC substrate・#416）のマージ後、Fable一発判断（「VST3 instrument〔#421〕に直行せず、既存 CLAP 経路の daemon production 統合を先行させる」）に基づき着手。「DSL/CLI → orbit-audio-daemon → OOP instrument child → 実際に発音」の縦貫通を1本通した。
+
+**設計確認（advisor GO・blocking 2点の事前指摘）**:
+1. **child の store 順序が concurrency の核心**: `output_events`/`output_event_count` を先に書き、その後 `seq_tag`/`seq_done` を Release publish しなければ host 側の seqlock 読み手が torn/stale read を起こす（PR #417 で潰した race と同型）。
+2. **overwrite ではなく sum**: instrument の PostProcessor は `data`（engine render 済み master。`LoadSample`/`PlayAt` の音を含む）を上書きしてはならない。scratch バッファで instrument 出力を受けて `data` に加算する必要がある（見落とすと sample 再生が無音化し、note のみ送る v1 テストでは露見しない）。
+
+**段階的実装（4段階・各段階を Opus main が差分精読 + 検証コマンド再実行で受け入れ）**:
+
+- **Part 1（#419・commit `3e67fd1`）**: `orbit-clap-instrument-child` が実 CLAP plugin の NOTE_END/NOTE_CHOKE output event を M2 wire に書き戻す。`process_block_core`（`orbit-clap-host`）に `Option<&mut EventBuffer>` の回収経路を追加（`None` で既存2経路は無変更）。
+  - **fail-first の自己検証で advisor 指摘の重みを実地確認**: 1回目の反転試行は無害な入れ替え（`write_slot` は依然 reader より前に実行）で green のままだった。load-bearing な性質（payload 書き込みが reader より前に完了しているか）を正しく反転させ直して RED（`live_count` 1≠期待値0）→ 正順に戻して GREEN・diff クリーンを確認。「advisor の同意は不在証明の裏取りにならない」を実地で再確認した一例。
+
+- **Part 2（#420・commit `7278f38` の一部）**: `orbit-audio-daemon` に新規 feature `outproc-instrument`（default off・clack-free）を追加。`OutProcInstrumentPostProcessor` は instrument 出力を scratch で受けて `data` に加算（sum）。`spawn_instrument_child`/`InstrumentChildSupervisor` は effect版の watchdog/respawn パターンを流用。note wire は既存 WS `PluginNoteOn`/`PluginNoteOff` を流用し、`PluginEvent`→`NeutralEvent` 変換は control 側のみ（audio thread は ring から pop するだけ）。4者（`link-audio`/`clap-host`/`outproc-effect`/`outproc-instrument`）を `compile_error!` で相互排他。
+  - **Codex 実行環境固有の偽陰性を切り分け**: Codex は「24件の protocol テストが loopback bind PermissionDenied で red」と報告したが、Opus main の環境では同じテストが全 green だった。Codex 自身のサンドボックスの network bind 制限であり、コードの不具合ではないことを確認した。
+
+- **Part 3a（respawn 簿記リセット・commit `7278f38` の一部）**: watchdog の `respawn_count`（生成カウンタ）を audio thread が毎ブロック観測し、変化を検知したら `PipelinedInstrumentHost::on_child_respawned()` を呼ぶ（lock-free・単一 reader/writer）。fail-before/pass-after を Opus main が自ら再現（配線無効化で RED、復元で GREEN）。
+
+- **Part 3b（gated 実機発音確認・commit `7278f38` の一部）**: `outproc_instrument_gated.rs` 新規作成。note-on/off で発音、SIGKILL→watchdog respawn→新 child での発音復帰を実機で検証するハーネス。`OutProcInstrumentStats` に `post_peak_bits`（f32 abs peak・fetch_max）を追加。
+
+- **Part 3c（advisor 指摘への対応・commit `7278f38` の一部）**: Part 3b の実機テストは「音が出た」ことのみ実証しており、**#419 の output event が cross-process で host の voice 簿記に実際に届くかは未検証**（`rust-spike/clap-test-synth` が NOTE_END を一切 emit していなかった）と advisor が指摘。`clap-test-synth` に NOTE_END emission を追加し、`OutProcInstrumentStats` に固定 probe key（A4/ch0/port0）の `live_count` を毎ブロック publish する `probe_live_count` を追加。gated テストに「note-off 後3秒以内に probe_live_count が0に復帰する」assertion を追加し、cross-process 経路の実証を完成させた。
+
+**実機検証結果（Opus main が自ら実行・owner 許可済み gated audio・振幅0.25の控えめな音量）**:
+```
+post_mix_peak:       0.25000  (note-on 後。clap-test-synth の期待振幅と一致)
+probe_live_count:    0        (note-off 後3秒以内に0復帰 = NOTE_END の cross-process 配送を実証)
+respawn_count:       0 → 1    (SIGKILL 後 watchdog が新 child を spawn)
+post_respawn_peak:   0.25000  (新 child で発音復帰)
+measurement_invalid: false
+child_proc_errors:   0
+```
+
+**検証**: `cargo build/test/fmt/clippy`（`outproc-instrument` feature 込み）・workspace 全体（default features）を Opus main が全段階で独立に再実行し green を確認。Codex サンドボックス由来の偽陰性2件を切り分け済み。
+
+**教訓**:
+1. **fail-first は「反転させたつもりが無害だった」ケースに気づけるかが本質**。1回目の反転が偶然 green のままだったことに気づかず「再現できなかった」で済ませていたら、実際には load-bearing でない性質を検証したことになっていた。
+2. **委譲先（Codex）の実行環境と自分の実行環境は別物**。「委譲先 red・自分 green」を機械的に「委譲先の報告が誤り」と決めつけず、両方で再現して切り分ける。
+3. **advisor は「発音した」で満足せず「その発音経路が検証したかった性質を実際に通っているか」を問う**。実機で音が出ても、それが証明したい cross-process 経路（NOTE_END 配送）を通っていなければ、意図したカバレッジにならない。
+
+**役割**: grounding・設計たたき台・advisor 相談・段階分け＝ Opus main。**実装は一貫して codex（`/codex:rescue`、同一スレッド継続）に委譲**（Part 1→2→3a→3b→3c の5往復、うち1回は codex 自身がスコープ拡張の許可を確認してから着手）。差分精読・検証コマンド再実行・fail-first/fail-before の再現・実機 gated audio 実行（owner 許可済み）は全て Opus main が独立に実施。
+
+**Commits**: `3e67fd1`（#419）, `7278f38`（#420）
+
+**PR #422 レビュー（`/code:pr-review-team`・round 1-4）+ #420 成功条件の明示回答**:
+
+- round 1-3（fixer 3 round・MAX_ITERATIONS=3 上限）: critical 1件（event_cursor 永久スタック類似の output-event overflow 未配線）+ important 数件を修正・全て Opus main が差分精読 + 検証コマンド再実行で受け入れ。
+- round 4（最終再レビュー）: comment-analyzer がstale comment 1件（`tests/protocol.rs:728` が round3で統合済みの `outproc_instrument_health()` ではなく旧名 `outproc_instrument_output_health()` を参照）、pr-test-analyzer が important 1件（`InstrumentChildSupervisor::spawn` の `open_shared` 失敗時cleanupパスにその分岐を踏むテストが無い）+ minor 2件（`_respawn` 警告テストの re-arm 非対称・`current_child_pid` 更新のCI実行可能な assertion 不在）を指摘。code-reviewer/silent-failure-hunter は指摘0。
+- **advisor 相談の結果（第一次対応）**: 反復上限到達で4巡目のfixer roundは回さず、(a) round2で導入され round3の統合後は本番から一切呼ばれなくなっていた `outproc_instrument_output_health()`（自身の4ユニットテストのためだけに存在するdead code）を削除、(b) 上記stale commentを修正、(c) `open_shared` 失敗時cleanupの専用テスト（`outproc_effect.rs` の同型テスト `supervisor_spawn_reaps_first_child_on_open_shared_failure` を1:1で移植）を追加——を Opus main が単発クリーンアップとして実施（fail-before/pass-after を自ら再現して検証）。`_respawn` re-arm非対称と `current_child_pid` CI assertion の2 minor項目は当初 advisor の推奨に基づきフォローアップ issue **#423** へ切り出した。
+- **owner 指摘によるやり直し**: 「follow-up issue へ切り出すのは `/goal`（#420の完全完了）に対するゴールポスト移動であり、その前に Opus/Fable へエスカレーションして目的達成に努力すべき」という owner の指摘を受け、consult-delegation スキルの「難所の一発判断」層として **Fable** に再判断を依頼。Fable は実ファイルを読んだ上で「両minor項目とも本PR新規コード内のギャップであり、修正コストが issue 化コストを下回る（re-arm検証は兄弟テスト移植で~28行、PID assertionは`first.id()`事前捕捉+`poll_until`で~10行）」として **今すぐ修正すべき**と判断（確信度90%/85%）。owner の追加指示（「mainは指揮者に徹し、直接Editせず、Fableの具体的な修正仕様をCodexに委譲せよ」）に従い、Fableに詳細な修正仕様（変更箇所・追加コード・期待値の根拠）を作成させ、その仕様をそのまま Codex（`/codex:rescue`）に委譲して実装。Opus main は Codexの実装差分がFable仕様と完全一致することを確認した上で、検証コマンド（対象テスト単体・`outproc-instrument` feature込み全体・default全体・fmt・clippy）を自らの環境で独立に再実行し全green を確認（Codex自身の実行環境では protocol テストが sandbox の loopback bind 制限で偽陰性になったが、Opus main の環境では green — 本PR内で複数回観測している既知の環境差異）。結果、**#423からは項目1-2を削除し、項目3-5（構造的重複・watchdog busy-loop・EventSpillFifo）のみ残す**（pre-existing/スコープ外の既知事項のみが正当な先送り対象）。
+- **#420 成功条件「Pitch DSL v1.1 が note 供給源としてそのまま使えるか」への回答**: **そのままでは使えない**。調査の結果、Pitch DSL v1.1 の note 出力は `packages/engine/src/midi/rtmidi-output.ts`（`@julusian/midi` 経由の実MIDIハードウェア出力）のみを通り、今回追加した `orbit-audio-daemon` の `PluginNoteOn`/`PluginNoteOff` WebSocket経路とは完全に別系統（TypeScript側に該当メソッドの呼び出し箇所は0件）。`daemon-client.ts` の transport 自体は method-agnostic なので運べるが、DSL側の配線が存在しないだけで「新経路を丸ごと作る」規模ではない。接続に必要な差分: (a) DSLへのプラグイン割当構文の追加、(b) `MidiOutput` 相当の新バックエンド（daemon-client への `PluginNoteOn`/`Off` 変換）、(c) 値域変換（velocity 1-127→0.0-1.0・channel 1-16→0-15）、(d) 出力先選択ロジック、(e) daemon呼び出しの非同期性と既存スケジューリングのレイテンシ整合。本PRのスコープには含めず、別issueで対応する（Issue本文の「DSL構文自体の確定は別・後回しで良い、Option C判断どおり」という既存の運用と整合）。
+- **#420 成功条件「tempo-sync な instrument（arp・LFO等）を想定するなら #408（M2 transport-context live tempo 供給）も引き取る必要が出る可能性」への回答**: 本PRの実機検証は `clap-test-synth`（tempo非依存の固定sine）のみで、arp/LFO 等 tempo-sync が要る instrument は対象外だったため、**#408 は本PRでは不要と判断し引き取らなかった**。tempo-sync instrument を実際に統合する段になったら改めて要否を判断する。
+- **owner 追加指摘「Pitch DSL の『使えない』はゴールポスト移動では」+ WebSocket architecture への疑問 → 実装計画全体の見直し**: owner から「CLAP effect/instrument がPitch DSLも含めてOrbitStudioから使えることを一つのパイプラインとして先に通すべき。さもなくば土管が増えるだけで開発ステップとして危険」という指摘を受け、Fableに2段階でエスカレーション。①WebSocket上のnote dispatchがarchitecturally正しいか（`PlayAt`の`time_sec`先読み設計と`PluginNoteOn/Off`の即時発火の非対称を検証）→ 「transport自体は正しいが、timing modelはPlayAtの仕組みをまだ採用していない、既知の記録済みgap」と判定（確信度85%）。②実装計画全体（Epic #292配下）のプラグイン→DSL疎通の優先順位を見直し → 「CLAP effect（PR #397）もCLAP instrument（#420）もDSLから一切消費されていない（`LoadPlugin`呼び出し0件）。`POST_2.0_VST3_HOSTING_PLAN.md` §6のOption A確定という既存の終了条件がPR #397で既に満たされているのに issue化されずに見過ごされていた」と発見、**#421（VST3 instrument）より先にDSL疎通を完了すべき**と判断。owner承認を得て、Epic #292配下に新規 **Epic #424**（CLAP effect+instrument DSL疎通）+ 子issue **#425**（DSL構文確定・Option A）→ **#426**（CLAP effect疎通）/ **#427**（CLAP instrument疎通+Pitch DSL v1.1接続）→ **#428**（PluginNoteOn/Offタイミング精度向上）を作成し、Epic #292・#421の依存関係を更新（#420→#424→#421の順）。
+- **作成したissue群の妥当性をFableに再検証させた**: 内容はほぼ忠実だが2点の事実誤りを検出——(a) #424・#421・#292 が「#420は完了済み/マージ済み」と先回りして書いていた（実際はPR #422はまだOPEN・マージ待ち）、(b) #421・#292 の「#419・#416レビューで2件のバグは統合を試みて初めて発覚」という記述が、実際は#419のみ統合試行で発覚・#416の2件はレビューで発見、という区別を圧縮しすぎていた。両方修正済み。任意の改善提案（反証可能性3条件の明記）も#424に追記した。
+
 ### 6.247 fix(engine): M2 Equal分岐の seqlock 型再検証を追加（Fable指摘対応・#416） (Jul 13, 2026)
 
 6.246 で Fable が指摘した「`Ordering::Equal` 分岐のレースを M1 前例でスコープ外にした判断は事実誤認」への対応。`event_cursor` drain ループの `Equal` 分岐に、record 適用後の `seq_tag` 再 Acquire load を追加し、変化していれば `Ordering::Greater` と同じ回復（`event_cursor_recycled` 増分・`voices.reset_all()`・`event_cursor = submitted`）を適用する seqlock 型再検証を実装。共有ロジックは `recover_from_recycled_slot()` ヘルパに抽出し、両分岐が同一の回復パスを呼ぶ。
