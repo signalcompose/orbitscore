@@ -5,6 +5,12 @@
 
 import type { AudioDevice } from './supercollider/types'
 
+export interface PluginLoadResult {
+  pluginId: string
+  pluginName: string
+  notePortIndex: number
+}
+
 /**
  * Audio engine interface
  * Defines the common interface for audio engines (currently SuperCollider)
@@ -54,6 +60,18 @@ export interface AudioEngine {
    * Best-effort. No-op on engines without LinkAudio (optional).
    */
   setLinkTempo?(bpm: number): Promise<void>
+
+  /** Eagerly load a plugin into the engine's master effect insert. */
+  loadPlugin?(filePath: string, pluginId?: string): Promise<PluginLoadResult>
+
+  /**
+   * Whether a previously-declared plugin is currently active in the engine
+   * (optional). Lets callers detect a stale idempotent cache after a daemon
+   * respawn silently failed to restore the plugin, so they can re-issue the
+   * load instead of returning a false "success". Engines without this method
+   * are treated as always-active (no self-heal check performed).
+   */
+  isPluginActive?(): boolean
 }
 
 /**

@@ -99,6 +99,10 @@ export class AudioManager {
     return this._audioPaths
   }
 
+  getDocumentDirectory(): string {
+    return this._documentDirectory
+  }
+
   /**
    * Resolve a sample spec to an absolute file path using the configured
    * audioPath(s) and document directory. Throws on resolution failure.

@@ -1168,7 +1168,10 @@ global.effect("~/plugins/TAL-Reverb-4.clap")   // master bus insert
 - **master bus への単一 insert**（全シーケンスに掛かる）。global master effects
   （compressor / limiter / normalizer）と同じ「master バス処理は global スコープ」の
   役割分担に従う。
-- v1 は 1 基のみ。2 回目の呼び出しはエラー（「v1 は master insert 1 基。チェーンは将来対応」）。
+- v1 は 1 基のみ。**同一 path + pluginId の再宣言は冪等（no-op）** — ライブコーディングの
+  ファイル全体再評価を壊さないため（PH.4 の instrument 冪等と同じ原理）。
+  **異なる path / pluginId での 2 回目の呼び出しはエラー**
+  （「v1 は master insert 1 基。チェーンは将来対応」）。
 - 将来拡張（非規範）: 複数回呼び出し = 呼び出し順の直列チェーン（左→右）。
   per-sequence insert（`seq.effect()`）も将来拡張として予約する — verb 名を共有するため、
   追加しても構文の非互換は生じない。
@@ -1215,8 +1218,8 @@ global.effect("~/plugins/TAL-Reverb-4.clap")   // master bus insert
 ### PH.6 v1 制限（実装事実の開示）
 
 - effect と instrument の同一プロセス同時使用は現配管では不可（compile-time 排他 feature）。
-  解消は #426 / #427 の配線課題であり、**構文はこの制限に依存しない**
-  （制限が解消されても構文は不変）。
+  解消は #431（daemon の OOP post-boot attach + 排他解消・Epic #424 Stage 2）のスコープであり、
+  **構文はこの制限に依存しない**（制限が解消されても構文は不変）。
 - note 発火は block-head 精度（sample-accurate 化は #428）。
 - ロード確認から audio 反映までの短い race window が残存する（#410）。
 - **param / CC 制御**（EQ-from-DSL 等）は本節のスコープ外 — M2 param path の成熟後に

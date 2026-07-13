@@ -41,6 +41,7 @@
 import { gainDbToAmplitude } from '../audio-gain-utils'
 import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
+import type { PluginLoadResult } from '../types'
 
 import { DaemonClient } from './daemon-client'
 import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './errors'
@@ -257,6 +258,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private readonly durations = new Map<string, number>()
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
+  /**
+   * v1 は単一 master insert（PluginEffectManager が上流で保証）。daemon crash 後に
+   * replay する宣言 intent。
+   */
+  private loadedPlugin?: { filePath: string; pluginId?: string }
+  /**
+   * Whether `loadedPlugin` is actually loaded in the daemon right now (silent-failure
+   * guard). Set true on a successful `loadPlugin()`/reload, false when a post-respawn
+   * reload fails — surfaced via `isPluginActive()` so `PluginEffectManager`'s idempotent
+   * cache-hit path can detect a stale "success" and re-issue the load instead of
+   * silently returning as if the plugin were still active.
+   */
+  private pluginActive = false
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
    * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
@@ -481,6 +495,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           // （durations は file 由来で不変なので保持し slice 領域解決に使う）。inflightLoads の旧
           // エントリは ws close の reject で各自の .finally が既に delete 済み。
           this.sampleIds.clear()
+          await this.reloadPluginsAfterRespawn()
           console.warn(
             `✅ [rust-engine] daemon respawned and session re-established (attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}).`,
           )
@@ -577,6 +592,63 @@ export class RustEnginePlayer implements AudioEngineBackend {
       }
       throw err
     }
+  }
+
+  /**
+   * Loads a plugin into the daemon's master effect insert. Converts daemon-side
+   * `DaemonProtocolError`s into operator-actionable messages (CLAP_UNAVAILABLE →
+   * build hint, other codes → generic wrap); non-protocol errors pass through
+   * unchanged.
+   */
+  async loadPlugin(filePath: string, pluginId?: string): Promise<PluginLoadResult> {
+    try {
+      const result = await this.daemon.loadPlugin(filePath, pluginId)
+      this.loadedPlugin = { filePath, pluginId }
+      this.pluginActive = true
+      return result
+    } catch (err) {
+      // 失敗時は必ず false（呼び出し元の false-on-entry 保証に依存しない）
+      this.pluginActive = false
+      if (err instanceof DaemonProtocolError) {
+        if (err.code === 'CLAP_UNAVAILABLE') {
+          throw new Error(
+            `Plugin hosting is unavailable in this daemon build; a --features clap-host build is required: ${err.message}`,
+          )
+        }
+        throw new Error(`Failed to load plugin: ${err.message}`)
+      }
+      throw err
+    }
+  }
+
+  /**
+   * Re-issues the last successful plugin declaration after a daemon respawn (the
+   * new daemon process starts with no plugins loaded). Broad catch is intentional:
+   * a reload failure is this plugin's own concern, not the respawn's — it must not
+   * make `respawnLoop` treat an otherwise-successful respawn as failed. Cache entry
+   * intentionally remains on failure so a later respawn retries restoration, and
+   * `pluginActive` flips false so `PluginEffectManager` can detect the stale cache
+   * (see `pluginActive` field doc) and self-heal on the next `effect()` call.
+   */
+  private async reloadPluginsAfterRespawn(): Promise<void> {
+    if (!this.loadedPlugin) return
+    const { filePath, pluginId } = this.loadedPlugin
+    try {
+      await this.daemon.loadPlugin(filePath, pluginId)
+      this.pluginActive = true
+    } catch (err) {
+      this.pluginActive = false
+      // Cache entry intentionally remains: a later daemon respawn retries restoration.
+      console.error(
+        `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}`,
+        err,
+      )
+    }
+  }
+
+  /** Whether `loadedPlugin` is actually active in the daemon right now (see field doc). */
+  isPluginActive(): boolean {
+    return this.pluginActive
   }
 
   /**
