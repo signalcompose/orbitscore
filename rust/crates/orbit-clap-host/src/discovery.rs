@@ -180,7 +180,9 @@ mod tests {
         (temp, bundle)
     }
 
-    fn built_test_plugin() -> Option<PathBuf> {
+    /// ビルド済みの test CLAP dylib を探す。無ければ build 手順を示して loud fail する
+    /// （サイレント skip は偽 green を招くため禁止 — PR #433 レビュー指摘）。
+    fn built_test_plugin() -> PathBuf {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
         [
             "rust-spike/clap-test-effect/target/release/libclap_test_effect.dylib",
@@ -191,35 +193,35 @@ mod tests {
         .into_iter()
         .map(|relative| repo.join(relative))
         .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| {
+            panic!(
+                "test CLAP dylib が無い — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml`\
+                 （または clap-test-synth）を実行してください"
+            )
+        })
     }
 
-    fn copy_test_plugin(destination: &Path) -> bool {
-        let Some(plugin) = built_test_plugin() else {
-            eprintln!(
-                "skip: test CLAP dylib が無い — rust-spike/clap-test-effect または clap-test-synth を build してください"
-            );
-            return false;
-        };
+    fn copy_test_plugin(destination: &Path) {
+        let plugin = built_test_plugin();
         fs::copy(&plugin, destination).expect("copy test plugin");
-        true
     }
 
     fn assert_bundle_loads(executable_name: &str) {
         let (_temp, bundle) = make_bundle(executable_name);
-        if !copy_test_plugin(&bundle.join("Contents/MacOS").join(executable_name)) {
-            return;
-        }
+        copy_test_plugin(&bundle.join("Contents/MacOS").join(executable_name));
 
         let plugins = list_plugins_in_file(&bundle).expect("load plugin from .clap bundle");
         assert!(!plugins.is_empty(), "bundle must expose a plugin");
     }
 
     #[test]
+    #[ignore = "needs a built test CLAP dylib (rust-spike/clap-test-effect or clap-test-synth, local only)"]
     fn loads_stem_named_executable_from_bundle_directory() {
         assert_bundle_loads("TestBundle");
     }
 
     #[test]
+    #[ignore = "needs a built test CLAP dylib (rust-spike/clap-test-effect or clap-test-synth, local only)"]
     fn loads_cf_bundle_executable_with_different_name() {
         assert_bundle_loads("DifferentExecutableName");
     }
@@ -234,12 +236,11 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a built test CLAP dylib (rust-spike/clap-test-effect or clap-test-synth, local only)"]
     fn loads_flat_file_clap() {
         let temp = TempDir::new();
         let flat_file = temp.0.join("FlatFile.clap");
-        if !copy_test_plugin(&flat_file) {
-            return;
-        }
+        copy_test_plugin(&flat_file);
 
         let plugins = list_plugins_in_file(&flat_file).expect("load flat-file .clap plugin");
         assert!(!plugins.is_empty(), "flat-file must expose a plugin");

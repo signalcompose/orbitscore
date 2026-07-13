@@ -22,7 +22,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **Date**: 2026-07-14
 **Status**: ✅ 実装・実機 E2E 済み（PR 作成・レビューフローへ）
 **Branch**: `433-clap-bundle-dir-discovery`
-**Commit**: `0575e98`
+**Commit**: `610bef4`
 
 #426 実機 E2E で発見した統合ギャップ（discovery が `.clap` バンドルディレクトリを
 そのまま dlopen して失敗）の修正。市販 CLAP プラグイン（Surge XT / FabFilter 等）は
@@ -43,7 +43,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   削除（約40行減）。テストを plist つき4系統に再構成: stem 一致 /
   **CFBundleExecutable ≠ stem（NSBundle 正規解決の検証・手組み版より強い保証）** /
   実行体不在エラー / flat-file 後方互換。plist 無しバンドルも NSBundle が stem から
-  推定してロード成功することを実測
+  推定してロード成功することを手動確認（自動テスト対象外）
 
 **検証（main 環境・非サンドボックス）**:
 - `cargo test --workspace` 全 green（failed 0・orbit-clap-host 24 件・daemon protocol 28 件含む）
@@ -71,6 +71,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   bundle-macos.sh のテンプレート化（spike 2例のみ・rule-of-three 前）
 - reuse / efficiency は clean（上流 API 置換で entry cache 経路は不変・追加コストは
   control plane の stat 1回のみ）
+
+**/code:pr-review-team round 1（4レビュアー + CI）**:
+- CI 4/4 pass（cfg ゲート修正で ubuntu clippy 回復）。comment-analyzer ≈ PASS
+  （全 claim を pinned ソース + 本家 entry.h で裏取り）。エラー経路も PASS
+  （NullBundlePath 削除で失われた failure mode なし・DSL への observability 不変）
+- **3レビュアーが同一 Important に収束**: fixture 依存の3テストがサイレント skip で
+  偽 PASS になる（dylib 未ビルド時に assertion ゼロで green・CI は macOS ゲートで
+  未実行のため回帰検知が実質ゼロ）
+- fixer 適用: リポジトリ既存の gated 慣行に準拠 — `#[ignore = "needs a built test CLAP
+  dylib..."]` + 未ビルド時は build 手順つき panic（loud fail を fixture 退避で実測）。
+  `cargo test -p orbit-clap-host --lib` = 21 passed / 3 ignored（正直な表示）・
+  `-- --ignored` = 3 passed。WORK_LOG の hash/文言補正・TESTING_GUIDE に
+  fixture 事前ビルド手順を追加
 
 ### 6.250 feat(dsl): global.effect() — CLAP effect の DSL 疎通 #426 Stage 1 (Jul 14, 2026)
 

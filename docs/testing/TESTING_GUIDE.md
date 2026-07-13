@@ -83,6 +83,27 @@ npm test -- unidirectional-toggle
 - SuperCollider environment-specific tests
 - Some interpreter tests
 
+### Rust: CLAP Host Gated Fixture Tests
+
+`orbit-clap-host` の discovery テスト（.clap バンドルディレクトリ解決など）は、
+実ビルド済みの CLAP テストプラグイン dylib（`rust-spike/clap-test-effect` または
+`rust-spike/clap-test-synth`）を前提とする `#[ignore]` 付き gated テスト。
+
+**事前ビルド**:
+```bash
+cargo build --release --manifest-path rust-spike/clap-test-effect/Cargo.toml
+# または
+cargo build --release --manifest-path rust-spike/clap-test-synth/Cargo.toml
+```
+
+**実行**:
+```bash
+cargo test -p orbit-clap-host --lib -- --ignored
+```
+
+fixture dylib が見つからない場合、これらのテストはサイレント skip せず `panic!` で
+loud fail する（build 手順を含むメッセージ付き）。
+
 ---
 
 ## 🎵 IDE Integration Testing (VS Code / Cursor / Claude Code)
