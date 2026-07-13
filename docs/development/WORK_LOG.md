@@ -61,6 +61,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - ゴール再確認: 「CLAP effect + instrument が完全に動く」まで横展開に入らない
   （#433 → #427 → #431 → Epic #424 DoD 実機実証）
 
+**/simplify（4観点・適用2件/スキップ2件）**:
+- 適用: ①**ubuntu CI fail の実修復** — テスト fixture（TempDir 等）が Linux で dead code
+  になり clippy --all-targets -D warnings が fail していた → `mod tests` 全体への単一
+  `#[cfg(target_os = "macos")]` で cfg 重複7箇所の解消と CI 修復を同時に達成
+  ②orbit-clap-spike（移植元・凍結）の `open_bundle` に「#433 で上流 API に置換済み」の
+  パンくずコメント（将来のコピペによるバグ再導入防止）
+- スキップ: TempDir 手組み（workspace 慣行4例目・tempfile 依存なし・rule-of-five 待ち）／
+  bundle-macos.sh のテンプレート化（spike 2例のみ・rule-of-three 前）
+- reuse / efficiency は clean（上流 API 置換で entry cache 経路は不変・追加コストは
+  control plane の stat 1回のみ）
+
 ### 6.250 feat(dsl): global.effect() — CLAP effect の DSL 疎通 #426 Stage 1 (Jul 14, 2026)
 
 **Date**: 2026-07-14

@@ -132,6 +132,7 @@ pub fn load_plugin_id_from_path(
 }
 
 #[cfg(test)]
+#[cfg(target_os = "macos")]
 mod tests {
     use super::*;
     use std::fs;
@@ -179,7 +180,6 @@ mod tests {
         (temp, bundle)
     }
 
-    #[cfg(target_os = "macos")]
     fn built_test_plugin() -> Option<PathBuf> {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
         [
@@ -193,7 +193,6 @@ mod tests {
         .find(|candidate| candidate.is_file())
     }
 
-    #[cfg(target_os = "macos")]
     fn copy_test_plugin(destination: &Path) -> bool {
         let Some(plugin) = built_test_plugin() else {
             eprintln!(
@@ -205,7 +204,6 @@ mod tests {
         true
     }
 
-    #[cfg(target_os = "macos")]
     fn assert_bundle_loads(executable_name: &str) {
         let (_temp, bundle) = make_bundle(executable_name);
         if !copy_test_plugin(&bundle.join("Contents/MacOS").join(executable_name)) {
@@ -216,19 +214,16 @@ mod tests {
         assert!(!plugins.is_empty(), "bundle must expose a plugin");
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn loads_stem_named_executable_from_bundle_directory() {
         assert_bundle_loads("TestBundle");
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn loads_cf_bundle_executable_with_different_name() {
         assert_bundle_loads("DifferentExecutableName");
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn bundle_with_missing_executable_is_an_error() {
         let (_temp, bundle) = make_bundle("MissingExecutable");
@@ -238,7 +233,6 @@ mod tests {
         ));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn loads_flat_file_clap() {
         let temp = TempDir::new();
