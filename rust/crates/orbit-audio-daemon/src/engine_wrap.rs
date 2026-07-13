@@ -120,6 +120,24 @@ pub struct EngineWrap {
     /// なる（[`Self::outproc_instrument_output_dropped_arc`]）。`outproc_frames_clamped` と同設計
     /// （PR #422 round 2 review: 追加済みの counter が daemon health 経路に配線されていなかった）。
     outproc_instrument_output_dropped: Arc<AtomicU64>,
+    /// OOP instrument `child_process_error_count`(child の CLAP `process()` 呼び出し失敗) の
+    /// **test 注入用** カウンタ（本番は常に 0）。`outproc_instrument_health` が real stats
+    /// （feature `outproc-instrument` 時のみ存在）にこれを加算する。integration test は instrument
+    /// child process を spawn しない（= 実 error 源が無い）ため、この counter が
+    /// outproc-instrument feature の有無に依らず 1 Hz ticker の OUTPROC_INSTRUMENT_ERROR 発火を
+    /// 駆動する唯一の seam になる（[`Self::outproc_instrument_child_errors_arc`]）。
+    /// `outproc_instrument_output_dropped` と同設計（PR #422 round 3: code-reviewer 指摘 — effect
+    /// 側の `OUTPROC_EFFECT_ERROR`/`_RESPAWN`/`_INVALID` に相当する instrument 側 signal が
+    /// daemon health 経路に配線されていなかった）。
+    outproc_instrument_child_errors: Arc<AtomicU64>,
+    /// OOP instrument `respawn_count`(child crash → watchdog respawn 回数) の **test 注入用**
+    /// カウンタ（本番は常に 0）。`outproc_instrument_child_errors` と同設計。
+    outproc_instrument_respawns: Arc<AtomicU64>,
+    /// OOP instrument `measurement_invalid`(watchdog が respawn/try_wait を諦め、計測が恒久的に
+    /// 無効になったフラグ) の **test 注入用** フラグ（本番は常に false）。数値カウンタではなく
+    /// 恒久 bool のため `AtomicBool` を使うが、他の `outproc_instrument_*` 注入用フィールドと同じ
+    /// 「本番経路から分離した cross-thread 注入 seam」設計（[`Self::outproc_instrument_measurement_invalid_arc`]）。
+    outproc_instrument_measurement_invalid: Arc<AtomicBool>,
     /// `push_plugin_event` が bounded retry（[`push_with_bounded_retry`]）の末に諦めた回数（本番は
     /// 常に 0 に近い想定・health signal）。event ring は audio callback が毎 block 全量 drain する
     /// ため満杯は一時的であり、真の drop はこの回数だけ発生する（M2 doc の「溢れても失わない」方針を
@@ -745,6 +763,9 @@ impl EngineWrap {
             plugin_loaded: AtomicBool::new(false),
             outproc_frames_clamped: Arc::new(AtomicU64::new(0)),
             outproc_instrument_output_dropped: Arc::new(AtomicU64::new(0)),
+            outproc_instrument_child_errors: Arc::new(AtomicU64::new(0)),
+            outproc_instrument_respawns: Arc::new(AtomicU64::new(0)),
+            outproc_instrument_measurement_invalid: Arc::new(AtomicBool::new(false)),
             plugin_event_ring_overflow_count: AtomicU64::new(0),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
@@ -1021,19 +1042,22 @@ impl EngineWrap {
         )
     }
 
-    /// feature `clap-host` 無効ビルド用の stub。
+    /// feature `clap-host` と `outproc-instrument` の両方が無効なビルド用の stub（#420 PR #422
+    /// Part 2 で `cfg` を `outproc-instrument` にも拡張したが、このコメントは `clap-host` 単独無効
+    /// としか書いておらず実際の条件と食い違っていた — comment-analyzer round 3 指摘）。
     #[cfg(not(any(feature = "clap-host", feature = "outproc-instrument")))]
     pub fn plugin_note_on(&self, _key: u8, _channel: u8, _velocity: f64) -> Result<(), WrapError> {
         Err(WrapError::ClapUnavailable(
-            "engine built without 'clap-host' feature".into(),
+            "engine built without 'clap-host' or 'outproc-instrument' feature".into(),
         ))
     }
 
-    /// feature `clap-host` 無効ビルド用の stub。
+    /// feature `clap-host` と `outproc-instrument` の両方が無効なビルド用の stub（上の
+    /// `plugin_note_on` stub と同じ食い違い・同じ修正）。
     #[cfg(not(any(feature = "clap-host", feature = "outproc-instrument")))]
     pub fn plugin_note_off(&self, _key: u8, _channel: u8, _velocity: f64) -> Result<(), WrapError> {
         Err(WrapError::ClapUnavailable(
-            "engine built without 'clap-host' feature".into(),
+            "engine built without 'clap-host' or 'outproc-instrument' feature".into(),
         ))
     }
 
@@ -1285,6 +1309,11 @@ impl EngineWrap {
     /// daemon health 経路への配線が欠けていた。advisor 判断: 3 counter を独立 WARNING code にすると
     /// 各 code に専用の CI 注入 seam + firing test が要り test 負債が線形に増えるため、真の loss
     /// signal 1 本に絞る）。
+    ///
+    /// PR #422 round 3 以降、production の 1 Hz ticker はこの accessor を直接呼ばず
+    /// [`Self::outproc_instrument_health`]（この 3 signal を包含する統合 accessor）を経由する
+    /// （同一 tick 内で `outproc_instrument` mutex を 2 回 `try_lock` する二重ロックを避けるため）。
+    /// この accessor 自体とそのユニットテストは round 2 のまま変更していない。
     #[cfg(feature = "outproc-instrument")]
     pub fn outproc_instrument_output_health(&self) -> (u64, u64, u64) {
         let injected_dropped = self
@@ -1318,6 +1347,100 @@ impl EngineWrap {
     #[cfg(not(feature = "outproc-instrument"))]
     pub fn outproc_instrument_output_health(&self) -> (u64, u64, u64) {
         (
+            self.outproc_instrument_output_dropped
+                .load(Ordering::Relaxed),
+            0,
+            0,
+        )
+    }
+
+    /// OOP instrument の全 health signal を `(child_process_error_count, respawn_count,
+    /// measurement_invalid, output_event_dropped_count, output_event_spilled_count,
+    /// output_note_end_dropped_count)` で返す（daemon の 1 Hz ticker が polling して WARNING event
+    /// で surface する非 RT observability）。`outproc_health()`（effect 側）と同じ「1 tick = 1
+    /// try_lock + 1 snapshot」設計 — 当初は child-process 系 3 signal だけの独立 accessor として
+    /// 書いたが、ticker が同一 tick 内で本 accessor と round 2 の
+    /// [`Self::outproc_instrument_output_health`] を両方呼ぶと同じ `outproc_instrument` mutex を
+    /// 2 回 `try_lock` してしまい、(a) 無駄な二重ロック (b) 6 signal が同一スナップショットである
+    /// 保証が消える（片方が WouldBlock で injected 分だけを返す間にもう片方が非ゼロを観測しうる）
+    /// という、effect 側が #406 で consolidate 済みの anti-pattern をそのまま再導入することになる
+    /// （advisor 指摘・PR #422 round 3）。そのため後方の 3 signal（output-event overflow 系）も
+    /// この 1 accessor に統合し、ticker からはこちらだけを呼ぶ。
+    ///
+    /// [`Self::outproc_instrument_output_health`] 自体（round 2 の CRITICAL fix・そのユニットテスト）
+    /// は意図的に変更していない — production ticker の呼び出し元をこの統合 accessor に差し替えた
+    /// だけで、既存の直接呼び出しテストは無傷のまま残る（PR #422 round 3 の「round 1/2 の成果には
+    /// 再度手を入れない」制約を尊重）。
+    ///
+    /// try_lock 方針は `outproc_health()` と同じ: **WouldBlock** は次 tick に持ち越すだけ
+    /// （cumulative なので drop しない）、**Poisoned** は warn して real 分を 0/false に丸める
+    /// （injected 分は失わない）。instrument 未起動 / outproc-instrument 無効時は injected 分のみ返す。
+    #[cfg(feature = "outproc-instrument")]
+    pub fn outproc_instrument_health(&self) -> (u64, u64, bool, u64, u64, u64) {
+        let injected_errors = self.outproc_instrument_child_errors.load(Ordering::Relaxed);
+        let injected_respawns = self.outproc_instrument_respawns.load(Ordering::Relaxed);
+        let injected_invalid = self
+            .outproc_instrument_measurement_invalid
+            .load(Ordering::Relaxed);
+        let injected_dropped = self
+            .outproc_instrument_output_dropped
+            .load(Ordering::Relaxed);
+        match self.outproc_instrument.try_lock() {
+            Ok(g) => g
+                .as_ref()
+                .map(|c| {
+                    let s = c.stats.snapshot();
+                    (
+                        s.child_process_error_count + injected_errors,
+                        s.respawn_count + injected_respawns,
+                        s.measurement_invalid || injected_invalid,
+                        s.output_event_dropped_count + injected_dropped,
+                        s.output_event_spilled_count,
+                        s.output_note_end_dropped_count,
+                    )
+                })
+                .unwrap_or((
+                    injected_errors,
+                    injected_respawns,
+                    injected_invalid,
+                    injected_dropped,
+                    0,
+                    0,
+                )),
+            Err(std::sync::TryLockError::WouldBlock) => (
+                injected_errors,
+                injected_respawns,
+                injected_invalid,
+                injected_dropped,
+                0,
+                0,
+            ),
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                tracing::warn!(
+                    "outproc instrument mutex poisoned; outproc_instrument_health reporting \
+                     zeros for real stats (OUTPROC_INSTRUMENT_ERROR/_RESPAWN/_INVALID/ \
+                     _OUTPUT_DROPPED events suppressed until daemon restart)"
+                );
+                (
+                    injected_errors,
+                    injected_respawns,
+                    injected_invalid,
+                    injected_dropped,
+                    0,
+                    0,
+                )
+            }
+        }
+    }
+
+    /// feature `outproc-instrument` 無効ビルド用の stub。本番は常に injected 分のみ（control が無い）。
+    #[cfg(not(feature = "outproc-instrument"))]
+    pub fn outproc_instrument_health(&self) -> (u64, u64, bool, u64, u64, u64) {
+        (
+            self.outproc_instrument_child_errors.load(Ordering::Relaxed),
+            self.outproc_instrument_respawns.load(Ordering::Relaxed),
+            self.outproc_instrument_measurement_invalid
+                .load(Ordering::Relaxed),
             self.outproc_instrument_output_dropped
                 .load(Ordering::Relaxed),
             0,
@@ -1388,6 +1511,32 @@ impl EngineWrap {
     #[doc(hidden)]
     pub fn outproc_instrument_output_dropped_arc(&self) -> Arc<AtomicU64> {
         self.outproc_instrument_output_dropped.clone()
+    }
+
+    /// test harness 用: OOP instrument `child_process_error_count` の注入カウンタを取得する。
+    /// `outproc_instrument_output_dropped_arc` と同形で、下層 counter は本番経路から分離した注入専用
+    /// （本番 0）。integration test から `fetch_add` して 1 Hz ticker の OUTPROC_INSTRUMENT_ERROR 発火を
+    /// 駆動する（instrument child process 不要・PR #422 round 3）。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn outproc_instrument_child_errors_arc(&self) -> Arc<AtomicU64> {
+        self.outproc_instrument_child_errors.clone()
+    }
+
+    /// test harness 用: OOP instrument `respawn_count` の注入カウンタを取得する。
+    /// `outproc_instrument_child_errors_arc` と同形。integration test から `fetch_add` して 1 Hz
+    /// ticker の OUTPROC_INSTRUMENT_RESPAWN 発火を駆動する（PR #422 round 3）。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn outproc_instrument_respawns_arc(&self) -> Arc<AtomicU64> {
+        self.outproc_instrument_respawns.clone()
+    }
+
+    /// test harness 用: OOP instrument `measurement_invalid` の注入フラグを取得する。数値カウンタ
+    /// 系の `_arc()` getter と異なり `AtomicBool` を返すが、同じ「本番経路から分離した注入専用
+    /// （本番 false）」設計。integration test から `store(true, ..)` して 1 Hz ticker の
+    /// OUTPROC_INSTRUMENT_INVALID fire-once 発火を駆動する（PR #422 round 3）。`#[doc(hidden)]`。
+    #[doc(hidden)]
+    pub fn outproc_instrument_measurement_invalid_arc(&self) -> Arc<AtomicBool> {
+        self.outproc_instrument_measurement_invalid.clone()
     }
 
     /// test harness 用: `StreamStats` への参照を取得し、外部から
@@ -2374,6 +2523,133 @@ mod outproc_instrument_health_tests {
         );
 
         assert_eq!(wrap.outproc_instrument_output_health(), (3, 0, 0));
+    }
+
+    // PR #422 round 3 (code-reviewer + advisor consolidation): `outproc_instrument_health()`
+    // mirrors `outproc_health_tests` (effect side) exactly -- Ok(None)/Ok(Some)/WouldBlock/Poisoned
+    // branches. It bundles all 6 instrument health signals (child-process trio +
+    // output-event-overflow trio) into one accessor/one try_lock (avoiding the double-lock
+    // `outproc_instrument_health()` + `outproc_instrument_output_health()` would otherwise cause
+    // in the same ticker iteration), so every test below uses 6 *distinct* values to catch a
+    // field-to-field mapping swap at either half of the tuple.
+
+    #[test]
+    fn health_ok_none_reports_only_injected_values() {
+        // instrument 未注入（build() 直後の初期値）= Ok(None) 分岐。
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        wrap.outproc_instrument_child_errors_arc()
+            .fetch_add(4, Ordering::Relaxed);
+        wrap.outproc_instrument_respawns_arc()
+            .fetch_add(2, Ordering::Relaxed);
+        wrap.outproc_instrument_measurement_invalid_arc()
+            .store(true, Ordering::Relaxed);
+        wrap.outproc_instrument_output_dropped_arc()
+            .fetch_add(7, Ordering::Relaxed);
+        assert_eq!(
+            wrap.outproc_instrument_health(),
+            (4, 2, true, 7, 0, 0),
+            "Ok(None): only injected counters/flag surface; real output-event fields are 0"
+        );
+    }
+
+    #[test]
+    fn health_ok_some_sums_real_stats_with_injected_counters() {
+        // Ok(Some(c)) 分岐: 実 OutProcInstrumentStats スナップショットと injected カウンタを両方
+        // 合算/OR して返すこと（6 値とも異なる数にして field-to-field mapping の swap を検知
+        // できるようにする -- `outproc_health_tests::ok_some_sums_real_stats_with_injected_counter`
+        // と同じ意図）。
+        let (wrap, stats) = wrap_with_instrument_stats();
+        stats.child_process_error_count.store(3, Ordering::Relaxed);
+        stats.respawn_count.store(2, Ordering::Relaxed);
+        stats.measurement_invalid.store(true, Ordering::Relaxed);
+        stats
+            .output_event_dropped_count
+            .store(11, Ordering::Relaxed);
+        stats
+            .output_event_spilled_count
+            .store(13, Ordering::Relaxed);
+        stats
+            .output_note_end_dropped_count
+            .store(6, Ordering::Relaxed);
+        wrap.outproc_instrument_child_errors_arc()
+            .fetch_add(9, Ordering::Relaxed);
+        wrap.outproc_instrument_respawns_arc()
+            .fetch_add(5, Ordering::Relaxed);
+        wrap.outproc_instrument_output_dropped_arc()
+            .fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(wrap.outproc_instrument_health(), (12, 7, true, 12, 13, 6));
+    }
+
+    #[test]
+    fn health_would_block_ignores_real_stats_and_reports_only_injected() {
+        // WouldBlock 分岐: 別スレッドが outproc_instrument mutex を保持している間は real stats を
+        // 読まず injected 分のみ返すこと（cumulative なので次 tick で real 分も取り戻せる設計）。
+        let (wrap, stats) = wrap_with_instrument_stats();
+        stats
+            .child_process_error_count
+            .store(100, Ordering::Relaxed);
+        stats.measurement_invalid.store(true, Ordering::Relaxed);
+        stats
+            .output_event_dropped_count
+            .store(200, Ordering::Relaxed);
+        wrap.outproc_instrument_child_errors_arc()
+            .fetch_add(1, Ordering::Relaxed);
+        wrap.outproc_instrument_output_dropped_arc()
+            .fetch_add(4, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let (holding_tx, holding_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc_instrument
+                .lock()
+                .expect("lock outproc_instrument for contention setup");
+            holding_tx.send(()).expect("signal lock held");
+            release_rx.recv().expect("wait for release signal");
+        });
+        holding_rx.recv().expect("holder thread signaled lock held");
+
+        assert_eq!(wrap.outproc_instrument_health(), (1, 0, false, 4, 0, 0));
+
+        release_tx.send(()).expect("signal release");
+        holder.join().expect("holder thread should not panic");
+    }
+
+    #[test]
+    fn health_poisoned_still_reports_injected_values_not_lost() {
+        // Poisoned 分岐: real stats は 0/false に丸めるが、injected 分は黙って失わず返すこと
+        // (`outproc_health_tests::poisoned_still_reports_injected_frames_clamped_not_lost` と同じ
+        // genuine-poison パターン: 別スレッドで panic → join)。
+        let (wrap, stats) = wrap_with_instrument_stats();
+        stats.child_process_error_count.store(42, Ordering::Relaxed);
+        stats.measurement_invalid.store(true, Ordering::Relaxed);
+        stats
+            .output_event_dropped_count
+            .store(99, Ordering::Relaxed);
+        wrap.outproc_instrument_child_errors_arc()
+            .fetch_add(3, Ordering::Relaxed);
+        wrap.outproc_instrument_output_dropped_arc()
+            .fetch_add(2, Ordering::Relaxed);
+
+        let wrap_clone = wrap.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = wrap_clone
+                .outproc_instrument
+                .lock()
+                .expect("lock outproc_instrument for poison setup");
+            panic!("intentional poison for outproc_instrument_health poisoned test");
+        })
+        .join()
+        .is_err();
+        assert!(
+            panicked,
+            "spawned thread should have panicked while holding the lock"
+        );
+
+        assert_eq!(wrap.outproc_instrument_health(), (3, 0, false, 2, 0, 0));
     }
 }
 

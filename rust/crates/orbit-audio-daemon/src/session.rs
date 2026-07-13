@@ -22,10 +22,11 @@ use crate::protocol::{
     ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_ENGINE_LOCK_CONTENTION,
     ERROR_CODE_ENGINE_LOCK_POISONED, ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_OUTPROC_EFFECT_ERROR,
     ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED, ERROR_CODE_OUTPROC_EFFECT_INVALID,
-    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED,
-    ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
-    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
-    EVENT_STREAM_STATS,
+    ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_OUTPROC_INSTRUMENT_ERROR,
+    ERROR_CODE_OUTPROC_INSTRUMENT_INVALID, ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED,
+    ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN, ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW,
+    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
+    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -86,9 +87,12 @@ pub async fn run(
             let mut last_outproc_respawns: u64 = 0;
             let mut last_outproc_frames_clamped: u64 = 0;
             let mut last_outproc_instrument_output_dropped: u64 = 0;
+            let mut last_outproc_instrument_errors: u64 = 0;
+            let mut last_outproc_instrument_respawns: u64 = 0;
             let mut last_engine_lock_contention: u64 = 0;
             let mut last_plugin_event_ring_overflow: u64 = 0;
             let mut outproc_invalid_reported = false;
+            let mut outproc_instrument_invalid_reported = false;
             let mut device_lost_reported = false;
             let mut engine_lock_poisoned_reported = false;
             loop {
@@ -291,19 +295,79 @@ pub async fn run(
                     last_outproc_frames_clamped = outproc_frames_clamped;
                 }
 
-                // out-of-process instrument の出力方向（M2 §4.2）event overflow health を非 RT で
-                // surface（#420 PR #422 round 2）。round 1 で追加済みの output-event overflow counter
-                // 群（dropped/spilled/note_end_dropped）が watchdog にはミラーされていたが、daemon
-                // health 経路への配線が欠けており、stuck-note class の regression が無音のまま埋もれ
-                // ていた（silent-failure-hunter 指摘）。真の loss signal（dropped の増加）のみを
-                // WARNING トリガにし、無損失な spilled と NoteEnd 喪失（stuck-note リスク）を示す
-                // note_end_dropped は message の文脈情報として含める（spilled 単独の WARNING はノイズ
-                // になるため見送り・advisor 判断）。
+                // out-of-process instrument の全 health signal（child-process 系: respawn/計測無効/
+                // child process() エラー + output-event overflow 系: dropped/spilled/note_end_dropped）
+                // を非 RT で surface（#420 PR #422 round 3）。round 2 までは output-event overflow
+                // のみ配線済みで、effect 側の OUTPROC_EFFECT_ERROR/_RESPAWN/_INVALID に相当する
+                // instrument 側 signal が daemon health 経路に無く、instrument-only build で恒久
+                // respawn 失敗が client に一切見えないまま audio が固まりうる欠落があった
+                // （code-reviewer round 3 re-review 指摘）。6 signal を 1 回の
+                // `outproc_instrument_health()` 呼び出し（1 try_lock + 1 snapshot）にまとめて読む
+                // （advisor 指摘: 本来ここと下の output-event overflow ブロックを別 accessor で
+                // 呼ぶと同一 tick 内で同じ `outproc_instrument` mutex を 2 回 try_lock してしまい、
+                // #406 で effect 側が consolidate 済みの二重ロック anti-pattern を再導入することに
+                // なる）。
                 let (
+                    outproc_instrument_errors,
+                    outproc_instrument_respawns,
+                    outproc_instrument_invalid,
                     outproc_instrument_dropped,
                     outproc_instrument_spilled,
                     outproc_instrument_note_end_dropped,
-                ) = engine.outproc_instrument_output_health();
+                ) = engine.outproc_instrument_health();
+                if outproc_instrument_errors > last_outproc_instrument_errors {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_INSTRUMENT_ERROR,
+                        format!(
+                            "out-of-process instrument child process() failed \
+                             ({outproc_instrument_errors} total); instrument is silent",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_instrument_errors = outproc_instrument_errors;
+                }
+                if outproc_instrument_respawns > last_outproc_instrument_respawns {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN,
+                        format!(
+                            "out-of-process instrument child crashed and was respawned \
+                             ({outproc_instrument_respawns} total); 3rd-party crash isolated",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_instrument_respawns = outproc_instrument_respawns;
+                }
+                // 計測無効は恒久状態なので fire-once（daemon は生存・instrument 経路のみ frozen）。
+                if outproc_instrument_invalid && !outproc_instrument_invalid_reported {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_INSTRUMENT_INVALID,
+                        "out-of-process instrument supervisor gave up (respawn/try_wait failed); \
+                         instrument frozen at last block (repeat-previous) — restart daemon or \
+                         fix plugin"
+                            .to_string(),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    outproc_instrument_invalid_reported = true;
+                }
+
+                // out-of-process instrument の出力方向（M2 §4.2）event overflow health（#420 PR #422
+                // round 2 で追加済み — round 1 で追加済みの output-event overflow counter 群
+                // (dropped/spilled/note_end_dropped) が watchdog にはミラーされていたが daemon health
+                // 経路への配線が欠けており stuck-note class の regression が無音のまま埋もれていた・
+                // silent-failure-hunter 指摘）。真の loss signal（dropped の増加）のみを WARNING
+                // トリガにし、無損失な spilled と NoteEnd 喪失（stuck-note リスク）を示す
+                // note_end_dropped は message の文脈情報として含める（spilled 単独の WARNING はノイズ
+                // になるため見送り・advisor 判断）。値は上の `outproc_instrument_health()` 呼び出しで
+                // 既に destructure 済み（round 3 で 1 accessor に統合・二重ロック回避）。
                 if outproc_instrument_dropped > last_outproc_instrument_output_dropped {
                     let evt = daemon_error_event(
                         ERROR_SEVERITY_WARNING,

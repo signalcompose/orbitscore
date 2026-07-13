@@ -129,6 +129,21 @@ pub const ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW: &str = "PLUGIN_EVENT_RING_OVERF
 /// 無損失な `spilled`（1 ブロック遅延のみ）と `note_end_dropped`（NoteEnd 喪失 = stuck-note リスク）も
 /// 文脈として含める。
 pub const ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED: &str = "OUTPROC_INSTRUMENT_OUTPUT_DROPPED";
+/// out-of-process instrument child の `process()` がエラーを返した（instrument は無音になる）。
+/// WARNING severity。child が shm の cumulative counter に積み、daemon が 1 Hz ticker で増加を
+/// 検知して発火する。`ERROR_CODE_OUTPROC_EFFECT_ERROR` の instrument 側ミラー（#420 PR #422 round 3:
+/// round 2 までは output-event overflow のみ surface しており、child process() 自体のエラー/respawn/
+/// 計測無効は無音のまま daemon health 経路に配線されていなかった — code-reviewer round 3 指摘）。
+pub const ERROR_CODE_OUTPROC_INSTRUMENT_ERROR: &str = "OUTPROC_INSTRUMENT_ERROR";
+/// out-of-process instrument child が crash し watchdog が respawn した。WARNING severity。
+/// `ERROR_CODE_OUTPROC_EFFECT_RESPAWN` の instrument 側ミラー（#420 PR #422 round 3）。
+pub const ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN: &str = "OUTPROC_INSTRUMENT_RESPAWN";
+/// out-of-process instrument の supervise が不能になった（respawn 失敗 / try_wait 連続失敗）=
+/// 計測無効。**WARNING** severity（daemon/engine は生存し他の audio は流れるが instrument は直前
+/// good block の repeat-previous が出続ける = instrument 経路のみ恒久停止）。daemon が 1 Hz ticker で
+/// `measurement_invalid` を検知して一度だけ発火する（fire-once）。`ERROR_CODE_OUTPROC_EFFECT_INVALID`
+/// の instrument 側ミラー（#420 PR #422 round 3）。
+pub const ERROR_CODE_OUTPROC_INSTRUMENT_INVALID: &str = "OUTPROC_INSTRUMENT_INVALID";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]
