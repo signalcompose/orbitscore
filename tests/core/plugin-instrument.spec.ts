@@ -25,9 +25,8 @@ describe('PluginInstrumentManager', () => {
     const pending = new Promise<void>((r) => (resolve = r))
     const loadPlugin = vi.fn(() => pending)
     const { global } = makeGlobal(loadPlugin)
-    const manager = global.getPluginInstrumentManager()
-    const first = manager.instrument('./synth.clap', 'synth-id')
-    const second = manager.instrument('synth.clap', 'synth-id')
+    const first = global.instrument('./synth.clap', 'synth-id')
+    const second = global.instrument('synth.clap', 'synth-id')
     resolve()
     await Promise.all([first, second])
     expect(loadPlugin).toHaveBeenCalledTimes(1)
@@ -40,10 +39,9 @@ describe('PluginInstrumentManager', () => {
 
   it('rejects a different path or plugin id after declaration', async () => {
     const { global, loadPlugin } = makeGlobal()
-    const manager = global.getPluginInstrumentManager()
-    await manager.instrument('synth.clap', 'one')
-    await expect(manager.instrument('other.clap', 'one')).rejects.toThrow('one instrument')
-    await expect(manager.instrument('synth.clap', 'two')).rejects.toThrow('one instrument')
+    await global.instrument('synth.clap', 'one')
+    await expect(global.instrument('other.clap', 'one')).rejects.toThrow('one instrument')
+    await expect(global.instrument('synth.clap', 'two')).rejects.toThrow('one instrument')
     expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 
@@ -51,17 +49,15 @@ describe('PluginInstrumentManager', () => {
     const failure = new Error('load failed')
     const loadPlugin = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({})
     const { global } = makeGlobal(loadPlugin)
-    const manager = global.getPluginInstrumentManager()
-    await expect(manager.instrument('synth.clap')).rejects.toBe(failure)
-    await expect(manager.instrument('synth.clap')).resolves.toBeUndefined()
+    await expect(global.instrument('synth.clap')).rejects.toBe(failure)
+    await expect(global.instrument('synth.clap')).resolves.toBe(global)
     expect(loadPlugin).toHaveBeenCalledTimes(2)
   })
 
   it('self-heals an inactive idempotent declaration', async () => {
     const { global, loadPlugin } = makeGlobal(vi.fn().mockResolvedValue({}), false)
-    const manager = global.getPluginInstrumentManager()
-    await manager.instrument('synth.clap')
-    await manager.instrument('synth.clap')
+    await global.instrument('synth.clap')
+    await global.instrument('synth.clap')
     expect(loadPlugin).toHaveBeenCalledTimes(2)
   })
 
@@ -78,12 +74,10 @@ describe('PluginInstrumentManager', () => {
   it('rejects LinkAudio in both declaration orders', async () => {
     const first = makeGlobal().global
     first.linkAudio()
-    await expect(first.getPluginInstrumentManager().instrument('synth.clap')).rejects.toThrow(
-      'LinkAudio',
-    )
+    await expect(first.instrument('synth.clap')).rejects.toThrow('LinkAudio')
 
     const second = makeGlobal().global
-    await second.getPluginInstrumentManager().instrument('synth.clap')
+    await second.instrument('synth.clap')
     expect(() => second.linkAudio()).toThrow('plugin hosting')
   })
 })

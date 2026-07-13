@@ -351,8 +351,8 @@ export class Sequence {
   /**
    * Declare this sequence as a MIDI output (§1). `play()` values are then
    * interpreted as degrees, not slice numbers. Cannot be combined with
-   * `audio()` / `chop()`. Coexists with the SuperCollider audio path (no
-   * LinkAudio-style exclusion).
+   * `audio()` / `chop()` / `instrument()`. Coexists with the SuperCollider
+   * audio path (no LinkAudio-style exclusion).
    *
    * @param portName CoreMIDI output port (case-insensitive substring, e.g.
    *                 "iac" matches "IACドライバ バス1"). Resolved eagerly so an

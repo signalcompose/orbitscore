@@ -39,8 +39,11 @@ function createHarness() {
 }
 
 describe('RustEnginePlayer plugin note ordering', () => {
-  it('issues note sends synchronously with no await boundary before the daemon call', () => {
+  it('issues note sends synchronously with no await boundary before the daemon call', async () => {
     const { player, daemon } = createHarness()
+    // pluginActive only flips true after a successful loadPlugin() — mirrors
+    // the real seq.instrument() -> daemon.loadPlugin() -> note dispatch order.
+    await player.loadPlugin('/plugins/echo.clap', 'echo-id', 'instrument')
     const on = player.pluginNoteOn(60, 0, 0.75)
     const off = player.pluginNoteOff(60, 0)
     expect(daemon.pluginNoteOn).toHaveBeenCalledWith(60, 0, 0.75)
@@ -48,13 +51,30 @@ describe('RustEnginePlayer plugin note ordering', () => {
     return Promise.all([on, off])
   })
 
-  it('logs a visible drop when the daemon is disconnected', async () => {
+  it('warns once and drops the note when the daemon is disconnected (C1)', async () => {
     const { player, daemon } = createHarness()
     daemon.isRunning.mockReturnValue(false)
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await player.pluginNoteOn(60, 0, 1)
+    await player.pluginNoteOff(60, 0)
     expect(daemon.pluginNoteOn).not.toHaveBeenCalled()
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('❌'), { key: 60 })
+    expect(daemon.pluginNoteOff).not.toHaveBeenCalled()
+    // warn-once: two drops, one warning.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('daemon is not connected'))
+  })
+
+  it('warns once and drops the note when pluginActive is false (C2 — respawn restore failed)', async () => {
+    const { player, daemon } = createHarness()
+    // Daemon is connected, but no successful loadPlugin() has happened, so
+    // pluginActive is still false (e.g. after a failed post-respawn reload).
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await player.pluginNoteOn(60, 0, 1)
+    await player.pluginNoteOff(60, 0)
+    expect(daemon.pluginNoteOn).not.toHaveBeenCalled()
+    expect(daemon.pluginNoteOff).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('was not restored'))
   })
 })
 

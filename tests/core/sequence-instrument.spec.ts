@@ -129,4 +129,34 @@ describe('Sequence instrument dispatch', () => {
     global.stop()
     expect(audio.pluginNoteOff).toHaveBeenCalledWith(60, 0)
   })
+
+  it('gain() during LOOP clears pending notes via the plugin scheduler (clearOwner)', async () => {
+    const { global, seq } = harness()
+    await seq.instrument('synth.clap')
+    global.quantize('off')
+    global.start()
+    seq.play(1, 3, 5, 0)
+    await seq.loop()
+
+    const clearOwnerSpy = vi.spyOn(global.getMidiManager().getPluginScheduler(), 'clearOwner')
+
+    seq.gain(-6)
+
+    expect(clearOwnerSpy).toHaveBeenCalledWith('synth')
+  })
+
+  it('play() replacement during LOOP defers to the next cycle (no immediate clearOwner)', async () => {
+    const { global, seq } = harness()
+    await seq.instrument('synth.clap')
+    global.quantize('off')
+    global.start()
+    seq.play(1, 3, 5, 0)
+    await seq.loop()
+
+    const clearOwnerSpy = vi.spyOn(global.getMidiManager().getPluginScheduler(), 'clearOwner')
+
+    seq.play(1, 1, 1, 1)
+
+    expect(clearOwnerSpy).not.toHaveBeenCalled()
+  })
 })

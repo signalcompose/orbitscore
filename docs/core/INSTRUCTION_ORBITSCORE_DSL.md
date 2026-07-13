@@ -1127,11 +1127,11 @@ piano.comp([1,3,5], [5,7,2]).voicelead()  // composes with §6.3
 
 ## Plugin Hosting (CLAP effect / instrument)
 
-> ⚠️ **構文確定・未実装 / syntax finalized, not yet implemented**
+> ⚠️ **一部未実装 / partially implemented**
 >
 > 本節は Issue #425（2026-07-13・owner 設計セッション + Fable 検証）で確定した構文仕様。
-> 実装は #426（effect 疎通）/ #427（instrument 疎通 + Pitch DSL 接続）/ #428（note timing）の
-> スコープであり、本節の記述が実装に先行する（spec-first）。
+> DSL 疎通は #426（effect・PR #432）/ #427（instrument + Pitch DSL 接続）ともに実装済み。
+> 残るスコープは #428（note timing のサンプル精度化）のみ。
 > Option A/B/C の比較経緯は `docs/development/POST_2.0_VST3_HOSTING_PLAN.md` §6、
 > 決定の記録は Issue #425 / WORK_LOG を参照。
 
@@ -1343,7 +1343,8 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 - **Effect Presets**: Named preset system for effect chains
 - **DAW Plugin**: VST/AU plugin development
 - **Plugin Hosting implementation**: the CLAP effect/instrument hosting *syntax* is finalized
-  (#425 — see the Plugin Hosting section above); engine wiring is tracked in #426/#427/#428.
+  (#425 — see the Plugin Hosting section above); DSL wiring for effect (#426) and instrument
+  (#427) is implemented. Only sample-accurate note timing (#428) remains outstanding.
   `.vst3` / `.component` formats are reserved (not yet supported)
 - **`slice()`**: per-event start/end point selection within a chopped file (#239)
 - **Audio `[ ]` stack / slice layering**: simultaneous audio-layer stacking in the play tree (#238)

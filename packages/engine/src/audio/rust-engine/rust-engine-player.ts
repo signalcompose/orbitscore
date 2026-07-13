@@ -50,9 +50,12 @@ import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './e
  * boundary で明示する未対応 feature gap の種別（A4 era）。
  * - `outputChannel`(LinkAudio) / `masterEffect`: 未対応 feature gap。
  * - `linkTempo`: Link テンポリード（#283・A4-PR3）。daemon が feature 無効ビルドなら warn-once。
+ * - `pluginNoteDrop`: daemon 未接続時に plugin note-on/off が silent drop される gap（#427 レビュー C1）。
+ * - `pluginInactive`: respawn 後の instrument 復元失敗（`pluginActive===false`）で note が
+ *   silent drop される gap（#427 レビュー C2）。
  * pan / slice 領域 / slice varispeed（rate≠1.0）は実装済みのため gap ではない。
  */
-type GapKind = 'outputChannel' | 'masterEffect' | 'linkTempo'
+type GapKind = 'outputChannel' | 'masterEffect' | 'linkTempo' | 'pluginNoteDrop' | 'pluginInactive'
 
 /** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
 export interface SliceSpec {
@@ -234,6 +237,8 @@ const freshWarned = (): Record<GapKind, boolean> => ({
   outputChannel: false,
   masterEffect: false,
   linkTempo: false,
+  pluginNoteDrop: false,
+  pluginInactive: false,
 })
 
 export class RustEnginePlayer implements AudioEngineBackend {
@@ -631,7 +636,17 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   pluginNoteOn(key: number, channel: number, velocity: number): Promise<void> {
     if (!this.daemon.isRunning()) {
-      console.error('❌ [rust-engine] plugin note-on dropped: daemon is not connected', { key })
+      this.warnOnce(
+        'pluginNoteDrop',
+        '⚠️  [rust-engine] plugin note-on/off dropped: daemon is not connected (notes will be silently dropped until reconnect)',
+      )
+      return Promise.resolve()
+    }
+    if (!this.pluginActive) {
+      this.warnOnce(
+        'pluginInactive',
+        '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
+      )
       return Promise.resolve()
     }
     // Ordering contract: do not insert an await before this call. Daemon requests are
@@ -641,7 +656,17 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   pluginNoteOff(key: number, channel: number, velocity?: number): Promise<void> {
     if (!this.daemon.isRunning()) {
-      console.error('❌ [rust-engine] plugin note-off dropped: daemon is not connected', { key })
+      this.warnOnce(
+        'pluginNoteDrop',
+        '⚠️  [rust-engine] plugin note-on/off dropped: daemon is not connected (notes will be silently dropped until reconnect)',
+      )
+      return Promise.resolve()
+    }
+    if (!this.pluginActive) {
+      this.warnOnce(
+        'pluginInactive',
+        '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
+      )
       return Promise.resolve()
     }
     // Keep the synchronous send ordering contract documented above: no await here.

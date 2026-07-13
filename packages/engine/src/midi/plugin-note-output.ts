@@ -15,9 +15,13 @@ export class PluginNoteOutput implements MidiOutput {
   noteOn(port: string, channel: number, note: number, velocity: number, owner: string): void {
     const key = Math.max(0, Math.min(127, Math.round(note)))
     const normalizedVelocity = Math.max(1, Math.min(127, Math.round(velocity))) / 127
-    void this.engine
-      .pluginNoteOn?.(key, channel - 1, normalizedVelocity)
-      ?.catch((err) => console.error('❌ PluginNoteOn failed', { key, err }))
+    if (this.engine.pluginNoteOn) {
+      void this.engine
+        .pluginNoteOn(key, channel - 1, normalizedVelocity)
+        .catch((err) => console.error('❌ PluginNoteOn failed', { key, err }))
+    } else {
+      console.error('❌ PluginNoteOn unavailable: engine.pluginNoteOn is not implemented', { key })
+    }
     this.activeNotes.push({ port, channel, note: key, owner })
   }
 
@@ -62,8 +66,14 @@ export class PluginNoteOutput implements MidiOutput {
 
   private sendTrackedNoteOff(note: ActiveNote): void {
     const key = note.note
-    void this.engine
-      .pluginNoteOff?.(key, note.channel - 1)
-      ?.catch((err) => console.error('❌ PluginNoteOff failed', { key, err }))
+    if (this.engine.pluginNoteOff) {
+      void this.engine
+        .pluginNoteOff(key, note.channel - 1)
+        .catch((err) => console.error('❌ PluginNoteOff failed', { key, err }))
+    } else {
+      console.error('❌ PluginNoteOff unavailable: engine.pluginNoteOff is not implemented', {
+        key,
+      })
+    }
   }
 }

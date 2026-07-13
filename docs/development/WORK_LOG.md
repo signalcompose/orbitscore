@@ -45,7 +45,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   #431 本文に追記済み）・linkAudio 双方向・`loadedPlugin` キャッシュに role 保存
   （respawn 後に effect として復元される事故の芽を排除）
 
-**実装（Codex 委譲・罠7点 🔴 明示）**: 21ファイル・+784/-45・新規3モジュール
+**実装（Codex 委譲・罠7点 🔴 明示）**: 21 files changed, 784 insertions(+), 45 deletions(-)・新規3モジュール
 （plugin-note-output / plugin-instrument-manager / 各テスト）+ VS Code 診断免除。
 逸脱なしと報告され、監査で全遵守を確認。
 

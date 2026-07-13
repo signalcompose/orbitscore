@@ -147,10 +147,6 @@ export class Global {
     return this.midiManager
   }
 
-  getPluginInstrumentManager(): PluginInstrumentManager {
-    return this.pluginInstrumentManager
-  }
-
   // ─── Chord namespace (§6) ──────────────────────────────────────────────────
   // A program-global table of chord values, read by Sequence.play to spread chord
   // refs (§6, 評価時値渡し). Lives here — like global.key() — so the interpreter
@@ -240,8 +236,8 @@ export class Global {
    * Ableton Link Audio instead of the hardware bus. Hardware output and
    * LinkAudio cannot coexist within the same .orbs file.
    *
-   * Rejected once plugin hosting (`global.effect()`) has already been
-   * declared — v1 mutual exclusion (PH.5).
+   * Rejected once plugin hosting (`global.effect()` or `seq.instrument()`) has
+   * already been declared — v1 mutual exclusion (PH.5).
    *
    * @param targetSampleRate Optional explicit target SR for plugin-side
    *                         resampling. Auto-detect with 48000 fallback when
