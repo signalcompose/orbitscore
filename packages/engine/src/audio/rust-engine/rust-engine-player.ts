@@ -607,6 +607,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
       this.pluginActive = true
       return result
     } catch (err) {
+      // 失敗時は必ず false（呼び出し元の false-on-entry 保証に依存しない）
+      this.pluginActive = false
       if (err instanceof DaemonProtocolError) {
         if (err.code === 'CLAP_UNAVAILABLE') {
           throw new Error(

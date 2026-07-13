@@ -125,4 +125,20 @@ describe('RustEnginePlayer.loadPlugin() error conversion', () => {
 
     await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id')).rejects.toBe(original)
   })
+
+  it('flips pluginActive to false when a subsequent loadPlugin call fails', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin('/plugins/echo.clap', 'echo-id')
+    expect(player.isPluginActive()).toBe(true)
+
+    daemon.loadPlugin.mockRejectedValueOnce(new Error('daemon transport failure'))
+
+    await expect(player.loadPlugin('/plugins/echo.clap', 'echo-id')).rejects.toThrow(
+      'daemon transport failure',
+    )
+    // The catch block must not rely on callers guaranteeing false-on-entry —
+    // it must flip pluginActive to false itself on every failure path.
+    expect(player.isPluginActive()).toBe(false)
+  })
 })
