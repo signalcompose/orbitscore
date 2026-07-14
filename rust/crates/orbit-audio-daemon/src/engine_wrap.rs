@@ -239,7 +239,12 @@ pub(crate) struct ChildLaunch {
 impl Drop for ChildLaunch {
     fn drop(&mut self) {
         if self.cleanup_shm_on_drop {
-            let _ = std::fs::remove_file(&self.shm_path);
+            if let Err(error) = std::fs::remove_file(&self.shm_path) {
+                tracing::warn!(
+                    "ChildLaunch drop: shm 削除失敗 {:?}: {error}",
+                    self.shm_path
+                );
+            }
         }
     }
 }
@@ -957,10 +962,22 @@ impl EngineWrap {
                 plugin_id: active_plugin_id,
                 engaged,
                 ..
-            } if active_path == &path => {
+            } if active_path == &path && active_plugin_id == &plugin_id => {
                 // READY を確認済みの Active だけがここへ来る。冪等再送でも gate を維持する。
                 engaged.store(true, Ordering::Release);
                 return Ok(outproc_plugin_summary(active_path, active_plugin_id));
+            }
+            ChildSlot::Active {
+                path: active_path,
+                plugin_id: active_plugin_id,
+                ..
+            } if active_path == &path => {
+                // 同一 path だが plugin_id が異なる = bundle 内の別サブプラグインへの差し替え
+                // 要求。path 差し替えと同様 v1 は拒否する（呼び出し側が指定した plugin_id を
+                // 握り潰して古い plugin_id のまま黙って Ok を返さない）。
+                return Err(outproc_runtime_error(format!(
+                    "outproc plugin already loaded from {active_path:?} with plugin_id {active_plugin_id:?}; v1 does not support replacement with plugin_id {plugin_id:?}"
+                )));
             }
             ChildSlot::Active {
                 path: active_path, ..
@@ -2569,6 +2586,7 @@ mod outproc_load_error_test_support {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     type InjectedSlot = (Arc<EngineWrap>, Arc<Mutex<ChildSlot>>);
 
@@ -2691,6 +2709,211 @@ mod outproc_load_error_test_support {
             matches!(&*child_slot.lock().expect("lock child slot"), ChildSlot::Loading { path } if path == Path::new(loading_path))
         );
     }
+
+    /// 実際に生存する（が無害な）child を起動して `ChildSlot::Active` を直接構築する。
+    /// `EffectChildSupervisor`/`InstrumentChildSupervisor` は `spawn_effect_child` 経由の
+    /// `Command` 起動を要求するので、実 CLAP/VST3 plugin なしで到達するには `spawn_outproc_supervisor`
+    /// を直接呼び、`first_child` には（respawn を誘発しない）長寿命の `sleep` を渡す（outproc_effect.rs
+    /// の `supervisor_*` テストと同じ手法）。supervisor が以後の shm unlink を所有するため、ローカルの
+    /// `launch` の `cleanup_shm_on_drop` は production の `load_outproc_plugin` 成功パスと同様に外す。
+    fn active_child_slot(
+        unique_path: impl Fn() -> PathBuf,
+        plugin_path: &str,
+        plugin_id: Option<String>,
+    ) -> ChildSlot {
+        let shm_path = unique_path();
+        let _ = std::fs::remove_file(&shm_path);
+        let _mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
+
+        let mut launch = child_launch(
+            shm_path,
+            PathBuf::from("unused-child-executable-for-respawn-only"),
+            OutProcChildStats::new(),
+        );
+        let first_child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn stub child for Active fixture");
+
+        let path = PathBuf::from(plugin_path);
+        let supervisor =
+            super::spawn_outproc_supervisor(first_child, &launch, path.clone(), plugin_id.clone())
+                .expect("spawn supervisor for Active fixture");
+        launch.cleanup_shm_on_drop = false;
+
+        ChildSlot::Active {
+            path,
+            plugin_id,
+            engaged: Arc::new(AtomicBool::new(true)),
+            _supervisor: supervisor,
+        }
+    }
+
+    /// Important finding 2a: `ChildSlot::Active` への同一 path・同一 plugin_id の再送は冪等に
+    /// `Ok` を返し、slot を `Active` のまま維持すること。
+    pub(super) fn active_slot_accepts_idempotent_reload(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        plugin_path: &str,
+        plugin_id: Option<String>,
+    ) {
+        let slot = active_child_slot(unique_path, plugin_path, plugin_id.clone());
+        let (wrap, child_slot) = inject(slot, OutProcChildStats::new());
+
+        wrap.load_outproc_plugin(PathBuf::from(plugin_path), plugin_id)
+            .expect("idempotent re-load of the same path+plugin_id while Active must succeed");
+        assert!(
+            matches!(
+                &*child_slot.lock().expect("lock child slot"),
+                ChildSlot::Active { .. }
+            ),
+            "idempotent re-load must keep the slot Active"
+        );
+    }
+
+    /// Critical finding: `ChildSlot::Active` への同一 path・**異なる** plugin_id は replacement
+    /// 要求として拒否すること（呼び出し側が指定した plugin_id を握り潰して古い plugin_id のまま
+    /// 黙って `Ok` を返してはならない）。
+    pub(super) fn active_slot_rejects_plugin_id_change(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        assert_error: impl Fn(WrapError, &str),
+        plugin_path: &str,
+        initial_plugin_id: Option<String>,
+        changed_plugin_id: Option<String>,
+    ) {
+        let slot = active_child_slot(unique_path, plugin_path, initial_plugin_id.clone());
+        let (wrap, child_slot) = inject(slot, OutProcChildStats::new());
+
+        let error = wrap
+            .load_outproc_plugin(PathBuf::from(plugin_path), changed_plugin_id)
+            .err()
+            .expect("same path with a different plugin_id while Active must be rejected");
+        assert_error(error, "does not support replacement");
+        assert!(
+            matches!(
+                &*child_slot.lock().expect("lock child slot"),
+                ChildSlot::Active { plugin_id, .. } if *plugin_id == initial_plugin_id
+            ),
+            "rejected plugin_id change must not disturb the previously-active plugin_id"
+        );
+    }
+
+    /// Important finding 2b: `ChildSlot::Active` への **異なる** path は v1 では replacement
+    /// 拒否のまま（既存の Loading 側テストと対になる Active 側の直接検証）。
+    pub(super) fn active_slot_rejects_path_replacement(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        assert_error: impl Fn(WrapError, &str),
+        plugin_path: &str,
+        other_path: &str,
+    ) {
+        let slot = active_child_slot(unique_path, plugin_path, None);
+        let (wrap, child_slot) = inject(slot, OutProcChildStats::new());
+
+        let error = wrap
+            .load_outproc_plugin(PathBuf::from(other_path), None)
+            .err()
+            .expect("a different path while Active must be rejected");
+        assert_error(error, "does not support replacement");
+        assert!(matches!(
+            &*child_slot.lock().expect("lock child slot"),
+            ChildSlot::Active { path, .. } if path == Path::new(plugin_path)
+        ));
+    }
+
+    /// テスト専用の「slow」child 実行可能ファイル。CLI 引数（`--shm`/`--plugin`/`--sample-rate`
+    /// 等）をすべて無視してただ sleep するだけの POSIX shell script。`load_outproc_plugin` が
+    /// 経由する `spawn_outproc_child` はこれらの引数を固定で付与するため、素の coreutils
+    /// （`sleep`/`cat` 等）は未知オプションとして即 exit してしまい「lock 外で長時間ブロックする」
+    /// 状態を再現できない（実際に `sleep` へこれらの引数を渡すと `illegal option` で即終了する）。
+    /// このクレートの CI は ubuntu-latest のみを対象とする（Windows 非対応）ので unix 専用で問題ない。
+    fn write_slow_child_script(unique_path: &impl Fn() -> PathBuf) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script_path = unique_path().with_extension("sh");
+        std::fs::write(&script_path, "#!/bin/sh\nsleep 20\n").expect("write slow child script");
+        let mut perms = std::fs::metadata(&script_path)
+            .expect("stat slow child script")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).expect("chmod slow child script");
+        script_path
+    }
+
+    /// Important finding 1: f36e99c の regression guard。`Loading` 中の 2 本目の `LoadPlugin` は、
+    /// 1 本目が shm-open/spawn/ready-ack poll（lock 外・最大 `CHILD_READY_TIMEOUT`）で実際に
+    /// ブロックしている **最中**でも、mutex 待ちでなく `ChildSlot::Loading` を即座に観測して
+    /// fail-fast すること。この lock-scope fix が無いと 2 本目は `.lock()` 自体で最大 10 秒
+    /// ブロックされ、意図された「Loading 中は即座に in progress で reject」が到達不能になる。
+    pub(super) fn concurrent_load_call_observes_loading_without_blocking(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        assert_error: impl Fn(WrapError, &str),
+        has_audio_input: bool,
+        loading_path: &str,
+        second_path: &str,
+    ) {
+        let shm_path = unique_path();
+        let _ = std::fs::remove_file(&shm_path);
+        let _mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
+        let child_exe = write_slow_child_script(&unique_path);
+
+        let stats = OutProcChildStats::new();
+        let launch = child_launch(shm_path.clone(), child_exe.clone(), stats.clone());
+        let (wrap, child_slot) = inject(ChildSlot::Empty(launch), stats);
+
+        let wrap_a = wrap.clone();
+        let loading_path_owned = PathBuf::from(loading_path);
+        let first_call =
+            std::thread::spawn(move || wrap_a.load_outproc_plugin(loading_path_owned, None));
+
+        // 1本目が Empty -> Loading へ遷移して lock を解放するまで待つ（shm open + spawn は同期的な
+        // syscall なので通常数 ms で観測できる。2s は CI 負荷下でも十分な余裕）。
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if matches!(
+                &*child_slot.lock().expect("poll child slot"),
+                ChildSlot::Loading { .. }
+            ) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "first LoadPlugin call never reached ChildSlot::Loading within 2s"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        // 1本目はまだ ready-ack poll 中（child script は READY を publish しない）。この状態で 2本目を
+        // 発行し、mutex 待ちでなく即座に "already in progress" で失敗することを検証する。
+        let start = std::time::Instant::now();
+        let error = wrap
+            .load_outproc_plugin(PathBuf::from(second_path), None)
+            .err()
+            .expect("concurrent call against a Loading slot must fail");
+        let elapsed = start.elapsed();
+
+        assert_error(error, "already in progress");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "second LoadPlugin call took {elapsed:?} while the first was still parked in its \
+             lock-free readiness poll -- it must fail fast on ChildSlot::Loading, not block on \
+             the mutex for up to CHILD_READY_TIMEOUT (regression guard for f36e99c)"
+        );
+
+        // 後片付け: READY を publish して 1本目を Active まで完走させ、決定的に join する
+        // （detach したまま放置すると child プロセス / watchdog スレッドがテストを跨いで残る）。
+        let ready_mmap =
+            orbit_audio_sandbox::open_shared(&shm_path).expect("open shm to publish READY");
+        let region = orbit_audio_sandbox::region_ptr(&ready_mmap);
+        // SAFETY: region は直前に開いた ready_mmap を指し、この scope の間生存する。
+        unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, has_audio_input) };
+        first_call
+            .join()
+            .expect("first LoadPlugin call thread panicked")
+            .expect("first LoadPlugin call must succeed once READY is published");
+        let _ = std::fs::remove_file(&child_exe);
+    }
 }
 
 /// `outproc_health()` の real body（`#[cfg(feature = "outproc-effect")]`）を直接叩く unit test。
@@ -2785,6 +3008,51 @@ mod outproc_health_tests {
             assert_effect_runtime_error_contains,
             "already-loading-effect.clap",
             "second-effect.clap",
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_concurrent_call_fails_fast_on_loading() {
+        super::outproc_load_error_test_support::concurrent_load_call_observes_loading_without_blocking(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            assert_effect_runtime_error_contains,
+            true, // effect role: CHILD_FLAG_HAS_AUDIO_INPUT set
+            "loading-effect.clap",
+            "second-effect.clap",
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_active_accepts_idempotent_reload() {
+        super::outproc_load_error_test_support::active_slot_accepts_idempotent_reload(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            "active-effect.clap",
+            Some("sub-a".to_string()),
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_active_rejects_plugin_id_change() {
+        super::outproc_load_error_test_support::active_slot_rejects_plugin_id_change(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            assert_effect_runtime_error_contains,
+            "active-effect.clap",
+            Some("sub-a".to_string()),
+            Some("sub-b".to_string()),
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_active_rejects_path_replacement() {
+        super::outproc_load_error_test_support::active_slot_rejects_path_replacement(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            assert_effect_runtime_error_contains,
+            "active-effect.clap",
+            "other-effect.clap",
         );
     }
 
@@ -2972,6 +3240,51 @@ mod outproc_instrument_health_tests {
             assert_instrument_runtime_error_contains,
             "already-loading-instrument.clap",
             "second-instrument.clap",
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_concurrent_call_fails_fast_on_loading() {
+        super::outproc_load_error_test_support::concurrent_load_call_observes_loading_without_blocking(
+            crate::outproc_instrument::unique_shm_path,
+            wrap_with_child_slot,
+            assert_instrument_runtime_error_contains,
+            false, // instrument role: CHILD_FLAG_HAS_AUDIO_INPUT must stay clear
+            "loading-instrument.clap",
+            "second-instrument.clap",
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_active_accepts_idempotent_reload() {
+        super::outproc_load_error_test_support::active_slot_accepts_idempotent_reload(
+            crate::outproc_instrument::unique_shm_path,
+            wrap_with_child_slot,
+            "active-instrument.clap",
+            Some("sub-a".to_string()),
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_active_rejects_plugin_id_change() {
+        super::outproc_load_error_test_support::active_slot_rejects_plugin_id_change(
+            crate::outproc_instrument::unique_shm_path,
+            wrap_with_child_slot,
+            assert_instrument_runtime_error_contains,
+            "active-instrument.clap",
+            Some("sub-a".to_string()),
+            Some("sub-b".to_string()),
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_active_rejects_path_replacement() {
+        super::outproc_load_error_test_support::active_slot_rejects_path_replacement(
+            crate::outproc_instrument::unique_shm_path,
+            wrap_with_child_slot,
+            assert_instrument_runtime_error_contains,
+            "active-instrument.clap",
+            "other-instrument.clap",
         );
     }
 

@@ -118,6 +118,42 @@ comment-analyzer）を PR #440 に対して実行。深刻度評価が割れた�
 shared session の古いスレッド結果を返した。foreground（`--wait`）で再委譲し、**`git status`/
 `git diff` で作業ツリーの実変更を一次情報として確認**してから受け入れた。
 
+---
+
+**`/code:pr-review-team 440` 収束（2026-07-14・Skill 経由・state file 監査証跡あり）**:
+
+Round 1（4体並行 + CI PASS）で新規 finding 3件 → fixer（Agent tool・sonnet）委譲 →
+Round 2（selector 再実行 → fresh 4体で再レビュー）で **Critical=0 / Important=0 /
+security checklist ALL PASS に収束**（iteration 1回）。
+
+- **Critical（修正済み）**: `load_outproc_plugin` の `ChildSlot::Active` 冪等ガードが
+  `path` のみ比較で `plugin_id` を無視。同一 path・別 plugin_id（bundle 内の別サブプラグイン）
+  の `LoadPlugin` が**古い plugin_id のまま黙って `Ok`** を返していた（silent-failure-hunter
+  検出・code-reviewer も sub-80% で同箇所を指摘・main が `session.rs` の `params.get("plugin_id")`
+  から呼び出し側可変であることを裏取りして Critical 確定）。修正: match arm を3本に分割
+  （同 path+同 plugin_id=冪等 Ok / 同 path+別 plugin_id=replacement 拒否 / 別 path=既存拒否）。
+- **Important（修正済み・2件)**: ① `f36e99c` lock-scope 修正の regression test 不在 →
+  READY を publish しない slow-child shell script fixture で「1本目が ready-ack poll 中に
+  2本目が `Loading` を即観測して <1s で fail-fast する」ことを検証する並行テストを追加
+  （6.254 前段で「PR-1c で検討」とした件を本 PR で前倒し実装）。② `Active` arm 3種
+  （冪等再送 Ok / plugin_id 差し替え拒否 / path 差し替え拒否）の直接テスト不在 →
+  `spawn_outproc_supervisor` + sleep スタブ fixture で追加。計8テスト（4種 × 両 feature）。
+- **Minor（修正済み）**: `Drop for ChildLaunch` の shm `remove_file` 失敗を `let _ =` で
+  握り潰し → `tracing::warn!` でログ。
+- **スコープ規律**: `Closed` 遷移の retry 可能化・fast-fail・エラーコード細分化は
+  **#441（PR-1c）へ移管済みのため fixer プロンプトで明示的に out-of-scope 指定**し、
+  再レビュー時も再報告を抑止（churn 防止）。
+- **受け入れ検証（main）**: fixer の green 報告を鵜呑みにせず差分精読 + 非サンドボックスで
+  `cargo test --lib` 両 feature 各 **44 passed**・fmt --check・clippy -D warnings 両 feature
+  green を再実行。Critical 修正は **fail-before/pass-after を変異で実証**（ガードを
+  `path` のみ比較に一時変異 → `active_rejects_plugin_id_change` が失敗 → revert で pass）。
+- **Round 2 特記**: code-reviewer は新規並行テストを単独15回再実行して flake なしを確認。
+  pr-test-analyzer の残 Minor 1件（sleep 30 スタブが `CONTROL_QUIT` 非応答のため supervisor
+  Drop の `REAP_TIMEOUT` 2s × 6テストの CI 時間増・決定論的でリーク無し）と
+  silent-failure-hunter の sub-80% 提案（script を `exec sleep 20` にして PID 曖昧性除去）は
+  非ゲート項目として記録のみ（必要なら #441 で同梱検討）。
+- **bot feedback**: reviews/comments とも空・check-run 全 success（`bot_feedback_read` 記録済み）。
+
 ### 6.253 feat(daemon): SharedRegion 拡張 + engaged ゲート導入 #431 PR-1a (Jul 14, 2026)
 
 **Date**: 2026-07-14
