@@ -17,6 +17,68 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.253 feat(daemon): SharedRegion 拡張 + engaged ゲート導入 #431 PR-1a (Jul 14, 2026)
+
+**Date**: 2026-07-14
+**Status**: ✅ 実装・受け入れ監査 GO（PR 作成・レビューフローへ）
+**Branch**: `431-oop-plugin-coexistence`
+**Commit**: `5eebf16`
+
+Epic #424 の DoD「1 effect + 1 instrument を DSL から同時にロードして演奏」を達成する
+最後のピース #431（OOP post-boot attach + effect/instrument 同時使用）の第一段。
+実装規模が大きいため 3 PR に段階分割（PR-1: substrate → PR-2: 共存 → PR-3: DoD 配線）し、
+PR-1 をさらに 2 段階（1a: 非侵襲的準備・1b: 実際の post-boot attach）に分割した前半。
+
+**グラウンディングの核心発見（Sonnet subagent・path:line 裏取り済み）**:
+- transport 層（`SharedRegion`）は各 child が専用 shm ファイルを持つため既に N-child 対応
+  （構造変更不要）
+- 真のギャップ = `PostProcessor` に engaged ゲートが無いこと。child 不在時
+  `PipelinedEffectHost::process_block` の READ 分岐は `seq_tag` 一致が一度も無いため
+  `primed` が永久 false のまま `0.0` で埋める（**恒久的無音**。単なる起動時の一時的事象ではない）
+- 合成順序は構造的に確定: instrument = add-mix・effect = overwrite。
+  `instrument → effect` の順で 1 つの `CompositePostProcessor` に包めば
+  `output.rs` は変更不要（単一 `Box<dyn PostProcessor>` スロットのまま）
+- `role` は Rust 側に概念ごと存在しない（greenfield）。`LoadPlugin` の OOP 実行時受け口も
+  存在しない（起動時 env のみ）
+
+**Fable 実装前相談（GO・D1-D7 一発判断・全判断根拠は path:line で裏取り済み）**:
+- engaged ゲートは processor 側（`teardown_requested` と同じ既存イディオム。host は
+  cross-thread atomic を持ち込まず純状態機械のまま）
+- 遅延 supervisor は `Arc<Mutex<ChildSlot>>` 共有 + StreamGuard 側 takeover guard
+  （PR-1b で実装）
+- ready ack は「child ready + role 検証通過」を control thread が確認してから Ok
+  （note ring drain を engaged 内に置くことで #410 型の data-loss race を構造的に排除）
+- 冪等性: 同一 path+role の再送は冪等 Ok・異なる path のみ reject
+- **見落とし発見**: TS ガード撤去だけでは不十分——in-process daemon にも cross-role reject が
+  必要（撤去のみだと silent plugin 置換が起きる）。PR-3 に反映
+
+**PR-1a 実装（Codex 委譲・8ファイル・+164/-4・非侵襲的）**:
+- `SharedRegion`（`transport.rs`）に `child_status`/`child_flags`（`AtomicU32`）を
+  **既存フィールド末尾に追記**（ABI 互換保持）。child readiness handshake の定義のみ
+- effect/instrument 両 child binary: load 成功直後に `child_flags`（has_audio_input 判定）→
+  `child_status = READY` の順で Release store
+- `ClapEffectProcessor`/`ClapInstrumentProcessor` に `has_audio_input()` accessor 追加
+  （in-process 経路の既存判定関数 `HostAudioBuffers::has_audio_input()` への単純委譲）
+- `OutProcEffectPostProcessor`/`OutProcInstrumentPostProcessor` に `engaged: Arc<AtomicBool>`
+  ゲート追加（`teardown_requested` チェックの後・処理委譲の前）。
+  **本 PR では全既存起動経路が `engaged=true` で構築するため挙動は1bitも変わらない**
+
+**受け入れ監査（Fable・GO・Minor 1件）**:
+- ABI 互換性・Release/Acquire 順序・engaged ゲート配置・`has_audio_input` 委譲を全て
+  一次コード精読で確認
+- **mutation による fail-before/pass-after 実証**: engaged ゲートを一時除去して実行 →
+  新規 disengaged テスト 2 件が red（effect: data 不変アサート失敗・instrument:
+  callback_count アサート失敗）→ 復元（shasum で byte-identical 確認）で green
+- Minor 1件（`CHILD_STATUS_LOAD_FAILED` が未使用の予約値であることの doc 追記）を適用
+- **PR-1b への申し送り2点**: ①respawn は同一 shm 再利用のため前 incarnation の READY が
+  残留する（poll ロジックは spawn 前 STARTING リセット or try_wait 併用が必須）
+  ②`engine_wrap.rs` は engaged の Arc を保持しておらず、LoadPlugin から flip するには
+  `ChildSlot` 構造に clone を持たせる変更が必要
+
+**検証**: `cargo test --workspace --features outproc-effect`（protocol 28件含む）・
+`--features outproc-instrument` 全 green・`cargo build --features clap-host` green・
+fmt/clippy（両 feature）green・`cargo deny --offline check` green。
+
 ### 6.252 feat(dsl): seq.instrument() — Pitch DSL note の daemon 配線 #427 (Jul 14, 2026)
 
 **Date**: 2026-07-14

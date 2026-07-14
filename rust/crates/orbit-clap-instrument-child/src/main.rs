@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
+use orbit_audio_sandbox::transport::{CHILD_FLAG_HAS_AUDIO_INPUT, CHILD_STATUS_READY};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
@@ -179,6 +180,17 @@ fn main() -> Result<()> {
         MAX_FRAMES as u32,
     )
     .with_context(|| format!("load CLAP instrument {:?}", args.plugin))?;
+    let flags = if instrument.has_audio_input() {
+        CHILD_FLAG_HAS_AUDIO_INPUT
+    } else {
+        0
+    };
+    // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。flags を先に
+    // publish し、status の Release store を readiness の公開点にする。
+    unsafe {
+        (*region).child_flags.store(flags, Release);
+        (*region).child_status.store(CHILD_STATUS_READY, Release);
+    }
     let mut scratch = vec![0.0f32; BUF_LEN];
     // Event window 分を事前確保し、hot loop での buffer 再確保を避ける。
     let mut event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);

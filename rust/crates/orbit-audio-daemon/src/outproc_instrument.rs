@@ -187,6 +187,10 @@ pub struct OutProcInstrumentPostProcessor {
     event_rx: rtrb::Consumer<NeutralEvent>,
     event_scratch: Vec<NeutralEvent>,
     audio_scratch: Vec<f32>,
+    /// PR-431: child が未 attach（post-boot attach 待ち）の間は音を素通しする安全弁。
+    /// **本 PR では常に true で構築される**（既存起動経路は eager attach のまま無変更）。
+    /// PR-1b で post-boot attach 経路がこれを false スタートにし、child ready 確認後に true へ遷移する。
+    engaged: Arc<AtomicBool>,
     teardown_requested: Arc<AtomicBool>,
     teardown_done: Arc<AtomicBool>,
     stats: Arc<OutProcInstrumentStats>,
@@ -200,6 +204,7 @@ impl OutProcInstrumentPostProcessor {
         host: PipelinedInstrumentHost,
         event_rx: rtrb::Consumer<NeutralEvent>,
         event_capacity: usize,
+        engaged: Arc<AtomicBool>,
         teardown_requested: Arc<AtomicBool>,
         teardown_done: Arc<AtomicBool>,
         stats: Arc<OutProcInstrumentStats>,
@@ -209,6 +214,7 @@ impl OutProcInstrumentPostProcessor {
             event_rx,
             event_scratch: Vec::with_capacity(event_capacity),
             audio_scratch: vec![0.0; BUF_LEN],
+            engaged,
             teardown_requested,
             teardown_done,
             stats,
@@ -221,6 +227,9 @@ impl PostProcessor for OutProcInstrumentPostProcessor {
     fn process(&mut self, data: &mut [f32]) {
         if self.teardown_requested.load(Ordering::Acquire) {
             self.teardown_done.store(true, Ordering::Release);
+            return;
+        }
+        if !self.engaged.load(Ordering::Acquire) {
             return;
         }
 
@@ -608,6 +617,7 @@ mod tests {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
+            Arc::new(AtomicBool::new(true)),
             requested,
             done,
             stats.clone(),
@@ -674,6 +684,7 @@ mod tests {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
+            Arc::new(AtomicBool::new(true)),
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
             stats.clone(),
@@ -746,6 +757,7 @@ mod tests {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
+            Arc::new(AtomicBool::new(true)),
             requested,
             done.clone(),
             stats.clone(),
@@ -770,6 +782,33 @@ mod tests {
 
         drop(processor);
         drop(ctl_mmap);
+        std::fs::remove_file(path).expect("remove shared memory");
+    }
+
+    #[test]
+    fn disengaged_passes_dry_without_updating_stats() {
+        let path = unique_shm_path();
+        let host_mmap = orbit_audio_sandbox::create_shared(&path).expect("create shared memory");
+        let host = PipelinedInstrumentHost::from_mmap(host_mmap);
+        let (_event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+        let stats = OutProcInstrumentStats::new();
+        let mut processor = OutProcInstrumentPostProcessor::new(
+            host,
+            event_rx,
+            NOTE_RING_CAPACITY,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            stats.clone(),
+        );
+
+        let mut data = vec![0.42; 8 * CHANNELS];
+        processor.process(&mut data);
+
+        assert!(data.iter().all(|sample| *sample == 0.42));
+        assert_eq!(stats.callback_count.load(Ordering::Relaxed), 0);
+
+        drop(processor);
         std::fs::remove_file(path).expect("remove shared memory");
     }
 

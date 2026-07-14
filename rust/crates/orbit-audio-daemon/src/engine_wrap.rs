@@ -548,6 +548,7 @@ impl EngineWrap {
         let stats = OutProcEffectStats::new();
         let processor = Box::new(OutProcEffectPostProcessor::new(
             host,
+            Arc::new(AtomicBool::new(true)),
             teardown_requested.clone(),
             teardown_done.clone(),
             stats.clone(),
@@ -662,6 +663,7 @@ impl EngineWrap {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
+            Arc::new(AtomicBool::new(true)),
             teardown_requested.clone(),
             teardown_done.clone(),
             stats.clone(),
