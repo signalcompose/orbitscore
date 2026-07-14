@@ -79,6 +79,20 @@ PR-1 をさらに 2 段階（1a: 非侵襲的準備・1b: 実際の post-boot at
 `--features outproc-instrument` 全 green・`cargo build --features clap-host` green・
 fmt/clippy（両 feature）green・`cargo deny --offline check` green。
 
+**/simplify（4観点並行レビュー→dedup→3件適用・スキップなし）**:
+- `engine_wrap.rs`: `start_outproc_effect`/`start_outproc_instrument` の3連続
+  `Arc<AtomicBool>` 引数のうち `engaged` をインライン `Arc::new(...)` から named local
+  （`let engaged = ...`）化。3引数が同型のため取り違えリスクを軽減
+- `outproc_instrument.rs` の `mod tests`: `outproc_effect.rs` に既にある
+  `engaged(value: bool) -> Arc<AtomicBool>` helper と対称の関数を追加し、4箇所の
+  `Arc::new(AtomicBool::new(...))` 直書きを置換（reuse・両ファイルのテスト記法を統一）
+- `transport.rs`: effect/instrument 両 child binary で重複していた
+  「flags 判定 → `child_flags` store → `child_status` store」の unsafe ブロックを
+  `pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bool)`
+  に抽出し、child 側は1行呼び出しに簡素化（重複2箇所→共通関数）
+- 挙動変更なし（named local 化・helper 抽出・関数抽出のみ）。再検証（cargo build/test
+  両 feature・fmt --check・clippy -D warnings 両 feature・cargo deny check）全 green
+
 ### 6.252 feat(dsl): seq.instrument() — Pitch DSL note の daemon 配線 #427 (Jul 14, 2026)
 
 **Date**: 2026-07-14

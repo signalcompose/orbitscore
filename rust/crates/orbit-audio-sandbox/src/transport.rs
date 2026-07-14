@@ -33,7 +33,7 @@
 use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use memmap2::MmapMut;
 
@@ -245,6 +245,27 @@ pub fn open_shared(path: &Path) -> io::Result<MmapMut> {
 /// ページ境界整列)でなければならない。返したポインタは `mmap` の生存期間を超えて使ってはならない。
 pub fn region_ptr(mmap: &MmapMut) -> *mut SharedRegion {
     mmap.as_ptr() as *mut SharedRegion
+}
+
+/// child が plugin load 成功後に呼ぶ readiness 公開ヘルパ（PR-431）。`child_flags` を先に
+/// Release store してから `child_status = CHILD_STATUS_READY` を Release store する
+/// （host が status を Acquire で観測すれば flags も必ず可視という happens-before を
+/// この1箇所に集約する）。
+///
+/// # Safety
+/// `region` は呼び出し元が map 済みの生存 SharedRegion を指していること。
+pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bool) {
+    let flags = if has_audio_input {
+        CHILD_FLAG_HAS_AUDIO_INPUT
+    } else {
+        0
+    };
+    unsafe {
+        (*region).child_flags.store(flags, Ordering::Release);
+        (*region)
+            .child_status
+            .store(CHILD_STATUS_READY, Ordering::Release);
+    }
 }
 
 #[cfg(test)]

@@ -24,7 +24,6 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
-use orbit_audio_sandbox::transport::{CHILD_FLAG_HAS_AUDIO_INPUT, CHILD_STATUS_READY};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_FRAMES,
 };
@@ -81,16 +80,9 @@ fn main() -> Result<()> {
     )
     .with_context(|| format!("load CLAP effect {:?}", args.plugin))?;
 
-    let flags = if effect.has_audio_input() {
-        CHILD_FLAG_HAS_AUDIO_INPUT
-    } else {
-        0
-    };
-    // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。flags を先に
-    // publish し、status の Release store を readiness の公開点にする。
+    // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。
     unsafe {
-        (*region).child_flags.store(flags, Release);
-        (*region).child_status.store(CHILD_STATUS_READY, Release);
+        orbit_audio_sandbox::transport::publish_child_ready(region, effect.has_audio_input());
     }
 
     // in-place process_block 用の作業バッファ（ループ前に確保 = RT 安全）。

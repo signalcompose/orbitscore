@@ -554,6 +554,10 @@ mod tests {
     use super::*;
     use orbit_audio_sandbox::{slot_index, VoiceAddr, VoiceKey, CHANNELS};
 
+    fn engaged(value: bool) -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(value))
+    }
+
     // pr-test-analyzer (item 7, PR #422 review): `OutProcInstrumentConfig::from_env`'s
     // `ORBIT_INSTRUMENT_BUFFER_FRAMES` parsing boundaries had no coverage. Test the extracted pure
     // helper directly rather than `std::env::set_var` (parallel-test flakiness trap; mirrors
@@ -617,7 +621,7 @@ mod tests {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
-            Arc::new(AtomicBool::new(true)),
+            engaged(true),
             requested,
             done,
             stats.clone(),
@@ -684,7 +688,7 @@ mod tests {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
-            Arc::new(AtomicBool::new(true)),
+            engaged(true),
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
             stats.clone(),
@@ -757,7 +761,7 @@ mod tests {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
-            Arc::new(AtomicBool::new(true)),
+            engaged(true),
             requested,
             done.clone(),
             stats.clone(),
@@ -796,7 +800,7 @@ mod tests {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
-            Arc::new(AtomicBool::new(false)),
+            engaged(false),
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
             stats.clone(),

@@ -543,12 +543,13 @@ impl EngineWrap {
         let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(host_mmap);
 
         // 2. teardown flags + 観測 stats + adapter。
+        let engaged = Arc::new(AtomicBool::new(true));
         let teardown_requested = Arc::new(AtomicBool::new(false));
         let teardown_done = Arc::new(AtomicBool::new(false));
         let stats = OutProcEffectStats::new();
         let processor = Box::new(OutProcEffectPostProcessor::new(
             host,
-            Arc::new(AtomicBool::new(true)),
+            engaged,
             teardown_requested.clone(),
             teardown_done.clone(),
             stats.clone(),
@@ -656,6 +657,7 @@ impl EngineWrap {
         })?;
         let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(host_mmap);
         let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+        let engaged = Arc::new(AtomicBool::new(true));
         let teardown_requested = Arc::new(AtomicBool::new(false));
         let teardown_done = Arc::new(AtomicBool::new(false));
         let stats = OutProcInstrumentStats::new();
@@ -663,7 +665,7 @@ impl EngineWrap {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
-            Arc::new(AtomicBool::new(true)),
+            engaged,
             teardown_requested.clone(),
             teardown_done.clone(),
             stats.clone(),
