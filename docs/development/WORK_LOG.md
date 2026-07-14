@@ -48,6 +48,32 @@ outproc-effect`/`outproc-instrument` 両方 **0 failed**（protocol 含む全 gr
 fmt --check・clippy -D warnings 両 feature green。Codex 環境固有の loopback 制約が
 原因であり実装バグではないことを確認。
 
+**/simplify（4観点並行レビュー・3件完了→1件（altitude）は advisor 呼び出しで45分超
+応答なしのため main が SendMessage で生存確認 → 応答なし → TaskStop）**:
+- simplification と efficiency が**独立に同一の設計不整合**へ収束（Important 相当）:
+  `load_outproc_plugin`（`engine_wrap.rs`）が `child_slot.lock()` の `MutexGuard` を
+  shm open・child spawn・supervisor spawn・**ready-ack poll ループ（最大10秒）**・
+  最終状態遷移まで関数末尾まで一度も drop せず保持していた。これにより2件目以降の
+  `LoadPlugin` 呼び出し（`Arc<EngineWrap>` は複数クライアント接続間で共有）は、
+  意図された `ChildSlot::Loading`（「in progress」で即座に reject する設計・D4 要件）
+  に到達する前に `.lock()` 自体で最大10秒ブロックされ、`Loading` 分岐が実質到達不能な
+  dead code になっていた（`let _ = engaged.load(...)` という無意味な読み捨てもその症状）
+- main が直接修正（fixer 委譲が同様に応答不能になったため self-fix）: `Loading` 書き込み
+  直後に `drop(slot)` してロックを解放し、shm open・spawn・ready-ack poll ループは
+  ロック外で実行。各エラーパス・成功パスで `child_slot.lock()` を再取得してから終端状態
+  （`Empty`/`Closed`/`Active`）を書き込む形に変更。`ChildSlot::Loading` から未使用になった
+  `engaged` フィールドを削除（dead_code 警告解消）。teardown は `child_slot` の `Arc` を
+  保持するだけで `.lock()` しないため、ロック解放中に他の書き込み主体は存在せず、
+  再取得後も `Loading` のままであることが構造的に保証される
+- reuse: 修正要求なし（poll-until-deadline パターンの重複は test-only スコープの既存
+  helper と production コードの型不一致により置き換え不可・将来的な技術的負債として
+  記録のみ）
+- 検証: `cargo build`/`test`（両 feature・0 failed）・`fmt --check`・`clippy -D warnings`
+  （両 feature）全 green を main が非サンドボックスで確認
+- **未対応**: 2件目の `LoadPlugin` が Loading 中に即座に reject されることを直接検証する
+  統合テストは、実 child プロセス spawn を要する gated テストとしてしか書けないため
+  本セッションでは追加していない（既存の readiness/role テストは変更なしで green）
+
 ### 6.253 feat(daemon): SharedRegion 拡張 + engaged ゲート導入 #431 PR-1a (Jul 14, 2026)
 
 **Date**: 2026-07-14

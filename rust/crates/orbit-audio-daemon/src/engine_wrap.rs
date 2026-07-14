@@ -215,7 +215,6 @@ pub(crate) enum ChildSlot {
     Empty(ChildLaunch),
     Loading {
         path: PathBuf,
-        engaged: Arc<AtomicBool>,
     },
     Active {
         path: PathBuf,
@@ -971,10 +970,8 @@ impl EngineWrap {
                 )));
             }
             ChildSlot::Loading {
-                path: loading_path,
-                engaged,
+                path: loading_path, ..
             } => {
-                let _ = engaged.load(Ordering::Acquire);
                 return Err(outproc_runtime_error(format!(
                     "outproc plugin load already in progress for {loading_path:?}"
                 )));
@@ -991,14 +988,20 @@ impl EngineWrap {
             ChildSlot::Empty(launch) => launch,
             _ => unreachable!("ChildSlot state was checked while holding the same mutex"),
         };
-        *slot = ChildSlot::Loading {
-            path: path.clone(),
-            engaged: launch.engaged.clone(),
-        };
+        *slot = ChildSlot::Loading { path: path.clone() };
+        // Loading 書き込みを可視化した直後にロックを解放する。以降の shm open・spawn・
+        // ready-ack poll（最大 CHILD_READY_TIMEOUT）はロック外で行う。他の LoadPlugin
+        // 呼び出しは Loading を即座に観測して「in progress」で失敗できる（この関数だけが
+        // Loading→Active/Closed/Empty へ遷移させるため、再取得後も Loading のままである
+        // ことが保証される。teardown は child_slot の Arc を保持するだけで .lock() しない）。
+        drop(slot);
 
         let ready_mmap = match orbit_audio_sandbox::open_shared(&launch.shm_path) {
             Ok(mmap) => mmap,
             Err(error) => {
+                let mut slot = child_slot
+                    .lock()
+                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
                 *slot = ChildSlot::Closed;
                 return Err(outproc_runtime_error(format!(
                     "open child readiness mapping {:?}: {error}",
@@ -1015,6 +1018,9 @@ impl EngineWrap {
             Ok(child) => child,
             Err(error) => {
                 let child_exe = launch.child_exe.clone();
+                let mut slot = child_slot
+                    .lock()
+                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
                 *slot = ChildSlot::Empty(launch);
                 return Err(outproc_runtime_error(format!(
                     "spawn outproc child {:?}: {error}",
@@ -1032,6 +1038,9 @@ impl EngineWrap {
                 Ok(supervisor) => supervisor,
                 Err(error) => {
                     // supervisor の startup cleanup は shm を unlink するため、この slot は再利用不能。
+                    let mut slot = child_slot
+                        .lock()
+                        .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
                     *slot = ChildSlot::Closed;
                     return Err(outproc_runtime_error(format!(
                         "spawn outproc watchdog: {error}"
@@ -1047,6 +1056,9 @@ impl EngineWrap {
                 let flags = unsafe { (*region).child_flags.load(Ordering::Acquire) };
                 if !outproc_role_matches(flags) {
                     drop(supervisor);
+                    let mut slot = child_slot
+                        .lock()
+                        .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
                     *slot = ChildSlot::Closed;
                     return Err(outproc_runtime_error(format!(
                         "loaded plugin role does not match daemon role (child_flags={flags:#x})"
@@ -1056,6 +1068,9 @@ impl EngineWrap {
             }
             if std::time::Instant::now() >= deadline {
                 drop(supervisor);
+                let mut slot = child_slot
+                    .lock()
+                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
                 *slot = ChildSlot::Closed;
                 return Err(outproc_runtime_error(format!(
                     "timed out waiting {:?} for child READY",
@@ -1069,6 +1084,9 @@ impl EngineWrap {
         let summary = outproc_plugin_summary(&path, &plugin_id);
         // Active supervisor が以後の unlink を所有する。local launch の fallback cleanup は解除する。
         launch.cleanup_shm_on_drop = false;
+        let mut slot = child_slot
+            .lock()
+            .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
         *slot = ChildSlot::Active {
             path,
             plugin_id,
