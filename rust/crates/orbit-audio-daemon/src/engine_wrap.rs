@@ -238,6 +238,9 @@ pub(crate) struct ChildLaunch {
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 impl Drop for ChildLaunch {
     fn drop(&mut self) {
+        // cleanup_shm_on_drop=true は「この launch が unlink の唯一の所有者」を意味する
+        // （supervisor へ所有権が移った経路は flag を false に倒す）。よって NotFound を含む
+        // あらゆる失敗が異常であり、無条件で warn する。
         if self.cleanup_shm_on_drop {
             if let Err(error) = std::fs::remove_file(&self.shm_path) {
                 tracing::warn!(
@@ -910,6 +913,12 @@ impl EngineWrap {
     ///
     /// blocking API: child の readiness を poll するため、session handler は `spawn_blocking` から
     /// 呼ぶこと。同一 path の再送は冪等、別 path への差し替えは v1 では拒否する。
+    ///
+    /// **契約（precondition）**: `StreamGuard`（`_child_guard` の唯一の強参照保持者）は in-flight
+    /// の本呼び出しより必ず長生きすること。破ると: 成功パスで `Ok` を返した直後、本関数ローカルの
+    /// `Arc` drop が最後の強参照となり、attach 直後の child が同期的に teardown（QUIT/reap/unlink）
+    /// されうる（「成功応答=生きた plugin」が崩れる）。現行の全配線（main.rs のプロセス寿命
+    /// `_stream_guard`・gated テストの関数スコープ `_guard`）はこれを満たす。
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     pub fn load_outproc_plugin(
         &self,
@@ -1019,6 +1028,7 @@ impl EngineWrap {
                 let mut slot = child_slot
                     .lock()
                     .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Closed;
                 return Err(outproc_runtime_error(format!(
                     "open child readiness mapping {:?}: {error}",
@@ -1038,6 +1048,7 @@ impl EngineWrap {
                 let mut slot = child_slot
                     .lock()
                     .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Empty(launch);
                 return Err(outproc_runtime_error(format!(
                     "spawn outproc child {:?}: {error}",
@@ -1055,9 +1066,12 @@ impl EngineWrap {
                 Ok(supervisor) => supervisor,
                 Err(error) => {
                     // supervisor の startup cleanup は shm を unlink するため、この slot は再利用不能。
+                    // unlink は startup cleanup が実施済み。launch の fallback は解除。
+                    launch.cleanup_shm_on_drop = false;
                     let mut slot = child_slot
                         .lock()
                         .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                    debug_assert_slot_loading(&slot);
                     *slot = ChildSlot::Closed;
                     return Err(outproc_runtime_error(format!(
                         "spawn outproc watchdog: {error}"
@@ -1072,10 +1086,13 @@ impl EngineWrap {
             if status == orbit_audio_sandbox::transport::CHILD_STATUS_READY {
                 let flags = unsafe { (*region).child_flags.load(Ordering::Acquire) };
                 if !outproc_role_matches(flags) {
+                    // supervisor drop の teardown が shm を unlink する。launch の fallback は解除。
                     drop(supervisor);
+                    launch.cleanup_shm_on_drop = false;
                     let mut slot = child_slot
                         .lock()
                         .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                    debug_assert_slot_loading(&slot);
                     *slot = ChildSlot::Closed;
                     return Err(outproc_runtime_error(format!(
                         "loaded plugin role does not match daemon role (child_flags={flags:#x})"
@@ -1084,10 +1101,13 @@ impl EngineWrap {
                 break;
             }
             if std::time::Instant::now() >= deadline {
+                // supervisor drop の teardown が shm を unlink する。launch の fallback は解除。
                 drop(supervisor);
+                launch.cleanup_shm_on_drop = false;
                 let mut slot = child_slot
                     .lock()
                     .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Closed;
                 return Err(outproc_runtime_error(format!(
                     "timed out waiting {:?} for child READY",
@@ -1104,6 +1124,7 @@ impl EngineWrap {
         let mut slot = child_slot
             .lock()
             .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+        debug_assert_slot_loading(&slot);
         *slot = ChildSlot::Active {
             path,
             plugin_id,
@@ -2025,6 +2046,17 @@ impl EngineWrap {
             .lock()
             .map_err(|_| WrapError::Scheduler("samples mutex poisoned".to_string()))
     }
+}
+
+/// `load_outproc_plugin` の終端遷移直前の不変条件検査（release では noop）。
+/// Loading 以外を観測したら、この関数以外に slot への書き手が現れたことを意味する。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn debug_assert_slot_loading(slot: &ChildSlot) {
+    debug_assert!(
+        matches!(slot, ChildSlot::Loading { .. }),
+        "load_outproc_plugin: slot must still be Loading (only this function \
+         transitions Loading -> Active/Closed/Empty)"
+    );
 }
 
 #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]

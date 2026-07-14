@@ -154,6 +154,45 @@ security checklist ALL PASS に収束**（iteration 1回）。
   非ゲート項目として記録のみ（必要なら #441 で同梱検討）。
 - **bot feedback**: reviews/comments とも空・check-run 全 success（`bot_feedback_read` 記録済み）。
 
+---
+
+**@claude bot review（scoped）+ 対応（2026-07-14・コミット `53db770` 後）**:
+
+advisor 相談（opus フォールバック・確信度80%）の推奨に従い、bot review を**並行性シーム3点に
+スコープ限定**して起動（(a) lock-release-during-poll の不変条件 / (b) ready-ack と
+`reset_child_starting` の Acquire/Release 順序 / (c) in-flight load と teardown の競合。
+テスト群と WORK_LOG は内部レビュー済みとして対象外を明示）。bot は 7分27秒で完了し
+**(a)(b) は airtight と判定**。指摘3点（いずれも non-blocking）:
+
+1. 終端 blind write に `debug_assert!` の防波堤を推奨（defense-in-depth）
+2. **(c) で理論上の競合を発見**: StreamGuard が in-flight load 中に drop されると、成功パスの
+   `Ok` 返却直後に関数ローカル `Arc` drop が最後の強参照となり attach 直後の child が同期
+   teardown される（「成功応答=生きた plugin」が崩れる）。現行配線（main.rs のプロセス寿命
+   `_stream_guard`・gated テストの関数スコープ `_guard`、main が grep で全数確認）では到達不能
+3. round-1 fix が導入した `tracing::warn!` が、失敗パスの二重 unlink（supervisor が先に unlink →
+   `ChildLaunch::drop` が NotFound）で毎回偽 WARN を出す observability regression
+
+**advisor 確認（opus・2回目）**: 指摘3=修正（90%）・指摘1=同梱修正（88%）・指摘2=契約として
+doc 化+tracking 記録のみ（85%）。再レビューは「軽量検証で代替せず /simplify + pr-review-team を
+回す（小差分なら速く収束することで規模適合を満たす）・2周目 bot は不要（3変更はすべて bot 自身の
+指摘の実装）」との裁定。
+
+**修正（fixer 委譲 → main 受け入れ検証）**: ① 終端 write 6箇所に debug_assert ② StreamGuard
+契約を doc comment 化 ③ Drop の NotFound フィルタ。main が差分精読 + 両 feature 各44 passed +
+fmt + clippy green を再実行して受け入れ。
+
+**/simplify（4観点並行・2件適用）**:
+- simplification/reuse/altitude が独立に同一指摘: 6箇所の逐語同一 debug_assert ブロック →
+  `debug_assert_slot_loading(&ChildSlot)` ヘルパーに抽出（約30行→7行）
+- **altitude が bot 指摘3の修正をさらに深化**: NotFound の error-kind フィルタは症状への
+  パッチであり、既存イディオム（成功パスの `cleanup_shm_on_drop = false`）を所有権移転済みの
+  3分岐（supervisor spawn 失敗・role mismatch・timeout）にも適用するのが正: `drop(supervisor)`
+  直後に flag を false へ倒し、`ChildLaunch::drop` は無条件 warn に復帰（NotFound が本来の
+  異常シグナルとして回復。open_shared/spawn 失敗の sole-unlinker パスは true のまま）。
+  reuse の副次観察（フィルタ版は他3箇所の同型 Drop と発散する）とも整合
+- efficiency / doc comment: clean
+- 検証: 両 feature 各 44 passed・fmt・clippy -D warnings green（main 再実行）
+
 ### 6.253 feat(daemon): SharedRegion 拡張 + engaged ゲート導入 #431 PR-1a (Jul 14, 2026)
 
 **Date**: 2026-07-14
