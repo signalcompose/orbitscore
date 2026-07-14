@@ -17,6 +17,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.254 feat(daemon): 実際の post-boot attach #431 PR-1b (Jul 14, 2026)
+
+**Date**: 2026-07-14
+**Status**: ✅ 実装・検証済み（PR 作成へ）
+**Branch**: `431-oop-plugin-coexistence`
+
+PR-1a（substrate: engaged ゲート・child readiness handshake）の上に、実際の post-boot
+attach を実装。Codex 委譲（設計は PR-1a と同一セッションの Fable 承認済み D1-D7 の
+延長のため、新規 advisor 相談は省略・トークン節約優先の owner 指示に従う）。
+
+**実装（5ファイル・+547/-96）**:
+- `ChildSlot`（`Empty/Loading/Active/Closed`）による遅延 supervisor 生成。daemon 起動時は
+  supervisor 無し、初回 `LoadPlugin` で spawn。`StreamGuard._child_guard` は
+  `Arc<Mutex<ChildSlot>>`（control 側は `Weak` 参照）で teardown 順序
+  （`_outproc_teardown → _stream → _child_guard`）を維持
+- `session.rs` の `LoadPlugin` ハンドラに role 検証つき OOP 実行時受け口を追加。初回 spawn・
+  同一 path 冪等 Ok・異なる path は reject
+- ready-ack: `child_status` を Acquire poll → READY 確認 → `child_flags` で role 一致検証
+  （10秒 timeout）してから応答。spawn 直前に `reset_child_starting` で前 incarnation の
+  READY 残留を除去（PR-1a doc コメントの申し送り事項に対応）
+- `engaged` を `false` 構築 → ready-ack 完了後に Release store で `true` へ遷移
+- Codex 自己修正: `StreamGuard` 先行 drop でも `EngineWrap` 側の strong `Arc` が
+  supervisor を延命しうる点を発見し teardown 順序を厳密化
+
+**検証**: Codex 実行環境（loopback bind 禁止のサンドボックス）では `tests/protocol.rs`
+28件が環境制約で FAIL したが、build/fmt/clippy は green・daemon unit 36件は green。
+main が非サンドボックスで独立再検証: `cargo test --workspace --features
+outproc-effect`/`outproc-instrument` 両方 **0 failed**（protocol 含む全 green）・
+fmt --check・clippy -D warnings 両 feature green。Codex 環境固有の loopback 制約が
+原因であり実装バグではないことを確認。
+
 ### 6.253 feat(daemon): SharedRegion 拡張 + engaged ゲート導入 #431 PR-1a (Jul 14, 2026)
 
 **Date**: 2026-07-14

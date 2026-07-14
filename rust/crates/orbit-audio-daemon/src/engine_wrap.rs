@@ -6,8 +6,14 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+use std::sync::Weak;
 use std::sync::{Arc, Mutex};
-#[cfg(feature = "clap-host")]
+#[cfg(any(
+    feature = "clap-host",
+    feature = "outproc-effect",
+    feature = "outproc-instrument"
+))]
 use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
@@ -180,6 +186,8 @@ struct OutProcControl {
     stats: Arc<crate::outproc_effect::OutProcEffectStats>,
     /// callback-duration 統計（A0 §6: CoreAudio+cpal は xrun 不発火 → RT 健全性は callback 実測時間で測る）。
     cb_stats: Arc<orbit_audio_native::CallbackTimeStats>,
+    /// post-boot attach の状態。`StreamGuard` と共有し、supervisor は stream より後に drop する。
+    child_slot: Weak<Mutex<ChildSlot>>,
 }
 
 #[cfg(feature = "outproc-instrument")]
@@ -188,7 +196,60 @@ struct OutProcInstrumentControl {
     event_tx: rtrb::Producer<orbit_audio_sandbox::NeutralEvent>,
     /// Audio adapter と watchdog が更新し、gated harness が読む観測 stats。
     stats: Arc<crate::outproc_instrument::OutProcInstrumentStats>,
+    /// post-boot attach の状態。`StreamGuard` と共有し、supervisor は stream より後に drop する。
+    child_slot: Weak<Mutex<ChildSlot>>,
 }
+
+#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+type OutProcChildSupervisor = crate::outproc_effect::EffectChildSupervisor;
+#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+type OutProcChildStats = crate::outproc_effect::OutProcEffectStats;
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+type OutProcChildSupervisor = crate::outproc_instrument::InstrumentChildSupervisor;
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+type OutProcChildStats = crate::outproc_instrument::OutProcInstrumentStats;
+
+/// OOP child の post-boot attach 状態。v1 は一つの daemon role につき一つの plugin path 固定。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) enum ChildSlot {
+    Empty(ChildLaunch),
+    Loading {
+        path: PathBuf,
+        engaged: Arc<AtomicBool>,
+    },
+    Active {
+        path: PathBuf,
+        plugin_id: Option<String>,
+        engaged: Arc<AtomicBool>,
+        _supervisor: OutProcChildSupervisor,
+    },
+    Closed,
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) struct ChildLaunch {
+    shm_path: PathBuf,
+    child_exe: PathBuf,
+    sample_rate: u32,
+    stats: Arc<OutProcChildStats>,
+    engaged: Arc<AtomicBool>,
+    cleanup_shm_on_drop: bool,
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+impl Drop for ChildLaunch {
+    fn drop(&mut self) {
+        if self.cleanup_shm_on_drop {
+            let _ = std::fs::remove_file(&self.shm_path);
+        }
+    }
+}
+
+/// child plugin load は通常 dlopen を含む。十分な上限を設け、応答を永久に保留しない。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+const CHILD_READY_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+const CHILD_READY_POLL: Duration = Duration::from_millis(10);
 
 /// CLAP host の control-side ハンドル一式（feature `clap-host` 専用）。
 #[cfg(feature = "clap-host")]
@@ -358,11 +419,8 @@ pub struct StreamGuard {
     _clap_thread: crate::clap_host::ClapThreadGuard,
     /// γ M1 PR-C（outproc-effect）: stream 停止 **後** に drop され、watchdog を止めて（respawn 停止）
     /// child へ QUIT → reap → shm unlink する。**field 順は load-bearing**: `_stream` より後に宣言する。
-    #[cfg(feature = "outproc-effect")]
-    _child_guard: crate::outproc_effect::EffectChildSupervisor,
-    /// outproc-instrument: stream 停止後に watchdog/child/shm を teardown する。
-    #[cfg(feature = "outproc-instrument")]
-    _instrument_child_guard: crate::outproc_instrument::InstrumentChildSupervisor,
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    _child_guard: Arc<Mutex<ChildSlot>>,
 }
 
 impl StreamGuard {
@@ -519,20 +577,30 @@ impl EngineWrap {
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let cfg = crate::outproc_effect::OutProcEffectConfig::from_env()
             .map_err(WrapError::OutProcEffectUnavailable)?;
-        Self::start_outproc_effect(cfg)
+        Self::start_outproc_effect_post_boot(cfg)
     }
 
-    /// OOP effect 経路の本体（`start()`（env 由来）と gated harness（明示 path）が共有する）。
-    /// shm 作成 → host mmap → adapter → cpal stream（sample_rate 確定）→ 初回 child spawn → watchdog
-    /// supervisor の順で組み、`StreamGuard` の field 順で teardown を強制する（drop 順は本ファイル冒頭の
-    /// `StreamGuard` doc 参照）。初回 child spawn 失敗は shm を掃除して `OutProcEffect` を返す。
+    /// 既存 gated harness 用の明示設定入口。従来どおり、返却前に設定済み plugin を attach する。
     #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
     pub fn start_outproc_effect(
         cfg: crate::outproc_effect::OutProcEffectConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        let plugin = cfg.plugin.clone();
+        let plugin_id = cfg.plugin_id.clone();
+        let (wrap, guard) = Self::start_outproc_effect_post_boot(cfg)?;
+        wrap.load_outproc_plugin(plugin, plugin_id)?;
+        Ok((wrap, guard))
+    }
+
+    /// production daemon の OOP effect 経路本体。
+    /// shm → adapter → stream までを daemon boot 時に構築し、child supervisor は初回
+    /// `LoadPlugin(role=effect)` まで遅延する。
+    #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+    fn start_outproc_effect_post_boot(
+        cfg: crate::outproc_effect::OutProcEffectConfig,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         use crate::outproc_effect::{
-            spawn_effect_child, EffectChildSupervisor, OutProcEffectPostProcessor,
-            OutProcEffectStats, OutProcTeardownGuard,
+            OutProcEffectPostProcessor, OutProcEffectStats, OutProcTeardownGuard,
         };
         use std::sync::atomic::AtomicBool;
 
@@ -543,13 +611,13 @@ impl EngineWrap {
         let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(host_mmap);
 
         // 2. engaged ゲート + teardown flags + 観測 stats + adapter。
-        let engaged = Arc::new(AtomicBool::new(true));
+        let engaged = Arc::new(AtomicBool::new(false));
         let teardown_requested = Arc::new(AtomicBool::new(false));
         let teardown_done = Arc::new(AtomicBool::new(false));
         let stats = OutProcEffectStats::new();
         let processor = Box::new(OutProcEffectPostProcessor::new(
             host,
-            engaged,
+            engaged.clone(),
             teardown_requested.clone(),
             teardown_done.clone(),
             stats.clone(),
@@ -566,41 +634,16 @@ impl EngineWrap {
             .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
 
-        // 4. 初回 child を同期 spawn（spawn 失敗を呼び出し側に返すため supervisor 外で起動）。
-        //    失敗時は作成済み shm を掃除する（stream はこの関数の早期 return で drop される）。
-        let first_child = match spawn_effect_child(
-            &cfg.child_exe,
-            &shm_path,
-            &cfg.plugin,
-            cfg.plugin_id.as_deref(),
-            sample_rate,
-        ) {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = std::fs::remove_file(&shm_path);
-                return Err(WrapError::OutProcEffect(format!(
-                    "spawn effect child {:?}: {e}",
-                    cfg.child_exe
-                )));
-            }
-        };
-        // current_child_pid を watchdog 起動前に publish（startup race 回避・advisor）: test が
-        // watchdog の初回 store を待たずに PID を読めるようにする。
-        stats
-            .current_child_pid
-            .store(first_child.id(), Ordering::Relaxed);
-
-        // 5. supervisor（watchdog spawn・2nd control mapping を内部で open）。
-        let supervisor = EffectChildSupervisor::spawn(
-            first_child,
+        // 4. child は初回 LoadPlugin まで作らない。engaged clone を slot に保持し、ready-ack 後に
+        //    control thread から Release store できるようにする。
+        let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
             shm_path,
-            stats.clone(),
-            cfg.child_exe,
-            cfg.plugin,
-            cfg.plugin_id,
+            child_exe: cfg.child_exe,
             sample_rate,
-        )
-        .map_err(|e| WrapError::OutProcEffect(format!("spawn watchdog: {e}")))?;
+            stats: stats.clone(),
+            engaged,
+            cleanup_shm_on_drop: true,
+        })));
 
         // 6. wrap 構築 + control 注入。
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
@@ -608,7 +651,11 @@ impl EngineWrap {
             .outproc
             .lock()
             .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))? =
-            Some(OutProcControl { stats, cb_stats });
+            Some(OutProcControl {
+                stats,
+                cb_stats,
+                child_slot: Arc::downgrade(&child_slot),
+            });
 
         // 7. StreamGuard（field 順 = teardown 順）。
         Ok((
@@ -616,7 +663,7 @@ impl EngineWrap {
             StreamGuard {
                 _outproc_teardown: OutProcTeardownGuard::new(teardown_requested, teardown_done),
                 _stream: stream,
-                _child_guard: supervisor,
+                _child_guard: child_slot,
             },
         ))
     }
@@ -632,11 +679,10 @@ impl EngineWrap {
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let cfg = crate::outproc_instrument::OutProcInstrumentConfig::from_env()
             .map_err(WrapError::OutProcInstrumentUnavailable)?;
-        Self::start_outproc_instrument(cfg)
+        Self::start_outproc_instrument_post_boot(cfg)
     }
 
-    /// Constructs the out-of-process instrument transport, post-processor, stream, child, and
-    /// supervisor in teardown-safe ownership order.
+    /// Existing gated-harness entry point. Preserves its pre-existing eager attach behavior.
     #[cfg(all(
         feature = "outproc-instrument",
         not(feature = "clap-host"),
@@ -646,9 +692,26 @@ impl EngineWrap {
     pub fn start_outproc_instrument(
         cfg: crate::outproc_instrument::OutProcInstrumentConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        let plugin = cfg.plugin.clone();
+        let plugin_id = cfg.plugin_id.clone();
+        let (wrap, guard) = Self::start_outproc_instrument_post_boot(cfg)?;
+        wrap.load_outproc_plugin(plugin, plugin_id)?;
+        Ok((wrap, guard))
+    }
+
+    /// Production daemon path: build transport and stream now, attach child on first LoadPlugin.
+    #[cfg(all(
+        feature = "outproc-instrument",
+        not(feature = "clap-host"),
+        not(feature = "link-audio"),
+        not(feature = "outproc-effect")
+    ))]
+    fn start_outproc_instrument_post_boot(
+        cfg: crate::outproc_instrument::OutProcInstrumentConfig,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         use crate::outproc_instrument::{
-            spawn_instrument_child, InstrumentChildSupervisor, OutProcInstrumentPostProcessor,
-            OutProcInstrumentStats, OutProcInstrumentTeardownGuard, NOTE_RING_CAPACITY,
+            OutProcInstrumentPostProcessor, OutProcInstrumentStats, OutProcInstrumentTeardownGuard,
+            NOTE_RING_CAPACITY,
         };
 
         let shm_path = crate::outproc_instrument::unique_shm_path();
@@ -657,7 +720,7 @@ impl EngineWrap {
         })?;
         let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(host_mmap);
         let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
-        let engaged = Arc::new(AtomicBool::new(true));
+        let engaged = Arc::new(AtomicBool::new(false));
         let teardown_requested = Arc::new(AtomicBool::new(false));
         let teardown_done = Arc::new(AtomicBool::new(false));
         let stats = OutProcInstrumentStats::new();
@@ -665,7 +728,7 @@ impl EngineWrap {
             host,
             event_rx,
             NOTE_RING_CAPACITY,
-            engaged,
+            engaged.clone(),
             teardown_requested.clone(),
             teardown_done.clone(),
             stats.clone(),
@@ -680,40 +743,23 @@ impl EngineWrap {
             .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
 
-        let first_child = match spawn_instrument_child(
-            &cfg.child_exe,
-            &shm_path,
-            &cfg.plugin,
-            cfg.plugin_id.as_deref(),
-            sample_rate,
-        ) {
-            Ok(child) => child,
-            Err(error) => {
-                let _ = std::fs::remove_file(&shm_path);
-                return Err(WrapError::OutProcInstrument(format!(
-                    "spawn instrument child {:?}: {error}",
-                    cfg.child_exe
-                )));
-            }
-        };
-        stats
-            .current_child_pid
-            .store(first_child.id(), Ordering::Relaxed);
-        let supervisor = InstrumentChildSupervisor::spawn(
-            first_child,
+        let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
             shm_path,
-            stats.clone(),
-            cfg.child_exe,
-            cfg.plugin,
-            cfg.plugin_id,
+            child_exe: cfg.child_exe,
             sample_rate,
-        )
-        .map_err(|error| WrapError::OutProcInstrument(format!("spawn watchdog: {error}")))?;
+            stats: stats.clone(),
+            engaged,
+            cleanup_shm_on_drop: true,
+        })));
 
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
-        })? = Some(OutProcInstrumentControl { event_tx, stats });
+        })? = Some(OutProcInstrumentControl {
+            event_tx,
+            stats,
+            child_slot: Arc::downgrade(&child_slot),
+        });
 
         Ok((
             wrap,
@@ -723,7 +769,7 @@ impl EngineWrap {
                     teardown_done,
                 ),
                 _stream: stream,
-                _instrument_child_guard: supervisor,
+                _child_guard: child_slot,
             },
         ))
     }
@@ -854,6 +900,182 @@ impl EngineWrap {
         Err(WrapError::LinkAudioUnavailable(
             "engine built without 'link-audio' feature".into(),
         ))
+    }
+
+    /// OOP feature の初回 `LoadPlugin` で child + watchdog を attach する。
+    ///
+    /// blocking API: child の readiness を poll するため、session handler は `spawn_blocking` から
+    /// 呼ぶこと。同一 path の再送は冪等、別 path への差し替えは v1 では拒否する。
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    pub fn load_outproc_plugin(
+        &self,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> Result<LoadedPluginSummary, WrapError> {
+        #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+        let child_slot = {
+            let guard = self
+                .outproc
+                .lock()
+                .map_err(|_| outproc_runtime_error("outproc mutex poisoned"))?;
+            guard
+                .as_ref()
+                .ok_or_else(|| {
+                    WrapError::OutProcEffectUnavailable(
+                        "outproc effect not initialized (test backend has no outproc path)".into(),
+                    )
+                })?
+                .child_slot
+                .upgrade()
+                .ok_or_else(|| outproc_runtime_error("outproc effect stream is closed"))?
+        };
+        #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+        let child_slot = {
+            let guard = self
+                .outproc_instrument
+                .lock()
+                .map_err(|_| outproc_runtime_error("outproc instrument mutex poisoned"))?;
+            guard
+                .as_ref()
+                .ok_or_else(|| {
+                    WrapError::OutProcInstrumentUnavailable(
+                        "outproc instrument not initialized (test backend has no outproc path)"
+                            .into(),
+                    )
+                })?
+                .child_slot
+                .upgrade()
+                .ok_or_else(|| outproc_runtime_error("outproc instrument stream is closed"))?
+        };
+
+        let mut slot = child_slot
+            .lock()
+            .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+
+        match &*slot {
+            ChildSlot::Active {
+                path: active_path,
+                plugin_id: active_plugin_id,
+                engaged,
+                ..
+            } if active_path == &path => {
+                // READY を確認済みの Active だけがここへ来る。冪等再送でも gate を維持する。
+                engaged.store(true, Ordering::Release);
+                return Ok(outproc_plugin_summary(active_path, active_plugin_id));
+            }
+            ChildSlot::Active {
+                path: active_path, ..
+            } => {
+                return Err(outproc_runtime_error(format!(
+                    "outproc plugin already loaded from {active_path:?}; v1 does not support replacement with {path:?}"
+                )));
+            }
+            ChildSlot::Loading {
+                path: loading_path,
+                engaged,
+            } => {
+                let _ = engaged.load(Ordering::Acquire);
+                return Err(outproc_runtime_error(format!(
+                    "outproc plugin load already in progress for {loading_path:?}"
+                )));
+            }
+            ChildSlot::Closed => {
+                return Err(outproc_runtime_error(
+                    "outproc child slot is closed after an unrecoverable attach failure",
+                ));
+            }
+            ChildSlot::Empty(_) => {}
+        }
+
+        let mut launch = match std::mem::replace(&mut *slot, ChildSlot::Closed) {
+            ChildSlot::Empty(launch) => launch,
+            _ => unreachable!("ChildSlot state was checked while holding the same mutex"),
+        };
+        *slot = ChildSlot::Loading {
+            path: path.clone(),
+            engaged: launch.engaged.clone(),
+        };
+
+        let ready_mmap = match orbit_audio_sandbox::open_shared(&launch.shm_path) {
+            Ok(mmap) => mmap,
+            Err(error) => {
+                *slot = ChildSlot::Closed;
+                return Err(outproc_runtime_error(format!(
+                    "open child readiness mapping {:?}: {error}",
+                    launch.shm_path
+                )));
+            }
+        };
+        let region = orbit_audio_sandbox::region_ptr(&ready_mmap);
+        // SAFETY: region はこの scope で生存する ready_mmap を指す。初回を含む全 spawn の直前に
+        // readiness を初期化し、前 incarnation の READY を誤認しない。
+        unsafe { orbit_audio_sandbox::transport::reset_child_starting(region) };
+
+        let first_child = match spawn_outproc_child(&launch, &path, plugin_id.as_deref()) {
+            Ok(child) => child,
+            Err(error) => {
+                let child_exe = launch.child_exe.clone();
+                *slot = ChildSlot::Empty(launch);
+                return Err(outproc_runtime_error(format!(
+                    "spawn outproc child {:?}: {error}",
+                    child_exe
+                )));
+            }
+        };
+        launch
+            .stats
+            .current_child_pid
+            .store(first_child.id(), Ordering::Relaxed);
+
+        let supervisor =
+            match spawn_outproc_supervisor(first_child, &launch, path.clone(), plugin_id.clone()) {
+                Ok(supervisor) => supervisor,
+                Err(error) => {
+                    // supervisor の startup cleanup は shm を unlink するため、この slot は再利用不能。
+                    *slot = ChildSlot::Closed;
+                    return Err(outproc_runtime_error(format!(
+                        "spawn outproc watchdog: {error}"
+                    )));
+                }
+            };
+
+        let deadline = std::time::Instant::now() + CHILD_READY_TIMEOUT;
+        loop {
+            // Acquire で READY を観測した後の flags load は child の publish 順と同期する。
+            let status = unsafe { (*region).child_status.load(Ordering::Acquire) };
+            if status == orbit_audio_sandbox::transport::CHILD_STATUS_READY {
+                let flags = unsafe { (*region).child_flags.load(Ordering::Acquire) };
+                if !outproc_role_matches(flags) {
+                    drop(supervisor);
+                    *slot = ChildSlot::Closed;
+                    return Err(outproc_runtime_error(format!(
+                        "loaded plugin role does not match daemon role (child_flags={flags:#x})"
+                    )));
+                }
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                drop(supervisor);
+                *slot = ChildSlot::Closed;
+                return Err(outproc_runtime_error(format!(
+                    "timed out waiting {:?} for child READY",
+                    CHILD_READY_TIMEOUT
+                )));
+            }
+            std::thread::sleep(CHILD_READY_POLL);
+        }
+
+        launch.engaged.store(true, Ordering::Release);
+        let summary = outproc_plugin_summary(&path, &plugin_id);
+        // Active supervisor が以後の unlink を所有する。local launch の fallback cleanup は解除する。
+        launch.cleanup_shm_on_drop = false;
+        *slot = ChildSlot::Active {
+            path,
+            plugin_id,
+            engaged: launch.engaged.clone(),
+            _supervisor: supervisor,
+        };
+        Ok(summary)
     }
 
     // ── CLAP plugin hosting（feature `clap-host` 専用・Issue #340）─────────────────────
@@ -1770,6 +1992,108 @@ impl EngineWrap {
     }
 }
 
+#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+fn outproc_runtime_error(message: impl Into<String>) -> WrapError {
+    WrapError::OutProcEffect(message.into())
+}
+
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+fn outproc_runtime_error(message: impl Into<String>) -> WrapError {
+    WrapError::OutProcInstrument(message.into())
+}
+
+#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+fn spawn_outproc_child(
+    launch: &ChildLaunch,
+    path: &std::path::Path,
+    plugin_id: Option<&str>,
+) -> std::io::Result<std::process::Child> {
+    crate::outproc_effect::spawn_effect_child(
+        &launch.child_exe,
+        &launch.shm_path,
+        path,
+        plugin_id,
+        launch.sample_rate,
+    )
+}
+
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+fn spawn_outproc_child(
+    launch: &ChildLaunch,
+    path: &std::path::Path,
+    plugin_id: Option<&str>,
+) -> std::io::Result<std::process::Child> {
+    crate::outproc_instrument::spawn_instrument_child(
+        &launch.child_exe,
+        &launch.shm_path,
+        path,
+        plugin_id,
+        launch.sample_rate,
+    )
+}
+
+#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+fn spawn_outproc_supervisor(
+    child: std::process::Child,
+    launch: &ChildLaunch,
+    path: PathBuf,
+    plugin_id: Option<String>,
+) -> std::io::Result<OutProcChildSupervisor> {
+    crate::outproc_effect::EffectChildSupervisor::spawn(
+        child,
+        launch.shm_path.clone(),
+        launch.stats.clone(),
+        launch.child_exe.clone(),
+        path,
+        plugin_id,
+        launch.sample_rate,
+    )
+}
+
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+fn spawn_outproc_supervisor(
+    child: std::process::Child,
+    launch: &ChildLaunch,
+    path: PathBuf,
+    plugin_id: Option<String>,
+) -> std::io::Result<OutProcChildSupervisor> {
+    crate::outproc_instrument::InstrumentChildSupervisor::spawn(
+        child,
+        launch.shm_path.clone(),
+        launch.stats.clone(),
+        launch.child_exe.clone(),
+        path,
+        plugin_id,
+        launch.sample_rate,
+    )
+}
+
+#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+fn outproc_role_matches(flags: u32) -> bool {
+    flags & orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT != 0
+}
+
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+fn outproc_role_matches(flags: u32) -> bool {
+    flags & orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT == 0
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn outproc_plugin_summary(
+    path: &std::path::Path,
+    plugin_id: &Option<String>,
+) -> LoadedPluginSummary {
+    LoadedPluginSummary {
+        plugin_id: plugin_id
+            .clone()
+            .unwrap_or_else(|| path.to_string_lossy().into_owned()),
+        plugin_name: path
+            .file_stem()
+            .map(|name| name.to_string_lossy().into_owned()),
+        note_port_index: 0,
+    }
+}
+
 pub struct LoadedSample {
     pub sample_id: String,
     pub frames: usize,
@@ -2233,12 +2557,12 @@ mod capture_path_tests {
 /// `EngineWrap` に対して real child を spawn せず `Some(OutProcControl)` を注入できる。
 #[cfg(all(test, feature = "outproc-effect"))]
 mod outproc_health_tests {
-    use super::{EngineWrap, OutProcControl};
+    use super::{outproc_role_matches, EngineWrap, OutProcControl};
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
     use orbit_audio_native::CallbackTimeStats;
     use std::sync::atomic::Ordering;
-    use std::sync::Arc;
+    use std::sync::{Arc, Weak};
 
     /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcControl` を
     /// `self.outproc` に注入する。返す `Arc<OutProcEffectStats>` はテスト側から直接
@@ -2250,8 +2574,17 @@ mod outproc_health_tests {
         *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
             stats: stats.clone(),
             cb_stats: CallbackTimeStats::new(),
+            child_slot: Weak::new(),
         });
         (wrap, stats)
+    }
+
+    #[test]
+    fn effect_ready_ack_requires_audio_input_flag() {
+        assert!(outproc_role_matches(
+            orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT
+        ));
+        assert!(!outproc_role_matches(0));
     }
 
     #[test]
@@ -2343,11 +2676,11 @@ mod outproc_health_tests {
 /// `OutProcInstrumentControl`（private struct）へ直接アクセスして注入する。
 #[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_health_tests {
-    use super::{EngineWrap, OutProcInstrumentControl};
+    use super::{outproc_role_matches, EngineWrap, OutProcInstrumentControl};
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
     use std::sync::atomic::Ordering;
-    use std::sync::Arc;
+    use std::sync::{Arc, Weak};
 
     /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcInstrumentControl`
     /// を `self.outproc_instrument` に注入する。event_tx の consumer 側は即 drop するが、この
@@ -2363,8 +2696,17 @@ mod outproc_instrument_health_tests {
             .expect("lock instrument control for injection") = Some(OutProcInstrumentControl {
             event_tx,
             stats: stats.clone(),
+            child_slot: Weak::new(),
         });
         (wrap, stats)
+    }
+
+    #[test]
+    fn instrument_ready_ack_rejects_audio_input_flag() {
+        assert!(outproc_role_matches(0));
+        assert!(!outproc_role_matches(
+            orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT
+        ));
     }
 
     // `outproc_instrument_health()` mirrors `outproc_health_tests` (effect side) exactly --
@@ -2509,7 +2851,11 @@ mod outproc_instrument_note_tests {
         *wrap
             .outproc_instrument
             .lock()
-            .expect("lock instrument control") = Some(OutProcInstrumentControl { event_tx, stats });
+            .expect("lock instrument control") = Some(OutProcInstrumentControl {
+            event_tx,
+            stats,
+            child_slot: std::sync::Weak::new(),
+        });
         (wrap, event_rx)
     }
 

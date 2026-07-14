@@ -48,6 +48,16 @@ fn daemon_error_event(severity: &str, code: &str, message: String) -> Event {
     )
 }
 
+#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+fn outproc_role_param_is_valid(params: &Value) -> bool {
+    params.get("role").and_then(Value::as_str) == Some("effect")
+}
+
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+fn outproc_role_param_is_valid(params: &Value) -> bool {
+    params.get("role").and_then(Value::as_str) == Some("instrument")
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -609,19 +619,49 @@ async fn handle_command(
                 ),
             ),
         },
-        // CLAP プラグインをロードして hot-install する（Issue #340・feature `clap-host`）。discovery +
-        // dlopen + activate は重いので LoadSample と同様 spawn_blocking で tokio ワーカーを塞がない。
-        // feature 無効ビルドは engine stub が CLAP_UNAVAILABLE を返す（command は feature 非依存）。
+        // CLAP プラグインをロードして hot-install する。in-process `clap-host` は既存 load path、
+        // OOP feature は role を検証して post-boot child attach path へ分岐する。どちらも dlopen を
+        // 含みうるため spawn_blocking で tokio worker から隔離する。
         "LoadPlugin" => match params.get("path").and_then(|p| p.as_str()) {
             Some(path_str) => {
+                #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+                if !outproc_role_param_is_valid(&params) {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "outproc-effect LoadPlugin requires role='effect'",
+                        ),
+                    );
+                }
+                #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+                if !outproc_role_param_is_valid(&params) {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "outproc-instrument LoadPlugin requires role='instrument'",
+                        ),
+                    );
+                }
+
                 let engine = engine.clone();
                 let path = std::path::PathBuf::from(path_str);
                 let plugin_id = params
                     .get("plugin_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
-                let res =
-                    tokio::task::spawn_blocking(move || engine.load_plugin(path, plugin_id)).await;
+                let res = tokio::task::spawn_blocking(move || {
+                    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+                    {
+                        engine.load_outproc_plugin(path, plugin_id)
+                    }
+                    #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+                    {
+                        engine.load_plugin(path, plugin_id)
+                    }
+                })
+                .await;
                 match res {
                     Ok(Ok(info)) => ok(
                         &id,
@@ -993,6 +1033,22 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn outproc_effect_load_plugin_accepts_only_effect_role() {
+        assert!(outproc_role_param_is_valid(&json!({"role": "effect"})));
+        assert!(!outproc_role_param_is_valid(&json!({"role": "instrument"})));
+        assert!(!outproc_role_param_is_valid(&json!({})));
+    }
+
+    #[cfg(feature = "outproc-instrument")]
+    #[test]
+    fn outproc_instrument_load_plugin_accepts_only_instrument_role() {
+        assert!(outproc_role_param_is_valid(&json!({"role": "instrument"})));
+        assert!(!outproc_role_param_is_valid(&json!({"role": "effect"})));
+        assert!(!outproc_role_param_is_valid(&json!({})));
+    }
 
     // LinkAudio エラーの protocol code 分割を pin（TS は UNAVAILABLE のみ握り潰し RUNTIME は rethrow）。
     #[test]

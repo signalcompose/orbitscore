@@ -275,6 +275,24 @@ pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bo
     }
 }
 
+/// child spawn の直前に readiness handshake を初期状態へ戻す。
+///
+/// shm は watchdog respawn 間で再利用されるため、前 incarnation の `READY` を残したまま
+/// replacement child を起動すると host が新 child の load 完了前に ready-ack を誤認しうる。
+/// status を先に `STARTING` にしてから flags を消し、全 spawn 経路で同じ順序を使う。
+/// この順序なら並行 poller が前 incarnation の `READY` と消去済み flags を組み合わせない。
+///
+/// # Safety
+/// `region` は呼び出し元が map 済みの生存 SharedRegion を指していること。
+pub unsafe fn reset_child_starting(region: *mut SharedRegion) {
+    unsafe {
+        (*region)
+            .child_status
+            .store(CHILD_STATUS_STARTING, Ordering::Release);
+        (*region).child_flags.store(0, Ordering::Release);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,6 +416,29 @@ mod tests {
         }
         drop(mmap_false);
         let _ = std::fs::remove_file(&p_false);
+    }
+
+    #[test]
+    fn reset_child_starting_clears_previous_incarnation_readiness() {
+        let path =
+            std::env::temp_dir().join(format!("orbit-sbx-reset-ready-{}.shm", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mmap = create_shared(&path).expect("create");
+        let region = region_ptr(&mmap);
+
+        // SAFETY: region は create_shared が返した生存 mapping を指す。
+        unsafe {
+            publish_child_ready(region, true);
+            reset_child_starting(region);
+            assert_eq!((*region).child_flags.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                (*region).child_status.load(Ordering::Relaxed),
+                CHILD_STATUS_STARTING
+            );
+        }
+
+        drop(mmap);
+        let _ = std::fs::remove_file(path);
     }
 
     // 存在しないファイルは map せず Err(open は read-only open なので作成しない)。
