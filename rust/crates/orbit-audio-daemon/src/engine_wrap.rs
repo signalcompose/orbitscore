@@ -1065,8 +1065,8 @@ impl EngineWrap {
             match spawn_outproc_supervisor(first_child, &launch, path.clone(), plugin_id.clone()) {
                 Ok(supervisor) => supervisor,
                 Err(error) => {
-                    // supervisor の startup cleanup は shm を unlink するため、この slot は再利用不能。
-                    // unlink は startup cleanup が実施済み。launch の fallback は解除。
+                    // spawn_outproc_supervisor はエラー時に自身の cleanup で shm を unlink して返るため、
+                    // この slot は再利用不能。launch の fallback unlink は解除。
                     launch.cleanup_shm_on_drop = false;
                     let mut slot = child_slot
                         .lock()
