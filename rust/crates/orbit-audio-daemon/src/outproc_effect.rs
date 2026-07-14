@@ -36,6 +36,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use orbit_audio_native::PostProcessor;
+use orbit_audio_sandbox::transport::reset_child_starting;
 use orbit_audio_sandbox::{open_shared, region_ptr, PipelinedEffectHost, CONTROL_QUIT};
 
 /// watchdog が child の生存を poll する周期（非 RT・control thread）。
@@ -485,6 +486,9 @@ impl EffectChildSupervisor {
                             tracing::warn!(
                                 "orbit-clap-effect-child が異常終了（{status}）→ respawn する"
                             );
+                            // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
+                            // 前 incarnation の READY を消してから replacement を spawn する。
+                            unsafe { reset_child_starting(region) };
                             match spawn_effect_child(
                                 &child_exe,
                                 &shm_path_wd,

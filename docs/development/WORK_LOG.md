@@ -17,6 +17,189 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.254 feat(daemon): 実際の post-boot attach #431 PR-1b (Jul 14, 2026)
+
+**Date**: 2026-07-14
+**Status**: ✅ 実装・検証済み（PR 作成へ）
+**Branch**: `431-oop-plugin-coexistence`
+
+PR-1a（substrate: engaged ゲート・child readiness handshake）の上に、実際の post-boot
+attach を実装。Codex 委譲（設計は PR-1a と同一セッションの Fable 承認済み D1-D7 の
+延長のため、新規 advisor 相談は省略・トークン節約優先の owner 指示に従う）。
+
+**実装（5ファイル・+547/-96）**:
+- `ChildSlot`（`Empty/Loading/Active/Closed`）による遅延 supervisor 生成。daemon 起動時は
+  supervisor 無し、初回 `LoadPlugin` で spawn。`StreamGuard._child_guard` は
+  `Arc<Mutex<ChildSlot>>`（control 側は `Weak` 参照）で teardown 順序
+  （`_outproc_teardown → _stream → _child_guard`）を維持
+- `session.rs` の `LoadPlugin` ハンドラに role 検証つき OOP 実行時受け口を追加。初回 spawn・
+  同一 path 冪等 Ok・異なる path は reject
+- ready-ack: `child_status` を Acquire poll → READY 確認 → `child_flags` で role 一致検証
+  （10秒 timeout）してから応答。spawn 直前に `reset_child_starting` で前 incarnation の
+  READY 残留を除去（PR-1a doc コメントの申し送り事項に対応）
+- `engaged` を `false` 構築 → ready-ack 完了後に Release store で `true` へ遷移
+- Codex 自己修正: `StreamGuard` 先行 drop でも `EngineWrap` 側の strong `Arc` が
+  supervisor を延命しうる点を発見し teardown 順序を厳密化
+
+**検証**: Codex 実行環境（loopback bind 禁止のサンドボックス）では `tests/protocol.rs`
+28件が環境制約で FAIL したが、build/fmt/clippy は green・daemon unit 36件は green。
+main が非サンドボックスで独立再検証: `cargo test --workspace --features
+outproc-effect`/`outproc-instrument` 両方 **0 failed**（protocol 含む全 green）・
+fmt --check・clippy -D warnings 両 feature green。Codex 環境固有の loopback 制約が
+原因であり実装バグではないことを確認。
+
+**/simplify（4観点並行レビュー・3件完了→1件（altitude）は advisor 呼び出しで45分超
+応答なしのため main が SendMessage で生存確認 → 応答なし → TaskStop）**:
+- simplification と efficiency が**独立に同一の設計不整合**へ収束（Important 相当）:
+  `load_outproc_plugin`（`engine_wrap.rs`）が `child_slot.lock()` の `MutexGuard` を
+  shm open・child spawn・supervisor spawn・**ready-ack poll ループ（最大10秒）**・
+  最終状態遷移まで関数末尾まで一度も drop せず保持していた。これにより2件目以降の
+  `LoadPlugin` 呼び出し（`Arc<EngineWrap>` は複数クライアント接続間で共有）は、
+  意図された `ChildSlot::Loading`（「in progress」で即座に reject する設計・D4 要件）
+  に到達する前に `.lock()` 自体で最大10秒ブロックされ、`Loading` 分岐が実質到達不能な
+  dead code になっていた（`let _ = engaged.load(...)` という無意味な読み捨てもその症状）
+- main が直接修正（fixer 委譲が同様に応答不能になったため self-fix）: `Loading` 書き込み
+  直後に `drop(slot)` してロックを解放し、shm open・spawn・ready-ack poll ループは
+  ロック外で実行。各エラーパス・成功パスで `child_slot.lock()` を再取得してから終端状態
+  （`Empty`/`Closed`/`Active`）を書き込む形に変更。`ChildSlot::Loading` から未使用になった
+  `engaged` フィールドを削除（dead_code 警告解消）。teardown は `child_slot` の `Arc` を
+  保持するだけで `.lock()` しないため、ロック解放中に他の書き込み主体は存在せず、
+  再取得後も `Loading` のままであることが構造的に保証される
+- reuse: 修正要求なし（poll-until-deadline パターンの重複は test-only スコープの既存
+  helper と production コードの型不一致により置き換え不可・将来的な技術的負債として
+  記録のみ）
+- 検証: `cargo build`/`test`（両 feature・0 failed）・`fmt --check`・`clippy -D warnings`
+  （両 feature）全 green を main が非サンドボックスで確認
+- **テスト方針の訂正（2026-07-14・PR-1b レビュー Q3 / Fable 裁定 確信度90%）**: 当初ここに
+  「2件目の `LoadPlugin` が Loading 中に即座に reject されることを検証する統合テストは、実 child
+  プロセス spawn を要する gated テストとしてしか書けない」と記したが**不正確だった**。(1)
+  `ChildSlot::Loading` を直接注入すれば「in progress」reject の D4 意味論は実プロセスゼロで
+  unit test できる（後述の (c) で追加）。(2) `f36e99c` の lock-scope 修正が対象とした「2件目が
+  `.lock()` で最大10秒ブロックせず即座に Loading を観測する」並行タイミング性質の検証は直接注入では
+  fail-before/pass-after を満たさない（実プロセス spawn が要る）が、それも READY を書かず sleep する
+  ダミー実行ファイルで**非 gated・CI 実行可能**に書ける（＝gated 必須ではない・「実プロセス spawn が
+  要る」と「gated（要 CLAP dylib/audio device）」の混同だった）。この並行タイミングテストは flaky
+  リスクを踏まえ PR-1c（#441）で検討する。
+
+---
+
+**PR-1b レビュー結果と追加対応（2026-07-14・PR #440）**:
+
+`/code:pr-review-team` 相当の4体（code-reviewer / silent-failure-hunter / pr-test-analyzer /
+comment-analyzer）を PR #440 に対して実行。深刻度評価が割れたため **Fable 裁定**（難所の一発判断・
+確信度85%）を仰いだ。要点:
+
+- **裁定 Q1**: 「plugin path の typo → 10秒待ち → `ChildSlot::Closed`（daemon 再起動必須）」は
+  Epic #424 DoD「完全に動く」の運用面を塞ぐ**真の欠陥**（Epic 内で必ず直す）。ただし PR-1b 単独を
+  ブロックする Critical ではなく **packaging の問題**。silent-failure-hunter の「非対称に根拠なし」
+  という論拠は誤り（`Closed` は shm unlink 所有権設計の帰結）だが、深刻度評価は正しい。
+  code-reviewer の「確信度45・Minor未満」は較正ミス。
+- **裁定 Q2 + owner 追認**: (c) エラーパステスト + (d) doc/decision record は **PR-1b（本 PR）に積む**。
+  (a) 失敗 slot の retry 可能化 + (b) child 早期 crash の fast-fail + (e) エラーコード細分化は
+  **PR-1c（#441・Epic #424 DoD ゲート項目）** へ。「Epic 内 PR への移動は DoD ゲート内側であり
+  ゴールポスト下方修正ではない／Epic 外 follow-up へ送って DoD 宣言するのが下方修正」という線引き。
+  #441 は #431/#424 にコメントで DoD ゲート項目として明記（マージより先に可視化）。
+
+**(c) エラーパス unit test（実プロセス不要・Codex 委譲）**: `engine_wrap.rs` の
+`outproc_health_tests`/`outproc_instrument_health_tests` に共有ヘルパー
+`outproc_load_error_test_support` 経由で各 feature 4テスト（計8）を追加:
+① open_shared 失敗 → `Closed` 遷移 ② spawn 失敗 → `Empty` 復帰（2回試行で retry 可能を実証）
+③ `Closed` 拒否 ④ `Loading` 拒否（同一 path 保持を確認）。いずれも終端 variant を `matches!` で
+検査し fail-before/pass-after を満たす（main が open_shared パスの `Closed` 書き込みを一時変異させ、
+対応テストが「Closed 期待」で落ちることを実証・revert 済み）。
+
+**(d) doc 訂正**: `transport.rs` の module doc「host 側 poll は未実装・PR-1b で追加」を「実装済み」に
+更新。`CHILD_STATUS_LOAD_FAILED` doc に decision record を追記（PR-1b は reset-only 実装・try_wait
+生死判定と fast-fail/retry 可能化は PR-1c(#441) 移管）。
+
+**検証（main が非サンドボックスで再実行）**: `cargo test -p orbit-audio-daemon --lib` 両 feature
+各 **40 passed**（従来36 + 新規4）・fmt --check・clippy -D warnings 両 feature green。委譲時の
+教訓: 初回 background 委譲は成果物が作業ツリーに landing せず、codex-companion のタスク追跡が
+shared session の古いスレッド結果を返した。foreground（`--wait`）で再委譲し、**`git status`/
+`git diff` で作業ツリーの実変更を一次情報として確認**してから受け入れた。
+
+---
+
+**`/code:pr-review-team 440` 収束（2026-07-14・Skill 経由・state file 監査証跡あり）**:
+
+Round 1（4体並行 + CI PASS）で新規 finding 3件 → fixer（Agent tool・sonnet）委譲 →
+Round 2（selector 再実行 → fresh 4体で再レビュー）で **Critical=0 / Important=0 /
+security checklist ALL PASS に収束**（iteration 1回）。
+
+- **Critical（修正済み）**: `load_outproc_plugin` の `ChildSlot::Active` 冪等ガードが
+  `path` のみ比較で `plugin_id` を無視。同一 path・別 plugin_id（bundle 内の別サブプラグイン）
+  の `LoadPlugin` が**古い plugin_id のまま黙って `Ok`** を返していた（silent-failure-hunter
+  検出・code-reviewer も sub-80% で同箇所を指摘・main が `session.rs` の `params.get("plugin_id")`
+  から呼び出し側可変であることを裏取りして Critical 確定）。修正: match arm を3本に分割
+  （同 path+同 plugin_id=冪等 Ok / 同 path+別 plugin_id=replacement 拒否 / 別 path=既存拒否）。
+- **Important（修正済み・2件)**: ① `f36e99c` lock-scope 修正の regression test 不在 →
+  READY を publish しない slow-child shell script fixture で「1本目が ready-ack poll 中に
+  2本目が `Loading` を即観測して <1s で fail-fast する」ことを検証する並行テストを追加
+  （6.254 前段で「PR-1c で検討」とした件を本 PR で前倒し実装）。② `Active` arm 3種
+  （冪等再送 Ok / plugin_id 差し替え拒否 / path 差し替え拒否）の直接テスト不在 →
+  `spawn_outproc_supervisor` + sleep スタブ fixture で追加。計8テスト（4種 × 両 feature）。
+- **Minor（修正済み）**: `Drop for ChildLaunch` の shm `remove_file` 失敗を `let _ =` で
+  握り潰し → `tracing::warn!` でログ。
+- **スコープ規律**: `Closed` 遷移の retry 可能化・fast-fail・エラーコード細分化は
+  **#441（PR-1c）へ移管済みのため fixer プロンプトで明示的に out-of-scope 指定**し、
+  再レビュー時も再報告を抑止（churn 防止）。
+- **受け入れ検証（main）**: fixer の green 報告を鵜呑みにせず差分精読 + 非サンドボックスで
+  `cargo test --lib` 両 feature 各 **44 passed**・fmt --check・clippy -D warnings 両 feature
+  green を再実行。Critical 修正は **fail-before/pass-after を変異で実証**（ガードを
+  `path` のみ比較に一時変異 → `active_rejects_plugin_id_change` が失敗 → revert で pass）。
+- **Round 2 特記**: code-reviewer は新規並行テストを単独15回再実行して flake なしを確認。
+  pr-test-analyzer の残 Minor 1件（sleep 30 スタブが `CONTROL_QUIT` 非応答のため supervisor
+  Drop の `REAP_TIMEOUT` 2s × 6テストの CI 時間増・決定論的でリーク無し）と
+  silent-failure-hunter の sub-80% 提案（script を `exec sleep 20` にして PID 曖昧性除去）は
+  非ゲート項目として記録のみ（必要なら #441 で同梱検討）。
+- **bot feedback**: reviews/comments とも空・check-run 全 success（`bot_feedback_read` 記録済み）。
+
+---
+
+**@claude bot review（scoped）+ 対応（2026-07-14・コミット `53db770` 後）**:
+
+advisor 相談（opus フォールバック・確信度80%）の推奨に従い、bot review を**並行性シーム3点に
+スコープ限定**して起動（(a) lock-release-during-poll の不変条件 / (b) ready-ack と
+`reset_child_starting` の Acquire/Release 順序 / (c) in-flight load と teardown の競合。
+テスト群と WORK_LOG は内部レビュー済みとして対象外を明示）。bot は 7分27秒で完了し
+**(a)(b) は airtight と判定**。指摘3点（いずれも non-blocking）:
+
+1. 終端 blind write に `debug_assert!` の防波堤を推奨（defense-in-depth）
+2. **(c) で理論上の競合を発見**: StreamGuard が in-flight load 中に drop されると、成功パスの
+   `Ok` 返却直後に関数ローカル `Arc` drop が最後の強参照となり attach 直後の child が同期
+   teardown される（「成功応答=生きた plugin」が崩れる）。現行配線（main.rs のプロセス寿命
+   `_stream_guard`・gated テストの関数スコープ `_guard`、main が grep で全数確認）では到達不能
+3. round-1 fix が導入した `tracing::warn!` が、失敗パスの二重 unlink（supervisor が先に unlink →
+   `ChildLaunch::drop` が NotFound）で毎回偽 WARN を出す observability regression
+
+**advisor 確認（opus・2回目）**: 指摘3=修正（90%）・指摘1=同梱修正（88%）・指摘2=契約として
+doc 化+tracking 記録のみ（85%）。再レビューは「軽量検証で代替せず /simplify + pr-review-team を
+回す（小差分なら速く収束することで規模適合を満たす）・2周目 bot は不要（3変更はすべて bot 自身の
+指摘の実装）」との裁定。
+
+**修正（fixer 委譲 → main 受け入れ検証）**: ① 終端 write 6箇所に debug_assert ② StreamGuard
+契約を doc comment 化 ③ Drop の NotFound フィルタ。main が差分精読 + 両 feature 各44 passed +
+fmt + clippy green を再実行して受け入れ。
+
+**/simplify（4観点並行・2件適用）**:
+- simplification/reuse/altitude が独立に同一指摘: 6箇所の逐語同一 debug_assert ブロック →
+  `debug_assert_slot_loading(&ChildSlot)` ヘルパーに抽出（約30行→7行）
+- **altitude が bot 指摘3の修正をさらに深化**: NotFound の error-kind フィルタは症状への
+  パッチであり、既存イディオム（成功パスの `cleanup_shm_on_drop = false`）を所有権移転済みの
+  3分岐（supervisor spawn 失敗・role mismatch・timeout）にも適用するのが正: `drop(supervisor)`
+  直後に flag を false へ倒し、`ChildLaunch::drop` は無条件 warn に復帰（NotFound が本来の
+  異常シグナルとして回復。open_shared/spawn 失敗の sole-unlinker パスは true のまま）。
+  reuse の副次観察（フィルタ版は他3箇所の同型 Drop と発散する）とも整合
+- efficiency / doc comment: clean
+- 検証: 両 feature 各 44 passed・fmt・clippy -D warnings green（main 再実行）
+
+**`/code:pr-review-team 440` 2周目（`c436a22` 後・収束確認）**: 4体レビューで
+comment-analyzer の medium 1件のみ（supervisor spawn 失敗分岐のコメントが unlink 実施者を
+「supervisor の startup cleanup」と誤帰属 — 実際は `spawn_outproc_supervisor` 自身の
+エラーパス cleanup が unlink する。main が outproc_effect.rs の3エラーパスで裏取り）。
+fixer がコメント2行を修正 → 再レビュー4体全て No findings で **Critical=0/Important=0/
+security ALL PASS に収束**（bot への対応返信・#441 への StreamGuard 契約 tracking 記録済み）。
+
 ### 6.253 feat(daemon): SharedRegion 拡張 + engaged ゲート導入 #431 PR-1a (Jul 14, 2026)
 
 **Date**: 2026-07-14

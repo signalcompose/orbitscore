@@ -15,6 +15,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use orbit_audio_native::PostProcessor;
+use orbit_audio_sandbox::transport::reset_child_starting;
 use orbit_audio_sandbox::{
     open_shared, region_ptr, NeutralEvent, PipelinedInstrumentHost, TransportContext, VoiceKey,
     BUF_LEN, CONTROL_QUIT,
@@ -415,6 +416,9 @@ impl InstrumentChildSupervisor {
                             tracing::warn!(
                                 "orbit-clap-instrument-child exited ({status}); respawning"
                             );
+                            // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
+                            // 前 incarnation の READY を消してから replacement を spawn する。
+                            unsafe { reset_child_starting(region) };
                             match spawn_instrument_child(
                                 &child_exe,
                                 &watchdog_shm_path,
