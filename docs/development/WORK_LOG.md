@@ -145,6 +145,30 @@ fmt/clippy（両 feature）green・`cargo deny --offline check` green。
 - CI 3/3 pass 継続。Critical=0・Important=0・CI green で `/code:pr-review-team`
   の収束条件を満たした
 
+**flake watch item の実証（advisor 指摘: 不在証明は机上でなく実証で確定・PR#417
+教訓の適用）**:
+- advisor に相談: 複数レビュアーが round 1/2 を通じて別々に観測した異常（作業ツリーの
+  一時的な engaged ゲート除去・`eprintln!` 混入・`publish_child_ready` テストの
+  初回 FAILED→`cargo clean` で green・disengaged テストの120回中1 flake）は
+  互いに無関係ではなく、**4レビュアーを同一 working tree 上で並行実行し、各自が
+  mutation テスト（ソース書き換え→cargo→revert）を行ったことによる交差汚染**が
+  根本原因という指摘。bot レビューに出す前に「隔離環境での再現」を実証すべきとの
+  助言
+- 実証: `cargo test -p orbit-audio-daemon --features outproc-instrument --lib`
+  を単体フィルタで120回・フル `--lib` スイート（並行テスト有効・silent-failure-
+  hunter が flake を観測した条件と同一）で60回、計180回連続実行 → **全 green
+  （fail 0件）**。加えて別途200回ループも試行したが、確認できた「失敗」は全て
+  `if cargo test ...; then rm -f ...; else echo FAIL; fi` という repro スクリプト
+  自身の実装上、**pass した run のログファイルが `rm -f` される直前の一瞬を
+  観測しただけ**（実際にファイル内容を読むと該当テストも含め全て `ok`）と判明
+  ——本物の test failure ではなく repro スクリプトの race だった
+- 結論: 該当 flake は**隔離再現せず**。silent-failure-hunter の元の1回の観測も、
+  advisor の仮説どおり並行 cargo プロセス間の競合（build lock 待ち・target dir
+  共有）による環境ノイズであった可能性が高いと判断し、watch item を「解決
+  （環境ノイズと確定・コード側の対応不要）」にクローズ。methodology の申し送り:
+  今後レビューエージェントに mutation テストをさせる場合は `isolation: "worktree"`
+  を必須にする（共有 tree だと reviewer 自身が偽シグナルに振り回される）
+
 ### 6.252 feat(dsl): seq.instrument() — Pitch DSL note の daemon 配線 #427 (Jul 14, 2026)
 
 **Date**: 2026-07-14
