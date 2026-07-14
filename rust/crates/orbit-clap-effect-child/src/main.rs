@@ -80,6 +80,11 @@ fn main() -> Result<()> {
     )
     .with_context(|| format!("load CLAP effect {:?}", args.plugin))?;
 
+    // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。
+    unsafe {
+        orbit_audio_sandbox::transport::publish_child_ready(region, effect.has_audio_input());
+    }
+
     // in-place process_block 用の作業バッファ（ループ前に確保 = RT 安全）。
     let mut scratch = vec![0.0f32; BUF_LEN];
 

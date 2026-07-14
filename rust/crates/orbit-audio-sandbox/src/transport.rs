@@ -8,6 +8,9 @@
 //! - **child**: `seq_request` を Acquire で読む(前回より進んだら)→ n_frames/input が可視 → `output[slot]` を書く → `seq_tag[slot] = seq` を Release(その slot の出力 publish)→ `seq_done = seq` を Release(submit guard 用の最新処理 seq)で store。
 //! - **host READ**: `seq_tag[slot(target)]` を Acquire で読み `== target` なら output が可視 → 出力にコピー。global monotone な `seq_done` でなく per-slot `seq_tag` で判定するのは、child が「latest 処理」で中間 seq を skip しても、その slot の tag が target に一致せず false-fresh を防げるから(seq_done では skip を検知できない)。
 //! - **host SUBMIT guard**: `seq_done` を Acquire で読み slot 再利用可否(下記不変条件)を判定する。
+//! - **child readiness**: child は `ClapEffectProcessor::load` / `ClapInstrumentProcessor::load`
+//!   成功直後に `child_flags` → `child_status` の順で Release store する。host は起動時にこれを poll
+//!   する（本 PR では poll する呼び出し元は未実装・PR-1b で追加）。
 //!
 //! **ping-pong バッファ**: `input` / `output` は各 [`SLOTS`] 個の slot を持ち、seq を [`slot_offset`]
 //! で割り当てて交替する。slot を分けることで「host が seq s の slot を書く」のと「child が seq s-k の
@@ -30,7 +33,7 @@
 use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, AtomicU64};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use memmap2::MmapMut;
 
@@ -78,6 +81,29 @@ pub fn slot_offset(seq: u64) -> usize {
 pub const CONTROL_RUN: u32 = 0;
 /// `control` の値: host が child に spin loop を抜けて正常終了するよう要求する。
 pub const CONTROL_QUIT: u32 = 1;
+
+/// child が実際にロードした CLAP plugin の readiness（PR-431・child→host handshake）。
+/// 0 = starting（child がまだ load 中）。
+pub const CHILD_STATUS_STARTING: u32 = 0;
+/// child が load に成功し、以降 process loop に入る状態。
+pub const CHILD_STATUS_READY: u32 = 1;
+/// **PR-1a 時点では未使用の予約値**（child が load に失敗して終了する直前の状態を表す想定）。
+/// child は load 失敗時 `?` の早期 return でこの値を書かずにそのままプロセス終了する。host は
+/// （初回起動時に限り）`child_status == STARTING` のまま child が消えたことを `try_wait` で
+/// 判別する前提（PR-1b でこの値を実際に書く経路を追加する場合、host 側の判定ロジックとセットで
+/// 設計すること）。
+///
+/// **respawn 注意**: shm は daemon 起動時に一度だけ truncate され、respawn（`EffectChildSupervisor`/
+/// `InstrumentChildSupervisor` の watchdog による再起動）は同一 shm を再利用する（再 truncate しない）
+/// ため、一度 READY に達した後の respawn 失敗では `child_status` は STARTING でなく前 incarnation の
+/// READY が残留する。PR-1b のポーラーは spawn 直前に host が STARTING へ明示リセットする、または
+/// try_wait の生死判定と併用する必要がある。
+pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
+
+/// child のロード結果を表す bit flags（PR-431）。bit0 = has_audio_input
+/// （`orbit_clap_host::buffers::HostAudioBuffers::has_audio_input()` 相当）。effect/instrument の
+/// 実体判定に使い、PR-1b で role 不一致検証に使う予定（本 PR では書き込みのみ）。
+pub const CHILD_FLAG_HAS_AUDIO_INPUT: u32 = 1 << 0;
 
 /// per-block の演奏文脈(event ではなく block header・設計 doc §4.5)。CLAP/VST3/AU が process
 /// 呼び出しのたびに共通して消費する transport metadata の superset。host -> child のみ(child から
@@ -173,6 +199,11 @@ pub struct SharedRegion {
     pub event_decode_error_count: AtomicU64,
     /// **per-slot**: host -> child の per-block 演奏文脈(§4.5)。child からの逆方向は無い。
     pub transport_context: [TransportContext; SLOTS],
+    /// **child -> host readiness signal**（PR-431）。child は load 成功後、[`SharedRegion::child_flags`]
+    /// を先に Release store してから本 field を [`CHILD_STATUS_READY`] に Release store する。
+    pub child_status: AtomicU32,
+    /// child が実際にロードした plugin の role 判定用 bit flags（[`CHILD_FLAG_HAS_AUDIO_INPUT`]）。
+    pub child_flags: AtomicU32,
 }
 
 /// 共有領域のバイトサイズ(mmap ファイルサイズ)。
@@ -221,6 +252,27 @@ pub fn open_shared(path: &Path) -> io::Result<MmapMut> {
 /// ページ境界整列)でなければならない。返したポインタは `mmap` の生存期間を超えて使ってはならない。
 pub fn region_ptr(mmap: &MmapMut) -> *mut SharedRegion {
     mmap.as_ptr() as *mut SharedRegion
+}
+
+/// child が plugin load 成功後に呼ぶ readiness 公開ヘルパ（PR-431）。`child_flags` を先に
+/// Release store してから `child_status = CHILD_STATUS_READY` を Release store する
+/// （host が status を Acquire で観測すれば flags も必ず可視という happens-before を
+/// この1箇所に集約する）。
+///
+/// # Safety
+/// `region` は呼び出し元が map 済みの生存 SharedRegion を指していること。
+pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bool) {
+    let flags = if has_audio_input {
+        CHILD_FLAG_HAS_AUDIO_INPUT
+    } else {
+        0
+    };
+    unsafe {
+        (*region).child_flags.store(flags, Ordering::Release);
+        (*region)
+            .child_status
+            .store(CHILD_STATUS_READY, Ordering::Release);
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +327,77 @@ mod tests {
         }
         drop(mmap);
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn child_readiness_defaults_to_starting_with_no_flags() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let p = std::env::temp_dir().join(format!(
+            "orbit-sbx-child-readiness-{}.shm",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&p);
+        let mmap = create_shared(&p).expect("create");
+        let region = region_ptr(&mmap);
+        // SAFETY: create_shared が返した生存 mapping を指す。truncate 直後で 0 初期化。
+        unsafe {
+            assert_eq!((*region).child_status.load(Relaxed), CHILD_STATUS_STARTING);
+            assert_eq!((*region).child_flags.load(Relaxed), 0);
+        }
+        drop(mmap);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    // publish_child_ready の直接検証（PR #439 review・pr-test-analyzer）: has_audio_input の
+    // true/false 分岐で child_flags/child_status が期待どおり Release store されることを、
+    // ヘルパを介さず本関数呼び出し1回ずつで確認する（既存テストは child_status/child_flags の
+    // 初期値のみを検証しており、この関数自体を直接呼ぶテストが無かった）。
+    #[test]
+    fn publish_child_ready_stores_flags_and_status_for_both_branches() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        // has_audio_input = true: CHILD_FLAG_HAS_AUDIO_INPUT が立ち、status は READY。
+        let p_true = std::env::temp_dir().join(format!(
+            "orbit-sbx-publish-ready-true-{}.shm",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&p_true);
+        let mmap_true = create_shared(&p_true).expect("create");
+        let region_true = region_ptr(&mmap_true);
+        // SAFETY: create_shared が返した生存 mapping を指す。
+        unsafe {
+            publish_child_ready(region_true, true);
+            assert_eq!(
+                (*region_true).child_flags.load(Relaxed),
+                CHILD_FLAG_HAS_AUDIO_INPUT
+            );
+            assert_eq!(
+                (*region_true).child_status.load(Relaxed),
+                CHILD_STATUS_READY
+            );
+        }
+        drop(mmap_true);
+        let _ = std::fs::remove_file(&p_true);
+
+        // has_audio_input = false: flags は 0 のまま、status は READY。
+        let p_false = std::env::temp_dir().join(format!(
+            "orbit-sbx-publish-ready-false-{}.shm",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&p_false);
+        let mmap_false = create_shared(&p_false).expect("create");
+        let region_false = region_ptr(&mmap_false);
+        // SAFETY: create_shared が返した生存 mapping を指す。
+        unsafe {
+            publish_child_ready(region_false, false);
+            assert_eq!((*region_false).child_flags.load(Relaxed), 0);
+            assert_eq!(
+                (*region_false).child_status.load(Relaxed),
+                CHILD_STATUS_READY
+            );
+        }
+        drop(mmap_false);
+        let _ = std::fs::remove_file(&p_false);
     }
 
     // 存在しないファイルは map せず Err(open は read-only open なので作成しない)。

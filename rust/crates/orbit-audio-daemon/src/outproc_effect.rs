@@ -263,6 +263,10 @@ pub struct OutProcEffectSnapshot {
 /// （atomic store のみ・RT 安全）。
 pub struct OutProcEffectPostProcessor {
     host: PipelinedEffectHost,
+    /// PR-431: child が未 attach（post-boot attach 待ち）の間は音を素通しする安全弁。
+    /// **本 PR では常に true で構築される**（既存起動経路は eager attach のまま無変更）。
+    /// PR-1b で post-boot attach 実装時に false スタートさせる想定（詳細は Issue #431 参照）。
+    engaged: Arc<AtomicBool>,
     /// teardown 要求（daemon supervisor → audio thread）。立つと transport への submit を止め、`data` を
     /// dry のまま素通しする。control 側が child へ QUIT を送って reap・shm unlink する前に audio thread が
     /// transport を触らなくなる（in-process clap の handshake を踏襲・設計 §4.5）。
@@ -275,15 +279,18 @@ pub struct OutProcEffectPostProcessor {
 
 impl OutProcEffectPostProcessor {
     /// `host` = mmap を所有する production 構築子（`PipelinedEffectHost::from_mmap`）で作った host、
+    /// `engaged` = child の post-boot attach 完了までの安全弁（本 PR では常に `true` で渡される）、
     /// `teardown_requested` / `teardown_done` = supervisor と共有する協調フラグ、`stats` = 観測ミラー。
     pub fn new(
         host: PipelinedEffectHost,
+        engaged: Arc<AtomicBool>,
         teardown_requested: Arc<AtomicBool>,
         teardown_done: Arc<AtomicBool>,
         stats: Arc<OutProcEffectStats>,
     ) -> Self {
         Self {
             host,
+            engaged,
             teardown_requested,
             teardown_done,
             stats,
@@ -301,6 +308,9 @@ impl PostProcessor for OutProcEffectPostProcessor {
         if self.teardown_requested.load(Ordering::Acquire) {
             // quiesce: 以降 transport（shm）を触らない。data は engine の dry 出力のまま流れる。
             self.teardown_done.store(true, Ordering::Release);
+            return;
+        }
+        if !self.engaged.load(Ordering::Acquire) {
             return;
         }
         // dry（effect 適用前）の abs ピークを記録（gated parity の baseline）。
@@ -634,13 +644,23 @@ mod tests {
         )
     }
 
+    fn engaged(value: bool) -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(value))
+    }
+
     // 通常経路: adapter は host.process_block に委譲し counter を stats へミラーする。child が未処理
     // （mmap zero-init）なので初回は prime silence（host が data を無音化）= 委譲が起きた証拠。
     #[test]
     fn delegates_to_host_first_block_primes_silence_and_mirrors_stats() {
         let (tr, td) = flags();
         let stats = OutProcEffectStats::new();
-        let mut pp = OutProcEffectPostProcessor::new(temp_host(), tr, td.clone(), stats.clone());
+        let mut pp = OutProcEffectPostProcessor::new(
+            temp_host(),
+            engaged(true),
+            tr,
+            td.clone(),
+            stats.clone(),
+        );
         let mut data = vec![0.7f32; 64 * 2];
         pp.process(&mut data);
         assert!(
@@ -662,8 +682,13 @@ mod tests {
     fn teardown_passes_dry_and_acks() {
         let (tr, td) = flags();
         let stats = OutProcEffectStats::new();
-        let mut pp =
-            OutProcEffectPostProcessor::new(temp_host(), tr.clone(), td.clone(), stats.clone());
+        let mut pp = OutProcEffectPostProcessor::new(
+            temp_host(),
+            engaged(true),
+            tr.clone(),
+            td.clone(),
+            stats.clone(),
+        );
         tr.store(true, Ordering::Release);
 
         let mut data = vec![0.7f32; 64 * 2];
@@ -690,6 +715,20 @@ mod tests {
             "冪等に dry 素通し"
         );
         assert!(td.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn disengaged_passes_dry_without_updating_stats() {
+        let (tr, td) = flags();
+        let stats = OutProcEffectStats::new();
+        let mut pp =
+            OutProcEffectPostProcessor::new(temp_host(), engaged(false), tr, td, stats.clone());
+
+        let mut data = vec![0.7f32; 64 * 2];
+        pp.process(&mut data);
+
+        assert!(data.iter().all(|&sample| sample == 0.7));
+        assert_eq!(stats.snapshot().callback_count, 0);
     }
 
     // OutProcEffectStats のスナップショットは全フィールドを反映する（observability の回帰ガード）。
@@ -888,7 +927,13 @@ mod tests {
     fn teardown_handshake_acked_under_concurrent_process() {
         let (tr, td) = flags();
         let stats = OutProcEffectStats::new();
-        let mut pp = OutProcEffectPostProcessor::new(temp_host(), tr.clone(), td.clone(), stats);
+        let mut pp = OutProcEffectPostProcessor::new(
+            temp_host(),
+            engaged(true),
+            tr.clone(),
+            td.clone(),
+            stats,
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
         let handle = std::thread::spawn(move || {

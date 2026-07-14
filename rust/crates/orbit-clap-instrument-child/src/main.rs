@@ -179,6 +179,10 @@ fn main() -> Result<()> {
         MAX_FRAMES as u32,
     )
     .with_context(|| format!("load CLAP instrument {:?}", args.plugin))?;
+    // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。
+    unsafe {
+        orbit_audio_sandbox::transport::publish_child_ready(region, instrument.has_audio_input());
+    }
     let mut scratch = vec![0.0f32; BUF_LEN];
     // Event window 分を事前確保し、hot loop での buffer 再確保を避ける。
     let mut event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);

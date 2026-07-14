@@ -17,6 +17,158 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.253 feat(daemon): SharedRegion 拡張 + engaged ゲート導入 #431 PR-1a (Jul 14, 2026)
+
+**Date**: 2026-07-14
+**Status**: ✅ 実装・受け入れ監査 GO（PR 作成・レビューフローへ）
+**Branch**: `431-oop-plugin-coexistence`
+**Commit**: `e68e746`
+
+Epic #424 の DoD「1 effect + 1 instrument を DSL から同時にロードして演奏」を達成する
+最後のピース #431（OOP post-boot attach + effect/instrument 同時使用）の第一段。
+実装規模が大きいため 3 PR に段階分割（PR-1: substrate → PR-2: 共存 → PR-3: DoD 配線）し、
+PR-1 をさらに 2 段階（1a: 非侵襲的準備・1b: 実際の post-boot attach）に分割した前半。
+
+**グラウンディングの核心発見（Sonnet subagent・path:line 裏取り済み）**:
+- transport 層（`SharedRegion`）は各 child が専用 shm ファイルを持つため既に N-child 対応
+  （構造変更不要）
+- 真のギャップ = `PostProcessor` に engaged ゲートが無いこと。child 不在時
+  `PipelinedEffectHost::process_block` の READ 分岐は `seq_tag` 一致が一度も無いため
+  `primed` が永久 false のまま `0.0` で埋める（**恒久的無音**。単なる起動時の一時的事象ではない）
+- 合成順序は構造的に確定: instrument = add-mix・effect = overwrite。
+  `instrument → effect` の順で 1 つの `CompositePostProcessor` に包めば
+  `output.rs` は変更不要（単一 `Box<dyn PostProcessor>` スロットのまま）
+- `role` は Rust 側に概念ごと存在しない（greenfield）。`LoadPlugin` の OOP 実行時受け口も
+  存在しない（起動時 env のみ）
+
+**Fable 実装前相談（GO・D1-D7 一発判断・全判断根拠は path:line で裏取り済み）**:
+- engaged ゲートは processor 側（`teardown_requested` と同じ既存イディオム。host は
+  cross-thread atomic を持ち込まず純状態機械のまま）
+- 遅延 supervisor は `Arc<Mutex<ChildSlot>>` 共有 + StreamGuard 側 takeover guard
+  （PR-1b で実装）
+- ready ack は「child ready + role 検証通過」を control thread が確認してから Ok
+  （note ring drain を engaged 内に置くことで #410 型の data-loss race を構造的に排除）
+- 冪等性: 同一 path+role の再送は冪等 Ok・異なる path のみ reject
+- **見落とし発見**: TS ガード撤去だけでは不十分——in-process daemon にも cross-role reject が
+  必要（撤去のみだと silent plugin 置換が起きる）。PR-3 に反映
+
+**PR-1a 実装（Codex 委譲・8ファイル・+167/-4・非侵襲的）**:
+- `SharedRegion`（`transport.rs`）に `child_status`/`child_flags`（`AtomicU32`）を
+  **既存フィールド末尾に追記**（ABI 互換保持）。child readiness handshake の定義のみ
+- effect/instrument 両 child binary: load 成功直後に `child_flags`（has_audio_input 判定）→
+  `child_status = READY` の順で Release store
+- `ClapEffectProcessor`/`ClapInstrumentProcessor` に `has_audio_input()` accessor 追加
+  （in-process 経路の既存判定関数 `HostAudioBuffers::has_audio_input()` への単純委譲）
+- `OutProcEffectPostProcessor`/`OutProcInstrumentPostProcessor` に `engaged: Arc<AtomicBool>`
+  ゲート追加（`teardown_requested` チェックの後・処理委譲の前）。
+  **本 PR では全既存起動経路が `engaged=true` で構築するため挙動は1bitも変わらない**
+
+**受け入れ監査（Fable・GO・Minor 1件）**:
+- ABI 互換性・Release/Acquire 順序・engaged ゲート配置・`has_audio_input` 委譲を全て
+  一次コード精読で確認
+- **mutation による fail-before/pass-after 実証**: engaged ゲートを一時除去して実行 →
+  新規 disengaged テスト 2 件が red（effect: data 不変アサート失敗・instrument:
+  callback_count アサート失敗）→ 復元（shasum で byte-identical 確認）で green
+- Minor 1件（`CHILD_STATUS_LOAD_FAILED` が未使用の予約値であることの doc 追記）を適用
+- **PR-1b への申し送り2点**: ①respawn は同一 shm 再利用のため前 incarnation の READY が
+  残留する（poll ロジックは spawn 前 STARTING リセット or try_wait 併用が必須）
+  ②`engine_wrap.rs` は engaged の Arc を保持しておらず、LoadPlugin から flip するには
+  `ChildSlot` 構造に clone を持たせる変更が必要
+
+**検証**: `cargo test --workspace --features outproc-effect`（protocol 28件含む）・
+`--features outproc-instrument` 全 green・`cargo build --features clap-host` green・
+fmt/clippy（両 feature）green・`cargo deny --offline check` green。
+
+**/simplify（4観点並行レビュー→dedup→3件適用・スキップなし）**:
+- `engine_wrap.rs`: `start_outproc_effect`/`start_outproc_instrument` の3連続
+  `Arc<AtomicBool>` 引数のうち `engaged` をインライン `Arc::new(...)` から named local
+  （`let engaged = ...`）化。3引数が同型のため取り違えリスクを軽減
+- `outproc_instrument.rs` の `mod tests`: `outproc_effect.rs` に既にある
+  `engaged(value: bool) -> Arc<AtomicBool>` helper と対称の関数を追加し、4箇所の
+  `Arc::new(AtomicBool::new(...))` 直書きを置換（reuse・両ファイルのテスト記法を統一）
+- `transport.rs`: effect/instrument 両 child binary で重複していた
+  「flags 判定 → `child_flags` store → `child_status` store」の unsafe ブロックを
+  `pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bool)`
+  に抽出し、child 側は1行呼び出しに簡素化（重複2箇所→共通関数）
+- 挙動変更なし（named local 化・helper 抽出・関数抽出のみ）。再検証（cargo build/test
+  両 feature・fmt --check・clippy -D warnings 両 feature・cargo deny check）全 green
+
+**/code:pr-review-team round 1（4レビュアー + CI・Critical 1件/Important 4件→全適用）**:
+- CI 3/3 pass（code-review・fmt/clippy/test・license/dependency gate）
+- **Critical**（comment-analyzer）: WORK_LOG の `**Commit**: \`5eebf16\`` が
+  到達不能な孤立コミット（自己参照ハッシュ埋め込みの手順ミスの残骸）を指していた。
+  実際の初回実装コミット `e68e746` に修正
+- **Important**（code-reviewer・pr-test-analyzer・silent-failure-hunter が独立に
+  同一の核心へ収束）: 新規関数 `publish_child_ready`（transport.rs）に直接のユニット
+  テストが無く、`has_audio_input` の true/false 分岐が未検証だった → 両分岐を
+  直接検証するテストを追加
+- **Important**（pr-test-analyzer）: instrument 版 `disengaged_passes_dry_without_
+  updating_stats` テストが event ring を空のまま検証しており、この PR の設計動機
+  そのもの（engaged=false 中は note event を drain せず data-loss race を防ぐ）を
+  一度も踏んでいなかった → note を1件 push し、process() 後も未消費のまま残ることを
+  assert する形に強化
+- **Important**（comment-analyzer）: `OutProcEffectPostProcessor::new` の doc が
+  新規引数 `engaged` を列挙していなかった → 追記（`OutProcInstrumentPostProcessor::new`
+  は doc 自体が無かったため新設）
+- **Important**（silent-failure-hunter）: `CHILD_STATUS_LOAD_FAILED` の doc が
+  「host は `child_status == STARTING` のまま child が消えたことで判別する」という
+  前提を述べていたが、これは初回起動でのみ成立する。respawn は shm を再 truncate
+  しないため、一度 READY に達した後の respawn 失敗では前 incarnation の READY が
+  残留する — doc 自身が防ごうとしていた silent failure の芽を doc 自身が見落として
+  いた（PR-1a の受け入れ監査が「Minor: doc 追記」として済ませていた項目の中身が
+  不完全だった）→ respawn 注意文を追記
+- Minor 4件（engaged docの予言的記述の重複緩和・engine_wrap.rs のステップコメント
+  漏れ・WORK_LOG 差分行数の実測補正 `+164/-4`→`+167/-4`・doc 語順整理）も全て適用
+- fixer が新規テスト2件それぞれで fail-before/pass-after 実証: `publish_child_ready`
+  の `child_flags` store を一時除去 → red（`left: 0 / right: 1`）→ 復元で green。
+  instrument disengaged テストは `!engaged` 分岐に一時的な ring drain を追加 →
+  red（`left: Err(Empty) / right: Ok(NoteOn {..})`）→ 復元で green
+- main が独立再検証: 両新規テストを個別実行して pass を確認（sandbox 外実行含む）・
+  cargo build/test 両 feature（0 failed）・fmt --check・clippy -D warnings 両
+  feature・cargo deny check 全 green
+
+**/code:pr-review-team round 2（4レビュアー・round 1 修正の検証）— Critical/Important 0件で収束**:
+- 4レビュアー全員が round 1 の6修正（Critical 1件・Important 4件・Minor 4件）の
+  適用内容を実ファイル精読・mutation 注入・実行確認で検証し、**新規の Critical/
+  Important 指摘なし**
+- pr-test-analyzer: 両新規テストに意図的な回帰を注入（`has_audio_input` 分岐反転・
+  engaged チェック順序入れ替え）→ 両方とも red を確認 → 復元で green。tautological
+  でない有効な回帰ガードであることを実証
+- silent-failure-hunter: 自身の round 1 指摘2点（respawn 注意文・engaged 不可視性）
+  が「コード修正」「記録のみで妥当」とそれぞれ適切に扱われたことを確認。**non-
+  blocking watch item**: `disengaged_passes_dry_without_updating_stats`
+  （outproc_instrument.rs）を120回試行中1回だけ flake を観測（同一バイナリ内の
+  他テスト（実子プロセス+watchdog スレッドを使う `supervisor_respawns_child_on_
+  unexpected_exit` 等）との干渉が疑われるが未特定・再現不可）。本 round の修正が
+  原因ではなくブロッカーでもないため、PR-1b 以降で再現した場合のフォローアップ
+  として `cargo nextest`（プロセス単位分離）での切り分けを申し送り
+- CI 3/3 pass 継続。Critical=0・Important=0・CI green で `/code:pr-review-team`
+  の収束条件を満たした
+
+**flake watch item の実証（advisor 指摘: 不在証明は机上でなく実証で確定・PR#417
+教訓の適用）**:
+- advisor に相談: 複数レビュアーが round 1/2 を通じて別々に観測した異常（作業ツリーの
+  一時的な engaged ゲート除去・`eprintln!` 混入・`publish_child_ready` テストの
+  初回 FAILED→`cargo clean` で green・disengaged テストの120回中1 flake）は
+  互いに無関係ではなく、**4レビュアーを同一 working tree 上で並行実行し、各自が
+  mutation テスト（ソース書き換え→cargo→revert）を行ったことによる交差汚染**が
+  根本原因という指摘。bot レビューに出す前に「隔離環境での再現」を実証すべきとの
+  助言
+- 実証: `cargo test -p orbit-audio-daemon --features outproc-instrument --lib`
+  を単体フィルタで120回・フル `--lib` スイート（並行テスト有効・silent-failure-
+  hunter が flake を観測した条件と同一）で60回、計180回連続実行 → **全 green
+  （fail 0件）**。加えて別途200回ループも試行したが、確認できた「失敗」は全て
+  `if cargo test ...; then rm -f ...; else echo FAIL; fi` という repro スクリプト
+  自身の実装上、**pass した run のログファイルが `rm -f` される直前の一瞬を
+  観測しただけ**（実際にファイル内容を読むと該当テストも含め全て `ok`）と判明
+  ——本物の test failure ではなく repro スクリプトの race だった
+- 結論: 該当 flake は**隔離再現せず**。silent-failure-hunter の元の1回の観測も、
+  advisor の仮説どおり並行 cargo プロセス間の競合（build lock 待ち・target dir
+  共有）による環境ノイズであった可能性が高いと判断し、watch item を「解決
+  （環境ノイズと確定・コード側の対応不要）」にクローズ。methodology の申し送り:
+  今後レビューエージェントに mutation テストをさせる場合は `isolation: "worktree"`
+  を必須にする（共有 tree だと reviewer 自身が偽シグナルに振り回される）
+
 ### 6.252 feat(dsl): seq.instrument() — Pitch DSL note の daemon 配線 #427 (Jul 14, 2026)
 
 **Date**: 2026-07-14

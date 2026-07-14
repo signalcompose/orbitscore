@@ -107,6 +107,11 @@ impl ClapEffectProcessor {
         Ok((processor, loaded.info))
     }
 
+    /// Whether the loaded plugin exposes an audio input port.
+    pub fn has_audio_input(&self) -> bool {
+        self.buffers.has_audio_input()
+    }
+
     /// interleaved stereo f32 ブロックを in-place で effect 処理する。
     ///
     /// 戻り値は `plugin.process()` が成功したか。失敗時は `data` を素通しする（[`process_block_core`] 準拠）。

@@ -96,6 +96,11 @@ impl ClapInstrumentProcessor {
         Ok((processor, loaded.info))
     }
 
+    /// Whether the loaded plugin exposes an audio input port.
+    pub fn has_audio_input(&self) -> bool {
+        self.buffers.has_audio_input()
+    }
+
     /// host → plugin の CLAP event を渡し、instrument の出力を `data` に加算する。
     ///
     /// `events` は呼び出し側が [`crate::push_neutral_event`] で構築した CLAP event buffer。
