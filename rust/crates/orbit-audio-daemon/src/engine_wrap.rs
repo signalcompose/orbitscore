@@ -2563,6 +2563,136 @@ mod capture_path_tests {
     }
 }
 
+#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
+mod outproc_load_error_test_support {
+    use super::{ChildLaunch, ChildSlot, EngineWrap, OutProcChildStats, WrapError};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    type InjectedSlot = (Arc<EngineWrap>, Arc<Mutex<ChildSlot>>);
+
+    fn child_launch(
+        shm_path: PathBuf,
+        child_exe: PathBuf,
+        stats: Arc<OutProcChildStats>,
+    ) -> ChildLaunch {
+        ChildLaunch {
+            shm_path,
+            child_exe,
+            sample_rate: 48_000,
+            stats,
+            engaged: Arc::new(AtomicBool::new(false)),
+            cleanup_shm_on_drop: true,
+        }
+    }
+
+    pub(super) fn open_shared_failure_closes_slot(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        assert_error: impl Fn(WrapError, &str),
+        plugin_path: &str,
+    ) {
+        let shm_path = unique_path();
+        let _ = std::fs::remove_file(&shm_path);
+        let stats = OutProcChildStats::new();
+        let launch = child_launch(
+            shm_path,
+            PathBuf::from("unused-child-executable"),
+            stats.clone(),
+        );
+        let (wrap, child_slot) = inject(ChildSlot::Empty(launch), stats);
+
+        let error = wrap
+            .load_outproc_plugin(PathBuf::from(plugin_path), None)
+            .err()
+            .expect("missing shared memory must fail before spawn");
+
+        assert_error(error, "open child readiness mapping");
+        assert!(
+            matches!(
+                *child_slot.lock().expect("lock child slot"),
+                ChildSlot::Closed
+            ),
+            "open_shared failure must transition the slot to Closed"
+        );
+    }
+
+    pub(super) fn spawn_failure_restores_empty_for_retry(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        assert_error: impl Fn(WrapError, &str),
+        plugin_path: &str,
+    ) {
+        let shm_path = unique_path();
+        let _ = std::fs::remove_file(&shm_path);
+        let _mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
+        let bad_child_exe = unique_path();
+        let _ = std::fs::remove_file(&bad_child_exe);
+        let stats = OutProcChildStats::new();
+        let launch = child_launch(shm_path, bad_child_exe, stats.clone());
+        let (wrap, child_slot) = inject(ChildSlot::Empty(launch), stats);
+
+        for attempt in 1..=2 {
+            let error = wrap
+                .load_outproc_plugin(PathBuf::from(plugin_path), None)
+                .err()
+                .expect("nonexistent child executable must fail to spawn");
+            assert_error(error, "spawn outproc child");
+            assert!(
+                matches!(
+                    *child_slot.lock().expect("lock child slot"),
+                    ChildSlot::Empty(_)
+                ),
+                "spawn failure attempt {attempt} must restore Empty so the same slot is retryable"
+            );
+        }
+    }
+
+    pub(super) fn closed_slot_is_rejected(
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        assert_error: impl Fn(WrapError, &str),
+        plugin_path: &str,
+    ) {
+        let (wrap, child_slot) = inject(ChildSlot::Closed, OutProcChildStats::new());
+
+        let error = wrap
+            .load_outproc_plugin(PathBuf::from(plugin_path), None)
+            .err()
+            .expect("Closed slot must reject attach");
+
+        assert_error(error, "closed after an unrecoverable attach failure");
+        assert!(matches!(
+            *child_slot.lock().expect("lock child slot"),
+            ChildSlot::Closed
+        ));
+    }
+
+    pub(super) fn loading_slot_is_rejected(
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        assert_error: impl Fn(WrapError, &str),
+        loading_path: &str,
+        second_path: &str,
+    ) {
+        let (wrap, child_slot) = inject(
+            ChildSlot::Loading {
+                path: PathBuf::from(loading_path),
+            },
+            OutProcChildStats::new(),
+        );
+
+        let error = wrap
+            .load_outproc_plugin(PathBuf::from(second_path), None)
+            .err()
+            .expect("Loading slot must reject concurrent attach");
+
+        assert_error(error, "already in progress");
+        assert!(
+            matches!(&*child_slot.lock().expect("lock child slot"), ChildSlot::Loading { path } if path == Path::new(loading_path))
+        );
+    }
+}
+
 /// `outproc_health()` の real body（`#[cfg(feature = "outproc-effect")]`）を直接叩く unit test。
 ///
 /// `tests/protocol.rs` の統合テストは default feature build（`outproc-effect` 無効）で走るため、
@@ -2575,12 +2705,12 @@ mod capture_path_tests {
 /// `EngineWrap` に対して real child を spawn せず `Some(OutProcControl)` を注入できる。
 #[cfg(all(test, feature = "outproc-effect"))]
 mod outproc_health_tests {
-    use super::{outproc_role_matches, EngineWrap, OutProcControl};
+    use super::{outproc_role_matches, ChildSlot, EngineWrap, OutProcControl, WrapError};
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
     use orbit_audio_native::CallbackTimeStats;
     use std::sync::atomic::Ordering;
-    use std::sync::{Arc, Weak};
+    use std::sync::{Arc, Mutex, Weak};
 
     /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcControl` を
     /// `self.outproc` に注入する。返す `Arc<OutProcEffectStats>` はテスト側から直接
@@ -2595,6 +2725,67 @@ mod outproc_health_tests {
             child_slot: Weak::new(),
         });
         (wrap, stats)
+    }
+
+    fn wrap_with_child_slot(
+        slot: ChildSlot,
+        stats: Arc<OutProcEffectStats>,
+    ) -> (Arc<EngineWrap>, Arc<Mutex<ChildSlot>>) {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let child_slot = Arc::new(Mutex::new(slot));
+        *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
+            stats,
+            cb_stats: CallbackTimeStats::new(),
+            child_slot: Arc::downgrade(&child_slot),
+        });
+        (wrap, child_slot)
+    }
+
+    fn assert_effect_runtime_error_contains(error: WrapError, expected: &str) {
+        assert!(
+            matches!(&error, WrapError::OutProcEffect(message) if message.contains(expected)),
+            "expected OutProcEffect error containing {expected:?}, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_open_shared_failure_closes_slot() {
+        super::outproc_load_error_test_support::open_shared_failure_closes_slot(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            assert_effect_runtime_error_contains,
+            "unused-effect.clap",
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_spawn_failure_restores_empty_for_retry() {
+        super::outproc_load_error_test_support::spawn_failure_restores_empty_for_retry(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            assert_effect_runtime_error_contains,
+            "unused-effect.clap",
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_rejects_closed_slot() {
+        super::outproc_load_error_test_support::closed_slot_is_rejected(
+            wrap_with_child_slot,
+            assert_effect_runtime_error_contains,
+            "unused-effect.clap",
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_rejects_loading_slot() {
+        super::outproc_load_error_test_support::loading_slot_is_rejected(
+            wrap_with_child_slot,
+            assert_effect_runtime_error_contains,
+            "already-loading-effect.clap",
+            "second-effect.clap",
+        );
     }
 
     #[test]
@@ -2694,11 +2885,11 @@ mod outproc_health_tests {
 /// `OutProcInstrumentControl`（private struct）へ直接アクセスして注入する。
 #[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_health_tests {
-    use super::{outproc_role_matches, EngineWrap, OutProcInstrumentControl};
+    use super::{outproc_role_matches, ChildSlot, EngineWrap, OutProcInstrumentControl, WrapError};
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
     use std::sync::atomic::Ordering;
-    use std::sync::{Arc, Weak};
+    use std::sync::{Arc, Mutex, Weak};
 
     /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcInstrumentControl`
     /// を `self.outproc_instrument` に注入する。event_tx の consumer 側は即 drop するが、この
@@ -2717,6 +2908,71 @@ mod outproc_instrument_health_tests {
             child_slot: Weak::new(),
         });
         (wrap, stats)
+    }
+
+    fn wrap_with_child_slot(
+        slot: ChildSlot,
+        stats: Arc<OutProcInstrumentStats>,
+    ) -> (Arc<EngineWrap>, Arc<Mutex<ChildSlot>>) {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let child_slot = Arc::new(Mutex::new(slot));
+        let (event_tx, _event_rx) = rtrb::RingBuffer::new(4);
+        *wrap
+            .outproc_instrument
+            .lock()
+            .expect("lock instrument control for injection") = Some(OutProcInstrumentControl {
+            event_tx,
+            stats,
+            child_slot: Arc::downgrade(&child_slot),
+        });
+        (wrap, child_slot)
+    }
+
+    fn assert_instrument_runtime_error_contains(error: WrapError, expected: &str) {
+        assert!(
+            matches!(&error, WrapError::OutProcInstrument(message) if message.contains(expected)),
+            "expected OutProcInstrument error containing {expected:?}, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_open_shared_failure_closes_slot() {
+        super::outproc_load_error_test_support::open_shared_failure_closes_slot(
+            crate::outproc_instrument::unique_shm_path,
+            wrap_with_child_slot,
+            assert_instrument_runtime_error_contains,
+            "unused-instrument.clap",
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_spawn_failure_restores_empty_for_retry() {
+        super::outproc_load_error_test_support::spawn_failure_restores_empty_for_retry(
+            crate::outproc_instrument::unique_shm_path,
+            wrap_with_child_slot,
+            assert_instrument_runtime_error_contains,
+            "unused-instrument.clap",
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_rejects_closed_slot() {
+        super::outproc_load_error_test_support::closed_slot_is_rejected(
+            wrap_with_child_slot,
+            assert_instrument_runtime_error_contains,
+            "unused-instrument.clap",
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_rejects_loading_slot() {
+        super::outproc_load_error_test_support::loading_slot_is_rejected(
+            wrap_with_child_slot,
+            assert_instrument_runtime_error_contains,
+            "already-loading-instrument.clap",
+            "second-instrument.clap",
+        );
     }
 
     #[test]

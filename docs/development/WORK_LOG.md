@@ -70,9 +70,53 @@ fmt --check・clippy -D warnings 両 feature green。Codex 環境固有の loopb
   記録のみ）
 - 検証: `cargo build`/`test`（両 feature・0 failed）・`fmt --check`・`clippy -D warnings`
   （両 feature）全 green を main が非サンドボックスで確認
-- **未対応**: 2件目の `LoadPlugin` が Loading 中に即座に reject されることを直接検証する
-  統合テストは、実 child プロセス spawn を要する gated テストとしてしか書けないため
-  本セッションでは追加していない（既存の readiness/role テストは変更なしで green）
+- **テスト方針の訂正（2026-07-14・PR-1b レビュー Q3 / Fable 裁定 確信度90%）**: 当初ここに
+  「2件目の `LoadPlugin` が Loading 中に即座に reject されることを検証する統合テストは、実 child
+  プロセス spawn を要する gated テストとしてしか書けない」と記したが**不正確だった**。(1)
+  `ChildSlot::Loading` を直接注入すれば「in progress」reject の D4 意味論は実プロセスゼロで
+  unit test できる（後述の (c) で追加）。(2) `f36e99c` の lock-scope 修正が対象とした「2件目が
+  `.lock()` で最大10秒ブロックせず即座に Loading を観測する」並行タイミング性質の検証は直接注入では
+  fail-before/pass-after を満たさない（実プロセス spawn が要る）が、それも READY を書かず sleep する
+  ダミー実行ファイルで**非 gated・CI 実行可能**に書ける（＝gated 必須ではない・「実プロセス spawn が
+  要る」と「gated（要 CLAP dylib/audio device）」の混同だった）。この並行タイミングテストは flaky
+  リスクを踏まえ PR-1c（#441）で検討する。
+
+---
+
+**PR-1b レビュー結果と追加対応（2026-07-14・PR #440）**:
+
+`/code:pr-review-team` 相当の4体（code-reviewer / silent-failure-hunter / pr-test-analyzer /
+comment-analyzer）を PR #440 に対して実行。深刻度評価が割れたため **Fable 裁定**（難所の一発判断・
+確信度85%）を仰いだ。要点:
+
+- **裁定 Q1**: 「plugin path の typo → 10秒待ち → `ChildSlot::Closed`（daemon 再起動必須）」は
+  Epic #424 DoD「完全に動く」の運用面を塞ぐ**真の欠陥**（Epic 内で必ず直す）。ただし PR-1b 単独を
+  ブロックする Critical ではなく **packaging の問題**。silent-failure-hunter の「非対称に根拠なし」
+  という論拠は誤り（`Closed` は shm unlink 所有権設計の帰結）だが、深刻度評価は正しい。
+  code-reviewer の「確信度45・Minor未満」は較正ミス。
+- **裁定 Q2 + owner 追認**: (c) エラーパステスト + (d) doc/decision record は **PR-1b（本 PR）に積む**。
+  (a) 失敗 slot の retry 可能化 + (b) child 早期 crash の fast-fail + (e) エラーコード細分化は
+  **PR-1c（#441・Epic #424 DoD ゲート項目）** へ。「Epic 内 PR への移動は DoD ゲート内側であり
+  ゴールポスト下方修正ではない／Epic 外 follow-up へ送って DoD 宣言するのが下方修正」という線引き。
+  #441 は #431/#424 にコメントで DoD ゲート項目として明記（マージより先に可視化）。
+
+**(c) エラーパス unit test（実プロセス不要・Codex 委譲）**: `engine_wrap.rs` の
+`outproc_health_tests`/`outproc_instrument_health_tests` に共有ヘルパー
+`outproc_load_error_test_support` 経由で各 feature 4テスト（計8）を追加:
+① open_shared 失敗 → `Closed` 遷移 ② spawn 失敗 → `Empty` 復帰（2回試行で retry 可能を実証）
+③ `Closed` 拒否 ④ `Loading` 拒否（同一 path 保持を確認）。いずれも終端 variant を `matches!` で
+検査し fail-before/pass-after を満たす（main が open_shared パスの `Closed` 書き込みを一時変異させ、
+対応テストが「Closed 期待」で落ちることを実証・revert 済み）。
+
+**(d) doc 訂正**: `transport.rs` の module doc「host 側 poll は未実装・PR-1b で追加」を「実装済み」に
+更新。`CHILD_STATUS_LOAD_FAILED` doc に decision record を追記（PR-1b は reset-only 実装・try_wait
+生死判定と fast-fail/retry 可能化は PR-1c(#441) 移管）。
+
+**検証（main が非サンドボックスで再実行）**: `cargo test -p orbit-audio-daemon --lib` 両 feature
+各 **40 passed**（従来36 + 新規4）・fmt --check・clippy -D warnings 両 feature green。委譲時の
+教訓: 初回 background 委譲は成果物が作業ツリーに landing せず、codex-companion のタスク追跡が
+shared session の古いスレッド結果を返した。foreground（`--wait`）で再委譲し、**`git status`/
+`git diff` で作業ツリーの実変更を一次情報として確認**してから受け入れた。
 
 ### 6.253 feat(daemon): SharedRegion 拡張 + engaged ゲート導入 #431 PR-1a (Jul 14, 2026)
 

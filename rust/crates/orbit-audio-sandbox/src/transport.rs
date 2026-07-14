@@ -9,8 +9,8 @@
 //! - **host READ**: `seq_tag[slot(target)]` を Acquire で読み `== target` なら output が可視 → 出力にコピー。global monotone な `seq_done` でなく per-slot `seq_tag` で判定するのは、child が「latest 処理」で中間 seq を skip しても、その slot の tag が target に一致せず false-fresh を防げるから(seq_done では skip を検知できない)。
 //! - **host SUBMIT guard**: `seq_done` を Acquire で読み slot 再利用可否(下記不変条件)を判定する。
 //! - **child readiness**: child は `ClapEffectProcessor::load` / `ClapInstrumentProcessor::load`
-//!   成功直後に `child_flags` → `child_status` の順で Release store する。host は起動時にこれを poll
-//!   する（本 PR では poll する呼び出し元は未実装・PR-1b で追加）。
+//!   成功直後に `child_flags` → `child_status` の順で Release store する。host は初回 `LoadPlugin` 時に
+//!   `load_outproc_plugin` の ready-ack ループでこれを poll する（PR-1b・#431 で実装済み）。
 //!
 //! **ping-pong バッファ**: `input` / `output` は各 [`SLOTS`] 個の slot を持ち、seq を [`slot_offset`]
 //! で割り当てて交替する。slot を分けることで「host が seq s の slot を書く」のと「child が seq s-k の
@@ -87,17 +87,19 @@ pub const CONTROL_QUIT: u32 = 1;
 pub const CHILD_STATUS_STARTING: u32 = 0;
 /// child が load に成功し、以降 process loop に入る状態。
 pub const CHILD_STATUS_READY: u32 = 1;
-/// **PR-1a 時点では未使用の予約値**（child が load に失敗して終了する直前の状態を表す想定）。
+/// **現状は未使用の予約値**（child が load に失敗して終了する直前の状態を表す想定）。
 /// child は load 失敗時 `?` の早期 return でこの値を書かずにそのままプロセス終了する。host は
-/// （初回起動時に限り）`child_status == STARTING` のまま child が消えたことを `try_wait` で
-/// 判別する前提（PR-1b でこの値を実際に書く経路を追加する場合、host 側の判定ロジックとセットで
-/// 設計すること）。
+/// 現時点では `child_status == STARTING` のまま child が消えたことを即時には判別しない。
 ///
 /// **respawn 注意**: shm は daemon 起動時に一度だけ truncate され、respawn（`EffectChildSupervisor`/
 /// `InstrumentChildSupervisor` の watchdog による再起動）は同一 shm を再利用する（再 truncate しない）
 /// ため、一度 READY に達した後の respawn 失敗では `child_status` は STARTING でなく前 incarnation の
-/// READY が残留する。PR-1b のポーラーは spawn 直前に host が STARTING へ明示リセットする、または
-/// try_wait の生死判定と併用する必要がある。
+/// READY が残留する。PR-1b（#440）は spawn 直前の `reset_child_starting` による STARTING リセット
+/// のみを実装し、この前 incarnation の READY 残留誤認を解消した。一方、初回 attach 時に child が
+/// `CHILD_STATUS_LOAD_FAILED` を書かず即死するケースの `try_wait` ベース生死判定は PR-1b では実装
+/// しない。そのため child の早期 crash は `CHILD_READY_TIMEOUT`（最大 10s）のタイムアウトとしてのみ
+/// 検出される。この fast-fail 化と、失敗した slot を retry 可能状態へ戻す対応は PR-1c（#441・
+/// Epic #424 DoD ゲート項目）へ移管した。`CHILD_STATUS_LOAD_FAILED` は現状も write 箇所なしの予約値。
 pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
 
 /// child のロード結果を表す bit flags（PR-431）。bit0 = has_audio_input
