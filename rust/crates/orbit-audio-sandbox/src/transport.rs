@@ -87,10 +87,17 @@ pub const CONTROL_QUIT: u32 = 1;
 pub const CHILD_STATUS_STARTING: u32 = 0;
 /// child が load に成功し、以降 process loop に入る状態。
 pub const CHILD_STATUS_READY: u32 = 1;
-/// child が load に失敗して終了する直前の状態。**PR-1a 時点では未使用の予約値**（child は load
-/// 失敗時 `?` の早期 return でこの値を書かずにそのままプロセス終了する。host は
-/// `child_status == STARTING` のまま child が消えたことを `try_wait` で判別する前提。PR-1b で
-/// この値を実際に書く経路を追加する場合、host 側の判定ロジックとセットで設計すること）。
+/// **PR-1a 時点では未使用の予約値**（child が load に失敗して終了する直前の状態を表す想定）。
+/// child は load 失敗時 `?` の早期 return でこの値を書かずにそのままプロセス終了する。host は
+/// （初回起動時に限り）`child_status == STARTING` のまま child が消えたことを `try_wait` で
+/// 判別する前提（PR-1b でこの値を実際に書く経路を追加する場合、host 側の判定ロジックとセットで
+/// 設計すること）。
+///
+/// **respawn 注意**: shm は daemon 起動時に一度だけ truncate され、respawn（`EffectChildSupervisor`/
+/// `InstrumentChildSupervisor` の watchdog による再起動）は同一 shm を再利用する（再 truncate しない）
+/// ため、一度 READY に達した後の respawn 失敗では `child_status` は STARTING でなく前 incarnation の
+/// READY が残留する。PR-1b のポーラーは spawn 直前に host が STARTING へ明示リセットする、または
+/// try_wait の生死判定と併用する必要がある。
 pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
 
 /// child のロード結果を表す bit flags（PR-431）。bit0 = has_audio_input
@@ -339,6 +346,58 @@ mod tests {
         }
         drop(mmap);
         let _ = std::fs::remove_file(&p);
+    }
+
+    // publish_child_ready の直接検証（PR #439 review・pr-test-analyzer）: has_audio_input の
+    // true/false 分岐で child_flags/child_status が期待どおり Release store されることを、
+    // ヘルパを介さず本関数呼び出し1回ずつで確認する（既存テストは child_status/child_flags の
+    // 初期値のみを検証しており、この関数自体を直接呼ぶテストが無かった）。
+    #[test]
+    fn publish_child_ready_stores_flags_and_status_for_both_branches() {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        // has_audio_input = true: CHILD_FLAG_HAS_AUDIO_INPUT が立ち、status は READY。
+        let p_true = std::env::temp_dir().join(format!(
+            "orbit-sbx-publish-ready-true-{}.shm",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&p_true);
+        let mmap_true = create_shared(&p_true).expect("create");
+        let region_true = region_ptr(&mmap_true);
+        // SAFETY: create_shared が返した生存 mapping を指す。
+        unsafe {
+            publish_child_ready(region_true, true);
+            assert_eq!(
+                (*region_true).child_flags.load(Relaxed),
+                CHILD_FLAG_HAS_AUDIO_INPUT
+            );
+            assert_eq!(
+                (*region_true).child_status.load(Relaxed),
+                CHILD_STATUS_READY
+            );
+        }
+        drop(mmap_true);
+        let _ = std::fs::remove_file(&p_true);
+
+        // has_audio_input = false: flags は 0 のまま、status は READY。
+        let p_false = std::env::temp_dir().join(format!(
+            "orbit-sbx-publish-ready-false-{}.shm",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&p_false);
+        let mmap_false = create_shared(&p_false).expect("create");
+        let region_false = region_ptr(&mmap_false);
+        // SAFETY: create_shared が返した生存 mapping を指す。
+        unsafe {
+            publish_child_ready(region_false, false);
+            assert_eq!((*region_false).child_flags.load(Relaxed), 0);
+            assert_eq!(
+                (*region_false).child_status.load(Relaxed),
+                CHILD_STATUS_READY
+            );
+        }
+        drop(mmap_false);
+        let _ = std::fs::remove_file(&p_false);
     }
 
     // 存在しないファイルは map せず Err(open は read-only open なので作成しない)。

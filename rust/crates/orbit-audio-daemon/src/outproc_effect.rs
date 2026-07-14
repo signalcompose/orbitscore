@@ -265,7 +265,7 @@ pub struct OutProcEffectPostProcessor {
     host: PipelinedEffectHost,
     /// PR-431: child が未 attach（post-boot attach 待ち）の間は音を素通しする安全弁。
     /// **本 PR では常に true で構築される**（既存起動経路は eager attach のまま無変更）。
-    /// PR-1b で post-boot attach 経路がこれを false スタートにし、child ready 確認後に true へ遷移する。
+    /// PR-1b で post-boot attach 実装時に false スタートさせる想定（詳細は Issue #431 参照）。
     engaged: Arc<AtomicBool>,
     /// teardown 要求（daemon supervisor → audio thread）。立つと transport への submit を止め、`data` を
     /// dry のまま素通しする。control 側が child へ QUIT を送って reap・shm unlink する前に audio thread が
@@ -279,6 +279,7 @@ pub struct OutProcEffectPostProcessor {
 
 impl OutProcEffectPostProcessor {
     /// `host` = mmap を所有する production 構築子（`PipelinedEffectHost::from_mmap`）で作った host、
+    /// `engaged` = child の post-boot attach 完了までの安全弁（本 PR では常に `true` で渡される）、
     /// `teardown_requested` / `teardown_done` = supervisor と共有する協調フラグ、`stats` = 観測ミラー。
     pub fn new(
         host: PipelinedEffectHost,

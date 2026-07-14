@@ -22,7 +22,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **Date**: 2026-07-14
 **Status**: ✅ 実装・受け入れ監査 GO（PR 作成・レビューフローへ）
 **Branch**: `431-oop-plugin-coexistence`
-**Commit**: `5eebf16`
+**Commit**: `e68e746`
 
 Epic #424 の DoD「1 effect + 1 instrument を DSL から同時にロードして演奏」を達成する
 最後のピース #431（OOP post-boot attach + effect/instrument 同時使用）の第一段。
@@ -52,7 +52,7 @@ PR-1 をさらに 2 段階（1a: 非侵襲的準備・1b: 実際の post-boot at
 - **見落とし発見**: TS ガード撤去だけでは不十分——in-process daemon にも cross-role reject が
   必要（撤去のみだと silent plugin 置換が起きる）。PR-3 に反映
 
-**PR-1a 実装（Codex 委譲・8ファイル・+164/-4・非侵襲的）**:
+**PR-1a 実装（Codex 委譲・8ファイル・+167/-4・非侵襲的）**:
 - `SharedRegion`（`transport.rs`）に `child_status`/`child_flags`（`AtomicU32`）を
   **既存フィールド末尾に追記**（ABI 互換保持）。child readiness handshake の定義のみ
 - effect/instrument 両 child binary: load 成功直後に `child_flags`（has_audio_input 判定）→
@@ -92,6 +92,40 @@ fmt/clippy（両 feature）green・`cargo deny --offline check` green。
   に抽出し、child 側は1行呼び出しに簡素化（重複2箇所→共通関数）
 - 挙動変更なし（named local 化・helper 抽出・関数抽出のみ）。再検証（cargo build/test
   両 feature・fmt --check・clippy -D warnings 両 feature・cargo deny check）全 green
+
+**/code:pr-review-team round 1（4レビュアー + CI・Critical 1件/Important 4件→全適用）**:
+- CI 3/3 pass（code-review・fmt/clippy/test・license/dependency gate）
+- **Critical**（comment-analyzer）: WORK_LOG の `**Commit**: \`5eebf16\`` が
+  到達不能な孤立コミット（自己参照ハッシュ埋め込みの手順ミスの残骸）を指していた。
+  実際の初回実装コミット `e68e746` に修正
+- **Important**（code-reviewer・pr-test-analyzer・silent-failure-hunter が独立に
+  同一の核心へ収束）: 新規関数 `publish_child_ready`（transport.rs）に直接のユニット
+  テストが無く、`has_audio_input` の true/false 分岐が未検証だった → 両分岐を
+  直接検証するテストを追加
+- **Important**（pr-test-analyzer）: instrument 版 `disengaged_passes_dry_without_
+  updating_stats` テストが event ring を空のまま検証しており、この PR の設計動機
+  そのもの（engaged=false 中は note event を drain せず data-loss race を防ぐ）を
+  一度も踏んでいなかった → note を1件 push し、process() 後も未消費のまま残ることを
+  assert する形に強化
+- **Important**（comment-analyzer）: `OutProcEffectPostProcessor::new` の doc が
+  新規引数 `engaged` を列挙していなかった → 追記（`OutProcInstrumentPostProcessor::new`
+  は doc 自体が無かったため新設）
+- **Important**（silent-failure-hunter）: `CHILD_STATUS_LOAD_FAILED` の doc が
+  「host は `child_status == STARTING` のまま child が消えたことで判別する」という
+  前提を述べていたが、これは初回起動でのみ成立する。respawn は shm を再 truncate
+  しないため、一度 READY に達した後の respawn 失敗では前 incarnation の READY が
+  残留する — doc 自身が防ごうとしていた silent failure の芽を doc 自身が見落として
+  いた（PR-1a の受け入れ監査が「Minor: doc 追記」として済ませていた項目の中身が
+  不完全だった）→ respawn 注意文を追記
+- Minor 4件（engaged docの予言的記述の重複緩和・engine_wrap.rs のステップコメント
+  漏れ・WORK_LOG 差分行数の実測補正 `+164/-4`→`+167/-4`・doc 語順整理）も全て適用
+- fixer が新規テスト2件それぞれで fail-before/pass-after 実証: `publish_child_ready`
+  の `child_flags` store を一時除去 → red（`left: 0 / right: 1`）→ 復元で green。
+  instrument disengaged テストは `!engaged` 分岐に一時的な ring drain を追加 →
+  red（`left: Err(Empty) / right: Ok(NoteOn {..})`）→ 復元で green
+- main が独立再検証: 両新規テストを個別実行して pass を確認（sandbox 外実行含む）・
+  cargo build/test 両 feature（0 failed）・fmt --check・clippy -D warnings 両
+  feature・cargo deny check 全 green
 
 ### 6.252 feat(dsl): seq.instrument() — Pitch DSL note の daemon 配線 #427 (Jul 14, 2026)
 

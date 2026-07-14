@@ -542,7 +542,7 @@ impl EngineWrap {
             .map_err(|e| WrapError::OutProcEffect(format!("create shm {shm_path:?}: {e}")))?;
         let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(host_mmap);
 
-        // 2. teardown flags + 観測 stats + adapter。
+        // 2. engaged ゲート + teardown flags + 観測 stats + adapter。
         let engaged = Arc::new(AtomicBool::new(true));
         let teardown_requested = Arc::new(AtomicBool::new(false));
         let teardown_done = Arc::new(AtomicBool::new(false));

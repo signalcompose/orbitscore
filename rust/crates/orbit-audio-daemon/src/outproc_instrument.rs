@@ -189,7 +189,7 @@ pub struct OutProcInstrumentPostProcessor {
     audio_scratch: Vec<f32>,
     /// PR-431: child が未 attach（post-boot attach 待ち）の間は音を素通しする安全弁。
     /// **本 PR では常に true で構築される**（既存起動経路は eager attach のまま無変更）。
-    /// PR-1b で post-boot attach 経路がこれを false スタートにし、child ready 確認後に true へ遷移する。
+    /// PR-1b で post-boot attach 実装時に false スタートさせる想定（詳細は Issue #431 参照）。
     engaged: Arc<AtomicBool>,
     teardown_requested: Arc<AtomicBool>,
     teardown_done: Arc<AtomicBool>,
@@ -200,6 +200,10 @@ pub struct OutProcInstrumentPostProcessor {
 }
 
 impl OutProcInstrumentPostProcessor {
+    /// `host` = mmap を所有する production 構築子（`PipelinedInstrumentHost::from_mmap`）で作った
+    /// host、`event_rx` = note event の受け側（`event_capacity` はその scratch buffer 分の容量）、
+    /// `engaged` = child の post-boot attach 完了までの安全弁（本 PR では常に `true` で渡される）、
+    /// `teardown_requested` / `teardown_done` = supervisor と共有する協調フラグ、`stats` = 観測ミラー。
     pub fn new(
         host: PipelinedInstrumentHost,
         event_rx: rtrb::Consumer<NeutralEvent>,
@@ -789,13 +793,34 @@ mod tests {
         std::fs::remove_file(path).expect("remove shared memory");
     }
 
+    // disengaged (engaged=false) の間は event ring を drain してはいけない: drain してしまうと
+    // engaged になった後の最初の process() でその note を再び読めず、note-on が消える data-loss
+    // race になる。以前の版はイベントを1件も積まずに空の ring を検証していたため、この drain-vs-
+    // no-drain の分岐を実際には踏んでいなかった（空の ring は pop() が常に Err なので、drain して
+    // もしなくても外から見た結果は同じ）。note を1件積んでから process() を呼び、process() 後も
+    // 同じ note が event_rx から pop できる（= 消費されていない）ことを直接検証する。
     #[test]
     fn disengaged_passes_dry_without_updating_stats() {
         let path = unique_shm_path();
         let host_mmap = orbit_audio_sandbox::create_shared(&path).expect("create shared memory");
         let host = PipelinedInstrumentHost::from_mmap(host_mmap);
-        let (_event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+        let (mut event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
         let stats = OutProcInstrumentStats::new();
+        let addr = VoiceAddr {
+            note_id: -1,
+            port_index: 0,
+            channel: PROBE_KEY.channel,
+            key: PROBE_KEY.key,
+            _pad: 0,
+        };
+        let note = NeutralEvent::NoteOn {
+            sample_offset: 0,
+            addr,
+            velocity: 0.8,
+            tuning_cents: 0.0,
+            length_frames: 0,
+        };
+        event_tx.push(note).expect("push note to control ring");
         let mut processor = OutProcInstrumentPostProcessor::new(
             host,
             event_rx,
@@ -811,6 +836,11 @@ mod tests {
 
         assert!(data.iter().all(|sample| *sample == 0.42));
         assert_eq!(stats.callback_count.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            processor.event_rx.pop(),
+            Ok(note),
+            "disengaged 中は event ring を drain せず、note がそのまま残っている"
+        );
 
         drop(processor);
         std::fs::remove_file(path).expect("remove shared memory");
