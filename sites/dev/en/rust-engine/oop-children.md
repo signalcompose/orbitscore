@@ -132,7 +132,8 @@ The instrument-side host (`PipelinedInstrumentHost` in `instrument_host.rs`) lay
 voice management (`VoiceTable`) on top of the same shm substrate, reusing the same transport
 (`seq_request`/`seq_done`/slot mechanism) as the effect host. `SharedRegion` also holds the
 event-transfer windows for M2 instrument IPC (`input_events`/`output_events`, etc.), but the
-wire format itself (`NeutralEvent`) is a detail left to the RE-3 (M2 IPC) chapter.
+wire format itself (`NeutralEvent`) is out of scope for this chapter
+(a dedicated M2 IPC wire chapter is planned; the primary sources today are `orbit-audio-sandbox/src/events.rs` and Issue #398).
 
 ## The child-side READY handshake
 
@@ -211,6 +212,9 @@ impl Drop for SandboxChildGuard {
         unsafe {
             (*self.region).control.store(CONTROL_QUIT, Release);
         }
+        // TODO(PR-C): respawn 判断のため child の ExitStatus を捕捉して supervisor へ渡す
+        // (本ガードは teardown 専用で終了 status を破棄する)。親プロセス死亡時の孤児化対策
+        // (PR_SET_PDEATHSIG 等)も supervisor 層で扱う。
         let deadline = Instant::now() + REAP_TIMEOUT;
         loop {
             match self.child.try_wait() {
@@ -225,6 +229,7 @@ impl Drop for SandboxChildGuard {
                     let _ = self.child.wait();
                     break;
                 }
+                // try_wait 自体の失敗(ECHILD 等)は timeout と区別して実エラーを出す。
                 Err(e) => {
                     eprintln!("orbit-audio-sandbox: try_wait 失敗(kill にフォールバック): {e}");
                     let _ = self.child.kill();
