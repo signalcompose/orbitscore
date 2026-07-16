@@ -56,12 +56,32 @@ describe('development docs helpers', () => {
     ])
   })
 
-  it('readDevDoc returns null for a file removed after the existsSync check (TOCTOU)', () => {
+  it('readDevDoc returns null when the read fails after existsSync passed (TOCTOU/EACCES)', () => {
     const root = temporaryDirectory()
-    const filePath = path.join(root, 'gone.md')
-    fs.writeFileSync(filePath, '# will be deleted')
-    fs.rmSync(filePath)
+    const filePath = path.join(root, 'race.md')
+    fs.writeFileSync(filePath, '# racy')
+    // Simulate the check-then-read race with a real fs error: the file exists
+    // (existsSync passes) but the read itself throws EACCES. Without the
+    // try/catch inside readDevDoc this call would throw instead of returning null.
+    fs.chmodSync(filePath, 0o000)
+    try {
+      expect(readDevDoc(root, 'race.md')).toBeNull()
+    } finally {
+      fs.chmodSync(filePath, 0o600)
+    }
+  })
 
-    expect(readDevDoc(root, 'gone.md')).toBeNull()
+  it('searchDevDocs skips an unreadable file instead of aborting the walk', () => {
+    const root = temporaryDirectory()
+    fs.writeFileSync(path.join(root, 'bad.md'), 'search target broken')
+    fs.writeFileSync(path.join(root, 'good.md'), 'search target ok')
+    fs.chmodSync(path.join(root, 'bad.md'), 0o000)
+    try {
+      expect(searchDevDocs(root, 'search target')).toEqual([
+        { path: 'good.md', line: 1, excerpt: 'search target ok' },
+      ])
+    } finally {
+      fs.chmodSync(path.join(root, 'bad.md'), 0o600)
+    }
   })
 })
