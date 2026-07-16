@@ -1903,6 +1903,11 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
   }
   let codeToSend = rawCode
   if (documentDir) {
+    // I3 (#456): REPL メタ行で基準ディレクトリを帯域外で先渡しする。import 文（IM.2）は
+    // どの statement よりも先に評価されるため、下の DSL 注入（statements として実行）では
+    // 間に合わない — メタ行だけが import の基準（IM.6）を初回 eval から確定できる。
+    // DSL 注入も残す（audio() 等の既存経路の実績を変えない・同値の冪等再設定）。
+    codeToSend = `//#documentDirectory ${documentDir}\n` + codeToSend
     const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
     const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
     if (globalInitMatch) {
