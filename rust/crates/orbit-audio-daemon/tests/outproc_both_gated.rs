@@ -78,7 +78,7 @@ fn both_roles_attach_in_instrument_then_effect_order() {
         .load_outproc_instrument_plugin(synth_path, synth_id)
         .expect("attach test-synth to instrument slot");
     engine
-        .load_outproc_effect_plugin(effect_path, None)
+        .load_outproc_effect_plugin(effect_path, None, None)
         .expect("attach test-effect to effect slot");
 
     engine
@@ -90,10 +90,14 @@ fn both_roles_attach_in_instrument_then_effect_order() {
             .map(|s| s.fresh > 0 && s.probe_live_count > 0)
             .unwrap_or(false)
     });
+    // post_peak まで待つ: OOP effect は SLOTS=2 の pipeline で出力が 1 ブロック遅れる。
+    // fresh/dry だけで先へ進むと、音の最初のブロックを入力した直後（post はまだ
+    // silence-primed の前段出力）に note-off → stats 読みになる race がある（#434 S2 の
+    // 起動位相シフトで顕在化・機構は従来から存在）。
     let effect_fresh = wait_until(Duration::from_secs(3), || {
         engine
             .outproc_effect_stats()
-            .map(|s| s.fresh > 0 && s.dry_peak > 0.01)
+            .map(|s| s.fresh > 0 && s.dry_peak > 0.01 && s.post_peak > 0.01)
             .unwrap_or(false)
     });
     engine

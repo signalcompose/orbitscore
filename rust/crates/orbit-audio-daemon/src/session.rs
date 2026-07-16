@@ -80,6 +80,23 @@ fn outproc_role_param_is_valid(params: &Value) -> bool {
     )
 }
 
+/// LoadPlugin params から `bus` を取り出す純関数。`None` は無指定（master bus）、`Ok(Some(_))` は
+/// non-empty 文字列。空文字列や非文字列型は `Err` として拒否する。
+#[cfg(feature = "outproc-effect")]
+fn parse_bus_param(params: &Value) -> Result<Option<String>, &'static str> {
+    match params.get("bus") {
+        None => Ok(None),
+        Some(Value::String(bus)) if !bus.trim().is_empty() => Ok(Some(bus.clone())),
+        Some(_) => Err("'bus' must be a non-empty string"),
+    }
+}
+
+/// role='instrument' と 'bus' の同時指定を検出する純関数（'bus' は effect 専用）。
+#[cfg(feature = "outproc-instrument")]
+fn bus_param_invalid_for_instrument_role(params: &Value) -> bool {
+    params.get("role").and_then(Value::as_str) == Some("instrument") && params.get("bus").is_some()
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -715,6 +732,23 @@ async fn handle_command(
                     .get("plugin_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                #[cfg(feature = "outproc-effect")]
+                let bus = match parse_bus_param(&params) {
+                    Ok(bus) => bus,
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                #[cfg(feature = "outproc-instrument")]
+                if bus_param_invalid_for_instrument_role(&params) {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "LoadPlugin bus is only valid for role='effect'",
+                        ),
+                    );
+                }
                 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
                 let params_role = params
                     .get("role")
@@ -727,7 +761,7 @@ async fn handle_command(
                         {
                             match params_role.as_deref() {
                                 Some("effect") => {
-                                    engine.load_outproc_effect_plugin(path, plugin_id)
+                                    engine.load_outproc_effect_plugin(path, plugin_id, bus)
                                 }
                                 Some("instrument") => {
                                     engine.load_outproc_instrument_plugin(path, plugin_id)
@@ -739,7 +773,17 @@ async fn handle_command(
                             feature = "outproc-effect",
                             feature = "outproc-instrument"
                         )))]
-                        engine.load_outproc_plugin(path, plugin_id)
+                        #[cfg(feature = "outproc-effect")]
+                        {
+                            engine.load_outproc_effect_plugin(path, plugin_id, bus)
+                        }
+                        #[cfg(all(
+                            feature = "outproc-instrument",
+                            not(feature = "outproc-effect")
+                        ))]
+                        {
+                            engine.load_outproc_plugin(path, plugin_id)
+                        }
                     }
                     #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
                     {
@@ -1164,6 +1208,33 @@ mod tests {
         assert!(outproc_role_param_is_valid(&json!({"role": "instrument"})));
         assert!(!outproc_role_param_is_valid(&json!({"role": "invalid"})));
         assert!(!outproc_role_param_is_valid(&json!({})));
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn parse_bus_param_accepts_absent_and_trims_nothing_but_rejects_blank_or_non_string() {
+        assert_eq!(parse_bus_param(&json!({})), Ok(None));
+        assert_eq!(
+            parse_bus_param(&json!({"bus": "fx1"})),
+            Ok(Some("fx1".to_owned()))
+        );
+        assert!(parse_bus_param(&json!({"bus": ""})).is_err());
+        assert!(parse_bus_param(&json!({"bus": "   "})).is_err());
+        assert!(parse_bus_param(&json!({"bus": 1})).is_err());
+    }
+
+    #[cfg(feature = "outproc-instrument")]
+    #[test]
+    fn bus_param_invalid_for_instrument_role_flags_only_the_combination() {
+        assert!(bus_param_invalid_for_instrument_role(
+            &json!({"role": "instrument", "bus": "fx1"})
+        ));
+        assert!(!bus_param_invalid_for_instrument_role(
+            &json!({"role": "instrument"})
+        ));
+        assert!(!bus_param_invalid_for_instrument_role(
+            &json!({"role": "effect", "bus": "fx1"})
+        ));
     }
 
     // LinkAudio エラーの protocol code 分割を pin（TS は UNAVAILABLE のみ握り潰し RUNTIME は rethrow）。

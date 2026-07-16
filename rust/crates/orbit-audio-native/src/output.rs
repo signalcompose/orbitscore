@@ -484,6 +484,39 @@ pub fn start_default_output_with_insert_buses(
     Ok((engine, stream, stats))
 }
 
+/// per-bus insert と従来の master post-processor を同じ callback に載せる。
+/// bus は master effect より前に処理されるため、instrument add-mix を含む既存 master
+/// 経路の意味論を変えない。
+pub fn start_default_output_with_insert_buses_and_post(
+    insert_buses: Vec<InsertBusStage>,
+    post: Box<dyn PostProcessor>,
+    buffer_frames: Option<u32>,
+    capture_path: Option<PathBuf>,
+) -> Result<
+    (
+        Engine,
+        OutputStream,
+        Arc<StreamStats>,
+        Arc<CallbackTimeStats>,
+    ),
+    OutputError,
+> {
+    if insert_buses.len() > MAX_INSERT_BUS_STAGES {
+        return Err(OutputError::NoConfig(format!(
+            "too many insert bus stages: {} (max {MAX_INSERT_BUS_STAGES})",
+            insert_buses.len()
+        )));
+    }
+    let (engine, stream, stats, cb) =
+        start_output_inner(None, insert_buses, Some(post), buffer_frames, capture_path)?;
+    Ok((
+        engine,
+        stream,
+        stats,
+        cb.expect("post path always creates CallbackTimeStats"),
+    ))
+}
+
 /// `start_default_output` / `_with_link_egress` / `_with_clap` の共通実装。
 /// `link` を渡すと cpal callback に egress 経路を、`post` を渡すと master-bus post-processor を
 /// 組み込む（両方 None なら hardware-only でビット同一）。`post` 有り時のみ callback-duration
