@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.256 feat(daemon): OOP effect × instrument 共存 #431 PR-2 (Jul 16, 2026)
+
+**Date**: 2026-07-16
+**Status**: ✅ 実装・実機検証済み（PR 作成へ）
+**Branch**: `431-oop-both-roles-coexistence`
+**Commit**: `02ddca5`
+
+Epic #424 の PR-2。`outproc-effect × outproc-instrument` の compile-time 排他を解消し、
+1つの daemon で両 role を同時ホスト可能に。実装 = Codex 委譲（2 Stage 分割）。
+
+**プロセス知見**: Codex は当初フルリファクタを3回連続で完走できず停止。原因 = PR-1c の
+全履歴を引き継いだ --resume スレッドの実行ウィンドウ圧迫。**fresh スレッド + 自己完結
+ブリーフ + Stage 分割**（Stage 1 = ジェネリック化のみ / Stage 2 = both 配線）で解決。
+
+**Stage 1（ジェネリック化・挙動不変）**:
+- `trait OutProcRole`（Stats/Supervisor 関連型 + spawn/detach/role_matches/stats アクセサ）
+  + `EffectRole`/`InstrumentRole` marker
+- `ChildLaunch<R>`/`ChildSlot<R>` 化・単一 role 型エイリアス撤去・`load_outproc_plugin_impl<R>`
+- 既存テスト 48+47 が無変更で全パス = 挙動不変の証明
+
+**Stage 2（both 配線）**:
+- `CompositePostProcessor`: instrument add-mix → effect serial insert の固定順・RT 経路
+  alloc/lock なし（output.rs 無改変）
+- `start_outproc_both()`: shm×2・processor×2・slot×2・単一 stream。StreamGuard は
+  teardown guard×2（stream 前）+ child guard×2（stream 後）
+- session.rs: both ビルドで role='effect'/'instrument' 両受理 → role 別 slot へ dispatch
+- buffer_frames 優先規則: 両 env が異なる値ならハードエラー（silent 優先禁止）+ unit テスト
+- instrument×effect の compile_error ペアのみ削除（clap-host/link-audio 排他は維持）
+
+**検証**:
+- 3構成フルスイート: effect 48 / instrument 47 / both 63 + clippy×3 + fmt 全グリーン
+- **both 実機 gated E2E PASS**: instrument 発音（fresh=3・probe live）→ effect serial
+  insert（post/dry ratio **0.50000** 厳密一致）が単一 callback で同時動作（2.10s）
+- single-role gated 回帰 全7本実機 PASS（parity / kill-test / stale-rate / attach-retry×2 /
+  発音 / respawn）— リファクタによる単体 role 退行なし
+
+**次**: PR 作成 → レビューフロー → PR-3（DoD 配線: TS ガード撤去 + in-process reject +
+配布 feature + 実機 E2E）→ Epic #424 DoD 宣言
+
 ### 6.255 fix(daemon): OOP attach 失敗の fast-fail + retry 可能化 #441 PR-1c (Jul 16, 2026)
 
 **Date**: 2026-07-16
