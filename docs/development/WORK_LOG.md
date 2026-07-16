@@ -17,7 +17,30 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.263 feat(engine): mixer graph — sum/aux/send を DSL まで完走 #459/#453 (Jul 17, 2026)
+### 6.264 docs(spec): import 宣言の spec 起草（IM.1-IM.6）#456 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: 📝 spec 起草（docs のみ・実装は I1-I3 で別 PR）
+
+**内容**: DocDD に従い、実装前に core spec（INSTRUCTION_ORBITSCORE_DSL.md）へ
+「Import / Project 構成」節を新設。設計種 = POST_2.0_MIXER_DSL_DESIGN.html §8。
+
+**主要決定**:
+- 構文 = `import { name, ... } from "./file.orbs"`（名前列挙 = 契約検査・`.orbs` 必須・
+  既存 `import chords` と文法判別で共存）
+- 意味論 = **グラフの合成**: 名前キー reconciliation（MX.1 と同一原理）に乗せ、
+  再評価 = 再束縛（hot-reload identity）。`var global = init GLOBAL` は import 先にも
+  書ける（冪等・standalone-evaluable）
+- project/performance 分離: import されたファイルは宣言専用（transport はエラー）
+- パス解決 = 各ファイル自身のディレクトリ基準（audio() 含む・規範）
+- 循環 = エラー・ダイヤモンド = 1 回評価・v1 はモジュールスコープなし（export は予約）
+
+**根拠調査**（Explore・実コード裏取り）: `import` は tokenizer/AST で stdlib 専用に既存予約
+（parse-statement.ts:216）・名前空間はフラット Map（interpreter types.ts:13）・名前キー
+再利用は process-initialization.ts:29/79 に既存 — 「import = 名前一致 merge」は既存
+reconciliation 機構の自然な拡張として成立する。
+
+Refs #456
 
 **Date**: 2026-07-17
 **Status**: ✅ 実装・実機 E2E 済み（PR 作成・レビューフローへ）
