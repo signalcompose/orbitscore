@@ -93,8 +93,8 @@ framing）。乖離が見つかっても即修正せず、まず現状を記述�
 
 | 作業単位 | 章 | 備考 |
 |---|---|---|
-| Unit A | RE-1 + RE-2（daemon 概観 + OOP children） | 依存: なし。先行して読める |
-| Unit B | RE-3 + RE-4（M2 IPC + capture seam） | 依存: Unit A の用語（shm transport 等）を参照する可能性 → Unit A 完了後推奨 |
+| Unit A | RE-1 + RE-2（daemon 概観 + OOP children） | **済（Issue #451・ja/en 各 index.md + oop-children.md）** |
+| Unit B | insert-bus + capture seam（旧計画の RE-3=M2 IPC は差し替え・M2 IPC 章は未着手のまま残） | **済（Issue #451・ja/en 各 insert-bus.md + capture-verification.md）** |
 | Unit C | PH-1（概観・**本 Issue でパイロット執筆済み**） | 他 Unit のテンプレートとして先行公開 |
 | Unit D | PH-2 + PH-3（CLAP/VST3 instrument hosting） | 依存: Unit C の DSL 構文説明を前提にできる |
 | Unit E | PH-4 + PH-5（effect hosting + Epic 全体像） | 依存: Unit D 完了後（instrument/effect 対比のため） |

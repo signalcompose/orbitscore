@@ -2,6 +2,16 @@ import type { DefaultTheme } from 'vitepress'
 
 export const sidebarJa: DefaultTheme.SidebarItem[] = [
   {
+    text: 'Part -1: Rust Engine',
+    collapsed: false,
+    items: [
+      { text: 'RE-1. daemon アーキテクチャ概観', link: '/rust-engine/' },
+      { text: 'RE-2. OOP children と shm transport', link: '/rust-engine/oop-children' },
+      { text: 'RE-3. per-sequence insert bus', link: '/rust-engine/insert-bus' },
+      { text: 'RE-4. capture seam と客観検証', link: '/rust-engine/capture-verification' },
+    ],
+  },
+  {
     text: 'Part 0: Orientation',
     collapsed: false,
     items: [
@@ -63,6 +73,19 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
 ]
 
 export const sidebarEn: DefaultTheme.SidebarItem[] = [
+  {
+    text: 'Part -1: Rust Engine',
+    collapsed: false,
+    items: [
+      { text: 'RE-1. Daemon Architecture Overview', link: '/en/rust-engine/' },
+      { text: 'RE-2. OOP Children and shm Transport', link: '/en/rust-engine/oop-children' },
+      { text: 'RE-3. Per-Sequence Insert Bus', link: '/en/rust-engine/insert-bus' },
+      {
+        text: 'RE-4. Capture Seam and Objective Verification',
+        link: '/en/rust-engine/capture-verification',
+      },
+    ],
+  },
   {
     text: 'Part 0: Orientation',
     collapsed: false,
