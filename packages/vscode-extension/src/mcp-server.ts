@@ -240,23 +240,39 @@ export function resolveDocsRoot(baseDir: string): string {
  * Directory URLs (including the root URL) serve their index.html.
  */
 export function resolveDocsFilePath(docsRoot: string, urlPath: string): string | null {
+  return resolveSafePath(docsRoot, urlPath, (decodedPath, relativePath) =>
+    decodedPath.endsWith('/') || !path.extname(relativePath)
+      ? path.join(relativePath, 'index.html')
+      : relativePath,
+  )
+}
+
+/**
+ * Shared traversal guard for every docs path lookup: decode → reject `..`/`\` →
+ * resolve against root → containment check. This is the security boundary for the
+ * locally-bound HTTP server and the MCP doc tools — keep it single-sourced so a
+ * future tightening applies everywhere at once. `mapTarget` lets callers layer
+ * their own URL→file mapping (e.g. directory → index.html) on the decoded path
+ * before resolution; the containment check always runs on the mapped result.
+ */
+function resolveSafePath(
+  root: string,
+  rawPath: string,
+  mapTarget: (decodedPath: string, relativePath: string) => string = (_, relativePath) =>
+    relativePath,
+): string | null {
   let decodedPath: string
   try {
-    decodedPath = decodeURIComponent(urlPath)
+    decodedPath = decodeURIComponent(rawPath)
   } catch {
     return null
   }
   if (decodedPath.includes('\\') || decodedPath.includes('..')) {
     return null
   }
-
   const relativePath = decodedPath.replace(/^\/+/, '')
-  const targetPath =
-    decodedPath.endsWith('/') || !path.extname(relativePath)
-      ? path.join(relativePath, 'index.html')
-      : relativePath
-  const filePath = path.resolve(docsRoot, targetPath)
-  const normalizedRoot = path.resolve(docsRoot)
+  const filePath = path.resolve(root, mapTarget(decodedPath, relativePath))
+  const normalizedRoot = path.resolve(root)
   if (filePath !== normalizedRoot && !filePath.startsWith(`${normalizedRoot}${path.sep}`)) {
     return null
   }
@@ -264,18 +280,11 @@ export function resolveDocsFilePath(docsRoot: string, urlPath: string): string |
 }
 
 function resolvePathWithinRoot(root: string, relativePath: string): string | null {
-  let decodedPath: string
-  try {
-    decodedPath = decodeURIComponent(relativePath)
-  } catch {
-    return null
-  }
-  if (!decodedPath || decodedPath.includes('\\') || decodedPath.includes('..')) {
-    return null
-  }
-  const filePath = path.resolve(root, decodedPath.replace(/^\/+/, ''))
-  const normalizedRoot = path.resolve(root)
-  return filePath.startsWith(`${normalizedRoot}${path.sep}`) ? filePath : null
+  if (!relativePath) return null
+  const filePath = resolveSafePath(root, relativePath)
+  // The bare root is a valid *directory* answer for the docs file server (mapped to
+  // index.html) but never a valid document path for readDevDoc/searchDevDocs.
+  return filePath !== null && filePath !== path.resolve(root) ? filePath : null
 }
 
 export function readDevDoc(sourceRoot: string, relativePath: string): string | null {
@@ -339,9 +348,12 @@ function contentTypeForDocsFile(filePath: string): string {
  * Build a per-session McpServer with the OrbitScore tool surface registered.
  * One instance per MCP session (see `startOrbitScoreMcpServer` for routing).
  */
-function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServerLike {
+function buildServer(
+  version: string,
+  handlers: OrbitScoreToolHandlers,
+  docsRoot: string,
+): McpServerLike {
   const server = new McpServer({ name: 'orbitscore', version })
-  const docsRoot = resolveDocsRoot(path.resolve(__dirname, '../../..'))
   const docsSourceRoot = path.resolve(docsRoot, '../..')
 
   server.registerTool(
@@ -837,7 +849,7 @@ export async function startOrbitScoreMcpServer(opts: {
         sessions.delete(transport.sessionId)
       }
     }
-    const server = buildServer(version, handlers)
+    const server = buildServer(version, handlers, docsRoot)
     entry.transport = transport
     entry.server = server
     await server.connect(transport)
