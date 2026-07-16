@@ -31,6 +31,9 @@ name = "orbit_audio_sandbox"
 memmap2 = "0.9"
 # gain child binary の引数 parse / エラー伝播用(lib 本体は使わない)。MIT/Apache-2.0。
 anyhow = "1"
+# child プロセスの親死活監視(#448 orphan 対策)用 getppid(2) FFI。MIT/Apache-2.0。
+# 4 child crate(orbit-clap-effect-child 等)から共有する src/parent_watch.rs でのみ使用。
+libc = "0.2"
 
 # 親子で同一 SharedRegion レイアウトを共有する gain child(PR-A の parity 相手)。
 # clack 非依存(実 CLAP effect child は PR-B の別 crate)。
@@ -41,3 +44,9 @@ path = "src/bin/sandbox-effect-child.rs"
 [[bin]]
 name = "sandbox-instrument-child"
 path = "src/bin/sandbox-instrument-child.rs"
+
+# テスト専用ヘルパー(#448 orphan 対策の実プロセス reparent 実証用)。
+# tests/parent_watch_integration.rs から spawn される。
+[[bin]]
+name = "parent-watch-probe"
+path = "src/bin/parent-watch-probe.rs"

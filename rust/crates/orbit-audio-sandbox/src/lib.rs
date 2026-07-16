@@ -21,6 +21,7 @@ pub mod events;
 pub mod host;
 mod instrument_host;
 pub mod offline;
+pub mod parent_watch;
 pub mod transport;
 
 pub use child::SandboxChildGuard;
@@ -40,6 +41,7 @@ pub use offline::{
     max_abs_diff, render_in_process_gain, render_through_child_sync,
     render_through_child_sync_with_options, ChildStats, RenderOptions,
 };
+pub use parent_watch::{ParentWatch, DEFAULT_CHECK_INTERVAL};
 pub use transport::{
     create_shared, open_shared, region_ptr, slot_index, slot_offset, SharedRegion,
     TransportContext, BUF_LEN, CHANNELS, CONTROL_QUIT, CONTROL_RUN, MAX_EVENTS_PER_BLOCK,

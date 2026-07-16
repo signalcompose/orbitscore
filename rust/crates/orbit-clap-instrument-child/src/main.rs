@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use anyhow::{bail, Context, Result};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
-    SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
+    ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
 use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
@@ -194,9 +194,16 @@ fn main() -> Result<()> {
     // historical seq up to the current `seq_request` (no resume-point handshake exists yet).
     // Tracked in #418.
     let mut last = 0u64;
+    // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
+    // SIGKILL・crash)でも spin loop を抜けられるよう、親死活を低頻度で監視する。
+    let mut parent_watch = ParentWatch::new();
 
     loop {
         if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
+            break;
+        }
+        if parent_watch.should_exit() {
+            eprintln!("[orbit-clap-instrument-child] 親プロセス死亡を検知、終了する");
             break;
         }
         let cur = unsafe { (*region).seq_request.load(Acquire) };
