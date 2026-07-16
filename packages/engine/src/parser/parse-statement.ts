@@ -15,6 +15,7 @@ import {
   PatternBinding,
   ModeBinding,
   ImportStatement,
+  FileImportStatement,
   PlayStack,
   PlayElement,
 } from './types'
@@ -213,11 +214,16 @@ export class StatementParser {
   }
 
   /**
-   * Parse `import chords` (§6). Only the `chords` stdlib is accepted in v1.1.
+   * Parse `import ...`. Two forms share the keyword and are disambiguated by the next
+   * token (IM.1, #456): `{` → file import (`import { a, b } from "./file.orbs"`),
+   * identifier → stdlib import (`import chords`, §6 — the only stdlib module in v1.1).
    */
-  private parseImport(): { statement: ImportStatement; newPos: number } {
+  private parseImport(): { statement: ImportStatement | FileImportStatement; newPos: number } {
     const importKw = ParserUtils.expect(this.tokens, this.pos, 'IMPORT')
     this.pos = importKw.newPos
+    if (this.tokens[this.pos]?.type === 'LBRACE') {
+      return this.parseFileImport()
+    }
     const moduleResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = moduleResult.newPos
     const module = moduleResult.token.value
@@ -225,6 +231,46 @@ export class StatementParser {
       throw new Error(`Unknown import "${module}". v1.1 supports only \`import chords\` (§6).`)
     }
     return { statement: { type: 'import', module }, newPos: this.pos }
+  }
+
+  /**
+   * Parse the file-import tail after `import` (IM.1, #456):
+   * `{ name (, name)* } from "<./|../>path.orbs"`. The name list is a contract check
+   * (IM.2 — not isolation); the path must be relative (`./` or `../`) and end in `.orbs`.
+   */
+  private parseFileImport(): { statement: FileImportStatement; newPos: number } {
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'LBRACE').newPos
+    const names: string[] = []
+    for (;;) {
+      const nameResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+      this.pos = nameResult.newPos
+      names.push(nameResult.token.value)
+      if (this.tokens[this.pos]?.type === 'COMMA') {
+        this.pos++
+        continue
+      }
+      break
+    }
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'RBRACE').newPos
+    const fromResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = fromResult.newPos
+    if (fromResult.token.value !== 'from') {
+      throw new Error(
+        `import: expected \`from\` after the name list, got "${fromResult.token.value}" (IM.1).`,
+      )
+    }
+    const pathResult = ParserUtils.expect(this.tokens, this.pos, 'STRING')
+    this.pos = pathResult.newPos
+    const path = pathResult.token.value
+    if (!path.startsWith('./') && !path.startsWith('../')) {
+      throw new Error(
+        `import "${path}": path must be relative to the importing file (start with ./ or ../) (IM.1).`,
+      )
+    }
+    if (!path.endsWith('.orbs')) {
+      throw new Error(`import "${path}": the .orbs extension is required (IM.1).`)
+    }
+    return { statement: { type: 'file_import', names, path }, newPos: this.pos }
   }
 
   /**

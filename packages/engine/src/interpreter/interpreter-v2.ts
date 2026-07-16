@@ -6,6 +6,8 @@
  * For new code, consider using the modules directly from './interpreter/'.
  */
 
+import * as path from 'path'
+
 import { AudioIR } from '../parser/audio-parser'
 import { createAudioEngine } from '../audio/create-audio-engine'
 import { AudioEngineBackend } from '../audio/engine-backend'
@@ -20,6 +22,7 @@ import { ENGINE_VERSION, DSL_VERSION } from '../version'
 import { InterpreterState } from './types'
 import { processGlobalInit, processSequenceInit } from './process-initialization'
 import { processStatement } from './process-statement'
+import { createImportContext, processFileImports } from './process-file-import'
 
 /**
  * Interpreter V2 - Object-oriented approach
@@ -163,6 +166,21 @@ export class InterpreterV2 {
 
     // Ensure SuperCollider is booted
     await this.ensureBooted()
+
+    // File imports (IM.2, #456): evaluated BEFORE the entry's own declarations, in
+    // source order, depth-first. The cache/cycle context lives for this eval only.
+    if (ir.fileImports?.length) {
+      const baseDir = options?.sourceFile
+        ? path.dirname(path.resolve(options.sourceFile))
+        : options?.documentDirectory
+      if (!baseDir) {
+        throw new Error(
+          'import: cannot resolve the base directory — no source file or document directory (IM.6).',
+        )
+      }
+      const ctx = createImportContext(options?.sourceFile)
+      await processFileImports(ir.fileImports, baseDir, this.state, ctx)
+    }
 
     // Process global initialization
     if (ir.globalInit) {

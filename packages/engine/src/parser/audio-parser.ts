@@ -8,7 +8,14 @@
  * For new code, consider using the modules directly from './'.
  */
 
-import { AudioToken, AudioIR, GlobalInit, SequenceInit, Statement } from './types'
+import {
+  AudioToken,
+  AudioIR,
+  FileImportStatement,
+  GlobalInit,
+  SequenceInit,
+  Statement,
+} from './types'
 import { AudioTokenizer } from './tokenizer'
 import { ParserUtils } from './parser-utils'
 import { StatementParser } from './parse-statement'
@@ -58,7 +65,11 @@ export class AudioParser {
     const result: AudioIR = {
       sequenceInits: [],
       statements: [],
+      fileImports: [],
     }
+    // IM.1: file import はファイル先頭領域（最初の非 import 文より前）のみ。
+    // import 文（stdlib 含む）以外を見たら以降の file import はエラー。
+    let seenNonImport = false
 
     this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
 
@@ -74,9 +85,22 @@ export class AudioParser {
         // Handle different statement types
         if (stmtResult.statement.type === 'global_init') {
           result.globalInit = stmtResult.statement as GlobalInit
+          seenNonImport = true
         } else if (stmtResult.statement.type === 'seq_init') {
           result.sequenceInits.push(stmtResult.statement as SequenceInit)
+          seenNonImport = true
+        } else if (stmtResult.statement.type === 'file_import') {
+          if (seenNonImport) {
+            throw new Error(
+              `import "${(stmtResult.statement as FileImportStatement).path}": ` +
+                `import statements must appear before any other statement (IM.1).`,
+            )
+          }
+          result.fileImports!.push(stmtResult.statement as FileImportStatement)
         } else {
+          if (stmtResult.statement.type !== 'import') {
+            seenNonImport = true
+          }
           result.statements.push(stmtResult.statement as Statement)
         }
       }
