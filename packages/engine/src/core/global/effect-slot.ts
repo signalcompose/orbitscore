@@ -54,10 +54,6 @@ export class EffectSlotMap<K> {
     return this.slots.has(key)
   }
 
-  get size(): number {
-    return this.slots.size
-  }
-
   /**
    * 宣言する（または冪等に再宣言する）。同一 spec の再宣言は既存 load を待ち、
    * respawn 後の stale cache（`isPluginActive?.('effect', bus) === false`）なら

@@ -108,6 +108,10 @@ export class SequenceEffectManager {
       }
       // 既存 bus（passthrough 昇格 / self-heal 再ロード）の失敗は bus を返却しない —
       // seq.output()/seq.send() の routing がその bus を参照し続けているため。
+      // 【意図的な旧実装との差分】旧実装は self-heal 再ロード失敗で宣言ごと bus を消して
+      // いた（hasDeclaration/hasAnyDeclaration が false に反転 = LinkAudio 排他ゲートが
+      // 緩む + routing が参照中の bus 名が pool 外へ漏失）。本実装は bus を温存する —
+      // MixerManager の従来挙動とも一致（#472 レビューで確認・回帰テストでピン留め済み）。
       throw err
     }
     return bus
