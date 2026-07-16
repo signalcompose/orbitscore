@@ -17,6 +17,52 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.255 fix(daemon): OOP attach 失敗の fast-fail + retry 可能化 #441 PR-1c (Jul 16, 2026)
+
+**Date**: 2026-07-16
+**Status**: ✅ 実装・検証済み（PR 作成へ）
+**Branch**: `441-oop-attach-fast-fail-retry`
+**Commit**: `b09a45e`
+
+Epic #424 DoD ゲート項目。PR #440 レビュー4体 + Fable 裁定で確定した attach エラー処理の
+一体的2欠陥（child 早期 crash が10秒 timeout でしか検出されない / 訂正可能なユーザーミスが
+slot を daemon 再起動まで殺す）を解消。実装 = Codex 委譲4周（main = Fable が実装前設計を
+確定し、diff 精読 + 検証で各周を受け入れ）。
+
+**実装（7ファイル・+383/-33）**:
+- (b) fast-fail: stats に `initial_attach_pending` / `child_early_exit`（AtomicBool）を追加。
+  watchdog は初回 attach 中（pending=true **かつ** shm `child_status != READY`）の child exit を
+  respawn せず `child_early_exit` を publish して終了。ready-ack ループがこれを poll し、10秒
+  timeout を待たず即エラー。READY 到達済み crash は従来の respawn 経路（レース回避の二重条件は
+  Fable レビューで発見 → Codex 2周目で修正）
+- (a) retry 可能化: supervisor に `detach_keep_shm()`（`unlink_shm` フラグで shm unlink をスキップ
+  する teardown）を追加。role mismatch / timeout / early-exit の3分岐を `Closed` から
+  `Empty(launch)` 復帰へ変更（unlink 所有権は launch に戻る = PR-1b `c436a22` フリップ前提の
+  再設計）。teardown が書いた `CONTROL_QUIT` は新 helper `reset_control_run` で `CONTROL_RUN` へ
+  戻す（残留すると次 incarnation の child が即終了する）。`open_shared` 失敗・supervisor spawn
+  失敗は真の daemon 破損なので `Closed` のまま
+- (e) エラーコード細分化: `WrapError::OutProcAttachFailed`（retryable）/ `OutProcSlotClosed`
+  （恒久）を追加し、`wrap_err_to_protocol` で `OUTPROC_ATTACH_FAILED` / `OUTPROC_SLOT_CLOSED` に
+  分離（#405 `CLAP_NOT_LOADED` の前例に倣う）。TS 側が機械判別可能に
+- transport: `CHILD_STATUS_LOAD_FAILED` の decision record コメントを PR-1c 実装後の実態に更新
+
+**テスト**:
+- fast-fail unit（`exit 1` スタブ・実プラグイン不要）: 5秒未満で `OutProcAttachFailed` +
+  slot Empty + shm 残存 + control RUN を検証
+- retry unit（role mismatch 経由・`exec sleep 20` スタブ + テスト側 `publish_child_ready` 注入）:
+  1回目失敗 → 同一 slot で2回目 Active 成功。同期合図は `current_child_pid` 遷移
+  （Loading 観測だと `reset_child_starting` に READY が wipe される flake window → Fable 指摘で修正）
+- gated E2E ×2（effect / instrument・実機）: typo path → 即エラー（<10s）→ 正しい path 再送 →
+  成功・音声処理確認。**実機 RUN 済み**（effect 2.59s / instrument 2.75s PASS）
+- 回帰: post-READY crash respawn テスト（lib）+ kill-test gated 実機 RUN（respawn 復帰・
+  ratio 0.50000・measurement_invalid false）PASS
+- fail-before/pass-after 変異実証: early-exit チェック無効化 → fast-fail テスト failure（10s 退行）、
+  role-mismatch arm を Closed 化 → retry テスト failure を確認後、復元して green
+- フルスイート: effect / instrument 各 feature 全テスト + sandbox 49 + clippy 3本 + gated compile
+  全パス（ホスト実行）
+
+**次**: PR 作成 → /simplify → /code:pr-review-team → bot review → PR-2（共存）へ
+
 ### 6.254 feat(daemon): 実際の post-boot attach #431 PR-1b (Jul 14, 2026)
 
 **Date**: 2026-07-14
