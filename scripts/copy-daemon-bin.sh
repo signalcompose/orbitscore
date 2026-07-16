@@ -30,11 +30,16 @@
 # NOT covered by that gate and can produce a .vsix whose default backend
 # (rust) is unable to start.
 #
+# The release daemon uses OOP-both plugin hosting, so its effect and instrument
+# child executables are bundled beside the daemon. The daemon resolves them as
+# siblings of its own executable, requiring no additional runtime wiring.
+#
 # Usage:
 #   bash scripts/copy-daemon-bin.sh
 #
-# Build the daemon first if you want it bundled:
-#   cd rust && cargo build --release -p orbit-audio-daemon
+# Build the release binaries first if you want them bundled:
+#   cd rust && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument
+#   cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child
 
 set -euo pipefail
 
@@ -45,20 +50,25 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 # single platform this bounded first version supports.
 PLATFORM="darwin-arm64"
 
-DAEMON_SRC="$PROJECT_ROOT/rust/target/release/orbit-audio-daemon"
 DEST_DIR="$PROJECT_ROOT/packages/vscode-extension/engine/bin/$PLATFORM"
 
-if [ ! -f "$DAEMON_SRC" ]; then
-  echo "⚠️  orbit-audio-daemon not found at $DAEMON_SRC — skipping bundle." >&2
-  echo "    rust is the default backend, so this build's default backend will not" >&2
-  echo "    be able to start unless you set orbitscore.engine to \"sc\". To bundle" >&2
-  echo "    the daemon and restore the default:" >&2
-  echo "      cd rust && cargo build --release -p orbit-audio-daemon" >&2
-  exit 0
-fi
-
 mkdir -p "$DEST_DIR"
-cp "$DAEMON_SRC" "$DEST_DIR/orbit-audio-daemon"
-chmod +x "$DEST_DIR/orbit-audio-daemon"
 
-echo "Bundled orbit-audio-daemon ($PLATFORM) -> $DEST_DIR/orbit-audio-daemon"
+copy_binary() {
+  local binary_name="$1"
+  local source_path="$PROJECT_ROOT/rust/target/release/$binary_name"
+  local destination_path="$DEST_DIR/$binary_name"
+
+  if [ ! -f "$source_path" ]; then
+    echo "⚠️  $binary_name not found at $source_path — skipping bundle." >&2
+    return
+  fi
+
+  cp "$source_path" "$destination_path"
+  chmod +x "$destination_path"
+  echo "Bundled $binary_name ($PLATFORM) -> $destination_path"
+}
+
+copy_binary "orbit-audio-daemon"
+copy_binary "orbit-clap-effect-child"
+copy_binary "orbit-clap-instrument-child"
