@@ -304,6 +304,12 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
+    // viewsWelcome コンテンツは view に provider が登録されて初めて描画される
+    // （空 TreeView で十分 — 章ツリーの本実装は #451 確定後の follow-up）。
+    vscode.window.registerTreeDataProvider('orbitscore.learningView', {
+      getChildren: () => [],
+      getTreeItem: (element: vscode.TreeItem) => element,
+    }),
     vscode.commands.registerCommand('orbitscore.openDevDocs', openDevDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocsPanel', () => openDevDocsPanel(context)),
     vscode.commands.registerCommand('orbitscore.openWalkthrough', openWalkthrough),
@@ -418,15 +424,27 @@ export function deactivate() {
   devDocsPanel = null
 }
 
-async function openDevDocs(): Promise<void> {
+/**
+ * Canonical local URL of the dev learning site, or null (with the shared error
+ * message shown) when the MCP server is not running. Single source for every
+ * entry point (browser command, webview panel) — the site is served at the
+ * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
+ * is only a redirect kept for muscle memory).
+ */
+function resolveDevDocsUrl(): string | null {
   const port = mcpServerHandle?.port ?? 0
   if (!port) {
     void vscode.window.showErrorMessage(
       'OrbitScore development docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
     )
-    return
+    return null
   }
-  const url = `http://127.0.0.1:${port}/docs/`
+  return `http://127.0.0.1:${port}/orbitscore/dev/`
+}
+
+async function openDevDocs(): Promise<void> {
+  const url = resolveDevDocsUrl()
+  if (!url) return
   const opened = await vscode.env.openExternal(vscode.Uri.parse(url))
   if (!opened) {
     outputChannel?.appendLine(`❌ Failed to open development docs at ${url}`)
@@ -441,14 +459,8 @@ async function openDevDocs(): Promise<void> {
  * existing panel instead of creating a duplicate.
  */
 function openDevDocsPanel(context: vscode.ExtensionContext): void {
-  const port = mcpServerHandle?.port ?? 0
-  if (!port) {
-    void vscode.window.showErrorMessage(
-      'OrbitScore development docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
-    )
-    return
-  }
-  const url = `http://127.0.0.1:${port}/orbitscore/dev/`
+  const url = resolveDevDocsUrl()
+  if (!url) return
 
   if (devDocsPanel) {
     devDocsPanel.reveal(vscode.ViewColumn.Active)
