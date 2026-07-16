@@ -1266,6 +1266,61 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 
 ---
 
+## Mixer / Routing（sum・aux/send — #453/#459）
+
+> **Status**: 設計確定（2026-07-17・issue #459 コメントが決定記録）・実装は M1-M3 で段階導入。
+> 本節が規範（DocDD: spec 先行）。ブレスト正本 `POST_2.0_MIXER_DSL_DESIGN.html` は非規範。
+
+### MX.1 ルーティングモデル
+
+グラフは **source（seq）→ 任意の per-seq insert（PH.2b）→ sum（group bus）→ master** の直列と、
+**send → aux（return bus）→ master** の並列タップで構成する。エッジは常に **source が行き先を指す**。
+reconciliation key は名前（同名 = 同一 node・再評価は再束縛）。
+
+### MX.2 sum — `global.sum(name)` / `seq.output(name)`
+
+```js
+global.sum("drum")                    // group bus 宣言（冪等）
+kick.output("drum")                   // メンバーシップ = 行き先指定
+snare.output("drum")
+sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（v1 は 1 基・PH.2b と同規則）
+```
+
+- `seq.output(name)` の名前解決: **sum 宣言があれば group bus・LinkAudio 有効なら egress
+  channel**（両機構は v1 相互排他のため衝突しない）。未宣言名はエラー
+- sum の **ネストは v1 不可**（1 段・将来拡張として予約）
+- seq が per-seq insert（`seq.effect()`）を持つ場合の処理順: **per-seq insert → group bus**
+  （DAW の track insert → group と同型）
+
+### MX.3 aux / send — `global.aux(name)` / `seq.send(name, amount)`
+
+```js
+global.aux("rev")                     // return bus 宣言
+aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
+kick.send("rev", 0.3)                 // send（copy・原音は継続して master/sum へ）
+```
+
+- send は **post-fader（= per-seq insert 適用後）固定**（v1。pre/post 切替は将来拡張）
+- `amount` は線形 gain（0.0-1.0 目安・上限は clamp しない）
+- 複数 send 可（fan-out）。send 先未宣言はエラー
+
+### MX.4 エンジン実装（規範）
+
+- event は常に**単一の bus に tag** される（fan-out は event 複製ではなく **bus 処理段の
+  copy 加算**で行う）。stage は構築時にトポロジカル順で固定（per-seq → sum → aux return →
+  master）。RT 経路に alloc/lock なし・全 bus inactive なら従来経路とビット同一（PH.2b と同じ
+  activation 機構）
+- bus は起動時プールから確保（kind: insert/sum/aux）。宣言 = activation・失敗ロールバック・
+  per-bus health・UNROUTABLE_EVENTS 観測は PH.2b の機構を共有
+
+### MX.5 v1 制約（実装事実の開示）
+
+- PDC（plugin latency 補償）なし — 並列経路（aux・group 間）の位相整合は保証しない
+- sum ネスト不可・send は post-fader 固定・LinkAudio と相互排他（PH.5）
+- 受理フォーマットは effect 系 = `.clap` のみ（PH.3）
+
+---
+
 ## Implementation Status
 
 ### Completed Features ✅
