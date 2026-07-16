@@ -77,9 +77,17 @@ fn main() -> Result<()> {
         );
     }
 
-    let (mut effect, _info) =
+    let (mut effect, info) =
         Vst3EffectProcessor::load(&args.plugin, args.sample_rate as f64, MAX_FRAMES as i32)
             .with_context(|| format!("load VST3 effect {:?}", args.plugin))?;
+
+    // load 成功を host へ handshake する（PR-1a の child readiness 契約・#445）。
+    // host の ready-ack ループ（PR-1b）はこれを待つため、publish しないと attach が
+    // CHILD_READY_TIMEOUT で必ず失敗する（CLAP effect child と同じ配置・同じ意味論）。
+    // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。
+    unsafe {
+        orbit_audio_sandbox::transport::publish_child_ready(region, info.audio_inputs > 0);
+    }
 
     let mut scratch = vec![0.0f32; BUF_LEN];
     let mut process_errors: u64 = 0;
