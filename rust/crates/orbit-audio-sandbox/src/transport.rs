@@ -459,7 +459,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let mmap = create_shared(&path).expect("create");
         let region = region_ptr(&mmap);
-        // SAFETY: region points into the live mapping created above.
+        // SAFETY: region は上で作成した生存 mapping を指す。
         unsafe {
             (*region).control.store(CONTROL_QUIT, Ordering::Release);
             reset_control_run(region);
