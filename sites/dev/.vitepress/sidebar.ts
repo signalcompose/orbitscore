@@ -46,7 +46,12 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
-    text: 'Part V: ADR / Glossary',
+    text: 'Part V: Plugin Hosting',
+    collapsed: false,
+    items: [{ text: 'PH-1. Plugin Hosting 概観', link: '/plugin-hosting/' }],
+  },
+  {
+    text: 'Part VI: ADR / Glossary',
     collapsed: false,
     items: [
       { text: 'ADR-001 SC ベース実装の選択', link: '/decisions/adr-001-supercollider' },
@@ -103,7 +108,12 @@ export const sidebarEn: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
-    text: 'Part V: ADR / Glossary',
+    text: 'Part V: Plugin Hosting',
+    collapsed: false,
+    items: [{ text: 'PH-1. Plugin Hosting Overview', link: '/en/plugin-hosting/' }],
+  },
+  {
+    text: 'Part VI: ADR / Glossary',
     collapsed: false,
     items: [
       {
