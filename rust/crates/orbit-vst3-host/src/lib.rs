@@ -958,6 +958,8 @@ impl Vst3InstrumentProcessor {
             },
         }];
         let Ok(num_samples) = i32::try_from(frames) else {
+            // Same rationale as the guards above: drop stale queued events on early return.
+            self.input_events.clear();
             return false;
         };
         let mut process_data = ProcessData {

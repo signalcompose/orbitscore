@@ -9,10 +9,9 @@
  * order, so callers can't accidentally skip validation. Callers that also
  * need to gate on other state (e.g. `PluginEffectManager.effect()` rejecting
  * while LinkAudio is enabled) should run that check *between* validation and
- * resolution — call `validatePluginExtension(spec)` directly first, do the
+ * resolution — call `validatePluginExtension(spec, role)` directly first, do the
  * gating check, then call `resolvePluginPath` (which re-validates; the
- * function is pure so the repeat call is harmless). Example:
- * `validatePluginExtension(spec, role)`.
+ * function is pure so the repeat call is harmless).
  */
 
 import path from 'node:path'

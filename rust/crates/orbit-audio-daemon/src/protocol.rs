@@ -144,6 +144,13 @@ pub const ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN: &str = "OUTPROC_INSTRUMENT_RESP
 /// `measurement_invalid` を検知して一度だけ発火する（fire-once）。`ERROR_CODE_OUTPROC_EFFECT_INVALID`
 /// の instrument 側ミラー（#420 PR #422 round 3）。
 pub const ERROR_CODE_OUTPROC_INSTRUMENT_INVALID: &str = "OUTPROC_INSTRUMENT_INVALID";
+/// out-of-process instrument child が input event を decode できなかった / 未対応の
+/// `NeutralEvent` variant を受けた（該当イベントは無音で消える）。WARNING severity。child が
+/// shm の cumulative counter（`event_decode_error_count`）に積み、daemon が 1 Hz ticker で増加を
+/// 検知して発火する（#421 pr-review-team round 2: counter の watchdog ミラーは round 1 で追加済み
+/// だったが daemon health 経路への配線が欠けており、per-note expression 等の未対応イベント消失が
+/// 一切可視化されなかった — silent-failure-hunter 指摘の残余）。
+pub const ERROR_CODE_OUTPROC_INSTRUMENT_EVENT_DECODE: &str = "OUTPROC_INSTRUMENT_EVENT_DECODE";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]
