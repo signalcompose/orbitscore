@@ -124,6 +124,47 @@ impl OutputStream {
 /// channel 数を遥かに上回る値。
 pub const MAX_LINK_CHANNELS: usize = 64;
 
+/// callback が同時に render できる insert bus 数の上限。stage は stream 構築時に固定されるため、
+/// callback では stack 上の `ArrayVec` だけで `render_multi` 引数を組み立てられる。
+pub const MAX_INSERT_BUS_STAGES: usize = 64;
+
+/// named routing tag を受ける per-bus insert stage。
+///
+/// `processor=None` は effect 未 attach の **登録済み bus** を表す。buffer を `render_multi` に渡して
+/// event を必ず消費し、そのまま master へ足すので、未 attach bus の event が retain され続けない。
+pub struct InsertBusStage {
+    name: String,
+    processor: Option<Box<dyn PostProcessor>>,
+    buffer: Vec<f32>,
+}
+
+impl InsertBusStage {
+    /// テストまたは構築側が既知の block 長で stage を作る。通常の stream 起動 seam は device config
+    /// 確定後に必要な buffer を確保するため、ここには 0 を渡してよい。
+    pub fn new(
+        name: impl Into<String>,
+        processor: Option<Box<dyn PostProcessor>>,
+        buffer_len: usize,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            processor,
+            buffer: vec![0.0; buffer_len],
+        }
+    }
+
+    /// effect 未 attach の routing bus を登録する。
+    pub fn unattached(name: impl Into<String>) -> Self {
+        Self::new(name, None, 0)
+    }
+
+    fn ensure_buffer_len(&mut self, len: usize) {
+        if self.buffer.len() < len {
+            self.buffer.resize(len, 0.0);
+        }
+    }
+}
+
 /// LinkAudio channel を RT callback に届けるための activation メッセージ（A4-2b-2）。
 /// control thread が ring 生成・scratch 事前確保まで行い、本構造体を reg-ring 経由で callback へ
 /// 渡す（callback は受け取って pool へ追加するだけ＝RT alloc を避ける）。`sink` は対になる
@@ -167,9 +208,11 @@ fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool 
 /// 各々独立の opt-in 分岐で、すべて None なら従来経路とビット同一。`capture` は `hw` を読むだけ
 /// なので有効でも出力サンプルは不変（tap であって mutation ではない）。
 #[inline]
+#[allow(clippy::too_many_arguments)] // callback state is kept as independent opt-in seams.
 fn render_block(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
+    insert_buses: &mut [InsertBusStage],
     post: &mut Option<Box<dyn PostProcessor>>,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
@@ -180,7 +223,12 @@ fn render_block(
     // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
     let t0 = cb_stats.as_ref().map(|_| Instant::now());
 
-    render_engine(engine, link, output_channels, hw);
+    if insert_buses.is_empty() {
+        // S1 の bus 無し経路は既存の呼び出し列をそのまま維持する（bit-identical）。
+        render_engine(engine, link, output_channels, hw);
+    } else {
+        render_engine_with_insert_buses(engine, link, insert_buses, output_channels, hw);
+    }
 
     // master-bus post-processor（CLAP）。engine render 済みの hardware sum を in-place 変換。
     if let Some(p) = post.as_mut() {
@@ -197,6 +245,69 @@ fn render_block(
 
     if let (Some(stats), Some(t0)) = (cb_stats, t0) {
         stats.record(t0.elapsed().as_nanos() as u64);
+    }
+}
+
+#[inline]
+fn render_engine_with_insert_buses(
+    engine: &Engine,
+    link: &mut Option<LinkEgress>,
+    buses: &mut [InsertBusStage],
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    // LinkAudio と併用するときも 1 回の render_multi に集約し、transport/gain ramp を一度だけ進める。
+    // bus 名と Link channel 名が重複した場合は bus を先に登録する（S1 は daemon Link 配線を変更しない）。
+    use arrayvec::ArrayVec;
+    const MAX_TARGETS: usize = MAX_INSERT_BUS_STAGES + MAX_LINK_CHANNELS;
+    debug_assert!(buses.len() <= MAX_INSERT_BUS_STAGES);
+    let bs = (hw.len() / output_channels) * output_channels;
+    let mut targets: ArrayVec<(&str, &mut [f32]), MAX_TARGETS> = ArrayVec::new();
+    for bus in buses.iter_mut() {
+        debug_assert!(
+            bus.buffer.len() >= bs,
+            "insert bus '{}' buffer too short",
+            bus.name
+        );
+        targets
+            .try_push((bus.name.as_str(), &mut bus.buffer[..bs]))
+            .expect("bounded bus count");
+    }
+
+    if let Some(le) = link {
+        while let Ok(act) = le.reg_rx.pop() {
+            le.channels.push(act);
+        }
+        for ch in le.channels.iter_mut() {
+            let active =
+                channel_egress_active(ch.ready.load(Ordering::Relaxed), ch.scratch.len(), bs);
+            if active
+                && targets
+                    .try_push((ch.name.as_str(), &mut ch.scratch[..bs]))
+                    .is_err()
+            {
+                debug_assert!(false, "render target pool exceeded configured cap");
+                break;
+            }
+        }
+    }
+    engine.render_multi(hw, &mut targets);
+    drop(targets);
+
+    for bus in buses.iter_mut() {
+        if let Some(processor) = bus.processor.as_mut() {
+            processor.process(&mut bus.buffer[..bs]);
+        }
+        for (dst, src) in hw.iter_mut().zip(&bus.buffer[..bs]) {
+            *dst += *src;
+        }
+    }
+    if let Some(le) = link {
+        for ch in le.channels.iter_mut() {
+            if channel_egress_active(ch.ready.load(Ordering::Relaxed), ch.scratch.len(), bs) {
+                ch.sink.commit(&ch.scratch[..bs]);
+            }
+        }
     }
 }
 
@@ -307,7 +418,8 @@ type OutputInnerStart = (
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
 /// 同時に初期化する（hardware-only）。呼び出し側は config ミスマッチを意識しなくてよい。
 pub fn start_default_output(capture_path: Option<PathBuf>) -> Result<OutputStart, OutputError> {
-    let (engine, stream, stats, _cb) = start_output_inner(None, None, None, capture_path)?;
+    let (engine, stream, stats, _cb) =
+        start_output_inner(None, Vec::new(), None, None, capture_path)?;
     Ok((engine, stream, stats))
 }
 
@@ -324,7 +436,8 @@ pub fn start_default_output_with_link_egress(
         // cap は control が強制するので最大 MAX_LINK_CHANNELS。callback で push のみ・realloc を避ける。
         channels: Vec::with_capacity(MAX_LINK_CHANNELS),
     };
-    let (engine, stream, stats, _cb) = start_output_inner(Some(link), None, None, capture_path)?;
+    let (engine, stream, stats, _cb) =
+        start_output_inner(Some(link), Vec::new(), None, None, capture_path)?;
     Ok((engine, stream, stats, reg_tx))
 }
 
@@ -343,10 +456,32 @@ pub fn start_default_output_with_clap(
     capture_path: Option<PathBuf>,
 ) -> Result<ClapHostStart, OutputError> {
     let (engine, stream, stats, cb) =
-        start_output_inner(None, Some(post), buffer_frames, capture_path)?;
+        start_output_inner(None, Vec::new(), Some(post), buffer_frames, capture_path)?;
     // post=Some の経路では inner が必ず CallbackTimeStats を作る。
     let cb = cb.expect("clap path always creates CallbackTimeStats");
     Ok((engine, stream, stats, cb))
+}
+
+/// per-bus insert stage 付きで出力を起動する。stage の buffer は device config 確定後、callback が
+/// 始まる前に 1 秒分を確保する。`processor=None` の stage は pass-through routing 登録として使える。
+pub fn start_default_output_with_insert_buses(
+    mut insert_buses: Vec<InsertBusStage>,
+    capture_path: Option<PathBuf>,
+) -> Result<OutputStart, OutputError> {
+    if insert_buses.len() > MAX_INSERT_BUS_STAGES {
+        return Err(OutputError::NoConfig(format!(
+            "too many insert bus stages: {} (max {MAX_INSERT_BUS_STAGES})",
+            insert_buses.len()
+        )));
+    }
+    let (engine, stream, stats, _cb) = start_output_inner(
+        None,
+        std::mem::take(&mut insert_buses),
+        None,
+        None,
+        capture_path,
+    )?;
+    Ok((engine, stream, stats))
 }
 
 /// `start_default_output` / `_with_link_egress` / `_with_clap` の共通実装。
@@ -356,6 +491,7 @@ pub fn start_default_output_with_clap(
 /// 計測・通常 None で device 既定）。
 fn start_output_inner(
     link: Option<LinkEgress>,
+    mut insert_buses: Vec<InsertBusStage>,
     post: Option<Box<dyn PostProcessor>>,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
@@ -375,6 +511,10 @@ fn start_output_inner(
     }
     let sample_rate = config.sample_rate.0;
     let channels = config.channels;
+    for bus in &mut insert_buses {
+        // callback block は通常これより遥かに短い。RT hot path の resize を構造的に排除する。
+        bus.ensure_buffer_len(sample_rate as usize * channels as usize);
+    }
 
     // capture seam（#307 realtime・A = daemon-start config / whole-stream）: `capture_path` が
     // 与えられたときのみ master 出力（post 適用後の hw）を WAV へ録る tap を差し込む。env 読取りは
@@ -405,6 +545,7 @@ fn start_output_inner(
         engine.clone(),
         stats.clone(),
         link,
+        insert_buses,
         post,
         capture_sink,
         cb_stats.clone(),
@@ -434,6 +575,7 @@ fn build_stream(
     engine: Engine,
     stats: Arc<StreamStats>,
     mut link: Option<LinkEgress>,
+    mut insert_buses: Vec<InsertBusStage>,
     mut post: Option<Box<dyn PostProcessor>>,
     mut capture: Option<RingTapSink>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
@@ -461,6 +603,7 @@ fn build_stream(
                     render_block(
                         &engine,
                         &mut link,
+                        &mut insert_buses,
                         &mut post,
                         &mut capture,
                         &cb_stats,
@@ -486,6 +629,7 @@ fn build_stream(
                         render_block(
                             &engine,
                             &mut link,
+                            &mut insert_buses,
                             &mut post,
                             &mut capture,
                             &cb_stats,
@@ -515,6 +659,7 @@ fn build_stream(
                         render_block(
                             &engine,
                             &mut link,
+                            &mut insert_buses,
                             &mut post,
                             &mut capture,
                             &cb_stats,
@@ -543,6 +688,7 @@ fn build_stream(
                         render_block(
                             &engine,
                             &mut link,
+                            &mut insert_buses,
                             &mut post,
                             &mut capture,
                             &cb_stats,
@@ -572,6 +718,99 @@ fn build_stream(
 mod tests {
     use super::*;
     use cpal::BackendSpecificError;
+
+    #[test]
+    fn render_block_zero_buses_bit_identical() {
+        let sample = orbit_audio_core::Sample::new(vec![0.25; 8], 48_000, 2);
+        let reference = Engine::new(48_000, 2);
+        reference.schedule(0.0, sample.clone()).expect("schedule");
+        let with_buses = Engine::new(48_000, 2);
+        with_buses.schedule(0.0, sample).expect("schedule");
+        let mut expected = vec![0.0; 8];
+        reference.render(&mut expected);
+        let mut buses = Vec::new();
+        let mut actual = vec![0.0; 8];
+        let mut link = None;
+        let mut post = None;
+        let mut capture = None;
+        let cb_stats = None;
+        render_block(
+            &with_buses,
+            &mut link,
+            &mut buses,
+            &mut post,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut actual,
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn render_block_one_bus_applies_effect_then_sums() {
+        struct Half;
+        impl PostProcessor for Half {
+            fn process(&mut self, data: &mut [f32]) {
+                for sample in data {
+                    *sample *= 0.5;
+                }
+            }
+        }
+        let engine = Engine::new(48_000, 2);
+        let tagged = orbit_audio_core::Sample::new(vec![2.0; 4], 48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("fx".into()),
+                "tagged".into(),
+                tagged,
+            )
+            .expect("schedule");
+        let plain = orbit_audio_core::Sample::new(vec![3.0; 4], 48_000, 2);
+        engine.schedule(0.0, plain).expect("schedule");
+        let mut buses = vec![InsertBusStage::new("fx", Some(Box::new(Half)), 4)];
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        // center pan の equal-power gain は √0.5。tagged=2.0×√0.5×0.5、
+        // untagged=3.0×√0.5 なので、両者の sum = 2√2 を値で pin する。
+        assert!(hw
+            .iter()
+            .all(|&sample| (sample - 2.0_f32.sqrt() * 2.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn tagged_event_with_unattached_bus_still_drops() {
+        let engine = Engine::new(48_000, 2);
+        let sample = orbit_audio_core::Sample::new(vec![1.0; 4], 48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("dry".into()),
+                "tagged".into(),
+                sample,
+            )
+            .expect("schedule");
+        let mut buses = vec![InsertBusStage::new("dry", None, 4)];
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        assert!(hw
+            .iter()
+            .all(|&sample| (sample - 0.5_f32.sqrt()).abs() < 1e-6));
+        assert_eq!(engine.active_count(), Some(0));
+    }
 
     #[test]
     fn stream_stats_starts_at_zero() {
@@ -710,6 +949,7 @@ mod tests {
         render_block(
             &engine,
             &mut link,
+            &mut [],
             &mut post,
             &mut capture,
             &cb_stats,
