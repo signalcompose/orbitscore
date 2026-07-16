@@ -85,6 +85,12 @@
         "title": "🔌 Register Claude Code MCP Server",
         "category": "OrbitScore",
         "icon": "$(plug)"
+      },
+      {
+        "command": "orbitscore.openDevDocs",
+        "title": "📚 OrbitScore: Open Dev Docs",
+        "category": "OrbitScore",
+        "icon": "$(book)"
       }
     ],
     "languages": [

@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto'
+import * as fs from 'fs'
 import * as http from 'http'
+import * as path from 'path'
 
 import type { WavAnalysis } from './wav-analysis'
 
@@ -221,11 +223,149 @@ export interface McpServerHandle {
 }
 
 /**
+ * Public URL prefix the built dev site is served under. Must equal SITE_BASE in
+ * sites/dev/.vitepress/config.ts (minus the trailing slash): the dist's asset and
+ * navigation URLs are absolute under that base, so serving at any other prefix
+ * breaks every asset request.
+ */
+export const DOCS_PUBLIC_BASE = '/orbitscore/dev'
+
+/** Resolve the built VitePress site from a repository/workspace base directory. */
+export function resolveDocsRoot(baseDir: string): string {
+  return path.resolve(baseDir, 'sites/dev/.vitepress/dist')
+}
+
+/**
+ * Resolve a docs-relative URL path without allowing it to escape docsRoot.
+ * Directory URLs (including the root URL) serve their index.html.
+ */
+export function resolveDocsFilePath(docsRoot: string, urlPath: string): string | null {
+  return resolveSafePath(docsRoot, urlPath, (decodedPath, relativePath) =>
+    decodedPath.endsWith('/') || !path.extname(relativePath)
+      ? path.join(relativePath, 'index.html')
+      : relativePath,
+  )
+}
+
+/**
+ * Shared traversal guard for every docs path lookup: decode → reject `..`/`\` →
+ * resolve against root → containment check. This is the security boundary for the
+ * locally-bound HTTP server and the MCP doc tools — keep it single-sourced so a
+ * future tightening applies everywhere at once. `mapTarget` lets callers layer
+ * their own URL→file mapping (e.g. directory → index.html) on the decoded path
+ * before resolution; the containment check always runs on the mapped result.
+ */
+function resolveSafePath(
+  root: string,
+  rawPath: string,
+  mapTarget: (decodedPath: string, relativePath: string) => string = (_, relativePath) =>
+    relativePath,
+): string | null {
+  let decodedPath: string
+  try {
+    decodedPath = decodeURIComponent(rawPath)
+  } catch {
+    return null
+  }
+  if (decodedPath.includes('\\') || decodedPath.includes('..')) {
+    return null
+  }
+  const relativePath = decodedPath.replace(/^\/+/, '')
+  const filePath = path.resolve(root, mapTarget(decodedPath, relativePath))
+  const normalizedRoot = path.resolve(root)
+  if (filePath !== normalizedRoot && !filePath.startsWith(`${normalizedRoot}${path.sep}`)) {
+    return null
+  }
+  return filePath
+}
+
+function resolvePathWithinRoot(root: string, relativePath: string): string | null {
+  if (!relativePath) return null
+  const filePath = resolveSafePath(root, relativePath)
+  // The bare root is a valid *directory* answer for the docs file server (mapped to
+  // index.html) but never a valid document path for readDevDoc/searchDevDocs.
+  return filePath !== null && filePath !== path.resolve(root) ? filePath : null
+}
+
+export function readDevDoc(sourceRoot: string, relativePath: string): string | null {
+  const filePath = resolvePathWithinRoot(sourceRoot, relativePath)
+  if (!filePath || path.extname(filePath) !== '.md' || !fs.existsSync(filePath)) {
+    return null
+  }
+  try {
+    return fs.readFileSync(filePath, 'utf8')
+  } catch {
+    // TOCTOU: the file could vanish (docs rebuild) between existsSync and read.
+    return null
+  }
+}
+
+export interface DevDocSearchMatch {
+  path: string
+  line: number
+  excerpt: string
+}
+
+export function searchDevDocs(sourceRoot: string, query: string, limit = 10): DevDocSearchMatch[] {
+  if (!query) return []
+  const matches: DevDocSearchMatch[] = []
+  const needle = query.toLowerCase()
+  const walk = (directory: string): void => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name === '.vitepress' || entry.name === 'node_modules') continue
+      const entryPath = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        walk(entryPath)
+      } else if (entry.isFile() && path.extname(entry.name) === '.md') {
+        let lines: string[]
+        try {
+          lines = fs.readFileSync(entryPath, 'utf8').split(/\r?\n/)
+        } catch {
+          // Skip a file that becomes unreadable mid-walk rather than aborting the search.
+          continue
+        }
+        for (let index = 0; index < lines.length && matches.length < limit; index += 1) {
+          if (lines[index].toLowerCase().includes(needle)) {
+            matches.push({
+              path: path.relative(sourceRoot, entryPath).split(path.sep).join('/'),
+              line: index + 1,
+              excerpt: lines[index].trim(),
+            })
+          }
+        }
+      }
+      if (matches.length >= limit) return
+    }
+  }
+  if (fs.existsSync(sourceRoot)) walk(sourceRoot)
+  return matches
+}
+
+function contentTypeForDocsFile(filePath: string): string {
+  const types: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+  }
+  return types[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream'
+}
+
+/**
  * Build a per-session McpServer with the OrbitScore tool surface registered.
  * One instance per MCP session (see `startOrbitScoreMcpServer` for routing).
  */
-function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServerLike {
+function buildServer(
+  version: string,
+  handlers: OrbitScoreToolHandlers,
+  docsRoot: string,
+): McpServerLike {
   const server = new McpServer({ name: 'orbitscore', version })
+  const docsSourceRoot = path.resolve(docsRoot, '../..')
 
   server.registerTool(
     'evaluate_orbitscore',
@@ -576,6 +716,46 @@ function buildServer(version: string, handlers: OrbitScoreToolHandlers): McpServ
     },
   )
 
+  server.registerTool(
+    'get_dev_doc',
+    {
+      title: 'Get Dev Doc',
+      description: 'Read a development-site Markdown document by its site-relative path.',
+      inputSchema: {
+        path: z.string().describe('Site-relative Markdown path, e.g. pipeline/text-to-ast.md'),
+      },
+    },
+    async (args) => {
+      const relativePath = typeof args.path === 'string' ? args.path : ''
+      const content = readDevDoc(docsSourceRoot, relativePath)
+      return content === null
+        ? errorResult('development document not found')
+        : { content: [{ type: 'text', text: content }] }
+    },
+  )
+
+  server.registerTool(
+    'search_dev_docs',
+    {
+      title: 'Search Dev Docs',
+      description: 'Search development-site Markdown documents for a case-insensitive substring.',
+      inputSchema: {
+        query: z.string().describe('Text to search for'),
+        limit: z.number().describe('Maximum matches to return (default 10)').optional(),
+      },
+    },
+    async (args) => {
+      const query = typeof args.query === 'string' ? args.query : ''
+      const requestedLimit = typeof args.limit === 'number' ? args.limit : 10
+      const limit = Number.isFinite(requestedLimit) ? Math.max(0, Math.floor(requestedLimit)) : 10
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify(searchDevDocs(docsSourceRoot, query, limit)) },
+        ],
+      }
+    },
+  )
+
   // Optional handler (see OrbitScoreToolHandlers.registerMcpServer): the tool
   // only exists on hosts that can register themselves into Claude Code.
   const registerMcpServer = handlers.registerMcpServer?.bind(handlers)
@@ -649,6 +829,7 @@ export async function startOrbitScoreMcpServer(opts: {
   const { port, version, handlers, log } = opts
 
   const sessions = new Map<string, SessionEntry>()
+  const docsRoot = resolveDocsRoot(path.resolve(__dirname, '../../..'))
 
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
@@ -679,7 +860,7 @@ export async function startOrbitScoreMcpServer(opts: {
         sessions.delete(transport.sessionId)
       }
     }
-    const server = buildServer(version, handlers)
+    const server = buildServer(version, handlers, docsRoot)
     entry.transport = transport
     entry.server = server
     await server.connect(transport)
@@ -696,6 +877,53 @@ export async function startOrbitScoreMcpServer(opts: {
         return
       }
       const pathname = (req.url ?? '').split('?')[0]
+      // Human-friendly alias: the VitePress dist is built with SITE_BASE
+      // (`/orbitscore/dev/` — sites/dev/.vitepress/config.ts), so all asset /
+      // navigation URLs inside the built pages are absolute under that base.
+      // Serving the dist at any other prefix would 404 every asset; instead
+      // `/docs` redirects to the canonical base and only the base serves files.
+      if (pathname === '/docs' || pathname === '/docs/') {
+        res.writeHead(302, { Location: `${DOCS_PUBLIC_BASE}/` })
+        res.end()
+        return
+      }
+      if (pathname === DOCS_PUBLIC_BASE || pathname.startsWith(`${DOCS_PUBLIC_BASE}/`)) {
+        if (req.method !== 'GET') {
+          res.writeHead(405, { Allow: 'GET', 'content-type': 'text/plain; charset=utf-8' })
+          res.end('Method Not Allowed')
+          return
+        }
+        if (!fs.existsSync(docsRoot)) {
+          log(`docs not built — docsRoot missing: ${docsRoot}`)
+          res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('Development docs are not built. Run npm run docs:build -w @orbitscore/dev-site')
+          return
+        }
+        const filePath = resolveDocsFilePath(docsRoot, pathname.slice(DOCS_PUBLIC_BASE.length))
+        if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+          log(`docs file not found for pathname: ${pathname}`)
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('Not Found')
+          return
+        }
+        const contentType = contentTypeForDocsFile(filePath)
+        if (contentType === 'application/octet-stream') {
+          log(
+            `docs file served with fallback content-type (unknown extension ${path.extname(filePath)}): ${filePath}`,
+          )
+        }
+        res.writeHead(200, { 'content-type': contentType })
+        const stream = fs.createReadStream(filePath)
+        stream.on('error', (err) => {
+          log(`docs file stream error for ${filePath}: ${err}`)
+          if (!res.headersSent) {
+            res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+          }
+          res.end('Internal Server Error')
+        })
+        stream.pipe(res)
+        return
+      }
       if (pathname !== '/mcp') {
         res.writeHead(404, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: 'not found' }))
