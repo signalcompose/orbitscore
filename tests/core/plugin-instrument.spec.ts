@@ -20,6 +20,21 @@ function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({}), active?: boolean
 }
 
 describe('PluginInstrumentManager', () => {
+  it('accepts VST3 instruments and passes their resolved path to the engine', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await expect(global.instrument('./synth.vst3', 'synth-id')).resolves.toBe(global)
+    expect(loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'synth.vst3'),
+      'synth-id',
+      'instrument',
+    )
+  })
+
+  it('continues to reject AU instruments', async () => {
+    const { global } = makeGlobal()
+    await expect(global.instrument('synth.component')).rejects.toThrow('not yet supported')
+  })
+
   it('eagerly loads once and shares concurrent identical declarations', async () => {
     let resolve!: () => void
     const pending = new Promise<void>((r) => (resolve = r))

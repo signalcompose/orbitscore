@@ -259,6 +259,11 @@ pub(crate) trait OutProcRole: Sized {
     fn set_child_early_exit(stats: &Self::Stats, value: bool);
     fn child_early_exit(stats: &Self::Stats) -> bool;
     fn set_current_child_pid(stats: &Self::Stats, pid: u32);
+    /// Attach path で plugin format に依存する child を選び直す。effect は env 設定のまま。
+    fn select_child_exe(
+        launch: &mut ChildLaunch<Self>,
+        path: &std::path::Path,
+    ) -> Result<(), String>;
     /// テスト専用: role ジェネリックなテストヘルパーが `Self::Stats` を構築するためのコンストラクタ。
     /// production コードはこれを呼ばない（`load_outproc_plugin_impl` 等は呼び出し側から渡された
     /// `ChildLaunch::stats` を使う）。
@@ -339,6 +344,12 @@ impl OutProcRole for EffectRole {
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
     }
+    fn select_child_exe(
+        _launch: &mut ChildLaunch<Self>,
+        _path: &std::path::Path,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     #[cfg(test)]
     fn new_stats() -> Arc<Self::Stats> {
         crate::outproc_effect::OutProcEffectStats::new()
@@ -403,6 +414,15 @@ impl OutProcRole for InstrumentRole {
     }
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
+    }
+    fn select_child_exe(
+        launch: &mut ChildLaunch<Self>,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        // 拡張子ベースの読み替え（.vst3 → VST3 child・それ以外 → CLAP child）。明示指定された
+        // child exe（デフォルト名以外）は保持される。詳細は `child_exe_for_attach` の doc 参照。
+        launch.child_exe = crate::outproc_instrument::child_exe_for_attach(&launch.child_exe, path);
+        Ok(())
     }
     #[cfg(test)]
     fn new_stats() -> Arc<Self::Stats> {
@@ -1494,6 +1514,10 @@ impl EngineWrap {
             ChildSlot::Empty(launch) => launch,
             _ => unreachable!("ChildSlot state was checked while holding the same mutex"),
         };
+        if let Err(error) = R::select_child_exe(&mut launch, &path) {
+            *slot = ChildSlot::Empty(launch);
+            return Err(R::runtime_error(error));
+        }
         *slot = ChildSlot::Loading { path: path.clone() };
         // Loading 書き込みを可視化した直後にロックを解放する。以降の shm open・spawn・
         // ready-ack poll（最大 CHILD_READY_TIMEOUT）はロック外で行う。他の LoadPlugin

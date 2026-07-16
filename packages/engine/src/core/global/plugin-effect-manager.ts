@@ -30,7 +30,7 @@ export class PluginEffectManager {
     // yet (unsaved file) makes `resolvePluginPath` throw a "cannot resolve"
     // error; if that ran before the LinkAudio gate, it would mask the more
     // relevant LinkAudio-conflict error with a confusing resolve failure.
-    validatePluginExtension(spec)
+    validatePluginExtension(spec, 'effect')
 
     if (this.linkAudioManager.isEnabled()) {
       throw new Error('global.effect() cannot be used while LinkAudio is enabled in v1.')
@@ -40,6 +40,7 @@ export class PluginEffectManager {
       spec,
       this.audioManager.getAudioPaths(),
       this.audioManager.getDocumentDirectory(),
+      'effect',
     )
 
     const existing = this.declaration

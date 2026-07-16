@@ -1,10 +1,8 @@
 /**
  * Plugin path resolver.
  *
- * Shared extension-validation + path-resolution logic for `.clap` plugin
- * specs. Extracted from `PluginEffectManager` (`global.effect()`) so #427's
- * `seq.instrument()` can reuse the same validation + resolution without
- * duplicating it.
+ * Shared role-aware extension-validation + path-resolution logic for plugin
+ * specs.
  *
  * `resolvePluginPath` validates the extension first, then resolves the path
  * (`resolvePathDirect`) — this single entry point always does both, in that
@@ -24,18 +22,23 @@ export function resolvePluginPath(
   spec: string,
   audioPaths: readonly string[],
   documentDirectory: string,
+  role: PluginRole,
 ): string {
-  validatePluginExtension(spec)
+  validatePluginExtension(spec, role)
   return resolvePathDirect(spec, audioPaths, documentDirectory)
 }
 
-export function validatePluginExtension(spec: string): void {
+export type PluginRole = 'effect' | 'instrument'
+
+export function validatePluginExtension(spec: string, role: PluginRole): void {
   const extension = path.extname(spec).toLowerCase()
   if (extension === '.clap') return
+  if (extension === '.vst3' && role === 'instrument') return
   if (extension === '.vst3' || extension === '.component') {
     throw new Error(
-      `${extension} plugins are not yet supported (reserved for future VST3/AU support).`,
+      `${extension} plugins are not yet supported for ${role} (reserved for future VST3/AU support).`,
     )
   }
-  throw new Error(`Unknown plugin extension "${extension || '(none)'}"; expected .clap.`)
+  const expected = role === 'instrument' ? '.clap or .vst3' : '.clap'
+  throw new Error(`Unknown plugin extension "${extension || '(none)'}"; expected ${expected}.`)
 }
