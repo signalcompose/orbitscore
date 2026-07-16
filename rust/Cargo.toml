@@ -11,6 +11,7 @@ members = [
   "crates/orbit-clap-effect-child",
   "crates/orbit-clap-instrument-child",
   "crates/orbit-vst3-effect-child",
+  "crates/orbit-vst3-instrument-child",
   "crates/orbit-sandbox-spike",
   "crates/orbit-audio-sandbox",
   "crates/orbit-vst3-host",

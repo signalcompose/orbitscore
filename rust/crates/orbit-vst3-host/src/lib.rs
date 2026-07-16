@@ -907,16 +907,18 @@ impl Vst3InstrumentProcessor {
         &self.info
     }
 
-    pub fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32) {
-        self.input_events.push_note_on(channel, pitch, velocity);
+    pub fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
+        self.input_events
+            .push_note_on(channel, pitch, velocity, sample_offset);
     }
 
-    pub fn push_note_off(&self, channel: i16, pitch: i16, velocity: f32) {
-        self.input_events.push_note_off(channel, pitch, velocity);
+    pub fn push_note_off(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
+        self.input_events
+            .push_note_off(channel, pitch, velocity, sample_offset);
     }
 
-    /// Queued note events are delivered at sample offset zero; successful plugin output is
-    /// add-mixed into interleaved stereo `data`.
+    /// Queued note events are delivered at their supplied sample offsets; successful plugin
+    /// output is add-mixed into interleaved stereo `data`.
     #[must_use]
     pub fn process_block(&mut self, data: &mut [f32]) -> bool {
         if !data.len().is_multiple_of(DEFAULT_CHANNELS) {
@@ -1714,10 +1716,10 @@ impl InputEventList {
         Self { wrapper, ptr }
     }
 
-    fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32) {
+    fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
         self.wrapper.events.borrow_mut().push(Event {
             busIndex: 0,
-            sampleOffset: 0,
+            sampleOffset: sample_offset,
             ppqPosition: 0.0,
             flags: Event_::EventFlags_::kIsLive as u16,
             r#type: Event_::EventTypes_::kNoteOnEvent as u16,
@@ -1734,10 +1736,10 @@ impl InputEventList {
         });
     }
 
-    fn push_note_off(&self, channel: i16, pitch: i16, velocity: f32) {
+    fn push_note_off(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
         self.wrapper.events.borrow_mut().push(Event {
             busIndex: 0,
-            sampleOffset: 0,
+            sampleOffset: sample_offset,
             ppqPosition: 0.0,
             flags: Event_::EventFlags_::kIsLive as u16,
             r#type: Event_::EventTypes_::kNoteOffEvent as u16,
