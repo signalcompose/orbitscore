@@ -644,6 +644,9 @@ pub struct StreamGuard {
     #[cfg(feature = "outproc-effect")]
     _outproc_teardown: crate::outproc_effect::OutProcTeardownGuard,
     /// outproc-instrument: stream 前に audio-thread adapter を quiesce する。
+    /// both build における `_outproc_teardown` との相対順序は load-bearing ではない
+    /// （各 guard は自 role 専用の requested/done atomic のみを操作し共有状態がない。
+    /// stream 停止後の child guard 2つと同じ独立性）。
     #[cfg(feature = "outproc-instrument")]
     _outproc_instrument_teardown: crate::outproc_instrument::OutProcInstrumentTeardownGuard,
     _stream: OutputStream,
