@@ -33,7 +33,7 @@
 //!
 //! device / dylib / child binary が揃わない env（headless CI 等）では owner へ stop&report（手動 fallback）。
 
-#![cfg(feature = "outproc-effect")]
+#![cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

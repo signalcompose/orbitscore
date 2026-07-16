@@ -9,7 +9,10 @@
 //!
 //! 実際にスピーカーから 0.25 振幅の sine が鳴るため、実行前に出力デバイスを確認すること。
 
-#![cfg(feature = "outproc-instrument")]
+#![cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+
+mod gated_common;
+use gated_common::{child_exe, repo_path, wait_until};
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -25,21 +28,6 @@ const PLUGIN_ID: &str = "com.signalcompose.clap-test-synth";
 const PROBE_NOTE_KEY: u8 = PROBE_KEY.key as u8;
 const PROBE_NOTE_CHANNEL: u8 = PROBE_KEY.channel as u8;
 
-fn repo_path(rel: &str) -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../..")).join(rel)
-}
-
-/// 別 crate の binary なので、test executable の sibling binary として解決する。
-fn child_exe() -> PathBuf {
-    let mut path = std::env::current_exe().expect("current_exe");
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.push("orbit-clap-instrument-child");
-    path
-}
-
 fn test_synth_dylib() -> PathBuf {
     repo_path("rust-spike/clap-test-synth/target/debug/libclap_test_synth.dylib")
 }
@@ -47,7 +35,7 @@ fn test_synth_dylib() -> PathBuf {
 /// 実機 test の prerequisites を loud に検証し、production 起動用 config を返す。
 fn setup_test() -> OutProcInstrumentConfig {
     let config = OutProcInstrumentConfig {
-        child_exe: child_exe(),
+        child_exe: child_exe("orbit-clap-instrument-child"),
         plugin: test_synth_dylib(),
         plugin_id: Some(PLUGIN_ID.to_owned()),
         buffer_frames: None,
@@ -63,17 +51,6 @@ fn setup_test() -> OutProcInstrumentConfig {
         config.child_exe.display()
     );
     config
-}
-
-fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if condition() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    condition()
 }
 
 #[test]

@@ -58,6 +58,14 @@ fn outproc_role_param_is_valid(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) == Some("instrument")
 }
 
+#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn outproc_role_param_is_valid(params: &Value) -> bool {
+    matches!(
+        params.get("role").and_then(Value::as_str),
+        Some("effect" | "instrument")
+    )
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -644,6 +652,16 @@ async fn handle_command(
                         ),
                     );
                 }
+                #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+                if !outproc_role_param_is_valid(&params) {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "outproc LoadPlugin requires role='effect' or role='instrument'",
+                        ),
+                    );
+                }
 
                 let engine = engine.clone();
                 let path = std::path::PathBuf::from(path_str);
@@ -651,9 +669,30 @@ async fn handle_command(
                     .get("plugin_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+                let params_role = params
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 let res = tokio::task::spawn_blocking(move || {
                     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
                     {
+                        #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+                        {
+                            match params_role.as_deref() {
+                                Some("effect") => {
+                                    engine.load_outproc_effect_plugin(path, plugin_id)
+                                }
+                                Some("instrument") => {
+                                    engine.load_outproc_instrument_plugin(path, plugin_id)
+                                }
+                                _ => unreachable!("role was validated before spawn_blocking"),
+                            }
+                        }
+                        #[cfg(not(all(
+                            feature = "outproc-effect",
+                            feature = "outproc-instrument"
+                        )))]
                         engine.load_outproc_plugin(path, plugin_id)
                     }
                     #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
@@ -1038,7 +1077,7 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "outproc-effect")]
+    #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
     #[test]
     fn outproc_effect_load_plugin_accepts_only_effect_role() {
         assert!(outproc_role_param_is_valid(&json!({"role": "effect"})));
@@ -1046,11 +1085,20 @@ mod tests {
         assert!(!outproc_role_param_is_valid(&json!({})));
     }
 
-    #[cfg(feature = "outproc-instrument")]
+    #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
     #[test]
     fn outproc_instrument_load_plugin_accepts_only_instrument_role() {
         assert!(outproc_role_param_is_valid(&json!({"role": "instrument"})));
         assert!(!outproc_role_param_is_valid(&json!({"role": "effect"})));
+        assert!(!outproc_role_param_is_valid(&json!({})));
+    }
+
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    #[test]
+    fn outproc_both_load_plugin_accepts_both_roles_and_rejects_invalid_role() {
+        assert!(outproc_role_param_is_valid(&json!({"role": "effect"})));
+        assert!(outproc_role_param_is_valid(&json!({"role": "instrument"})));
+        assert!(!outproc_role_param_is_valid(&json!({"role": "invalid"})));
         assert!(!outproc_role_param_is_valid(&json!({})));
     }
 
