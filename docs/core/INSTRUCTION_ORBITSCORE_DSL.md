@@ -1266,6 +1266,84 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 
 ---
 
+## Plugin Catalog — 名前指し・自動補完（#463）
+
+> **Status**: 設計確定（2026-07-17・issue #463 が追跡）・実装は C1-C3 で段階導入（未実装）。
+> 本節が規範（DocDD: spec 先行）。**path 指定（PH.3）は不変** — カタログはその上に載る
+> 追加の解決層であり、path で書かれた spec はカタログを一切参照しない。
+
+### PC.1 カタログ
+
+- インストール済みプラグインの index。エントリ =
+  `{ name, vendor, format, path, pluginId, roles }`（roles = effect / instrument 判定。
+  1 バンドル複数プラグインは pluginId ごとに 1 エントリ）
+- スキャン対象 = OS 標準ディレクトリ（macOS: `~/Library/Audio/Plug-Ins/CLAP`・
+  `/Library/Audio/Plug-Ins/CLAP`・同 `VST3`）+ 環境変数 `ORBIT_PLUGIN_PATH`
+  （`:` 区切り・追加検索パス・**各ディレクトリ直下のみ = 非再帰**）
+- metadata の取得: CLAP = factory metadata（軽量・load 不要）、VST3 = bundle 内
+  `moduleinfo.json` があれば load 不要、無ければ probe（`probe_plugin` 資産 #397）。
+  probe は逐次で時間がかかるため**バックグラウンド + キャッシュ必須**
+- キャッシュ = `~/.orbitscore/plugin-catalog.json`（正本はこのファイル。エンジン・
+  拡張・MCP はこれを読むだけ）。生成/更新 = 初回スキャン + 明示 rescan（自動 watch は
+  v1 スコープ外）。スキャンの持ち主 = **daemon**（probe 資産が Rust 側にあるため。
+  JSON-RPC `ScanPlugins` コマンドで実行・拡張/CLI はそれを叩く）
+
+### PC.2 DSL の名前指し
+
+```js
+kick.effect("TAL Reverb 4")            // カタログ名で解決
+kick.effect("TAL Software/TAL Reverb 4")  // vendor 修飾（同名衝突時の一意化）
+kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カタログ非参照）
+```
+
+- **判別規則**: spec が path-direct 形（`./` `../` `~/` `/` **開始**）または既知拡張子
+  （`.clap` `.vst3` `.component`）で終わる → 従来どおり path 解決（PH.3）。
+  それ以外 → **カタログ名として解決**
+  - **実装注意**: audio 系の `looksLikePath()`（「`/` を含む」= path 判定）は**再利用
+    しない** — vendor 修飾 `"TAL Software/TAL Reverb 4"` は `/` を含むがカタログ名。
+    判別は本節の規則（開始形/末尾拡張子）で専用に実装する
+  - カタログ名自体が既知拡張子で終わる場合（例: name = `"MyPlugin.clap"`）は path 解決に
+    倒れる（既知の限界 — 該当プラグインは path 指定で回避）
+- 名前解決: `name` 完全一致（case-insensitive・前後空白 trim・Unicode は **NFC 正規化後**
+  に比較 — macOS FS の NFD 由来の不一致を防ぐ）。複数ヒット（同名別 vendor / 別 format）
+  は**候補を列挙してエラー**（silent に先頭を選ばない）。`"vendor/name"` で一意化
+- **解決の出力 = `(path, pluginId)` の組**で、両方を `LoadPlugin` へ渡す（カタログは
+  pluginId 単位で 1 エントリ = name → (path, pluginId) は 1:1）。したがって**カタログ
+  名指しと第 2 引数 `pluginId` の併用はエラー**（名前が既に一意。pluginId 引数は
+  path 指定時のみ有効）
+- 同名同 vendor で複数 format がある場合の優先: **当該 verb が受理できる format
+  （PH.3）の中から CLAP > VST3**。受理可能 format のエントリが 1 つも無い場合
+  （例: VST3 版しか無いプラグインを `global.effect()` で名指し）は、path 系の
+  「not yet supported」文言を流用せず**「カタログ名 + 見つかった format + 当該 verb の
+  受理状況」を含む専用エラー**にする
+- role 検査: 解決したエントリの roles が verb と不一致（effect() に instrument-only 等）
+  はエラー
+- カタログ未生成・名前未ヒット時のエラーは「rescan 手順」を含む actionable メッセージ
+
+### PC.3 OrbitStudio 自動補完
+
+- 拡張の completion provider が `effect("` / `instrument("` の引数位置で
+  カタログから候補（name・vendor 修飾形・format ラベル付き）をサジェスト
+- 補完はキャッシュファイル読取のみ（engine 起動不要）。キャッシュ不在時は候補なし + 
+  rescan を促す 1 回限りの案内
+
+### PC.4 MCP
+
+- `list_plugins` ツール（#450 の doc ツール群と同じ流儀）: カタログをそのまま返す。
+  LLM が「入っているプラグイン」を前提に作編曲できるようにする
+- `rescan_plugins` ツール: daemon の `ScanPlugins` を起動し完了を返す
+
+### PC.5 v1 制約（実装事実の開示）
+
+- 本節は全体が未実装（C1 = daemon scan + キャッシュ / C2 = DSL 名前解決 /
+  C3 = 補完 + MCP の 3 段導入）
+- 多バージョン共存（同名同 vendor 同 format の別バージョン）は区別しない —
+  スキャン順で最後に見つかった path が勝つ（バージョン規則は将来拡張）
+- ファイルシステム watch による自動 rescan なし・AU（`.component`）はスキャン対象外
+  （PH.3 の受理状況と整合してから追加）
+
+---
+
 ## Mixer / Routing（sum・aux/send — #453/#459）
 
 > **Status**: 設計確定（2026-07-17・issue #459 コメントが決定記録）・実装は M1-M3 で段階導入。

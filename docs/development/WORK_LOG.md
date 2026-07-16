@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.268 docs(spec): plugin catalog spec 起草（PC.1-PC.5）#463 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: 📝 spec 起草（docs のみ・実装は C1-C3 で別 PR）
+
+**内容**: owner 発案「名前とかメーカーとかから自動補完」を plugin カタログ + 名前指し +
+エディタ補完として仕様化。core spec に「Plugin Catalog」節を新設。
+
+**主要決定**:
+- カタログ = OS 標準ディレクトリ + ORBIT_PLUGIN_PATH のスキャン。キャッシュ
+  `~/.orbitscore/plugin-catalog.json` が正本・スキャンの持ち主 = daemon（probe 資産 #397）
+- 名前指し: path-direct 形/既知拡張子 → 従来 path 解決（不変）・それ以外 → カタログ名。
+  曖昧は候補列挙エラー・`"vendor/name"` 修飾・CLAP > VST3 優先・role 検査
+- 補完はキャッシュ読取のみ（engine 起動不要）・MCP list_plugins / rescan_plugins
+- 段階導入 C1（scan+cache）→ C2（DSL 解決）→ C3（補完+MCP）
+
+Refs #463
+
+
 ### 6.267 refactor(engine): unify effect-slot pool + self-heal across 3 managers #468 (Jul 17, 2026)
 
 **Date**: 2026-07-17
