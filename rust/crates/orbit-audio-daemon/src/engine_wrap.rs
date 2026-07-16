@@ -208,19 +208,271 @@ struct OutProcInstrumentControl {
     child_slot: Weak<Mutex<ChildSlot>>,
 }
 
+/// OOP role ごとの差分を child-slot state machine から分離する。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) trait OutProcRole: Sized {
+    type Stats;
+    type Supervisor;
+    const ROLE_NAME: &'static str;
+
+    fn spawn_child(
+        launch: &ChildLaunch<Self>,
+        path: &std::path::Path,
+        plugin_id: Option<&str>,
+    ) -> std::io::Result<std::process::Child>;
+    fn spawn_supervisor(
+        child: std::process::Child,
+        launch: &ChildLaunch<Self>,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> std::io::Result<Self::Supervisor>;
+    fn detach_keep_shm(supervisor: Self::Supervisor);
+    fn role_matches(child_flags: u32) -> bool;
+    fn runtime_error(message: String) -> WrapError;
+    fn set_initial_attach_pending(stats: &Self::Stats, value: bool);
+    fn set_child_early_exit(stats: &Self::Stats, value: bool);
+    fn child_early_exit(stats: &Self::Stats) -> bool;
+    fn set_current_child_pid(stats: &Self::Stats, pid: u32);
+}
+
+#[cfg(feature = "outproc-effect")]
+pub(crate) struct EffectRole;
+#[cfg(feature = "outproc-instrument")]
+pub(crate) struct InstrumentRole;
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) struct DefaultOutProcRole;
+
 #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-type OutProcChildSupervisor = crate::outproc_effect::EffectChildSupervisor;
-#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-type OutProcChildStats = crate::outproc_effect::OutProcEffectStats;
+impl OutProcRole for DefaultOutProcRole {
+    type Stats = crate::outproc_effect::OutProcEffectStats;
+    type Supervisor = crate::outproc_effect::EffectChildSupervisor;
+    const ROLE_NAME: &'static str = EffectRole::ROLE_NAME;
+    fn spawn_child(
+        launch: &ChildLaunch<Self>,
+        path: &std::path::Path,
+        plugin_id: Option<&str>,
+    ) -> std::io::Result<std::process::Child> {
+        crate::outproc_effect::spawn_effect_child(
+            &launch.child_exe,
+            &launch.shm_path,
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn spawn_supervisor(
+        child: std::process::Child,
+        launch: &ChildLaunch<Self>,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> std::io::Result<Self::Supervisor> {
+        crate::outproc_effect::EffectChildSupervisor::spawn(
+            child,
+            launch.shm_path.clone(),
+            launch.stats.clone(),
+            launch.child_exe.clone(),
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn detach_keep_shm(supervisor: Self::Supervisor) {
+        supervisor.detach_keep_shm();
+    }
+    fn role_matches(flags: u32) -> bool {
+        EffectRole::role_matches(flags)
+    }
+    fn runtime_error(message: String) -> WrapError {
+        EffectRole::runtime_error(message)
+    }
+    fn set_initial_attach_pending(stats: &Self::Stats, value: bool) {
+        EffectRole::set_initial_attach_pending(stats, value)
+    }
+    fn set_child_early_exit(stats: &Self::Stats, value: bool) {
+        EffectRole::set_child_early_exit(stats, value)
+    }
+    fn child_early_exit(stats: &Self::Stats) -> bool {
+        EffectRole::child_early_exit(stats)
+    }
+    fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
+        EffectRole::set_current_child_pid(stats, pid)
+    }
+}
 #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-type OutProcChildSupervisor = crate::outproc_instrument::InstrumentChildSupervisor;
-#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-type OutProcChildStats = crate::outproc_instrument::OutProcInstrumentStats;
+impl OutProcRole for DefaultOutProcRole {
+    type Stats = crate::outproc_instrument::OutProcInstrumentStats;
+    type Supervisor = crate::outproc_instrument::InstrumentChildSupervisor;
+    const ROLE_NAME: &'static str = InstrumentRole::ROLE_NAME;
+    fn spawn_child(
+        launch: &ChildLaunch<Self>,
+        path: &std::path::Path,
+        plugin_id: Option<&str>,
+    ) -> std::io::Result<std::process::Child> {
+        crate::outproc_instrument::spawn_instrument_child(
+            &launch.child_exe,
+            &launch.shm_path,
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn spawn_supervisor(
+        child: std::process::Child,
+        launch: &ChildLaunch<Self>,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> std::io::Result<Self::Supervisor> {
+        crate::outproc_instrument::InstrumentChildSupervisor::spawn(
+            child,
+            launch.shm_path.clone(),
+            launch.stats.clone(),
+            launch.child_exe.clone(),
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn detach_keep_shm(supervisor: Self::Supervisor) {
+        supervisor.detach_keep_shm();
+    }
+    fn role_matches(flags: u32) -> bool {
+        InstrumentRole::role_matches(flags)
+    }
+    fn runtime_error(message: String) -> WrapError {
+        InstrumentRole::runtime_error(message)
+    }
+    fn set_initial_attach_pending(stats: &Self::Stats, value: bool) {
+        InstrumentRole::set_initial_attach_pending(stats, value)
+    }
+    fn set_child_early_exit(stats: &Self::Stats, value: bool) {
+        InstrumentRole::set_child_early_exit(stats, value)
+    }
+    fn child_early_exit(stats: &Self::Stats) -> bool {
+        InstrumentRole::child_early_exit(stats)
+    }
+    fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
+        InstrumentRole::set_current_child_pid(stats, pid)
+    }
+}
+
+#[cfg(feature = "outproc-effect")]
+impl OutProcRole for EffectRole {
+    type Stats = crate::outproc_effect::OutProcEffectStats;
+    type Supervisor = crate::outproc_effect::EffectChildSupervisor;
+    const ROLE_NAME: &'static str = "effect";
+    fn spawn_child(
+        launch: &ChildLaunch<Self>,
+        path: &std::path::Path,
+        plugin_id: Option<&str>,
+    ) -> std::io::Result<std::process::Child> {
+        crate::outproc_effect::spawn_effect_child(
+            &launch.child_exe,
+            &launch.shm_path,
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn spawn_supervisor(
+        child: std::process::Child,
+        launch: &ChildLaunch<Self>,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> std::io::Result<Self::Supervisor> {
+        crate::outproc_effect::EffectChildSupervisor::spawn(
+            child,
+            launch.shm_path.clone(),
+            launch.stats.clone(),
+            launch.child_exe.clone(),
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn detach_keep_shm(supervisor: Self::Supervisor) {
+        supervisor.detach_keep_shm();
+    }
+    fn role_matches(flags: u32) -> bool {
+        flags & orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT != 0
+    }
+    fn runtime_error(message: String) -> WrapError {
+        WrapError::OutProcEffect(message)
+    }
+    fn set_initial_attach_pending(stats: &Self::Stats, value: bool) {
+        stats.initial_attach_pending.store(value, Ordering::Release);
+    }
+    fn set_child_early_exit(stats: &Self::Stats, value: bool) {
+        stats.child_early_exit.store(value, Ordering::Release);
+    }
+    fn child_early_exit(stats: &Self::Stats) -> bool {
+        stats.child_early_exit.load(Ordering::Acquire)
+    }
+    fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
+        stats.current_child_pid.store(pid, Ordering::Relaxed);
+    }
+}
+
+#[cfg(feature = "outproc-instrument")]
+impl OutProcRole for InstrumentRole {
+    type Stats = crate::outproc_instrument::OutProcInstrumentStats;
+    type Supervisor = crate::outproc_instrument::InstrumentChildSupervisor;
+    const ROLE_NAME: &'static str = "instrument";
+    fn spawn_child(
+        launch: &ChildLaunch<Self>,
+        path: &std::path::Path,
+        plugin_id: Option<&str>,
+    ) -> std::io::Result<std::process::Child> {
+        crate::outproc_instrument::spawn_instrument_child(
+            &launch.child_exe,
+            &launch.shm_path,
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn spawn_supervisor(
+        child: std::process::Child,
+        launch: &ChildLaunch<Self>,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> std::io::Result<Self::Supervisor> {
+        crate::outproc_instrument::InstrumentChildSupervisor::spawn(
+            child,
+            launch.shm_path.clone(),
+            launch.stats.clone(),
+            launch.child_exe.clone(),
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn detach_keep_shm(supervisor: Self::Supervisor) {
+        supervisor.detach_keep_shm();
+    }
+    fn role_matches(flags: u32) -> bool {
+        flags & orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT == 0
+    }
+    fn runtime_error(message: String) -> WrapError {
+        WrapError::OutProcInstrument(message)
+    }
+    fn set_initial_attach_pending(stats: &Self::Stats, value: bool) {
+        stats.initial_attach_pending.store(value, Ordering::Release);
+    }
+    fn set_child_early_exit(stats: &Self::Stats, value: bool) {
+        stats.child_early_exit.store(value, Ordering::Release);
+    }
+    fn child_early_exit(stats: &Self::Stats) -> bool {
+        stats.child_early_exit.load(Ordering::Acquire)
+    }
+    fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
+        stats.current_child_pid.store(pid, Ordering::Relaxed);
+    }
+}
 
 /// OOP child の post-boot attach 状態。v1 は一つの daemon role につき一つの plugin path 固定。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-pub(crate) enum ChildSlot {
-    Empty(ChildLaunch),
+pub(crate) enum ChildSlot<R: OutProcRole = DefaultOutProcRole> {
+    Empty(ChildLaunch<R>),
     Loading {
         path: PathBuf,
     },
@@ -228,23 +480,23 @@ pub(crate) enum ChildSlot {
         path: PathBuf,
         plugin_id: Option<String>,
         engaged: Arc<AtomicBool>,
-        _supervisor: OutProcChildSupervisor,
+        _supervisor: R::Supervisor,
     },
     Closed,
 }
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-pub(crate) struct ChildLaunch {
+pub(crate) struct ChildLaunch<R: OutProcRole = DefaultOutProcRole> {
     shm_path: PathBuf,
     child_exe: PathBuf,
     sample_rate: u32,
-    stats: Arc<OutProcChildStats>,
+    stats: Arc<R::Stats>,
     engaged: Arc<AtomicBool>,
     cleanup_shm_on_drop: bool,
 }
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-impl Drop for ChildLaunch {
+impl<R: OutProcRole> Drop for ChildLaunch<R> {
     fn drop(&mut self) {
         // cleanup_shm_on_drop=true は retryable attach failure 後を含め、この launch が unlink の
         // 唯一の所有者であることを意味する。よって NotFound を含む
@@ -379,11 +631,6 @@ compile_error!(
     "features `outproc-instrument` and `link-audio` are mutually exclusive \
      (both integrate the single cpal callback)"
 );
-#[cfg(all(feature = "outproc-instrument", feature = "outproc-effect"))]
-compile_error!(
-    "features `outproc-instrument` and `outproc-effect` are mutually exclusive \
-     (both own the single master-bus post-processor seam)"
-);
 
 /// `cpal::Stream` を保持する guard。drop されるとストリーム停止。`!Send`。
 ///
@@ -435,6 +682,9 @@ pub struct StreamGuard {
     /// γ M1 PR-C（outproc-effect）: stream 停止 **後** に drop され、watchdog を止めて（respawn 停止）
     /// child へ QUIT → reap → shm unlink する。**field 順は load-bearing**: `_stream` より後に宣言する。
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    #[cfg(feature = "outproc-effect")]
+    _child_guard: Arc<Mutex<ChildSlot>>,
+    #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
     _child_guard: Arc<Mutex<ChildSlot>>,
 }
 
@@ -938,7 +1188,7 @@ impl EngineWrap {
             let guard = self
                 .outproc
                 .lock()
-                .map_err(|_| outproc_runtime_error("outproc mutex poisoned"))?;
+                .map_err(|_| EffectRole::runtime_error("outproc mutex poisoned".into()))?;
             guard
                 .as_ref()
                 .ok_or_else(|| {
@@ -948,14 +1198,15 @@ impl EngineWrap {
                 })?
                 .child_slot
                 .upgrade()
-                .ok_or_else(|| outproc_runtime_error("outproc effect stream is closed"))?
+                .ok_or_else(|| {
+                    EffectRole::runtime_error("outproc effect stream is closed".into())
+                })?
         };
         #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
         let child_slot = {
-            let guard = self
-                .outproc_instrument
-                .lock()
-                .map_err(|_| outproc_runtime_error("outproc instrument mutex poisoned"))?;
+            let guard = self.outproc_instrument.lock().map_err(|_| {
+                InstrumentRole::runtime_error("outproc instrument mutex poisoned".into())
+            })?;
             guard
                 .as_ref()
                 .ok_or_else(|| {
@@ -966,9 +1217,24 @@ impl EngineWrap {
                 })?
                 .child_slot
                 .upgrade()
-                .ok_or_else(|| outproc_runtime_error("outproc instrument stream is closed"))?
+                .ok_or_else(|| {
+                    InstrumentRole::runtime_error("outproc instrument stream is closed".into())
+                })?
         };
+        #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+        return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id);
+        #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+        return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id);
+    }
 
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    fn load_outproc_plugin_impl<R: OutProcRole>(
+        &self,
+        child_slot: Arc<Mutex<ChildSlot<R>>>,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> Result<LoadedPluginSummary, WrapError> {
+        let _role_name = R::ROLE_NAME;
         let mut slot = lock_child_slot_recovering(&child_slot, "initial state check");
 
         match &*slot {
@@ -990,21 +1256,21 @@ impl EngineWrap {
                 // 同一 path だが plugin_id が異なる = bundle 内の別サブプラグインへの差し替え
                 // 要求。path 差し替えと同様 v1 は拒否する（呼び出し側が指定した plugin_id を
                 // 握り潰して古い plugin_id のまま黙って Ok を返さない）。
-                return Err(outproc_runtime_error(format!(
+                return Err(R::runtime_error(format!(
                     "outproc plugin already loaded from {active_path:?} with plugin_id {active_plugin_id:?}; v1 does not support replacement with plugin_id {plugin_id:?}"
                 )));
             }
             ChildSlot::Active {
                 path: active_path, ..
             } => {
-                return Err(outproc_runtime_error(format!(
+                return Err(R::runtime_error(format!(
                     "outproc plugin already loaded from {active_path:?}; v1 does not support replacement with {path:?}"
                 )));
             }
             ChildSlot::Loading {
                 path: loading_path, ..
             } => {
-                return Err(outproc_runtime_error(format!(
+                return Err(R::runtime_error(format!(
                     "outproc plugin load already in progress for {loading_path:?}"
                 )));
             }
@@ -1034,7 +1300,7 @@ impl EngineWrap {
                 let mut slot = lock_child_slot_recovering(&child_slot, "open_shared failure");
                 debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Closed;
-                return Err(outproc_runtime_error(format!(
+                return Err(R::runtime_error(format!(
                     "open child readiness mapping {:?}: {error}",
                     launch.shm_path
                 )));
@@ -1046,34 +1312,25 @@ impl EngineWrap {
         unsafe { orbit_audio_sandbox::transport::reset_child_starting(region) };
 
         // spawn 前にセットしておくことで、即座に終了する child が通常の respawn 経路に紛れ込むのを防ぐ。
-        launch
-            .stats
-            .initial_attach_pending
-            .store(true, Ordering::Release);
-        launch
-            .stats
-            .child_early_exit
-            .store(false, Ordering::Release);
-        let first_child = match spawn_outproc_child(&launch, &path, plugin_id.as_deref()) {
+        R::set_initial_attach_pending(&launch.stats, true);
+        R::set_child_early_exit(&launch.stats, false);
+        let first_child = match R::spawn_child(&launch, &path, plugin_id.as_deref()) {
             Ok(child) => child,
             Err(error) => {
                 let child_exe = launch.child_exe.clone();
                 let mut slot = lock_child_slot_recovering(&child_slot, "child spawn failure");
                 debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Empty(launch);
-                return Err(outproc_runtime_error(format!(
+                return Err(R::runtime_error(format!(
                     "spawn outproc child {:?}: {error}",
                     child_exe
                 )));
             }
         };
-        launch
-            .stats
-            .current_child_pid
-            .store(first_child.id(), Ordering::Relaxed);
+        R::set_current_child_pid(&launch.stats, first_child.id());
 
         let supervisor =
-            match spawn_outproc_supervisor(first_child, &launch, path.clone(), plugin_id.clone()) {
+            match R::spawn_supervisor(first_child, &launch, path.clone(), plugin_id.clone()) {
                 Ok(supervisor) => supervisor,
                 Err(error) => {
                     // spawn_outproc_supervisor はエラー時に自身の cleanup で shm を unlink して返るため、
@@ -1083,9 +1340,7 @@ impl EngineWrap {
                         lock_child_slot_recovering(&child_slot, "supervisor spawn failure");
                     debug_assert_slot_loading(&slot);
                     *slot = ChildSlot::Closed;
-                    return Err(outproc_runtime_error(format!(
-                        "spawn outproc watchdog: {error}"
-                    )));
+                    return Err(R::runtime_error(format!("spawn outproc watchdog: {error}")));
                 }
             };
 
@@ -1095,7 +1350,7 @@ impl EngineWrap {
             let status = unsafe { (*region).child_status.load(Ordering::Acquire) };
             if status == orbit_audio_sandbox::transport::CHILD_STATUS_READY {
                 let flags = unsafe { (*region).child_flags.load(Ordering::Acquire) };
-                if !outproc_role_matches(flags) {
+                if !R::role_matches(flags) {
                     return Err(retryable_attach_failure(
                         supervisor,
                         region,
@@ -1106,13 +1361,10 @@ impl EngineWrap {
                         ),
                     ));
                 }
-                launch
-                    .stats
-                    .initial_attach_pending
-                    .store(false, Ordering::Release);
+                R::set_initial_attach_pending(&launch.stats, false);
                 break;
             }
-            if launch.stats.child_early_exit.load(Ordering::Acquire) {
+            if R::child_early_exit(&launch.stats) {
                 return Err(retryable_attach_failure(
                     supervisor,
                     region,
@@ -2068,7 +2320,7 @@ impl EngineWrap {
 /// `load_outproc_plugin` の終端遷移直前の不変条件検査（release では noop）。
 /// Loading 以外を観測したら、この関数以外に slot への書き手が現れたことを意味する。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-fn debug_assert_slot_loading(slot: &ChildSlot) {
+fn debug_assert_slot_loading<R: OutProcRole>(slot: &ChildSlot<R>) {
     debug_assert!(
         matches!(slot, ChildSlot::Loading { .. }),
         "load_outproc_plugin: slot must still be Loading (only this function \
@@ -2079,10 +2331,10 @@ fn debug_assert_slot_loading(slot: &ChildSlot) {
 /// child slot の poison は attach state machine の停止理由にせず、唯一の書き手である本関数が
 /// 回復して本来の遷移を完遂する。放置すると Loading/Closed/Empty の中間状態が恒久化する。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-fn lock_child_slot_recovering<'a>(
-    child_slot: &'a Mutex<ChildSlot>,
+fn lock_child_slot_recovering<'a, R: OutProcRole>(
+    child_slot: &'a Mutex<ChildSlot<R>>,
     site: &'static str,
-) -> MutexGuard<'a, ChildSlot> {
+) -> MutexGuard<'a, ChildSlot<R>> {
     child_slot.lock().unwrap_or_else(|poisoned| {
         tracing::error!("child slot mutex poisoned during {site}; recovering");
         poisoned.into_inner()
@@ -2096,15 +2348,15 @@ fn lock_child_slot_recovering<'a>(
 /// SAFETY 前提: `region` は呼び出し元 scope で生存する `ready_mmap` を指すこと
 /// （`load_outproc_plugin` の ready-ack ループからのみ呼ばれる）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-fn retryable_attach_failure(
-    supervisor: OutProcChildSupervisor,
+fn retryable_attach_failure<R: OutProcRole>(
+    supervisor: R::Supervisor,
     region: *mut orbit_audio_sandbox::transport::SharedRegion,
-    child_slot: &Mutex<ChildSlot>,
-    launch: ChildLaunch,
+    child_slot: &Mutex<ChildSlot<R>>,
+    launch: ChildLaunch<R>,
     message: String,
 ) -> WrapError {
     tracing::warn!("outproc attach failed (retryable): {message}");
-    supervisor.detach_keep_shm();
+    R::detach_keep_shm(supervisor);
     // teardown が CONTROL_QUIT を書いたので、retry する child は RUN モードで起動する必要がある。
     unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
     let mut slot = lock_child_slot_recovering(child_slot, "retryable attach failure");
@@ -2113,90 +2365,22 @@ fn retryable_attach_failure(
     WrapError::OutProcAttachFailed(message)
 }
 
-#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-fn outproc_runtime_error(message: impl Into<String>) -> WrapError {
-    WrapError::OutProcEffect(message.into())
-}
+#[cfg(test)]
+type OutProcChildStats = <DefaultOutProcRole as OutProcRole>::Stats;
 
-#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-fn outproc_runtime_error(message: impl Into<String>) -> WrapError {
-    WrapError::OutProcInstrument(message.into())
-}
-
-#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-fn spawn_outproc_child(
-    launch: &ChildLaunch,
-    path: &std::path::Path,
-    plugin_id: Option<&str>,
-) -> std::io::Result<std::process::Child> {
-    crate::outproc_effect::spawn_effect_child(
-        &launch.child_exe,
-        &launch.shm_path,
-        path,
-        plugin_id,
-        launch.sample_rate,
-    )
-}
-
-#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-fn spawn_outproc_child(
-    launch: &ChildLaunch,
-    path: &std::path::Path,
-    plugin_id: Option<&str>,
-) -> std::io::Result<std::process::Child> {
-    crate::outproc_instrument::spawn_instrument_child(
-        &launch.child_exe,
-        &launch.shm_path,
-        path,
-        plugin_id,
-        launch.sample_rate,
-    )
-}
-
-#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+#[cfg(test)]
 fn spawn_outproc_supervisor(
     child: std::process::Child,
     launch: &ChildLaunch,
     path: PathBuf,
     plugin_id: Option<String>,
-) -> std::io::Result<OutProcChildSupervisor> {
-    crate::outproc_effect::EffectChildSupervisor::spawn(
-        child,
-        launch.shm_path.clone(),
-        launch.stats.clone(),
-        launch.child_exe.clone(),
-        path,
-        plugin_id,
-        launch.sample_rate,
-    )
+) -> std::io::Result<<DefaultOutProcRole as OutProcRole>::Supervisor> {
+    DefaultOutProcRole::spawn_supervisor(child, launch, path, plugin_id)
 }
 
-#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-fn spawn_outproc_supervisor(
-    child: std::process::Child,
-    launch: &ChildLaunch,
-    path: PathBuf,
-    plugin_id: Option<String>,
-) -> std::io::Result<OutProcChildSupervisor> {
-    crate::outproc_instrument::InstrumentChildSupervisor::spawn(
-        child,
-        launch.shm_path.clone(),
-        launch.stats.clone(),
-        launch.child_exe.clone(),
-        path,
-        plugin_id,
-        launch.sample_rate,
-    )
-}
-
-#[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+#[cfg(test)]
 fn outproc_role_matches(flags: u32) -> bool {
-    flags & orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT != 0
-}
-
-#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-fn outproc_role_matches(flags: u32) -> bool {
-    flags & orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT == 0
+    DefaultOutProcRole::role_matches(flags)
 }
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
