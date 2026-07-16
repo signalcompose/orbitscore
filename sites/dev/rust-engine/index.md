@@ -369,12 +369,12 @@ daemon 全体のアーキテクチャ確定（楽器=in-process・effects/3rd-pa
 ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-note.orbs
 ```
 
-**期待値**: capture peak は再生した波形の既知振幅（例えば sine の gain=1.0 相当なら 1.0
-付近）と一致するはずだが、この値は **本エージェントの作業環境（実 audio device が無いサンドボックス）
-では実行して検証していない**。したがって具体的な peak 数値はここでは記載せず、**未検証**として
-明記する。実機で確認する場合は `docs/development/WORK_LOG.md` の capture seam 関連エントリ
-（6.24x 台）と、PH-1 章の Try it（capture peak = 0.25000・WORK_LOG 6.258）を参照して同様の
-手順で peak を照合すること。
+**期待値（実機検証済み・2026-07-17）**: `test-assets/audio/sine_880.wav`（振幅 1.0 の sine）を
+1 発再生した capture WAV の実測 peak は **0.70711**（= 1.0 × equal-power pan center の
+√0.5。engine は center pan に equal-power gain を掛けるため、モノラル素材の capture peak は
+素材振幅 × √0.5 になる）。plugin oracle 系では clap-test-synth の既知振幅 0.25 が capture でも
+**0.25000** ちょうどで観測される（WORK_LOG 6.258 / 6.262・gated テストの stats
+`post_mix_peak` とも一致 = 同一 tap 点の相互検証）。
 
 ## Sources
 

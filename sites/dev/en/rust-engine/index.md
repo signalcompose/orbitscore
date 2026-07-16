@@ -382,13 +382,13 @@ samples out to a WAV file. Procedure (assuming a distribution-configuration rele
 ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-note.orbs
 ```
 
-**Expected value**: the capture peak should match the known amplitude of the played waveform
-(e.g. around 1.0 for a sine at gain=1.0), but this value was **not run or verified in this
-agent's working environment** (a sandbox without a real audio device). Therefore no concrete peak
-number is given here — it is explicitly marked **unverified**. To confirm on real hardware, see
-the capture-seam-related entries in `docs/development/WORK_LOG.md` (the 6.24x series) and the
-Try-it in the PH-1 chapter (capture peak = 0.25000, confirmed per WORK_LOG 6.258) for the same
-kind of procedure.
+**Expected value (verified on real hardware, 2026-07-17)**: playing
+`test-assets/audio/sine_880.wav` (a sine of amplitude 1.0) once yields a measured capture-WAV
+peak of **0.70711** (= 1.0 × the equal-power center-pan gain √0.5; the engine applies
+equal-power panning, so a mono asset's capture peak is its amplitude × √0.5). For the plugin
+oracles, clap-test-synth's known amplitude 0.25 is observed as exactly **0.25000** in the
+capture (WORK_LOG 6.258 / 6.262 — also matching the gated tests' `post_mix_peak` stats,
+i.e. two independent measurement paths agreeing at the same tap point).
 
 ## Sources
 

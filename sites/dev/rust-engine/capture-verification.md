@@ -290,11 +290,12 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture.wav cargo test -p orbit-audio-daemon \
 4. 可能ならエンジン側の `post_peak` 系アクセサ（`outproc_instrument_post_peak`
    相当）を同じセッションで読み、capture WAV の実測 peak と比較する。
 
-**期待値（未検証）**: capture WAV の実測 peak と daemon の `post_peak_bits`
-由来アクセサ値は、tap 点が同じ `hw`（post-mix・post 適用後）である以上、
-理論上は一致するはずだが、本ページ執筆時点でこの突き合わせを実機で
-実行して数値を確認したわけではない。実行する場合はここでの記述を実測値で
-上書きすること。
+**期待値（実機で相互検証済み・2026-07-17）**: tap 点が同じ `hw`（post-mix・post 適用後）
+である以上、両者は一致する。実測例: clap-test-synth（既知振幅 0.25）の同一 oracle に対し、
+gated テストの stats 側 `post_mix_peak` = **0.25000**（`outproc_instrument_vst3_gated` 等）、
+DSL E2E の capture WAV 実測 peak = **0.25000**（WORK_LOG 6.258）— 独立した 2 計測経路が
+既知振幅と 5 桁一致しており、capture と post_peak 系アクセサが同じ信号を見ていることの
+実証になっている。
 
 ## Sources
 

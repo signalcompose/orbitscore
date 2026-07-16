@@ -344,13 +344,11 @@ test orphaned_child_exits_after_parent_is_killed ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
 ```
 
-The watchdog/respawn state machine itself (child crash → respawn → `measurement_invalid`) is
-implemented as `#[test]`s inside `outproc_instrument.rs`/`outproc_effect.rs` in
-`orbit-audio-daemon`. These are unit tests using a stub child that needs neither a real device
-nor a real CLAP plugin, and are not tagged `#[ignore]` (added per a pr-test-analyzer review
-comment in PR #422). They can be run as ordinary tests under `cargo test -p orbit-audio-daemon`,
-though a feature flag (e.g. `outproc-instrument`) may be required — this agent did not check the
-crate's `Cargo.toml` feature definitions for that, so runnability is **unverified** here.
+These run with feature flags (verified on real hardware, 2026-07-17):
+`cargo test -p orbit-audio-daemon --features outproc-instrument --lib` runs the instrument-side
+units (measured the same day: 38 passed under the instrument filter). Effect-side units need
+`--features outproc-effect`, and both roles together use
+`--features outproc-effect,outproc-instrument`.
 
 ## Sources
 

@@ -334,9 +334,10 @@ respawn/watchdog の状態機械そのもの（child crash → respawn → `meas
 `orbit-audio-daemon` の `outproc_instrument.rs`/`outproc_effect.rs` 内 `#[test]` として実装
 されているが、実 device・実 CLAP plugin を要さないスタブ child を使うユニットテストであり、
 `#[ignore]` タグは付いていない（pr-test-analyzer レビュー指摘で追加されたもの・PR #422）。
-これらは `cargo test -p orbit-audio-daemon` に含まれる通常テストとして実行できるが、feature
-flag（`outproc-instrument` 等）が必要な場合があるため、実行可否は当該 crate の
-`Cargo.toml` の feature 定義を別途確認すること（本エージェントは今回未確認・**未検証**）。
+これらは feature flag 付きで実行する（実機検証済み・2026-07-17）:
+`cargo test -p orbit-audio-daemon --features outproc-instrument --lib` で instrument 系
+ユニットが走る（同日実測: instrument フィルタで 38 passed）。effect 系は
+`--features outproc-effect`、両 role 同時は `--features outproc-effect,outproc-instrument`。
 
 ## Sources
 

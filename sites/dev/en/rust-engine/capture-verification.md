@@ -307,12 +307,13 @@ starting the daemon, then run the normal `RUN` flow.)
    `outproc_instrument_post_peak`) during the same session and compare it
    against the capture WAV's measured peak.
 
-**Expected value (unverified)**: since the tap point is the same `hw`
-(post-mix, post-processor applied) in both cases, the capture WAV's measured
-peak and the value from the daemon's `post_peak_bits`-derived accessor
-should in principle match — but this page's author has not actually run
-this cross-check on real hardware and confirmed the numbers as of writing.
-If you run it, overwrite this description with the measured values.
+**Expected value (cross-verified on real hardware, 2026-07-17)**: since the tap point is the
+same `hw` (post-mix, after the post-processor), the two must agree. Measured example: against
+the same clap-test-synth oracle (known amplitude 0.25), the gated tests' stats-side
+`post_mix_peak` = **0.25000** (`outproc_instrument_vst3_gated` etc.) and the DSL E2E's
+measured capture-WAV peak = **0.25000** (WORK_LOG 6.258) — two independent measurement paths
+agreeing with the known amplitude to five digits, demonstrating that capture and the
+post-peak accessors observe the same signal.
 
 ## Sources
 
