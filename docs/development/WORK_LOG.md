@@ -36,9 +36,9 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - 循環 = エラー・ダイヤモンド = 1 回評価・v1 はモジュールスコープなし（export は予約）
 
 **根拠調査**（Explore・実コード裏取り）: `import` は tokenizer/AST で stdlib 専用に既存予約
-（parse-statement.ts:216）・名前空間はフラット Map（interpreter types.ts:13）・名前キー
-再利用は process-initialization.ts:29/79 に既存 — 「import = 名前一致 merge」は既存
-reconciliation 機構の自然な拡張として成立する。
+（parse-statement.ts）・名前空間はフラット Map（interpreter/types.ts）・名前キー再利用は
+process-initialization.ts に既存 — 「import = 名前一致 merge」は既存 reconciliation 機構の
+自然な拡張として成立する。
 
 Refs #456
 

@@ -1334,7 +1334,8 @@ import { kick, snare } from "./drums.orbs"   // ファイル import（名前列�
 import chords                                 // 既存の stdlib import（§6・変更なし）
 ```
 
-- パスは**文字列リテラル・import 元ファイル基準の相対パス**。拡張子 `.orbs` は必須（省略糖衣なし）
+- パスは**文字列リテラル・import 元ファイル基準の相対パス**（`./` または `../` で始まること。
+  絶対パス・裸の名前はエラー）。拡張子 `.orbs` は必須（省略糖衣なし）
 - 文法の判別: `import` の次が `{` → ファイル import、識別子 → stdlib import（v1.1 の
   `import chords` と後方互換のまま共存）
 - `{ }` 内は import 先ファイルの **top-level `var` 宣言名**。列挙した名前が import 先に
@@ -1351,8 +1352,12 @@ import chords                                 // 既存の stdlib import（§6�
 - `var global = init GLOBAL` は import 先ファイルにも**書いてよい（推奨）**。名前キー
   reconciliation により entry と同一の Global インスタンスへ解決されるため、各ファイルは
   **単独でも評価可能**（standalone-evaluable）かつ import されても二重初期化しない（冪等）
+- **評価順序（規範）**: import は**ソース記載順・深さ優先（依存が先 = post-order）**で評価し、
+  その後に import 元自身の宣言を評価する。したがって同名衝突の「後から評価された定義」は
+  決定的に定まる（entry 自身の宣言が常に最後 = 最優先）
 - 同一ファイルの多重 import（ダイヤモンド）は **1 回だけ評価**（top-level 評価ごとの
-  module cache）。**循環 import はエラー**
+  module cache）。ファイル同一性の基準は**解決済み絶対パス**（symlink 解決後の realpath —
+  異なる相対表記が同一ファイルを指す場合も 1 回）。**循環 import はエラー**
 - v1 制約: モジュールスコープは持たない（フラット名前空間）。`{ }` に列挙しなかった宣言も
   評価され名前空間に入る（列挙は契約検査であって隔離ではない — 隔離は v2 予約）。異なる
   ファイルが同名を宣言した場合は**後から評価された定義が同一インスタンスに再適用**される
@@ -1382,6 +1387,7 @@ import chords                                 // 既存の stdlib import（§6�
 
 ### IM.6 v1 制約（実装事実の開示）
 
+- **本節は全体が未実装**（`import` の `{` 分岐を含め parser/interpreter とも I1-I3 で導入）
 - モジュールスコープなし・`export` なし・衝突診断なし（IM.2 に明記）
 - VS Code 拡張のファイル横断診断・補完・サブジェクトブロック実行は v1 スコープ外
   （import 行を含むファイルでは未定義変数診断を抑制する方向で段階対応）
