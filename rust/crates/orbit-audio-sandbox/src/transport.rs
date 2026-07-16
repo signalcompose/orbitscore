@@ -88,18 +88,17 @@ pub const CHILD_STATUS_STARTING: u32 = 0;
 /// child が load に成功し、以降 process loop に入る状態。
 pub const CHILD_STATUS_READY: u32 = 1;
 /// **現状は未使用の予約値**（child が load に失敗して終了する直前の状態を表す想定）。
-/// child は load 失敗時 `?` の早期 return でこの値を書かずにそのままプロセス終了する。host は
-/// 現時点では `child_status == STARTING` のまま child が消えたことを即時には判別しない。
+/// child は load 失敗時 `?` の早期 return でこの値を書かずにそのままプロセス終了する。PR-1c (#441)
+/// では watchdog が初回 attach 中の child exit を stats に publish し、host が timeout を待たずに
+/// retryable attach failure として返す。
 ///
 /// **respawn 注意**: shm は daemon 起動時に一度だけ truncate され、respawn（`EffectChildSupervisor`/
 /// `InstrumentChildSupervisor` の watchdog による再起動）は同一 shm を再利用する（再 truncate しない）
 /// ため、一度 READY に達した後の respawn 失敗では `child_status` は STARTING でなく前 incarnation の
 /// READY が残留する。PR-1b（#440）は spawn 直前の `reset_child_starting` による STARTING リセット
 /// のみを実装し、この前 incarnation の READY 残留誤認を解消した。一方、初回 attach 時に child が
-/// `CHILD_STATUS_LOAD_FAILED` を書かず即死するケースの `try_wait` ベース生死判定は PR-1b では実装
-/// しない。そのため child の早期 crash は `CHILD_READY_TIMEOUT`（最大 10s）のタイムアウトとしてのみ
-/// 検出される。この fast-fail 化と、失敗した slot を retry 可能状態へ戻す対応は PR-1c（#441・
-/// Epic #424 DoD ゲート項目）へ移管した。`CHILD_STATUS_LOAD_FAILED` は現状も write 箇所なしの予約値。
+/// `CHILD_STATUS_LOAD_FAILED` は現状も write 箇所なしの予約値であり、early-exit は上記 watchdog
+/// signal で検出する。
 pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
 
 /// child のロード結果を表す bit flags（PR-431）。bit0 = has_audio_input
@@ -295,6 +294,14 @@ pub unsafe fn reset_child_starting(region: *mut SharedRegion) {
     }
 }
 
+/// attach 失敗後に同じ shm を次の child incarnation へ引き継ぐ前、teardown が書いた QUIT を解除する。
+///
+/// # Safety
+/// `region` は呼び出し元が map 済みの生存 SharedRegion を指していること。
+pub unsafe fn reset_control_run(region: *mut SharedRegion) {
+    unsafe { (*region).control.store(CONTROL_RUN, Ordering::Release) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,6 +446,25 @@ mod tests {
             );
         }
 
+        drop(mmap);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn reset_control_run_rearms_region_after_attach_teardown() {
+        let path = std::env::temp_dir().join(format!(
+            "orbit-sbx-reset-control-{}.shm",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mmap = create_shared(&path).expect("create");
+        let region = region_ptr(&mmap);
+        // SAFETY: region points into the live mapping created above.
+        unsafe {
+            (*region).control.store(CONTROL_QUIT, Ordering::Release);
+            reset_control_run(region);
+            assert_eq!((*region).control.load(Ordering::Acquire), CONTROL_RUN);
+        }
         drop(mmap);
         let _ = std::fs::remove_file(path);
     }

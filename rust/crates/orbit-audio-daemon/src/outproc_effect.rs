@@ -177,6 +177,10 @@ fn default_child_exe(format: PluginFormat) -> Result<PathBuf, String> {
 /// reader は daemon の accessor / gated harness（slot 数決定の `stale` / RT 健全性）。
 #[derive(Default)]
 pub struct OutProcEffectStats {
+    /// 初回 attach の READY 待ち中。watchdog はこの間の child exit を respawn せず fast-fail へ渡す。
+    pub initial_attach_pending: AtomicBool,
+    /// 初回 attach 中に child が exit したことを watchdog が publish する。
+    pub child_early_exit: AtomicBool,
     /// child から fresh な出力を読めた callback 数。
     pub fresh: AtomicU64,
     /// child が間に合わず repeat-previous した callback 数（slot 数決定の主指標の一つ）。
@@ -409,6 +413,7 @@ pub struct EffectChildSupervisor {
     shutdown: Arc<AtomicBool>,
     watchdog: Option<JoinHandle<()>>,
     shm_path: PathBuf,
+    unlink_shm: bool,
 }
 
 impl EffectChildSupervisor {
@@ -483,6 +488,21 @@ impl EffectChildSupervisor {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
                             try_wait_errors = 0;
+                            // READY publication races with the host clearing initial_attach_pending:
+                            // a child can publish READY and then crash in that window.  Treating it
+                            // as an early attach exit would stop this watchdog, while the host can
+                            // still observe READY and install a dead Active slot.  Only pre-READY
+                            // exits fast-fail; post-READY exits must use the normal respawn path.
+                            if stats.initial_attach_pending.load(Ordering::Acquire)
+                                && unsafe {
+                                    (*region).child_status.load(Ordering::Acquire)
+                                        != orbit_audio_sandbox::transport::CHILD_STATUS_READY
+                                }
+                            {
+                                tracing::warn!("orbit-clap-effect-child exited during initial attach ({status})");
+                                stats.child_early_exit.store(true, Ordering::Release);
+                                break;
+                            }
                             tracing::warn!(
                                 "orbit-clap-effect-child が異常終了（{status}）→ respawn する"
                             );
@@ -570,7 +590,13 @@ impl EffectChildSupervisor {
             shutdown,
             watchdog: Some(watchdog),
             shm_path,
+            unlink_shm: true,
         })
+    }
+
+    /// Stop/reap the child but leave shm unlink ownership with `ChildLaunch` for a retry.
+    pub fn detach_keep_shm(mut self) {
+        self.unlink_shm = false;
     }
 }
 
@@ -587,9 +613,11 @@ impl Drop for EffectChildSupervisor {
         }
         // 3. shm unlink（この時点で host mmap は stream drop で、ctl mmap は watchdog 終了で消えており
         //    どのプロセスもこの shm を map していない）。
-        if let Err(e) = std::fs::remove_file(&self.shm_path) {
-            // 既に消えている等は無害（warn のみ・teardown は続行）。
-            tracing::warn!("OOP effect shm 削除失敗 {:?}: {e}", self.shm_path);
+        if self.unlink_shm {
+            if let Err(e) = std::fs::remove_file(&self.shm_path) {
+                // 既に消えている等は無害（warn のみ・teardown は続行）。
+                tracing::warn!("OOP effect shm 削除失敗 {:?}: {e}", self.shm_path);
+            }
         }
     }
 }
@@ -855,6 +883,13 @@ mod tests {
     fn supervisor_respawns_child_on_unexpected_exit() {
         let shm = make_shm();
         let stats = OutProcEffectStats::new();
+        // Regression for #441: READY may be visible while the host has not yet cleared this flag.
+        // The watchdog must respawn rather than taking the initial-attach fast-fail branch.
+        stats.initial_attach_pending.store(true, Ordering::Release);
+        let mmap = open_shared(&shm).expect("open shm to publish READY");
+        let region = region_ptr(&mmap);
+        // SAFETY: mmap owns the live shared region for this test.
+        unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, true) };
         let first = Command::new("sleep")
             .arg("0.2")
             .spawn()

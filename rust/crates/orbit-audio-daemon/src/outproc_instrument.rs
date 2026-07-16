@@ -117,6 +117,8 @@ fn default_child_exe() -> Result<PathBuf, String> {
 
 #[derive(Default)]
 pub struct OutProcInstrumentStats {
+    pub initial_attach_pending: AtomicBool,
+    pub child_early_exit: AtomicBool,
     pub fresh: AtomicU64,
     pub callback_count: AtomicU64,
     pub respawn_count: AtomicU64,
@@ -329,6 +331,7 @@ pub struct InstrumentChildSupervisor {
     shutdown: Arc<AtomicBool>,
     watchdog: Option<JoinHandle<()>>,
     shm_path: PathBuf,
+    unlink_shm: bool,
 }
 
 impl InstrumentChildSupervisor {
@@ -413,6 +416,20 @@ impl InstrumentChildSupervisor {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
                             try_wait_errors = 0;
+                            // READY publication races with the host clearing initial_attach_pending:
+                            // a child can publish READY and then crash in that window.  Only a
+                            // pre-READY exit is an attach fast-fail; a post-READY exit must reach
+                            // the normal respawn path or the host could install a dead Active slot.
+                            if stats.initial_attach_pending.load(Ordering::Acquire)
+                                && unsafe {
+                                    (*region).child_status.load(Ordering::Acquire)
+                                        != orbit_audio_sandbox::transport::CHILD_STATUS_READY
+                                }
+                            {
+                                tracing::warn!("orbit-clap-instrument-child exited during initial attach ({status})");
+                                stats.child_early_exit.store(true, Ordering::Release);
+                                break;
+                            }
                             tracing::warn!(
                                 "orbit-clap-instrument-child exited ({status}); respawning"
                             );
@@ -508,7 +525,13 @@ impl InstrumentChildSupervisor {
             shutdown,
             watchdog: Some(watchdog),
             shm_path,
+            unlink_shm: true,
         })
+    }
+
+    /// Stop/reap the child but leave shm unlink ownership with `ChildLaunch` for a retry.
+    pub fn detach_keep_shm(mut self) {
+        self.unlink_shm = false;
     }
 }
 
@@ -520,11 +543,13 @@ impl Drop for InstrumentChildSupervisor {
                 tracing::error!("outproc instrument watchdog panicked during shutdown");
             }
         }
-        if let Err(error) = std::fs::remove_file(&self.shm_path) {
-            tracing::warn!(
-                "OOP instrument shm removal failed {:?}: {error}",
-                self.shm_path
-            );
+        if self.unlink_shm {
+            if let Err(error) = std::fs::remove_file(&self.shm_path) {
+                tracing::warn!(
+                    "OOP instrument shm removal failed {:?}: {error}",
+                    self.shm_path
+                );
+            }
         }
     }
 }
@@ -952,6 +977,12 @@ mod tests {
     fn supervisor_respawns_child_on_unexpected_exit() {
         let shm = make_shm();
         let stats = OutProcInstrumentStats::new();
+        // Regression for #441: a post-READY crash while attach is still pending must respawn.
+        stats.initial_attach_pending.store(true, Ordering::Release);
+        let mmap = open_shared(&shm).expect("open shm to publish READY");
+        let region = region_ptr(&mmap);
+        // SAFETY: mmap owns the live shared region for this test.
+        unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, false) };
         let first = Command::new("sleep")
             .arg("0.2")
             .spawn()
