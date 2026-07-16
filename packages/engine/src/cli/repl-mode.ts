@@ -57,6 +57,23 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
  * @param interpreter - Existing interpreter instance
  * @returns Never resolves (keeps process alive)
  */
+/**
+ * REPL メタ行 `//#documentDirectory <path>`（I3, #456）: エディタ統合（VS Code 拡張）が
+ * 「開いているファイルのディレクトリ」を eval 単位で伝えるための帯域外チャネル。DSL 注入
+ * （`global.setDocumentDirectory(...)`）は statements として import より後に評価されるため、
+ * import の基準ディレクトリ（IM.6）はこのメタ行でしか先渡しできない。`//` コメントなので
+ * DSL としても無害（tokenizer が読み飛ばす）— 戻り値では code から取り除かず、値だけ抽出する。
+ * 複数あれば最後の値が勝つ。
+ */
+export function extractDocumentDirectoryMeta(code: string): string | undefined {
+  let dir: string | undefined
+  for (const line of code.split('\n')) {
+    const m = line.match(/^\s*\/\/#documentDirectory\s+(.+?)\s*$/)
+    if (m) dir = m[1]
+  }
+  return dir
+}
+
 export async function startREPL(interpreter: InterpreterV2): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -66,6 +83,9 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
 
   let buffer = ''
   let emptyLineCount = 0
+  // メタ行で受けた基準ディレクトリ（セッション内で最後の値が持続 — エディタ側は eval ごとに
+  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。
+  let sessionDocumentDirectory: string | undefined
 
   rl.on('line', async (line) => {
     if (process.env.ORBITSCORE_DEBUG) {
@@ -106,7 +126,13 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
     try {
       const code = buffer.trim()
       const ir = parseAudioDSL(code)
-      await interpreter.execute(ir, { source: code, evalSource: 'human' }) // §L1
+      const metaDir = extractDocumentDirectoryMeta(code)
+      if (metaDir) sessionDocumentDirectory = metaDir
+      await interpreter.execute(ir, {
+        source: code,
+        evalSource: 'human',
+        documentDirectory: sessionDocumentDirectory,
+      }) // §L1
       console.log('✓') // Success indicator
       buffer = '' // Reset buffer on success
       if (process.env.ORBITSCORE_DEBUG) {
@@ -147,7 +173,13 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
 
     try {
       const ir = parseAudioDSL(code)
-      await interpreter.execute(ir, { source: code, evalSource: 'human' }) // §L1
+      const metaDir = extractDocumentDirectoryMeta(code)
+      if (metaDir) sessionDocumentDirectory = metaDir
+      await interpreter.execute(ir, {
+        source: code,
+        evalSource: 'human',
+        documentDirectory: sessionDocumentDirectory,
+      }) // §L1
       console.log('✓') // Success indicator
     } catch (error: any) {
       console.error(`[ERROR] ${error.message}`)

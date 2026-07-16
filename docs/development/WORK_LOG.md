@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.266 feat: import I3 — REPL メタ行で基準ディレクトリを帯域外先渡し #456 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（unit 検証済み・OrbitStudio 実機 MCP E2E は別途 = owner「あとでもいい」）
+
+**問題**: VS Code 拡張は基準ディレクトリを `global.setDocumentDirectory(...)` の **DSL 注入**
+（statements として実行）で渡すが、import 文（IM.2）はどの statement よりも先に評価される
+ため、拡張 REPL 経由の import は IM.6 ガード（基準未解決エラー）に落ちる。
+
+**解決**: REPL プロトコルにメタ行 `//#documentDirectory <path>` を追加（帯域外チャネル）。
+- engine (repl-mode.ts): `extractDocumentDirectoryMeta()` で抽出し `execute()` の
+  `documentDirectory` option に渡す（セッション内で最後の値が持続 = ファイル切替追従）。
+  `//` コメントなので DSL として無害（tokenizer が読み飛ばす）
+- extension (extension.ts writeCodeToEngine): メタ行を常に先頭へ prepend。既存の DSL 注入
+  は残す（audio() 既存経路の実績を変えない・同値の冪等再設定）
+
+**検証**: 新規 6 tests（抽出・重複時 last-wins・空白/スペースパス・DSL 無害性・メタ経由
+import 解決）。全体 1431 passed。拡張 tsc --noEmit clean。
+
+**残**: OrbitStudio 実機 MCP E2E（task 化済み・Agent Bridge の SOUND CONFIRMED ループ再利用）
+
+Refs #456
+
 ### 6.265 feat(engine): file import declaration — parser + interpreter (I1+I2) #456 (Jul 17, 2026)
 
 **Date**: 2026-07-17
