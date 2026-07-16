@@ -59,8 +59,8 @@ skill の Phase 1 (Discovery interview) では audience / scope / language 等�
 | 項目 | 確定値 |
 |---|---|
 | **audience** | self (yamato、実装学習が主目的)。contributor onboarding は副次効果として歓迎 |
-| **content language** | 日本語 only (start)。en は post-ICMC で i18n 追加検討 |
-| **primary source** | own codebase: `packages/engine/src/`、`packages/vscode-extension/src/` |
+| **content language** | **日英バイリンガル必須**（ja ルート + `en/` ツリーを常に同時更新。post-ICMC 先送りの旧方針は撤回・(2026-07-17 owner 指示)） |
+| **primary source** | own codebase: `packages/engine/src/`、`packages/vscode-extension/src/`、`rust/crates/`（rust-engine 移行後） |
 | **scope (含む)** | parser / DSL runtime / scheduler / audio / vscode-extension の **内部実装** |
 | **scope (含まない)** | SuperCollider 内部、Vue 内部、VS Code API 内部 (引用と link に留める) |
 | **voice / tone** | technical-explanatory、sempai 寄り (warmth 中程度)。詳細は STYLE_GUIDE で確定 |
@@ -71,6 +71,8 @@ skill の Phase 1 (Discovery interview) では audience / scope / language 等�
 | **external audit** | advisor で代替 (詳細は §5) |
 | **research depth** | spec-grade (primary source = code 自身、reading 時は逐語引用) |
 | **deploy target** | post-ICMC で GitHub Pages、initial は local-only (`docs:dev`) |
+| **curriculum structure** | **ステップバイステップ構成**。各ステップは実機で再現可能な手順とし、その手順集合が **網羅的 E2E テストのタスクを兼ねる**（learning = E2E 検証の二重役割。(2026-07-17 owner 指示)） |
+| **local delivery** | ローカル配信は **MCP サーバ `/docs/`**（[#450](https://github.com/signalcompose/orbitscore/issues/450)）と **OrbitStudio ワンクリック** の 2 経路（(2026-07-17 owner 指示)） |
 
 ---
 
@@ -203,11 +205,13 @@ cross-LLM-family audit に格上げする選択肢は post-ICMC で検討:
 
 ## 6. Skill Phase 9 — Deployment
 
-- **Initial**: local-only (`docs:dev` で hot reload)。飛行機内などのオフライン作業もこれで足りる
-- **post-ICMC**: GitHub Pages に deploy
-  - URL 案: `signalcompose.github.io/orbitscore-internals/` (or 独自 subdomain)
+**(2026-07-17 owner 指示: 以下は実態に合わせて更新。GitHub Pages は post-ICMC 予定ではなく既に稼働中)**
+
+- **本番**: GitHub Actions `deploy-sites.yml` が `sites/dev/` を build し `https://signalcompose.github.io/orbitscore/dev/` に deploy（`.vitepress/config.ts` の `SITE_BASE = '/orbitscore/dev/'` と一致）
   - 公開範囲: public (OSS なので隠す理由なし、contributor 用途でも有用)
-  - 「個人の学習ノート」 disclaimer は landing page でも明記
+  - 「個人の学習ノート」 disclaimer は landing page (`sites/dev/index.md` / `sites/dev/en/index.md`) で明記
+- **開発時**: local-only (`npm run docs:dev -w @orbitscore/dev-site` で hot reload)。飛行機内などのオフライン作業もこれで足りる
+- **ローカル配信（追加経路・(2026-07-17 owner 指示)）**: MCP サーバ `/docs/`（[#450](https://github.com/signalcompose/orbitscore/issues/450)）経由・OrbitStudio からのワンクリック起動の 2 経路を予定。GitHub Pages 版と並存し、オフライン/エージェント駆動での参照を担う
 
 ---
 
