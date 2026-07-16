@@ -103,12 +103,67 @@ fn parse_buffer_frames(value: Option<&str>) -> Option<u32> {
     }
 }
 
+/// instrument child のフォーマット別デフォルト binary 名。VST3 だけが専用 child を持ち、
+/// それ以外（.clap・raw .dylib CLAP 等）は従来どおり CLAP child が担当する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstrumentPluginFormat {
+    Clap,
+    Vst3,
+}
+
+impl InstrumentPluginFormat {
+    /// 拡張子 `.vst3`（大文字小文字不問）のみ VST3。**それ以外はすべて Clap** —
+    /// CLAP は VST3 対応前から唯一サポートされていた instrument フォーマットだった
+    /// ため、未知拡張子のフォールバック先として妥当。一例として、CLAP gated テストは
+    /// 未バンドルの raw `.dylib`（clap-test-synth）を attach するため、ここで未知
+    /// 拡張子を reject すると既存経路が壊れる（本ブランチの実機 gated RUN で検出済み）。
+    /// 不正な plugin path の失敗は従来どおり child 側の load エラーとして表面化する。
+    fn from_plugin_path(path: &Path) -> Self {
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some(extension) if extension.eq_ignore_ascii_case("vst3") => Self::Vst3,
+            _ => Self::Clap,
+        }
+    }
+
+    fn default_child_name(self) -> &'static str {
+        match self {
+            Self::Clap => "orbit-clap-instrument-child",
+            Self::Vst3 => "orbit-vst3-instrument-child",
+        }
+    }
+}
+
+/// attach する plugin の拡張子から instrument child binary を選ぶ（純関数・unit テスト対象）。
+///
+/// - `current_child_exe` の file name がフォーマット別デフォルト名（clap/vst3 child）で
+///   ない場合は**明示指定と見なして触らない**（gated テストの config 直指定・
+///   `ORBIT_INSTRUMENT_CHILD_BIN` override を保護）。
+/// - デフォルト名の場合は**同じディレクトリ**でフォーマットに応じた binary に読み替える。
+///   `current_exe` からの再導出はしない（テストハーネスでは current_exe が
+///   `target/debug/deps/` 配下になり sibling 解決が壊れるため）。retryable attach 失敗で
+///   `ChildLaunch` が再利用されても、毎回この読み替えが走るので .vst3 → .clap の
+///   attach し直しで元の child に戻る（対称・冪等）。
+pub(crate) fn child_exe_for_attach(current_child_exe: &Path, plugin_path: &Path) -> PathBuf {
+    let is_default_name = matches!(
+        current_child_exe.file_name().and_then(|name| name.to_str()),
+        Some("orbit-clap-instrument-child") | Some("orbit-vst3-instrument-child")
+    );
+    if !is_default_name {
+        return current_child_exe.to_path_buf();
+    }
+    let desired = InstrumentPluginFormat::from_plugin_path(plugin_path).default_child_name();
+    match current_child_exe.parent() {
+        Some(dir) => dir.join(desired),
+        None => PathBuf::from(desired),
+    }
+}
+
 fn default_child_exe() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|error| format!("current_exe: {error}"))?;
     let dir = exe
         .parent()
         .ok_or_else(|| "current_exe has no parent directory".to_string())?;
-    Ok(dir.join("orbit-clap-instrument-child"))
+    Ok(dir.join(InstrumentPluginFormat::Clap.default_child_name()))
 }
 
 #[derive(Default)]
@@ -130,6 +185,9 @@ pub struct OutProcInstrumentStats {
     /// 上記 output 方向 drop に `NoteEnd` が含まれた回数。`SharedRegion::output_note_end_dropped_count`
     /// のミラー(host の簿記リセット判断トリガと同じ counter だが、こちらは daemon health 可視化用)。
     pub output_note_end_dropped_count: AtomicU64,
+    /// child が decode できなかった input event / 未対応 `NeutralEvent` variant の数。
+    /// `SharedRegion::event_decode_error_count` のミラー(他カウンタと同じ mirror パターン)。
+    pub event_decode_error_count: AtomicU64,
     /// Gated cross-process probe: A4 (port 0 / channel 0 / key 69) の host-side live voice 数。
     pub probe_live_count: AtomicU16,
     /// Instrument 加算後の master bus の abs peak を f32 bits で累積する。非負 f32 の bits は
@@ -159,6 +217,7 @@ impl OutProcInstrumentStats {
             output_note_end_dropped_count: self
                 .output_note_end_dropped_count
                 .load(Ordering::Relaxed),
+            event_decode_error_count: self.event_decode_error_count.load(Ordering::Relaxed),
             probe_live_count: self.probe_live_count.load(Ordering::Relaxed),
             post_peak: f32::from_bits(self.post_peak_bits.load(Ordering::Relaxed)),
             current_child_pid: self.current_child_pid.load(Ordering::Relaxed),
@@ -176,6 +235,7 @@ pub struct OutProcInstrumentSnapshot {
     pub output_event_dropped_count: u64,
     pub output_event_spilled_count: u64,
     pub output_note_end_dropped_count: u64,
+    pub event_decode_error_count: u64,
     pub probe_live_count: u16,
     pub post_peak: f32,
     pub current_child_pid: u32,
@@ -407,6 +467,11 @@ impl InstrumentChildSupervisor {
                     stats
                         .output_note_end_dropped_count
                         .store(note_end_dropped, Ordering::Relaxed);
+                    let event_decode_errors =
+                        unsafe { (*region).event_decode_error_count.load(Ordering::Relaxed) };
+                    stats
+                        .event_decode_error_count
+                        .store(event_decode_errors, Ordering::Relaxed);
 
                     match child.try_wait() {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
@@ -1096,5 +1161,44 @@ mod tests {
         drop(sup);
         drop(ctl_mmap);
         let _ = std::fs::remove_file(&shm);
+    }
+    #[test]
+    fn instrument_plugin_format_selects_child_name_from_extension() {
+        assert_eq!(
+            InstrumentPluginFormat::from_plugin_path(Path::new("synth.clap")).default_child_name(),
+            "orbit-clap-instrument-child"
+        );
+        assert_eq!(
+            InstrumentPluginFormat::from_plugin_path(Path::new("synth.VST3")).default_child_name(),
+            "orbit-vst3-instrument-child"
+        );
+        // 未知拡張子・raw dylib は従来どおり CLAP child（CLAP gated は未バンドル .dylib を使う）。
+        assert_eq!(
+            InstrumentPluginFormat::from_plugin_path(Path::new("libclap_test_synth.dylib"))
+                .default_child_name(),
+            "orbit-clap-instrument-child"
+        );
+    }
+
+    #[test]
+    fn child_exe_for_attach_swaps_default_names_in_place_and_is_symmetric() {
+        let clap = PathBuf::from("/target/debug/orbit-clap-instrument-child");
+        let vst3 = PathBuf::from("/target/debug/orbit-vst3-instrument-child");
+        // .vst3 attach はデフォルト CLAP child を同ディレクトリの VST3 child に読み替える。
+        assert_eq!(child_exe_for_attach(&clap, Path::new("synth.vst3")), vst3);
+        // retryable attach 失敗で child_exe が VST3 に書き換わったまま .clap を attach し直しても
+        // CLAP child に戻る（対称・冪等）。
+        assert_eq!(child_exe_for_attach(&vst3, Path::new("synth.clap")), clap);
+        assert_eq!(child_exe_for_attach(&vst3, Path::new("synth.vst3")), vst3);
+    }
+
+    #[test]
+    fn child_exe_for_attach_preserves_explicit_non_default_binaries() {
+        let custom = PathBuf::from("/tmp/gated-instrument-child");
+        assert_eq!(
+            child_exe_for_attach(&custom, Path::new("synth.vst3")),
+            custom,
+            "explicit child exe (env override / test fixture) must be retained"
+        );
     }
 }

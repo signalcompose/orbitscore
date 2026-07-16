@@ -1,3 +1,5 @@
+import path from 'node:path'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
@@ -54,6 +56,16 @@ describe('Sequence instrument dispatch', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.useRealTimers()
+  })
+
+  it('accepts a VST3 instrument declaration', async () => {
+    const { audio, seq } = harness()
+    await expect(seq.instrument('synth.vst3')).resolves.toBe(seq)
+    expect(audio.loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'synth.vst3'),
+      undefined,
+      'instrument',
+    )
   })
 
   it('awaits eager declaration, marks note mode, and resolves degrees to plugin notes', async () => {

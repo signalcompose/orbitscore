@@ -25,7 +25,7 @@ export class PluginInstrumentManager {
   }
 
   async instrument(spec: string, pluginId?: string): Promise<void> {
-    validatePluginExtension(spec)
+    validatePluginExtension(spec, 'instrument')
     if (this.linkAudioManager.isEnabled()) {
       throw new Error('seq.instrument() cannot be used while LinkAudio is enabled in v1.')
     }
@@ -34,6 +34,7 @@ export class PluginInstrumentManager {
       spec,
       this.audioManager.getAudioPaths(),
       this.audioManager.getDocumentDirectory(),
+      'instrument',
     )
     const existing = this.declaration
     if (existing) {

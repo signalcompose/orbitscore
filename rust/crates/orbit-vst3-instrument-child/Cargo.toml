@@ -1,0 +1,17 @@
+[package]
+name = "orbit-vst3-instrument-child"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Out-of-process VST3 instrument child hosting a real VST3 plugin over the orbit-audio-sandbox event transport"
+
+[[bin]]
+name = "orbit-vst3-instrument-child"
+path = "src/main.rs"
+
+[dependencies]
+orbit-vst3-host = { path = "../orbit-vst3-host" }
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
+anyhow = "1"

@@ -259,6 +259,11 @@ pub(crate) trait OutProcRole: Sized {
     fn set_child_early_exit(stats: &Self::Stats, value: bool);
     fn child_early_exit(stats: &Self::Stats) -> bool;
     fn set_current_child_pid(stats: &Self::Stats, pid: u32);
+    /// Attach path で plugin format に依存する child を選び直す。effect は env 設定のまま。
+    fn select_child_exe(
+        launch: &mut ChildLaunch<Self>,
+        path: &std::path::Path,
+    ) -> Result<(), String>;
     /// テスト専用: role ジェネリックなテストヘルパーが `Self::Stats` を構築するためのコンストラクタ。
     /// production コードはこれを呼ばない（`load_outproc_plugin_impl` 等は呼び出し側から渡された
     /// `ChildLaunch::stats` を使う）。
@@ -339,6 +344,12 @@ impl OutProcRole for EffectRole {
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
     }
+    fn select_child_exe(
+        _launch: &mut ChildLaunch<Self>,
+        _path: &std::path::Path,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     #[cfg(test)]
     fn new_stats() -> Arc<Self::Stats> {
         crate::outproc_effect::OutProcEffectStats::new()
@@ -403,6 +414,20 @@ impl OutProcRole for InstrumentRole {
     }
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
+    }
+    fn select_child_exe(
+        launch: &mut ChildLaunch<Self>,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        // 拡張子ベースの読み替え（.vst3 → VST3 child・それ以外 → CLAP child）。明示指定された
+        // child exe（デフォルト名以外）は保持される。詳細は `child_exe_for_attach` の doc 参照。
+        launch.child_exe = crate::outproc_instrument::child_exe_for_attach(&launch.child_exe, path);
+        tracing::debug!(
+            ?path,
+            child_exe = ?launch.child_exe,
+            "instrument child selected for attach"
+        );
+        Ok(())
     }
     #[cfg(test)]
     fn new_stats() -> Arc<Self::Stats> {
@@ -1494,6 +1519,10 @@ impl EngineWrap {
             ChildSlot::Empty(launch) => launch,
             _ => unreachable!("ChildSlot state was checked while holding the same mutex"),
         };
+        if let Err(error) = R::select_child_exe(&mut launch, &path) {
+            *slot = ChildSlot::Empty(launch);
+            return Err(R::runtime_error(error));
+        }
         *slot = ChildSlot::Loading { path: path.clone() };
         // Loading 書き込みを可視化した直後にロックを解放する。以降の shm open・spawn・
         // ready-ack poll（最大 CHILD_READY_TIMEOUT）はロック外で行う。他の LoadPlugin
@@ -2069,7 +2098,7 @@ impl EngineWrap {
 
     /// OOP instrument の全 health signal を `(child_process_error_count, respawn_count,
     /// measurement_invalid, output_event_dropped_count, output_event_spilled_count,
-    /// output_note_end_dropped_count)` で返す（daemon の 1 Hz ticker が polling して WARNING event
+    /// output_note_end_dropped_count, event_decode_error_count)` で返す（daemon の 1 Hz ticker が polling して WARNING event
     /// で surface する非 RT observability）。`outproc_health()`（effect 側）と同じ「1 tick = 1
     /// try_lock + 1 snapshot」設計 — child-process 系 3 signal と output-event overflow 系 3 signal を
     /// 1 accessor に統合し、同一 tick 内で `outproc_instrument` mutex を複数回 `try_lock` する
@@ -2079,7 +2108,7 @@ impl EngineWrap {
     /// （cumulative なので drop しない）、**Poisoned** は warn して real 分を 0/false に丸める
     /// （injected 分は失わない）。instrument 未起動 / outproc-instrument 無効時は injected 分のみ返す。
     #[cfg(feature = "outproc-instrument")]
-    pub fn outproc_instrument_health(&self) -> (u64, u64, bool, u64, u64, u64) {
+    pub fn outproc_instrument_health(&self) -> (u64, u64, bool, u64, u64, u64, u64) {
         let injected_errors = self.outproc_instrument_child_errors.load(Ordering::Relaxed);
         let injected_respawns = self.outproc_instrument_respawns.load(Ordering::Relaxed);
         let injected_invalid = self
@@ -2100,6 +2129,7 @@ impl EngineWrap {
                         s.output_event_dropped_count + injected_dropped,
                         s.output_event_spilled_count,
                         s.output_note_end_dropped_count,
+                        s.event_decode_error_count,
                     )
                 })
                 .unwrap_or((
@@ -2109,12 +2139,14 @@ impl EngineWrap {
                     injected_dropped,
                     0,
                     0,
+                    0,
                 )),
             Err(std::sync::TryLockError::WouldBlock) => (
                 injected_errors,
                 injected_respawns,
                 injected_invalid,
                 injected_dropped,
+                0,
                 0,
                 0,
             ),
@@ -2131,6 +2163,7 @@ impl EngineWrap {
                     injected_dropped,
                     0,
                     0,
+                    0,
                 )
             }
         }
@@ -2138,7 +2171,7 @@ impl EngineWrap {
 
     /// feature `outproc-instrument` 無効ビルド用の stub。本番は常に injected 分のみ（control が無い）。
     #[cfg(not(feature = "outproc-instrument"))]
-    pub fn outproc_instrument_health(&self) -> (u64, u64, bool, u64, u64, u64) {
+    pub fn outproc_instrument_health(&self) -> (u64, u64, bool, u64, u64, u64, u64) {
         (
             self.outproc_instrument_child_errors.load(Ordering::Relaxed),
             self.outproc_instrument_respawns.load(Ordering::Relaxed),
@@ -2146,6 +2179,7 @@ impl EngineWrap {
                 .load(Ordering::Relaxed),
             self.outproc_instrument_output_dropped
                 .load(Ordering::Relaxed),
+            0,
             0,
             0,
         )
@@ -4051,11 +4085,13 @@ mod outproc_health_tests {
 #[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_health_tests {
     use super::{
-        ChildSlot, EngineWrap, InstrumentRole, OutProcInstrumentControl, OutProcRole, WrapError,
+        ChildLaunch, ChildSlot, EngineWrap, InstrumentRole, OutProcInstrumentControl, OutProcRole,
+        WrapError,
     };
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
-    use std::sync::atomic::Ordering;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, Weak};
 
     /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcInstrumentControl`
@@ -4146,6 +4182,53 @@ mod outproc_instrument_health_tests {
     }
 
     #[test]
+    fn instrument_select_child_exe_swaps_default_child_by_extension() {
+        let stats = InstrumentRole::new_stats();
+        let mut launch = ChildLaunch::<InstrumentRole> {
+            shm_path: PathBuf::from("/tmp/unused-select-child-exe.shm"),
+            child_exe: PathBuf::from("/opt/orbitscore/orbit-clap-instrument-child"),
+            sample_rate: 48_000,
+            stats: stats.clone(),
+            engaged: Arc::new(AtomicBool::new(false)),
+            cleanup_shm_on_drop: false,
+        };
+
+        InstrumentRole::select_child_exe(&mut launch, Path::new("synth.vst3"))
+            .expect("select_child_exe must not error on default child name");
+        assert_eq!(
+            launch.child_exe.file_name().and_then(|name| name.to_str()),
+            Some("orbit-vst3-instrument-child")
+        );
+
+        // Symmetric: attaching a .clap plugin afterwards swaps back to the CLAP child.
+        InstrumentRole::select_child_exe(&mut launch, Path::new("synth.clap"))
+            .expect("select_child_exe must not error on default child name");
+        assert_eq!(
+            launch.child_exe.file_name().and_then(|name| name.to_str()),
+            Some("orbit-clap-instrument-child")
+        );
+
+        // An explicitly-named (non-default) child exe is preserved untouched.
+        let mut explicit_launch = ChildLaunch::<InstrumentRole> {
+            shm_path: PathBuf::from("/tmp/unused-select-child-exe-explicit.shm"),
+            child_exe: PathBuf::from("/opt/orbitscore/custom-instrument-child"),
+            sample_rate: 48_000,
+            stats,
+            engaged: Arc::new(AtomicBool::new(false)),
+            cleanup_shm_on_drop: false,
+        };
+        InstrumentRole::select_child_exe(&mut explicit_launch, Path::new("synth.vst3"))
+            .expect("select_child_exe must not error on explicit child name");
+        assert_eq!(
+            explicit_launch
+                .child_exe
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("custom-instrument-child")
+        );
+    }
+
+    #[test]
     fn instrument_load_outproc_rejects_closed_slot() {
         super::outproc_load_error_test_support::closed_slot_is_rejected(
             wrap_with_child_slot,
@@ -4219,9 +4302,9 @@ mod outproc_instrument_health_tests {
 
     // `outproc_instrument_health()` mirrors `outproc_health_tests` (effect side) exactly --
     // Ok(None)/Ok(Some)/WouldBlock/Poisoned branches. It bundles all 6 instrument health signals
-    // (child-process trio + output-event-overflow trio) into one accessor/one try_lock, so every
-    // test below uses 6 *distinct* values to catch a field-to-field mapping swap at either half
-    // of the tuple.
+    // (child-process trio + output-event-overflow trio + event_decode_error_count) into one
+    // accessor/one try_lock, so every test below uses distinct values to catch a field-to-field
+    // mapping swap anywhere in the tuple.
 
     #[test]
     fn health_ok_none_reports_only_injected_values() {
@@ -4238,7 +4321,7 @@ mod outproc_instrument_health_tests {
             .fetch_add(7, Ordering::Relaxed);
         assert_eq!(
             wrap.outproc_instrument_health(),
-            (4, 2, true, 7, 0, 0),
+            (4, 2, true, 7, 0, 0, 0),
             "Ok(None): only injected counters/flag surface; real output-event fields are 0"
         );
     }
@@ -4262,6 +4345,7 @@ mod outproc_instrument_health_tests {
         stats
             .output_note_end_dropped_count
             .store(6, Ordering::Relaxed);
+        stats.event_decode_error_count.store(8, Ordering::Relaxed);
         wrap.outproc_instrument_child_errors_arc()
             .fetch_add(9, Ordering::Relaxed);
         wrap.outproc_instrument_respawns_arc()
@@ -4269,7 +4353,10 @@ mod outproc_instrument_health_tests {
         wrap.outproc_instrument_output_dropped_arc()
             .fetch_add(1, Ordering::Relaxed);
 
-        assert_eq!(wrap.outproc_instrument_health(), (12, 7, true, 12, 13, 6));
+        assert_eq!(
+            wrap.outproc_instrument_health(),
+            (12, 7, true, 12, 13, 6, 8)
+        );
     }
 
     #[test]
@@ -4302,7 +4389,7 @@ mod outproc_instrument_health_tests {
         });
         holding_rx.recv().expect("holder thread signaled lock held");
 
-        assert_eq!(wrap.outproc_instrument_health(), (1, 0, false, 4, 0, 0));
+        assert_eq!(wrap.outproc_instrument_health(), (1, 0, false, 4, 0, 0, 0));
 
         release_tx.send(()).expect("signal release");
         holder.join().expect("holder thread should not panic");
@@ -4339,7 +4426,7 @@ mod outproc_instrument_health_tests {
             "spawned thread should have panicked while holding the lock"
         );
 
-        assert_eq!(wrap.outproc_instrument_health(), (3, 0, false, 2, 0, 0));
+        assert_eq!(wrap.outproc_instrument_health(), (3, 0, false, 2, 0, 0, 0));
     }
 }
 

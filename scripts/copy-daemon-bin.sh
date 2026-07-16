@@ -39,7 +39,7 @@
 #
 # Build the release binaries first if you want them bundled:
 #   cd rust && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument
-#   cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child
+#   cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-instrument-child
 
 set -euo pipefail
 
@@ -72,3 +72,4 @@ copy_binary() {
 copy_binary "orbit-audio-daemon"
 copy_binary "orbit-clap-effect-child"
 copy_binary "orbit-clap-instrument-child"
+copy_binary "orbit-vst3-instrument-child"

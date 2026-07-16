@@ -17,6 +17,88 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.258 feat(vst3): VST3 instrument production — Pitch DSL が VST3 で鳴る実機 E2E #421 (Jul 16, 2026)
+
+**Date**: 2026-07-16
+**Status**: ✅ 実装・実機 E2E PASS（PR 作成・レビューフローへ）
+**Branch**: `421-vst3-instrument-production`
+**Commits**: `25e5360` (Stage 1) / Stage 2 / Stage 3 / `a09d7fb` (Stage 4)
+
+Epic #424 の CLAP instrument 経路（#427）を VST3 に横展開。単一 PR + Stage ごとの
+細かいコミットで実装（owner 確定方針・overnight 自律走行）。実装 = Codex fresh
+スレッド×4（Stage 分割・自己完結ブリーフ）+ main の受け入れ監査。
+
+**スコープ = note on/off のみ**。CC→IMidiMapping / per-note expression / tempo(#408) は
+owner 設計セッションへ明示先送り（PR に doc 化）。
+
+**Stage 1（orbit-vst3-host）**: `Vst3InstrumentProcessor` 新設 — instrument 判定
+（audio in=0/out>0・event input bus 必須・effect は NotInstrument で明示拒否）、
+headless EditController + IConnectionPoint、event input bus の明示 activateBus、
+note on/off を積む `HostInputEventList`（IEventList 実装）、process は add-mix
+（CLAP 版と同意味論）、teardown は effect の規律踏襲。
+
+**Stage 2（orbit-vst3-instrument-child 新 crate）**: clap 版の transport ミラー
+（event slot 消費・in-order seq・output window/spill・publish_child_ready）。
+**VST3 に NOTE_END が無い非対称は child 内で吸収**: NoteOff/NoteChoke 処理時に
+同 addr/sample_offset の synthetic NoteEnd を output window へ書く（host の
+(port,channel,key) 参照カウント簿記は無改変・Fable 確定設計）。wildcard は 0 丸め、
+NoteChoke は velocity 0 の NoteOff 化。push API に sample_offset 追加。
+
+**Stage 3（テスト）**: `orbit-vst3-synth-oracle` 新設（clap-test-synth の SineVoice
+ミラー・振幅 0.25・package-oracle.sh）+ offline テスト（発音→0.25±0.01→note off→無音、
+effect 拒否の負テスト）+ `outproc_instrument_vst3_gated.rs`（CLAP 版ミラー3本）。
+**gated 実機 RUN 3/3 PASS**: post_mix_peak=0.25000・synthetic NOTE_END で
+probe_live_count 0 復帰・SIGKILL respawn 回復。
+
+**Stage 4（daemon + DSL 配線）**: attach 時に拡張子で instrument child を選択
+（.vst3 → orbit-vst3-instrument-child・それ以外は従来どおり CLAP child。
+デフォルト名 child の同ディレクトリ差し替え = 対称・冪等な純関数）。
+`validatePluginExtension` を role 対応化（instrument = .clap/.vst3・effect = .clap のみ）。
+release.yml / copy-daemon-bin.sh に VST3 child 同梱。
+
+**受け入れ監査で Codex 実装から2点修正（実機 gated RUN で検出・#445 の教訓が的中）**:
+① 拡張子 validation が CLAP gated の raw .dylib attach を破壊 → 未知拡張子は
+reject せず CLAP child へ ② child exe 再導出が current_exe 基準でテストハーネス
+（deps/ 配下）を壊す + retry 後に .clap へ戻らない → 親ディレクトリ基準の対称読み替えに。
+fail-before/pass-after: CLAP gated 0/3 → 3/3。
+
+**実機 E2E（DoD・self-run は owner 常時許可の範囲）**:
+.orbs（`global.key("C")` + `seq.instrument("SynthOracle.vst3")` + `play(1,3,5,8)` +
+`RUN(synth)`）を配布構成 release daemon + cli-audio.js + `ORBIT_CAPTURE_WAV` で実行 →
+**capture peak = 0.25000（厳密一致・synth 既知振幅）**。CLAP baseline も同手順で
+0.25000（経路パリティ）。DSL → LoadPlugin(role=instrument) → 拡張子ベース child 選択 →
+VST3 child → IEventList note on/off → sine 発音 → master bus の全経路を客観実証
+（スピーカー実再生込み）。
+※ ハーネスの学び: `play()` はパターン buffering のみで発音には `RUN(seq)` が必要
+（WORK_LOG 6.x 既知の RUN/LOOP 忘れ silent 再現を踏んだ）。
+
+**検証**: cargo workspace build / clippy -D warnings / fmt・daemon unit 54 + protocol 28・
+CLAP gated 3/3 + VST3 gated 3/3（実機）・npm test 1333 passed / 0 failed。
+既知 flake: offline テスト初回ビルド時の oracle packaging 並行競合（既存パターン・
+Stage 1 以前から存在・再実行で安定 green）。
+
+**/simplify（4観点並行・PR #447）**: reuse/efficiency/altitude = クリーン判定。
+simplification 2件適用（oracle packaging ヘルパー統合・NoteOff/NoteChoke 分岐統合）。
+適用後 gated 3/3 実機再RUN green（`2389f12`）。
+
+**/code:pr-review-team（round 1-3・収束）**:
+- round 1（4レビュアー並行）: Critical 2（plugin-resolver doc 例の stale シグネチャ /
+  select_child_exe 配線の CI テスト欠如）+ Important 4（ガード早期 return の stale
+  input events / event_decode_error_count 未ミラー / child 選択の log なし /
+  process() tresult 破棄）+ テスト増強2件 → fixer 一括適用（`a34fce0`・
+  classify_event 純関数抽出 + unit テスト5本含む）
+- round 2（収束チェック）: 残余 Important 1（decode counter が ticker 経路まで
+  届いていない）+ Minor 2 を検出 → 7-tuple 化 + 新 WARNING
+  `OUTPROC_INSTRUMENT_EVENT_DECODE` 配線等で解消（`beedd24`）
+- round 3: **全 RESOLVED・新規指摘なし・Critical/Important = 0 で収束**
+- CI 4/4 pass（fmt/clippy/test・code-review・packaging・license gate）
+- 各 round 後に CLAP/VST3 gated 実機再RUN で退行なしを確認
+- 既知 flake: 高負荷時（並行 cargo と競合）に voice-leading / random 等の
+  timing 依存 spec が落ちる。隔離再実行で毎回 green を確認済み
+
+**状態**: PR #447 open・レビュー収束済み・CI green。マージと Epic #424 クローズは
+owner 指示待ち（overnight 自律走行の停止点）。
+
 ### 6.257 feat(daemon): DoD 配線 — TS ガード撤去 + cross-role reject + 配布 feature + DSL 実機 E2E #431 PR-3 (Jul 16, 2026)
 
 **Date**: 2026-07-16

@@ -1054,6 +1054,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-vst3-instrument-child"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "orbit-audio-sandbox",
+ "orbit-vst3-host",
+]
+
+[[package]]
+name = "orbit-vst3-synth-oracle"
+version = "0.0.1"
+dependencies = [
+ "vst3",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"

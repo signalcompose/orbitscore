@@ -25,10 +25,11 @@ use crate::protocol::{
     ERROR_CODE_ENGINE_LOCK_POISONED, ERROR_CODE_LINK_EGRESS_DROP, ERROR_CODE_OUTPROC_EFFECT_ERROR,
     ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED, ERROR_CODE_OUTPROC_EFFECT_INVALID,
     ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_OUTPROC_INSTRUMENT_ERROR,
-    ERROR_CODE_OUTPROC_INSTRUMENT_INVALID, ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED,
-    ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN, ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW,
-    ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR,
-    EVENT_PLAY_ENDED, EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
+    ERROR_CODE_OUTPROC_INSTRUMENT_EVENT_DECODE, ERROR_CODE_OUTPROC_INSTRUMENT_INVALID,
+    ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED, ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN,
+    ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
+    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
+    EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -120,6 +121,7 @@ pub async fn run(
             let mut last_outproc_instrument_output_dropped: u64 = 0;
             let mut last_outproc_instrument_errors: u64 = 0;
             let mut last_outproc_instrument_respawns: u64 = 0;
+            let mut last_outproc_instrument_decode_errors: u64 = 0;
             let mut last_engine_lock_contention: u64 = 0;
             let mut last_plugin_event_ring_overflow: u64 = 0;
             let mut outproc_invalid_reported = false;
@@ -345,7 +347,25 @@ pub async fn run(
                     outproc_instrument_dropped,
                     outproc_instrument_spilled,
                     outproc_instrument_note_end_dropped,
+                    outproc_instrument_decode_errors,
                 ) = engine.outproc_instrument_health();
+                // input 方向の decode 失敗 / 未対応 NeutralEvent variant（該当イベントは無音で
+                // 消える）。output overflow とは別枠の WARNING（#421 round 2 residual）。
+                if outproc_instrument_decode_errors > last_outproc_instrument_decode_errors {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_OUTPROC_INSTRUMENT_EVENT_DECODE,
+                        format!(
+                            "out-of-process instrument dropped undecodable/unsupported input \
+                             events ({outproc_instrument_decode_errors} total); those events \
+                             are silently lost to the plugin",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_outproc_instrument_decode_errors = outproc_instrument_decode_errors;
+                }
                 if outproc_instrument_errors > last_outproc_instrument_errors {
                     let evt = daemon_error_event(
                         ERROR_SEVERITY_WARNING,

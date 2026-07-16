@@ -1,0 +1,17 @@
+[package]
+name = "orbit-vst3-synth-oracle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "VST3 monophonic sine synth test-oracle for orbit-vst3-host"
+publish = false
+
+[lib]
+name = "orbit_vst3_synth_oracle"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+vst3 = "0.3"
