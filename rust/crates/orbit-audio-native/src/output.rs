@@ -128,10 +128,32 @@ pub const MAX_LINK_CHANNELS: usize = 64;
 /// callback では stack 上の `ArrayVec` だけで `render_multi` 引数を組み立てられる。
 pub const MAX_INSERT_BUS_STAGES: usize = 64;
 
-/// named routing tag を受ける per-bus insert stage。
+/// mixer graph（#459/#453 MX.1-MX.5）における stage の出力先。**stages 配列内の index** で指す
+/// （配列順 = トポロジカル順という MX.4 の不変条件を、型ではなく構築時検証で担保する）。
+/// `Master` は既定（従来の「hw へ加算」のみの経路とビット同一）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BusTarget {
+    /// hardware sum へ加算する（従来の唯一の経路）。
+    #[default]
+    Master,
+    /// 自分より **後ろ**（配列 index が大きい）の stage へ copy 加算する（sum への合流）。
+    Bus(usize),
+}
+
+/// post-insert の signal を copy 加算する send（aux への並列タップ・MX.3）。post-fader 固定
+/// （v1・pre/post 切替は将来拡張）。`target` は `sends` を持つ stage 自身より**後ろ**の index。
+#[derive(Debug, Clone, Copy)]
+pub struct BusSend {
+    pub target: usize,
+    pub gain: f32,
+}
+
+/// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
+/// （#459/#453・MX.1-MX.5）。
 ///
 /// `processor=None` は effect 未 attach の **登録済み bus** を表す。buffer を `render_multi` に渡して
-/// event を必ず消費し、そのまま master へ足すので、未 attach bus の event が retain され続けない。
+/// event を必ず消費し、そのまま `output_target` へ足すので、未 attach bus の event が retain され
+/// 続けない。
 pub struct InsertBusStage {
     name: String,
     processor: Option<Box<dyn PostProcessor>>,
@@ -146,6 +168,10 @@ pub struct InsertBusStage {
     /// activation → その後に tag 付き PlayAt」の順序を守ること（`seq.effect()` は await するので
     /// 構造的に成立）。
     active: Arc<AtomicBool>,
+    /// この stage の insert 適用後 buffer を最終的にどこへ足すか（既定 `Master` = 従来経路）。
+    output_target: BusTarget,
+    /// post-insert の buffer を copy 加算する先（既定空 = 従来経路）。MX.3 の send/aux。
+    sends: Vec<BusSend>,
 }
 
 impl InsertBusStage {
@@ -174,6 +200,8 @@ impl InsertBusStage {
             processor,
             buffer: vec![0.0; buffer_len],
             active,
+            output_target: BusTarget::default(),
+            sends: Vec::new(),
         }
     }
 
@@ -182,11 +210,50 @@ impl InsertBusStage {
         Self::new(name, None, 0)
     }
 
+    /// この stage の出力先を指定する（既定 `Master`）。sum の member や sum→master 以外の合流に
+    /// 使う（MX.1）。target index の妥当性（自分より後ろ）は構築 API 側で検証する。
+    pub fn with_output_target(mut self, target: BusTarget) -> Self {
+        self.output_target = target;
+        self
+    }
+
+    /// 複数の send（aux/return への post-fader copy・MX.3）を指定する（既定空）。
+    pub fn with_sends(mut self, sends: Vec<BusSend>) -> Self {
+        self.sends = sends;
+        self
+    }
+
     fn ensure_buffer_len(&mut self, len: usize) {
         if self.buffer.len() < len {
             self.buffer.resize(len, 0.0);
         }
     }
+}
+
+/// `insert_buses` の `output_target`/`sends` が MX.4 のトポロジカル不変条件（配列順で後方参照
+/// のみ）を満たすか検証する。stage i の target/send が `<= i` を指すと、render 時に
+/// `split_at_mut` で解決できない（前方参照 or 自己参照は sum のネスト・循環に相当し v1 で禁止・
+/// MX.2）。構築 API の入口（`start_default_output_with_insert_buses*`）でのみ呼ぶ。
+fn validate_bus_topology(stages: &[InsertBusStage]) -> Result<(), OutputError> {
+    for (i, stage) in stages.iter().enumerate() {
+        if let BusTarget::Bus(target) = stage.output_target {
+            if target <= i || target >= stages.len() {
+                return Err(OutputError::NoConfig(format!(
+                    "insert bus '{}' (index {i}) output_target Bus({target}) must be a later stage",
+                    stage.name
+                )));
+            }
+        }
+        for send in &stage.sends {
+            if send.target <= i || send.target >= stages.len() {
+                return Err(OutputError::NoConfig(format!(
+                    "insert bus '{}' (index {i}) send target {} must be a later stage",
+                    stage.name, send.target
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// LinkAudio channel を RT callback に届けるための activation メッセージ（A4-2b-2）。
@@ -291,10 +358,40 @@ fn render_engine_with_insert_buses(
     const MAX_TARGETS: usize = MAX_INSERT_BUS_STAGES + MAX_LINK_CHANNELS;
     debug_assert!(buses.len() <= MAX_INSERT_BUS_STAGES);
     let bs = (hw.len() / output_channels) * output_channels;
+
+    // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
+    let active_flags: ArrayVec<bool, MAX_INSERT_BUS_STAGES> = buses
+        .iter()
+        .map(|bus| bus.active.load(Ordering::Relaxed))
+        .collect();
+
+    // is_render_target（MX.4）: 「event tag を受けるか」（active）と「グラフの中継点として
+    // 生きるか」（他の active stage の output_target/sends から参照されるか）を分離する。
+    // 後者だけが true の stage（例: 未 declare の sum bus に active な member が output している）
+    // も、buffer を zero-fill し post-loop で処理しないと合流先が前 block のゴミを持ち越す。
+    let mut render_targets: ArrayVec<bool, MAX_INSERT_BUS_STAGES> =
+        active_flags.iter().copied().collect();
+    for (i, bus) in buses.iter().enumerate() {
+        if !active_flags[i] {
+            continue;
+        }
+        if let BusTarget::Bus(j) = bus.output_target {
+            render_targets[j] = true;
+        }
+        for send in &bus.sends {
+            render_targets[send.target] = true;
+        }
+    }
+
     let mut targets: ArrayVec<(&str, &mut [f32]), MAX_TARGETS> = ArrayVec::new();
-    for bus in buses.iter_mut() {
-        // inactive stage は render 対象外（コストゼロ・InsertBusStage::active の doc 参照）。
-        if !bus.active.load(Ordering::Relaxed) {
+    for (i, bus) in buses.iter_mut().enumerate() {
+        if !active_flags[i] {
+            // inactive stage は render_multi のタグ対象外（コストゼロ・event tag 契約は変えない・
+            // InsertBusStage::active の doc 参照）。ただし render_target なら render_multi を
+            // 通らないので、代わりにここで手動 zero-fill する（post-loop が読む前提を守る）。
+            if render_targets[i] {
+                bus.buffer[..bs].fill(0.0);
+            }
             continue;
         }
         debug_assert!(
@@ -327,17 +424,44 @@ fn render_engine_with_insert_buses(
     engine.render_multi(hw, &mut targets);
     drop(targets);
 
-    for bus in buses.iter_mut() {
-        if !bus.active.load(Ordering::Relaxed) {
+    // post-loop: 配列順（= トポロジカル順・MX.4）で is_render_target な stage を処理する。
+    // stage i の output_target/send は必ず i より後ろを指す（構築時 validate_bus_topology で
+    // 検証済み）ので、`split_at_mut(i + 1)` で「i を含む左」と「i より後ろの右」に安全に分割できる
+    // （sum のネスト・循環は構造的に発生しない）。
+    for i in 0..buses.len() {
+        if !render_targets[i] {
             continue;
         }
-        if let Some(processor) = bus.processor.as_mut() {
-            processor.process(&mut bus.buffer[..bs]);
+        if active_flags[i] {
+            if let Some(processor) = buses[i].processor.as_mut() {
+                processor.process(&mut buses[i].buffer[..bs]);
+            }
         }
-        for (dst, src) in hw.iter_mut().zip(&bus.buffer[..bs]) {
-            *dst += *src;
+
+        let (left, right) = buses.split_at_mut(i + 1);
+        let src_stage = &left[i];
+
+        match src_stage.output_target {
+            BusTarget::Master => {
+                for (dst, s) in hw.iter_mut().zip(&src_stage.buffer[..bs]) {
+                    *dst += *s;
+                }
+            }
+            BusTarget::Bus(j) => {
+                let dst_buf = &mut right[j - i - 1].buffer[..bs];
+                for (d, s) in dst_buf.iter_mut().zip(&src_stage.buffer[..bs]) {
+                    *d += *s;
+                }
+            }
+        }
+        for send in &src_stage.sends {
+            let dst_buf = &mut right[send.target - i - 1].buffer[..bs];
+            for (d, s) in dst_buf.iter_mut().zip(&src_stage.buffer[..bs]) {
+                *d += *s * send.gain;
+            }
         }
     }
+
     if let Some(le) = link {
         for ch in le.channels.iter_mut() {
             if channel_egress_active(ch.ready.load(Ordering::Relaxed), ch.scratch.len(), bs) {
@@ -510,6 +634,7 @@ pub fn start_default_output_with_insert_buses(
             insert_buses.len()
         )));
     }
+    validate_bus_topology(&insert_buses)?;
     let (engine, stream, stats, _cb) = start_output_inner(
         None,
         std::mem::take(&mut insert_buses),
@@ -543,6 +668,7 @@ pub fn start_default_output_with_insert_buses_and_post(
             insert_buses.len()
         )));
     }
+    validate_bus_topology(&insert_buses)?;
     let (engine, stream, stats, cb) =
         start_output_inner(None, insert_buses, Some(post), buffer_frames, capture_path)?;
     Ok((
@@ -962,6 +1088,155 @@ mod tests {
             .iter()
             .all(|&sample| (sample - 0.5_f32.sqrt()).abs() < 1e-6));
         assert_eq!(engine.active_count(), Some(0));
+    }
+
+    // #459/#453 M1: mixer graph (sum/aux) 拡張の必須テスト群。既存の per-seq insert のみの構成
+    // （output_target=Master・sends 空）が上の既存テスト群でそのまま green であることをもって
+    // 「既定構成の挙動不変」を担保する（明示的な回帰確認）。
+
+    #[test]
+    fn sum_bus_chains_member_output_before_master() {
+        // stage0 "kick"（processor None・output_target=Bus(1) = drum sum へ）
+        // stage1 "drum"（sum・0.5×gain processor・output_target 既定 Master）
+        struct Half;
+        impl PostProcessor for Half {
+            fn process(&mut self, data: &mut [f32]) {
+                for sample in data {
+                    *sample *= 0.5;
+                }
+            }
+        }
+        let engine = Engine::new(48_000, 2);
+        let tagged = orbit_audio_core::Sample::new(vec![2.0; 4], 48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("kick".into()),
+                "tagged".into(),
+                tagged,
+            )
+            .expect("schedule");
+        let mut buses = vec![
+            InsertBusStage::new("kick", None, 4).with_output_target(BusTarget::Bus(1)),
+            InsertBusStage::new("drum", Some(Box::new(Half)), 4),
+        ];
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        // kick の寄与（2.0 × equal-power pan √0.5）が drum の 0.5×gain を経て hw に現れる。
+        assert!(hw
+            .iter()
+            .all(|&sample| (sample - 2.0_f32.sqrt() * 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn send_copies_post_insert_signal_with_gain() {
+        // stage0 "a"（0.5×insert processor・Master・send{target:1, gain:0.5}）
+        // stage1 "aux"（processor None・Master）
+        struct Half;
+        impl PostProcessor for Half {
+            fn process(&mut self, data: &mut [f32]) {
+                for sample in data {
+                    *sample *= 0.5;
+                }
+            }
+        }
+        let engine = Engine::new(48_000, 2);
+        let tagged = orbit_audio_core::Sample::new(vec![2.0; 4], 48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("a".into()),
+                "tagged".into(),
+                tagged,
+            )
+            .expect("schedule");
+        let mut buses = vec![
+            InsertBusStage::new("a", Some(Box::new(Half)), 4).with_sends(vec![BusSend {
+                target: 1,
+                gain: 0.5,
+            }]),
+            InsertBusStage::unattached("aux"),
+        ];
+        buses[1].ensure_buffer_len(4);
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        // raw = 2.0 × equal-power pan √0.5（post-pan・pre-insert）。
+        // dry = raw × 0.5（insert 後）が Master へ、wet = dry × 0.5（send gain・post-fader）が
+        // aux 経由で Master へ。hw = dry + wet = raw × 0.75。
+        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        assert!(hw.iter().all(|&sample| (sample - raw * 0.75).abs() < 1e-6));
+    }
+
+    #[test]
+    fn invalid_forward_reference_rejected() {
+        // target/send が自分以下の index を指す構成は構築 API で拒否する（sum のネスト・循環を
+        // 構造的に排除する MX.4 の不変条件）。
+        let self_ref =
+            vec![InsertBusStage::new("a", None, 4).with_output_target(BusTarget::Bus(0))];
+        assert!(validate_bus_topology(&self_ref).is_err());
+
+        let backward_ref = vec![
+            InsertBusStage::new("a", None, 4).with_output_target(BusTarget::Bus(0)),
+            InsertBusStage::new("b", None, 4),
+        ];
+        assert!(validate_bus_topology(&backward_ref).is_err());
+
+        let bad_send = vec![InsertBusStage::new("a", None, 4).with_sends(vec![BusSend {
+            target: 0,
+            gain: 0.5,
+        }])];
+        assert!(validate_bus_topology(&bad_send).is_err());
+
+        let ok = vec![
+            InsertBusStage::new("a", None, 4).with_output_target(BusTarget::Bus(1)),
+            InsertBusStage::new("b", None, 4),
+        ];
+        assert!(validate_bus_topology(&ok).is_ok());
+    }
+
+    #[test]
+    fn inactive_sum_target_still_receives_member_output() {
+        // stage0 "kick"（active・processor None・output_target=Bus(1)）
+        // stage1 "drum"（inactive = 未 declare・processor None・output_target 既定 Master）でも、
+        // active な member から参照される is_render_target として buffer が生き、
+        // hw まで合成が届くこと。
+        let engine = Engine::new(48_000, 2);
+        let tagged = orbit_audio_core::Sample::new(vec![1.0; 4], 48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("kick".into()),
+                "tagged".into(),
+                tagged,
+            )
+            .expect("schedule");
+        let mut buses = vec![
+            InsertBusStage::new("kick", None, 4).with_output_target(BusTarget::Bus(1)),
+            InsertBusStage::with_activation("drum", None, 4, Arc::new(AtomicBool::new(false))),
+        ];
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        assert!(hw
+            .iter()
+            .all(|&sample| (sample - 0.5_f32.sqrt()).abs() < 1e-6));
     }
 
     #[test]
