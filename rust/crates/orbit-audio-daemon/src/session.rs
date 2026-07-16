@@ -55,8 +55,8 @@ fn outproc_role_param_is_valid(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) == Some("effect")
 }
 
-/// in-process client は常に role を送る。旧 daemon との通信互換のため role を省略していた client は、
-/// 単一 slot を安全に保護できないので明示的に拒否する。
+/// in-process build の LoadPlugin にはこの PR 前は role 概念がなかった。単一 slot を安全に保護するため
+/// role は現在必須であり、省略する client は明示的に拒否する。
 #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
 fn clap_role_param(params: &Value) -> Option<ClapPluginRole> {
     match params.get("role").and_then(Value::as_str) {

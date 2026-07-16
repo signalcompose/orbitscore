@@ -1217,9 +1217,10 @@ global.effect("~/plugins/TAL-Reverb-4.clap")   // master bus insert
 
 ### PH.6 v1 制限（実装事実の開示）
 
-- effect と instrument の同一プロセス同時使用は現配管では不可（compile-time 排他 feature）。
-  解消は #431（daemon の OOP post-boot attach + 排他解消・Epic #424 Stage 2）のスコープであり、
-  **構文はこの制限に依存しない**（制限が解消されても構文は不変）。
+- release 既定の OOP-both 構成（`--features outproc-effect,outproc-instrument`）では、effect と
+  instrument の同一プロセス同時使用をサポートする（#431 で解消、Epic #424 DoD 達成）。
+  in-process `clap-host` は dev / gated-test 専用の単一 slot なので、異なる role への再ロードは
+  `CLAP_CROSS_ROLE_REJECTED` で拒否される。
 - note 発火は block-head 精度（sample-accurate 化は #428）。
 - ロード確認から audio 反映までの短い race window が残存する（#410）。
 - **param / CC 制御**（EQ-from-DSL 等）は本節のスコープ外 — M2 param path の成熟後に

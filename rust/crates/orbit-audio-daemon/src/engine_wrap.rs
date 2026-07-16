@@ -2853,6 +2853,84 @@ mod plugin_load_gate_tests {
     }
 
     #[test]
+    fn failed_first_load_leaves_role_unset_and_permits_a_different_role() {
+        let (wrap, cmd_rx) = loadable_engine();
+        let responder = std::thread::spawn(move || {
+            for message in ["first load failed", "second load failed"] {
+                let crate::clap_host::ClapCommand::LoadPlugin { reply, .. } = cmd_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("both loads should reach clap host while no role is loaded");
+                reply
+                    .send(Err(message.to_string()))
+                    .expect("caller waits for reply");
+            }
+        });
+
+        let first = wrap.load_plugin(PathBuf::from("first.clap"), None, ClapPluginRole::Effect);
+        assert!(matches!(first, Err(WrapError::Clap(message)) if message == "first load failed"));
+        assert_eq!(
+            wrap.clap
+                .lock()
+                .expect("clap mutex")
+                .as_ref()
+                .expect("clap control")
+                .loaded_role,
+            None,
+            "failed first load must not claim a role"
+        );
+
+        let second = wrap.load_plugin(
+            PathBuf::from("second.clap"),
+            None,
+            ClapPluginRole::Instrument,
+        );
+        responder.join().expect("responder thread should not panic");
+        assert!(
+            matches!(second, Err(WrapError::Clap(message)) if message == "second load failed"),
+            "different role after a failed first load must reach clap host, not cross-role reject"
+        );
+    }
+
+    #[test]
+    fn failed_same_role_reload_preserves_the_successfully_loaded_role() {
+        let (wrap, cmd_rx) = loadable_engine();
+        let responder = std::thread::spawn(move || {
+            let crate::clap_host::ClapCommand::LoadPlugin { reply, .. } = cmd_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("first load should reach clap host");
+            reply
+                .send(Ok(orbit_clap_host::LoadedPluginInfo {
+                    plugin_id: "com.example.dummy".to_string(),
+                    plugin_name: Some("Dummy".to_string()),
+                    note_port_index: 0,
+                }))
+                .expect("caller waits for first reply");
+            let crate::clap_host::ClapCommand::LoadPlugin { reply, .. } = cmd_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("same-role reload should reach clap host");
+            reply
+                .send(Err("reload failed".to_string()))
+                .expect("caller waits for reload reply");
+        });
+
+        let first = wrap.load_plugin(PathBuf::from("dummy.clap"), None, ClapPluginRole::Effect);
+        assert!(first.is_ok(), "first load should succeed");
+        let reload = wrap.load_plugin(PathBuf::from("dummy.clap"), None, ClapPluginRole::Effect);
+        responder.join().expect("responder thread should not panic");
+        assert!(matches!(reload, Err(WrapError::Clap(message)) if message == "reload failed"));
+        assert_eq!(
+            wrap.clap
+                .lock()
+                .expect("clap mutex")
+                .as_ref()
+                .expect("clap control")
+                .loaded_role,
+            Some(ClapPluginRole::Effect),
+            "failed same-role reload must preserve the successful load's role"
+        );
+    }
+
+    #[test]
     fn different_role_resend_is_rejected_before_clap_host_replacement() {
         let (wrap, cmd_rx) = loadable_engine();
         wrap.clap
@@ -2939,6 +3017,47 @@ mod plugin_load_gate_tests {
         );
         assert!(consumer.pop().is_ok());
         assert!(consumer.pop().is_ok());
+    }
+}
+
+#[cfg(all(test, feature = "outproc-effect", not(feature = "outproc-instrument")))]
+mod outproc_effect_eager_start_tests {
+    use super::{EngineWrap, WrapError};
+    use crate::outproc_effect::{OutProcEffectConfig, PluginFormat};
+    use std::path::PathBuf;
+
+    #[test]
+    fn eager_effect_start_requires_a_plugin_path_before_device_access() {
+        let result = EngineWrap::start_outproc_effect(OutProcEffectConfig {
+            format: PluginFormat::Clap,
+            child_exe: PathBuf::from("unused-child"),
+            plugin: None,
+            plugin_id: None,
+            buffer_frames: None,
+        });
+        assert!(
+            matches!(result, Err(WrapError::OutProcEffect(message)) if message == "eager start requires a plugin path")
+        );
+    }
+}
+
+#[cfg(all(test, feature = "outproc-instrument", not(feature = "outproc-effect")))]
+mod outproc_instrument_eager_start_tests {
+    use super::{EngineWrap, WrapError};
+    use crate::outproc_instrument::OutProcInstrumentConfig;
+    use std::path::PathBuf;
+
+    #[test]
+    fn eager_instrument_start_requires_a_plugin_path_before_device_access() {
+        let result = EngineWrap::start_outproc_instrument(OutProcInstrumentConfig {
+            child_exe: PathBuf::from("unused-child"),
+            plugin: None,
+            plugin_id: None,
+            buffer_frames: None,
+        });
+        assert!(
+            matches!(result, Err(WrapError::OutProcInstrument(message)) if message == "eager start requires a plugin path")
+        );
     }
 }
 

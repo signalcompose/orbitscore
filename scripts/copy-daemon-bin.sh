@@ -24,11 +24,11 @@
 #
 # This best-effort skip is safe only because release.yml's post-package gate
 # fails loud (aborts the release) if engine/bin/darwin-arm64/orbit-audio-daemon
-# is missing from the packaged .vsix — that gate is what actually guarantees
-# the *shipped* artifact has the daemon. Packaging paths that don't go through
-# release.yml (e.g. a manual `vsce package` after a plain `npm run build`) are
-# NOT covered by that gate and can produce a .vsix whose default backend
-# (rust) is unable to start.
+# or either OOP child binary is missing from the packaged .vsix — that gate is
+# what actually guarantees the *shipped* artifact has its daemon and children.
+# Packaging paths that don't go through release.yml (e.g. a manual `vsce package`
+# after a plain `npm run build`) are NOT covered by that gate and can produce a
+# .vsix whose default backend (rust) is unable to start.
 #
 # The release daemon uses OOP-both plugin hosting, so its effect and instrument
 # child executables are bundled beside the daemon. The daemon resolves them as
