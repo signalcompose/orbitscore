@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.263 feat(engine): mixer graph — sum/aux/send を DSL まで完走 #459/#453 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装・実機 E2E 済み（PR 作成・レビューフローへ）
+**Branch**: `459-mixer-graph-impl`
+**Commits**: M0 spec = PR #466（マージ済・MX.1-MX.5）/ M1 `3029545` / M2 `95d3fc9` / M3 `7b70b1b`
+
+#434 の insert bus 基盤の上に DAW ミキサー構造（group/send-return）を実装。
+設計 = Fable main（issue #459 コメントが決定記録・fan-out は event 複製でなく
+bus 処理段の copy 加算 = render_multi 無変更が核）。実装 = Sonnet xhigh ×3 + main 監査。
+
+**M1（core）**: InsertBusStage に output_target/sends・validate_bus_topology
+（前方参照のみ = 配列順がトポロジカル順・ネスト/循環が構造的に不可）・
+is_render_target 分離（member だけ active な sum が中継点として生きる）。
+closed-form unit（sum ×0.5・send dry+wet ×0.75）・既存テスト無変更 green。
+
+**M2（daemon）**: BusKind（Insert/Sum/Aux）プール・実行時 routing の atomic overlay
+（routing_override + 全後方 slot 事前確保の send_gain_overrides = RT は Relaxed load のみ）・
+SetBusRouting protocol（前方参照 + kind + 有限 gain を non-RT 検証・部分適用なし）。
+**実機 gated: insert→sum→aux カスケード全段厳密半減 0.70711→0.35355→0.17678→0.08839**。
+
+**M3（DSL）**: MixerManager（global.sum()/aux()・ハンドル .effect()）・
+seq.output()（sum 解決 + insert 未宣言時の pass-through 自動確保）・
+seq.send()（累積・全状態冪等再送）・set_bus_routing での activation・
+parser に裸 sum()/aux() 受理。
+
+**実機 E2E（DSL・capture）**:
+- **sum oracle: peak 0.35355 厳密一致**
+- **aux oracle: 窓解析で send 実効を実証** — 第1窓 0.7071（dry のみ・wet は OOP
+  pipeline 1 block 遅延）→ 定常 0.4965（dry+位相シフト wet の干渉）。素朴期待値
+  1.06 との差 = **MX.5 の既知制約（PDC なし）の実観測**（spec と実挙動が一致）
+
+**検証**: npm test 1397 / rust 3構成 80/56/115 / gated（mixer 新設 + bus/both 退行なし・
+実機）/ clippy --all-targets / fmt。
+
 ### 6.262 feat(engine): seq.effect() per-sequence insert — S1〜S3 完走 #434 (Jul 17, 2026)
 
 **Date**: 2026-07-17

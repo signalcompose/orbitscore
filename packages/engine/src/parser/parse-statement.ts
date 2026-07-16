@@ -342,6 +342,17 @@ export class StatementParser {
 
     this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
 
+    // Bare `sum("drum")` / `aux("rev")` reference (MX.2/MX.3, #459/#453 M3): no `.method`
+    // dot — the identifier itself is called directly, then (optionally) chained, e.g.
+    // `sum("drum").effect("GlueComp.clap")`. Must be checked before the DOT requirement
+    // below since this form has no dot after the target identifier.
+    if (
+      (target === 'sum' || target === 'aux') &&
+      ParserUtils.current(this.tokens, this.pos).type === 'LPAREN'
+    ) {
+      return this.parseMixerHandleReference(target)
+    }
+
     if (ParserUtils.current(this.tokens, this.pos).type !== 'DOT') {
       // Identifier without method call (invalid syntax, skip it)
       return { statement: null, newPos: this.pos }
@@ -455,6 +466,33 @@ export class StatementParser {
       result.chain = chain
     }
 
+    return { statement: result, newPos: this.pos }
+  }
+
+  /**
+   * Parse a bare `sum("name")` / `aux("name")` reference (MX.2/MX.3, #459/#453 M3):
+   * `kind("name")[.method(args)[.method(args)...]]`. Reconciliation key is the name —
+   * this always resolves against the SAME sum/aux declared via `global.sum(name)` /
+   * `global.aux(name)` (a plain `GlobalStatement`), never a new one.
+   */
+  private parseMixerHandleReference(kind: 'sum' | 'aux'): {
+    statement: Statement
+    newPos: number
+  } {
+    const argsResult = this.parseArguments()
+    this.pos = argsResult.newPos
+    if (argsResult.args.length !== 1 || typeof argsResult.args[0] !== 'string') {
+      throw new Error(`${kind}(name) requires exactly one string argument (the bus name).`)
+    }
+    const name = argsResult.args[0]
+
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+    const chain = this.parseMethodChain()
+
+    const result: any = { type: 'mixer_handle', kind, name }
+    if (chain.length > 0) {
+      result.chain = chain
+    }
     return { statement: result, newPos: this.pos }
   }
 

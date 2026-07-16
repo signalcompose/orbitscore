@@ -291,6 +291,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * 単一 boolean だと健全な宣言まで再ロードされる）。
    */
   private readonly pluginActiveByKey = new Map<string, boolean>()
+  /**
+   * seq bus ごとの「最後に意図した routing」（MX.4 M3）。daemon respawn 後に
+   * `reapplyBusRoutingAfterRespawn` が全 entry を再発行する（新 daemon の routing atomics は
+   * 既定値に戻るため、replay しないと sum/aux routing が silent に素通しへ戻る）。
+   */
+  private readonly busRoutings = new Map<
+    string,
+    { output: string | undefined; sends: { bus: string; gain: number }[] }
+  >()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
    * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
@@ -516,6 +525,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           // エントリは ws close の reject で各自の .finally が既に delete 済み。
           this.sampleIds.clear()
           await this.reloadPluginsAfterRespawn()
+          await this.reapplyBusRoutingAfterRespawn()
           console.warn(
             `✅ [rust-engine] daemon respawned and session re-established (attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}).`,
           )
@@ -611,6 +621,56 @@ export class RustEnginePlayer implements AudioEngineBackend {
         return
       }
       throw err
+    }
+  }
+
+  /**
+   * Runtime mixer bus routing change (MX.4, #459/#453 M3). Unlike LinkAudio channel
+   * registration, there is no hardware-bus fallback for a missing sum/aux target — the
+   * daemon-side error (e.g. `UNSUPPORTED` on a non-`outproc-effect` build, or a kind/order
+   * violation) is a real failure and propagates unchanged to the caller (`Sequence`'s
+   * `output()`/`send()`, which log it via `console.warn` — see that file).
+   */
+  async setBusRouting(
+    seqBus: string,
+    output: string | undefined,
+    sends: { bus: string; gain: number }[],
+  ): Promise<void> {
+    // Intent-first cache: transport failures (daemon mid-respawn, socket drop) keep the
+    // intended routing so `reapplyBusRoutingAfterRespawn` restores it on the next daemon.
+    // A definitive daemon-side rejection means the daemon state did NOT change, so the
+    // cache reverts — otherwise every later respawn would replay a known-bad request.
+    const prev = this.busRoutings.get(seqBus)
+    this.busRoutings.set(seqBus, { output, sends })
+    try {
+      await this.daemon.setBusRouting(seqBus, output, sends)
+    } catch (err) {
+      if (err instanceof DaemonProtocolError) {
+        if (prev) this.busRoutings.set(seqBus, prev)
+        else this.busRoutings.delete(seqBus)
+      }
+      throw err
+    }
+  }
+
+  /**
+   * Re-issues the last intended `SetBusRouting` per seq bus after a daemon respawn — the
+   * new daemon process starts with all `routing_override`/send atomics at their defaults,
+   * so without this replay every sum/aux routing silently reverts to plain per-sequence
+   * output (audio quietly goes to the wrong place). Mirrors `reloadPluginsAfterRespawn`:
+   * per-entry independent failure handling, and a failure must not fail the respawn itself.
+   */
+  private async reapplyBusRoutingAfterRespawn(): Promise<void> {
+    for (const [seqBus, { output, sends }] of this.busRoutings.entries()) {
+      try {
+        await this.daemon.setBusRouting(seqBus, output, sends)
+      } catch (err) {
+        // Cache entry intentionally remains: a later daemon respawn retries restoration.
+        console.error(
+          `❌ [rust-engine] failed to restore bus routing after daemon respawn (bus=${seqBus})`,
+          err,
+        )
+      }
     }
   }
 

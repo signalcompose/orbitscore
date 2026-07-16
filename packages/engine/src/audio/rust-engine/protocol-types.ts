@@ -18,6 +18,10 @@ export interface HandshakeFrame {
 export type CommandMethod =
   | 'LoadSample'
   | 'LoadPlugin'
+  // ランタイムの mixer bus routing 変更（MX.4・#459/#453 M3）: seq_bus の output(sum)/
+  // sends(aux) を非 RT で書き換える。daemon が feature `outproc-effect` 無効ビルドなら
+  // OUTPROC_EFFECT_UNAVAILABLE を返す。
+  | 'SetBusRouting'
   | 'PluginNoteOn'
   | 'PluginNoteOff'
   | 'UnloadSample'

@@ -12,6 +12,7 @@ interface FakeDaemon {
   loadPlugin: ReturnType<typeof vi.fn>
   pluginNoteOn: ReturnType<typeof vi.fn>
   pluginNoteOff: ReturnType<typeof vi.fn>
+  setBusRouting: ReturnType<typeof vi.fn>
   quit: ReturnType<typeof vi.fn>
 }
 
@@ -32,6 +33,7 @@ function createHarness() {
     loadPlugin: vi.fn().mockResolvedValue(ECHO_LOAD_RESULT),
     pluginNoteOn: vi.fn().mockResolvedValue(undefined),
     pluginNoteOff: vi.fn().mockResolvedValue(undefined),
+    setBusRouting: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
   }
   Object.defineProperty(player, 'daemon', { value: daemon })
@@ -186,6 +188,90 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       'seq-bus-0',
     )
     expect(player.isPluginActive()).toBe(false)
+  })
+})
+
+describe('RustEnginePlayer bus routing recovery after daemon respawn (MX.4 M3)', () => {
+  const players: RustEnginePlayer[] = []
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await Promise.all(players.splice(0).map((player) => player.quit()))
+  })
+
+  it('replays the last intended SetBusRouting per seq bus after respawn', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setBusRouting('seq-bus-0', 'sum-bus-0', [{ bus: 'aux-bus-0', gain: 0.3 }])
+    await player.setBusRouting('seq-bus-1', undefined, [{ bus: 'aux-bus-0', gain: 0.5 }])
+    daemon.setBusRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setBusRouting).toHaveBeenCalledTimes(2)
+    expect(daemon.setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [
+      { bus: 'aux-bus-0', gain: 0.3 },
+    ])
+    expect(daemon.setBusRouting).toHaveBeenCalledWith('seq-bus-1', undefined, [
+      { bus: 'aux-bus-0', gain: 0.5 },
+    ])
+  })
+
+  it('keeps the intended routing on a transport failure so the respawn replay restores it', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    daemon.setBusRouting.mockRejectedValueOnce(new Error('socket closed'))
+    await expect(player.setBusRouting('seq-bus-0', 'sum-bus-0', [])).rejects.toThrow(
+      'socket closed',
+    )
+    daemon.setBusRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+  })
+
+  it('reverts the cache on a definitive daemon-side rejection (no bad replay after respawn)', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setBusRouting('seq-bus-0', 'sum-bus-0', [])
+    daemon.setBusRouting.mockRejectedValueOnce(
+      new DaemonProtocolError('MALFORMED_REQUEST', 'output must target a sum bus'),
+    )
+    await expect(player.setBusRouting('seq-bus-0', 'aux-bus-0', [])).rejects.toThrow(
+      'output must target a sum bus',
+    )
+    daemon.setBusRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    // The rejected request is NOT replayed; the last accepted routing is.
+    expect(daemon.setBusRouting).toHaveBeenCalledTimes(1)
+    expect(daemon.setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+  })
+
+  it('one routing replay failure logs an error and does not skip the others or fail the respawn', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setBusRouting('seq-bus-0', 'sum-bus-0', [])
+    await player.setBusRouting('seq-bus-1', 'sum-bus-0', [])
+    daemon.setBusRouting.mockClear()
+    daemon.setBusRouting
+      .mockRejectedValueOnce(new Error('replay failed'))
+      .mockResolvedValueOnce(undefined)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setBusRouting).toHaveBeenCalledTimes(2)
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('failed to restore bus routing'),
+      expect.any(Error),
+    )
   })
 })
 

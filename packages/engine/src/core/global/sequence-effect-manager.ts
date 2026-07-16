@@ -21,7 +21,9 @@ export const SEQUENCE_EFFECT_BUS_POOL_SIZE = 8
 
 interface SeqEffectDeclaration {
   bus: string
-  resolvedPath: string
+  // undefined = passthrough-only (bus allocated via `ensureBus()`, no plugin loaded yet —
+  // MX.4/#459/#453 M3: `seq.output()`/`seq.send()` on a sequence without `seq.effect()`).
+  resolvedPath?: string
   pluginId?: string
   load: Promise<void>
 }
@@ -62,6 +64,23 @@ export class SequenceEffectManager {
     return this.declarations.get(sequenceName)?.bus
   }
 
+  /**
+   * Ensures a per-sequence bus is allocated WITHOUT loading a plugin into it (MX.4/#459/#453
+   * M3): `seq.output(sum)` / `seq.send(aux, gain)` need a bus to route from even when
+   * `seq.effect()` was never declared (a "pass-through insert" — DAW-style track with no
+   * insert plugin but still a routable channel). Idempotent — returns the existing bus
+   * whether it is a passthrough-only allocation or already has a real insert loaded via
+   * `effect()`. If `effect()` is called later for the same sequence, it upgrades this same
+   * bus in place instead of allocating a second one (see `effect()` below).
+   */
+  ensureBus(sequenceName: string): string {
+    const existing = this.declarations.get(sequenceName)
+    if (existing) return existing.bus
+    const bus = this.freedBuses.pop() ?? this.allocateFreshBus(sequenceName)
+    this.declarations.set(sequenceName, { bus, load: Promise.resolve() })
+    return bus
+  }
+
   /** Declares (or idempotently re-declares) the insert for `sequenceName`. Returns the allocated bus name. */
   async effect(sequenceName: string, spec: string, pluginId?: string): Promise<string> {
     // Order mirrors PluginEffectManager.effect(): validate the spec, gate on
@@ -82,7 +101,9 @@ export class SequenceEffectManager {
     )
 
     const existing = this.declarations.get(sequenceName)
-    if (existing) {
+    // A passthrough-only declaration (from ensureBus(), no resolvedPath yet) is not a real
+    // insert — upgrade it in place instead of treating it as an existing insert declaration.
+    if (existing && existing.resolvedPath !== undefined) {
       if (existing.resolvedPath === resolvedPath && existing.pluginId === pluginId) {
         await existing.load
         // Self-heal on stale cache after a daemon respawn (see PluginEffectManager
@@ -99,13 +120,21 @@ export class SequenceEffectManager {
       )
     }
 
-    const bus = this.freedBuses.pop() ?? this.allocateFreshBus(sequenceName)
+    const wasPassthrough = existing !== undefined
+    const bus = existing?.bus ?? this.freedBuses.pop() ?? this.allocateFreshBus(sequenceName)
     try {
       await this.issueLoad(sequenceName, bus, resolvedPath, pluginId)
     } catch (err) {
-      // ロールバック: 失敗した宣言の bus を free-list に返す（daemon 側も activation を
-      // 巻き戻すため、両側の状態が対称に戻る）。
-      this.freedBuses.push(bus)
+      if (wasPassthrough) {
+        // ロールバック: passthrough から昇格しようとして失敗した場合は bus を pool に
+        // 戻さず、passthrough 状態に戻す（seq.output()/seq.send() の routing がまだその
+        // bus を参照しているため — bus 自体は生き続ける必要がある）。
+        this.declarations.set(sequenceName, { bus, load: Promise.resolve() })
+      } else {
+        // 新規割当が失敗した場合は free-list に返す（daemon 側も activation を巻き戻す
+        // ため、両側の状態が対称に戻る）。
+        this.freedBuses.push(bus)
+      }
       throw err
     }
     return bus

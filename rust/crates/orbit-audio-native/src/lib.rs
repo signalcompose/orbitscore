@@ -18,8 +18,8 @@ pub use loader::{load_sample_from_file, load_sample_resampled, LoaderError};
 pub use output::{
     start_default_output, start_default_output_with_clap, start_default_output_with_insert_buses,
     start_default_output_with_insert_buses_and_post, start_default_output_with_link_egress,
-    InsertBusStage, LinkChannelActivate, OutputError, OutputStream, StreamStats,
-    StreamStatsSnapshot, MAX_INSERT_BUS_STAGES, MAX_LINK_CHANNELS,
+    BusSend, BusTarget, InsertBusStage, LinkChannelActivate, OutputError, OutputStream,
+    StreamStats, StreamStatsSnapshot, MAX_INSERT_BUS_STAGES, MAX_LINK_CHANNELS,
 };
 pub use post_processor::{CallbackTimeSnapshot, CallbackTimeStats, PostProcessor};
 pub use resampler::ResampleError;

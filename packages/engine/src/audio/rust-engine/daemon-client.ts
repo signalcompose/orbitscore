@@ -380,6 +380,24 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /**
+   * Runtime mixer bus routing change (MX.4, #459/#453 M3): (re)sets `seqBus`'s output
+   * target (sum) and/or send gains (aux). `output: undefined` means "leave untouched" —
+   * translated to omitting the field so the daemon's `parse_set_bus_routing_params`
+   * treats it as `None` and does not touch the existing override.
+   */
+  async setBusRouting(
+    seqBus: string,
+    output: string | undefined,
+    sends: { bus: string; gain: number }[],
+  ): Promise<void> {
+    await this.request('SetBusRouting', {
+      seq_bus: seqBus,
+      ...(output === undefined ? {} : { output }),
+      sends,
+    })
+  }
+
   pluginNoteOn(key: number, channel: number, velocity: number): Promise<void> {
     return this.request('PluginNoteOn', { key, channel, velocity }) as unknown as Promise<void>
   }

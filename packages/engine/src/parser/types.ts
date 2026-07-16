@@ -70,6 +70,22 @@ export type Statement =
   | PatternBinding
   | ModeBinding
   | ImportStatement
+  | MixerHandleStatement
+
+/**
+ * Bare `sum("drum")` / `aux("rev")` reference (MX.2/MX.3, #459/#453 M3) — used to add the
+ * group/return bus's own insert: `sum("drum").effect("GlueComp.clap")`. Distinct from
+ * `global.sum(name)` / `global.aux(name)` (the declaration form, parsed as a plain
+ * `GlobalStatement`): this bare form has no `global`-variable prefix, so there is no
+ * `target` to resolve against `state.globals` — it always operates on `state.currentGlobal`
+ * (§ interpreter `requireGlobal`, mirrors `import chords` / chord bindings).
+ */
+export type MixerHandleStatement = {
+  type: 'mixer_handle'
+  kind: 'sum' | 'aux'
+  name: string
+  chain?: MethodChain[]
+}
 
 /**
  * `var NAME = [ ... ]` — a chord-value binding (§6, bare `[ ]` literal, decision #48).

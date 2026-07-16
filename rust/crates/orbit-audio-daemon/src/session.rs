@@ -91,6 +91,46 @@ fn parse_bus_param(params: &Value) -> Result<Option<String>, &'static str> {
     }
 }
 
+/// `SetBusRouting` params から `(seq_bus, output, sends)` を取り出す純関数（#459/#453 M2）。
+/// - `seq_bus`: 必須の非空文字列。
+/// - `output`: 省略/`null` = `None`（output target には触れない）。非空文字列以外は拒否。
+/// - `sends`: 省略/`null` = 空配列。`[{bus: string, gain: number}]` の配列以外・要素の型不正は拒否。
+#[cfg(feature = "outproc-effect")]
+#[allow(clippy::type_complexity)]
+fn parse_set_bus_routing_params(
+    params: &Value,
+) -> Result<(String, Option<String>, Vec<(String, f32)>), &'static str> {
+    let seq_bus = match params.get("seq_bus") {
+        Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+        _ => return Err("'seq_bus' must be a non-empty string"),
+    };
+    let output = match params.get("output") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
+        _ => return Err("'output' must be a non-empty string or null"),
+    };
+    let sends = match params.get("sends") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(items)) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                let bus = match item.get("bus") {
+                    Some(Value::String(s)) if !s.trim().is_empty() => s.clone(),
+                    _ => return Err("'sends[].bus' must be a non-empty string"),
+                };
+                let gain = match item.get("gain").and_then(Value::as_f64) {
+                    Some(g) => g as f32,
+                    None => return Err("'sends[].gain' must be a number"),
+                };
+                out.push((bus, gain));
+            }
+            out
+        }
+        _ => return Err("'sends' must be an array"),
+    };
+    Ok((seq_bus, output, sends))
+}
+
 /// PlayAt の `bus`（per-sequence insert routing・PH.2b・#434 S3）と `channel`（LinkAudio
 /// routing・#209）の同時指定を検出する純関数。両者は core 上は同じ routing tag フィールド
 /// （`ScheduledSample.channel`）を共有するため、同時指定は意味が一意に決まらず拒否する。
@@ -1073,6 +1113,27 @@ async fn handle_command(
                 Err(e) => err(&id, wrap_err_to_protocol(&e)),
             }
         }
+        // 実行時 mixer routing 切替（#459/#453 M2）: sum bus への output / aux bus への send を
+        // 非 RT で設定する。`SetBusRouting` は `outproc-effect` feature 専用（insert/sum/aux bus
+        // 機構自体がその feature の産物・`build_effect_bus_stages` 参照）。
+        #[cfg(feature = "outproc-effect")]
+        "SetBusRouting" => match parse_set_bus_routing_params(&params) {
+            Ok((seq_bus, output, sends)) => {
+                match engine.set_bus_routing(&seq_bus, output.as_deref(), &sends) {
+                    Ok(()) => ok(&id, json!({"status": "accepted"})),
+                    Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                }
+            }
+            Err(message) => err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
+        },
+        #[cfg(not(feature = "outproc-effect"))]
+        "SetBusRouting" => err(
+            &id,
+            ProtocolError::new(
+                "UNSUPPORTED",
+                "SetBusRouting requires the outproc-effect build (mixer bus graph)",
+            ),
+        ),
         // gated な fault 注入（recovery floor / #300 の kill-test 専用・単一動作なので unit コマンド）。
         // ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 のときだけ受理する（既定では出荷時に無効）。
         // daemon を panic させ、main.rs の panic hook 経由で stderr に DaemonError を出し exit(1)
