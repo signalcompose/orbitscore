@@ -425,6 +425,39 @@ impl<R: OutProcRole> Drop for ChildLaunch<R> {
     }
 }
 
+/// stream 起動前に失敗した場合だけ shm を回収する暫定所有者。
+/// `ChildLaunch` 構築後はそちらが unlink 所有者になるため、必ず disarm する。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+struct ShmCleanupGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+impl ShmCleanupGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+impl Drop for ShmCleanupGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Err(error) = std::fs::remove_file(&self.path) {
+                tracing::warn!(
+                    "ShmCleanupGuard drop: shm 削除失敗 {:?}: {error}",
+                    self.path
+                );
+            }
+        }
+    }
+}
+
 /// child plugin load は通常 dlopen を含む。十分な上限を設け、応答を永久に保留しない。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 const CHILD_READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -567,9 +600,9 @@ compile_error!(
 ///
 /// `outproc-instrument` も同じ teardown ordering を専用 guard/supervisor で維持する。
 ///
-/// なお `link-audio` / `clap-host` / `outproc-effect` / `outproc-instrument` は4者すべて併用不可
-/// （`compile_error!`）なので
-/// 複数ブロックが同時に存在することはない。
+/// `clap-host` / `link-audio` は outproc family と引き続き `compile_error!` で排他である。一方
+/// `outproc-effect` と `outproc-instrument` は both build で共存でき、その場合は両 child guard が
+/// 同時に存在する。
 pub struct StreamGuard {
     /// carry-forward #1（clap-host）: stream 停止 **前** に drop され、audio thread で `stop_processing`
     /// を済ませる（`ClapTeardownGuard::drop` が teardown_requested を立て teardown_done を待つ）。
@@ -596,7 +629,8 @@ pub struct StreamGuard {
     /// child へ QUIT → reap → shm unlink する。**field 順は load-bearing**: `_stream` より後に宣言する。
     #[cfg(feature = "outproc-effect")]
     _child_guard: Arc<Mutex<ChildSlot>>,
-    /// both build では同種 guard 間の順序は load-bearing ではない（どちらも stream 停止後）。
+    /// both build では同種 guard 間の順序は load-bearing ではない（どちらも stream 停止後）。別々の
+    /// child process / shm region を持ち supervisor 間に共有状態が無いため、独立に teardown できる。
     #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
     _instrument_child_guard: Arc<Mutex<ChildSlot<InstrumentRole>>>,
     #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
@@ -788,6 +822,7 @@ impl EngineWrap {
         let shm_path = crate::outproc_effect::unique_shm_path();
         let host_mmap = orbit_audio_sandbox::create_shared(&shm_path)
             .map_err(|e| WrapError::OutProcEffect(format!("create shm {shm_path:?}: {e}")))?;
+        let mut shm_cleanup = ShmCleanupGuard::new(shm_path.clone());
         let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(host_mmap);
 
         // 2. engaged ゲート + teardown flags + 観測 stats + adapter。
@@ -824,6 +859,8 @@ impl EngineWrap {
             engaged,
             cleanup_shm_on_drop: true,
         })));
+        // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
+        shm_cleanup.disarm();
 
         // 6. wrap 構築 + control 注入。
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
@@ -898,6 +935,7 @@ impl EngineWrap {
         let host_mmap = orbit_audio_sandbox::create_shared(&shm_path).map_err(|error| {
             WrapError::OutProcInstrument(format!("create shm {shm_path:?}: {error}"))
         })?;
+        let mut shm_cleanup = ShmCleanupGuard::new(shm_path.clone());
         let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(host_mmap);
         let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
         let engaged = Arc::new(AtomicBool::new(false));
@@ -931,6 +969,8 @@ impl EngineWrap {
             engaged,
             cleanup_shm_on_drop: true,
         })));
+        // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
+        shm_cleanup.disarm();
 
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         *wrap.outproc_instrument.lock().map_err(|_| {
@@ -992,12 +1032,14 @@ impl EngineWrap {
             orbit_audio_sandbox::create_shared(&effect_shm)
                 .map_err(|e| WrapError::OutProcEffect(format!("create shm {effect_shm:?}: {e}")))?,
         );
+        let mut effect_shm_cleanup = ShmCleanupGuard::new(effect_shm.clone());
         let instrument_shm = crate::outproc_instrument::unique_shm_path();
         let instrument_host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(
             orbit_audio_sandbox::create_shared(&instrument_shm).map_err(|e| {
                 WrapError::OutProcInstrument(format!("create shm {instrument_shm:?}: {e}"))
             })?,
         );
+        let mut instrument_shm_cleanup = ShmCleanupGuard::new(instrument_shm.clone());
         let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
         let effect_engaged = Arc::new(AtomicBool::new(false));
         let instrument_engaged = Arc::new(AtomicBool::new(false));
@@ -1040,6 +1082,8 @@ impl EngineWrap {
             engaged: effect_engaged,
             cleanup_shm_on_drop: true,
         })));
+        // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
+        effect_shm_cleanup.disarm();
         let instrument_slot = Arc::new(Mutex::new(ChildSlot::<InstrumentRole>::Empty(
             ChildLaunch {
                 shm_path: instrument_shm,
@@ -1050,6 +1094,8 @@ impl EngineWrap {
                 cleanup_shm_on_drop: true,
             },
         )));
+        // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
+        instrument_shm_cleanup.disarm();
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         *wrap
             .outproc
@@ -2508,6 +2554,35 @@ fn outproc_plugin_summary(
             .file_stem()
             .map(|name| name.to_string_lossy().into_owned()),
         note_port_index: 0,
+    }
+}
+
+#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
+mod shm_cleanup_guard_tests {
+    use super::ShmCleanupGuard;
+    use std::path::PathBuf;
+
+    fn unique_path() -> PathBuf {
+        std::env::temp_dir().join(format!("orbitscore-shm-cleanup-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn armed_drop_removes_file_and_disarmed_drop_keeps_it() {
+        let armed = unique_path();
+        std::fs::write(&armed, b"guard test").expect("create armed guard file");
+        drop(ShmCleanupGuard::new(armed.clone()));
+        assert!(!armed.exists(), "armed guard must remove shm file");
+
+        let disarmed = unique_path();
+        std::fs::write(&disarmed, b"guard test").expect("create disarmed guard file");
+        let mut guard = ShmCleanupGuard::new(disarmed.clone());
+        guard.disarm();
+        drop(guard);
+        assert!(
+            disarmed.exists(),
+            "disarmed guard must leave ChildLaunch-owned file"
+        );
+        std::fs::remove_file(disarmed).expect("remove retained test file");
     }
 }
 
