@@ -35,13 +35,21 @@ fn setup_test() -> (OutProcEffectConfig, OutProcInstrumentConfig) {
         plugin_id: Some(PLUGIN_ID.to_owned()),
         buffer_frames: None,
     };
-    assert!(effect.plugin.as_ref().expect("gated config has an effect plugin").exists(), "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml`", effect.plugin.as_ref().expect("gated config has an effect plugin").display());
+    let effect_plugin = effect
+        .plugin
+        .as_ref()
+        .expect("gated config has an effect plugin");
+    assert!(effect_plugin.exists(), "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml`", effect_plugin.display());
     assert!(
         effect.child_exe.exists(),
         "effect child binary が無い: {} — 先に `cargo build -p orbit-clap-effect-child`",
         effect.child_exe.display()
     );
-    assert!(instrument.plugin.as_ref().expect("gated config has an instrument plugin").exists(), "test-synth dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-synth/Cargo.toml`", instrument.plugin.as_ref().expect("gated config has an instrument plugin").display());
+    let instrument_plugin = instrument
+        .plugin
+        .as_ref()
+        .expect("gated config has an instrument plugin");
+    assert!(instrument_plugin.exists(), "test-synth dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-synth/Cargo.toml`", instrument_plugin.display());
     assert!(
         instrument.child_exe.exists(),
         "instrument child binary が無い: {} — 先に `cargo build -p orbit-clap-instrument-child`",
