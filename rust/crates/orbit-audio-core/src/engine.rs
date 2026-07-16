@@ -117,6 +117,15 @@ impl Engine {
         self.inner.try_lock().ok().map(|s| s.active_count())
     }
 
+    /// 未登録 named target へ tag された event の skip 累計（retain ハザードの観測点・
+    /// `Scheduler::unroutable_event_count` 参照）。ロック競合時は `None`。
+    pub fn unroutable_event_count(&self) -> Option<u64> {
+        self.inner.try_lock().ok().map(|s| {
+            s.unroutable_event_count
+                .load(std::sync::atomic::Ordering::Relaxed)
+        })
+    }
+
     /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時、正なら線形ランプ。
     ///
     /// 正の `ramp_sec` がサブフレーム相当（例: 1/sample_rate 未満）でも、

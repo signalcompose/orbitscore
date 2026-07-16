@@ -53,7 +53,7 @@ export class PluginEffectManager {
         // instead of returning a false "success". Engines without
         // `isPluginActive` (SC backend / plain mocks) keep the old no-op
         // idempotent behavior.
-        if (this.audioEngine.isPluginActive?.() === false) {
+        if (this.audioEngine.isPluginActive?.('effect') === false) {
           await this.issueLoad(resolvedPath, pluginId)
         }
         return

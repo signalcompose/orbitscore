@@ -84,7 +84,7 @@ export interface AudioEngine {
    * load instead of returning a false "success". Engines without this method
    * are treated as always-active (no self-heal check performed).
    */
-  isPluginActive?(): boolean
+  isPluginActive?(role?: 'effect' | 'instrument', bus?: string): boolean
 }
 
 /**

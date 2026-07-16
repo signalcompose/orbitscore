@@ -285,7 +285,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * cache-hit path can detect a stale "success" and re-issue the load instead of
    * silently returning as if the plugin were still active.
    */
-  private pluginActive = false
+  /**
+   * declaration key（`${role}:${bus ?? ''}`）ごとの active 状態。respawn 後の reload が
+   * 一部だけ失敗した場合に、失敗した宣言だけを self-heal 対象にする（#461 review:
+   * 単一 boolean だと健全な宣言まで再ロードされる）。
+   */
+  private readonly pluginActiveByKey = new Map<string, boolean>()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
    * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
@@ -624,11 +629,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
     try {
       const result = await this.daemon.loadPlugin(filePath, pluginId, role, bus)
       this.loadedPlugins.set(`${role}:${bus ?? ''}`, { filePath, pluginId, role, bus })
-      this.pluginActive = true
+      this.pluginActiveByKey.set(`${role}:${bus ?? ''}`, true)
       return result
     } catch (err) {
       // 失敗時は必ず false（呼び出し元の false-on-entry 保証に依存しない）
-      this.pluginActive = false
+      this.pluginActiveByKey.set(`${role}:${bus ?? ''}`, false)
       if (err instanceof DaemonProtocolError) {
         if (err.code === 'CLAP_UNAVAILABLE') {
           throw new Error(
@@ -649,7 +654,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       )
       return Promise.resolve()
     }
-    if (!this.pluginActive) {
+    if (this.pluginActiveByKey.get('instrument:') !== true) {
       this.warnOnce(
         'pluginInactive',
         '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
@@ -669,7 +674,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       )
       return Promise.resolve()
     }
-    if (!this.pluginActive) {
+    if (this.pluginActiveByKey.get('instrument:') !== true) {
       this.warnOnce(
         'pluginInactive',
         '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
@@ -693,13 +698,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (this.loadedPlugins.size === 0) return
     // Reissue every declaration (master effect/instrument + all seq.effect() buses).
     // One entry's failure must not skip the others — each is independent daemon state.
-    let anyFailed = false
-    for (const { filePath, pluginId, role, bus } of this.loadedPlugins.values()) {
+    for (const [key, { filePath, pluginId, role, bus }] of this.loadedPlugins.entries()) {
       try {
         await this.daemon.loadPlugin(filePath, pluginId, role, bus)
+        this.pluginActiveByKey.set(key, true)
       } catch (err) {
-        anyFailed = true
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
+        // per-key の false 化により、self-heal は失敗した宣言だけを再ロードする（#461 review）。
+        this.pluginActiveByKey.set(key, false)
         console.error(
           `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}` +
             (bus ? ` (bus=${bus})` : ''),
@@ -707,12 +713,18 @@ export class RustEnginePlayer implements AudioEngineBackend {
         )
       }
     }
-    this.pluginActive = !anyFailed
   }
 
   /** Whether `loadedPlugin` is actually active in the daemon right now (see field doc). */
-  isPluginActive(): boolean {
-    return this.pluginActive
+  isPluginActive(role?: 'effect' | 'instrument', bus?: string): boolean {
+    // 引数なし = 全宣言が active か（後方互換・boolean AND）。role/bus 指定 = 該当宣言のみ。
+    if (role !== undefined) {
+      return this.pluginActiveByKey.get(`${role}:${bus ?? ''}`) !== false
+    }
+    for (const active of this.pluginActiveByKey.values()) {
+      if (!active) return false
+    }
+    return this.pluginActiveByKey.size > 0
   }
 
   /**

@@ -36,6 +36,12 @@ interface SeqEffectDeclaration {
 export class SequenceEffectManager {
   private readonly declarations = new Map<string, SeqEffectDeclaration>()
   private nextBusIndex = 0
+  /**
+   * 失敗した宣言から返却された bus 名の free-list。ライブコーディングでは
+   * 「typo → 失敗 → 直して再宣言」が普通に起きるため、失敗が pool を恒久消費すると
+   * 数回のリトライで枯渇する（#461 review Important）。返却された名前を優先的に再利用する。
+   */
+  private freedBuses: string[] = []
 
   constructor(
     private readonly audioEngine: AudioEngine,
@@ -82,7 +88,7 @@ export class SequenceEffectManager {
         // Self-heal on stale cache after a daemon respawn (see PluginEffectManager
         // for the full rationale). Engines without isPluginActive keep the old
         // no-op idempotent behavior.
-        if (this.audioEngine.isPluginActive?.() === false) {
+        if (this.audioEngine.isPluginActive?.('effect', existing.bus) === false) {
           await this.issueLoad(sequenceName, existing.bus, resolvedPath, pluginId)
         }
         return existing.bus
@@ -93,6 +99,19 @@ export class SequenceEffectManager {
       )
     }
 
+    const bus = this.freedBuses.pop() ?? this.allocateFreshBus(sequenceName)
+    try {
+      await this.issueLoad(sequenceName, bus, resolvedPath, pluginId)
+    } catch (err) {
+      // ロールバック: 失敗した宣言の bus を free-list に返す（daemon 側も activation を
+      // 巻き戻すため、両側の状態が対称に戻る）。
+      this.freedBuses.push(bus)
+      throw err
+    }
+    return bus
+  }
+
+  private allocateFreshBus(sequenceName: string): string {
     if (this.nextBusIndex >= SEQUENCE_EFFECT_BUS_POOL_SIZE) {
       throw new Error(
         `Sequence '${sequenceName}': seq.effect() insert bus pool exhausted — v1 supports at ` +
@@ -101,7 +120,6 @@ export class SequenceEffectManager {
     }
     const bus = `${SEQUENCE_EFFECT_BUS_PREFIX}${this.nextBusIndex}`
     this.nextBusIndex += 1
-    await this.issueLoad(sequenceName, bus, resolvedPath, pluginId)
     return bus
   }
 

@@ -850,6 +850,56 @@ mod tests {
     }
 
     #[test]
+    fn activation_flip_mid_stream_takes_effect_without_reconstruction() {
+        // 「宣言 = activation」契約の CI 検証（pr-review-team round 1・test-analyzer C8）:
+        // 同じ Arc<AtomicBool> を flip するだけで、stage の再構築なしに render 対象へ
+        // 入る/外れることを、除外時の bit-identical と適用時の 0.5×gain の両面で pin する。
+        struct Half;
+        impl PostProcessor for Half {
+            fn process(&mut self, data: &mut [f32]) {
+                for sample in data {
+                    *sample *= 0.5;
+                }
+            }
+        }
+        let active = Arc::new(AtomicBool::new(false));
+        let engine = Engine::new(48_000, 2);
+        let tagged = orbit_audio_core::Sample::new(vec![2.0; 16], 48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("fx".into()),
+                "tagged".into(),
+                tagged,
+            )
+            .expect("schedule");
+        let mut buses = vec![InsertBusStage::with_activation(
+            "fx",
+            Some(Box::new(Half)),
+            4,
+            active.clone(),
+        )];
+        // inactive の間、tagged event は render 対象外（消費されない）で hw は無音。
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        assert!(hw.iter().all(|&sample| sample == 0.0));
+
+        // flip 後、同じ stage オブジェクトのまま effect が適用される。
+        active.store(true, Ordering::Release);
+        let mut hw = vec![0.0; 4];
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        assert!(hw
+            .iter()
+            .all(|&sample| (sample - 0.5_f32.sqrt()).abs() < 1e-6));
+    }
+
+    #[test]
     fn render_block_one_bus_applies_effect_then_sums() {
         struct Half;
         impl PostProcessor for Half {

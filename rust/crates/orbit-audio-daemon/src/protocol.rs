@@ -151,6 +151,11 @@ pub const ERROR_CODE_OUTPROC_INSTRUMENT_INVALID: &str = "OUTPROC_INSTRUMENT_INVA
 /// だったが daemon health 経路への配線が欠けており、per-note expression 等の未対応イベント消失が
 /// 一切可視化されなかった — silent-failure-hunter 指摘の残余）。
 pub const ERROR_CODE_OUTPROC_INSTRUMENT_EVENT_DECODE: &str = "OUTPROC_INSTRUMENT_EVENT_DECODE";
+/// named routing tag（insert bus / LinkAudio channel）が render 対象に存在せず、event が
+/// 消費されないまま retain され続けている（メモリ増加 + 鳴らない音）。WARNING severity。
+/// core の `Scheduler::unroutable_event_count` を 1 Hz ticker が監視して発火する
+/// （#461 review: 「宣言前 tag / 名前 typo」の唯一の観測点）。
+pub const ERROR_CODE_UNROUTABLE_EVENTS: &str = "UNROUTABLE_EVENTS";
 
 /// Daemon → Client の event（通知、id なし）。
 #[derive(Debug, Serialize)]

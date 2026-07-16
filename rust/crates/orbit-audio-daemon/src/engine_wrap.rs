@@ -1750,7 +1750,7 @@ impl EngineWrap {
         // slot の解決だけを lock 下で行い、attach 本体（child spawn + READY poll）前に guard を
         // 必ず落とす: `outproc` mutex を数百 ms 保持すると 1 Hz health ticker（try_lock）や
         // stats アクセサと競合する（従来コードも guard は slot 解決の式で即 drop していた）。
-        let slot = {
+        let (slot, bus_active) = {
             let control_guard = self
                 .outproc
                 .lock()
@@ -1760,7 +1760,7 @@ impl EngineWrap {
                     "outproc effect not initialized (test backend has no outproc path)".into(),
                 )
             })?;
-            let weak_slot = match bus {
+            let (weak_slot, bus_active) = match bus {
                 Some(bus) => {
                     let slot = control.bus_slots.get(&bus).ok_or_else(|| {
                         WrapError::OutProcEffect(format!(
@@ -1770,18 +1770,31 @@ impl EngineWrap {
                     // 宣言 = activation: この store 以降、callback は当該 bus を render 対象に
                     // 含める（attach 完了前は engaged=false の pass-through）。宣言前の bus は
                     // render 対象外 = 既定プールのコストゼロ（InsertBusStage::active の doc 参照）。
-                    if let Some(active) = control.bus_actives.get(&bus) {
+                    // attach 失敗時は下で false に巻き戻す（宣言が生き残らない = pool を汚さない）。
+                    let active = control.bus_actives.get(&bus).cloned();
+                    if let Some(active) = &active {
                         active.store(true, std::sync::atomic::Ordering::Release);
                     }
-                    slot
+                    (slot, active)
                 }
-                None => &control.child_slot,
+                None => (&control.child_slot, None),
             };
-            weak_slot
-                .upgrade()
-                .ok_or_else(|| WrapError::OutProcEffect("outproc effect stream is closed".into()))?
+            (
+                weak_slot.upgrade().ok_or_else(|| {
+                    WrapError::OutProcEffect("outproc effect stream is closed".into())
+                })?,
+                bus_active,
+            )
         };
-        self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id)
+        let result = self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id);
+        if result.is_err() {
+            // ロールバック: 失敗した宣言の bus を render 対象から外す（TS 側も宣言を破棄して
+            // bus 名を free-list に返すため、Rust/TS の状態が対称に戻る）。
+            if let Some(active) = bus_active {
+                active.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        result
     }
 
     /// both build で instrument slot へ attach する。
@@ -2451,6 +2464,49 @@ impl EngineWrap {
                 (0, 0, false, injected)
             }
         }
+    }
+
+    /// per-bus OOP effect の health を bus 名つきで列挙する（#461 review Critical: bus child の
+    /// crash/respawn/計測無効/frames_clamped が ticker に出ない穴を塞ぐ）。master の
+    /// [`Self::outproc_health`] と同型の tuple を bus ごとに返す。1 tick = 1 try_lock +
+    /// snapshot 群（WouldBlock/Poisoned/未初期化は空 Vec = 次 tick 持ち越し）。
+    #[cfg(feature = "outproc-effect")]
+    pub fn outproc_effect_bus_health(&self) -> Vec<(String, (u64, u64, bool, u64))> {
+        match self.outproc.try_lock() {
+            Ok(g) => g
+                .as_ref()
+                .map(|c| {
+                    c.bus_stats
+                        .iter()
+                        .map(|(name, stats)| {
+                            let s = stats.snapshot();
+                            (
+                                name.clone(),
+                                (
+                                    s.child_process_error_count,
+                                    s.respawn_count,
+                                    s.measurement_invalid,
+                                    s.frames_clamped,
+                                ),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// feature 無効ビルド用 stub（ticker 側を cfg なしで書けるようにする）。
+    #[cfg(not(feature = "outproc-effect"))]
+    pub fn outproc_effect_bus_health(&self) -> Vec<(String, (u64, u64, bool, u64))> {
+        Vec::new()
+    }
+
+    /// 未登録 named target へ tag された event の skip 累計（core の retain ハザード観測点・
+    /// `Scheduler::unroutable_event_count`）。lock 競合時は 0（cumulative なので次 tick で回収）。
+    pub fn unroutable_event_count(&self) -> u64 {
+        self.engine.unroutable_event_count().unwrap_or(0)
     }
 
     /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false, ...)`（control が無い）。
@@ -4283,6 +4339,38 @@ mod outproc_health_tests {
             .err()
             .expect("closed bus slot still rejects the load, but past the routing step");
         assert_effect_runtime_error_contains(error, "closed after an unrecoverable attach failure");
+    }
+
+    #[test]
+    fn load_outproc_effect_plugin_rolls_back_activation_on_failure() {
+        // #461 review Important: attach 失敗後に activation=true が残ると、失敗した宣言が
+        // render path を恒久占有する。失敗で flag が false に戻ることを固定する。
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let bus_slot = Arc::new(Mutex::new(ChildSlot::<EffectRole>::Closed));
+        let active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut bus_slots = HashMap::new();
+        bus_slots.insert("fx1".to_owned(), Arc::downgrade(&bus_slot));
+        let mut bus_actives = HashMap::new();
+        bus_actives.insert("fx1".to_owned(), active.clone());
+        *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
+            stats: OutProcEffectStats::new(),
+            cb_stats: CallbackTimeStats::new(),
+            child_slot: Weak::new(),
+            bus_slots,
+            bus_stats: HashMap::new(),
+            bus_actives,
+        });
+        let result = wrap.load_outproc_effect_plugin(
+            std::path::PathBuf::from("unused.clap"),
+            None,
+            Some("fx1".into()),
+        );
+        assert!(result.is_err());
+        assert!(
+            !active.load(std::sync::atomic::Ordering::Acquire),
+            "attach 失敗後は activation がロールバックされること"
+        );
     }
 
     fn assert_effect_runtime_error_contains(error: WrapError, expected: &str) {

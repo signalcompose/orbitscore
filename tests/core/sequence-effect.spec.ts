@@ -149,6 +149,34 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     await expect(overflow.effect('./reverb.clap')).rejects.toThrow('pool exhausted')
   })
 
+  it('returns a failed declaration bus to the free-list so retries do not exhaust the pool', async () => {
+    // #461 review Important: ライブコーディングの typo → リトライで pool が恒久消費されない。
+    const loadPlugin = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('plugin load failed'))
+      .mockResolvedValue({})
+    const { global } = harness(loadPlugin)
+    const seq = new Sequence(global, global as any)
+    seq.setName('drum')
+    await expect(seq.effect('./typo.clap')).rejects.toThrow('plugin load failed')
+    // 再宣言は失敗で返却された同じ bus 名を再利用する。
+    await seq.effect('./reverb.clap')
+    expect(loadPlugin).toHaveBeenLastCalledWith(
+      expect.stringContaining('reverb.clap'),
+      undefined,
+      'effect',
+      'seq-bus-0',
+    )
+    // 失敗を繰り返しても pool は枯渇しない（cap 回失敗 → なお成功できる）。
+    const failing = vi.fn().mockRejectedValue(new Error('nope'))
+    const { global: g2 } = harness(failing)
+    const s2 = new Sequence(g2, g2 as any)
+    s2.setName('retry')
+    for (let i = 0; i < SEQUENCE_EFFECT_BUS_POOL_SIZE + 2; i++) {
+      await expect(s2.effect('./nope.clap')).rejects.toThrow('nope')
+    }
+  })
+
   it('rejects a backend without plugin hosting support', async () => {
     const audio = scheduler()
     const global = new Global(audio)

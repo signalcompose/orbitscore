@@ -27,9 +27,9 @@ use crate::protocol::{
     ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_OUTPROC_INSTRUMENT_ERROR,
     ERROR_CODE_OUTPROC_INSTRUMENT_EVENT_DECODE, ERROR_CODE_OUTPROC_INSTRUMENT_INVALID,
     ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED, ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN,
-    ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
-    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
-    EVENT_STREAM_STATS,
+    ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_CODE_UNROUTABLE_EVENTS,
+    ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED,
+    EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -143,6 +143,17 @@ pub async fn run(
             let mut last_outproc_errors: u64 = 0;
             let mut last_outproc_respawns: u64 = 0;
             let mut last_outproc_frames_clamped: u64 = 0;
+            // per-bus effect health の watermark（#461 review Critical: bus child の異常が
+            // ticker に出ない穴）。key = bus 名。
+            let mut last_bus_errors: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            let mut last_bus_respawns: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            let mut bus_invalid_reported: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut last_bus_frames_clamped: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            let mut last_unroutable_events: u64 = 0;
             let mut last_outproc_instrument_output_dropped: u64 = 0;
             let mut last_outproc_instrument_errors: u64 = 0;
             let mut last_outproc_instrument_respawns: u64 = 0;
@@ -351,6 +362,94 @@ pub async fn run(
                         break;
                     }
                     last_outproc_frames_clamped = outproc_frames_clamped;
+                }
+
+                // per-bus OOP effect（seq.effect() の insert bus・#434/#461）の health を master と
+                // 同じ 4 signal で surface する。error code は master と共有し、message の bus 名で
+                // 区別する（コード乱発を避ける）。
+                for (bus, (errors, respawns, invalid, clamped)) in
+                    engine.outproc_effect_bus_health()
+                {
+                    let last = last_bus_errors.entry(bus.clone()).or_insert(0);
+                    if errors > *last {
+                        let evt = daemon_error_event(
+                            ERROR_SEVERITY_WARNING,
+                            ERROR_CODE_OUTPROC_EFFECT_ERROR,
+                            format!(
+                                "out-of-process effect child process() failed on bus '{bus}' \
+                                 ({errors} total); that sequence's insert passes dry",
+                            ),
+                        );
+                        if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                            break;
+                        }
+                        *last = errors;
+                    }
+                    let last = last_bus_respawns.entry(bus.clone()).or_insert(0);
+                    if respawns > *last {
+                        let evt = daemon_error_event(
+                            ERROR_SEVERITY_WARNING,
+                            ERROR_CODE_OUTPROC_EFFECT_RESPAWN,
+                            format!(
+                                "out-of-process effect child crashed and was respawned on bus \
+                                 '{bus}' ({respawns} total); 3rd-party crash isolated",
+                            ),
+                        );
+                        if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                            break;
+                        }
+                        *last = respawns;
+                    }
+                    if invalid && !bus_invalid_reported.contains(&bus) {
+                        let evt = daemon_error_event(
+                            ERROR_SEVERITY_WARNING,
+                            ERROR_CODE_OUTPROC_EFFECT_INVALID,
+                            format!(
+                                "out-of-process effect supervisor gave up on bus '{bus}' \
+                                 (respawn/try_wait failed); that insert is frozen — restart \
+                                 daemon or fix plugin",
+                            ),
+                        );
+                        if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                            break;
+                        }
+                        bus_invalid_reported.insert(bus.clone());
+                    }
+                    let last = last_bus_frames_clamped.entry(bus).or_insert(0);
+                    if clamped > *last {
+                        let evt = daemon_error_event(
+                            ERROR_SEVERITY_WARNING,
+                            ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED,
+                            format!(
+                                "out-of-process effect block exceeded MAX_FRAMES and was \
+                                 clamped on a seq bus ({clamped} total)",
+                            ),
+                        );
+                        if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                            break;
+                        }
+                        *last = clamped;
+                    }
+                }
+
+                // 未登録 named target（insert bus / LinkAudio channel）へ tag された event の
+                // retain を surface する（#461 review: comment-only だった core のハザードに
+                // 観測点を配線・frames_clamped の前例と同じ「既存 counter → ticker 追配線」）。
+                let unroutable = engine.unroutable_event_count();
+                if unroutable > last_unroutable_events {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_UNROUTABLE_EVENTS,
+                        format!(
+                            "{unroutable} scheduled event(s) are tagged to an unknown \
+                             bus/channel and will never play (declared-before-tag order \
+                             violated, or a name typo); they are retained until Stop",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_unroutable_events = unroutable;
                 }
 
                 // out-of-process instrument の全 health signal（child-process 系: respawn/計測無効/
