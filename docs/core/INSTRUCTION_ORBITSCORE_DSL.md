@@ -1321,6 +1321,81 @@ kick.send("rev", 0.3)                 // send（copy・原音は継続して mas
 
 ---
 
+## Import / Project 構成（複数ファイル — #456）
+
+> **Status**: 設計確定（2026-07-17・issue #456 が追跡）・実装は I1-I3 で段階導入（未実装）。
+> 本節が規範（DocDD: spec 先行）。ブレスト正本 `POST_2.0_MIXER_DSL_DESIGN.html` §8 は非規範。
+> 素朴な 1 ファイル運用は**恒久に保護**する — import を使わない .orbs は従来どおり完結して動く。
+
+### IM.1 構文
+
+```js
+import { kick, snare } from "./drums.orbs"   // ファイル import（名前列挙必須）
+import chords                                 // 既存の stdlib import（§6・変更なし）
+```
+
+- パスは**文字列リテラル・import 元ファイル基準の相対パス**（`./` または `../` で始まること。
+  絶対パス・裸の名前はエラー）。拡張子 `.orbs` は必須（省略糖衣なし）
+- 文法の判別: `import` の次が `{` → ファイル import、識別子 → stdlib import（v1.1 の
+  `import chords` と後方互換のまま共存）
+- `{ }` 内は import 先ファイルの **top-level `var` 宣言名**。列挙した名前が import 先に
+  宣言されていなければ**エラー**（契約検査）
+- import 文はファイル先頭領域（最初の非 import 文より前）にのみ書ける
+- `export` キーワードは v1 では導入しない（全 top-level 宣言が import 可能・将来の可視性
+  制御のため予約語として確保）
+
+### IM.2 意味論 — import = グラフの合成（名前一致 merge）
+
+- import 先ファイルの**宣言群を評価し、共有名前空間へ名前キーで合流**させる。OrbitScore の
+  reconciliation key は名前（MX.1 と同一原理）: 同名 = 同一 node・再評価は**再束縛であって
+  再構築ではない**（hot-reload identity）
+- `var global = init GLOBAL` は import 先ファイルにも**書いてよい（推奨）**。名前キー
+  reconciliation により entry と同一の Global インスタンスへ解決されるため、各ファイルは
+  **単独でも評価可能**（standalone-evaluable）かつ import されても二重初期化しない（冪等）
+- **評価順序（規範）**: import は**ソース記載順・深さ優先（依存が先 = post-order）**で評価し、
+  その後に import 元自身の宣言を評価する。したがって同名衝突の「後から評価された定義」は
+  決定的に定まる（entry 自身の宣言が常に最後 = 最優先）
+- 同一ファイルの多重 import（ダイヤモンド）は **1 回だけ評価**（top-level 評価ごとの
+  module cache）。ファイル同一性の基準は**解決済み絶対パス**（symlink 解決後の realpath —
+  異なる相対表記が同一ファイルを指す場合も 1 回）。**循環 import はエラー**
+- v1 制約: モジュールスコープは持たない（フラット名前空間）。`{ }` に列挙しなかった宣言も
+  評価され名前空間に入る（列挙は契約検査であって隔離ではない — 隔離は v2 予約）。異なる
+  ファイルが同名を宣言した場合は**後から評価された定義が同一インスタンスに再適用**される
+  （衝突診断は将来拡張）
+
+### IM.3 module 制約 — project / performance の分離
+
+- import されたファイルは**宣言専用**: `RUN` / `LOOP` / `MUTE` 等の transport キーワードが
+  import されたコンテキストで実行されるのは**エラー**（entry ファイルのみが transport を
+  所有する）。単独評価時（そのファイルを直接 play/eval）は従来どおり transport 可
+- 設計根拠: project（永続グラフ = 楽器・mixer・routing）と performance（live 操作 = tempo・
+  transport）の 2 分割（POST_2.0_MIXER_DSL_DESIGN §8.1）。import で持ち込むのは前者
+
+### IM.4 パス解決
+
+- import パスの基準 = **import を書いたファイルのディレクトリ**（transitive import も同様）
+- import 先ファイル内の `audio("...")` 等の相対パスは**そのファイル自身のディレクトリ基準**で
+  解決する（規範）。entry の documentDirectory に依存しない — モジュールは移動可能な単位
+
+### IM.5 再評価 / live coding
+
+- entry の再評価は import を**毎回読み直す**（キャッシュは 1 評価内のみ）。名前キー
+  reconciliation により走行中シーケンスの identity は保たれ、差し替えは再束縛で済む
+  （音切れ最小化 — MX.1 と同じ機構に乗る）
+- import 先ファイルだけを編集した場合の自動反映（ファイルウォッチ）は v1 スコープ外 —
+  entry の再評価で取り込む
+
+### IM.6 v1 制約（実装事実の開示）
+
+- **本節は全体が未実装**（`import` の `{` 分岐を含め parser/interpreter とも I1-I3 で導入）
+- モジュールスコープなし・`export` なし・衝突診断なし（IM.2 に明記）
+- VS Code 拡張のファイル横断診断・補完・サブジェクトブロック実行は v1 スコープ外
+  （import 行を含むファイルでは未定義変数診断を抑制する方向で段階対応）
+- REPL / 部分 eval（行・ブロック実行）からの import 文は entry ファイル基準が定まらないため
+  **エディタで開いているファイルのディレクトリ**を基準とする
+
+---
+
 ## Implementation Status
 
 ### Completed Features ✅
