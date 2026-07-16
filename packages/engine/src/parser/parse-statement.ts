@@ -244,6 +244,9 @@ export class StatementParser {
     for (;;) {
       const nameResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
       this.pos = nameResult.newPos
+      if (names.includes(nameResult.token.value)) {
+        throw new Error(`import: duplicate name "${nameResult.token.value}" in the list (IM.1).`)
+      }
       names.push(nameResult.token.value)
       if (this.tokens[this.pos]?.type === 'COMMA') {
         this.pos++

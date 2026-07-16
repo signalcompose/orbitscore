@@ -85,10 +85,8 @@ export class AudioParser {
         // Handle different statement types
         if (stmtResult.statement.type === 'global_init') {
           result.globalInit = stmtResult.statement as GlobalInit
-          seenNonImport = true
         } else if (stmtResult.statement.type === 'seq_init') {
           result.sequenceInits.push(stmtResult.statement as SequenceInit)
-          seenNonImport = true
         } else if (stmtResult.statement.type === 'file_import') {
           if (seenNonImport) {
             throw new Error(
@@ -98,10 +96,11 @@ export class AudioParser {
           }
           result.fileImports!.push(stmtResult.statement as FileImportStatement)
         } else {
-          if (stmtResult.statement.type !== 'import') {
-            seenNonImport = true
-          }
           result.statements.push(stmtResult.statement as Statement)
+        }
+        // import 文（stdlib / file の両方）だけが先頭領域を延長する — 不変条件はこの1行。
+        if (stmtResult.statement.type !== 'import' && stmtResult.statement.type !== 'file_import') {
+          seenNonImport = true
         }
       }
 

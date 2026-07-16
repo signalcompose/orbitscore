@@ -179,7 +179,15 @@ export class InterpreterV2 {
         )
       }
       const ctx = createImportContext(options?.sourceFile)
-      await processFileImports(ir.fileImports, baseDir, this.state, ctx)
+      try {
+        await processFileImports(ir.fileImports, baseDir, this.state, ctx)
+      } finally {
+        // 成功・失敗を問わず基準ディレクトリを entry 側（documentDirectory または
+        // sourceFile のディレクトリ = baseDir）へ復元する。復元しないと entry 自身の
+        // audio() が最後に評価した module のディレクトリ基準で解決される（IM.4 違反）し、
+        // 失敗時は長寿命 interpreter（REPL/live）で次の評価まで基準が腐る。
+        this.state.currentGlobal?.setDocumentDirectory(options?.documentDirectory ?? baseDir)
+      }
     }
 
     // Process global initialization

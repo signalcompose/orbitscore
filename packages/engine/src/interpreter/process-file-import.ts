@@ -31,8 +31,16 @@ export function createImportContext(entryFile?: string | null): ImportContext {
   if (entryFile) {
     try {
       stack.push(fs.realpathSync(path.resolve(entryFile)))
-    } catch {
-      // entry が未保存バッファ等で実在しない場合は自己 import 検出だけ諦める（REPL・IM.6）。
+    } catch (err) {
+      // ENOENT（entry が未保存バッファ等で実在しない）だけは自己 import 検出を諦めて続行
+      // してよい（REPL・IM.6）。それ以外（EACCES/ELOOP 等）は黙って検出を落とすと IM.2 の
+      // 保証が silent に劣化するため明示エラーにする。
+      if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+        throw new Error(
+          `import: cannot resolve entry file ${entryFile} ` +
+            `(${(err as NodeJS.ErrnoException)?.code ?? 'unknown'}): ${(err as Error)?.message} (IM.6).`,
+        )
+      }
     }
   }
   return { cache: new Map(), stack }
@@ -82,8 +90,17 @@ async function processOneImport(
   try {
     // IM.2: ダイヤモンド同一性の基準は symlink 解決後の realpath。
     realPath = fs.realpathSync(resolvedRaw)
-  } catch {
-    throw new Error(`import "${imp.path}": file not found at ${resolvedRaw} (IM.4).`)
+  } catch (err) {
+    // ENOENT 以外（EACCES/ELOOP/ENOTDIR 等）を「file not found」に丸めると、権限や
+    // symlink 循環の問題をパス typo と誤診させる — errno を出し分ける。
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code === 'ENOENT') {
+      throw new Error(`import "${imp.path}": file not found at ${resolvedRaw} (IM.4).`)
+    }
+    throw new Error(
+      `import "${imp.path}": could not resolve ${resolvedRaw} (${code ?? 'unknown'}): ` +
+        `${(err as Error)?.message} (IM.4).`,
+    )
   }
   if (ctx.stack.includes(realPath)) {
     throw new Error(
@@ -93,8 +110,27 @@ async function processOneImport(
 
   let names = ctx.cache.get(realPath)
   if (!names) {
-    const sourceText = fs.readFileSync(realPath, 'utf8')
-    const ir = parseAudioDSL(sourceText)
+    let sourceText: string
+    try {
+      sourceText = fs.readFileSync(realPath, 'utf8')
+    } catch (err) {
+      // realpath 成功後の read 失敗（EACCES・TOCTOU 削除等）。生の Node エラーを漏らさず
+      // どの import 文が原因かを付ける（本ファイルのエラー規約に合わせる）。
+      throw new Error(
+        `import "${imp.path}": could not read ${realPath} ` +
+          `(${(err as NodeJS.ErrnoException)?.code ?? 'unknown'}): ${(err as Error)?.message} (IM.4).`,
+      )
+    }
+    let ir: AudioIR
+    try {
+      ir = parseAudioDSL(sourceText)
+    } catch (err) {
+      // import 先の構文エラーは「どのファイルか」を必ず付ける（深い import 連鎖で
+      // ユーザーが手動二分探索する羽目にならないように）。
+      throw new Error(
+        `import "${imp.path}": parse error in ${realPath}: ${(err as Error)?.message ?? err} (IM.1).`,
+      )
+    }
     names = declaredNames(ir)
     ctx.stack.push(realPath)
     try {

@@ -49,6 +49,10 @@ describe('file import — parser (IM.1)', () => {
     const ir = parseAudioDSL(`import chords\nimport { a } from "./x.orbs"`)
     expect(ir.fileImports).toHaveLength(1)
   })
+
+  it('rejects a duplicate name in the list', () => {
+    expect(() => parseAudioDSL(`import { a, a } from "./x.orbs"`)).toThrow('duplicate name "a"')
+  })
 })
 
 describe('file import — interpreter (IM.2-IM.6)', () => {
@@ -176,5 +180,47 @@ describe('file import — interpreter (IM.2-IM.6)', () => {
   it('errors when neither sourceFile nor documentDirectory is available (IM.6)', async () => {
     const ir = parseAudioDSL(`import { kick } from "./drums.orbs"\n`)
     await expect(interpreter.execute(ir)).rejects.toThrow('cannot resolve the base directory')
+  })
+
+  it('reports a permission failure as its errno, not as "file not found"', async () => {
+    write('locked.orbs', `var global = init GLOBAL\n`)
+    fs.chmodSync(path.join(dir, 'locked.orbs'), 0o000)
+    const entry = write('main.orbs', `import { global } from "./locked.orbs"\n`)
+    try {
+      await expect(run(entry)).rejects.toThrow(/could not read .*EACCES/)
+      await expect(run(entry)).rejects.not.toThrow('file not found')
+    } finally {
+      fs.chmodSync(path.join(dir, 'locked.orbs'), 0o644)
+    }
+  })
+
+  it('attributes a syntax error in an imported file to the import statement (IM.1)', async () => {
+    write('broken.orbs', `import { x } from "not-even-a-string\n`)
+    const entry = write('main.orbs', `import { x } from "./broken.orbs"\n`)
+    await expect(run(entry)).rejects.toThrow(/parse error in .*broken\.orbs/)
+  })
+
+  it('restores the base directory from sourceFile when documentDirectory is not passed (IM.4)', async () => {
+    fs.mkdirSync(path.join(dir, 'sub'))
+    write('sub/mod.orbs', `var global = init GLOBAL\nvar pad = init global.seq\n`)
+    const entry = write('main.orbs', `import { pad } from "./sub/mod.orbs"\n`)
+    const ir = parseAudioDSL(fs.readFileSync(entry, 'utf8'))
+    await interpreter.execute(ir, { sourceFile: entry }) // documentDirectory 省略
+    const g = (interpreter as any).state.currentGlobal
+    // module dir (sub/) が漏れず、entry のディレクトリへ復元される
+    expect(g.getState().documentDirectory).toBe(dir)
+  })
+
+  it('restores the entry documentDirectory even when an import throws mid-chain', async () => {
+    write('good.orbs', `var global = init GLOBAL\nvar pad = init global.seq\n`)
+    write('bad.orbs', `var global = init GLOBAL\nvar b = init global.seq\nRUN(b)\n`)
+    const entry = write(
+      'main.orbs',
+      `import { pad } from "./good.orbs"\nimport { b } from "./bad.orbs"\n`,
+    )
+    await expect(run(entry)).rejects.toThrow('not allowed in an imported file')
+    // 失敗しても基準ディレクトリは entry の documentDirectory に復元される（module dir が残らない）
+    const g = (interpreter as any).state.currentGlobal
+    expect(g.getState().documentDirectory).toBe(dir)
   })
 })
