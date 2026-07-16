@@ -19,6 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
+#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+use orbit_audio_native::PostProcessor;
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
     StreamStatsSnapshot,
@@ -205,7 +207,25 @@ struct OutProcInstrumentControl {
     /// Audio adapter と watchdog が更新し、gated harness が読む観測 stats。
     stats: Arc<crate::outproc_instrument::OutProcInstrumentStats>,
     /// post-boot attach の状態。`StreamGuard` と共有し、supervisor は stream より後に drop する。
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    child_slot: Weak<Mutex<ChildSlot<InstrumentRole>>>,
+    #[cfg(not(all(feature = "outproc-effect", feature = "outproc-instrument")))]
     child_slot: Weak<Mutex<ChildSlot>>,
+}
+
+/// instrument の add-mix 後に effect の serial insert を適用する RT 専用の合成 processor。
+#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+struct CompositePostProcessor {
+    instrument: crate::outproc_instrument::OutProcInstrumentPostProcessor,
+    effect: crate::outproc_effect::OutProcEffectPostProcessor,
+}
+
+#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+impl PostProcessor for CompositePostProcessor {
+    fn process(&mut self, data: &mut [f32]) {
+        self.instrument.process(data);
+        self.effect.process(data);
+    }
 }
 
 /// OOP role ごとの差分を child-slot state machine から分離する。
@@ -352,6 +372,62 @@ impl OutProcRole for DefaultOutProcRole {
     }
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         InstrumentRole::set_current_child_pid(stats, pid)
+    }
+}
+#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+impl OutProcRole for DefaultOutProcRole {
+    type Stats = crate::outproc_effect::OutProcEffectStats;
+    type Supervisor = crate::outproc_effect::EffectChildSupervisor;
+    const ROLE_NAME: &'static str = EffectRole::ROLE_NAME;
+    fn spawn_child(
+        launch: &ChildLaunch<Self>,
+        path: &std::path::Path,
+        plugin_id: Option<&str>,
+    ) -> std::io::Result<std::process::Child> {
+        crate::outproc_effect::spawn_effect_child(
+            &launch.child_exe,
+            &launch.shm_path,
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn spawn_supervisor(
+        child: std::process::Child,
+        launch: &ChildLaunch<Self>,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> std::io::Result<Self::Supervisor> {
+        crate::outproc_effect::EffectChildSupervisor::spawn(
+            child,
+            launch.shm_path.clone(),
+            launch.stats.clone(),
+            launch.child_exe.clone(),
+            path,
+            plugin_id,
+            launch.sample_rate,
+        )
+    }
+    fn detach_keep_shm(supervisor: Self::Supervisor) {
+        supervisor.detach_keep_shm()
+    }
+    fn role_matches(flags: u32) -> bool {
+        EffectRole::role_matches(flags)
+    }
+    fn runtime_error(message: String) -> WrapError {
+        EffectRole::runtime_error(message)
+    }
+    fn set_initial_attach_pending(stats: &Self::Stats, value: bool) {
+        EffectRole::set_initial_attach_pending(stats, value)
+    }
+    fn set_child_early_exit(stats: &Self::Stats, value: bool) {
+        EffectRole::set_child_early_exit(stats, value)
+    }
+    fn child_early_exit(stats: &Self::Stats) -> bool {
+        EffectRole::child_early_exit(stats)
+    }
+    fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
+        EffectRole::set_current_child_pid(stats, pid)
     }
 }
 
@@ -684,6 +760,9 @@ pub struct StreamGuard {
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     #[cfg(feature = "outproc-effect")]
     _child_guard: Arc<Mutex<ChildSlot>>,
+    /// both build では同種 guard 間の順序は load-bearing ではない（どちらも stream 停止後）。
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    _instrument_child_guard: Arc<Mutex<ChildSlot<InstrumentRole>>>,
     #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
     _child_guard: Arc<Mutex<ChildSlot>>,
 }
@@ -1039,6 +1118,148 @@ impl EngineWrap {
         ))
     }
 
+    /// both build の buffer size を解決する。両方指定され値が異なる場合は、RT 設定の暗黙優先を
+    /// 作らず hard error にする。片方だけならその値、両方未指定なら `None` を使う。
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    fn resolve_outproc_both_buffer_frames(
+        effect: Option<u32>,
+        instrument: Option<u32>,
+    ) -> Result<Option<u32>, WrapError> {
+        match (effect, instrument) {
+            (Some(effect), Some(instrument)) if effect != instrument => Err(WrapError::OutProcEffect(format!(
+                    "ORBIT_EFFECT_BUFFER_FRAMES ({effect}) and ORBIT_INSTRUMENT_BUFFER_FRAMES ({instrument}) must match"
+                ))),
+            (Some(value), _) | (_, Some(value)) => Ok(Some(value)),
+            (None, None) => Ok(None),
+        }
+    }
+
+    /// effect と instrument の transport を一つの callback に合成して起動する。
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    pub fn start_outproc_both(
+        effect_cfg: crate::outproc_effect::OutProcEffectConfig,
+        instrument_cfg: crate::outproc_instrument::OutProcInstrumentConfig,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        use crate::outproc_effect::{
+            OutProcEffectPostProcessor, OutProcEffectStats, OutProcTeardownGuard,
+        };
+        use crate::outproc_instrument::{
+            OutProcInstrumentPostProcessor, OutProcInstrumentStats, OutProcInstrumentTeardownGuard,
+            NOTE_RING_CAPACITY,
+        };
+        let buffer_frames = Self::resolve_outproc_both_buffer_frames(
+            effect_cfg.buffer_frames,
+            instrument_cfg.buffer_frames,
+        )?;
+        let effect_shm = crate::outproc_effect::unique_shm_path();
+        let effect_host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
+            orbit_audio_sandbox::create_shared(&effect_shm)
+                .map_err(|e| WrapError::OutProcEffect(format!("create shm {effect_shm:?}: {e}")))?,
+        );
+        let instrument_shm = crate::outproc_instrument::unique_shm_path();
+        let instrument_host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(
+            orbit_audio_sandbox::create_shared(&instrument_shm).map_err(|e| {
+                WrapError::OutProcInstrument(format!("create shm {instrument_shm:?}: {e}"))
+            })?,
+        );
+        let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+        let effect_engaged = Arc::new(AtomicBool::new(false));
+        let instrument_engaged = Arc::new(AtomicBool::new(false));
+        let effect_stop = Arc::new(AtomicBool::new(false));
+        let effect_done = Arc::new(AtomicBool::new(false));
+        let instrument_stop = Arc::new(AtomicBool::new(false));
+        let instrument_done = Arc::new(AtomicBool::new(false));
+        let effect_stats = OutProcEffectStats::new();
+        let instrument_stats = OutProcInstrumentStats::new();
+        let processor = Box::new(CompositePostProcessor {
+            instrument: OutProcInstrumentPostProcessor::new(
+                instrument_host,
+                event_rx,
+                NOTE_RING_CAPACITY,
+                instrument_engaged.clone(),
+                instrument_stop.clone(),
+                instrument_done.clone(),
+                instrument_stats.clone(),
+            ),
+            effect: OutProcEffectPostProcessor::new(
+                effect_host,
+                effect_engaged.clone(),
+                effect_stop.clone(),
+                effect_done.clone(),
+                effect_stats.clone(),
+            ),
+        });
+        let (engine, stream, stream_stats, effect_cb_stats) =
+            orbit_audio_native::start_default_output_with_clap(
+                processor,
+                buffer_frames,
+                capture_path_from_env(),
+            )
+            .map_err(WrapError::Output)?;
+        let effect_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
+            shm_path: effect_shm,
+            child_exe: effect_cfg.child_exe,
+            sample_rate: stream.sample_rate,
+            stats: effect_stats.clone(),
+            engaged: effect_engaged,
+            cleanup_shm_on_drop: true,
+        })));
+        let instrument_slot = Arc::new(Mutex::new(ChildSlot::<InstrumentRole>::Empty(
+            ChildLaunch {
+                shm_path: instrument_shm,
+                child_exe: instrument_cfg.child_exe,
+                sample_rate: stream.sample_rate,
+                stats: instrument_stats.clone(),
+                engaged: instrument_engaged,
+                cleanup_shm_on_drop: true,
+            },
+        )));
+        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        *wrap
+            .outproc
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))? =
+            Some(OutProcControl {
+                stats: effect_stats,
+                cb_stats: effect_cb_stats,
+                child_slot: Arc::downgrade(&effect_slot),
+            });
+        *wrap.outproc_instrument.lock().map_err(|_| {
+            WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
+        })? = Some(OutProcInstrumentControl {
+            event_tx,
+            stats: instrument_stats,
+            child_slot: Arc::downgrade(&instrument_slot),
+        });
+        Ok((
+            wrap,
+            StreamGuard {
+                _outproc_teardown: OutProcTeardownGuard::new(effect_stop, effect_done),
+                _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
+                    instrument_stop,
+                    instrument_done,
+                ),
+                _stream: stream,
+                _child_guard: effect_slot,
+                _instrument_child_guard: instrument_slot,
+            },
+        ))
+    }
+
+    #[cfg(all(
+        feature = "outproc-effect",
+        feature = "outproc-instrument",
+        not(feature = "clap-host"),
+        not(feature = "link-audio")
+    ))]
+    pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        let effect = crate::outproc_effect::OutProcEffectConfig::from_env()
+            .map_err(WrapError::OutProcEffectUnavailable)?;
+        let instrument = crate::outproc_instrument::OutProcInstrumentConfig::from_env()
+            .map_err(WrapError::OutProcInstrumentUnavailable)?;
+        Self::start_outproc_both(effect, instrument)
+    }
+
     /// [`AudioBackend`] 経由で起動する（integration test 用）。
     ///
     /// guard は `Box<dyn Any + Send>` の不透明ハンドル。scope 終了まで
@@ -1183,6 +1404,8 @@ impl EngineWrap {
         path: PathBuf,
         plugin_id: Option<String>,
     ) -> Result<LoadedPluginSummary, WrapError> {
+        #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+        return self.load_outproc_effect_plugin(path, plugin_id);
         #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
         let child_slot = {
             let guard = self
@@ -1225,6 +1448,54 @@ impl EngineWrap {
         return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id);
         #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
         return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id);
+    }
+
+    /// both build で effect slot へ attach する。
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    pub fn load_outproc_effect_plugin(
+        &self,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> Result<LoadedPluginSummary, WrapError> {
+        let slot = self
+            .outproc
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?
+            .as_ref()
+            .ok_or_else(|| {
+                WrapError::OutProcEffectUnavailable(
+                    "outproc effect not initialized (test backend has no outproc path)".into(),
+                )
+            })?
+            .child_slot
+            .upgrade()
+            .ok_or_else(|| WrapError::OutProcEffect("outproc effect stream is closed".into()))?;
+        self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id)
+    }
+
+    /// both build で instrument slot へ attach する。
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    pub fn load_outproc_instrument_plugin(
+        &self,
+        path: PathBuf,
+        plugin_id: Option<String>,
+    ) -> Result<LoadedPluginSummary, WrapError> {
+        let slot = self
+            .outproc_instrument
+            .lock()
+            .map_err(|_| WrapError::OutProcInstrument("outproc instrument mutex poisoned".into()))?
+            .as_ref()
+            .ok_or_else(|| {
+                WrapError::OutProcInstrumentUnavailable(
+                    "outproc instrument not initialized (test backend has no outproc path)".into(),
+                )
+            })?
+            .child_slot
+            .upgrade()
+            .ok_or_else(|| {
+                WrapError::OutProcInstrument("outproc instrument stream is closed".into())
+            })?;
+        self.load_outproc_plugin_impl::<InstrumentRole>(slot, path, plugin_id)
     }
 
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -2396,6 +2667,24 @@ fn outproc_plugin_summary(
             .file_stem()
             .map(|name| name.to_string_lossy().into_owned()),
         note_port_index: 0,
+    }
+}
+
+#[cfg(all(test, feature = "outproc-effect", feature = "outproc-instrument"))]
+mod outproc_both_tests {
+    use super::EngineWrap;
+
+    #[test]
+    fn both_buffer_frames_rejects_conflicting_values() {
+        assert!(EngineWrap::resolve_outproc_both_buffer_frames(Some(32), Some(64)).is_err());
+        assert_eq!(
+            EngineWrap::resolve_outproc_both_buffer_frames(Some(32), None).unwrap(),
+            Some(32)
+        );
+        assert_eq!(
+            EngineWrap::resolve_outproc_both_buffer_frames(None, None).unwrap(),
+            None
+        );
     }
 }
 
@@ -3600,7 +3889,7 @@ mod outproc_health_tests {
 /// build で走るため real body の match arm がどのテストからも一度も compile even されない）で、この
 /// `#[cfg(test)]` submodule から `EngineWrap::outproc_instrument`（private field）と
 /// `OutProcInstrumentControl`（private struct）へ直接アクセスして注入する。
-#[cfg(all(test, feature = "outproc-instrument"))]
+#[cfg(all(test, feature = "outproc-instrument", not(feature = "outproc-effect")))]
 mod outproc_instrument_health_tests {
     use super::{outproc_role_matches, ChildSlot, EngineWrap, OutProcInstrumentControl, WrapError};
     use crate::backend::StubBackend;
