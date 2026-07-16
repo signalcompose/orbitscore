@@ -71,6 +71,11 @@ pub enum Vst3HostError {
         direction: &'static str,
         channels: i32,
     },
+    NotInstrument {
+        input_buses: i32,
+        output_buses: i32,
+    },
+    MissingEventInputBus,
 }
 
 impl Display for Vst3HostError {
@@ -122,6 +127,16 @@ impl Display for Vst3HostError {
                 f,
                 "primary {direction} bus is not stereo (expected {DEFAULT_CHANNELS} channels, got {channels})"
             ),
+            Self::NotInstrument {
+                input_buses,
+                output_buses,
+            } => write!(
+                f,
+                "VST3 plugin is not an instrument (audio input buses={input_buses}, audio output buses={output_buses}); expected no audio input buses and at least one audio output bus"
+            ),
+            Self::MissingEventInputBus => {
+                write!(f, "VST3 instrument has no event input bus")
+            }
         }
     }
 }
@@ -705,6 +720,262 @@ impl Vst3EffectProcessor {
 }
 
 impl Drop for Vst3EffectProcessor {
+    fn drop(&mut self) {
+        if let Some(processor) = self.processor.take() {
+            unsafe {
+                let _ = processor.setProcessing(0);
+            }
+        }
+        if let (Some(component_connection), Some(controller_connection)) = (
+            self.component_connection.as_ref(),
+            self.controller_connection.as_ref(),
+        ) {
+            unsafe {
+                let _ = component_connection.disconnect(controller_connection.as_ptr());
+                let _ = controller_connection.disconnect(component_connection.as_ptr());
+            }
+        }
+        let _ = self.component_connection.take();
+        let _ = self.controller_connection.take();
+        if let Some(controller) = self.controller.take() {
+            unsafe {
+                let _ = controller.terminate();
+            }
+        }
+        if let Some(component) = self.component.take() {
+            unsafe {
+                let _ = component.setActive(0);
+                let _ = component.terminate();
+            }
+        }
+        let _ = self.factory.take();
+    }
+}
+
+/// Single-threaded VST3 instrument processor.
+///
+/// `Rc` makes this type `!Send` and `!Sync`. Construct, process, and drop it on the same home
+/// thread. Its explicit teardown order intentionally matches [`Vst3EffectProcessor`].
+pub struct Vst3InstrumentProcessor {
+    processor: Option<ComPtr<IAudioProcessor>>,
+    controller: Option<ComPtr<IEditController>>,
+    component_connection: Option<ComPtr<IConnectionPoint>>,
+    controller_connection: Option<ComPtr<IConnectionPoint>>,
+    component: Option<ComPtr<IComponent>>,
+    _component_handler: Option<ComWrapper<HostComponentHandler>>,
+    _host_context: ComWrapper<HostApplication>,
+    factory: Option<ComPtr<IPluginFactory>>,
+    _home_thread: PhantomData<Rc<()>>,
+    _library: LoadedLibrary,
+    info: LoadedVst3Info,
+    input_events: InputEventList,
+    output_parameter_changes: ParameterChanges,
+    output_events: EventList,
+    process_output_l: Vec<f32>,
+    process_output_r: Vec<f32>,
+}
+
+impl Vst3InstrumentProcessor {
+    pub fn load(
+        bundle_path: &Path,
+        sample_rate: f64,
+        max_samples_per_block: i32,
+    ) -> Result<(Self, LoadedVst3Info), Vst3HostError> {
+        let library = LoadedLibrary::open(bundle_path)?;
+        let factory = unsafe { library.get_factory()? };
+        let class = find_audio_module_class(&factory)?;
+        let mut component_raw = ptr::null_mut();
+        let create_result = unsafe {
+            factory.createInstance(
+                class.cid.as_ptr() as FIDString,
+                IComponent_iid.as_ptr() as FIDString,
+                &mut component_raw,
+            )
+        };
+        if !is_ok(create_result) {
+            return Err(Vst3HostError::CreateInstance(create_result));
+        }
+        let component = unsafe { ComPtr::from_raw(component_raw as *mut IComponent) }
+            .ok_or(Vst3HostError::CreateInstance(create_result))?;
+        let host_context = ComWrapper::new(HostApplication);
+        let host_context_ptr = host_context
+            .as_com_ref::<IHostApplication>()
+            .expect("HostApplication exposes IHostApplication")
+            .as_ptr()
+            .cast::<FUnknown>();
+        let init_result = unsafe { component.initialize(host_context_ptr) };
+        if !is_ok(init_result) {
+            return Err(Vst3HostError::Initialize(init_result));
+        }
+        let processor = component
+            .as_com_ref()
+            .cast::<IAudioProcessor>()
+            .ok_or(Vst3HostError::QueryAudioProcessor)?;
+        let sample_size_result =
+            unsafe { processor.canProcessSampleSize(SymbolicSampleSizes_::kSample32 as i32) };
+        if !is_ok(sample_size_result) {
+            return Err(Vst3HostError::SampleSize(sample_size_result));
+        }
+
+        // Controller creation/connection precedes bus activation, matching the effect host.
+        let controller_handshake =
+            connect_controller(&factory, &component, &host_context, host_context_ptr)?;
+        let input_buses = unsafe {
+            component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kInput as i32)
+        };
+        let output_buses = unsafe {
+            component.getBusCount(MediaTypes_::kAudio as i32, BusDirections_::kOutput as i32)
+        };
+        if input_buses != 0 || output_buses <= 0 {
+            return Err(Vst3HostError::NotInstrument {
+                input_buses,
+                output_buses,
+            });
+        }
+        let event_input_buses = unsafe {
+            component.getBusCount(MediaTypes_::kEvent as i32, BusDirections_::kInput as i32)
+        };
+        if event_input_buses <= 0 {
+            return Err(Vst3HostError::MissingEventInputBus);
+        }
+
+        configure_audio_buses(&component, &processor, input_buses, output_buses)?;
+        // The event input bus is required for note delivery; unlike audio activation it must not
+        // be left to a plugin default.
+        let event_result = unsafe {
+            component.activateBus(
+                MediaTypes_::kEvent as i32,
+                BusDirections_::kInput as i32,
+                0,
+                1,
+            )
+        };
+        if !is_ok(event_result) {
+            return Err(Vst3HostError::SetActive(event_result));
+        }
+
+        let mut setup = ProcessSetup {
+            processMode: ProcessModes_::kRealtime as i32,
+            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+            maxSamplesPerBlock: max_samples_per_block,
+            sampleRate: sample_rate,
+        };
+        let setup_result = unsafe { processor.setupProcessing(&mut setup) };
+        if !is_ok(setup_result) {
+            return Err(Vst3HostError::SetupProcessing(setup_result));
+        }
+        let active_result = unsafe { component.setActive(1) };
+        if !is_ok(active_result) {
+            return Err(Vst3HostError::SetActive(active_result));
+        }
+        let processing_result = unsafe { processor.setProcessing(1) };
+        if !is_ok(processing_result) && processing_result != kNotImplemented {
+            return Err(Vst3HostError::SetProcessing(processing_result));
+        }
+
+        let info = LoadedVst3Info {
+            name: class.name,
+            audio_inputs: input_buses,
+            audio_outputs: output_buses,
+            is_effect: false,
+        };
+        let scratch_len = max_samples_per_block.max(0) as usize;
+        Ok((
+            Self {
+                processor: Some(processor),
+                controller: controller_handshake.controller,
+                component_connection: controller_handshake.component_connection,
+                controller_connection: controller_handshake.controller_connection,
+                component: Some(component),
+                _component_handler: controller_handshake.component_handler,
+                _host_context: host_context,
+                factory: Some(factory),
+                _home_thread: PhantomData,
+                _library: library,
+                info: info.clone(),
+                input_events: InputEventList::new(),
+                output_parameter_changes: ParameterChanges::empty(),
+                output_events: EventList::empty(),
+                process_output_l: vec![0.0; scratch_len],
+                process_output_r: vec![0.0; scratch_len],
+            },
+            info,
+        ))
+    }
+
+    pub fn info(&self) -> &LoadedVst3Info {
+        &self.info
+    }
+
+    pub fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32) {
+        self.input_events.push_note_on(channel, pitch, velocity);
+    }
+
+    pub fn push_note_off(&self, channel: i16, pitch: i16, velocity: f32) {
+        self.input_events.push_note_off(channel, pitch, velocity);
+    }
+
+    /// Queued note events are delivered at sample offset zero; successful plugin output is
+    /// add-mixed into interleaved stereo `data`.
+    #[must_use]
+    pub fn process_block(&mut self, data: &mut [f32]) -> bool {
+        if !data.len().is_multiple_of(DEFAULT_CHANNELS) {
+            return false;
+        }
+        let frames = data.len() / DEFAULT_CHANNELS;
+        if frames > self.process_output_l.len() {
+            return false;
+        }
+        self.process_output_l[..frames].fill(0.0);
+        self.process_output_r[..frames].fill(0.0);
+        let mut output_ptrs = [
+            self.process_output_l.as_mut_ptr(),
+            self.process_output_r.as_mut_ptr(),
+        ];
+        let mut outputs = [AudioBusBuffers {
+            numChannels: DEFAULT_CHANNELS as i32,
+            silenceFlags: 0,
+            __field0: AudioBusBuffers__type0 {
+                channelBuffers32: output_ptrs.as_mut_ptr(),
+            },
+        }];
+        let Ok(num_samples) = i32::try_from(frames) else {
+            return false;
+        };
+        let mut process_data = ProcessData {
+            processMode: ProcessModes_::kRealtime as i32,
+            symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
+            numSamples: num_samples,
+            numInputs: 0,
+            numOutputs: 1,
+            inputs: ptr::null_mut(),
+            outputs: outputs.as_mut_ptr(),
+            inputParameterChanges: ptr::null_mut(),
+            outputParameterChanges: self.output_parameter_changes.as_ptr(),
+            inputEvents: self.input_events.as_ptr(),
+            outputEvents: self.output_events.as_ptr(),
+            processContext: ptr::null_mut(),
+        };
+        let result = unsafe {
+            self.processor
+                .as_ref()
+                .expect("processor remains alive until drop")
+                .process(&mut process_data)
+        };
+        self.input_events.clear();
+        if !is_ok(result) {
+            return false;
+        }
+        for frame in 0..frames {
+            let base = frame * DEFAULT_CHANNELS;
+            data[base] += self.process_output_l[frame];
+            data[base + 1] += self.process_output_r[frame];
+        }
+        true
+    }
+}
+
+impl Drop for Vst3InstrumentProcessor {
     fn drop(&mut self) {
         if let Some(processor) = self.processor.take() {
             unsafe {
@@ -1423,6 +1694,109 @@ impl IBStreamTrait for MemoryStream {
             *pos = self.pos.get() as i64;
         }
         kResultOk
+    }
+}
+
+/// Working input event list for the instrument processor. `IEventList` is queried synchronously
+/// from `IAudioProcessor::process`, so `RefCell` lets the Rust-facing queue and COM callbacks
+/// share one allocation without requiring a mutable COM interface.
+struct InputEventList {
+    wrapper: ComWrapper<HostInputEventList>,
+    ptr: ComPtr<IEventList>,
+}
+
+impl InputEventList {
+    fn new() -> Self {
+        let wrapper = ComWrapper::new(HostInputEventList::new());
+        let ptr = wrapper
+            .to_com_ptr::<IEventList>()
+            .expect("HostInputEventList exposes IEventList");
+        Self { wrapper, ptr }
+    }
+
+    fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32) {
+        self.wrapper.events.borrow_mut().push(Event {
+            busIndex: 0,
+            sampleOffset: 0,
+            ppqPosition: 0.0,
+            flags: Event_::EventFlags_::kIsLive as u16,
+            r#type: Event_::EventTypes_::kNoteOnEvent as u16,
+            __field0: Event__type0 {
+                noteOn: NoteOnEvent {
+                    channel,
+                    pitch,
+                    tuning: 0.0,
+                    velocity,
+                    length: 0,
+                    noteId: -1,
+                },
+            },
+        });
+    }
+
+    fn push_note_off(&self, channel: i16, pitch: i16, velocity: f32) {
+        self.wrapper.events.borrow_mut().push(Event {
+            busIndex: 0,
+            sampleOffset: 0,
+            ppqPosition: 0.0,
+            flags: Event_::EventFlags_::kIsLive as u16,
+            r#type: Event_::EventTypes_::kNoteOffEvent as u16,
+            __field0: Event__type0 {
+                noteOff: NoteOffEvent {
+                    channel,
+                    pitch,
+                    velocity,
+                    noteId: -1,
+                    tuning: 0.0,
+                },
+            },
+        });
+    }
+
+    fn clear(&self) {
+        self.wrapper.events.borrow_mut().clear();
+    }
+
+    fn as_ptr(&self) -> *mut IEventList {
+        self.ptr.as_ptr()
+    }
+}
+
+struct HostInputEventList {
+    events: RefCell<Vec<Event>>,
+}
+
+impl HostInputEventList {
+    fn new() -> Self {
+        Self {
+            events: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl Class for HostInputEventList {
+    type Interfaces = (IEventList,);
+}
+
+impl IEventListTrait for HostInputEventList {
+    unsafe fn getEventCount(&self) -> i32 {
+        self.events.borrow().len().min(i32::MAX as usize) as i32
+    }
+
+    unsafe fn getEvent(&self, index: i32, event: *mut Event) -> tresult {
+        if index < 0 || event.is_null() {
+            return kInvalidArgument;
+        }
+        let events = self.events.borrow();
+        let Some(source) = events.get(index as usize) else {
+            return kInvalidArgument;
+        };
+        *event = *source;
+        kResultOk
+    }
+
+    unsafe fn addEvent(&self, _event: *mut Event) -> tresult {
+        kResultFalse
     }
 }
 
