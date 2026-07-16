@@ -292,7 +292,12 @@ export function readDevDoc(sourceRoot: string, relativePath: string): string | n
   if (!filePath || path.extname(filePath) !== '.md' || !fs.existsSync(filePath)) {
     return null
   }
-  return fs.readFileSync(filePath, 'utf8')
+  try {
+    return fs.readFileSync(filePath, 'utf8')
+  } catch {
+    // TOCTOU: the file could vanish (docs rebuild) between existsSync and read.
+    return null
+  }
 }
 
 export interface DevDocSearchMatch {
@@ -312,7 +317,13 @@ export function searchDevDocs(sourceRoot: string, query: string, limit = 10): De
       if (entry.isDirectory()) {
         walk(entryPath)
       } else if (entry.isFile() && path.extname(entry.name) === '.md') {
-        const lines = fs.readFileSync(entryPath, 'utf8').split(/\r?\n/)
+        let lines: string[]
+        try {
+          lines = fs.readFileSync(entryPath, 'utf8').split(/\r?\n/)
+        } catch {
+          // Skip a file that becomes unreadable mid-walk rather than aborting the search.
+          continue
+        }
         for (let index = 0; index < lines.length && matches.length < limit; index += 1) {
           if (lines[index].toLowerCase().includes(needle)) {
             matches.push({
@@ -883,18 +894,34 @@ export async function startOrbitScoreMcpServer(opts: {
           return
         }
         if (!fs.existsSync(docsRoot)) {
+          log(`docs not built — docsRoot missing: ${docsRoot}`)
           res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
           res.end('Development docs are not built. Run npm run docs:build -w @orbitscore/dev-site')
           return
         }
         const filePath = resolveDocsFilePath(docsRoot, pathname.slice(DOCS_PUBLIC_BASE.length))
         if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+          log(`docs file not found for pathname: ${pathname}`)
           res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
           res.end('Not Found')
           return
         }
-        res.writeHead(200, { 'content-type': contentTypeForDocsFile(filePath) })
-        fs.createReadStream(filePath).pipe(res)
+        const contentType = contentTypeForDocsFile(filePath)
+        if (contentType === 'application/octet-stream') {
+          log(
+            `docs file served with fallback content-type (unknown extension ${path.extname(filePath)}): ${filePath}`,
+          )
+        }
+        res.writeHead(200, { 'content-type': contentType })
+        const stream = fs.createReadStream(filePath)
+        stream.on('error', (err) => {
+          log(`docs file stream error for ${filePath}: ${err}`)
+          if (!res.headersSent) {
+            res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+          }
+          res.end('Internal Server Error')
+        })
+        stream.pipe(res)
         return
       }
       if (pathname !== '/mcp') {

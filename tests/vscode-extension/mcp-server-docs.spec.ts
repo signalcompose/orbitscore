@@ -50,8 +50,18 @@ describe('development docs helpers', () => {
 
     expect(readDevDoc(root, 'guide/intro.md')).toContain('OrbitScore')
     expect(readDevDoc(root, '../outside.md')).toBeNull()
+    expect(readDevDoc(root, '')).toBeNull()
     expect(searchDevDocs(root, 'SEARCH')).toEqual([
       { path: 'guide/intro.md', line: 2, excerpt: 'OrbitScore search target' },
     ])
+  })
+
+  it('readDevDoc returns null for a file removed after the existsSync check (TOCTOU)', () => {
+    const root = temporaryDirectory()
+    const filePath = path.join(root, 'gone.md')
+    fs.writeFileSync(filePath, '# will be deleted')
+    fs.rmSync(filePath)
+
+    expect(readDevDoc(root, 'gone.md')).toBeNull()
   })
 })

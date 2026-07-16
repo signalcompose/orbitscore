@@ -421,7 +421,12 @@ async function openDevDocs(): Promise<void> {
     )
     return
   }
-  await vscode.env.openExternal(vscode.Uri.parse(`http://127.0.0.1:${port}/docs/`))
+  const url = `http://127.0.0.1:${port}/docs/`
+  const opened = await vscode.env.openExternal(vscode.Uri.parse(url))
+  if (!opened) {
+    outputChannel?.appendLine(`❌ Failed to open development docs at ${url}`)
+    void vscode.window.showErrorMessage('Could not open the development docs in your browser.')
+  }
 }
 
 /**
