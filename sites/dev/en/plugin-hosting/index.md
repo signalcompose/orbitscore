@@ -229,10 +229,21 @@ The following is the procedure verified in the real-hardware E2E for Issue #421 
 production), recorded in WORK_LOG 6.258.
 
 ```
+var global = init GLOBAL
+global.tempo(100)
+global.beat(4 by 4)
 global.key("C")
-seq.instrument("SynthOracle.vst3")
-play(1, 3, 5, 8)
-RUN(seq)
+global.start()
+
+var synth = init global.seq
+synth.instrument("/path/to/SynthOracle.vst3")
+synth.octave(4)
+synth.vel(96)
+synth.length(1)
+
+synth.play(1, 3, 5, 8)
+
+RUN(synth)
 ```
 
 Running the distribution-configuration release daemon + `cli-audio.js` with `ORBIT_CAPTURE_WAV`

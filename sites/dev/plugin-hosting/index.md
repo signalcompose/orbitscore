@@ -219,10 +219,21 @@ PH-4 章に譲る。
 以下は Issue #421（VST3 instrument production）の実機 E2E で実証済みの手順（WORK_LOG 6.258）。
 
 ```
+var global = init GLOBAL
+global.tempo(100)
+global.beat(4 by 4)
 global.key("C")
-seq.instrument("SynthOracle.vst3")
-play(1, 3, 5, 8)
-RUN(seq)
+global.start()
+
+var synth = init global.seq
+synth.instrument("/path/to/SynthOracle.vst3")
+synth.octave(4)
+synth.vel(96)
+synth.length(1)
+
+synth.play(1, 3, 5, 8)
+
+RUN(synth)
 ```
 
 配布構成の release daemon + `cli-audio.js` を `ORBIT_CAPTURE_WAV` 有効で実行すると、
