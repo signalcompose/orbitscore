@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.267 refactor(engine): unify effect-slot pool + self-heal across 3 managers #468 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（既存テスト全 green = 挙動ピン留めの下で統合）
+
+**内容**: `PluginEffectManager` / `SequenceEffectManager` / `MixerManager` に ~15 行ずつ
+複製されていたパターンを `effect-slot.ts` に一本化:
+- `resolveEffectSpec()` — validate → LinkAudio gate → resolve（順序 load-bearing）
+- `EffectSlotMap<K>` — 冪等再宣言 + respawn 後 self-heal（isPluginActive=false → 再ロード）+
+  install/rollback（自分の宣言のみ削除）。master insert は 3 引数呼びを維持（既存契約）
+- `BusPool` — prefix 連番 + free-list（失敗が pool を恒久消費しない #461 根拠を共通化）
+
+SequenceEffectManager は buses（passthrough 含む routing 用割当）と slots（実 insert）を
+分離し、「昇格/self-heal 失敗時は bus を返却しない・新規割当失敗のみ free-list へ返す」
+固有ロールバックを catch 側に残した。MixerManager は sum/aux を同型 KindState 2 面に。
+
+**検証**: 既存の manager 系テスト（global-plugin-effect / sequence-effect /
+global-mixer-sum-aux 等）を変更せず全 green・全体 1425 passed。
+
+Refs #468 #467
 ### 6.266 feat: import I3 — REPL メタ行で基準ディレクトリを帯域外先渡し #456 (Jul 17, 2026)
 
 **Date**: 2026-07-17

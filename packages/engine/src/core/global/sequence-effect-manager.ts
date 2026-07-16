@@ -2,7 +2,7 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
-import { resolvePluginPath, validatePluginExtension } from './plugin-resolver'
+import { BusPool, EffectSlotMap, resolveEffectSpec } from './effect-slot'
 
 /**
  * Bus name prefix for the daemon's default per-sequence insert bus pool. Must
@@ -19,49 +19,46 @@ export const SEQUENCE_EFFECT_BUS_PREFIX = 'seq-bus-'
  */
 export const SEQUENCE_EFFECT_BUS_POOL_SIZE = 8
 
-interface SeqEffectDeclaration {
-  bus: string
-  // undefined = passthrough-only (bus allocated via `ensureBus()`, no plugin loaded yet —
-  // MX.4/#459/#453 M3: `seq.output()`/`seq.send()` on a sequence without `seq.effect()`).
-  resolvedPath?: string
-  pluginId?: string
-  load: Promise<void>
-}
-
 /**
  * Owns the per-sequence insert (`seq.effect()` — PH.2b / #434 S3) declarations:
  * one bus per sequence, allocated from the daemon's default bus pool
- * (`seq-bus-0`.."seq-bus-7"). Mirrors `PluginEffectManager` /
- * `PluginInstrumentManager`'s eager-load + idempotent-redeclare pattern, keyed
- * by sequence name instead of a single master slot.
+ * (`seq-bus-0`.."seq-bus-7"). 実装は #468 の共通基盤（`BusPool` + `EffectSlotMap`）に
+ * 委譲し、この manager 固有なのは「passthrough bus（`ensureBus()` — plugin 未ロードの
+ * routing 用割当・MX.4）と insert の分離、および昇格失敗時に bus を返却しない
+ * ロールバック」だけ。
  */
 export class SequenceEffectManager {
-  private readonly declarations = new Map<string, SeqEffectDeclaration>()
-  private nextBusIndex = 0
-  /**
-   * 失敗した宣言から返却された bus 名の free-list。ライブコーディングでは
-   * 「typo → 失敗 → 直して再宣言」が普通に起きるため、失敗が pool を恒久消費すると
-   * 数回のリトライで枯渇する（#461 review Important）。返却された名前を優先的に再利用する。
-   */
-  private freedBuses: string[] = []
+  /** sequenceName → 割当 bus（passthrough 含む）。routing（output/send）が参照する。 */
+  private readonly buses = new Map<string, string>()
+  /** sequenceName → 実 insert 宣言（passthrough は含まない）。 */
+  private readonly slots: EffectSlotMap<string>
+  private readonly pool = new BusPool(
+    SEQUENCE_EFFECT_BUS_PREFIX,
+    SEQUENCE_EFFECT_BUS_POOL_SIZE,
+    (name) =>
+      `Sequence '${name}': seq.effect() insert bus pool exhausted — v1 supports at ` +
+      `most ${SEQUENCE_EFFECT_BUS_POOL_SIZE} sequences with a concurrent insert.`,
+  )
 
   constructor(
-    private readonly audioEngine: AudioEngine,
+    audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
-  ) {}
+  ) {
+    this.slots = new EffectSlotMap(audioEngine)
+  }
 
   hasDeclaration(sequenceName: string): boolean {
-    return this.declarations.has(sequenceName)
+    return this.buses.has(sequenceName)
   }
 
   /** Whether any sequence has declared an insert (used by `Global.linkAudio()`'s v1 exclusion gate). */
   hasAnyDeclaration(): boolean {
-    return this.declarations.size > 0
+    return this.buses.size > 0
   }
 
   getBus(sequenceName: string): string | undefined {
-    return this.declarations.get(sequenceName)?.bus
+    return this.buses.get(sequenceName)
   }
 
   /**
@@ -74,105 +71,49 @@ export class SequenceEffectManager {
    * bus in place instead of allocating a second one (see `effect()` below).
    */
   ensureBus(sequenceName: string): string {
-    const existing = this.declarations.get(sequenceName)
-    if (existing) return existing.bus
-    const bus = this.freedBuses.pop() ?? this.allocateFreshBus(sequenceName)
-    this.declarations.set(sequenceName, { bus, load: Promise.resolve() })
+    const existing = this.buses.get(sequenceName)
+    if (existing) return existing
+    const bus = this.pool.acquire(sequenceName)
+    this.buses.set(sequenceName, bus)
     return bus
   }
 
   /** Declares (or idempotently re-declares) the insert for `sequenceName`. Returns the allocated bus name. */
   async effect(sequenceName: string, spec: string, pluginId?: string): Promise<string> {
-    // Order mirrors PluginEffectManager.effect(): validate the spec, gate on
-    // LinkAudio, then resolve the path (see that file's doc comment for why).
-    validatePluginExtension(spec, 'effect')
-
-    if (this.linkAudioManager.isEnabled()) {
-      throw new Error(
-        `Sequence '${sequenceName}': seq.effect() cannot be used while LinkAudio is enabled in v1.`,
-      )
-    }
-
-    const resolvedPath = resolvePluginPath(
+    const resolvedPath = resolveEffectSpec(
       spec,
-      this.audioManager.getAudioPaths(),
-      this.audioManager.getDocumentDirectory(),
-      'effect',
+      { audioManager: this.audioManager, linkAudioManager: this.linkAudioManager },
+      `Sequence '${sequenceName}': seq.effect() cannot be used while LinkAudio is enabled in v1.`,
     )
 
-    const existing = this.declarations.get(sequenceName)
-    // A passthrough-only declaration (from ensureBus(), no resolvedPath yet) is not a real
-    // insert — upgrade it in place instead of treating it as an existing insert declaration.
-    if (existing && existing.resolvedPath !== undefined) {
-      if (existing.resolvedPath === resolvedPath && existing.pluginId === pluginId) {
-        await existing.load
-        // Self-heal on stale cache after a daemon respawn (see PluginEffectManager
-        // for the full rationale). Engines without isPluginActive keep the old
-        // no-op idempotent behavior.
-        if (this.audioEngine.isPluginActive?.('effect', existing.bus) === false) {
-          await this.issueLoad(sequenceName, existing.bus, resolvedPath, pluginId)
-        }
-        return existing.bus
-      }
-      throw new Error(
+    const duplicateError = () =>
+      new Error(
         `Sequence '${sequenceName}': seq.effect() supports one insert per sequence in v1; ` +
           `chains (multiple inserts) are reserved for future support.`,
       )
-    }
 
-    const wasPassthrough = existing !== undefined
-    const bus = existing?.bus ?? this.freedBuses.pop() ?? this.allocateFreshBus(sequenceName)
+    // passthrough（ensureBus 由来・insert 未ロード）は「既存 insert」ではない — 同じ bus を
+    // その場で昇格する。実 insert が既にあれば slots.declare が冪等/self-heal/重複エラーを担う。
+    const hadBus = this.buses.has(sequenceName)
+    const bus = this.buses.get(sequenceName) ?? this.pool.acquire(sequenceName)
+    this.buses.set(sequenceName, bus)
     try {
-      await this.issueLoad(sequenceName, bus, resolvedPath, pluginId)
+      await this.slots.declare(sequenceName, bus, resolvedPath, pluginId, duplicateError)
     } catch (err) {
-      if (wasPassthrough) {
-        // ロールバック: passthrough から昇格しようとして失敗した場合は bus を pool に
-        // 戻さず、passthrough 状態に戻す（seq.output()/seq.send() の routing がまだその
-        // bus を参照しているため — bus 自体は生き続ける必要がある）。
-        this.declarations.set(sequenceName, { bus, load: Promise.resolve() })
-      } else {
-        // 新規割当が失敗した場合は free-list に返す（daemon 側も activation を巻き戻す
-        // ため、両側の状態が対称に戻る）。
-        this.freedBuses.push(bus)
+      if (!hadBus) {
+        // この呼び出しで新規に確保した bus の load 失敗: free-list へ返す（daemon 側も
+        // activation を巻き戻すため、両側の状態が対称に戻る）。
+        this.buses.delete(sequenceName)
+        this.pool.release(bus)
       }
+      // 既存 bus（passthrough 昇格 / self-heal 再ロード）の失敗は bus を返却しない —
+      // seq.output()/seq.send() の routing がその bus を参照し続けているため。
+      // 【意図的な旧実装との差分】旧実装は self-heal 再ロード失敗で宣言ごと bus を消して
+      // いた（hasDeclaration/hasAnyDeclaration が false に反転 = LinkAudio 排他ゲートが
+      // 緩む + routing が参照中の bus 名が pool 外へ漏失）。本実装は bus を温存する —
+      // MixerManager の従来挙動とも一致（#472 レビューで確認・回帰テストでピン留め済み）。
       throw err
     }
     return bus
-  }
-
-  private allocateFreshBus(sequenceName: string): string {
-    if (this.nextBusIndex >= SEQUENCE_EFFECT_BUS_POOL_SIZE) {
-      throw new Error(
-        `Sequence '${sequenceName}': seq.effect() insert bus pool exhausted — v1 supports at ` +
-          `most ${SEQUENCE_EFFECT_BUS_POOL_SIZE} sequences with a concurrent insert.`,
-      )
-    }
-    const bus = `${SEQUENCE_EFFECT_BUS_PREFIX}${this.nextBusIndex}`
-    this.nextBusIndex += 1
-    return bus
-  }
-
-  private async issueLoad(
-    sequenceName: string,
-    bus: string,
-    resolvedPath: string,
-    pluginId: string | undefined,
-  ): Promise<void> {
-    if (!this.audioEngine.loadPlugin) {
-      throw new Error('Plugin hosting requires the Rust engine backend.')
-    }
-    const load = this.audioEngine
-      .loadPlugin(resolvedPath, pluginId, 'effect', bus)
-      .then(() => undefined)
-    const declaration: SeqEffectDeclaration = { bus, resolvedPath, pluginId, load }
-    this.declarations.set(sequenceName, declaration)
-    try {
-      await load
-    } catch (err) {
-      if (this.declarations.get(sequenceName) === declaration) {
-        this.declarations.delete(sequenceName)
-      }
-      throw err
-    }
   }
 }
