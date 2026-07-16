@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.260 feat(mcp): dev learning site のローカル配信 + MCP ツール + OrbitStudio 導線 #450 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（PR 作成・レビューへ）
+**Branch**: `450-mcp-dev-docs-serving`
+
+owner 要望「learning site をユーザー/LLM がローカル参照できるように。MCP サーバに
+機能的に組み込み、ブラウザ経由・MCP 経由で見れるように。OrbitStudio からワンクリック」。
+実装 = Codex 委譲 + main の受け入れ監査（base 整合の修正1件）。
+
+- **static 配信**: 拡張内 MCP HTTP サーバ（mcp-server.ts・127.0.0.1）に
+  `sites/dev/.vitepress/dist` の配信を追加。**配信 prefix = SITE_BASE
+  （`/orbitscore/dev/`）と一致させる**（dist 内の asset/ナビ URL は base 絶対
+  パスのため、他 prefix では全 asset が 404 になる — 受け入れ監査で検出し
+  `/docs` は 302 redirect に変更）。path traversal 防御（decode → `..`/`\` 拒否 →
+  resolve 後に root 内検証）・Host-header allowlist は `/mcp` と共通・dist 不在時は
+  503 + ビルドコマンド案内
+- **MCP ツール**: `get_dev_doc(path)`（ソース md を site 相対パスで取得）・
+  `search_dev_docs(query, limit)`（md 全文の case-insensitive 検索・
+  {path,line,excerpt}）。LLM がサイト本文を直接参照できる
+- **OrbitStudio 導線**: `orbitscore.openDevDocs` コマンド + status bar `$(book) Docs`
+  ボタン（MCP サーバ起動時のみ表示・`vscode.env.openExternal`）
+- unit テスト: resolveDocsRoot / resolveDocsFilePath（traversal・%2e%2e）/
+  readDevDoc / searchDevDocs（.vitepress 除外）
+- 検証: npm run build green・vscode-extension テスト 122/122・変更ファイル lint クリーン
+- 関連: #451（サイト内容の 2026-07 追随・日英・E2E 兼用カリキュラム）が別トラックで進行
+
 ### 6.259 docs: Plugin Hosting docs 同期（#421 / #445 実装事実の反映） #449 (Jul 17, 2026)
 
 **Date**: 2026-07-17

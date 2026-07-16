@@ -47,6 +47,7 @@ let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let bundleStatusItem: vscode.StatusBarItem | null = null
+let docsStatusItem: vscode.StatusBarItem | null = null
 let isLiveCodingMode: boolean = false
 // Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
 // Used to decide if `global.setDocumentDirectory(...)` can be prepended safely.
@@ -261,6 +262,13 @@ export async function activate(context: vscode.ExtensionContext) {
   updateBundleStatus()
   bundleStatusItem.show()
 
+  // The development docs are served by the optional MCP server, so this stays
+  // hidden until that server has successfully started.
+  docsStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98)
+  docsStatusItem.text = '$(book) Docs'
+  docsStatusItem.tooltip = 'Open OrbitScore development docs'
+  docsStatusItem.command = 'orbitscore.openDevDocs'
+
   // Re-evaluate bundle status when user changes the override setting or
   // switches engine kind (#377: kind gates whether scsynth is even resolved).
   context.subscriptions.push(
@@ -295,8 +303,10 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
+    vscode.commands.registerCommand('orbitscore.openDevDocs', openDevDocs),
     statusBarItem,
     bundleStatusItem,
+    docsStatusItem,
   )
 
   // Register IntelliSense providers
@@ -377,6 +387,7 @@ export async function activate(context: vscode.ExtensionContext) {
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
       })
+      docsStatusItem?.show()
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       outputChannel?.appendLine(`❌ MCP server failed to start on port ${mcpPort}: ${reason}`)
@@ -399,6 +410,18 @@ export function deactivate() {
   outputChannel?.dispose()
   statusBarItem?.dispose()
   bundleStatusItem?.dispose()
+  docsStatusItem?.dispose()
+}
+
+async function openDevDocs(): Promise<void> {
+  const port = mcpServerHandle?.port ?? 0
+  if (!port) {
+    void vscode.window.showErrorMessage(
+      'OrbitScore development docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
+    )
+    return
+  }
+  await vscode.env.openExternal(vscode.Uri.parse(`http://127.0.0.1:${port}/docs/`))
 }
 
 /**
