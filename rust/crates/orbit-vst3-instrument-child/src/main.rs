@@ -175,6 +175,25 @@ fn to_vst3_offset(offset: u32) -> i32 {
     offset.min(i32::MAX as u32) as i32
 }
 
+/// note-off を instrument へ送り、同 addr/sample_offset の synthetic NOTE_END を積む。
+/// VST3 には CLAP の NOTE_END 相当の plugin→host イベントが無いため、child がここで合成して
+/// host の (port,channel,key) voice 簿記を閉じる（NoteOff / NoteChoke 共通・choke は velocity 0）。
+#[cfg(target_os = "macos")]
+fn note_off_and_end(
+    instrument: &mut Vst3InstrumentProcessor,
+    output_events: &mut Vec<NeutralEvent>,
+    addr: VoiceAddr,
+    velocity: f32,
+    sample_offset: u32,
+) {
+    let (channel, pitch) = vst3_channel_pitch(addr);
+    instrument.push_note_off(channel, pitch, velocity, to_vst3_offset(sample_offset));
+    output_events.push(NeutralEvent::NoteEnd {
+        sample_offset,
+        addr,
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
@@ -247,41 +266,29 @@ fn main() -> Result<()> {
                             to_vst3_offset(sample_offset),
                         );
                     }
+                    // NoteOff / NoteChoke は同じ形: VST3 note-off を送り、VST3 に無い NOTE_END を
+                    // 同ブロックで合成して host の voice 簿記を閉じる（choke は velocity 0 扱い）。
                     NeutralEvent::NoteOff {
                         sample_offset,
                         addr,
                         velocity,
-                    } => {
-                        let (channel, pitch) = vst3_channel_pitch(addr);
-                        instrument.push_note_off(
-                            channel,
-                            pitch,
-                            velocity as f32,
-                            to_vst3_offset(sample_offset),
-                        );
-                        // VST3 has no NOTE_END callback: synthesize it in this same block.
-                        output_events.push(NeutralEvent::NoteEnd {
-                            sample_offset,
-                            addr,
-                        });
-                    }
+                    } => note_off_and_end(
+                        &mut instrument,
+                        &mut output_events,
+                        addr,
+                        velocity as f32,
+                        sample_offset,
+                    ),
                     NeutralEvent::NoteChoke {
                         sample_offset,
                         addr,
-                    } => {
-                        let (channel, pitch) = vst3_channel_pitch(addr);
-                        instrument.push_note_off(
-                            channel,
-                            pitch,
-                            0.0,
-                            to_vst3_offset(sample_offset),
-                        );
-                        // Choke likewise terminates the host's matching voice bookkeeping entry.
-                        output_events.push(NeutralEvent::NoteEnd {
-                            sample_offset,
-                            addr,
-                        });
-                    }
+                    } => note_off_and_end(
+                        &mut instrument,
+                        &mut output_events,
+                        addr,
+                        0.0,
+                        sample_offset,
+                    ),
                     _ => unsafe {
                         (*region).event_decode_error_count.fetch_add(1, Relaxed);
                     },

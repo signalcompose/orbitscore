@@ -199,45 +199,30 @@ fn vst3_probe_path() -> PathBuf {
 
 fn package_oracle() -> Option<PathBuf> {
     static ORACLE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    ORACLE.get_or_init(package_gain_oracle).clone()
-}
-
-fn package_gain_oracle() -> Option<PathBuf> {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let script = manifest_dir
-        .parent()
-        .expect("crate has parent")
-        .join("orbit-vst3-gain-oracle")
-        .join("package-oracle.sh");
-    let output = Command::new(&script).output().ok()?;
-    if !output.status.success() {
-        eprintln!(
-            "oracle packaging failed: status={} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Some(PathBuf::from(stdout.trim()))
+    ORACLE
+        .get_or_init(|| run_package_script("orbit-vst3-gain-oracle"))
+        .clone()
 }
 
 fn package_synth_oracle() -> Option<PathBuf> {
     static ORACLE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    ORACLE.get_or_init(package_synth_oracle_once).clone()
+    ORACLE
+        .get_or_init(|| run_package_script("orbit-vst3-synth-oracle"))
+        .clone()
 }
 
-fn package_synth_oracle_once() -> Option<PathBuf> {
+/// `crates/<crate_dir>/package-oracle.sh` を実行して bundle の絶対パスを得る（失敗は loud skip）。
+fn run_package_script(crate_dir: &str) -> Option<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let script = manifest_dir
         .parent()
         .expect("crate has parent")
-        .join("orbit-vst3-synth-oracle")
+        .join(crate_dir)
         .join("package-oracle.sh");
     let output = Command::new(&script).output().ok()?;
     if !output.status.success() {
         eprintln!(
-            "synth oracle packaging failed: status={} stderr={}",
+            "{crate_dir} packaging failed: status={} stderr={}",
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
