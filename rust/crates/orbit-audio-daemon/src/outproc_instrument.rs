@@ -416,10 +416,10 @@ impl InstrumentChildSupervisor {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
                             try_wait_errors = 0;
-                            // READY publication races with the host clearing initial_attach_pending:
-                            // a child can publish READY and then crash in that window.  Only a
-                            // pre-READY exit is an attach fast-fail; a post-READY exit must reach
-                            // the normal respawn path or the host could install a dead Active slot.
+                            // READY の publish は host が initial_attach_pending をクリアする処理と競合する:
+                            // child は READY を publish した直後にその窓で crash しうる。pre-READY の exit の
+                            // みが attach fast-fail であり、post-READY の exit は通常の respawn 経路に到達
+                            // しなければならない（さもないと host が死んだ Active slot を install しうる）。
                             if stats.initial_attach_pending.load(Ordering::Acquire)
                                 && unsafe {
                                     (*region).child_status.load(Ordering::Acquire)
@@ -529,7 +529,8 @@ impl InstrumentChildSupervisor {
         })
     }
 
-    /// Stop/reap the child but leave shm unlink ownership with `ChildLaunch` for a retry.
+    /// shm の unlink 所有権を `ChildLaunch` に残したまま supervisor を teardown する（retry 用）。
+    /// 本体は `unlink_shm` を倒すだけで、stop/reap は値渡しで consume した self の即時 Drop が行う。
     pub fn detach_keep_shm(mut self) {
         self.unlink_shm = false;
     }
@@ -977,11 +978,11 @@ mod tests {
     fn supervisor_respawns_child_on_unexpected_exit() {
         let shm = make_shm();
         let stats = OutProcInstrumentStats::new();
-        // Regression for #441: a post-READY crash while attach is still pending must respawn.
+        // #441 の regression: attach 保留中の post-READY crash は respawn しなければならない。
         stats.initial_attach_pending.store(true, Ordering::Release);
         let mmap = open_shared(&shm).expect("open shm to publish READY");
         let region = region_ptr(&mmap);
-        // SAFETY: mmap owns the live shared region for this test.
+        // SAFETY: mmap はこのテストの生存する shared region を所有する。
         unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, false) };
         let first = Command::new("sleep")
             .arg("0.2")

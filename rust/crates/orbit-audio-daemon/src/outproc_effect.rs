@@ -488,11 +488,11 @@ impl EffectChildSupervisor {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
                             try_wait_errors = 0;
-                            // READY publication races with the host clearing initial_attach_pending:
-                            // a child can publish READY and then crash in that window.  Treating it
-                            // as an early attach exit would stop this watchdog, while the host can
-                            // still observe READY and install a dead Active slot.  Only pre-READY
-                            // exits fast-fail; post-READY exits must use the normal respawn path.
+                            // READY の publish は host が initial_attach_pending をクリアする処理と競合する:
+                            // child は READY を publish した直後にその窓で crash しうる。これを attach 初期の
+                            // 早期 exit として扱うと本 watchdog が停止してしまう一方、host は READY を観測して
+                            // 死んだ Active slot を install しうる。pre-READY の exit のみ fast-fail とし、
+                            // post-READY の exit は通常の respawn 経路を使わなければならない。
                             if stats.initial_attach_pending.load(Ordering::Acquire)
                                 && unsafe {
                                     (*region).child_status.load(Ordering::Acquire)
@@ -594,7 +594,8 @@ impl EffectChildSupervisor {
         })
     }
 
-    /// Stop/reap the child but leave shm unlink ownership with `ChildLaunch` for a retry.
+    /// shm の unlink 所有権を `ChildLaunch` に残したまま supervisor を teardown する（retry 用）。
+    /// 本体は `unlink_shm` を倒すだけで、stop/reap は値渡しで consume した self の即時 Drop が行う。
     pub fn detach_keep_shm(mut self) {
         self.unlink_shm = false;
     }
@@ -883,12 +884,12 @@ mod tests {
     fn supervisor_respawns_child_on_unexpected_exit() {
         let shm = make_shm();
         let stats = OutProcEffectStats::new();
-        // Regression for #441: READY may be visible while the host has not yet cleared this flag.
-        // The watchdog must respawn rather than taking the initial-attach fast-fail branch.
+        // #441 の regression: host がまだこのフラグをクリアしていない間も READY は見えうる。
+        // watchdog は initial-attach fast-fail 分岐ではなく respawn を行わなければならない。
         stats.initial_attach_pending.store(true, Ordering::Release);
         let mmap = open_shared(&shm).expect("open shm to publish READY");
         let region = region_ptr(&mmap);
-        // SAFETY: mmap owns the live shared region for this test.
+        // SAFETY: mmap はこのテストの生存する shared region を所有する。
         unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, true) };
         let first = Command::new("sleep")
             .arg("0.2")

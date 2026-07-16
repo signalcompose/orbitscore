@@ -73,10 +73,10 @@ pub enum WrapError {
     /// out-of-process instrument の runtime failure。
     #[error("out-of-process instrument runtime error: {0}")]
     OutProcInstrument(String),
-    /// Attach failed after child launch but the shm slot was restored and may be retried.
+    /// child launch 後の attach が失敗したが、shm slot は復元済みで再試行可能。
     #[error("out-of-process attach failed: {0}")]
     OutProcAttachFailed(String),
-    /// The OOP slot is permanently closed (startup infrastructure failure).
+    /// OOP slot が永久に closed（起動インフラの失敗）。
     #[error("out-of-process slot closed: {0}")]
     OutProcSlotClosed(String),
 }
@@ -1047,7 +1047,7 @@ impl EngineWrap {
         // readiness を初期化し、前 incarnation の READY を誤認しない。
         unsafe { orbit_audio_sandbox::transport::reset_child_starting(region) };
 
-        // Set before spawn so an immediately-exiting child cannot race into normal respawn.
+        // spawn 前にセットしておくことで、即座に終了する child が通常の respawn 経路に紛れ込むのを防ぐ。
         launch
             .stats
             .initial_attach_pending
@@ -2097,13 +2097,17 @@ fn retryable_attach_failure(
     launch: ChildLaunch,
     message: String,
 ) -> WrapError {
+    tracing::warn!("outproc attach failed (retryable): {message}");
     supervisor.detach_keep_shm();
-    // teardown wrote QUIT; the retry child must start in RUN mode.
+    // teardown が CONTROL_QUIT を書いたので、retry する child は RUN モードで起動する必要がある。
     unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
-    let mut slot = match child_slot.lock() {
-        Ok(slot) => slot,
-        Err(_) => return outproc_runtime_error("child slot mutex poisoned"),
-    };
+    let mut slot = child_slot.lock().unwrap_or_else(|poisoned| {
+        // poison はロック保持中の他 thread panic を意味するが、Loading→X の書き手は本関数のみ
+        // なので回復して Empty 復帰を完遂する（放置すると slot が Loading で恒久スタックし、
+        // 以後の LoadPlugin が偽の「in progress」で永久に失敗する）。
+        tracing::error!("child slot mutex poisoned during retryable attach failure; recovering");
+        poisoned.into_inner()
+    });
     debug_assert_slot_loading(&slot);
     *slot = ChildSlot::Empty(launch);
     WrapError::OutProcAttachFailed(message)
@@ -2999,7 +3003,7 @@ mod outproc_load_error_test_support {
             let path = PathBuf::from(plugin_path);
             let call = std::thread::spawn(move || wrap_call.load_outproc_plugin(path, None));
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            // PID is published after reset_child_starting, so this READY cannot be wiped by it.
+            // PID は reset_child_starting の後に publish されるため、この READY はそれによって消されない。
             while stats
                 .current_child_pid
                 .load(std::sync::atomic::Ordering::Relaxed)
