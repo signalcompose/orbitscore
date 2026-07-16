@@ -57,6 +57,9 @@ pub enum WrapError {
     /// 専用スレッド不在・mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("clap host runtime error: {0}")]
     Clap(String),
+    /// in-process CLAP host は単一 slot のため、先にロード済みの role と異なる再ロードを拒否する。
+    #[error("clap cross-role load rejected: {0}")]
+    ClapCrossRoleRejected(String),
     /// CLAP plugin hosting は利用可能だが、まだ一度も `load_plugin` に成功していない（#405）。
     /// feature-gap（`ClapUnavailable`）でも汎用 runtime エラー（`Clap`）でもなく、専用コードにすることで
     /// クライアントが「LoadPlugin をまだ呼んでいない／失敗した」ことを actionable に判定できるようにする
@@ -498,6 +501,8 @@ const CHILD_READY_POLL: Duration = Duration::from_millis(10);
 struct ClapControl {
     /// 専用スレッドへ `LoadPlugin` を送る Sender。
     cmd_tx: std::sync::mpsc::Sender<crate::clap_host::ClapCommand>,
+    /// 単一 CLAP slot に正常ロード済みの plugin role。成功応答後だけ更新する。
+    loaded_role: Option<ClapPluginRole>,
     /// audio thread（cpal callback の `ClapPostProcessor`）へ note を渡す event ring producer。
     event_tx: rtrb::Producer<orbit_clap_host::PluginEvent>,
     /// CLAP processor 統計（post-mix peak / process error 等）。daemon が読む。
@@ -505,6 +510,13 @@ struct ClapControl {
     /// callback-duration 統計（A0 §6: CoreAudio+cpal は xrun 不発火 → RT 健全性は callback 実測時間で
     /// 測る）。daemon の RT 監視 / gated test の budget 検証が読む。
     cb_stats: Arc<orbit_audio_native::CallbackTimeStats>,
+}
+
+/// in-process CLAP host の単一 slot に紐付く plugin role。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClapPluginRole {
+    Effect,
+    Instrument,
 }
 
 /// CLAP plugin の activate に渡す最大フレーム数。daemon の cpal stream は可変 buffer（`None`）なので
@@ -794,6 +806,7 @@ impl EngineWrap {
             .lock()
             .map_err(|_| WrapError::Clap("clap mutex poisoned".into()))? = Some(ClapControl {
             cmd_tx,
+            loaded_role: None,
             event_tx: parts.event_producer,
             stats: parts.stats,
             cb_stats,
@@ -1604,19 +1617,28 @@ impl EngineWrap {
         &self,
         path: PathBuf,
         plugin_id: Option<String>,
+        role: ClapPluginRole,
     ) -> Result<LoadedPluginSummary, WrapError> {
         let (reply_tx, reply_rx) = std::sync::mpsc::channel();
         {
             // lock は send までで解放し、reply 待ちの blocking を mutex 外で行う。
-            let guard = self
+            let mut guard = self
                 .clap
                 .lock()
                 .map_err(|_| WrapError::Clap("clap mutex poisoned".into()))?;
-            let ctl = guard.as_ref().ok_or_else(|| {
+            let ctl = guard.as_mut().ok_or_else(|| {
                 WrapError::ClapUnavailable(
                     "clap host not initialized (test backend has no clap path)".into(),
                 )
             })?;
+            if let Some(loaded_role) = ctl.loaded_role {
+                if loaded_role != role {
+                    return Err(WrapError::ClapCrossRoleRejected(
+                        "in-process clap-host has one plugin slot; unload before changing role"
+                            .into(),
+                    ));
+                }
+            }
             ctl.cmd_tx
                 .send(crate::clap_host::ClapCommand::LoadPlugin {
                     path,
@@ -1632,6 +1654,11 @@ impl EngineWrap {
             Ok(Ok(info)) => {
                 // #405: 以後 push_plugin_event が「未ロード」を検知して事前に弾けるようにする。
                 self.plugin_loaded.store(true, Ordering::Relaxed);
+                if let Ok(mut guard) = self.clap.lock() {
+                    if let Some(ctl) = guard.as_mut() {
+                        ctl.loaded_role = Some(role);
+                    }
+                }
                 Ok(LoadedPluginSummary {
                     plugin_id: info.plugin_id,
                     plugin_name: info.plugin_name,
@@ -1649,6 +1676,7 @@ impl EngineWrap {
         &self,
         _path: PathBuf,
         _plugin_id: Option<String>,
+        _role: ClapPluginRole,
     ) -> Result<LoadedPluginSummary, WrapError> {
         Err(WrapError::ClapUnavailable(
             "engine built without 'clap-host' feature".into(),
@@ -2709,6 +2737,7 @@ mod plugin_load_gate_tests {
         let cb_stats = orbit_audio_native::CallbackTimeStats::new();
         *wrap.clap.lock().expect("clap mutex") = Some(ClapControl {
             cmd_tx,
+            loaded_role: None,
             event_tx,
             stats,
             cb_stats,
@@ -2777,7 +2806,7 @@ mod plugin_load_gate_tests {
                 .expect("load_plugin should still be waiting for reply");
         });
 
-        let result = wrap.load_plugin(PathBuf::from("dummy.clap"), None);
+        let result = wrap.load_plugin(PathBuf::from("dummy.clap"), None, ClapPluginRole::Effect);
         responder.join().expect("responder thread should not panic");
 
         // `LoadedPluginSummary` は Debug 未実装のため `assert!(result.is_ok(), "{result:?}")`
@@ -2789,6 +2818,60 @@ mod plugin_load_gate_tests {
         assert!(
             wrap.plugin_loaded.load(Ordering::Relaxed),
             "load_plugin success branch must set plugin_loaded"
+        );
+    }
+
+    #[test]
+    fn same_role_resend_reaches_existing_already_loaded_path() {
+        let (wrap, cmd_rx) = loadable_engine();
+        wrap.clap
+            .lock()
+            .expect("clap mutex")
+            .as_mut()
+            .expect("clap control")
+            .loaded_role = Some(ClapPluginRole::Effect);
+        let responder = std::thread::spawn(move || {
+            let crate::clap_host::ClapCommand::LoadPlugin { reply, .. } = cmd_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("same-role resend should reach clap host");
+            reply
+                .send(Err("AlreadyLoaded".to_string()))
+                .expect("caller should wait for reply");
+        });
+
+        let result = wrap.load_plugin(PathBuf::from("dummy.clap"), None, ClapPluginRole::Effect);
+        responder.join().expect("responder thread should not panic");
+        assert!(
+            matches!(result, Err(WrapError::Clap(message)) if message == "AlreadyLoaded"),
+            "same-role resend must preserve the clap host's AlreadyLoaded behavior"
+        );
+    }
+
+    #[test]
+    fn different_role_resend_is_rejected_before_clap_host_replacement() {
+        let (wrap, cmd_rx) = loadable_engine();
+        wrap.clap
+            .lock()
+            .expect("clap mutex")
+            .as_mut()
+            .expect("clap control")
+            .loaded_role = Some(ClapPluginRole::Effect);
+
+        let result = wrap.load_plugin(
+            PathBuf::from("dummy.clap"),
+            None,
+            ClapPluginRole::Instrument,
+        );
+        assert!(
+            matches!(result, Err(WrapError::ClapCrossRoleRejected(_))),
+            "different role must be rejected before the single slot can be replaced"
+        );
+        assert!(
+            matches!(
+                cmd_rx.recv_timeout(Duration::from_millis(50)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "cross-role rejection must not send a replacement command to clap host"
         );
     }
 
