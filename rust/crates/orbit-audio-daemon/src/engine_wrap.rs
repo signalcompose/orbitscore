@@ -259,177 +259,14 @@ pub(crate) trait OutProcRole: Sized {
 pub(crate) struct EffectRole;
 #[cfg(feature = "outproc-instrument")]
 pub(crate) struct InstrumentRole;
-#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-pub(crate) struct DefaultOutProcRole;
-
+/// single-role ビルドの既定 role（both ビルドでは legacy API 用に effect を指す）。
+/// 委譲 impl を複製せず type alias で本体 impl を継承する。
 #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-impl OutProcRole for DefaultOutProcRole {
-    type Stats = crate::outproc_effect::OutProcEffectStats;
-    type Supervisor = crate::outproc_effect::EffectChildSupervisor;
-    const ROLE_NAME: &'static str = EffectRole::ROLE_NAME;
-    fn spawn_child(
-        launch: &ChildLaunch<Self>,
-        path: &std::path::Path,
-        plugin_id: Option<&str>,
-    ) -> std::io::Result<std::process::Child> {
-        crate::outproc_effect::spawn_effect_child(
-            &launch.child_exe,
-            &launch.shm_path,
-            path,
-            plugin_id,
-            launch.sample_rate,
-        )
-    }
-    fn spawn_supervisor(
-        child: std::process::Child,
-        launch: &ChildLaunch<Self>,
-        path: PathBuf,
-        plugin_id: Option<String>,
-    ) -> std::io::Result<Self::Supervisor> {
-        crate::outproc_effect::EffectChildSupervisor::spawn(
-            child,
-            launch.shm_path.clone(),
-            launch.stats.clone(),
-            launch.child_exe.clone(),
-            path,
-            plugin_id,
-            launch.sample_rate,
-        )
-    }
-    fn detach_keep_shm(supervisor: Self::Supervisor) {
-        supervisor.detach_keep_shm();
-    }
-    fn role_matches(flags: u32) -> bool {
-        EffectRole::role_matches(flags)
-    }
-    fn runtime_error(message: String) -> WrapError {
-        EffectRole::runtime_error(message)
-    }
-    fn set_initial_attach_pending(stats: &Self::Stats, value: bool) {
-        EffectRole::set_initial_attach_pending(stats, value)
-    }
-    fn set_child_early_exit(stats: &Self::Stats, value: bool) {
-        EffectRole::set_child_early_exit(stats, value)
-    }
-    fn child_early_exit(stats: &Self::Stats) -> bool {
-        EffectRole::child_early_exit(stats)
-    }
-    fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
-        EffectRole::set_current_child_pid(stats, pid)
-    }
-}
+pub(crate) type DefaultOutProcRole = EffectRole;
 #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-impl OutProcRole for DefaultOutProcRole {
-    type Stats = crate::outproc_instrument::OutProcInstrumentStats;
-    type Supervisor = crate::outproc_instrument::InstrumentChildSupervisor;
-    const ROLE_NAME: &'static str = InstrumentRole::ROLE_NAME;
-    fn spawn_child(
-        launch: &ChildLaunch<Self>,
-        path: &std::path::Path,
-        plugin_id: Option<&str>,
-    ) -> std::io::Result<std::process::Child> {
-        crate::outproc_instrument::spawn_instrument_child(
-            &launch.child_exe,
-            &launch.shm_path,
-            path,
-            plugin_id,
-            launch.sample_rate,
-        )
-    }
-    fn spawn_supervisor(
-        child: std::process::Child,
-        launch: &ChildLaunch<Self>,
-        path: PathBuf,
-        plugin_id: Option<String>,
-    ) -> std::io::Result<Self::Supervisor> {
-        crate::outproc_instrument::InstrumentChildSupervisor::spawn(
-            child,
-            launch.shm_path.clone(),
-            launch.stats.clone(),
-            launch.child_exe.clone(),
-            path,
-            plugin_id,
-            launch.sample_rate,
-        )
-    }
-    fn detach_keep_shm(supervisor: Self::Supervisor) {
-        supervisor.detach_keep_shm();
-    }
-    fn role_matches(flags: u32) -> bool {
-        InstrumentRole::role_matches(flags)
-    }
-    fn runtime_error(message: String) -> WrapError {
-        InstrumentRole::runtime_error(message)
-    }
-    fn set_initial_attach_pending(stats: &Self::Stats, value: bool) {
-        InstrumentRole::set_initial_attach_pending(stats, value)
-    }
-    fn set_child_early_exit(stats: &Self::Stats, value: bool) {
-        InstrumentRole::set_child_early_exit(stats, value)
-    }
-    fn child_early_exit(stats: &Self::Stats) -> bool {
-        InstrumentRole::child_early_exit(stats)
-    }
-    fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
-        InstrumentRole::set_current_child_pid(stats, pid)
-    }
-}
+pub(crate) type DefaultOutProcRole = InstrumentRole;
 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
-impl OutProcRole for DefaultOutProcRole {
-    type Stats = crate::outproc_effect::OutProcEffectStats;
-    type Supervisor = crate::outproc_effect::EffectChildSupervisor;
-    const ROLE_NAME: &'static str = EffectRole::ROLE_NAME;
-    fn spawn_child(
-        launch: &ChildLaunch<Self>,
-        path: &std::path::Path,
-        plugin_id: Option<&str>,
-    ) -> std::io::Result<std::process::Child> {
-        crate::outproc_effect::spawn_effect_child(
-            &launch.child_exe,
-            &launch.shm_path,
-            path,
-            plugin_id,
-            launch.sample_rate,
-        )
-    }
-    fn spawn_supervisor(
-        child: std::process::Child,
-        launch: &ChildLaunch<Self>,
-        path: PathBuf,
-        plugin_id: Option<String>,
-    ) -> std::io::Result<Self::Supervisor> {
-        crate::outproc_effect::EffectChildSupervisor::spawn(
-            child,
-            launch.shm_path.clone(),
-            launch.stats.clone(),
-            launch.child_exe.clone(),
-            path,
-            plugin_id,
-            launch.sample_rate,
-        )
-    }
-    fn detach_keep_shm(supervisor: Self::Supervisor) {
-        supervisor.detach_keep_shm()
-    }
-    fn role_matches(flags: u32) -> bool {
-        EffectRole::role_matches(flags)
-    }
-    fn runtime_error(message: String) -> WrapError {
-        EffectRole::runtime_error(message)
-    }
-    fn set_initial_attach_pending(stats: &Self::Stats, value: bool) {
-        EffectRole::set_initial_attach_pending(stats, value)
-    }
-    fn set_child_early_exit(stats: &Self::Stats, value: bool) {
-        EffectRole::set_child_early_exit(stats, value)
-    }
-    fn child_early_exit(stats: &Self::Stats) -> bool {
-        EffectRole::child_early_exit(stats)
-    }
-    fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
-        EffectRole::set_current_child_pid(stats, pid)
-    }
-}
+pub(crate) type DefaultOutProcRole = EffectRole;
 
 #[cfg(feature = "outproc-effect")]
 impl OutProcRole for EffectRole {
@@ -757,7 +594,6 @@ pub struct StreamGuard {
     _clap_thread: crate::clap_host::ClapThreadGuard,
     /// γ M1 PR-C（outproc-effect）: stream 停止 **後** に drop され、watchdog を止めて（respawn 停止）
     /// child へ QUIT → reap → shm unlink する。**field 順は load-bearing**: `_stream` より後に宣言する。
-    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     #[cfg(feature = "outproc-effect")]
     _child_guard: Arc<Mutex<ChildSlot>>,
     /// both build では同種 guard 間の順序は load-bearing ではない（どちらも stream 停止後）。
@@ -1398,6 +1234,11 @@ impl EngineWrap {
     /// `Arc` drop が最後の強参照となり、attach 直後の child が同期的に teardown（QUIT/reap/unlink）
     /// されうる（「成功応答=生きた plugin」が崩れる）。現行の全配線（main.rs のプロセス寿命
     /// `_stream_guard`・gated テストの関数スコープ `_guard`）はこれを満たす。
+    ///
+    /// **both ビルドでの意味論**: この legacy 単一 role API は **effect slot 専用**になる
+    /// （instrument slot には触れない）。production 経路（session.rs の LoadPlugin dispatch）は
+    /// both ビルドでは本メソッドを使わず、必ず role 別の `load_outproc_effect_plugin` /
+    /// `load_outproc_instrument_plugin` を呼ぶこと。
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     pub fn load_outproc_plugin(
         &self,

@@ -3,6 +3,9 @@
 
 #![cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
 
+mod gated_common;
+use gated_common::{child_exe, repo_path, wait_until};
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -14,20 +17,6 @@ const EFFECT_GAIN: f32 = 0.5;
 const PLUGIN_ID: &str = "com.signalcompose.clap-test-synth";
 const PROBE_NOTE_KEY: u8 = PROBE_KEY.key as u8;
 const PROBE_NOTE_CHANNEL: u8 = PROBE_KEY.channel as u8;
-
-fn repo_path(rel: &str) -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../..")).join(rel)
-}
-
-fn child_exe(name: &str) -> PathBuf {
-    let mut path = std::env::current_exe().expect("current_exe");
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.push(name);
-    path
-}
 
 fn setup_test() -> (OutProcEffectConfig, OutProcInstrumentConfig) {
     let effect = OutProcEffectConfig {
@@ -56,17 +45,6 @@ fn setup_test() -> (OutProcEffectConfig, OutProcInstrumentConfig) {
         instrument.child_exe.display()
     );
     (effect, instrument)
-}
-
-fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if condition() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    condition()
 }
 
 #[test]

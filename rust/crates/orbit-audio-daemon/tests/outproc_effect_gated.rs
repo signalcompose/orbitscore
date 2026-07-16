@@ -20,7 +20,10 @@
 //! （cross-process は same-build determinism なので両プロセスが再コンパイルされる）。本テストの assert は
 //! 「catastrophic でない」sanity floor で、SLOTS の最終判断は printed verdict を owner が読んで行う。
 
-#![cfg(feature = "outproc-effect")]
+#![cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+
+mod gated_common;
+use gated_common::{child_exe, repo_path, wait_until};
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,25 +37,6 @@ const EFFECT_GAIN: f32 = 0.5;
 /// RT 健全性の callback 所要時間上限（synth/clap gated と同じ保守的上限 20ms）。
 const CALLBACK_MAX_BUDGET_NS: u64 = 20_000_000;
 
-/// repo ルート相対パスを解決する（MANIFEST_DIR = rust/crates/orbit-audio-daemon）。
-fn repo_path(rel: &str) -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../..")).join(rel)
-}
-
-/// effect child binary（`orbit-clap-effect-child`）のパスを解決する。
-///
-/// 別 crate の binary なので `CARGO_BIN_EXE_*` は使えない。test 実行ファイル
-/// （`target/<profile>/deps/<name>-<hash>`）の祖先から sibling binary を導く（profile 非依存）。
-fn child_exe() -> PathBuf {
-    let mut p = std::env::current_exe().expect("current_exe");
-    p.pop(); // test exe 名を除く → deps/
-    if p.ends_with("deps") {
-        p.pop(); // deps/ を除く → target/<profile>/
-    }
-    p.push("orbit-clap-effect-child");
-    p
-}
-
 /// test-effect の .clap dylib（standalone crate なので独自 target/debug 配下）。
 fn test_effect_dylib() -> PathBuf {
     repo_path("rust-spike/clap-test-effect/target/debug/libclap_test_effect.dylib")
@@ -63,7 +47,7 @@ fn test_effect_dylib() -> PathBuf {
 fn setup_test(buffer_frames: Option<u32>) -> (OutProcEffectConfig, PathBuf) {
     let cfg = OutProcEffectConfig {
         format: PluginFormat::Clap,
-        child_exe: child_exe(),
+        child_exe: child_exe("orbit-clap-effect-child"),
         plugin: test_effect_dylib(),
         plugin_id: None, // 単一プラグイン bundle なので id 省略可
         buffer_frames,
@@ -92,18 +76,6 @@ fn play_sine(engine: &EngineWrap, wav: &Path) {
     engine
         .play_at(&sample.sample_id, onset, 1.0, 0.0, 0.0, 0.0, 1.0, None)
         .expect("play sine");
-}
-
-/// `cond` が真になるまで（または timeout まで）20ms 間隔で poll する。真で抜けたら true。
-fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if cond() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    cond()
 }
 
 // ── parity: OOP effect が master bus を加工する（post/dry ≈ EFFECT_GAIN）─────────────────────
