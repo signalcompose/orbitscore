@@ -25,7 +25,8 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, slot_index, slot_offset, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_FRAMES,
+    open_shared, region_ptr, slot_index, slot_offset, ParentWatch, BUF_LEN, CHANNELS, CONTROL_QUIT,
+    MAX_FRAMES,
 };
 use orbit_clap_host::ClapEffectProcessor;
 
@@ -96,10 +97,17 @@ fn main() -> Result<()> {
     let mut process_errors: u64 = 0;
 
     let mut last: u64 = 0;
+    // orphan 対策（#448）: host（daemon）が CONTROL_QUIT を書かずに死ぬ経路（プロセス exit・
+    // SIGKILL・crash）でも spin loop を抜けられるよう、親死活を低頻度で監視する。
+    let mut parent_watch = ParentWatch::new();
     loop {
         // host からの正常終了要求。一回限りの flag なので Relaxed で十分（PR-A gain child と同様）。
         // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す（map 後不変）。
         if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
+            break;
+        }
+        if parent_watch.should_exit() {
+            eprintln!("[orbit-clap-effect-child] 親プロセス死亡を検知、終了する");
             break;
         }
         // SAFETY: 同上（region は有効）。seq_request の Acquire は host SUBMIT の Release と

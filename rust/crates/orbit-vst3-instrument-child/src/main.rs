@@ -12,7 +12,8 @@ use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
-    SharedRegion, VoiceAddr, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
+    ParentWatch, SharedRegion, VoiceAddr, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK,
+    MAX_FRAMES,
 };
 #[cfg(target_os = "macos")]
 use orbit_vst3_host::Vst3InstrumentProcessor;
@@ -275,8 +276,15 @@ fn main() -> Result<()> {
     let mut output_spill = EventSpillFifo::new();
     let mut process_errors = 0;
     let mut last = 0;
+    // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
+    // SIGKILL・crash)でも spin loop を抜けられるよう、親死活を低頻度で監視する。
+    let mut parent_watch = ParentWatch::new();
     loop {
         if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
+            break;
+        }
+        if parent_watch.should_exit() {
+            eprintln!("[orbit-vst3-instrument-child] 親プロセス死亡を検知、終了する");
             break;
         }
         let cur = unsafe { (*region).seq_request.load(Acquire) };

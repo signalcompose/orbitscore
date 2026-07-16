@@ -22,7 +22,8 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, slot_index, slot_offset, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_FRAMES,
+    open_shared, region_ptr, slot_index, slot_offset, ParentWatch, BUF_LEN, CHANNELS, CONTROL_QUIT,
+    MAX_FRAMES,
 };
 #[cfg(target_os = "macos")]
 use orbit_vst3_host::Vst3EffectProcessor;
@@ -93,8 +94,15 @@ fn main() -> Result<()> {
     let mut process_errors: u64 = 0;
 
     let mut last: u64 = 0;
+    // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
+    // SIGKILL・crash)でも spin loop を抜けられるよう、親死活を低頻度で監視する。
+    let mut parent_watch = ParentWatch::new();
     loop {
         if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
+            break;
+        }
+        if parent_watch.should_exit() {
+            eprintln!("[orbit-vst3-effect-child] 親プロセス死亡を検知、終了する");
             break;
         }
         let cur = unsafe { (*region).seq_request.load(Acquire) };

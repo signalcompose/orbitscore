@@ -16,6 +16,16 @@ use orbit_audio_daemon::protocol::{
 use orbit_audio_daemon::server;
 use serde_json::json;
 
+// 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
+// の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
+// まで届く前に終了する）。そのため通常の client 側 `SIGTERM → SIGKILL` 停止（daemon-client.ts
+// `killChildGracefully`）や panic では、`InstrumentChildSupervisor` / `EffectChildSupervisor` の
+// `Drop`（CONTROL_QUIT 送出）が実行されず、out-of-process CLAP/VST3 child が孤児化し得る。
+// `server::serve` の accept loop 内タスクが `Arc<EngineWrap>` を clone して保持するため、
+// main() のローカル drop だけでは決定論的な shutdown にならず、まとまった graceful-shutdown
+// 配線（signal → 全 clone 収束待ち → drop）が必要になる（本 issue のスコープ外・別 issue 向き）。
+// 本 issue の本命防御は child 側（[`orbit_audio_sandbox::ParentWatch`]）: どの死に方でも
+// child が親の死亡を自力で検知して抜けるため、この daemon 側ギャップの実害を軽減する。
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     tracing_subscriber::fmt()
