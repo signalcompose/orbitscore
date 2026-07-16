@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+use std::sync::MutexGuard;
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use std::sync::Weak;
 use std::sync::{Arc, Mutex};
 #[cfg(any(
@@ -73,6 +75,12 @@ pub enum WrapError {
     /// out-of-process instrument の runtime failure。
     #[error("out-of-process instrument runtime error: {0}")]
     OutProcInstrument(String),
+    /// child launch 後の attach が失敗したが、shm slot は復元済みで再試行可能。
+    #[error("out-of-process attach failed: {0}")]
+    OutProcAttachFailed(String),
+    /// OOP slot が永久に closed（起動インフラの失敗）。
+    #[error("out-of-process slot closed: {0}")]
+    OutProcSlotClosed(String),
 }
 
 /// 共有可能なエンジン wrapper。
@@ -238,8 +246,8 @@ pub(crate) struct ChildLaunch {
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 impl Drop for ChildLaunch {
     fn drop(&mut self) {
-        // cleanup_shm_on_drop=true は「この launch が unlink の唯一の所有者」を意味する
-        // （supervisor へ所有権が移った経路は flag を false に倒す）。よって NotFound を含む
+        // cleanup_shm_on_drop=true は retryable attach failure 後を含め、この launch が unlink の
+        // 唯一の所有者であることを意味する。よって NotFound を含む
         // あらゆる失敗が異常であり、無条件で warn する。
         if self.cleanup_shm_on_drop {
             if let Err(error) = std::fs::remove_file(&self.shm_path) {
@@ -603,7 +611,7 @@ impl EngineWrap {
     /// shm → adapter → stream までを daemon boot 時に構築し、child supervisor は初回
     /// `LoadPlugin(role=effect)` まで遅延する。
     #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-    fn start_outproc_effect_post_boot(
+    pub fn start_outproc_effect_post_boot(
         cfg: crate::outproc_effect::OutProcEffectConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         use crate::outproc_effect::{
@@ -713,7 +721,7 @@ impl EngineWrap {
         not(feature = "link-audio"),
         not(feature = "outproc-effect")
     ))]
-    fn start_outproc_instrument_post_boot(
+    pub fn start_outproc_instrument_post_boot(
         cfg: crate::outproc_instrument::OutProcInstrumentConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         use crate::outproc_instrument::{
@@ -961,9 +969,7 @@ impl EngineWrap {
                 .ok_or_else(|| outproc_runtime_error("outproc instrument stream is closed"))?
         };
 
-        let mut slot = child_slot
-            .lock()
-            .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+        let mut slot = lock_child_slot_recovering(&child_slot, "initial state check");
 
         match &*slot {
             ChildSlot::Active {
@@ -1003,8 +1009,8 @@ impl EngineWrap {
                 )));
             }
             ChildSlot::Closed => {
-                return Err(outproc_runtime_error(
-                    "outproc child slot is closed after an unrecoverable attach failure",
+                return Err(WrapError::OutProcSlotClosed(
+                    "outproc child slot is closed after an unrecoverable attach failure".into(),
                 ));
             }
             ChildSlot::Empty(_) => {}
@@ -1025,9 +1031,7 @@ impl EngineWrap {
         let ready_mmap = match orbit_audio_sandbox::open_shared(&launch.shm_path) {
             Ok(mmap) => mmap,
             Err(error) => {
-                let mut slot = child_slot
-                    .lock()
-                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                let mut slot = lock_child_slot_recovering(&child_slot, "open_shared failure");
                 debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Closed;
                 return Err(outproc_runtime_error(format!(
@@ -1041,13 +1045,20 @@ impl EngineWrap {
         // readiness を初期化し、前 incarnation の READY を誤認しない。
         unsafe { orbit_audio_sandbox::transport::reset_child_starting(region) };
 
+        // spawn 前にセットしておくことで、即座に終了する child が通常の respawn 経路に紛れ込むのを防ぐ。
+        launch
+            .stats
+            .initial_attach_pending
+            .store(true, Ordering::Release);
+        launch
+            .stats
+            .child_early_exit
+            .store(false, Ordering::Release);
         let first_child = match spawn_outproc_child(&launch, &path, plugin_id.as_deref()) {
             Ok(child) => child,
             Err(error) => {
                 let child_exe = launch.child_exe.clone();
-                let mut slot = child_slot
-                    .lock()
-                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                let mut slot = lock_child_slot_recovering(&child_slot, "child spawn failure");
                 debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Empty(launch);
                 return Err(outproc_runtime_error(format!(
@@ -1068,9 +1079,8 @@ impl EngineWrap {
                     // spawn_outproc_supervisor はエラー時に自身の cleanup で shm を unlink して返るため、
                     // この slot は再利用不能。launch の fallback unlink は解除。
                     launch.cleanup_shm_on_drop = false;
-                    let mut slot = child_slot
-                        .lock()
-                        .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                    let mut slot =
+                        lock_child_slot_recovering(&child_slot, "supervisor spawn failure");
                     debug_assert_slot_loading(&slot);
                     *slot = ChildSlot::Closed;
                     return Err(outproc_runtime_error(format!(
@@ -1086,33 +1096,42 @@ impl EngineWrap {
             if status == orbit_audio_sandbox::transport::CHILD_STATUS_READY {
                 let flags = unsafe { (*region).child_flags.load(Ordering::Acquire) };
                 if !outproc_role_matches(flags) {
-                    // supervisor drop の teardown が shm を unlink する。launch の fallback は解除。
-                    drop(supervisor);
-                    launch.cleanup_shm_on_drop = false;
-                    let mut slot = child_slot
-                        .lock()
-                        .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
-                    debug_assert_slot_loading(&slot);
-                    *slot = ChildSlot::Closed;
-                    return Err(outproc_runtime_error(format!(
-                        "loaded plugin role does not match daemon role (child_flags={flags:#x})"
-                    )));
+                    return Err(retryable_attach_failure(
+                        supervisor,
+                        region,
+                        &child_slot,
+                        launch,
+                        format!(
+                            "loaded plugin role does not match daemon role (child_flags={flags:#x})"
+                        ),
+                    ));
                 }
+                launch
+                    .stats
+                    .initial_attach_pending
+                    .store(false, Ordering::Release);
                 break;
             }
+            if launch.stats.child_early_exit.load(Ordering::Acquire) {
+                return Err(retryable_attach_failure(
+                    supervisor,
+                    region,
+                    &child_slot,
+                    launch,
+                    "child exited before publishing READY".into(),
+                ));
+            }
             if std::time::Instant::now() >= deadline {
-                // supervisor drop の teardown が shm を unlink する。launch の fallback は解除。
-                drop(supervisor);
-                launch.cleanup_shm_on_drop = false;
-                let mut slot = child_slot
-                    .lock()
-                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
-                debug_assert_slot_loading(&slot);
-                *slot = ChildSlot::Closed;
-                return Err(outproc_runtime_error(format!(
-                    "timed out waiting {:?} for child READY",
-                    CHILD_READY_TIMEOUT
-                )));
+                return Err(retryable_attach_failure(
+                    supervisor,
+                    region,
+                    &child_slot,
+                    launch,
+                    format!(
+                        "timed out waiting {:?} for child READY",
+                        CHILD_READY_TIMEOUT
+                    ),
+                ));
             }
             std::thread::sleep(CHILD_READY_POLL);
         }
@@ -1121,9 +1140,7 @@ impl EngineWrap {
         let summary = outproc_plugin_summary(&path, &plugin_id);
         // Active supervisor が以後の unlink を所有する。local launch の fallback cleanup は解除する。
         launch.cleanup_shm_on_drop = false;
-        let mut slot = child_slot
-            .lock()
-            .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+        let mut slot = lock_child_slot_recovering(&child_slot, "successful attach");
         debug_assert_slot_loading(&slot);
         *slot = ChildSlot::Active {
             path,
@@ -2059,6 +2076,43 @@ fn debug_assert_slot_loading(slot: &ChildSlot) {
     );
 }
 
+/// child slot の poison は attach state machine の停止理由にせず、唯一の書き手である本関数が
+/// 回復して本来の遷移を完遂する。放置すると Loading/Closed/Empty の中間状態が恒久化する。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn lock_child_slot_recovering<'a>(
+    child_slot: &'a Mutex<ChildSlot>,
+    site: &'static str,
+) -> MutexGuard<'a, ChildSlot> {
+    child_slot.lock().unwrap_or_else(|poisoned| {
+        tracing::error!("child slot mutex poisoned during {site}; recovering");
+        poisoned.into_inner()
+    })
+}
+
+/// retryable な attach 失敗（role mismatch / early-exit / timeout）の共通終端処理。
+/// supervisor を unlink 抜きで teardown し（unlink 所有権は launch に戻る）、teardown が
+/// 書いた QUIT を RUN へ戻して、slot を retry 可能な `Empty(launch)` に復帰させる。
+///
+/// SAFETY 前提: `region` は呼び出し元 scope で生存する `ready_mmap` を指すこと
+/// （`load_outproc_plugin` の ready-ack ループからのみ呼ばれる）。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn retryable_attach_failure(
+    supervisor: OutProcChildSupervisor,
+    region: *mut orbit_audio_sandbox::transport::SharedRegion,
+    child_slot: &Mutex<ChildSlot>,
+    launch: ChildLaunch,
+    message: String,
+) -> WrapError {
+    tracing::warn!("outproc attach failed (retryable): {message}");
+    supervisor.detach_keep_shm();
+    // teardown が CONTROL_QUIT を書いたので、retry する child は RUN モードで起動する必要がある。
+    unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
+    let mut slot = lock_child_slot_recovering(child_slot, "retryable attach failure");
+    debug_assert_slot_loading(&slot);
+    *slot = ChildSlot::Empty(launch);
+    WrapError::OutProcAttachFailed(message)
+}
+
 #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
 fn outproc_runtime_error(message: impl Into<String>) -> WrapError {
     WrapError::OutProcEffect(message.into())
@@ -2668,6 +2722,44 @@ mod outproc_load_error_test_support {
         );
     }
 
+    #[cfg(feature = "outproc-effect")]
+    pub(super) fn poisoned_slot_open_shared_failure_recovers_to_closed(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        plugin_path: &str,
+    ) {
+        let shm_path = unique_path();
+        let _ = std::fs::remove_file(&shm_path);
+        let stats = OutProcChildStats::new();
+        let (wrap, child_slot) = inject(
+            ChildSlot::Empty(child_launch(
+                shm_path,
+                PathBuf::from("unused-child-executable"),
+                stats.clone(),
+            )),
+            stats,
+        );
+        let poison_slot = child_slot.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poison_slot.lock().expect("lock slot for poison");
+            panic!("intentional child slot poison");
+        })
+        .join();
+
+        let error = match wrap.load_outproc_plugin(PathBuf::from(plugin_path), None) {
+            Ok(_) => panic!("missing shm must take the Closed terminal transition after recovery"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            WrapError::OutProcEffect(_) | WrapError::OutProcInstrument(_)
+        ));
+        assert!(matches!(
+            *child_slot.lock().unwrap_or_else(|p| p.into_inner()),
+            ChildSlot::Closed
+        ));
+    }
+
     pub(super) fn spawn_failure_restores_empty_for_retry(
         unique_path: impl Fn() -> PathBuf,
         inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
@@ -2863,13 +2955,123 @@ mod outproc_load_error_test_support {
     fn write_slow_child_script(unique_path: &impl Fn() -> PathBuf) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let script_path = unique_path().with_extension("sh");
-        std::fs::write(&script_path, "#!/bin/sh\nsleep 20\n").expect("write slow child script");
+        std::fs::write(&script_path, "#!/bin/sh\nexec sleep 20\n")
+            .expect("write slow child script");
         let mut perms = std::fs::metadata(&script_path)
             .expect("stat slow child script")
             .permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&script_path, perms).expect("chmod slow child script");
         script_path
+    }
+
+    fn write_exit_child_script(unique_path: &impl Fn() -> PathBuf) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script_path = unique_path().with_extension("sh");
+        std::fs::write(&script_path, "#!/bin/sh\nexit 1\n").expect("write exit child script");
+        let mut perms = std::fs::metadata(&script_path)
+            .expect("stat exit script")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&script_path, perms).expect("chmod exit script");
+        script_path
+    }
+
+    pub(super) fn early_exit_fast_fails_and_keeps_retry_shm(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        plugin_path: &str,
+    ) {
+        let shm_path = unique_path();
+        let _ = std::fs::remove_file(&shm_path);
+        let mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
+        let child_exe = write_exit_child_script(&unique_path);
+        let stats = OutProcChildStats::new();
+        let (wrap, slot) = inject(
+            ChildSlot::Empty(child_launch(shm_path.clone(), child_exe.clone(), stats)),
+            OutProcChildStats::new(),
+        );
+        let started = std::time::Instant::now();
+        let error = match wrap.load_outproc_plugin(PathBuf::from(plugin_path), None) {
+            Ok(_) => panic!("immediately exiting child must fail attach"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(error, WrapError::OutProcAttachFailed(ref msg) if msg.contains("exited before publishing READY"))
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "early exit waited too long"
+        );
+        assert!(matches!(*slot.lock().unwrap(), ChildSlot::Empty(_)));
+        assert!(shm_path.exists(), "retry shm must remain linked");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        assert_eq!(
+            unsafe { (*region).control.load(std::sync::atomic::Ordering::Acquire) },
+            orbit_audio_sandbox::CONTROL_RUN
+        );
+        let _ = std::fs::remove_file(child_exe);
+    }
+
+    pub(super) fn role_mismatch_retries_same_slot(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        plugin_path: &str,
+        wrong_has_audio_input: bool,
+        correct_has_audio_input: bool,
+    ) {
+        let shm_path = unique_path();
+        let _ = std::fs::remove_file(&shm_path);
+        let mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
+        let child_exe = write_slow_child_script(&unique_path);
+        let stats = OutProcChildStats::new();
+        let (wrap, slot) = inject(
+            ChildSlot::Empty(child_launch(
+                shm_path.clone(),
+                child_exe.clone(),
+                stats.clone(),
+            )),
+            stats.clone(),
+        );
+        for (attempt, has_input) in [(1, wrong_has_audio_input), (2, correct_has_audio_input)] {
+            stats
+                .current_child_pid
+                .store(0, std::sync::atomic::Ordering::Relaxed);
+            let wrap_call = wrap.clone();
+            let path = PathBuf::from(plugin_path);
+            let call = std::thread::spawn(move || wrap_call.load_outproc_plugin(path, None));
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            // PID は reset_child_starting の後に publish されるため、この READY はそれによって消されない。
+            while stats
+                .current_child_pid
+                .load(std::sync::atomic::Ordering::Relaxed)
+                == 0
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "attempt {attempt} never completed child spawn"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let region = orbit_audio_sandbox::region_ptr(&mmap);
+            unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, has_input) };
+            let result = call.join().expect("load thread panicked");
+            if attempt == 1 {
+                assert!(
+                    matches!(result, Err(WrapError::OutProcAttachFailed(ref msg)) if msg.contains("role does not match"))
+                );
+                assert!(matches!(*slot.lock().unwrap(), ChildSlot::Empty(_)));
+                assert!(shm_path.exists());
+                assert_eq!(
+                    unsafe { (*region).control.load(std::sync::atomic::Ordering::Acquire) },
+                    orbit_audio_sandbox::CONTROL_RUN
+                );
+            } else {
+                result.expect("second attach must reuse Empty slot and succeed");
+                assert!(matches!(*slot.lock().unwrap(), ChildSlot::Active { .. }));
+            }
+        }
+        let _ = std::fs::remove_file(child_exe);
     }
 
     /// Important finding 1: f36e99c の regression guard。`Loading` 中の 2 本目の `LoadPlugin` は、
@@ -2999,7 +3201,9 @@ mod outproc_health_tests {
 
     fn assert_effect_runtime_error_contains(error: WrapError, expected: &str) {
         assert!(
-            matches!(&error, WrapError::OutProcEffect(message) if message.contains(expected)),
+            matches!(&error,
+                WrapError::OutProcEffect(message) | WrapError::OutProcSlotClosed(message)
+                if message.contains(expected)),
             "expected OutProcEffect error containing {expected:?}, got {error:?}"
         );
     }
@@ -3015,12 +3219,41 @@ mod outproc_health_tests {
     }
 
     #[test]
+    fn effect_load_outproc_poisoned_slot_recovers_to_closed_on_open_shared_failure() {
+        super::outproc_load_error_test_support::poisoned_slot_open_shared_failure_recovers_to_closed(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            "poisoned-effect.clap",
+        );
+    }
+
+    #[test]
     fn effect_load_outproc_spawn_failure_restores_empty_for_retry() {
         super::outproc_load_error_test_support::spawn_failure_restores_empty_for_retry(
             crate::outproc_effect::unique_shm_path,
             wrap_with_child_slot,
             assert_effect_runtime_error_contains,
             "unused-effect.clap",
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_early_exit_fast_fails_and_keeps_retry_shm() {
+        super::outproc_load_error_test_support::early_exit_fast_fails_and_keeps_retry_shm(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            "exit-effect.clap",
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_role_mismatch_retries_same_slot() {
+        super::outproc_load_error_test_support::role_mismatch_retries_same_slot(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            "retry-effect.clap",
+            false,
+            true,
         );
     }
 
@@ -3231,7 +3464,9 @@ mod outproc_instrument_health_tests {
 
     fn assert_instrument_runtime_error_contains(error: WrapError, expected: &str) {
         assert!(
-            matches!(&error, WrapError::OutProcInstrument(message) if message.contains(expected)),
+            matches!(&error,
+                WrapError::OutProcInstrument(message) | WrapError::OutProcSlotClosed(message)
+                if message.contains(expected)),
             "expected OutProcInstrument error containing {expected:?}, got {error:?}"
         );
     }
@@ -3253,6 +3488,26 @@ mod outproc_instrument_health_tests {
             wrap_with_child_slot,
             assert_instrument_runtime_error_contains,
             "unused-instrument.clap",
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_early_exit_fast_fails_and_keeps_retry_shm() {
+        super::outproc_load_error_test_support::early_exit_fast_fails_and_keeps_retry_shm(
+            crate::outproc_instrument::unique_shm_path,
+            wrap_with_child_slot,
+            "exit-instrument.clap",
+        );
+    }
+
+    #[test]
+    fn instrument_load_outproc_role_mismatch_retries_same_slot() {
+        super::outproc_load_error_test_support::role_mismatch_retries_same_slot(
+            crate::outproc_instrument::unique_shm_path,
+            wrap_with_child_slot,
+            "retry-instrument.clap",
+            true,
+            false,
         );
     }
 

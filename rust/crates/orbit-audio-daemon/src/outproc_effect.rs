@@ -177,6 +177,10 @@ fn default_child_exe(format: PluginFormat) -> Result<PathBuf, String> {
 /// reader は daemon の accessor / gated harness（slot 数決定の `stale` / RT 健全性）。
 #[derive(Default)]
 pub struct OutProcEffectStats {
+    /// 初回 attach の READY 待ち中。watchdog はこの間の child exit を respawn せず fast-fail へ渡す。
+    pub initial_attach_pending: AtomicBool,
+    /// 初回 attach 中に child が exit したことを watchdog が publish する。
+    pub child_early_exit: AtomicBool,
     /// child から fresh な出力を読めた callback 数。
     pub fresh: AtomicU64,
     /// child が間に合わず repeat-previous した callback 数（slot 数決定の主指標の一つ）。
@@ -409,6 +413,7 @@ pub struct EffectChildSupervisor {
     shutdown: Arc<AtomicBool>,
     watchdog: Option<JoinHandle<()>>,
     shm_path: PathBuf,
+    unlink_shm: bool,
 }
 
 impl EffectChildSupervisor {
@@ -483,6 +488,21 @@ impl EffectChildSupervisor {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
                             try_wait_errors = 0;
+                            // READY の publish は host が initial_attach_pending をクリアする処理と競合する:
+                            // child は READY を publish した直後にその窓で crash しうる。これを attach 初期の
+                            // 早期 exit として扱うと本 watchdog が停止してしまう一方、host は READY を観測して
+                            // 死んだ Active slot を install しうる。pre-READY の exit のみ fast-fail とし、
+                            // post-READY の exit は通常の respawn 経路を使わなければならない。
+                            if stats.initial_attach_pending.load(Ordering::Acquire)
+                                && unsafe {
+                                    (*region).child_status.load(Ordering::Acquire)
+                                        != orbit_audio_sandbox::transport::CHILD_STATUS_READY
+                                }
+                            {
+                                tracing::warn!("orbit-clap-effect-child exited during initial attach ({status})");
+                                stats.child_early_exit.store(true, Ordering::Release);
+                                break;
+                            }
                             tracing::warn!(
                                 "orbit-clap-effect-child が異常終了（{status}）→ respawn する"
                             );
@@ -570,7 +590,14 @@ impl EffectChildSupervisor {
             shutdown,
             watchdog: Some(watchdog),
             shm_path,
+            unlink_shm: true,
         })
+    }
+
+    /// shm の unlink 所有権を `ChildLaunch` に残したまま supervisor を teardown する（retry 用）。
+    /// 本体は `unlink_shm` を倒すだけで、stop/reap は値渡しで consume した self の即時 Drop が行う。
+    pub fn detach_keep_shm(mut self) {
+        self.unlink_shm = false;
     }
 }
 
@@ -587,9 +614,11 @@ impl Drop for EffectChildSupervisor {
         }
         // 3. shm unlink（この時点で host mmap は stream drop で、ctl mmap は watchdog 終了で消えており
         //    どのプロセスもこの shm を map していない）。
-        if let Err(e) = std::fs::remove_file(&self.shm_path) {
-            // 既に消えている等は無害（warn のみ・teardown は続行）。
-            tracing::warn!("OOP effect shm 削除失敗 {:?}: {e}", self.shm_path);
+        if self.unlink_shm {
+            if let Err(e) = std::fs::remove_file(&self.shm_path) {
+                // 既に消えている等は無害（warn のみ・teardown は続行）。
+                tracing::warn!("OOP effect shm 削除失敗 {:?}: {e}", self.shm_path);
+            }
         }
     }
 }
@@ -855,6 +884,13 @@ mod tests {
     fn supervisor_respawns_child_on_unexpected_exit() {
         let shm = make_shm();
         let stats = OutProcEffectStats::new();
+        // #441 の regression: host がまだこのフラグをクリアしていない間も READY は見えうる。
+        // watchdog は initial-attach fast-fail 分岐ではなく respawn を行わなければならない。
+        stats.initial_attach_pending.store(true, Ordering::Release);
+        let mmap = open_shared(&shm).expect("open shm to publish READY");
+        let region = region_ptr(&mmap);
+        // SAFETY: mmap はこのテストの生存する shared region を所有する。
+        unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, true) };
         let first = Command::new("sleep")
             .arg("0.2")
             .spawn()

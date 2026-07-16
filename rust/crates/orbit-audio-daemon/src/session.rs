@@ -1027,6 +1027,10 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::OutProcInstrument(msg) => {
             ProtocolError::new("OUTPROC_INSTRUMENT_RUNTIME", msg.clone())
         }
+        WrapError::OutProcAttachFailed(msg) => {
+            ProtocolError::new("OUTPROC_ATTACH_FAILED", msg.clone())
+        }
+        WrapError::OutProcSlotClosed(msg) => ProtocolError::new("OUTPROC_SLOT_CLOSED", msg.clone()),
     }
 }
 
@@ -1095,6 +1099,18 @@ mod tests {
         assert_eq!(
             wrap_err_to_protocol(&runtime).code,
             "OUTPROC_INSTRUMENT_RUNTIME"
+        );
+    }
+
+    #[test]
+    fn outproc_attach_failure_and_closed_slot_have_distinct_protocol_codes() {
+        assert_eq!(
+            wrap_err_to_protocol(&WrapError::OutProcAttachFailed("retry".into())).code,
+            "OUTPROC_ATTACH_FAILED"
+        );
+        assert_eq!(
+            wrap_err_to_protocol(&WrapError::OutProcSlotClosed("closed".into())).code,
+            "OUTPROC_SLOT_CLOSED"
         );
     }
 
