@@ -2636,10 +2636,10 @@ fn retryable_attach_failure<R: OutProcRole>(
     WrapError::OutProcAttachFailed(message)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
 type OutProcChildStats = <DefaultOutProcRole as OutProcRole>::Stats;
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
 fn spawn_outproc_supervisor(
     child: std::process::Child,
     launch: &ChildLaunch,
@@ -2649,7 +2649,7 @@ fn spawn_outproc_supervisor(
     DefaultOutProcRole::spawn_supervisor(child, launch, path, plugin_id)
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
 fn outproc_role_matches(flags: u32) -> bool {
     DefaultOutProcRole::role_matches(flags)
 }
