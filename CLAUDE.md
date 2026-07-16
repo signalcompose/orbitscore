@@ -161,14 +161,14 @@ git branch --show-current
 ### Project Overview
 **OrbitScore** - Audio-based live coding DSL for modern music production
 - DSL Version: v3.0 (SuperCollider Audio Engine)
-- Test Status: 230 passed, 23 skipped (253 total) = 90.9%
+- Test Status: 1333 passed, 29 skipped (1362 total)
 - Branch Strategy: GitHub Flow (`main` + feature branches)
 
 ### Development Commands
 ```bash
 npm run build            # Build all packages (incremental)
 npm run build:clean      # Clean build (rebuild all files)
-npm test                 # Run all tests (220 tests, 23 skipped)
+npm test                 # Run all tests (1362 tests, 29 skipped)
 npm run dev:engine       # Run engine in development mode
 npm run lint             # ESLint + Prettier
 ```

@@ -16,8 +16,9 @@
    - 4.6 [音量とステレオ位置](#6-音量とステレオ位置)
    - 4.7 [アンダースコアプレフィックスパターン（DSL v3.0）](#7-アンダースコアプレフィックスパターンdsl-v30)
    - 4.8 [メソッドチェーン](#8-メソッドチェーン)
-5. [よくある間違い](#よくある間違い)
-6. [トラブルシューティング](#トラブルシューティング)
+5. [Plugin Hosting（CLAP / VST3）](#plugin-hostingclap--vst3)
+6. [よくある間違い](#よくある間違い)
+7. [トラブルシューティング](#トラブルシューティング)
 
 ---
 
@@ -578,6 +579,53 @@ var snare = init global.seq
   .gain(-3)
   .pan(20)
 ```
+
+---
+
+## Plugin Hosting（CLAP / VST3）
+
+> 本節は 2.0.0 以降に追加された機能です。詳細な構文仕様は
+> `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` の Plugin Hosting 節を参照してください。
+
+OrbitScore は CLAP / VST3 プラグインをホストして、エフェクト（master bus insert）と
+インストゥルメント（音源）として使うことができます。
+
+### エフェクト: `global.effect()`
+
+```orbitscore
+global.effect("~/plugins/TAL-Reverb-4.clap")
+```
+
+- master bus への単一 insert（全シーケンスに掛かります）
+- v1 では 1 基のみ。**対応フォーマットは `.clap` のみ**
+
+### インストゥルメント: `seq.instrument()`
+
+```orbitscore
+var synth = init global.seq
+synth.instrument("~/plugins/Surge XT.clap")
+// または VST3:
+// synth.instrument("~/plugins/Surge XT.vst3")
+synth.octave(4).vel(100)
+synth.play(1, 3, 5, 0)  // 値は度数（Pitch DSL と同じ）
+```
+
+- `seq.instrument()` を宣言したシーケンスは note シーケンスになり、`play()` の値は
+  度数として解釈されます（`global.key()` の設定が必須）
+- **対応フォーマットは `.clap` と `.vst3` の両方**
+- v1 ではプラグインのインスタンスは 1 つのみ
+
+### LinkAudio との併用不可（v1 制限）
+
+`global.linkAudio()` と Plugin Hosting（effect / instrument のいずれか）は、v1 では
+同時に使用できません。
+
+### 対応フォーマット表（v1 時点）
+
+| Role | `.clap` | `.vst3` | `.component`（AU） |
+|---|---|---|---|
+| `seq.instrument()`（instrument） | ✅ | ✅ | 未対応（予約のみ） |
+| `global.effect()`（effect） | ✅ | 未対応（予約のみ） | 未対応（予約のみ） |
 
 ---
 

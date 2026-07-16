@@ -104,6 +104,31 @@ cargo test -p orbit-clap-host --lib -- --ignored
 fixture dylib が見つからない場合、これらのテストはサイレント skip せず `panic!` で
 loud fail する（build 手順を含むメッセージ付き）。
 
+### Rust: VST3 Instrument Gated Fixture Tests
+
+`orbit-audio-daemon` の out-of-process VST3 instrument テスト（#421）は、実機の output
+device と `orbit-vst3-instrument-child`（VST3 host 用の別プロセス child）を前提とする
+`#[ignore]` 付き gated テスト。synth oracle（既知の音量応答を持つテスト用 VST3 instrument）
+は `orbit-vst3-synth-oracle` の `package-oracle.sh` が自動でビルド・バンドルするため、
+テスト実行前に手動でパッケージングする必要はない。
+
+**事前ビルド**（child プロセスのバイナリ）:
+```bash
+cargo build -p orbit-vst3-instrument-child --manifest-path rust/Cargo.toml
+```
+
+**実行**:
+```bash
+cargo test -p orbit-audio-daemon --features outproc-instrument \
+  --test outproc_instrument_vst3_gated -- --ignored --nocapture --test-threads=1
+```
+
+- 実機 output device 必須（headless CI では実行不可）。
+- synth oracle バンドル（`SynthOracle.vst3`）は `orbit-vst3-synth-oracle/package-oracle.sh`
+  がテスト内部（`package_oracle()`）から呼び出されビルドされる。
+- 期待値: oracle が鳴らす note の `post_mix_peak` が `0.25 ± 0.01`（既知の音量応答）。
+- `--test-threads=1` は実機オーディオデバイスの排他利用のため必須。
+
 ---
 
 ## 🎵 IDE Integration Testing (VS Code / Cursor / Claude Code)

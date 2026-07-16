@@ -17,6 +17,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.259 docs: Plugin Hosting docs 同期（#421 / #445 実装事実の反映） #449 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 完了
+**Branch**: `449-docs-plugin-hosting-sync`
+
+DocDD 監査で、#421（VST3 instrument production・PR #447 マージ済）と #445（VST3 effect
+child READY handshake・PR #446 マージ済）の実装事実が docs に反映されていない遅れを検出。
+以下を修正:
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`: PH.3 の format 受理表を role 別（instrument =
+  `.clap`/`.vst3`、effect = `.clap` のみ）に更新。Not Yet Implemented セクションと
+  Plugin Hosting 節ヘッダに #421 / #445 の参照と、VST3 instrument の先送りスコープ
+  （CC / per-note expression / tempo #408）を追記。
+- `docs/testing/TESTING_GUIDE.md`: VST3 Instrument Gated Fixture Tests 節を新設
+  （`orbit-vst3-instrument-child` ビルド手順 + gated テストコマンド + oracle 期待値 0.25）。
+- `docs/user/ja/USER_MANUAL.md`: Plugin Hosting（CLAP / VST3）節を新設（ユーザー向け構文・
+  対応フォーマット表）。
+- `CLAUDE.md`: Test Status / npm test コメントのテスト件数を現状（1333 passed, 29 skipped,
+  1362 total）に更新。
+
 ### 6.258 feat(vst3): VST3 instrument production — Pitch DSL が VST3 で鳴る実機 E2E #421 (Jul 16, 2026)
 
 **Date**: 2026-07-16

@@ -1131,12 +1131,17 @@ piano.comp([1,3,5], [5,7,2]).voicelead()  // composes with §6.3
 >
 > 本節は Issue #425（2026-07-13・owner 設計セッション + Fable 検証）で確定した構文仕様。
 > DSL 疎通は #426（effect・PR #432）/ #427（instrument + Pitch DSL 接続）ともに実装済み。
+> **VST3 instrument hosting は #421（PR #447・2026-07-17 マージ）で実装済み**（`seq.instrument()` が
+> `.vst3` を受理）。VST3 effect 側は child プロセスの READY handshake（#445・PR #446）まで実装済みだが
+> `global.effect()` は引き続き `.clap` のみ受理する。VST3 instrument のスコープは note on/off のみ
+> — CC 制御（IMidiMapping 相当）・per-note expression・tempo 連動（#408）は明示的に先送り。
 > 残るスコープは #428（note timing のサンプル精度化）のみ。
 > Option A/B/C の比較経緯は `docs/development/POST_2.0_VST3_HOSTING_PLAN.md` §6、
 > 決定の記録は Issue #425 / WORK_LOG を参照。
 
-OrbitScore engine（Rust daemon）は CLAP プラグインをホストする配管を持つ
-（effect = PR #397 / instrument = PR #422）。本節はそれを DSL から消費する構文の正本。
+OrbitScore engine（Rust daemon）は CLAP / VST3 プラグインをホストする配管を持つ
+（CLAP effect = PR #397 / CLAP instrument = PR #422 / VST3 instrument = #421 PR #447 /
+VST3 effect child handshake = #445 PR #446）。本節はそれを DSL から消費する構文の正本。
 
 ### PH.1 instrument — `seq.instrument(path[, pluginId])`
 
@@ -1182,8 +1187,12 @@ global.effect("~/plugins/TAL-Reverb-4.clap")   // master bus insert
   （`./` `../` `~/` `/`）と同じ規則。bank 名検索（`global.audioPath()` 相当）はなし。
 - format は**拡張子で判定**: `.clap` → CLAP、`.vst3` → VST3、`.component` → AU。
   verb は format 非依存（format 別 verb は作らない）。
-  **v1 の受理は `.clap` のみ** — `.vst3` / `.component` は構文上予約し
-  「not yet supported」エラーを返す。未知拡張子はエラー。
+  **role 別の受理は非対称**（#421・2026-07-17 実装事実）:
+  - `seq.instrument()`: `.clap` / `.vst3` を受理。`.component` は構文上予約し
+    「not yet supported」エラーを返す。
+  - `global.effect()`: `.clap` のみ受理。`.vst3` / `.component` は構文上予約し
+    「not yet supported」エラーを返す。
+  未知拡張子はいずれの role でもエラー。
 - 第2引数 `pluginId`（optional）: 1 バンドルに複数プラグインが入る場合の指定
   （daemon `LoadPlugin.plugin_id` に対応）。省略時はバンドル先頭のプラグイン。
 
@@ -1345,8 +1354,12 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 - **DAW Plugin**: VST/AU plugin development
 - **Plugin Hosting implementation**: the CLAP effect/instrument hosting *syntax* is finalized
   (#425 — see the Plugin Hosting section above); DSL wiring for effect (#426) and instrument
-  (#427) is implemented. Only sample-accurate note timing (#428) remains outstanding.
-  `.vst3` / `.component` formats are reserved (not yet supported)
+  (#427) is implemented. **VST3 instrument hosting is implemented** (#421 — `seq.instrument()`
+  accepts `.vst3`; PR #447, merged 2026-07-17). VST3 effect hosting is not yet wired into
+  `global.effect()` (the effect child process gained a READY handshake in #445/PR #446, but
+  `.vst3` is still rejected at the `global.effect()` verb). `.component` (AU) remains reserved
+  for both roles (not yet supported). Only sample-accurate note timing (#428) remains
+  outstanding for the implemented paths.
 - **`slice()`**: per-event start/end point selection within a chopped file (#239)
 - **Audio `[ ]` stack / slice layering**: simultaneous audio-layer stacking in the play tree (#238)
 
