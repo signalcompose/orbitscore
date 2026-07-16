@@ -136,6 +136,16 @@ pub struct InsertBusStage {
     name: String,
     processor: Option<Box<dyn PostProcessor>>,
     buffer: Vec<f32>,
+    /// **activation flag**（`LinkChannelActivate.ready` と同じパターン）: `false` の間この bus は
+    /// render 対象から完全に外れる（zero-fill / gain-ramp / sum のコストゼロ）。daemon の既定
+    /// bus プール（#434 S3）は宣言（LoadPlugin）まで inactive で、全 bus inactive なら
+    /// `render_block` は bus 無し経路（ビット同一）に落ちる — `seq.effect()` を使わない
+    /// セッションが pool のコストを払わないための機構。
+    /// ⚠ inactive bus 名に tag された event は render_multi の対象外 = 消費されず retain される
+    /// （LinkAudio の not-ready channel と同じ既存ハザード）。producer（TS）は「宣言 =
+    /// activation → その後に tag 付き PlayAt」の順序を守ること（`seq.effect()` は await するので
+    /// 構造的に成立）。
+    active: Arc<AtomicBool>,
 }
 
 impl InsertBusStage {
@@ -146,10 +156,24 @@ impl InsertBusStage {
         processor: Option<Box<dyn PostProcessor>>,
         buffer_len: usize,
     ) -> Self {
+        // 手組み（テスト・明示構成）の stage は生成時から live。遅延 activation が要る
+        // 呼び出し側（daemon の bus プール）は `with_activation` を使う。
+        Self::with_activation(name, processor, buffer_len, Arc::new(AtomicBool::new(true)))
+    }
+
+    /// 共有 activation flag 付きで stage を作る（daemon が LoadPlugin 時に `true` へ release-store
+    /// する用途。flag の所有は呼び出し側と共有）。
+    pub fn with_activation(
+        name: impl Into<String>,
+        processor: Option<Box<dyn PostProcessor>>,
+        buffer_len: usize,
+        active: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             name: name.into(),
             processor,
             buffer: vec![0.0; buffer_len],
+            active,
         }
     }
 
@@ -223,8 +247,13 @@ fn render_block(
     // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
     let t0 = cb_stats.as_ref().map(|_| Instant::now());
 
-    if insert_buses.is_empty() {
-        // S1 の bus 無し経路は既存の呼び出し列をそのまま維持する（bit-identical）。
+    // active な bus が 1 つも無ければ既存の呼び出し列をそのまま維持する（bit-identical）。
+    // 既定 bus プール（全 stage inactive で起動）はここで従来経路に落ちるため、
+    // `seq.effect()` 未使用セッションに RT コストを課さない。
+    if !insert_buses
+        .iter()
+        .any(|bus| bus.active.load(Ordering::Relaxed))
+    {
         render_engine(engine, link, output_channels, hw);
     } else {
         render_engine_with_insert_buses(engine, link, insert_buses, output_channels, hw);
@@ -264,6 +293,10 @@ fn render_engine_with_insert_buses(
     let bs = (hw.len() / output_channels) * output_channels;
     let mut targets: ArrayVec<(&str, &mut [f32]), MAX_TARGETS> = ArrayVec::new();
     for bus in buses.iter_mut() {
+        // inactive stage は render 対象外（コストゼロ・InsertBusStage::active の doc 参照）。
+        if !bus.active.load(Ordering::Relaxed) {
+            continue;
+        }
         debug_assert!(
             bus.buffer.len() >= bs,
             "insert bus '{}' buffer too short",
@@ -295,6 +328,9 @@ fn render_engine_with_insert_buses(
     drop(targets);
 
     for bus in buses.iter_mut() {
+        if !bus.active.load(Ordering::Relaxed) {
+            continue;
+        }
         if let Some(processor) = bus.processor.as_mut() {
             processor.process(&mut bus.buffer[..bs]);
         }
@@ -762,6 +798,39 @@ mod tests {
         let mut expected = vec![0.0; 8];
         reference.render(&mut expected);
         let mut buses = Vec::new();
+        let mut actual = vec![0.0; 8];
+        let mut link = None;
+        let mut post = None;
+        let mut capture = None;
+        let cb_stats = None;
+        render_block(
+            &with_buses,
+            &mut link,
+            &mut buses,
+            &mut post,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut actual,
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn render_block_all_inactive_buses_bit_identical() {
+        // 既定 bus プール（宣言前 = 全 stage inactive）は render_engine 経路に落ち、
+        // bus 無しとビット同一・追加コストゼロであること（#461 efficiency review）。
+        let sample = orbit_audio_core::Sample::new(vec![0.25; 8], 48_000, 2);
+        let reference = Engine::new(48_000, 2);
+        reference.schedule(0.0, sample.clone()).expect("schedule");
+        let with_buses = Engine::new(48_000, 2);
+        with_buses.schedule(0.0, sample).expect("schedule");
+        let mut expected = vec![0.0; 8];
+        reference.render(&mut expected);
+        let mut buses = vec![
+            InsertBusStage::with_activation("seq-bus-0", None, 8, Arc::new(AtomicBool::new(false))),
+            InsertBusStage::with_activation("seq-bus-1", None, 8, Arc::new(AtomicBool::new(false))),
+        ];
         let mut actual = vec![0.0; 8];
         let mut link = None;
         let mut post = None;

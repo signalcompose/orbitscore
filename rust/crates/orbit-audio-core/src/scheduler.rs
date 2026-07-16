@@ -23,9 +23,18 @@ pub struct ScheduledSample {
     pub sample: Sample,
     /// Stop 命令での個別停止用識別子。`None` なら停止不可（fire-and-forget）。
     pub play_id: Option<String>,
-    /// 出力先 channel 名（LinkAudio outputChannel・#209）。`None` = 既定（unrouted / hardware
-    /// sum）。同名 channel の event は `Scheduler::render_channel` で加算合成される
-    /// （sum-by-name・DSL §8.1.2）。
+    /// 出力先の named routing tag。`None` = 既定（unrouted / hardware sum）。同名 target の
+    /// event は `render_multi` で加算合成される（sum-by-name・DSL §8.1.2）。
+    ///
+    /// **2つの用途を担う**（wire レベルでは相互排他 — daemon `session.rs` の
+    /// `playat_bus_and_channel_both_set` が両立を拒否する）:
+    /// - LinkAudio outputChannel（#209）— named channel buffer へ egress
+    /// - per-sequence insert bus（#434・PH.2b）— `InsertBusStage` へルーティングし
+    ///   effect 適用後に master へ sum
+    ///
+    /// ⚠ render 対象に存在しない名前へ tag された event は消費されず retain され続ける
+    /// （LinkAudio not-ready channel と insert-bus 未 activation に共通の既存ハザード。
+    /// producer 側が「登録/宣言 → tag」の順序を守ることが前提）。
     pub channel: Option<String>,
 }
 
