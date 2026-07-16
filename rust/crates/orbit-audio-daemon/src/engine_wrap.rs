@@ -791,6 +791,46 @@ mod set_bus_routing_tests {
         let message = format!("{error:?}");
         assert!(message.contains("unknown bus"), "{message}");
     }
+
+    /// M3（#459/#453）: `SetBusRouting` は参照された bus（seq_bus 自身・output 先・send 先）を
+    /// activation する（`LoadPlugin` 未実行の pass-through bus でも routing が render 対象になる）。
+    #[test]
+    fn set_bus_routing_activates_seq_bus_and_referenced_targets() {
+        let wrap = wrap_with_three_stage_topology();
+        let seq_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let sum_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let aux_active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let mut guard = wrap.outproc.lock().unwrap();
+            let control = guard.as_mut().unwrap();
+            control
+                .bus_actives
+                .insert("seq-bus-0".to_owned(), seq_active.clone());
+            control
+                .bus_actives
+                .insert("sum-bus-0".to_owned(), sum_active.clone());
+            control
+                .bus_actives
+                .insert("aux-bus-0".to_owned(), aux_active.clone());
+        }
+
+        wrap.set_bus_routing(
+            "seq-bus-0",
+            Some("sum-bus-0"),
+            &[("aux-bus-0".to_owned(), 0.5)],
+        )
+        .expect("routing with output + send must be accepted");
+
+        assert!(seq_active.load(Ordering::Acquire), "seq_bus must activate");
+        assert!(
+            sum_active.load(Ordering::Acquire),
+            "output target must activate"
+        );
+        assert!(
+            aux_active.load(Ordering::Acquire),
+            "send target must activate"
+        );
+    }
 }
 
 #[cfg(feature = "outproc-instrument")]
@@ -2247,6 +2287,20 @@ impl EngineWrap {
                     ))
                 })?;
                 slot.store(gain.to_bits(), Ordering::Relaxed);
+            }
+        }
+
+        // 4. activation（M3・#459/#453）: `SetBusRouting` は `LoadPlugin` と同じ activation 機構を
+        //    共有する（MX.4）。plugin 未ロードの pass-through bus（insert 未宣言の seq が
+        //    `seq.output`/`seq.send` だけを持つケース）でも routing が生きるよう、参照された bus
+        //    （seq_bus 自身・output 先・send 先）を render 対象に含める。既に active な bus への
+        //    再 store は無害（RT 経路は bool load のみ）。
+        for name in std::iter::once(seq_bus)
+            .chain(output)
+            .chain(sends.iter().map(|(name, _)| name.as_str()))
+        {
+            if let Some(active) = control.bus_actives.get(name) {
+                active.store(true, Ordering::Release);
             }
         }
         Ok(())

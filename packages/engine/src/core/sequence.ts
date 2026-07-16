@@ -94,8 +94,15 @@ export class Sequence {
   // LinkAudio output channel (only meaningful when Global.linkAudio() is enabled)
   private _outputChannel?: string
 
-  // per-sequence insert bus (only meaningful when seq.effect() was declared — PH.2b / #434 S3)
+  // per-sequence insert bus (only meaningful when seq.effect() was declared — PH.2b / #434 S3;
+  // or auto-allocated by `output()`/`send()` targeting a sum/aux bus — MX.4 / #459/#453 M3)
   private _insertBus?: string
+
+  // MX.4/#459/#453 M3: the sum bus target for `SetBusRouting` (set by `output(sumName)`),
+  // and the accumulated aux sends (set by `send(auxName, amount)`). Kept so every
+  // `SetBusRouting` re-issue carries the FULL current routing state (idempotent re-send).
+  private _sumOutputBus?: string
+  private readonly _auxSends = new Map<string, number>()
 
   // MIDI properties (only meaningful when seq.midi() was declared).
   // A MIDI sequence interprets play() values as degrees, not slice numbers.
@@ -295,24 +302,41 @@ export class Sequence {
   }
 
   /**
-   * Set the LinkAudio output channel name for this sequence.
+   * Set the LinkAudio output channel name for this sequence, OR (MX.2, #459/#453 M3) route
+   * this sequence's per-seq insert bus to a declared sum/group bus.
    *
-   * Effective only when `Global.linkAudio()` was declared earlier in the same
-   * .orbs file. Without that declaration the assignment is recorded but the
-   * sequence still routes through the hardware bus, and a runtime warning is
-   * emitted on each call when LinkAudio mode is not enabled. Multiple sequences
-   * sharing the same channel name are summed by the SC plugin.
+   * Name resolution (MX.2): if `channelName` matches a `global.sum(name)` declaration, this
+   * routes to that group bus via `SetBusRouting` (v1 mutual exclusion with LinkAudio means
+   * only one of the two branches below can ever apply). Otherwise, the existing LinkAudio
+   * egress-channel behavior applies unchanged: effective only when `Global.linkAudio()` was
+   * declared earlier in the same .orbs file; without that declaration the assignment is
+   * recorded but the sequence still routes through the hardware bus, and a runtime warning
+   * is emitted. Multiple sequences sharing the same channel name are summed by the SC plugin.
    *
-   * Channel changes take effect at the next scheduling cycle; in-flight loop
-   * iterations are not rewritten (no `seamlessParameterUpdate` — channel
-   * switching mid-loop is a separate feature, planned for Step 3.4).
+   * Channel/routing changes take effect at the next scheduling cycle; in-flight loop
+   * iterations are not rewritten (no `seamlessParameterUpdate` — mid-loop switching is a
+   * separate feature, planned for Step 3.4).
    */
   output(channelName: string): this {
+    const name = this.stateManager.getName() || 'sequence'
     if (!channelName || !channelName.trim()) {
-      throw new Error(
-        `Sequence '${this.stateManager.getName() || 'sequence'}': output(channelName) requires a non-empty channel name.`,
-      )
+      throw new Error(`Sequence '${name}': output(channelName) requires a non-empty channel name.`)
     }
+
+    const sumBus = this.global.resolveSumBus(channelName)
+    if (sumBus) {
+      if (this.isNoteSequence()) {
+        throw new Error(
+          `Sequence '${name}': output("${channelName}") to a sum bus is only supported on ` +
+            `audio sequences in v1 (not midi()/instrument() sequences).`,
+        )
+      }
+      this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+      this._sumOutputBus = sumBus
+      this.syncBusRouting()
+      return this
+    }
+
     this._outputChannel = channelName
     if (this.global.isLinkAudioEnabled()) {
       // Eagerly register the channel with the plugin so its source appears in
@@ -321,13 +345,13 @@ export class Sequence {
       // the dispatch path re-registers idempotently if this races the boot.
       this.audioEngine.registerLinkAudioChannel?.(channelName)?.catch((err) => {
         console.warn(
-          `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}"): ` +
+          `⚠️  ${name}.output("${channelName}"): ` +
             `eager LinkAudio channel registration failed (will retry on playback): ${err}`,
         )
       })
     } else {
       console.warn(
-        `⚠️  ${this.stateManager.getName() || 'sequence'}.output("${channelName}") ` +
+        `⚠️  ${name}.output("${channelName}") ` +
           `was called without 'global.linkAudio()'. The channel name is recorded ` +
           `but will not take effect until LinkAudio mode is declared.`,
       )
@@ -337,6 +361,60 @@ export class Sequence {
 
   getOutputChannel(): string | undefined {
     return this._outputChannel
+  }
+
+  /**
+   * Add a send to a declared aux/return bus (MX.3, #459/#453 M3). Post-fader fixed (after
+   * this sequence's own insert, if any). Multiple sends fan out (repeated calls with
+   * different `auxName` accumulate; the same `auxName` overwrites its gain). Audio
+   * sequences only (mirrors `seq.effect()` / sum-routing restriction).
+   */
+  send(auxName: string, amount: number): this {
+    const name = this.stateManager.getName() || 'sequence'
+    if (!auxName || !auxName.trim()) {
+      throw new Error(`Sequence '${name}': send(auxName, amount) requires a non-empty aux name.`)
+    }
+    if (this.isNoteSequence()) {
+      throw new Error(
+        `Sequence '${name}': send() is only supported on audio sequences in v1 (not ` +
+          `midi()/instrument() sequences).`,
+      )
+    }
+    const auxBus = this.global.resolveAuxBus(auxName)
+    if (!auxBus) {
+      throw new Error(
+        `Sequence '${name}': send("${auxName}", ...) references an undeclared aux bus. ` +
+          `Call global.aux("${auxName}") first.`,
+      )
+    }
+    if (!Number.isFinite(amount)) {
+      throw new Error(`Sequence '${name}': send("${auxName}", ${amount}) gain must be finite.`)
+    }
+
+    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    this._auxSends.set(auxBus, amount)
+    this.syncBusRouting()
+    return this
+  }
+
+  /**
+   * Re-issues `SetBusRouting` with the FULL current routing state (output + all sends) for
+   * this sequence's insert bus (MX.4/#459/#453 M3). Fire-and-forget + best-effort, mirroring
+   * `output()`'s eager LinkAudio registration: a failed push must not break the synchronous
+   * `.method().method()` chaining contract these calls share with the rest of the DSL.
+   */
+  private syncBusRouting(): void {
+    if (!this._insertBus) return
+    const bus = this._insertBus
+    const sends = Array.from(this._auxSends.entries()).map(([sendBus, gain]) => ({
+      bus: sendBus,
+      gain,
+    }))
+    void this.global.setBusRouting(bus, this._sumOutputBus, sends).catch((err) => {
+      console.warn(
+        `⚠️  ${this.stateManager.getName() || 'sequence'}: SetBusRouting(${bus}) failed: ${err}`,
+      )
+    })
   }
 
   /**

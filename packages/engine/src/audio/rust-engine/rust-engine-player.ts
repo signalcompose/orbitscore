@@ -615,6 +615,21 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
+   * Runtime mixer bus routing change (MX.4, #459/#453 M3). Unlike LinkAudio channel
+   * registration, there is no hardware-bus fallback for a missing sum/aux target — the
+   * daemon-side error (e.g. `UNSUPPORTED` on a non-`outproc-effect` build, or a kind/order
+   * violation) is a real failure and propagates unchanged to the caller (`Sequence`'s
+   * `output()`/`send()`, which log it via `console.warn` — see that file).
+   */
+  async setBusRouting(
+    seqBus: string,
+    output: string | undefined,
+    sends: { bus: string; gain: number }[],
+  ): Promise<void> {
+    await this.daemon.setBusRouting(seqBus, output, sends)
+  }
+
+  /**
    * Loads a plugin into the daemon's master effect insert. Converts daemon-side
    * `DaemonProtocolError`s into operator-actionable messages (CLAP_UNAVAILABLE →
    * build hint, other codes → generic wrap); non-protocol errors pass through

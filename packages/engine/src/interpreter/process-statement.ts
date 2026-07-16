@@ -12,6 +12,7 @@ import {
   PatternBinding,
   ModeBinding,
   ImportStatement,
+  MixerHandleStatement,
 } from '../parser/audio-parser'
 
 import { InterpreterState } from './types'
@@ -69,6 +70,9 @@ export async function processStatement(
     case 'mode_binding':
       processModeBinding(statement, state)
       break
+    case 'mixer_handle':
+      await processMixerHandleStatement(statement, state)
+      break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
       console.warn(`Unknown statement type: ${(statement as any).type}`)
@@ -125,6 +129,28 @@ function processModeBinding(statement: ModeBinding, state: InterpreterState): vo
     statement.lattice,
     statement.period,
   )
+}
+
+/**
+ * Process a bare `sum("name")` / `aux("name")` reference (MX.2/MX.3, #459/#453 M3):
+ * `global.sum(name)`/`global.aux(name)` is a `GlobalStatement` (target-prefixed), but this
+ * bare form has no `global`-variable prefix — it always operates on `state.currentGlobal`
+ * (mirrors `import chords` / the chord-binding handlers above).
+ */
+async function processMixerHandleStatement(
+  statement: MixerHandleStatement,
+  state: InterpreterState,
+): Promise<void> {
+  const global = requireGlobal(state, `${statement.kind}("${statement.name}")`)
+  if (!global) return
+
+  let result: any = await callMethod(global, statement.kind, [statement.name])
+
+  if (statement.chain) {
+    for (const chainedCall of statement.chain) {
+      result = await callMethod(result, chainedCall.method, chainedCall.args)
+    }
+  }
 }
 
 /**

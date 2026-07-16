@@ -25,6 +25,7 @@ import { MidiTransportScheduler } from './global/midi-transport-scheduler'
 import { PluginEffectManager } from './global/plugin-effect-manager'
 import { PluginInstrumentManager } from './global/plugin-instrument-manager'
 import { SequenceEffectManager } from './global/sequence-effect-manager'
+import { MixerManager, MixerBusHandle } from './global/mixer-manager'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -39,6 +40,7 @@ export class Global {
   private pluginEffectManager: PluginEffectManager
   private pluginInstrumentManager: PluginInstrumentManager
   private sequenceEffectManager: SequenceEffectManager
+  private mixerManager: MixerManager
 
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
@@ -76,6 +78,7 @@ export class Global {
       this.audioManager,
       this.linkAudioManager,
     )
+    this.mixerManager = new MixerManager(audioEngine, this.audioManager, this.linkAudioManager)
     this.quantizeManager = new QuantizeManager()
     this.midiManager = midiManager ?? new MidiManager()
     this.midiManager.setPluginOutputFactory(() => new PluginNoteOutput(audioEngine))
@@ -254,7 +257,8 @@ export class Global {
     if (
       this.pluginEffectManager.hasDeclaration() ||
       this.pluginInstrumentManager.hasDeclaration() ||
-      this.sequenceEffectManager.hasAnyDeclaration()
+      this.sequenceEffectManager.hasAnyDeclaration() ||
+      this.mixerManager.hasAnyDeclaration()
     ) {
       throw new Error(
         'global.linkAudio() cannot be used after plugin hosting has been declared in v1.',
@@ -289,6 +293,51 @@ export class Global {
    */
   async sequenceEffect(sequenceName: string, path: string, pluginId?: string): Promise<string> {
     return this.sequenceEffectManager.effect(sequenceName, path, pluginId)
+  }
+
+  /**
+   * Ensures a per-sequence bus is allocated without loading a plugin (MX.4/#459/#453 M3):
+   * used by `Sequence.output()`/`.send()` when `seq.effect()` was not declared, so
+   * `SetBusRouting` has a source bus to reference. @internal
+   */
+  ensureSequenceInsertBus(sequenceName: string): string {
+    return this.sequenceEffectManager.ensureBus(sequenceName)
+  }
+
+  /** Declares (or idempotently re-declares) a sum/group bus (MX.2, #459/#453 M3). */
+  sum(name: string): MixerBusHandle {
+    return this.mixerManager.sum(name)
+  }
+
+  /** Declares (or idempotently re-declares) an aux/return bus (MX.3, #459/#453 M3). */
+  aux(name: string): MixerBusHandle {
+    return this.mixerManager.aux(name)
+  }
+
+  /** Resolves a declared sum bus name to its allocated bus, or undefined if undeclared. @internal */
+  resolveSumBus(name: string): string | undefined {
+    return this.mixerManager.resolveSum(name)
+  }
+
+  /** Resolves a declared aux bus name to its allocated bus, or undefined if undeclared. @internal */
+  resolveAuxBus(name: string): string | undefined {
+    return this.mixerManager.resolveAux(name)
+  }
+
+  /**
+   * Issues (or re-issues) `SetBusRouting` for `seqBus` (MX.4/#459/#453 M3). `output` /
+   * `sends` should be the sequence's FULL current routing state — see
+   * `AudioEngine.setBusRouting`'s doc comment for why. @internal
+   */
+  async setBusRouting(
+    seqBus: string,
+    output: string | undefined,
+    sends: { bus: string; gain: number }[],
+  ): Promise<void> {
+    if (!this.audioEngine.setBusRouting) {
+      throw new Error('Mixer bus routing requires the Rust engine backend.')
+    }
+    await this.audioEngine.setBusRouting(seqBus, output, sends)
   }
 
   /**

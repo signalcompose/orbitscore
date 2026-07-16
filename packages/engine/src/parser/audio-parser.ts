@@ -29,6 +29,7 @@ export type {
   PatternBinding,
   ModeBinding,
   ImportStatement,
+  MixerHandleStatement,
   MethodChain,
   RandomValue,
   PlayElement,

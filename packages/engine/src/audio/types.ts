@@ -85,6 +85,21 @@ export interface AudioEngine {
    * are treated as always-active (no self-heal check performed).
    */
   isPluginActive?(role?: 'effect' | 'instrument', bus?: string): boolean
+
+  /**
+   * Runtime mixer routing (MX.4, #459/#453 M3): (re)sets `seqBus`'s output target (a sum
+   * bus) and/or send gains (to aux buses). `output: undefined` leaves the existing output
+   * target untouched (daemon-side semantics — there is no way to explicitly clear it back
+   * to the hardware bus in v1). `sends` is the FULL current send list for `seqBus` — callers
+   * must re-send previously-set sends alongside a new one (the daemon only touches the
+   * enumerated entries, so a shorter list does not clear the others, but callers should still
+   * pass the complete set to keep engine state and TS-side state visibly in sync).
+   */
+  setBusRouting?(
+    seqBus: string,
+    output: string | undefined,
+    sends: { bus: string; gain: number }[],
+  ): Promise<void>
 }
 
 /**
