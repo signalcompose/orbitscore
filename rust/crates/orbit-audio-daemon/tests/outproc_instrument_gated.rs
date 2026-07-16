@@ -164,6 +164,37 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
 }
 
 #[test]
+#[ignore = "#441: needs a real output device + built instrument child + test-synth dylib"]
+fn outproc_instrument_attach_failure_can_retry_with_correct_plugin() {
+    let cfg = setup_test();
+    let good_plugin = cfg.plugin.clone();
+    let plugin_id = cfg.plugin_id.clone();
+    let (engine, _guard) =
+        EngineWrap::start_outproc_instrument_post_boot(cfg).expect("start daemon");
+    let started = Instant::now();
+    let error =
+        match engine.load_outproc_plugin(PathBuf::from("/definitely/not/a/plugin.clap"), None) {
+            Ok(_) => panic!("typo plugin must fail"),
+            Err(error) => error,
+        };
+    assert!(matches!(
+        error,
+        orbit_audio_daemon::engine_wrap::WrapError::OutProcAttachFailed(_)
+    ));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    engine
+        .load_outproc_plugin(good_plugin, plugin_id)
+        .expect("retry correct plugin");
+    engine
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .expect("note on");
+    assert!(wait_until(Duration::from_secs(3), || engine
+        .outproc_instrument_stats()
+        .map(|s| s.fresh > 0 && s.probe_live_count > 0)
+        .unwrap_or(false)));
+}
+
+#[test]
 #[ignore = "Issue #420 Part 3b: SIGKILL test needs a real output device + built child and synth"]
 fn outproc_instrument_survives_child_kill_and_sounds_again() {
     let (engine, _guard) =

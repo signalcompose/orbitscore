@@ -182,6 +182,33 @@ fn outproc_effect_processes_audio_via_daemon() {
     // _guard drop で teardown（watchdog 停止 → QUIT → reap → unlink）。panic / UB なく完了することを検証。
 }
 
+#[test]
+#[ignore = "#441: needs a real output device + built child binary + test-effect dylib"]
+fn outproc_effect_attach_failure_can_retry_with_correct_plugin() {
+    let (cfg, wav) = setup_test(None);
+    let good_plugin = cfg.plugin.clone();
+    let (engine, _guard) = EngineWrap::start_outproc_effect_post_boot(cfg).expect("start daemon");
+    let started = Instant::now();
+    let error =
+        match engine.load_outproc_plugin(PathBuf::from("/definitely/not/a/plugin.clap"), None) {
+            Ok(_) => panic!("typo plugin must fail"),
+            Err(error) => error,
+        };
+    assert!(matches!(
+        error,
+        orbit_audio_daemon::engine_wrap::WrapError::OutProcAttachFailed(_)
+    ));
+    assert!(started.elapsed() < Duration::from_secs(10));
+    engine
+        .load_outproc_plugin(good_plugin, None)
+        .expect("retry correct plugin");
+    play_sine(&engine, &wav);
+    assert!(wait_until(Duration::from_secs(3), || engine
+        .outproc_effect_stats()
+        .map(|s| s.fresh > 0)
+        .unwrap_or(false)));
+}
+
 // ── kill-test: child SIGKILL → daemon 生存 → respawn → fresh 処理復帰 ─────────────────────────
 #[test]
 #[ignore = "γ M1 PR-C: needs a real output device + built child binary + test-effect dylib (local only)"]
