@@ -23,6 +23,7 @@ export default withMermaid(
       'en/STYLE_GUIDE.md',
       '**/.audit/**',
       '**/AUDIT_REPORT*.md',
+      '.plan/**',
     ],
 
     // KaTeX CSS は public/katex/ に同梱して local link で読み込む。
