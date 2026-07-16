@@ -231,8 +231,11 @@ impl PostProcessor for CompositePostProcessor {
 /// OOP role ごとの差分を child-slot state machine から分離する。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) trait OutProcRole: Sized {
-    type Stats;
-    type Supervisor;
+    /// `Send + Sync` は生産コード上も既に前提（watchdog スレッドが `Arc<Self::Stats>` を共有する）。
+    /// ジェネリックなテストヘルパーが `Arc<Mutex<ChildSlot<R>>>` をスレッド間で受け渡す際、
+    /// コンパイラにその前提を明示するために必要。
+    type Stats: Send + Sync;
+    type Supervisor: Send;
     const ROLE_NAME: &'static str;
 
     fn spawn_child(
@@ -253,6 +256,16 @@ pub(crate) trait OutProcRole: Sized {
     fn set_child_early_exit(stats: &Self::Stats, value: bool);
     fn child_early_exit(stats: &Self::Stats) -> bool;
     fn set_current_child_pid(stats: &Self::Stats, pid: u32);
+    /// テスト専用: role ジェネリックなテストヘルパーが `Self::Stats` を構築するためのコンストラクタ。
+    /// production コードはこれを呼ばない（`load_outproc_plugin_impl` 等は呼び出し側から渡された
+    /// `ChildLaunch::stats` を使う）。
+    #[cfg(test)]
+    fn new_stats() -> Arc<Self::Stats>;
+    /// テスト専用: `current_child_pid` の生 atomic への参照。`role_mismatch_retries_same_slot` が
+    /// spawn 完了の同期に使う（両 role の `Stats` に同名 `pub` field があるが、`Self::Stats` への
+    /// ジェネリックコードからは field アクセスできないため trait 経由にする）。
+    #[cfg(test)]
+    fn current_child_pid_atomic(stats: &Self::Stats) -> &std::sync::atomic::AtomicU32;
 }
 
 #[cfg(feature = "outproc-effect")]
@@ -323,6 +336,14 @@ impl OutProcRole for EffectRole {
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
     }
+    #[cfg(test)]
+    fn new_stats() -> Arc<Self::Stats> {
+        crate::outproc_effect::OutProcEffectStats::new()
+    }
+    #[cfg(test)]
+    fn current_child_pid_atomic(stats: &Self::Stats) -> &std::sync::atomic::AtomicU32 {
+        &stats.current_child_pid
+    }
 }
 
 #[cfg(feature = "outproc-instrument")]
@@ -379,6 +400,14 @@ impl OutProcRole for InstrumentRole {
     }
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    fn new_stats() -> Arc<Self::Stats> {
+        crate::outproc_instrument::OutProcInstrumentStats::new()
+    }
+    #[cfg(test)]
+    fn current_child_pid_atomic(stats: &Self::Stats) -> &std::sync::atomic::AtomicU32 {
+        &stats.current_child_pid
     }
 }
 
@@ -2523,24 +2552,6 @@ fn retryable_attach_failure<R: OutProcRole>(
     WrapError::OutProcAttachFailed(message)
 }
 
-#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
-type OutProcChildStats = <DefaultOutProcRole as OutProcRole>::Stats;
-
-#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
-fn spawn_outproc_supervisor(
-    child: std::process::Child,
-    launch: &ChildLaunch,
-    path: PathBuf,
-    plugin_id: Option<String>,
-) -> std::io::Result<<DefaultOutProcRole as OutProcRole>::Supervisor> {
-    DefaultOutProcRole::spawn_supervisor(child, launch, path, plugin_id)
-}
-
-#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
-fn outproc_role_matches(flags: u32) -> bool {
-    DefaultOutProcRole::role_matches(flags)
-}
-
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 fn outproc_plugin_summary(
     path: &std::path::Path,
@@ -3057,19 +3068,19 @@ mod capture_path_tests {
 
 #[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
 mod outproc_load_error_test_support {
-    use super::{ChildLaunch, ChildSlot, EngineWrap, OutProcChildStats, WrapError};
+    use super::{ChildLaunch, ChildSlot, EngineWrap, OutProcRole, WrapError};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    type InjectedSlot = (Arc<EngineWrap>, Arc<Mutex<ChildSlot>>);
+    type InjectedSlot<R> = (Arc<EngineWrap>, Arc<Mutex<ChildSlot<R>>>);
 
-    fn child_launch(
+    fn child_launch<R: OutProcRole>(
         shm_path: PathBuf,
         child_exe: PathBuf,
-        stats: Arc<OutProcChildStats>,
-    ) -> ChildLaunch {
+        stats: Arc<R::Stats>,
+    ) -> ChildLaunch<R> {
         ChildLaunch {
             shm_path,
             child_exe,
@@ -3080,16 +3091,16 @@ mod outproc_load_error_test_support {
         }
     }
 
-    pub(super) fn open_shared_failure_closes_slot(
+    pub(super) fn open_shared_failure_closes_slot<R: OutProcRole>(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         assert_error: impl Fn(WrapError, &str),
         plugin_path: &str,
     ) {
         let shm_path = unique_path();
         let _ = std::fs::remove_file(&shm_path);
-        let stats = OutProcChildStats::new();
-        let launch = child_launch(
+        let stats = R::new_stats();
+        let launch = child_launch::<R>(
             shm_path,
             PathBuf::from("unused-child-executable"),
             stats.clone(),
@@ -3097,7 +3108,7 @@ mod outproc_load_error_test_support {
         let (wrap, child_slot) = inject(ChildSlot::Empty(launch), stats);
 
         let error = wrap
-            .load_outproc_plugin(PathBuf::from(plugin_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None)
             .err()
             .expect("missing shared memory must fail before spawn");
 
@@ -3112,16 +3123,16 @@ mod outproc_load_error_test_support {
     }
 
     #[cfg(feature = "outproc-effect")]
-    pub(super) fn poisoned_slot_open_shared_failure_recovers_to_closed(
+    pub(super) fn poisoned_slot_open_shared_failure_recovers_to_closed<R: OutProcRole + 'static>(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         plugin_path: &str,
     ) {
         let shm_path = unique_path();
         let _ = std::fs::remove_file(&shm_path);
-        let stats = OutProcChildStats::new();
+        let stats = R::new_stats();
         let (wrap, child_slot) = inject(
-            ChildSlot::Empty(child_launch(
+            ChildSlot::Empty(child_launch::<R>(
                 shm_path,
                 PathBuf::from("unused-child-executable"),
                 stats.clone(),
@@ -3135,7 +3146,11 @@ mod outproc_load_error_test_support {
         })
         .join();
 
-        let error = match wrap.load_outproc_plugin(PathBuf::from(plugin_path), None) {
+        let error = match wrap.load_outproc_plugin_impl::<R>(
+            child_slot.clone(),
+            PathBuf::from(plugin_path),
+            None,
+        ) {
             Ok(_) => panic!("missing shm must take the Closed terminal transition after recovery"),
             Err(error) => error,
         };
@@ -3149,9 +3164,9 @@ mod outproc_load_error_test_support {
         ));
     }
 
-    pub(super) fn spawn_failure_restores_empty_for_retry(
+    pub(super) fn spawn_failure_restores_empty_for_retry<R: OutProcRole>(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         assert_error: impl Fn(WrapError, &str),
         plugin_path: &str,
     ) {
@@ -3160,13 +3175,13 @@ mod outproc_load_error_test_support {
         let _mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
         let bad_child_exe = unique_path();
         let _ = std::fs::remove_file(&bad_child_exe);
-        let stats = OutProcChildStats::new();
-        let launch = child_launch(shm_path, bad_child_exe, stats.clone());
+        let stats = R::new_stats();
+        let launch = child_launch::<R>(shm_path, bad_child_exe, stats.clone());
         let (wrap, child_slot) = inject(ChildSlot::Empty(launch), stats);
 
         for attempt in 1..=2 {
             let error = wrap
-                .load_outproc_plugin(PathBuf::from(plugin_path), None)
+                .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None)
                 .err()
                 .expect("nonexistent child executable must fail to spawn");
             assert_error(error, "spawn outproc child");
@@ -3180,15 +3195,15 @@ mod outproc_load_error_test_support {
         }
     }
 
-    pub(super) fn closed_slot_is_rejected(
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+    pub(super) fn closed_slot_is_rejected<R: OutProcRole>(
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         assert_error: impl Fn(WrapError, &str),
         plugin_path: &str,
     ) {
-        let (wrap, child_slot) = inject(ChildSlot::Closed, OutProcChildStats::new());
+        let (wrap, child_slot) = inject(ChildSlot::Closed, R::new_stats());
 
         let error = wrap
-            .load_outproc_plugin(PathBuf::from(plugin_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None)
             .err()
             .expect("Closed slot must reject attach");
 
@@ -3199,8 +3214,8 @@ mod outproc_load_error_test_support {
         ));
     }
 
-    pub(super) fn loading_slot_is_rejected(
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+    pub(super) fn loading_slot_is_rejected<R: OutProcRole>(
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         assert_error: impl Fn(WrapError, &str),
         loading_path: &str,
         second_path: &str,
@@ -3209,11 +3224,11 @@ mod outproc_load_error_test_support {
             ChildSlot::Loading {
                 path: PathBuf::from(loading_path),
             },
-            OutProcChildStats::new(),
+            R::new_stats(),
         );
 
         let error = wrap
-            .load_outproc_plugin(PathBuf::from(second_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(second_path), None)
             .err()
             .expect("Loading slot must reject concurrent attach");
 
@@ -3225,23 +3240,23 @@ mod outproc_load_error_test_support {
 
     /// 実際に生存する（が無害な）child を起動して `ChildSlot::Active` を直接構築する。
     /// `EffectChildSupervisor`/`InstrumentChildSupervisor` は `spawn_effect_child` 経由の
-    /// `Command` 起動を要求するので、実 CLAP/VST3 plugin なしで到達するには `spawn_outproc_supervisor`
+    /// `Command` 起動を要求するので、実 CLAP/VST3 plugin なしで到達するには `R::spawn_supervisor`
     /// を直接呼び、`first_child` には（respawn を誘発しない）長寿命の `sleep` を渡す（outproc_effect.rs
     /// の `supervisor_*` テストと同じ手法）。supervisor が以後の shm unlink を所有するため、ローカルの
     /// `launch` の `cleanup_shm_on_drop` は production の `load_outproc_plugin` 成功パスと同様に外す。
-    fn active_child_slot(
+    fn active_child_slot<R: OutProcRole>(
         unique_path: impl Fn() -> PathBuf,
         plugin_path: &str,
         plugin_id: Option<String>,
-    ) -> ChildSlot {
+    ) -> ChildSlot<R> {
         let shm_path = unique_path();
         let _ = std::fs::remove_file(&shm_path);
         let _mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
 
-        let mut launch = child_launch(
+        let mut launch = child_launch::<R>(
             shm_path,
             PathBuf::from("unused-child-executable-for-respawn-only"),
-            OutProcChildStats::new(),
+            R::new_stats(),
         );
         let first_child = std::process::Command::new("sleep")
             .arg("30")
@@ -3249,9 +3264,8 @@ mod outproc_load_error_test_support {
             .expect("spawn stub child for Active fixture");
 
         let path = PathBuf::from(plugin_path);
-        let supervisor =
-            super::spawn_outproc_supervisor(first_child, &launch, path.clone(), plugin_id.clone())
-                .expect("spawn supervisor for Active fixture");
+        let supervisor = R::spawn_supervisor(first_child, &launch, path.clone(), plugin_id.clone())
+            .expect("spawn supervisor for Active fixture");
         launch.cleanup_shm_on_drop = false;
 
         ChildSlot::Active {
@@ -3264,17 +3278,21 @@ mod outproc_load_error_test_support {
 
     /// Important finding 2a: `ChildSlot::Active` への同一 path・同一 plugin_id の再送は冪等に
     /// `Ok` を返し、slot を `Active` のまま維持すること。
-    pub(super) fn active_slot_accepts_idempotent_reload(
+    pub(super) fn active_slot_accepts_idempotent_reload<R: OutProcRole>(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         plugin_path: &str,
         plugin_id: Option<String>,
     ) {
-        let slot = active_child_slot(unique_path, plugin_path, plugin_id.clone());
-        let (wrap, child_slot) = inject(slot, OutProcChildStats::new());
+        let slot = active_child_slot::<R>(unique_path, plugin_path, plugin_id.clone());
+        let (wrap, child_slot) = inject(slot, R::new_stats());
 
-        wrap.load_outproc_plugin(PathBuf::from(plugin_path), plugin_id)
-            .expect("idempotent re-load of the same path+plugin_id while Active must succeed");
+        wrap.load_outproc_plugin_impl::<R>(
+            child_slot.clone(),
+            PathBuf::from(plugin_path),
+            plugin_id,
+        )
+        .expect("idempotent re-load of the same path+plugin_id while Active must succeed");
         assert!(
             matches!(
                 &*child_slot.lock().expect("lock child slot"),
@@ -3287,19 +3305,23 @@ mod outproc_load_error_test_support {
     /// Critical finding: `ChildSlot::Active` への同一 path・**異なる** plugin_id は replacement
     /// 要求として拒否すること（呼び出し側が指定した plugin_id を握り潰して古い plugin_id のまま
     /// 黙って `Ok` を返してはならない）。
-    pub(super) fn active_slot_rejects_plugin_id_change(
+    pub(super) fn active_slot_rejects_plugin_id_change<R: OutProcRole>(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         assert_error: impl Fn(WrapError, &str),
         plugin_path: &str,
         initial_plugin_id: Option<String>,
         changed_plugin_id: Option<String>,
     ) {
-        let slot = active_child_slot(unique_path, plugin_path, initial_plugin_id.clone());
-        let (wrap, child_slot) = inject(slot, OutProcChildStats::new());
+        let slot = active_child_slot::<R>(unique_path, plugin_path, initial_plugin_id.clone());
+        let (wrap, child_slot) = inject(slot, R::new_stats());
 
         let error = wrap
-            .load_outproc_plugin(PathBuf::from(plugin_path), changed_plugin_id)
+            .load_outproc_plugin_impl::<R>(
+                child_slot.clone(),
+                PathBuf::from(plugin_path),
+                changed_plugin_id,
+            )
             .err()
             .expect("same path with a different plugin_id while Active must be rejected");
         assert_error(error, "does not support replacement");
@@ -3314,18 +3336,18 @@ mod outproc_load_error_test_support {
 
     /// Important finding 2b: `ChildSlot::Active` への **異なる** path は v1 では replacement
     /// 拒否のまま（既存の Loading 側テストと対になる Active 側の直接検証）。
-    pub(super) fn active_slot_rejects_path_replacement(
+    pub(super) fn active_slot_rejects_path_replacement<R: OutProcRole>(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         assert_error: impl Fn(WrapError, &str),
         plugin_path: &str,
         other_path: &str,
     ) {
-        let slot = active_child_slot(unique_path, plugin_path, None);
-        let (wrap, child_slot) = inject(slot, OutProcChildStats::new());
+        let slot = active_child_slot::<R>(unique_path, plugin_path, None);
+        let (wrap, child_slot) = inject(slot, R::new_stats());
 
         let error = wrap
-            .load_outproc_plugin(PathBuf::from(other_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(other_path), None)
             .err()
             .expect("a different path while Active must be rejected");
         assert_error(error, "does not support replacement");
@@ -3366,22 +3388,30 @@ mod outproc_load_error_test_support {
         script_path
     }
 
-    pub(super) fn early_exit_fast_fails_and_keeps_retry_shm(
+    pub(super) fn early_exit_fast_fails_and_keeps_retry_shm<R: OutProcRole>(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         plugin_path: &str,
     ) {
         let shm_path = unique_path();
         let _ = std::fs::remove_file(&shm_path);
         let mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
         let child_exe = write_exit_child_script(&unique_path);
-        let stats = OutProcChildStats::new();
+        let stats = R::new_stats();
         let (wrap, slot) = inject(
-            ChildSlot::Empty(child_launch(shm_path.clone(), child_exe.clone(), stats)),
-            OutProcChildStats::new(),
+            ChildSlot::Empty(child_launch::<R>(
+                shm_path.clone(),
+                child_exe.clone(),
+                stats,
+            )),
+            R::new_stats(),
         );
         let started = std::time::Instant::now();
-        let error = match wrap.load_outproc_plugin(PathBuf::from(plugin_path), None) {
+        let error = match wrap.load_outproc_plugin_impl::<R>(
+            slot.clone(),
+            PathBuf::from(plugin_path),
+            None,
+        ) {
             Ok(_) => panic!("immediately exiting child must fail attach"),
             Err(error) => error,
         };
@@ -3402,9 +3432,9 @@ mod outproc_load_error_test_support {
         let _ = std::fs::remove_file(child_exe);
     }
 
-    pub(super) fn role_mismatch_retries_same_slot(
+    pub(super) fn role_mismatch_retries_same_slot<R: OutProcRole + 'static>(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         plugin_path: &str,
         wrong_has_audio_input: bool,
         correct_has_audio_input: bool,
@@ -3413,9 +3443,9 @@ mod outproc_load_error_test_support {
         let _ = std::fs::remove_file(&shm_path);
         let mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
         let child_exe = write_slow_child_script(&unique_path);
-        let stats = OutProcChildStats::new();
+        let stats = R::new_stats();
         let (wrap, slot) = inject(
-            ChildSlot::Empty(child_launch(
+            ChildSlot::Empty(child_launch::<R>(
                 shm_path.clone(),
                 child_exe.clone(),
                 stats.clone(),
@@ -3423,17 +3453,16 @@ mod outproc_load_error_test_support {
             stats.clone(),
         );
         for (attempt, has_input) in [(1, wrong_has_audio_input), (2, correct_has_audio_input)] {
-            stats
-                .current_child_pid
-                .store(0, std::sync::atomic::Ordering::Relaxed);
+            R::current_child_pid_atomic(&stats).store(0, std::sync::atomic::Ordering::Relaxed);
             let wrap_call = wrap.clone();
+            let slot_call = slot.clone();
             let path = PathBuf::from(plugin_path);
-            let call = std::thread::spawn(move || wrap_call.load_outproc_plugin(path, None));
+            let call = std::thread::spawn(move || {
+                wrap_call.load_outproc_plugin_impl::<R>(slot_call, path, None)
+            });
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
             // PID は reset_child_starting の後に publish されるため、この READY はそれによって消されない。
-            while stats
-                .current_child_pid
-                .load(std::sync::atomic::Ordering::Relaxed)
+            while R::current_child_pid_atomic(&stats).load(std::sync::atomic::Ordering::Relaxed)
                 == 0
             {
                 assert!(
@@ -3468,9 +3497,11 @@ mod outproc_load_error_test_support {
     /// ブロックしている **最中**でも、mutex 待ちでなく `ChildSlot::Loading` を即座に観測して
     /// fail-fast すること。この lock-scope fix が無いと 2 本目は `.lock()` 自体で最大 10 秒
     /// ブロックされ、意図された「Loading 中は即座に in progress で reject」が到達不能になる。
-    pub(super) fn concurrent_load_call_observes_loading_without_blocking(
+    pub(super) fn concurrent_load_call_observes_loading_without_blocking<
+        R: OutProcRole + 'static,
+    >(
         unique_path: impl Fn() -> PathBuf,
-        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        inject: impl Fn(ChildSlot<R>, Arc<R::Stats>) -> InjectedSlot<R>,
         assert_error: impl Fn(WrapError, &str),
         has_audio_input: bool,
         loading_path: &str,
@@ -3481,14 +3512,16 @@ mod outproc_load_error_test_support {
         let _mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
         let child_exe = write_slow_child_script(&unique_path);
 
-        let stats = OutProcChildStats::new();
-        let launch = child_launch(shm_path.clone(), child_exe.clone(), stats.clone());
+        let stats = R::new_stats();
+        let launch = child_launch::<R>(shm_path.clone(), child_exe.clone(), stats.clone());
         let (wrap, child_slot) = inject(ChildSlot::Empty(launch), stats);
 
         let wrap_a = wrap.clone();
+        let slot_a = child_slot.clone();
         let loading_path_owned = PathBuf::from(loading_path);
-        let first_call =
-            std::thread::spawn(move || wrap_a.load_outproc_plugin(loading_path_owned, None));
+        let first_call = std::thread::spawn(move || {
+            wrap_a.load_outproc_plugin_impl::<R>(slot_a, loading_path_owned, None)
+        });
 
         // 1本目が Empty -> Loading へ遷移して lock を解放するまで待つ（shm open + spawn は同期的な
         // syscall なので通常数 ms で観測できる。2s は CI 負荷下でも十分な余裕）。
@@ -3511,7 +3544,7 @@ mod outproc_load_error_test_support {
         // 発行し、mutex 待ちでなく即座に "already in progress" で失敗することを検証する。
         let start = std::time::Instant::now();
         let error = wrap
-            .load_outproc_plugin(PathBuf::from(second_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(second_path), None)
             .err()
             .expect("concurrent call against a Loading slot must fail");
         let elapsed = start.elapsed();
@@ -3551,7 +3584,7 @@ mod outproc_load_error_test_support {
 /// `EngineWrap` に対して real child を spawn せず `Some(OutProcControl)` を注入できる。
 #[cfg(all(test, feature = "outproc-effect"))]
 mod outproc_health_tests {
-    use super::{outproc_role_matches, ChildSlot, EngineWrap, OutProcControl, WrapError};
+    use super::{ChildSlot, EffectRole, EngineWrap, OutProcControl, OutProcRole, WrapError};
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
     use orbit_audio_native::CallbackTimeStats;
@@ -3574,9 +3607,9 @@ mod outproc_health_tests {
     }
 
     fn wrap_with_child_slot(
-        slot: ChildSlot,
+        slot: ChildSlot<EffectRole>,
         stats: Arc<OutProcEffectStats>,
-    ) -> (Arc<EngineWrap>, Arc<Mutex<ChildSlot>>) {
+    ) -> (Arc<EngineWrap>, Arc<Mutex<ChildSlot<EffectRole>>>) {
         let (wrap, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
         let child_slot = Arc::new(Mutex::new(slot));
@@ -3712,10 +3745,10 @@ mod outproc_health_tests {
 
     #[test]
     fn effect_ready_ack_requires_audio_input_flag() {
-        assert!(outproc_role_matches(
+        assert!(EffectRole::role_matches(
             orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT
         ));
-        assert!(!outproc_role_matches(0));
+        assert!(!EffectRole::role_matches(0));
     }
 
     #[test]
@@ -3805,9 +3838,11 @@ mod outproc_health_tests {
 /// build で走るため real body の match arm がどのテストからも一度も compile even されない）で、この
 /// `#[cfg(test)]` submodule から `EngineWrap::outproc_instrument`（private field）と
 /// `OutProcInstrumentControl`（private struct）へ直接アクセスして注入する。
-#[cfg(all(test, feature = "outproc-instrument", not(feature = "outproc-effect")))]
+#[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_health_tests {
-    use super::{outproc_role_matches, ChildSlot, EngineWrap, OutProcInstrumentControl, WrapError};
+    use super::{
+        ChildSlot, EngineWrap, InstrumentRole, OutProcInstrumentControl, OutProcRole, WrapError,
+    };
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
     use std::sync::atomic::Ordering;
@@ -3833,9 +3868,9 @@ mod outproc_instrument_health_tests {
     }
 
     fn wrap_with_child_slot(
-        slot: ChildSlot,
+        slot: ChildSlot<InstrumentRole>,
         stats: Arc<OutProcInstrumentStats>,
-    ) -> (Arc<EngineWrap>, Arc<Mutex<ChildSlot>>) {
+    ) -> (Arc<EngineWrap>, Arc<Mutex<ChildSlot<InstrumentRole>>>) {
         let (wrap, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
         let child_slot = Arc::new(Mutex::new(slot));
@@ -3966,8 +4001,8 @@ mod outproc_instrument_health_tests {
 
     #[test]
     fn instrument_ready_ack_rejects_audio_input_flag() {
-        assert!(outproc_role_matches(0));
-        assert!(!outproc_role_matches(
+        assert!(InstrumentRole::role_matches(0));
+        assert!(!InstrumentRole::role_matches(
             orbit_audio_sandbox::transport::CHILD_FLAG_HAS_AUDIO_INPUT
         ));
     }

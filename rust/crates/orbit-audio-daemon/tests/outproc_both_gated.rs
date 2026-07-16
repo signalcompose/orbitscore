@@ -6,8 +6,7 @@
 mod gated_common;
 use gated_common::{child_exe, repo_path, wait_until};
 
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use orbit_audio_daemon::engine_wrap::EngineWrap;
 use orbit_audio_daemon::outproc_effect::{OutProcEffectConfig, PluginFormat};
