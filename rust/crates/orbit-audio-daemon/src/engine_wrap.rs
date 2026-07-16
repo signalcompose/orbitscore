@@ -341,23 +341,35 @@ fn parse_named_bus_pool_size(env_name: &str, raw: &str, default: usize) -> Resul
 /// `ORBIT_SUM_BUS_POOL`（既定 4）から `sum-bus-0..N-1` の既定プール名を組み立てる。
 #[cfg(feature = "outproc-effect")]
 fn sum_bus_pool_from_env() -> Result<Vec<String>, WrapError> {
-    let raw = std::env::var("ORBIT_SUM_BUS_POOL").unwrap_or_default();
-    let n = parse_named_bus_pool_size("ORBIT_SUM_BUS_POOL", &raw, DEFAULT_SUM_BUS_POOL_SIZE)
-        .map_err(WrapError::OutProcEffect)?;
-    Ok((0..n)
-        .map(|i| format!("{DEFAULT_SUM_BUS_POOL_PREFIX}{i}"))
-        .collect())
+    named_bus_pool_from_env(
+        "ORBIT_SUM_BUS_POOL",
+        DEFAULT_SUM_BUS_POOL_SIZE,
+        DEFAULT_SUM_BUS_POOL_PREFIX,
+    )
 }
 
 /// `ORBIT_AUX_BUS_POOL`（既定 4）から `aux-bus-0..N-1` の既定プール名を組み立てる。
 #[cfg(feature = "outproc-effect")]
 fn aux_bus_pool_from_env() -> Result<Vec<String>, WrapError> {
-    let raw = std::env::var("ORBIT_AUX_BUS_POOL").unwrap_or_default();
-    let n = parse_named_bus_pool_size("ORBIT_AUX_BUS_POOL", &raw, DEFAULT_AUX_BUS_POOL_SIZE)
+    named_bus_pool_from_env(
+        "ORBIT_AUX_BUS_POOL",
+        DEFAULT_AUX_BUS_POOL_SIZE,
+        DEFAULT_AUX_BUS_POOL_PREFIX,
+    )
+}
+
+/// env 名 + 既定サイズ + prefix から `<prefix>0..N-1` の既定プール名を組み立てる共通体
+/// （/simplify: sum/aux の同一実装を単一化・命名スキーム変更時のドリフト防止）。
+#[cfg(feature = "outproc-effect")]
+fn named_bus_pool_from_env(
+    env_name: &str,
+    default_size: usize,
+    prefix: &str,
+) -> Result<Vec<String>, WrapError> {
+    let raw = std::env::var(env_name).unwrap_or_default();
+    let n = parse_named_bus_pool_size(env_name, &raw, default_size)
         .map_err(WrapError::OutProcEffect)?;
-    Ok((0..n)
-        .map(|i| format!("{DEFAULT_AUX_BUS_POOL_PREFIX}{i}"))
-        .collect())
+    Ok((0..n).map(|i| format!("{prefix}{i}")).collect())
 }
 
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →

@@ -409,6 +409,26 @@ fn render_engine_with_insert_buses(
         .map(|bus| bus.active.load(Ordering::Relaxed))
         .collect();
 
+    // M2 routing atomics も callback 冒頭で 1 回だけ snapshot する。marking pass と post-loop が
+    // 同じ atomic を別々に load すると、callback 途中に `SetBusRouting` が挟まった場合に
+    // 「marking が見た合流先 j」と「accumulation が書く合流先 j'」が食い違い、zero-fill されて
+    // いない buffer へ加算 → 次に render target になった block で前分が一括流出（pop）する。
+    // snapshot を両パスで共有すれば 1 callback 内の view は常に一貫する。
+    let effective_targets: ArrayVec<BusTarget, MAX_INSERT_BUS_STAGES> =
+        buses.iter().map(effective_output_target).collect();
+    let send_override_gains: ArrayVec<
+        ArrayVec<f32, { MAX_INSERT_BUS_STAGES - 1 }>,
+        MAX_INSERT_BUS_STAGES,
+    > = buses
+        .iter()
+        .map(|bus| {
+            bus.send_gain_overrides
+                .iter()
+                .map(|g| f32::from_bits(g.load(Ordering::Relaxed)))
+                .collect()
+        })
+        .collect();
+
     // is_render_target（MX.4）: 「event tag を受けるか」（active）と「グラフの中継点として
     // 生きるか」（他の active stage の output_target/sends から参照されるか）を分離する。
     // 後者だけが true の stage（例: 未 declare の sum bus に active な member が output している）
@@ -419,7 +439,7 @@ fn render_engine_with_insert_buses(
         if !active_flags[i] {
             continue;
         }
-        if let BusTarget::Bus(j) = effective_output_target(bus) {
+        if let BusTarget::Bus(j) = effective_targets[i] {
             render_targets[j] = true;
         }
         for send in &bus.sends {
@@ -427,8 +447,8 @@ fn render_engine_with_insert_buses(
         }
         // M2: 実行時 send override も render target 判定に加える（override が非ゼロ gain の間、
         // 合流先 stage を post-loop の zero-fill/processor 対象に含める必要がある）。
-        for (k, gain) in bus.send_gain_overrides.iter().enumerate() {
-            if f32::from_bits(gain.load(Ordering::Relaxed)) != 0.0 {
+        for (k, gain) in send_override_gains[i].iter().enumerate() {
+            if *gain != 0.0 {
                 render_targets[i + 1 + k] = true;
             }
         }
@@ -492,7 +512,7 @@ fn render_engine_with_insert_buses(
         let (left, right) = buses.split_at_mut(i + 1);
         let src_stage = &left[i];
 
-        match effective_output_target(src_stage) {
+        match effective_targets[i] {
             BusTarget::Master => {
                 for (dst, s) in hw.iter_mut().zip(&src_stage.buffer[..bs]) {
                     *dst += *s;
@@ -511,9 +531,9 @@ fn render_engine_with_insert_buses(
                 *d += *s * send.gain;
             }
         }
-        // M2: 実行時 send override（`SetBusRouting`）。gain=0.0 は無効（分岐で skip・RT はロードのみ）。
-        for (k, gain_atomic) in src_stage.send_gain_overrides.iter().enumerate() {
-            let gain = f32::from_bits(gain_atomic.load(Ordering::Relaxed));
+        // M2: 実行時 send override（`SetBusRouting`）。gain=0.0 は無効（分岐で skip）。
+        // 冒頭 snapshot（send_override_gains）を使い marking pass と同じ値で加算する。
+        for (k, gain) in send_override_gains[i].iter().copied().enumerate() {
             if gain == 0.0 {
                 continue;
             }

@@ -7,6 +7,7 @@
 import * as path from 'path'
 
 import { AudioEngine } from '../audio/types'
+import { DaemonProtocolError } from '../audio/rust-engine/errors'
 import { PlayElement, RandomValue } from '../parser/audio-parser'
 import { resolveDegree } from '../midi/degree-resolution'
 import { resolveChords, cloneElement } from '../midi/chord/resolve-chords'
@@ -103,6 +104,11 @@ export class Sequence {
   // `SetBusRouting` re-issue carries the FULL current routing state (idempotent re-send).
   private _sumOutputBus?: string
   private readonly _auxSends = new Map<string, number>()
+  /**
+   * 直近の `syncBusRouting` が失敗し、TS 側の routing 宣言と daemon の実 routing が乖離して
+   * いる可能性がある状態（true の間）。再生開始時（dispatch 前）に検知して全量再送する。
+   */
+  private _busRoutingStale = false
 
   // MIDI properties (only meaningful when seq.midi() was declared).
   // A MIDI sequence interprets play() values as degrees, not slice numbers.
@@ -410,11 +416,31 @@ export class Sequence {
       bus: sendBus,
       gain,
     }))
-    void this.global.setBusRouting(bus, this._sumOutputBus, sends).catch((err) => {
-      console.warn(
-        `⚠️  ${this.stateManager.getName() || 'sequence'}: SetBusRouting(${bus}) failed: ${err}`,
-      )
-    })
+    void this.global.setBusRouting(bus, this._sumOutputBus, sends).then(
+      () => {
+        this._busRoutingStale = false
+      },
+      (err) => {
+        // 失敗＝TS 側の宣言（_sumOutputBus/_auxSends）と daemon の実 routing が乖離した状態。
+        // stale フラグを立て、次の routing 呼び出しまたは再生開始時に全量再送で自己修復する
+        // （`pluginActiveByKey` の self-heal と同じ形）。
+        this._busRoutingStale = true
+        const name = this.stateManager.getName() || 'sequence'
+        if (err instanceof DaemonProtocolError) {
+          // daemon 側の決定的な拒否（kind/順序違反・非 outproc-effect ビルドの UNSUPPORTED 等）。
+          // 再送しても同じ結果＝スクリプト側の修正が必要なので、actionable な error で出す。
+          console.error(
+            `❌ ${name}: SetBusRouting(${bus}) was rejected — routing was NOT applied. ` +
+              `Fix the declaration and re-run .output()/.send(): ${err.message}`,
+          )
+        } else {
+          console.warn(
+            `⚠️  ${name}: SetBusRouting(${bus}) failed (transient) — ` +
+              `will re-sync on the next routing call or playback start: ${err}`,
+          )
+        }
+      },
+    )
   }
 
   /**
@@ -1384,6 +1410,9 @@ export class Sequence {
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
     this.applyVoiceLeading() // §6.3 (C1): deterministic auto voice-leading annotation
     this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
+    // 直近の SetBusRouting が失敗していたら、音が出る前に全量再送で自己修復する
+    // （transient 失敗の回復経路。決定的拒否は再送しても同じ error log が出るだけで無害）。
+    if (this._busRoutingStale) this.syncBusRouting()
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -1428,6 +1457,9 @@ export class Sequence {
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
     this.applyVoiceLeading() // §6.3 (C1): deterministic auto voice-leading annotation
     this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
+    // 直近の SetBusRouting が失敗していたら、音が出る前に全量再送で自己修復する
+    // （transient 失敗の回復経路。決定的拒否は再送しても同じ error log が出るだけで無害）。
+    if (this._busRoutingStale) this.syncBusRouting()
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),

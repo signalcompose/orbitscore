@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { DaemonProtocolError } from '../../packages/engine/src/audio/rust-engine/errors'
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import { MidiManager } from '../../packages/engine/src/core/global/midi-manager'
@@ -102,13 +103,45 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     expect(() => seq.output('drum')).toThrow('only supported on audio sequences')
   })
 
-  it('logs a warning but does not throw when SetBusRouting rejects', async () => {
-    const setBusRouting = vi.fn().mockRejectedValue(new Error('kind mismatch'))
+  it('logs a transient warning (not error) and does not throw when SetBusRouting fails at transport', async () => {
+    const setBusRouting = vi.fn().mockRejectedValue(new Error('socket closed'))
     const { global, seq } = harness(setBusRouting)
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     global.sum('drum')
     expect(() => seq.output('drum')).not.toThrow()
     await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled())
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('will re-sync'))
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('logs an actionable console.error when the daemon definitively rejects SetBusRouting', async () => {
+    const setBusRouting = vi
+      .fn()
+      .mockRejectedValue(new DaemonProtocolError('MALFORMED_REQUEST', 'kind mismatch'))
+    const { global, seq } = harness(setBusRouting)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    global.sum('drum')
+    expect(() => seq.output('drum')).not.toThrow()
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled())
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('routing was NOT applied'))
+  })
+
+  it('self-heals a failed routing push on the next routing call (full-state re-send)', async () => {
+    const setBusRouting = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('socket closed'))
+      .mockResolvedValue(undefined)
+    const { global, seq } = harness(setBusRouting)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    global.sum('drum')
+    global.aux('rev')
+    seq.output('drum') // fails (transient)
+    seq.send('rev', 0.3) // full-state re-send carries the sum output too
+    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalledTimes(2))
+    expect(setBusRouting).toHaveBeenLastCalledWith('seq-bus-0', 'sum-bus-0', [
+      { bus: 'aux-bus-0', gain: 0.3 },
+    ])
   })
 })
 
