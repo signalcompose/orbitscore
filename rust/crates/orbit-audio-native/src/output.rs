@@ -1,7 +1,7 @@
 //! cpal を使った既定出力デバイスへのストリーム設定。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -169,9 +169,25 @@ pub struct InsertBusStage {
     /// 構造的に成立）。
     active: Arc<AtomicBool>,
     /// この stage の insert 適用後 buffer を最終的にどこへ足すか（既定 `Master` = 従来経路）。
+    /// **静的**構成（テスト・PH.2b の固定 topology）用。M2 の実行時切替は `routing_override` を
+    /// 優先する（後述）。
     output_target: BusTarget,
     /// post-insert の buffer を copy 加算する先（既定空 = 従来経路）。MX.3 の send/aux。
+    /// `output_target` と同様、静的構成専用。M2 の実行時切替は `send_gain_overrides` を使う。
     sends: Vec<BusSend>,
+    /// M2（#459/#453）: `SetBusRouting` daemon コマンド（非 RT・session.rs）が書き込む実行時
+    /// ルーティング。RT callback は atomic load のみ行う（Relaxed で可・ルーティング変更は
+    /// 音楽的タイミング精度不要）。エンコード: `0` = override 無し（静的 `output_target` を使う）・
+    /// `1` = `Master`・`n >= 2` = `Bus(n - 2)`。呼び出し側（`build_effect_bus_stages` 系）が
+    /// 構築時に `Arc::new(AtomicUsize::new(0))` を渡し、control 側にも同じ Arc の clone を保持させる
+    /// ことで、命名解決済みの routing 変更を RT 側に不可視な形で反映する。
+    routing_override: Arc<AtomicUsize>,
+    /// M2: 実行時 send gain override。index `k` は「この stage より `k + 1` 個後ろ」の stage への
+    /// send gain（f32 bits・`0.0` = 無効 = send 無し）。構築時に「この stage より後ろの全 stage」分の
+    /// スロットを確保しておく（v1 の設計判断: SetBusRouting は既存スロットへの書き込みのみで、
+    /// 実行時に Vec を伸長しない）。send 先は aux kind のみ許可（control 側 `SetBusRouting` ハンドラが
+    /// 検証・spec MX.4）。
+    send_gain_overrides: Vec<Arc<AtomicU32>>,
 }
 
 impl InsertBusStage {
@@ -202,6 +218,8 @@ impl InsertBusStage {
             active,
             output_target: BusTarget::default(),
             sends: Vec::new(),
+            routing_override: Arc::new(AtomicUsize::new(0)),
+            send_gain_overrides: Vec::new(),
         }
     }
 
@@ -223,10 +241,36 @@ impl InsertBusStage {
         self
     }
 
+    /// M2（#459/#453）: 実行時ルーティング用の atomic ハンドルを装着する。`routing_override` は
+    /// この stage の output target 切替用（呼び出し側が control 側にも同じ Arc の clone を保持し
+    /// `SetBusRouting` で書き込む）。`send_gain_overrides` は「この stage より後ろの全 stage」分の
+    /// gain スロットを、絶対 index の昇順（この stage の直後から順）で渡す（呼び出し側が
+    /// stage 配列の組み立て時にサイズを決める）。
+    pub fn with_routing_overrides(
+        mut self,
+        routing_override: Arc<AtomicUsize>,
+        send_gain_overrides: Vec<Arc<AtomicU32>>,
+    ) -> Self {
+        self.routing_override = routing_override;
+        self.send_gain_overrides = send_gain_overrides;
+        self
+    }
+
     fn ensure_buffer_len(&mut self, len: usize) {
         if self.buffer.len() < len {
             self.buffer.resize(len, 0.0);
         }
+    }
+}
+
+/// stage の実行時 output target を解決する（M2）。`routing_override` が `0`（override 無し）なら
+/// 静的 `output_target` をそのまま使う。RT callback から呼ぶため atomic load 以外の副作用は無い。
+#[inline]
+fn effective_output_target(stage: &InsertBusStage) -> BusTarget {
+    match stage.routing_override.load(Ordering::Relaxed) {
+        0 => stage.output_target,
+        1 => BusTarget::Master,
+        n => BusTarget::Bus(n - 2),
     }
 }
 
@@ -375,11 +419,18 @@ fn render_engine_with_insert_buses(
         if !active_flags[i] {
             continue;
         }
-        if let BusTarget::Bus(j) = bus.output_target {
+        if let BusTarget::Bus(j) = effective_output_target(bus) {
             render_targets[j] = true;
         }
         for send in &bus.sends {
             render_targets[send.target] = true;
+        }
+        // M2: 実行時 send override も render target 判定に加える（override が非ゼロ gain の間、
+        // 合流先 stage を post-loop の zero-fill/processor 対象に含める必要がある）。
+        for (k, gain) in bus.send_gain_overrides.iter().enumerate() {
+            if f32::from_bits(gain.load(Ordering::Relaxed)) != 0.0 {
+                render_targets[i + 1 + k] = true;
+            }
         }
     }
 
@@ -441,7 +492,7 @@ fn render_engine_with_insert_buses(
         let (left, right) = buses.split_at_mut(i + 1);
         let src_stage = &left[i];
 
-        match src_stage.output_target {
+        match effective_output_target(src_stage) {
             BusTarget::Master => {
                 for (dst, s) in hw.iter_mut().zip(&src_stage.buffer[..bs]) {
                     *dst += *s;
@@ -458,6 +509,17 @@ fn render_engine_with_insert_buses(
             let dst_buf = &mut right[send.target - i - 1].buffer[..bs];
             for (d, s) in dst_buf.iter_mut().zip(&src_stage.buffer[..bs]) {
                 *d += *s * send.gain;
+            }
+        }
+        // M2: 実行時 send override（`SetBusRouting`）。gain=0.0 は無効（分岐で skip・RT はロードのみ）。
+        for (k, gain_atomic) in src_stage.send_gain_overrides.iter().enumerate() {
+            let gain = f32::from_bits(gain_atomic.load(Ordering::Relaxed));
+            if gain == 0.0 {
+                continue;
+            }
+            let dst_buf = &mut right[k].buffer[..bs];
+            for (d, s) in dst_buf.iter_mut().zip(&src_stage.buffer[..bs]) {
+                *d += *s * gain;
             }
         }
     }
@@ -1177,6 +1239,134 @@ mod tests {
         // aux 経由で Master へ。hw = dry + wet = raw × 0.75。
         let raw = 2.0_f32 * 0.5_f32.sqrt();
         assert!(hw.iter().all(|&sample| (sample - raw * 0.75).abs() < 1e-6));
+    }
+
+    // #459/#453 M2: 実行時ルーティング（`routing_override`/`send_gain_overrides`）が次の
+    // callback から反映されることを固定する（`SetBusRouting` は control 側で atomic を書き換える
+    // だけで render 側には触れない、という設計の生命線）。
+
+    #[test]
+    fn routing_override_retargets_output_from_master_to_bus_on_next_callback() {
+        // stage0 "a"（static output_target=Master）に override で Bus(1) を書き込むと、次の
+        // callback から「a → drum(0.5×gain) → Master」経路に切り替わる。
+        struct Half;
+        impl PostProcessor for Half {
+            fn process(&mut self, data: &mut [f32]) {
+                for sample in data {
+                    *sample *= 0.5;
+                }
+            }
+        }
+        let engine = Engine::new(48_000, 2);
+        let tagged = orbit_audio_core::Sample::new(vec![2.0; 4], 48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("a".into()),
+                "tagged".into(),
+                tagged,
+            )
+            .expect("schedule");
+
+        let routing_override = Arc::new(AtomicUsize::new(0));
+        let mut buses = vec![
+            InsertBusStage::new("a", None, 4).with_routing_overrides(
+                routing_override.clone(),
+                vec![Arc::new(AtomicU32::new(0))],
+            ),
+            InsertBusStage::new("drum", Some(Box::new(Half)), 4),
+        ];
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+
+        // override 前: 既定 static Master へ直接加算される（drum の 0.5×gain を経ない）。
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        assert!(hw.iter().all(|&sample| (sample - raw).abs() < 1e-6));
+
+        // override 書き込み（= `SetBusRouting` が control 側から行う操作の模擬）。
+        // encoding: n = target_index(1) + 2 = 3.
+        routing_override.store(3, Ordering::Relaxed);
+
+        // 次の block を再スケジュールして再度 render（同じ音を再現）。
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("a".into()),
+                "tagged2".into(),
+                orbit_audio_core::Sample::new(vec![2.0; 4], 48_000, 2),
+            )
+            .expect("schedule");
+        let mut hw2 = vec![0.0; 4];
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw2);
+        assert!(hw2.iter().all(|&sample| (sample - raw * 0.5).abs() < 1e-6));
+    }
+
+    #[test]
+    fn send_gain_override_applies_from_the_correct_slot_on_next_callback() {
+        // stage0 "a"（processor None）に override で aux(index 1) への send gain を書き込むと、
+        // 次の callback から Master(dry) + aux(wet) の合成に切り替わる。
+        let engine = Engine::new(48_000, 2);
+        let tagged = orbit_audio_core::Sample::new(vec![2.0; 4], 48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("a".into()),
+                "tagged".into(),
+                tagged,
+            )
+            .expect("schedule");
+
+        let send_slot = Arc::new(AtomicU32::new(0));
+        let mut buses = vec![
+            InsertBusStage::new("a", None, 4)
+                .with_routing_overrides(Arc::new(AtomicUsize::new(0)), vec![send_slot.clone()]),
+            InsertBusStage::unattached("aux"),
+        ];
+        buses[1].ensure_buffer_len(4);
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+
+        // override 前: dry のみ Master へ。
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw);
+        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        assert!(hw.iter().all(|&sample| (sample - raw).abs() < 1e-6));
+
+        // send gain override 書き込み（`SetBusRouting` の模擬）。
+        send_slot.store(0.5_f32.to_bits(), Ordering::Relaxed);
+
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("a".into()),
+                "tagged2".into(),
+                orbit_audio_core::Sample::new(vec![2.0; 4], 48_000, 2),
+            )
+            .expect("schedule");
+        let mut hw2 = vec![0.0; 4];
+        render_engine_with_insert_buses(&engine, &mut link, &mut buses, 2, &mut hw2);
+        // dry(raw) + wet(raw × 0.5 send gain) = raw × 1.5.
+        assert!(hw2.iter().all(|&sample| (sample - raw * 1.5).abs() < 1e-6));
     }
 
     #[test]

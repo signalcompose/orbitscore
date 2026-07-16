@@ -6,6 +6,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+#[cfg(feature = "outproc-effect")]
+use std::sync::atomic::{AtomicU32, AtomicUsize};
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use std::sync::MutexGuard;
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -211,6 +213,17 @@ struct OutProcControl {
     /// bus を指名した時点で `true`（宣言 = activation）。全 bus inactive の間、callback は
     /// bus 無し経路（ビット同一）を通る。
     bus_actives: HashMap<String, Arc<std::sync::atomic::AtomicBool>>,
+    /// bus 名 → kind（M2・#459/#453）。`SetBusRouting` の検証（output は sum のみ・send 先は
+    /// aux のみ許可・MX.4）に使う。
+    bus_kinds: HashMap<String, BusKind>,
+    /// bus 名 → stage 配列内の絶対 index（M2）。forward-only（後方参照のみ・MX.4）の検証に使う。
+    bus_index: HashMap<String, usize>,
+    /// bus 名 → render 側 `InsertBusStage::routing_override` と共有する atomic ハンドル（M2）。
+    /// `SetBusRouting` がここを書き換えて output target を実行時に切替える。
+    bus_routing: HashMap<String, Arc<AtomicUsize>>,
+    /// bus 名 → render 側 `InsertBusStage::send_gain_overrides` と共有する atomic ハンドル群
+    /// （M2・index k = 「この bus の絶対 index + 1 + k」への send gain）。
+    bus_sends: HashMap<String, Vec<Arc<AtomicU32>>>,
 }
 
 /// `ORBIT_EFFECT_BUSES` の値を解析する純関数。カンマ区切りの bus 名を trim・空要素除去した上で、
@@ -283,11 +296,77 @@ fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
     Ok(default_effect_bus_pool(pool_size))
 }
 
-/// 1 本の named insert bus を構成する部材（`build_effect_bus_stages` → `install_effect_bus_slots`
-/// の間で運ぶ・#434 S2/S3）。effect-only / both の両起動経路で同一のライフサイクルを共有する。
+/// bus のグラフ上の役割（#459/#453 M2）。`insert` = 既存の per-seq effect bus（PH.2b・#434）・
+/// `sum` = 複数 insert の合流点（`seq.output(sum)`）・`aux` = post-fader send 先（`seq.send(aux, gain)`）。
+/// 名前 prefix（`seq-bus-`/`sum-bus-`/`aux-bus-`）からも判別できるが、`SetBusRouting` の検証
+/// （output は sum のみ・send 先は aux のみ許可・MX.4）を prefix 文字列比較に依存させないため、
+/// 構築時に確定した値として明示的に持つ。
+#[cfg(feature = "outproc-effect")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusKind {
+    Insert,
+    Sum,
+    Aux,
+}
+
+/// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
+/// （M3 で配線予定）。
+#[cfg(feature = "outproc-effect")]
+pub const DEFAULT_SUM_BUS_POOL_PREFIX: &str = "sum-bus-";
+/// `aux-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.send(aux, gain)` が同じ規則で名前を組み立てる
+/// （M3 で配線予定）。
+#[cfg(feature = "outproc-effect")]
+pub const DEFAULT_AUX_BUS_POOL_PREFIX: &str = "aux-bus-";
+/// `ORBIT_SUM_BUS_POOL` の既定サイズ（未設定時）。
+#[cfg(feature = "outproc-effect")]
+const DEFAULT_SUM_BUS_POOL_SIZE: usize = 4;
+/// `ORBIT_AUX_BUS_POOL` の既定サイズ（未設定時）。
+#[cfg(feature = "outproc-effect")]
+const DEFAULT_AUX_BUS_POOL_SIZE: usize = 4;
+
+/// `ORBIT_SUM_BUS_POOL` / `ORBIT_AUX_BUS_POOL` に共通のプールサイズ解析（`parse_effect_bus_pool_size`
+/// と同じ規則: 空 = 既定値・非数値/負値はエラー）。env 名をメッセージに含めるため呼び出し側が
+/// 渡す（`ORBIT_EFFECT_BUS_POOL` 用の既存関数と重複させない）。
+#[cfg(feature = "outproc-effect")]
+fn parse_named_bus_pool_size(env_name: &str, raw: &str, default: usize) -> Result<usize, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(default);
+    }
+    trimmed
+        .parse::<usize>()
+        .map_err(|_| format!("{env_name} must be a non-negative integer, got '{raw}'"))
+}
+
+/// `ORBIT_SUM_BUS_POOL`（既定 4）から `sum-bus-0..N-1` の既定プール名を組み立てる。
+#[cfg(feature = "outproc-effect")]
+fn sum_bus_pool_from_env() -> Result<Vec<String>, WrapError> {
+    let raw = std::env::var("ORBIT_SUM_BUS_POOL").unwrap_or_default();
+    let n = parse_named_bus_pool_size("ORBIT_SUM_BUS_POOL", &raw, DEFAULT_SUM_BUS_POOL_SIZE)
+        .map_err(WrapError::OutProcEffect)?;
+    Ok((0..n)
+        .map(|i| format!("{DEFAULT_SUM_BUS_POOL_PREFIX}{i}"))
+        .collect())
+}
+
+/// `ORBIT_AUX_BUS_POOL`（既定 4）から `aux-bus-0..N-1` の既定プール名を組み立てる。
+#[cfg(feature = "outproc-effect")]
+fn aux_bus_pool_from_env() -> Result<Vec<String>, WrapError> {
+    let raw = std::env::var("ORBIT_AUX_BUS_POOL").unwrap_or_default();
+    let n = parse_named_bus_pool_size("ORBIT_AUX_BUS_POOL", &raw, DEFAULT_AUX_BUS_POOL_SIZE)
+        .map_err(WrapError::OutProcEffect)?;
+    Ok((0..n)
+        .map(|i| format!("{DEFAULT_AUX_BUS_POOL_PREFIX}{i}"))
+        .collect())
+}
+
+/// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
+/// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
+/// effect-only / both の両起動経路で同一のライフサイクルを共有する。
 #[cfg(feature = "outproc-effect")]
 struct EffectBusBuild {
     name: String,
+    kind: BusKind,
     shm_path: std::path::PathBuf,
     engaged: Arc<std::sync::atomic::AtomicBool>,
     stop: Arc<std::sync::atomic::AtomicBool>,
@@ -297,20 +376,47 @@ struct EffectBusBuild {
     /// `true`（宣言 = activation → 以降 pass-through）。それまで callback は bus を
     /// render 対象に含めない = 既定プールのコストゼロ。
     active: Arc<std::sync::atomic::AtomicBool>,
+    /// render 側 `InsertBusStage::routing_override` と共有（M2）。`SetBusRouting` が
+    /// control 側からこの Arc を書き換えて実行時に output target を切替える。
+    routing_override: Arc<AtomicUsize>,
+    /// render 側 `InsertBusStage::send_gain_overrides` と共有（M2・index k = 「この stage の
+    /// 絶対 index + 1 + k」への send gain）。`SetBusRouting` が該当 index の Arc を書き換える。
+    send_gain_overrides: Vec<Arc<AtomicU32>>,
 }
 
-/// `ORBIT_EFFECT_BUSES` / 既定プールの bus 名から、render 側の `InsertBusStage` 群と
-/// daemon 側の部材（`EffectBusBuild`）を構築する。stage は inactive で生まれ、LoadPlugin
-/// （`load_outproc_effect_plugin` の bus 指定）で activate される。
+/// `ORBIT_EFFECT_BUSES`/`ORBIT_EFFECT_BUS_POOL`（insert）+ `ORBIT_SUM_BUS_POOL`（sum）+
+/// `ORBIT_AUX_BUS_POOL`（aux）の bus 名から、render 側の `InsertBusStage` 群と daemon 側の部材
+/// （`EffectBusBuild`）を構築する。**stage 配列の並びは `[insert…, sum…, aux…]` に固定**する
+/// （MX.4: insert → sum/aux への forward-only 参照が常に構築可能になるよう、insert を先頭に
+/// 置く）。stage は inactive で生まれ、LoadPlugin（`load_outproc_effect_plugin` の bus 指定）
+/// で activate される。sum/aux stage も同じ `OutProcEffectPostProcessor` 機構（PH.2b）で
+/// 自前の insert chain を持てる（M2 で明示解禁）。
 #[cfg(feature = "outproc-effect")]
 fn build_effect_bus_stages(
 ) -> Result<(Vec<orbit_audio_native::InsertBusStage>, Vec<EffectBusBuild>), WrapError> {
     use crate::outproc_effect::{OutProcEffectPostProcessor, OutProcEffectStats};
     use std::sync::atomic::AtomicBool;
-    let names = effect_buses_from_env()?;
-    let mut builds = Vec::with_capacity(names.len());
-    let mut insert_buses = Vec::with_capacity(names.len());
-    for name in names {
+
+    let insert_names = effect_buses_from_env()?;
+    let sum_names = sum_bus_pool_from_env()?;
+    let aux_names = aux_bus_pool_from_env()?;
+    let named: Vec<(String, BusKind)> = insert_names
+        .into_iter()
+        .map(|n| (n, BusKind::Insert))
+        .chain(sum_names.into_iter().map(|n| (n, BusKind::Sum)))
+        .chain(aux_names.into_iter().map(|n| (n, BusKind::Aux)))
+        .collect();
+    let total = named.len();
+    if total > orbit_audio_native::MAX_INSERT_BUS_STAGES {
+        return Err(WrapError::OutProcEffect(format!(
+            "too many bus stages: {total} (insert+sum+aux, max {})",
+            orbit_audio_native::MAX_INSERT_BUS_STAGES
+        )));
+    }
+
+    let mut builds = Vec::with_capacity(total);
+    let mut insert_buses = Vec::with_capacity(total);
+    for (index, (name, kind)) in named.into_iter().enumerate() {
         let shm_path = crate::outproc_effect::unique_shm_path();
         let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
             orbit_audio_sandbox::create_shared(&shm_path).map_err(|e| {
@@ -322,33 +428,46 @@ fn build_effect_bus_stages(
         let done = Arc::new(AtomicBool::new(false));
         let active = Arc::new(AtomicBool::new(false));
         let stats = OutProcEffectStats::new();
-        insert_buses.push(orbit_audio_native::InsertBusStage::with_activation(
-            name.clone(),
-            Some(Box::new(OutProcEffectPostProcessor::new(
-                host,
-                engaged.clone(),
-                stop.clone(),
-                done.clone(),
-                stats.clone(),
-            ))),
-            0,
-            active.clone(),
-        ));
+        let routing_override = Arc::new(AtomicUsize::new(0));
+        // この stage より後ろの全 stage 分の send gain スロットを構築時に確保する（v1 の設計判断:
+        // `SetBusRouting` は既存スロットへの書き込みのみ・実行時に Vec を伸長しない）。
+        let send_gain_overrides: Vec<Arc<AtomicU32>> = (0..(total - index - 1))
+            .map(|_| Arc::new(AtomicU32::new(0)))
+            .collect();
+        insert_buses.push(
+            orbit_audio_native::InsertBusStage::with_activation(
+                name.clone(),
+                Some(Box::new(OutProcEffectPostProcessor::new(
+                    host,
+                    engaged.clone(),
+                    stop.clone(),
+                    done.clone(),
+                    stats.clone(),
+                ))),
+                0,
+                active.clone(),
+            )
+            .with_routing_overrides(routing_override.clone(), send_gain_overrides.clone()),
+        );
         builds.push(EffectBusBuild {
             name,
+            kind,
             shm_path,
             engaged,
             stop,
             done,
             stats,
             active,
+            routing_override,
+            send_gain_overrides,
         });
     }
     Ok((insert_buses, builds))
 }
 
-/// bus 部材を ChildSlot / 観測 map / StreamGuard 用 guard 群へ展開する（stream 起動後・
-/// sample_rate 確定後に呼ぶ）。返り値: (bus_slots, bus_stats, bus_actives, child_guards, teardowns)。
+/// bus 部材を ChildSlot / 観測 map / routing map / StreamGuard 用 guard 群へ展開する（stream 起動後・
+/// sample_rate 確定後に呼ぶ）。返り値: (bus_slots, bus_stats, bus_actives, bus_kinds, bus_index,
+/// bus_routing, bus_sends, child_guards, teardowns)。
 #[cfg(feature = "outproc-effect")]
 #[allow(clippy::type_complexity)]
 fn install_effect_bus_slots(
@@ -359,6 +478,10 @@ fn install_effect_bus_slots(
     HashMap<String, Weak<Mutex<ChildSlot>>>,
     HashMap<String, Arc<crate::outproc_effect::OutProcEffectStats>>,
     HashMap<String, Arc<std::sync::atomic::AtomicBool>>,
+    HashMap<String, BusKind>,
+    HashMap<String, usize>,
+    HashMap<String, Arc<AtomicUsize>>,
+    HashMap<String, Vec<Arc<AtomicU32>>>,
     Vec<Arc<Mutex<ChildSlot>>>,
     Vec<crate::outproc_effect::OutProcTeardownGuard>,
 ) {
@@ -366,9 +489,13 @@ fn install_effect_bus_slots(
     let mut bus_slots = HashMap::new();
     let mut bus_stats = HashMap::new();
     let mut bus_actives = HashMap::new();
+    let mut bus_kinds = HashMap::new();
+    let mut bus_index = HashMap::new();
+    let mut bus_routing = HashMap::new();
+    let mut bus_sends = HashMap::new();
     let mut child_guards = Vec::with_capacity(builds.len());
     let mut teardowns = Vec::with_capacity(builds.len());
-    for build in builds {
+    for (index, build) in builds.into_iter().enumerate() {
         let slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
             shm_path: build.shm_path,
             child_exe: child_exe.to_path_buf(),
@@ -379,11 +506,25 @@ fn install_effect_bus_slots(
         })));
         bus_slots.insert(build.name.clone(), Arc::downgrade(&slot));
         bus_stats.insert(build.name.clone(), build.stats);
-        bus_actives.insert(build.name, build.active);
+        bus_actives.insert(build.name.clone(), build.active);
+        bus_kinds.insert(build.name.clone(), build.kind);
+        bus_index.insert(build.name.clone(), index);
+        bus_routing.insert(build.name.clone(), build.routing_override);
+        bus_sends.insert(build.name, build.send_gain_overrides);
         child_guards.push(slot);
         teardowns.push(OutProcTeardownGuard::new(build.stop, build.done));
     }
-    (bus_slots, bus_stats, bus_actives, child_guards, teardowns)
+    (
+        bus_slots,
+        bus_stats,
+        bus_actives,
+        bus_kinds,
+        bus_index,
+        bus_routing,
+        bus_sends,
+        child_guards,
+        teardowns,
+    )
 }
 
 #[cfg(all(test, feature = "outproc-effect"))]
@@ -475,6 +616,180 @@ mod effect_bus_pool_tests {
                 "seq-bus-2".to_string(),
             ]
         );
+    }
+}
+
+/// M2（#459/#453）: sum/aux プール名生成・`SetBusRouting` の検証規則の unit テスト。
+#[cfg(all(test, feature = "outproc-effect"))]
+mod named_bus_pool_tests {
+    use super::{
+        aux_bus_pool_from_env, parse_named_bus_pool_size, sum_bus_pool_from_env,
+        DEFAULT_AUX_BUS_POOL_SIZE, DEFAULT_SUM_BUS_POOL_SIZE,
+    };
+
+    #[test]
+    fn pool_size_defaults_when_unset_or_blank() {
+        assert_eq!(
+            parse_named_bus_pool_size("X", "", 4),
+            Ok(DEFAULT_SUM_BUS_POOL_SIZE)
+        );
+        assert_eq!(parse_named_bus_pool_size("X", "  ", 4), Ok(4));
+    }
+
+    #[test]
+    fn pool_size_rejects_non_numeric() {
+        let error = parse_named_bus_pool_size("ORBIT_SUM_BUS_POOL", "abc", 4)
+            .expect_err("non-numeric must be rejected");
+        assert!(error.contains("ORBIT_SUM_BUS_POOL"), "{error}");
+    }
+
+    #[test]
+    fn sum_pool_generates_default_four_names() {
+        // env は他テストと並行するプロセス内 global mutable state なので、明示的に空文字へ戻す
+        // （unset だと他テストの残留値を拾いうる・#434 系の既存慣習に合わせる）。
+        std::env::set_var("ORBIT_SUM_BUS_POOL", "");
+        let names = sum_bus_pool_from_env().expect("default sum pool");
+        assert_eq!(names.len(), DEFAULT_SUM_BUS_POOL_SIZE);
+        assert_eq!(names[0], "sum-bus-0");
+        std::env::remove_var("ORBIT_SUM_BUS_POOL");
+    }
+
+    #[test]
+    fn aux_pool_generates_default_four_names() {
+        std::env::set_var("ORBIT_AUX_BUS_POOL", "");
+        let names = aux_bus_pool_from_env().expect("default aux pool");
+        assert_eq!(names.len(), DEFAULT_AUX_BUS_POOL_SIZE);
+        assert_eq!(names[0], "aux-bus-0");
+        std::env::remove_var("ORBIT_AUX_BUS_POOL");
+    }
+}
+
+/// `EngineWrap::set_bus_routing` の検証規則を stub backend + 手組み `OutProcControl` で
+/// 直接 exercise する unit テスト（M2・#459/#453）。real child は不要（bus_index/bus_kinds/
+/// bus_routing/bus_sends だけを検証する経路のため）。
+#[cfg(all(test, feature = "outproc-effect"))]
+mod set_bus_routing_tests {
+    use super::{AtomicU32, AtomicUsize, BusKind, EngineWrap, Ordering, OutProcControl, Weak};
+    use crate::backend::StubBackend;
+    use crate::outproc_effect::OutProcEffectStats;
+    use orbit_audio_native::CallbackTimeStats;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    /// stage 配列 `[seq-bus-0 (Insert), sum-bus-0 (Sum), aux-bus-0 (Aux)]` を模した
+    /// `OutProcControl` を注入する（native stage 自体は起動しない・routing 検証のみが対象）。
+    fn wrap_with_three_stage_topology() -> Arc<EngineWrap> {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let mut bus_index = HashMap::new();
+        bus_index.insert("seq-bus-0".to_owned(), 0usize);
+        bus_index.insert("sum-bus-0".to_owned(), 1usize);
+        bus_index.insert("aux-bus-0".to_owned(), 2usize);
+        let mut bus_kinds = HashMap::new();
+        bus_kinds.insert("seq-bus-0".to_owned(), BusKind::Insert);
+        bus_kinds.insert("sum-bus-0".to_owned(), BusKind::Sum);
+        bus_kinds.insert("aux-bus-0".to_owned(), BusKind::Aux);
+        let mut bus_routing = HashMap::new();
+        bus_routing.insert("seq-bus-0".to_owned(), Arc::new(AtomicUsize::new(0)));
+        let mut bus_sends = HashMap::new();
+        // seq-bus-0 (index 0) has 2 later stages (index 1, 2) => 2 send slots.
+        bus_sends.insert(
+            "seq-bus-0".to_owned(),
+            vec![Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0))],
+        );
+        *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
+            stats: OutProcEffectStats::new(),
+            cb_stats: CallbackTimeStats::new(),
+            child_slot: Weak::new(),
+            bus_slots: HashMap::new(),
+            bus_stats: HashMap::new(),
+            bus_actives: HashMap::new(),
+            bus_kinds,
+            bus_index,
+            bus_routing,
+            bus_sends,
+        });
+        wrap
+    }
+
+    #[test]
+    fn output_to_sum_bus_stores_encoded_target_on_the_routing_atomic() {
+        let wrap = wrap_with_three_stage_topology();
+        wrap.set_bus_routing("seq-bus-0", Some("sum-bus-0"), &[])
+            .expect("sum output must be accepted");
+        let guard = wrap.outproc.lock().unwrap();
+        let routing = guard
+            .as_ref()
+            .unwrap()
+            .bus_routing
+            .get("seq-bus-0")
+            .unwrap();
+        // encoding: n = target_index + 2 (see native InsertBusStage doc).
+        assert_eq!(routing.load(Ordering::Relaxed), 1 + 2);
+    }
+
+    #[test]
+    fn output_to_insert_bus_is_rejected_kind_mismatch() {
+        let wrap = wrap_with_three_stage_topology();
+        let error = wrap
+            .set_bus_routing("seq-bus-0", Some("aux-bus-0"), &[])
+            .expect_err("output to an aux bus must be rejected (output requires sum kind)");
+        let message = format!("{error:?}");
+        assert!(message.contains("must be a sum bus"), "{message}");
+    }
+
+    #[test]
+    fn output_to_earlier_or_equal_index_is_rejected() {
+        let wrap = wrap_with_three_stage_topology();
+        let error = wrap
+            .set_bus_routing("sum-bus-0", Some("seq-bus-0"), &[])
+            .expect_err("backward reference must be rejected");
+        let message = format!("{error:?}");
+        assert!(message.contains("later stage"), "{message}");
+    }
+
+    #[test]
+    fn send_to_aux_bus_stores_gain_bits_on_the_correct_slot() {
+        let wrap = wrap_with_three_stage_topology();
+        wrap.set_bus_routing("seq-bus-0", None, &[("aux-bus-0".to_owned(), 0.75)])
+            .expect("send to an aux bus must be accepted");
+        let guard = wrap.outproc.lock().unwrap();
+        let sends = guard.as_ref().unwrap().bus_sends.get("seq-bus-0").unwrap();
+        // aux-bus-0 is at absolute index 2; seq-bus-0 is at index 0 => slot k = 2 - 0 - 1 = 1.
+        let gain = f32::from_bits(sends[1].load(Ordering::Relaxed));
+        assert_eq!(gain, 0.75);
+        // The untouched slot (sum-bus-0, k=0) must remain disabled.
+        assert_eq!(f32::from_bits(sends[0].load(Ordering::Relaxed)), 0.0);
+    }
+
+    #[test]
+    fn send_to_sum_bus_is_rejected_kind_mismatch() {
+        let wrap = wrap_with_three_stage_topology();
+        let error = wrap
+            .set_bus_routing("seq-bus-0", None, &[("sum-bus-0".to_owned(), 0.5)])
+            .expect_err("send to a sum bus must be rejected (send requires aux kind)");
+        let message = format!("{error:?}");
+        assert!(message.contains("must be an aux bus"), "{message}");
+    }
+
+    #[test]
+    fn non_finite_gain_is_rejected() {
+        let wrap = wrap_with_three_stage_topology();
+        let error = wrap
+            .set_bus_routing("seq-bus-0", None, &[("aux-bus-0".to_owned(), f32::NAN)])
+            .expect_err("NaN gain must be rejected");
+        let message = format!("{error:?}");
+        assert!(message.contains("finite"), "{message}");
+    }
+
+    #[test]
+    fn unknown_bus_name_is_rejected() {
+        let wrap = wrap_with_three_stage_topology();
+        let error = wrap
+            .set_bus_routing("nope", None, &[])
+            .expect_err("unknown seq_bus must be rejected");
+        let message = format!("{error:?}");
+        assert!(message.contains("unknown bus"), "{message}");
     }
 }
 
@@ -1232,10 +1547,23 @@ impl EngineWrap {
                 bus_slots: HashMap::new(),
                 bus_stats: HashMap::new(),
                 bus_actives: HashMap::new(),
+                bus_kinds: HashMap::new(),
+                bus_index: HashMap::new(),
+                bus_routing: HashMap::new(),
+                bus_sends: HashMap::new(),
             });
 
-        let (bus_slots, bus_stats, bus_actives, bus_child_guards, bus_teardowns) =
-            install_effect_bus_slots(bus_builds, &cfg.child_exe, sample_rate);
+        let (
+            bus_slots,
+            bus_stats,
+            bus_actives,
+            bus_kinds,
+            bus_index,
+            bus_routing,
+            bus_sends,
+            bus_child_guards,
+            bus_teardowns,
+        ) = install_effect_bus_slots(bus_builds, &cfg.child_exe, sample_rate);
         {
             let mut guard = wrap
                 .outproc
@@ -1245,6 +1573,10 @@ impl EngineWrap {
             control.bus_slots = bus_slots;
             control.bus_stats = bus_stats;
             control.bus_actives = bus_actives;
+            control.bus_kinds = bus_kinds;
+            control.bus_index = bus_index;
+            control.bus_routing = bus_routing;
+            control.bus_sends = bus_sends;
         }
 
         // 7. StreamGuard（field 順 = teardown 順）。
@@ -1491,6 +1823,10 @@ impl EngineWrap {
                 bus_slots: HashMap::new(),
                 bus_stats: HashMap::new(),
                 bus_actives: HashMap::new(),
+                bus_kinds: HashMap::new(),
+                bus_index: HashMap::new(),
+                bus_routing: HashMap::new(),
+                bus_sends: HashMap::new(),
             });
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
@@ -1500,8 +1836,17 @@ impl EngineWrap {
             child_slot: Arc::downgrade(&instrument_slot),
         });
 
-        let (bus_slots, bus_stats, bus_actives, bus_child_guards, bus_teardowns) =
-            install_effect_bus_slots(bus_builds, &effect_cfg.child_exe, stream.sample_rate);
+        let (
+            bus_slots,
+            bus_stats,
+            bus_actives,
+            bus_kinds,
+            bus_index,
+            bus_routing,
+            bus_sends,
+            bus_child_guards,
+            bus_teardowns,
+        ) = install_effect_bus_slots(bus_builds, &effect_cfg.child_exe, stream.sample_rate);
         {
             let mut guard = wrap
                 .outproc
@@ -1511,6 +1856,10 @@ impl EngineWrap {
             control.bus_slots = bus_slots;
             control.bus_stats = bus_stats;
             control.bus_actives = bus_actives;
+            control.bus_kinds = bus_kinds;
+            control.bus_index = bus_index;
+            control.bus_routing = bus_routing;
+            control.bus_sends = bus_sends;
         }
 
         Ok((
@@ -1795,6 +2144,112 @@ impl EngineWrap {
             }
         }
         result
+    }
+
+    /// 実行時ルーティング切替（#459/#453 M2）: `seq_bus` の output target / send gain を非 RT で
+    /// 書き換える。**forward-only（MX.4）と kind 制約（output は sum のみ・send 先は aux のみ）を
+    /// ここで検証してから atomic に反映する**（RT callback は検証済みの値を load するだけ）。
+    ///
+    /// - `output = Some(name)`: `name` は `sum` kind かつ `seq_bus` より後ろの index でなければ
+    ///   ならない。それ以外はエラーで拒否し、既存の routing_override には触れない（部分適用しない）。
+    /// - `output = None`: output target には触れない（既存の override をそのまま保つ。明示的に
+    ///   `Master` へ戻す操作は v1 のスコープ外・将来 `output = Some("master")` 等の予約語で拡張しうる）。
+    /// - `sends`: 列挙された `(name, gain)` のみを反映する（列挙されていない既存 send には触れない）。
+    ///   `name` は `aux` kind かつ `seq_bus` より後ろの index でなければならない。`gain` は有限
+    ///   （NaN/Inf 拒否）。1 件でも検証に失敗したら **どの send も反映しない**（部分適用しない）。
+    #[cfg(feature = "outproc-effect")]
+    pub fn set_bus_routing(
+        &self,
+        seq_bus: &str,
+        output: Option<&str>,
+        sends: &[(String, f32)],
+    ) -> Result<(), WrapError> {
+        let guard = self
+            .outproc
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+        let control = guard.as_ref().ok_or_else(|| {
+            WrapError::OutProcEffectUnavailable(
+                "outproc effect not initialized (test backend has no outproc path)".into(),
+            )
+        })?;
+
+        let seq_index = *control
+            .bus_index
+            .get(seq_bus)
+            .ok_or_else(|| WrapError::OutProcEffect(format!("unknown bus '{seq_bus}'")))?;
+
+        // 1. output target を検証（反映はまだしない・部分適用を避ける）。
+        let resolved_output = match output {
+            Some(name) => {
+                let target_index = *control.bus_index.get(name).ok_or_else(|| {
+                    WrapError::OutProcEffect(format!("SetBusRouting output: unknown bus '{name}'"))
+                })?;
+                if target_index <= seq_index {
+                    return Err(WrapError::OutProcEffect(format!(
+                        "SetBusRouting output '{name}' (index {target_index}) must be a later stage than '{seq_bus}' (index {seq_index})"
+                    )));
+                }
+                if control.bus_kinds.get(name) != Some(&BusKind::Sum) {
+                    return Err(WrapError::OutProcEffect(format!(
+                        "SetBusRouting output '{name}' must be a sum bus"
+                    )));
+                }
+                Some(target_index)
+            }
+            None => None,
+        };
+
+        // 2. sends を検証（同上・1 件でも失敗したら全体を拒否）。
+        let mut resolved_sends = Vec::with_capacity(sends.len());
+        for (name, gain) in sends {
+            if !gain.is_finite() {
+                return Err(WrapError::OutProcEffect(format!(
+                    "SetBusRouting send '{name}' gain must be finite, got {gain}"
+                )));
+            }
+            let target_index = *control.bus_index.get(name).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("SetBusRouting send: unknown bus '{name}'"))
+            })?;
+            if target_index <= seq_index {
+                return Err(WrapError::OutProcEffect(format!(
+                    "SetBusRouting send '{name}' (index {target_index}) must be a later stage than '{seq_bus}' (index {seq_index})"
+                )));
+            }
+            if control.bus_kinds.get(name) != Some(&BusKind::Aux) {
+                return Err(WrapError::OutProcEffect(format!(
+                    "SetBusRouting send '{name}' must be an aux bus"
+                )));
+            }
+            resolved_sends.push((target_index, *gain));
+        }
+
+        // 3. 検証済みの値だけを atomic へ反映する。
+        if let Some(target_index) = resolved_output {
+            let routing = control.bus_routing.get(seq_bus).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no routing handle"))
+            })?;
+            // エンコード: 0=override 無し・1=Master・n>=2 => Bus(n-2)（native `InsertBusStage`
+            // doc 参照）。
+            routing.store(target_index + 2, Ordering::Relaxed);
+        }
+        if !resolved_sends.is_empty() {
+            let send_slots = control.bus_sends.get(seq_bus).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no send slots"))
+            })?;
+            for (target_index, gain) in resolved_sends {
+                // slot k は絶対 index `seq_index + 1 + k` を指す（構築時の割当・build_effect_bus_stages
+                // doc 参照）ので k = target_index - seq_index - 1。
+                let k = target_index - seq_index - 1;
+                let slot = send_slots.get(k).ok_or_else(|| {
+                    WrapError::OutProcEffect(format!(
+                        "bus '{seq_bus}' has no send slot for target index {target_index}"
+                    ))
+                })?;
+                slot.store(gain.to_bits(), Ordering::Relaxed);
+            }
+        }
+        Ok(())
     }
 
     /// both build で instrument slot へ attach する。
@@ -4276,6 +4731,10 @@ mod outproc_health_tests {
             bus_slots: HashMap::new(),
             bus_stats: HashMap::new(),
             bus_actives: HashMap::new(),
+            bus_kinds: HashMap::new(),
+            bus_index: HashMap::new(),
+            bus_routing: HashMap::new(),
+            bus_sends: HashMap::new(),
         });
         (wrap, stats)
     }
@@ -4294,6 +4753,10 @@ mod outproc_health_tests {
             bus_slots: HashMap::new(),
             bus_stats: HashMap::new(),
             bus_actives: HashMap::new(),
+            bus_kinds: HashMap::new(),
+            bus_index: HashMap::new(),
+            bus_routing: HashMap::new(),
+            bus_sends: HashMap::new(),
         });
         (wrap, child_slot)
     }
@@ -4329,6 +4792,10 @@ mod outproc_health_tests {
             bus_slots,
             bus_stats: HashMap::new(),
             bus_actives: HashMap::new(),
+            bus_kinds: HashMap::new(),
+            bus_index: HashMap::new(),
+            bus_routing: HashMap::new(),
+            bus_sends: HashMap::new(),
         });
         let error = wrap
             .load_outproc_effect_plugin(
@@ -4360,6 +4827,10 @@ mod outproc_health_tests {
             bus_slots,
             bus_stats: HashMap::new(),
             bus_actives,
+            bus_kinds: HashMap::new(),
+            bus_index: HashMap::new(),
+            bus_routing: HashMap::new(),
+            bus_sends: HashMap::new(),
         });
         let result = wrap.load_outproc_effect_plugin(
             std::path::PathBuf::from("unused.clap"),
