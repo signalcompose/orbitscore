@@ -168,6 +168,41 @@ describe('DaemonClient with mock server', () => {
     expect(rec?.params).not.toHaveProperty('channel')
   })
 
+  it('PlayAt bus あり: bus フィールドを params に含める（#434 S3 insert routing）', async () => {
+    const url = await server.start({
+      PlayAt: () => ({ play_id: 'p-bus-1' }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.playAt('s-mock-1', 0.0, 0.8, 0, 0, 0, 1, undefined, 'seq-bus-0')
+    const rec = server.received.find((r) => r.method === 'PlayAt')
+    expect(rec?.params.bus).toBe('seq-bus-0')
+    expect(rec?.params).not.toHaveProperty('channel')
+  })
+
+  it('PlayAt bus なし（undefined）: bus フィールドを params から省く', async () => {
+    const url = await server.start({
+      PlayAt: () => ({ play_id: 'p-no-bus-1' }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.playAt('s-mock-1', 0.0, 0.8)
+    const rec = server.received.find((r) => r.method === 'PlayAt')
+    expect(rec?.params).not.toHaveProperty('bus')
+  })
+
+  it('LoadPlugin bus あり: bus フィールドを params に含める（#434 S3）', async () => {
+    const url = await server.start({
+      LoadPlugin: () => ({ plugin_id: 'reverb', plugin_name: 'Reverb', note_port_index: 0 }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.loadPlugin('/tmp/reverb.clap', undefined, 'effect', 'seq-bus-0')
+    const record = server.received.find((r) => r.method === 'LoadPlugin')
+    expect(record?.params).toEqual({
+      path: '/tmp/reverb.clap',
+      role: 'effect',
+      bus: 'seq-bus-0',
+    })
+  })
+
   it('Stop は status=stopped を true に変換する', async () => {
     const url = await server.start({
       Stop: (params) => {

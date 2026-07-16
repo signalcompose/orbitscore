@@ -298,6 +298,7 @@ export class DaemonClient extends EventEmitter {
     durationSec = 0,
     rate = 1,
     channel?: string,
+    bus?: string,
   ): Promise<{ playId: string }> {
     const result = await this.request('PlayAt', {
       sample_id: sampleId,
@@ -312,6 +313,9 @@ export class DaemonClient extends EventEmitter {
       rate,
       // channel は LinkAudio ルーティング先（非空の時のみ送る。空/未指定は hardware）。
       ...(channel ? { channel } : {}),
+      // bus は per-sequence insert routing（seq.effect()・PH.2b・#434 S3）。channel と
+      // 同時送出はしない想定（呼び出し側が排他を担保。daemon 側も同時指定を拒否する）。
+      ...(bus ? { bus } : {}),
     })
     return { playId: String(result.play_id) }
   }
@@ -359,11 +363,15 @@ export class DaemonClient extends EventEmitter {
     filePath: string,
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
+    bus?: string,
   ): Promise<PluginLoadResult> {
     const result = await this.request('LoadPlugin', {
       path: filePath,
       ...(pluginId === undefined ? {} : { plugin_id: pluginId }),
       role,
+      // bus は per-sequence insert（'effect' role 専用・#434 S3）。省略時は master slot
+      // （既存の global.effect() / seq.instrument() と後方互換）。
+      ...(bus ? { bus } : {}),
     })
     return {
       pluginId: String(result.plugin_id),

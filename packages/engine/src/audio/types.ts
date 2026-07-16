@@ -61,11 +61,17 @@ export interface AudioEngine {
    */
   setLinkTempo?(bpm: number): Promise<void>
 
-  /** Eagerly load a plugin into the engine's master effect insert. */
+  /**
+   * Eagerly load a plugin into the engine's master effect insert, or (when
+   * `bus` is given) a named per-sequence insert bus (`seq.effect()` — PH.2b /
+   * #434). `bus` is only meaningful for `role: 'effect'`; passing it with
+   * `role: 'instrument'` is a daemon-side error.
+   */
   loadPlugin?(
     filePath: string,
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
+    bus?: string,
   ): Promise<PluginLoadResult>
 
   pluginNoteOn?(key: number, channel: number, velocity: number): Promise<void>

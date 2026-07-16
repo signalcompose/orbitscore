@@ -85,6 +85,12 @@ export interface ScheduledPlay {
   /** LinkAudio ルーティング先チャンネル名。非空の時のみ daemon の PlayAt へ転送する。 */
   outputChannel?: string
   /**
+   * per-sequence insert bus 名（`seq.effect()`・PH.2b・#434 S3）。非空の時のみ daemon の
+   * PlayAt へ転送する。`outputChannel` と同時に立つことはない（LinkAudio と plugin
+   * hosting は v1 で排他）。
+   */
+  insertBus?: string
+  /**
    * #390 live playhead: 由来する play() 引数のドット結合インデックス（"2"、ネストは
    * 後段で "1.0"）。dispatch 成功時に `[STEP]` marker を stdout へ出すためだけの
    * observational フィールド。timing / 音響には一切影響しない。
@@ -264,14 +270,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
   /**
-   * v1 は effect / instrument 共通の単一 plugin slot（各 manager が上流で保証）。
-   * daemon crash 後に同じ role で replay する宣言 intent。
+   * daemon crash 後に replay する宣言 intent。key = `${role}:${bus ?? ''}` — master
+   * effect/instrument はそれぞれ単一 slot（各 manager が上流で保証）、per-sequence
+   * insert（`seq.effect()`・#434 S3）は bus ごとに 1 エントリなので Map で保持する。
    */
-  private loadedPlugin?: {
-    filePath: string
-    pluginId?: string
-    role: 'effect' | 'instrument'
-  }
+  private readonly loadedPlugins = new Map<
+    string,
+    { filePath: string; pluginId?: string; role: 'effect' | 'instrument'; bus?: string }
+  >()
   /**
    * Whether `loadedPlugin` is actually loaded in the daemon right now (silent-failure
    * guard). Set true on a successful `loadPlugin()`/reload, false when a post-respawn
@@ -613,10 +619,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
     filePath: string,
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
+    bus?: string,
   ): Promise<PluginLoadResult> {
     try {
-      const result = await this.daemon.loadPlugin(filePath, pluginId, role)
-      this.loadedPlugin = { filePath, pluginId, role }
+      const result = await this.daemon.loadPlugin(filePath, pluginId, role, bus)
+      this.loadedPlugins.set(`${role}:${bus ?? ''}`, { filePath, pluginId, role, bus })
       this.pluginActive = true
       return result
     } catch (err) {
@@ -683,19 +690,24 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * (see `pluginActive` field doc) and self-heal on the next `effect()` call.
    */
   private async reloadPluginsAfterRespawn(): Promise<void> {
-    if (!this.loadedPlugin) return
-    const { filePath, pluginId, role } = this.loadedPlugin
-    try {
-      await this.daemon.loadPlugin(filePath, pluginId, role)
-      this.pluginActive = true
-    } catch (err) {
-      this.pluginActive = false
-      // Cache entry intentionally remains: a later daemon respawn retries restoration.
-      console.error(
-        `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}`,
-        err,
-      )
+    if (this.loadedPlugins.size === 0) return
+    // Reissue every declaration (master effect/instrument + all seq.effect() buses).
+    // One entry's failure must not skip the others — each is independent daemon state.
+    let anyFailed = false
+    for (const { filePath, pluginId, role, bus } of this.loadedPlugins.values()) {
+      try {
+        await this.daemon.loadPlugin(filePath, pluginId, role, bus)
+      } catch (err) {
+        anyFailed = true
+        // Cache entry intentionally remains: a later daemon respawn retries restoration.
+        console.error(
+          `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}` +
+            (bus ? ` (bus=${bus})` : ''),
+          err,
+        )
+      }
     }
+    this.pluginActive = !anyFailed
   }
 
   /** Whether `loadedPlugin` is actually active in the daemon right now (see field doc). */
@@ -732,13 +744,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     sequenceName = '',
     outputChannel?: string,
     argPath?: string,
+    insertBus?: string,
   ): void {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel`（`sequence.output()` 経由）が
     // authoritative に出す（A4-2b-2b で egress 配線済み）。scheduleEvent は channel を tag するだけで、
     // 「egress is not wired」の旧 warn は stale なので出さない（egress 有効な daemon では誤誘導になる）。
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
-    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel, argPath })
+    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel, argPath, insertBus })
   }
 
   /**
@@ -764,6 +777,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     sequenceName = '',
     outputChannel?: string,
     argPath?: string,
+    insertBus?: string,
   ): void {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel` が authoritative（上記
     // scheduleEvent と同様・egress 配線済みなので stale な「not wired」warn は出さない）。
@@ -776,6 +790,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       slice: { index: sliceIndex, total: totalSlices, eventDurationMs },
       outputChannel,
       argPath,
+      insertBus,
     })
   }
 
@@ -932,6 +947,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       durationSec,
       rate,
       play.outputChannel,
+      play.insertBus,
     )
     // #390 live playhead: emitted only after a successful dispatch (emission-only
     // — no timing / semantics change).

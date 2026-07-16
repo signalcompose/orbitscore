@@ -35,6 +35,7 @@ export interface AudioEngineBackend extends Scheduler {
     filePath: string,
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
+    bus?: string,
   ): Promise<PluginLoadResult>
   pluginNoteOn?(key: number, channel: number, velocity: number): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number): Promise<void>

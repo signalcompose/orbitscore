@@ -28,6 +28,9 @@ export interface Scheduler {
     sequenceName: string,
     outputChannel?: string,
     argPath?: string,
+    // per-sequence insert bus (seq.effect() — PH.2b / #434 S3). Mutually
+    // exclusive with outputChannel (LinkAudio and plugin hosting are v1-exclusive).
+    insertBus?: string,
   ): void
   scheduleSliceEvent(
     filepath: string,
@@ -40,6 +43,7 @@ export interface Scheduler {
     sequenceName: string,
     outputChannel?: string,
     argPath?: string,
+    insertBus?: string,
   ): void
   /**
    * #390 live playhead: marker-only event for a REST (0) slot — no audio

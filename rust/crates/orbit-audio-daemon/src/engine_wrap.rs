@@ -233,10 +233,50 @@ fn parse_effect_buses(raw: &str) -> Result<Vec<String>, String> {
         .collect()
 }
 
+/// 既定 insert bus プールの名前 prefix。DSL 側（TS）の per-sequence effect manager が
+/// 同じ規則（`seq-bus-<n>`）で bus 名を組み立てて `LoadPlugin.bus` / `PlayAt.bus` に
+/// 送るため、prefix を変える場合は TS 側の定数も合わせて更新すること（#434 S3）。
+#[cfg(feature = "outproc-effect")]
+pub const DEFAULT_EFFECT_BUS_POOL_PREFIX: &str = "seq-bus-";
+
+/// `ORBIT_EFFECT_BUS_POOL` の既定サイズ（未設定時）。PH.2b の v1 上限（同時 insert 8 seq）と一致。
+#[cfg(feature = "outproc-effect")]
+const DEFAULT_EFFECT_BUS_POOL_SIZE: usize = 8;
+
+/// 既定プール名 `seq-bus-0..N` を生成する純関数。`ORBIT_EFFECT_BUSES`（明示名）が指定されて
+/// いない場合のみ呼ばれる。`pool_size` は `ORBIT_EFFECT_BUS_POOL` の解析結果（既定 8・0 で無効）。
+#[cfg(feature = "outproc-effect")]
+fn default_effect_bus_pool(pool_size: usize) -> Vec<String> {
+    (0..pool_size)
+        .map(|n| format!("{DEFAULT_EFFECT_BUS_POOL_PREFIX}{n}"))
+        .collect()
+}
+
+/// `ORBIT_EFFECT_BUS_POOL` を解析する純関数。空 / 未設定は既定値（8）。`"0"` はプール無効
+/// （明示的な `ORBIT_EFFECT_BUSES` のみ使う後方互換モード）。非数値・負値は起動時エラー。
+#[cfg(feature = "outproc-effect")]
+fn parse_effect_bus_pool_size(raw: &str) -> Result<usize, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(DEFAULT_EFFECT_BUS_POOL_SIZE);
+    }
+    trimmed
+        .parse::<usize>()
+        .map_err(|_| format!("ORBIT_EFFECT_BUS_POOL must be a non-negative integer, got '{raw}'"))
+}
+
+/// bus 名の解決: `ORBIT_EFFECT_BUSES`（明示名・非空）が設定されていればそれを使う（既存 S2 挙動を
+/// 保つ）。未設定なら `ORBIT_EFFECT_BUS_POOL`（既定 8・`"0"` で無効）に従って `seq-bus-<n>` の
+/// 既定プールを生成する。両方指定は `ORBIT_EFFECT_BUSES` を優先（明示指定が常に勝つ）。
 #[cfg(feature = "outproc-effect")]
 fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
-    parse_effect_buses(&std::env::var("ORBIT_EFFECT_BUSES").unwrap_or_default())
-        .map_err(WrapError::OutProcEffect)
+    let explicit = std::env::var("ORBIT_EFFECT_BUSES").unwrap_or_default();
+    if !explicit.trim().is_empty() {
+        return parse_effect_buses(&explicit).map_err(WrapError::OutProcEffect);
+    }
+    let pool_raw = std::env::var("ORBIT_EFFECT_BUS_POOL").unwrap_or_default();
+    let pool_size = parse_effect_bus_pool_size(&pool_raw).map_err(WrapError::OutProcEffect)?;
+    Ok(default_effect_bus_pool(pool_size))
 }
 
 #[cfg(all(test, feature = "outproc-effect"))]
@@ -280,6 +320,54 @@ mod effect_buses_from_env_tests {
         let error =
             parse_effect_buses("fx1,fx\x002").expect_err("NUL byte in name must be rejected");
         assert!(error.contains("invalid"), "unexpected message: {error}");
+    }
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+mod effect_bus_pool_tests {
+    use super::{
+        default_effect_bus_pool, parse_effect_bus_pool_size, DEFAULT_EFFECT_BUS_POOL_SIZE,
+    };
+
+    #[test]
+    fn pool_size_defaults_to_eight_when_unset_or_blank() {
+        assert_eq!(
+            parse_effect_bus_pool_size(""),
+            Ok(DEFAULT_EFFECT_BUS_POOL_SIZE)
+        );
+        assert_eq!(
+            parse_effect_bus_pool_size("   "),
+            Ok(DEFAULT_EFFECT_BUS_POOL_SIZE)
+        );
+    }
+
+    #[test]
+    fn pool_size_zero_disables_the_pool() {
+        assert_eq!(parse_effect_bus_pool_size("0"), Ok(0));
+        assert_eq!(default_effect_bus_pool(0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pool_size_parses_explicit_count() {
+        assert_eq!(parse_effect_bus_pool_size("3"), Ok(3));
+    }
+
+    #[test]
+    fn pool_size_rejects_non_numeric_or_negative() {
+        assert!(parse_effect_bus_pool_size("abc").is_err());
+        assert!(parse_effect_bus_pool_size("-1").is_err());
+    }
+
+    #[test]
+    fn default_pool_generates_seq_bus_names_in_order() {
+        assert_eq!(
+            default_effect_bus_pool(3),
+            vec![
+                "seq-bus-0".to_string(),
+                "seq-bus-1".to_string(),
+                "seq-bus-2".to_string(),
+            ]
+        );
     }
 }
 
