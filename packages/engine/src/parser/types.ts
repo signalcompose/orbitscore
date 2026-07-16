@@ -49,6 +49,12 @@ export type AudioIR = {
   globalInit?: GlobalInit
   sequenceInits: SequenceInit[]
   statements: Statement[]
+  /**
+   * ファイル import（IM.1-IM.2, #456）。評価順序の規範（imports が entry 自身の宣言より
+   * 先・ソース記載順）を守るため statements とは別バケットで保持し、interpreter が
+   * globalInit より前に処理する。ファイル先頭領域のみ（AudioParser.parse が検査）。
+   */
+  fileImports?: FileImportStatement[]
 }
 
 export type GlobalInit = {
@@ -70,6 +76,7 @@ export type Statement =
   | PatternBinding
   | ModeBinding
   | ImportStatement
+  | FileImportStatement
   | MixerHandleStatement
 
 /**
@@ -103,6 +110,17 @@ export type ChordBinding = {
 export type ImportStatement = {
   type: 'import'
   module: string // 'chords' (the only module accepted in v1.1)
+}
+
+/**
+ * `import { kick, snare } from "./drums.orbs"` — file import (IM.1, #456).
+ * `names` は契約検査（import 先の top-level 宣言に存在しなければエラー・隔離ではない —
+ * IM.2）。`path` は import 元ファイル基準の相対パス（`./` | `../` 開始・`.orbs` 必須）。
+ */
+export type FileImportStatement = {
+  type: 'file_import'
+  names: string[]
+  path: string
 }
 
 /**

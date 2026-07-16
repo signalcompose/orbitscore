@@ -6,6 +6,8 @@
  * For new code, consider using the modules directly from './interpreter/'.
  */
 
+import * as path from 'path'
+
 import { AudioIR } from '../parser/audio-parser'
 import { createAudioEngine } from '../audio/create-audio-engine'
 import { AudioEngineBackend } from '../audio/engine-backend'
@@ -20,6 +22,7 @@ import { ENGINE_VERSION, DSL_VERSION } from '../version'
 import { InterpreterState } from './types'
 import { processGlobalInit, processSequenceInit } from './process-initialization'
 import { processStatement } from './process-statement'
+import { createImportContext, processFileImports } from './process-file-import'
 
 /**
  * Interpreter V2 - Object-oriented approach
@@ -163,6 +166,29 @@ export class InterpreterV2 {
 
     // Ensure SuperCollider is booted
     await this.ensureBooted()
+
+    // File imports (IM.2, #456): evaluated BEFORE the entry's own declarations, in
+    // source order, depth-first. The cache/cycle context lives for this eval only.
+    if (ir.fileImports?.length) {
+      const baseDir = options?.sourceFile
+        ? path.dirname(path.resolve(options.sourceFile))
+        : options?.documentDirectory
+      if (!baseDir) {
+        throw new Error(
+          'import: cannot resolve the base directory — no source file or document directory (IM.6).',
+        )
+      }
+      const ctx = createImportContext(options?.sourceFile)
+      try {
+        await processFileImports(ir.fileImports, baseDir, this.state, ctx)
+      } finally {
+        // 成功・失敗を問わず基準ディレクトリを entry 側（documentDirectory または
+        // sourceFile のディレクトリ = baseDir）へ復元する。復元しないと entry 自身の
+        // audio() が最後に評価した module のディレクトリ基準で解決される（IM.4 違反）し、
+        // 失敗時は長寿命 interpreter（REPL/live）で次の評価まで基準が腐る。
+        this.state.currentGlobal?.setDocumentDirectory(options?.documentDirectory ?? baseDir)
+      }
+    }
 
     // Process global initialization
     if (ir.globalInit) {

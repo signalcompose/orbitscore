@@ -17,6 +17,32 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.265 feat(engine): file import declaration — parser + interpreter (I1+I2) #456 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装・実機 E2E 済み（spec = IM.1-IM.6・PR #469 マージ済みの正本に準拠）
+
+**内容**:
+- **parser (I1)**: `import { names } from "./file.orbs"` を既存 `import chords` と同一キーワードで
+  分岐パース（次トークン `{` = file import）。パス検査（`./`|`../` 開始・`.orbs` 必須）・
+  先頭領域検査（非 import 文の後の import はエラー）。IR は `fileImports` 別バケット
+  （評価順序の規範を担保）
+- **interpreter (I2)**: `process-file-import.ts` 新設。realpath ベースの module cache
+  （ダイヤモンド 1 回評価）・循環検出（entry 含む stack）・契約検査（IR 静的宣言列挙 vs
+  names）・transport 禁止（IM.3）・module 評価中は documentDirectory を module dir に
+  差し替え（IM.4: audio() は呼び出し時即時解決のためこれで成立）・entry の宣言は常に最後
+  （IM.2 評価順序）
+- REPL/部分 eval: sourceFile 無しは documentDirectory 基準・どちらも無ければエラー（IM.6）
+
+**検証**: 新規 spec 17 tests（parser 7 + interpreter 10: merge/契約/循環/自己 import/
+ダイヤモンド/transport 拒否/transitive パス/REPL 基準/基準なしエラー）。全体 1420 passed。
+実機 E2E: module（`./sine_880.wav` = module 相対）を entry が import → RUN → capture
+peak 0.70711（オラクル一致・IM.4 実機確認）。
+
+**残（I3・別 PR）**: VS Code 拡張の import 行対応（診断抑制・保存時再評価の動線）。
+
+Refs #456
+
 ### 6.264 docs(spec): import 宣言の spec 起草（IM.1-IM.6）#456 (Jul 17, 2026)
 
 **Date**: 2026-07-17
