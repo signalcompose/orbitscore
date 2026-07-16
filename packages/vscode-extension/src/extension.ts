@@ -48,6 +48,7 @@ let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let bundleStatusItem: vscode.StatusBarItem | null = null
 let docsStatusItem: vscode.StatusBarItem | null = null
+let devDocsPanel: vscode.WebviewPanel | null = null
 let isLiveCodingMode: boolean = false
 // Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
 // Used to decide if `global.setDocumentDirectory(...)` can be prepended safely.
@@ -303,7 +304,15 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
+    // viewsWelcome コンテンツは view に provider が登録されて初めて描画される
+    // （空 TreeView で十分 — 章ツリーの本実装は #451 確定後の follow-up）。
+    vscode.window.registerTreeDataProvider('orbitscore.learningView', {
+      getChildren: () => [],
+      getTreeItem: (element: vscode.TreeItem) => element,
+    }),
     vscode.commands.registerCommand('orbitscore.openDevDocs', openDevDocs),
+    vscode.commands.registerCommand('orbitscore.openDevDocsPanel', () => openDevDocsPanel(context)),
+    vscode.commands.registerCommand('orbitscore.openWalkthrough', openWalkthrough),
     statusBarItem,
     bundleStatusItem,
     docsStatusItem,
@@ -411,22 +420,103 @@ export function deactivate() {
   statusBarItem?.dispose()
   bundleStatusItem?.dispose()
   docsStatusItem?.dispose()
+  devDocsPanel?.dispose()
+  devDocsPanel = null
 }
 
-async function openDevDocs(): Promise<void> {
+/**
+ * Canonical local URL of the dev learning site, or null (with the shared error
+ * message shown) when the MCP server is not running. Single source for every
+ * entry point (browser command, webview panel) — the site is served at the
+ * VitePress base `/orbitscore/dev/` (mcp-server.ts DOCS_PUBLIC_BASE; `/docs`
+ * is only a redirect kept for muscle memory).
+ */
+function resolveDevDocsUrl(): string | null {
   const port = mcpServerHandle?.port ?? 0
   if (!port) {
     void vscode.window.showErrorMessage(
       'OrbitScore development docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
     )
-    return
+    return null
   }
-  const url = `http://127.0.0.1:${port}/docs/`
+  return `http://127.0.0.1:${port}/orbitscore/dev/`
+}
+
+async function openDevDocs(): Promise<void> {
+  const url = resolveDevDocsUrl()
+  if (!url) return
   const opened = await vscode.env.openExternal(vscode.Uri.parse(url))
   if (!opened) {
     outputChannel?.appendLine(`❌ Failed to open development docs at ${url}`)
     void vscode.window.showErrorMessage('Could not open the development docs in your browser.')
   }
+}
+
+/**
+ * Open the development docs inside an editor tab via an iframe-wrapped
+ * webview panel, so the site can be read side-by-side with `.orbs` files
+ * without leaving VS Code. Singleton: a second invocation reveals the
+ * existing panel instead of creating a duplicate.
+ */
+function openDevDocsPanel(context: vscode.ExtensionContext): void {
+  const url = resolveDevDocsUrl()
+  if (!url) return
+
+  if (devDocsPanel) {
+    devDocsPanel.reveal(vscode.ViewColumn.Active)
+    return
+  }
+
+  devDocsPanel = vscode.window.createWebviewPanel(
+    'orbitscore.devDocsPanel',
+    'OrbitScore Docs',
+    vscode.ViewColumn.Active,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+    },
+  )
+  devDocsPanel.webview.html = buildDevDocsPanelHtml(url)
+  devDocsPanel.onDidDispose(
+    () => {
+      devDocsPanel = null
+    },
+    null,
+    context.subscriptions,
+  )
+}
+
+function buildDevDocsPanelHtml(url: string): string {
+  const escapedUrl = url.replace(/"/g, '&quot;')
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; frame-src http://127.0.0.1:*; style-src 'unsafe-inline';"
+  />
+  <style>
+    html, body { height: 100%; margin: 0; padding: 0; }
+    iframe { width: 100%; height: 100%; border: none; }
+  </style>
+</head>
+<body>
+  <iframe src="${escapedUrl}" title="OrbitScore development docs"></iframe>
+</body>
+</html>`
+}
+
+async function openWalkthrough(): Promise<void> {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8')) as {
+    publisher: string
+    name: string
+  }
+  const extensionId = `${pkg.publisher}.${pkg.name}`
+  await vscode.commands.executeCommand(
+    'workbench.action.openWalkthrough',
+    `${extensionId}#orbitscore.learnOrbitScore`,
+  )
 }
 
 /**

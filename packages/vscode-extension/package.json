@@ -91,6 +91,102 @@
         "title": "📚 OrbitScore: Open Dev Docs",
         "category": "OrbitScore",
         "icon": "$(book)"
+      },
+      {
+        "command": "orbitscore.openDevDocsPanel",
+        "title": "🖥️ OrbitScore: Open Dev Docs (Editor Tab)",
+        "category": "OrbitScore",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "orbitscore.openWalkthrough",
+        "title": "🎓 OrbitScore: Start the Walkthrough",
+        "category": "OrbitScore",
+        "icon": "$(mortar-board)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "orbitscore",
+          "title": "OrbitScore",
+          "icon": "media/icon-activitybar.svg"
+        }
+      ]
+    },
+    "views": {
+      "orbitscore": [
+        {
+          "id": "orbitscore.learningView",
+          "name": "Learning",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "orbitscore.learningView",
+        "contents": "Learn OrbitScore and find your way around the docs.\n[📚 Open Learning Site (Browser)](command:orbitscore.openDevDocs)\n[🖥 Open in Editor](command:orbitscore.openDevDocsPanel)\n[🎓 Start the Walkthrough](command:orbitscore.openWalkthrough)\n\nNote: this welcome view is a placeholder entry point. A full chapter tree (TreeView) is a follow-up once #451 (site structure) is finalized."
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "orbitscore.openDevDocs",
+          "when": "resourceExtname == .orbs",
+          "group": "navigation"
+        }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "orbitscore.learnOrbitScore",
+        "title": "Learn OrbitScore",
+        "description": "Get from zero to your first sound, then explore the engine and plugin hosting.",
+        "icon": "media/icon-activitybar.svg",
+        "steps": [
+          {
+            "id": "openLearningSite",
+            "title": "Open the Learning Site",
+            "description": "Open the OrbitScore development learning site in your browser to see the full documentation.\n[Open Learning Site](command:orbitscore.openDevDocs)",
+            "media": {
+              "markdown": "media/walkthrough/01-open-learning-site.md"
+            },
+            "completionEvents": [
+              "onCommand:orbitscore.openDevDocs"
+            ]
+          },
+          {
+            "id": "startEngine",
+            "title": "Start the Engine",
+            "description": "Start the bundled native audio engine so OrbitScore can play sound.\n[Start Engine](command:orbitscore.toggleEngine)",
+            "media": {
+              "markdown": "media/walkthrough/02-start-engine.md"
+            },
+            "completionEvents": [
+              "onCommand:orbitscore.toggleEngine"
+            ]
+          },
+          {
+            "id": "runFirstSound",
+            "title": "Run Your First Sound",
+            "description": "Open a `.orbs` file, select a line, and run it to hear your first sound.\n[Run Selection](command:orbitscore.runSelection)",
+            "media": {
+              "markdown": "media/walkthrough/03-run-first-sound.md"
+            },
+            "completionEvents": [
+              "onCommand:orbitscore.runSelection"
+            ]
+          },
+          {
+            "id": "explorePluginHosting",
+            "title": "Explore Plugin Hosting",
+            "description": "Learn how OrbitScore hosts CLAP/VST3/AU instruments and effects.\n[Read the Plugin Hosting Chapter](command:orbitscore.openDevDocs)",
+            "media": {
+              "markdown": "media/walkthrough/04-plugin-hosting.md"
+            }
+          }
+        ]
       }
     ],
     "languages": [
