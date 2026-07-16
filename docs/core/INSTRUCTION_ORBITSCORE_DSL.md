@@ -1279,7 +1279,7 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   1 バンドル複数プラグインは pluginId ごとに 1 エントリ）
 - スキャン対象 = OS 標準ディレクトリ（macOS: `~/Library/Audio/Plug-Ins/CLAP`・
   `/Library/Audio/Plug-Ins/CLAP`・同 `VST3`）+ 環境変数 `ORBIT_PLUGIN_PATH`
-  （`:` 区切り・追加検索パス）
+  （`:` 区切り・追加検索パス・**各ディレクトリ直下のみ = 非再帰**）
 - metadata の取得: CLAP = factory metadata（軽量・load 不要）、VST3 = bundle 内
   `moduleinfo.json` があれば load 不要、無ければ probe（`probe_plugin` 資産 #397）。
   probe は逐次で時間がかかるため**バックグラウンド + キャッシュ必須**
@@ -1296,13 +1296,26 @@ kick.effect("TAL Software/TAL Reverb 4")  // vendor 修飾（同名衝突時の�
 kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カタログ非参照）
 ```
 
-- **判別規則**: spec が path-direct 形（`./` `../` `~/` `/` 開始）または既知拡張子
+- **判別規則**: spec が path-direct 形（`./` `../` `~/` `/` **開始**）または既知拡張子
   （`.clap` `.vst3` `.component`）で終わる → 従来どおり path 解決（PH.3）。
   それ以外 → **カタログ名として解決**
-- 名前解決: `name` 完全一致（case-insensitive）。複数ヒット（同名別 vendor / 別 format）
+  - **実装注意**: audio 系の `looksLikePath()`（「`/` を含む」= path 判定）は**再利用
+    しない** — vendor 修飾 `"TAL Software/TAL Reverb 4"` は `/` を含むがカタログ名。
+    判別は本節の規則（開始形/末尾拡張子）で専用に実装する
+  - カタログ名自体が既知拡張子で終わる場合（例: name = `"MyPlugin.clap"`）は path 解決に
+    倒れる（既知の限界 — 該当プラグインは path 指定で回避）
+- 名前解決: `name` 完全一致（case-insensitive・前後空白 trim・Unicode は **NFC 正規化後**
+  に比較 — macOS FS の NFD 由来の不一致を防ぐ）。複数ヒット（同名別 vendor / 別 format）
   は**候補を列挙してエラー**（silent に先頭を選ばない）。`"vendor/name"` で一意化
-- 同名同 vendor で複数 format がある場合の優先: **CLAP > VST3**（engine の 1st-class
-  format を既定に。明示したい場合は path 指定へフォールバック）
+- **解決の出力 = `(path, pluginId)` の組**で、両方を `LoadPlugin` へ渡す（カタログは
+  pluginId 単位で 1 エントリ = name → (path, pluginId) は 1:1）。したがって**カタログ
+  名指しと第 2 引数 `pluginId` の併用はエラー**（名前が既に一意。pluginId 引数は
+  path 指定時のみ有効）
+- 同名同 vendor で複数 format がある場合の優先: **当該 verb が受理できる format
+  （PH.3）の中から CLAP > VST3**。受理可能 format のエントリが 1 つも無い場合
+  （例: VST3 版しか無いプラグインを `global.effect()` で名指し）は、path 系の
+  「not yet supported」文言を流用せず**「カタログ名 + 見つかった format + 当該 verb の
+  受理状況」を含む専用エラー**にする
 - role 検査: 解決したエントリの roles が verb と不一致（effect() に instrument-only 等）
   はエラー
 - カタログ未生成・名前未ヒット時のエラーは「rescan 手順」を含む actionable メッセージ
