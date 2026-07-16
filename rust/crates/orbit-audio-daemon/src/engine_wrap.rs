@@ -7,6 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+use std::sync::MutexGuard;
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use std::sync::Weak;
 use std::sync::{Arc, Mutex};
 #[cfg(any(
@@ -967,9 +969,7 @@ impl EngineWrap {
                 .ok_or_else(|| outproc_runtime_error("outproc instrument stream is closed"))?
         };
 
-        let mut slot = child_slot
-            .lock()
-            .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+        let mut slot = lock_child_slot_recovering(&child_slot, "initial state check");
 
         match &*slot {
             ChildSlot::Active {
@@ -1031,9 +1031,7 @@ impl EngineWrap {
         let ready_mmap = match orbit_audio_sandbox::open_shared(&launch.shm_path) {
             Ok(mmap) => mmap,
             Err(error) => {
-                let mut slot = child_slot
-                    .lock()
-                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                let mut slot = lock_child_slot_recovering(&child_slot, "open_shared failure");
                 debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Closed;
                 return Err(outproc_runtime_error(format!(
@@ -1060,9 +1058,7 @@ impl EngineWrap {
             Ok(child) => child,
             Err(error) => {
                 let child_exe = launch.child_exe.clone();
-                let mut slot = child_slot
-                    .lock()
-                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                let mut slot = lock_child_slot_recovering(&child_slot, "child spawn failure");
                 debug_assert_slot_loading(&slot);
                 *slot = ChildSlot::Empty(launch);
                 return Err(outproc_runtime_error(format!(
@@ -1083,9 +1079,8 @@ impl EngineWrap {
                     // spawn_outproc_supervisor はエラー時に自身の cleanup で shm を unlink して返るため、
                     // この slot は再利用不能。launch の fallback unlink は解除。
                     launch.cleanup_shm_on_drop = false;
-                    let mut slot = child_slot
-                        .lock()
-                        .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+                    let mut slot =
+                        lock_child_slot_recovering(&child_slot, "supervisor spawn failure");
                     debug_assert_slot_loading(&slot);
                     *slot = ChildSlot::Closed;
                     return Err(outproc_runtime_error(format!(
@@ -1145,9 +1140,7 @@ impl EngineWrap {
         let summary = outproc_plugin_summary(&path, &plugin_id);
         // Active supervisor が以後の unlink を所有する。local launch の fallback cleanup は解除する。
         launch.cleanup_shm_on_drop = false;
-        let mut slot = child_slot
-            .lock()
-            .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
+        let mut slot = lock_child_slot_recovering(&child_slot, "successful attach");
         debug_assert_slot_loading(&slot);
         *slot = ChildSlot::Active {
             path,
@@ -2083,6 +2076,19 @@ fn debug_assert_slot_loading(slot: &ChildSlot) {
     );
 }
 
+/// child slot の poison は attach state machine の停止理由にせず、唯一の書き手である本関数が
+/// 回復して本来の遷移を完遂する。放置すると Loading/Closed/Empty の中間状態が恒久化する。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn lock_child_slot_recovering<'a>(
+    child_slot: &'a Mutex<ChildSlot>,
+    site: &'static str,
+) -> MutexGuard<'a, ChildSlot> {
+    child_slot.lock().unwrap_or_else(|poisoned| {
+        tracing::error!("child slot mutex poisoned during {site}; recovering");
+        poisoned.into_inner()
+    })
+}
+
 /// retryable な attach 失敗（role mismatch / early-exit / timeout）の共通終端処理。
 /// supervisor を unlink 抜きで teardown し（unlink 所有権は launch に戻る）、teardown が
 /// 書いた QUIT を RUN へ戻して、slot を retry 可能な `Empty(launch)` に復帰させる。
@@ -2101,13 +2107,7 @@ fn retryable_attach_failure(
     supervisor.detach_keep_shm();
     // teardown が CONTROL_QUIT を書いたので、retry する child は RUN モードで起動する必要がある。
     unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
-    let mut slot = child_slot.lock().unwrap_or_else(|poisoned| {
-        // poison はロック保持中の他 thread panic を意味するが、Loading→X の書き手は本関数のみ
-        // なので回復して Empty 復帰を完遂する（放置すると slot が Loading で恒久スタックし、
-        // 以後の LoadPlugin が偽の「in progress」で永久に失敗する）。
-        tracing::error!("child slot mutex poisoned during retryable attach failure; recovering");
-        poisoned.into_inner()
-    });
+    let mut slot = lock_child_slot_recovering(child_slot, "retryable attach failure");
     debug_assert_slot_loading(&slot);
     *slot = ChildSlot::Empty(launch);
     WrapError::OutProcAttachFailed(message)
@@ -2722,6 +2722,44 @@ mod outproc_load_error_test_support {
         );
     }
 
+    #[cfg(feature = "outproc-effect")]
+    pub(super) fn poisoned_slot_open_shared_failure_recovers_to_closed(
+        unique_path: impl Fn() -> PathBuf,
+        inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
+        plugin_path: &str,
+    ) {
+        let shm_path = unique_path();
+        let _ = std::fs::remove_file(&shm_path);
+        let stats = OutProcChildStats::new();
+        let (wrap, child_slot) = inject(
+            ChildSlot::Empty(child_launch(
+                shm_path,
+                PathBuf::from("unused-child-executable"),
+                stats.clone(),
+            )),
+            stats,
+        );
+        let poison_slot = child_slot.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poison_slot.lock().expect("lock slot for poison");
+            panic!("intentional child slot poison");
+        })
+        .join();
+
+        let error = match wrap.load_outproc_plugin(PathBuf::from(plugin_path), None) {
+            Ok(_) => panic!("missing shm must take the Closed terminal transition after recovery"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            WrapError::OutProcEffect(_) | WrapError::OutProcInstrument(_)
+        ));
+        assert!(matches!(
+            *child_slot.lock().unwrap_or_else(|p| p.into_inner()),
+            ChildSlot::Closed
+        ));
+    }
+
     pub(super) fn spawn_failure_restores_empty_for_retry(
         unique_path: impl Fn() -> PathBuf,
         inject: impl Fn(ChildSlot, Arc<OutProcChildStats>) -> InjectedSlot,
@@ -3177,6 +3215,15 @@ mod outproc_health_tests {
             wrap_with_child_slot,
             assert_effect_runtime_error_contains,
             "unused-effect.clap",
+        );
+    }
+
+    #[test]
+    fn effect_load_outproc_poisoned_slot_recovers_to_closed_on_open_shared_failure() {
+        super::outproc_load_error_test_support::poisoned_slot_open_shared_failure_recovers_to_closed(
+            crate::outproc_effect::unique_shm_path,
+            wrap_with_child_slot,
+            "poisoned-effect.clap",
         );
     }
 
