@@ -1101,17 +1101,15 @@ impl EngineWrap {
             if status == orbit_audio_sandbox::transport::CHILD_STATUS_READY {
                 let flags = unsafe { (*region).child_flags.load(Ordering::Acquire) };
                 if !outproc_role_matches(flags) {
-                    supervisor.detach_keep_shm();
-                    // teardown wrote QUIT; the retry child must start in RUN mode.
-                    unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
-                    let mut slot = child_slot
-                        .lock()
-                        .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
-                    debug_assert_slot_loading(&slot);
-                    *slot = ChildSlot::Empty(launch);
-                    return Err(WrapError::OutProcAttachFailed(format!(
-                        "loaded plugin role does not match daemon role (child_flags={flags:#x})"
-                    )));
+                    return Err(retryable_attach_failure(
+                        supervisor,
+                        region,
+                        &child_slot,
+                        launch,
+                        format!(
+                            "loaded plugin role does not match daemon role (child_flags={flags:#x})"
+                        ),
+                    ));
                 }
                 launch
                     .stats
@@ -1120,29 +1118,25 @@ impl EngineWrap {
                 break;
             }
             if launch.stats.child_early_exit.load(Ordering::Acquire) {
-                supervisor.detach_keep_shm();
-                unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
-                let mut slot = child_slot
-                    .lock()
-                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
-                debug_assert_slot_loading(&slot);
-                *slot = ChildSlot::Empty(launch);
-                return Err(WrapError::OutProcAttachFailed(
+                return Err(retryable_attach_failure(
+                    supervisor,
+                    region,
+                    &child_slot,
+                    launch,
                     "child exited before publishing READY".into(),
                 ));
             }
             if std::time::Instant::now() >= deadline {
-                supervisor.detach_keep_shm();
-                unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
-                let mut slot = child_slot
-                    .lock()
-                    .map_err(|_| outproc_runtime_error("child slot mutex poisoned"))?;
-                debug_assert_slot_loading(&slot);
-                *slot = ChildSlot::Empty(launch);
-                return Err(WrapError::OutProcAttachFailed(format!(
-                    "timed out waiting {:?} for child READY",
-                    CHILD_READY_TIMEOUT
-                )));
+                return Err(retryable_attach_failure(
+                    supervisor,
+                    region,
+                    &child_slot,
+                    launch,
+                    format!(
+                        "timed out waiting {:?} for child READY",
+                        CHILD_READY_TIMEOUT
+                    ),
+                ));
             }
             std::thread::sleep(CHILD_READY_POLL);
         }
@@ -2087,6 +2081,32 @@ fn debug_assert_slot_loading(slot: &ChildSlot) {
         "load_outproc_plugin: slot must still be Loading (only this function \
          transitions Loading -> Active/Closed/Empty)"
     );
+}
+
+/// retryable な attach 失敗（role mismatch / early-exit / timeout）の共通終端処理。
+/// supervisor を unlink 抜きで teardown し（unlink 所有権は launch に戻る）、teardown が
+/// 書いた QUIT を RUN へ戻して、slot を retry 可能な `Empty(launch)` に復帰させる。
+///
+/// SAFETY 前提: `region` は呼び出し元 scope で生存する `ready_mmap` を指すこと
+/// （`load_outproc_plugin` の ready-ack ループからのみ呼ばれる）。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn retryable_attach_failure(
+    supervisor: OutProcChildSupervisor,
+    region: *mut orbit_audio_sandbox::transport::SharedRegion,
+    child_slot: &Mutex<ChildSlot>,
+    launch: ChildLaunch,
+    message: String,
+) -> WrapError {
+    supervisor.detach_keep_shm();
+    // teardown wrote QUIT; the retry child must start in RUN mode.
+    unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
+    let mut slot = match child_slot.lock() {
+        Ok(slot) => slot,
+        Err(_) => return outproc_runtime_error("child slot mutex poisoned"),
+    };
+    debug_assert_slot_loading(&slot);
+    *slot = ChildSlot::Empty(launch);
+    WrapError::OutProcAttachFailed(message)
 }
 
 #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
