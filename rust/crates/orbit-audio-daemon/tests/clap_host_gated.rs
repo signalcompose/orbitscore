@@ -28,7 +28,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use orbit_audio_daemon::engine_wrap::EngineWrap;
+use orbit_audio_daemon::engine_wrap::{ClapPluginRole, EngineWrap};
 
 /// repo ルート相対パスを解決する（MANIFEST_DIR = rust/crates/orbit-audio-daemon）。
 fn repo_path(rel: &str) -> PathBuf {
@@ -51,7 +51,7 @@ fn synth_processes_audio_via_daemon() {
 
     // プラグインをロード（discovery + activate + install ring push）。単一プラグインなので id=None。
     let info = engine
-        .load_plugin(synth.clone(), None)
+        .load_plugin(synth.clone(), None, ClapPluginRole::Instrument)
         .expect("load test-synth plugin");
     assert_eq!(
         info.plugin_id, "com.signalcompose.clap-test-synth",
@@ -59,7 +59,7 @@ fn synth_processes_audio_via_daemon() {
     );
 
     // 二重ロードは AlreadyLoaded で弾く（controller の double-load guard を駆動し、サイレント除去を検知）。
-    let second = engine.load_plugin(synth.clone(), None);
+    let second = engine.load_plugin(synth.clone(), None, ClapPluginRole::Instrument);
     assert!(
         second.is_err(),
         "二重ロードは AlreadyLoaded エラーを返すべきだが Ok が返った"

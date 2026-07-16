@@ -48,15 +48,15 @@ fn setup_test(buffer_frames: Option<u32>) -> (OutProcEffectConfig, PathBuf) {
     let cfg = OutProcEffectConfig {
         format: PluginFormat::Clap,
         child_exe: child_exe("orbit-clap-effect-child"),
-        plugin: test_effect_dylib(),
+        plugin: Some(test_effect_dylib()),
         plugin_id: None, // 単一プラグイン bundle なので id 省略可
         buffer_frames,
     };
     let wav = repo_path("test-assets/audio/sine_440.wav");
     assert!(
-        cfg.plugin.exists(),
+        cfg.plugin.as_ref().expect("gated config has a plugin").exists(),
         "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml`",
-        cfg.plugin.display()
+        cfg.plugin.as_ref().expect("gated config has a plugin").display()
     );
     assert!(
         cfg.child_exe.exists(),
@@ -158,7 +158,7 @@ fn outproc_effect_processes_audio_via_daemon() {
 #[ignore = "#441: needs a real output device + built child binary + test-effect dylib"]
 fn outproc_effect_attach_failure_can_retry_with_correct_plugin() {
     let (cfg, wav) = setup_test(None);
-    let good_plugin = cfg.plugin.clone();
+    let good_plugin = cfg.plugin.clone().expect("gated config has a plugin");
     let (engine, _guard) = EngineWrap::start_outproc_effect_post_boot(cfg).expect("start daemon");
     let started = Instant::now();
     let error =

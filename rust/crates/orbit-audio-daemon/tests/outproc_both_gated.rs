@@ -21,23 +21,35 @@ fn setup_test() -> (OutProcEffectConfig, OutProcInstrumentConfig) {
     let effect = OutProcEffectConfig {
         format: PluginFormat::Clap,
         child_exe: child_exe("orbit-clap-effect-child"),
-        plugin: repo_path("rust-spike/clap-test-effect/target/debug/libclap_test_effect.dylib"),
+        plugin: Some(repo_path(
+            "rust-spike/clap-test-effect/target/debug/libclap_test_effect.dylib",
+        )),
         plugin_id: None,
         buffer_frames: None,
     };
     let instrument = OutProcInstrumentConfig {
         child_exe: child_exe("orbit-clap-instrument-child"),
-        plugin: repo_path("rust-spike/clap-test-synth/target/debug/libclap_test_synth.dylib"),
+        plugin: Some(repo_path(
+            "rust-spike/clap-test-synth/target/debug/libclap_test_synth.dylib",
+        )),
         plugin_id: Some(PLUGIN_ID.to_owned()),
         buffer_frames: None,
     };
-    assert!(effect.plugin.exists(), "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml`", effect.plugin.display());
+    let effect_plugin = effect
+        .plugin
+        .as_ref()
+        .expect("gated config has an effect plugin");
+    assert!(effect_plugin.exists(), "test-effect dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-effect/Cargo.toml`", effect_plugin.display());
     assert!(
         effect.child_exe.exists(),
         "effect child binary が無い: {} — 先に `cargo build -p orbit-clap-effect-child`",
         effect.child_exe.display()
     );
-    assert!(instrument.plugin.exists(), "test-synth dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-synth/Cargo.toml`", instrument.plugin.display());
+    let instrument_plugin = instrument
+        .plugin
+        .as_ref()
+        .expect("gated config has an instrument plugin");
+    assert!(instrument_plugin.exists(), "test-synth dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-synth/Cargo.toml`", instrument_plugin.display());
     assert!(
         instrument.child_exe.exists(),
         "instrument child binary が無い: {} — 先に `cargo build -p orbit-clap-instrument-child`",
@@ -50,9 +62,15 @@ fn setup_test() -> (OutProcEffectConfig, OutProcInstrumentConfig) {
 #[ignore = "both-role OOP: needs a real output device + built effect/instrument children and test dylibs (local only)"]
 fn both_roles_attach_in_instrument_then_effect_order() {
     let (effect_cfg, instrument_cfg) = setup_test();
-    let synth_path = instrument_cfg.plugin.clone();
+    let synth_path = instrument_cfg
+        .plugin
+        .clone()
+        .expect("gated config has an instrument plugin");
     let synth_id = instrument_cfg.plugin_id.clone();
-    let effect_path = effect_cfg.plugin.clone();
+    let effect_path = effect_cfg
+        .plugin
+        .clone()
+        .expect("gated config has an effect plugin");
     let (engine, _guard) = EngineWrap::start_outproc_both(effect_cfg, instrument_cfg)
         .expect("start both-role OOP daemon");
 

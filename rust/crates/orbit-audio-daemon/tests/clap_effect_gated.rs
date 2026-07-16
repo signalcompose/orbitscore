@@ -22,7 +22,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use orbit_audio_daemon::engine_wrap::EngineWrap;
+use orbit_audio_daemon::engine_wrap::{ClapPluginRole, EngineWrap};
 
 /// repo ルート相対パスを解決する（MANIFEST_DIR = rust/crates/orbit-audio-daemon）。
 fn repo_path(rel: &str) -> PathBuf {
@@ -66,7 +66,7 @@ fn effect_processes_audio_via_daemon() {
     // ── Phase B: effect ロード（serial insert）───────────────────────────────────────
     // 単一プラグインなので id=None。
     let info = engine
-        .load_plugin(effect.clone(), None)
+        .load_plugin(effect.clone(), None, ClapPluginRole::Effect)
         .expect("load test-effect plugin");
     assert_eq!(
         info.plugin_id, "com.signalcompose.clap-test-effect",

@@ -263,35 +263,14 @@ export class Global {
     return this.linkAudioManager.isEnabled()
   }
 
-  /**
-   * v1 mutual exclusion between `global.effect()` and `seq.instrument()`
-   * (daemon single-plugin slot limitation; planned for #431). Checked here —
-   * rather than inside each manager — so neither manager needs a closure over
-   * the other (mirrors the `linkAudio()` cross-manager check above). Each
-   * caller passes the *other* manager, so a repeat call declaring the same
-   * plugin again (idempotent path, handled inside the manager itself) is
-   * unaffected.
-   */
-  private assertNoCrossPluginDeclaration(
-    other: PluginEffectManager | PluginInstrumentManager,
-  ): void {
-    if (other.hasDeclaration()) {
-      throw new Error(
-        'v1 does not support simultaneous effect and instrument use (daemon single-plugin slot limitation; planned for #431).',
-      )
-    }
-  }
-
   /** Eagerly load the v1 single master-insert plugin. */
   async effect(path: string, pluginId?: string): Promise<this> {
-    this.assertNoCrossPluginDeclaration(this.pluginInstrumentManager)
     await this.pluginEffectManager.effect(path, pluginId)
     return this
   }
 
   /** Eagerly load the v1 single hosted instrument plugin (shared by note sequences). */
   async instrument(path: string, pluginId?: string): Promise<this> {
-    this.assertNoCrossPluginDeclaration(this.pluginEffectManager)
     await this.pluginInstrumentManager.instrument(path, pluginId)
     return this
   }

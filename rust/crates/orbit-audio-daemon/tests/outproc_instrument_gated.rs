@@ -36,14 +36,22 @@ fn test_synth_dylib() -> PathBuf {
 fn setup_test() -> OutProcInstrumentConfig {
     let config = OutProcInstrumentConfig {
         child_exe: child_exe("orbit-clap-instrument-child"),
-        plugin: test_synth_dylib(),
+        plugin: Some(test_synth_dylib()),
         plugin_id: Some(PLUGIN_ID.to_owned()),
         buffer_frames: None,
     };
     assert!(
-        config.plugin.exists(),
+        config
+            .plugin
+            .as_ref()
+            .expect("gated config has a plugin")
+            .exists(),
         "test-synth dylib が無い: {} — 先に `cargo build --manifest-path rust-spike/clap-test-synth/Cargo.toml`",
-        config.plugin.display()
+        config
+            .plugin
+            .as_ref()
+            .expect("gated config has a plugin")
+            .display()
     );
     assert!(
         config.child_exe.exists(),
@@ -144,7 +152,7 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
 #[ignore = "#441: needs a real output device + built instrument child + test-synth dylib"]
 fn outproc_instrument_attach_failure_can_retry_with_correct_plugin() {
     let cfg = setup_test();
-    let good_plugin = cfg.plugin.clone();
+    let good_plugin = cfg.plugin.clone().expect("gated config has a plugin");
     let plugin_id = cfg.plugin_id.clone();
     let (engine, _guard) =
         EngineWrap::start_outproc_instrument_post_boot(cfg).expect("start daemon");

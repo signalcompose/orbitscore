@@ -74,6 +74,7 @@ jobs:
         with:
           workspaces: rust
 
+      # Release daemon uses OOP-both; the in-process clap-host is dev/gated-test only.
       # Builds the native orbit-audio-daemon binary so scripts/copy-daemon-bin.sh
       # (invoked by `npm run build` -> build:engine, see packages/vscode-extension/
       # package.json) can bundle it into engine/bin/darwin-arm64/ before packaging
@@ -82,8 +83,10 @@ jobs:
       # ordering here determines whether the release .vsix ships with the daemon.
       # runner is macos-14 (Apple Silicon) -- matches the daemon's only bundled
       # target (darwin-arm64).
-      - name: Build orbit-audio-daemon (native Rust engine, default backend since #369)
-        run: cargo build --release -p orbit-audio-daemon --manifest-path rust/Cargo.toml
+      - name: Build OOP-both Rust daemon and CLAP child binaries
+        run: |
+          cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument --manifest-path rust/Cargo.toml
+          cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child --manifest-path rust/Cargo.toml
 
       - name: Build engine + extension TypeScript
         working-directory: packages/vscode-extension
@@ -133,6 +136,19 @@ jobs:
             exit 1
           fi
           echo "orbit-audio-daemon present and executable in packaged .vsix"
+
+          for CHILD_BIN in orbit-clap-effect-child orbit-clap-instrument-child; do
+            CHILD_PATH="$VSIX_CHECK/extension/engine/bin/darwin-arm64/$CHILD_BIN"
+            if [ ! -f "$CHILD_PATH" ]; then
+              echo "::error::$CHILD_BIN missing from packaged .vsix at engine/bin/darwin-arm64/ — OOP plugin hosting cannot start its child" >&2
+              exit 1
+            fi
+            if [ ! -x "$CHILD_PATH" ]; then
+              echo "::error::$CHILD_BIN in packaged .vsix is not executable (lost +x bit?)" >&2
+              exit 1
+            fi
+            echo "$CHILD_BIN present and executable in packaged .vsix"
+          done
 
       # ─────────────────────────────────────────────────────────────────────
       # Steps below this point only run for tag pushes (not pull_request).

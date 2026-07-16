@@ -17,6 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.257 feat(daemon): DoD 配線 — TS ガード撤去 + cross-role reject + 配布 feature + DSL 実機 E2E #431 PR-3 (Jul 16, 2026)
+
+**Date**: 2026-07-16
+**Status**: ✅ 実装・**Epic #424 DoD 実機達成**（PR 作成・レビューフローへ）
+**Branch**: `431-oop-dod-wiring`
+**Commit**: [PENDING]
+
+Epic #424 の最終 PR。実装 = Codex（Stage A/B + E2E 発見バグ修正）。
+
+**Stage A（ガード配線の付け替え）**:
+- TS: `assertNoCrossPluginDeclaration` 撤去（v1 排他の根拠 = daemon 単一 slot が PR-2 で解消）
+- daemon: in-process clap-host に cross-role reject 新設（`ClapControl.loaded_role` 記録 +
+  `CLAP_CROSS_ROLE_REJECTED`・撤去だけだと silent 置換になる #431 の罠に対応）。
+  in-process LoadPlugin は role 必須化
+- 受け入れ監査で clap gated テストのコンパイル破綻を検出し修正
+
+**Stage B（配布 feature 方針・#431 scope e 確定)**:
+- release daemon = `--features outproc-effect,outproc-instrument`（OOP both）。
+  in-process clap-host は dev/gated 専用
+- child binary 2本を .vsix に同梱（daemon の sibling 解決規約・追加配線不要）+
+  release.yml post-package gate に fail-loud 検証追加
+
+**E2E 発見バグ（production ブロッカー）**:
+- 配布構成 daemon が `ORBIT_EFFECT_PLUGIN not set` で boot 不能（from_env の eager 時代の遺物）
+  → Config.plugin を Option 化・plugin env 任意化・eager 系は None 明示エラー
+
+**Epic #424 DoD 実機達成**:
+- .orbs（`global.effect(CLAPTestEffect.clap)` + `seq.instrument(CLAPTestSynth.clap)` +
+  `play(1,3,5,8)`）を cli-audio.js + 配布構成 release daemon で実行
+- baseline（instrument のみ）capture peak **0.25000**（synth 既知振幅）/
+  effect+instrument 同時 peak **0.12500**・**ratio 0.50000 厳密一致**
+- 「DSL から CLAP effect 1 つ + instrument 1 つを同時ロードし、Pitch DSL の note で演奏し、
+  両方が実機で鳴る」= **DoD の文言通りを客観実証**（スピーカー実再生込み）
+
+**検証**: 3構成 lib（51/50/82）+ 全ターゲットコンパイル + clippy + TS 1330 passed
+
 ### 6.256 feat(daemon): OOP effect × instrument 共存 #431 PR-2 (Jul 16, 2026)
 
 **Date**: 2026-07-16

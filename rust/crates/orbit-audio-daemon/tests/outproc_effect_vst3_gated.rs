@@ -103,7 +103,7 @@ fn setup_test(buffer_frames: Option<u32>) -> (OutProcEffectConfig, PathBuf) {
     let cfg = OutProcEffectConfig {
         format: PluginFormat::Vst3,
         child_exe: vst3_child_exe(),
-        plugin: package_oracle(),
+        plugin: Some(package_oracle()),
         plugin_id: None, // 単一プラグイン bundle なので id 省略可
         buffer_frames,
     };
@@ -114,9 +114,15 @@ fn setup_test(buffer_frames: Option<u32>) -> (OutProcEffectConfig, PathBuf) {
         cfg.child_exe.display()
     );
     assert!(
-        cfg.plugin.exists(),
+        cfg.plugin
+            .as_ref()
+            .expect("gated config has a plugin")
+            .exists(),
         "VST3 gain oracle bundle が無い: {}",
-        cfg.plugin.display()
+        cfg.plugin
+            .as_ref()
+            .expect("gated config has a plugin")
+            .display()
     );
     assert!(wav.exists(), "音源 WAV が無い: {}", wav.display());
     (cfg, wav)
@@ -437,7 +443,7 @@ fn outproc_effect_vst3_commercial_plugin_smoke() {
     let cfg = OutProcEffectConfig {
         format: PluginFormat::Vst3,
         child_exe,
-        plugin: plugin.clone(),
+        plugin: Some(plugin.clone()),
         plugin_id: std::env::var("ORBIT_EFFECT_PLUGIN_ID").ok(),
         buffer_frames: None,
     };

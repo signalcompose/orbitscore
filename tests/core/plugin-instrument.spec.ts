@@ -61,14 +61,14 @@ describe('PluginInstrumentManager', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(2)
   })
 
-  it('rejects effect and instrument in both declaration orders, including the same path', async () => {
+  it('allows effect and instrument declarations in both orders, including the same path', async () => {
     const first = makeGlobal().global
     await first.effect('shared.clap')
-    await expect(first.instrument('shared.clap')).rejects.toThrow('#431')
+    await expect(first.instrument('shared.clap')).resolves.toBe(first)
 
     const second = makeGlobal().global
     await second.instrument('shared.clap')
-    await expect(second.effect('shared.clap')).rejects.toThrow('#431')
+    await expect(second.effect('shared.clap')).resolves.toBe(second)
   })
 
   it('rejects LinkAudio in both declaration orders', async () => {

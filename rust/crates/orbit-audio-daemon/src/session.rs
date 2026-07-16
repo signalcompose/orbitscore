@@ -16,6 +16,8 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
 use tracing::warn;
 
+#[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+use crate::engine_wrap::ClapPluginRole;
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
@@ -51,6 +53,17 @@ fn daemon_error_event(severity: &str, code: &str, message: String) -> Event {
 #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
 fn outproc_role_param_is_valid(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) == Some("effect")
+}
+
+/// in-process build の LoadPlugin にはこの PR 前は role 概念がなかった。単一 slot を安全に保護するため
+/// role は現在必須であり、省略する client は明示的に拒否する。
+#[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+fn clap_role_param(params: &Value) -> Option<ClapPluginRole> {
+    match params.get("role").and_then(Value::as_str) {
+        Some("effect") => Some(ClapPluginRole::Effect),
+        Some("instrument") => Some(ClapPluginRole::Instrument),
+        _ => None,
+    }
 }
 
 #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
@@ -632,6 +645,19 @@ async fn handle_command(
         // 含みうるため spawn_blocking で tokio worker から隔離する。
         "LoadPlugin" => match params.get("path").and_then(|p| p.as_str()) {
             Some(path_str) => {
+                #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+                let clap_role = match clap_role_param(&params) {
+                    Some(role) => role,
+                    None => {
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "MALFORMED_REQUEST",
+                                "in-process LoadPlugin requires role='effect' or role='instrument'",
+                            ),
+                        );
+                    }
+                };
                 #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
                 if !outproc_role_param_is_valid(&params) {
                     return err(
@@ -697,7 +723,7 @@ async fn handle_command(
                     }
                     #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
                     {
-                        engine.load_plugin(path, plugin_id)
+                        engine.load_plugin(path, plugin_id, clap_role)
                     }
                 })
                 .await;
@@ -1052,6 +1078,9 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         // CLAP も LinkAudio と同様 feature-gap（UNAVAILABLE）と runtime 失敗を別コードにする。
         WrapError::ClapUnavailable(msg) => ProtocolError::new("CLAP_UNAVAILABLE", msg.clone()),
         WrapError::Clap(msg) => ProtocolError::new("CLAP_RUNTIME", msg.clone()),
+        WrapError::ClapCrossRoleRejected(msg) => {
+            ProtocolError::new("CLAP_CROSS_ROLE_REJECTED", msg.clone())
+        }
         // 未ロード（LoadPlugin 未送信 / 失敗後）は feature-gap でも汎用 runtime エラーでもない専用
         // コード（#405）。TS 層が「まだロードしていない」ことを actionable に判定できるようにする。
         WrapError::ClapNotLoaded(msg) => ProtocolError::new("CLAP_NOT_LOADED", msg.clone()),
@@ -1076,6 +1105,21 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+    #[test]
+    fn inprocess_load_plugin_requires_a_known_role() {
+        assert_eq!(
+            clap_role_param(&json!({"role": "effect"})),
+            Some(ClapPluginRole::Effect)
+        );
+        assert_eq!(
+            clap_role_param(&json!({"role": "instrument"})),
+            Some(ClapPluginRole::Instrument)
+        );
+        assert_eq!(clap_role_param(&json!({})), None);
+        assert_eq!(clap_role_param(&json!({"role": "unknown"})), None);
+    }
 
     #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
     #[test]
@@ -1127,6 +1171,12 @@ mod tests {
     fn clap_runtime_maps_to_runtime_code() {
         let e = WrapError::Clap("plugin event ring full".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_RUNTIME");
+    }
+
+    #[test]
+    fn clap_cross_role_rejection_maps_to_dedicated_code() {
+        let e = WrapError::ClapCrossRoleRejected("single slot".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_CROSS_ROLE_REJECTED");
     }
 
     // 未ロードは feature-gap / 汎用 runtime エラーのどちらとも別コードにする（#405）。
