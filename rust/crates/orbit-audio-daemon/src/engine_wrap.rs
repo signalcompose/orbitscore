@@ -825,8 +825,8 @@ impl EngineWrap {
     }
 
     /// feature `outproc-effect` 版（γ M1 PR-C・Issue #359）: cpal 出力を OOP effect master-bus
-    /// post-processor 経路付きで起動する。production は環境変数（`ORBIT_EFFECT_PLUGIN` 等）から設定を
-    /// 組む。設定不足は `OutProcEffectUnavailable`（feature-gap と同じ握り潰し対象）。
+    /// post-processor 経路付きで起動する。production は環境変数から child 設定を組み、plugin は
+    /// `LoadPlugin` で post-boot attach する。
     #[cfg(all(
         feature = "outproc-effect",
         not(feature = "clap-host"),
@@ -844,7 +844,10 @@ impl EngineWrap {
     pub fn start_outproc_effect(
         cfg: crate::outproc_effect::OutProcEffectConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
-        let plugin = cfg.plugin.clone();
+        let plugin = cfg
+            .plugin
+            .clone()
+            .ok_or_else(|| WrapError::OutProcEffect("eager start requires a plugin path".into()))?;
         let plugin_id = cfg.plugin_id.clone();
         let (wrap, guard) = Self::start_outproc_effect_post_boot(cfg)?;
         wrap.load_outproc_plugin(plugin, plugin_id)?;
@@ -954,7 +957,9 @@ impl EngineWrap {
     pub fn start_outproc_instrument(
         cfg: crate::outproc_instrument::OutProcInstrumentConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
-        let plugin = cfg.plugin.clone();
+        let plugin = cfg.plugin.clone().ok_or_else(|| {
+            WrapError::OutProcInstrument("eager start requires a plugin path".into())
+        })?;
         let plugin_id = cfg.plugin_id.clone();
         let (wrap, guard) = Self::start_outproc_instrument_post_boot(cfg)?;
         wrap.load_outproc_plugin(plugin, plugin_id)?;

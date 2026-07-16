@@ -84,24 +84,17 @@ impl PluginFormat {
             Self::Vst3 => "orbit-vst3-effect-child",
         }
     }
-
-    fn plugin_kind(self) -> &'static str {
-        match self {
-            Self::Clap => ".clap",
-            Self::Vst3 => ".vst3",
-        }
-    }
 }
 
-/// OOP effect の起動設定（child binary path + plugin）。`start_outproc_effect` と gated test が使う。
+/// OOP effect の起動設定。plugin は post-boot attach では不要で、eager start と gated test のみ使う。
 /// sample_rate は device 確定後に渡すので含めない。
 pub struct OutProcEffectConfig {
     /// plugin format（既定 env は `clap`）。
     pub format: PluginFormat,
     /// effect child binary（format に応じた child）のパス。
     pub child_exe: PathBuf,
-    /// host する plugin bundle のパス（load-time param のみ・M1 は per-block automation なし）。
-    pub plugin: PathBuf,
+    /// eager start で host する plugin bundle のパス。post-boot attach は `LoadPlugin` で受け取る。
+    pub plugin: Option<PathBuf>,
     /// plugin id（CLAP は id、VST3 Phase 1 は CLI symmetry のため渡すだけ）。
     pub plugin_id: Option<String>,
     /// cpal に要求する固定バッファフレーム数（gated stale-rate harness が 32/64 を渡す）。`None` は
@@ -114,7 +107,7 @@ impl OutProcEffectConfig {
     /// - `ORBIT_EFFECT_FORMAT`: `clap` | `vst3`（省略時 `clap`）。
     /// - `ORBIT_EFFECT_CHILD_BIN`: child binary path（省略時は daemon exe と同一ディレクトリの
     ///   format 対応 child）。
-    /// - `ORBIT_EFFECT_PLUGIN`: plugin bundle path（**必須**）。
+    /// - `ORBIT_EFFECT_PLUGIN`: plugin bundle path（任意。post-boot attach は `LoadPlugin` で渡す）。
     /// - `ORBIT_EFFECT_PLUGIN_ID`: plugin id（任意）。
     pub fn from_env() -> Result<Self, String> {
         let format = PluginFormat::from_env_value(std::env::var("ORBIT_EFFECT_FORMAT").ok())?;
@@ -122,14 +115,7 @@ impl OutProcEffectConfig {
             Some(v) => PathBuf::from(v),
             None => default_child_exe(format)?,
         };
-        let plugin = std::env::var_os("ORBIT_EFFECT_PLUGIN")
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                format!(
-                    "ORBIT_EFFECT_PLUGIN not set (out-of-process effect needs a {} bundle path)",
-                    format.plugin_kind()
-                )
-            })?;
+        let plugin = std::env::var_os("ORBIT_EFFECT_PLUGIN").map(PathBuf::from);
         let plugin_id = std::env::var("ORBIT_EFFECT_PLUGIN_ID").ok();
         // production は通常 device 既定。`ORBIT_EFFECT_BUFFER_FRAMES` で明示できる。**設定済みなのに無効**
         // （非正・parse 不能）な場合は黙って無視せず warn を出す（silent fallback 回避）。未設定は device 既定。
@@ -658,6 +644,23 @@ impl Drop for OutProcTeardownGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static EFFECT_PLUGIN_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn from_env_allows_plugin_to_be_unset_for_post_boot_attach() {
+        let _guard = EFFECT_PLUGIN_ENV_LOCK.lock().expect("effect env mutex");
+        let previous = std::env::var_os("ORBIT_EFFECT_PLUGIN");
+        std::env::remove_var("ORBIT_EFFECT_PLUGIN");
+
+        let config = OutProcEffectConfig::from_env().expect("plugin path is optional at boot");
+
+        if let Some(value) = previous {
+            std::env::set_var("ORBIT_EFFECT_PLUGIN", value);
+        }
+        assert_eq!(config.plugin, None);
+    }
 
     /// 実 mmap（zero-init・unlink 後もマッピングは有効）を所有する production 構築子経由の host を作る。
     /// unsafe を使わず（`from_mmap`）テスト用に zeroed SharedRegion を得る。

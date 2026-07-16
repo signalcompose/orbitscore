@@ -57,7 +57,8 @@ pub fn unique_shm_path() -> PathBuf {
 
 pub struct OutProcInstrumentConfig {
     pub child_exe: PathBuf,
-    pub plugin: PathBuf,
+    /// eager start で host する plugin bundle のパス。post-boot attach は `LoadPlugin` で受け取る。
+    pub plugin: Option<PathBuf>,
     pub plugin_id: Option<String>,
     pub buffer_frames: Option<u32>,
 }
@@ -68,12 +69,7 @@ impl OutProcInstrumentConfig {
             Some(value) => PathBuf::from(value),
             None => default_child_exe()?,
         };
-        let plugin = std::env::var_os("ORBIT_INSTRUMENT_PLUGIN")
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                "ORBIT_INSTRUMENT_PLUGIN not set (out-of-process instrument needs a .clap bundle path)"
-                    .to_string()
-            })?;
+        let plugin = std::env::var_os("ORBIT_INSTRUMENT_PLUGIN").map(PathBuf::from);
         let plugin_id = std::env::var("ORBIT_INSTRUMENT_PLUGIN_ID").ok();
         let buffer_frames = parse_buffer_frames(
             std::env::var("ORBIT_INSTRUMENT_BUFFER_FRAMES")
@@ -587,6 +583,25 @@ impl Drop for OutProcInstrumentTeardownGuard {
 mod tests {
     use super::*;
     use orbit_audio_sandbox::{slot_index, VoiceAddr, VoiceKey, CHANNELS};
+    use std::sync::Mutex;
+
+    static INSTRUMENT_PLUGIN_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn from_env_allows_plugin_to_be_unset_for_post_boot_attach() {
+        let _guard = INSTRUMENT_PLUGIN_ENV_LOCK
+            .lock()
+            .expect("instrument env mutex");
+        let previous = std::env::var_os("ORBIT_INSTRUMENT_PLUGIN");
+        std::env::remove_var("ORBIT_INSTRUMENT_PLUGIN");
+
+        let config = OutProcInstrumentConfig::from_env().expect("plugin path is optional at boot");
+
+        if let Some(value) = previous {
+            std::env::set_var("ORBIT_INSTRUMENT_PLUGIN", value);
+        }
+        assert_eq!(config.plugin, None);
+    }
 
     fn engaged(value: bool) -> Arc<AtomicBool> {
         Arc::new(AtomicBool::new(value))
