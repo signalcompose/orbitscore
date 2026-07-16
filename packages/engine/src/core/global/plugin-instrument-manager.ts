@@ -40,7 +40,7 @@ export class PluginInstrumentManager {
     if (existing) {
       if (existing.resolvedPath === resolvedPath && existing.pluginId === pluginId) {
         await existing.load
-        if (this.audioEngine.isPluginActive?.() === false) {
+        if (this.audioEngine.isPluginActive?.('instrument') === false) {
           await this.issueLoad(resolvedPath, pluginId)
         }
         return

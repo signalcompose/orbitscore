@@ -23,9 +23,18 @@ pub struct ScheduledSample {
     pub sample: Sample,
     /// Stop 命令での個別停止用識別子。`None` なら停止不可（fire-and-forget）。
     pub play_id: Option<String>,
-    /// 出力先 channel 名（LinkAudio outputChannel・#209）。`None` = 既定（unrouted / hardware
-    /// sum）。同名 channel の event は `Scheduler::render_channel` で加算合成される
-    /// （sum-by-name・DSL §8.1.2）。
+    /// 出力先の named routing tag。`None` = 既定（unrouted / hardware sum）。同名 target の
+    /// event は `render_multi` で加算合成される（sum-by-name・DSL §8.1.2）。
+    ///
+    /// **2つの用途を担う**（wire レベルでは相互排他 — daemon `session.rs` の
+    /// `playat_bus_and_channel_both_set` が両立を拒否する）:
+    /// - LinkAudio outputChannel（#209）— named channel buffer へ egress
+    /// - per-sequence insert bus（#434・PH.2b）— `InsertBusStage` へルーティングし
+    ///   effect 適用後に master へ sum
+    ///
+    /// ⚠ render 対象に存在しない名前へ tag された event は消費されず retain され続ける
+    /// （LinkAudio not-ready channel と insert-bus 未 activation に共通の既存ハザード。
+    /// producer 側が「登録/宣言 → tag」の順序を守ることが前提）。
     pub channel: Option<String>,
 }
 
@@ -126,6 +135,12 @@ pub fn resolve_slice_region(
 /// オーディオコールバック内で使うことを想定し、allocation 無しで
 /// フレーム単位のサンプルを取り出せるよう設計している。
 pub struct Scheduler {
+    /// 未登録の named target へ tag された event を skip した累計回数（RT 安全・Relaxed）。
+    /// skip された event は消費されず retain され続ける（`ScheduledSample.channel` doc の
+    /// ハザード）ため、この counter の増加は「宣言前 tag / 名前 typo」の唯一の観測点。
+    /// daemon の 1 Hz ticker が増加を WARNING で surface する（#461 review）。
+    pub unroutable_event_count: std::sync::atomic::AtomicU64,
+
     output_sample_rate: u32,
     output_channels: u16,
     events: Vec<ActiveSample>,
@@ -178,6 +193,7 @@ impl Scheduler {
             output_sample_rate,
             output_channels,
             events: Vec::new(),
+            unroutable_event_count: std::sync::atomic::AtomicU64::new(0),
             cursor_frames: 0,
             global_gain: 1.0,
             target_gain: 1.0,
@@ -369,7 +385,12 @@ impl Scheduler {
                 None => None,
                 Some(name) => match channels.iter().position(|(n, _)| *n == name) {
                     Some(i) => Some(i),
-                    None => continue,
+                    None => {
+                        // 未登録 target: event は消費されない（retain）。観測用 counter のみ更新。
+                        self.unroutable_event_count
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        continue;
+                    }
                 },
             };
             let active = &mut self.events[ev_idx];
@@ -1115,6 +1136,37 @@ mod tests {
     }
 
     // ===== A4-2b-1: render_multi（single-pass multi-buffer）=====
+
+    #[test]
+    fn render_multi_counts_unroutable_tagged_events() {
+        // 未登録 target へ tag された event は skip + retain され、唯一の観測点である
+        // unroutable_event_count が callback ごとに増える（#461 review）。登録済み tag は 0。
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(
+            ScheduledSample::new(0.0, mk_sample_stereo(50)).with_channel(Some("ghost".into())),
+        );
+        let mut hw = vec![0.0f32; 8];
+        let mut empty: [(&str, &mut [f32]); 0] = [];
+        s.render_multi(&mut hw, &mut empty);
+        assert_eq!(
+            s.unroutable_event_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(s.active_count(), 1, "skip された event は retain される");
+
+        let mut s = Scheduler::new(48_000, 2);
+        s.schedule(ScheduledSample::new(0.0, mk_sample_stereo(50)).with_channel(Some("fx".into())));
+        let mut hw = vec![0.0f32; 8];
+        let mut buf = vec![0.0f32; 8];
+        let mut targets = [("fx", buf.as_mut_slice())];
+        s.render_multi(&mut hw, &mut targets);
+        assert_eq!(
+            s.unroutable_event_count
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
 
     #[test]
     fn render_multi_empty_channels_matches_render() {

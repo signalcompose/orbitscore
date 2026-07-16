@@ -94,6 +94,9 @@ export class Sequence {
   // LinkAudio output channel (only meaningful when Global.linkAudio() is enabled)
   private _outputChannel?: string
 
+  // per-sequence insert bus (only meaningful when seq.effect() was declared — PH.2b / #434 S3)
+  private _insertBus?: string
+
   // MIDI properties (only meaningful when seq.midi() was declared).
   // A MIDI sequence interprets play() values as degrees, not slice numbers.
   private _midiPort?: string // resolved actual port name
@@ -397,6 +400,31 @@ export class Sequence {
 
   isInstrument(): boolean {
     return this._instrumentDeclared
+  }
+
+  /**
+   * Declare a per-sequence insert plugin (`seq.effect()` — PH.2b / #434 S3).
+   * Processed **before** the master mix / `global.effect()` (master chain
+   * semantics are unchanged). Restricted to audio sequences: note sequences
+   * (`seq.midi()` / `seq.instrument()`) play through the plugin-note path or a
+   * MIDI bus, not the audio-event PlayAt path this insert taps, so declaring it
+   * there is a v1 error rather than a silent no-op.
+   */
+  async effect(pluginPath: string, pluginId?: string): Promise<this> {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this.isNoteSequence()) {
+      throw new Error(
+        `Sequence '${name}': seq.effect() is only supported on audio sequences in v1 ` +
+          `(not midi()/instrument() sequences — their playback does not go through the ` +
+          `insert-bus audio path).`,
+      )
+    }
+    this._insertBus = await this.global.sequenceEffect(name, pluginPath, pluginId)
+    return this
+  }
+
+  getInsertBus(): string | undefined {
+    return this._insertBus
   }
 
   isNoteSequence(): boolean {
@@ -1172,6 +1200,7 @@ export class Sequence {
       masterGainDb: this.global.getMasterGainDb(),
       patternDuration: this.getPatternDuration(),
       outputChannel: this.resolveDispatchChannel(),
+      insertBus: this._insertBus,
     })
   }
 
@@ -1253,6 +1282,7 @@ export class Sequence {
       masterGainDb: this.global.getMasterGainDb(),
       patternDuration: this.getPatternDuration(),
       outputChannel: this.resolveDispatchChannel(),
+      insertBus: this._insertBus,
     })
 
     this.stateManager.setPlaying(true)
@@ -1477,6 +1507,7 @@ export class Sequence {
       pan: panState.pan,
       panRandom: panState.panRandom,
       outputChannel: this._outputChannel,
+      insertBus: this._insertBus,
       midiPort: this._midiPort,
       midiChannel: this._midiChannel,
       gate: this._gate,

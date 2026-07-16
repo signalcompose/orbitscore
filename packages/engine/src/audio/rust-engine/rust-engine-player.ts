@@ -85,6 +85,12 @@ export interface ScheduledPlay {
   /** LinkAudio ルーティング先チャンネル名。非空の時のみ daemon の PlayAt へ転送する。 */
   outputChannel?: string
   /**
+   * per-sequence insert bus 名（`seq.effect()`・PH.2b・#434 S3）。非空の時のみ daemon の
+   * PlayAt へ転送する。`outputChannel` と同時に立つことはない（LinkAudio と plugin
+   * hosting は v1 で排他）。
+   */
+  insertBus?: string
+  /**
    * #390 live playhead: 由来する play() 引数のドット結合インデックス（"2"、ネストは
    * 後段で "1.0"）。dispatch 成功時に `[STEP]` marker を stdout へ出すためだけの
    * observational フィールド。timing / 音響には一切影響しない。
@@ -264,14 +270,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** 同一 filepath の並行ロードを直列化する single-flight。 */
   private readonly inflightLoads = new Map<string, Promise<string>>()
   /**
-   * v1 は effect / instrument 共通の単一 plugin slot（各 manager が上流で保証）。
-   * daemon crash 後に同じ role で replay する宣言 intent。
+   * daemon crash 後に replay する宣言 intent。key = `${role}:${bus ?? ''}` — master
+   * effect/instrument はそれぞれ単一 slot（各 manager が上流で保証）、per-sequence
+   * insert（`seq.effect()`・#434 S3）は bus ごとに 1 エントリなので Map で保持する。
    */
-  private loadedPlugin?: {
-    filePath: string
-    pluginId?: string
-    role: 'effect' | 'instrument'
-  }
+  private readonly loadedPlugins = new Map<
+    string,
+    { filePath: string; pluginId?: string; role: 'effect' | 'instrument'; bus?: string }
+  >()
   /**
    * Whether `loadedPlugin` is actually loaded in the daemon right now (silent-failure
    * guard). Set true on a successful `loadPlugin()`/reload, false when a post-respawn
@@ -279,7 +285,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * cache-hit path can detect a stale "success" and re-issue the load instead of
    * silently returning as if the plugin were still active.
    */
-  private pluginActive = false
+  /**
+   * declaration key（`${role}:${bus ?? ''}`）ごとの active 状態。respawn 後の reload が
+   * 一部だけ失敗した場合に、失敗した宣言だけを self-heal 対象にする（#461 review:
+   * 単一 boolean だと健全な宣言まで再ロードされる）。
+   */
+  private readonly pluginActiveByKey = new Map<string, boolean>()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
    * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
@@ -613,15 +624,16 @@ export class RustEnginePlayer implements AudioEngineBackend {
     filePath: string,
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
+    bus?: string,
   ): Promise<PluginLoadResult> {
     try {
-      const result = await this.daemon.loadPlugin(filePath, pluginId, role)
-      this.loadedPlugin = { filePath, pluginId, role }
-      this.pluginActive = true
+      const result = await this.daemon.loadPlugin(filePath, pluginId, role, bus)
+      this.loadedPlugins.set(`${role}:${bus ?? ''}`, { filePath, pluginId, role, bus })
+      this.pluginActiveByKey.set(`${role}:${bus ?? ''}`, true)
       return result
     } catch (err) {
       // 失敗時は必ず false（呼び出し元の false-on-entry 保証に依存しない）
-      this.pluginActive = false
+      this.pluginActiveByKey.set(`${role}:${bus ?? ''}`, false)
       if (err instanceof DaemonProtocolError) {
         if (err.code === 'CLAP_UNAVAILABLE') {
           throw new Error(
@@ -642,7 +654,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       )
       return Promise.resolve()
     }
-    if (!this.pluginActive) {
+    if (this.pluginActiveByKey.get('instrument:') !== true) {
       this.warnOnce(
         'pluginInactive',
         '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
@@ -662,7 +674,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       )
       return Promise.resolve()
     }
-    if (!this.pluginActive) {
+    if (this.pluginActiveByKey.get('instrument:') !== true) {
       this.warnOnce(
         'pluginInactive',
         '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
@@ -683,24 +695,36 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * (see `pluginActive` field doc) and self-heal on the next `effect()` call.
    */
   private async reloadPluginsAfterRespawn(): Promise<void> {
-    if (!this.loadedPlugin) return
-    const { filePath, pluginId, role } = this.loadedPlugin
-    try {
-      await this.daemon.loadPlugin(filePath, pluginId, role)
-      this.pluginActive = true
-    } catch (err) {
-      this.pluginActive = false
-      // Cache entry intentionally remains: a later daemon respawn retries restoration.
-      console.error(
-        `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}`,
-        err,
-      )
+    if (this.loadedPlugins.size === 0) return
+    // Reissue every declaration (master effect/instrument + all seq.effect() buses).
+    // One entry's failure must not skip the others — each is independent daemon state.
+    for (const [key, { filePath, pluginId, role, bus }] of this.loadedPlugins.entries()) {
+      try {
+        await this.daemon.loadPlugin(filePath, pluginId, role, bus)
+        this.pluginActiveByKey.set(key, true)
+      } catch (err) {
+        // Cache entry intentionally remains: a later daemon respawn retries restoration.
+        // per-key の false 化により、self-heal は失敗した宣言だけを再ロードする（#461 review）。
+        this.pluginActiveByKey.set(key, false)
+        console.error(
+          `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}` +
+            (bus ? ` (bus=${bus})` : ''),
+          err,
+        )
+      }
     }
   }
 
   /** Whether `loadedPlugin` is actually active in the daemon right now (see field doc). */
-  isPluginActive(): boolean {
-    return this.pluginActive
+  isPluginActive(role?: 'effect' | 'instrument', bus?: string): boolean {
+    // 引数なし = 全宣言が active か（後方互換・boolean AND）。role/bus 指定 = 該当宣言のみ。
+    if (role !== undefined) {
+      return this.pluginActiveByKey.get(`${role}:${bus ?? ''}`) !== false
+    }
+    for (const active of this.pluginActiveByKey.values()) {
+      if (!active) return false
+    }
+    return this.pluginActiveByKey.size > 0
   }
 
   /**
@@ -732,13 +756,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
     sequenceName = '',
     outputChannel?: string,
     argPath?: string,
+    insertBus?: string,
   ): void {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel`（`sequence.output()` 経由）が
     // authoritative に出す（A4-2b-2b で egress 配線済み）。scheduleEvent は channel を tag するだけで、
     // 「egress is not wired」の旧 warn は stale なので出さない（egress 有効な daemon では誤誘導になる）。
     // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
-    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel, argPath })
+    this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel, argPath, insertBus })
   }
 
   /**
@@ -764,6 +789,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     sequenceName = '',
     outputChannel?: string,
     argPath?: string,
+    insertBus?: string,
   ): void {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel` が authoritative（上記
     // scheduleEvent と同様・egress 配線済みなので stale な「not wired」warn は出さない）。
@@ -776,6 +802,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       slice: { index: sliceIndex, total: totalSlices, eventDurationMs },
       outputChannel,
       argPath,
+      insertBus,
     })
   }
 
@@ -932,6 +959,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       durationSec,
       rate,
       play.outputChannel,
+      play.insertBus,
     )
     // #390 live playhead: emitted only after a successful dispatch (emission-only
     // — no timing / semantics change).

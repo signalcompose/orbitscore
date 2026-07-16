@@ -1178,8 +1178,37 @@ global.effect("~/plugins/TAL-Reverb-4.clap")   // master bus insert
   **異なる path / pluginId での 2 回目の呼び出しはエラー**
   （「v1 は master insert 1 基。チェーンは将来対応」）。
 - 将来拡張（非規範）: 複数回呼び出し = 呼び出し順の直列チェーン（左→右）。
-  per-sequence insert（`seq.effect()`）も将来拡張として予約する — verb 名を共有するため、
-  追加しても構文の非互換は生じない。
+
+### PH.2b per-sequence effect — `seq.effect(path[, pluginId])`（#434）
+
+```js
+var drums = init global.seq
+drums.audio("kick.wav")
+drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる insert
+```
+
+- **シーケンス個別の insert**（DAW の per-track insert と同型）。処理順は
+  **per-sequence insert → master mix → `global.effect()`（master chain）** — 既存の
+  master 経路の意味論は不変。
+- v1 は **1 seq = 1 insert**。同一 path + pluginId の再宣言は冪等（no-op・PH.2 と同じ
+  ライブ再評価保護）。異なる path / pluginId での再宣言はエラー。チェーン
+  （複数回呼び出し = 直列）は将来拡張（エンジン内部は順序付きリストで実装済み・
+  DSL 側のガード解放のみ）。
+- **受理フォーマットは effect と同じ**: v1 は `.clap` のみ（`.vst3` / `.component` は
+  instrument と異なり effect 系では未対応）。
+- **エンジン実装（規範）**: `seq.effect()` 宣言はエンジンの **named insert bus** を確保し、
+  当該シーケンスの再生イベントに bus tag を付けてスケジュールする。bus は宣言時点で
+  登録され、**plugin の attach 完了前でも音は素通しで master に届く**（宣言 → attach の
+  間に音が消えたり詰まったりしない）。plugin ロード失敗時も bus は pass-through で残る。
+- **既知の v1 制約（非目標）**: plugin latency 補償（PDC）なし — 複数 seq に latency の
+  異なる insert を掛けると bus 間で位相がずれる。master gain ramp は per-sequence insert の
+  **前**に適用される（DAW の「fader は insert 後」と逆・master unity なら影響なし）。
+  insert を同時に持てるシーケンス数には上限がある（既定 8・エンジンは RT 安全のため
+  bus を起動時にプールとして確保し、宣言時にプールから割り当てる）。上限超過の
+  `seq.effect()` 宣言は明示エラー。
+- LinkAudio との併用不可は PH.5 に従う（`global.effect()` と同じ v1 排他）。
+- **将来予約（非規範）**: aux バス / send-return（pre/post-fader tap・fan-out）は同じ
+  insert bus 基盤の上に実装する（#453・正本 = `POST_2.0_MIXER_DSL_DESIGN.html`）。
 
 ### PH.3 プラグイン識別と format 判定
 
@@ -1344,8 +1373,8 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 - **delay()**: Per-sequence delay effect
 - **reverb()**: Per-sequence reverb effect
 - **filter()**: Per-sequence filter effects
-- **seq.effect()** (per-sequence plugin insert): reserved as a future extension of the
-  Plugin Hosting section — v1 hosts plugin effects on the master bus only (`global.effect()`)
+- **seq.effect()** (per-sequence plugin insert): implemented (#434) — see PH.2b. Chains
+  (multiple inserts per sequence) and aux/send routing (#453) remain future extensions
 
 #### Advanced Features
 - **Composite Meters**: `((3 by 4)(2 by 4))`

@@ -114,6 +114,9 @@ export interface ScheduleEventsOptions {
   // LinkAudio dispatch — set only when Global.linkAudio() is enabled AND the
   // sequence has a channel name from .output(). Absent means hardware bus.
   outputChannel?: string
+  // per-sequence insert bus (seq.effect() — PH.2b / #434 S3). Set only when the
+  // sequence declared an insert. Mutually exclusive with outputChannel.
+  insertBus?: string
 }
 
 /**
@@ -136,4 +139,6 @@ export interface ScheduleEventsFromTimeOptions {
   patternDuration: number
   // LinkAudio dispatch — see ScheduleEventsOptions.outputChannel.
   outputChannel?: string
+  // see ScheduleEventsOptions.insertBus.
+  insertBus?: string
 }

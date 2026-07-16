@@ -24,6 +24,7 @@ import { TransportClock } from './global/transport-clock'
 import { MidiTransportScheduler } from './global/midi-transport-scheduler'
 import { PluginEffectManager } from './global/plugin-effect-manager'
 import { PluginInstrumentManager } from './global/plugin-instrument-manager'
+import { SequenceEffectManager } from './global/sequence-effect-manager'
 
 export class Global {
   // Manager instances for different responsibilities
@@ -37,6 +38,7 @@ export class Global {
   private midiManager: MidiManager
   private pluginEffectManager: PluginEffectManager
   private pluginInstrumentManager: PluginInstrumentManager
+  private sequenceEffectManager: SequenceEffectManager
 
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
@@ -65,6 +67,11 @@ export class Global {
     this.audioManager = new AudioManager(audioEngine)
     this.linkAudioManager = new LinkAudioManager()
     this.pluginEffectManager = new PluginEffectManager(
+      audioEngine,
+      this.audioManager,
+      this.linkAudioManager,
+    )
+    this.sequenceEffectManager = new SequenceEffectManager(
       audioEngine,
       this.audioManager,
       this.linkAudioManager,
@@ -246,7 +253,8 @@ export class Global {
   linkAudio(targetSampleRate?: number): this {
     if (
       this.pluginEffectManager.hasDeclaration() ||
-      this.pluginInstrumentManager.hasDeclaration()
+      this.pluginInstrumentManager.hasDeclaration() ||
+      this.sequenceEffectManager.hasAnyDeclaration()
     ) {
       throw new Error(
         'global.linkAudio() cannot be used after plugin hosting has been declared in v1.',
@@ -273,6 +281,14 @@ export class Global {
   async instrument(path: string, pluginId?: string): Promise<this> {
     await this.pluginInstrumentManager.instrument(path, pluginId)
     return this
+  }
+
+  /**
+   * Eagerly load a per-sequence insert plugin for `sequenceName` (`seq.effect()` —
+   * PH.2b / #434 S3). Returns the allocated insert bus name.
+   */
+  async sequenceEffect(sequenceName: string, path: string, pluginId?: string): Promise<string> {
+    return this.sequenceEffectManager.effect(sequenceName, path, pluginId)
   }
 
   /**

@@ -95,7 +95,12 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
 
     await (player as any).respawnLoop()
 
-    expect(daemon.loadPlugin).toHaveBeenCalledWith('/plugins/echo.clap', 'echo-id', 'effect')
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/echo.clap',
+      'echo-id',
+      'effect',
+      undefined,
+    )
     // C1: a successful reload must flip pluginActive back to true, so
     // PluginEffectManager's self-heal check doesn't mistake this recovery
     // for a still-stale cache.
@@ -128,8 +133,59 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       '/plugins/echo.clap',
       'echo-id',
       'instrument',
+      undefined,
     )
     expect(player.isPluginActive()).toBe(true)
+  })
+
+  it('reissues a master effect and a per-sequence insert bus independently (#434 S3)', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin('/plugins/master.clap', undefined, 'effect')
+    await player.loadPlugin('/plugins/reverb.clap', undefined, 'effect', 'seq-bus-0')
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(2)
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/master.clap',
+      undefined,
+      'effect',
+      undefined,
+    )
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/reverb.clap',
+      undefined,
+      'effect',
+      'seq-bus-0',
+    )
+  })
+
+  it('one bus reload failure does not skip reloading the others', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin('/plugins/master.clap', undefined, 'effect')
+    await player.loadPlugin('/plugins/reverb.clap', undefined, 'effect', 'seq-bus-0')
+    daemon.loadPlugin.mockClear()
+    daemon.loadPlugin
+      .mockRejectedValueOnce(new Error('master reload failed'))
+      .mockResolvedValueOnce(ECHO_LOAD_RESULT)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(2)
+    // The failing entry does not prevent the other declaration from reloading.
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/reverb.clap',
+      undefined,
+      'effect',
+      'seq-bus-0',
+    )
+    expect(player.isPluginActive()).toBe(false)
   })
 })
 

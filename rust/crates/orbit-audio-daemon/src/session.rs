@@ -27,9 +27,9 @@ use crate::protocol::{
     ERROR_CODE_OUTPROC_EFFECT_RESPAWN, ERROR_CODE_OUTPROC_INSTRUMENT_ERROR,
     ERROR_CODE_OUTPROC_INSTRUMENT_EVENT_DECODE, ERROR_CODE_OUTPROC_INSTRUMENT_INVALID,
     ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED, ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN,
-    ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_SEVERITY_FATAL,
-    ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED, EVENT_PLAY_STARTED,
-    EVENT_STREAM_STATS,
+    ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_CODE_UNROUTABLE_EVENTS,
+    ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED,
+    EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -80,6 +80,31 @@ fn outproc_role_param_is_valid(params: &Value) -> bool {
     )
 }
 
+/// LoadPlugin params から `bus` を取り出す純関数。`None` は無指定（master bus）、`Ok(Some(_))` は
+/// non-empty 文字列。空文字列や非文字列型は `Err` として拒否する。
+#[cfg(feature = "outproc-effect")]
+fn parse_bus_param(params: &Value) -> Result<Option<String>, &'static str> {
+    match params.get("bus") {
+        None => Ok(None),
+        Some(Value::String(bus)) if !bus.trim().is_empty() => Ok(Some(bus.clone())),
+        Some(_) => Err("'bus' must be a non-empty string"),
+    }
+}
+
+/// PlayAt の `bus`（per-sequence insert routing・PH.2b・#434 S3）と `channel`（LinkAudio
+/// routing・#209）の同時指定を検出する純関数。両者は core 上は同じ routing tag フィールド
+/// （`ScheduledSample.channel`）を共有するため、同時指定は意味が一意に決まらず拒否する。
+#[cfg(feature = "outproc-effect")]
+fn playat_bus_and_channel_both_set(bus: &Option<String>, channel: &Option<String>) -> bool {
+    bus.is_some() && channel.is_some()
+}
+
+/// role='instrument' と 'bus' の同時指定を検出する純関数（'bus' は effect 専用）。
+#[cfg(feature = "outproc-instrument")]
+fn bus_param_invalid_for_instrument_role(params: &Value) -> bool {
+    params.get("role").and_then(Value::as_str) == Some("instrument") && params.get("bus").is_some()
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -118,6 +143,17 @@ pub async fn run(
             let mut last_outproc_errors: u64 = 0;
             let mut last_outproc_respawns: u64 = 0;
             let mut last_outproc_frames_clamped: u64 = 0;
+            // per-bus effect health の watermark（#461 review Critical: bus child の異常が
+            // ticker に出ない穴）。key = bus 名。
+            let mut last_bus_errors: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            let mut last_bus_respawns: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            let mut bus_invalid_reported: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            let mut last_bus_frames_clamped: std::collections::HashMap<String, u64> =
+                std::collections::HashMap::new();
+            let mut last_unroutable_events: u64 = 0;
             let mut last_outproc_instrument_output_dropped: u64 = 0;
             let mut last_outproc_instrument_errors: u64 = 0;
             let mut last_outproc_instrument_respawns: u64 = 0;
@@ -326,6 +362,94 @@ pub async fn run(
                         break;
                     }
                     last_outproc_frames_clamped = outproc_frames_clamped;
+                }
+
+                // per-bus OOP effect（seq.effect() の insert bus・#434/#461）の health を master と
+                // 同じ 4 signal で surface する。error code は master と共有し、message の bus 名で
+                // 区別する（コード乱発を避ける）。
+                for (bus, (errors, respawns, invalid, clamped)) in
+                    engine.outproc_effect_bus_health()
+                {
+                    let last = last_bus_errors.entry(bus.clone()).or_insert(0);
+                    if errors > *last {
+                        let evt = daemon_error_event(
+                            ERROR_SEVERITY_WARNING,
+                            ERROR_CODE_OUTPROC_EFFECT_ERROR,
+                            format!(
+                                "out-of-process effect child process() failed on bus '{bus}' \
+                                 ({errors} total); that sequence's insert passes dry",
+                            ),
+                        );
+                        if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                            break;
+                        }
+                        *last = errors;
+                    }
+                    let last = last_bus_respawns.entry(bus.clone()).or_insert(0);
+                    if respawns > *last {
+                        let evt = daemon_error_event(
+                            ERROR_SEVERITY_WARNING,
+                            ERROR_CODE_OUTPROC_EFFECT_RESPAWN,
+                            format!(
+                                "out-of-process effect child crashed and was respawned on bus \
+                                 '{bus}' ({respawns} total); 3rd-party crash isolated",
+                            ),
+                        );
+                        if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                            break;
+                        }
+                        *last = respawns;
+                    }
+                    if invalid && !bus_invalid_reported.contains(&bus) {
+                        let evt = daemon_error_event(
+                            ERROR_SEVERITY_WARNING,
+                            ERROR_CODE_OUTPROC_EFFECT_INVALID,
+                            format!(
+                                "out-of-process effect supervisor gave up on bus '{bus}' \
+                                 (respawn/try_wait failed); that insert is frozen — restart \
+                                 daemon or fix plugin",
+                            ),
+                        );
+                        if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                            break;
+                        }
+                        bus_invalid_reported.insert(bus.clone());
+                    }
+                    let last = last_bus_frames_clamped.entry(bus).or_insert(0);
+                    if clamped > *last {
+                        let evt = daemon_error_event(
+                            ERROR_SEVERITY_WARNING,
+                            ERROR_CODE_OUTPROC_EFFECT_FRAMES_CLAMPED,
+                            format!(
+                                "out-of-process effect block exceeded MAX_FRAMES and was \
+                                 clamped on a seq bus ({clamped} total)",
+                            ),
+                        );
+                        if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                            break;
+                        }
+                        *last = clamped;
+                    }
+                }
+
+                // 未登録 named target（insert bus / LinkAudio channel）へ tag された event の
+                // retain を surface する（#461 review: comment-only だった core のハザードに
+                // 観測点を配線・frames_clamped の前例と同じ「既存 counter → ticker 追配線」）。
+                let unroutable = engine.unroutable_event_count();
+                if unroutable > last_unroutable_events {
+                    let evt = daemon_error_event(
+                        ERROR_SEVERITY_WARNING,
+                        ERROR_CODE_UNROUTABLE_EVENTS,
+                        format!(
+                            "{unroutable} scheduled event(s) are tagged to an unknown \
+                             bus/channel and will never play (declared-before-tag order \
+                             violated, or a name typo); they are retained until Stop",
+                        ),
+                    );
+                    if tx.send(to_json_or_fallback(&evt)).await.is_err() {
+                        break;
+                    }
+                    last_unroutable_events = unroutable;
                 }
 
                 // out-of-process instrument の全 health signal（child-process 系: respawn/計測無効/
@@ -715,6 +839,23 @@ async fn handle_command(
                     .get("plugin_id")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
+                #[cfg(feature = "outproc-effect")]
+                let bus = match parse_bus_param(&params) {
+                    Ok(bus) => bus,
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                #[cfg(feature = "outproc-instrument")]
+                if bus_param_invalid_for_instrument_role(&params) {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "LoadPlugin bus is only valid for role='effect'",
+                        ),
+                    );
+                }
                 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
                 let params_role = params
                     .get("role")
@@ -727,7 +868,7 @@ async fn handle_command(
                         {
                             match params_role.as_deref() {
                                 Some("effect") => {
-                                    engine.load_outproc_effect_plugin(path, plugin_id)
+                                    engine.load_outproc_effect_plugin(path, plugin_id, bus)
                                 }
                                 Some("instrument") => {
                                     engine.load_outproc_instrument_plugin(path, plugin_id)
@@ -739,7 +880,17 @@ async fn handle_command(
                             feature = "outproc-effect",
                             feature = "outproc-instrument"
                         )))]
-                        engine.load_outproc_plugin(path, plugin_id)
+                        #[cfg(feature = "outproc-effect")]
+                        {
+                            engine.load_outproc_effect_plugin(path, plugin_id, bus)
+                        }
+                        #[cfg(all(
+                            feature = "outproc-instrument",
+                            not(feature = "outproc-effect")
+                        ))]
+                        {
+                            engine.load_outproc_plugin(path, plugin_id)
+                        }
                     }
                     #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
                     {
@@ -815,6 +966,27 @@ async fn handle_command(
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string());
+            // bus（per-sequence insert routing・PH.2b・#434 S3）。'channel'（LinkAudio）とは
+            // 別 wire param。core の routing tag は単一フィールド（`ScheduledSample.channel`）
+            // を再利用するが、LinkAudio と plugin hosting は v1 で排他ビルドのため
+            // 実運用上どちらか一方しか有効にならない。同時指定は明示エラーで開示する。
+            #[cfg(feature = "outproc-effect")]
+            let bus = match parse_bus_param(&params) {
+                Ok(bus) => bus,
+                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
+            };
+            #[cfg(feature = "outproc-effect")]
+            if playat_bus_and_channel_both_set(&bus, &channel) {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        "PlayAt 'bus' and 'channel' cannot both be set",
+                    ),
+                );
+            }
+            #[cfg(feature = "outproc-effect")]
+            let channel = bus.or(channel);
             match params.get("sample_id").and_then(|v| v.as_str()) {
                 Some(sid) => match engine.play_at(
                     sid,
@@ -1164,6 +1336,53 @@ mod tests {
         assert!(outproc_role_param_is_valid(&json!({"role": "instrument"})));
         assert!(!outproc_role_param_is_valid(&json!({"role": "invalid"})));
         assert!(!outproc_role_param_is_valid(&json!({})));
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn parse_bus_param_accepts_absent_and_trims_nothing_but_rejects_blank_or_non_string() {
+        assert_eq!(parse_bus_param(&json!({})), Ok(None));
+        assert_eq!(
+            parse_bus_param(&json!({"bus": "fx1"})),
+            Ok(Some("fx1".to_owned()))
+        );
+        assert!(parse_bus_param(&json!({"bus": ""})).is_err());
+        assert!(parse_bus_param(&json!({"bus": "   "})).is_err());
+        assert!(parse_bus_param(&json!({"bus": 1})).is_err());
+    }
+
+    // PlayAt の 'bus'（PH.2b insert routing）と 'channel'（LinkAudio routing）は同じ core routing
+    // tag フィールドを共有するため同時指定を拒否する（#434 S3）。
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn playat_bus_and_channel_both_set_flags_only_the_combination() {
+        assert!(playat_bus_and_channel_both_set(
+            &Some("seq-bus-0".to_owned()),
+            &Some("link-ch".to_owned())
+        ));
+        assert!(!playat_bus_and_channel_both_set(
+            &Some("seq-bus-0".to_owned()),
+            &None
+        ));
+        assert!(!playat_bus_and_channel_both_set(
+            &None,
+            &Some("link-ch".to_owned())
+        ));
+        assert!(!playat_bus_and_channel_both_set(&None, &None));
+    }
+
+    #[cfg(feature = "outproc-instrument")]
+    #[test]
+    fn bus_param_invalid_for_instrument_role_flags_only_the_combination() {
+        assert!(bus_param_invalid_for_instrument_role(
+            &json!({"role": "instrument", "bus": "fx1"})
+        ));
+        assert!(!bus_param_invalid_for_instrument_role(
+            &json!({"role": "instrument"})
+        ));
+        assert!(!bus_param_invalid_for_instrument_role(
+            &json!({"role": "effect", "bus": "fx1"})
+        ));
     }
 
     // LinkAudio エラーの protocol code 分割を pin（TS は UNAVAILABLE のみ握り潰し RUNTIME は rethrow）。

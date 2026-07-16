@@ -17,6 +17,48 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.262 feat(engine): seq.effect() per-sequence insert — S1〜S3 完走 #434 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装・実機 E2E PASS（PR 作成・レビューフローへ）
+**Branch**: `434-per-sequence-effect-insert`
+**Commits**: `42edbc1`(S1) / `2fba667`(S2) / `84c64b5`(spec PH.2b) / `450a7e0`(S3)
+
+owner 最優先要望（mem: owner-wants-seq-effect-per-track）の履行。設計 = Fable main
+（S0 spike + issue #434 コメントに確定記録・owner 指示により advisor 相談なし）。
+実装 = Codex（S1）→ Sonnet xhigh フォールバック（S2b/S3・Codex sandbox EPERM）。
+
+**S0 spike（性能ゲート）**: 64f budget ≈1.33ms に対し 1 OOP effect の callback max
+= 64µs（~4.8%）・stale 0% → per-bus 直列 OOP 成立を実測確認。
+
+**S1（core・挙動不変）**: InsertBusStage（named bus + ordered stages）を render
+パイプラインへ。bus 0 個で bit-identical・**未登録 bus tag の永久 retain landmine 対策**
+（登録 bus は processor 未 attach でも pass-through で event 消費）を fail-before/
+pass-after で固定。LinkAudio 併用時も render_multi 1回。
+
+**S2（daemon N-slot）**: bus id キーの per-bus effect slot 群（専用 shm/child/watchdog/
+stats）・LoadPlugin `bus` param・effect-only/both 両経路・StreamGuard が全 bus guard 保持。
+受け入れ監査で3点修正（attach 中の outproc mutex 長期保持 / gated の計測手段が
+engaged=false 設計と矛盾 / both gated の pipeline 1 ブロック遅延 race）— いずれも
+**実機 RUN が検出**（#445 の教訓の再現）。gated bus 2/2 実機 PASS（**ratio 0.50000**・
+bus 隔離・child 回収）・both/effect gated 退行なし。
+
+**spec 先行（DocDD）**: core spec に **PH.2b** 新設（処理順 = per-seq insert → master mix
+→ global.effect・1 seq 1 insert・bus プール上限 8・PDC 非対応等の v1 制約明記）。
+
+**S3（DSL 配線）**: 既定 bus プール（ORBIT_EFFECT_BUS_POOL・seq-bus-0..7）・PlayAt
+`bus` param（channel と排他）・TS SequenceEffectManager + `Sequence.effect()`（note seq
+は v1 エラー）・insertBus の scheduling 全経路配線。**実装中に respawn 後 plugin
+再ロードの単一キャッシュバグを発見修正**（複数 plugin で最後の1つしか復元されない →
+role:bus キー Map 化）。
+
+**実機 E2E（DoD）**: sine_880.wav を `drums.effect(CLAPTestEffect.clap)` あり/なしで
+capture 比較 → **peak ratio = 0.50000 厳密一致**（0.70711 → 0.35355）。DSL →
+LoadPlugin(bus) → PlayAt(bus) → render_multi bus routing → OOP child gain →
+master sum の全経路を客観実証。
+
+**検証**: 3 feature 構成 lib（67/56/102）・workspace build/clippy/fmt・
+npm test 1354 passed / 0 failed・gated 3 スイート実機 PASS。
 ### 6.260 feat(mcp): dev learning site のローカル配信 + MCP ツール + OrbitStudio 導線 #450 (Jul 17, 2026)
 
 **Date**: 2026-07-17

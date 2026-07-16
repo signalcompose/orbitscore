@@ -69,6 +69,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
     masterGainDb,
     patternDuration,
     outputChannel,
+    insertBus,
   } = options
 
   if (!audioFilePath || !timedEvents || timedEvents.length === 0) {
@@ -106,6 +107,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
           sequenceName,
           outputChannel,
           event.argPath,
+          insertBus,
         )
       } else {
         scheduler.scheduleEvent(
@@ -116,6 +118,7 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
           sequenceName,
           outputChannel,
           event.argPath,
+          insertBus,
         )
       }
     } else if (event.sliceNumber === 0 && event.argPath !== undefined) {
@@ -154,6 +157,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
     masterGainDb,
     patternDuration,
     outputChannel,
+    insertBus,
   } = options
 
   if (!timedEvents || !audioFilePath) {
@@ -212,6 +216,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
             sequenceName,
             outputChannel,
             event.argPath,
+            insertBus,
           )
         } else {
           scheduler.scheduleEvent(
@@ -222,6 +227,7 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
             sequenceName,
             outputChannel,
             event.argPath,
+            insertBus,
           )
         }
       } else if (event.sliceNumber === 0 && event.argPath !== undefined) {

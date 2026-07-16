@@ -201,6 +201,281 @@ struct OutProcControl {
     cb_stats: Arc<orbit_audio_native::CallbackTimeStats>,
     /// post-boot attach の状態。`StreamGuard` と共有し、supervisor は stream より後に drop する。
     child_slot: Weak<Mutex<ChildSlot>>,
+    /// 起動時に固定した named insert bus の effect slots。master slot は `child_slot` のまま
+    /// 保持し、bus 無し LoadPlugin の後方互換を保つ。
+    bus_slots: HashMap<String, Weak<Mutex<ChildSlot>>>,
+    /// bus 名 → その bus の `OutProcEffectStats`（`outproc_effect_bus_stats` gated 計測用）。
+    /// `bus_slots` と同じキー集合で、child の生死に関わらず統計自体は生存し続けるため強参照。
+    bus_stats: HashMap<String, Arc<crate::outproc_effect::OutProcEffectStats>>,
+    /// bus 名 → render 側 `InsertBusStage::active` と共有する activation flag。LoadPlugin が
+    /// bus を指名した時点で `true`（宣言 = activation）。全 bus inactive の間、callback は
+    /// bus 無し経路（ビット同一）を通る。
+    bus_actives: HashMap<String, Arc<std::sync::atomic::AtomicBool>>,
+}
+
+/// `ORBIT_EFFECT_BUSES` の値を解析する純関数。カンマ区切りの bus 名を trim・空要素除去した上で、
+/// 重複や NUL 文字を含む名前を拒否する。env 直読みを避けることで unit テスト可能にする
+/// （`PluginFormat::from_env_value` / `parse_buffer_frames` と同じ「値渡し純関数 + env 読みラッパー」
+/// の慣習に合わせる）。
+#[cfg(feature = "outproc-effect")]
+fn parse_effect_buses(raw: &str) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    raw.split(',')
+        .filter_map(|s| {
+            let s = s.trim();
+            (!s.is_empty()).then(|| s.to_owned())
+        })
+        .map(|bus| {
+            if bus.contains('\0') || !seen.insert(bus.clone()) {
+                Err(format!(
+                    "ORBIT_EFFECT_BUSES contains duplicate or invalid bus '{bus}'"
+                ))
+            } else {
+                Ok(bus)
+            }
+        })
+        .collect()
+}
+
+/// 既定 insert bus プールの名前 prefix。DSL 側（TS）の per-sequence effect manager が
+/// 同じ規則（`seq-bus-<n>`）で bus 名を組み立てて `LoadPlugin.bus` / `PlayAt.bus` に
+/// 送るため、prefix を変える場合は TS 側の定数も合わせて更新すること（#434 S3）。
+#[cfg(feature = "outproc-effect")]
+pub const DEFAULT_EFFECT_BUS_POOL_PREFIX: &str = "seq-bus-";
+
+/// `ORBIT_EFFECT_BUS_POOL` の既定サイズ（未設定時）。PH.2b の v1 上限（同時 insert 8 seq）と一致。
+#[cfg(feature = "outproc-effect")]
+const DEFAULT_EFFECT_BUS_POOL_SIZE: usize = 8;
+
+/// 既定プール名 `seq-bus-0..N` を生成する純関数。`ORBIT_EFFECT_BUSES`（明示名）が指定されて
+/// いない場合のみ呼ばれる。`pool_size` は `ORBIT_EFFECT_BUS_POOL` の解析結果（既定 8・0 で無効）。
+#[cfg(feature = "outproc-effect")]
+fn default_effect_bus_pool(pool_size: usize) -> Vec<String> {
+    (0..pool_size)
+        .map(|n| format!("{DEFAULT_EFFECT_BUS_POOL_PREFIX}{n}"))
+        .collect()
+}
+
+/// `ORBIT_EFFECT_BUS_POOL` を解析する純関数。空 / 未設定は既定値（8）。`"0"` はプール無効
+/// （明示的な `ORBIT_EFFECT_BUSES` のみ使う後方互換モード）。非数値・負値は起動時エラー。
+#[cfg(feature = "outproc-effect")]
+fn parse_effect_bus_pool_size(raw: &str) -> Result<usize, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(DEFAULT_EFFECT_BUS_POOL_SIZE);
+    }
+    trimmed
+        .parse::<usize>()
+        .map_err(|_| format!("ORBIT_EFFECT_BUS_POOL must be a non-negative integer, got '{raw}'"))
+}
+
+/// bus 名の解決: `ORBIT_EFFECT_BUSES`（明示名・非空）が設定されていればそれを使う（既存 S2 挙動を
+/// 保つ）。未設定なら `ORBIT_EFFECT_BUS_POOL`（既定 8・`"0"` で無効）に従って `seq-bus-<n>` の
+/// 既定プールを生成する。両方指定は `ORBIT_EFFECT_BUSES` を優先（明示指定が常に勝つ）。
+#[cfg(feature = "outproc-effect")]
+fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
+    let explicit = std::env::var("ORBIT_EFFECT_BUSES").unwrap_or_default();
+    if !explicit.trim().is_empty() {
+        return parse_effect_buses(&explicit).map_err(WrapError::OutProcEffect);
+    }
+    let pool_raw = std::env::var("ORBIT_EFFECT_BUS_POOL").unwrap_or_default();
+    let pool_size = parse_effect_bus_pool_size(&pool_raw).map_err(WrapError::OutProcEffect)?;
+    Ok(default_effect_bus_pool(pool_size))
+}
+
+/// 1 本の named insert bus を構成する部材（`build_effect_bus_stages` → `install_effect_bus_slots`
+/// の間で運ぶ・#434 S2/S3）。effect-only / both の両起動経路で同一のライフサイクルを共有する。
+#[cfg(feature = "outproc-effect")]
+struct EffectBusBuild {
+    name: String,
+    shm_path: std::path::PathBuf,
+    engaged: Arc<std::sync::atomic::AtomicBool>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+    stats: Arc<crate::outproc_effect::OutProcEffectStats>,
+    /// render 側 `InsertBusStage::active` と共有。LoadPlugin が bus を指名した時点で
+    /// `true`（宣言 = activation → 以降 pass-through）。それまで callback は bus を
+    /// render 対象に含めない = 既定プールのコストゼロ。
+    active: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// `ORBIT_EFFECT_BUSES` / 既定プールの bus 名から、render 側の `InsertBusStage` 群と
+/// daemon 側の部材（`EffectBusBuild`）を構築する。stage は inactive で生まれ、LoadPlugin
+/// （`load_outproc_effect_plugin` の bus 指定）で activate される。
+#[cfg(feature = "outproc-effect")]
+fn build_effect_bus_stages(
+) -> Result<(Vec<orbit_audio_native::InsertBusStage>, Vec<EffectBusBuild>), WrapError> {
+    use crate::outproc_effect::{OutProcEffectPostProcessor, OutProcEffectStats};
+    use std::sync::atomic::AtomicBool;
+    let names = effect_buses_from_env()?;
+    let mut builds = Vec::with_capacity(names.len());
+    let mut insert_buses = Vec::with_capacity(names.len());
+    for name in names {
+        let shm_path = crate::outproc_effect::unique_shm_path();
+        let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
+            orbit_audio_sandbox::create_shared(&shm_path).map_err(|e| {
+                WrapError::OutProcEffect(format!("create bus shm {shm_path:?}: {e}"))
+            })?,
+        );
+        let engaged = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let active = Arc::new(AtomicBool::new(false));
+        let stats = OutProcEffectStats::new();
+        insert_buses.push(orbit_audio_native::InsertBusStage::with_activation(
+            name.clone(),
+            Some(Box::new(OutProcEffectPostProcessor::new(
+                host,
+                engaged.clone(),
+                stop.clone(),
+                done.clone(),
+                stats.clone(),
+            ))),
+            0,
+            active.clone(),
+        ));
+        builds.push(EffectBusBuild {
+            name,
+            shm_path,
+            engaged,
+            stop,
+            done,
+            stats,
+            active,
+        });
+    }
+    Ok((insert_buses, builds))
+}
+
+/// bus 部材を ChildSlot / 観測 map / StreamGuard 用 guard 群へ展開する（stream 起動後・
+/// sample_rate 確定後に呼ぶ）。返り値: (bus_slots, bus_stats, bus_actives, child_guards, teardowns)。
+#[cfg(feature = "outproc-effect")]
+#[allow(clippy::type_complexity)]
+fn install_effect_bus_slots(
+    builds: Vec<EffectBusBuild>,
+    child_exe: &std::path::Path,
+    sample_rate: u32,
+) -> (
+    HashMap<String, Weak<Mutex<ChildSlot>>>,
+    HashMap<String, Arc<crate::outproc_effect::OutProcEffectStats>>,
+    HashMap<String, Arc<std::sync::atomic::AtomicBool>>,
+    Vec<Arc<Mutex<ChildSlot>>>,
+    Vec<crate::outproc_effect::OutProcTeardownGuard>,
+) {
+    use crate::outproc_effect::OutProcTeardownGuard;
+    let mut bus_slots = HashMap::new();
+    let mut bus_stats = HashMap::new();
+    let mut bus_actives = HashMap::new();
+    let mut child_guards = Vec::with_capacity(builds.len());
+    let mut teardowns = Vec::with_capacity(builds.len());
+    for build in builds {
+        let slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
+            shm_path: build.shm_path,
+            child_exe: child_exe.to_path_buf(),
+            sample_rate,
+            stats: build.stats.clone(),
+            engaged: build.engaged,
+            cleanup_shm_on_drop: true,
+        })));
+        bus_slots.insert(build.name.clone(), Arc::downgrade(&slot));
+        bus_stats.insert(build.name.clone(), build.stats);
+        bus_actives.insert(build.name, build.active);
+        child_guards.push(slot);
+        teardowns.push(OutProcTeardownGuard::new(build.stop, build.done));
+    }
+    (bus_slots, bus_stats, bus_actives, child_guards, teardowns)
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+mod effect_buses_from_env_tests {
+    use super::parse_effect_buses;
+
+    #[test]
+    fn empty_string_yields_no_buses() {
+        assert_eq!(parse_effect_buses(""), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn whitespace_only_yields_no_buses() {
+        assert_eq!(parse_effect_buses("   "), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn parses_comma_separated_names_and_trims_whitespace() {
+        assert_eq!(
+            parse_effect_buses(" fx1 ,fx2"),
+            Ok(vec!["fx1".to_owned(), "fx2".to_owned()])
+        );
+    }
+
+    #[test]
+    fn skips_empty_elements_between_commas() {
+        assert_eq!(
+            parse_effect_buses("fx1,,fx2,"),
+            Ok(vec!["fx1".to_owned(), "fx2".to_owned()])
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_bus_names() {
+        let error = parse_effect_buses("fx1,fx1").expect_err("duplicate must be rejected");
+        assert!(error.contains("duplicate"), "unexpected message: {error}");
+    }
+
+    #[test]
+    fn rejects_nul_byte_in_bus_name() {
+        let error =
+            parse_effect_buses("fx1,fx\x002").expect_err("NUL byte in name must be rejected");
+        assert!(error.contains("invalid"), "unexpected message: {error}");
+    }
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+mod effect_bus_pool_tests {
+    use super::{
+        default_effect_bus_pool, parse_effect_bus_pool_size, DEFAULT_EFFECT_BUS_POOL_SIZE,
+    };
+
+    #[test]
+    fn pool_size_defaults_to_eight_when_unset_or_blank() {
+        assert_eq!(
+            parse_effect_bus_pool_size(""),
+            Ok(DEFAULT_EFFECT_BUS_POOL_SIZE)
+        );
+        assert_eq!(
+            parse_effect_bus_pool_size("   "),
+            Ok(DEFAULT_EFFECT_BUS_POOL_SIZE)
+        );
+    }
+
+    #[test]
+    fn pool_size_zero_disables_the_pool() {
+        assert_eq!(parse_effect_bus_pool_size("0"), Ok(0));
+        assert_eq!(default_effect_bus_pool(0), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pool_size_parses_explicit_count() {
+        assert_eq!(parse_effect_bus_pool_size("3"), Ok(3));
+    }
+
+    #[test]
+    fn pool_size_rejects_non_numeric_or_negative() {
+        assert!(parse_effect_bus_pool_size("abc").is_err());
+        assert!(parse_effect_bus_pool_size("-1").is_err());
+    }
+
+    #[test]
+    fn default_pool_generates_seq_bus_names_in_order() {
+        assert_eq!(
+            default_effect_bus_pool(3),
+            vec![
+                "seq-bus-0".to_string(),
+                "seq-bus-1".to_string(),
+                "seq-bus-2".to_string(),
+            ]
+        );
+    }
 }
 
 #[cfg(feature = "outproc-instrument")]
@@ -680,6 +955,8 @@ pub struct StreamGuard {
     /// より前に宣言する（clap-host とは feature 排他なので同時には存在しない）。
     #[cfg(feature = "outproc-effect")]
     _outproc_teardown: crate::outproc_effect::OutProcTeardownGuard,
+    #[cfg(feature = "outproc-effect")]
+    _outproc_bus_teardowns: Vec<crate::outproc_effect::OutProcTeardownGuard>,
     /// outproc-instrument: stream 前に audio-thread adapter を quiesce する。
     /// both build における `_outproc_teardown` との相対順序は load-bearing ではない
     /// （各 guard は自 role 専用の requested/done atomic のみを操作し共有状態がない。
@@ -698,6 +975,8 @@ pub struct StreamGuard {
     /// child へ QUIT → reap → shm unlink する。**field 順は load-bearing**: `_stream` より後に宣言する。
     #[cfg(feature = "outproc-effect")]
     _child_guard: Arc<Mutex<ChildSlot>>,
+    #[cfg(feature = "outproc-effect")]
+    _bus_child_guards: Vec<Arc<Mutex<ChildSlot>>>,
     /// both build では同種 guard 間の順序は load-bearing ではない（どちらも stream 停止後）。別々の
     /// child process / shm region を持ち supervisor 間に共有状態が無いため、独立に teardown できる。
     #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -891,6 +1170,10 @@ impl EngineWrap {
         };
         use std::sync::atomic::AtomicBool;
 
+        // Each registered bus owns a complete transport up front.  Attachment is the existing
+        // lock-free `engaged` release-store（activation は LoadPlugin 時・`EffectBusBuild` doc 参照）。
+        let (insert_buses, bus_builds) = build_effect_bus_stages()?;
+
         // 1. shm 作成 → host mmap（adapter が所有・audio thread）。
         let shm_path = crate::outproc_effect::unique_shm_path();
         let host_mmap = orbit_audio_sandbox::create_shared(&shm_path)
@@ -914,7 +1197,8 @@ impl EngineWrap {
         // 3. cpal stream 起動（ここで device の sample_rate が確定する）。adapter を注入する。
         //    gated stale-rate harness は cfg.buffer_frames に 32/64 を渡し小バッファを要求する。
         let (engine, stream, stream_stats, cb_stats) =
-            orbit_audio_native::start_default_output_with_clap(
+            orbit_audio_native::start_default_output_with_insert_buses_and_post(
+                insert_buses,
                 processor,
                 cfg.buffer_frames,
                 capture_path_from_env(),
@@ -926,7 +1210,7 @@ impl EngineWrap {
         //    control thread から Release store できるようにする。
         let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
             shm_path,
-            child_exe: cfg.child_exe,
+            child_exe: cfg.child_exe.clone(),
             sample_rate,
             stats: stats.clone(),
             engaged,
@@ -945,15 +1229,33 @@ impl EngineWrap {
                 stats,
                 cb_stats,
                 child_slot: Arc::downgrade(&child_slot),
+                bus_slots: HashMap::new(),
+                bus_stats: HashMap::new(),
+                bus_actives: HashMap::new(),
             });
+
+        let (bus_slots, bus_stats, bus_actives, bus_child_guards, bus_teardowns) =
+            install_effect_bus_slots(bus_builds, &cfg.child_exe, sample_rate);
+        {
+            let mut guard = wrap
+                .outproc
+                .lock()
+                .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+            let control = guard.as_mut().expect("outproc control installed");
+            control.bus_slots = bus_slots;
+            control.bus_stats = bus_stats;
+            control.bus_actives = bus_actives;
+        }
 
         // 7. StreamGuard（field 順 = teardown 順）。
         Ok((
             wrap,
             StreamGuard {
                 _outproc_teardown: OutProcTeardownGuard::new(teardown_requested, teardown_done),
+                _outproc_bus_teardowns: bus_teardowns,
                 _stream: stream,
                 _child_guard: child_slot,
+                _bus_child_guards: bus_child_guards,
             },
         ))
     }
@@ -1102,6 +1404,11 @@ impl EngineWrap {
             effect_cfg.buffer_frames,
             instrument_cfg.buffer_frames,
         )?;
+
+        // 同じ transport 構築を effect-only 経路（`start_outproc_effect_post_boot`）と共有する。
+        // bus 0 個（または全 bus inactive）なら render は従来経路とビット同一に振る舞う。
+        let (insert_buses, bus_builds) = build_effect_bus_stages()?;
+
         let effect_shm = crate::outproc_effect::unique_shm_path();
         let effect_host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
             orbit_audio_sandbox::create_shared(&effect_shm)
@@ -1143,7 +1450,8 @@ impl EngineWrap {
             ),
         });
         let (engine, stream, stream_stats, effect_cb_stats) =
-            orbit_audio_native::start_default_output_with_clap(
+            orbit_audio_native::start_default_output_with_insert_buses_and_post(
+                insert_buses,
                 processor,
                 buffer_frames,
                 capture_path_from_env(),
@@ -1151,7 +1459,7 @@ impl EngineWrap {
             .map_err(WrapError::Output)?;
         let effect_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
             shm_path: effect_shm,
-            child_exe: effect_cfg.child_exe,
+            child_exe: effect_cfg.child_exe.clone(),
             sample_rate: stream.sample_rate,
             stats: effect_stats.clone(),
             engaged: effect_engaged,
@@ -1180,6 +1488,9 @@ impl EngineWrap {
                 stats: effect_stats,
                 cb_stats: effect_cb_stats,
                 child_slot: Arc::downgrade(&effect_slot),
+                bus_slots: HashMap::new(),
+                bus_stats: HashMap::new(),
+                bus_actives: HashMap::new(),
             });
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
@@ -1188,16 +1499,32 @@ impl EngineWrap {
             stats: instrument_stats,
             child_slot: Arc::downgrade(&instrument_slot),
         });
+
+        let (bus_slots, bus_stats, bus_actives, bus_child_guards, bus_teardowns) =
+            install_effect_bus_slots(bus_builds, &effect_cfg.child_exe, stream.sample_rate);
+        {
+            let mut guard = wrap
+                .outproc
+                .lock()
+                .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+            let control = guard.as_mut().expect("outproc control installed");
+            control.bus_slots = bus_slots;
+            control.bus_stats = bus_stats;
+            control.bus_actives = bus_actives;
+        }
+
         Ok((
             wrap,
             StreamGuard {
                 _outproc_teardown: OutProcTeardownGuard::new(effect_stop, effect_done),
+                _outproc_bus_teardowns: bus_teardowns,
                 _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
                     instrument_stop,
                     instrument_done,
                 ),
                 _stream: stream,
                 _child_guard: effect_slot,
+                _bus_child_guards: bus_child_guards,
                 _instrument_child_guard: instrument_slot,
             },
         ))
@@ -1367,7 +1694,7 @@ impl EngineWrap {
         plugin_id: Option<String>,
     ) -> Result<LoadedPluginSummary, WrapError> {
         #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
-        return self.load_outproc_effect_plugin(path, plugin_id);
+        return self.load_outproc_effect_plugin(path, plugin_id, None);
         #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
         let child_slot = {
             let guard = self
@@ -1413,26 +1740,61 @@ impl EngineWrap {
     }
 
     /// both build で effect slot へ attach する。
-    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    #[cfg(feature = "outproc-effect")]
     pub fn load_outproc_effect_plugin(
         &self,
         path: PathBuf,
         plugin_id: Option<String>,
+        bus: Option<String>,
     ) -> Result<LoadedPluginSummary, WrapError> {
-        let slot = self
-            .outproc
-            .lock()
-            .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?
-            .as_ref()
-            .ok_or_else(|| {
+        // slot の解決だけを lock 下で行い、attach 本体（child spawn + READY poll）前に guard を
+        // 必ず落とす: `outproc` mutex を数百 ms 保持すると 1 Hz health ticker（try_lock）や
+        // stats アクセサと競合する（従来コードも guard は slot 解決の式で即 drop していた）。
+        let (slot, bus_active) = {
+            let control_guard = self
+                .outproc
+                .lock()
+                .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+            let control = control_guard.as_ref().ok_or_else(|| {
                 WrapError::OutProcEffectUnavailable(
                     "outproc effect not initialized (test backend has no outproc path)".into(),
                 )
-            })?
-            .child_slot
-            .upgrade()
-            .ok_or_else(|| WrapError::OutProcEffect("outproc effect stream is closed".into()))?;
-        self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id)
+            })?;
+            let (weak_slot, bus_active) = match bus {
+                Some(bus) => {
+                    let slot = control.bus_slots.get(&bus).ok_or_else(|| {
+                        WrapError::OutProcEffect(format!(
+                            "unknown effect bus '{bus}' (configured by ORBIT_EFFECT_BUSES)"
+                        ))
+                    })?;
+                    // 宣言 = activation: この store 以降、callback は当該 bus を render 対象に
+                    // 含める（attach 完了前は engaged=false の pass-through）。宣言前の bus は
+                    // render 対象外 = 既定プールのコストゼロ（InsertBusStage::active の doc 参照）。
+                    // attach 失敗時は下で false に巻き戻す（宣言が生き残らない = pool を汚さない）。
+                    let active = control.bus_actives.get(&bus).cloned();
+                    if let Some(active) = &active {
+                        active.store(true, std::sync::atomic::Ordering::Release);
+                    }
+                    (slot, active)
+                }
+                None => (&control.child_slot, None),
+            };
+            (
+                weak_slot.upgrade().ok_or_else(|| {
+                    WrapError::OutProcEffect("outproc effect stream is closed".into())
+                })?,
+                bus_active,
+            )
+        };
+        let result = self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id);
+        if result.is_err() {
+            // ロールバック: 失敗した宣言の bus を render 対象から外す（TS 側も宣言を破棄して
+            // bus 名を free-list に返すため、Rust/TS の状態が対称に戻る）。
+            if let Some(active) = bus_active {
+                active.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        result
     }
 
     /// both build で instrument slot へ attach する。
@@ -1982,6 +2344,27 @@ impl EngineWrap {
         }
     }
 
+    /// test harness / gated 計測用: 特定の named insert bus（`ORBIT_EFFECT_BUSES`）に attach された
+    /// OOP effect の観測スナップショット。master bus の [`Self::outproc_effect_stats`] と異なり、
+    /// 未知の bus 名 / bus 未起動時は `None`（poison も `None`・warn で区別）。`#[doc(hidden)]`。
+    #[cfg(feature = "outproc-effect")]
+    #[doc(hidden)]
+    pub fn outproc_effect_bus_stats(
+        &self,
+        bus: &str,
+    ) -> Option<crate::outproc_effect::OutProcEffectSnapshot> {
+        match self.outproc.lock() {
+            Ok(g) => g
+                .as_ref()
+                .and_then(|c| c.bus_stats.get(bus))
+                .map(|stats| stats.snapshot()),
+            Err(_) => {
+                tracing::warn!("outproc mutex poisoned; outproc_effect_bus_stats returning None");
+                None
+            }
+        }
+    }
+
     /// test harness / RT 監視用: OOP effect の callback-duration スナップショット（A0 §6・budget 検証）。
     /// `#[doc(hidden)]`。outproc 無効時は None。poison 時も None だが warn で区別する。
     #[cfg(feature = "outproc-effect")]
@@ -2081,6 +2464,49 @@ impl EngineWrap {
                 (0, 0, false, injected)
             }
         }
+    }
+
+    /// per-bus OOP effect の health を bus 名つきで列挙する（#461 review Critical: bus child の
+    /// crash/respawn/計測無効/frames_clamped が ticker に出ない穴を塞ぐ）。master の
+    /// [`Self::outproc_health`] と同型の tuple を bus ごとに返す。1 tick = 1 try_lock +
+    /// snapshot 群（WouldBlock/Poisoned/未初期化は空 Vec = 次 tick 持ち越し）。
+    #[cfg(feature = "outproc-effect")]
+    pub fn outproc_effect_bus_health(&self) -> Vec<(String, (u64, u64, bool, u64))> {
+        match self.outproc.try_lock() {
+            Ok(g) => g
+                .as_ref()
+                .map(|c| {
+                    c.bus_stats
+                        .iter()
+                        .map(|(name, stats)| {
+                            let s = stats.snapshot();
+                            (
+                                name.clone(),
+                                (
+                                    s.child_process_error_count,
+                                    s.respawn_count,
+                                    s.measurement_invalid,
+                                    s.frames_clamped,
+                                ),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// feature 無効ビルド用 stub（ticker 側を cfg なしで書けるようにする）。
+    #[cfg(not(feature = "outproc-effect"))]
+    pub fn outproc_effect_bus_health(&self) -> Vec<(String, (u64, u64, bool, u64))> {
+        Vec::new()
+    }
+
+    /// 未登録 named target へ tag された event の skip 累計（core の retain ハザード観測点・
+    /// `Scheduler::unroutable_event_count`）。lock 競合時は 0（cumulative なので次 tick で回収）。
+    pub fn unroutable_event_count(&self) -> u64 {
+        self.engine.unroutable_event_count().unwrap_or(0)
     }
 
     /// feature `outproc-effect` 無効ビルド用の stub。本番は常に `(0, 0, false, ...)`（control が無い）。
@@ -3832,6 +4258,7 @@ mod outproc_health_tests {
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
     use orbit_audio_native::CallbackTimeStats;
+    use std::collections::HashMap;
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex, Weak};
 
@@ -3846,6 +4273,9 @@ mod outproc_health_tests {
             stats: stats.clone(),
             cb_stats: CallbackTimeStats::new(),
             child_slot: Weak::new(),
+            bus_slots: HashMap::new(),
+            bus_stats: HashMap::new(),
+            bus_actives: HashMap::new(),
         });
         (wrap, stats)
     }
@@ -3861,8 +4291,86 @@ mod outproc_health_tests {
             stats,
             cb_stats: CallbackTimeStats::new(),
             child_slot: Arc::downgrade(&child_slot),
+            bus_slots: HashMap::new(),
+            bus_stats: HashMap::new(),
+            bus_actives: HashMap::new(),
         });
         (wrap, child_slot)
+    }
+
+    #[test]
+    fn load_outproc_effect_plugin_rejects_unknown_bus() {
+        let (wrap, _child_slot) =
+            wrap_with_child_slot(ChildSlot::Closed, OutProcEffectStats::new());
+        let error = wrap
+            .load_outproc_effect_plugin(
+                std::path::PathBuf::from("unused.clap"),
+                None,
+                Some("nope".into()),
+            )
+            .err()
+            .expect("unknown bus must be rejected before touching the master slot");
+        assert_effect_runtime_error_contains(error, "unknown effect bus 'nope'");
+    }
+
+    #[test]
+    fn load_outproc_effect_plugin_routes_known_bus_to_its_own_slot_not_master() {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        // master `child_slot` is dropped (Weak::new()), so if the bus lookup fell through to it
+        // this call would fail with "stream is closed" instead of reaching the bus-specific slot.
+        let bus_slot = Arc::new(Mutex::new(ChildSlot::<EffectRole>::Closed));
+        let mut bus_slots = HashMap::new();
+        bus_slots.insert("fx1".to_owned(), Arc::downgrade(&bus_slot));
+        *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
+            stats: OutProcEffectStats::new(),
+            cb_stats: CallbackTimeStats::new(),
+            child_slot: Weak::new(),
+            bus_slots,
+            bus_stats: HashMap::new(),
+            bus_actives: HashMap::new(),
+        });
+        let error = wrap
+            .load_outproc_effect_plugin(
+                std::path::PathBuf::from("unused.clap"),
+                None,
+                Some("fx1".into()),
+            )
+            .err()
+            .expect("closed bus slot still rejects the load, but past the routing step");
+        assert_effect_runtime_error_contains(error, "closed after an unrecoverable attach failure");
+    }
+
+    #[test]
+    fn load_outproc_effect_plugin_rolls_back_activation_on_failure() {
+        // #461 review Important: attach 失敗後に activation=true が残ると、失敗した宣言が
+        // render path を恒久占有する。失敗で flag が false に戻ることを固定する。
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let bus_slot = Arc::new(Mutex::new(ChildSlot::<EffectRole>::Closed));
+        let active = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut bus_slots = HashMap::new();
+        bus_slots.insert("fx1".to_owned(), Arc::downgrade(&bus_slot));
+        let mut bus_actives = HashMap::new();
+        bus_actives.insert("fx1".to_owned(), active.clone());
+        *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
+            stats: OutProcEffectStats::new(),
+            cb_stats: CallbackTimeStats::new(),
+            child_slot: Weak::new(),
+            bus_slots,
+            bus_stats: HashMap::new(),
+            bus_actives,
+        });
+        let result = wrap.load_outproc_effect_plugin(
+            std::path::PathBuf::from("unused.clap"),
+            None,
+            Some("fx1".into()),
+        );
+        assert!(result.is_err());
+        assert!(
+            !active.load(std::sync::atomic::Ordering::Acquire),
+            "attach 失敗後は activation がロールバックされること"
+        );
     }
 
     fn assert_effect_runtime_error_contains(error: WrapError, expected: &str) {
