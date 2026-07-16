@@ -11,7 +11,8 @@
  * while LinkAudio is enabled) should run that check *between* validation and
  * resolution — call `validatePluginExtension(spec)` directly first, do the
  * gating check, then call `resolvePluginPath` (which re-validates; the
- * function is pure so the repeat call is harmless).
+ * function is pure so the repeat call is harmless). Example:
+ * `validatePluginExtension(spec, role)`.
  */
 
 import path from 'node:path'

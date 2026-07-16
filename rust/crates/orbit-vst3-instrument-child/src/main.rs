@@ -175,23 +175,83 @@ fn to_vst3_offset(offset: u32) -> i32 {
     offset.min(i32::MAX as u32) as i32
 }
 
-/// note-off を instrument へ送り、同 addr/sample_offset の synthetic NOTE_END を積む。
-/// VST3 には CLAP の NOTE_END 相当の plugin→host イベントが無いため、child がここで合成して
-/// host の (port,channel,key) voice 簿記を閉じる（NoteOff / NoteChoke 共通・choke は velocity 0）。
+/// Pure classification of an incoming `NeutralEvent` into the action `main()`'s dispatch loop
+/// should apply. Extracted so the event-routing logic (channel/pitch wildcard rounding, VST3
+/// NOTE_END synthesis for NoteOff/NoteChoke) is unit-testable without a loaded VST3 instrument.
 #[cfg(target_os = "macos")]
-fn note_off_and_end(
-    instrument: &mut Vst3InstrumentProcessor,
-    output_events: &mut Vec<NeutralEvent>,
-    addr: VoiceAddr,
-    velocity: f32,
-    sample_offset: u32,
-) {
-    let (channel, pitch) = vst3_channel_pitch(addr);
-    instrument.push_note_off(channel, pitch, velocity, to_vst3_offset(sample_offset));
-    output_events.push(NeutralEvent::NoteEnd {
-        sample_offset,
-        addr,
-    });
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum EventAction {
+    NoteOn {
+        channel: i16,
+        pitch: i16,
+        velocity: f32,
+        offset: i32,
+    },
+    /// NoteOff / NoteChoke both resolve here: push a VST3 note-off, plus a synthetic `NoteEnd`
+    /// (VST3 has no plugin→host NOTE_END equivalent) so the host can close its voice bookkeeping.
+    NoteOffAndEnd {
+        channel: i16,
+        pitch: i16,
+        velocity: f32,
+        offset: i32,
+        end: NeutralEvent,
+    },
+    /// Unsupported variant: caller must bump `event_decode_error_count`.
+    Unsupported,
+}
+
+#[cfg(target_os = "macos")]
+fn classify_event(event: &NeutralEvent) -> EventAction {
+    match *event {
+        NeutralEvent::NoteOn {
+            sample_offset,
+            addr,
+            velocity,
+            ..
+        } => {
+            let (channel, pitch) = vst3_channel_pitch(addr);
+            EventAction::NoteOn {
+                channel,
+                pitch,
+                velocity: velocity as f32,
+                offset: to_vst3_offset(sample_offset),
+            }
+        }
+        NeutralEvent::NoteOff {
+            sample_offset,
+            addr,
+            velocity,
+        } => {
+            let (channel, pitch) = vst3_channel_pitch(addr);
+            EventAction::NoteOffAndEnd {
+                channel,
+                pitch,
+                velocity: velocity as f32,
+                offset: to_vst3_offset(sample_offset),
+                end: NeutralEvent::NoteEnd {
+                    sample_offset,
+                    addr,
+                },
+            }
+        }
+        NeutralEvent::NoteChoke {
+            sample_offset,
+            addr,
+        } => {
+            let (channel, pitch) = vst3_channel_pitch(addr);
+            EventAction::NoteOffAndEnd {
+                channel,
+                pitch,
+                velocity: 0.0,
+                offset: to_vst3_offset(sample_offset),
+                end: NeutralEvent::NoteEnd {
+                    sample_offset,
+                    addr,
+                },
+            }
+        }
+        _ => EventAction::Unsupported,
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -251,45 +311,26 @@ fn main() -> Result<()> {
             }
             output_events.clear();
             for event in &event_scratch {
-                match *event {
-                    NeutralEvent::NoteOn {
-                        sample_offset,
-                        addr,
+                match classify_event(event) {
+                    EventAction::NoteOn {
+                        channel,
+                        pitch,
                         velocity,
-                        ..
+                        offset,
                     } => {
-                        let (channel, pitch) = vst3_channel_pitch(addr);
-                        instrument.push_note_on(
-                            channel,
-                            pitch,
-                            velocity as f32,
-                            to_vst3_offset(sample_offset),
-                        );
+                        instrument.push_note_on(channel, pitch, velocity, offset);
                     }
-                    // NoteOff / NoteChoke は同じ形: VST3 note-off を送り、VST3 に無い NOTE_END を
-                    // 同ブロックで合成して host の voice 簿記を閉じる（choke は velocity 0 扱い）。
-                    NeutralEvent::NoteOff {
-                        sample_offset,
-                        addr,
+                    EventAction::NoteOffAndEnd {
+                        channel,
+                        pitch,
                         velocity,
-                    } => note_off_and_end(
-                        &mut instrument,
-                        &mut output_events,
-                        addr,
-                        velocity as f32,
-                        sample_offset,
-                    ),
-                    NeutralEvent::NoteChoke {
-                        sample_offset,
-                        addr,
-                    } => note_off_and_end(
-                        &mut instrument,
-                        &mut output_events,
-                        addr,
-                        0.0,
-                        sample_offset,
-                    ),
-                    _ => unsafe {
+                        offset,
+                        end,
+                    } => {
+                        instrument.push_note_off(channel, pitch, velocity, offset);
+                        output_events.push(end);
+                    }
+                    EventAction::Unsupported => unsafe {
                         (*region).event_decode_error_count.fetch_add(1, Relaxed);
                     },
                 }
@@ -324,7 +365,9 @@ fn main() -> Result<()> {
     }
     if process_errors != 0 {
         eprintln!(
-            "[orbit-vst3-instrument-child] plugin.process() failed for {process_errors} block(s)"
+            "[orbit-vst3-instrument-child] plugin.process() failed for {process_errors} block(s); \
+             last tresult={}",
+            instrument.last_process_error()
         );
     }
     Ok(())
@@ -373,5 +416,106 @@ mod tests {
     fn in_order_sequence_boundaries() {
         assert_eq!(in_order_seqs(7, 7).collect::<Vec<_>>(), Vec::<u64>::new());
         assert_eq!(in_order_seqs(7, 9).collect::<Vec<_>>(), vec![8, 9]);
+    }
+
+    fn concrete_addr(channel: i16, key: i16) -> VoiceAddr {
+        VoiceAddr {
+            note_id: -1,
+            port_index: -1,
+            channel,
+            key,
+            _pad: 0,
+        }
+    }
+
+    #[test]
+    fn classify_note_on_maps_channel_pitch_velocity_offset() {
+        let event = NeutralEvent::NoteOn {
+            sample_offset: 42,
+            addr: concrete_addr(3, 60),
+            velocity: 0.5,
+            tuning_cents: 0.0,
+            length_frames: -1,
+        };
+        assert_eq!(
+            classify_event(&event),
+            EventAction::NoteOn {
+                channel: 3,
+                pitch: 60,
+                velocity: 0.5,
+                offset: 42,
+            }
+        );
+    }
+
+    #[test]
+    fn classify_note_on_rounds_wildcard_to_zero() {
+        let event = NeutralEvent::NoteOn {
+            sample_offset: 0,
+            addr: VoiceAddr::WILDCARD,
+            velocity: 1.0,
+            tuning_cents: 0.0,
+            length_frames: -1,
+        };
+        assert_eq!(
+            classify_event(&event),
+            EventAction::NoteOn {
+                channel: 0,
+                pitch: 0,
+                velocity: 1.0,
+                offset: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn classify_note_off_and_choke_yield_matching_note_end() {
+        let addr = concrete_addr(5, 69);
+        let off_event = NeutralEvent::NoteOff {
+            sample_offset: 10,
+            addr,
+            velocity: 0.7,
+        };
+        let choke_event = NeutralEvent::NoteChoke {
+            sample_offset: 10,
+            addr,
+        };
+
+        let expected_end = NeutralEvent::NoteEnd {
+            sample_offset: 10,
+            addr,
+        };
+
+        assert_eq!(
+            classify_event(&off_event),
+            EventAction::NoteOffAndEnd {
+                channel: 5,
+                pitch: 69,
+                velocity: 0.7,
+                offset: 10,
+                end: expected_end,
+            }
+        );
+        assert_eq!(
+            classify_event(&choke_event),
+            EventAction::NoteOffAndEnd {
+                channel: 5,
+                pitch: 69,
+                velocity: 0.0,
+                offset: 10,
+                end: expected_end,
+            }
+        );
+    }
+
+    #[test]
+    fn classify_unsupported_variant_yields_unsupported() {
+        assert_eq!(classify_event(&note_end()), EventAction::Unsupported);
+        let poly_pressure = NeutralEvent::PolyPressure {
+            sample_offset: 0,
+            addr: VoiceAddr::WILDCARD,
+            pressure: 0.0,
+        };
+        assert_eq!(classify_event(&poly_pressure), EventAction::Unsupported);
     }
 }

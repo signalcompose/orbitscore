@@ -422,6 +422,11 @@ impl OutProcRole for InstrumentRole {
         // 拡張子ベースの読み替え（.vst3 → VST3 child・それ以外 → CLAP child）。明示指定された
         // child exe（デフォルト名以外）は保持される。詳細は `child_exe_for_attach` の doc 参照。
         launch.child_exe = crate::outproc_instrument::child_exe_for_attach(&launch.child_exe, path);
+        tracing::debug!(
+            ?path,
+            child_exe = ?launch.child_exe,
+            "instrument child selected for attach"
+        );
         Ok(())
     }
     #[cfg(test)]
@@ -4075,11 +4080,13 @@ mod outproc_health_tests {
 #[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_health_tests {
     use super::{
-        ChildSlot, EngineWrap, InstrumentRole, OutProcInstrumentControl, OutProcRole, WrapError,
+        ChildLaunch, ChildSlot, EngineWrap, InstrumentRole, OutProcInstrumentControl, OutProcRole,
+        WrapError,
     };
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
-    use std::sync::atomic::Ordering;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex, Weak};
 
     /// `StubBackend` で `EngineWrap` を起動し、real child なしで組み立てた `OutProcInstrumentControl`
@@ -4166,6 +4173,53 @@ mod outproc_instrument_health_tests {
             "retry-instrument.clap",
             true,
             false,
+        );
+    }
+
+    #[test]
+    fn instrument_select_child_exe_swaps_default_child_by_extension() {
+        let stats = InstrumentRole::new_stats();
+        let mut launch = ChildLaunch::<InstrumentRole> {
+            shm_path: PathBuf::from("/tmp/unused-select-child-exe.shm"),
+            child_exe: PathBuf::from("/opt/orbitscore/orbit-clap-instrument-child"),
+            sample_rate: 48_000,
+            stats: stats.clone(),
+            engaged: Arc::new(AtomicBool::new(false)),
+            cleanup_shm_on_drop: false,
+        };
+
+        InstrumentRole::select_child_exe(&mut launch, Path::new("synth.vst3"))
+            .expect("select_child_exe must not error on default child name");
+        assert_eq!(
+            launch.child_exe.file_name().and_then(|name| name.to_str()),
+            Some("orbit-vst3-instrument-child")
+        );
+
+        // Symmetric: attaching a .clap plugin afterwards swaps back to the CLAP child.
+        InstrumentRole::select_child_exe(&mut launch, Path::new("synth.clap"))
+            .expect("select_child_exe must not error on default child name");
+        assert_eq!(
+            launch.child_exe.file_name().and_then(|name| name.to_str()),
+            Some("orbit-clap-instrument-child")
+        );
+
+        // An explicitly-named (non-default) child exe is preserved untouched.
+        let mut explicit_launch = ChildLaunch::<InstrumentRole> {
+            shm_path: PathBuf::from("/tmp/unused-select-child-exe-explicit.shm"),
+            child_exe: PathBuf::from("/opt/orbitscore/custom-instrument-child"),
+            sample_rate: 48_000,
+            stats,
+            engaged: Arc::new(AtomicBool::new(false)),
+            cleanup_shm_on_drop: false,
+        };
+        InstrumentRole::select_child_exe(&mut explicit_launch, Path::new("synth.vst3"))
+            .expect("select_child_exe must not error on explicit child name");
+        assert_eq!(
+            explicit_launch
+                .child_exe
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("custom-instrument-child")
         );
     }
 

@@ -151,6 +151,73 @@ fn process_block_rejects_frames_exceeding_scratch() {
     );
 }
 
+// Mirror of process_block_rejects_non_stereo_length / process_block_rejects_frames_exceeding_scratch
+// for Vst3InstrumentProcessor (Fix 1: guard early-returns must clear queued input events so a
+// rejected block's note doesn't leak into the next successful block at a stale sample offset).
+#[test]
+fn instrument_process_block_rejects_non_stereo_length() {
+    let Some(bundle) = package_synth_oracle() else {
+        eprintln!("VST3 synth oracle build failed; loud skip for this machine");
+        return;
+    };
+    let (mut processor, _info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
+        .unwrap_or_else(|error| {
+            panic!("failed to load synth oracle {}: {error}", bundle.display())
+        });
+
+    processor.push_note_on(0, 69, 0.8, 0);
+    // Odd length: not a multiple of DEFAULT_CHANNELS(2).
+    let mut data = vec![0.0f32; 3];
+    assert!(
+        !processor.process_block(&mut data),
+        "non-multiple-of-channels length must be rejected"
+    );
+
+    // The queued note must not leak into the next (valid, silent) block.
+    let mut audio = vec![0.0f32; FRAMES * 2];
+    assert!(
+        processor.process_block(&mut audio),
+        "valid block after a rejected block must succeed"
+    );
+    let peak = audio
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0_f32, f32::max);
+    assert_eq!(peak, 0.0, "rejected block's queued note must not sound");
+}
+
+#[test]
+fn instrument_process_block_rejects_frames_exceeding_scratch() {
+    let Some(bundle) = package_synth_oracle() else {
+        eprintln!("VST3 synth oracle build failed; loud skip for this machine");
+        return;
+    };
+    let (mut processor, _info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
+        .unwrap_or_else(|error| {
+            panic!("failed to load synth oracle {}: {error}", bundle.display())
+        });
+
+    processor.push_note_on(0, 69, 0.8, 0);
+    // FRAMES(512) is the scratch length (max_samples_per_block); one frame beyond that must fail.
+    let mut data = vec![0.0f32; (FRAMES + 1) * 2];
+    assert!(
+        !processor.process_block(&mut data),
+        "frame count exceeding scratch length must be rejected"
+    );
+
+    // The queued note must not leak into the next (valid, silent) block.
+    let mut audio = vec![0.0f32; FRAMES * 2];
+    assert!(
+        processor.process_block(&mut audio),
+        "valid block after a rejected block must succeed"
+    );
+    let peak = audio
+        .iter()
+        .map(|sample| sample.abs())
+        .fold(0.0_f32, f32::max);
+    assert_eq!(peak, 0.0, "rejected block's queued note must not sound");
+}
+
 #[test]
 fn real_vst3_abi_loads_processes_and_drops() {
     let candidates = real_plugin_candidates();

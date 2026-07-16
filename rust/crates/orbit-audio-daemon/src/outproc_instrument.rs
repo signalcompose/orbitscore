@@ -112,8 +112,10 @@ enum InstrumentPluginFormat {
 }
 
 impl InstrumentPluginFormat {
-    /// 拡張子 `.vst3`（大文字小文字不問）のみ VST3。**それ以外はすべて Clap** — CLAP gated
-    /// テストは未バンドルの raw `.dylib`（clap-test-synth）を attach するため、ここで未知
+    /// 拡張子 `.vst3`（大文字小文字不問）のみ VST3。**それ以外はすべて Clap** —
+    /// CLAP は VST3 対応前から唯一サポートされていた instrument フォーマットだった
+    /// ため、未知拡張子のフォールバック先として妥当。一例として、CLAP gated テストは
+    /// 未バンドルの raw `.dylib`（clap-test-synth）を attach するため、ここで未知
     /// 拡張子を reject すると既存経路が壊れる（本ブランチの実機 gated RUN で検出済み）。
     /// 不正な plugin path の失敗は従来どおり child 側の load エラーとして表面化する。
     fn from_plugin_path(path: &Path) -> Self {
@@ -183,6 +185,9 @@ pub struct OutProcInstrumentStats {
     /// 上記 output 方向 drop に `NoteEnd` が含まれた回数。`SharedRegion::output_note_end_dropped_count`
     /// のミラー(host の簿記リセット判断トリガと同じ counter だが、こちらは daemon health 可視化用)。
     pub output_note_end_dropped_count: AtomicU64,
+    /// child が decode できなかった input event / 未対応 `NeutralEvent` variant の数。
+    /// `SharedRegion::event_decode_error_count` のミラー(他カウンタと同じ mirror パターン)。
+    pub event_decode_error_count: AtomicU64,
     /// Gated cross-process probe: A4 (port 0 / channel 0 / key 69) の host-side live voice 数。
     pub probe_live_count: AtomicU16,
     /// Instrument 加算後の master bus の abs peak を f32 bits で累積する。非負 f32 の bits は
@@ -212,6 +217,7 @@ impl OutProcInstrumentStats {
             output_note_end_dropped_count: self
                 .output_note_end_dropped_count
                 .load(Ordering::Relaxed),
+            event_decode_error_count: self.event_decode_error_count.load(Ordering::Relaxed),
             probe_live_count: self.probe_live_count.load(Ordering::Relaxed),
             post_peak: f32::from_bits(self.post_peak_bits.load(Ordering::Relaxed)),
             current_child_pid: self.current_child_pid.load(Ordering::Relaxed),
@@ -229,6 +235,7 @@ pub struct OutProcInstrumentSnapshot {
     pub output_event_dropped_count: u64,
     pub output_event_spilled_count: u64,
     pub output_note_end_dropped_count: u64,
+    pub event_decode_error_count: u64,
     pub probe_live_count: u16,
     pub post_peak: f32,
     pub current_child_pid: u32,
@@ -460,6 +467,11 @@ impl InstrumentChildSupervisor {
                     stats
                         .output_note_end_dropped_count
                         .store(note_end_dropped, Ordering::Relaxed);
+                    let event_decode_errors =
+                        unsafe { (*region).event_decode_error_count.load(Ordering::Relaxed) };
+                    stats
+                        .event_decode_error_count
+                        .store(event_decode_errors, Ordering::Relaxed);
 
                     match child.try_wait() {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,

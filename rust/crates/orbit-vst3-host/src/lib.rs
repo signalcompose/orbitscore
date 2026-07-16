@@ -773,6 +773,9 @@ pub struct Vst3InstrumentProcessor {
     output_events: EventList,
     process_output_l: Vec<f32>,
     process_output_r: Vec<f32>,
+    /// Raw tresult of the most recent failing `process()` call (RT-safe: no logging on the hot
+    /// path, just stashed for the caller to surface out-of-band, e.g. on child process exit).
+    last_process_error: std::cell::Cell<i32>,
 }
 
 impl Vst3InstrumentProcessor {
@@ -898,6 +901,7 @@ impl Vst3InstrumentProcessor {
                 output_events: EventList::empty(),
                 process_output_l: vec![0.0; scratch_len],
                 process_output_r: vec![0.0; scratch_len],
+                last_process_error: std::cell::Cell::new(0),
             },
             info,
         ))
@@ -905,6 +909,13 @@ impl Vst3InstrumentProcessor {
 
     pub fn info(&self) -> &LoadedVst3Info {
         &self.info
+    }
+
+    /// Raw tresult of the most recent failing `process()` call (0 / `kResultOk` if none since
+    /// construction). Intended for out-of-band error reporting (e.g. child process exit summary),
+    /// not for the audio-thread hot path.
+    pub fn last_process_error(&self) -> i32 {
+        self.last_process_error.get()
     }
 
     pub fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
@@ -922,10 +933,15 @@ impl Vst3InstrumentProcessor {
     #[must_use]
     pub fn process_block(&mut self, data: &mut [f32]) -> bool {
         if !data.len().is_multiple_of(DEFAULT_CHANNELS) {
+            // Clear queued input events so a rejected block doesn't leak stale note
+            // events (with now-invalid sample offsets) into the next successful block.
+            self.input_events.clear();
             return false;
         }
         let frames = data.len() / DEFAULT_CHANNELS;
         if frames > self.process_output_l.len() {
+            // Same rationale as above: drop stale queued events on early return.
+            self.input_events.clear();
             return false;
         }
         self.process_output_l[..frames].fill(0.0);
@@ -966,6 +982,7 @@ impl Vst3InstrumentProcessor {
         };
         self.input_events.clear();
         if !is_ok(result) {
+            self.last_process_error.set(result);
             return false;
         }
         for frame in 0..frames {
