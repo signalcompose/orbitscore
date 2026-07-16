@@ -77,6 +77,28 @@ CLAP gated 3/3 + VST3 gated 3/3（実機）・npm test 1333 passed / 0 failed。
 既知 flake: offline テスト初回ビルド時の oracle packaging 並行競合（既存パターン・
 Stage 1 以前から存在・再実行で安定 green）。
 
+**/simplify（4観点並行・PR #447）**: reuse/efficiency/altitude = クリーン判定。
+simplification 2件適用（oracle packaging ヘルパー統合・NoteOff/NoteChoke 分岐統合）。
+適用後 gated 3/3 実機再RUN green（`2389f12`）。
+
+**/code:pr-review-team（round 1-3・収束）**:
+- round 1（4レビュアー並行）: Critical 2（plugin-resolver doc 例の stale シグネチャ /
+  select_child_exe 配線の CI テスト欠如）+ Important 4（ガード早期 return の stale
+  input events / event_decode_error_count 未ミラー / child 選択の log なし /
+  process() tresult 破棄）+ テスト増強2件 → fixer 一括適用（`a34fce0`・
+  classify_event 純関数抽出 + unit テスト5本含む）
+- round 2（収束チェック）: 残余 Important 1（decode counter が ticker 経路まで
+  届いていない）+ Minor 2 を検出 → 7-tuple 化 + 新 WARNING
+  `OUTPROC_INSTRUMENT_EVENT_DECODE` 配線等で解消（`beedd24`）
+- round 3: **全 RESOLVED・新規指摘なし・Critical/Important = 0 で収束**
+- CI 4/4 pass（fmt/clippy/test・code-review・packaging・license gate）
+- 各 round 後に CLAP/VST3 gated 実機再RUN で退行なしを確認
+- 既知 flake: 高負荷時（並行 cargo と競合）に voice-leading / random 等の
+  timing 依存 spec が落ちる。隔離再実行で毎回 green を確認済み
+
+**状態**: PR #447 open・レビュー収束済み・CI green。マージと Epic #424 クローズは
+owner 指示待ち（overnight 自律走行の停止点）。
+
 ### 6.257 feat(daemon): DoD 配線 — TS ガード撤去 + cross-role reject + 配布 feature + DSL 実機 E2E #431 PR-3 (Jul 16, 2026)
 
 **Date**: 2026-07-16
