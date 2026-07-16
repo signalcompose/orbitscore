@@ -17,6 +17,36 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.261 feat(vscode): docs entry point 全部入り（Activity Bar / Webview panel / Walkthrough）#457 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（PR 作成・レビューへ）
+**Branch**: `457-docs-entry-points`
+
+owner 決定「どれもあっても困らない」= #450（status bar + openDevDocs）に加え、学習サイトへの
+入口を全部入りで用意。前提資産（#450・不変）: `orbitscore.openDevDocs` コマンド・MCP HTTP サーバの
+`/orbitscore/dev/` static 配信・status bar `$(book) Docs`。
+
+- **Activity Bar view container**: `contributes.viewsContainers.activitybar` に OrbitScore
+  コンテナ（`media/icon-activitybar.svg`）+ `contributes.views` の Learning view（`viewsWelcome`
+  で 3 ボタン: Open Learning Site (Browser) / Open in Editor / Start the Walkthrough）。
+  TreeView 本実装（章ツリー）は #451（サイト構成確定後）の follow-up と明記
+- **Webview panel**: 新コマンド `orbitscore.openDevDocsPanel` — `vscode.window.createWebviewPanel`
+  で editor タブに `<iframe src="http://127.0.0.1:<port>/orbitscore/dev/">` を全画面表示
+  （CSP で `frame-src http://127.0.0.1:*` を明示・retainContextWhenHidden・シングルトン管理・
+  MCP サーバ未起動時は openDevDocs と同文言でエラー表示）
+- **Walkthrough**: `contributes.walkthroughs` に `orbitscore.learnOrbitScore`（新コマンド
+  `orbitscore.openWalkthrough` から起動）。v1 4 ステップ（Open Learning Site→
+  onCommand:orbitscore.openDevDocs / Start the Engine→onCommand:orbitscore.toggleEngine /
+  Run your first sound→onCommand:orbitscore.runSelection / Explore plugin hosting→
+  completionEvents なし・手動チェック）。ステップ本文は `media/walkthrough/*.md` に
+  日本語+英語併記（package.nls ローカライズより工数が軽いため採用・両言語を1ファイルに集約）
+- **既存導線維持**: status bar / openDevDocs は不変。`.orbs` を開いている時の
+  `editor/title` メニューに `$(book)` ボタン（`orbitscore.openDevDocs`）を追加
+- 検証: `npm run build` green・vscode-extension テスト 130/130・変更 ts ファイル lint クリーン
+- 妥協点: 4番目のステップ（Explore plugin hosting）は `onLink` completionEvent の VS Code 側
+  対応が不確実なため completionEvents を省略し手動チェックに倒した
+
 ### 6.262 feat(engine): seq.effect() per-sequence insert — S1〜S3 完走 #434 (Jul 17, 2026)
 
 **Date**: 2026-07-17
