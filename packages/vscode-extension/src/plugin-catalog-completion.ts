@@ -25,6 +25,12 @@ export interface PluginArgContext {
   readonly quoteStartChar: number
 }
 
+export interface PluginCatalogCompletionCandidate {
+  readonly entry: PluginCatalogEntry
+  readonly label: string
+  readonly insertText: string
+}
+
 // Matches `.effect("` / `.instrument("` immediately followed by an in-progress
 // string (no closing quote yet) ending at the cursor. `[^"\n]*$` anchors to the
 // end of the prefix, so this matches `effect("Sca` (partial) just as well as
@@ -52,20 +58,35 @@ export function detectPluginArgContext(
 /**
  * Filters catalog entries for a completion request:
  * - role match (PC.3: `instrument(` → roles includes `instrument`; `effect(` → roles includes `effect`)
- * - format restriction for effects (PH.3: only CLAP effects are accepted today; instruments have no such restriction)
- * - typed-prefix narrowing (case-insensitive substring match against `name` or `vendor/name`)
+ * - both verbs accept CLAP and VST3 entries (PH.3); catalog name resolution prefers CLAP on a same-name tie
+ * - cross-format same-name collisions become `format/name` candidates; other names remain plain
+ * - typed-prefix narrowing (case-insensitive substring match against the candidate or `vendor/name`)
  */
 export function filterCatalogEntries(
   entries: readonly PluginCatalogEntry[],
   verb: PluginVerb,
   typed: string,
-): PluginCatalogEntry[] {
+): PluginCatalogCompletionCandidate[] {
   const needle = typed.trim().toLowerCase()
-  return entries.filter((entry) => {
-    if (!entry.roles.includes(verb)) return false
-    if (verb === 'effect' && entry.format.toLowerCase() !== 'clap') return false
-    if (needle === '') return true
+  const roleEntries = entries.filter((entry) => entry.roles.includes(verb))
+  const formatsByName = new Map<string, Set<string>>()
+  for (const entry of roleEntries) {
+    const name = normalizeCatalogKey(entry.name)
+    const formats = formatsByName.get(name) ?? new Set<string>()
+    formats.add(normalizeCatalogKey(entry.format))
+    formatsByName.set(name, formats)
+  }
+
+  return roleEntries.flatMap((entry) => {
+    const hasFormatCollision = (formatsByName.get(normalizeCatalogKey(entry.name))?.size ?? 0) > 1
+    const label = hasFormatCollision ? `${entry.format.toLowerCase()}/${entry.name}` : entry.name
+    if (needle === '') return [{ entry, label, insertText: label }]
     const qualified = `${entry.vendor}/${entry.name}`.toLowerCase()
-    return entry.name.toLowerCase().includes(needle) || qualified.includes(needle)
+    if (!label.toLowerCase().includes(needle) && !qualified.includes(needle)) return []
+    return [{ entry, label, insertText: label }]
   })
+}
+
+function normalizeCatalogKey(value: string): string {
+  return value.trim().normalize('NFC').toLowerCase()
 }

@@ -17,9 +17,17 @@ function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({})) {
 }
 
 describe('Global.effect()', () => {
-  it.each(['synth.vst3', 'synth.component'])('rejects reserved format %s', async (spec) => {
+  it.each(['synth.component'])('rejects reserved format %s', async (spec) => {
     const { global } = makeGlobal()
     await expect(global.effect(spec)).rejects.toThrow('not yet supported')
+  })
+
+  // #504: VST3 effects are wired end-to-end (daemon vst3-effect-child) — the old
+  // effect=CLAP-only gate is gone, so a .vst3 path now loads as an effect.
+  it('accepts a .vst3 path for effect (#504)', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await global.effect('synth.vst3')
+    expect(loadPlugin).toHaveBeenCalled()
   })
 
   // Bare names (no `./`-style prefix, no known plugin extension) are now catalog names

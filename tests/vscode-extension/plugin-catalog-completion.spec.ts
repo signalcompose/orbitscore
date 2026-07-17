@@ -80,28 +80,35 @@ describe('detectPluginArgContext', () => {
 describe('filterCatalogEntries', () => {
   it('narrows to Scaler-prefixed candidates as the user types "Sca" for instrument(', () => {
     const result = filterCatalogEntries(ENTRIES, 'instrument', 'Sca')
-    expect(result.map((e) => e.name)).toEqual(['Scaler 2'])
+    expect(result.map((c) => c.label)).toEqual(['Scaler 2'])
   })
 
-  it('effect() only returns CLAP format entries even when a VST3 same-name entry exists', () => {
+  it('effect() includes VST3 entries when completing effects', () => {
     const result = filterCatalogEntries(ENTRIES, 'effect', 'TAL')
-    expect(result).toHaveLength(1)
-    expect(result[0].format).toBe('clap')
+    expect(result.map(({ entry }) => entry.format)).toEqual(['clap', 'vst3'])
+  })
+
+  it('emits format/name labels and insert text for same-name cross-format effects', () => {
+    const result = filterCatalogEntries(ENTRIES, 'effect', 'TAL')
+    expect(result.map(({ label, insertText }) => ({ label, insertText }))).toEqual([
+      { label: 'clap/TAL Reverb 4', insertText: 'clap/TAL Reverb 4' },
+      { label: 'vst3/TAL Reverb 4', insertText: 'vst3/TAL Reverb 4' },
+    ])
   })
 
   it('instrument() has no format restriction', () => {
     const result = filterCatalogEntries(ENTRIES, 'instrument', 'Surge')
-    expect(result.map((e) => e.name)).toEqual(['Surge XT'])
+    expect(result.map(({ entry }) => entry.name)).toEqual(['Surge XT'])
   })
 
   it('empty typed prefix returns all role-matching entries', () => {
     const result = filterCatalogEntries(ENTRIES, 'instrument', '')
-    expect(result.map((e) => e.name).sort()).toEqual(['Scaler 2', 'Surge XT'])
+    expect(result.map(({ entry }) => entry.name).sort()).toEqual(['Scaler 2', 'Surge XT'])
   })
 
   it('matches vendor-qualified prefix ("TAL Software/")', () => {
     const result = filterCatalogEntries(ENTRIES, 'effect', 'TAL Software/TAL')
-    expect(result).toHaveLength(1)
+    expect(result).toHaveLength(2)
   })
 
   it('role mismatch excludes an entry', () => {

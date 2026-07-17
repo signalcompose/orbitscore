@@ -41,18 +41,19 @@ export type PluginRole = 'effect' | 'instrument'
 export function validatePluginExtension(spec: string, role: PluginRole): void {
   const extension = path.extname(spec).toLowerCase()
   if (extension === '.clap') return
-  if (extension === '.vst3' && role === 'instrument') return
+  if (extension === '.vst3') return
   if (extension === '.vst3' || extension === '.component') {
     throw new Error(
       `${extension} plugins are not yet supported for ${role} (reserved for future VST3/AU support).`,
     )
   }
-  const expected = role === 'instrument' ? '.clap or .vst3' : '.clap'
+  const expected = '.clap or .vst3'
   throw new Error(`Unknown plugin extension "${extension || '(none)'}"; expected ${expected}.`)
 }
 
 const PATH_DIRECT_PREFIXES = ['./', '../', '~/', '/']
 const KNOWN_PLUGIN_EXTENSIONS = ['.clap', '.vst3', '.component']
+const KNOWN_PLUGIN_FORMATS = ['clap', 'vst3']
 
 /**
  * PC.2 discriminator: path-direct specs start with `./`/`../`/`~/`/`/` or end with a known
@@ -70,8 +71,8 @@ function normalizeCatalogKey(value: string): string {
   return value.trim().normalize('NFC').toLowerCase()
 }
 
-function acceptedFormatsForRole(role: PluginRole): readonly string[] {
-  return role === 'instrument' ? ['clap', 'vst3'] : ['clap']
+function acceptedFormatsForRole(): readonly string[] {
+  return ['clap', 'vst3']
 }
 
 const RESCAN_HINT = 'Run `orbit-plugin-scan` to (re)generate the plugin catalog, then retry.'
@@ -83,7 +84,7 @@ interface ResolvedCatalogPlugin {
 
 /**
  * Resolves a catalog (non-path) spec to `(path, pluginId)` per PC.2: exact name match
- * (case-insensitive/trim/NFC), optional `"vendor/name"` qualification, role check, then
+ * (case-insensitive/trim/NFC), optional `"vendor/name"` or `"format/name"` qualification, role check, then
  * format preference (CLAP > VST3) among the formats the verb accepts (PH.3).
  */
 function resolveCatalogSpec(
@@ -98,13 +99,21 @@ function resolveCatalogSpec(
   }
 
   const slashIndex = spec.indexOf('/')
-  const hasVendor = slashIndex !== -1
-  const vendorKey = hasVendor ? normalizeCatalogKey(spec.slice(0, slashIndex)) : undefined
-  const nameKey = normalizeCatalogKey(hasVendor ? spec.slice(slashIndex + 1) : spec)
+  const qualifierKey =
+    slashIndex === -1 ? undefined : normalizeCatalogKey(spec.slice(0, slashIndex))
+  const formatKey =
+    qualifierKey !== undefined && KNOWN_PLUGIN_FORMATS.includes(qualifierKey)
+      ? qualifierKey
+      : undefined
+  const vendorKey = formatKey === undefined ? qualifierKey : undefined
+  const nameKey = normalizeCatalogKey(slashIndex === -1 ? spec : spec.slice(slashIndex + 1))
 
   let candidates = catalog.plugins.filter((entry) => normalizeCatalogKey(entry.name) === nameKey)
   if (vendorKey !== undefined) {
     candidates = candidates.filter((entry) => normalizeCatalogKey(entry.vendor) === vendorKey)
+  }
+  if (formatKey !== undefined) {
+    candidates = candidates.filter((entry) => normalizeCatalogKey(entry.format) === formatKey)
   }
 
   if (candidates.length === 0) {
@@ -132,7 +141,7 @@ function resolveCatalogSpec(
     )
   }
 
-  const accepted = acceptedFormatsForRole(role)
+  const accepted = acceptedFormatsForRole()
   const formatCandidates = roleCandidates.filter((entry) =>
     accepted.includes(entry.format.toLowerCase()),
   )

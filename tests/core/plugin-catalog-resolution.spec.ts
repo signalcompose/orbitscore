@@ -32,6 +32,15 @@ const FIXTURE_CATALOG: PluginCatalogFile = {
       pluginId: 'tal-reverb-id',
       roles: ['effect'],
     },
+    // Same name in VST3 — exercises CLAP preference and `format/name` qualification (#504).
+    {
+      name: 'TAL Reverb 4',
+      vendor: 'TAL Software',
+      format: 'vst3',
+      path: '/plugins/tal-reverb.vst3',
+      pluginId: 'tal-reverb-vst3-id',
+      roles: ['effect'],
+    },
     // Same bare name, two different vendors — ambiguous without vendor qualifier.
     {
       name: 'Reverb',
@@ -66,7 +75,7 @@ const FIXTURE_CATALOG: PluginCatalogFile = {
       pluginId: 'scaler3-clap-id',
       roles: ['instrument'],
     },
-    // VST3-only plugin — effect() (CLAP-only in v1) must get a dedicated error.
+    // VST3-only effect — effect() accepts it when no CLAP alternative exists.
     {
       name: 'VstOnlyFX',
       vendor: 'Some Vendor',
@@ -163,16 +172,35 @@ describe('resolvePluginSpec catalog resolution', () => {
     expect(resolved).toEqual({ path: '/plugins/scaler3.clap', pluginId: 'scaler3-clap-id' })
   })
 
+  it('prefers CLAP over VST3 for effects with the same vendor/name', () => {
+    const resolved = resolvePluginSpec('TAL Reverb 4', undefined, [], '/doc', 'effect', catalogPath)
+    expect(resolved).toEqual({ path: '/plugins/tal-reverb.clap', pluginId: 'tal-reverb-id' })
+  })
+
+  it('resolves format/name qualifiers to the requested effect format', () => {
+    expect(
+      resolvePluginSpec('clap/TAL Reverb 4', undefined, [], '/doc', 'effect', catalogPath),
+    ).toEqual({
+      path: '/plugins/tal-reverb.clap',
+      pluginId: 'tal-reverb-id',
+    })
+    expect(
+      resolvePluginSpec('vst3/TAL Reverb 4', undefined, [], '/doc', 'effect', catalogPath),
+    ).toEqual({
+      path: '/plugins/tal-reverb.vst3',
+      pluginId: 'tal-reverb-vst3-id',
+    })
+  })
+
+  it('resolves a VST3-only effect name', () => {
+    const resolved = resolvePluginSpec('VstOnlyFX', undefined, [], '/doc', 'effect', catalogPath)
+    expect(resolved).toEqual({ path: '/plugins/vstonlyfx.vst3', pluginId: 'vstonlyfx-id' })
+  })
+
   it('rejects pairing a catalog name with an explicit pluginId argument', () => {
     expect(() =>
       resolvePluginSpec('TAL Reverb 4', 'explicit-id', [], '/doc', 'effect', catalogPath),
     ).toThrow(/pluginId/)
-  })
-
-  it('rejects a VST3-only catalog entry for effect() with a dedicated message (not the path "not yet supported" wording)', () => {
-    expect(() =>
-      resolvePluginSpec('VstOnlyFX', undefined, [], '/doc', 'effect', catalogPath),
-    ).toThrow(/VstOnlyFX.*vst3.*effect\(\)/s)
   })
 
   it('rejects a role mismatch (instrument-only entry requested as effect)', () => {

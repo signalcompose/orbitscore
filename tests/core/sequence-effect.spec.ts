@@ -101,9 +101,15 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects .vst3 (effect accepts .clap only, unlike seq.instrument())', async () => {
-    const { seq } = harness()
-    await expect(seq.effect('synth.vst3')).rejects.toThrow('not yet supported')
+  it('accepts .vst3 effects', async () => {
+    const { seq, loadPlugin } = harness()
+    await expect(seq.effect('reverb.vst3')).resolves.toBe(seq)
+    expect(loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'reverb.vst3'),
+      undefined,
+      'effect',
+      'seq-bus-0',
+    )
   })
 
   it('rejects on note sequences (midi)', async () => {
