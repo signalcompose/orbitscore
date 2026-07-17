@@ -18,9 +18,9 @@
 #
 # Best-effort by design: most contributors run `npm run build` without ever
 # running `cargo build`, and that must keep working even though rust is now
-# the default backend (#369) — those local builds simply won't have the
-# daemon resolvable at runtime. If the daemon binary hasn't been built, this
-# script warns and exits 0 rather than failing the whole build.
+# the default backend (#369). #487 以降、cargo が使える環境では bundle 前に再ビルド
+# を試みるが、**ビルド失敗時も警告して既存バイナリへ縮退する**（exit 0 を維持）。
+# daemon バイナリが無い場合も従来どおり警告して exit 0。
 #
 # This best-effort skip is safe only because release.yml's post-package gate
 # fails loud (aborts the release) if engine/bin/darwin-arm64/orbit-audio-daemon
@@ -73,9 +73,13 @@ copy_binary() {
 # cargo 不在の contributor は従来どおり best-effort（存在するものをコピー・警告付き）。
 if command -v cargo >/dev/null 2>&1; then
   echo "Rebuilding daemon + child binaries (release) before bundling..."
-  (cd "$PROJECT_ROOT/rust" \
+  # best-effort 契約の維持: cargo はあるがツールチェーン不足等でビルドできない環境
+  # （TS 専業 contributor 等）でも npm run build を落とさず、既存バイナリへ縮退する。
+  if ! (cd "$PROJECT_ROOT/rust" \
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
-    && cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-instrument-child)
+    && cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-instrument-child); then
+    echo "⚠️  release rebuild failed — bundling whatever exists in rust/target/release (may be stale)." >&2
+  fi
 else
   echo "⚠️  cargo not found — bundling whatever exists in rust/target/release (may be stale)." >&2
 fi
