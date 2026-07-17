@@ -763,6 +763,28 @@ async fn handle_command(
                 ),
             }
         }
+        // ランタイムのオーディオデバイス切替（#484 D2）。`device` 省略 / 空文字列 = システム既定へ
+        // 縮退（`ListAudioDevices` と同じ wire 規約）。cpal I/O を伴うため `ListAudioDevices` と同様
+        // spawn_blocking で隔離する（実処理は audio owner thread へさらに委譲される・
+        // `EngineWrap::select_audio_device` 参照）。
+        "SelectAudioDevice" => {
+            let device = params
+                .get("device")
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.trim().is_empty());
+            let engine = engine.clone();
+            let switched =
+                tokio::task::spawn_blocking(move || engine.select_audio_device(device)).await;
+            match switched {
+                Ok(Ok(device)) => ok(&id, json!({ "ok": true, "device": device })),
+                Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
+                Err(join_err) => err(
+                    &id,
+                    ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                ),
+            }
+        }
         "GetStatus" => {
             let status = json!({
                 "daemon_version": env!("CARGO_PKG_VERSION"),
@@ -1380,6 +1402,11 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("OUTPROC_ATTACH_FAILED", msg.clone())
         }
         WrapError::OutProcSlotClosed(msg) => ProtocolError::new("OUTPROC_SLOT_CLOSED", msg.clone()),
+        // ランタイム device switch（`SelectAudioDevice`・#484 D2）が実行できない状態
+        // （capture 有効中の明示拒否・audio owner thread 未生存 = test backend 等）。
+        WrapError::AudioDeviceSwitchUnavailable(msg) => {
+            ProtocolError::new("AUDIO_DEVICE_SWITCH_UNAVAILABLE", msg.clone())
+        }
     }
 }
 

@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.281 feat(engine): 走行中のオーディオデバイス切替 #484 D2 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（Codex + Sonnet 協働・実機切替 11〜99ms）
+
+**内容**:
+- native: `RenderState`（link/insert_buses/post）を Arc<Mutex> で callback と制御スレッドが
+  共有（callback は try_lock・競合時は zero-fill + render_contentions カウンタ）。
+  `rebuild_output_stream()` が同じ Engine/RenderState で新デバイスの stream を再構築
+- daemon: **audio owner thread** 設計 — `cpal::Stream` は !Send のため、stream 所有を
+  専用 OS スレッドに固定し、EngineWrap は Send+Sync な mpsc Sender だけ持つ。
+  `SelectAudioDevice` RPC（空文字 = 既定へ）。全 6 feature 変種に一様適用
+- capture 有効時は AUDIO_DEVICE_SWITCH_UNAVAILABLE で明示拒否（正直エラー）
+- TS: daemon-client / rust-engine-player に selectAudioDevice 公開
+
+**実機**: sine ループ再生中にスピーカー ⇔ Pro Tools Aggregate ⇔ 既定を切替 —
+99ms/34ms/11ms・uptime 連続・loaded_samples/active_plays 保持・daemon 無再起動。
+
+**残（D2.5）**: Engine ビュー/MCP からの即時切替接続 — 拡張 → 走行中 daemon への制御
+チャネルが未存在（engine とは DSL-eval stdin のみ）。`//#selectAudioDevice` メタ行
+（#456 の前例踏襲）で橋渡しする設計を提案として記録。
+
+Refs #484
+
+
 ### 6.280 feat(orbitstudio): Engine ビューにデバイス表示/選択 #484 D3 (Jul 17, 2026)
 
 **Date**: 2026-07-17

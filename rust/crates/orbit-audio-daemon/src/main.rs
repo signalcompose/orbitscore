@@ -8,13 +8,14 @@
 //!
 //! 起動失敗時は stderr に 1 行 JSON を出して非ゼロ exit code で終了する。
 
-use orbit_audio_daemon::engine_wrap::EngineWrap;
+use orbit_audio_daemon::engine_wrap::{DeviceSwitchRequest, EngineWrap, WrapError};
 use orbit_audio_daemon::protocol::{
     Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC, ERROR_SEVERITY_FATAL,
     EVENT_DAEMON_ERROR, PROTOCOL_VERSION,
 };
 use orbit_audio_daemon::server;
 use serde_json::json;
+use std::sync::Arc;
 
 // 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
 // の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
@@ -84,8 +85,11 @@ async fn run() -> Result<(), i32> {
     // （`engine_wrap::device_name_from_env` が capture_path_from_env と同じ層分けで読む）。
     apply_audio_device_arg(std::env::args().skip(1));
 
-    // 1. Engine を起動（audio device 取得）
-    let (engine, _stream_guard) = match EngineWrap::start() {
+    // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
+    // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
+    // thread"）へ委譲する — `cpal::Stream` は `!Send` なので、以降 tokio worker 間を自由に飛び回る
+    // 通常の async task にはハンドルを一切持ち込めない。
+    let engine = match start_engine_with_device_switch() {
         Ok(e) => e,
         Err(e) => {
             report_startup_failure(ProtocolError::new("DEVICE_CONFIG_ERROR", e.to_string()));
@@ -121,6 +125,55 @@ async fn run() -> Result<(), i32> {
     // 4. accept loop
     server::serve(bound.listener, engine).await;
     Ok(())
+}
+
+/// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
+/// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
+/// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。
+///
+/// 以後の `SelectAudioDevice` RPC は `EngineWrap::select_audio_device` → `mpsc` 経由でこの thread に
+/// 委譲され、この thread が [`EngineWrap::apply_device_switch`] で実際の cpal `Device`/`Stream` 差し替え
+/// を行う。thread は `switch_rx` が close する（= `engine.device_switch_tx` を保持する最後の `Arc`
+/// が drop される）まで無期限に生存し、`_guard`（`StreamGuard`）を握り続ける — 既存の「`main()` の
+/// ローカル変数が daemon プロセス終了まで guard を握る」という寿命モデルと同一。
+fn start_engine_with_device_switch() -> Result<Arc<EngineWrap>, WrapError> {
+    let (switch_tx, switch_rx) = std::sync::mpsc::channel::<DeviceSwitchRequest>();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Arc<EngineWrap>, WrapError>>();
+
+    std::thread::Builder::new()
+        .name("orbit-audio-owner".into())
+        .spawn(move || {
+            let (engine, mut guard) = match EngineWrap::start() {
+                Ok(pair) => pair,
+                Err(e) => {
+                    // ready_rx 側が既に drop されていても（呼び出し元が別経路で失敗した等）
+                    // send 失敗は無視してよい — 報告先が無いだけで、この thread はそのまま終了する。
+                    let _ = ready_tx.send(Err(e));
+                    return;
+                }
+            };
+            engine.install_device_switch_channel(switch_tx);
+            if ready_tx.send(Ok(engine.clone())).is_err() {
+                // 呼び出し元が既に諦めている（recv 側 drop）。stream 起動には成功しているので、
+                // 静かに guard を保持したまま待ち受けを続ける意味はない — 即座に終了して stream を
+                // 閉じる（プロセス自体は起動失敗として既に exit 済みのはず）。
+                return;
+            }
+            // switch_rx: 要求が来る限り処理し続ける。`engine`（延いては `device_switch_tx` の
+            // Sender clone）が全て drop されるとこの for ループは自然終了するが、`Arc<EngineWrap>`
+            // は `server::serve` の accept loop タスクが保持し続けるため、実運用ではプロセスが
+            // 生きている間ずっとブロックしたままになる（既存の「グレースフルシャットダウン機構が
+            // 無い」という #448 既知事項と同じ前提）。
+            for req in switch_rx {
+                let result = engine.apply_device_switch(&mut guard, req.device);
+                let _ = req.reply.send(result);
+            }
+        })
+        .expect("spawn audio owner thread");
+
+    ready_rx
+        .recv()
+        .expect("audio owner thread exited before reporting readiness")
 }
 
 /// `--audio-device <name>` を argv から抽出する純関数（#484 D1）。値が欠けている（末尾で

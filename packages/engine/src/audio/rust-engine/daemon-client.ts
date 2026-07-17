@@ -431,13 +431,28 @@ export class DaemonClient extends EventEmitter {
   }
 
   /**
-   * cpal output device 一覧を daemon から取得する（#484 D1）。ランタイム切替（`SelectAudioDevice`）
-   * は D2 scope・未実装。ここは列挙のみで、実際の選択は daemon 起動引数（`--audio-device`）で行う。
+   * cpal output device 一覧を daemon から取得する（#484 D1）。ランタイム切替は
+   * {@link DaemonClient.selectAudioDevice}（#484 D2）で行う。
    */
   async listAudioDevices(): Promise<AudioDeviceListEntry[]> {
     const result = await this.request('ListAudioDevices', {})
     const devices = result.devices
     return Array.isArray(devices) ? (devices as AudioDeviceListEntry[]) : []
+  }
+
+  /**
+   * daemon プロセスを再起動せずに出力デバイスを切り替える（#484 D2）。`device` は
+   * `listAudioDevices()` が返す `name`、または空文字列（システム既定へ縮退）。切替中の短い
+   * 無音ギャップは許容される仕様（daemon 側で render state ごと新 stream へ引き継ぐ）。
+   *
+   * `ORBIT_CAPTURE_WAV` で daemon が録音中の場合は daemon 側が明示的に拒否する
+   * （`AUDIO_DEVICE_SWITCH_UNAVAILABLE`）— 継続不可のため、この場合は daemon 再起動が必要。
+   *
+   * @returns 実際に適用されたデバイス名（`"system default"` を含みうる）。
+   */
+  async selectAudioDevice(device: string): Promise<string> {
+    const result = await this.request('SelectAudioDevice', { device })
+    return typeof result.device === 'string' ? result.device : device
   }
 
   /**

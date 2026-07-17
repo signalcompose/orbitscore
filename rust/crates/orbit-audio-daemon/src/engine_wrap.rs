@@ -88,6 +88,11 @@ pub enum WrapError {
     /// OOP slot が永久に closed（起動インフラの失敗）。
     #[error("out-of-process slot closed: {0}")]
     OutProcSlotClosed(String),
+    /// ランタイムのオーディオデバイス切替（`SelectAudioDevice`・#484 D2）が実行できない状態。
+    /// capture（`ORBIT_CAPTURE_WAV`）有効時の明示拒否、または `StreamGuard` 未生存（test backend 等）
+    /// の場合に返す。cpal 側の実失敗（device open 失敗等）は `Output`（`OutputError` 経由）に別れる。
+    #[error("audio device switch unavailable: {0}")]
+    AudioDeviceSwitchUnavailable(String),
 }
 
 /// 共有可能なエンジン wrapper。
@@ -169,6 +174,21 @@ pub struct EngineWrap {
     /// producer 側を別スレッドへ outsource せず常に `&self` 経由で `EngineWrap` 自身が直接書くため、
     /// `Arc` clone による cross-thread 共有が不要で、プレーンな `AtomicU64` で足りる。
     plugin_event_ring_overflow_count: AtomicU64,
+    /// device switch（#484 D2）: `StreamGuard`（延いては `cpal::Stream`）を排他所有する専用 OS thread
+    /// （"audio owner thread"・`main.rs` が spawn）への要求チャンネル。`cpal::Stream` は `!Send` なので
+    /// `EngineWrap`（`Arc` 共有で `Send + Sync` 必須）にはハンドルを一切持たせられない — 代わりに
+    /// `Send + Sync` な `mpsc::Sender` だけを持ち、実際の device 差し替え（[`OutputStream`] の入れ替え）
+    /// は要求を受けた owner thread 自身が [`EngineWrap::apply_device_switch`] で行う。`start_with`
+    /// （test backend）経路では未設定（`None`）のまま — `select_audio_device` は
+    /// `AudioDeviceSwitchUnavailable` を返す。
+    device_switch_tx: Mutex<Option<std::sync::mpsc::Sender<DeviceSwitchRequest>>>,
+    /// device switch（#484 D2）: 起動時に解決した `buffer_frames`（gated stale-rate harness 用の
+    /// 明示指定 or `None`=device 既定）。`rebuild_output_stream` に同じ値を渡し、switch 前後で
+    /// バッファサイズ設定がドリフトしないようにする。
+    output_buffer_frames: Mutex<Option<u32>>,
+    /// device switch（#484 D2）: 起動時に得た callback-duration 統計 Arc（`post` 有りの variant のみ
+    /// `Some`）。switch 後の新 stream にも同じ Arc を渡し、計測を継続させる（カウンタリセットしない）。
+    output_cb_stats: Mutex<Option<Arc<orbit_audio_native::CallbackTimeStats>>>,
     /// LinkAudio egress の control-side ハンドル（feature `link-audio` 専用・A4-2b-2）。
     /// reg-ring push / mpsc send が内部可変性（`&mut LinkAudioControl`）を要する一方、`EngineWrap`
     /// は `Arc` 共有で `&self` しか持てない。`Mutex` で内包することで `register_link_audio_channel`
@@ -1330,7 +1350,13 @@ pub struct StreamGuard {
     /// stream 停止後の child guard 2つと同じ独立性）。
     #[cfg(feature = "outproc-instrument")]
     _outproc_instrument_teardown: crate::outproc_instrument::OutProcInstrumentTeardownGuard,
-    _stream: OutputStream,
+    /// device switch（#484 D2）: `cpal::Stream`（`OutputStream` 内部）は `!Send` のため、`EngineWrap`
+    /// （`Arc` 共有・tokio task を跨ぐため `Send + Sync` 必須）には一切保持させない。`StreamGuard` は
+    /// 従来どおり単一の "audio owner thread"（`main.rs` が spawn する専用 OS thread）だけがローカル
+    /// 変数として所有し続け、switch は `mpsc` 経由でその thread 上に処理を委譲する
+    /// （[`EngineWrap::apply_device_switch`]）。**field 順は変わらず load-bearing**（従来の `_stream`
+    /// と同じ位置）。
+    stream: OutputStream,
     #[cfg(feature = "link-audio")]
     _link: Option<crate::link_audio::LinkAudioGuard>,
     /// clap-host: stream 停止 **後** に drop され、専用スレッドを停止 → `ClapHost::shutdown()` で
@@ -1355,10 +1381,18 @@ pub struct StreamGuard {
 impl StreamGuard {
     /// capture seam（#307 realtime）: capture 有効時のみ producer-side drop 累積を返す（無効は `None`）。
     /// `Some(0)` は録音健全・`> 0` は録音破損（検証 invalid）。gated 検証ハーネスが teardown 前に
-    /// assert する（`_stream: OutputStream` へ委譲）。全 feature variant が `_stream` を持つので共通。
+    /// assert する（`stream: OutputStream` へ委譲）。全 feature variant が `stream` を持つので共通。
     pub fn capture_drops(&self) -> Option<u64> {
-        self._stream.capture_drops()
+        self.stream.capture_drops()
     }
+}
+
+/// device switch（#484 D2）: `EngineWrap::select_audio_device`（任意スレッド・`Send`）から
+/// audio owner thread（`StreamGuard` を所有する専用 OS thread）へ送る要求。`reply` は
+/// `std::sync::mpsc::Sender` なので、要求元は対応する `Receiver::recv()` で同期的に結果を待てる。
+pub struct DeviceSwitchRequest {
+    pub device: Option<String>,
+    pub reply: std::sync::mpsc::Sender<Result<String, WrapError>>,
 }
 
 /// 生の env 値（`Some(raw)`）を capture 出力先 [`PathBuf`] へ解決する純関数（`capture_path_from_env`
@@ -1426,7 +1460,9 @@ impl EngineWrap {
             device_name_from_env(),
         )?;
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
-        Ok((wrap, StreamGuard { _stream: stream }))
+        let guard = StreamGuard { stream };
+        wrap.record_stream_config(None, None);
+        Ok((wrap, guard))
     }
 
     /// feature `link-audio` 版: cpal 出力を LinkAudio egress 経路付きで起動し、GPL consumer thread を
@@ -1456,13 +1492,12 @@ impl EngineWrap {
             .link
             .lock()
             .map_err(|_| WrapError::LinkAudio("link mutex poisoned".into()))? = Some(control);
-        Ok((
-            wrap,
-            StreamGuard {
-                _stream: stream,
-                _link: Some(link_guard),
-            },
-        ))
+        let guard = StreamGuard {
+            stream,
+            _link: Some(link_guard),
+        };
+        wrap.record_stream_config(None, None);
+        Ok((wrap, guard))
     }
 
     /// feature `clap-host` 版（Issue #340）: cpal 出力を CLAP master-bus post-processor 経路付きで
@@ -1502,19 +1537,18 @@ impl EngineWrap {
             loaded_role: None,
             event_tx: parts.event_producer,
             stats: parts.stats,
-            cb_stats,
+            cb_stats: cb_stats.clone(),
         });
-        Ok((
-            wrap,
-            StreamGuard {
-                _clap_teardown: crate::clap_host::ClapTeardownGuard::new(
-                    parts.teardown_requested,
-                    parts.teardown_done,
-                ),
-                _stream: stream,
-                _clap_thread: thread_guard,
-            },
-        ))
+        let guard = StreamGuard {
+            _clap_teardown: crate::clap_host::ClapTeardownGuard::new(
+                parts.teardown_requested,
+                parts.teardown_done,
+            ),
+            stream,
+            _clap_thread: thread_guard,
+        };
+        wrap.record_stream_config(None, Some(cb_stats));
+        Ok((wrap, guard))
     }
 
     /// feature `outproc-effect` 版（γ M1 PR-C・Issue #359）: cpal 出力を OOP effect master-bus
@@ -1617,7 +1651,7 @@ impl EngineWrap {
             .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))? =
             Some(OutProcControl {
                 stats,
-                cb_stats,
+                cb_stats: cb_stats.clone(),
                 child_slot: Arc::downgrade(&child_slot),
                 bus_slots: HashMap::new(),
                 bus_stats: HashMap::new(),
@@ -1655,16 +1689,15 @@ impl EngineWrap {
         }
 
         // 7. StreamGuard（field 順 = teardown 順）。
-        Ok((
-            wrap,
-            StreamGuard {
-                _outproc_teardown: OutProcTeardownGuard::new(teardown_requested, teardown_done),
-                _outproc_bus_teardowns: bus_teardowns,
-                _stream: stream,
-                _child_guard: child_slot,
-                _bus_child_guards: bus_child_guards,
-            },
-        ))
+        let guard = StreamGuard {
+            _outproc_teardown: OutProcTeardownGuard::new(teardown_requested, teardown_done),
+            _outproc_bus_teardowns: bus_teardowns,
+            stream,
+            _child_guard: child_slot,
+            _bus_child_guards: bus_child_guards,
+        };
+        wrap.record_stream_config(cfg.buffer_frames, Some(cb_stats));
+        Ok((wrap, guard))
     }
 
     /// feature `outproc-instrument` production entry point. Configuration is fixed at daemon
@@ -1736,10 +1769,11 @@ impl EngineWrap {
             stats.clone(),
         ));
 
-        let (engine, stream, stream_stats, _cb_stats) =
+        let buffer_frames = cfg.buffer_frames;
+        let (engine, stream, stream_stats, cb_stats) =
             orbit_audio_native::start_default_output_with_clap(
                 processor,
-                cfg.buffer_frames,
+                buffer_frames,
                 capture_path_from_env(),
                 device_name_from_env(),
             )
@@ -1766,17 +1800,16 @@ impl EngineWrap {
             child_slot: Arc::downgrade(&child_slot),
         });
 
-        Ok((
-            wrap,
-            StreamGuard {
-                _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
-                    teardown_requested,
-                    teardown_done,
-                ),
-                _stream: stream,
-                _child_guard: child_slot,
-            },
-        ))
+        let guard = StreamGuard {
+            _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
+                teardown_requested,
+                teardown_done,
+            ),
+            stream,
+            _child_guard: child_slot,
+        };
+        wrap.record_stream_config(buffer_frames, Some(cb_stats));
+        Ok((wrap, guard))
     }
 
     /// both build の buffer size を解決する。両方指定され値が異なる場合は、RT 設定の暗黙優先を
@@ -1895,7 +1928,7 @@ impl EngineWrap {
             .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))? =
             Some(OutProcControl {
                 stats: effect_stats,
-                cb_stats: effect_cb_stats,
+                cb_stats: effect_cb_stats.clone(),
                 child_slot: Arc::downgrade(&effect_slot),
                 bus_slots: HashMap::new(),
                 bus_stats: HashMap::new(),
@@ -1939,21 +1972,20 @@ impl EngineWrap {
             control.bus_sends = bus_sends;
         }
 
-        Ok((
-            wrap,
-            StreamGuard {
-                _outproc_teardown: OutProcTeardownGuard::new(effect_stop, effect_done),
-                _outproc_bus_teardowns: bus_teardowns,
-                _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
-                    instrument_stop,
-                    instrument_done,
-                ),
-                _stream: stream,
-                _child_guard: effect_slot,
-                _bus_child_guards: bus_child_guards,
-                _instrument_child_guard: instrument_slot,
-            },
-        ))
+        let guard = StreamGuard {
+            _outproc_teardown: OutProcTeardownGuard::new(effect_stop, effect_done),
+            _outproc_bus_teardowns: bus_teardowns,
+            _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
+                instrument_stop,
+                instrument_done,
+            ),
+            stream,
+            _child_guard: effect_slot,
+            _bus_child_guards: bus_child_guards,
+            _instrument_child_guard: instrument_slot,
+        };
+        wrap.record_stream_config(buffer_frames, Some(effect_cb_stats));
+        Ok((wrap, guard))
     }
 
     #[cfg(all(
@@ -2013,6 +2045,9 @@ impl EngineWrap {
             outproc_instrument_respawns: Arc::new(AtomicU64::new(0)),
             outproc_instrument_measurement_invalid: Arc::new(AtomicBool::new(false)),
             plugin_event_ring_overflow_count: AtomicU64::new(0),
+            device_switch_tx: Mutex::new(None),
+            output_buffer_frames: Mutex::new(None),
+            output_cb_stats: Mutex::new(None),
             // 本番 `start()`（feature 時）が spawn 後に Some を注入する。test backend 経路は None。
             #[cfg(feature = "link-audio")]
             link: Mutex::new(None),
@@ -2026,6 +2061,111 @@ impl EngineWrap {
             #[cfg(feature = "outproc-instrument")]
             outproc_instrument: Mutex::new(None),
         })
+    }
+
+    /// device switch（#484 D2）: 各 `start*()` variant 共通の後処理。`buffer_frames`/`cb_stats` を
+    /// `self` に保存する（`apply_device_switch` が switch 時に同じ値を再利用し、バッファサイズ設定・
+    /// callback-duration 計測の連続性を保つ）。`StreamGuard` 自体の所有権はこれまでどおり呼び出し側
+    /// （`main.rs` の audio owner thread ローカル変数）が持つ — ここでは触らない。
+    fn record_stream_config(
+        self: &Arc<Self>,
+        buffer_frames: Option<u32>,
+        cb_stats: Option<Arc<orbit_audio_native::CallbackTimeStats>>,
+    ) {
+        if let Ok(mut slot) = self.output_buffer_frames.lock() {
+            *slot = buffer_frames;
+        }
+        if let Ok(mut slot) = self.output_cb_stats.lock() {
+            *slot = cb_stats;
+        }
+    }
+
+    /// device switch（#484 D2）: `main.rs` の audio owner thread が `EngineWrap::start()` 直後に
+    /// 一度だけ呼ぶ。以後、[`Self::select_audio_device`] からの要求はこのチャンネル経由で
+    /// owner thread（`tx` の受け手側 `rx` を loop で回すコード）に届く。
+    pub fn install_device_switch_channel(&self, tx: std::sync::mpsc::Sender<DeviceSwitchRequest>) {
+        if let Ok(mut slot) = self.device_switch_tx.lock() {
+            *slot = Some(tx);
+        }
+    }
+
+    /// device switch（#484 D2）: 制御スレッド（RPC handler・`spawn_blocking` 経由）から呼ぶ公開 API。
+    /// 実際の cpal I/O は行わず、audio owner thread へ要求を送って応答を待つだけ（`cpal::Stream` は
+    /// `!Send` のため `EngineWrap` 自身は一切触れない）。
+    ///
+    /// - `device`: `None`/空文字列 = システム既定へ縮退（`resolve_output_device` と同じ規約）。
+    /// - capture（`ORBIT_CAPTURE_WAV`）が有効な場合は明示的に拒否する（継続不可・#484 D2 ブリーフの
+    ///   選択(a)）: capture writer は switch 前の stream 専用に生成されており、新 stream に持ち越すと
+    ///   ring producer が古い stream の drop と一緒に失われるため、無音で録音が壊れるより先に fail する。
+    /// - **ブロッキング呼び出し**: 呼び出し側は `spawn_blocking`（session.rs の他の cpal I/O ハンドラと
+    ///   同じ隔離）から呼ぶこと。RT callback 内からは絶対に呼ばない。
+    pub fn select_audio_device(&self, device: Option<String>) -> Result<String, WrapError> {
+        if capture_path_from_env().is_some() {
+            return Err(WrapError::AudioDeviceSwitchUnavailable(
+                "ORBIT_CAPTURE_WAV is active; runtime device switch is unsupported while \
+                 capture is recording (restart the daemon to change device with capture on)"
+                    .into(),
+            ));
+        }
+        let tx = self
+            .device_switch_tx
+            .lock()
+            .map_err(|_| {
+                WrapError::AudioDeviceSwitchUnavailable("device switch channel poisoned".into())
+            })?
+            .clone()
+            .ok_or_else(|| {
+                WrapError::AudioDeviceSwitchUnavailable(
+                    "no audio owner thread registered (test backend or daemon shutting down)"
+                        .into(),
+                )
+            })?;
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        tx.send(DeviceSwitchRequest {
+            device,
+            reply: reply_tx,
+        })
+        .map_err(|_| {
+            WrapError::AudioDeviceSwitchUnavailable("audio owner thread has exited".into())
+        })?;
+        reply_rx.recv().map_err(|_| {
+            WrapError::AudioDeviceSwitchUnavailable(
+                "audio owner thread dropped the reply channel".into(),
+            )
+        })?
+    }
+
+    /// device switch（#484 D2）: 実際の cpal I/O。**audio owner thread 上でのみ呼ぶこと**
+    /// （`cpal::Stream` の `!Send` 制約を型システムではなく運用で守る seam — `&mut StreamGuard` を
+    /// 要求することで、呼び出し側が `StreamGuard` を所有するその thread からしか呼べないよう
+    /// 誘導する）。`Engine`（scheduler 状態）・OOP effect/instrument child・plugin routing は
+    /// 一切触らない（`orbit_audio_native::RenderState` を新 stream に丸ごと引き継ぐ）。
+    pub fn apply_device_switch(
+        &self,
+        guard: &mut StreamGuard,
+        device: Option<String>,
+    ) -> Result<String, WrapError> {
+        let device_label = match &device {
+            Some(name) if !name.trim().is_empty() => name.clone(),
+            _ => "system default".to_string(),
+        };
+        let render_state = guard.stream.render_state();
+        let buffer_frames = self.output_buffer_frames.lock().ok().and_then(|g| *g);
+        let cb_stats = self.output_cb_stats.lock().ok().and_then(|g| g.clone());
+
+        let new_stream = orbit_audio_native::rebuild_output_stream(
+            render_state,
+            self.engine.clone(),
+            self.stream_stats.clone(),
+            cb_stats,
+            buffer_frames,
+            device,
+        )?;
+        // 新 stream が再生開始した後にだけ古い stream を差し替える（`rebuild_output_stream` は
+        // 内部で `stream.play()` 済みを返す）。切替が失敗した場合はこの代入に到達せず、古い stream が
+        // そのまま生き続ける＝無音のまま失敗しない。
+        guard.stream = new_stream;
+        Ok(device_label)
     }
 
     /// 名前付き LinkAudio channel を登録する（A4-2b-2・feature `link-audio` 専用）。
@@ -4278,6 +4418,51 @@ mod capture_path_tests {
         assert_eq!(
             resolve_capture_path(Some("  /tmp/out.wav  ".to_string())),
             Some(PathBuf::from("/tmp/out.wav"))
+        );
+    }
+}
+
+/// device switch（#484 D2）: `select_audio_device` の非 cpal 分岐（capture 拒否・
+/// owner thread 未生存）を `StubBackend`（実 cpal I/O を伴わない test backend）で検証する。
+/// 実際の cpal `Device`/`Stream` 差し替えそのもの（`apply_device_switch`）は実機 gated harness の
+/// 領域（unit test では検証不能）。
+#[cfg(test)]
+mod select_audio_device_tests {
+    use super::EngineWrap;
+    use crate::backend::StubBackend;
+
+    /// capture-active（`ORBIT_CAPTURE_WAV`）拒否と、audio owner thread 未登録（`start_with` /
+    /// test backend 経路）拒否の両方を **1 テスト関数内**で順に検証する。`ORBIT_CAPTURE_WAV` は
+    /// プロセス全体で共有される可変状態なので、別テスト関数に分けて cargo test のデフォルト並列
+    /// 実行に晒すと set/remove がレースする（`named_bus_pool_tests` の既存 env 慣習と同じ落とし穴）。
+    #[test]
+    fn select_audio_device_rejects_capture_active_then_missing_owner_thread() {
+        // SAFETY: テスト専用の単一テスト関数内 env 操作（このテストの実行区間でのみ意味を持つ値）。
+        unsafe {
+            std::env::set_var("ORBIT_CAPTURE_WAV", "/tmp/does-not-matter.wav");
+        }
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let capture_error = wrap
+            .select_audio_device(Some("Any Device".to_string()))
+            .expect_err("capture-active must reject the switch");
+        assert!(
+            format!("{capture_error}").contains("ORBIT_CAPTURE_WAV is active"),
+            "{capture_error}"
+        );
+
+        // capture を無効化すると、`start_with`（test backend）が `install_device_switch_channel`
+        // を一度も呼んでいないため「audio owner thread 未登録」として明示的に reject する
+        // （無音で成功したふりをしない）。
+        unsafe {
+            std::env::remove_var("ORBIT_CAPTURE_WAV");
+        }
+        let no_owner_error = wrap
+            .select_audio_device(None)
+            .expect_err("no owner thread must reject the switch");
+        assert!(
+            format!("{no_owner_error}").contains("no audio owner thread"),
+            "{no_owner_error}"
         );
     }
 }
