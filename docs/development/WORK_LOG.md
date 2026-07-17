@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.284 fix(engine): VST3 effect の名前解決/補完受理 #504 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 実装（PR #505・レビュー1名+検証1名で収束・実カタログ検証済み）
+
+**内容**:
+- owner 実機で `sum("bus").effect("` の補完が 0 件 → 原因 = effect に残る「CLAP のみ」ゲート（spec PH.3 の古い記述）。daemon は VST3 effect 配線済み（#397/#445・select_child_exe の拡張子読み替え）のため spec 先行更新の上で撤去
+- PC.2 に `format/名前` 限定記法（clap/Name・vst3/Name）。format 名と同名 vendor が両方成立する場合は明示の曖昧性エラー
+- 補完: 同名衝突は vendor+name キーで format 分割・残衝突は vendor/name ラベルにフォールバック。実カタログで effect 候補 71 件
+- メソッド補完の静的リストに現行 API（effect/instrument/output/sum/aux）追加 — mixer graph 以前のリストのままで sum の後に effect が出なかった
+- 派生記録: #474 = 右クリック本命は「挿してあるエフェクトの上で UI を開く」・挿入は補完 retrigger の疑似ドリルダウン・#495 に文脈判定要件が3件具体化
+
+**関連**: #504（Closes）・#463・#474・#495
+
+---
+
 ### 6.281 feat(engine): 走行中のオーディオデバイス切替 #484 D2 (Jul 17, 2026)
 
 **Date**: 2026-07-17
