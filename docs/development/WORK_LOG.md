@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+**#479 の調査結論（実測）**: ParentWatch のコードバグではなく **stale バイナリ**が真因。
+orphan ×3 は全て #462 修正前のビルド（バイナリ内に ParentWatch 文字列 0 ヒット・mtime が
+修正コミットより古い）。現行ソースの fresh build は daemon SIGKILL 後 1 秒以内に child 退出
+（実機 fail-before/pass-after 確認）。4 child crate は同一機構・divergence なし。
+
+**対策**: copy-daemon-bin.sh が cargo の使える環境では bundle 前に daemon + 全 child を
+release 再ビルドする（incremental・実測 6 秒）。cargo 不在は従来の best-effort（警告付き）。
+検証は機能テストで実施 —
+bundled release バイナリで daemon SIGKILL → 元 child が退出(PASS)・TS respawn 機構が
+新 daemon + effect を自動復元することまで確認(release はシンボル strip のため strings
+検査は無効・当初の文字列確認記述を訂正)。
+
+Refs #487 #479 #462
 ### 6.274 fix(mcp): analyze_audio — soundDetected 偽陰性修正 + 窓分析 #478 (Jul 17, 2026)
 ### 6.273 chore(build): bundle 前に daemon+child を再ビルド #487（#479 の真因対策）(Jul 17, 2026)
 ### 6.272 fix(mcp): stale dist（base 不一致）検出ガード #480 (Jul 17, 2026)
@@ -53,21 +66,6 @@ RUN が選択外）が混入していた。競合自体は構造的に実在（�
 
 Refs #476
 =======
-**#479 の調査結論（実測）**: ParentWatch のコードバグではなく **stale バイナリ**が真因。
-orphan ×3 は全て #462 修正前のビルド（バイナリ内に ParentWatch 文字列 0 ヒット・mtime が
-修正コミットより古い）。現行ソースの fresh build は daemon SIGKILL 後 1 秒以内に child 退出
-（実機 fail-before/pass-after 確認）。4 child crate は同一機構・divergence なし。
-
-**対策**: copy-daemon-bin.sh が cargo の使える環境では bundle 前に daemon + 全 child を
-release 再ビルドする（incremental・実測 6 秒）。cargo 不在は従来の best-effort（警告付き）。
-検証は機能テストで実施 —
-bundled release バイナリで daemon SIGKILL → 元 child が退出(PASS)・TS respawn 機構が
-新 daemon + effect を自動復元することまで確認(release はシンボル strip のため strings
-検査は無効・当初の文字列確認記述を訂正)。
-
-Refs #487 #479 #462
->>>>>>> c5e6194 (chore(build): rebuild daemon + child binaries before bundling (#487))
-=======
 **内容（LLM の「耳」の強化）**:
 - soundDetected: 旧判定は ≥3 onsets を要求し one-shot 1 発（peak 0.7）を false と誤報
   （品質チェック E2E で実測）→ ≥1 onset + peak > 0.05 に修正
@@ -80,6 +78,19 @@ wav-analysis/docs-http 72 tests green。
 
 Refs #478
 >>>>>>> 482f98b (fix(mcp): analyze_audio — fix soundDetected false negatives, add windowed series (#478))
+=======
+### 6.275 docs(spec): MX.2 の「未宣言名はエラー」を実挙動に整合 #477 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ spec 修正（トリアージ = spec 側が誤り）
+
+**内容**: 品質チェック E2E で MX.2「未宣言名はエラー」と実装（sum 非該当名は LinkAudio
+channel として記録 + 警告 = §8.1.2 の既存挙動）の矛盾を検出（#477）。トリアージ:
+「後から global.linkAudio() を宣言する」既存ワークフローを壊す実装厳格化より、spec の
+overstatement を訂正するのが正 — MX.2 を「記録 + 警告（ハードエラーではない）」に修正。
+
+Refs #477
+>>>>>>> d57753f (docs(spec): align MX.2 undeclared-output-name wording with actual behavior (#477))
 
 
 ### 6.270 chore(qa): docs-driven 実機 E2E + 学習サイト最新化 #481 (Jul 17, 2026)
