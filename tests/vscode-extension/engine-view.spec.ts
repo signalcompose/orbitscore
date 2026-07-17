@@ -5,10 +5,12 @@ import {
   buildDeviceSectionNode,
   buildEngineStatusNode,
   buildRootNodes,
+  buildRecoverySectionNode,
   deviceNameFromNodeId,
   deviceSectionChildren,
   parseSelectAudioDeviceResultLine,
   resolveDeviceClickAction,
+  recoverySectionChildren,
   translateSelectAudioDeviceError,
   type EngineViewDevice,
 } from '../../packages/vscode-extension/src/engine-view'
@@ -59,9 +61,39 @@ describe('buildDeviceSectionNode', () => {
 })
 
 describe('buildRootNodes', () => {
-  it('returns engine-status then device-section', () => {
+  it('returns engine-status, settings, and recovery nodes', () => {
     const nodes = buildRootNodes(true)
-    expect(nodes.map((n) => n.kind)).toEqual(['engine-status', 'debug-toggle', 'device-section'])
+    expect(nodes.map((n) => n.kind)).toEqual([
+      'engine-status',
+      'debug-toggle',
+      'device-section',
+      'recovery-section',
+    ])
+  })
+})
+
+describe('recovery nodes', () => {
+  it('builds a collapsed recovery section', () => {
+    expect(buildRecoverySectionNode()).toMatchObject({
+      kind: 'recovery-section',
+      collapsible: true,
+      collapsibleState: 'collapsed',
+    })
+  })
+
+  it('exposes restart and reload actions', () => {
+    expect(recoverySectionChildren()).toEqual([
+      expect.objectContaining({
+        id: 'recovery-action:orbitscore.restartEngine',
+        label: 'Restart Engine',
+        description: 'Force-restart a stuck engine',
+      }),
+      expect.objectContaining({
+        id: 'recovery-action:orbitscore.reloadWindow',
+        label: 'Reload Window',
+        description: 'Restart the extension',
+      }),
+    ])
   })
 })
 

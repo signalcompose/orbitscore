@@ -22,6 +22,8 @@ export type EngineViewNodeKind =
   | 'engine-status'
   | 'debug-toggle'
   | 'device-section'
+  | 'recovery-section'
+  | 'recovery-action'
   | 'device'
   | 'device-loading'
   | 'device-error'
@@ -37,6 +39,8 @@ export interface EngineViewNode {
   selected?: boolean
   /** Whether the node should render as an expandable tree item. */
   collapsible: boolean
+  /** Initial expansion for collapsible nodes. */
+  collapsibleState?: 'expanded' | 'collapsed'
 }
 
 /** Root-level nodes shown at all times once the engine view has a live TreeDataProvider. */
@@ -45,6 +49,7 @@ export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
     buildEngineStatusNode(engineRunning),
     buildDebugToggleNode(false),
     buildDeviceSectionNode(),
+    buildRecoverySectionNode(),
   ]
 }
 
@@ -76,6 +81,41 @@ export function buildDeviceSectionNode(): EngineViewNode {
     label: 'Output Device',
     collapsible: true,
   }
+}
+
+export function buildRecoverySectionNode(): EngineViewNode {
+  return {
+    kind: 'recovery-section',
+    id: 'recovery-section',
+    label: 'Recovery',
+    collapsible: true,
+    collapsibleState: 'collapsed',
+  }
+}
+
+/** Visible emergency actions, kept pure so their presentation is unit-tested. */
+export function recoverySectionChildren(): EngineViewNode[] {
+  return [
+    {
+      kind: 'recovery-action',
+      id: 'recovery-action:orbitscore.restartEngine',
+      label: 'Restart Engine',
+      description: 'Force-restart a stuck engine',
+      collapsible: false,
+    },
+    {
+      kind: 'recovery-action',
+      id: 'recovery-action:orbitscore.reloadWindow',
+      label: 'Reload Window',
+      description: 'Restart the extension',
+      collapsible: false,
+    },
+  ]
+}
+
+export function recoveryCommandFromNodeId(nodeId: string): string | null {
+  if (!nodeId.startsWith('recovery-action:')) return null
+  return nodeId.slice('recovery-action:'.length)
 }
 
 /** Fetch state for the device list, populated by `extension.ts` when the

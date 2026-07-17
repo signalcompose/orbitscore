@@ -40,6 +40,8 @@ import {
   buildRootNodes,
   deviceNameFromNodeId,
   deviceSectionChildren,
+  recoveryCommandFromNodeId,
+  recoverySectionChildren,
   resolveDeviceClickAction,
   translateSelectAudioDeviceError,
   type DeviceFetchState,
@@ -1393,7 +1395,9 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
     const item = new vscode.TreeItem(
       node.label,
       node.collapsible
-        ? vscode.TreeItemCollapsibleState.Expanded
+        ? node.collapsibleState === 'collapsed'
+          ? vscode.TreeItemCollapsibleState.Collapsed
+          : vscode.TreeItemCollapsibleState.Expanded
         : vscode.TreeItemCollapsibleState.None,
     )
     item.id = node.id
@@ -1401,7 +1405,6 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
     switch (node.kind) {
       case 'engine-status':
         item.iconPath = new vscode.ThemeIcon(isEngineRunning() ? 'debug-stop' : 'play')
-        item.contextValue = 'engine-status'
         item.command = { command: 'orbitscore.engineViewToggleEngine', title: 'Toggle Engine' }
         break
       case 'debug-toggle':
@@ -1411,6 +1414,14 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
       case 'device-section':
         item.iconPath = new vscode.ThemeIcon('list-selection')
         break
+      case 'recovery-section':
+        item.iconPath = new vscode.ThemeIcon('tools')
+        break
+      case 'recovery-action': {
+        const command = recoveryCommandFromNodeId(node.id)
+        if (command) item.command = { command, title: node.label }
+        break
+      }
       case 'device':
         item.iconPath = new vscode.ThemeIcon(node.selected ? 'check' : 'circle-large-outline')
         item.command = {
@@ -1451,6 +1462,7 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
     if (node.kind === 'device-section') {
       return this.getDeviceChildren()
     }
+    if (node.kind === 'recovery-section') return recoverySectionChildren()
     return []
   }
 

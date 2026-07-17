@@ -226,18 +226,6 @@
           "when": "resourceExtname == .orbs",
           "group": "orbitscore"
         }
-      ],
-      "view/item/context": [
-        {
-          "command": "orbitscore.restartEngine",
-          "when": "view == orbitscore.engineView && viewItem == engine-status",
-          "group": "navigation"
-        },
-        {
-          "command": "orbitscore.reloadWindow",
-          "when": "view == orbitscore.engineView && viewItem == engine-status",
-          "group": "navigation@2"
-        }
       ]
     },
     "walkthroughs": [
