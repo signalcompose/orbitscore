@@ -267,8 +267,8 @@ export async function activate(context: vscode.ExtensionContext) {
   // hidden until that server has successfully started.
   docsStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98)
   docsStatusItem.text = '$(book) Docs'
-  docsStatusItem.tooltip = 'Open OrbitScore development docs'
-  docsStatusItem.command = 'orbitscore.openDevDocs'
+  docsStatusItem.tooltip = 'Open the OrbitScore learning site'
+  docsStatusItem.command = 'orbitscore.openDocs'
 
   // Re-evaluate bundle status when user changes the override setting or
   // switches engine kind (#377: kind gates whether scsynth is even resolved).

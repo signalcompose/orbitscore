@@ -136,7 +136,7 @@
     "menus": {
       "editor/title": [
         {
-          "command": "orbitscore.openDevDocs",
+          "command": "orbitscore.openDocs",
           "when": "resourceExtname == .orbs",
           "group": "navigation"
         }
