@@ -13,6 +13,8 @@ import {
   type EditorState,
   type DocumentText,
   type AnalyzeAudioResult,
+  type ListPluginsResult,
+  type RescanPluginsResult,
 } from '../../packages/vscode-extension/src/mcp-server'
 
 /**
@@ -146,6 +148,16 @@ function createStubHandlers(overrides: Partial<OrbitScoreToolHandlers> = {}): {
           soundDetected: false,
         },
       }
+      return result
+    },
+    listPlugins: () => {
+      record('listPlugins', [])
+      const result: ListPluginsResult = { ok: true, plugins: [] }
+      return result
+    },
+    rescanPlugins: () => {
+      record('rescanPlugins', [])
+      const result: RescanPluginsResult = { ok: true, count: 0, skipped: [] }
       return result
     },
   }
@@ -333,7 +345,7 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect((res.headers['mcp-session-id'] as string).length).toBeGreaterThan(0)
   })
 
-  it('tools/list contains all 18 tools; evaluate_orbitscore requires code:string', async () => {
+  it('tools/list contains all 20 tools; evaluate_orbitscore requires code:string', async () => {
     const { handlers } = createStubHandlers()
     handle = await startTestServer(handlers)
     const client = new McpTestClient(handle.port)
@@ -365,6 +377,8 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       'get_diagnostics',
       'get_log',
       'analyze_audio',
+      'list_plugins',
+      'rescan_plugins',
     ]
     for (const name of expectedNames) {
       expect(names, `missing tool: ${name}`).toContain(name)
@@ -418,6 +432,72 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(body.result.isError).toBeFalsy()
     expect(JSON.parse(body.result.content[0]!.text)).toEqual(docText)
     expect(getDocumentTextCalled).toBe(true)
+  })
+
+  it('tools/call list_plugins round-trips the catalog entries', async () => {
+    const plugins: ListPluginsResult = {
+      ok: true,
+      plugins: [
+        {
+          name: 'Surge XT',
+          vendor: 'Surge Synth Team',
+          format: 'clap',
+          path: '/clap/SurgeXT.clap',
+          pluginId: 'surge-xt',
+          roles: ['instrument'],
+        },
+      ],
+    }
+    const { handlers } = createStubHandlers({ listPlugins: () => plugins })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await client.toolsCall('list_plugins')
+
+    expect(res.status).toBe(200)
+    const body = res.json as JsonRpcOk<ToolCallResult>
+    expect(body.result.isError).toBeFalsy()
+    expect(JSON.parse(body.result.content[0]!.text)).toEqual(plugins.plugins)
+  })
+
+  it('tools/call list_plugins surfaces isError:true when the catalog is missing', async () => {
+    const { handlers } = createStubHandlers({
+      listPlugins: () => ({ ok: false, error: 'plugin catalog not found' }),
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await client.toolsCall('list_plugins')
+
+    const body = res.json as JsonRpcOk<ToolCallResult>
+    expect(body.result.isError).toBe(true)
+    expect(body.result.content[0]?.text).toMatch(/^error:/)
+  })
+
+  it('tools/call rescan_plugins round-trips the scan summary', async () => {
+    let rescanPluginsCalled = false
+    const { handlers } = createStubHandlers({
+      rescanPlugins: () => {
+        rescanPluginsCalled = true
+        return { ok: true, count: 12, skipped: ['/vst3/NoMetadata.vst3'] }
+      },
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const res = await client.toolsCall('rescan_plugins')
+
+    expect(res.status).toBe(200)
+    const body = res.json as JsonRpcOk<ToolCallResult>
+    expect(body.result.isError).toBeFalsy()
+    expect(JSON.parse(body.result.content[0]!.text)).toEqual({
+      count: 12,
+      skipped: ['/vst3/NoMetadata.vst3'],
+    })
+    expect(rescanPluginsCalled).toBe(true)
   })
 
   it('handler error surfaces as isError:true with text starting with "error:"', async () => {

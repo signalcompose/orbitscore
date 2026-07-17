@@ -29,10 +29,14 @@ import {
   type FileDiagnostics,
   type FlashConfigInput,
   type FlashConfigResult,
+  type ListPluginsResult,
   type McpServerHandle,
   type RegisterMcpServerInput,
+  type RescanPluginsResult,
   type SelectionInput,
 } from './mcp-server'
+import { detectPluginArgContext, filterCatalogEntries } from './plugin-catalog-completion'
+import { loadPluginCatalog, runPluginScan } from './plugin-catalog-reader'
 import {
   colorForSeq,
   findPlayArgRangeForPath,
@@ -54,6 +58,10 @@ let isLiveCodingMode: boolean = false
 let globalInitialized: boolean = false
 // Optional MCP control server (Agent Bridge). Non-null only while running.
 let mcpServerHandle: McpServerHandle | null = null
+// #463 C3: show the "no plugin catalog yet, run rescan" hint at most once per
+// activation (loadPluginCatalog() is cheap but the info popup shouldn't nag on
+// every keystroke while typing an effect()/instrument() argument).
+let pluginCatalogHintShown = false
 
 // let isDebugMode: boolean = false // Debug mode flag
 
@@ -295,6 +303,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
+    vscode.commands.registerCommand('orbitscore.rescanPlugins', rescanPlugins),
     // viewsWelcome コンテンツは view に provider が登録されて初めて描画される
     // （空 TreeView で十分 — 章ツリーの本実装は #451 確定後の follow-up）。
     vscode.window.registerTreeDataProvider('orbitscore.learningView', {
@@ -388,6 +397,8 @@ export async function activate(context: vscode.ExtensionContext) {
           getDiagnostics: (filePath) => getDiagnosticsForAgent(filePath),
           getLog: (lines) => getLogForAgent(lines),
           analyzeAudio: (wavPath, windowMs) => analyzeAudioForAgent(wavPath, windowMs),
+          listPlugins: () => listPluginsForAgent(),
+          rescanPlugins: () => rescanPluginsForAgent(),
           registerMcpServer: (args) => registerMcpServerForAgent(args),
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
@@ -1392,6 +1403,30 @@ function forceKillScsynth() {
   })
 }
 
+/**
+ * "OrbitScore: Rescan Plugin Catalog" command (#463 C1b) — palette + editor
+ * right-click menu. Spawns `orbit-plugin-scan` directly (not via the daemon:
+ * the scanner is an independent crash-isolated binary — see
+ * docs/core/INSTRUCTION_ORBITSCORE_DSL.md §PC.1) and invalidates the
+ * in-memory catalog cache on success so completion picks up the fresh scan.
+ */
+async function rescanPlugins(): Promise<void> {
+  outputChannel?.appendLine('🔎 Rescanning plugin catalog...')
+  const result = await runPluginScan()
+  if (result.ok) {
+    pluginCatalogHintShown = false
+    outputChannel?.appendLine(
+      `✅ Plugin catalog rescanned: ${result.count} plugins (${result.skipped.length} skipped)`,
+    )
+    vscode.window.showInformationMessage(
+      `OrbitScore: rescanned ${result.count} plugins (${result.skipped.length} skipped)`,
+    )
+  } else {
+    outputChannel?.appendLine(`❌ Plugin catalog rescan failed: ${result.error}`)
+    vscode.window.showErrorMessage(`OrbitScore: plugin catalog rescan failed: ${result.error}`)
+  }
+}
+
 /** One SuperCollider-reported audio device (shared shape for the palette QuickPick and the MCP tools). */
 interface DetectedAudioDevice {
   label: string
@@ -2005,6 +2040,31 @@ function forceKillScsynthForAgent(): CommandResult {
   return { ok: true, message: 'kill signal sent' }
 }
 
+/** Read the plugin catalog for the MCP `list_plugins` tool (#463 PC.4). */
+function listPluginsForAgent(): ListPluginsResult {
+  const catalog = loadPluginCatalog()
+  if (!catalog) {
+    return {
+      ok: false,
+      error: 'plugin catalog not found — run "OrbitScore: Rescan Plugin Catalog" first',
+    }
+  }
+  return {
+    ok: true,
+    plugins: catalog.plugins.map((entry) => ({ ...entry, roles: [...entry.roles] })),
+  }
+}
+
+/** Run the scanner for the MCP `rescan_plugins` tool (#463 PC.4/C1b). Shares `runPluginScan` with the command variant above. */
+async function rescanPluginsForAgent(): Promise<RescanPluginsResult> {
+  const result = await runPluginScan()
+  if (!result.ok) {
+    return { ok: false, error: result.error }
+  }
+  pluginCatalogHintShown = false
+  return { ok: true, count: result.count, skipped: [...result.skipped] }
+}
+
 /** List audio devices for the MCP `list_audio_devices` tool. Mirrors `selectAudioDevice`'s guard/resolve steps but returns the list instead of prompting. */
 async function listAudioDevicesForAgent(): Promise<AudioDevicesResult> {
   if (getConfiguredEngineKind() === 'rust') {
@@ -2434,6 +2494,55 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
   )
 
   context.subscriptions.push(completionProvider)
+
+  // Plugin catalog name completion (#463 C3, spec §PC.3). Triggers on `"` but
+  // — per owner requirement 2026-07-17 — must also keep narrowing while the
+  // user types further characters inside the string; VS Code does this
+  // client-side via each item's `range`, so no re-trigger characters are
+  // needed for the common case (registered `"` covers the initial open-quote
+  // fire; detectPluginArgContext itself matches a partial, unclosed string,
+  // so a real re-invocation — e.g. Ctrl+Space — still resolves correctly too).
+  const pluginCompletionProvider = vscode.languages.registerCompletionItemProvider(
+    'orbitscore',
+    {
+      provideCompletionItems(document, position) {
+        const lineText = document.lineAt(position).text
+        const pluginContext = detectPluginArgContext(lineText, position.character)
+        if (!pluginContext) return undefined
+
+        const catalog = loadPluginCatalog()
+        if (!catalog) {
+          if (!pluginCatalogHintShown) {
+            pluginCatalogHintShown = true
+            vscode.window.showInformationMessage(
+              'OrbitScore: no plugin catalog found. Run "OrbitScore: Rescan Plugin Catalog" to enable name completion.',
+            )
+          }
+          return undefined
+        }
+
+        const matches = filterCatalogEntries(
+          catalog.plugins,
+          pluginContext.verb,
+          pluginContext.typed,
+        )
+        const range = new vscode.Range(
+          new vscode.Position(position.line, pluginContext.quoteStartChar),
+          new vscode.Position(position.line, position.character),
+        )
+        return matches.map((entry) => {
+          const item = new vscode.CompletionItem(entry.name, vscode.CompletionItemKind.Value)
+          item.detail = `${entry.vendor} · ${entry.format.toUpperCase()}`
+          item.insertText = entry.name
+          item.range = range
+          item.filterText = entry.name
+          return item
+        })
+      },
+    },
+    '"',
+  )
+  context.subscriptions.push(pluginCompletionProvider)
 }
 
 /**

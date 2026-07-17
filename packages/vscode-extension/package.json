@@ -87,6 +87,12 @@
         "category": "OrbitScore"
       },
       {
+        "command": "orbitscore.rescanPlugins",
+        "title": "OrbitScore: Rescan Plugin Catalog",
+        "icon": "$(refresh)",
+        "category": "OrbitScore"
+      },
+      {
         "command": "orbitscore.openDocs",
         "title": "OrbitScore: Open Learning Site",
         "icon": "$(book)"
@@ -183,6 +189,13 @@
         {
           "command": "orbitscore.stopEngine",
           "when": "false"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "orbitscore.rescanPlugins",
+          "when": "resourceExtname == .orbs",
+          "group": "orbitscore"
         }
       ]
     },

@@ -87,6 +87,7 @@ jobs:
         run: |
           cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument --manifest-path rust/Cargo.toml
           cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-instrument-child --manifest-path rust/Cargo.toml
+          cargo build --release -p orbit-plugin-scan --manifest-path rust/Cargo.toml
 
       - name: Build engine + extension TypeScript
         working-directory: packages/vscode-extension
@@ -149,6 +150,19 @@ jobs:
             fi
             echo "$CHILD_BIN present and executable in packaged .vsix"
           done
+
+          # Plugin catalog scanner (#463 C1b): rescan (palette/context-menu/MCP)
+          # spawns this binary directly, independent of the daemon.
+          SCAN_BIN="$VSIX_CHECK/extension/engine/bin/darwin-arm64/orbit-plugin-scan"
+          if [ ! -f "$SCAN_BIN" ]; then
+            echo "::error::orbit-plugin-scan missing from packaged .vsix at engine/bin/darwin-arm64/ — plugin catalog rescan would fail to start" >&2
+            exit 1
+          fi
+          if [ ! -x "$SCAN_BIN" ]; then
+            echo "::error::orbit-plugin-scan in packaged .vsix is not executable (lost +x bit?)" >&2
+            exit 1
+          fi
+          echo "orbit-plugin-scan present and executable in packaged .vsix"
 
       # ─────────────────────────────────────────────────────────────────────
       # Steps below this point only run for tag pushes (not pull_request).
