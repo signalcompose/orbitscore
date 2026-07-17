@@ -319,6 +319,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.showCommands', showCommands),
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
     vscode.commands.registerCommand('orbitscore.stopEngine', stopEngine),
+    vscode.commands.registerCommand('orbitscore.restartEngine', restartEngine),
     vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
     vscode.commands.registerCommand('orbitscore.forceKillScsynth', forceKillScsynth),
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
@@ -741,7 +742,33 @@ async function maybeShowBundleNotice(): Promise<void> {
 function showCommands() {
   // SC バックエンド専用コマンドは engine=sc の時だけ載せる（既定 Rust では非表示）。
   const isScBackend = vscode.workspace.getConfiguration('orbitscore').get<string>('engine') === 'sc'
-  const items: Array<vscode.QuickPickItem & { command: string }> = [
+  const rustItems: Array<vscode.QuickPickItem & { command: string }> = [
+    {
+      label: 'Run Selection',
+      description: 'Cmd+Enter',
+      detail: 'Execute selected code or the current line',
+      command: 'orbitscore.runSelection',
+    },
+    {
+      label: 'Restart Engine (recovery)',
+      description: 'Force-restart a stuck engine',
+      detail: 'Stop the engine and restart it after cleanup',
+      command: 'orbitscore.restartEngine',
+    },
+    {
+      label: 'Configure Flash',
+      description: 'Customize flash settings',
+      detail: 'Configure flash count, duration, color, and opacity',
+      command: 'orbitscore.configureFlash',
+    },
+    {
+      label: 'Reload',
+      description: 'Reload window',
+      detail: 'Restart the extension and re-evaluate the file',
+      command: 'workbench.action.reloadWindow',
+    },
+  ]
+  const scItems: Array<vscode.QuickPickItem & { command: string }> = [
     {
       label: 'Start Engine',
       description: 'Boot the audio engine',
@@ -766,22 +793,18 @@ function showCommands() {
       detail: 'Stop the audio engine',
       command: 'orbitscore.stopEngine',
     },
-    ...(isScBackend
-      ? [
-          {
-            label: 'Select Audio Device (SC)',
-            description: 'Choose output device',
-            detail: 'Select the audio output device for the SuperCollider backend',
-            command: 'orbitscore.selectAudioDevice',
-          },
-          {
-            label: 'Force Kill scsynth (SC)',
-            description: 'killall scsynth',
-            detail: 'Escape hatch — force-kill any orphan scsynth processes',
-            command: 'orbitscore.forceKillScsynth',
-          },
-        ]
-      : []),
+    {
+      label: 'Select Audio Device (SC)',
+      description: 'Choose output device',
+      detail: 'Select the audio output device for the SuperCollider backend',
+      command: 'orbitscore.selectAudioDevice',
+    },
+    {
+      label: 'Force Kill scsynth (SC)',
+      description: 'killall scsynth',
+      detail: 'Escape hatch — force-kill any orphan scsynth processes',
+      command: 'orbitscore.forceKillScsynth',
+    },
     {
       label: 'Configure Flash',
       description: 'Customize flash settings',
@@ -796,10 +819,21 @@ function showCommands() {
     },
   ]
 
+  const items = isScBackend ? scItems : rustItems
   vscode.window.showQuickPick(items).then((selection) => {
     if (!selection) return
     vscode.commands.executeCommand(selection.command)
   })
+}
+
+function restartEngine(): void {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+  if (getConfiguredEngineKind() === 'rust' && !resolveAudioDeviceSetting(workspaceRoot)) {
+    vscode.window.showInformationMessage('Select an output device in Audio Engine Settings first')
+    return
+  }
+  stopEngine()
+  setTimeout(() => startEngine(), 2200)
 }
 
 async function configureFlash() {
@@ -1377,6 +1411,7 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
     switch (node.kind) {
       case 'engine-status':
         item.iconPath = new vscode.ThemeIcon(isEngineRunning() ? 'debug-stop' : 'play')
+        item.contextValue = 'engine-status'
         item.command = { command: 'orbitscore.engineViewToggleEngine', title: 'Toggle Engine' }
         break
       case 'debug-toggle':

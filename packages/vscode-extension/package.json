@@ -63,6 +63,12 @@
         "category": "OrbitScore"
       },
       {
+        "command": "orbitscore.restartEngine",
+        "title": "Restart Engine (recovery)",
+        "icon": "$(debug-restart)",
+        "category": "OrbitScore"
+      },
+      {
         "command": "orbitscore.forceKillScsynth",
         "title": "Force Kill scsynth",
         "icon": "$(close-all)",
@@ -196,6 +202,10 @@
           "when": "false"
         },
         {
+          "command": "orbitscore.restartEngine",
+          "when": "false"
+        },
+        {
           "command": "orbitscore.engineViewSelectDevice",
           "when": "false"
         }
@@ -205,6 +215,13 @@
           "command": "orbitscore.rescanPlugins",
           "when": "resourceExtname == .orbs",
           "group": "orbitscore"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "orbitscore.restartEngine",
+          "when": "view == orbitscore.engineView && viewItem == engine-status",
+          "group": "navigation"
         }
       ]
     },
