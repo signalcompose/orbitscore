@@ -12,6 +12,7 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
     items: [
       { text: '2. インストール', link: '/getting-started/installation' },
       { text: '3. はじめての音', link: '/getting-started/first-sound' },
+      { text: '4. エンジン設定', link: '/getting-started/engine-settings' },
     ],
   },
   {
@@ -68,6 +69,7 @@ export const sidebarEn: DefaultTheme.SidebarItem[] = [
     items: [
       { text: '2. Installation', link: '/en/getting-started/installation' },
       { text: '3. Your First Sound', link: '/en/getting-started/first-sound' },
+      { text: '4. Engine Settings', link: '/en/getting-started/engine-settings' },
     ],
   },
   {

@@ -40,8 +40,8 @@
     "commands": [
       {
         "command": "orbitscore.toggleEngine",
-        "title": "Start Engine",
-        "icon": "$(play)",
+        "title": "OrbitScore: Start / Stop Engine",
+        "icon": "$(play-circle)",
         "category": "OrbitScore"
       },
       {
@@ -152,6 +152,11 @@
     ],
     "menus": {
       "editor/title": [
+        {
+          "command": "orbitscore.toggleEngine",
+          "when": "resourceExtname == .orbs",
+          "group": "navigation@1"
+        },
         {
           "command": "orbitscore.openDocs",
           "when": "resourceExtname == .orbs",
