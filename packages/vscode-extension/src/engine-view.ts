@@ -20,6 +20,7 @@ export interface EngineViewDevice {
 
 export type EngineViewNodeKind =
   | 'engine-status'
+  | 'debug-toggle'
   | 'device-section'
   | 'device'
   | 'device-loading'
@@ -40,15 +41,30 @@ export interface EngineViewNode {
 
 /** Root-level nodes shown at all times once the engine view has a live TreeDataProvider. */
 export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
-  return [buildEngineStatusNode(engineRunning), buildDeviceSectionNode()]
+  return [
+    buildEngineStatusNode(engineRunning),
+    buildDebugToggleNode(false),
+    buildDeviceSectionNode(),
+  ]
 }
 
 export function buildEngineStatusNode(engineRunning: boolean): EngineViewNode {
   return {
     kind: 'engine-status',
     id: 'engine-status',
-    label: engineRunning ? 'Engine: Running' : 'Engine: Stopped',
+    label: engineRunning ? 'Engine: Running' : 'Engine: Off',
     description: engineRunning ? 'Click to stop' : 'Click to start',
+    collapsible: false,
+  }
+}
+
+export function buildDebugToggleNode(enabled: boolean): EngineViewNode {
+  return {
+    kind: 'debug-toggle',
+    id: 'debug-toggle',
+    label: 'Debug mode',
+    description: enabled ? 'On (restart engine to apply)' : 'Off',
+    selected: enabled,
     collapsible: false,
   }
 }
@@ -109,7 +125,17 @@ export function deviceSectionChildren(
       },
     ]
   }
-  return state.devices.map((device) => buildDeviceNode(device, selectedDevice))
+  return [
+    {
+      kind: 'device',
+      id: 'device:__default__',
+      label: `${selectedDevice === '__default__' ? '● ' : ''}System Default`,
+      description: 'Use the operating system default output',
+      selected: selectedDevice === '__default__',
+      collapsible: false,
+    },
+    ...state.devices.map((device) => buildDeviceNode(device, selectedDevice)),
+  ]
 }
 
 /**
@@ -118,7 +144,7 @@ export function deviceSectionChildren(
  * default") — if it is the host's default output device.
  */
 export function buildDeviceNode(device: EngineViewDevice, selectedDevice: string): EngineViewNode {
-  const selected = selectedDevice === '' ? device.isDefault : device.name === selectedDevice
+  const selected = device.name === selectedDevice
   const labelSuffix = device.isDefault ? ' (system default)' : ''
   return {
     kind: 'device',
@@ -134,6 +160,19 @@ export function buildDeviceNode(device: EngineViewDevice, selectedDevice: string
 export function deviceNameFromNodeId(nodeId: string): string | null {
   if (!nodeId.startsWith('device:')) return null
   return nodeId.slice('device:'.length)
+}
+
+export type DeviceClickAction = 'start' | 'live-switch' | 'deselect-stop' | 'none'
+
+/** The selection-is-power state machine used by both the TreeView and MCP. */
+export function resolveDeviceClickAction(
+  clickedDevice: string,
+  selectedDevice: string,
+  engineRunning: boolean,
+): DeviceClickAction {
+  if (clickedDevice === selectedDevice) return 'deselect-stop'
+  if (!engineRunning) return 'start'
+  return 'live-switch'
 }
 
 /** Result payload embedded in the engine's `{"selectAudioDevice":{...}}` stdout line (#484 D2.5). */

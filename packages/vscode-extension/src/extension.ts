@@ -40,6 +40,7 @@ import {
   buildRootNodes,
   deviceNameFromNodeId,
   deviceSectionChildren,
+  resolveDeviceClickAction,
   translateSelectAudioDeviceError,
   type DeviceFetchState,
   type EngineViewDevice,
@@ -338,6 +339,8 @@ export async function activate(context: vscode.ExtensionContext) {
       return vscode.window.registerTreeDataProvider('orbitscore.engineView', engineViewProvider)
     })(),
     vscode.commands.registerCommand('orbitscore.engineViewSelectDevice', engineViewSelectDevice),
+    vscode.commands.registerCommand('orbitscore.engineViewToggleEngine', engineViewToggleEngine),
+    vscode.commands.registerCommand('orbitscore.engineViewToggleDebug', engineViewToggleDebug),
     vscode.commands.registerCommand('orbitscore.openDocs', openUserDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocs', openDevDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocsPanel', () => openDevDocsPanel(context)),
@@ -432,6 +435,8 @@ export async function activate(context: vscode.ExtensionContext) {
       vscode.window.showWarningMessage(`OrbitScore MCP server failed to start: ${reason}`)
     }
   }
+
+  void autoStartConfiguredRustEngine()
 }
 
 export function deactivate() {
@@ -1265,9 +1270,35 @@ function isEngineRunning(): boolean {
  * back-compat with existing workspaces. Empty string means "system default".
  */
 function resolveAudioDeviceSetting(workspaceRoot: string): string {
-  const configured = vscode.workspace.getConfiguration('orbitscore').get<string>('audioDevice', '')
-  if (configured) return configured
+  const setting = vscode.workspace.getConfiguration('orbitscore')
+  const inspected = setting.inspect<string>('audioDevice')
+  const configured = inspected?.workspaceValue ?? inspected?.globalValue
+  // An explicitly empty legacy value means off, never "System Default".
+  if (configured !== undefined) return configured
   return loadAudioDeviceConfig(workspaceRoot) ?? ''
+}
+
+async function autoStartConfiguredRustEngine(): Promise<void> {
+  if (getConfiguredEngineKind() !== 'rust') return
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+  const saved = resolveAudioDeviceSetting(workspaceRoot)
+  if (!saved) return
+  try {
+    const devices = await fetchAudioDevicesForView()
+    if (saved !== '__default__' && !devices.some((device) => device.name === saved)) {
+      vscode.window.showWarningMessage(
+        `Saved audio device "${saved}" is not connected — select a device in Audio Engine Settings`,
+      )
+      return
+    }
+    startEngine()
+    setTimeout(() => {
+      if (!isEngineRunning())
+        vscode.window.showErrorMessage('Audio engine exited shortly after automatic startup')
+    }, 5000)
+  } catch {
+    // Enumeration failure leaves the engine off; the view will expose its error node.
+  }
 }
 
 /**
@@ -1346,7 +1377,11 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
     switch (node.kind) {
       case 'engine-status':
         item.iconPath = new vscode.ThemeIcon(isEngineRunning() ? 'debug-stop' : 'play')
-        item.command = { command: 'orbitscore.toggleEngine', title: 'Toggle Engine' }
+        item.command = { command: 'orbitscore.engineViewToggleEngine', title: 'Toggle Engine' }
+        break
+      case 'debug-toggle':
+        item.iconPath = new vscode.ThemeIcon(node.selected ? 'check' : 'circle-large-outline')
+        item.command = { command: 'orbitscore.engineViewToggleDebug', title: 'Toggle Debug Mode' }
         break
       case 'device-section':
         item.iconPath = new vscode.ThemeIcon('list-selection')
@@ -1372,7 +1407,21 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
     if (!node) {
       // viewsWelcome (Start/Debug/Stop buttons) covers the stopped state —
       // only populate the tree once the engine is actually running.
-      return isEngineRunning() ? buildRootNodes(true) : []
+      return buildRootNodes(isEngineRunning()).map((node) =>
+        node.kind === 'debug-toggle'
+          ? {
+              ...node,
+              selected: vscode.workspace
+                .getConfiguration('orbitscore')
+                .get<boolean>('engineDebug', false),
+              description: vscode.workspace
+                .getConfiguration('orbitscore')
+                .get<boolean>('engineDebug', false)
+                ? 'On (restart engine to apply)'
+                : 'Off',
+            }
+          : node,
+      )
     }
     if (node.kind === 'device-section') {
       return this.getDeviceChildren()
@@ -1398,6 +1447,19 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
   }
 }
 
+function engineViewToggleEngine(): void {
+  if (isEngineRunning()) {
+    stopEngine()
+    return
+  }
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+  if (getConfiguredEngineKind() === 'rust' && !resolveAudioDeviceSetting(workspaceRoot)) {
+    vscode.window.showInformationMessage('Select an output device below first')
+    return
+  }
+  startEngine()
+}
+
 /**
  * Write `orbitscore.audioDevice` (Workspace scope when a workspace is open,
  * Global otherwise). Shared by the Engine view's device-click command and the
@@ -1405,12 +1467,12 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
  * the live bridge only affects the running process, so the setting must also
  * be written for the choice to survive an engine restart).
  */
-async function writeAudioDeviceSetting(deviceName: string): Promise<void> {
+async function writeAudioDeviceSetting(deviceName: string | undefined): Promise<void> {
   const target = vscode.workspace.workspaceFolders?.[0]
     ? vscode.ConfigurationTarget.Workspace
     : vscode.ConfigurationTarget.Global
   await vscode.workspace.getConfiguration('orbitscore').update('audioDevice', deviceName, target)
-  outputChannel?.appendLine(`🔊 orbitscore.audioDevice set to: ${deviceName}`)
+  outputChannel?.appendLine(`🔊 orbitscore.audioDevice set to: ${deviceName ?? '(cleared)'}`)
 }
 
 /**
@@ -1426,13 +1488,27 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
   const deviceName = deviceNameFromNodeId(node.id)
   if (!deviceName) return
 
+  if (getConfiguredEngineKind() !== 'rust') {
+    // SC retains its established write-and-restart flow.
+    await writeAudioDeviceSetting(deviceName)
+    engineViewProvider?.refresh()
+    return
+  }
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+  const selectedDevice = resolveAudioDeviceSetting(workspaceRoot)
+  const action = resolveDeviceClickAction(deviceName, selectedDevice, isEngineRunning())
+  if (action === 'deselect-stop') {
+    await writeAudioDeviceSetting(undefined)
+    if (isEngineRunning()) stopEngine()
+    engineViewProvider?.refresh()
+    return
+  }
+
   await writeAudioDeviceSetting(deviceName)
   engineViewProvider?.refresh()
 
   if (!isEngineRunning()) {
-    vscode.window.showInformationMessage(
-      `🔊 Audio device set to "${deviceName}". Applies the next time you start the engine.`,
-    )
+    startEngine()
     return
   }
 
@@ -1499,7 +1575,27 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
   }
 }
 
-function startEngine(debugMode: boolean = false, agentOpts?: { captureWav?: string }) {
+async function engineViewToggleDebug(): Promise<void> {
+  const config = vscode.workspace.getConfiguration('orbitscore')
+  const next = !config.get<boolean>('engineDebug', false)
+  const target = vscode.workspace.workspaceFolders?.[0]
+    ? vscode.ConfigurationTarget.Workspace
+    : vscode.ConfigurationTarget.Global
+  await config.update('engineDebug', next, target)
+  engineViewProvider?.refresh()
+  if (isEngineRunning()) {
+    const choice = await vscode.window.showInformationMessage(
+      'Restart engine to apply?',
+      'Restart Engine',
+    )
+    if (choice === 'Restart Engine') {
+      stopEngine()
+      setTimeout(() => startEngine(), 2200)
+    }
+  }
+}
+
+function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }) {
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return
@@ -1542,11 +1638,13 @@ function startEngine(debugMode: boolean = false, agentOpts?: { captureWav?: stri
     }
   }
 
-  const modeLabel = debugMode ? '(Debug Mode)' : '(Normal Mode)'
+  const effectiveDebugMode =
+    debugMode ?? vscode.workspace.getConfiguration('orbitscore').get<boolean>('engineDebug', false)
+  const modeLabel = effectiveDebugMode ? '(Debug Mode)' : '(Normal Mode)'
   outputChannel?.appendLine(`🚀 Starting engine... ${modeLabel}`)
 
   // Get engine path
-  const engineInfo = getEnginePath(debugMode)
+  const engineInfo = getEnginePath(effectiveDebugMode)
   if (!engineInfo) {
     return
   }
@@ -1563,16 +1661,16 @@ function startEngine(debugMode: boolean = false, agentOpts?: { captureWav?: stri
 
   // Build args
   const args = ['repl']
-  if (audioDevice) {
+  if (audioDevice && audioDevice !== '__default__') {
     args.push('--audio-device', audioDevice)
   }
-  if (debugMode) {
+  if (effectiveDebugMode) {
     args.push('--debug')
   }
 
   // Set environment
   const env = { ...process.env }
-  if (debugMode) {
+  if (effectiveDebugMode) {
     env.ORBITSCORE_DEBUG = '1'
   }
 
@@ -1618,16 +1716,16 @@ function startEngine(debugMode: boolean = false, agentOpts?: { captureWav?: stri
   isLiveCodingMode = true
   globalInitialized = false
 
-  statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
+  statusBarItem!.text = effectiveDebugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
   vscode.window.showInformationMessage(
-    debugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
+    effectiveDebugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
   )
   outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
   engineViewProvider?.refresh()
 
   // Setup handlers
-  setupStdoutHandler(engineProcess, debugMode)
+  setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
   setupExitHandler(engineProcess)
   // #501 review Important #2: an unhandled 'error' event on a stream crashes
@@ -2438,18 +2536,21 @@ async function listAudioDevicesForAgent(): Promise<AudioDevicesResult> {
  */
 async function selectAudioDeviceForAgent(device: string): Promise<CommandResult> {
   if (getConfiguredEngineKind() === 'rust') {
-    // D2.5 (#484): the live `//#selectAudioDevice` bridge changes the *running*
-    // instance. The "orbitscore.audioDevice" setting is written below on success
-    // so the choice also persists for the next engine start (mirrors the Engine
-    // view's write-then-live-switch order in `engineViewSelectDevice`).
-    if (!isEngineRunning()) {
-      return {
-        ok: false,
-        error:
-          'engine is not running; start it first to switch the audio device live ' +
-          '(or set the "orbitscore.audioDevice" setting / use the Engine view to set ' +
-          'the device for the next start)',
-      }
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
+    const action = resolveDeviceClickAction(
+      device,
+      resolveAudioDeviceSetting(workspaceRoot),
+      isEngineRunning(),
+    )
+    if (action === 'deselect-stop') {
+      await writeAudioDeviceSetting(undefined)
+      if (isEngineRunning()) stopEngine()
+      return { ok: true, message: 'audio device deselected and engine stopped' }
+    }
+    if (action === 'start') {
+      await writeAudioDeviceSetting(device)
+      startEngine()
+      return { ok: true, message: `audio device selected: ${device}; engine starting` }
     }
     try {
       const result = await sendSelectAudioDeviceMeta(device)
