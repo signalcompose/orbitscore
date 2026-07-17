@@ -47,7 +47,6 @@ let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let bundleStatusItem: vscode.StatusBarItem | null = null
-let docsStatusItem: vscode.StatusBarItem | null = null
 let devDocsPanel: vscode.WebviewPanel | null = null
 let isLiveCodingMode: boolean = false
 // Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
@@ -263,13 +262,6 @@ export async function activate(context: vscode.ExtensionContext) {
   updateBundleStatus()
   bundleStatusItem.show()
 
-  // The development docs are served by the optional MCP server, so this stays
-  // hidden until that server has successfully started.
-  docsStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98)
-  docsStatusItem.text = '$(book) Docs'
-  docsStatusItem.tooltip = 'Open the OrbitScore learning site'
-  docsStatusItem.command = 'orbitscore.openDocs'
-
   // Re-evaluate bundle status when user changes the override setting or
   // switches engine kind (#377: kind gates whether scsynth is even resolved).
   context.subscriptions.push(
@@ -316,7 +308,6 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.openWalkthrough', openWalkthrough),
     statusBarItem,
     bundleStatusItem,
-    docsStatusItem,
   )
 
   // Register IntelliSense providers
@@ -397,7 +388,6 @@ export async function activate(context: vscode.ExtensionContext) {
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
       })
-      docsStatusItem?.show()
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       outputChannel?.appendLine(`❌ MCP server failed to start on port ${mcpPort}: ${reason}`)
@@ -420,7 +410,6 @@ export function deactivate() {
   outputChannel?.dispose()
   statusBarItem?.dispose()
   bundleStatusItem?.dispose()
-  docsStatusItem?.dispose()
   devDocsPanel?.dispose()
   devDocsPanel = null
 }
