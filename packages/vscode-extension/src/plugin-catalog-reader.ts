@@ -15,6 +15,9 @@
  */
 
 import * as child_process from 'child_process'
+
+/** スキャナ実行の上限（実測は数秒・moduleinfo 読取のみでも余裕を見て 2 分）。 */
+const SCAN_TIMEOUT_MS = 120_000
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -151,24 +154,38 @@ export function runPluginScan(explicitBinaryPath?: string): Promise<RunPluginSca
       return
     }
 
-    child_process.execFile(binaryPath, [], (error, stdout, stderr) => {
-      if (error) {
-        resolve({ ok: false, error: stderr?.trim() || error.message })
-        return
-      }
-      try {
-        const parsed = JSON.parse(stdout) as PluginScanOutcome
-        clearPluginCatalogCache()
-        resolve({
-          ok: true,
-          count: parsed.count,
-          cachePath: parsed.cachePath,
-          skipped: parsed.skipped,
-        })
-      } catch (parseError) {
-        const reason = parseError instanceof Error ? parseError.message : String(parseError)
-        resolve({ ok: false, error: `failed to parse orbit-plugin-scan output: ${reason}` })
-      }
-    })
+    // タイムアウト必須（レビュー Important）: スキャナの存在意義 = 行儀の悪いプラグインの
+    // 隔離だが、crash でなく「ハング」だと execFile は既定で永久に待つ — palette/MCP の
+    // 呼び出しが無言で固まる。timeout 超過は SIGKILL + 明示エラーで返す。
+    child_process.execFile(
+      binaryPath,
+      [],
+      { timeout: SCAN_TIMEOUT_MS, killSignal: 'SIGKILL' },
+      (error, stdout, stderr) => {
+        if (error) {
+          const timedOut = error.killed || /SIGKILL/.test(String(error.signal ?? ''))
+          resolve({
+            ok: false,
+            error: timedOut
+              ? `plugin scan timed out after ${SCAN_TIMEOUT_MS / 1000}s (a plugin may be hanging during metadata read) — binary: ${binaryPath}`
+              : stderr?.trim() || error.message,
+          })
+          return
+        }
+        try {
+          const parsed = JSON.parse(stdout) as PluginScanOutcome
+          clearPluginCatalogCache()
+          resolve({
+            ok: true,
+            count: parsed.count,
+            cachePath: parsed.cachePath,
+            skipped: parsed.skipped,
+          })
+        } catch (parseError) {
+          const reason = parseError instanceof Error ? parseError.message : String(parseError)
+          resolve({ ok: false, error: `failed to parse orbit-plugin-scan output: ${reason}` })
+        }
+      },
+    )
   })
 }
