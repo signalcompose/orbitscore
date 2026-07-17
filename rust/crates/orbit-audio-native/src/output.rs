@@ -160,9 +160,15 @@ fn resolve_output_device(
         return host.default_output_device().ok_or(OutputError::NoDevice);
     };
 
+    // 【重要・確認 E2E での P0 再発防止】ここで `host.output_devices()` を使ってはいけない。
+    // cpal の output フィルタは各デバイスの supported_output_configs を probe し、その実装が
+    // macOS では AudioUnit + CreateIOProcID を生成する — Aggregate デバイス等で CoreAudio 内
+    // ブロック（実測: 起動が ready line 前に無限ハング・スタックで確定）。起動クリティカル
+    // パスでは probe なしの `devices()` 名前照合のみ行い、config 検証は選択後の通常の
+    // stream 構築（そのデバイス 1 台に対してのみ）に任せる。
     let mut matched: Option<Device> = None;
     let mut available_names = Vec::new();
-    if let Ok(devices) = host.output_devices() {
+    if let Ok(devices) = host.devices() {
         for device in devices {
             if let Ok(name) = device.name() {
                 if name == requested {
@@ -175,7 +181,19 @@ fn resolve_output_device(
     }
 
     match matched {
-        Some(device) => Ok(device),
+        // `devices()` は入力専用デバイスも含む（probe 回避の代償）。マッチした 1 台だけ
+        // default_output_config で出力可否を確認し、出力不可なら旧挙動どおり警告 + 既定へ
+        // 縮退する（起動失敗にしない）。probe はユーザーが明示指定した 1 台に限定される。
+        Some(device) => {
+            if device.default_output_config().is_ok() {
+                Ok(device)
+            } else {
+                eprintln!(
+                    "[audio-device] requested device \"{requested}\" is not an output device — falling back to system default output"
+                );
+                host.default_output_device().ok_or(OutputError::NoDevice)
+            }
+        }
         None => {
             eprintln!(
                 "[audio-device] requested device \"{requested}\" not found (available: {available_names:?}) — falling back to system default output"
