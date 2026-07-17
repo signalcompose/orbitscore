@@ -17,6 +17,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.283 feat(orbitstudio): 選択=電源モデルの Engine ビュー #484 D3.5 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 実装（計画は owner 承認済みアーティファクト・実装 Codex 4タスク・受け入れ監査済み）
+
+**内容**:
+- Engine ビューを「選択=電源」モデルへ転換: デバイス一覧を停止中も常時表示（D1 の `--list-audio-devices` 軽量列挙）・クリック状態機械 `resolveDeviceClickAction`（OFF時クリック=保存+起動 / ON時別デバイス=D2.5ライブ切替 / 選択中再クリック=解除+停止+設定クリア）
+- 選択の三値化: 未設定=OFF / `__default__`=システム既定で ON / デバイス名=指名 ON（旧「空=既定にチェック」廃止）
+- activate 時の自動 ON: 保存デバイスの**実在を列挙で確認してから**起動（不在=警告して起動しない・保存値は保持）・自動再スポーンなし・起動後5秒以内の exit は通知。deactivate + ParentWatch で終了時 OFF
+- Engine 行=電源トグル（OFF は選択保持=一時停止）・Debug チェックボックス（`orbitscore.engineDebug`）
+- UI 出口の一元化: welcome の Start/Debug/Stop 撤去・rust 時のステータスバー QuickPick 廃止（クリック=ビューを開く）・非常口はビュー最下部「Recovery」セクション（折りたたみ・Restart Engine / Reload Window）のみ・右クリックメニューは誤操作防止で不採用
+- MCP `select_audio_device` も同状態機械（LLM からも選択=電源が成立）
+- 派生決定: SC 退役 #502（フォールバック対象ですらない・opt-in も閉じる方向）・D5 複数出力は取り下げ（OS の Aggregate Device 責務）・WebviewView 化は #503（設定が固まってから）
+
+**関連**: #484（残 = D4: バッファ/SR/入力）・#502・#503
+
+---
+
 ### 6.282 feat(orbitstudio): Engine ビュー/MCP からの走行中デバイス切替 #484 D2.5 (Jul 17, 2026)
 
 **Date**: 2026-07-17
