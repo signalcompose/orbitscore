@@ -1280,9 +1280,12 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 - スキャン対象 = OS 標準ディレクトリ（macOS: `~/Library/Audio/Plug-Ins/CLAP`・
   `/Library/Audio/Plug-Ins/CLAP`・同 `VST3`）+ 環境変数 `ORBIT_PLUGIN_PATH`
   （`:` 区切り・追加検索パス・**各ディレクトリ直下のみ = 非再帰**）
-- metadata の取得: CLAP = factory metadata（軽量・load 不要）、VST3 = bundle 内
-  `moduleinfo.json` があれば load 不要、無ければ probe（`probe_plugin` 資産 #397）。
-  probe は逐次で時間がかかるため**バックグラウンド + キャッシュ必須**
+- **スキャンは UI を出さない・ブロックしない**（規範）: プラグインの実ロード（probe）は
+  コンテンツ依存プラグインがネイティブダイアログを出し得るため（実害確認 2026-07-17）、
+  **v1 では行わない**。metadata の取得: CLAP = factory metadata（dlopen のみ）、
+  VST3 = bundle 内 `Contents/Resources/moduleinfo.json` **のみ**（無ければ skip し、
+  スキャン結果 summary の `skipped` 配列で開示）。UI 抑止付き probe による skip 解消は
+  将来拡張（C1b 以降）
 - キャッシュ = `~/.orbitscore/plugin-catalog.json`（正本はこのファイル。エンジン・
   拡張・MCP はこれを読むだけ）。生成/更新 = 初回スキャン + 明示 rescan（自動 watch は
   v1 スコープ外）。スキャンの持ち主 = **daemon**（probe 資産が Rust 側にあるため。

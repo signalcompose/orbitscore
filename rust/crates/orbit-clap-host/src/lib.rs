@@ -24,7 +24,9 @@ mod processor;
 
 pub use clack_host::events::io::EventBuffer;
 pub use controller::{ClapHost, ClapHostError, LoadedPluginInfo};
-pub use discovery::DiscoveryError;
+// #463 plugin catalog スキャナ（orbit-plugin-scan）が discovery API を外部から使うために追加
+// re-export（DiscoveryError は元から公開済み）。ロジック変更なし。
+pub use discovery::{list_plugins_in_file, DiscoveryError, FoundPlugin, PluginDescriptor};
 pub use effect::ClapEffectProcessor;
 pub use events::{
     make_event_ring, push_neutral_event, PluginEvent, PluginEventConsumer, PluginEventProducer,

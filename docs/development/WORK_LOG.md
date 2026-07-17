@@ -17,6 +17,30 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.269 feat(rust): plugin catalog scanner C1 — orbit-plugin-scan #463 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（実機スモーク済み・daemon 配線 C1b / DSL 解決 C2 / 補完 C3 は別 PR）
+
+**内容**: カタログスキャナを**独立バイナリ** `orbit-plugin-scan` として新設（crash 隔離・
+#397 の isolation 原則）。標準ディレクトリ + ORBIT_PLUGIN_PATH（非再帰）を走査し
+`~/.orbitscore/plugin-catalog.json`（atomic write）を生成。
+
+**設計変更（owner 実害報告に基づく・spec へ反映済み）**: VST3 の probe fallback（実ロード）
+はコンテンツ依存プラグインがネイティブダイアログを出す実害が出たため**撤去**。v1 は
+moduleinfo.json のみ（Steinberg の trailing-comma 方言は string-aware ストリッパで対応・
+Audio Module Class のみエントリ化・Sub Categories で role 推定）。CLAP は既存 discovery に
+vendor/features を追加して利用。
+
+**検証**: 新規 20 unit + orbit-clap-host 21 green・clippy/fmt clean。実機スモーク:
+ダイアログなしで完走・VST3 335 バンドル中 79 エントリ化 / 256 skip（moduleinfo 無し・
+summary で開示）。CLAP は実機に 0 個のため fixture のみ（既知の残テスト）。
+
+**残**: skip 256 の解消 = UI 抑止付き probe（C1b 検討）・daemon ScanPlugins 配線・C2/C3。
+
+Refs #463
+
+
 ### 6.268 docs(spec): plugin catalog spec 起草（PC.1-PC.5）#463 (Jul 17, 2026)
 
 **Date**: 2026-07-17

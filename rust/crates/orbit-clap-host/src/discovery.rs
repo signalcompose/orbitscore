@@ -29,6 +29,11 @@ pub struct PluginDescriptor {
     pub id: String,
     pub name: Option<String>,
     pub version: Option<String>,
+    /// プラグインベンダー名（#463 plugin catalog 用に追加）。
+    pub vendor: Option<String>,
+    /// CLAP feature タグ一覧（例: "instrument", "audio-effect"）。#463 plugin catalog の
+    /// role 判定（instrument/effect）に使う。非 UTF-8 なタグは黙って skip する。
+    pub features: Vec<String>,
 }
 
 impl PluginDescriptor {
@@ -48,10 +53,16 @@ impl PluginDescriptor {
                 return None;
             }
         };
+        let features = p
+            .features()
+            .filter_map(|f| f.to_str().ok().map(str::to_owned))
+            .collect();
         Some(Self {
             id,
             name: p.name().map(|v| v.to_string_lossy().to_string()),
             version: p.version().map(|v| v.to_string_lossy().to_string()),
+            vendor: p.vendor().map(|v| v.to_string_lossy().to_string()),
+            features,
         })
     }
 }

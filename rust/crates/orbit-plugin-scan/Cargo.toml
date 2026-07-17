@@ -1,0 +1,33 @@
+# orbit-plugin-scan — プラグインカタログスキャナ（#463 C1）。
+#
+# CLAP/VST3 バンドルをスキャンし ~/.orbitscore/plugin-catalog.json を生成する。
+# スキャン・probe はプラグインロードを伴い crash リスクがあるため、daemon 本体でなく
+# 短命な独立バイナリに隔離する（#397 の crash isolation 原則）。
+#
+# 正本: docs/core/INSTRUCTION_ORBITSCORE_DSL.md「Plugin Catalog」節 PC.1
+[package]
+name = "orbit-plugin-scan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Plugin catalog scanner: discovers CLAP/VST3 plugins and writes ~/.orbitscore/plugin-catalog.json (Issue #463)"
+publish = false
+
+[lib]
+name = "orbit_plugin_scan"
+path = "src/lib.rs"
+
+[[bin]]
+name = "orbit-plugin-scan"
+path = "src/main.rs"
+
+[dependencies]
+orbit-clap-host = { path = "../orbit-clap-host" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
