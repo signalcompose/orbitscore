@@ -81,6 +81,9 @@ let mcpServerHandle: McpServerHandle | null = null
 const selectAudioDeviceBridge = new DeviceSwitchBridge()
 // Audio Engine Settings TreeView (#484 D3). Non-null once activated.
 let engineViewProvider: EngineViewProvider | null = null
+// Changes whenever a spawn is created or a user explicitly stops the engine.
+// Auto-start's delayed health check uses it to avoid warning about a later action.
+let engineGeneration = 0
 // #463 C3: show the "no plugin catalog yet, run rescan" hint at most once per
 // activation (loadPluginCatalog() is cheap but the info popup shouldn't nag on
 // every keystroke while typing an effect()/instrument() argument).
@@ -1317,13 +1320,16 @@ async function autoStartConfiguredRustEngine(): Promise<void> {
       )
       return
     }
-    startEngine()
+    if (!startEngine()) return
+    const autoStartGeneration = engineGeneration
     setTimeout(() => {
-      if (!isEngineRunning())
+      if (engineGeneration === autoStartGeneration && !isEngineRunning())
         vscode.window.showErrorMessage('Audio engine exited shortly after automatic startup')
     }, 5000)
-  } catch {
-    // Enumeration failure leaves the engine off; the view will expose its error node.
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`⚠️ unable to enumerate saved audio device: ${message}`)
+    vscode.window.showWarningMessage(message)
   }
 }
 
@@ -1508,8 +1514,14 @@ async function writeAudioDeviceSetting(deviceName: string | undefined): Promise<
   const target = vscode.workspace.workspaceFolders?.[0]
     ? vscode.ConfigurationTarget.Workspace
     : vscode.ConfigurationTarget.Global
-  await vscode.workspace.getConfiguration('orbitscore').update('audioDevice', deviceName, target)
-  outputChannel?.appendLine(`🔊 orbitscore.audioDevice set to: ${deviceName ?? '(cleared)'}`)
+  try {
+    await vscode.workspace.getConfiguration('orbitscore').update('audioDevice', deviceName, target)
+    outputChannel?.appendLine(`🔊 orbitscore.audioDevice set to: ${deviceName ?? '(cleared)'}`)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`❌ failed to update orbitscore.audioDevice: ${message}`)
+    vscode.window.showErrorMessage(`Failed to save audio device setting: ${message}`)
+  }
 }
 
 /**
@@ -1535,7 +1547,7 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
   const selectedDevice = resolveAudioDeviceSetting(workspaceRoot)
   const action = resolveDeviceClickAction(deviceName, selectedDevice, isEngineRunning())
   if (action === 'deselect-stop') {
-    await writeAudioDeviceSetting(undefined)
+    await writeAudioDeviceSetting('')
     if (isEngineRunning()) stopEngine()
     engineViewProvider?.refresh()
     return
@@ -1598,18 +1610,6 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
       return
     }
   }
-
-  const choice = await vscode.window.showInformationMessage(
-    `🔊 Audio device set to "${deviceName}". This applies on the next engine start — restart now?`,
-    'Restart Engine',
-    'Later',
-  )
-  if (choice === 'Restart Engine') {
-    stopEngine()
-    // stopEngine()'s SIGKILL fallback fires at 2s if SIGTERM hasn't landed —
-    // wait past that so the restart doesn't race a still-exiting process.
-    setTimeout(() => startEngine(), 2200)
-  }
 }
 
 async function engineViewToggleDebug(): Promise<void> {
@@ -1618,7 +1618,14 @@ async function engineViewToggleDebug(): Promise<void> {
   const target = vscode.workspace.workspaceFolders?.[0]
     ? vscode.ConfigurationTarget.Workspace
     : vscode.ConfigurationTarget.Global
-  await config.update('engineDebug', next, target)
+  try {
+    await config.update('engineDebug', next, target)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    outputChannel?.appendLine(`❌ failed to update orbitscore.engineDebug: ${message}`)
+    vscode.window.showErrorMessage(`Failed to save debug mode setting: ${message}`)
+    return
+  }
   engineViewProvider?.refresh()
   if (isEngineRunning()) {
     const choice = await vscode.window.showInformationMessage(
@@ -1632,10 +1639,10 @@ async function engineViewToggleDebug(): Promise<void> {
   }
 }
 
-function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }) {
+function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): boolean {
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
-    return
+    return false
   }
 
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
@@ -1653,7 +1660,7 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }) {
     scResolution = resolveScsynthForUI()
     if (!scResolution) {
       void maybeShowBundleNotice()
-      return
+      return false
     }
   } else {
     // rust kind (C2): daemon 解決可否を spawn 前に pre-check する。従来は
@@ -1671,7 +1678,7 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }) {
       vscode.window.showErrorMessage(
         '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
       )
-      return
+      return false
     }
   }
 
@@ -1683,7 +1690,7 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }) {
   // Get engine path
   const engineInfo = getEnginePath(effectiveDebugMode)
   if (!engineInfo) {
-    return
+    return false
   }
   const { enginePath } = engineInfo
 
@@ -1748,6 +1755,7 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }) {
     stdio: ['pipe', 'pipe', 'pipe'],
     env,
   })
+  engineGeneration += 1
 
   // Update state
   isLiveCodingMode = true
@@ -1772,13 +1780,15 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }) {
     outputChannel?.appendLine(`⚠️ engine stdin error: ${err.message}`)
     selectAudioDeviceBridge.drainAll(`engine stdin error: ${err.message}`)
   })
+  return true
 }
 
 function startEngineDebug() {
   startEngine(true)
 }
 
-function stopEngine() {
+function stopEngine(): boolean {
+  engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {
     // Capture process reference before nulling module-level variable
     // (the SIGKILL timeout needs this reference after engineProcess is set to null)
@@ -1809,7 +1819,9 @@ function stopEngine() {
     engineViewProvider?.refresh()
     vscode.window.showInformationMessage('🛑 Engine stopped')
     outputChannel?.appendLine('🛑 Engine stopped')
+    return true
   }
+  return false
 }
 
 /**
@@ -2580,13 +2592,17 @@ async function selectAudioDeviceForAgent(device: string): Promise<CommandResult>
       isEngineRunning(),
     )
     if (action === 'deselect-stop') {
-      await writeAudioDeviceSetting(undefined)
-      if (isEngineRunning()) stopEngine()
+      await writeAudioDeviceSetting('')
+      if (isEngineRunning() && !stopEngine()) {
+        return { ok: false, error: 'engine failed to stop — see the OrbitScore output channel' }
+      }
       return { ok: true, message: 'audio device deselected and engine stopped' }
     }
     if (action === 'start') {
       await writeAudioDeviceSetting(device)
-      startEngine()
+      if (!startEngine()) {
+        return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
+      }
       return { ok: true, message: `audio device selected: ${device}; engine starting` }
     }
     try {
