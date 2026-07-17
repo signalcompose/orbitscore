@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+  <!-- engine: gear + play. currentColor で activity bar のテーマ色に追従 -->
+  <circle cx="12" cy="12" r="8.2"/>
+  <path d="M12 1.8v3M12 19.2v3M1.8 12h3M19.2 12h3M4.8 4.8l2.1 2.1M17.1 17.1l2.1 2.1M19.2 4.8l-2.1 2.1M6.9 17.1l-2.1 2.1"/>
+  <path d="M10 8.6v6.8l5.4-3.4z" fill="currentColor" stroke="none"/>
+</svg>

@@ -47,7 +47,6 @@ let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
 let bundleStatusItem: vscode.StatusBarItem | null = null
-let docsStatusItem: vscode.StatusBarItem | null = null
 let devDocsPanel: vscode.WebviewPanel | null = null
 let isLiveCodingMode: boolean = false
 // Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
@@ -261,14 +260,6 @@ export async function activate(context: vscode.ExtensionContext) {
     arguments: ['orbitscore.scsynthPath'],
   }
   updateBundleStatus()
-  bundleStatusItem.show()
-
-  // The development docs are served by the optional MCP server, so this stays
-  // hidden until that server has successfully started.
-  docsStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98)
-  docsStatusItem.text = '$(book) Docs'
-  docsStatusItem.tooltip = 'Open OrbitScore development docs'
-  docsStatusItem.command = 'orbitscore.openDevDocs'
 
   // Re-evaluate bundle status when user changes the override setting or
   // switches engine kind (#377: kind gates whether scsynth is even resolved).
@@ -310,12 +301,17 @@ export async function activate(context: vscode.ExtensionContext) {
       getChildren: () => [],
       getTreeItem: (element: vscode.TreeItem) => element,
     }),
+    // viewsWelcome は provider 登録が無いと描画されない（上と同じ理由）— Engine ビューにも空 provider。
+    vscode.window.registerTreeDataProvider('orbitscore.engineView', {
+      getChildren: () => [],
+      getTreeItem: (element: vscode.TreeItem) => element,
+    }),
+    vscode.commands.registerCommand('orbitscore.openDocs', openUserDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocs', openDevDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocsPanel', () => openDevDocsPanel(context)),
     vscode.commands.registerCommand('orbitscore.openWalkthrough', openWalkthrough),
     statusBarItem,
     bundleStatusItem,
-    docsStatusItem,
   )
 
   // Register IntelliSense providers
@@ -396,7 +392,6 @@ export async function activate(context: vscode.ExtensionContext) {
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
       })
-      docsStatusItem?.show()
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       outputChannel?.appendLine(`❌ MCP server failed to start on port ${mcpPort}: ${reason}`)
@@ -419,7 +414,6 @@ export function deactivate() {
   outputChannel?.dispose()
   statusBarItem?.dispose()
   bundleStatusItem?.dispose()
-  docsStatusItem?.dispose()
   devDocsPanel?.dispose()
   devDocsPanel = null
 }
@@ -440,6 +434,30 @@ function resolveDevDocsUrl(): string | null {
     return null
   }
   return `http://127.0.0.1:${port}/orbitscore/dev/`
+}
+
+/**
+ * Canonical local URL of the END-USER learning site (sites/user — served at
+ * `/orbitscore/` by the MCP server; the dev site lives under `/orbitscore/dev/`).
+ */
+function resolveUserDocsUrl(): string | null {
+  const port = mcpServerHandle?.port ?? 0
+  if (!port) {
+    void vscode.window.showErrorMessage(
+      'OrbitScore docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
+    )
+    return null
+  }
+  return `http://127.0.0.1:${port}/orbitscore/`
+}
+
+async function openUserDocs(): Promise<void> {
+  const url = resolveUserDocsUrl()
+  if (!url) return
+  const opened = await vscode.env.openExternal(vscode.Uri.parse(url))
+  if (!opened) {
+    outputChannel?.appendLine(`❌ Failed to open the learning site at ${url}`)
+  }
 }
 
 async function openDevDocs(): Promise<void> {
@@ -611,17 +629,19 @@ function updateBundleStatus(): void {
   if (getConfiguredEngineKind() === 'rust') {
     const daemonResolution = resolveDaemonForUI()
     if (!daemonResolution) {
+      bundleStatusItem.show()
       bundleStatusItem.text = '$(error) daemon: not found'
       bundleStatusItem.tooltip =
         'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
       bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
       return
     }
-    bundleStatusItem.text = '$(check) engine: rust (native)'
-    bundleStatusItem.tooltip = `Native Rust audio daemon (orbit-audio-daemon, ${daemonResolution.source})\n${daemonResolution.path}\nscsynth is not required.`
-    bundleStatusItem.backgroundColor = undefined
+    // 既定（Rust・健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の
+    // 意味がない）。daemon 不在エラーと SC バックエンド時のみ表示する。
+    bundleStatusItem.hide()
     return
   }
+  bundleStatusItem.show()
   const resolution = resolveScsynthForUI()
   if (!resolution) {
     bundleStatusItem.text = '$(error) scsynth: not found'
@@ -680,78 +700,66 @@ async function maybeShowBundleNotice(): Promise<void> {
 }
 
 function showCommands() {
-  const items: vscode.QuickPickItem[] = [
+  // SC バックエンド専用コマンドは engine=sc の時だけ載せる（既定 Rust では非表示）。
+  const isScBackend = vscode.workspace.getConfiguration('orbitscore').get<string>('engine') === 'sc'
+  const items: Array<vscode.QuickPickItem & { command: string }> = [
     {
-      label: '🚀 Start Engine',
-      description: 'Boot audio engine',
-      detail: 'Start OrbitScore audio engine with SuperCollider',
+      label: 'Start Engine',
+      description: 'Boot the audio engine',
+      detail: 'Start the OrbitScore audio engine (Rust daemon)',
+      command: 'orbitscore.toggleEngine',
     },
     {
-      label: '🐛 Start Engine (Debug)',
+      label: 'Start Engine (Debug)',
       description: 'Boot with full logging',
-      detail: 'Start engine with verbose debug output',
+      detail: 'Start the engine with verbose debug output',
+      command: 'orbitscore.startEngineDebug',
     },
     {
-      label: '▶️ Run Selection',
+      label: 'Run Selection',
       description: 'Cmd+Enter',
-      detail: 'Execute selected code or current line',
+      detail: 'Execute selected code or the current line',
+      command: 'orbitscore.runSelection',
     },
     {
-      label: '🛑 Stop Engine',
-      description: 'Kill engine process',
-      detail: 'Force stop the audio engine',
+      label: 'Stop Engine',
+      description: 'Stop the engine process',
+      detail: 'Stop the audio engine',
+      command: 'orbitscore.stopEngine',
     },
+    ...(isScBackend
+      ? [
+          {
+            label: 'Select Audio Device (SC)',
+            description: 'Choose output device',
+            detail: 'Select the audio output device for the SuperCollider backend',
+            command: 'orbitscore.selectAudioDevice',
+          },
+          {
+            label: 'Force Kill scsynth (SC)',
+            description: 'killall scsynth',
+            detail: 'Escape hatch — force-kill any orphan scsynth processes',
+            command: 'orbitscore.forceKillScsynth',
+          },
+        ]
+      : []),
     {
-      label: '🔊 Select Audio Device',
-      description: 'Choose output device',
-      detail: 'Select audio output device for SuperCollider',
-    },
-    {
-      label: '🔪 Force Kill scsynth',
-      description: 'killall scsynth',
-      detail: 'Escape hatch — force-kill any orphan scsynth processes',
-    },
-    {
-      label: '⚡ Configure Flash',
+      label: 'Configure Flash',
       description: 'Customize flash settings',
       detail: 'Configure flash count, duration, color, and opacity',
+      command: 'orbitscore.configureFlash',
     },
     {
-      label: '🔄 Reload',
+      label: 'Reload',
       description: 'Reload window',
-      detail: 'Restart extension and re-evaluate file',
+      detail: 'Restart the extension and re-evaluate the file',
+      command: 'workbench.action.reloadWindow',
     },
   ]
 
   vscode.window.showQuickPick(items).then((selection) => {
     if (!selection) return
-
-    switch (selection.label) {
-      case '🚀 Start Engine':
-        vscode.commands.executeCommand('orbitscore.toggleEngine')
-        break
-      case '🐛 Start Engine (Debug)':
-        vscode.commands.executeCommand('orbitscore.startEngineDebug')
-        break
-      case '▶️ Run Selection':
-        vscode.commands.executeCommand('orbitscore.runSelection')
-        break
-      case '🛑 Stop Engine':
-        vscode.commands.executeCommand('orbitscore.stopEngine')
-        break
-      case '🔊 Select Audio Device':
-        vscode.commands.executeCommand('orbitscore.selectAudioDevice')
-        break
-      case '🔪 Force Kill scsynth':
-        vscode.commands.executeCommand('orbitscore.forceKillScsynth')
-        break
-      case '⚡ Configure Flash':
-        vscode.commands.executeCommand('orbitscore.configureFlash')
-        break
-      case '🔄 Reload':
-        vscode.commands.executeCommand('workbench.action.reloadWindow')
-        break
-    }
+    vscode.commands.executeCommand(selection.command)
   })
 }
 
