@@ -74,6 +74,88 @@ export function extractDocumentDirectoryMeta(code: string): string | undefined {
   return dir
 }
 
+/**
+ * REPL の行処理セッション（#476 で分離・単体テスト可能に）。
+ *
+ * 【直列化の根拠 — #476】readline は 1 チャンクの複数行を同 tick で 'line' 連発する。
+ * async ハンドラは互いを待たないため、素朴な実装では共有 buffer が「実行中の execute が
+ * 終わる前に後続行で伸びる → 累積 buffer の重複実行・完了時 clear との競合で行が失われる」
+ * （遅い await = plugin ロードで顕在化し、エディタの複数行実行が silent に壊れる）。
+ * `pushLine` は FIFO promise チェーンに積むだけで、1 行の処理（execute 完了と buffer
+ * 更新まで）が終わってから次の行に進む。`idle()` はキュー drain を待つ（テスト用）。
+ */
+export function createReplSession(interpreter: InterpreterV2): {
+  pushLine: (line: string) => void
+  idle: () => Promise<void>
+} {
+  let buffer = ''
+  let emptyLineCount = 0
+  // メタ行で受けた基準ディレクトリ（セッション内で最後の値が持続 — エディタ側は eval ごとに
+  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。
+  let sessionDocumentDirectory: string | undefined
+  let lineQueue: Promise<void> = Promise.resolve()
+
+  async function executeCurrentBuffer(clearOnIncomplete: boolean): Promise<void> {
+    const code = buffer.trim()
+    if (!code) {
+      buffer = ''
+      emptyLineCount = 0
+      return
+    }
+    try {
+      const ir = parseAudioDSL(code)
+      const metaDir = extractDocumentDirectoryMeta(code)
+      if (metaDir) sessionDocumentDirectory = metaDir
+      await interpreter.execute(ir, {
+        source: code,
+        evalSource: 'human',
+        documentDirectory: sessionDocumentDirectory,
+      }) // §L1
+      console.log('✓') // Success indicator
+      buffer = ''
+    } catch (error: any) {
+      // 不完全入力（複数行の途中）は buffering を続ける（強制実行時は除く）
+      if (
+        !clearOnIncomplete &&
+        (error.message.includes('EOF') ||
+          error.message.includes('Expected RPAREN') ||
+          error.message.includes('Expected comma or closing parenthesis'))
+      ) {
+        return
+      }
+      console.error(`[ERROR] ${error.message}`)
+      buffer = ''
+    }
+  }
+
+  async function handleLine(line: string): Promise<void> {
+    if (line.trim() === '') {
+      emptyLineCount++
+      buffer += '\n'
+      // 2+ 連続空行 = バッファ確定・強制実行
+      if (emptyLineCount >= 2 && buffer.trim()) {
+        await executeCurrentBuffer(true)
+        emptyLineCount = 0
+      }
+      return
+    }
+    emptyLineCount = 0
+    buffer += line + '\n'
+    await executeCurrentBuffer(false)
+  }
+
+  return {
+    pushLine(line: string): void {
+      // handleLine は内部で全エラーを捕捉するが、防御としてチェーン自体も reject を握る
+      // （1 行の異常で以後の入力が全停止しないように）。
+      lineQueue = lineQueue.then(() => handleLine(line)).catch(() => {})
+    },
+    idle(): Promise<void> {
+      return lineQueue
+    },
+  }
+}
+
 export async function startREPL(interpreter: InterpreterV2): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -81,113 +163,8 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
     terminal: false,
   })
 
-  let buffer = ''
-  let emptyLineCount = 0
-  // メタ行で受けた基準ディレクトリ（セッション内で最後の値が持続 — エディタ側は eval ごとに
-  // 現在ファイルの dir を送るので、ファイル切替にも追従する）。
-  let sessionDocumentDirectory: string | undefined
-
-  rl.on('line', async (line) => {
-    if (process.env.ORBITSCORE_DEBUG) {
-      console.log(`[DEBUG] Received line (length=${line.length}): ${JSON.stringify(line)}`)
-      console.log(`[DEBUG] Buffer length before: ${buffer.length}`)
-    }
-
-    // If we receive an empty line, increment counter
-    if (line.trim() === '') {
-      emptyLineCount++
-      buffer += '\n'
-
-      if (process.env.ORBITSCORE_DEBUG) {
-        console.log(`[DEBUG] Empty line detected, count=${emptyLineCount}`)
-      }
-
-      // If we get 2+ consecutive empty lines, treat buffer as complete and execute
-      if (emptyLineCount >= 2 && buffer.trim()) {
-        if (process.env.ORBITSCORE_DEBUG) {
-          console.log(`[DEBUG] Forcing execution due to 2+ empty lines`)
-        }
-        await executeBuffer()
-      }
-      return
-    }
-
-    // Reset empty line counter and add line to buffer
-    emptyLineCount = 0
-    buffer += line + '\n'
-
-    if (process.env.ORBITSCORE_DEBUG) {
-      console.log(`[DEBUG] Buffer length after: ${buffer.length}`)
-      console.log(`[DEBUG] Attempting to parse buffer...`)
-    }
-
-    // Try to parse and execute the buffer
-    // If parsing fails due to incomplete input, keep buffering
-    try {
-      const code = buffer.trim()
-      const ir = parseAudioDSL(code)
-      const metaDir = extractDocumentDirectoryMeta(code)
-      if (metaDir) sessionDocumentDirectory = metaDir
-      await interpreter.execute(ir, {
-        source: code,
-        evalSource: 'human',
-        documentDirectory: sessionDocumentDirectory,
-      }) // §L1
-      console.log('✓') // Success indicator
-      buffer = '' // Reset buffer on success
-      if (process.env.ORBITSCORE_DEBUG) {
-        console.log(`[DEBUG] Parse success, buffer cleared`)
-      }
-    } catch (error: any) {
-      if (process.env.ORBITSCORE_DEBUG) {
-        console.log(`[DEBUG] Parse error: ${error.message}`)
-      }
-      // If error is about EOF or incomplete input, keep buffering
-      if (
-        error.message.includes('EOF') ||
-        error.message.includes('Expected RPAREN') ||
-        error.message.includes('Expected comma or closing parenthesis')
-      ) {
-        if (process.env.ORBITSCORE_DEBUG) {
-          console.log(`[DEBUG] Incomplete input, continuing to buffer`)
-        }
-        // Continue buffering
-        return
-      }
-      // For other errors, report and reset buffer
-      console.error(`[ERROR] ${error.message}`)
-      buffer = ''
-      if (process.env.ORBITSCORE_DEBUG) {
-        console.log(`[DEBUG] Fatal parse error, buffer cleared`)
-      }
-    }
-  })
-
-  async function executeBuffer() {
-    const code = buffer.trim()
-    if (!code) {
-      buffer = ''
-      emptyLineCount = 0
-      return
-    }
-
-    try {
-      const ir = parseAudioDSL(code)
-      const metaDir = extractDocumentDirectoryMeta(code)
-      if (metaDir) sessionDocumentDirectory = metaDir
-      await interpreter.execute(ir, {
-        source: code,
-        evalSource: 'human',
-        documentDirectory: sessionDocumentDirectory,
-      }) // §L1
-      console.log('✓') // Success indicator
-    } catch (error: any) {
-      console.error(`[ERROR] ${error.message}`)
-    }
-
-    buffer = ''
-    emptyLineCount = 0
-  }
+  const session = createReplSession(interpreter)
+  rl.on('line', (line) => session.pushLine(line))
 
   // Keep process alive indefinitely for interactive REPL
   // This is intentional: REPL mode is designed to run continuously,

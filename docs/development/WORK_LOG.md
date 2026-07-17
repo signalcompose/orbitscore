@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.271 fix(engine): REPL 行処理の FIFO 直列化 #476 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 修正・実機再現シナリオ PASS
+
+**内容**: readline の同 tick 連続 'line' イベントを FIFO promise チェーンで直列化
+（`createReplSession` として分離・単体テスト可能に）。旧実装は async ハンドラが互いを
+待たず、共有 buffer が「実行中 execute 完了前に伸びる → 累積 buffer の重複実行・
+完了時 clear との競合」を起こす構造だった（unit テストは旧実装で fail する形で
+ピン留め: 全行 1 回ずつ順序実行・失敗行が後続を失わない・不完全入力の buffering 維持）。
+
+**根因の訂正（issue に反映）**: 当初の「effect 入りファイル一括実行で無音」の実機再現は、
+E2E ドライバの set_selection 境界の取り違え（end_char 省略 = end_line の行頭 → 最終行
+RUN が選択外）が混入していた。競合自体は構造的に実在（汚れセッションでの誤エラーも同根）。
+
+**検証**: 新規 3 tests・全体 1436 passed。ヘッドレス REPL で全行実行確認。実機
+（OrbitStudio + MCP・正しい選択）で effect 入り 9 行ファイル一括実行 → capture peak
+0.35355（オラクル一致）。
+
+Refs #476
+
+
 ### 6.270 chore(qa): docs-driven 実機 E2E + 学習サイト最新化 #481 (Jul 17, 2026)
 
 **Date**: 2026-07-17
