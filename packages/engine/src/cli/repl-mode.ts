@@ -148,7 +148,13 @@ export function createReplSession(interpreter: InterpreterV2): {
     pushLine(line: string): void {
       // handleLine は内部で全エラーを捕捉するが、防御としてチェーン自体も reject を握る
       // （1 行の異常で以後の入力が全停止しないように）。
-      lineQueue = lineQueue.then(() => handleLine(line)).catch(() => {})
+      lineQueue = lineQueue
+        .then(() => handleLine(line))
+        .catch((e) => {
+          // handleLine は既知エラーを内部で捕捉する。ここに来るのは想定外のみ —
+          // 黙って握ると REPL が silent に劣化するため、必ず痕跡を残して続行する。
+          console.error(`[ERROR] unexpected REPL queue failure: ${e?.message ?? e}`)
+        })
     },
     idle(): Promise<void> {
       return lineQueue
