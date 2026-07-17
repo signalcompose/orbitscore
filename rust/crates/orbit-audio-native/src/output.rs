@@ -113,8 +113,14 @@ pub fn list_output_devices() -> Result<Vec<AudioDeviceInfo>, OutputError> {
     let host = cpal::default_host();
     let default_name = host.default_output_device().and_then(|d| d.name().ok());
 
+    // 【#493 と同根のハング回避（レビュー Critical）】`host.output_devices()` は使わない —
+    // その supports_output フィルタは per-device に AudioUnit + CreateIOProcID を生成し、
+    // Aggregate デバイス等で CoreAudio 内ブロックする（resolve 経路でスタック実証済み）。
+    // 代わりに probe なしの `devices()` で列挙し、出力可否と config は軽量な
+    // default_output_config のみで判定（失敗 = 入力専用等として skip）。残余リスクは
+    // 呼び出し側のプロセス timeout（拡張 5s / RPC は spawn_blocking）が受け止める。
     let devices = host
-        .output_devices()
+        .devices()
         .map_err(|e| OutputError::NoConfig(e.to_string()))?;
 
     let mut result = Vec::new();
