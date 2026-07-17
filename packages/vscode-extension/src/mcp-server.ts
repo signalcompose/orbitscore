@@ -545,8 +545,9 @@ function buildServer(
       description:
         'Select the audio output device. For the SuperCollider backend, writes to ' +
         '.orbitscore.json (restart the engine to apply). For the Rust engine (default), ' +
-        'switches the device live in the running engine — no restart needed, but the ' +
-        'engine must already be running.',
+        'switches the device live in the running engine — no restart needed — and also ' +
+        'persists the choice to the "orbitscore.audioDevice" setting so it carries over ' +
+        'to the next engine start; the engine must already be running.',
       inputSchema: {
         device: z.string().describe('Device name as reported by list_audio_devices'),
       },

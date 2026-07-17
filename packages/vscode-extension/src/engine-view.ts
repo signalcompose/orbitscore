@@ -162,6 +162,12 @@ export function parseSelectAudioDeviceResultLine(
   return parsed.selectAudioDevice
 }
 
+/** Sentinel embedded in the daemon's error string when a live device switch is
+ * refused because `ORBIT_CAPTURE_WAV` recording is active (#484 D2 brief choice
+ * (a)). Shared between `translateSelectAudioDeviceError` and `extension.ts`'s
+ * restart-prompt branch so the two checks can't drift out of sync. */
+export const AUDIO_DEVICE_SWITCH_UNAVAILABLE = 'AUDIO_DEVICE_SWITCH_UNAVAILABLE'
+
 /**
  * User-facing translation for the daemon's `AUDIO_DEVICE_SWITCH_UNAVAILABLE` error
  * (raised while `ORBIT_CAPTURE_WAV` recording is active — the daemon refuses to tear
@@ -169,7 +175,7 @@ export function parseSelectAudioDeviceResultLine(
  * unchanged so real failures aren't masked.
  */
 export function translateSelectAudioDeviceError(error: string | undefined): string {
-  if (error && error.includes('AUDIO_DEVICE_SWITCH_UNAVAILABLE')) {
+  if (error && error.includes(AUDIO_DEVICE_SWITCH_UNAVAILABLE)) {
     return '録音中は切替できません — エンジンを再起動してください'
   }
   return error ?? 'live audio device switch failed'

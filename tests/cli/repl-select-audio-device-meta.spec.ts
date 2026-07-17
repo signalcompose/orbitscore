@@ -122,4 +122,41 @@ describe('createReplSession //#selectAudioDevice bridge', () => {
       logSpy.mockRestore()
     }
   })
+
+  it('does not pollute an in-progress multi-line statement buffer (#501 review Important #9)', async () => {
+    // A meta line arriving mid an unclosed multi-line DSL statement must not
+    // get concatenated into the pending buffer (which would corrupt the parse)
+    // and must not clear the buffer either — the statement should still
+    // evaluate correctly once its parens close.
+    const interpreter = makeInterpreterWithDevice({
+      selectAudioDevice: async (device) => device || 'system default',
+    })
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const session = createReplSession(interpreter)
+      session.pushLine('var global = init GLOBAL')
+      session.pushLine('var kick = init global.seq')
+      // Unclosed multi-line RUN(...) call — parse is incomplete, buffering continues.
+      session.pushLine('RUN(kick,')
+      // The meta line arrives mid-statement (e.g. the editor issued a live device
+      // switch while a multi-line eval was still being typed/sent).
+      session.pushLine('//#selectAudioDevice Foo')
+      // Statement closes — this must still parse and execute as one unit, with the
+      // meta line excluded from the evaluated source.
+      session.pushLine('kick)')
+      await session.idle()
+
+      const successLogs = logSpy.mock.calls.filter((call) => call[0] === '✓')
+      expect(successLogs.length).toBeGreaterThan(0)
+
+      const metaLogs = logSpy.mock.calls
+        .map((call) => call[0])
+        .filter(
+          (line): line is string => typeof line === 'string' && line.includes('selectAudioDevice'),
+        )
+      expect(metaLogs).toEqual([JSON.stringify({ selectAudioDevice: { ok: true, device: 'Foo' } })])
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
 })

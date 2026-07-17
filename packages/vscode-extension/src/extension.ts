@@ -36,16 +36,17 @@ import {
   type SelectionInput,
 } from './mcp-server'
 import {
+  AUDIO_DEVICE_SWITCH_UNAVAILABLE,
   buildRootNodes,
   deviceNameFromNodeId,
   deviceSectionChildren,
-  parseSelectAudioDeviceResultLine,
   translateSelectAudioDeviceError,
   type DeviceFetchState,
   type EngineViewDevice,
   type EngineViewNode,
   type SelectAudioDeviceBridgeResult,
 } from './engine-view'
+import { DeviceSwitchBridge } from './device-switch-bridge'
 import { detectPluginArgContext, filterCatalogEntries } from './plugin-catalog-completion'
 import { loadPluginCatalog, runPluginScan } from './plugin-catalog-reader'
 import {
@@ -69,9 +70,12 @@ let isLiveCodingMode: boolean = false
 let globalInitialized: boolean = false
 // Optional MCP control server (Agent Bridge). Non-null only while running.
 let mcpServerHandle: McpServerHandle | null = null
-// FIFO of pending `//#selectAudioDevice` meta-line requests, resolved by the first
-// matching JSON result line seen on stdout (#484 D2.5, see sendSelectAudioDeviceMeta).
-const pendingSelectAudioDeviceResolvers: Array<(result: SelectAudioDeviceBridgeResult) => void> = []
+// Stateful FIFO/timeout/drain logic for the `//#selectAudioDevice` live bridge
+// (#484 D2.5, extracted to device-switch-bridge.ts in PR #501 review so it's
+// testable without mocking vscode). One instance for the extension's lifetime —
+// drained on every engine exit/stop so a resolver from a dead engine can never
+// FIFO-match a future engine's response.
+const selectAudioDeviceBridge = new DeviceSwitchBridge()
 // Audio Engine Settings TreeView (#484 D3). Non-null once activated.
 let engineViewProvider: EngineViewProvider | null = null
 // #463 C3: show the "no plugin catalog yet, run rescan" hint at most once per
@@ -1184,7 +1188,16 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
       // line `{"selectAudioDevice":{...}}` emitted by repl-mode.ts. FIFO — matches
       // the oldest pending request (the stdin write path is a single serialized
       // queue on the engine side, so requests/responses stay in order).
-      resolvePendingSelectAudioDevice(rawLine)
+      // A line that looks like the bridge's shape (`{"selectAudioDevice...`) but
+      // fails to parse — e.g. a chunk boundary split the JSON across two `data`
+      // events — is logged so a stuck caller isn't silently invisible.
+      const looksLikeSelectAudioDeviceLine = rawLine.trim().startsWith('{"selectAudioDevice')
+      const recognized = selectAudioDeviceBridge.handleLine(rawLine)
+      if (looksLikeSelectAudioDeviceLine && !recognized) {
+        outputChannel?.appendLine(
+          `⚠️ received a malformed //#selectAudioDevice result line (possible chunk-boundary split): ${rawLine}`,
+        )
+      }
     }
 
     // Filter output in non-debug mode (reuses the split above — one pass per chunk).
@@ -1226,6 +1239,12 @@ function setupExitHandler(process: child_process.ChildProcess): void {
     isLiveCodingMode = false
     globalInitialized = false
     clearAllPlayheadDecorations() // #390: nothing is sounding anymore
+    // #501 review Critical #1: drain any //#selectAudioDevice requests still
+    // awaiting a response — otherwise a stale resolver could FIFO-match the
+    // next engine instance's response.
+    selectAudioDeviceBridge.drainAll(
+      'engine process exited before responding to //#selectAudioDevice',
+    )
 
     statusBarItem!.text = '🎵 OrbitScore: Stopped'
     statusBarItem!.tooltip = 'Click to start engine'
@@ -1380,22 +1399,34 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
 }
 
 /**
- * "Select Audio Device" command wired to a device `TreeItem` click in the
- * Engine view (#484 D3). Writes `orbitscore.audioDevice` (Workspace scope
- * when a workspace is open, Global otherwise) and — honestly, since D2
- * (live device switch) isn't implemented — tells the user this takes effect
- * on the *next* engine start, offering an immediate restart if one is
- * currently running.
+ * Write `orbitscore.audioDevice` (Workspace scope when a workspace is open,
+ * Global otherwise). Shared by the Engine view's device-click command and the
+ * MCP `select_audio_device` tool's live-switch path (#501 review Important #6 —
+ * the live bridge only affects the running process, so the setting must also
+ * be written for the choice to survive an engine restart).
  */
-async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
-  const deviceName = deviceNameFromNodeId(node.id)
-  if (!deviceName) return
-
+async function writeAudioDeviceSetting(deviceName: string): Promise<void> {
   const target = vscode.workspace.workspaceFolders?.[0]
     ? vscode.ConfigurationTarget.Workspace
     : vscode.ConfigurationTarget.Global
   await vscode.workspace.getConfiguration('orbitscore').update('audioDevice', deviceName, target)
   outputChannel?.appendLine(`🔊 orbitscore.audioDevice set to: ${deviceName}`)
+}
+
+/**
+ * "Select Audio Device" command wired to a device `TreeItem` click in the
+ * Engine view (#484 D3). Writes `orbitscore.audioDevice` (Workspace scope
+ * when a workspace is open, Global otherwise). For a running rust-engine
+ * instance, D2.5's live `//#selectAudioDevice` bridge applies the change
+ * immediately; otherwise (or on live-switch failure) this tells the user the
+ * setting takes effect on the *next* engine start and offers an immediate
+ * restart.
+ */
+async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
+  const deviceName = deviceNameFromNodeId(node.id)
+  if (!deviceName) return
+
+  await writeAudioDeviceSetting(deviceName)
   engineViewProvider?.refresh()
 
   if (!isEngineRunning()) {
@@ -1406,8 +1437,9 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
   }
 
   // D2.5 (#484): try the live `//#selectAudioDevice` bridge before falling back to the
-  // restart prompt. SC backend never emits the bridge's stdout line, so skip straight
-  // to the restart flow for it rather than waiting out the full 10s timeout.
+  // restart prompt. SC backend skips straight to the restart flow — it's an
+  // optimization to avoid a pointless round-trip (repl-mode.ts never wires up the
+  // bridge for SC), not a necessity to dodge the timeout.
   if (getConfiguredEngineKind() === 'rust') {
     try {
       const result = await sendSelectAudioDeviceMeta(deviceName)
@@ -1416,7 +1448,7 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
         vscode.window.showInformationMessage(`🔊 switched to "${result.device ?? deviceName}"`)
         return
       }
-      if (result.error?.includes('AUDIO_DEVICE_SWITCH_UNAVAILABLE')) {
+      if (result.error?.includes(AUDIO_DEVICE_SWITCH_UNAVAILABLE)) {
         const choice = await vscode.window.showWarningMessage(
           translateSelectAudioDeviceError(result.error),
           'Restart Engine',
@@ -1427,11 +1459,30 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
         }
         return
       }
+      // #501 review Important #4: surface the specific failure rather than
+      // silently falling through to the generic "applies on next start" prompt.
       outputChannel?.appendLine(`⚠️ live device switch failed: ${result.error}`)
-    } catch (err) {
-      outputChannel?.appendLine(
-        `⚠️ live device switch bridge error: ${err instanceof Error ? err.message : String(err)}`,
+      const choice = await vscode.window.showWarningMessage(
+        `🔊 live device switch failed: ${translateSelectAudioDeviceError(result.error)}`,
+        'Restart Engine',
       )
+      if (choice === 'Restart Engine') {
+        stopEngine()
+        setTimeout(() => startEngine(), 2200)
+      }
+      return
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      outputChannel?.appendLine(`⚠️ live device switch bridge error: ${message}`)
+      const choice = await vscode.window.showWarningMessage(
+        `🔊 live device switch bridge error: ${message}`,
+        'Restart Engine',
+      )
+      if (choice === 'Restart Engine') {
+        stopEngine()
+        setTimeout(() => startEngine(), 2200)
+      }
+      return
     }
   }
 
@@ -1579,6 +1630,13 @@ function startEngine(debugMode: boolean = false, agentOpts?: { captureWav?: stri
   setupStdoutHandler(engineProcess, debugMode)
   setupStderrHandler(engineProcess)
   setupExitHandler(engineProcess)
+  // #501 review Important #2: an unhandled 'error' event on a stream crashes
+  // the process. stdin can emit this independently of the 'exit' event (e.g.
+  // EPIPE if the engine's stdin closes before we stop writing to it).
+  engineProcess.stdin?.on('error', (err) => {
+    outputChannel?.appendLine(`⚠️ engine stdin error: ${err.message}`)
+    selectAudioDeviceBridge.drainAll(`engine stdin error: ${err.message}`)
+  })
 }
 
 function startEngineDebug() {
@@ -1594,6 +1652,11 @@ function stopEngine() {
     isLiveCodingMode = false
     globalInitialized = false
     clearAllPlayheadDecorations() // #390: don't wait for the exit event
+    // #501 review Critical #1: drain here too — `stopEngine()` nulls
+    // `engineProcess` immediately (before the `exit` event fires), so a caller
+    // awaiting `sendSelectAudioDeviceMeta()` would otherwise hang until the
+    // 10s timeout instead of failing fast.
+    selectAudioDeviceBridge.drainAll('engine was stopped before responding to //#selectAudioDevice')
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -2180,46 +2243,37 @@ async function runSelection() {
  * engine-side acknowledgment is a recorded follow-on (WORK_LOG 6.189).
  */
 /**
- * Resolve the oldest pending `sendSelectAudioDeviceMeta()` call if `rawLine` is the
- * bridge's JSON result line. No-op otherwise (the vast majority of stdout traffic).
- */
-function resolvePendingSelectAudioDevice(rawLine: string): void {
-  const result = parseSelectAudioDeviceResultLine(rawLine)
-  if (!result) return
-  const resolver = pendingSelectAudioDeviceResolvers.shift()
-  resolver?.(result)
-}
-
-/**
  * Send a `//#selectAudioDevice <name>` meta line to the running engine and wait for
  * the correlated JSON result line on stdout (#484 D2.5 — see repl-mode.ts's
  * `extractSelectAudioDeviceMeta`/`executeSelectAudioDeviceMeta`). Rejects if the
- * engine's stdin is not writable or if no result arrives within `timeoutMs`
- * (default 10s — SC-backend engines never emit the bridge line, so this also
- * doubles as the "unsupported backend" signal for callers that don't pre-check
- * `getConfiguredEngineKind()`).
+ * engine's stdin is not writable. Resolves (never rejects otherwise) with a
+ * synthetic `ok: false` on a stdin write failure or on timeout (default 10s —
+ * a genuine communication failure safety net; an unsupported backend returns an
+ * explicit `ok: false` line instead of timing out, see repl-mode.ts).
  */
 function sendSelectAudioDeviceMeta(
   device: string,
   timeoutMs = 10000,
 ): Promise<SelectAudioDeviceBridgeResult> {
-  return new Promise((resolve, reject) => {
-    if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
-      reject(new Error('engine stdin is not writable (engine not running?)'))
-      return
-    }
-    const timer = setTimeout(() => {
-      const idx = pendingSelectAudioDeviceResolvers.indexOf(resolver)
-      if (idx >= 0) pendingSelectAudioDeviceResolvers.splice(idx, 1)
-      reject(new Error('timed out waiting for engine response to //#selectAudioDevice'))
-    }, timeoutMs)
-    const resolver = (result: SelectAudioDeviceBridgeResult): void => {
-      clearTimeout(timer)
-      resolve(result)
-    }
-    pendingSelectAudioDeviceResolvers.push(resolver)
-    engineProcess.stdin.write(`//#selectAudioDevice${device ? ' ' + device : ''}\n`)
-  })
+  if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
+    return Promise.reject(new Error('engine stdin is not writable (engine not running?)'))
+  }
+  const stdin = engineProcess.stdin
+  return selectAudioDeviceBridge.send(
+    (line, onError) => {
+      stdin.write(line, (err) => {
+        if (err) {
+          outputChannel?.appendLine(
+            `⚠️ failed to write //#selectAudioDevice to stdin: ${err.message}`,
+          )
+          onError(err)
+        }
+      })
+      return true
+    },
+    device,
+    timeoutMs,
+  )
 }
 
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
@@ -2384,21 +2438,27 @@ async function listAudioDevicesForAgent(): Promise<AudioDevicesResult> {
  */
 async function selectAudioDeviceForAgent(device: string): Promise<CommandResult> {
   if (getConfiguredEngineKind() === 'rust') {
-    // D2.5 (#484): rust engine has no persisted device config — the only way to
-    // change it is the live `//#selectAudioDevice` bridge into a running engine.
+    // D2.5 (#484): the live `//#selectAudioDevice` bridge changes the *running*
+    // instance. The "orbitscore.audioDevice" setting is written below on success
+    // so the choice also persists for the next engine start (mirrors the Engine
+    // view's write-then-live-switch order in `engineViewSelectDevice`).
     if (!isEngineRunning()) {
       return {
         ok: false,
         error:
           'engine is not running; start it first to switch the audio device live ' +
-          '(the Rust engine has no persisted device config — use the "orbitscore.audioDevice" ' +
-          'setting or the Engine view to set the device for the next start)',
+          '(or set the "orbitscore.audioDevice" setting / use the Engine view to set ' +
+          'the device for the next start)',
       }
     }
     try {
       const result = await sendSelectAudioDeviceMeta(device)
       if (result.ok) {
-        return { ok: true, message: `audio device switched to: ${result.device ?? device}` }
+        await writeAudioDeviceSetting(result.device ?? device)
+        return {
+          ok: true,
+          message: `audio device switched to: ${result.device ?? device} (persisted for next start)`,
+        }
       }
       return { ok: false, error: translateSelectAudioDeviceError(result.error) }
     } catch (err) {
