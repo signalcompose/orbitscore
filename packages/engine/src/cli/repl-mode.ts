@@ -75,6 +75,53 @@ export function extractDocumentDirectoryMeta(code: string): string | undefined {
 }
 
 /**
+ * REPL メタ行 `//#selectAudioDevice <name>`（D2.5, #484）: エディタ統合が走行中エンジンの
+ * 出力デバイスをライブ切替するための帯域外チャネル。`documentDirectory` と異なり DSL
+ * statement には混ぜず、1 行単独で送られる想定（呼び出し側は eval バッファに積まず即時処理）。
+ * `<name>` 省略（末尾空白のみ）はシステム既定への切替を意味する。
+ */
+const SELECT_AUDIO_DEVICE_META_RE = /^\s*\/\/#selectAudioDevice(?:\s+(.+?))?\s*$/
+
+export function extractSelectAudioDeviceMeta(line: string): { device: string } | undefined {
+  const m = line.match(SELECT_AUDIO_DEVICE_META_RE)
+  if (!m) return undefined
+  return { device: (m[1] ?? '').trim() }
+}
+
+/**
+ * `//#selectAudioDevice` メタ行を処理し、相関用の 1 行 JSON を stdout に出す
+ * （`{"selectAudioDevice":{"ok":true,"device":"..."}}` / `{"ok":false,"error":"..."}`）。
+ * `interpreter.audioEngine` 経由（SC バックエンドは `selectAudioDevice` 未実装 = optional）。
+ */
+async function executeSelectAudioDeviceMeta(
+  interpreter: InterpreterV2,
+  device: string,
+): Promise<void> {
+  try {
+    const audioEngine = interpreter.audioEngine
+    if (!audioEngine.selectAudioDevice) {
+      console.log(
+        JSON.stringify({
+          selectAudioDevice: {
+            ok: false,
+            error: 'selectAudioDevice is not supported by the current audio engine backend',
+          },
+        }),
+      )
+      return
+    }
+    const applied = await audioEngine.selectAudioDevice(device)
+    console.log(JSON.stringify({ selectAudioDevice: { ok: true, device: applied } }))
+  } catch (error: any) {
+    console.log(
+      JSON.stringify({
+        selectAudioDevice: { ok: false, error: error?.message ?? String(error) },
+      }),
+    )
+  }
+}
+
+/**
  * REPL の行処理セッション（#476 で分離・単体テスト可能に）。
  *
  * 【直列化の根拠 — #476】readline は 1 チャンクの複数行を同 tick で 'line' 連発する。
@@ -129,6 +176,13 @@ export function createReplSession(interpreter: InterpreterV2): {
   }
 
   async function handleLine(line: string): Promise<void> {
+    const selectDeviceMeta = extractSelectAudioDeviceMeta(line)
+    if (selectDeviceMeta) {
+      // 単独の帯域外コマンド — eval バッファには積まず、進行中のバッファはそのまま維持する
+      // （複数行入力の途中でデバイス切替が挟まれても壊れない）。
+      await executeSelectAudioDeviceMeta(interpreter, selectDeviceMeta.device)
+      return
+    }
     if (line.trim() === '') {
       emptyLineCount++
       buffer += '\n'

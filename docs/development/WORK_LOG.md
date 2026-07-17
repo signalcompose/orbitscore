@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.282 feat(orbitstudio): Engine ビュー/MCP からの走行中デバイス切替 #484 D2.5 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（Sonnet 委譲・headless 実機で JSON ブリッジ確認）
+
+**内容**:
+- REPL メタ行 `//#selectAudioDevice <name>`（name 省略 = システム既定）を新設。#456 の `//#documentDirectory` 前例を踏襲しつつ、eval バッファに積まない帯域外処理（複数行入力の途中に挟まっても壊れない）。結果は 1 行 JSON `{"selectAudioDevice":{"ok":...}}` で stdout に相関出力
+- `AudioEngineBackend` に optional `selectAudioDevice?()` を追加（RustEnginePlayer は D2 の daemon RPC を接続・SC は未実装のまま）
+- 拡張: Engine ビューのデバイスクリックが、rust エンジン走行中はライブ切替を先に試行（成功 = 「switched to X」・capture 中 = 「録音中は切替できません」+ Restart 提案・その他失敗 = 従来の再起動フローへフォールバック）。stdout 行との相関は FIFO resolver + 10s タイムアウト
+- MCP `select_audio_device` の rust 経路を「未対応エラー」から同ブリッジ経由のライブ切替に変更
+- テスト +20（メタ行抽出/セッション統合/結果行パース/エラー翻訳）。1524 passed
+
+**関連**: #484（残 = バッファサイズ・サンプリングレート・多ch・入力 = D4）
+
+---
+
 ### 6.281 feat(engine): 走行中のオーディオデバイス切替 #484 D2 (Jul 17, 2026)
 
 **Date**: 2026-07-17

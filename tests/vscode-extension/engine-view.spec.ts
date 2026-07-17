@@ -7,6 +7,8 @@ import {
   buildRootNodes,
   deviceNameFromNodeId,
   deviceSectionChildren,
+  parseSelectAudioDeviceResultLine,
+  translateSelectAudioDeviceError,
   type EngineViewDevice,
 } from '../../packages/vscode-extension/src/engine-view'
 
@@ -138,5 +140,58 @@ describe('deviceNameFromNodeId', () => {
   it('returns null for non-device node ids', () => {
     expect(deviceNameFromNodeId('engine-status')).toBeNull()
     expect(deviceNameFromNodeId('device-loading')).toBeNull()
+  })
+})
+
+// #484 D2.5 — the `//#selectAudioDevice` meta-line bridge's pure result parsing/translation.
+
+describe('parseSelectAudioDeviceResultLine', () => {
+  it('parses an ok result line', () => {
+    expect(
+      parseSelectAudioDeviceResultLine(
+        JSON.stringify({ selectAudioDevice: { ok: true, device: 'Built-in Output' } }),
+      ),
+    ).toEqual({ ok: true, device: 'Built-in Output' })
+  })
+
+  it('parses an error result line', () => {
+    expect(
+      parseSelectAudioDeviceResultLine(
+        JSON.stringify({ selectAudioDevice: { ok: false, error: 'boom' } }),
+      ),
+    ).toEqual({ ok: false, error: 'boom' })
+  })
+
+  it('tolerates surrounding whitespace/newline from the stdout chunk split', () => {
+    expect(
+      parseSelectAudioDeviceResultLine(
+        `  ${JSON.stringify({ selectAudioDevice: { ok: true, device: 'X' } })}\n`,
+      ),
+    ).toEqual({ ok: true, device: 'X' })
+  })
+
+  it('returns undefined for unrelated lines', () => {
+    expect(parseSelectAudioDeviceResultLine('🎵 OrbitScore Audio Engine')).toBeUndefined()
+    expect(parseSelectAudioDeviceResultLine('{"other":true}')).toBeUndefined()
+  })
+
+  it('returns undefined for malformed JSON that happens to mention the key', () => {
+    expect(parseSelectAudioDeviceResultLine('{selectAudioDevice: not json}')).toBeUndefined()
+  })
+})
+
+describe('translateSelectAudioDeviceError', () => {
+  it('translates AUDIO_DEVICE_SWITCH_UNAVAILABLE to a Japanese user message', () => {
+    expect(translateSelectAudioDeviceError('AUDIO_DEVICE_SWITCH_UNAVAILABLE')).toBe(
+      '録音中は切替できません — エンジンを再起動してください',
+    )
+  })
+
+  it('passes other errors through unchanged', () => {
+    expect(translateSelectAudioDeviceError('device not found')).toBe('device not found')
+  })
+
+  it('falls back to a generic message when undefined', () => {
+    expect(translateSelectAudioDeviceError(undefined)).toBe('live audio device switch failed')
   })
 })

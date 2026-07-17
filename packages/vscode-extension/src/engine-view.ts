@@ -135,3 +135,42 @@ export function deviceNameFromNodeId(nodeId: string): string | null {
   if (!nodeId.startsWith('device:')) return null
   return nodeId.slice('device:'.length)
 }
+
+/** Result payload embedded in the engine's `{"selectAudioDevice":{...}}` stdout line (#484 D2.5). */
+export interface SelectAudioDeviceBridgeResult {
+  ok: boolean
+  device?: string
+  error?: string
+}
+
+/**
+ * Parse a raw engine stdout line for the `//#selectAudioDevice` bridge's JSON result
+ * (emitted by `repl-mode.ts`'s `executeSelectAudioDeviceMeta`). Returns `undefined` for
+ * any other line — the vast majority of stdout traffic — including parse failures.
+ */
+export function parseSelectAudioDeviceResultLine(
+  rawLine: string,
+): SelectAudioDeviceBridgeResult | undefined {
+  const trimmed = rawLine.trim()
+  if (!trimmed.startsWith('{') || !trimmed.includes('selectAudioDevice')) return undefined
+  let parsed: { selectAudioDevice?: SelectAudioDeviceBridgeResult }
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return undefined
+  }
+  return parsed.selectAudioDevice
+}
+
+/**
+ * User-facing translation for the daemon's `AUDIO_DEVICE_SWITCH_UNAVAILABLE` error
+ * (raised while `ORBIT_CAPTURE_WAV` recording is active — the daemon refuses to tear
+ * down the stream mid-capture, #484 D2 brief choice (a)). Other errors pass through
+ * unchanged so real failures aren't masked.
+ */
+export function translateSelectAudioDeviceError(error: string | undefined): string {
+  if (error && error.includes('AUDIO_DEVICE_SWITCH_UNAVAILABLE')) {
+    return '録音中は切替できません — エンジンを再起動してください'
+  }
+  return error ?? 'live audio device switch failed'
+}

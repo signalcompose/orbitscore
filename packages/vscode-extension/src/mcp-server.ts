@@ -543,9 +543,10 @@ function buildServer(
     {
       title: 'Select Audio Device',
       description:
-        'Write the selected audio output device to .orbitscore.json — equivalent to ' +
-        'choosing a device via "Select Audio Device". Restart the engine to apply. ' +
-        'Not implemented for the Rust engine.',
+        'Select the audio output device. For the SuperCollider backend, writes to ' +
+        '.orbitscore.json (restart the engine to apply). For the Rust engine (default), ' +
+        'switches the device live in the running engine — no restart needed, but the ' +
+        'engine must already be running.',
       inputSchema: {
         device: z.string().describe('Device name as reported by list_audio_devices'),
       },
