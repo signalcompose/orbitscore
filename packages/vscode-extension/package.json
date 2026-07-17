@@ -147,7 +147,7 @@
       },
       {
         "view": "orbitscore.engineView",
-        "contents": "Control the OrbitScore audio engine.\n[Start Engine](command:orbitscore.toggleEngine)\n[Start Engine (Debug)](command:orbitscore.startEngineDebug)\n[Stop Engine](command:orbitscore.stopEngine)\n[Select Audio Device](command:orbitscore.selectAudioDevice)\n[Force Kill scsynth](command:orbitscore.forceKillScsynth)\n\nNote: process state and CPU metrics will appear here in a future TreeView."
+        "contents": "Control the OrbitScore audio engine.\n[Start Engine](command:orbitscore.toggleEngine)\n[Start Engine (Debug)](command:orbitscore.startEngineDebug)\n[Stop Engine](command:orbitscore.stopEngine)\n\nNote: process state, CPU metrics and audio-device selection (Rust engine) will appear here — see issue #484. Legacy SC-backend commands (Select Audio Device / Force Kill scsynth) remain in the Command Palette."
       }
     ],
     "menus": {
