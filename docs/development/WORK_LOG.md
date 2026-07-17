@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.277 fix(native): device 解決の CoreAudio ハングを解消 #484 hotfix (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 修正・確認 E2E 全 PASS（owner 指示の「バグ確認 E2E」が main の P0 を検出）
+
+**発見**: マージ直後の確認 E2E で engine 起動が ready line timeout。スタック採取で確定 —
+`resolve_output_device` の `host.output_devices()` は cpal 内部で各デバイスの
+supported_output_configs を probe（AudioUnit + CreateIOProcID 生成）し、Aggregate
+デバイス等で CoreAudio 内ブロック。boot が設定デバイス名を渡すようになったため
+**OrbitStudio の既定起動が壊れていた**（環境依存で顕在化 — D1 実装時の実機検証は通過
+していた）。
+
+**修正**: 起動クリティカルパスは probe なしの `host.devices()` 名前照合のみに。config
+検証は選択後の stream 構築（1 台のみ）に委ねる。3 ケース（実在名/不在名/指定なし）で
+即 ready を確認。
+
+**確認 E2E（アプリ経由・全修正の再検証）**: #476 = effect 入りファイル一括実行 →
+peak 0.35355 一致 / #478 = soundDetected true（onset 1）+ windows 2197・steady 0.3536 /
+#480 = stale 偽装 → 503 + rebuild hint → 復元 200 / #487 = ビルド時 rebuild 走行確認。
+
+**既知 Minor**: daemon stderr のデバイス fallback 警告が拡張ログに未転送（可視性・別途）。
+
+Refs #484
+
+
 ### 6.276 feat(daemon): audio device enumeration + startup selection #484 D1 (Jul 17, 2026)
 
 **Date**: 2026-07-17
