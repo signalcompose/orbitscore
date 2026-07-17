@@ -29,6 +29,7 @@ pub struct StreamStats {
     xruns: AtomicU64,
     buffer_underruns: AtomicU64,
     device_lost: AtomicBool,
+    render_contentions: AtomicU64,
 }
 
 impl StreamStats {
@@ -37,6 +38,7 @@ impl StreamStats {
             xruns: self.xruns.load(Ordering::Relaxed),
             buffer_underruns: self.buffer_underruns.load(Ordering::Relaxed),
             device_lost: self.device_lost.load(Ordering::Relaxed),
+            render_contentions: self.render_contentions.load(Ordering::Relaxed),
         }
     }
 
@@ -70,6 +72,10 @@ impl StreamStats {
             cpal::StreamError::BackendSpecific { .. } => self.record_xrun(),
         }
     }
+
+    fn record_render_contention(&self) {
+        self.render_contentions.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +83,7 @@ pub struct StreamStatsSnapshot {
     pub xruns: u64,
     pub buffer_underruns: u64,
     pub device_lost: bool,
+    pub render_contentions: u64,
 }
 
 #[derive(Error, Debug)]
@@ -221,17 +228,33 @@ pub struct OutputStream {
     /// 宣言する**ことで drop 順を「stream 停止（callback 停止＝以後 commit なし）→ writer が ring の
     /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
     _capture: Option<crate::capture::CaptureWriter>,
+    render_state: Arc<std::sync::Mutex<RenderState>>,
     pub sample_rate: u32,
     pub channels: u16,
 }
 
 impl OutputStream {
+    /// Callback-owned state shared with a replacement stream. This deliberately
+    /// excludes capture: capture switches are rejected by the daemon.
+    pub fn render_state(&self) -> Arc<std::sync::Mutex<RenderState>> {
+        self.render_state.clone()
+    }
     /// capture 有効時のみ、producer 側で drop した interleaved サンプル累積を返す。capture 無効は
     /// `None`。**`> 0` は「off-thread writer が追いつかず録音が破損した = 検証 invalid」を意味する**
     /// （検証ハーネス/オペレータが assert・監視する silent-failure ガード）。
     pub fn capture_drops(&self) -> Option<u64> {
         self._capture.as_ref().map(|w| w.dropped_samples())
     }
+}
+
+/// Mutable callback state which must survive a cpal stream rebuild (notably
+/// out-of-process processor adapters). The callback uses one `try_lock`; a
+/// concurrent control-plane rebuild produces a silent block instead of ever
+/// blocking an audio thread.
+pub struct RenderState {
+    link: Option<LinkEgress>,
+    insert_buses: Vec<InsertBusStage>,
+    post: Option<Box<dyn PostProcessor>>,
 }
 
 /// callback が同時に egress できる LinkAudio channel の上限（A4-2b-2b）。RT callback の per-block
@@ -451,6 +474,41 @@ fn channel_egress_active(ready: bool, scratch_len: usize, block: usize) -> bool 
 }
 
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
+#[inline]
+fn render_shared_block(
+    engine: &Engine,
+    state: &Arc<std::sync::Mutex<RenderState>>,
+    capture: &mut Option<RingTapSink>,
+    cb_stats: &Option<Arc<CallbackTimeStats>>,
+    output_channels: usize,
+    hw: &mut [f32],
+    stats: &StreamStats,
+) {
+    match state.try_lock() {
+        Ok(mut state) => {
+            let RenderState {
+                link,
+                insert_buses,
+                post,
+            } = &mut *state;
+            render_block(
+                engine,
+                link,
+                insert_buses,
+                post,
+                capture,
+                cb_stats,
+                output_channels,
+                hw,
+            )
+        }
+        Err(_) => {
+            hw.fill(0.0);
+            stats.record_render_contention();
+        }
+    }
+}
+
 ///
 /// 手順: (1) callback 開始時刻を取る（`cb_stats` 有り時のみ）→ (2) [`render_engine`] で engine
 /// （+ LinkAudio egress）を render → (3) `post` 有りなら hardware sum を in-place 変換（CLAP
@@ -967,15 +1025,18 @@ fn start_output_inner(
     // 従来通り無計測（None → render_block は計測分岐を踏まずビット同一）。
     let cb_stats = post.as_ref().map(|_| CallbackTimeStats::new());
     let engine = Engine::new(sample_rate, channels);
+    let render_state = Arc::new(std::sync::Mutex::new(RenderState {
+        link,
+        insert_buses,
+        post,
+    }));
     let stream = build_stream(
         &device,
         &config,
         sample_format,
         engine.clone(),
         stats.clone(),
-        link,
-        insert_buses,
-        post,
+        render_state.clone(),
         capture_sink,
         cb_stats.clone(),
     )?;
@@ -988,12 +1049,55 @@ fn start_output_inner(
         OutputStream {
             _stream: stream,
             _capture: capture_writer,
+            render_state,
             sample_rate,
             channels,
         },
         stats,
         cb_stats,
     ))
+}
+
+/// Rebuild only the cpal device/stream while preserving the engine, callback
+/// state, and stream statistics. Capture is intentionally not attached here.
+pub fn rebuild_output_stream(
+    render_state: Arc<std::sync::Mutex<RenderState>>,
+    engine: Engine,
+    stats: Arc<StreamStats>,
+    cb_stats: Option<Arc<CallbackTimeStats>>,
+    buffer_frames: Option<u32>,
+    device_name: Option<String>,
+) -> Result<OutputStream, OutputError> {
+    let host = cpal::default_host();
+    let device = resolve_output_device(&host, device_name.as_deref())?;
+    let supported = device
+        .default_output_config()
+        .map_err(|e| OutputError::NoConfig(e.to_string()))?;
+    let sample_format = supported.sample_format();
+    let mut config = supported.config();
+    if let Some(frames) = buffer_frames {
+        config.buffer_size = cpal::BufferSize::Fixed(frames);
+    }
+    let stream = build_stream(
+        &device,
+        &config,
+        sample_format,
+        engine,
+        stats,
+        render_state.clone(),
+        None,
+        cb_stats,
+    )?;
+    stream
+        .play()
+        .map_err(|e| OutputError::PlayStream(e.to_string()))?;
+    Ok(OutputStream {
+        _stream: stream,
+        _capture: None,
+        render_state,
+        sample_rate: config.sample_rate.0,
+        channels: config.channels,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1003,15 +1107,12 @@ fn build_stream(
     sample_format: SampleFormat,
     engine: Engine,
     stats: Arc<StreamStats>,
-    mut link: Option<LinkEgress>,
-    mut insert_buses: Vec<InsertBusStage>,
-    mut post: Option<Box<dyn PostProcessor>>,
+    render_state: Arc<std::sync::Mutex<RenderState>>,
     mut capture: Option<RingTapSink>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
 ) -> Result<Stream, OutputError> {
-    let make_err_fn = || {
+    let make_err_fn = |stats: Arc<StreamStats>| {
         // 上位 (daemon session) が StreamStats / DaemonError 経由で可視化する責務を持つ。
-        let stats = stats.clone();
         move |err: cpal::StreamError| stats.record_error(&err)
     };
 
@@ -1023,24 +1124,24 @@ fn build_stream(
     }
 
     let out_ch = config.channels as usize;
+    let callback_stats = stats.clone();
 
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
                 config,
                 move |data: &mut [f32], _| {
-                    render_block(
+                    render_shared_block(
                         &engine,
-                        &mut link,
-                        &mut insert_buses,
-                        &mut post,
+                        &render_state,
                         &mut capture,
                         &cb_stats,
                         out_ch,
                         data,
+                        &callback_stats,
                     )
                 },
-                make_err_fn(),
+                make_err_fn(stats.clone()),
                 None,
             )
             .map_err(|e| OutputError::BuildStream(e.to_string()))?,
@@ -1055,21 +1156,20 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(
+                        render_shared_block(
                             &engine,
-                            &mut link,
-                            &mut insert_buses,
-                            &mut post,
+                            &render_state,
                             &mut capture,
                             &cb_stats,
                             out_ch,
                             buf,
+                            &callback_stats,
                         );
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                         }
                     },
-                    make_err_fn(),
+                    make_err_fn(stats.clone()),
                     None,
                 )
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?
@@ -1085,21 +1185,20 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(
+                        render_shared_block(
                             &engine,
-                            &mut link,
-                            &mut insert_buses,
-                            &mut post,
+                            &render_state,
                             &mut capture,
                             &cb_stats,
                             out_ch,
                             buf,
+                            &callback_stats,
                         );
                         for (i, s) in buf.iter().enumerate() {
                             data[i] = (s.clamp(-1.0, 1.0) * i32::MAX as f32) as i32;
                         }
                     },
-                    make_err_fn(),
+                    make_err_fn(stats.clone()),
                     None,
                 )
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?
@@ -1114,22 +1213,21 @@ fn build_stream(
                             scratch.resize(data.len(), 0.0);
                         }
                         let buf = &mut scratch[..data.len()];
-                        render_block(
+                        render_shared_block(
                             &engine,
-                            &mut link,
-                            &mut insert_buses,
-                            &mut post,
+                            &render_state,
                             &mut capture,
                             &cb_stats,
                             out_ch,
                             buf,
+                            &callback_stats,
                         );
                         for (i, s) in buf.iter().enumerate() {
                             let v = (s.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32;
                             data[i] = v as u16;
                         }
                     },
-                    make_err_fn(),
+                    make_err_fn(stats.clone()),
                     None,
                 )
                 .map_err(|e| OutputError::BuildStream(e.to_string()))?

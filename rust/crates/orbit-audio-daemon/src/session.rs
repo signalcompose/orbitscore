@@ -607,6 +607,9 @@ pub async fn run(
                         "cpu_load": 0.0,
                         "xruns": snapshot.xruns,
                         "buffer_underruns": snapshot.buffer_underruns,
+                        // D2: RenderState try_lock 競合（デバイス切替中の zero-fill）の観測面。
+                        // 定常時は 0 のはず — 増え続けるなら切替以外の contention を疑う。
+                        "render_contentions": snapshot.render_contentions,
                         "now_sec": now_sec,
                     }),
                 );
@@ -763,6 +766,28 @@ async fn handle_command(
                 ),
             }
         }
+        // ランタイムのオーディオデバイス切替（#484 D2）。`device` 省略 / 空文字列 = システム既定へ
+        // 縮退（`ListAudioDevices` と同じ wire 規約）。cpal I/O を伴うため `ListAudioDevices` と同様
+        // spawn_blocking で隔離する（実処理は audio owner thread へさらに委譲される・
+        // `EngineWrap::select_audio_device` 参照）。
+        "SelectAudioDevice" => {
+            let device = params
+                .get("device")
+                .and_then(|d| d.as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.trim().is_empty());
+            let engine = engine.clone();
+            let switched =
+                tokio::task::spawn_blocking(move || engine.select_audio_device(device)).await;
+            match switched {
+                Ok(Ok(device)) => ok(&id, json!({ "ok": true, "device": device })),
+                Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
+                Err(join_err) => err(
+                    &id,
+                    ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                ),
+            }
+        }
         "GetStatus" => {
             let status = json!({
                 "daemon_version": env!("CARGO_PKG_VERSION"),
@@ -772,6 +797,7 @@ async fn handle_command(
                 "loaded_samples": engine.loaded_sample_count(),
                 "active_plays": engine.active_play_count(),
                 "uptime_sec": engine.uptime_sec(),
+                "render_contentions": engine.stream_stats_snapshot().render_contentions,
             });
             ok(&id, status)
         }
@@ -1380,6 +1406,11 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("OUTPROC_ATTACH_FAILED", msg.clone())
         }
         WrapError::OutProcSlotClosed(msg) => ProtocolError::new("OUTPROC_SLOT_CLOSED", msg.clone()),
+        // ランタイム device switch（`SelectAudioDevice`・#484 D2）が実行できない状態
+        // （capture 有効中の明示拒否・audio owner thread 未生存 = test backend 等）。
+        WrapError::AudioDeviceSwitchUnavailable(msg) => {
+            ProtocolError::new("AUDIO_DEVICE_SWITCH_UNAVAILABLE", msg.clone())
+        }
     }
 }
 

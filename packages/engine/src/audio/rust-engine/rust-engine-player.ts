@@ -44,6 +44,7 @@ import type { AudioDevice } from '../supercollider/types'
 import type { PluginLoadResult } from '../types'
 
 import { DaemonClient } from './daemon-client'
+import type { AudioDeviceListEntry } from './daemon-client'
 import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './errors'
 
 /**
@@ -581,6 +582,26 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   setAvailableDevices(_devices: AudioDevice[]): void {
     // S2 では daemon 側のデバイス列挙 API が無いため no-op。
+  }
+
+  /**
+   * cpal output device 一覧を daemon から取得する（#484 D1）。`AudioEngineBackend` の同期
+   * `getAvailableDevices()`/`setAvailableDevices()` は SC 経路向けの既存 shape で rust 経路には
+   * まだ配線されていない（S2 の既知ギャップ）— このメソッドはそれとは別に、daemon の非同期
+   * `ListAudioDevices` RPC への直接の passthrough を提供する。
+   */
+  async listAudioDevices(): Promise<AudioDeviceListEntry[]> {
+    return this.daemon.listAudioDevices()
+  }
+
+  /**
+   * daemon プロセスを再起動せずに出力デバイスを切り替える（#484 D2）。`daemon.selectAudioDevice`
+   * への薄い passthrough。切替中の短い無音ギャップは仕様として許容される。
+   *
+   * @returns 実際に適用されたデバイス名。
+   */
+  async selectAudioDevice(device: string): Promise<string> {
+    return this.daemon.selectAudioDevice(device)
   }
 
   /**

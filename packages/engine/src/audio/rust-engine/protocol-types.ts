@@ -42,8 +42,12 @@ export type CommandMethod =
   // ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 のときだけ受理し、それ以外は MALFORMED_REQUEST。
   | 'InjectFault'
   // cpal output device 列挙（#484 D1）。起動時 device 選択（`--audio-device`）とは別経路 —
-  // 一覧を返すのみで、選択は起動引数（将来のランタイム切替は D2 で `SelectAudioDevice` を追加）。
+  // 一覧を返すのみで、選択は起動引数（ランタイム切替は D2 の `SelectAudioDevice`）。
   | 'ListAudioDevices'
+  // ランタイムのオーディオデバイス切替（#484 D2）。daemon プロセスを再起動せず cpal
+  // Device/Stream だけを差し替える。`{ device: string }`（空文字列 = システム既定）。
+  // ORBIT_CAPTURE_WAV 有効時は AUDIO_DEVICE_SWITCH_UNAVAILABLE を返す（未対応・#484 D2 ブリーフ選択(a)）。
+  | 'SelectAudioDevice'
 
 export interface CommandFrame {
   id: string
