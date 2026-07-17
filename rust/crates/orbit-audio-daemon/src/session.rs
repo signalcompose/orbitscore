@@ -607,6 +607,9 @@ pub async fn run(
                         "cpu_load": 0.0,
                         "xruns": snapshot.xruns,
                         "buffer_underruns": snapshot.buffer_underruns,
+                        // D2: RenderState try_lock 競合（デバイス切替中の zero-fill）の観測面。
+                        // 定常時は 0 のはず — 増え続けるなら切替以外の contention を疑う。
+                        "render_contentions": snapshot.render_contentions,
                         "now_sec": now_sec,
                     }),
                 );
@@ -794,6 +797,7 @@ async fn handle_command(
                 "loaded_samples": engine.loaded_sample_count(),
                 "active_plays": engine.active_play_count(),
                 "uptime_sec": engine.uptime_sec(),
+                "render_contentions": engine.stream_stats_snapshot().render_contentions,
             });
             ok(&id, status)
         }
