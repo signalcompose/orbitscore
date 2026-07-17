@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.272 fix(mcp): stale dist（base 不一致）検出ガード #480 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 修正
+
+**内容**: docs 配信に `isDocsDistStale()` を追加 — index.html に `base + '/assets/'` 参照が
+無い dist（base 変更前の古いビルド）は、未ビルト時と同じ 503 + rebuild 手順の actionable
+メッセージに落とす（従来は壊れた素 HTML を黙って配信）。mtime キャッシュでリクエスト毎の
+同期 read を回避。unit 4 件（正常/不一致/不在/mtime 再検査）+ 既存 docs-http 36 件 green。
+
+Refs #480
 ### 6.271 fix(engine): REPL 行処理の FIFO 直列化 #476 (Jul 17, 2026)
 
 **Date**: 2026-07-17
