@@ -64,6 +64,50 @@ describe('DaemonClient with mock server', () => {
     expect(record?.params.path).toBe('/tmp/kick.wav')
   })
 
+  it('listAudioDevices は ListAudioDevices の devices 配列をそのまま返す（#484 D1）', async () => {
+    const url = await server.start({
+      ListAudioDevices: () => ({
+        devices: [
+          {
+            name: 'Built-in Output',
+            isDefault: true,
+            maxOutputChannels: 2,
+            defaultSampleRate: 48000,
+            direction: 'output',
+          },
+          {
+            name: 'USB Audio',
+            isDefault: false,
+            maxOutputChannels: 8,
+            defaultSampleRate: 44100,
+            direction: 'output',
+          },
+        ],
+      }),
+    })
+    await client.start({ wsUrlOverride: url })
+    const devices = await client.listAudioDevices()
+    expect(devices).toHaveLength(2)
+    expect(devices[0]).toEqual({
+      name: 'Built-in Output',
+      isDefault: true,
+      maxOutputChannels: 2,
+      defaultSampleRate: 48000,
+      direction: 'output',
+    })
+    expect(devices[1].name).toBe('USB Audio')
+    const record = server.received.find((r) => r.method === 'ListAudioDevices')
+    expect(record).toBeDefined()
+  })
+
+  it('listAudioDevices は devices が配列でない応答を空配列として扱う', async () => {
+    const url = await server.start({
+      ListAudioDevices: () => ({}),
+    })
+    await client.start({ wsUrlOverride: url })
+    await expect(client.listAudioDevices()).resolves.toEqual([])
+  })
+
   it('LoadPlugin は response を camelCase に変換し effect role と plugin_id を送る', async () => {
     const url = await server.start({
       LoadPlugin: () => ({
@@ -370,6 +414,50 @@ describe('DaemonClient real spawn error handling (C3)', () => {
     // exit/timeout 経路との判別のため文言まで固定して assert する。
     await expect(client.start({ daemonPath: badShebangBin })).rejects.toThrow(/daemon spawn failed/)
     expect(client.isRunning()).toBe(false)
+  })
+})
+
+describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
+  // 実 daemon バイナリの代わりに argv をファイルへ書き出すだけの shell script を spawn し、
+  // `--audio-device <name>` が実際に子プロセスへ渡ることを検証する（daemon 側の解決・縮退
+  // ロジック自体は Rust unit test で検証済み・ここは TS→spawn args の配線のみが対象）。
+  let client: DaemonClient
+  let tmpDir: string
+  let recorderBin: string
+  let argvFile: string
+
+  beforeEach(() => {
+    client = new DaemonClient()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-audio-device-'))
+    recorderBin = path.join(tmpDir, 'orbit-audio-daemon')
+    argvFile = path.join(tmpDir, 'argv.txt')
+    fs.writeFileSync(
+      recorderBin,
+      `#!/bin/sh
+printf '%s\n' "$@" > "${argvFile}"
+exit 1
+`,
+      { mode: 0o755 },
+    )
+  })
+
+  afterEach(async () => {
+    await client.quit()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('audioDevice 指定時は --audio-device <name> を argv に渡す', async () => {
+    await expect(
+      client.start({ daemonPath: recorderBin, audioDevice: 'USB Audio', startupTimeoutMs: 500 }),
+    ).rejects.toThrow()
+    const argv = fs.readFileSync(argvFile, 'utf-8').trim().split('\n')
+    expect(argv).toEqual(['--audio-device', 'USB Audio'])
+  })
+
+  it('audioDevice 未指定時は追加 argv を渡さない', async () => {
+    await expect(client.start({ daemonPath: recorderBin, startupTimeoutMs: 500 })).rejects.toThrow()
+    const argv = fs.readFileSync(argvFile, 'utf-8')
+    expect(argv.trim()).toBe('')
   })
 })
 

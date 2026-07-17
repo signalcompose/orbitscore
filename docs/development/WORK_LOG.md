@@ -17,6 +17,30 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.276 feat(daemon): audio device enumeration + startup selection #484 D1 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装・実機検証済み（D2 = 走行中切替 / D3 = 拡張 UI・MCP 配線は別 PR）
+
+**内容**: owner MUST 要件（デバイス選択）の第1段。
+- `ListAudioDevices`（JSON-RPC）: cpal output device 列挙 `{name, isDefault,
+  maxOutputChannels, defaultSampleRate, direction}`（direction は将来の入力用予約）
+- `--audio-device <name>` の起動時 honor: 完全一致 → 該当デバイスで stream 構築・
+  不在 → 利用可能デバイス一覧付き警告 + デフォルト縮退（従来の「not yet honored」
+  WARNING を撤去）。layering は capture_path と同型（env は engine_wrap に集約・
+  native crate は明示引数）
+- TS: daemon-client に listAudioDevices + audioDevice option・rust-engine-player の
+  boot(outputDevice) が実際に渡すように
+
+**検証**: Rust unit 8（名前解決・argv parse）+ TS 4・clippy/fmt/feature 組み合わせ green・
+npm 1448 passed。実機: ListAudioDevices が実デバイス 2 件（MacBook Proのスピーカー
+default / Pro Tools Aggregate I/O）を返却・不在名で警告 + 縮退起動を確認。
+（監査メモ: release バイナリの strings 検査は 16 byte リテラルの即値比較最適化で
+偽陰性になる — 機能スモークが正・ParentWatch #479 と同じ教訓）
+
+Refs #484
+
+
 **#479 の調査結論（実測）**: ParentWatch のコードバグではなく **stale バイナリ**が真因。
 orphan ×3 は全て #462 修正前のビルド（バイナリ内に ParentWatch 文字列 0 ヒット・mtime が
 修正コミットより古い）。現行ソースの fresh build は daemon SIGKILL 後 1 秒以内に child 退出

@@ -1390,6 +1390,24 @@ fn capture_path_from_env() -> Option<PathBuf> {
     }
 }
 
+/// device 選択（#484 D1）: 環境変数 `ORBIT_AUDIO_DEVICE` を解決する。main.rs が `--audio-device`
+/// CLI 引数をこの env に反映してから `EngineWrap::start()` を呼ぶ（`capture_path_from_env` と
+/// 同じ層分け＝env 読取りは daemon 層に集約し、native へは解決済み値を渡す）。未設定 / 空文字列は
+/// `None`（host 既定を使う・従来経路とビット同一）。
+fn device_name_from_env() -> Option<String> {
+    match std::env::var("ORBIT_AUDIO_DEVICE") {
+        Ok(raw) if !raw.trim().is_empty() => Some(raw),
+        Ok(_) => None,
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!(
+                "[audio-device] ORBIT_AUDIO_DEVICE が非 UTF-8 のため無視した（host 既定へ縮退）"
+            );
+            None
+        }
+    }
+}
+
 impl EngineWrap {
     /// Engine とストリーム guard を起動する（本番用、cpal 既定出力）。
     /// guard は caller（通常は main）が drop されるまで保持すること。
@@ -1403,8 +1421,10 @@ impl EngineWrap {
         not(feature = "outproc-instrument")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
-        let (engine, stream, stream_stats) =
-            orbit_audio_native::start_default_output(capture_path_from_env())?;
+        let (engine, stream, stream_stats) = orbit_audio_native::start_default_output_with_device(
+            capture_path_from_env(),
+            device_name_from_env(),
+        )?;
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         Ok((wrap, StreamGuard { _stream: stream }))
     }
@@ -1423,6 +1443,7 @@ impl EngineWrap {
             orbit_audio_native::start_default_output_with_link_egress(
                 crate::link_audio::REG_RING_CAPACITY,
                 capture_path_from_env(),
+                device_name_from_env(),
             )?;
         let (control, link_guard) = crate::link_audio::LinkAudioControl::spawn(
             reg_tx,
@@ -1463,6 +1484,7 @@ impl EngineWrap {
                 processor,
                 None,
                 capture_path_from_env(),
+                device_name_from_env(),
             )
             .map_err(WrapError::Output)?;
         // 専用スレッドを起動（!Send instance + pump をここで所有）。install ring producer を渡す。
@@ -1569,6 +1591,7 @@ impl EngineWrap {
                 processor,
                 cfg.buffer_frames,
                 capture_path_from_env(),
+                device_name_from_env(),
             )
             .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
@@ -1718,6 +1741,7 @@ impl EngineWrap {
                 processor,
                 cfg.buffer_frames,
                 capture_path_from_env(),
+                device_name_from_env(),
             )
             .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
@@ -1839,6 +1863,7 @@ impl EngineWrap {
                 processor,
                 buffer_frames,
                 capture_path_from_env(),
+                device_name_from_env(),
             )
             .map_err(WrapError::Output)?;
         let effect_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {

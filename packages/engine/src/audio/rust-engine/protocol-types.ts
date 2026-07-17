@@ -41,6 +41,9 @@ export type CommandMethod =
   // gated な fault 注入（recovery floor の kill-test 専用）。daemon 側で
   // ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 のときだけ受理し、それ以外は MALFORMED_REQUEST。
   | 'InjectFault'
+  // cpal output device 列挙（#484 D1）。起動時 device 選択（`--audio-device`）とは別経路 —
+  // 一覧を返すのみで、選択は起動引数（将来のランタイム切替は D2 で `SelectAudioDevice` を追加）。
+  | 'ListAudioDevices'
 
 export interface CommandFrame {
   id: string

@@ -402,21 +402,21 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * daemon を起動し WebSocket 接続を確立する。`outputDevice` は S2 では未対応
-   * （daemon は既定デバイスを選択）。**一度だけ呼ぶ前提**（InterpreterV2 は isBooted で guard）。
+   * daemon を起動し WebSocket 接続を確立する。`outputDevice` は起動時 `--audio-device` として
+   * daemon へ渡り、cpal device 名の**完全一致**で honor される（#484 D1）。一致しない場合は
+   * daemon 側が stderr に警告して host 既定へ縮退する（起動は失敗しない）。ランタイム中の切替
+   * （stream 再構築）は D2 scope・未実装。**一度だけ呼ぶ前提**（InterpreterV2 は isBooted で guard）。
    *
    * 順序が load-bearing: getStatus で初期 anchor を確定**してから** StreamStats を subscribe する。
    * 逆順だと、getStatus の await 中に届いた StreamStats（精緻な transport now_sec）を、後続の
    * getStatus(uptime_sec) が後退上書きしうる。先に初期 anchor を置けば StreamStats は常に前進補正。
    */
   async boot(outputDevice?: string): Promise<void> {
-    if (outputDevice) {
-      console.warn(
-        `⚠️  [rust-engine] outputDevice="${outputDevice}" is not yet honored — the daemon uses the system default output (S2 scope).`,
-      )
-    }
-
-    await this.daemon.start({ daemonPath: this.daemonPath, wsUrlOverride: this.wsUrlOverride })
+    await this.daemon.start({
+      daemonPath: this.daemonPath,
+      wsUrlOverride: this.wsUrlOverride,
+      audioDevice: outputDevice,
+    })
     await this.establishSession()
   }
 
