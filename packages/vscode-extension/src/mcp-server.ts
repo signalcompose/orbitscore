@@ -384,6 +384,31 @@ export function matchDocsRequest(pathname: string, sites: DocsSite[]): DocsSite 
 }
 
 /**
+ * dist が「存在するが base 不一致の stale ビルド」でないか検査する（#480）。
+ * VitePress は SITE_BASE をアセット URL に焼き込むため、base 変更前の古い dist を
+ * 配信すると全アセットが 404 になり素 HTML が出る（実害 2026-07-17）。index.html に
+ * `base + '/assets/'` への参照が含まれることを鮮度の代理指標とし、不一致なら
+ * 未ビルト時と同じ actionable メッセージ（rebuild 手順）に落とす。結果は
+ * index.html の mtime でキャッシュ（リクエスト毎の同期 read を避ける）。
+ */
+export function isDocsDistStale(root: string, base: string): boolean {
+  const indexPath = path.join(root, 'index.html')
+  try {
+    const mtime = fs.statSync(indexPath).mtimeMs
+    const cached = staleCheckCache.get(indexPath)
+    if (cached && cached.mtime === mtime) return cached.stale
+    const html = fs.readFileSync(indexPath, 'utf8')
+    const stale = !html.includes(`${base}/assets/`)
+    staleCheckCache.set(indexPath, { mtime, stale })
+    return stale
+  } catch {
+    // index.html が読めない = 未ビルト相当。呼び出し側の existsSync ガードに任せる。
+    return false
+  }
+}
+const staleCheckCache = new Map<string, { mtime: number; stale: boolean }>()
+
+/**
  * Build a per-session McpServer with the OrbitScore tool surface registered.
  * One instance per MCP session (see `startOrbitScoreMcpServer` for routing).
  */
@@ -940,6 +965,12 @@ export async function startOrbitScoreMcpServer(opts: {
           log(`docs not built — root missing: ${docsMatch.root}`)
           res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
           res.end(docsMatch.buildHint)
+          return
+        }
+        if (isDocsDistStale(docsMatch.root, docsMatch.base)) {
+          log(`docs dist is stale (base mismatch) — ${docsMatch.root}`)
+          res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end(`Docs build is stale (built with a different base path). ${docsMatch.buildHint}`)
           return
         }
         const filePath = resolveDocsFilePath(docsMatch.root, pathname.slice(docsMatch.base.length))
