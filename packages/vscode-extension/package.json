@@ -119,7 +119,7 @@
         },
         {
           "id": "orbitscore-engine",
-          "title": "OrbitScore Engine",
+          "title": "Audio Engine Settings",
           "icon": "media/icon-engine-activitybar.svg"
         }
       ]
@@ -135,7 +135,7 @@
       "orbitscore-engine": [
         {
           "id": "orbitscore.engineView",
-          "name": "Engine",
+          "name": "Audio Engine Settings",
           "visibility": "visible"
         }
       ]
@@ -166,6 +166,18 @@
         {
           "command": "orbitscore.selectAudioDevice",
           "when": "config.orbitscore.engine == 'sc'"
+        },
+        {
+          "command": "orbitscore.toggleEngine",
+          "when": "false"
+        },
+        {
+          "command": "orbitscore.startEngineDebug",
+          "when": "false"
+        },
+        {
+          "command": "orbitscore.stopEngine",
+          "when": "false"
         }
       ]
     },
