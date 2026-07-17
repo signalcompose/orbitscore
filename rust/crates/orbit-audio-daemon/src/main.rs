@@ -70,6 +70,14 @@ fn install_fatal_panic_hook() {
 }
 
 async fn run() -> Result<(), i32> {
+    // -1. `--list-audio-devices`（#484 D3）: cpal 列挙のみ行い stdout に JSON 一覧を出して即 exit
+    // する軽量モード。stream は開かない（ハングリスクを避ける・上の `resolve_output_device` の
+    // Aggregate デバイス probe 回避コメント参照）。通常起動（WebSocket listener bind・accept loop）
+    // には進まない。
+    if has_list_audio_devices_flag(std::env::args().skip(1)) {
+        return run_list_audio_devices();
+    }
+
     // 0. `--audio-device <name>` を解析し、`ORBIT_AUDIO_DEVICE` env へ反映する（#484 D1）。
     // 実際の device 解決（列挙・一致判定・不一致時の縮退警告）は `orbit-audio-native`
     // 側（`resolve_output_device`）が cpal I/O を伴って行う。ここでは env に橋渡しするだけ
@@ -141,6 +149,47 @@ fn apply_audio_device_arg<I: IntoIterator<Item = String>>(args: I) {
     }
 }
 
+/// argv に `--list-audio-devices` フラグが含まれるかを判定する純関数（#484 D3）。
+fn has_list_audio_devices_flag<I: IntoIterator<Item = String>>(args: I) -> bool {
+    args.into_iter().any(|arg| arg == "--list-audio-devices")
+}
+
+/// `--list-audio-devices` モードの実処理（#484 D3）。`orbit_audio_native::list_output_devices()`
+/// で cpal 列挙のみ行い、1 行 JSON で stdout に出力して終了する。TS 側（VS Code extension の
+/// Engine ビュー・D3）はこのプロセスを spawn → 1 行読んで即 exit を待つ想定。列挙失敗時は
+/// stderr に理由を出し非ゼロ exit（通常起動の `report_startup_failure` と同じ schema は使わない
+/// — こちらは WebSocket プロトコルの外側の一過性 CLI 呼び出しのため）。
+fn run_list_audio_devices() -> Result<(), i32> {
+    match orbit_audio_native::list_output_devices() {
+        Ok(devices) => {
+            // wire 形は session.rs `ListAudioDevices` ハンドラと同じフィールド名に揃える
+            // （`AudioDeviceInfo` は Serialize を derive していないため手動でマップする）。
+            let devices: Vec<serde_json::Value> = devices
+                .into_iter()
+                .map(|d| {
+                    json!({
+                        "name": d.name,
+                        "isDefault": d.is_default,
+                        "maxOutputChannels": d.max_output_channels,
+                        "defaultSampleRate": d.default_sample_rate,
+                        "direction": d.direction,
+                    })
+                })
+                .collect();
+            let line = serde_json::to_string(&json!({ "devices": devices }))
+                .unwrap_or_else(|_| r#"{"devices":[]}"#.to_string());
+            println!("{line}");
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!(r#"{{"error":"{e}"}}"#);
+            Err(1)
+        }
+    }
+}
+
 fn report_startup_failure(error: ProtocolError) {
     let payload = StartupError {
         ready: false,
@@ -186,5 +235,27 @@ mod tests {
             "Second".to_string(),
         ];
         assert_eq!(parse_audio_device_arg(args), Some("Second".to_string()));
+    }
+
+    #[test]
+    fn list_audio_devices_flag_absent() {
+        let args = ["--audio-device".to_string(), "USB Audio".to_string()];
+        assert!(!has_list_audio_devices_flag(args));
+    }
+
+    #[test]
+    fn list_audio_devices_flag_present() {
+        let args = ["--list-audio-devices".to_string()];
+        assert!(has_list_audio_devices_flag(args));
+    }
+
+    #[test]
+    fn list_audio_devices_flag_present_among_others() {
+        let args = [
+            "--audio-device".to_string(),
+            "USB Audio".to_string(),
+            "--list-audio-devices".to_string(),
+        ];
+        assert!(has_list_audio_devices_flag(args));
     }
 }

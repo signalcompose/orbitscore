@@ -93,6 +93,11 @@
         "category": "OrbitScore"
       },
       {
+        "command": "orbitscore.engineViewSelectDevice",
+        "title": "OrbitScore: Select Audio Device (Engine View)",
+        "category": "OrbitScore"
+      },
+      {
         "command": "orbitscore.openDocs",
         "title": "OrbitScore: Open Learning Site",
         "icon": "$(book)"
@@ -153,7 +158,7 @@
       },
       {
         "view": "orbitscore.engineView",
-        "contents": "Control the OrbitScore audio engine.\n[Start Engine](command:orbitscore.toggleEngine)\n[Start Engine (Debug)](command:orbitscore.startEngineDebug)\n[Stop Engine](command:orbitscore.stopEngine)\n\nNote: process state, CPU metrics and audio-device selection (Rust engine) will appear here — see issue #484."
+        "contents": "Control the OrbitScore audio engine.\n[Start Engine](command:orbitscore.toggleEngine)\n[Start Engine (Debug)](command:orbitscore.startEngineDebug)\n[Stop Engine](command:orbitscore.stopEngine)\n\nOnce the engine is running, this view shows engine status and lets you pick the output device (applies on the next start). CPU metrics are a follow-up — see issue #484."
       }
     ],
     "menus": {
@@ -188,6 +193,10 @@
         },
         {
           "command": "orbitscore.stopEngine",
+          "when": "false"
+        },
+        {
+          "command": "orbitscore.engineViewSelectDevice",
           "when": "false"
         }
       ],
@@ -339,6 +348,12 @@
           ],
           "default": "rust",
           "description": "Audio backend to use. \"rust\" (default) is the native audio daemon (orbit-audio-daemon). \"sc\" opts into SuperCollider (requires bundled scsynth or orbitscore.scsynthPath).",
+          "scope": "machine-overridable"
+        },
+        "orbitscore.audioDevice": {
+          "type": "string",
+          "default": "",
+          "description": "Output audio device to use (both \"rust\" and \"sc\" engines). Leave empty to use the system default. Pick a device from the Audio Engine Settings view, or set the exact device name here. Applies on the *next* engine start — there is no live device switch yet (#484 D2). Takes precedence over the legacy `.orbitscore.json` \"audioDevice\" key when both are set.",
           "scope": "machine-overridable"
         },
         "orbitscore.mcpServer.port": {

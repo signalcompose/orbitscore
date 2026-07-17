@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.280 feat(orbitstudio): Engine ビューにデバイス表示/選択 #484 D3 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（D2 走行中切替は次段 — 選択は「次回起動時に適用」と正直に明示）
+
+**内容**:
+- daemon `--list-audio-devices` 軽量モード（cpal 列挙のみ・stream 非開 = hotfix の教訓で
+  ハングリスク回避・JSON 1 行出力で即 exit）
+- Engine ビューを TreeDataProvider 化（#483 の基礎）: 停止中は welcome ボタン・起動中は
+  Engine 状態（クリックで toggle）+ Output Device 一覧（展開時 lazy 取得・ポーリングなし）
+- デバイス選択 → `orbitscore.audioDevice` 設定（新設・machine-overridable）書き込み。
+  起動中なら再起動を提案。設定の正 = VS Code 設定（.orbitscore.json は後方互換 fallback —
+  palette/MCP の旧 write 経路の統合は follow-up）
+
+**検証**: Rust 7 tests・TS 13 tests・tsc/lint/build green。実機: `--list-audio-devices` が
+2 デバイス（MacBook Proのスピーカー default / Pro Tools Aggregate I/O）を返し即 exit。
+
+Refs #484 #483
+
+
 ### 6.279 feat(orbitstudio): plugin catalog 補完 + rescan 3面 + MCP #463 C1b/C3 (Jul 17, 2026)
 
 **Date**: 2026-07-17
