@@ -181,7 +181,19 @@ fn resolve_output_device(
     }
 
     match matched {
-        Some(device) => Ok(device),
+        // `devices()` は入力専用デバイスも含む（probe 回避の代償）。マッチした 1 台だけ
+        // default_output_config で出力可否を確認し、出力不可なら旧挙動どおり警告 + 既定へ
+        // 縮退する（起動失敗にしない）。probe はユーザーが明示指定した 1 台に限定される。
+        Some(device) => {
+            if device.default_output_config().is_ok() {
+                Ok(device)
+            } else {
+                eprintln!(
+                    "[audio-device] requested device \"{requested}\" is not an output device — falling back to system default output"
+                );
+                host.default_output_device().ok_or(OutputError::NoDevice)
+            }
+        }
         None => {
             eprintln!(
                 "[audio-device] requested device \"{requested}\" not found (available: {available_names:?}) — falling back to system default output"
