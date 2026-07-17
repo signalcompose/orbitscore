@@ -1368,7 +1368,9 @@ sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（v1 は 1 �
 ```
 
 - `seq.output(name)` の名前解決: **sum 宣言があれば group bus・LinkAudio 有効なら egress
-  channel**（両機構は v1 相互排他のため衝突しない）。未宣言名はエラー
+  channel**（両機構は v1 相互排他のため衝突しない）。sum にも LinkAudio にも解決されない
+  名前は**記録 + 警告**（§8.1.2 の既存挙動 — 後から `global.linkAudio()` を宣言する
+  ワークフローを壊さないため。宣言時ハードエラーではないことに注意・#477）
 - sum の **ネストは v1 不可**（1 段・将来拡張として予約）
 - seq が per-seq insert（`seq.effect()`）を持つ場合の処理順: **per-seq insert → group bus**
   （DAW の track insert → group と同型）
