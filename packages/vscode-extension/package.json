@@ -41,58 +41,50 @@
       {
         "command": "orbitscore.toggleEngine",
         "title": "Start Engine",
-        "icon": "$(play-circle)",
-        "category": "OrbitScore",
-        "icon": "$(play)"
+        "icon": "$(play)",
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.startEngineDebug",
         "title": "Start Engine (Debug)",
-        "icon": "$(debug)",
-        "category": "OrbitScore",
-        "icon": "$(debug-alt)"
+        "icon": "$(debug-alt)",
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.runSelection",
         "title": "Run Selection",
-        "icon": "$(play)",
-        "category": "OrbitScore",
-        "icon": "$(run)"
+        "icon": "$(run)",
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.stopEngine",
         "title": "Stop Engine",
-        "icon": "$(debug-stop)",
-        "category": "OrbitScore",
-        "icon": "$(stop)"
+        "icon": "$(stop)",
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.forceKillScsynth",
         "title": "Force Kill scsynth",
-        "icon": "$(close)",
-        "category": "OrbitScore",
-        "icon": "$(close-all)"
+        "icon": "$(close-all)",
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.selectAudioDevice",
         "title": "Select Audio Device",
-        "icon": "$(unmute)",
-        "category": "OrbitScore",
-        "icon": "$(device-desktop)"
+        "icon": "$(device-desktop)",
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.configureFlash",
         "title": "Configure Flash Settings",
         "icon": "$(settings-gear)",
-        "category": "OrbitScore",
-        "icon": "$(settings-gear)"
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.registerMcpServer",
         "title": "Register Claude Code MCP Server",
         "icon": "$(plug)",
-        "category": "OrbitScore",
-        "icon": "$(plug)"
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.openDocs",
@@ -103,8 +95,7 @@
         "command": "orbitscore.openDevDocs",
         "title": "OrbitScore: Open Dev Docs",
         "icon": "$(book)",
-        "category": "OrbitScore",
-        "icon": "$(book)"
+        "category": "OrbitScore"
       },
       {
         "command": "orbitscore.openDevDocsPanel",
@@ -125,6 +116,11 @@
           "id": "orbitscore",
           "title": "OrbitScore",
           "icon": "media/icon-activitybar.svg"
+        },
+        {
+          "id": "orbitscore-engine",
+          "title": "OrbitScore Engine",
+          "icon": "media/icon-engine-activitybar.svg"
         }
       ]
     },
@@ -135,12 +131,23 @@
           "name": "Learning",
           "visibility": "visible"
         }
+      ],
+      "orbitscore-engine": [
+        {
+          "id": "orbitscore.engineView",
+          "name": "Engine",
+          "visibility": "visible"
+        }
       ]
     },
     "viewsWelcome": [
       {
         "view": "orbitscore.learningView",
         "contents": "Learn OrbitScore and find your way around the docs.\n[Open Learning Site (Browser)](command:orbitscore.openDocs)\n[Start the Walkthrough](command:orbitscore.openWalkthrough)\n\nNote: this welcome view is a placeholder entry point. A full chapter tree (TreeView) is a follow-up once #451 (site structure) is finalized."
+      },
+      {
+        "view": "orbitscore.engineView",
+        "contents": "Control the OrbitScore audio engine.\n[Start Engine](command:orbitscore.toggleEngine)\n[Start Engine (Debug)](command:orbitscore.startEngineDebug)\n[Stop Engine](command:orbitscore.stopEngine)\n[Select Audio Device](command:orbitscore.selectAudioDevice)\n[Force Kill scsynth](command:orbitscore.forceKillScsynth)\n\nNote: process state and CPU metrics will appear here in a future TreeView."
       }
     ],
     "menus": {
