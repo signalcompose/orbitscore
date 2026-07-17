@@ -34,8 +34,9 @@ OrbitStudio の Activity Bar にある **Audio Engine Settings** ビューから
 
 ## 上級者向け: SuperCollider バックエンド
 
-既定のエンジンは Rust ですが、環境変数 `ORBITSCORE_ENGINE=sc` で従来の
-SuperCollider バックエンドに切り替えられます（レガシー互換・通常は不要です）。
+既定のエンジンは Rust ですが、VS Code 設定 **`orbitscore.engine`** を `"sc"` に
+すると従来の SuperCollider バックエンドに切り替えられます（レガシー互換・通常は
+不要です。環境変数ではなくこの設定が正です — 拡張が spawn 時に env を上書きします）。
 SC 選択時のみ、コマンドパレットに SC 用コマンド（Select Audio Device /
 Force Kill scsynth）が現れます。
 

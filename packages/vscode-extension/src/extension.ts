@@ -301,6 +301,11 @@ export async function activate(context: vscode.ExtensionContext) {
       getChildren: () => [],
       getTreeItem: (element: vscode.TreeItem) => element,
     }),
+    // viewsWelcome は provider 登録が無いと描画されない（上と同じ理由）— Engine ビューにも空 provider。
+    vscode.window.registerTreeDataProvider('orbitscore.engineView', {
+      getChildren: () => [],
+      getTreeItem: (element: vscode.TreeItem) => element,
+    }),
     vscode.commands.registerCommand('orbitscore.openDocs', openUserDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocs', openDevDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocsPanel', () => openDevDocsPanel(context)),

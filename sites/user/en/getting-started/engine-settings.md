@@ -36,9 +36,10 @@ audio goes.
 
 ## Advanced: the SuperCollider backend
 
-The default engine is Rust, but the environment variable `ORBITSCORE_ENGINE=sc`
-switches to the legacy SuperCollider backend (for compatibility; normally not
-needed). Only when SC is selected do the SC-specific commands (Select Audio
+The default engine is Rust, but setting the VS Code setting **`orbitscore.engine`**
+to `"sc"` switches to the legacy SuperCollider backend (for compatibility; normally
+not needed — the setting, not the OS environment variable, is authoritative: the
+extension overwrites the env when spawning the engine). Only when SC is selected do the SC-specific commands (Select Audio
 Device / Force Kill scsynth) appear in the Command Palette.
 
 ::: tip Verification
