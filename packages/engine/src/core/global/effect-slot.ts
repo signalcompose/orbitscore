@@ -10,27 +10,40 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
-import { resolvePluginPath, validatePluginExtension } from './plugin-resolver'
+import {
+  isPluginPathSpec,
+  resolvePluginSpec,
+  validatePluginExtension,
+  type ResolvedPluginSpec,
+} from './plugin-resolver'
 
 /**
  * effect spec の共通前処理。順序は load-bearing（PluginEffectManager 由来）:
  * spec 検証 → LinkAudio gate → パス解決。未保存ファイル等で resolve が
  * 「cannot resolve」を投げる前に、より本質的な LinkAudio 競合エラーを出すため。
+ * 拡張子検証（`validatePluginExtension`）は path-direct spec にのみ適用する
+ * （#463 C2: カタログ名はここで弾かず、`resolvePluginSpec` のカタログ解決に委ねる）。
  */
 export function resolveEffectSpec(
   spec: string,
+  pluginId: string | undefined,
   deps: { audioManager: AudioManager; linkAudioManager: LinkAudioManager },
   linkAudioErrorMessage: string,
-): string {
-  validatePluginExtension(spec, 'effect')
+  catalogPathOverride?: string,
+): ResolvedPluginSpec {
+  if (isPluginPathSpec(spec)) {
+    validatePluginExtension(spec, 'effect')
+  }
   if (deps.linkAudioManager.isEnabled()) {
     throw new Error(linkAudioErrorMessage)
   }
-  return resolvePluginPath(
+  return resolvePluginSpec(
     spec,
+    pluginId,
     deps.audioManager.getAudioPaths(),
     deps.audioManager.getDocumentDirectory(),
     'effect',
+    catalogPathOverride,
   )
 }
 

@@ -80,8 +80,9 @@ export class SequenceEffectManager {
 
   /** Declares (or idempotently re-declares) the insert for `sequenceName`. Returns the allocated bus name. */
   async effect(sequenceName: string, spec: string, pluginId?: string): Promise<string> {
-    const resolvedPath = resolveEffectSpec(
+    const resolved = resolveEffectSpec(
       spec,
+      pluginId,
       { audioManager: this.audioManager, linkAudioManager: this.linkAudioManager },
       `Sequence '${sequenceName}': seq.effect() cannot be used while LinkAudio is enabled in v1.`,
     )
@@ -98,7 +99,7 @@ export class SequenceEffectManager {
     const bus = this.buses.get(sequenceName) ?? this.pool.acquire(sequenceName)
     this.buses.set(sequenceName, bus)
     try {
-      await this.slots.declare(sequenceName, bus, resolvedPath, pluginId, duplicateError)
+      await this.slots.declare(sequenceName, bus, resolved.path, resolved.pluginId, duplicateError)
     } catch (err) {
       if (!hadBus) {
         // この呼び出しで新規に確保した bus の load 失敗: free-list へ返す（daemon 側も

@@ -2,7 +2,7 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
-import { resolvePluginPath, validatePluginExtension } from './plugin-resolver'
+import { isPluginPathSpec, resolvePluginSpec, validatePluginExtension } from './plugin-resolver'
 
 interface InstrumentDeclaration {
   resolvedPath: string
@@ -25,29 +25,36 @@ export class PluginInstrumentManager {
   }
 
   async instrument(spec: string, pluginId?: string): Promise<void> {
-    validatePluginExtension(spec, 'instrument')
+    // 拡張子検証は path-direct spec にのみ適用する（#463 C2: カタログ名はここで弾かず、
+    // resolvePluginSpec のカタログ解決に委ねる — effect-slot.ts の resolveEffectSpec と同型）。
+    if (isPluginPathSpec(spec)) {
+      validatePluginExtension(spec, 'instrument')
+    }
     if (this.linkAudioManager.isEnabled()) {
       throw new Error('seq.instrument() cannot be used while LinkAudio is enabled in v1.')
     }
 
-    const resolvedPath = resolvePluginPath(
+    const resolved = resolvePluginSpec(
       spec,
+      pluginId,
       this.audioManager.getAudioPaths(),
       this.audioManager.getDocumentDirectory(),
       'instrument',
     )
+    const resolvedPath = resolved.path
+    const resolvedPluginId = resolved.pluginId
     const existing = this.declaration
     if (existing) {
-      if (existing.resolvedPath === resolvedPath && existing.pluginId === pluginId) {
+      if (existing.resolvedPath === resolvedPath && existing.pluginId === resolvedPluginId) {
         await existing.load
         if (this.audioEngine.isPluginActive?.('instrument') === false) {
-          await this.issueLoad(resolvedPath, pluginId)
+          await this.issueLoad(resolvedPath, resolvedPluginId)
         }
         return
       }
       throw new Error('seq.instrument() supports one instrument instance in v1.')
     }
-    await this.issueLoad(resolvedPath, pluginId)
+    await this.issueLoad(resolvedPath, resolvedPluginId)
   }
 
   private async issueLoad(resolvedPath: string, pluginId: string | undefined): Promise<void> {
