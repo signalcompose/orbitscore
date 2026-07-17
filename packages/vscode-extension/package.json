@@ -69,6 +69,12 @@
         "category": "OrbitScore"
       },
       {
+        "command": "orbitscore.reloadWindow",
+        "title": "Reload Window",
+        "icon": "$(refresh)",
+        "category": "OrbitScore"
+      },
+      {
         "command": "orbitscore.forceKillScsynth",
         "title": "Force Kill scsynth",
         "icon": "$(close-all)",
@@ -206,6 +212,10 @@
           "when": "false"
         },
         {
+          "command": "orbitscore.reloadWindow",
+          "when": "false"
+        },
+        {
           "command": "orbitscore.engineViewSelectDevice",
           "when": "false"
         }
@@ -222,6 +232,11 @@
           "command": "orbitscore.restartEngine",
           "when": "view == orbitscore.engineView && viewItem == engine-status",
           "group": "navigation"
+        },
+        {
+          "command": "orbitscore.reloadWindow",
+          "when": "view == orbitscore.engineView && viewItem == engine-status",
+          "group": "navigation@2"
         }
       ]
     },

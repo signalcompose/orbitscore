@@ -275,7 +275,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Create status bar item
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
   statusBarItem.text = '🎵 OrbitScore: Stopped'
-  statusBarItem.tooltip = 'Click to show commands'
+  statusBarItem.tooltip = 'Open Audio Engine Settings'
   statusBarItem.command = 'orbitscore.showCommands'
   statusBarItem.show()
 
@@ -289,6 +289,7 @@ export async function activate(context: vscode.ExtensionContext) {
     arguments: ['orbitscore.scsynthPath'],
   }
   updateBundleStatus()
+  updateStatusBarEngineAction()
 
   // Re-evaluate bundle status when user changes the override setting or
   // switches engine kind (#377: kind gates whether scsynth is even resolved).
@@ -300,6 +301,7 @@ export async function activate(context: vscode.ExtensionContext) {
       ) {
         updateBundleStatus()
       }
+      if (e.affectsConfiguration('orbitscore.engine')) updateStatusBarEngineAction()
     }),
   )
 
@@ -320,6 +322,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.runSelection', runSelection),
     vscode.commands.registerCommand('orbitscore.stopEngine', stopEngine),
     vscode.commands.registerCommand('orbitscore.restartEngine', restartEngine),
+    vscode.commands.registerCommand('orbitscore.reloadWindow', reloadWindow),
     vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
     vscode.commands.registerCommand('orbitscore.forceKillScsynth', forceKillScsynth),
     vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
@@ -742,32 +745,10 @@ async function maybeShowBundleNotice(): Promise<void> {
 function showCommands() {
   // SC バックエンド専用コマンドは engine=sc の時だけ載せる（既定 Rust では非表示）。
   const isScBackend = vscode.workspace.getConfiguration('orbitscore').get<string>('engine') === 'sc'
-  const rustItems: Array<vscode.QuickPickItem & { command: string }> = [
-    {
-      label: 'Run Selection',
-      description: 'Cmd+Enter',
-      detail: 'Execute selected code or the current line',
-      command: 'orbitscore.runSelection',
-    },
-    {
-      label: 'Restart Engine (recovery)',
-      description: 'Force-restart a stuck engine',
-      detail: 'Stop the engine and restart it after cleanup',
-      command: 'orbitscore.restartEngine',
-    },
-    {
-      label: 'Configure Flash',
-      description: 'Customize flash settings',
-      detail: 'Configure flash count, duration, color, and opacity',
-      command: 'orbitscore.configureFlash',
-    },
-    {
-      label: 'Reload',
-      description: 'Reload window',
-      detail: 'Restart the extension and re-evaluate the file',
-      command: 'workbench.action.reloadWindow',
-    },
-  ]
+  if (!isScBackend) {
+    vscode.commands.executeCommand('orbitscore.engineView.focus')
+    return
+  }
   const scItems: Array<vscode.QuickPickItem & { command: string }> = [
     {
       label: 'Start Engine',
@@ -819,11 +800,16 @@ function showCommands() {
     },
   ]
 
-  const items = isScBackend ? scItems : rustItems
-  vscode.window.showQuickPick(items).then((selection) => {
+  vscode.window.showQuickPick(scItems).then((selection) => {
     if (!selection) return
     vscode.commands.executeCommand(selection.command)
   })
+}
+
+function updateStatusBarEngineAction(): void {
+  if (!statusBarItem) return
+  statusBarItem.tooltip =
+    getConfiguredEngineKind() === 'rust' ? 'Open Audio Engine Settings' : 'Click to show commands'
 }
 
 function restartEngine(): void {
@@ -834,6 +820,10 @@ function restartEngine(): void {
   }
   stopEngine()
   setTimeout(() => startEngine(), 2200)
+}
+
+function reloadWindow(): void {
+  void vscode.commands.executeCommand('workbench.action.reloadWindow')
 }
 
 async function configureFlash() {
