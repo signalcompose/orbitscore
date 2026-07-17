@@ -158,6 +158,25 @@ export interface FileDiagnostics {
 /** Result of analyze_audio (wav-analysis.ts is the vscode-free WAV parser). */
 export type AnalyzeAudioResult = { ok: true; analysis: WavAnalysis } | { ok: false; error: string }
 
+/** One entry of the plugin catalog (#463 PC.1), as reported by list_plugins. */
+export interface PluginCatalogEntryInfo {
+  name: string
+  vendor: string
+  format: string
+  path: string
+  pluginId: string
+  roles: string[]
+}
+/** Result of list_plugins: the plugin catalog, or an error when it hasn't been scanned yet. */
+export type ListPluginsResult =
+  | { ok: true; plugins: PluginCatalogEntryInfo[] }
+  | { ok: false; error: string }
+
+/** Result of rescan_plugins: the scan summary, or an error. */
+export type RescanPluginsResult =
+  | { ok: true; count: number; skipped: string[] }
+  | { ok: false; error: string }
+
 /**
  * Arguments for register_mcp_server. `scope` is a raw string here (rather than
  * the 'project' | 'user' union) so validation lives in one place — the
@@ -196,6 +215,10 @@ export interface OrbitScoreToolHandlers {
   getDiagnostics(path?: string): FileDiagnostics[]
   getLog(lines?: number): string[]
   analyzeAudio(wavPath: string, windowMs?: number): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
+  /** list_plugins (#463 PC.4): return the plugin catalog as-is. */
+  listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
+  /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
+  rescanPlugins(): Promise<RescanPluginsResult> | RescanPluginsResult
   /**
    * Optional (unlike the members above): only hosts that can register
    * themselves into Claude Code expose the register_mcp_server tool — the
@@ -772,6 +795,47 @@ function buildServer(
         return errorResult(result.error)
       }
       return { content: [{ type: 'text', text: JSON.stringify(result.analysis) }] }
+    },
+  )
+
+  server.registerTool(
+    'list_plugins',
+    {
+      title: 'List Plugins',
+      description:
+        'List the installed CLAP/VST3 plugin catalog (#463 PC.1) — name, vendor, format, ' +
+        'and roles (effect/instrument) for each entry — so an agent can pick real ' +
+        'plugin names when composing effect()/instrument() calls. Returns an error ' +
+        '(with a rescan hint) if the catalog has not been scanned yet.',
+    },
+    async () => {
+      const result = await handlers.listPlugins()
+      if (!result.ok) {
+        return errorResult(result.error)
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(result.plugins) }] }
+    },
+  )
+
+  server.registerTool(
+    'rescan_plugins',
+    {
+      title: 'Rescan Plugins',
+      description:
+        'Scan the OS plugin directories (and ORBIT_PLUGIN_PATH) and rewrite the plugin ' +
+        'catalog. Equivalent to the "Rescan Plugin Catalog" command. Returns the count ' +
+        'of plugins found and any skipped (metadata-less) entries.',
+    },
+    async () => {
+      const result = await handlers.rescanPlugins()
+      if (!result.ok) {
+        return errorResult(result.error)
+      }
+      return {
+        content: [
+          { type: 'text', text: JSON.stringify({ count: result.count, skipped: result.skipped }) },
+        ],
+      }
     },
   )
 

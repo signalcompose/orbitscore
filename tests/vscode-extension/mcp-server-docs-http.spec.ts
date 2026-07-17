@@ -115,6 +115,8 @@ function createStubHandlers(): OrbitScoreToolHandlers {
       }
       return result
     },
+    listPlugins: () => ({ ok: true, plugins: [] }),
+    rescanPlugins: () => ({ ok: true, count: 0, skipped: [] }),
   }
 }
 

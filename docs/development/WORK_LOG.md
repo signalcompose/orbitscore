@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.279 feat(orbitstudio): plugin catalog 補完 + rescan 3面 + MCP #463 C1b/C3 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（#463 完結・バケット A 1本目完了）
+
+**内容**:
+- **補完（PC.3）**: `.effect("` / `.instrument("` の引数位置でカタログ候補（name・vendor/format
+  detail）。**タイプ中も絞り込み**（owner 要件 — 部分入力マッチ + range 明示で VS Code の
+  prefix/fuzzy フィルタが効く）。effect は PH.3 どおり CLAP のみ・instrument は roles 適合
+- **rescan 3面（C1b）**: palette コマンド + `.orbs` 右クリックメニュー + MCP `rescan_plugins`。
+  設計変更 = daemon 経由でなく拡張が `orbit-plugin-scan` を直接 spawn（crash 隔離バイナリの
+  ため daemon を経由する必然なし）。バイナリは copy-daemon-bin.sh + release gate に追加
+- **MCP（PC.4）**: `list_plugins` / `rescan_plugins`（handler seam 必須メンバー）
+
+**検証**: 拡張 tests 160（+11: 部分入力 `effect("Sca` → Scaler 絞り込み含む）・全体 1495
+passed・tsc/lint clean。実機: スキャナ spawn → count 79・bundle 5 バイナリ確認。
+
+**既知**: 実カタログに CLAP effect が 0 のため effect 補完の実データ経路は unit のみ
+（CLAPTestEffect は標準外ディレクトリ — ORBIT_PLUGIN_PATH で追加可能）。
+
+Refs #463
+
+
 ### 6.278 feat(dsl): plugin catalog 名前指し #463 C2 (Jul 17, 2026)
 
 **Date**: 2026-07-17
