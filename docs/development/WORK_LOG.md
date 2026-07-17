@@ -58,7 +58,10 @@ orphan ×3 は全て #462 修正前のビルド（バイナリ内に ParentWatch
 
 **対策**: copy-daemon-bin.sh が cargo の使える環境では bundle 前に daemon + 全 child を
 release 再ビルドする（incremental・実測 6 秒）。cargo 不在は従来の best-effort（警告付き）。
-bundle 後の child に ParentWatch 文字列が入っていることを確認済み。
+検証は機能テストで実施 —
+bundled release バイナリで daemon SIGKILL → 元 child が退出(PASS)・TS respawn 機構が
+新 daemon + effect を自動復元することまで確認(release はシンボル strip のため strings
+検査は無効・当初の文字列確認記述を訂正)。
 
 Refs #487 #479 #462
 >>>>>>> c5e6194 (chore(build): rebuild daemon + child binaries before bundling (#487))
