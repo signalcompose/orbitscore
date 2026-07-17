@@ -192,6 +192,28 @@ describe('resolvePluginSpec catalog resolution', () => {
     })
   })
 
+  it('rejects a format/name qualifier that also matches a format-named vendor', () => {
+    const catalog = {
+      ...FIXTURE_CATALOG,
+      plugins: [
+        ...FIXTURE_CATALOG.plugins,
+        {
+          name: 'TAL Reverb 4',
+          vendor: 'VST3',
+          format: 'clap',
+          path: '/plugins/vendor-vst3-reverb.clap',
+          pluginId: 'vendor-vst3-reverb-id',
+          roles: ['effect'],
+        },
+      ],
+    }
+    const ambiguousCatalogPath = writeCatalog(dir, catalog)
+    clearPluginCatalogCache()
+    expect(() =>
+      resolvePluginSpec('vst3/TAL Reverb 4', undefined, [], '/doc', 'effect', ambiguousCatalogPath),
+    ).toThrow(/ambiguous.*format qualifier.*vendor "vst3"/s)
+  })
+
   it('resolves a VST3-only effect name', () => {
     const resolved = resolvePluginSpec('VstOnlyFX', undefined, [], '/doc', 'effect', catalogPath)
     expect(resolved).toEqual({ path: '/plugins/vstonlyfx.vst3', pluginId: 'vstonlyfx-id' })

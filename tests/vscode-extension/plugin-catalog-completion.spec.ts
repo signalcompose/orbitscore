@@ -96,6 +96,16 @@ describe('filterCatalogEntries', () => {
     ])
   })
 
+  it('splits formats only within a vendor and retains a plain label for another vendor', () => {
+    const entries: PluginCatalogEntry[] = [
+      { ...ENTRIES[1], name: 'Reverb', vendor: 'VendorA', format: 'clap' },
+      { ...ENTRIES[2], name: 'Reverb', vendor: 'VendorA', format: 'vst3' },
+      { ...ENTRIES[1], name: 'Reverb', vendor: 'VendorB', format: 'clap' },
+    ]
+    const result = filterCatalogEntries(entries, 'effect', 'Reverb')
+    expect(result.map(({ label }) => label)).toEqual(['clap/Reverb', 'vst3/Reverb', 'Reverb'])
+  })
+
   it('instrument() has no format restriction', () => {
     const result = filterCatalogEntries(ENTRIES, 'instrument', 'Surge')
     expect(result.map(({ entry }) => entry.name)).toEqual(['Surge XT'])

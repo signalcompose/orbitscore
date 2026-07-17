@@ -42,9 +42,9 @@ export function validatePluginExtension(spec: string, role: PluginRole): void {
   const extension = path.extname(spec).toLowerCase()
   if (extension === '.clap') return
   if (extension === '.vst3') return
-  if (extension === '.vst3' || extension === '.component') {
+  if (extension === '.component') {
     throw new Error(
-      `${extension} plugins are not yet supported for ${role} (reserved for future VST3/AU support).`,
+      `${extension} plugins are not yet supported for ${role} (reserved for future AU support).`,
     )
   }
   const expected = '.clap or .vst3'
@@ -109,11 +109,22 @@ function resolveCatalogSpec(
   const nameKey = normalizeCatalogKey(slashIndex === -1 ? spec : spec.slice(slashIndex + 1))
 
   let candidates = catalog.plugins.filter((entry) => normalizeCatalogKey(entry.name) === nameKey)
-  if (vendorKey !== undefined) {
-    candidates = candidates.filter((entry) => normalizeCatalogKey(entry.vendor) === vendorKey)
-  }
   if (formatKey !== undefined) {
-    candidates = candidates.filter((entry) => normalizeCatalogKey(entry.format) === formatKey)
+    const formatCandidates = candidates.filter(
+      (entry) => normalizeCatalogKey(entry.format) === formatKey,
+    )
+    const vendorCandidates = candidates.filter(
+      (entry) => normalizeCatalogKey(entry.vendor) === qualifierKey,
+    )
+    if (formatCandidates.length > 0 && vendorCandidates.length > 0) {
+      throw new Error(
+        `"${spec}" is ambiguous: matches format qualifier and vendor "${qualifierKey}" — ` +
+          'use a path spec or full vendor name.',
+      )
+    }
+    candidates = formatCandidates.length > 0 ? formatCandidates : vendorCandidates
+  } else if (vendorKey !== undefined) {
+    candidates = candidates.filter((entry) => normalizeCatalogKey(entry.vendor) === vendorKey)
   }
 
   if (candidates.length === 0) {

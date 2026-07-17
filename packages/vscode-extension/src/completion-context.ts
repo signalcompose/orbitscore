@@ -137,6 +137,13 @@ export function getContextualCompletions(
         'normalizer(${1:1.0}, ${2:0.01}, ${3:true})',
       ),
     )
+    completions.push(createCompletion('effect', 'Add an effect plugin', 'effect("${1}")'))
+    completions.push(
+      createCompletion('instrument', 'Add an instrument plugin', 'instrument("${1}")'),
+    )
+    completions.push(createCompletion('output', 'Route output to a bus', 'output("${1:bus}")'))
+    completions.push(createCompletion('sum', 'Create or select a sum bus', 'sum("${1:name}")'))
+    completions.push(createCompletion('aux', 'Create or select an aux bus', 'aux("${1:name}")'))
 
     // LinkAudio output mode (once-per-file, mutually exclusive with hardware out)
     if (!context.hasLinkAudio) {

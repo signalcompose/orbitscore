@@ -59,7 +59,7 @@ export function detectPluginArgContext(
  * Filters catalog entries for a completion request:
  * - role match (PC.3: `instrument(` → roles includes `instrument`; `effect(` → roles includes `effect`)
  * - both verbs accept CLAP and VST3 entries (PH.3); catalog name resolution prefers CLAP on a same-name tie
- * - cross-format same-name collisions become `format/name` candidates; other names remain plain
+ * - same-vendor cross-format collisions become `format/name` candidates; remaining label collisions use `vendor/name`
  * - typed-prefix narrowing (case-insensitive substring match against the candidate or `vendor/name`)
  */
 export function filterCatalogEntries(
@@ -69,17 +69,33 @@ export function filterCatalogEntries(
 ): PluginCatalogCompletionCandidate[] {
   const needle = typed.trim().toLowerCase()
   const roleEntries = entries.filter((entry) => entry.roles.includes(verb))
-  const formatsByName = new Map<string, Set<string>>()
+  const formatsByVendorAndName = new Map<string, Set<string>>()
   for (const entry of roleEntries) {
-    const name = normalizeCatalogKey(entry.name)
-    const formats = formatsByName.get(name) ?? new Set<string>()
+    const key = vendorAndNameKey(entry)
+    const formats = formatsByVendorAndName.get(key) ?? new Set<string>()
     formats.add(normalizeCatalogKey(entry.format))
-    formatsByName.set(name, formats)
+    formatsByVendorAndName.set(key, formats)
   }
 
-  return roleEntries.flatMap((entry) => {
-    const hasFormatCollision = (formatsByName.get(normalizeCatalogKey(entry.name))?.size ?? 0) > 1
-    const label = hasFormatCollision ? `${entry.format.toLowerCase()}/${entry.name}` : entry.name
+  const baseCandidates = roleEntries.map((entry) => {
+    const hasFormatCollision = (formatsByVendorAndName.get(vendorAndNameKey(entry))?.size ?? 0) > 1
+    return {
+      entry,
+      label: hasFormatCollision ? `${entry.format.toLowerCase()}/${entry.name}` : entry.name,
+    }
+  })
+  const vendorsByLabel = new Map<string, Set<string>>()
+  for (const { entry, label } of baseCandidates) {
+    const vendors = vendorsByLabel.get(normalizeCatalogKey(label)) ?? new Set<string>()
+    vendors.add(normalizeCatalogKey(entry.vendor))
+    vendorsByLabel.set(normalizeCatalogKey(label), vendors)
+  }
+
+  return baseCandidates.flatMap(({ entry, label: baseLabel }) => {
+    const label =
+      (vendorsByLabel.get(normalizeCatalogKey(baseLabel))?.size ?? 0) > 1
+        ? `${entry.vendor}/${entry.name}`
+        : baseLabel
     if (needle === '') return [{ entry, label, insertText: label }]
     const qualified = `${entry.vendor}/${entry.name}`.toLowerCase()
     if (!label.toLowerCase().includes(needle) && !qualified.includes(needle)) return []
@@ -89,4 +105,8 @@ export function filterCatalogEntries(
 
 function normalizeCatalogKey(value: string): string {
   return value.trim().normalize('NFC').toLowerCase()
+}
+
+function vendorAndNameKey(entry: PluginCatalogEntry): string {
+  return `${normalizeCatalogKey(entry.vendor)}\u0000${normalizeCatalogKey(entry.name)}`
 }

@@ -1312,7 +1312,8 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
 - 名前解決: `name` 完全一致（case-insensitive・前後空白 trim・Unicode は **NFC 正規化後**
   に比較 — macOS FS の NFD 由来の不一致を防ぐ）。最初の `/` より前が既知 format 名
   （`clap` / `vst3`）なら `"format/name"` としてその format に限定し、それ以外は従来どおり
-  `"vendor/name"` として扱う。同名別 vendor は候補を列挙してエラー（silent に先頭を選ばない）。
+  `"vendor/name"` として扱う。format 名と同じ vendor が両方の解釈で候補を持つ場合は曖昧エラーにする。
+  同名別 vendor は候補を列挙してエラー（silent に先頭を選ばない）。
 - **解決の出力 = `(path, pluginId)` の組**で、両方を `LoadPlugin` へ渡す（カタログは
   pluginId 単位で 1 エントリ = name → (path, pluginId) は 1:1）。したがって**カタログ
   名指しと第 2 引数 `pluginId` の併用はエラー**（名前が既に一意。pluginId 引数は
@@ -1328,7 +1329,9 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
   カタログから候補（name・vendor 修飾形・format ラベル付き）をサジェスト
 - `effect()` / `instrument()` ともに CLAP と VST3 の候補をサジェストする。同名が両 format
   にある場合は `clap/name` / `vst3/name` と format 接頭辞を付け、表示と insertText を一致
-  させる。format 衝突のない名前は従来どおり接頭辞なし。名前解決は PH.3 に従い CLAP を優先する。
+  させる（同一 vendor 内だけを比較）。format 接頭辞後も別 vendor とラベルが衝突する場合は
+  `vendor/name` を表示する。format 衝突のない名前は従来どおり接頭辞なし。名前解決は PH.3 に従い
+  CLAP を優先する。
 - 補完はキャッシュファイル読取のみ（engine 起動不要）。キャッシュ不在時は候補なし + 
   rescan を促す 1 回限りの案内
 

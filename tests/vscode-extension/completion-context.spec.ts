@@ -103,6 +103,18 @@ describe('getContextualCompletions — global context', () => {
     expect(labels).not.toContain('tick')
     expect(labels).not.toContain('key')
   })
+
+  it('includes current plugin and mixer API methods with their snippets', () => {
+    const items = getContextualCompletions({ ...baseGlobalContext }, true)
+    const byLabel = new Map(
+      items.map((item) => [item.label as string, (item.insertText as any).value]),
+    )
+    expect(byLabel.get('effect')).toBe('effect("${1}")')
+    expect(byLabel.get('instrument')).toBe('instrument("${1}")')
+    expect(byLabel.get('output')).toBe('output("${1:bus}")')
+    expect(byLabel.get('sum')).toBe('sum("${1:name}")')
+    expect(byLabel.get('aux')).toBe('aux("${1:name}")')
+  })
 })
 
 describe('getContextualCompletions — sequence context', () => {
