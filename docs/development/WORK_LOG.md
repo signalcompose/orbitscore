@@ -17,12 +17,14 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.274 fix(mcp): analyze_audio — soundDetected 偽陰性修正 + 窓分析 #478 (Jul 17, 2026)
 ### 6.273 chore(build): bundle 前に daemon+child を再ビルド #487（#479 の真因対策）(Jul 17, 2026)
 ### 6.272 fix(mcp): stale dist（base 不一致）検出ガード #480 (Jul 17, 2026)
 
 **Date**: 2026-07-17
 **Status**: ✅ 修正
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 **内容**: docs 配信に `isDocsDistStale()` を追加 — index.html に `base + '/assets/'` 参照が
 無い dist（base 変更前の古いビルド）は、未ビルト時と同じ 503 + rebuild 手順の actionable
@@ -65,6 +67,19 @@ bundled release バイナリで daemon SIGKILL → 元 child が退出(PASS)・T
 
 Refs #487 #479 #462
 >>>>>>> c5e6194 (chore(build): rebuild daemon + child binaries before bundling (#487))
+=======
+**内容（LLM の「耳」の強化）**:
+- soundDetected: 旧判定は ≥3 onsets を要求し one-shot 1 発（peak 0.7）を false と誤報
+  （品質チェック E2E で実測）→ ≥1 onset + peak > 0.05 に修正
+- `window_ms` オプション追加: per-window peak/RMS 系列を返し、MX.5 の「dry 先行 →
+  干渉定常」のような時間構造を MCP 経由で検証可能に（従来はローカル python 直読みに
+  フォールバックしていた = MCP 実装漏れ枠の解消）
+
+**検証**: 新規 3 tests（one-shot 検知・窓系列の時間構造・省略時は系列なし）+ 既存
+wav-analysis/docs-http 72 tests green。
+
+Refs #478
+>>>>>>> 482f98b (fix(mcp): analyze_audio — fix soundDetected false negatives, add windowed series (#478))
 
 
 ### 6.270 chore(qa): docs-driven 実機 E2E + 学習サイト最新化 #481 (Jul 17, 2026)

@@ -31,8 +31,17 @@ export interface WavAnalysis {
   onsets: number[]
   /** Gaps between consecutive onsets in seconds. */
   onsetGaps: number[]
-  /** true when the capture plausibly contains sound (≥3 onsets and peak > 0.05). */
+  /**
+   * true when the capture plausibly contains sound（≥1 onset かつ peak > 0.05）。
+   * #478 修正: 旧判定は ≥3 onsets を要求し、one-shot 1 発（peak 0.7 等）を
+   * false と誤報していた（品質チェック E2E で実測）。
+   */
   soundDetected: boolean
+  /**
+   * 任意の時間窓 peak/RMS 系列（`windowMs` オプション指定時のみ・#478）。
+   * MX.5 の「dry 先行 → 干渉定常」のような時間構造の検証を可能にする。
+   */
+  windows?: Array<{ startSec: number; peak: number; rms: number }>
 }
 
 /** RMS window size in seconds (20ms — fine enough to separate 0.5s beats). */
@@ -42,7 +51,7 @@ const MIN_ONSET_GAP_SEC = 0.2
 /** Absolute floor for the onset threshold (below this is treated as noise). */
 const ONSET_THRESHOLD_FLOOR = 0.01
 
-export function analyzeWavBuffer(buf: Buffer): WavAnalysis {
+export function analyzeWavBuffer(buf: Buffer, opts?: { windowMs?: number }): WavAnalysis {
   if (
     buf.length < 12 ||
     buf.toString('ascii', 0, 4) !== 'RIFF' ||
@@ -138,6 +147,43 @@ export function analyzeWavBuffer(buf: Buffer): WavAnalysis {
     rms,
     onsets,
     onsetGaps,
-    soundDetected: onsets.length >= 3 && peak > 0.05,
+    soundDetected: onsets.length >= 1 && peak > 0.05,
+    ...(opts?.windowMs && opts.windowMs > 0
+      ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
+      : {}),
   }
+}
+
+/** 指定解像度の per-window peak/RMS 系列（mono mixdown・#478）。 */
+function windowSeries(
+  buf: Buffer,
+  dataOff: number,
+  frames: number,
+  format: WavFormat,
+  windowSec: number,
+): Array<{ startSec: number; peak: number; rms: number }> {
+  const winFrames = Math.max(1, Math.floor(format.sampleRate * windowSec))
+  const out: Array<{ startSec: number; peak: number; rms: number }> = []
+  for (let w = 0; w * winFrames < frames; w++) {
+    const start = w * winFrames
+    const end = Math.min(start + winFrames, frames)
+    let peak = 0
+    let sumSq = 0
+    for (let i = start; i < end; i++) {
+      let mono = 0
+      for (let c = 0; c < format.channels; c++) {
+        mono += buf.readFloatLE(dataOff + (i * format.channels + c) * 4)
+      }
+      mono /= format.channels
+      const a = Math.abs(mono)
+      if (a > peak) peak = a
+      sumSq += mono * mono
+    }
+    out.push({
+      startSec: start / format.sampleRate,
+      peak,
+      rms: Math.sqrt(sumSq / Math.max(1, end - start)),
+    })
+  }
+  return out
 }

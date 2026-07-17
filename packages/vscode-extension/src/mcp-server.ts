@@ -195,7 +195,7 @@ export interface OrbitScoreToolHandlers {
   getDocumentText(): DocumentText
   getDiagnostics(path?: string): FileDiagnostics[]
   getLog(lines?: number): string[]
-  analyzeAudio(wavPath: string): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
+  analyzeAudio(wavPath: string, windowMs?: number): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
   /**
    * Optional (unlike the members above): only hosts that can register
    * themselves into Claude Code expose the register_mcp_server tool — the
@@ -754,14 +754,20 @@ function buildServer(
       description:
         'Parse a WAV file (e.g. a capture_wav produced by start_engine) and report ' +
         'peak, RMS, and onset timing so audio can be verified objectively without ' +
-        'listening.',
+        'listening. Pass window_ms to also get a per-window peak/RMS time series ' +
+        '(for verifying temporal structure such as dry-first / steady-state).',
       inputSchema: {
         wav_path: z.string().describe('Absolute path to the WAV file to analyze'),
+        window_ms: z
+          .number()
+          .describe('Optional window size in ms for a per-window peak/RMS series (e.g. 10)')
+          .optional(),
       },
     },
     async (args) => {
       const wavPath = typeof args.wav_path === 'string' ? args.wav_path : ''
-      const result = await handlers.analyzeAudio(wavPath)
+      const windowMs = typeof args.window_ms === 'number' ? args.window_ms : undefined
+      const result = await handlers.analyzeAudio(wavPath, windowMs)
       if (!result.ok) {
         return errorResult(result.error)
       }

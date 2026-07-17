@@ -195,3 +195,30 @@ describe('analyzeWavBuffer', () => {
     expect(analysis.onsets).toHaveLength(4)
   })
 })
+
+describe('analyzeWavBuffer — #478 fixes', () => {
+  it('detects a single one-shot (1 onset, high peak) as sound — old >=3-onset rule false-negatived this', () => {
+    const buf = buildFloat32Wav({ seconds: 2, clicks: [0.5], clickAmp: 0.7 })
+    const analysis = analyzeWavBuffer(buf)
+    expect(analysis.onsets.length).toBe(1)
+    expect(analysis.soundDetected).toBe(true)
+  })
+
+  it('returns a per-window peak/RMS series when windowMs is passed', () => {
+    const buf = buildFloat32Wav({ seconds: 1, clicks: [0.5], clickAmp: 0.7 })
+    const analysis = analyzeWavBuffer(buf, { windowMs: 10 })
+    expect(analysis.windows).toBeDefined()
+    const w = analysis.windows!
+    expect(w.length).toBeGreaterThan(90)
+    // 0.1s 時点は無音・0.5s の click 窓では peak が立つ — 時間構造が系列から読める
+    expect(w[10]!.peak).toBe(0)
+    const loudest = w.reduce((a, b) => (b.peak > a.peak ? b : a))
+    expect(loudest.peak).toBeGreaterThan(0.6)
+    expect(Math.abs(loudest.startSec - 0.5)).toBeLessThan(0.02)
+  })
+
+  it('omits the windows series when windowMs is not passed', () => {
+    const buf = buildFloat32Wav({ seconds: 1 })
+    expect(analyzeWavBuffer(buf).windows).toBeUndefined()
+  })
+})
