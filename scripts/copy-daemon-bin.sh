@@ -37,9 +37,8 @@
 # Usage:
 #   bash scripts/copy-daemon-bin.sh
 #
-# Build the release binaries first if you want them bundled:
-#   cd rust && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument
-#   cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-instrument-child
+# #487 以降、cargo が使える環境ではこのスクリプト自身が bundle 前に release を再ビルド
+# する（stale child バイナリの黙殺コピー = #479 の真因の再発防止）。
 
 set -euo pipefail
 
@@ -68,6 +67,18 @@ copy_binary() {
   chmod +x "$destination_path"
   echo "Bundled $binary_name ($PLATFORM) -> $destination_path"
 }
+
+# #487: stale child バイナリの黙殺コピー防止（#479 の真因）。cargo が使える環境では
+# bundle 前に daemon + 全 child を必ず再ビルドする（incremental なので通常は数秒）。
+# cargo 不在の contributor は従来どおり best-effort（存在するものをコピー・警告付き）。
+if command -v cargo >/dev/null 2>&1; then
+  echo "Rebuilding daemon + child binaries (release) before bundling..."
+  (cd "$PROJECT_ROOT/rust" \
+    && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
+    && cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-instrument-child)
+else
+  echo "⚠️  cargo not found — bundling whatever exists in rust/target/release (may be stale)." >&2
+fi
 
 copy_binary "orbit-audio-daemon"
 copy_binary "orbit-clap-effect-child"

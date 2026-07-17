@@ -17,11 +17,13 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.273 chore(build): bundle 前に daemon+child を再ビルド #487（#479 の真因対策）(Jul 17, 2026)
 ### 6.272 fix(mcp): stale dist（base 不一致）検出ガード #480 (Jul 17, 2026)
 
 **Date**: 2026-07-17
 **Status**: ✅ 修正
 
+<<<<<<< HEAD
 **内容**: docs 配信に `isDocsDistStale()` を追加 — index.html に `base + '/assets/'` 参照が
 無い dist（base 変更前の古いビルド）は、未ビルト時と同じ 503 + rebuild 手順の actionable
 メッセージに落とす（従来は壊れた素 HTML を黙って配信）。mtime キャッシュでリクエスト毎の
@@ -48,6 +50,18 @@ RUN が選択外）が混入していた。競合自体は構造的に実在（�
 0.35355（オラクル一致）。
 
 Refs #476
+=======
+**#479 の調査結論（実測）**: ParentWatch のコードバグではなく **stale バイナリ**が真因。
+orphan ×3 は全て #462 修正前のビルド（バイナリ内に ParentWatch 文字列 0 ヒット・mtime が
+修正コミットより古い）。現行ソースの fresh build は daemon SIGKILL 後 1 秒以内に child 退出
+（実機 fail-before/pass-after 確認）。4 child crate は同一機構・divergence なし。
+
+**対策**: copy-daemon-bin.sh が cargo の使える環境では bundle 前に daemon + 全 child を
+release 再ビルドする（incremental・実測 6 秒）。cargo 不在は従来の best-effort（警告付き）。
+bundle 後の child に ParentWatch 文字列が入っていることを確認済み。
+
+Refs #487 #479 #462
+>>>>>>> c5e6194 (chore(build): rebuild daemon + child binaries before bundling (#487))
 
 
 ### 6.270 chore(qa): docs-driven 実機 E2E + 学習サイト最新化 #481 (Jul 17, 2026)
