@@ -17,6 +17,7 @@ members = [
   "crates/orbit-vst3-host",
   "crates/orbit-vst3-gain-oracle",
   "crates/orbit-vst3-synth-oracle",
+  "crates/orbit-plugin-scan",
 ]
 # 🔴 orbit-link-audio(GPL 隔離 crate)は **member にしない**。
 # member にすると default の `cargo build` / cargo-deny がこの GPL crate を root として
