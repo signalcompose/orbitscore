@@ -38,11 +38,20 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'ミキシングとプロジェクト構成',
+    collapsed: false,
+    items: [
+      { text: '15. エフェクトを挿す', link: '/mixing/effects' },
+      { text: '16. sum と aux/send', link: '/mixing/routing' },
+      { text: '17. 複数ファイルプロジェクト', link: '/projects/import' },
+    ],
+  },
+  {
     text: '困ったときは',
     collapsed: false,
     items: [
-      { text: '15. リファレンス', link: '/reference/methods' },
-      { text: '16. トラブルシューティング', link: '/troubleshooting' },
+      { text: '18. リファレンス', link: '/reference/methods' },
+      { text: '19. トラブルシューティング', link: '/troubleshooting' },
     ],
   },
 ]
@@ -85,11 +94,20 @@ export const sidebarEn: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'Mixing and Project Structure',
+    collapsed: false,
+    items: [
+      { text: '15. Inserting Effects', link: '/en/mixing/effects' },
+      { text: '16. sum and aux/send', link: '/en/mixing/routing' },
+      { text: '17. Multi-File Projects', link: '/en/projects/import' },
+    ],
+  },
+  {
     text: 'Help',
     collapsed: false,
     items: [
-      { text: '15. Reference', link: '/en/reference/methods' },
-      { text: '16. Troubleshooting', link: '/en/troubleshooting' },
+      { text: '18. Reference', link: '/en/reference/methods' },
+      { text: '19. Troubleshooting', link: '/en/troubleshooting' },
     ],
   },
 ]

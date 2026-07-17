@@ -1,6 +1,6 @@
 # OrbitScore Dev Learning Site
 
-OrbitScore 実装の reading の足跡 (個人学習ノート)。
+OrbitScore 実装の技術面を解説するラーニングドキュメント。
 詳細は [`docs/development/DEV_LEARNING_SITE.md`](../../docs/development/DEV_LEARNING_SITE.md) 参照。
 
 ## ローカルで閲覧する
@@ -44,6 +44,6 @@ npm run docs:dev      # http://localhost:5173 (HMR 付き)
 - **公開先**: https://signalcompose.github.io/orbitscore/dev/ (ja)
 - **English**: https://signalcompose.github.io/orbitscore/dev/en/
 - 自動 deploy: `.github/workflows/deploy-sites.yml` (`main` の `sites/**` 変更で trigger)
-- 個人学習ノートとして公開しているため、未完の章 (例: `orientation/what-is-orbitscore.md`) や
+- 技術解説ドキュメントとして整備中のため、未完の章 (例: `orientation/what-is-orbitscore.md`) や
   日本語コードコメント残存 (citation 整合のため byte-identical 規律、 詳細は `.translation-glossary.md`) を含む。
 - 完全な仕様は code (SoT) と `docs/` の DDD ドキュメントを参照のこと。

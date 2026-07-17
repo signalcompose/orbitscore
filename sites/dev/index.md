@@ -1,10 +1,10 @@
 ---
-title: "OrbitScore Dev — 個人学習ノート"
+title: "OrbitScore Dev — 技術解説ラーニング"
 chapter-id: index
 status: stable
 ---
 
-# OrbitScore Dev — 個人学習ノート
+# OrbitScore Dev — 技術解説ラーニング
 
 > **Note**: 本サイトは「ドキュメント」ではなく **OrbitScore 実装に関する著者 (yamato) の reading の足跡** です。code が真実、本サイトはその時点の理解の snapshot に過ぎません。
 

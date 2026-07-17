@@ -87,6 +87,10 @@
         "icon": "$(plug)"
       },
       {
+        "command": "orbitscore.openDocs",
+        "title": "OrbitScore: Open Learning Site"
+      },
+      {
         "command": "orbitscore.openDevDocs",
         "title": "📚 OrbitScore: Open Dev Docs",
         "category": "OrbitScore",
@@ -126,7 +130,7 @@
     "viewsWelcome": [
       {
         "view": "orbitscore.learningView",
-        "contents": "Learn OrbitScore and find your way around the docs.\n[📚 Open Learning Site (Browser)](command:orbitscore.openDevDocs)\n[🖥 Open in Editor](command:orbitscore.openDevDocsPanel)\n[🎓 Start the Walkthrough](command:orbitscore.openWalkthrough)\n\nNote: this welcome view is a placeholder entry point. A full chapter tree (TreeView) is a follow-up once #451 (site structure) is finalized."
+        "contents": "Learn OrbitScore and find your way around the docs.\n[📚 Open Learning Site (Browser)](command:orbitscore.openDocs)\n[🎓 Start the Walkthrough](command:orbitscore.openWalkthrough)\n\nNote: this welcome view is a placeholder entry point. A full chapter tree (TreeView) is a follow-up once #451 (site structure) is finalized."
       }
     ],
     "menus": {
@@ -148,12 +152,12 @@
           {
             "id": "openLearningSite",
             "title": "Open the Learning Site",
-            "description": "Open the OrbitScore development learning site in your browser to see the full documentation.\n[Open Learning Site](command:orbitscore.openDevDocs)",
+            "description": "Open the OrbitScore development learning site in your browser to see the full documentation.\n[Open Learning Site](command:orbitscore.openDocs)",
             "media": {
               "markdown": "media/walkthrough/01-open-learning-site.md"
             },
             "completionEvents": [
-              "onCommand:orbitscore.openDevDocs"
+              "onCommand:orbitscore.openDocs"
             ]
           },
           {
@@ -181,7 +185,7 @@
           {
             "id": "explorePluginHosting",
             "title": "Explore Plugin Hosting",
-            "description": "Learn how OrbitScore hosts CLAP/VST3/AU instruments and effects.\n[Read the Plugin Hosting Chapter](command:orbitscore.openDevDocs)",
+            "description": "Learn how OrbitScore hosts CLAP/VST3/AU instruments and effects.\n[Open the Learning Site](command:orbitscore.openDocs)",
             "media": {
               "markdown": "media/walkthrough/04-plugin-hosting.md"
             }

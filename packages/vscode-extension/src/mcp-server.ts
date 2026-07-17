@@ -230,9 +230,22 @@ export interface McpServerHandle {
  */
 export const DOCS_PUBLIC_BASE = '/orbitscore/dev'
 
+/**
+ * Public URL prefix for the END-USER learning site (sites/user — VitePress base
+ * `/orbitscore/`). The dev base above lives INSIDE this prefix, so routing must
+ * check the dev prefix first (longest-prefix wins); asset URLs never collide
+ * (`/orbitscore/assets/...` vs `/orbitscore/dev/assets/...`).
+ */
+export const USER_DOCS_PUBLIC_BASE = '/orbitscore'
+
 /** Resolve the built VitePress site from a repository/workspace base directory. */
 export function resolveDocsRoot(baseDir: string): string {
   return path.resolve(baseDir, 'sites/dev/.vitepress/dist')
+}
+
+/** Resolve the built end-user site from a repository/workspace base directory. */
+export function resolveUserDocsRoot(baseDir: string): string {
+  return path.resolve(baseDir, 'sites/user/.vitepress/dist')
 }
 
 /**
@@ -353,6 +366,21 @@ function contentTypeForDocsFile(filePath: string): string {
     '.ttf': 'font/ttf',
   }
   return types[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream'
+}
+
+/** 配信対象サイト（dev / user）のルーティング候補。 */
+interface DocsSite {
+  base: string
+  root: string
+  buildHint: string
+}
+
+/** pathname が候補のどのサイトに属すか（配列順 = 優先順・最長プレフィックスを先に置く）。 */
+export function matchDocsRequest(pathname: string, sites: DocsSite[]): DocsSite | null {
+  for (const site of sites) {
+    if (pathname === site.base || pathname.startsWith(`${site.base}/`)) return site
+  }
+  return null
 }
 
 /**
@@ -830,6 +858,7 @@ export async function startOrbitScoreMcpServer(opts: {
 
   const sessions = new Map<string, SessionEntry>()
   const docsRoot = resolveDocsRoot(path.resolve(__dirname, '../../..'))
+  const userDocsRoot = resolveUserDocsRoot(path.resolve(__dirname, '../../..'))
 
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
@@ -887,19 +916,33 @@ export async function startOrbitScoreMcpServer(opts: {
         res.end()
         return
       }
-      if (pathname === DOCS_PUBLIC_BASE || pathname.startsWith(`${DOCS_PUBLIC_BASE}/`)) {
+      // Longest-prefix first: the dev base lives inside the user base.
+      const docsMatch = matchDocsRequest(pathname, [
+        {
+          base: DOCS_PUBLIC_BASE,
+          root: docsRoot,
+          buildHint:
+            'Development docs are not built. Run npm run docs:build -w @orbitscore/dev-site',
+        },
+        {
+          base: USER_DOCS_PUBLIC_BASE,
+          root: userDocsRoot,
+          buildHint: 'User docs are not built. Run npm run docs:build -w @orbitscore/user-site',
+        },
+      ])
+      if (docsMatch) {
         if (req.method !== 'GET') {
           res.writeHead(405, { Allow: 'GET', 'content-type': 'text/plain; charset=utf-8' })
           res.end('Method Not Allowed')
           return
         }
-        if (!fs.existsSync(docsRoot)) {
-          log(`docs not built — docsRoot missing: ${docsRoot}`)
+        if (!fs.existsSync(docsMatch.root)) {
+          log(`docs not built — root missing: ${docsMatch.root}`)
           res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' })
-          res.end('Development docs are not built. Run npm run docs:build -w @orbitscore/dev-site')
+          res.end(docsMatch.buildHint)
           return
         }
-        const filePath = resolveDocsFilePath(docsRoot, pathname.slice(DOCS_PUBLIC_BASE.length))
+        const filePath = resolveDocsFilePath(docsMatch.root, pathname.slice(docsMatch.base.length))
         if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
           log(`docs file not found for pathname: ${pathname}`)
           res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })

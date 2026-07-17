@@ -310,6 +310,7 @@ export async function activate(context: vscode.ExtensionContext) {
       getChildren: () => [],
       getTreeItem: (element: vscode.TreeItem) => element,
     }),
+    vscode.commands.registerCommand('orbitscore.openDocs', openUserDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocs', openDevDocs),
     vscode.commands.registerCommand('orbitscore.openDevDocsPanel', () => openDevDocsPanel(context)),
     vscode.commands.registerCommand('orbitscore.openWalkthrough', openWalkthrough),
@@ -440,6 +441,30 @@ function resolveDevDocsUrl(): string | null {
     return null
   }
   return `http://127.0.0.1:${port}/orbitscore/dev/`
+}
+
+/**
+ * Canonical local URL of the END-USER learning site (sites/user — served at
+ * `/orbitscore/` by the MCP server; the dev site lives under `/orbitscore/dev/`).
+ */
+function resolveUserDocsUrl(): string | null {
+  const port = mcpServerHandle?.port ?? 0
+  if (!port) {
+    void vscode.window.showErrorMessage(
+      'OrbitScore docs require the MCP server. Set orbitscore.mcpServer.port and enable the MCP server.',
+    )
+    return null
+  }
+  return `http://127.0.0.1:${port}/orbitscore/`
+}
+
+async function openUserDocs(): Promise<void> {
+  const url = resolveUserDocsUrl()
+  if (!url) return
+  const opened = await vscode.env.openExternal(vscode.Uri.parse(url))
+  if (!opened) {
+    outputChannel?.appendLine(`❌ Failed to open the learning site at ${url}`)
+  }
 }
 
 async function openDevDocs(): Promise<void> {

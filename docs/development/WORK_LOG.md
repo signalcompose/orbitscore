@@ -17,6 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.270 chore(qa): docs-driven 実機 E2E + 学習サイト最新化 #481 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 品質ゲートフェーズ（owner 方針: docs の主張 ⇔ 実装 ⇔ 教材 ⇔ MCP 面の
+4 者を実機で突き合わせる。切れ目のスコープ）
+
+**実機 E2E（OrbitStudio + MCP・SOUND CONFIRMED）**:
+- import プロジェクト（editor 経路・I3 メタ行）: peak 0.70711 オラクル一致・IM.4 module
+  相対 audio パス実機確認・契約エラー表出確認
+- sum insert（CLAPTestEffect）: 0.35355 一致 / aux send: dry 先行 0.7071 → 干渉定常
+  0.4965（MX.5 の no-PDC 記述どおり）
+- MCP 12 ツール疎通（open/select/run/edit_replace/save/get_document_text 等）
+
+**炙り出した発見（全て issue 化）**: #476 REPL 複数行バッファ競合（遅い await で後続行
+消失）・#477 MX.2 と LinkAudio fallback の spec 矛盾・#478 analyze_audio の耳の限界・
+#479 ParentWatch 不全（orphan effect-child ×8 が CPU 95% 空回り）・#480 stale dist 配信
+
+**学習サイト**: user サイトに mixing/effects・mixing/routing・projects/import（日英 6 章 +
+sidebar）を新設 — スニペットは本日の実機 E2E 通過分を verbatim 使用。**エンドユーザー
+サイトの配信を追加**（MCP server が /orbitscore/ で sites/user を配信・dev は
+/orbitscore/dev/ のまま・最長プレフィックス routing）。導線 = 目立つボタン類は user
+サイト（orbitscore.openDocs 新設）・dev はパレットのみ（owner 指示・「個人学習ノート」
+表現は「技術解説ラーニング」へ）
+
+**spec 同期**: IM/PC の Status 行の stale（「未実装」のまま）を実装事実に更新
+
+Refs #481
+
+
 ### 6.269 feat(rust): plugin catalog scanner C1 — orbit-plugin-scan #463 (Jul 17, 2026)
 
 **Date**: 2026-07-17

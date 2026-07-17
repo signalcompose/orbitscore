@@ -1268,7 +1268,7 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 
 ## Plugin Catalog — 名前指し・自動補完（#463）
 
-> **Status**: 設計確定（2026-07-17・issue #463 が追跡）・実装は C1-C3 で段階導入（未実装）。
+> **Status**: C1（スキャナ + キャッシュ）実装済み（PR #475）・C1b/C2/C3 は未実装（issue #463 が追跡）。
 > 本節が規範（DocDD: spec 先行）。**path 指定（PH.3）は不変** — カタログはその上に載る
 > 追加の解決層であり、path で書かれた spec はカタログを一切参照しない。
 
@@ -1338,7 +1338,7 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
 
 ### PC.5 v1 制約（実装事実の開示）
 
-- 本節は全体が未実装（C1 = daemon scan + キャッシュ / C2 = DSL 名前解決 /
+- C1b（daemon 配線）/ C2（DSL 名前解決）/ C3（補完+MCP）は未実装（C1 = スキャナ /
   C3 = 補完 + MCP の 3 段導入）
 - 多バージョン共存（同名同 vendor 同 format の別バージョン）は区別しない —
   スキャン順で最後に見つかった path が勝つ（バージョン規則は将来拡張）
@@ -1404,7 +1404,7 @@ kick.send("rev", 0.3)                 // send（copy・原音は継続して mas
 
 ## Import / Project 構成（複数ファイル — #456）
 
-> **Status**: 設計確定（2026-07-17・issue #456 が追跡）・実装は I1-I3 で段階導入（未実装）。
+> **Status**: ✅ 実装済み（2026-07-17・I1+I2 = PR #470・I3 = PR #471・#456 CLOSED）。
 > 本節が規範（DocDD: spec 先行）。ブレスト正本 `POST_2.0_MIXER_DSL_DESIGN.html` §8 は非規範。
 > 素朴な 1 ファイル運用は**恒久に保護**する — import を使わない .orbs は従来どおり完結して動く。
 
@@ -1468,7 +1468,6 @@ import chords                                 // 既存の stdlib import（§6�
 
 ### IM.6 v1 制約（実装事実の開示）
 
-- **本節は全体が未実装**（`import` の `{` 分岐を含め parser/interpreter とも I1-I3 で導入）
 - モジュールスコープなし・`export` なし・衝突診断なし（IM.2 に明記）
 - VS Code 拡張のファイル横断診断・補完・サブジェクトブロック実行は v1 スコープ外
   （import 行を含むファイルでは未定義変数診断を抑制する方向で段階対応）
