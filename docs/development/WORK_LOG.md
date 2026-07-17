@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.278 feat(dsl): plugin catalog 名前指し #463 C2 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 実装（バケット A 先頭・owner の「フルパスをどうにかしたい」に応答）
+
+**内容（PC.2 準拠）**: `kick.effect("TAL Reverb 4")` / `seq.instrument("Scaler 3")` —
+- 判別 = path-direct 形 or 既知拡張子 → 従来 path 解決（不変）・それ以外 → カタログ名
+  （audio 系 looksLikePath は不使用 — vendor 修飾が `/` を含むため専用判別）
+- 一致 = NFC/case-insensitive/trim・曖昧は候補列挙エラー・`"vendor/name"` 修飾
+- 解決 = (path, pluginId) の組を LoadPlugin へ・名前指し + pluginId 引数の併用はエラー
+- format 優先 = verb 受理内で CLAP > VST3・受理不能は専用エラー・未ヒットは rescan 案内
+- カタログ読取 = plugin-catalog.ts（mtime キャッシュ・`ORBIT_PLUGIN_CATALOG` で注入可）
+
+**意図的挙動変更**: 既知拡張子なしの裸名（例 `effect.wav`）は拡張子エラーでなくカタログ
+解決へルーティング（PC.2 の規範・既存テスト 2 件を `./` 付きに更新）。
+
+**検証**: 新規 25 tests・全体 1473 passed・tsc/lint clean。実カタログ（79 entries）で
+"Scaler 3" → VST3 path + CID 解決・"Mic Room"（VST3-only）を effect() で専用エラー確認。
+
+Refs #463
+
+
 ### 6.277 fix(native): device 解決の CoreAudio ハングを解消 #484 hotfix (Jul 17, 2026)
 
 **Date**: 2026-07-17

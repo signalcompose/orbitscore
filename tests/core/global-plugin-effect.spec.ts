@@ -22,7 +22,10 @@ describe('Global.effect()', () => {
     await expect(global.effect(spec)).rejects.toThrow('not yet supported')
   })
 
-  it.each(['effect.wav', 'effect'])('rejects unknown extension %s', async (spec) => {
+  // Bare names (no `./`-style prefix, no known plugin extension) are now catalog names
+  // per #463 C2's PC.2 discriminator — use a path-direct prefix to keep exercising the
+  // path-side "unknown extension" validation.
+  it.each(['./effect.wav', './effect'])('rejects unknown extension %s', async (spec) => {
     const { global } = makeGlobal()
     await expect(global.effect(spec)).rejects.toThrow('Unknown plugin extension')
   })

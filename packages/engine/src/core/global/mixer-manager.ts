@@ -126,16 +126,17 @@ export class MixerManager {
   ): Promise<MixerBusHandle> {
     // LinkAudio gate は declareBus() 済みでも維持する（respawn/reload 経路で effect() 単独が
     // 再実行され得るため — resolveEffectSpec が spec 検証 → gate → 解決の順序を保証する）。
-    const resolvedPath = resolveEffectSpec(
+    const resolved = resolveEffectSpec(
       spec,
+      pluginId,
       { audioManager: this.audioManager, linkAudioManager: this.linkAudioManager },
       `${kind}("${name}").effect() cannot be used while LinkAudio is enabled in v1.`,
     )
     await this.kinds[kind].inserts.declare(
       bus,
       bus,
-      resolvedPath,
-      pluginId,
+      resolved.path,
+      resolved.pluginId,
       () =>
         new Error(
           `${kind}("${name}").effect() supports one insert per bus in v1; chains (multiple ` +

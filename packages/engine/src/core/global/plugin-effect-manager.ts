@@ -22,16 +22,17 @@ export class PluginEffectManager {
   }
 
   async effect(spec: string, pluginId?: string): Promise<void> {
-    const resolvedPath = resolveEffectSpec(
+    const resolved = resolveEffectSpec(
       spec,
+      pluginId,
       { audioManager: this.audioManager, linkAudioManager: this.linkAudioManager },
       'global.effect() cannot be used while LinkAudio is enabled in v1.',
     )
     await this.slots.declare(
       'master',
       undefined,
-      resolvedPath,
-      pluginId,
+      resolved.path,
+      resolved.pluginId,
       () =>
         new Error(
           'global.effect() supports one master insert in v1; effect chains are reserved for future support.',
