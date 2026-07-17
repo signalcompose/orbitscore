@@ -97,28 +97,23 @@ async function executeSelectAudioDeviceMeta(
   interpreter: InterpreterV2,
   device: string,
 ): Promise<void> {
+  // JSON エンベロープの出力は 1 箇所に集約（3 分岐で個別に stringify すると
+  // 将来のフィールド追加時に stdout 契約が食い違うリスクがある）。
+  let result: { ok: boolean; device?: string; error?: string }
   try {
     const audioEngine = interpreter.audioEngine
     if (!audioEngine.selectAudioDevice) {
-      console.log(
-        JSON.stringify({
-          selectAudioDevice: {
-            ok: false,
-            error: 'selectAudioDevice is not supported by the current audio engine backend',
-          },
-        }),
-      )
-      return
+      result = {
+        ok: false,
+        error: 'selectAudioDevice is not supported by the current audio engine backend',
+      }
+    } else {
+      result = { ok: true, device: await audioEngine.selectAudioDevice(device) }
     }
-    const applied = await audioEngine.selectAudioDevice(device)
-    console.log(JSON.stringify({ selectAudioDevice: { ok: true, device: applied } }))
   } catch (error: any) {
-    console.log(
-      JSON.stringify({
-        selectAudioDevice: { ok: false, error: error?.message ?? String(error) },
-      }),
-    )
+    result = { ok: false, error: error?.message ?? String(error) }
   }
+  console.log(JSON.stringify({ selectAudioDevice: result }))
 }
 
 /**
