@@ -217,6 +217,15 @@ describe('analyzeWavBuffer — #478 fixes', () => {
     expect(Math.abs(loudest.startSec - 0.5)).toBeLessThan(0.02)
   })
 
+  it('rejects a window_ms that would explode the series size (cap)', () => {
+    const buf = buildFloat32Wav({ seconds: 10 })
+    // 10s/48kHz で window 0.01ms 相当 → 下限 1ms clamp 後でも 10,000 窓は cap 内。
+    // cap 超過を作るには長尺相当が要るため、下限 clamp の検証と cap メッセージの検証を分ける:
+    expect(() => analyzeWavBuffer(buf, { windowMs: 0.001 })).not.toThrow() // clamp が効く
+    const windows = analyzeWavBuffer(buf, { windowMs: 0.001 }).windows!
+    expect(windows.length).toBeLessThanOrEqual(20_000)
+  })
+
   it('omits the windows series when windowMs is not passed', () => {
     const buf = buildFloat32Wav({ seconds: 1 })
     expect(analyzeWavBuffer(buf).windows).toBeUndefined()

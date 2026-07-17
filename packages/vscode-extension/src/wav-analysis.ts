@@ -154,6 +154,11 @@ export function analyzeWavBuffer(buf: Buffer, opts?: { windowMs?: number }): Wav
   }
 }
 
+/** windows 系列の上限（JSON ペイロード肥大の防御・レビュー指摘）。 */
+const MAX_WINDOW_SERIES = 20_000
+/** window_ms の下限（極小値で winFrames=1 に floor され窓数が爆発するのを防ぐ）。 */
+const MIN_WINDOW_MS = 1
+
 /** 指定解像度の per-window peak/RMS 系列（mono mixdown・#478）。 */
 function windowSeries(
   buf: Buffer,
@@ -162,7 +167,15 @@ function windowSeries(
   format: WavFormat,
   windowSec: number,
 ): Array<{ startSec: number; peak: number; rms: number }> {
-  const winFrames = Math.max(1, Math.floor(format.sampleRate * windowSec))
+  const effectiveSec = Math.max(windowSec, MIN_WINDOW_MS / 1000)
+  const winFrames = Math.max(1, Math.floor(format.sampleRate * effectiveSec))
+  const windowCount = Math.ceil(frames / winFrames)
+  if (windowCount > MAX_WINDOW_SERIES) {
+    throw new Error(
+      `window_ms too small for this capture: ${windowCount} windows would be produced ` +
+        `(cap ${MAX_WINDOW_SERIES}). Use a larger window_ms.`,
+    )
+  }
   const out: Array<{ startSec: number; peak: number; rms: number }> = []
   for (let w = 0; w * winFrames < frames; w++) {
     const start = w * winFrames
