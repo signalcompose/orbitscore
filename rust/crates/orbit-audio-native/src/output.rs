@@ -93,6 +93,98 @@ pub enum OutputError {
     Capture(String),
 }
 
+/// `ListAudioDevices`（#484 D1）の 1 デバイス分。cpal の output device 列挙結果を wire 用に
+/// 平坦化する。`direction` は将来の入力デバイス列挙（v1 スコープ外）に備えた予約フィールド —
+/// v1 は `"output"` 固定で埋める。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioDeviceInfo {
+    pub name: String,
+    pub is_default: bool,
+    pub max_output_channels: u16,
+    pub default_sample_rate: u32,
+    pub direction: &'static str,
+}
+
+/// cpal の default host から output device を列挙する（#484 D1）。個々のデバイスの config 取得が
+/// 失敗しても（macOS で一時的に無効化されたデバイス等）全体を失敗させず、そのデバイスだけ
+/// skip する（列挙は observability 用途で best-effort でよい・enumerate 失敗が daemon 起動可否を
+/// 左右してはいけない）。
+pub fn list_output_devices() -> Result<Vec<AudioDeviceInfo>, OutputError> {
+    let host = cpal::default_host();
+    let default_name = host.default_output_device().and_then(|d| d.name().ok());
+
+    let devices = host
+        .output_devices()
+        .map_err(|e| OutputError::NoConfig(e.to_string()))?;
+
+    let mut result = Vec::new();
+    for device in devices {
+        let Ok(name) = device.name() else {
+            continue;
+        };
+        let Ok(config) = device.default_output_config() else {
+            continue;
+        };
+        let is_default = default_name.as_deref() == Some(name.as_str());
+        result.push(AudioDeviceInfo {
+            name,
+            is_default,
+            max_output_channels: config.channels(),
+            default_sample_rate: config.sample_rate().0,
+            direction: "output",
+        });
+    }
+    Ok(result)
+}
+
+/// 起動時の device 指定を解決する純関数（`--audio-device` honor・#484 D1）。名前**完全一致**の
+/// device を `available` から探す。`requested` が `None`、または一致するデバイスが無ければ
+/// `None`（= host 既定へ縮退）を返す。cpal I/O を持たないため unit test で決定的に検証できる。
+pub fn resolve_requested_device_name(
+    requested: Option<&str>,
+    available: &[String],
+) -> Option<String> {
+    let requested = requested?;
+    available.iter().find(|n| n.as_str() == requested).cloned()
+}
+
+/// `start_output_inner` から呼ばれる cpal I/O 込みの device 解決（#484 D1）。`resolve_requested_device_name`
+/// （pure）に実際の host 列挙を組み合わせる。`requested` が `None` なら常に host 既定を使う
+/// （列挙コストを払わない・従来経路とビット同一）。一致するデバイスが見つからない場合は
+/// stderr に警告して host 既定へ縮退する（daemon 起動を失敗させない）。
+fn resolve_output_device(
+    host: &cpal::Host,
+    requested: Option<&str>,
+) -> Result<Device, OutputError> {
+    let Some(requested) = requested else {
+        return host.default_output_device().ok_or(OutputError::NoDevice);
+    };
+
+    let mut matched: Option<Device> = None;
+    let mut available_names = Vec::new();
+    if let Ok(devices) = host.output_devices() {
+        for device in devices {
+            if let Ok(name) = device.name() {
+                if name == requested {
+                    matched = Some(device);
+                    break;
+                }
+                available_names.push(name);
+            }
+        }
+    }
+
+    match matched {
+        Some(device) => Ok(device),
+        None => {
+            eprintln!(
+                "[audio-device] requested device \"{requested}\" not found (available: {available_names:?}) — falling back to system default output"
+            );
+            host.default_output_device().ok_or(OutputError::NoDevice)
+        }
+    }
+}
+
 /// capture ring の秒数（`sample_rate * channels * 秒`）。off-thread writer が瞬間的な disk
 /// 遅延を吸収できるよう generous に確保する。恒常的に writer が追いつかなければ drop が
 /// カウントされ、検証側が invalid として loud に落とす（silent-failure ガード）。
@@ -660,8 +752,18 @@ type OutputInnerStart = (
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
 /// 同時に初期化する（hardware-only）。呼び出し側は config ミスマッチを意識しなくてよい。
 pub fn start_default_output(capture_path: Option<PathBuf>) -> Result<OutputStart, OutputError> {
+    start_default_output_with_device(capture_path, None)
+}
+
+/// [`start_default_output`] の device 指定版（#484 D1）。`device_name` が `Some` かつ一致する出力
+/// device が見つかれば起動時にそれを honor する。`None`、または一致しない場合は host 既定へ
+/// warn 付きで縮退する（`start_output_inner` 側の共通ロジック）。
+pub fn start_default_output_with_device(
+    capture_path: Option<PathBuf>,
+    device_name: Option<String>,
+) -> Result<OutputStart, OutputError> {
     let (engine, stream, stats, _cb) =
-        start_output_inner(None, Vec::new(), None, None, capture_path)?;
+        start_output_inner(None, Vec::new(), None, None, capture_path, device_name)?;
     Ok((engine, stream, stats))
 }
 
@@ -671,6 +773,7 @@ pub fn start_default_output(capture_path: Option<PathBuf>) -> Result<OutputStart
 pub fn start_default_output_with_link_egress(
     reg_capacity: usize,
     capture_path: Option<PathBuf>,
+    device_name: Option<String>,
 ) -> Result<LinkEgressStart, OutputError> {
     let (reg_tx, reg_rx) = rtrb::RingBuffer::new(reg_capacity);
     let link = LinkEgress {
@@ -678,8 +781,14 @@ pub fn start_default_output_with_link_egress(
         // cap は control が強制するので最大 MAX_LINK_CHANNELS。callback で push のみ・realloc を避ける。
         channels: Vec::with_capacity(MAX_LINK_CHANNELS),
     };
-    let (engine, stream, stats, _cb) =
-        start_output_inner(Some(link), Vec::new(), None, None, capture_path)?;
+    let (engine, stream, stats, _cb) = start_output_inner(
+        Some(link),
+        Vec::new(),
+        None,
+        None,
+        capture_path,
+        device_name,
+    )?;
     Ok((engine, stream, stats, reg_tx))
 }
 
@@ -696,9 +805,16 @@ pub fn start_default_output_with_clap(
     post: Box<dyn PostProcessor>,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
+    device_name: Option<String>,
 ) -> Result<ClapHostStart, OutputError> {
-    let (engine, stream, stats, cb) =
-        start_output_inner(None, Vec::new(), Some(post), buffer_frames, capture_path)?;
+    let (engine, stream, stats, cb) = start_output_inner(
+        None,
+        Vec::new(),
+        Some(post),
+        buffer_frames,
+        capture_path,
+        device_name,
+    )?;
     // post=Some の経路では inner が必ず CallbackTimeStats を作る。
     let cb = cb.expect("clap path always creates CallbackTimeStats");
     Ok((engine, stream, stats, cb))
@@ -709,6 +825,7 @@ pub fn start_default_output_with_clap(
 pub fn start_default_output_with_insert_buses(
     mut insert_buses: Vec<InsertBusStage>,
     capture_path: Option<PathBuf>,
+    device_name: Option<String>,
 ) -> Result<OutputStart, OutputError> {
     if insert_buses.len() > MAX_INSERT_BUS_STAGES {
         return Err(OutputError::NoConfig(format!(
@@ -723,6 +840,7 @@ pub fn start_default_output_with_insert_buses(
         None,
         None,
         capture_path,
+        device_name,
     )?;
     Ok((engine, stream, stats))
 }
@@ -735,6 +853,7 @@ pub fn start_default_output_with_insert_buses_and_post(
     post: Box<dyn PostProcessor>,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
+    device_name: Option<String>,
 ) -> Result<
     (
         Engine,
@@ -751,8 +870,14 @@ pub fn start_default_output_with_insert_buses_and_post(
         )));
     }
     validate_bus_topology(&insert_buses)?;
-    let (engine, stream, stats, cb) =
-        start_output_inner(None, insert_buses, Some(post), buffer_frames, capture_path)?;
+    let (engine, stream, stats, cb) = start_output_inner(
+        None,
+        insert_buses,
+        Some(post),
+        buffer_frames,
+        capture_path,
+        device_name,
+    )?;
     Ok((
         engine,
         stream,
@@ -765,16 +890,19 @@ pub fn start_default_output_with_insert_buses_and_post(
 /// `link` を渡すと cpal callback に egress 経路を、`post` を渡すと master-bus post-processor を
 /// 組み込む（両方 None なら hardware-only でビット同一）。`post` 有り時のみ callback-duration
 /// 計測 stats を作って返す。`buffer_frames` が `Some` なら `BufferSize::Fixed` を要求する（小バッファ
-/// 計測・通常 None で device 既定）。
+/// 計測・通常 None で device 既定）。`device_name` が `Some` かつ一致する output device が
+/// あればそれを使う（`--audio-device` honor・#484 D1）。`None`、または一致するデバイスが
+/// 見つからなければ stderr に警告して host 既定へ縮退する（起動を失敗させない）。
 fn start_output_inner(
     link: Option<LinkEgress>,
     mut insert_buses: Vec<InsertBusStage>,
     post: Option<Box<dyn PostProcessor>>,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
+    device_name: Option<String>,
 ) -> Result<OutputInnerStart, OutputError> {
     let host = cpal::default_host();
-    let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
+    let device = resolve_output_device(&host, device_name.as_deref())?;
     let supported = device
         .default_output_config()
         .map_err(|e| OutputError::NoConfig(e.to_string()))?;
@@ -995,6 +1123,41 @@ fn build_stream(
 mod tests {
     use super::*;
     use cpal::BackendSpecificError;
+
+    #[test]
+    fn resolve_requested_device_name_none_when_not_requested() {
+        let available = vec!["Built-in Output".to_string(), "USB Audio".to_string()];
+        assert_eq!(resolve_requested_device_name(None, &available), None);
+    }
+
+    #[test]
+    fn resolve_requested_device_name_exact_match() {
+        let available = vec!["Built-in Output".to_string(), "USB Audio".to_string()];
+        assert_eq!(
+            resolve_requested_device_name(Some("USB Audio"), &available),
+            Some("USB Audio".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_requested_device_name_falls_back_when_absent() {
+        let available = vec!["Built-in Output".to_string()];
+        assert_eq!(
+            resolve_requested_device_name(Some("Nonexistent Device"), &available),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_requested_device_name_is_case_sensitive() {
+        // 完全一致のみ honor する（大文字小文字の揺れは一致させない — device 名の安定性は
+        // プラットフォーム依存で、緩い一致は誤ったデバイスを選びうるため・#484 D1）。
+        let available = vec!["USB Audio".to_string()];
+        assert_eq!(
+            resolve_requested_device_name(Some("usb audio"), &available),
+            None
+        );
+    }
 
     #[test]
     fn render_block_zero_buses_bit_identical() {

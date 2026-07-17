@@ -735,6 +735,34 @@ async fn handle_command(
 
     match method.as_str() {
         "Ping" => ok(&id, Value::String("pong".to_string())),
+        // cpal の output device 列挙（#484 D1）。host 列挙は環境によっては軽くブロックしうるため
+        // LoadSample と同様 spawn_blocking で tokio ワーカーを塞がない。`direction` は将来の入力
+        // デバイス列挙（v1 スコープ外）向けの予約フィールドで、v1 は "output" 固定。
+        "ListAudioDevices" => {
+            let listed = tokio::task::spawn_blocking(orbit_audio_native::list_output_devices).await;
+            match listed {
+                Ok(Ok(devices)) => {
+                    let devices: Vec<Value> = devices
+                        .into_iter()
+                        .map(|d| {
+                            json!({
+                                "name": d.name,
+                                "isDefault": d.is_default,
+                                "maxOutputChannels": d.max_output_channels,
+                                "defaultSampleRate": d.default_sample_rate,
+                                "direction": d.direction,
+                            })
+                        })
+                        .collect();
+                    ok(&id, json!({ "devices": devices }))
+                }
+                Ok(Err(e)) => err(&id, ProtocolError::new("DEVICE_ENUM_ERROR", e.to_string())),
+                Err(join_err) => err(
+                    &id,
+                    ProtocolError::new("INTERNAL_ERROR", join_err.to_string()),
+                ),
+            }
+        }
         "GetStatus" => {
             let status = json!({
                 "daemon_version": env!("CARGO_PKG_VERSION"),

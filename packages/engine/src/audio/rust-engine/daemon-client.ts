@@ -52,11 +52,26 @@ export interface DaemonClientOptions {
   /** handshake フレーム受信 timeout。 */
   handshakeTimeoutMs?: number
   /**
+   * 起動時に daemon へ渡す `--audio-device <name>` の名前（#484 D1）。cpal の device 名と
+   * **完全一致**で honor される。一致しなければ daemon が stderr に警告して host 既定へ縮退する
+   * （起動は失敗しない）。ランタイム中の切替（stream 再構築）は D2 scope・未実装。
+   */
+  audioDevice?: string
+  /**
    * テスト用: spawn を skip して既存 ws URL に接続する抜け道。
    * production code からは使用しない。
    * @internal
    */
   wsUrlOverride?: string
+}
+
+/** `ListAudioDevices` の 1 要素（#484 D1）。daemon 側 `orbit_audio_native::AudioDeviceInfo` の wire 形。 */
+export interface AudioDeviceListEntry {
+  name: string
+  isDefault: boolean
+  maxOutputChannels: number
+  defaultSampleRate: number
+  direction: 'output' | 'input'
 }
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
@@ -189,7 +204,8 @@ export class DaemonClient extends EventEmitter {
     // quit() は this.running===false なら no-op なので手動回収が必要。
     try {
       const wsUrl =
-        options.wsUrlOverride ?? (await this.spawnDaemon(options.daemonPath, startupTimeoutMs))
+        options.wsUrlOverride ??
+        (await this.spawnDaemon(options.daemonPath, startupTimeoutMs, options.audioDevice))
 
       // handshake の検出ハンドラを connectWebSocket より先に用意。
       // open 後すぐ message が届くケースでも handshakeResolver が
@@ -415,6 +431,16 @@ export class DaemonClient extends EventEmitter {
   }
 
   /**
+   * cpal output device 一覧を daemon から取得する（#484 D1）。ランタイム切替（`SelectAudioDevice`）
+   * は D2 scope・未実装。ここは列挙のみで、実際の選択は daemon 起動引数（`--audio-device`）で行う。
+   */
+  async listAudioDevices(): Promise<AudioDeviceListEntry[]> {
+    const result = await this.request('ListAudioDevices', {})
+    const devices = result.devices
+    return Array.isArray(devices) ? (devices as AudioDeviceListEntry[]) : []
+  }
+
+  /**
    * gated な fault 注入（recovery floor の kill-test 専用 / @internal）。daemon を
    * ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 で起動した場合のみ受理される。daemon を
    * panic→exit(1)（panic hook 経路）で殺す。daemon は応答前に死ぬので request は close で
@@ -532,9 +558,16 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
-  private async spawnDaemon(explicitPath: string | undefined, timeoutMs: number): Promise<string> {
+  private async spawnDaemon(
+    explicitPath: string | undefined,
+    timeoutMs: number,
+    audioDevice: string | undefined,
+  ): Promise<string> {
     const binary = this.resolveDaemonBinary(explicitPath)
-    const child = spawn(binary, [], { stdio: ['ignore', 'pipe', 'pipe'] })
+    // `--audio-device <name>` は daemon 起動時のみ honor される（#484 D1・ランタイム切替は D2）。
+    // 名前が不一致でも daemon は起動を落とさず stderr に警告して host 既定へ縮退する。
+    const args = audioDevice ? ['--audio-device', audioDevice] : []
+    const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
     this.child = child
 
     const stderrChunks: string[] = []

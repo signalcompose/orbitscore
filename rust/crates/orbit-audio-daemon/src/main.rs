@@ -70,6 +70,12 @@ fn install_fatal_panic_hook() {
 }
 
 async fn run() -> Result<(), i32> {
+    // 0. `--audio-device <name>` を解析し、`ORBIT_AUDIO_DEVICE` env へ反映する（#484 D1）。
+    // 実際の device 解決（列挙・一致判定・不一致時の縮退警告）は `orbit-audio-native`
+    // 側（`resolve_output_device`）が cpal I/O を伴って行う。ここでは env に橋渡しするだけ
+    // （`engine_wrap::device_name_from_env` が capture_path_from_env と同じ層分けで読む）。
+    apply_audio_device_arg(std::env::args().skip(1));
+
     // 1. Engine を起動（audio device 取得）
     let (engine, _stream_guard) = match EngineWrap::start() {
         Ok(e) => e,
@@ -109,6 +115,32 @@ async fn run() -> Result<(), i32> {
     Ok(())
 }
 
+/// `--audio-device <name>` を argv から抽出する純関数（#484 D1）。値が欠けている（末尾で
+/// 引数無し）場合は `None` を返し無視する（起動は既定デバイスで続行 — 起動失敗にしない）。
+/// 複数回指定された場合は最後の指定を優先する（CLI の一般的な慣習）。
+fn parse_audio_device_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
+    let mut result = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--audio-device" {
+            result = iter.next();
+        }
+    }
+    result
+}
+
+/// argv から `--audio-device` を解析し、見つかれば `ORBIT_AUDIO_DEVICE` env へ反映する
+/// （`EngineWrap::start()` 到達前に呼ぶ必要がある・main の起動シーケンス step 0）。
+fn apply_audio_device_arg<I: IntoIterator<Item = String>>(args: I) {
+    if let Some(name) = parse_audio_device_arg(args) {
+        // SAFETY: main() 起動シーケンス冒頭・単一スレッドで他スレッド生成前に呼ばれるため、
+        // env の読み書き競合は発生しない（tokio worker はまだ起動していない）。
+        unsafe {
+            std::env::set_var("ORBIT_AUDIO_DEVICE", name);
+        }
+    }
+}
+
 fn report_startup_failure(error: ProtocolError) {
     let payload = StartupError {
         ready: false,
@@ -120,4 +152,39 @@ fn report_startup_failure(error: ProtocolError) {
     eprintln!("{line}");
     use std::io::Write;
     let _ = std::io::stderr().flush();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_audio_device_arg_absent() {
+        let args = ["--foo".to_string(), "bar".to_string()];
+        assert_eq!(parse_audio_device_arg(args), None);
+    }
+
+    #[test]
+    fn parse_audio_device_arg_present() {
+        let args = ["--audio-device".to_string(), "USB Audio".to_string()];
+        assert_eq!(parse_audio_device_arg(args), Some("USB Audio".to_string()));
+    }
+
+    #[test]
+    fn parse_audio_device_arg_missing_value_ignored() {
+        // 末尾で値が欠けている（typo 等）場合は起動を落とさず None へ縮退する。
+        let args = ["--audio-device".to_string()];
+        assert_eq!(parse_audio_device_arg(args), None);
+    }
+
+    #[test]
+    fn parse_audio_device_arg_last_occurrence_wins() {
+        let args = [
+            "--audio-device".to_string(),
+            "First".to_string(),
+            "--audio-device".to_string(),
+            "Second".to_string(),
+        ];
+        assert_eq!(parse_audio_device_arg(args), Some("Second".to_string()));
+    }
 }
