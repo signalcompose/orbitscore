@@ -95,9 +95,15 @@ describe('Global.sum() / Global.aux()', () => {
     )
   })
 
-  it('handle.effect() rejects non-.clap specs', async () => {
-    const { global } = makeGlobal()
-    await expect(global.sum('drum').effect('Reverb.vst3')).rejects.toThrow('not yet supported')
+  it('handle.effect() accepts .vst3 specs', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await expect(global.sum('drum').effect('Reverb.vst3')).resolves.toBeDefined()
+    expect(loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'Reverb.vst3'),
+      undefined,
+      'effect',
+      'sum-bus-0',
+    )
   })
 
   it('sum("drum") and aux("rev") are independent namespaces/pools', () => {
