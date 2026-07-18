@@ -20,7 +20,10 @@ export interface EngineViewDevice {
 
 export type EngineViewNodeKind =
   | 'engine-status'
+  | 'debug-toggle'
   | 'device-section'
+  | 'recovery-section'
+  | 'recovery-action'
   | 'device'
   | 'device-loading'
   | 'device-error'
@@ -36,19 +39,37 @@ export interface EngineViewNode {
   selected?: boolean
   /** Whether the node should render as an expandable tree item. */
   collapsible: boolean
+  /** Initial expansion for collapsible nodes. */
+  collapsibleState?: 'expanded' | 'collapsed'
 }
 
 /** Root-level nodes shown at all times once the engine view has a live TreeDataProvider. */
 export function buildRootNodes(engineRunning: boolean): EngineViewNode[] {
-  return [buildEngineStatusNode(engineRunning), buildDeviceSectionNode()]
+  return [
+    buildEngineStatusNode(engineRunning),
+    buildDebugToggleNode(false),
+    buildDeviceSectionNode(),
+    buildRecoverySectionNode(),
+  ]
 }
 
 export function buildEngineStatusNode(engineRunning: boolean): EngineViewNode {
   return {
     kind: 'engine-status',
     id: 'engine-status',
-    label: engineRunning ? 'Engine: Running' : 'Engine: Stopped',
+    label: engineRunning ? 'Engine: Running' : 'Engine: Off',
     description: engineRunning ? 'Click to stop' : 'Click to start',
+    collapsible: false,
+  }
+}
+
+export function buildDebugToggleNode(enabled: boolean): EngineViewNode {
+  return {
+    kind: 'debug-toggle',
+    id: 'debug-toggle',
+    label: 'Debug mode',
+    description: enabled ? 'On (restart engine to apply)' : 'Off',
+    selected: enabled,
     collapsible: false,
   }
 }
@@ -60,6 +81,41 @@ export function buildDeviceSectionNode(): EngineViewNode {
     label: 'Output Device',
     collapsible: true,
   }
+}
+
+export function buildRecoverySectionNode(): EngineViewNode {
+  return {
+    kind: 'recovery-section',
+    id: 'recovery-section',
+    label: 'Recovery',
+    collapsible: true,
+    collapsibleState: 'collapsed',
+  }
+}
+
+/** Visible emergency actions, kept pure so their presentation is unit-tested. */
+export function recoverySectionChildren(): EngineViewNode[] {
+  return [
+    {
+      kind: 'recovery-action',
+      id: 'recovery-action:orbitscore.restartEngine',
+      label: 'Restart Engine',
+      description: 'Force-restart a stuck engine',
+      collapsible: false,
+    },
+    {
+      kind: 'recovery-action',
+      id: 'recovery-action:orbitscore.reloadWindow',
+      label: 'Reload Window',
+      description: 'Restart the extension',
+      collapsible: false,
+    },
+  ]
+}
+
+export function recoveryCommandFromNodeId(nodeId: string): string | null {
+  if (!nodeId.startsWith('recovery-action:')) return null
+  return nodeId.slice('recovery-action:'.length)
 }
 
 /** Fetch state for the device list, populated by `extension.ts` when the
@@ -109,7 +165,17 @@ export function deviceSectionChildren(
       },
     ]
   }
-  return state.devices.map((device) => buildDeviceNode(device, selectedDevice))
+  return [
+    {
+      kind: 'device',
+      id: 'device:__default__',
+      label: `${selectedDevice === '__default__' ? '● ' : ''}System Default`,
+      description: 'Use the operating system default output',
+      selected: selectedDevice === '__default__',
+      collapsible: false,
+    },
+    ...state.devices.map((device) => buildDeviceNode(device, selectedDevice)),
+  ]
 }
 
 /**
@@ -118,7 +184,7 @@ export function deviceSectionChildren(
  * default") — if it is the host's default output device.
  */
 export function buildDeviceNode(device: EngineViewDevice, selectedDevice: string): EngineViewNode {
-  const selected = selectedDevice === '' ? device.isDefault : device.name === selectedDevice
+  const selected = device.name === selectedDevice
   const labelSuffix = device.isDefault ? ' (system default)' : ''
   return {
     kind: 'device',
@@ -134,4 +200,62 @@ export function buildDeviceNode(device: EngineViewDevice, selectedDevice: string
 export function deviceNameFromNodeId(nodeId: string): string | null {
   if (!nodeId.startsWith('device:')) return null
   return nodeId.slice('device:'.length)
+}
+
+export type DeviceClickAction = 'start' | 'live-switch' | 'deselect-stop' | 'none'
+
+/** The selection-is-power state machine used by both the TreeView and MCP. */
+export function resolveDeviceClickAction(
+  clickedDevice: string,
+  selectedDevice: string,
+  engineRunning: boolean,
+): DeviceClickAction {
+  if (clickedDevice === selectedDevice) return 'deselect-stop'
+  if (!engineRunning) return 'start'
+  return 'live-switch'
+}
+
+/** Result payload embedded in the engine's `{"selectAudioDevice":{...}}` stdout line (#484 D2.5). */
+export interface SelectAudioDeviceBridgeResult {
+  ok: boolean
+  device?: string
+  error?: string
+}
+
+/**
+ * Parse a raw engine stdout line for the `//#selectAudioDevice` bridge's JSON result
+ * (emitted by `repl-mode.ts`'s `executeSelectAudioDeviceMeta`). Returns `undefined` for
+ * any other line — the vast majority of stdout traffic — including parse failures.
+ */
+export function parseSelectAudioDeviceResultLine(
+  rawLine: string,
+): SelectAudioDeviceBridgeResult | undefined {
+  const trimmed = rawLine.trim()
+  if (!trimmed.startsWith('{') || !trimmed.includes('selectAudioDevice')) return undefined
+  let parsed: { selectAudioDevice?: SelectAudioDeviceBridgeResult }
+  try {
+    parsed = JSON.parse(trimmed)
+  } catch {
+    return undefined
+  }
+  return parsed.selectAudioDevice
+}
+
+/** Sentinel embedded in the daemon's error string when a live device switch is
+ * refused because `ORBIT_CAPTURE_WAV` recording is active (#484 D2 brief choice
+ * (a)). Shared between `translateSelectAudioDeviceError` and `extension.ts`'s
+ * restart-prompt branch so the two checks can't drift out of sync. */
+export const AUDIO_DEVICE_SWITCH_UNAVAILABLE = 'AUDIO_DEVICE_SWITCH_UNAVAILABLE'
+
+/**
+ * User-facing translation for the daemon's `AUDIO_DEVICE_SWITCH_UNAVAILABLE` error
+ * (raised while `ORBIT_CAPTURE_WAV` recording is active — the daemon refuses to tear
+ * down the stream mid-capture, #484 D2 brief choice (a)). Other errors pass through
+ * unchanged so real failures aren't masked.
+ */
+export function translateSelectAudioDeviceError(error: string | undefined): string {
+  if (error && error.includes(AUDIO_DEVICE_SWITCH_UNAVAILABLE)) {
+    return '録音中は切替できません — エンジンを再起動してください'
+  }
+  return error ?? 'live audio device switch failed'
 }

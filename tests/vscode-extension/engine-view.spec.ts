@@ -5,8 +5,13 @@ import {
   buildDeviceSectionNode,
   buildEngineStatusNode,
   buildRootNodes,
+  buildRecoverySectionNode,
   deviceNameFromNodeId,
   deviceSectionChildren,
+  parseSelectAudioDeviceResultLine,
+  resolveDeviceClickAction,
+  recoverySectionChildren,
+  translateSelectAudioDeviceError,
   type EngineViewDevice,
 } from '../../packages/vscode-extension/src/engine-view'
 
@@ -38,11 +43,11 @@ describe('buildEngineStatusNode', () => {
     })
   })
 
-  it('shows stopped state with a start hint', () => {
+  it('shows off state with a start hint', () => {
     expect(buildEngineStatusNode(false)).toEqual({
       kind: 'engine-status',
       id: 'engine-status',
-      label: 'Engine: Stopped',
+      label: 'Engine: Off',
       description: 'Click to start',
       collapsible: false,
     })
@@ -56,9 +61,39 @@ describe('buildDeviceSectionNode', () => {
 })
 
 describe('buildRootNodes', () => {
-  it('returns engine-status then device-section', () => {
+  it('returns engine-status, settings, and recovery nodes', () => {
     const nodes = buildRootNodes(true)
-    expect(nodes.map((n) => n.kind)).toEqual(['engine-status', 'device-section'])
+    expect(nodes.map((n) => n.kind)).toEqual([
+      'engine-status',
+      'debug-toggle',
+      'device-section',
+      'recovery-section',
+    ])
+  })
+})
+
+describe('recovery nodes', () => {
+  it('builds a collapsed recovery section', () => {
+    expect(buildRecoverySectionNode()).toMatchObject({
+      kind: 'recovery-section',
+      collapsible: true,
+      collapsibleState: 'collapsed',
+    })
+  })
+
+  it('exposes restart and reload actions', () => {
+    expect(recoverySectionChildren()).toEqual([
+      expect.objectContaining({
+        id: 'recovery-action:orbitscore.restartEngine',
+        label: 'Restart Engine',
+        description: 'Force-restart a stuck engine',
+      }),
+      expect.objectContaining({
+        id: 'recovery-action:orbitscore.reloadWindow',
+        label: 'Reload Window',
+        description: 'Restart the extension',
+      }),
+    ])
   })
 })
 
@@ -96,10 +131,12 @@ describe('deviceSectionChildren', () => {
     ])
   })
 
-  it('maps each device to a node, marking the system default as selected when nothing is configured', () => {
+  it('keeps an empty setting unselected and exposes an explicit System Default row', () => {
     const nodes = deviceSectionChildren({ status: 'loaded', devices: [speaker, aggregate] }, '')
-    expect(nodes).toEqual([buildDeviceNode(speaker, ''), buildDeviceNode(aggregate, '')])
-    expect(nodes[0].selected).toBe(true)
+    expect(nodes).toEqual(
+      expect.arrayContaining([buildDeviceNode(speaker, ''), buildDeviceNode(aggregate, '')]),
+    )
+    expect(nodes[0].selected).toBe(false)
     expect(nodes[1].selected).toBe(false)
   })
 
@@ -109,16 +146,18 @@ describe('deviceSectionChildren', () => {
       'Pro Tools Aggregate I/O',
     )
     expect(nodes[0].selected).toBe(false)
-    expect(nodes[1].selected).toBe(true)
+    expect(nodes[1].selected).toBe(false)
+    expect(nodes[2].selected).toBe(true)
   })
 })
 
 describe('buildDeviceNode', () => {
-  it('marks the default device label and description', () => {
+  it('labels the default device but does not select it when nothing is configured (D3.5: empty = off)', () => {
     const node = buildDeviceNode(speaker, '')
     expect(node.id).toBe('device:MacBook Proのスピーカー')
     expect(node.label).toContain('(system default)')
-    expect(node.label.startsWith('● ')).toBe(true)
+    expect(node.label.startsWith('● ')).toBe(false)
+    expect(node.selected).toBe(false)
     expect(node.description).toBe('2ch · 48000Hz')
   })
 
@@ -138,5 +177,70 @@ describe('deviceNameFromNodeId', () => {
   it('returns null for non-device node ids', () => {
     expect(deviceNameFromNodeId('engine-status')).toBeNull()
     expect(deviceNameFromNodeId('device-loading')).toBeNull()
+  })
+})
+
+describe('resolveDeviceClickAction', () => {
+  it('starts when off with a new device', () => {
+    expect(resolveDeviceClickAction('A', '', false)).toBe('start')
+  })
+  it('switches live when on with a different device', () => {
+    expect(resolveDeviceClickAction('B', 'A', true)).toBe('live-switch')
+  })
+  it('deselects and stops when clicking the selected device', () => {
+    expect(resolveDeviceClickAction('A', 'A', true)).toBe('deselect-stop')
+  })
+})
+
+// #484 D2.5 — the `//#selectAudioDevice` meta-line bridge's pure result parsing/translation.
+
+describe('parseSelectAudioDeviceResultLine', () => {
+  it('parses an ok result line', () => {
+    expect(
+      parseSelectAudioDeviceResultLine(
+        JSON.stringify({ selectAudioDevice: { ok: true, device: 'Built-in Output' } }),
+      ),
+    ).toEqual({ ok: true, device: 'Built-in Output' })
+  })
+
+  it('parses an error result line', () => {
+    expect(
+      parseSelectAudioDeviceResultLine(
+        JSON.stringify({ selectAudioDevice: { ok: false, error: 'boom' } }),
+      ),
+    ).toEqual({ ok: false, error: 'boom' })
+  })
+
+  it('tolerates surrounding whitespace/newline from the stdout chunk split', () => {
+    expect(
+      parseSelectAudioDeviceResultLine(
+        `  ${JSON.stringify({ selectAudioDevice: { ok: true, device: 'X' } })}\n`,
+      ),
+    ).toEqual({ ok: true, device: 'X' })
+  })
+
+  it('returns undefined for unrelated lines', () => {
+    expect(parseSelectAudioDeviceResultLine('🎵 OrbitScore Audio Engine')).toBeUndefined()
+    expect(parseSelectAudioDeviceResultLine('{"other":true}')).toBeUndefined()
+  })
+
+  it('returns undefined for malformed JSON that happens to mention the key', () => {
+    expect(parseSelectAudioDeviceResultLine('{selectAudioDevice: not json}')).toBeUndefined()
+  })
+})
+
+describe('translateSelectAudioDeviceError', () => {
+  it('translates AUDIO_DEVICE_SWITCH_UNAVAILABLE to a Japanese user message', () => {
+    expect(translateSelectAudioDeviceError('AUDIO_DEVICE_SWITCH_UNAVAILABLE')).toBe(
+      '録音中は切替できません — エンジンを再起動してください',
+    )
+  })
+
+  it('passes other errors through unchanged', () => {
+    expect(translateSelectAudioDeviceError('device not found')).toBe('device not found')
+  })
+
+  it('falls back to a generic message when undefined', () => {
+    expect(translateSelectAudioDeviceError(undefined)).toBe('live audio device switch failed')
   })
 })

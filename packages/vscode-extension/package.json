@@ -72,6 +72,18 @@
         "category": "OrbitScore"
       },
       {
+        "command": "orbitscore.restartEngine",
+        "title": "Restart Engine (recovery)",
+        "icon": "$(debug-restart)",
+        "category": "OrbitScore"
+      },
+      {
+        "command": "orbitscore.reloadWindow",
+        "title": "Reload Window",
+        "icon": "$(refresh)",
+        "category": "OrbitScore"
+      },
+      {
         "command": "orbitscore.forceKillScsynth",
         "title": "Force Kill scsynth",
         "icon": "$(close-all)",
@@ -167,7 +179,7 @@
       },
       {
         "view": "orbitscore.engineView",
-        "contents": "Control the OrbitScore audio engine.\n[Start Engine](command:orbitscore.toggleEngine)\n[Start Engine (Debug)](command:orbitscore.startEngineDebug)\n[Stop Engine](command:orbitscore.stopEngine)\n\nOnce the engine is running, this view shows engine status and lets you pick the output device (applies on the next start). CPU metrics are a follow-up — see issue #484."
+        "contents": "Select an output device to power on the audio engine.\nThe device list is unavailable while audio hardware detection fails."
       }
     ],
     "menus": {
@@ -202,6 +214,14 @@
         },
         {
           "command": "orbitscore.stopEngine",
+          "when": "false"
+        },
+        {
+          "command": "orbitscore.restartEngine",
+          "when": "false"
+        },
+        {
+          "command": "orbitscore.reloadWindow",
           "when": "false"
         },
         {
@@ -362,7 +382,13 @@
         "orbitscore.audioDevice": {
           "type": "string",
           "default": "",
-          "description": "Output audio device to use (both \"rust\" and \"sc\" engines). Leave empty to use the system default. Pick a device from the Audio Engine Settings view, or set the exact device name here. Applies on the *next* engine start — there is no live device switch yet (#484 D2). Takes precedence over the legacy `.orbitscore.json` \"audioDevice\" key when both are set.",
+          "description": "Output audio device to use. Empty means no device is selected; use \"__default__\" for the operating system default output.",
+          "scope": "machine-overridable"
+        },
+        "orbitscore.engineDebug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the audio engine in debug mode.",
           "scope": "machine-overridable"
         },
         "orbitscore.mcpServer.port": {
