@@ -20,7 +20,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.290 test(daemon): outproc loading テストの flake 除去 #491 (Jul 18, 2026)
 
 **Date**: 2026-07-18
-**Status**: ✅ 実装（レビュー前）
+**Status**: ✅ 完了（PR #516 MERGED main `0a484ad`）
 
 **内容**:
 - `effect_load_outproc_concurrent_call_fails_fast_on_loading` が CI で2回 flake（#489 発見・PR #515 で再発。いずれも Rust 非接触の変更で fail、rerun で pass）
@@ -29,6 +29,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - ローカル: outproc テスト 38 passed・fmt/clippy 緑
 
 **関連**: #491（Closes）・#489 / PR #515（再発観測）
+
+### 6.289 feat(engine): Signal Chain notation layer — parser + shared resolution #514 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 実装（Phase B・表記層のみ・レビュー前）
+
+**内容**:
+- Signal Chain DSL（SIGNAL_CHAIN_DSL_SPEC_v1・決定 #64-77）の Phase B。P0(#511) ゲート通過済み・Fable 実装前相談で設計確定
+- tokenizer に COLON を追加し、named arguments（SC.3: `HogeComp(threshold: -18, sidechain: duck)`）を実装。値は number/string/boolean/識別子 ref（`{type:'ref'}` で遅延解決）。`outs: {...}` マップは #408 まで明示エラー
+- mixer 宣言（SC.2.1）: `var mix = init global.mixer` → `MixerInit`、`mix.output(1,2)` / `mix.sum` / `mix.aux` → `MixerNodeDecl`。sum/aux の括弧付きは明示エラー
+- `import * from`（SC.2.2・決定 #72）: star import をパース。names は契約検査のみで実体は共有空間評価のため、既存 interpreter でそのまま実行可能と確認
+- プラグイン呼び出しはパーサ変更なし（既存 MethodChain が任意名・括弧なし末尾を受理済み）。「文法は静的・語彙は動的」の解決は新設 `signal-chain/resolve.ts`（純関数: normalizeCatalogName + resolveChainName、DSL メソッド > ミキサー名 > カタログの優先順位と衝突報告）に集約。補完/診断/Phase C interpreter が共用する
+- 新形状の実行は明示エラー（SC.3.3 silent 無視禁止）: named arg 到達・mixer 宣言到達で「Phase C で実装」を throw。既存挙動は厳密に不変
+- spec SC.2 規範(3) に「既知 DSL メソッド最優先」を追記（spec 先行更新・shadow 防止の実装決定として明文化）
+- テスト `tests/audio-parser/signal-chain-syntax.spec.ts` 新設（SC.0 例の fixture 含む 14件）。全体 1563 passed・lint エラー 0
+
+**関連**: #514（Phase B）・#506 / #495 / #511 / 次=Phase C（既存 manager への写像）
+
+**レビュー経緯（PR #515）**:
+- /simplify 4観点 → fix 2件適用（boolean 判定を ParserUtils 再利用・mixer_node_decl リテラル統合）+ resolve.ts 先行実装の意図注記
+- pr-review-team round-1（3名）→ **Critical 1件**: named_arg の Phase C ガードが method 存在チェック後にあり、プラグイン名呼び出し（実在メソッドでない）で「Method not found」素通りに吸われ到達不能 → processArguments 先行実行に修正（`047ac57`）+ テスト5件補強
+- round-2 検証: 順序変更の純関数性確認・fail-before/pass-after を旧コード checkout で実機検証・**Critical 0 / Important 0 収束**。CI 4/4 pass
+- follow-up 注記（PR コメント）: 既存 method-not-found 素通りが新文法で load-bearing になる件は Phase C の resolver 配線で明示エラー化 / tokenizer `:` の silent skip → parse エラー顕在化は意図的方向
 
 ### 6.288 refactor+fix(vscode): #512 補完の /simplify + pr-review-team 収束 (Jul 18, 2026)
 

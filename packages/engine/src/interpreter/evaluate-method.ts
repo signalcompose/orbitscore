@@ -21,14 +21,17 @@
  * ```
  */
 export async function callMethod(obj: any, methodName: string, args: any[]): Promise<any> {
+  // Process arguments BEFORE the method-existence check: plugin/bus chain names
+  // (SC.3) are NOT real methods until Phase C, so a named arg on them would
+  // otherwise be swallowed by the not-found branch below instead of reaching
+  // the explicit Phase C guard in processArguments (SC.3.3 forbids that).
+  const processedArgs = await processArguments(methodName, args)
+
   const method = obj[methodName]
   if (!method || typeof method !== 'function') {
     console.error(`Method not found: ${methodName} on ${obj.constructor.name}`)
     return obj
   }
-
-  // Process arguments
-  const processedArgs = await processArguments(methodName, args)
 
   // Call the method
   const result = await method.apply(obj, processedArgs)
@@ -62,6 +65,14 @@ export async function processArguments(methodName: string, args: any[]): Promise
   const processed: any[] = []
 
   for (const arg of args) {
+    if (arg && typeof arg === 'object' && arg.type === 'named_arg') {
+      // Signal Chain named arguments (SC.3) parse since #514 (Phase B) but
+      // execute only from Phase C. Explicit — SC.3.3 forbids silent ignoring.
+      throw new Error(
+        `named argument "${arg.name}:" in ${methodName}() is not executable yet: ` +
+          `parsing landed in #514 (Phase B); execution lands in Phase C.`,
+      )
+    }
     if (methodName === 'beat' && arg.numerator !== undefined) {
       // Handle meter: beat(4 by 4) -> beat(4, 4)
       processed.push(arg.numerator, arg.denominator)

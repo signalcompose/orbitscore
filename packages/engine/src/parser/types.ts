@@ -24,7 +24,8 @@ export type AudioTokenType =
   | 'MINUS' // - (for negative numbers)
   | 'PLUS' // + (for octave shift / detune sign, e.g. 3^+1)
   | 'PERCENT' // % (for random range)
-  | 'ASTERISK' // * (for x*n repetition, §6.5)
+  | 'ASTERISK' // * (for x*n repetition §6.5 / `import * from` SC.2.2)
+  | 'COLON' // : (named argument separator, SC.3)
   | 'ACCIDENTAL' // pitch alteration prefix: b, bb, #, ## (degree b/# notation)
   | 'CARET' // ^ (octave shift modifier, e.g. 3^+1)
   | 'TILDE' // ~ (detune modifier, e.g. b7~-0.25)
@@ -78,6 +79,58 @@ export type Statement =
   | ImportStatement
   | FileImportStatement
   | MixerHandleStatement
+  | MixerInit
+  | MixerNodeDecl
+
+/**
+ * `var mix = init global.mixer` (SC.2.1): a named handle onto the ONE implicit mixer
+ * space (the console). `globalVariable` is the identifier before `.mixer` — not
+ * validated at parse time (names are arbitrary; the interpreter resolves it).
+ * Execution is Phase C (#514 is notation-layer only): reaching the interpreter throws.
+ */
+export type MixerInit = {
+  type: 'mixer_init'
+  variableName: string
+  globalVariable: string
+}
+
+/**
+ * A mixer-node derivation (SC.2.1): `var master = mix.output(1, 2)` /
+ * `var drums = mix.sum` / `var verb = mix.aux`. `base` is the mixer-handle
+ * identifier as written (may itself be imported) — resolution is deferred to the
+ * interpreter, which also rejects a non-mixer base. sum/aux take NO parentheses
+ * (the declaration allocates an anonymous bus named by the variable); output takes
+ * exactly one physical channel pair. Execution is Phase C: reaching the interpreter throws.
+ */
+export type MixerNodeDecl = {
+  type: 'mixer_node_decl'
+  variableName: string
+  base: string
+  kind: 'output' | 'sum' | 'aux'
+  channels?: [number, number] // output only
+}
+
+/**
+ * A named argument `name: value` inside a call (SC.3): tagged so it can coexist in
+ * the same `args` array as positional raw values without changing their shape
+ * (existing consumers depend on positional args being unwrapped). `value` is a
+ * number | string | boolean | {@link ArgRef}. Execution is Phase C: a named arg
+ * reaching evaluate-method throws (SC.3.3 forbids silent ignoring).
+ */
+export type NamedArg = {
+  type: 'named_arg'
+  name: string
+  value: number | string | boolean | ArgRef
+}
+
+/**
+ * A bare-identifier value of a named argument (`sidechain: duck`): kept as a
+ * deferred name reference so consumers can distinguish it from a STRING literal.
+ */
+export type ArgRef = {
+  type: 'ref'
+  name: string
+}
 
 /**
  * Bare `sum("drum")` / `aux("rev")` reference (MX.2/MX.3, #459/#453 M3) — used to add the
@@ -121,6 +174,8 @@ export type FileImportStatement = {
   type: 'file_import'
   names: string[]
   path: string
+  /** `import * from "..."` (SC.2.2, decision #72): flat star import — `names` is empty. */
+  star?: boolean
 }
 
 /**

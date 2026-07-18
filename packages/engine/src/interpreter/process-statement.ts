@@ -73,6 +73,15 @@ export async function processStatement(
     case 'mixer_handle':
       await processMixerHandleStatement(statement, state)
       break
+    case 'mixer_init':
+    case 'mixer_node_decl':
+      // Signal Chain mixer declarations (SC.2.1) parse since #514 (Phase B,
+      // notation layer) but execute only from Phase C. Explicit — SC.3.3
+      // forbids silently ignoring what the user wrote.
+      throw new Error(
+        `Signal Chain mixer declarations (var ${statement.variableName} = ...) are not ` +
+          `executable yet: parsing landed in #514 (Phase B); execution lands in Phase C.`,
+      )
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
       console.warn(`Unknown statement type: ${(statement as any).type}`)

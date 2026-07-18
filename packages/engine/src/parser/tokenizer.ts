@@ -269,6 +269,11 @@ export class AudioTokenizer {
           tokens.push({ type: 'ASTERISK', value: '*', line, column })
           this.advance()
           break
+        case ':':
+          // Signal Chain named arguments (SC.3): PluginName(param: value)
+          tokens.push({ type: 'COLON', value: ':', line, column })
+          this.advance()
+          break
         default:
           // Skip unknown characters
           this.advance()
