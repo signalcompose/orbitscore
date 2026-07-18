@@ -34,6 +34,12 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **関連**: #514（Phase B）・#506 / #495 / #511 / 次=Phase C（既存 manager への写像）
 
+**レビュー経緯（PR #515）**:
+- /simplify 4観点 → fix 2件適用（boolean 判定を ParserUtils 再利用・mixer_node_decl リテラル統合）+ resolve.ts 先行実装の意図注記
+- pr-review-team round-1（3名）→ **Critical 1件**: named_arg の Phase C ガードが method 存在チェック後にあり、プラグイン名呼び出し（実在メソッドでない）で「Method not found」素通りに吸われ到達不能 → processArguments 先行実行に修正（`047ac57`）+ テスト5件補強
+- round-2 検証: 順序変更の純関数性確認・fail-before/pass-after を旧コード checkout で実機検証・**Critical 0 / Important 0 収束**。CI 4/4 pass
+- follow-up 注記（PR コメント）: 既存 method-not-found 素通りが新文法で load-bearing になる件は Phase C の resolver 配線で明示エラー化 / tokenizer `:` の silent skip → parse エラー顕在化は意図的方向
+
 ### 6.288 refactor+fix(vscode): #512 補完の /simplify + pr-review-team 収束 (Jul 18, 2026)
 
 **Date**: 2026-07-18
