@@ -17,6 +17,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.285 docs(spec): Signal Chain DSL 正本制定 #506 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 正本制定（owner との設計対話で決定 #64-#77 を確定・実装は #495 と同時設計で未着手）
+
+**内容**:
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.html` 新設 — effect()/instrument()/文字列ルーティングを置き換える表記体系の正本
+  - プラグイン名メソッド `receiver.PluginName(param: value)`（名前付き引数 = #460 オートメーションの静的端点）
+  - 二層意味論（宣言層 = 可換な集合 / 信号層 = 順序を持つ列）
+  - ミキサー first-class 宣言（`var mix = init global.mixer` → `mix.output(1,2)/sum/aux` 派生・卓の import レイヤリング・`import * from` 採用）
+  - ノード型がメソッドの意味を決める（aux 名 = send / sum・output 名 = 本流の出力先・括弧なし）
+  - ライブ意味論（再評価 = パラメータ更新・ブロック置き換え・コメントアウト = バイパス）
+- DESIGN_DISCUSSION_RECORD §15 に決定ログ #64-#77 と経緯を追記
+- 既存の文字列形 API は全て互換存置（素朴経路の恒久保護）
+
+**関連**: #506・#495（同時設計）・#460・#497・#484 D4
+
+---
+
 ### 6.284 fix(engine): VST3 effect の名前解決/補完受理 #504 (Jul 18, 2026)
 
 **Date**: 2026-07-18
