@@ -4477,6 +4477,12 @@ mod outproc_load_error_test_support {
 
     type InjectedSlot<R> = (Arc<EngineWrap>, Arc<Mutex<ChildSlot<R>>>);
 
+    /// テストのセットアップ段階（child spawn 等）の完了待ち上限。検証対象の性質ではなく
+    /// 「セットアップが終わらないなら何かが壊れている」の保険なので、CI の高負荷でも
+    /// 越えない大きな値にする（#491: 2s では遅い runner で spawn が間に合わず flake）。
+    /// 各ポーリングループは条件成立で即抜けるため、正常時の所要時間には影響しない。
+    const SETUP_DEADLINE: Duration = Duration::from_secs(30);
+
     fn child_launch<R: OutProcRole>(
         shm_path: PathBuf,
         child_exe: PathBuf,
@@ -4861,7 +4867,7 @@ mod outproc_load_error_test_support {
             let call = std::thread::spawn(move || {
                 wrap_call.load_outproc_plugin_impl::<R>(slot_call, path, None)
             });
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let deadline = std::time::Instant::now() + SETUP_DEADLINE;
             // PID は reset_child_starting の後に publish されるため、この READY はそれによって消されない。
             while R::current_child_pid_atomic(&stats).load(std::sync::atomic::Ordering::Relaxed)
                 == 0
@@ -4924,9 +4930,11 @@ mod outproc_load_error_test_support {
             wrap_a.load_outproc_plugin_impl::<R>(slot_a, loading_path_owned, None)
         });
 
-        // 1本目が Empty -> Loading へ遷移して lock を解放するまで待つ（shm open + spawn は同期的な
-        // syscall なので通常数 ms で観測できる。2s は CI 負荷下でも十分な余裕）。
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        // 1本目が Empty -> Loading へ遷移して lock を解放するまで待つ。この deadline は
+        // セットアップ（child spawn）完了待ちであって検証対象の性質ではないので、CI の
+        // 高負荷でも越えない大きな値にする（#491: 2s では遅い runner で spawn が間に合わず
+        // flake した。ループは Loading 観測で即抜けるため通常は数 ms で終わる）。
+        let deadline = std::time::Instant::now() + SETUP_DEADLINE;
         loop {
             if matches!(
                 &*child_slot.lock().expect("poll child slot"),
@@ -4936,7 +4944,7 @@ mod outproc_load_error_test_support {
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "first LoadPlugin call never reached ChildSlot::Loading within 2s"
+                "first LoadPlugin call never reached ChildSlot::Loading within {SETUP_DEADLINE:?}"
             );
             std::thread::sleep(Duration::from_millis(5));
         }
