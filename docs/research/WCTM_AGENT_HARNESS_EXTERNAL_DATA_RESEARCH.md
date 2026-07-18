@@ -9,7 +9,7 @@ laiso の記事「作って使うAIエージェント —— Pi Coding Agent で
 
 > **このハーネスを orbitstudio / WCTM で採用することで、外部データの受け取りをエージェント側で可能にできるのではないか。**
 
-を、WCTM システム仕様（`docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html` §4 LLM Runtime）に照らして検討し、**本番ランタイムの選択を確定する**ための調査。結論として WCTM 本番ランタイムを **pi ベースの OrbitScore 専用ハーネス**に確定した（旧 decision #29「Claude Code 二段構え」を上書き）。本書はその判断の一次資料。
+を、WCTM システム仕様（`docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §4 LLM Runtime）に照らして検討し、**本番ランタイムの選択を確定する**ための調査。結論として WCTM 本番ランタイムを **pi ベースの OrbitScore 専用ハーネス**に確定した（旧 decision #29「Claude Code 二段構え」を上書き）。本書はその判断の一次資料。
 
 ## 調査方法
 
@@ -197,8 +197,8 @@ push/pull 議論の着地点はここに収束する。**ランタイム選択�
 
 本調査の結論は以下に反映済み（同一 PR）:
 
-- **`WCTM_SYSTEM_SPEC_v1.html`**: §4 を「pi ベース専用ハーネス」に全面改訂（4.1 なぜ変えたか / 4.2 A/B 比較を歴史保存 / 4.3 確定方針 / 4.4 コスト・ガードレール）。§3.2 に位置検出の核心メモ、§10 に Open Q 2件（位置検出問題・投影演出）、ヘッダ改訂注、構成図凡例。
-- **`IMPLEMENTATION_INSTRUCTIONS.html`**: W-Runtime / ロードマップ図 / known-decisions 表 / 委譲表を pi-first に整合。
+- **`WCTM_SYSTEM_SPEC_v1.md`**: §4 を「pi ベース専用ハーネス」に全面改訂（4.1 なぜ変えたか / 4.2 A/B 比較を歴史保存 / 4.3 確定方針 / 4.4 コスト・ガードレール）。§3.2 に位置検出の核心メモ、§10 に Open Q 2件（位置検出問題・投影演出）、ヘッダ改訂注、構成図凡例。
+- **`IMPLEMENTATION_INSTRUCTIONS.md`**: W-Runtime / ロードマップ図 / known-decisions 表 / 委譲表を pi-first に整合。
 - **`DESIGN_DISCUSSION_RECORD.md`**: §14「第七議論」新規（決定 #60–#63）。
   - #60: 本番ランタイム = pi ベース専用ハーネス（#29 を上書き）
   - #61: Claude Code は開発ツール、本番ランタイムにしない
@@ -225,4 +225,4 @@ push/pull 議論の着地点はここに収束する。**ランタイム選択�
 - nader「How to Build a Custom Agent Framework with PI」 https://nader.substack.com/p/how-to-build-a-custom-agent-framework
 - npm `@mariozechner/pi-coding-agent` / `@mariozechner/pi-ai`
 - anthropics/claude-code issues: #7252（resources/updated 未実装）, #33679 / #36665（サーバ push が agent に届かない）
-- 関連社内資料: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html` §3-§4, `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` §14, `docs/research/WCTM_LLM_ENSEMBLE_LISTENING_RESEARCH.md`（LLM の「耳」の先行研究）
+- 関連社内資料: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3-§4, `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` §14, `docs/research/WCTM_LLM_ENSEMBLE_LISTENING_RESEARCH.md`（LLM の「耳」の先行研究）

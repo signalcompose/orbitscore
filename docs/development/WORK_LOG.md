@@ -17,13 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.286 docs(spec): specs-v2 を Markdown 正本へ移行 #507 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 完了（pandoc HTML→gfm 逆変換 + 残骸掃除 + fidelity チェック）
+
+**内容**:
+- アーティファクトが Markdown を直接レンダリングできるようになり「手書き HTML 正本」の根拠が消えたため（owner 決定・#507）、specs-v2 の HTML 5 本を .md 化して HTML を削除（PITCH_DSL / SESSION_LOG / WCTM / IMPLEMENTATION_INSTRUCTIONS / SIGNAL_CHAIN）。DESIGN_DISCUSSION_RECORD.html は .md が既に正本のため削除のみ
+- fidelity チェック: タグ除去テキストの文字集合比較で HTML 側にしか無い文字は各ファイル 0.1〜4%（エンティティ・記号類）・見出し/コード/表は保存。WCTM の埋め込み SVG アーキテクチャ図は md 内にインライン保存
+- pandoc 残骸（span/重複タイトル）を掃除。リポジトリ内の .html 参照を全て .md へ更新（CLAUDE.md「HTML が正本」→「Markdown が正本」含む）
+- 補足: pandoc 禁止則は「md→HTML 再生成でテーマ破壊」方向の話であり、今回の逆変換（HTML を捨てる）には非該当
+
+**関連**: #507（Closes）
+
+---
+
 ### 6.285 docs(spec): Signal Chain DSL 正本制定 #506 (Jul 18, 2026)
 
 **Date**: 2026-07-18
 **Status**: ✅ 正本制定（owner との設計対話で決定 #64-#77 を確定・実装は #495 と同時設計で未着手）
 
 **内容**:
-- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.html` 新設 — effect()/instrument()/文字列ルーティングを置き換える表記体系の正本
+- `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` 新設 — effect()/instrument()/文字列ルーティングを置き換える表記体系の正本
   - プラグイン名メソッド `receiver.PluginName(param: value)`（名前付き引数 = #460 オートメーションの静的端点）
   - 二層意味論（宣言層 = 可換な集合 / 信号層 = 順序を持つ列）
   - ミキサー first-class 宣言（`var mix = init global.mixer` → `mix.output(1,2)/sum/aux` 派生・卓の import レイヤリング・`import * from` 採用）
@@ -1487,7 +1502,7 @@ plugin DSL 構文（Option A）を確定した。Epic #424（CLAP plugin DSL wir
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`: 新セクション「Plugin Hosting
   (CLAP effect / instrument)」（PH.1-PH.6・構文確定/未実装マーカーつき）+
   「Not Yet Implemented」2 箇所更新 + `## Implementation Status` 見出しを補い構造明確化。
-- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.html`: §1 に plugin instrument 出力の相互参照、
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`: §1 に plugin instrument 出力の相互参照、
   §7 に出力アダプタ適用注記（CC123/120 → note-off 列挙・detune v1 不能・rule 0 適合）、
   §8 に scope 移管注記（構文の正本 = core spec）。
 
@@ -1773,7 +1788,7 @@ VST3 hosting Phase 0+1（PR #397 MERGED・main `e6476e2`）の次の関門 = **P
 
 - **確定事実は「藝大不採択」のみ**。ICLC への proposal 提出（≈8/15）は年次・提出日・提出形態（work / work+paper、paper は ICMC 別提出も検討）いずれも要確認扱いで、硬い日付に置換しない（advisor 指摘: 硬い前提を別の硬い前提で置換すると同型のバグを再生産する）。
 - **ナビ = 本文修正**: `CLAUDE.md` §現在進行中 / `docs/core/INDEX.md`（+ research 凍結ポインタ）/ `INSTRUCTION_ORBITSCORE_DSL.md` / `POST_2.0_*` 6箇所（MASTER_PLAN ×2 / PLUGIN_STRATEGY / NEXT_STEPS / ROADMAP_NOTES / ORBITSTUDIO_PLAN）の締切参照を retarget ポインタ（#413）へ更新。
-- **正本 = 入口ノート + 本文凍結**: `WCTM_SYSTEM_SPEC_v1.html` / `IMPLEMENTATION_INSTRUCTIONS.html` の冒頭に前提変更ノートを追加し meta の concert/deadline を訂正。§0 分業原理・週次計画（W1–W6 / SPReAD / リハ#1）等の本文は藝大版スナップショットとして保持。§7 Known Decisions は再議論しない（締切・Max 必須は外部与件であって決定ログ #1-32 ではない）。
+- **正本 = 入口ノート + 本文凍結**: `WCTM_SYSTEM_SPEC_v1.md` / `IMPLEMENTATION_INSTRUCTIONS.md` の冒頭に前提変更ノートを追加し meta の concert/deadline を訂正。§0 分業原理・週次計画（W1–W6 / SPReAD / リハ#1）等の本文は藝大版スナップショットとして保持。§7 Known Decisions は再議論しない（締切・Max 必須は外部与件であって決定ログ #1-32 ではない）。
 - **凍結（本文無変更）**: `docs/research/WCTM_*` 7本 + `DESIGN_DISCUSSION_RECORD.md`。旧前提のスナップショットとして意図的に保存（記録改変は文脈破壊）。
 - `docs/WCTM/ARCHITECTURE.html` は `.gitignore` 済・別ブランチ `wctm-architecture-docs` 管理のため本 PR の対象外。
 - **統括 Issue #413 新設**（WCTM/ICLC トラックの受け皿・stub）。Epic #224 本文更新 + #240 相互参照。将来方向（private レポ接続・論文・orbitstudio 集約）は #413 で追跡。
@@ -2349,7 +2364,7 @@ out-of-scope（cutover blocker でない）: `.time()` pitch保存stretch/`.fixp
 ### 6.178 docs(wctm): change production runtime to a pi-based dedicated harness (Jun 28, 2026)
 
 **Branch**: `claude/agent-external-data-harness-yob87g`
-**変更ファイル**: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html` §4 全面改訂 + §3.2 / §10 / ヘッダ改訂注 / 構成図凡例、`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`（W-Runtime / ロードマップ図 / known-decisions 表）、`docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` §14 新規（決定 #60–#63）。
+**変更ファイル**: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §4 全面改訂 + §3.2 / §10 / ヘッダ改訂注 / 構成図凡例、`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.md`（W-Runtime / ロードマップ図 / known-decisions 表）、`docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` §14 新規（決定 #60–#63）。
 
 **経緯**: laiso「Pi Coding Agent」記事を起点に大和が「このハーネスで外部データの受け取りをエージェント側で可能にできるのでは」と提起。設計対話の結論として **WCTM 本番ランタイムを Claude Code 二段構え（旧 decision #29）から pi（@mariozechner/pi-coding-agent）ベースの OrbitScore 専用ハーネスに確定**。
 
@@ -3527,7 +3542,7 @@ post-2.0 のクリティカルパス先頭 A0+S1（CLAP hosting）に着手。`P
 **Status**: ✅ ドキュメントのみ（レビュー反映済・HOLD: Epic/実装 Issue は承認後）
 **Branch**: `289-post2.0-master-plan`
 
-新規セッションが post-2.0 を実行に移せるよう、探索ノート3本（`POST_2.0_ROADMAP_NOTES` / `..._ENGINE_AND_DISTRIBUTION` / `..._PITCH_MODEL_NOTES`）+ research を一次ソースに統合した `docs/development/POST_2.0_MASTER_PLAN.html`（手書き HTML）を作成。`specs-v2/IMPLEMENTATION_INSTRUCTIONS.html` を範にコールドスタート実行可能な形（Start here → §1 不変条件 → §2 依存スパイン → §3 最初の1手 A0+S1 → §4 3トラック → §5 ゲート/停止条件 → §7 Delegation Profile → §8 運用規則 → §9 Epic 提案 → §10 Open Questions）。
+新規セッションが post-2.0 を実行に移せるよう、探索ノート3本（`POST_2.0_ROADMAP_NOTES` / `..._ENGINE_AND_DISTRIBUTION` / `..._PITCH_MODEL_NOTES`）+ research を一次ソースに統合した `docs/development/POST_2.0_MASTER_PLAN.html`（手書き HTML）を作成。`specs-v2/IMPLEMENTATION_INSTRUCTIONS.md` を範にコールドスタート実行可能な形（Start here → §1 不変条件 → §2 依存スパイン → §3 最初の1手 A0+S1 → §4 3トラック → §5 ゲート/停止条件 → §7 Delegation Profile → §8 運用規則 → §9 Epic 提案 → §10 Open Questions）。
 - **確信度勾配を保持**（engine=DECIDED / hosting=FEASIBILITY / pitch=SPEC-FIRST / song=TENTATIVE）。advisor 2 回相談（構成 + Opus/Sonnet 切り分け）。
 - **§7 Delegation Profile（Opus/Sonnet）**: 判定ルール1つ（Sonnet=IF 確定＋検証容易 / Opus=seam・判断 or 誤答が検証をすり抜ける）+「**委譲は Opus が実ゲートで検証**」を本セッションの実例（Sonnet 監査 5 件見落とし→bot 6 件目）で裏付け。
 - **レビュー反映**: (a) Track A スコープ境界（MIDI/IAC は engine 非依存・接点は `TransportClock` のみ）/ (b) ライセンス節（自コード=コンポーネント別自由 / 依存=permissive が不変条件 / 現状 Source-Available v1.0 維持 / 名称統一は横断 TODO・#ops 共有済）。

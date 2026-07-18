@@ -5,7 +5,7 @@ import { RootContext, SymbolicPitch } from '../../packages/engine/src/midi/types
 
 /**
  * Phase 1 (#228) — degree resolution, root scope semantics
- * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §2.1, §7-0
+ * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.md §2.1, §7-0
  */
 
 // C4 = 60: octave 4, root pitch class 0 (C).

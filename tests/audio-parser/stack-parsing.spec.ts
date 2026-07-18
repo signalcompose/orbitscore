@@ -4,7 +4,7 @@ import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 
 /**
  * Phase 3 (#231) — `[ ]` stack parsing (§4, §6).
- * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §4 (Brackets), §6 (Chord Values)
+ * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.md §4 (Brackets), §6 (Chord Values)
  *
  * Parser-level: the PlayStack AST shape, numeric / altered / subtree voices, the
  * structural `^N` rule (rangeSet cleared, §2.4), the whole-stack `^N`, chord-name

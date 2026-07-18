@@ -38,12 +38,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### 正本仕様（`docs/specs-v2/`）を必ずこの順で読む
 
-実装に着手する前に、以下を順に読むこと（**HTML が正本**。SVG のアーキテクチャ図も仕様の一部）:
+実装に着手する前に、以下を順に読むこと（**Markdown が正本**・#507 で HTML から移行。埋め込み SVG のアーキテクチャ図も仕様の一部）:
 
-1. [`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`](docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html) — 作業指示書（フェーズ・依存グラフ・委譲方針・確定済み決定）
-2. [`docs/specs-v2/PITCH_DSL_SPEC_v1.1.html`](docs/specs-v2/PITCH_DSL_SPEC_v1.1.html) — Stage 1 (note DSL) の仕様正本
-3. [`docs/specs-v2/SESSION_LOG_SPEC_v1.html`](docs/specs-v2/SESSION_LOG_SPEC_v1.html) — 記録 (.orbslog) の仕様正本
-4. [`docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html`](docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html) — コンサートシステムの仕様正本
+1. [`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.md`](docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.md) — 作業指示書（フェーズ・依存グラフ・委譲方針・確定済み決定）
+2. [`docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`](docs/specs-v2/PITCH_DSL_SPEC_v1.1.md) — Stage 1 (note DSL) の仕様正本
+3. [`docs/specs-v2/SESSION_LOG_SPEC_v1.md`](docs/specs-v2/SESSION_LOG_SPEC_v1.md) — 記録 (.orbslog) の仕様正本
+4. [`docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md`](docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md) — コンサートシステムの仕様正本
 5. [`docs/specs-v2/DESIGN_DISCUSSION_RECORD.md`](docs/specs-v2/DESIGN_DISCUSSION_RECORD.md) — 設計経緯と棄却済み代替案（判断に迷ったときの参照）
 
 ### 進捗・タスク管理 = GitHub Epic #224
