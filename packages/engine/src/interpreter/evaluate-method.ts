@@ -62,6 +62,14 @@ export async function processArguments(methodName: string, args: any[]): Promise
   const processed: any[] = []
 
   for (const arg of args) {
+    if (arg && typeof arg === 'object' && arg.type === 'named_arg') {
+      // Signal Chain named arguments (SC.3) parse since #514 (Phase B) but
+      // execute only from Phase C. Explicit — SC.3.3 forbids silent ignoring.
+      throw new Error(
+        `named argument "${arg.name}:" in ${methodName}() is not executable yet: ` +
+          `parsing landed in #514 (Phase B); execution lands in Phase C.`,
+      )
+    }
     if (methodName === 'beat' && arg.numerator !== undefined) {
       // Handle meter: beat(4 by 4) -> beat(4, 4)
       processed.push(arg.numerator, arg.denominator)

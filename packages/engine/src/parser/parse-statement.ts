@@ -16,6 +16,9 @@ import {
   ModeBinding,
   ImportStatement,
   FileImportStatement,
+  MixerInit,
+  MixerNodeDecl,
+  NamedArg,
   PlayStack,
   PlayElement,
 } from './types'
@@ -79,7 +82,14 @@ export class StatementParser {
    * Parse variable declaration
    */
   private parseVarDeclaration(): {
-    statement: GlobalInit | SequenceInit | ChordBinding | PatternBinding | ModeBinding
+    statement:
+      | GlobalInit
+      | SequenceInit
+      | ChordBinding
+      | PatternBinding
+      | ModeBinding
+      | MixerInit
+      | MixerNodeDecl
     newPos: number
   } {
     const varResult = ParserUtils.expect(this.tokens, this.pos, 'VAR')
@@ -119,6 +129,17 @@ export class StatementParser {
     // binding (§6.5). No existing var RHS starts with `(`, so this is unambiguous.
     if (rhs.type === 'LPAREN') {
       return this.parsePatternBinding(varNameResult.token.value)
+    }
+
+    // `var master = mix.output(1, 2)` / `var drums = mix.sum` / `var verb = mix.aux`
+    // (SC.2.1): a mixer-node derivation. Lookahead-limited to `<id>.output|sum|aux`
+    // so every other identifier RHS keeps the existing `Expected GLOBAL...` error.
+    if (
+      rhs.type === 'IDENTIFIER' &&
+      ParserUtils.peek(this.tokens, this.pos).type === 'DOT' &&
+      ['output', 'sum', 'aux'].includes(this.tokens[this.pos + 2]?.value ?? '')
+    ) {
+      return this.parseMixerNodeDecl(varNameResult.token.value)
     }
 
     const initResult = ParserUtils.expect(this.tokens, this.pos, 'INIT')
@@ -224,6 +245,13 @@ export class StatementParser {
     if (this.tokens[this.pos]?.type === 'LBRACE') {
       return this.parseFileImport()
     }
+    // `import * from "./file.orbs"` (SC.2.2, decision #72): flat star import —
+    // every top-level declaration of the file enters scope.
+    if (this.tokens[this.pos]?.type === 'ASTERISK') {
+      this.pos++
+      const path = this.parseImportFromPath()
+      return { statement: { type: 'file_import', names: [], path, star: true }, newPos: this.pos }
+    }
     const moduleResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = moduleResult.newPos
     const module = moduleResult.token.value
@@ -255,11 +283,17 @@ export class StatementParser {
       break
     }
     this.pos = ParserUtils.expect(this.tokens, this.pos, 'RBRACE').newPos
+    const path = this.parseImportFromPath()
+    return { statement: { type: 'file_import', names, path }, newPos: this.pos }
+  }
+
+  /** Parse the shared `from "<./|../>path.orbs"` tail of a file import (IM.1). */
+  private parseImportFromPath(): string {
     const fromResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
     this.pos = fromResult.newPos
     if (fromResult.token.value !== 'from') {
       throw new Error(
-        `import: expected \`from\` after the name list, got "${fromResult.token.value}" (IM.1).`,
+        `import: expected \`from\` after the import list, got "${fromResult.token.value}" (IM.1).`,
       )
     }
     const pathResult = ParserUtils.expect(this.tokens, this.pos, 'STRING')
@@ -273,7 +307,7 @@ export class StatementParser {
     if (!path.endsWith('.orbs')) {
       throw new Error(`import "${path}": the .orbs extension is required (IM.1).`)
     }
-    return { statement: { type: 'file_import', names, path }, newPos: this.pos }
+    return path
   }
 
   /**
@@ -356,7 +390,10 @@ export class StatementParser {
   /**
    * Parse sequence initialization (init variable.seq)
    */
-  private parseSequenceInit(variableName: string): { statement: SequenceInit; newPos: number } {
+  private parseSequenceInit(variableName: string): {
+    statement: SequenceInit | MixerInit
+    newPos: number
+  } {
     const globalVarResult = ParserUtils.advance(this.tokens, this.pos)
     this.pos = globalVarResult.newPos
 
@@ -375,10 +412,77 @@ export class StatementParser {
           newPos: this.pos,
         }
       }
+      // `var mix = init global.mixer` (SC.2.1): a named handle onto the one
+      // implicit mixer space. Reuses the seq_init shape (base variable + DOT + kind).
+      if (ParserUtils.current(this.tokens, this.pos).value === 'mixer') {
+        const mixerResult = ParserUtils.advance(this.tokens, this.pos)
+        this.pos = mixerResult.newPos
+        return {
+          statement: {
+            type: 'mixer_init',
+            variableName,
+            globalVariable: globalVarResult.token.value,
+          },
+          newPos: this.pos,
+        }
+      }
     }
 
-    // If not .seq, it might be another type of initialization
+    // If not .seq / .mixer, it might be another type of initialization
     throw new Error(`Unexpected initialization: init ${globalVarResult.token.value}`)
+  }
+
+  /**
+   * Parse `var NAME = <base>.output(ch, ch)` / `<base>.sum` / `<base>.aux` (SC.2.1):
+   * a mixer-node derivation. `base` is kept as written (it may be an imported handle);
+   * whether it actually names a mixer is the interpreter's job. sum/aux are bare
+   * (no parentheses — the variable name IS the bus name); output requires exactly
+   * one physical channel pair.
+   */
+  private parseMixerNodeDecl(variableName: string): { statement: MixerNodeDecl; newPos: number } {
+    const baseResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = baseResult.newPos
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'DOT').newPos
+    const kindResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = kindResult.newPos
+    const kind = kindResult.token.value as 'output' | 'sum' | 'aux'
+
+    if (kind === 'output') {
+      this.pos = ParserUtils.expect(this.tokens, this.pos, 'LPAREN').newPos
+      const first = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = first.newPos
+      this.pos = ParserUtils.expect(this.tokens, this.pos, 'COMMA').newPos
+      const second = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = second.newPos
+      this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+      return {
+        statement: {
+          type: 'mixer_node_decl',
+          variableName,
+          base: baseResult.token.value,
+          kind,
+          channels: [ParserUtils.parseNumber(first.token), ParserUtils.parseNumber(second.token)],
+        },
+        newPos: this.pos,
+      }
+    }
+
+    if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
+      throw new Error(
+        `${kind} takes no arguments in a mixer declaration (SC.2.1): ` +
+          `write \`var ${variableName} = ${baseResult.token.value}.${kind}\` — ` +
+          `the variable name is the bus name.`,
+      )
+    }
+    return {
+      statement: {
+        type: 'mixer_node_decl',
+        variableName,
+        base: baseResult.token.value,
+        kind,
+      },
+      newPos: this.pos,
+    }
   }
 
   /**
@@ -658,6 +762,27 @@ export class StatementParser {
       if (ParserUtils.current(this.tokens, this.pos).type === 'RPAREN') {
         break
       }
+      // `name: value` (SC.3 named argument) — detected by IDENTIFIER + COLON
+      // lookahead, which cannot occur in the pre-COLON grammar, so positional
+      // parsing is untouched. Coexists with positional args in the same list
+      // (`send` sugar: `.verb(0.3, enabled: false)`).
+      if (
+        ParserUtils.current(this.tokens, this.pos).type === 'IDENTIFIER' &&
+        ParserUtils.peek(this.tokens, this.pos).type === 'COLON'
+      ) {
+        args.push(this.parseNamedArgument())
+        runStart = args.length
+        this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+        if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
+          this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+          this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+          continue
+        }
+        if (ParserUtils.current(this.tokens, this.pos).type === 'RPAREN') {
+          break
+        }
+        throw new Error('Expected comma or closing parenthesis after a named argument')
+      }
       const expressionParser = new ExpressionParser(this.tokens, this.pos)
       const argResult = expressionParser.parseArgument()
       this.pos = argResult.newPos
@@ -700,5 +825,49 @@ export class StatementParser {
     const rparenResult = ParserUtils.expect(this.tokens, this.pos, 'RPAREN')
     this.pos = rparenResult.newPos
     return { args, newPos: this.pos }
+  }
+
+  /**
+   * Parse one `name: value` named argument (SC.3). Values are restricted to
+   * literals and identifier references: NUMBER (with optional `-`), STRING,
+   * `true`/`false` (→ boolean), any other IDENTIFIER (→ deferred {@link ArgRef},
+   * e.g. `sidechain: duck`). Map values (`outs: { ... }`) are #408 scope and
+   * rejected with a pointer rather than a generic parse error.
+   */
+  private parseNamedArgument(): NamedArg {
+    const nameResult = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = nameResult.newPos
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'COLON').newPos
+    const name = nameResult.token.value
+
+    const valueToken = ParserUtils.current(this.tokens, this.pos)
+    if (valueToken.type === 'LBRACE') {
+      throw new Error(
+        `named argument "${name}:" — map values (\`outs: { ... }\`) are not supported yet (#408).`,
+      )
+    }
+    if (valueToken.type === 'STRING') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      return { type: 'named_arg', name, value: valueToken.value }
+    }
+    if (valueToken.type === 'MINUS' || valueToken.type === 'NUMBER') {
+      const negative = valueToken.type === 'MINUS'
+      if (negative) this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      const num = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = num.newPos
+      const value = ParserUtils.parseNumber(num.token)
+      return { type: 'named_arg', name, value: negative ? -value : value }
+    }
+    if (valueToken.type === 'IDENTIFIER') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      if (valueToken.value === 'true' || valueToken.value === 'false') {
+        return { type: 'named_arg', name, value: valueToken.value === 'true' }
+      }
+      return { type: 'named_arg', name, value: { type: 'ref', name: valueToken.value } }
+    }
+    throw new Error(
+      `named argument "${name}:" expects a number, string, boolean, or identifier — ` +
+        `got "${valueToken.value}".`,
+    )
   }
 }
