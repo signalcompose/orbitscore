@@ -54,7 +54,7 @@ export function detectDslCompletionContext(
     return { kind: 'import-path', typed: importPath[1] ?? '' }
   }
 
-  const busArg = /\.?(output|send)\(\s*"([^"\n]*)$/.exec(prefix)
+  const busArg = /\.(output|send)\(\s*"([^"\n]*)$/.exec(prefix)
   if (busArg && state === 'string') {
     return {
       kind: busArg[1] === 'output' ? 'sum-name' : 'aux-name',

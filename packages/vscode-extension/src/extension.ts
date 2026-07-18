@@ -3102,19 +3102,24 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
             const importUri = vscode.Uri.file(
               path.resolve(path.dirname(document.uri.fsPath), completionContext.importPath),
             )
+            let importedSource: string
             try {
-              const importedSource = Buffer.from(
-                await vscode.workspace.fs.readFile(importUri),
-              ).toString('utf8')
-              return makeItems(
-                extractTopLevelDeclaredNames(importedSource),
-                vscode.CompletionItemKind.Variable,
+              importedSource = Buffer.from(await vscode.workspace.fs.readFile(importUri)).toString(
+                'utf8',
               )
-            } catch {
+            } catch (error) {
               // The import may still be mid-edit or absent; completion must not
-              // turn that ordinary editing state into a provider error.
+              // turn that ordinary editing state into a provider error. Logged
+              // so real failures (e.g. permissions) remain diagnosable.
+              outputChannel?.appendLine(
+                `⚠️ DSL import-name completion: could not read ${importUri.fsPath}: ${error}`,
+              )
               return undefined
             }
+            return makeItems(
+              extractTopLevelDeclaredNames(importedSource),
+              vscode.CompletionItemKind.Variable,
+            )
           }
           case 'import-path': {
             const files = await vscode.workspace.findFiles('**/*.orbs')

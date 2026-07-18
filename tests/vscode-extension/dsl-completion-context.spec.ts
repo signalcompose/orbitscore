@@ -4,6 +4,7 @@ import {
   detectDslCompletionContext,
   extractDeclaredBusNames,
   extractTopLevelDeclaredNames,
+  filterDslCandidates,
 } from '../../packages/vscode-extension/src/dsl-completion-context'
 
 describe('detectDslCompletionContext', () => {
@@ -33,6 +34,20 @@ describe('detectDslCompletionContext', () => {
     expect(detectDslCompletionContext('// seq.output("dr', 17)).toBeNull()
     expect(detectDslCompletionContext('note = "seq.output("', 14)).toBeNull()
     expect(detectDslCompletionContext('// import { x } from "./x.orbs"', 14)).toBeNull()
+  })
+
+  it('requires bus-name surfaces to be dotted method calls', () => {
+    const bare = 'output("dr'
+    expect(detectDslCompletionContext(bare, bare.length)).toBeNull()
+    const partial = 'seq.reoutput("dr'
+    expect(detectDslCompletionContext(partial, partial.length)).toBeNull()
+  })
+})
+
+describe('filterDslCandidates', () => {
+  it('matches case-insensitive substrings and passes everything for empty input', () => {
+    expect(filterDslCandidates(['Kick', 'Snare', 'HiHat'], 'ha')).toEqual(['HiHat'])
+    expect(filterDslCandidates(['a', 'b'], '')).toEqual(['a', 'b'])
   })
 })
 
