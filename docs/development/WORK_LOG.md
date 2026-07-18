@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.287 feat(vscode): DSL 文脈補完を6面へ拡張 #512 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 実装（レビュー待ち・未コミット）
+
+**内容**:
+- VS Code 拡張に vscode 非依存の `dsl-completion-context.ts` を追加し、コメント／無関係な文字列内を除外する regex 文脈検出を実装
+- `import { ... }` の import 元 top-level 宣言、`from "..."` の workspace `.orbs` 相対パス、`seq.`／`global.` の既知メソッド、`output("...")` の `global.sum()` 名、`send("...")` の `global.aux()` 名を補完
+- import 宣言抽出は engine の `declaredNames` と同じく top-level `var` 宣言を静的に列挙し、VS Code provider 側だけがワークスペース／ファイル I/O を担当
+- 純関数テストを追加（6面・コメント/文字列誤爆・top-level／bus 宣言抽出）。`npm run build` は成功、`npm test` は exit 0、追加テスト 4/4 pass。`npm run lint` は既存2警告のみ（新規変更は警告なし）
+
+**関連**: #512（Phase A）・#463 C3
+
 ### 6.286 docs(spec): specs-v2 を Markdown 正本へ移行 #507 (Jul 18, 2026)
 
 **Date**: 2026-07-18
