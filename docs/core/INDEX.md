@@ -37,10 +37,10 @@ OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider a
 
 | # | File | Purpose |
 |---|---|---|
-| 1 | [IMPLEMENTATION_INSTRUCTIONS.html](../specs-v2/IMPLEMENTATION_INSTRUCTIONS.html) | 作業指示書（フェーズ・依存グラフ・委譲方針・Known Decisions §7） |
-| 2 | [PITCH_DSL_SPEC_v1.1.html](../specs-v2/PITCH_DSL_SPEC_v1.1.html) | Stage 1 = note DSL（度数 / root / mode / chord / `[ ]` / tie）仕様正本 |
-| 3 | [SESSION_LOG_SPEC_v1.html](../specs-v2/SESSION_LOG_SPEC_v1.html) | 記録 `.orbslog`（因果ログ・三重スタンプ・リプレイ）仕様正本 |
-| 4 | [WCTM_SYSTEM_SPEC_v1.html](../specs-v2/WCTM_SYSTEM_SPEC_v1.html) | コンサートシステム（Bridge MCP / ランタイム / Link 結合度）仕様正本 |
+| 1 | [IMPLEMENTATION_INSTRUCTIONS.md](../specs-v2/IMPLEMENTATION_INSTRUCTIONS.md) | 作業指示書（フェーズ・依存グラフ・委譲方針・Known Decisions §7） |
+| 2 | [PITCH_DSL_SPEC_v1.1.md](../specs-v2/PITCH_DSL_SPEC_v1.1.md) | Stage 1 = note DSL（度数 / root / mode / chord / `[ ]` / tie）仕様正本 |
+| 3 | [SESSION_LOG_SPEC_v1.md](../specs-v2/SESSION_LOG_SPEC_v1.md) | 記録 `.orbslog`（因果ログ・三重スタンプ・リプレイ）仕様正本 |
+| 4 | [WCTM_SYSTEM_SPEC_v1.md](../specs-v2/WCTM_SYSTEM_SPEC_v1.md) | コンサートシステム（Bridge MCP / ランタイム / Link 結合度）仕様正本 |
 | 5 | [DESIGN_DISCUSSION_RECORD.md](../specs-v2/DESIGN_DISCUSSION_RECORD.md) | 設計経緯と棄却済み代替案（決定ログ #1-32。判断に迷ったときの参照） |
 
 > ⚠️ §7 Known Decisions（+ 議論記録の決定ログ）は確定済み。**再設計・再議論しない**。

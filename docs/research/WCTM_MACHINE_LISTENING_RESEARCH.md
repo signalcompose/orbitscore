@@ -170,7 +170,7 @@ spec §10.6 の推奨初期案（(a) オペレーター舵取り + (b) エンジ
 - George Lewis, Voyager（Cycling '74 インタビュー + 二次資料。書誌 *Leonardo Music Journal* 10 (2000) は既存社内調査 [WCTM_LLM_ENSEMBLE_LISTENING_RESEARCH](WCTM_LLM_ENSEMBLE_LISTENING_RESEARCH.md) の出典に依拠・本調査では未再検証）
 - ReaLJam/ReaLchords（DeepMind）ユーザー評価 / JAMMIN-GPT（ISMIR 2023 LBD）/ ChatMusician / "Can LLMs Reason in Music?"
 - Anthropic prompt caching 公式ドキュメント / Cycling '74 リリースノート（Max 9.1 ABL・v8/node.script）/ Ableton Link 公式ドキュメント
-- 関連社内資料: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.html` §2-§4/§10・`WCTM_AGENT_HARNESS_EXTERNAL_DATA_RESEARCH.md`・`WCTM_LLM_ENSEMBLE_LISTENING_RESEARCH.md`（層1-3 の先行研究地図）
+- 関連社内資料: `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §2-§4/§10・`WCTM_AGENT_HARNESS_EXTERNAL_DATA_RESEARCH.md`・`WCTM_LLM_ENSEMBLE_LISTENING_RESEARCH.md`（層1-3 の先行研究地図）
 
 ## 本調査の限界
 

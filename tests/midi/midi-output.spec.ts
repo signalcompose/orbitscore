@@ -5,7 +5,7 @@ import { RtMidiOutput } from '../../packages/engine/src/midi/rtmidi-output'
 
 /**
  * RtMidiOutput tests — Phase 1 (#228)
- * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §1, §2.4, §7, §7-2
+ * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.md §1, §2.4, §7, §7-2
  *
  * All tests use a mock MidiBackend so no real MIDI hardware is required.
  */

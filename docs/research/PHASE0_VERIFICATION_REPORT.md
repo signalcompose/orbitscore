@@ -4,7 +4,7 @@
 **Issue**: signalcompose/orbitscore#226
 **Branch**: `226-phase-0-verification`
 **Epic**: #224
-**正本**: `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html` §4 Phase 0
+**正本**: `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.md` §4 Phase 0
 
 ---
 

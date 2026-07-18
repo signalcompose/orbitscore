@@ -9,7 +9,7 @@ import {
 
 /**
  * MidiScheduler tests (#221)
- * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §7-3, §7-4
+ * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.md §7-3, §7-4
  *
  * All tests use vitest fake timers and a mock MidiOutput that records calls
  * into a shared ordered call-log so cross-method ordering can be asserted.

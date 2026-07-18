@@ -4,7 +4,7 @@ import { AudioTokenizer, parseAudioDSL } from '../../packages/engine/src/parser/
 
 /**
  * Phase 1 increment 2a (#228) — pitch token + parser support
- * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §2.1, §2.4
+ * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.md §2.1, §2.4
  *
  * Tokenizer: accidentals (`b`/`bb`/`#`/`##`), `^` (octave shift), `~` (detune).
  * Parser: produce a PlayPitch AST node carrying degree + alteration +

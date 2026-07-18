@@ -277,7 +277,7 @@
 **Issue**: signalcompose/orbitscore#266
 **Branch**: `266-pitch-spec-normative-sync`
 
-**背景**: `docs/specs-v2/PITCH_DSL_SPEC_v1.1.html`（v1.1 の仕様正本）は 2026-06-12 の実装前ドラフトで、E1-E6 実装の確定決定（DESIGN_DISCUSSION_RECORD #47-59）と乖離・矛盾していた。spec-first 原則（規則 #6）に対し締切優先で code→spec の逆順になった負債を解消。オラクルは test の assertion（`tests/midi/{voicing,random,expression,mode,key-center}.spec.ts`, `tests/audio-parser/pattern-binding-parsing.spec.ts`）に固定し、各 normative 文を test と照合。
+**背景**: `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`（v1.1 の仕様正本）は 2026-06-12 の実装前ドラフトで、E1-E6 実装の確定決定（DESIGN_DISCUSSION_RECORD #47-59）と乖離・矛盾していた。spec-first 原則（規則 #6）に対し締切優先で code→spec の逆順になった負債を解消。オラクルは test の assertion（`tests/midi/{voicing,random,expression,mode,key-center}.spec.ts`, `tests/audio-parser/pattern-binding-parsing.spec.ts`）に固定し、各 normative 文を test と照合。
 
 **主な乖離解消**:
 - **§6 の矛盾**: 「ビルダー API `.drop()` 等は採用しない」と明記されていたが E2 で voicing 演算子を実装（決定 #49/#51）→ value 合成（構成音）と voicing（オクターブ配置）を別軸として整理し、採用理由を明記（コード名シンボルではないため設計原則5は保持）
@@ -478,8 +478,8 @@ Phase 3 確定後の設計対話を `DESIGN_DISCUSSION_RECORD.md` に §10 + 決
 **変更内容**:
 
 - `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` + `.html`: §9 第四議論を追記 (9.1-9.7、決定ログ #33-38)。`.html` は直接編集で同期 (pandoc 不使用 — 仕様 HTML は手書き保守が方針、`.md` のテーマを壊さないため)
-- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.html` §2.1 (度数受理 / `o`=running range)、§2.4 (`^N` スティッキー pitch range)
-- `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.html`: テスト網羅項を新ルールに
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md` §2.1 (度数受理 / `o`=running range)、§2.4 (`^N` スティッキー pitch range)
+- `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.md`: テスト網羅項を新ルールに
 - `midi/degree-resolution.ts`: 受理度数 {1-9,11,13} 検証 (10/12/14/15+ は throw)
 - `parser/types.ts` + `parse-expression.ts`: PlayPitch に `rangeSet` (「`^` を書いたか」=スティッキー set point)
 - `midi/types.ts`: SymbolicPitch に `rangeSet?` (出力段の running range スレッド用)
@@ -882,10 +882,10 @@ Phase 3 確定後の設計対話を `DESIGN_DISCUSSION_RECORD.md` に §10 + 決
 
 **正本仕様 (docs/specs-v2/、 読み順)**:
 
-1. `IMPLEMENTATION_INSTRUCTIONS.html` — 作業指示書 (フェーズ・依存グラフ・委譲方針・Known Decisions §7)
-2. `PITCH_DSL_SPEC_v1.1.html` — Stage 1 = note DSL の仕様正本
-3. `SESSION_LOG_SPEC_v1.html` — 記録 .orbslog の仕様正本
-4. `WCTM_SYSTEM_SPEC_v1.html` — コンサートシステムの仕様正本
+1. `IMPLEMENTATION_INSTRUCTIONS.md` — 作業指示書 (フェーズ・依存グラフ・委譲方針・Known Decisions §7)
+2. `PITCH_DSL_SPEC_v1.1.md` — Stage 1 = note DSL の仕様正本
+3. `SESSION_LOG_SPEC_v1.md` — 記録 .orbslog の仕様正本
+4. `WCTM_SYSTEM_SPEC_v1.md` — コンサートシステムの仕様正本
 5. `DESIGN_DISCUSSION_RECORD.md` — 設計経緯と棄却済み代替案 (決定ログ #1-32)
 
 **起票した Issue 群 (2026-06-13)**: Epic #224、 実装系 #225-237 (Phase 0/R/1/L1/2/3/4・W-Bridge/RuntimeA/Link/Ops・docs sync)、 将来予約 #238-242 (audio `[ ]`・slice()・譜面レンダリング Epic・L2 Replayer・WCTM 事後分析)。 ラベル `wctm` / `session-log`、 マイルストーン「WCTM 2026-08-07」を新設。

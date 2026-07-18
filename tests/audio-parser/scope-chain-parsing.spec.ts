@@ -4,7 +4,7 @@ import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 
 /**
  * Phase 2 (#230) — `.root()` / `.mode()` / `.oct()` group-scope chain parsing.
- * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.html §2.3, §3
+ * Spec: docs/specs-v2/PITCH_DSL_SPEC_v1.1.md §2.3, §3
  *
  * Parser-level (this file): the PlayScoped AST shape, note-name reassembly,
  * degree roots, .oct, duplicate/conflict diagnostics, "chain closes the run",
