@@ -447,6 +447,12 @@ export class StatementParser {
     this.pos = kindResult.newPos
     const kind = kindResult.token.value as 'output' | 'sum' | 'aux'
 
+    const statement: MixerNodeDecl = {
+      type: 'mixer_node_decl',
+      variableName,
+      base: baseResult.token.value,
+      kind,
+    }
     if (kind === 'output') {
       this.pos = ParserUtils.expect(this.tokens, this.pos, 'LPAREN').newPos
       const first = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
@@ -455,34 +461,18 @@ export class StatementParser {
       const second = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
       this.pos = second.newPos
       this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
-      return {
-        statement: {
-          type: 'mixer_node_decl',
-          variableName,
-          base: baseResult.token.value,
-          kind,
-          channels: [ParserUtils.parseNumber(first.token), ParserUtils.parseNumber(second.token)],
-        },
-        newPos: this.pos,
-      }
-    }
-
-    if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
+      statement.channels = [
+        ParserUtils.parseNumber(first.token),
+        ParserUtils.parseNumber(second.token),
+      ]
+    } else if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
       throw new Error(
         `${kind} takes no arguments in a mixer declaration (SC.2.1): ` +
           `write \`var ${variableName} = ${baseResult.token.value}.${kind}\` — ` +
           `the variable name is the bus name.`,
       )
     }
-    return {
-      statement: {
-        type: 'mixer_node_decl',
-        variableName,
-        base: baseResult.token.value,
-        kind,
-      },
-      newPos: this.pos,
-    }
+    return { statement, newPos: this.pos }
   }
 
   /**
@@ -860,8 +850,8 @@ export class StatementParser {
     }
     if (valueToken.type === 'IDENTIFIER') {
       this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
-      if (valueToken.value === 'true' || valueToken.value === 'false') {
-        return { type: 'named_arg', name, value: valueToken.value === 'true' }
+      if (ParserUtils.isBooleanLiteral(valueToken.value)) {
+        return { type: 'named_arg', name, value: ParserUtils.parseBoolean(valueToken.value) }
       }
       return { type: 'named_arg', name, value: { type: 'ref', name: valueToken.value } }
     }

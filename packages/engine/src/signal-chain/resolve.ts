@@ -15,6 +15,10 @@
  * The caller supplies the name tables. Note for Phase C: the declared-mixer-name
  * table must include the implicit `master(1,2)` of a file that declares no mixer
  * (SC.2 norm 6) — that defaulting is the caller's responsibility, not this module's.
+ *
+ * Landed ahead of its first caller ON PURPOSE: #514 Phase B locks the
+ * resolution-order contract early; the first consumers are the Phase C
+ * interpreter mapping and the #495 language service.
  */
 
 /** What one chain-method name resolves to. */
