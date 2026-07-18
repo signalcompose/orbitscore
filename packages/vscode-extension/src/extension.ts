@@ -55,8 +55,6 @@ import {
   extractDeclaredBusNames,
   extractTopLevelDeclaredNames,
   filterDslCandidates,
-  GLOBAL_METHODS,
-  SEQUENCE_METHODS,
 } from './dsl-completion-context'
 import { detectPluginArgContext, filterCatalogEntries } from './plugin-catalog-completion'
 import { loadPluginCatalog, runPluginScan } from './plugin-catalog-reader'
@@ -3090,10 +3088,6 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
           })
 
         switch (completionContext.kind) {
-          case 'sequence-methods':
-            return makeItems(SEQUENCE_METHODS, vscode.CompletionItemKind.Method)
-          case 'global-methods':
-            return makeItems(GLOBAL_METHODS, vscode.CompletionItemKind.Method)
           case 'sum-name':
             return makeItems(
               extractDeclaredBusNames(document.getText(), 'sum'),
@@ -3139,7 +3133,6 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
         }
       },
     },
-    '.',
     '"',
     '{',
   )

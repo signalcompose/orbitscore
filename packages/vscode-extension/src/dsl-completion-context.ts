@@ -7,73 +7,9 @@
 
 export type DslCompletionContext =
   | { readonly kind: 'import-names'; readonly typed: string; readonly importPath: string }
-  | { readonly kind: 'import-path'; readonly typed: string; readonly quoteStartChar: number }
-  | { readonly kind: 'sequence-methods'; readonly typed: string }
-  | { readonly kind: 'global-methods'; readonly typed: string }
-  | { readonly kind: 'sum-name'; readonly typed: string; readonly quoteStartChar: number }
-  | { readonly kind: 'aux-name'; readonly typed: string; readonly quoteStartChar: number }
-
-// Source: public DSL methods on engine `src/core/sequence.ts`. This static
-// mirror can diverge; #495 phase 2 AST work will eliminate that risk.
-export const SEQUENCE_METHODS = [
-  'audio',
-  'beat',
-  'cell',
-  'chop',
-  'comp',
-  'defaultGain',
-  'defaultPan',
-  'density',
-  'effect',
-  'gain',
-  'gate',
-  'hold',
-  'instrument',
-  'length',
-  'loop',
-  'midi',
-  'mute',
-  'octave',
-  'output',
-  'pan',
-  'play',
-  'quantize',
-  'root',
-  'run',
-  'send',
-  'stop',
-  'tempo',
-  'unmute',
-  'vel',
-  'vl',
-  'voicelead',
-] as const
-
-// Source: public DSL methods on engine `src/core/global.ts`. This static
-// mirror can diverge; #495 phase 2 AST work will eliminate that risk.
-export const GLOBAL_METHODS = [
-  'audioDevice',
-  'audioPath',
-  'aux',
-  'beat',
-  'compressor',
-  'defineChord',
-  'defineMode',
-  'definePattern',
-  'effect',
-  'gain',
-  'instrument',
-  'key',
-  'limiter',
-  'loop',
-  'midiLatency',
-  'normalizer',
-  'quantize',
-  'start',
-  'stop',
-  'sum',
-  'tempo',
-] as const
+  | { readonly kind: 'import-path'; readonly typed: string }
+  | { readonly kind: 'sum-name'; readonly typed: string }
+  | { readonly kind: 'aux-name'; readonly typed: string }
 
 /** Returns true when `position` is inside a line comment or string literal. */
 function lexicalStateAt(text: string, position: number): 'code' | 'comment' | 'string' {
@@ -115,20 +51,14 @@ export function detectDslCompletionContext(
 
   const importPath = /\bimport\s*\{[^}"\n]*\}\s*from\s*"([^"\n]*)$/.exec(prefix)
   if (importPath && state === 'string') {
-    return {
-      kind: 'import-path',
-      typed: importPath[1] ?? '',
-      quoteStartChar: position - (importPath[1] ?? '').length,
-    }
+    return { kind: 'import-path', typed: importPath[1] ?? '' }
   }
 
   const busArg = /\.?(output|send)\(\s*"([^"\n]*)$/.exec(prefix)
   if (busArg && state === 'string') {
-    const typed = busArg[2] ?? ''
     return {
       kind: busArg[1] === 'output' ? 'sum-name' : 'aux-name',
-      typed,
-      quoteStartChar: position - typed.length,
+      typed: busArg[2] ?? '',
     }
   }
 
@@ -147,12 +77,7 @@ export function detectDslCompletionContext(
     }
   }
 
-  const method = /\b(seq|global)\.([A-Za-z_$][\w$]*)?$/.exec(prefix)
-  if (!method) return null
-  return {
-    kind: method[1] === 'global' ? 'global-methods' : 'sequence-methods',
-    typed: method[2] ?? '',
-  }
+  return null
 }
 
 /** Mirrors engine `declaredNames`: global/sequence initializers and `var` bindings. */
