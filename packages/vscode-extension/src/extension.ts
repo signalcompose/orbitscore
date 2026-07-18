@@ -50,6 +50,12 @@ import {
   type SelectAudioDeviceBridgeResult,
 } from './engine-view'
 import { DeviceSwitchBridge } from './device-switch-bridge'
+import {
+  detectDslCompletionContext,
+  extractDeclaredBusNames,
+  extractTopLevelDeclaredNames,
+  filterDslCandidates,
+} from './dsl-completion-context'
 import { detectPluginArgContext, filterCatalogEntries } from './plugin-catalog-completion'
 import { loadPluginCatalog, runPluginScan } from './plugin-catalog-reader'
 import {
@@ -3057,6 +3063,85 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
     '"',
   )
   context.subscriptions.push(pluginCompletionProvider)
+
+  // DSL completion surfaces introduced by #512.  Context recognition lives in
+  // dsl-completion-context.ts so this provider is only responsible for VS Code
+  // I/O and CompletionItem construction.
+  const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
+    'orbitscore',
+    {
+      async provideCompletionItems(document, position) {
+        const lineText = document.lineAt(position).text
+        const completionContext = detectDslCompletionContext(lineText, position.character)
+        if (!completionContext) return undefined
+
+        const typedRange = new vscode.Range(
+          new vscode.Position(position.line, position.character - completionContext.typed.length),
+          position,
+        )
+        const makeItems = (candidates: readonly string[], kind: vscode.CompletionItemKind) =>
+          filterDslCandidates(candidates, completionContext.typed).map((candidate) => {
+            const item = new vscode.CompletionItem(candidate, kind)
+            item.insertText = candidate
+            item.range = typedRange
+            return item
+          })
+
+        switch (completionContext.kind) {
+          case 'sum-name':
+            return makeItems(
+              extractDeclaredBusNames(document.getText(), 'sum'),
+              vscode.CompletionItemKind.Value,
+            )
+          case 'aux-name':
+            return makeItems(
+              extractDeclaredBusNames(document.getText(), 'aux'),
+              vscode.CompletionItemKind.Value,
+            )
+          case 'import-names': {
+            const importUri = vscode.Uri.file(
+              path.resolve(path.dirname(document.uri.fsPath), completionContext.importPath),
+            )
+            let importedSource: string
+            try {
+              importedSource = Buffer.from(await vscode.workspace.fs.readFile(importUri)).toString(
+                'utf8',
+              )
+            } catch (error) {
+              // The import may still be mid-edit or absent; completion must not
+              // turn that ordinary editing state into a provider error. Logged
+              // so real failures (e.g. permissions) remain diagnosable.
+              outputChannel?.appendLine(
+                `⚠️ DSL import-name completion: could not read ${importUri.fsPath}: ${error}`,
+              )
+              return undefined
+            }
+            return makeItems(
+              extractTopLevelDeclaredNames(importedSource),
+              vscode.CompletionItemKind.Variable,
+            )
+          }
+          case 'import-path': {
+            const files = await vscode.workspace.findFiles('**/*.orbs')
+            const currentDirectory = path.dirname(document.uri.fsPath)
+            const candidates = files
+              .filter((uri) => uri.fsPath !== document.uri.fsPath)
+              .map((uri) => {
+                const relativePath = path
+                  .relative(currentDirectory, uri.fsPath)
+                  .split(path.sep)
+                  .join('/')
+                return relativePath.startsWith('.') ? relativePath : `./${relativePath}`
+              })
+            return makeItems(candidates, vscode.CompletionItemKind.File)
+          }
+        }
+      },
+    },
+    '"',
+    '{',
+  )
+  context.subscriptions.push(dslCompletionProvider)
 }
 
 /**

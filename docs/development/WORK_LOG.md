@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.288 refactor+fix(vscode): #512 補完の /simplify + pr-review-team 収束 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ レビュー収束（round-2 で Critical 0 / Important 0）・owner マージ指示待ち
+
+**内容**:
+- `/simplify` fix 適用（`db030ba`）: sequence/global メソッド補完面が既存 completionProvider と重複し候補が二重表示 → 新規2面を削除しメソッド補完を既存 provider に一本化（補完面は6→4面）。未参照 `quoteStartChar` を削除
+- pr-review-team round-1（code-reviewer + silent-failure-hunter + pr-test-analyzer、経済則で4→3名）Important 3件を修正（`4b710e0`）: busArg 正規表現をドット必須化（`output("` 等の誤発火防止・回帰テスト付き）、import-names の catch を readFile のみに縮小し outputChannel へログ、`filterDslCandidates` のテスト追加
+- round-2 検証レビュアー1名で全 fix の解消と fail-before/pass-after を確認、Critical 0 / Important 0 で収束
+- skip した efficiency/simplification findings は PR #513 コメントに follow-up として注記（#495 Phase E の AST 化で解消予定）
+- テスト 1549 passed / lint エラー 0
+
+**関連**: #512（Phase A）・PR #513
+
+### 6.287 feat(vscode): DSL 文脈補完を6面へ拡張 #512 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 実装済み（`7364726`）
+
+**内容**:
+- VS Code 拡張に vscode 非依存の `dsl-completion-context.ts` を追加し、コメント／無関係な文字列内を除外する regex 文脈検出を実装
+- `import { ... }` の import 元 top-level 宣言、`from "..."` の workspace `.orbs` 相対パス、`seq.`／`global.` の既知メソッド、`output("...")` の `global.sum()` 名、`send("...")` の `global.aux()` 名を補完
+- import 宣言抽出は engine の `declaredNames` と同じく top-level `var` 宣言を静的に列挙し、VS Code provider 側だけがワークスペース／ファイル I/O を担当
+- 純関数テストを追加（6面・コメント/文字列誤爆・top-level／bus 宣言抽出）。`npm run build` は成功、`npm test` は exit 0、追加テスト 4/4 pass。`npm run lint` は既存2警告のみ（新規変更は警告なし）
+
+**関連**: #512（Phase A）・#463 C3
+
 ### 6.286 docs(spec): specs-v2 を Markdown 正本へ移行 #507 (Jul 18, 2026)
 
 **Date**: 2026-07-18
