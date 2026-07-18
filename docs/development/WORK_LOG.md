@@ -17,6 +17,19 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.290 test(daemon): outproc loading テストの flake 除去 #491 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 完了（PR #516 MERGED main `0a484ad`）
+
+**内容**:
+- `effect_load_outproc_concurrent_call_fails_fast_on_loading` が CI で2回 flake（#489 発見・PR #515 で再発。いずれも Rust 非接触の変更で fail、rerun で pass）
+- 原因: セットアップ（child spawn）完了待ちの deadline 2s が、検証対象の性質でないのに高負荷 runner で spawn 遅延に負けて panic する作り
+- fix: `outproc_load_error_test_support` に `SETUP_DEADLINE = 30s` 定数を導入し、セットアップ待ちポーリング2箇所（Loading 遷移待ち・child spawn PID 待ち）に適用。ポーリングは条件成立で即抜けるため正常時の所要時間は不変。本命の regression guard（2本目が mutex 待ちせず 1s 未満で fail-fast する assert）は無変更
+- ローカル: outproc テスト 38 passed・fmt/clippy 緑
+
+**関連**: #491（Closes）・#489 / PR #515（再発観測）
+
 ### 6.289 feat(engine): Signal Chain notation layer — parser + shared resolution #514 (Jul 18, 2026)
 
 **Date**: 2026-07-18
