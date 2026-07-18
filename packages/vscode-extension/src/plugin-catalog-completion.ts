@@ -25,6 +25,12 @@ export interface PluginArgContext {
   readonly quoteStartChar: number
 }
 
+export interface PluginCatalogCompletionCandidate {
+  readonly entry: PluginCatalogEntry
+  readonly label: string
+  readonly insertText: string
+}
+
 // Matches `.effect("` / `.instrument("` immediately followed by an in-progress
 // string (no closing quote yet) ending at the cursor. `[^"\n]*$` anchors to the
 // end of the prefix, so this matches `effect("Sca` (partial) just as well as
@@ -52,20 +58,55 @@ export function detectPluginArgContext(
 /**
  * Filters catalog entries for a completion request:
  * - role match (PC.3: `instrument(` → roles includes `instrument`; `effect(` → roles includes `effect`)
- * - format restriction for effects (PH.3: only CLAP effects are accepted today; instruments have no such restriction)
- * - typed-prefix narrowing (case-insensitive substring match against `name` or `vendor/name`)
+ * - both verbs accept CLAP and VST3 entries (PH.3); catalog name resolution prefers CLAP on a same-name tie
+ * - same-vendor cross-format collisions become `format/name` candidates; remaining label collisions use `vendor/name`
+ * - typed-prefix narrowing (case-insensitive substring match against the candidate or `vendor/name`)
  */
 export function filterCatalogEntries(
   entries: readonly PluginCatalogEntry[],
   verb: PluginVerb,
   typed: string,
-): PluginCatalogEntry[] {
+): PluginCatalogCompletionCandidate[] {
   const needle = typed.trim().toLowerCase()
-  return entries.filter((entry) => {
-    if (!entry.roles.includes(verb)) return false
-    if (verb === 'effect' && entry.format.toLowerCase() !== 'clap') return false
-    if (needle === '') return true
-    const qualified = `${entry.vendor}/${entry.name}`.toLowerCase()
-    return entry.name.toLowerCase().includes(needle) || qualified.includes(needle)
+  const roleEntries = entries.filter((entry) => entry.roles.includes(verb))
+  const formatsByVendorAndName = new Map<string, Set<string>>()
+  for (const entry of roleEntries) {
+    const key = vendorAndNameKey(entry)
+    const formats = formatsByVendorAndName.get(key) ?? new Set<string>()
+    formats.add(normalizeCatalogKey(entry.format))
+    formatsByVendorAndName.set(key, formats)
+  }
+
+  const baseCandidates = roleEntries.map((entry) => {
+    const hasFormatCollision = (formatsByVendorAndName.get(vendorAndNameKey(entry))?.size ?? 0) > 1
+    return {
+      entry,
+      label: hasFormatCollision ? `${entry.format.toLowerCase()}/${entry.name}` : entry.name,
+    }
   })
+  const vendorsByLabel = new Map<string, Set<string>>()
+  for (const { entry, label } of baseCandidates) {
+    const vendors = vendorsByLabel.get(normalizeCatalogKey(label)) ?? new Set<string>()
+    vendors.add(normalizeCatalogKey(entry.vendor))
+    vendorsByLabel.set(normalizeCatalogKey(label), vendors)
+  }
+
+  return baseCandidates.flatMap(({ entry, label: baseLabel }) => {
+    const label =
+      (vendorsByLabel.get(normalizeCatalogKey(baseLabel))?.size ?? 0) > 1
+        ? `${entry.vendor}/${entry.name}`
+        : baseLabel
+    if (needle === '') return [{ entry, label, insertText: label }]
+    const qualified = `${entry.vendor}/${entry.name}`.toLowerCase()
+    if (!label.toLowerCase().includes(needle) && !qualified.includes(needle)) return []
+    return [{ entry, label, insertText: label }]
+  })
+}
+
+function normalizeCatalogKey(value: string): string {
+  return value.trim().normalize('NFC').toLowerCase()
+}
+
+function vendorAndNameKey(entry: PluginCatalogEntry): string {
+  return `${normalizeCatalogKey(entry.vendor)}\u0000${normalizeCatalogKey(entry.name)}`
 }

@@ -3044,12 +3044,12 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
           new vscode.Position(position.line, pluginContext.quoteStartChar),
           new vscode.Position(position.line, position.character),
         )
-        return matches.map((entry) => {
-          const item = new vscode.CompletionItem(entry.name, vscode.CompletionItemKind.Value)
+        return matches.map(({ entry, label, insertText }) => {
+          const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Value)
           item.detail = `${entry.vendor} · ${entry.format.toUpperCase()}`
-          item.insertText = entry.name
+          item.insertText = insertText
           item.range = range
-          item.filterText = entry.name
+          item.filterText = label
           return item
         })
       },

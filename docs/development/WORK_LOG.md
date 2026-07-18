@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.284 fix(engine): VST3 effect の名前解決/補完受理 #504 (Jul 18, 2026)
+
+**Date**: 2026-07-18
+**Status**: ✅ 実装（PR #505・レビュー1名+検証1名で収束・実カタログ検証済み）
+
+**内容**:
+- owner 実機で `sum("bus").effect("` の補完が 0 件 → 原因 = effect に残る「CLAP のみ」ゲート（spec PH.3 の古い記述）。daemon は VST3 effect 配線済み（#397/#445・select_child_exe の拡張子読み替え）のため spec 先行更新の上で撤去
+- PC.2 に `format/名前` 限定記法（clap/Name・vst3/Name）。format 名と同名 vendor が両方成立する場合は明示の曖昧性エラー
+- 補完: 同名衝突は vendor+name キーで format 分割・残衝突は vendor/name ラベルにフォールバック。実カタログで effect 候補 71 件
+- メソッド補完の静的リストに現行 API（effect/instrument/output/sum/aux）追加 — mixer graph 以前のリストのままで sum の後に effect が出なかった
+- 派生記録: #474 = 右クリック本命は「挿してあるエフェクトの上で UI を開く」・挿入は補完 retrigger の疑似ドリルダウン・#495 に文脈判定要件が3件具体化
+
+**関連**: #504（Closes）・#463・#474・#495
+
+---
+
 ### 6.283 feat(orbitstudio): 選択=電源モデルの Engine ビュー #484 D3.5 (Jul 18, 2026)
 
 **Date**: 2026-07-18
@@ -190,6 +206,44 @@ default / Pro Tools Aggregate I/O）を返却・不在名で警告 + 縮退起�
 Refs #484
 
 
+### 6.275 docs(spec): MX.2 の「未宣言名はエラー」を実挙動に整合 #477 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ spec 修正（トリアージ = spec 側が誤り）
+
+**内容**: 品質チェック E2E で MX.2「未宣言名はエラー」と実装（sum 非該当名は LinkAudio
+channel として記録 + 警告 = §8.1.2 の既存挙動）の矛盾を検出（#477）。トリアージ:
+「後から global.linkAudio() を宣言する」既存ワークフローを壊す実装厳格化より、spec の
+overstatement を訂正するのが正 — MX.2 を「記録 + 警告（ハードエラーではない）」に修正。
+
+Refs #477
+
+---
+
+### 6.274 fix(mcp): analyze_audio — soundDetected 偽陰性修正 + 窓分析 #478 (Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 修正
+
+**内容（LLM の「耳」の強化）**:
+- soundDetected: 旧判定は ≥3 onsets を要求し one-shot 1 発（peak 0.7）を false と誤報
+  （品質チェック E2E で実測）→ ≥1 onset + peak > 0.05 に修正
+- `window_ms` オプション追加: per-window peak/RMS 系列を返し、MX.5 の「dry 先行 →
+  干渉定常」のような時間構造を MCP 経由で検証可能に（従来はローカル python 直読みに
+  フォールバックしていた = MCP 実装漏れ枠の解消）
+
+**検証**: 新規 3 tests（one-shot 検知・窓系列の時間構造・省略時は系列なし）+ 既存
+wav-analysis/docs-http 72 tests green。
+
+Refs #478
+
+---
+
+### 6.273 chore(build): bundle 前に daemon+child を再ビルド #487（#479 の真因対策）(Jul 17, 2026)
+
+**Date**: 2026-07-17
+**Status**: ✅ 修正
+
 **#479 の調査結論（実測）**: ParentWatch のコードバグではなく **stale バイナリ**が真因。
 orphan ×3 は全て #462 修正前のビルド（バイナリ内に ParentWatch 文字列 0 ヒット・mtime が
 修正コミットより古い）。現行ソースの fresh build は daemon SIGKILL 後 1 秒以内に child 退出
@@ -203,21 +257,23 @@ bundled release バイナリで daemon SIGKILL → 元 child が退出(PASS)・T
 検査は無効・当初の文字列確認記述を訂正)。
 
 Refs #487 #479 #462
-### 6.274 fix(mcp): analyze_audio — soundDetected 偽陰性修正 + 窓分析 #478 (Jul 17, 2026)
-### 6.273 chore(build): bundle 前に daemon+child を再ビルド #487（#479 の真因対策）(Jul 17, 2026)
+
+---
+
 ### 6.272 fix(mcp): stale dist（base 不一致）検出ガード #480 (Jul 17, 2026)
 
 **Date**: 2026-07-17
 **Status**: ✅ 修正
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 **内容**: docs 配信に `isDocsDistStale()` を追加 — index.html に `base + '/assets/'` 参照が
 無い dist（base 変更前の古いビルド）は、未ビルト時と同じ 503 + rebuild 手順の actionable
 メッセージに落とす（従来は壊れた素 HTML を黙って配信）。mtime キャッシュでリクエスト毎の
 同期 read を回避。unit 4 件（正常/不一致/不在/mtime 再検査）+ 既存 docs-http 36 件 green。
 
 Refs #480
+
+---
+
 ### 6.271 fix(engine): REPL 行処理の FIFO 直列化 #476 (Jul 17, 2026)
 
 **Date**: 2026-07-17
@@ -238,33 +294,8 @@ RUN が選択外）が混入していた。競合自体は構造的に実在（�
 0.35355（オラクル一致）。
 
 Refs #476
-=======
-**内容（LLM の「耳」の強化）**:
-- soundDetected: 旧判定は ≥3 onsets を要求し one-shot 1 発（peak 0.7）を false と誤報
-  （品質チェック E2E で実測）→ ≥1 onset + peak > 0.05 に修正
-- `window_ms` オプション追加: per-window peak/RMS 系列を返し、MX.5 の「dry 先行 →
-  干渉定常」のような時間構造を MCP 経由で検証可能に（従来はローカル python 直読みに
-  フォールバックしていた = MCP 実装漏れ枠の解消）
 
-**検証**: 新規 3 tests（one-shot 検知・窓系列の時間構造・省略時は系列なし）+ 既存
-wav-analysis/docs-http 72 tests green。
-
-Refs #478
->>>>>>> 482f98b (fix(mcp): analyze_audio — fix soundDetected false negatives, add windowed series (#478))
-=======
-### 6.275 docs(spec): MX.2 の「未宣言名はエラー」を実挙動に整合 #477 (Jul 17, 2026)
-
-**Date**: 2026-07-17
-**Status**: ✅ spec 修正（トリアージ = spec 側が誤り）
-
-**内容**: 品質チェック E2E で MX.2「未宣言名はエラー」と実装（sum 非該当名は LinkAudio
-channel として記録 + 警告 = §8.1.2 の既存挙動）の矛盾を検出（#477）。トリアージ:
-「後から global.linkAudio() を宣言する」既存ワークフローを壊す実装厳格化より、spec の
-overstatement を訂正するのが正 — MX.2 を「記録 + 警告（ハードエラーではない）」に修正。
-
-Refs #477
->>>>>>> d57753f (docs(spec): align MX.2 undeclared-output-name wording with actual behavior (#477))
-
+---
 
 ### 6.270 chore(qa): docs-driven 実機 E2E + 学習サイト最新化 #481 (Jul 17, 2026)
 

@@ -1132,8 +1132,8 @@ piano.comp([1,3,5], [5,7,2]).voicelead()  // composes with §6.3
 > 本節は Issue #425（2026-07-13・owner 設計セッション + Fable 検証）で確定した構文仕様。
 > DSL 疎通は #426（effect・PR #432）/ #427（instrument + Pitch DSL 接続）ともに実装済み。
 > **VST3 instrument hosting は #421（PR #447・2026-07-17 マージ）で実装済み**（`seq.instrument()` が
-> `.vst3` を受理）。VST3 effect 側は child プロセスの READY handshake（#445・PR #446）まで実装済みだが
-> `global.effect()` は引き続き `.clap` のみ受理する。VST3 instrument のスコープは note on/off のみ
+> `.vst3` を受理）。VST3 effect 側も child プロセスの READY handshake（#445・PR #446）を経て
+> `global.effect()` が `.vst3` を受理する。名前指しで同名の CLAP / VST3 が存在する場合は CLAP を優先する。VST3 instrument のスコープは note on/off のみ
 > — CC 制御（IMidiMapping 相当）・per-note expression・tempo 連動（#408）は明示的に先送り。
 > 残るスコープは #428（note timing のサンプル精度化）のみ。
 > Option A/B/C の比較経緯は `docs/development/POST_2.0_VST3_HOSTING_PLAN.md` §6、
@@ -1194,8 +1194,7 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   ライブ再評価保護）。異なる path / pluginId での再宣言はエラー。チェーン
   （複数回呼び出し = 直列）は将来拡張（エンジン内部は順序付きリストで実装済み・
   DSL 側のガード解放のみ）。
-- **受理フォーマットは effect と同じ**: v1 は `.clap` のみ（`.vst3` / `.component` は
-  instrument と異なり effect 系では未対応）。
+- **受理フォーマットは effect と同じ**: `.clap` / `.vst3` を受理し、`.component` は未対応。
 - **エンジン実装（規範）**: `seq.effect()` 宣言はエンジンの **named insert bus** を確保し、
   当該シーケンスの再生イベントに bus tag を付けてスケジュールする。bus は宣言時点で
   登録され、**plugin の attach 完了前でも音は素通しで master に届く**（宣言 → attach の
@@ -1216,12 +1215,14 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   （`./` `../` `~/` `/`）と同じ規則。bank 名検索（`global.audioPath()` 相当）はなし。
 - format は**拡張子で判定**: `.clap` → CLAP、`.vst3` → VST3、`.component` → AU。
   verb は format 非依存（format 別 verb は作らない）。
-  **role 別の受理は非対称**（#421・2026-07-17 実装事実）:
+  **role 別の受理**（#421・2026-07-17 実装事実）:
   - `seq.instrument()`: `.clap` / `.vst3` を受理。`.component` は構文上予約し
     「not yet supported」エラーを返す。
-  - `global.effect()`: `.clap` のみ受理。`.vst3` / `.component` は構文上予約し
+  - `global.effect()`: `.clap` / `.vst3` を受理。`.component` は構文上予約し
     「not yet supported」エラーを返す。
   未知拡張子はいずれの role でもエラー。
+- カタログ名による解決では、effect / instrument とも同名の CLAP / VST3 が存在する場合は
+  **CLAP を優先**する。
 - 第2引数 `pluginId`（optional）: 1 バンドルに複数プラグインが入る場合の指定
   （daemon `LoadPlugin.plugin_id` に対応）。省略時はバンドル先頭のプラグイン。
 
@@ -1296,6 +1297,7 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 ```js
 kick.effect("TAL Reverb 4")            // カタログ名で解決
 kick.effect("TAL Software/TAL Reverb 4")  // vendor 修飾（同名衝突時の一意化）
+kick.effect("vst3/TAL Reverb 4")       // format 修飾（VST3 版を明示）
 kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カタログ非参照）
 ```
 
@@ -1308,17 +1310,15 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
   - カタログ名自体が既知拡張子で終わる場合（例: name = `"MyPlugin.clap"`）は path 解決に
     倒れる（既知の限界 — 該当プラグインは path 指定で回避）
 - 名前解決: `name` 完全一致（case-insensitive・前後空白 trim・Unicode は **NFC 正規化後**
-  に比較 — macOS FS の NFD 由来の不一致を防ぐ）。複数ヒット（同名別 vendor / 別 format）
-  は**候補を列挙してエラー**（silent に先頭を選ばない）。`"vendor/name"` で一意化
+  に比較 — macOS FS の NFD 由来の不一致を防ぐ）。最初の `/` より前が既知 format 名
+  （`clap` / `vst3`）なら `"format/name"` としてその format に限定し、それ以外は従来どおり
+  `"vendor/name"` として扱う。format 名と同じ vendor が両方の解釈で候補を持つ場合は曖昧エラーにする。
+  同名別 vendor は候補を列挙してエラー（silent に先頭を選ばない）。
 - **解決の出力 = `(path, pluginId)` の組**で、両方を `LoadPlugin` へ渡す（カタログは
   pluginId 単位で 1 エントリ = name → (path, pluginId) は 1:1）。したがって**カタログ
   名指しと第 2 引数 `pluginId` の併用はエラー**（名前が既に一意。pluginId 引数は
   path 指定時のみ有効）
-- 同名同 vendor で複数 format がある場合の優先: **当該 verb が受理できる format
-  （PH.3）の中から CLAP > VST3**。受理可能 format のエントリが 1 つも無い場合
-  （例: VST3 版しか無いプラグインを `global.effect()` で名指し）は、path 系の
-  「not yet supported」文言を流用せず**「カタログ名 + 見つかった format + 当該 verb の
-  受理状況」を含む専用エラー**にする
+- 同名同 vendor で複数 format がある場合の優先: **CLAP > VST3**。
 - role 検査: 解決したエントリの roles が verb と不一致（effect() に instrument-only 等）
   はエラー
 - カタログ未生成・名前未ヒット時のエラーは「rescan 手順」を含む actionable メッセージ
@@ -1327,6 +1327,11 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
 
 - 拡張の completion provider が `effect("` / `instrument("` の引数位置で
   カタログから候補（name・vendor 修飾形・format ラベル付き）をサジェスト
+- `effect()` / `instrument()` ともに CLAP と VST3 の候補をサジェストする。同名が両 format
+  にある場合は `clap/name` / `vst3/name` と format 接頭辞を付け、表示と insertText を一致
+  させる（同一 vendor 内だけを比較）。format 接頭辞後も別 vendor とラベルが衝突する場合は
+  `vendor/name` を表示する。format 衝突のない名前は従来どおり接頭辞なし。名前解決は PH.3 に従い
+  CLAP を優先する。
 - 補完はキャッシュファイル読取のみ（engine 起動不要）。キャッシュ不在時は候補なし + 
   rescan を促す 1 回限りの案内
 
@@ -1596,9 +1601,8 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 - **Plugin Hosting implementation**: the CLAP effect/instrument hosting *syntax* is finalized
   (#425 — see the Plugin Hosting section above); DSL wiring for effect (#426) and instrument
   (#427) is implemented. **VST3 instrument hosting is implemented** (#421 — `seq.instrument()`
-  accepts `.vst3`; PR #447, merged 2026-07-17). VST3 effect hosting is not yet wired into
-  `global.effect()` (the effect child process gained a READY handshake in #445/PR #446, but
-  `.vst3` is still rejected at the `global.effect()` verb). `.component` (AU) remains reserved
+  accepts `.vst3`; PR #447, merged 2026-07-17). **VST3 effect hosting is implemented**
+  (`global.effect()` accepts `.vst3`; same-name catalog resolution prefers CLAP). `.component` (AU) remains reserved
   for both roles (not yet supported). Only sample-accurate note timing (#428) remains
   outstanding for the implemented paths.
 - **`slice()`**: per-event start/end point selection within a chopped file (#239)

@@ -9,6 +9,9 @@ build/
 # Copied engine files in vscode-extension
 packages/vscode-extension/engine/
 
+# Vendored third-party sources are not included in this repository's TypeScript project.
+packages/sc-link-audio/external_libraries/
+
 # Test coverage
 coverage/
 

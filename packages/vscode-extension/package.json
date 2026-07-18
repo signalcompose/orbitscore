@@ -37,6 +37,15 @@
     "onLanguage:orbitscore"
   ],
   "contributes": {
+    "configurationDefaults": {
+      "[orbitscore]": {
+        "editor.quickSuggestions": {
+          "other": "on",
+          "comments": "off",
+          "strings": "on"
+        }
+      }
+    },
     "commands": [
       {
         "command": "orbitscore.toggleEngine",
