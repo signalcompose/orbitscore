@@ -21,14 +21,17 @@
  * ```
  */
 export async function callMethod(obj: any, methodName: string, args: any[]): Promise<any> {
+  // Process arguments BEFORE the method-existence check: plugin/bus chain names
+  // (SC.3) are NOT real methods until Phase C, so a named arg on them would
+  // otherwise be swallowed by the not-found branch below instead of reaching
+  // the explicit Phase C guard in processArguments (SC.3.3 forbids that).
+  const processedArgs = await processArguments(methodName, args)
+
   const method = obj[methodName]
   if (!method || typeof method !== 'function') {
     console.error(`Method not found: ${methodName} on ${obj.constructor.name}`)
     return obj
   }
-
-  // Process arguments
-  const processedArgs = await processArguments(methodName, args)
 
   // Call the method
   const result = await method.apply(obj, processedArgs)

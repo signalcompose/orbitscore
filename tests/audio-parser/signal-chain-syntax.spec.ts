@@ -10,7 +10,7 @@
 import { describe, it, expect } from 'vitest'
 
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
-import { processArguments } from '../../packages/engine/src/interpreter/evaluate-method'
+import { callMethod, processArguments } from '../../packages/engine/src/interpreter/evaluate-method'
 import {
   normalizeCatalogName,
   resolveChainName,
@@ -52,6 +52,21 @@ describe('named arguments (SC.3)', () => {
       processArguments('HogeComp', [{ type: 'named_arg', name: 'mix', value: 0.5 }]),
     ).rejects.toThrow(/Phase C/)
   })
+
+  it('fires the Phase C guard even when the method is not a real method (plugin names)', async () => {
+    // SC.3: plugin chain names are NOT methods on Sequence/Global until Phase C.
+    // The guard must run before the method-not-found swallow, or
+    // `kick.HogeComp(threshold: -18)` would silently no-op.
+    const receiver = {} // no HogeComp method — the realistic plugin-call shape
+    await expect(
+      callMethod(receiver, 'HogeComp', [{ type: 'named_arg', name: 'threshold', value: -18 }]),
+    ).rejects.toThrow(/Phase C/)
+  })
+
+  it('rejects malformed named-arg values and missing separators explicitly', () => {
+    expect(() => parseAudioDSL('kick.Bar(x: (1))')).toThrow(/expects a number/)
+    expect(() => parseAudioDSL('kick.Bar(x: 1 y: 2)')).toThrow(/comma or closing parenthesis/)
+  })
 })
 
 describe('mixer declarations (SC.2.1)', () => {
@@ -87,6 +102,16 @@ describe('mixer declarations (SC.2.1)', () => {
 
   it('keeps the existing error for other identifier RHS', () => {
     expect(() => parseAudioDSL('var x = someVar')).toThrow(/Expected INIT/)
+  })
+
+  it('keeps the existing error for init targets other than seq/mixer', () => {
+    expect(() => parseAudioDSL('var g = init global.foo')).toThrow(/Unexpected initialization/)
+  })
+
+  it('errors explicitly when a sum/aux derivation is written as a call (boundary lock)', () => {
+    // Pre-#514 this was the generic `Expected INIT` error; the mixer branch now
+    // claims the `<id>.sum(` shape and must keep it an explicit error.
+    expect(() => parseAudioDSL('var x = someSeq.sum(1)')).toThrow(/no arguments/)
   })
 })
 
