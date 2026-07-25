@@ -116,6 +116,33 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     },
   )
 
+  it.each(['sum', 'aux'] as const)(
+    'rejects unsupported methods on a string-form %s bus',
+    async (kind) => {
+      const global = new Global(new RecordingScheduler())
+      const state = stateWith(global)
+
+      await expect(run(`${kind}("bus").gain(0.5)`, state)).rejects.toThrow(/S2.*S3.*#517/)
+    },
+  )
+
+  it('dispatches effect() on string-form sum and aux buses', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = stateWith(global)
+    const sumHandle = global.sum('drums')
+    const auxHandle = global.aux('verb')
+    const sumEffect = vi.spyOn(sumHandle, 'effect').mockResolvedValue(sumHandle)
+    const auxEffect = vi.spyOn(auxHandle, 'effect').mockResolvedValue(auxHandle)
+    vi.spyOn(global, 'sum').mockReturnValue(sumHandle)
+    vi.spyOn(global, 'aux').mockReturnValue(auxHandle)
+
+    await run('sum("drums").effect("Comp.clap")', state)
+    await run('aux("verb").effect("Reverb.clap")', state)
+
+    expect(sumEffect).toHaveBeenCalledWith('Comp.clap')
+    expect(auxEffect).toHaveBeenCalledWith('Reverb.clap')
+  })
+
   it('refuses to use any output endpoint as a receiver, including the implicit master', async () => {
     // SC.3.3 forbids swallowing what the user wrote: an output endpoint has no
     // receiver surface until #484 D4, so it must throw rather than resolve to an
@@ -228,9 +255,14 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     )
   })
 
-  it('rejects mixer names that collide with sequence/global names in either declaration order', async () => {
+  it('rejects mixer names that collide with sequence/global names in every declaration order', async () => {
     const global = new Global(new RecordingScheduler())
 
+    const sequenceBeforeHandle = stateWith(global)
+    await run('var kick = init global.seq', sequenceBeforeHandle)
+    await expect(run('var kick = init global.mixer', sequenceBeforeHandle)).rejects.toThrow(
+      /mixer.*sequence namespace/i,
+    )
     await expect(
       run(
         'var kick = init global.seq\nvar mix = init global.mixer\nvar kick = mix.sum',
@@ -245,11 +277,48 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     await expect(run('var global = init global.mixer', stateWith(global))).rejects.toThrow(
       /mixer.*global namespace/i,
     )
+    const globalBeforeNode = stateWith(global)
+    await run('var mix = init global.mixer', globalBeforeNode)
+    await expect(run('var global = mix.sum', globalBeforeNode)).rejects.toThrow(
+      /mixer.*global namespace/i,
+    )
+    const handleBeforeGlobal = stateWith(global)
+    await run('var reserved = init global.mixer', handleBeforeGlobal)
+    await expect(
+      processGlobalInit({ type: 'global_init', variableName: 'reserved' }, handleBeforeGlobal),
+    ).rejects.toThrow(/global.*mixer namespace/i)
+    const handleBeforeSequence = stateWith(global)
+    await run('var reserved = init global.mixer', handleBeforeSequence)
+    await expect(run('var reserved = init global.seq', handleBeforeSequence)).rejects.toThrow(
+      /sequence.*mixer namespace/i,
+    )
     const mixerFirst = stateWith(global)
     await run('var mix = init global.mixer\nvar later = mix.aux', mixerFirst)
     await expect(
       processGlobalInit({ type: 'global_init', variableName: 'later' }, mixerFirst),
     ).rejects.toThrow(/global.*mixer namespace/i)
+  })
+
+  it('rejects mixer handle and node names that collide in either declaration order', async () => {
+    const global = new Global(new RecordingScheduler())
+    const nodeBeforeHandle = stateWith(global)
+    await run('var mix = init global.mixer\nvar bus = mix.sum', nodeBeforeHandle)
+    await expect(run('var bus = init global.mixer', nodeBeforeHandle)).rejects.toThrow(
+      /mixer.*node/i,
+    )
+
+    const handleBeforeNode = stateWith(global)
+    await run('var first = init global.mixer\nvar reserved = init global.mixer', handleBeforeNode)
+    await expect(run('var reserved = first.aux', handleBeforeNode)).rejects.toThrow(
+      /mixer.*handle/i,
+    )
+  })
+
+  it('rejects a mixer node declaration that uses its own handle name as the base', async () => {
+    const state = stateWith(new Global(new RecordingScheduler()))
+    await run('var mix = init global.mixer', state)
+
+    await expect(run('var mix = mix.sum', state)).rejects.toThrow(/mixer.*handle/i)
   })
 
   it('throws from exported global/sequence handlers when their target is absent', async () => {

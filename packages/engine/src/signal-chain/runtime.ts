@@ -21,10 +21,23 @@ export interface MixerRuntimeRegistry {
   readonly nodes: Map<string, MixerRuntimeNode>
 }
 
-// SC.2 norm 5's DAG validation starts in #517 S2/S3, together with the send and
+// SC.2 norm 5's DAG validation starts in #517 S3, together with the send and
 // output-routing edges that can actually form a cycle. S1 only registers nodes.
 export function createMixerRuntimeRegistry(): MixerRuntimeRegistry {
   return { handles: new Map(), nodes: new Map() }
+}
+
+const BUS_CHAIN_METHOD = 'effect'
+
+export function validateBusChainMethods(methods: readonly string[]): void {
+  const unsupported = methods.find((method) => method !== BUS_CHAIN_METHOD)
+  if (unsupported) {
+    throw new Error(
+      `Mixer sum/aux bus method "${unsupported}" is not available in S1: ` +
+        `plugin-name methods arrive in S2, while routing tails and send sugar arrive ` +
+        `in S3 (#517).`,
+    )
+  }
 }
 
 export function registerMixerHandle(state: InterpreterState, statement: MixerInit): Global {
@@ -45,6 +58,12 @@ export function registerMixerHandle(state: InterpreterState, statement: MixerIni
     throw new Error(
       `Mixer name "${statement.variableName}" conflicts with the existing ` +
         `${conflictingNamespace} namespace.`,
+    )
+  }
+
+  if (state.mixers.nodes.has(statement.variableName)) {
+    throw new Error(
+      `Mixer handle "${statement.variableName}" conflicts with the existing mixer node namespace.`,
     )
   }
 
@@ -82,6 +101,12 @@ export function registerMixerNode(
     throw new Error(
       `Mixer name "${statement.variableName}" conflicts with the existing ` +
         `${conflictingNamespace} namespace.`,
+    )
+  }
+
+  if (state.mixers.handles.has(statement.variableName)) {
+    throw new Error(
+      `Mixer node "${statement.variableName}" conflicts with the existing mixer handle namespace.`,
     )
   }
 
@@ -161,14 +186,7 @@ export function mixerNodeReceiver(
   methods: readonly string[],
 ): MixerBusHandle {
   if (node.kind !== 'output') {
-    const unsupported = methods.find((method) => method !== 'effect')
-    if (unsupported) {
-      throw new Error(
-        `Mixer ${node.kind} bus method "${unsupported}" is not available in S1: ` +
-          `plugin-name methods arrive in S2, while routing tails and send sugar arrive ` +
-          `in S3 (#517).`,
-      )
-    }
+    validateBusChainMethods(methods)
     return node.handle
   }
   throw new Error(

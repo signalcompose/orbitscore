@@ -55,6 +55,23 @@ describe('named arguments (SC.3)', () => {
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'format', value: 'CLAP' }]),
     ).rejects.toThrow(/S2.*#517/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'vendor', value: 'Acme' }]),
+    ).rejects.toThrow(/S2.*#517/)
+    await expect(
+      processArguments('HogeComp', [
+        { type: 'named_arg', name: 'sidechain', value: { type: 'ref', name: 'duck' } },
+      ]),
+    ).rejects.toThrow(/#409/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'outs', value: 'kick' }]),
+    ).rejects.toThrow(/#408/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'preset', value: 'Wide' }]),
+    ).rejects.toThrow(/S4.*#517/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'enabled', value: true }]),
+    ).rejects.toThrow(/S4.*#517/)
   })
 
   it('fires the #517 staged-execution guard even when the method is not a real method', async () => {

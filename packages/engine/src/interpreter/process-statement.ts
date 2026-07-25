@@ -19,6 +19,7 @@ import {
   registerMixerHandle,
   registerMixerNode,
   resolveMixerNode,
+  validateBusChainMethods,
   type MixerRuntimeNode,
 } from '../signal-chain/runtime'
 
@@ -194,6 +195,7 @@ async function processMixerHandleStatement(
   const global = requireGlobal(state, `${statement.kind}("${statement.name}")`)
   if (!global) return
 
+  validateBusChainMethods((statement.chain ?? []).map((call) => call.method))
   await applyMethodChain(global, statement.kind, [statement.name], statement.chain)
 }
 

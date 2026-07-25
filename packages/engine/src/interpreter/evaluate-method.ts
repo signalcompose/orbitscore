@@ -69,10 +69,21 @@ export async function processArguments(methodName: string, args: any[]): Promise
       // Selector arguments belong to plugin resolution in S2. Parameter values
       // require S4's Rust param-set/enumeration protocol. Keep this explicit:
       // SC.3.3 forbids silently ignoring either shape.
-      const stage =
-        arg.name === 'format' || arg.name === 'vendor'
-          ? 'selectors (format:/vendor:) arrive with plugin resolution in S2'
-          : 'parameter values require the Rust param-set/enumeration protocol in S4'
+      let stage: string
+      switch (arg.name) {
+        case 'format':
+        case 'vendor':
+          stage = 'selectors (format:/vendor:) arrive with plugin resolution in S2'
+          break
+        case 'sidechain':
+          stage = 'sidechain routing arrives in #409'
+          break
+        case 'outs':
+          stage = 'multi-output routing arrives in #408'
+          break
+        default:
+          stage = 'parameter values require the Rust param-set/enumeration protocol in S4'
+      }
       throw new Error(
         `named argument "${arg.name}:" in ${methodName}() is not executable yet: ` +
           `${stage} (#517).`,
