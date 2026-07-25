@@ -69,7 +69,12 @@ export class MixerManager {
     this.kinds = { sum: makeKind('sum', SUM_BUS_PREFIX), aux: makeKind('aux', AUX_BUS_PREFIX) }
   }
 
-  /** Whether any sum or aux bus has been declared (used by `Global.linkAudio()`'s v1 exclusion gate). */
+  /**
+   * Whether this console has been claimed at all — by a declared sum/aux bus, or
+   * by a Signal Chain mixer declaration that allocates no bus (`init global.mixer`
+   * / `mix.output(...)`, recorded via {@link declareRuntime}). Used by
+   * `Global.linkAudio()`'s v1 exclusion gate, which must fire for both.
+   */
   hasAnyDeclaration(): boolean {
     return (
       this.hasRuntimeDeclaration || this.kinds.sum.buses.size > 0 || this.kinds.aux.buses.size > 0

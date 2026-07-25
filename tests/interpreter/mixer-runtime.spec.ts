@@ -77,6 +77,18 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     await expect(run('missing.effect("x")', state)).rejects.toThrow('Variable not found: missing')
   })
 
+  it('refuses to use any output endpoint as a receiver, including the implicit master', async () => {
+    // SC.3.3 forbids swallowing what the user wrote: an output endpoint has no
+    // receiver surface until #484 D4, so it must throw rather than resolve to an
+    // inert object that callMethod would silently no-op on.
+    const global = new Global(new RecordingScheduler())
+    const state = stateWith(global)
+    await expect(run('master.effect("Reverb.clap")', state)).rejects.toThrow('#484 D4')
+
+    await run('var mix = init global.mixer\nvar main = mix.output(1, 2)', state)
+    await expect(run('main.effect("Reverb.clap")', state)).rejects.toThrow('#484 D4')
+  })
+
   it('rejects invalid bases, duplicate kinds, and use of non-default output endpoints', async () => {
     const global = new Global(new RecordingScheduler())
     const state = stateWith(global)
