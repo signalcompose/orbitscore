@@ -22,14 +22,14 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
     verb.HogeReverb(size: 0.8).master
 
     // ── トラック
-    kick.audioPath("kick.wav").chop(16).play(1, 5, 9, 13)
+    kick.audio("kick.wav").chop(16).play(1, 5, 9, 13)
         .CLAPTestEffect(mix: 0.5)
         .HogeComp(threshold: -18, sidechain: duck)
         .verb(0.3)                        // aux 名 → send（位置 = プリ/ポスト）
         .FugaEQ(low: 2)
         .drums                            // sum 名 → 本流の出力先（宣言層・括弧なし）
 
-    bass.audioPath("bass.wav").play(1, 9).duck(1.0).drums
+    bass.audio("bass.wav").play(1, 9).duck(1.0).drums
     drums.GlueComp(ratio: 2).master
     lead.Serum(preset: "Pluck 01").TALReverb4(size: 0.6).subout
 
@@ -37,7 +37,7 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
 
 | 層 | 属するもの | 順序の意味 |
 |----|----|----|
-| **宣言層** | audioPath / chop / play / gain / pan / 出力先ノード名（括弧なし）/ instrument 役のプラグイン呼び出し / ミキサー宣言 | **可換**。どこに書いても同じ。同一項目の再宣言は後勝ち。 |
+| **宣言層** | audio / chop / play / gain / pan / 出力先ノード名（括弧なし）/ instrument 役のプラグイン呼び出し / ミキサー宣言 | **可換**。どこに書いても同じ。同一項目の再宣言は後勝ち。 |
 | **信号層** | effect 役のプラグイン呼び出し / send（aux 名メソッドを含む） | **この層内の相対順序だけ**が接続順になる。宣言層の文がどこに挟まっても影響しない。 |
 
 <div class="norm">
