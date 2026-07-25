@@ -17,6 +17,55 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.291 feat(engine): Signal Chain ミキサー宣言の実行 #517 S1 (Jul 26, 2026)
+
+**Date**: 2026-07-26
+**Status**: ✅ レビュー収束（PR #518・owner マージ指示待ち）
+
+**#517 のスコープ改訂（owner 決定・重要）**:
+当初は「Phase C = TS 側の写像のみ / Rust 側拡張は Phase D」の分割だったが、事前調査で **SC.0 の例は TS 側の写像だけでは原理的に実行できない**ことが判明（下記）。owner 判断により **Rust 拡張を取り込み、SC.0 完全実行までを #517 の到達点**とし、S1〜S5 に分割した。本項はその S1。
+
+**調査で確定した制約**（Codex 起案 + Fable 独立検証・いずれも一次ソース確認）:
+- 1レシーバ=1insert がハードコード（`effect-slot.ts:84-98` / `sequence-effect-manager.ts:92` / `mixer-manager.ts:142`）。daemon の `LoadPlugin` はチェーン位置を持たない（`daemon-client.ts:378`）
+- プラグインのパラメータ設定経路が存在しない（`audio/types.ts:70-75` / `daemon-client.ts:384-391` / `session.rs:884-999`。`protocol-types.ts` の `CommandMethod` union に param set/enumeration/preset/bypass なし）
+- send のプリ/ポスト位置を表現できない（routing state にタップ点の概念なし）
+- `syncBusRouting()` は fire-and-forget（`sequence.ts:412-429`）→ SC.2 規範5 の「評価時に明示エラー」には await 可能経路が要る
+
+**S1 の内容**:
+- `InterpreterState` に mixer registry を追加。新規 `signal-chain/runtime.ts` に集約
+- `MixerInit` → 同一 Global の卓への冪等な handle 取得（SC.2 規範1）
+- `MixerNodeDecl` → `mix.sum`/`mix.aux` を既存 `Global.sum()`/`Global.aux()` へ、`mix.output(ch, ch)` を endpoint メタデータへ写像
+- mixer node をレシーバとする文の dispatch（SC.2 規範4）
+- `declaredNames()` に mixer 宣言を追加
+- 未解決レシーバ・output エンドポイントへのメソッド呼び出しを明示エラー化（SC.3.3）
+- LinkAudio 排他ゲートを、バスを確保しない宣言にも適用（両方向）
+- 名前空間の衝突検出（global / sequence / mixer handle / mixer node の全交差）
+- 仕様の誤記修正: SC.0 の `kick.audioPath(...)` → `audio(...)`（`Sequence.audio()` が正・`audioPath` は Global の検索パス設定）
+
+**暗黙 master(1,2) の扱い（SC.2 規範6・決定 #75）**:
+名前解決時の**遅延解決**とし registry には登録しない。`execute()` は REPL の評価単位ごとに呼ばれ `InterpreterState` は評価をまたいで持続するため、評価単位ごとの先読みにすると宣言ブロックとトラック行を別評価した際に誤登録する。spec は静的な「ファイル」単位で書かれておりライブ増分評価との橋渡しに明文がないため、**spec 追記は follow-up**。
+
+**レビュー経緯（PR #518・`/simplify` + pr-review-team 4ラウンド）**:
+本レビューで **4つの実バグ**が出た。いずれも「不完全な経路を黙って飲み込む」同一の病で、**同じ穴が3回、別々の入口から再発**した:
+1. 既定チャンネルの output だけが黙る非対称（`/simplify`）
+2. バスが `effect()` 以外を飲み込む・宣言形（ラウンド1）
+3. 同じ穴が裸の文字列形 `sum("drums").gain(0.5)` から（ラウンド2）
+4. 同じ穴がターゲット接頭辞形 `global.sum("drums").gain(0.5)` から（ラウンド3）
+
+3回目で2名のレビュアーが独立に「強制が値ではなく呼び出し箇所に付いているのが根本原因」と診断。箇所ごとのパッチをやめ、**構造的修正**へエスカレーションした（`9d2e412`）:
+- `MixerBusHandle` に module-private Symbol の brand を付与（`Sequence` も `effect()` を持つため duck typing では誤検知し得る）。TypeScript が全 `MixerBusHandle` に brand を要求し、Symbol は未 export のため外部から偽造不能
+- チェーンの唯一の実行点 `applyMethodChain` が `callMethod` の直前に毎回 `guardBusChain` を実行。ハンドラ側の「検証を呼ぶ義務」を撤去
+- 閉包の根拠: `chain?:` を持つ statement 型は3つのみ、そのハンドラ4つはすべて `applyMethodChain` を通る、外部の `callMethod` は transport の4箇所（コマンド名固定・チェーンなし・非バス受け手）のみ
+- fail-fast は分岐2（受け手が Global で次が `sum`/`aux`）が担い、分岐1（受け手が既にバス）が強制を担う。分岐2 を失っても劣化は原子性のみ
+
+**テストの検出力はミューテーションで検証**（暗黙 master の遅延解決・output レシーバの明示エラー・10個の衝突ガード・共有ヘルパの2呼び出し元・原子性の分岐・衝突メッセージのアサーション）。レビュアー側も独立に17回のミューテーションを再実行して確認。
+
+**検証**: 全 suite 1594 passed / 29 skipped・lint エラー0・build 通過・CI 4/4 pass
+
+**follow-up**: `callMethod` の素通り自体（全レシーバに波及するため別 issue）/ `requireGlobal` と `processSequenceInit` の既存素通り / brand のシリアライズ境界（現状バスハンドルはプロセス内のみ）/ 増分評価下の暗黙 master 規則の spec 追記
+
+**関連**: #517（S1）・#514 / PR #515（Phase B）・#511（P0）・#484 D4・#408 / #409
+
 ### 6.290 test(daemon): outproc loading テストの flake 除去 #491 (Jul 18, 2026)
 
 **Date**: 2026-07-18
