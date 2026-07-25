@@ -7,6 +7,7 @@ import { MidiOutput } from '../../packages/engine/src/midi/midi-output'
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 import { processStatement } from '../../packages/engine/src/interpreter/process-statement'
 import { InterpreterState } from '../../packages/engine/src/interpreter/types'
+import { createMixerRuntimeRegistry } from '../../packages/engine/src/signal-chain/runtime'
 
 /**
  * Phase R (#227) — pattern variables end to end (§6.5): namespace splice, `*n` on a
@@ -150,6 +151,7 @@ describe('Phase R — interpreter routing for pattern_binding (§6.5)', () => {
     return {
       globals: new Map([['g', global]]),
       sequences: new Map(),
+      mixers: createMixerRuntimeRegistry(),
       currentGlobal: global,
       audioEngine: undefined as never,
       isBooted: true,

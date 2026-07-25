@@ -24,6 +24,7 @@ import { parseAudioDSL } from '../parser/audio-parser'
 import { processGlobalInit, processSequenceInit } from '../interpreter/process-initialization'
 import { processStatement } from '../interpreter/process-statement'
 import { InterpreterState } from '../interpreter/types'
+import { createMixerRuntimeRegistry } from '../signal-chain/runtime'
 
 /**
  * No-op audio engine. MIDI runs on the TransportClock (no SuperCollider), so
@@ -74,6 +75,7 @@ async function main(): Promise<void> {
   const state: InterpreterState = {
     globals: new Map(),
     sequences: new Map(),
+    mixers: createMixerRuntimeRegistry(),
     currentGlobal: undefined,
     audioEngine: noopEngine as unknown as InterpreterState['audioEngine'],
     isBooted: true,

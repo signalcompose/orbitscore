@@ -6,6 +6,7 @@ import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
 import { AudioEngineBackend } from '../audio/engine-backend'
 import { SessionLogWriter } from '../core/session-log/session-log-writer'
+import type { MixerRuntimeRegistry } from '../signal-chain/runtime'
 
 /**
  * Interpreter state containing globals and sequences
@@ -13,6 +14,7 @@ import { SessionLogWriter } from '../core/session-log/session-log-writer'
 export interface InterpreterState {
   globals: Map<string, Global>
   sequences: Map<string, Sequence>
+  mixers: MixerRuntimeRegistry
   currentGlobal?: Global
   audioEngine: AudioEngineBackend
   isBooted: boolean

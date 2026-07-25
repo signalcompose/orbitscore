@@ -1,8 +1,9 @@
 /**
  * Signal Chain DSL notation layer (#514 Phase B):
  * named arguments (SC.3), mixer declarations (SC.2.1), star import (SC.2.2),
- * and the shared name-resolution module. Execution (Phase C) is out of scope —
- * the new shapes throw explicit not-yet-executable errors, asserted below.
+ * and the shared name-resolution module. Execution landed later (#517): mixer
+ * declarations run as of S1 (see tests/interpreter/mixer-runtime.spec.ts), while
+ * named arguments still throw explicit not-yet-executable errors, asserted below.
  *
  * Spec: docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md
  */
@@ -155,15 +156,12 @@ describe('chain notation (SC.0 / SC.4)', () => {
     expect(statement.chain[6]).toMatchObject({ method: 'drums', args: [] })
   })
 
-  it('throws an explicit not-yet-executable error for mixer declarations at interpretation', async () => {
-    const { processStatement } = await import(
-      '../../packages/engine/src/interpreter/process-statement'
-    )
-    const statement = parseAudioDSL('var mix = init global.mixer').statements[0]!
-    await expect(
-      processStatement(statement, { globals: new Map(), sequences: new Map() } as never),
-    ).rejects.toThrow(/Phase C/)
-  })
+  // The mixer-declaration not-yet-executable guard that used to live here was
+  // retired when S1 (#517) made `var mix = init global.mixer` / `mix.sum` /
+  // `mix.aux` / `mix.output(ch, ch)` execute against the existing mixer
+  // primitives. Execution is now covered from the interpreter side by
+  // tests/interpreter/mixer-runtime.spec.ts; the parse-level assertions for the
+  // same shapes remain above.
 })
 
 describe('shared name resolution (SC.2 norm 3 / SC.3.2)', () => {

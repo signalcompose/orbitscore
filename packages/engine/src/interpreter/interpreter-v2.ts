@@ -18,6 +18,7 @@ import {
   formatLogStamp,
 } from '../core/session-log/session-log-writer'
 import { ENGINE_VERSION, DSL_VERSION } from '../version'
+import { createMixerRuntimeRegistry } from '../signal-chain/runtime'
 
 import { InterpreterState } from './types'
 import { processGlobalInit, processSequenceInit } from './process-initialization'
@@ -47,6 +48,7 @@ export class InterpreterV2 {
       audioEngine: opts?.audioEngine ?? createAudioEngine(),
       globals: new Map(),
       sequences: new Map(),
+      mixers: createMixerRuntimeRegistry(),
       currentGlobal: undefined,
       isBooted: false,
       // Initialize unidirectional toggle groups

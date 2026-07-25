@@ -48,6 +48,7 @@ interface KindState {
  */
 export class MixerManager {
   private readonly kinds: Record<MixerKind, KindState>
+  private hasRuntimeDeclaration = false
 
   constructor(
     audioEngine: AudioEngine,
@@ -70,7 +71,17 @@ export class MixerManager {
 
   /** Whether any sum or aux bus has been declared (used by `Global.linkAudio()`'s v1 exclusion gate). */
   hasAnyDeclaration(): boolean {
-    return this.kinds.sum.buses.size > 0 || this.kinds.aux.buses.size > 0
+    return (
+      this.hasRuntimeDeclaration || this.kinds.sum.buses.size > 0 || this.kinds.aux.buses.size > 0
+    )
+  }
+
+  /** Records a Signal Chain mixer handle/output without allocating a daemon bus. */
+  declareRuntime(): void {
+    if (this.linkAudioManager.isEnabled()) {
+      throw new Error('global.mixer cannot be used while LinkAudio is enabled in v1.')
+    }
+    this.hasRuntimeDeclaration = true
   }
 
   /** Declares (or idempotently re-declares) a sum/group bus. MX.2: sum nesting is not supported in v1. */

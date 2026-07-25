@@ -14,6 +14,13 @@ import {
   ImportStatement,
   MixerHandleStatement,
 } from '../parser/audio-parser'
+import {
+  mixerNodeReceiver,
+  registerMixerHandle,
+  registerMixerNode,
+  resolveMixerNode,
+  type MixerRuntimeNode,
+} from '../signal-chain/runtime'
 
 import { InterpreterState } from './types'
 import { callMethod } from './evaluate-method'
@@ -52,7 +59,12 @@ export async function processStatement(
         // It's a sequence statement
         await processSequenceStatement(statement, state)
       } else {
-        console.error(`Variable not found: ${statement.target}`)
+        const node = resolveMixerNode(state.mixers, statement.target, state.currentGlobal)
+        if (node) {
+          await processMixerNodeStatement(statement, node)
+        } else {
+          throw new Error(`Variable not found: ${statement.target}`)
+        }
       }
       break
     case 'transport':
@@ -74,17 +86,27 @@ export async function processStatement(
       await processMixerHandleStatement(statement, state)
       break
     case 'mixer_init':
+      registerMixerHandle(state.mixers, statement, state.globals)
+      break
     case 'mixer_node_decl':
-      // Signal Chain mixer declarations (SC.2.1) parse since #514 (Phase B,
-      // notation layer) but execute only from Phase C. Explicit — SC.3.3
-      // forbids silently ignoring what the user wrote.
-      throw new Error(
-        `Signal Chain mixer declarations (var ${statement.variableName} = ...) are not ` +
-          `executable yet: parsing landed in #514 (Phase B); execution lands in Phase C.`,
-      )
+      registerMixerNode(state.mixers, statement)
+      break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
       console.warn(`Unknown statement type: ${(statement as any).type}`)
+  }
+}
+
+async function processMixerNodeStatement(
+  statement: SequenceStatement,
+  node: MixerRuntimeNode,
+): Promise<void> {
+  let result: any = mixerNodeReceiver(node)
+  result = await callMethod(result, statement.method, statement.args)
+  if (statement.chain) {
+    for (const chainedCall of statement.chain) {
+      result = await callMethod(result, chainedCall.method, chainedCall.args)
+    }
   }
 }
 
