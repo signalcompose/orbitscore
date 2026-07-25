@@ -15,11 +15,11 @@ import {
   MixerHandleStatement,
 } from '../parser/audio-parser'
 import {
+  guardBusChain,
   mixerNodeReceiver,
   registerMixerHandle,
   registerMixerNode,
   resolveMixerNode,
-  validateBusChainMethods,
   type MixerRuntimeNode,
 } from '../signal-chain/runtime'
 
@@ -103,6 +103,11 @@ export async function processStatement(
  * threading each call's return value into the next (methods return `this` to
  * chain). Every receiver kind — global, sequence, bare bus reference, mixer node —
  * shares this loop so chain semantics stay defined in exactly one place.
+ *
+ * That includes which methods a receiver even accepts: {@link guardBusChain} runs
+ * against the value about to be dispatched on, before each call. Enforcement
+ * therefore travels with the value rather than with the handler that produced it,
+ * so a handler added later inherits it instead of having to remember it.
  */
 async function applyMethodChain(
   receiver: unknown,
@@ -110,8 +115,12 @@ async function applyMethodChain(
   args: any[],
   chain?: ReadonlyArray<{ method: string; args: any[] }>,
 ): Promise<any> {
+  const pending = [method, ...(chain ?? []).map((call) => call.method)]
+  guardBusChain(receiver, pending)
+
   let result: any = await callMethod(receiver, method, args)
-  for (const chainedCall of chain ?? []) {
+  for (const [index, chainedCall] of (chain ?? []).entries()) {
+    guardBusChain(result, pending.slice(index + 1))
     result = await callMethod(result, chainedCall.method, chainedCall.args)
   }
   return result
@@ -121,13 +130,7 @@ async function processMixerNodeStatement(
   statement: SequenceStatement,
   node: MixerRuntimeNode,
 ): Promise<void> {
-  const methods = [statement.method, ...(statement.chain ?? []).map((call) => call.method)]
-  await applyMethodChain(
-    mixerNodeReceiver(node, methods),
-    statement.method,
-    statement.args,
-    statement.chain,
-  )
+  await applyMethodChain(mixerNodeReceiver(node), statement.method, statement.args, statement.chain)
 }
 
 /**
@@ -195,7 +198,6 @@ async function processMixerHandleStatement(
   const global = requireGlobal(state, `${statement.kind}("${statement.name}")`)
   if (!global) return
 
-  validateBusChainMethods((statement.chain ?? []).map((call) => call.method))
   await applyMethodChain(global, statement.kind, [statement.name], statement.chain)
 }
 

@@ -19,13 +19,39 @@ export const AUX_BUS_PREFIX = 'aux-bus-'
  */
 export const MIXER_BUS_POOL_SIZE = 4
 
-type MixerKind = 'sum' | 'aux'
+/**
+ * The `Global` methods that hand back a {@link MixerBusHandle}. Single source for
+ * both the sum/aux dispatch below and the interpreter's fail-fast bus gate, which
+ * needs to know a bus is coming *before* it calls (and thereby allocates) it.
+ */
+export const MIXER_BUS_KINDS = ['sum', 'aux'] as const
+
+type MixerKind = (typeof MIXER_BUS_KINDS)[number]
+
+/**
+ * Brand marking a value as a mixer bus handle. Carried by the handle itself
+ * rather than inferred from its shape, so {@link isMixerBusHandle} identifies
+ * buses exactly — a `Sequence` also has an `effect()` method, and any future
+ * receiver might too.
+ */
+const MIXER_BUS_HANDLE = Symbol('orbitscore.MixerBusHandle')
 
 /** Returned by `global.sum(name)` / `global.aux(name)` and the bare `sum(name)` / `aux(name)` reference. */
 export interface MixerBusHandle {
+  readonly [MIXER_BUS_HANDLE]: true
   readonly bus: string
   /** Declares (or idempotently re-declares) the bus's own insert (MX.2/MX.3: v1 one insert). */
   effect(path: string, pluginId?: string): Promise<MixerBusHandle>
+}
+
+/**
+ * Whether `value` is a mixer bus handle, wherever it came from — a declared
+ * `mix.sum` node, a string-form `sum("x")` call, or the handle another
+ * `effect()` returns mid-chain. TypeScript requires the brand on every
+ * `MixerBusHandle`, so no bus can reach a caller without answering this.
+ */
+export function isMixerBusHandle(value: unknown): value is MixerBusHandle {
+  return typeof value === 'object' && value !== null && MIXER_BUS_HANDLE in value
 }
 
 /** kind ごと（sum / aux）の宣言テーブル一式。 */
@@ -128,6 +154,7 @@ export class MixerManager {
 
   private makeHandle(kind: MixerKind, name: string, bus: string): MixerBusHandle {
     return {
+      [MIXER_BUS_HANDLE]: true,
       bus,
       effect: (path: string, pluginId?: string) => this.effectFor(kind, name, bus, path, pluginId),
     }

@@ -126,6 +126,66 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     },
   )
 
+  it.each(['sum', 'aux'] as const)(
+    'rejects unsupported methods on a target-prefixed %s bus',
+    async (kind) => {
+      const global = new Global(new RecordingScheduler())
+      const state = stateWith(global)
+
+      await expect(run(`global.${kind}("bus").gain(0.5)`, state)).rejects.toThrow(/S2.*S3.*#517/)
+    },
+  )
+
+  it('dispatches effect() on target-prefixed sum and aux buses', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = stateWith(global)
+    const sumHandle = global.sum('drums')
+    const auxHandle = global.aux('verb')
+    const sumEffect = vi.spyOn(sumHandle, 'effect').mockResolvedValue(sumHandle)
+    const auxEffect = vi.spyOn(auxHandle, 'effect').mockResolvedValue(auxHandle)
+    vi.spyOn(global, 'sum').mockReturnValue(sumHandle)
+    vi.spyOn(global, 'aux').mockReturnValue(auxHandle)
+
+    await run('global.sum("drums").effect("Comp.clap")', state)
+    await run('global.aux("verb").effect("Reverb.clap")', state)
+
+    expect(sumEffect).toHaveBeenCalledWith('Comp.clap')
+    expect(auxEffect).toHaveBeenCalledWith('Reverb.clap')
+  })
+
+  it('rejects a bus chain before any of its calls run, on every entry form', async () => {
+    // The gate is atomic: nothing in the chain executes when a later method is
+    // unsupported, so no plugin is loaded and no bus pool slot is consumed.
+    const global = new Global(new RecordingScheduler())
+    const state = stateWith(global)
+    await run('var mix = init global.mixer\nvar verb = mix.aux', state)
+    const node = state.mixers.nodes.get('verb')
+    const declaredEffect = vi.spyOn(
+      (node as Extract<typeof node, { kind: 'aux' }>).handle,
+      'effect',
+    )
+
+    await expect(run('verb.effect("Reverb.clap").gain(0.5)', state)).rejects.toThrow(/#517/)
+    expect(declaredEffect).not.toHaveBeenCalled()
+
+    const sum = vi.spyOn(global, 'sum')
+    await expect(run('sum("drums").gain(0.5)', state)).rejects.toThrow(/#517/)
+    await expect(run('global.sum("drums").gain(0.5)', state)).rejects.toThrow(/#517/)
+    expect(sum).not.toHaveBeenCalled()
+  })
+
+  it('leaves non-bus chains untouched by the bus gate', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = stateWith(global)
+    await run('var kick = init global.seq', state)
+
+    // `gain` is unsupported on a bus but must stay a plain (non-throwing) call
+    // everywhere else: the gate keys off the receiver, not the method name.
+    await run('global.tempo(120).beat(4 by 4)', state)
+    await run('kick.gain(0.5)', state)
+    expect(global.tempo()).toBe(120)
+  })
+
   it('dispatches effect() on string-form sum and aux buses', async () => {
     const global = new Global(new RecordingScheduler())
     const state = stateWith(global)
@@ -303,14 +363,17 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     const global = new Global(new RecordingScheduler())
     const nodeBeforeHandle = stateWith(global)
     await run('var mix = init global.mixer\nvar bus = mix.sum', nodeBeforeHandle)
+    // Anchored on the leading noun: both messages contain both words, so an
+    // unanchored /mixer.*node/ would also match the node-side message (and vice
+    // versa), letting a swap of the two messages pass unnoticed.
     await expect(run('var bus = init global.mixer', nodeBeforeHandle)).rejects.toThrow(
-      /mixer.*node/i,
+      /^Mixer handle .* existing mixer node namespace/i,
     )
 
     const handleBeforeNode = stateWith(global)
     await run('var first = init global.mixer\nvar reserved = init global.mixer', handleBeforeNode)
     await expect(run('var reserved = first.aux', handleBeforeNode)).rejects.toThrow(
-      /mixer.*handle/i,
+      /^Mixer node .* existing mixer handle namespace/i,
     )
   })
 
@@ -318,7 +381,9 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     const state = stateWith(new Global(new RecordingScheduler()))
     await run('var mix = init global.mixer', state)
 
-    await expect(run('var mix = mix.sum', state)).rejects.toThrow(/mixer.*handle/i)
+    await expect(run('var mix = mix.sum', state)).rejects.toThrow(
+      /^Mixer node .* existing mixer handle namespace/i,
+    )
   })
 
   it('throws from exported global/sequence handlers when their target is absent', async () => {

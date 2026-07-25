@@ -1,4 +1,5 @@
 import { Global } from '../core/global'
+import { MIXER_BUS_KINDS, isMixerBusHandle } from '../core/global/mixer-manager'
 import type { MixerBusHandle } from '../core/global/mixer-manager'
 import type { MixerInit, MixerNodeDecl } from '../parser/types'
 import type { InterpreterState } from '../interpreter/types'
@@ -29,7 +30,7 @@ export function createMixerRuntimeRegistry(): MixerRuntimeRegistry {
 
 const BUS_CHAIN_METHOD = 'effect'
 
-export function validateBusChainMethods(methods: readonly string[]): void {
+function validateBusChainMethods(methods: readonly string[]): void {
   const unsupported = methods.find((method) => method !== BUS_CHAIN_METHOD)
   if (unsupported) {
     throw new Error(
@@ -37,6 +38,36 @@ export function validateBusChainMethods(methods: readonly string[]): void {
         `plugin-name methods arrive in S2, while routing tails and send sugar arrive ` +
         `in S3 (#517).`,
     )
+  }
+}
+
+const BUS_PRODUCER_METHODS: ReadonlySet<string> = new Set(MIXER_BUS_KINDS)
+
+/**
+ * Gate the pending methods of a statement's call chain: `methods[0]` is about to
+ * be invoked on `receiver`, and the rest follow on each result in turn. Throws
+ * for the first method that would land on a mixer sum/aux bus without being
+ * supported in S1 (SC.3.3 forbids swallowing it — `callMethod` would otherwise
+ * log "Method not found" and hand the receiver back unchanged).
+ *
+ * The gate is attached to the *value*, not to a call site: `applyMethodChain`
+ * calls it before every dispatch, so a new statement handler cannot open this
+ * hole again by forgetting to validate. Two branches, in the order a bus can
+ * appear:
+ *
+ * 1. The receiver already *is* a bus (a declared `mix.sum` node, or the handle a
+ *    previous `effect()` returned) — validate everything still pending.
+ * 2. The receiver is a `Global` and the next call is `sum()`/`aux()`, which is
+ *    about to *make* one — validate the tail that will land on it, before the
+ *    call allocates a pool slot. Branch 1 alone would still reject the chain,
+ *    just one call too late; this branch is what keeps the rejection atomic.
+ */
+export function guardBusChain(receiver: unknown, methods: readonly string[]): void {
+  if (methods.length === 0) return
+  if (isMixerBusHandle(receiver)) {
+    validateBusChainMethods(methods)
+  } else if (receiver instanceof Global && BUS_PRODUCER_METHODS.has(methods[0])) {
+    validateBusChainMethods(methods.slice(1))
   }
 }
 
@@ -180,13 +211,12 @@ export function resolveMixerNode(
  * output is what #484 D4 adds. Throwing for every output keeps the unimplemented
  * path loud (SC.3.3 forbids swallowing it) instead of handing back an inert
  * object that `callMethod` would silently no-op on.
+ *
+ * Which methods the returned bus accepts is not decided here: {@link guardBusChain}
+ * decides that for every bus, however it was reached.
  */
-export function mixerNodeReceiver(
-  node: MixerRuntimeNode,
-  methods: readonly string[],
-): MixerBusHandle {
+export function mixerNodeReceiver(node: MixerRuntimeNode): MixerBusHandle {
   if (node.kind !== 'output') {
-    validateBusChainMethods(methods)
     return node.handle
   }
   throw new Error(
