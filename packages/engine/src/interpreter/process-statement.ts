@@ -86,10 +86,10 @@ export async function processStatement(
       await processMixerHandleStatement(statement, state)
       break
     case 'mixer_init':
-      registerMixerHandle(state.mixers, statement, state.globals)
+      registerMixerHandle(state, statement)
       break
     case 'mixer_node_decl':
-      registerMixerNode(state.mixers, statement)
+      registerMixerNode(state, statement)
       break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
@@ -100,7 +100,7 @@ export async function processStatement(
 /**
  * Apply a statement's main call and then its chained calls to `receiver`,
  * threading each call's return value into the next (methods return `this` to
- * chain). Every receiver kind — global, sequence, mixer handle, mixer node —
+ * chain). Every receiver kind — global, sequence, bare bus reference, mixer node —
  * shares this loop so chain semantics stay defined in exactly one place.
  */
 async function applyMethodChain(
@@ -120,7 +120,13 @@ async function processMixerNodeStatement(
   statement: SequenceStatement,
   node: MixerRuntimeNode,
 ): Promise<void> {
-  await applyMethodChain(mixerNodeReceiver(node), statement.method, statement.args, statement.chain)
+  const methods = [statement.method, ...(statement.chain ?? []).map((call) => call.method)]
+  await applyMethodChain(
+    mixerNodeReceiver(node, methods),
+    statement.method,
+    statement.args,
+    statement.chain,
+  )
 }
 
 /**
@@ -213,8 +219,7 @@ export async function processGlobalStatement(
 ): Promise<void> {
   const global = state.globals.get(statement.target)
   if (!global) {
-    console.error(`Global instance not found: ${statement.target}`)
-    return
+    throw new Error(`Variable not found: ${statement.target}`)
   }
 
   await applyMethodChain(global, statement.method, statement.args, statement.chain)
@@ -242,8 +247,7 @@ export async function processSequenceStatement(
 ): Promise<void> {
   const sequence = state.sequences.get(statement.target)
   if (!sequence) {
-    console.error(`Sequence instance not found: ${statement.target}`)
-    return
+    throw new Error(`Variable not found: ${statement.target}`)
   }
 
   await applyMethodChain(sequence, statement.method, statement.args, statement.chain)

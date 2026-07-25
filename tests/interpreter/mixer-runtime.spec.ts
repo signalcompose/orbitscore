@@ -1,8 +1,24 @@
-import { describe, expect, it, vi } from 'vitest'
+import * as fs from 'fs'
+import * as os from 'os'
+import * as path from 'path'
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
-import { declaredNames } from '../../packages/engine/src/interpreter/process-file-import'
-import { processStatement } from '../../packages/engine/src/interpreter/process-statement'
+import {
+  createImportContext,
+  declaredNames,
+  processFileImports,
+} from '../../packages/engine/src/interpreter/process-file-import'
+import {
+  processGlobalInit,
+  processSequenceInit,
+} from '../../packages/engine/src/interpreter/process-initialization'
+import {
+  processGlobalStatement,
+  processSequenceStatement,
+  processStatement,
+} from '../../packages/engine/src/interpreter/process-statement'
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 import {
   createMixerRuntimeRegistry,
@@ -26,12 +42,23 @@ function stateWith(global: Global) {
 }
 
 async function run(source: string, state: ReturnType<typeof stateWith>): Promise<void> {
-  for (const statement of parseAudioDSL(source).statements) {
+  const ir = parseAudioDSL(source)
+  if (ir.globalInit) await processGlobalInit(ir.globalInit, state)
+  for (const init of ir.sequenceInits) await processSequenceInit(init, state)
+  for (const statement of ir.statements) {
     await processStatement(statement, state)
   }
 }
 
 describe('Signal Chain mixer runtime namespace (SC.2)', () => {
+  const temporaryDirectories: string[] = []
+
+  afterEach(() => {
+    for (const directory of temporaryDirectories.splice(0)) {
+      fs.rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('maps mixer handles and sum/aux nodes onto the existing Global primitives idempotently', async () => {
     const global = new Global(new RecordingScheduler())
     const sum = vi.spyOn(global, 'sum')
@@ -77,6 +104,18 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     await expect(run('missing.effect("x")', state)).rejects.toThrow('Variable not found: missing')
   })
 
+  it.each(['sum', 'aux'] as const)(
+    'rejects unsupported methods on a declared %s bus, including chained calls',
+    async (kind) => {
+      const global = new Global(new RecordingScheduler())
+      const state = stateWith(global)
+      await run(`var mix = init global.mixer\nvar bus = mix.${kind}`, state)
+
+      await expect(run('bus.gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
+      await expect(run('bus.effect("x").gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
+    },
+  )
+
   it('refuses to use any output endpoint as a receiver, including the implicit master', async () => {
     // SC.3.3 forbids swallowing what the user wrote: an output endpoint has no
     // receiver surface until #484 D4, so it must throw rather than resolve to an
@@ -89,7 +128,7 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     await expect(run('main.effect("Reverb.clap")', state)).rejects.toThrow('#484 D4')
   })
 
-  it('rejects invalid bases, duplicate kinds, and use of non-default output endpoints', async () => {
+  it('rejects invalid bases, duplicate kinds, and methods on declared output endpoints', async () => {
     const global = new Global(new RecordingScheduler())
     const state = stateWith(global)
     await expect(run('var verb = nope.aux', state)).rejects.toThrow('not a mixer handle')
@@ -97,6 +136,136 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     await expect(run('var bus = mix.aux', state)).rejects.toThrow('cannot be redeclared')
     await run('var alt = mix.output(3, 4)', state)
     await expect(run('alt.effect("x")', state)).rejects.toThrow('#484 D4')
+  })
+
+  it('resolves a declared master output instead of the implicit fallback', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = stateWith(global)
+    await run('var mix = init global.mixer\nvar master = mix.output(3, 4)', state)
+
+    expect(resolveMixerNode(state.mixers, 'master', global)).toBe(state.mixers.nodes.get('master'))
+    expect(resolveMixerNode(state.mixers, 'master', global)).toMatchObject({
+      kind: 'output',
+      channels: [3, 4],
+    })
+  })
+
+  it('keeps implicit master fallback independent across Globals', async () => {
+    const g1 = new Global(new RecordingScheduler())
+    const g2 = new Global(new RecordingScheduler())
+    const state = stateWith(g1)
+    state.globals.set('g1', g1)
+    state.globals.set('g2', g2)
+    await run('var mix = init g1.mixer\nvar drums = mix.sum', state)
+
+    expect(resolveMixerNode(state.mixers, 'master', g1)).toBeUndefined()
+    expect(resolveMixerNode(state.mixers, 'master', g2)).toMatchObject({
+      kind: 'output',
+      global: g2,
+      channels: [1, 2],
+    })
+  })
+
+  it('executes mixer declarations through named and star file imports', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orbs-mixer-import-'))
+    temporaryDirectories.push(directory)
+    fs.writeFileSync(
+      path.join(directory, 'mixer.orbs'),
+      'var global = init GLOBAL\nvar mix = init global.mixer\nvar drums = mix.sum\n',
+    )
+
+    for (const importClause of ['{ mix, drums }', '*']) {
+      const entry = path.join(directory, `main-${importClause === '*' ? 'star' : 'named'}.orbs`)
+      fs.writeFileSync(entry, `import ${importClause} from "./mixer.orbs"\n`)
+      const importedState = stateWith(new Global(new RecordingScheduler()))
+      const ir = parseAudioDSL(fs.readFileSync(entry, 'utf8'))
+      await processFileImports(
+        ir.fileImports ?? [],
+        directory,
+        importedState,
+        createImportContext(entry),
+      )
+      expect(importedState.mixers.handles.has('mix')).toBe(true)
+      expect(importedState.mixers.nodes.get('drums')).toMatchObject({ kind: 'sum' })
+    }
+  })
+
+  it('rejects rebinding a mixer handle to another Global', async () => {
+    const g1 = new Global(new RecordingScheduler())
+    const g2 = new Global(new RecordingScheduler())
+    const state = stateWith(g1)
+    state.globals.set('g1', g1)
+    state.globals.set('g2', g2)
+    await run('var mix = init g1.mixer', state)
+    await expect(run('var mix = init g2.mixer', state)).rejects.toThrow('different Global')
+  })
+
+  it('rejects redeclaring a mixer node against a handle for another Global', async () => {
+    const g1 = new Global(new RecordingScheduler())
+    const g2 = new Global(new RecordingScheduler())
+    const state = stateWith(g1)
+    state.globals.set('g1', g1)
+    state.globals.set('g2', g2)
+    await run('var m1 = init g1.mixer\nvar m2 = init g2.mixer\nvar bus = m1.sum', state)
+    await expect(run('var bus = m2.sum', state)).rejects.toThrow('cannot be redeclared')
+  })
+
+  it('treats repeated output declaration with the same channels as idempotent', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = stateWith(global)
+    await run('var mix = init global.mixer\nvar out = mix.output(3, 4)', state)
+    const first = state.mixers.nodes.get('out')
+    await run('var out = mix.output(3, 4)', state)
+    expect(state.mixers.nodes.get('out')).toBe(first)
+  })
+
+  it('reports both old and newly requested channels on output redeclaration', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = stateWith(global)
+    await run('var mix = init global.mixer\nvar out = mix.output(1, 2)', state)
+    await expect(run('var out = mix.output(3, 4)', state)).rejects.toThrow(
+      'already declared for channels (1, 2); cannot redeclare for (3, 4)',
+    )
+  })
+
+  it('rejects mixer names that collide with sequence/global names in either declaration order', async () => {
+    const global = new Global(new RecordingScheduler())
+
+    await expect(
+      run(
+        'var kick = init global.seq\nvar mix = init global.mixer\nvar kick = mix.sum',
+        stateWith(global),
+      ),
+    ).rejects.toThrow(/mixer.*sequence namespace/i)
+    const mixerBeforeSequence = stateWith(global)
+    await run('var mix = init global.mixer\nvar kick = mix.sum', mixerBeforeSequence)
+    await expect(run('var kick = init global.seq', mixerBeforeSequence)).rejects.toThrow(
+      /sequence.*mixer namespace/i,
+    )
+    await expect(run('var global = init global.mixer', stateWith(global))).rejects.toThrow(
+      /mixer.*global namespace/i,
+    )
+    const mixerFirst = stateWith(global)
+    await run('var mix = init global.mixer\nvar later = mix.aux', mixerFirst)
+    await expect(
+      processGlobalInit({ type: 'global_init', variableName: 'later' }, mixerFirst),
+    ).rejects.toThrow(/global.*mixer namespace/i)
+  })
+
+  it('throws from exported global/sequence handlers when their target is absent', async () => {
+    const state = stateWith(new Global(new RecordingScheduler()))
+    await expect(
+      processGlobalStatement(
+        { type: 'global', target: 'missing', method: 'tempo', args: [] },
+        state,
+      ),
+    ).rejects.toThrow('Variable not found: missing')
+    await expect(
+      processSequenceStatement(
+        { type: 'sequence', target: 'missing', method: 'play', args: [] },
+        state,
+      ),
+    ).rejects.toThrow('Variable not found: missing')
   })
 
   it('keeps every mixer declaration mutually exclusive with LinkAudio', async () => {

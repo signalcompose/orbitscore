@@ -51,17 +51,20 @@ describe('named arguments (SC.3)', () => {
   it('throws an explicit not-yet-executable error when a named arg reaches evaluation', async () => {
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'mix', value: 0.5 }]),
-    ).rejects.toThrow(/Phase C/)
+    ).rejects.toThrow(/S4.*#517/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'format', value: 'CLAP' }]),
+    ).rejects.toThrow(/S2.*#517/)
   })
 
-  it('fires the Phase C guard even when the method is not a real method (plugin names)', async () => {
-    // SC.3: plugin chain names are NOT methods on Sequence/Global until Phase C.
+  it('fires the #517 staged-execution guard even when the method is not a real method', async () => {
+    // SC.3: plugin chain names are NOT methods on Sequence/Global until S2.
     // The guard must run before the method-not-found swallow, or
     // `kick.HogeComp(threshold: -18)` would silently no-op.
     const receiver = {} // no HogeComp method — the realistic plugin-call shape
     await expect(
       callMethod(receiver, 'HogeComp', [{ type: 'named_arg', name: 'threshold', value: -18 }]),
-    ).rejects.toThrow(/Phase C/)
+    ).rejects.toThrow(/#517/)
   })
 
   it('rejects malformed named-arg values and missing separators explicitly', () => {
@@ -135,7 +138,7 @@ describe('star import (SC.2.2, decision #72)', () => {
 describe('chain notation (SC.0 / SC.4)', () => {
   it('parses the SC.0 track example: plugins, named args, send sugar, bare bus tail', () => {
     const ir = parseAudioDSL(
-      'kick.audioPath("kick.wav").chop(16).play(1, 5, 9, 13)\n' +
+      'kick.audio("kick.wav").chop(16).play(1, 5, 9, 13)\n' +
         '    .CLAPTestEffect(mix: 0.5)\n' +
         '    .HogeComp(threshold: -18, sidechain: duck)\n' +
         '    .verb(0.3)\n' +
@@ -143,7 +146,7 @@ describe('chain notation (SC.0 / SC.4)', () => {
         '    .drums',
     )
     const statement = ir.statements[0] as { chain: Array<{ method: string; args: unknown[] }> }
-    expect(statement).toMatchObject({ type: 'sequence', target: 'kick', method: 'audioPath' })
+    expect(statement).toMatchObject({ type: 'sequence', target: 'kick', method: 'audio' })
     expect(statement.chain.map((c) => c.method)).toEqual([
       'chop',
       'play',

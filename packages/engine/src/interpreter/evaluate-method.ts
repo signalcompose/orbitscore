@@ -22,9 +22,9 @@
  */
 export async function callMethod(obj: any, methodName: string, args: any[]): Promise<any> {
   // Process arguments BEFORE the method-existence check: plugin/bus chain names
-  // (SC.3) are NOT real methods until Phase C, so a named arg on them would
+  // (SC.3) are NOT real methods until their #517 implementation stage, so a named arg would
   // otherwise be swallowed by the not-found branch below instead of reaching
-  // the explicit Phase C guard in processArguments (SC.3.3 forbids that).
+  // the explicit staged-execution guard in processArguments (SC.3.3 forbids that).
   const processedArgs = await processArguments(methodName, args)
 
   const method = obj[methodName]
@@ -66,11 +66,16 @@ export async function processArguments(methodName: string, args: any[]): Promise
 
   for (const arg of args) {
     if (arg && typeof arg === 'object' && arg.type === 'named_arg') {
-      // Signal Chain named arguments (SC.3) parse since #514 (Phase B) but
-      // execute only from Phase C. Explicit — SC.3.3 forbids silent ignoring.
+      // Selector arguments belong to plugin resolution in S2. Parameter values
+      // require S4's Rust param-set/enumeration protocol. Keep this explicit:
+      // SC.3.3 forbids silently ignoring either shape.
+      const stage =
+        arg.name === 'format' || arg.name === 'vendor'
+          ? 'selectors (format:/vendor:) arrive with plugin resolution in S2'
+          : 'parameter values require the Rust param-set/enumeration protocol in S4'
       throw new Error(
         `named argument "${arg.name}:" in ${methodName}() is not executable yet: ` +
-          `parsing landed in #514 (Phase B); execution lands in Phase C.`,
+          `${stage} (#517).`,
       )
     }
     if (methodName === 'beat' && arg.numerator !== undefined) {

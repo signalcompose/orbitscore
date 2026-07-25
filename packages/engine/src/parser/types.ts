@@ -86,7 +86,7 @@ export type Statement =
  * `var mix = init global.mixer` (SC.2.1): a named handle onto the ONE implicit mixer
  * space (the console). `globalVariable` is the identifier before `.mixer` — not
  * validated at parse time (names are arbitrary; the interpreter resolves it).
- * Execution is Phase C (#514 is notation-layer only): reaching the interpreter throws.
+ * The interpreter executes this declaration in #517 S1.
  */
 export type MixerInit = {
   type: 'mixer_init'
@@ -100,7 +100,7 @@ export type MixerInit = {
  * identifier as written (may itself be imported) — resolution is deferred to the
  * interpreter, which also rejects a non-mixer base. sum/aux take NO parentheses
  * (the declaration allocates an anonymous bus named by the variable); output takes
- * exactly one physical channel pair. Execution is Phase C: reaching the interpreter throws.
+ * exactly one physical channel pair. The interpreter executes it in #517 S1.
  */
 export type MixerNodeDecl = {
   type: 'mixer_node_decl'
@@ -114,8 +114,9 @@ export type MixerNodeDecl = {
  * A named argument `name: value` inside a call (SC.3): tagged so it can coexist in
  * the same `args` array as positional raw values without changing their shape
  * (existing consumers depend on positional args being unwrapped). `value` is a
- * number | string | boolean | {@link ArgRef}. Execution is Phase C: a named arg
- * reaching evaluate-method throws (SC.3.3 forbids silent ignoring).
+ * number | string | boolean | {@link ArgRef}. Selectors execute from #517 S2;
+ * parameter values require the Rust param-set/enumeration protocol in S4. Until
+ * then evaluate-method throws (SC.3.3 forbids silent ignoring).
  */
 export type NamedArg = {
   type: 'named_arg'
