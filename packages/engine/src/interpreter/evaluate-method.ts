@@ -1,3 +1,13 @@
+import { Global } from '../core/global'
+import { isMixerBusHandle } from '../core/global/mixer-manager'
+import type { MixerBusHandle } from '../core/global/mixer-manager'
+import { loadPluginCatalog, type PluginCatalogEntry } from '../core/global/plugin-catalog'
+import { Sequence } from '../core/sequence'
+import { normalizeCatalogName, resolveChainName } from '../signal-chain/resolve'
+import { BUS_DSL_METHODS, GLOBAL_DSL_METHODS, SEQUENCE_DSL_METHODS } from '../signal-chain/runtime'
+
+import type { InterpreterState } from './types'
+
 /**
  * Method evaluation for Interpreter V2
  * Handles method calls and argument processing
@@ -20,17 +30,50 @@
  * // result === global (for chaining)
  * ```
  */
-export async function callMethod(obj: any, methodName: string, args: any[]): Promise<any> {
-  // Process arguments BEFORE the method-existence check: plugin/bus chain names
-  // (SC.3) are NOT real methods until their #517 implementation stage, so a named arg would
-  // otherwise be swallowed by the not-found branch below instead of reaching
-  // the explicit staged-execution guard in processArguments (SC.3.3 forbids that).
-  const processedArgs = await processArguments(methodName, args)
+export async function callMethod(
+  obj: any,
+  methodName: string,
+  args: any[],
+  state?: InterpreterState,
+): Promise<any> {
+  if (state) {
+    const dslMethods =
+      obj instanceof Sequence
+        ? SEQUENCE_DSL_METHODS
+        : obj instanceof Global
+          ? GLOBAL_DSL_METHODS
+          : isMixerBusHandle(obj)
+            ? BUS_DSL_METHODS
+            : new Set<string>()
+    const catalog = loadPluginCatalog()
+    const entries =
+      catalog?.plugins.filter((entry) => normalizeCatalogName(entry.name) === methodName) ?? []
+    const mixerNames = new Set(state.mixers.nodes.keys())
+    const resolution = resolveChainName(methodName, {
+      dslMethods,
+      mixerNames,
+      pluginNames: new Set(entries.length > 0 ? [methodName] : []),
+    })
 
+    if (resolution.kind === 'mixer-name') {
+      throw new Error(
+        `Mixer-name method "${methodName}" is resolved, but routing dispatch arrives in S3 (#517).`,
+      )
+    }
+    if (resolution.kind === 'plugin') {
+      return dispatchPlugin(obj, methodName, args, entries, state)
+    }
+    if (resolution.kind === 'unknown') {
+      throw new Error(
+        `Unknown chain method "${methodName}" on ${obj?.constructor?.name ?? 'receiver'}.`,
+      )
+    }
+  }
+
+  const processedArgs = await processArguments(methodName, args)
   const method = obj[methodName]
   if (!method || typeof method !== 'function') {
-    console.error(`Method not found: ${methodName} on ${obj.constructor.name}`)
-    return obj
+    throw new Error(`Method not found: ${methodName} on ${obj?.constructor?.name ?? 'receiver'}`)
   }
 
   // Call the method
@@ -38,6 +81,99 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 
   // Return the result (usually 'this' for chaining)
   return result || obj
+}
+
+type NamedArg = { type: 'named_arg'; name: string; value: any }
+
+function selector(args: any[], name: string): string | undefined {
+  const match = args.find((arg): arg is NamedArg => arg?.type === 'named_arg' && arg.name === name)
+  return match?.value
+}
+
+function selectCatalogEntries(entries: PluginCatalogEntry[], format?: string, vendor?: string) {
+  const normalized = (value: string) => value.trim().normalize('NFC').toLowerCase()
+  return entries.filter(
+    (entry) =>
+      (format === undefined || normalized(entry.format) === normalized(format)) &&
+      (vendor === undefined || normalized(entry.vendor) === normalized(vendor)),
+  )
+}
+
+async function dispatchPlugin(
+  obj: any,
+  methodName: string,
+  args: any[],
+  entries: PluginCatalogEntry[],
+  state: InterpreterState,
+): Promise<any> {
+  const format = selector(args, 'format')
+  const vendor = selector(args, 'vendor')
+  const candidates = selectCatalogEntries(entries, format, vendor)
+  if (candidates.length === 0) {
+    throw new Error(
+      `Plugin "${methodName}" has no catalog entry matching the requested format/vendor selector.`,
+    )
+  }
+
+  for (const arg of args) {
+    if (!arg || arg.type !== 'named_arg' || arg.name === 'format' || arg.name === 'vendor') continue
+    if (arg.name === 'sidechain') {
+      const auxName = arg.value?.type === 'ref' ? arg.value.name : arg.value
+      const node = state.mixers.nodes.get(auxName)
+      if (!node || node.kind !== 'aux') {
+        throw new Error(`sidechain: "${auxName}" is not a declared aux mixer node.`)
+      }
+      throw new Error(`sidechain: is validated, but its routing requires #409.`)
+    }
+    if (arg.name === 'outs') throw new Error(`outs: requires multi-output routing in #408.`)
+    throw new Error(
+      `named argument "${arg.name}:" requires S4 (#517 Rust param-set/preset/bypass support).`,
+    )
+  }
+
+  const roles = new Set(candidates.flatMap((entry) => entry.roles))
+  let role: 'effect' | 'instrument'
+  if (isMixerBusHandle(obj) || obj instanceof Global) {
+    role = 'effect'
+  } else if (obj instanceof Sequence) {
+    if (roles.has('effect') && roles.has('instrument')) {
+      const displayName = candidates[0].name
+      throw new Error(
+        `Plugin "${displayName}" is ambiguous between effect and instrument roles; ` +
+          `use effect("${displayName}") or instrument("${displayName}") explicitly.`,
+      )
+    }
+    role = roles.has('instrument') ? 'instrument' : 'effect'
+  } else {
+    throw new Error(`Plugin method "${methodName}" cannot be applied to this receiver.`)
+  }
+  if (!roles.has(role)) {
+    throw new Error(`Plugin "${candidates[0].name}" does not support the "${role}" role.`)
+  }
+
+  const displayName = candidates[0].name
+  const spec =
+    format !== undefined
+      ? `${format}/${displayName}`
+      : vendor !== undefined
+        ? `${vendor}/${displayName}`
+        : displayName
+  try {
+    const result =
+      role === 'instrument'
+        ? await (obj as Sequence).instrument(spec)
+        : await (obj as Global | Sequence | MixerBusHandle).effect(spec)
+    return result || obj
+  } catch (error) {
+    if (
+      role === 'effect' &&
+      error instanceof Error &&
+      /one insert|single insert|one slot/i.test(error.message)
+    ) {
+      throw new Error(`${error.message} S4 (#517 multiple insert support) will lift this limit.`)
+    }
+    throw error
+  }
 }
 
 /**
@@ -73,8 +209,8 @@ export async function processArguments(methodName: string, args: any[]): Promise
       switch (arg.name) {
         case 'format':
         case 'vendor':
-          stage = 'selectors (format:/vendor:) arrive with plugin resolution in S2'
-          break
+          processed.push(arg)
+          continue
         case 'sidechain':
           stage = 'sidechain routing arrives in #409'
           break

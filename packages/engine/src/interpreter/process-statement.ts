@@ -62,7 +62,7 @@ export async function processStatement(
       } else {
         const node = resolveMixerNode(state.mixers, statement.target, state.currentGlobal)
         if (node) {
-          await processMixerNodeStatement(statement, node)
+          await processMixerNodeStatement(statement, node, state)
         } else {
           throw new Error(`Variable not found: ${statement.target}`)
         }
@@ -113,15 +113,16 @@ async function applyMethodChain(
   receiver: unknown,
   method: string,
   args: any[],
+  state: InterpreterState,
   chain?: ReadonlyArray<{ method: string; args: any[] }>,
 ): Promise<any> {
   const pending = [method, ...(chain ?? []).map((call) => call.method)]
   guardBusChain(receiver, pending)
 
-  let result: any = await callMethod(receiver, method, args)
+  let result: any = await callMethod(receiver, method, args, state)
   for (const [index, chainedCall] of (chain ?? []).entries()) {
     guardBusChain(result, pending.slice(index + 1))
-    result = await callMethod(result, chainedCall.method, chainedCall.args)
+    result = await callMethod(result, chainedCall.method, chainedCall.args, state)
   }
   return result
 }
@@ -129,8 +130,15 @@ async function applyMethodChain(
 async function processMixerNodeStatement(
   statement: SequenceStatement,
   node: MixerRuntimeNode,
+  state: InterpreterState,
 ): Promise<void> {
-  await applyMethodChain(mixerNodeReceiver(node), statement.method, statement.args, statement.chain)
+  await applyMethodChain(
+    mixerNodeReceiver(node),
+    statement.method,
+    statement.args,
+    state,
+    statement.chain,
+  )
 }
 
 /**
@@ -198,7 +206,7 @@ async function processMixerHandleStatement(
   const global = requireGlobal(state, `${statement.kind}("${statement.name}")`)
   if (!global) return
 
-  await applyMethodChain(global, statement.kind, [statement.name], statement.chain)
+  await applyMethodChain(global, statement.kind, [statement.name], state, statement.chain)
 }
 
 /**
@@ -226,7 +234,7 @@ export async function processGlobalStatement(
     throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  await applyMethodChain(global, statement.method, statement.args, statement.chain)
+  await applyMethodChain(global, statement.method, statement.args, state, statement.chain)
 }
 
 /**
@@ -254,7 +262,7 @@ export async function processSequenceStatement(
     throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  await applyMethodChain(sequence, statement.method, statement.args, statement.chain)
+  await applyMethodChain(sequence, statement.method, statement.args, state, statement.chain)
 }
 
 /**
