@@ -329,6 +329,15 @@ export class Global {
     return this.mixerManager.resolveAux(name)
   }
 
+  /** Resolves either string-form mixer bus kind without allocating. @internal */
+  resolveMixerBus(name: string): { kind: 'sum' | 'aux'; bus: string } | undefined {
+    return this.mixerManager.resolveNode(name)
+  }
+
+  ownsMixerBus(bus: string): boolean {
+    return this.mixerManager.ownsBus(bus)
+  }
+
   /**
    * Issues (or re-issues) `SetBusRouting` for `seqBus` (MX.4/#459/#453 M3). `output` /
    * `sends` should be the sequence's FULL current routing state — see

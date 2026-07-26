@@ -11,6 +11,14 @@ export const GLOBAL_DSL_METHODS: ReadonlySet<string> = new Set([
   'midiLatency',
   'audioPath',
   'audioDevice',
+  // Injected as DSL source by the host, not called only from TypeScript: the
+  // extension prepends `global.setDocumentDirectory("...")` to every evaluation
+  // so `audio()` resolves relative to the edited file (extension.ts, and the MCP
+  // evaluate path mirrors it). It therefore belongs to the Global DSL surface —
+  // classifying it as an internal API made the reverse-direction test pass while
+  // the runtime path threw `Unknown chain method` on every editor evaluation
+  // (regression from #519 S2, found by driving the real app in #523).
+  'setDocumentDirectory',
   'linkAudio',
   'effect',
   'instrument',
@@ -166,7 +174,8 @@ export function registerMixerHandle(state: InterpreterState, statement: MixerIni
   const existing = state.mixers.handles.get(statement.variableName)
   if (existing && existing !== global) {
     throw new Error(
-      `Mixer handle "${statement.variableName}" is already bound to a different Global.`,
+      `Mixer handle "${statement.variableName}" is already bound to a different Global; ` +
+        `live replacement is staged for S4 (#522).`,
     )
   }
 
@@ -211,7 +220,8 @@ export function registerMixerNode(
     if (existing.global !== mixerGlobal || existing.kind !== statement.kind) {
       throw new Error(
         `Mixer node "${statement.variableName}" is already declared as ${existing.kind}; ` +
-          `it cannot be redeclared as ${statement.kind}.`,
+          `it cannot be redeclared as ${statement.kind} in v1; live replacement is staged ` +
+          `for S4 (#522).`,
       )
     }
     if (
@@ -222,7 +232,7 @@ export function registerMixerNode(
       throw new Error(
         `Mixer output "${statement.variableName}" is already declared for channels ` +
           `(${existing.channels.join(', ')}); cannot redeclare for ` +
-          `(${statement.channels?.join(', ')}).`,
+          `(${statement.channels?.join(', ')}) in v1; live replacement is staged for S4 (#522).`,
       )
     }
     return existing
@@ -257,8 +267,18 @@ export function resolveMixerNode(
   name: string,
   global?: Global,
 ): MixerRuntimeNode | undefined {
+  // `explicit.global` is always a real Global, so when `global` is undefined
+  // this comparison is false for every node — an unresolved owning Global
+  // (#523 IMPORTANT 7) must not fall back to matching a name against ANY
+  // registered Global, which would silently revert to the pre-SC.4
+  // unrestricted lookup and break cross-Global isolation (SC.4).
   const explicit = registry.nodes.get(name)
-  if (explicit) return explicit
+  if (explicit?.global === global) return explicit
+  const stringNode = global ? global.resolveMixerBus(name) : undefined
+  if (global && stringNode) {
+    const handle = global[stringNode.kind](name)
+    return { kind: stringNode.kind, global, handle }
+  }
   if (!global || name !== 'master') return undefined
 
   for (const node of registry.nodes.values()) {

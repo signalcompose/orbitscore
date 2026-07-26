@@ -1379,6 +1379,11 @@ sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（v1 は 1 �
 - sum の **ネストは v1 不可**（1 段・将来拡張として予約）
 - seq が per-seq insert（`seq.effect()`）を持つ場合の処理順: **per-seq insert → group bus**
   （DAW の track insert → group と同型）
+- **master への明示的な復帰**: `SetBusRouting` の `output` に予約語 `"master"` を渡すと、
+  sum への出力先指定を解除して hardware/master へ戻す（#517 S3 で追加）。`output` の
+  **省略**は従来どおり「既存の出力先を保持（変更なし）」を意味し、予約語との区別で
+  三状態を表現する。native 側の routing エンコードは以前から `1 = Master` を持っており、
+  本変更は control-plane（parse + 検証 + TS 3層 + respawn cache）のみに閉じる
 
 ### MX.3 aux / send — `global.aux(name)` / `seq.send(name, amount)`
 

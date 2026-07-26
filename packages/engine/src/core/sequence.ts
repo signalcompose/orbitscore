@@ -77,6 +77,16 @@ function writtenPitchOf(ev: TimedEvent): SymbolicPitch {
   )
 }
 
+/**
+ * The `sends` half of a full-state `SetBusRouting` payload. Shared by both push
+ * paths so the payload shape cannot drift between them. Kept off the prototype:
+ * every `Sequence` method is part of the surface a plugin name could shadow
+ * (SC.2 norm 3), so internal helpers stay module-level.
+ */
+function buildRoutingSends(auxSends: ReadonlyMap<string, number>): { bus: string; gain: number }[] {
+  return Array.from(auxSends.entries()).map(([bus, gain]) => ({ bus, gain }))
+}
+
 export class Sequence {
   private global: Global
   private audioEngine: AudioEngine
@@ -369,6 +379,11 @@ export class Sequence {
     return this._outputChannel
   }
 
+  /** Owning Global identity for Global-scoped dynamic mixer-name resolution. @internal */
+  getGlobal(): Global {
+    return this.global
+  }
+
   /**
    * Add a send to a declared aux/return bus (MX.3, #459/#453 M3). Post-fader fixed (after
    * this sequence's own insert, if any). Multiple sends fan out (repeated calls with
@@ -403,6 +418,52 @@ export class Sequence {
     return this
   }
 
+  /** Awaitable routing entry used only by Signal Chain mixer-name sugar. */
+  async routeOutputFromDsl(output: string): Promise<this> {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this.isNoteSequence()) {
+      throw new Error(
+        `Sequence '${name}': mixer output routing is only supported on audio sequences in v1.`,
+      )
+    }
+    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    this._sumOutputBus = output
+    await this.pushBusRouting()
+    return this
+  }
+
+  /** Awaitable routing entry used only by Signal Chain aux-name sugar. */
+  async routeSendFromDsl(auxBus: string, amount: number): Promise<this> {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this.isNoteSequence()) {
+      throw new Error(
+        `Sequence '${name}': send routing is only supported on audio sequences in v1.`,
+      )
+    }
+    if (!Number.isFinite(amount)) {
+      throw new Error(`Sequence '${name}': send gain must be finite.`)
+    }
+    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    this._auxSends.set(auxBus, amount)
+    await this.pushBusRouting()
+    return this
+  }
+
+  private async pushBusRouting(): Promise<void> {
+    if (!this._insertBus) return
+    try {
+      await this.global.setBusRouting(
+        this._insertBus,
+        this._sumOutputBus,
+        buildRoutingSends(this._auxSends),
+      )
+      this._busRoutingStale = false
+    } catch (error) {
+      this._busRoutingStale = true
+      throw error
+    }
+  }
+
   /**
    * Re-issues `SetBusRouting` with the FULL current routing state (output + all sends) for
    * this sequence's insert bus (MX.4/#459/#453 M3). Fire-and-forget + best-effort, mirroring
@@ -412,11 +473,7 @@ export class Sequence {
   private syncBusRouting(): void {
     if (!this._insertBus) return
     const bus = this._insertBus
-    const sends = Array.from(this._auxSends.entries()).map(([sendBus, gain]) => ({
-      bus: sendBus,
-      gain,
-    }))
-    void this.global.setBusRouting(bus, this._sumOutputBus, sends).then(
+    void this.global.setBusRouting(bus, this._sumOutputBus, buildRoutingSends(this._auxSends)).then(
       () => {
         this._busRoutingStale = false
       },

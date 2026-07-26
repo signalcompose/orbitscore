@@ -253,15 +253,44 @@ See `.claude/settings.json` for Hook configuration.
 3. 内部レビュー通過後、**advisor に相談**する: ① bot レビュー（`@claude` GitHub review）を受けるか ② 受ける場合のスコープ（load-bearing な箇所に絞る）。必要なら `@claude` を PR コメントで起動し、**bot のレビュー内容を watch して確認**する（bot は「作業中」placeholder を後から更新する方式なので、本文が確定するまでポーリングする）。
 4. bot レビューの**修正内容を advisor と確認**し、**再度 PR レビュー（1・2）が必要か**を判断する。
 
+### 🔴 マージ前ゲート: ビルド + 実機 E2E（必須・owner 指示 2026-07-27）
+
+**マージ指示を仰ぐ前に、必ずビルドして実機で動かし、その PR の機能が動くことを確認する。**
+ユニットテストが全部緑でも実機が壊れていることがある。
+
+手順:
+
+```bash
+npm run build          # engine/daemon に変更があれば npm run build:clean
+```
+
+1. **起動中の OrbitStudio を必ず終了してから起動し直す** — 古い extension host が新しい daemon を
+   spawn すると `DaemonStartupError: daemon exited before ready (code=null)` になる
+2. `ORBITSCORE_MCP_PORT=39123` を付けて起動（この環境変数が無いと MCP サーバーが立たない）
+3. `mcp__orbitscore__get_engine_state` でエンジン起動を確認
+4. **その PR で追加/変更した DSL 機能を `mcp__orbitscore__evaluate_orbitscore` で実際に評価する**
+5. **`mcp__orbitscore__get_log` で ERROR が出ていないことを確認する**
+
+❌ **`evaluate_orbitscore` の `ok` だけで判断しない。** これは「受理して書き込んだ」を返すだけで、
+エンジン側のエラーは `get_log` にしか現れない。
+
+**理由（PR #523 で実証）**: 全 suite 1632 緑・`/simplify` 通過・`/code:pr-review-team` 2ラウンド
+（4レビュアー）通過の状態で、実機で動かしたら **S2 マージ以降エディタ評価が全滅していた**
+（拡張が全評価の先頭に注入する `global.setDocumentDirectory(...)` が DSL 語彙に無く弾かれていた）。
+逆方向テストは「全メソッドが DSL 語彙か内部 API 除外リストのどちらかに分類される」ことしか
+検査しないため、**除外リストへの誤分類でテストは緑・実行時だけ壊れる**。
+机上レビューとユニットテストでは「ホストが注入する経路」は守れない。
+
 ### ドキュメントのみの変更
 
-5. **docs のみの変更**は full PR レビュー（simplify + pr-review-team）がオーバーエンジニアリングになる。**advisor と相談してレビュー方法を決める**（例: comment-analyzer のみ / advisor の直接確認 / bot second-opinion 等）。
+5. **docs のみの変更**は full PR レビュー（simplify + pr-review-team）がオーバーエンジニアリングになる。**advisor と相談してレビュー方法を決める**（例: comment-analyzer のみ / advisor の直接確認 / bot second-opinion 等）。ビルド + 実機 E2E も不要。
 
 ### 禁止事項
 
 - ❌ `/simplify` / `/code:pr-review-team` を Agent tool でハンドロールして代用する
 - ❌ `/code:pr-review-team` の反復ループを自分で round 分割して手動実行する（スキルに収束まで委ねる）
 - ❌ 内部レビュー通過の判定を自己判断で済ませる（独立した再レビュー or bot で裏付ける）
+- ❌ **ビルド + 実機 E2E を省いてマージ指示を仰ぐ**（コード変更を含む PR の場合）
 
 ### 理由
 

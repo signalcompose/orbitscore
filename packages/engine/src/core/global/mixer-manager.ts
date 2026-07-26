@@ -40,8 +40,11 @@ const MIXER_BUS_HANDLE = Symbol('orbitscore.MixerBusHandle')
 export interface MixerBusHandle {
   readonly [MIXER_BUS_HANDLE]: true
   readonly bus: string
+  readonly kind: MixerKind
   /** Declares (or idempotently re-declares) the bus's own insert (MX.2/MX.3: v1 one insert). */
   effect(path: string, pluginId?: string): Promise<MixerBusHandle>
+  routeOutput(output: string): Promise<MixerBusHandle>
+  routeSend(bus: string, amount: number): Promise<MixerBusHandle>
 }
 
 /**
@@ -74,10 +77,11 @@ interface KindState {
  */
 export class MixerManager {
   private readonly kinds: Record<MixerKind, KindState>
+  private readonly routings = new Map<string, { output?: string; sends: Map<string, number> }>()
   private hasRuntimeDeclaration = false
 
   constructor(
-    audioEngine: AudioEngine,
+    private readonly audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
@@ -135,9 +139,35 @@ export class MixerManager {
     return this.kinds.aux.buses.get(name)
   }
 
+  resolveNode(name: string): { kind: MixerKind; bus: string } | undefined {
+    const sum = this.resolveSum(name)
+    if (sum !== undefined) return { kind: 'sum', bus: sum }
+    const aux = this.resolveAux(name)
+    if (aux !== undefined) return { kind: 'aux', bus: aux }
+    return undefined
+  }
+
+  ownsBus(bus: string): boolean {
+    return [...this.kinds.sum.buses.values(), ...this.kinds.aux.buses.values()].includes(bus)
+  }
+
   private declareBus(kind: MixerKind, name: string): MixerBusHandle {
     if (!name || !name.trim()) {
       throw new Error(`global.${kind}(name) requires a non-empty name.`)
+    }
+    // `.master` is reserved for the output endpoint (reset routing to
+    // hardware/master); a sum/aux bus claiming that name would silently shadow
+    // it. Guarded here — rather than at each declaration call site — because
+    // the `var master = mix.sum` node-declaration form (registerMixerNode in
+    // signal-chain/runtime.ts) reaches this SAME method with the declared
+    // variable name, so one check covers both the string form and the
+    // node-declaration form. An output named `master` never reaches here: it
+    // is handled entirely in registerMixerNode without calling sum()/aux().
+    if (name === 'master') {
+      throw new Error(
+        `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
+          `${kind} bus. Choose a different name for this ${kind} bus.`,
+      )
     }
     if (this.linkAudioManager.isEnabled()) {
       throw new Error(`global.${kind}() cannot be used while LinkAudio is enabled in v1.`)
@@ -156,8 +186,43 @@ export class MixerManager {
     return {
       [MIXER_BUS_HANDLE]: true,
       bus,
+      kind,
       effect: (path: string, pluginId?: string) => this.effectFor(kind, name, bus, path, pluginId),
+      routeOutput: async (output: string) => {
+        await this.route(bus, output, undefined)
+        return this.makeHandle(kind, name, bus)
+      },
+      routeSend: async (target: string, amount: number) => {
+        await this.route(bus, undefined, { bus: target, amount })
+        return this.makeHandle(kind, name, bus)
+      },
     }
+  }
+
+  private async route(
+    source: string,
+    output: string | undefined,
+    send: { bus: string; amount: number } | undefined,
+  ): Promise<void> {
+    if (!this.audioEngine.setBusRouting) {
+      throw new Error('Mixer bus routing requires the Rust engine backend.')
+    }
+    const current = this.routings.get(source)
+    // Build the next state without touching the stored one, and commit only after
+    // the daemon accepts it. Merging happens on every call, so a rejected push that
+    // had already been recorded would leave every later call building on a routing
+    // the daemon never applied.
+    const next = {
+      output: output !== undefined ? output : current?.output,
+      sends: new Map(current?.sends),
+    }
+    if (send !== undefined) next.sends.set(send.bus, send.amount)
+    await this.audioEngine.setBusRouting(
+      source,
+      next.output,
+      [...next.sends].map(([bus, gain]) => ({ bus, gain })),
+    )
+    this.routings.set(source, next)
   }
 
   private async effectFor(

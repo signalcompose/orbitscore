@@ -1,4 +1,5 @@
 import { Global } from '../core/global'
+import { EffectSlotLimitError } from '../core/global/effect-slot'
 import { isMixerBusHandle } from '../core/global/mixer-manager'
 import type { MixerBusHandle } from '../core/global/mixer-manager'
 import { loadPluginCatalog, type PluginCatalogEntry } from '../core/global/plugin-catalog'
@@ -8,10 +9,16 @@ import type { NamedArg } from '../parser/types'
 import type { InterpreterState } from '../interpreter/types'
 
 import { normalizeCatalogName, resolveChainName } from './resolve'
-import { BUS_DSL_METHODS, GLOBAL_DSL_METHODS, SEQUENCE_DSL_METHODS } from './runtime'
+import {
+  BUS_DSL_METHODS,
+  GLOBAL_DSL_METHODS,
+  SEQUENCE_DSL_METHODS,
+  resolveMixerNode,
+} from './runtime'
 
 export type ChainDispatch =
   | { kind: 'dsl-method' }
+  | { kind: 'mixer'; node: import('./runtime').MixerRuntimeNode }
   | { kind: 'plugin'; entries: PluginCatalogEntry[] }
 
 const catalogMethodIndexes = new WeakMap<
@@ -24,7 +31,14 @@ function catalogEntriesForMethod(methodName: string): PluginCatalogEntry[] {
   // Reuse the catalog resolver's canonical missing-catalog diagnostic instead
   // of collapsing absence into the same empty result as a misspelled name.
   if (!catalog) {
-    resolveCatalogSpec(methodName, undefined, undefined)
+    try {
+      resolveCatalogSpec(methodName, undefined, undefined)
+    } catch (error) {
+      if (error instanceof Error) {
+        throw new Error(`${error.message} Also check the DSL method name for a typo.`)
+      }
+      throw error
+    }
     throw new Error('Plugin catalog resolution unexpectedly returned without a catalog.')
   }
 
@@ -48,6 +62,7 @@ export function resolveChainDispatch(
   receiver: unknown,
   methodName: string,
   state: InterpreterState,
+  invocation: 'bare' | 'call' = 'call',
 ): ChainDispatch {
   const dslMethods =
     receiver instanceof Sequence
@@ -62,23 +77,54 @@ export function resolveChainDispatch(
   // plugin catalog.
   if (dslMethods.has(methodName)) return { kind: 'dsl-method' }
 
+  const receiverGlobal = resolveReceiverGlobal(receiver, state)
+  const node = resolveMixerNode(state.mixers, methodName, receiverGlobal)
   const entries = catalogEntriesForMethod(methodName)
   const resolution = resolveChainName(methodName, {
     dslMethods,
-    mixerNames: state.mixers.nodes,
+    mixerNames: {
+      // `resolveChainName` queries this with the same name it was handed
+      // (resolve.ts:61), so the node resolved above already is the answer.
+      // Re-resolving would rebuild a mixer-bus handle just to discard it.
+      has: () => node !== undefined,
+    },
     pluginNames: new Set(entries.length > 0 ? [methodName] : []),
   })
 
   if (resolution.kind === 'mixer-name') {
-    throw new Error(
-      `Mixer-name method "${methodName}" is resolved, but routing dispatch arrives in S3 (#517).`,
-    )
+    if (!node) throw new Error(`Mixer node "${methodName}" is not visible from this Global.`)
+    return { kind: 'mixer', node }
   }
-  if (resolution.kind === 'plugin') return { kind: 'plugin', entries }
+  if (resolution.kind === 'plugin') {
+    if (invocation === 'bare') {
+      throw new Error(
+        `Plugin method "${methodName}" requires parentheses; write ${methodName}(). ` +
+          `Bare names are reserved for mixer output routing.`,
+      )
+    }
+    return { kind: 'plugin', entries }
+  }
   const receiverName = isMixerBusHandle(receiver)
     ? `mixer bus "${receiver.bus}"`
     : ((receiver as any)?.constructor?.name ?? 'receiver')
   throw new Error(`Unknown chain method "${methodName}" on ${receiverName}.`)
+}
+
+/**
+ * Which Global owns this chain receiver — the scope every mixer-name lookup is
+ * resolved against (SC.4: a node declared on another Global is not in scope).
+ *
+ * Kept as one function because both mixer-name resolution and `sidechain:`
+ * validation need it; a mixer-bus handle carries no back-reference, so its owner
+ * is found by asking each Global whether it owns that bus.
+ */
+function resolveReceiverGlobal(receiver: unknown, state: InterpreterState): Global | undefined {
+  if (receiver instanceof Sequence) return receiver.getGlobal()
+  if (receiver instanceof Global) return receiver
+  if (isMixerBusHandle(receiver)) {
+    return [...state.globals.values()].find((candidate) => candidate.ownsMixerBus(receiver.bus))
+  }
+  return undefined
 }
 
 type PluginArguments = {
@@ -131,6 +177,7 @@ function validateReservedArgumentShape(methodName: string, named: NamedArg): voi
  * rather than adding an early branch that can skip an argument.
  */
 function classifyPluginArguments(
+  receiver: unknown,
   methodName: string,
   args: readonly unknown[],
   state: InterpreterState,
@@ -160,7 +207,8 @@ function classifyPluginArguments(
         return { ...classified, vendor: named.value as string }
       case 'sidechain': {
         const auxName = (named.value as { type: 'ref'; name: string }).name
-        const node = state.mixers.nodes.get(auxName)
+        const global = resolveReceiverGlobal(receiver, state)
+        const node = resolveMixerNode(state.mixers, auxName, global)
         if (!node || node.kind !== 'aux') {
           throw new Error(`sidechain: "${auxName}" is not a declared aux mixer node.`)
         }
@@ -183,7 +231,7 @@ export async function dispatchPlugin(
   entries: PluginCatalogEntry[],
   state: InterpreterState,
 ): Promise<any> {
-  const { format, vendor } = classifyPluginArguments(methodName, args, state)
+  const { format, vendor } = classifyPluginArguments(receiver, methodName, args, state)
   const resolved = resolveCatalogMethodCandidates(methodName, entries, format, vendor, undefined)
   const displayName = resolved.entry.name
   const spec =
@@ -219,11 +267,7 @@ export async function dispatchPlugin(
         : await (receiver as Global | Sequence | MixerBusHandle).effect(spec)
     return result || receiver
   } catch (error) {
-    if (
-      role === 'effect' &&
-      error instanceof Error &&
-      /one insert|single insert|one slot/i.test(error.message)
-    ) {
+    if (role === 'effect' && error instanceof EffectSlotLimitError) {
       throw new Error(`${error.message} S4 (#517 multiple insert support) will lift this limit.`)
     }
     throw error

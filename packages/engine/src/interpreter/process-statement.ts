@@ -14,6 +14,9 @@ import {
   ImportStatement,
   MixerHandleStatement,
 } from '../parser/audio-parser'
+import { Global } from '../core/global'
+import { Sequence } from '../core/sequence'
+import { isMixerBusHandle } from '../core/global/mixer-manager'
 import { dispatchPlugin, resolveChainDispatch } from '../signal-chain/dispatch'
 import {
   guardBusChain,
@@ -26,6 +29,13 @@ import {
 
 import { InterpreterState } from './types'
 import { callMethod } from './evaluate-method'
+
+/**
+ * Global methods that may be written without parentheses. Mirrors the transport
+ * set the pre-#517-S3 `handleGlobalTransportCommand` actually executed; every
+ * other Global DSL method takes arguments, so a bare form is a dropped `(...)`.
+ */
+const GLOBAL_BARE_METHODS: ReadonlySet<string> = new Set(['start', 'stop', 'loop'])
 
 /**
  * Process a statement
@@ -117,22 +127,146 @@ async function applyMethodChain(
   method: string,
   args: any[],
   state: InterpreterState,
-  chain?: ReadonlyArray<{ method: string; args: any[] }>,
+  chain?: ReadonlyArray<{
+    method: string
+    args: any[]
+    invocation?: 'bare' | 'call'
+  }>,
+  invocation: 'bare' | 'call' = 'call',
 ): Promise<any> {
-  async function dispatchCall(receiver: unknown, method: string, args: any[]): Promise<any> {
-    const dispatch = resolveChainDispatch(receiver, method, state)
-    return dispatch.kind === 'plugin'
-      ? dispatchPlugin(receiver, method, args, dispatch.entries, state)
-      : callMethod(receiver, method, args)
+  async function dispatchCall(
+    receiver: unknown,
+    method: string,
+    args: any[],
+    invocation: 'bare' | 'call',
+  ): Promise<any> {
+    const dispatch = resolveChainDispatch(receiver, method, state, invocation)
+    if (
+      dispatch.kind === 'dsl-method' &&
+      invocation === 'bare' &&
+      receiver instanceof Global &&
+      !GLOBAL_BARE_METHODS.has(method)
+    ) {
+      // Before #517 S3, a bare non-transport call on a Global reached
+      // `handleGlobalTransportCommand`, whose `default` arm warned and never
+      // invoked the method. S3 routes every bare first hop through the chain
+      // dispatcher instead, so `global.midiLatency` (a dropped `(20)`) would call
+      // `midiLatency(undefined)` and silently corrupt state — reproduced, along
+      // with `global.key` crashing inside `name.match(...)`. Sequences keep bare
+      // DSL methods (`kick.unmute`); only a Global needs the parentheses, since
+      // its bare vocabulary is transport-only.
+      throw new Error(
+        `Global method "${method}" requires parentheses; write global.${method}(...). ` +
+          `Only ${[...GLOBAL_BARE_METHODS].join(' / ')} may be written bare on a Global.`,
+      )
+    }
+    if (dispatch.kind === 'plugin') {
+      return dispatchPlugin(receiver, method, args, dispatch.entries, state)
+    }
+    if (dispatch.kind === 'mixer') {
+      if (!(receiver instanceof Sequence) && !isMixerBusHandle(receiver)) {
+        // Permanent, not staged: SIGNAL_CHAIN_DSL_SPEC_v1 enumerates routing
+        // receivers as sequences and buses — SC.2 norm (4) ("バス自身もレシーバ
+        // である": a bus takes chains and output targets in the same form as a
+        // sequence) and SC.3.1 ("receiver = シーケンス or バス"). A Global is the
+        // console the buses live on, not a signal source. The only receiver that
+        // reaches here is a Global resolving a bare bus name (e.g.
+        // `global.drums`), which #517/#522 do not stage any support for.
+        // (SC.4 defines what each node kind's method MEANS, not who may route —
+        // do not cite it for this constraint.)
+        throw new Error(
+          `Mixer routing sources are Sequences and mixer buses only; a Global cannot route ` +
+            `to "${method}" by bus name.`,
+        )
+      }
+      if (dispatch.node.kind === 'aux') {
+        if (invocation !== 'call') {
+          throw new Error(`Aux mixer "${method}" requires parentheses because it is a send.`)
+        }
+        let amount: number | undefined
+        let enabled = true
+        // `seen` rejects a second specification of `amount` (positional or
+        // named) or `enabled`, the same shape `classifyPluginArguments`
+        // (dispatch.ts) uses for plugin-method arguments: reuse rather than
+        // re-implement, so this loop cannot silently let one value overwrite
+        // another (#523 CRITICAL 4).
+        const seen = new Set<'amount' | 'enabled'>()
+        for (const arg of args) {
+          if (typeof arg === 'number') {
+            if (seen.has('amount')) {
+              throw new Error(
+                `Aux mixer "${method}" specifies duplicate amount (positional/amount:).`,
+              )
+            }
+            seen.add('amount')
+            amount = arg
+          } else if (arg?.type === 'named_arg' && arg.name === 'amount') {
+            if (seen.has('amount')) {
+              throw new Error(
+                `Aux mixer "${method}" specifies duplicate amount (positional/amount:).`,
+              )
+            }
+            seen.add('amount')
+            if (typeof arg.value !== 'number') {
+              throw new Error(`Aux mixer "${method}" amount: must be numeric.`)
+            }
+            amount = arg.value
+          } else if (arg?.type === 'named_arg' && arg.name === 'enabled') {
+            if (seen.has('enabled')) {
+              throw new Error(`Aux mixer "${method}" specifies duplicate enabled:.`)
+            }
+            seen.add('enabled')
+            if (typeof arg.value !== 'boolean') {
+              throw new Error(`Aux mixer "${method}" enabled: must be boolean.`)
+            }
+            enabled = arg.value
+          } else {
+            throw new Error(
+              `Aux mixer "${method}" accepts amount: and enabled: routing arguments only.`,
+            )
+          }
+        }
+        if (amount === undefined) {
+          throw new Error(`Aux mixer "${method}" send requires a numeric amount.`)
+        }
+        const gain = enabled ? amount : 0
+        return receiver instanceof Sequence
+          ? receiver.routeSendFromDsl(dispatch.node.handle.bus, gain)
+          : receiver.routeSend(dispatch.node.handle.bus, gain)
+      }
+      if (invocation !== 'bare') {
+        throw new Error(`Mixer ${dispatch.node.kind} "${method}" is an output, not a send.`)
+      }
+      if (dispatch.node.kind === 'output') {
+        const [left, right] = dispatch.node.channels
+        if (left !== 1 || right !== 2) {
+          throw new Error(
+            `Mixer output "${method}" (channels ${left}, ${right}) cannot be routed to yet: ` +
+              `only the master endpoint (channels 1, 2) is routable in S3. Physical ` +
+              `multi-output routing is staged for #484 D4.`,
+          )
+        }
+      }
+      const output = dispatch.node.kind === 'output' ? 'master' : dispatch.node.handle.bus
+      return receiver instanceof Sequence
+        ? receiver.routeOutputFromDsl(output)
+        : receiver.routeOutput(output)
+    }
+    return callMethod(receiver, method, args)
   }
 
   const pending = [method, ...(chain ?? []).map((call) => call.method)]
   guardBusChain(receiver, pending)
 
-  let result: any = await dispatchCall(receiver, method, args)
+  let result: any = await dispatchCall(receiver, method, args, invocation)
   for (const [index, chainedCall] of (chain ?? []).entries()) {
     guardBusChain(result, pending.slice(index + 1))
-    result = await dispatchCall(result, chainedCall.method, chainedCall.args)
+    result = await dispatchCall(
+      result,
+      chainedCall.method,
+      chainedCall.args,
+      chainedCall.invocation ?? 'call',
+    )
   }
   return result
 }
@@ -148,6 +282,7 @@ async function processMixerNodeStatement(
     statement.args,
     state,
     statement.chain,
+    statement.invocation ?? 'call',
   )
 }
 
@@ -244,7 +379,14 @@ export async function processGlobalStatement(
     throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  await applyMethodChain(global, statement.method, statement.args, state, statement.chain)
+  await applyMethodChain(
+    global,
+    statement.method,
+    statement.args,
+    state,
+    statement.chain,
+    statement.invocation ?? 'call',
+  )
 }
 
 /**
@@ -272,7 +414,14 @@ export async function processSequenceStatement(
     throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  await applyMethodChain(sequence, statement.method, statement.args, state, statement.chain)
+  await applyMethodChain(
+    sequence,
+    statement.method,
+    statement.args,
+    state,
+    statement.chain,
+    statement.invocation ?? 'call',
+  )
 }
 
 /**

@@ -65,10 +65,10 @@ describe('named arguments (SC.3)', () => {
     // produced a misleading "second pluginId" error from the resolver instead.
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'format', value: 'CLAP' }]),
-    ).rejects.toThrow(/S2.*#517/)
+    ).rejects.toThrow(/string-form HogeComp\(\).*Name\(format: "vst3"\).*#517/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'vendor', value: 'Acme' }]),
-    ).rejects.toThrow(/S2.*#517/)
+    ).rejects.toThrow(/string-form HogeComp\(\).*Name\(format: "vst3"\).*#517/)
     await expect(
       processArguments('HogeComp', [
         { type: 'named_arg', name: 'sidechain', value: { type: 'ref', name: 'duck' } },
@@ -193,6 +193,44 @@ describe('chain notation (SC.0 / SC.4)', () => {
   // primitives. Execution is now covered from the interpreter side by
   // tests/interpreter/mixer-runtime.spec.ts; the parse-level assertions for the
   // same shapes remain above.
+
+  it('keeps the tail of a chain that starts with a bare hop (#523 CRITICAL 3)', () => {
+    // Regression: parseBareMethodReference used to return immediately without
+    // calling parseMethodChain(), so `kick.drums.pan(0.5)` parsed only the
+    // `drums` hop and silently dropped `.pan(0.5)`.
+    const ir = parseAudioDSL('kick.drums.pan(0.5)')
+    const statement = ir.statements[0] as {
+      type: string
+      target: string
+      method: string
+      invocation?: string
+      chain?: Array<{ method: string; args: unknown[] }>
+    }
+    expect(statement).toMatchObject({
+      type: 'sequence',
+      target: 'kick',
+      method: 'drums',
+      invocation: 'bare',
+    })
+    expect(statement.chain).toMatchObject([{ method: 'pan', args: [0.5] }])
+  })
+
+  it('keeps the tail after a bare non-transport-command first hop (#523 CRITICAL 3)', () => {
+    const ir = parseAudioDSL('kick.unmute.pan(0.5)')
+    const statement = ir.statements[0] as {
+      type: string
+      method: string
+      chain?: Array<{ method: string; args: unknown[] }>
+    }
+    expect(statement).toMatchObject({ type: 'sequence', method: 'unmute' })
+    expect(statement.chain).toMatchObject([{ method: 'pan', args: [0.5] }])
+  })
+
+  it('still parses a genuine bare transport command with no chain (#523 CRITICAL 3)', () => {
+    const ir = parseAudioDSL('kick.start')
+    expect(ir.statements[0]).toMatchObject({ type: 'transport', target: 'kick', command: 'start' })
+    expect((ir.statements[0] as { chain?: unknown }).chain).toBeUndefined()
+  })
 })
 
 describe('shared name resolution (SC.2 norm 3 / SC.3.2)', () => {

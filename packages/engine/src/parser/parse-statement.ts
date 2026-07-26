@@ -25,6 +25,13 @@ import {
 import { ParserUtils } from './parser-utils'
 import { ExpressionParser, collapseScopedRun } from './parse-expression'
 
+/**
+ * Bare method names that stay TransportStatements (SC.1). Every other bare name
+ * becomes a `sequence` statement with `invocation: 'bare'` so the interpreter can
+ * tell `.drums` (mixer output routing) from `.TALReverb4()` (a plugin call).
+ */
+const TRANSPORT_COMMANDS: ReadonlySet<string> = new Set(['start', 'stop', 'loop', 'run', 'mute'])
+
 /** Semitone offset of one `mode(...)` element (a root-scope degree) from the tonic (§2.2). */
 function modeElementSemitone(el: PlayElement): number {
   if (typeof el === 'number') return degreeToSemitone(el)
@@ -521,8 +528,9 @@ export class StatementParser {
       return this.parseMethodWithArguments(target, method)
     }
 
-    // Method without parentheses (transport commands)
-    return this.parseTransportCommand(target, method)
+    // Method without parentheses: either a genuine transport command, or a bare
+    // chain hop (e.g. mixer output routing) that may still have a chain tail.
+    return this.parseBareMethodReference(target, method)
   }
 
   /**
@@ -665,7 +673,7 @@ export class StatementParser {
         this.pos = chainArgsResult.newPos
         chain.push({ method: chainMethod, args: chainArgsResult.args })
       } else {
-        chain.push({ method: chainMethod, args: [] })
+        chain.push({ method: chainMethod, args: [], invocation: 'bare' })
       }
 
       // Update current for next iteration
@@ -677,12 +685,34 @@ export class StatementParser {
   }
 
   /**
-   * Parse transport command (method without parentheses)
+   * Parse a bare method reference (no parentheses on the first hop): either a
+   * genuine transport command (`start`/`stop`/`loop`/`run`/`mute`), which never
+   * carries a chain, or a bare chain hop (e.g. `kick.drums.pan(0.5)`, mixer
+   * output routing). The parenthesised path (`parseMethodWithArguments`) always
+   * continues into `parseMethodChain()`; this path must do the same for the
+   * non-transport case, or a chain that STARTS bare loses everything after its
+   * first hop (chain hops that are themselves bare, e.g. `verb.Plugin().master`,
+   * already work — `parseMethodChain` sets `invocation: 'bare'` per hop).
    */
-  private parseTransportCommand(
+  private parseBareMethodReference(
     target: string,
     command: string,
   ): { statement: Statement; newPos: number } {
+    if (!TRANSPORT_COMMANDS.has(command)) {
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      const chain = this.parseMethodChain()
+      const result: any = {
+        type: 'sequence',
+        target,
+        method: command,
+        args: [],
+        invocation: 'bare',
+      }
+      if (chain.length > 0) {
+        result.chain = chain
+      }
+      return { statement: result, newPos: this.pos }
+    }
     return {
       statement: {
         type: 'transport',

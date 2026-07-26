@@ -67,7 +67,9 @@ export async function processArguments(methodName: string, args: any[]): Promise
       switch (arg.name) {
         case 'format':
         case 'vendor':
-          stage = 'selectors (format:/vendor:) arrive with plugin resolution in S2'
+          stage =
+            `string-form ${methodName}() does not accept selectors; ` +
+            `use the plugin-name method form Name(format: "vst3")`
           break
         case 'sidechain':
           stage = 'sidechain routing arrives in #409'

@@ -17,6 +17,212 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.293 feat(engine): Signal Chain バス名メソッドのルーティング写像 #517 S3 (Jul 26, 2026)
+
+**Date**: 2026-07-26
+**Status**: 🔄 レビュー前（実装完了・#521）
+
+**内容**:
+バス名メソッドを既存の send / output 経路へ写像し、SC.4 のルーティング意味論を実行可能にした。
+あわせて S1 / S2 から持ち越した義務6件を片付けた（いずれも S3 の実装で必ず触る箇所）。
+
+計画: Codex 起案 → Fable 独立第二意見 → 判断3件を owner 承認 → 確定（#521 コメント）。
+
+**Q1: 括弧なし単独文を SC.1(1) の等価性に載せる（義務 a）**:
+根本原因は「括弧の有無を interpreter に伝える情報が AST に無い」ことだった。`.drums` と
+`.TALReverb4()` はどちらも `args: []` に潰れており区別できなかった。`invocation: 'bare' | 'call'`
+を主呼び出しと全 chain hop に持たせ、分岐を行列で total にした:
+
+| | mixer sum/output | mixer aux | plugin | DSL method |
+|---|---|---|---|---|
+| bare | 出力先指定 | 明示エラー（kind） | `Name()` を案内 | **従来どおり `callMethod`** |
+| call | 明示エラー（kind） | send | plugin dispatch | 従来どおり |
+
+既知 transport（`start` / `stop` / `loop` / `run` / `mute`）は従来の AST を維持する。
+**`bare × DSL method` のセルは Fable が「計画の行列に無い」と指摘したもの**で、抜けると
+`kick.unmute` 等の既存動作が壊れる。回帰テストで固定した。
+
+S2 で「transport 経路に state を渡す」案を却下した理由（括弧なしの `kick.TALReverb4` が
+プラグイン dispatch され SC.4 決定 #77 に反する）は、この形では発生しない。
+
+**Q2: await 可能なルーティング経路（SC.2 規範5）**:
+`.verb(0.3)` / `.drums` / `.master` が評価 promise から await され、daemon の DAG / kind /
+逆 stage 拒否が伝播する。既存の同期契約は不変。Sequence と MixerBusHandle の双方が
+レシーバになれる（SC.2 規範4 の `verb.Plugin().master`）。
+
+> **訂正（レビュー #523 comment-analyzer の指摘）**: 当初ここに「routing 状態と full-state
+> payload 構築は共有 primitive に集約し、双方から使う」と書いたが、**実装はそうなっていない**。
+> Sequence 側は `_sumOutputBus` / `_auxSends` + モジュール関数 `buildRoutingSends()`、
+> MixerManager 側は `routings` Map + `route()` 内のインライン変換で、同型のロジックを
+> それぞれが個別に持つ（`Map<string, number>` → `{bus, gain}[]` の変換が2箇所）。
+> `6e96c31` が集約したのは **Sequence 内部の2箇所（`pushBusRouting` / `syncBusRouting`）の
+> 重複のみ**。両者の統合は #522 で検討する。
+
+**`.master` — 予約語で hardware/master へ復帰**:
+`SetBusRouting` の `output` に予約語 `"master"` を渡すと sum への出力先指定を解除する。
+`output` の省略は従来どおり「変更なし」で、三状態を表現する。
+
+形式は**予約語を採用**（Codex の推奨は null 三状態だったが Fable が却下理由の誤りを実証）:
+wire 上の bus 名はプール名のみでユーザー宣言名は乗らないため衝突しない。`engine_wrap.rs` に
+予約コメントが既にあり、native のエンコードも `1 = Master` を持っていた。Rust 側の変更は最小限で、
+エンコード計算を検証段階へ寄せた（master は bus 索引を持たないため、従来の「検証は索引を返し
+ストア段階で +2」の分業では表現できなかった）。実装により無効化された予約コメントも実態に更新した。
+
+**Q3: 暗黙 master と文字列形バス名の語彙統合（義務 b・c）**:
+Global ごとの「有効 mixer node view」を canonical lookup に一本化。解決順は registry の明示ノード →
+同じ Global の文字列形 sum/aux → 明示ノードが無い場合のみ暗黙 master(1,2)。**同じ defaulting を
+2箇所で再実装しない。**`sidechain:` も同じ lookup。
+
+**暗黙 master の抑制は明示ノードのみで判定する**（Fable 指摘の追補3）。文字列形宣言を「明示」に
+含めると `global.sum("drums")` だけのファイルで `master` が語彙から消えて**互換破壊**になる。
+
+**Q4: Global 横断性（義務 d）**:
+Global 一致を canonical lookup の**必須引数**に。別 Global の同名ノードは語彙として見えず
+routing target にも使えない。
+
+**Q5: SC.5「後勝ち」（義務 e）→ S4（#522）**:
+staging と明文化し（spec 更新は `62f6bc9`）、kind / channel / Global 変更のエラーに
+**`S4 (#522)` の stage 表記を追加**した。
+
+**Q6: エラー文言債務（義務 f）**:
+- **文言スニッフィングを型付きエラーへ**: `EffectSlotLimitError` / `EFFECT_SLOT_LIMIT`。従来の
+  正規表現は Global の実文言 `one master insert` にマッチせず、**S4 案内が付かないバグだった**
+  （#521 コメントに実測記録）。テストが捏造文言で通していたため検出できなかった
+- 捏造 mock 文言のテストを廃し、実 manager の文言で検証する
+- string-form API に selector を渡した場合の案内を plugin method 形に更新
+- catalog 不在メッセージに typo 確認の案内を追加
+
+**send のタップ位置 → S4（#522）**:
+SC.4 規範3 は v1 では post-insert 固定。core spec MX.3 が以前から staging を宣言しており SC.4 側に
+反映した（`62f6bc9`）。v1 は 1 insert 制限でタップ点の区別が意味を持たず、複数 insert のスロット
+index と不可分。
+
+**テスト**:
+- fail-before 4件 → pass-after 21件（`signal-chain-dispatch.spec.ts`）
+- Rust: `reserved_master_output_resets_the_routing_atomic` を含む9件通過
+- **追補2・3 のテストを main が追加**（実装は正しかったがテストが無かった）: `kick.verb()` の
+  amount 省略が明示エラーになること / 文字列形宣言が暗黙 master を抑制しないこと。
+  **両方ミューテーションで検出力を確認**
+
+**`/simplify` 4観点（`6e96c31`）**:
+4観点すべてが `resolveEffectiveMixerNode` を指摘（`resolveMixerNode` の再実装・1回の dispatch で
+2回呼ばれ2回目はハンドルを確保して捨てる）→ 削除して委譲。receiver の owning Global 解決を
+`resolveReceiverGlobal()` に集約。`MixerManager.route()` が `routings` を **await 前に**書き換えて
+いた点を成功後コミットに修正。`buildRoutingSends` は private メソッドで足すと S2 の逆方向テストが
+prototype 表面として検出したため（`private` は実行時に残る）モジュール関数へ。
+
+**pr-review-team ラウンド1（`73d21d7`）— CI 全 pass のまま Critical 6件**:
+4レビュアー全員が実行して再現。うち2件は2名が独立に同一指摘へ到達。**C1〜C4 はこの PR が
+退治対象に掲げた silent pass-through と同型**で、過去5回再発したパターンがパーサーの chain
+継続チェックと aux 引数ループという**新しい2箇所**で再現していた。
+
+- **C1 `invocation` の伝播漏れ**: `processGlobalStatement` / `processMixerNodeStatement` が
+  `applyMethodChain` に渡しておらず常に `'call'` に落ちていた。`global.TALReverb4`（括弧なし）が
+  拒否されず黙ってプラグイン呼び出しになり、逆に正当な `verb.master` が誤って拒否される
+- **C2 非 master output の誤配線**: `kind === 'output'` だけを見て `channels` を無視し、
+  `mix.output(3, 4)` への配線が無警告で master(1,2) へ流れていた → channels が `[1,2]` でなければ
+  #484 D4 を案内する明示エラーに
+- **C3 bare 始まりチェーンの脱落**: 新設した非 transport の bare 分岐が `parseMethodChain()` を
+  呼んでおらず、`kick.drums.pan(0.5)` の `.pan(0.5)` が構文解析段階で消えていた（エラーなし）。
+  関数名も実態と乖離していたため `parseBareMethodReference` に改名
+- **C4 aux `amount:` の重複**: named `amount:` が `amount === undefined` を見ず無条件上書き。
+  `verb(0.3, amount: 0.9)` は 0.3 が消え、逆順は例外という非対称 → `classifyPluginArguments` と
+  同型の `seen` セットを**再実装せず流用**
+- **C5 不変条件のテスト欠落**: `MixerManager.route()` の「daemon 受理後にコミット」に対し、
+  変異（`set` を await 前へ戻す）を入れても全 suite グリーンだった → 1回目 reject → 2回目 resolve で
+  「拒否分がマージされていない」ことを検証するテストを追加し、**変異で落ちることを確認**
+- **C6 doc が機能を否定**: `audio/types.ts` が「v1 では hardware に戻す手段が無い」のままで、
+  `Global.setBusRouting` がそこを権威として参照していた → 三状態の記述に訂正
+
+Important: `"master"` 名の sum/aux 宣言が予約語を無警告でシャドウ（**決定 #78** として spec 化・
+出力エンドポイントの `master` 命名は正当なので sum/aux のみ拒否）／`!global && explicit` が
+SC.4 の Global 分離をバイパス（`executeModuleIR` が import 元と同じ state に `processGlobalInit` を
+呼ぶため、node が存在するなら `currentGlobal` は必ず設定済み = 到達不能を実証して削除）／
+明示宣言形の cross-Global 分離が未検証（変異で確認）／`EffectSlotLimitError` が手組み mock 経由
+でしか検証されていない（実 manager 経路のテストを追加）。
+
+**テストは236行追加・0行削除** — 実装を通すために既存アサーションを緩めた箇所はない。
+
+**pr-review-team ラウンド2 — Critical 0・Important 1**:
+4レビュアーで再検証。ラウンド1修正はすべて実行による裏取りで健全と確認された。
+
+- **最大の懸念（パーサーの `skipNewlines`）は問題なし**: 2名が独立に検証。`kick.drums\nkick.pan(0.5)`
+  は2文に正しく分離し、`kick.drums\n.pan(0.5)`（次行が先頭ドット）が chain になるのは
+  **括弧あり経路（本 PR 未変更）の `kick.audio(1)\n.pan(0.5)` と同一挙動**。C3 修正は既存経路と
+  対称にしただけで、新しい飲み込み経路は作っていない
+- **C2 ガードは chain 2ホップ目以降でも発火**: `kick.verb(0.5).alt` で reject され、かつ
+  `setBusRouting` が1回だけ呼ばれた（1ホップ目は正常完了）ことまで実証
+- **C4 の `seen` は total**: `null` / 配列 / ネストオブジェクト / **name が undefined の named_arg**
+  （パーサーが生成し得ない壊れた IR）等10種以上を投入し全て例外
+- **fixer の自己申告した変異検証2件を独立に再現**: 15変異のうち14を新規テストが検出
+- **`applyMethodChain` の全4呼び出し元を確認**: `processMixerHandleStatement` のみ `invocation` を
+  渡していないが、`MixerHandleStatement` 型に該当フィールドが無く文法上 `sum(...)` / `aux(...)` は
+  常に括弧付き（bare 形が存在しない）ため、見落としではなくスコープ外
+
+**Important 1件（修正済み）**: 非 master output ガード `left !== 1 || right !== 2` を
+`left !== 1` だけに緩める変異が全 suite グリーンのまま通った。既存テストが使う非 master output は
+`mix.output(3, 4)`（`left=3`）のみで、**`left===1` かつ `right!==2` のケースが未検証**だった
+（`mix.output(1, 3)`）。テストを追加し、**変異を入れて実際に落ちることを確認**した。
+
+> **誤検出の切り分け**: レビュアー1名が「新規の master reserved テストがフル suite で落ちた」と
+> 報告したが、**当該テストは `makeGlobal()` で毎回新しい Global を作る同期的な throw
+> アサーションのみ**（async / FS / タイマーを含まない）で、負荷で落ちる構造がない。同時刻に
+> 別レビュアーが `name === 'master'` ガードを `if (false && ...)` で無効化する変異を作業ツリーに
+> 置いていたため、その瞬間の計測だった。ガード健全な状態でフル suite を2回連続実行し
+> **1632 passed / 失敗0** を確認済み（並行レビューの副作用であり、フレークでも実装の欠陥でもない）。
+
+**実機駆動で見つけた Critical（#519 S2 由来の回帰・テストが緑のまま壊れていた）**:
+OrbitStudio をビルドして実際に評価したところ、**エディタからの評価がすべて失敗していた**:
+
+```
+ERROR: Unknown chain method "setDocumentDirectory" on Global.
+```
+
+拡張は `audio()` を編集中ファイル基準で解決させるため、**全評価の先頭に
+`global.setDocumentDirectory("<dir>")` を DSL ソースとして注入する**（`extension.ts`・MCP の
+evaluate 経路も同じ）。ところがこの名前が `GLOBAL_DSL_METHODS` に無く、S2 の「未知メソッド =
+明示エラー」が注入行を弾いていた。
+
+**S2 の逆方向テストが防ぐはずだった失敗モードそのものを、除外リストへの誤分類で通していた**:
+当該テストは「全 prototype メソッドが DSL 語彙か内部 API 除外リストのどちらかに分類される」ことしか
+検査しないため、`setDocumentDirectory` を除外リストに入れた時点でテストは緑になり、
+**実行時経路だけが壊れる**。ホストが DSL として注入する以上これは内部 API ではないので、
+`GLOBAL_DSL_METHODS` へ移し、除外リストから外した理由をコメントで残した。
+
+注入される実際の形を DSL として評価する回帰テストを追加し、**語彙から外すと
+`Unknown chain method` で落ちることを確認**した。main も同じ状態なので S2 マージ以降
+エディタ評価が壊れていたことになる（`/simplify` も pr-review-team 2ラウンドも、
+実機で動かすまで検出できなかった）。
+
+**実機確認**: 修正後、`kick.verb(0.3)`（aux send）・`kick.drums`（sum への出力先指定）・
+`drums.master`（hardware 復帰）が実エンジンでエラーなく評価された。
+
+**comment-analyzer が検証した主張（すべて実測と一致）**: 「236行追加・0行削除」／「1631 passed」／
+「S3 前 1611」（`62f6bc9` を worktree で実行）／README の「1617 passed」（`db01cd8`）／
+Rust 9件／`engine_wrap.rs` の `1 = Master` エンコード／`db01cd8` が `EffectSlotLimitError` の
+導入コミットであること／`73d21d7` が到達可能で孤児参照が他に無いこと／SC.2 規範(4) と SC.3.1 の
+引用が原文と一致すること。**issue 番号は #484 の「D4」を除く全件が件名と整合**。
+
+> **`#484 D4` — PR 由来ではない既存の文書間不整合（#484 に記録・owner 判断待ち）**:
+> 本仕様書（正本）は `#484 D4` をマルチチャンネル出力の着地点として参照し専用の表の行まで持つが、
+> **issue #484 の本文・コメントに「D4」は存在しない**（実在は D1 / D2 / D2.5 / D3 / D3.5 / D5、
+> かつ最も近い D5 = 複数デバイス同時出力は owner 裁定で取り下げ済み）。main の本番エラーメッセージ
+> （`runtime.ts:289`）とテスト（`mixer-runtime.spec.ts:212`）も同じ文字列を前提にしているため、
+> **本 PR だけ表記を変えると仕様正本と main から乖離して不整合が増える**。既存表記を踏襲し、
+> (a) #484 に D4 を切る / (b) 枝番号を落とす の判断を #484 のコメントで仰いだ。
+
+> **既知フレーク（本 PR と無関係）**: `daemon-client.spec.ts` の #484 D1 argv テスト2件は
+> **#520** で追跡中。本ブランチは当該テストも `daemon-client.ts` も触っていない（差分空）。
+> 根因は「spawn した shell の書き込みを待たずに読む」レースで、#520 の「全 suite 同時実行時のみ」
+> という記述より広く、**負荷が高ければ単独実行でも落ちる**（本セッションで観測）。
+
+**検証**: 全 suite **1632 passed / 29 skipped**（S3 前 1611・レビュー修正で +15）・
+`tsc --build` 通過 / lint エラー0 / `cargo test` 全 crate green /
+`cargo fmt --check` 通過 / `cargo clippy --all-targets` 警告なし
+
+**関連**: #517（統括）・#521（S3）・#523（PR）・#522（S4 = Rust プロトコル拡張の受け皿）・
+#518（S1）・#519（S2）・#409（`sidechain:` / `outs:` の実配線）・#484 D4・#520（既知フレーク）
+
 ### 6.292 feat(engine): Signal Chain チェーンメソッドの解決とディスパッチ #517 S2 (Jul 26, 2026)
 
 **Date**: 2026-07-26

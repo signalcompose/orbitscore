@@ -761,6 +761,23 @@ mod set_bus_routing_tests {
     }
 
     #[test]
+    fn reserved_master_output_resets_the_routing_atomic() {
+        let wrap = wrap_with_three_stage_topology();
+        wrap.set_bus_routing("seq-bus-0", Some("sum-bus-0"), &[])
+            .expect("sum output must be accepted");
+        wrap.set_bus_routing("seq-bus-0", Some("master"), &[])
+            .expect("reserved master output must be accepted");
+        let guard = wrap.outproc.lock().unwrap();
+        let routing = guard
+            .as_ref()
+            .unwrap()
+            .bus_routing
+            .get("seq-bus-0")
+            .unwrap();
+        assert_eq!(routing.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
     fn output_to_insert_bus_is_rejected_kind_mismatch() {
         let wrap = wrap_with_three_stage_topology();
         let error = wrap
@@ -2367,10 +2384,12 @@ impl EngineWrap {
     /// 書き換える。**forward-only（MX.4）と kind 制約（output は sum のみ・send 先は aux のみ）を
     /// ここで検証してから atomic に反映する**（RT callback は検証済みの値を load するだけ）。
     ///
+    /// - `output = Some("master")`: **予約語**。sum への出力先指定を解除して hardware/master へ
+    ///   戻す（#517 S3 で追加。この予約語は bus 名として検索・登録しない）。
     /// - `output = Some(name)`: `name` は `sum` kind かつ `seq_bus` より後ろの index でなければ
     ///   ならない。それ以外はエラーで拒否し、既存の routing_override には触れない（部分適用しない）。
-    /// - `output = None`: output target には触れない（既存の override をそのまま保つ。明示的に
-    ///   `Master` へ戻す操作は v1 のスコープ外・将来 `output = Some("master")` 等の予約語で拡張しうる）。
+    /// - `output = None`: output target には触れない（既存の override をそのまま保つ）。
+    ///   予約語との区別で「変更なし / sum へ変更 / master へ戻す」の三状態を表現する。
     /// - `sends`: 列挙された `(name, gain)` のみを反映する（列挙されていない既存 send には触れない）。
     ///   `name` は `aux` kind かつ `seq_bus` より後ろの index でなければならない。`gain` は有限
     ///   （NaN/Inf 拒否）。1 件でも検証に失敗したら **どの send も反映しない**（部分適用しない）。
@@ -2398,6 +2417,7 @@ impl EngineWrap {
 
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
+            Some("master") => Some(1),
             Some(name) => {
                 let target_index = *control.bus_index.get(name).ok_or_else(|| {
                     WrapError::OutProcEffect(format!("SetBusRouting output: unknown bus '{name}'"))
@@ -2412,7 +2432,7 @@ impl EngineWrap {
                         "SetBusRouting output '{name}' must be a sum bus"
                     )));
                 }
-                Some(target_index)
+                Some(target_index + 2)
             }
             None => None,
         };
@@ -2442,13 +2462,13 @@ impl EngineWrap {
         }
 
         // 3. 検証済みの値だけを atomic へ反映する。
-        if let Some(target_index) = resolved_output {
+        if let Some(routing_value) = resolved_output {
             let routing = control.bus_routing.get(seq_bus).ok_or_else(|| {
                 WrapError::OutProcEffect(format!("bus '{seq_bus}' has no routing handle"))
             })?;
             // エンコード: 0=override 無し・1=Master・n>=2 => Bus(n-2)（native `InsertBusStage`
             // doc 参照）。
-            routing.store(target_index + 2, Ordering::Relaxed);
+            routing.store(routing_value, Ordering::Relaxed);
         }
         if !resolved_sends.is_empty() {
             let send_slots = control.bus_sends.get(seq_bus).ok_or_else(|| {
