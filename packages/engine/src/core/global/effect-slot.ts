@@ -121,8 +121,13 @@ export class EffectChainMap<K> {
   }
 
   /** `key` の現在のチェーンのスナップショット（S4/#522 Rust プロトコル拡張が読む想定の参照専用アクセサ）。 */
+  /**
+   * 観測用の参照専用ビュー。**コピーを返す** — `readonly` はコンパイル時の保護でしかなく、
+   * 内部配列そのものを渡すと `as any` 経由の mutate で登記が壊れる。S4/#522 の Rust
+   * プロトコル拡張がここを消費し始めるため、その前に閉じておく。
+   */
   chainFor(key: K): readonly PluginSlot[] {
-    return this.chains.get(key) ?? []
+    return [...(this.chains.get(key) ?? [])]
   }
 
   /**

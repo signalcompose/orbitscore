@@ -17,6 +17,91 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.294 refactor(engine): plugin 宣言のチェーン化 + instrument 仕様の矛盾解消 #517 S4 PR-1a (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527）
+
+**内容**:
+S4（#522）の第1段。**TS のデータモデルのみ・挙動不変**で、spec 更新を先行させた（運用規則6）。
+`EffectSlotMap`（1レシーバ = 1 insert 固定）を、チェーンと role を表現できる `EffectChainMap` に
+置き換える。**上限は 1 のまま維持**（解除は wire と RT の変更が要るため PR-1b）。
+
+4層（RT / daemon / wire / TS）を1 PR で動かすとレビューが機能しないため（S3 はより小さい差分で
+Critical 8件）、リスク境界で分割した。挙動不変なので「既存テストが緑のまま」であること自体が
+正しさの証拠になる。
+
+**仕様の矛盾を解消（`b5e2798`）**: SC.3.1 規範(4)「instrument は…**後勝ち（差し替え）**」と
+core spec PH.4「異 path への差し替えは**エラー**」が正面から矛盾していた（#522 は instrument に
+一切触れておらず、仕様完全性検査で検出）。**上方向に解消** — PH.4 の立場は「エンジン全体で
+1 インスタンス」の帰結であり、複数インスタンス化で前提ごと消えるため。
+
+**フォーマット調査（一次情報）**: 旧「同 path 共有」は daemon の `AlreadyLoaded` 制約に合わせた
+TS 側 dedup だったが、**共有を成立させる機構がフォーマット側に無い**ことを確認した。CLAP は
+`clap_plugin_preset_load` がインスタンス丸ごとにしか効かず、持続的な param 問い合わせ
+（`clap_plugin_params.get_value`）にもスコープが無い。`clap_host_track_info.get` が単数の track を
+返すことからも 1 インスタンス = 1 トラック前提。VST3 は Unit 機構で per-part を表現できるが
+**opt-in** で、本実装は未対応。つまり旧 dedup は**共有の利点を実現する機構を持たないまま、
+preset / param / note が混ざる欠点だけを負っていた**。
+
+**サミングとマルチティンバーを別概念として規定**: 合流するのは note ストリームであって
+プロセス共有ではない（owner 指摘）。後続 stage を **#524（サミング・Units 非依存）/
+#525（マルチティンバー）/ #526（voice 分離）** として issue 化。
+
+**合流点の移設を spec に記載（`2ff0af4`）**: instrument の音声は master の post processor で
+add-mix されており **seq バスグラフを一切通らない**。このため SC.0 の
+`lead.Serum(...).TALReverb4(...).subout` は #522 の5項目を全部実装しても動かない。
+#522 の題目「SC.0 の完全実行」には移設が必須で、要件から漏れていた（実装は PR-1b）。
+
+**`/simplify`（`228646f`）**: altitude の指摘1件が3件をまとめて閉じた — `duplicateError: () => Error`
+は型の約束が片方の分岐でしか機能していなかった（effect では Error が捨てられ `.message` だけ
+再包装、instrument ではそのまま throw）。`duplicateMessage: () => string` に縮小しエラー型の決定を
+map が持つ形にしたところ、reuse と simplification が別々に指摘した throw の重複も消えた。
+あわせて到達不能な `maxLength` ガードを削除し、同型の隣接引数（`normalizedName` と
+`resolvedPath` がどちらも `string`）を `PluginDeclaration` に集約した。
+
+**pr-review-team ラウンド1（`ff4a335` / `93ac319`）— Critical 0・Important 6**:
+
+- **並行 self-heal の競合**（2名が独立に再現）: 同一キーへの `declare()` が並行に走ると両方が
+  同じ `existing` を `replacing` として `issueLoad` を呼び、**オブジェクト同一性**判定により
+  後着のエントリが黙って捨てられる。さらに追跡側が失敗し追跡漏れ側が成功すると
+  `chains.delete(key)` が走り、**daemon にプラグインが生きているのに「何も宣言されていない」と
+  報告する**。`pending: Map<K, Promise<void>>` でキー単位に直列化。
+  > 根本原因は本 PR 由来ではない（旧実装も無条件 `set` = 最後勝ちで同種の弱点）。ただし本 PR は
+  > 同一性ベースの置換に変えたことで「**後着の実ロードが成功しても TS 側に一切反映されない**」
+  > という新しい取りこぼしの形を追加していた。
+- **`instanceId` にテストが1件も無かった**: 定数に置換しても全1634件が通過。S4 の設計は
+  「respawn を跨いで ID が不変であること」に依存するのに、値を assert するテストが皆無だった。
+  > fixer が最初に書いた保持テストは**変異検証で潜り抜けた**（occurrence が偶然同じ文字列に
+  > 再計算される）。`receiverId` が毎回別文字列を返すモックに差し替えて再設計した。
+  > **変異検証を要求していなければ、守っていないテストが入っていた。**
+- **`normalizePluginInstanceName` にテストが無かった**: 恒等関数に置換しても全件通過。
+  あわせて Windows パスで `instanceId` にパスが混入するバグを修正。
+- **spec が未実装の挙動を実装済みのように記述**（2名が独立に指摘・PH.1 / PH.4 / SC.3.1）:
+  このプロジェクトは SC.5 に「**v1 のエラーは stage 表記を含む**（ユーザーがいつ使えるように
+  なるかを知れるようにするため）」と規約を明文化しており、追記だけがそれに従っていなかった。
+  「v1 の現在地 / 理由 / 実装時期」ブロックを3箇所に追加し、エラー文言にも stage 表記を付けた。
+- **誤った出典**: 「#523 の調査」は誤り（#523 は S3 のバス名ルーティング PR で該当調査を含まない）。
+  #408/#409 型の**3回目の再発**。`#527 の調査` に訂正
+- ファイルヘッダ「three managers」→「four」
+
+**ラウンド2 — Critical 0・Important 1**:
+ラウンド1の修正は独自のストレス実行でも破れなかった（500回呼び出し・200×20キー並行後も
+`pending.size === 0`・reject が後続を汚染しない）。CLAP の記述も上流ヘッダと逐語照合された。
+
+唯一の新規指摘は**私が書いたコメントの誤り** — `KNOWN_PLUGIN_EXTENSIONS` に
+「新 format を足す時はここだけを変える」と書いたが、**同じファイルの `validatePluginExtension()` が
+独立にハードコードした if チェーン**で判定しており、この配列を参照していなかった。将来 `.au3` を
+足すと「パスとしては認識され名前も生成されるのに、ロードだけ拒否される」不整合が起きる。
+`SUPPORTED_PLUGIN_EXTENSIONS`（ロード可能）と `RESERVED_PLUGIN_EXTENSIONS`（AU 予約）に分け、
+`KNOWN_PLUGIN_EXTENSIONS` と `KNOWN_PLUGIN_FORMATS` を**そこから派生**させて実際に単一正本にした。
+
+**検証**: 全 suite **1652 passed / 29 skipped**（S4 前 1634 + 新規18）・`tsc --build` exit 0・
+lint エラー0
+
+**関連**: #517（統括）・#522（S4）・#527（本 PR）・#524 / #525 / #526（後続 stage）・
+#523（S3）・#409・#484
+
 ### 6.293 feat(engine): Signal Chain バス名メソッドのルーティング写像 #517 S3 (Jul 26, 2026)
 
 **Date**: 2026-07-26

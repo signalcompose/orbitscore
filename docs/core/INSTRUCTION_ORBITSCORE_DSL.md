@@ -1173,7 +1173,9 @@ synth.play(1, 3, 5, 0)                        // 値は度数（Pitch DSL と同
   > **v1 の現在地**: **PR-1a（#527）はまだこの移設を実装していない**。instrument の出力は
   > 引き続き master の `CompositePostProcessor`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）で
   > add-mix されており、`packages/engine/src/core/sequence.ts` は note シーケンスへの
-  > `output()` / `send()` を依然拒否する。PR-1a が実装するのは plugin 宣言のチェーン化基盤
+  > `send()` と **sum バスへの** `output()` を依然拒否する（LinkAudio チャンネル名としての
+  > `output()` は note シーケンスでも通る — 拒否されるのは sum バスへのルーティングのみ）。
+  > PR-1a が実装するのは plugin 宣言のチェーン化基盤
   > （`EffectChainMap`）のみで、上記の合流先変更そのものはこの基盤の上に構築する別工程。
   > **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は「`lead.Serum(...).TALReverb4(size: 0.6).subout`
   > が実際に機能すること」。
