@@ -215,6 +215,7 @@ export type GlobalStatement = {
   target: string
   method: string
   args: any[]
+  invocation?: 'bare' | 'call'
   chain?: MethodChain[]
 }
 

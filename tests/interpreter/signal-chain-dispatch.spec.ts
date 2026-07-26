@@ -365,6 +365,26 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('kick.TALReverb4()', state)).rejects.toThrow(/S4.*multiple insert/i)
   })
 
+  it('rewrites a real EffectSlotLimitError from EffectSlotMap.declare() with the S4 pointer', async () => {
+    // Regression (#523 IMPORTANT 9): the only prior coverage constructed
+    // `new EffectSlotLimitError(...)` by hand and mocked `sequence.effect()`,
+    // so it never exercised the real path: EffectSlotMap.declare() throwing
+    // for a genuine second insert → the `instanceof EffectSlotLimitError`
+    // check in dispatch.ts → message rewrite. That kind of gap once let a
+    // real bug (wording that no longer matched the old regex) go undetected.
+    const scheduler = new RecordingScheduler() as RecordingScheduler & {
+      loadPlugin: ReturnType<typeof vi.fn>
+    }
+    scheduler.loadPlugin = vi.fn().mockResolvedValue({})
+    const global = new Global(scheduler)
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+
+    await run('kick.TALReverb4()', state)
+    await expect(run('kick.Twin(vendor: "A")', state)).rejects.toThrow(/S4.*multiple insert/i)
+    expect(scheduler.loadPlugin).toHaveBeenCalledTimes(1)
+  })
+
   it('routes bare sum/output and called aux names, awaiting the daemon result', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
@@ -381,6 +401,28 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       ['seq-bus-0', 'sum-bus-0', [{ bus: 'aux-bus-0', gain: 0.37 }]],
       ['seq-bus-0', 'master', [{ bus: 'aux-bus-0', gain: 0.37 }]],
     ])
+  })
+
+  it('rejects routing to a declared non-master output instead of silently rerouting to master', async () => {
+    // Regression (#523 CRITICAL 2): the output-endpoint branch used to look only
+    // at `dispatch.node.kind === 'output'` and always route to 'master',
+    // ignoring the node's declared channels. A user routing to a physical
+    // multi-output endpoint (channels other than 1,2) would have their audio
+    // silently sent to master instead of erroring.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run(
+      'var kick = init global.seq\nvar mix = init global.mixer\nvar hp1 = mix.output(3, 4)',
+      state,
+    )
+    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+
+    await expect(run('kick.hp1', state)).rejects.toThrow(/hp1.*3.*4.*#484 D4/s)
+    expect(routing).not.toHaveBeenCalled()
+
+    // The master endpoint (channels 1,2) is the only one allowed in S3.
+    await run('var master = mix.output(1, 2)\nkick.master', state)
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', 'master', [])
   })
 
   it('supports named send arguments and routing from a mixer bus receiver', async () => {
@@ -420,6 +462,43 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('kick.drums(0.3)', state)).rejects.toThrow(/sum.*send|send.*sum/i)
   })
 
+  it('forwards invocation on the Global receiver path, rejecting a bare plugin name', async () => {
+    // Regression (#523 CRITICAL 1): processGlobalStatement used to call
+    // applyMethodChain without forwarding `invocation`, so a bare Global plugin
+    // reference silently defaulted to 'call' and skipped the parentheses guard.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const effect = vi.spyOn(global, 'effect')
+
+    await expect(run('global.TALReverb4', state)).rejects.toThrow(/TALReverb4\(\)/)
+    expect(effect).not.toHaveBeenCalled()
+  })
+
+  it('forwards invocation on the mixer-node receiver path, accepting a bare master hop', async () => {
+    // Regression (#523 CRITICAL 1): processMixerNodeStatement used to call
+    // applyMethodChain without forwarding `invocation`, so a legitimate bare
+    // `verb.master` (verb itself being the statement target, a declared mixer
+    // node) was wrongly rejected as "an output, not a send."
+    const scheduler = new RecordingScheduler() as RecordingScheduler & {
+      setBusRouting: ReturnType<typeof vi.fn>
+    }
+    scheduler.setBusRouting = vi.fn().mockResolvedValue(undefined)
+    const global = new Global(scheduler)
+    const state = makeState(global)
+    await run(
+      'var mix = init global.mixer\nvar master = mix.output(1, 2)\nvar verb = mix.aux',
+      state,
+    )
+
+    await run('verb.master', state)
+    expect(scheduler.setBusRouting).toHaveBeenCalledWith('aux-bus-0', 'master', [])
+
+    // The called form must still be rejected: master is an output, not a send.
+    await expect(run('verb.master()', state)).rejects.toThrow(
+      /output.*not a send|not a send.*output/i,
+    )
+  })
+
   it('makes string-form bus declarations visible only to their owning Global', async () => {
     const g1 = new Global(new RecordingScheduler())
     const g2 = new Global(new RecordingScheduler())
@@ -453,6 +532,27 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(routing).toHaveBeenCalledOnce()
   })
 
+  it('rejects a duplicate aux amount instead of silently letting one overwrite the other', async () => {
+    // Regression (#523 CRITICAL 4): the aux-send arg loop assigned `amount`
+    // unconditionally whenever it saw a bare number or a named `amount:`, so a
+    // second specification silently won — with the two call orders disagreeing
+    // about which value survived.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq\nvar mix = init global.mixer\nvar verb = mix.aux', state)
+    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+
+    await expect(run('kick.verb(0.3, amount: 0.9)', state)).rejects.toThrow(/duplicate.*amount/i)
+    await expect(run('kick.verb(amount: 0.9, 0.3)', state)).rejects.toThrow(/duplicate.*amount/i)
+    await expect(run('kick.verb(amount: 0.3, amount: 0.5)', state)).rejects.toThrow(
+      /duplicate.*amount/i,
+    )
+    await expect(run('kick.verb(0.3, enabled: false, enabled: true)', state)).rejects.toThrow(
+      /duplicate.*enabled/i,
+    )
+    expect(routing).not.toHaveBeenCalled()
+  })
+
   it('lets a string-form bus declaration coexist with the implicit master', async () => {
     // The implicit master(1,2) is suppressed only by an EXPLICIT mixer node
     // (SC.2 norm 6). Counting string-form declarations as "explicit" would make
@@ -469,6 +569,20 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       ['seq-bus-0', 'sum-bus-0', []],
       ['seq-bus-0', 'master', []],
     ])
+  })
+
+  it('rejects a Global routing to a bus by bare bus name as a permanent, non-staged error (#523 MINOR 10)', async () => {
+    // Sources of mixer routing are Sequences and mixer buses only
+    // (SIGNAL_CHAIN_DSL_SPEC_v1 §SC.0/SC.4); a Global is the console itself
+    // and never a routing source, so `global.drums` must reject permanently
+    // rather than with a staged "#517" message this PR itself is part of.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var mix = init global.mixer\nvar drums = mix.sum', state)
+
+    await expect(run('global.drums', state)).rejects.toThrow(
+      /Sequences and mixer buses only.*Global.*drums/i,
+    )
   })
 
   it('keeps the branded bus guard ahead of generic resolver errors', async () => {

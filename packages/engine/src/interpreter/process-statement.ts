@@ -138,7 +138,19 @@ async function applyMethodChain(
     }
     if (dispatch.kind === 'mixer') {
       if (!(receiver instanceof Sequence) && !isMixerBusHandle(receiver)) {
-        throw new Error(`Mixer routing from this receiver is not available in S3 (#517).`)
+        // Permanent, not staged: SIGNAL_CHAIN_DSL_SPEC_v1 enumerates routing
+        // receivers as sequences and buses — SC.2 norm (4) ("バス自身もレシーバ
+        // である": a bus takes chains and output targets in the same form as a
+        // sequence) and SC.3.1 ("receiver = シーケンス or バス"). A Global is the
+        // console the buses live on, not a signal source. The only receiver that
+        // reaches here is a Global resolving a bare bus name (e.g.
+        // `global.drums`), which #517/#522 do not stage any support for.
+        // (SC.4 defines what each node kind's method MEANS, not who may route —
+        // do not cite it for this constraint.)
+        throw new Error(
+          `Mixer routing sources are Sequences and mixer buses only; a Global cannot route ` +
+            `to "${method}" by bus name.`,
+        )
       }
       if (dispatch.node.kind === 'aux') {
         if (invocation !== 'call') {
@@ -146,15 +158,37 @@ async function applyMethodChain(
         }
         let amount: number | undefined
         let enabled = true
+        // `seen` rejects a second specification of `amount` (positional or
+        // named) or `enabled`, the same shape `classifyPluginArguments`
+        // (dispatch.ts) uses for plugin-method arguments: reuse rather than
+        // re-implement, so this loop cannot silently let one value overwrite
+        // another (#523 CRITICAL 4).
+        const seen = new Set<'amount' | 'enabled'>()
         for (const arg of args) {
-          if (typeof arg === 'number' && amount === undefined) {
+          if (typeof arg === 'number') {
+            if (seen.has('amount')) {
+              throw new Error(
+                `Aux mixer "${method}" specifies duplicate amount (positional/amount:).`,
+              )
+            }
+            seen.add('amount')
             amount = arg
           } else if (arg?.type === 'named_arg' && arg.name === 'amount') {
+            if (seen.has('amount')) {
+              throw new Error(
+                `Aux mixer "${method}" specifies duplicate amount (positional/amount:).`,
+              )
+            }
+            seen.add('amount')
             if (typeof arg.value !== 'number') {
               throw new Error(`Aux mixer "${method}" amount: must be numeric.`)
             }
             amount = arg.value
           } else if (arg?.type === 'named_arg' && arg.name === 'enabled') {
+            if (seen.has('enabled')) {
+              throw new Error(`Aux mixer "${method}" specifies duplicate enabled:.`)
+            }
+            seen.add('enabled')
             if (typeof arg.value !== 'boolean') {
               throw new Error(`Aux mixer "${method}" enabled: must be boolean.`)
             }
@@ -175,6 +209,16 @@ async function applyMethodChain(
       }
       if (invocation !== 'bare') {
         throw new Error(`Mixer ${dispatch.node.kind} "${method}" is an output, not a send.`)
+      }
+      if (dispatch.node.kind === 'output') {
+        const [left, right] = dispatch.node.channels
+        if (left !== 1 || right !== 2) {
+          throw new Error(
+            `Mixer output "${method}" (channels ${left}, ${right}) cannot be routed to yet: ` +
+              `only the master endpoint (channels 1, 2) is routable in S3. Physical ` +
+              `multi-output routing is staged for #484 D4.`,
+          )
+        }
       }
       const output = dispatch.node.kind === 'output' ? 'master' : dispatch.node.handle.bus
       return receiver instanceof Sequence
@@ -211,6 +255,7 @@ async function processMixerNodeStatement(
     statement.args,
     state,
     statement.chain,
+    statement.invocation ?? 'call',
   )
 }
 
@@ -307,7 +352,14 @@ export async function processGlobalStatement(
     throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  await applyMethodChain(global, statement.method, statement.args, state, statement.chain)
+  await applyMethodChain(
+    global,
+    statement.method,
+    statement.args,
+    state,
+    statement.chain,
+    statement.invocation ?? 'call',
+  )
 }
 
 /**

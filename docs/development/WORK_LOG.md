@@ -47,9 +47,16 @@ S2 で「transport 経路に state を渡す」案を却下した理由（括弧
 
 **Q2: await 可能なルーティング経路（SC.2 規範5）**:
 `.verb(0.3)` / `.drums` / `.master` が評価 promise から await され、daemon の DAG / kind /
-逆 stage 拒否が伝播する。既存の同期契約は不変。routing 状態と full-state payload 構築は
-共有 primitive に集約し、Sequence と MixerBusHandle の双方から使う（SC.2 規範4 の
-`verb.Plugin().master`）。
+逆 stage 拒否が伝播する。既存の同期契約は不変。Sequence と MixerBusHandle の双方が
+レシーバになれる（SC.2 規範4 の `verb.Plugin().master`）。
+
+> **訂正（レビュー #523 comment-analyzer の指摘）**: 当初ここに「routing 状態と full-state
+> payload 構築は共有 primitive に集約し、双方から使う」と書いたが、**実装はそうなっていない**。
+> Sequence 側は `_sumOutputBus` / `_auxSends` + モジュール関数 `buildRoutingSends()`、
+> MixerManager 側は `routings` Map + `route()` 内のインライン変換で、同型のロジックを
+> それぞれが個別に持つ（`Map<string, number>` → `{bus, gain}[]` の変換が2箇所）。
+> `6e96c31` が集約したのは **Sequence 内部の2箇所（`pushBusRouting` / `syncBusRouting`）の
+> 重複のみ**。両者の統合は #522 で検討する。
 
 **`.master` — 予約語で hardware/master へ復帰**:
 `SetBusRouting` の `output` に予約語 `"master"` を渡すと sum への出力先指定を解除する。
@@ -97,11 +104,56 @@ index と不可分。
   amount 省略が明示エラーになること / 文字列形宣言が暗黙 master を抑制しないこと。
   **両方ミューテーションで検出力を確認**
 
-**検証**: 全 suite **1617 passed / 29 skipped**（S3 前 1611）・lint エラー0 /
+**`/simplify` 4観点（`6e96c31`）**:
+4観点すべてが `resolveEffectiveMixerNode` を指摘（`resolveMixerNode` の再実装・1回の dispatch で
+2回呼ばれ2回目はハンドルを確保して捨てる）→ 削除して委譲。receiver の owning Global 解決を
+`resolveReceiverGlobal()` に集約。`MixerManager.route()` が `routings` を **await 前に**書き換えて
+いた点を成功後コミットに修正。`buildRoutingSends` は private メソッドで足すと S2 の逆方向テストが
+prototype 表面として検出したため（`private` は実行時に残る）モジュール関数へ。
+
+**pr-review-team ラウンド1（`96dbb85`）— CI 全 pass のまま Critical 6件**:
+4レビュアー全員が実行して再現。うち2件は2名が独立に同一指摘へ到達。**C1〜C4 はこの PR が
+退治対象に掲げた silent pass-through と同型**で、過去5回再発したパターンがパーサーの chain
+継続チェックと aux 引数ループという**新しい2箇所**で再現していた。
+
+- **C1 `invocation` の伝播漏れ**: `processGlobalStatement` / `processMixerNodeStatement` が
+  `applyMethodChain` に渡しておらず常に `'call'` に落ちていた。`global.TALReverb4`（括弧なし）が
+  拒否されず黙ってプラグイン呼び出しになり、逆に正当な `verb.master` が誤って拒否される
+- **C2 非 master output の誤配線**: `kind === 'output'` だけを見て `channels` を無視し、
+  `mix.output(3, 4)` への配線が無警告で master(1,2) へ流れていた → channels が `[1,2]` でなければ
+  #484 D4 を案内する明示エラーに
+- **C3 bare 始まりチェーンの脱落**: 新設した非 transport の bare 分岐が `parseMethodChain()` を
+  呼んでおらず、`kick.drums.pan(0.5)` の `.pan(0.5)` が構文解析段階で消えていた（エラーなし）。
+  関数名も実態と乖離していたため `parseBareMethodReference` に改名
+- **C4 aux `amount:` の重複**: named `amount:` が `amount === undefined` を見ず無条件上書き。
+  `verb(0.3, amount: 0.9)` は 0.3 が消え、逆順は例外という非対称 → `classifyPluginArguments` と
+  同型の `seen` セットを**再実装せず流用**
+- **C5 不変条件のテスト欠落**: `MixerManager.route()` の「daemon 受理後にコミット」に対し、
+  変異（`set` を await 前へ戻す）を入れても全 suite グリーンだった → 1回目 reject → 2回目 resolve で
+  「拒否分がマージされていない」ことを検証するテストを追加し、**変異で落ちることを確認**
+- **C6 doc が機能を否定**: `audio/types.ts` が「v1 では hardware に戻す手段が無い」のままで、
+  `Global.setBusRouting` がそこを権威として参照していた → 三状態の記述に訂正
+
+Important: `"master"` 名の sum/aux 宣言が予約語を無警告でシャドウ（**決定 #78** として spec 化・
+出力エンドポイントの `master` 命名は正当なので sum/aux のみ拒否）／`!global && explicit` が
+SC.4 の Global 分離をバイパス（`executeModuleIR` が import 元と同じ state に `processGlobalInit` を
+呼ぶため、node が存在するなら `currentGlobal` は必ず設定済み = 到達不能を実証して削除）／
+明示宣言形の cross-Global 分離が未検証（変異で確認）／`EffectSlotLimitError` が手組み mock 経由
+でしか検証されていない（実 manager 経路のテストを追加）。
+
+**テストは236行追加・0行削除** — 実装を通すために既存アサーションを緩めた箇所はない。
+
+> **既知フレーク（本 PR と無関係）**: `daemon-client.spec.ts` の #484 D1 argv テスト2件は
+> **#520** で追跡中。本ブランチは当該テストも `daemon-client.ts` も触っていない（差分空）。
+> 根因は「spawn した shell の書き込みを待たずに読む」レースで、#520 の「全 suite 同時実行時のみ」
+> という記述より広く、**負荷が高ければ単独実行でも落ちる**（本セッションで観測）。
+
+**検証**: 全 suite **1631 passed / 29 skipped**（S3 前 1611・レビュー修正で +14）・
+`tsc --build` 通過 / lint エラー0 / `cargo test` 全 crate green /
 `cargo fmt --check` 通過 / `cargo clippy --all-targets` 警告なし
 
-**関連**: #517（統括）・#521（S3）・#522（S4 = Rust プロトコル拡張の受け皿）・
-#518（S1）・#519（S2）・#409（`sidechain:` / `outs:` の実配線）・#484 D4
+**関連**: #517（統括）・#521（S3）・#523（PR）・#522（S4 = Rust プロトコル拡張の受け皿）・
+#518（S1）・#519（S2）・#409（`sidechain:` / `outs:` の実配線）・#484 D4・#520（既知フレーク）
 
 ### 6.292 feat(engine): Signal Chain チェーンメソッドの解決とディスパッチ #517 S2 (Jul 26, 2026)
 

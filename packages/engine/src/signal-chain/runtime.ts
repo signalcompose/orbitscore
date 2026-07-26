@@ -259,8 +259,13 @@ export function resolveMixerNode(
   name: string,
   global?: Global,
 ): MixerRuntimeNode | undefined {
+  // `explicit.global` is always a real Global, so when `global` is undefined
+  // this comparison is false for every node — an unresolved owning Global
+  // (#523 IMPORTANT 7) must not fall back to matching a name against ANY
+  // registered Global, which would silently revert to the pre-SC.4
+  // unrestricted lookup and break cross-Global isolation (SC.4).
   const explicit = registry.nodes.get(name)
-  if (explicit?.global === global || (!global && explicit)) return explicit
+  if (explicit?.global === global) return explicit
   const stringNode = global ? global.resolveMixerBus(name) : undefined
   if (global && stringNode) {
     const handle = global[stringNode.kind](name)

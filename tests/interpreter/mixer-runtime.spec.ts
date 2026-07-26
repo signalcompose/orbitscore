@@ -237,6 +237,29 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     })
   })
 
+  it('rejects declaring a sum/aux node named "master" while keeping an output named "master" legal (#523 IMPORTANT 6)', async () => {
+    // `.master` is reserved (reset to hardware/master); an output endpoint
+    // named `master` IS the master, so that form must keep working.
+    const sumState = stateWith(new Global(new RecordingScheduler()))
+    await run('var mix = init global.mixer', sumState)
+    await expect(run('var master = mix.sum', sumState)).rejects.toThrow(
+      /master.*reserved|reserved.*master/i,
+    )
+
+    const auxState = stateWith(new Global(new RecordingScheduler()))
+    await run('var mix = init global.mixer', auxState)
+    await expect(run('var master = mix.aux', auxState)).rejects.toThrow(
+      /master.*reserved|reserved.*master/i,
+    )
+
+    const outputState = stateWith(new Global(new RecordingScheduler()))
+    await run('var mix = init global.mixer\nvar master = mix.output(1, 2)', outputState)
+    expect(outputState.mixers.nodes.get('master')).toMatchObject({
+      kind: 'output',
+      channels: [1, 2],
+    })
+  })
+
   it('keeps implicit master fallback independent across Globals', async () => {
     const g1 = new Global(new RecordingScheduler())
     const g2 = new Global(new RecordingScheduler())
@@ -251,6 +274,35 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
       global: g2,
       channels: [1, 2],
     })
+  })
+
+  it('keeps an explicitly declared node invisible from another Global (#523 IMPORTANT 8)', async () => {
+    // The existing cross-Global isolation coverage only exercises the
+    // string-form path (global.sum("x") → global.resolveMixerBus). An
+    // explicit `var`-declared node (mix.sum/mix.aux) is looked up via
+    // `registry.nodes.get`, a different branch of resolveMixerNode — verify it
+    // is equally scoped to its declaring Global.
+    const g1 = new Global(new RecordingScheduler())
+    const g2 = new Global(new RecordingScheduler())
+    const state = stateWith(g1)
+    state.globals.set('g1', g1)
+    state.globals.set('g2', g2)
+    await run('var mix1 = init g1.mixer\nvar drums = mix1.sum', state)
+
+    expect(resolveMixerNode(state.mixers, 'drums', g1)).toMatchObject({ kind: 'sum', global: g1 })
+    expect(resolveMixerNode(state.mixers, 'drums', g2)).toBeUndefined()
+  })
+
+  it('does not resolve an explicit node when the caller has no known owning Global (#523 IMPORTANT 7)', async () => {
+    // resolveMixerNode used to special-case an unresolved `global` (undefined)
+    // by returning the first name match from ANY registered Global — silently
+    // reverting to the pre-SC.4 unrestricted lookup instead of failing loudly.
+    const g1 = new Global(new RecordingScheduler())
+    const state = stateWith(g1)
+    state.globals.set('g1', g1)
+    await run('var mix1 = init g1.mixer\nvar drums = mix1.sum', state)
+
+    expect(resolveMixerNode(state.mixers, 'drums', undefined)).toBeUndefined()
   })
 
   it('executes mixer declarations through named and star file imports', async () => {

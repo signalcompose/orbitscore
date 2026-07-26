@@ -113,4 +113,36 @@ describe('Global.sum() / Global.aux()', () => {
     expect(global.resolveSumBus('shared-name')).toBe('sum-bus-0')
     expect(global.resolveAuxBus('shared-name')).toBe('aux-bus-0')
   })
+
+  it('rejects "master" as a sum/aux name — it is reserved for the output endpoint (#523 IMPORTANT 6)', () => {
+    // `.master` means "reset routing to hardware/master". Nothing stopped a
+    // user from declaring `global.sum("master")`, after which `.master`
+    // silently resolved to their sum bus instead — no error, reserved meaning
+    // lost. Declaring an output endpoint named `master` (`mix.output(1, 2)`)
+    // must stay legal: that node genuinely IS the master.
+    const { global } = makeGlobal()
+    expect(() => global.sum('master')).toThrow(/master.*reserved|reserved.*master/i)
+    expect(() => global.aux('master')).toThrow(/master.*reserved|reserved.*master/i)
+  })
+
+  it('commits routing state only after the daemon accepts it, so a rejected call is not merged into a later one (#523 CRITICAL 5)', async () => {
+    // MixerManager.route() builds `next` from the last COMMITTED routing and
+    // only calls `this.routings.set(source, next)` after `setBusRouting`
+    // resolves. If that commit ever moved before the `await`, a rejected send
+    // would still be recorded, and the next (unrelated) call on the same
+    // source would silently resend it merged into its own payload.
+    const setBusRouting = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('daemon rejected'))
+      .mockResolvedValueOnce(undefined)
+    const engine = { setBusRouting, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const global = new Global(engine)
+    const handle = global.sum('drum')
+
+    await expect(handle.routeSend('aux-bus-0', 0.5)).rejects.toThrow('daemon rejected')
+
+    await handle.routeOutput('master')
+
+    expect(setBusRouting).toHaveBeenNthCalledWith(2, 'sum-bus-0', 'master', [])
+  })
 })

@@ -155,6 +155,20 @@ export class MixerManager {
     if (!name || !name.trim()) {
       throw new Error(`global.${kind}(name) requires a non-empty name.`)
     }
+    // `.master` is reserved for the output endpoint (reset routing to
+    // hardware/master); a sum/aux bus claiming that name would silently shadow
+    // it. Guarded here — rather than at each declaration call site — because
+    // the `var master = mix.sum` node-declaration form (registerMixerNode in
+    // signal-chain/runtime.ts) reaches this SAME method with the declared
+    // variable name, so one check covers both the string form and the
+    // node-declaration form. An output named `master` never reaches here: it
+    // is handled entirely in registerMixerNode without calling sum()/aux().
+    if (name === 'master') {
+      throw new Error(
+        `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
+          `${kind} bus. Choose a different name for this ${kind} bus.`,
+      )
+    }
     if (this.linkAudioManager.isEnabled()) {
       throw new Error(`global.${kind}() cannot be used while LinkAudio is enabled in v1.`)
     }

@@ -88,9 +88,11 @@ export interface AudioEngine {
 
   /**
    * Runtime mixer routing (MX.4, #459/#453 M3): (re)sets `seqBus`'s output target (a sum
-   * bus) and/or send gains (to aux buses). `output: undefined` leaves the existing output
-   * target untouched (daemon-side semantics — there is no way to explicitly clear it back
-   * to the hardware bus in v1). `sends` is the FULL current send list for `seqBus` — callers
+   * bus) and/or send gains (to aux buses). `output` is three-state: `undefined` leaves the
+   * existing output target untouched, a sum-bus name redirects there, and the reserved word
+   * `"master"` clears it back to the hardware bus (#517 S3 — see `EngineWrap::set_bus_routing`
+   * in `engine_wrap.rs` for the wire encoding, where `1` means Master). `sends` is the FULL
+   * current send list for `seqBus` — callers
    * must re-send previously-set sends alongside a new one (the daemon only touches the
    * enumerated entries, so a shorter list does not clear the others, but callers should still
    * pass the complete set to keep engine state and TS-side state visibly in sync).

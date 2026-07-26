@@ -54,6 +54,8 @@ interface EffectSlotEntry {
 }
 
 export class EffectSlotLimitError extends Error {
+  // Unreferenced within this codebase today — kept for the typed-error contract.
+  // S4/#522's Rust protocol extension is the expected consumer (commit db01cd8).
   readonly code = 'EFFECT_SLOT_LIMIT'
 
   constructor(message: string) {
