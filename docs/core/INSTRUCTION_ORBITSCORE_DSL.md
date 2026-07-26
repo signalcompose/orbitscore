@@ -1265,8 +1265,12 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 > **なぜ共有をやめたか（#527 の調査）**: 旧規則の「同 path 共有」は、daemon が 2 回目の `LoadPlugin` を
 > `AlreadyLoaded` にする制約に合わせた TS 側 dedup だった。しかし**フォーマット側に共有を成立させる
 > 機構が無い**: CLAP は `clap_plugin_preset_load` がインスタンス丸ごとにしか効かず（port / channel で
-> スコープする引数が無い）、param も `param_id` のみでスコープを持たない（`PER_NOTE_ID` 等のフラグは
-> MPE 的なボイス単位モジュレーションであって持続する音色設定ではない）。host 側アクセサ
+> スコープする引数が無い）。param の**持続的な問い合わせ**（`clap_plugin_params.get_value` —
+> 引数は `param_id` のみで port / channel / key のスコープを持たない）にもスコープが無い。value 設定
+> イベント自体（`clap_event_param_value`）は `note_id` / `port_index` / `channel` / `key` のスコープ
+> フィールドを持つが、これは**発音中のボイス1つを一時的に狙う**ための機構であり（`PER_NOTE_ID` 等の
+> フラグと同様 MPE 的なボイス単位モジュレーション）、パートごとに持続する音色設定を表す機構ではない。
+> host 側アクセサ
 > `clap_host_track_info.get` が返す track 情報が**単数**であることからも（`clap_plugin_track_info` は
 > plugin 側の変更通知構造体）、CLAP は 1 インスタンス = 1 トラックを
 > 前提にしている。VST3 は Unit 機構（`UnitInfo.programListId` / `ParameterInfo.unitId` /
