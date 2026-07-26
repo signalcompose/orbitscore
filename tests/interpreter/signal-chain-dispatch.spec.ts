@@ -67,7 +67,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
           roles: ['effect'],
         },
         {
-          name: 'TAL Reverb 4',
+          name: 'TAL-Reverb-4',
           vendor: 'TAL',
           format: 'vst3',
           path: '/tal.vst3',
@@ -167,7 +167,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(effect).not.toHaveBeenCalled()
   })
 
-  it('dispatches plugin names and maps format/vendor selectors to string-form resolution', async () => {
+  it('dispatches normalized plugin method names across divergent per-format display names', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run('var kick = init global.seq\nvar mix = init global.mixer\nvar verb = mix.aux', state)
@@ -183,8 +183,29 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       state,
     )
 
-    expect(effect.mock.calls).toEqual([['TAL Reverb 4'], ['vst3/TAL Reverb 4'], ['B/Twin']])
+    expect(effect.mock.calls).toEqual([['TAL Reverb 4'], ['vst3/TAL-Reverb-4'], ['B/Twin']])
     expect(busEffect).toHaveBeenCalledWith('TAL Reverb 4')
+  })
+
+  it('requires quoted string selectors and rejects duplicate reserved arguments', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+    const effect = vi
+      .spyOn(state.sequences.get('kick')!, 'effect')
+      .mockResolvedValue(state.sequences.get('kick')!)
+
+    await expect(run('kick.TALReverb4(format: vst3)', state)).rejects.toThrow(
+      /format:.*string literal.*format: "vst3"/i,
+    )
+    expect(effect).not.toHaveBeenCalled()
+
+    await run('kick.TALReverb4(format: "vst3")', state)
+    expect(effect).toHaveBeenCalledWith('vst3/TAL-Reverb-4')
+
+    await expect(run('kick.TALReverb4(format: "clap", format: "vst3")', state)).rejects.toThrow(
+      /duplicate named argument "format:"/i,
+    )
   })
 
   it('rejects positional plugin arguments instead of silently dropping them', async () => {
@@ -327,6 +348,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('kick.TALReverb4(enabled: false)', state)).rejects.toThrow(/S4/)
     await expect(run('kick.TALReverb4(sidechain: missing)', state)).rejects.toThrow(
       /not a declared aux/,
+    )
+    await expect(run('kick.TALReverb4(sidechain: "duck")', state)).rejects.toThrow(
+      /sidechain:.*identifier.*sidechain: duck/i,
     )
     // Anchored on the argument name, not just the issue number: both cite #409
     // (it covers sidechain AND multi-out), so a bare /#409/ would still pass if

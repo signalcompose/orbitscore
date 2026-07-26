@@ -2,7 +2,7 @@ import { Global } from '../core/global'
 import { isMixerBusHandle } from '../core/global/mixer-manager'
 import type { MixerBusHandle } from '../core/global/mixer-manager'
 import { loadPluginCatalog, type PluginCatalogEntry } from '../core/global/plugin-catalog'
-import { resolveCatalogSpec } from '../core/global/plugin-resolver'
+import { resolveCatalogMethodCandidates, resolveCatalogSpec } from '../core/global/plugin-resolver'
 import { Sequence } from '../core/sequence'
 import type { NamedArg } from '../parser/types'
 import type { InterpreterState } from '../interpreter/types'
@@ -86,6 +86,38 @@ type PluginArguments = {
   vendor?: string
 }
 
+type ArgumentShape = 'string literal' | 'identifier' | 'number'
+
+const RESERVED_ARGUMENT_SHAPES = {
+  format: 'string literal',
+  vendor: 'string literal',
+  sidechain: 'identifier',
+  outs: 'number',
+} as const satisfies Record<string, ArgumentShape>
+
+function argumentShape(value: NamedArg['value']): ArgumentShape | 'boolean' {
+  if (typeof value === 'string') return 'string literal'
+  if (typeof value === 'number') return 'number'
+  if (typeof value === 'boolean') return 'boolean'
+  return 'identifier'
+}
+
+function validateReservedArgumentShape(methodName: string, named: NamedArg): void {
+  const expected = RESERVED_ARGUMENT_SHAPES[named.name as keyof typeof RESERVED_ARGUMENT_SHAPES]
+  if (expected === undefined || argumentShape(named.value) === expected) return
+
+  const example =
+    expected === 'string literal'
+      ? `${named.name}: "${named.name === 'format' ? 'vst3' : 'Vendor Name'}"`
+      : expected === 'identifier'
+        ? `${named.name}: duck`
+        : `${named.name}: 4`
+  throw new Error(
+    `Plugin method "${methodName}" requires ${named.name}: to be a ${expected}; ` +
+      `use ${example}.`,
+  )
+}
+
 /**
  * Classify every plugin-method argument. This function is deliberately total:
  * every known named-argument class is either consumed or rejected, and every
@@ -103,6 +135,7 @@ function classifyPluginArguments(
   args: readonly unknown[],
   state: InterpreterState,
 ): PluginArguments {
+  const seen = new Set<string>()
   return args.reduce<PluginArguments>((classified, arg) => {
     if (!arg || typeof arg !== 'object' || (arg as NamedArg).type !== 'named_arg') {
       throw new Error(
@@ -112,15 +145,22 @@ function classifyPluginArguments(
     }
 
     const named = arg as NamedArg
+    if (seen.has(named.name)) {
+      throw new Error(
+        `Plugin method "${methodName}" specifies duplicate named argument "${named.name}:".`,
+      )
+    }
+    seen.add(named.name)
+    validateReservedArgumentShape(methodName, named)
+
     switch (named.name) {
       case 'format':
         return { ...classified, format: named.value as string }
       case 'vendor':
         return { ...classified, vendor: named.value as string }
       case 'sidechain': {
-        const auxName =
-          (named.value as any)?.type === 'ref' ? (named.value as any).name : named.value
-        const node = state.mixers.nodes.get(auxName as string)
+        const auxName = (named.value as { type: 'ref'; name: string }).name
+        const node = state.mixers.nodes.get(auxName)
         if (!node || node.kind !== 'aux') {
           throw new Error(`sidechain: "${auxName}" is not a declared aux mixer node.`)
         }
@@ -144,14 +184,14 @@ export async function dispatchPlugin(
   state: InterpreterState,
 ): Promise<any> {
   const { format, vendor } = classifyPluginArguments(methodName, args, state)
-  const displayName = entries[0].name
+  const resolved = resolveCatalogMethodCandidates(methodName, entries, format, vendor, undefined)
+  const displayName = resolved.entry.name
   const spec =
     format !== undefined
       ? `${format}/${displayName}`
       : vendor !== undefined
         ? `${vendor}/${displayName}`
         : displayName
-  const resolved = resolveCatalogSpec(spec, undefined, undefined)
 
   const roles = new Set(resolved.entries.flatMap((entry) => entry.roles))
   let role: 'effect' | 'instrument'

@@ -81,27 +81,16 @@ export interface ResolvedCatalogPlugin {
   readonly path: string
   readonly pluginId: string
   readonly entries: readonly PluginCatalogEntry[]
+  readonly entry: PluginCatalogEntry
 }
 
-/**
- * Resolves a catalog (non-path) spec to its path, plugin ID, and matching catalog
- * entries per PC.2: exact name match (case-insensitive/trim/NFC), optional
- * `"vendor/name"` or `"format/name"` qualification, conditional role check, then
- * format preference (CLAP > VST3) among the formats the verb accepts (PH.3).
- * Passing `role: undefined` skips role filtering and returns all selected entries
- * so public callers can perform receiver-specific role dispatch themselves.
- */
-export function resolveCatalogSpec(
-  spec: string,
-  role: PluginRole | undefined,
-  catalogPathOverride: string | undefined,
-): ResolvedCatalogPlugin {
-  const catalogPath = resolveCatalogPath(catalogPathOverride)
-  const catalog = loadPluginCatalog(catalogPathOverride)
-  if (!catalog) {
-    throw new Error(`Plugin catalog not found at ${catalogPath}. ${RESCAN_HINT}`)
-  }
+type CatalogQualifier = {
+  readonly qualifierKey: string | undefined
+  readonly formatKey: string | undefined
+  readonly vendorKey: string | undefined
+}
 
+function catalogQualifier(spec: string): CatalogQualifier {
   const slashIndex = spec.indexOf('/')
   const qualifierKey =
     slashIndex === -1 ? undefined : normalizeCatalogKey(spec.slice(0, slashIndex))
@@ -109,10 +98,22 @@ export function resolveCatalogSpec(
     qualifierKey !== undefined && KNOWN_PLUGIN_FORMATS.includes(qualifierKey)
       ? qualifierKey
       : undefined
-  const vendorKey = formatKey === undefined ? qualifierKey : undefined
-  const nameKey = normalizeCatalogKey(slashIndex === -1 ? spec : spec.slice(slashIndex + 1))
+  return {
+    qualifierKey,
+    formatKey,
+    vendorKey: formatKey === undefined ? qualifierKey : undefined,
+  }
+}
 
-  let candidates = catalog.plugins.filter((entry) => normalizeCatalogKey(entry.name) === nameKey)
+function resolveCatalogCandidates(
+  spec: string,
+  initialCandidates: readonly PluginCatalogEntry[],
+  role: PluginRole | undefined,
+  catalogPath: string,
+): ResolvedCatalogPlugin {
+  const { qualifierKey, formatKey, vendorKey } = catalogQualifier(spec)
+  let candidates = [...initialCandidates]
+
   if (formatKey !== undefined) {
     const formatCandidates = candidates.filter(
       (entry) => normalizeCatalogKey(entry.format) === formatKey,
@@ -169,10 +170,58 @@ export function resolveCatalogSpec(
     )
   }
 
-  const chosen: PluginCatalogEntry =
+  const chosen =
     formatCandidates.find((entry) => entry.format.toLowerCase() === 'clap') ?? formatCandidates[0]
 
-  return { path: chosen.path, pluginId: chosen.pluginId, entries: candidates }
+  return { path: chosen.path, pluginId: chosen.pluginId, entries: candidates, entry: chosen }
+}
+
+/**
+ * Resolves a method-form plugin against candidates already matched by normalized
+ * method name. Qualification, ambiguity, role, and format precedence stay in the
+ * same implementation used by string-form catalog resolution.
+ */
+export function resolveCatalogMethodCandidates(
+  methodName: string,
+  candidates: readonly PluginCatalogEntry[],
+  format: string | undefined,
+  vendor: string | undefined,
+  role: PluginRole | undefined,
+  catalogPathOverride?: string,
+): ResolvedCatalogPlugin {
+  const displayName = candidates[0]?.name ?? methodName
+  const spec =
+    format !== undefined
+      ? `${format}/${displayName}`
+      : vendor !== undefined
+        ? `${vendor}/${displayName}`
+        : displayName
+  return resolveCatalogCandidates(spec, candidates, role, resolveCatalogPath(catalogPathOverride))
+}
+
+/**
+ * Resolves a catalog (non-path) spec to its path, plugin ID, and matching catalog
+ * entries per PC.2: exact name match (case-insensitive/trim/NFC), optional
+ * `"vendor/name"` or `"format/name"` qualification, conditional role check, then
+ * format preference (CLAP > VST3) among the formats the verb accepts (PH.3).
+ * Passing `role: undefined` skips role filtering and returns all selected entries
+ * so public callers can perform receiver-specific role dispatch themselves.
+ */
+export function resolveCatalogSpec(
+  spec: string,
+  role: PluginRole | undefined,
+  catalogPathOverride: string | undefined,
+): ResolvedCatalogPlugin {
+  const catalogPath = resolveCatalogPath(catalogPathOverride)
+  const catalog = loadPluginCatalog(catalogPathOverride)
+  if (!catalog) {
+    throw new Error(`Plugin catalog not found at ${catalogPath}. ${RESCAN_HINT}`)
+  }
+
+  const slashIndex = spec.indexOf('/')
+  const nameKey = normalizeCatalogKey(slashIndex === -1 ? spec : spec.slice(slashIndex + 1))
+  const candidates = catalog.plugins.filter((entry) => normalizeCatalogKey(entry.name) === nameKey)
+  return resolveCatalogCandidates(spec, candidates, role, catalogPath)
 }
 
 export interface ResolvedPluginSpec {
