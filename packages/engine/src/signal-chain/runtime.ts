@@ -4,6 +4,64 @@ import type { MixerBusHandle } from '../core/global/mixer-manager'
 import type { MixerInit, MixerNodeDecl } from '../parser/types'
 import type { InterpreterState } from '../interpreter/types'
 
+export const GLOBAL_DSL_METHODS: ReadonlySet<string> = new Set([
+  'tempo',
+  'beat',
+  'key',
+  'midiLatency',
+  'audioPath',
+  'audioDevice',
+  'linkAudio',
+  'effect',
+  'instrument',
+  'sum',
+  'aux',
+  'quantize',
+  'gain',
+  'compressor',
+  'limiter',
+  'normalizer',
+  'start',
+  'loop',
+  'stop',
+])
+
+export const SEQUENCE_DSL_METHODS: ReadonlySet<string> = new Set([
+  'quantize',
+  'tempo',
+  'beat',
+  'length',
+  'gain',
+  'defaultGain',
+  'pan',
+  'defaultPan',
+  'output',
+  'send',
+  'midi',
+  'instrument',
+  'effect',
+  'hold',
+  'voicelead',
+  'vl',
+  'cell',
+  'density',
+  'comp',
+  'gate',
+  'vel',
+  'octave',
+  'root',
+  'audio',
+  'chop',
+  'play',
+  'run',
+  'loop',
+  'stop',
+  'mute',
+  'unmute',
+])
+
+export const BUS_DSL_METHODS: ReadonlySet<string> = new Set(['effect'])
+
 export type MixerRuntimeNode =
   | {
       readonly kind: 'output'
@@ -28,14 +86,19 @@ export function createMixerRuntimeRegistry(): MixerRuntimeRegistry {
   return { handles: new Map(), nodes: new Map() }
 }
 
-const BUS_CHAIN_METHOD = 'effect'
+const BUS_UNSUPPORTED_DSL_METHODS: ReadonlySet<string> = new Set([
+  ...GLOBAL_DSL_METHODS,
+  ...SEQUENCE_DSL_METHODS,
+])
 
 function validateBusChainMethods(methods: readonly string[]): void {
-  const unsupported = methods.find((method) => method !== BUS_CHAIN_METHOD)
+  const unsupported = methods.find(
+    (method) => !BUS_DSL_METHODS.has(method) && BUS_UNSUPPORTED_DSL_METHODS.has(method),
+  )
   if (unsupported) {
     throw new Error(
-      `Mixer sum/aux bus method "${unsupported}" is not available in S1: ` +
-        `plugin-name methods arrive in S2, while routing tails and send sugar arrive ` +
+      `Mixer sum/aux bus DSL method "${unsupported}" is not available: ` +
+        `plugin-name methods are supported in S2, while routing tails and send sugar arrive ` +
         `in S3 (#517).`,
     )
   }
@@ -46,9 +109,11 @@ const BUS_PRODUCER_METHODS: ReadonlySet<string> = new Set(MIXER_BUS_KINDS)
 /**
  * Gate the pending methods of a statement's call chain: `methods[0]` is about to
  * be invoked on `receiver`, and the rest follow on each result in turn. Throws
- * for the first method that would land on a mixer sum/aux bus without being
- * supported in S1 (SC.3.3 forbids swallowing it — `callMethod` would otherwise
- * log "Method not found" and hand the receiver back unchanged).
+ * for the first method that is not part of the bus vocabulary. Plugin-name
+ * methods are valid from S2 and routing/send sugar arrives in S3; ordinary
+ * Sequence/Global verbs such as `gain` and `tempo` remain invalid on buses.
+ * This guard supplies the actionable staged diagnostic instead of `callMethod`'s
+ * generic method-not-found error.
  *
  * The gate is attached to the *value*, not to a call site: `applyMethodChain`
  * calls it before every dispatch, so a new statement handler cannot open this

@@ -17,6 +17,129 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.292 feat(engine): Signal Chain チェーンメソッドの解決とディスパッチ #517 S2 (Jul 26, 2026)
+
+**Date**: 2026-07-26
+**Status**: 🔄 レビュー中（PR #519・#518 の上に stacked）
+
+**内容**:
+Phase B (#514) で実装されたが**どこからも呼ばれていなかった** `signal-chain/resolve.ts` の
+`resolveChainName()` を実際のディスパッチに配線した。
+
+- チェーンメソッド名を「DSL メソッド / ミキサー名 / プラグイン名 / unknown」に解決
+- `plugin` → 既存 `effect()` / `instrument()` へディスパッチ
+- `mixer-name` → S3 で実装される旨の明示エラー
+- `unknown` → **明示エラー**（`callMethod` の `console.error` + receiver 返却を廃止）
+- dual-role プラグインは曖昧エラーとし、文字列形の逃げ道を案内
+- named args の段階別エラー: 実パラメータ / `preset:` / `enabled:` → S4、`sidechain:` / `outs:` → #409
+  （初版は `outs:` を #408 としていたが誤り。後述のラウンド2で訂正した）
+- curated DSL 語彙リスト（`GLOBAL_DSL_METHODS` / `SEQUENCE_DSL_METHODS` / `BUS_DSL_METHODS`）を導入。
+  実メソッドの機械列挙だと `getState` や scheduling API まで DSL 語彙として最優先解決されるため
+
+**プラグイン選択は既存 resolver を再利用（SC.3.2）**:
+仕様はメソッド形と文字列形の一致を要求している。独自に絞り込まず、named 引数から
+文字列形と同じ spec 文字列を組み立てて `resolveCatalogSpec` に渡し、その解決結果の
+roles だけで dispatch を決める。
+
+**解決とディスパッチはチェーンの実行点に置く**:
+`applyMethodChain`（S1 が唯一のチェーン実行点と定め、すでに `guardBusChain` を実行している場所）
+から新規 `signal-chain/dispatch.ts` を呼ぶ。`callMethod` は3引数の機械的な invoker のまま。
+`guardBusChain` は必ず解決より先に実行する（バスの未対応メソッドが S1 の staged エラーで
+落ちる性質を維持するため）。
+
+**レビュー経緯（`/simplify` 4観点 → `91f4070`）**:
+初回実装（`3c173b9`）は `resolveCatalogSpec` を再利用せず独自に再実装しており、
+**文字列形と実際に食い違っていた**:
+- 文字列形は `"format/name"` と `"vendor/name"` を排他的に扱い曖昧エラーを出すのに、
+  新実装は `format:` と `vendor:` を独立に AND で絞っていた
+- 両方指定時、role 判定は AND で絞った候補集合に基づくのに最終 spec は片方の修飾子しか
+  残さないため、**role 判定の根拠とは別の entry が解決され得た**
+- role 曖昧性を修飾子適用前の集合で計算していたため、ベンダーごとに role が異なる同名
+  プラグインで誤った案内（「effect と instrument で曖昧」）が出ていた。正しくは「ベンダーが曖昧」
+
+**設計判断（Fable・採用しなかった案とその理由）**:
+初回実装の `callMethod(obj, method, args, state?)` は、S1 が3回の再発の末に排除した失敗モード
+（渡し忘れると silently 効かない）を引数を鍵に再現していた。
+
+「`state` を必須にする」案は**仕様違反の副作用**を持つため却下した。パーサは括弧なしの
+`kick.foo` を任意の識別子で TransportStatement にするため、sequence transport 経路に `state` を
+渡すと**括弧なしの `kick.TALReverb4` がプラグイン dispatch される**ようになる。仕様は括弧なしを
+「sum / output 名 = 出力先指定」に予約しており（SC.4 決定 #77）、プラグイン呼び出しは括弧つき
+（SC.3.1）。型チェックの安心と引き換えに未検討の文法拡張を裏口から入れることになる。
+
+**efficiency**: `resolveChainName` は `dslMethods.has()` を最初に見て早期 return するが、
+その引数を組み立てる時点でカタログの読み込みと全走査が既に終わっていた。`.play(1)` のような
+プラグイン名になり得ない呼び出しでも毎回 `fs.statSync` とカタログ全走査（実測: 200件で約30µs、
+1000件で約130µs／呼び出し）が走っていた。DSL メソッドとして解決できた時点でカタログに触らない
+形にし、プラグイン名の索引もカタログ単位でキャッシュした。
+
+**逆方向テストの追加**: `Sequence` / `Global` の全 prototype メソッドが、DSL 語彙か明示的な
+内部 API 除外リストのどちらかに分類されることを検査する。従来は「列挙した名前が実在する」しか
+見ておらず、実在するのに未登録のメソッドを検出できなかった（プラグイン名と衝突すると黙って
+plugin dispatch へ流れる silent shadowing のリスク）。
+
+**pr-review-team ラウンド1**: Critical 1・Important 7・Minor 6。Critical は
+**プラグイン呼び出しが位置引数を黙って捨てる**（`kick.TALReverb4(0.5)` で 0.5 が消え、
+デフォルト値でロードされる。再現済み）。#517 で同じ「silent 素通り」の病が**5回目**で、
+毎回「既存の検証を再利用せず必要な分岐だけ再実装した結果、想定しなかったケースが抜けた」
+という同じ形。
+
+**ラウンド1の修正（`861153e`）**: 個別対処ではなく構造で閉じた。permissive なループを
+`classifyPluginArguments` に置き換え、全引数を走査して named_arg でなければ即エラー、
+named_arg なら `switch` で必ずいずれかに落ち、**`default` が S4 エラーを投げる**。
+素通りする経路が構造的に存在しない。あわせて:
+- `processArguments` の `format:` / `vendor:` 素通りを明示エラーに戻した（プラグイン
+  dispatch はこの関数を通らないため、到達するのは実在 DSL メソッドへの stray な
+  selector のみ。素通りさせると resolver が「第2の pluginId を渡すな」という見当違いの
+  エラーを出していた）
+- カタログ不在を「タイポ」と区別し、`orbit-plugin-scan` の案内に到達させた
+- テスト追加: `outs:` エラー / バス・Global の role 不一致 / `global.SomeEffect()`
+- バスレシーバのエラーに実バス名 / `pluginNames` を実 `Set` に / 陳腐化コメント3件を修正
+
+**ラウンド2**: Critical 0。silent-failure 観点は**クリーン**（`null` / 配列 / 名前欠落の
+named_arg など、パーサが生成し得ない形も含めて10種類を実際に流し、全てが throw することを
+確認。`ChainDispatch` が2要素の判別共用体であるため両分岐に跨る第三の経路が型として
+存在しないことも確認）。Important 2件:
+- **チェーン中間ホップのガード順序テストが、実際にはそれを検証していなかった**
+  （`bus.TALReverb4().gain(0.5)` はレシーバが最初からバスのため、ループ前の一括ガードで
+  弾かれる。ループ内のガードは一度も効いていない。2名が独立に発見、うち1名はスパイで
+  `effect` が0回しか呼ばれないことを確認）
+- 仕様書の `outs:` の依存 issue 番号が誤り（#408 はテンポ/トランスポート state の配線で
+  multi-out と無関係。正しくは #409 = マルチバス音声搬送で、sidechain と multi-out の
+  両方を担う）。**仕様書由来の誤りで、実装のエラーメッセージにも伝播していた**
+
+**ラウンド3（`05c88f3`）**: Critical 0・Important 2。
+- **`sidechain:` と `outs:` のアサーションが両者を区別できていなかった**。#409 への統一で
+  両者が同じ issue 番号を指すようになり、`/#409/` だけでは取り違えを検出できない状態に
+  なっていた（レビュアーがメッセージを入れ替えて33件すべてが通ることを実証）。
+  **当初の修正（引数名でアンカー）は効いていなかった** — エラー文は
+  `named argument "sidechain:" in ...` の形で引数名を先頭に必ず含むため、説明部分が
+  入れ替わっても通る。実際に変異させて初めて判明した。差異のある箇所（stage 句）を
+  狙う形に直し、**2ファイルで個別に**ミューテーション確認した（同じ `#409` を出す分岐が
+  `dispatch.ts` と `evaluate-method.ts` の2箇所にあり、テストも別）
+- WORK_LOG 6.292 の自己矛盾（概要行が `outs:` → #408 のまま）を訂正
+
+**ラウンド4**: Critical 0・Important 1。
+- **再発防止の注記自体が誤ったエントリ番号を指していた**（6.243 と書いたが正しくは 6.242）。
+  「誤った issue 番号が次の読者を誤導する」問題への対策が、同じ誤りを犯していた
+- 弱いアサーションの罠を**クラスとして掃き出し**、他に同型の組が無いことを確認。
+  `preset:` / `enabled:` / 任意パラメータが同じ `/S4/` を共有しているのは**同一の
+  `default` 分岐**から出ているためで、分岐が割れていない以上入れ替えようがない
+  （「同じ文言を共有すること」自体は欠陥ではなく、**別々の分岐が区別できない**ことが欠陥）
+- 3名すべてが収束と判定
+
+**検証**: 全 suite 1610 passed / 29 skipped（3回連続で同一）・lint エラー0・build 通過
+
+> ラウンド4で追加した `sidechain:` / `outs:` の統合アサーションは既存の `it()` ブロック内に
+> 足したため、テストケース総数は変わらない（vitest は `it` 単位で数える）。
+
+**関連**: #517（S2）・#518（S1・stacked base）・#514（Phase B）・#409（`sidechain:` / `outs:` の実配線）・#484 D4
+
+> **注**: #408 は「テンポ/トランスポート state の Engine への配線」であり、`outs:` とは無関係。
+> 同じ取り違えは **6.242**（2026-07-12）でも発生しており、design doc §4.2(b) の
+> 「#408 と同様に defer」という誤参照を owner 確認の上で訂正した記録がある。
+> **#408 を multi-out 系の依存として書かないこと**。
+
 ### 6.291 feat(engine): Signal Chain ミキサー宣言の実行 #517 S1 (Jul 26, 2026)
 
 **Date**: 2026-07-26
@@ -64,7 +187,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **follow-up**: `callMethod` の素通り自体（全レシーバに波及するため別 issue）/ `requireGlobal` と `processSequenceInit` の既存素通り / brand のシリアライズ境界（現状バスハンドルはプロセス内のみ）/ 増分評価下の暗黙 master 規則の spec 追記
 
-**関連**: #517（S1）・#514 / PR #515（Phase B）・#511（P0）・#484 D4・#408 / #409
+**関連**: #517（S1）・#514 / PR #515（Phase B）・#511（P0）・#484 D4・#409
 
 ### 6.290 test(daemon): outproc loading テストの flake 除去 #491 (Jul 18, 2026)
 

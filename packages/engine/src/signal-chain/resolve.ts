@@ -16,9 +16,8 @@
  * table must include the implicit `master(1,2)` of a file that declares no mixer
  * (SC.2 norm 6) — that defaulting is the caller's responsibility, not this module's.
  *
- * Landed ahead of its first caller ON PURPOSE: #514 locks the notation and
- * resolution-order contract early; the first consumers are the #517 staged
- * interpreter mapping and the #495 language service.
+ * The #517 S2 interpreter dispatch is the first consumer of this contract;
+ * the #495 language service will reuse the same pure resolution functions.
  */
 
 /** What one chain-method name resolves to. */
@@ -35,9 +34,9 @@ export type ChainNameTables = {
   /** Public DSL method names of the receiver (Sequence / Global / bus handle). */
   dslMethods: ReadonlySet<string>
   /** Declared mixer-node names (output / sum / aux variables), implicit master included. */
-  mixerNames: ReadonlySet<string>
+  mixerNames: { has(name: string): boolean }
   /** Normalized plugin-catalog names (see {@link normalizeCatalogName}). */
-  pluginNames: ReadonlySet<string>
+  pluginNames: { has(name: string): boolean }
 }
 
 /**

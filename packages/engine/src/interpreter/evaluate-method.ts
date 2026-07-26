@@ -21,16 +21,10 @@
  * ```
  */
 export async function callMethod(obj: any, methodName: string, args: any[]): Promise<any> {
-  // Process arguments BEFORE the method-existence check: plugin/bus chain names
-  // (SC.3) are NOT real methods until their #517 implementation stage, so a named arg would
-  // otherwise be swallowed by the not-found branch below instead of reaching
-  // the explicit staged-execution guard in processArguments (SC.3.3 forbids that).
   const processedArgs = await processArguments(methodName, args)
-
   const method = obj[methodName]
   if (!method || typeof method !== 'function') {
-    console.error(`Method not found: ${methodName} on ${obj.constructor.name}`)
-    return obj
+    throw new Error(`Method not found: ${methodName} on ${obj?.constructor?.name ?? 'receiver'}`)
   }
 
   // Call the method
@@ -66,9 +60,9 @@ export async function processArguments(methodName: string, args: any[]): Promise
 
   for (const arg of args) {
     if (arg && typeof arg === 'object' && arg.type === 'named_arg') {
-      // Selector arguments belong to plugin resolution in S2. Parameter values
-      // require S4's Rust param-set/enumeration protocol. Keep this explicit:
-      // SC.3.3 forbids silently ignoring either shape.
+      // Plugin-name dispatch handles selectors before reaching this function.
+      // Any named argument that arrives here belongs to a DSL method and must
+      // receive an explicit staged error (SC.3.3).
       let stage: string
       switch (arg.name) {
         case 'format':
@@ -79,7 +73,7 @@ export async function processArguments(methodName: string, args: any[]): Promise
           stage = 'sidechain routing arrives in #409'
           break
         case 'outs':
-          stage = 'multi-output routing arrives in #408'
+          stage = 'multi-output routing arrives in #409'
           break
         default:
           stage = 'parameter values require the Rust param-set/enumeration protocol in S4'

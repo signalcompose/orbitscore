@@ -44,14 +44,25 @@ describe('named arguments (SC.3)', () => {
     })
   })
 
-  it('rejects map values with an #408 pointer (outs:)', () => {
-    expect(() => parseAudioDSL('lead.Serum(outs: { "kick": bd })')).toThrow(/#408/)
+  it('rejects map values with an #409 pointer (outs:)', () => {
+    expect(() => parseAudioDSL('lead.Serum(outs: { "kick": bd })')).toThrow(/#409/)
   })
 
   it('throws an explicit not-yet-executable error when a named arg reaches evaluation', async () => {
+    // `sidechain:` and `outs:` both cite #409 (it covers sidechain AND multi-out),
+    // so the issue number alone cannot tell the two branches apart. The argument
+    // name cannot either — every message opens with `named argument "<name>:"`.
+    // Those assertions therefore match the STAGE clause, which is the only part
+    // that differs; a swap of the two explanations must fail the test.
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'mix', value: 0.5 }]),
     ).rejects.toThrow(/S4.*#517/)
+    // Selectors reaching HERE mean a real DSL method was called with a stray
+    // `format:`/`vendor:` (e.g. `kick.effect("X", format: "vst3")`) — plugin
+    // method-form calls are dispatched by signal-chain/dispatch.ts and never
+    // reach processArguments. So this must stay an explicit staged error, not a
+    // pass-through: letting the raw NamedArg object flow into a real method
+    // produced a misleading "second pluginId" error from the resolver instead.
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'format', value: 'CLAP' }]),
     ).rejects.toThrow(/S2.*#517/)
@@ -62,10 +73,10 @@ describe('named arguments (SC.3)', () => {
       processArguments('HogeComp', [
         { type: 'named_arg', name: 'sidechain', value: { type: 'ref', name: 'duck' } },
       ]),
-    ).rejects.toThrow(/#409/)
+    ).rejects.toThrow(/sidechain routing arrives in #409/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'outs', value: 'kick' }]),
-    ).rejects.toThrow(/#408/)
+    ).rejects.toThrow(/multi-output routing arrives in #409/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'preset', value: 'Wide' }]),
     ).rejects.toThrow(/S4.*#517/)

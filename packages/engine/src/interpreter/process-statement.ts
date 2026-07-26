@@ -14,6 +14,7 @@ import {
   ImportStatement,
   MixerHandleStatement,
 } from '../parser/audio-parser'
+import { dispatchPlugin, resolveChainDispatch } from '../signal-chain/dispatch'
 import {
   guardBusChain,
   mixerNodeReceiver,
@@ -62,7 +63,7 @@ export async function processStatement(
       } else {
         const node = resolveMixerNode(state.mixers, statement.target, state.currentGlobal)
         if (node) {
-          await processMixerNodeStatement(statement, node)
+          await processMixerNodeStatement(statement, node, state)
         } else {
           throw new Error(`Variable not found: ${statement.target}`)
         }
@@ -103,6 +104,8 @@ export async function processStatement(
  * threading each call's return value into the next (methods return `this` to
  * chain). Every receiver kind — global, sequence, bare bus reference, mixer node —
  * shares this loop so chain semantics stay defined in exactly one place.
+ * Each hop also resolves dynamic chain vocabulary and selects DSL-method versus
+ * plugin dispatch before threading the returned receiver onward.
  *
  * That includes which methods a receiver even accepts: {@link guardBusChain} runs
  * against the value about to be dispatched on, before each call. Enforcement
@@ -113,15 +116,23 @@ async function applyMethodChain(
   receiver: unknown,
   method: string,
   args: any[],
+  state: InterpreterState,
   chain?: ReadonlyArray<{ method: string; args: any[] }>,
 ): Promise<any> {
+  async function dispatchCall(receiver: unknown, method: string, args: any[]): Promise<any> {
+    const dispatch = resolveChainDispatch(receiver, method, state)
+    return dispatch.kind === 'plugin'
+      ? dispatchPlugin(receiver, method, args, dispatch.entries, state)
+      : callMethod(receiver, method, args)
+  }
+
   const pending = [method, ...(chain ?? []).map((call) => call.method)]
   guardBusChain(receiver, pending)
 
-  let result: any = await callMethod(receiver, method, args)
+  let result: any = await dispatchCall(receiver, method, args)
   for (const [index, chainedCall] of (chain ?? []).entries()) {
     guardBusChain(result, pending.slice(index + 1))
-    result = await callMethod(result, chainedCall.method, chainedCall.args)
+    result = await dispatchCall(result, chainedCall.method, chainedCall.args)
   }
   return result
 }
@@ -129,8 +140,15 @@ async function applyMethodChain(
 async function processMixerNodeStatement(
   statement: SequenceStatement,
   node: MixerRuntimeNode,
+  state: InterpreterState,
 ): Promise<void> {
-  await applyMethodChain(mixerNodeReceiver(node), statement.method, statement.args, statement.chain)
+  await applyMethodChain(
+    mixerNodeReceiver(node),
+    statement.method,
+    statement.args,
+    state,
+    statement.chain,
+  )
 }
 
 /**
@@ -198,7 +216,7 @@ async function processMixerHandleStatement(
   const global = requireGlobal(state, `${statement.kind}("${statement.name}")`)
   if (!global) return
 
-  await applyMethodChain(global, statement.kind, [statement.name], statement.chain)
+  await applyMethodChain(global, statement.kind, [statement.name], state, statement.chain)
 }
 
 /**
@@ -226,7 +244,7 @@ export async function processGlobalStatement(
     throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  await applyMethodChain(global, statement.method, statement.args, statement.chain)
+  await applyMethodChain(global, statement.method, statement.args, state, statement.chain)
 }
 
 /**
@@ -254,7 +272,7 @@ export async function processSequenceStatement(
     throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  await applyMethodChain(sequence, statement.method, statement.args, statement.chain)
+  await applyMethodChain(sequence, statement.method, statement.args, state, statement.chain)
 }
 
 /**
