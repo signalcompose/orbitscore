@@ -109,9 +109,11 @@ const BUS_PRODUCER_METHODS: ReadonlySet<string> = new Set(MIXER_BUS_KINDS)
 /**
  * Gate the pending methods of a statement's call chain: `methods[0]` is about to
  * be invoked on `receiver`, and the rest follow on each result in turn. Throws
- * for the first method that would land on a mixer sum/aux bus without being
- * supported in S1 (SC.3.3 forbids swallowing it — `callMethod` would otherwise
- * log "Method not found" and hand the receiver back unchanged).
+ * for the first method that is not part of the bus vocabulary. Plugin-name
+ * methods are valid from S2 and routing/send sugar arrives in S3; ordinary
+ * Sequence/Global verbs such as `gain` and `tempo` remain invalid on buses.
+ * This guard supplies the actionable staged diagnostic instead of `callMethod`'s
+ * generic method-not-found error.
  *
  * The gate is attached to the *value*, not to a call site: `applyMethodChain`
  * calls it before every dispatch, so a new statement handler cannot open this

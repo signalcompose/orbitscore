@@ -21,7 +21,12 @@ const catalogMethodIndexes = new WeakMap<
 
 function catalogEntriesForMethod(methodName: string): PluginCatalogEntry[] {
   const catalog = loadPluginCatalog()
-  if (!catalog) return []
+  // Reuse the catalog resolver's canonical missing-catalog diagnostic instead
+  // of collapsing absence into the same empty result as a misspelled name.
+  if (!catalog) {
+    resolveCatalogSpec(methodName, undefined, undefined)
+    throw new Error('Plugin catalog resolution unexpectedly returned without a catalog.')
+  }
 
   let index = catalogMethodIndexes.get(catalog)
   if (!index) {
@@ -61,7 +66,7 @@ export function resolveChainDispatch(
   const resolution = resolveChainName(methodName, {
     dslMethods,
     mixerNames: state.mixers.nodes,
-    pluginNames: { has: () => entries.length > 0 },
+    pluginNames: new Set(entries.length > 0 ? [methodName] : []),
   })
 
   if (resolution.kind === 'mixer-name') {
@@ -70,14 +75,58 @@ export function resolveChainDispatch(
     )
   }
   if (resolution.kind === 'plugin') return { kind: 'plugin', entries }
-  throw new Error(
-    `Unknown chain method "${methodName}" on ${(receiver as any)?.constructor?.name ?? 'receiver'}.`,
-  )
+  const receiverName = isMixerBusHandle(receiver)
+    ? `mixer bus "${receiver.bus}"`
+    : ((receiver as any)?.constructor?.name ?? 'receiver')
+  throw new Error(`Unknown chain method "${methodName}" on ${receiverName}.`)
 }
 
-function selector(args: any[], name: string): string | undefined {
-  const match = args.find((arg): arg is NamedArg => arg?.type === 'named_arg' && arg.name === name)
-  return match?.value as string | undefined
+type PluginArguments = {
+  format?: string
+  vendor?: string
+}
+
+/**
+ * Classify every plugin-method argument. This function is deliberately total:
+ * every known named-argument class is either consumed or rejected, and every
+ * non-named shape is rejected as positional syntax. Nothing can fall through.
+ */
+function classifyPluginArguments(
+  methodName: string,
+  args: readonly unknown[],
+  state: InterpreterState,
+): PluginArguments {
+  return args.reduce<PluginArguments>((classified, arg) => {
+    if (!arg || typeof arg !== 'object' || (arg as NamedArg).type !== 'named_arg') {
+      throw new Error(
+        `Plugin method "${methodName}" does not accept positional arguments; ` +
+          `all arguments must be named, for example ${methodName}(mix: 0.5).`,
+      )
+    }
+
+    const named = arg as NamedArg
+    switch (named.name) {
+      case 'format':
+        return { ...classified, format: named.value as string }
+      case 'vendor':
+        return { ...classified, vendor: named.value as string }
+      case 'sidechain': {
+        const auxName =
+          (named.value as any)?.type === 'ref' ? (named.value as any).name : named.value
+        const node = state.mixers.nodes.get(auxName as string)
+        if (!node || node.kind !== 'aux') {
+          throw new Error(`sidechain: "${auxName}" is not a declared aux mixer node.`)
+        }
+        throw new Error(`sidechain: is validated, but its routing requires #409.`)
+      }
+      case 'outs':
+        throw new Error(`outs: requires multi-output routing in #408.`)
+      default:
+        throw new Error(
+          `named argument "${named.name}:" requires S4 (#517 Rust param-set/preset/bypass support).`,
+        )
+    }
+  }, {})
 }
 
 export async function dispatchPlugin(
@@ -87,8 +136,7 @@ export async function dispatchPlugin(
   entries: PluginCatalogEntry[],
   state: InterpreterState,
 ): Promise<any> {
-  const format = selector(args, 'format')
-  const vendor = selector(args, 'vendor')
+  const { format, vendor } = classifyPluginArguments(methodName, args, state)
   const displayName = entries[0].name
   const spec =
     format !== undefined
@@ -97,22 +145,6 @@ export async function dispatchPlugin(
         ? `${vendor}/${displayName}`
         : displayName
   const resolved = resolveCatalogSpec(spec, undefined, undefined)
-
-  for (const arg of args) {
-    if (!arg || arg.type !== 'named_arg' || arg.name === 'format' || arg.name === 'vendor') continue
-    if (arg.name === 'sidechain') {
-      const auxName = arg.value?.type === 'ref' ? arg.value.name : arg.value
-      const node = state.mixers.nodes.get(auxName)
-      if (!node || node.kind !== 'aux') {
-        throw new Error(`sidechain: "${auxName}" is not a declared aux mixer node.`)
-      }
-      throw new Error(`sidechain: is validated, but its routing requires #409.`)
-    }
-    if (arg.name === 'outs') throw new Error(`outs: requires multi-output routing in #408.`)
-    throw new Error(
-      `named argument "${arg.name}:" requires S4 (#517 Rust param-set/preset/bypass support).`,
-    )
-  }
 
   const roles = new Set(resolved.entries.flatMap((entry) => entry.roles))
   let role: 'effect' | 'instrument'

@@ -17,6 +17,77 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.292 feat(engine): Signal Chain チェーンメソッドの解決とディスパッチ #517 S2 (Jul 26, 2026)
+
+**Date**: 2026-07-26
+**Status**: 🔄 レビュー中（PR #519・#518 の上に stacked）
+
+**内容**:
+Phase B (#514) で実装されたが**どこからも呼ばれていなかった** `signal-chain/resolve.ts` の
+`resolveChainName()` を実際のディスパッチに配線した。
+
+- チェーンメソッド名を「DSL メソッド / ミキサー名 / プラグイン名 / unknown」に解決
+- `plugin` → 既存 `effect()` / `instrument()` へディスパッチ
+- `mixer-name` → S3 で実装される旨の明示エラー
+- `unknown` → **明示エラー**（`callMethod` の `console.error` + receiver 返却を廃止）
+- dual-role プラグインは曖昧エラーとし、文字列形の逃げ道を案内
+- named args の段階別エラー: 実パラメータ / `preset:` / `enabled:` → S4、`sidechain:` → #409、`outs:` → #408
+- curated DSL 語彙リスト（`GLOBAL_DSL_METHODS` / `SEQUENCE_DSL_METHODS` / `BUS_DSL_METHODS`）を導入。
+  実メソッドの機械列挙だと `getState` や scheduling API まで DSL 語彙として最優先解決されるため
+
+**プラグイン選択は既存 resolver を再利用（SC.3.2）**:
+仕様はメソッド形と文字列形の一致を要求している。独自に絞り込まず、named 引数から
+文字列形と同じ spec 文字列を組み立てて `resolveCatalogSpec` に渡し、その解決結果の
+roles だけで dispatch を決める。
+
+**解決とディスパッチはチェーンの実行点に置く**:
+`applyMethodChain`（S1 が唯一のチェーン実行点と定め、すでに `guardBusChain` を実行している場所）
+から新規 `signal-chain/dispatch.ts` を呼ぶ。`callMethod` は3引数の機械的な invoker のまま。
+`guardBusChain` は必ず解決より先に実行する（バスの未対応メソッドが S1 の staged エラーで
+落ちる性質を維持するため）。
+
+**レビュー経緯（`/simplify` 4観点 → `91f4070`）**:
+初回実装（`3c173b9`）は `resolveCatalogSpec` を再利用せず独自に再実装しており、
+**文字列形と実際に食い違っていた**:
+- 文字列形は `"format/name"` と `"vendor/name"` を排他的に扱い曖昧エラーを出すのに、
+  新実装は `format:` と `vendor:` を独立に AND で絞っていた
+- 両方指定時、role 判定は AND で絞った候補集合に基づくのに最終 spec は片方の修飾子しか
+  残さないため、**role 判定の根拠とは別の entry が解決され得た**
+- role 曖昧性を修飾子適用前の集合で計算していたため、ベンダーごとに role が異なる同名
+  プラグインで誤った案内（「effect と instrument で曖昧」）が出ていた。正しくは「ベンダーが曖昧」
+
+**設計判断（Fable・採用しなかった案とその理由）**:
+初回実装の `callMethod(obj, method, args, state?)` は、S1 が3回の再発の末に排除した失敗モード
+（渡し忘れると silently 効かない）を引数を鍵に再現していた。
+
+「`state` を必須にする」案は**仕様違反の副作用**を持つため却下した。パーサは括弧なしの
+`kick.foo` を任意の識別子で TransportStatement にするため、sequence transport 経路に `state` を
+渡すと**括弧なしの `kick.TALReverb4` がプラグイン dispatch される**ようになる。仕様は括弧なしを
+「sum / output 名 = 出力先指定」に予約しており（SC.4 決定 #77）、プラグイン呼び出しは括弧つき
+（SC.3.1）。型チェックの安心と引き換えに未検討の文法拡張を裏口から入れることになる。
+
+**efficiency**: `resolveChainName` は `dslMethods.has()` を最初に見て早期 return するが、
+その引数を組み立てる時点でカタログの読み込みと全走査が既に終わっていた。`.play(1)` のような
+プラグイン名になり得ない呼び出しでも毎回 `fs.statSync` とカタログ全走査（実測: 200件で約30µs、
+1000件で約130µs／呼び出し）が走っていた。DSL メソッドとして解決できた時点でカタログに触らない
+形にし、プラグイン名の索引もカタログ単位でキャッシュした。
+
+**逆方向テストの追加**: `Sequence` / `Global` の全 prototype メソッドが、DSL 語彙か明示的な
+内部 API 除外リストのどちらかに分類されることを検査する。従来は「列挙した名前が実在する」しか
+見ておらず、実在するのに未登録のメソッドを検出できなかった（プラグイン名と衝突すると黙って
+plugin dispatch へ流れる silent shadowing のリスク）。
+
+**pr-review-team ラウンド1**: Critical 1・Important 7・Minor 6。Critical は
+**プラグイン呼び出しが位置引数を黙って捨てる**（`kick.TALReverb4(0.5)` で 0.5 が消え、
+デフォルト値でロードされる。再現済み）。#517 で同じ「silent 素通り」の病が**5回目**で、
+毎回「既存の検証を再利用せず必要な分岐だけ再実装した結果、想定しなかったケースが抜けた」
+という同じ形。修正は個別対処ではなく「すべての引数をいずれかの分類に落とし、落ちなければ
+throw」という構造にする方針。
+
+**検証**: 全 suite 1603 passed / 29 skipped・lint エラー0・build 通過
+
+**関連**: #517（S2）・#518（S1・stacked base）・#514（Phase B）・#408 / #409 / #484 D4
+
 ### 6.291 feat(engine): Signal Chain ミキサー宣言の実行 #517 S1 (Jul 26, 2026)
 
 **Date**: 2026-07-26

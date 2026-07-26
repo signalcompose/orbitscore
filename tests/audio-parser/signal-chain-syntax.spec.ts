@@ -52,12 +52,18 @@ describe('named arguments (SC.3)', () => {
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'mix', value: 0.5 }]),
     ).rejects.toThrow(/S4.*#517/)
+    // Selectors reaching HERE mean a real DSL method was called with a stray
+    // `format:`/`vendor:` (e.g. `kick.effect("X", format: "vst3")`) — plugin
+    // method-form calls are dispatched by signal-chain/dispatch.ts and never
+    // reach processArguments. So this must stay an explicit staged error, not a
+    // pass-through: letting the raw NamedArg object flow into a real method
+    // produced a misleading "second pluginId" error from the resolver instead.
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'format', value: 'CLAP' }]),
-    ).resolves.toEqual([{ type: 'named_arg', name: 'format', value: 'CLAP' }])
+    ).rejects.toThrow(/S2.*#517/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'vendor', value: 'Acme' }]),
-    ).resolves.toEqual([{ type: 'named_arg', name: 'vendor', value: 'Acme' }])
+    ).rejects.toThrow(/S2.*#517/)
     await expect(
       processArguments('HogeComp', [
         { type: 'named_arg', name: 'sidechain', value: { type: 'ref', name: 'duck' } },

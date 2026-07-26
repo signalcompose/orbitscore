@@ -84,9 +84,12 @@ export interface ResolvedCatalogPlugin {
 }
 
 /**
- * Resolves a catalog (non-path) spec to `(path, pluginId)` per PC.2: exact name match
- * (case-insensitive/trim/NFC), optional `"vendor/name"` or `"format/name"` qualification, role check, then
+ * Resolves a catalog (non-path) spec to its path, plugin ID, and matching catalog
+ * entries per PC.2: exact name match (case-insensitive/trim/NFC), optional
+ * `"vendor/name"` or `"format/name"` qualification, conditional role check, then
  * format preference (CLAP > VST3) among the formats the verb accepts (PH.3).
+ * Passing `role: undefined` skips role filtering and returns all selected entries
+ * so public callers can perform receiver-specific role dispatch themselves.
  */
 export function resolveCatalogSpec(
   spec: string,

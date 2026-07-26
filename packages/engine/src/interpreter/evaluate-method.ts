@@ -60,15 +60,15 @@ export async function processArguments(methodName: string, args: any[]): Promise
 
   for (const arg of args) {
     if (arg && typeof arg === 'object' && arg.type === 'named_arg') {
-      // Selector arguments belong to plugin resolution in S2. Parameter values
-      // require S4's Rust param-set/enumeration protocol. Keep this explicit:
-      // SC.3.3 forbids silently ignoring either shape.
+      // Plugin-name dispatch handles selectors before reaching this function.
+      // Any named argument that arrives here belongs to a DSL method and must
+      // receive an explicit staged error (SC.3.3).
       let stage: string
       switch (arg.name) {
         case 'format':
         case 'vendor':
-          processed.push(arg)
-          continue
+          stage = 'selectors (format:/vendor:) arrive with plugin resolution in S2'
+          break
         case 'sidechain':
           stage = 'sidechain routing arrives in #409'
           break

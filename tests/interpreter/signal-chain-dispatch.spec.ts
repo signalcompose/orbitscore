@@ -187,6 +187,40 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(busEffect).toHaveBeenCalledWith('TAL Reverb 4')
   })
 
+  it('rejects positional plugin arguments instead of silently dropping them', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+    const effect = vi.spyOn(state.sequences.get('kick')!, 'effect')
+
+    await expect(run('kick.TALReverb4(0.5)', state)).rejects.toThrow(
+      /positional argument.*named.*TALReverb4\(mix: 0\.5\)/i,
+    )
+    expect(effect).not.toHaveBeenCalled()
+  })
+
+  it('rejects plugin selectors passed to a string-form DSL method with the staged error', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+
+    await expect(run('kick.effect("TAL Reverb 4", format: "vst3")', state)).rejects.toThrow(
+      /named argument "format:".*not executable yet.*plugin resolution.*S2/i,
+    )
+  })
+
+  it('distinguishes a missing plugin catalog from an unknown plugin method', async () => {
+    process.env.ORBIT_PLUGIN_CATALOG = path.join(directory, 'missing-catalog.json')
+    clearPluginCatalogCache()
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+
+    await expect(run('kick.TALReverb4()', state)).rejects.toThrow(
+      /Plugin catalog not found.*orbit-plugin-scan/,
+    )
+  })
+
   it('dispatches an instrument-only plugin and rejects an ambiguous dual-role plugin', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
@@ -199,6 +233,29 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('lead.Dual()', state)).rejects.toThrow(
       /ambiguous.*effect\("Dual"\).*instrument\("Dual"\)/i,
     )
+  })
+
+  it('rejects instrument-only plugins on bus and Global effect receivers', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var mix = init global.mixer\nvar bus = mix.aux', state)
+
+    await expect(run('bus.Synth()', state)).rejects.toThrow(
+      /Plugin "Synth" does not support the "effect" role/,
+    )
+    await expect(run('global.Synth()', state)).rejects.toThrow(
+      /Plugin "Synth" does not support the "effect" role/,
+    )
+  })
+
+  it('dispatches a plugin method directly on Global', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const effect = vi.spyOn(global, 'effect').mockResolvedValue(global)
+
+    await run('global.TALReverb4()', state)
+
+    expect(effect).toHaveBeenCalledWith('TAL Reverb 4')
   })
 
   it('matches string-form ambiguity when format and vendor selectors are both present', async () => {
@@ -261,6 +318,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       /not a declared aux/,
     )
     await expect(run('kick.TALReverb4(sidechain: duck)', state)).rejects.toThrow(/#409/)
+    await expect(run('kick.TALReverb4(outs: 4)', state)).rejects.toThrow(/#408/)
     await expect(run('kick.drums()', state)).rejects.toThrow(/S3.*#517/)
     await run('kick.TALReverb4()', state)
     await expect(run('kick.TALReverb4()', state)).rejects.toThrow(/S4.*multiple insert/i)
@@ -271,6 +329,26 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const state = makeState(global)
     await run('var mix = init global.mixer\nvar bus = mix.aux', state)
     await expect(run('bus.gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
+  })
+
+  it('keeps the branded bus guard on a later chain hop after a successful plugin call', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var mix = init global.mixer\nvar bus = mix.aux', state)
+    const handle = state.mixers.nodes.get('bus')!.handle
+    vi.spyOn(handle, 'effect').mockResolvedValue(handle)
+
+    await expect(run('bus.TALReverb4().gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
+  })
+
+  it('names a mixer bus in unknown-method errors instead of reporting Object', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var mix = init global.mixer\nvar bus = mix.aux', state)
+
+    await expect(run('bus.NoSuch()', state)).rejects.toThrow(
+      /Unknown chain method "NoSuch" on mixer bus "aux-bus-0"/,
+    )
   })
 
   it('keeps every curated DSL name backed by a real receiver method', () => {
@@ -286,12 +364,14 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
   it('classifies every public receiver method as DSL vocabulary or an explicit internal API', () => {
     const sequenceInternalMethods = new Set([
       'constructor',
+      // Timing and loop-scheduling internals.
       'resolveQuantize',
       'nextQuantizedTime',
       'setName',
       'recalculateTiming',
       'seamlessParameterUpdate',
       'restartLoopFromCurrentTime',
+      // Output, engine-mode, and audio-buffer internals.
       'getOutputChannel',
       'syncBusRouting',
       'isMidi',
@@ -302,6 +382,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'prepareSlices',
       'activeScheduler',
       'clearEvents',
+      // Tonal-context and voice-leading internals.
       'baseOctave',
       'resolveRootContext',
       'degreeRootToPitchClass',
@@ -310,6 +391,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'applyVoiceLeading',
       'validateNonMidiDispatch',
       'containsStack',
+      // MIDI/event scheduling internals.
       'scheduleMidiEvents',
       'resolveNoteTarget',
       'resolveOutputDetune',
@@ -320,6 +402,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'scheduleEventsFromTime',
       'resolveDispatchChannel',
       'scheduleEvents',
+      // Runtime timing notifications and state inspection.
       'getPatternDuration',
       'notifyGlobalTempoChange',
       'notifyGlobalBeatChange',
@@ -327,6 +410,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     ])
     const globalInternalMethods = new Set([
       'constructor',
+      // MIDI, chord, pattern, and mode registries.
       'getMidiManager',
       'importChords',
       'defineChord',
@@ -335,6 +419,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'definePattern',
       'defineMode',
       'getBinding',
+      // Audio resolution and mixer-runtime plumbing.
       'resolveAudioSpec',
       'isLinkAudioEnabled',
       'declareMixerRuntime',
@@ -343,6 +428,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'resolveSumBus',
       'resolveAuxBus',
       'setBusRouting',
+      // Transport timing and host integration.
       'pushLinkTempoIfLeading',
       'getQuantize',
       'setDocumentDirectory',
@@ -352,6 +438,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'getQuantizedEffectPosition',
       'transportParams',
       'msToBarBeat',
+      // Sequence registry, scheduler access, and state inspection.
       'registerSequence',
       'getSequence',
       'seq',

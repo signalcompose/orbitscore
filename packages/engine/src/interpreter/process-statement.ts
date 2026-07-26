@@ -104,6 +104,8 @@ export async function processStatement(
  * threading each call's return value into the next (methods return `this` to
  * chain). Every receiver kind — global, sequence, bare bus reference, mixer node —
  * shares this loop so chain semantics stay defined in exactly one place.
+ * Each hop also resolves dynamic chain vocabulary and selects DSL-method versus
+ * plugin dispatch before threading the returned receiver onward.
  *
  * That includes which methods a receiver even accepts: {@link guardBusChain} runs
  * against the value about to be dispatched on, before each call. Enforcement
