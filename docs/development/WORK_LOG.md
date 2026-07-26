@@ -31,7 +31,8 @@ Phase B (#514) で実装されたが**どこからも呼ばれていなかった
 - `mixer-name` → S3 で実装される旨の明示エラー
 - `unknown` → **明示エラー**（`callMethod` の `console.error` + receiver 返却を廃止）
 - dual-role プラグインは曖昧エラーとし、文字列形の逃げ道を案内
-- named args の段階別エラー: 実パラメータ / `preset:` / `enabled:` → S4、`sidechain:` → #409、`outs:` → #408
+- named args の段階別エラー: 実パラメータ / `preset:` / `enabled:` → S4、`sidechain:` / `outs:` → #409
+  （初版は `outs:` を #408 としていたが誤り。後述のラウンド2で訂正した）
 - curated DSL 語彙リスト（`GLOBAL_DSL_METHODS` / `SEQUENCE_DSL_METHODS` / `BUS_DSL_METHODS`）を導入。
   実メソッドの機械列挙だと `getState` や scheduling API まで DSL 語彙として最優先解決されるため
 
@@ -109,7 +110,11 @@ named_arg など、パーサが生成し得ない形も含めて10種類を実�
 
 **検証**: 全 suite 1610 passed / 29 skipped・lint エラー0・build 通過
 
-**関連**: #517（S2）・#518（S1・stacked base）・#514（Phase B）・#408 / #409 / #484 D4
+**関連**: #517（S2）・#518（S1・stacked base）・#514（Phase B）・#409（`sidechain:` / `outs:` の実配線）・#484 D4
+
+> **注**: #408 は「テンポ/トランスポート state の Engine への配線」であり、`outs:` とは無関係。
+> 同じ取り違えは 6.243 でも一度発生しており（design doc の誤参照を訂正した記録あり）、
+> **#408 を multi-out 系の依存として書かないこと**。
 
 ### 6.291 feat(engine): Signal Chain ミキサー宣言の実行 #517 S1 (Jul 26, 2026)
 
@@ -158,7 +163,7 @@ named_arg など、パーサが生成し得ない形も含めて10種類を実�
 
 **follow-up**: `callMethod` の素通り自体（全レシーバに波及するため別 issue）/ `requireGlobal` と `processSequenceInit` の既存素通り / brand のシリアライズ境界（現状バスハンドルはプロセス内のみ）/ 増分評価下の暗黙 master 規則の spec 追記
 
-**関連**: #517（S1）・#514 / PR #515（Phase B）・#511（P0）・#484 D4・#408 / #409
+**関連**: #517（S1）・#514 / PR #515（Phase B）・#511（P0）・#484 D4・#409
 
 ### 6.290 test(daemon): outproc loading テストの flake 除去 #491 (Jul 18, 2026)
 

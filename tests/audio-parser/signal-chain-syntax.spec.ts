@@ -49,6 +49,11 @@ describe('named arguments (SC.3)', () => {
   })
 
   it('throws an explicit not-yet-executable error when a named arg reaches evaluation', async () => {
+    // `sidechain:` and `outs:` both cite #409 (it covers sidechain AND multi-out),
+    // so the issue number alone cannot tell the two branches apart. The argument
+    // name cannot either — every message opens with `named argument "<name>:"`.
+    // Those assertions therefore match the STAGE clause, which is the only part
+    // that differs; a swap of the two explanations must fail the test.
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'mix', value: 0.5 }]),
     ).rejects.toThrow(/S4.*#517/)
@@ -68,10 +73,10 @@ describe('named arguments (SC.3)', () => {
       processArguments('HogeComp', [
         { type: 'named_arg', name: 'sidechain', value: { type: 'ref', name: 'duck' } },
       ]),
-    ).rejects.toThrow(/#409/)
+    ).rejects.toThrow(/sidechain routing arrives in #409/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'outs', value: 'kick' }]),
-    ).rejects.toThrow(/#409/)
+    ).rejects.toThrow(/multi-output routing arrives in #409/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'preset', value: 'Wide' }]),
     ).rejects.toThrow(/S4.*#517/)

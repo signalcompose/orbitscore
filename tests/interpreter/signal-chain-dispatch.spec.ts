@@ -317,8 +317,13 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('kick.TALReverb4(sidechain: missing)', state)).rejects.toThrow(
       /not a declared aux/,
     )
-    await expect(run('kick.TALReverb4(sidechain: duck)', state)).rejects.toThrow(/#409/)
-    await expect(run('kick.TALReverb4(outs: 4)', state)).rejects.toThrow(/#409/)
+    // Anchored on the argument name, not just the issue number: both cite #409
+    // (it covers sidechain AND multi-out), so a bare /#409/ would still pass if
+    // the two branches' messages were swapped.
+    await expect(run('kick.TALReverb4(sidechain: duck)', state)).rejects.toThrow(
+      /^sidechain:.*#409/,
+    )
+    await expect(run('kick.TALReverb4(outs: 4)', state)).rejects.toThrow(/^outs:.*#409/)
     await expect(run('kick.drums()', state)).rejects.toThrow(/S3.*#517/)
     await run('kick.TALReverb4()', state)
     await expect(run('kick.TALReverb4()', state)).rejects.toThrow(/S4.*multiple insert/i)
