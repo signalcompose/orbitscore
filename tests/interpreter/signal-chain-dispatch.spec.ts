@@ -425,6 +425,24 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(routing).toHaveBeenCalledWith('seq-bus-0', 'master', [])
   })
 
+  it('rejects an output whose left channel is 1 but whose right channel is not 2', async () => {
+    // The case above only exercises `left !== 1` (channels 3,4), so relaxing the
+    // guard to `if (left !== 1)` alone leaves the suite green — the right-channel
+    // half of the comparison goes unverified (found by mutating it in review
+    // round 2). `mix.output(1, 3)` shares master's left channel without being
+    // master, so it pins the other half.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run(
+      'var kick = init global.seq\nvar mix = init global.mixer\nvar odd = mix.output(1, 3)',
+      state,
+    )
+    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+
+    await expect(run('kick.odd', state)).rejects.toThrow(/odd.*1.*3.*#484 D4/s)
+    expect(routing).not.toHaveBeenCalled()
+  })
+
   it('supports named send arguments and routing from a mixer bus receiver', async () => {
     const scheduler = new RecordingScheduler() as RecordingScheduler & {
       setBusRouting: ReturnType<typeof vi.fn>

@@ -143,12 +143,40 @@ SC.4 の Global 分離をバイパス（`executeModuleIR` が import 元と同�
 
 **テストは236行追加・0行削除** — 実装を通すために既存アサーションを緩めた箇所はない。
 
+**pr-review-team ラウンド2 — Critical 0・Important 1**:
+4レビュアーで再検証。ラウンド1修正はすべて実行による裏取りで健全と確認された。
+
+- **最大の懸念（パーサーの `skipNewlines`）は問題なし**: 2名が独立に検証。`kick.drums\nkick.pan(0.5)`
+  は2文に正しく分離し、`kick.drums\n.pan(0.5)`（次行が先頭ドット）が chain になるのは
+  **括弧あり経路（本 PR 未変更）の `kick.audio(1)\n.pan(0.5)` と同一挙動**。C3 修正は既存経路と
+  対称にしただけで、新しい飲み込み経路は作っていない
+- **C2 ガードは chain 2ホップ目以降でも発火**: `kick.verb(0.5).alt` で reject され、かつ
+  `setBusRouting` が1回だけ呼ばれた（1ホップ目は正常完了）ことまで実証
+- **C4 の `seen` は total**: `null` / 配列 / ネストオブジェクト / **name が undefined の named_arg**
+  （パーサーが生成し得ない壊れた IR）等10種以上を投入し全て例外
+- **fixer の自己申告した変異検証2件を独立に再現**: 15変異のうち14を新規テストが検出
+- **`applyMethodChain` の全4呼び出し元を確認**: `processMixerHandleStatement` のみ `invocation` を
+  渡していないが、`MixerHandleStatement` 型に該当フィールドが無く文法上 `sum(...)` / `aux(...)` は
+  常に括弧付き（bare 形が存在しない）ため、見落としではなくスコープ外
+
+**Important 1件（修正済み）**: 非 master output ガード `left !== 1 || right !== 2` を
+`left !== 1` だけに緩める変異が全 suite グリーンのまま通った。既存テストが使う非 master output は
+`mix.output(3, 4)`（`left=3`）のみで、**`left===1` かつ `right!==2` のケースが未検証**だった
+（`mix.output(1, 3)`）。テストを追加し、**変異を入れて実際に落ちることを確認**した。
+
+> **誤検出の切り分け**: レビュアー1名が「新規の master reserved テストがフル suite で落ちた」と
+> 報告したが、**当該テストは `makeGlobal()` で毎回新しい Global を作る同期的な throw
+> アサーションのみ**（async / FS / タイマーを含まない）で、負荷で落ちる構造がない。同時刻に
+> 別レビュアーが `name === 'master'` ガードを `if (false && ...)` で無効化する変異を作業ツリーに
+> 置いていたため、その瞬間の計測だった。ガード健全な状態でフル suite を2回連続実行し
+> **1632 passed / 失敗0** を確認済み（並行レビューの副作用であり、フレークでも実装の欠陥でもない）。
+
 > **既知フレーク（本 PR と無関係）**: `daemon-client.spec.ts` の #484 D1 argv テスト2件は
 > **#520** で追跡中。本ブランチは当該テストも `daemon-client.ts` も触っていない（差分空）。
 > 根因は「spawn した shell の書き込みを待たずに読む」レースで、#520 の「全 suite 同時実行時のみ」
 > という記述より広く、**負荷が高ければ単独実行でも落ちる**（本セッションで観測）。
 
-**検証**: 全 suite **1631 passed / 29 skipped**（S3 前 1611・レビュー修正で +14）・
+**検証**: 全 suite **1632 passed / 29 skipped**（S3 前 1611・レビュー修正で +15）・
 `tsc --build` 通過 / lint エラー0 / `cargo test` 全 crate green /
 `cargo fmt --check` 通過 / `cargo clippy --all-targets` 警告なし
 
