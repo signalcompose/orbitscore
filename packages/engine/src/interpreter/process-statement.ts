@@ -14,6 +14,14 @@ import {
   ImportStatement,
   MixerHandleStatement,
 } from '../parser/audio-parser'
+import {
+  guardBusChain,
+  mixerNodeReceiver,
+  registerMixerHandle,
+  registerMixerNode,
+  resolveMixerNode,
+  type MixerRuntimeNode,
+} from '../signal-chain/runtime'
 
 import { InterpreterState } from './types'
 import { callMethod } from './evaluate-method'
@@ -52,7 +60,12 @@ export async function processStatement(
         // It's a sequence statement
         await processSequenceStatement(statement, state)
       } else {
-        console.error(`Variable not found: ${statement.target}`)
+        const node = resolveMixerNode(state.mixers, statement.target, state.currentGlobal)
+        if (node) {
+          await processMixerNodeStatement(statement, node)
+        } else {
+          throw new Error(`Variable not found: ${statement.target}`)
+        }
       }
       break
     case 'transport':
@@ -74,18 +87,50 @@ export async function processStatement(
       await processMixerHandleStatement(statement, state)
       break
     case 'mixer_init':
+      registerMixerHandle(state, statement)
+      break
     case 'mixer_node_decl':
-      // Signal Chain mixer declarations (SC.2.1) parse since #514 (Phase B,
-      // notation layer) but execute only from Phase C. Explicit — SC.3.3
-      // forbids silently ignoring what the user wrote.
-      throw new Error(
-        `Signal Chain mixer declarations (var ${statement.variableName} = ...) are not ` +
-          `executable yet: parsing landed in #514 (Phase B); execution lands in Phase C.`,
-      )
+      registerMixerNode(state, statement)
+      break
     default:
       // TypeScript should prevent this, but handle gracefully at runtime
       console.warn(`Unknown statement type: ${(statement as any).type}`)
   }
+}
+
+/**
+ * Apply a statement's main call and then its chained calls to `receiver`,
+ * threading each call's return value into the next (methods return `this` to
+ * chain). Every receiver kind — global, sequence, bare bus reference, mixer node —
+ * shares this loop so chain semantics stay defined in exactly one place.
+ *
+ * That includes which methods a receiver even accepts: {@link guardBusChain} runs
+ * against the value about to be dispatched on, before each call. Enforcement
+ * therefore travels with the value rather than with the handler that produced it,
+ * so a handler added later inherits it instead of having to remember it.
+ */
+async function applyMethodChain(
+  receiver: unknown,
+  method: string,
+  args: any[],
+  chain?: ReadonlyArray<{ method: string; args: any[] }>,
+): Promise<any> {
+  const pending = [method, ...(chain ?? []).map((call) => call.method)]
+  guardBusChain(receiver, pending)
+
+  let result: any = await callMethod(receiver, method, args)
+  for (const [index, chainedCall] of (chain ?? []).entries()) {
+    guardBusChain(result, pending.slice(index + 1))
+    result = await callMethod(result, chainedCall.method, chainedCall.args)
+  }
+  return result
+}
+
+async function processMixerNodeStatement(
+  statement: SequenceStatement,
+  node: MixerRuntimeNode,
+): Promise<void> {
+  await applyMethodChain(mixerNodeReceiver(node), statement.method, statement.args, statement.chain)
 }
 
 /**
@@ -153,13 +198,7 @@ async function processMixerHandleStatement(
   const global = requireGlobal(state, `${statement.kind}("${statement.name}")`)
   if (!global) return
 
-  let result: any = await callMethod(global, statement.kind, [statement.name])
-
-  if (statement.chain) {
-    for (const chainedCall of statement.chain) {
-      result = await callMethod(result, chainedCall.method, chainedCall.args)
-    }
-  }
+  await applyMethodChain(global, statement.kind, [statement.name], statement.chain)
 }
 
 /**
@@ -184,22 +223,10 @@ export async function processGlobalStatement(
 ): Promise<void> {
   const global = state.globals.get(statement.target)
   if (!global) {
-    console.error(`Global instance not found: ${statement.target}`)
-    return
+    throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  // Start with the global object
-  let result: any = global
-
-  // Process the main method
-  result = await callMethod(result, statement.method, statement.args)
-
-  // Process any chained methods
-  if (statement.chain) {
-    for (const chainedCall of statement.chain) {
-      result = await callMethod(result, chainedCall.method, chainedCall.args)
-    }
-  }
+  await applyMethodChain(global, statement.method, statement.args, statement.chain)
 }
 
 /**
@@ -224,22 +251,10 @@ export async function processSequenceStatement(
 ): Promise<void> {
   const sequence = state.sequences.get(statement.target)
   if (!sequence) {
-    console.error(`Sequence instance not found: ${statement.target}`)
-    return
+    throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  // Start with the sequence object
-  let result: any = sequence
-
-  // Process the main method
-  result = await callMethod(result, statement.method, statement.args)
-
-  // Process any chained methods
-  if (statement.chain) {
-    for (const chainedCall of statement.chain) {
-      result = await callMethod(result, chainedCall.method, chainedCall.args)
-    }
-  }
+  await applyMethodChain(sequence, statement.method, statement.args, statement.chain)
 }
 
 /**

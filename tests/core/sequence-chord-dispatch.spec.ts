@@ -7,6 +7,7 @@ import { MidiOutput } from '../../packages/engine/src/midi/midi-output'
 import { parseAudioDSL } from '../../packages/engine/src/parser/audio-parser'
 import { processStatement } from '../../packages/engine/src/interpreter/process-statement'
 import { InterpreterState } from '../../packages/engine/src/interpreter/types'
+import { createMixerRuntimeRegistry } from '../../packages/engine/src/signal-chain/runtime'
 
 /**
  * Phase 3 (#231) — chord values end to end (§6): the global chord namespace,
@@ -166,6 +167,7 @@ describe('Phase 3 — interpreter routing for import / chord_binding (§6)', () 
     return {
       globals: new Map([['g', global]]),
       sequences: new Map(),
+      mixers: createMixerRuntimeRegistry(),
       currentGlobal: global,
       audioEngine: undefined as never,
       isBooted: true,

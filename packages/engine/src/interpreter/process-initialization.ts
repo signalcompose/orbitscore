@@ -25,6 +25,12 @@ import { InterpreterState } from './types'
  * ```
  */
 export async function processGlobalInit(init: GlobalInit, state: InterpreterState): Promise<void> {
+  if (state.mixers.handles.has(init.variableName) || state.mixers.nodes.has(init.variableName)) {
+    throw new Error(
+      `Global name "${init.variableName}" conflicts with the existing mixer namespace.`,
+    )
+  }
+
   // Reuse existing global if it exists (for REPL persistence)
   let globalInstance = state.globals.get(init.variableName)
 
@@ -57,6 +63,12 @@ export async function processSequenceInit(
   init: SequenceInit,
   state: InterpreterState,
 ): Promise<void> {
+  if (state.mixers.handles.has(init.variableName) || state.mixers.nodes.has(init.variableName)) {
+    throw new Error(
+      `Sequence name "${init.variableName}" conflicts with the existing mixer namespace.`,
+    )
+  }
+
   let global: Global | undefined
 
   // If globalVariable is specified (new syntax: init global.seq)

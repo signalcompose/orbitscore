@@ -275,6 +275,11 @@ export class Global {
     return this.linkAudioManager.isEnabled()
   }
 
+  /** @internal Marks use of the Signal Chain hardware mixer namespace. */
+  declareMixerRuntime(): void {
+    this.mixerManager.declareRuntime()
+  }
+
   /** Eagerly load the v1 single master-insert plugin. */
   async effect(path: string, pluginId?: string): Promise<this> {
     await this.pluginEffectManager.effect(path, pluginId)

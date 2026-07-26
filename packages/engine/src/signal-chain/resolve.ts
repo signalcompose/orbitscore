@@ -1,10 +1,10 @@
 /**
- * Signal Chain shared name-resolution module (#514 Phase B).
+ * Signal Chain shared name-resolution module (#514 notation layer).
  *
  * Spec: docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md — SC.3.1 "grammar is static,
  * vocabulary is dynamic": the parser accepts any method name; what a chain method
  * MEANS is decided here, and this decision must be identical everywhere it is
- * asked — the interpreter (Phase C), diagnostics, and editor completion (#495)
+ * asked — the staged #517 interpreter mapping, diagnostics, and editor completion (#495)
  * all call these pure functions.
  *
  * Resolution order (SC.2 norm 3): known DSL method > declared mixer name >
@@ -12,12 +12,12 @@
  * the built-in vocabulary. Ties across the remaining two are reported as
  * `collisions` for the language service to warn about.
  *
- * The caller supplies the name tables. Note for Phase C: the declared-mixer-name
+ * The caller supplies the name tables. For the #517 runtime stages, the declared-mixer-name
  * table must include the implicit `master(1,2)` of a file that declares no mixer
  * (SC.2 norm 6) — that defaulting is the caller's responsibility, not this module's.
  *
- * Landed ahead of its first caller ON PURPOSE: #514 Phase B locks the
- * resolution-order contract early; the first consumers are the Phase C
+ * Landed ahead of its first caller ON PURPOSE: #514 locks the notation and
+ * resolution-order contract early; the first consumers are the #517 staged
  * interpreter mapping and the #495 language service.
  */
 

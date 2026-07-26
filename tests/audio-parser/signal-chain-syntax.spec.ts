@@ -1,8 +1,9 @@
 /**
  * Signal Chain DSL notation layer (#514 Phase B):
  * named arguments (SC.3), mixer declarations (SC.2.1), star import (SC.2.2),
- * and the shared name-resolution module. Execution (Phase C) is out of scope —
- * the new shapes throw explicit not-yet-executable errors, asserted below.
+ * and the shared name-resolution module. Execution landed later (#517): mixer
+ * declarations run as of S1 (see tests/interpreter/mixer-runtime.spec.ts), while
+ * named arguments still throw explicit not-yet-executable errors, asserted below.
  *
  * Spec: docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md
  */
@@ -50,17 +51,37 @@ describe('named arguments (SC.3)', () => {
   it('throws an explicit not-yet-executable error when a named arg reaches evaluation', async () => {
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'mix', value: 0.5 }]),
-    ).rejects.toThrow(/Phase C/)
+    ).rejects.toThrow(/S4.*#517/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'format', value: 'CLAP' }]),
+    ).rejects.toThrow(/S2.*#517/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'vendor', value: 'Acme' }]),
+    ).rejects.toThrow(/S2.*#517/)
+    await expect(
+      processArguments('HogeComp', [
+        { type: 'named_arg', name: 'sidechain', value: { type: 'ref', name: 'duck' } },
+      ]),
+    ).rejects.toThrow(/#409/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'outs', value: 'kick' }]),
+    ).rejects.toThrow(/#408/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'preset', value: 'Wide' }]),
+    ).rejects.toThrow(/S4.*#517/)
+    await expect(
+      processArguments('HogeComp', [{ type: 'named_arg', name: 'enabled', value: true }]),
+    ).rejects.toThrow(/S4.*#517/)
   })
 
-  it('fires the Phase C guard even when the method is not a real method (plugin names)', async () => {
-    // SC.3: plugin chain names are NOT methods on Sequence/Global until Phase C.
+  it('fires the #517 staged-execution guard even when the method is not a real method', async () => {
+    // SC.3: plugin chain names are NOT methods on Sequence/Global until S2.
     // The guard must run before the method-not-found swallow, or
     // `kick.HogeComp(threshold: -18)` would silently no-op.
     const receiver = {} // no HogeComp method — the realistic plugin-call shape
     await expect(
       callMethod(receiver, 'HogeComp', [{ type: 'named_arg', name: 'threshold', value: -18 }]),
-    ).rejects.toThrow(/Phase C/)
+    ).rejects.toThrow(/#517/)
   })
 
   it('rejects malformed named-arg values and missing separators explicitly', () => {
@@ -134,7 +155,7 @@ describe('star import (SC.2.2, decision #72)', () => {
 describe('chain notation (SC.0 / SC.4)', () => {
   it('parses the SC.0 track example: plugins, named args, send sugar, bare bus tail', () => {
     const ir = parseAudioDSL(
-      'kick.audioPath("kick.wav").chop(16).play(1, 5, 9, 13)\n' +
+      'kick.audio("kick.wav").chop(16).play(1, 5, 9, 13)\n' +
         '    .CLAPTestEffect(mix: 0.5)\n' +
         '    .HogeComp(threshold: -18, sidechain: duck)\n' +
         '    .verb(0.3)\n' +
@@ -142,7 +163,7 @@ describe('chain notation (SC.0 / SC.4)', () => {
         '    .drums',
     )
     const statement = ir.statements[0] as { chain: Array<{ method: string; args: unknown[] }> }
-    expect(statement).toMatchObject({ type: 'sequence', target: 'kick', method: 'audioPath' })
+    expect(statement).toMatchObject({ type: 'sequence', target: 'kick', method: 'audio' })
     expect(statement.chain.map((c) => c.method)).toEqual([
       'chop',
       'play',
@@ -155,15 +176,12 @@ describe('chain notation (SC.0 / SC.4)', () => {
     expect(statement.chain[6]).toMatchObject({ method: 'drums', args: [] })
   })
 
-  it('throws an explicit not-yet-executable error for mixer declarations at interpretation', async () => {
-    const { processStatement } = await import(
-      '../../packages/engine/src/interpreter/process-statement'
-    )
-    const statement = parseAudioDSL('var mix = init global.mixer').statements[0]!
-    await expect(
-      processStatement(statement, { globals: new Map(), sequences: new Map() } as never),
-    ).rejects.toThrow(/Phase C/)
-  })
+  // The mixer-declaration not-yet-executable guard that used to live here was
+  // retired when S1 (#517) made `var mix = init global.mixer` / `mix.sum` /
+  // `mix.aux` / `mix.output(ch, ch)` execute against the existing mixer
+  // primitives. Execution is now covered from the interpreter side by
+  // tests/interpreter/mixer-runtime.spec.ts; the parse-level assertions for the
+  // same shapes remain above.
 })
 
 describe('shared name resolution (SC.2 norm 3 / SC.3.2)', () => {
