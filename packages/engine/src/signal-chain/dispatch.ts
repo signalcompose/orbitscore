@@ -90,6 +90,13 @@ type PluginArguments = {
  * Classify every plugin-method argument. This function is deliberately total:
  * every known named-argument class is either consumed or rejected, and every
  * non-named shape is rejected as positional syntax. Nothing can fall through.
+ *
+ * Total by construction, not by discipline. The shape this replaced — handle
+ * the cases you thought of, `continue` past the rest — swallowed a case five
+ * separate times across #517, each time because a check was re-implemented
+ * rather than reused, and each time the gap was invisible until someone tried
+ * the input nobody had listed. Extend the `switch` (the `default` arm throws)
+ * rather than adding an early branch that can skip an argument.
  */
 function classifyPluginArguments(
   methodName: string,
@@ -120,7 +127,7 @@ function classifyPluginArguments(
         throw new Error(`sidechain: is validated, but its routing requires #409.`)
       }
       case 'outs':
-        throw new Error(`outs: requires multi-output routing in #408.`)
+        throw new Error(`outs: requires multi-output routing in #409.`)
       default:
         throw new Error(
           `named argument "${named.name}:" requires S4 (#517 Rust param-set/preset/bypass support).`,

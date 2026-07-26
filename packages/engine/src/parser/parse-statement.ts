@@ -821,7 +821,7 @@ export class StatementParser {
    * Parse one `name: value` named argument (SC.3). Values are restricted to
    * literals and identifier references: NUMBER (with optional `-`), STRING,
    * `true`/`false` (→ boolean), any other IDENTIFIER (→ deferred {@link ArgRef},
-   * e.g. `sidechain: duck`). Map values (`outs: { ... }`) are #408 scope and
+   * e.g. `sidechain: duck`). Map values (`outs: { ... }`) are #409 scope and
    * rejected with a pointer rather than a generic parse error.
    */
   private parseNamedArgument(): NamedArg {
@@ -833,7 +833,7 @@ export class StatementParser {
     const valueToken = ParserUtils.current(this.tokens, this.pos)
     if (valueToken.type === 'LBRACE') {
       throw new Error(
-        `named argument "${name}:" — map values (\`outs: { ... }\`) are not supported yet (#408).`,
+        `named argument "${name}:" — map values (\`outs: { ... }\`) are not supported yet (#409).`,
       )
     }
     if (valueToken.type === 'STRING') {

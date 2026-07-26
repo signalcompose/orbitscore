@@ -44,8 +44,8 @@ describe('named arguments (SC.3)', () => {
     })
   })
 
-  it('rejects map values with an #408 pointer (outs:)', () => {
-    expect(() => parseAudioDSL('lead.Serum(outs: { "kick": bd })')).toThrow(/#408/)
+  it('rejects map values with an #409 pointer (outs:)', () => {
+    expect(() => parseAudioDSL('lead.Serum(outs: { "kick": bd })')).toThrow(/#409/)
   })
 
   it('throws an explicit not-yet-executable error when a named arg reaches evaluation', async () => {
@@ -71,7 +71,7 @@ describe('named arguments (SC.3)', () => {
     ).rejects.toThrow(/#409/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'outs', value: 'kick' }]),
-    ).rejects.toThrow(/#408/)
+    ).rejects.toThrow(/#409/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'preset', value: 'Wide' }]),
     ).rejects.toThrow(/S4.*#517/)

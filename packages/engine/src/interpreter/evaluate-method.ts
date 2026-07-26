@@ -73,7 +73,7 @@ export async function processArguments(methodName: string, args: any[]): Promise
           stage = 'sidechain routing arrives in #409'
           break
         case 'outs':
-          stage = 'multi-output routing arrives in #408'
+          stage = 'multi-output routing arrives in #409'
           break
         default:
           stage = 'parameter values require the Rust param-set/enumeration protocol in S4'

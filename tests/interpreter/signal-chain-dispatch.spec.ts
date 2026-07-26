@@ -318,7 +318,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       /not a declared aux/,
     )
     await expect(run('kick.TALReverb4(sidechain: duck)', state)).rejects.toThrow(/#409/)
-    await expect(run('kick.TALReverb4(outs: 4)', state)).rejects.toThrow(/#408/)
+    await expect(run('kick.TALReverb4(outs: 4)', state)).rejects.toThrow(/#409/)
     await expect(run('kick.drums()', state)).rejects.toThrow(/S3.*#517/)
     await run('kick.TALReverb4()', state)
     await expect(run('kick.TALReverb4()', state)).rejects.toThrow(/S4.*multiple insert/i)
@@ -331,14 +331,15 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('bus.gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
   })
 
-  it('keeps the branded bus guard on a later chain hop after a successful plugin call', async () => {
+  it('keeps the branded bus guard when a later chain hop first returns a bus', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
-    await run('var mix = init global.mixer\nvar bus = mix.aux', state)
-    const handle = state.mixers.nodes.get('bus')!.handle
-    vi.spyOn(handle, 'effect').mockResolvedValue(handle)
+    const tempo = vi.spyOn(global, 'tempo')
 
-    await expect(run('bus.TALReverb4().gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
+    await expect(run('global.tempo(120).aux("verb").gain(0.5)', state)).rejects.toThrow(
+      /S2.*S3.*#517/,
+    )
+    expect(tempo).toHaveBeenCalledWith(120)
   })
 
   it('names a mixer bus in unknown-method errors instead of reporting Object', async () => {
