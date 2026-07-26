@@ -17,6 +17,92 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.293 feat(engine): Signal Chain バス名メソッドのルーティング写像 #517 S3 (Jul 26, 2026)
+
+**Date**: 2026-07-26
+**Status**: 🔄 レビュー前（実装完了・#521）
+
+**内容**:
+バス名メソッドを既存の send / output 経路へ写像し、SC.4 のルーティング意味論を実行可能にした。
+あわせて S1 / S2 から持ち越した義務6件を片付けた（いずれも S3 の実装で必ず触る箇所）。
+
+計画: Codex 起案 → Fable 独立第二意見 → 判断3件を owner 承認 → 確定（#521 コメント）。
+
+**Q1: 括弧なし単独文を SC.1(1) の等価性に載せる（義務 a）**:
+根本原因は「括弧の有無を interpreter に伝える情報が AST に無い」ことだった。`.drums` と
+`.TALReverb4()` はどちらも `args: []` に潰れており区別できなかった。`invocation: 'bare' | 'call'`
+を主呼び出しと全 chain hop に持たせ、分岐を行列で total にした:
+
+| | mixer sum/output | mixer aux | plugin | DSL method |
+|---|---|---|---|---|
+| bare | 出力先指定 | 明示エラー（kind） | `Name()` を案内 | **従来どおり `callMethod`** |
+| call | 明示エラー（kind） | send | plugin dispatch | 従来どおり |
+
+既知 transport（`start` / `stop` / `loop` / `run` / `mute`）は従来の AST を維持する。
+**`bare × DSL method` のセルは Fable が「計画の行列に無い」と指摘したもの**で、抜けると
+`kick.unmute` 等の既存動作が壊れる。回帰テストで固定した。
+
+S2 で「transport 経路に state を渡す」案を却下した理由（括弧なしの `kick.TALReverb4` が
+プラグイン dispatch され SC.4 決定 #77 に反する）は、この形では発生しない。
+
+**Q2: await 可能なルーティング経路（SC.2 規範5）**:
+`.verb(0.3)` / `.drums` / `.master` が評価 promise から await され、daemon の DAG / kind /
+逆 stage 拒否が伝播する。既存の同期契約は不変。routing 状態と full-state payload 構築は
+共有 primitive に集約し、Sequence と MixerBusHandle の双方から使う（SC.2 規範4 の
+`verb.Plugin().master`）。
+
+**`.master` — 予約語で hardware/master へ復帰**:
+`SetBusRouting` の `output` に予約語 `"master"` を渡すと sum への出力先指定を解除する。
+`output` の省略は従来どおり「変更なし」で、三状態を表現する。
+
+形式は**予約語を採用**（Codex の推奨は null 三状態だったが Fable が却下理由の誤りを実証）:
+wire 上の bus 名はプール名のみでユーザー宣言名は乗らないため衝突しない。`engine_wrap.rs` に
+予約コメントが既にあり、native のエンコードも `1 = Master` を持っていた。Rust 側の変更は最小限で、
+エンコード計算を検証段階へ寄せた（master は bus 索引を持たないため、従来の「検証は索引を返し
+ストア段階で +2」の分業では表現できなかった）。実装により無効化された予約コメントも実態に更新した。
+
+**Q3: 暗黙 master と文字列形バス名の語彙統合（義務 b・c）**:
+Global ごとの「有効 mixer node view」を canonical lookup に一本化。解決順は registry の明示ノード →
+同じ Global の文字列形 sum/aux → 明示ノードが無い場合のみ暗黙 master(1,2)。**同じ defaulting を
+2箇所で再実装しない。**`sidechain:` も同じ lookup。
+
+**暗黙 master の抑制は明示ノードのみで判定する**（Fable 指摘の追補3）。文字列形宣言を「明示」に
+含めると `global.sum("drums")` だけのファイルで `master` が語彙から消えて**互換破壊**になる。
+
+**Q4: Global 横断性（義務 d）**:
+Global 一致を canonical lookup の**必須引数**に。別 Global の同名ノードは語彙として見えず
+routing target にも使えない。
+
+**Q5: SC.5「後勝ち」（義務 e）→ S4（#522）**:
+staging と明文化し（spec 更新は `62f6bc9`）、kind / channel / Global 変更のエラーに
+**`S4 (#522)` の stage 表記を追加**した。
+
+**Q6: エラー文言債務（義務 f）**:
+- **文言スニッフィングを型付きエラーへ**: `EffectSlotLimitError` / `EFFECT_SLOT_LIMIT`。従来の
+  正規表現は Global の実文言 `one master insert` にマッチせず、**S4 案内が付かないバグだった**
+  （#521 コメントに実測記録）。テストが捏造文言で通していたため検出できなかった
+- 捏造 mock 文言のテストを廃し、実 manager の文言で検証する
+- string-form API に selector を渡した場合の案内を plugin method 形に更新
+- catalog 不在メッセージに typo 確認の案内を追加
+
+**send のタップ位置 → S4（#522）**:
+SC.4 規範3 は v1 では post-insert 固定。core spec MX.3 が以前から staging を宣言しており SC.4 側に
+反映した（`62f6bc9`）。v1 は 1 insert 制限でタップ点の区別が意味を持たず、複数 insert のスロット
+index と不可分。
+
+**テスト**:
+- fail-before 4件 → pass-after 21件（`signal-chain-dispatch.spec.ts`）
+- Rust: `reserved_master_output_resets_the_routing_atomic` を含む9件通過
+- **追補2・3 のテストを main が追加**（実装は正しかったがテストが無かった）: `kick.verb()` の
+  amount 省略が明示エラーになること / 文字列形宣言が暗黙 master を抑制しないこと。
+  **両方ミューテーションで検出力を確認**
+
+**検証**: 全 suite **1617 passed / 29 skipped**（S3 前 1611）・lint エラー0 /
+`cargo fmt --check` 通過 / `cargo clippy --all-targets` 警告なし
+
+**関連**: #517（統括）・#521（S3）・#522（S4 = Rust プロトコル拡張の受け皿）・
+#518（S1）・#519（S2）・#409（`sidechain:` / `outs:` の実配線）・#484 D4
+
 ### 6.292 feat(engine): Signal Chain チェーンメソッドの解決とディスパッチ #517 S2 (Jul 26, 2026)
 
 **Date**: 2026-07-26
