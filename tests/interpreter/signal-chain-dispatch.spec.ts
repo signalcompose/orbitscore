@@ -207,6 +207,17 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('kick.effect("TAL Reverb 4", format: "vst3")', state)).rejects.toThrow(
       /named argument "format:".*not executable yet.*plugin resolution.*S2/i,
     )
+    // `sidechain:` / `outs:` on a curated DSL method take the same route
+    // (resolveChainDispatch → callMethod → processArguments), but were only
+    // covered by a direct processArguments() unit call. Exercising them through
+    // run() catches a future resolver-wiring change that diverts named args
+    // before they reach processArguments — which the unit test cannot see.
+    await expect(run('kick.gain(sidechain: duck)', state)).rejects.toThrow(
+      /sidechain routing arrives in #409/,
+    )
+    await expect(run('kick.gain(outs: 4)', state)).rejects.toThrow(
+      /multi-output routing arrives in #409/,
+    )
   })
 
   it('distinguishes a missing plugin catalog from an unknown plugin method', async () => {
