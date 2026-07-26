@@ -40,12 +40,14 @@ export class PluginInstrumentManager {
     )
     await this.slots.declare(
       'instrument',
-      undefined,
-      'instrument',
-      normalizePluginInstanceName(spec),
-      resolved.path,
-      resolved.pluginId,
-      () => new Error('seq.instrument() supports one instrument instance in v1.'),
+      {
+        role: 'instrument',
+        bus: undefined,
+        normalizedName: normalizePluginInstanceName(spec),
+        resolvedPath: resolved.path,
+        pluginId: resolved.pluginId,
+      },
+      () => 'seq.instrument() supports one instrument instance in v1.',
     )
   }
 }

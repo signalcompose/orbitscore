@@ -92,11 +92,9 @@ export class SequenceEffectManager {
       `Sequence '${sequenceName}': seq.effect() cannot be used while LinkAudio is enabled in v1.`,
     )
 
-    const duplicateError = () =>
-      new Error(
-        `Sequence '${sequenceName}': seq.effect() supports one insert per sequence in v1; ` +
-          `chains (multiple inserts) are reserved for future support.`,
-      )
+    const duplicateMessage = () =>
+      `Sequence '${sequenceName}': seq.effect() supports one insert per sequence in v1; ` +
+      `chains (multiple inserts) are reserved for future support.`
 
     // passthrough（ensureBus 由来・insert 未ロード）は「既存 insert」ではない — 同じ bus を
     // その場で昇格する。実 insert が既にあれば slots.declare が冪等/self-heal/重複エラーを担う。
@@ -106,12 +104,14 @@ export class SequenceEffectManager {
     try {
       await this.slots.declare(
         sequenceName,
-        bus,
-        'effect',
-        normalizePluginInstanceName(spec),
-        resolved.path,
-        resolved.pluginId,
-        duplicateError,
+        {
+          role: 'effect',
+          bus,
+          normalizedName: normalizePluginInstanceName(spec),
+          resolvedPath: resolved.path,
+          pluginId: resolved.pluginId,
+        },
+        duplicateMessage,
       )
     } catch (err) {
       if (!hadBus) {

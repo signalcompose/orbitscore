@@ -52,7 +52,8 @@ export function validatePluginExtension(spec: string, role: PluginRole): void {
 }
 
 const PATH_DIRECT_PREFIXES = ['./', '../', '~/', '/']
-const KNOWN_PLUGIN_EXTENSIONS = ['.clap', '.vst3', '.component']
+/** plugin ファイルとして認識する拡張子の正本。新 format を足す時はここだけを変える。 */
+export const KNOWN_PLUGIN_EXTENSIONS = ['.clap', '.vst3', '.component']
 const KNOWN_PLUGIN_FORMATS = ['clap', 'vst3']
 
 /**

@@ -30,15 +30,15 @@ export class PluginEffectManager {
     )
     await this.slots.declare(
       'master',
-      undefined,
-      'effect',
-      normalizePluginInstanceName(spec),
-      resolved.path,
-      resolved.pluginId,
+      {
+        role: 'effect',
+        bus: undefined,
+        normalizedName: normalizePluginInstanceName(spec),
+        resolvedPath: resolved.path,
+        pluginId: resolved.pluginId,
+      },
       () =>
-        new Error(
-          'global.effect() supports one master insert in v1; effect chains are reserved for future support.',
-        ),
+        'global.effect() supports one master insert in v1; effect chains are reserved for future support.',
     )
   }
 }

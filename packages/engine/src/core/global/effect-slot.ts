@@ -6,11 +6,14 @@
  * install/rollback」「prefix 連番 + free-list の bus pool」をここに一本化する。
  */
 
+import * as path from 'path'
+
 import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
 import {
+  KNOWN_PLUGIN_EXTENSIONS,
   isPluginPathSpec,
   resolvePluginSpec,
   validatePluginExtension,
@@ -68,6 +71,20 @@ export interface InstrumentSlot extends PluginSlotBase {
 
 export type PluginSlot = EffectSlot | InstrumentSlot
 
+/**
+ * 1 宣言分の入力。`normalizedName`（instance identity 用の表示名）と `resolvedPath`
+ * （ロード対象の実ファイル）は意味が全く違うのに同じ `string` なので、位置引数で並べず
+ * 名前付きで受け取る（取り違えを型で防げないため）。
+ */
+export interface PluginDeclaration {
+  readonly role: 'effect' | 'instrument'
+  /** master insert は undefined。bus 付きは insert bus 名 */
+  readonly bus: string | undefined
+  readonly normalizedName: string
+  readonly resolvedPath: string
+  readonly pluginId: string | undefined
+}
+
 export class EffectSlotLimitError extends Error {
   // Unreferenced within this codebase today — kept for the typed-error contract.
   // S4/#522's Rust protocol extension is the expected consumer (commit db01cd8).
@@ -100,60 +117,49 @@ export class EffectChainMap<K> {
 
   /**
    * 宣言する（または冪等に再宣言する）。同一 spec の再宣言は既存 load を待ち、
-   * respawn 後の stale cache（`isPluginActive?.('effect', bus) === false`）なら
-   * 再ロードで self-heal する。異なる spec は `duplicateError` を throw（v1: 1 slot）。
+   * respawn 後の stale cache（`isPluginActive?.(role, bus) === false`）なら
+   * 再ロードで self-heal する。異なる spec は上限エラーを throw（v1: 1 slot）。
    * 新規宣言の load 失敗は宣言を取り除いて rethrow（呼び出し側は catch で bus の
    * 返却等の後始末を行える）。
    */
-  async declare(
-    key: K,
-    bus: string | undefined,
-    role: 'effect' | 'instrument',
-    normalizedName: string,
-    resolvedPath: string,
-    pluginId: string | undefined,
-    duplicateError: () => Error,
-  ): Promise<void> {
+  async declare(key: K, spec: PluginDeclaration, duplicateMessage: () => string): Promise<void> {
     const chain = this.chains.get(key) ?? []
     const existing = chain[0]
     if (existing) {
       if (
-        existing.role === role &&
-        existing.resolvedPath === resolvedPath &&
-        existing.pluginId === pluginId
+        existing.role === spec.role &&
+        existing.resolvedPath === spec.resolvedPath &&
+        existing.pluginId === spec.pluginId
       ) {
         await existing.load
         // Self-heal: respawn 後の復元失敗で engine 側だけ宣言が消えている場合、
         // 冪等パスで false success を返さず再ロードする（PluginEffectManager 由来の
         // silent-failure guard）。isPluginActive を持たない engine（SC/素の mock）は
         // 従来の no-op 冪等のまま。
-        if (this.audioEngine.isPluginActive?.(role, bus) === false) {
-          await this.issueLoad(key, bus, role, normalizedName, resolvedPath, pluginId, existing)
+        if (this.audioEngine.isPluginActive?.(spec.role, spec.bus) === false) {
+          await this.issueLoad(key, spec, existing)
         }
         return
       }
-      const error = duplicateError()
-      throw role === 'effect' ? new EffectSlotLimitError(error.message) : error
+      // 上限超過の型はこのマップが一元的に決める。呼び出し側は文言だけを渡す
+      // （`EffectSlotLimitError` は effect チェーンの上限専用 — `code` を消費する
+      // S4/#522 の Rust プロトコル拡張が effect を対象にしているため、他 role に
+      // 流用しない）。
+      throw spec.role === 'effect'
+        ? new EffectSlotLimitError(duplicateMessage())
+        : new Error(duplicateMessage())
     }
-    if (chain.length >= this.maxLength) {
-      const error = duplicateError()
-      throw role === 'effect' ? new EffectSlotLimitError(error.message) : error
-    }
-    await this.issueLoad(key, bus, role, normalizedName, resolvedPath, pluginId)
+    // `chain[0]` が空 = チェーンも空なので、ここに `chain.length >= maxLength` の
+    // ガードは要らない（到達不能）。複数 insert を許す時に必要になるのは長さ判定では
+    // なく、先頭だけでなくチェーン全体と spec を突き合わせる形への書き換え（PR-1b）。
+    await this.issueLoad(key, spec)
   }
 
-  private async issueLoad(
-    key: K,
-    bus: string | undefined,
-    role: 'effect' | 'instrument',
-    normalizedName: string,
-    resolvedPath: string,
-    pluginId: string | undefined,
-    replacing?: PluginSlot,
-  ): Promise<void> {
+  private async issueLoad(key: K, spec: PluginDeclaration, replacing?: PluginSlot): Promise<void> {
     if (!this.audioEngine.loadPlugin) {
       throw new Error('Plugin hosting requires the Rust engine backend.')
     }
+    const { role, bus, normalizedName, resolvedPath, pluginId } = spec
     // bus 無し（master insert）は 3 引数のまま呼ぶ（既存の呼び出し契約を変えない —
     // explicit undefined でも実 engine は等価だが、契約をピンするテスト/モックがある）。
     const load = (
@@ -189,10 +195,17 @@ export class EffectChainMap<K> {
   }
 }
 
-/** SC.5 の instance identity に使う plugin 名を安定化する。 */
+/**
+ * SC.5 の instance identity に使う plugin 名を安定化する。拡張子の集合は
+ * `KNOWN_PLUGIN_EXTENSIONS` を正本として参照する（ここで正規表現に書き下すと、
+ * AU（`.component`）対応などで片方だけ更新される二重管理になる）。
+ */
 export function normalizePluginInstanceName(spec: string): string {
-  const unqualified = spec.trim().normalize('NFC').split('/').pop() ?? spec
-  return unqualified.replace(/\.(?:clap|vst3|component)$/i, '')
+  const unqualified = path.basename(spec.trim().normalize('NFC'))
+  const extension = path.extname(unqualified).toLowerCase()
+  return KNOWN_PLUGIN_EXTENSIONS.includes(extension)
+    ? unqualified.slice(0, -extension.length)
+    : unqualified
 }
 
 /**

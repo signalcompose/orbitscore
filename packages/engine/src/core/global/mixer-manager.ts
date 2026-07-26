@@ -247,16 +247,16 @@ export class MixerManager {
     )
     await this.kinds[kind].inserts.declare(
       name,
-      bus,
-      'effect',
-      normalizePluginInstanceName(spec),
-      resolved.path,
-      resolved.pluginId,
+      {
+        role: 'effect',
+        bus,
+        normalizedName: normalizePluginInstanceName(spec),
+        resolvedPath: resolved.path,
+        pluginId: resolved.pluginId,
+      },
       () =>
-        new Error(
-          `${kind}("${name}").effect() supports one insert per bus in v1; chains (multiple ` +
-            `inserts) are reserved for future support.`,
-        ),
+        `${kind}("${name}").effect() supports one insert per bus in v1; chains (multiple ` +
+        `inserts) are reserved for future support.`,
     )
     return this.makeHandle(kind, name, bus)
   }
