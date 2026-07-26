@@ -193,15 +193,22 @@ export class MixerManager {
     if (!this.audioEngine.setBusRouting) {
       throw new Error('Mixer bus routing requires the Rust engine backend.')
     }
-    const current = this.routings.get(source) ?? { sends: new Map<string, number>() }
-    if (output !== undefined) current.output = output
-    if (send !== undefined) current.sends.set(send.bus, send.amount)
-    this.routings.set(source, current)
+    const current = this.routings.get(source)
+    // Build the next state without touching the stored one, and commit only after
+    // the daemon accepts it. Merging happens on every call, so a rejected push that
+    // had already been recorded would leave every later call building on a routing
+    // the daemon never applied.
+    const next = {
+      output: output !== undefined ? output : current?.output,
+      sends: new Map(current?.sends),
+    }
+    if (send !== undefined) next.sends.set(send.bus, send.amount)
     await this.audioEngine.setBusRouting(
       source,
-      current.output,
-      [...current.sends].map(([bus, gain]) => ({ bus, gain })),
+      next.output,
+      [...next.sends].map(([bus, gain]) => ({ bus, gain })),
     )
+    this.routings.set(source, next)
   }
 
   private async effectFor(

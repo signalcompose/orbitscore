@@ -77,20 +77,16 @@ export function resolveChainDispatch(
   // plugin catalog.
   if (dslMethods.has(methodName)) return { kind: 'dsl-method' }
 
-  const receiverGlobal =
-    receiver instanceof Sequence
-      ? receiver.getGlobal()
-      : receiver instanceof Global
-        ? receiver
-        : isMixerBusHandle(receiver)
-          ? [...state.globals.values()].find((candidate) => candidate.ownsMixerBus(receiver.bus))
-          : undefined
-  const node = resolveEffectiveMixerNode(state, methodName, receiverGlobal)
+  const receiverGlobal = resolveReceiverGlobal(receiver, state)
+  const node = resolveMixerNode(state.mixers, methodName, receiverGlobal)
   const entries = catalogEntriesForMethod(methodName)
   const resolution = resolveChainName(methodName, {
     dslMethods,
     mixerNames: {
-      has: (name) => resolveEffectiveMixerNode(state, name, receiverGlobal) !== undefined,
+      // `resolveChainName` queries this with the same name it was handed
+      // (resolve.ts:61), so the node resolved above already is the answer.
+      // Re-resolving would rebuild a mixer-bus handle just to discard it.
+      has: () => node !== undefined,
     },
     pluginNames: new Set(entries.length > 0 ? [methodName] : []),
   })
@@ -114,23 +110,21 @@ export function resolveChainDispatch(
   throw new Error(`Unknown chain method "${methodName}" on ${receiverName}.`)
 }
 
-function resolveEffectiveMixerNode(
-  state: InterpreterState,
-  name: string,
-  global: Global | undefined,
-) {
-  const explicit = state.mixers.nodes.get(name)
-  if (explicit && (!global || explicit.global === global)) return explicit
-  if (!global) return undefined
-  const stringNode = global.resolveMixerBus(name)
-  if (stringNode) {
-    return {
-      kind: stringNode.kind,
-      global,
-      handle: global[stringNode.kind](name),
-    } as const
+/**
+ * Which Global owns this chain receiver — the scope every mixer-name lookup is
+ * resolved against (SC.4: a node declared on another Global is not in scope).
+ *
+ * Kept as one function because both mixer-name resolution and `sidechain:`
+ * validation need it; a mixer-bus handle carries no back-reference, so its owner
+ * is found by asking each Global whether it owns that bus.
+ */
+function resolveReceiverGlobal(receiver: unknown, state: InterpreterState): Global | undefined {
+  if (receiver instanceof Sequence) return receiver.getGlobal()
+  if (receiver instanceof Global) return receiver
+  if (isMixerBusHandle(receiver)) {
+    return [...state.globals.values()].find((candidate) => candidate.ownsMixerBus(receiver.bus))
   }
-  return resolveMixerNode(state.mixers, name, global)
+  return undefined
 }
 
 type PluginArguments = {
@@ -213,17 +207,8 @@ function classifyPluginArguments(
         return { ...classified, vendor: named.value as string }
       case 'sidechain': {
         const auxName = (named.value as { type: 'ref'; name: string }).name
-        const global =
-          receiver instanceof Sequence
-            ? receiver.getGlobal()
-            : receiver instanceof Global
-              ? receiver
-              : isMixerBusHandle(receiver)
-                ? [...state.globals.values()].find((candidate) =>
-                    candidate.ownsMixerBus(receiver.bus),
-                  )
-                : undefined
-        const node = resolveEffectiveMixerNode(state, auxName, global)
+        const global = resolveReceiverGlobal(receiver, state)
+        const node = resolveMixerNode(state.mixers, auxName, global)
         if (!node || node.kind !== 'aux') {
           throw new Error(`sidechain: "${auxName}" is not a declared aux mixer node.`)
         }

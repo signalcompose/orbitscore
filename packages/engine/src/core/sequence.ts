@@ -77,6 +77,16 @@ function writtenPitchOf(ev: TimedEvent): SymbolicPitch {
   )
 }
 
+/**
+ * The `sends` half of a full-state `SetBusRouting` payload. Shared by both push
+ * paths so the payload shape cannot drift between them. Kept off the prototype:
+ * every `Sequence` method is part of the surface a plugin name could shadow
+ * (SC.2 norm 3), so internal helpers stay module-level.
+ */
+function buildRoutingSends(auxSends: ReadonlyMap<string, number>): { bus: string; gain: number }[] {
+  return Array.from(auxSends.entries()).map(([bus, gain]) => ({ bus, gain }))
+}
+
 export class Sequence {
   private global: Global
   private audioEngine: AudioEngine
@@ -441,9 +451,12 @@ export class Sequence {
 
   private async pushBusRouting(): Promise<void> {
     if (!this._insertBus) return
-    const sends = Array.from(this._auxSends.entries()).map(([bus, gain]) => ({ bus, gain }))
     try {
-      await this.global.setBusRouting(this._insertBus, this._sumOutputBus, sends)
+      await this.global.setBusRouting(
+        this._insertBus,
+        this._sumOutputBus,
+        buildRoutingSends(this._auxSends),
+      )
       this._busRoutingStale = false
     } catch (error) {
       this._busRoutingStale = true
@@ -460,11 +473,7 @@ export class Sequence {
   private syncBusRouting(): void {
     if (!this._insertBus) return
     const bus = this._insertBus
-    const sends = Array.from(this._auxSends.entries()).map(([sendBus, gain]) => ({
-      bus: sendBus,
-      gain,
-    }))
-    void this.global.setBusRouting(bus, this._sumOutputBus, sends).then(
+    void this.global.setBusRouting(bus, this._sumOutputBus, buildRoutingSends(this._auxSends)).then(
       () => {
         this._busRoutingStale = false
       },

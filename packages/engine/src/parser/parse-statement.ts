@@ -25,6 +25,13 @@ import {
 import { ParserUtils } from './parser-utils'
 import { ExpressionParser, collapseScopedRun } from './parse-expression'
 
+/**
+ * Bare method names that stay TransportStatements (SC.1). Every other bare name
+ * becomes a `sequence` statement with `invocation: 'bare'` so the interpreter can
+ * tell `.drums` (mixer output routing) from `.TALReverb4()` (a plugin call).
+ */
+const TRANSPORT_COMMANDS: ReadonlySet<string> = new Set(['start', 'stop', 'loop', 'run', 'mute'])
+
 /** Semitone offset of one `mode(...)` element (a root-scope degree) from the tonic (§2.2). */
 function modeElementSemitone(el: PlayElement): number {
   if (typeof el === 'number') return degreeToSemitone(el)
@@ -683,8 +690,7 @@ export class StatementParser {
     target: string,
     command: string,
   ): { statement: Statement; newPos: number } {
-    const transportCommands = new Set(['start', 'stop', 'loop', 'run', 'mute'])
-    if (!transportCommands.has(command)) {
+    if (!TRANSPORT_COMMANDS.has(command)) {
       return {
         statement: {
           type: 'sequence',
