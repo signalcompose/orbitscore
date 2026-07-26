@@ -65,10 +65,10 @@ describe('named arguments (SC.3)', () => {
     // produced a misleading "second pluginId" error from the resolver instead.
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'format', value: 'CLAP' }]),
-    ).rejects.toThrow(/S2.*#517/)
+    ).rejects.toThrow(/string-form HogeComp\(\).*Name\(format: "vst3"\).*#517/)
     await expect(
       processArguments('HogeComp', [{ type: 'named_arg', name: 'vendor', value: 'Acme' }]),
-    ).rejects.toThrow(/S2.*#517/)
+    ).rejects.toThrow(/string-form HogeComp\(\).*Name\(format: "vst3"\).*#517/)
     await expect(
       processArguments('HogeComp', [
         { type: 'named_arg', name: 'sidechain', value: { type: 'ref', name: 'duck' } },

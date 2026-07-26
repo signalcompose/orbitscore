@@ -40,8 +40,11 @@ const MIXER_BUS_HANDLE = Symbol('orbitscore.MixerBusHandle')
 export interface MixerBusHandle {
   readonly [MIXER_BUS_HANDLE]: true
   readonly bus: string
+  readonly kind: MixerKind
   /** Declares (or idempotently re-declares) the bus's own insert (MX.2/MX.3: v1 one insert). */
   effect(path: string, pluginId?: string): Promise<MixerBusHandle>
+  routeOutput(output: string): Promise<MixerBusHandle>
+  routeSend(bus: string, amount: number): Promise<MixerBusHandle>
 }
 
 /**
@@ -74,10 +77,11 @@ interface KindState {
  */
 export class MixerManager {
   private readonly kinds: Record<MixerKind, KindState>
+  private readonly routings = new Map<string, { output?: string; sends: Map<string, number> }>()
   private hasRuntimeDeclaration = false
 
   constructor(
-    audioEngine: AudioEngine,
+    private readonly audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
@@ -135,6 +139,18 @@ export class MixerManager {
     return this.kinds.aux.buses.get(name)
   }
 
+  resolveNode(name: string): { kind: MixerKind; bus: string } | undefined {
+    const sum = this.resolveSum(name)
+    if (sum !== undefined) return { kind: 'sum', bus: sum }
+    const aux = this.resolveAux(name)
+    if (aux !== undefined) return { kind: 'aux', bus: aux }
+    return undefined
+  }
+
+  ownsBus(bus: string): boolean {
+    return [...this.kinds.sum.buses.values(), ...this.kinds.aux.buses.values()].includes(bus)
+  }
+
   private declareBus(kind: MixerKind, name: string): MixerBusHandle {
     if (!name || !name.trim()) {
       throw new Error(`global.${kind}(name) requires a non-empty name.`)
@@ -156,8 +172,36 @@ export class MixerManager {
     return {
       [MIXER_BUS_HANDLE]: true,
       bus,
+      kind,
       effect: (path: string, pluginId?: string) => this.effectFor(kind, name, bus, path, pluginId),
+      routeOutput: async (output: string) => {
+        await this.route(bus, output, undefined)
+        return this.makeHandle(kind, name, bus)
+      },
+      routeSend: async (target: string, amount: number) => {
+        await this.route(bus, undefined, { bus: target, amount })
+        return this.makeHandle(kind, name, bus)
+      },
     }
+  }
+
+  private async route(
+    source: string,
+    output: string | undefined,
+    send: { bus: string; amount: number } | undefined,
+  ): Promise<void> {
+    if (!this.audioEngine.setBusRouting) {
+      throw new Error('Mixer bus routing requires the Rust engine backend.')
+    }
+    const current = this.routings.get(source) ?? { sends: new Map<string, number>() }
+    if (output !== undefined) current.output = output
+    if (send !== undefined) current.sends.set(send.bus, send.amount)
+    this.routings.set(source, current)
+    await this.audioEngine.setBusRouting(
+      source,
+      current.output,
+      [...current.sends].map(([bus, gain]) => ({ bus, gain })),
+    )
   }
 
   private async effectFor(

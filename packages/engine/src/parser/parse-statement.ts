@@ -665,7 +665,7 @@ export class StatementParser {
         this.pos = chainArgsResult.newPos
         chain.push({ method: chainMethod, args: chainArgsResult.args })
       } else {
-        chain.push({ method: chainMethod, args: [] })
+        chain.push({ method: chainMethod, args: [], invocation: 'bare' })
       }
 
       // Update current for next iteration
@@ -683,6 +683,19 @@ export class StatementParser {
     target: string,
     command: string,
   ): { statement: Statement; newPos: number } {
+    const transportCommands = new Set(['start', 'stop', 'loop', 'run', 'mute'])
+    if (!transportCommands.has(command)) {
+      return {
+        statement: {
+          type: 'sequence',
+          target,
+          method: command,
+          args: [],
+          invocation: 'bare',
+        },
+        newPos: this.pos,
+      }
+    }
     return {
       statement: {
         type: 'transport',

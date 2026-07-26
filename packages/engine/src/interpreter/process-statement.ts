@@ -14,6 +14,8 @@ import {
   ImportStatement,
   MixerHandleStatement,
 } from '../parser/audio-parser'
+import { Sequence } from '../core/sequence'
+import { isMixerBusHandle } from '../core/global/mixer-manager'
 import { dispatchPlugin, resolveChainDispatch } from '../signal-chain/dispatch'
 import {
   guardBusChain,
@@ -117,22 +119,83 @@ async function applyMethodChain(
   method: string,
   args: any[],
   state: InterpreterState,
-  chain?: ReadonlyArray<{ method: string; args: any[] }>,
+  chain?: ReadonlyArray<{
+    method: string
+    args: any[]
+    invocation?: 'bare' | 'call'
+  }>,
+  invocation: 'bare' | 'call' = 'call',
 ): Promise<any> {
-  async function dispatchCall(receiver: unknown, method: string, args: any[]): Promise<any> {
-    const dispatch = resolveChainDispatch(receiver, method, state)
-    return dispatch.kind === 'plugin'
-      ? dispatchPlugin(receiver, method, args, dispatch.entries, state)
-      : callMethod(receiver, method, args)
+  async function dispatchCall(
+    receiver: unknown,
+    method: string,
+    args: any[],
+    invocation: 'bare' | 'call',
+  ): Promise<any> {
+    const dispatch = resolveChainDispatch(receiver, method, state, invocation)
+    if (dispatch.kind === 'plugin') {
+      return dispatchPlugin(receiver, method, args, dispatch.entries, state)
+    }
+    if (dispatch.kind === 'mixer') {
+      if (!(receiver instanceof Sequence) && !isMixerBusHandle(receiver)) {
+        throw new Error(`Mixer routing from this receiver is not available in S3 (#517).`)
+      }
+      if (dispatch.node.kind === 'aux') {
+        if (invocation !== 'call') {
+          throw new Error(`Aux mixer "${method}" requires parentheses because it is a send.`)
+        }
+        let amount: number | undefined
+        let enabled = true
+        for (const arg of args) {
+          if (typeof arg === 'number' && amount === undefined) {
+            amount = arg
+          } else if (arg?.type === 'named_arg' && arg.name === 'amount') {
+            if (typeof arg.value !== 'number') {
+              throw new Error(`Aux mixer "${method}" amount: must be numeric.`)
+            }
+            amount = arg.value
+          } else if (arg?.type === 'named_arg' && arg.name === 'enabled') {
+            if (typeof arg.value !== 'boolean') {
+              throw new Error(`Aux mixer "${method}" enabled: must be boolean.`)
+            }
+            enabled = arg.value
+          } else {
+            throw new Error(
+              `Aux mixer "${method}" accepts amount: and enabled: routing arguments only.`,
+            )
+          }
+        }
+        if (amount === undefined) {
+          throw new Error(`Aux mixer "${method}" send requires a numeric amount.`)
+        }
+        const gain = enabled ? amount : 0
+        return receiver instanceof Sequence
+          ? receiver.routeSendFromDsl(dispatch.node.handle.bus, gain)
+          : receiver.routeSend(dispatch.node.handle.bus, gain)
+      }
+      if (invocation !== 'bare') {
+        throw new Error(`Mixer ${dispatch.node.kind} "${method}" is an output, not a send.`)
+      }
+      const output = dispatch.node.kind === 'output' ? 'master' : dispatch.node.handle.bus
+      return receiver instanceof Sequence
+        ? receiver.routeOutputFromDsl(output)
+        : receiver.routeOutput(output)
+    }
+    return callMethod(receiver, method, args)
   }
 
   const pending = [method, ...(chain ?? []).map((call) => call.method)]
   guardBusChain(receiver, pending)
 
-  let result: any = await dispatchCall(receiver, method, args)
+  let result: any = await dispatchCall(receiver, method, args, invocation)
   for (const [index, chainedCall] of (chain ?? []).entries()) {
     guardBusChain(result, pending.slice(index + 1))
-    result = await dispatchCall(result, chainedCall.method, chainedCall.args)
+    result = await dispatchCall(
+      result,
+      chainedCall.method,
+      chainedCall.args,
+      chainedCall.invocation ?? 'call',
+    )
   }
   return result
 }
@@ -272,7 +335,14 @@ export async function processSequenceStatement(
     throw new Error(`Variable not found: ${statement.target}`)
   }
 
-  await applyMethodChain(sequence, statement.method, statement.args, state, statement.chain)
+  await applyMethodChain(
+    sequence,
+    statement.method,
+    statement.args,
+    state,
+    statement.chain,
+    statement.invocation ?? 'call',
+  )
 }
 
 /**

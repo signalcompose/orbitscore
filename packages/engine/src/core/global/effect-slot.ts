@@ -53,6 +53,15 @@ interface EffectSlotEntry {
   load: Promise<void>
 }
 
+export class EffectSlotLimitError extends Error {
+  readonly code = 'EFFECT_SLOT_LIMIT'
+
+  constructor(message: string) {
+    super(message)
+    this.name = 'EffectSlotLimitError'
+  }
+}
+
 /**
  * key ごとに 1 つの effect 宣言（v1: チェーン不可）を持つ slot 集合。
  * `declare()` が冪等再宣言・respawn 後 self-heal（`isPluginActive === false` で再ロード）・
@@ -94,7 +103,7 @@ export class EffectSlotMap<K> {
         }
         return
       }
-      throw duplicateError()
+      throw new EffectSlotLimitError(duplicateError().message)
     }
     await this.issueLoad(key, bus, resolvedPath, pluginId)
   }

@@ -223,12 +223,14 @@ export type SequenceStatement = {
   target: string
   method: string
   args: any[]
+  invocation?: 'bare' | 'call'
   chain?: MethodChain[]
 }
 
 export type MethodChain = {
   method: string
   args: any[]
+  invocation?: 'bare' | 'call'
 }
 
 // Play structure types

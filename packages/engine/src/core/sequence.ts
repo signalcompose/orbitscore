@@ -369,6 +369,11 @@ export class Sequence {
     return this._outputChannel
   }
 
+  /** Owning Global identity for Global-scoped dynamic mixer-name resolution. @internal */
+  getGlobal(): Global {
+    return this.global
+  }
+
   /**
    * Add a send to a declared aux/return bus (MX.3, #459/#453 M3). Post-fader fixed (after
    * this sequence's own insert, if any). Multiple sends fan out (repeated calls with
@@ -401,6 +406,49 @@ export class Sequence {
     this._auxSends.set(auxBus, amount)
     this.syncBusRouting()
     return this
+  }
+
+  /** Awaitable routing entry used only by Signal Chain mixer-name sugar. */
+  async routeOutputFromDsl(output: string): Promise<this> {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this.isNoteSequence()) {
+      throw new Error(
+        `Sequence '${name}': mixer output routing is only supported on audio sequences in v1.`,
+      )
+    }
+    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    this._sumOutputBus = output
+    await this.pushBusRouting()
+    return this
+  }
+
+  /** Awaitable routing entry used only by Signal Chain aux-name sugar. */
+  async routeSendFromDsl(auxBus: string, amount: number): Promise<this> {
+    const name = this.stateManager.getName() || 'sequence'
+    if (this.isNoteSequence()) {
+      throw new Error(
+        `Sequence '${name}': send routing is only supported on audio sequences in v1.`,
+      )
+    }
+    if (!Number.isFinite(amount)) {
+      throw new Error(`Sequence '${name}': send gain must be finite.`)
+    }
+    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    this._auxSends.set(auxBus, amount)
+    await this.pushBusRouting()
+    return this
+  }
+
+  private async pushBusRouting(): Promise<void> {
+    if (!this._insertBus) return
+    const sends = Array.from(this._auxSends.entries()).map(([bus, gain]) => ({ bus, gain }))
+    try {
+      await this.global.setBusRouting(this._insertBus, this._sumOutputBus, sends)
+      this._busRoutingStale = false
+    } catch (error) {
+      this._busRoutingStale = true
+      throw error
+    }
   }
 
   /**

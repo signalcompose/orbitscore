@@ -166,7 +166,8 @@ export function registerMixerHandle(state: InterpreterState, statement: MixerIni
   const existing = state.mixers.handles.get(statement.variableName)
   if (existing && existing !== global) {
     throw new Error(
-      `Mixer handle "${statement.variableName}" is already bound to a different Global.`,
+      `Mixer handle "${statement.variableName}" is already bound to a different Global; ` +
+        `live replacement is staged for S4 (#522).`,
     )
   }
 
@@ -211,7 +212,8 @@ export function registerMixerNode(
     if (existing.global !== mixerGlobal || existing.kind !== statement.kind) {
       throw new Error(
         `Mixer node "${statement.variableName}" is already declared as ${existing.kind}; ` +
-          `it cannot be redeclared as ${statement.kind}.`,
+          `it cannot be redeclared as ${statement.kind} in v1; live replacement is staged ` +
+          `for S4 (#522).`,
       )
     }
     if (
@@ -222,7 +224,7 @@ export function registerMixerNode(
       throw new Error(
         `Mixer output "${statement.variableName}" is already declared for channels ` +
           `(${existing.channels.join(', ')}); cannot redeclare for ` +
-          `(${statement.channels?.join(', ')}).`,
+          `(${statement.channels?.join(', ')}) in v1; live replacement is staged for S4 (#522).`,
       )
     }
     return existing
@@ -258,7 +260,12 @@ export function resolveMixerNode(
   global?: Global,
 ): MixerRuntimeNode | undefined {
   const explicit = registry.nodes.get(name)
-  if (explicit) return explicit
+  if (explicit?.global === global || (!global && explicit)) return explicit
+  const stringNode = global ? global.resolveMixerBus(name) : undefined
+  if (global && stringNode) {
+    const handle = global[stringNode.kind](name)
+    return { kind: stringNode.kind, global, handle }
+  }
   if (!global || name !== 'master') return undefined
 
   for (const node of registry.nodes.values()) {
