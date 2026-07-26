@@ -5,7 +5,11 @@ import { EffectChainMap, normalizePluginInstanceName } from './effect-slot'
 import { LinkAudioManager } from './link-audio-manager'
 import { isPluginPathSpec, resolvePluginSpec, validatePluginExtension } from './plugin-resolver'
 
-/** Owns the single v1 daemon instrument declaration shared by note sequences. */
+/**
+ * Owns the single v1 daemon instrument declaration shared by note sequences.
+ * Per-sequence instances (independent per note sequence, no sharing) land in
+ * PR-1b (#517 S4 / #522) — see `INSTRUCTION_ORBITSCORE_DSL.md` PH.4's staging note.
+ */
 export class PluginInstrumentManager {
   private readonly slots: EffectChainMap<'instrument'>
 
@@ -47,7 +51,9 @@ export class PluginInstrumentManager {
         resolvedPath: resolved.path,
         pluginId: resolved.pluginId,
       },
-      () => 'seq.instrument() supports one instrument instance in v1.',
+      () =>
+        'seq.instrument() supports one instrument instance in v1. ' +
+        'S4 PR-1b (#517/#522) will allow independent instances per note sequence.',
     )
   }
 }

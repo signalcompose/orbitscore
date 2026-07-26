@@ -99,6 +99,25 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
 
 </div>
 
+> **v1 の現在地（規範4 の per-sequence インスタンス化）**: **PR-1a（#527）が実装するのはデータモデルのみ**
+> （`EffectChainMap` によるチェーン化と instanceId 発番の基盤）。エンジンは依然として
+> **single global instrument key**（`packages/engine/src/core/global/plugin-instrument-manager.ts` の
+> `new EffectChainMap(audioEngine, () => 'instrument')` が固定キー1本で管理）を使っており、全シーケンスが
+> 共有する旧挙動が温存されている。異なる path / pluginId での再宣言は「原子的差し替え・失敗時は旧
+> インスタンス保持」ではなく、無条件の throw のままである（`tests/core/plugin-instrument.spec.ts` の
+> 「rejects a different path or plugin id after declaration」がこれをピン留めしている）。
+>
+> **理由**: per-sequence インスタンス化・原子的差し替えは、宣言の登記先キーを `instrument` 固定から
+> シーケンス名ベースへ切り替え、かつ prepare → commit 型の差し替えロジックを実装する配線変更であり、
+> `EffectChainMap` という基盤（本 PR）の上に構築する別工程として分離する。
+>
+> **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は core spec PH.4 の staging note と同一
+> （「異なる note シーケンスの `instrument()` 宣言が、エラーにならず独立したインスタンスを生成すること」）。
+>
+> **v1 のエラーは stage 表記を含む**（ユーザーがいつ使えるようになるかを知れるようにするため。
+> `seq.instrument()` の重複宣言エラーは "S4 PR-1b (#517/#522) will allow independent instances per
+> note sequence." を付記する）。
+
 ### SC.3.2 名前の正規化と衝突
 
 <div class="norm">

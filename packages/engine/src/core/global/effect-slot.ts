@@ -1,9 +1,10 @@
 /**
- * Shared building blocks for the three effect-declaring managers (#468):
+ * Shared building blocks for the four effect/instrument-declaring managers (#468・
+ * #527 で `PluginInstrumentManager` も合流):
  * `PluginEffectManager`（master insert）/ `SequenceEffectManager`（per-seq insert）/
- * `MixerManager`（sum・aux insert）。各 manager に ~15 行ずつ複製されていた
- * 「validate → LinkAudio gate → resolve」「冪等再宣言 + respawn 後 self-heal +
- * install/rollback」「prefix 連番 + free-list の bus pool」をここに一本化する。
+ * `MixerManager`（sum・aux insert）/ `PluginInstrumentManager`（instrument）。各 manager に
+ * ~15 行ずつ複製されていた「validate → LinkAudio gate → resolve」「冪等再宣言 + respawn 後
+ * self-heal + install/rollback」「prefix 連番 + free-list の bus pool」をここに一本化する。
  */
 
 import * as path from 'path'
@@ -104,6 +105,10 @@ export class EffectSlotLimitError extends Error {
  */
 export class EffectChainMap<K> {
   private readonly chains = new Map<K, PluginSlot[]>()
+  // key ごとの直列化キュー（#527 review Important 1）。値は「前呼び出しの決着
+  // （成功/失敗いずれも）待ち」で、前呼び出しの成否は自分の結果に影響させない
+  // （catch で握りつぶし、必ず次の呼び出しへ進める）。
+  private readonly pending = new Map<K, Promise<void>>()
 
   constructor(
     private readonly audioEngine: AudioEngine,
@@ -115,14 +120,46 @@ export class EffectChainMap<K> {
     return (this.chains.get(key)?.length ?? 0) > 0
   }
 
+  /** `key` の現在のチェーンのスナップショット（S4/#522 Rust プロトコル拡張が読む想定の参照専用アクセサ）。 */
+  chainFor(key: K): readonly PluginSlot[] {
+    return this.chains.get(key) ?? []
+  }
+
   /**
    * 宣言する（または冪等に再宣言する）。同一 spec の再宣言は既存 load を待ち、
    * respawn 後の stale cache（`isPluginActive?.(role, bus) === false`）なら
    * 再ロードで self-heal する。異なる spec は上限エラーを throw（v1: 1 slot）。
    * 新規宣言の load 失敗は宣言を取り除いて rethrow（呼び出し側は catch で bus の
    * 返却等の後始末を行える）。
+   *
+   * `key` ごとに直列化する（#527 review Important 1）: 同一 key への `declare()` を
+   * await せずに連打すると、両方が同じ `existing` を `replacing` として捕まえ、先に
+   * 同期区間を走らせた方だけがチェーン配列の置換（object identity 比較）に勝ち、
+   * もう片方の置換は無音の no-op になる（勝った側の load が後で失敗すると catch の
+   * rollback がチェーンごと削除する一方、負けた側は自分の entry がチェーンに無い
+   * ため rollback が素通りする — engine 側は実際にロード済みなのに `has()` が
+   * false を返す事故になる）。呼び出し本体（`declareBody`）を key 単位の
+   * pending promise の後ろに直列でつなぐことで、このレースを避ける。
    */
   async declare(key: K, spec: PluginDeclaration, duplicateMessage: () => string): Promise<void> {
+    const previous = this.pending.get(key) ?? Promise.resolve()
+    const settled = previous
+      .catch(() => undefined)
+      .then(() => this.declareBody(key, spec, duplicateMessage))
+    const tracked = settled.catch(() => undefined)
+    this.pending.set(key, tracked)
+    try {
+      await settled
+    } finally {
+      if (this.pending.get(key) === tracked) this.pending.delete(key)
+    }
+  }
+
+  private async declareBody(
+    key: K,
+    spec: PluginDeclaration,
+    duplicateMessage: () => string,
+  ): Promise<void> {
     const chain = this.chains.get(key) ?? []
     const existing = chain[0]
     if (existing) {
@@ -199,9 +236,14 @@ export class EffectChainMap<K> {
  * SC.5 の instance identity に使う plugin 名を安定化する。拡張子の集合は
  * `KNOWN_PLUGIN_EXTENSIONS` を正本として参照する（ここで正規表現に書き下すと、
  * AU（`.component`）対応などで片方だけ更新される二重管理になる）。
+ *
+ * `\` を `/` に寄せてから `path.basename` に渡す（#527 review Important 3 Minor）:
+ * POSIX 上の `path.basename` は `\` をセパレータとして扱わないため、そのままでは
+ * Windows 形式のパス（`C:\Plugins\Synth.vst3`）がドライブレターごと素通りしてしまう。
  */
 export function normalizePluginInstanceName(spec: string): string {
-  const unqualified = path.basename(spec.trim().normalize('NFC'))
+  const normalized = spec.trim().normalize('NFC').replace(/\\/g, '/')
+  const unqualified = path.basename(normalized)
   const extension = path.extname(unqualified).toLowerCase()
   return KNOWN_PLUGIN_EXTENSIONS.includes(extension)
     ? unqualified.slice(0, -extension.length)

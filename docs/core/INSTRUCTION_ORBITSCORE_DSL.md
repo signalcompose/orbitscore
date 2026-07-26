@@ -1169,6 +1169,14 @@ synth.play(1, 3, 5, 0)                        // 値は度数（Pitch DSL と同
   > このため SC.0 の `lead.Serum(...).TALReverb4(size: 0.6).subout` — 楽器にエフェクトを挿し
   > 出力先を指定する記述 — が原理的に成立しなかった（DSL 層も note シーケンスへの
   > `output()` / `send()` を拒否していた）。#522 の到達点「SC.0 の完全実行」には移設が必須である。
+  >
+  > **v1 の現在地**: **PR-1a（#527）はまだこの移設を実装していない**。instrument の出力は
+  > 引き続き master の `CompositePostProcessor`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）で
+  > add-mix されており、`packages/engine/src/core/sequence.ts` は note シーケンスへの
+  > `output()` / `send()` を依然拒否する。PR-1a が実装するのは plugin 宣言のチェーン化基盤
+  > （`EffectChainMap`）のみで、上記の合流先変更そのものはこの基盤の上に構築する別工程。
+  > **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は「`lead.Serum(...).TALReverb4(size: 0.6).subout`
+  > が実際に機能すること」。
 - RUN / LOOP / MUTE / quantize の意味論は MIDI シーケンスと同一。
 
 ### PH.2 effect — `global.effect(path[, pluginId])`
@@ -1254,16 +1262,31 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   - **クラッシュ隔離**: 1 インスタンス = 1 child プロセス。crash 時は当該シーケンスのみ無音になり
     自動 respawn する。他のインスタンス・audio シーケンスは影響を受けない。
 
-> **なぜ共有をやめたか（#523 の調査）**: 旧規則の「同 path 共有」は、daemon が 2 回目の `LoadPlugin` を
+> **なぜ共有をやめたか（#527 の調査）**: 旧規則の「同 path 共有」は、daemon が 2 回目の `LoadPlugin` を
 > `AlreadyLoaded` にする制約に合わせた TS 側 dedup だった。しかし**フォーマット側に共有を成立させる
 > 機構が無い**: CLAP は `clap_plugin_preset_load` がインスタンス丸ごとにしか効かず（port / channel で
 > スコープする引数が無い）、param も `param_id` のみでスコープを持たない（`PER_NOTE_ID` 等のフラグは
-> MPE 的なボイス単位モジュレーションであって持続する音色設定ではない）。`clap_plugin_track_info` が
-> 「このインスタンスが乗っているトラック」を**単数**で返すことからも、CLAP は 1 インスタンス = 1 トラックを
+> MPE 的なボイス単位モジュレーションであって持続する音色設定ではない）。host 側アクセサ
+> `clap_host_track_info.get` が返す track 情報が**単数**であることからも（`clap_plugin_track_info` は
+> plugin 側の変更通知構造体）、CLAP は 1 インスタンス = 1 トラックを
 > 前提にしている。VST3 は Unit 機構（`UnitInfo.programListId` / `ParameterInfo.unitId` /
 > `getUnitByBus`）で per-part を表現できるが **opt-in** で、本実装は未対応。
 > したがって旧規則は**共有の利点を実現する機構を持たないまま、preset / param / note が混ざる欠点だけを
 > 負っていた**。
+
+> **v1 の現在地（per-sequence インスタンス化）**: **PR-1a（#527）が実装するのはデータモデルのみ**
+> （`EffectChainMap` によるチェーン化と role 別 instanceId 発番の基盤）。エンジンは依然として
+> **single global instrument key**（`PluginInstrumentManager` が `'instrument'` 固定キーで管理）を
+> 使っており、異なる note シーケンスからの `instrument()` 宣言は「supports one instrument instance
+> in v1」エラーで拒否される（既存テストがこれをピン留めしている）。上記の「シーケンスごとに独立した
+> インスタンス」は本 PR の時点では成立しない。
+>
+> **理由**: per-sequence インスタンス化は、宣言の登記先キーを `instrument` 固定から
+> シーケンス名ベースへ切り替える配線変更であり、`EffectChainMap` という基盤（本 PR）の上に
+> 構築する別工程として分離する。
+>
+> **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は「異なる note シーケンスの `instrument()`
+> 宣言が、エラーにならず独立したインスタンスを生成すること」。
 
 - **複数シーケンスと 1 インスタンスの関係**（暗黙には生じない。いずれも明示宣言・後続 stage）:
   - **サミング**: 複数シーケンスが同一インスタンスの**同一 part** に note を合流させる（通常の
