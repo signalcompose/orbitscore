@@ -1,6 +1,6 @@
 # OrbitScore Signal Chain DSL Specification v1
 
-Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決定ログ: DESIGN_DISCUSSION_RECORD §15（決定 \#64–#77）/ 実装: \#495 言語サービスと同時設計（本仕様の制定時点では未実装）
+Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決定ログ: DESIGN_DISCUSSION_RECORD §15（決定 \#64–#77）+ 本文内の決定 \#78（`master` 予約・SC.2.1）/ 実装: \#495 言語サービスと同時設計（本仕様の制定時点では未実装）
 
 <div class="warn">
 
@@ -189,4 +189,4 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
 
 - **Q1（暫定採用済み）**: 日本語名プラグインは識別子化せず、逃げ道（`effect("名前")`）のみとする。反対があれば再協議。
 
-決定の経緯・棄却した代替案は DESIGN_DISCUSSION_RECORD §15（決定 \#64–#77）を参照。
+決定の経緯・棄却した代替案は DESIGN_DISCUSSION_RECORD §15（決定 \#64–#77）を参照。決定 \#78（`master` 予約）は SC.2.1 に直接記載している（#523 のレビューで判明した予約語シャドウへの対応・DESIGN_DISCUSSION_RECORD は旧前提のスナップショットとして凍結されているため転記しない）。
