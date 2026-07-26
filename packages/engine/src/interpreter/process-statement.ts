@@ -14,6 +14,7 @@ import {
   ImportStatement,
   MixerHandleStatement,
 } from '../parser/audio-parser'
+import { dispatchPlugin, resolveChainDispatch } from '../signal-chain/dispatch'
 import {
   guardBusChain,
   mixerNodeReceiver,
@@ -116,13 +117,20 @@ async function applyMethodChain(
   state: InterpreterState,
   chain?: ReadonlyArray<{ method: string; args: any[] }>,
 ): Promise<any> {
+  async function dispatchCall(receiver: unknown, method: string, args: any[]): Promise<any> {
+    const dispatch = resolveChainDispatch(receiver, method, state)
+    return dispatch.kind === 'plugin'
+      ? dispatchPlugin(receiver, method, args, dispatch.entries, state)
+      : callMethod(receiver, method, args)
+  }
+
   const pending = [method, ...(chain ?? []).map((call) => call.method)]
   guardBusChain(receiver, pending)
 
-  let result: any = await callMethod(receiver, method, args, state)
+  let result: any = await dispatchCall(receiver, method, args)
   for (const [index, chainedCall] of (chain ?? []).entries()) {
     guardBusChain(result, pending.slice(index + 1))
-    result = await callMethod(result, chainedCall.method, chainedCall.args, state)
+    result = await dispatchCall(result, chainedCall.method, chainedCall.args)
   }
   return result
 }

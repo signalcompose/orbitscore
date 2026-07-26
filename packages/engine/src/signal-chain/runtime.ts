@@ -86,7 +86,6 @@ export function createMixerRuntimeRegistry(): MixerRuntimeRegistry {
   return { handles: new Map(), nodes: new Map() }
 }
 
-const BUS_CHAIN_METHOD = 'effect'
 const BUS_UNSUPPORTED_DSL_METHODS: ReadonlySet<string> = new Set([
   ...GLOBAL_DSL_METHODS,
   ...SEQUENCE_DSL_METHODS,
@@ -94,7 +93,7 @@ const BUS_UNSUPPORTED_DSL_METHODS: ReadonlySet<string> = new Set([
 
 function validateBusChainMethods(methods: readonly string[]): void {
   const unsupported = methods.find(
-    (method) => method !== BUS_CHAIN_METHOD && BUS_UNSUPPORTED_DSL_METHODS.has(method),
+    (method) => !BUS_DSL_METHODS.has(method) && BUS_UNSUPPORTED_DSL_METHODS.has(method),
   )
   if (unsupported) {
     throw new Error(

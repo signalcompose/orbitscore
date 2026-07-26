@@ -67,7 +67,7 @@ export function isPluginPathSpec(spec: string): boolean {
   return KNOWN_PLUGIN_EXTENSIONS.some((ext) => lower.endsWith(ext))
 }
 
-function normalizeCatalogKey(value: string): string {
+export function normalizeCatalogKey(value: string): string {
   return value.trim().normalize('NFC').toLowerCase()
 }
 
@@ -77,9 +77,10 @@ function acceptedFormatsForRole(): readonly string[] {
 
 const RESCAN_HINT = 'Run `orbit-plugin-scan` to (re)generate the plugin catalog, then retry.'
 
-interface ResolvedCatalogPlugin {
+export interface ResolvedCatalogPlugin {
   readonly path: string
   readonly pluginId: string
+  readonly entries: readonly PluginCatalogEntry[]
 }
 
 /**
@@ -87,9 +88,9 @@ interface ResolvedCatalogPlugin {
  * (case-insensitive/trim/NFC), optional `"vendor/name"` or `"format/name"` qualification, role check, then
  * format preference (CLAP > VST3) among the formats the verb accepts (PH.3).
  */
-function resolveCatalogSpec(
+export function resolveCatalogSpec(
   spec: string,
-  role: PluginRole,
+  role: PluginRole | undefined,
   catalogPathOverride: string | undefined,
 ): ResolvedCatalogPlugin {
   const catalogPath = resolveCatalogPath(catalogPathOverride)
@@ -144,8 +145,9 @@ function resolveCatalogSpec(
     }
   }
 
-  const roleCandidates = candidates.filter((entry) => entry.roles.includes(role))
-  if (roleCandidates.length === 0) {
+  const roleCandidates =
+    role === undefined ? candidates : candidates.filter((entry) => entry.roles.includes(role))
+  if (role !== undefined && roleCandidates.length === 0) {
     const foundRoles = [...new Set(candidates.flatMap((entry) => entry.roles))].join(', ') || 'none'
     throw new Error(
       `Plugin "${spec}" does not support the "${role}" role (catalog roles: ${foundRoles}).`,
@@ -167,7 +169,7 @@ function resolveCatalogSpec(
   const chosen: PluginCatalogEntry =
     formatCandidates.find((entry) => entry.format.toLowerCase() === 'clap') ?? formatCandidates[0]
 
-  return { path: chosen.path, pluginId: chosen.pluginId }
+  return { path: chosen.path, pluginId: chosen.pluginId, entries: candidates }
 }
 
 export interface ResolvedPluginSpec {

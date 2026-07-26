@@ -106,6 +106,38 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
           pluginId: 'dual',
           roles: ['effect', 'instrument'],
         },
+        {
+          name: 'Role Split',
+          vendor: 'Effect Vendor',
+          format: 'clap',
+          path: '/role-split-effect.clap',
+          pluginId: 'role-split-effect',
+          roles: ['effect'],
+        },
+        {
+          name: 'Role Split',
+          vendor: 'Instrument Vendor',
+          format: 'clap',
+          path: '/role-split-instrument.clap',
+          pluginId: 'role-split-instrument',
+          roles: ['instrument'],
+        },
+        {
+          name: 'Selector Split',
+          vendor: 'Effect Vendor',
+          format: 'vst3',
+          path: '/selector-split-effect.vst3',
+          pluginId: 'selector-split-effect',
+          roles: ['effect'],
+        },
+        {
+          name: 'Selector Split',
+          vendor: 'Instrument Vendor',
+          format: 'vst3',
+          path: '/selector-split-instrument.vst3',
+          pluginId: 'selector-split-instrument',
+          roles: ['instrument'],
+        },
       ],
     }
     const catalogPath = path.join(directory, 'plugin-catalog.json')
@@ -169,6 +201,46 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     )
   })
 
+  it('matches string-form ambiguity when format and vendor selectors are both present', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var lead = init global.seq', state)
+    const sequence = state.sequences.get('lead')!
+    const effect = vi.spyOn(sequence, 'effect')
+    const instrument = vi.spyOn(sequence, 'instrument')
+
+    let stringError: unknown
+    try {
+      await sequence.effect('vst3/Selector Split')
+    } catch (error) {
+      stringError = error
+    }
+
+    expect(stringError).toBeInstanceOf(Error)
+    await expect(
+      run('lead.SelectorSplit(format: "vst3", vendor: "Instrument Vendor")', state),
+    ).rejects.toThrow((stringError as Error).message)
+    expect(effect).toHaveBeenCalledOnce()
+    expect(instrument).not.toHaveBeenCalled()
+  })
+
+  it('matches string-form vendor ambiguity before inferring a role', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var lead = init global.seq', state)
+    const sequence = state.sequences.get('lead')!
+
+    let stringError: unknown
+    try {
+      await sequence.effect('Role Split')
+    } catch (error) {
+      stringError = error
+    }
+
+    expect(stringError).toBeInstanceOf(Error)
+    await expect(run('lead.RoleSplit()', state)).rejects.toThrow((stringError as Error).message)
+  })
+
   it('throws actionable errors for unknown names, staged args, sidechain, mixer names, and second inserts', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
@@ -209,5 +281,97 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const bus = new Global(new RecordingScheduler()).aux('probe')
     for (const name of BUS_DSL_METHODS)
       expect(typeof bus[name as keyof typeof bus]).toBe('function')
+  })
+
+  it('classifies every public receiver method as DSL vocabulary or an explicit internal API', () => {
+    const sequenceInternalMethods = new Set([
+      'constructor',
+      'resolveQuantize',
+      'nextQuantizedTime',
+      'setName',
+      'recalculateTiming',
+      'seamlessParameterUpdate',
+      'restartLoopFromCurrentTime',
+      'getOutputChannel',
+      'syncBusRouting',
+      'isMidi',
+      'isInstrument',
+      'getInsertBus',
+      'isNoteSequence',
+      'loadAudio',
+      'prepareSlices',
+      'activeScheduler',
+      'clearEvents',
+      'baseOctave',
+      'resolveRootContext',
+      'degreeRootToPitchClass',
+      'resolveScopeToContext',
+      'validateMidiDispatch',
+      'applyVoiceLeading',
+      'validateNonMidiDispatch',
+      'containsStack',
+      'scheduleMidiEvents',
+      'resolveNoteTarget',
+      'resolveOutputDetune',
+      'makeTiePlan',
+      'absorbEventTies',
+      'applyGateAndLegato',
+      'applyVoiceTiesAndHold',
+      'scheduleEventsFromTime',
+      'resolveDispatchChannel',
+      'scheduleEvents',
+      'getPatternDuration',
+      'notifyGlobalTempoChange',
+      'notifyGlobalBeatChange',
+      'getState',
+    ])
+    const globalInternalMethods = new Set([
+      'constructor',
+      'getMidiManager',
+      'importChords',
+      'defineChord',
+      'setChord',
+      'getChordVoices',
+      'definePattern',
+      'defineMode',
+      'getBinding',
+      'resolveAudioSpec',
+      'isLinkAudioEnabled',
+      'declareMixerRuntime',
+      'sequenceEffect',
+      'ensureSequenceInsertBus',
+      'resolveSumBus',
+      'resolveAuxBus',
+      'setBusRouting',
+      'pushLinkTempoIfLeading',
+      'getQuantize',
+      'setDocumentDirectory',
+      'getMasterGainDb',
+      'setTransportHooks',
+      'getTransportPosition',
+      'getQuantizedEffectPosition',
+      'transportParams',
+      'msToBarBeat',
+      'registerSequence',
+      'getSequence',
+      'seq',
+      'getScheduler',
+      'getMidiTransport',
+      'isTransportRunning',
+      'getState',
+    ])
+
+    for (const name of Object.getOwnPropertyNames(Sequence.prototype)) {
+      expect(
+        SEQUENCE_DSL_METHODS.has(name) || sequenceInternalMethods.has(name),
+        `unclassified Sequence method: ${name}`,
+      ).toBe(true)
+    }
+    for (const name of Object.getOwnPropertyNames(Global.prototype)) {
+      expect(
+        GLOBAL_DSL_METHODS.has(name) || globalInternalMethods.has(name),
+        `unclassified Global method: ${name}`,
+      ).toBe(true)
+    }
   })
 })

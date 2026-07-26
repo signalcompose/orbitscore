@@ -35,9 +35,9 @@ export type ChainNameTables = {
   /** Public DSL method names of the receiver (Sequence / Global / bus handle). */
   dslMethods: ReadonlySet<string>
   /** Declared mixer-node names (output / sum / aux variables), implicit master included. */
-  mixerNames: ReadonlySet<string>
+  mixerNames: { has(name: string): boolean }
   /** Normalized plugin-catalog names (see {@link normalizeCatalogName}). */
-  pluginNames: ReadonlySet<string>
+  pluginNames: { has(name: string): boolean }
 }
 
 /**
