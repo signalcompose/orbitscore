@@ -47,11 +47,26 @@ export function resolveEffectSpec(
   )
 }
 
-interface EffectSlotEntry {
+export type PluginInstanceId = string
+
+interface PluginSlotBase {
+  readonly instanceId: PluginInstanceId
+  readonly normalizedName: string
   resolvedPath: string
   pluginId?: string
   load: Promise<void>
 }
+
+export interface EffectSlot extends PluginSlotBase {
+  readonly role: 'effect'
+  readonly bus: string | undefined
+}
+
+export interface InstrumentSlot extends PluginSlotBase {
+  readonly role: 'instrument'
+}
+
+export type PluginSlot = EffectSlot | InstrumentSlot
 
 export class EffectSlotLimitError extends Error {
   // Unreferenced within this codebase today — kept for the typed-error contract.
@@ -65,17 +80,22 @@ export class EffectSlotLimitError extends Error {
 }
 
 /**
- * key ごとに 1 つの effect 宣言（v1: チェーン不可）を持つ slot 集合。
+ * key ごとに plugin chain を持つ宣言集合。PR-1a では上限 1 を維持するが、
+ * 登記自体は複数 insert と instrument role を表現できる形にしておく。
  * `declare()` が冪等再宣言・respawn 後 self-heal（`isPluginActive === false` で再ロード）・
  * 失敗時の宣言ロールバック（自分が入れた宣言のみ削除）を一手に実装する。
  */
-export class EffectSlotMap<K> {
-  private readonly slots = new Map<K, EffectSlotEntry>()
+export class EffectChainMap<K> {
+  private readonly chains = new Map<K, PluginSlot[]>()
 
-  constructor(private readonly audioEngine: AudioEngine) {}
+  constructor(
+    private readonly audioEngine: AudioEngine,
+    private readonly receiverId: (key: K) => string,
+    private readonly maxLength = 1,
+  ) {}
 
   has(key: K): boolean {
-    return this.slots.has(key)
+    return (this.chains.get(key)?.length ?? 0) > 0
   }
 
   /**
@@ -88,33 +108,48 @@ export class EffectSlotMap<K> {
   async declare(
     key: K,
     bus: string | undefined,
+    role: 'effect' | 'instrument',
+    normalizedName: string,
     resolvedPath: string,
     pluginId: string | undefined,
     duplicateError: () => Error,
   ): Promise<void> {
-    const existing = this.slots.get(key)
+    const chain = this.chains.get(key) ?? []
+    const existing = chain[0]
     if (existing) {
-      if (existing.resolvedPath === resolvedPath && existing.pluginId === pluginId) {
+      if (
+        existing.role === role &&
+        existing.resolvedPath === resolvedPath &&
+        existing.pluginId === pluginId
+      ) {
         await existing.load
         // Self-heal: respawn 後の復元失敗で engine 側だけ宣言が消えている場合、
         // 冪等パスで false success を返さず再ロードする（PluginEffectManager 由来の
         // silent-failure guard）。isPluginActive を持たない engine（SC/素の mock）は
         // 従来の no-op 冪等のまま。
-        if (this.audioEngine.isPluginActive?.('effect', bus) === false) {
-          await this.issueLoad(key, bus, resolvedPath, pluginId)
+        if (this.audioEngine.isPluginActive?.(role, bus) === false) {
+          await this.issueLoad(key, bus, role, normalizedName, resolvedPath, pluginId, existing)
         }
         return
       }
-      throw new EffectSlotLimitError(duplicateError().message)
+      const error = duplicateError()
+      throw role === 'effect' ? new EffectSlotLimitError(error.message) : error
     }
-    await this.issueLoad(key, bus, resolvedPath, pluginId)
+    if (chain.length >= this.maxLength) {
+      const error = duplicateError()
+      throw role === 'effect' ? new EffectSlotLimitError(error.message) : error
+    }
+    await this.issueLoad(key, bus, role, normalizedName, resolvedPath, pluginId)
   }
 
   private async issueLoad(
     key: K,
     bus: string | undefined,
+    role: 'effect' | 'instrument',
+    normalizedName: string,
     resolvedPath: string,
     pluginId: string | undefined,
+    replacing?: PluginSlot,
   ): Promise<void> {
     if (!this.audioEngine.loadPlugin) {
       throw new Error('Plugin hosting requires the Rust engine backend.')
@@ -123,18 +158,41 @@ export class EffectSlotMap<K> {
     // explicit undefined でも実 engine は等価だが、契約をピンするテスト/モックがある）。
     const load = (
       bus === undefined
-        ? this.audioEngine.loadPlugin(resolvedPath, pluginId, 'effect')
-        : this.audioEngine.loadPlugin(resolvedPath, pluginId, 'effect', bus)
+        ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role)
+        : this.audioEngine.loadPlugin(resolvedPath, pluginId, role, bus)
     ).then(() => undefined)
-    const entry: EffectSlotEntry = { resolvedPath, pluginId, load }
-    this.slots.set(key, entry)
+    const chain = this.chains.get(key) ?? []
+    const occurrence =
+      chain.filter((slot) => slot !== replacing && slot.normalizedName === normalizedName).length +
+      1
+    const instanceId =
+      replacing?.instanceId ?? `${this.receiverId(key)}/${normalizedName}#${occurrence}`
+    const entry: PluginSlot =
+      role === 'effect'
+        ? { role, bus, instanceId, normalizedName, resolvedPath, pluginId, load }
+        : { role, instanceId, normalizedName, resolvedPath, pluginId, load }
+    const nextChain = replacing
+      ? chain.map((slot) => (slot === replacing ? entry : slot))
+      : [...chain, entry]
+    this.chains.set(key, nextChain)
     try {
       await load
     } catch (err) {
-      if (this.slots.get(key) === entry) this.slots.delete(key)
+      const current = this.chains.get(key)
+      if (current?.includes(entry)) {
+        const rolledBack = current.filter((slot) => slot !== entry)
+        if (rolledBack.length === 0) this.chains.delete(key)
+        else this.chains.set(key, rolledBack)
+      }
       throw err
     }
   }
+}
+
+/** SC.5 の instance identity に使う plugin 名を安定化する。 */
+export function normalizePluginInstanceName(spec: string): string {
+  const unqualified = spec.trim().normalize('NFC').split('/').pop() ?? spec
+  return unqualified.replace(/\.(?:clap|vst3|component)$/i, '')
 }
 
 /**

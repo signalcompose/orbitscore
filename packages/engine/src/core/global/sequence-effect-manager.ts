@@ -2,7 +2,12 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
-import { BusPool, EffectSlotMap, resolveEffectSpec } from './effect-slot'
+import {
+  BusPool,
+  EffectChainMap,
+  normalizePluginInstanceName,
+  resolveEffectSpec,
+} from './effect-slot'
 
 /**
  * Bus name prefix for the daemon's default per-sequence insert bus pool. Must
@@ -22,7 +27,7 @@ export const SEQUENCE_EFFECT_BUS_POOL_SIZE = 8
 /**
  * Owns the per-sequence insert (`seq.effect()` — PH.2b / #434 S3) declarations:
  * one bus per sequence, allocated from the daemon's default bus pool
- * (`seq-bus-0`.."seq-bus-7"). 実装は #468 の共通基盤（`BusPool` + `EffectSlotMap`）に
+ * (`seq-bus-0`.."seq-bus-7"). 実装は #468 の共通基盤（`BusPool` + `EffectChainMap`）に
  * 委譲し、この manager 固有なのは「passthrough bus（`ensureBus()` — plugin 未ロードの
  * routing 用割当・MX.4）と insert の分離、および昇格失敗時に bus を返却しない
  * ロールバック」だけ。
@@ -31,7 +36,7 @@ export class SequenceEffectManager {
   /** sequenceName → 割当 bus（passthrough 含む）。routing（output/send）が参照する。 */
   private readonly buses = new Map<string, string>()
   /** sequenceName → 実 insert 宣言（passthrough は含まない）。 */
-  private readonly slots: EffectSlotMap<string>
+  private readonly slots: EffectChainMap<string>
   private readonly pool = new BusPool(
     SEQUENCE_EFFECT_BUS_PREFIX,
     SEQUENCE_EFFECT_BUS_POOL_SIZE,
@@ -45,7 +50,7 @@ export class SequenceEffectManager {
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
-    this.slots = new EffectSlotMap(audioEngine)
+    this.slots = new EffectChainMap(audioEngine, (sequenceName) => `seq:${sequenceName}`)
   }
 
   hasDeclaration(sequenceName: string): boolean {
@@ -99,7 +104,15 @@ export class SequenceEffectManager {
     const bus = this.buses.get(sequenceName) ?? this.pool.acquire(sequenceName)
     this.buses.set(sequenceName, bus)
     try {
-      await this.slots.declare(sequenceName, bus, resolved.path, resolved.pluginId, duplicateError)
+      await this.slots.declare(
+        sequenceName,
+        bus,
+        'effect',
+        normalizePluginInstanceName(spec),
+        resolved.path,
+        resolved.pluginId,
+        duplicateError,
+      )
     } catch (err) {
       if (!hadBus) {
         // この呼び出しで新規に確保した bus の load 失敗: free-list へ返す（daemon 側も

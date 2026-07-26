@@ -2,7 +2,12 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
-import { BusPool, EffectSlotMap, resolveEffectSpec } from './effect-slot'
+import {
+  BusPool,
+  EffectChainMap,
+  normalizePluginInstanceName,
+  resolveEffectSpec,
+} from './effect-slot'
 
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
@@ -60,14 +65,14 @@ export function isMixerBusHandle(value: unknown): value is MixerBusHandle {
 /** kind ごと（sum / aux）の宣言テーブル一式。 */
 interface KindState {
   readonly buses: Map<string, string> // declared name → bus
-  readonly inserts: EffectSlotMap<string> // keyed by bus name
+  readonly inserts: EffectChainMap<string> // keyed by declared mixer name
   readonly pool: BusPool
 }
 
 /**
  * Owns `global.sum(name)` / `global.aux(name)` declarations (MX.2/MX.3, #459/#453 M3): one
  * bus per declared name, allocated from the daemon's default sum/aux bus pools
- * (`sum-bus-0..3` / `aux-bus-0..3`). 実装は #468 の共通基盤（`BusPool` + `EffectSlotMap`）
+ * (`sum-bus-0..3` / `aux-bus-0..3`). 実装は #468 の共通基盤（`BusPool` + `EffectChainMap`）
  * に委譲し、sum / aux は同型の `KindState` 2 面として持つ。
  *
  * The bus's own insert (`sum("drum").effect(...)`) reuses the SAME `LoadPlugin` endpoint
@@ -87,7 +92,7 @@ export class MixerManager {
   ) {
     const makeKind = (kind: MixerKind, prefix: string): KindState => ({
       buses: new Map(),
-      inserts: new EffectSlotMap(audioEngine),
+      inserts: new EffectChainMap(audioEngine, (name) => `${kind}:${name}`),
       pool: new BusPool(
         prefix,
         MIXER_BUS_POOL_SIZE,
@@ -241,8 +246,10 @@ export class MixerManager {
       `${kind}("${name}").effect() cannot be used while LinkAudio is enabled in v1.`,
     )
     await this.kinds[kind].inserts.declare(
+      name,
       bus,
-      bus,
+      'effect',
+      normalizePluginInstanceName(spec),
       resolved.path,
       resolved.pluginId,
       () =>
