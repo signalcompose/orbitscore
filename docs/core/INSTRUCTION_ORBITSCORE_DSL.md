@@ -1160,8 +1160,15 @@ synth.play(1, 3, 5, 0)                        // 値は度数（Pitch DSL と同
   （`octave` / `vel` / `gate` / `root`、mode / chord / `[ ]` / tie / voicing 適用可）。
 - **v1 実現マトリクスの例外**: detune `~` は不可（plugin 経路に pitch bend / CC がない
   ため warn + skip）。`global.midiLatency()` は MIDI 送出専用のため非適用。
-- 出力はエンジン master bus に add-mix され、global gain / master effect insert /
-  capture の対象になる。
+- 出力は**当該シーケンスの insert bus に源流として合流**し、per-sequence の effect チェーン /
+  send / 出力先ルーティングの対象になる（#517 S4 で master 直行から移設）。ルーティング未宣言時の
+  既定の行き先は従来どおり master であり、global gain / master effect insert / capture の対象で
+  あることは不変。
+  > **移設の理由**: 移設前は instrument の音が master の post processor で add-mix されており
+  > （`engine_wrap.rs` の `CompositePostProcessor`）、**seq バスグラフを一切通らなかった**。
+  > このため SC.0 の `lead.Serum(...).TALReverb4(size: 0.6).subout` — 楽器にエフェクトを挿し
+  > 出力先を指定する記述 — が原理的に成立しなかった（DSL 層も note シーケンスへの
+  > `output()` / `send()` を拒否していた）。#522 の到達点「SC.0 の完全実行」には移設が必須である。
 - RUN / LOOP / MUTE / quantize の意味論は MIDI シーケンスと同一。
 
 ### PH.2 effect — `global.effect(path[, pluginId])`
