@@ -1232,18 +1232,50 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   （ファイル不在・非対応 format・plugin 非対応ビルド）は**宣言時のハードエラー**とし、
   warn + no-op にしない（instrument の silent failure = 無音を防ぐ。daemon の
   `CLAP_NOT_LOADED` 正直エラー方針 #405 と整合）。
-- **instrument はエンジン全体で 1 インスタンス**（v1）:
-  - 複数の note シーケンスが**同じ path** を宣言 → 同一インスタンスを共有（note はマージ。
-    v1 は全 note が channel 0 固定。per-sequence channel は将来の非規範拡張）。
-    実装注記: daemon は同 path でも 2 回目の `LoadPlugin` を `AlreadyLoaded` エラーに
-    するため、**共有は TS ブリッジ側の dedup で実現する**（置換ベースで設計しないこと）。
-  - **異なる path** の 2 つ目の宣言 → エラー（daemon が置換非サポート。加えてライブ中の
-    暗黙置換は他シーケンスの音が突然変わる事故になる）。
-  - 同一シーケンスの再宣言: 同一 path は冪等（no-op）。異 path への差し替えはエラー
-    （`.audio()` の置換挙動とは異なることに注意）。
+- **instrument はシーケンスごとに 1 インスタンス**（#517 S4 で「エンジン全体で 1 インスタンス」の
+  制約を解除）:
+  - 各 note シーケンスの宣言は**独立したインスタンス**を生成する。複数シーケンスが同じ path を
+    宣言しても**共有しない**（音色状態・パラメータ・preset・声部がトラックごとに独立する。
+    CPU / メモリもインスタンスごとに掛かる）。
+  - 同一シーケンスの再宣言: 同一 path + pluginId は冪等（no-op・ライブ再評価の保護）。
+    異なる path / pluginId は**後勝ちで差し替える**（SC.3.1 規範4）。差し替えは prepare → commit 型で、
+    新インスタンスのロード成功まで旧インスタンスが鳴り続け、失敗時は旧インスタンスが無傷で残る。
+    差し替え時の保留 note は旧インスタンスへ全解放してから破棄する。
+  - note の宛先は宣言シーケンス自身のインスタンス。channel は 0 固定（インスタンス化により
+    per-sequence channel の必要は消滅した。channel は本来の意味 = マルチティンバープラグイン内の
+    パート指定として後続 stage で使う）。
+  - **クラッシュ隔離**: 1 インスタンス = 1 child プロセス。crash 時は当該シーケンスのみ無音になり
+    自動 respawn する。他のインスタンス・audio シーケンスは影響を受けない。
+
+> **なぜ共有をやめたか（#523 の調査）**: 旧規則の「同 path 共有」は、daemon が 2 回目の `LoadPlugin` を
+> `AlreadyLoaded` にする制約に合わせた TS 側 dedup だった。しかし**フォーマット側に共有を成立させる
+> 機構が無い**: CLAP は `clap_plugin_preset_load` がインスタンス丸ごとにしか効かず（port / channel で
+> スコープする引数が無い）、param も `param_id` のみでスコープを持たない（`PER_NOTE_ID` 等のフラグは
+> MPE 的なボイス単位モジュレーションであって持続する音色設定ではない）。`clap_plugin_track_info` が
+> 「このインスタンスが乗っているトラック」を**単数**で返すことからも、CLAP は 1 インスタンス = 1 トラックを
+> 前提にしている。VST3 は Unit 機構（`UnitInfo.programListId` / `ParameterInfo.unitId` /
+> `getUnitByBus`）で per-part を表現できるが **opt-in** で、本実装は未対応。
+> したがって旧規則は**共有の利点を実現する機構を持たないまま、preset / param / note が混ざる欠点だけを
+> 負っていた**。
+
+- **複数シーケンスと 1 インスタンスの関係**（暗黙には生じない。いずれも明示宣言・後続 stage）:
+  - **サミング**: 複数シーケンスが同一インスタンスの**同一 part** に note を合流させる（通常の
+    単一ティンバー音源を含む）。note ストリームは 1 つの voice pool に合流し、preset / パラメータは
+    1 組。**note の解放はシーケンス単位** — あるシーケンスの停止は自分が発音した note のみを解放し、
+    同一 key を他シーケンスが保持していれば発音は続く（`(port_index, channel, key)` 参照カウント方式・
+    M2 §4.7 の voice 簿記と同一）。**voice stealing はプラグインのポリフォニー管理に従う内在的性質として
+    容認**する（DAW で 1 トラックにクリップを重ねた場合と同じ）。
+  - **マルチティンバー**: 複数シーケンスが同一インスタンスの**異なる part**（port / channel、VST3 では
+    Unit）を独立に叩く。note は合流せず、part ごとに独立した preset / param を持つ（対応 format のみ。
+    CLAP は per-part の機構を持たないため part 指定は明示エラー）。
+  - 通常音源は part を 1 つだけ持つ縮退形であり、**part 指定のない合流はサミングになる**。
 - **All Notes Off**: plugin 経路に CC はないため、active note を列挙して note-off を
   逐次送出する。`global.stop()` / LOOP 除外 / MUTE / `play()` 差し替え時の保留 note
-  解放義務は Pitch DSL §7-2 と同一。
+  解放義務は Pitch DSL §7-2 と同一。**インスタンスごと・シーケンス（owner）ごとに追跡**し、
+  サミング時は上記の参照カウント判定に従う（他シーケンスが同一 key を保持していれば note-off を
+  送出しない）。インスタンス全体を落とす wildcard な choke は、**アンロード / 差し替えの teardown
+  でのみ**使用する（1 シーケンスの停止では使わない — 他シーケンスの発音を巻き込むため）。
+  child crash で声部が消滅した後の stale な note-off は無害（受信側に該当声部が無い）。
 - **underscore 規約**: plugin verb は宣言専用であり `_effect` / `_instrument` 形はない。
 - `.orbslog`: 宣言は他 verb 同様に因果評価ログとして自動記録される（特別扱いなし）。
 
