@@ -425,6 +425,23 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(routing).toHaveBeenCalledWith('seq-bus-0', 'master', [])
   })
 
+  it('accepts the host-injected global.setDocumentDirectory(...) as DSL', async () => {
+    // Regression (#523, from #519 S2): the extension prepends
+    // `global.setDocumentDirectory("<dir>")` to every evaluation so `audio()`
+    // resolves relative to the edited file, and the MCP evaluate path mirrors it.
+    // `setDocumentDirectory` was classified as an internal API rather than DSL
+    // vocabulary, so S2's "unknown method is an explicit error" rejected the
+    // injected line — breaking EVERY editor evaluation while the suite stayed
+    // green (the reverse-direction test only checks that each method is
+    // classified, not that the classification is right). Found by driving the
+    // real app, not by a test.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await expect(
+      run('global.setDocumentDirectory("/tmp/orbitscore-doc-dir")', state),
+    ).resolves.not.toThrow()
+  })
+
   it('rejects an output whose left channel is 1 but whose right channel is not 2', async () => {
     // The case above only exercises `left !== 1` (channels 3,4), so relaxing the
     // guard to `if (left !== 1)` alone leaves the suite green — the right-channel
@@ -717,7 +734,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // Transport timing and host integration.
       'pushLinkTempoIfLeading',
       'getQuantize',
-      'setDocumentDirectory',
+      // `setDocumentDirectory` deliberately NOT listed here: the host injects it
+      // as DSL source, so it belongs to GLOBAL_DSL_METHODS. Listing it here is
+      // what let the runtime break while this test stayed green (#523).
       'getMasterGainDb',
       'setTransportHooks',
       'getTransportPosition',

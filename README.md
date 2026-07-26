@@ -277,7 +277,7 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 npm test
 ```
 
-**1632 passed, 29 skipped (1661 total) — post-2.0 (#517 S3 Signal Chain routing)**
+**1633 passed, 29 skipped (1662 total) — post-2.0 (#517 S3 Signal Chain routing)**
 
 Run `npm test` to see the current breakdown. Skipped tests are SuperCollider / real-daemon integration tests that require a local environment.
 

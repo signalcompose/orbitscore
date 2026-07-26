@@ -11,6 +11,14 @@ export const GLOBAL_DSL_METHODS: ReadonlySet<string> = new Set([
   'midiLatency',
   'audioPath',
   'audioDevice',
+  // Injected as DSL source by the host, not called only from TypeScript: the
+  // extension prepends `global.setDocumentDirectory("...")` to every evaluation
+  // so `audio()` resolves relative to the edited file (extension.ts, and the MCP
+  // evaluate path mirrors it). It therefore belongs to the Global DSL surface —
+  // classifying it as an internal API made the reverse-direction test pass while
+  // the runtime path threw `Unknown chain method` on every editor evaluation
+  // (regression from #519 S2, found by driving the real app in #523).
+  'setDocumentDirectory',
   'linkAudio',
   'effect',
   'instrument',

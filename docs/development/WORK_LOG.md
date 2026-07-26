@@ -171,6 +171,32 @@ SC.4 の Global 分離をバイパス（`executeModuleIR` が import 元と同�
 > 置いていたため、その瞬間の計測だった。ガード健全な状態でフル suite を2回連続実行し
 > **1632 passed / 失敗0** を確認済み（並行レビューの副作用であり、フレークでも実装の欠陥でもない）。
 
+**実機駆動で見つけた Critical（#519 S2 由来の回帰・テストが緑のまま壊れていた）**:
+OrbitStudio をビルドして実際に評価したところ、**エディタからの評価がすべて失敗していた**:
+
+```
+ERROR: Unknown chain method "setDocumentDirectory" on Global.
+```
+
+拡張は `audio()` を編集中ファイル基準で解決させるため、**全評価の先頭に
+`global.setDocumentDirectory("<dir>")` を DSL ソースとして注入する**（`extension.ts`・MCP の
+evaluate 経路も同じ）。ところがこの名前が `GLOBAL_DSL_METHODS` に無く、S2 の「未知メソッド =
+明示エラー」が注入行を弾いていた。
+
+**S2 の逆方向テストが防ぐはずだった失敗モードそのものを、除外リストへの誤分類で通していた**:
+当該テストは「全 prototype メソッドが DSL 語彙か内部 API 除外リストのどちらかに分類される」ことしか
+検査しないため、`setDocumentDirectory` を除外リストに入れた時点でテストは緑になり、
+**実行時経路だけが壊れる**。ホストが DSL として注入する以上これは内部 API ではないので、
+`GLOBAL_DSL_METHODS` へ移し、除外リストから外した理由をコメントで残した。
+
+注入される実際の形を DSL として評価する回帰テストを追加し、**語彙から外すと
+`Unknown chain method` で落ちることを確認**した。main も同じ状態なので S2 マージ以降
+エディタ評価が壊れていたことになる（`/simplify` も pr-review-team 2ラウンドも、
+実機で動かすまで検出できなかった）。
+
+**実機確認**: 修正後、`kick.verb(0.3)`（aux send）・`kick.drums`（sum への出力先指定）・
+`drums.master`（hardware 復帰）が実エンジンでエラーなく評価された。
+
 **comment-analyzer が検証した主張（すべて実測と一致）**: 「236行追加・0行削除」／「1631 passed」／
 「S3 前 1611」（`62f6bc9` を worktree で実行）／README の「1617 passed」（`db01cd8`）／
 Rust 9件／`engine_wrap.rs` の `1 = Master` エンコード／`db01cd8` が `EffectSlotLimitError` の
