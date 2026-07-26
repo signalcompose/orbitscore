@@ -425,6 +425,25 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(routing).toHaveBeenCalledWith('seq-bus-0', 'master', [])
   })
 
+  it('requires parentheses for a bare Global DSL method, but keeps transport bare', async () => {
+    // Regression (#523, bot review): before S3, a bare non-transport call on a
+    // Global hit `handleGlobalTransportCommand`'s `default` arm, which warned and
+    // never invoked the method. S3 routes every bare first hop through the chain
+    // dispatcher, so a dropped `(20)` in `global.midiLatency(20)` silently called
+    // `midiLatency(undefined)` — reproduced, along with `global.key` crashing
+    // inside `name.match(...)`. Sequences must keep bare DSL methods working
+    // (`kick.unmute`), so the guard is Global-only.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+
+    await expect(run('global.midiLatency', state)).rejects.toThrow(/requires parentheses/)
+    await expect(run('global.key', state)).rejects.toThrow(/requires parentheses/)
+    await expect(run('global.audioDevice', state)).rejects.toThrow(/requires parentheses/)
+
+    // Transport stays bare, and the parenthesised form is unaffected.
+    await expect(run('global.tempo(120)', state)).resolves.not.toThrow()
+  })
+
   it('accepts the host-injected global.setDocumentDirectory(...) as DSL', async () => {
     // Regression (#523, from #519 S2): the extension prepends
     // `global.setDocumentDirectory("<dir>")` to every evaluation so `audio()`

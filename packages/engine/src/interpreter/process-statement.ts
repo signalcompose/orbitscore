@@ -14,6 +14,7 @@ import {
   ImportStatement,
   MixerHandleStatement,
 } from '../parser/audio-parser'
+import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
 import { isMixerBusHandle } from '../core/global/mixer-manager'
 import { dispatchPlugin, resolveChainDispatch } from '../signal-chain/dispatch'
@@ -28,6 +29,13 @@ import {
 
 import { InterpreterState } from './types'
 import { callMethod } from './evaluate-method'
+
+/**
+ * Global methods that may be written without parentheses. Mirrors the transport
+ * set the pre-#517-S3 `handleGlobalTransportCommand` actually executed; every
+ * other Global DSL method takes arguments, so a bare form is a dropped `(...)`.
+ */
+const GLOBAL_BARE_METHODS: ReadonlySet<string> = new Set(['start', 'stop', 'loop'])
 
 /**
  * Process a statement
@@ -133,6 +141,25 @@ async function applyMethodChain(
     invocation: 'bare' | 'call',
   ): Promise<any> {
     const dispatch = resolveChainDispatch(receiver, method, state, invocation)
+    if (
+      dispatch.kind === 'dsl-method' &&
+      invocation === 'bare' &&
+      receiver instanceof Global &&
+      !GLOBAL_BARE_METHODS.has(method)
+    ) {
+      // Before #517 S3, a bare non-transport call on a Global reached
+      // `handleGlobalTransportCommand`, whose `default` arm warned and never
+      // invoked the method. S3 routes every bare first hop through the chain
+      // dispatcher instead, so `global.midiLatency` (a dropped `(20)`) would call
+      // `midiLatency(undefined)` and silently corrupt state — reproduced, along
+      // with `global.key` crashing inside `name.match(...)`. Sequences keep bare
+      // DSL methods (`kick.unmute`); only a Global needs the parentheses, since
+      // its bare vocabulary is transport-only.
+      throw new Error(
+        `Global method "${method}" requires parentheses; write global.${method}(...). ` +
+          `Only ${[...GLOBAL_BARE_METHODS].join(' / ')} may be written bare on a Global.`,
+      )
+    }
     if (dispatch.kind === 'plugin') {
       return dispatchPlugin(receiver, method, args, dispatch.entries, state)
     }
