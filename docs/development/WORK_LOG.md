@@ -111,7 +111,7 @@ index と不可分。
 いた点を成功後コミットに修正。`buildRoutingSends` は private メソッドで足すと S2 の逆方向テストが
 prototype 表面として検出したため（`private` は実行時に残る）モジュール関数へ。
 
-**pr-review-team ラウンド1（`96dbb85`）— CI 全 pass のまま Critical 6件**:
+**pr-review-team ラウンド1（`73d21d7`）— CI 全 pass のまま Critical 6件**:
 4レビュアー全員が実行して再現。うち2件は2名が独立に同一指摘へ到達。**C1〜C4 はこの PR が
 退治対象に掲げた silent pass-through と同型**で、過去5回再発したパターンがパーサーの chain
 継続チェックと aux 引数ループという**新しい2箇所**で再現していた。
