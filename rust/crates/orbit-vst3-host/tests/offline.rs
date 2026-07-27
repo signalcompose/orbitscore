@@ -66,10 +66,10 @@ fn synth_oracle_sounds_then_silences_on_note_off() {
         eprintln!("VST3 synth oracle build failed; loud skip for this machine");
         return;
     };
-    let (mut processor, info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None)
-        .unwrap_or_else(|error| {
-            panic!("failed to load synth oracle {}: {error}", bundle.display())
-        });
+    let (mut processor, info) =
+        Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None).unwrap_or_else(
+            |error| panic!("failed to load synth oracle {}: {error}", bundle.display()),
+        );
     assert!(!info.is_effect, "oracle must be detected as an instrument");
     assert_eq!(info.audio_inputs, 0);
     assert_eq!(info.audio_outputs, 1);
@@ -160,10 +160,10 @@ fn instrument_process_block_rejects_non_stereo_length() {
         eprintln!("VST3 synth oracle build failed; loud skip for this machine");
         return;
     };
-    let (mut processor, _info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None)
-        .unwrap_or_else(|error| {
-            panic!("failed to load synth oracle {}: {error}", bundle.display())
-        });
+    let (mut processor, _info) =
+        Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None).unwrap_or_else(
+            |error| panic!("failed to load synth oracle {}: {error}", bundle.display()),
+        );
 
     processor.push_note_on(0, 69, 0.8, 0);
     // Odd length: not a multiple of DEFAULT_CHANNELS(2).
@@ -192,10 +192,10 @@ fn instrument_process_block_rejects_frames_exceeding_scratch() {
         eprintln!("VST3 synth oracle build failed; loud skip for this machine");
         return;
     };
-    let (mut processor, _info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None)
-        .unwrap_or_else(|error| {
-            panic!("failed to load synth oracle {}: {error}", bundle.display())
-        });
+    let (mut processor, _info) =
+        Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None).unwrap_or_else(
+            |error| panic!("failed to load synth oracle {}: {error}", bundle.display()),
+        );
 
     processor.push_note_on(0, 69, 0.8, 0);
     // FRAMES(512) is the scratch length (max_samples_per_block); one frame beyond that must fail.
