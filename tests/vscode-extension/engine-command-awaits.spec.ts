@@ -8,6 +8,14 @@ vi.mock('child_process', async (importOriginal) => {
   return { ...actual, spawn: vi.fn(actual.spawn), execFile: vi.fn(actual.execFile) }
 })
 
+vi.mock('../../packages/vscode-extension/src/engine-startup-runtime', () => ({
+  extensionEngineFileExists: vi.fn(() => true),
+  resolveDaemonBinaryForExtension: vi.fn(() => ({
+    path: '/unit-test/orbit-audio-daemon',
+    source: 'unit-test',
+  })),
+}))
+
 let child_process: typeof import('child_process')
 let ext: typeof import('../../packages/vscode-extension/src/extension')
 let vscode: typeof import('vscode')
