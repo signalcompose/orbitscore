@@ -53,12 +53,14 @@ interface FakeChildProcess {
   proc: ChildProcess
   fireExit: (code: number | null) => void
   fireStdoutData: (chunk: string) => void
+  fireStderrData: (chunk: string) => void
   fireStdinError: (err: Error) => void
 }
 
 function fakeChildProcess(): FakeChildProcess {
   const exitListeners: Array<(code: number | null) => void> = []
   const stdoutListeners: Array<(data: Buffer) => void> = []
+  const stderrListeners: Array<(data: Buffer) => void> = []
   const stdinErrorListeners: Array<(err: Error) => void> = []
 
   const proc: Partial<ChildProcess> = {
@@ -71,6 +73,11 @@ function fakeChildProcess(): FakeChildProcess {
         if (event === 'data') stdoutListeners.push(cb as (data: Buffer) => void)
       },
     } as unknown as ChildProcess['stdout'],
+    stderr: {
+      on: (event: string, cb: (...args: unknown[]) => void) => {
+        if (event === 'data') stderrListeners.push(cb as (data: Buffer) => void)
+      },
+    } as unknown as ChildProcess['stderr'],
     stdin: {
       on: (event: string, cb: (...args: unknown[]) => void) => {
         if (event === 'error') stdinErrorListeners.push(cb as (err: Error) => void)
@@ -82,6 +89,7 @@ function fakeChildProcess(): FakeChildProcess {
     proc: proc as ChildProcess,
     fireExit: (code) => exitListeners.forEach((cb) => cb(code)),
     fireStdoutData: (chunk) => stdoutListeners.forEach((cb) => cb(Buffer.from(chunk))),
+    fireStderrData: (chunk) => stderrListeners.forEach((cb) => cb(Buffer.from(chunk))),
     fireStdinError: (err) => stdinErrorListeners.forEach((cb) => cb(err)),
   }
 }
@@ -332,6 +340,69 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       expect(marker, appendedLines.join('\n')).toBeDefined()
       expect(marker).toContain('🛑 internal error in setupStdoutHandler')
       // The stack trace line, logged separately for root-causing.
+      expect(appendedLines.some((line) => line.includes('at '))).toBe(true)
+    })
+
+    // #527 review round 5 Minor #1: `logHandlerFailure` itself is called from
+    // inside the try/catch above — if ITS body threw (here: a fake
+    // `outputChannel.appendLine` that throws, standing in for any future
+    // change that makes the real one throw), the exception would re-escape
+    // the very catch block meant to contain it, defeating the containment
+    // this whole describe block exists to prove. `statusBarItem` is null
+    // (same trigger as the test above) to reach `logHandlerFailure` via a
+    // genuine failure, not a synthetic call.
+    it('does not itself throw when outputChannel.appendLine throws — falls back to console.error (#527 review round 5 Minor #1)', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest(null) // statusBarItem!.text throws on null
+      ext.__setOutputChannelForTest({
+        appendLine: () => {
+          throw new Error('outputChannel.appendLine itself is broken')
+        },
+        append: () => {},
+      })
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      try {
+        ext.setupStdoutHandler(proc, false)
+        expect(() => fireStdoutData('✅ Global running\n')).not.toThrow()
+
+        expect(consoleErrorSpy).toHaveBeenCalled()
+        const loggedArgs = consoleErrorSpy.mock.calls[0]
+        expect(String(loggedArgs[0])).toContain('setupStdoutHandler')
+      } finally {
+        consoleErrorSpy.mockRestore()
+      }
+    })
+  })
+
+  describe('setupStderrHandler (#527 review round 5 Minor #2)', () => {
+    // Symmetry fix: the other three listener bodies (setupStdoutHandler,
+    // setupExitHandler, setupStdinErrorHandler) are each wrapped in
+    // try/catch + logHandlerFailure per round 4 Important #1, but
+    // setupStderrHandler had been left unwrapped. `outputChannel?.append`
+    // has no realistic throw path today, so this test injects a throwing
+    // fake to prove the containment exists, the same way the other three
+    // handlers' round-4 tests do.
+    it('contains an exception thrown inside the listener body instead of letting it escape', () => {
+      const { proc, fireStderrData } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {
+          throw new Error('injected fault in outputChannel.append')
+        },
+      })
+
+      ext.setupStderrHandler(proc)
+
+      expect(() => fireStderrData('boom\n')).not.toThrow()
+
+      const marker = appendedLines.find((line) => line.includes('setupStderrHandler'))
+      expect(marker, appendedLines.join('\n')).toBeDefined()
+      expect(marker).toContain('🛑 internal error in setupStderrHandler')
       expect(appendedLines.some((line) => line.includes('at '))).toBe(true)
     })
   })

@@ -1321,16 +1321,17 @@ export function __resetPlayheadStateForTest(): void {
 
 // ---- Handler-body crash containment (#527 review round 4 Important #1) ----
 //
-// setupStdoutHandler / setupExitHandler / setupStdinErrorHandler register
-// listener bodies directly on Node stream/process events. There is no
-// `process.on('uncaughtException', ...)` anywhere in this extension, so an
-// exception that escapes ANY of these three listener bodies is not just an
-// OrbitScore failure — it crashes the extension HOST process, taking down
-// every other extension in the window along with it. `transportStatusText`'s
-// exhaustiveness guard (#527 review Important #2, above) was the first piece
-// of code on this path that can deliberately `throw`, but the danger it
-// exposed is general: ANY exception here (a null UI element, a bridge method
-// throwing, etc.) has always had this blast radius.
+// setupStdoutHandler / setupStderrHandler / setupExitHandler /
+// setupStdinErrorHandler register listener bodies directly on Node
+// stream/process events. There is no `process.on('uncaughtException', ...)`
+// anywhere in this extension, so an exception that escapes ANY of these four
+// listener bodies is not just an OrbitScore failure — it crashes the
+// extension HOST process, taking down every other extension in the window
+// along with it. `transportStatusText`'s exhaustiveness guard (#527 review
+// Important #2, above) was the first piece of code on this path that can
+// deliberately `throw`, but the danger it exposed is general: ANY exception
+// here (a null UI element, a bridge method throwing, etc.) has always had
+// this blast radius.
 //
 // `logHandlerFailure` catches and records loud, marker-prefixed failures
 // (including the stack trace, for root-causing) instead of re-throwing —
@@ -1339,11 +1340,30 @@ export function __resetPlayheadStateForTest(): void {
 // only place engine-side errors are observable — see CLAUDE.md's testing
 // discipline notes), writing loudly to `outputChannel` IS the loud-failure
 // behavior, not a silent swallow.
+//
+// #527 review round 5 Minor #1: `logHandlerFailure` is itself called from
+// inside every one of those catch blocks — if ITS body threw (e.g. a future
+// VS Code API change makes `outputChannel.appendLine` throw, or a test fake
+// does), the exception would re-escape the very catch block that was
+// supposed to contain it, defeating the whole mechanism. The inner
+// try/catch below makes `logHandlerFailure` self-contained: if writing to
+// `outputChannel` fails, it falls back to `console.error` instead of
+// propagating. That fallback is deliberately a single, non-throwing
+// primitive call — there is no safe place left to report a failure of the
+// fallback itself.
 function logHandlerFailure(handlerName: string, err: unknown): void {
-  const message = err instanceof Error ? err.message : String(err)
-  const stack = err instanceof Error && err.stack ? err.stack : '(no stack trace available)'
-  outputChannel?.appendLine(`🛑 internal error in ${handlerName}: ${message}`)
-  outputChannel?.appendLine(stack)
+  try {
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = err instanceof Error && err.stack ? err.stack : '(no stack trace available)'
+    outputChannel?.appendLine(`🛑 internal error in ${handlerName}: ${message}`)
+    outputChannel?.appendLine(stack)
+  } catch (loggingErr) {
+    console.error(
+      `🛑 internal error in ${handlerName} (and outputChannel logging itself failed):`,
+      err,
+      loggingErr,
+    )
+  }
 }
 
 /**
@@ -1404,10 +1424,22 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 
 /**
  * Setup stderr handler for engine process.
+ *
+ * #527 review round 5 Minor #2: wrapped in the same try/catch +
+ * `logHandlerFailure` containment as the other three listener bodies above —
+ * this one had been left unwrapped despite the crash-containment note two
+ * functions up describing the danger in general terms for "every listener
+ * body registered on the engine process". `outputChannel?.append` has no
+ * realistic throw path today, so this is a symmetry fix, not a fix for an
+ * observed failure.
  */
-function setupStderrHandler(process: child_process.ChildProcess): void {
+export function setupStderrHandler(process: child_process.ChildProcess): void {
   process.stderr?.on('data', (data) => {
-    outputChannel?.append(`ERROR: ${data.toString()}`)
+    try {
+      outputChannel?.append(`ERROR: ${data.toString()}`)
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
   })
 }
 
