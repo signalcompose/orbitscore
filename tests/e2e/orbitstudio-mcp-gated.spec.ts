@@ -233,14 +233,19 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const debugWhileRunning = await client.call('start_engine', { debug: true })
       expect(debugWhileRunning.isError, debugWhileRunning.text).toBe(true)
       expect(debugWhileRunning.text).toContain('stop_engine')
-      // Symmetric with the capture-reject check above: a mutant that made the
-      // debug-reject branch tear the engine down instead of just rejecting
-      // would otherwise pass silently here.
-      const stateAfterDebugReject = await client.call('get_engine_state')
-      expect(
-        (JSON.parse(stateAfterDebugReject.text) as { running: boolean }).running,
-        stateAfterDebugReject.text,
-      ).toBe(true)
+      // #527 review round 3 Minor #1: a `running === true` re-check here was
+      // removed — capture and debug rejects both fall through
+      // decideStartEngineForAgent's SAME single `spawnOnlyOptions.length > 0`
+      // branch (engine-lifecycle.ts), which returns before touching engine
+      // state either way. The `stateAfterCaptureReject` check above already
+      // exercises that exact early-return path end-to-end; repeating it here
+      // adds no additional detection power (a mutant that made either reject
+      // branch tear the engine down would already be caught above). What
+      // DOES still add value for the debug case — and is kept — is the
+      // `.toContain('stop_engine')` message-content check just above, which
+      // proves the rejection message mentions "debug" rather than being
+      // hardcoded to the capture wording (see the unit-level equivalent in
+      // engine-lifecycle.spec.ts's `decideStartEngineForAgent` describe).
 
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)

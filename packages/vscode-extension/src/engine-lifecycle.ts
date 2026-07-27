@@ -11,6 +11,40 @@
 import { parseSelectAudioDeviceResultLine } from './engine-view'
 import { parseStepLine, type StepEvent } from './playhead'
 
+/** Transport state driving the status-bar label — see `transportStatusText`. */
+export type TransportState = 'playing' | 'ready'
+
+/**
+ * Render the status-bar label for a transport state via an EXHAUSTIVE SWITCH,
+ * not a ternary (#527 review Important #2).
+ *
+ * Every caller today passes a literal `'playing'` or `'ready'`, so the type
+ * checker already rules out anything else — but `setTransportStatus` exists
+ * specifically so a future IPC/JSON/loosely-typed boundary (a wire protocol,
+ * a deserialized message) can drive it, and at THAT boundary the compile-time
+ * guarantee is gone. A ternary silently folds any unrecognized value into the
+ * 'ready' branch: no log, no error, just a status bar that says "Ready" while
+ * the engine is actually playing. The `default` branch below assigns `state`
+ * to a `never`-typed variable — TypeScript only accepts this if the two
+ * `case`s above are truly exhaustive over the declared union, so adding a
+ * third `TransportState` member without a matching `case` here is a compile
+ * error, and a value that reaches `default` at runtime only despite that
+ * (i.e. it arrived via a type-unsafe boundary) throws instead of silently
+ * falling through.
+ */
+export function transportStatusText(state: TransportState, debugMode: boolean): string {
+  switch (state) {
+    case 'playing':
+      return debugMode ? '🎵 OrbitScore: ▶️ Playing 🐛' : '🎵 OrbitScore: ▶️ Playing'
+    case 'ready':
+      return debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
+    default: {
+      const _exhaustive: never = state
+      throw new Error(`Unhandled transport state: ${String(_exhaustive)}`)
+    }
+  }
+}
+
 export interface EngineStdoutLineIntent {
   rawLine: string
   step: StepEvent | null
@@ -30,7 +64,7 @@ export interface EngineStdoutEffects {
    * siblings — a same-signature `() => void` pair is exactly the shape a wiring mistake
    * (swapping which implementation lands in which slot) can't be caught by the type
    * checker. A single parameterized callback makes that mistake unrepresentable. */
-  setTransportStatus(state: 'playing' | 'ready'): void
+  setTransportStatus(state: TransportState): void
 }
 
 export type StartEngineDecision =

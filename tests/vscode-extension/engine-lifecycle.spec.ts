@@ -9,9 +9,11 @@ import {
   applyEngineStdinError,
   applyEngineStdoutChunk,
   decideStartEngineForAgent,
+  transportStatusText,
   type EngineExitEffects,
   type EngineStdinErrorEffects,
   type EngineStdoutEffects,
+  type TransportState,
 } from '../../packages/vscode-extension/src/engine-lifecycle'
 
 function effects(): EngineStdoutEffects {
@@ -159,6 +161,26 @@ describe('engine stdout lifecycle', () => {
 
     expect(fx.setTransportStatus).toHaveBeenCalledTimes(1)
     expect(fx.setTransportStatus).toHaveBeenCalledWith('playing')
+  })
+})
+
+describe('transportStatusText (#527 review round 3 Important #2)', () => {
+  it('renders the playing / ready labels, with and without the debug suffix', () => {
+    expect(transportStatusText('playing', false)).toBe('🎵 OrbitScore: ▶️ Playing')
+    expect(transportStatusText('playing', true)).toBe('🎵 OrbitScore: ▶️ Playing 🐛')
+    expect(transportStatusText('ready', false)).toBe('🎵 OrbitScore: Ready')
+    expect(transportStatusText('ready', true)).toBe('🎵 OrbitScore: Ready 🐛')
+  })
+
+  it('throws instead of silently falling through to "Ready" for a value outside the union', () => {
+    // A ternary (the pre-fix shape) would fold any non-'playing' value into
+    // the 'ready' branch — no log, no error, just a status bar showing
+    // "Ready" while the engine is actually playing. The exhaustive switch
+    // must throw instead. The invalid value can only be reached by bypassing
+    // the type system (e.g. a future IPC/JSON boundary), hence the cast.
+    expect(() => transportStatusText('unknown' as unknown as TransportState, false)).toThrow(
+      /Unhandled transport state/,
+    )
   })
 })
 

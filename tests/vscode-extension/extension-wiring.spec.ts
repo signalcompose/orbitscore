@@ -21,10 +21,15 @@
  */
 import type { ChildProcess } from 'child_process'
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 import { DeviceSwitchBridge } from '../../packages/vscode-extension/src/device-switch-bridge'
 import * as ext from '../../packages/vscode-extension/src/extension'
+// Resolves to the SAME module instance `extension.ts`'s `import * as vscode
+// from 'vscode'` gets via the root vitest.config.ts alias — pushing into
+// `vscodeMock.window.visibleTextEditors` is observed by extension.ts's own
+// `vscode.window.visibleTextEditors` reads (round 3 Critical #1).
+import * as vscodeMock from '../mocks/vscode'
 
 interface FakeChildProcess {
   proc: ChildProcess
@@ -69,6 +74,8 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
     ext.__setStatusBarItemForTest(null)
     ext.__setOutputChannelForTest(null)
     ext.__setEngineViewProviderForTest(null)
+    ext.__resetPlayheadStateForTest()
+    vscodeMock.window.visibleTextEditors.length = 0
   })
 
   describe('setupStdoutHandler', () => {
@@ -96,6 +103,185 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       fireStdoutData('✅ Global stopped\n')
 
       expect(statusBarItem.text).toBe('🎵 OrbitScore: Ready')
+    })
+
+    // #527 review round 3 Critical #2: handleStep / clearSequence /
+    // clearAllPlayheads / handleSelectAudioDeviceLine had ZERO wiring
+    // coverage — replacing all four with no-ops simultaneously left the
+    // existing two setTransportStatus tests above (the only stdout-handler
+    // coverage that existed) green. Each test below asserts a signal that
+    // ONLY the named effect's real implementation produces, so a no-op
+    // substitution of that one effect fails here independent of the other
+    // three.
+    it('wires handleStep: a [STEP] line schedules a playhead timeout (independent of the other three effects)', () => {
+      vi.useFakeTimers()
+      try {
+        const { proc, fireStdoutData } = fakeChildProcess()
+        ext.__setEngineProcessForTest(proc)
+        ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+        ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+
+        expect(ext.__getPlayheadTimeoutCountForTest()).toBe(0)
+
+        ext.setupStdoutHandler(proc, false)
+        fireStdoutData(`[STEP] seqStep 0 ${Date.now()}\n`)
+
+        expect(ext.__getPlayheadTimeoutCountForTest()).toBe(1)
+      } finally {
+        ext.__resetPlayheadStateForTest()
+        vi.useRealTimers()
+      }
+    })
+
+    it('wires clearSequence: "⏹ <seq>" clears only that seq\'s playhead range', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setPlayheadActiveRangeForTest(
+        'seqA',
+        'file:///irrelevant.orbs',
+        new vscodeMock.Range(new vscodeMock.Position(0, 0), new vscodeMock.Position(0, 1)),
+      )
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(1)
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData('⏹ seqA\n')
+
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(0)
+    })
+
+    it('wires clearAllPlayheads: "✅ Global stopped" clears every playhead range', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setPlayheadActiveRangeForTest(
+        'seqB',
+        'file:///irrelevant.orbs',
+        new vscodeMock.Range(new vscodeMock.Position(0, 0), new vscodeMock.Position(0, 1)),
+      )
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(1)
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData('✅ Global stopped\n')
+
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(0)
+    })
+
+    it('wires handleSelectAudioDeviceLine: a well-formed //#selectAudioDevice result line resolves a pending send()', async () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+
+      const bridge = ext.__getDeviceSwitchBridgeForTest()
+      // Short timeout as a safety net only, matching the exit-handler
+      // drainDeviceBridge tests below — if handleSelectAudioDeviceLine were
+      // a no-op, this resolves via timeout with `ok: false` instead.
+      const resultPromise = bridge.send(() => true, 'Device A', 200)
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData('{"selectAudioDevice":{"ok":true,"device":"Device A"}}\n')
+
+      const result = await resultPromise
+      expect(result).toEqual({ ok: true, device: 'Device A' })
+    })
+
+    // #527 review round 3 Important #1: transcribeLog / warnMalformed...
+    // (below, under setupExitHandler: logExit; under setupStdinErrorHandler:
+    // logStdinError) had no assertion anywhere on the actual output-channel
+    // CONTENT — only that `outputChannel` was truthy-safe to call. A no-op
+    // substitution of any one of these four passed all 24 pre-existing
+    // tests. Assertions below read the real production template strings
+    // from extension.ts (not fabricated expected text) so a wording change
+    // in the source and a stale test can't silently drift apart unnoticed —
+    // each assertion targets a substring stable across such wording tweaks.
+    it('wires transcribeLog (non-debug): filters noise but keeps important lines, verbatim', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: () => {},
+        append: (value: string) => {
+          appended.push(value)
+        },
+      })
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData('⚠️ Something important\nsendosc: pure noise line\n')
+
+      const combined = appended.join('')
+      expect(combined).toContain('⚠️ Something important')
+      expect(combined).not.toContain('sendosc: pure noise line')
+    })
+
+    it('wires transcribeLog (debug): passes the raw output through unfiltered', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: () => {},
+        append: (value: string) => {
+          appended.push(value)
+        },
+      })
+
+      ext.setupStdoutHandler(proc, true)
+      // "sendosc:" is filtered in non-debug mode (see the test above) — debug
+      // mode must let it through verbatim.
+      fireStdoutData('sendosc: pure noise line\n')
+
+      expect(appended.join('')).toContain('sendosc: pure noise line')
+    })
+
+    it('wires warnMalformedSelectAudioDeviceLine: current engine — no "stale" wording', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+
+      const malformedLine = '{"selectAudioDevice":{"ok":true,"dev'
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData(malformedLine + '\n')
+
+      const warning = appendedLines.find((line) => line.includes('malformed'))
+      expect(warning, appendedLines.join('\n')).toBeDefined()
+      expect(warning).toContain(malformedLine)
+      expect(warning).not.toContain('stale engine')
+    })
+
+    it('wires warnMalformedSelectAudioDeviceLine: stale engine — includes "from a stale engine" (#527 review Important #1)', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const otherProc = fakeChildProcess().proc
+      const appendedLines: string[] = []
+      // engineProcess points at a DIFFERENT process than the one whose
+      // stdout fires below — the stale-engine case Important #1 fixed.
+      ext.__setEngineProcessForTest(otherProc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+
+      const malformedLine = '{"selectAudioDevice":{"ok":true,"dev'
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData(malformedLine + '\n')
+
+      const warning = appendedLines.find((line) => line.includes('malformed'))
+      expect(warning, appendedLines.join('\n')).toBeDefined()
+      expect(warning).toContain(malformedLine)
+      expect(warning).toContain('from a stale engine')
     })
   })
 
@@ -157,6 +343,83 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       fireExit(0)
 
       expect(ext.__getEngineProcessForTest()).toBeNull()
+    })
+
+    // #527 review round 3 Critical #1: clearEngineState and clearAllPlayheads
+    // are both unconditionally-invoked `() => void` effects with NO
+    // interdependency, so swapping which real implementation lands under
+    // which key produces an IDENTICAL final state (engineProcess still ends
+    // up null, playhead ranges still end up cleared) — the test above and
+    // "final state" assertions in general cannot see the swap. What DOES
+    // differ under a swap is ORDER: applyEngineExit always calls the
+    // `clearEngineState` key before the `clearAllPlayheads` key, so swapping
+    // which real body sits behind each key swaps WHICH observable side
+    // effect happens FIRST. This test seeds a playhead range against a fake
+    // editor and, at the exact moment the real `clearAllPlayheadDecorations`
+    // reaches `editor.setDecorations` (its own, independent observable
+    // effect — round 3 Critical #1's second complaint, that it had no
+    // assertion anywhere), snapshots whether `engineProcess` has ALREADY
+    // been nulled. Correct wiring: yes (clearEngineState ran first). Swapped:
+    // no (the null-out closure hasn't run yet, because it's now called
+    // second).
+    it('wires clearEngineState and clearAllPlayheads to the correct effect, in the declared order', () => {
+      const { proc, fireExit } = fakeChildProcess()
+      const docUriString = 'file:///order-test.orbs'
+      const decorationCalls: Array<{ rangesLength: number; engineProcessWasNull: boolean }> = []
+      const fakeEditor = {
+        document: { uri: { toString: () => docUriString } },
+        setDecorations: (_type: unknown, ranges: unknown[]) => {
+          decorationCalls.push({
+            rangesLength: ranges.length,
+            engineProcessWasNull: ext.__getEngineProcessForTest() === null,
+          })
+        },
+      }
+      vscodeMock.window.visibleTextEditors.push(fakeEditor)
+
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+      ext.__setPlayheadActiveRangeForTest(
+        'seqOrder',
+        docUriString,
+        new vscodeMock.Range(new vscodeMock.Position(0, 0), new vscodeMock.Position(0, 1)),
+      )
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(1)
+
+      ext.setupExitHandler(proc)
+      fireExit(0)
+
+      // Independent assertion on clearAllPlayheadDecorations's OWN effect:
+      // it ran exactly once and actually cleared (empty ranges array), not
+      // merely "some callback fired".
+      expect(decorationCalls).toHaveLength(1)
+      expect(decorationCalls[0].rangesLength).toBe(0)
+      // Order assertion: this is what a clearEngineState/clearAllPlayheads
+      // swap flips.
+      expect(decorationCalls[0].engineProcessWasNull).toBe(true)
+      expect(ext.__getEngineProcessForTest()).toBeNull()
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(0)
+    })
+
+    it('wires logExit: the output channel receives the real exit code, verbatim', () => {
+      const { proc, fireExit } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      ext.setupExitHandler(proc)
+      fireExit(137)
+
+      expect(appendedLines.some((line) => line.includes('exited with code 137'))).toBe(true)
     })
 
     it('wires drainDeviceBridge: a pending selectAudioDevice request resolves with the exit reason', async () => {
@@ -240,6 +503,23 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
 
       const result = await resultPromise
       expect(result.error).toContain('timed out')
+    })
+
+    it('wires logStdinError: the output channel receives the real error message, verbatim', () => {
+      const { proc, fireStdinError } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+
+      ext.setupStdinErrorHandler(proc)
+      fireStdinError(new Error('boom'))
+
+      expect(appendedLines.some((line) => line.includes('engine stdin error: boom'))).toBe(true)
     })
   })
 

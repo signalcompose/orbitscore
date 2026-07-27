@@ -72,6 +72,56 @@ exit 経路について懸念していたのと同じ機序）。`stdin` の `'e
   `.claude/worktrees/` 内の古いコピーまで一致し、実機 OrbitStudio を7個同時起動していた。
   `--dir tests` でグロブ基点を固定した
 
+### 6.298 test(extension): 配線カバレッジの過大申告を是正 #527 レビューR3対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+ラウンド3（Critical 2 / Important 2 / Minor 4）への対応。ラウンド2の C2 / C3 / I4 / I5 は
+独立検証で CLOSED と判定されたが、**C1（配線）は NOT CLOSED** だった。
+
+**「配線をテストした」は過大申告だった**: 6.297 で配線テストを新設したが、レビュアーが
+変異を実際に走らせた結果、**約13スロット中7つが今も無検出で入れ替え・空実装化できる**ことが
+判明した。
+
+| 生き残った変異 | 見逃した原因 |
+|---|---|
+| `clearEngineState` ⇄ `clearAllPlayheads` の入れ替え | 両方が無条件に走るため「最終状態」しか見ておらず、**どちらがやったか**を区別していない |
+| `setupStdoutHandler` の `handleStep` / `clearSequence` / `clearAllPlayheads` / `handleSelectAudioDeviceLine` を全部 no-op 化 | 7つの実エフェクトのうち配線テストがあるのは `setTransportStatus` だけだった |
+| ログ/診断4系統（`transcribeLog` / `logExit` / `logStdinError` / `warnMalformedSelectAudioDeviceLine`）を個別に no-op 化 | `outputChannel` の**出力内容**を検証するテストが皆無だった |
+
+特に痛いのは最後の `warnMalformedSelectAudioDeviceLine` — **6.297 で「stale でも消えないように」
+直した診断そのもの**で、呼ぶか否かの純粋ロジックは厚くテストされているのに、実際に
+output channel へ出る配線は誰も検証していなかった。
+
+**対応**: `clearAllPlayheadDecorations` の独立観測用 seam を追加し、`editor.setDecorations` が
+呼ばれた**瞬間**に `engineProcess` が既に null かを記録することで「`clearEngineState` が先に
+走ったか」という順序を観測できるようにした（両者は相互非依存なので最終状態では区別できない）。
+stdout の4エフェクトには playhead timeout 数 / active range 数 / `DeviceSwitchBridge.send()` の
+実解決を使った独立アサーションを、ログ4系統には fake `outputChannel` に実際に append された
+**文言の内容**検証を追加（文言は実装を読んで部分一致で検証・捏造なし）。
+
+**`setTransportStatus` の網羅性ガード（Important 2）**: 三項演算子だったため `'playing'` 以外が
+来ると**黙って `'ready'` 側に落ちる**。現在の呼び出し側はリテラルのみで型に守られているが、
+この畳み込みを「取り違えを表現不能にする」と説明したのは**スロット入れ替えについてのみ真**で、
+不正入力は防がない。`transportStatusText(state, debugMode)` を `switch` +
+`default: { const _exhaustive: never = state; throw }` で実装し直した。
+
+**E2E の無意味な追加を撤回（Minor 1）**: 6.297 で足した「debug 拒否後の `running === true`」は、
+capture 拒否と**同一の early return** を通るため検出力を増やしていなかった。削除した。
+E2E は足せばよいというものではない、という自戒として記録する。
+
+**変異検証（main 側で独立に再実行）**: (A) `clearEngineState` ⇄ `clearAllPlayheads` 入れ替え →
+1件 red / (B) `warnMalformedSelectAudioDeviceLine` を no-op 化 → 2件 red /
+(C) `transportStatusText` を三項に戻す → 1件 red。いずれも restore で全緑に復帰。
+
+**検証**: `npm test` 1691 passed / 29 skipped（1678 → +13）・`tsc --build` 通過・lint エラー0・
+実機 gated E2E 1 passed・孤児デーモン 0。
+
+**申し送り**: 委譲先が `audio-device argv` テストの flaky な失敗を1度観測している（再実行で緑・
+本変更と無関係）。main 側の3回の `npm test` では再現せず。
+
 ### 6.297 test(extension): 配線をテスト可能にし、弱いアサーションを潰す #527 レビューR2対応 (Jul 27, 2026)
 
 **Date**: 2026-07-27

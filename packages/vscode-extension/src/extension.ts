@@ -55,6 +55,7 @@ import {
   applyEngineStdinError,
   applyEngineStdoutChunk,
   decideStartEngineForAgent,
+  transportStatusText,
 } from './engine-lifecycle'
 import {
   detectDslCompletionContext,
@@ -1223,6 +1224,18 @@ function shouldFilterLine(line: string): boolean {
 // wiring itself (not just "some fake got called in the right shape", which
 // engine-lifecycle.spec.ts already covers for the pure decision logic). Not
 // part of the extension's public API — do not call from production code.
+//
+// ⚠️ #527 review round 3 Minor #3: none of these exports are gated behind a
+// test-environment check (e.g. `process.env.VITEST`) — they are plain named
+// exports, reachable by ANY code that imports this module. Today the only
+// importer is the spec above, so the risk is inert. If a future change gives
+// production code a reason to import `extension.ts` (unlikely but not
+// impossible — e.g. a second entry point re-exporting activation helpers),
+// that code would silently gain the power to reassign `engineProcess` /
+// `statusBarItem` / `outputChannel` / `engineViewProvider` out from under the
+// running extension with no compiler warning. Keep new test-only exports
+// confined to this block, and re-check this note before adding an importer
+// of `extension.ts` outside `tests/`.
 export function __setEngineProcessForTest(process: child_process.ChildProcess | null): void {
   engineProcess = process
 }
@@ -1239,7 +1252,9 @@ export function __setOutputChannelForTest(
 ): void {
   outputChannel = channel as unknown as vscode.OutputChannel | null
 }
-export function __setEngineViewProviderForTest(provider: { refresh(): void } | null): void {
+export function __setEngineViewProviderForTest(
+  provider: Pick<EngineViewProvider, 'refresh'> | null,
+): void {
   engineViewProvider = provider as unknown as EngineViewProvider | null
 }
 /** Exposes the real singleton bridge so a spec can prove drainDeviceBridge
@@ -1247,6 +1262,61 @@ export function __setEngineViewProviderForTest(provider: { refresh(): void } | n
  * asserting the handler doesn't throw. */
 export function __getDeviceSwitchBridgeForTest(): DeviceSwitchBridge {
   return selectAudioDeviceBridge
+}
+
+// -- Playhead test seams (#527 review round 3 Critical #1) ------------------
+//
+// `clearAllPlayheadDecorations()` had no independent test coverage at all —
+// every existing assertion about `setupExitHandler`/`setupStdoutHandler`
+// checked only `engineProcess` (governed by `clearEngineState`), so swapping
+// which real implementation lands under the `clearEngineState` vs.
+// `clearAllPlayheads` effect keys type-checked and left every test green.
+// These seams let a spec seed a playhead range and observe its OWN clearing
+// (via the real `editor.setDecorations` call, once a fake editor is pushed
+// into the `vscode` mock's `window.visibleTextEditors`) as a signal
+// independent of `engineProcess`.
+/** Seed a playhead active range as if a real `[STEP]` line had resolved to it
+ * — bypasses playhead.ts's document-text parsing (already covered by
+ * playhead.spec.ts) and also pre-creates the color's decoration type via
+ * `ensurePlayheadDecorationType`, so `clearAllPlayheadDecorations()`'s
+ * `editor.setDecorations(type, [])` call is observable rather than skipped
+ * for want of a registered decoration type. */
+export function __setPlayheadActiveRangeForTest(
+  seqName: string,
+  docUriString: string,
+  // `unknown`, not `vscode.Range`: the mock's `Range` (tests/mocks/vscode.ts)
+  // is a minimal duck-typed stand-in that does not structurally satisfy the
+  // real `@types/vscode` interface, and nothing this seam's consumers read
+  // needs more than `{ start, end }` — accepting the real type here would
+  // just push an `as unknown as vscode.Range` cast onto every call site.
+  range: unknown,
+): void {
+  ensurePlayheadDecorationType(
+    colorForSeq(seqName, playheadColorConfig(), playheadPaletteAssignments),
+  )
+  playheadActiveRanges.set(seqName, { docUriString, range: range as vscode.Range })
+}
+export function __getPlayheadActiveRangeCountForTest(): number {
+  return playheadActiveRanges.size
+}
+/** Number of pending playhead-step `setTimeout`s — `handleStepLine` adds one
+ * synchronously on every `[STEP]` line it processes (unless the event is
+ * stale), independent of clearSequence/clearAllPlayheads/
+ * handleSelectAudioDeviceLine, so this is a signal specific to `handleStep`
+ * wiring in `setupStdoutHandler`. */
+export function __getPlayheadTimeoutCountForTest(): number {
+  return playheadTimeouts.size
+}
+/** Resets all module-private playhead state between specs — disposes every
+ * decoration type and clears every pending timeout, so one spec's seeded
+ * range/decoration type never leaks into the next. */
+export function __resetPlayheadStateForTest(): void {
+  for (const timeout of playheadTimeouts) clearTimeout(timeout)
+  playheadTimeouts.clear()
+  playheadActiveRanges.clear()
+  for (const decorationType of playheadDecorationTypes.values()) decorationType.dispose()
+  playheadDecorationTypes.clear()
+  playheadPaletteAssignments.clear()
 }
 
 /**
@@ -1288,15 +1358,12 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
           outputChannel?.append(output)
         }
       },
+      // #527 review Important #2: rendering delegated to transportStatusText()
+      // (engine-lifecycle.ts) — an exhaustive switch, not a ternary, so a
+      // state value outside 'playing' | 'ready' throws instead of silently
+      // displaying "Ready".
       setTransportStatus: (state) => {
-        statusBarItem!.text =
-          state === 'playing'
-            ? debugMode
-              ? '🎵 OrbitScore: ▶️ Playing 🐛'
-              : '🎵 OrbitScore: ▶️ Playing'
-            : debugMode
-              ? '🎵 OrbitScore: Ready 🐛'
-              : '🎵 OrbitScore: Ready'
+        statusBarItem!.text = transportStatusText(state, debugMode)
       },
     })
   })
