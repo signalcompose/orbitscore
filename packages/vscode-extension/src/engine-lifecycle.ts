@@ -8,6 +8,7 @@
  * unit test.
  */
 
+import { parseSelectAudioDeviceResultLine } from './engine-view'
 import { parseStepLine, type StepEvent } from './playhead'
 
 export interface EngineStdoutLineIntent {
@@ -25,8 +26,11 @@ export interface EngineStdoutEffects {
   handleSelectAudioDeviceLine(rawLine: string): boolean
   warnMalformedSelectAudioDeviceLine(rawLine: string, stale: boolean): void
   transcribeLog(): void
-  setPlayingStatus(): void
-  setReadyStatus(): void
+  /** #527 review Critical #3: folded from separate setPlayingStatus()/setReadyStatus()
+   * siblings — a same-signature `() => void` pair is exactly the shape a wiring mistake
+   * (swapping which implementation lands in which slot) can't be caught by the type
+   * checker. A single parameterized callback makes that mistake unrepresentable. */
+  setTransportStatus(state: 'playing' | 'ready'): void
 }
 
 export type StartEngineDecision =
@@ -50,6 +54,27 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
  * Apply one stdout chunk while partitioning state mutations by process identity.
  * Log transcription and malformed-line diagnostics intentionally remain visible
  * for stale engines; playhead, bridge, and status mutations do not.
+ *
+ * #528: stdout arrives asynchronously, same as the `'exit'` event (see
+ * `applyEngineExit`'s docstring). A fast stop_engine → start_engine sequence
+ * can deliver a dead process's trailing buffer to this handler after a new
+ * engine is already current. Log transcription may as well run unconditionally
+ * (a stopped engine's final output is diagnostically useful even when stale),
+ * but shared-state mutations — playhead, status bar, the //#selectAudioDevice
+ * bridge's FIFO — must stay current-process-only, or stale output clears the
+ * new engine's live playhead, rewinds the status bar, or FIFO-matches a stale
+ * resolver against the new engine's response (failure direction opposite of
+ * #501 review Critical #1, same root cause — module state not partitioned by
+ * process identity).
+ *
+ * #527 review Important #1: whether a `//#selectAudioDevice` result line is
+ * malformed is a property of the LINE (checked with the same pure
+ * `parseSelectAudioDeviceResultLine` `DeviceSwitchBridge.handleLine` uses) —
+ * it must not be conflated with whether this engine is current. The previous
+ * shape short-circuited the parse attempt behind `isCurrent`, so a perfectly
+ * well-formed result from a stale engine was reported as malformed on every
+ * stop→start cycle, drowning out the one signal this diagnostic exists to
+ * catch: a genuine chunk-boundary split.
  */
 export function applyEngineStdoutChunk(
   output: string,
@@ -60,8 +85,11 @@ export function applyEngineStdoutChunk(
   for (const rawLine of lines) {
     const intent = classifyEngineStdoutLine(rawLine)
     if (intent.selectAudioDeviceCandidate) {
-      const recognized = isCurrent && effects.handleSelectAudioDeviceLine(rawLine)
-      if (!recognized) effects.warnMalformedSelectAudioDeviceLine(rawLine, !isCurrent)
+      const parses = parseSelectAudioDeviceResultLine(rawLine) !== undefined
+      // FIFO consumption is shared, cross-engine state — current only.
+      if (isCurrent) effects.handleSelectAudioDeviceLine(rawLine)
+      // Malformed-ness is a property of the line, independent of isCurrent.
+      if (!parses) effects.warnMalformedSelectAudioDeviceLine(rawLine, !isCurrent)
     }
     if (!isCurrent) continue
     if (intent.step) {
@@ -70,6 +98,12 @@ export function applyEngineStdoutChunk(
     }
     if (intent.stoppedSequence) effects.clearSequence(intent.stoppedSequence)
     if (intent.globalStopped) effects.clearAllPlayheads()
+    // Mirrors the pre-refactor loop, which called
+    // `selectAudioDeviceBridge.handleLine()` unconditionally on every
+    // current-engine line (a no-op unless the line actually parses as a
+    // bridge result) — split into this branch plus the one above so the
+    // malformed-line diagnostic could escape the isCurrent guard (Important
+    // #1 above) without changing which lines the bridge itself sees.
     if (!intent.selectAudioDeviceCandidate) effects.handleSelectAudioDeviceLine(rawLine)
   }
 
@@ -77,9 +111,9 @@ export function applyEngineStdoutChunk(
 
   if (!isCurrent) return
   if (output.includes('✅ Global running') || output.includes('▶ Global')) {
-    effects.setPlayingStatus()
+    effects.setTransportStatus('playing')
   } else if (output.includes('✅ Global stopped') || output.includes('⏹ Global')) {
-    effects.setReadyStatus()
+    effects.setTransportStatus('ready')
   }
 }
 

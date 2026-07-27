@@ -72,6 +72,73 @@ exit 経路について懸念していたのと同じ機序）。`stdin` の `'e
   `.claude/worktrees/` 内の古いコピーまで一致し、実機 OrbitStudio を7個同時起動していた。
   `--dir tests` でグロブ基点を固定した
 
+### 6.297 test(extension): 配線をテスト可能にし、弱いアサーションを潰す #527 レビューR2対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+ラウンド2（Critical 3 / Important 3 / Minor 4）への対応。ラウンド1の指摘は4レビュアーとも全件
+CLOSED と判定された一方、**新規テスト自体に穴が見つかった**。
+
+**「変異検証をやった」は壊し方が1種類に偏っていた**: 6.296 では「ガードを無効化する」変異
+（5種）で red を確認したが、レビュアーが**別種の変異を実行して3つが生き残る**ことを示した。
+
+| 生き残った変異 | 見逃した原因 |
+|---|---|
+| bridge を同じ行に2回呼ぶ | `toHaveBeenCalled()` が回数を見ていない |
+| `handleStep` 後の `continue` を削除 | 同上（引数も見ていない） |
+| `applyEngineExit` の副作用順序を逆転 | 個別 mock のみで順序を見ていない |
+| `stale` 引数を `true` に固定 | current × パース失敗の経路が未カバー |
+
+FIFO キューを消費する副作用（`DeviceSwitchBridge.handleLine`）では**回数がそのまま正しさ**。
+`toHaveBeenCalledTimes` / 引数検証 / `mock.invocationCallOrder` で全4種を殺せるようにした。
+教訓は CLAUDE.md に固定（変異は最低4種 = 分岐反転・回数・順序・引数）。
+
+**stale な正常行が「malformed」と誤報されていた（2レビュアーが独立に指摘）**: 6.296 で足した
+診断に鏡像の欠陥があった。`recognized = isCurrent && handleSelectAudioDeviceLine(...)` は
+`&&` の短絡で stale 時に**パースを試みることすらせず**、完全に正しい JSON も「malformed
+（chunk-boundary split の疑い）」と報告していた。stop → start のたびに偽警告が出続け、
+**本物の破損が起きた日にその警告が無視される** — 診断を足した目的そのものを壊す。
+「妥当な JSON か」（`parseSelectAudioDeviceResultLine` による純粋判定）と「FIFO を触ってよいか」
+（`isCurrent`）を分離した。
+
+**配線（wiring）にテストが無かった（owner 指示で本 PR 内に取り込み）**: 純関数へ抽出しても、
+純関数と本物の副作用を繋ぐ配線は無防備なまま。`() => void` 型の兄弟コールバックは
+**取り違えても型チェックを通り、ユニット・E2E とも全件 green**。当初 #530 に切り出したが、
+owner 指示（「このフォローアップは早めに確実に…しっかり塞いで再発防止」）により本 PR で対応:
+
+1. **型で潰す** — `setPlayingStatus()` / `setReadyStatus()` を
+   `setTransportStatus(state: 'playing' | 'ready')` 1本に畳み、取り違えを**表現不能**にした
+2. **`vscode` モックで実際に叩く** — `tests/mocks/vscode.ts` と `vitest.config.ts` の alias を新設し、
+   `extension.ts` の `setup*Handler` を直接呼んで配線を検証（`tests/vscode-extension/
+   extension-wiring.spec.ts`・9件）。`extension.ts` にはテスト専用 export を追加し、用途と
+   「本番コードから呼ぶな」を明記
+
+なお `showStoppedStatus` / `refreshEngineView` は毎回両方呼ばれるため、**最終状態だけを見る
+素朴なアサーションでは入れ替え変異を検出できなかった**（委譲先が一度実装してから気づき、
+発火順序を記録する方式に作り直した）。
+
+**受け入れ検証で見つけた設定の脆さ（main 側で修正）**: 委譲先は alias を
+`packages/engine/vitest.config.ts` に置いたが、これは **cwd 依存**で `npm test`
+（cwd=packages/engine）でしか効かない。リポジトリルートから走らせると
+`Cannot find package 'vscode'` で落ちる（`test:e2e:gated` はルートから走る）。
+設定をルート `vitest.config.ts` の単一正本に寄せ、両スクリプトに `--config` を明示して
+起動パス非依存にした。
+
+**変異検証（5種・すべて main 側で独立に再実行）**: (a) bridge 二重呼び出し / (b) `continue`
+削除 / (c) `applyEngineExit` 順序逆転 / (d) `stale` 引数固定 / (e) `extension.ts` の
+`showStoppedStatus` ⇄ `refreshEngineView` 配線入れ替え —— いずれも対応テストが red、
+restore で green。(e) は `expected [ 'refresh', 'status-stopped' ] to deeply equal
+[ 'status-stopped', 'refresh' ]` で検出。
+
+**検証**: `npm test` 1678 passed / 29 skipped（1664 → +14）・ルートからの単独実行も 9 passed・
+`tsc --build` 通過・lint エラー0・実機 gated E2E 1 passed・孤児デーモン 0。
+
+**残存ギャップ**: `clearEngineState` / `clearAllPlayheads` 同士の入れ替えは順序ベースの検証を
+まだ入れていない（`clearEngineState` は `engineProcess` の null 化という個別の観測可能な
+副作用でのみ検証）。
+
 ### 6.296 refactor(extension): engine ライフサイクルの判断を vscode 非依存に抽出 #528 レビュー対応 (Jul 27, 2026)
 
 **Date**: 2026-07-27

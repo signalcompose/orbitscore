@@ -1203,22 +1203,63 @@ function shouldFilterLine(line: string): boolean {
   return false
 }
 
+// ---- Test-only seams (#527 review Critical #3) -------------------------
+//
+// setupStdoutHandler / setupExitHandler / setupStdinErrorHandler close over
+// this module's private process/UI state (`engineProcess`, `statusBarItem`,
+// `outputChannel`, `engineViewProvider`, `selectAudioDeviceBridge`) instead of
+// taking it as parameters — normal for code that owns state for the
+// extension's whole lifetime, but it meant no spec could drive these handlers
+// without running the full activate() flow (MCP server bring-up, auto-start
+// device probing, command/tree registration — none of which the wiring
+// itself needs). The four effects-object literals built by these handlers
+// have same-shaped `() => void` sibling callbacks (e.g. showStoppedStatus /
+// refreshEngineView); swapping which real implementation lands in which slot
+// type-checks fine and both the unit suite and the gated E2E stayed green.
+//
+// These exports/setters exist ONLY so
+// tests/vscode-extension/extension-wiring.spec.ts can inject fakes for that
+// state and call the real setup*Handler functions directly, asserting the
+// wiring itself (not just "some fake got called in the right shape", which
+// engine-lifecycle.spec.ts already covers for the pure decision logic). Not
+// part of the extension's public API — do not call from production code.
+export function __setEngineProcessForTest(process: child_process.ChildProcess | null): void {
+  engineProcess = process
+}
+export function __getEngineProcessForTest(): child_process.ChildProcess | null {
+  return engineProcess
+}
+export function __setStatusBarItemForTest(
+  item: Pick<vscode.StatusBarItem, 'text' | 'tooltip'> | null,
+): void {
+  statusBarItem = item as unknown as vscode.StatusBarItem | null
+}
+export function __setOutputChannelForTest(
+  channel: Pick<vscode.OutputChannel, 'appendLine' | 'append'> | null,
+): void {
+  outputChannel = channel as unknown as vscode.OutputChannel | null
+}
+export function __setEngineViewProviderForTest(provider: { refresh(): void } | null): void {
+  engineViewProvider = provider as unknown as EngineViewProvider | null
+}
+/** Exposes the real singleton bridge so a spec can prove drainDeviceBridge
+ * wiring by observing a pending `send()` actually resolve, rather than just
+ * asserting the handler doesn't throw. */
+export function __getDeviceSwitchBridgeForTest(): DeviceSwitchBridge {
+  return selectAudioDeviceBridge
+}
+
 /**
  * Setup stdout handler for engine process.
  */
-function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   process.stdout?.on('data', (data) => {
     const output = data.toString()
     const lines: string[] = output.split('\n')
 
-    // #528: stdout も 'exit' と同じく非同期に届く。stop → start を素早く行うと、
-    // 既に死んだ engine の残バッファがこのハンドラに遅れて流れ込む。ログの転記は
-    // 無条件に続けてよい（停止中 engine の最終出力は診断上むしろ欲しい）が、
-    // **共有状態への書き込みは現役の engine のものだけ**に限る — さもないと古い
-    // 行が新 engine のライブ playhead を消し、status bar を巻き戻し、stale な
-    // //#selectAudioDevice 応答が新 engine の待ち行列に FIFO マッチしてしまう
-    // #501 review Critical #1 とは故障方向が逆だが、根本原因（module state が
-    // process identity ごとに分割されていない）は同じ。
+    // Identity-guarded via applyEngineStdoutChunk — see its docstring in
+    // engine-lifecycle.ts for the #528 stop→start race this protects against
+    // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
     const isCurrent = engineProcess === process
 
     applyEngineStdoutChunk(output, lines, isCurrent, {
@@ -1234,8 +1275,12 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
         )
       },
       transcribeLog: () => {
-        // Reuses the split above: classification and filtering remain the same
-        // two passes over each chunk as before this lifecycle extraction.
+        // Second pass over the SAME `lines` array classifyEngineStdoutLine()
+        // (inside applyEngineStdoutChunk) already scanned — not a re-split of
+        // `output`. Unlike before this lifecycle extraction — when a stale
+        // process's line loop ran zero iterations — this now always runs,
+        // current or stale: the malformed-//#selectAudioDevice diagnostic
+        // must see stale output too (#527 review Important #1).
         if (!debugMode) {
           const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
           if (filteredOutput.trim()) outputChannel?.append(filteredOutput + '\n')
@@ -1243,13 +1288,15 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
           outputChannel?.append(output)
         }
       },
-      setPlayingStatus: () => {
-        statusBarItem!.text = debugMode
-          ? '🎵 OrbitScore: ▶️ Playing 🐛'
-          : '🎵 OrbitScore: ▶️ Playing'
-      },
-      setReadyStatus: () => {
-        statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
+      setTransportStatus: (state) => {
+        statusBarItem!.text =
+          state === 'playing'
+            ? debugMode
+              ? '🎵 OrbitScore: ▶️ Playing 🐛'
+              : '🎵 OrbitScore: ▶️ Playing'
+            : debugMode
+              ? '🎵 OrbitScore: Ready 🐛'
+              : '🎵 OrbitScore: Ready'
       },
     })
   })
@@ -1271,7 +1318,7 @@ function setupStderrHandler(process: child_process.ChildProcess): void {
  * process. stdin can emit this independently of the 'exit' event (e.g. EPIPE if
  * the engine's stdin closes before we stop writing to it).
  */
-function setupStdinErrorHandler(process: child_process.ChildProcess): void {
+export function setupStdinErrorHandler(process: child_process.ChildProcess): void {
   process.stdin?.on('error', (err) => {
     // Identity-guarded via applyEngineStdinError — see its docstring in
     // engine-lifecycle.ts for the #528 stop→start race this protects against.
@@ -1285,7 +1332,7 @@ function setupStdinErrorHandler(process: child_process.ChildProcess): void {
 /**
  * Setup exit handler for engine process.
  */
-function setupExitHandler(process: child_process.ChildProcess): void {
+export function setupExitHandler(process: child_process.ChildProcess): void {
   process.on('exit', (code) => {
     // Identity-guarded via applyEngineExit — see its docstring in
     // engine-lifecycle.ts for the #528 stop→start race this protects against.

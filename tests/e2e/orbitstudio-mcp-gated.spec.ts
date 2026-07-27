@@ -25,8 +25,12 @@
  *
  *   npm run test:e2e:gated
  *
- * Do not pass the spec path as a positional CLI argument: it can glob-match
- * stale copies under .claude/worktrees/ and launch multiple real GUI apps.
+ * `npm run test:e2e:gated` itself passes a positional pattern
+ * (`e2e/orbitstudio-mcp-gated`), but scoped under `--dir tests` — resolved
+ * relative to that root, it can only match this one file. The dangerous case
+ * is a MANUAL `npx vitest run <pattern>` WITHOUT `--dir tests`: from the repo
+ * root, an unscoped positional pattern can glob-match stale copies under
+ * .claude/worktrees/ and launch multiple real GUI apps.
  *
  * SAFETY (repeated at the kill call site too): the teardown/setup kill
  * pattern targets `OrbitStudio.app/Contents/MacOS` — a path fragment unique
@@ -229,6 +233,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const debugWhileRunning = await client.call('start_engine', { debug: true })
       expect(debugWhileRunning.isError, debugWhileRunning.text).toBe(true)
       expect(debugWhileRunning.text).toContain('stop_engine')
+      // Symmetric with the capture-reject check above: a mutant that made the
+      // debug-reject branch tear the engine down instead of just rejecting
+      // would otherwise pass silently here.
+      const stateAfterDebugReject = await client.call('get_engine_state')
+      expect(
+        (JSON.parse(stateAfterDebugReject.text) as { running: boolean }).running,
+        stateAfterDebugReject.text,
+      ).toBe(true)
 
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)

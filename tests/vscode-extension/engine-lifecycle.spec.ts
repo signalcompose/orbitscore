@@ -22,8 +22,7 @@ function effects(): EngineStdoutEffects {
     handleSelectAudioDeviceLine: vi.fn(() => false),
     warnMalformedSelectAudioDeviceLine: vi.fn(),
     transcribeLog: vi.fn(),
-    setPlayingStatus: vi.fn(),
-    setReadyStatus: vi.fn(),
+    setTransportStatus: vi.fn(),
   }
 }
 
@@ -54,6 +53,7 @@ describe('engine stdout lifecycle', () => {
     applyEngineStdoutChunk(output, output.split('\n'), false, fx)
 
     expect(fx.transcribeLog).toHaveBeenCalledOnce()
+    expect(fx.warnMalformedSelectAudioDeviceLine).toHaveBeenCalledTimes(1)
     expect(fx.warnMalformedSelectAudioDeviceLine).toHaveBeenCalledWith(
       '{"selectAudioDevice":{"ok":',
       true,
@@ -62,8 +62,56 @@ describe('engine stdout lifecycle', () => {
     expect(fx.clearSequence).not.toHaveBeenCalled()
     expect(fx.clearAllPlayheads).not.toHaveBeenCalled()
     expect(fx.handleSelectAudioDeviceLine).not.toHaveBeenCalled()
-    expect(fx.setPlayingStatus).not.toHaveBeenCalled()
-    expect(fx.setReadyStatus).not.toHaveBeenCalled()
+    expect(fx.setTransportStatus).not.toHaveBeenCalled()
+  })
+
+  it('does not warn for a well-formed //#selectAudioDevice line from a stale engine (#527 review Important #1)', () => {
+    // Reproduces the exact false-positive the review reported: a stale
+    // engine's result line that is perfectly valid JSON must not be reported
+    // as "malformed" — that conflates "may we touch the FIFO" (isCurrent)
+    // with "does this line even parse" (a property of the line itself).
+    const fx = effects()
+    const rawLine = '{"selectAudioDevice":{"ok":true}}'
+
+    applyEngineStdoutChunk(rawLine, [rawLine], false, fx)
+
+    expect(fx.warnMalformedSelectAudioDeviceLine).not.toHaveBeenCalled()
+    expect(fx.handleSelectAudioDeviceLine).not.toHaveBeenCalled()
+  })
+
+  it('reports accurate (non-hardcoded) staleness for a malformed candidate line even when current', () => {
+    // #527 review Important #3: a mutant that hardcodes the `stale` argument
+    // to `true` must be caught here — this is the one case (current +
+    // malformed) that actually reaches the warn call with isCurrent true.
+    const fx = effects()
+    const rawLine = '{"selectAudioDevice":{"ok":'
+
+    applyEngineStdoutChunk(rawLine, [rawLine], true, fx)
+
+    expect(fx.warnMalformedSelectAudioDeviceLine).toHaveBeenCalledTimes(1)
+    expect(fx.warnMalformedSelectAudioDeviceLine).toHaveBeenCalledWith(rawLine, false)
+  })
+
+  it('consumes the select-audio-device bridge exactly once for a well-formed candidate line (#527 review Critical #1)', () => {
+    const fx = effects()
+    vi.mocked(fx.handleSelectAudioDeviceLine).mockReturnValue(true)
+    const rawLine = '{"selectAudioDevice":{"ok":true}}'
+
+    applyEngineStdoutChunk(rawLine, [rawLine], true, fx)
+
+    expect(fx.handleSelectAudioDeviceLine).toHaveBeenCalledTimes(1)
+    expect(fx.handleSelectAudioDeviceLine).toHaveBeenCalledWith(rawLine)
+    expect(fx.warnMalformedSelectAudioDeviceLine).not.toHaveBeenCalled()
+  })
+
+  it('never lets a STEP line reach the select-audio-device bridge (#527 review Critical #2)', () => {
+    const fx = effects()
+    const rawLine = '[STEP] drums 0 123'
+
+    applyEngineStdoutChunk(rawLine, [rawLine], true, fx)
+
+    expect(fx.handleStep).toHaveBeenCalledTimes(1)
+    expect(fx.handleSelectAudioDeviceLine).not.toHaveBeenCalled()
   })
 
   it('applies playhead, status, and bridge effects for current output', () => {
@@ -75,16 +123,42 @@ describe('engine stdout lifecycle', () => {
     applyEngineStdoutChunk(output, output.split('\n'), true, fx)
 
     expect(fx.transcribeLog).toHaveBeenCalledOnce()
+    expect(fx.handleStep).toHaveBeenCalledTimes(1)
     expect(fx.handleStep).toHaveBeenCalledWith({
       seqName: 'drums',
       argPath: '0',
       atEpochMs: 123,
     })
+    expect(fx.clearSequence).toHaveBeenCalledTimes(1)
     expect(fx.clearSequence).toHaveBeenCalledWith('bass')
     expect(fx.clearAllPlayheads).toHaveBeenCalledOnce()
-    expect(fx.handleSelectAudioDeviceLine).toHaveBeenCalled()
+    // The bridge sees the two non-candidate, non-step lines (mirroring the
+    // pre-refactor "call handleLine on every current line" loop) plus the
+    // one genuine candidate line — exactly 3, in that order. A mutant that
+    // removes the `!intent.selectAudioDeviceCandidate` guard (double-calling
+    // the bridge for the candidate line, #527 review Critical #1) or that
+    // drops `continue` after handleStep (letting the STEP line fall through
+    // to the same call, #527 review Critical #2) both push this to 4.
+    expect(fx.handleSelectAudioDeviceLine).toHaveBeenCalledTimes(3)
+    expect(fx.handleSelectAudioDeviceLine).toHaveBeenNthCalledWith(1, '⏹ bass stopped')
+    expect(fx.handleSelectAudioDeviceLine).toHaveBeenNthCalledWith(2, '✅ Global stopped')
+    expect(fx.handleSelectAudioDeviceLine).toHaveBeenNthCalledWith(
+      3,
+      '{"selectAudioDevice":{"ok":true}}',
+    )
     expect(fx.warnMalformedSelectAudioDeviceLine).not.toHaveBeenCalled()
-    expect(fx.setReadyStatus).toHaveBeenCalledOnce()
+    expect(fx.setTransportStatus).toHaveBeenCalledTimes(1)
+    expect(fx.setTransportStatus).toHaveBeenCalledWith('ready')
+  })
+
+  it('wires setTransportStatus("playing") for running output', () => {
+    const fx = effects()
+    const output = '✅ Global running'
+
+    applyEngineStdoutChunk(output, [output], true, fx)
+
+    expect(fx.setTransportStatus).toHaveBeenCalledTimes(1)
+    expect(fx.setTransportStatus).toHaveBeenCalledWith('playing')
   })
 })
 
@@ -102,7 +176,7 @@ describe('applyEngineExit', () => {
     expect(fx.refreshEngineView).not.toHaveBeenCalled()
   })
 
-  it('logs and applies every state mutation for the current process', () => {
+  it('logs and applies every state mutation, in order, for the current process (#527 review Important #2)', () => {
     const fx = exitEffects()
 
     applyEngineExit(0, true, fx)
@@ -115,6 +189,20 @@ describe('applyEngineExit', () => {
     )
     expect(fx.showStoppedStatus).toHaveBeenCalledOnce()
     expect(fx.refreshEngineView).toHaveBeenCalledOnce()
+
+    // Order matters: refreshEngineView reads engine-view state through
+    // extension.ts's module closures, so it must run AFTER clearEngineState
+    // nulls out engineProcess — otherwise the view reads one stale cycle. A
+    // mutant that reverses this sequence must fail here even though every
+    // individual mock above was still called exactly once with the right
+    // argument.
+    const order = (fn: { mock: { invocationCallOrder: number[] } }) =>
+      fn.mock.invocationCallOrder[0]
+    expect(order(fx.logExit)).toBeLessThan(order(fx.clearEngineState))
+    expect(order(fx.clearEngineState)).toBeLessThan(order(fx.clearAllPlayheads))
+    expect(order(fx.clearAllPlayheads)).toBeLessThan(order(fx.drainDeviceBridge))
+    expect(order(fx.drainDeviceBridge)).toBeLessThan(order(fx.showStoppedStatus))
+    expect(order(fx.showStoppedStatus)).toBeLessThan(order(fx.refreshEngineView))
   })
 })
 

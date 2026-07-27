@@ -12,7 +12,7 @@
     "build": "tsc --build && node scripts/sync-dist.js",
     "build:clean": "tsc --build --clean && tsc --build && node scripts/sync-dist.js",
     "dev": "ts-node src/index.ts",
-    "test": "npx vitest run --dir ../../tests --globals --pool=forks --poolOptions.forks.singleFork=true",
+    "test": "npx vitest run --dir ../../tests --config ../../vitest.config.ts --globals --pool=forks --poolOptions.forks.singleFork=true",
     "cli": "cd ../.. && node packages/engine/dist/cli-audio.js"
   },
   "dependencies": {
