@@ -20,7 +20,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.305 feat(engine): plugin state restore = sound selection #540 P2 (Jul 28, 2026)
 
 **Date**: 2026-07-28
-**Status**: 🔄 実装中（P2 コア完了・実機 E2E 前）
+**Status**: ✅ コア完了・実機 E2E PASS（実 Kontakt + .vstpreset の音色確認は素材待ち）
 
 **内容**: `seq.instrument(path[, pluginId][, statePath])` で保存済みプラグイン state
 （`.vstpreset` / raw chunk）を復元し**音色を選択**できるようにする。UI なしで音色問題を解く
