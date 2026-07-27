@@ -57,6 +57,7 @@ import {
   applyEngineStdoutChunk,
   decideStartEngineForAgent,
   transportStatusText,
+  type EngineExitEffects,
 } from './engine-lifecycle'
 import {
   detectDslCompletionContext,
@@ -830,14 +831,15 @@ function updateStatusBarEngineAction(): void {
     getConfiguredEngineKind() === 'rust' ? 'Open Audio Engine Settings' : 'Click to show commands'
 }
 
-function restartEngine(): void {
+async function restartEngine(): Promise<void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
   if (getConfiguredEngineKind() === 'rust' && !resolveAudioDeviceSetting(workspaceRoot)) {
     vscode.window.showInformationMessage('Select an output device in Audio Engine Settings first')
     return
   }
   stopEngine()
-  setTimeout(() => startEngine(), 2200)
+  await new Promise<void>((resolve) => setTimeout(resolve, 2200))
+  await startEngine()
 }
 
 function reloadWindow(): void {
@@ -1030,13 +1032,13 @@ async function configureFlash() {
   }
 }
 
-function toggleEngine() {
+export async function toggleEngine(): Promise<void> {
   if (engineProcess && !engineProcess.killed) {
     // Stop engine
     stopEngine()
   } else {
     // Start engine
-    startEngine()
+    await startEngine()
   }
 }
 
@@ -1378,6 +1380,8 @@ function logHandlerFailure(handlerName: string, err: unknown): void {
     const message = err instanceof Error ? err.message : String(err)
     const stack = err instanceof Error && err.stack ? err.stack : '(no stack trace available)'
     if (!outputChannel) {
+      // Defensive dead code in production; reachable only through the
+      // test-only __setOutputChannelForTest(null) reset hook.
       console.error(`🛑 internal error in ${handlerName} (no output channel to log to):`, err)
       return
     }
@@ -1491,6 +1495,23 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
   })
 }
 
+function engineTerminationEffects(): Omit<EngineExitEffects, 'logExit'> {
+  return {
+    clearEngineState: () => {
+      engineProcess = null
+      isLiveCodingMode = false
+      globalInitialized = false
+    },
+    clearAllPlayheads: clearAllPlayheadDecorations,
+    drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+    showStoppedStatus: () => {
+      statusBarItem!.text = '🎵 OrbitScore: Stopped'
+      statusBarItem!.tooltip = 'Click to start engine'
+    },
+    refreshEngineView: () => engineViewProvider?.refresh(),
+  }
+}
+
 /**
  * Setup exit handler for engine process.
  */
@@ -1502,18 +1523,7 @@ export function setupExitHandler(process: child_process.ChildProcess): void {
       applyEngineExit(code, engineProcess === process, {
         logExit: (exitCode) =>
           outputChannel?.appendLine(`\n🛑 Engine process exited with code ${exitCode}`),
-        clearEngineState: () => {
-          engineProcess = null
-          isLiveCodingMode = false
-          globalInitialized = false
-        },
-        clearAllPlayheads: clearAllPlayheadDecorations,
-        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
-        showStoppedStatus: () => {
-          statusBarItem!.text = '🎵 OrbitScore: Stopped'
-          statusBarItem!.tooltip = 'Click to start engine'
-        },
-        refreshEngineView: () => engineViewProvider?.refresh(),
+        ...engineTerminationEffects(),
       })
     } catch (err) {
       logHandlerFailure('setupExitHandler', err)
@@ -1543,18 +1553,7 @@ export function setupErrorHandler(process: child_process.ChildProcess): void {
       applyEngineError(err, engineProcess === process, {
         logError: (error) =>
           outputChannel?.appendLine(`\n🛑 Engine process error: ${error.message}`),
-        clearEngineState: () => {
-          engineProcess = null
-          isLiveCodingMode = false
-          globalInitialized = false
-        },
-        clearAllPlayheads: clearAllPlayheadDecorations,
-        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
-        showStoppedStatus: () => {
-          statusBarItem!.text = '🎵 OrbitScore: Stopped'
-          statusBarItem!.tooltip = 'Click to start engine'
-        },
-        refreshEngineView: () => engineViewProvider?.refresh(),
+        ...engineTerminationEffects(),
       })
     } catch (innerErr) {
       logHandlerFailure('setupErrorHandler', innerErr)
@@ -1596,7 +1595,7 @@ async function autoStartConfiguredRustEngine(): Promise<void> {
       )
       return
     }
-    if (!startEngine()) return
+    if (!(await startEngine())) return
     const autoStartGeneration = engineGeneration
     setTimeout(() => {
       if (engineGeneration === autoStartGeneration && !isEngineRunning())
@@ -1766,7 +1765,7 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
   }
 }
 
-function engineViewToggleEngine(): void {
+async function engineViewToggleEngine(): Promise<void> {
   if (isEngineRunning()) {
     stopEngine()
     return
@@ -1776,7 +1775,7 @@ function engineViewToggleEngine(): void {
     vscode.window.showInformationMessage('Select an output device below first')
     return
   }
-  startEngine()
+  await startEngine()
 }
 
 /**
@@ -1833,7 +1832,7 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
   engineViewProvider?.refresh()
 
   if (!isEngineRunning()) {
-    startEngine()
+    await startEngine()
     return
   }
 
@@ -1856,7 +1855,7 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
         )
         if (choice === 'Restart Engine') {
           stopEngine()
-          setTimeout(() => startEngine(), 2200)
+          setTimeout(() => void startEngine(), 2200)
         }
         return
       }
@@ -1869,7 +1868,7 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
       )
       if (choice === 'Restart Engine') {
         stopEngine()
-        setTimeout(() => startEngine(), 2200)
+        setTimeout(() => void startEngine(), 2200)
       }
       return
     } catch (err) {
@@ -1881,7 +1880,7 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
       )
       if (choice === 'Restart Engine') {
         stopEngine()
-        setTimeout(() => startEngine(), 2200)
+        setTimeout(() => void startEngine(), 2200)
       }
       return
     }
@@ -1910,12 +1909,15 @@ async function engineViewToggleDebug(): Promise<void> {
     )
     if (choice === 'Restart Engine') {
       stopEngine()
-      setTimeout(() => startEngine(), 2200)
+      setTimeout(() => void startEngine(), 2200)
     }
   }
 }
 
-function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): boolean {
+async function startEngine(
+  debugMode?: boolean,
+  agentOpts?: { captureWav?: string },
+): Promise<boolean> {
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return false
@@ -2039,11 +2041,6 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): 
 
   statusBarItem!.text = effectiveDebugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
-  vscode.window.showInformationMessage(
-    effectiveDebugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
-  )
-  outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
-  engineViewProvider?.refresh()
 
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
@@ -2051,11 +2048,23 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): 
   setupExitHandler(engineProcess)
   setupStdinErrorHandler(engineProcess)
   setupErrorHandler(engineProcess)
+
+  const spawnedProcess = engineProcess
+  await new Promise<void>((resolve) => process.nextTick(resolve))
+  if (!engineProcess || engineProcess !== spawnedProcess || engineProcess.killed) {
+    return false
+  }
+
+  vscode.window.showInformationMessage(
+    effectiveDebugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
+  )
+  outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
+  engineViewProvider?.refresh()
   return true
 }
 
-function startEngineDebug() {
-  startEngine(true)
+async function startEngineDebug(): Promise<void> {
+  await startEngine(true)
 }
 
 export function stopEngine(): boolean {
@@ -2771,27 +2780,7 @@ export async function startEngineForAgent(options?: {
   // started the engine explicitly via an earlier start_engine call.
   if (decision.kind === 'reject') return { ok: false, error: decision.error }
   if (decision.kind === 'already-running') return { ok: true, message: 'engine already running' }
-  startEngine(options?.debug === true, options)
-  const spawnedProcess = engineProcess
-  // startEngine() may abort (missing daemon, build issue) without throwing — it
-  // reports via a VS Code notification. Reflect the actual spawn outcome so the
-  // agent doesn't assume success.
-  if (!spawnedProcess) {
-    return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
-  }
-  // #533: a spawn failure (ENOENT/EMFILE/EAGAIN) surfaces as a `ChildProcess`
-  // `'error'` event, not a `'killed'` flag flip — `killed` only reflects
-  // whether WE sent a signal, and we never do on a spawn failure, so the
-  // synchronous check just below would previously read `killed === false`
-  // forever and report success. Node defers emitting that `'error'` event via
-  // `process.nextTick()` specifically so a listener attached synchronously
-  // right after `spawn()` — as `setupErrorHandler` is, inside `startEngine()`
-  // above — still catches it. Queuing our OWN `process.nextTick()` here runs
-  // strictly after that already-queued one (Node's nextTick queue is FIFO),
-  // so by the time this resolves, `setupErrorHandler`'s identity-guarded
-  // teardown (nulling `engineProcess`) has already run if the spawn failed.
-  await new Promise<void>((resolve) => process.nextTick(resolve))
-  if (!engineProcess || engineProcess !== spawnedProcess || engineProcess.killed) {
+  if (!(await startEngine(options?.debug === true, options))) {
     return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
   }
   return {
@@ -2905,7 +2894,7 @@ async function selectAudioDeviceForAgent(device: string): Promise<CommandResult>
     }
     if (action === 'start') {
       await writeAudioDeviceSetting(device)
-      if (!startEngine()) {
+      if (!(await startEngine())) {
         return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
       }
       return { ok: true, message: `audio device selected: ${device}; engine starting` }

@@ -30,14 +30,20 @@ function effects(): EngineStdoutEffects {
   }
 }
 
-function exitEffects(): EngineExitEffects {
+function terminationEffects(): Omit<EngineExitEffects, 'logExit'> {
   return {
-    logExit: vi.fn(),
     clearEngineState: vi.fn(),
     clearAllPlayheads: vi.fn(),
     drainDeviceBridge: vi.fn(),
     showStoppedStatus: vi.fn(),
     refreshEngineView: vi.fn(),
+  }
+}
+
+function exitEffects(): EngineExitEffects {
+  return {
+    logExit: vi.fn(),
+    ...terminationEffects(),
   }
 }
 
@@ -51,11 +57,7 @@ function stdinErrorEffects(): EngineStdinErrorEffects {
 function errorEffects(): EngineErrorEffects {
   return {
     logError: vi.fn(),
-    clearEngineState: vi.fn(),
-    clearAllPlayheads: vi.fn(),
-    drainDeviceBridge: vi.fn(),
-    showStoppedStatus: vi.fn(),
-    refreshEngineView: vi.fn(),
+    ...terminationEffects(),
   }
 }
 

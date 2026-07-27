@@ -27,6 +27,7 @@
  */
 import * as child_process from 'child_process'
 
+import * as vscode from 'vscode'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 import * as ext from '../../packages/vscode-extension/src/extension'
@@ -65,15 +66,21 @@ function fakeSpawnedProcess(): FakeSpawnedProcess {
 }
 
 describe('startEngineForAgent post-spawn detection (#533)', () => {
+  let showInformationMessage: ReturnType<typeof vi.spyOn>
+
   beforeEach(() => {
     ext.__setEngineProcessForTest(null)
     ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
     ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
     ext.__setEngineViewProviderForTest({ refresh: () => {} })
+    showInformationMessage = vi
+      .spyOn(vscode.window, 'showInformationMessage')
+      .mockResolvedValue(undefined)
   })
 
   afterEach(() => {
     vi.mocked(child_process.spawn).mockReset()
+    showInformationMessage.mockRestore()
   })
 
   it('reports ok:false when the spawned process emits "error" shortly after spawn (e.g. ENOENT)', async () => {
@@ -89,17 +96,33 @@ describe('startEngineForAgent post-spawn detection (#533)', () => {
       ok: false,
       error: 'engine failed to start — see the OrbitScore output channel',
     })
+    expect(showInformationMessage).not.toHaveBeenCalled()
     // setupErrorHandler's identity-guarded teardown actually ran — proves
     // this isn't a hang/timeout being misread as detection.
     expect(ext.__getEngineProcessForTest()).toBeNull()
   })
 
-  it('reports ok:true when the spawned process does not error', async () => {
+  it('reports ok:true and shows the unchanged debug success toast once after spawn confirmation', async () => {
     const { proc } = fakeSpawnedProcess()
     vi.mocked(child_process.spawn).mockImplementation(() => proc)
 
-    const result = await ext.startEngineForAgent()
+    const result = await ext.startEngineForAgent({ debug: true })
 
     expect(result).toEqual({ ok: true, message: 'engine starting' })
+    expect(showInformationMessage).toHaveBeenCalledTimes(1)
+    expect(showInformationMessage).toHaveBeenCalledWith('✅ Engine started (Debug)')
+  })
+
+  it('does not show a success toast on spawn failure through the palette toggle command', async () => {
+    const { proc, fireError } = fakeSpawnedProcess()
+    vi.mocked(child_process.spawn).mockImplementation(() => {
+      fireError(new Error('spawn node ENOENT'))
+      return proc
+    })
+
+    await ext.toggleEngine()
+
+    expect(showInformationMessage).not.toHaveBeenCalled()
+    expect(ext.__getEngineProcessForTest()).toBeNull()
   })
 })

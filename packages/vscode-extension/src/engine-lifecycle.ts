@@ -222,15 +222,9 @@ export function applyEngineStdinError(
   effects.drainDeviceBridge(`engine stdin error: ${message}`)
 }
 
-export interface EngineErrorEffects {
+export interface EngineErrorEffects extends Omit<EngineExitEffects, 'logExit'> {
   /** Called unconditionally, matching `EngineExitEffects.logExit` / `EngineStdinErrorEffects.logStdinError`. */
   logError(err: Error): void
-  /** Nulls `engineProcess` and resets `isLiveCodingMode` / `globalInitialized` — current-process only. */
-  clearEngineState(): void
-  clearAllPlayheads(): void
-  drainDeviceBridge(reason: string): void
-  showStoppedStatus(): void
-  refreshEngineView(): void
 }
 
 /**
