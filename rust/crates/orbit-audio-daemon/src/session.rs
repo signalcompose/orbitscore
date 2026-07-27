@@ -147,6 +147,7 @@ fn bus_param_invalid_for_instrument_role(params: &Value) -> bool {
 
 /// `instance` は role='instrument' 専用（#540 P1・`bus` が role='effect' 専用なのと対称）。
 /// effect 宣言に instance が紛れ込んだ場合に黙って無視せず MALFORMED で弾くための判定。
+#[cfg(feature = "outproc-instrument")]
 fn instance_param_invalid_for_effect_role(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) != Some("instrument")
         && params.get("instance").is_some()
@@ -165,6 +166,7 @@ fn parse_instance_param(params: &Value) -> Result<Option<String>, &'static str> 
 
 /// `state_path` param（任意・非空文字列・#540 P2）。role='instrument' 専用。
 /// `instance` と同じ validation 方針。
+#[cfg(feature = "outproc-instrument")]
 fn parse_state_path_param(params: &Value) -> Result<Option<String>, &'static str> {
     match params.get("state_path") {
         None => Ok(None),
@@ -175,6 +177,7 @@ fn parse_state_path_param(params: &Value) -> Result<Option<String>, &'static str
 }
 
 /// `state_path` は role='instrument' 専用（#540 P2・`instance` と同じ対称性）。
+#[cfg(feature = "outproc-instrument")]
 fn state_param_invalid_for_effect_role(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) != Some("instrument")
         && params.get("state_path").is_some()
@@ -1338,11 +1341,14 @@ fn parse_midi_channel(params: &Value) -> Result<u8, ProtocolError> {
     }
 }
 
+/// PluginNoteOn/Off の engine 呼び出し（key, channel, velocity, instance — #540 P1）。
+type PluginNoteCall = fn(&EngineWrap, u8, u8, f64, Option<String>) -> Result<(), WrapError>;
+
 /// `PluginNoteOn`/`PluginNoteOff` の配線（`default_velocity`/`status`/`call`）。
 struct PluginNoteSpec {
     default_velocity: f64,
     status: &'static str,
-    call: fn(&EngineWrap, u8, u8, f64, Option<String>) -> Result<(), WrapError>,
+    call: PluginNoteCall,
 }
 
 /// `method` 文字列から [`PluginNoteSpec`] を解決する single source of truth。`handle_command` 冒頭の
@@ -1382,7 +1388,7 @@ async fn handle_plugin_note(
     engine: &Arc<EngineWrap>,
     default_velocity: f64,
     status: &'static str,
-    call: fn(&EngineWrap, u8, u8, f64, Option<String>) -> Result<(), WrapError>,
+    call: PluginNoteCall,
 ) -> Value {
     match params.get("key").and_then(|v| v.as_u64()) {
         Some(k) if k <= 127 => match parse_midi_channel(params) {
@@ -1729,19 +1735,14 @@ mod tests {
         assert!(
             std::ptr::fn_addr_eq(
                 on.call,
-                EngineWrap::plugin_note_on
-                    as fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>
+                EngineWrap::plugin_note_on as PluginNoteCall
             ),
             "PluginNoteOn は EngineWrap::plugin_note_on を呼ぶこと（NoteOff と入れ替わっていないこと）"
         );
 
         let off = plugin_note_spec("PluginNoteOff").expect("PluginNoteOff has a spec");
         assert!(
-            std::ptr::fn_addr_eq(
-                off.call,
-                EngineWrap::plugin_note_off
-                    as fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>
-            ),
+            std::ptr::fn_addr_eq(off.call, EngineWrap::plugin_note_off as PluginNoteCall),
             "PluginNoteOff は EngineWrap::plugin_note_off を呼ぶこと"
         );
     }

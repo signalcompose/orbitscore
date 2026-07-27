@@ -4831,8 +4831,7 @@ mod outproc_load_error_test_support {
                 None,
                 None,
             )
-            .err()
-            .expect("missing shared memory must fail before spawn");
+            .expect_err("missing shared memory must fail before spawn");
 
         assert_error(error, "open child readiness mapping");
         assert!(
@@ -4910,8 +4909,7 @@ mod outproc_load_error_test_support {
                     None,
                     None,
                 )
-                .err()
-                .expect("nonexistent child executable must fail to spawn");
+                .expect_err("nonexistent child executable must fail to spawn");
             assert_error(error, "spawn outproc child");
             assert!(
                 matches!(
@@ -4937,8 +4935,7 @@ mod outproc_load_error_test_support {
                 None,
                 None,
             )
-            .err()
-            .expect("Closed slot must reject attach");
+            .expect_err("Closed slot must reject attach");
 
         assert_error(error, "closed after an unrecoverable attach failure");
         assert!(matches!(
@@ -4967,8 +4964,7 @@ mod outproc_load_error_test_support {
                 None,
                 None,
             )
-            .err()
-            .expect("Loading slot must reject concurrent attach");
+            .expect_err("Loading slot must reject concurrent attach");
 
         assert_error(error, "already in progress");
         assert!(
@@ -5064,8 +5060,7 @@ mod outproc_load_error_test_support {
                 changed_plugin_id,
                 None,
             )
-            .err()
-            .expect("same path with a different plugin_id while Active must be rejected");
+            .expect_err("same path with a different plugin_id while Active must be rejected");
         assert_error(error, "does not support replacement");
         assert!(
             matches!(
@@ -5095,8 +5090,7 @@ mod outproc_load_error_test_support {
                 None,
                 None,
             )
-            .err()
-            .expect("a different path while Active must be rejected");
+            .expect_err("a different path while Active must be rejected");
         assert_error(error, "does not support replacement");
         assert!(matches!(
             &*child_slot.lock().expect("lock child slot"),
@@ -5300,8 +5294,7 @@ mod outproc_load_error_test_support {
                 None,
                 None,
             )
-            .err()
-            .expect("concurrent call against a Loading slot must fail");
+            .expect_err("concurrent call against a Loading slot must fail");
         let elapsed = start.elapsed();
 
         assert_error(error, "already in progress");
@@ -5401,8 +5394,7 @@ mod outproc_health_tests {
                 None,
                 Some("nope".into()),
             )
-            .err()
-            .expect("unknown bus must be rejected before touching the master slot");
+            .expect_err("unknown bus must be rejected before touching the master slot");
         assert_effect_runtime_error_contains(error, "unknown effect bus 'nope'");
     }
 
@@ -5433,8 +5425,7 @@ mod outproc_health_tests {
                 None,
                 Some("fx1".into()),
             )
-            .err()
-            .expect("closed bus slot still rejects the load, but past the routing step");
+            .expect_err("closed bus slot still rejects the load, but past the routing step");
         assert_effect_runtime_error_contains(error, "closed after an unrecoverable attach failure");
     }
 
