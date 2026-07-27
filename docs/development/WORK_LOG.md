@@ -17,10 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.306 docs: design principles + E2E harness spec 正本化 #544 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: 🔄 PR 準備中
+
+**内容**: 2026-07-28 の owner 設計議論で確定した規範を docs へ昇格（#544）。
+
+- **`docs/core/DESIGN_PRINCIPLES.md`（新規）**: ①LLM-first（「LLM が使えない機能 = このソフト
+  ウェアの敗北」・すべての能力はプログラマブル面が先・UI は人間向けビュー・UI 専用例外は
+  一度きりの初期化イベントに封じ込め）②人間製成果物への依存禁止（外部 DAW `.vstpreset`
+  却下の一般化）③人間と LLM の対称ワークフロー（同じ state に合流・同じ永続化）
+  ④意図（.orbs）と登記（プロジェクトファイル）の分離
+- **`docs/testing/E2E_HARNESS_SPEC.md`（新規）**: DSL 網羅 E2E の規範（#543）。仕様書駆動・
+  **二重台帳の機械監査**（仕様セクション ↔ fixture / 実装 dispatch ↔ fixture・CI 赤）・
+  2層構造（オフライン決定論層 = 網羅 / 実機 MCP 層 = 配線代表）・観測タイプ必須・無人実行・
+  改ざん耐性（期待値は仕様の式から導出・変異スイープ自動化）・学習サイト双方向監査
+- INDEX.md 更新・6.304/6.305 の Status をマージ済みへ更新
+
+**設計議論の記録先**: #541（プロジェクトファイル = 機械が書く登記簿・YAML `states:` のみ・
+DAW ループ受け入れ基準）/ #543（ハーネス）/ #474（UI hosting・設計未決）
+
 ### 6.305 feat(engine): plugin state restore = sound selection #540 P2 (Jul 28, 2026)
 
 **Date**: 2026-07-28
-**Status**: ✅ コア完了・実機 E2E PASS（実 Kontakt + .vstpreset の音色確認は素材待ち）
+**Status**: ✅ **PR #542 MERGED**（main `58e16bc`・2026-07-28・#540 CLOSED）
 
 **内容**: `seq.instrument(path[, pluginId][, statePath])` で保存済みプラグイン state
 （`.vstpreset` / raw chunk）を復元し**音色を選択**できるようにする。UI なしで音色問題を解く
@@ -52,7 +73,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 ### 6.304 feat(engine): per-sequence instrument instances #540 P1 (Jul 28, 2026)
 
 **Date**: 2026-07-28
-**Status**: ✅ P1 コミット済み（`1dae696`）
+**Status**: ✅ **PR #542 MERGED**（main `58e16bc`・2026-07-28）
 
 **背景**: 2026-07-29 の作品制作（owner）に「シーケンスごとに別 instrument」と「音色の変更」が
 必須。instrument はアプリ全体で1台（daemon `Mutex<Option<...>>` / TS 単数ガード）だった。
