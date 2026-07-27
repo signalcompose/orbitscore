@@ -1319,53 +1319,86 @@ export function __resetPlayheadStateForTest(): void {
   playheadPaletteAssignments.clear()
 }
 
+// ---- Handler-body crash containment (#527 review round 4 Important #1) ----
+//
+// setupStdoutHandler / setupExitHandler / setupStdinErrorHandler register
+// listener bodies directly on Node stream/process events. There is no
+// `process.on('uncaughtException', ...)` anywhere in this extension, so an
+// exception that escapes ANY of these three listener bodies is not just an
+// OrbitScore failure — it crashes the extension HOST process, taking down
+// every other extension in the window along with it. `transportStatusText`'s
+// exhaustiveness guard (#527 review Important #2, above) was the first piece
+// of code on this path that can deliberately `throw`, but the danger it
+// exposed is general: ANY exception here (a null UI element, a bridge method
+// throwing, etc.) has always had this blast radius.
+//
+// `logHandlerFailure` catches and records loud, marker-prefixed failures
+// (including the stack trace, for root-causing) instead of re-throwing —
+// re-throwing would defeat the purpose, since it's exactly what crashes the
+// host. Per this project's convention (`get_log` / the output channel is the
+// only place engine-side errors are observable — see CLAUDE.md's testing
+// discipline notes), writing loudly to `outputChannel` IS the loud-failure
+// behavior, not a silent swallow.
+function logHandlerFailure(handlerName: string, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err)
+  const stack = err instanceof Error && err.stack ? err.stack : '(no stack trace available)'
+  outputChannel?.appendLine(`🛑 internal error in ${handlerName}: ${message}`)
+  outputChannel?.appendLine(stack)
+}
+
 /**
  * Setup stdout handler for engine process.
  */
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   process.stdout?.on('data', (data) => {
-    const output = data.toString()
-    const lines: string[] = output.split('\n')
+    try {
+      const output = data.toString()
+      const lines: string[] = output.split('\n')
 
-    // Identity-guarded via applyEngineStdoutChunk — see its docstring in
-    // engine-lifecycle.ts for the #528 stop→start race this protects against
-    // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
-    const isCurrent = engineProcess === process
+      // Identity-guarded via applyEngineStdoutChunk — see its docstring in
+      // engine-lifecycle.ts for the #528 stop→start race this protects against
+      // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
+      const isCurrent = engineProcess === process
 
-    applyEngineStdoutChunk(output, lines, isCurrent, {
-      handleStep: handleStepLine,
-      clearSequence: clearPlayheadForSequence,
-      clearAllPlayheads: clearAllPlayheadDecorations,
-      handleSelectAudioDeviceLine: (rawLine) => selectAudioDeviceBridge.handleLine(rawLine),
-      warnMalformedSelectAudioDeviceLine: (rawLine, stale) => {
-        outputChannel?.appendLine(
-          `⚠️ received a malformed //#selectAudioDevice result line${
-            stale ? ' from a stale engine' : ''
-          } (possible chunk-boundary split): ${rawLine}`,
-        )
-      },
-      transcribeLog: () => {
-        // Second pass over the SAME `lines` array classifyEngineStdoutLine()
-        // (inside applyEngineStdoutChunk) already scanned — not a re-split of
-        // `output`. Unlike before this lifecycle extraction — when a stale
-        // process's line loop ran zero iterations — this now always runs,
-        // current or stale: the malformed-//#selectAudioDevice diagnostic
-        // must see stale output too (#527 review Important #1).
-        if (!debugMode) {
-          const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
-          if (filteredOutput.trim()) outputChannel?.append(filteredOutput + '\n')
-        } else {
-          outputChannel?.append(output)
-        }
-      },
-      // #527 review Important #2: rendering delegated to transportStatusText()
-      // (engine-lifecycle.ts) — an exhaustive switch, not a ternary, so a
-      // state value outside 'playing' | 'ready' throws instead of silently
-      // displaying "Ready".
-      setTransportStatus: (state) => {
-        statusBarItem!.text = transportStatusText(state, debugMode)
-      },
-    })
+      applyEngineStdoutChunk(output, lines, isCurrent, {
+        handleStep: handleStepLine,
+        clearSequence: clearPlayheadForSequence,
+        clearAllPlayheads: clearAllPlayheadDecorations,
+        handleSelectAudioDeviceLine: (rawLine) => selectAudioDeviceBridge.handleLine(rawLine),
+        warnMalformedSelectAudioDeviceLine: (rawLine, stale) => {
+          outputChannel?.appendLine(
+            `⚠️ received a malformed //#selectAudioDevice result line${
+              stale ? ' from a stale engine' : ''
+            } (possible chunk-boundary split): ${rawLine}`,
+          )
+        },
+        transcribeLog: () => {
+          // Second pass over the SAME `lines` array classifyEngineStdoutLine()
+          // (inside applyEngineStdoutChunk) already scanned — not a re-split of
+          // `output`. Unlike before this lifecycle extraction — when a stale
+          // process's line loop ran zero iterations — this now always runs,
+          // current or stale: the malformed-//#selectAudioDevice diagnostic
+          // must see stale output too (#527 review Important #1).
+          if (!debugMode) {
+            const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
+            if (filteredOutput.trim()) outputChannel?.append(filteredOutput + '\n')
+          } else {
+            outputChannel?.append(output)
+          }
+        },
+        // #527 review Important #2: rendering delegated to transportStatusText()
+        // (engine-lifecycle.ts) — an exhaustive switch, not a ternary, so a
+        // state value outside 'playing' | 'ready' throws instead of silently
+        // displaying "Ready". That throw is caught by the try/catch wrapping
+        // this whole listener body (#527 review round 4 Important #1) — it
+        // reaches `logHandlerFailure` below, NOT the extension host.
+        setTransportStatus: (state) => {
+          statusBarItem!.text = transportStatusText(state, debugMode)
+        },
+      })
+    } catch (err) {
+      logHandlerFailure('setupStdoutHandler', err)
+    }
   })
 }
 
@@ -1387,12 +1420,16 @@ function setupStderrHandler(process: child_process.ChildProcess): void {
  */
 export function setupStdinErrorHandler(process: child_process.ChildProcess): void {
   process.stdin?.on('error', (err) => {
-    // Identity-guarded via applyEngineStdinError — see its docstring in
-    // engine-lifecycle.ts for the #528 stop→start race this protects against.
-    applyEngineStdinError(err.message, engineProcess === process, {
-      logStdinError: (message) => outputChannel?.appendLine(`⚠️ engine stdin error: ${message}`),
-      drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
-    })
+    try {
+      // Identity-guarded via applyEngineStdinError — see its docstring in
+      // engine-lifecycle.ts for the #528 stop→start race this protects against.
+      applyEngineStdinError(err.message, engineProcess === process, {
+        logStdinError: (message) => outputChannel?.appendLine(`⚠️ engine stdin error: ${message}`),
+        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+      })
+    } catch (innerErr) {
+      logHandlerFailure('setupStdinErrorHandler', innerErr)
+    }
   })
 }
 
@@ -1401,24 +1438,28 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
  */
 export function setupExitHandler(process: child_process.ChildProcess): void {
   process.on('exit', (code) => {
-    // Identity-guarded via applyEngineExit — see its docstring in
-    // engine-lifecycle.ts for the #528 stop→start race this protects against.
-    applyEngineExit(code, engineProcess === process, {
-      logExit: (exitCode) =>
-        outputChannel?.appendLine(`\n🛑 Engine process exited with code ${exitCode}`),
-      clearEngineState: () => {
-        engineProcess = null
-        isLiveCodingMode = false
-        globalInitialized = false
-      },
-      clearAllPlayheads: clearAllPlayheadDecorations,
-      drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
-      showStoppedStatus: () => {
-        statusBarItem!.text = '🎵 OrbitScore: Stopped'
-        statusBarItem!.tooltip = 'Click to start engine'
-      },
-      refreshEngineView: () => engineViewProvider?.refresh(),
-    })
+    try {
+      // Identity-guarded via applyEngineExit — see its docstring in
+      // engine-lifecycle.ts for the #528 stop→start race this protects against.
+      applyEngineExit(code, engineProcess === process, {
+        logExit: (exitCode) =>
+          outputChannel?.appendLine(`\n🛑 Engine process exited with code ${exitCode}`),
+        clearEngineState: () => {
+          engineProcess = null
+          isLiveCodingMode = false
+          globalInitialized = false
+        },
+        clearAllPlayheads: clearAllPlayheadDecorations,
+        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+        showStoppedStatus: () => {
+          statusBarItem!.text = '🎵 OrbitScore: Stopped'
+          statusBarItem!.tooltip = 'Click to start engine'
+        },
+        refreshEngineView: () => engineViewProvider?.refresh(),
+      })
+    } catch (err) {
+      logHandlerFailure('setupExitHandler', err)
+    }
   })
 }
 

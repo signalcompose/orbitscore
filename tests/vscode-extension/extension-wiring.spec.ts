@@ -24,12 +24,30 @@ import type { ChildProcess } from 'child_process'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 import { DeviceSwitchBridge } from '../../packages/vscode-extension/src/device-switch-bridge'
+import * as engineLifecycle from '../../packages/vscode-extension/src/engine-lifecycle'
 import * as ext from '../../packages/vscode-extension/src/extension'
 // Resolves to the SAME module instance `extension.ts`'s `import * as vscode
 // from 'vscode'` gets via the root vitest.config.ts alias — pushing into
 // `vscodeMock.window.visibleTextEditors` is observed by extension.ts's own
 // `vscode.window.visibleTextEditors` reads (round 3 Critical #1).
 import * as vscodeMock from '../mocks/vscode'
+
+// #527 review round 4 Important #2: a pass-through spy on the REAL
+// `applyEngineExit`, not a behavior replacement — every export other than
+// `applyEngineExit` is untouched, and `applyEngineExit` itself still runs its
+// actual body via `vi.fn(actual.applyEngineExit)`. This lets the
+// "clearEngineState and clearAllPlayheads" spec below (only) capture the
+// `effects` object `setupExitHandler` builds, without disturbing any other
+// exitHandler spec in this file, which all still exercise the genuine
+// `applyEngineExit` end-to-end exactly as before.
+vi.mock('../../packages/vscode-extension/src/engine-lifecycle', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../packages/vscode-extension/src/engine-lifecycle')>()
+  return {
+    ...actual,
+    applyEngineExit: vi.fn(actual.applyEngineExit),
+  }
+})
 
 interface FakeChildProcess {
   proc: ChildProcess
@@ -76,6 +94,7 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
     ext.__setEngineViewProviderForTest(null)
     ext.__resetPlayheadStateForTest()
     vscodeMock.window.visibleTextEditors.length = 0
+    vi.mocked(engineLifecycle.applyEngineExit).mockClear()
   })
 
   describe('setupStdoutHandler', () => {
@@ -283,6 +302,38 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       expect(warning).toContain(malformedLine)
       expect(warning).toContain('from a stale engine')
     })
+
+    // #527 review round 4 Important #1: NOTHING wraps this listener body —
+    // no `process.on('uncaughtException', ...)` exists anywhere in
+    // extension.ts — so an exception escaping it used to crash the extension
+    // HOST process (every other extension in the window, not just
+    // OrbitScore). `statusBarItem` is null here specifically to trigger a
+    // REAL exception via the `statusBarItem!.text = ...` non-null assertion
+    // inside `setTransportStatus` (reached via a "✅ Global running" line) —
+    // not a synthetic throw — proving the try/catch added around the
+    // listener body actually contains a genuine failure from this code path.
+    it('contains an exception thrown inside the listener body instead of letting it escape (#527 review round 4 Important #1)', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest(null) // statusBarItem!.text throws on null
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+
+      ext.setupStdoutHandler(proc, false)
+
+      expect(() => fireStdoutData('✅ Global running\n')).not.toThrow()
+
+      const marker = appendedLines.find((line) => line.includes('setupStdoutHandler'))
+      expect(marker, appendedLines.join('\n')).toBeDefined()
+      expect(marker).toContain('🛑 internal error in setupStdoutHandler')
+      // The stack trace line, logged separately for root-causing.
+      expect(appendedLines.some((line) => line.includes('at '))).toBe(true)
+    })
   })
 
   describe('setupExitHandler', () => {
@@ -345,35 +396,34 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       expect(ext.__getEngineProcessForTest()).toBeNull()
     })
 
-    // #527 review round 3 Critical #1: clearEngineState and clearAllPlayheads
-    // are both unconditionally-invoked `() => void` effects with NO
-    // interdependency, so swapping which real implementation lands under
-    // which key produces an IDENTICAL final state (engineProcess still ends
-    // up null, playhead ranges still end up cleared) — the test above and
-    // "final state" assertions in general cannot see the swap. What DOES
-    // differ under a swap is ORDER: applyEngineExit always calls the
-    // `clearEngineState` key before the `clearAllPlayheads` key, so swapping
-    // which real body sits behind each key swaps WHICH observable side
-    // effect happens FIRST. This test seeds a playhead range against a fake
-    // editor and, at the exact moment the real `clearAllPlayheadDecorations`
-    // reaches `editor.setDecorations` (its own, independent observable
-    // effect — round 3 Critical #1's second complaint, that it had no
-    // assertion anywhere), snapshots whether `engineProcess` has ALREADY
-    // been nulled. Correct wiring: yes (clearEngineState ran first). Swapped:
-    // no (the null-out closure hasn't run yet, because it's now called
-    // second).
-    it('wires clearEngineState and clearAllPlayheads to the correct effect, in the declared order', () => {
+    // #527 review round 3 Critical #1 originally caught this with an
+    // ORDER-based assertion: applyEngineExit happens to call the
+    // `clearEngineState` key before the `clearAllPlayheads` key today, so a
+    // body-swap between the two flips which observable side effect fires
+    // first. #527 review round 4 Important #2 found that assertion itself
+    // unsound: `applyEngineExit`'s docstring documents ONLY an identity-guard
+    // rationale for these two calls — no ordering contract between them is
+    // declared anywhere (`clearAllPlayheads`'s only comment is "#390: nothing
+    // is sounding anymore"). A future, equally-correct reordering inside
+    // `applyEngineExit` (e.g. clearing playheads before nulling
+    // `engineProcess`) would flip the order and fail the old test with NO
+    // actual defect — a test that fails on correct code is itself a bug.
+    //
+    // Redesigned to be ORDER-INDEPENDENT: capture the real `effects` object
+    // `setupExitHandler` builds (via a pass-through spy on the real
+    // `engine-lifecycle` module — see the `vi.mock` above; every other
+    // exitHandler spec in this file still exercises the genuine
+    // `applyEngineExit`, unaffected), then invoke `clearEngineState` and
+    // `clearAllPlayheads` INDIVIDUALLY against freshly-seeded state. This
+    // still catches a body-swap (each key's closure no longer produces its
+    // documented single-purpose effect) without asserting anything about
+    // which one `applyEngineExit` happens to call first.
+    it('wires clearEngineState and clearAllPlayheads to their own distinct effects (order-independent)', () => {
       const { proc, fireExit } = fakeChildProcess()
-      const docUriString = 'file:///order-test.orbs'
-      const decorationCalls: Array<{ rangesLength: number; engineProcessWasNull: boolean }> = []
+      const docUriString = 'file:///order-independent-test.orbs'
       const fakeEditor = {
         document: { uri: { toString: () => docUriString } },
-        setDecorations: (_type: unknown, ranges: unknown[]) => {
-          decorationCalls.push({
-            rangesLength: ranges.length,
-            engineProcessWasNull: ext.__getEngineProcessForTest() === null,
-          })
-        },
+        setDecorations: () => {},
       }
       vscodeMock.window.visibleTextEditors.push(fakeEditor)
 
@@ -381,26 +431,37 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
       ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
       ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      ext.setupExitHandler(proc)
+      fireExit(0)
+
+      const applyEngineExitSpy = vi.mocked(engineLifecycle.applyEngineExit)
+      expect(applyEngineExitSpy).toHaveBeenCalledTimes(1)
+      const effects = applyEngineExitSpy.mock.calls[0][2]
+
+      // --- clearEngineState in isolation: nulls engineProcess, leaves any
+      // playhead range untouched ---
+      ext.__setEngineProcessForTest(proc)
       ext.__setPlayheadActiveRangeForTest(
-        'seqOrder',
+        'seqA',
         docUriString,
         new vscodeMock.Range(new vscodeMock.Position(0, 0), new vscodeMock.Position(0, 1)),
       )
       expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(1)
 
-      ext.setupExitHandler(proc)
-      fireExit(0)
+      effects.clearEngineState()
 
-      // Independent assertion on clearAllPlayheadDecorations's OWN effect:
-      // it ran exactly once and actually cleared (empty ranges array), not
-      // merely "some callback fired".
-      expect(decorationCalls).toHaveLength(1)
-      expect(decorationCalls[0].rangesLength).toBe(0)
-      // Order assertion: this is what a clearEngineState/clearAllPlayheads
-      // swap flips.
-      expect(decorationCalls[0].engineProcessWasNull).toBe(true)
       expect(ext.__getEngineProcessForTest()).toBeNull()
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(1)
+
+      // --- clearAllPlayheads in isolation: clears the playhead range, leaves
+      // engineProcess untouched ---
+      ext.__setEngineProcessForTest(proc)
+
+      effects.clearAllPlayheads()
+
       expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(0)
+      expect(ext.__getEngineProcessForTest()).toBe(proc)
     })
 
     it('wires logExit: the output channel receives the real exit code, verbatim', () => {
@@ -467,6 +528,39 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       expect(statusBarItem.text).toBe('untouched')
       expect(refreshCalls).toBe(0)
     })
+
+    // #527 review round 4 Important #1: same containment requirement as
+    // setupStdoutHandler above. `showStoppedStatus` reaches
+    // `statusBarItem!.text = ...` unconditionally for a current process, so a
+    // null `statusBarItem` throws a real exception from inside the listener
+    // body, which the wrapping try/catch must contain.
+    it('contains an exception thrown inside the listener body instead of letting it escape (#527 review round 4 Important #1)', () => {
+      const { proc, fireExit } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest(null) // showStoppedStatus's statusBarItem!.text throws on null
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      ext.setupExitHandler(proc)
+
+      expect(() => fireExit(0)).not.toThrow()
+
+      // clearEngineState still ran before the fault (proves this isn't a
+      // blanket "nothing happened" swallow — it's a real caught exception
+      // mid-effects, and the effects that ran before the fault took hold).
+      expect(ext.__getEngineProcessForTest()).toBeNull()
+
+      const marker = appendedLines.find((line) => line.includes('setupExitHandler'))
+      expect(marker, appendedLines.join('\n')).toBeDefined()
+      expect(marker).toContain('🛑 internal error in setupExitHandler')
+      expect(appendedLines.some((line) => line.includes('at '))).toBe(true)
+    })
   })
 
   describe('setupStdinErrorHandler', () => {
@@ -520,6 +614,48 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       fireStdinError(new Error('boom'))
 
       expect(appendedLines.some((line) => line.includes('engine stdin error: boom'))).toBe(true)
+    })
+
+    // #527 review round 4 Important #1: same containment requirement as the
+    // other two handlers. This listener body has no `statusBarItem` access to
+    // exploit for a "natural" fault, so the real singleton
+    // `DeviceSwitchBridge.drainAll` (reached via `applyEngineStdinError`'s
+    // `drainDeviceBridge` effect) is monkey-patched to throw for this one
+    // test only, and restored afterward so no other spec in this file (which
+    // shares the same module-level bridge instance) is affected.
+    it('contains an exception thrown inside the listener body instead of letting it escape (#527 review round 4 Important #1)', () => {
+      const { proc, fireStdinError } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+
+      const bridge = ext.__getDeviceSwitchBridgeForTest()
+      const originalDrainAll = bridge.drainAll
+      bridge.drainAll = () => {
+        throw new Error('injected fault in drainDeviceBridge')
+      }
+
+      try {
+        ext.setupStdinErrorHandler(proc)
+        expect(() => fireStdinError(new Error('EPIPE'))).not.toThrow()
+      } finally {
+        bridge.drainAll = originalDrainAll
+      }
+
+      // logStdinError still ran before the fault (the effect preceding
+      // drainDeviceBridge in applyEngineStdinError), proving this is a real
+      // caught mid-effects exception, not a blanket swallow.
+      expect(appendedLines.some((line) => line.includes('engine stdin error: EPIPE'))).toBe(true)
+
+      const marker = appendedLines.find((line) => line.includes('setupStdinErrorHandler'))
+      expect(marker, appendedLines.join('\n')).toBeDefined()
+      expect(marker).toContain('🛑 internal error in setupStdinErrorHandler')
+      expect(appendedLines.some((line) => line.includes('at '))).toBe(true)
     })
   })
 

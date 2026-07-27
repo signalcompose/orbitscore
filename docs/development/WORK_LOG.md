@@ -72,6 +72,63 @@ exit 経路について懸念していたのと同じ機序）。`stdin` の `'e
   `.claude/worktrees/` 内の古いコピーまで一致し、実機 OrbitStudio を7個同時起動していた。
   `--dir tests` でグロブ基点を固定した
 
+### 6.299 fix(extension): ハンドラ例外の隔離と、存在しない契約に依存したテストの是正 #527 レビューR4対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+ラウンド4は **Critical 0 / Important 2**。pr-test-analyzer は20種の変異を実走させ、
+ラウンド3の指摘を全件 CLOSED と判定し新規指摘なし（stdout 7 / exit 6 / stdin 2 の全スロットを
+個別に no-op 化して全て red、`transportStatusText` の4文字列を個別に破壊して全て red、
+テスト用 seam に嘘をつかせる変異でも即 red）。残る Important 2件はいずれも 6.298 で
+私が持ち込んだもの。
+
+**Important 1 — silent failure を潰して、より悪い故障を作っていた**: 6.298 で足した
+`transportStatusText` の網羅性ガード（`throw`）は **stdout の `'data'` ハンドラ内**で走るが、
+`extension.ts` には `process.on('uncaughtException', ...)` も当該リスナを包む try/catch も
+無かった。Node のストリーム emit から同期的に例外が抜けると、**OrbitScore だけでなく
+拡張ホストのプロセス全体（他の拡張も含む）が落ちる**。status bar の破損を防ぐために
+ホスト全体を落とすのでは割に合わない。
+
+さらにこれは**より広い既存の危険**を照らしていた — ガード固有ではなく、stdout / exit / stdin
+ハンドラ内の**あらゆる例外**が同じ経路でホストを落とす。3つのリスナ本体を try/catch で包み、
+`logHandlerFailure()` がマーカー付き（`🛑 internal error in <handler名>:`）+ スタックトレースで
+output channel に記録する形にした。**握り潰しではない** — このプロジェクトでは
+「エンジン側のエラーは output channel にしか出ない」が原則で、`get_log` から観測できることが
+loud failure の定義である。`transportStatusText` の `throw` は意図が正しいのでそのまま残した。
+
+**Important 2 — 正しいコードで落ちるテストを作っていた**: 6.298 の
+`clearEngineState` ⇄ `clearAllPlayheads` swap 検出は「どちらが先に走ったか」に依存していたが、
+**この2つに順序の契約は存在しない**。`applyEngineExit` の docstring を実読して確認した ——
+identity ガードの理由しか書かれておらず、順序には一切言及がない。将来「装飾を消してから
+状態を null にする」という等しく正しい並べ替えをすると、欠陥が無いのにテストが落ちる。
+
+`vi.mock` の pass-through spy で `setupExitHandler` に渡される実 effects オブジェクトを捕獲し、
+`clearEngineState()` / `clearAllPlayheads()` を**個別に呼んで**固有の副作用を検証する形に
+置き換えた。**受け入れ条件を2つ課した**: 実体の入れ替えで red / `applyEngineExit` 内の
+呼び出し順を反転しても green のまま（＝存在しない契約に依存していないことの証明）。
+両方とも main 側で実測した。
+
+**レビュアー同士の対立を一次情報で裁定**: 順序テストの頑健性について
+code-reviewer は「文書化されていない実装詳細への依存」、pr-test-analyzer は
+「文書化済みの契約なので頑健」と判定が割れた。main 側で docstring を実読し、
+**pr-test-analyzer の主張が誤り**であることを確認して code-reviewer の指摘を採用した。
+委譲先の判定を鵜呑みにしない受け入れ検証規律が効いた事例。
+
+**変異検証（main 側で独立に再実行）**: (A) `clearEngineState` ⇄ `clearAllPlayheads` の実体
+入れ替え → 1件 red / (B) `applyEngineExit` 内の呼び出し順を反転 → **23件 green のまま** /
+(C) stdout ハンドラの catch を再 throw に変更 → 1件 red
+（`expected [Function] to not throw an error but 'TypeError: ...' was thrown`）。
+いずれも restore で全緑に復帰。
+
+なお (A) は**1回目の変異が pattern 不一致で当たっておらず**、「23 passed」を検出失敗と
+誤読しかけた。実ファイルの形を確認して当て直した（try/catch 導入でインデントが変わっていた）。
+**変異が実際に適用されたことを確認せずに緑を読むと、検証したつもりで何も検証していない。**
+
+**検証**: `npm test` 1694 passed / 29 skipped（1691 → +3）・`tsc --build` 通過・lint エラー0・
+実機 gated E2E 1 passed・孤児デーモン 0。
+
 ### 6.298 test(extension): 配線カバレッジの過大申告を是正 #527 レビューR3対応 (Jul 27, 2026)
 
 **Date**: 2026-07-27
