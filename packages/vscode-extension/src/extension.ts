@@ -1275,6 +1275,13 @@ function setupStderrHandler(process: child_process.ChildProcess): void {
 function setupExitHandler(process: child_process.ChildProcess): void {
   process.on('exit', (code) => {
     outputChannel?.appendLine(`\n🛑 Engine process exited with code ${code}`)
+    // #528: Node の 'exit' は非同期に届く。stop_engine → start_engine を素早く
+    // 行うと、既に新しい engine を spawn し `engineProcess` に入れた *後* で
+    // 古いプロセスの exit が発火する。identity を確かめずに下の後片付けを走らせると
+    // 生きている新 engine のハンドルを null にしてしまい、daemon は鳴ったまま
+    // 孤児化する（UI は "Stopped"・stop_engine でも落とせない・evaluate も不通）。
+    // 自分がまだ現役の engine である時だけ後片付けする。
+    if (engineProcess !== process) return
     engineProcess = null
     isLiveCodingMode = false
     globalInitialized = false
@@ -2486,6 +2493,19 @@ function evaluateForAgent(code: string): EvaluateResult {
 /** Start the engine for the MCP `start_engine` tool (mirrors the palette command). */
 function startEngineForAgent(options?: { captureWav?: string; debug?: boolean }): CommandResult {
   if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
+    // #528: capture は `ORBIT_CAPTURE_WAV` を engine spawn 時に渡すことでしか有効化
+    // できない。既に走っている engine に後から効かせる術はないので、`captureWav` 付きの
+    // 要求をここで `ok: true` にすると **capture が無効なまま成功を返す**ことになる
+    // （呼び出し側は録れていると信じて capture.wav を読み、ENOENT で初めて気づく）。
+    // 拡張は activate 時に engine を自動起動するため、これは例外ケースではなく既定の経路。
+    if (options?.captureWav) {
+      return {
+        ok: false,
+        error:
+          'engine is already running without capture — capture is configured at engine start ' +
+          '(ORBIT_CAPTURE_WAV). Call stop_engine first, then start_engine with capture_wav.',
+      }
+    }
     return { ok: true, message: 'engine already running' }
   }
   startEngine(options?.debug === true, options)

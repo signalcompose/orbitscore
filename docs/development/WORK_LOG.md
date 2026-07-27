@@ -17,6 +17,48 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.295 fix(extension): engine 再起動時の孤児化と capture 要求の握り潰しを修正 #528 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+gated E2E の音声アサーションが「27秒キャプチャ・peak 0」で落ちていた件（#528）を追ったところ、
+**ハーネス起因の1件と本番バグ2件**が出た。テストを直す過程で本番の欠陥が見つかった形。
+
+**(1) フィクスチャの深さ喪失（ハーネス）**: `kick_loop.orbs` は
+`audioPath("../../../test-assets/audio")` という**相対形そのものがアサーション**で、
+`setDocumentDirectory` が「編集中ファイル自身のディレクトリ」を基準に解決することを証明している
+（ファイル内コメントに明記）。#392 でこれを**フラットな tmpRoot へコピー**したため `../../../` が
+tmp の外へ登り、`[SAMPLE_NOT_FOUND]` → 無音キャプチャになっていた。パスを絶対化すると意図した
+アサーションが死ぬため、**tmpRoot 配下にディレクトリ深さを再現**する形で修正した。
+
+**(2) exit ハンドラが identity を確認していない（本番バグ）**: `setupExitHandler` は
+どのプロセスの exit かを問わず `engineProcess = null` 等を実行していた。Node の `'exit'` は
+非同期に届くため、**stop_engine → start_engine を素早く行うと、既に spawn 済みの新 engine の
+ハンドルを古いプロセスの exit が消す**。結果デーモンは鳴ったまま孤児化し、UI は "Stopped"、
+`stop_engine` でも落とせず evaluate も不通になる。デバイス変更やハング後の再起動という
+日常操作で踏む。実際、修正前の失敗実行はオーディオデバイスを掴んだデーモンを毎回1つずつ
+残していた（次の実行の自動起動が失敗する二次被害まで観測）。`engineProcess !== process` の
+時は後片付けを行わないガードを追加。
+
+**(3) capture 要求の握り潰し（本番バグ・silent failure）**: `startEngineForAgent` は engine が
+既に走っていると `ok: true, 'engine already running'` を返し `captureWav` を**黙って捨てて**いた。
+capture は spawn 時の `ORBIT_CAPTURE_WAV` でしか有効化できないため、呼び出し側は録れていると
+信じたまま capture.wav を読む段で ENOENT に遭う（agent には原因不明の失敗に見える）。
+拡張は activate 時に engine を自動起動するので**これは例外ではなく既定の経路**。明示エラーに変更。
+
+**テストの積み上げ**:
+- E2E に自動起動 engine の停止 → capture 付き再起動の手順を追加（(2) を回帰カバー）
+- E2E に「走行中の capture 付き start_engine は失敗する」ステップを追加（(3) を回帰カバー）
+- engine が上がらなかった場合に output channel を例外へ添える診断を追加
+- **ミューテーション検証**: audioPath を存在しないディレクトリに倒すと `peak: 0` で落ち、
+  (3) のガードを外すと `engine already running` で落ちることを実測。両アサーションが
+  load-bearing であることを確認した
+- `test:e2e:gated` スクリプトを追加。vitest にパスを渡すと**フィルタ文字列**として解釈され
+  `.claude/worktrees/` 内の古いコピーまで一致し、実機 OrbitStudio を7個同時起動していた。
+  `--dir tests` でグロブ基点を固定した
+
 ### 6.294 refactor(engine): plugin 宣言のチェーン化 + instrument 仕様の矛盾解消 #517 S4 PR-1a (Jul 27, 2026)
 
 **Date**: 2026-07-27

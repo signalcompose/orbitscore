@@ -14,6 +14,7 @@
     "docs:build": "npm -w @orbitscore/dev-site run docs:build",
     "docs:preview": "npm -w @orbitscore/dev-site run docs:preview",
     "test": "npm -w @orbitscore/engine test",
+    "test:e2e:gated": "ORBIT_GATED_ORBITSTUDIO=1 npx vitest run --dir tests --globals --pool=forks --poolOptions.forks.singleFork=true e2e/orbitstudio-mcp-gated",
     "midi-run": "ts-node --transpile-only packages/engine/src/cli/midi-run.ts",
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",

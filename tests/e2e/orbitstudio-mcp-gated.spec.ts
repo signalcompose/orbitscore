@@ -147,8 +147,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // Scratch copy of the kick-loop fixture (basename preserved so the
       // languageId/path assertions below still hold): save_file writes here,
       // inside the tmpRoot that afterAll removes, instead of the tracked fixture.
-      kickLoopWorkPath = path.join(tmpRoot, 'kick_loop.orbs')
+      //
+      // #528: the copy MUST reproduce the fixture's directory depth. The fixture
+      // deliberately uses `audioPath("../../../test-assets/audio")` to prove that
+      // `setDocumentDirectory` resolves relative paths against the edited file's
+      // own directory — that relative form is the assertion, not an accident.
+      // Copying it to a flat tmpRoot (the #392 behaviour) made `../../../` climb
+      // out to `/var/folders/<x>/test-assets/audio`, so kick.wav was never found
+      // (`[SAMPLE_NOT_FOUND]`) and the capture came back silent — the suite's most
+      // valuable assertion was failing for a harness reason, unnoticed.
+      //
+      // Recreating `tests/fixtures/mcp-e2e/` under tmpRoot keeps the relative
+      // resolution genuinely exercised (now rooted at tmpRoot instead of the repo).
+      const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
+      const workFixtureDir = path.join(tmpRoot, fixtureRelDir)
+      fs.mkdirSync(workFixtureDir, { recursive: true })
+      kickLoopWorkPath = path.join(workFixtureDir, path.basename(KICK_LOOP_FIXTURE))
       fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
+      // The audio the fixture's relative path must land on, mirrored at the same
+      // depth from tmpRoot as it sits from REPO_ROOT.
+      const workAudioDir = path.join(tmpRoot, 'test-assets/audio')
+      fs.mkdirSync(workAudioDir, { recursive: true })
+      fs.copyFileSync(
+        path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+        path.join(workAudioDir, 'kick.wav'),
+      )
       const port = 39400 + Math.floor(Math.random() * 200)
 
       // ── 2. Launch: `orbs` CLI with the extension in dev mode ──
@@ -172,17 +195,59 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
 
       // ── 3. start_engine with capture_wav, wait for it to come up ──
-      const startRes = await client.call('start_engine', { capture_wav: captureWavPath })
-      expect(startRes.isError, startRes.text).toBe(false)
-
+      // 拡張は activate 時に engine を自動起動する。capture は spawn 時の
+      // `ORBIT_CAPTURE_WAV` でしか有効化できない (#528) ので、自動起動した engine を
+      // 一度落としてから capture 付きで起動し直す。自動起動の spawn 完了を待たずに
+      // stop すると取りこぼすため、running を確認してから止める。
       await waitUntil(
         async () => {
           const stateRes = await client!.call('get_engine_state')
-          const state = JSON.parse(stateRes.text) as { running: boolean }
-          return state.running === true
+          return (JSON.parse(stateRes.text) as { running: boolean }).running === true
         },
-        { intervalMs: 500, timeoutMs: 15_000, label: 'engine running' },
+        { intervalMs: 500, timeoutMs: 30_000, label: 'auto-started engine running' },
       )
+      // #528 回帰ピン: capture は spawn 時にしか有効化できないので、既に走っている
+      // engine に対する capture 付き start_engine は **失敗を返さなければならない**。
+      // 旧実装はここで `ok: true, 'engine already running'` を返して captureWav を
+      // 黙って捨てていた — 呼び出し側は録れていると信じ、capture.wav を読む段で
+      // 初めて ENOENT に気づく（agent からは原因の分からない失敗になる）。
+      const captureWhileRunning = await client.call('start_engine', {
+        capture_wav: captureWavPath,
+      })
+      expect(captureWhileRunning.isError, captureWhileRunning.text).toBe(true)
+      expect(captureWhileRunning.text).toContain('stop_engine')
+
+      const preStopRes = await client.call('stop_engine')
+      expect(preStopRes.isError, preStopRes.text).toBe(false)
+      await waitUntil(
+        async () => {
+          const stateRes = await client!.call('get_engine_state')
+          return (JSON.parse(stateRes.text) as { running: boolean }).running === false
+        },
+        { intervalMs: 500, timeoutMs: 15_000, label: 'engine stopped' },
+      )
+
+      const startRes = await client.call('start_engine', { capture_wav: captureWavPath })
+      expect(startRes.isError, startRes.text).toBe(false)
+
+      try {
+        await waitUntil(
+          async () => {
+            const stateRes = await client!.call('get_engine_state')
+            const state = JSON.parse(stateRes.text) as { running: boolean }
+            return state.running === true
+          },
+          { intervalMs: 500, timeoutMs: 15_000, label: 'engine running' },
+        )
+      } catch (err) {
+        // engine が上がらなかった理由は output channel にしか出ない（MCP の
+        // get_engine_state は running の真偽しか返さない）。タイムアウトだけを
+        // 報告すると毎回ここで手動再現する羽目になるので、失敗時にログを添える。
+        const logRes = await client.call('get_log', { lines: 120 })
+        throw new Error(
+          `${(err as Error).message}\n--- OrbitScore output channel ---\n${logRes.text}`,
+        )
+      }
       await sleep(2500) // audio init settle
 
       // ── 4. #384 behavioral check: diagnostics fire on open, no edit needed ──
