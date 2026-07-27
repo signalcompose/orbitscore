@@ -51,6 +51,12 @@ import {
 } from './engine-view'
 import { DeviceSwitchBridge } from './device-switch-bridge'
 import {
+  applyEngineExit,
+  applyEngineStdinError,
+  applyEngineStdoutChunk,
+  decideStartEngineForAgent,
+} from './engine-lifecycle'
+import {
   detectDslCompletionContext,
   extractDeclaredBusNames,
   extractTopLevelDeclaredNames,
@@ -61,7 +67,6 @@ import { loadPluginCatalog, runPluginScan } from './plugin-catalog-reader'
 import {
   colorForSeq,
   findPlayArgRangeForPath,
-  parseStepLine,
   type PlayheadColorConfig,
   type StepEvent,
 } from './playhead'
@@ -1212,61 +1217,41 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
     // **共有状態への書き込みは現役の engine のものだけ**に限る — さもないと古い
     // 行が新 engine のライブ playhead を消し、status bar を巻き戻し、stale な
     // //#selectAudioDevice 応答が新 engine の待ち行列に FIFO マッチしてしまう
-    // （setupExitHandler の identity ガードと同じ理由・#501 review Critical #1）。
+    // #501 review Critical #1 とは故障方向が逆だが、根本原因（module state が
+    // process identity ごとに分割されていない）は同じ。
     const isCurrent = engineProcess === process
 
-    // Live playhead (#390): parse `[STEP]` markers and stop lines from the RAW
-    // lines — the markers are filtered out of the Output channel below.
-    // (Lines split across chunk boundaries are rare and self-heal on the next
-    // step ~one beat later, so no carry buffer.)
-    for (const rawLine of isCurrent ? lines : []) {
-      const step = parseStepLine(rawLine)
-      if (step) {
-        handleStepLine(step)
-        continue
-      }
-      // `⏹ <seqName> (...)` = that seq stopped; `✅ Global stopped` = all off.
-      const stopMatch = rawLine.match(/⏹\s+(\S+)/)
-      if (stopMatch) {
-        clearPlayheadForSequence(stopMatch[1])
-      }
-      if (rawLine.includes('✅ Global stopped')) {
-        clearAllPlayheadDecorations()
-      }
-      // `//#selectAudioDevice` meta-line bridge result (#484 D2.5): a single JSON
-      // line `{"selectAudioDevice":{...}}` emitted by repl-mode.ts. FIFO — matches
-      // the oldest pending request (the stdin write path is a single serialized
-      // queue on the engine side, so requests/responses stay in order).
-      // A line that looks like the bridge's shape (`{"selectAudioDevice...`) but
-      // fails to parse — e.g. a chunk boundary split the JSON across two `data`
-      // events — is logged so a stuck caller isn't silently invisible.
-      const looksLikeSelectAudioDeviceLine = rawLine.trim().startsWith('{"selectAudioDevice')
-      const recognized = selectAudioDeviceBridge.handleLine(rawLine)
-      if (looksLikeSelectAudioDeviceLine && !recognized) {
+    applyEngineStdoutChunk(output, lines, isCurrent, {
+      handleStep: handleStepLine,
+      clearSequence: clearPlayheadForSequence,
+      clearAllPlayheads: clearAllPlayheadDecorations,
+      handleSelectAudioDeviceLine: (rawLine) => selectAudioDeviceBridge.handleLine(rawLine),
+      warnMalformedSelectAudioDeviceLine: (rawLine, stale) => {
         outputChannel?.appendLine(
-          `⚠️ received a malformed //#selectAudioDevice result line (possible chunk-boundary split): ${rawLine}`,
+          `⚠️ received a malformed //#selectAudioDevice result line${
+            stale ? ' from a stale engine' : ''
+          } (possible chunk-boundary split): ${rawLine}`,
         )
-      }
-    }
-
-    // Filter output in non-debug mode (reuses the split above — one pass per chunk).
-    if (!debugMode) {
-      const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
-      if (filteredOutput.trim()) {
-        outputChannel?.append(filteredOutput + '\n')
-      }
-    } else {
-      // Debug mode: show everything
-      outputChannel?.append(output)
-    }
-
-    // Update status based on scheduler state
-    if (!isCurrent) return
-    if (output.includes('✅ Global running') || output.includes('▶ Global')) {
-      statusBarItem!.text = debugMode ? '🎵 OrbitScore: ▶️ Playing 🐛' : '🎵 OrbitScore: ▶️ Playing'
-    } else if (output.includes('✅ Global stopped') || output.includes('⏹ Global')) {
-      statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
-    }
+      },
+      transcribeLog: () => {
+        // Reuses the split above: classification and filtering remain the same
+        // two passes over each chunk as before this lifecycle extraction.
+        if (!debugMode) {
+          const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
+          if (filteredOutput.trim()) outputChannel?.append(filteredOutput + '\n')
+        } else {
+          outputChannel?.append(output)
+        }
+      },
+      setPlayingStatus: () => {
+        statusBarItem!.text = debugMode
+          ? '🎵 OrbitScore: ▶️ Playing 🐛'
+          : '🎵 OrbitScore: ▶️ Playing'
+      },
+      setReadyStatus: () => {
+        statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
+      },
+    })
   })
 }
 
@@ -1288,14 +1273,12 @@ function setupStderrHandler(process: child_process.ChildProcess): void {
  */
 function setupStdinErrorHandler(process: child_process.ChildProcess): void {
   process.stdin?.on('error', (err) => {
-    outputChannel?.appendLine(`⚠️ engine stdin error: ${err.message}`)
-    // #528: identity ガード（setupExitHandler と同じ理由）。stop → start を素早く
-    // 行うと、死んだ engine の stdin が新 engine の spawn 後に EPIPE を出しうる。
-    // その時に drainAll すると、**新 engine 宛て**の //#selectAudioDevice 応答待ちを
-    // 巻き添えで捨てることになる（#501 review Critical #1 が exit 経路について
-    // 懸念していた stale resolver の FIFO マッチと同じ機序）。
-    if (engineProcess !== process) return
-    selectAudioDeviceBridge.drainAll(`engine stdin error: ${err.message}`)
+    // Identity-guarded via applyEngineStdinError — see its docstring in
+    // engine-lifecycle.ts for the #528 stop→start race this protects against.
+    applyEngineStdinError(err.message, engineProcess === process, {
+      logStdinError: (message) => outputChannel?.appendLine(`⚠️ engine stdin error: ${message}`),
+      drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+    })
   })
 }
 
@@ -1304,28 +1287,24 @@ function setupStdinErrorHandler(process: child_process.ChildProcess): void {
  */
 function setupExitHandler(process: child_process.ChildProcess): void {
   process.on('exit', (code) => {
-    outputChannel?.appendLine(`\n🛑 Engine process exited with code ${code}`)
-    // #528: Node の 'exit' は非同期に届く。stop_engine → start_engine を素早く
-    // 行うと、既に新しい engine を spawn し `engineProcess` に入れた *後* で
-    // 古いプロセスの exit が発火する。identity を確かめずに下の後片付けを走らせると
-    // 生きている新 engine のハンドルを null にしてしまい、daemon は鳴ったまま
-    // 孤児化する（UI は "Stopped"・stop_engine でも落とせない・evaluate も不通）。
-    // 自分がまだ現役の engine である時だけ後片付けする。
-    if (engineProcess !== process) return
-    engineProcess = null
-    isLiveCodingMode = false
-    globalInitialized = false
-    clearAllPlayheadDecorations() // #390: nothing is sounding anymore
-    // #501 review Critical #1: drain any //#selectAudioDevice requests still
-    // awaiting a response — otherwise a stale resolver could FIFO-match the
-    // next engine instance's response.
-    selectAudioDeviceBridge.drainAll(
-      'engine process exited before responding to //#selectAudioDevice',
-    )
-
-    statusBarItem!.text = '🎵 OrbitScore: Stopped'
-    statusBarItem!.tooltip = 'Click to start engine'
-    engineViewProvider?.refresh()
+    // Identity-guarded via applyEngineExit — see its docstring in
+    // engine-lifecycle.ts for the #528 stop→start race this protects against.
+    applyEngineExit(code, engineProcess === process, {
+      logExit: (exitCode) =>
+        outputChannel?.appendLine(`\n🛑 Engine process exited with code ${exitCode}`),
+      clearEngineState: () => {
+        engineProcess = null
+        isLiveCodingMode = false
+        globalInitialized = false
+      },
+      clearAllPlayheads: clearAllPlayheadDecorations,
+      drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+      showStoppedStatus: () => {
+        statusBarItem!.text = '🎵 OrbitScore: Stopped'
+        statusBarItem!.tooltip = 'Click to start engine'
+      },
+      refreshEngineView: () => engineViewProvider?.refresh(),
+    })
   })
 }
 
@@ -2516,22 +2495,15 @@ function evaluateForAgent(code: string): EvaluateResult {
 
 /** Start the engine for the MCP `start_engine` tool (mirrors the palette command). */
 function startEngineForAgent(options?: { captureWav?: string; debug?: boolean }): CommandResult {
-  if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
-    // #528: capture は `ORBIT_CAPTURE_WAV` を engine spawn 時に渡すことでしか有効化
-    // できない。既に走っている engine に後から効かせる術はないので、`captureWav` 付きの
-    // 要求をここで `ok: true` にすると **capture が無効なまま成功を返す**ことになる
-    // （呼び出し側は録れていると信じて capture.wav を読み、ENOENT で初めて気づく）。
-    // 拡張は activate 時に engine を自動起動するため、これは例外ケースではなく既定の経路。
-    if (options?.captureWav) {
-      return {
-        ok: false,
-        error:
-          'engine is already running without capture — capture is configured at engine start ' +
-          '(ORBIT_CAPTURE_WAV). Call stop_engine first, then start_engine with capture_wav.',
-      }
-    }
-    return { ok: true, message: 'engine already running' }
-  }
+  const decision = decideStartEngineForAgent(isEngineRunning() && isLiveCodingMode, options)
+  // `isEngineRunning() && isLiveCodingMode` can already be true here without this
+  // call having spawned anything: autoStartConfiguredRustEngine() calls
+  // startEngine() directly on activation when a saved audio device setting is
+  // configured (and, unless it is `__default__`, that device is present in the
+  // enumerated device list) — see the config gate there. Callers may also have
+  // started the engine explicitly via an earlier start_engine call.
+  if (decision.kind === 'reject') return { ok: false, error: decision.error }
+  if (decision.kind === 'already-running') return { ok: true, message: 'engine already running' }
   startEngine(options?.debug === true, options)
   // startEngine() may abort (missing daemon, build issue) without throwing — it
   // reports via a VS Code notification. Reflect the actual spawn outcome so the

@@ -23,9 +23,10 @@
  * Run gated (this launches a real GUI app and plays audible sound — do NOT
  * run unattended/unprompted):
  *
- *   ORBIT_GATED_ORBITSTUDIO=1 npx vitest run --dir ../../tests --globals \
- *     --pool=forks --poolOptions.forks.singleFork=true orbitstudio-mcp-gated
- *   (run from packages/engine, per the project's targeted-vitest convention)
+ *   npm run test:e2e:gated
+ *
+ * Do not pass the spec path as a positional CLI argument: it can glob-match
+ * stale copies under .claude/worktrees/ and launch multiple real GUI apps.
  *
  * SAFETY (repeated at the kill call site too): the teardown/setup kill
  * pattern targets `OrbitStudio.app/Contents/MacOS` — a path fragment unique
@@ -219,6 +220,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       })
       expect(captureWhileRunning.isError, captureWhileRunning.text).toBe(true)
       expect(captureWhileRunning.text).toContain('stop_engine')
+      const stateAfterCaptureReject = await client.call('get_engine_state')
+      expect(
+        (JSON.parse(stateAfterCaptureReject.text) as { running: boolean }).running,
+        stateAfterCaptureReject.text,
+      ).toBe(true)
+
+      const debugWhileRunning = await client.call('start_engine', { debug: true })
+      expect(debugWhileRunning.isError, debugWhileRunning.text).toBe(true)
+      expect(debugWhileRunning.text).toContain('stop_engine')
 
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
@@ -233,10 +243,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // engine が上がらなかった理由は output channel にしか出ない（MCP の
         // get_engine_state は running の真偽しか返さない）。タイムアウトだけを
         // 報告すると毎回ここで手動再現する羽目になるので、失敗時にログを添える。
-        const logRes = await client.call('get_log', { lines: 120 })
-        throw new Error(
-          `${(err as Error).message}\n--- OrbitScore output channel ---\n${logRes.text}`,
-        )
+        let logText = '(unable to retrieve OrbitScore output channel)'
+        try {
+          logText = (await client.call('get_log', { lines: 120 })).text
+        } catch (getLogErr) {
+          // get_log 自身の失敗理由（例: ECONNREFUSED = 拡張ホストごと落ちた）は
+          // 診断上重要なので握り潰さない。元の engine 起動タイムアウトは維持する。
+          logText = `(unable to retrieve OrbitScore output channel: ${
+            getLogErr instanceof Error ? getLogErr.message : String(getLogErr)
+          })`
+        }
+        throw new Error(`${(err as Error).message}\n--- OrbitScore output channel ---\n${logText}`)
       }
       await sleep(2500) // audio init settle
 

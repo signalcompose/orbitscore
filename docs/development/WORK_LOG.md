@@ -72,6 +72,74 @@ exit 経路について懸念していたのと同じ機序）。`stdin` の `'e
   `.claude/worktrees/` 内の古いコピーまで一致し、実機 OrbitStudio を7個同時起動していた。
   `--dir tests` でグロブ基点を固定した
 
+### 6.296 refactor(extension): engine ライフサイクルの判断を vscode 非依存に抽出 #528 レビュー対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+6.295 に対する `/code:pr-review-team` ラウンド1（Critical 2 / Important 5 / Minor 3）への対応。
+
+**Critical 1 — identity ガードにテストが1件も無かった**: しかも E2E は stop 後に
+`waitForEngine(false, ...)` で完全停止を待ってから起動するため、**守るべきレース窓を
+テスト自身が消していた**。
+
+当初「狭いタイミング窓に依存するので決定論的テストは書けない」と申告したが、これは
+問題の切り分けが誤っていた。**ガードは純粋な状態比較であり、テストにタイミングは要らない** —
+古いプロセスのハンドラを登録 → 現役を別プロセスに差し替え → 古い方でイベント発火、で
+決定論的に再現できる。真の障害はハンドラが module-private かつ vscode 密結合だったこと。
+
+そこで `packages/vscode-extension/src/engine-lifecycle.ts`（**`vscode` を import しない**）を
+新設し、既存の `device-switch-bridge.ts` / `playhead.ts` と同じ抽出様式に揃えた:
+
+- `applyEngineStdoutChunk(output, lines, isCurrent, effects)`
+- `applyEngineExit(code, isCurrent, effects)`
+- `applyEngineStdinError(message, isCurrent, effects)`
+- `decideStartEngineForAgent(engineRunning, options)`
+
+可変状態（`engineProcess` 等）への代入は `extension.ts` 側のコールバックに残し、新モジュールは
+状態を持たない。副作用の順序と `drainAll` の理由文字列は逐語で保存した。
+
+**Important 1 — `debug` に同じ silent-discard バグが生きていた**: `captureWav` だけを特別扱い
+したため、走行中の `start_engine({ debug: true })` は `ok: true` を返して verbose ログが付かない
+ままだった。`debug` も spawn 時限定（`--debug` を spawn 時にのみ渡す）。両方を
+「spawn 時限定オプション」として一括で拒否する形に統合。
+
+**Important 2 — 宣言した不変条件を実装が破っていた**: 「ログの転記は無条件」と書きながら、
+malformed な `//#selectAudioDevice` 行の警告はガード内側にあり stale では消えていた。しかも
+消えるのはチャンク境界で JSON が割れる再起動近傍 —— この警告が存在する理由そのものの場面。
+診断であって状態変更ではないので、ガードの外へ出した（stale である旨も文言に含める）。
+
+**Important 4 — コメントが実装を過大に述べていた**: 「拡張は activate 時に engine を自動起動する
+ため既定の経路」と書いたが、`autoStartConfiguredRustEngine` は保存済みデバイスが無ければ
+早期 return する。さらに実読の結果、`saved !== '__default__'` のときだけ接続チェックが働き、
+`__default__` は無条件で通ること、この関数は `startEngine()` を直接呼び `startEngineForAgent` を
+経由しないことも判明した（「このブランチに到達する」という表現自体が不正確だった）。
+
+**変異検証（5種・すべて main 側で独立に再実行）**:
+
+| 変異 | 結果 |
+|---|---|
+| stdout の stale ガード無効化 | stale テスト red |
+| `debug` を spawn-only 判定から除外 | debug テスト red |
+| stale 時に診断を出さないよう変更 | stale テスト red |
+| `applyEngineExit` の identity ガード無効化 | exit stale テスト red |
+| `applyEngineStdinError` の identity ガード無効化 | stdin stale テスト red |
+
+いずれも restore で green に復帰。**委譲先の変異検証報告を鵜呑みにせず、main 側で全件を
+再実行して裏を取った**（受け入れ検証規律）。
+
+**E2E 追加**: 拒否直後に `running === true` を確認（拒否分岐が engine を teardown する変異を殺す）、
+`debug` 拒否の回帰ピン、`get_log` 自身が失敗しても元のタイムアウトと失敗理由の双方を残す診断、
+ヘッダの起動方法を `npm run test:e2e:gated` に更新。
+
+**検証**: `npm test` 1664 passed / 29 skipped（1654 → +10）・`tsc --build` 通過・lint エラー0・
+実機 gated E2E 1 passed・実行後の孤児デーモン 0。
+
+**委譲の経緯**: 実装は Codex に発注したが、追加分の発注時点で Codex スレッドがブロック状態
+（全プロセス CPU 0.0%・ファイル変化なし）だったため、owner 指示のフォールバック
+（Sonnet subagent）に切り替えた。
+
 ### 6.294 refactor(engine): plugin 宣言のチェーン化 + instrument 仕様の矛盾解消 #517 S4 PR-1a (Jul 27, 2026)
 
 **Date**: 2026-07-27
