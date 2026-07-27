@@ -100,7 +100,7 @@ describe('PluginInstrumentManager', () => {
     // workaround text itself — a regression that dropped the guidance but kept
     // the leading phrase must fail this assertion.
     await expect(global.instrument('kick', 'other.clap', 'one')).rejects.toThrow(
-      /v1 does not support replacing it \(restart the engine to change the plugin\)\./,
+      /v1 does not support replacing it \(restart the engine to change the plugin or sound\)\./,
     )
   })
 
@@ -128,6 +128,45 @@ describe('PluginInstrumentManager', () => {
     const second = makeGlobal().global
     await second.instrument('kick', 'shared.clap')
     await expect(second.effect('shared.clap')).resolves.toBe(second)
+  })
+
+  it('resolves a relative state path against the document directory and passes it to the engine (#540 P2)', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await global.instrument('kick', 'synth.vst3', undefined, 'sounds/kick.vstpreset')
+    expect(loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'synth.vst3'),
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:kick',
+      path.resolve('/songs/session', 'sounds/kick.vstpreset'),
+    )
+  })
+
+  it('passes an absolute state path through unchanged (#540 P2)', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await global.instrument('kick', 'synth.vst3', undefined, '/presets/kick.vstpreset')
+    expect(loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'synth.vst3'),
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/presets/kick.vstpreset',
+    )
+  })
+
+  it('treats a different state for the same sequence as a rejected replacement (#540 P2)', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await global.instrument('kick', 'synth.vst3', undefined, 'a.vstpreset')
+    // 同一 state の再宣言は冪等（ロードは 1 回のまま）。
+    await global.instrument('kick', 'synth.vst3', undefined, 'a.vstpreset')
+    expect(loadPlugin).toHaveBeenCalledTimes(1)
+    // state 違い = 音色の差し替え要求 → v1 は拒否（黙って古い音色のまま成功にしない）。
+    await expect(global.instrument('kick', 'synth.vst3', undefined, 'b.vstpreset')).rejects.toThrow(
+      "Sequence 'kick' already has an instrument instance",
+    )
+    expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 
   it('rejects LinkAudio in both declaration orders', async () => {

@@ -71,6 +71,42 @@ describe('Sequence instrument dispatch', () => {
     )
   })
 
+  it('routes a .vstpreset second argument to state, not pluginId (#540 P2 heuristic)', async () => {
+    const { audio, seq } = harness()
+    await seq.instrument('synth.vst3', 'kick.vstpreset')
+    expect(audio.loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'synth.vst3'),
+      undefined, // pluginId ではない
+      'instrument',
+      undefined,
+      'plugin:synth',
+      path.resolve('/songs', 'kick.vstpreset'),
+    )
+  })
+
+  it('keeps a non-state second argument as pluginId and accepts the 3-arg form (#540 P2)', async () => {
+    const first = harness()
+    await first.seq.instrument('synth.vst3', 'my-plugin-id')
+    expect(first.audio.loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'synth.vst3'),
+      'my-plugin-id',
+      'instrument',
+      undefined,
+      'plugin:synth',
+    )
+
+    const second = harness()
+    await second.seq.instrument('synth.vst3', 'my-plugin-id', 'kick.vstpreset')
+    expect(second.audio.loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'synth.vst3'),
+      'my-plugin-id',
+      'instrument',
+      undefined,
+      'plugin:synth',
+      path.resolve('/songs', 'kick.vstpreset'),
+    )
+  })
+
   it('awaits eager declaration, marks note mode, and resolves degrees to plugin notes', async () => {
     const { audio, global, seq } = harness()
     const chained = await seq.instrument('synth.clap')

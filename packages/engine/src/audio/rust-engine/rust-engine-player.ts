@@ -283,6 +283,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       role: 'effect' | 'instrument'
       bus?: string
       instance?: string
+      statePath?: string
     }
   >()
   /**
@@ -721,11 +722,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
     role: 'effect' | 'instrument',
     bus?: string,
     instance?: string,
+    statePath?: string,
   ): Promise<PluginLoadResult> {
     const key = RustEnginePlayer.pluginKey(role, bus, instance)
     try {
-      const result = await this.daemon.loadPlugin(filePath, pluginId, role, bus, instance)
-      this.loadedPlugins.set(key, { filePath, pluginId, role, bus, instance })
+      const result = await this.daemon.loadPlugin(
+        filePath,
+        pluginId,
+        role,
+        bus,
+        instance,
+        statePath,
+      )
+      this.loadedPlugins.set(key, { filePath, pluginId, role, bus, instance, statePath })
       this.pluginActiveByKey.set(key, true)
       return result
     } catch (err) {
@@ -801,9 +810,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (this.loadedPlugins.size === 0) return
     // Reissue every declaration (master effect/instrument + all seq.effect() buses).
     // One entry's failure must not skip the others — each is independent daemon state.
-    for (const [key, { filePath, pluginId, role, bus, instance }] of this.loadedPlugins.entries()) {
+    for (const [
+      key,
+      { filePath, pluginId, role, bus, instance, statePath },
+    ] of this.loadedPlugins.entries()) {
       try {
-        await this.daemon.loadPlugin(filePath, pluginId, role, bus, instance)
+        await this.daemon.loadPlugin(filePath, pluginId, role, bus, instance, statePath)
         this.pluginActiveByKey.set(key, true)
       } catch (err) {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.

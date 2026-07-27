@@ -58,6 +58,11 @@ interface PluginSlotBase {
   readonly normalizedName: string
   readonly resolvedPath: string
   readonly pluginId?: string
+  /**
+   * 保存済み state ファイル（#540 P2・現状 instrument のみが設定する）。ロード identity の
+   * 一部として idempotence 判定に参加する（effect では常に undefined 同士の比較）。
+   */
+  readonly statePath?: string
   readonly load: Promise<void>
 }
 
@@ -89,6 +94,11 @@ export interface PluginDeclaration {
    * `plugin:<seqName>` port と同じ規約で、daemon がこの ID に slot を割り当てる。
    */
   readonly instance?: string
+  /**
+   * 保存済みプラグイン state ファイルの解決済みパス（'instrument' role 専用・#540 P2）。
+   * ロード identity の一部 — 同 path/pluginId でも state が違えば別宣言（v1 は差し替え拒否）。
+   */
+  readonly statePath?: string
 }
 
 export class EffectSlotLimitError extends Error {
@@ -198,7 +208,8 @@ export class EffectChainMap<K> {
       if (
         existing.role === spec.role &&
         existing.resolvedPath === spec.resolvedPath &&
-        existing.pluginId === spec.pluginId
+        existing.pluginId === spec.pluginId &&
+        existing.statePath === spec.statePath
       ) {
         await existing.load
         // Self-heal: respawn 後の復元失敗で engine 側だけ宣言が消えている場合、
@@ -228,16 +239,19 @@ export class EffectChainMap<K> {
     if (!this.audioEngine.loadPlugin) {
       throw new Error('Plugin hosting requires the Rust engine backend.')
     }
-    const { role, bus, normalizedName, resolvedPath, pluginId, instance } = spec
+    const { role, bus, normalizedName, resolvedPath, pluginId, instance, statePath } = spec
     // bus 無し（master insert）は 3 引数のまま呼ぶ（既存の呼び出し契約を変えない —
     // explicit undefined でも実 engine は等価だが、契約をピンするテスト/モックがある）。
-    // instrument の instance 付き（#540 P1）は 5 引数（bus は instrument で常に undefined）。
+    // instrument の instance 付き（#540 P1）は 5 引数（bus は instrument で常に undefined）、
+    // state 付き（#540 P2）は 6 引数。
     const load = (
-      instance !== undefined
-        ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role, undefined, instance)
-        : bus === undefined
-          ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role)
-          : this.audioEngine.loadPlugin(resolvedPath, pluginId, role, bus)
+      statePath !== undefined
+        ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role, undefined, instance, statePath)
+        : instance !== undefined
+          ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role, undefined, instance)
+          : bus === undefined
+            ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role)
+            : this.audioEngine.loadPlugin(resolvedPath, pluginId, role, bus)
     ).then(() => undefined)
     const chain = this.chains.get(key) ?? []
     const occurrence =
@@ -248,7 +262,7 @@ export class EffectChainMap<K> {
     const entry: PluginSlot =
       role === 'effect'
         ? { role, bus, instanceId, normalizedName, resolvedPath, pluginId, load }
-        : { role, instanceId, normalizedName, resolvedPath, pluginId, load }
+        : { role, instanceId, normalizedName, resolvedPath, pluginId, statePath, load }
     const nextChain = replacing
       ? chain.map((slot) => (slot === replacing ? entry : slot))
       : [...chain, entry]

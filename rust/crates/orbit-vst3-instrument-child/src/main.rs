@@ -24,6 +24,9 @@ struct Args {
     plugin: PathBuf,
     plugin_id: Option<String>,
     sample_rate: u32,
+    /// #540 P2: 保存済み state ファイル（`.vstpreset` container または raw component chunk）。
+    /// load 後・READY publish 前に適用する。
+    state: Option<PathBuf>,
 }
 
 #[cfg(target_os = "macos")]
@@ -32,6 +35,7 @@ fn parse_args() -> Result<Args> {
     let mut plugin = None;
     let mut plugin_id = None;
     let mut sample_rate = 48_000;
+    let mut state = None;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -45,6 +49,7 @@ fn parse_args() -> Result<Args> {
                     .parse()
                     .context("--sample-rate の parse")?
             }
+            "--state" => state = Some(PathBuf::from(it.next().context("--state に値が必要")?)),
             other => bail!("未知の引数: {other}"),
         }
     }
@@ -53,6 +58,7 @@ fn parse_args() -> Result<Args> {
         plugin: plugin.context("--plugin は必須")?,
         plugin_id,
         sample_rate,
+        state,
     })
 }
 
@@ -266,6 +272,20 @@ fn main() -> Result<()> {
     let (mut instrument, _) =
         Vst3InstrumentProcessor::load(&args.plugin, args.sample_rate as f64, MAX_FRAMES as i32)
             .with_context(|| format!("load VST3 instrument {:?}", args.plugin))?;
+    // #540 P2: 保存済み state の適用は READY publish より前。失敗はハードエラー — 音色が
+    // 復元できていないのに default 音のまま READY を出すと「保存した音で鳴る」契約が
+    // 黙って破れる（attach 失敗として daemon 側に表面化させる）。
+    if let Some(state_path) = &args.state {
+        let bytes = std::fs::read(state_path)
+            .with_context(|| format!("read state file {state_path:?}"))?;
+        instrument
+            .apply_state(&bytes)
+            .with_context(|| format!("apply state {state_path:?} to {:?}", args.plugin))?;
+        eprintln!(
+            "[orbit-vst3-instrument-child] state restored from {state_path:?} ({} bytes)",
+            bytes.len()
+        );
+    }
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, false);
     }

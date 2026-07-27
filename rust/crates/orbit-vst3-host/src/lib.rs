@@ -76,6 +76,8 @@ pub enum Vst3HostError {
         output_buses: i32,
     },
     MissingEventInputBus,
+    /// #540 P2: 保存済み state（.vstpreset / raw chunk）の解析・適用失敗。
+    State(String),
 }
 
 impl Display for Vst3HostError {
@@ -137,6 +139,7 @@ impl Display for Vst3HostError {
             Self::MissingEventInputBus => {
                 write!(f, "VST3 instrument has no event input bus")
             }
+            Self::State(message) => write!(f, "plugin state restore failed: {message}"),
         }
     }
 }
@@ -779,6 +782,31 @@ pub struct Vst3InstrumentProcessor {
 }
 
 impl Vst3InstrumentProcessor {
+    /// #540 P2: 保存済み state を復元して音色を選択する。`.vstpreset` container（magic
+    /// `VST3`）と raw component state chunk の両方を受ける。`load()` 完了後・process 開始前
+    /// （child では READY publish 前）に呼ぶこと。失敗はハードエラー — 音色が復元できて
+    /// いないのに default 音で鳴らすのは「保存した音で鳴る」という契約違反のため、
+    /// 呼び出し側（child）はロード失敗として表面化させる。
+    pub fn apply_state(&mut self, bytes: &[u8]) -> Result<(), Vst3HostError> {
+        let component = self
+            .component
+            .as_ref()
+            .ok_or_else(|| Vst3HostError::State("component already shut down".into()))?;
+        let owned_raw;
+        let chunks = match parse_vstpreset(bytes)? {
+            Some(chunks) => chunks,
+            None => {
+                // magic 無し = raw component state chunk（自前保存の生 dump 等）。
+                owned_raw = VstPresetChunks {
+                    component: bytes,
+                    controller: None,
+                };
+                owned_raw
+            }
+        };
+        apply_state_chunks(component, self.controller.as_ref(), &chunks)
+    }
+
     pub fn load(
         bundle_path: &Path,
         sample_rate: f64,
@@ -1106,6 +1134,133 @@ fn connect_controller(
         controller_connection,
         component_handler: Some(component_handler),
     })
+}
+
+/// #540 P2: `.vstpreset` container の chunk 参照（`parse_vstpreset` の結果）。
+struct VstPresetChunks<'a> {
+    component: &'a [u8],
+    controller: Option<&'a [u8]>,
+}
+
+/// `.vstpreset` container を解析する（Steinberg "VST 3 Preset File Format"）。
+///
+/// レイアウト: header 48 bytes = magic `VST3`(4) + version i32 LE(4) + class ID ASCII(32) +
+/// chunk-list offset i64 LE(8)。chunk list = magic `List`(4) + count i32 LE(4) +
+/// count × { chunk ID(4) + offset i64 LE(8) + size i64 LE(8) }。`Comp` = component state・
+/// `Cont` = controller state・`Info` はメタデータ（無視）。
+///
+/// 先頭 magic が `VST3` でなければ `Ok(None)`（呼び出し側は raw component state chunk として
+/// 扱う）。magic が合うのに構造が壊れている場合はエラー（silent に raw 扱いすると
+/// container ヘッダごと setState に流れて plugin 側で不可解に失敗する）。
+///
+/// header の class ID は照合しない: TUID ↔ ASCII 表現はプラットフォームで byte order が
+/// 異なり（COM 互換 swap）、誤検知で正当な preset を弾くリスクが照合の利得を上回る。
+/// 不一致の preset は plugin 自身の setState が拒否する。
+fn parse_vstpreset(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, Vst3HostError> {
+    if bytes.len() < 4 || &bytes[0..4] != b"VST3" {
+        return Ok(None);
+    }
+    let malformed = |reason: &str| Vst3HostError::State(format!("malformed .vstpreset: {reason}"));
+    if bytes.len() < 48 {
+        return Err(malformed("header shorter than 48 bytes"));
+    }
+    let read_i64 = |offset: usize| -> Result<i64, Vst3HostError> {
+        let end = offset
+            .checked_add(8)
+            .filter(|&end| end <= bytes.len())
+            .ok_or_else(|| malformed("integer field out of bounds"))?;
+        Ok(i64::from_le_bytes(bytes[offset..end].try_into().unwrap()))
+    };
+    let list_offset = usize::try_from(read_i64(40)?)
+        .map_err(|_| malformed("negative chunk-list offset"))?;
+    let list_end = list_offset
+        .checked_add(8)
+        .filter(|&end| end <= bytes.len())
+        .ok_or_else(|| malformed("chunk-list offset out of bounds"))?;
+    if &bytes[list_offset..list_offset + 4] != b"List" {
+        return Err(malformed("chunk list magic is not 'List'"));
+    }
+    let count = i32::from_le_bytes(bytes[list_offset + 4..list_end].try_into().unwrap());
+    let count = usize::try_from(count).map_err(|_| malformed("negative chunk count"))?;
+    let mut component: Option<&[u8]> = None;
+    let mut controller: Option<&[u8]> = None;
+    for index in 0..count {
+        let entry = list_end + index * 20;
+        let entry_end = entry
+            .checked_add(20)
+            .filter(|&end| end <= bytes.len())
+            .ok_or_else(|| malformed("chunk entry out of bounds"))?;
+        let id = &bytes[entry..entry + 4];
+        let offset = usize::try_from(read_i64(entry + 4)?)
+            .map_err(|_| malformed("negative chunk offset"))?;
+        let size = usize::try_from(read_i64(entry + 12)?)
+            .map_err(|_| malformed("negative chunk size"))?;
+        let end = offset
+            .checked_add(size)
+            .filter(|&end| end <= bytes.len())
+            .ok_or_else(|| malformed("chunk data out of bounds"))?;
+        let _ = entry_end;
+        match id {
+            b"Comp" => component = Some(&bytes[offset..end]),
+            b"Cont" => controller = Some(&bytes[offset..end]),
+            _ => {}
+        }
+    }
+    let component = component.ok_or_else(|| malformed("no 'Comp' (component state) chunk"))?;
+    Ok(Some(VstPresetChunks {
+        component,
+        controller,
+    }))
+}
+
+/// #540 P2: state chunk を component / controller に適用する。復元順序は VST3 公式 FAQ
+/// (Persistence): ① `IComponent::setState` ② `IEditController::setComponentState`
+/// ③ `IEditController::setState`（controller chunk がある場合のみ）。
+///
+/// ① の失敗は音色が復元されていないことを意味するのでハードエラー。②③ は GUI/表示側の
+/// 同期でありベストエフォート（未実装の plugin も多い）— 失敗は stderr に出すのみ。
+fn apply_state_chunks(
+    component: &ComPtr<IComponent>,
+    controller: Option<&ComPtr<IEditController>>,
+    chunks: &VstPresetChunks<'_>,
+) -> Result<(), Vst3HostError> {
+    let stream_wrapper = ComWrapper::new(MemoryStream::with_data(chunks.component.to_vec()));
+    let stream = stream_wrapper
+        .to_com_ptr::<IBStream>()
+        .expect("MemoryStream exposes IBStream");
+    let set_result = unsafe { component.setState(stream.as_ptr()) };
+    if !is_ok(set_result) {
+        return Err(Vst3HostError::State(format!(
+            "IComponent::setState rejected the saved state (tresult {set_result:#x}; \
+             wrong plugin for this preset, or a truncated state file)"
+        )));
+    }
+    if let Some(controller) = controller {
+        unsafe {
+            let mut pos = 0;
+            let _ = stream.seek(0, IBStream_::IStreamSeekMode_::kIBSeekSet as i32, &mut pos);
+            let sync_result = controller.setComponentState(stream.as_ptr());
+            if !is_ok(sync_result) {
+                eprintln!(
+                    "[orbit-vst3-host] setComponentState after state restore returned {sync_result:#x} (best-effort; audio state is already applied)"
+                );
+            }
+        }
+        if let Some(controller_chunk) = chunks.controller {
+            let controller_stream_wrapper =
+                ComWrapper::new(MemoryStream::with_data(controller_chunk.to_vec()));
+            let controller_stream = controller_stream_wrapper
+                .to_com_ptr::<IBStream>()
+                .expect("MemoryStream exposes IBStream");
+            let controller_result = unsafe { controller.setState(controller_stream.as_ptr()) };
+            if !is_ok(controller_result) {
+                eprintln!(
+                    "[orbit-vst3-host] IEditController::setState returned {controller_result:#x} (best-effort; audio state is already applied)"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 fn sync_component_state(component: &ComPtr<IComponent>, controller: &ComPtr<IEditController>) {
@@ -1639,6 +1794,14 @@ impl MemoryStream {
     fn new() -> Self {
         Self {
             data: RefCell::new(Vec::new()),
+            pos: Cell::new(0),
+        }
+    }
+
+    /// #540 P2: 保存済み state chunk を読み出し位置 0 で包む（`setState` 系へ渡す用）。
+    fn with_data(data: Vec<u8>) -> Self {
+        Self {
+            data: RefCell::new(data),
             pos: Cell::new(0),
         }
     }
@@ -2181,5 +2344,101 @@ mod tests {
     fn is_ok_treats_result_false_and_not_implemented_as_failure() {
         assert!(!is_ok(kResultFalse));
         assert!(!is_ok(kNotImplemented));
+    }
+
+    // ── #540 P2: .vstpreset parser ───────────────────────────────────────────────
+
+    /// 合成 .vstpreset を組み立てる（header 48B + データ + chunk list）。
+    fn build_vstpreset(chunks: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"VST3");
+        out.extend_from_slice(&1i32.to_le_bytes());
+        out.extend_from_slice(&[b'A'; 32]); // class ID ASCII（parser は照合しない）
+        let list_offset_field = out.len();
+        out.extend_from_slice(&0i64.to_le_bytes()); // 後で埋める
+        let mut entries = Vec::new();
+        for (id, data) in chunks {
+            let offset = out.len() as i64;
+            out.extend_from_slice(data);
+            entries.push((**id, offset, data.len() as i64));
+        }
+        let list_offset = out.len() as i64;
+        out.extend_from_slice(b"List");
+        out.extend_from_slice(&(entries.len() as i32).to_le_bytes());
+        for (id, offset, size) in entries {
+            out.extend_from_slice(&id);
+            out.extend_from_slice(&offset.to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes());
+        }
+        out[list_offset_field..list_offset_field + 8]
+            .copy_from_slice(&list_offset.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn vstpreset_extracts_comp_and_cont_chunks() {
+        let preset = build_vstpreset(&[(b"Comp", b"component-state"), (b"Cont", b"ctrl")]);
+        let chunks = parse_vstpreset(&preset)
+            .expect("well-formed preset parses")
+            .expect("VST3 magic is recognized");
+        assert_eq!(chunks.component, b"component-state");
+        assert_eq!(chunks.controller, Some(&b"ctrl"[..]));
+    }
+
+    #[test]
+    fn vstpreset_without_cont_chunk_has_no_controller_state() {
+        let preset = build_vstpreset(&[(b"Comp", b"component-only"), (b"Info", b"<xml/>")]);
+        let chunks = parse_vstpreset(&preset)
+            .expect("well-formed preset parses")
+            .expect("VST3 magic is recognized");
+        assert_eq!(chunks.component, b"component-only");
+        assert_eq!(chunks.controller, None);
+    }
+
+    #[test]
+    fn non_vstpreset_bytes_fall_back_to_raw_state() {
+        // magic 無し = raw component state（呼び出し側がそのまま setState へ流す契約）。
+        assert!(parse_vstpreset(b"OPAQ raw plugin state blob")
+            .expect("raw bytes are not an error")
+            .is_none());
+        assert!(parse_vstpreset(b"").expect("empty is raw").is_none());
+    }
+
+    #[test]
+    fn vstpreset_with_magic_but_broken_structure_is_an_error_not_raw() {
+        // magic があるのに壊れている場合は raw 扱いに落とさず明示エラー（container ヘッダを
+        // setState に流し込む silent 誤動作を防ぐ）。
+        let truncated = b"VST3\x01\x00\x00\x00short";
+        assert!(matches!(
+            parse_vstpreset(truncated),
+            Err(Vst3HostError::State(_))
+        ));
+
+        // Comp チャンク欠如。
+        let no_comp = build_vstpreset(&[(b"Info", b"<xml/>")]);
+        assert!(matches!(
+            parse_vstpreset(&no_comp),
+            Err(Vst3HostError::State(_))
+        ));
+
+        // chunk list offset が範囲外。
+        let mut bad_offset = build_vstpreset(&[(b"Comp", b"x")]);
+        let len = bad_offset.len() as i64;
+        bad_offset[40..48].copy_from_slice(&(len + 100).to_le_bytes());
+        assert!(matches!(
+            parse_vstpreset(&bad_offset),
+            Err(Vst3HostError::State(_))
+        ));
+
+        // chunk データが範囲外（size がファイル末尾を超える）。
+        let comp: &[u8] = b"state";
+        let mut bad_size = build_vstpreset(&[(b"Comp", comp)]);
+        let total_len = bad_size.len() as i64;
+        let size_field = bad_size.len() - 8;
+        bad_size[size_field..].copy_from_slice(&total_len.to_le_bytes());
+        assert!(matches!(
+            parse_vstpreset(&bad_size),
+            Err(Vst3HostError::State(_))
+        ));
     }
 }

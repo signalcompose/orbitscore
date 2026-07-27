@@ -163,6 +163,23 @@ fn parse_instance_param(params: &Value) -> Result<Option<String>, &'static str> 
     }
 }
 
+/// `state_path` param（任意・非空文字列・#540 P2）。role='instrument' 専用。
+/// `instance` と同じ validation 方針。
+fn parse_state_path_param(params: &Value) -> Result<Option<String>, &'static str> {
+    match params.get("state_path") {
+        None => Ok(None),
+        Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+        Some(Value::String(_)) => Err("'state_path' must be a non-empty string"),
+        Some(_) => Err("'state_path' must be a string"),
+    }
+}
+
+/// `state_path` は role='instrument' 専用（#540 P2・`instance` と同じ対称性）。
+fn state_param_invalid_for_effect_role(params: &Value) -> bool {
+    params.get("role").and_then(Value::as_str) != Some("instrument")
+        && params.get("state_path").is_some()
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -986,10 +1003,28 @@ async fn handle_command(
                         return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
                     }
                 };
+                // #540 P2: `state_path`（role='instrument' 専用・保存済み state の復元）。
+                #[cfg(feature = "outproc-instrument")]
+                if state_param_invalid_for_effect_role(&params) {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "LoadPlugin state_path is only valid for role='instrument'",
+                        ),
+                    );
+                }
+                #[cfg(feature = "outproc-instrument")]
+                let state_path = match parse_state_path_param(&params) {
+                    Ok(state_path) => state_path.map(std::path::PathBuf::from),
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
                 // instrument-only build の `load_outproc_plugin` は単数互換経路のため
-                // instance を使わない（validation は上で済んでいる）。
+                // instance / state を使わない（validation は上で済んでいる）。
                 #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-                let _ = &instance;
+                let _ = (&instance, &state_path);
                 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
                 let params_role = params
                     .get("role")
@@ -1004,9 +1039,9 @@ async fn handle_command(
                                 Some("effect") => {
                                     engine.load_outproc_effect_plugin(path, plugin_id, bus)
                                 }
-                                Some("instrument") => {
-                                    engine.load_outproc_instrument_plugin(path, plugin_id, instance)
-                                }
+                                Some("instrument") => engine.load_outproc_instrument_plugin(
+                                    path, plugin_id, instance, state_path,
+                                ),
                                 _ => unreachable!("role was validated before spawn_blocking"),
                             }
                         }

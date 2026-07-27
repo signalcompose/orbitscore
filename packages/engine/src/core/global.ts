@@ -289,9 +289,15 @@ export class Global {
   /**
    * Eagerly load a per-sequence hosted instrument plugin (#540 P1). `seqName` keys
    * the instance — each note sequence gets an independent daemon instrument slot.
+   * `statePath` restores a saved plugin state (sound selection — #540 P2).
    */
-  async instrument(seqName: string, path: string, pluginId?: string): Promise<this> {
-    await this.pluginInstrumentManager.instrument(seqName, path, pluginId)
+  async instrument(
+    seqName: string,
+    path: string,
+    pluginId?: string,
+    statePath?: string,
+  ): Promise<this> {
+    await this.pluginInstrumentManager.instrument(seqName, path, pluginId, statePath)
     return this
   }
 

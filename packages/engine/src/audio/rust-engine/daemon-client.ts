@@ -381,6 +381,7 @@ export class DaemonClient extends EventEmitter {
     role: 'effect' | 'instrument',
     bus?: string,
     instance?: string,
+    statePath?: string,
   ): Promise<PluginLoadResult> {
     const result = await this.request('LoadPlugin', {
       path: filePath,
@@ -392,6 +393,9 @@ export class DaemonClient extends EventEmitter {
       // instance は instrument slot pool の宛先（'instrument' role 専用・#540 P1）。
       // 省略時は daemon 側で互換の "default"（slot 0）に解決される。
       ...(instance ? { instance } : {}),
+      // state_path は保存済みプラグイン state（'instrument' role 専用・#540 P2）。
+      // child spawn 時に適用され、respawn でも再適用される。
+      ...(statePath ? { state_path: statePath } : {}),
     })
     return {
       pluginId: String(result.plugin_id),

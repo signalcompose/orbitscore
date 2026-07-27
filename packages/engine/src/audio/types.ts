@@ -73,6 +73,7 @@ export interface AudioEngine {
     role: 'effect' | 'instrument',
     bus?: string,
     instance?: string,
+    statePath?: string,
   ): Promise<PluginLoadResult>
 
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>

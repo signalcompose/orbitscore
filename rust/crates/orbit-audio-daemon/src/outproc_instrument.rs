@@ -376,6 +376,7 @@ pub fn spawn_instrument_child(
     plugin: &Path,
     plugin_id: Option<&str>,
     sample_rate: u32,
+    state: Option<&Path>,
 ) -> io::Result<Child> {
     let mut command = Command::new(child_exe);
     command
@@ -388,6 +389,10 @@ pub fn spawn_instrument_child(
         .stderr(Stdio::inherit());
     if let Some(id) = plugin_id {
         command.arg("--plugin-id").arg(id);
+    }
+    // #540 P2: 保存済み state。respawn 経路もここを通るため、respawn 後も音色が復元される。
+    if let Some(state) = state {
+        command.arg("--state").arg(state);
     }
     command.spawn()
 }
@@ -433,6 +438,7 @@ impl InstrumentChildSupervisor {
         plugin: PathBuf,
         plugin_id: Option<String>,
         sample_rate: u32,
+        state: Option<PathBuf>,
     ) -> io::Result<Self> {
         let ctl_mmap = match open_shared(&shm_path) {
             Ok(mmap) => mmap,
@@ -536,6 +542,7 @@ impl InstrumentChildSupervisor {
                                 &plugin,
                                 plugin_id.as_deref(),
                                 sample_rate,
+                                state.as_deref(),
                             ) {
                                 Ok(replacement) => {
                                     stats
@@ -1034,6 +1041,7 @@ mod tests {
             PathBuf::from("/nonexistent.clap"),
             None,
             48_000,
+            None,
         )
         .expect("supervisor spawn");
 
@@ -1066,6 +1074,7 @@ mod tests {
             PathBuf::from("/nonexistent.clap"),
             None,
             48_000,
+            None,
         );
         assert!(r.is_err(), "open_shared 失敗で Err を返す");
         // first_child が reap された（orphan でない）= kill -0 が失敗（ESRCH）する。
@@ -1110,6 +1119,7 @@ mod tests {
             PathBuf::from("/ignored.clap"),
             None,
             48_000,
+            None,
         )
         .expect("supervisor spawn");
 
@@ -1158,6 +1168,7 @@ mod tests {
             PathBuf::from("/ignored.clap"),
             None,
             48_000,
+            None,
         )
         .expect("supervisor spawn");
 

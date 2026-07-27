@@ -37,6 +37,12 @@ fn parse_args() -> Result<Args> {
                     .parse()
                     .context("--sample-rate の parse")?;
             }
+            // #540 P2: state 復元は VST3 instrument child のみ対応。CLAP は未対応であることを
+            // 「未知の引数」より明確なメッセージで返す（daemon の attach エラーとして表面化）。
+            "--state" => bail!(
+                "state restore (--state) is not supported for CLAP instruments yet (#540 P2); \
+                 use a VST3 build of the plugin"
+            ),
             other => bail!("未知の引数: {other}"),
         }
     }

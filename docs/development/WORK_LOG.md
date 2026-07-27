@@ -17,10 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.305 feat(engine): plugin state restore = sound selection #540 P2 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: 🔄 実装中（P2 コア完了・実機 E2E 前）
+
+**内容**: `seq.instrument(path[, pluginId][, statePath])` で保存済みプラグイン state
+（`.vstpreset` / raw chunk）を復元し**音色を選択**できるようにする。UI なしで音色問題を解く
+（音作りは外部 DAW / 将来の #474 UI、選択は OrbitScore 内で完結）。
+
+**設計: spawn 時 CLI 引数（IPC 拡張ゼロ）**:
+- child `--state <file>` → load 後・READY publish 前に適用。失敗はハードエラー
+  （default 音のまま黙って鳴らさない）。**respawn でも同引数で再適用**される
+- `.vstpreset` parser を orbit-vst3-host に新設（header 48B + List chunk table・
+  Comp/Cont 抽出・magic 無しは raw chunk 扱い・magic ありで壊れていれば明示エラー）。
+  復元順序は VST3 公式 FAQ: component setState → controller setComponentState →
+  controller setState。class ID は照合しない（byte-order 誤検知 > 利得・plugin 自身が拒否する）
+- wire: LoadPlugin `state_path`（instrument 専用・effect に付けば MALFORMED）。
+  **state はロード identity の一部**（同 plugin 別 state の再宣言 = 差し替え要求 → v1 拒否）
+- DSL: 第2引数の拡張子ヒューリスティック（`.vstpreset`/`.state` = state・他 = pluginId）+
+  3引数明示形。相対パスは document directory 基準（検索パス不使用）
+- CLAP は明示エラー（Kontakt = VST3 が本命・後続で clack state ext）
+
+**spec**: PH.1 に state 引数を追記。PH.4 の「後勝ち差し替え」規範に v1 staging 注記を追加
+（現実装は明示拒否・履行先 #522 SC.5）。
+
+**検証**:
+- Rust: orbit-vst3-host 6 passed（parser 4種 + 既存2）・daemon lib 120 passed
+- **変異検証**: (C) Comp チャンク不採取 → 2件 red / (D) chunk 境界チェック除去 → 1件 red。復元後全緑
+- TS フルスイート **1728 passed / 29 skipped**（+5: state 解決・identity・ヒューリスティック）
+
+**Commit**: [PENDING]
+
 ### 6.304 feat(engine): per-sequence instrument instances #540 P1 (Jul 28, 2026)
 
 **Date**: 2026-07-28
-**Status**: 🔄 実装中（P1 完了・P2 state ロード続行中）
+**Status**: ✅ P1 コミット済み（`1dae696`）
 
 **背景**: 2026-07-29 の作品制作（owner）に「シーケンスごとに別 instrument」と「音色の変更」が
 必須。instrument はアプリ全体で1台（daemon `Mutex<Option<...>>` / TS 単数ガード）だった。

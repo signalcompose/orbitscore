@@ -103,6 +103,7 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       'effect',
       undefined,
       undefined,
+      undefined,
     )
     // C1: a successful reload must flip pluginActive back to true, so
     // PluginEffectManager's self-heal check doesn't mistake this recovery
@@ -138,6 +139,7 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       'instrument',
       undefined,
       undefined,
+      undefined,
     )
     expect(player.isPluginActive()).toBe(true)
   })
@@ -159,12 +161,14 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       'effect',
       undefined,
       undefined,
+      undefined,
     )
     expect(daemon.loadPlugin).toHaveBeenCalledWith(
       '/plugins/reverb.clap',
       undefined,
       'effect',
       'seq-bus-0',
+      undefined,
       undefined,
     )
   })
@@ -190,6 +194,7 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       undefined,
       'effect',
       'seq-bus-0',
+      undefined,
       undefined,
     )
     expect(player.isPluginActive()).toBe(false)

@@ -77,7 +77,7 @@ fn both_roles_attach_in_instrument_then_effect_order() {
         .expect("start both-role OOP daemon");
 
     engine
-        .load_outproc_instrument_plugin(synth_path, synth_id, None)
+        .load_outproc_instrument_plugin(synth_path, synth_id, None, None)
         .expect("attach test-synth to instrument slot");
     engine
         .load_outproc_effect_plugin(effect_path, None, None)

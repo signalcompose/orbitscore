@@ -965,16 +965,20 @@ pub(crate) trait OutProcRole: Sized {
     type Supervisor: Send;
     const ROLE_NAME: &'static str;
 
+    /// `state` は保存済みプラグイン state ファイル（#540 P2・instrument 専用）。
+    /// effect role は受け取らない契約（session 層で validation 済み）なので無視してよい。
     fn spawn_child(
         launch: &ChildLaunch<Self>,
         path: &std::path::Path,
         plugin_id: Option<&str>,
+        state: Option<&std::path::Path>,
     ) -> std::io::Result<std::process::Child>;
     fn spawn_supervisor(
         child: std::process::Child,
         launch: &ChildLaunch<Self>,
         path: PathBuf,
         plugin_id: Option<String>,
+        state: Option<PathBuf>,
     ) -> std::io::Result<Self::Supervisor>;
     fn detach_keep_shm(supervisor: Self::Supervisor);
     fn role_matches(child_flags: u32) -> bool;
@@ -1022,7 +1026,10 @@ impl OutProcRole for EffectRole {
         launch: &ChildLaunch<Self>,
         path: &std::path::Path,
         plugin_id: Option<&str>,
+        state: Option<&std::path::Path>,
     ) -> std::io::Result<std::process::Child> {
+        // effect は state 未対応（session 層が role='effect' + state_path を MALFORMED で弾く）。
+        let _ = state;
         crate::outproc_effect::spawn_effect_child(
             &launch.child_exe,
             &launch.shm_path,
@@ -1036,7 +1043,9 @@ impl OutProcRole for EffectRole {
         launch: &ChildLaunch<Self>,
         path: PathBuf,
         plugin_id: Option<String>,
+        state: Option<PathBuf>,
     ) -> std::io::Result<Self::Supervisor> {
+        let _ = state;
         crate::outproc_effect::EffectChildSupervisor::spawn(
             child,
             launch.shm_path.clone(),
@@ -1093,6 +1102,7 @@ impl OutProcRole for InstrumentRole {
         launch: &ChildLaunch<Self>,
         path: &std::path::Path,
         plugin_id: Option<&str>,
+        state: Option<&std::path::Path>,
     ) -> std::io::Result<std::process::Child> {
         crate::outproc_instrument::spawn_instrument_child(
             &launch.child_exe,
@@ -1100,6 +1110,7 @@ impl OutProcRole for InstrumentRole {
             path,
             plugin_id,
             launch.sample_rate,
+            state,
         )
     }
     fn spawn_supervisor(
@@ -1107,6 +1118,7 @@ impl OutProcRole for InstrumentRole {
         launch: &ChildLaunch<Self>,
         path: PathBuf,
         plugin_id: Option<String>,
+        state: Option<PathBuf>,
     ) -> std::io::Result<Self::Supervisor> {
         crate::outproc_instrument::InstrumentChildSupervisor::spawn(
             child,
@@ -1116,6 +1128,7 @@ impl OutProcRole for InstrumentRole {
             path,
             plugin_id,
             launch.sample_rate,
+            state,
         )
     }
     fn detach_keep_shm(supervisor: Self::Supervisor) {
@@ -1173,6 +1186,9 @@ pub(crate) enum ChildSlot<R: OutProcRole = DefaultOutProcRole> {
     Active {
         path: PathBuf,
         plugin_id: Option<String>,
+        /// 保存済み state ファイル（#540 P2）。ロード identity の一部 — 同 path/plugin_id でも
+        /// state が異なる再宣言は v1 では差し替え扱いで拒否する。
+        state: Option<PathBuf>,
         engaged: Arc<AtomicBool>,
         _supervisor: R::Supervisor,
     },
@@ -2440,9 +2456,9 @@ impl EngineWrap {
                 })?
         };
         #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-        return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id);
+        return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id, None);
         #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-        return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id);
+        return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id, None);
     }
 
     /// both build で effect slot へ attach する。
@@ -2492,7 +2508,7 @@ impl EngineWrap {
                 bus_active,
             )
         };
-        let result = self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id);
+        let result = self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id, None);
         if result.is_err() {
             // ロールバック: 失敗した宣言の bus を render 対象から外す（TS 側も宣言を破棄して
             // bus 名を free-list に返すため、Rust/TS の状態が対称に戻る）。
@@ -2633,6 +2649,7 @@ impl EngineWrap {
         path: PathBuf,
         plugin_id: Option<String>,
         instance: Option<String>,
+        state: Option<PathBuf>,
     ) -> Result<LoadedPluginSummary, WrapError> {
         // #540 P1: instance → slot index の解決。初出の instance には次の空き slot
         // （= 割当済み数）を充てる。instance 欠如は互換のため slot 0 相当の "default" に写す。
@@ -2669,7 +2686,7 @@ impl EngineWrap {
                     WrapError::OutProcInstrument("outproc instrument stream is closed".into())
                 })?
         };
-        self.load_outproc_plugin_impl::<InstrumentRole>(slot, path, plugin_id)
+        self.load_outproc_plugin_impl::<InstrumentRole>(slot, path, plugin_id, state)
     }
 
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -2678,6 +2695,7 @@ impl EngineWrap {
         child_slot: Arc<Mutex<ChildSlot<R>>>,
         path: PathBuf,
         plugin_id: Option<String>,
+        state: Option<PathBuf>,
     ) -> Result<LoadedPluginSummary, WrapError> {
         let _role_name = R::ROLE_NAME;
         let mut slot = lock_child_slot_recovering(&child_slot, "initial state check");
@@ -2686,12 +2704,28 @@ impl EngineWrap {
             ChildSlot::Active {
                 path: active_path,
                 plugin_id: active_plugin_id,
+                state: active_state,
                 engaged,
                 ..
-            } if active_path == &path && active_plugin_id == &plugin_id => {
+            } if active_path == &path && active_plugin_id == &plugin_id
+                && active_state == &state =>
+            {
                 // READY を確認済みの Active だけがここへ来る。冪等再送でも gate を維持する。
                 engaged.store(true, Ordering::Release);
                 return Ok(outproc_plugin_summary(active_path, active_plugin_id));
+            }
+            ChildSlot::Active {
+                path: active_path,
+                plugin_id: active_plugin_id,
+                state: active_state,
+                ..
+            } if active_path == &path && active_plugin_id == &plugin_id => {
+                // 同一 path/plugin_id だが state が異なる = 音色の差し替え要求（#540 P2）。
+                // v1 は他の差し替えと同様に拒否する（黙って古い音色のまま Ok を返さない）。
+                return Err(R::runtime_error(format!(
+                    "outproc plugin already loaded from {active_path:?} with state {active_state:?}; \
+                     v1 does not support replacement with state {state:?} (restart the engine to change the sound)"
+                )));
             }
             ChildSlot::Active {
                 path: active_path,
@@ -2763,7 +2797,8 @@ impl EngineWrap {
         // spawn 前にセットしておくことで、即座に終了する child が通常の respawn 経路に紛れ込むのを防ぐ。
         R::set_initial_attach_pending(&launch.stats, true);
         R::set_child_early_exit(&launch.stats, false);
-        let first_child = match R::spawn_child(&launch, &path, plugin_id.as_deref()) {
+        let first_child = match R::spawn_child(&launch, &path, plugin_id.as_deref(), state.as_deref())
+        {
             Ok(child) => child,
             Err(error) => {
                 let child_exe = launch.child_exe.clone();
@@ -2778,20 +2813,24 @@ impl EngineWrap {
         };
         R::set_current_child_pid(&launch.stats, first_child.id());
 
-        let supervisor =
-            match R::spawn_supervisor(first_child, &launch, path.clone(), plugin_id.clone()) {
-                Ok(supervisor) => supervisor,
-                Err(error) => {
-                    // spawn_outproc_supervisor はエラー時に自身の cleanup で shm を unlink して返るため、
-                    // この slot は再利用不能。launch の fallback unlink は解除。
-                    launch.cleanup_shm_on_drop = false;
-                    let mut slot =
-                        lock_child_slot_recovering(&child_slot, "supervisor spawn failure");
-                    debug_assert_slot_loading(&slot);
-                    *slot = ChildSlot::Closed;
-                    return Err(R::runtime_error(format!("spawn outproc watchdog: {error}")));
-                }
-            };
+        let supervisor = match R::spawn_supervisor(
+            first_child,
+            &launch,
+            path.clone(),
+            plugin_id.clone(),
+            state.clone(),
+        ) {
+            Ok(supervisor) => supervisor,
+            Err(error) => {
+                // spawn_outproc_supervisor はエラー時に自身の cleanup で shm を unlink して返るため、
+                // この slot は再利用不能。launch の fallback unlink は解除。
+                launch.cleanup_shm_on_drop = false;
+                let mut slot = lock_child_slot_recovering(&child_slot, "supervisor spawn failure");
+                debug_assert_slot_loading(&slot);
+                *slot = ChildSlot::Closed;
+                return Err(R::runtime_error(format!("spawn outproc watchdog: {error}")));
+            }
+        };
 
         let deadline = std::time::Instant::now() + CHILD_READY_TIMEOUT;
         loop {
@@ -2846,6 +2885,7 @@ impl EngineWrap {
         *slot = ChildSlot::Active {
             path,
             plugin_id,
+            state,
             engaged: launch.engaged.clone(),
             _supervisor: supervisor,
         };
@@ -4781,7 +4821,7 @@ mod outproc_load_error_test_support {
         let (wrap, child_slot) = inject(ChildSlot::Empty(launch), stats);
 
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None, None)
             .err()
             .expect("missing shared memory must fail before spawn");
 
@@ -4823,6 +4863,7 @@ mod outproc_load_error_test_support {
             child_slot.clone(),
             PathBuf::from(plugin_path),
             None,
+            None,
         ) {
             Ok(_) => panic!("missing shm must take the Closed terminal transition after recovery"),
             Err(error) => error,
@@ -4854,7 +4895,7 @@ mod outproc_load_error_test_support {
 
         for attempt in 1..=2 {
             let error = wrap
-                .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None)
+                .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None, None)
                 .err()
                 .expect("nonexistent child executable must fail to spawn");
             assert_error(error, "spawn outproc child");
@@ -4876,7 +4917,7 @@ mod outproc_load_error_test_support {
         let (wrap, child_slot) = inject(ChildSlot::Closed, R::new_stats());
 
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None, None)
             .err()
             .expect("Closed slot must reject attach");
 
@@ -4901,7 +4942,7 @@ mod outproc_load_error_test_support {
         );
 
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(second_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(second_path), None, None)
             .err()
             .expect("Loading slot must reject concurrent attach");
 
@@ -4937,13 +4978,14 @@ mod outproc_load_error_test_support {
             .expect("spawn stub child for Active fixture");
 
         let path = PathBuf::from(plugin_path);
-        let supervisor = R::spawn_supervisor(first_child, &launch, path.clone(), plugin_id.clone())
+        let supervisor = R::spawn_supervisor(first_child, &launch, path.clone(), plugin_id.clone(), None)
             .expect("spawn supervisor for Active fixture");
         launch.cleanup_shm_on_drop = false;
 
         ChildSlot::Active {
             path,
             plugin_id,
+            state: None,
             engaged: Arc::new(AtomicBool::new(true)),
             _supervisor: supervisor,
         }
@@ -4964,6 +5006,7 @@ mod outproc_load_error_test_support {
             child_slot.clone(),
             PathBuf::from(plugin_path),
             plugin_id,
+            None,
         )
         .expect("idempotent re-load of the same path+plugin_id while Active must succeed");
         assert!(
@@ -4994,6 +5037,7 @@ mod outproc_load_error_test_support {
                 child_slot.clone(),
                 PathBuf::from(plugin_path),
                 changed_plugin_id,
+                None,
             )
             .err()
             .expect("same path with a different plugin_id while Active must be rejected");
@@ -5020,7 +5064,7 @@ mod outproc_load_error_test_support {
         let (wrap, child_slot) = inject(slot, R::new_stats());
 
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(other_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(other_path), None, None)
             .err()
             .expect("a different path while Active must be rejected");
         assert_error(error, "does not support replacement");
@@ -5084,6 +5128,7 @@ mod outproc_load_error_test_support {
             slot.clone(),
             PathBuf::from(plugin_path),
             None,
+            None,
         ) {
             Ok(_) => panic!("immediately exiting child must fail attach"),
             Err(error) => error,
@@ -5131,7 +5176,7 @@ mod outproc_load_error_test_support {
             let slot_call = slot.clone();
             let path = PathBuf::from(plugin_path);
             let call = std::thread::spawn(move || {
-                wrap_call.load_outproc_plugin_impl::<R>(slot_call, path, None)
+                wrap_call.load_outproc_plugin_impl::<R>(slot_call, path, None, None)
             });
             let deadline = std::time::Instant::now() + SETUP_DEADLINE;
             // PID は reset_child_starting の後に publish されるため、この READY はそれによって消されない。
@@ -5193,7 +5238,7 @@ mod outproc_load_error_test_support {
         let slot_a = child_slot.clone();
         let loading_path_owned = PathBuf::from(loading_path);
         let first_call = std::thread::spawn(move || {
-            wrap_a.load_outproc_plugin_impl::<R>(slot_a, loading_path_owned, None)
+            wrap_a.load_outproc_plugin_impl::<R>(slot_a, loading_path_owned, None, None)
         });
 
         // 1本目が Empty -> Loading へ遷移して lock を解放するまで待つ。この deadline は
@@ -5219,7 +5264,7 @@ mod outproc_load_error_test_support {
         // 発行し、mutex 待ちでなく即座に "already in progress" で失敗することを検証する。
         let start = std::time::Instant::now();
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(second_path), None)
+            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(second_path), None, None)
             .err()
             .expect("concurrent call against a Loading slot must fail");
         let elapsed = start.elapsed();
@@ -6110,6 +6155,7 @@ mod outproc_instrument_note_tests {
                 std::path::PathBuf::from("unused.clap"),
                 None,
                 Some("plugin:kick".into()),
+                None,
             )
             .expect_err("weak slot cannot upgrade");
         assert!(
@@ -6123,6 +6169,7 @@ mod outproc_instrument_note_tests {
                 std::path::PathBuf::from("unused.clap"),
                 None,
                 Some("plugin:extra".into()),
+                None,
             )
             .expect_err("pool of 2 is exhausted by a 3rd instance");
         assert!(
