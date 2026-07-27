@@ -145,42 +145,26 @@ fn bus_param_invalid_for_instrument_role(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) == Some("instrument") && params.get("bus").is_some()
 }
 
-/// `instance` は role='instrument' 専用（#540 P1・`bus` が role='effect' 専用なのと対称）。
-/// effect 宣言に instance が紛れ込んだ場合に黙って無視せず MALFORMED で弾くための判定。
-#[cfg(feature = "outproc-instrument")]
-fn instance_param_invalid_for_effect_role(params: &Value) -> bool {
-    params.get("role").and_then(Value::as_str) != Some("instrument")
-        && params.get("instance").is_some()
-}
-
-/// `instance` param（任意・非空文字列）。欠如は `Ok(None)`（互換: 単数時代の "default" 扱い）。
-/// 空文字列・非文字列は `Err`（`parse_bus_param` と同じ「黙って壊さない」方針）。
-fn parse_instance_param(params: &Value) -> Result<Option<String>, &'static str> {
-    match params.get("instance") {
+/// 任意・非空文字列 param の共通パーサ（`instance` #540 P1 / `state_path` #540 P2）。
+/// 欠如は `Ok(None)`（互換: 単数時代の "default" 扱い）。空文字列・非文字列は `Err`
+/// （`parse_bus_param` と同じ「黙って壊さない」方針）。
+fn parse_optional_nonempty_string_param(
+    params: &Value,
+    field: &'static str,
+) -> Result<Option<String>, String> {
+    match params.get(field) {
         None => Ok(None),
         Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
-        Some(Value::String(_)) => Err("'instance' must be a non-empty string"),
-        Some(_) => Err("'instance' must be a string"),
+        Some(Value::String(_)) => Err(format!("'{field}' must be a non-empty string")),
+        Some(_) => Err(format!("'{field}' must be a string")),
     }
 }
 
-/// `state_path` param（任意・非空文字列・#540 P2）。role='instrument' 専用。
-/// `instance` と同じ validation 方針。
+/// role='instrument' 専用 param（`instance` / `state_path`）が他 role の宣言に紛れ込んだかの
+/// 判定（`bus` が role='effect' 専用なのと対称）。黙って無視せず MALFORMED で弾くために使う。
 #[cfg(feature = "outproc-instrument")]
-fn parse_state_path_param(params: &Value) -> Result<Option<String>, &'static str> {
-    match params.get("state_path") {
-        None => Ok(None),
-        Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
-        Some(Value::String(_)) => Err("'state_path' must be a non-empty string"),
-        Some(_) => Err("'state_path' must be a string"),
-    }
-}
-
-/// `state_path` は role='instrument' 専用（#540 P2・`instance` と同じ対称性）。
-#[cfg(feature = "outproc-instrument")]
-fn state_param_invalid_for_effect_role(params: &Value) -> bool {
-    params.get("role").and_then(Value::as_str) != Some("instrument")
-        && params.get("state_path").is_some()
+fn instrument_only_param_misused(params: &Value, field: &str) -> bool {
+    params.get("role").and_then(Value::as_str) != Some("instrument") && params.get(field).is_some()
 }
 
 pub async fn run(
@@ -990,7 +974,7 @@ async fn handle_command(
                 }
                 // #540 P1: `instance`（role='instrument' 専用・`bus` と対称）。
                 #[cfg(feature = "outproc-instrument")]
-                if instance_param_invalid_for_effect_role(&params) {
+                if instrument_only_param_misused(&params, "instance") {
                     return err(
                         &id,
                         ProtocolError::new(
@@ -1000,7 +984,7 @@ async fn handle_command(
                     );
                 }
                 #[cfg(feature = "outproc-instrument")]
-                let instance = match parse_instance_param(&params) {
+                let instance = match parse_optional_nonempty_string_param(&params, "instance") {
                     Ok(instance) => instance,
                     Err(message) => {
                         return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
@@ -1008,7 +992,7 @@ async fn handle_command(
                 };
                 // #540 P2: `state_path`（role='instrument' 専用・保存済み state の復元）。
                 #[cfg(feature = "outproc-instrument")]
-                if state_param_invalid_for_effect_role(&params) {
+                if instrument_only_param_misused(&params, "state_path") {
                     return err(
                         &id,
                         ProtocolError::new(
@@ -1018,7 +1002,7 @@ async fn handle_command(
                     );
                 }
                 #[cfg(feature = "outproc-instrument")]
-                let state_path = match parse_state_path_param(&params) {
+                let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
                     Ok(state_path) => state_path.map(std::path::PathBuf::from),
                     Err(message) => {
                         return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
@@ -1397,7 +1381,7 @@ async fn handle_plugin_note(
                 // 未定義になるため）。
                 let velocity = param_f64(params, "velocity", default_velocity).clamp(0.0, 1.0);
                 // #540 P1: instance で slot pool の宛先を選ぶ（欠如は互換の "default"）。
-                let instance = match parse_instance_param(params) {
+                let instance = match parse_optional_nonempty_string_param(params, "instance") {
                     Ok(instance) => instance,
                     Err(message) => {
                         return err(id, ProtocolError::new("MALFORMED_REQUEST", message))

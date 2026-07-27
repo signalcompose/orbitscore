@@ -18,6 +18,7 @@ import { MidiScheduler } from '../midi/midi-scheduler'
 import { TimedEvent, TimedEventScope } from '../timing/calculation/types'
 
 import { Global } from './global'
+import { isStateFileSpec } from './global/plugin-resolver'
 import { Scheduler } from './global/types'
 import { preparePlayback } from './sequence/playback/prepare-playback'
 import { runSequence } from './sequence/playback/run-sequence'
@@ -566,13 +567,12 @@ export class Sequence {
         `Sequence '${name}': instrument() cannot be combined with audio()/chop()/midi().`,
       )
     }
-    const isStateFile = (value: string) => /\.(vstpreset|state)$/i.test(value)
     let pluginId: string | undefined
     let statePath: string | undefined
     if (maybeState !== undefined) {
       pluginId = pluginIdOrState
       statePath = maybeState
-    } else if (pluginIdOrState !== undefined && isStateFile(pluginIdOrState)) {
+    } else if (pluginIdOrState !== undefined && isStateFileSpec(pluginIdOrState)) {
       statePath = pluginIdOrState
     } else {
       pluginId = pluginIdOrState

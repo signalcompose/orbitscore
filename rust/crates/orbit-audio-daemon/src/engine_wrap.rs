@@ -893,6 +893,11 @@ struct OutProcInstrumentControl {
     instance_index: HashMap<String, usize>,
 }
 
+/// instance 引数の無い互換経路（旧単数 API・wire の `instance` 欠如）が写る instance 名
+/// （= slot 0）。「instance-less は slot 0」の不変条件をこの1定数で表現する（#540 P1）。
+#[cfg(feature = "outproc-instrument")]
+pub(crate) const DEFAULT_INSTRUMENT_INSTANCE: &str = "default";
+
 /// stream 起動前に確保した instrument slot の中間部品（起動後に `ChildLaunch` へ組み上げる。
 /// sample_rate が stream 起動後にしか確定しないため 2 段階になる）。
 #[cfg(feature = "outproc-instrument")]
@@ -918,6 +923,110 @@ struct InstrumentSlotEntry {
     child_slot: Weak<Mutex<ChildSlot<InstrumentRole>>>,
     #[cfg(not(all(feature = "outproc-effect", feature = "outproc-instrument")))]
     child_slot: Weak<Mutex<ChildSlot>>,
+}
+
+/// #540 P1: N slot 分の shm / note ring / post processor を確保する（stream 起動前・
+/// both / instrument-only 両起動経路で共有 — effect 側の `install_effect_bus_slots` と同じ
+/// 「抽出 helper を両 spawn 経路が呼ぶ」型）。
+#[cfg(feature = "outproc-instrument")]
+fn build_pending_instrument_slots(
+    slot_count: usize,
+) -> Result<
+    (
+        Vec<PendingInstrumentSlot>,
+        Vec<crate::outproc_instrument::OutProcInstrumentPostProcessor>,
+    ),
+    WrapError,
+> {
+    use crate::outproc_instrument::{
+        OutProcInstrumentPostProcessor, OutProcInstrumentStats, NOTE_RING_CAPACITY,
+    };
+    let mut pending = Vec::with_capacity(slot_count);
+    let mut posts = Vec::with_capacity(slot_count);
+    for _ in 0..slot_count {
+        let shm_path = crate::outproc_instrument::unique_shm_path();
+        let host_mmap = orbit_audio_sandbox::create_shared(&shm_path).map_err(|error| {
+            WrapError::OutProcInstrument(format!("create shm {shm_path:?}: {error}"))
+        })?;
+        let cleanup = ShmCleanupGuard::new(shm_path.clone());
+        let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(host_mmap);
+        let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+        let engaged = Arc::new(AtomicBool::new(false));
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let stats = OutProcInstrumentStats::new();
+        posts.push(OutProcInstrumentPostProcessor::new(
+            host,
+            event_rx,
+            NOTE_RING_CAPACITY,
+            engaged.clone(),
+            stop.clone(),
+            done.clone(),
+            stats.clone(),
+        ));
+        pending.push(PendingInstrumentSlot {
+            shm_path,
+            cleanup,
+            event_tx,
+            stats,
+            engaged,
+            stop,
+            done,
+        });
+    }
+    Ok((pending, posts))
+}
+
+/// `install_instrument_slots` の戻り値（entry / child guard / teardown guard の3列）。
+#[cfg(feature = "outproc-instrument")]
+type InstalledInstrumentSlots = (
+    Vec<InstrumentSlotEntry>,
+    Vec<Arc<Mutex<ChildSlot<InstrumentRole>>>>,
+    Vec<crate::outproc_instrument::OutProcInstrumentTeardownGuard>,
+);
+
+/// #540 P1: pending slot を ChildLaunch / control entry / guard へ組み上げる
+/// （sample_rate が stream 起動後にしか確定しないため build と2段階・両起動経路で共有）。
+#[cfg(feature = "outproc-instrument")]
+fn install_instrument_slots(
+    pending_slots: Vec<PendingInstrumentSlot>,
+    child_exe: &std::path::Path,
+    sample_rate: u32,
+) -> InstalledInstrumentSlots {
+    let mut entries = Vec::with_capacity(pending_slots.len());
+    let mut child_guards = Vec::with_capacity(pending_slots.len());
+    let mut teardowns = Vec::with_capacity(pending_slots.len());
+    for pending in pending_slots {
+        let PendingInstrumentSlot {
+            shm_path,
+            mut cleanup,
+            event_tx,
+            stats,
+            engaged,
+            stop,
+            done,
+        } = pending;
+        let child_slot = Arc::new(Mutex::new(ChildSlot::<InstrumentRole>::Empty(
+            ChildLaunch {
+                shm_path,
+                child_exe: child_exe.to_path_buf(),
+                sample_rate,
+                stats: stats.clone(),
+                engaged,
+                cleanup_shm_on_drop: true,
+            },
+        )));
+        // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
+        cleanup.disarm();
+        entries.push(InstrumentSlotEntry {
+            event_tx,
+            stats,
+            child_slot: Arc::downgrade(&child_slot),
+        });
+        child_guards.push(child_slot);
+        teardowns.push(crate::outproc_instrument::OutProcInstrumentTeardownGuard::new(stop, done));
+    }
+    (entries, child_guards, teardowns)
 }
 
 /// instrument の add-mix 後に effect の serial insert を適用する RT 専用の合成 processor。
@@ -1822,46 +1931,9 @@ impl EngineWrap {
     pub fn start_outproc_instrument_post_boot(
         cfg: crate::outproc_instrument::OutProcInstrumentConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
-        use crate::outproc_instrument::{
-            OutProcInstrumentPostProcessor, OutProcInstrumentStats, OutProcInstrumentTeardownGuard,
-            NOTE_RING_CAPACITY,
-        };
-
         // #540 P1: instrument slot pool（both build と同方式・instrument-only 版）。
-        let instrument_slot_count = cfg.slots;
-        let mut pending_instrument_slots = Vec::with_capacity(instrument_slot_count);
-        let mut instrument_posts = Vec::with_capacity(instrument_slot_count);
-        for _ in 0..instrument_slot_count {
-            let shm_path = crate::outproc_instrument::unique_shm_path();
-            let host_mmap = orbit_audio_sandbox::create_shared(&shm_path).map_err(|error| {
-                WrapError::OutProcInstrument(format!("create shm {shm_path:?}: {error}"))
-            })?;
-            let cleanup = ShmCleanupGuard::new(shm_path.clone());
-            let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(host_mmap);
-            let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
-            let engaged = Arc::new(AtomicBool::new(false));
-            let stop = Arc::new(AtomicBool::new(false));
-            let done = Arc::new(AtomicBool::new(false));
-            let stats = OutProcInstrumentStats::new();
-            instrument_posts.push(OutProcInstrumentPostProcessor::new(
-                host,
-                event_rx,
-                NOTE_RING_CAPACITY,
-                engaged.clone(),
-                stop.clone(),
-                done.clone(),
-                stats.clone(),
-            ));
-            pending_instrument_slots.push(PendingInstrumentSlot {
-                shm_path,
-                cleanup,
-                event_tx,
-                stats,
-                engaged,
-                stop,
-                done,
-            });
-        }
+        let (pending_instrument_slots, instrument_posts) =
+            build_pending_instrument_slots(cfg.slots)?;
         let processor = Box::new(InstrumentPoolPostProcessor {
             instruments: instrument_posts,
         });
@@ -1878,37 +1950,8 @@ impl EngineWrap {
         let sample_rate = stream.sample_rate;
 
         // #540 P1: pending slot を ChildLaunch へ組み上げる（sample_rate は stream 起動後に確定）。
-        let mut instrument_slot_entries = Vec::with_capacity(instrument_slot_count);
-        let mut instrument_child_guards = Vec::with_capacity(instrument_slot_count);
-        let mut instrument_teardowns = Vec::with_capacity(instrument_slot_count);
-        for pending in pending_instrument_slots {
-            let PendingInstrumentSlot {
-                shm_path,
-                mut cleanup,
-                event_tx,
-                stats,
-                engaged,
-                stop,
-                done,
-            } = pending;
-            let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
-                shm_path,
-                child_exe: cfg.child_exe.clone(),
-                sample_rate,
-                stats: stats.clone(),
-                engaged,
-                cleanup_shm_on_drop: true,
-            })));
-            // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
-            cleanup.disarm();
-            instrument_slot_entries.push(InstrumentSlotEntry {
-                event_tx,
-                stats,
-                child_slot: Arc::downgrade(&child_slot),
-            });
-            instrument_child_guards.push(child_slot);
-            instrument_teardowns.push(OutProcInstrumentTeardownGuard::new(stop, done));
-        }
+        let (instrument_slot_entries, instrument_child_guards, instrument_teardowns) =
+            install_instrument_slots(pending_instrument_slots, &cfg.child_exe, sample_rate);
 
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         *wrap.outproc_instrument.lock().map_err(|_| {
@@ -1952,10 +1995,6 @@ impl EngineWrap {
         use crate::outproc_effect::{
             OutProcEffectPostProcessor, OutProcEffectStats, OutProcTeardownGuard,
         };
-        use crate::outproc_instrument::{
-            OutProcInstrumentPostProcessor, OutProcInstrumentStats, OutProcInstrumentTeardownGuard,
-            NOTE_RING_CAPACITY,
-        };
         let buffer_frames = Self::resolve_outproc_both_buffer_frames(
             effect_cfg.buffer_frames,
             instrument_cfg.buffer_frames,
@@ -1975,41 +2014,8 @@ impl EngineWrap {
         // post processor を事前確保する（audio graph は起動時固定のため）。child は
         // LoadPlugin まで spawn しないので idle slot のコストは shm と即-return の
         // post processor のみ。
-        let instrument_slot_count = instrument_cfg.slots;
-        let mut pending_instrument_slots = Vec::with_capacity(instrument_slot_count);
-        let mut instrument_posts = Vec::with_capacity(instrument_slot_count);
-        for _ in 0..instrument_slot_count {
-            let shm_path = crate::outproc_instrument::unique_shm_path();
-            let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(
-                orbit_audio_sandbox::create_shared(&shm_path).map_err(|e| {
-                    WrapError::OutProcInstrument(format!("create shm {shm_path:?}: {e}"))
-                })?,
-            );
-            let cleanup = ShmCleanupGuard::new(shm_path.clone());
-            let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
-            let engaged = Arc::new(AtomicBool::new(false));
-            let stop = Arc::new(AtomicBool::new(false));
-            let done = Arc::new(AtomicBool::new(false));
-            let stats = OutProcInstrumentStats::new();
-            instrument_posts.push(OutProcInstrumentPostProcessor::new(
-                host,
-                event_rx,
-                NOTE_RING_CAPACITY,
-                engaged.clone(),
-                stop.clone(),
-                done.clone(),
-                stats.clone(),
-            ));
-            pending_instrument_slots.push(PendingInstrumentSlot {
-                shm_path,
-                cleanup,
-                event_tx,
-                stats,
-                engaged,
-                stop,
-                done,
-            });
-        }
+        let (pending_instrument_slots, instrument_posts) =
+            build_pending_instrument_slots(instrument_cfg.slots)?;
         let effect_engaged = Arc::new(AtomicBool::new(false));
         let effect_stop = Arc::new(AtomicBool::new(false));
         let effect_done = Arc::new(AtomicBool::new(false));
@@ -2044,39 +2050,12 @@ impl EngineWrap {
         // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
         effect_shm_cleanup.disarm();
         // #540 P1: pending slot を ChildLaunch へ組み上げる（sample_rate は stream 起動後に確定）。
-        let mut instrument_slot_entries = Vec::with_capacity(instrument_slot_count);
-        let mut instrument_child_guards = Vec::with_capacity(instrument_slot_count);
-        let mut instrument_teardowns = Vec::with_capacity(instrument_slot_count);
-        for pending in pending_instrument_slots {
-            let PendingInstrumentSlot {
-                shm_path,
-                mut cleanup,
-                event_tx,
-                stats,
-                engaged,
-                stop,
-                done,
-            } = pending;
-            let child_slot = Arc::new(Mutex::new(ChildSlot::<InstrumentRole>::Empty(
-                ChildLaunch {
-                    shm_path,
-                    child_exe: instrument_cfg.child_exe.clone(),
-                    sample_rate: stream.sample_rate,
-                    stats: stats.clone(),
-                    engaged,
-                    cleanup_shm_on_drop: true,
-                },
-            )));
-            // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
-            cleanup.disarm();
-            instrument_slot_entries.push(InstrumentSlotEntry {
-                event_tx,
-                stats,
-                child_slot: Arc::downgrade(&child_slot),
-            });
-            instrument_child_guards.push(child_slot);
-            instrument_teardowns.push(OutProcInstrumentTeardownGuard::new(stop, done));
-        }
+        let (instrument_slot_entries, instrument_child_guards, instrument_teardowns) =
+            install_instrument_slots(
+                pending_instrument_slots,
+                &instrument_cfg.child_exe,
+                stream.sample_rate,
+            );
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         *wrap
             .outproc
@@ -2446,7 +2425,7 @@ impl EngineWrap {
             // note 側の instance 解決（instance_index lookup）が通るよう登録しておく。
             control
                 .instance_index
-                .entry("default".to_string())
+                .entry(DEFAULT_INSTRUMENT_INSTANCE.to_string())
                 .or_insert(0);
             control
                 .slots
@@ -2668,7 +2647,7 @@ impl EngineWrap {
                     "outproc instrument not initialized (test backend has no outproc path)".into(),
                 )
             })?;
-            let name = instance.as_deref().unwrap_or("default");
+            let name = instance.as_deref().unwrap_or(DEFAULT_INSTRUMENT_INSTANCE);
             let index = match control.instance_index.get(name) {
                 Some(&index) => index,
                 None => {
@@ -3078,7 +3057,7 @@ impl EngineWrap {
         })?;
         // #540 P1: instance → slot の解決。未割当の instance への note は「未ロード」と同義
         // なので明示エラーにする（旧単数時代は ring へ積んで黙って捨てられていた — 診断の改善）。
-        let name = instance.unwrap_or("default");
+        let name = instance.unwrap_or(DEFAULT_INSTRUMENT_INSTANCE);
         let Some(&index) = control.instance_index.get(name) else {
             return Err(WrapError::OutProcInstrument(format!(
                 "unknown instrument instance '{name}' (LoadPlugin has not assigned it a slot)"
@@ -5711,7 +5690,10 @@ mod outproc_instrument_health_tests {
                 stats: stats.clone(),
                 child_slot: Weak::new(),
             }],
-            instance_index: std::collections::HashMap::from([(String::from("default"), 0)]),
+            instance_index: std::collections::HashMap::from([(
+                String::from(super::DEFAULT_INSTRUMENT_INSTANCE),
+                0,
+            )]),
         });
         (wrap, stats)
     }
@@ -5733,7 +5715,10 @@ mod outproc_instrument_health_tests {
                 stats,
                 child_slot: Arc::downgrade(&child_slot),
             }],
-            instance_index: std::collections::HashMap::from([(String::from("default"), 0)]),
+            instance_index: std::collections::HashMap::from([(
+                String::from(super::DEFAULT_INSTRUMENT_INSTANCE),
+                0,
+            )]),
         });
         (wrap, child_slot)
     }
@@ -6058,7 +6043,10 @@ mod outproc_instrument_note_tests {
                 stats,
                 child_slot: std::sync::Weak::new(),
             }],
-            instance_index: std::collections::HashMap::from([(String::from("default"), 0)]),
+            instance_index: std::collections::HashMap::from([(
+                String::from(super::DEFAULT_INSTRUMENT_INSTANCE),
+                0,
+            )]),
         });
         (wrap, event_rx)
     }

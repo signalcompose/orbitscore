@@ -1,8 +1,7 @@
-import path from 'node:path'
-
 import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
+import { resolvePathDirect } from './audio-resolver'
 import { EffectChainMap, normalizePluginInstanceName } from './effect-slot'
 import { LinkAudioManager } from './link-audio-manager'
 import { isPluginPathSpec, resolvePluginSpec, validatePluginExtension } from './plugin-resolver'
@@ -26,7 +25,7 @@ export class PluginInstrumentManager {
   }
 
   hasDeclaration(): boolean {
-    return this.slots.size > 0
+    return this.slots.hasAny()
   }
 
   async instrument(
@@ -76,14 +75,18 @@ export class PluginInstrumentManager {
    * 属する資産で、暗黙の検索で別プロジェクトの同名 state を拾う事故を避ける。
    */
   private resolveStatePath(statePath: string): string {
-    if (path.isAbsolute(statePath)) return statePath
-    const documentDirectory = this.audioManager.getDocumentDirectory()
-    if (documentDirectory === undefined) {
+    // 既存の resolvePathDirect を再利用する（~ 展開・絶対パス・document directory 解決・
+    // 未設定時 throw の検証済みロジック）。audioPaths は意図的に空配列。
+    // 注: getDocumentDirectory() は未設定時 undefined ではなく **空文字列** を返すため、
+    // 自前の `=== undefined` ガードは死んでいて cwd 相対に silent フォールバックしていた
+    // （/simplify reuse レビューが検出した実バグ）。
+    try {
+      return resolvePathDirect(statePath, [], this.audioManager.getDocumentDirectory())
+    } catch {
       throw new Error(
         `instrument state path '${statePath}' is relative, but no document directory is set; ` +
           'use an absolute path or evaluate from a saved document.',
       )
     }
-    return path.resolve(documentDirectory, statePath)
   }
 }

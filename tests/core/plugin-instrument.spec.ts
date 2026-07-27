@@ -156,6 +156,19 @@ describe('PluginInstrumentManager', () => {
     )
   })
 
+  it('rejects a relative state path when no document directory is set (#540 P2)', async () => {
+    // 回帰ピン: getDocumentDirectory() は未設定時 undefined でなく空文字列を返す。
+    // 旧実装の `=== undefined` ガードは死んでいて cwd 相対に silent フォールバックしていた
+    // （/simplify reuse レビュー検出の実バグ）。明示エラーになること・ロードに進まないこと。
+    const loadPlugin = vi.fn().mockResolvedValue({})
+    const engine = { loadPlugin, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const global = new Global(engine) // setDocumentDirectory を意図的に呼ばない
+    await expect(
+      global.instrument('kick', '/plugins/synth.vst3', undefined, 'kick.vstpreset'),
+    ).rejects.toThrow('no document directory is set')
+    expect(loadPlugin).not.toHaveBeenCalled()
+  })
+
   it('treats a different state for the same sequence as a rejected replacement (#540 P2)', async () => {
     const { global, loadPlugin } = makeGlobal()
     await global.instrument('kick', 'synth.vst3', undefined, 'a.vstpreset')

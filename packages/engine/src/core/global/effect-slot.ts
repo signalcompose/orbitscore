@@ -135,13 +135,12 @@ export class EffectChainMap<K> {
     return (this.chains.get(key)?.length ?? 0) > 0
   }
 
-  /** 非空チェーンを持つ key の数（#540 P1: `PluginInstrumentManager.hasDeclaration` が使用）。 */
-  get size(): number {
-    let count = 0
+  /** いずれかの key に非空チェーンがあるか（#540 P1: `PluginInstrumentManager.hasDeclaration`）。 */
+  hasAny(): boolean {
     for (const chain of this.chains.values()) {
-      if (chain.length > 0) count += 1
+      if (chain.length > 0) return true
     }
-    return count
+    return false
   }
 
   /**
@@ -242,17 +241,15 @@ export class EffectChainMap<K> {
     const { role, bus, normalizedName, resolvedPath, pluginId, instance, statePath } = spec
     // bus 無し（master insert）は 3 引数のまま呼ぶ（既存の呼び出し契約を変えない —
     // explicit undefined でも実 engine は等価だが、契約をピンするテスト/モックがある）。
-    // instrument の instance 付き（#540 P1）は 5 引数（bus は instrument で常に undefined）、
-    // state 付き（#540 P2）は 6 引数。
-    const load = (
-      statePath !== undefined
-        ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role, undefined, instance, statePath)
-        : instance !== undefined
-          ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role, undefined, instance)
-          : bus === undefined
-            ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role)
-            : this.audioEngine.loadPlugin(resolvedPath, pluginId, role, bus)
-    ).then(() => undefined)
+    // bus / instance / statePath は末尾 optional（#540 P1/P2）— 分岐を列挙する代わりに
+    // 末尾の undefined を落として「与えられた引数だけを渡す」契約を保つ。
+    const optionalArgs: (string | undefined)[] = [bus, instance, statePath]
+    while (optionalArgs.length > 0 && optionalArgs[optionalArgs.length - 1] === undefined) {
+      optionalArgs.pop()
+    }
+    const load = this.audioEngine
+      .loadPlugin(resolvedPath, pluginId, role, ...(optionalArgs as [string?, string?, string?]))
+      .then(() => undefined)
     const chain = this.chains.get(key) ?? []
     const occurrence =
       chain.filter((slot) => slot !== replacing && slot.normalizedName === normalizedName).length +
