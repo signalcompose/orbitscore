@@ -1,31 +1,39 @@
 import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
+import { resolvePathDirect } from './audio-resolver'
 import { EffectChainMap, normalizePluginInstanceName } from './effect-slot'
 import { LinkAudioManager } from './link-audio-manager'
 import { isPluginPathSpec, resolvePluginSpec, validatePluginExtension } from './plugin-resolver'
 
 /**
- * Owns the single v1 daemon instrument declaration shared by note sequences.
- * Per-sequence instances (independent per note sequence, no sharing) land in
- * PR-1b (#517 S4 / #522) — see `INSTRUCTION_ORBITSCORE_DSL.md` PH.4's staging note.
+ * Owns per-sequence daemon instrument declarations (#540 P1). Each note sequence
+ * gets an independent instrument instance — the map key is the sequence name and
+ * the wire `instance` ID follows the note path's `plugin:<seqName>` port
+ * convention (`Sequence.resolveNoteTarget()`), so declarations and notes address
+ * the same daemon slot.
  */
 export class PluginInstrumentManager {
-  private readonly slots: EffectChainMap<'instrument'>
+  private readonly slots: EffectChainMap<string>
 
   constructor(
     audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
-    this.slots = new EffectChainMap(audioEngine, () => 'instrument')
+    this.slots = new EffectChainMap(audioEngine, (seqName) => `seq:${seqName}`)
   }
 
   hasDeclaration(): boolean {
-    return this.slots.has('instrument')
+    return this.slots.hasAny()
   }
 
-  async instrument(spec: string, pluginId?: string): Promise<void> {
+  async instrument(
+    seqName: string,
+    spec: string,
+    pluginId?: string,
+    statePath?: string,
+  ): Promise<void> {
     // 拡張子検証は path-direct spec にのみ適用する（#463 C2: カタログ名はここで弾かず、
     // resolvePluginSpec のカタログ解決に委ねる — effect-slot.ts の resolveEffectSpec と同型）。
     if (isPluginPathSpec(spec)) {
@@ -43,17 +51,46 @@ export class PluginInstrumentManager {
       'instrument',
     )
     await this.slots.declare(
-      'instrument',
+      seqName,
       {
         role: 'instrument',
         bus: undefined,
         normalizedName: normalizePluginInstanceName(spec),
         resolvedPath: resolved.path,
         pluginId: resolved.pluginId,
+        // note 側 `resolveNoteTarget()` の port（`plugin:<seqName>`）と同じ規約。
+        instance: `plugin:${seqName}`,
+        // #540 P2: 保存済み state（音色）。相対パスは document directory 基準で解決する。
+        statePath: statePath === undefined ? undefined : this.resolveStatePath(statePath),
       },
       () =>
-        'seq.instrument() supports one instrument instance in v1. ' +
-        'S4 PR-1b (#517/#522) will allow independent instances per note sequence.',
+        `Sequence '${seqName}' already has an instrument instance; ` +
+        'v1 does not support replacing it (restart the engine to change the plugin or sound).',
     )
+  }
+
+  /**
+   * state ファイルの相対パスを document directory 基準で解決する（#540 P2）。
+   * 音源 plugin と違い検索パス（audioPaths）は使わない — state は曲のプロジェクトに
+   * 属する資産で、暗黙の検索で別プロジェクトの同名 state を拾う事故を避ける。
+   */
+  private resolveStatePath(statePath: string): string {
+    // 既存の resolvePathDirect を再利用する（~ 展開・絶対パス・document directory 解決・
+    // 未設定時 throw の検証済みロジック）。audioPaths は意図的に空配列。
+    // 注: getDocumentDirectory() は未設定時 undefined ではなく **空文字列** を返すため、
+    // 自前の `=== undefined` ガードは死んでいて cwd 相対に silent フォールバックしていた
+    // （/simplify reuse レビューが検出した実バグ）。
+    try {
+      return resolvePathDirect(statePath, [], this.audioManager.getDocumentDirectory())
+    } catch (err) {
+      // 原因を本文に連結する（#542 レビュー: broad catch が resolvePathDirect の別の throw
+      // 理由を「no document directory」と誤ラベルしたまま原因を失わないため。`{ cause }` は
+      // tsconfig の lib が ES2022.Error を含まないため使わない）。
+      const cause = err instanceof Error ? ` (cause: ${err.message})` : ''
+      throw new Error(
+        `instrument state path '${statePath}' is relative, but no document directory is set; ` +
+          `use an absolute path or evaluate from a saved document.${cause}`,
+      )
+    }
   }
 }

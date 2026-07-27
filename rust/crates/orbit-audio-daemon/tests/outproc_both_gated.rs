@@ -34,6 +34,8 @@ fn setup_test() -> (OutProcEffectConfig, OutProcInstrumentConfig) {
         )),
         plugin_id: Some(PLUGIN_ID.to_owned()),
         buffer_frames: None,
+        // 単一 child の both-build 検証なので slot pool は最小の 1（#540 P1）。
+        slots: 1,
     };
     let effect_plugin = effect
         .plugin
@@ -75,14 +77,14 @@ fn both_roles_attach_in_instrument_then_effect_order() {
         .expect("start both-role OOP daemon");
 
     engine
-        .load_outproc_instrument_plugin(synth_path, synth_id)
+        .load_outproc_instrument_plugin(synth_path, synth_id, None, None)
         .expect("attach test-synth to instrument slot");
     engine
         .load_outproc_effect_plugin(effect_path, None, None)
         .expect("attach test-effect to effect slot");
 
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("send probe note on");
     let instrument_live = wait_until(Duration::from_secs(3), || {
         engine
@@ -101,7 +103,7 @@ fn both_roles_attach_in_instrument_then_effect_order() {
             .unwrap_or(false)
     });
     engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, None)
         .expect("send probe note off");
 
     let instrument = engine.outproc_instrument_stats().expect("instrument stats");
@@ -133,4 +135,117 @@ fn both_roles_attach_in_instrument_then_effect_order() {
         (0.4..=0.6).contains(&ratio),
         "effect の post/dry gain 比が想定外: {ratio:.5}（期待 ~{EFFECT_GAIN}）"
     );
+}
+
+/// #540 P1: 2 つの instrument instance が独立した child で同時に鳴り、note の宛先が
+/// 取り違えられないことを実機で検証する（「常に slot 0 へ送る」型の退行は
+/// instance B の probe が立たない・A の isolation が破れる形で検出される）。
+#[test]
+#[ignore = "#540 P1: needs a real output device + built effect/instrument children and test dylibs (local only)"]
+fn two_instrument_instances_sound_independently() {
+    let (effect_cfg, mut instrument_cfg) = setup_test();
+    instrument_cfg.slots = 2;
+    let synth_path = instrument_cfg
+        .plugin
+        .clone()
+        .expect("gated config has an instrument plugin");
+    let synth_id = instrument_cfg.plugin_id.clone();
+    let (engine, _guard) = EngineWrap::start_outproc_both(effect_cfg, instrument_cfg)
+        .expect("start both-role OOP daemon");
+
+    engine
+        .load_outproc_instrument_plugin(
+            synth_path.clone(),
+            synth_id.clone(),
+            Some("plugin:a".into()),
+            None,
+        )
+        .expect("attach test-synth to instance a");
+    engine
+        .load_outproc_instrument_plugin(synth_path, synth_id, Some("plugin:b".into()), None)
+        .expect("attach test-synth to instance b");
+
+    // A だけに note-on → A の probe が立ち、B は 0 のまま（宛先分離の実機証明）。
+    engine
+        .plugin_note_on(
+            PROBE_NOTE_KEY,
+            PROBE_NOTE_CHANNEL,
+            0.8,
+            Some("plugin:a".into()),
+        )
+        .expect("note on to instance a");
+    let a_live = wait_until(Duration::from_secs(3), || {
+        engine
+            .outproc_instrument_stats_for("plugin:a")
+            .map(|s| s.fresh > 0 && s.probe_live_count > 0 && s.post_peak > 0.01)
+            .unwrap_or(false)
+    });
+    let b_stats_during_a = engine
+        .outproc_instrument_stats_for("plugin:b")
+        .expect("instance b stats");
+    // B にも note-on → 両方が同時に鳴る。
+    engine
+        .plugin_note_on(
+            PROBE_NOTE_KEY,
+            PROBE_NOTE_CHANNEL,
+            0.8,
+            Some("plugin:b".into()),
+        )
+        .expect("note on to instance b");
+    let b_live = wait_until(Duration::from_secs(3), || {
+        engine
+            .outproc_instrument_stats_for("plugin:b")
+            .map(|s| s.fresh > 0 && s.probe_live_count > 0 && s.post_peak > 0.01)
+            .unwrap_or(false)
+    });
+
+    engine
+        .plugin_note_off(
+            PROBE_NOTE_KEY,
+            PROBE_NOTE_CHANNEL,
+            0.0,
+            Some("plugin:a".into()),
+        )
+        .expect("note off to instance a");
+    engine
+        .plugin_note_off(
+            PROBE_NOTE_KEY,
+            PROBE_NOTE_CHANNEL,
+            0.0,
+            Some("plugin:b".into()),
+        )
+        .expect("note off to instance b");
+    let both_released = wait_until(Duration::from_secs(3), || {
+        let a = engine.outproc_instrument_stats_for("plugin:a");
+        let b = engine.outproc_instrument_stats_for("plugin:b");
+        matches!((a, b), (Some(a), Some(b)) if a.probe_live_count == 0 && b.probe_live_count == 0)
+    });
+
+    let a = engine
+        .outproc_instrument_stats_for("plugin:a")
+        .expect("instance a stats");
+    let b = engine
+        .outproc_instrument_stats_for("plugin:b")
+        .expect("instance b stats");
+    println!("=== #540 P1 two-instance verdict ===");
+    println!(
+        "a: fresh={} live={} post_peak={:.5} respawn={} invalid={}",
+        a.fresh, a.probe_live_count, a.post_peak, a.respawn_count, a.measurement_invalid
+    );
+    println!(
+        "b: fresh={} live={} post_peak={:.5} respawn={} invalid={}",
+        b.fresh, b.probe_live_count, b.post_peak, b.respawn_count, b.measurement_invalid
+    );
+    assert!(a_live, "instance a must sound after its note-on");
+    assert_eq!(
+        b_stats_during_a.probe_live_count, 0,
+        "instance b must stay silent while only a has a note (destination isolation)"
+    );
+    assert!(b_live, "instance b must sound after its note-on");
+    assert!(
+        both_released,
+        "both instances must release their probe voice"
+    );
+    assert!(!a.measurement_invalid, "instance a measurement invalid");
+    assert!(!b.measurement_invalid, "instance b measurement invalid");
 }

@@ -18,6 +18,7 @@ import { MidiScheduler } from '../midi/midi-scheduler'
 import { TimedEvent, TimedEventScope } from '../timing/calculation/types'
 
 import { Global } from './global'
+import { isStateFileSpec } from './global/plugin-resolver'
 import { Scheduler } from './global/types'
 import { preparePlayback } from './sequence/playback/prepare-playback'
 import { runSequence } from './sequence/playback/run-sequence'
@@ -547,14 +548,36 @@ export class Sequence {
     return this._midiPort !== undefined
   }
 
-  async instrument(pluginPath: string, pluginId?: string): Promise<this> {
+  /**
+   * `instrument(path)` / `instrument(path, pluginId)` / `instrument(path, statePath)` /
+   * `instrument(path, pluginId, statePath)`。
+   *
+   * 第2引数は拡張子で判別する（#540 P2）: `.vstpreset` / `.state` なら保存済み state
+   * （音色の選択）、それ以外は pluginId。DSL は named 引数を持たないため、pluginId が
+   * state 拡張子で終わることは実在しない前提の位置引数ヒューリスティックを採る。
+   */
+  async instrument(
+    pluginPath: string,
+    pluginIdOrState?: string,
+    maybeState?: string,
+  ): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (this._audioFilePath !== undefined || this._chopDivisions !== undefined || this.isMidi()) {
       throw new Error(
         `Sequence '${name}': instrument() cannot be combined with audio()/chop()/midi().`,
       )
     }
-    await this.global.instrument(pluginPath, pluginId)
+    let pluginId: string | undefined
+    let statePath: string | undefined
+    if (maybeState !== undefined) {
+      pluginId = pluginIdOrState
+      statePath = maybeState
+    } else if (pluginIdOrState !== undefined && isStateFileSpec(pluginIdOrState)) {
+      statePath = pluginIdOrState
+    } else {
+      pluginId = pluginIdOrState
+    }
+    await this.global.instrument(name, pluginPath, pluginId, statePath)
     this._instrumentDeclared = true
     return this
   }

@@ -61,7 +61,17 @@ pub struct OutProcInstrumentConfig {
     pub plugin: Option<PathBuf>,
     pub plugin_id: Option<String>,
     pub buffer_frames: Option<u32>,
+    /// 起動時に事前確保する instrument slot 数（#540 P1）。audio graph / shm / note ring は
+    /// stream 起動時に固定で焼かれるため、複数 instrument は「N slot の事前確保 + LoadPlugin の
+    /// instance 割当」で実現する（effect の per-bus slot と同じ方式）。
+    pub slots: usize,
 }
+
+/// `ORBIT_OUTPROC_INSTRUMENT_SLOTS` の既定値。idle slot のコストは shm region と
+/// engaged=false で即 return する post processor のみ（child は LoadPlugin まで spawn しない）。
+pub const DEFAULT_INSTRUMENT_SLOTS: usize = 8;
+/// slot 数の上限（shm region とリングの事前確保が線形に増えるため暴走値を弾く）。
+pub const MAX_INSTRUMENT_SLOTS: usize = 32;
 
 impl OutProcInstrumentConfig {
     pub fn from_env() -> Result<Self, String> {
@@ -76,12 +86,35 @@ impl OutProcInstrumentConfig {
                 .ok()
                 .as_deref(),
         );
+        let slots = parse_instrument_slots(
+            std::env::var("ORBIT_OUTPROC_INSTRUMENT_SLOTS")
+                .ok()
+                .as_deref(),
+        );
         Ok(Self {
             child_exe,
             plugin,
             plugin_id,
             buffer_frames,
+            slots,
         })
+    }
+}
+
+/// `ORBIT_OUTPROC_INSTRUMENT_SLOTS` を [1, MAX] に clamp して解決する（純関数・unit テスト対象）。
+/// 未設定・不正値は default（`parse_buffer_frames` と同じ「黙って壊さない」方針で warn のみ）。
+fn parse_instrument_slots(value: Option<&str>) -> usize {
+    let Some(value) = value else {
+        return DEFAULT_INSTRUMENT_SLOTS;
+    };
+    match value.parse::<usize>() {
+        Ok(slots) if (1..=MAX_INSTRUMENT_SLOTS).contains(&slots) => slots,
+        _ => {
+            tracing::warn!(
+                "ORBIT_OUTPROC_INSTRUMENT_SLOTS='{value}' is invalid (want 1..={MAX_INSTRUMENT_SLOTS}); using default {DEFAULT_INSTRUMENT_SLOTS}"
+            );
+            DEFAULT_INSTRUMENT_SLOTS
+        }
     }
 }
 
@@ -337,13 +370,16 @@ impl PostProcessor for OutProcInstrumentPostProcessor {
     }
 }
 
-pub fn spawn_instrument_child(
+/// child の起動コマンドを組み立てる純関数（unit テスト対象・#542 レビュー: `--state` の
+/// 有無を含む引数構築を spawn から分離してピン留めできるようにする）。
+fn instrument_child_command(
     child_exe: &Path,
     shm_path: &Path,
     plugin: &Path,
     plugin_id: Option<&str>,
     sample_rate: u32,
-) -> io::Result<Child> {
+    state: Option<&Path>,
+) -> Command {
     let mut command = Command::new(child_exe);
     command
         .arg("--shm")
@@ -356,7 +392,22 @@ pub fn spawn_instrument_child(
     if let Some(id) = plugin_id {
         command.arg("--plugin-id").arg(id);
     }
-    command.spawn()
+    // #540 P2: 保存済み state。respawn 経路もここを通るため、respawn 後も音色が復元される。
+    if let Some(state) = state {
+        command.arg("--state").arg(state);
+    }
+    command
+}
+
+pub fn spawn_instrument_child(
+    child_exe: &Path,
+    shm_path: &Path,
+    plugin: &Path,
+    plugin_id: Option<&str>,
+    sample_rate: u32,
+    state: Option<&Path>,
+) -> io::Result<Child> {
+    instrument_child_command(child_exe, shm_path, plugin, plugin_id, sample_rate, state).spawn()
 }
 
 fn reap(child: &mut Child) {
@@ -400,6 +451,7 @@ impl InstrumentChildSupervisor {
         plugin: PathBuf,
         plugin_id: Option<String>,
         sample_rate: u32,
+        state: Option<PathBuf>,
     ) -> io::Result<Self> {
         let ctl_mmap = match open_shared(&shm_path) {
             Ok(mmap) => mmap,
@@ -487,11 +539,12 @@ impl InstrumentChildSupervisor {
                                         != orbit_audio_sandbox::transport::CHILD_STATUS_READY
                                 }
                             {
-                                tracing::warn!("orbit-clap-instrument-child exited during initial attach ({status})");
+                                tracing::warn!(plugin = ?plugin, "orbit-clap-instrument-child exited during initial attach ({status})");
                                 stats.child_early_exit.store(true, Ordering::Release);
                                 break;
                             }
                             tracing::warn!(
+                                plugin = ?plugin,
                                 "orbit-clap-instrument-child exited ({status}); respawning"
                             );
                             // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
@@ -503,6 +556,7 @@ impl InstrumentChildSupervisor {
                                 &plugin,
                                 plugin_id.as_deref(),
                                 sample_rate,
+                                state.as_deref(),
                             ) {
                                 Ok(replacement) => {
                                     stats
@@ -515,6 +569,7 @@ impl InstrumentChildSupervisor {
                                 }
                                 Err(error) => {
                                     tracing::error!(
+                                        plugin = ?plugin,
                                         "instrument child respawn failed; measurement invalid: {error}"
                                     );
                                     stats.measurement_invalid.store(true, Ordering::Release);
@@ -1001,6 +1056,7 @@ mod tests {
             PathBuf::from("/nonexistent.clap"),
             None,
             48_000,
+            None,
         )
         .expect("supervisor spawn");
 
@@ -1033,6 +1089,7 @@ mod tests {
             PathBuf::from("/nonexistent.clap"),
             None,
             48_000,
+            None,
         );
         assert!(r.is_err(), "open_shared 失敗で Err を返す");
         // first_child が reap された（orphan でない）= kill -0 が失敗（ESRCH）する。
@@ -1077,6 +1134,7 @@ mod tests {
             PathBuf::from("/ignored.clap"),
             None,
             48_000,
+            None,
         )
         .expect("supervisor spawn");
 
@@ -1125,6 +1183,7 @@ mod tests {
             PathBuf::from("/ignored.clap"),
             None,
             48_000,
+            None,
         )
         .expect("supervisor spawn");
 
@@ -1200,5 +1259,51 @@ mod tests {
             custom,
             "explicit child exe (env override / test fixture) must be retained"
         );
+    }
+
+    /// #540 P2（#542 レビュー test-gap）: `--state` 引数の構築をピン留めする。
+    /// respawn 経路も同じ builder を通るため、この契約が「state が respawn を生き延びる」の
+    /// コマンド構築レベルの証明になる（実機レベルは gated テストが担う）。
+    #[test]
+    fn instrument_child_command_includes_state_only_when_given() {
+        use std::ffi::OsStr;
+        let args_of = |state: Option<&Path>| -> Vec<String> {
+            instrument_child_command(
+                Path::new("/bin/child"),
+                Path::new("/tmp/shm"),
+                Path::new("/plugins/synth.vst3"),
+                Some("plugin-id"),
+                48_000,
+                state,
+            )
+            .get_args()
+            .map(|arg: &OsStr| arg.to_string_lossy().into_owned())
+            .collect()
+        };
+
+        let with_state = args_of(Some(Path::new("/songs/kick.vstpreset")));
+        let state_flag = with_state
+            .iter()
+            .position(|arg| arg == "--state")
+            .expect("--state flag present when state is Some");
+        assert_eq!(
+            with_state.get(state_flag + 1).map(String::as_str),
+            Some("/songs/kick.vstpreset"),
+            "--state must be immediately followed by the state path"
+        );
+
+        let without_state = args_of(None);
+        assert!(
+            !without_state.iter().any(|arg| arg == "--state"),
+            "--state must be omitted when state is None (CLAP child would bail on it)"
+        );
+        // state の有無で他の引数は不変（--state ペア以外が同一）。
+        let stripped: Vec<_> = with_state
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != state_flag && *i != state_flag + 1)
+            .map(|(_, arg)| arg.clone())
+            .collect();
+        assert_eq!(stripped, without_state);
     }
 }

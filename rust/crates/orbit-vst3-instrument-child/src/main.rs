@@ -24,6 +24,9 @@ struct Args {
     plugin: PathBuf,
     plugin_id: Option<String>,
     sample_rate: u32,
+    /// #540 P2: 保存済み state ファイル（`.vstpreset` container または raw component chunk）。
+    /// load 後・READY publish 前に適用する。
+    state: Option<PathBuf>,
 }
 
 #[cfg(target_os = "macos")]
@@ -32,6 +35,7 @@ fn parse_args() -> Result<Args> {
     let mut plugin = None;
     let mut plugin_id = None;
     let mut sample_rate = 48_000;
+    let mut state = None;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -45,6 +49,7 @@ fn parse_args() -> Result<Args> {
                     .parse()
                     .context("--sample-rate の parse")?
             }
+            "--state" => state = Some(PathBuf::from(it.next().context("--state に値が必要")?)),
             other => bail!("未知の引数: {other}"),
         }
     }
@@ -53,6 +58,7 @@ fn parse_args() -> Result<Args> {
         plugin: plugin.context("--plugin は必須")?,
         plugin_id,
         sample_rate,
+        state,
     })
 }
 
@@ -263,9 +269,34 @@ fn main() -> Result<()> {
     if let Some(plugin_id) = &args.plugin_id {
         eprintln!("[orbit-vst3-instrument-child] --plugin-id={plugin_id} は VST3 では未使用");
     }
-    let (mut instrument, _) =
-        Vst3InstrumentProcessor::load(&args.plugin, args.sample_rate as f64, MAX_FRAMES as i32)
-            .with_context(|| format!("load VST3 instrument {:?}", args.plugin))?;
+    // #540 P2: 保存済み state は load に渡し、**setActive 前**に適用される（VST3 正準の
+    // 復元フロー・#542 レビュー F7）。失敗はハードエラー — 音色が復元できていないのに
+    // default 音のまま READY を出すと「保存した音で鳴る」契約が黙って破れる
+    // （attach 失敗として daemon 側に表面化させる）。
+    let state_bytes = match &args.state {
+        Some(state_path) => Some(
+            std::fs::read(state_path).with_context(|| format!("read state file {state_path:?}"))?,
+        ),
+        None => None,
+    };
+    let (mut instrument, _) = Vst3InstrumentProcessor::load(
+        &args.plugin,
+        args.sample_rate as f64,
+        MAX_FRAMES as i32,
+        state_bytes.as_deref(),
+    )
+    .with_context(|| {
+        format!(
+            "load VST3 instrument {:?} (state: {:?})",
+            args.plugin, args.state
+        )
+    })?;
+    if let (Some(state_path), Some(bytes)) = (&args.state, &state_bytes) {
+        eprintln!(
+            "[orbit-vst3-instrument-child] state restored from {state_path:?} ({} bytes)",
+            bytes.len()
+        );
+    }
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, false);
     }

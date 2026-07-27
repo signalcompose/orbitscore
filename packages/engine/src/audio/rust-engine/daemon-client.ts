@@ -380,6 +380,8 @@ export class DaemonClient extends EventEmitter {
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
     bus?: string,
+    instance?: string,
+    statePath?: string,
   ): Promise<PluginLoadResult> {
     const result = await this.request('LoadPlugin', {
       path: filePath,
@@ -388,6 +390,12 @@ export class DaemonClient extends EventEmitter {
       // bus は per-sequence insert（'effect' role 専用・#434 S3）。省略時は master slot
       // （既存の global.effect() / seq.instrument() と後方互換）。
       ...(bus ? { bus } : {}),
+      // instance は instrument slot pool の宛先（'instrument' role 専用・#540 P1）。
+      // 省略時は daemon 側で互換の "default"（slot 0）に解決される。
+      ...(instance ? { instance } : {}),
+      // state_path は保存済みプラグイン state（'instrument' role 専用・#540 P2）。
+      // child spawn 時に適用され、respawn でも再適用される。
+      ...(statePath ? { state_path: statePath } : {}),
     })
     return {
       pluginId: String(result.plugin_id),
@@ -414,15 +422,21 @@ export class DaemonClient extends EventEmitter {
     })
   }
 
-  pluginNoteOn(key: number, channel: number, velocity: number): Promise<void> {
-    return this.request('PluginNoteOn', { key, channel, velocity }) as unknown as Promise<void>
+  pluginNoteOn(key: number, channel: number, velocity: number, instance?: string): Promise<void> {
+    return this.request('PluginNoteOn', {
+      key,
+      channel,
+      velocity,
+      ...(instance ? { instance } : {}),
+    }) as unknown as Promise<void>
   }
 
-  pluginNoteOff(key: number, channel: number, velocity?: number): Promise<void> {
+  pluginNoteOff(key: number, channel: number, velocity?: number, instance?: string): Promise<void> {
     return this.request('PluginNoteOff', {
       key,
       channel,
       ...(velocity === undefined ? {} : { velocity }),
+      ...(instance ? { instance } : {}),
     }) as unknown as Promise<void>
   }
 

@@ -61,10 +61,49 @@ describe('Sequence instrument dispatch', () => {
   it('accepts a VST3 instrument declaration', async () => {
     const { audio, seq } = harness()
     await expect(seq.instrument('synth.vst3')).resolves.toBe(seq)
+    // #540 P1: instance は note 側 port と同じ `plugin:<seqName>` 規約（5引数目）。
     expect(audio.loadPlugin).toHaveBeenCalledWith(
       path.resolve('/songs', 'synth.vst3'),
       undefined,
       'instrument',
+      undefined,
+      'plugin:synth',
+    )
+  })
+
+  it('routes a .vstpreset second argument to state, not pluginId (#540 P2 heuristic)', async () => {
+    const { audio, seq } = harness()
+    await seq.instrument('synth.vst3', 'kick.vstpreset')
+    expect(audio.loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'synth.vst3'),
+      undefined, // pluginId ではない
+      'instrument',
+      undefined,
+      'plugin:synth',
+      path.resolve('/songs', 'kick.vstpreset'),
+    )
+  })
+
+  it('keeps a non-state second argument as pluginId and accepts the 3-arg form (#540 P2)', async () => {
+    const first = harness()
+    await first.seq.instrument('synth.vst3', 'my-plugin-id')
+    expect(first.audio.loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'synth.vst3'),
+      'my-plugin-id',
+      'instrument',
+      undefined,
+      'plugin:synth',
+    )
+
+    const second = harness()
+    await second.seq.instrument('synth.vst3', 'my-plugin-id', 'kick.vstpreset')
+    expect(second.audio.loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'synth.vst3'),
+      'my-plugin-id',
+      'instrument',
+      undefined,
+      'plugin:synth',
+      path.resolve('/songs', 'kick.vstpreset'),
     )
   })
 
@@ -83,7 +122,7 @@ describe('Sequence instrument dispatch', () => {
     await vi.advanceTimersByTimeAsync(2100)
 
     expect(audio.pluginNoteOn.mock.calls.map((call: unknown[]) => call[0])).toEqual([60, 64])
-    expect(audio.pluginNoteOn).toHaveBeenCalledWith(60, 0, 96 / 127)
+    expect(audio.pluginNoteOn).toHaveBeenCalledWith(60, 0, 96 / 127, 'plugin:synth')
   })
 
   it('enforces instrument/midi/audio/chop exclusion in both directions', async () => {
@@ -139,7 +178,7 @@ describe('Sequence instrument dispatch', () => {
     expect(audio.pluginNoteOn).toHaveBeenCalledTimes(1)
     expect(audio.pluginNoteOff).not.toHaveBeenCalled()
     global.stop()
-    expect(audio.pluginNoteOff).toHaveBeenCalledWith(60, 0)
+    expect(audio.pluginNoteOff).toHaveBeenCalledWith(60, 0, undefined, 'plugin:synth')
   })
 
   it('gain() during LOOP clears pending notes via the plugin scheduler (clearOwner)', async () => {

@@ -63,6 +63,11 @@ copy_binary() {
     return
   fi
 
+  # #540: 既存ファイルへの in-place 上書き（cp は同一 inode に書く）は、macOS の kernel
+  # code-signing キャッシュを invalid にし、以後の exec が SIGKILL で即死する
+  # （署名自体は `codesign --verify` で valid のまま = 診断が非常に紛らわしい）。
+  # 必ず unlink してから新しい inode としてコピーする。
+  rm -f "$destination_path"
   cp "$source_path" "$destination_path"
   chmod +x "$destination_path"
   echo "Bundled $binary_name ($PLATFORM) -> $destination_path"

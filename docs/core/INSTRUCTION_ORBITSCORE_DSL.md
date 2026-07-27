@@ -1143,14 +1143,27 @@ OrbitScore engine（Rust daemon）は CLAP / VST3 プラグインをホストす
 （CLAP effect = PR #397 / CLAP instrument = PR #422 / VST3 instrument = #421 PR #447 /
 VST3 effect child handshake = #445 PR #446）。本節はそれを DSL から消費する構文の正本。
 
-### PH.1 instrument — `seq.instrument(path[, pluginId])`
+### PH.1 instrument — `seq.instrument(path[, pluginId][, statePath])`
 
 ```js
 var synth = init global.seq
 synth.instrument("~/plugins/Surge XT.clap")   // 種別宣言＝出口宣言
 synth.octave(4).vel(100)
 synth.play(1, 3, 5, 0)                        // 値は度数（Pitch DSL と同じ）
+
+var keys = init global.seq
+keys.instrument("Kontakt 8.vst3", "keys.vstpreset")  // 保存済み state で音色を選択（#540 P2）
 ```
+
+- **state 復元（#540 P2・VST3 のみ）**: 第2/第3引数に **`.vstpreset` / `.state`** で終わる
+  パスを渡すと、保存済みプラグイン state を child 起動時に復元して音色を選択する
+  （`.vstpreset` は他 DAW で書き出した Steinberg 標準 container・raw な component state
+  chunk も可）。引数の判別は**拡張子ヒューリスティック** — `.vstpreset`/`.state` で終われば
+  state、さもなくば pluginId（3引数形 `instrument(path, pluginId, statePath)` は明示指定）。
+  相対パスは **document directory 基準**で解決する（音源検索パスは使わない — state は
+  プロジェクトの資産で、暗黙検索による別プロジェクト同名 state の誤読を避ける）。
+  復元失敗はロード失敗として表面化する（default 音のまま黙って鳴らさない）。daemon respawn
+  後の再ロードでも state は再適用される。CLAP は v1 未対応（明示エラー）。
 
 - `.midi(port, ch)` と同型の**シーケンス種別宣言 verb**。宣言したシーケンスは
   **note シーケンス**となり、`play()` の値は度数として解釈される。
@@ -1254,10 +1267,14 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   - 各 note シーケンスの宣言は**独立したインスタンス**を生成する。複数シーケンスが同じ path を
     宣言しても**共有しない**（音色状態・パラメータ・preset・声部がトラックごとに独立する。
     CPU / メモリもインスタンスごとに掛かる）。
-  - 同一シーケンスの再宣言: 同一 path + pluginId は冪等（no-op・ライブ再評価の保護）。
-    異なる path / pluginId は**後勝ちで差し替える**（SC.3.1 規範4）。差し替えは prepare → commit 型で、
-    新インスタンスのロード成功まで旧インスタンスが鳴り続け、失敗時は旧インスタンスが無傷で残る。
-    差し替え時の保留 note は旧インスタンスへ全解放してから破棄する。
+  - 同一シーケンスの再宣言: 同一 path + pluginId + statePath は冪等（no-op・ライブ再評価の保護。
+    **statePath もロード identity の一部** — 同じ plugin でも state が違えば別宣言・#540 P2）。
+    異なる path / pluginId / statePath は**後勝ちで差し替える**（SC.3.1 規範4）。差し替えは
+    prepare → commit 型で、新インスタンスのロード成功まで旧インスタンスが鳴り続け、失敗時は
+    旧インスタンスが無傷で残る。差し替え時の保留 note は旧インスタンスへ全解放してから破棄する。
+    > **v1 の現在地（#540 P1/P2 時点）**: 後勝ち差し替えは**未実装で、明示エラーとして拒否**する
+    > （エラー文言がエンジン再起動の回避策を案内する）。実装先は #522 の SC.5 ライブ意味論
+    > （使用中 routing の差し替え・旧インスタンス解放・rollback と不可分のため）。
   - note の宛先は宣言シーケンス自身のインスタンス。channel は 0 固定（インスタンス化により
     per-sequence channel の必要は消滅した。channel は本来の意味 = マルチティンバープラグイン内の
     パート指定として後続 stage で使う）。
@@ -1280,19 +1297,16 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 > したがって旧規則は**共有の利点を実現する機構を持たないまま、preset / param / note が混ざる欠点だけを
 > 負っていた**。
 
-> **v1 の現在地（per-sequence インスタンス化）**: **PR-1a（#527）が実装するのはデータモデルのみ**
-> （`EffectChainMap` によるチェーン化と role 別 instanceId 発番の基盤）。エンジンは依然として
-> **single global instrument key**（`PluginInstrumentManager` が `'instrument'` 固定キーで管理）を
-> 使っており、異なる note シーケンスからの `instrument()` 宣言は「supports one instrument instance
-> in v1」エラーで拒否される（既存テストがこれをピン留めしている）。上記の「シーケンスごとに独立した
-> インスタンス」は本 PR の時点では成立しない。
+> **v1 の現在地（per-sequence インスタンス化）**: **#540 P1 で実装済み。** 宣言の登記は
+> シーケンス名キー（`PluginInstrumentManager` + `EffectChainMap<string>`）、daemon は起動時に
+> 事前確保した **instrument slot pool** へ `instance`（`plugin:<seqName>` 規約）で割り当てる。
+> 異なる note シーケンスの `instrument()` 宣言は独立したインスタンス（独立 child プロセス）を
+> 生成し、実機 gated テストが2インスタンスの同時発音と宛先分離をピン留めしている。
 >
-> **理由**: per-sequence インスタンス化は、宣言の登記先キーを `instrument` 固定から
-> シーケンス名ベースへ切り替える配線変更であり、`EffectChainMap` という基盤（本 PR）の上に
-> 構築する別工程として分離する。
->
-> **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は「異なる note シーケンスの `instrument()`
-> 宣言が、エラーにならず独立したインスタンスを生成すること」。
+> **slot pool の上限**: 同時に持てるインスタンス数は起動時固定の slot 数まで
+> （env `ORBIT_OUTPROC_INSTRUMENT_SLOTS`・既定 8・最大 32）。超過した宣言は
+> 「instrument slot pool exhausted」の明示エラーになり、env を上げてエンジンを再起動する。
+> 割当は解除されない（ライブセッション中に多数のシーケンス名を使い捨てると再起動が必要になる）。
 
 - **複数シーケンスと 1 インスタンスの関係**（暗黙には生じない。いずれも明示宣言・後続 stage）:
   - **サミング**: 複数シーケンスが同一インスタンスの**同一 part** に note を合流させる（通常の

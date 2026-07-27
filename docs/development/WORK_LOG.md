@@ -17,10 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.305 feat(engine): plugin state restore = sound selection #540 P2 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: ✅ コア完了・実機 E2E PASS（実 Kontakt + .vstpreset の音色確認は素材待ち）
+
+**内容**: `seq.instrument(path[, pluginId][, statePath])` で保存済みプラグイン state
+（`.vstpreset` / raw chunk）を復元し**音色を選択**できるようにする。UI なしで音色問題を解く
+（音作りは外部 DAW / 将来の #474 UI、選択は OrbitScore 内で完結）。
+
+**設計: spawn 時 CLI 引数（IPC 拡張ゼロ）**:
+- child `--state <file>` → load 後・READY publish 前に適用。失敗はハードエラー
+  （default 音のまま黙って鳴らさない）。**respawn でも同引数で再適用**される
+- `.vstpreset` parser を orbit-vst3-host に新設（header 48B + List chunk table・
+  Comp/Cont 抽出・magic 無しは raw chunk 扱い・magic ありで壊れていれば明示エラー）。
+  復元順序は VST3 公式 FAQ: component setState → controller setComponentState →
+  controller setState。class ID は照合しない（byte-order 誤検知 > 利得・plugin 自身が拒否する）
+- wire: LoadPlugin `state_path`（instrument 専用・effect に付けば MALFORMED）。
+  **state はロード identity の一部**（同 plugin 別 state の再宣言 = 差し替え要求 → v1 拒否）
+- DSL: 第2引数の拡張子ヒューリスティック（`.vstpreset`/`.state` = state・他 = pluginId）+
+  3引数明示形。相対パスは document directory 基準（検索パス不使用）
+- CLAP は明示エラー（Kontakt = VST3 が本命・後続で clack state ext）
+
+**spec**: PH.1 に state 引数を追記。PH.4 の「後勝ち差し替え」規範に v1 staging 注記を追加
+（現実装は明示拒否・履行先 #522 SC.5）。
+
+**検証**:
+- Rust: orbit-vst3-host 6 passed（parser 4種 + 既存2）・daemon lib 120 passed
+- **変異検証**: (C) Comp チャンク不採取 → 2件 red / (D) chunk 境界チェック除去 → 1件 red。復元後全緑
+- TS フルスイート **1728 passed / 29 skipped**（+5: state 解決・identity・ヒューリスティック）
+
+**Commit**: [PENDING]
+
+### 6.304 feat(engine): per-sequence instrument instances #540 P1 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: ✅ P1 コミット済み（`1dae696`）
+
+**背景**: 2026-07-29 の作品制作（owner）に「シーケンスごとに別 instrument」と「音色の変更」が
+必須。instrument はアプリ全体で1台（daemon `Mutex<Option<...>>` / TS 単数ガード）だった。
+
+**設計**: **instrument slot pool** — audio graph / shm / note ring は stream 起動時に固定で
+焼かれるため、effect の per-bus slot と同方式で **N slot（`ORBIT_OUTPROC_INSTRUMENT_SLOTS`・
+default 8）を起動時に事前確保**し、`LoadPlugin` の `instance` param で slot を割当てる。
+動的グラフ変更を回避。idle slot は engaged=false で即 return（コストほぼゼロ）。
+
+**Rust**: `OutProcInstrumentControl` を `slots: Vec<InstrumentSlotEntry>` + `instance_index` に
+再構成。`CompositePostProcessor.instruments` Vec 化。both / instrument-only 両起動経路を pool
+ループ化。`PluginNoteOn/Off` に `instance` param（未割当 instance へは明示エラー — 旧単数時代は
+ring に積んで黙って捨てられていた）。pool 枯渇は env-var ヒント付き明示エラー。
+health は全 slot 合算・stats accessor は互換（slot 0）+ `outproc_instrument_stats_for(instance)`。
+
+**TS**: note 側 `resolveNoteTarget()` が既に per-note で `plugin:<seqName>` port を運んでいた事実を
+利用し、**`PluginNoteOutput` の port をそのまま wire の instance に転用**（scheduler 層は無変更・
+rtmidi/IAC 経路に不接触）。`PluginInstrumentManager` を per-seq key 化（宣言 instance も同じ
+`plugin:<seqName>` 規約）。`RustEnginePlayer` の cache / self-heal / respawn replay を
+instance キー化（`pluginKey()`）。
+
+**検証**:
+- Rust lib 120 passed（+3 新規: slot routing / unknown-instance / pool 枯渇 vs 既存 instance 区別）
+- **変異検証**: (A) instance 無視・常に slot 0 → 3件 red / (B) 枯渇チェック除去 → 1件 red。復元後全緑
+- TS フルスイート **1723 passed / 29 skipped**（+1。IAC 保護対象 sequence-midi-dispatch 13件は無傷で全緑）
+
+**Commit**: [PENDING]
+
 ### 6.303 chore(test): vitest を単一バージョンに統一 #531 (Jul 27, 2026)
 
 **Date**: 2026-07-27
-**Status**: 🔄 レビュー待ち
+**Status**: ✅ 完了（PR #539 MERGED `dc080e2`）
 
 **内容**:
 同一リポジトリに vitest が2系統インストールされていた（`packages/engine` = 2.1.9 /

@@ -20,19 +20,22 @@ function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({}), active?: boolean
 }
 
 describe('PluginInstrumentManager', () => {
-  it('accepts VST3 instruments and passes their resolved path to the engine', async () => {
+  it('accepts VST3 instruments and passes their resolved path + instance to the engine', async () => {
     const { global, loadPlugin } = makeGlobal()
-    await expect(global.instrument('./synth.vst3', 'synth-id')).resolves.toBe(global)
+    await expect(global.instrument('kick', './synth.vst3', 'synth-id')).resolves.toBe(global)
+    // #540 P1: instance は note 側 port と同じ `plugin:<seqName>` 規約（5引数目）。
     expect(loadPlugin).toHaveBeenCalledWith(
       path.resolve('/songs/session', 'synth.vst3'),
       'synth-id',
       'instrument',
+      undefined,
+      'plugin:kick',
     )
   })
 
   it('continues to reject AU instruments', async () => {
     const { global } = makeGlobal()
-    await expect(global.instrument('synth.component')).rejects.toThrow('not yet supported')
+    await expect(global.instrument('kick', 'synth.component')).rejects.toThrow('not yet supported')
   })
 
   it('eagerly loads once and shares concurrent identical declarations', async () => {
@@ -40,8 +43,8 @@ describe('PluginInstrumentManager', () => {
     const pending = new Promise<void>((r) => (resolve = r))
     const loadPlugin = vi.fn(() => pending)
     const { global } = makeGlobal(loadPlugin)
-    const first = global.instrument('./synth.clap', 'synth-id')
-    const second = global.instrument('synth.clap', 'synth-id')
+    const first = global.instrument('kick', './synth.clap', 'synth-id')
+    const second = global.instrument('kick', 'synth.clap', 'synth-id')
     resolve()
     await Promise.all([first, second])
     expect(loadPlugin).toHaveBeenCalledTimes(1)
@@ -49,26 +52,55 @@ describe('PluginInstrumentManager', () => {
       path.resolve('/songs/session', 'synth.clap'),
       'synth-id',
       'instrument',
+      undefined,
+      'plugin:kick',
     )
   })
 
-  it('rejects a different path or plugin id after declaration', async () => {
+  it('gives independent sequences independent instrument instances (#540 P1)', async () => {
     const { global, loadPlugin } = makeGlobal()
-    await global.instrument('synth.clap', 'one')
-    await expect(global.instrument('other.clap', 'one')).rejects.toThrow('one instrument')
-    await expect(global.instrument('synth.clap', 'two')).rejects.toThrow('one instrument')
+    await global.instrument('kick', 'synth.clap', 'one')
+    await global.instrument('lead', 'synth.clap', 'one')
+    // 同じ plugin でも sequence が違えば別インスタンス（別 instance ID で 2 回ロード）。
+    expect(loadPlugin).toHaveBeenCalledTimes(2)
+    expect(loadPlugin).toHaveBeenNthCalledWith(
+      1,
+      path.resolve('/songs/session', 'synth.clap'),
+      'one',
+      'instrument',
+      undefined,
+      'plugin:kick',
+    )
+    expect(loadPlugin).toHaveBeenNthCalledWith(
+      2,
+      path.resolve('/songs/session', 'synth.clap'),
+      'one',
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+  })
+
+  it('rejects a different path or plugin id after declaration for the same sequence', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await global.instrument('kick', 'synth.clap', 'one')
+    await expect(global.instrument('kick', 'other.clap', 'one')).rejects.toThrow(
+      "Sequence 'kick' already has an instrument instance",
+    )
+    await expect(global.instrument('kick', 'synth.clap', 'two')).rejects.toThrow(
+      "Sequence 'kick' already has an instrument instance",
+    )
     expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 
-  it('states the v1 limit error carries a stage marker (#527 review addition 2 / SC.5 "v1 のエラーは stage 表記を含む")', async () => {
+  it('spells out the v1 replacement restriction and its workaround in the error', async () => {
     const { global } = makeGlobal()
-    await global.instrument('synth.clap', 'one')
+    await global.instrument('kick', 'synth.clap', 'one')
     // Explicit, not just a substring incidentally still matching: pins the
-    // stage-marker text itself, not merely the pre-existing "one instrument"
-    // phrase — a regression that dropped the stage suffix but kept "one
-    // instrument" must fail this assertion.
-    await expect(global.instrument('other.clap', 'one')).rejects.toThrow(
-      /S4 PR-1b \(#517\/#522\) will allow independent instances per note sequence\./,
+    // workaround text itself — a regression that dropped the guidance but kept
+    // the leading phrase must fail this assertion.
+    await expect(global.instrument('kick', 'other.clap', 'one')).rejects.toThrow(
+      /v1 does not support replacing it \(restart the engine to change the plugin or sound\)\./,
     )
   })
 
@@ -76,35 +108,87 @@ describe('PluginInstrumentManager', () => {
     const failure = new Error('load failed')
     const loadPlugin = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({})
     const { global } = makeGlobal(loadPlugin)
-    await expect(global.instrument('synth.clap')).rejects.toBe(failure)
-    await expect(global.instrument('synth.clap')).resolves.toBe(global)
+    await expect(global.instrument('kick', 'synth.clap')).rejects.toBe(failure)
+    await expect(global.instrument('kick', 'synth.clap')).resolves.toBe(global)
     expect(loadPlugin).toHaveBeenCalledTimes(2)
   })
 
   it('self-heals an inactive idempotent declaration', async () => {
     const { global, loadPlugin } = makeGlobal(vi.fn().mockResolvedValue({}), false)
-    await global.instrument('synth.clap')
-    await global.instrument('synth.clap')
+    await global.instrument('kick', 'synth.clap')
+    await global.instrument('kick', 'synth.clap')
     expect(loadPlugin).toHaveBeenCalledTimes(2)
   })
 
   it('allows effect and instrument declarations in both orders, including the same path', async () => {
     const first = makeGlobal().global
     await first.effect('shared.clap')
-    await expect(first.instrument('shared.clap')).resolves.toBe(first)
+    await expect(first.instrument('kick', 'shared.clap')).resolves.toBe(first)
 
     const second = makeGlobal().global
-    await second.instrument('shared.clap')
+    await second.instrument('kick', 'shared.clap')
     await expect(second.effect('shared.clap')).resolves.toBe(second)
+  })
+
+  it('resolves a relative state path against the document directory and passes it to the engine (#540 P2)', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await global.instrument('kick', 'synth.vst3', undefined, 'sounds/kick.vstpreset')
+    expect(loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'synth.vst3'),
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:kick',
+      path.resolve('/songs/session', 'sounds/kick.vstpreset'),
+    )
+  })
+
+  it('passes an absolute state path through unchanged (#540 P2)', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await global.instrument('kick', 'synth.vst3', undefined, '/presets/kick.vstpreset')
+    expect(loadPlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'synth.vst3'),
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/presets/kick.vstpreset',
+    )
+  })
+
+  it('rejects a relative state path when no document directory is set (#540 P2)', async () => {
+    // 回帰ピン: getDocumentDirectory() は未設定時 undefined でなく空文字列を返す。
+    // 旧実装の `=== undefined` ガードは死んでいて cwd 相対に silent フォールバックしていた
+    // （/simplify reuse レビュー検出の実バグ）。明示エラーになること・ロードに進まないこと。
+    const loadPlugin = vi.fn().mockResolvedValue({})
+    const engine = { loadPlugin, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const global = new Global(engine) // setDocumentDirectory を意図的に呼ばない
+    await expect(
+      global.instrument('kick', '/plugins/synth.vst3', undefined, 'kick.vstpreset'),
+    ).rejects.toThrow('no document directory is set')
+    expect(loadPlugin).not.toHaveBeenCalled()
+  })
+
+  it('treats a different state for the same sequence as a rejected replacement (#540 P2)', async () => {
+    const { global, loadPlugin } = makeGlobal()
+    await global.instrument('kick', 'synth.vst3', undefined, 'a.vstpreset')
+    // 同一 state の再宣言は冪等（ロードは 1 回のまま）。
+    await global.instrument('kick', 'synth.vst3', undefined, 'a.vstpreset')
+    expect(loadPlugin).toHaveBeenCalledTimes(1)
+    // state 違い = 音色の差し替え要求 → v1 は拒否（黙って古い音色のまま成功にしない）。
+    await expect(global.instrument('kick', 'synth.vst3', undefined, 'b.vstpreset')).rejects.toThrow(
+      "Sequence 'kick' already has an instrument instance",
+    )
+    expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 
   it('rejects LinkAudio in both declaration orders', async () => {
     const first = makeGlobal().global
     first.linkAudio()
-    await expect(first.instrument('synth.clap')).rejects.toThrow('LinkAudio')
+    await expect(first.instrument('kick', 'synth.clap')).rejects.toThrow('LinkAudio')
 
     const second = makeGlobal().global
-    await second.instrument('synth.clap')
+    await second.instrument('kick', 'synth.clap')
     expect(() => second.linkAudio()).toThrow('plugin hosting')
   })
 })

@@ -79,6 +79,15 @@ export function isPluginPathSpec(spec: string): boolean {
   return KNOWN_PLUGIN_EXTENSIONS.some((ext) => lower.endsWith(ext))
 }
 
+/**
+ * `seq.instrument()` の第2引数が保存済み state ファイル（音色）かの判別（#540 P2）。
+ * `.vstpreset`（Steinberg 標準 container）と `.state`（raw component chunk）のみ。
+ * `isPluginPathSpec` と同じ「spec 文字列の種別判別はここに集約する」方針で同居させる。
+ */
+export function isStateFileSpec(value: string): boolean {
+  return /\.(vstpreset|state)$/i.test(value)
+}
+
 export function normalizeCatalogKey(value: string): string {
   return value.trim().normalize('NFC').toLowerCase()
 }

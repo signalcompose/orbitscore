@@ -239,14 +239,14 @@ const MAX_RESPAWN_ATTEMPTS = 5
 /** respawn 試行間の固定バックオフ（crash loop 緩和 + port 解放待ち）。 */
 const RESPAWN_BACKOFF_MS = 150
 
-/** feature gap warning の初期状態（フィールド初期化子で arm・stopAll で再 arm に使う）。 */
-const freshWarned = (): Record<GapKind, boolean> => ({
-  outputChannel: false,
-  masterEffect: false,
-  linkTempo: false,
-  pluginNoteDrop: false,
-  pluginInactive: false,
-})
+/**
+ * feature gap warning の抑止キー集合（フィールド初期化子で arm・stopAll で再 arm）。
+ * キーは `kind` または `kind:discriminator`。#542 レビュー: `pluginInactive` は instance ごとに
+ * 独立して警告する必要がある（単一 boolean だと最初の1台の警告以降、別 instrument の
+ * note ドロップが session 終端まで無警告になる）ため、Record<GapKind, boolean> から
+ * 判別子付き Set へ変更した。
+ */
+const freshWarned = (): Set<string> => new Set()
 
 export class RustEnginePlayer implements AudioEngineBackend {
   private readonly daemon: DaemonClient
@@ -277,7 +277,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
    */
   private readonly loadedPlugins = new Map<
     string,
-    { filePath: string; pluginId?: string; role: 'effect' | 'instrument'; bus?: string }
+    {
+      filePath: string
+      pluginId?: string
+      role: 'effect' | 'instrument'
+      bus?: string
+      instance?: string
+      statePath?: string
+    }
   >()
   /**
    * Whether `loadedPlugin` is actually loaded in the daemon right now (silent-failure
@@ -329,7 +336,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private respawnPromise: Promise<void> | null = null
 
   /** feature gap の 1 回限り warning。stopAll で再 arm する。 */
-  private warned: Record<GapKind, boolean> = freshWarned()
+  private warned: Set<string> = freshWarned()
 
   constructor(options: RustEnginePlayerOptions = {}) {
     this.daemon = new DaemonClient()
@@ -701,20 +708,38 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * build hint, other codes → generic wrap); non-protocol errors pass through
    * unchanged.
    */
+  /**
+   * 宣言 cache / active flag のキー。effect は bus、instrument は instance が第2成分
+   * （#540 P1 — instrument slot pool の宛先が bus ではなく instance のため）。
+   */
+  private static pluginKey(role: 'effect' | 'instrument', bus?: string, instance?: string): string {
+    return role === 'instrument' ? `instrument:${instance ?? ''}` : `effect:${bus ?? ''}`
+  }
+
   async loadPlugin(
     filePath: string,
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
     bus?: string,
+    instance?: string,
+    statePath?: string,
   ): Promise<PluginLoadResult> {
+    const key = RustEnginePlayer.pluginKey(role, bus, instance)
     try {
-      const result = await this.daemon.loadPlugin(filePath, pluginId, role, bus)
-      this.loadedPlugins.set(`${role}:${bus ?? ''}`, { filePath, pluginId, role, bus })
-      this.pluginActiveByKey.set(`${role}:${bus ?? ''}`, true)
+      const result = await this.daemon.loadPlugin(
+        filePath,
+        pluginId,
+        role,
+        bus,
+        instance,
+        statePath,
+      )
+      this.loadedPlugins.set(key, { filePath, pluginId, role, bus, instance, statePath })
+      this.pluginActiveByKey.set(key, true)
       return result
     } catch (err) {
       // 失敗時は必ず false（呼び出し元の false-on-entry 保証に依存しない）
-      this.pluginActiveByKey.set(`${role}:${bus ?? ''}`, false)
+      this.pluginActiveByKey.set(key, false)
       if (err instanceof DaemonProtocolError) {
         if (err.code === 'CLAP_UNAVAILABLE') {
           throw new Error(
@@ -727,7 +752,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
-  pluginNoteOn(key: number, channel: number, velocity: number): Promise<void> {
+  pluginNoteOn(key: number, channel: number, velocity: number, instance?: string): Promise<void> {
     if (!this.daemon.isRunning()) {
       this.warnOnce(
         'pluginNoteDrop',
@@ -735,19 +760,23 @@ export class RustEnginePlayer implements AudioEngineBackend {
       )
       return Promise.resolve()
     }
-    if (this.pluginActiveByKey.get('instrument:') !== true) {
+    if (
+      this.pluginActiveByKey.get(RustEnginePlayer.pluginKey('instrument', undefined, instance)) !==
+      true
+    ) {
       this.warnOnce(
         'pluginInactive',
-        '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
+        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after the last daemon respawn — re-run seq.instrument(...) to restore it`,
+        instance ?? 'default',
       )
       return Promise.resolve()
     }
     // Ordering contract: do not insert an await before this call. Daemon requests are
     // processed sequentially, so synchronous WebSocket send order is musical note order.
-    return this.daemon.pluginNoteOn(key, channel, velocity)
+    return this.daemon.pluginNoteOn(key, channel, velocity, instance)
   }
 
-  pluginNoteOff(key: number, channel: number, velocity?: number): Promise<void> {
+  pluginNoteOff(key: number, channel: number, velocity?: number, instance?: string): Promise<void> {
     if (!this.daemon.isRunning()) {
       this.warnOnce(
         'pluginNoteDrop',
@@ -755,15 +784,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
       )
       return Promise.resolve()
     }
-    if (this.pluginActiveByKey.get('instrument:') !== true) {
+    if (
+      this.pluginActiveByKey.get(RustEnginePlayer.pluginKey('instrument', undefined, instance)) !==
+      true
+    ) {
       this.warnOnce(
         'pluginInactive',
-        '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
+        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after the last daemon respawn — re-run seq.instrument(...) to restore it`,
+        instance ?? 'default',
       )
       return Promise.resolve()
     }
     // Keep the synchronous send ordering contract documented above: no await here.
-    return this.daemon.pluginNoteOff(key, channel, velocity)
+    return this.daemon.pluginNoteOff(key, channel, velocity, instance)
   }
 
   /**
@@ -779,9 +812,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
     if (this.loadedPlugins.size === 0) return
     // Reissue every declaration (master effect/instrument + all seq.effect() buses).
     // One entry's failure must not skip the others — each is independent daemon state.
-    for (const [key, { filePath, pluginId, role, bus }] of this.loadedPlugins.entries()) {
+    for (const [
+      key,
+      { filePath, pluginId, role, bus, instance, statePath },
+    ] of this.loadedPlugins.entries()) {
       try {
-        await this.daemon.loadPlugin(filePath, pluginId, role, bus)
+        await this.daemon.loadPlugin(filePath, pluginId, role, bus, instance, statePath)
         this.pluginActiveByKey.set(key, true)
       } catch (err) {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
@@ -797,10 +833,10 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /** Whether `loadedPlugin` is actually active in the daemon right now (see field doc). */
-  isPluginActive(role?: 'effect' | 'instrument', bus?: string): boolean {
-    // 引数なし = 全宣言が active か（後方互換・boolean AND）。role/bus 指定 = 該当宣言のみ。
+  isPluginActive(role?: 'effect' | 'instrument', bus?: string, instance?: string): boolean {
+    // 引数なし = 全宣言が active か（後方互換・boolean AND）。role/bus/instance 指定 = 該当宣言のみ。
     if (role !== undefined) {
-      return this.pluginActiveByKey.get(`${role}:${bus ?? ''}`) !== false
+      return this.pluginActiveByKey.get(RustEnginePlayer.pluginKey(role, bus, instance)) !== false
     }
     for (const active of this.pluginActiveByKey.values()) {
       if (!active) return false
@@ -1227,9 +1263,10 @@ export class RustEnginePlayer implements AudioEngineBackend {
     return this.daemon.getStatus()
   }
 
-  private warnOnce(kind: GapKind, message: string): void {
-    if (this.warned[kind]) return
-    this.warned[kind] = true
+  private warnOnce(kind: GapKind, message: string, discriminator?: string): void {
+    const key = discriminator === undefined ? kind : `${kind}:${discriminator}`
+    if (this.warned.has(key)) return
+    this.warned.add(key)
     console.warn(message)
   }
 }

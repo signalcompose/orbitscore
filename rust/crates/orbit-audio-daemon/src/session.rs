@@ -145,6 +145,29 @@ fn bus_param_invalid_for_instrument_role(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) == Some("instrument") && params.get("bus").is_some()
 }
 
+/// 任意・非空文字列 param の共通パーサ（`instance` #540 P1 / `state_path` #540 P2）。
+/// 欠如は `Ok(None)`（互換: 単数時代の "default" 扱い）。空文字列・非文字列は `Err`
+/// （`parse_bus_param` と同じ「黙って壊さない」方針）。
+fn parse_optional_nonempty_string_param(
+    params: &Value,
+    field: &'static str,
+) -> Result<Option<String>, String> {
+    match params.get(field) {
+        None => Ok(None),
+        // trim 判定は `parse_bus_param` と対称（空白のみの値を「非空」として通さない）。
+        Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.clone())),
+        Some(Value::String(_)) => Err(format!("'{field}' must be a non-empty string")),
+        Some(_) => Err(format!("'{field}' must be a string")),
+    }
+}
+
+/// role='instrument' 専用 param（`instance` / `state_path`）が他 role の宣言に紛れ込んだかの
+/// 判定（`bus` が role='effect' 専用なのと対称）。黙って無視せず MALFORMED で弾くために使う。
+#[cfg(feature = "outproc-instrument")]
+fn instrument_only_param_misused(params: &Value, field: &str) -> bool {
+    params.get("role").and_then(Value::as_str) != Some("instrument") && params.get(field).is_some()
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -950,6 +973,59 @@ async fn handle_command(
                         ),
                     );
                 }
+                // #540 P1: `instance`（role='instrument' 専用・`bus` と対称）。
+                #[cfg(feature = "outproc-instrument")]
+                if instrument_only_param_misused(&params, "instance") {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "LoadPlugin instance is only valid for role='instrument'",
+                        ),
+                    );
+                }
+                #[cfg(feature = "outproc-instrument")]
+                let instance = match parse_optional_nonempty_string_param(&params, "instance") {
+                    Ok(instance) => instance,
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                // #540 P2: `state_path`（role='instrument' 専用・保存済み state の復元）。
+                #[cfg(feature = "outproc-instrument")]
+                if instrument_only_param_misused(&params, "state_path") {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "LoadPlugin state_path is only valid for role='instrument'",
+                        ),
+                    );
+                }
+                #[cfg(feature = "outproc-instrument")]
+                let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
+                    Ok(state_path) => state_path.map(std::path::PathBuf::from),
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                // instrument-only build（テスト用構成）は単数互換経路しか持たない。ビルド構成
+                // パリティ方針（#542 レビュー）: 尊重できない param を検証後に黙って捨てて
+                // `ok` を返さない — この構成が扱えない要求は明示エラーで断る（TS 層は常に
+                // instance を送るため、silent 縮退は「2台目が黙って1台に合流」として現れる）。
+                #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+                if instance.is_some() || state_path.is_some() {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "OUTPROC_INSTRUMENT_UNAVAILABLE",
+                            "this daemon build (outproc-instrument only) supports a single \
+                             instrument instance and no state restore; rebuild with \
+                             --features outproc-effect,outproc-instrument for per-sequence \
+                             instances (LoadPlugin instance/state_path)",
+                        ),
+                    );
+                }
                 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
                 let params_role = params
                     .get("role")
@@ -964,9 +1040,9 @@ async fn handle_command(
                                 Some("effect") => {
                                     engine.load_outproc_effect_plugin(path, plugin_id, bus)
                                 }
-                                Some("instrument") => {
-                                    engine.load_outproc_instrument_plugin(path, plugin_id)
-                                }
+                                Some("instrument") => engine.load_outproc_instrument_plugin(
+                                    path, plugin_id, instance, state_path,
+                                ),
                                 _ => unreachable!("role was validated before spawn_blocking"),
                             }
                         }
@@ -1263,11 +1339,14 @@ fn parse_midi_channel(params: &Value) -> Result<u8, ProtocolError> {
     }
 }
 
+/// PluginNoteOn/Off の engine 呼び出し（key, channel, velocity, instance — #540 P1）。
+type PluginNoteCall = fn(&EngineWrap, u8, u8, f64, Option<String>) -> Result<(), WrapError>;
+
 /// `PluginNoteOn`/`PluginNoteOff` の配線（`default_velocity`/`status`/`call`）。
 struct PluginNoteSpec {
     default_velocity: f64,
     status: &'static str,
-    call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
+    call: PluginNoteCall,
 }
 
 /// `method` 文字列から [`PluginNoteSpec`] を解決する single source of truth。`handle_command` 冒頭の
@@ -1307,7 +1386,7 @@ async fn handle_plugin_note(
     engine: &Arc<EngineWrap>,
     default_velocity: f64,
     status: &'static str,
-    call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
+    call: PluginNoteCall,
 ) -> Value {
     match params.get("key").and_then(|v| v.as_u64()) {
         Some(k) if k <= 127 => match parse_midi_channel(params) {
@@ -1315,10 +1394,18 @@ async fn handle_plugin_note(
                 // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が
                 // 未定義になるため）。
                 let velocity = param_f64(params, "velocity", default_velocity).clamp(0.0, 1.0);
+                // #540 P1: instance で slot pool の宛先を選ぶ（欠如は互換の "default"）。
+                let instance = match parse_optional_nonempty_string_param(params, "instance") {
+                    Ok(instance) => instance,
+                    Err(message) => {
+                        return err(id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
                 let engine = engine.clone();
-                let res =
-                    tokio::task::spawn_blocking(move || call(&engine, k as u8, channel, velocity))
-                        .await;
+                let res = tokio::task::spawn_blocking(move || {
+                    call(&engine, k as u8, channel, velocity, instance)
+                })
+                .await;
                 match res {
                     Ok(Ok(())) => ok(id, json!({"status": status, "key": k})),
                     Ok(Err(e)) => err(id, wrap_err_to_protocol(&e)),
@@ -1505,6 +1592,50 @@ mod tests {
         ));
     }
 
+    // #540 P1/P2（#542 レビュー test-gap）: instrument 専用 param の role 誤用判定を pin
+    // （bus_param_invalid_for_instrument_role の対称テスト）。
+    #[cfg(feature = "outproc-instrument")]
+    #[test]
+    fn instrument_only_param_misused_flags_only_the_combination() {
+        for field in ["instance", "state_path"] {
+            assert!(
+                instrument_only_param_misused(&json!({"role": "effect", field: "x"}), field),
+                "'{field}' on role=effect must be flagged"
+            );
+            assert!(
+                !instrument_only_param_misused(&json!({"role": "instrument", field: "x"}), field),
+                "'{field}' on role=instrument is the valid combination"
+            );
+            assert!(
+                !instrument_only_param_misused(&json!({"role": "effect"}), field),
+                "absent '{field}' must not be flagged"
+            );
+        }
+    }
+
+    // #540 P1/P2（#542 レビュー test-gap）: 任意・非空文字列 param パーサの境界を pin。
+    // 空文字列・空白のみ（parse_bus_param と対称の trim 判定）・非文字列は Err、欠如は Ok(None)。
+    #[test]
+    fn parse_optional_nonempty_string_param_boundaries() {
+        for field in ["instance", "state_path"] {
+            assert_eq!(
+                parse_optional_nonempty_string_param(&json!({}), field),
+                Ok(None),
+                "absent '{field}' is Ok(None) (single-instrument compat)"
+            );
+            assert_eq!(
+                parse_optional_nonempty_string_param(&json!({field: "plugin:kick"}), field),
+                Ok(Some("plugin:kick".to_string()))
+            );
+            assert!(parse_optional_nonempty_string_param(&json!({field: ""}), field).is_err());
+            assert!(
+                parse_optional_nonempty_string_param(&json!({field: "  "}), field).is_err(),
+                "whitespace-only '{field}' must be rejected (trim parity with parse_bus_param)"
+            );
+            assert!(parse_optional_nonempty_string_param(&json!({field: 7}), field).is_err());
+        }
+    }
+
     // LinkAudio エラーの protocol code 分割を pin（TS は UNAVAILABLE のみ握り潰し RUNTIME は rethrow）。
     #[test]
     fn link_audio_unavailable_maps_to_unavailable_code() {
@@ -1646,19 +1777,14 @@ mod tests {
         assert!(
             std::ptr::fn_addr_eq(
                 on.call,
-                EngineWrap::plugin_note_on
-                    as fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>
+                EngineWrap::plugin_note_on as PluginNoteCall
             ),
             "PluginNoteOn は EngineWrap::plugin_note_on を呼ぶこと（NoteOff と入れ替わっていないこと）"
         );
 
         let off = plugin_note_spec("PluginNoteOff").expect("PluginNoteOff has a spec");
         assert!(
-            std::ptr::fn_addr_eq(
-                off.call,
-                EngineWrap::plugin_note_off
-                    as fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>
-            ),
+            std::ptr::fn_addr_eq(off.call, EngineWrap::plugin_note_off as PluginNoteCall),
             "PluginNoteOff は EngineWrap::plugin_note_off を呼ぶこと"
         );
     }
@@ -1681,6 +1807,7 @@ mod tests {
             _key: u8,
             _channel: u8,
             velocity: f64,
+            _instance: Option<String>,
         ) -> Result<(), WrapError> {
             CAPTURED_VELOCITY_BITS.store(velocity.to_bits(), Ordering::SeqCst);
             Ok(())
@@ -1730,6 +1857,7 @@ mod tests {
             _key: u8,
             _channel: u8,
             _velocity: f64,
+            _instance: Option<String>,
         ) -> Result<(), WrapError> {
             panic!("orbit-audio-daemon test: simulated panic inside spawn_blocking call fn");
         }

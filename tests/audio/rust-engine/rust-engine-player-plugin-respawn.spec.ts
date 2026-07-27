@@ -48,8 +48,8 @@ describe('RustEnginePlayer plugin note ordering', () => {
     await player.loadPlugin('/plugins/echo.clap', 'echo-id', 'instrument')
     const on = player.pluginNoteOn(60, 0, 0.75)
     const off = player.pluginNoteOff(60, 0)
-    expect(daemon.pluginNoteOn).toHaveBeenCalledWith(60, 0, 0.75)
-    expect(daemon.pluginNoteOff).toHaveBeenCalledWith(60, 0, undefined)
+    expect(daemon.pluginNoteOn).toHaveBeenCalledWith(60, 0, 0.75, undefined)
+    expect(daemon.pluginNoteOff).toHaveBeenCalledWith(60, 0, undefined, undefined)
     return Promise.all([on, off])
   })
 
@@ -76,7 +76,21 @@ describe('RustEnginePlayer plugin note ordering', () => {
     expect(daemon.pluginNoteOn).not.toHaveBeenCalled()
     expect(daemon.pluginNoteOff).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('was not restored'))
+    // #542: 警告は instance を名指しする（instance 未指定は 'default' 表記）。
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("instrument 'default'"))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('not restored'))
+  })
+
+  it('warns per instance, not once globally, when different instruments are inactive (#542)', async () => {
+    const { player } = createHarness()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // どちらの instance もロード成功していない → 両方 drop されるが、警告は instance ごとに1回ずつ。
+    await player.pluginNoteOn(60, 0, 1, 'plugin:kick')
+    await player.pluginNoteOn(60, 0, 1, 'plugin:kick')
+    await player.pluginNoteOn(60, 0, 1, 'plugin:lead')
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("instrument 'plugin:kick'"))
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("instrument 'plugin:lead'"))
   })
 })
 
@@ -101,6 +115,8 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       '/plugins/echo.clap',
       'echo-id',
       'effect',
+      undefined,
+      undefined,
       undefined,
     )
     // C1: a successful reload must flip pluginActive back to true, so
@@ -136,6 +152,8 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       'echo-id',
       'instrument',
       undefined,
+      undefined,
+      undefined,
     )
     expect(player.isPluginActive()).toBe(true)
   })
@@ -156,13 +174,101 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       undefined,
       'effect',
       undefined,
+      undefined,
+      undefined,
     )
     expect(daemon.loadPlugin).toHaveBeenCalledWith(
       '/plugins/reverb.clap',
       undefined,
       'effect',
       'seq-bus-0',
+      undefined,
+      undefined,
     )
+  })
+
+  it('reissues two instrument instances independently with their own instance+statePath (#540 P1/P2)', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/songs/kick.vstpreset',
+    )
+    await player.loadPlugin(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+      '/songs/lead.vstpreset',
+    )
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    // instance キーが退行して片方が cache を上書きすると、ここが 1 回になり検出される。
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(2)
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/songs/kick.vstpreset',
+    )
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+      '/songs/lead.vstpreset',
+    )
+  })
+
+  it('one instrument reload failure flips only that instance inactive; the other keeps playing (#540 P1)', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:kick',
+    )
+    await player.loadPlugin(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+    daemon.loadPlugin.mockClear()
+    // Map 挿入順で kick が先に再ロードされ、その1回目だけ失敗させる。
+    daemon.loadPlugin
+      .mockRejectedValueOnce(new Error('kick reload failed'))
+      .mockResolvedValueOnce(ECHO_LOAD_RESULT)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    // active フラグは instance ごとに独立（片方の失敗が他方に波及しない）。
+    expect(player.isPluginActive('instrument', undefined, 'plugin:kick')).toBe(false)
+    expect(player.isPluginActive('instrument', undefined, 'plugin:lead')).toBe(true)
+
+    // 失敗した instance への note は drop、成功した instance への note は通る。
+    daemon.pluginNoteOn.mockClear()
+    await player.pluginNoteOn(60, 0, 0.8, 'plugin:kick')
+    expect(daemon.pluginNoteOn).not.toHaveBeenCalled()
+    await player.pluginNoteOn(60, 0, 0.8, 'plugin:lead')
+    expect(daemon.pluginNoteOn).toHaveBeenCalledTimes(1)
+    expect(daemon.pluginNoteOn).toHaveBeenCalledWith(60, 0, 0.8, 'plugin:lead')
   })
 
   it('one bus reload failure does not skip reloading the others', async () => {
@@ -186,6 +292,8 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       undefined,
       'effect',
       'seq-bus-0',
+      undefined,
+      undefined,
     )
     expect(player.isPluginActive()).toBe(false)
   })
