@@ -2,7 +2,12 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
-import { BusPool, EffectSlotMap, resolveEffectSpec } from './effect-slot'
+import {
+  BusPool,
+  EffectChainMap,
+  normalizePluginInstanceName,
+  resolveEffectSpec,
+} from './effect-slot'
 
 /**
  * Bus name prefix for the daemon's default per-sequence insert bus pool. Must
@@ -22,7 +27,7 @@ export const SEQUENCE_EFFECT_BUS_POOL_SIZE = 8
 /**
  * Owns the per-sequence insert (`seq.effect()` — PH.2b / #434 S3) declarations:
  * one bus per sequence, allocated from the daemon's default bus pool
- * (`seq-bus-0`.."seq-bus-7"). 実装は #468 の共通基盤（`BusPool` + `EffectSlotMap`）に
+ * (`seq-bus-0`.."seq-bus-7"). 実装は #468 の共通基盤（`BusPool` + `EffectChainMap`）に
  * 委譲し、この manager 固有なのは「passthrough bus（`ensureBus()` — plugin 未ロードの
  * routing 用割当・MX.4）と insert の分離、および昇格失敗時に bus を返却しない
  * ロールバック」だけ。
@@ -31,7 +36,7 @@ export class SequenceEffectManager {
   /** sequenceName → 割当 bus（passthrough 含む）。routing（output/send）が参照する。 */
   private readonly buses = new Map<string, string>()
   /** sequenceName → 実 insert 宣言（passthrough は含まない）。 */
-  private readonly slots: EffectSlotMap<string>
+  private readonly slots: EffectChainMap<string>
   private readonly pool = new BusPool(
     SEQUENCE_EFFECT_BUS_PREFIX,
     SEQUENCE_EFFECT_BUS_POOL_SIZE,
@@ -45,7 +50,7 @@ export class SequenceEffectManager {
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
-    this.slots = new EffectSlotMap(audioEngine)
+    this.slots = new EffectChainMap(audioEngine, (sequenceName) => `seq:${sequenceName}`)
   }
 
   hasDeclaration(sequenceName: string): boolean {
@@ -87,11 +92,9 @@ export class SequenceEffectManager {
       `Sequence '${sequenceName}': seq.effect() cannot be used while LinkAudio is enabled in v1.`,
     )
 
-    const duplicateError = () =>
-      new Error(
-        `Sequence '${sequenceName}': seq.effect() supports one insert per sequence in v1; ` +
-          `chains (multiple inserts) are reserved for future support.`,
-      )
+    const duplicateMessage = () =>
+      `Sequence '${sequenceName}': seq.effect() supports one insert per sequence in v1; ` +
+      `chains (multiple inserts) are reserved for future support.`
 
     // passthrough（ensureBus 由来・insert 未ロード）は「既存 insert」ではない — 同じ bus を
     // その場で昇格する。実 insert が既にあれば slots.declare が冪等/self-heal/重複エラーを担う。
@@ -99,13 +102,37 @@ export class SequenceEffectManager {
     const bus = this.buses.get(sequenceName) ?? this.pool.acquire(sequenceName)
     this.buses.set(sequenceName, bus)
     try {
-      await this.slots.declare(sequenceName, bus, resolved.path, resolved.pluginId, duplicateError)
+      await this.slots.declare(
+        sequenceName,
+        {
+          role: 'effect',
+          bus,
+          normalizedName: normalizePluginInstanceName(spec),
+          resolvedPath: resolved.path,
+          pluginId: resolved.pluginId,
+        },
+        duplicateMessage,
+      )
     } catch (err) {
       if (!hadBus) {
         // この呼び出しで新規に確保した bus の load 失敗: free-list へ返す（daemon 側も
         // activation を巻き戻すため、両側の状態が対称に戻る）。
-        this.buses.delete(sequenceName)
-        this.pool.release(bus)
+        //
+        // ただし直列化キュー（#527 review Important 1）が生んだ新しい成功経路がある:
+        // 同一 sequenceName への `effect()` を await せず連打すると、後続呼び出しは
+        // 「hadBus === true」（この呼び出しが確保した bus を同期的に見て再利用）で
+        // pending キューに並ぶ。この呼び出しの declare() が失敗しても、後続はキューの
+        // 順番で独立に再試行し、成功すればこの bus に生きた宣言を持つ。`!hadBus` の
+        // 時点の判定はもう有効ではない — キューがまだ流れている最中に同期的に
+        // `has()` を見ると、後続の `declareBody()` がまだ走っていない可能性がある
+        // タイミングを掴んで「誰も使っていない」と誤判定しうる（#527 review round 3）。
+        // `slots.settled()` でこの key へのキューが完全に片付くのを待ってから、
+        // 真に誰も宣言を持っていない場合だけ解放する。
+        await this.slots.settled(sequenceName)
+        if (!this.slots.has(sequenceName)) {
+          this.buses.delete(sequenceName)
+          this.pool.release(bus)
+        }
       }
       // 既存 bus（passthrough 昇格 / self-heal 再ロード）の失敗は bus を返却しない —
       // seq.output()/seq.send() の routing がその bus を参照し続けているため。

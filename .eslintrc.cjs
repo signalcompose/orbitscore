@@ -33,6 +33,6 @@ module.exports = {
     'packages/**/dist/**',
     'node_modules/**',
     'scripts/**',
-    'packages/engine/vitest.config.ts',
+    'vitest.config.ts',
   ],
 }

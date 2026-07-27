@@ -1160,8 +1160,25 @@ synth.play(1, 3, 5, 0)                        // 値は度数（Pitch DSL と同
   （`octave` / `vel` / `gate` / `root`、mode / chord / `[ ]` / tie / voicing 適用可）。
 - **v1 実現マトリクスの例外**: detune `~` は不可（plugin 経路に pitch bend / CC がない
   ため warn + skip）。`global.midiLatency()` は MIDI 送出専用のため非適用。
-- 出力はエンジン master bus に add-mix され、global gain / master effect insert /
-  capture の対象になる。
+- 出力は**当該シーケンスの insert bus に源流として合流**し、per-sequence の effect チェーン /
+  send / 出力先ルーティングの対象になる（#517 S4 で master 直行から移設）。ルーティング未宣言時の
+  既定の行き先は従来どおり master であり、global gain / master effect insert / capture の対象で
+  あることは不変。
+  > **移設の理由**: 移設前は instrument の音が master の post processor で add-mix されており
+  > （`engine_wrap.rs` の `CompositePostProcessor`）、**seq バスグラフを一切通らなかった**。
+  > このため SC.0 の `lead.Serum(...).TALReverb4(size: 0.6).subout` — 楽器にエフェクトを挿し
+  > 出力先を指定する記述 — が原理的に成立しなかった（DSL 層も note シーケンスへの
+  > `output()` / `send()` を拒否していた）。#522 の到達点「SC.0 の完全実行」には移設が必須である。
+  >
+  > **v1 の現在地**: **PR-1a（#527）はまだこの移設を実装していない**。instrument の出力は
+  > 引き続き master の `CompositePostProcessor`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）で
+  > add-mix されており、`packages/engine/src/core/sequence.ts` は note シーケンスへの
+  > `send()` と **sum バスへの** `output()` を依然拒否する（LinkAudio チャンネル名としての
+  > `output()` は note シーケンスでも通る — 拒否されるのは sum バスへのルーティングのみ）。
+  > PR-1a が実装するのは plugin 宣言のチェーン化基盤
+  > （`EffectChainMap`）のみで、上記の合流先変更そのものはこの基盤の上に構築する別工程。
+  > **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は「`lead.Serum(...).TALReverb4(size: 0.6).subout`
+  > が実際に機能すること」。
 - RUN / LOOP / MUTE / quantize の意味論は MIDI シーケンスと同一。
 
 ### PH.2 effect — `global.effect(path[, pluginId])`
@@ -1232,18 +1249,69 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   （ファイル不在・非対応 format・plugin 非対応ビルド）は**宣言時のハードエラー**とし、
   warn + no-op にしない（instrument の silent failure = 無音を防ぐ。daemon の
   `CLAP_NOT_LOADED` 正直エラー方針 #405 と整合）。
-- **instrument はエンジン全体で 1 インスタンス**（v1）:
-  - 複数の note シーケンスが**同じ path** を宣言 → 同一インスタンスを共有（note はマージ。
-    v1 は全 note が channel 0 固定。per-sequence channel は将来の非規範拡張）。
-    実装注記: daemon は同 path でも 2 回目の `LoadPlugin` を `AlreadyLoaded` エラーに
-    するため、**共有は TS ブリッジ側の dedup で実現する**（置換ベースで設計しないこと）。
-  - **異なる path** の 2 つ目の宣言 → エラー（daemon が置換非サポート。加えてライブ中の
-    暗黙置換は他シーケンスの音が突然変わる事故になる）。
-  - 同一シーケンスの再宣言: 同一 path は冪等（no-op）。異 path への差し替えはエラー
-    （`.audio()` の置換挙動とは異なることに注意）。
+- **instrument はシーケンスごとに 1 インスタンス**（#517 S4 で「エンジン全体で 1 インスタンス」の
+  制約を解除）:
+  - 各 note シーケンスの宣言は**独立したインスタンス**を生成する。複数シーケンスが同じ path を
+    宣言しても**共有しない**（音色状態・パラメータ・preset・声部がトラックごとに独立する。
+    CPU / メモリもインスタンスごとに掛かる）。
+  - 同一シーケンスの再宣言: 同一 path + pluginId は冪等（no-op・ライブ再評価の保護）。
+    異なる path / pluginId は**後勝ちで差し替える**（SC.3.1 規範4）。差し替えは prepare → commit 型で、
+    新インスタンスのロード成功まで旧インスタンスが鳴り続け、失敗時は旧インスタンスが無傷で残る。
+    差し替え時の保留 note は旧インスタンスへ全解放してから破棄する。
+  - note の宛先は宣言シーケンス自身のインスタンス。channel は 0 固定（インスタンス化により
+    per-sequence channel の必要は消滅した。channel は本来の意味 = マルチティンバープラグイン内の
+    パート指定として後続 stage で使う）。
+  - **クラッシュ隔離**: 1 インスタンス = 1 child プロセス。crash 時は当該シーケンスのみ無音になり
+    自動 respawn する。他のインスタンス・audio シーケンスは影響を受けない。
+
+> **なぜ共有をやめたか（#527 の調査）**: 旧規則の「同 path 共有」は、daemon が 2 回目の `LoadPlugin` を
+> `AlreadyLoaded` にする制約に合わせた TS 側 dedup だった。しかし**フォーマット側に共有を成立させる
+> 機構が無い**: CLAP は `clap_plugin_preset_load` がインスタンス丸ごとにしか効かず（port / channel で
+> スコープする引数が無い）。param の**持続的な問い合わせ**（`clap_plugin_params.get_value` —
+> 引数は `param_id` のみで port / channel / key のスコープを持たない）にもスコープが無い。value 設定
+> イベント自体（`clap_event_param_value`）は `note_id` / `port_index` / `channel` / `key` のスコープ
+> フィールドを持つが、これは**発音中のボイス1つを一時的に狙う**ための機構であり（`PER_NOTE_ID` 等の
+> フラグと同様 MPE 的なボイス単位モジュレーション）、パートごとに持続する音色設定を表す機構ではない。
+> host 側アクセサ
+> `clap_host_track_info.get` が返す track 情報が**単数**であることからも（`clap_plugin_track_info` は
+> plugin 側の変更通知構造体）、CLAP は 1 インスタンス = 1 トラックを
+> 前提にしている。VST3 は Unit 機構（`UnitInfo.programListId` / `ParameterInfo.unitId` /
+> `getUnitByBus`）で per-part を表現できるが **opt-in** で、本実装は未対応。
+> したがって旧規則は**共有の利点を実現する機構を持たないまま、preset / param / note が混ざる欠点だけを
+> 負っていた**。
+
+> **v1 の現在地（per-sequence インスタンス化）**: **PR-1a（#527）が実装するのはデータモデルのみ**
+> （`EffectChainMap` によるチェーン化と role 別 instanceId 発番の基盤）。エンジンは依然として
+> **single global instrument key**（`PluginInstrumentManager` が `'instrument'` 固定キーで管理）を
+> 使っており、異なる note シーケンスからの `instrument()` 宣言は「supports one instrument instance
+> in v1」エラーで拒否される（既存テストがこれをピン留めしている）。上記の「シーケンスごとに独立した
+> インスタンス」は本 PR の時点では成立しない。
+>
+> **理由**: per-sequence インスタンス化は、宣言の登記先キーを `instrument` 固定から
+> シーケンス名ベースへ切り替える配線変更であり、`EffectChainMap` という基盤（本 PR）の上に
+> 構築する別工程として分離する。
+>
+> **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は「異なる note シーケンスの `instrument()`
+> 宣言が、エラーにならず独立したインスタンスを生成すること」。
+
+- **複数シーケンスと 1 インスタンスの関係**（暗黙には生じない。いずれも明示宣言・後続 stage）:
+  - **サミング**: 複数シーケンスが同一インスタンスの**同一 part** に note を合流させる（通常の
+    単一ティンバー音源を含む）。note ストリームは 1 つの voice pool に合流し、preset / パラメータは
+    1 組。**note の解放はシーケンス単位** — あるシーケンスの停止は自分が発音した note のみを解放し、
+    同一 key を他シーケンスが保持していれば発音は続く（`(port_index, channel, key)` 参照カウント方式・
+    M2 §4.7 の voice 簿記と同一）。**voice stealing はプラグインのポリフォニー管理に従う内在的性質として
+    容認**する（DAW で 1 トラックにクリップを重ねた場合と同じ）。
+  - **マルチティンバー**: 複数シーケンスが同一インスタンスの**異なる part**（port / channel、VST3 では
+    Unit）を独立に叩く。note は合流せず、part ごとに独立した preset / param を持つ（対応 format のみ。
+    CLAP は per-part の機構を持たないため part 指定は明示エラー）。
+  - 通常音源は part を 1 つだけ持つ縮退形であり、**part 指定のない合流はサミングになる**。
 - **All Notes Off**: plugin 経路に CC はないため、active note を列挙して note-off を
   逐次送出する。`global.stop()` / LOOP 除外 / MUTE / `play()` 差し替え時の保留 note
-  解放義務は Pitch DSL §7-2 と同一。
+  解放義務は Pitch DSL §7-2 と同一。**インスタンスごと・シーケンス（owner）ごとに追跡**し、
+  サミング時は上記の参照カウント判定に従う（他シーケンスが同一 key を保持していれば note-off を
+  送出しない）。インスタンス全体を落とす wildcard な choke は、**アンロード / 差し替えの teardown
+  でのみ**使用する（1 シーケンスの停止では使わない — 他シーケンスの発音を巻き込むため）。
+  child crash で声部が消滅した後の stale な note-off は無害（受信側に該当声部が無い）。
 - **underscore 規約**: plugin verb は宣言専用であり `_effect` / `_instrument` 形はない。
 - `.orbslog`: 宣言は他 verb 同様に因果評価ログとして自動記録される（特別扱いなし）。
 

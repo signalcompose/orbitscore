@@ -17,6 +17,441 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.295 fix(extension): engine 再起動時の孤児化と capture 要求の握り潰しを修正 #528 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+gated E2E の音声アサーションが「27秒キャプチャ・peak 0」で落ちていた件（#528）を追ったところ、
+**ハーネス起因の1件と本番バグ2件**が出た。テストを直す過程で本番の欠陥が見つかった形。
+
+**(1) フィクスチャの深さ喪失（ハーネス）**: `kick_loop.orbs` は
+`audioPath("../../../test-assets/audio")` という**相対形そのものがアサーション**で、
+`setDocumentDirectory` が「編集中ファイル自身のディレクトリ」を基準に解決することを証明している
+（ファイル内コメントに明記）。#392 でこれを**フラットな tmpRoot へコピー**したため `../../../` が
+tmp の外へ登り、`[SAMPLE_NOT_FOUND]` → 無音キャプチャになっていた。パスを絶対化すると意図した
+アサーションが死ぬため、**tmpRoot 配下にディレクトリ深さを再現**する形で修正した。
+
+**(2) exit ハンドラが identity を確認していない（本番バグ）**: `setupExitHandler` は
+どのプロセスの exit かを問わず `engineProcess = null` 等を実行していた。Node の `'exit'` は
+非同期に届くため、**stop_engine → start_engine を素早く行うと、既に spawn 済みの新 engine の
+ハンドルを古いプロセスの exit が消す**。結果デーモンは鳴ったまま孤児化し、UI は "Stopped"、
+`stop_engine` でも落とせず evaluate も不通になる。デバイス変更やハング後の再起動という
+日常操作で踏む。実際、修正前の失敗実行はオーディオデバイスを掴んだデーモンを毎回1つずつ
+残していた（次の実行の自動起動が失敗する二次被害まで観測）。`engineProcess !== process` の
+時は後片付けを行わないガードを追加。
+
+**(3) capture 要求の握り潰し（本番バグ・silent failure）**: `startEngineForAgent` は engine が
+既に走っていると `ok: true, 'engine already running'` を返し `captureWav` を**黙って捨てて**いた。
+capture は spawn 時の `ORBIT_CAPTURE_WAV` でしか有効化できないため、呼び出し側は録れていると
+信じたまま capture.wav を読む段で ENOENT に遭う（agent には原因不明の失敗に見える）。
+拡張は activate 時に engine を自動起動するので**これは例外ではなく既定の経路**。明示エラーに変更。
+
+**(2') 同一バグクラスの横展開（`/simplify` altitude 指摘）**: (2) を直しただけでは片手落ちで、
+**同じ機序の兄弟ハンドラが無防備**だった。`stdout` の `'data'` ハンドラは古い process の残バッファが
+遅れて届くと、新 engine のライブ playhead 装飾を消し、status bar を巻き戻し、stale な
+`//#selectAudioDevice` 応答を新 engine の待ち行列に FIFO マッチさせる（#501 review Critical #1 が
+exit 経路について懸念していたのと同じ機序）。`stdin` の `'error'` ハンドラも identity 未確認で
+`drainAll` を呼んでいた。いずれも identity ガードを追加。**ログの転記は無条件のまま残した** —
+停止中 engine の最終出力は診断上むしろ必要で、守るべきは共有状態への書き込みだけのため。
+`stdin` ハンドラは他と同じ体裁の `setupStdinErrorHandler()` に切り出した。
+
+なお altitude レビューは follow-up 候補も挙げた（`selectAudioDeviceBridge` の generation-aware 化 /
+状態リセット三つ組みの重複 / `isEngineRunning()` を使わない重複条件 / spawn 時限定オプションの
+中央検証）。いずれも本 PR のレース修正とは軸が違うため見送り。
+
+**テストの積み上げ**:
+- E2E に自動起動 engine の停止 → capture 付き再起動の手順を追加（(2) を回帰カバー）
+- E2E に「走行中の capture 付き start_engine は失敗する」ステップを追加（(3) を回帰カバー）
+- engine が上がらなかった場合に output channel を例外へ添える診断を追加
+- **ミューテーション検証**: audioPath を存在しないディレクトリに倒すと `peak: 0` で落ち、
+  (3) のガードを外すと `engine already running` で落ちることを実測。両アサーションが
+  load-bearing であることを確認した
+- `test:e2e:gated` スクリプトを追加。vitest にパスを渡すと**フィルタ文字列**として解釈され
+  `.claude/worktrees/` 内の古いコピーまで一致し、実機 OrbitStudio を7個同時起動していた。
+  `--dir tests` でグロブ基点を固定した
+
+### 6.300 fix(extension): 例外隔離の自己防御と containment の対称化 #527 レビューR5対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 bot レビュー待ち（PR #527）
+
+**内容**:
+ラウンド5は **Critical 0 / Important 0**。ラウンド4の Important 2件はいずれも CLOSED と
+判定され、**内部レビューが収束した**。判定はレビュアーが自ら変異を実行して再現したもので、
+差分の読み直しによる自己申告ではない（順序反転で23件緑のまま / 実体入れ替えで1件のみ red）。
+
+`get_log` 経路も実装まで裏取りされた: `outputChannel` は `activate()` で生成され
+`pushLogRing` にタップされてリングバッファに載るため、ハンドラが発火しうる時点では
+null になり得ない（null になるのはテストが注入した場合のみ）。つまり try/catch は形を変えた
+握り潰しではなく、エージェントから観測可能な loud failure である。`vi.mock` のリークも
+`tests/vscode-extension/` 配下60ファイル1000テストを実行して否定された。
+
+**残る Minor 3件のうち2件を本 PR で閉じた**:
+
+1. **`logHandlerFailure` 自身の自己防御** — `outputChannel.appendLine` が throw すると、
+   その例外が catch ブロックから再脱出し**まさに防ごうとした拡張ホストのクラッシュを起こす**。
+   内部 try/catch で包み `console.error` にフォールバックした。Fable も独立に同じ穴を
+   指摘しており（「loud failure の定義を `get_log` から観測可能に置くなら、その経路自体が
+   optional chaining で切れるのは自己矛盾」）、二者が別経路で同じ結論に達した。
+2. **`setupStderrHandler` の containment 対称化** — 他3ハンドラに付けたコメントが
+   「このハンドラ内のあらゆる例外が拡張ホストを落とす」と一般論として述べているのに、
+   stderr だけ未適用だった。同じ形で包んだ。
+
+**見送った1件**: 人間ユーザーへの可視性が Output パネルのみ（トースト無し）。旧挙動
+（ホストクラッシュ）は確かに loud だったが、**それを可視性の手段とは呼べない**。
+エージェント向けには `get_log` で十分 loud であり、トースト追加は別の UX 判断とした。
+
+**Fable の bot レビュー判断**: 「受ける。ただし `ded6a84`（前回 bot 通過時点）以降の
+**本番コードのみ**にスコープを絞る」。根拠 — 前回通過後に約2,100行（本番 TS は
+`extension.ts` +333 / `engine-lifecycle.ts` 新規252）が積まれ、しかもその内容は
+「TS データモデルのリファクタ」ではなく**プロセスライフサイクル**であり、本プロジェクトの
+事故史で「ユニットテストと机上レビューが最も弱い」と実証済みのコードクラス。よって
+「レビュー機構は差分規模に見合わせる」原則は **bot 実施を支持する側**に働く。
+内部レビュー5ラウンドは強いが全員 Claude 系であり、系統の異なる目の限界費用は低い。
+テストインフラは変異検証の方がレバレッジが高いので bot スコープから除外。
+
+**E2E に足さないと決めた点**: Fable は「`🛑 internal error` マーカーが gated E2E の
+`get_log` からアサートされているか」を確認せよと述べたが、**この経路は実機で意図的に
+起こせない**（ハンドラ内で例外を起こすには fault 注入が要る）。ユニットテストで押さえるのが
+妥当と判断し、E2E には足さない。できないことを「やった」と報告しないための明示。
+
+**変異検証（main 側で独立に再実行・適用確認つき）**: (1) `logHandlerFailure` の内部
+try/catch を外す → 1件 red / (2) `setupStderrHandler` の catch を外す → 1件 red。
+いずれも restore で25件緑に復帰。**6.299 の反省を踏まえ、変異がファイルに実際に適用された
+ことを確認してからテストを走らせた。**
+
+**検証**: `npm test` 1696 passed / 29 skipped（1694 → +2）・`tsc --build` 通過・lint エラー0・
+実機 gated E2E 1 passed・孤児デーモン 0・CI 4チェック全 green。
+
+### 6.299 fix(extension): ハンドラ例外の隔離と、存在しない契約に依存したテストの是正 #527 レビューR4対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+ラウンド4は **Critical 0 / Important 2**。pr-test-analyzer は20種の変異を実走させ、
+ラウンド3の指摘を全件 CLOSED と判定し新規指摘なし（stdout 7 / exit 6 / stdin 2 の全スロットを
+個別に no-op 化して全て red、`transportStatusText` の4文字列を個別に破壊して全て red、
+テスト用 seam に嘘をつかせる変異でも即 red）。残る Important 2件はいずれも 6.298 で
+私が持ち込んだもの。
+
+**Important 1 — silent failure を潰して、より悪い故障を作っていた**: 6.298 で足した
+`transportStatusText` の網羅性ガード（`throw`）は **stdout の `'data'` ハンドラ内**で走るが、
+`extension.ts` には `process.on('uncaughtException', ...)` も当該リスナを包む try/catch も
+無かった。Node のストリーム emit から同期的に例外が抜けると、**OrbitScore だけでなく
+拡張ホストのプロセス全体（他の拡張も含む）が落ちる**。status bar の破損を防ぐために
+ホスト全体を落とすのでは割に合わない。
+
+さらにこれは**より広い既存の危険**を照らしていた — ガード固有ではなく、stdout / exit / stdin
+ハンドラ内の**あらゆる例外**が同じ経路でホストを落とす。3つのリスナ本体を try/catch で包み、
+`logHandlerFailure()` がマーカー付き（`🛑 internal error in <handler名>:`）+ スタックトレースで
+output channel に記録する形にした。**握り潰しではない** — このプロジェクトでは
+「エンジン側のエラーは output channel にしか出ない」が原則で、`get_log` から観測できることが
+loud failure の定義である。`transportStatusText` の `throw` は意図が正しいのでそのまま残した。
+
+**Important 2 — 正しいコードで落ちるテストを作っていた**: 6.298 の
+`clearEngineState` ⇄ `clearAllPlayheads` swap 検出は「どちらが先に走ったか」に依存していたが、
+**この2つに順序の契約は存在しない**。`applyEngineExit` の docstring を実読して確認した ——
+identity ガードの理由しか書かれておらず、順序には一切言及がない。将来「装飾を消してから
+状態を null にする」という等しく正しい並べ替えをすると、欠陥が無いのにテストが落ちる。
+
+`vi.mock` の pass-through spy で `setupExitHandler` に渡される実 effects オブジェクトを捕獲し、
+`clearEngineState()` / `clearAllPlayheads()` を**個別に呼んで**固有の副作用を検証する形に
+置き換えた。**受け入れ条件を2つ課した**: 実体の入れ替えで red / `applyEngineExit` 内の
+呼び出し順を反転しても green のまま（＝存在しない契約に依存していないことの証明）。
+両方とも main 側で実測した。
+
+**レビュアー同士の対立を一次情報で裁定**: 順序テストの頑健性について
+code-reviewer は「文書化されていない実装詳細への依存」、pr-test-analyzer は
+「文書化済みの契約なので頑健」と判定が割れた。main 側で docstring を実読し、
+**pr-test-analyzer の主張が誤り**であることを確認して code-reviewer の指摘を採用した。
+委譲先の判定を鵜呑みにしない受け入れ検証規律が効いた事例。
+
+**変異検証（main 側で独立に再実行）**: (A) `clearEngineState` ⇄ `clearAllPlayheads` の実体
+入れ替え → 1件 red / (B) `applyEngineExit` 内の呼び出し順を反転 → **23件 green のまま** /
+(C) stdout ハンドラの catch を再 throw に変更 → 1件 red
+（`expected [Function] to not throw an error but 'TypeError: ...' was thrown`）。
+いずれも restore で全緑に復帰。
+
+なお (A) は**1回目の変異が pattern 不一致で当たっておらず**、「23 passed」を検出失敗と
+誤読しかけた。実ファイルの形を確認して当て直した（try/catch 導入でインデントが変わっていた）。
+**変異が実際に適用されたことを確認せずに緑を読むと、検証したつもりで何も検証していない。**
+
+**検証**: `npm test` 1694 passed / 29 skipped（1691 → +3）・`tsc --build` 通過・lint エラー0・
+実機 gated E2E 1 passed・孤児デーモン 0。
+
+### 6.298 test(extension): 配線カバレッジの過大申告を是正 #527 レビューR3対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+ラウンド3（Critical 2 / Important 2 / Minor 4）への対応。ラウンド2の C2 / C3 / I4 / I5 は
+独立検証で CLOSED と判定されたが、**C1（配線）は NOT CLOSED** だった。
+
+**「配線をテストした」は過大申告だった**: 6.297 で配線テストを新設したが、レビュアーが
+変異を実際に走らせた結果、**約13スロット中7つが今も無検出で入れ替え・空実装化できる**ことが
+判明した。
+
+| 生き残った変異 | 見逃した原因 |
+|---|---|
+| `clearEngineState` ⇄ `clearAllPlayheads` の入れ替え | 両方が無条件に走るため「最終状態」しか見ておらず、**どちらがやったか**を区別していない |
+| `setupStdoutHandler` の `handleStep` / `clearSequence` / `clearAllPlayheads` / `handleSelectAudioDeviceLine` を全部 no-op 化 | 7つの実エフェクトのうち配線テストがあるのは `setTransportStatus` だけだった |
+| ログ/診断4系統（`transcribeLog` / `logExit` / `logStdinError` / `warnMalformedSelectAudioDeviceLine`）を個別に no-op 化 | `outputChannel` の**出力内容**を検証するテストが皆無だった |
+
+特に痛いのは最後の `warnMalformedSelectAudioDeviceLine` — **6.297 で「stale でも消えないように」
+直した診断そのもの**で、呼ぶか否かの純粋ロジックは厚くテストされているのに、実際に
+output channel へ出る配線は誰も検証していなかった。
+
+**対応**: `clearAllPlayheadDecorations` の独立観測用 seam を追加し、`editor.setDecorations` が
+呼ばれた**瞬間**に `engineProcess` が既に null かを記録することで「`clearEngineState` が先に
+走ったか」という順序を観測できるようにした（両者は相互非依存なので最終状態では区別できない）。
+stdout の4エフェクトには playhead timeout 数 / active range 数 / `DeviceSwitchBridge.send()` の
+実解決を使った独立アサーションを、ログ4系統には fake `outputChannel` に実際に append された
+**文言の内容**検証を追加（文言は実装を読んで部分一致で検証・捏造なし）。
+
+**`setTransportStatus` の網羅性ガード（Important 2）**: 三項演算子だったため `'playing'` 以外が
+来ると**黙って `'ready'` 側に落ちる**。現在の呼び出し側はリテラルのみで型に守られているが、
+この畳み込みを「取り違えを表現不能にする」と説明したのは**スロット入れ替えについてのみ真**で、
+不正入力は防がない。`transportStatusText(state, debugMode)` を `switch` +
+`default: { const _exhaustive: never = state; throw }` で実装し直した。
+
+**E2E の無意味な追加を撤回（Minor 1）**: 6.297 で足した「debug 拒否後の `running === true`」は、
+capture 拒否と**同一の early return** を通るため検出力を増やしていなかった。削除した。
+E2E は足せばよいというものではない、という自戒として記録する。
+
+**変異検証（main 側で独立に再実行）**: (A) `clearEngineState` ⇄ `clearAllPlayheads` 入れ替え →
+1件 red / (B) `warnMalformedSelectAudioDeviceLine` を no-op 化 → 2件 red /
+(C) `transportStatusText` を三項に戻す → 1件 red。いずれも restore で全緑に復帰。
+
+**検証**: `npm test` 1691 passed / 29 skipped（1678 → +13）・`tsc --build` 通過・lint エラー0・
+実機 gated E2E 1 passed・孤児デーモン 0。
+
+**申し送り**: 委譲先が `audio-device argv` テストの flaky な失敗を1度観測している（再実行で緑・
+本変更と無関係）。main 側の3回の `npm test` では再現せず。
+
+### 6.297 test(extension): 配線をテスト可能にし、弱いアサーションを潰す #527 レビューR2対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+ラウンド2（Critical 3 / Important 3 / Minor 4）への対応。ラウンド1の指摘は4レビュアーとも全件
+CLOSED と判定された一方、**新規テスト自体に穴が見つかった**。
+
+**「変異検証をやった」は壊し方が1種類に偏っていた**: 6.296 では「ガードを無効化する」変異
+（5種）で red を確認したが、レビュアーが**別種の変異を実行して3つが生き残る**ことを示した。
+
+| 生き残った変異 | 見逃した原因 |
+|---|---|
+| bridge を同じ行に2回呼ぶ | `toHaveBeenCalled()` が回数を見ていない |
+| `handleStep` 後の `continue` を削除 | 同上（引数も見ていない） |
+| `applyEngineExit` の副作用順序を逆転 | 個別 mock のみで順序を見ていない |
+| `stale` 引数を `true` に固定 | current × パース失敗の経路が未カバー |
+
+FIFO キューを消費する副作用（`DeviceSwitchBridge.handleLine`）では**回数がそのまま正しさ**。
+`toHaveBeenCalledTimes` / 引数検証 / `mock.invocationCallOrder` で全4種を殺せるようにした。
+教訓は CLAUDE.md に固定（変異は最低4種 = 分岐反転・回数・順序・引数）。
+
+**stale な正常行が「malformed」と誤報されていた（2レビュアーが独立に指摘）**: 6.296 で足した
+診断に鏡像の欠陥があった。`recognized = isCurrent && handleSelectAudioDeviceLine(...)` は
+`&&` の短絡で stale 時に**パースを試みることすらせず**、完全に正しい JSON も「malformed
+（chunk-boundary split の疑い）」と報告していた。stop → start のたびに偽警告が出続け、
+**本物の破損が起きた日にその警告が無視される** — 診断を足した目的そのものを壊す。
+「妥当な JSON か」（`parseSelectAudioDeviceResultLine` による純粋判定）と「FIFO を触ってよいか」
+（`isCurrent`）を分離した。
+
+**配線（wiring）にテストが無かった（owner 指示で本 PR 内に取り込み）**: 純関数へ抽出しても、
+純関数と本物の副作用を繋ぐ配線は無防備なまま。`() => void` 型の兄弟コールバックは
+**取り違えても型チェックを通り、ユニット・E2E とも全件 green**。当初 #530 に切り出したが、
+owner 指示（「このフォローアップは早めに確実に…しっかり塞いで再発防止」）により本 PR で対応:
+
+1. **型で潰す** — `setPlayingStatus()` / `setReadyStatus()` を
+   `setTransportStatus(state: 'playing' | 'ready')` 1本に畳み、取り違えを**表現不能**にした
+2. **`vscode` モックで実際に叩く** — `tests/mocks/vscode.ts` と `vitest.config.ts` の alias を新設し、
+   `extension.ts` の `setup*Handler` を直接呼んで配線を検証（`tests/vscode-extension/
+   extension-wiring.spec.ts`・9件）。`extension.ts` にはテスト専用 export を追加し、用途と
+   「本番コードから呼ぶな」を明記
+
+なお `showStoppedStatus` / `refreshEngineView` は毎回両方呼ばれるため、**最終状態だけを見る
+素朴なアサーションでは入れ替え変異を検出できなかった**（委譲先が一度実装してから気づき、
+発火順序を記録する方式に作り直した）。
+
+**受け入れ検証で見つけた設定の脆さ（main 側で修正）**: 委譲先は alias を
+`packages/engine/vitest.config.ts` に置いたが、これは **cwd 依存**で `npm test`
+（cwd=packages/engine）でしか効かない。リポジトリルートから走らせると
+`Cannot find package 'vscode'` で落ちる（`test:e2e:gated` はルートから走る）。
+設定をルート `vitest.config.ts` の単一正本に寄せ、両スクリプトに `--config` を明示して
+起動パス非依存にした。
+
+**変異検証（5種・すべて main 側で独立に再実行）**: (a) bridge 二重呼び出し / (b) `continue`
+削除 / (c) `applyEngineExit` 順序逆転 / (d) `stale` 引数固定 / (e) `extension.ts` の
+`showStoppedStatus` ⇄ `refreshEngineView` 配線入れ替え —— いずれも対応テストが red、
+restore で green。(e) は `expected [ 'refresh', 'status-stopped' ] to deeply equal
+[ 'status-stopped', 'refresh' ]` で検出。
+
+**検証**: `npm test` 1678 passed / 29 skipped（1664 → +14）・ルートからの単独実行も 9 passed・
+`tsc --build` 通過・lint エラー0・実機 gated E2E 1 passed・孤児デーモン 0。
+
+**残存ギャップ**: `clearEngineState` / `clearAllPlayheads` 同士の入れ替えは順序ベースの検証を
+まだ入れていない（`clearEngineState` は `engineProcess` の null 化という個別の観測可能な
+副作用でのみ検証）。
+
+### 6.296 refactor(extension): engine ライフサイクルの判断を vscode 非依存に抽出 #528 レビュー対応 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527 に同梱）
+
+**内容**:
+6.295 に対する `/code:pr-review-team` ラウンド1（Critical 2 / Important 5 / Minor 3）への対応。
+
+**Critical 1 — identity ガードにテストが1件も無かった**: しかも E2E は stop 後に
+`waitForEngine(false, ...)` で完全停止を待ってから起動するため、**守るべきレース窓を
+テスト自身が消していた**。
+
+当初「狭いタイミング窓に依存するので決定論的テストは書けない」と申告したが、これは
+問題の切り分けが誤っていた。**ガードは純粋な状態比較であり、テストにタイミングは要らない** —
+古いプロセスのハンドラを登録 → 現役を別プロセスに差し替え → 古い方でイベント発火、で
+決定論的に再現できる。真の障害はハンドラが module-private かつ vscode 密結合だったこと。
+
+そこで `packages/vscode-extension/src/engine-lifecycle.ts`（**`vscode` を import しない**）を
+新設し、既存の `device-switch-bridge.ts` / `playhead.ts` と同じ抽出様式に揃えた:
+
+- `applyEngineStdoutChunk(output, lines, isCurrent, effects)`
+- `applyEngineExit(code, isCurrent, effects)`
+- `applyEngineStdinError(message, isCurrent, effects)`
+- `decideStartEngineForAgent(engineRunning, options)`
+
+可変状態（`engineProcess` 等）への代入は `extension.ts` 側のコールバックに残し、新モジュールは
+状態を持たない。副作用の順序と `drainAll` の理由文字列は逐語で保存した。
+
+**Important 1 — `debug` に同じ silent-discard バグが生きていた**: `captureWav` だけを特別扱い
+したため、走行中の `start_engine({ debug: true })` は `ok: true` を返して verbose ログが付かない
+ままだった。`debug` も spawn 時限定（`--debug` を spawn 時にのみ渡す）。両方を
+「spawn 時限定オプション」として一括で拒否する形に統合。
+
+**Important 2 — 宣言した不変条件を実装が破っていた**: 「ログの転記は無条件」と書きながら、
+malformed な `//#selectAudioDevice` 行の警告はガード内側にあり stale では消えていた。しかも
+消えるのはチャンク境界で JSON が割れる再起動近傍 —— この警告が存在する理由そのものの場面。
+診断であって状態変更ではないので、ガードの外へ出した（stale である旨も文言に含める）。
+
+**Important 4 — コメントが実装を過大に述べていた**: 「拡張は activate 時に engine を自動起動する
+ため既定の経路」と書いたが、`autoStartConfiguredRustEngine` は保存済みデバイスが無ければ
+早期 return する。さらに実読の結果、`saved !== '__default__'` のときだけ接続チェックが働き、
+`__default__` は無条件で通ること、この関数は `startEngine()` を直接呼び `startEngineForAgent` を
+経由しないことも判明した（「このブランチに到達する」という表現自体が不正確だった）。
+
+**変異検証（5種・すべて main 側で独立に再実行）**:
+
+| 変異 | 結果 |
+|---|---|
+| stdout の stale ガード無効化 | stale テスト red |
+| `debug` を spawn-only 判定から除外 | debug テスト red |
+| stale 時に診断を出さないよう変更 | stale テスト red |
+| `applyEngineExit` の identity ガード無効化 | exit stale テスト red |
+| `applyEngineStdinError` の identity ガード無効化 | stdin stale テスト red |
+
+いずれも restore で green に復帰。**委譲先の変異検証報告を鵜呑みにせず、main 側で全件を
+再実行して裏を取った**（受け入れ検証規律）。
+
+**E2E 追加**: 拒否直後に `running === true` を確認（拒否分岐が engine を teardown する変異を殺す）、
+`debug` 拒否の回帰ピン、`get_log` 自身が失敗しても元のタイムアウトと失敗理由の双方を残す診断、
+ヘッダの起動方法を `npm run test:e2e:gated` に更新。
+
+**検証**: `npm test` 1664 passed / 29 skipped（1654 → +10）・`tsc --build` 通過・lint エラー0・
+実機 gated E2E 1 passed・実行後の孤児デーモン 0。
+
+**委譲の経緯**: 実装は Codex に発注したが、追加分の発注時点で Codex スレッドがブロック状態
+（全プロセス CPU 0.0%・ファイル変化なし）だったため、owner 指示のフォールバック
+（Sonnet subagent）に切り替えた。
+
+### 6.294 refactor(engine): plugin 宣言のチェーン化 + instrument 仕様の矛盾解消 #517 S4 PR-1a (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（PR #527）
+
+**内容**:
+S4（#522）の第1段。**TS のデータモデルのみ・挙動不変**で、spec 更新を先行させた（運用規則6）。
+`EffectSlotMap`（1レシーバ = 1 insert 固定）を、チェーンと role を表現できる `EffectChainMap` に
+置き換える。**上限は 1 のまま維持**（解除は wire と RT の変更が要るため PR-1b）。
+
+4層（RT / daemon / wire / TS）を1 PR で動かすとレビューが機能しないため（S3 はより小さい差分で
+Critical 8件）、リスク境界で分割した。挙動不変なので「既存テストが緑のまま」であること自体が
+正しさの証拠になる。
+
+**仕様の矛盾を解消（`b5e2798`）**: SC.3.1 規範(4)「instrument は…**後勝ち（差し替え）**」と
+core spec PH.4「異 path への差し替えは**エラー**」が正面から矛盾していた（#522 は instrument に
+一切触れておらず、仕様完全性検査で検出）。**上方向に解消** — PH.4 の立場は「エンジン全体で
+1 インスタンス」の帰結であり、複数インスタンス化で前提ごと消えるため。
+
+**フォーマット調査（一次情報）**: 旧「同 path 共有」は daemon の `AlreadyLoaded` 制約に合わせた
+TS 側 dedup だったが、**共有を成立させる機構がフォーマット側に無い**ことを確認した。CLAP は
+`clap_plugin_preset_load` がインスタンス丸ごとにしか効かず、持続的な param 問い合わせ
+（`clap_plugin_params.get_value`）にもスコープが無い。`clap_host_track_info.get` が単数の track を
+返すことからも 1 インスタンス = 1 トラック前提。VST3 は Unit 機構で per-part を表現できるが
+**opt-in** で、本実装は未対応。つまり旧 dedup は**共有の利点を実現する機構を持たないまま、
+preset / param / note が混ざる欠点だけを負っていた**。
+
+**サミングとマルチティンバーを別概念として規定**: 合流するのは note ストリームであって
+プロセス共有ではない（owner 指摘）。後続 stage を **#524（サミング・Units 非依存）/
+#525（マルチティンバー）/ #526（voice 分離）** として issue 化。
+
+**合流点の移設を spec に記載（`2ff0af4`）**: instrument の音声は master の post processor で
+add-mix されており **seq バスグラフを一切通らない**。このため SC.0 の
+`lead.Serum(...).TALReverb4(...).subout` は #522 の5項目を全部実装しても動かない。
+#522 の題目「SC.0 の完全実行」には移設が必須で、要件から漏れていた（実装は PR-1b）。
+
+**`/simplify`（`228646f`）**: altitude の指摘1件が3件をまとめて閉じた — `duplicateError: () => Error`
+は型の約束が片方の分岐でしか機能していなかった（effect では Error が捨てられ `.message` だけ
+再包装、instrument ではそのまま throw）。`duplicateMessage: () => string` に縮小しエラー型の決定を
+map が持つ形にしたところ、reuse と simplification が別々に指摘した throw の重複も消えた。
+あわせて到達不能な `maxLength` ガードを削除し、同型の隣接引数（`normalizedName` と
+`resolvedPath` がどちらも `string`）を `PluginDeclaration` に集約した。
+
+**pr-review-team ラウンド1（`ff4a335` / `93ac319`）— Critical 0・Important 6**:
+
+- **並行 self-heal の競合**（2名が独立に再現）: 同一キーへの `declare()` が並行に走ると両方が
+  同じ `existing` を `replacing` として `issueLoad` を呼び、**オブジェクト同一性**判定により
+  後着のエントリが黙って捨てられる。さらに追跡側が失敗し追跡漏れ側が成功すると
+  `chains.delete(key)` が走り、**daemon にプラグインが生きているのに「何も宣言されていない」と
+  報告する**。`pending: Map<K, Promise<void>>` でキー単位に直列化。
+  > 根本原因は本 PR 由来ではない（旧実装も無条件 `set` = 最後勝ちで同種の弱点）。ただし本 PR は
+  > 同一性ベースの置換に変えたことで「**後着の実ロードが成功しても TS 側に一切反映されない**」
+  > という新しい取りこぼしの形を追加していた。
+- **`instanceId` にテストが1件も無かった**: 定数に置換しても全1634件が通過。S4 の設計は
+  「respawn を跨いで ID が不変であること」に依存するのに、値を assert するテストが皆無だった。
+  > fixer が最初に書いた保持テストは**変異検証で潜り抜けた**（occurrence が偶然同じ文字列に
+  > 再計算される）。`receiverId` が毎回別文字列を返すモックに差し替えて再設計した。
+  > **変異検証を要求していなければ、守っていないテストが入っていた。**
+- **`normalizePluginInstanceName` にテストが無かった**: 恒等関数に置換しても全件通過。
+  あわせて Windows パスで `instanceId` にパスが混入するバグを修正。
+- **spec が未実装の挙動を実装済みのように記述**（2名が独立に指摘・PH.1 / PH.4 / SC.3.1）:
+  このプロジェクトは SC.5 に「**v1 のエラーは stage 表記を含む**（ユーザーがいつ使えるように
+  なるかを知れるようにするため）」と規約を明文化しており、追記だけがそれに従っていなかった。
+  「v1 の現在地 / 理由 / 実装時期」ブロックを3箇所に追加し、エラー文言にも stage 表記を付けた。
+- **誤った出典**: 「#523 の調査」は誤り（#523 は S3 のバス名ルーティング PR で該当調査を含まない）。
+  #408/#409 型の**3回目の再発**。`#527 の調査` に訂正
+- ファイルヘッダ「three managers」→「four」
+
+**ラウンド2 — Critical 0・Important 1**:
+ラウンド1の修正は独自のストレス実行でも破れなかった（500回呼び出し・200×20キー並行後も
+`pending.size === 0`・reject が後続を汚染しない）。CLAP の記述も上流ヘッダと逐語照合された。
+
+唯一の新規指摘は**私が書いたコメントの誤り** — `KNOWN_PLUGIN_EXTENSIONS` に
+「新 format を足す時はここだけを変える」と書いたが、**同じファイルの `validatePluginExtension()` が
+独立にハードコードした if チェーン**で判定しており、この配列を参照していなかった。将来 `.au3` を
+足すと「パスとしては認識され名前も生成されるのに、ロードだけ拒否される」不整合が起きる。
+`SUPPORTED_PLUGIN_EXTENSIONS`（ロード可能）と `RESERVED_PLUGIN_EXTENSIONS`（AU 予約）に分け、
+`KNOWN_PLUGIN_EXTENSIONS` と `KNOWN_PLUGIN_FORMATS` を**そこから派生**させて実際に単一正本にした。
+
+**検証**: 全 suite **1652 passed / 29 skipped**（S4 前 1634 + 新規18）・`tsc --build` exit 0・
+lint エラー0
+
+**関連**: #517（統括）・#522（S4）・#527（本 PR）・#524 / #525 / #526（後続 stage）・
+#523（S3）・#409・#484
+
 ### 6.293 feat(engine): Signal Chain バス名メソッドのルーティング写像 #517 S3 (Jul 26, 2026)
 
 **Date**: 2026-07-26

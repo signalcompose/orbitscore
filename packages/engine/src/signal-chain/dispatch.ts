@@ -267,6 +267,7 @@ export async function dispatchPlugin(
         : await (receiver as Global | Sequence | MixerBusHandle).effect(spec)
     return result || receiver
   } catch (error) {
+    // EffectChainMap は PR-1a でも上限 1 を typed error で報告する。
     if (role === 'effect' && error instanceof EffectSlotLimitError) {
       throw new Error(`${error.message} S4 (#517 multiple insert support) will lift this limit.`)
     }

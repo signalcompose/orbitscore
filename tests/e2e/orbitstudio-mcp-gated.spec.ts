@@ -23,9 +23,14 @@
  * Run gated (this launches a real GUI app and plays audible sound — do NOT
  * run unattended/unprompted):
  *
- *   ORBIT_GATED_ORBITSTUDIO=1 npx vitest run --dir ../../tests --globals \
- *     --pool=forks --poolOptions.forks.singleFork=true orbitstudio-mcp-gated
- *   (run from packages/engine, per the project's targeted-vitest convention)
+ *   npm run test:e2e:gated
+ *
+ * `npm run test:e2e:gated` itself passes a positional pattern
+ * (`e2e/orbitstudio-mcp-gated`), but scoped under `--dir tests` — resolved
+ * relative to that root, it can only match this one file. The dangerous case
+ * is a MANUAL `npx vitest run <pattern>` WITHOUT `--dir tests`: from the repo
+ * root, an unscoped positional pattern can glob-match stale copies under
+ * .claude/worktrees/ and launch multiple real GUI apps.
  *
  * SAFETY (repeated at the kill call site too): the teardown/setup kill
  * pattern targets `OrbitStudio.app/Contents/MacOS` — a path fragment unique
@@ -65,6 +70,18 @@ const REPO_ROOT = path.resolve(__dirname, '../..')
 const EXTENSION_DEV_PATH = path.join(REPO_ROOT, 'packages/vscode-extension')
 const KICK_LOOP_FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/kick_loop.orbs')
 const DIAGNOSTIC_FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/diagnostic_case.orbs')
+// Real built CLAP bundles (rust-spike test fixtures, also used by the Rust-side
+// outproc_*_gated tests) — used below so a real instrument declaration can
+// actually succeed and stay registered, rather than a made-up path that fails
+// to load and rolls back (see EffectChainMap.declareBody in effect-slot.ts).
+const CLAP_TEST_SYNTH_PATH = path.join(
+  REPO_ROOT,
+  'rust-spike/clap-test-synth/target/release/CLAPTestSynth.clap',
+)
+const CLAP_TEST_EFFECT_PATH = path.join(
+  REPO_ROOT,
+  'rust-spike/clap-test-effect/target/release/CLAPTestEffect.clap',
+)
 
 const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
@@ -135,8 +152,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // Scratch copy of the kick-loop fixture (basename preserved so the
       // languageId/path assertions below still hold): save_file writes here,
       // inside the tmpRoot that afterAll removes, instead of the tracked fixture.
-      kickLoopWorkPath = path.join(tmpRoot, 'kick_loop.orbs')
+      //
+      // #528: the copy MUST reproduce the fixture's directory depth. The fixture
+      // deliberately uses `audioPath("../../../test-assets/audio")` to prove that
+      // `setDocumentDirectory` resolves relative paths against the edited file's
+      // own directory — that relative form is the assertion, not an accident.
+      // Copying it to a flat tmpRoot (the #392 behaviour) made `../../../` climb
+      // out to `/var/folders/<x>/test-assets/audio`, so kick.wav was never found
+      // (`[SAMPLE_NOT_FOUND]`) and the capture came back silent — the suite's most
+      // valuable assertion was failing for a harness reason, unnoticed.
+      //
+      // Recreating `tests/fixtures/mcp-e2e/` under tmpRoot keeps the relative
+      // resolution genuinely exercised (now rooted at tmpRoot instead of the repo).
+      const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
+      const workFixtureDir = path.join(tmpRoot, fixtureRelDir)
+      fs.mkdirSync(workFixtureDir, { recursive: true })
+      kickLoopWorkPath = path.join(workFixtureDir, path.basename(KICK_LOOP_FIXTURE))
       fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
+      // The audio the fixture's relative path must land on, mirrored at the same
+      // depth from tmpRoot as it sits from REPO_ROOT.
+      const workAudioDir = path.join(tmpRoot, 'test-assets/audio')
+      fs.mkdirSync(workAudioDir, { recursive: true })
+      fs.copyFileSync(
+        path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+        path.join(workAudioDir, 'kick.wav'),
+      )
       const port = 39400 + Math.floor(Math.random() * 200)
 
       // ── 2. Launch: `orbs` CLI with the extension in dev mode ──
@@ -160,17 +200,78 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
 
       // ── 3. start_engine with capture_wav, wait for it to come up ──
+      // 拡張は activate 時に engine を自動起動する。capture は spawn 時の
+      // `ORBIT_CAPTURE_WAV` でしか有効化できない (#528) ので、自動起動した engine を
+      // 一度落としてから capture 付きで起動し直す。自動起動の spawn 完了を待たずに
+      // stop すると取りこぼすため、running を確認してから止める。
+      const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
+        waitUntil(
+          async () => {
+            const stateRes = await client!.call('get_engine_state')
+            return (JSON.parse(stateRes.text) as { running: boolean }).running === running
+          },
+          { intervalMs: 500, timeoutMs, label },
+        )
+
+      await waitForEngine(true, 30_000, 'auto-started engine running')
+      // #528 回帰ピン: capture は spawn 時にしか有効化できないので、既に走っている
+      // engine に対する capture 付き start_engine は **失敗を返さなければならない**。
+      // 旧実装はここで `ok: true, 'engine already running'` を返して captureWav を
+      // 黙って捨てていた — 呼び出し側は録れていると信じ、capture.wav を読む段で
+      // 初めて ENOENT に気づく（agent からは原因の分からない失敗になる）。
+      const captureWhileRunning = await client.call('start_engine', {
+        capture_wav: captureWavPath,
+      })
+      expect(captureWhileRunning.isError, captureWhileRunning.text).toBe(true)
+      expect(captureWhileRunning.text).toContain('stop_engine')
+      const stateAfterCaptureReject = await client.call('get_engine_state')
+      expect(
+        (JSON.parse(stateAfterCaptureReject.text) as { running: boolean }).running,
+        stateAfterCaptureReject.text,
+      ).toBe(true)
+
+      const debugWhileRunning = await client.call('start_engine', { debug: true })
+      expect(debugWhileRunning.isError, debugWhileRunning.text).toBe(true)
+      expect(debugWhileRunning.text).toContain('stop_engine')
+      // #527 review round 3 Minor #1: a `running === true` re-check here was
+      // removed — capture and debug rejects both fall through
+      // decideStartEngineForAgent's SAME single `spawnOnlyOptions.length > 0`
+      // branch (engine-lifecycle.ts), which returns before touching engine
+      // state either way. The `stateAfterCaptureReject` check above already
+      // exercises that exact early-return path end-to-end; repeating it here
+      // adds no additional detection power (a mutant that made either reject
+      // branch tear the engine down would already be caught above). What
+      // DOES still add value for the debug case — and is kept — is the
+      // `.toContain('stop_engine')` message-content check just above, which
+      // proves the rejection message mentions "debug" rather than being
+      // hardcoded to the capture wording (see the unit-level equivalent in
+      // engine-lifecycle.spec.ts's `decideStartEngineForAgent` describe).
+
+      const preStopRes = await client.call('stop_engine')
+      expect(preStopRes.isError, preStopRes.text).toBe(false)
+      await waitForEngine(false, 15_000, 'engine stopped')
+
       const startRes = await client.call('start_engine', { capture_wav: captureWavPath })
       expect(startRes.isError, startRes.text).toBe(false)
 
-      await waitUntil(
-        async () => {
-          const stateRes = await client!.call('get_engine_state')
-          const state = JSON.parse(stateRes.text) as { running: boolean }
-          return state.running === true
-        },
-        { intervalMs: 500, timeoutMs: 15_000, label: 'engine running' },
-      )
+      try {
+        await waitForEngine(true, 15_000, 'engine running')
+      } catch (err) {
+        // engine が上がらなかった理由は output channel にしか出ない（MCP の
+        // get_engine_state は running の真偽しか返さない）。タイムアウトだけを
+        // 報告すると毎回ここで手動再現する羽目になるので、失敗時にログを添える。
+        let logText = '(unable to retrieve OrbitScore output channel)'
+        try {
+          logText = (await client.call('get_log', { lines: 120 })).text
+        } catch (getLogErr) {
+          // get_log 自身の失敗理由（例: ECONNREFUSED = 拡張ホストごと落ちた）は
+          // 診断上重要なので握り潰さない。元の engine 起動タイムアウトは維持する。
+          logText = `(unable to retrieve OrbitScore output channel: ${
+            getLogErr instanceof Error ? getLogErr.message : String(getLogErr)
+          })`
+        }
+        throw new Error(`${(err as Error).message}\n--- OrbitScore output channel ---\n${logText}`)
+      }
       await sleep(2500) // audio init settle
 
       // ── 4. #384 behavioral check: diagnostics fire on open, no edit needed ──
@@ -274,6 +375,129 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const runTempoRes = await client.call('run_selection')
       expect(runTempoRes.isError, runTempoRes.text).toBe(false)
       await sleep(4000) // sound plays at 180bpm
+
+      // ── 6b. #527 (S4 PR-1a): instrument duplicate declaration carries the S4
+      // stage marker. The whole Global has exactly one v1 instrument slot
+      // (PluginInstrumentManager — shared across sequences), so declaring a
+      // second, different instrument must be rejected with a message that
+      // names the follow-on stage (S4 PR-1b / #517 #522), not just a generic
+      // "one instrument" message. Uses a dedicated fresh sequence (not `drum`,
+      // which already has audio()/chop() — combining that with instrument()
+      // hits a different, sequence-level guard first). `evaluate_orbitscore`'s
+      // `ok` only means "accepted and written" (packages/vscode-extension/src/
+      // extension.ts evaluateForAgent) — the actual accept/reject only shows
+      // up in the engine's own stdout/stderr, surfaced here via get_log.
+      const declareInstSeqRes = await client.call('evaluate_orbitscore', {
+        code: 'var instSeq = init global.seq',
+      })
+      expect(declareInstSeqRes.isError, declareInstSeqRes.text).toBe(false)
+
+      const firstInstrumentRes = await client.call('evaluate_orbitscore', {
+        code: `instSeq.instrument("${CLAP_TEST_SYNTH_PATH}")`,
+      })
+      expect(firstInstrumentRes.isError, firstInstrumentRes.text).toBe(false)
+      await sleep(6000) // real out-of-process CLAP attach: spawn + IPC handshake
+
+      const afterFirstInstrumentLog = (await client.call('get_log', { lines: 500 })).text
+      const firstInstrumentAttachFailed =
+        afterFirstInstrumentLog.includes('[OUTPROC_ATTACH_FAILED]')
+
+      if (firstInstrumentAttachFailed) {
+        // The real CLAP bundle failed to attach in this environment (e.g. no
+        // outproc instrument child binary / codesigning gate in the packaged
+        // extension host) — the duplicate-declaration branch requires an
+        // existing successful registration to collide with, so it is not
+        // reachable here. Recorded rather than silently asserting a vacuous
+        // pass; see the invoking report for the actual log line observed.
+        // eslint-disable-next-line no-console
+        console.log(
+          '[orbitstudio-mcp-gated] first instrument() attach failed — duplicate-declaration ' +
+            `branch not exercised. Log tail: ${afterFirstInstrumentLog.slice(-400)}`,
+        )
+      } else {
+        const secondInstrumentRes = await client.call('evaluate_orbitscore', {
+          code: `instSeq.instrument("${CLAP_TEST_EFFECT_PATH}")`,
+        })
+        expect(secondInstrumentRes.isError, secondInstrumentRes.text).toBe(false)
+        await sleep(1000) // duplicate rejection is synchronous once the first slot is registered
+
+        const afterSecondInstrumentLog = (await client.call('get_log', { lines: 500 })).text
+        expect(
+          afterSecondInstrumentLog,
+          `expected the S4 stage-marker duplicate error, got log tail: ${afterSecondInstrumentLog.slice(-800)}`,
+        ).toContain(
+          'seq.instrument() supports one instrument instance in v1. ' +
+            'S4 PR-1b (#517/#522) will allow independent instances per note sequence.',
+        )
+      }
+
+      // ── 6c. #527: a failed plugin declaration surfaces loudly AND the engine
+      // remains usable afterward (EffectChainMap rollback path). Uses a
+      // deliberately nonexistent plugin path — no real plugin binary is needed
+      // for this half, since resolvePluginSpec doesn't check fs existence for
+      // path-direct specs (only the async out-of-process attach can fail).
+      const beforeEffectFailLog = (await client.call('get_log', { lines: 500 })).text
+      const attachFailedBefore = (beforeEffectFailLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? [])
+        .length
+
+      const badEffectRes = await client.call('evaluate_orbitscore', {
+        code: 'global.effect("nonexistent-plugin.clap")',
+      })
+      expect(badEffectRes.isError, badEffectRes.text).toBe(false)
+      await sleep(6000) // real out-of-process attach attempt, then failure
+
+      const afterEffectFailLog = (await client.call('get_log', { lines: 500 })).text
+      expect(
+        afterEffectFailLog,
+        `expected an OUTPROC_ATTACH_FAILED error, got log tail: ${afterEffectFailLog.slice(-800)}`,
+      ).toContain('[OUTPROC_ATTACH_FAILED] child exited before publishing READY')
+
+      // Engine survives: a normal statement right after the failure must still
+      // be accepted, and must not add a NEW attach failure of its own.
+      const recoveryRes = await client.call('evaluate_orbitscore', {
+        code: 'global.beat(4 by 4)',
+      })
+      expect(recoveryRes.isError, recoveryRes.text).toBe(false)
+      await sleep(1000)
+
+      const engineStateAfterFailure = await client.call('get_engine_state')
+      expect(JSON.parse(engineStateAfterFailure.text).running).toBe(true)
+
+      const afterRecoveryLog = (await client.call('get_log', { lines: 500 })).text
+      const attachFailedAfterRecovery = (afterRecoveryLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? [])
+        .length
+      // Exactly one NEW attach failure (the deliberate one above) — the
+      // recovery statement must not add another.
+      expect(attachFailedAfterRecovery).toBe(attachFailedBefore + 1)
+
+      // ── 6d. #521/#517 S3 regression guard: the mixer/routing DSL (bus-name
+      // chain methods — mix.output/sum/aux, `.verb(0.3)` send, `.drums` sum
+      // routing, `.master`) still evaluates cleanly through the real app after
+      // the four-manager migration (#527). No ERROR: line (packages/vscode-
+      // extension/src/extension.ts stderr handler) must appear for this batch.
+      const beforeMixerLog = (await client.call('get_log', { lines: 500 })).text
+      const errorCountBeforeMixer = (beforeMixerLog.match(/ERROR:/g) ?? []).length
+
+      const mixerRes = await client.call('evaluate_orbitscore', {
+        code: [
+          'var mix = init global.mixer',
+          'var master = mix.output(1, 2)',
+          'var drums = mix.sum',
+          'var verb = mix.aux',
+          'verb.master',
+          'drum.verb(0.3).drums',
+          'drums.master',
+        ].join('\n'),
+      })
+      expect(mixerRes.isError, mixerRes.text).toBe(false)
+      await sleep(1500)
+
+      const afterMixerLog = (await client.call('get_log', { lines: 500 })).text
+      const errorCountAfterMixer = (afterMixerLog.match(/ERROR:/g) ?? []).length
+      expect(
+        errorCountAfterMixer,
+        `expected no new ERROR: lines from the mixer/routing DSL, got log tail: ${afterMixerLog.slice(-800)}`,
+      ).toBe(errorCountBeforeMixer)
 
       // ── 7. get_log sanity check — non-empty, evidence of engine activity ──
       const logRes = await client.call('get_log', { lines: 100 })

@@ -1,27 +1,28 @@
 import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
+import { EffectChainMap, normalizePluginInstanceName } from './effect-slot'
 import { LinkAudioManager } from './link-audio-manager'
 import { isPluginPathSpec, resolvePluginSpec, validatePluginExtension } from './plugin-resolver'
 
-interface InstrumentDeclaration {
-  resolvedPath: string
-  pluginId?: string
-  load: Promise<void>
-}
-
-/** Owns the single v1 daemon instrument declaration shared by note sequences. */
+/**
+ * Owns the single v1 daemon instrument declaration shared by note sequences.
+ * Per-sequence instances (independent per note sequence, no sharing) land in
+ * PR-1b (#517 S4 / #522) — see `INSTRUCTION_ORBITSCORE_DSL.md` PH.4's staging note.
+ */
 export class PluginInstrumentManager {
-  private declaration?: InstrumentDeclaration
+  private readonly slots: EffectChainMap<'instrument'>
 
   constructor(
-    private readonly audioEngine: AudioEngine,
+    audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
-  ) {}
+  ) {
+    this.slots = new EffectChainMap(audioEngine, () => 'instrument')
+  }
 
   hasDeclaration(): boolean {
-    return this.declaration !== undefined
+    return this.slots.has('instrument')
   }
 
   async instrument(spec: string, pluginId?: string): Promise<void> {
@@ -41,36 +42,18 @@ export class PluginInstrumentManager {
       this.audioManager.getDocumentDirectory(),
       'instrument',
     )
-    const resolvedPath = resolved.path
-    const resolvedPluginId = resolved.pluginId
-    const existing = this.declaration
-    if (existing) {
-      if (existing.resolvedPath === resolvedPath && existing.pluginId === resolvedPluginId) {
-        await existing.load
-        if (this.audioEngine.isPluginActive?.('instrument') === false) {
-          await this.issueLoad(resolvedPath, resolvedPluginId)
-        }
-        return
-      }
-      throw new Error('seq.instrument() supports one instrument instance in v1.')
-    }
-    await this.issueLoad(resolvedPath, resolvedPluginId)
-  }
-
-  private async issueLoad(resolvedPath: string, pluginId: string | undefined): Promise<void> {
-    if (!this.audioEngine.loadPlugin) {
-      throw new Error('Plugin hosting requires the Rust engine backend.')
-    }
-    const load = this.audioEngine
-      .loadPlugin(resolvedPath, pluginId, 'instrument')
-      .then(() => undefined)
-    const declaration = { resolvedPath, pluginId, load }
-    this.declaration = declaration
-    try {
-      await load
-    } catch (err) {
-      if (this.declaration === declaration) this.declaration = undefined
-      throw err
-    }
+    await this.slots.declare(
+      'instrument',
+      {
+        role: 'instrument',
+        bus: undefined,
+        normalizedName: normalizePluginInstanceName(spec),
+        resolvedPath: resolved.path,
+        pluginId: resolved.pluginId,
+      },
+      () =>
+        'seq.instrument() supports one instrument instance in v1. ' +
+        'S4 PR-1b (#517/#522) will allow independent instances per note sequence.',
+    )
   }
 }

@@ -51,6 +51,13 @@ import {
 } from './engine-view'
 import { DeviceSwitchBridge } from './device-switch-bridge'
 import {
+  applyEngineExit,
+  applyEngineStdinError,
+  applyEngineStdoutChunk,
+  decideStartEngineForAgent,
+  transportStatusText,
+} from './engine-lifecycle'
+import {
   detectDslCompletionContext,
   extractDeclaredBusNames,
   extractTopLevelDeclaredNames,
@@ -61,7 +68,6 @@ import { loadPluginCatalog, runPluginScan } from './plugin-catalog-reader'
 import {
   colorForSeq,
   findPlayArgRangeForPath,
-  parseStepLine,
   type PlayheadColorConfig,
   type StepEvent,
 } from './playhead'
@@ -1198,97 +1204,294 @@ function shouldFilterLine(line: string): boolean {
   return false
 }
 
+// ---- Test-only seams (#527 review Critical #3) -------------------------
+//
+// setupStdoutHandler / setupExitHandler / setupStdinErrorHandler close over
+// this module's private process/UI state (`engineProcess`, `statusBarItem`,
+// `outputChannel`, `engineViewProvider`, `selectAudioDeviceBridge`) instead of
+// taking it as parameters — normal for code that owns state for the
+// extension's whole lifetime, but it meant no spec could drive these handlers
+// without running the full activate() flow (MCP server bring-up, auto-start
+// device probing, command/tree registration — none of which the wiring
+// itself needs). The four effects-object literals built by these handlers
+// have same-shaped `() => void` sibling callbacks (e.g. showStoppedStatus /
+// refreshEngineView); swapping which real implementation lands in which slot
+// type-checks fine and both the unit suite and the gated E2E stayed green.
+//
+// These exports/setters exist ONLY so
+// tests/vscode-extension/extension-wiring.spec.ts can inject fakes for that
+// state and call the real setup*Handler functions directly, asserting the
+// wiring itself (not just "some fake got called in the right shape", which
+// engine-lifecycle.spec.ts already covers for the pure decision logic). Not
+// part of the extension's public API — do not call from production code.
+//
+// ⚠️ #527 review round 3 Minor #3: none of these exports are gated behind a
+// test-environment check (e.g. `process.env.VITEST`) — they are plain named
+// exports, reachable by ANY code that imports this module. Today the only
+// importer is the spec above, so the risk is inert. If a future change gives
+// production code a reason to import `extension.ts` (unlikely but not
+// impossible — e.g. a second entry point re-exporting activation helpers),
+// that code would silently gain the power to reassign `engineProcess` /
+// `statusBarItem` / `outputChannel` / `engineViewProvider` out from under the
+// running extension with no compiler warning. Keep new test-only exports
+// confined to this block, and re-check this note before adding an importer
+// of `extension.ts` outside `tests/`.
+export function __setEngineProcessForTest(process: child_process.ChildProcess | null): void {
+  engineProcess = process
+}
+export function __getEngineProcessForTest(): child_process.ChildProcess | null {
+  return engineProcess
+}
+export function __setStatusBarItemForTest(
+  item: Pick<vscode.StatusBarItem, 'text' | 'tooltip'> | null,
+): void {
+  statusBarItem = item as unknown as vscode.StatusBarItem | null
+}
+export function __setOutputChannelForTest(
+  channel: Pick<vscode.OutputChannel, 'appendLine' | 'append'> | null,
+): void {
+  outputChannel = channel as unknown as vscode.OutputChannel | null
+}
+export function __setEngineViewProviderForTest(
+  provider: Pick<EngineViewProvider, 'refresh'> | null,
+): void {
+  engineViewProvider = provider as unknown as EngineViewProvider | null
+}
+/** Exposes the real singleton bridge so a spec can prove drainDeviceBridge
+ * wiring by observing a pending `send()` actually resolve, rather than just
+ * asserting the handler doesn't throw. */
+export function __getDeviceSwitchBridgeForTest(): DeviceSwitchBridge {
+  return selectAudioDeviceBridge
+}
+
+// -- Playhead test seams (#527 review round 3 Critical #1) ------------------
+//
+// `clearAllPlayheadDecorations()` had no independent test coverage at all —
+// every existing assertion about `setupExitHandler`/`setupStdoutHandler`
+// checked only `engineProcess` (governed by `clearEngineState`), so swapping
+// which real implementation lands under the `clearEngineState` vs.
+// `clearAllPlayheads` effect keys type-checked and left every test green.
+// These seams let a spec seed a playhead range and observe its OWN clearing
+// (via the real `editor.setDecorations` call, once a fake editor is pushed
+// into the `vscode` mock's `window.visibleTextEditors`) as a signal
+// independent of `engineProcess`.
+/** Seed a playhead active range as if a real `[STEP]` line had resolved to it
+ * — bypasses playhead.ts's document-text parsing (already covered by
+ * playhead.spec.ts) and also pre-creates the color's decoration type via
+ * `ensurePlayheadDecorationType`, so `clearAllPlayheadDecorations()`'s
+ * `editor.setDecorations(type, [])` call is observable rather than skipped
+ * for want of a registered decoration type. */
+export function __setPlayheadActiveRangeForTest(
+  seqName: string,
+  docUriString: string,
+  // `unknown`, not `vscode.Range`: the mock's `Range` (tests/mocks/vscode.ts)
+  // is a minimal duck-typed stand-in that does not structurally satisfy the
+  // real `@types/vscode` interface, and nothing this seam's consumers read
+  // needs more than `{ start, end }` — accepting the real type here would
+  // just push an `as unknown as vscode.Range` cast onto every call site.
+  range: unknown,
+): void {
+  ensurePlayheadDecorationType(
+    colorForSeq(seqName, playheadColorConfig(), playheadPaletteAssignments),
+  )
+  playheadActiveRanges.set(seqName, { docUriString, range: range as vscode.Range })
+}
+export function __getPlayheadActiveRangeCountForTest(): number {
+  return playheadActiveRanges.size
+}
+/** Number of pending playhead-step `setTimeout`s — `handleStepLine` adds one
+ * synchronously on every `[STEP]` line it processes (unless the event is
+ * stale), independent of clearSequence/clearAllPlayheads/
+ * handleSelectAudioDeviceLine, so this is a signal specific to `handleStep`
+ * wiring in `setupStdoutHandler`. */
+export function __getPlayheadTimeoutCountForTest(): number {
+  return playheadTimeouts.size
+}
+/** Resets all module-private playhead state between specs — disposes every
+ * decoration type and clears every pending timeout, so one spec's seeded
+ * range/decoration type never leaks into the next. */
+export function __resetPlayheadStateForTest(): void {
+  for (const timeout of playheadTimeouts) clearTimeout(timeout)
+  playheadTimeouts.clear()
+  playheadActiveRanges.clear()
+  for (const decorationType of playheadDecorationTypes.values()) decorationType.dispose()
+  playheadDecorationTypes.clear()
+  playheadPaletteAssignments.clear()
+}
+
+// ---- Handler-body crash containment (#527 review round 4 Important #1) ----
+//
+// setupStdoutHandler / setupStderrHandler / setupExitHandler /
+// setupStdinErrorHandler register listener bodies directly on Node
+// stream/process events. There is no `process.on('uncaughtException', ...)`
+// anywhere in this extension, so an exception that escapes ANY of these four
+// listener bodies is not just an OrbitScore failure — it crashes the
+// extension HOST process, taking down every other extension in the window
+// along with it. `transportStatusText`'s exhaustiveness guard (#527 review
+// Important #2, above) was the first piece of code on this path that can
+// deliberately `throw`, but the danger it exposed is general: ANY exception
+// here (a null UI element, a bridge method throwing, etc.) has always had
+// this blast radius.
+//
+// `logHandlerFailure` catches and records loud, marker-prefixed failures
+// (including the stack trace, for root-causing) instead of re-throwing —
+// re-throwing would defeat the purpose, since it's exactly what crashes the
+// host. Per this project's convention (`get_log` / the output channel is the
+// only place engine-side errors are observable — see CLAUDE.md's testing
+// discipline notes), writing loudly to `outputChannel` IS the loud-failure
+// behavior, not a silent swallow.
+//
+// #527 review round 5 Minor #1: `logHandlerFailure` is itself called from
+// inside every one of those catch blocks — if ITS body threw (e.g. a future
+// VS Code API change makes `outputChannel.appendLine` throw, or a test fake
+// does), the exception would re-escape the very catch block that was
+// supposed to contain it, defeating the whole mechanism. The inner
+// try/catch below makes `logHandlerFailure` self-contained: if writing to
+// `outputChannel` fails, it falls back to `console.error` instead of
+// propagating. That fallback is deliberately a single, non-throwing
+// primitive call — there is no safe place left to report a failure of the
+// fallback itself.
+function logHandlerFailure(handlerName: string, err: unknown): void {
+  try {
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = err instanceof Error && err.stack ? err.stack : '(no stack trace available)'
+    outputChannel?.appendLine(`🛑 internal error in ${handlerName}: ${message}`)
+    outputChannel?.appendLine(stack)
+  } catch (loggingErr) {
+    console.error(
+      `🛑 internal error in ${handlerName} (and outputChannel logging itself failed):`,
+      err,
+      loggingErr,
+    )
+  }
+}
+
 /**
  * Setup stdout handler for engine process.
  */
-function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   process.stdout?.on('data', (data) => {
-    const output = data.toString()
-    const lines: string[] = output.split('\n')
+    try {
+      const output = data.toString()
+      const lines: string[] = output.split('\n')
 
-    // Live playhead (#390): parse `[STEP]` markers and stop lines from the RAW
-    // lines — the markers are filtered out of the Output channel below.
-    // (Lines split across chunk boundaries are rare and self-heal on the next
-    // step ~one beat later, so no carry buffer.)
-    for (const rawLine of lines) {
-      const step = parseStepLine(rawLine)
-      if (step) {
-        handleStepLine(step)
-        continue
-      }
-      // `⏹ <seqName> (...)` = that seq stopped; `✅ Global stopped` = all off.
-      const stopMatch = rawLine.match(/⏹\s+(\S+)/)
-      if (stopMatch) {
-        clearPlayheadForSequence(stopMatch[1])
-      }
-      if (rawLine.includes('✅ Global stopped')) {
-        clearAllPlayheadDecorations()
-      }
-      // `//#selectAudioDevice` meta-line bridge result (#484 D2.5): a single JSON
-      // line `{"selectAudioDevice":{...}}` emitted by repl-mode.ts. FIFO — matches
-      // the oldest pending request (the stdin write path is a single serialized
-      // queue on the engine side, so requests/responses stay in order).
-      // A line that looks like the bridge's shape (`{"selectAudioDevice...`) but
-      // fails to parse — e.g. a chunk boundary split the JSON across two `data`
-      // events — is logged so a stuck caller isn't silently invisible.
-      const looksLikeSelectAudioDeviceLine = rawLine.trim().startsWith('{"selectAudioDevice')
-      const recognized = selectAudioDeviceBridge.handleLine(rawLine)
-      if (looksLikeSelectAudioDeviceLine && !recognized) {
-        outputChannel?.appendLine(
-          `⚠️ received a malformed //#selectAudioDevice result line (possible chunk-boundary split): ${rawLine}`,
-        )
-      }
-    }
+      // Identity-guarded via applyEngineStdoutChunk — see its docstring in
+      // engine-lifecycle.ts for the #528 stop→start race this protects against
+      // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
+      const isCurrent = engineProcess === process
 
-    // Filter output in non-debug mode (reuses the split above — one pass per chunk).
-    if (!debugMode) {
-      const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
-      if (filteredOutput.trim()) {
-        outputChannel?.append(filteredOutput + '\n')
-      }
-    } else {
-      // Debug mode: show everything
-      outputChannel?.append(output)
-    }
-
-    // Update status based on scheduler state
-    if (output.includes('✅ Global running') || output.includes('▶ Global')) {
-      statusBarItem!.text = debugMode ? '🎵 OrbitScore: ▶️ Playing 🐛' : '🎵 OrbitScore: ▶️ Playing'
-    } else if (output.includes('✅ Global stopped') || output.includes('⏹ Global')) {
-      statusBarItem!.text = debugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
+      applyEngineStdoutChunk(output, lines, isCurrent, {
+        handleStep: handleStepLine,
+        clearSequence: clearPlayheadForSequence,
+        clearAllPlayheads: clearAllPlayheadDecorations,
+        handleSelectAudioDeviceLine: (rawLine) => selectAudioDeviceBridge.handleLine(rawLine),
+        warnMalformedSelectAudioDeviceLine: (rawLine, stale) => {
+          outputChannel?.appendLine(
+            `⚠️ received a malformed //#selectAudioDevice result line${
+              stale ? ' from a stale engine' : ''
+            } (possible chunk-boundary split): ${rawLine}`,
+          )
+        },
+        transcribeLog: () => {
+          // Second pass over the SAME `lines` array classifyEngineStdoutLine()
+          // (inside applyEngineStdoutChunk) already scanned — not a re-split of
+          // `output`. Unlike before this lifecycle extraction — when a stale
+          // process's line loop ran zero iterations — this now always runs,
+          // current or stale: the malformed-//#selectAudioDevice diagnostic
+          // must see stale output too (#527 review Important #1).
+          if (!debugMode) {
+            const filteredOutput = lines.filter((line) => !shouldFilterLine(line)).join('\n')
+            if (filteredOutput.trim()) outputChannel?.append(filteredOutput + '\n')
+          } else {
+            outputChannel?.append(output)
+          }
+        },
+        // #527 review Important #2: rendering delegated to transportStatusText()
+        // (engine-lifecycle.ts) — an exhaustive switch, not a ternary, so a
+        // state value outside 'playing' | 'ready' throws instead of silently
+        // displaying "Ready". That throw is caught by the try/catch wrapping
+        // this whole listener body (#527 review round 4 Important #1) — it
+        // reaches `logHandlerFailure` below, NOT the extension host.
+        setTransportStatus: (state) => {
+          statusBarItem!.text = transportStatusText(state, debugMode)
+        },
+      })
+    } catch (err) {
+      logHandlerFailure('setupStdoutHandler', err)
     }
   })
 }
 
 /**
  * Setup stderr handler for engine process.
+ *
+ * #527 review round 5 Minor #2: wrapped in the same try/catch +
+ * `logHandlerFailure` containment as the other three listener bodies above —
+ * this one had been left unwrapped despite the crash-containment note two
+ * functions up describing the danger in general terms for "every listener
+ * body registered on the engine process". `outputChannel?.append` has no
+ * realistic throw path today, so this is a symmetry fix, not a fix for an
+ * observed failure.
  */
-function setupStderrHandler(process: child_process.ChildProcess): void {
+export function setupStderrHandler(process: child_process.ChildProcess): void {
   process.stderr?.on('data', (data) => {
-    outputChannel?.append(`ERROR: ${data.toString()}`)
+    try {
+      outputChannel?.append(`ERROR: ${data.toString()}`)
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
+  })
+}
+
+/**
+ * Setup stdin 'error' handler for engine process.
+ *
+ * #501 review Important #2: an unhandled 'error' event on a stream crashes the
+ * process. stdin can emit this independently of the 'exit' event (e.g. EPIPE if
+ * the engine's stdin closes before we stop writing to it).
+ */
+export function setupStdinErrorHandler(process: child_process.ChildProcess): void {
+  process.stdin?.on('error', (err) => {
+    try {
+      // Identity-guarded via applyEngineStdinError — see its docstring in
+      // engine-lifecycle.ts for the #528 stop→start race this protects against.
+      applyEngineStdinError(err.message, engineProcess === process, {
+        logStdinError: (message) => outputChannel?.appendLine(`⚠️ engine stdin error: ${message}`),
+        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+      })
+    } catch (innerErr) {
+      logHandlerFailure('setupStdinErrorHandler', innerErr)
+    }
   })
 }
 
 /**
  * Setup exit handler for engine process.
  */
-function setupExitHandler(process: child_process.ChildProcess): void {
+export function setupExitHandler(process: child_process.ChildProcess): void {
   process.on('exit', (code) => {
-    outputChannel?.appendLine(`\n🛑 Engine process exited with code ${code}`)
-    engineProcess = null
-    isLiveCodingMode = false
-    globalInitialized = false
-    clearAllPlayheadDecorations() // #390: nothing is sounding anymore
-    // #501 review Critical #1: drain any //#selectAudioDevice requests still
-    // awaiting a response — otherwise a stale resolver could FIFO-match the
-    // next engine instance's response.
-    selectAudioDeviceBridge.drainAll(
-      'engine process exited before responding to //#selectAudioDevice',
-    )
-
-    statusBarItem!.text = '🎵 OrbitScore: Stopped'
-    statusBarItem!.tooltip = 'Click to start engine'
-    engineViewProvider?.refresh()
+    try {
+      // Identity-guarded via applyEngineExit — see its docstring in
+      // engine-lifecycle.ts for the #528 stop→start race this protects against.
+      applyEngineExit(code, engineProcess === process, {
+        logExit: (exitCode) =>
+          outputChannel?.appendLine(`\n🛑 Engine process exited with code ${exitCode}`),
+        clearEngineState: () => {
+          engineProcess = null
+          isLiveCodingMode = false
+          globalInitialized = false
+        },
+        clearAllPlayheads: clearAllPlayheadDecorations,
+        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+        showStoppedStatus: () => {
+          statusBarItem!.text = '🎵 OrbitScore: Stopped'
+          statusBarItem!.tooltip = 'Click to start engine'
+        },
+        refreshEngineView: () => engineViewProvider?.refresh(),
+      })
+    } catch (err) {
+      logHandlerFailure('setupExitHandler', err)
+    }
   })
 }
 
@@ -1779,13 +1982,7 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): 
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
   setupExitHandler(engineProcess)
-  // #501 review Important #2: an unhandled 'error' event on a stream crashes
-  // the process. stdin can emit this independently of the 'exit' event (e.g.
-  // EPIPE if the engine's stdin closes before we stop writing to it).
-  engineProcess.stdin?.on('error', (err) => {
-    outputChannel?.appendLine(`⚠️ engine stdin error: ${err.message}`)
-    selectAudioDeviceBridge.drainAll(`engine stdin error: ${err.message}`)
-  })
+  setupStdinErrorHandler(engineProcess)
   return true
 }
 
@@ -2485,9 +2682,15 @@ function evaluateForAgent(code: string): EvaluateResult {
 
 /** Start the engine for the MCP `start_engine` tool (mirrors the palette command). */
 function startEngineForAgent(options?: { captureWav?: string; debug?: boolean }): CommandResult {
-  if (isLiveCodingMode && engineProcess && !engineProcess.killed) {
-    return { ok: true, message: 'engine already running' }
-  }
+  const decision = decideStartEngineForAgent(isEngineRunning() && isLiveCodingMode, options)
+  // `isEngineRunning() && isLiveCodingMode` can already be true here without this
+  // call having spawned anything: autoStartConfiguredRustEngine() calls
+  // startEngine() directly on activation when a saved audio device setting is
+  // configured (and, unless it is `__default__`, that device is present in the
+  // enumerated device list) — see the config gate there. Callers may also have
+  // started the engine explicitly via an earlier start_engine call.
+  if (decision.kind === 'reject') return { ok: false, error: decision.error }
+  if (decision.kind === 'already-running') return { ok: true, message: 'engine already running' }
   startEngine(options?.debug === true, options)
   // startEngine() may abort (missing daemon, build issue) without throwing — it
   // reports via a VS Code notification. Reflect the actual spawn outcome so the

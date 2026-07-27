@@ -60,6 +60,18 @@ describe('PluginInstrumentManager', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 
+  it('states the v1 limit error carries a stage marker (#527 review addition 2 / SC.5 "v1 のエラーは stage 表記を含む")', async () => {
+    const { global } = makeGlobal()
+    await global.instrument('synth.clap', 'one')
+    // Explicit, not just a substring incidentally still matching: pins the
+    // stage-marker text itself, not merely the pre-existing "one instrument"
+    // phrase — a regression that dropped the stage suffix but kept "one
+    // instrument" must fail this assertion.
+    await expect(global.instrument('other.clap', 'one')).rejects.toThrow(
+      /S4 PR-1b \(#517\/#522\) will allow independent instances per note sequence\./,
+    )
+  })
+
   it('rolls back a failed eager load and permits retry', async () => {
     const failure = new Error('load failed')
     const loadPlugin = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce({})

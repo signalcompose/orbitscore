@@ -2,19 +2,19 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
-import { EffectSlotMap, resolveEffectSpec } from './effect-slot'
+import { EffectChainMap, normalizePluginInstanceName, resolveEffectSpec } from './effect-slot'
 
 /** Owns the single v1 master-insert plugin declaration and eager load. */
 export class PluginEffectManager {
-  /** 単一 slot（v1 master insert）を固定 key で EffectSlotMap に載せる（#468 共通化）。 */
-  private readonly slots: EffectSlotMap<'master'>
+  /** v1 master insert を固定 key の chain（上限 1）に載せる。 */
+  private readonly slots: EffectChainMap<'master'>
 
   constructor(
     audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
-    this.slots = new EffectSlotMap(audioEngine)
+    this.slots = new EffectChainMap(audioEngine, () => 'master')
   }
 
   hasDeclaration(): boolean {
@@ -30,13 +30,15 @@ export class PluginEffectManager {
     )
     await this.slots.declare(
       'master',
-      undefined,
-      resolved.path,
-      resolved.pluginId,
+      {
+        role: 'effect',
+        bus: undefined,
+        normalizedName: normalizePluginInstanceName(spec),
+        resolvedPath: resolved.path,
+        pluginId: resolved.pluginId,
+      },
       () =>
-        new Error(
-          'global.effect() supports one master insert in v1; effect chains are reserved for future support.',
-        ),
+        'global.effect() supports one master insert in v1; effect chains are reserved for future support.',
     )
   }
 }

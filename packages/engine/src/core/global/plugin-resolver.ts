@@ -38,22 +38,34 @@ export function resolvePluginPath(
 
 export type PluginRole = 'effect' | 'instrument'
 
+/** 実際にロードできる拡張子。新 format のサポートを足す時はここに追加する。 */
+const SUPPORTED_PLUGIN_EXTENSIONS = ['.clap', '.vst3']
+/** plugin ファイルとしては認識するが v1 ではロードできない拡張子（AU 予約）。 */
+const RESERVED_PLUGIN_EXTENSIONS = ['.component']
+/**
+ * plugin ファイルパスとして**認識する**拡張子 = ロード可能 + 予約。
+ * ロード可否とは別概念なので、`validatePluginExtension` は上の2つから判定する
+ * （この配列だけを見ると「予約拡張子もロードできる」と誤読するため）。
+ */
+export const KNOWN_PLUGIN_EXTENSIONS = [
+  ...SUPPORTED_PLUGIN_EXTENSIONS,
+  ...RESERVED_PLUGIN_EXTENSIONS,
+]
+const KNOWN_PLUGIN_FORMATS = SUPPORTED_PLUGIN_EXTENSIONS.map((extension) => extension.slice(1))
+
 export function validatePluginExtension(spec: string, role: PluginRole): void {
   const extension = path.extname(spec).toLowerCase()
-  if (extension === '.clap') return
-  if (extension === '.vst3') return
-  if (extension === '.component') {
+  if (SUPPORTED_PLUGIN_EXTENSIONS.includes(extension)) return
+  if (RESERVED_PLUGIN_EXTENSIONS.includes(extension)) {
     throw new Error(
       `${extension} plugins are not yet supported for ${role} (reserved for future AU support).`,
     )
   }
-  const expected = '.clap or .vst3'
+  const expected = SUPPORTED_PLUGIN_EXTENSIONS.join(' or ')
   throw new Error(`Unknown plugin extension "${extension || '(none)'}"; expected ${expected}.`)
 }
 
 const PATH_DIRECT_PREFIXES = ['./', '../', '~/', '/']
-const KNOWN_PLUGIN_EXTENSIONS = ['.clap', '.vst3', '.component']
-const KNOWN_PLUGIN_FORMATS = ['clap', 'vst3']
 
 /**
  * PC.2 discriminator: path-direct specs start with `./`/`../`/`~/`/`/` or end with a known
