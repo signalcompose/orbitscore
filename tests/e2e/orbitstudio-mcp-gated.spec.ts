@@ -415,6 +415,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             `branch not exercised. Log tail: ${afterFirstInstrumentLog.slice(-400)}`,
         )
       } else {
+        // ── #540 P1 (a): 同一シーケンスへの別 plugin 再宣言 = v1 の差し替え拒否。
+        // エラー文言は回避策（エンジン再起動）を案内する新文言であること。
         const secondInstrumentRes = await client.call('evaluate_orbitscore', {
           code: `instSeq.instrument("${CLAP_TEST_EFFECT_PATH}")`,
         })
@@ -424,11 +426,38 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const afterSecondInstrumentLog = (await client.call('get_log', { lines: 500 })).text
         expect(
           afterSecondInstrumentLog,
-          `expected the S4 stage-marker duplicate error, got log tail: ${afterSecondInstrumentLog.slice(-800)}`,
-        ).toContain(
-          'seq.instrument() supports one instrument instance in v1. ' +
-            'S4 PR-1b (#517/#522) will allow independent instances per note sequence.',
-        )
+          `expected the v1 replacement rejection, got log tail: ${afterSecondInstrumentLog.slice(-800)}`,
+        ).toContain("Sequence 'instSeq' already has an instrument instance")
+        expect(afterSecondInstrumentLog).toContain('restart the engine to change the plugin')
+
+        // ── #540 P1 (b): 別シーケンスは自分の独立インスタンスを持てる（旧「エンジン
+        // 全体で1台」制限の撤去がこの PR の表面）。同じ synth をもう1台 attach し、
+        // 新規の attach 失敗も「already has」拒否も**増えない**ことを確認する。
+        const attachFailuresBeforeSecondSeq = (
+          afterSecondInstrumentLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []
+        ).length
+        const declareInstSeq2Res = await client.call('evaluate_orbitscore', {
+          code: 'var instSeq2 = init global.seq',
+        })
+        expect(declareInstSeq2Res.isError, declareInstSeq2Res.text).toBe(false)
+        const secondSeqInstrumentRes = await client.call('evaluate_orbitscore', {
+          code: `instSeq2.instrument("${CLAP_TEST_SYNTH_PATH}")`,
+        })
+        expect(secondSeqInstrumentRes.isError, secondSeqInstrumentRes.text).toBe(false)
+        await sleep(6000) // 2台目の実 out-of-process attach（spawn + IPC handshake）
+
+        const afterSecondSeqLog = (await client.call('get_log', { lines: 500 })).text
+        const attachFailuresAfterSecondSeq = (
+          afterSecondSeqLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []
+        ).length
+        expect(
+          attachFailuresAfterSecondSeq,
+          `second sequence's own instrument must attach (no new OUTPROC_ATTACH_FAILED). Log tail: ${afterSecondSeqLog.slice(-800)}`,
+        ).toBe(attachFailuresBeforeSecondSeq)
+        expect(
+          afterSecondSeqLog,
+          `second sequence must NOT hit the same-sequence duplicate rejection. Log tail: ${afterSecondSeqLog.slice(-800)}`,
+        ).not.toContain("Sequence 'instSeq2' already has an instrument instance")
       }
 
       // ── 6c. #527: a failed plugin declaration surfaces loudly AND the engine
