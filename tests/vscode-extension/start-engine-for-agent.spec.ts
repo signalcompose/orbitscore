@@ -4,17 +4,16 @@
  *
  * Unlike extension-wiring.spec.ts (which calls the exported setup*Handler
  * functions directly, bypassing `startEngine()`'s pre-flight entirely), this
- * spec mocks ONLY `child_process.spawn` and exercises the REAL
- * `startEngine()` pre-flight (engine-kind resolution via
- * `require('../engine/dist/audio/engine-backend')`, daemon-path resolution
- * via `require('../engine/dist/audio/rust-engine/daemon-client')`, and the
- * `packages/vscode-extension/engine/dist/cli-audio.js` existence check) —
- * this is the only way to prove `startEngineForAgent` itself (not just
+ * spec mocks `child_process.spawn` plus the extension build-artifact boundary,
+ * then exercises the REAL `startEngine()` pre-flight and spawn-confirmation
+ * path. The boundary mock supplies a resolved daemon and confirms the
+ * extension-local CLI path is present; assertions below prove both pre-flight
+ * checks still ran. Engine-kind resolution remains real (and intentionally
+ * exercises its production fallback when ignored build artifacts are absent).
+ * This is the only way to prove `startEngineForAgent` itself (not just
  * `applyEngineError`'s pure logic, covered in engine-lifecycle.spec.ts)
- * detects a spawn failure. It depends on this checkout's build artifacts
- * under `packages/vscode-extension/engine/dist/` and
- * `rust/target/release/orbit-audio-daemon` — the same assumption
- * tests/audio/rust-engine/real-daemon-timing.spec.ts already makes.
+ * detects a spawn failure without making the unit test depend on a prior
+ * extension build.
  *
  * #533's core claim: `engineProcess.killed` cannot detect a spawn failure —
  * it only reflects whether WE sent a signal, and we never do on failure. A
@@ -30,6 +29,10 @@ import * as child_process from 'child_process'
 import * as vscode from 'vscode'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
+import {
+  extensionEngineFileExists,
+  resolveDaemonBinaryForExtension,
+} from '../../packages/vscode-extension/src/engine-startup-runtime'
 import * as ext from '../../packages/vscode-extension/src/extension'
 
 vi.mock('child_process', async (importOriginal) => {
@@ -39,6 +42,14 @@ vi.mock('child_process', async (importOriginal) => {
     spawn: vi.fn(actual.spawn),
   }
 })
+
+vi.mock('../../packages/vscode-extension/src/engine-startup-runtime', () => ({
+  extensionEngineFileExists: vi.fn(() => true),
+  resolveDaemonBinaryForExtension: vi.fn(() => ({
+    path: '/unit-test/orbit-audio-daemon',
+    source: 'unit-test',
+  })),
+}))
 
 interface FakeSpawnedProcess {
   proc: child_process.ChildProcess
@@ -69,6 +80,8 @@ describe('startEngineForAgent post-spawn detection (#533)', () => {
   let showInformationMessage: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
+    vi.mocked(extensionEngineFileExists).mockClear()
+    vi.mocked(resolveDaemonBinaryForExtension).mockClear()
     ext.__setEngineProcessForTest(null)
     ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
     ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
@@ -124,6 +137,11 @@ describe('startEngineForAgent post-spawn detection (#533)', () => {
     const result = await ext.startEngineForAgent({ debug: true })
 
     expect(result).toEqual({ ok: true, message: 'engine starting' })
+    expect(resolveDaemonBinaryForExtension).toHaveBeenCalledOnce()
+    expect(extensionEngineFileExists).toHaveBeenCalledOnce()
+    expect(extensionEngineFileExists).toHaveBeenCalledWith(
+      expect.stringContaining('packages/vscode-extension/engine/dist/cli-audio.js'),
+    )
     expect(showInformationMessage).toHaveBeenCalledTimes(1)
     expect(showInformationMessage).toHaveBeenCalledWith('✅ Engine started (Debug)')
   })

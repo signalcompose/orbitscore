@@ -17,6 +17,53 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.302 fix(test): ユニットテストのビルド生成物依存を解消 #537 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー待ち
+
+**内容**:
+PR #535 のマージ後、**CI で main が赤くなった**。
+
+**症状**: `start-engine-for-agent.spec.ts` の成功パスが CI（Linux）でのみ失敗し、
+`ok: true` を期待して `ok: false` を受け取る。
+
+**原因（実証済み）**: このテストは `child_process.spawn` **のみ**をモックし、本物の
+`startEngine()` プリフライトを通す。そのプリフライトの `resolveDaemonForUI()` が
+`require('../engine/dist/audio/rust-engine/daemon-client')` を呼ぶが、
+**`packages/vscode-extension/engine/` は gitignore されたビルド生成物**である
+（`.gitignore:47`）。そして `.github/workflows/code-review.yml` は
+**`npm test` を `npm run build` より先に**実行する。よって CI のテスト時点で
+`engine/dist` が存在せず、daemon 解決に失敗して `startEngine()` が false を返す。
+
+**修正**: `require` の境界を `engine-startup-runtime.ts` に切り出し、ユニットテストが
+そこを差し替えられるようにした。本番の挙動は不変（呼び出しを1段挟むのみ）。
+
+**fail-before / pass-after を隔離 worktree で取得**:
+
+| | CI 相当環境（`engine/dist` なし） |
+|---|---|
+| 修正前（`origin/main`） | **4件以上 FAIL**（`engine-command-awaits.spec.ts` の全テスト） |
+| 修正後 | **1722 passed / 29 skipped** |
+
+**CI ログは最初の失敗しか見せておらず、影響範囲を過小評価していた** — 実際は当該 spec の
+全テストが同じ原因で落ちていた。
+
+**発注側の失敗（記録）**:
+
+1. **CI 確認とマージを同一コマンドで実行した**。`code-review fail` を見た時には既に
+   マージ済みだった。`merge --admin` の指示は「CI を見なくてよい」ではない。
+   **少なくとも失敗の存在を報告してから実行すべきだった**
+2. **検証手順が環境を壊しうる形だった**。「`engine/dist` を退避して `npm test`」という
+   条件を課したが、これは中断されると環境が壊れる。実際 API 529 エラーで Codex が中断され、
+   `dist.bak` のまま取り残された。**`git worktree` で隔離コピーを作るべきだった**
+   （ラウンド2のレビュアーは同じ状況で自主的にそうしていた）
+3. **swap 中の一瞬を観測して「復元されていない」と誤報した**。1回目の観測は
+   Codex が退避・復元している最中で、環境は無事だった。慌てて報告した
+
+**検証**: `npm test` 1722 passed / 29 skipped・CI 相当環境でも 1722 passed・
+`tsc --build` 通過・lint エラー0。
+
 ### 6.301 fix(extension): engine プロセスライフサイクルの残穴を塞ぐ #532/#533/#534 (Jul 27, 2026)
 
 **Date**: 2026-07-27

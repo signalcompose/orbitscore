@@ -60,6 +60,10 @@ import {
   type EngineExitEffects,
 } from './engine-lifecycle'
 import {
+  extensionEngineFileExists,
+  resolveDaemonBinaryForExtension,
+} from './engine-startup-runtime'
+import {
   detectDslCompletionContext,
   extractDeclaredBusNames,
   extractTopLevelDeclaredNames,
@@ -661,11 +665,7 @@ function resolveScsynthForUI(): { path: string; source: string } | null {
  */
 function resolveDaemonForUI(): { path: string; source: string } | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const daemonModule = require('../engine/dist/audio/rust-engine/daemon-client') as {
-      resolveDaemonBinaryPath: (explicitPath?: string) => { path: string; source: string }
-    }
-    return daemonModule.resolveDaemonBinaryPath()
+    return resolveDaemonBinaryForExtension()
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
     outputChannel?.appendLine(`❌ daemon resolver failed: ${reason}`)
@@ -1054,7 +1054,7 @@ function getEnginePath(debugMode: boolean): { enginePath: string; engineSource: 
   outputChannel?.appendLine(`📦 Using: ${engineSource}`)
   outputChannel?.appendLine(`📍 Path: ${enginePath}`)
 
-  if (!fs.existsSync(enginePath)) {
+  if (!extensionEngineFileExists(enginePath)) {
     vscode.window.showErrorMessage(
       `Extension engine not found: ${enginePath}\n\n` +
         `This indicates a build issue. Please rebuild the extension:\n` +
