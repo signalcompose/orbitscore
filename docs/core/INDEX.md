@@ -21,6 +21,7 @@ OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider a
 | File | Purpose |
 |---|---|
 | [INDEX.md](INDEX.md) | This file — top-level navigation |
+| [DESIGN_PRINCIPLES.md](DESIGN_PRINCIPLES.md) | プロダクト設計原則（LLM-first / 人間製成果物依存の禁止 / 対称ワークフロー）— 全機能仕様の上位規範 |
 | [PROJECT_RULES.md](PROJECT_RULES.md) | Critical project rules — must-read before contributing |
 | [INSTRUCTION_ORBITSCORE_DSL.md](INSTRUCTION_ORBITSCORE_DSL.md) | DSL v3.0 specification — single source of truth |
 | [CONTEXT7_GUIDE.md](CONTEXT7_GUIDE.md) | Context7 (external library docs) usage |
@@ -93,6 +94,7 @@ user 向け学習サイト本体 (VitePress、ローカル参照は `npm run -w 
 | File | Purpose |
 |---|---|
 | [TESTING_GUIDE.md](../testing/TESTING_GUIDE.md) | Unit / integration test procedures |
+| [E2E_HARNESS_SPEC.md](../testing/E2E_HARNESS_SPEC.md) | DSL 網羅 E2E ハーネス仕様（仕様書駆動・二重台帳監査・無人実行・改ざん耐性）— #543 の規範 |
 | [PERFORMANCE_TEST.md](../testing/PERFORMANCE_TEST.md) | Live coding performance benchmarks |
 
 ---
