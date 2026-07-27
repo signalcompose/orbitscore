@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.303 chore(test): vitest を単一バージョンに統一 #531 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー待ち
+
+**内容**:
+同一リポジトリに vitest が2系統インストールされていた（`packages/engine` = 2.1.9 /
+ルート = 3.2.6）。PR #527 で `vscode` の alias を持つ**共有 `vitest.config.ts` をルートに新設**し
+両スクリプトから参照するようにしたため、**1つの設定ファイルが2つのメジャーバージョンから
+読まれる**状態になっていた。
+
+**対応**: `packages/engine` から vitest 依存を落とし、ルートの hoisted 版のみを使う。
+両経路とも 3.2.6 に統一。`package-lock.json` は 232 行削減。本番コードは無変更。
+
+**検証（すべて条件を揃えて実測）**:
+
+| 検証 | 結果 |
+|---|---|
+| `npm test`（cwd=packages/engine） | 1722 passed / 29 skipped（**件数変化なし**） |
+| ルートからの実行 | 270 passed |
+| **CI 相当環境（隔離 worktree・`engine/dist` なし）** | 1722 passed / 29 skipped |
+| 両経路の vitest | **3.2.6 に統一** |
+
+2.x → 3.x で**テストが silently skip される**可能性があったため、件数が1件でも減ったら
+停止する条件を委譲時に課した。減っていない。
+
+**発注側の失敗（記録・本日3度目の同種）**: 隔離 worktree での検証中、
+**変更あり / origin/main の2つの worktree で `packages/engine/node_modules` の
+リンク状態が違っており、条件が揃っていない比較**をした。`uuid` はそこにしか無いため
+リンクが効いていない方だけが落ち、それを見て「変更起因の退行」と**誤って断定した**。
+条件を揃え直したら両方 1722 passed。**検証手順そのものを検証していなかった。**
+
+**#537 の教訓を適用した点**: 本体の `packages/vscode-extension/engine/` を mv で退避する方法は
+使わず、`git worktree` の隔離コピーで CI 相当環境を作った（退避方式は中断されると環境が壊れる）。
+
 ### 6.302 fix(test): ユニットテストのビルド生成物依存を解消 #537 (Jul 27, 2026)
 
 **Date**: 2026-07-27
