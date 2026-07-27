@@ -1206,11 +1206,20 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
     const output = data.toString()
     const lines: string[] = output.split('\n')
 
+    // #528: stdout も 'exit' と同じく非同期に届く。stop → start を素早く行うと、
+    // 既に死んだ engine の残バッファがこのハンドラに遅れて流れ込む。ログの転記は
+    // 無条件に続けてよい（停止中 engine の最終出力は診断上むしろ欲しい）が、
+    // **共有状態への書き込みは現役の engine のものだけ**に限る — さもないと古い
+    // 行が新 engine のライブ playhead を消し、status bar を巻き戻し、stale な
+    // //#selectAudioDevice 応答が新 engine の待ち行列に FIFO マッチしてしまう
+    // （setupExitHandler の identity ガードと同じ理由・#501 review Critical #1）。
+    const isCurrent = engineProcess === process
+
     // Live playhead (#390): parse `[STEP]` markers and stop lines from the RAW
     // lines — the markers are filtered out of the Output channel below.
     // (Lines split across chunk boundaries are rare and self-heal on the next
     // step ~one beat later, so no carry buffer.)
-    for (const rawLine of lines) {
+    for (const rawLine of isCurrent ? lines : []) {
       const step = parseStepLine(rawLine)
       if (step) {
         handleStepLine(step)
@@ -1252,6 +1261,7 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
     }
 
     // Update status based on scheduler state
+    if (!isCurrent) return
     if (output.includes('✅ Global running') || output.includes('▶ Global')) {
       statusBarItem!.text = debugMode ? '🎵 OrbitScore: ▶️ Playing 🐛' : '🎵 OrbitScore: ▶️ Playing'
     } else if (output.includes('✅ Global stopped') || output.includes('⏹ Global')) {
@@ -1266,6 +1276,26 @@ function setupStdoutHandler(process: child_process.ChildProcess, debugMode: bool
 function setupStderrHandler(process: child_process.ChildProcess): void {
   process.stderr?.on('data', (data) => {
     outputChannel?.append(`ERROR: ${data.toString()}`)
+  })
+}
+
+/**
+ * Setup stdin 'error' handler for engine process.
+ *
+ * #501 review Important #2: an unhandled 'error' event on a stream crashes the
+ * process. stdin can emit this independently of the 'exit' event (e.g. EPIPE if
+ * the engine's stdin closes before we stop writing to it).
+ */
+function setupStdinErrorHandler(process: child_process.ChildProcess): void {
+  process.stdin?.on('error', (err) => {
+    outputChannel?.appendLine(`⚠️ engine stdin error: ${err.message}`)
+    // #528: identity ガード（setupExitHandler と同じ理由）。stop → start を素早く
+    // 行うと、死んだ engine の stdin が新 engine の spawn 後に EPIPE を出しうる。
+    // その時に drainAll すると、**新 engine 宛て**の //#selectAudioDevice 応答待ちを
+    // 巻き添えで捨てることになる（#501 review Critical #1 が exit 経路について
+    // 懸念していた stale resolver の FIFO マッチと同じ機序）。
+    if (engineProcess !== process) return
+    selectAudioDeviceBridge.drainAll(`engine stdin error: ${err.message}`)
   })
 }
 
@@ -1786,13 +1816,7 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): 
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
   setupExitHandler(engineProcess)
-  // #501 review Important #2: an unhandled 'error' event on a stream crashes
-  // the process. stdin can emit this independently of the 'exit' event (e.g.
-  // EPIPE if the engine's stdin closes before we stop writing to it).
-  engineProcess.stdin?.on('error', (err) => {
-    outputChannel?.appendLine(`⚠️ engine stdin error: ${err.message}`)
-    selectAudioDeviceBridge.drainAll(`engine stdin error: ${err.message}`)
-  })
+  setupStdinErrorHandler(engineProcess)
   return true
 }
 

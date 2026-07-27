@@ -199,13 +199,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // `ORBIT_CAPTURE_WAV` でしか有効化できない (#528) ので、自動起動した engine を
       // 一度落としてから capture 付きで起動し直す。自動起動の spawn 完了を待たずに
       // stop すると取りこぼすため、running を確認してから止める。
-      await waitUntil(
-        async () => {
-          const stateRes = await client!.call('get_engine_state')
-          return (JSON.parse(stateRes.text) as { running: boolean }).running === true
-        },
-        { intervalMs: 500, timeoutMs: 30_000, label: 'auto-started engine running' },
-      )
+      const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
+        waitUntil(
+          async () => {
+            const stateRes = await client!.call('get_engine_state')
+            return (JSON.parse(stateRes.text) as { running: boolean }).running === running
+          },
+          { intervalMs: 500, timeoutMs, label },
+        )
+
+      await waitForEngine(true, 30_000, 'auto-started engine running')
       // #528 回帰ピン: capture は spawn 時にしか有効化できないので、既に走っている
       // engine に対する capture 付き start_engine は **失敗を返さなければならない**。
       // 旧実装はここで `ok: true, 'engine already running'` を返して captureWav を
@@ -219,26 +222,13 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
-      await waitUntil(
-        async () => {
-          const stateRes = await client!.call('get_engine_state')
-          return (JSON.parse(stateRes.text) as { running: boolean }).running === false
-        },
-        { intervalMs: 500, timeoutMs: 15_000, label: 'engine stopped' },
-      )
+      await waitForEngine(false, 15_000, 'engine stopped')
 
       const startRes = await client.call('start_engine', { capture_wav: captureWavPath })
       expect(startRes.isError, startRes.text).toBe(false)
 
       try {
-        await waitUntil(
-          async () => {
-            const stateRes = await client!.call('get_engine_state')
-            const state = JSON.parse(stateRes.text) as { running: boolean }
-            return state.running === true
-          },
-          { intervalMs: 500, timeoutMs: 15_000, label: 'engine running' },
-        )
+        await waitForEngine(true, 15_000, 'engine running')
       } catch (err) {
         // engine が上がらなかった理由は output channel にしか出ない（MCP の
         // get_engine_state は running の真偽しか返さない）。タイムアウトだけを

@@ -48,6 +48,19 @@ capture は spawn 時の `ORBIT_CAPTURE_WAV` でしか有効化できないた�
 信じたまま capture.wav を読む段で ENOENT に遭う（agent には原因不明の失敗に見える）。
 拡張は activate 時に engine を自動起動するので**これは例外ではなく既定の経路**。明示エラーに変更。
 
+**(2') 同一バグクラスの横展開（`/simplify` altitude 指摘）**: (2) を直しただけでは片手落ちで、
+**同じ機序の兄弟ハンドラが無防備**だった。`stdout` の `'data'` ハンドラは古い process の残バッファが
+遅れて届くと、新 engine のライブ playhead 装飾を消し、status bar を巻き戻し、stale な
+`//#selectAudioDevice` 応答を新 engine の待ち行列に FIFO マッチさせる（#501 review Critical #1 が
+exit 経路について懸念していたのと同じ機序）。`stdin` の `'error'` ハンドラも identity 未確認で
+`drainAll` を呼んでいた。いずれも identity ガードを追加。**ログの転記は無条件のまま残した** —
+停止中 engine の最終出力は診断上むしろ必要で、守るべきは共有状態への書き込みだけのため。
+`stdin` ハンドラは他と同じ体裁の `setupStdinErrorHandler()` に切り出した。
+
+なお altitude レビューは follow-up 候補も挙げた（`selectAudioDeviceBridge` の generation-aware 化 /
+状態リセット三つ組みの重複 / `isEngineRunning()` を使わない重複条件 / spawn 時限定オプションの
+中央検証）。いずれも本 PR のレース修正とは軸が違うため見送り。
+
 **テストの積み上げ**:
 - E2E に自動起動 engine の停止 → capture 付き再起動の手順を追加（(2) を回帰カバー）
 - E2E に「走行中の capture 付き start_engine は失敗する」ステップを追加（(3) を回帰カバー）
