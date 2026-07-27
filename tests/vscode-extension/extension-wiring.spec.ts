@@ -55,6 +55,7 @@ interface FakeChildProcess {
   fireStdoutData: (chunk: string) => void
   fireStderrData: (chunk: string) => void
   fireStdinError: (err: Error) => void
+  fireError: (err: Error) => void
 }
 
 function fakeChildProcess(): FakeChildProcess {
@@ -62,10 +63,12 @@ function fakeChildProcess(): FakeChildProcess {
   const stdoutListeners: Array<(data: Buffer) => void> = []
   const stderrListeners: Array<(data: Buffer) => void> = []
   const stdinErrorListeners: Array<(err: Error) => void> = []
+  const errorListeners: Array<(err: Error) => void> = []
 
   const proc: Partial<ChildProcess> = {
     on: ((event: string, cb: (...args: unknown[]) => void) => {
       if (event === 'exit') exitListeners.push(cb as (code: number | null) => void)
+      if (event === 'error') errorListeners.push(cb as (err: Error) => void)
       return proc
     }) as ChildProcess['on'],
     stdout: {
@@ -91,6 +94,7 @@ function fakeChildProcess(): FakeChildProcess {
     fireStdoutData: (chunk) => stdoutListeners.forEach((cb) => cb(Buffer.from(chunk))),
     fireStderrData: (chunk) => stderrListeners.forEach((cb) => cb(Buffer.from(chunk))),
     fireStdinError: (err) => stdinErrorListeners.forEach((cb) => cb(err)),
+    fireError: (err) => errorListeners.forEach((cb) => cb(err)),
   }
 }
 
@@ -370,6 +374,32 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
         expect(consoleErrorSpy).toHaveBeenCalled()
         const loggedArgs = consoleErrorSpy.mock.calls[0]
         expect(String(loggedArgs[0])).toContain('setupStdoutHandler')
+      } finally {
+        consoleErrorSpy.mockRestore()
+      }
+    })
+
+    // #534: a null `outputChannel` is a SEPARATE failure mode from
+    // `appendLine` throwing (the test above) — `outputChannel?.appendLine`
+    // on a null channel was a silent no-op via optional chaining, so the
+    // `catch` block (which only ever sees THROWN exceptions) was never
+    // reached, and no `console.error` fallback fired either. `outputChannel`
+    // is null here (not just a throwing fake) to reach that exact branch.
+    it('falls back to console.error when outputChannel itself is null (#534)', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest(null) // statusBarItem!.text throws on null
+      ext.__setOutputChannelForTest(null)
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      try {
+        ext.setupStdoutHandler(proc, false)
+        expect(() => fireStdoutData('✅ Global running\n')).not.toThrow()
+
+        expect(consoleErrorSpy).toHaveBeenCalledTimes(1)
+        const loggedArgs = consoleErrorSpy.mock.calls[0]
+        expect(String(loggedArgs[0])).toContain('setupStdoutHandler')
+        expect(String(loggedArgs[0])).toContain('no output channel')
       } finally {
         consoleErrorSpy.mockRestore()
       }
@@ -727,6 +757,238 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       expect(marker, appendedLines.join('\n')).toBeDefined()
       expect(marker).toContain('🛑 internal error in setupStdinErrorHandler')
       expect(appendedLines.some((line) => line.includes('at '))).toBe(true)
+    })
+  })
+
+  describe('setupErrorHandler (#533)', () => {
+    it('wires showStoppedStatus and refreshEngineView to the correct effect, in the declared order', () => {
+      // Same rationale as the equivalent setupExitHandler test above: both
+      // callbacks are unconditionally invoked once for a current-process
+      // error, so recording the ORDER the two distinct side effects fire in
+      // is what catches a same-signature body swap.
+      const { proc, fireError } = fakeChildProcess()
+      const calls: string[] = []
+      let statusText = 'untouched'
+      let statusTooltip = 'untouched'
+      const statusBarItem = {
+        get text() {
+          return statusText
+        },
+        set text(value: string) {
+          statusText = value
+          if (value === '🎵 OrbitScore: Stopped') calls.push('status-stopped')
+        },
+        get tooltip() {
+          return statusTooltip
+        },
+        set tooltip(value: string) {
+          statusTooltip = value
+        },
+      }
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest(statusBarItem)
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setEngineViewProviderForTest({
+        refresh: () => {
+          calls.push('refresh')
+        },
+      })
+
+      ext.setupErrorHandler(proc)
+      fireError(new Error('spawn node ENOENT'))
+
+      expect(statusText).toBe('🎵 OrbitScore: Stopped')
+      expect(statusTooltip).toBe('Click to start engine')
+      expect(calls).toEqual(['status-stopped', 'refresh'])
+    })
+
+    it('wires clearEngineState to null the current engineProcess handle', () => {
+      const { proc, fireError } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      ext.setupErrorHandler(proc)
+      fireError(new Error('spawn node ENOENT'))
+
+      expect(ext.__getEngineProcessForTest()).toBeNull()
+    })
+
+    it('wires logError: the output channel receives the real error message, verbatim', () => {
+      const { proc, fireError } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      ext.setupErrorHandler(proc)
+      fireError(new Error('spawn node ENOENT'))
+
+      expect(appendedLines.some((line) => line.includes('spawn node ENOENT'))).toBe(true)
+    })
+
+    it('wires drainDeviceBridge: a pending selectAudioDevice request resolves with the error reason', async () => {
+      const { proc, fireError } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      const bridge = ext.__getDeviceSwitchBridgeForTest()
+      const resultPromise = bridge.send(() => true, 'device-name', 200)
+
+      ext.setupErrorHandler(proc)
+      fireError(new Error('spawn node ENOENT'))
+
+      const result = await resultPromise
+      expect(result.ok).toBe(false)
+      expect(result.error).toBe('engine process error: spawn node ENOENT')
+    })
+
+    it('skips every current-process-only effect for a stale process (identity guard still wired end-to-end)', () => {
+      const { proc, fireError } = fakeChildProcess()
+      const otherProc = fakeChildProcess().proc
+      const statusBarItem = { text: 'untouched', tooltip: 'untouched' }
+      let refreshCalls = 0
+      // engineProcess points at a DIFFERENT process than the one whose
+      // 'error' fires below.
+      ext.__setEngineProcessForTest(otherProc)
+      ext.__setStatusBarItemForTest(statusBarItem)
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setEngineViewProviderForTest({
+        refresh: () => {
+          refreshCalls += 1
+        },
+      })
+
+      ext.setupErrorHandler(proc)
+      fireError(new Error('spawn node ENOENT'))
+
+      expect(statusBarItem.text).toBe('untouched')
+      expect(refreshCalls).toBe(0)
+    })
+
+    it('contains an exception thrown inside the listener body instead of letting it escape', () => {
+      const { proc, fireError } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest(null) // showStoppedStatus's statusBarItem!.text throws on null
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => {
+          appendedLines.push(value)
+        },
+        append: () => {},
+      })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      ext.setupErrorHandler(proc)
+
+      expect(() => fireError(new Error('spawn node ENOENT'))).not.toThrow()
+
+      // clearEngineState still ran before the fault (proves this isn't a
+      // blanket "nothing happened" swallow).
+      expect(ext.__getEngineProcessForTest()).toBeNull()
+
+      const marker = appendedLines.find((line) => line.includes('setupErrorHandler'))
+      expect(marker, appendedLines.join('\n')).toBeDefined()
+      expect(marker).toContain('🛑 internal error in setupErrorHandler')
+      expect(appendedLines.some((line) => line.includes('at '))).toBe(true)
+    })
+  })
+
+  describe('stopEngine SIGKILL escalation (#532)', () => {
+    // `proc.killed` means "a signal was successfully SENT to the process",
+    // NOT "the process has exited" — `node_modules/@types/node/child_process
+    // .d.ts` documents this explicitly. `proc.kill('SIGTERM')` flips
+    // `killed` to `true` the instant the signal is delivered, so the old
+    // `!proc.killed` escalation check was always false and SIGKILL never
+    // fired. This fake mimics that real Node quirk: `kill()` flips `killed`
+    // immediately, independent of `exitCode`/`signalCode`, which a test
+    // controls separately to simulate whether the process actually exited.
+    function fakeStoppableProcess(): {
+      proc: ChildProcess
+      killCalls: string[]
+      setExited: (code: number) => void
+    } {
+      const killCalls: string[] = []
+      const state = {
+        killed: false,
+        exitCode: null as number | null,
+        signalCode: null as string | null,
+      }
+      const proc = {
+        get killed() {
+          return state.killed
+        },
+        get exitCode() {
+          return state.exitCode
+        },
+        get signalCode() {
+          return state.signalCode
+        },
+        kill: vi.fn((signal?: string) => {
+          killCalls.push(String(signal))
+          state.killed = true
+          return true
+        }),
+      }
+      return {
+        proc: proc as unknown as ChildProcess,
+        killCalls,
+        setExited: (code) => {
+          state.exitCode = code
+        },
+      }
+    }
+
+    it('escalates to SIGKILL after 2s when the process ignores SIGTERM', () => {
+      vi.useFakeTimers()
+      try {
+        const { proc, killCalls } = fakeStoppableProcess()
+        ext.__setEngineProcessForTest(proc)
+        ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+        ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+        ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+        expect(ext.stopEngine()).toBe(true)
+        expect(killCalls).toEqual(['SIGTERM'])
+
+        vi.advanceTimersByTime(2000)
+
+        expect(killCalls).toEqual(['SIGTERM', 'SIGKILL'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('does not send a redundant SIGKILL once the process has actually exited', () => {
+      vi.useFakeTimers()
+      try {
+        const { proc, killCalls, setExited } = fakeStoppableProcess()
+        ext.__setEngineProcessForTest(proc)
+        ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+        ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+        ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+        expect(ext.stopEngine()).toBe(true)
+        expect(killCalls).toEqual(['SIGTERM'])
+
+        // The process actually terminates in response to SIGTERM before the
+        // 2s escalation timer fires.
+        setExited(0)
+        vi.advanceTimersByTime(2000)
+
+        expect(killCalls).toEqual(['SIGTERM'])
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 

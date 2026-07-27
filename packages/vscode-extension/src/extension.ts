@@ -51,6 +51,7 @@ import {
 } from './engine-view'
 import { DeviceSwitchBridge } from './device-switch-bridge'
 import {
+  applyEngineError,
   applyEngineExit,
   applyEngineStdinError,
   applyEngineStdoutChunk,
@@ -1322,24 +1323,36 @@ export function __resetPlayheadStateForTest(): void {
 // ---- Handler-body crash containment (#527 review round 4 Important #1) ----
 //
 // setupStdoutHandler / setupStderrHandler / setupExitHandler /
-// setupStdinErrorHandler register listener bodies directly on Node
-// stream/process events. There is no `process.on('uncaughtException', ...)`
-// anywhere in this extension, so an exception that escapes ANY of these four
-// listener bodies is not just an OrbitScore failure — it crashes the
-// extension HOST process, taking down every other extension in the window
-// along with it. `transportStatusText`'s exhaustiveness guard (#527 review
+// setupStdinErrorHandler / setupErrorHandler register listener bodies
+// directly on Node stream/process events. There is no
+// `process.on('uncaughtException', ...)` anywhere in this extension, so an
+// exception that escapes ANY of these five listener bodies is not contained
+// by anything OrbitScore controls.
+//
+// #534: what happens next past that point is NOT settled, and this comment
+// deliberately does not assert either way. PR #527's bot review claimed the
+// previous (unguarded) code let such an exception crash the extension host
+// outright; a later accept audit countered that the extension host installs
+// its own `uncaughtException` handler at bootstrap and, in many cases, logs
+// and continues instead of crashing. Neither claim has been verified here
+// against the extension host's actual bootstrap source — treat both as
+// unconfirmed. What IS certain regardless of which is true: an uncontained
+// exception here escapes `get_log` (this project's convention for "loud" —
+// see CLAUDE.md's testing discipline notes), so containment is worth having
+// independent of whether the crash claim turns out to be right. At minimum,
+// it can crash the host; at minimum, it makes the failure invisible to
+// `get_log`. `transportStatusText`'s exhaustiveness guard (#527 review
 // Important #2, above) was the first piece of code on this path that can
 // deliberately `throw`, but the danger it exposed is general: ANY exception
-// here (a null UI element, a bridge method throwing, etc.) has always had
-// this blast radius.
+// here (a null UI element, a bridge method throwing, etc.) carries the same
+// risk.
 //
 // `logHandlerFailure` catches and records loud, marker-prefixed failures
 // (including the stack trace, for root-causing) instead of re-throwing —
-// re-throwing would defeat the purpose, since it's exactly what crashes the
-// host. Per this project's convention (`get_log` / the output channel is the
-// only place engine-side errors are observable — see CLAUDE.md's testing
-// discipline notes), writing loudly to `outputChannel` IS the loud-failure
-// behavior, not a silent swallow.
+// re-throwing would defeat the purpose. Per this project's convention,
+// writing loudly to `outputChannel` IS the loud-failure behavior, not a
+// silent swallow — provided `outputChannel` itself is reachable (see the
+// null-channel handling below).
 //
 // #527 review round 5 Minor #1: `logHandlerFailure` is itself called from
 // inside every one of those catch blocks — if ITS body threw (e.g. a future
@@ -1351,12 +1364,25 @@ export function __resetPlayheadStateForTest(): void {
 // propagating. That fallback is deliberately a single, non-throwing
 // primitive call — there is no safe place left to report a failure of the
 // fallback itself.
+//
+// #534: a null `outputChannel` is a SEPARATE failure mode from
+// `appendLine` throwing — `outputChannel?.appendLine(...)` on a null
+// channel is a silent no-op via optional chaining, so the `catch` block
+// below (which only ever sees thrown exceptions) was never reached for that
+// case, and the failure vanished with no `console.error` fallback either.
+// That defeats the one function whose entire job is to make failures loud,
+// so the null case is now checked explicitly instead of relying on the
+// exception path to catch it.
 function logHandlerFailure(handlerName: string, err: unknown): void {
   try {
     const message = err instanceof Error ? err.message : String(err)
     const stack = err instanceof Error && err.stack ? err.stack : '(no stack trace available)'
-    outputChannel?.appendLine(`🛑 internal error in ${handlerName}: ${message}`)
-    outputChannel?.appendLine(stack)
+    if (!outputChannel) {
+      console.error(`🛑 internal error in ${handlerName} (no output channel to log to):`, err)
+      return
+    }
+    outputChannel.appendLine(`🛑 internal error in ${handlerName}: ${message}`)
+    outputChannel.appendLine(stack)
   } catch (loggingErr) {
     console.error(
       `🛑 internal error in ${handlerName} (and outputChannel logging itself failed):`,
@@ -1491,6 +1517,47 @@ export function setupExitHandler(process: child_process.ChildProcess): void {
       })
     } catch (err) {
       logHandlerFailure('setupExitHandler', err)
+    }
+  })
+}
+
+/**
+ * Setup `'error'` handler for the engine `ChildProcess` itself (#533).
+ *
+ * `ChildProcess` is an `EventEmitter`: an `'error'` event with no listener is
+ * thrown as an uncaught exception by EventEmitter's own contract — this is a
+ * DIFFERENT hazard from the "no `process.on('uncaughtException', ...)`"
+ * concern documented above the other four handlers, and it existed even
+ * before those four were wrapped in try/catch, because nothing was
+ * listening for `'error'` at all. A spawn failure (`ENOENT` / `EMFILE` /
+ * `EAGAIN`) emits `'error'`, and per Node's docs `'exit'` may never fire for
+ * that same failure, so `setupExitHandler` above cannot be relied on to
+ * clean up here.
+ */
+export function setupErrorHandler(process: child_process.ChildProcess): void {
+  process.on('error', (err) => {
+    try {
+      // Identity-guarded via applyEngineError — see its docstring in
+      // engine-lifecycle.ts for the #528-style stale-process race this
+      // protects against (same mechanism as the other four handlers above).
+      applyEngineError(err, engineProcess === process, {
+        logError: (error) =>
+          outputChannel?.appendLine(`\n🛑 Engine process error: ${error.message}`),
+        clearEngineState: () => {
+          engineProcess = null
+          isLiveCodingMode = false
+          globalInitialized = false
+        },
+        clearAllPlayheads: clearAllPlayheadDecorations,
+        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+        showStoppedStatus: () => {
+          statusBarItem!.text = '🎵 OrbitScore: Stopped'
+          statusBarItem!.tooltip = 'Click to start engine'
+        },
+        refreshEngineView: () => engineViewProvider?.refresh(),
+      })
+    } catch (innerErr) {
+      logHandlerFailure('setupErrorHandler', innerErr)
     }
   })
 }
@@ -1983,6 +2050,7 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): 
   setupStderrHandler(engineProcess)
   setupExitHandler(engineProcess)
   setupStdinErrorHandler(engineProcess)
+  setupErrorHandler(engineProcess)
   return true
 }
 
@@ -1990,7 +2058,7 @@ function startEngineDebug() {
   startEngine(true)
 }
 
-function stopEngine(): boolean {
+export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {
     // Capture process reference before nulling module-level variable
@@ -2010,9 +2078,18 @@ function stopEngine(): boolean {
     // This allows the engine to clean up SuperCollider properly
     proc.kill('SIGTERM')
 
-    // Force kill after 2 seconds if still running
+    // Force kill after 2 seconds if still running.
+    //
+    // #532: `proc.killed` means "a signal was successfully SENT", not "the
+    // process has exited" (`node_modules/@types/node/child_process.d.ts`
+    // documents this explicitly). `proc.kill('SIGTERM')` above already makes
+    // `killed === true` the instant the signal is delivered, so `!proc.killed`
+    // here was always false and this SIGKILL never fired — a process that
+    // ignores or hangs on SIGTERM was never escalated to, orphaning it.
+    // `exitCode` / `signalCode` are the correct signal: both stay `null`
+    // until the process has actually terminated.
     setTimeout(() => {
-      if (!proc.killed) {
+      if (proc.exitCode === null && proc.signalCode === null) {
         proc.kill('SIGKILL')
       }
     }, 2000)
@@ -2681,7 +2758,10 @@ function evaluateForAgent(code: string): EvaluateResult {
 }
 
 /** Start the engine for the MCP `start_engine` tool (mirrors the palette command). */
-function startEngineForAgent(options?: { captureWav?: string; debug?: boolean }): CommandResult {
+export async function startEngineForAgent(options?: {
+  captureWav?: string
+  debug?: boolean
+}): Promise<CommandResult> {
   const decision = decideStartEngineForAgent(isEngineRunning() && isLiveCodingMode, options)
   // `isEngineRunning() && isLiveCodingMode` can already be true here without this
   // call having spawned anything: autoStartConfiguredRustEngine() calls
@@ -2692,10 +2772,26 @@ function startEngineForAgent(options?: { captureWav?: string; debug?: boolean })
   if (decision.kind === 'reject') return { ok: false, error: decision.error }
   if (decision.kind === 'already-running') return { ok: true, message: 'engine already running' }
   startEngine(options?.debug === true, options)
+  const spawnedProcess = engineProcess
   // startEngine() may abort (missing daemon, build issue) without throwing — it
   // reports via a VS Code notification. Reflect the actual spawn outcome so the
   // agent doesn't assume success.
-  if (!engineProcess || engineProcess.killed) {
+  if (!spawnedProcess) {
+    return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
+  }
+  // #533: a spawn failure (ENOENT/EMFILE/EAGAIN) surfaces as a `ChildProcess`
+  // `'error'` event, not a `'killed'` flag flip — `killed` only reflects
+  // whether WE sent a signal, and we never do on a spawn failure, so the
+  // synchronous check just below would previously read `killed === false`
+  // forever and report success. Node defers emitting that `'error'` event via
+  // `process.nextTick()` specifically so a listener attached synchronously
+  // right after `spawn()` — as `setupErrorHandler` is, inside `startEngine()`
+  // above — still catches it. Queuing our OWN `process.nextTick()` here runs
+  // strictly after that already-queued one (Node's nextTick queue is FIFO),
+  // so by the time this resolves, `setupErrorHandler`'s identity-guarded
+  // teardown (nulling `engineProcess`) has already run if the spawn failed.
+  await new Promise<void>((resolve) => process.nextTick(resolve))
+  if (!engineProcess || engineProcess !== spawnedProcess || engineProcess.killed) {
     return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
   }
   return {

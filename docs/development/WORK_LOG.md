@@ -17,6 +17,69 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.301 fix(extension): engine プロセスライフサイクルの残穴を塞ぐ #532/#533/#534 (Jul 27, 2026)
+
+**Date**: 2026-07-27
+**Status**: 🔄 レビュー中（新フロー初適用）
+
+**内容**:
+PR #527 の受け入れ監査（Fable）が見つけた**既存バグ2件**と、同 PR のコードに残った Minor 1件。
+いずれも #528 の物語の直接の続き（孤児デーモン・UI と実体の乖離）で、
+**内部レビュー5ラウンドと bot レビューを通り抜けた**もの。
+
+**#533 — `ChildProcess` 本体の `'error'` ハンドラが未登録**: `startEngine()` は
+stdout / stderr / exit / stdin-error の4つを登録するが、**`engineProcess.on('error', ...)` が
+無かった**。実害は2つ: (1) EventEmitter の規約上リスナ不在の `'error'` は throw され
+uncaughtException になる (2) **spawn 失敗時は `'exit'` が発火しない場合があり**、
+`engineProcess` が `killed === false` のまま残留して `get_engine_state` が `running: true` を
+返し続けるのに実体が無い（#528 が潰した乖離の鏡像）。
+
+既存4ハンドラと同じ様式で `setupErrorHandler` + `applyEngineError`（identity ガード付き）を追加。
+
+**さらに `startEngineForAgent` の spawn 後チェックがこの経路を検出できないことが判明**。
+Node は spawn 失敗を `process.nextTick` で遅延 emit するため、同期チェックでは間に合わない。
+`async` 化して1 tick 待ってから再チェックする形にした。
+
+**この機構を実証で確認した**（コメントの主張を鵜呑みにしない）:
+
+```
+順序: ["error:ENOENT", "after-our-nextTick"]
+killed: false / exitCode: -2
+```
+
+`'error'` は後から積んだ `nextTick` より先に処理される（FIFO の主張は正しい）。同時に
+**`killed: false`** も確認でき、**旧実装が成功を返していたというバグの前提そのもの**が
+裏付けられた。
+
+**#532 — `stopEngine()` の SIGKILL エスカレーションが dead code**: `subprocess.killed` は
+「**シグナル送信に成功したか**」であり「終了したか」ではない（`@types/node` が明言）。
+SIGTERM 送信成功で `killed === true` になるため `!proc.killed` は恒偽で、**SIGKILL は絶対に
+発火しなかった**。`proc.exitCode === null && proc.signalCode === null` に修正。
+
+**#534** — `logHandlerFailure` が `outputChannel` の null 時に `?.` で無音 no-op になる点を
+`console.error` フォールバックで塞ぎ、crash-containment コメントの断定
+（「拡張ホストがクラッシュする」）を不確定な書き方に改めた（bot と受け入れ監査で主張が
+食い違っており、どちらとも確定していないため）。
+
+**main 側の受け入れ検証で見つけた自分の誤り**: 変異 #532 の1回目で「221件すべて緑＝検出
+できない」と読みかけた。`grep -c MUTATION` が 1 を返したので適用済みと判断したが、
+**それは行数を数えただけで狙った行に当たった保証ではない**。行を明示して当て直したところ
+正しく red になり、委譲先の報告が正しく**私の検証が誤っていた**と判明した。
+6.299 で「変異の適用を確認せよ」と学んだが、**確認の粒度が甘かった**。
+今後は「マーカーの有無」ではなく**変異後の当該行そのものを表示**する。
+
+**迷子ファイル**: リポジトリ直下に `packages/vscode-extension/src/extension.ts` と同一内容の
+未追跡 `extension.ts`（149KB）が残っていた（lint エラー1件の原因）。削除済み。
+`git add -A` していたら混入していた。
+
+**検証**: `npm test` 1709 passed / 29 skipped（1696 → +13）・`tsc --build` 通過・lint エラー0・
+実機 gated E2E 1 passed・孤児デーモン 0。
+
+**レビュー運用**: 本 PR から新フロー（チーム1ラウンドと Fable 監査を**並行**起動 → 修正前に
+設計パス → 同一ラウンド内で fix 再点検 → provenance で打ち切り）を初適用する。
+計測のため**指摘の provenance 内訳（original-diff 起因 / fix 起因）を記録**する
+（claude-tools#291 の検証データになる）。
+
 ### 6.295 fix(extension): engine 再起動時の孤児化と capture 要求の握り潰しを修正 #528 (Jul 27, 2026)
 
 **Date**: 2026-07-27

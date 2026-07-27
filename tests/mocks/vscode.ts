@@ -144,6 +144,23 @@ export const workspace = {
   getConfiguration: () => ({
     get: <T>(_key: string, defaultValue?: T) => defaultValue,
     update: async () => undefined,
+    // `resolveAudioDeviceSetting` (extension.ts) calls `.inspect()` to
+    // distinguish an explicit workspace/global value from "unset" — no spec
+    // exercised that path until start-engine-for-agent.spec.ts (#533) drove
+    // `startEngine()` for real. Always "unset" here: every key falls
+    // through to `.get()`'s default value / the `.orbitscore.json` fallback.
+    inspect: <T>(_key: string) =>
+      ({
+        key: _key,
+        defaultValue: undefined,
+        globalValue: undefined,
+        workspaceValue: undefined,
+      }) as {
+        key: string
+        defaultValue?: T
+        globalValue?: T
+        workspaceValue?: T
+      },
   }),
   workspaceFolders: undefined as unknown,
   textDocuments: [] as unknown[],
