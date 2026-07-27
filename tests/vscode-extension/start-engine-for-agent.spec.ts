@@ -102,6 +102,21 @@ describe('startEngineForAgent post-spawn detection (#533)', () => {
     expect(ext.__getEngineProcessForTest()).toBeNull()
   })
 
+  it('contains a synchronous spawn throw and leaves engine state clean', async () => {
+    vi.mocked(child_process.spawn).mockImplementation(() => {
+      throw new Error('spawn node ENOTDIR')
+    })
+
+    const result = await ext.startEngineForAgent()
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'engine failed to start — see the OrbitScore output channel',
+    })
+    expect(ext.__getEngineProcessForTest()).toBeNull()
+    expect(showInformationMessage).not.toHaveBeenCalled()
+  })
+
   it('reports ok:true and shows the unchanged debug success toast once after spawn confirmation', async () => {
     const { proc } = fakeSpawnedProcess()
     vi.mocked(child_process.spawn).mockImplementation(() => proc)

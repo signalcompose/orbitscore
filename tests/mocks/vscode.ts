@@ -170,12 +170,23 @@ export const workspace = {
   onDidCloseTextDocument: () => fakeDisposable(),
 }
 
+export const registeredCommandHandlers = new Map<string, (...args: unknown[]) => unknown>()
+
+export function resetRegisteredCommandHandlers(): void {
+  registeredCommandHandlers.clear()
+}
+
 export const commands = {
-  registerCommand: () => fakeDisposable(),
+  registerCommand: (command: string, handler: (...args: unknown[]) => unknown) => {
+    registeredCommandHandlers.set(command, handler)
+    return fakeDisposable()
+  },
   executeCommand: async () => undefined,
 }
 
 export const languages = {
+  registerCompletionItemProvider: () => fakeDisposable(),
+  registerHoverProvider: () => fakeDisposable(),
   createDiagnosticCollection: () => ({
     set: () => {},
     delete: () => {},

@@ -46,6 +46,7 @@ vi.mock('../../packages/vscode-extension/src/engine-lifecycle', async (importOri
   return {
     ...actual,
     applyEngineExit: vi.fn(actual.applyEngineExit),
+    applyEngineError: vi.fn(actual.applyEngineError),
   }
 })
 
@@ -54,6 +55,8 @@ interface FakeChildProcess {
   fireExit: (code: number | null) => void
   fireStdoutData: (chunk: string) => void
   fireStderrData: (chunk: string) => void
+  fireStdoutError: (err: Error) => void
+  fireStderrError: (err: Error) => void
   fireStdinError: (err: Error) => void
   fireError: (err: Error) => void
 }
@@ -62,6 +65,8 @@ function fakeChildProcess(): FakeChildProcess {
   const exitListeners: Array<(code: number | null) => void> = []
   const stdoutListeners: Array<(data: Buffer) => void> = []
   const stderrListeners: Array<(data: Buffer) => void> = []
+  const stdoutErrorListeners: Array<(err: Error) => void> = []
+  const stderrErrorListeners: Array<(err: Error) => void> = []
   const stdinErrorListeners: Array<(err: Error) => void> = []
   const errorListeners: Array<(err: Error) => void> = []
 
@@ -74,11 +79,13 @@ function fakeChildProcess(): FakeChildProcess {
     stdout: {
       on: (event: string, cb: (...args: unknown[]) => void) => {
         if (event === 'data') stdoutListeners.push(cb as (data: Buffer) => void)
+        if (event === 'error') stdoutErrorListeners.push(cb as (err: Error) => void)
       },
     } as unknown as ChildProcess['stdout'],
     stderr: {
       on: (event: string, cb: (...args: unknown[]) => void) => {
         if (event === 'data') stderrListeners.push(cb as (data: Buffer) => void)
+        if (event === 'error') stderrErrorListeners.push(cb as (err: Error) => void)
       },
     } as unknown as ChildProcess['stderr'],
     stdin: {
@@ -93,6 +100,8 @@ function fakeChildProcess(): FakeChildProcess {
     fireExit: (code) => exitListeners.forEach((cb) => cb(code)),
     fireStdoutData: (chunk) => stdoutListeners.forEach((cb) => cb(Buffer.from(chunk))),
     fireStderrData: (chunk) => stderrListeners.forEach((cb) => cb(Buffer.from(chunk))),
+    fireStdoutError: (err) => stdoutErrorListeners.forEach((cb) => cb(err)),
+    fireStderrError: (err) => stderrErrorListeners.forEach((cb) => cb(err)),
     fireStdinError: (err) => stdinErrorListeners.forEach((cb) => cb(err)),
     fireError: (err) => errorListeners.forEach((cb) => cb(err)),
   }
@@ -107,9 +116,25 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
     ext.__resetPlayheadStateForTest()
     vscodeMock.window.visibleTextEditors.length = 0
     vi.mocked(engineLifecycle.applyEngineExit).mockClear()
+    vi.mocked(engineLifecycle.applyEngineError).mockClear()
   })
 
   describe('setupStdoutHandler', () => {
+    it('routes stdout stream errors through logHandlerFailure', () => {
+      const { proc, fireStdoutError } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => appendedLines.push(value),
+        append: () => {},
+      })
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutError(new Error('stdout exploded'))
+
+      expect(
+        appendedLines.some((line) => line.includes('setupStdoutHandler: stdout exploded')),
+      ).toBe(true)
+    })
     it('wires setTransportStatus("playing") into the Playing status bar text', () => {
       const { proc, fireStdoutData } = fakeChildProcess()
       const statusBarItem = { text: '', tooltip: '' }
@@ -407,6 +432,21 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
   })
 
   describe('setupStderrHandler (#527 review round 5 Minor #2)', () => {
+    it('routes stderr stream errors through logHandlerFailure', () => {
+      const { proc, fireStderrError } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => appendedLines.push(value),
+        append: () => {},
+      })
+
+      ext.setupStderrHandler(proc)
+      fireStderrError(new Error('stderr exploded'))
+
+      expect(
+        appendedLines.some((line) => line.includes('setupStderrHandler: stderr exploded')),
+      ).toBe(true)
+    })
     // Symmetry fix: the other three listener bodies (setupStdoutHandler,
     // setupExitHandler, setupStdinErrorHandler) are each wrapped in
     // try/catch + logHandlerFailure per round 4 Important #1, but
@@ -761,6 +801,37 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
   })
 
   describe('setupErrorHandler (#533)', () => {
+    it('wires clearEngineState and clearAllPlayheads to their own distinct effects (order-independent)', () => {
+      const { proc, fireError } = fakeChildProcess()
+      const docUriString = 'file:///error-order-independent-test.orbs'
+      vscodeMock.window.visibleTextEditors.push({
+        document: { uri: { toString: () => docUriString } },
+        setDecorations: () => {},
+      })
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      ext.setupErrorHandler(proc)
+      fireError(new Error('spawn node ENOENT'))
+
+      const effects = vi.mocked(engineLifecycle.applyEngineError).mock.calls[0][2]
+      ext.__setEngineProcessForTest(proc)
+      ext.__setPlayheadActiveRangeForTest(
+        'seqA',
+        docUriString,
+        new vscodeMock.Range(new vscodeMock.Position(0, 0), new vscodeMock.Position(0, 1)),
+      )
+      effects.clearEngineState()
+      expect(ext.__getEngineProcessForTest()).toBeNull()
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(1)
+
+      ext.__setEngineProcessForTest(proc)
+      effects.clearAllPlayheads()
+      expect(ext.__getPlayheadActiveRangeCountForTest()).toBe(0)
+      expect(ext.__getEngineProcessForTest()).toBe(proc)
+    })
     it('wires showStoppedStatus and refreshEngineView to the correct effect, in the declared order', () => {
       // Same rationale as the equivalent setupExitHandler test above: both
       // callbacks are unconditionally invoked once for a current-process

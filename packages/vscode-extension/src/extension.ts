@@ -1400,6 +1400,9 @@ function logHandlerFailure(handlerName: string, err: unknown): void {
  * Setup stdout handler for engine process.
  */
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+  process.stdout?.on('error', (err) => {
+    logHandlerFailure('setupStdoutHandler', err)
+  })
   process.stdout?.on('data', (data) => {
     try {
       const output = data.toString()
@@ -1464,6 +1467,9 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
  * observed failure.
  */
 export function setupStderrHandler(process: child_process.ChildProcess): void {
+  process.stderr?.on('error', (err) => {
+    logHandlerFailure('setupStderrHandler', err)
+  })
   process.stderr?.on('data', (data) => {
     try {
       outputChannel?.append(`ERROR: ${data.toString()}`)
@@ -1855,7 +1861,11 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
         )
         if (choice === 'Restart Engine') {
           stopEngine()
-          setTimeout(() => void startEngine(), 2200)
+          setTimeout(
+            () =>
+              void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
+            2200,
+          )
         }
         return
       }
@@ -1868,7 +1878,10 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
       )
       if (choice === 'Restart Engine') {
         stopEngine()
-        setTimeout(() => void startEngine(), 2200)
+        setTimeout(
+          () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
+          2200,
+        )
       }
       return
     } catch (err) {
@@ -1880,7 +1893,10 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
       )
       if (choice === 'Restart Engine') {
         stopEngine()
-        setTimeout(() => void startEngine(), 2200)
+        setTimeout(
+          () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
+          2200,
+        )
       }
       return
     }
@@ -1909,7 +1925,10 @@ async function engineViewToggleDebug(): Promise<void> {
     )
     if (choice === 'Restart Engine') {
       stopEngine()
-      setTimeout(() => void startEngine(), 2200)
+      setTimeout(
+        () => void startEngine().catch((err) => logHandlerFailure('engineViewToggleDebug', err)),
+        2200,
+      )
     }
   }
 }
@@ -1918,6 +1937,17 @@ async function startEngine(
   debugMode?: boolean,
   agentOpts?: { captureWav?: string },
 ): Promise<boolean> {
+  console.log('[TEMP startEngine state]', {
+    engineProcess: engineProcess
+      ? { killed: engineProcess.killed, exitCode: engineProcess.exitCode }
+      : null,
+    statusBarItem: statusBarItem === null ? null : 'set',
+    outputChannel: outputChannel === null ? null : 'set',
+    engineViewProvider: engineViewProvider === null ? null : 'set',
+    globalInitialized,
+    isLiveCodingMode,
+    engineGeneration,
+  })
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return false
@@ -1949,6 +1979,7 @@ async function startEngine(
     // compiled `resolveDaemonBinaryPath()` を実行するため、ここでの解決結果と
     // 決定的に同一になる（再注入する理由が無い）。
     const daemonResolution = resolveDaemonForUI()
+    console.log('[TEMP startEngine daemon resolution]', daemonResolution)
     if (!daemonResolution) {
       outputChannel?.appendLine(
         '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
@@ -2028,11 +2059,17 @@ async function startEngine(
   }
 
   // Spawn engine process
-  engineProcess = child_process.spawn('node', [enginePath, ...args], {
-    cwd: workspaceRoot,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env,
-  })
+  try {
+    engineProcess = child_process.spawn('node', [enginePath, ...args], {
+      cwd: workspaceRoot,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    })
+  } catch (err) {
+    // spawn threw before engineProcess was assigned, so no engine state was dirtied.
+    logHandlerFailure('startEngine', err)
+    return false
+  }
   engineGeneration += 1
 
   // Update state
