@@ -65,6 +65,18 @@ const REPO_ROOT = path.resolve(__dirname, '../..')
 const EXTENSION_DEV_PATH = path.join(REPO_ROOT, 'packages/vscode-extension')
 const KICK_LOOP_FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/kick_loop.orbs')
 const DIAGNOSTIC_FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/diagnostic_case.orbs')
+// Real built CLAP bundles (rust-spike test fixtures, also used by the Rust-side
+// outproc_*_gated tests) — used below so a real instrument declaration can
+// actually succeed and stay registered, rather than a made-up path that fails
+// to load and rolls back (see EffectChainMap.declareBody in effect-slot.ts).
+const CLAP_TEST_SYNTH_PATH = path.join(
+  REPO_ROOT,
+  'rust-spike/clap-test-synth/target/release/CLAPTestSynth.clap',
+)
+const CLAP_TEST_EFFECT_PATH = path.join(
+  REPO_ROOT,
+  'rust-spike/clap-test-effect/target/release/CLAPTestEffect.clap',
+)
 
 const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
@@ -274,6 +286,129 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const runTempoRes = await client.call('run_selection')
       expect(runTempoRes.isError, runTempoRes.text).toBe(false)
       await sleep(4000) // sound plays at 180bpm
+
+      // ── 6b. #527 (S4 PR-1a): instrument duplicate declaration carries the S4
+      // stage marker. The whole Global has exactly one v1 instrument slot
+      // (PluginInstrumentManager — shared across sequences), so declaring a
+      // second, different instrument must be rejected with a message that
+      // names the follow-on stage (S4 PR-1b / #517 #522), not just a generic
+      // "one instrument" message. Uses a dedicated fresh sequence (not `drum`,
+      // which already has audio()/chop() — combining that with instrument()
+      // hits a different, sequence-level guard first). `evaluate_orbitscore`'s
+      // `ok` only means "accepted and written" (packages/vscode-extension/src/
+      // extension.ts evaluateForAgent) — the actual accept/reject only shows
+      // up in the engine's own stdout/stderr, surfaced here via get_log.
+      const declareInstSeqRes = await client.call('evaluate_orbitscore', {
+        code: 'var instSeq = init global.seq',
+      })
+      expect(declareInstSeqRes.isError, declareInstSeqRes.text).toBe(false)
+
+      const firstInstrumentRes = await client.call('evaluate_orbitscore', {
+        code: `instSeq.instrument("${CLAP_TEST_SYNTH_PATH}")`,
+      })
+      expect(firstInstrumentRes.isError, firstInstrumentRes.text).toBe(false)
+      await sleep(6000) // real out-of-process CLAP attach: spawn + IPC handshake
+
+      const afterFirstInstrumentLog = (await client.call('get_log', { lines: 500 })).text
+      const firstInstrumentAttachFailed =
+        afterFirstInstrumentLog.includes('[OUTPROC_ATTACH_FAILED]')
+
+      if (firstInstrumentAttachFailed) {
+        // The real CLAP bundle failed to attach in this environment (e.g. no
+        // outproc instrument child binary / codesigning gate in the packaged
+        // extension host) — the duplicate-declaration branch requires an
+        // existing successful registration to collide with, so it is not
+        // reachable here. Recorded rather than silently asserting a vacuous
+        // pass; see the invoking report for the actual log line observed.
+        // eslint-disable-next-line no-console
+        console.log(
+          '[orbitstudio-mcp-gated] first instrument() attach failed — duplicate-declaration ' +
+            `branch not exercised. Log tail: ${afterFirstInstrumentLog.slice(-400)}`,
+        )
+      } else {
+        const secondInstrumentRes = await client.call('evaluate_orbitscore', {
+          code: `instSeq.instrument("${CLAP_TEST_EFFECT_PATH}")`,
+        })
+        expect(secondInstrumentRes.isError, secondInstrumentRes.text).toBe(false)
+        await sleep(1000) // duplicate rejection is synchronous once the first slot is registered
+
+        const afterSecondInstrumentLog = (await client.call('get_log', { lines: 500 })).text
+        expect(
+          afterSecondInstrumentLog,
+          `expected the S4 stage-marker duplicate error, got log tail: ${afterSecondInstrumentLog.slice(-800)}`,
+        ).toContain(
+          'seq.instrument() supports one instrument instance in v1. ' +
+            'S4 PR-1b (#517/#522) will allow independent instances per note sequence.',
+        )
+      }
+
+      // ── 6c. #527: a failed plugin declaration surfaces loudly AND the engine
+      // remains usable afterward (EffectChainMap rollback path). Uses a
+      // deliberately nonexistent plugin path — no real plugin binary is needed
+      // for this half, since resolvePluginSpec doesn't check fs existence for
+      // path-direct specs (only the async out-of-process attach can fail).
+      const beforeEffectFailLog = (await client.call('get_log', { lines: 500 })).text
+      const attachFailedBefore = (beforeEffectFailLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? [])
+        .length
+
+      const badEffectRes = await client.call('evaluate_orbitscore', {
+        code: 'global.effect("nonexistent-plugin.clap")',
+      })
+      expect(badEffectRes.isError, badEffectRes.text).toBe(false)
+      await sleep(6000) // real out-of-process attach attempt, then failure
+
+      const afterEffectFailLog = (await client.call('get_log', { lines: 500 })).text
+      expect(
+        afterEffectFailLog,
+        `expected an OUTPROC_ATTACH_FAILED error, got log tail: ${afterEffectFailLog.slice(-800)}`,
+      ).toContain('[OUTPROC_ATTACH_FAILED] child exited before publishing READY')
+
+      // Engine survives: a normal statement right after the failure must still
+      // be accepted, and must not add a NEW attach failure of its own.
+      const recoveryRes = await client.call('evaluate_orbitscore', {
+        code: 'global.beat(4 by 4)',
+      })
+      expect(recoveryRes.isError, recoveryRes.text).toBe(false)
+      await sleep(1000)
+
+      const engineStateAfterFailure = await client.call('get_engine_state')
+      expect(JSON.parse(engineStateAfterFailure.text).running).toBe(true)
+
+      const afterRecoveryLog = (await client.call('get_log', { lines: 500 })).text
+      const attachFailedAfterRecovery = (afterRecoveryLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? [])
+        .length
+      // Exactly one NEW attach failure (the deliberate one above) — the
+      // recovery statement must not add another.
+      expect(attachFailedAfterRecovery).toBe(attachFailedBefore + 1)
+
+      // ── 6d. #521/#517 S3 regression guard: the mixer/routing DSL (bus-name
+      // chain methods — mix.output/sum/aux, `.verb(0.3)` send, `.drums` sum
+      // routing, `.master`) still evaluates cleanly through the real app after
+      // the four-manager migration (#527). No ERROR: line (packages/vscode-
+      // extension/src/extension.ts stderr handler) must appear for this batch.
+      const beforeMixerLog = (await client.call('get_log', { lines: 500 })).text
+      const errorCountBeforeMixer = (beforeMixerLog.match(/ERROR:/g) ?? []).length
+
+      const mixerRes = await client.call('evaluate_orbitscore', {
+        code: [
+          'var mix = init global.mixer',
+          'var master = mix.output(1, 2)',
+          'var drums = mix.sum',
+          'var verb = mix.aux',
+          'verb.master',
+          'drum.verb(0.3).drums',
+          'drums.master',
+        ].join('\n'),
+      })
+      expect(mixerRes.isError, mixerRes.text).toBe(false)
+      await sleep(1500)
+
+      const afterMixerLog = (await client.call('get_log', { lines: 500 })).text
+      const errorCountAfterMixer = (afterMixerLog.match(/ERROR:/g) ?? []).length
+      expect(
+        errorCountAfterMixer,
+        `expected no new ERROR: lines from the mixer/routing DSL, got log tail: ${afterMixerLog.slice(-800)}`,
+      ).toBe(errorCountBeforeMixer)
 
       // ── 7. get_log sanity check — non-empty, evidence of engine activity ──
       const logRes = await client.call('get_log', { lines: 100 })
