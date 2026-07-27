@@ -222,6 +222,45 @@ export function applyEngineStdinError(
   effects.drainDeviceBridge(`engine stdin error: ${message}`)
 }
 
+export interface EngineErrorEffects extends Omit<EngineExitEffects, 'logExit'> {
+  /** Called unconditionally, matching `EngineExitEffects.logExit` / `EngineStdinErrorEffects.logStdinError`. */
+  logError(err: Error): void
+}
+
+/**
+ * Apply a Node `ChildProcess` `'error'` event (e.g. `ENOENT`/`EMFILE`/`EAGAIN`
+ * on spawn failure) the same way `applyEngineExit` handles `'exit'`: log
+ * unconditionally, mutate shared state only when the process is still
+ * current.
+ *
+ * #533: `ChildProcess` is an `EventEmitter`, and by that contract an
+ * `'error'` event with no registered listener is thrown as an uncaught
+ * exception — independent of, and prior to, this project's own
+ * exception-containment convention for the other four handler bodies (that
+ * convention only helps once a listener already exists to catch inside).
+ * Node's docs also note `'exit'` may never fire for the same spawn failure
+ * that emits `'error'`, so without an identity-guarded handler here,
+ * `engineProcess` stays non-null with `killed === false` forever:
+ * `isEngineRunning()` keeps reporting `true`, and `get_engine_state` /
+ * `start_engine` diverge from reality — the mirror image of #528 (there,
+ * `applyEngineExit` lacked the identity guard; here, nothing observes the
+ * failure at all). Only run the current-process-only effects that mutate
+ * shared state; the error is still logged either way.
+ */
+export function applyEngineError(
+  err: Error,
+  isCurrent: boolean,
+  effects: EngineErrorEffects,
+): void {
+  effects.logError(err)
+  if (!isCurrent) return
+  effects.clearEngineState()
+  effects.clearAllPlayheads()
+  effects.drainDeviceBridge(`engine process error: ${err.message}`)
+  effects.showStoppedStatus()
+  effects.refreshEngineView()
+}
+
 /**
  * Decide whether an agent start request can reuse the current engine.
  * Capture and debug are spawn-only settings — `startEngine()` in `extension.ts`

@@ -51,11 +51,13 @@ import {
 } from './engine-view'
 import { DeviceSwitchBridge } from './device-switch-bridge'
 import {
+  applyEngineError,
   applyEngineExit,
   applyEngineStdinError,
   applyEngineStdoutChunk,
   decideStartEngineForAgent,
   transportStatusText,
+  type EngineExitEffects,
 } from './engine-lifecycle'
 import {
   detectDslCompletionContext,
@@ -829,14 +831,15 @@ function updateStatusBarEngineAction(): void {
     getConfiguredEngineKind() === 'rust' ? 'Open Audio Engine Settings' : 'Click to show commands'
 }
 
-function restartEngine(): void {
+async function restartEngine(): Promise<void> {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd()
   if (getConfiguredEngineKind() === 'rust' && !resolveAudioDeviceSetting(workspaceRoot)) {
     vscode.window.showInformationMessage('Select an output device in Audio Engine Settings first')
     return
   }
   stopEngine()
-  setTimeout(() => startEngine(), 2200)
+  await new Promise<void>((resolve) => setTimeout(resolve, 2200))
+  await startEngine()
 }
 
 function reloadWindow(): void {
@@ -1029,13 +1032,13 @@ async function configureFlash() {
   }
 }
 
-function toggleEngine() {
+export async function toggleEngine(): Promise<void> {
   if (engineProcess && !engineProcess.killed) {
     // Stop engine
     stopEngine()
   } else {
     // Start engine
-    startEngine()
+    await startEngine()
   }
 }
 
@@ -1322,24 +1325,36 @@ export function __resetPlayheadStateForTest(): void {
 // ---- Handler-body crash containment (#527 review round 4 Important #1) ----
 //
 // setupStdoutHandler / setupStderrHandler / setupExitHandler /
-// setupStdinErrorHandler register listener bodies directly on Node
-// stream/process events. There is no `process.on('uncaughtException', ...)`
-// anywhere in this extension, so an exception that escapes ANY of these four
-// listener bodies is not just an OrbitScore failure — it crashes the
-// extension HOST process, taking down every other extension in the window
-// along with it. `transportStatusText`'s exhaustiveness guard (#527 review
+// setupStdinErrorHandler / setupErrorHandler register listener bodies
+// directly on Node stream/process events. There is no
+// `process.on('uncaughtException', ...)` anywhere in this extension, so an
+// exception that escapes ANY of these five listener bodies is not contained
+// by anything OrbitScore controls.
+//
+// #534: what happens next past that point is NOT settled, and this comment
+// deliberately does not assert either way. PR #527's bot review claimed the
+// previous (unguarded) code let such an exception crash the extension host
+// outright; a later accept audit countered that the extension host installs
+// its own `uncaughtException` handler at bootstrap and, in many cases, logs
+// and continues instead of crashing. Neither claim has been verified here
+// against the extension host's actual bootstrap source — treat both as
+// unconfirmed. What IS certain regardless of which is true: an uncontained
+// exception here escapes `get_log` (this project's convention for "loud" —
+// see CLAUDE.md's testing discipline notes), so containment is worth having
+// independent of whether the crash claim turns out to be right. At minimum,
+// it can crash the host; at minimum, it makes the failure invisible to
+// `get_log`. `transportStatusText`'s exhaustiveness guard (#527 review
 // Important #2, above) was the first piece of code on this path that can
 // deliberately `throw`, but the danger it exposed is general: ANY exception
-// here (a null UI element, a bridge method throwing, etc.) has always had
-// this blast radius.
+// here (a null UI element, a bridge method throwing, etc.) carries the same
+// risk.
 //
 // `logHandlerFailure` catches and records loud, marker-prefixed failures
 // (including the stack trace, for root-causing) instead of re-throwing —
-// re-throwing would defeat the purpose, since it's exactly what crashes the
-// host. Per this project's convention (`get_log` / the output channel is the
-// only place engine-side errors are observable — see CLAUDE.md's testing
-// discipline notes), writing loudly to `outputChannel` IS the loud-failure
-// behavior, not a silent swallow.
+// re-throwing would defeat the purpose. Per this project's convention,
+// writing loudly to `outputChannel` IS the loud-failure behavior, not a
+// silent swallow — provided `outputChannel` itself is reachable (see the
+// null-channel handling below).
 //
 // #527 review round 5 Minor #1: `logHandlerFailure` is itself called from
 // inside every one of those catch blocks — if ITS body threw (e.g. a future
@@ -1351,12 +1366,27 @@ export function __resetPlayheadStateForTest(): void {
 // propagating. That fallback is deliberately a single, non-throwing
 // primitive call — there is no safe place left to report a failure of the
 // fallback itself.
+//
+// #534: a null `outputChannel` is a SEPARATE failure mode from
+// `appendLine` throwing — `outputChannel?.appendLine(...)` on a null
+// channel is a silent no-op via optional chaining, so the `catch` block
+// below (which only ever sees thrown exceptions) was never reached for that
+// case, and the failure vanished with no `console.error` fallback either.
+// That defeats the one function whose entire job is to make failures loud,
+// so the null case is now checked explicitly instead of relying on the
+// exception path to catch it.
 function logHandlerFailure(handlerName: string, err: unknown): void {
   try {
     const message = err instanceof Error ? err.message : String(err)
     const stack = err instanceof Error && err.stack ? err.stack : '(no stack trace available)'
-    outputChannel?.appendLine(`🛑 internal error in ${handlerName}: ${message}`)
-    outputChannel?.appendLine(stack)
+    if (!outputChannel) {
+      // Defensive dead code in production; reachable only through the
+      // test-only __setOutputChannelForTest(null) reset hook.
+      console.error(`🛑 internal error in ${handlerName} (no output channel to log to):`, err)
+      return
+    }
+    outputChannel.appendLine(`🛑 internal error in ${handlerName}: ${message}`)
+    outputChannel.appendLine(stack)
   } catch (loggingErr) {
     console.error(
       `🛑 internal error in ${handlerName} (and outputChannel logging itself failed):`,
@@ -1370,6 +1400,9 @@ function logHandlerFailure(handlerName: string, err: unknown): void {
  * Setup stdout handler for engine process.
  */
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+  process.stdout?.on('error', (err) => {
+    logHandlerFailure('setupStdoutHandler', err)
+  })
   process.stdout?.on('data', (data) => {
     try {
       const output = data.toString()
@@ -1434,6 +1467,9 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
  * observed failure.
  */
 export function setupStderrHandler(process: child_process.ChildProcess): void {
+  process.stderr?.on('error', (err) => {
+    logHandlerFailure('setupStderrHandler', err)
+  })
   process.stderr?.on('data', (data) => {
     try {
       outputChannel?.append(`ERROR: ${data.toString()}`)
@@ -1465,6 +1501,23 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
   })
 }
 
+function engineTerminationEffects(): Omit<EngineExitEffects, 'logExit'> {
+  return {
+    clearEngineState: () => {
+      engineProcess = null
+      isLiveCodingMode = false
+      globalInitialized = false
+    },
+    clearAllPlayheads: clearAllPlayheadDecorations,
+    drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+    showStoppedStatus: () => {
+      statusBarItem!.text = '🎵 OrbitScore: Stopped'
+      statusBarItem!.tooltip = 'Click to start engine'
+    },
+    refreshEngineView: () => engineViewProvider?.refresh(),
+  }
+}
+
 /**
  * Setup exit handler for engine process.
  */
@@ -1476,21 +1529,40 @@ export function setupExitHandler(process: child_process.ChildProcess): void {
       applyEngineExit(code, engineProcess === process, {
         logExit: (exitCode) =>
           outputChannel?.appendLine(`\n🛑 Engine process exited with code ${exitCode}`),
-        clearEngineState: () => {
-          engineProcess = null
-          isLiveCodingMode = false
-          globalInitialized = false
-        },
-        clearAllPlayheads: clearAllPlayheadDecorations,
-        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
-        showStoppedStatus: () => {
-          statusBarItem!.text = '🎵 OrbitScore: Stopped'
-          statusBarItem!.tooltip = 'Click to start engine'
-        },
-        refreshEngineView: () => engineViewProvider?.refresh(),
+        ...engineTerminationEffects(),
       })
     } catch (err) {
       logHandlerFailure('setupExitHandler', err)
+    }
+  })
+}
+
+/**
+ * Setup `'error'` handler for the engine `ChildProcess` itself (#533).
+ *
+ * `ChildProcess` is an `EventEmitter`: an `'error'` event with no listener is
+ * thrown as an uncaught exception by EventEmitter's own contract — this is a
+ * DIFFERENT hazard from the "no `process.on('uncaughtException', ...)`"
+ * concern documented above the other four handlers, and it existed even
+ * before those four were wrapped in try/catch, because nothing was
+ * listening for `'error'` at all. A spawn failure (`ENOENT` / `EMFILE` /
+ * `EAGAIN`) emits `'error'`, and per Node's docs `'exit'` may never fire for
+ * that same failure, so `setupExitHandler` above cannot be relied on to
+ * clean up here.
+ */
+export function setupErrorHandler(process: child_process.ChildProcess): void {
+  process.on('error', (err) => {
+    try {
+      // Identity-guarded via applyEngineError — see its docstring in
+      // engine-lifecycle.ts for the #528-style stale-process race this
+      // protects against (same mechanism as the other four handlers above).
+      applyEngineError(err, engineProcess === process, {
+        logError: (error) =>
+          outputChannel?.appendLine(`\n🛑 Engine process error: ${error.message}`),
+        ...engineTerminationEffects(),
+      })
+    } catch (innerErr) {
+      logHandlerFailure('setupErrorHandler', innerErr)
     }
   })
 }
@@ -1529,7 +1601,7 @@ async function autoStartConfiguredRustEngine(): Promise<void> {
       )
       return
     }
-    if (!startEngine()) return
+    if (!(await startEngine())) return
     const autoStartGeneration = engineGeneration
     setTimeout(() => {
       if (engineGeneration === autoStartGeneration && !isEngineRunning())
@@ -1699,7 +1771,7 @@ class EngineViewProvider implements vscode.TreeDataProvider<EngineViewNode> {
   }
 }
 
-function engineViewToggleEngine(): void {
+async function engineViewToggleEngine(): Promise<void> {
   if (isEngineRunning()) {
     stopEngine()
     return
@@ -1709,7 +1781,7 @@ function engineViewToggleEngine(): void {
     vscode.window.showInformationMessage('Select an output device below first')
     return
   }
-  startEngine()
+  await startEngine()
 }
 
 /**
@@ -1766,7 +1838,7 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
   engineViewProvider?.refresh()
 
   if (!isEngineRunning()) {
-    startEngine()
+    await startEngine()
     return
   }
 
@@ -1789,7 +1861,11 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
         )
         if (choice === 'Restart Engine') {
           stopEngine()
-          setTimeout(() => startEngine(), 2200)
+          setTimeout(
+            () =>
+              void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
+            2200,
+          )
         }
         return
       }
@@ -1802,7 +1878,10 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
       )
       if (choice === 'Restart Engine') {
         stopEngine()
-        setTimeout(() => startEngine(), 2200)
+        setTimeout(
+          () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
+          2200,
+        )
       }
       return
     } catch (err) {
@@ -1814,7 +1893,10 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
       )
       if (choice === 'Restart Engine') {
         stopEngine()
-        setTimeout(() => startEngine(), 2200)
+        setTimeout(
+          () => void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
+          2200,
+        )
       }
       return
     }
@@ -1843,12 +1925,18 @@ async function engineViewToggleDebug(): Promise<void> {
     )
     if (choice === 'Restart Engine') {
       stopEngine()
-      setTimeout(() => startEngine(), 2200)
+      setTimeout(
+        () => void startEngine().catch((err) => logHandlerFailure('engineViewToggleDebug', err)),
+        2200,
+      )
     }
   }
 }
 
-function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): boolean {
+async function startEngine(
+  debugMode?: boolean,
+  agentOpts?: { captureWav?: string },
+): Promise<boolean> {
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return false
@@ -1959,11 +2047,17 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): 
   }
 
   // Spawn engine process
-  engineProcess = child_process.spawn('node', [enginePath, ...args], {
-    cwd: workspaceRoot,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env,
-  })
+  try {
+    engineProcess = child_process.spawn('node', [enginePath, ...args], {
+      cwd: workspaceRoot,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    })
+  } catch (err) {
+    // spawn threw before engineProcess was assigned, so no engine state was dirtied.
+    logHandlerFailure('startEngine', err)
+    return false
+  }
   engineGeneration += 1
 
   // Update state
@@ -1972,25 +2066,33 @@ function startEngine(debugMode?: boolean, agentOpts?: { captureWav?: string }): 
 
   statusBarItem!.text = effectiveDebugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
-  vscode.window.showInformationMessage(
-    effectiveDebugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
-  )
-  outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
-  engineViewProvider?.refresh()
 
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
   setupExitHandler(engineProcess)
   setupStdinErrorHandler(engineProcess)
+  setupErrorHandler(engineProcess)
+
+  const spawnedProcess = engineProcess
+  await new Promise<void>((resolve) => process.nextTick(resolve))
+  if (!engineProcess || engineProcess !== spawnedProcess || engineProcess.killed) {
+    return false
+  }
+
+  vscode.window.showInformationMessage(
+    effectiveDebugMode ? '✅ Engine started (Debug)' : '✅ Engine started',
+  )
+  outputChannel?.appendLine('✅ Engine started - Ready for evaluation')
+  engineViewProvider?.refresh()
   return true
 }
 
-function startEngineDebug() {
-  startEngine(true)
+async function startEngineDebug(): Promise<void> {
+  await startEngine(true)
 }
 
-function stopEngine(): boolean {
+export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {
     // Capture process reference before nulling module-level variable
@@ -2010,9 +2112,18 @@ function stopEngine(): boolean {
     // This allows the engine to clean up SuperCollider properly
     proc.kill('SIGTERM')
 
-    // Force kill after 2 seconds if still running
+    // Force kill after 2 seconds if still running.
+    //
+    // #532: `proc.killed` means "a signal was successfully SENT", not "the
+    // process has exited" (`node_modules/@types/node/child_process.d.ts`
+    // documents this explicitly). `proc.kill('SIGTERM')` above already makes
+    // `killed === true` the instant the signal is delivered, so `!proc.killed`
+    // here was always false and this SIGKILL never fired — a process that
+    // ignores or hangs on SIGTERM was never escalated to, orphaning it.
+    // `exitCode` / `signalCode` are the correct signal: both stay `null`
+    // until the process has actually terminated.
     setTimeout(() => {
-      if (!proc.killed) {
+      if (proc.exitCode === null && proc.signalCode === null) {
         proc.kill('SIGKILL')
       }
     }, 2000)
@@ -2681,7 +2792,10 @@ function evaluateForAgent(code: string): EvaluateResult {
 }
 
 /** Start the engine for the MCP `start_engine` tool (mirrors the palette command). */
-function startEngineForAgent(options?: { captureWav?: string; debug?: boolean }): CommandResult {
+export async function startEngineForAgent(options?: {
+  captureWav?: string
+  debug?: boolean
+}): Promise<CommandResult> {
   const decision = decideStartEngineForAgent(isEngineRunning() && isLiveCodingMode, options)
   // `isEngineRunning() && isLiveCodingMode` can already be true here without this
   // call having spawned anything: autoStartConfiguredRustEngine() calls
@@ -2691,11 +2805,7 @@ function startEngineForAgent(options?: { captureWav?: string; debug?: boolean })
   // started the engine explicitly via an earlier start_engine call.
   if (decision.kind === 'reject') return { ok: false, error: decision.error }
   if (decision.kind === 'already-running') return { ok: true, message: 'engine already running' }
-  startEngine(options?.debug === true, options)
-  // startEngine() may abort (missing daemon, build issue) without throwing — it
-  // reports via a VS Code notification. Reflect the actual spawn outcome so the
-  // agent doesn't assume success.
-  if (!engineProcess || engineProcess.killed) {
+  if (!(await startEngine(options?.debug === true, options))) {
     return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
   }
   return {
@@ -2809,7 +2919,7 @@ async function selectAudioDeviceForAgent(device: string): Promise<CommandResult>
     }
     if (action === 'start') {
       await writeAudioDeviceSetting(device)
-      if (!startEngine()) {
+      if (!(await startEngine())) {
         return { ok: false, error: 'engine failed to start — see the OrbitScore output channel' }
       }
       return { ok: true, message: `audio device selected: ${device}; engine starting` }

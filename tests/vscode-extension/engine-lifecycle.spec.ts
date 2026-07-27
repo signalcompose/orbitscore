@@ -5,11 +5,13 @@
 import { describe, it, expect, vi } from 'vitest'
 
 import {
+  applyEngineError,
   applyEngineExit,
   applyEngineStdinError,
   applyEngineStdoutChunk,
   decideStartEngineForAgent,
   transportStatusText,
+  type EngineErrorEffects,
   type EngineExitEffects,
   type EngineStdinErrorEffects,
   type EngineStdoutEffects,
@@ -28,9 +30,8 @@ function effects(): EngineStdoutEffects {
   }
 }
 
-function exitEffects(): EngineExitEffects {
+function terminationEffects(): Omit<EngineExitEffects, 'logExit'> {
   return {
-    logExit: vi.fn(),
     clearEngineState: vi.fn(),
     clearAllPlayheads: vi.fn(),
     drainDeviceBridge: vi.fn(),
@@ -39,10 +40,24 @@ function exitEffects(): EngineExitEffects {
   }
 }
 
+function exitEffects(): EngineExitEffects {
+  return {
+    logExit: vi.fn(),
+    ...terminationEffects(),
+  }
+}
+
 function stdinErrorEffects(): EngineStdinErrorEffects {
   return {
     logStdinError: vi.fn(),
     drainDeviceBridge: vi.fn(),
+  }
+}
+
+function errorEffects(): EngineErrorEffects {
+  return {
+    logError: vi.fn(),
+    ...terminationEffects(),
   }
 }
 
@@ -245,6 +260,47 @@ describe('applyEngineStdinError', () => {
 
     expect(fx.logStdinError).toHaveBeenCalledWith('EPIPE')
     expect(fx.drainDeviceBridge).toHaveBeenCalledWith('engine stdin error: EPIPE')
+  })
+})
+
+describe('applyEngineError (#533)', () => {
+  it('logs but skips every state mutation for a stale (non-current) process', () => {
+    const fx = errorEffects()
+    const err = new Error('spawn node ENOENT')
+
+    applyEngineError(err, false, fx)
+
+    expect(fx.logError).toHaveBeenCalledWith(err)
+    expect(fx.clearEngineState).not.toHaveBeenCalled()
+    expect(fx.clearAllPlayheads).not.toHaveBeenCalled()
+    expect(fx.drainDeviceBridge).not.toHaveBeenCalled()
+    expect(fx.showStoppedStatus).not.toHaveBeenCalled()
+    expect(fx.refreshEngineView).not.toHaveBeenCalled()
+  })
+
+  it('logs and applies every state mutation, in order, for the current process', () => {
+    const fx = errorEffects()
+    const err = new Error('spawn node ENOENT')
+
+    applyEngineError(err, true, fx)
+
+    expect(fx.logError).toHaveBeenCalledWith(err)
+    expect(fx.clearEngineState).toHaveBeenCalledOnce()
+    expect(fx.clearAllPlayheads).toHaveBeenCalledOnce()
+    expect(fx.drainDeviceBridge).toHaveBeenCalledWith('engine process error: spawn node ENOENT')
+    expect(fx.showStoppedStatus).toHaveBeenCalledOnce()
+    expect(fx.refreshEngineView).toHaveBeenCalledOnce()
+
+    // Order matters, same rationale as applyEngineExit's equivalent test:
+    // a reordering mutant must fail here even though every individual mock
+    // above was still called exactly once with the right argument.
+    const order = (fn: { mock: { invocationCallOrder: number[] } }) =>
+      fn.mock.invocationCallOrder[0]
+    expect(order(fx.logError)).toBeLessThan(order(fx.clearEngineState))
+    expect(order(fx.clearEngineState)).toBeLessThan(order(fx.clearAllPlayheads))
+    expect(order(fx.clearAllPlayheads)).toBeLessThan(order(fx.drainDeviceBridge))
+    expect(order(fx.drainDeviceBridge)).toBeLessThan(order(fx.showStoppedStatus))
+    expect(order(fx.showStoppedStatus)).toBeLessThan(order(fx.refreshEngineView))
   })
 })
 
