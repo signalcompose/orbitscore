@@ -1,34 +1,36 @@
-import * as child_process from 'child_process'
+import type { ChildProcess } from 'child_process'
 
-import * as vscode from 'vscode'
+import type { ExtensionContext, WorkspaceConfiguration } from 'vscode'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
-import * as ext from '../../packages/vscode-extension/src/extension'
-import * as vscodeMock from '../mocks/vscode'
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
   return { ...actual, spawn: vi.fn(actual.spawn), execFile: vi.fn(actual.execFile) }
 })
 
-function fakeSpawnedProcess(): child_process.ChildProcess {
-  const proc: Partial<child_process.ChildProcess> = {
+let child_process: typeof import('child_process')
+let ext: typeof import('../../packages/vscode-extension/src/extension')
+let vscode: typeof import('vscode')
+let vscodeMock: typeof import('../mocks/vscode')
+
+function fakeSpawnedProcess(): ChildProcess {
+  const proc: Partial<ChildProcess> = {
     killed: false,
     kill: (() => {
       proc.killed = true
       return true
-    }) as child_process.ChildProcess['kill'],
-    on: (() => proc) as child_process.ChildProcess['on'],
-    stdout: { on: () => {} } as unknown as child_process.ChildProcess['stdout'],
-    stderr: { on: () => {} } as unknown as child_process.ChildProcess['stderr'],
-    stdin: { on: () => {} } as unknown as child_process.ChildProcess['stdin'],
+    }) as ChildProcess['kill'],
+    on: (() => proc) as ChildProcess['on'],
+    stdout: { on: () => {} } as unknown as ChildProcess['stdout'],
+    stderr: { on: () => {} } as unknown as ChildProcess['stderr'],
+    stdin: { on: () => {} } as unknown as ChildProcess['stdin'],
   }
-  return proc as child_process.ChildProcess
+  return proc as ChildProcess
 }
 
 async function activateForCommands(): Promise<void> {
   vscodeMock.resetRegisteredCommandHandlers()
-  await ext.activate({ subscriptions: [] } as unknown as vscode.ExtensionContext)
+  await ext.activate({ subscriptions: [] } as unknown as ExtensionContext)
 }
 
 function handler(command: string): (...args: unknown[]) => unknown {
@@ -38,29 +40,23 @@ function handler(command: string): (...args: unknown[]) => unknown {
 }
 
 describe('registered command startEngine awaits', () => {
-  beforeEach(() => {
-    // Defensive isolation. `--pool=forks --poolOptions.forks.singleFork=true`
-    // means every spec file shares ONE `extension.ts` module instance, so
-    // module-level engine state and `vi` spies survive across files. These
-    // tests make `startEngine()` reject by nulling `statusBarItem`, which a
-    // leftover `engineProcess` (early "already running" return) or a leftover
-    // spy can defeat — so reset both rather than trusting other specs to clean
-    // up after themselves.
-    //
-    // Honest note: two of these tests once failed in the full suite while
-    // passing in isolation, but that observation was made while this file was
-    // being edited concurrently, so the failing state is not reproducible and
-    // the exact leak was never isolated. Measured afterwards: removing any ONE
-    // of these three resets (this line, the `restoreAllMocks` above, or the
-    // whole `afterEach`) still leaves the suite green — none is individually
-    // load-bearing today. They are kept as cheap insurance against a future
-    // spec leaking state into this one, not as a fix for a known culprit.
+  beforeEach(async () => {
     vi.restoreAllMocks()
     vi.useRealTimers()
-    ext.__setEngineProcessForTest(null)
+    vi.resetModules()
+    ;[child_process, ext, vscode, vscodeMock] = await Promise.all([
+      import('child_process'),
+      import('../../packages/vscode-extension/src/extension'),
+      import('vscode'),
+      import('../mocks/vscode'),
+    ])
     vi.mocked(child_process.spawn).mockReset()
     vi.mocked(child_process.spawn).mockReturnValue(fakeSpawnedProcess())
     vi.mocked(child_process.execFile).mockReset()
+    vi.mocked(child_process.execFile).mockImplementation(((_file, _args, _options, callback) => {
+      callback(new Error('device enumeration disabled in command-await tests'), '', '')
+      return fakeSpawnedProcess()
+    }) as typeof child_process.execFile)
     vi.spyOn(vscode.workspace, 'getConfiguration').mockReturnValue({
       get: <T>(_key: string, defaultValue?: T) => defaultValue,
       update: async () => undefined,
@@ -68,13 +64,12 @@ describe('registered command startEngine awaits', () => {
         globalValue: key === 'audioDevice' ? '__default__' : undefined,
         workspaceValue: undefined,
       }),
-    } as unknown as vscode.WorkspaceConfiguration)
+    } as unknown as WorkspaceConfiguration)
   })
 
   afterEach(() => {
     vi.useRealTimers()
     vi.restoreAllMocks()
-    ext.__setEngineProcessForTest(null)
   })
 
   it('restartEngine awaits startEngine before its registered handler settles', async () => {
@@ -114,7 +109,7 @@ describe('registered command startEngine awaits', () => {
     let deviceCallback: ((error: Error | null, stdout: string, stderr: string) => void) | undefined
     vi.mocked(child_process.execFile).mockImplementation(((_file, _args, _options, callback) => {
       deviceCallback = callback as typeof deviceCallback
-      return {} as child_process.ChildProcess
+      return {} as ChildProcess
     }) as typeof child_process.execFile)
     vi.mocked(vscode.workspace.getConfiguration).mockReturnValue({
       get: <T>(_key: string, defaultValue?: T) => defaultValue,
@@ -123,7 +118,7 @@ describe('registered command startEngine awaits', () => {
         globalValue: key === 'audioDevice' ? '__default__' : undefined,
         workspaceValue: undefined,
       }),
-    } as unknown as vscode.WorkspaceConfiguration)
+    } as unknown as WorkspaceConfiguration)
     const warning = vi.spyOn(vscode.window, 'showWarningMessage').mockResolvedValue(undefined)
 
     await activateForCommands()

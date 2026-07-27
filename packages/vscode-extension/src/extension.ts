@@ -1937,17 +1937,6 @@ async function startEngine(
   debugMode?: boolean,
   agentOpts?: { captureWav?: string },
 ): Promise<boolean> {
-  console.log('[TEMP startEngine state]', {
-    engineProcess: engineProcess
-      ? { killed: engineProcess.killed, exitCode: engineProcess.exitCode }
-      : null,
-    statusBarItem: statusBarItem === null ? null : 'set',
-    outputChannel: outputChannel === null ? null : 'set',
-    engineViewProvider: engineViewProvider === null ? null : 'set',
-    globalInitialized,
-    isLiveCodingMode,
-    engineGeneration,
-  })
   if (engineProcess && !engineProcess.killed) {
     vscode.window.showWarningMessage('⚠️ Engine is already running')
     return false
@@ -1979,7 +1968,6 @@ async function startEngine(
     // compiled `resolveDaemonBinaryPath()` を実行するため、ここでの解決結果と
     // 決定的に同一になる（再注入する理由が無い）。
     const daemonResolution = resolveDaemonForUI()
-    console.log('[TEMP startEngine daemon resolution]', daemonResolution)
     if (!daemonResolution) {
       outputChannel?.appendLine(
         '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
