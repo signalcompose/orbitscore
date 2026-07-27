@@ -72,10 +72,11 @@ export interface AudioEngine {
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
     bus?: string,
+    instance?: string,
   ): Promise<PluginLoadResult>
 
-  pluginNoteOn?(key: number, channel: number, velocity: number): Promise<void>
-  pluginNoteOff?(key: number, channel: number, velocity?: number): Promise<void>
+  pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
+  pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>
 
   /**
    * Whether a previously-declared plugin is currently active in the engine
@@ -84,7 +85,7 @@ export interface AudioEngine {
    * load instead of returning a false "success". Engines without this method
    * are treated as always-active (no self-heal check performed).
    */
-  isPluginActive?(role?: 'effect' | 'instrument', bus?: string): boolean
+  isPluginActive?(role?: 'effect' | 'instrument', bus?: string, instance?: string): boolean
 
   /**
    * Runtime mixer routing (MX.4, #459/#453 M3): (re)sets `seqBus`'s output target (a sum

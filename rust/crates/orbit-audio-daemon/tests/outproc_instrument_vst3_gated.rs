@@ -57,6 +57,8 @@ fn setup_test() -> OutProcInstrumentConfig {
         plugin: Some(plugin),
         plugin_id: None,
         buffer_frames: None,
+        // 単一 child の DSP/respawn 検証なので slot pool は最小の 1（#540 P1）。
+        slots: 1,
     }
 }
 
@@ -67,7 +69,7 @@ fn outproc_vst3_instrument_sounds_at_oracle_amplitude_and_ends_note() {
         .expect("start OOP VST3 instrument daemon");
 
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("send A4 note on");
     let sounded = wait_until(Duration::from_secs(10), || {
         engine
@@ -89,7 +91,7 @@ fn outproc_vst3_instrument_sounds_at_oracle_amplitude_and_ends_note() {
     );
 
     engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, None)
         .expect("send A4 note off");
     // VST3 has no plugin NOTE_END callback. `orbit-vst3-instrument-child` synthesizes NOTE_END
     // when it forwards NoteOff, so this verifies host bookkeeping rather than plugin feedback.
@@ -138,7 +140,7 @@ fn outproc_vst3_instrument_attach_failure_can_retry_with_oracle() {
         .load_outproc_plugin(oracle, None)
         .expect("retry synth oracle");
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("note on");
     assert!(wait_until(Duration::from_secs(10), || engine
         .outproc_instrument_stats()
@@ -152,7 +154,7 @@ fn outproc_vst3_instrument_survives_child_kill_and_sounds_again() {
     let (engine, _guard) = EngineWrap::start_outproc_instrument(setup_test())
         .expect("start OOP VST3 instrument daemon");
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("pre-kill note on");
     assert!(wait_until(Duration::from_secs(10), || engine
         .outproc_instrument_stats()
@@ -180,7 +182,7 @@ fn outproc_vst3_instrument_survives_child_kill_and_sounds_again() {
         .expect("post-respawn stats")
         .fresh;
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("post-respawn note on");
     assert!(wait_until(Duration::from_secs(10), || engine
         .outproc_instrument_stats()

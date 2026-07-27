@@ -6,26 +6,28 @@ import { LinkAudioManager } from './link-audio-manager'
 import { isPluginPathSpec, resolvePluginSpec, validatePluginExtension } from './plugin-resolver'
 
 /**
- * Owns the single v1 daemon instrument declaration shared by note sequences.
- * Per-sequence instances (independent per note sequence, no sharing) land in
- * PR-1b (#517 S4 / #522) — see `INSTRUCTION_ORBITSCORE_DSL.md` PH.4's staging note.
+ * Owns per-sequence daemon instrument declarations (#540 P1). Each note sequence
+ * gets an independent instrument instance — the map key is the sequence name and
+ * the wire `instance` ID follows the note path's `plugin:<seqName>` port
+ * convention (`Sequence.resolveNoteTarget()`), so declarations and notes address
+ * the same daemon slot.
  */
 export class PluginInstrumentManager {
-  private readonly slots: EffectChainMap<'instrument'>
+  private readonly slots: EffectChainMap<string>
 
   constructor(
     audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
-    this.slots = new EffectChainMap(audioEngine, () => 'instrument')
+    this.slots = new EffectChainMap(audioEngine, (seqName) => `seq:${seqName}`)
   }
 
   hasDeclaration(): boolean {
-    return this.slots.has('instrument')
+    return this.slots.size > 0
   }
 
-  async instrument(spec: string, pluginId?: string): Promise<void> {
+  async instrument(seqName: string, spec: string, pluginId?: string): Promise<void> {
     // 拡張子検証は path-direct spec にのみ適用する（#463 C2: カタログ名はここで弾かず、
     // resolvePluginSpec のカタログ解決に委ねる — effect-slot.ts の resolveEffectSpec と同型）。
     if (isPluginPathSpec(spec)) {
@@ -43,17 +45,19 @@ export class PluginInstrumentManager {
       'instrument',
     )
     await this.slots.declare(
-      'instrument',
+      seqName,
       {
         role: 'instrument',
         bus: undefined,
         normalizedName: normalizePluginInstanceName(spec),
         resolvedPath: resolved.path,
         pluginId: resolved.pluginId,
+        // note 側 `resolveNoteTarget()` の port（`plugin:<seqName>`）と同じ規約。
+        instance: `plugin:${seqName}`,
       },
       () =>
-        'seq.instrument() supports one instrument instance in v1. ' +
-        'S4 PR-1b (#517/#522) will allow independent instances per note sequence.',
+        `Sequence '${seqName}' already has an instrument instance; ` +
+        'v1 does not support replacing it (restart the engine to change the plugin).',
     )
   }
 }

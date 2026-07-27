@@ -61,10 +61,13 @@ describe('Sequence instrument dispatch', () => {
   it('accepts a VST3 instrument declaration', async () => {
     const { audio, seq } = harness()
     await expect(seq.instrument('synth.vst3')).resolves.toBe(seq)
+    // #540 P1: instance は note 側 port と同じ `plugin:<seqName>` 規約（5引数目）。
     expect(audio.loadPlugin).toHaveBeenCalledWith(
       path.resolve('/songs', 'synth.vst3'),
       undefined,
       'instrument',
+      undefined,
+      'plugin:synth',
     )
   })
 
@@ -83,7 +86,7 @@ describe('Sequence instrument dispatch', () => {
     await vi.advanceTimersByTimeAsync(2100)
 
     expect(audio.pluginNoteOn.mock.calls.map((call: unknown[]) => call[0])).toEqual([60, 64])
-    expect(audio.pluginNoteOn).toHaveBeenCalledWith(60, 0, 96 / 127)
+    expect(audio.pluginNoteOn).toHaveBeenCalledWith(60, 0, 96 / 127, 'plugin:synth')
   })
 
   it('enforces instrument/midi/audio/chop exclusion in both directions', async () => {
@@ -139,7 +142,7 @@ describe('Sequence instrument dispatch', () => {
     expect(audio.pluginNoteOn).toHaveBeenCalledTimes(1)
     expect(audio.pluginNoteOff).not.toHaveBeenCalled()
     global.stop()
-    expect(audio.pluginNoteOff).toHaveBeenCalledWith(60, 0)
+    expect(audio.pluginNoteOff).toHaveBeenCalledWith(60, 0, undefined, 'plugin:synth')
   })
 
   it('gain() during LOOP clears pending notes via the plugin scheduler (clearOwner)', async () => {

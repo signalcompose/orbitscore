@@ -39,6 +39,8 @@ fn setup_test() -> OutProcInstrumentConfig {
         plugin: Some(test_synth_dylib()),
         plugin_id: Some(PLUGIN_ID.to_owned()),
         buffer_frames: None,
+        // 単一 child の DSP/respawn 検証なので slot pool は最小の 1（#540 P1）。
+        slots: 1,
     };
     assert!(
         config
@@ -68,7 +70,7 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
         EngineWrap::start_outproc_instrument(setup_test()).expect("start OOP instrument daemon");
 
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("send A4 note on");
     let sounded = wait_until(Duration::from_secs(3), || {
         engine
@@ -77,7 +79,7 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
             .unwrap_or(false)
     });
     engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, None)
         .expect("send A4 note off");
     let note_end_received = wait_until(Duration::from_secs(3), || {
         engine
@@ -171,7 +173,7 @@ fn outproc_instrument_attach_failure_can_retry_with_correct_plugin() {
         .load_outproc_plugin(good_plugin, plugin_id)
         .expect("retry correct plugin");
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("note on");
     assert!(wait_until(Duration::from_secs(3), || engine
         .outproc_instrument_stats()
@@ -186,7 +188,7 @@ fn outproc_instrument_survives_child_kill_and_sounds_again() {
         EngineWrap::start_outproc_instrument(setup_test()).expect("start OOP instrument daemon");
 
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("send pre-kill A4 note on");
     let sounded_before = wait_until(Duration::from_secs(3), || {
         engine
@@ -195,7 +197,7 @@ fn outproc_instrument_survives_child_kill_and_sounds_again() {
             .unwrap_or(false)
     });
     engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, None)
         .expect("send pre-kill A4 note off");
     let before = engine
         .outproc_instrument_stats()
@@ -235,7 +237,7 @@ fn outproc_instrument_survives_child_kill_and_sounds_again() {
         .fresh;
 
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("send post-respawn A4 note on");
     let sounded_after = wait_until(Duration::from_secs(3), || {
         engine
@@ -244,7 +246,7 @@ fn outproc_instrument_survives_child_kill_and_sounds_again() {
             .unwrap_or(false)
     });
     engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, None)
         .expect("send post-respawn A4 note off");
 
     let after = engine

@@ -145,6 +145,24 @@ fn bus_param_invalid_for_instrument_role(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) == Some("instrument") && params.get("bus").is_some()
 }
 
+/// `instance` は role='instrument' 専用（#540 P1・`bus` が role='effect' 専用なのと対称）。
+/// effect 宣言に instance が紛れ込んだ場合に黙って無視せず MALFORMED で弾くための判定。
+fn instance_param_invalid_for_effect_role(params: &Value) -> bool {
+    params.get("role").and_then(Value::as_str) != Some("instrument")
+        && params.get("instance").is_some()
+}
+
+/// `instance` param（任意・非空文字列）。欠如は `Ok(None)`（互換: 単数時代の "default" 扱い）。
+/// 空文字列・非文字列は `Err`（`parse_bus_param` と同じ「黙って壊さない」方針）。
+fn parse_instance_param(params: &Value) -> Result<Option<String>, &'static str> {
+    match params.get("instance") {
+        None => Ok(None),
+        Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+        Some(Value::String(_)) => Err("'instance' must be a non-empty string"),
+        Some(_) => Err("'instance' must be a string"),
+    }
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -950,6 +968,28 @@ async fn handle_command(
                         ),
                     );
                 }
+                // #540 P1: `instance`（role='instrument' 専用・`bus` と対称）。
+                #[cfg(feature = "outproc-instrument")]
+                if instance_param_invalid_for_effect_role(&params) {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "LoadPlugin instance is only valid for role='instrument'",
+                        ),
+                    );
+                }
+                #[cfg(feature = "outproc-instrument")]
+                let instance = match parse_instance_param(&params) {
+                    Ok(instance) => instance,
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                // instrument-only build の `load_outproc_plugin` は単数互換経路のため
+                // instance を使わない（validation は上で済んでいる）。
+                #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+                let _ = &instance;
                 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
                 let params_role = params
                     .get("role")
@@ -965,7 +1005,7 @@ async fn handle_command(
                                     engine.load_outproc_effect_plugin(path, plugin_id, bus)
                                 }
                                 Some("instrument") => {
-                                    engine.load_outproc_instrument_plugin(path, plugin_id)
+                                    engine.load_outproc_instrument_plugin(path, plugin_id, instance)
                                 }
                                 _ => unreachable!("role was validated before spawn_blocking"),
                             }
@@ -1267,7 +1307,7 @@ fn parse_midi_channel(params: &Value) -> Result<u8, ProtocolError> {
 struct PluginNoteSpec {
     default_velocity: f64,
     status: &'static str,
-    call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
+    call: fn(&EngineWrap, u8, u8, f64, Option<String>) -> Result<(), WrapError>,
 }
 
 /// `method` 文字列から [`PluginNoteSpec`] を解決する single source of truth。`handle_command` 冒頭の
@@ -1307,7 +1347,7 @@ async fn handle_plugin_note(
     engine: &Arc<EngineWrap>,
     default_velocity: f64,
     status: &'static str,
-    call: fn(&EngineWrap, u8, u8, f64) -> Result<(), WrapError>,
+    call: fn(&EngineWrap, u8, u8, f64, Option<String>) -> Result<(), WrapError>,
 ) -> Value {
     match params.get("key").and_then(|v| v.as_u64()) {
         Some(k) if k <= 127 => match parse_midi_channel(params) {
@@ -1315,10 +1355,18 @@ async fn handle_plugin_note(
                 // velocity は CLAP 期待レンジ 0.0..=1.0 に clamp する（範囲外は plugin 挙動が
                 // 未定義になるため）。
                 let velocity = param_f64(params, "velocity", default_velocity).clamp(0.0, 1.0);
+                // #540 P1: instance で slot pool の宛先を選ぶ（欠如は互換の "default"）。
+                let instance = match parse_instance_param(params) {
+                    Ok(instance) => instance,
+                    Err(message) => {
+                        return err(id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
                 let engine = engine.clone();
-                let res =
-                    tokio::task::spawn_blocking(move || call(&engine, k as u8, channel, velocity))
-                        .await;
+                let res = tokio::task::spawn_blocking(move || {
+                    call(&engine, k as u8, channel, velocity, instance)
+                })
+                .await;
                 match res {
                     Ok(Ok(())) => ok(id, json!({"status": status, "key": k})),
                     Ok(Err(e)) => err(id, wrap_err_to_protocol(&e)),
@@ -1681,6 +1729,7 @@ mod tests {
             _key: u8,
             _channel: u8,
             velocity: f64,
+            _instance: Option<String>,
         ) -> Result<(), WrapError> {
             CAPTURED_VELOCITY_BITS.store(velocity.to_bits(), Ordering::SeqCst);
             Ok(())
@@ -1730,6 +1779,7 @@ mod tests {
             _key: u8,
             _channel: u8,
             _velocity: f64,
+            _instance: Option<String>,
         ) -> Result<(), WrapError> {
             panic!("orbit-audio-daemon test: simulated panic inside spawn_blocking call fn");
         }

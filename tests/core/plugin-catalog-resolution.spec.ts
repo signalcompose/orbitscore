@@ -281,11 +281,14 @@ describe('Global.effect()/instrument() catalog name integration', () => {
     const global = new Global(engine)
     global.setDocumentDirectory('/songs/session')
 
-    await expect(global.instrument('Scaler 3')).resolves.toBe(global)
+    await expect(global.instrument('lead', 'Scaler 3')).resolves.toBe(global)
+    // #540 P1: instance（`plugin:<seqName>`）が 5 引数目で渡る。
     expect(loadPlugin).toHaveBeenCalledWith(
       '/plugins/scaler3.clap',
       'scaler3-clap-id',
       'instrument',
+      undefined,
+      'plugin:lead',
     )
   })
 

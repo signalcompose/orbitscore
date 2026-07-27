@@ -48,8 +48,8 @@ describe('RustEnginePlayer plugin note ordering', () => {
     await player.loadPlugin('/plugins/echo.clap', 'echo-id', 'instrument')
     const on = player.pluginNoteOn(60, 0, 0.75)
     const off = player.pluginNoteOff(60, 0)
-    expect(daemon.pluginNoteOn).toHaveBeenCalledWith(60, 0, 0.75)
-    expect(daemon.pluginNoteOff).toHaveBeenCalledWith(60, 0, undefined)
+    expect(daemon.pluginNoteOn).toHaveBeenCalledWith(60, 0, 0.75, undefined)
+    expect(daemon.pluginNoteOff).toHaveBeenCalledWith(60, 0, undefined, undefined)
     return Promise.all([on, off])
   })
 
@@ -102,6 +102,7 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       'echo-id',
       'effect',
       undefined,
+      undefined,
     )
     // C1: a successful reload must flip pluginActive back to true, so
     // PluginEffectManager's self-heal check doesn't mistake this recovery
@@ -136,6 +137,7 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       'echo-id',
       'instrument',
       undefined,
+      undefined,
     )
     expect(player.isPluginActive()).toBe(true)
   })
@@ -156,12 +158,14 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       undefined,
       'effect',
       undefined,
+      undefined,
     )
     expect(daemon.loadPlugin).toHaveBeenCalledWith(
       '/plugins/reverb.clap',
       undefined,
       'effect',
       'seq-bus-0',
+      undefined,
     )
   })
 
@@ -186,6 +190,7 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       undefined,
       'effect',
       'seq-bus-0',
+      undefined,
     )
     expect(player.isPluginActive()).toBe(false)
   })

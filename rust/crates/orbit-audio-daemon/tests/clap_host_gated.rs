@@ -70,9 +70,9 @@ fn synth_processes_audio_via_daemon() {
 
     // NoteOn → 少し鳴らす → NoteOff。C4(60)。複数回叩いて持続発音させる。
     for _ in 0..8 {
-        engine.plugin_note_on(60, 0, 0.8).expect("plugin note on");
+        engine.plugin_note_on(60, 0, 0.8, None).expect("plugin note on");
         std::thread::sleep(Duration::from_millis(60));
-        engine.plugin_note_off(60, 0, 0.0).expect("plugin note off");
+        engine.plugin_note_off(60, 0, 0.0, None).expect("plugin note off");
         std::thread::sleep(Duration::from_millis(40));
     }
 

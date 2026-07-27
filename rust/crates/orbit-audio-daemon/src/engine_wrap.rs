@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
-#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+#[cfg(feature = "outproc-instrument")]
 use orbit_audio_native::PostProcessor;
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
@@ -884,6 +884,31 @@ mod set_bus_routing_tests {
 
 #[cfg(feature = "outproc-instrument")]
 struct OutProcInstrumentControl {
+    /// #540 P1: 起動時に事前確保した instrument slot 群（index = slot 番号）。audio graph /
+    /// shm / note ring は stream 起動時に固定で焼かれるため、複数 instrument は N slot の
+    /// 事前確保 + `LoadPlugin` の instance 割当で実現する（effect の per-bus slot と同方式）。
+    slots: Vec<InstrumentSlotEntry>,
+    /// instance ID → slot index。初出の instance に次の空き slot（= 割当済み数）を充てる。
+    /// 割当は解除しない（daemon 生存中は宣言順で安定 — respawn しても address が変わらない）。
+    instance_index: HashMap<String, usize>,
+}
+
+/// stream 起動前に確保した instrument slot の中間部品（起動後に `ChildLaunch` へ組み上げる。
+/// sample_rate が stream 起動後にしか確定しないため 2 段階になる）。
+#[cfg(feature = "outproc-instrument")]
+struct PendingInstrumentSlot {
+    shm_path: PathBuf,
+    cleanup: ShmCleanupGuard,
+    event_tx: rtrb::Producer<orbit_audio_sandbox::NeutralEvent>,
+    stats: Arc<crate::outproc_instrument::OutProcInstrumentStats>,
+    engaged: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+}
+
+/// instrument slot 1本分の control-side ハンドル（旧 `OutProcInstrumentControl` のフィールド群）。
+#[cfg(feature = "outproc-instrument")]
+struct InstrumentSlotEntry {
     /// Control threadで構築済みの NeutralEvent を audio thread へ渡す producer。
     event_tx: rtrb::Producer<orbit_audio_sandbox::NeutralEvent>,
     /// Audio adapter と watchdog が更新し、gated harness が読む観測 stats。
@@ -898,15 +923,35 @@ struct OutProcInstrumentControl {
 /// instrument の add-mix 後に effect の serial insert を適用する RT 専用の合成 processor。
 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
 struct CompositePostProcessor {
-    instrument: crate::outproc_instrument::OutProcInstrumentPostProcessor,
+    /// #540 P1: slot pool（起動時固定・Vec は起動後に伸縮しないので RT 安全）。
+    /// 未使用 slot は engaged=false で即 return するため idle コストはほぼゼロ。
+    instruments: Vec<crate::outproc_instrument::OutProcInstrumentPostProcessor>,
     effect: crate::outproc_effect::OutProcEffectPostProcessor,
 }
 
 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
 impl PostProcessor for CompositePostProcessor {
     fn process(&mut self, data: &mut [f32]) {
-        self.instrument.process(data);
+        for instrument in &mut self.instruments {
+            instrument.process(data);
+        }
         self.effect.process(data);
+    }
+}
+
+/// instrument-only build 用: slot pool の post processor を順に回す
+/// （`CompositePostProcessor` の instrument 部分のみ版・#540 P1）。
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+struct InstrumentPoolPostProcessor {
+    instruments: Vec<crate::outproc_instrument::OutProcInstrumentPostProcessor>,
+}
+
+#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+impl PostProcessor for InstrumentPoolPostProcessor {
+    fn process(&mut self, data: &mut [f32]) {
+        for instrument in &mut self.instruments {
+            instrument.process(data);
+        }
     }
 }
 
@@ -1361,12 +1406,13 @@ pub struct StreamGuard {
     _outproc_teardown: crate::outproc_effect::OutProcTeardownGuard,
     #[cfg(feature = "outproc-effect")]
     _outproc_bus_teardowns: Vec<crate::outproc_effect::OutProcTeardownGuard>,
-    /// outproc-instrument: stream 前に audio-thread adapter を quiesce する。
-    /// both build における `_outproc_teardown` との相対順序は load-bearing ではない
+    /// outproc-instrument: stream 前に audio-thread adapter を quiesce する（#540 P1 で
+    /// slot pool 化に伴い Vec。guard 間に共有状態は無く順序は load-bearing ではない）。
+    /// both build における `_outproc_teardown` との相対順序も load-bearing ではない
     /// （各 guard は自 role 専用の requested/done atomic のみを操作し共有状態がない。
     /// stream 停止後の child guard 2つと同じ独立性）。
     #[cfg(feature = "outproc-instrument")]
-    _outproc_instrument_teardown: crate::outproc_instrument::OutProcInstrumentTeardownGuard,
+    _outproc_instrument_teardowns: Vec<crate::outproc_instrument::OutProcInstrumentTeardownGuard>,
     /// device switch（#484 D2）: `cpal::Stream`（`OutputStream` 内部）は `!Send` のため、`EngineWrap`
     /// （`Arc` 共有・tokio task を跨ぐため `Send + Sync` 必須）には一切保持させない。`StreamGuard` は
     /// 従来どおり単一の "audio owner thread"（`main.rs` が spawn する専用 OS thread）だけがローカル
@@ -1390,9 +1436,9 @@ pub struct StreamGuard {
     /// both build では同種 guard 間の順序は load-bearing ではない（どちらも stream 停止後）。別々の
     /// child process / shm region を持ち supervisor 間に共有状態が無いため、独立に teardown できる。
     #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
-    _instrument_child_guard: Arc<Mutex<ChildSlot<InstrumentRole>>>,
+    _instrument_child_guards: Vec<Arc<Mutex<ChildSlot<InstrumentRole>>>>,
     #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-    _child_guard: Arc<Mutex<ChildSlot>>,
+    _child_guards: Vec<Arc<Mutex<ChildSlot>>>,
 }
 
 impl StreamGuard {
@@ -1765,26 +1811,44 @@ impl EngineWrap {
             NOTE_RING_CAPACITY,
         };
 
-        let shm_path = crate::outproc_instrument::unique_shm_path();
-        let host_mmap = orbit_audio_sandbox::create_shared(&shm_path).map_err(|error| {
-            WrapError::OutProcInstrument(format!("create shm {shm_path:?}: {error}"))
-        })?;
-        let mut shm_cleanup = ShmCleanupGuard::new(shm_path.clone());
-        let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(host_mmap);
-        let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
-        let engaged = Arc::new(AtomicBool::new(false));
-        let teardown_requested = Arc::new(AtomicBool::new(false));
-        let teardown_done = Arc::new(AtomicBool::new(false));
-        let stats = OutProcInstrumentStats::new();
-        let processor = Box::new(OutProcInstrumentPostProcessor::new(
-            host,
-            event_rx,
-            NOTE_RING_CAPACITY,
-            engaged.clone(),
-            teardown_requested.clone(),
-            teardown_done.clone(),
-            stats.clone(),
-        ));
+        // #540 P1: instrument slot pool（both build と同方式・instrument-only 版）。
+        let instrument_slot_count = cfg.slots;
+        let mut pending_instrument_slots = Vec::with_capacity(instrument_slot_count);
+        let mut instrument_posts = Vec::with_capacity(instrument_slot_count);
+        for _ in 0..instrument_slot_count {
+            let shm_path = crate::outproc_instrument::unique_shm_path();
+            let host_mmap = orbit_audio_sandbox::create_shared(&shm_path).map_err(|error| {
+                WrapError::OutProcInstrument(format!("create shm {shm_path:?}: {error}"))
+            })?;
+            let cleanup = ShmCleanupGuard::new(shm_path.clone());
+            let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(host_mmap);
+            let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+            let engaged = Arc::new(AtomicBool::new(false));
+            let stop = Arc::new(AtomicBool::new(false));
+            let done = Arc::new(AtomicBool::new(false));
+            let stats = OutProcInstrumentStats::new();
+            instrument_posts.push(OutProcInstrumentPostProcessor::new(
+                host,
+                event_rx,
+                NOTE_RING_CAPACITY,
+                engaged.clone(),
+                stop.clone(),
+                done.clone(),
+                stats.clone(),
+            ));
+            pending_instrument_slots.push(PendingInstrumentSlot {
+                shm_path,
+                cleanup,
+                event_tx,
+                stats,
+                engaged,
+                stop,
+                done,
+            });
+        }
+        let processor = Box::new(InstrumentPoolPostProcessor {
+            instruments: instrument_posts,
+        });
 
         let buffer_frames = cfg.buffer_frames;
         let (engine, stream, stream_stats, cb_stats) =
@@ -1797,33 +1861,51 @@ impl EngineWrap {
             .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
 
-        let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
-            shm_path,
-            child_exe: cfg.child_exe,
-            sample_rate,
-            stats: stats.clone(),
-            engaged,
-            cleanup_shm_on_drop: true,
-        })));
-        // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
-        shm_cleanup.disarm();
+        // #540 P1: pending slot を ChildLaunch へ組み上げる（sample_rate は stream 起動後に確定）。
+        let mut instrument_slot_entries = Vec::with_capacity(instrument_slot_count);
+        let mut instrument_child_guards = Vec::with_capacity(instrument_slot_count);
+        let mut instrument_teardowns = Vec::with_capacity(instrument_slot_count);
+        for pending in pending_instrument_slots {
+            let PendingInstrumentSlot {
+                shm_path,
+                mut cleanup,
+                event_tx,
+                stats,
+                engaged,
+                stop,
+                done,
+            } = pending;
+            let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
+                shm_path,
+                child_exe: cfg.child_exe.clone(),
+                sample_rate,
+                stats: stats.clone(),
+                engaged,
+                cleanup_shm_on_drop: true,
+            })));
+            // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
+            cleanup.disarm();
+            instrument_slot_entries.push(InstrumentSlotEntry {
+                event_tx,
+                stats,
+                child_slot: Arc::downgrade(&child_slot),
+            });
+            instrument_child_guards.push(child_slot);
+            instrument_teardowns.push(OutProcInstrumentTeardownGuard::new(stop, done));
+        }
 
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
         })? = Some(OutProcInstrumentControl {
-            event_tx,
-            stats,
-            child_slot: Arc::downgrade(&child_slot),
+            slots: instrument_slot_entries,
+            instance_index: HashMap::new(),
         });
 
         let guard = StreamGuard {
-            _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
-                teardown_requested,
-                teardown_done,
-            ),
+            _outproc_instrument_teardowns: instrument_teardowns,
             stream,
-            _child_guard: child_slot,
+            _child_guards: instrument_child_guards,
         };
         wrap.record_stream_config(buffer_frames, Some(cb_stats));
         Ok((wrap, guard))
@@ -1873,32 +1955,51 @@ impl EngineWrap {
                 .map_err(|e| WrapError::OutProcEffect(format!("create shm {effect_shm:?}: {e}")))?,
         );
         let mut effect_shm_cleanup = ShmCleanupGuard::new(effect_shm.clone());
-        let instrument_shm = crate::outproc_instrument::unique_shm_path();
-        let instrument_host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(
-            orbit_audio_sandbox::create_shared(&instrument_shm).map_err(|e| {
-                WrapError::OutProcInstrument(format!("create shm {instrument_shm:?}: {e}"))
-            })?,
-        );
-        let mut instrument_shm_cleanup = ShmCleanupGuard::new(instrument_shm.clone());
-        let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
-        let effect_engaged = Arc::new(AtomicBool::new(false));
-        let instrument_engaged = Arc::new(AtomicBool::new(false));
-        let effect_stop = Arc::new(AtomicBool::new(false));
-        let effect_done = Arc::new(AtomicBool::new(false));
-        let instrument_stop = Arc::new(AtomicBool::new(false));
-        let instrument_done = Arc::new(AtomicBool::new(false));
-        let effect_stats = OutProcEffectStats::new();
-        let instrument_stats = OutProcInstrumentStats::new();
-        let processor = Box::new(CompositePostProcessor {
-            instrument: OutProcInstrumentPostProcessor::new(
-                instrument_host,
+        // #540 P1: instrument slot pool。stream 起動前に N slot 分の shm / note ring /
+        // post processor を事前確保する（audio graph は起動時固定のため）。child は
+        // LoadPlugin まで spawn しないので idle slot のコストは shm と即-return の
+        // post processor のみ。
+        let instrument_slot_count = instrument_cfg.slots;
+        let mut pending_instrument_slots = Vec::with_capacity(instrument_slot_count);
+        let mut instrument_posts = Vec::with_capacity(instrument_slot_count);
+        for _ in 0..instrument_slot_count {
+            let shm_path = crate::outproc_instrument::unique_shm_path();
+            let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(
+                orbit_audio_sandbox::create_shared(&shm_path).map_err(|e| {
+                    WrapError::OutProcInstrument(format!("create shm {shm_path:?}: {e}"))
+                })?,
+            );
+            let cleanup = ShmCleanupGuard::new(shm_path.clone());
+            let (event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+            let engaged = Arc::new(AtomicBool::new(false));
+            let stop = Arc::new(AtomicBool::new(false));
+            let done = Arc::new(AtomicBool::new(false));
+            let stats = OutProcInstrumentStats::new();
+            instrument_posts.push(OutProcInstrumentPostProcessor::new(
+                host,
                 event_rx,
                 NOTE_RING_CAPACITY,
-                instrument_engaged.clone(),
-                instrument_stop.clone(),
-                instrument_done.clone(),
-                instrument_stats.clone(),
-            ),
+                engaged.clone(),
+                stop.clone(),
+                done.clone(),
+                stats.clone(),
+            ));
+            pending_instrument_slots.push(PendingInstrumentSlot {
+                shm_path,
+                cleanup,
+                event_tx,
+                stats,
+                engaged,
+                stop,
+                done,
+            });
+        }
+        let effect_engaged = Arc::new(AtomicBool::new(false));
+        let effect_stop = Arc::new(AtomicBool::new(false));
+        let effect_done = Arc::new(AtomicBool::new(false));
+        let effect_stats = OutProcEffectStats::new();
+        let processor = Box::new(CompositePostProcessor {
+            instruments: instrument_posts,
             effect: OutProcEffectPostProcessor::new(
                 effect_host,
                 effect_engaged.clone(),
@@ -1926,18 +2027,40 @@ impl EngineWrap {
         })));
         // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
         effect_shm_cleanup.disarm();
-        let instrument_slot = Arc::new(Mutex::new(ChildSlot::<InstrumentRole>::Empty(
-            ChildLaunch {
-                shm_path: instrument_shm,
-                child_exe: instrument_cfg.child_exe,
-                sample_rate: stream.sample_rate,
-                stats: instrument_stats.clone(),
-                engaged: instrument_engaged,
-                cleanup_shm_on_drop: true,
-            },
-        )));
-        // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
-        instrument_shm_cleanup.disarm();
+        // #540 P1: pending slot を ChildLaunch へ組み上げる（sample_rate は stream 起動後に確定）。
+        let mut instrument_slot_entries = Vec::with_capacity(instrument_slot_count);
+        let mut instrument_child_guards = Vec::with_capacity(instrument_slot_count);
+        let mut instrument_teardowns = Vec::with_capacity(instrument_slot_count);
+        for pending in pending_instrument_slots {
+            let PendingInstrumentSlot {
+                shm_path,
+                mut cleanup,
+                event_tx,
+                stats,
+                engaged,
+                stop,
+                done,
+            } = pending;
+            let child_slot = Arc::new(Mutex::new(ChildSlot::<InstrumentRole>::Empty(
+                ChildLaunch {
+                    shm_path,
+                    child_exe: instrument_cfg.child_exe.clone(),
+                    sample_rate: stream.sample_rate,
+                    stats: stats.clone(),
+                    engaged,
+                    cleanup_shm_on_drop: true,
+                },
+            )));
+            // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
+            cleanup.disarm();
+            instrument_slot_entries.push(InstrumentSlotEntry {
+                event_tx,
+                stats,
+                child_slot: Arc::downgrade(&child_slot),
+            });
+            instrument_child_guards.push(child_slot);
+            instrument_teardowns.push(OutProcInstrumentTeardownGuard::new(stop, done));
+        }
         let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
         *wrap
             .outproc
@@ -1958,9 +2081,8 @@ impl EngineWrap {
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
         })? = Some(OutProcInstrumentControl {
-            event_tx,
-            stats: instrument_stats,
-            child_slot: Arc::downgrade(&instrument_slot),
+            slots: instrument_slot_entries,
+            instance_index: HashMap::new(),
         });
 
         let (
@@ -1992,14 +2114,11 @@ impl EngineWrap {
         let guard = StreamGuard {
             _outproc_teardown: OutProcTeardownGuard::new(effect_stop, effect_done),
             _outproc_bus_teardowns: bus_teardowns,
-            _outproc_instrument_teardown: OutProcInstrumentTeardownGuard::new(
-                instrument_stop,
-                instrument_done,
-            ),
+            _outproc_instrument_teardowns: instrument_teardowns,
             stream,
             _child_guard: effect_slot,
             _bus_child_guards: bus_child_guards,
-            _instrument_child_guard: instrument_slot,
+            _instrument_child_guards: instrument_child_guards,
         };
         wrap.record_stream_config(buffer_frames, Some(effect_cb_stats));
         Ok((wrap, guard))
@@ -2299,17 +2418,21 @@ impl EngineWrap {
         };
         #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
         let child_slot = {
-            let guard = self.outproc_instrument.lock().map_err(|_| {
+            let mut guard = self.outproc_instrument.lock().map_err(|_| {
                 InstrumentRole::runtime_error("outproc instrument mutex poisoned".into())
             })?;
-            guard
-                .as_ref()
-                .ok_or_else(|| {
-                    WrapError::OutProcInstrumentUnavailable(
-                        "outproc instrument not initialized (test backend has no outproc path)"
-                            .into(),
-                    )
-                })?
+            let control = guard.as_mut().ok_or_else(|| {
+                WrapError::OutProcInstrumentUnavailable(
+                    "outproc instrument not initialized (test backend has no outproc path)".into(),
+                )
+            })?;
+            // #540 P1: instance 引数の無いこの経路は互換の "default" instance = slot 0。
+            // note 側の instance 解決（instance_index lookup）が通るよう登録しておく。
+            control.instance_index.entry("default".to_string()).or_insert(0);
+            control
+                .slots
+                .first()
+                .expect("slot pool has at least 1 slot (clamped in from_env)")
                 .child_slot
                 .upgrade()
                 .ok_or_else(|| {
@@ -2509,22 +2632,43 @@ impl EngineWrap {
         &self,
         path: PathBuf,
         plugin_id: Option<String>,
+        instance: Option<String>,
     ) -> Result<LoadedPluginSummary, WrapError> {
-        let slot = self
-            .outproc_instrument
-            .lock()
-            .map_err(|_| WrapError::OutProcInstrument("outproc instrument mutex poisoned".into()))?
-            .as_ref()
-            .ok_or_else(|| {
+        // #540 P1: instance → slot index の解決。初出の instance には次の空き slot
+        // （= 割当済み数）を充てる。instance 欠如は互換のため slot 0 相当の "default" に写す。
+        let slot = {
+            let mut guard = self.outproc_instrument.lock().map_err(|_| {
+                WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
+            })?;
+            let control = guard.as_mut().ok_or_else(|| {
                 WrapError::OutProcInstrumentUnavailable(
                     "outproc instrument not initialized (test backend has no outproc path)".into(),
                 )
-            })?
-            .child_slot
-            .upgrade()
-            .ok_or_else(|| {
-                WrapError::OutProcInstrument("outproc instrument stream is closed".into())
             })?;
+            let name = instance.as_deref().unwrap_or("default");
+            let index = match control.instance_index.get(name) {
+                Some(&index) => index,
+                None => {
+                    let next = control.instance_index.len();
+                    if next >= control.slots.len() {
+                        return Err(WrapError::OutProcInstrument(format!(
+                            "instrument slot pool exhausted ({} slots, all assigned); \
+                             raise ORBIT_OUTPROC_INSTRUMENT_SLOTS (max {}) and restart the engine",
+                            control.slots.len(),
+                            crate::outproc_instrument::MAX_INSTRUMENT_SLOTS,
+                        )));
+                    }
+                    control.instance_index.insert(name.to_string(), next);
+                    next
+                }
+            };
+            control.slots[index]
+                .child_slot
+                .upgrade()
+                .ok_or_else(|| {
+                    WrapError::OutProcInstrument("outproc instrument stream is closed".into())
+                })?
+        };
         self.load_outproc_plugin_impl::<InstrumentRole>(slot, path, plugin_id)
     }
 
@@ -2787,7 +2931,15 @@ impl EngineWrap {
 
     /// ロード済み CLAP プラグインへ NoteOn を送る（event ring 経由・非ブロッキング・feature 専用）。
     #[cfg(feature = "clap-host")]
-    pub fn plugin_note_on(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
+    pub fn plugin_note_on(
+        &self,
+        key: u8,
+        channel: u8,
+        velocity: f64,
+        instance: Option<String>,
+    ) -> Result<(), WrapError> {
+        // in-process CLAP は単一インスタンスなので instance 指定は縮退する（#540 P1）。
+        let _ = instance;
         self.push_plugin_event(orbit_clap_host::PluginEvent::NoteOn {
             key,
             channel,
@@ -2797,7 +2949,14 @@ impl EngineWrap {
 
     /// ロード済み CLAP プラグインへ NoteOff を送る（feature 専用）。
     #[cfg(feature = "clap-host")]
-    pub fn plugin_note_off(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
+    pub fn plugin_note_off(
+        &self,
+        key: u8,
+        channel: u8,
+        velocity: f64,
+        instance: Option<String>,
+    ) -> Result<(), WrapError> {
+        let _ = instance;
         self.push_plugin_event(orbit_clap_host::PluginEvent::NoteOff {
             key,
             channel,
@@ -2808,24 +2967,42 @@ impl EngineWrap {
     /// Out-of-process instrument NoteOn. Conversion to the format-neutral wire event happens on
     /// this control-side method; the audio thread only pops already-converted events.
     #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
-    pub fn plugin_note_on(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
-        self.push_outproc_instrument_event(orbit_audio_sandbox::NeutralEvent::NoteOn {
-            sample_offset: 0,
-            addr: Self::outproc_instrument_voice_addr(channel, key),
-            velocity,
-            tuning_cents: 0.0,
-            length_frames: 0,
-        })
+    pub fn plugin_note_on(
+        &self,
+        key: u8,
+        channel: u8,
+        velocity: f64,
+        instance: Option<String>,
+    ) -> Result<(), WrapError> {
+        self.push_outproc_instrument_event(
+            orbit_audio_sandbox::NeutralEvent::NoteOn {
+                sample_offset: 0,
+                addr: Self::outproc_instrument_voice_addr(channel, key),
+                velocity,
+                tuning_cents: 0.0,
+                length_frames: 0,
+            },
+            instance.as_deref(),
+        )
     }
 
     /// Out-of-process instrument NoteOff, converted on the control side.
     #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
-    pub fn plugin_note_off(&self, key: u8, channel: u8, velocity: f64) -> Result<(), WrapError> {
-        self.push_outproc_instrument_event(orbit_audio_sandbox::NeutralEvent::NoteOff {
-            sample_offset: 0,
-            addr: Self::outproc_instrument_voice_addr(channel, key),
-            velocity,
-        })
+    pub fn plugin_note_off(
+        &self,
+        key: u8,
+        channel: u8,
+        velocity: f64,
+        instance: Option<String>,
+    ) -> Result<(), WrapError> {
+        self.push_outproc_instrument_event(
+            orbit_audio_sandbox::NeutralEvent::NoteOff {
+                sample_offset: 0,
+                addr: Self::outproc_instrument_voice_addr(channel, key),
+                velocity,
+            },
+            instance.as_deref(),
+        )
     }
 
     /// Builds the `VoiceAddr` shared by `plugin_note_on`/`plugin_note_off` for the
@@ -2845,6 +3022,7 @@ impl EngineWrap {
     fn push_outproc_instrument_event(
         &self,
         event: orbit_audio_sandbox::NeutralEvent,
+        instance: Option<&str>,
     ) -> Result<(), WrapError> {
         let mut guard = self.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
@@ -2854,7 +3032,19 @@ impl EngineWrap {
                 "outproc instrument not initialized (test backend)".into(),
             )
         })?;
-        control.event_tx.push(event).map_err(|_| {
+        // #540 P1: instance → slot の解決。未割当の instance への note は「未ロード」と同義
+        // なので明示エラーにする（旧単数時代は ring へ積んで黙って捨てられていた — 診断の改善）。
+        let name = instance.unwrap_or("default");
+        let Some(&index) = control.instance_index.get(name) else {
+            return Err(WrapError::OutProcInstrument(format!(
+                "unknown instrument instance '{name}' (LoadPlugin has not assigned it a slot)"
+            )));
+        };
+        let slot = control
+            .slots
+            .get_mut(index)
+            .expect("instance_index always maps to a pre-allocated slot");
+        slot.event_tx.push(event).map_err(|_| {
             self.plugin_event_ring_overflow_count
                 .fetch_add(1, Ordering::Relaxed);
             WrapError::OutProcInstrument("instrument note ring full".into())
@@ -2917,7 +3107,13 @@ impl EngineWrap {
     /// Part 2 で `cfg` を `outproc-instrument` にも拡張したが、このコメントは `clap-host` 単独無効
     /// としか書いておらず実際の条件と食い違っていた — comment-analyzer round 3 指摘）。
     #[cfg(not(any(feature = "clap-host", feature = "outproc-instrument")))]
-    pub fn plugin_note_on(&self, _key: u8, _channel: u8, _velocity: f64) -> Result<(), WrapError> {
+    pub fn plugin_note_on(
+        &self,
+        _key: u8,
+        _channel: u8,
+        _velocity: f64,
+        _instance: Option<String>,
+    ) -> Result<(), WrapError> {
         Err(WrapError::ClapUnavailable(
             "engine built without 'clap-host' or 'outproc-instrument' feature".into(),
         ))
@@ -2926,7 +3122,13 @@ impl EngineWrap {
     /// feature `clap-host` と `outproc-instrument` の両方が無効なビルド用の stub（上の
     /// `plugin_note_on` stub と同じ食い違い・同じ修正）。
     #[cfg(not(any(feature = "clap-host", feature = "outproc-instrument")))]
-    pub fn plugin_note_off(&self, _key: u8, _channel: u8, _velocity: f64) -> Result<(), WrapError> {
+    pub fn plugin_note_off(
+        &self,
+        _key: u8,
+        _channel: u8,
+        _velocity: f64,
+        _instance: Option<String>,
+    ) -> Result<(), WrapError> {
         Err(WrapError::ClapUnavailable(
             "engine built without 'clap-host' or 'outproc-instrument' feature".into(),
         ))
@@ -3106,11 +3308,37 @@ impl EngineWrap {
     pub fn outproc_instrument_stats(
         &self,
     ) -> Option<crate::outproc_instrument::OutProcInstrumentSnapshot> {
+        // #540 P1: 互換 accessor は slot 0（= 単数時代の唯一の slot）を返す。
+        // instance 指定版は `outproc_instrument_stats_for` を使う。
         match self.outproc_instrument.lock() {
-            Ok(guard) => guard.as_ref().map(|control| control.stats.snapshot()),
+            Ok(guard) => guard
+                .as_ref()
+                .and_then(|control| control.slots.first().map(|slot| slot.stats.snapshot())),
             Err(_) => {
                 tracing::warn!(
                     "outproc instrument mutex poisoned; outproc_instrument_stats returning None"
+                );
+                None
+            }
+        }
+    }
+
+    /// Gated instrument harness 用（#540 P1）: instance 指定で slot の観測値を返す。
+    /// 未割当の instance は None。
+    #[cfg(feature = "outproc-instrument")]
+    #[doc(hidden)]
+    pub fn outproc_instrument_stats_for(
+        &self,
+        instance: &str,
+    ) -> Option<crate::outproc_instrument::OutProcInstrumentSnapshot> {
+        match self.outproc_instrument.lock() {
+            Ok(guard) => guard.as_ref().and_then(|control| {
+                let index = *control.instance_index.get(instance)?;
+                control.slots.get(index).map(|slot| slot.stats.snapshot())
+            }),
+            Err(_) => {
+                tracing::warn!(
+                    "outproc instrument mutex poisoned; outproc_instrument_stats_for returning None"
                 );
                 None
             }
@@ -3121,10 +3349,13 @@ impl EngineWrap {
     #[cfg(feature = "outproc-instrument")]
     #[doc(hidden)]
     pub fn outproc_instrument_reset_post_peak(&self) {
+        // #540 P1: 計測位相のリセットは全 slot に適用する（未使用 slot への reset は無害）。
         match self.outproc_instrument.lock() {
             Ok(guard) => {
                 if let Some(control) = guard.as_ref() {
-                    control.stats.reset_post_peak();
+                    for slot in &control.slots {
+                        slot.stats.reset_post_peak();
+                    }
                 }
             }
             Err(_) => tracing::warn!(
@@ -3250,18 +3481,31 @@ impl EngineWrap {
             .outproc_instrument_output_dropped
             .load(Ordering::Relaxed);
         match self.outproc_instrument.try_lock() {
+            // #540 P1: slot pool の cumulative counter を合算し bool は OR する（1 Hz ticker の
+            // WARNING surface は「どこかの instrument child が悪い」で十分。instance 別の詳細は
+            // `outproc_instrument_stats_for` で個別に引ける）。
             Ok(g) => g
                 .as_ref()
                 .map(|c| {
-                    let s = c.stats.snapshot();
+                    let mut totals = (0u64, 0u64, false, 0u64, 0u64, 0u64, 0u64);
+                    for slot in &c.slots {
+                        let s = slot.stats.snapshot();
+                        totals.0 += s.child_process_error_count;
+                        totals.1 += s.respawn_count;
+                        totals.2 |= s.measurement_invalid;
+                        totals.3 += s.output_event_dropped_count;
+                        totals.4 += s.output_event_spilled_count;
+                        totals.5 += s.output_note_end_dropped_count;
+                        totals.6 += s.event_decode_error_count;
+                    }
                     (
-                        s.child_process_error_count + injected_errors,
-                        s.respawn_count + injected_respawns,
-                        s.measurement_invalid || injected_invalid,
-                        s.output_event_dropped_count + injected_dropped,
-                        s.output_event_spilled_count,
-                        s.output_note_end_dropped_count,
-                        s.event_decode_error_count,
+                        totals.0 + injected_errors,
+                        totals.1 + injected_respawns,
+                        totals.2 || injected_invalid,
+                        totals.3 + injected_dropped,
+                        totals.4,
+                        totals.5,
+                        totals.6,
                     )
                 })
                 .unwrap_or((
@@ -3826,6 +4070,7 @@ pub struct LoadedSample {
 
 /// `load_plugin` の結果サマリ（feature 非依存型・session.rs を feature 非依存に保つ）。
 /// feature 有効時は `orbit_clap_host::LoadedPluginInfo` から変換、無効時は stub が Err を返す。
+#[derive(Debug)]
 pub struct LoadedPluginSummary {
     pub plugin_id: String,
     pub plugin_name: Option<String>,
@@ -3877,12 +4122,12 @@ mod plugin_load_gate_tests {
 
     #[test]
     fn note_on_before_load_returns_explicit_error_not_success() {
-        assert_rejected_before_load(|wrap| wrap.plugin_note_on(60, 0, 0.8));
+        assert_rejected_before_load(|wrap| wrap.plugin_note_on(60, 0, 0.8, None));
     }
 
     #[test]
     fn note_off_before_load_returns_explicit_error_not_success() {
-        assert_rejected_before_load(|wrap| wrap.plugin_note_off(60, 0, 0.0));
+        assert_rejected_before_load(|wrap| wrap.plugin_note_off(60, 0, 0.0, None));
     }
 
     #[test]
@@ -4127,7 +4372,7 @@ mod plugin_load_gate_tests {
     #[test]
     fn note_on_after_load_reaches_ring() {
         let (wrap, mut consumer) = loaded_engine();
-        let result = wrap.plugin_note_on(60, 0, 0.8);
+        let result = wrap.plugin_note_on(60, 0, 0.8, None);
         assert!(result.is_ok(), "load 後は成功するはず: {result:?}");
         match consumer.pop() {
             Ok(orbit_clap_host::PluginEvent::NoteOn {
@@ -4146,7 +4391,7 @@ mod plugin_load_gate_tests {
     #[test]
     fn note_off_after_load_reaches_ring() {
         let (wrap, mut consumer) = loaded_engine();
-        let result = wrap.plugin_note_off(60, 0, 0.0);
+        let result = wrap.plugin_note_off(60, 0, 0.0, None);
         assert!(result.is_ok(), "load 後は成功するはず: {result:?}");
         match consumer.pop() {
             Ok(orbit_clap_host::PluginEvent::NoteOff {
@@ -4171,12 +4416,12 @@ mod plugin_load_gate_tests {
     #[test]
     fn plugin_loaded_flag_stays_true_across_multiple_events() {
         let (wrap, mut consumer) = loaded_engine();
-        assert!(wrap.plugin_note_on(60, 0, 0.5).is_ok());
+        assert!(wrap.plugin_note_on(60, 0, 0.5, None).is_ok());
         assert!(
             wrap.plugin_loaded.load(Ordering::Relaxed),
             "1回目 push 後も true のまま"
         );
-        assert!(wrap.plugin_note_off(60, 0, 0.0).is_ok());
+        assert!(wrap.plugin_note_off(60, 0, 0.0, None).is_ok());
         assert!(
             wrap.plugin_loaded.load(Ordering::Relaxed),
             "2回目 push 後も true のまま（reset 経路が無いことの確認）"
@@ -4220,6 +4465,7 @@ mod outproc_instrument_eager_start_tests {
             plugin: None,
             plugin_id: None,
             buffer_frames: None,
+            slots: 1,
         });
         assert!(
             matches!(result, Err(WrapError::OutProcInstrument(message)) if message == "eager start requires a plugin path")
@@ -4364,7 +4610,7 @@ mod push_plugin_event_tests {
         let before = engine.plugin_event_ring_overflow_count();
 
         let err = engine
-            .plugin_note_on(60, 0, 0.8)
+            .plugin_note_on(60, 0, 0.8, None)
             .expect_err("test backend has no clap control (clap field is None)");
 
         assert!(
@@ -4388,7 +4634,7 @@ mod push_plugin_event_tests {
         let before = engine.plugin_event_ring_overflow_count();
 
         let err = engine
-            .plugin_note_off(60, 0, 0.0)
+            .plugin_note_off(60, 0, 0.0, None)
             .expect_err("test backend has no clap control (clap field is None)");
 
         assert!(
@@ -5389,9 +5635,12 @@ mod outproc_instrument_health_tests {
             .outproc_instrument
             .lock()
             .expect("lock instrument control for injection") = Some(OutProcInstrumentControl {
-            event_tx,
-            stats: stats.clone(),
-            child_slot: Weak::new(),
+            slots: vec![super::InstrumentSlotEntry {
+                event_tx,
+                stats: stats.clone(),
+                child_slot: Weak::new(),
+            }],
+            instance_index: std::collections::HashMap::from([(String::from("default"), 0)]),
         });
         (wrap, stats)
     }
@@ -5408,9 +5657,12 @@ mod outproc_instrument_health_tests {
             .outproc_instrument
             .lock()
             .expect("lock instrument control for injection") = Some(OutProcInstrumentControl {
-            event_tx,
-            stats,
-            child_slot: Arc::downgrade(&child_slot),
+            slots: vec![super::InstrumentSlotEntry {
+                event_tx,
+                stats,
+                child_slot: Arc::downgrade(&child_slot),
+            }],
+            instance_index: std::collections::HashMap::from([(String::from("default"), 0)]),
         });
         (wrap, child_slot)
     }
@@ -5730,9 +5982,12 @@ mod outproc_instrument_note_tests {
             .outproc_instrument
             .lock()
             .expect("lock instrument control") = Some(OutProcInstrumentControl {
-            event_tx,
-            stats,
-            child_slot: std::sync::Weak::new(),
+            slots: vec![super::InstrumentSlotEntry {
+                event_tx,
+                stats,
+                child_slot: std::sync::Weak::new(),
+            }],
+            instance_index: std::collections::HashMap::from([(String::from("default"), 0)]),
         });
         (wrap, event_rx)
     }
@@ -5740,8 +5995,8 @@ mod outproc_instrument_note_tests {
     #[test]
     fn plugin_notes_are_converted_to_neutral_events_on_control_side() {
         let (wrap, mut event_rx) = wrap_with_note_consumer(4);
-        wrap.plugin_note_on(60, 3, 0.75).expect("send note on");
-        wrap.plugin_note_off(61, 4, 0.25).expect("send note off");
+        wrap.plugin_note_on(60, 3, 0.75, None).expect("send note on");
+        wrap.plugin_note_off(61, 4, 0.25, None).expect("send note off");
 
         let expected_addr = |channel, key| VoiceAddr {
             note_id: -1,
@@ -5770,6 +6025,114 @@ mod outproc_instrument_note_tests {
         );
     }
 
+    /// #540 P1: 2 slot の control を組み、instance ごとの ring を返す（slot routing 検証用）。
+    fn wrap_with_two_slots() -> (
+        std::sync::Arc<EngineWrap>,
+        rtrb::Consumer<NeutralEvent>,
+        rtrb::Consumer<NeutralEvent>,
+    ) {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let (tx_a, rx_a) = rtrb::RingBuffer::new(4);
+        let (tx_b, rx_b) = rtrb::RingBuffer::new(4);
+        *wrap
+            .outproc_instrument
+            .lock()
+            .expect("lock instrument control") = Some(OutProcInstrumentControl {
+            slots: vec![
+                super::InstrumentSlotEntry {
+                    event_tx: tx_a,
+                    stats: crate::outproc_instrument::OutProcInstrumentStats::new(),
+                    child_slot: std::sync::Weak::new(),
+                },
+                super::InstrumentSlotEntry {
+                    event_tx: tx_b,
+                    stats: crate::outproc_instrument::OutProcInstrumentStats::new(),
+                    child_slot: std::sync::Weak::new(),
+                },
+            ],
+            instance_index: std::collections::HashMap::from([
+                (String::from("plugin:kick"), 0),
+                (String::from("plugin:lead"), 1),
+            ]),
+        });
+        (wrap, rx_a, rx_b)
+    }
+
+    // #540 P1: instance が note を正しい slot の ring へ導くこと。取り違え（常に slot 0 へ
+    // 送る退行）は rx_b が空のままになるので検出できる。
+    #[test]
+    fn plugin_notes_route_to_the_slot_of_their_instance() {
+        let (wrap, mut rx_a, mut rx_b) = wrap_with_two_slots();
+        wrap.plugin_note_on(60, 0, 0.8, Some("plugin:lead".into()))
+            .expect("note to lead slot");
+        wrap.plugin_note_on(61, 0, 0.8, Some("plugin:kick".into()))
+            .expect("note to kick slot");
+
+        // lead (slot 1) には key 60 のみ、kick (slot 0) には key 61 のみが届く。
+        match rx_b.pop() {
+            Ok(NeutralEvent::NoteOn { addr, .. }) => assert_eq!(addr.key, 60),
+            other => panic!("expected NoteOn(60) in lead slot ring, got {other:?}"),
+        }
+        assert!(rx_b.pop().is_err(), "lead slot must receive exactly 1 event");
+        match rx_a.pop() {
+            Ok(NeutralEvent::NoteOn { addr, .. }) => assert_eq!(addr.key, 61),
+            other => panic!("expected NoteOn(61) in kick slot ring, got {other:?}"),
+        }
+        assert!(rx_a.pop().is_err(), "kick slot must receive exactly 1 event");
+    }
+
+    // #540 P1: 未割当 instance への note は「ロード前」と同義の明示エラー（黙って slot 0 に
+    // 送らない — 取り違えたら別シーケンスの音源が鳴る）。
+    #[test]
+    fn plugin_note_to_unknown_instance_is_an_explicit_error() {
+        let (wrap, mut rx_a, mut rx_b) = wrap_with_two_slots();
+        let err = wrap
+            .plugin_note_on(60, 0, 0.8, Some("plugin:ghost".into()))
+            .expect_err("unknown instance must error");
+        assert!(
+            matches!(&err, WrapError::OutProcInstrument(message)
+                if message.contains("unknown instrument instance 'plugin:ghost'")),
+            "expected unknown-instance error, got {err:?}"
+        );
+        assert!(rx_a.pop().is_err(), "no slot may receive the event");
+        assert!(rx_b.pop().is_err(), "no slot may receive the event");
+    }
+
+    // #540 P1: pool 枯渇は明示エラー（既存 instance の再ロードは exhaustion にならない —
+    // 既存は slot 解決まで到達して「stream is closed」で落ちる = 割当ロジックの区別を検証）。
+    #[test]
+    fn load_distinguishes_existing_instance_from_pool_exhaustion() {
+        let (wrap, _rx_a, _rx_b) = wrap_with_two_slots();
+        // 既存 instance → slot 解決へ進む（Weak::new() のため stream closed で落ちる）。
+        let existing = wrap
+            .load_outproc_instrument_plugin(
+                std::path::PathBuf::from("unused.clap"),
+                None,
+                Some("plugin:kick".into()),
+            )
+            .expect_err("weak slot cannot upgrade");
+        assert!(
+            matches!(&existing, WrapError::OutProcInstrument(message)
+                if message.contains("stream is closed")),
+            "existing instance must reach slot resolution, got {existing:?}"
+        );
+        // 新規 instance（3つ目）→ pool (2 slots) 枯渇の明示エラー。
+        let exhausted = wrap
+            .load_outproc_instrument_plugin(
+                std::path::PathBuf::from("unused.clap"),
+                None,
+                Some("plugin:extra".into()),
+            )
+            .expect_err("pool of 2 is exhausted by a 3rd instance");
+        assert!(
+            matches!(&exhausted, WrapError::OutProcInstrument(message)
+                if message.contains("instrument slot pool exhausted")
+                    && message.contains("ORBIT_OUTPROC_INSTRUMENT_SLOTS")),
+            "expected exhaustion error with the env-var hint, got {exhausted:?}"
+        );
+    }
+
     // pr-test-analyzer (item 6, PR #422 review): `push_outproc_instrument_event`'s ring-full error
     // path (increments `plugin_event_ring_overflow_count`, returns `WrapError::OutProcInstrument`)
     // had no coverage. A capacity-1 ring plus a consumer that never drains guarantees the ring
@@ -5781,7 +6144,7 @@ mod outproc_instrument_note_tests {
 
         let mut result = Ok(());
         for _ in 0..8 {
-            result = wrap.plugin_note_on(60, 0, 0.8);
+            result = wrap.plugin_note_on(60, 0, 0.8, None);
             if result.is_err() {
                 break;
             }
@@ -5808,7 +6171,7 @@ mod outproc_instrument_note_tests {
         let (wrap, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
         let err = wrap
-            .plugin_note_on(60, 0, 0.8)
+            .plugin_note_on(60, 0, 0.8, None)
             .expect_err("outproc_instrument mutex holds None by default (no injection)");
         assert!(
             matches!(err, WrapError::OutProcInstrumentUnavailable(_)),
@@ -5821,7 +6184,7 @@ mod outproc_instrument_note_tests {
         let (wrap, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
         let err = wrap
-            .plugin_note_off(60, 0, 0.0)
+            .plugin_note_off(60, 0, 0.0, None)
             .expect_err("outproc_instrument mutex holds None by default (no injection)");
         assert!(
             matches!(err, WrapError::OutProcInstrumentUnavailable(_)),

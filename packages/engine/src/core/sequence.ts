@@ -554,7 +554,7 @@ export class Sequence {
         `Sequence '${name}': instrument() cannot be combined with audio()/chop()/midi().`,
       )
     }
-    await this.global.instrument(pluginPath, pluginId)
+    await this.global.instrument(name, pluginPath, pluginId)
     this._instrumentDeclared = true
     return this
   }

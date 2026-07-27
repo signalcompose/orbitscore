@@ -2,7 +2,12 @@ import type { AudioEngine } from '../audio/types'
 
 import type { ActiveNote, MidiOutput } from './midi-output'
 
-/** MidiScheduler output adapter for the daemon's single hosted instrument. */
+/**
+ * MidiScheduler output adapter for daemon-hosted instruments. The scheduler's
+ * `port` (`plugin:<seqName>` — see `Sequence.resolveNoteTarget()`) doubles as the
+ * daemon `instance` ID, so each sequence's notes address its own instrument slot
+ * (#540 P1).
+ */
 export class PluginNoteOutput implements MidiOutput {
   private activeNotes: ActiveNote[] = []
 
@@ -17,7 +22,7 @@ export class PluginNoteOutput implements MidiOutput {
     const normalizedVelocity = Math.max(1, Math.min(127, Math.round(velocity))) / 127
     if (this.engine.pluginNoteOn) {
       void this.engine
-        .pluginNoteOn(key, channel - 1, normalizedVelocity)
+        .pluginNoteOn(key, channel - 1, normalizedVelocity, port)
         .catch((err) => console.error('❌ PluginNoteOn failed', { key, err }))
     } else {
       console.error('❌ PluginNoteOn unavailable: engine.pluginNoteOn is not implemented', { key })
@@ -68,7 +73,7 @@ export class PluginNoteOutput implements MidiOutput {
     const key = note.note
     if (this.engine.pluginNoteOff) {
       void this.engine
-        .pluginNoteOff(key, note.channel - 1)
+        .pluginNoteOff(key, note.channel - 1, undefined, note.port)
         .catch((err) => console.error('❌ PluginNoteOff failed', { key, err }))
     } else {
       console.error('❌ PluginNoteOff unavailable: engine.pluginNoteOff is not implemented', {

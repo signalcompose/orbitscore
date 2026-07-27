@@ -61,7 +61,17 @@ pub struct OutProcInstrumentConfig {
     pub plugin: Option<PathBuf>,
     pub plugin_id: Option<String>,
     pub buffer_frames: Option<u32>,
+    /// 起動時に事前確保する instrument slot 数（#540 P1）。audio graph / shm / note ring は
+    /// stream 起動時に固定で焼かれるため、複数 instrument は「N slot の事前確保 + LoadPlugin の
+    /// instance 割当」で実現する（effect の per-bus slot と同じ方式）。
+    pub slots: usize,
 }
+
+/// `ORBIT_OUTPROC_INSTRUMENT_SLOTS` の既定値。idle slot のコストは shm region と
+/// engaged=false で即 return する post processor のみ（child は LoadPlugin まで spawn しない）。
+pub const DEFAULT_INSTRUMENT_SLOTS: usize = 8;
+/// slot 数の上限（shm region とリングの事前確保が線形に増えるため暴走値を弾く）。
+pub const MAX_INSTRUMENT_SLOTS: usize = 32;
 
 impl OutProcInstrumentConfig {
     pub fn from_env() -> Result<Self, String> {
@@ -76,12 +86,35 @@ impl OutProcInstrumentConfig {
                 .ok()
                 .as_deref(),
         );
+        let slots = parse_instrument_slots(
+            std::env::var("ORBIT_OUTPROC_INSTRUMENT_SLOTS")
+                .ok()
+                .as_deref(),
+        );
         Ok(Self {
             child_exe,
             plugin,
             plugin_id,
             buffer_frames,
+            slots,
         })
+    }
+}
+
+/// `ORBIT_OUTPROC_INSTRUMENT_SLOTS` を [1, MAX] に clamp して解決する（純関数・unit テスト対象）。
+/// 未設定・不正値は default（`parse_buffer_frames` と同じ「黙って壊さない」方針で warn のみ）。
+fn parse_instrument_slots(value: Option<&str>) -> usize {
+    let Some(value) = value else {
+        return DEFAULT_INSTRUMENT_SLOTS;
+    };
+    match value.parse::<usize>() {
+        Ok(slots) if (1..=MAX_INSTRUMENT_SLOTS).contains(&slots) => slots,
+        _ => {
+            tracing::warn!(
+                "ORBIT_OUTPROC_INSTRUMENT_SLOTS='{value}' is invalid (want 1..={MAX_INSTRUMENT_SLOTS}); using default {DEFAULT_INSTRUMENT_SLOTS}"
+            );
+            DEFAULT_INSTRUMENT_SLOTS
+        }
     }
 }
 

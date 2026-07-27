@@ -34,6 +34,8 @@ fn setup_test() -> (OutProcEffectConfig, OutProcInstrumentConfig) {
         )),
         plugin_id: Some(PLUGIN_ID.to_owned()),
         buffer_frames: None,
+        // 単一 child の both-build 検証なので slot pool は最小の 1（#540 P1）。
+        slots: 1,
     };
     let effect_plugin = effect
         .plugin
@@ -75,14 +77,14 @@ fn both_roles_attach_in_instrument_then_effect_order() {
         .expect("start both-role OOP daemon");
 
     engine
-        .load_outproc_instrument_plugin(synth_path, synth_id)
+        .load_outproc_instrument_plugin(synth_path, synth_id, None)
         .expect("attach test-synth to instrument slot");
     engine
         .load_outproc_effect_plugin(effect_path, None, None)
         .expect("attach test-effect to effect slot");
 
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8)
+        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, None)
         .expect("send probe note on");
     let instrument_live = wait_until(Duration::from_secs(3), || {
         engine
@@ -101,7 +103,7 @@ fn both_roles_attach_in_instrument_then_effect_order() {
             .unwrap_or(false)
     });
     engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0)
+        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, None)
         .expect("send probe note off");
 
     let instrument = engine.outproc_instrument_stats().expect("instrument stats");

@@ -84,6 +84,11 @@ export interface PluginDeclaration {
   readonly normalizedName: string
   readonly resolvedPath: string
   readonly pluginId: string | undefined
+  /**
+   * instrument slot pool の宛先（'instrument' role 専用・#540 P1）。note 側の
+   * `plugin:<seqName>` port と同じ規約で、daemon がこの ID に slot を割り当てる。
+   */
+  readonly instance?: string
 }
 
 export class EffectSlotLimitError extends Error {
@@ -118,6 +123,15 @@ export class EffectChainMap<K> {
 
   has(key: K): boolean {
     return (this.chains.get(key)?.length ?? 0) > 0
+  }
+
+  /** 非空チェーンを持つ key の数（#540 P1: `PluginInstrumentManager.hasDeclaration` が使用）。 */
+  get size(): number {
+    let count = 0
+    for (const chain of this.chains.values()) {
+      if (chain.length > 0) count += 1
+    }
+    return count
   }
 
   /**
@@ -191,7 +205,7 @@ export class EffectChainMap<K> {
         // 冪等パスで false success を返さず再ロードする（PluginEffectManager 由来の
         // silent-failure guard）。isPluginActive を持たない engine（SC/素の mock）は
         // 従来の no-op 冪等のまま。
-        if (this.audioEngine.isPluginActive?.(spec.role, spec.bus) === false) {
+        if (this.audioEngine.isPluginActive?.(spec.role, spec.bus, spec.instance) === false) {
           await this.issueLoad(key, spec, existing)
         }
         return
@@ -214,13 +228,16 @@ export class EffectChainMap<K> {
     if (!this.audioEngine.loadPlugin) {
       throw new Error('Plugin hosting requires the Rust engine backend.')
     }
-    const { role, bus, normalizedName, resolvedPath, pluginId } = spec
+    const { role, bus, normalizedName, resolvedPath, pluginId, instance } = spec
     // bus 無し（master insert）は 3 引数のまま呼ぶ（既存の呼び出し契約を変えない —
     // explicit undefined でも実 engine は等価だが、契約をピンするテスト/モックがある）。
+    // instrument の instance 付き（#540 P1）は 5 引数（bus は instrument で常に undefined）。
     const load = (
-      bus === undefined
-        ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role)
-        : this.audioEngine.loadPlugin(resolvedPath, pluginId, role, bus)
+      instance !== undefined
+        ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role, undefined, instance)
+        : bus === undefined
+          ? this.audioEngine.loadPlugin(resolvedPath, pluginId, role)
+          : this.audioEngine.loadPlugin(resolvedPath, pluginId, role, bus)
     ).then(() => undefined)
     const chain = this.chains.get(key) ?? []
     const occurrence =

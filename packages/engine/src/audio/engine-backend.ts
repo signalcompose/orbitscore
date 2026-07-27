@@ -38,9 +38,10 @@ export interface AudioEngineBackend extends Scheduler {
     pluginId: string | undefined,
     role: 'effect' | 'instrument',
     bus?: string,
+    instance?: string,
   ): Promise<PluginLoadResult>
-  pluginNoteOn?(key: number, channel: number, velocity: number): Promise<void>
-  pluginNoteOff?(key: number, channel: number, velocity?: number): Promise<void>
+  pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
+  pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>
   isPluginActive?(): boolean
 }
 
