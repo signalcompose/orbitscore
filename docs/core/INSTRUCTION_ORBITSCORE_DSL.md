@@ -1297,19 +1297,16 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 > したがって旧規則は**共有の利点を実現する機構を持たないまま、preset / param / note が混ざる欠点だけを
 > 負っていた**。
 
-> **v1 の現在地（per-sequence インスタンス化）**: **PR-1a（#527）が実装するのはデータモデルのみ**
-> （`EffectChainMap` によるチェーン化と role 別 instanceId 発番の基盤）。エンジンは依然として
-> **single global instrument key**（`PluginInstrumentManager` が `'instrument'` 固定キーで管理）を
-> 使っており、異なる note シーケンスからの `instrument()` 宣言は「supports one instrument instance
-> in v1」エラーで拒否される（既存テストがこれをピン留めしている）。上記の「シーケンスごとに独立した
-> インスタンス」は本 PR の時点では成立しない。
+> **v1 の現在地（per-sequence インスタンス化）**: **#540 P1 で実装済み。** 宣言の登記は
+> シーケンス名キー（`PluginInstrumentManager` + `EffectChainMap<string>`）、daemon は起動時に
+> 事前確保した **instrument slot pool** へ `instance`（`plugin:<seqName>` 規約）で割り当てる。
+> 異なる note シーケンスの `instrument()` 宣言は独立したインスタンス（独立 child プロセス）を
+> 生成し、実機 gated テストが2インスタンスの同時発音と宛先分離をピン留めしている。
 >
-> **理由**: per-sequence インスタンス化は、宣言の登記先キーを `instrument` 固定から
-> シーケンス名ベースへ切り替える配線変更であり、`EffectChainMap` という基盤（本 PR）の上に
-> 構築する別工程として分離する。
->
-> **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は「異なる note シーケンスの `instrument()`
-> 宣言が、エラーにならず独立したインスタンスを生成すること」。
+> **slot pool の上限**: 同時に持てるインスタンス数は起動時固定の slot 数まで
+> （env `ORBIT_OUTPROC_INSTRUMENT_SLOTS`・既定 8・最大 32）。超過した宣言は
+> 「instrument slot pool exhausted」の明示エラーになり、env を上げてエンジンを再起動する。
+> 割当は解除されない（ライブセッション中に多数のシーケンス名を使い捨てると再起動が必要になる）。
 
 - **複数シーケンスと 1 インスタンスの関係**（暗黙には生じない。いずれも明示宣言・後続 stage）:
   - **サミング**: 複数シーケンスが同一インスタンスの**同一 part** に note を合流させる（通常の

@@ -43,7 +43,7 @@ export interface AudioEngineBackend extends Scheduler {
   ): Promise<PluginLoadResult>
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>
-  isPluginActive?(): boolean
+  isPluginActive?(role?: 'effect' | 'instrument', bus?: string, instance?: string): boolean
 }
 
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */

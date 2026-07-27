@@ -269,18 +269,29 @@ fn main() -> Result<()> {
     if let Some(plugin_id) = &args.plugin_id {
         eprintln!("[orbit-vst3-instrument-child] --plugin-id={plugin_id} は VST3 では未使用");
     }
-    let (mut instrument, _) =
-        Vst3InstrumentProcessor::load(&args.plugin, args.sample_rate as f64, MAX_FRAMES as i32)
-            .with_context(|| format!("load VST3 instrument {:?}", args.plugin))?;
-    // #540 P2: 保存済み state の適用は READY publish より前。失敗はハードエラー — 音色が
-    // 復元できていないのに default 音のまま READY を出すと「保存した音で鳴る」契約が
-    // 黙って破れる（attach 失敗として daemon 側に表面化させる）。
-    if let Some(state_path) = &args.state {
-        let bytes =
-            std::fs::read(state_path).with_context(|| format!("read state file {state_path:?}"))?;
-        instrument
-            .apply_state(&bytes)
-            .with_context(|| format!("apply state {state_path:?} to {:?}", args.plugin))?;
+    // #540 P2: 保存済み state は load に渡し、**setActive 前**に適用される（VST3 正準の
+    // 復元フロー・#542 レビュー F7）。失敗はハードエラー — 音色が復元できていないのに
+    // default 音のまま READY を出すと「保存した音で鳴る」契約が黙って破れる
+    // （attach 失敗として daemon 側に表面化させる）。
+    let state_bytes = match &args.state {
+        Some(state_path) => Some(
+            std::fs::read(state_path).with_context(|| format!("read state file {state_path:?}"))?,
+        ),
+        None => None,
+    };
+    let (mut instrument, _) = Vst3InstrumentProcessor::load(
+        &args.plugin,
+        args.sample_rate as f64,
+        MAX_FRAMES as i32,
+        state_bytes.as_deref(),
+    )
+    .with_context(|| {
+        format!(
+            "load VST3 instrument {:?} (state: {:?})",
+            args.plugin, args.state
+        )
+    })?;
+    if let (Some(state_path), Some(bytes)) = (&args.state, &state_bytes) {
         eprintln!(
             "[orbit-vst3-instrument-child] state restored from {state_path:?} ({} bytes)",
             bytes.len()

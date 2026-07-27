@@ -370,14 +370,16 @@ impl PostProcessor for OutProcInstrumentPostProcessor {
     }
 }
 
-pub fn spawn_instrument_child(
+/// child の起動コマンドを組み立てる純関数（unit テスト対象・#542 レビュー: `--state` の
+/// 有無を含む引数構築を spawn から分離してピン留めできるようにする）。
+fn instrument_child_command(
     child_exe: &Path,
     shm_path: &Path,
     plugin: &Path,
     plugin_id: Option<&str>,
     sample_rate: u32,
     state: Option<&Path>,
-) -> io::Result<Child> {
+) -> Command {
     let mut command = Command::new(child_exe);
     command
         .arg("--shm")
@@ -394,7 +396,18 @@ pub fn spawn_instrument_child(
     if let Some(state) = state {
         command.arg("--state").arg(state);
     }
-    command.spawn()
+    command
+}
+
+pub fn spawn_instrument_child(
+    child_exe: &Path,
+    shm_path: &Path,
+    plugin: &Path,
+    plugin_id: Option<&str>,
+    sample_rate: u32,
+    state: Option<&Path>,
+) -> io::Result<Child> {
+    instrument_child_command(child_exe, shm_path, plugin, plugin_id, sample_rate, state).spawn()
 }
 
 fn reap(child: &mut Child) {
@@ -526,11 +539,12 @@ impl InstrumentChildSupervisor {
                                         != orbit_audio_sandbox::transport::CHILD_STATUS_READY
                                 }
                             {
-                                tracing::warn!("orbit-clap-instrument-child exited during initial attach ({status})");
+                                tracing::warn!(plugin = ?plugin, "orbit-clap-instrument-child exited during initial attach ({status})");
                                 stats.child_early_exit.store(true, Ordering::Release);
                                 break;
                             }
                             tracing::warn!(
+                                plugin = ?plugin,
                                 "orbit-clap-instrument-child exited ({status}); respawning"
                             );
                             // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
@@ -555,6 +569,7 @@ impl InstrumentChildSupervisor {
                                 }
                                 Err(error) => {
                                     tracing::error!(
+                                        plugin = ?plugin,
                                         "instrument child respawn failed; measurement invalid: {error}"
                                     );
                                     stats.measurement_invalid.store(true, Ordering::Release);
@@ -1244,5 +1259,51 @@ mod tests {
             custom,
             "explicit child exe (env override / test fixture) must be retained"
         );
+    }
+
+    /// #540 P2（#542 レビュー test-gap）: `--state` 引数の構築をピン留めする。
+    /// respawn 経路も同じ builder を通るため、この契約が「state が respawn を生き延びる」の
+    /// コマンド構築レベルの証明になる（実機レベルは gated テストが担う）。
+    #[test]
+    fn instrument_child_command_includes_state_only_when_given() {
+        use std::ffi::OsStr;
+        let args_of = |state: Option<&Path>| -> Vec<String> {
+            instrument_child_command(
+                Path::new("/bin/child"),
+                Path::new("/tmp/shm"),
+                Path::new("/plugins/synth.vst3"),
+                Some("plugin-id"),
+                48_000,
+                state,
+            )
+            .get_args()
+            .map(|arg: &OsStr| arg.to_string_lossy().into_owned())
+            .collect()
+        };
+
+        let with_state = args_of(Some(Path::new("/songs/kick.vstpreset")));
+        let state_flag = with_state
+            .iter()
+            .position(|arg| arg == "--state")
+            .expect("--state flag present when state is Some");
+        assert_eq!(
+            with_state.get(state_flag + 1).map(String::as_str),
+            Some("/songs/kick.vstpreset"),
+            "--state must be immediately followed by the state path"
+        );
+
+        let without_state = args_of(None);
+        assert!(
+            !without_state.iter().any(|arg| arg == "--state"),
+            "--state must be omitted when state is None (CLAP child would bail on it)"
+        );
+        // state の有無で他の引数は不変（--state ペア以外が同一）。
+        let stripped: Vec<_> = with_state
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != state_flag && *i != state_flag + 1)
+            .map(|(_, arg)| arg.clone())
+            .collect();
+        assert_eq!(stripped, without_state);
     }
 }

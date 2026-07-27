@@ -239,14 +239,14 @@ const MAX_RESPAWN_ATTEMPTS = 5
 /** respawn 試行間の固定バックオフ（crash loop 緩和 + port 解放待ち）。 */
 const RESPAWN_BACKOFF_MS = 150
 
-/** feature gap warning の初期状態（フィールド初期化子で arm・stopAll で再 arm に使う）。 */
-const freshWarned = (): Record<GapKind, boolean> => ({
-  outputChannel: false,
-  masterEffect: false,
-  linkTempo: false,
-  pluginNoteDrop: false,
-  pluginInactive: false,
-})
+/**
+ * feature gap warning の抑止キー集合（フィールド初期化子で arm・stopAll で再 arm）。
+ * キーは `kind` または `kind:discriminator`。#542 レビュー: `pluginInactive` は instance ごとに
+ * 独立して警告する必要がある（単一 boolean だと最初の1台の警告以降、別 instrument の
+ * note ドロップが session 終端まで無警告になる）ため、Record<GapKind, boolean> から
+ * 判別子付き Set へ変更した。
+ */
+const freshWarned = (): Set<string> => new Set()
 
 export class RustEnginePlayer implements AudioEngineBackend {
   private readonly daemon: DaemonClient
@@ -336,7 +336,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private respawnPromise: Promise<void> | null = null
 
   /** feature gap の 1 回限り warning。stopAll で再 arm する。 */
-  private warned: Record<GapKind, boolean> = freshWarned()
+  private warned: Set<string> = freshWarned()
 
   constructor(options: RustEnginePlayerOptions = {}) {
     this.daemon = new DaemonClient()
@@ -766,7 +766,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     ) {
       this.warnOnce(
         'pluginInactive',
-        '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
+        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after the last daemon respawn — re-run seq.instrument(...) to restore it`,
+        instance ?? 'default',
       )
       return Promise.resolve()
     }
@@ -789,7 +790,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     ) {
       this.warnOnce(
         'pluginInactive',
-        '⚠️  [rust-engine] plugin note-on/off dropped: instrument was not restored after the last daemon respawn — re-run seq.instrument(...) to restore it',
+        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after the last daemon respawn — re-run seq.instrument(...) to restore it`,
+        instance ?? 'default',
       )
       return Promise.resolve()
     }
@@ -1261,9 +1263,10 @@ export class RustEnginePlayer implements AudioEngineBackend {
     return this.daemon.getStatus()
   }
 
-  private warnOnce(kind: GapKind, message: string): void {
-    if (this.warned[kind]) return
-    this.warned[kind] = true
+  private warnOnce(kind: GapKind, message: string, discriminator?: string): void {
+    const key = discriminator === undefined ? kind : `${kind}:${discriminator}`
+    if (this.warned.has(key)) return
+    this.warned.add(key)
     console.warn(message)
   }
 }

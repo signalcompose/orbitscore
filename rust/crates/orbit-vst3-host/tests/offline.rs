@@ -66,7 +66,7 @@ fn synth_oracle_sounds_then_silences_on_note_off() {
         eprintln!("VST3 synth oracle build failed; loud skip for this machine");
         return;
     };
-    let (mut processor, info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
+    let (mut processor, info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None)
         .unwrap_or_else(|error| {
             panic!("failed to load synth oracle {}: {error}", bundle.display())
         });
@@ -104,7 +104,7 @@ fn instrument_loader_rejects_gain_effect_oracle() {
         eprintln!("VST3 oracle build failed; loud skip for this machine");
         return;
     };
-    let error = match Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32) {
+    let error = match Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None) {
         Ok(_) => panic!("effect oracle must not load as an instrument"),
         Err(error) => error,
     };
@@ -160,7 +160,7 @@ fn instrument_process_block_rejects_non_stereo_length() {
         eprintln!("VST3 synth oracle build failed; loud skip for this machine");
         return;
     };
-    let (mut processor, _info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
+    let (mut processor, _info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None)
         .unwrap_or_else(|error| {
             panic!("failed to load synth oracle {}: {error}", bundle.display())
         });
@@ -192,7 +192,7 @@ fn instrument_process_block_rejects_frames_exceeding_scratch() {
         eprintln!("VST3 synth oracle build failed; loud skip for this machine");
         return;
     };
-    let (mut processor, _info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
+    let (mut processor, _info) = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None)
         .unwrap_or_else(|error| {
             panic!("failed to load synth oracle {}: {error}", bundle.display())
         });

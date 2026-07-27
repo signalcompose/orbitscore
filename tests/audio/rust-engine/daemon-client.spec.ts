@@ -247,6 +247,64 @@ describe('DaemonClient with mock server', () => {
     })
   })
 
+  it('LoadPlugin instance/state_path あり: 両フィールドを params に含める（#540 P1/P2）', async () => {
+    const url = await server.start({
+      LoadPlugin: () => ({ plugin_id: 'kontakt', plugin_name: 'Kontakt', note_port_index: 0 }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.loadPlugin(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/songs/kick.vstpreset',
+    )
+    const record = server.received.find((r) => r.method === 'LoadPlugin')
+    expect(record?.params).toEqual({
+      path: '/plugins/kontakt.vst3',
+      role: 'instrument',
+      instance: 'plugin:kick',
+      state_path: '/songs/kick.vstpreset',
+    })
+  })
+
+  it('LoadPlugin instance/state_path なし: フィールド自体を省略する（互換・#540）', async () => {
+    const url = await server.start({
+      LoadPlugin: () => ({ plugin_id: 'synth', plugin_name: 'Synth', note_port_index: 0 }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.loadPlugin('/plugins/synth.clap', undefined, 'instrument')
+    const record = server.received.find((r) => r.method === 'LoadPlugin')
+    expect(record?.params).toEqual({
+      path: '/plugins/synth.clap',
+      role: 'instrument',
+    })
+    expect(record?.params).not.toHaveProperty('instance')
+    expect(record?.params).not.toHaveProperty('state_path')
+  })
+
+  it('PluginNoteOn/Off instance あり/なし: instance フィールドの含有/省略（#540 P1）', async () => {
+    const url = await server.start({
+      PluginNoteOn: () => ({ status: 'note_on', key: 60 }),
+      PluginNoteOff: () => ({ status: 'note_off', key: 60 }),
+    })
+    await client.start({ wsUrlOverride: url })
+    await client.pluginNoteOn(60, 0, 0.8, 'plugin:kick')
+    await client.pluginNoteOff(60, 0, undefined, 'plugin:kick')
+    await client.pluginNoteOn(61, 0, 0.8)
+    const notes = server.received.filter((r) => r.method.startsWith('PluginNote'))
+    expect(notes[0]?.params).toEqual({
+      key: 60,
+      channel: 0,
+      velocity: 0.8,
+      instance: 'plugin:kick',
+    })
+    expect(notes[1]?.params).toEqual({ key: 60, channel: 0, instance: 'plugin:kick' })
+    expect(notes[2]?.params).toEqual({ key: 61, channel: 0, velocity: 0.8 })
+    expect(notes[2]?.params).not.toHaveProperty('instance')
+  })
+
   it('Stop は status=stopped を true に変換する', async () => {
     const url = await server.start({
       Stop: (params) => {

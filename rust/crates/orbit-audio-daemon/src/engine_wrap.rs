@@ -893,8 +893,14 @@ struct OutProcInstrumentControl {
     instance_index: HashMap<String, usize>,
 }
 
-/// instance 引数の無い互換経路（旧単数 API・wire の `instance` 欠如）が写る instance 名
-/// （= slot 0）。「instance-less は slot 0」の不変条件をこの1定数で表現する（#540 P1）。
+/// instance 引数の無い互換経路（旧単数 API・wire の `instance` 欠如）が写る instance 名。
+///
+/// 「= slot 0」が**強制**されるのは instrument-only build の互換経路
+/// （`load_outproc_plugin` の `or_insert(0)`）のみ。both build では "default" も通常の
+/// 先着順割当を通るため、名前付き instance が先行していれば slot 0 とは限らない
+/// （slot は同質なので挙動差は無く、互換 accessor `outproc_instrument_stats()` =
+/// slots\[0\] が別 instance の統計を返し得る、というテストハーネス表面のみ —
+/// #542 レビュー指摘）。
 #[cfg(feature = "outproc-instrument")]
 pub(crate) const DEFAULT_INSTRUMENT_INSTANCE: &str = "default";
 
@@ -2660,6 +2666,11 @@ impl EngineWrap {
                             crate::outproc_instrument::MAX_INSTRUMENT_SLOTS,
                         )));
                     }
+                    // 注（#542 レビュー F12）: 割当はロード試行**前**で、失敗しても解除しない
+                    // （TS 層は失敗宣言を忘れて再試行できるのと非対称）。attach が unrecoverable
+                    // 失敗（slot=Closed）した instance は daemon 生存中その slot を占有し続ける。
+                    // 解除には slot の再初期化（shm/ring の作り直し）が要るため v1 は保持で確定 —
+                    // 枯渇時のエラーが env 引き上げ + 再起動を案内する。
                     control.instance_index.insert(name.to_string(), next);
                     next
                 }
@@ -3070,7 +3081,9 @@ impl EngineWrap {
         slot.event_tx.push(event).map_err(|_| {
             self.plugin_event_ring_overflow_count
                 .fetch_add(1, Ordering::Relaxed);
-            WrapError::OutProcInstrument("instrument note ring full".into())
+            // 診断の同一性方針（#542 レビュー）: N 台化したエラーは instance を名指しする
+            // （unknown-instance / pool-exhausted と対称）。
+            WrapError::OutProcInstrument(format!("instrument note ring full (instance '{name}')"))
         })
     }
 

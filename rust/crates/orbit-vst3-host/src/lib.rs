@@ -781,36 +781,36 @@ pub struct Vst3InstrumentProcessor {
     last_process_error: std::cell::Cell<i32>,
 }
 
-impl Vst3InstrumentProcessor {
-    /// #540 P2: 保存済み state を復元して音色を選択する。`.vstpreset` container（magic
-    /// `VST3`）と raw component state chunk の両方を受ける。`load()` 完了後・process 開始前
-    /// （child では READY publish 前）に呼ぶこと。失敗はハードエラー — 音色が復元できて
-    /// いないのに default 音で鳴らすのは「保存した音で鳴る」という契約違反のため、
-    /// 呼び出し側（child）はロード失敗として表面化させる。
-    pub fn apply_state(&mut self, bytes: &[u8]) -> Result<(), Vst3HostError> {
-        let component = self
-            .component
-            .as_ref()
-            .ok_or_else(|| Vst3HostError::State("component already shut down".into()))?;
-        let owned_raw;
-        let chunks = match parse_vstpreset(bytes)? {
-            Some(chunks) => chunks,
-            None => {
-                // magic 無し = raw component state chunk（自前保存の生 dump 等）。
-                owned_raw = VstPresetChunks {
-                    component: bytes,
-                    controller: None,
-                };
-                owned_raw
-            }
-        };
-        apply_state_chunks(component, self.controller.as_ref(), &chunks)
-    }
+/// #540 P2: 保存済み state を component / controller へ復元する（`.vstpreset` container と
+/// raw component state chunk の両対応）。失敗はハードエラー — 音色が復元できていないのに
+/// default 音で鳴らすのは「保存した音で鳴る」という契約違反のため、呼び出し側は
+/// ロード失敗として表面化させる。
+fn apply_state_bytes(
+    component: &ComPtr<IComponent>,
+    controller: Option<&ComPtr<IEditController>>,
+    bytes: &[u8],
+) -> Result<(), Vst3HostError> {
+    let owned_raw;
+    let chunks = match parse_vstpreset(bytes)? {
+        Some(chunks) => chunks,
+        None => {
+            // magic 無し = raw component state chunk（自前保存の生 dump 等）。
+            owned_raw = VstPresetChunks {
+                component: bytes,
+                controller: None,
+            };
+            owned_raw
+        }
+    };
+    apply_state_chunks(component, controller, &chunks)
+}
 
+impl Vst3InstrumentProcessor {
     pub fn load(
         bundle_path: &Path,
         sample_rate: f64,
         max_samples_per_block: i32,
+        state: Option<&[u8]>,
     ) -> Result<(Self, LoadedVst3Info), Vst3HostError> {
         let library = LoadedLibrary::open(bundle_path)?;
         let factory = unsafe { library.get_factory()? };
@@ -894,6 +894,13 @@ impl Vst3InstrumentProcessor {
         let setup_result = unsafe { processor.setupProcessing(&mut setup) };
         if !is_ok(setup_result) {
             return Err(Vst3HostError::SetupProcessing(setup_result));
+        }
+        // #540 P2: 保存済み state の復元は **setActive(1) より前**に行う。VST3 の正準復元
+        // フローは「setup 済み・inactive の component へ setState」で、activate 後の適用は
+        // 「実行中の preset 差し替え」意味論になり、サンプルマップ等の構造的 state を持つ
+        // 音源（Kontakt 等）で挙動差が出得る（#542 レビュー F7）。
+        if let Some(bytes) = state {
+            apply_state_bytes(&component, controller_handshake.controller.as_ref(), bytes)?;
         }
         let active_result = unsafe { component.setActive(1) };
         if !is_ok(active_result) {

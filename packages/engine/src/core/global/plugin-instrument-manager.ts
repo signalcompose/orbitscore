@@ -82,10 +82,14 @@ export class PluginInstrumentManager {
     // （/simplify reuse レビューが検出した実バグ）。
     try {
       return resolvePathDirect(statePath, [], this.audioManager.getDocumentDirectory())
-    } catch {
+    } catch (err) {
+      // 原因を本文に連結する（#542 レビュー: broad catch が resolvePathDirect の別の throw
+      // 理由を「no document directory」と誤ラベルしたまま原因を失わないため。`{ cause }` は
+      // tsconfig の lib が ES2022.Error を含まないため使わない）。
+      const cause = err instanceof Error ? ` (cause: ${err.message})` : ''
       throw new Error(
         `instrument state path '${statePath}' is relative, but no document directory is set; ` +
-          'use an absolute path or evaluate from a saved document.',
+          `use an absolute path or evaluate from a saved document.${cause}`,
       )
     }
   }

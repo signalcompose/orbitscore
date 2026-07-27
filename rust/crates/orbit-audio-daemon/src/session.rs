@@ -154,7 +154,8 @@ fn parse_optional_nonempty_string_param(
 ) -> Result<Option<String>, String> {
     match params.get(field) {
         None => Ok(None),
-        Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+        // trim 判定は `parse_bus_param` と対称（空白のみの値を「非空」として通さない）。
+        Some(Value::String(s)) if !s.trim().is_empty() => Ok(Some(s.clone())),
         Some(Value::String(_)) => Err(format!("'{field}' must be a non-empty string")),
         Some(_) => Err(format!("'{field}' must be a string")),
     }
@@ -1008,10 +1009,23 @@ async fn handle_command(
                         return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
                     }
                 };
-                // instrument-only build の `load_outproc_plugin` は単数互換経路のため
-                // instance / state を使わない（validation は上で済んでいる）。
+                // instrument-only build（テスト用構成）は単数互換経路しか持たない。ビルド構成
+                // パリティ方針（#542 レビュー）: 尊重できない param を検証後に黙って捨てて
+                // `ok` を返さない — この構成が扱えない要求は明示エラーで断る（TS 層は常に
+                // instance を送るため、silent 縮退は「2台目が黙って1台に合流」として現れる）。
                 #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-                let _ = (&instance, &state_path);
+                if instance.is_some() || state_path.is_some() {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "OUTPROC_INSTRUMENT_UNAVAILABLE",
+                            "this daemon build (outproc-instrument only) supports a single \
+                             instrument instance and no state restore; rebuild with \
+                             --features outproc-effect,outproc-instrument for per-sequence \
+                             instances (LoadPlugin instance/state_path)",
+                        ),
+                    );
+                }
                 #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
                 let params_role = params
                     .get("role")
@@ -1576,6 +1590,50 @@ mod tests {
         assert!(!bus_param_invalid_for_instrument_role(
             &json!({"role": "effect", "bus": "fx1"})
         ));
+    }
+
+    // #540 P1/P2（#542 レビュー test-gap）: instrument 専用 param の role 誤用判定を pin
+    // （bus_param_invalid_for_instrument_role の対称テスト）。
+    #[cfg(feature = "outproc-instrument")]
+    #[test]
+    fn instrument_only_param_misused_flags_only_the_combination() {
+        for field in ["instance", "state_path"] {
+            assert!(
+                instrument_only_param_misused(&json!({"role": "effect", field: "x"}), field),
+                "'{field}' on role=effect must be flagged"
+            );
+            assert!(
+                !instrument_only_param_misused(&json!({"role": "instrument", field: "x"}), field),
+                "'{field}' on role=instrument is the valid combination"
+            );
+            assert!(
+                !instrument_only_param_misused(&json!({"role": "effect"}), field),
+                "absent '{field}' must not be flagged"
+            );
+        }
+    }
+
+    // #540 P1/P2（#542 レビュー test-gap）: 任意・非空文字列 param パーサの境界を pin。
+    // 空文字列・空白のみ（parse_bus_param と対称の trim 判定）・非文字列は Err、欠如は Ok(None)。
+    #[test]
+    fn parse_optional_nonempty_string_param_boundaries() {
+        for field in ["instance", "state_path"] {
+            assert_eq!(
+                parse_optional_nonempty_string_param(&json!({}), field),
+                Ok(None),
+                "absent '{field}' is Ok(None) (single-instrument compat)"
+            );
+            assert_eq!(
+                parse_optional_nonempty_string_param(&json!({field: "plugin:kick"}), field),
+                Ok(Some("plugin:kick".to_string()))
+            );
+            assert!(parse_optional_nonempty_string_param(&json!({field: ""}), field).is_err());
+            assert!(
+                parse_optional_nonempty_string_param(&json!({field: "  "}), field).is_err(),
+                "whitespace-only '{field}' must be rejected (trim parity with parse_bus_param)"
+            );
+            assert!(parse_optional_nonempty_string_param(&json!({field: 7}), field).is_err());
+        }
     }
 
     // LinkAudio エラーの protocol code 分割を pin（TS は UNAVAILABLE のみ握り潰し RUNTIME は rethrow）。
