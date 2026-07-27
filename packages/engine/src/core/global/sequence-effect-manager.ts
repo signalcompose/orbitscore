@@ -117,8 +117,22 @@ export class SequenceEffectManager {
       if (!hadBus) {
         // この呼び出しで新規に確保した bus の load 失敗: free-list へ返す（daemon 側も
         // activation を巻き戻すため、両側の状態が対称に戻る）。
-        this.buses.delete(sequenceName)
-        this.pool.release(bus)
+        //
+        // ただし直列化キュー（#527 review Important 1）が生んだ新しい成功経路がある:
+        // 同一 sequenceName への `effect()` を await せず連打すると、後続呼び出しは
+        // 「hadBus === true」（この呼び出しが確保した bus を同期的に見て再利用）で
+        // pending キューに並ぶ。この呼び出しの declare() が失敗しても、後続はキューの
+        // 順番で独立に再試行し、成功すればこの bus に生きた宣言を持つ。`!hadBus` の
+        // 時点の判定はもう有効ではない — キューがまだ流れている最中に同期的に
+        // `has()` を見ると、後続の `declareBody()` がまだ走っていない可能性がある
+        // タイミングを掴んで「誰も使っていない」と誤判定しうる（#527 review round 3）。
+        // `slots.settled()` でこの key へのキューが完全に片付くのを待ってから、
+        // 真に誰も宣言を持っていない場合だけ解放する。
+        await this.slots.settled(sequenceName)
+        if (!this.slots.has(sequenceName)) {
+          this.buses.delete(sequenceName)
+          this.pool.release(bus)
+        }
       }
       // 既存 bus（passthrough 昇格 / self-heal 再ロード）の失敗は bus を返却しない —
       // seq.output()/seq.send() の routing がその bus を参照し続けているため。

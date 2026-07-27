@@ -56,9 +56,9 @@ export type PluginInstanceId = string
 interface PluginSlotBase {
   readonly instanceId: PluginInstanceId
   readonly normalizedName: string
-  resolvedPath: string
-  pluginId?: string
-  load: Promise<void>
+  readonly resolvedPath: string
+  readonly pluginId?: string
+  readonly load: Promise<void>
 }
 
 export interface EffectSlot extends PluginSlotBase {
@@ -120,14 +120,27 @@ export class EffectChainMap<K> {
     return (this.chains.get(key)?.length ?? 0) > 0
   }
 
-  /** `key` の現在のチェーンのスナップショット（S4/#522 Rust プロトコル拡張が読む想定の参照専用アクセサ）。 */
   /**
-   * 観測用の参照専用ビュー。**コピーを返す** — `readonly` はコンパイル時の保護でしかなく、
-   * 内部配列そのものを渡すと `as any` 経由の mutate で登記が壊れる。S4/#522 の Rust
+   * 観測用の参照専用ビュー。**コピーを返す** — `readonly` 配列型はコンパイル時の保護でしかなく、
+   * 内部配列そのものを渡すと `as any` 経由の mutate で登記が壊れる（要素の各フィールドも
+   * `PluginSlotBase` 側で `readonly` 化済み — #527 review round 3 Minor）。S4/#522 の Rust
    * プロトコル拡張がここを消費し始めるため、その前に閉じておく。
    */
   chainFor(key: K): readonly PluginSlot[] {
     return [...(this.chains.get(key) ?? [])]
+  }
+
+  /**
+   * `key` への現在キューされている `declare()` 呼び出しがすべて決着するまで待つ
+   * （#527 review round 3）。呼び出し元が「自分の宣言が失敗した後、外部管理のリソース
+   * （bus 等）を解放してよいか」を `has()` で判定する場合、**この await を経てから**
+   * 判定すること — 直列化キューの後続 `declareBody()` がまだ走っていない可能性がある
+   * 状態で `has()` を見ると、後続が成功して chain を埋める直前のタイミングを掴んで
+   * 誤って「誰も使っていない」と判定しうる（呼び出し元の catch ブロックから同期的に
+   * `has()` を見るだけでは、キューの残り段数分だけ判定が早すぎることがある）。
+   */
+  async settled(key: K): Promise<void> {
+    await (this.pending.get(key) ?? Promise.resolve())
   }
 
   /**
