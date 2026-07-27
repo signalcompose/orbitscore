@@ -276,8 +276,8 @@ fn main() -> Result<()> {
     // 復元できていないのに default 音のまま READY を出すと「保存した音で鳴る」契約が
     // 黙って破れる（attach 失敗として daemon 側に表面化させる）。
     if let Some(state_path) = &args.state {
-        let bytes = std::fs::read(state_path)
-            .with_context(|| format!("read state file {state_path:?}"))?;
+        let bytes =
+            std::fs::read(state_path).with_context(|| format!("read state file {state_path:?}"))?;
         instrument
             .apply_state(&bytes)
             .with_context(|| format!("apply state {state_path:?} to {:?}", args.plugin))?;

@@ -167,7 +167,12 @@ fn two_instrument_instances_sound_independently() {
 
     // A だけに note-on → A の probe が立ち、B は 0 のまま（宛先分離の実機証明）。
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, Some("plugin:a".into()))
+        .plugin_note_on(
+            PROBE_NOTE_KEY,
+            PROBE_NOTE_CHANNEL,
+            0.8,
+            Some("plugin:a".into()),
+        )
         .expect("note on to instance a");
     let a_live = wait_until(Duration::from_secs(3), || {
         engine
@@ -180,7 +185,12 @@ fn two_instrument_instances_sound_independently() {
         .expect("instance b stats");
     // B にも note-on → 両方が同時に鳴る。
     engine
-        .plugin_note_on(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.8, Some("plugin:b".into()))
+        .plugin_note_on(
+            PROBE_NOTE_KEY,
+            PROBE_NOTE_CHANNEL,
+            0.8,
+            Some("plugin:b".into()),
+        )
         .expect("note on to instance b");
     let b_live = wait_until(Duration::from_secs(3), || {
         engine
@@ -190,10 +200,20 @@ fn two_instrument_instances_sound_independently() {
     });
 
     engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, Some("plugin:a".into()))
+        .plugin_note_off(
+            PROBE_NOTE_KEY,
+            PROBE_NOTE_CHANNEL,
+            0.0,
+            Some("plugin:a".into()),
+        )
         .expect("note off to instance a");
     engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, Some("plugin:b".into()))
+        .plugin_note_off(
+            PROBE_NOTE_KEY,
+            PROBE_NOTE_CHANNEL,
+            0.0,
+            Some("plugin:b".into()),
+        )
         .expect("note off to instance b");
     let both_released = wait_until(Duration::from_secs(3), || {
         let a = engine.outproc_instrument_stats_for("plugin:a");
@@ -222,7 +242,10 @@ fn two_instrument_instances_sound_independently() {
         "instance b must stay silent while only a has a note (destination isolation)"
     );
     assert!(b_live, "instance b must sound after its note-on");
-    assert!(both_released, "both instances must release their probe voice");
+    assert!(
+        both_released,
+        "both instances must release their probe voice"
+    );
     assert!(!a.measurement_invalid, "instance a measurement invalid");
     assert!(!b.measurement_invalid, "instance b measurement invalid");
 }

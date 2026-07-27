@@ -2444,7 +2444,10 @@ impl EngineWrap {
             })?;
             // #540 P1: instance 引数の無いこの経路は互換の "default" instance = slot 0。
             // note 側の instance 解決（instance_index lookup）が通るよう登録しておく。
-            control.instance_index.entry("default".to_string()).or_insert(0);
+            control
+                .instance_index
+                .entry("default".to_string())
+                .or_insert(0);
             control
                 .slots
                 .first()
@@ -2456,9 +2459,11 @@ impl EngineWrap {
                 })?
         };
         #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-        return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id, None);
+        return self
+            .load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id, None);
         #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-        return self.load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id, None);
+        return self
+            .load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id, None);
     }
 
     /// both build で effect slot へ attach する。
@@ -2508,7 +2513,8 @@ impl EngineWrap {
                 bus_active,
             )
         };
-        let result = self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id, None);
+        let result =
+            self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id, None);
         if result.is_err() {
             // ロールバック: 失敗した宣言の bus を render 対象から外す（TS 側も宣言を破棄して
             // bus 名を free-list に返すため、Rust/TS の状態が対称に戻る）。
@@ -2679,12 +2685,9 @@ impl EngineWrap {
                     next
                 }
             };
-            control.slots[index]
-                .child_slot
-                .upgrade()
-                .ok_or_else(|| {
-                    WrapError::OutProcInstrument("outproc instrument stream is closed".into())
-                })?
+            control.slots[index].child_slot.upgrade().ok_or_else(|| {
+                WrapError::OutProcInstrument("outproc instrument stream is closed".into())
+            })?
         };
         self.load_outproc_plugin_impl::<InstrumentRole>(slot, path, plugin_id, state)
     }
@@ -2707,7 +2710,8 @@ impl EngineWrap {
                 state: active_state,
                 engaged,
                 ..
-            } if active_path == &path && active_plugin_id == &plugin_id
+            } if active_path == &path
+                && active_plugin_id == &plugin_id
                 && active_state == &state =>
             {
                 // READY を確認済みの Active だけがここへ来る。冪等再送でも gate を維持する。
@@ -2797,20 +2801,20 @@ impl EngineWrap {
         // spawn 前にセットしておくことで、即座に終了する child が通常の respawn 経路に紛れ込むのを防ぐ。
         R::set_initial_attach_pending(&launch.stats, true);
         R::set_child_early_exit(&launch.stats, false);
-        let first_child = match R::spawn_child(&launch, &path, plugin_id.as_deref(), state.as_deref())
-        {
-            Ok(child) => child,
-            Err(error) => {
-                let child_exe = launch.child_exe.clone();
-                let mut slot = lock_child_slot_recovering(&child_slot, "child spawn failure");
-                debug_assert_slot_loading(&slot);
-                *slot = ChildSlot::Empty(launch);
-                return Err(R::runtime_error(format!(
-                    "spawn outproc child {:?}: {error}",
-                    child_exe
-                )));
-            }
-        };
+        let first_child =
+            match R::spawn_child(&launch, &path, plugin_id.as_deref(), state.as_deref()) {
+                Ok(child) => child,
+                Err(error) => {
+                    let child_exe = launch.child_exe.clone();
+                    let mut slot = lock_child_slot_recovering(&child_slot, "child spawn failure");
+                    debug_assert_slot_loading(&slot);
+                    *slot = ChildSlot::Empty(launch);
+                    return Err(R::runtime_error(format!(
+                        "spawn outproc child {:?}: {error}",
+                        child_exe
+                    )));
+                }
+            };
         R::set_current_child_pid(&launch.stats, first_child.id());
 
         let supervisor = match R::spawn_supervisor(
@@ -4821,7 +4825,12 @@ mod outproc_load_error_test_support {
         let (wrap, child_slot) = inject(ChildSlot::Empty(launch), stats);
 
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None, None)
+            .load_outproc_plugin_impl::<R>(
+                child_slot.clone(),
+                PathBuf::from(plugin_path),
+                None,
+                None,
+            )
             .err()
             .expect("missing shared memory must fail before spawn");
 
@@ -4895,7 +4904,12 @@ mod outproc_load_error_test_support {
 
         for attempt in 1..=2 {
             let error = wrap
-                .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None, None)
+                .load_outproc_plugin_impl::<R>(
+                    child_slot.clone(),
+                    PathBuf::from(plugin_path),
+                    None,
+                    None,
+                )
                 .err()
                 .expect("nonexistent child executable must fail to spawn");
             assert_error(error, "spawn outproc child");
@@ -4917,7 +4931,12 @@ mod outproc_load_error_test_support {
         let (wrap, child_slot) = inject(ChildSlot::Closed, R::new_stats());
 
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(plugin_path), None, None)
+            .load_outproc_plugin_impl::<R>(
+                child_slot.clone(),
+                PathBuf::from(plugin_path),
+                None,
+                None,
+            )
             .err()
             .expect("Closed slot must reject attach");
 
@@ -4942,7 +4961,12 @@ mod outproc_load_error_test_support {
         );
 
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(second_path), None, None)
+            .load_outproc_plugin_impl::<R>(
+                child_slot.clone(),
+                PathBuf::from(second_path),
+                None,
+                None,
+            )
             .err()
             .expect("Loading slot must reject concurrent attach");
 
@@ -4978,8 +5002,9 @@ mod outproc_load_error_test_support {
             .expect("spawn stub child for Active fixture");
 
         let path = PathBuf::from(plugin_path);
-        let supervisor = R::spawn_supervisor(first_child, &launch, path.clone(), plugin_id.clone(), None)
-            .expect("spawn supervisor for Active fixture");
+        let supervisor =
+            R::spawn_supervisor(first_child, &launch, path.clone(), plugin_id.clone(), None)
+                .expect("spawn supervisor for Active fixture");
         launch.cleanup_shm_on_drop = false;
 
         ChildSlot::Active {
@@ -5064,7 +5089,12 @@ mod outproc_load_error_test_support {
         let (wrap, child_slot) = inject(slot, R::new_stats());
 
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(other_path), None, None)
+            .load_outproc_plugin_impl::<R>(
+                child_slot.clone(),
+                PathBuf::from(other_path),
+                None,
+                None,
+            )
             .err()
             .expect("a different path while Active must be rejected");
         assert_error(error, "does not support replacement");
@@ -5264,7 +5294,12 @@ mod outproc_load_error_test_support {
         // 発行し、mutex 待ちでなく即座に "already in progress" で失敗することを検証する。
         let start = std::time::Instant::now();
         let error = wrap
-            .load_outproc_plugin_impl::<R>(child_slot.clone(), PathBuf::from(second_path), None, None)
+            .load_outproc_plugin_impl::<R>(
+                child_slot.clone(),
+                PathBuf::from(second_path),
+                None,
+                None,
+            )
             .err()
             .expect("concurrent call against a Loading slot must fail");
         let elapsed = start.elapsed();
@@ -6040,8 +6075,10 @@ mod outproc_instrument_note_tests {
     #[test]
     fn plugin_notes_are_converted_to_neutral_events_on_control_side() {
         let (wrap, mut event_rx) = wrap_with_note_consumer(4);
-        wrap.plugin_note_on(60, 3, 0.75, None).expect("send note on");
-        wrap.plugin_note_off(61, 4, 0.25, None).expect("send note off");
+        wrap.plugin_note_on(60, 3, 0.75, None)
+            .expect("send note on");
+        wrap.plugin_note_off(61, 4, 0.25, None)
+            .expect("send note off");
 
         let expected_addr = |channel, key| VoiceAddr {
             note_id: -1,
@@ -6119,12 +6156,18 @@ mod outproc_instrument_note_tests {
             Ok(NeutralEvent::NoteOn { addr, .. }) => assert_eq!(addr.key, 60),
             other => panic!("expected NoteOn(60) in lead slot ring, got {other:?}"),
         }
-        assert!(rx_b.pop().is_err(), "lead slot must receive exactly 1 event");
+        assert!(
+            rx_b.pop().is_err(),
+            "lead slot must receive exactly 1 event"
+        );
         match rx_a.pop() {
             Ok(NeutralEvent::NoteOn { addr, .. }) => assert_eq!(addr.key, 61),
             other => panic!("expected NoteOn(61) in kick slot ring, got {other:?}"),
         }
-        assert!(rx_a.pop().is_err(), "kick slot must receive exactly 1 event");
+        assert!(
+            rx_a.pop().is_err(),
+            "kick slot must receive exactly 1 event"
+        );
     }
 
     // #540 P1: 未割当 instance への note は「ロード前」と同義の明示エラー（黙って slot 0 に

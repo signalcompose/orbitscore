@@ -1171,8 +1171,8 @@ fn parse_vstpreset(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, Vst3Host
             .ok_or_else(|| malformed("integer field out of bounds"))?;
         Ok(i64::from_le_bytes(bytes[offset..end].try_into().unwrap()))
     };
-    let list_offset = usize::try_from(read_i64(40)?)
-        .map_err(|_| malformed("negative chunk-list offset"))?;
+    let list_offset =
+        usize::try_from(read_i64(40)?).map_err(|_| malformed("negative chunk-list offset"))?;
     let list_end = list_offset
         .checked_add(8)
         .filter(|&end| end <= bytes.len())
@@ -1193,8 +1193,8 @@ fn parse_vstpreset(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, Vst3Host
         let id = &bytes[entry..entry + 4];
         let offset = usize::try_from(read_i64(entry + 4)?)
             .map_err(|_| malformed("negative chunk offset"))?;
-        let size = usize::try_from(read_i64(entry + 12)?)
-            .map_err(|_| malformed("negative chunk size"))?;
+        let size =
+            usize::try_from(read_i64(entry + 12)?).map_err(|_| malformed("negative chunk size"))?;
         let end = offset
             .checked_add(size)
             .filter(|&end| end <= bytes.len())
@@ -2370,8 +2370,7 @@ mod tests {
             out.extend_from_slice(&offset.to_le_bytes());
             out.extend_from_slice(&size.to_le_bytes());
         }
-        out[list_offset_field..list_offset_field + 8]
-            .copy_from_slice(&list_offset.to_le_bytes());
+        out[list_offset_field..list_offset_field + 8].copy_from_slice(&list_offset.to_le_bytes());
         out
     }
 
