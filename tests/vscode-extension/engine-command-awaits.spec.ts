@@ -13,7 +13,7 @@ let ext: typeof import('../../packages/vscode-extension/src/extension')
 let vscode: typeof import('vscode')
 let vscodeMock: typeof import('../mocks/vscode')
 
-function fakeSpawnedProcess(): ChildProcess {
+function fakeSpawnedProcess(stdinWritable = false): ChildProcess {
   const proc: Partial<ChildProcess> = {
     killed: false,
     kill: (() => {
@@ -23,7 +23,11 @@ function fakeSpawnedProcess(): ChildProcess {
     on: (() => proc) as ChildProcess['on'],
     stdout: { on: () => {} } as unknown as ChildProcess['stdout'],
     stderr: { on: () => {} } as unknown as ChildProcess['stderr'],
-    stdin: { on: () => {} } as unknown as ChildProcess['stdin'],
+    stdin: {
+      on: () => {},
+      writable: stdinWritable,
+      write: () => true,
+    } as unknown as ChildProcess['stdin'],
   }
   return proc as ChildProcess
 }
@@ -37,6 +41,57 @@ function handler(command: string): (...args: unknown[]) => unknown {
   const registered = vscodeMock.registeredCommandHandlers.get(command)
   expect(registered, `${command} was not registered`).toBeDefined()
   return registered!
+}
+
+async function expectSelectDeviceRestartFailure(
+  bridgeResult: { ok: false; error: string } | undefined,
+  expectedBranchLine: string,
+  restartFailure: string,
+): Promise<void> {
+  vi.useFakeTimers()
+  await activateForCommands()
+  ext.__setEngineProcessForTest(fakeSpawnedProcess(bridgeResult !== undefined))
+  const appendedLines: string[] = []
+  ext.__setOutputChannelForTest({
+    appendLine: (value: string) => appendedLines.push(value),
+    append: () => {},
+  })
+  const warning = vi.spyOn(vscode.window, 'showWarningMessage').mockResolvedValue('Restart Engine')
+
+  const commandPromise = handler('orbitscore.engineViewSelectDevice')({
+    id: 'device:Test Device',
+    kind: 'device',
+    label: 'Test Device',
+    collapsible: false,
+  }) as Promise<void>
+  if (bridgeResult) {
+    const bridge = ext.__getDeviceSwitchBridgeForTest()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(bridge.pendingCount).toBe(1)
+    expect(bridge.handleLine(JSON.stringify({ selectAudioDevice: bridgeResult }))).toBe(true)
+  }
+  await commandPromise
+
+  expect(
+    warning.mock.calls.some(([message, choice]) => {
+      return String(message).includes(expectedBranchLine) && choice === 'Restart Engine'
+    }),
+  ).toBe(true)
+
+  ext.__setEngineViewProviderForTest({
+    refresh: () => {
+      throw new Error(restartFailure)
+    },
+  })
+  await vi.advanceTimersByTimeAsync(2200)
+
+  expect(
+    appendedLines.some(
+      (line) =>
+        line.includes('internal error in engineViewSelectDevice') && line.includes(restartFailure),
+    ),
+    appendedLines.join('\n'),
+  ).toBe(true)
 }
 
 describe('registered command startEngine awaits', () => {
@@ -129,6 +184,36 @@ describe('registered command startEngine awaits', () => {
     expect(warning).toHaveBeenCalled()
   })
 
+  it('engineViewSelectDevice unavailable recovery logs its rejected restart', async () => {
+    await expectSelectDeviceRestartFailure(
+      {
+        ok: false,
+        error: 'AUDIO_DEVICE_SWITCH_UNAVAILABLE: recording is active',
+      },
+      '録音中は切替できません',
+      'unavailable recovery restart failed',
+    )
+  })
+
+  it('engineViewSelectDevice failed-result recovery logs its rejected restart', async () => {
+    await expectSelectDeviceRestartFailure(
+      {
+        ok: false,
+        error: 'requested device disappeared',
+      },
+      'live device switch failed: requested device disappeared',
+      'failed-result recovery restart failed',
+    )
+  })
+
+  it('engineViewSelectDevice bridge-exception recovery logs its rejected restart', async () => {
+    await expectSelectDeviceRestartFailure(
+      undefined,
+      'live device switch bridge error: engine stdin is not writable',
+      'bridge-exception recovery restart failed',
+    )
+  })
+
   it('engineViewToggleDebug timeout routes a rejected startEngine through logHandlerFailure', async () => {
     vi.useFakeTimers()
     await activateForCommands()
@@ -142,11 +227,19 @@ describe('registered command startEngine awaits', () => {
     vi.spyOn(vscode.window, 'showInformationMessage').mockResolvedValue('Restart Engine')
 
     await handler('orbitscore.engineViewToggleDebug')()
-    ext.__setStatusBarItemForTest(null)
+    const restartFailure = 'toggle-debug recovery restart failed'
+    ext.__setEngineViewProviderForTest({
+      refresh: () => {
+        throw new Error(restartFailure)
+      },
+    })
     await vi.advanceTimersByTimeAsync(2200)
 
     expect(
-      appendedLines.some((line) => line.includes('internal error in engineViewToggleDebug')),
+      appendedLines.some(
+        (line) =>
+          line.includes('internal error in engineViewToggleDebug') && line.includes(restartFailure),
+      ),
     ).toBe(true)
   })
 })
