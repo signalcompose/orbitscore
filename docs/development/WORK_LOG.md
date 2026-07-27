@@ -41,7 +41,7 @@ DAW ループ受け入れ基準）/ #543（ハーネス）/ #474（UI hosting・
 ### 6.305 feat(engine): plugin state restore = sound selection #540 P2 (Jul 28, 2026)
 
 **Date**: 2026-07-28
-**Status**: ✅ **PR #542 MERGED**（main `58e16bc`・2026-07-28・#540 CLOSED）
+**Status**: ✅ **PR #542 MERGED**（main `58e16bc`・2026-07-28・#540 CLOSED）。実機 E2E PASS 済み（実 Kontakt + 実 state での音色確認は #546 Phase 3 の受け入れ E2E で実施）
 
 **内容**: `seq.instrument(path[, pluginId][, statePath])` で保存済みプラグイン state
 （`.vstpreset` / raw chunk）を復元し**音色を選択**できるようにする。UI なしで音色問題を解く
@@ -68,7 +68,7 @@ DAW ループ受け入れ基準）/ #543（ハーネス）/ #474（UI hosting・
 - **変異検証**: (C) Comp チャンク不採取 → 2件 red / (D) chunk 境界チェック除去 → 1件 red。復元後全緑
 - TS フルスイート **1728 passed / 29 skipped**（+5: state 解決・identity・ヒューリスティック）
 
-**Commit**: [PENDING]
+**Commit**: `d2bb780`
 
 ### 6.304 feat(engine): per-sequence instrument instances #540 P1 (Jul 28, 2026)
 
@@ -100,7 +100,7 @@ instance キー化（`pluginKey()`）。
 - **変異検証**: (A) instance 無視・常に slot 0 → 3件 red / (B) 枯渇チェック除去 → 1件 red。復元後全緑
 - TS フルスイート **1723 passed / 29 skipped**（+1。IAC 保護対象 sequence-midi-dispatch 13件は無傷で全緑）
 
-**Commit**: [PENDING]
+**Commit**: `1dae696`
 
 ### 6.303 chore(test): vitest を単一バージョンに統一 #531 (Jul 27, 2026)
 

@@ -10,8 +10,10 @@ owner 確定（2026-07-28・#543）。DSL の E2E テストは本仕様に従う
 
 ## 1. 仕様書駆動
 
-- 網羅の台帳 = [`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md)
-  （単一信頼情報源）の**規範セクション ID**（P.1, PH.4, MX.3, SC.5 …）
+- 網羅の台帳 = **規範セクション ID**。対象は
+  [`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md)
+  （単一信頼情報源・P.1 / PH.4 / MX.3 等）**および `specs-v2/` 配下の関連仕様**
+  （SIGNAL_CHAIN_DSL_SPEC の SC.5 等 — DSL 表面を規定する仕様はすべて台帳に含める）
 - fixture は**仕様セクション ID を名前に持つ最小 `.orbs`**（例 `P.3-range-sticky.orbs`）
 - マニフェスト（構文 ID → fixture → 期待観測）による table-driven 実行
 
@@ -64,7 +66,7 @@ owner 確定（2026-07-28・#543）。DSL の E2E テストは本仕様に従う
 3. **変異スイープの自動定期ジョブ化** — 代表変異（分岐反転・呼び出し回数・順序・引数差し替え）を
    機械適用し、**殺せない変異の増加 = assert の弱体化**を CI で検出する
 
-## 7. テスト資産の機械生成（人間製成果物の禁止）
+## 7. テスト資産の機械生成（人間製成果物への依存禁止）
 
 - fixture・期待値・state はすべて機械が生成する
 - state 復元の E2E は実プラグインや人間保存の state を使わない。**oracle synth に意味のある
