@@ -17,10 +17,48 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
+### 6.308 fix(build): bundle orbit-vst3-effect-child #548 (Jul 28, 2026)
 
 **Date**: 2026-07-28
 **Status**: 🔄 PR 準備中
+
+**実害**: 出荷された OrbitStudio で VST3 エフェクトを使うと child の spawn が失敗していた。
+daemon は `ORBIT_EFFECT_FORMAT=vst3` のとき `orbit-vst3-effect-child` を spawn しようとする
+（`outproc_effect.rs:84`・既定パスは daemon と同一ディレクトリ）のに、`copy-daemon-bin.sh` の
+再ビルド一覧にも copy 一覧にも含まれていなかった。
+
+**実機で再現・修正を確認**:
+
+```
+修正前: ERROR: Failed to load plugin: [OUTPROC_EFFECT_RUNTIME] spawn outproc child
+        ".../orbit-vst3-effect-child": No such file or directory (os error 2)
+修正後: 52012 .../engine/bin/darwin-arm64/orbit-vst3-effect-child
+        --plugin /Library/Audio/Plug-Ins/VST3/Tape Echo v6.vst3 ...
+```
+
+**なぜ既存テストで検出できなかったか**: gated テスト（`outproc_effect_vst3_gated.rs:28`）は
+自前で `cargo build -p orbit-vst3-effect-child` してから走るため、**バンドル経路を通らない**。
+ソースツリーを見るテストでは同じ穴が再発する。
+
+**修正**:
+1. `scripts/copy-daemon-bin.sh` の cargo 再ビルド一覧と `copy_binary` 一覧の両方に追加
+2. **二重台帳の回帰テスト**（`tests/vscode-extension/bundled-child-binaries.spec.ts`）:
+   台帳A = daemon Rust ソース中の child 名リテラル / 台帳B = コピー対象 + バンドル実体。
+   A ⊆ B を検査するので、**daemon に format を足すと自動的に要求が増える**
+
+**変異検証（5種・すべて red を確認）**: ①`copy_binary` 削除（元のバグ再現）②`cargo -p` 削除
+（stale コピー・#487 再発）③バンドル実体のみ削除 ④daemon literal のリネーム ⑤抽出パターン破壊。
+
+> **④で初版テストの欠陥が発覚**: `orbit-[a-z0-9-]+-child` と綴りを決め打ちしていたため、
+> リネームすると**台帳Aが黙って縮んで pass** していた（silent partial coverage）。
+> 綴り非依存のパターンに変え、**モジュールごとの抽出件数**を検査するよう修正した。
+
+**検証**: 全スイート 1738 passed（+3）/ ビルド + 実機 MCP E2E で child の実起動を確認。
+
+### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: ✅ **PR #550 MERGED**（main `cab5c85`・2026-07-28・#547 CLOSED）
 
 **内容**: Epic #546 Phase 0（設計確定）の成果物を spec として正本化。owner が5論点を承認し、
 **プラグイン形式に依存しない UX** が中核制約として追加されたことを受けた設計。
