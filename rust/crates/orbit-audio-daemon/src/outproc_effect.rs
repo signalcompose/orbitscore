@@ -115,10 +115,15 @@ impl PluginFormat {
 /// - 冪等かつ対称: retryable な attach 失敗で `ChildLaunch` が再利用されても毎回この読み替えが
 ///   走るので、`.vst3` → `.clap` の attach し直しで元の child に戻る。
 pub(crate) fn child_exe_for_attach(current_child_exe: &Path, plugin_path: &Path) -> PathBuf {
-    let is_default_name = matches!(
-        current_child_exe.file_name().and_then(|name| name.to_str()),
-        Some("orbit-clap-effect-child") | Some("orbit-vst3-effect-child")
-    );
+    // 🔴 デフォルト名は `default_child_name()` から導出する（手打ちリテラルにしない）。
+    // 決め打ちだと child をリネームしたとき is_default_name が常に false になり、
+    // **per-plugin のフォーマット切替が無音のまま無効化される**（#552 が退行しても
+    // 古いリテラル前提のテストは気づけない）。
+    let current_name = current_child_exe.file_name().and_then(|name| name.to_str());
+    let is_default_name = current_name.is_some_and(|name| {
+        name == PluginFormat::Clap.default_child_name()
+            || name == PluginFormat::Vst3.default_child_name()
+    });
     if !is_default_name {
         return current_child_exe.to_path_buf();
     }
@@ -147,9 +152,19 @@ pub struct OutProcEffectConfig {
 
 impl OutProcEffectConfig {
     /// 環境変数から設定を組む（production `start()` 用）:
-    /// - `ORBIT_EFFECT_FORMAT`: `clap` | `vst3`（省略時 `clap`）。
+    /// - `ORBIT_EFFECT_FORMAT`: `clap` | `vst3`（省略時 `clap`）。**初期値のみ**。
     /// - `ORBIT_EFFECT_CHILD_BIN`: child binary path（省略時は daemon exe と同一ディレクトリの
     ///   format 対応 child）。
+    ///
+    /// **🔴 #552: `ORBIT_EFFECT_FORMAT` は post-boot attach の child 選択を決めない。**
+    /// `LoadPlugin` はあらゆる経路で `select_child_exe` を通り、child exe がデフォルト名なら
+    /// **plugin パスの拡張子**で上書きされる（[`child_exe_for_attach`]）。したがってここで
+    /// 決まる `child_exe` は「最初の attach までの初期値」であり、実運用では即座に
+    /// 置き換わる。プラグイン形式を利用者に見せないための設計（CAP.6-1）。
+    ///
+    /// 既知の非対称（許容）: 無効値（例 `ORBIT_EFFECT_FORMAT=nonsense`）は起動時エラーで
+    /// daemon を落とすが、有効値は実際の child 選択に影響しない。gated テストが初期 child を
+    /// 指定する用途で本 env を使っているため存置している。
     /// - `ORBIT_EFFECT_PLUGIN`: plugin bundle path（任意。post-boot attach は `LoadPlugin` で渡す）。
     /// - `ORBIT_EFFECT_PLUGIN_ID`: plugin id（任意）。
     pub fn from_env() -> Result<Self, String> {
@@ -408,7 +423,7 @@ pub fn spawn_effect_child(
 
 /// QUIT 済み（または crash した）child を bounded に reap する。timeout 超過で kill にフォールバック。
 /// `SandboxChildGuard` の reap と同じ意味論（非 RT・spin でなく yield）。
-fn reap(child: &mut Child) {
+fn reap(child: &mut Child, child_name: &str) {
     let deadline = Instant::now() + REAP_TIMEOUT;
     loop {
         match child.try_wait() {
@@ -416,7 +431,7 @@ fn reap(child: &mut Child) {
             Ok(None) if Instant::now() < deadline => std::thread::yield_now(),
             Ok(None) => {
                 tracing::warn!(
-                    "orbit-clap-effect-child が {REAP_TIMEOUT:?} 以内に終了せず kill にフォールバック"
+                    "{child_name} が {REAP_TIMEOUT:?} 以内に終了せず kill にフォールバック"
                 );
                 let _ = child.kill();
                 let _ = child.wait();
@@ -475,6 +490,13 @@ impl EffectChildSupervisor {
         let base = Instant::now();
         // respawn 用に closure へ move する shm_path（struct 側は unlink 用に原本を保持する）。
         let shm_path_wd = shm_path.clone();
+        // #552: VST3 / CLAP どちらの child かをログに出すため実際の名前を持ち込む
+        // （決め打ちだと VST3 child のクラッシュが CLAP child の障害に見える）。
+        let child_name_wd = child_exe
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("orbit-effect-child")
+            .to_owned();
         // first_child は **closure に直接 move しない**: thread spawn が失敗すると closure ごと drop され
         // first_child が orphan 化して shm を spin し続ける（`Child::drop` は kill しない）。thread spawn
         // 成功を確認してから channel で渡し、spawn 失敗時は first_child を本 scope に残して reap できるようにする。
@@ -528,12 +550,14 @@ impl EffectChildSupervisor {
                                         != orbit_audio_sandbox::transport::CHILD_STATUS_READY
                                 }
                             {
-                                tracing::warn!("orbit-clap-effect-child exited during initial attach ({status})");
+                                tracing::warn!(
+                                    "{child_name_wd} exited during initial attach ({status})"
+                                );
                                 stats.child_early_exit.store(true, Ordering::Release);
                                 break;
                             }
                             tracing::warn!(
-                                "orbit-clap-effect-child が異常終了（{status}）→ respawn する"
+                                "{child_name_wd} が異常終了（{status}）→ respawn する"
                             );
                             // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
                             // 前 incarnation の READY を消してから replacement を spawn する。
@@ -588,7 +612,7 @@ impl EffectChildSupervisor {
                 unsafe {
                     (*region).control.store(CONTROL_QUIT, Ordering::Release);
                 }
-                reap(&mut child);
+                reap(&mut child, &child_name_wd);
                 // ここで ctl_mmap が drop（thread 終了）。shm unlink は supervisor drop が join 後に行う。
             }) {
             Ok(handle) => handle,

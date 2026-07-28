@@ -1102,7 +1102,11 @@ pub(crate) trait OutProcRole: Sized {
     fn set_child_early_exit(stats: &Self::Stats, value: bool);
     fn child_early_exit(stats: &Self::Stats) -> bool;
     fn set_current_child_pid(stats: &Self::Stats, pid: u32);
-    /// Attach path で plugin format に依存する child を選び直す。effect は env 設定のまま。
+    /// Attach する plugin のパスから、その format に対応する child を選び直す。
+    ///
+    /// **#552 以降、effect と instrument の両 role が per-plugin 解決を行う**（利用者に
+    /// プラグイン形式を見せないため・CAP.6-1）。デフォルト名以外の child exe は明示指定と
+    /// 見なして保持する。詳細は各 role の `child_exe_for_attach` doc を参照。
     fn select_child_exe(
         launch: &mut ChildLaunch<Self>,
         path: &std::path::Path,

@@ -177,10 +177,14 @@ impl InstrumentPluginFormat {
 ///   `ChildLaunch` が再利用されても、毎回この読み替えが走るので .vst3 → .clap の
 ///   attach し直しで元の child に戻る（対称・冪等）。
 pub(crate) fn child_exe_for_attach(current_child_exe: &Path, plugin_path: &Path) -> PathBuf {
-    let is_default_name = matches!(
-        current_child_exe.file_name().and_then(|name| name.to_str()),
-        Some("orbit-clap-instrument-child") | Some("orbit-vst3-instrument-child")
-    );
+    // effect 側（`outproc_effect::child_exe_for_attach`）と対称: デフォルト名は
+    // `default_child_name()` から導出する。手打ちリテラルだとリネーム時に判定が常に
+    // false へ倒れ、フォーマット切替が無音で無効化される。
+    let current_name = current_child_exe.file_name().and_then(|name| name.to_str());
+    let is_default_name = current_name.is_some_and(|name| {
+        name == InstrumentPluginFormat::Clap.default_child_name()
+            || name == InstrumentPluginFormat::Vst3.default_child_name()
+    });
     if !is_default_name {
         return current_child_exe.to_path_buf();
     }
@@ -410,16 +414,14 @@ pub fn spawn_instrument_child(
     instrument_child_command(child_exe, shm_path, plugin, plugin_id, sample_rate, state).spawn()
 }
 
-fn reap(child: &mut Child) {
+fn reap(child: &mut Child, child_name: &str) {
     let deadline = Instant::now() + REAP_TIMEOUT;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => return,
             Ok(None) if Instant::now() < deadline => std::thread::yield_now(),
             Ok(None) => {
-                tracing::warn!(
-                    "orbit-clap-instrument-child did not exit within {REAP_TIMEOUT:?}; killing"
-                );
+                tracing::warn!("{child_name} did not exit within {REAP_TIMEOUT:?}; killing");
                 let _ = child.kill();
                 let _ = child.wait();
                 return;
@@ -477,6 +479,13 @@ impl InstrumentChildSupervisor {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_thread = shutdown.clone();
         let watchdog_shm_path = shm_path.clone();
+        // #552 と対称: VST3 / CLAP どちらの child かをログに出す（決め打ちだと VST3 child の
+        // クラッシュが CLAP child の障害に見える）。
+        let child_name_wd = child_exe
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("orbit-instrument-child")
+            .to_owned();
         let (child_tx, child_rx) = std::sync::mpsc::channel::<Child>();
 
         let watchdog = match std::thread::Builder::new()
@@ -539,13 +548,13 @@ impl InstrumentChildSupervisor {
                                         != orbit_audio_sandbox::transport::CHILD_STATUS_READY
                                 }
                             {
-                                tracing::warn!(plugin = ?plugin, "orbit-clap-instrument-child exited during initial attach ({status})");
+                                tracing::warn!(plugin = ?plugin, "{child_name_wd} exited during initial attach ({status})");
                                 stats.child_early_exit.store(true, Ordering::Release);
                                 break;
                             }
                             tracing::warn!(
                                 plugin = ?plugin,
-                                "orbit-clap-instrument-child exited ({status}); respawning"
+                                "{child_name_wd} exited ({status}); respawning"
                             );
                             // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
                             // 前 incarnation の READY を消してから replacement を spawn する。
@@ -597,7 +606,7 @@ impl InstrumentChildSupervisor {
                 unsafe {
                     (*region).control.store(CONTROL_QUIT, Ordering::Release);
                 }
-                reap(&mut child);
+                reap(&mut child, &child_name_wd);
             }) {
             Ok(handle) => handle,
             Err(error) => {

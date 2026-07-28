@@ -1,4 +1,6 @@
+import { execFileSync } from 'child_process'
 import * as fs from 'fs'
+import * as os from 'os'
 import * as path from 'path'
 
 import { describe, it, expect } from 'vitest'
@@ -98,6 +100,49 @@ function checkedByReleaseGate(workflow: string): string[] {
   return m[1].trim().split(/\s+/).sort()
 }
 
+/**
+ * `release.yml` の post-package gate（`for CHILD_BIN … done`）を **原文のまま抜き出す**。
+ *
+ * 台帳照合（テキスト）だけでは `exit 1` が消えても検出できない — 実際に走らせて
+ * 終了コードを見るための素材を取る。YAML の `run: |` ブロック内なので共通インデントを剥がす。
+ */
+function extractReleaseGateScript(workflow: string): string {
+  const start = workflow.indexOf('          for CHILD_BIN in')
+  if (start < 0) return ''
+  const endMarker = '\n          done\n'
+  const end = workflow.indexOf(endMarker, start)
+  if (end < 0) return ''
+  return workflow
+    .slice(start, end + endMarker.length)
+    .split('\n')
+    .map((line) => line.replace(/^ {10}/, ''))
+    .join('\n')
+}
+
+/** 抽出した gate を、与えたバイナリ集合を持つ一時 .vsix 展開ディレクトリに対して実行する。 */
+function runReleaseGate(gateScript: string, presentBinaries: string[]): number {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-gate-'))
+  try {
+    const binDir = path.join(root, 'extension/engine/bin/darwin-arm64')
+    fs.mkdirSync(binDir, { recursive: true })
+    for (const name of presentBinaries) {
+      const p = path.join(binDir, name)
+      fs.writeFileSync(p, '#!/bin/sh\nexit 0\n')
+      fs.chmodSync(p, 0o755)
+    }
+    try {
+      execFileSync('bash', ['-c', `set -euo pipefail\nVSIX_CHECK="${root}"\n${gateScript}`], {
+        stdio: 'pipe',
+      })
+      return 0
+    } catch (error) {
+      return (error as { status?: number }).status ?? -1
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
+
 describe('#548 bundled out-of-process child binaries', () => {
   it('daemon が spawn しうる child はすべて copy-daemon-bin.sh のコピー対象である', () => {
     const byModule = requiredChildBinariesByModule()
@@ -157,6 +202,32 @@ describe('#548 bundled out-of-process child binaries', () => {
       `post-package gate が出荷 .vsix で検査しない child: ${notGated.join(', ')} — ` +
         `copy_binary の行が将来削除されても検出できず、同じ実害が無警告で再出荷される`,
     ).toEqual([])
+  })
+
+  // 🔴 台帳照合（テキスト）だけでは `exit 1` が消えても検出できない — gate から
+  // `exit 1` を抜いてもリスト抽出結果は同一なので上のテストは green のままになる。
+  // **gate を実際に走らせて終了コードを見る**ことでしか、fail-loud は保証できない。
+  it('post-package gate は child が欠けていると実際に非ゼロ終了する', () => {
+    const workflow = fs.readFileSync(RELEASE_WORKFLOW, 'utf8')
+    const gateScript = extractReleaseGateScript(workflow)
+    expect(
+      gateScript,
+      'release.yml から post-package gate の for ループを抽出できていない',
+    ).toContain('CHILD_BIN')
+
+    const required = requiredChildBinaries()
+
+    // 全部揃っていれば通過する（gate が常に落ちるだけの無意味な検査になっていないことの確認）。
+    expect(runReleaseGate(gateScript, required), 'すべて揃っているのに gate が落ちた').toBe(0)
+
+    // 1つずつ欠かして、**必ず**非ゼロ終了することを確認する。
+    for (const omitted of required) {
+      const present = required.filter((name) => name !== omitted)
+      expect(
+        runReleaseGate(gateScript, present),
+        `${omitted} が欠けているのに gate が通過した — 出荷ゲートが fail-loud でない`,
+      ).not.toBe(0)
+    }
   })
 
   it('ビルド済みなら、バンドル実体にも required child がすべて存在する', () => {
