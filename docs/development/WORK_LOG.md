@@ -17,6 +17,60 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.318 test(vst3): out-of-process instrument の音声 parity を CLAP と対称にする #565 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ 完了
+
+**VST3 instrument が out-of-process で実際に音を出すことを、どの層も検証していなかった。**
+CLAP には `orbit-clap-instrument-child/tests/instrument_parity_gated.rs` があるのに VST3 には無く、
+**形式間で検証の厚みが非対称**だった（PR #563 の全長 E2E 実装時に発覚）。
+
+`rust/crates/orbit-vst3-instrument-child/tests/instrument_parity_gated.rs` を新規追加し、
+in-process `Vst3InstrumentProcessor` と out-of-process child のレンダ結果が
+**bit-exact に一致すること**（`max_abs_diff == 0.0`）を検証する。
+
+### CLAP 版との構造的な差異
+
+**VST3 の in-process API は CLAP と違う。** CLAP 版は `push_neutral_event` + `EventBuffer` を使うが、
+VST3 は `push_note_on(channel, pitch, velocity, sample_offset)` / `push_note_off(...)` を使う。
+
+したがって OOP 側へ渡す `NeutralEvent` 列と、in-process 側の呼び出しは**翻訳**で対応させる。
+**この翻訳が間違っていると「両方同じように壊れている」を見逃しうる**ため、
+翻訳箇所に sample_offset / channel / velocity の対応をコメントで明記した。
+
+### 変異検証（3種・実出力で確認）
+
+| 変異 | 結果 |
+|---|---|
+| in-process 側の note pitch を +1 | red（`left: 0.2499993 / right: 0.0`） |
+| OOP 側の events から NoteOff を削除 | red |
+| pitch +1 のまま `max_abs_diff` の assert を無効化 | **green**（= 対照実験。閾値が実際に検出していることの証明） |
+
+3つ目は対照実験で、1つ目の red が本当に `max_abs_diff == 0.0` によるものだと示している。
+
+### bundle が用意できないときは silent pass にしない
+
+当初 `package_bundle()` が `None` を返したら `eprintln!` して `return` する形だった
+（既存 `orbit-vst3-host/tests/offline.rs` のハウススタイル）。しかし
+**`return` するテストは passed として集計される** — ビルド失敗が緑になる false green。
+
+既存のあれらは `#[ignore]` ではなく通常の `cargo test` で走るので skip が意図的な移植性配慮だが、
+**本テストは `#[ignore]` で、実行者が `--ignored` を付けて明示的にこの検証を求めた時にしか走らない**。
+対になる CLAP 版は `assert!` で落とす。**#565 は検証の非対称を消すための issue なので、
+失敗の仕方の非対称を新たに導入してはいけない** → `panic!` に変更した。
+
+あわせて `orbit-vst3-synth-oracle` の `package_bundle()` の doc から
+「呼び出し側は loud skip する」を削除（この変更で事実と食い違うようになったため。
+放置すれば #567 で潰したのと同じ嘘のコメントになる）。
+
+### 検証
+
+- `cargo test --workspace --locked` ✅ **382 passed / 0 failed**
+- `cargo test -p orbit-vst3-instrument-child --test instrument_parity_gated -- --ignored` ✅ 1 passed
+- 通常の `cargo test` では **1 ignored**（CI を壊さない・CLAP 版と同じ扱い）
+- `cargo fmt --check` ✅ / `cargo clippy --workspace --all-targets -- -D warnings` ✅
+
 ### 6.317 fix(test): CI フレーク #529 の真因（ETXTBSY）を特定し構造的に除去 (Jul 29, 2026)
 
 **Date**: 2026-07-29
