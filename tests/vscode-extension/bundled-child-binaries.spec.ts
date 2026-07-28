@@ -24,6 +24,7 @@ import { describe, it, expect } from 'vitest'
 const REPO_ROOT = path.resolve(__dirname, '../..')
 const DAEMON_SRC = path.join(REPO_ROOT, 'rust/crates/orbit-audio-daemon/src')
 const COPY_SCRIPT = path.join(REPO_ROOT, 'scripts/copy-daemon-bin.sh')
+const RELEASE_WORKFLOW = path.join(REPO_ROOT, '.github/workflows/release.yml')
 
 /** daemon の outproc モジュールと、それぞれが必ず持つ format 分岐の数（Clap / Vst3）。 */
 const OUTPROC_MODULES = ['outproc_effect.rs', 'outproc_instrument.rs'] as const
@@ -57,12 +58,23 @@ function requiredChildBinaries(): string[] {
 }
 
 /** 台帳B-1: `copy-daemon-bin.sh` が copy_binary で運ぶ名前。 */
-function copiedByScript(): string[] {
-  const script = fs.readFileSync(COPY_SCRIPT, 'utf8')
+function copiedByScript(script: string): string[] {
   return [...script.matchAll(/^copy_binary\s+"([^"]+)"/gm)].map((m) => m[1]).sort()
 }
 
-/** 台帳B-2: 実際にバンドルされたファイル（ビルド済みのときのみ存在。gitignore 対象）。 */
+/** `cargo build ... -p NAME` 群に現れる package 名（copy-daemon-bin.sh / release.yml 共通）。 */
+function cargoBuiltPackages(text: string): Set<string> {
+  return new Set([...text.matchAll(/-p\s+(orbit-[a-z0-9-]+)/g)].map((m) => m[1]))
+}
+
+/**
+ * 台帳B-2: 実際にバンドルされたファイル（ビルド済みのときのみ存在。gitignore 対象）。
+ *
+ * `<platform>-<arch>` のディレクトリ命名は Node 慣習で、production 側の
+ * `plugin-catalog-reader.ts`（`resolvePluginScanBinaryPath`）と
+ * `daemon-client.ts`（`resolveDaemonBinaryPath`）が同じ規則で組み立てている。
+ * 共有ヘルパは存在しないため、ここでも同じ規則を再現している（規則を変えるときは3箇所同時）。
+ */
 function bundledBinaries(): string[] | undefined {
   const dir = path.join(
     REPO_ROOT,
@@ -73,15 +85,29 @@ function bundledBinaries(): string[] | undefined {
   return fs.readdirSync(dir).sort()
 }
 
+/**
+ * 台帳C: `release.yml` の post-package gate が **出荷 `.vsix` に対して**存在を検査する child 名。
+ *
+ * **この gate が本バグの唯一のセーフティネットである** — `copy_binary` の行が将来誤って
+ * 削除されても、gate が検査していれば出荷前に落ちる。gate 自身が台帳から漏れていると、
+ * 同じ実害が無警告で再出荷される（初版はまさにこの状態だった）。
+ */
+function checkedByReleaseGate(workflow: string): string[] {
+  const m = workflow.match(/for\s+CHILD_BIN\s+in\s+([^;]+);/)
+  if (!m) return []
+  return m[1].trim().split(/\s+/).sort()
+}
+
 describe('#548 bundled out-of-process child binaries', () => {
   it('daemon が spawn しうる child はすべて copy-daemon-bin.sh のコピー対象である', () => {
-    const required = requiredChildBinaries()
-    const copied = copiedByScript()
+    const byModule = requiredChildBinariesByModule()
+    const required = [...new Set([...byModule.values()].flat())].sort()
+    const copied = copiedByScript(fs.readFileSync(COPY_SCRIPT, 'utf8'))
 
     // 🔴 台帳Aの取りこぼしを検出する。空振り（0件）だけでなく **部分的な縮み** も
     // success にしない — 各 outproc モジュールは Clap / Vst3 の2分岐を必ず持つ。
     // format を増やしたらここが落ちるので、バンドル側の追従が強制される。
-    for (const [file, names] of requiredChildBinariesByModule()) {
+    for (const [file, names] of byModule) {
       expect(
         names.length,
         `${file} から抽出した child 名が ${names.length} 件（期待: ${FORMATS_PER_MODULE} 以上）— ` +
@@ -99,14 +125,37 @@ describe('#548 bundled out-of-process child binaries', () => {
 
   it('コピー対象は cargo の再ビルド対象にも含まれている', () => {
     const script = fs.readFileSync(COPY_SCRIPT, 'utf8')
-    // `cargo build --release -p A -p B ...` 群に現れる package 名を集める。
-    const built = new Set([...script.matchAll(/-p\s+(orbit-[a-z0-9-]+)/g)].map((m) => m[1]))
+    const built = cargoBuiltPackages(script)
 
-    const notBuilt = copiedByScript().filter((name) => !built.has(name))
+    const notBuilt = copiedByScript(script).filter((name) => !built.has(name))
     expect(
       notBuilt,
       `copy_binary の対象なのに cargo build の -p に無い: ${notBuilt.join(', ')} — ` +
         `stale なバイナリが黙ってコピーされる（#487 の再発）`,
+    ).toEqual([])
+  })
+
+  it('release.yml が required child をビルドし、post-package gate で検査している', () => {
+    const workflow = fs.readFileSync(RELEASE_WORKFLOW, 'utf8')
+    const required = requiredChildBinaries()
+
+    const notBuilt = required.filter((name) => !cargoBuiltPackages(workflow).has(name))
+    expect(
+      notBuilt,
+      `release.yml の cargo build に無い child: ${notBuilt.join(', ')} — ` +
+        `ビルド失敗が fail-loud 経路を通らず、copy-daemon-bin.sh の best-effort に落ちる`,
+    ).toEqual([])
+
+    const gated = checkedByReleaseGate(workflow)
+    expect(gated.length, 'post-package gate の CHILD_BIN ループを抽出できていない').toBeGreaterThan(
+      0,
+    )
+
+    const notGated = required.filter((name) => !gated.includes(name))
+    expect(
+      notGated,
+      `post-package gate が出荷 .vsix で検査しない child: ${notGated.join(', ')} — ` +
+        `copy_binary の行が将来削除されても検出できず、同じ実害が無警告で再出荷される`,
     ).toEqual([])
   })
 

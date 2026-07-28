@@ -1193,9 +1193,18 @@ impl OutProcRole for EffectRole {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
     }
     fn select_child_exe(
-        _launch: &mut ChildLaunch<Self>,
-        _path: &std::path::Path,
+        launch: &mut ChildLaunch<Self>,
+        path: &std::path::Path,
     ) -> Result<(), String> {
+        // #552: 拡張子ベースの読み替え（.vst3 → VST3 child・それ以外 → CLAP child）。
+        // 明示指定された child exe（デフォルト名以外）は保持される。instrument 側と同一の規則で、
+        // 詳細は `outproc_effect::child_exe_for_attach` の doc を参照。
+        launch.child_exe = crate::outproc_effect::child_exe_for_attach(&launch.child_exe, path);
+        tracing::debug!(
+            ?path,
+            child_exe = ?launch.child_exe,
+            "effect child selected for attach"
+        );
         Ok(())
     }
     #[cfg(test)]
@@ -5324,11 +5333,15 @@ mod outproc_load_error_test_support {
 /// `EngineWrap` に対して real child を spawn せず `Some(OutProcControl)` を注入できる。
 #[cfg(all(test, feature = "outproc-effect"))]
 mod outproc_health_tests {
-    use super::{ChildSlot, EffectRole, EngineWrap, OutProcControl, OutProcRole, WrapError};
+    use super::{
+        ChildLaunch, ChildSlot, EffectRole, EngineWrap, OutProcControl, OutProcRole, WrapError,
+    };
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
     use orbit_audio_native::CallbackTimeStats;
     use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex, Weak};
 
@@ -5374,6 +5387,58 @@ mod outproc_health_tests {
             bus_sends: HashMap::new(),
         });
         (wrap, child_slot)
+    }
+
+    /// #552 配線ピン: effect の `select_child_exe` が**実際に読み替えを行う**ことを検証する。
+    ///
+    /// `outproc_effect::child_exe_for_attach` の純関数ユニットテストだけでは足りない —
+    /// trait 実装が no-op（修正前の状態）に戻っても、純関数のテストは green のままだった
+    /// （変異検証で実証）。**純関数と load 経路を繋ぐ配線そのもの**をここで押さえる。
+    #[test]
+    fn effect_select_child_exe_swaps_default_child_by_extension() {
+        let stats = EffectRole::new_stats();
+        let mut launch = ChildLaunch::<EffectRole> {
+            shm_path: PathBuf::from("/tmp/unused-effect-select-child-exe.shm"),
+            child_exe: PathBuf::from("/opt/orbitscore/orbit-clap-effect-child"),
+            sample_rate: 48_000,
+            stats: stats.clone(),
+            engaged: Arc::new(AtomicBool::new(false)),
+            cleanup_shm_on_drop: false,
+        };
+
+        EffectRole::select_child_exe(&mut launch, Path::new("Tape Echo.vst3"))
+            .expect("select_child_exe must not error on default child name");
+        assert_eq!(
+            launch.child_exe.file_name().and_then(|name| name.to_str()),
+            Some("orbit-vst3-effect-child"),
+            "VST3 エフェクトを attach したら VST3 child に読み替わらねばならない（#552）"
+        );
+
+        // 対称: 次に .clap を attach すると CLAP child へ戻る（混在チェーンの前提）。
+        EffectRole::select_child_exe(&mut launch, Path::new("Surge.clap"))
+            .expect("select_child_exe must not error on default child name");
+        assert_eq!(
+            launch.child_exe.file_name().and_then(|name| name.to_str()),
+            Some("orbit-clap-effect-child"),
+            "CLAP エフェクトを attach したら CLAP child へ戻らねばならない（#552）"
+        );
+
+        // 明示指定（デフォルト名以外）は touch しない = ORBIT_EFFECT_CHILD_BIN / gated 直指定の保護。
+        let mut explicit_launch = ChildLaunch::<EffectRole> {
+            shm_path: PathBuf::from("/tmp/unused-effect-select-child-exe-explicit.shm"),
+            child_exe: PathBuf::from("/opt/orbitscore/custom-effect-child"),
+            sample_rate: 48_000,
+            stats,
+            engaged: Arc::new(AtomicBool::new(false)),
+            cleanup_shm_on_drop: false,
+        };
+        EffectRole::select_child_exe(&mut explicit_launch, Path::new("Tape Echo.vst3"))
+            .expect("select_child_exe must not error on explicit child name");
+        assert_eq!(
+            explicit_launch.child_exe,
+            PathBuf::from("/opt/orbitscore/custom-effect-child"),
+            "明示指定された child exe は読み替えてはならない"
+        );
     }
 
     #[test]

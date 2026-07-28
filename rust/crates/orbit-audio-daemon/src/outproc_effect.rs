@@ -78,11 +78,54 @@ impl PluginFormat {
         }
     }
 
+    /// 拡張子 `.vst3`（大文字小文字不問）のみ VST3。**それ以外はすべて Clap**。
+    /// instrument 側（`outproc_instrument::InstrumentPluginFormat::from_plugin_path`）と同一規則。
+    ///
+    /// CLAP は VST3 対応前から唯一サポートされていた format なので、未知拡張子の
+    /// フォールバック先として妥当（raw `.dylib` の CLAP を attach する gated テストがある）。
+    /// 不正な plugin path の失敗は従来どおり child 側の load エラーとして表面化する。
+    fn from_plugin_path(path: &Path) -> Self {
+        match path.extension().and_then(|extension| extension.to_str()) {
+            Some(extension) if extension.eq_ignore_ascii_case("vst3") => Self::Vst3,
+            _ => Self::Clap,
+        }
+    }
+
     fn default_child_name(self) -> &'static str {
         match self {
             Self::Clap => "orbit-clap-effect-child",
             Self::Vst3 => "orbit-vst3-effect-child",
         }
+    }
+}
+
+/// attach する plugin の拡張子から effect child binary を選ぶ（純関数・unit テスト対象）。
+///
+/// **#552**: 従来 effect の format は `ORBIT_EFFECT_FORMAT` による **process-global** だったため、
+/// 1つのチェーンに CLAP と VST3 のエフェクトを混在させられなかった。プラグイン形式は
+/// 利用者に見えてはならない実装の詳細であり（`PLUGIN_CAPABILITY_ABSTRACTION_v1.md` CAP.6-1
+/// 「上位は能力 ID だけを知り、形式分岐を持たない」）、instrument 側と同じ per-plugin 解決へ揃える。
+///
+/// - `current_child_exe` の file name がフォーマット別デフォルト名でない場合は
+///   **明示指定と見なして触らない**（`ORBIT_EFFECT_CHILD_BIN` override と gated テストの
+///   config 直指定を保護する）。
+/// - デフォルト名の場合は**同じディレクトリ**でフォーマットに応じた binary に読み替える。
+///   `current_exe` からの再導出はしない（テストハーネスでは `current_exe` が
+///   `target/debug/deps/` 配下になり sibling 解決が壊れるため）。
+/// - 冪等かつ対称: retryable な attach 失敗で `ChildLaunch` が再利用されても毎回この読み替えが
+///   走るので、`.vst3` → `.clap` の attach し直しで元の child に戻る。
+pub(crate) fn child_exe_for_attach(current_child_exe: &Path, plugin_path: &Path) -> PathBuf {
+    let is_default_name = matches!(
+        current_child_exe.file_name().and_then(|name| name.to_str()),
+        Some("orbit-clap-effect-child") | Some("orbit-vst3-effect-child")
+    );
+    if !is_default_name {
+        return current_child_exe.to_path_buf();
+    }
+    let desired = PluginFormat::from_plugin_path(plugin_path).default_child_name();
+    match current_child_exe.parent() {
+        Some(dir) => dir.join(desired),
+        None => PathBuf::from(desired),
     }
 }
 
@@ -997,6 +1040,52 @@ mod tests {
         );
         stop.store(true, Ordering::Relaxed);
         handle.join().expect("process loop thread joins");
+    }
+
+    // #552: effect の format は attach する plugin ごとに決まる（process-global ではない）。
+    // 利用者にプラグイン形式は見えてはならず、CLAP と VST3 のエフェクトは同一チェーンに
+    // 混在できなければならない（CAP.6-1「上位は形式分岐を持たない」）。
+    #[test]
+    fn effect_plugin_format_selects_child_name_from_extension() {
+        assert_eq!(
+            PluginFormat::from_plugin_path(Path::new("reverb.clap")).default_child_name(),
+            "orbit-clap-effect-child"
+        );
+        assert_eq!(
+            PluginFormat::from_plugin_path(Path::new("Tape Echo.VST3")).default_child_name(),
+            "orbit-vst3-effect-child"
+        );
+        // 未知拡張子は CLAP へフォールバック（raw .dylib の CLAP を attach する gated テストがある）。
+        assert_eq!(
+            PluginFormat::from_plugin_path(Path::new("libclap_test_effect.dylib"))
+                .default_child_name(),
+            "orbit-clap-effect-child"
+        );
+    }
+
+    #[test]
+    fn effect_child_exe_for_attach_swaps_within_same_directory() {
+        let clap_child = PathBuf::from("/opt/orbit/bin/orbit-clap-effect-child");
+        assert_eq!(
+            child_exe_for_attach(&clap_child, Path::new("/plugins/Tape Echo.vst3")),
+            PathBuf::from("/opt/orbit/bin/orbit-vst3-effect-child"),
+        );
+        // 対称・冪等: VST3 child から .clap を attach し直すと CLAP child へ戻る。
+        let vst3_child = PathBuf::from("/opt/orbit/bin/orbit-vst3-effect-child");
+        assert_eq!(
+            child_exe_for_attach(&vst3_child, Path::new("/plugins/Surge.clap")),
+            PathBuf::from("/opt/orbit/bin/orbit-clap-effect-child"),
+        );
+    }
+
+    #[test]
+    fn effect_child_exe_for_attach_preserves_explicit_override() {
+        // ORBIT_EFFECT_CHILD_BIN / gated テストの直指定を壊さない（デフォルト名以外は触らない）。
+        let explicit = PathBuf::from("/custom/my-effect-host");
+        assert_eq!(
+            child_exe_for_attach(&explicit, Path::new("/plugins/Tape Echo.vst3")),
+            explicit,
+        );
     }
 
     // C2（pr-review-team）: format 選択の純関数は device/child プロセス不要で CI 常時実行できるのに

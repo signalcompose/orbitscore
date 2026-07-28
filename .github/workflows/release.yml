@@ -86,7 +86,7 @@ jobs:
       - name: Build OOP-both Rust daemon and CLAP child binaries
         run: |
           cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument --manifest-path rust/Cargo.toml
-          cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-instrument-child --manifest-path rust/Cargo.toml
+          cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-effect-child -p orbit-vst3-instrument-child --manifest-path rust/Cargo.toml
           cargo build --release -p orbit-plugin-scan --manifest-path rust/Cargo.toml
 
       - name: Build engine + extension TypeScript
@@ -138,7 +138,7 @@ jobs:
           fi
           echo "orbit-audio-daemon present and executable in packaged .vsix"
 
-          for CHILD_BIN in orbit-clap-effect-child orbit-clap-instrument-child orbit-vst3-instrument-child; do
+          for CHILD_BIN in orbit-clap-effect-child orbit-clap-instrument-child orbit-vst3-effect-child orbit-vst3-instrument-child; do
             CHILD_PATH="$VSIX_CHECK/extension/engine/bin/darwin-arm64/$CHILD_BIN"
             if [ ! -f "$CHILD_PATH" ]; then
               echo "::error::$CHILD_BIN missing from packaged .vsix at engine/bin/darwin-arm64/ — OOP plugin hosting cannot start its child" >&2

@@ -53,7 +53,24 @@ daemon は `ORBIT_EFFECT_FORMAT=vst3` のとき `orbit-vst3-effect-child` を sp
 > リネームすると**台帳Aが黙って縮んで pass** していた（silent partial coverage）。
 > 綴り非依存のパターンに変え、**モジュールごとの抽出件数**を検査するよう修正した。
 
-**検証**: 全スイート 1738 passed（+3）/ ビルド + 実機 MCP E2E で child の実起動を確認。
+**#552 も同時に修正**（owner 判断: テスト負債になる前に潰す）: effect の plugin format が
+`ORBIT_EFFECT_FORMAT` による **process-global** だったため、CLAP と VST3 のエフェクトを
+同一チェーンに混在できなかった。**プラグイン形式は利用者に見えてはならない実装の詳細**
+（CAP.6-1）であり、instrument 側（`from_plugin_path`）と同じ per-plugin 解決へ揃えた。
+`select_child_exe` トレイトの seam は既にあり、effect 実装が no-op だっただけ。
+
+**🔴 変異検証で配線の穴が発覚**: 純関数 `child_exe_for_attach` のユニットテスト3件を書いても、
+**`select_child_exe` を no-op に戻す変異（= 元のバグそのもの）が green のまま生き残った**。
+純関数と load 経路を繋ぐ**配線**は別物であり、instrument 側と対称の配線テスト
+（`effect_select_child_exe_swaps_default_child_by_extension`）を追加して初めて red になった。
+
+**altitude レビューで出荷ゲートの穴も発覚**: `.github/workflows/release.yml` の
+post-package gate（`for CHILD_BIN in ...`）が `orbit-vst3-effect-child` を検査しておらず、
+**本バグの再発を防ぐはずのセーフティネット自身が同じ欠落を抱えていた**。ビルド一覧
+（`:89`）と gate（`:141`）の両方を修正し、テストの台帳を release.yml まで拡張した。
+
+**検証**: TS 1739 passed（+4）/ Rust 127 passed（+4）/ fmt・clippy clean /
+**env を一切設定せずに VST3 エフェクトが `orbit-vst3-effect-child` を起動**することを実機で確認。
 
 ### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
 
