@@ -25,10 +25,10 @@ use clack_extensions::audio_ports::{
 };
 // clack_common は直接依存に無い。clack_plugin が `pub use clack_common::stream;` で
 // 再エクスポートしているのでそちら経由で取る。
+use clack_extensions::state::{PluginState, PluginStateImpl};
 use clack_plugin::stream::{InputStream, OutputStream};
 // `Read`/`Write` は std::io の trait 実装として提供される（clack_common::stream）。
 use std::io::{Read as _, Write as _};
-use clack_extensions::state::{PluginState, PluginStateImpl};
 use clack_extensions::note_ports::{
     NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
     PluginNotePortsImpl,

@@ -42,11 +42,20 @@ Epic #546 の中核制約「**プラグイン形式に依存しない**」の履
 - 同 child が `service_command_mailbox` を呼ぶようにした。#556 で共有層へ引き上げてあるので、
   **ack の publish 順序・未知 kind の扱い・detail の切り詰め禁止は自動的に継承される**
   （handler を書くだけで済む、という #556 の設計主張がここで実際に効いた）
-- `clap-test-synth` oracle: テストが1本も無かったので VST3 oracle と**対称に5本**追加
+- `clap-test-synth` oracle: テストが1本も無かったので VST3 oracle と対称に5本追加。
+  あわせて **VST3 oracle にも対称の契約 pin テストを追加**した（4本 → 5本）
 
 **🔴 形式間の契約を固定する**: 両 oracle が同じ magic（`ORC1`）・同じ長さ（8）・同じバイト並びを
-使うことを、oracle 側テスト（`state_encoding_matches_the_cross_format_contract`）と
-配線テスト側の `encode_state` の**二重記述**で固定した。片方だけ変えたら red になる。
+使うことを、**両 oracle の `state_encoding_matches_the_cross_format_contract`** で固定した。
+別ワークスペースなので定数を共有できないため、**両側を同じリテラルに pin する**のが唯一の橋渡しになる。
+どちらか一方の定数を変えれば、その側のテストが red になる。
+
+> ⚠️ **`/simplify` の指摘で修正**: 当初は CLAP 側にしか pin テストを置いておらず、
+> 「両 oracle で固定した」という記述が**誤り**だった。CLAP の定数を CLAP のリテラルと
+> 比べるだけの自己言及的な pin で、**VST3 側の定数が変わっても何も red にならなかった**。
+> VST3 oracle にも同じテストを追加し、片側だけの契約破り（magic 変更 / 長さ変更）が
+> 実際に red になることを変異で確認した。
+
 「VST3 と CLAP で同じ E2E」という受け入れ基準は、この契約が守られて初めて意味を持つ。
 
 **配線テスト**（`orbit-clap-instrument-child/tests/mailbox_wiring.rs`・VST3 側と同構造）:

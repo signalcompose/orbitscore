@@ -583,6 +583,31 @@ mod tests {
         }
     }
 
+    /// 🔴 **CLAP oracle と同じエンコードであること**を固定する。
+    ///
+    /// 両 oracle が同じ magic・同じ長さ・同じバイト並びを使うからこそ、
+    /// 「VST3 と CLAP で同じ E2E が green」という受け入れ基準が意味を持つ。
+    /// **両側が同じリテラルに pin されている**ので、どちらか一方の定数を変えれば
+    /// その側のテストが red になる（`clap-test-synth` 側にも同名のテストがある）。
+    /// 別ワークスペースなので定数を共有できず、この二重 pin が唯一の橋渡しになる。
+    #[test]
+    fn state_encoding_matches_the_cross_format_contract() {
+        assert_eq!(STATE_MAGIC, 0x4F52_4331, "magic は \"ORC1\"");
+        assert_eq!(STATE_LEN, 8, "magic 4 バイト + i32 4 バイト");
+
+        let bytes = encode_state(7);
+        assert_eq!(
+            &bytes[..4],
+            &STATE_MAGIC.to_le_bytes(),
+            "先頭 4 バイトが little-endian の magic でない"
+        );
+        assert_eq!(
+            &bytes[4..8],
+            &7i32.to_le_bytes(),
+            "後半 4 バイトが little-endian の i32 オフセットでない"
+        );
+    }
+
     /// 🔴 不正な state を **黙って 0 に倒さない**（復元したつもりで別の音になるのを防ぐ）。
     #[test]
     fn state_rejects_foreign_and_short_payloads() {
