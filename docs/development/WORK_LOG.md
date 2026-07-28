@@ -17,6 +17,73 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.311 fix(ci): build `outproc-instrument` alone — it was broken on main (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: 🔄 PR 準備中
+
+**症状**: `cargo check -p orbit-audio-daemon --features outproc-instrument` が
+**main でコンパイルエラー2件**で失敗していた（#551 / #556 とは無関係の既存欠陥。
+両ブランチと main で同じ2件が出ることを確認済み）。
+
+**原因**: `load_distinguishes_existing_instance_from_pool_exhaustion` テストが
+`load_outproc_instrument_plugin` を呼ぶが、このメソッドは
+`all(outproc-effect, outproc-instrument)`（both build）でのみ定義される。
+**テスト側の cfg が呼び先より緩かった**。
+
+**実害の範囲**: 出荷経路（`release.yml` / `copy-daemon-bin.sh`）は**常に both build** なので、
+壊れた成果物が出荷されることはない。困るのは `--features outproc-instrument` 単独で
+`cargo test` を叩いた開発者で、理由の分からないエラーに当たる。
+
+**なぜ気づかれなかったか（本質）**: CI が `outproc-effect` は検査するのに
+**`outproc-instrument` を一度もビルドしていなかった**。壊れたのがまさに CI の死角にある
+feature だった。cfg を直すだけでは同じ形で再発する。
+
+**対応**:
+
+- テストの cfg を呼び先に合わせる（`#[cfg(feature = "outproc-effect")]` を追加）
+- **CI に4ステップ追加**: `outproc-instrument` 単独の clippy / test と、
+  **出荷時に実際に使う組み合わせ**（`outproc-effect,outproc-instrument`）の clippy / test
+
+**ガードの実証**: cfg 修正を元に戻して退行を再現したところ、**新ステップは error 3件で落ち、
+既存ステップ（`--features outproc-effect`）は 0 件で素通り**した。追加したステップが
+実際に検出力を持つことを実行結果で確認している。
+
+**検証**: 3組み合わせ（`outproc-instrument` / `outproc-effect` / 両方）すべて
+clippy 警告 0・test green。
+
+---
+
+**同時に塞いだ別の穴: vitest が `.claude/worktrees/` の複製 spec を拾う**
+
+gated E2E を回そうとして `vitest run tests/e2e/orbitstudio-mcp-gated.spec.ts` と書いたところ、
+**実機 OrbitStudio が7個同時起動し、daemon が19本残留した**（2026-07-28）。
+
+原因: vitest の位置引数は「発見済み全ファイルへの正規表現フィルタ」であり、パス指定ではない。
+`.claude/worktrees/agent-*` には subagent が作ったブランチのフルコピーが残っており、
+同名の spec が7本存在していた。gated spec のヘッダコメントはこの危険を警告しているが、
+**何も強制していなかった**（同種の事故は WORK_LOG 6.x にも記録がある）。
+
+`vitest.config.ts` に `exclude` を追加して discovery から外した。
+**実測: 発見ファイル数 7 → 1**（exclude を外して再計測し、7 に戻ることも確認済み）。
+
+> ⚠️ **レビューで見つかった二次被害**: 最初 `['**/node_modules/**', '**/dist/**', ...]` と
+> **既定値を手打ちで再現**したが、`test.exclude` に配列を渡すと vitest の `defaultExclude` は
+> **マージされず丸ごと置き換わる**（`@vitest/utils` の `deepMerge` が配列を mergeable から
+> 除外している）。結果、`**/.{idea,git,cache,output,temp}/**` や `**/cypress/**` の除外が
+> 黙って消えていた — **この PR が塞ごうとしている穴と同じ形の穴**を別の場所に開けていた。
+> `.cache/` に spec を置くと実際に拾われることを実測で確認し、
+> `[...configDefaults.exclude, '**/.claude/worktrees/**']` へ修正した。
+> 修正後、①`.cache/` が除外される ②worktree 除外が維持される
+> ③通常の発見数（1735）が変わらない、の3点を実測。
+
+**CI ステップの検出力（レビュアーが個別に測定）**: 追加した4ステップのうち
+`outproc-instrument` 単独の clippy と test の**2つが対象バグを直接検出**し、
+残る2つ（出荷時の組み合わせ）は**このバグは検出しないが別の懸念を守る**ため飾りではない。
+なお WORK_LOG が「error 3件」としていたのは、正確には **E0599 が2件**＋要約行の計3行。
+
+---
+
 ### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
 
 **Date**: 2026-07-28

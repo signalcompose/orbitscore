@@ -6181,6 +6181,13 @@ mod outproc_instrument_note_tests {
 
     // #540 P1: pool 枯渇は明示エラー（既存 instance の再ロードは exhaustion にならない —
     // 既存は slot 解決まで到達して「stream is closed」で落ちる = 割当ロジックの区別を検証）。
+    //
+    // 🔴 cfg は呼び先に合わせる: `load_outproc_instrument_plugin` は both build
+    // (`all(outproc-effect, outproc-instrument)`) でのみ定義される。テスト側を
+    // `outproc-instrument` だけで有効にすると、**`--features outproc-instrument` 単独の
+    // ビルドがコンパイルエラーになる**（出荷経路は常に both build なので成果物は無事だが、
+    // 単独 feature で `cargo test` を叩いた開発者が理由の分からないエラーに当たる）。
+    #[cfg(feature = "outproc-effect")]
     #[test]
     fn load_distinguishes_existing_instance_from_pool_exhaustion() {
         let (wrap, _rx_a, _rx_b) = wrap_with_two_slots();
