@@ -354,8 +354,10 @@ fn an_empty_state_from_the_plugin_is_reported_as_a_failure_not_logged_as_success
         "空 state を成功として ack した（音色を失ったことに気づけなくなる）"
     );
     assert_eq!(len, 0, "失敗なのに長さが 0 でない");
+    // 🔴 リテラルを書き写さない。実装と同じ定数を見ることで、**文言ではなく
+    // 「この分岐が発火したか」**を検査する（文言を整理しただけで red になるのを防ぐ）。
     assert!(
-        detail.contains("空"),
+        detail.contains(orbit_clap_host::EMPTY_STATE_FROM_PLUGIN),
         "detail が空 state を理由として伝えていない: {detail:?}"
     );
     assert!(

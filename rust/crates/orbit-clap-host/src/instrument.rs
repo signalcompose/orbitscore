@@ -36,6 +36,15 @@ use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
 
+/// `capture_state()` が空 state を拒否したときの理由文。
+///
+/// **テストが文言に結合しないよう定数にしている**。テスト側がリテラルを書き写すと、
+/// 実装の正しさではなく**文言の一致**を検査することになり、メッセージを整理しただけで
+/// 無関係に red になる（レビュー指摘）。定数を共有すれば「この分岐が発火した」ことだけを
+/// 検査できる。
+pub const EMPTY_STATE_FROM_PLUGIN: &str =
+    "plugin が空の state を返した（0 バイトを成功として登記しない）";
+
 /// 単一スレッドで load / process / drop する instrument CLAP プロセッサ。
 ///
 /// `!Send`（[`PluginInstance`] を含む）。生成したスレッド上でのみ使うこと。
@@ -81,9 +90,7 @@ impl ClapInstrumentProcessor {
             .save(&mut handle, &mut bytes)
             .map_err(|error| ClapHostError::State(format!("save: {error}")))?;
         if bytes.is_empty() {
-            return Err(ClapHostError::State(
-                "plugin が空の state を返した（0 バイトを成功として登記しない）".into(),
-            ));
+            return Err(ClapHostError::State(EMPTY_STATE_FROM_PLUGIN.into()));
         }
         Ok(bytes)
     }
@@ -129,7 +136,11 @@ impl ClapInstrumentProcessor {
     /// 「READY を先に publish してしまい、復元前の既定音色で 1 ブロック鳴る」順序ミスが
     /// **書けてしまう**。実際、順序を入れ替えても配線テストが green のまま通ることが
     /// 変異検証で判明した（テストで守れない不変条件だった）。load に畳んで
-    /// **表現できなくする**。VST3 側 `Vst3InstrumentProcessor::load` も同じ形。
+    /// **正しい呼び方を1箇所に強制する**。VST3 側 `Vst3InstrumentProcessor::load` も同じ形。
+    ///
+    /// ⚠️ 型で**表現不能**にしたわけではない — `apply_state_bytes` は `pub` のままなので、
+    /// `load(.., None)` してから後で呼ぶコードは今でも書ける。ただしその逆行は
+    /// 破損 state のテスト（`a_corrupt_state_file_...`）が拾う（レビューで実証済み）。
     pub fn load(
         path: &Path,
         id: Option<&str>,
