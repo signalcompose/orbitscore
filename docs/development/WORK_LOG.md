@@ -17,6 +17,90 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.315 test: prove the tone loop on real hardware — PR #563 のレビュー〜出荷 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ PR #563 MERGED（merge commit `01563c4`）
+
+6.314 の続き。`/simplify` → レビュー3ラウンド → Fable 独立監査3回 → 実機 E2E → **全長 E2E** まで。
+Rust 366 → 382、TypeScript 1757 → 1773。
+
+**Epic #546 の音色ループを実機で証明した**（`tests/e2e/orbitstudio-mcp-gated.spec.ts`）:
+
+offset 7 の state で attach → 発音 → MCP で保存（**バイト同値**を確認）→ `stop_engine` →
+`start_engine` → **保存物を公開 DSL 経路 `instrument(path, savedPath)` で指す** → capture WAV の
+基本周波数が一致。判定は解析のみで**人間を介在させない**。
+
+実機での変異検証（理論値どおり）:
+
+| 変異 | 結果 |
+|---|---|
+| 通常 | Cycle A / B とも **392.00Hz** |
+| `statePath` を落とす | `restored 261.63Hz must match saved 392.00Hz` |
+| 手組み state を offset 0 に | `Cycle A 261.63Hz must be offset-7 pitch 392.00Hz` |
+
+261.63Hz は default(C4)、392.00Hz は offset 7。**2つの変異がそれぞれ別のアサーションを殺す**
+（前者は復元経路の検証、後者は「弱いテストへの転落」を防ぐ砦）。
+
+## 実機・独立監査でしか見つからなかった3件
+
+**1. env ゲート設計が false green を生む（実装前に発見）**
+
+「oracle に env で非 default の音色を持たせる」案を検討したが、env はアプリプロセスに一度入ると
+`stop_engine`→`start_engine` を跨いで**外せない**（daemon が extension host の env を継承）。
+すると**復元が壊れていても同じピッチが鳴る**。独立監査の裁定で実装前に棄却し、
+テスト側で state を手組みする方式に変更した。
+
+**2. gated E2E が1ヶ月前の CLAP バンドルを検証していた**
+
+VST3 oracle は `package-oracle.sh` でその場ビルドするのに、CLAP は `fs.existsSync` で
+**存在確認するだけ**だった。**存在は鮮度を意味しない** — `target/release/` にあったのは
+#557（CLAP oracle に `PluginStateImpl` を足した PR）より前の 6/27 のバンドルで、
+`CLAP_EXT_STATE を持たない` で保存が落ちた。CLAP も同じくその場ビルドする形へ揃えた
+（`8810f47`）。
+
+**3. 度数が根音未宣言で解決できず、音が一度も鳴っていなかった**
+
+`play(1)` は MIDI 度数で `global.key(...)` が要る。**`evaluate_orbitscore` はすべて
+`isError: false` を返していた**が、エンジン側で解決に失敗していた。`get_log` の ERROR デルタを
+見るアサーションが無ければ「無音」で落ちて原因究明から始まっていた。
+規律「`ok` は受理しか意味しない・`get_log` を見よ」がそのまま効いた実例。
+
+## レビューで実測により塞いだ穴
+
+`/code:pr-review-team` が**変異を実行して4件の生存**を検出した（推測ではない）:
+
+- `save_state_command` の IO エラー分岐 — テスト fixture が共有 seam を使わず**手書き複製**を
+  残していたため、書き込み失敗を成功として ack しても全件 green だった
+- `bytesWritten <= 0` ガード — **`NaN <= 0` は false** なので `Number(undefined)` が素通りし、
+  壊れた保存が「成功」として登記されていた
+- per-sequence effect の `effects[index - 1]` オフセット
+- DSL 語彙の分類テストが**和集合判定**で、`savePluginState` の露出を検出できなかった
+
+加えて「保存した state が**次の respawn で復元される**」という機能の存在理由そのものが
+全レイヤーで無検証だった（既存テスト名は respawn を検証するかに読めたが、実際は
+`latest_state` の**値**しか見ていなかった）。本番と同じ seam を通す因果テストを追加した。
+
+## その他
+
+- sidecar 掃除の失敗で mailbox スロットが解放されず、respawn 経路で踏むと
+  **プラグイン state を二度と保存できない daemon** になっていた。掃除の結果を保持してから
+  必ず解放し、その後にエラーを返す形へ（復帰しつつ loud のまま）
+- 4つの child に重複していた save-state handler を共有層 `save_state_command` へ集約
+- spec の stale な「host 側の発行経路は未実装」注記を更新（**この PR がその発行経路**）。
+  UIH.5 に v1 スコープ注記（sum/aux 未対応・**解決順を暗黙に決めない**理由）を追加
+
+## 残課題（追跡）
+
+- **#565**: VST3 instrument の out-of-process 音声が**全層で未検証**（CLAP には
+  `instrument_parity_gated.rs` があるが VST3 には無い）。Epic #546 の完了条件に含めた
+- **#541**: 起動時の自動復元は「テストが無い」のではなく**実装が無い**
+  （`project.yaml` の `states:` を読むコードが1行も無い）。実装されたら本 E2E の
+  「savedPath を手で渡す」1行を消すだけで受け入れテストになる
+- **#564**: sum/aux バス insert の state 保存（アドレス指定の名前空間が未決）
+
+---
+
 ### 6.314 feat(engine): save live plugin state through MCP #562 (Jul 28, 2026)
 
 **Date**: 2026-07-28
