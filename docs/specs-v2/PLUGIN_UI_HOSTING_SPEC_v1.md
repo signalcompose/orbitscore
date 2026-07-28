@@ -89,32 +89,66 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
    待ちは**状態機械 + runloop への復帰**で表現する（継続渡し）。
    ブロックすると、応答であるコマンドを処理するのも同じメインスレッドであるため**必ず
    デッドロックする**
-2. **完了シグナルの意味を1つに固定する。** `evt_ack_seq` の前進 =
-   **「当該イベントに伴う host 側処理が完結した」**（保存の場合は SAVE_STATE の往復・
-   atomic rename・`project.yaml` 更新まで完了）。**受領のみの ack は定義しない**
-   （受領 ack だと child が保存前に先へ進み、セーフポイントが事実上スキップされる）
-3. **同期を要するイベントと、しないイベントを分ける。**
-   `UI_CLOSED` は**取りこぼし不可**（失うとクローズ手続きが完結しない）。
+2. **🔴 コマンドの ack は「受理」を意味し、「完了」ではない。**
+   長時間かかる手続き（クローズ）を起動するコマンドは、**受理した時点で直ちに ack を返す**。
+   手続きの完了は**イベント**で別に通知する。
+
+   > **これを守らないとデッドロックする**（実際にした）。UIH.2 規律3 によりコマンド
+   > メールボックスは単一で、host は ack を待つ間 次を投函できない。CLOSE_UI の ack を
+   > 手続き完了まで遅らせると、host は完了に必要な SAVE_STATE を投函できず、child は
+   > その保存完了を待ち続ける — **循環待ち**になる。
+
+3. **イベントの `evt_ack_seq` の前進 = 「当該イベントに伴う host 側処理が完結した」**
+   （保存の場合は SAVE_STATE の往復・atomic rename・`project.yaml` 更新まで完了）。
+   **受領のみの ack は定義しない**（受領 ack だと child が保存前に先へ進み、
+   セーフポイントが事実上スキップされる）
+4. **同期を要するイベントと、しないイベントを分ける。**
+   `UI_CLOSED` / `UI_CLOSED_DONE` は**取りこぼし不可**（失うと手続きが完結しない）。
    `STATE_DIRTY` は**最適化**なので合流（coalesce）してよい
-4. **紳士協定を作らない。** 「host が先に SAVE_STATE を済ませているはず」に依存しない。
+5. **紳士協定を作らない。** 「host が先に SAVE_STATE を済ませているはず」に依存しない。
    **3経路すべてが同じハンドシェイクを通る**
 
 ### イベント欄（リング）
 
-単一スロットでは規律3を満たせない（後続が先行を上書きする）。**既存の `seq_tag` / `SLOTS`
+単一スロットではポリシー4を満たせない（後続が先行を上書きする）。**既存の `seq_tag` / `SLOTS`
 と同じ per-slot 方式**を使う:
 
 | フィールド | 方向 | 意味 |
 |---|---|---|
 | `evt_seq: AtomicU64` | child → host | child が投函時に単調増加。スロットは `evt_seq % EVT_SLOTS` |
-| `evt_kind: [AtomicU32; EVT_SLOTS]` | child → host | `STATE_DIRTY` / `UI_CLOSED` / `UI_RESIZED` |
+| `evt_kind: [AtomicU32; EVT_SLOTS]` | child → host | `STATE_DIRTY` / `UI_CLOSED` / `UI_CLOSED_DONE` |
 | `evt_arg: [[u8; N]; EVT_SLOTS]` | child → host | 付随情報 |
-| `evt_ack_seq: AtomicU64` | host → child | **host 側処理が完結した** `evt_seq`（ポリシー2） |
+| `evt_ack_seq: AtomicU64` | host → child | **host 側処理が完結した** `evt_seq`（ポリシー3） |
 
-- host は `evt_ack_seq < evt_seq` の間、未処理スロットを順に処理して `evt_ack_seq` を進める
-- **リングが一周しそうな場合、child は `STATE_DIRTY` を合流させる**（最新1件のみ残す）。
-  `UI_CLOSED` は合流させず、投函できるまで状態機械が `Closing` に留まる
+**🔴 slot 再利用の不変条件（鏡像元から継承する）**:
+
+> `transport.rs:25-27`: *"host は新 seq s を submit する前に `seq_done >= s - SLOTS` を確認する。
+> 満たさなければ submit を見送る(stall)。… **不変条件が破れると live-but-slow child との間で
+> データ競合 = UB になる**"*
+
+イベント欄の鏡像は: **child は新 `evt_seq` = s を投函する前に
+`evt_ack_seq >= s - EVT_SLOTS` を確認する。満たさなければ投函を見送る。**
+
+- **投函済み・未 ack のスロットを書き換えてはならない。** host が `evt_arg`（非 atomic の
+  `[u8; N]`）を読んでいる最中の書き込みは cross-process の torn read になる
+- したがって **`STATE_DIRTY` の合流は child ローカルの pending フラグで行う**
+  （「dirty が立っている」を child 側に保持し、スロットが空いてから1件だけ投函する）。
+  スロット上の書き換えによる合流は**禁止**
+- `UI_CLOSED` は合流させない。投函できるまで状態機械が `Closing` に留まる
 - host は既にコマンド完了を polling しているため、同じループでイベントも拾える
+
+> **`UI_RESIZED` を持たない理由**: ウィンドウのリサイズは child が自分の `NSWindow` に対して
+> 完結させる（UIH.4b）。host に消費者が無いイベントを高頻度で流すとリングを塞ぎ、
+> `UI_CLOSED` の投函を不必要に遅らせる。
+
+### 故障時の脱出条件
+
+| 事象 | 規定 |
+|---|---|
+| **`Closing` 中に child が crash → respawn** | respawn 後の child は**新規インスタンス**であり、`cmd_*` / `evt_*` は**リセットする**（pending は引き継がない）。host は in-flight の手続きを**中止**し、**登記を触らない**（PRJ.4 の「失敗時は前回の登記を保持」を、ack が永遠に来ないケースへも適用する） |
+| **host が生きたまま停滞し `evt_ack_seq` が進まない** | child は `Closing` に**無期限滞留しない**。タイムアウト後は **loud にエラーを報告した上で保存なしでクローズを完遂**する（ウィンドウが永久に閉じられない方が悪い）。この場合 host は登記を更新しない |
+| **host プロセスが死亡** | 既存の `ParentWatch` が child ごと回収する（UIH.1・変更なし）。新たな規定は不要 |
+| **child の `cmd_ack_seq` が永遠に返らない** | host はコマンドにタイムアウトを持ち、**loud に失敗**させる。規律3 の待ちに脱出条件が無い状態にしない |
 
 > **既存の `control` を再利用しない理由**: `control` は teardown 経路で
 > `reset_control_run` により RUN へ戻される（respawn の shm 再利用）。コマンドの意味論を
@@ -220,12 +254,15 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
   ③ CLAP closed(was_destroyed) コールバック（[thread-safe] → main へ marshal） ← child 起点
 
 フェーズ A（Open のときのみ受理・即座に Closing へ遷移して runloop へ復帰）:
+  - 🔴 ② 起因なら CLOSE_UI に**この時点で**受理 ack を返す（UIH.2a ポリシー2）
+       ack を手続き完了まで遅らせると循環待ちになる
   - UI_CLOSED イベントを投函（UIH.2a）
   - was_destroyed フラグを Closing 状態に保持
   - 🔴 ここで待たない。ハンドラは戻る
 
-（host が UI_CLOSED を観測 → SAVE_STATE コマンドを投函 → child が runloop で処理 →
-  host が atomic rename と project.yaml 更新まで完了 → evt_ack_seq を前進）
+（host が UI_CLOSED を観測 → SAVE_STATE コマンドを投函できる（CLOSE_UI は ack 済み）→
+  child が runloop で処理 → host が atomic rename と project.yaml 更新まで完了
+  → evt_ack_seq を前進）
 
 フェーズ B（runloop が evt_ack_seq の前進を観測して再開）:
   1. プラグイン側の解放 — 形式と was_destroyed で分岐:
@@ -234,12 +271,16 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
        CLAP（was_destroyed=true）  : destroy() のみ（破棄済み GUI へ hide() を呼ばない）
   2. NSWindow をプログラム的に閉じて破棄
   3. Closed へ遷移
-  4. ② 起因なら CLOSE_UI に成功 ack を返す
+  4. 🔴 UI_CLOSED_DONE イベントを投函（手続き完了の通知）
 
 Closing / Closed 中に到達した追加の要求:
   ①③ → no-op（既に手続き中）
   ②   → no-op だが 🔴 成功 ack を返す（cmd_result=0 / detail="already-closing"）
 ```
+
+> **MCP `close_plugin_ui` の完了判定**: コマンドの ack（受理）ではなく
+> **`UI_CLOSED_DONE` の受信**をもって完了とする。ack で完了を名乗ると
+> 「返ってきたのにウィンドウがまだある」ことになる。
 
 > 🔴 **経路①で `windowWillClose` を使ってはならない。** `windowWillClose` は AppKit が
 > ウィンドウを閉じ**始めた後**の通知で、そこから保存の往復（非同期・数十 ms〜）を挟むと
@@ -254,7 +295,7 @@ Closing / Closed 中に到達した追加の要求:
 
 > **②に特別扱いを設けない理由**: 「host が CLOSE_UI の前に SAVE_STATE を済ませている」は
 > child から検証できない紳士協定であり、host 側の実装が守らなければ黙って保存なしで閉じる
-> （UIH.2a ポリシー4）。3経路を同じ手続きに通せばこの穴は生じない。
+> （UIH.2a ポリシー5）。3経路を同じ手続きに通せばこの穴は生じない。
 
 **セーフポイントは状態遷移の入口で1回だけ発火する。** runloop による直列化は「同時実行」を
 防ぐが「2回実行」は防がないため、**状態機械による再入ガードが設計要件**である
@@ -336,7 +377,7 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
   - **`Closing` 中の CLOSE_UI が成功 ack を返す**（ack を落とすと host が待ち続けて red）
   - **`was_destroyed=true` の経路で `hide()` が呼ばれない**（分岐を潰すと red になること）
   - **フェーズ B が `evt_ack_seq` の前進**でのみ開始する（受領のみで進めると、保存前に解放が
-    走って red — UIH.2a ポリシー2 の検証）
+    走って red — UIH.2a ポリシー3 の検証）
   - **フェーズ A がメインスレッドをブロックしない**（ハンドラ内でブロッキング待機に変異させると
     SAVE_STATE が処理されずタイムアウトで red — UIH.2a ポリシー1 の検証）
   - **経路①が `windowShouldClose` で一旦拒否する**（`windowWillClose` へ変異させると
@@ -344,6 +385,19 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
   - **`setFrame` が `attached` より前に呼ばれる**（順序を入れ替えると red）
   - **`UI_CLOSED` を取りこぼさない**（リングを単一スロットに変異させ、`STATE_DIRTY` を
     連投して `UI_CLOSED` を上書きすると、クローズが完結せず red）
+  - 🔴 **規律3 を忠実に守る host モックで経路②を完走させる**（`cmd_seq == cmd_ack_seq` を
+    待ってから次を投函する host で CLOSE_UI を送る。CLOSE_UI の受理 ack をフェーズ B へ
+    遅らせる変異を入れると **hang して red**）
+
+    > **この項目が最重要**: host モックが規律3 を守らず SAVE_STATE を平行投函してしまうと、
+    > 循環待ちがあっても**全項目 green のまま出荷される**。「テストが通っても壊れている」の典型。
+
+  - **`Closing` 中に child を kill → respawn** させ、host が手続きを中止して
+    **登記を更新しない**ことを確認（登記を書く変異を入れると red）
+  - **未 ack スロットへ上書き投函する変異**を入れると red（slot 再利用の不変条件・
+    `transport.rs:25-27` の鏡像）
+  - **host 停滞時にタイムアウトでクローズが完遂する**（タイムアウトを外す変異で
+    `Closing` に無期限滞留 → red）
 - 判定は解析で行い人間を介在させない。**computer-use は受け入れ E2E の主経路にしない**
   （CAP.7）
 

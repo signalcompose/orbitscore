@@ -93,8 +93,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - 併せて: PRJ.4 にファイル名の可逆エンコード要件（`a-b/c` と `a/b-c` の衝突防止）、
   CAP.3a の列挙に `currentPreset` KVO を追加
 
-**レビューは3ラウンドの上限に到達**（CLAUDE.md の経済則）。ラウンド3の修正は独立再検証を
-経ていないため、その旨を owner へ明示して判断を仰ぐ。
+ラウンド4（owner 指示で上限超過・ハンドシェイクに限定・敵対的）:
+- **F-D1（確定デッドロック）**: 経路②が**条文3つから機械的に導ける循環待ち**になっていた。
+  UIH.2 規律3（単一メールボックス・ack を待つ間 次を投函しない）+ CLOSE_UI の ack を
+  フェーズ B へ遅らせた設計 + `evt_ack_seq` の前進に SAVE_STATE の往復が必要、の3つが噛み合い、
+  **host は SAVE_STATE を投函できず child は保存完了を待ち続ける**。症状は
+  「`close_plugin_ui` が返らずウィンドウも閉じられない」
+  → **ack の意味を二段化**（ポリシー2 新設: コマンドの ack は「受理」であって「完了」ではない）。
+  完了は `UI_CLOSED_DONE` イベントで別に通知する
+- **F-D2（未規定）**: `Closing` 中の child crash / respawn、host 停滞時の脱出条件が無かった
+  → 故障時の脱出条件を表で規定（respawn はメールボックスをリセット・host は登記を触らない /
+  host 停滞はタイムアウトで loud + 保存なしクローズ / コマンドにもタイムアウト）
+- **D-2（不変条件の継承漏れ）**: 「既存の `seq_tag` / `SLOTS` と同じ」と書きながら、
+  その核である slot 再利用ガード（`transport.rs:25-27`・**破れると UB**）を継承していなかった。
+  「一周しそうなら合流」という近似表現は**投函済みスロットの書き換え**＝ cross-process の
+  torn read と読めた → 不変条件を明記し、合流は child ローカルの pending フラグに限定。
+  消費者のいない `UI_RESIZED` は削除（リングを塞ぐだけ）
+- **D-3**: 変異検証に4項目追加。最重要は「**規律3 を忠実に守る host モックで経路②を完走**」—
+  モックが規律3 を守らないと **F-D1 があっても全項目 green のまま出荷される**
+
+**教訓**: 「既存機構と同じ方式を使う」と書くとき、**その機構の不変条件も一緒に継承しなければ
+ならない**。名前だけ借りると、元が潰したレースを再導入する。
 
 **AU の一次確認（Codex 到達不能につき自力実施）**: macOS SDK ヘッダで対応表の AU 列を確定。
 `fullState`（preset 用）と `fullStateForDocument`（ドキュメント用・*"Hosts saving documents
