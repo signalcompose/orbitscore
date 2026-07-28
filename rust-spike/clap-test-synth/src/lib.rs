@@ -434,3 +434,112 @@ impl<'a> PluginAudioProcessor<'a, TestSynthShared, TestSynthMainThread>
 // ──────────────────────────────────────────────────────────
 
 clack_export_entry!(SinglePluginEntry<TestSynth>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// state バイト列が往復すること（`clap_plugin_state` の save → load の中身）。
+    /// **VST3 oracle の同名テストと同じ意味論**であることが、形式中立の前提になる。
+    #[test]
+    fn state_round_trips_through_encoding() {
+        for offset in [-24, -1, 0, 1, 7, 24] {
+            let bytes = encode_state(offset);
+            assert_eq!(bytes.len(), STATE_LEN);
+            assert_eq!(
+                decode_state(&bytes),
+                Some(offset),
+                "encode → decode で {offset} が保存されない"
+            );
+        }
+    }
+
+    /// 🔴 不正な state を **黙って 0 に倒さない**（復元したつもりで別の音になるのを防ぐ）。
+    #[test]
+    fn state_rejects_foreign_and_short_payloads() {
+        let mut wrong_magic = encode_state(7);
+        wrong_magic[0] ^= 0xFF;
+        assert_eq!(decode_state(&wrong_magic), None, "magic 不一致を受理した");
+
+        let short = &encode_state(7)[..STATE_LEN - 1];
+        assert_eq!(decode_state(short), None, "長さ不足を受理した");
+
+        assert_eq!(decode_state(&[]), None, "空を受理した");
+    }
+
+    /// 🔴 **VST3 oracle と同じエンコードであること**を固定する。
+    ///
+    /// 両 oracle が同じ magic・同じ長さ・同じバイト並びを使うからこそ、
+    /// 「VST3 と CLAP で同じ E2E が green」という受け入れ基準が意味を持つ。
+    /// 片方だけエンコードを変えたら、この期待値が red になって気づける。
+    #[test]
+    fn state_encoding_matches_the_cross_format_contract() {
+        assert_eq!(STATE_MAGIC, 0x4F52_4331, "magic は \"ORC1\"");
+        assert_eq!(STATE_LEN, 8, "magic 4 バイト + i32 4 バイト");
+
+        let bytes = encode_state(7);
+        assert_eq!(
+            &bytes[..4],
+            &STATE_MAGIC.to_le_bytes(),
+            "先頭 4 バイトが little-endian の magic でない"
+        );
+        assert_eq!(
+            &bytes[4..8],
+            &7i32.to_le_bytes(),
+            "後半 4 バイトが little-endian の i32 オフセットでない"
+        );
+    }
+
+    /// 期待値は**仕様の式**から導出する（実装が出した値と付き合わせない）。
+    #[test]
+    fn offset_shifts_pitch_by_semitones() {
+        let base = voice_frequency_hz(69, 0);
+        assert!(
+            (base - 440.0).abs() < 1e-3,
+            "A4 (key 69・offset 0) は 440Hz のはず: {base}"
+        );
+
+        let octave_up = voice_frequency_hz(69, 12);
+        assert!(
+            (octave_up / base - 2.0).abs() < 1e-4,
+            "+12 半音で 2 倍にならない: {octave_up} / {base}"
+        );
+
+        // オフセットは key と等価に効く（key+n と offset+n が同じ音）。
+        for (key, offset) in [(60u8, 7i32), (72, -5), (69, 3)] {
+            let via_offset = voice_frequency_hz(key, offset);
+            let via_key = voice_frequency_hz((key as i32 + offset) as u8, 0);
+            assert!(
+                (via_offset - via_key).abs() < 1e-3,
+                "key={key} offset={offset}: オフセットが key と等価に効いていない"
+            );
+        }
+    }
+
+    /// 🔴 配線: `note_on` が **実際に** オフセットを使って phase_inc を決めること。
+    /// 純関数（`voice_frequency_hz`）のテストだけでは、`note_on` がそれを無視していても green になる。
+    #[test]
+    fn note_on_applies_state_offset_to_phase_increment() {
+        let sample_rate = 48_000.0f32;
+        let mut plain = SineVoice::new();
+        let mut shifted = SineVoice::new();
+
+        plain.note_on(69, sample_rate, 0);
+        shifted.note_on(69, sample_rate, 12);
+
+        let expected_plain = TAU * voice_frequency_hz(69, 0) / sample_rate;
+        let expected_shifted = TAU * voice_frequency_hz(69, 12) / sample_rate;
+        assert!(
+            (plain.phase_inc - expected_plain).abs() < 1e-6,
+            "offset 0 の phase_inc が仕様式と一致しない"
+        );
+        assert!(
+            (shifted.phase_inc - expected_shifted).abs() < 1e-6,
+            "offset 12 の phase_inc が仕様式と一致しない"
+        );
+        assert!(
+            (shifted.phase_inc / plain.phase_inc - 2.0).abs() < 1e-4,
+            "offset がヴォイスに反映されていない（phase_inc が変わらない）"
+        );
+    }
+}

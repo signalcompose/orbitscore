@@ -25,6 +25,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
+use clack_extensions::state::PluginState;
 use clack_host::events::io::EventBuffer;
 use clack_host::events::UnknownEvent;
 use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
@@ -53,6 +54,51 @@ pub struct ClapInstrumentProcessor {
 }
 
 impl ClapInstrumentProcessor {
+    /// 現在の plugin state をバイト列で取り出す（#557・`CLAP_EXT_STATE`）。
+    ///
+    /// **VST3 側 `Vst3InstrumentProcessor::capture_state` と同じ意味論**にそろえる:
+    ///
+    /// - 拡張が無い / `save` が失敗したら `Err`。**`Ok(vec![])` にしない**
+    /// - **空 state も `Err`**。サイズ 0 を「成功」として登記すると、再起動時に音色を
+    ///   失ったことに気づけない（spec UIH.3「サイズ 0 の state を成功として登記しない」）
+    ///
+    /// メインスレッドから呼ぶこと（`PluginMainThreadHandle` の契約）。本 crate の
+    /// プロセッサは `!Send` で単一スレッド運用なので、呼び出し側が守れば自然に満たされる。
+    pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
+        let mut handle = self._instance.plugin_handle();
+        let state = handle
+            .get_extension::<PluginState>()
+            .ok_or_else(|| ClapHostError::State("plugin が CLAP_EXT_STATE を持たない".into()))?;
+        let mut bytes = Vec::new();
+        state
+            .save(&mut handle, &mut bytes)
+            .map_err(|error| ClapHostError::State(format!("save: {error}")))?;
+        if bytes.is_empty() {
+            return Err(ClapHostError::State(
+                "plugin が空の state を返した（0 バイトを成功として登記しない）".into(),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    /// 保存済み state を適用する（#557・spawn 時の復元経路）。
+    ///
+    /// VST3 側 `apply_state_bytes` と対称。**空バイト列は受け付けない** —
+    /// 「復元したつもりで既定音色のまま」という silent な取り違えを防ぐ。
+    pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
+        if bytes.is_empty() {
+            return Err(ClapHostError::State("空の state を適用しようとした".into()));
+        }
+        let mut handle = self._instance.plugin_handle();
+        let state = handle
+            .get_extension::<PluginState>()
+            .ok_or_else(|| ClapHostError::State("plugin が CLAP_EXT_STATE を持たない".into()))?;
+        let mut reader = bytes;
+        state
+            .load(&mut handle, &mut reader)
+            .map_err(|error| ClapHostError::State(format!("load: {error}")))
+    }
+
     /// Converts a plugin output event into the M2 child-to-host event representation.
     pub fn neutral_output_event(event: &UnknownEvent) -> Option<NeutralEvent> {
         crate::events::neutral_event_from_clap_output(event)

@@ -6,6 +6,10 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
+use orbit_audio_sandbox::transport::{
+    service_command_mailbox, write_sidecar, CommandOutcome, CMD_RESULT_BAD_ARG,
+    CMD_RESULT_IO_ERROR, CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE,
+};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
@@ -17,6 +21,8 @@ struct Args {
     plugin: PathBuf,
     plugin_id: Option<String>,
     sample_rate: u32,
+    /// #557: 起動時に適用する保存済み state のパス（VST3 child と対称）。
+    state: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -24,6 +30,7 @@ fn parse_args() -> Result<Args> {
     let mut plugin = None;
     let mut plugin_id = None;
     let mut sample_rate = 48_000;
+    let mut state = None;
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -37,12 +44,8 @@ fn parse_args() -> Result<Args> {
                     .parse()
                     .context("--sample-rate の parse")?;
             }
-            // #540 P2: state 復元は VST3 instrument child のみ対応。CLAP は未対応であることを
-            // 「未知の引数」より明確なメッセージで返す（daemon の attach エラーとして表面化）。
-            "--state" => bail!(
-                "state restore (--state) is not supported for CLAP instruments yet (#540 P2); \
-                 use a VST3 build of the plugin"
-            ),
+            // #557: VST3 child と同じ意味論で state を復元する（形式中立の要件 CAP.6）。
+            "--state" => state = Some(PathBuf::from(it.next().context("--state に値が必要")?)),
             other => bail!("未知の引数: {other}"),
         }
     }
@@ -51,7 +54,35 @@ fn parse_args() -> Result<Args> {
         plugin: plugin.context("--plugin は必須")?,
         plugin_id,
         sample_rate,
+        state,
     })
+}
+
+/// `CMD_SAVE_STATE` の本体。戻り値は [`CommandOutcome`] で、これを
+/// `service_command_mailbox` が `cmd_result` / `cmd_result_len` / `cmd_result_detail` へ
+/// publish する（この関数は共有メモリに直接触らない）。
+///
+/// **VST3 child の `handle_save_state` と同じ形**。フォーマット固有なのは
+/// `capture_state()` の呼び先だけで、プロトコル規律は共有層が持つ。
+fn handle_save_state(
+    path_arg: Option<&str>,
+    instrument: &mut ClapInstrumentProcessor,
+) -> CommandOutcome {
+    let Some(path) = path_arg.filter(|candidate| !candidate.is_empty()) else {
+        return CommandOutcome::failed(
+            CMD_RESULT_BAD_ARG,
+            "cmd_arg is empty or not NUL-terminated UTF-8",
+        );
+    };
+    let bytes = match instrument.capture_state() {
+        Err(error) => return CommandOutcome::failed(CMD_RESULT_PLUGIN_ERROR, format!("{error}")),
+        Ok(bytes) => bytes,
+    };
+    // UIH.3 は fsync を要求する（`write_sidecar` が担う）。
+    match write_sidecar(path, &bytes) {
+        Err(error) => CommandOutcome::failed(CMD_RESULT_IO_ERROR, format!("write {path}: {error}")),
+        Ok(()) => CommandOutcome::ok(bytes.len() as u64),
+    }
 }
 
 fn in_order_seqs(last: u64, cur: u64) -> impl Iterator<Item = u64> {
@@ -185,6 +216,15 @@ fn main() -> Result<()> {
         MAX_FRAMES as u32,
     )
     .with_context(|| format!("load CLAP instrument {:?}", args.plugin))?;
+    // #557: state の復元は **READY を publish する前**に済ませる。host が READY を見た時点で
+    // 音色が確定していないと、「復元前の既定音色で 1 ブロック鳴る」窓ができる。
+    if let Some(state_path) = args.state.as_deref() {
+        let bytes =
+            std::fs::read(state_path).with_context(|| format!("read state {:?}", state_path))?;
+        instrument
+            .apply_state_bytes(&bytes)
+            .with_context(|| format!("apply state {:?}", state_path))?;
+    }
     // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, instrument.has_audio_input());
@@ -211,6 +251,14 @@ fn main() -> Result<()> {
         if parent_watch.should_exit() {
             eprintln!("[orbit-clap-instrument-child] 親プロセス死亡を検知、終了する");
             break;
+        }
+        // #557: host からのコマンドを処理する（UIH.2）。VST3 child と同じ共有層を使うので、
+        // ack の publish 順序・未知 kind の扱い・detail の切り詰め禁止は自動的に継承される。
+        unsafe {
+            service_command_mailbox(region, |kind, arg| match kind {
+                CMD_SAVE_STATE => Some(handle_save_state(arg, &mut instrument)),
+                _ => None,
+            });
         }
         let cur = unsafe { (*region).seq_request.load(Acquire) };
         if cur <= last {
