@@ -12,13 +12,14 @@ publish = false
 description = "Minimal CLAP audio effect for γ-effects daemon CLAP hosting verification"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 clack-plugin = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744" }
 clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744", features = [
   "clack-plugin",
   "audio-ports",
+  "state",
 ] }
 
 [dev-dependencies]

@@ -43,6 +43,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
+use clack_extensions::state::PluginState;
 use clack_host::events::io::InputEvents;
 use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
 
@@ -85,6 +86,7 @@ impl ClapEffectProcessor {
         sample_rate: u32,
         channels: usize,
         max_frames: u32,
+        state: Option<&[u8]>,
     ) -> Result<(Self, LoadedPluginInfo), ClapHostError> {
         // standalone なので daemon の監視フィールドではなく fresh な Arc を渡す
         // （callback は pump しない・resize は監視しない）。
@@ -98,13 +100,47 @@ impl ClapEffectProcessor {
             Arc::new(AtomicU64::new(0)),
         )?;
 
-        let processor = Self {
+        let mut processor = Self {
             plugin: loaded.plugin,
             buffers: loaded.buffers,
             steady: 0,
             _instance: loaded.instance,
         };
+        if let Some(bytes) = state {
+            processor.apply_state_bytes(bytes)?;
+        }
         Ok((processor, loaded.info))
+    }
+
+    pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
+        let mut handle = self._instance.plugin_handle();
+        let state = handle
+            .get_extension::<PluginState>()
+            .ok_or_else(|| ClapHostError::State("plugin が CLAP_EXT_STATE を持たない".into()))?;
+        let mut bytes = Vec::new();
+        state
+            .save(&mut handle, &mut bytes)
+            .map_err(|error| ClapHostError::State(format!("save: {error}")))?;
+        if bytes.is_empty() {
+            return Err(ClapHostError::State(
+                crate::instrument::EMPTY_STATE_FROM_PLUGIN.into(),
+            ));
+        }
+        Ok(bytes)
+    }
+
+    pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
+        if bytes.is_empty() {
+            return Err(ClapHostError::State("空の state を適用しようとした".into()));
+        }
+        let mut handle = self._instance.plugin_handle();
+        let state = handle
+            .get_extension::<PluginState>()
+            .ok_or_else(|| ClapHostError::State("plugin が CLAP_EXT_STATE を持たない".into()))?;
+        let mut reader = bytes;
+        state
+            .load(&mut handle, &mut reader)
+            .map_err(|error| ClapHostError::State(format!("load: {error}")))
     }
 
     /// Whether the loaded plugin exposes an audio input port.

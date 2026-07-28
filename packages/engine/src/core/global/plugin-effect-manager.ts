@@ -2,7 +2,12 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
-import { EffectChainMap, normalizePluginInstanceName, resolveEffectSpec } from './effect-slot'
+import {
+  EffectChainMap,
+  normalizePluginInstanceName,
+  resolveEffectSpec,
+  type PluginSlot,
+} from './effect-slot'
 
 /** Owns the single v1 master-insert plugin declaration and eager load. */
 export class PluginEffectManager {
@@ -19,6 +24,10 @@ export class PluginEffectManager {
 
   hasDeclaration(): boolean {
     return this.slots.has('master')
+  }
+
+  chain(): readonly PluginSlot[] {
+    return this.slots.chainFor('master')
   }
 
   async effect(spec: string, pluginId?: string): Promise<void> {

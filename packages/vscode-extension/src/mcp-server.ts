@@ -177,6 +177,10 @@ export type RescanPluginsResult =
   | { ok: true; count: number; skipped: string[] }
   | { ok: false; error: string }
 
+export type SavePluginStateResult =
+  | { ok: true; saved: unknown }
+  | { ok: false; error: string; code?: string; details?: unknown }
+
 /**
  * Arguments for register_mcp_server. `scope` is a raw string here (rather than
  * the 'project' | 'user' union) so validation lives in one place — the
@@ -219,6 +223,11 @@ export interface OrbitScoreToolHandlers {
   listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
   /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
   rescanPlugins(): Promise<RescanPluginsResult> | RescanPluginsResult
+  /** 明示plugin state保存。UIH.5の揮発アドレス `(sequence,index)` を受ける。 */
+  savePluginState?(
+    sequence: string,
+    index: number,
+  ): Promise<SavePluginStateResult> | SavePluginStateResult
   /**
    * Optional (unlike the members above): only hosts that can register
    * themselves into Claude Code expose the register_mcp_server tool — the
@@ -771,6 +780,43 @@ function buildServer(
       return { content: [{ type: 'text', text: handlers.getLog(lines).join('\n') }] }
     },
   )
+
+  const savePluginState = handlers.savePluginState?.bind(handlers)
+  if (savePluginState) {
+    server.registerTool(
+      'save_plugin_state',
+      {
+        title: 'Save Plugin State',
+        description:
+          'Save the current state of a running plugin into the project states directory and ' +
+          'register it in project.yaml. Address the current chain with sequence and index: ' +
+          'index 0 is a note-sequence instrument; effects start at index 1; use sequence ' +
+          '"master" with index 1 for the master effect. Playback must be stopped.',
+        inputSchema: {
+          sequence: z.string().describe('Sequence name, or the reserved name "master"'),
+          index: z.number().describe('UIH.5 chain index (instrument 0, effects 1-based)'),
+        },
+      },
+      async (args) => {
+        const sequence = typeof args.sequence === 'string' ? args.sequence : ''
+        const index = typeof args.index === 'number' ? args.index : NaN
+        if (!sequence || !Number.isInteger(index) || index < 0) {
+          return errorResult('sequence and a non-negative integer index are required')
+        }
+        const result = await savePluginState(sequence, index)
+        if (!result.ok) {
+          return errorResult(
+            JSON.stringify({
+              error: result.error,
+              ...(result.code ? { code: result.code } : {}),
+              ...(result.details === undefined ? {} : { details: result.details }),
+            }),
+          )
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result.saved) }] }
+      },
+    )
+  }
 
   server.registerTool(
     'analyze_audio',

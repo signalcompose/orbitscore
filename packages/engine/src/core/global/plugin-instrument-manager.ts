@@ -2,7 +2,7 @@ import type { AudioEngine } from '../../audio/types'
 
 import { AudioManager } from './audio-manager'
 import { resolvePathDirect } from './audio-resolver'
-import { EffectChainMap, normalizePluginInstanceName } from './effect-slot'
+import { EffectChainMap, normalizePluginInstanceName, type PluginSlot } from './effect-slot'
 import { LinkAudioManager } from './link-audio-manager'
 import { isPluginPathSpec, resolvePluginSpec, validatePluginExtension } from './plugin-resolver'
 
@@ -26,6 +26,10 @@ export class PluginInstrumentManager {
 
   hasDeclaration(): boolean {
     return this.slots.hasAny()
+  }
+
+  chainFor(sequenceName: string): readonly PluginSlot[] {
+    return this.slots.chainFor(sequenceName)
   }
 
   async instrument(

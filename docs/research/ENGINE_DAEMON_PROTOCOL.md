@@ -1,8 +1,8 @@
-# Engine Daemon IPC Protocol Specification (v0.1 draft)
+# Engine Daemon IPC Protocol Specification (v0.2 draft)
 
 **ステータス**: Draft（Issue #93 の初期設計）
 **最終更新**: 2026-04-17
-**対象バージョン**: protocol v0.1 (Phase 1b)
+**対象バージョン**: protocol v0.2
 **関連 Issue**: [#93](https://github.com/signalcompose/orbitscore/issues/93), [#107](https://github.com/signalcompose/orbitscore/issues/107), [#108](https://github.com/signalcompose/orbitscore/issues/108)
 
 ---
@@ -29,7 +29,7 @@ TypeScript 側アプリケーション層（VS Code extension / interpreter）�
 - daemon は選択した port を **stdout に 1 行 JSON**（改行終端、即 flush）で出力:
 
 ```json
-{"ready": true, "port": 52913, "protocol_version": "0.1"}
+{"ready": true, "port": 52913, "protocol_version": "0.2"}
 ```
 
 クライアントは stdout をキャプチャしてこれを読み、接続する。
@@ -90,7 +90,7 @@ Client                          Daemon
 ```json
 {
   "type": "handshake",
-  "protocol_version": "0.1",
+  "protocol_version": "0.2",
   "daemon_version": "0.0.1",
   "capabilities": ["playback", "src"]
 }
@@ -316,7 +316,7 @@ daemon の状態取得。
   "id": "u6",
   "result": {
     "daemon_version": "0.0.1",
-    "protocol_version": "0.1",
+    "protocol_version": "0.2",
     "uptime_sec": 123.4,
     "output_sample_rate": 48000,
     "output_channels": 2,
@@ -335,6 +335,47 @@ daemon の状態取得。
 // Response
 { "id": "u7", "result": "pong" }
 ```
+
+### GetPluginState（v0.2）
+
+停止中の out-of-process plugin child から現在 state を取得し、host が同一ディレクトリの
+一時ファイルを検証してから `path` へ atomic rename する。MCP の `(sequence,index)` は
+TypeScript 層でこの wire target へ解決済みであり、daemon は chain index を永続キーとして扱わない。
+
+```json
+// effect（bus 省略 = master）
+{
+  "id": "u8",
+  "method": "GetPluginState",
+  "params": { "role": "effect", "path": "/abs/project/states/master.state" }
+}
+
+// instrument
+{
+  "id": "u9",
+  "method": "GetPluginState",
+  "params": {
+    "role": "instrument",
+    "instance": "plugin:lead",
+    "path": "/abs/project/states/lead.state"
+  }
+}
+
+// Response
+{
+  "id": "u9",
+  "result": { "path": "/abs/project/states/lead.state", "bytes_written": 4096 }
+}
+```
+
+- `path` は絶対パス。埋め込み NUL、共有 mailbox の固定長を超える UTF-8 path は拒否する
+- `role="effect"` の `bus` は任意。省略時は master effect slot
+- `role="instrument"` の `instance` は必須
+- sample playback、live instrument note、または上位 transport が演奏中なら保存を拒否する。
+  自動停止は行わない
+- mailbox timeout は5秒。timeout、plugin非対応、child終了、I/O、protocol不整合は別々の
+  `PLUGIN_STATE_*` error codeで返す
+- 成功は `bytes_written > 0`、ackのbyte数と実ファイルサイズ一致、atomic rename完了を意味する
 
 ---
 

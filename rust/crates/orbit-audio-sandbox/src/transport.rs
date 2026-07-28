@@ -30,10 +30,13 @@
 // 共有メモリは生ポインタ経由でクロスプロセス参照するため unsafe FFI 同等。
 #![allow(unsafe_code)]
 
+use std::fmt;
 use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use memmap2::MmapMut;
 
@@ -250,6 +253,324 @@ pub const CMD_RESULT_IO_ERROR: u32 = 2;
 pub const CMD_RESULT_BAD_ARG: u32 = 3;
 /// `cmd_result`: 未知の `cmd_kind`（**黙って無視せず ack で知らせる**）。
 pub const CMD_RESULT_UNKNOWN_KIND: u32 = 4;
+/// `cmd_result`: command の処理中に child が終了し、host が failure ack で打ち切った。
+pub const CMD_RESULT_CHILD_EXITED: u32 = 5;
+
+/// plugin state mailbox の ack 待ち上限（UIH.2 / #562）。
+///
+/// 上位層を含めてこの定数を唯一の production timeout として使う。テストだけは
+/// [`CommandMailboxHost::issue_save_state_with_timeout`] へ短い値を渡して timeout 分岐を踏む。
+pub const PLUGIN_STATE_MAILBOX_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandMailboxResponse {
+    pub bytes_written: u64,
+}
+
+#[derive(Debug)]
+pub enum CommandMailboxError {
+    Mapping(io::Error),
+    InvalidArgument(String),
+    Busy {
+        seq: u64,
+    },
+    Poisoned {
+        seq: u64,
+    },
+    Timeout {
+        seq: u64,
+        elapsed: Duration,
+    },
+    ChildExited {
+        seq: u64,
+        detail: String,
+    },
+    CommandFailed {
+        seq: u64,
+        result: u32,
+        detail: String,
+    },
+    Protocol {
+        seq: u64,
+        ack: u64,
+    },
+    SequenceExhausted,
+    CoordinatorPoisoned,
+}
+
+impl fmt::Display for CommandMailboxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mapping(error) => write!(f, "plugin state mailbox mapping failed: {error}"),
+            Self::InvalidArgument(detail) => {
+                write!(f, "invalid plugin state sidecar path: {detail}")
+            }
+            Self::Busy { seq } => {
+                write!(f, "plugin state mailbox command {seq} is still in flight")
+            }
+            Self::Poisoned { seq } => write!(
+                f,
+                "plugin state mailbox command {seq} timed out and remains in flight"
+            ),
+            Self::Timeout { seq, elapsed } => write!(
+                f,
+                "plugin state mailbox command {seq} timed out after {elapsed:?}"
+            ),
+            Self::ChildExited { seq, detail } => {
+                write!(
+                    f,
+                    "plugin child exited during mailbox command {seq}: {detail}"
+                )
+            }
+            Self::CommandFailed {
+                seq,
+                result,
+                detail,
+            } => write!(
+                f,
+                "plugin state mailbox command {seq} failed (result={result}): {detail}"
+            ),
+            Self::Protocol { seq, ack } => write!(
+                f,
+                "plugin state mailbox ack mismatch: expected exactly {seq}, got {ack}"
+            ),
+            Self::SequenceExhausted => write!(f, "plugin state mailbox sequence exhausted"),
+            Self::CoordinatorPoisoned => write!(f, "plugin state mailbox coordinator poisoned"),
+        }
+    }
+}
+
+impl std::error::Error for CommandMailboxError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Mapping(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for CommandMailboxError {
+    fn from(value: io::Error) -> Self {
+        Self::Mapping(value)
+    }
+}
+
+#[derive(Debug)]
+struct InFlightCommand {
+    seq: u64,
+    generation: u64,
+    abandoned: bool,
+    sidecar_path: std::path::PathBuf,
+}
+
+#[derive(Debug, Default)]
+struct CommandMailboxState {
+    generation: u64,
+    in_flight: Option<InFlightCommand>,
+}
+
+/// host 側の single-outstanding command coordinator（UIH.2 / #562）。
+///
+/// `Mutex` は投函と reset の短い critical section だけを保護する。ack 待ち中は保持しないため、
+/// watchdog は child 死亡後に in-flight command を failure ack で完了させられる。
+#[derive(Debug)]
+pub struct CommandMailboxHost {
+    shm_path: std::path::PathBuf,
+    state: Mutex<CommandMailboxState>,
+}
+
+impl CommandMailboxHost {
+    pub fn new(shm_path: std::path::PathBuf) -> Self {
+        Self {
+            shm_path,
+            state: Mutex::new(CommandMailboxState::default()),
+        }
+    }
+
+    pub fn issue_save_state(
+        &self,
+        sidecar_path: &Path,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_save_state_with_timeout(sidecar_path, PLUGIN_STATE_MAILBOX_TIMEOUT)
+    }
+
+    /// 現在の child incarnation が plugin state 復元まで終えて READY かをAcquireで確認する。
+    pub fn child_is_ready(&self) -> Result<bool, CommandMailboxError> {
+        let mmap = open_shared(&self.shm_path)?;
+        let region = region_ptr(&mmap);
+        Ok(unsafe { (*region).child_status.load(Ordering::Acquire) } == CHILD_STATUS_READY)
+    }
+
+    /// `timeout` の差し替えは unit test が5秒待たずに failure lifecycle を実証するための seam。
+    /// production caller は必ず [`Self::issue_save_state`] を使う。
+    #[doc(hidden)]
+    pub fn issue_save_state_with_timeout(
+        &self,
+        sidecar_path: &Path,
+        timeout: Duration,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        if !sidecar_path.is_absolute() {
+            return Err(CommandMailboxError::InvalidArgument(
+                "path must be absolute".into(),
+            ));
+        }
+        let sidecar = sidecar_path.to_str().ok_or_else(|| {
+            CommandMailboxError::InvalidArgument("path must be valid UTF-8".into())
+        })?;
+
+        let mmap = open_shared(&self.shm_path)?;
+        let region = region_ptr(&mmap);
+        let (seq, generation) = {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| CommandMailboxError::CoordinatorPoisoned)?;
+
+            if let Some(in_flight) = state.in_flight.as_ref() {
+                if !in_flight.abandoned {
+                    return Err(CommandMailboxError::Busy { seq: in_flight.seq });
+                }
+                let ack = unsafe { (*region).cmd_ack_seq.load(Ordering::Acquire) };
+                if ack != in_flight.seq {
+                    return Err(CommandMailboxError::Poisoned { seq: in_flight.seq });
+                }
+                remove_abandoned_sidecar(&in_flight.sidecar_path)?;
+                state.in_flight = None;
+            }
+
+            let previous = unsafe { (*region).cmd_seq.load(Ordering::Relaxed) };
+            let seq = previous
+                .checked_add(1)
+                .ok_or(CommandMailboxError::SequenceExhausted)?;
+            unsafe {
+                if !write_cstr_field(&mut (*region).cmd_arg, sidecar) {
+                    return Err(CommandMailboxError::InvalidArgument(format!(
+                        "path must contain no NUL and fit in CMD_ARG_BYTES={CMD_ARG_BYTES}"
+                    )));
+                }
+                let _ = write_cstr_field(&mut (*region).cmd_result_detail, "");
+                (*region).cmd_result_len.store(0, Ordering::Relaxed);
+                (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
+                (*region).cmd_kind.store(CMD_SAVE_STATE, Ordering::Relaxed);
+                // Release publish: child は cmd_seq Acquire 後に kind/arg を読む。
+                (*region).cmd_seq.store(seq, Ordering::Release);
+            }
+            let generation = state.generation;
+            state.in_flight = Some(InFlightCommand {
+                seq,
+                generation,
+                abandoned: false,
+                sidecar_path: sidecar_path.to_path_buf(),
+            });
+            (seq, generation)
+        };
+
+        let started = Instant::now();
+        loop {
+            {
+                let state = self
+                    .state
+                    .lock()
+                    .map_err(|_| CommandMailboxError::CoordinatorPoisoned)?;
+                if state.generation != generation {
+                    return Err(CommandMailboxError::ChildExited {
+                        seq,
+                        detail: "child died and the mailbox was reset before replacement spawn"
+                            .into(),
+                    });
+                }
+            }
+
+            let ack = unsafe { (*region).cmd_ack_seq.load(Ordering::Acquire) };
+            if ack == seq {
+                let result = unsafe { (*region).cmd_result.load(Ordering::Relaxed) };
+                let bytes_written = unsafe { (*region).cmd_result_len.load(Ordering::Relaxed) };
+                let detail = unsafe {
+                    read_cstr_field(&(*region).cmd_result_detail)
+                        .unwrap_or("invalid UTF-8 in command detail")
+                        .to_string()
+                };
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| CommandMailboxError::CoordinatorPoisoned)?;
+                if matches!(
+                    state.in_flight.as_ref(),
+                    Some(current)
+                        if current.seq == seq
+                            && current.generation == generation
+                ) {
+                    state.in_flight = None;
+                }
+                return match result {
+                    CMD_RESULT_OK => Ok(CommandMailboxResponse { bytes_written }),
+                    CMD_RESULT_CHILD_EXITED => {
+                        Err(CommandMailboxError::ChildExited { seq, detail })
+                    }
+                    _ => Err(CommandMailboxError::CommandFailed {
+                        seq,
+                        result,
+                        detail,
+                    }),
+                };
+            }
+            if ack > seq {
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| CommandMailboxError::CoordinatorPoisoned)?;
+                if let Some(current) = state.in_flight.as_mut() {
+                    if current.seq == seq && current.generation == generation {
+                        current.abandoned = true;
+                    }
+                }
+                return Err(CommandMailboxError::Protocol { seq, ack });
+            }
+
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                let mut state = self
+                    .state
+                    .lock()
+                    .map_err(|_| CommandMailboxError::CoordinatorPoisoned)?;
+                if let Some(current) = state.in_flight.as_mut() {
+                    if current.seq == seq && current.generation == generation {
+                        // timeout 後も delayed ack が来うる。ack/reset まで slot を再利用させない。
+                        current.abandoned = true;
+                    }
+                }
+                return Err(CommandMailboxError::Timeout { seq, elapsed });
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// watchdog が旧 child の死亡を確認した後、replacement spawn より前に呼ぶ。
+    pub fn reset_after_child_exit(&self) -> Result<(), CommandMailboxError> {
+        let mmap = open_shared(&self.shm_path)?;
+        let region = region_ptr(&mmap);
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| CommandMailboxError::CoordinatorPoisoned)?;
+        // SAFETY: mmap は生存し、旧 child の死亡確認後なので child と reset writer は競合しない。
+        unsafe { reset_child_starting(region) };
+        state.generation = state.generation.wrapping_add(1);
+        if let Some(in_flight) = state.in_flight.as_ref() {
+            remove_abandoned_sidecar(&in_flight.sidecar_path)?;
+        }
+        state.in_flight = None;
+        Ok(())
+    }
+}
+
+fn remove_abandoned_sidecar(path: &Path) -> Result<(), CommandMailboxError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CommandMailboxError::Mapping(error)),
+    }
+}
 
 /// 固定長バイト配列へ NUL 終端 UTF-8 を書く。収まらなければ `false`（**切り詰めない**）。
 ///
@@ -321,10 +642,9 @@ impl CommandOutcome {
 /// **この関数がプロトコル不変条件を一手に引き受ける** — child 側はフォーマット固有の処理だけを
 /// handler に書けばよい。分散させると publish 順序を child ごとに守り続ける必要が生じる。
 ///
-/// **現状これを呼んでいるのは `orbit-vst3-instrument-child` のみ**（と統合テストの fixture）。
-/// 残る `orbit-{vst3-effect,clap-instrument,clap-effect}-child` は未配線で、コマンドを
-/// 送っても ack しない。handler を書くだけで乗れる設計にしてあるが、**乗るまでは
-/// 「送れば必ず ack が返る」とは言えない**（host 側のタイムアウトが要る・spec UIH.2）。
+/// instrument child は VST3 / CLAP とも配線済み。effect child も同じ handler seam を使う。
+/// host は [`CommandMailboxHost`] を通して発行し、未対応 child / plugin hang を
+/// [`PLUGIN_STATE_MAILBOX_TIMEOUT`] で loud に失敗させる。
 ///
 /// 引き受ける不変条件:
 /// - **未知の `cmd_kind` を黙って捨てない** — handler が `None` を返したら
@@ -344,7 +664,8 @@ impl CommandOutcome {
 /// - **respawn 時にメールボックスを reset する**（spec UIH.2 規律 0-b）。残った未処理コマンドを
 ///   replacement child が自分宛として実行してしまう
 ///
-/// どちらも host 側の配線が未実装のため現在は未到達。配線を足す PR が同時に満たすこと。
+/// production host は [`CommandMailboxHost`] で単一未処理とexact ackを強制し、daemonの
+/// effect/instrument watchdogは旧child死亡後に同じcoordinatorをresetしてからrespawnする。
 ///
 /// # Safety
 /// `region` は生存中の [`SharedRegion`] を指していなければならない。
@@ -457,6 +778,22 @@ pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bo
 /// `region` は呼び出し元が map 済みの生存 SharedRegion を指していること。
 pub unsafe fn reset_child_starting(region: *mut SharedRegion) {
     unsafe {
+        let seq = (*region).cmd_seq.load(Ordering::Acquire);
+        let ack = (*region).cmd_ack_seq.load(Ordering::Relaxed);
+        if seq > ack {
+            let _ = write_cstr_field(
+                &mut (*region).cmd_result_detail,
+                "child exited before completing the command",
+            );
+            (*region).cmd_result_len.store(0, Ordering::Relaxed);
+            (*region)
+                .cmd_result
+                .store(CMD_RESULT_CHILD_EXITED, Ordering::Relaxed);
+            // failure payload を先に書き、ack を最後に publish する。
+            (*region).cmd_ack_seq.store(seq, Ordering::Release);
+        }
+        (*region).cmd_kind.store(CMD_NONE, Ordering::Relaxed);
+        (*region).cmd_arg.fill(0);
         (*region)
             .child_status
             .store(CHILD_STATUS_STARTING, Ordering::Release);
@@ -475,6 +812,32 @@ pub unsafe fn reset_control_run(region: *mut SharedRegion) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    static MAILBOX_TEST_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn mailbox_test_path(label: &str) -> std::path::PathBuf {
+        let seq = MAILBOX_TEST_SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "orbit-mailbox-{label}-{}-{seq}.shm",
+            std::process::id()
+        ))
+    }
+
+    fn wait_for_command(region: *mut SharedRegion) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+            if seq != 0 {
+                return seq;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "host did not publish a mailbox command"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 
     // クロスプロセスで共有する以上、レイアウトが壊れると親子で別物を読む。サイズ/整列の回帰を捕捉。
     #[test]
@@ -618,6 +981,243 @@ mod tests {
 
         drop(mmap);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn command_mailbox_host_round_trips_one_exact_ack() {
+        let shm = mailbox_test_path("round-trip");
+        let mmap = create_shared(&shm).expect("create");
+        let host = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let child_shm = shm.clone();
+        let child = std::thread::spawn(move || {
+            let child_mmap = open_shared(&child_shm).expect("child map");
+            let region = region_ptr(&child_mmap);
+            let seq = wait_for_command(region);
+            unsafe {
+                assert_eq!((*region).cmd_kind.load(Ordering::Acquire), CMD_SAVE_STATE);
+                assert_eq!(
+                    read_cstr_field(&(*region).cmd_arg),
+                    Some("/tmp/orbit-mailbox-state.bin")
+                );
+                (*region).cmd_result_len.store(321, Ordering::Relaxed);
+                (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
+                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+        });
+
+        let response = host
+            .issue_save_state(Path::new("/tmp/orbit-mailbox-state.bin"))
+            .expect("mailbox success");
+        assert_eq!(response.bytes_written, 321);
+        child.join().expect("child join");
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn command_mailbox_host_rejects_a_second_outstanding_command() {
+        let shm = mailbox_test_path("single-outstanding");
+        let mmap = create_shared(&shm).expect("create");
+        let host = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let child_shm = shm.clone();
+        let child = std::thread::spawn(move || {
+            let child_mmap = open_shared(&child_shm).expect("child map");
+            let region = region_ptr(&child_mmap);
+            let seq = wait_for_command(region);
+            std::thread::sleep(Duration::from_millis(40));
+            unsafe {
+                (*region).cmd_result_len.store(1, Ordering::Relaxed);
+                (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
+                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+        });
+        let first_host = host.clone();
+        let first = std::thread::spawn(move || {
+            first_host.issue_save_state(Path::new("/tmp/orbit-mailbox-first.bin"))
+        });
+        let region = region_ptr(&mmap);
+        let seq = wait_for_command(region);
+        let second = host
+            .issue_save_state(Path::new("/tmp/orbit-mailbox-second.bin"))
+            .expect_err("second command must not overwrite the first");
+        assert!(matches!(second, CommandMailboxError::Busy { seq: busy } if busy == seq));
+        assert_eq!(
+            first
+                .join()
+                .expect("first issuer join")
+                .expect("first command")
+                .bytes_written,
+            1
+        );
+        child.join().expect("child join");
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn command_mailbox_timeout_keeps_the_slot_poisoned_until_late_ack() {
+        let shm = mailbox_test_path("timeout");
+        let mmap = create_shared(&shm).expect("create");
+        let host = CommandMailboxHost::new(shm.clone());
+        let timed_out_sidecar =
+            std::env::temp_dir().join(format!("orbit-mailbox-timeout-{}.bin", std::process::id()));
+        let _ = std::fs::remove_file(&timed_out_sidecar);
+
+        let error = host
+            .issue_save_state_with_timeout(&timed_out_sidecar, Duration::from_millis(15))
+            .expect_err("unacknowledged command must time out");
+        let timed_out_seq = match error {
+            CommandMailboxError::Timeout { seq, elapsed } => {
+                assert!(elapsed >= Duration::from_millis(15));
+                seq
+            }
+            other => panic!("unexpected timeout error: {other}"),
+        };
+        std::fs::write(&timed_out_sidecar, b"late child output")
+            .expect("simulate sidecar written after host timeout");
+        assert!(matches!(
+            host.issue_save_state_with_timeout(
+                Path::new("/tmp/orbit-mailbox-overwrite.bin"),
+                Duration::from_millis(5)
+            ),
+            Err(CommandMailboxError::Poisoned { seq }) if seq == timed_out_seq
+        ));
+
+        let region = region_ptr(&mmap);
+        unsafe {
+            (*region).cmd_result_len.store(9, Ordering::Relaxed);
+            (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
+            (*region)
+                .cmd_ack_seq
+                .store(timed_out_seq, Ordering::Release);
+        }
+        let child_shm = shm.clone();
+        let child = std::thread::spawn(move || {
+            let child_mmap = open_shared(&child_shm).expect("child map");
+            let child_region = region_ptr(&child_mmap);
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                let seq = unsafe { (*child_region).cmd_seq.load(Ordering::Acquire) };
+                if seq > timed_out_seq {
+                    unsafe {
+                        (*child_region).cmd_result_len.store(11, Ordering::Relaxed);
+                        (*child_region)
+                            .cmd_result
+                            .store(CMD_RESULT_OK, Ordering::Relaxed);
+                        (*child_region).cmd_ack_seq.store(seq, Ordering::Release);
+                    }
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "replacement command not published"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        assert_eq!(
+            host.issue_save_state_with_timeout(
+                Path::new("/tmp/orbit-mailbox-after-late-ack.bin"),
+                Duration::from_millis(250)
+            )
+            .expect("late exact ack releases the poisoned slot")
+            .bytes_written,
+            11
+        );
+        assert!(
+            !timed_out_sidecar.exists(),
+            "late-ack sidecar must be removed before mailbox reuse"
+        );
+        child.join().expect("child join");
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn command_mailbox_reset_fails_inflight_before_replacement_spawn() {
+        let shm = mailbox_test_path("reset");
+        let mmap = create_shared(&shm).expect("create");
+        let host = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let abandoned_sidecar =
+            std::env::temp_dir().join(format!("orbit-mailbox-reset-{}.bin", std::process::id()));
+        let _ = std::fs::remove_file(&abandoned_sidecar);
+        std::fs::write(&abandoned_sidecar, b"partial child output")
+            .expect("create abandoned sidecar");
+        let issuer_host = host.clone();
+        let issuer_sidecar = abandoned_sidecar.clone();
+        let issuer = std::thread::spawn(move || {
+            issuer_host.issue_save_state_with_timeout(&issuer_sidecar, Duration::from_secs(1))
+        });
+        let region = region_ptr(&mmap);
+        let seq = wait_for_command(region);
+        host.reset_after_child_exit().expect("reset after death");
+        let error = issuer
+            .join()
+            .expect("issuer join")
+            .expect_err("in-flight command must fail on child death");
+        assert!(matches!(
+            error,
+            CommandMailboxError::ChildExited {
+                seq: failed_seq,
+                ..
+            } if failed_seq == seq
+        ));
+        unsafe {
+            assert_eq!((*region).cmd_ack_seq.load(Ordering::Acquire), seq);
+            assert_eq!(
+                (*region).cmd_result.load(Ordering::Relaxed),
+                CMD_RESULT_CHILD_EXITED
+            );
+            assert_eq!((*region).cmd_kind.load(Ordering::Relaxed), CMD_NONE);
+            assert_eq!(
+                (*region).child_status.load(Ordering::Acquire),
+                CHILD_STATUS_STARTING
+            );
+        }
+        assert!(
+            !abandoned_sidecar.exists(),
+            "child death/reset must remove its abandoned sidecar"
+        );
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn command_mailbox_requires_an_exact_ack_and_valid_bounded_path() {
+        let shm = mailbox_test_path("exact-ack");
+        let mmap = create_shared(&shm).expect("create");
+        let host = CommandMailboxHost::new(shm.clone());
+        let child_shm = shm.clone();
+        let child = std::thread::spawn(move || {
+            let child_mmap = open_shared(&child_shm).expect("child map");
+            let region = region_ptr(&child_mmap);
+            let seq = wait_for_command(region);
+            unsafe { (*region).cmd_ack_seq.store(seq + 1, Ordering::Release) };
+        });
+        assert!(matches!(
+            host.issue_save_state_with_timeout(
+                Path::new("/tmp/orbit-mailbox-exact.bin"),
+                Duration::from_millis(250)
+            ),
+            Err(CommandMailboxError::Protocol { seq, ack }) if ack == seq + 1
+        ));
+        child.join().expect("child join");
+
+        let too_long = format!("/{}", "x".repeat(CMD_ARG_BYTES));
+        assert!(matches!(
+            CommandMailboxHost::new(shm.clone())
+                .issue_save_state_with_timeout(Path::new(&too_long), Duration::from_millis(1)),
+            Err(CommandMailboxError::InvalidArgument(_))
+        ));
+        assert!(matches!(
+            CommandMailboxHost::new(shm.clone()).issue_save_state_with_timeout(
+                Path::new("/tmp/before\0after"),
+                Duration::from_millis(1)
+            ),
+            Err(CommandMailboxError::InvalidArgument(_))
+        ));
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
     }
 
     // ── #555: コマンドメールボックスの引数エンコード（UIH.2） ──

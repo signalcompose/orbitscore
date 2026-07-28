@@ -25,7 +25,7 @@ async fn handshake_frame_is_sent() {
     let mut ws = daemon.connect().await;
     let hs = TestDaemon::recv_handshake(&mut ws).await;
     assert_eq!(hs["type"], "handshake");
-    assert_eq!(hs["protocol_version"], "0.1");
+    assert_eq!(hs["protocol_version"], "0.2");
     assert!(hs["daemon_version"].is_string());
     assert!(hs["capabilities"].is_array());
 }

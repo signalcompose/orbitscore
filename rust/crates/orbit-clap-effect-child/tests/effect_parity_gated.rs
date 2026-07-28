@@ -44,6 +44,7 @@ fn render_in_process_effect(dylib: &Path, input: &[f32], block_frames: usize) ->
         SAMPLE_RATE,
         CHANNELS,
         MAX_FRAMES as u32,
+        None,
     )
     .expect("load test-effect (side A in-process)");
     let mut out = Vec::with_capacity(input.len());

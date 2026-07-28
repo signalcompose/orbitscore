@@ -82,6 +82,14 @@ const CLAP_TEST_EFFECT_PATH = path.join(
   REPO_ROOT,
   'rust-spike/clap-test-effect/target/release/CLAPTestEffect.clap',
 )
+const VST3_SYNTH_PACKAGE_SCRIPT = path.join(
+  REPO_ROOT,
+  'rust/crates/orbit-vst3-synth-oracle/package-oracle.sh',
+)
+const VST3_EFFECT_PACKAGE_SCRIPT = path.join(
+  REPO_ROOT,
+  'rust/crates/orbit-vst3-gain-oracle/package-oracle.sh',
+)
 
 const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
@@ -401,6 +409,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const afterFirstInstrumentLog = (await client.call('get_log', { lines: 500 })).text
       const firstInstrumentAttachFailed =
         afterFirstInstrumentLog.includes('[OUTPROC_ATTACH_FAILED]')
+      expect(
+        firstInstrumentAttachFailed,
+        `the #562 real MCP state path requires a live CLAP instrument. Log tail: ${afterFirstInstrumentLog.slice(-800)}`,
+      ).toBe(false)
 
       if (firstInstrumentAttachFailed) {
         // The real CLAP bundle failed to attach in this environment (e.g. no
@@ -415,6 +427,139 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             `branch not exercised. Log tail: ${afterFirstInstrumentLog.slice(-400)}`,
         )
       } else {
+        // ── #562: the same MCP state-save tool reaches all four hosted forms.
+        // Package the repository-owned VST3 oracles into ignored rust/target
+        // fixtures, then attach one CLAP and one VST3 effect to audio receivers
+        // (v1 deliberately rejects seq.effect() on instrument sequences). This
+        // stays below the one-instrument/one-effect-per-receiver limits while
+        // exercising both daemon role selectors.
+        expect(fs.existsSync(CLAP_TEST_EFFECT_PATH), CLAP_TEST_EFFECT_PATH).toBe(true)
+        const vst3SynthPath = execFileSync(
+          '/bin/bash',
+          [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'mcp-e2e'],
+          { encoding: 'utf8' },
+        ).trim()
+        const vst3EffectPath = execFileSync('/bin/bash', [VST3_EFFECT_PACKAGE_SCRIPT, 'release'], {
+          encoding: 'utf8',
+        }).trim()
+
+        const declareVst3SeqRes = await client.call('evaluate_orbitscore', {
+          code: 'var vst3StateSeq = init global.seq',
+        })
+        expect(declareVst3SeqRes.isError, declareVst3SeqRes.text).toBe(false)
+        const attachVst3InstrumentRes = await client.call('evaluate_orbitscore', {
+          code: `vst3StateSeq.instrument("${vst3SynthPath}")`,
+        })
+        expect(attachVst3InstrumentRes.isError, attachVst3InstrumentRes.text).toBe(false)
+        const attachClapEffectRes = await client.call('evaluate_orbitscore', {
+          code: `drum.effect("${CLAP_TEST_EFFECT_PATH}")`,
+        })
+        expect(attachClapEffectRes.isError, attachClapEffectRes.text).toBe(false)
+        const declareVst3EffectSeqRes = await client.call('evaluate_orbitscore', {
+          code: 'var vst3EffectSeq = init global.seq',
+        })
+        expect(declareVst3EffectSeqRes.isError, declareVst3EffectSeqRes.text).toBe(false)
+        const attachVst3EffectRes = await client.call('evaluate_orbitscore', {
+          code: `vst3EffectSeq.effect("${vst3EffectPath}")`,
+        })
+        expect(attachVst3EffectRes.isError, attachVst3EffectRes.text).toBe(false)
+        await sleep(12_000) // three real child spawns + READY handshakes
+
+        const afterFourFormAttachLog = (await client.call('get_log', { lines: 500 })).text
+        expect(
+          (afterFourFormAttachLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []).length,
+          `all four #562 plugin forms must be live. Log tail: ${afterFourFormAttachLog.slice(-1200)}`,
+        ).toBe(0)
+
+        // Playing requests are rejected at the MCP boundary and must not stop
+        // transport as a side effect. Count the engine's own stop marker before
+        // and after the rejected request rather than inferring from process state.
+        const stoppedBeforeRejectedSave = (
+          afterFourFormAttachLog.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []
+        ).length
+        const rejectedWhilePlaying = await client.call('save_plugin_state', {
+          sequence: 'instSeq',
+          index: 0,
+        })
+        expect(rejectedWhilePlaying.isError, rejectedWhilePlaying.text).toBe(true)
+        expect(rejectedWhilePlaying.text).toContain('transport is running')
+        await sleep(500)
+        const afterRejectedSaveLog = (await client.call('get_log', { lines: 500 })).text
+        expect(
+          (afterRejectedSaveLog.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length,
+          `save rejection must not auto-stop transport. Log tail: ${afterRejectedSaveLog.slice(-800)}`,
+        ).toBe(stoppedBeforeRejectedSave)
+
+        // evaluate_orbitscore normally refreshes the workspace directory. Set
+        // the scratch project directory last in this same evaluation so
+        // project.yaml and states/ can only be written under tmpRoot.
+        const escapedProjectDirectory = tmpRoot.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+        const stopForSaveRes = await client.call('evaluate_orbitscore', {
+          code: `global.stop()\nglobal.setDocumentDirectory("${escapedProjectDirectory}")`,
+        })
+        expect(stopForSaveRes.isError, stopForSaveRes.text).toBe(false)
+        await waitUntil(
+          async () => {
+            const log = (await client!.call('get_log', { lines: 500 })).text
+            return (
+              (log.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length >
+              stoppedBeforeRejectedSave
+            )
+          },
+          { intervalMs: 200, timeoutMs: 5_000, label: 'transport stopped before state save' },
+        )
+
+        const errorsBeforeStateSave = (
+          (await client.call('get_log', { lines: 500 })).text.match(/ERROR:/g) ?? []
+        ).length
+        const stateRequests = [
+          { sequence: 'instSeq', index: 0, identity: 'instSeq/instrument/CLAPTestSynth/0' },
+          { sequence: 'drum', index: 1, identity: 'drum/effect/CLAPTestEffect/0' },
+          {
+            sequence: 'vst3StateSeq',
+            index: 0,
+            identity: 'vst3StateSeq/instrument/SynthOracle/0',
+          },
+          {
+            sequence: 'vst3EffectSeq',
+            index: 1,
+            identity: 'vst3EffectSeq/effect/GainOracle/0',
+          },
+        ] as const
+        for (const request of stateRequests) {
+          const response = await client.call('save_plugin_state', request)
+          expect(response.isError, response.text).toBe(false)
+          const saved = JSON.parse(response.text) as {
+            path: string
+            bytesWritten: number
+            identityKey: string
+            projectFile: string
+            projectStatePath: string
+          }
+          expect(saved.bytesWritten).toBeGreaterThan(0)
+          expect(saved.identityKey).toBe(request.identity)
+          expect(saved.projectFile).toBe(path.join(tmpRoot, 'project.yaml'))
+          expect(saved.projectStatePath.startsWith('states/')).toBe(true)
+          expect(saved.path.startsWith(path.join(tmpRoot, 'states') + path.sep)).toBe(true)
+          expect(fs.statSync(saved.path).size).toBe(saved.bytesWritten)
+        }
+        const projectYaml = fs.readFileSync(path.join(tmpRoot, 'project.yaml'), 'utf8')
+        for (const request of stateRequests) expect(projectYaml).toContain(request.identity)
+
+        const invalidStateIndex = await client.call('save_plugin_state', {
+          sequence: 'drum',
+          index: 99,
+        })
+        expect(invalidStateIndex.isError, invalidStateIndex.text).toBe(true)
+        expect(invalidStateIndex.text).toContain('Valid indices:')
+        expect(invalidStateIndex.text).toContain('1 (effect, CLAPTestEffect)')
+
+        const stateSaveLog = (await client.call('get_log', { lines: 500 })).text
+        expect(
+          (stateSaveLog.match(/ERROR:/g) ?? []).length,
+          `successful #562 saves must add no ERROR: lines. Log tail: ${stateSaveLog.slice(-1200)}`,
+        ).toBe(errorsBeforeStateSave)
+
         // ── #540 P1 (a): 同一シーケンスへの別 plugin 再宣言 = v1 の差し替え拒否。
         // エラー文言は回避策（エンジン再起動）を案内する新文言であること。
         const secondInstrumentRes = await client.call('evaluate_orbitscore', {

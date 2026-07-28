@@ -17,10 +17,10 @@ fn gain_oracle_is_sample_exact() {
         return;
     };
 
-    let (mut processor, info) = Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
-        .unwrap_or_else(|error| {
-            panic!("failed to load oracle bundle {}: {error}", bundle.display())
-        });
+    let (mut processor, info) =
+        Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None).unwrap_or_else(
+            |error| panic!("failed to load oracle bundle {}: {error}", bundle.display()),
+        );
     assert!(info.is_effect, "oracle must be detected as an effect");
     assert_eq!(info.audio_inputs, 1);
     assert_eq!(info.audio_outputs, 1);
@@ -58,6 +58,43 @@ fn gain_oracle_is_sample_exact() {
             "gain=0.5 right sample {index}"
         );
     }
+}
+
+#[test]
+fn effect_state_round_trip_restores_the_live_gain() {
+    use orbit_vst3_gain_oracle::{encode_state, STATE_LEN};
+
+    let Some(bundle) = package_oracle() else {
+        eprintln!("VST3 oracle build failed; loud skip for this machine");
+        return;
+    };
+    let (input_l, input_r) = known_stereo_input();
+    let mut output_l = vec![0.0; FRAMES];
+    let mut output_r = vec![0.0; FRAMES];
+    let (mut changed, _) = Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None)
+        .expect("load effect before state capture");
+    changed
+        .process_stereo(&input_l, &input_r, &mut output_l, &mut output_r, Some(0.25))
+        .expect("set observable oracle gain");
+    let state = changed.capture_state().expect("capture live effect state");
+    assert_eq!(state, encode_state(0.25));
+    assert_eq!(state.len(), STATE_LEN);
+    drop(changed);
+
+    output_l.fill(0.0);
+    output_r.fill(0.0);
+    let (mut restored, _) =
+        Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, Some(&state))
+            .expect("restore effect state before activation");
+    restored
+        .process_stereo(&input_l, &input_r, &mut output_l, &mut output_r, None)
+        .expect("process with restored gain");
+    for (actual, input) in output_l.iter().zip(&input_l) {
+        assert_eq!(actual.to_bits(), (*input * 0.25).to_bits());
+    }
+
+    let corrupt = b"not-an-effect-state";
+    assert!(Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, Some(corrupt)).is_err());
 }
 
 #[test]
@@ -119,10 +156,10 @@ fn process_block_rejects_non_stereo_length() {
         eprintln!("VST3 oracle build failed; loud skip for this machine");
         return;
     };
-    let (mut processor, _info) = Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
-        .unwrap_or_else(|error| {
-            panic!("failed to load oracle bundle {}: {error}", bundle.display())
-        });
+    let (mut processor, _info) =
+        Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None).unwrap_or_else(
+            |error| panic!("failed to load oracle bundle {}: {error}", bundle.display()),
+        );
 
     // Odd length: not a multiple of DEFAULT_CHANNELS(2).
     let mut data = vec![0.25f32; 3];
@@ -138,10 +175,10 @@ fn process_block_rejects_frames_exceeding_scratch() {
         eprintln!("VST3 oracle build failed; loud skip for this machine");
         return;
     };
-    let (mut processor, _info) = Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32)
-        .unwrap_or_else(|error| {
-            panic!("failed to load oracle bundle {}: {error}", bundle.display())
-        });
+    let (mut processor, _info) =
+        Vst3EffectProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None).unwrap_or_else(
+            |error| panic!("failed to load oracle bundle {}: {error}", bundle.display()),
+        );
 
     // FRAMES(512) is the scratch length (max_samples_per_block); one frame beyond that must fail.
     let mut data = vec![0.25f32; (FRAMES + 1) * 2];

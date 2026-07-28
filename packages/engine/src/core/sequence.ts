@@ -586,6 +586,11 @@ export class Sequence {
     return this._instrumentDeclared
   }
 
+  /** True when index 0 is occupied by the built-in (non-plugin) audio source. */
+  hasAudioSource(): boolean {
+    return this._audioFilePath !== undefined
+  }
+
   /**
    * Declare a per-sequence insert plugin (`seq.effect()` — PH.2b / #434 S3).
    * Processed **before** the master mix / `global.effect()` (master chain

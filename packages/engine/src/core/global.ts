@@ -3,6 +3,8 @@
  * Represents the global transport and configuration
  */
 
+import * as path from 'path'
+
 import { AudioEngine } from '../audio/types'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
@@ -26,6 +28,17 @@ import { PluginEffectManager } from './global/plugin-effect-manager'
 import { PluginInstrumentManager } from './global/plugin-instrument-manager'
 import { SequenceEffectManager } from './global/sequence-effect-manager'
 import { MixerManager, MixerBusHandle } from './global/mixer-manager'
+import type { PluginSlot } from './global/effect-slot'
+import {
+  ProjectStateStore,
+  type PluginStateIdentity,
+  type SavedProjectPluginState,
+} from './project-state-store'
+
+export interface ResolvedPluginStateTarget {
+  identity: PluginStateIdentity
+  daemonTarget: { role: 'effect'; bus?: string } | { role: 'instrument'; instance: string }
+}
 
 export class Global {
   // Manager instances for different responsibilities
@@ -41,6 +54,7 @@ export class Global {
   private pluginInstrumentManager: PluginInstrumentManager
   private sequenceEffectManager: SequenceEffectManager
   private mixerManager: MixerManager
+  private readonly projectStateStores = new Map<string, ProjectStateStore>()
 
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
@@ -602,6 +616,122 @@ export class Global {
   /** True while the transport is running (set by `start()` / cleared by `stop()`). */
   isTransportRunning(): boolean {
     return this.transportClock.running
+  }
+
+  /**
+   * UIH.5 の揮発アドレス `(sequence,index)` を、現在のchainからSC.5 identityとdaemon slotへ
+   * 同時に解決する。indexを永続キーへ流用しない。
+   */
+  resolvePluginStateTarget(sequence: string, index: number): ResolvedPluginStateTarget {
+    if (!Number.isInteger(index) || index < 0) {
+      throw new Error(`Plugin chain index must be a non-negative integer; received ${index}.`)
+    }
+
+    let slot: PluginSlot | undefined
+    let valid: { index: number; slot: PluginSlot }[]
+    if (sequence === 'master') {
+      const effects = this.pluginEffectManager.chain()
+      valid = effects.map((effect, offset) => ({ index: offset + 1, slot: effect }))
+      if (index === 0) {
+        throw this.pluginIndexError(
+          sequence,
+          index,
+          valid,
+          'master is a bus and has no source slot; effects start at index 1',
+        )
+      }
+      slot = effects[index - 1]
+    } else {
+      const receiver = this.sequenceRegistry.getSequence(sequence)
+      if (!receiver) {
+        throw new Error(`Unknown sequence '${sequence}'; no plugin chain is registered.`)
+      }
+      const instruments = this.pluginInstrumentManager.chainFor(sequence)
+      const effects = this.sequenceEffectManager.chainFor(sequence)
+      valid = [
+        ...instruments.map((instrument) => ({ index: 0, slot: instrument })),
+        ...effects.map((effect, offset) => ({ index: offset + 1, slot: effect })),
+      ]
+      if (index === 0) {
+        slot = instruments[0]
+        if (!slot) {
+          const sourceReason = receiver.hasAudioSource()
+            ? 'the built-in audio source is not a plugin and is not addressable in v1'
+            : receiver.isMidi()
+              ? 'the MIDI source is not a hosted plugin and is not addressable'
+              : 'no plugin instrument is declared'
+          throw this.pluginIndexError(sequence, index, valid, sourceReason)
+        }
+      } else {
+        slot = effects[index - 1]
+      }
+    }
+
+    if (!slot) {
+      throw this.pluginIndexError(
+        sequence,
+        index,
+        valid!,
+        'the requested chain slot does not exist',
+      )
+    }
+    const identity: PluginStateIdentity = {
+      receiver: sequence,
+      role: slot.role,
+      normalizedName: slot.normalizedName,
+      occurrence: slot.occurrence,
+    }
+    return {
+      identity,
+      daemonTarget:
+        slot.role === 'instrument'
+          ? { role: 'instrument', instance: slot.instance }
+          : {
+              role: 'effect',
+              ...(slot.bus === undefined ? {} : { bus: slot.bus }),
+            },
+    }
+  }
+
+  async savePluginState(sequence: string, index: number): Promise<SavedProjectPluginState> {
+    if (this.isTransportRunning()) {
+      throw new Error('Plugin state cannot be saved while the transport is running; stop first.')
+    }
+    const resolved = this.resolvePluginStateTarget(sequence, index)
+    const projectDirectory = this.audioManager.getDocumentDirectory()
+    if (!projectDirectory) {
+      throw new Error(
+        'Plugin state cannot be saved before the document has a directory; save the .orbs file first.',
+      )
+    }
+    const absoluteDirectory = path.resolve(projectDirectory)
+    let store = this.projectStateStores.get(absoluteDirectory)
+    if (!store) {
+      store = new ProjectStateStore(absoluteDirectory, this.audioEngine)
+      this.projectStateStores.set(absoluteDirectory, store)
+    }
+    return store.save(resolved.identity, resolved.daemonTarget)
+  }
+
+  private pluginIndexError(
+    sequence: string,
+    index: number,
+    valid: { index: number; slot: PluginSlot }[],
+    reason: string,
+  ): Error {
+    const listed =
+      valid.length === 0
+        ? '<none>'
+        : valid
+            .map(
+              ({ index: validIndex, slot }) =>
+                `${validIndex} (${slot.role}, ${slot.normalizedName})`,
+            )
+            .join(', ')
+    return new Error(
+      `Plugin chain index ${index} is invalid for '${sequence}': ${reason}. ` +
+        `Valid indices: ${listed}.`,
+    )
   }
 
   // Get internal state for compatibility

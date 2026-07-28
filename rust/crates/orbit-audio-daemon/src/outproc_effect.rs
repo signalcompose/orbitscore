@@ -31,13 +31,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use orbit_audio_native::PostProcessor;
-use orbit_audio_sandbox::transport::reset_child_starting;
-use orbit_audio_sandbox::{open_shared, region_ptr, PipelinedEffectHost, CONTROL_QUIT};
+use orbit_audio_sandbox::{
+    open_shared, region_ptr, CommandMailboxHost, PipelinedEffectHost, CONTROL_QUIT,
+};
 
 /// watchdog が child の生存を poll する周期（非 RT・control thread）。
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
@@ -390,6 +391,7 @@ pub fn spawn_effect_child(
     plugin: &Path,
     plugin_id: Option<&str>,
     sample_rate: u32,
+    state: Option<&Path>,
 ) -> io::Result<Child> {
     let mut cmd = Command::new(child_exe);
     cmd.arg("--shm")
@@ -401,6 +403,9 @@ pub fn spawn_effect_child(
         .stderr(Stdio::inherit());
     if let Some(id) = plugin_id {
         cmd.arg("--plugin-id").arg(id);
+    }
+    if let Some(path) = state {
+        cmd.arg("--state").arg(path);
     }
     cmd.spawn()
 }
@@ -449,6 +454,30 @@ impl EffectChildSupervisor {
     /// 返すため supervisor 外で起動する）。watchdog はこれを引き継ぎ、以降の crash で respawn する。
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
+        first_child: Child,
+        shm_path: PathBuf,
+        stats: Arc<OutProcEffectStats>,
+        child_exe: PathBuf,
+        plugin: PathBuf,
+        plugin_id: Option<String>,
+        sample_rate: u32,
+    ) -> io::Result<Self> {
+        let mailbox = Arc::new(CommandMailboxHost::new(shm_path.clone()));
+        Self::spawn_with_mailbox(
+            first_child,
+            shm_path,
+            stats,
+            child_exe,
+            plugin,
+            plugin_id,
+            sample_rate,
+            Arc::new(Mutex::new(None)),
+            mailbox,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with_mailbox(
         mut first_child: Child,
         shm_path: PathBuf,
         stats: Arc<OutProcEffectStats>,
@@ -456,6 +485,8 @@ impl EffectChildSupervisor {
         plugin: PathBuf,
         plugin_id: Option<String>,
         sample_rate: u32,
+        latest_state: Arc<Mutex<Option<PathBuf>>>,
+        mailbox: Arc<CommandMailboxHost>,
     ) -> io::Result<Self> {
         // watchdog 専用の control mapping（host は from_mmap で 1st mapping を消費するので 2nd を開く）。
         // この MmapMut は closure に move され watchdog thread 終了まで生存する（region ポインタの前提）。
@@ -539,15 +570,33 @@ impl EffectChildSupervisor {
                             tracing::warn!(
                                 "{child_name_wd} が異常終了（{status}）→ respawn する"
                             );
-                            // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
-                            // 前 incarnation の READY を消してから replacement を spawn する。
-                            unsafe { reset_child_starting(region) };
+                            // `try_wait=Some` で旧 child の死亡を確認済み。in-flight command を
+                            // failure ack で完了し、readiness/mailbox を reset してから replacement を
+                            // spawn する（生きた child への reset は禁止・UIH.2）。
+                            if let Err(error) = mailbox.reset_after_child_exit() {
+                                tracing::error!(
+                                    "effect mailbox reset failed; measurement invalid: {error}"
+                                );
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
+                            }
+                            let state = match latest_state.lock() {
+                                Ok(state) => state.clone(),
+                                Err(_) => {
+                                    tracing::error!(
+                                        "effect latest-state mutex poisoned; measurement invalid"
+                                    );
+                                    stats.measurement_invalid.store(true, Ordering::Release);
+                                    break;
+                                }
+                            };
                             match spawn_effect_child(
                                 &child_exe,
                                 &shm_path_wd,
                                 &plugin,
                                 plugin_id.as_deref(),
                                 sample_rate,
+                                state.as_deref(),
                             ) {
                                 Ok(c) => {
                                     // PID を先に publish（kill-test が新 child を kill できるよう）。

@@ -17,6 +17,77 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.314 feat(engine): save live plugin state through MCP #562 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: ✅ 実装・変異検証完了（sandbox の loopback / process-list 制約を除く）
+
+#562 の plugin state 保存経路を、4形式の実 child から daemon / TS engine / REPL / VS Code
+extension を経て MCP `save_plugin_state(sequence,index)` まで接続した。自動復元は #541 に残し、
+保存成功時の `project.yaml` 登記までを本変更に含めた。
+
+**mailbox / child lifecycle**:
+
+- host 側 `CommandMailboxHost` を追加。production timeout は単一の
+  `PLUGIN_STATE_MAILBOX_TIMEOUT = 5s` とし、実測 elapsed をエラーへ含める
+- ack 待ち中は mutex を保持しない。単一未処理、完全一致 ack、publish 順、
+  `CMD_ARG_BYTES` / NUL / UTF-8 / 絶対パス境界を一元化
+- timeout 後は遅延 ack または child death/reset まで poisoned のまま保持し、遅延 write の
+  sidecar は ack/reset 後にだけ削除
+- 初回 attach / effect watchdog / instrument watchdog の3経路を同じ coordinator へ配線。
+  `try_wait() == Some` で旧 child の死亡確認後に failure ack → reset → replacement spawn の順を強制
+
+**4形式 parity / daemon**:
+
+- VST3 / CLAP effect host と child に state capture / READY 前 restore / mailbox service を追加
+- VST3 gain oracle と CLAP test effect を共通 `ORE1 + f64 gain` state にし、保存値 0.25 が
+  実 process child から戻る配線テストを追加。既存 instrument 2形式と合わせ4形式を実証
+- sample scheduler は `active_count_strict()`、instrument は control-side active-note 集合を使い、
+  判定不能を含め演奏中の保存を fail-closed に拒否。自動 stop はしない
+- child READY、slot role/bus/instance、非空・実ファイル長一致を検証後、同一 directory の一意
+  sidecarを atomic rename + directory fsync。成功後は supervisor と共有する `latest_state` を更新
+- daemon protocol を `0.2` に上げ、`GetPluginState` と専用 error code 群を追加
+
+**TS / project / MCP**:
+
+- UIH.5 `(sequence,index)` を current chain から daemon target と SC.5
+  `<receiver>/<role>/<normalized-name>/<occurrence>` へ同時解決。master effect は
+  `{sequence:"master",index:1}`、audio source index 0 は明示拒否、無効 index は有効な
+  role / normalized name 一覧を返す
+- state 本体成功後だけ `project.yaml` の `states:` を atomic 更新。未知の top-level field は保持し、
+  state filename は SC.5 tuple の JSON/base64url で衝突なく生成
+- REPL meta は request ID 付き JSON、extension bridge は Map 相関・timeout・process death drain を
+  実装。MCP は daemon code/details を `isError:true` で保持
+- gated OrbitStudio E2E に、VST3/CLAP × instrument/effect の4保存、演奏中拒否の非停止性、
+  `project.yaml`、無効 index、`get_log` の新規 `ERROR:` なしを追加
+
+**変異検証（`$TMPDIR` backup → 変異 → red → 復元 → `cmp` 一致）**:
+
+| クラス | 変異 | red の観測 |
+|---|---|---|
+| 分岐反転 | transport guard を反転 | 演奏中要求が resolve して拒否テスト red |
+| 呼び出し回数 | daemon save を2回呼ぶ | `toHaveBeenCalledTimes(1)` が 2 で red |
+| 順序 | manifest を state 保存より先に確定 | daemon 失敗後に新SC.5 keyが残り red |
+| 引数差し替え | instrument instance を `default` に変更 | `plugin:lead` routing 差分で red |
+| lifecycle | 保存後の `latest_state` 更新を削除 | supervisor 共有 Arc が `None` のままで red |
+
+**検証**:
+
+- `cargo test --no-run -p orbit-audio-daemon --features outproc-effect,outproc-instrument` ✅
+- daemon feature build: lib 134 / main 7 passed。protocol integration 28件は sandbox が
+  `127.0.0.1` bind を `EPERM` にするため setup で実行不能
+- `cargo test --workspace --exclude orbit-audio-daemon` ✅
+- 4 child mailbox wiring: VST3 effect 1 / CLAP effect 1 / VST3 instrument 2 /
+  CLAP instrument 4 passed
+- `cargo fmt --all --check` / `cargo clippy --workspace --all-targets` ✅
+- `npm run build` / `npm run lint` ✅（lint は既存 warning 2件、error 0）
+- state / REPL / bridge の network-free Vitest 13 passed。MCP HTTP 16件と WebSocket mock 群は
+  同じ loopback `EPERM`。指定の全 Vitest は WebSocket `listening` 待ちで停止するため中断
+- gated real OrbitStudio E2E は「unprompted 実行禁止（実 GUI・可聴音）」契約に従い未実行
+- `pgrep -f "orbit-.*-child"` は sandbox の process-list 拒否で確認不能
+
+---
+
 ### 6.313 test(daemon): make the #529 flake self-diagnosing instead of silent (Jul 28, 2026)
 
 **Date**: 2026-07-28

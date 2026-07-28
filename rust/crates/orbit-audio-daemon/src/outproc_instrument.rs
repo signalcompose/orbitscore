@@ -10,15 +10,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use orbit_audio_native::PostProcessor;
-use orbit_audio_sandbox::transport::reset_child_starting;
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, NeutralEvent, PipelinedInstrumentHost, TransportContext, VoiceKey,
-    BUF_LEN, CONTROL_QUIT,
+    open_shared, region_ptr, CommandMailboxHost, NeutralEvent, PipelinedInstrumentHost,
+    TransportContext, VoiceKey, BUF_LEN, CONTROL_QUIT,
 };
 
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
@@ -425,7 +424,7 @@ pub struct InstrumentChildSupervisor {
 impl InstrumentChildSupervisor {
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
-        mut first_child: Child,
+        first_child: Child,
         shm_path: PathBuf,
         stats: Arc<OutProcInstrumentStats>,
         child_exe: PathBuf,
@@ -433,6 +432,32 @@ impl InstrumentChildSupervisor {
         plugin_id: Option<String>,
         sample_rate: u32,
         state: Option<PathBuf>,
+    ) -> io::Result<Self> {
+        let mailbox = Arc::new(CommandMailboxHost::new(shm_path.clone()));
+        Self::spawn_with_mailbox(
+            first_child,
+            shm_path,
+            stats,
+            child_exe,
+            plugin,
+            plugin_id,
+            sample_rate,
+            Arc::new(Mutex::new(state)),
+            mailbox,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with_mailbox(
+        mut first_child: Child,
+        shm_path: PathBuf,
+        stats: Arc<OutProcInstrumentStats>,
+        child_exe: PathBuf,
+        plugin: PathBuf,
+        plugin_id: Option<String>,
+        sample_rate: u32,
+        latest_state: Arc<Mutex<Option<PathBuf>>>,
+        mailbox: Arc<CommandMailboxHost>,
     ) -> io::Result<Self> {
         let ctl_mmap = match open_shared(&shm_path) {
             Ok(mmap) => mmap,
@@ -532,9 +557,26 @@ impl InstrumentChildSupervisor {
                                 plugin = ?plugin,
                                 "{child_name_wd} exited ({status}); respawning"
                             );
-                            // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
-                            // 前 incarnation の READY を消してから replacement を spawn する。
-                            unsafe { reset_child_starting(region) };
+                            // 旧 child の死亡確認後にだけ command failure/reset を行う。
+                            if let Err(error) = mailbox.reset_after_child_exit() {
+                                tracing::error!(
+                                    plugin = ?plugin,
+                                    "instrument mailbox reset failed; measurement invalid: {error}"
+                                );
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
+                            }
+                            let state = match latest_state.lock() {
+                                Ok(state) => state.clone(),
+                                Err(_) => {
+                                    tracing::error!(
+                                        plugin = ?plugin,
+                                        "instrument latest-state mutex poisoned; measurement invalid"
+                                    );
+                                    stats.measurement_invalid.store(true, Ordering::Release);
+                                    break;
+                                }
+                            };
                             match spawn_instrument_child(
                                 &child_exe,
                                 &watchdog_shm_path,

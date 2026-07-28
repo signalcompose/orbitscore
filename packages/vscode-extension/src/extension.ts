@@ -1,6 +1,7 @@
 import * as child_process from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
+import { randomUUID } from 'crypto'
 // import * as os from 'os'
 
 import * as vscode from 'vscode'
@@ -34,6 +35,7 @@ import {
   type RegisterMcpServerInput,
   type RescanPluginsResult,
   type SelectionInput,
+  type SavePluginStateResult,
 } from './mcp-server'
 import {
   AUDIO_DEVICE_SWITCH_UNAVAILABLE,
@@ -50,6 +52,7 @@ import {
   type SelectAudioDeviceBridgeResult,
 } from './engine-view'
 import { DeviceSwitchBridge } from './device-switch-bridge'
+import { PluginStateBridge } from './plugin-state-bridge'
 import {
   applyEngineError,
   applyEngineExit,
@@ -89,6 +92,7 @@ let isLiveCodingMode: boolean = false
 // Tracks whether `var global = init GLOBAL` has been evaluated in the current engine session.
 // Used to decide if `global.setDocumentDirectory(...)` can be prepended safely.
 let globalInitialized: boolean = false
+let transportPlaying: boolean = false
 // Optional MCP control server (Agent Bridge). Non-null only while running.
 let mcpServerHandle: McpServerHandle | null = null
 // Stateful FIFO/timeout/drain logic for the `//#selectAudioDevice` live bridge
@@ -97,6 +101,7 @@ let mcpServerHandle: McpServerHandle | null = null
 // drained on every engine exit/stop so a resolver from a dead engine can never
 // FIFO-match a future engine's response.
 const selectAudioDeviceBridge = new DeviceSwitchBridge()
+const pluginStateBridge = new PluginStateBridge()
 // Audio Engine Settings TreeView (#484 D3). Non-null once activated.
 let engineViewProvider: EngineViewProvider | null = null
 // Changes whenever a spawn is created or a user explicitly stops the engine.
@@ -265,6 +270,7 @@ export async function activate(context: vscode.ExtensionContext) {
   engineProcess = null
   isLiveCodingMode = false
   globalInitialized = false
+  transportPlaying = false
 
   // Create output channel
   outputChannel = vscode.window.createOutputChannel('OrbitScore')
@@ -452,6 +458,7 @@ export async function activate(context: vscode.ExtensionContext) {
           analyzeAudio: (wavPath, windowMs) => analyzeAudioForAgent(wavPath, windowMs),
           listPlugins: () => listPluginsForAgent(),
           rescanPlugins: () => rescanPluginsForAgent(),
+          savePluginState: (sequence, index) => savePluginStateForAgent(sequence, index),
           registerMcpServer: (args) => registerMcpServerForAgent(args),
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
@@ -1413,6 +1420,16 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
       const isCurrent = engineProcess === process
 
+      for (const rawLine of lines) {
+        if (!rawLine.trim().startsWith('{"savePluginState"')) continue
+        const parsed = isCurrent && pluginStateBridge.handleLine(rawLine)
+        if (!parsed && isCurrent) {
+          outputChannel?.appendLine(
+            `⚠️ received a malformed //#savePluginState result line: ${rawLine}`,
+          )
+        }
+      }
+
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -1446,6 +1463,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
         // this whole listener body (#527 review round 4 Important #1) — it
         // reaches `logHandlerFailure` below, NOT the extension host.
         setTransportStatus: (state) => {
+          transportPlaying = state === 'playing'
           statusBarItem!.text = transportStatusText(state, debugMode)
         },
       })
@@ -1493,7 +1511,10 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
       // engine-lifecycle.ts for the #528 stop→start race this protects against.
       applyEngineStdinError(err.message, engineProcess === process, {
         logStdinError: (message) => outputChannel?.appendLine(`⚠️ engine stdin error: ${message}`),
-        drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+        drainDeviceBridge: (reason) => {
+          selectAudioDeviceBridge.drainAll(reason)
+          pluginStateBridge.drainAll(reason)
+        },
       })
     } catch (innerErr) {
       logHandlerFailure('setupStdinErrorHandler', innerErr)
@@ -1507,9 +1528,13 @@ function engineTerminationEffects(): Omit<EngineExitEffects, 'logExit'> {
       engineProcess = null
       isLiveCodingMode = false
       globalInitialized = false
+      transportPlaying = false
     },
     clearAllPlayheads: clearAllPlayheadDecorations,
-    drainDeviceBridge: (reason) => selectAudioDeviceBridge.drainAll(reason),
+    drainDeviceBridge: (reason) => {
+      selectAudioDeviceBridge.drainAll(reason)
+      pluginStateBridge.drainAll(reason)
+    },
     showStoppedStatus: () => {
       statusBarItem!.text = '🎵 OrbitScore: Stopped'
       statusBarItem!.tooltip = 'Click to start engine'
@@ -2063,6 +2088,7 @@ async function startEngine(
   // Update state
   isLiveCodingMode = true
   globalInitialized = false
+  transportPlaying = false
 
   statusBarItem!.text = effectiveDebugMode ? '🎵 OrbitScore: Ready 🐛' : '🎵 OrbitScore: Ready'
   statusBarItem!.tooltip = 'Click to stop engine'
@@ -2101,12 +2127,14 @@ export function stopEngine(): boolean {
     engineProcess = null
     isLiveCodingMode = false
     globalInitialized = false
+    transportPlaying = false
     clearAllPlayheadDecorations() // #390: don't wait for the exit event
     // #501 review Critical #1: drain here too — `stopEngine()` nulls
     // `engineProcess` immediately (before the `exit` event fires), so a caller
     // awaiting `sendSelectAudioDeviceMeta()` would otherwise hang until the
     // 10s timeout instead of failing fast.
     selectAudioDeviceBridge.drainAll('engine was stopped before responding to //#selectAudioDevice')
+    pluginStateBridge.drainAll('engine was stopped before responding to //#savePluginState')
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -2737,6 +2765,32 @@ function sendSelectAudioDeviceMeta(
   )
 }
 
+function sendPluginStateMeta(
+  sequence: string,
+  index: number,
+  timeoutMs = 10_000,
+): Promise<import('./plugin-state-bridge').PluginStateBridgeResult> {
+  if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
+    return Promise.reject(new Error('engine stdin is not writable (engine not running?)'))
+  }
+  const stdin = engineProcess.stdin
+  return pluginStateBridge.send(
+    (line, onError) => {
+      stdin.write(line, (error) => {
+        if (error) {
+          outputChannel?.appendLine(
+            `⚠️ failed to write //#savePluginState to stdin: ${error.message}`,
+          )
+          onError(error)
+        }
+      })
+      return true
+    },
+    { requestId: randomUUID(), sequence, index },
+    timeoutMs,
+  )
+}
+
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -2789,6 +2843,35 @@ function evaluateForAgent(code: string): EvaluateResult {
   // （get_log で観測可能）し、play() のみで RUN/LOOP が無ければ仕様上無音
   // （evaluate ok ≠ 発音 — WORK_LOG 6.189 の follow-on 課題）。
   return { ok: true }
+}
+
+async function savePluginStateForAgent(
+  sequence: string,
+  index: number,
+): Promise<SavePluginStateResult> {
+  if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
+    return { ok: false, error: 'engine is not running — start the engine first' }
+  }
+  if (transportPlaying) {
+    return {
+      ok: false,
+      error: 'plugin state cannot be saved while the transport is running; stop first',
+    }
+  }
+  try {
+    const result = await sendPluginStateMeta(sequence, index)
+    if (!result.ok) {
+      return {
+        ok: false,
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+        ...(result.details === undefined ? {} : { details: result.details }),
+      }
+    }
+    return { ok: true, saved: result.saved }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 /** Start the engine for the MCP `start_engine` tool (mirrors the palette command). */

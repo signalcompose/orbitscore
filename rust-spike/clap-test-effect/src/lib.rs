@@ -15,7 +15,12 @@ use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
 };
+use clack_extensions::state::{PluginState, PluginStateImpl};
 use clack_plugin::prelude::*;
+use clack_plugin::stream::{InputStream, OutputStream};
+use std::io::{Read as _, Write as _};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 // ──────────────────────────────────────────────────────────
 // 固定ゲイン定数
@@ -26,6 +31,27 @@ use clack_plugin::prelude::*;
 /// host 側テストはこの値を期待値計算に使う:
 /// `expected_out[i] = input[i] * EFFECT_GAIN`
 pub const EFFECT_GAIN: f32 = 0.5;
+pub const STATE_MAGIC: u32 = 0x4F52_4531; // "ORE1"
+pub const STATE_LEN: usize = 12;
+
+pub fn encode_state(gain: f64) -> [u8; STATE_LEN] {
+    let mut bytes = [0u8; STATE_LEN];
+    bytes[..4].copy_from_slice(&STATE_MAGIC.to_le_bytes());
+    bytes[4..].copy_from_slice(&gain.to_bits().to_le_bytes());
+    bytes
+}
+
+pub fn decode_state(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() != STATE_LEN {
+        return None;
+    }
+    let magic = u32::from_le_bytes(bytes[..4].try_into().ok()?);
+    if magic != STATE_MAGIC {
+        return None;
+    }
+    let gain = f64::from_bits(u64::from_le_bytes(bytes[4..].try_into().ok()?));
+    gain.is_finite().then_some(gain)
+}
 
 // ──────────────────────────────────────────────────────────
 // Top-level plugin 型
@@ -42,8 +68,9 @@ impl Plugin for TestEffect {
         builder: &mut PluginExtensions<Self>,
         _shared: Option<&TestEffectShared>,
     ) {
-        // effect は audio ports のみ登録。note ports は不要
-        builder.register::<PluginAudioPorts>();
+        builder
+            .register::<PluginAudioPorts>()
+            .register::<PluginState>();
     }
 }
 
@@ -55,14 +82,18 @@ impl DefaultPluginFactory for TestEffect {
     }
 
     fn new_shared(_host: HostSharedHandle<'_>) -> Result<Self::Shared<'_>, PluginError> {
-        Ok(TestEffectShared)
+        Ok(TestEffectShared {
+            gain: Arc::new(AtomicU64::new((EFFECT_GAIN as f64).to_bits())),
+        })
     }
 
     fn new_main_thread<'a>(
         _host: HostMainThreadHandle<'a>,
-        _shared: &'a Self::Shared<'a>,
+        shared: &'a Self::Shared<'a>,
     ) -> Result<Self::MainThread<'a>, PluginError> {
-        Ok(TestEffectMainThread)
+        Ok(TestEffectMainThread {
+            gain: Arc::clone(&shared.gain),
+        })
     }
 }
 
@@ -70,8 +101,9 @@ impl DefaultPluginFactory for TestEffect {
 // Shared state（任意スレッドからアクセス）
 // ──────────────────────────────────────────────────────────
 
-/// effect plugin の共有状態。定数 gain を使うため内部状態なし。
-pub struct TestEffectShared;
+pub struct TestEffectShared {
+    gain: Arc<AtomicU64>,
+}
 
 impl PluginShared<'_> for TestEffectShared {}
 
@@ -79,9 +111,34 @@ impl PluginShared<'_> for TestEffectShared {}
 // Main-thread データ
 // ──────────────────────────────────────────────────────────
 
-pub struct TestEffectMainThread;
+pub struct TestEffectMainThread {
+    gain: Arc<AtomicU64>,
+}
 
 impl PluginMainThread<'_, TestEffectShared> for TestEffectMainThread {}
+
+impl PluginStateImpl for TestEffectMainThread {
+    fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
+        let bytes = encode_state(f64::from_bits(self.gain.load(Ordering::Relaxed)));
+        output
+            .write_all(&bytes)
+            .map_err(|_| PluginError::Message("clap-test-effect: failed to write state"))
+    }
+
+    fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
+        let mut bytes = Vec::new();
+        input
+            .read_to_end(&mut bytes)
+            .map_err(|_| PluginError::Message("clap-test-effect: failed to read state"))?;
+        let Some(gain) = decode_state(&bytes) else {
+            return Err(PluginError::Message(
+                "clap-test-effect: invalid ORE1 state payload",
+            ));
+        };
+        self.gain.store(gain.to_bits(), Ordering::Relaxed);
+        Ok(())
+    }
+}
 
 // Audio-ports extension（main thread）
 impl PluginAudioPortsImpl for TestEffectMainThread {
@@ -111,8 +168,9 @@ impl PluginAudioPortsImpl for TestEffectMainThread {
 // ──────────────────────────────────────────────────────────
 
 /// audio thread で動作する effect プロセッサ。
-/// 定数 gain のみ適用するため内部状態なし。
-pub struct TestEffectAudioProcessor;
+pub struct TestEffectAudioProcessor {
+    gain: Arc<AtomicU64>,
+}
 
 impl<'a> PluginAudioProcessor<'a, TestEffectShared, TestEffectMainThread>
     for TestEffectAudioProcessor
@@ -120,10 +178,12 @@ impl<'a> PluginAudioProcessor<'a, TestEffectShared, TestEffectMainThread>
     fn activate(
         _host: HostAudioProcessorHandle<'a>,
         _main_thread: &mut TestEffectMainThread,
-        _shared: &'a TestEffectShared,
+        shared: &'a TestEffectShared,
         _audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
-        Ok(Self)
+        Ok(Self {
+            gain: Arc::clone(&shared.gain),
+        })
     }
 
     /// 入力サンプルに EFFECT_GAIN を乗算して出力に書く。
@@ -147,6 +207,7 @@ impl<'a> PluginAudioProcessor<'a, TestEffectShared, TestEffectMainThread>
             .into_f32()
             .ok_or(PluginError::Message("f32 バッファが必要です"))?;
 
+        let gain = f64::from_bits(self.gain.load(Ordering::Relaxed)) as f32;
         for channel_pair in channel_pairs {
             match channel_pair {
                 // 入力のみ（対応する出力なし）: 何もしない
@@ -156,13 +217,13 @@ impl<'a> PluginAudioProcessor<'a, TestEffectShared, TestEffectMainThread>
                 // 入力と出力が別バッファ: gain を乗算してコピー
                 ChannelPair::InputOutput(input, output) => {
                     for (i, o) in input.iter().zip(output) {
-                        *o = i * EFFECT_GAIN;
+                        *o = i * gain;
                     }
                 }
                 // in-place（host が同一バッファを再利用）: そのまま gain を乗算
                 ChannelPair::InPlace(buf) => {
                     for sample in buf {
-                        *sample *= EFFECT_GAIN;
+                        *sample *= gain;
                     }
                 }
             }
@@ -177,3 +238,29 @@ impl<'a> PluginAudioProcessor<'a, TestEffectShared, TestEffectMainThread>
 // ──────────────────────────────────────────────────────────
 
 clack_export_entry!(SinglePluginEntry<TestEffect>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effect_state_encoding_round_trips_and_rejects_corruption() {
+        let bytes = encode_state(0.25);
+        assert_eq!(decode_state(&bytes), Some(0.25));
+        let mut wrong_magic = bytes;
+        wrong_magic[0] ^= 0xFF;
+        assert_eq!(decode_state(&wrong_magic), None);
+        assert_eq!(decode_state(&bytes[..STATE_LEN - 1]), None);
+        assert_eq!(decode_state(&encode_state(f64::INFINITY)), None);
+    }
+
+    #[test]
+    fn effect_state_encoding_matches_cross_format_contract() {
+        assert_eq!(STATE_MAGIC, 0x4F52_4531);
+        assert_eq!(STATE_LEN, 12);
+        assert_eq!(
+            encode_state(0.25),
+            [0x31, 0x45, 0x52, 0x4F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xD0, 0x3F,]
+        );
+    }
+}

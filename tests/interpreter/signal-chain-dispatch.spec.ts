@@ -696,6 +696,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'syncBusRouting',
       'isMidi',
       'isInstrument',
+      // #562: index 0 が組み込みオーディオソースに占有されているかの判定。
+      // UIH.5「audio シーケンスの index 0 はアドレス不可」のエラー理由を出し分けるために
+      // global.ts が呼ぶ内部ヘルパで、DSL 語彙ではない（インタプリタからの参照はゼロ）。
+      'hasAudioSource',
       'getInsertBus',
       'isNoteSequence',
       'loadAudio',
@@ -730,6 +734,15 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     ])
     const globalInternalMethods = new Set([
       'constructor',
+      // #562: plugin state の明示保存経路。**DSL 語彙ではない** —
+      // REPL のメタ行 `//#savePluginState`（MCP bridge が発行）からのみ入る。
+      // DSL から書けてしまうと「保存」という副作用が楽譜に紛れ込むため、意図的に語彙にしない。
+      'savePluginState',
+      // (sequence, index) を SC.5 インスタンス同一性 + daemon target へ解決する内部 API。
+      // UIH.5 の index 規則を実装する。インタプリタからの参照はゼロ。
+      'resolvePluginStateTarget',
+      // private だが Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
+      'pluginIndexError',
       // MIDI, chord, pattern, and mode registries.
       'getMidiManager',
       'importChords',

@@ -18,7 +18,7 @@ rust/
     ├── orbit-audio-native/     # cpal + symphonia + rubato (desktop)
     │   └── examples/poc_play.rs
     ├── orbit-audio-wasm/       # wasm-bindgen + AudioWorklet (スタブ)
-    └── orbit-audio-daemon/     # binary: WebSocket IPC server (protocol v0.1)
+    └── orbit-audio-daemon/     # binary: WebSocket IPC server (protocol v0.2)
         └── tests/smoke.rs      # startup smoke test
 ```
 

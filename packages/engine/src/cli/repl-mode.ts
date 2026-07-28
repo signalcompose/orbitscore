@@ -88,6 +88,76 @@ export function extractSelectAudioDeviceMeta(line: string): { device: string } |
   return { device: (m[1] ?? '').trim() }
 }
 
+const SAVE_PLUGIN_STATE_META_RE = /^\s*\/\/#savePluginState\s+(.+?)\s*$/
+
+export interface SavePluginStateMeta {
+  requestId: string
+  sequence: string
+  index: number
+}
+
+/** JSON payloadを使い、空白や記号を含むsequence名を壊さず相関IDも保持する。 */
+export function extractSavePluginStateMeta(line: string): SavePluginStateMeta | undefined {
+  const match = line.match(SAVE_PLUGIN_STATE_META_RE)
+  if (!match) return undefined
+  let value: unknown
+  try {
+    value = JSON.parse(match[1]!)
+  } catch (error) {
+    throw new Error(
+      `invalid //#savePluginState JSON: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('//#savePluginState payload must be a JSON object')
+  }
+  const payload = value as Record<string, unknown>
+  if (typeof payload.requestId !== 'string' || payload.requestId.length === 0) {
+    throw new Error('//#savePluginState requires a non-empty string requestId')
+  }
+  if (typeof payload.sequence !== 'string' || payload.sequence.length === 0) {
+    throw new Error('//#savePluginState requires a non-empty string sequence')
+  }
+  if (!Number.isInteger(payload.index) || (payload.index as number) < 0) {
+    throw new Error('//#savePluginState requires a non-negative integer index')
+  }
+  return {
+    requestId: payload.requestId,
+    sequence: payload.sequence,
+    index: payload.index as number,
+  }
+}
+
+async function executeSavePluginStateMeta(
+  interpreter: InterpreterV2,
+  input: SavePluginStateMeta,
+): Promise<void> {
+  try {
+    const saved = await interpreter.savePluginState(input.sequence, input.index)
+    console.log(
+      JSON.stringify({
+        savePluginState: {
+          requestId: input.requestId,
+          ok: true,
+          saved,
+        },
+      }),
+    )
+  } catch (error: any) {
+    console.log(
+      JSON.stringify({
+        savePluginState: {
+          requestId: input.requestId,
+          ok: false,
+          error: error?.message ?? String(error),
+          ...(typeof error?.code === 'string' ? { code: error.code } : {}),
+          ...(error?.details === undefined ? {} : { details: error.details }),
+        },
+      }),
+    )
+  }
+}
+
 /**
  * `//#selectAudioDevice` メタ行を処理し、相関用の 1 行 JSON を stdout に出す
  * （`{"selectAudioDevice":{"ok":true,"device":"..."}}` / `{"ok":false,"error":"..."}`）。
@@ -171,6 +241,17 @@ export function createReplSession(interpreter: InterpreterV2): {
   }
 
   async function handleLine(line: string): Promise<void> {
+    if (SAVE_PLUGIN_STATE_META_RE.test(line)) {
+      try {
+        const savePluginStateMeta = extractSavePluginStateMeta(line)
+        if (savePluginStateMeta) {
+          await executeSavePluginStateMeta(interpreter, savePluginStateMeta)
+        }
+      } catch (error: any) {
+        console.error(`[ERROR] ${error?.message ?? String(error)}`)
+      }
+      return
+    }
     const selectDeviceMeta = extractSelectAudioDeviceMeta(line)
     if (selectDeviceMeta) {
       // 単独の帯域外コマンド — eval バッファには積まず、進行中のバッファはそのまま維持する

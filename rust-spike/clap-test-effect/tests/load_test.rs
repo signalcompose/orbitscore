@@ -32,7 +32,10 @@ fn plugin_loads_and_exposes_id() {
         .expect("エントリに PluginFactory がありません");
 
     let count = factory.plugin_count();
-    assert_eq!(count, 1, "factory 内のプラグイン数が不正: got {count}, want 1");
+    assert_eq!(
+        count, 1,
+        "factory 内のプラグイン数が不正: got {count}, want 1"
+    );
 
     let desc = factory
         .plugin_descriptor(0)
@@ -40,7 +43,8 @@ fn plugin_loads_and_exposes_id() {
 
     let id = desc.id().expect("plugin id が null です").to_bytes();
     assert_eq!(
-        id, EXPECTED_ID,
+        id,
+        EXPECTED_ID,
         "plugin ID 不一致: got {:?}, want {:?}",
         std::str::from_utf8(id),
         std::str::from_utf8(EXPECTED_ID),

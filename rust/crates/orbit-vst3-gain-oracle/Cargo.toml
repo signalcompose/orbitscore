@@ -19,7 +19,7 @@ publish = false
 [lib]
 name = "orbit_vst3_gain_oracle"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 vst3 = "0.3"

@@ -11,6 +11,15 @@ export interface PluginLoadResult {
   notePortIndex: number
 }
 
+export type PluginStateSaveTarget =
+  | { role: 'effect'; bus?: string }
+  | { role: 'instrument'; instance: string }
+
+export interface PluginStateSaveResult {
+  path: string
+  bytesWritten: number
+}
+
 /**
  * Audio engine interface
  * Defines the common interface for audio engines (currently SuperCollider)
@@ -75,6 +84,12 @@ export interface AudioEngine {
     instance?: string,
     statePath?: string,
   ): Promise<PluginLoadResult>
+
+  /** 現在のOOP plugin stateを停止中に取得し、指定した絶対パスへatomicに確定する。 */
+  savePluginState?(
+    target: PluginStateSaveTarget,
+    absolutePath: string,
+  ): Promise<PluginStateSaveResult>
 
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>

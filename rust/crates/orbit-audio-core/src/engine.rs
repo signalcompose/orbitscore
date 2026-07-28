@@ -117,6 +117,15 @@ impl Engine {
         self.inner.try_lock().ok().map(|s| s.active_count())
     }
 
+    /// スケジューラのアクティブ再生数を fail-closed な停止判定へ使うための blocking accessor。
+    ///
+    /// 観測用途の [`Self::active_count`] と異なり、lock 競合を `None`（呼び出し側で 0 へ縮退しうる）
+    /// にせず、取得できるまで待つ。poison は明示エラーとして返す。
+    pub fn active_count_strict(&self) -> Result<usize, EngineError> {
+        let scheduler = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
+        Ok(scheduler.active_count())
+    }
+
     /// 未登録 named target へ tag された event の skip 累計（retain ハザードの観測点・
     /// `Scheduler::unroutable_event_count` 参照）。ロック競合時は `None`。
     pub fn unroutable_event_count(&self) -> Option<u64> {

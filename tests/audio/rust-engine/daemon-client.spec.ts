@@ -284,6 +284,48 @@ describe('DaemonClient with mock server', () => {
     expect(record?.params).not.toHaveProperty('state_path')
   })
 
+  it('GetPluginState sends the resolved effect target and preserves the byte result', async () => {
+    const url = await server.start({
+      GetPluginState: () => ({
+        path: '/songs/states/master.state',
+        bytes_written: 123,
+      }),
+    })
+    await client.start({ wsUrlOverride: url })
+
+    await expect(
+      client.savePluginState({ role: 'effect', bus: 'seq-bus-2' }, '/songs/states/master.state'),
+    ).resolves.toEqual({
+      path: '/songs/states/master.state',
+      bytesWritten: 123,
+    })
+    expect(server.received.find((record) => record.method === 'GetPluginState')?.params).toEqual({
+      path: '/songs/states/master.state',
+      role: 'effect',
+      bus: 'seq-bus-2',
+    })
+  })
+
+  it('GetPluginState sends an instrument instance without an effect bus', async () => {
+    const url = await server.start({
+      GetPluginState: () => ({
+        path: '/songs/states/lead.state',
+        bytes_written: 12,
+      }),
+    })
+    await client.start({ wsUrlOverride: url })
+
+    await client.savePluginState(
+      { role: 'instrument', instance: 'plugin:lead' },
+      '/songs/states/lead.state',
+    )
+    expect(server.received.find((record) => record.method === 'GetPluginState')?.params).toEqual({
+      path: '/songs/states/lead.state',
+      role: 'instrument',
+      instance: 'plugin:lead',
+    })
+  })
+
   it('PluginNoteOn/Off instance あり/なし: instance フィールドの含有/省略（#540 P1）', async () => {
     const url = await server.start({
       PluginNoteOn: () => ({ status: 'note_on', key: 60 }),

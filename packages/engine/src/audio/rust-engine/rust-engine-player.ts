@@ -752,6 +752,13 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  async savePluginState(
+    target: import('../types').PluginStateSaveTarget,
+    absolutePath: string,
+  ): Promise<import('../types').PluginStateSaveResult> {
+    return this.daemon.savePluginState(target, absolutePath)
+  }
+
   pluginNoteOn(key: number, channel: number, velocity: number, instance?: string): Promise<void> {
     if (!this.daemon.isRunning()) {
       this.warnOnce(
