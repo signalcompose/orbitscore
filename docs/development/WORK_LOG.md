@@ -84,10 +84,92 @@ gated E2E を回そうとして `vitest run tests/e2e/orbitstudio-mcp-gated.spec
 
 ---
 
-### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
+### 6.308 fix(build): bundle orbit-vst3-effect-child #548 (Jul 28, 2026)
 
 **Date**: 2026-07-28
 **Status**: 🔄 PR 準備中
+
+**実害**: 出荷された OrbitStudio で VST3 エフェクトを使うと child の spawn が失敗していた。
+daemon は `ORBIT_EFFECT_FORMAT=vst3` のとき `orbit-vst3-effect-child` を spawn しようとする
+（`outproc_effect.rs:84`・既定パスは daemon と同一ディレクトリ）のに、`copy-daemon-bin.sh` の
+再ビルド一覧にも copy 一覧にも含まれていなかった。
+
+**実機で再現・修正を確認**:
+
+```
+修正前: ERROR: Failed to load plugin: [OUTPROC_EFFECT_RUNTIME] spawn outproc child
+        ".../orbit-vst3-effect-child": No such file or directory (os error 2)
+修正後: 52012 .../engine/bin/darwin-arm64/orbit-vst3-effect-child
+        --plugin /Library/Audio/Plug-Ins/VST3/Tape Echo v6.vst3 ...
+```
+
+**なぜ既存テストで検出できなかったか**: gated テスト（`outproc_effect_vst3_gated.rs:28`）は
+自前で `cargo build -p orbit-vst3-effect-child` してから走るため、**バンドル経路を通らない**。
+ソースツリーを見るテストでは同じ穴が再発する。
+
+**修正**:
+1. `scripts/copy-daemon-bin.sh` の cargo 再ビルド一覧と `copy_binary` 一覧の両方に追加
+2. **二重台帳の回帰テスト**（`tests/vscode-extension/bundled-child-binaries.spec.ts`）:
+   台帳A = daemon Rust ソース中の child 名リテラル / 台帳B = コピー対象 + バンドル実体。
+   A ⊆ B を検査するので、**daemon に format を足すと自動的に要求が増える**
+
+**変異検証（5種・すべて red を確認）**: ①`copy_binary` 削除（元のバグ再現）②`cargo -p` 削除
+（stale コピー・#487 再発）③バンドル実体のみ削除 ④daemon literal のリネーム ⑤抽出パターン破壊。
+
+> **④で初版テストの欠陥が発覚**: `orbit-[a-z0-9-]+-child` と綴りを決め打ちしていたため、
+> リネームすると**台帳Aが黙って縮んで pass** していた（silent partial coverage）。
+> 綴り非依存のパターンに変え、**モジュールごとの抽出件数**を検査するよう修正した。
+
+**#552 も同時に修正**（owner 判断: テスト負債になる前に潰す）: effect の plugin format が
+`ORBIT_EFFECT_FORMAT` による **process-global** だったため、CLAP と VST3 のエフェクトを
+同一チェーンに混在できなかった。**プラグイン形式は利用者に見えてはならない実装の詳細**
+（CAP.6-1）であり、instrument 側（`from_plugin_path`）と同じ per-plugin 解決へ揃えた。
+`select_child_exe` トレイトの seam は既にあり、effect 実装が no-op だっただけ。
+
+**🔴 変異検証で配線の穴が発覚**: 純関数 `child_exe_for_attach` のユニットテスト3件を書いても、
+**`select_child_exe` を no-op に戻す変異（= 元のバグそのもの）が green のまま生き残った**。
+純関数と load 経路を繋ぐ**配線**は別物であり、instrument 側と対称の配線テスト
+（`effect_select_child_exe_swaps_default_child_by_extension`）を追加して初めて red になった。
+
+**altitude レビューで出荷ゲートの穴も発覚**: `.github/workflows/release.yml` の
+post-package gate（`for CHILD_BIN in ...`）が `orbit-vst3-effect-child` を検査しておらず、
+**本バグの再発を防ぐはずのセーフティネット自身が同じ欠落を抱えていた**。ビルド一覧
+（`:89`）と gate（`:141`）の両方を修正し、テストの台帳を release.yml まで拡張した。
+
+**検証**: TS 1739 passed（+4）/ fmt・clippy clean /
+**env を一切設定せずに VST3 エフェクトが `orbit-vst3-effect-child` を起動**することを実機で確認。
+
+**`/simplify` の指摘を反映（3エージェントが一致して挙げた重複）**:
+
+effect 側に新規追加した `from_plugin_path` / `child_exe_for_attach` は、instrument 側の
+同名関数と**列挙型名以外は逐語的に同一**だった。doc コメント自身が「instrument 側と同一規則」
+「effect 側と対称」と互いを参照し合っており、**規則を直したとき片方だけ直し忘れる運用**に
+頼っていた。#548 がまさに「片方だけ入っていなかった」バグである以上、同じ形を増やすのは筋が悪い。
+
+`outproc_child_exe` モジュールへ規則そのものを抽出し、各 role は**binary 名の対だけ**を渡す形に:
+
+- `is_vst3_plugin_path` / `child_exe_for_attach(current, plugin, clap_name, vst3_name)`
+- ログ用の `exe_label`（両 supervisor で重複していた6行）も集約
+- 抽出の結果、両 enum の `from_plugin_path` が**デッドコードになったので削除**した
+- unit テストは削除した内部メソッドではなく**公開の入口** `child_exe_for_attach` 経由へ付け替えた
+  （実際に attach で使われる経路を守る形になる）
+
+**変異検証（4種・すべて red）**: (a) 拡張子判定の反転 (b) 明示指定ガードの無効化
+(c) clap/vst3 名の入れ替え (d) ディレクトリを捨てて sibling 解決を壊す。
+**いずれも effect と instrument の両方のテストが落ちた** — 規則が本当に共有されている証拠。
+
+**doc の誤りも訂正**: `ORBIT_EFFECT_FORMAT` の存置理由を「gated テストが使うため」と
+書いていたが、repo 全体を grep すると**利用者は本ファイルとドキュメントのみ**で、gated テストは
+`OutProcEffectConfig` を直接組み立てており env を経由しない。実態（無効値の loud な起動失敗という
+既存挙動を黙って変えないため）に書き換えた。
+
+**検証**: Rust workspace 全 green（daemon は `--features outproc-effect,outproc-instrument` で 132 passed）/
+TS 1739 passed / fmt・clippy clean。
+
+### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: ✅ **PR #550 MERGED**（main `cab5c85`・2026-07-28・#547 CLOSED）
 
 **内容**: Epic #546 Phase 0（設計確定）の成果物を spec として正本化。owner が5論点を承認し、
 **プラグイン形式に依存しない UX** が中核制約として追加されたことを受けた設計。
