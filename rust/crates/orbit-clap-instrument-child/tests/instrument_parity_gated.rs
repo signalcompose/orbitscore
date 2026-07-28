@@ -41,6 +41,7 @@ fn render_in_process(
         SAMPLE_RATE,
         CHANNELS,
         MAX_FRAMES as u32,
+        None,
     )
     .expect("load test synth (side A)");
     let mut out = Vec::with_capacity(events_by_block.len() * block_frames * CHANNELS);

@@ -114,12 +114,21 @@ impl ClapInstrumentProcessor {
     /// * `sample_rate` — サンプリングレート（Hz）。
     /// * `channels` — 出力チャンネル数（通常 2）。
     /// * `max_frames` — 最大フレーム数（共有メモリの 1 slot 容量に合わせる）。
+    /// プラグインをロードする。`state` を渡すと **返る前に適用済み**になる。
+    ///
+    /// 🔴 **state を別呼び出しにしない理由**: 呼び出し側は load 後に
+    /// `publish_child_ready` を行う。復元を別呼び出しにすると「READY を先に publish して
+    /// しまい、復元前の既定音色で 1 ブロック鳴る」順序ミスが**書けてしまう**。
+    /// 実際、順序を入れ替えても配線テストが green のまま通ることが変異検証で判明した
+    /// （テストで守れない不変条件だった）。load に畳んで**表現できなくする**。
+    /// VST3 側 `Vst3InstrumentProcessor::load` も同じ形（`state: Option<&[u8]>`）。
     pub fn load(
         path: &Path,
         id: Option<&str>,
         sample_rate: u32,
         channels: usize,
         max_frames: u32,
+        state: Option<&[u8]>,
     ) -> Result<(Self, LoadedPluginInfo), ClapHostError> {
         // standalone なので daemon の監視フィールドではなく fresh な Arc を渡す
         // （callback は pump しない・resize は監視しない）。
@@ -133,12 +142,17 @@ impl ClapInstrumentProcessor {
             Arc::new(AtomicU64::new(0)),
         )?;
 
-        let processor = Self {
+        let mut processor = Self {
             plugin: loaded.plugin,
             buffers: loaded.buffers,
             steady: 0,
             _instance: loaded.instance,
         };
+        // 🔴 返る前に適用する。呼び出し側が READY を publish する時点で音色が確定している
+        // ことを、**呼び出し順ではなくこの関数の契約として**保証する。
+        if let Some(bytes) = state {
+            processor.apply_state_bytes(bytes)?;
+        }
         Ok((processor, loaded.info))
     }
 

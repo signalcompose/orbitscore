@@ -208,23 +208,22 @@ fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
     let region = region_ptr(&mmap);
+    // #557: state は **`load` に渡す**（別呼び出しにしない）。READY publish より前に
+    // 適用されることを `load` の契約として保証させる — 順序ミスを書けなくするため。
+    // 分離していた時は、順序を入れ替えても配線テストが green のまま通った（変異検証で判明）。
+    let state_bytes = match args.state.as_deref() {
+        None => None,
+        Some(path) => Some(std::fs::read(path).with_context(|| format!("read state {path:?}"))?),
+    };
     let (mut instrument, _info) = ClapInstrumentProcessor::load(
         &args.plugin,
         args.plugin_id.as_deref(),
         args.sample_rate,
         CHANNELS,
         MAX_FRAMES as u32,
+        state_bytes.as_deref(),
     )
     .with_context(|| format!("load CLAP instrument {:?}", args.plugin))?;
-    // #557: state の復元は **READY を publish する前**に済ませる。host が READY を見た時点で
-    // 音色が確定していないと、「復元前の既定音色で 1 ブロック鳴る」窓ができる。
-    if let Some(state_path) = args.state.as_deref() {
-        let bytes =
-            std::fs::read(state_path).with_context(|| format!("read state {:?}", state_path))?;
-        instrument
-            .apply_state_bytes(&bytes)
-            .with_context(|| format!("apply state {:?}", state_path))?;
-    }
     // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す。
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, instrument.has_audio_input());
