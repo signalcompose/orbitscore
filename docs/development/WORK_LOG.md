@@ -62,8 +62,14 @@ first LoadPlugin call finished before the poller ever observed ChildSlot::Loadin
 its result was Err(OutProcEffect("MUTATION: select_child_exe forced failure"))
 ```
 
-> ⚠️ **spawn 失敗を強制する変異は通ってしまった** — ローカルではポーラが `Loading` の窓を
-> 捉えるため。これ自体が「CI の負荷下でだけ窓を見逃す」という分析の裏付けになる。
+> ⚠️ **環境差**: spawn 失敗を強制する変異は、**私の環境では通り**（ポーラが `Loading` の窓を
+> 捉えた）、**レビュアーの環境では両サイトとも 8/8 で新しい診断つきに落ちた**。
+> spawn の ENOENT 検出は fork/exec 実装依存で負荷・スケジューリングに敏感なため、
+> どちらも起こりうる。**1回の観測から「通ってしまう」と一般化して書いたのは誤り**だった。
+>
+> なお site 2 の pid 再読（TOCTOU 対策）は、レースを踏ませる合成実験を 30 回試しても
+> **一度も再現しなかった**。理屈上は正しいが窓が極めて狭く、#529 の実際の原因だった
+> 可能性は低い。コストはほぼゼロなので残す。
 
 **この issue はクローズしない**: 診断の改善であって症状の除去ではない。
 spawn 失敗そのものは残るので flake は再発しうる。
