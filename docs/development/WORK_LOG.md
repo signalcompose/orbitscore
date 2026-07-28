@@ -17,6 +17,86 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.319 fix(daemon): 即死する child を tight loop で respawn し続ける穴を塞ぐ #573 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ 完了
+
+watchdog は child が起動直後に死に続ける状況で **20ms 間隔（`WATCHDOG_POLL`）で respawn を
+繰り返し続けていた**。上限も backoff も無い。`initial_attach_pending` による fast-fail は
+**初回 attach の間だけ**有効で、一度 attach に成功した後の即死ループは止まらない。
+
+### 発見の経緯 — #569 の議論から実証へ
+
+#569（respawn 時の state ファイル欠損）を検討する中で「20ms 間隔の respawn ループになる疑い」を
+持ったが、**机上推論のみで未実証**だった（issue にもそう明記した）。
+
+その後 **PR #572 の CI が落ち**、既存テスト
+`supervisor_respawn_passes_the_state_saved_after_initial_spawn`（PR #563 の `9e0994b`）の
+記録スクリプトが `sleep 0.2` で自分から終了するため **watchdog が繰り返し respawn している**ことが
+判明した。テストは「どの respawn の記録を掴むか」がタイミング依存で、
+`respawn must receive --state`（= state 記録**前**の respawn の記録を掴んだ）で落ちていた。
+
+**疑いが実証に変わった。** #569 とは別の問題（#569 は原因の1つを消すだけで、プラグイン本体の
+消失・load 時クラッシュ・OOM によるループは残る）なので #573 として切り出した。
+
+### 実装
+
+`outproc_respawn_guard.rs`（新規）に純関数 `advance_fast_respawn_streak` を置き、
+**effect / instrument の両 watchdog で共有**する。別々に持つと片方だけ閾値やロジックを
+直し忘れる非対称が生まれる（#548 で実際に踏んだ形）。
+
+- child の終了を検知したとき、`last_respawn_ns` からの経過が `FAST_RESPAWN_THRESHOLD`（2s）
+  未満なら「速い失敗」として連続カウント。**閾値以上生きていたらカウンタをリセット**する
+  （単発クラッシュからは従来どおり復帰する）
+- 連続の速い失敗が `MAX_CONSECUTIVE_FAST_RESPAWNS`（5）に達したら respawn をやめて `break`
+- 停止は **loud**: `tracing::error!` に**連続失敗回数**と**直近の終了ステータス**を含める。
+  既存の「恒久 spawn 失敗で `measurement_invalid` + break」と同じ形に揃えた
+- instrument 側に `last_respawn_ns` を新規追加して effect と対称化
+
+### 既存テストのタイミング依存も解消
+
+`supervisor_respawn_passes_the_state_saved_after_initial_spawn` /
+`supervisor_respawns_child_on_unexpected_exit` の respawn 先 stub は即終了していたため、
+(a) どの respawn を掴むかがタイミング依存で (b) 本変更後は breaker に引っかかる。
+**決定論的な長寿命 stub**（`exec sleep N`）に置き換えた。検証の意味は変えていない。
+
+### 指示外で見つかった実バグ: `exec` 無しの孤児化
+
+fixture スクリプトの末尾コマンドに `exec` が無いと、`Child::kill()` が**シェルだけを殺し、
+`sleep` 孫プロセスが孤児化する**（実機で確認・1件はパイプされたテスト出力を詰まらせた）。
+全 fixture の末尾を `exec sleep N` に統一した。#529 で扱った孤児プロセスと同じ類型。
+
+### 変異検証（実出力で確認）
+
+| 変異 | red になったテスト |
+|---|---|
+| 上限判定を無効化（`if false`） | `supervisor_stops_respawning_after_consecutive_fast_failures` / `supervisor_resets_fast_fail_streak_after_a_survivor` の **2件** |
+| リセット削除（常に +1） | `exactly_at_threshold_counts_as_survived` / `surviving_past_threshold_resets_the_streak` / `supervisor_resets_fast_fail_streak_after_a_survivor` の **3件** |
+
+reset 削除の red メッセージは
+`2 fast fails + 1 survivor (reset) + 4 fast fails must respawn exactly 7 times before giving up
+(without the reset, the streak would trip the breaker after only 4 respawns)` で、
+**リセットが無いと 7 回ではなく 4 回で止まる**ことを具体的に示している。
+
+### 検証
+
+- `cargo test --workspace --locked` ✅ **382 passed / 0 failed**
+- `--features outproc-effect` ✅ 143 / `outproc-instrument` ✅ 118 / 両方 ✅ 186（すべて 0 failed）
+- `cargo fmt --check` ✅ / `cargo clippy --workspace --all-targets -- -D warnings` ✅
+
+### 作業上の反省: 同一 working tree での並行作業の衝突
+
+実装を委譲した subagent の**完了通知**を受けて作業終了と判断し、同じ working tree で
+変異検証（ソースを壊す作業）を始めた。しかし subagent 自身の報告文は
+「**background cargo test の完了を待つ**」で、まだ稼働していた。
+
+結果、subagent は私の変異を「外部からの書き換え」と検知して再適用・再検証を繰り返した。
+しかも私が当てた変異は、**subagent がまさに red 化を検証しようとしていた変異と同一**だった。
+
+**完了通知はその turn が終わったことしか意味しない。** 破壊的な作業をする前に生存確認が要る
+（本来は worktree を分けるべき作業だった）。memory に記録済み。
+
 ### 6.317 fix(test): CI フレーク #529 の真因（ETXTBSY）を特定し構造的に除去 (Jul 29, 2026)
 
 **Date**: 2026-07-29

@@ -20,10 +20,18 @@ use orbit_audio_sandbox::{
     TransportContext, VoiceKey, BUF_LEN, CONTROL_QUIT,
 };
 
+use crate::outproc_respawn_guard::advance_fast_respawn_streak;
+
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
 const TEARDOWN_TIMEOUT: Duration = Duration::from_millis(500);
 const TRY_WAIT_ERROR_LIMIT: u32 = 50;
+/// 「速い失敗」とみなす生存時間の閾値（#573）。`outproc_effect::FAST_RESPAWN_THRESHOLD` と同値・
+/// 同じ理由（`CHILD_READY_TIMEOUT` より十分短く `WATCHDOG_POLL` よりずっと長い）。effect 側の
+/// doc comment を参照。
+const FAST_RESPAWN_THRESHOLD: Duration = Duration::from_secs(2);
+/// 連続 fast-fail の上限（#573）。`outproc_effect::MAX_CONSECUTIVE_FAST_RESPAWNS` と同値・同じ理由。
+const MAX_CONSECUTIVE_FAST_RESPAWNS: u32 = 5;
 pub const NOTE_RING_CAPACITY: usize = 1024;
 /// Fixed probe voice (A4 / port 0 / channel 0 / key 69) used by the gated cross-process
 /// NOTE_END test. `pub` so the gated test references this instead of re-hardcoding the triple.
@@ -188,6 +196,12 @@ pub struct OutProcInstrumentStats {
     pub fresh: AtomicU64,
     pub callback_count: AtomicU64,
     pub respawn_count: AtomicU64,
+    /// 直近 respawn のタイムスタンプ（supervisor 起動からの経過 ns・0 = 未 respawn）。#573 の
+    /// fast-fail 検知が直前 spawn の生存時間を測るのに使う。`outproc_effect::OutProcEffectStats`
+    /// の同名フィールドと同じ意味論。
+    pub last_respawn_ns: AtomicU64,
+    /// watchdog が supervise を諦めた（respawn 失敗 / try_wait 連続失敗 / #573: 起動直後に死に続ける
+    /// child の respawn を連続上限で打ち切った）= 計測無効。gated harness が verdict を捨てる。
     pub measurement_invalid: AtomicBool,
     pub child_process_error_count: AtomicU64,
     /// child-local spill FIFO(§4.2 output 方向)自体が尽きた場合のみ増分(真の drop)。child の
@@ -225,6 +239,7 @@ impl OutProcInstrumentStats {
             fresh: self.fresh.load(Ordering::Relaxed),
             callback_count: self.callback_count.load(Ordering::Relaxed),
             respawn_count: self.respawn_count.load(Ordering::Relaxed),
+            last_respawn_ns: self.last_respawn_ns.load(Ordering::Relaxed),
             measurement_invalid: self.measurement_invalid.load(Ordering::Relaxed),
             child_process_error_count: self.child_process_error_count.load(Ordering::Relaxed),
             output_event_dropped_count: self.output_event_dropped_count.load(Ordering::Relaxed),
@@ -245,6 +260,7 @@ pub struct OutProcInstrumentSnapshot {
     pub fresh: u64,
     pub callback_count: u64,
     pub respawn_count: u64,
+    pub last_respawn_ns: u64,
     pub measurement_invalid: bool,
     pub child_process_error_count: u64,
     pub output_event_dropped_count: u64,
@@ -487,6 +503,8 @@ impl InstrumentChildSupervisor {
         // クラッシュが CLAP child の障害に見える）。
         let child_name_wd =
             crate::outproc_child_exe::exe_label(&child_exe, "orbit-instrument-child");
+        // #573: `last_respawn_ns` の基準時刻（初回 child の spawn とほぼ同時刻）。effect 側と同じ。
+        let base = Instant::now();
         let (child_tx, child_rx) = std::sync::mpsc::channel::<Child>();
 
         let watchdog = match std::thread::Builder::new()
@@ -498,6 +516,9 @@ impl InstrumentChildSupervisor {
                     Err(_) => return,
                 };
                 let mut try_wait_errors = 0u32;
+                // #573: 連続 fast-fail（`FAST_RESPAWN_THRESHOLD` 未満で死んだ respawn）の回数。
+                // `FAST_RESPAWN_THRESHOLD` 以上生きた respawn（正常な単発クラッシュからの復帰）でリセット。
+                let mut consecutive_fast_fails: u32 = 0;
                 loop {
                     if shutdown_thread.load(Ordering::Acquire) {
                         break;
@@ -553,6 +574,28 @@ impl InstrumentChildSupervisor {
                                 stats.child_early_exit.store(true, Ordering::Release);
                                 break;
                             }
+                            // #573: 起動直後に死に続ける child を tight loop で respawn し続けない。
+                            // `last_respawn_ns`（初期値 0 = supervisor 起動時刻 `base`）からの経過時間で
+                            // 直前 spawn の生存時間を測る。
+                            let elapsed_since_spawn = base.elapsed().saturating_sub(
+                                Duration::from_nanos(stats.last_respawn_ns.load(Ordering::Relaxed)),
+                            );
+                            consecutive_fast_fails = advance_fast_respawn_streak(
+                                consecutive_fast_fails,
+                                elapsed_since_spawn,
+                                FAST_RESPAWN_THRESHOLD,
+                            );
+                            if consecutive_fast_fails >= MAX_CONSECUTIVE_FAST_RESPAWNS {
+                                tracing::error!(
+                                    plugin = ?plugin,
+                                    "{child_name_wd} exited {consecutive_fast_fails} times in a row \
+                                     within less than {FAST_RESPAWN_THRESHOLD:?} of being spawned \
+                                     (last exit status: {status}); giving up on the respawn loop \
+                                     (measurement invalid)"
+                                );
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
+                            }
                             tracing::warn!(
                                 plugin = ?plugin,
                                 "{child_name_wd} exited ({status}); respawning"
@@ -591,6 +634,9 @@ impl InstrumentChildSupervisor {
                                         .store(replacement.id(), Ordering::Relaxed);
                                     child = replacement;
                                     stats.respawn_count.fetch_add(1, Ordering::Relaxed);
+                                    stats
+                                        .last_respawn_ns
+                                        .store(base.elapsed().as_nanos() as u64, Ordering::Relaxed);
                                     // The audio-thread adapter observes this generation counter
                                     // and resets its host-side voice bookkeeping on its next block.
                                 }
@@ -1138,8 +1184,16 @@ mod tests {
     // `outproc_effect::tests::supervisor_respawns_child_on_unexpected_exit`: an unexpectedly
     // exited child triggers a real respawn (PID publish + `respawn_count` incrementing) without
     // `measurement_invalid` being set.
+    //
+    // #573: respawn 先は元々 bare `sleep`（transport 引数を数値と誤解して即 exit → fast respawn
+    // loop）だった。fast-fail 対策導入前は無害な副作用だったが、導入後はこの respawn 先自体が
+    // 「起動直後に死に続ける child」に該当し `MAX_CONSECUTIVE_FAST_RESPAWNS` 回で watchdog が
+    // 諦めてしまう（`measurement_invalid` が立ち、本テストの assertion と矛盾する）。respawn
+    // 成功の状態機械だけを検証したいので、引数を無視して生き続ける stub script に差し替える。
     #[test]
     fn supervisor_respawns_child_on_unexpected_exit() {
+        use std::os::unix::fs::PermissionsExt;
+
         let shm = make_shm();
         let stats = OutProcInstrumentStats::new();
         // #441 の regression: attach 保留中の post-READY crash は respawn しなければならない。
@@ -1153,11 +1207,26 @@ mod tests {
             .spawn()
             .expect("spawn stub child");
         let first_pid = first.id();
+        // 引数（--shm/--plugin/--sample-rate）を無視して生き続ける respawn 先（spawn は成功 =
+        // respawn_count++、かつ #573 の fast-fail 検知に引っかからない）。
+        let respawn_target = std::env::temp_dir().join(format!(
+            "orbit-instrument-respawn-target-{}-{}.sh",
+            std::process::id(),
+            SHM_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&respawn_target, "#!/bin/sh\nexec sleep 30\n")
+            .expect("write respawn target stub");
+        let mut permissions = std::fs::metadata(&respawn_target)
+            .expect("respawn target metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&respawn_target, permissions)
+            .expect("make respawn target executable");
         let sup = InstrumentChildSupervisor::spawn(
             first,
             shm.clone(),
             stats.clone(),
-            PathBuf::from("sleep"),
+            respawn_target.clone(),
             PathBuf::from("/ignored.clap"),
             None,
             48_000,
@@ -1182,8 +1251,14 @@ mod tests {
         );
         drop(sup);
         let _ = std::fs::remove_file(&shm);
+        let _ = std::fs::remove_file(&respawn_target);
     }
 
+    // #573: この respawn 先の script は元々 `sleep 0.2` で自分から終了していた。すると
+    // watchdog がそれを異常終了として検知して**さらに respawn**してしまい、「どの respawn の
+    // 記録を掴むか」がタイミング依存になっていた（fast-fail 対策の導入で連続 fast-fail の上限に
+    // 達し respawn 自体が止まってしまう可能性もある）。長寿命（記録後は寝続ける）にすることで
+    // respawn が「初回 child の強制 kill による1回」だけに確定し、決定論的なテストになる。
     #[test]
     fn supervisor_respawn_passes_the_state_saved_after_initial_spawn() {
         use std::os::unix::fs::PermissionsExt;
@@ -1198,7 +1273,7 @@ mod tests {
         let child_script = fixture_dir.join("record-respawn-args.sh");
         std::fs::write(
             &child_script,
-            "#!/bin/sh\nscript_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" > \"$script_dir/respawn-args.txt\"\nsleep 0.2\n",
+            "#!/bin/sh\nscript_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" > \"$script_dir/respawn-args.txt\"\nexec sleep 3600\n",
         )
         .expect("write respawn argument recorder");
         let mut permissions = std::fs::metadata(&child_script)
@@ -1305,6 +1380,142 @@ mod tests {
         drop(sup);
         std::fs::remove_dir_all(fixture_dir).expect("remove respawn fixture directory");
         let _ = std::fs::remove_file(shm);
+    }
+
+    // #573: 起動直後に死に続ける child を watchdog が tight loop で respawn し続けない。respawn 先を
+    // 即死する `true` にして、`MAX_CONSECUTIVE_FAST_RESPAWNS` 回連続の速い失敗で respawn をやめる
+    // （measurement_invalid を立てて break する）ことを検証する。effect 側
+    // `supervisor_stops_respawning_after_consecutive_fast_failures` のミラー。
+    //
+    // 変異検証: 上限判定（`consecutive_fast_fails >= MAX_CONSECUTIVE_FAST_RESPAWNS` の break）を
+    // 外すと `true` が即死し続けるので respawn_count は無限に増え続け、「頭打ちで安定する」
+    // assertion が red になる（実測は本 PR の報告を参照）。
+    #[test]
+    fn supervisor_stops_respawning_after_consecutive_fast_failures() {
+        let shm = make_shm();
+        let stats = OutProcInstrumentStats::new();
+        let first = Command::new("true")
+            .spawn()
+            .expect("spawn immediately-exiting stub");
+        let sup = InstrumentChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats.clone(),
+            PathBuf::from("true"),
+            PathBuf::from("/ignored.clap"),
+            None,
+            48_000,
+            None,
+        )
+        .expect("supervisor spawn");
+
+        let gave_up = poll_until(5, || stats.measurement_invalid.load(Ordering::Acquire));
+        assert!(
+            gave_up,
+            "consecutive fast failures must trip measurement_invalid"
+        );
+
+        let stopped_at = stats.respawn_count.load(Ordering::Relaxed);
+        assert_eq!(
+            stopped_at,
+            (MAX_CONSECUTIVE_FAST_RESPAWNS - 1) as u64,
+            "respawn must stop exactly MAX_CONSECUTIVE_FAST_RESPAWNS-1 respawns after the \
+             fast-failing streak begins (the Nth death that reaches the limit does not spawn \
+             a replacement)"
+        );
+        // 打ち切り後も respawn_count が増え続けていないこと（本当に止まった証拠。tight loop の
+        // 再発を検出する）。
+        std::thread::sleep(Duration::from_millis(200));
+        assert_eq!(
+            stats.respawn_count.load(Ordering::Relaxed),
+            stopped_at,
+            "respawn_count must not keep climbing after the watchdog gave up"
+        );
+
+        drop(sup);
+        let _ = std::fs::remove_file(&shm);
+    }
+
+    /// `dir` に、自身の起動回数（sidecar counter file）を記録し、`slow_at` 回目の起動のときだけ
+    /// `FAST_RESPAWN_THRESHOLD` を超えて生き続ける（それ以外は即終了する）script を書く。連続
+    /// fast-fail カウンタが「閾値以上生きた respawn でリセットされる」ことを検証するための stub。
+    /// effect 側 `write_variable_lifetime_script` のミラー。
+    fn write_variable_lifetime_script(dir: &Path, slow_at: u32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.join("variable-lifetime.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\nscript_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n\
+                 count_file=\"$script_dir/invocation-count.txt\"\n\
+                 n=$(cat \"$count_file\" 2>/dev/null || echo 0)\n\
+                 n=$((n+1))\n\
+                 printf '%s' \"$n\" > \"$count_file\"\n\
+                 if [ \"$n\" -eq {slow_at} ]; then\n  exec sleep 2.2\nfi\nexit 0\n"
+            ),
+        )
+        .expect("write variable-lifetime script");
+        let mut permissions = std::fs::metadata(&script)
+            .expect("variable-lifetime script metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions)
+            .expect("make variable-lifetime script executable");
+        script
+    }
+
+    // #573: 単発クラッシュ（`FAST_RESPAWN_THRESHOLD` 以上生きてから死ぬ）は連続 fast-fail カウンタを
+    // リセットする——壊れた child だと誤判定されず従来どおり復帰し続けられる。3 回目の起動だけ
+    // 2.2s 生きてから死ぬ script を使い、reset の前後に fast fail を積んで検証する（2 fast fails →
+    // 1 survivor(reset) → 4 fast fails = 7 respawn 後に 2 度目のストリークで上限に達する）。effect 側
+    // `supervisor_resets_fast_fail_streak_after_a_survivor` のミラー。
+    //
+    // 変異検証: リセット（`advance_fast_respawn_streak` の `else 0`）を「常に加算する」よう変異させると、
+    // 3 回目の survivor 死も加算されてしまい、合算が本来より早く上限へ達する。respawn_count は 7 では
+    // なく 4 で頭打ちになり、`final_respawn_count == 7` assertion が red になる（実測は本 PR の報告を
+    // 参照）。
+    #[test]
+    fn supervisor_resets_fast_fail_streak_after_a_survivor() {
+        let fixture_dir = std::env::temp_dir().join(format!(
+            "orbit-instrument-fast-fail-reset-{}-{}",
+            std::process::id(),
+            SHM_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&fixture_dir).expect("create fast-fail-reset fixture directory");
+        let script = write_variable_lifetime_script(&fixture_dir, 3);
+
+        let shm = make_shm();
+        let stats = OutProcInstrumentStats::new();
+        let first = Command::new(&script)
+            .spawn()
+            .expect("spawn variable-lifetime stub (invocation 1)");
+        let sup = InstrumentChildSupervisor::spawn(
+            first,
+            shm.clone(),
+            stats.clone(),
+            script.clone(),
+            PathBuf::from("/ignored.clap"),
+            None,
+            48_000,
+            None,
+        )
+        .expect("supervisor spawn");
+
+        let gave_up = poll_until(10, || stats.measurement_invalid.load(Ordering::Acquire));
+        assert!(
+            gave_up,
+            "the second fast-fail streak (after the reset) must eventually trip the breaker too"
+        );
+        assert_eq!(
+            stats.respawn_count.load(Ordering::Relaxed),
+            7,
+            "2 fast fails + 1 survivor (reset) + 4 fast fails must respawn exactly 7 times before \
+             giving up (without the reset, the streak would trip the breaker after only 4 respawns)"
+        );
+
+        drop(sup);
+        std::fs::remove_dir_all(&fixture_dir).expect("remove fast-fail-reset fixture directory");
+        let _ = std::fs::remove_file(&shm);
     }
 
     // pr-test-analyzer (item 3, PR #422 review): the watchdog's per-tick mirror of `SharedRegion`'s
