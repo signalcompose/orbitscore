@@ -18,7 +18,7 @@ use tracing::warn;
 
 #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
 use crate::engine_wrap::ClapPluginRole;
-#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use crate::engine_wrap::PluginStateTarget;
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
@@ -1086,17 +1086,17 @@ async fn handle_command(
         // #562: 実行中のOOP childから現在stateをsidecarへ保存する。上位層で解決済みの
         // role/bus/instanceを受け、停止判定・single mailbox・atomic renameはEngineWrapに集約する。
         "GetPluginState" => {
-            #[cfg(not(all(feature = "outproc-effect", feature = "outproc-instrument")))]
+            #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
             {
                 err(
                     &id,
                     ProtocolError::new(
                         "PLUGIN_STATE_UNAVAILABLE",
-                        "GetPluginState requires daemon features outproc-effect,outproc-instrument",
+                        "GetPluginState requires outproc-effect or outproc-instrument",
                     ),
                 )
             }
-            #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+            #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
             {
                 let final_path = match params
                     .get("path")
@@ -1116,45 +1116,27 @@ async fn handle_command(
                 };
                 let target = match params.get("role").and_then(Value::as_str) {
                     Some("effect") => {
-                        if params.get("instance").is_some() {
-                            return err(
-                                &id,
-                                ProtocolError::new(
-                                    "MALFORMED_REQUEST",
-                                    "GetPluginState instance is only valid for role='instrument'",
-                                ),
-                            );
-                        }
-                        let bus = match parse_bus_param(&params) {
-                            Ok(bus) => bus,
-                            Err(message) => {
-                                return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                        #[cfg(not(feature = "outproc-effect"))]
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "PLUGIN_STATE_UNAVAILABLE",
+                                "GetPluginState role='effect' requires outproc-effect",
+                            ),
+                        );
+                        #[cfg(feature = "outproc-effect")]
+                        {
+                            if params.get("instance").is_some() {
+                                return err(
+                                    &id,
+                                    ProtocolError::new(
+                                        "MALFORMED_REQUEST",
+                                        "GetPluginState instance is only valid for role='instrument'",
+                                    ),
+                                );
                             }
-                        };
-                        PluginStateTarget::Effect { bus }
-                    }
-                    Some("instrument") => {
-                        if params.get("bus").is_some() {
-                            return err(
-                                &id,
-                                ProtocolError::new(
-                                    "MALFORMED_REQUEST",
-                                    "GetPluginState bus is only valid for role='effect'",
-                                ),
-                            );
-                        }
-                        let instance =
-                            match parse_optional_nonempty_string_param(&params, "instance") {
-                                Ok(Some(instance)) => instance,
-                                Ok(None) => {
-                                    return err(
-                                        &id,
-                                        ProtocolError::new(
-                                            "MALFORMED_REQUEST",
-                                            "GetPluginState role='instrument' requires 'instance'",
-                                        ),
-                                    )
-                                }
+                            let bus = match parse_bus_param(&params) {
+                                Ok(bus) => bus,
                                 Err(message) => {
                                     return err(
                                         &id,
@@ -1162,7 +1144,51 @@ async fn handle_command(
                                     )
                                 }
                             };
-                        PluginStateTarget::Instrument { instance }
+                            PluginStateTarget::Effect { bus }
+                        }
+                    }
+                    Some("instrument") => {
+                        #[cfg(not(feature = "outproc-instrument"))]
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "PLUGIN_STATE_UNAVAILABLE",
+                                "GetPluginState role='instrument' requires outproc-instrument",
+                            ),
+                        );
+                        #[cfg(feature = "outproc-instrument")]
+                        {
+                            if params.get("bus").is_some() {
+                                return err(
+                                    &id,
+                                    ProtocolError::new(
+                                        "MALFORMED_REQUEST",
+                                        "GetPluginState bus is only valid for role='effect'",
+                                    ),
+                                );
+                            }
+                            let instance =
+                                match parse_optional_nonempty_string_param(&params, "instance") {
+                                    Ok(Some(instance)) => instance,
+                                    Ok(None) => {
+                                        return err(
+                                            &id,
+                                            ProtocolError::new(
+                                                "MALFORMED_REQUEST",
+                                                "GetPluginState role='instrument' requires \
+                                                 'instance'",
+                                            ),
+                                        )
+                                    }
+                                    Err(message) => {
+                                        return err(
+                                            &id,
+                                            ProtocolError::new("MALFORMED_REQUEST", message),
+                                        )
+                                    }
+                                };
+                            PluginStateTarget::Instrument { instance }
+                        }
                     }
                     _ => {
                         return err(

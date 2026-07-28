@@ -2738,7 +2738,7 @@ impl EngineWrap {
 
     /// 停止中のout-of-process childへstate保存を1回だけ発行し、同一directoryの一時ファイルを
     /// 検証後に最終パスへatomic renameする。
-    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     pub fn save_outproc_plugin_state(
         &self,
         target: PluginStateTarget,
@@ -2757,6 +2757,7 @@ impl EngineWrap {
         }
 
         let (mailbox, latest_state) = match target {
+            #[cfg(feature = "outproc-effect")]
             PluginStateTarget::Effect { bus } => {
                 let slot = {
                     let control_guard = self.outproc.lock().map_err(|_| {
@@ -2785,6 +2786,7 @@ impl EngineWrap {
                 };
                 active_plugin_state_handles(&slot, "effect")?
             }
+            #[cfg(feature = "outproc-instrument")]
             PluginStateTarget::Instrument { instance } => {
                 let slot = {
                     let control_guard = self.outproc_instrument.lock().map_err(|_| {
@@ -3955,16 +3957,23 @@ impl EngineWrap {
     ///
     /// sample scheduler のlock競合を0へ縮退させず、live NoteOnも含めて一つでも演奏中なら
     /// `false` を返す。内部状態を判定できない場合はエラーにして保存側で拒否する。
-    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     fn plugin_state_save_is_stopped(&self) -> Result<bool, WrapError> {
         let active_plays = self
             .engine
             .active_count_strict()
             .map_err(|error| WrapError::Scheduler(error.to_string()))?;
-        let active_notes = self.active_plugin_notes.lock().map_err(|_| {
-            WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
-        })?;
-        Ok(active_plays == 0 && active_notes.is_empty())
+        #[cfg(feature = "outproc-instrument")]
+        {
+            let active_notes = self.active_plugin_notes.lock().map_err(|_| {
+                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
+            })?;
+            Ok(active_plays == 0 && active_notes.is_empty())
+        }
+        #[cfg(not(feature = "outproc-instrument"))]
+        {
+            Ok(active_plays == 0)
+        }
     }
 
     pub fn output_sample_rate(&self) -> u32 {
@@ -4269,13 +4278,13 @@ fn lock_child_slot_recovering<'a, R: OutProcRole>(
     })
 }
 
-#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 type PluginStateHandles = (
     Arc<orbit_audio_sandbox::CommandMailboxHost>,
     Arc<Mutex<Option<PathBuf>>>,
 );
 
-#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 fn active_plugin_state_handles<R: OutProcRole>(
     child_slot: &Mutex<ChildSlot<R>>,
     role: &str,
@@ -4301,7 +4310,7 @@ fn active_plugin_state_handles<R: OutProcRole>(
     }
 }
 
-#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 fn plugin_state_mailbox_error(error: orbit_audio_sandbox::CommandMailboxError) -> WrapError {
     use orbit_audio_sandbox::{
         CommandMailboxError as E, CMD_RESULT_BAD_ARG, CMD_RESULT_IO_ERROR, CMD_RESULT_PLUGIN_ERROR,
@@ -4433,7 +4442,9 @@ pub struct LoadedPluginSummary {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PluginStateTarget {
+    #[cfg(feature = "outproc-effect")]
     Effect { bus: Option<String> },
+    #[cfg(feature = "outproc-instrument")]
     Instrument { instance: String },
 }
 
@@ -5924,7 +5935,6 @@ mod outproc_health_tests {
         );
     }
 
-    #[cfg(feature = "outproc-instrument")]
     #[test]
     fn plugin_state_save_atomically_replaces_file_and_updates_respawn_state() {
         let shm_path = crate::outproc_effect::unique_shm_path();
@@ -6016,22 +6026,25 @@ mod outproc_health_tests {
             "successful save must leave no sidecar"
         );
 
-        wrap.active_plugin_notes
-            .lock()
-            .expect("active notes lock")
-            .insert(("plugin:lead".into(), 60, 0));
-        let rejected_path = state_directory.join("must-not-write.state");
-        assert!(matches!(
-            wrap.save_outproc_plugin_state(
-                PluginStateTarget::Effect { bus: None },
-                rejected_path.clone()
-            ),
-            Err(WrapError::PluginStatePerforming(_))
-        ));
-        assert!(
-            !rejected_path.exists(),
-            "performing rejection must happen before any filesystem or mailbox side effect"
-        );
+        #[cfg(feature = "outproc-instrument")]
+        {
+            wrap.active_plugin_notes
+                .lock()
+                .expect("active notes lock")
+                .insert(("plugin:lead".into(), 60, 0));
+            let rejected_path = state_directory.join("must-not-write.state");
+            assert!(matches!(
+                wrap.save_outproc_plugin_state(
+                    PluginStateTarget::Effect { bus: None },
+                    rejected_path.clone()
+                ),
+                Err(WrapError::PluginStatePerforming(_))
+            ));
+            assert!(
+                !rejected_path.exists(),
+                "performing rejection must happen before any filesystem or mailbox side effect"
+            );
+        }
 
         std::fs::remove_dir_all(&state_directory).expect("remove state directory");
     }
@@ -6321,6 +6334,41 @@ mod outproc_instrument_health_tests {
                 WrapError::OutProcInstrument(message) | WrapError::OutProcSlotClosed(message)
                 if message.contains(expected)),
             "expected OutProcInstrument error containing {expected:?}, got {error:?}"
+        );
+    }
+
+    #[cfg(not(feature = "outproc-effect"))]
+    #[test]
+    fn instrument_only_plugin_state_save_resolves_the_default_instance() {
+        let shm_path = crate::outproc_instrument::unique_shm_path();
+        let active = super::outproc_load_error_test_support::active_child_slot::<InstrumentRole>(
+            || shm_path.clone(),
+            "stateful-instrument.clap",
+            None,
+        );
+        let (wrap, _child_slot) = wrap_with_child_slot(active, OutProcInstrumentStats::new());
+        let final_path = std::env::temp_dir().join(format!(
+            "orbit-instrument-only-state-{}-{}.state",
+            std::process::id(),
+            super::short_uuid()
+        ));
+
+        let error = wrap
+            .save_outproc_plugin_state(
+                super::PluginStateTarget::Instrument {
+                    instance: super::DEFAULT_INSTRUMENT_INSTANCE.to_string(),
+                },
+                final_path.clone(),
+            )
+            .expect_err("STARTING child must reject state save after resolving the instance");
+
+        assert!(
+            matches!(error, WrapError::PluginStateNotReady(_)),
+            "instrument-only save must reach the selected child mailbox, got {error:?}"
+        );
+        assert!(
+            !final_path.exists(),
+            "not-ready rejection must happen before creating the final state file"
         );
     }
 
