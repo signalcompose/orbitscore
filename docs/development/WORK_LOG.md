@@ -17,6 +17,98 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.316 feat(engine): project.yaml から plugin state を宣言時に自動復元 #541 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ 実装・変異検証・**実機 gated E2E 完了**（受け入れ基準達成）
+
+`project.yaml` の `states:` を、instrument / master effect / per-sequence effect の新規宣言時に
+SC.5 identity で引き、明示 `statePath` が無い場合だけ daemon の `loadPlugin` へ渡す経路を追加。
+manifest は保存側と同じ parser / identity key を使い、未生成は no-op、壊れた manifest は throw、
+登記済み state ファイルの欠損は stderr へ診断したうえで state 無しの load へ degrade する。
+
+ライブコーディングの再評価を壊さないため、slot の `.orbs` 宣言値 `declaredStatePath` と
+初回 load の実効値 `statePath` を分離。冪等判定は前者だけを見て、respawn self-heal は後者を
+再利用する。sum / aux はアドレス指定が未決のため #564 のまま対象外。
+
+U1–U10 はすべて3 manager の public API 経由で検証。resolver 無効化、優先順位逆転、
+declared/effective 統合、欠損時 throw / 診断削除、manifest parse 握り潰し、`seq:` receiver 混入、
+role 除去、空 documentDirectory guard 除去、不在 manifest throw、self-heal の実効値再利用削除を
+それぞれ red にし、重複 `loadPlugin` 呼び出しも `toHaveBeenCalledTimes(1)` で検出した。変異後は
+`/tmp/claude-501/541-mutation-backup/` の原本と全対象を `cmp` し、一致を確認。
+
+**検証**:
+
+- `npm run build` ✅
+- `npm test` ✅ **1789 passed / 30 skipped / 0 failed**（ベースライン 1773 + 新規 16）
+- `npm run lint` ✅ error 0（warning 2件はいずれも本変更と無関係の既存ファイル:
+  `plugin-catalog-reader.ts` と `audio-slicer.spec.ts`）
+- **実機 gated E2E ✅ 2 passed**（`npm run test:e2e:gated`）— 受け入れ基準の本体
+
+### 実機で初めて見えた不具合（ユニット全緑・受け入れ監査通過をすり抜けた）
+
+**1回目の実機実行は落ちた。** `restored 261.63Hz must match saved 392.00Hz` — default C4 に
+落ちており、自動復元が発火していなかった。ユニット 1789 件は全緑、Fable の受け入れ監査も
+「このままマージ可」だった状態でこれである。
+
+一時プローブ（`console.error` → engine stderr → `get_log`）で実値を観測して確定した原因:
+
+```
+dir=/Users/yamato/Src/proj_orbitscore/orbitscore  ← REPO_ROOT。tmpRoot ではない
+key=stSeq/instrument/CLAPTestSynth/0              ← key は正しい
+manifest not found at <REPO_ROOT>/project.yaml
+```
+
+**実装ではなく E2E ハーネスの問題だった。** 拡張は documentDirectory を2経路で渡す:
+
+| 経路 | documentDirectory |
+|---|---|
+| `run_selection`（`extension.ts:2699`） | `path.dirname(editor.document.uri.fsPath)` = 開いているファイルのディレクトリ |
+| `evaluate_orbitscore`（`extension.ts:2839`） | **workspace root** |
+
+gated E2E はアプリを REPO_ROOT を workspace として起動していたため、tmpRoot 内の fixture を
+`run_selection` で評価する先行フェーズは tmpRoot になる一方、`evaluate_orbitscore` しか使わない
+復元フェーズは REPO_ROOT になっていた。**テストが直前行で `global.setDocumentDirectory(root)` を
+呼んでも効かない** — REPL は毎 eval のメタ行 `//#documentDirectory <workspace>` を
+`sessionDocumentDirectory` として保持し、**バッファ実行のたびに冒頭で再適用する**ため上書きされる。
+
+修正: **アプリの workspace を tmpRoot で開く**。両経路が一致し、テスト側の脆い
+`setDocumentDirectory` 手当て3箇所も不要になった。ユーザーが曲フォルダを開く実際の使い方にも近い。
+
+その副作用で先行テストが `auto-started engine running` タイムアウトになった。
+`autoStartConfiguredRustEngine` は `resolveAudioDeviceSetting()` が空だと即 return し、その値は
+`vscode.workspace.getConfiguration('orbitscore').inspect('audioDevice').workspaceValue`
+= `<workspace>/.vscode/settings.json` 由来。リポジトリにはあるが新規 tmpRoot には無かった。
+セットアップで `<tmpRoot>/.vscode/settings.json` を生成して解決（デバイス名はマシン依存を避け、
+実装がサポートするセンチネル `__default__` を使う）。
+
+### 診断が暴いたテストの穴（同 PR で塞いだ）
+
+復元テストは `saved.path` のバイト一致しか見ておらず、**保存がどのディレクトリに落ちたかを
+一度も検証していなかった** — 保存が別ディレクトリでも通る。同ファイル内の先行フェーズは
+`projectFile` まで assert しているのに、復元フェーズだけが緩かった。
+`identityKey` / `projectFile` / `states/` 配下の3点を追加し、次に同型で転んだときに
+「保存が違う場所」か「復元が読めていない」かが**テストの失敗メッセージだけで切り分けられる**ようにした
+（今回は切り分けにプローブを1往復挟む必要があった）。
+
+**検証環境についての注記**: 実装を委譲した Codex 側の sandbox では `listen EPERM 127.0.0.1`
+により mock daemon / MCP HTTP 系の 95件が落ちていた。**これは sandbox の artifact であって
+退行ではない** — 同一差分を sandbox 外で回すと上記のとおり全緑になる。委譲先の
+「何件 failed」報告は、実行環境を確認せずに退行と読んではいけない（逆に、緑報告も
+そのまま信じない）。
+
+**本変更で残る follow-up（issue 化済み）**:
+
+- **#569**: 宣言時に登記済み state ファイルが欠損していれば state 無しへ degrade して音を出せる
+  一方、初回 load 後に同じファイルが消えた respawn では再 load が失敗し `pluginActive=false` の
+  まま note が drop される。respawn 全体の失敗処理を含むため #541 では現状維持
+- **#568**: 同名・別 path の plugin は SC.5 key が衝突しうる。`normalizePluginInstanceName` が
+  パスを捨てるため。fingerprint 併記は `version: 1` の `states:` 値型を変えるため別 schema issue
+- **#567**: OrbitStudio `get_log` は要求行数を黙って末尾 500 行へ cap する。E2E の ERROR 件数
+  前後比較はスライディングウィンドウ上の補助判定に留まる（復元の主判定は non-default pitch）。
+  既存テストの `RESTORE_LOG_LINES = 2000` は実際には効いておらず、
+  「窓を広げて計測を安定させる」というコメントが事実と食い違っていたので実態に合わせた
+
 ### 6.315 test: prove the tone loop on real hardware — PR #563 のレビュー〜出荷 (Jul 29, 2026)
 
 **Date**: 2026-07-29

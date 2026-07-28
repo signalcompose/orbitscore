@@ -92,6 +92,7 @@ export class MixerManager {
   ) {
     const makeKind = (kind: MixerKind, prefix: string): KindState => ({
       buses: new Map(),
+      // #564 でアドレス指定が未決のため、sum/aux は state 自動復元の対象外。
       inserts: new EffectChainMap(audioEngine, (name) => `${kind}:${name}`),
       pool: new BusPool(
         prefix,

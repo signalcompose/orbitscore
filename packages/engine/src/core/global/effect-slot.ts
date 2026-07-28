@@ -10,6 +10,7 @@
 import * as path from 'path'
 
 import type { AudioEngine } from '../../audio/types'
+import type { PluginStateIdentity } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
@@ -61,10 +62,9 @@ interface PluginSlotBase {
   readonly normalizedName: string
   readonly resolvedPath: string
   readonly pluginId?: string
-  /**
-   * 保存済み state ファイル（#540 P2・現状 instrument のみが設定する）。ロード identity の
-   * 一部として idempotence 判定に参加する（effect では常に undefined 同士の比較）。
-   */
+  /** `.orbs` 宣言が明示した state path。冪等再宣言の同一性判定はこの値だけを見る。 */
+  readonly declaredStatePath?: string
+  /** 実際の load に渡した state path（明示値、または project.yaml のフォールバック）。 */
   readonly statePath?: string
   readonly load: Promise<void>
 }
@@ -99,10 +99,24 @@ export interface PluginDeclaration {
    */
   readonly instance?: string
   /**
-   * 保存済みプラグイン state ファイルの解決済みパス（'instrument' role 専用・#540 P2）。
-   * ロード identity の一部 — 同 path/pluginId でも state が違えば別宣言（v1 は差し替え拒否）。
+   * `.orbs` が明示した保存済みプラグイン state ファイルの解決済みパス（#540 P2）。
+   * project.yaml から得る実効値とは分離し、冪等判定にはこの宣言値だけを使う。
    */
   readonly statePath?: string
+}
+
+export type PluginStatePathFallbackResolver = (
+  identity: PluginStateIdentity,
+) => Promise<string | undefined>
+
+export interface EffectChainMapOptions<K> {
+  readonly maxLength?: number
+  readonly statePathFallback?: PluginStatePathFallbackResolver
+  /**
+   * project.yaml の SC.5 identity に使う外向き receiver 名。`receiverId` が返す内部
+   * namespace (`seq:<name>` 等) とは異なる。
+   */
+  readonly externalReceiverId?: (key: K) => string
 }
 
 export class EffectSlotLimitError extends Error {
@@ -124,6 +138,9 @@ export class EffectSlotLimitError extends Error {
  */
 export class EffectChainMap<K> {
   private readonly chains = new Map<K, PluginSlot[]>()
+  private readonly maxLength: number
+  private readonly statePathFallback?: PluginStatePathFallbackResolver
+  private readonly externalReceiverId?: (key: K) => string
   // key ごとの直列化キュー（#527 review Important 1）。値は「前呼び出しの決着
   // （成功/失敗いずれも）待ち」で、前呼び出しの成否は自分の結果に影響させない
   // （catch で握りつぶし、必ず次の呼び出しへ進める）。
@@ -132,8 +149,12 @@ export class EffectChainMap<K> {
   constructor(
     private readonly audioEngine: AudioEngine,
     private readonly receiverId: (key: K) => string,
-    private readonly maxLength = 1,
-  ) {}
+    options: EffectChainMapOptions<K> = {},
+  ) {
+    this.maxLength = options.maxLength ?? 1
+    this.statePathFallback = options.statePathFallback
+    this.externalReceiverId = options.externalReceiverId
+  }
 
   has(key: K): boolean {
     return (this.chains.get(key)?.length ?? 0) > 0
@@ -212,7 +233,7 @@ export class EffectChainMap<K> {
         existing.role === spec.role &&
         existing.resolvedPath === spec.resolvedPath &&
         existing.pluginId === spec.pluginId &&
-        existing.statePath === spec.statePath
+        existing.declaredStatePath === spec.statePath
       ) {
         await existing.load
         // Self-heal: respawn 後の復元失敗で engine 側だけ宣言が消えている場合、
@@ -242,11 +263,32 @@ export class EffectChainMap<K> {
     if (!this.audioEngine.loadPlugin) {
       throw new Error('Plugin hosting requires the Rust engine backend.')
     }
-    const { role, bus, normalizedName, resolvedPath, pluginId, instance, statePath } = spec
-    // bus 無し（master insert）は 3 引数のまま呼ぶ（既存の呼び出し契約を変えない —
-    // explicit undefined でも実 engine は等価だが、契約をピンするテスト/モックがある）。
-    // bus / instance / statePath は末尾 optional（#540 P1/P2）— 分岐を列挙する代わりに
-    // 末尾の undefined を落として「与えられた引数だけを渡す」契約を保つ。
+    const { role, bus, normalizedName, resolvedPath, pluginId, instance } = spec
+    const chain = this.chains.get(key) ?? []
+    const occurrence =
+      replacing?.occurrence ??
+      chain.filter((slot) => slot !== replacing && slot.normalizedName === normalizedName).length
+    const receiver = replacing?.receiver ?? this.receiverId(key)
+    const instanceId = replacing?.instanceId ?? `${receiver}/${normalizedName}#${occurrence + 1}`
+    // manifest は宣言値が無い新規 slot だけで参照する。respawn self-heal では、初回 load で
+    // 確定した実効値を常に優先して同じパスを指し続ける（ファイル内容は再読込されうる）。
+    const externalReceiver =
+      replacing === undefined && spec.statePath === undefined
+        ? this.externalReceiverId?.(key)
+        : undefined
+    const fallbackStatePath =
+      externalReceiver !== undefined && this.statePathFallback !== undefined
+        ? await this.statePathFallback({
+            receiver: externalReceiver,
+            role,
+            normalizedName,
+            occurrence,
+          })
+        : undefined
+    const statePath = replacing?.statePath ?? spec.statePath ?? fallbackStatePath
+    // bus / instance / statePath は末尾 optional（#540 P1/P2）。末尾の undefined を落とし、
+    // 「必要な位置までの引数だけを渡す」契約を保つ。したがって statePath の無い master
+    // insert は従来どおり 3 引数だが、statePath があればその位置までの undefined も渡す。
     const optionalArgs: (string | undefined)[] = [bus, instance, statePath]
     while (optionalArgs.length > 0 && optionalArgs[optionalArgs.length - 1] === undefined) {
       optionalArgs.pop()
@@ -254,12 +296,6 @@ export class EffectChainMap<K> {
     const load = this.audioEngine
       .loadPlugin(resolvedPath, pluginId, role, ...(optionalArgs as [string?, string?, string?]))
       .then(() => undefined)
-    const chain = this.chains.get(key) ?? []
-    const occurrence =
-      replacing?.occurrence ??
-      chain.filter((slot) => slot !== replacing && slot.normalizedName === normalizedName).length
-    const receiver = replacing?.receiver ?? this.receiverId(key)
-    const instanceId = replacing?.instanceId ?? `${receiver}/${normalizedName}#${occurrence + 1}`
     const entry: PluginSlot =
       role === 'effect'
         ? {
@@ -271,6 +307,8 @@ export class EffectChainMap<K> {
             normalizedName,
             resolvedPath,
             pluginId,
+            declaredStatePath: spec.statePath,
+            statePath,
             load,
           }
         : {
@@ -282,6 +320,7 @@ export class EffectChainMap<K> {
             normalizedName,
             resolvedPath,
             pluginId,
+            declaredStatePath: spec.statePath,
             statePath,
             load,
           }

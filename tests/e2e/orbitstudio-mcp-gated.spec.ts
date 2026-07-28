@@ -187,6 +187,23 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const extensionsDir = path.join(tmpRoot, 'extensions')
       fs.mkdirSync(userDataDir, { recursive: true })
       fs.mkdirSync(extensionsDir, { recursive: true })
+      // tmpRoot を workspace にしたため、リポジトリの .vscode/settings.json は効かない。
+      // autoStartConfiguredRustEngine は保存済み audioDevice が無いと即 return するので、
+      // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
+      // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
+      const workspaceSettingsDir = path.join(tmpRoot, '.vscode')
+      fs.mkdirSync(workspaceSettingsDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(workspaceSettingsDir, 'settings.json'),
+        JSON.stringify(
+          {
+            'orbitscore.audioDevice': '__default__',
+            'orbitscore.engineDebug': false,
+          },
+          null,
+          2,
+        ) + '\n',
+      )
       const captureWavPath = path.join(tmpRoot, 'capture.wav')
       // Scratch copy of the kick-loop fixture (basename preserved so the
       // languageId/path assertions below still hold): save_file writes here,
@@ -236,7 +253,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
           `--user-data-dir=${userDataDir}`,
           `--extensions-dir=${extensionsDir}`,
-          REPO_ROOT,
+          // `evaluate_orbitscore` は workspace root を documentDirectory として渡すので、
+          // プロジェクト（project.yaml / states/）を置く tmpRoot を workspace として開く。
+          // これはユーザーが曲フォルダを開く実際の使い方とも一致する。
+          tmpRoot,
         ],
         {
           env: { ...process.env, ORBITSCORE_MCP_PORT: String(port) },
@@ -741,10 +761,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const activeClient = client
       const root = tmpRoot
 
-      // この復元フェーズは2サイクル分（約26秒）のログを跨いで ERROR/attach 失敗の
-      // 増分を見るため、既存フェーズの 500 行窓では古い行が流れて偽陰性になりうる
-      // （独立監査の指摘）。窓を広げて計測の土台を安定させる。
-      const RESTORE_LOG_LINES = 2000
+      // get_log は要求値にかかわらず末尾 500 行へ cap する。ERROR/attach 失敗の前後比較は
+      // このスライディングウィンドウ内の補助判定で、復元の主判定は下の pitch assert。
+      const RESTORE_LOG_LINES = 500
       const fixturesDir = path.join(root, 'fixtures')
       fs.mkdirSync(fixturesDir, { recursive: true })
       const handStatePath = path.join(fixturesDir, 'orc1-offset7.state')
@@ -815,11 +834,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
       )
       const stopShifted = await activeClient.call('evaluate_orbitscore', {
-        code: [
-          'stSeq.stop()',
-          'global.stop()',
-          `global.setDocumentDirectory(${JSON.stringify(root)})`,
-        ].join('\n'),
+        code: ['stSeq.stop()', 'global.stop()'].join('\n'),
       })
       expect(stopShifted.isError, stopShifted.text).toBe(false)
       await waitUntil(
@@ -839,8 +854,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         index: 0,
       })
       expect(saveShifted.isError, saveShifted.text).toBe(false)
-      const saved = JSON.parse(saveShifted.text) as { path: string; bytesWritten: number }
+      const saved = JSON.parse(saveShifted.text) as {
+        path: string
+        bytesWritten: number
+        identityKey: string
+        projectFile: string
+        projectStatePath: string
+      }
       expect(saved.bytesWritten).toBe(handState.length)
+      expect(saved.identityKey).toBe('stSeq/instrument/CLAPTestSynth/0')
+      expect(saved.projectFile).toBe(path.join(root, 'project.yaml'))
+      expect(saved.path.startsWith(path.join(root, 'states') + path.sep)).toBe(true)
       expect(
         fs.readFileSync(saved.path).equals(handState),
         'MCP-saved state must be byte-identical to the Cycle A input',
@@ -856,7 +880,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         `Cycle A must add no ERROR: lines. Log tail: ${afterCycleALog.slice(-1200)}`,
       ).toBe(errorsBeforeCycleA)
 
-      // ── Cycle B: the MCP output (never the hand fixture) is the restore input.
+      // ── Cycle B: project.yaml registration from the MCP save is the restore input.
       const errorsBeforeCycleB = countErrors(afterCycleALog)
       const startRestored = await activeClient.call('start_engine', { capture_wav: restoredWav })
       expect(startRestored.isError, startRestored.text).toBe(false)
@@ -868,7 +892,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'var global = init GLOBAL',
           'global.key("C")',
           'global.start()',
-          'var rsSeq = init global.seq',
+          'var stSeq = init global.seq',
         ].join('\n'),
       })
       expect(initRestored.isError, initRestored.text).toBe(false)
@@ -876,7 +900,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
       )
       const attachRestored = await activeClient.call('evaluate_orbitscore', {
-        code: `rsSeq.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)}, ${JSON.stringify(saved.path)})`,
+        code: `stSeq.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`,
       })
       expect(attachRestored.isError, attachRestored.text).toBe(false)
       await sleep(6000)
@@ -889,7 +913,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       ).toBe(attachFailuresBeforeRestored)
 
       const playRestored = await activeClient.call('evaluate_orbitscore', {
-        code: ['rsSeq.play(1)', 'RUN(rsSeq)'].join('\n'),
+        code: ['stSeq.play(1)', 'RUN(stSeq)'].join('\n'),
       })
       expect(playRestored.isError, playRestored.text).toBe(false)
       await sleep(3000)
@@ -898,7 +922,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
       )
       const stopRestored = await activeClient.call('evaluate_orbitscore', {
-        code: ['rsSeq.stop()', 'global.stop()'].join('\n'),
+        code: ['stSeq.stop()', 'global.stop()'].join('\n'),
       })
       expect(stopRestored.isError, stopRestored.text).toBe(false)
       await waitUntil(

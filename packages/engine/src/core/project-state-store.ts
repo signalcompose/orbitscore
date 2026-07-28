@@ -79,6 +79,62 @@ function parseManifest(source: string, manifestPath: string): ProjectManifest {
   return manifest as ProjectManifest
 }
 
+/**
+ * project.yaml の SC.5 identity 登記を、daemon に渡せる絶対 state path へ解決する。
+ *
+ * document context が無い場合と manifest / identity が未登記の場合は通常状態として no-op。
+ * manifest 自体の破損は parseManifest の既存契約どおり throw し、登記済みファイルだけが
+ * 欠損している場合は音を止めず state 無しへ degrade する（stderr には診断を残す）。
+ */
+export async function resolveRegisteredPluginStatePath(
+  projectDirectory: string,
+  identity: PluginStateIdentity,
+): Promise<string | undefined> {
+  // AudioManager.getDocumentDirectory() は未設定時に空文字列を返す。ここを path.join() より
+  // 前で止めないと、engine の cwd にある project.yaml を暗黙に読むことになる。
+  if (!projectDirectory) {
+    return undefined
+  }
+
+  const manifestPath = path.join(projectDirectory, 'project.yaml')
+  let manifest: ProjectManifest
+  try {
+    const source = await fs.promises.readFile(manifestPath, 'utf8')
+    manifest = parseManifest(source, manifestPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+    throw error
+  }
+
+  const key = identityKey(identity)
+  const registeredPath = manifest.states[key]
+  if (registeredPath === undefined) {
+    return undefined
+  }
+
+  const absoluteStatePath = path.resolve(projectDirectory, registeredPath)
+  try {
+    await fs.promises.access(absoluteStatePath, fs.constants.F_OK)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    console.error(
+      `Registered plugin state '${absoluteStatePath}' for '${key}' does not exist; ` +
+        'loading the plugin without state.',
+    )
+    return undefined
+  }
+  return absoluteStatePath
+}
+
+export function createStatePathFallback(directoryProvider: {
+  getDocumentDirectory(): string
+}): (identity: PluginStateIdentity) => Promise<string | undefined> {
+  return (identity) =>
+    resolveRegisteredPluginStatePath(directoryProvider.getDocumentDirectory(), identity)
+}
+
 async function syncDirectory(directory: string): Promise<void> {
   const handle = await fs.promises.open(directory, 'r')
   try {
