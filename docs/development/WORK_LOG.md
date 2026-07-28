@@ -67,6 +67,21 @@ gated E2E を回そうとして `vitest run tests/e2e/orbitstudio-mcp-gated.spec
 `vitest.config.ts` に `exclude` を追加して discovery から外した。
 **実測: 発見ファイル数 7 → 1**（exclude を外して再計測し、7 に戻ることも確認済み）。
 
+> ⚠️ **レビューで見つかった二次被害**: 最初 `['**/node_modules/**', '**/dist/**', ...]` と
+> **既定値を手打ちで再現**したが、`test.exclude` に配列を渡すと vitest の `defaultExclude` は
+> **マージされず丸ごと置き換わる**（`@vitest/utils` の `deepMerge` が配列を mergeable から
+> 除外している）。結果、`**/.{idea,git,cache,output,temp}/**` や `**/cypress/**` の除外が
+> 黙って消えていた — **この PR が塞ごうとしている穴と同じ形の穴**を別の場所に開けていた。
+> `.cache/` に spec を置くと実際に拾われることを実測で確認し、
+> `[...configDefaults.exclude, '**/.claude/worktrees/**']` へ修正した。
+> 修正後、①`.cache/` が除外される ②worktree 除外が維持される
+> ③通常の発見数（1735）が変わらない、の3点を実測。
+
+**CI ステップの検出力（レビュアーが個別に測定）**: 追加した4ステップのうち
+`outproc-instrument` 単独の clippy と test の**2つが対象バグを直接検出**し、
+残る2つ（出荷時の組み合わせ）は**このバグは検出しないが別の懸念を守る**ため飾りではない。
+なお WORK_LOG が「error 3件」としていたのは、正確には **E0599 が2件**＋要約行の計3行。
+
 ---
 
 ### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
