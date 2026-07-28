@@ -272,10 +272,8 @@ fn package_oracle() -> Option<PathBuf> {
 }
 
 fn package_synth_oracle() -> Option<PathBuf> {
-    static ORACLE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    ORACLE
-        .get_or_init(|| run_package_script("orbit-vst3-synth-oracle"))
-        .clone()
+    // package 手順は oracle 自身が持つ（`orbit-vst3-instrument-child` の配線テストとの共有）。
+    orbit_vst3_synth_oracle::package_bundle()
 }
 
 /// `crates/<crate_dir>/package-oracle.sh` を実行して bundle の絶対パスを得る（失敗は loud skip）。

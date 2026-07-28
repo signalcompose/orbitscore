@@ -97,7 +97,7 @@ fn main() -> Result<()> {
                         CMD_RESULT_BAD_ARG,
                         "cmd_arg is empty or not NUL-terminated UTF-8",
                     ),
-                    Some(path) => match std::fs::write(path, FIXTURE_STATE) {
+                    Some(path) => match orbit_audio_sandbox::write_sidecar(path, FIXTURE_STATE) {
                         Err(error) => CommandOutcome::failed(
                             CMD_RESULT_IO_ERROR,
                             format!("write {path}: {error}"),

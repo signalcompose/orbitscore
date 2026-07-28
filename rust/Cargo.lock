@@ -1095,6 +1095,7 @@ dependencies = [
  "anyhow",
  "orbit-audio-sandbox",
  "orbit-vst3-host",
+ "orbit-vst3-synth-oracle",
 ]
 
 [[package]]

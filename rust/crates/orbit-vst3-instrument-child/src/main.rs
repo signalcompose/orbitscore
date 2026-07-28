@@ -11,8 +11,8 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
 use orbit_audio_sandbox::transport::{
-    service_command_mailbox, CommandOutcome, CMD_RESULT_BAD_ARG, CMD_RESULT_IO_ERROR,
-    CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE,
+    service_command_mailbox, write_sidecar, CommandOutcome, CMD_RESULT_BAD_ARG,
+    CMD_RESULT_IO_ERROR, CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE,
 };
 #[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
@@ -266,7 +266,9 @@ fn classify_event(event: &NeutralEvent) -> EventAction {
     }
 }
 
-/// `CMD_SAVE_STATE` の本体（`service_command` からフラットに呼ぶ）。
+/// `CMD_SAVE_STATE` の本体。戻り値は [`CommandOutcome`] で、これを
+/// `service_command_mailbox` が `cmd_result` / `cmd_result_len` / `cmd_result_detail` へ
+/// publish する（この関数は共有メモリに直接触らない）。
 ///
 /// 戻り値 = `(cmd_result, cmd_result_len, cmd_result_detail)`。**どの失敗経路でも
 /// 理由を返す**（silent に握り潰さない）。
@@ -285,7 +287,8 @@ fn handle_save_state(
         Err(error) => return CommandOutcome::failed(CMD_RESULT_PLUGIN_ERROR, format!("{error}")),
         Ok(bytes) => bytes,
     };
-    match std::fs::write(path, &bytes) {
+    // UIH.3 は fsync を要求する（`write_sidecar` が担う）。
+    match write_sidecar(path, &bytes) {
         Err(error) => CommandOutcome::failed(CMD_RESULT_IO_ERROR, format!("write {path}: {error}")),
         Ok(()) => CommandOutcome::ok(bytes.len() as u64),
     }

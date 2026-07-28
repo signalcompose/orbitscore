@@ -38,7 +38,6 @@ state を吸い上げる経路が無かった**。`orbit-vst3-host` に `MemoryS
   child がそこへ書く）。`SharedRegion` は固定サイズ POD で数十 MB を運べない
 - `Vst3InstrumentProcessor::capture_state()`: `IComponent::getState` をバイト列で返す。
   **空 chunk は `Err`** — サイズ 0 を「成功」として上位へ渡すと音色を失う
-- `read_stream_contents`: `MemoryStream` の内部を覗かず**規格の API（seek + read）だけ**で取る
 - child: メインループでコマンドを1件処理。**未知の kind も ack で知らせる**（silent 無視しない）
 
 **実行モデルとの関係**: spec UIH.1 は「state 操作はメインスレッド」を要求する。**現状 child の
@@ -49,7 +48,7 @@ state を吸い上げる経路が無かった**。`orbit-vst3-host` に `MemoryS
 **変異検証（3種・すべて red）**: ①収まらない値を切り詰めて書く（**別パスへの書き込みを招く**）
 ②NUL 終端が無くても先頭から読む ③非 UTF-8 を lossy で受理する。
 
-**検証**: sandbox 44 passed（+3）/ daemon 123 passed / fmt clean / clippy 0。
+**検証**: この段階の件数はコマンド併記が無く再現できなかったため、節末の実測表に一本化した。
 
 **🔴 ループ通し E2E を追加（受け入れ基準の中核）**:
 `orbit-vst3-host/tests/offline.rs` の `state_round_trip_reproduces_the_same_pitch`。
@@ -66,7 +65,7 @@ state を吸い上げる経路が無かった**。`orbit-vst3-host` に `MemoryS
 oracle crate に `rlib` を追加してテストから式を参照できるようにした。
 
 **変異検証（4種・すべて red）**: ①`getState` が state を返さない ②`setState` が
-オフセットを適用しない ③`read_stream_contents` が末尾を取りこぼす ④`seek` を省く。
+オフセットを適用しない ③`capture_state` が chunk の末尾を取りこぼす ④`seek` を省く。
 
 > ⚠️ **`capture_state` の空チェック（`bytes.is_empty()` → `Err`）は現時点で無防備**。
 > oracle は常に非空を返すためこの経路を踏めず、当該分岐を消す変異はどのテストでも
@@ -101,10 +100,68 @@ oracle crate に `rlib` を追加してテストから式を参照できるよ�
 
 (c) が狙い撃ちのテスト1件だけを落とすことも確認した（各テストが別々の性質を守っている）。
 
-**検証**: host 10 passed / oracle 4 passed / sandbox 47 passed（+4）/ daemon 123 passed /
-workspace 全 green / fmt clean / clippy 0。
+**検証**（コマンドと実測値・crate 単位の合計）:
 
-**残**: 本 PR は VST3 instrument のみ。CLAP / effect への展開は形式中立の要件（CAP.6-2）として後続。
+| コマンド | passed |
+|---|---|
+| `cargo test -p orbit-audio-sandbox` | 61 |
+| `cargo test -p orbit-vst3-host` | 16 |
+| `cargo test -p orbit-vst3-synth-oracle` | 4 |
+| `cargo test -p orbit-vst3-instrument-child` | 9（本 PR で新設） |
+| `cargo test -p orbit-audio-daemon`（既定 feature） | 64 |
+
+`cargo test --workspace` 全 green / `cargo fmt --all` clean / `cargo clippy --workspace --all-targets` 警告 0。
+
+> ⚠️ 当初この節に書いていた「sandbox 47 / daemon 123」は**どのコマンドでも再現しない数値**だった。
+> feature フラグ次第で件数が変わるため、**コマンドを併記しない件数は検証の役に立たない**。
+
+**🔴 本番 child の配線を実プロセスで検証（pr-test-analyzer が変異で実証した穴）**:
+`service_command_mailbox` の呼び出しを `if false { ... }` で包む変異が**全テスト green のまま
+通過した**。fixture (`sandbox-instrument-child`) はプロトコルを検証するが `capture_state()` を
+呼ばないため、**本番 child の配線はどこでも守られていなかった**。
+
+対応: `orbit-vst3-instrument-child/tests/mailbox_wiring.rs` を新設。本番 child バイナリを
+実際に spawn し、`--state` で既知のオフセット（7半音）を**復元**して起動 → メールボックス
+経由で**吸い上げ** → サイドカーが復元値と一致することを確認する。実プラグイン（synth oracle）
+を実 VST3 ホストでロードした上で shm を往復する。**デバイス不要・無人**。
+
+package 手順は oracle 自身の `package_bundle()` に移した（`orbit-vst3-host` の
+ループ通しテストと共有。手順が変わったとき片方だけ直し忘れる形を避ける）。
+
+**変異検証（4種・すべて red・切り分けも確認）**:
+
+| 変異 | 結果 |
+|---|---|
+| (a) メインループの呼び出しを無効化（**従来どこも殺せなかった変異**） | 2件とも red |
+| (b) 分岐反転（`CMD_SAVE_STATE` を未対応として返す） | 保存テストのみ red |
+| (c) 実プラグインを見ずに固定バイト列を書く | 保存テストのみ red |
+| (d) 引数差し替え（要求と別のパスへ書く） | 保存テストのみ red |
+
+**spec 逸脱の解消**（規則6: spec が正本）:
+
+- **fsync**: UIH.3 は「書き込み → fsync → ack」を要求するが実装は `std::fs::write` のみだった。
+  `write_sidecar()` を共有層に置いて `fsync` まで行う。ack が「ディスクに載った」を意味しないと、
+  電源断で「登記簿は新しい state を指すが実体は古い」状態になりうる
+- **`cmd_result_len`**: 実装が新設した専用フィールドが UIH.2 の表に無かった → spec に追記
+- **単一未処理コマンド契約**と**respawn 時の mailbox reset** を UIH.2 の規律に MUST として明記。
+  後者は「replacement child が前世代宛のコマンドを実行し成功で ack する」経路（silent-failure
+  レビューの指摘）。**host 側の発行経路が未実装のため現在は未到達**なので、投機的な実装は
+  避け、発行経路を足す PR が同時に満たす制約として spec に固定した
+- サイドカーの**削除責務は host** であることを UIH.3 に明記
+
+**`write_cstr_field` の穴**: 埋め込み NUL を含む値を受理していた（read 側は最初の NUL で切る
+ので「切り詰めない」保証が黙って崩れる）。拒否側に倒し、**保証をコメントではなくコードで守る**
+形にした。変異検証済み。
+
+**スコープの明示（#555 の宣言との差分）**: issue #555 のスコープには「daemon 側: 保存を要求して
+ack を待つ経路」も含まれていたが、**本 PR には入っていない**。上記の respawn / タイムアウト /
+単一未処理コマンドの規律は、その配線 PR が満たすべき前提として spec 側に置いた。
+
+**混入の除去**: 作業ツリーにあった #557（CLAP state parity）の未完成コードが `git add -A` で
+本 PR のコミットに紛れ込んでいた。`rust-spike/` は CI のワークスペース外でビルドされないため
+**CI をすり抜けた**（実際にコンパイルエラー3件）。差分から除去し、patch として退避してある。
+
+**残**: 本 PR は VST3 instrument のみ。CLAP / effect への展開は形式中立の要件（CAP.6 の項目2「必須能力は全形式で揃える」）として後続。
 `service_command_mailbox` を共有層に置いたので、CLAP child は handler を書くだけで済む。
 UI 経路（#474）と `project.yaml` 永続化（PRJ）も残る。
 

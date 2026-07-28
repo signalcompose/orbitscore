@@ -526,6 +526,39 @@ extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
         .into_raw()
 }
 
+/// この oracle を VST3 バンドルとして package し、`.vst3` のパスを返す。
+///
+/// **テスト専用のヘルパを oracle 本体に置いている理由**: このバンドルを必要とするテストは
+/// 複数クレートにまたがる（`orbit-vst3-host` のループ通しテストと
+/// `orbit-vst3-instrument-child` の配線テスト）。各テストが同じ package 手順をコピーすると、
+/// 手順が変わったときに片方だけ直し忘れる。oracle 自身が「自分をどう package するか」を
+/// 知っているのが最も腐りにくい。
+///
+/// ビルドに失敗したら `None` を返す（呼び出し側は loud skip する）。プロセス内で一度だけ
+/// 実行し、結果をキャッシュする。
+pub fn package_bundle() -> Option<std::path::PathBuf> {
+    use std::sync::OnceLock;
+    static BUNDLE: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    BUNDLE
+        .get_or_init(|| {
+            let script =
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("package-oracle.sh");
+            let output = std::process::Command::new(&script).output().ok()?;
+            if !output.status.success() {
+                eprintln!(
+                    "synth oracle packaging failed: status={} stderr={}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return None;
+            }
+            Some(std::path::PathBuf::from(
+                String::from_utf8_lossy(&output.stdout).trim(),
+            ))
+        })
+        .clone()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
