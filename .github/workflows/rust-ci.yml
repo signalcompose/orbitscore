@@ -55,6 +55,19 @@ jobs:
       - name: Clippy (outproc-effect feature)
         run: cargo clippy -p orbit-audio-daemon --features outproc-effect --all-targets --locked -- -D warnings
 
+      # 🔴 `outproc-instrument` 単独と both build を CI の視野に入れる。
+      # ここが死角だったため、`--features outproc-instrument` 単独のビルドが
+      # コンパイルエラーのまま main に載っていた（テストの cfg が呼び先のメソッドより
+      # 緩く、both build でしか存在しないメソッドを参照していた）。
+      # 出荷経路は常に both build なので成果物は無事だったが、単独 feature で
+      # `cargo test` を叩いた開発者が理由の分からないエラーに当たる状態だった。
+      - name: Clippy (outproc-instrument feature)
+        run: cargo clippy -p orbit-audio-daemon --features outproc-instrument --all-targets --locked -- -D warnings
+
+      # 出荷時に実際に使う組み合わせ（release.yml / copy-daemon-bin.sh と同じ）。
+      - name: Clippy (outproc-effect + outproc-instrument, the shipped combination)
+        run: cargo clippy -p orbit-audio-daemon --features outproc-effect,outproc-instrument --all-targets --locked -- -D warnings
+
       - name: Test (default features, gated tests auto-skipped)
         run: cargo test --workspace --locked
 
@@ -63,6 +76,12 @@ jobs:
 
       - name: Test (outproc-effect feature, gated tests auto-skipped)
         run: cargo test -p orbit-audio-daemon --features outproc-effect --locked
+
+      - name: Test (outproc-instrument feature, gated tests auto-skipped)
+        run: cargo test -p orbit-audio-daemon --features outproc-instrument --locked
+
+      - name: Test (outproc-effect + outproc-instrument, the shipped combination)
+        run: cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument --locked
 
   cargo-deny:
     name: license / dependency gate
