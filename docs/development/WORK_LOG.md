@@ -161,6 +161,26 @@ ack を待つ経路」も含まれていたが、**本 PR には入っていな�
 本 PR のコミットに紛れ込んでいた。`rust-spike/` は CI のワークスペース外でビルドされないため
 **CI をすり抜けた**（実際にコンパイルエラー3件）。差分から除去し、patch として退避してある。
 
+**ラウンド2レビュー（Critical 0 / Important 2・両方対応済み）**:
+
+- **`fsync` が audio spin loop と同じスレッドに乗る**: ラウンド1の `std::fs::write`（page cache 止まり）を
+  `sync_all()` に強化した結果、演奏中に `SAVE_STATE` が来ると次の audio slot が数 ms〜数十 ms 遅延し
+  dropout を生みうる。**現状は発行元が無く未到達**なので投機的な実装は避け、
+  spec UIH.3 に「audio 専用スレッド分離が済むまで host は演奏停止中にのみ発行する（MUST）」を明記した
+- **oracle bundle の出力パス競合**: `package_bundle()` を共有層へ引き上げたことで、
+  **別クレート＝別プロセス**から同じ固定パスへ `rm -rf` する形を新たに作ってしまっていた。
+  `cargo test` は既定で逐次実行のため現状は表面化しないが、別ターミナルでの並行実行や
+  `cargo nextest` で即座に踏む。出力先をプロセスごとに分けて競合そのものを消した。
+  **2クレートのテストを実際に同時実行して両方 green を確認**（分離前は同一パスを奪い合う）
+
+**変異検証（レビュアーが独立に再実行・6種すべて red）**: 主張した4種に加え、
+`cmd_result_len` の改竄と**サイドカーへの余分バイト追記**（長さ検証が効くか）も red だった。
+
+> ⚠️ **構造的な制約（既存・本 PR の欠陥ではない）**: `mailbox_wiring.rs` は
+> `#![cfg(target_os = "macos")]` で、Rust CI は `ubuntu-latest` のみ。**この配線テストは
+> CI で一度も走らない**（VST3 関連テスト全般に共通）。退行検出はマージ前ゲートの
+> 手動実行規律に依存している。macOS ランナーの追加は別 issue 相当。
+
 **残**: 本 PR は VST3 instrument のみ。CLAP / effect への展開は形式中立の要件（CAP.6 の項目2「必須能力は全形式で揃える」）として後続。
 `service_command_mailbox` を共有層に置いたので、CLAP child は handler を書くだけで済む。
 UI 経路（#474）と `project.yaml` 永続化（PRJ）も残る。

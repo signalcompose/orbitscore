@@ -543,7 +543,13 @@ pub fn package_bundle() -> Option<std::path::PathBuf> {
         .get_or_init(|| {
             let script =
                 std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("package-oracle.sh");
-            let output = std::process::Command::new(&script).output().ok()?;
+            // 出力先をプロセスごとに分ける（複数クレートのテストが別プロセスで同時に
+            // 呼びうるため。詳細は package-oracle.sh のコメント）。
+            let output = std::process::Command::new(&script)
+                .arg("debug")
+                .arg(std::process::id().to_string())
+                .output()
+                .ok()?;
             if !output.status.success() {
                 eprintln!(
                     "synth oracle packaging failed: status={} stderr={}",
