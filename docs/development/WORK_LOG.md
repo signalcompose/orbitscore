@@ -17,6 +17,98 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.317 fix(test): CI フレーク #529 の真因（ETXTBSY）を特定し構造的に除去 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ 真因特定 + 除去（**真の検証は CI が握る** — 後述）
+
+### 真因は CI の実測で判明した — 診断改善が機能した
+
+PR #570 の CI で #529 が再発し、**PR #561 で入れた診断計装が原因を吐いた**:
+
+```
+first LoadPlugin call finished before the poller ever observed ChildSlot::Loading
+(slot is now Empty, after 2 polls / 5.079915ms); its result was
+Err(OutProcEffect("spawn outproc child \"/tmp/orbit-outproc-effect-6243-3.sh\":
+                  Text file busy (os error 26)"))
+```
+
+**ETXTBSY**。#529 本文の「✅ 有力な機序」が**そのまま当たっていた**:
+
+| 本文の予測 | 実測 |
+|---|---|
+| 「`Loading` に到達しなかった」のではなく「**既に離脱していた**」 | ✅ `slot is now Empty, after 2 polls / 5.079915ms` |
+| spawn 失敗 → `Loading → Empty` に即座に戻る。窓はサブミリ秒 | ✅ 5ms で 2 polls しか回っていない |
+| CI で断続的に spawn が失敗する既知の原因: **ETXTBSY** | ✅ `Text file busy (os error 26)` |
+| 実エラーが握り潰されて deadline timeout panic に化ける | ✅ **改善後は join して実エラーを載せたので即座に判明** |
+
+診断改善が無ければ、今回も「never reached ChildSlot::Loading within 30s」という
+**原因を何も語らない panic** になっていた。**対症でなく診断を先に直した判断の実証**。
+
+### 機序（独立裁定で検証・確信度 85-90%）
+
+1. スレッド A が `.sh` を書き込み用に open している
+2. その最中に別スレッドが `posix_spawn`（`clone(CLONE_VM|CLONE_VFORK)` + `execve`）する
+   → **子は A の write fd を継承する**
+3. A は close して chmod し、その `.sh` を exec する
+4. しかし**継承した子がまだ exec 前で write fd を握っている**ため、Linux カーネルの
+   `deny_write_access` / `i_writecount` チェックに引っかかり **ETXTBSY**
+
+**`O_CLOEXEC` は無効化しない** — CLOEXEC が閉じるのは**その子自身が exec した瞬間**で、
+fork〜exec の窓では継承 fd は生きている。
+
+**ETXTBSY の write-count 拒否は Linux 固有**（POSIX では optional・macOS/XNU は事実上チェックしない）。
+**Apple Silicon ローカルで一度も再現せず ubuntu-latest でだけ出る**という観測履歴と整合する —
+**ローカル再現失敗は負荷不足ではなく OS 差**だった。
+
+### 棄却した案（いずれも一次情報で確認）
+
+- **生存済みバイナリを使う**（当初 main の推奨）→ ❌ `CARGO_BIN_EXE_<name>` は
+  **integration test / bench のビルド時にしか設定されない**。当該テストは lib unit test なので
+  コンパイルエラーになる。**main が Cargo 仕様を確認せずに推奨していた**（#529 で訂正済み）
+- **`LazyLock` で1回だけ生成** → ❌ 初回アクセスは他テストが既に並走中に起きる。窓の縮小に留まる
+- **global mutex で直列化** → ❌ プロセス内の**全 fork**（特に **watchdog respawn スレッド**）が
+  lock に参加する必要があり、本番コード変更が要る（方針違反）
+- **fsync/close を挟む**（#529 本文の1案目）→ ❌ **無効**。`fs::write` は返る前に既に close している。
+  問題は「閉じ忘れ」ではなく「**閉じる前に他スレッドの fork が fd テーブルごと複製した**」こと
+
+### 採用: コミット済み fixture スクリプト
+
+`write_slow_child_script` / `write_exit_child_script` を廃止し、
+`rust/crates/orbit-audio-daemon/tests/fixtures/{slow-child,exit-child}.sh` を
+`env!("CARGO_MANIFEST_DIR")` 起点で参照する（git に **100755** でコミット）。
+
+**構造的解決である理由**: ETXTBSY の必要条件は「exec 時点でその inode を write-open している者が
+存在すること」。fixture は**テストプロセスの生存中に誰も一度も write-open しない**ので、
+継承させる write fd がそもそも発生しない。**確率を下げるのではなく前提条件を消している**。
+
+各テスト末尾の `remove_file(child_exe)` は削除（共有 fixture を消すと並走テストが壊れる）。
+
+### 変異検証で「他にも5件が同じ機序を抱えていた」ことが判明
+
+fixture パスを存在しないものに変える変異で **6件が red**:
+
+- `effect_load_outproc_concurrent_call_fails_fast_on_loading`（#529 の当該テスト）
+- `effect_load_outproc_early_exit_fast_fails_and_keeps_retry_shm`
+- `effect_load_outproc_role_mismatch_retries_same_slot`
+- 上記3つの instrument 版
+
+つまり **#529 として観測されていたのは氷山の一角**で、同じ機序の潜在フレークが他に5件あった。
+裁定の「`write_exit_child_script` も同時に置き換えるべき」という指摘どおり。
+
+### 検証
+
+- `cargo test --workspace --locked` ✅ 382 passed / 0 failed
+- `--features outproc-effect` ✅ 138 / `--features outproc-instrument` ✅ 113 /
+  `--features outproc-effect,outproc-instrument` ✅ 179（いずれも 0 failed。CI が走らせる全組み合わせ）
+- `cargo fmt --check` ✅ / `cargo clippy --workspace --all-targets -- -D warnings` ✅
+
+🔴 **ローカルの緑は修正の証明にならない** — このフレークは Linux 固有で macOS では再現しない。
+ローカルで確認できるのは「退行していないこと」だけで、**真の検証は CI が握る**。
+
+**反証条件**: fixture 化後もなお ETXTBSY が出たら、この機序は誤りで**外部 writer を疑い直す**。
+PR #561 の診断計装を残したのは、そのときの自白装置として。
+
 ### 6.315 test: prove the tone loop on real hardware — PR #563 のレビュー〜出荷 (Jul 29, 2026)
 
 **Date**: 2026-07-29
